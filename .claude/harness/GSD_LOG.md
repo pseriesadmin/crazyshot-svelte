@@ -16,3 +16,12 @@
   - ESLint v10 migration (.eslintrc.cjs → eslint.config.js)
   - All H-01~H-06 harness rules compliance verified
   - npm run harness:check ✅ (ESLint + TypeScript passing)
+
+[2026-05-29 15:30] GSD | S1-M1 Products Module | src/routes/products/ | 15m | ✅ SUCCESS
+  - Product listing page (src/routes/products/+page.svelte) with search/category filter
+  - Product detail page (src/routes/products/[id]/+page.svelte) with reservation form
+  - Database migration 006: 8 products, 9 assets seeded (cameras, lenses, audio, lighting, tripod)
+  - Asset availability counter & condition badges
+  - RPC-based reservation (H-01 compliant: no direct INSERT)
+  - Responsive grid layout with pricing display
+  - All H-01~H-06 harness rules verified ✅

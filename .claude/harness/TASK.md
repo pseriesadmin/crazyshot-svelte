@@ -11,19 +11,17 @@ TDD도메인: M3 rental_reservations atomic_reserve, M4 payment flow, subscripti
 ---
 
 ## NOW
-- S0-3: Supabase-JS 클라이언트 설정 (DONE)
-  - ✅ Supabase singleton client 모듈 (src/lib/services/supabase.ts)
-  - ✅ Auth store with performSignUp/performSignIn/performSignOut (src/lib/stores/auth.ts)
-  - ✅ RPC wrapper functions (9개 - atomicReserveAsset, calculateCartTotal, processPaymentAndCreateOrder 등)
-  - ✅ Auth state 자동 초기화 in +layout.svelte
-  - ✅ ESLint v10 마이그레이션 (eslint.config.js)
-  - ✅ TypeScript + ESLint 전체 검증 통과 (npm run harness:check)
+- S1-M2: Reservation Flow (TDD)
+  - Unit tests for atomic_reserve_asset RPC
+  - Conflict detection (date overlap checking)
+  - Reservation status state machine (pending→confirmed→active→completed)
+  - Implement proper error handling for double-booking
 
 ## NEXT
-- S1-M1: Products 모듈 (GSD)
-  - Product listing page with search/filter
-  - Product detail page with asset availability
-  - Equipment condition images (Cloudinary integration)
+- S1-M3: Payment Integration (TDD)
+  - TossPayments v2 webhook handler
+  - Payment confirmation flow
+  - Order tracking and status updates
 - S1-M1: Products 모듈 (GSD)
   - Product listing page
   - Product detail page
@@ -43,8 +41,21 @@ TDD도메인: M3 rental_reservations atomic_reserve, M4 payment flow, subscripti
   - ✅ Git repo init with Husky pre-commit
   - ✅ ESLint H-01 to H-06 rules
   - ✅ .env.local with real Supabase credentials
-- S0-2: Database Schema (THIS SESSION)
-  - ✅ All migrations applied successfully
+- S0-2: Database Schema
+  - ✅ 5 migrations (001-005)
+  - ✅ 10 tables with RLS enabled
+  - ✅ 9 RPC functions (atomic_reserve_asset, calculateCartTotal, processPaymentAndCreateOrder 등)
+  - ✅ 3 subscription plans seeded
+- S0-3: Supabase-JS Client
+  - ✅ Singleton client with RPC wrappers
+  - ✅ Auth store (performSignUp/SignIn/SignOut)
+  - ✅ Auth state auto-initialization
+  - ✅ ESLint v10 migration
+- S1-M1: Products Module
+  - ✅ Product listing with search/filter
+  - ✅ Product detail page
+  - ✅ Asset availability display
+  - ✅ 8 products + 9 assets seeded
 
 ## BLOCKED
 (None)
