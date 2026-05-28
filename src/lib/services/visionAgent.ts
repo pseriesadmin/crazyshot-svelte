@@ -60,7 +60,7 @@ export async function analyzeEquipmentCondition(
 			estimatedRepairCost: parsed.estimatedRepairCost
 		};
 	} catch (error) {
-		console.error('Vision Agent 분석 실패:', error);
+		console.warn('Vision Agent 분석 실패:', error);
 		throw error;
 	}
 }

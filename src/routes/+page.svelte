@@ -1,10 +1,8 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 
-	let status = 'Development Environment Ready ✨';
-
 	onMount(() => {
-		console.log('CRAZYSHOT Development Environment initialized');
+		console.warn('CRAZYSHOT Development Environment initialized');
 	});
 </script>
 

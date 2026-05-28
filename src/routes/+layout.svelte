@@ -2,11 +2,24 @@
 	import '../app.css';
 	import { onMount } from 'svelte';
 	import { locale } from 'svelte-i18n';
+	import { initializeAuth, subscribeToAuthChanges, authState } from '$lib/stores/auth';
 
 	let currentLocale = 'ko';
 
 	onMount(() => {
 		locale.set(currentLocale);
+
+		// Initialize auth state
+		initializeAuth().catch((_error) => {
+			console.warn('Auth initialization error');
+		});
+
+		// Subscribe to auth state changes (e.g., when user logs in/out in another tab)
+		const unsubscribe = subscribeToAuthChanges();
+
+		return () => {
+			unsubscribe();
+		};
 	});
 
 	function toggleLanguage() {
@@ -20,6 +33,14 @@
 		<nav class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
 			<div class="font-bold text-2xl text-purple-600">📸 CRAZYSHOT</div>
 			<div class="flex gap-4 items-center">
+				{#if $authState.loading}
+					<div class="text-sm text-gray-500">Loading...</div>
+				{:else if $authState.user}
+					<div class="text-sm text-gray-700">{$authState.user.email}</div>
+					<a href="/auth/logout" class="px-3 py-1 text-sm rounded hover:bg-gray-100">Sign Out</a>
+				{:else}
+					<a href="/auth/login" class="px-3 py-1 text-sm rounded hover:bg-gray-100">Sign In</a>
+				{/if}
 				<button
 					on:click={toggleLanguage}
 					class="px-3 py-1 text-sm rounded hover:bg-gray-100"
