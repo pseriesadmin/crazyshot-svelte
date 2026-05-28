@@ -67,6 +67,7 @@ export default [
       },
       globals: {
         console: 'readonly',
+        alert: 'readonly',
       },
     },
     plugins: {

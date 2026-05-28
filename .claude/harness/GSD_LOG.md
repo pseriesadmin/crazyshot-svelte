@@ -8,3 +8,11 @@
   - 004_rpc_search_path_fix: Security advisor 경고 수정
   - 005_seed_subscription_plans: 3 subscription plans 시드
   - Supabase TypeScript types 생성 → src/lib/types/database.ts
+
+[2026-05-29 15:00] SETUP | S0-3 Supabase Client | src/lib/services, src/lib/stores | 20m | ✅ SUCCESS
+  - Supabase client singleton (src/lib/services/supabase.ts) with RPC wrappers
+  - Auth state store (src/lib/stores/auth.ts) with performSignUp/In/Out
+  - Auth state auto-initialization in +layout.svelte
+  - ESLint v10 migration (.eslintrc.cjs → eslint.config.js)
+  - All H-01~H-06 harness rules compliance verified
+  - npm run harness:check ✅ (ESLint + TypeScript passing)

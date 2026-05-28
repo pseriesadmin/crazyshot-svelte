@@ -11,19 +11,19 @@ TDD도메인: M3 rental_reservations atomic_reserve, M4 payment flow, subscripti
 ---
 
 ## NOW
-- S0-2: Database Schema 구축 (DONE)
-  - ✅ 5개 마이그레이션 적용 (001~005)
-  - ✅ 10개 테이블 생성 (products, assets, user_profiles, subscriptions, rental_reservations, orders, order_items, payment_transactions, shipments, subscription_plans)
-  - ✅ RLS 정책 24개 설정
-  - ✅ RPC 함수 9개 구현 (atomic_reserve_asset, calculate_cart_total, batch_atomic_reserve, process_payment_and_create_order, confirm_payment 등)
-  - ✅ TypeScript types 생성 (src/lib/types/database.ts)
-  - ✅ Subscription plans seed 데이터 3개 (Basic, Premium, Pro)
+- S0-3: Supabase-JS 클라이언트 설정 (DONE)
+  - ✅ Supabase singleton client 모듈 (src/lib/services/supabase.ts)
+  - ✅ Auth store with performSignUp/performSignIn/performSignOut (src/lib/stores/auth.ts)
+  - ✅ RPC wrapper functions (9개 - atomicReserveAsset, calculateCartTotal, processPaymentAndCreateOrder 등)
+  - ✅ Auth state 자동 초기화 in +layout.svelte
+  - ✅ ESLint v10 마이그레이션 (eslint.config.js)
+  - ✅ TypeScript + ESLint 전체 검증 통과 (npm run harness:check)
 
 ## NEXT
-- S0-3: Supabase-JS 클라이언트 설정
-  - Client configuration (VITE_SUPABASE_URL, VITE_SUPABASE_ANON_KEY)
-  - Auth integration (signUp, signIn, signOut)
-  - RPC call wrapper functions
+- S1-M1: Products 모듈 (GSD)
+  - Product listing page with search/filter
+  - Product detail page with asset availability
+  - Equipment condition images (Cloudinary integration)
 - S1-M1: Products 모듈 (GSD)
   - Product listing page
   - Product detail page

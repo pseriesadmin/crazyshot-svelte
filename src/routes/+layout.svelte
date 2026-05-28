@@ -31,8 +31,11 @@
 <div class="min-h-screen flex flex-col">
 	<header class="sticky top-0 z-100 bg-white shadow-sm">
 		<nav class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
-			<div class="font-bold text-2xl text-purple-600">📸 CRAZYSHOT</div>
-			<div class="flex gap-4 items-center">
+			<a href="/" class="font-bold text-2xl text-purple-600 hover:text-purple-800">📸 CRAZYSHOT</a>
+			<div class="flex gap-6 items-center">
+				<a href="/products" class="text-gray-700 hover:text-purple-600 font-medium">
+					렌탈 장비
+				</a>
 				{#if $authState.loading}
 					<div class="text-sm text-gray-500">Loading...</div>
 				{:else if $authState.user}
