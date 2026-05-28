@@ -1,0 +1,62 @@
+#!/bin/sh
+. "$(dirname "$0")/_/husky.sh"
+
+echo ""
+echo "🔍 Harness pre-commit 검사 시작..."
+
+# [H-01~H-05] ESLint 금지 패턴 검사
+echo "  ESLint 검사..."
+npx eslint src --ext .ts,.svelte --max-warnings=0
+if [ $? -ne 0 ]; then
+  echo "❌ ESLint 위반. AGENTS.md 절대 금지 패턴 확인."
+  exit 1
+fi
+
+# TypeScript 컴파일 검사
+echo "  TypeScript 컴파일 검사..."
+npx tsc --noEmit
+if [ $? -ne 0 ]; then
+  echo "❌ TypeScript 에러. 타입 오류 수정 필요."
+  exit 1
+fi
+
+# [H-04] console.log 잔류 검사 (harness-allow 주석 제외)
+echo "  console.log 잔류 검사..."
+if grep -r "console\.log" src/ --include="*.ts" --include="*.svelte" \
+   2>/dev/null | grep -v "// harness-allow"; then
+  echo "❌ console.log 잔류. 제거 또는 줄 끝에 // harness-allow 추가."
+  exit 1
+fi
+
+# [H-03] any 타입 잔류 검사
+echo "  any 타입 잔류 검사..."
+if grep -rn ": any\b" src/ --include="*.ts" --include="*.svelte" \
+   2>/dev/null | grep -v "// harness-allow"; then
+  echo "❌ any 타입 잔류. 명시적 타입으로 교체."
+  exit 1
+fi
+
+# [GP-10] 기존 마이그레이션 파일 수정 감지
+echo "  마이그레이션 파일 수정 감지..."
+MODIFIED=$(git diff --cached --name-only 2>/dev/null | grep "supabase/migrations/" || true)
+if [ -n "$MODIFIED" ]; then
+  echo "❌ 기존 마이그레이션 파일 수정 감지:"
+  echo "$MODIFIED"
+  echo "  새 마이그레이션 파일로 ALTER 처리하세요. (GP-10)"
+  exit 1
+fi
+
+# [CS-01] 서버 키 클라이언트 노출 검사
+echo "  서버 키 노출 검사..."
+if grep -rn "TOSS_SECRET_KEY\|SERVICE_ROLE_KEY" src/ --include="*.ts" \
+   --include="*.svelte" 2>/dev/null | grep -v "static/private" \
+   | grep -v "// harness-allow"; then
+  echo "❌ 서버 전용 키가 클라이언트 파일에서 감지됨."
+  echo "  \$env/static/private 에서만 import 해야 합니다. (GP-09)"
+  exit 1
+fi
+
+echo ""
+echo "✅ Harness pre-commit 검사 통과."
+echo ""
+exit 0

@@ -1,0 +1,65 @@
+{
+  "name": "crazyshot-web",
+  "version": "1.0.0",
+  "type": "module",
+  "main": "index.js",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "test": "vitest",
+    "test:ui": "vitest --ui",
+    "lint": "eslint .",
+    "format": "prettier --write .",
+    "harness:check": "eslint src --ext .ts,.svelte && tsc --noEmit",
+    "harness:fix": "eslint src --ext .ts,.svelte --fix",
+    "harness:gc": "npx ts-prune src --error 2>/dev/null || true"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "description": "",
+  "devDependencies": {
+    "@sveltejs/adapter-auto": "^7.0.1",
+    "@sveltejs/adapter-vercel": "^6.3.3",
+    "@sveltejs/kit": "^2.61.1",
+    "@sveltejs/vite-plugin-svelte": "^7.1.2",
+    "@types/node": "^25.9.1",
+    "@typescript-eslint/eslint-plugin": "^8.60.0",
+    "@typescript-eslint/parser": "^8.60.0",
+    "@vitest/ui": "^4.1.7",
+    "autoprefixer": "^10.5.0",
+    "eslint": "^10.4.0",
+    "eslint-plugin-security": "^4.0.0",
+    "eslint-plugin-svelte": "^3.18.0",
+    "husky": "^9.1.7",
+    "jsdom": "^29.1.1",
+    "lint-staged": "^16.4.0",
+    "postcss": "^8.5.15",
+    "prettier": "^3.8.3",
+    "svelte": "^5.55.10",
+    "svelte-i18n": "^4.0.1",
+    "tailwindcss": "^4.3.0",
+    "tslib": "^2.8.1",
+    "typescript": "^6.0.3",
+    "vite": "^8.0.14",
+    "vitest": "^4.1.7"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.99.0",
+    "@supabase/supabase-js": "^2.106.2",
+    "@tailwindcss/postcss": "^4.3.0",
+    "axios": "^1.16.1",
+    "dotenv": "^17.4.2"
+  },
+  "lint-staged": {
+    "src/**/*.{ts,svelte}": [
+      "eslint --max-warnings=0",
+      "bash -c \"tsc --noEmit\""
+    ],
+    "supabase/migrations/*.sql": [
+      "bash -c \"echo [GP-10] 기존 마이그레이션 수정 감지 && exit 1\""
+    ]
+  },
+  "prepare": "husky install"
+}

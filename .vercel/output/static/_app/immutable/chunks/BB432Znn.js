@@ -1,0 +1,1 @@
+import{I as e}from"./BNY2XcVv.js";e();
