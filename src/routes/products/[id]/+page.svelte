@@ -1,8 +1,10 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
-	import { supabase } from '$lib/services/supabase';
+	import { supabase, rpc } from '$lib/services/supabase';
 	import { isAuthenticated } from '$lib/stores/auth';
+	import { validateReservationInput, calculateReservationPrice } from '$lib/services/reservationHelper';
 	import type { Tables } from '$lib/types/database';
+	import type { PriceBreakdown } from '$lib/services/reservationHelper';
 
 	export let data;
 
@@ -15,6 +17,7 @@
 	let endDate = '';
 	let reservationError = '';
 	let reservationLoading = false;
+	let priceBreakdown: PriceBreakdown | null = null;
 
 	onMount(async () => {
 		try {
@@ -46,6 +49,37 @@
 		}
 	});
 
+	function updatePriceBreakdown() {
+		if (!startDate || !endDate || !product) {
+			priceBreakdown = null;
+			return;
+		}
+
+		// Validate dates using helper functions
+		const validationErrors = validateReservationInput({
+			productId: product.id,
+			startDate,
+			endDate
+		});
+
+		if (validationErrors.length > 0) {
+			priceBreakdown = null;
+			return;
+		}
+
+		// Calculate price with potential subscription discount (0% for now, would come from user profile)
+		priceBreakdown = calculateReservationPrice(
+			product.base_price_daily,
+			product.base_price_weekly,
+			product.base_price_monthly,
+			startDate,
+			endDate,
+			0 // TODO: Get subscription discount from user profile
+		);
+	}
+
+	$: if (startDate && endDate) updatePriceBreakdown();
+
 	async function makeReservation() {
 		if (!$isAuthenticated) {
 			error = '예약하려면 먼저 로그인해주세요.';
@@ -57,8 +91,19 @@
 			return;
 		}
 
-		if (new Date(endDate) <= new Date(startDate)) {
-			reservationError = '종료일이 시작일보다 늦어야 합니다.';
+		// Validate input using helper function
+		if (!product) {
+			throw new Error('Product not loaded');
+		}
+
+		const validationErrors = validateReservationInput({
+			productId: product.id,
+			startDate,
+			endDate
+		});
+
+		if (validationErrors.length > 0) {
+			reservationError = validationErrors.map((e) => e.message).join(', ');
 			return;
 		}
 
@@ -66,15 +111,17 @@
 			reservationLoading = true;
 			reservationError = '';
 
-			if (!product) throw new Error('Product not loaded');
-
 			// Use RPC to atomically reserve asset (H-01: no direct INSERT)
-			const { rpc } = await import('$lib/services/supabase');
-			await rpc.atomicReserveAsset(product.id, startDate, endDate);
+			const result = await rpc.atomicReserveAsset(product.id, startDate, endDate);
+
+			if (!result.success) {
+				throw new Error(result.error_message || 'Reservation failed');
+			}
 
 			// Clear form
 			startDate = '';
 			endDate = '';
+			priceBreakdown = null;
 
 			// Show success message
 			console.warn('예약이 완료되었습니다. 결제 페이지로 이동합니다.');
@@ -247,6 +294,29 @@
 							</div>
 						</div>
 
+						{#if priceBreakdown}
+							<div class="bg-purple-50 border border-purple-200 rounded-lg p-4 mb-6 text-sm">
+								<div class="flex justify-between mb-2">
+									<span class="text-gray-700">대여 기간:</span>
+									<span class="font-semibold text-gray-900">{priceBreakdown.rentalDays}일 ({priceBreakdown.rentalPeriodType})</span>
+								</div>
+								<div class="flex justify-between mb-2">
+									<span class="text-gray-700">소계:</span>
+									<span class="font-semibold text-gray-900">{formatPrice(priceBreakdown.subtotal)}</span>
+								</div>
+								{#if priceBreakdown.discountAmount > 0}
+									<div class="flex justify-between mb-2">
+										<span class="text-gray-700">할인 ({priceBreakdown.discountRate}%):</span>
+										<span class="font-semibold text-red-600">-{formatPrice(priceBreakdown.discountAmount)}</span>
+									</div>
+								{/if}
+								<div class="border-t border-purple-200 pt-2 flex justify-between">
+									<span class="font-bold text-gray-900">총액:</span>
+									<span class="font-bold text-purple-600 text-lg">{formatPrice(priceBreakdown.finalAmount)}</span>
+								</div>
+							</div>
+						{/if}
+
 						{#if reservationError}
 							<div class="bg-red-50 border border-red-200 rounded-lg p-4 mb-6 text-red-700 text-sm">
 								{reservationError}
@@ -255,10 +325,10 @@
 
 						<button
 							on:click={makeReservation}
-							disabled={reservationLoading || assets.length === 0}
+							disabled={reservationLoading || assets.length === 0 || !priceBreakdown}
 							class="w-full bg-purple-600 text-white font-bold py-3 rounded-lg hover:bg-purple-700 transition disabled:bg-gray-400 disabled:cursor-not-allowed"
 						>
-							{reservationLoading ? '예약 중...' : assets.length === 0 ? '품절' : '예약하기'}
+							{reservationLoading ? '예약 중...' : assets.length === 0 ? '품절' : !priceBreakdown ? '날짜를 선택하세요' : '예약하기'}
 						</button>
 					{/if}
 				</div>

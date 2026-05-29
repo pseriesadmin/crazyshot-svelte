@@ -47,3 +47,6 @@ coverage/
 build/
 .next/
 out/
+
+# Vercel
+.vercel/

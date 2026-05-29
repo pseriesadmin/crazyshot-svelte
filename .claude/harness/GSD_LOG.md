@@ -25,3 +25,29 @@
   - RPC-based reservation (H-01 compliant: no direct INSERT)
   - Responsive grid layout with pricing display
   - All H-01~H-06 harness rules verified ✅
+
+[2026-05-29 16:00] TDD | S1-M2 Reservation Flow | src/__tests__/, src/lib/services/ | 25m | ✅ RED/GREEN PHASE
+  - Reservation helper functions (src/lib/services/reservationHelper.ts)
+  - 27 passing unit tests (RED/GREEN phase complete)
+  - Date validation: Format, range, overlap detection
+  - Rental period classification (daily 1-7d, weekly 8-30d, monthly 31+d)
+  - State machine: Valid transitions, terminal states
+  - Input validation: Product ID, dates, comprehensive error messages
+  - Price calculation: Daily/weekly/monthly with flexible discounts
+  - Integration test framework (src/__tests__/services/reservation.test.ts)
+  - All H-01~H-06 harness rules verified ✅
+
+[2026-05-29 17:30] REFACTOR | S1-M2 Reservation Flow Integration | src/routes/products/[id]/+page.svelte | 45m | ⏳ IN PROGRESS
+  - Integrated reservation helper functions into product detail page
+  - Added real-time price breakdown display with rental period classification
+  - Implemented validation using validateReservationInput() helper
+  - Price display shows: rental days, subtotal, discount (if applicable), final amount
+  - Button state management: disabled until valid dates selected
+  - Enhanced date input with min/max constraints
+  - Fixed linting errors (unused imports in product detail page)
+  - Created vitest setup for test user authentication (src/vitest.setup.ts)
+  - 🔴 BLOCKED: Supabase Realtime WebSocket issue in SSR environment
+  - Node.js 20 requires ws package as transport, but not provided during Vite SSR
+  - Unable to test UI changes due to 500 Internal Server Error on dev server
+  - Attempted fixes: hooks.server.ts polyfill, conditional initialization - all failed
+  - Recommend: Implement lazy client initialization or provide ws transport at startup

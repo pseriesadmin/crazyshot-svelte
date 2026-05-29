@@ -11,11 +11,17 @@ TDD도메인: M3 rental_reservations atomic_reserve, M4 payment flow, subscripti
 ---
 
 ## NOW
-- S1-M2: Reservation Flow (TDD)
-  - Unit tests for atomic_reserve_asset RPC
-  - Conflict detection (date overlap checking)
-  - Reservation status state machine (pending→confirmed→active→completed)
-  - Implement proper error handling for double-booking
+- S1-M2: Reservation Flow (TDD - REFACTOR phase in progress)
+  - ✅ 27 passing tests for reservation helper functions (RED/GREEN complete)
+  - ✅ Date validation (format, range, overlap detection)
+  - ✅ Rental period classification (daily/weekly/monthly)
+  - ✅ State machine with transition validation
+  - ✅ Price calculation with discounts
+  - ✅ REFACTOR: Integrated validation & price calculation into product detail UI
+  - ✅ Added price breakdown display with subscription discount support
+  - ✅ Enhanced reservation form with real-time date validation
+  - 🔴 BLOCKED: SSR WebSocket issue - Supabase Realtime requires ws transport in Node.js
+  - ⏳ TODO: Resolve SSR issue to enable dev server testing
 
 ## NEXT
 - S1-M3: Payment Integration (TDD)
@@ -58,9 +64,24 @@ TDD도메인: M3 rental_reservations atomic_reserve, M4 payment flow, subscripti
   - ✅ 8 products + 9 assets seeded
 
 ## BLOCKED
-(None)
+- S1-M2 UI Testing: Supabase Realtime WebSocket Issue in SSR
+  - Issue: Node.js 20 in SvelteKit SSR doesn't have native WebSocket support
+  - Supabase RealtimeClient fails to initialize when ws package not provided as transport
+  - Attempted fixes: ws polyfill in hooks.server.ts, conditional initialization, require('ws')
+  - Root cause: Supabase client loads at module level during SSR before polyfills applied
+  - Solution needed: Either provide ws transport before client creation, or lazy-load Supabase client only on browser
+  - Workaround: Disable Realtime (not production-ready) or use production build without SSR debugging
 
 ## BACKLOG
+- INFRA: Fix Supabase SSR WebSocket Issue
+  - Provide ws transport to Supabase client during SSR
+  - Or implement lazy client initialization pattern
+  - Enable dev server + browser testing for S1-M2 REFACTOR phase
+  - Target: Enable `npm run dev` to work without 500 errors
+- S1-M3: Payment Integration (TDD)
+  - TossPayments v2 webhook handler
+  - Payment confirmation flow
+  - Order tracking and status updates
 - S1-M4: Subscriptions (GSD)
   - Plan selection UI
   - Subscription management
