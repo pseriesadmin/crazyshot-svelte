@@ -9,11 +9,14 @@ if (!supabaseUrl || !supabaseAnonKey) {
   throw new Error('Missing Supabase environment variables (VITE_SUPABASE_URL, VITE_SUPABASE_ANON_KEY)');
 }
 
+// Disable auth persistence in SSR to avoid session storage issues in Node.js
+const isSSR = typeof window === 'undefined';
+
 // Singleton Supabase client instance
 export const supabase = createClient<Database>(supabaseUrl, supabaseAnonKey, {
   auth: {
-    persistSession: true,
-    autoRefreshToken: true,
+    persistSession: !isSSR,
+    autoRefreshToken: !isSSR,
     detectSessionInUrl: true,
   },
 });
