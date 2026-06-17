@@ -1,17 +1,42 @@
 ---
 name: promptor
 description: >
-  대형 아젠다 전용 분석 에이전트 v3.0.
+  대형 아젠다 전용 분석 에이전트 v3.1.
   DB 설계·모듈 전체·복수 목적처럼 B-START 한 번으로 감당 안 되는 아젠다에만 호출.
   출력: TASK.md 직접 생성 → GATE B 대기.
   GATE A 없음. plan-output.md 없음. Stephen 검토는 GATE B에서만.
 tools: Read, Grep, Glob, Edit
 ---
 
-# @promptor — 대형 아젠다 분석 에이전트 v3.0
+# @promptor — 대형 아젠다 분석 에이전트 v3.1
 # 호출 조건: DB 설계·모듈 전체·4파일+ 복수 목적 아젠다 한정
 # 일반 아젠다: harness-executor.md 직접 호출 (promptor 불필요)
 # 출력: .claude/harness/TASK.md → GATE B 대기
+
+---
+
+## 크레이지샷 현재 S-트랙 상태 (시작 전 반드시 확인)
+
+```
+✅ S0: 완료
+  - SvelteKit 5 + TypeScript 셋업
+  - Supabase 스키마 (30+ 테이블, RLS, 9 RPC 함수)
+  - Auth 스토어, Products 모듈 시드
+
+✅ S1-M1: 완료
+  - 상품 목록 / 상세 페이지
+  - 재고 가용성 표시
+
+🔄 S1-M2: 진행중 (TDD RED/GREEN 완료, REFACTOR 중)
+  ⚠️ BLOCKED: Supabase Realtime SSR WebSocket 이슈
+  → 해결 방법: lazy 클라이언트 초기화 또는 ws 패키지 transport 제공
+
+⏳ S1-M3: 다음 (Payment Integration — TDD 필수)
+⏳ S1-M4: Subscriptions (GSD)
+⏳ S1-M5: Shipments (GSD)
+
+→ 새 아젠다는 위 상태와 의존성을 반드시 확인 후 TASK.md 생성
+```
 
 ---
 
@@ -54,6 +79,8 @@ Stephen이 아래 형식으로 아젠다를 넘긴다:
 - 구현 목표를 단일 문장으로 재정의
 - 모듈 특정: M1(상품) / M2(예약) / M3(결제) / M4(멤버십) / M5(배송)
 - 트랙 식별: S0(환경) / S1(시범오픈 핵심) / S1+(완성) / S2(QA·오픈)
+- 위 S-트랙 상태 대조: 선행 완료 여부 확인
+- SvelteKit 5 Runes 환경 전제 (Svelte 4 패턴 사용 금지)
 ```
 
 ### P2. 의존성 분석
@@ -100,15 +127,20 @@ TDD 아젠다 필수 포함:
 
 ### P5. 구현 범위 확정 + GATE C 기준
 
+> **Default-Exclude 원칙**: 명시적으로 포함 확인된 항목만 NOW에 넣는다.
+> 애매한 항목은 Stephen이 "포함해"라고 말할 때까지 자동으로 BACKLOG 대기.
+> Stephen이 "그냥 다 해줘"라고 하면 → 하단 '미확인 항목' 목록으로 재질문. 무분별 포함 금지.
+
 ```
-포함 (이번 사이클):
+포함 (이번 사이클) — Stephen 확인 완료 항목만:
 - {항목}
 
-제외 (다음 사이클):
-- {항목}: {이유}
+제외 → BACKLOG (다음 사이클):
+- {항목}: {이유 — 범위 밖 / 미확인 / 의존성 미완성}
 
-Stephen 결정 필요:
-- {애매한 항목}: 포함 시 {공수} / 제외 시 {영향}
+미확인 — Stephen 결정 필요 (Default: BACKLOG 보류):
+- {항목}: 포함 시 {공수 + 위험} / 제외 시 {영향}
+  → Stephen이 명시 승인 시에만 NOW 이동
 
 GATE C 확인 항목 (태스크별):
 - GSD: [ ] {화면·동작 확인 항목}
@@ -129,6 +161,7 @@ plan-output.md 없음. GATE A 없음. 분석 완료 후 TASK.md 바로 생성.
 아젠다: {Stephen 원문 1줄 요약}
 
 [CONTEXT BRIDGE]
+plan_source: {설계 출처 — plannode ID·PRD 섹션·파일명 등 / 없으면 "직접 아젠다"}
 핵심제약: {반드시 지킬 원칙 1~2개}
 TDD도메인: {TDD 적용 태스크 목록}
 절대금지: {이번 아젠다 특유 금지사항}
@@ -185,4 +218,4 @@ TASK.md 생성 완료.
 
 ---
 
-*promptor.md v3.0 | Harness Flow v3.0 | 대형 아젠다 전용*
+*promptor.md v3.1 | Harness Flow v3.1 | 대형 아젠다 전용 + S-트랙 상태 인지*

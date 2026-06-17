@@ -1,19 +1,150 @@
+/* ════════════════════════════════════════════════════════
+   CRAZYSHOT UI DESIGN SYSTEM — v1.0
+   소스: Figma variables.json + Figma Make 0701OrderList
+   모든 퍼블리싱 화면 공통 적용
+   ════════════════════════════════════════════════════════ */
+
+:root {
+
+  /* ── 브랜드 컬러 ── */
+  --cs-orange:        #FF4500;       /* CrazyShot 대표 오렌지 */
+  --cs-orange-hover:  #E03E00;
+  --cs-dark:          #100B32;       /* 주요 다크 (헤더·총금액 박스) */
+  --cs-purple:        #3B2F8A;       /* CTA 버튼·선택 강조 */
+  --cs-purple-hover:  #2E2470;
+  --cs-purple-light:  #553FE0;       /* 파란 배지 */
+  --cs-red-badge:     #FF3535;       /* 빨간 배지 */
+  --cs-lilac:         #ECEBF4;       /* 페이지 배경 */
+  --cs-lilac-nav:     rgba(225,222,243,0.7); /* nav 필 반투명 배경 */
+
+  /* ── 텍스트 컬러 ── */
+  --cs-text:          #100B32;       /* 기본 본문 */
+  --cs-text-dark:     #444444;       /* 보조 텍스트 (variables.json 색상2) */
+  --cs-text-mid:      #777777;       /* 3차 텍스트 (variables.json basic2) */
+  --cs-text-light:    #AAAAAA;       /* 힌트·플레이스홀더 */
+  --cs-text-placeholder: #b6b6b6;
+
+  /* ── 서피스 컬러 ── */
+  --cs-white:         #FFFFFF;
+  --cs-surface-gray:  #f6f6f6;       /* 폼 입력·결제금액 블록 배경 */
+  --cs-border:        #E0E0E6;
+
+  /* ── 상태 컬러 ── */
+  --cs-error:         #E53935;
+  --cs-success:       #388E3C;
+  --cs-points:        #c1bbec;       /* 포인트 텍스트 (다크 박스 위) */
+
+  /* ── 폰트 패밀리 ── */
+  --font-kr:          'Noto Sans KR', 'Apple SD Gothic Neo', 'Malgun Gothic', sans-serif;
+  --font-kr-heading:  'SB AggroOTF', 'Noto Sans KR', sans-serif;  /* 한글 헤드라인 */
+  --font-en-display:  'Tilt Warp', sans-serif;                     /* 영문 메뉴·서브타이틀 */
+  --font-en-condensed:'Config Condensed', sans-serif;              /* 영문 대형 광고 */
+
+  /* ── 타이포그래피 스케일 (PC) ── */
+  /* format: font-size / line-height, font-weight */
+  --text-pc-ad-en-80: 900 80px/120% var(--font-en-condensed);     /* 영문 광고 대형 */
+  --text-pc-ad-en-35: 400 35px/130% var(--font-en-display);       /* 영문 광고 중형 */
+  --text-pc-ad-kr-60: 700 60px/100% var(--font-kr-heading);       /* 한글 광고 대형 */
+  --text-pc-ad-kr-35: 700 35px/160% var(--font-kr-heading);       /* 한글 타이틀 대형 */
+  --text-pc-ad-kr-22: 500 22px/auto var(--font-kr-heading);       /* 한글 광고 소형 */
+  --text-pc-htitle-25: 700 25px/200% var(--font-kr);              /* 헤더 타이틀 */
+  --text-pc-hsub-22:  700 22px/160% var(--font-kr);               /* 헤더 서브타이틀 */
+  --text-pc-menu-en-20: 400 20px/160% var(--font-en-display);     /* 영문 메뉴 */
+  --text-pc-menu-kr-20: 500 20px/auto var(--font-kr-heading);     /* 한글 메뉴 */
+  --text-pc-title-18: 700 18px/170% var(--font-kr);               /* 섹션 타이틀 */
+  --text-pc-title-16: 700 16px/200% var(--font-kr);               /* 소형 타이틀 */
+  --text-pc-body-14:  700 14px/200% var(--font-kr);               /* 본문 Bold */
+  --text-pc-script-12: 400 12px/200% var(--font-kr);              /* 캡션 */
+
+  /* ── 타이포그래피 스케일 (Mobile) ── */
+  --text-m-ad-kr-40:  700 40px/140% var(--font-kr-heading);
+  --text-m-ad-en-30:  400 30px/130% var(--font-en-display);
+  --text-m-ad-kr-30:  700 30px/130% var(--font-kr-heading);
+  --text-m-menu-en-24: 400 24px/auto var(--font-en-display);
+  --text-m-htitle-24B: 900 24px/160% var(--font-kr);
+  --text-m-htitle-24L: 500 24px/160% var(--font-kr);
+  --text-m-title-21:  700 21px/160% var(--font-kr);
+  --text-m-title-18B: 700 18px/160% var(--font-kr);
+  --text-m-title-18L: 500 18px/160% var(--font-kr);
+  --text-m-body-16B:  700 16px/160% var(--font-kr);
+  --text-m-body-16L:  500 16px/160% var(--font-kr);
+  --text-m-script-14B: 700 14px/200% var(--font-kr);
+  --text-m-script-14: 500 14px/160% var(--font-kr);
+  --text-m-script-12: 500 12px/160% var(--font-kr);
+
+  /* ── 이펙트 (그림자) ── */
+  /* outsh1: 강한 다크 그림자 (텍스트 강조) */
+  --shadow-outsh1:    10px 10px 0 rgba(5,0,38,1);
+  /* outsh2: 보라 반투명 그림자 */
+  --shadow-outsh2:    4px 4px 0 rgba(39,27,122,0.5);
+  /* outsh3: #100B32 그림자 (카드·버튼) */
+  --shadow-outsh3:    5px 5px 0 rgba(16,11,50,1);
+  /* outsh4: 흰 글로우 */
+  --shadow-outsh4:    0 0 15px rgba(255,255,255,0.5);
+  /* outsh5: 검은 그림자 */
+  --shadow-outsh5:    4px 5px 0 rgba(0,0,0,0.5);
+  /* 카드 내부 어둠 */
+  --shadow-inner:     inset 0 0 60px rgba(0,0,0,0.6);
+  /* 하단바 그림자 */
+  --shadow-bottom-bar: 0 -2px 20px rgba(16,11,50,0.10);
+
+  /* ── 레이아웃 ── */
+  --layout-pc-max:    1240px;        /* PC 콘텐츠 최대폭 */
+  --layout-pc-pad:    40px;          /* PC 좌우 패딩 */
+  --layout-tab-pad:   32px;          /* 태블릿 좌우 패딩 */
+  --layout-mob-pad:   20px;          /* 모바일 좌우 패딩 */
+  --layout-section-gap: 50px;        /* 섹션 간격 */
+  --layout-header-h:  100px;         /* 헤더 높이 */
+  --layout-footer-h:  80px;          /* 하단 고정 바 높이 */
+
+  /* ── 반경 ── */
+  --radius-xs:        4px;
+  --radius-sm:        8px;
+  --radius-md:        15px;          /* 폼 입력 */
+  --radius-lg:        20px;          /* 배지·날짜 행 */
+  --radius-xl:        30px;          /* 총금액 박스·CTA 버튼 */
+  --radius-2xl:       50px;          /* 흰 카드 */
+  --radius-full:      9999px;
+
+  /* ── 스페이싱 (기존 유지 + 확장) ── */
+  --spacing-1:  4px;
+  --spacing-2:  8px;
+  --spacing-3:  12px;
+  --spacing-4:  16px;
+  --spacing-5:  20px;
+  --spacing-6:  24px;
+  --spacing-8:  32px;
+  --spacing-10: 40px;
+  --spacing-12: 48px;
+  --spacing-16: 64px;
+
+  /* ── 기존 호환 토큰 (레거시 — 신규 개발 시 위 토큰 사용) ── */
+  --color-primary:        var(--cs-orange);
+  --color-primary-hover:  var(--cs-orange-hover);
+  --color-surface:        var(--cs-white);
+  --color-surface-alt:    var(--cs-surface-gray);
+  --color-text:           var(--cs-text);
+  --color-text-secondary: var(--cs-text-mid);
+  --color-border:         var(--cs-border);
+  --color-error:          var(--cs-error);
+  --color-success:        var(--cs-success);
+}
+
+/* ══ RESET ══ */
 * {
-	margin: 0;
-	padding: 0;
-	box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
 }
 
-html,
-body {
-	height: 100%;
-}
+html, body { height: 100%; }
 
 body {
-	font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial,
-		sans-serif;
-	color: #1f2937;
-	background-color: #f9fafb;
+  font: var(--text-m-body-16L);
+  color: var(--cs-text);
+  background-color: var(--cs-lilac);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
 }
 
 @tailwind base;

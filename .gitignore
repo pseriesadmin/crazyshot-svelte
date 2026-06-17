@@ -40,6 +40,12 @@ pnpm-debug.log*
 .cache/
 *.log
 
+# Harness learnings — 자동 생성 에러 로그 (패턴 파일은 커밋)
+.claude/harness/learnings/compile_error.md
+.claude/harness/learnings/test_error.md
+.claude/harness/learnings/green_compile_error.md
+.claude/harness/learnings/boundary_violations.md
+
 # Test coverage
 coverage/
 
@@ -50,3 +56,4 @@ out/
 
 # Vercel
 .vercel/
+.vercel

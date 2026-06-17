@@ -13,7 +13,12 @@
     "format": "prettier --write .",
     "harness:check": "eslint src --ext .ts,.svelte && tsc --noEmit",
     "harness:fix": "eslint src --ext .ts,.svelte --fix",
-    "harness:gc": "npx ts-prune src --error 2>/dev/null || true"
+    "harness:gc": "npx ts-prune src --error 2>/dev/null || true",
+    "boundary:check": "node scripts/boundary-validator.cjs",
+    "boundary:report": "node scripts/boundary-validator.cjs --verbose",
+    "harness:health": "bash scripts/harness-health-check.sh",
+    "harness:health:fix": "bash scripts/harness-health-check.sh --fix",
+    "check": "svelte-check --tsconfig ./tsconfig.json"
   },
   "keywords": [],
   "author": "",

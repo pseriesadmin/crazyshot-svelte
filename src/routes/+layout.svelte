@@ -45,7 +45,7 @@
 					<a href="/auth/login" class="px-3 py-1 text-sm rounded hover:bg-gray-100">Sign In</a>
 				{/if}
 				<button
-					on:click={toggleLanguage}
+					onclick={toggleLanguage}
 					class="px-3 py-1 text-sm rounded hover:bg-gray-100"
 				>
 					{currentLocale === 'ko' ? '🇰🇷 KOR' : '🇺🇸 ENG'}

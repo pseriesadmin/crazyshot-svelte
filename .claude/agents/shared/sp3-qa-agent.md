@@ -90,9 +90,19 @@ ui-mobile.md:
 TypeScript:
 □ npm run check (tsc --noEmit) → 에러 0건
 
+SvelteKit 5 패턴 (신규 — v3.1):
+□ Svelte 4 이벤트 문법 없음
+  → grep -rn "on:click\|on:input\|on:submit\|on:change" src/
+□ writable store 사용 없음 (→ $state 사용)
+  → grep -rn "from 'svelte/store'" src/
+□ export let 사용 없음 (→ $props 사용)
+  → grep -rn "export let" src/lib/components/
+□ $env/static/public에 서버 키 없음
+  → grep -rn "TOSS_SECRET\|SERVICE_ROLE" src/ | grep "static/public"
+
 성능:
 □ N+1 쿼리 없음
-□ 불필요한 realtime 구독 없음 (onDestroy 해제)
+□ 불필요한 realtime 구독 없음 ($effect cleanup 또는 onDestroy 해제)
 
 접근성:
 □ 이미지 alt 속성 존재
@@ -199,4 +209,4 @@ QA 종합: {통과 ✅ / 재검수 필요 ⚠️}
 
 ---
 
-*sp3-qa-agent.md v3.0 | Harness Flow v3.0 | QA Evaluator*
+*sp3-qa-agent.md v3.1 | Harness Flow v3.1 | QA Evaluator + SvelteKit 5 체크*

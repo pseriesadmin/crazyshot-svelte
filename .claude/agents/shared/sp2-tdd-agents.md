@@ -126,6 +126,37 @@ git은 절대 혼자 실행하지 않는다.
 "🟢 GREEN: {N}개 통과. GATE C [GREEN] 대기."
 ```
 
+### GREEN 자동 검증 (v3.2 신규)
+
+GREEN 완료 후 **자동으로** Self-Correction Runner 실행:
+
+```bash
+npm run test {파일명}        # 테스트 재확인
+  ├─ ✓ 전체 통과 → 다음 단계
+  └─ ✗ 부분 실패 → 실패 테스트 명확화 후 구현 추가
+
+npm run check              # TypeScript 컴파일
+  └─ ✗ 실패 → .harness/learnings/green_compile_error.md 저장
+             → 에이전트 자동 수정 시도
+
+npm run lint               # ESLint (선택)
+```
+
+**자동 피드백 예시:**
+
+```
+❌ GREEN 후 타입 에러 발생
+  "Property 'transaction_id' does not exist on type 'PaymentResult'"
+  ↓
+에러 위치 + 타입 정보 저장
+  ↓
+에이전트 다음 턴:
+  "GREEN 컴파일 실패. 원인: 반환 타입 누락."
+  "수정: interface PaymentResult에 transaction_id 추가합니다."
+  ↓
+구현 수정 + npm run check → 성공!
+```
+
 ### GREEN GATE C
 
 ```
@@ -134,6 +165,8 @@ git은 절대 혼자 실행하지 않는다.
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 구현파일: {경로}
 테스트  : {N}개 통과 / 0개 실패
+✓ npm run check: PASS
+✓ npm run lint: PASS
 
 크레이지샷 도메인 확인:
 

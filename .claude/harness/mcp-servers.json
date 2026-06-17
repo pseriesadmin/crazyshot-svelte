@@ -1,0 +1,192 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Crazyshot MCP Servers Configuration v3.2",
+  "description": "Model Context Protocol servers for Harness Flow integration",
+  "version": "3.2",
+  "note": "v3.2에서 공식 추가. 현재는 선언만 — 실제 MCP 통합은 향후 단계",
+  "mcpServers": {
+    "github_mcp": {
+      "enabled": false,
+      "description": "GitHub PR/Issue 관리 (GATE E 후 고려)",
+      "command": "npx",
+      "args": ["@modelcontextprotocol/server-github"],
+      "env": {
+        "GITHUB_TOKEN": "$env/dynamic/private/GITHUB_TOKEN"
+      },
+      "use_cases": [
+        "자동 PR 생성 (sp4-deploy-agent)",
+        "이슈 자동 댓글 (QA 결과 반영)",
+        "커밋 메시지 자동화"
+      ]
+    },
+    "playwright_mcp": {
+      "enabled": false,
+      "description": "브라우저 자동화 + 스크린샷 (UI 검증용)",
+      "command": "npx",
+      "args": ["@modelcontextprotocol/server-playwright"],
+      "env": {
+        "BROWSER_TIMEOUT": "30000"
+      },
+      "use_cases": [
+        "UI 변경 후 스크린샷 캡처",
+        "모바일 반응형 테스트",
+        "Cloudinary CDN 이미지 렌더링 확인"
+      ]
+    },
+    "postgres_mcp": {
+      "enabled": true,
+      "description": "Supabase PostgreSQL 쿼리 + 분석 (TDD 검증용)",
+      "command": "python",
+      "args": ["-m", "mcp_postgres_server"],
+      "env": {
+        "DATABASE_URL": "$env/dynamic/private/SUPABASE_DB_URL",
+        "READONLY": "false"
+      },
+      "restrictions": {
+        "allowed_schemas": ["public"],
+        "forbidden_tables": ["auth.users", "auth.sessions"],
+        "forbidden_operations": ["DROP", "TRUNCATE", "DELETE FROM"],
+        "allowed_operations": ["SELECT", "EXPLAIN ANALYZE"]
+      },
+      "use_cases": [
+        "스키마 구조 탐색 (rental_reservations 테이블 정의)",
+        "쿼리 성능 분석 (EXPLAIN ANALYZE)",
+        "마이그레이션 유효성 검증"
+      ]
+    },
+    "supabase_mcp": {
+      "enabled": true,
+      "description": "Supabase REST API + RPC 호출 (현재 주요 도구)",
+      "command": "node",
+      "args": ["scripts/mcp-supabase-server.js"],
+      "env": {
+        "SUPABASE_URL": "$env/static/public/PUBLIC_SUPABASE_URL",
+        "SUPABASE_ANON_KEY": "$env/static/public/PUBLIC_SUPABASE_ANON_KEY",
+        "SUPABASE_SERVICE_ROLE_KEY": "$env/static/private/SUPABASE_SERVICE_ROLE_KEY"
+      },
+      "rate_limits": {
+        "calls_per_minute": 60,
+        "concurrent_calls": 5
+      },
+      "use_cases": [
+        "atomic_reserve_asset RPC 호출",
+        "calculate_cart_total RPC 호출",
+        "check_asset_availability RPC 호출",
+        "payment_transactions 조회",
+        "raw_webhook_logs 저장"
+      ]
+    },
+    "toss_payments_mcp": {
+      "enabled": false,
+      "description": "Toss Payments API (결제 검증용)",
+      "command": "node",
+      "args": ["scripts/mcp-toss-server.js"],
+      "env": {
+        "TOSS_CLIENT_KEY": "$env/static/public/PUBLIC_TOSS_CLIENT_KEY",
+        "TOSS_SECRET_KEY": "$env/static/private/TOSS_SECRET_KEY"
+      },
+      "restrictions": {
+        "allowed_endpoints": [
+          "/v1/payments/confirm",
+          "/v1/payments/{paymentKey}",
+          "/v1/billing/authorizations/{authKey}/issue"
+        ],
+        "forbidden_endpoints": [
+          "/v1/payments/{paymentKey}/cancel",
+          "/v1/settlements"
+        ]
+      },
+      "use_cases": [
+        "결제 승인 (confirmPayment)",
+        "결제 조회 (getPaymentDetails)",
+        "환불 계산 검증"
+      ]
+    },
+    "vercel_mcp": {
+      "enabled": false,
+      "description": "Vercel 배포 + 로그 (GATE E 후 고려)",
+      "command": "npx",
+      "args": ["@modelcontextprotocol/server-vercel"],
+      "env": {
+        "VERCEL_TOKEN": "$env/dynamic/private/VERCEL_TOKEN",
+        "VERCEL_PROJECT_ID": "$env/static/public/VERCEL_PROJECT_ID"
+      },
+      "use_cases": [
+        "배포 상태 조회",
+        "환경변수 관리",
+        "빌드 로그 분석"
+      ]
+    }
+  },
+  "middleware_integration": {
+    "pii_shield": {
+      "enabled": true,
+      "applies_to": ["supabase_mcp", "postgres_mcp", "toss_payments_mcp"],
+      "description": "모든 MCP 호출 결과에서 PII 자동 마스킹"
+    },
+    "tool_budget": {
+      "enabled": true,
+      "applies_to": ["supabase_mcp"],
+      "description": "TDD 결제 태스크 시에만 toss_payments_mcp 활성화"
+    },
+    "resilience": {
+      "enabled": true,
+      "applies_to": ["supabase_mcp", "postgres_mcp"],
+      "exponential_backoff": {
+        "initial_delay_ms": 1000,
+        "max_retries": 3,
+        "max_delay_ms": 8000
+      }
+    }
+  },
+  "auth_management": {
+    "static_public": {
+      "location": "$env/static/public",
+      "keys": [
+        "PUBLIC_SUPABASE_URL",
+        "PUBLIC_SUPABASE_ANON_KEY",
+        "PUBLIC_TOSS_CLIENT_KEY"
+      ],
+      "restrictions": "클라이언트 코드에서 import 가능"
+    },
+    "static_private": {
+      "location": "$env/static/private",
+      "keys": [
+        "SUPABASE_SERVICE_ROLE_KEY",
+        "TOSS_SECRET_KEY"
+      ],
+      "restrictions": "서버사이드(+server.ts, RPC) 전용 — 클라이언트 import 금지"
+    },
+    "dynamic_private": {
+      "location": "$env/dynamic/private",
+      "keys": [
+        "GITHUB_TOKEN",
+        "VERCEL_TOKEN",
+        "SUPABASE_DB_URL"
+      ],
+      "restrictions": "런타임 서버사이드 로드 (빌드 시점에 필요 없음)"
+    }
+  },
+  "learning_integration": {
+    "description": "MCP 호출 실패 시 자동 학습 기록",
+    "storage": ".harness/learnings/",
+    "examples": [
+      {
+        "scenario": "atomic_reserve_asset RPC 실패",
+        "capture": ".harness/learnings/rental_rpc_errors.md",
+        "content": "RPC 실패 사유 + 매개변수 + 해결책"
+      },
+      {
+        "scenario": "Toss Payments API 실패",
+        "capture": ".harness/learnings/payment_api_errors.md",
+        "content": "결제 실패 유형 + 에러 코드 + 재시도 전략"
+      }
+    ]
+  },
+  "roadmap": {
+    "v3.2": "선언 + 문서화",
+    "v3.3": "Supabase MCP 실제 구현",
+    "v3.4": "Playwright MCP (UI 검증)",
+    "v3.5": "GitHub MCP (자동 PR 생성)"
+  }
+}

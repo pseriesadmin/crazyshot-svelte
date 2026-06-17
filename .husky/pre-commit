@@ -56,6 +56,16 @@ if grep -rn "TOSS_SECRET_KEY\|SERVICE_ROLE_KEY" src/ --include="*.ts" \
   exit 1
 fi
 
+# [BC-01] Boundary Rules 자동 검사 (v3.2 신규)
+echo "  경계 규칙 검사..."
+if [ -f "scripts/boundary-validator.cjs" ]; then
+  node scripts/boundary-validator.cjs || {
+    echo "❌ 경계 규칙 위반."
+    echo "   상세: .claude/harness/learnings/boundary_violations.md"
+    exit 1
+  }
+fi
+
 echo ""
 echo "✅ Harness pre-commit 검사 통과."
 echo ""

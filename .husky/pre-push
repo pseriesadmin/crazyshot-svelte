@@ -1,0 +1,64 @@
+#!/bin/sh
+. "$(dirname "$0")/_/husky.sh"
+
+echo ""
+echo "🚀 Harness pre-push 검사 시작..."
+
+# [P-01] 머지 충돌 마커 잔류 검사
+echo "  충돌 마커 검사..."
+if git diff --cached --name-only 2>/dev/null | xargs grep -l "^<<<<<<< HEAD" 2>/dev/null; then
+  echo "❌ 머지 충돌 마커가 남아 있습니다."
+  exit 1
+fi
+
+# 실제 push 대상 파일에서 확인
+CONFLICT=$(grep -rn "<<<<<<< HEAD\|=======$\|>>>>>>> " src/ \
+  --include="*.ts" --include="*.svelte" 2>/dev/null | grep -v ".git" || true)
+if [ -n "$CONFLICT" ]; then
+  echo "❌ 소스 파일에 머지 충돌 마커 잔류:"
+  echo "$CONFLICT" | head -5
+  exit 1
+fi
+echo "  ✓ 충돌 마커 없음"
+
+# [P-02] 대용량 파일 검사 (>5MB)
+echo "  대용량 파일 검사..."
+MAX_BYTES=5242880  # 5MB
+
+# push 범위 브랜치의 신규 파일
+git diff --name-only HEAD~1..HEAD 2>/dev/null | while read -r file; do
+  if [ -f "$file" ]; then
+    SIZE=$(wc -c < "$file" | tr -d ' ')
+    if [ "$SIZE" -gt "$MAX_BYTES" ]; then
+      echo "❌ 대용량 파일: $file ($(echo "scale=1; $SIZE/1024/1024" | bc)MB)"
+      exit 1
+    fi
+  fi
+done
+echo "  ✓ 파일 크기 적정"
+
+# [P-03] 서버 키 하드코딩 검사 (전체 src)
+echo "  서버 키 하드코딩 검사..."
+if grep -rn \
+  -e "sk_live_\|sk_test_" \
+  -e "service_role.*eyJ" \
+  -e "TOSS_SECRET_KEY\s*=\s*['\"]" \
+  src/ 2>/dev/null | grep -v "harness-allow"; then
+  echo "❌ 서버 키 하드코딩 감지. .env를 통해 관리하세요."
+  exit 1
+fi
+echo "  ✓ 서버 키 하드코딩 없음"
+
+# [P-04] Boundary Validator (push 전 최종 확인)
+echo "  경계 규칙 최종 확인..."
+if [ -f "scripts/boundary-validator.cjs" ]; then
+  node scripts/boundary-validator.cjs 2>&1 || {
+    echo "❌ 경계 규칙 위반 감지. 커밋 내용을 수정하세요."
+    exit 1
+  }
+fi
+
+echo ""
+echo "✅ Harness pre-push 검사 통과."
+echo ""
+exit 0
