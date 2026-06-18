@@ -36,9 +36,9 @@ if grep -rn ": any\b" src/ --include="*.ts" --include="*.svelte" \
   exit 1
 fi
 
-# [GP-10] 기존 마이그레이션 파일 수정 감지
+# [GP-10] 기존 마이그레이션 파일 수정 감지 (Added 파일은 제외, Modified만 차단)
 echo "  마이그레이션 파일 수정 감지..."
-MODIFIED=$(git diff --cached --name-only 2>/dev/null | grep "supabase/migrations/" || true)
+MODIFIED=$(git diff --cached --name-only --diff-filter=M 2>/dev/null | grep "supabase/migrations/" || true)
 if [ -n "$MODIFIED" ]; then
   echo "❌ 기존 마이그레이션 파일 수정 감지:"
   echo "$MODIFIED"
