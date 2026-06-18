@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { onMount } from 'svelte';
   import { slide } from 'svelte/transition';
   import type { PageData } from './$types';
   import type { Product } from '$lib/types/database';
@@ -93,6 +94,7 @@
   let rpReturnService = $state<DeliveryService>('quick');
   let rpReturnOpen = $state(false);
   let rpReturnForm = $state<FormState>(defaultForm());
+  let rpCopyToReturn = $state(false);
 
   // ── Order Total
   let otCouponWelcome = $state(false);
@@ -129,6 +131,59 @@
     return `${String(h).padStart(2, '0')}:00`;
   }
 
+  // ── Copy-to-return sync handlers
+  function c1HandleDelivery(v: DeliveryType) { c1Opts = { ...c1Opts, rentalDelivery: v, ...(c1Opts.copyToReturn ? { returnDelivery: v } : {}) }; }
+  function c1HandleVisit(v: VisitLocation) { c1Opts = { ...c1Opts, rentalVisit: v, ...(c1Opts.copyToReturn ? { returnVisit: v } : {}) }; }
+  function c1HandleService(v: DeliveryService) { c1Opts = { ...c1Opts, rentalService: v, ...(c1Opts.copyToReturn ? { returnService: v } : {}) }; }
+  function c1HandleRentalForm(f: FormState) { c1RentalForm = f; if (c1Opts.copyToReturn) c1ReturnForm = { ...f }; }
+  function c1HandleRentalDate(d: string) { c1RentalDate = d; if (c1Opts.copyToReturn) c1ReturnDate = d; }
+  function c1HandleRentalTime(t: string) { c1RentalTime = t; if (c1Opts.copyToReturn) c1ReturnTime = t; }
+  function c1HandleCopy(v: boolean) {
+    if (v) {
+      c1Opts = { ...c1Opts, copyToReturn: true, returnDelivery: c1Opts.rentalDelivery, returnVisit: c1Opts.rentalVisit, returnService: c1Opts.rentalService };
+      c1ReturnForm = { ...c1RentalForm };
+      c1ReturnDate = c1RentalDate;
+      c1ReturnTime = c1RentalTime;
+    } else {
+      c1Opts = { ...c1Opts, copyToReturn: false };
+    }
+  }
+
+  function c2HandleDelivery(v: DeliveryType) { c2Opts = { ...c2Opts, rentalDelivery: v, ...(c2Opts.copyToReturn ? { returnDelivery: v } : {}) }; }
+  function c2HandleVisit(v: VisitLocation) { c2Opts = { ...c2Opts, rentalVisit: v, ...(c2Opts.copyToReturn ? { returnVisit: v } : {}) }; }
+  function c2HandleService(v: DeliveryService) { c2Opts = { ...c2Opts, rentalService: v, ...(c2Opts.copyToReturn ? { returnService: v } : {}) }; }
+  function c2HandleRentalForm(f: FormState) { c2RentalForm = f; if (c2Opts.copyToReturn) c2ReturnForm = { ...f }; }
+  function c2HandleRentalDate(d: string) { c2RentalDate = d; if (c2Opts.copyToReturn) c2ReturnDate = d; }
+  function c2HandleRentalTime(t: string) { c2RentalTime = t; if (c2Opts.copyToReturn) c2ReturnTime = t; }
+  function c2HandleCopy(v: boolean) {
+    if (v) {
+      c2Opts = { ...c2Opts, copyToReturn: true, returnDelivery: c2Opts.rentalDelivery, returnVisit: c2Opts.rentalVisit, returnService: c2Opts.rentalService };
+      c2ReturnForm = { ...c2RentalForm };
+      c2ReturnDate = c2RentalDate;
+      c2ReturnTime = c2RentalTime;
+    } else {
+      c2Opts = { ...c2Opts, copyToReturn: false };
+    }
+  }
+
+  function rpHandleDelivery(v: DeliveryType) { rpRentalDelivery = v; if (rpCopyToReturn) rpReturnDelivery = v; }
+  function rpHandleVisit(v: VisitLocation) { rpRentalVisit = v; if (rpCopyToReturn) rpReturnVisit = v; }
+  function rpHandleService(v: DeliveryService) { rpRentalService = v; if (rpCopyToReturn) rpReturnService = v; }
+  function rpHandleRentalForm(f: FormState) { rpRentalForm = f; if (rpCopyToReturn) rpReturnForm = { ...f }; }
+  function rpHandleRentalDate(d: string) { rpRentalDateVal = d; if (rpCopyToReturn) rpReturnDateVal = d; }
+  function rpHandleRentalTime(t: string) { rpRentalTimeVal2 = t; if (rpCopyToReturn) rpReturnTimeVal2 = t; }
+  function rpHandleCopy(v: boolean) {
+    rpCopyToReturn = v;
+    if (v) {
+      rpReturnDelivery = rpRentalDelivery;
+      rpReturnVisit = rpRentalVisit;
+      rpReturnService = rpRentalService;
+      rpReturnForm = { ...rpRentalForm };
+      rpReturnDateVal = rpRentalDateVal;
+      rpReturnTimeVal2 = rpRentalTimeVal2;
+    }
+  }
+
   function calDays(year: number, month: number): (number | null)[] {
     const firstDay = new Date(year, month, 1).getDay();
     const daysInMonth = new Date(year, month + 1, 0).getDate();
@@ -150,6 +205,22 @@
 
   // ── Footer
   let agreed = $state(false);
+  let footerVisible = $state(false);
+
+  onMount(() => {
+    let lastY = window.scrollY;
+    function onScroll() {
+      const y = window.scrollY;
+      if (y > lastY) {
+        footerVisible = true;   // 아래로 스크롤 → 팝업
+      } else if (y < lastY) {
+        footerVisible = false;  // 위로 스크롤 → 다운
+      }
+      lastY = y;
+    }
+    window.addEventListener('scroll', onScroll, { passive: true });
+    return () => window.removeEventListener('scroll', onScroll);
+  });
 
   // ── Helpers
   function optionLabel(delivery: DeliveryType, visit: VisitLocation, service: DeliveryService): string {
@@ -178,10 +249,10 @@
   <header class="cart-header">
     <div class="cart-header-inner">
       <!-- Back + Cart pill -->
-      <button class="header-pill">
+      <button type="button" class="header-pill" aria-label="뒤로 가기, 장바구니">
         <div class="header-pill-left">
-          <svg width="22" height="18" viewBox="0 0 21.3844 17.1421" fill="none">
-            <path d="M19.8844 8.5707L1.5 8.57107M8.57107 1.5L1.5 8.57107L8.57107 15.6421" stroke="#100B32" stroke-linecap="round" stroke-linejoin="round" stroke-width="3"/>
+          <svg class="header-pill-arrow" viewBox="0 0 21.3844 17.1421" fill="none" aria-hidden="true">
+            <path d="M19.8844 8.5707L1.5 8.57107M8.57107 1.5L1.5 8.57107L8.57107 15.6421" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="3"/>
           </svg>
           <span class="header-back-text">Back</span>
         </div>
@@ -349,14 +420,14 @@
                     <span class="acc-label">대여 방법</span>
                     <div class="acc-head-right">
                       <span class="acc-value">{optionLabel(c1Opts.rentalDelivery, c1Opts.rentalVisit, c1Opts.rentalService)}</span>
-                      <svg width="12" height="8" viewBox="0 0 12 8" fill="none" class:rotate-180={c1Acc.rental} style="transition:transform 0.3s">
+                      <svg width="12" height="8" viewBox="0 0 12 8" fill="none" style="transition:transform 0.3s;transform:{c1Acc.rental ? 'rotate(180deg)' : 'none'}">
                         <path d="M1 1L6 7L11 1" stroke="#444" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
                       </svg>
                     </div>
                   </button>
                   {#if c1Acc.rental}
                     <div transition:slide={{ duration: 300 }} class="acc-body">
-                      {@render RentalForm({ type: 'rental', calId: 'c1-rental', selectedDate: c1RentalDate, onDateChange: (d) => c1RentalDate = d, timeId: 'c1-rental-t', selectedTime: c1RentalTime, onTimeChange: (t) => c1RentalTime = t, delivery: c1Opts.rentalDelivery, visitLoc: c1Opts.rentalVisit, service: c1Opts.rentalService, form: c1RentalForm, copyToReturn: c1Opts.copyToReturn, onDeliveryChange: (v) => c1Opts = { ...c1Opts, rentalDelivery: v }, onVisitChange: (v) => c1Opts = { ...c1Opts, rentalVisit: v }, onServiceChange: (v) => c1Opts = { ...c1Opts, rentalService: v }, onFormChange: (f) => c1RentalForm = f, onCopyChange: (v) => c1Opts = { ...c1Opts, copyToReturn: v } })}
+                      {@render RentalForm({ type: 'rental', calId: 'c1-rental', selectedDate: c1RentalDate, onDateChange: c1HandleRentalDate, timeId: 'c1-rental-t', selectedTime: c1RentalTime, onTimeChange: c1HandleRentalTime, delivery: c1Opts.rentalDelivery, visitLoc: c1Opts.rentalVisit, service: c1Opts.rentalService, form: c1RentalForm, copyToReturn: c1Opts.copyToReturn, onDeliveryChange: c1HandleDelivery, onVisitChange: c1HandleVisit, onServiceChange: c1HandleService, onFormChange: c1HandleRentalForm, onCopyChange: c1HandleCopy })}
                     </div>
                   {/if}
                 </div>
@@ -366,7 +437,7 @@
                     <span class="acc-label">반납 방법</span>
                     <div class="acc-head-right">
                       <span class="acc-value">{optionLabel(c1Opts.returnDelivery, c1Opts.returnVisit, c1Opts.returnService)}</span>
-                      <svg width="12" height="8" viewBox="0 0 12 8" fill="none" class:rotate-180={c1Acc.return_} style="transition:transform 0.3s">
+                      <svg width="12" height="8" viewBox="0 0 12 8" fill="none" style="transition:transform 0.3s;transform:{c1Acc.return_ ? 'rotate(180deg)' : 'none'}">
                         <path d="M1 1L6 7L11 1" stroke="#444" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
                       </svg>
                     </div>
@@ -383,7 +454,7 @@
                     <span class="acc-label">약정 요금</span>
                     <div class="acc-head-right">
                       <span class="acc-value">153,000 원</span>
-                      <svg width="12" height="8" viewBox="0 0 12 8" fill="none" class:rotate-180={c1Acc.fee} style="transition:transform 0.3s">
+                      <svg width="12" height="8" viewBox="0 0 12 8" fill="none" style="transition:transform 0.3s;transform:{c1Acc.fee ? 'rotate(180deg)' : 'none'}">
                         <path d="M1 1L6 7L11 1" stroke="#444" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
                       </svg>
                     </div>
@@ -509,14 +580,14 @@
                     <span class="acc-label">대여 방법</span>
                     <div class="acc-head-right">
                       <span class="acc-value">{optionLabel(c2Opts.rentalDelivery, c2Opts.rentalVisit, c2Opts.rentalService)}</span>
-                      <svg width="12" height="8" viewBox="0 0 12 8" fill="none" class:rotate-180={c2Acc.rental} style="transition:transform 0.3s">
+                      <svg width="12" height="8" viewBox="0 0 12 8" fill="none" style="transition:transform 0.3s;transform:{c2Acc.rental ? 'rotate(180deg)' : 'none'}">
                         <path d="M1 1L6 7L11 1" stroke="#444" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
                       </svg>
                     </div>
                   </button>
                   {#if c2Acc.rental}
                     <div transition:slide={{ duration: 300 }} class="acc-body">
-                      {@render RentalForm({ type: 'rental', calId: 'c2-rental', selectedDate: c2RentalDate, onDateChange: (d) => c2RentalDate = d, timeId: 'c2-rental-t', selectedTime: c2RentalTime, onTimeChange: (t) => c2RentalTime = t, delivery: c2Opts.rentalDelivery, visitLoc: c2Opts.rentalVisit, service: c2Opts.rentalService, form: c2RentalForm, copyToReturn: c2Opts.copyToReturn, onDeliveryChange: (v) => c2Opts = { ...c2Opts, rentalDelivery: v }, onVisitChange: (v) => c2Opts = { ...c2Opts, rentalVisit: v }, onServiceChange: (v) => c2Opts = { ...c2Opts, rentalService: v }, onFormChange: (f) => c2RentalForm = f, onCopyChange: (v) => c2Opts = { ...c2Opts, copyToReturn: v } })}
+                      {@render RentalForm({ type: 'rental', calId: 'c2-rental', selectedDate: c2RentalDate, onDateChange: c2HandleRentalDate, timeId: 'c2-rental-t', selectedTime: c2RentalTime, onTimeChange: c2HandleRentalTime, delivery: c2Opts.rentalDelivery, visitLoc: c2Opts.rentalVisit, service: c2Opts.rentalService, form: c2RentalForm, copyToReturn: c2Opts.copyToReturn, onDeliveryChange: c2HandleDelivery, onVisitChange: c2HandleVisit, onServiceChange: c2HandleService, onFormChange: c2HandleRentalForm, onCopyChange: c2HandleCopy })}
                     </div>
                   {/if}
                 </div>
@@ -525,7 +596,7 @@
                     <span class="acc-label">반납 방법</span>
                     <div class="acc-head-right">
                       <span class="acc-value">{optionLabel(c2Opts.returnDelivery, c2Opts.returnVisit, c2Opts.returnService)}</span>
-                      <svg width="12" height="8" viewBox="0 0 12 8" fill="none" class:rotate-180={c2Acc.return_} style="transition:transform 0.3s">
+                      <svg width="12" height="8" viewBox="0 0 12 8" fill="none" style="transition:transform 0.3s;transform:{c2Acc.return_ ? 'rotate(180deg)' : 'none'}">
                         <path d="M1 1L6 7L11 1" stroke="#444" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
                       </svg>
                     </div>
@@ -541,7 +612,7 @@
                     <span class="acc-label">약정 요금</span>
                     <div class="acc-head-right">
                       <span class="acc-value">154,000 원</span>
-                      <svg width="12" height="8" viewBox="0 0 12 8" fill="none" class:rotate-180={c2Acc.fee} style="transition:transform 0.3s">
+                      <svg width="12" height="8" viewBox="0 0 12 8" fill="none" style="transition:transform 0.3s;transform:{c2Acc.fee ? 'rotate(180deg)' : 'none'}">
                         <path d="M1 1L6 7L11 1" stroke="#444" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
                       </svg>
                     </div>
@@ -577,14 +648,14 @@
                 <span class="acc-label">대여 방법</span>
                 <div class="acc-head-right">
                   <span class="acc-value">{optionLabel(rpRentalDelivery, rpRentalVisit, rpRentalService)}</span>
-                  <svg width="12" height="8" viewBox="0 0 12 8" fill="none" class:rotate-180={rpRentalOpen} style="transition:transform 0.3s">
+                  <svg width="12" height="8" viewBox="0 0 12 8" fill="none" style="transition:transform 0.3s;transform:{rpRentalOpen ? 'rotate(180deg)' : 'none'}">
                     <path d="M1 1L6 7L11 1" stroke="#444" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
                   </svg>
                 </div>
               </button>
               {#if rpRentalOpen}
                 <div transition:slide={{ duration: 300 }} class="acc-body">
-                  {@render RentalForm({ type: 'rental', calId: 'rp-rental', selectedDate: rpRentalDateVal, onDateChange: (d) => rpRentalDateVal = d, timeId: 'rp-rental-t', selectedTime: rpRentalTimeVal2, onTimeChange: (t) => rpRentalTimeVal2 = t, delivery: rpRentalDelivery, visitLoc: rpRentalVisit, service: rpRentalService, form: rpRentalForm, onDeliveryChange: (v) => rpRentalDelivery = v, onVisitChange: (v) => rpRentalVisit = v, onServiceChange: (v) => rpRentalService = v, onFormChange: (f) => rpRentalForm = f })}
+                  {@render RentalForm({ type: 'rental', calId: 'rp-rental', selectedDate: rpRentalDateVal, onDateChange: rpHandleRentalDate, timeId: 'rp-rental-t', selectedTime: rpRentalTimeVal2, onTimeChange: rpHandleRentalTime, delivery: rpRentalDelivery, visitLoc: rpRentalVisit, service: rpRentalService, form: rpRentalForm, copyToReturn: rpCopyToReturn, onDeliveryChange: rpHandleDelivery, onVisitChange: rpHandleVisit, onServiceChange: rpHandleService, onFormChange: rpHandleRentalForm, onCopyChange: rpHandleCopy })}
                 </div>
               {/if}
             </div>
@@ -594,7 +665,7 @@
                 <span class="acc-label">반납 방법</span>
                 <div class="acc-head-right">
                   <span class="acc-value">{optionLabel(rpReturnDelivery, rpReturnVisit, rpReturnService)}</span>
-                  <svg width="12" height="8" viewBox="0 0 12 8" fill="none" class:rotate-180={rpReturnOpen} style="transition:transform 0.3s">
+                  <svg width="12" height="8" viewBox="0 0 12 8" fill="none" style="transition:transform 0.3s;transform:{rpReturnOpen ? 'rotate(180deg)' : 'none'}">
                     <path d="M1 1L6 7L11 1" stroke="#444" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
                   </svg>
                 </div>
@@ -676,7 +747,7 @@
   </main>
 
   <!-- ═══════════════════════ FOOTER ═══════════════════════ -->
-  <footer class="cart-footer">
+  <footer class="cart-footer" class:footer-visible={footerVisible}>
     <div class="footer-inner">
       <label class="footer-terms">
         <button class="checkbox-btn" onclick={() => agreed = !agreed} aria-label="동의">
@@ -703,6 +774,22 @@
       </button>
     </div>
   </footer>
+
+  <!-- ═══════════════════════ FLOATING BAR ═══════════════════════ -->
+  <div class="fab-bar" aria-label="빠른 메뉴">
+    <button class="fab-btn" aria-label="장바구니">
+      <svg xmlns="http://www.w3.org/2000/svg" width="52" height="52" viewBox="0 0 35 35" fill="none">
+        <path d="M35 17.5C35 27.165 27.165 35 17.5 35C7.83502 35 0 27.165 0 17.5C0 7.83502 7.83502 0 17.5 0C27.165 0 35 7.83502 35 17.5Z" fill="#3B2F8A"/>
+        <path d="M25.7736 14.25C26.461 14.3115 26.9685 14.918 26.9073 15.6055L26.5402 19.7188L26.5362 19.7559C26.3287 21.5004 25.6935 23.0646 24.588 24.2061C23.4647 25.3657 21.9392 26 20.1573 26H15.754C13.9724 25.9998 12.4475 25.3656 11.3243 24.2061C10.2189 23.0646 9.58361 21.5003 9.37609 19.7559L9.37316 19.7373L9.37219 19.7188L9.005 15.6055C8.94381 14.9181 9.45154 14.3116 10.1388 14.25C10.8264 14.1887 11.4339 14.6962 11.4952 15.3838L11.8614 19.4766C12.0227 20.8088 12.4854 21.8113 13.1202 22.4668C13.7398 23.1063 14.6009 23.4998 15.754 23.5H20.1573C21.3108 23.5 22.1724 23.1064 22.7921 22.4668C23.427 21.8113 23.8906 20.809 24.0519 19.4766L24.4171 15.3838C24.4784 14.6963 25.0861 14.1889 25.7736 14.25Z" fill="white"/>
+        <path d="M17.9562 9.10156C18.8942 9.10156 19.9275 9.43248 20.7423 10.1455C21.5869 10.8847 22.1417 11.9887 22.1417 13.3877V15.4326C22.1417 16.1229 21.582 16.6826 20.8917 16.6826C20.2447 16.6823 19.7125 16.1908 19.6486 15.5605L19.6417 15.4326V13.3877C19.6417 12.6973 19.3889 12.2829 19.0958 12.0264C18.7731 11.7441 18.3385 11.6016 17.9562 11.6016C17.5738 11.6017 17.1392 11.7441 16.8165 12.0264C16.5235 12.2829 16.2706 12.6975 16.2706 13.3877V15.4326C16.2706 16.1229 15.711 16.6826 15.0206 16.6826C14.3304 16.6825 13.7707 16.1228 13.7706 15.4326V13.3877C13.7706 11.9888 14.3256 10.8847 15.17 10.1455C15.9848 9.43242 17.0182 9.10166 17.9562 9.10156Z" fill="white"/>
+      </svg>
+    </button>
+    <button class="fab-btn" aria-label="검색">
+      <svg xmlns="http://www.w3.org/2000/svg" width="52" height="52" viewBox="0 0 35 35" fill="none">
+        <path fill-rule="evenodd" clip-rule="evenodd" d="M17.5 0C27.165 0 35 7.83502 35 17.5C35 27.165 27.165 35 17.5 35C7.83502 35 0 27.165 0 17.5C0 7.83502 7.83502 0 17.5 0ZM22.4912 21.1592C21.9717 20.4791 20.9753 20.362 20.3564 20.9531C19.7512 21.5315 19.8035 22.5066 20.4346 23.0566C21.3083 23.8178 21.9885 24.5282 22.7158 25.4443C23.2368 26.1002 24.2097 26.1977 24.8154 25.6191C25.4338 25.0284 25.363 24.0284 24.708 23.4785C23.8396 22.7498 23.1757 22.0552 22.4912 21.1592ZM19.8799 10.3262C18.4921 9.69815 16.9491 9.49557 15.4463 9.74414C13.9433 9.99289 12.5471 10.6819 11.4355 11.7236C10.324 12.7655 9.5467 14.1139 9.20117 15.5977C8.8558 17.0812 8.95733 18.6341 9.49414 20.0596C10.0312 21.4852 10.9793 22.7203 12.2178 23.6074C13.4563 24.4944 14.9305 24.9944 16.4531 25.0439C17.1427 25.0662 17.7204 24.5255 17.7432 23.8359C17.7655 23.1462 17.2239 22.5686 16.5342 22.5459C15.5059 22.5124 14.5103 22.1742 13.6738 21.5752C12.8372 20.976 12.1968 20.1417 11.834 19.1787C11.4713 18.2157 11.4024 17.1663 11.6357 16.1641C11.8692 15.1619 12.3947 14.2515 13.1455 13.5479C13.8964 12.8442 14.8393 12.379 15.8545 12.2109C16.8696 12.0431 17.9122 12.1793 18.8496 12.6035C19.787 13.0279 20.5783 13.7212 21.1221 14.5947C21.6655 15.4681 21.9383 16.4836 21.9053 17.5117C21.8832 18.2016 22.4243 18.7795 23.1143 18.8018C23.8038 18.8236 24.3809 18.2824 24.4033 17.5928C24.4524 16.0702 24.0491 14.5667 23.2441 13.2734C22.4391 11.9801 21.2677 10.9544 19.8799 10.3262Z" fill="#3B2F8A"/>
+      </svg>
+    </button>
+  </div>
 </div>
 
 <!-- ═══════════════════════ SNIPPET COMPONENTS ═══════════════════════ -->
@@ -1045,61 +1132,77 @@
     position: sticky;
     top: 0;
     z-index: 50;
-    background: white;
+    background: #ECEBF4;
     border-bottom: 1px solid rgba(0,0,0,0.1);
   }
   .cart-header-inner {
     display: flex;
     align-items: center;
-    justify-content: center;
+    justify-content: space-between;
     gap: 30px;
-    padding: 20px;
-    flex-wrap: wrap;
+    width: 100%;
+    max-width: var(--layout-pc-max);
+    margin: 0 auto;
+    padding: 20px var(--layout-pc-pad);
+    flex-wrap: nowrap;
+    box-sizing: border-box;
   }
   .header-pill {
-    background: rgba(225,222,243,0.4);
+    background: rgba(225, 222, 243, 0.4);
     border: none;
     cursor: pointer;
     display: flex;
     align-items: center;
     justify-content: space-between;
-    padding: 15px 40px;
+    gap: 16px;
+    padding: 20px 40px;
     border-radius: 25px;
     width: 100%;
     max-width: 460px;
-    min-width: 300px;
-    flex-shrink: 0;
+    min-width: 0;
+    min-height: 62px;
+    flex: 0 1 460px;
+    box-sizing: border-box;
+    color: var(--cs-text);
+    transition: background 0.2s;
   }
+  .header-pill:hover { background: rgba(225, 222, 243, 0.85); }
   .header-pill-left {
     display: flex;
     align-items: center;
     gap: 9px;
+    min-width: 0;
+  }
+  .header-pill-arrow {
+    width: 22px;
+    height: 18px;
+    flex-shrink: 0;
   }
   .header-back-text {
-    font-size: 16px;
-    font-weight: 700;
-    color: #100B32;
-    line-height: 2;
+    font: var(--text-pc-title-16);
+    color: var(--cs-text);
+    white-space: nowrap;
   }
   .header-cart-text {
-    font-family: var(--font-en-display);
-    font-size: 20px;
-    color: #100B32;
-    line-height: 1.6;
+    font: var(--text-pc-menu-en-20);
+    color: var(--cs-text);
+    flex-shrink: 0;
+    white-space: nowrap;
   }
 
   /* Category icons */
   .cat-icons {
     display: flex;
-    flex-wrap: wrap;
+    flex-wrap: nowrap;
     gap: 30px;
     align-items: center;
     justify-content: flex-end;
-    padding: 0 30px;
+    flex-shrink: 0;
   }
   .cat-icon-btn {
     background: #E1DEF3;
     border: none;
+    outline: none;
     cursor: pointer;
     border-radius: 30px;
     width: 60px;
@@ -1318,7 +1421,7 @@
     border: none;
     cursor: pointer;
     border-radius: 30px;
-    padding: 20px 30px;
+    padding: 30px;
     display: flex;
     align-items: center;
     justify-content: space-between;
@@ -1409,7 +1512,7 @@
   .visit-info {
     font-size: 14px;
     font-weight: 700;
-    color: #CF0000;
+    color: var(--cs-red);
     line-height: 2;
   }
   .visit-info p { margin: 0; }
@@ -1430,11 +1533,10 @@
     border-radius: 20px;
     display: flex;
     flex-wrap: wrap;
-    gap: 30px;
     align-items: center;
     justify-content: center;
     padding: 15px 20px;
-    gap: 40px;
+    gap: 100px;
   }
   .location-group {
     display: flex;
@@ -1505,14 +1607,19 @@
     white-space: nowrap;
   }
 
-  /* ══ Calendar Layer ══ */
+  /* ══ Calendar + Time Layer ══ */
   .datetime-wrap { position: relative; display: flex; flex-direction: column; gap: 0; }
   .cal-layer {
+    position: absolute;
+    top: calc(100% + 8px);
+    left: 0;
+    z-index: 100;
     background: white;
     border-radius: 20px;
     padding: 20px;
     box-shadow: 0 8px 30px rgba(16,11,50,0.15);
-    margin-top: 8px;
+    width: 50%;
+    box-sizing: border-box;
   }
   .cal-header {
     display: flex;
@@ -1581,12 +1688,46 @@
   .cal-day-sun:not(.cal-day-past) { color: #FF3535; }
   .cal-day-sat:not(.cal-day-past) { color: #3B2F8A; }
 
+  /* ══ Time Layer ══ */
+  .time-layer {
+    position: absolute;
+    top: calc(100% + 8px);
+    right: 0;
+    z-index: 100;
+    background: white;
+    border-radius: 20px;
+    padding: 16px;
+    box-shadow: 0 8px 30px rgba(16,11,50,0.15);
+    width: 50%;
+    box-sizing: border-box;
+  }
+  .time-grid {
+    display: grid;
+    grid-template-columns: repeat(6, 1fr);
+    gap: 4px;
+  }
+  .time-cell {
+    background: #f6f6f6;
+    border: none;
+    border-radius: 10px;
+    padding: 8px 4px;
+    font-family: var(--font-kr);
+    font-size: 12px;
+    font-weight: 500;
+    color: #444;
+    cursor: pointer;
+    transition: background 0.15s;
+    text-align: center;
+  }
+  .time-cell:hover { background: #ECEBF4; }
+  .time-cell-sel { background: #3B2F8A !important; color: white !important; font-weight: 700; }
+
   /* Form inputs */
   .f-input {
     background: #F6F6F6;
     border: none;
     border-radius: 15px;
-    padding: 12px 20px;
+    padding: 10px 20px;
     width: 100%;
     font-size: 14px;
     font-weight: 500;
@@ -1635,7 +1776,7 @@
   .coupon-row-left { display: flex; align-items: center; gap: 20px; cursor: pointer; }
   .coupon-label { font-size: 14px; font-weight: 700; color: #444; }
   .coupon-expiry { font-size: 14px; font-weight: 700; color: #444; display: flex; align-items: center; gap: 10px; }
-  .coupon-days { color: #FF3535; }
+  .coupon-days { color: var(--cs-red-badge); }
   .hint-text { font-size: 12px; font-weight: 500; color: #AAAAAA; letter-spacing: -0.5px; line-height: 1.6; margin: 0; }
 
   /* ══ Price Detail ══ */
@@ -1775,6 +1916,11 @@
     border-top: 1px solid rgba(0,0,0,0.06);
     box-shadow: 0 -4px 20px rgba(16,11,50,0.1);
     padding-bottom: env(safe-area-inset-bottom);
+    transform: translateY(100%);
+    transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  }
+  .cart-footer.footer-visible {
+    transform: translateY(0);
   }
   .footer-inner {
     max-width: 1240px;
@@ -1821,19 +1967,69 @@
     cursor: not-allowed;
   }
 
+  /* ══ Floating Bar ══ */
+  .fab-bar {
+    position: fixed;
+    right: 24px;
+    bottom: 100px;
+    z-index: 40;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+  .fab-btn {
+    background: none;
+    border: none;
+    outline: none;
+    cursor: pointer;
+    padding: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: transform 0.15s;
+    filter: drop-shadow(0 4px 10px rgba(16,11,50,0.22));
+  }
+  .fab-btn:hover { transform: scale(1.07); }
+  .fab-btn:active { transform: scale(0.95); }
+
   /* ══ Responsive ══ */
   @media (max-width: 1024px) {
-    .cart-content { padding: 0 32px; }
+    .cart-content { padding: 0 var(--layout-tab-pad); }
+    .cart-header-inner {
+      padding: 16px var(--layout-tab-pad);
+      gap: 20px;
+      justify-content: space-between;
+    }
+    .header-pill {
+      flex: 1 1 auto;
+      max-width: min(460px, 100%);
+      padding: 14px 28px;
+      min-height: 56px;
+    }
     .footer-inner { padding: 20px 32px; gap: 30px; }
     .cat-icons { gap: 16px; padding: 0 10px; }
     .cat-icon-btn { width: 50px; height: 50px; }
   }
 
   @media (max-width: 640px) {
-    .cart-header-inner { padding: 12px 16px; gap: 12px; flex-direction: column; }
-    .header-pill { padding: 12px 24px; min-width: unset; }
-    .header-back-text { font-size: 14px; }
-    .header-cart-text { font-size: 18px; }
+    .cart-header-inner {
+      padding: 12px var(--layout-mob-pad);
+      gap: 12px;
+      flex-direction: column;
+      align-items: stretch;
+    }
+    .header-pill {
+      flex: 1 1 auto;
+      max-width: none;
+      width: 100%;
+      padding: 12px var(--layout-mob-pad);
+      min-height: 48px;
+      border-radius: var(--radius-lg);
+    }
+    .header-pill-left { gap: 6px; }
+    .header-pill-arrow { width: 18px; height: 15px; }
+    .header-back-text { font: var(--text-m-body-16B); }
+    .header-cart-text { font: var(--text-m-title-18B); font-family: var(--font-en-display); font-weight: 400; }
     .cat-icons { display: none; }
     .cart-main { padding: 30px 0; }
     .cart-content { padding: 0 12px; gap: 30px; }
@@ -1864,9 +2060,24 @@
     .total-dark-box { padding: 16px 20px; border-radius: 20px; }
     .total-label { font-size: 14px; }
     .total-num { font-size: 18px; }
-    .footer-inner { padding: 16px; gap: 16px; }
+    .cart-footer { padding-bottom: max(14px, env(safe-area-inset-bottom)); }
+    .footer-inner { padding: 16px 16px 14px; gap: 16px; flex-direction: column; align-items: stretch; }
+    .footer-terms { flex-shrink: 1; }
     .footer-terms-text { font-size: 13px; white-space: normal; }
-    .footer-cta { height: 52px; font-size: 14px; }
+    .footer-cta { flex: none; width: 100%; height: 56px; font-size: 15px; }
     .price-detail-list { padding: 0 10px; }
+    /* 모바일 letter-spacing (m-body_com_16b: -0.5px, m-titie_com_18b: -0.3px) */
+    .product-name { letter-spacing: -0.3px; }
+    .form-section-label { letter-spacing: -0.5px; }
+    .form-check-label { letter-spacing: -0.5px; }
+    .coupon-label { letter-spacing: -0.5px; }
+    .coupon-expiry { letter-spacing: -0.5px; }
+    .price-row-label { letter-spacing: -0.5px; }
+    .price-row-val { letter-spacing: -0.5px; }
+    .location-cat-label { letter-spacing: -0.5px; }
+    .f-input { letter-spacing: -0.5px; }
+    .copy-label { letter-spacing: -0.5px; }
+    .acc-label { letter-spacing: -0.3px; }
+    .header-pill { padding: 12px 20px; border-radius: 18px; min-height: 44px; }
   }
 </style>

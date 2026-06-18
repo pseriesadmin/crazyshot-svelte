@@ -1,3 +1,4 @@
+import { browser } from '$app/environment';
 import { createClient } from '@supabase/supabase-js';
 import type { Database } from '$lib/types/database';
 import type {
@@ -16,7 +17,14 @@ if (!supabaseUrl || !supabaseAnonKey) {
 }
 
 // Disable auth persistence in SSR to avoid session storage issues in Node.js
-const isSSR = typeof window === 'undefined';
+const isSSR = !browser;
+
+// Node.js < 22 has no native WebSocket — required when createClient initializes Realtime during SSR
+if (isSSR && typeof globalThis.WebSocket === 'undefined') {
+  const { default: ws } = await import('ws');
+  (globalThis as typeof globalThis & { WebSocket: typeof WebSocket }).WebSocket =
+    ws as unknown as typeof WebSocket;
+}
 
 // Singleton Supabase client instance (typed against v5.46 schema)
 export const supabase = createClient<Database>(supabaseUrl, supabaseAnonKey, {
