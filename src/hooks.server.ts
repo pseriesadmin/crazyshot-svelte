@@ -1,9 +1,10 @@
 import ws from 'ws';
 import type { Handle } from '@sveltejs/kit';
 
-// Polyfill WebSocket for Node.js SSR (ESM-safe — require('ws') 금지)
+// Node.js < 22: Supabase Realtime needs WebSocket during SSR (root layout → auth store → supabase client)
 if (typeof globalThis.WebSocket === 'undefined') {
-	(globalThis as unknown as Record<string, unknown>).WebSocket = ws;
+	(globalThis as typeof globalThis & { WebSocket: typeof WebSocket }).WebSocket =
+		ws as unknown as typeof WebSocket;
 }
 
 export const handle: Handle = async ({ event, resolve }) => {

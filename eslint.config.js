@@ -66,6 +66,8 @@ export default [
         parser: ts.parser,
       },
       globals: {
+        window: 'readonly',
+        document: 'readonly',
         console: 'readonly',
         alert: 'readonly',
       },

@@ -10,18 +10,23 @@
   --cs-orange:        #FF4500;       /* CrazyShot 대표 오렌지 */
   --cs-orange-hover:  #E03E00;
   --cs-dark:          #100B32;       /* 주요 다크 (헤더·총금액 박스) */
-  --cs-purple:        #3B2F8A;       /* CTA 버튼·선택 강조 */
+  --cs-purple:        #3B2F8A;       /* CTA 버튼·선택 강조 = purple-80% */
   --cs-purple-hover:  #2E2470;
-  --cs-purple-light:  #553FE0;       /* 파란 배지 */
-  --cs-red-badge:     #FF3535;       /* 빨간 배지 */
-  --cs-lilac:         #ECEBF4;       /* 페이지 배경 */
-  --cs-lilac-nav:     rgba(225,222,243,0.7); /* nav 필 반투명 배경 */
+  --cs-purple-dark:   #201857;       /* 강조 배경 = purple-90% */
+  --cs-purple-light:  #553FE0;       /* 포인트 강조 = purple-60% */
+  --cs-purple-pale:   #C1BBEC;       /* 연한 강조 = purple-20% */
+  --cs-purple-op10:   #E1DEF3;       /* nav 배경 기본색 = purple-op-10% */
+  --cs-red:           #CF0000;       /* 에러·경고 = red-100 */
+  --cs-red-badge:     #FF3535;       /* 빨간 배지 = red-80% */
+  --cs-red-light:     #FFB3B3;       /* 연한 강조 = red-30% */
+  --cs-lilac:         #ECEBF4;       /* 페이지 배경 = purple-5% */
+  --cs-lilac-nav:     rgba(225,222,243,0.4); /* nav 필 반투명 배경 */
 
   /* ── 텍스트 컬러 ── */
-  --cs-text:          #100B32;       /* 기본 본문 */
-  --cs-text-dark:     #444444;       /* 보조 텍스트 (variables.json 색상2) */
-  --cs-text-mid:      #777777;       /* 3차 텍스트 (variables.json basic2) */
-  --cs-text-light:    #AAAAAA;       /* 힌트·플레이스홀더 */
+  --cs-text:          #100B32;       /* 기본 본문 = purple-100% */
+  --cs-text-dark:     #444444;       /* 보조 텍스트 = grey-90% */
+  --cs-text-mid:      #666666;       /* 3차 텍스트 = grey-70% */
+  --cs-text-light:    #AAAAAA;       /* 힌트 = grey-30% */
   --cs-text-placeholder: #b6b6b6;
 
   /* ── 서피스 컬러 ── */

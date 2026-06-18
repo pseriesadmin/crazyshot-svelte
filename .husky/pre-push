@@ -6,9 +6,13 @@ echo "🚀 Harness pre-push 검사 시작..."
 
 # [P-01] 머지 충돌 마커 잔류 검사
 echo "  충돌 마커 검사..."
-if git diff --cached --name-only 2>/dev/null | xargs grep -l "^<<<<<<< HEAD" 2>/dev/null; then
-  echo "❌ 머지 충돌 마커가 남아 있습니다."
-  exit 1
+STAGED_FILES=$(git diff --cached --name-only 2>/dev/null)
+if [ -n "$STAGED_FILES" ]; then
+  CONFLICT_STAGED=$(echo "$STAGED_FILES" | xargs grep -l "^<<<<<<< HEAD" 2>/dev/null || true)
+  if [ -n "$CONFLICT_STAGED" ]; then
+    echo "❌ 스테이징된 파일에 머지 충돌 마커가 남아 있습니다."
+    exit 1
+  fi
 fi
 
 # 실제 push 대상 파일에서 확인
