@@ -1,0 +1,36 @@
+#!/bin/sh
+. "$(dirname "$0")/_/husky.sh"
+
+COMMIT_MSG_FILE="$1"
+MSG=$(cat "$COMMIT_MSG_FILE")
+SUBJECT=$(echo "$MSG" | head -n1)
+
+# 자동 생성 커밋 (merge, rebase) 건너뜀
+if echo "$SUBJECT" | grep -qE "^(Merge|Rebase|Initial commit|WIP:)"; then
+  exit 0
+fi
+
+# [CM-01] 제목 길이 (72자 이하)
+SUBJ_LEN=${#SUBJECT}
+if [ "$SUBJ_LEN" -gt 72 ]; then
+  echo "❌ 커밋 제목이 너무 깁니다 (${SUBJ_LEN}자 > 72자)."
+  echo "   현재: $SUBJECT"
+  exit 1
+fi
+
+# [CM-02] Conventional Commits 형식 권장
+# feat(scope): 설명 / fix: 설명 / docs: 등
+if ! echo "$SUBJECT" | grep -qE "^(feat|fix|refactor|test|docs|chore|ci|style|perf|revert|wip)(\([^)]+\))?: "; then
+  echo "⚠️  커밋 형식 권장: <type>(scope): <description>"
+  echo "   타입: feat|fix|refactor|test|docs|chore|ci|style|perf|revert"
+  echo "   현재: $SUBJECT"
+  # WARNING만 — exit 0으로 진행 허용
+fi
+
+# [CM-03] 빈 제목 금지
+if [ -z "$SUBJECT" ] || [ "$SUBJECT" = " " ]; then
+  echo "❌ 커밋 제목이 비어있습니다."
+  exit 1
+fi
+
+exit 0

@@ -1,5 +1,5 @@
 # AGENTS.md — 크레이지샷 (Crazyshot)
-# Harness Flow v3.0 | 시범서비스 오픈 목표 W1~W12
+# Harness Flow v3.1 | 시범서비스 오픈 목표 W1~W12
 # "자동이 막고, 사람이 방향을 잡는다."
 
 ---
@@ -24,8 +24,11 @@ GP-2.  GATE B·C·E 전환은 Stephen의 명시적 승인 후에만 진행
 GP-3.  AI는 제안·실행, 결정은 Stephen
 GP-4.  TDD 도메인은 테스트 없이 구현 코드 작성 금지
 GP-5.  30분 초과 GSD / 15분 초과 TDD 태스크는 분해 후 재승인
-GP-6.  불확실하면 즉시 멈추고 Stephen에게 질문
-GP-7.  명시 범위 밖 기능 선제 구현 금지
+GP-6.  불확실하면 즉시 멈추고 Stephen에게 질문 (단, ROUTINE 등급은 자율 진행)
+GP-7.  명시 범위 밖 기능 선제 구현 금지 (Default-Exclude 원칙)
+GP-11. GATE는 CRITICAL 등급만 발동 — ROUTINE·BOUNDARY는 자율 처리
+GP-12. GATE 질문은 서비스 의도 언어로 — 기술 용어 Stephen에게 노출 금지
+GP-13. 오인 발생 시 HOOK-7 즉시 실행 → misidentifications.md 기록 필수
 GP-8.  컨텍스트 리셋 요청 시 TASK.md + GSD_LOG.md 즉시 재로드
 GP-9.  서버 전용 키는 절대 클라이언트 코드에 노출 금지
 GP-10. 기존 마이그레이션 파일 직접 수정 금지 (새 파일로 ALTER 처리)
@@ -67,30 +70,50 @@ UI·화면     : UI / 컴포넌트 / 화면 / 레이아웃 / 스타일
 
 ---
 
-## 에이전트 호출 순서 (v3.0 — GATE 3개)
+## 에이전트 호출 순서 (v3.1 → v3.2 업그레이드: 5계층 아키텍처 + 3-Tier Orchestration)
+
+### 전체 워크플로우
 
 ```
-[B-START] 아젠다 작성           👤 Stephen
+[B-START] 아젠다 작성                    👤 Stephen
           ↓
-@harness-executor               🤖 TASK.md 생성
+LAYER 1: Context          →              🤖 @harness-executor (Planner)
+         (AGENTS.md 로드 + TASK.md 생성)
           ↓
-GATE B  태스크 확인             👤 Stephen (승인 필수)
+GATE B  태스크 승인                      👤 Stephen (범위·기준 확인)
           ↓
-@harness-executor               🤖 NOW 태스크 실행
-   또는 @sp2-tdd-agents         🤖 TDD 도메인 시
+LAYER 2-4: Tools+Sensors   →            🤖 도메인 판별
+          Execution
+          
+      GSD → @harness-executor (Generator) 직접 실행
+          ↓ (매 파일 변경 후)
+          LAYER 5: Control Loop (Self-Correction Runner)
+          npm run check → 컴파일 에러 → .harness/learnings/feedback 저장
+          에이전트 자동 재시도
+      
+      TDD → @sp2-tdd-agents (Generator) RED→GREEN→REFACTOR
+          ↓ (각 단계 후)
+          LAYER 5: Self-Correction (컴파일/테스트 실패 자동 피드백)
           ↓
-GATE C  결과물 확인 (매루프)    👤 Stephen
+          GATE C [RED], [GREEN], [REFACTOR] 반복 (👤 Stephen 승인)
+          
           ↓
-@sp3-qa-agent                   🤖 전체 검수 (GATE C 마지막 루프 후)
+GATE C (최종) 마지막 루프 승인          👤 Stephen
           ↓
-GATE E  최종 확인               👤 Stephen → 커밋 허가 → 👤 git
+LAYER 5: Orchestration     →            🤖 @sp3-qa-agent (Evaluator)
+         (무결성 검증)                   3단계 검수 + 시범서비스 기준 체크
           ↓
-@sp4-deploy-agent               🤖 시범서비스 배포 체크리스트
+GATE E  최종 품질 승인                  👤 Stephen
+          ↓
+commit/push                             👤 git (권한 전용)
+          ↓
+LAYER 1: Sandbox / Deployment  →        🤖 @sp4-deploy-agent (체크리스트)
 ```
 
-대형 아젠다(DB 설계·모듈 전체 설계 등) 한정으로 @promptor 선행 호출 가능:
+### 대형 아젠다 경로 (선택)
+
 ```
-@promptor → 분석 결과 검토 → [B-START] 작성 → 위 순서대로
+@promptor → TASK.md 생성 (분석) → GATE B → @harness-executor 실행
 ```
 
 ---
@@ -131,16 +154,32 @@ import { TOSS_SECRET_KEY } from '$env/static/public'
 
 ---
 
-## 도메인 규칙 파일
+## 에러 분류 체계 (Error Taxonomy — v3.2 신규)
+
+```
+Class A (Transient)    : API Rate Limit, 네트워크 → 5회 Backoff
+Class B (Deterministic): 컴파일·린트·테스트 실패 → 3회 Self-Correction
+Class C (Semantic)     : 요구사항 불명확, QA 3회 REJECT → Stephen 에스컬레이션
+Class D (Critical)     : 서버 키 노출, 가드레일 수정 → 즉시 세션 종료
+
+상세: .claude/harness/ERROR_TAXONOMY.md
+```
+
+---
+
+## 도메인 규칙 파일 (✅ 생성 완료 — v3.2)
 
 ```
 .claude/rules/
-├── core-rules.md         ← 개발 실행 원칙
-├── rental.md             ← 렌탈·예약·가용성
-├── payment.md            ← 결제·환불·PG
-├── ui-mobile.md          ← 모바일 UX 기준
-└── security-auth.md      ← 인증·권한·RLS
+├── core-rules.md         ← 개발 실행 원칙 (스택, 파일 경로, 품질 기준)
+├── rental.md             ← M2 렌탈·예약·가용성 (RPC, 상태머신, 할인)
+├── payment.md            ← M3 결제·환불·PG (웹훅, 멱등성, 9단계)
+├── ui-mobile.md          ← SvelteKit 5 UI + 모바일 UX (runes, CSS 변수)
+└── security-auth.md      ← 인증·RLS·HMAC·환경변수 분리
 ```
+
+→ harness-executor가 태스크 실행 전 관련 rules/*.md를 자동 로드
+→ sp3-qa-agent가 GATE E 전 전 항목 grep 자동 검증
 
 ---
 
@@ -148,24 +187,54 @@ import { TOSS_SECRET_KEY } from '$env/static/public'
 
 ```
 crazyshot-svelte/
-├── AGENTS.md
-├── s0-setup.sh                   ← 자동 강제 시스템 설치 (실행 후 삭제)
+├── AGENTS.md                          ← 루트 헌장 (이 파일)
+├── CLAUDE.md                          ← 세션 시작 가이드
+├── scripts/
+│   └── init-harness.sh                ← 다른 프로젝트 부트스트래핑용
 ├── .claude/
 │   ├── agents/
-│   │   ├── promptor.md           ← 대형 아젠다 분석 (선택)
-│   │   ├── harness-executor.md   ← GSD+TDD 통합 실행 (핵심)
+│   │   ├── promptor.md                ← 대형 아젠다 분석 (선택)
+│   │   ├── harness-executor.md        ← GSD+TDD 통합 실행 (핵심)
 │   │   └── shared/
 │   │       ├── sp2-tdd-agents.md
 │   │       ├── sp3-qa-agent.md
 │   │       └── sp4-deploy-agent.md
-│   └── harness/
-│       ├── TASK.md               ← NOW 태스크
-│       ├── GSD_LOG.md            ← 실행 이력
-│       ├── ROLLBACK_LOG.md       ← 반려·롤백 이력
-│       └── context-hook.md       ← 컨텍스트 롯 방지
+│   ├── harness/
+│   │   ├── TASK.md                    ← NOW 태스크
+│   │   ├── GSD_LOG.md                 ← 실행 이력
+│   │   ├── ROLLBACK_LOG.md            ← 반려·롤백 이력
+│   │   ├── ARCHITECTURE.md            ← 5계층 아키텍처 다이어그램
+│   │   ├── ERROR_TAXONOMY.md          ← 에러 분류 + 에스컬레이션 (v3.2 신규)
+│   │   ├── HANDOFF_TEMPLATE.md        ← 세션 핸드오프 프로토콜 (v3.2 신규)
+│   │   ├── context-hook.md            ← 컨텍스트 롯 방지 (HOOK-1~6)
+│   │   ├── middleware-guards.md       ← 보안·도구 제약
+│   │   └── learnings/                 ← 자동 학습 기록
+│   └── rules/
+│       ├── core-rules.md
+│       ├── rental.md
+│       ├── payment.md
+│       ├── ui-mobile.md
+│       └── security-auth.md
 └── src/ ...
 ```
 
 ---
 
-*AGENTS.md | Harness Flow v3.0 | crazyshot 시범서비스 오픈 목표*
+## SvelteKit 5 추가 금지 패턴 (v3.1 신규)
+
+```typescript
+// ❌ Svelte 4 이벤트 문법 (Svelte 5에서 경고/에러)
+<button on:click={handler}>   // → <button onclick={handler}>
+<input on:input={handler}>    // → <input oninput={handler}>
+
+// ❌ Svelte 4 상태 관리 (→ $state 사용)
+import { writable } from 'svelte/store'
+const count = writable(0)     // → let count = $state(0)
+
+// ❌ Svelte 4 props (→ $props 사용)
+export let productId: string  // → let { productId }: Props = $props()
+```
+
+---
+
+*AGENTS.md | Harness Flow v3.2 | crazyshot 시범서비스 오픈 목표*

@@ -324,7 +324,7 @@
 						{/if}
 
 						<button
-							on:click={makeReservation}
+							onclick={makeReservation}
 							disabled={reservationLoading || assets.length === 0 || !priceBreakdown}
 							class="w-full bg-purple-600 text-white font-bold py-3 rounded-lg hover:bg-purple-700 transition disabled:bg-gray-400 disabled:cursor-not-allowed"
 						>

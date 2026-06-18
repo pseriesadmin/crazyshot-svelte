@@ -33,6 +33,18 @@
 			"dest": "/"
 		},
 		{
+			"src": "^/dev/cart/?(?:/__data.json)?$",
+			"dest": "/dev/cart"
+		},
+		{
+			"src": "^/products/?(?:/__data.json)?$",
+			"dest": "/products"
+		},
+		{
+			"src": "^/products/([^/]+?)/?(?:/__data.json)?$",
+			"dest": "/products/[id]"
+		},
+		{
 			"src": "/.*",
 			"dest": "/![-]/catchall"
 		}

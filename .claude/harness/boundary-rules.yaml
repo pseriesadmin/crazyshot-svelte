@@ -1,0 +1,125 @@
+# boundary-rules.yaml — 절대 금지 패턴 자동 검사
+# Harness Flow v3.2 | 경계 설정 자동화
+
+rules:
+  h_01_rpc_only:
+    name: "직접 INSERT 금지 (RPC 경유 필수)"
+    pattern: "await\\s+supabase\\.from\\(['\"]rental_reservations['\"]\\)\\.insert"
+    severity: ERROR
+    message: "❌ H-01: 직접 INSERT 금지. atomic_reserve_asset RPC를 사용하세요."
+    file_types: ["ts", "tsx", "js", "svelte"]
+    exceptions: []
+    documentation: "rental.md"
+
+  h_02_client_price_calc:
+    name: "클라이언트 가격 계산 금지"
+    pattern: "(const|let)\\s+\\w*price\\w*\\s*=\\s*\\w+\\s*\\*\\s*(0\\.[0-9]+|[0-9]+)"
+    severity: ERROR
+    message: "❌ H-02: 클라이언트 가격 계산 금지. calculate_cart_total RPC를 사용하세요."
+    file_types: ["ts", "tsx", "svelte"]
+    location: ["src/routes/", "src/lib/"]
+    exceptions: ["src/lib/utils/demo.ts"]  # 데모용만 예외
+    documentation: "payment.md"
+
+  h_03_webhook_sync_processing:
+    name: "웹훅 동기 처리 금지"
+    pattern: "export\\s+(const|async)\\s+POST.*webhook.*=>\\s*\\{[^}]*await\\s+calculate[^}]*return\\s+200"
+    severity: ERROR
+    message: "❌ H-03: 웹훅 동기 처리 금지 (Vercel 타임아웃 위험). 즉시 200 OK 반환 후 pg_cron 사용."
+    file_types: ["ts", "tsx"]
+    location: ["src/routes/api/webhooks/"]
+    documentation: "payment.md"
+
+  h_04_expires_filter_missing:
+    name: "가용성 조회에 expires_at 필터 필수"
+    pattern: "\\.in\\s*\\(.*status.*\\)(?!.*expires_at)"
+    severity: WARNING
+    message: "⚠️ H-04: 가용성 조회에서 expires_at 필터 누락. 만료된 HOLD가 재고로 잡힐 수 있습니다."
+    file_types: ["ts", "tsx"]
+    location: ["src/lib/services/"]
+    documentation: "rental.md"
+
+  h_05_secret_key_client_exposure:
+    name: "서버 키를 클라이언트에 노출 금지"
+    pattern: "import\\s+\\{[^}]*TOSS_SECRET_KEY[^}]*\\}\\s+from\\s+['\\\"]\\$env/static/public['\\\"]"
+    severity: ERROR
+    message: "❌ H-05: 서버 키가 클라이언트에 노출됨. $env/static/private를 사용하세요."
+    file_types: ["ts", "tsx", "svelte"]
+    documentation: "security-auth.md"
+
+  h_06_any_type_usage:
+    name: "'any' 타입 금지"
+    pattern: ":\\s*any(?!\\s*//.*demo)"
+    severity: ERROR
+    message: "❌ H-06: 'any' 타입 금지. 명시적 타입을 정의하세요."
+    file_types: ["ts", "tsx"]
+    exceptions: [".test.ts"]  # 테스트는 예외 가능
+    documentation: "core-rules.md"
+
+  h_07_direct_rls_bypass:
+    name: "RLS 정책 우회 코드"
+    pattern: "service_role|SERVICE_ROLE_KEY.*from.*static/public"
+    severity: ERROR
+    message: "❌ H-07: service_role 키가 클라이언트 코드에 노출. 서버사이드 전용입니다."
+    file_types: ["ts", "tsx", "svelte"]
+    location: ["src/lib/", "src/routes/[^/]*\\.svelte"]  # 페이지/컴포넌트만 검사
+    documentation: "security-auth.md"
+
+  console_log_leftover:
+    name: "console.log 잔류"
+    pattern: "console\\.(log|warn|error|debug)\\s*\\("
+    severity: WARNING
+    message: "⚠️ GATE C 전 제거할 것: console.log 잔류"
+    file_types: ["ts", "tsx"]
+    exceptions: ["src/__tests__/", "scripts/"]
+    documentation: "core-rules.md"
+
+  svelte4_event_syntax:
+    name: "Svelte 4 이벤트 문법 (금지)"
+    pattern: "<[^>]+on:(click|input|submit|change|focus|blur)[^>]*>"
+    severity: ERROR
+    message: "❌ Svelte 5 필수: on:click 대신 onclick={} 사용"
+    file_types: ["svelte"]
+    documentation: "ui-mobile.md"
+
+  hardcoded_colors:
+    name: "하드코딩 색상 (CSS 변수 사용)"
+    pattern: "color:\\s*(#[0-9a-fA-F]{6}|rgb\\([^)]+\\))|background:\\s*(#[0-9a-fA-F]{6}|rgb\\([^)]+\\))"
+    severity: WARNING
+    message: "⚠️ CSS 변수 사용: color: var(--color-primary) 사용"
+    file_types: ["svelte", "css"]
+    documentation: "ui-mobile.md"
+
+  missing_alt_attribute:
+    name: "이미지 alt 속성 누락"
+    pattern: "<img[^>]*src=[^>]*(?!alt=)"
+    severity: WARNING
+    message: "⚠️ 접근성: <img>에 alt 속성 필수"
+    file_types: ["svelte"]
+    documentation: "ui-mobile.md"
+
+# 메타데이터
+metadata:
+  version: "3.2"
+  created_at: "2026-06-09"
+  last_updated: "2026-06-09"
+
+# 자동 실행 설정
+auto_check:
+  enabled: true
+  trigger: "git_pre_commit"
+  fail_on: ["ERROR"]
+  warn_on: ["WARNING"]
+  report_format: "compact"  # compact | verbose | json
+
+# 예외 관리 (프로젝트별)
+exemptions:
+  demo_mode:
+    affected_rules: ["h_02_client_price_calc"]
+    reason: "데모 환경에서는 클라이언트 계산 허용"
+    expires: "2026-12-31"
+
+  legacy_payment:
+    affected_rules: ["h_03_webhook_sync_processing"]
+    reason: "레거시 결제 모듈 (M3 마이그레이션 중)"
+    expires: "2026-07-31"
