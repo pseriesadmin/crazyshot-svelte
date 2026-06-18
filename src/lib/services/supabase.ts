@@ -16,15 +16,7 @@ if (!supabaseUrl || !supabaseAnonKey) {
   throw new Error('Missing Supabase environment variables (VITE_SUPABASE_URL, VITE_SUPABASE_ANON_KEY)');
 }
 
-// Disable auth persistence in SSR to avoid session storage issues in Node.js
 const isSSR = !browser;
-
-// Node.js < 22 has no native WebSocket — required when createClient initializes Realtime during SSR
-if (isSSR && typeof globalThis.WebSocket === 'undefined') {
-  const { default: ws } = await import('ws');
-  (globalThis as typeof globalThis & { WebSocket: typeof WebSocket }).WebSocket =
-    ws as unknown as typeof WebSocket;
-}
 
 // Singleton Supabase client instance (typed against v5.46 schema)
 export const supabase = createClient<Database>(supabaseUrl, supabaseAnonKey, {
