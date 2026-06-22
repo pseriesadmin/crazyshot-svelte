@@ -1,5 +1,7 @@
 #!/bin/sh
-. "$(dirname "$0")/_/husky.sh"
+
+# nvm PATH 주입 (git 훅 환경에서 npx를 찾지 못하는 문제 방지)
+export PATH="$HOME/.nvm/versions/node/v22.23.0/bin:$PATH"
 
 echo ""
 echo "🔍 Harness pre-commit 검사 시작..."

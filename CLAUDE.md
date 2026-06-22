@@ -48,7 +48,7 @@
 [B-START] 입력 → @harness-executor (일반 아젠다)
 대형 아젠다    → @promptor → TASK.md 생성 → @harness-executor
 TDD 태스크     → @harness-executor가 @sp2-tdd-agents에 위임
-GATE C 완료    → @sp3-qa-agent (검수)
+모든 NOW 완료  → @sp3-qa-agent 자동 호출 (검수)
 GATE E 통과    → @sp4-deploy-agent (배포 체크리스트)
 세션 핸드오프  → "핸드오프" 입력 → HOOK-6 실행
 오인 발생 시   → HOOK-7 자동 → misidentifications.md 기록
@@ -61,13 +61,14 @@ GATE E 통과    → @sp4-deploy-agent (배포 체크리스트)
 🔴 CRITICAL (핵심) → 서비스 의도 확인 필수
    결제·예약·보안·크레이지스코어 / 다중 파일·DB 변경 / GATE E
 
-🟡 BOUNDARY (경계) → "계속할까요?" 한 줄 확인
+🟡 BOUNDARY (경계) → 자동 진행 + 완료 1줄 보고 (응답 불필요)
    단일 서비스 로직 / 신규 컴포넌트
 
 🟢 ROUTINE (일반) → 자동 진행 + 결과 보고만
    UI 스타일·텍스트·기존 컴포넌트 수정
 
-→ 모든 GATE 질문은 서비스 의도 언어로 (기술 용어 노출 금지)
+→ CRITICAL GATE 질문만 서비스 의도 언어로 (기술 용어 노출 금지)
+→ GATE B 자동 통과: GSD/ROUTINE/UI퍼블리싱 단순 아젠다
 ```
 
 ---
@@ -89,11 +90,13 @@ Class D (보안 위반) → 즉시 중단
 
 ```
 ❌ git 명령어 자율 실행 금지 (Stephen만)
-❌ GATE 없이 다음 태스크 진행 금지
+❌ CRITICAL GATE 없이 다음 태스크 진행 금지 (BOUNDARY·ROUTINE은 자동)
 ❌ TDD 도메인에서 테스트 없이 구현 코드 작성 금지
 ❌ $env/static/public에 서버 키 import 금지
 ❌ 기존 마이그레이션 파일 직접 수정 금지
 ❌ Svelte 4 문법 사용 금지 (on:event → onevent)
+❌ 하네스 플래닝에 Claude 네이티브 Plan 에이전트 사용 금지 → @promptor 또는 @harness-executor 사용
+❌ Claude 네이티브 TaskCreate/TaskUpdate 도구 사용 금지 → .claude/harness/TASK.md 직접 편집
 ```
 
 ---
@@ -104,7 +107,8 @@ Class D (보안 위반) → 즉시 중단
 .claude/rules/core-rules.md      ← 개발 실행 원칙 (스택, 파일 경로)
 .claude/rules/rental.md          ← M2 예약·가용성 도메인
 .claude/rules/payment.md         ← M3 결제·웹훅·PG 도메인
-.claude/rules/ui-mobile.md       ← SvelteKit 5 UI + 모바일 UX
+.claude/rules/ui-mobile.md       ← SvelteKit 5 UI + 모바일 UX + 터치 타겟
+.claude/rules/uiux.md            ← 디자인 시스템 정본 (토큰·컴포넌트 패턴)
 .claude/rules/security-auth.md   ← 인증·RLS·보안
 ```
 

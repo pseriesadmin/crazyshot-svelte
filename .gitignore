@@ -28,6 +28,15 @@ dist/
 # OS
 .DS_Store
 Thumbs.db
+Icon?
+
+# Claude Code — 로컬 권한·경로 (개인 설정)
+.claude/settings.local.json
+
+# Cursor harness — .claude/ 정본과 중복되는 심볼릭 링크
+.cursor/harness/*.md
+!.cursor/harness/CURSOR_START.md
+.cursor/harness/learnings/
 
 # Logs
 npm-debug.log*
