@@ -86,6 +86,21 @@ Class D (보안 위반) → 즉시 중단
 
 ---
 
+## Supabase DB 환경 (혼용 절대 금지)
+
+```
+테스트DB  crazyshot-stage   ID: ezyvffjvuwmtuhpxdjrw
+  → 마이그레이션 먼저 검증하는 곳 (.env.local 미연결)
+
+stageDB   본 서비스 stage   ID: vnbpmvxruyciuuaermyh
+  → .env.local 현재 연결 중 (개발 서버 기본값)
+
+⚠️ 마이그레이션 적용 순서: 테스트DB 검증 → stageDB 적용
+⚠️ MCP apply_migration 실행 전 project_id 반드시 재확인
+```
+
+---
+
 ## 절대 기억할 것
 
 ```
@@ -104,12 +119,13 @@ Class D (보안 위반) → 즉시 중단
 ## 도메인 규칙 파일
 
 ```
-.claude/rules/core-rules.md      ← 개발 실행 원칙 (스택, 파일 경로)
-.claude/rules/rental.md          ← M2 예약·가용성 도메인
-.claude/rules/payment.md         ← M3 결제·웹훅·PG 도메인
-.claude/rules/ui-mobile.md       ← SvelteKit 5 UI + 모바일 UX + 터치 타겟
-.claude/rules/uiux.md            ← 디자인 시스템 정본 (토큰·컴포넌트 패턴)
-.claude/rules/security-auth.md   ← 인증·RLS·보안
+.claude/rules/core-rules.md        ← 개발 실행 원칙 (스택, 파일 경로)
+.claude/rules/rental.md            ← M2 예약·가용성 도메인
+.claude/rules/payment.md           ← M3 결제·웹훅·PG 도메인
+.claude/rules/ui-mobile.md         ← SvelteKit 5 UI + 모바일 UX + 터치 타겟
+.claude/rules/uiux.md              ← 디자인 시스템 정본 (토큰·컴포넌트 패턴)
+.claude/rules/security-auth.md     ← 인증·RLS·보안
+.claude/rules/figma-publishing.md  ← Figma AI 퍼블리싱 스킬 (디자인→코드 변환)
 ```
 
 ---

@@ -17,7 +17,14 @@ TypeScript
 - as unknown as T 캐스팅 → 대신 타입 가드 함수 작성
 - 반환 타입 명시 필수 (함수 시그니처)
 
-Supabase
+Supabase — DB 환경 분리 (절대 혼용 금지)
+┌─────────────────────────────────────────────────────────────────┐
+│ 테스트DB  (crazyshot-stage)   ID: ezyvffjvuwmtuhpxdjrw          │
+│   → 마이그레이션 검증 먼저. .env.local.test / 개발 전용         │
+│ stageDB   (본 서비스 stage)   ID: vnbpmvxruyciuuaermyh          │
+│   → .env.local 현재 연결. 검증 완료 후 적용                     │
+│ ⚠️ 마이그레이션 순서: 테스트DB 검증 → stageDB 적용              │
+└─────────────────────────────────────────────────────────────────┘
 - 클라이언트: import { supabase } from '$lib/services/supabase'
 - 서버사이드: import { createServerClient } from '@supabase/ssr'
 - RPC 호출: supabase.rpc('function_name', { params })
