@@ -2,24 +2,9 @@
 	import '../app.css';
 	import { onMount } from 'svelte';
 	import { locale } from 'svelte-i18n';
-	import { page } from '$app/stores';
 	import { initializeAuth, subscribeToAuthChanges, authState } from '$lib/stores/auth';
-	import FloatingChatButton from '$lib/components/chat/FloatingChatButton.svelte';
 
 	let currentLocale = 'ko';
-
-	// PRD.1.7 — 채팅 FAB (테스트: 항상 노출, 비로그인 시 폴백)
-	let chatUserId = $derived($authState.user?.id ?? 'test-user')
-	let chatUserName = $derived(
-		($authState.user?.user_metadata?.full_name as string | undefined) ??
-		$authState.user?.email?.split('@')[0] ??
-		'테스트유저'
-	)
-	let chatUserHandle = $derived(
-		($authState.user?.user_metadata?.username as string | undefined) ??
-		$authState.user?.email?.split('@')[0] ??
-		'test'
-	)
 
 	onMount(() => {
 		locale.set(currentLocale);
