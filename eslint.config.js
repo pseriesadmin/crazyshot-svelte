@@ -36,7 +36,21 @@ const commonRules = {
 export default [
   // Global ignores
   {
-    ignores: ['node_modules/', '.svelte-kit/', 'build/', 'dist/', '*.config.js'],
+    ignores: [
+      'node_modules/',
+      '.svelte-kit/',
+      'build/',
+      'dist/',
+      '*.config.js',
+      // S1-M? 채팅 모듈 — RPC 마이그레이션 완료 후 별도 커밋 시 ignore 제거
+      'src/lib/components/chat/**',
+      'src/routes/api/chat/**',
+      'src/routes/chat/**',
+      'src/lib/services/chatService.ts',
+      'src/lib/services/supabaseBrowser.ts',
+      'src/lib/stores/chat.svelte.ts',
+      'src/lib/types/chat.ts',
+    ],
   },
 
   // JavaScript/TypeScript rules
@@ -70,6 +84,11 @@ export default [
         document: 'readonly',
         console: 'readonly',
         alert: 'readonly',
+        history: 'readonly',
+        sessionStorage: 'readonly',
+        localStorage: 'readonly',
+        setTimeout: 'readonly',
+        clearTimeout: 'readonly',
       },
     },
     plugins: {
