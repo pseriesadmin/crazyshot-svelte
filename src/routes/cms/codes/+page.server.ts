@@ -85,7 +85,6 @@ export const load: PageServerLoad = async ({ locals }) => {
   const productCountMap: Record<string, number> = {}
   for (const p of productCounts ?? []) {
     const cat = (p as { category: string }).category
-    // eslint-disable-next-line security/detect-object-injection
     productCountMap[cat] = (productCountMap[cat] ?? 0) + 1
   }
 

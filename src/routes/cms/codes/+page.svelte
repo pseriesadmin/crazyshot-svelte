@@ -18,7 +18,6 @@
   }
   function nodeColor(node: TreeNode): string {
     const root = node.path_codes[0] ?? node.code
-    // eslint-disable-next-line security/detect-object-injection
     return ROOT_COLORS[root] ?? '#888'
   }
 
