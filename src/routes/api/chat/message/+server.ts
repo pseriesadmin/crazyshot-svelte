@@ -1,13 +1,17 @@
 // POST /api/chat/message — 메시지 전송 + Claude AI 의도 분류
-// PRD.1.7.4 | H-05: ANTHROPIC_API_KEY → $env/static/private 전용
+// PRD.1.7.4 | H-05: ANTHROPIC_API_KEY → $env/dynamic/private 전용
 
 import { json } from '@sveltejs/kit'
 import Anthropic from '@anthropic-ai/sdk'
-import { ANTHROPIC_API_KEY } from '$env/static/private'
+import { env } from '$env/dynamic/private'
 import type { RequestHandler } from './$types'
 import type { ChatMessage, ChatIntent } from '$lib/types/chat'
 
-const anthropic = new Anthropic({ apiKey: ANTHROPIC_API_KEY })
+function getAnthropicClient(): Anthropic | null {
+  const apiKey = env.ANTHROPIC_API_KEY
+  if (!apiKey) return null
+  return new Anthropic({ apiKey })
+}
 
 const SYSTEM_PROMPT = `당신은 크레이지샷(crazyshot.kr) 촬영장비 렌탈 플랫폼의 AI 어시스턴트입니다.
 고객의 메시지를 분석하여 의도를 분류하고 적절한 응답을 생성하세요.
@@ -139,18 +143,21 @@ export const POST: RequestHandler = async ({ request, locals }) => {
   }
 
   try {
-    const response = await anthropic.messages.create({
-      model: 'claude-haiku-4-5',
-      max_tokens: 512,
-      system: SYSTEM_PROMPT,
-      messages: validHistory,
-    })
+    const anthropic = getAnthropicClient()
+    if (anthropic) {
+      const response = await anthropic.messages.create({
+        model: 'claude-haiku-4-5',
+        max_tokens: 512,
+        system: SYSTEM_PROMPT,
+        messages: validHistory,
+      })
 
-    const rawText =
-      response.content[0].type === 'text' ? response.content[0].text.trim() : ''
+      const rawText =
+        response.content[0].type === 'text' ? response.content[0].text.trim() : ''
 
-    const parsed = JSON.parse(rawText) as AIClassifierResponse
-    classified = parsed
+      const parsed = JSON.parse(rawText) as AIClassifierResponse
+      classified = parsed
+    }
   } catch {
     // 파싱 실패 시 CS_ESCALATE 유지
   }

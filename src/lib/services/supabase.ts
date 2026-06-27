@@ -1,5 +1,5 @@
 import { browser } from '$app/environment';
-import { PUBLIC_SUPABASE_URL, PUBLIC_SUPABASE_ANON_KEY } from '$env/static/public';
+import { requireSupabasePublicEnv } from '$lib/env/supabasePublic';
 import { createClient } from '@supabase/supabase-js';
 import type { Database } from '$lib/types/database';
 import type {
@@ -10,16 +10,7 @@ import type {
 } from '$lib/types/database';
 import type { Session } from '@supabase/supabase-js';
 
-// PUBLIC_ 우선, VITE_ fallback (Vercel 기존 env 호환)
-// 로컬 + Preview → crazyshot-stage 테스트 DB (ezyvffjvuwmtuhpxdjrw)
-const supabaseUrl = PUBLIC_SUPABASE_URL || import.meta.env.VITE_SUPABASE_URL;
-const supabaseAnonKey = PUBLIC_SUPABASE_ANON_KEY || import.meta.env.VITE_SUPABASE_ANON_KEY;
-
-if (!supabaseUrl || !supabaseAnonKey) {
-  throw new Error(
-    'Missing Supabase env: set PUBLIC_SUPABASE_URL/KEY or VITE_SUPABASE_URL/KEY (crazyshot DB)',
-  );
-}
+const { url: supabaseUrl, anonKey: supabaseAnonKey } = requireSupabasePublicEnv();
 
 const isSSR = !browser;
 
