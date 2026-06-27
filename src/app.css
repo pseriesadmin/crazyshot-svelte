@@ -35,9 +35,25 @@
   --cs-border:        #E0E0E6;
 
   /* ── 상태 컬러 ── */
-  --cs-error:         #E53935;
-  --cs-success:       #388E3C;
-  --cs-points:        #c1bbec;       /* 포인트 텍스트 (다크 박스 위) */
+  --cs-error:              #E53935;
+  --cs-success:            #388E3C;
+  --cs-success-light:      #10B981;  /* 통계·배지 강조 초록 */
+  --cs-warning:            #F59E0B;  /* 경고·접미어 강조 노랑 */
+  --cs-info:               #0EA5E9;  /* 정보·날짜 강조 파랑 */
+  --cs-text-success:       #1a7f37;  /* 성공 알림 텍스트 */
+  --cs-points:             #c1bbec;  /* 포인트 텍스트 (다크 박스 위) */
+
+  /* ── 상태 배경 컬러 (알림·폼 피드백) ── */
+  --cs-bg-error:           #fff0f0;  /* 에러 메시지 배경 */
+  --cs-bg-success:         #f0fff4;  /* 성공 알림 배경 */
+  --cs-bg-warning:         #fff8e6;  /* 경고 알림 배경 */
+  --cs-text-warning:       #a66000;  /* 경고 알림 텍스트 */
+  --cs-bg-row-hover:       #fafafa;  /* 테이블 행 hover */
+  --cs-chat-in-bg:         #FFCFCF;  /* 채팅 수신 배지 배경 (red-10%) */
+
+  /* ── UI 상태 컬러 ── */
+  --cs-disabled-button:    #B0ABCC;  /* 버튼 disabled (purple-pale 파생) */
+  --cs-disabled-toggle:    #d0d0d8;  /* 토글 off 상태 */
 
   /* ── 폰트 패밀리 ── */
   --font-kr:          'Noto Sans KR', 'Apple SD Gothic Neo', 'Malgun Gothic', sans-serif;

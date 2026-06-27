@@ -5,8 +5,8 @@
       "name": "crazyshot-svelte",
       "runtimeExecutable": "npm",
       "runtimeArgs": ["run", "dev"],
-      "port": 5173,
-      "autoPort": false
+      "port": 5175,
+      "autoPort": true
     }
   ]
 }

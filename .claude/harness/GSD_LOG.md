@@ -51,3 +51,19 @@
   - Unable to test UI changes due to 500 Internal Server Error on dev server
   - Attempted fixes: hooks.server.ts polyfill, conditional initialization - all failed
   - Recommend: Implement lazy client initialization or provide ws transport at startup
+
+[2026-06-26] GSD | PRD.1.7 T5~T8 | src/routes/api/chat/, src/lib/components/chat/, src/routes/+layout.svelte | ✅ SUCCESS
+  - T5: API 라우트 5개 (session / message[Claude AI 의도분류] / sessions / action-card / close)
+    · ANTHROPIC_API_KEY → $env/static/private (H-05 준수)
+    · const db = locals.supabase as any (chat 테이블 미생성 타입 우회)
+    · claude-haiku-4-5, confidence < 0.6 → CS_ESCALATE 강제
+  - T6: UI 컴포넌트 5개 (ChatHeader / MessageBubble / ActionCard / MessageList / ChatInput)
+    · Svelte 5 Runes ($props, $state, $derived, $effect)
+    · CSS 변수 전용 (--cs-purple, --cs-lilac, --cs-points 등)
+  - T7: 컨테이너 3개 (ChatWindow / ChatBottomSheet / FloatingChatButton)
+    · FloatingChatButton: fab-btn 패턴 (dev/cart 동일), 커스텀 SVG 아이콘
+    · ChatBottomSheet: mobile bottom-up / PC bottom-right 반응형
+  - T8: +layout.svelte fab-bar 삽입
+    · SSR 오류 수정: chat.ts → chat.svelte.ts (class 패턴 $state 필드)
+    · $authState.user 조건부 렌더링 (비로그인 시 숨김)
+    · FloatingChatButton SVG Stephen 확정 디자인 적용

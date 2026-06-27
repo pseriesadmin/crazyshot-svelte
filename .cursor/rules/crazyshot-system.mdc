@@ -1,0 +1,206 @@
+---
+description: 크레이지샷 하네스 플로우 시스템 인덱스 (Cursor 독립판) — 에이전트·하네스·규칙 전체 구조 맵
+globs: ["**/*.svelte", "**/*.ts", "**/*.sql", "src/**/*"]
+alwaysApply: true
+---
+
+# CrazyShot Harness Flow v3.2 — Cursor 독립 시스템 인덱스
+
+> 이 파일은 `.cursor/` 자체 완결 하네스 시스템의 전체 구조 맵입니다.
+> **`.claude/` 의존 없음** — `.cursor/harness/` 가 단독 운영 기준입니다.
+
+---
+
+## 프로젝트
+
+```
+서비스: 크레이지샷 (crazyshot.kr) — 촬영장비 렌탈 플랫폼
+스택: SvelteKit 5 + TypeScript · Supabase · Vercel · 토스페이먼츠 v2
+워크플로우: Harness Flow v3.2 (Cursor 독립판)
+담당: Stephen (기획·결정권자) — AI는 제안·실행, 결정은 Stephen
+```
+
+---
+
+## ⚡ 세션 시작 시 반드시 로드
+
+```
+@AGENTS.md                                   ← 황금 원칙 + TDD 강제 키워드
+@CLAUDE.md                                   ← 에이전트 호출 규칙 + 현재 진행 상태
+@.cursor/harness/TASK.md                     ← NOW/DONE/BLOCKED ★ 세션 시작 시 필독
+@.cursor/harness/GSD_LOG.md                  ← 작업 이력·마지막 수정 파일
+@.cursor/harness/context-hook.md             ← HOOK-1~8 (드리프트 방지)
+```
+
+**도메인 작업 시 추가 로드:**
+```
+@.cursor/rules/domain-rental.mdc             ← M2 예약·가용성 작업 시
+@.cursor/rules/domain-payment.mdc            ← M3 결제·웹훅 작업 시
+@.cursor/rules/domain-ui-mobile.mdc          ← UI·Svelte 5 컴포넌트 작업 시
+```
+
+---
+
+## 에이전트 호출 (@멘션)
+
+```
+@harness-executor  ← [B-START] 아젠다 → TASK.md 생성 + NOW 태스크 실행 (핵심)
+@promptor          ← 대형 아젠다 (DB 설계·모듈 전체·4파일+) 분석
+@sp2-tdd-agents    ← TDD 태스크 RED→GREEN→REFACTOR 실행
+@qa                ← GATE E 전 3단계 검수 (harness-executor 자동 호출)
+@sp4-deploy-agent  ← GATE E 통과 후 배포 체크리스트
+```
+
+---
+
+## 하네스 시스템 파일 (`.cursor/harness/` — 독립 실운영 기준)
+
+```
+@.cursor/harness/TASK.md               ← 현재 NOW/DONE/BLOCKED ★
+@.cursor/harness/GSD_LOG.md            ← 작업 이력·마지막 수정 파일
+@.cursor/harness/context-hook.md       ← HOOK-1~8 (드리프트 방지)
+@.cursor/harness/ERROR_TAXONOMY.md     ← 에러 분류 Class A~D
+@.cursor/harness/HANDOFF_TEMPLATE.md   ← 세션 핸드오프 양식
+@.cursor/harness/ROLLBACK_LOG.md       ← 반려·롤백 이력
+@.cursor/harness/TASK.template.md      ← 새 TASK.md 작성 참조 템플릿
+@.cursor/harness/ARCHITECTURE.md       ← 5계층 + 3-Tier 아키텍처
+@.cursor/harness/middleware-guards.md  ← 7가지 보안/최적화 가드레일
+@.cursor/harness/boundary-rules.yaml  ← H-01~H-07 자동 검사 패턴
+@.cursor/harness/CURSOR_START.md       ← 세션 시작 복붙 템플릿 ★
+@.cursor/harness/learnings/            ← Self-Correction 학습 기록
+```
+
+---
+
+## 도메인 규칙 파일 (Cursor 자동 로드)
+
+| 파일 | 적용 조건 |
+|------|---------|
+| `.cursor/rules/crazyshot-system.mdc` | alwaysApply — 이 파일 (전체 맵) |
+| `.cursor/rules/harness-rules.mdc` | alwaysApply — 스택·보안·RLS 원칙 |
+| `.cursor/rules/uiux.mdc` | alwaysApply — UI/UX 디자인 시스템 |
+| `.cursor/rules/domain-ui-mobile.mdc` | globs: `*.svelte`, `*.css` |
+| `.cursor/rules/domain-rental.mdc` | globs: `*reservation*`, `*rental*` |
+| `.cursor/rules/domain-payment.mdc` | globs: `*payment*`, `*webhook*`, `*toss*` |
+
+---
+
+## GATE 등급 (Cursor 하네스 기준)
+
+```
+🔴 CRITICAL → Stephen 확인 필수 (자율 진행 절대 금지)
+   결제·예약·보안·크레이지스코어 / 다중 파일·DB 변경 / GATE E
+
+🟡 BOUNDARY → 자동 진행 (완료 1줄 보고만, 확인 요청 없음)
+   단일 서비스 로직 / 신규 컴포넌트
+
+🟢 ROUTINE → 자동 진행 + 결과 보고만
+   UI 스타일·텍스트·기존 컴포넌트 수정
+```
+
+> 모든 GATE 질문은 **서비스 의도 언어**로 — 기술 용어 Stephen에게 노출 금지
+
+---
+
+## TDD 강제 키워드
+
+```
+결제·정산: payment / 결제 / 환불 / 보증금 / 토스 / 웹훅 / 멱등성 / 쿠폰 / 포인트
+예약·재고: reservation / 예약 / 가용성 / 이중예약 / atomic_reserve / HOLD / 재고
+핵심 RPC:  calculate_cart_total / atomic_reserve_asset / batch_atomic_reserve
+보안·권한: auth / RLS / JWT / 인증 / 접근제어
+특화로직:  크레이지스코어 / 할인순서 / 9단계 / canProceed
+```
+
+---
+
+## 절대 금지 패턴
+
+```typescript
+// ❌ 직접 INSERT → ✅ atomic_reserve_asset RPC
+// ❌ 클라이언트 가격 계산 → ✅ calculate_cart_total RPC
+// ❌ 재고 확인 없이 결제창 오픈 → ✅ atomic_reserve → 성공 → requestPayment
+// ❌ 웹훅 동기 9단계 계산 → ✅ 즉시 저장 + 200 OK + pg_cron
+// ❌ TOSS_SECRET_KEY from $env/static/public → ✅ private
+// ❌ 기존 마이그레이션 직접 수정 → ✅ 새 파일 ALTER
+// ❌ on:click → ✅ onclick (Svelte 5)
+// ❌ writable() → ✅ $state()
+// ❌ git 자율 실행
+// ❌ 만료 필터 없는 가용성 조회 → ✅ expires_at.gt.now 포함
+```
+
+---
+
+## 에러 분류
+
+```
+Class A: 네트워크/API → 5회 Backoff
+Class B: 컴파일/테스트 → 3회 Self-Correction → .cursor/harness/learnings/ 저장
+Class C: 요구사항 불명확 → Stephen 에스컬레이션
+Class D: 보안 위반 → 즉시 중단
+상세: .cursor/harness/ERROR_TAXONOMY.md
+```
+
+---
+
+## 현재 진행 상태
+
+```
+✅ S0: 환경 설정 완료 (Supabase 스키마 30+ 테이블, RLS, 9 RPC)
+✅ S1-M1: Products 모듈 완료
+✅ S1-M2: Reservation Flow (TDD RED/GREEN/REFACTOR 완료)
+   ⚠️ BLOCKED: Supabase Realtime SSR WebSocket 이슈
+✅ S1-M2.5: Cart Dev Route (장바구니 UI 개발 — /dev/cart)
+⏳ S1-M3: Payment Integration (TDD 필수)
+⏳ S1-M4: Subscriptions (GSD)
+⏳ S1-M5: Shipments (GSD)
+```
+
+> 최신 상태: `@.cursor/harness/TASK.md` 참조 (독립 운영 기준)
+
+---
+
+## 단어 명령
+
+```
+"컨텍스트 체크"  → HOOK-4 재시작 브리핑
+"파일 확인해"    → HOOK-1 (파일 직접 Read)
+"핸드오프"       → HOOK-6 (HANDOFF.md 생성 → .cursor/harness/HANDOFF.md)
+"스킵" / "다음"  → HOOK-8 (BLOCKED 처리)
+"스벨트 확인"    → HOOK-5 (Svelte 5 패턴 체크)
+"오인 기록"      → HOOK-7 (learnings/misidentifications.md)
+"에러 분류"      → ERROR_TAXONOMY.md Class 판별
+```
+
+---
+
+## Self-Correction Runner (자동 학습 루프)
+
+```
+npm run check 실패
+  → .cursor/harness/learnings/compile_error.md 저장
+  → 에이전트 자동 수정 시도 (최대 3회)
+  → 3회 실패 → GATE C + Stephen 개입
+
+npm run test 실패
+  → .cursor/harness/learnings/test_error.md 저장
+  → 자동 수정 + 재시도
+```
+
+---
+
+## 에이전트 파일 위치 (Cursor 독립판)
+
+```
+.cursor/agents/
+├── harness-executor.md     ← 핵심 실행 에이전트 (Planner + Generator)
+├── promptor.md             ← 대형 아젠다 분석
+├── sp2-tdd-agents.md       ← TDD Worker (RED→GREEN→REFACTOR)
+├── qa.md                   ← QA Evaluator (3단계 검수)
+└── sp4-deploy-agent.md     ← 배포 체크리스트
+```
+
+---
+
+*crazyshot-system.mdc v3.0 | Cursor 독립 완전 자기완결형 | Harness Flow v3.2*
+*`.claude/` 의존 없음 — `.cursor/harness/` 단독 운영*

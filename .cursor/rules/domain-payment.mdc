@@ -1,0 +1,117 @@
+---
+description: 크레이지샷 결제·환불·PG 도메인 규칙 — M3 Payment 관련 파일에 자동 적용
+globs: ["src/**/*payment*", "src/**/*webhook*", "src/**/*toss*", "src/__tests__/*payment*"]
+alwaysApply: false
+---
+
+# 크레이지샷 결제·웹훅·PG 도메인 규칙 (M3)
+
+> ⚠️ **결제·웹훅 작업 시작 전 필수**: `@.claude/rules/payment.md` 를 반드시 먼저 읽어라.
+> 아래는 핵심 요약이며, 9단계 계산·환불 처리·TDD 케이스는 정본에서 확인한다.
+> 정본이 업데이트됐다면 이 파일보다 정본이 항상 우선한다.
+
+---
+
+## 핵심 원칙
+
+```
+결제창    = atomic_reserve_asset 성공 확인 후 열기 (재고 없이 열기 금지)
+웹훅      = 수신 즉시 raw_webhook_logs 저장 → 200 OK → pg_cron 처리
+멱등성    = idempotency_key 중복 결제 방지 (DB UNIQUE 제약)
+비밀키    = TOSS_SECRET_KEY $env/static/private 전용
+테이블 분리 = 실결제: payment_transactions / 보증금: deposit_holds
+```
+
+## 결제 플로우
+
+```
+1. atomic_reserve_asset RPC → HOLD 획득
+2. calculate_cart_total RPC → 금액 확정 + calc_at 기록
+3. TossPayments.requestPayment() 호출
+4. 결제 완료 → /api/payment/confirm 서버 라우트
+5. 서버에서 Toss 결제 승인 API 호출
+6. 성공: reservation confirmed + payment_transactions (RPC 경유)
+7. 실패: HOLD 해제 (reservation cancelled)
+```
+
+## 웹훅 처리 패턴 (필수)
+
+```typescript
+// +server.ts — /api/webhooks/toss
+export const POST = async ({ request }) => {
+  const body = await request.json()
+  const signature = request.headers.get('toss-payments-signature')
+
+  if (!verifyTossSignature(body, signature))
+    return new Response('Unauthorized', { status: 401 })
+
+  // ✅ 즉시 저장 후 200 반환 (1초 이내 필수)
+  await supabase.from('raw_webhook_logs').insert({
+    payload: body, processed: false,
+    received_at: new Date().toISOString()
+  })
+  return new Response('OK', { status: 200 })
+  // pg_cron이 백그라운드에서 9단계 계산 처리
+}
+
+// ❌ 금지: 동기로 9단계 계산 후 반환 (10초+ → Vercel 타임아웃)
+```
+
+## 9단계 금액 계산 (pg_cron 백그라운드)
+
+```
+1. 기본 렌탈료  2. 멤버십 할인  3. 쿠폰 할인
+4. 포인트 차감  5. VAT 역산    6. 배송비 (CRAZY → 0)
+7. 보증금 계산 (크레이지스코어) 8. 혼합결제 분리 9. 최종 금액 검증 (calc_at 30초)
+```
+
+## calc_at 유효성 체크
+
+```typescript
+const CALC_VALIDITY_SECONDS = 30
+const calcAge = (Date.now() - new Date(calc_at).getTime()) / 1000
+if (calcAge > CALC_VALIDITY_SECONDS) {
+  return { error: 'PRICE_EXPIRED', message: '금액이 만료되었습니다. 다시 확인해주세요.' }
+}
+```
+
+## RPC 함수
+
+```typescript
+// 장바구니 금액 계산
+await supabase.rpc('calculate_cart_total', {
+  p_user_id: string, p_reservation_ids: string[],
+  p_coupon_code?: string, p_points_to_use?: number
+})
+// 반환: { total: number, breakdown: PriceBreakdown, calc_at: string }
+
+// 결제 완료 + 예약 확정 (원자적)
+await supabase.rpc('processPaymentAndCreateOrder', {
+  p_payment_key: string, p_order_id: string,
+  p_amount: number, p_idempotency_key: string
+})
+```
+
+## TDD 케이스 (M3)
+
+```
+Happy: 정상 결제 / 웹훅 1초 이내 200 OK / 동일 웹훅 재전송 → 중복 처리 안 됨
+Edge:  calc_at 30초 초과 / 금액 불일치 / 부분 취소
+Error: 결제 실패 → HOLD 해제 / 토스 서버 다운 / 동일 idempotency_key 두 번
+```
+
+## GATE C 확인 (M3)
+
+```
+[ ] 웹훅 200 OK 1초 이내 반환?
+[ ] raw_webhook_logs 먼저 저장?
+[ ] idempotency_key 중복 차단?
+[ ] 결제 성공 후 예약 confirmed 전환?
+[ ] TOSS_SECRET_KEY → $env/static/private?
+[ ] calc_at 30초 유효성 체크?
+[ ] 할인순서: 기본료→멤버십→쿠폰→포인트→VAT역산→배송비?
+```
+
+---
+
+*domain-payment.mdc | 커서 전용 | 정본: .claude/rules/payment.md*

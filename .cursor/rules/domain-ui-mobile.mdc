@@ -1,0 +1,196 @@
+---
+description: 크레이지샷 SvelteKit 5 Runes 패턴 + 모바일 UX 규칙 — UI·Svelte 컴포넌트 파일에 자동 적용
+globs: ["src/**/*.svelte", "src/lib/components/**/*.ts", "src/**/*.css"]
+alwaysApply: false
+---
+
+# 크레이지샷 UI·모바일 도메인 규칙
+
+> ⚠️ **UI·Svelte 작업 시작 전 필수** 규칙. 아래는 실행 가능한 패턴 정본이다.
+
+---
+
+## SvelteKit 5 컴포넌트 패턴
+
+```svelte
+<!-- ✅ Svelte 5 Runes 컴포넌트 — 이 패턴만 허용 -->
+<script lang="ts">
+  interface Props {
+    productId: string
+    initialDate?: string
+  }
+
+  let { productId, initialDate = '' }: Props = $props()
+
+  let selectedDate = $state(initialDate)
+  let isLoading = $state(false)
+  let price = $derived(calculatePrice(selectedDate))
+
+  $effect(() => {
+    const subscription = subscribeToAvailability(productId)
+    return () => subscription.unsubscribe()  // 반드시 cleanup 반환
+  })
+</script>
+
+<!-- ❌ Svelte 4 문법 절대 금지 -->
+<script>
+  export let productId          // → $props() 사용
+  import { writable } from 'svelte/store'  // → $state() 사용
+</script>
+```
+
+## 이벤트 핸들러
+
+```svelte
+<!-- ✅ Svelte 5 -->
+<button onclick={handleClick}>확인</button>
+<input oninput={handleInput} />
+<form onsubmit={handleSubmit}>
+
+<!-- ❌ Svelte 4 (금지) -->
+<button on:click={handleClick}>
+<input on:input={handleInput}>
+```
+
+---
+
+## 모바일 터치 타겟 (최소값 필수)
+
+```css
+/* 모든 인터랙티브 요소: 최소 44×44px */
+button, a, [role="button"] {
+  min-height: 44px;
+  min-width: 44px;
+}
+
+/* 탭 인터페이스: 최소 48px */
+.tab-item {
+  min-height: 48px;
+  padding: 0 16px;
+}
+```
+
+---
+
+## CSS 변수 (하드코딩 금지)
+
+```css
+/* ✅ 변수 사용 */
+color: var(--cs-text);
+background: var(--cs-surface-gray);
+border-radius: var(--radius-md);
+
+/* ❌ 하드코딩 (금지) */
+color: #ff4500;
+background: #f5f5f5;
+```
+
+### 크레이지샷 디자인 토큰 (`src/app.css` 기준)
+
+```css
+/* 컬러 */
+--cs-orange:       #FF4500
+--cs-dark:         #100B32
+--cs-purple:       #3B2F8A
+--cs-purple-hover: #2E2470
+--cs-lilac:        #ECEBF4
+--cs-text:         #100B32
+--cs-text-dark:    #444444
+--cs-surface-gray: #f6f6f6
+
+/* 반경 */
+--radius-md:   15px   /* 폼 입력 */
+--radius-lg:   20px   /* 날짜 행·라디오 */
+--radius-xl:   30px   /* CTA 버튼 */
+--radius-2xl:  50px   /* 흰 카드 (가장 중요) */
+
+/* 레이아웃 */
+--layout-pc-max:      1240px
+--layout-section-gap: 50px
+--layout-header-h:    100px
+--layout-mob-pad:     20px
+```
+
+전체 토큰: `src/app.css` | 시각 가이드: `.cursor/rules/uiux.mdc`
+
+---
+
+## 이미지 (Cloudinary CDN 필수)
+
+```svelte
+<!-- ✅ Cloudinary 최적화 URL -->
+<img
+  src="https://res.cloudinary.com/crazyshot/image/upload/w_400,h_300,c_fill,f_auto,q_auto/{publicId}.jpg"
+  alt="제품명 — 상세 설명"
+  width="400"
+  height="300"
+  loading="lazy"
+/>
+
+<!-- ❌ 금지: alt 없음 / S3 직접 URL / loading 없음 -->
+```
+
+---
+
+## 로딩 상태 패턴
+
+```svelte
+<!-- ✅ 스켈레톤 로더 -->
+{#if isLoading}
+  <div class="skeleton" aria-label="로딩 중...">
+    <div class="skeleton-line"></div>
+  </div>
+{:else}
+  <ProductCard {product} />
+{/if}
+
+<!-- ✅ 버튼 로딩 상태 -->
+<button disabled={isLoading} onclick={handleSubmit}>
+  {#if isLoading}처리 중...{:else}예약하기{/if}
+</button>
+```
+
+---
+
+## 접근성 기준
+
+```
+이미지       : alt 필수 (장식용은 alt="")
+버튼         : 명확한 텍스트 또는 aria-label
+모달         : role="dialog" + aria-modal="true" + 포커스 트랩
+폼 입력      : <label for="id"> 또는 aria-label
+에러 메시지  : role="alert" + aria-live="assertive"
+색상 대비    : 최소 4.5:1 (WCAG AA)
+```
+
+---
+
+## 배송 마감 UI 표시 기준
+
+```
+epost/CJ   : 15:00 마감 표시
+quick      : 17:00 마감 표시
+locker     : 18:00 마감 표시
+pickup     : 19:00 마감 표시
+두발히어로  : 14:00 마감 (화면: 13:30 표시 — 여유 30분)
+공휴일      : "다음 영업일" (public_holidays 테이블 조회)
+```
+
+---
+
+## GATE C 확인 항목 (UI 관련)
+
+```
+[ ] 모든 인터랙티브 요소 44×44px 이상?
+[ ] 하드코딩 색상 없음 (var(--) 사용)?
+[ ] Cloudinary CDN URL 사용?
+[ ] 이미지 alt 속성 존재?
+[ ] Svelte 4 문법 없음? (on:event → onevent)
+[ ] writable store 대신 $state() 사용?
+[ ] $effect cleanup에서 .unsubscribe() 반환?
+[ ] 새 컴포넌트 생성 전 기존 컴포넌트 재사용 가능성 확인?
+```
+
+---
+
+*domain-ui-mobile.mdc | Cursor 독립판 | SvelteKit 5 Runes + 모바일 퍼스트 UX*
