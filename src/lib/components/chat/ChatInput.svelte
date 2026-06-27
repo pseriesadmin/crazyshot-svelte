@@ -36,7 +36,7 @@
   function handleInput() {
     if (!textareaEl) return
     textareaEl.style.height = 'auto'
-    const maxH = 44 // 2행 (line-height 22px × 2)
+    const maxH = 72
     textareaEl.style.height = Math.min(textareaEl.scrollHeight, maxH) + 'px'
   }
 
@@ -128,7 +128,7 @@
     height: 67px;
     display: flex;
     align-items: center;
-    padding: 12px 15px;
+    padding: 8px 15px;
     gap: 8px;
   }
 
@@ -165,21 +165,14 @@
     background: transparent;
     border: none;
     padding: 0;
-    margin: 0;
     font: 400 16px/22px 'Noto Sans KR', sans-serif;
     color: var(--cs-text);
     letter-spacing: -0.2px;
     resize: none;
     outline: none;
-    height: 22px;
-    max-height: 44px;
+    height: 36px;
+    max-height: 72px;
     overflow-y: auto;
-    scrollbar-width: none;
-    -ms-overflow-style: none;
-  }
-
-  .input-field::-webkit-scrollbar {
-    display: none;
   }
 
   .input-field::placeholder {

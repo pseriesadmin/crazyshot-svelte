@@ -46,16 +46,16 @@
     border-radius: var(--radius-xl);
     display: flex;
     align-items: center;
-    gap: 16px;
-    padding: 14px 20px;
+    gap: 20px;
+    padding: 20px;
     flex-shrink: 0;
     width: 100%;
   }
 
-  /* 65px 원형 아바타 */
+  /* 72px 원형 아바타 — Figma node 2497:8693 */
   .avatar {
-    width: 65px;
-    height: 65px;
+    width: 72px;
+    height: 72px;
     border-radius: 50%;
     background: var(--cs-purple);
     display: flex;
@@ -67,7 +67,7 @@
   .avatar-initials {
     font-family: 'Noto Sans KR', sans-serif;
     font-weight: 600;
-    font-size: 21px;
+    font-size: 24px;
     color: var(--cs-white);
     letter-spacing: -0.2px;
   }
@@ -75,23 +75,23 @@
   .user-info {
     display: flex;
     flex-direction: column;
-    gap: 3px;
+    gap: 5px;
     flex: 1;
   }
 
-  /* Noto Sans KR Black 21px — Figma 22px 대비 1pt 축소 */
+  /* Noto Sans KR Black 22px — Figma node 2497:8697 */
   .user-name {
-    font: var(--text-pc-title-18, 900 18px 'Noto Sans KR', sans-serif);
-    font-size: 18px;
+    font: var(--text-pc-htitle-25, 900 22px 'Noto Sans KR', sans-serif);
+    font-size: 22px;
     font-weight: 900;
     color: var(--cs-dark);
     margin: 0;
   }
 
-  /* Noto Sans KR Bold 15px — Figma 16px 대비 1pt 축소 */
+  /* Noto Sans KR Bold 16px #707388 — Figma node 2497:8698 */
   .user-handle {
-    font: var(--text-m-script-14, 700 14px 'Noto Sans KR', sans-serif);
-    font-size: 14px;
+    font: var(--text-pc-title-16, 700 16px 'Noto Sans KR', sans-serif);
+    font-size: 16px;
     color: var(--cs-text-mid, #777777);
     letter-spacing: -0.5px;
     margin: 0;
