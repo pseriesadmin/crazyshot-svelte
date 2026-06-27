@@ -74,7 +74,7 @@
 	</main>
 
 	<!-- PRD.1.7 — 채팅 FAB: fab-bar가 없는 페이지에서만 표시 -->
-	{#if !['checkout', 'products/'].some(p => $page.url.pathname.includes(p)) && !$page.url.pathname.startsWith('/dev/cart')}
+	{#if !['checkout', 'products/'].some(p => $page.url.pathname.includes(p))}
 		<div class="global-fab-bar">
 			<FloatingButton
 				userId={chatUserId}
