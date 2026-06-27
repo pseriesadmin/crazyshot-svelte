@@ -4,7 +4,16 @@
   import type { PageData } from './$types';
   import type { Product } from '$lib/types/database';
   import SubGnb from '$lib/components/common/SubGnb.svelte';
+  import FloatingButton from '$lib/components/chat/FloatingButton.svelte';
+  import { authState } from '$lib/stores/auth';
   import { sampleSubItems, priceConfig } from '$lib/fixtures/cartFixtures';
+
+  let chatUserId = $derived($authState.user?.id ?? 'test-user')
+  let chatUserName = $derived(
+    ($authState.user?.user_metadata?.full_name as string | undefined) ??
+    $authState.user?.email?.split('@')[0] ??
+    '테스트유저'
+  )
 
   function readInputValue(event: { currentTarget: { value: string } }): string {
     return event.currentTarget.value;
@@ -852,6 +861,7 @@
         <path fill-rule="evenodd" clip-rule="evenodd" d="M17.5 0C27.165 0 35 7.83502 35 17.5C35 27.165 27.165 35 17.5 35C7.83502 35 0 27.165 0 17.5C0 7.83502 7.83502 0 17.5 0ZM22.4912 21.1592C21.9717 20.4791 20.9753 20.362 20.3564 20.9531C19.7512 21.5315 19.8035 22.5066 20.4346 23.0566C21.3083 23.8178 21.9885 24.5282 22.7158 25.4443C23.2368 26.1002 24.2097 26.1977 24.8154 25.6191C25.4338 25.0284 25.363 24.0284 24.708 23.4785C23.8396 22.7498 23.1757 22.0552 22.4912 21.1592ZM19.8799 10.3262C18.4921 9.69815 16.9491 9.49557 15.4463 9.74414C13.9433 9.99289 12.5471 10.6819 11.4355 11.7236C10.324 12.7655 9.5467 14.1139 9.20117 15.5977C8.8558 17.0812 8.95733 18.6341 9.49414 20.0596C10.0312 21.4852 10.9793 22.7203 12.2178 23.6074C13.4563 24.4944 14.9305 24.9944 16.4531 25.0439C17.1427 25.0662 17.7204 24.5255 17.7432 23.8359C17.7655 23.1462 17.2239 22.5686 16.5342 22.5459C15.5059 22.5124 14.5103 22.1742 13.6738 21.5752C12.8372 20.976 12.1968 20.1417 11.834 19.1787C11.4713 18.2157 11.4024 17.1663 11.6357 16.1641C11.8692 15.1619 12.3947 14.2515 13.1455 13.5479C13.8964 12.8442 14.8393 12.379 15.8545 12.2109C16.8696 12.0431 17.9122 12.1793 18.8496 12.6035C19.787 13.0279 20.5783 13.7212 21.1221 14.5947C21.6655 15.4681 21.9383 16.4836 21.9053 17.5117C21.8832 18.2016 22.4243 18.7795 23.1143 18.8018C23.8038 18.8236 24.3809 18.2824 24.4033 17.5928C24.4524 16.0702 24.0491 14.5667 23.2441 13.2734C22.4391 11.9801 21.2677 10.9544 19.8799 10.3262Z" fill="#3B2F8A"/>
       </svg>
     </button>
+    <FloatingButton userId={chatUserId} userName={chatUserName} />
   </div>
 </div>
 

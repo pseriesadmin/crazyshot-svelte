@@ -2,6 +2,7 @@
 	import '../app.css';
 	import { onMount } from 'svelte';
 	import { locale } from 'svelte-i18n';
+	import { page } from '$app/stores';
 	import { initializeAuth, subscribeToAuthChanges, authState } from '$lib/stores/auth';
 	import FloatingButton from '$lib/components/chat/FloatingButton.svelte';
 
@@ -72,12 +73,16 @@
 		<slot />
 	</main>
 
-	<!-- PRD.1.7 — 채팅 FAB: 모든 페이지 공통 -->
-	<FloatingButton
-		userId={chatUserId}
-		userName={chatUserName}
-		userHandle={chatUserHandle}
-	/>
+	<!-- PRD.1.7 — 채팅 FAB: fab-bar가 없는 페이지에서만 표시 -->
+	{#if !['checkout', 'products/'].some(p => $page.url.pathname.includes(p)) && !$page.url.pathname.startsWith('/dev/cart')}
+		<div class="global-fab-bar">
+			<FloatingButton
+				userId={chatUserId}
+				userName={chatUserName}
+				userHandle={chatUserHandle}
+			/>
+		</div>
+	{/if}
 
 	<footer class="site-footer">
 		<div class="footer-inner">
@@ -165,6 +170,16 @@
 </div>
 
 <style>
+	.global-fab-bar {
+		position: fixed;
+		right: 24px;
+		bottom: 100px;
+		z-index: 40;
+		display: flex;
+		flex-direction: column;
+		gap: 10px;
+	}
+
 	:global(html) {
 		font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue',
 			Arial, sans-serif;
