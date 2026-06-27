@@ -18,13 +18,21 @@ TypeScript
 - 반환 타입 명시 필수 (함수 시그니처)
 
 Supabase — DB 환경 분리 (절대 혼용 금지)
-┌─────────────────────────────────────────────────────────────────┐
-│ 테스트DB  (crazyshot-stage)   ID: ezyvffjvuwmtuhpxdjrw          │
-│   → 마이그레이션 검증 먼저. .env.local.test / 개발 전용         │
-│ stageDB   (본 서비스 stage)   ID: vnbpmvxruyciuuaermyh          │
-│   → .env.local 현재 연결. 검증 완료 후 적용                     │
-│ ⚠️ 마이그레이션 순서: 테스트DB 검증 → stageDB 적용              │
-└─────────────────────────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────────────────┐
+│ 🔴 실서비스 DB  crazyshot (Production)                              │
+│    ID : vnbpmvxruyciuuaermyh                                        │
+│    URL: https://vnbpmvxruyciuuaermyh.supabase.co                   │
+│    → .env.local 현재 연결. 검증 완료 마이그레이션만 적용            │
+│                                                                     │
+│ 🟡 테스트 DB   crazyshot-stage (Preview)                            │
+│    ID : ezyvffjvuwmtuhpxdjrw                                        │
+│    URL: https://ezyvffjvuwmtuhpxdjrw.supabase.co                   │
+│    → 마이그레이션 1차 검증 전용                                     │
+│                                                                     │
+│ ⛔ 마이그레이션 필수 순서: crazyshot-stage 검증 → crazyshot 실배포  │
+│ ⚠️ apply_migration 실행 전 project_id 반드시 재확인                │
+│ ⚠️ 실서비스 DB 미검증 직접 적용 절대 금지                          │
+└─────────────────────────────────────────────────────────────────────┘
 - 클라이언트: import { supabase } from '$lib/services/supabase'
 - 서버사이드: import { createServerClient } from '@supabase/ssr'
 - RPC 호출: supabase.rpc('function_name', { params })

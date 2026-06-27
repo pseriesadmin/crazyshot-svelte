@@ -19,6 +19,7 @@
 @.cursor/harness/TASK.md
 @.cursor/harness/GSD_LOG.md
 @.cursor/harness/context-hook.md
+@.cursor/harness/SUPABASE_DB.md
 
 읽은 후 HOOK-4 재시작 브리핑을 실행해주세요:
 - 현재 아젠다 1줄 요약
@@ -108,6 +109,7 @@ GATE 등급:
 @.cursor/harness/TASK.md                     ← NOW/DONE/BLOCKED ★
 @.cursor/harness/GSD_LOG.md                  ← 작업 이력
 @.cursor/harness/context-hook.md             ← HOOK-1~8
+@.cursor/harness/SUPABASE_DB.md              ← Supabase DB 2개 정의 ★
 @.cursor/harness/ERROR_TAXONOMY.md           ← 에러 분류
 @.cursor/harness/HANDOFF_TEMPLATE.md         ← 핸드오프 양식
 @.cursor/harness/ARCHITECTURE.md             ← 5계층 + 3-Tier 구조

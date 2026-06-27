@@ -89,14 +89,23 @@ Class D (보안 위반) → 즉시 중단
 ## Supabase DB 환경 (혼용 절대 금지)
 
 ```
-테스트DB  crazyshot-stage   ID: ezyvffjvuwmtuhpxdjrw
-  → 마이그레이션 먼저 검증하는 곳 (.env.local 미연결)
+🔴 실서비스 DB  crazyshot (Production)
+   Project ID : vnbpmvxruyciuuaermyh
+   URL        : https://vnbpmvxruyciuuaermyh.supabase.co
+   용도       : 실사용자 서비스 배포용 — 검증 완료 마이그레이션만 적용
+   .env.local : ✅ 현재 연결 중 (개발 서버 기본값)
 
-stageDB   본 서비스 stage   ID: vnbpmvxruyciuuaermyh
-  → .env.local 현재 연결 중 (개발 서버 기본값)
+🟡 테스트 DB   crazyshot-stage (Preview)
+   Project ID : ezyvffjvuwmtuhpxdjrw
+   URL        : https://ezyvffjvuwmtuhpxdjrw.supabase.co
+   용도       : 마이그레이션 1차 검증 전용 — 실서비스 반영 전 필수 통과
 
-⚠️ 마이그레이션 적용 순서: 테스트DB 검증 → stageDB 적용
+⛔ 마이그레이션 필수 적용 순서 (위반 시 즉시 중단)
+   1단계 → crazyshot-stage (ezyvffjvuwmtuhpxdjrw) 검증
+   2단계 → crazyshot (vnbpmvxruyciuuaermyh) 실배포
+
 ⚠️ MCP apply_migration 실행 전 project_id 반드시 재확인
+⚠️ 실서비스 DB에 미검증 마이그레이션 직접 적용 절대 금지
 ```
 
 ---
