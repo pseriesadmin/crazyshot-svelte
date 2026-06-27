@@ -174,7 +174,7 @@
 		position: fixed;
 		right: 24px;
 		bottom: 100px;
-		z-index: 40;
+		z-index: 200;
 		display: flex;
 		flex-direction: column;
 		gap: 10px;
