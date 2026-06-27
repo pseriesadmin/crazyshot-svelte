@@ -1,7 +1,7 @@
 // POST /api/chat/sessions/[id]/join — 관리자가 세션 선택 시 admin_id 배정
 import { json } from '@sveltejs/kit'
 import { env } from '$env/dynamic/private'
-import { getSupabaseUrl } from '$lib/env/supabasePublic'
+import { PUBLIC_SUPABASE_URL } from '$env/static/public'
 import { createClient } from '@supabase/supabase-js'
 import type { RequestHandler } from './$types'
 
@@ -12,7 +12,7 @@ export const POST: RequestHandler = async ({ params, locals }) => {
   const serviceRoleKey = env.SUPABASE_SERVICE_ROLE_KEY
   if (!serviceRoleKey) return json({ error: '서버 설정 오류입니다.' }, { status: 500 })
 
-  const admin = createClient(getSupabaseUrl(), serviceRoleKey)
+  const admin = createClient(PUBLIC_SUPABASE_URL, serviceRoleKey)
 
   // cms_role 확인 (service role — user_profiles RLS bypass)
   const { data: profile } = await admin

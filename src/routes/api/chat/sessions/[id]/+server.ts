@@ -1,7 +1,7 @@
 // DELETE /api/chat/sessions/[id] — 세션 완전 삭제 (closed 전용, 관리자)
 import { json } from '@sveltejs/kit'
 import { env } from '$env/dynamic/private'
-import { getSupabaseUrl } from '$lib/env/supabasePublic'
+import { PUBLIC_SUPABASE_URL } from '$env/static/public'
 import { createClient } from '@supabase/supabase-js'
 import type { RequestHandler } from './$types'
 
@@ -12,7 +12,7 @@ export const DELETE: RequestHandler = async ({ params, locals }) => {
   const serviceRoleKey = env.SUPABASE_SERVICE_ROLE_KEY
   if (!serviceRoleKey) return json({ error: '서버 설정 오류입니다.' }, { status: 500 })
 
-  const admin = createClient(getSupabaseUrl(), serviceRoleKey)
+  const admin = createClient(PUBLIC_SUPABASE_URL, serviceRoleKey)
 
   // cms_role 확인
   const { data: profile } = await admin

@@ -26,7 +26,8 @@ export const POST: RequestHandler = async ({ params, locals }) => {
 
   const sessionId = params.id
 
-  const { data, error } = await admin
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const { data, error } = await (admin as any)
     .from('chat_sessions')
     .update({ status: 'closed', updated_at: new Date().toISOString() })
     .eq('id', sessionId)
@@ -34,11 +35,12 @@ export const POST: RequestHandler = async ({ params, locals }) => {
     .select('id, status')
     .single()
 
+  const err = error as { code?: string; message?: string } | null
   // PGRST116 = 0 rows matched (이미 closed거나 존재하지 않는 세션)
-  if (error?.code === 'PGRST116' || !data) {
+  if (err?.code === 'PGRST116' || !data) {
     return json({ error: '세션을 찾을 수 없거나 이미 종료됐습니다.' }, { status: 404 })
   }
-  if (error) return json({ error: error.message }, { status: 500 })
+  if (err) return json({ error: err.message }, { status: 500 })
 
   return json({ session: data })
 }

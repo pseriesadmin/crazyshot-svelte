@@ -24,7 +24,7 @@
 
   // ── Types
   type DeliveryType = 'visit' | 'delivery';
-  type VisitLocation = 'main' | 'branch1' | 'branch2';
+  type VisitLocation = 'main' | 'branch1' | 'branch2' | 'none';
   type DeliveryService = 'crazy' | 'quick';
 
   interface CardOptions {
@@ -2069,6 +2069,12 @@
   }
   .fab-btn:hover { transform: scale(1.07); }
   .fab-btn:active { transform: scale(0.95); }
+
+  /* 모바일 기본: 70px / PC(≥640px): 40px */
+  .fab-btn svg { width: 70px; height: 70px; }
+  @media (min-width: 640px) {
+    .fab-btn svg { width: 40px; height: 40px; }
+  }
 
   /* ══ Responsive ══ */
   @media (max-width: 1024px) {

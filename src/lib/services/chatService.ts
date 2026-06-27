@@ -185,14 +185,15 @@ export async function markMessagesRead(
   sessionId: string,
   senderTypes: ('user' | 'admin' | 'ai')[] = ['admin', 'ai']
 ): Promise<{ error: string | null }> {
-  const { error } = await supabase
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const { error } = await (supabase as any)
     .from('chat_messages')
     .update({ is_read: true })
     .eq('session_id', sessionId)
     .eq('is_read', false)
     .in('sender_type', senderTypes)
 
-  return { error: error?.message ?? null }
+  return { error: (error as { message?: string } | null)?.message ?? null }
 }
 
 // ──────────────────────────────────────────────

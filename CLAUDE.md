@@ -93,12 +93,14 @@ Class D (보안 위반) → 즉시 중단
    Project ID : vnbpmvxruyciuuaermyh
    URL        : https://vnbpmvxruyciuuaermyh.supabase.co
    용도       : 실사용자 서비스 배포용 — 검증 완료 마이그레이션만 적용
-   .env.local : ✅ 현재 연결 중 (개발 서버 기본값)
+   .env.local : ❌ 미연결 (Vercel 프로덕션 환경에서만 사용)
 
-🟡 테스트 DB   crazyshot-stage (Preview)
+🟡 테스트 DB   crazyshot-stage (Stage)
    Project ID : ezyvffjvuwmtuhpxdjrw
    URL        : https://ezyvffjvuwmtuhpxdjrw.supabase.co
-   용도       : 마이그레이션 1차 검증 전용 — 실서비스 반영 전 필수 통과
+   용도       : 로컬 개발 기본값 + 마이그레이션 1차 검증
+   .env.local : ✅ 현재 연결 중 (로컬 개발 서버)
+   백업파일   : .env.local.stage-backup
 
 ⛔ 마이그레이션 필수 적용 순서 (위반 시 즉시 중단)
    1단계 → crazyshot-stage (ezyvffjvuwmtuhpxdjrw) 검증

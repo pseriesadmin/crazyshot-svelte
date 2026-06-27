@@ -48,8 +48,9 @@
   let isUploading = $state(false)
 
   // 세션 ID 앞 8자를 핸들로 표시 (비로그인 식별용)
+  // 관리자 목록과 동일하게 user_id 앞 8자 표시
   let displayHandle = $derived(
-    userHandle || (session ? '#' + session.id.slice(0, 8) : '')
+    userHandle || (session ? '#' + session.user_id.slice(0, 8) : '')
   )
 
   // 메시지 목록은 chatStore에서 파생
@@ -86,7 +87,8 @@
       return
     }
 
-    if (!existing) {
+    if (!existing || existing.status === 'closed') {
+      // 세션 없거나 종료됨 → 서버에서 closed 재활성화 또는 신규 생성
       const created = await createChatSession({ context_type: contextType as never, context_id: contextId })
       if (created.error || !created.session) {
         errorMsg = created.error ?? '세션 생성 실패'
@@ -103,8 +105,8 @@
     const { messages: hist } = await loadMessages(existing.id)
     setMessages(hist)
 
-    // 읽음 처리
-    await markMessagesRead(existing.id)
+    // 받은 메시지(admin, ai)만 읽음 처리 — 본인 메시지는 상대방이 읽어야 활성화
+    await markMessagesRead(existing.id, ['admin', 'ai'])
 
     isLoading = false
   }
@@ -121,8 +123,8 @@
       session.id,
       (msg) => {
         pushMessage(msg)
-        // 창이 열려있으면 즉시 읽음 처리
-        markMessagesRead(session!.id)
+        // admin·ai 메시지가 도착했을 때만 읽음 처리
+        markMessagesRead(session!.id, ['admin', 'ai'])
       },
       (messageId) => {
         // 상대방이 내 메시지를 읽었을 때 → 로컬 버블 아이콘 즉시 업데이트

@@ -27,13 +27,14 @@
 				query = query.eq('category', selectedCategory);
 			}
 
-			const { data, error: fetchError } = await query.eq('status', 'active');
+			const { data: rawData, error: fetchError } = await (query as ReturnType<typeof query.eq>).eq('is_active', true);
+			const data: Tables<'products'>[] = (rawData ?? []) as Tables<'products'>[];
 
 			if (fetchError) throw fetchError;
 
 			// Fetch available asset counts for each product
 			const productsWithCounts = await Promise.all(
-				(data || []).map(async (product) => {
+				(data || []).map(async (product: Record<string, unknown>) => {
 					const { count } = await supabase
 						.from('assets')
 						.select('*', { count: 'exact', head: true })
@@ -139,7 +140,7 @@
 								? '📷'
 								: product.category === 'lens'
 									? '🔍'
-									: product.category === 'tripod'
+									: (product.category as string) === 'tripod'
 										? '📏'
 										: product.category === 'audio'
 											? '🎤'

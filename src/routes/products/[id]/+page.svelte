@@ -58,7 +58,8 @@
     if (!qaText.trim() || qaSubmitting) return;
     qaSubmitting = true;
     try {
-      await supabase.rpc('submit_product_inquiry', {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      await (supabase as any).rpc('submit_product_inquiry', {
         p_product_id: data.productId,
         p_content: qaText.trim(),
       });
@@ -119,7 +120,7 @@
     sessionStorage.setItem('pendingReservation', JSON.stringify({
       productId: product.id,
       productName: product.name,
-      imageUrl: (product as Record<string, unknown>).image_url ?? '',
+      imageUrl: (product as unknown as Record<string, unknown>).image_url ?? '',
       startDate: e.startDate,
       endDate: e.endDate,
       startHour: e.startHour,

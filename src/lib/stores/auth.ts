@@ -128,8 +128,8 @@ export const performSignOut = async () => {
 };
 
 // Subscribe to auth state changes
-export const subscribeToAuthChanges = (callback?: (user: User | null) => void) => {
-  const unsubscribe = authService.onAuthStateChange((event, session) => {
+export const subscribeToAuthChanges = (callback?: (user: User | null) => void): (() => void) => {
+  const result = authService.onAuthStateChange((event, session) => {
     authState.set({
       user: session?.user || null,
       session: session || null,
@@ -142,5 +142,7 @@ export const subscribeToAuthChanges = (callback?: (user: User | null) => void) =
     }
   });
 
-  return unsubscribe;
+  // Supabase onAuthStateChange returns { data: { subscription } }
+  const sub = (result as { data?: { subscription?: { unsubscribe: () => void } } })?.data?.subscription
+  return () => sub?.unsubscribe()
 };

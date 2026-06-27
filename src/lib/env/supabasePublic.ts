@@ -1,12 +1,14 @@
 import { env } from '$env/dynamic/public'
 
-/** PUBLIC_ 우선, VITE_ fallback — Vercel 기존 env와 호환 ($env/static 빌드 필수 제거) */
+/** PUBLIC_ 우선, VITE_ fallback — Vercel 기존 env와 호환 */
 export function getSupabaseUrl(): string {
-	return env.PUBLIC_SUPABASE_URL ?? env.VITE_SUPABASE_URL ?? ''
+	// eslint-disable-next-line @typescript-eslint/no-explicit-any
+	return env.PUBLIC_SUPABASE_URL ?? (env as any).VITE_SUPABASE_URL ?? ''
 }
 
 export function getSupabaseAnonKey(): string {
-	return env.PUBLIC_SUPABASE_ANON_KEY ?? env.VITE_SUPABASE_ANON_KEY ?? ''
+	// eslint-disable-next-line @typescript-eslint/no-explicit-any
+	return env.PUBLIC_SUPABASE_ANON_KEY ?? (env as any).VITE_SUPABASE_ANON_KEY ?? ''
 }
 
 export function requireSupabasePublicEnv(): { url: string; anonKey: string } {

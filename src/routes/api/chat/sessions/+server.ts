@@ -66,13 +66,56 @@ export const GET: RequestHandler = async ({ url, locals }) => {
     }
   }
 
-  const sessions = rows.map((s: Record<string, unknown>) => ({
-    ...s,
-    user_name: '',
-    user_handle: '',
-    last_message_content: lastMsgMap[s.id as string]?.content ?? '',
-    last_message_sender: lastMsgMap[s.id as string]?.sender_type ?? '',
-  }))
+  // 세션 유저 정보 조회 — user_profiles 우선, 없으면 auth.users email fallback
+  const uniqueUserIds = [...new Set(rows.map((s: Record<string, unknown>) => s.user_id as string))]
+  const userInfoMap: Record<string, { name: string; handle: string }> = {}
+
+  if (uniqueUserIds.length > 0) {
+    // user_profiles에서 full_name 조회
+    const { data: profiles } = await admin
+      .from('user_profiles')
+      .select('id, full_name, email')
+      .in('id', uniqueUserIds)
+
+    type ProfileRow = { id: string; full_name: string | null; email: string | null }
+    for (const p of (profiles as ProfileRow[] ?? [])) {
+      if (p.full_name || p.email) {
+        userInfoMap[p.id] = {
+          name: p.full_name ?? '',
+          handle: p.email ? `@${p.email.split('@')[0]}` : '',
+        }
+      }
+    }
+
+    // user_profiles에 없는 유저 → auth.users email 조회
+    const missingIds = uniqueUserIds.filter((id) => !userInfoMap[id])
+    if (missingIds.length > 0) {
+      const authResults = await Promise.all(
+        missingIds.map((id) => admin.auth.admin.getUserById(id))
+      )
+      for (const { data: authUser } of authResults) {
+        if (authUser?.user) {
+          const u = authUser.user
+          const email = u.email ?? u.user_metadata?.email as string | undefined
+          userInfoMap[u.id] = {
+            name: (u.user_metadata?.full_name as string | undefined) ?? (u.user_metadata?.name as string | undefined) ?? '',
+            handle: email ? `@${email.split('@')[0]}` : `@${u.id.slice(0, 8)}`,
+          }
+        }
+      }
+    }
+  }
+
+  const sessions = rows.map((s: Record<string, unknown>) => {
+    const info = userInfoMap[s.user_id as string]
+    return {
+      ...s,
+      user_name: info?.name ?? '',
+      user_handle: info?.handle ?? `@${(s.user_id as string).slice(0, 8)}`,
+      last_message_content: lastMsgMap[s.id as string]?.content ?? '',
+      last_message_sender: lastMsgMap[s.id as string]?.sender_type ?? '',
+    }
+  })
 
   return json({ sessions })
 }
