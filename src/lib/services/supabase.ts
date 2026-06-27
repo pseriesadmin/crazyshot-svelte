@@ -1,7 +1,6 @@
 import { browser } from '$app/environment';
 import { PUBLIC_SUPABASE_URL, PUBLIC_SUPABASE_ANON_KEY } from '$env/static/public';
 import { createClient } from '@supabase/supabase-js';
-import { createBrowserClient } from '@supabase/ssr';
 import type { Database } from '$lib/types/database';
 import type {
   AtomicReserveAssetArgs,
@@ -12,6 +11,7 @@ import type {
 import type { Session } from '@supabase/supabase-js';
 
 // PUBLIC_ 우선, VITE_ fallback (Vercel 기존 env 호환)
+// 로컬 + Preview → crazyshot-stage 테스트 DB (ezyvffjvuwmtuhpxdjrw)
 const supabaseUrl = PUBLIC_SUPABASE_URL || import.meta.env.VITE_SUPABASE_URL;
 const supabaseAnonKey = PUBLIC_SUPABASE_ANON_KEY || import.meta.env.VITE_SUPABASE_ANON_KEY;
 
@@ -21,13 +21,16 @@ if (!supabaseUrl || !supabaseAnonKey) {
   );
 }
 
-// 브라우저: createBrowserClient (쿠키 기반 — 서버 safeGetSession과 세션 공유)
-// SSR: createClient (세션 미저장 — 서버는 event.locals.supabase 사용)
-export const supabase = browser
-  ? createBrowserClient<Database>(supabaseUrl, supabaseAnonKey)
-  : createClient<Database>(supabaseUrl, supabaseAnonKey, {
-      auth: { persistSession: false, autoRefreshToken: false },
-    });
+const isSSR = !browser;
+
+// Singleton Supabase client instance (typed against v5.46 schema)
+export const supabase = createClient<Database>(supabaseUrl, supabaseAnonKey, {
+  auth: {
+    persistSession: !isSSR,
+    autoRefreshToken: !isSSR,
+    detectSessionInUrl: true,
+  },
+});
 
 // =============================================================================
 // Auth helpers
