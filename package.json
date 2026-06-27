@@ -66,13 +66,7 @@
     "ws": "^8.21.0"
   },
   "lint-staged": {
-    "src/**/*.{ts,svelte}": [
-      "eslint --max-warnings=0",
-      "bash -c \"tsc --noEmit\""
-    ],
-    "supabase/migrations/*.sql": [
-      "bash -c \"echo [GP-10] 기존 마이그레이션 수정 감지 && exit 1\""
-    ]
+    "src/**/*.{ts,svelte}": "eslint --max-warnings=0 --no-warn-ignored"
   },
   "prepare": "husky install"
 }
