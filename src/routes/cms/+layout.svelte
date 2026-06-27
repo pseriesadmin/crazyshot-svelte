@@ -2,6 +2,7 @@
   import { goto } from '$app/navigation'
   import { page } from '$app/state'
   import { supabase } from '$lib/services/supabase'
+  import { Toaster } from 'svelte-sonner'
   import type { LayoutData } from './$types'
 
   interface Props {
@@ -128,6 +129,8 @@
 {:else}
   {@render children()}
 {/if}
+
+<Toaster position="bottom-center" richColors closeButton />
 
 <style>
   /* ══ CMS 크로스브라우저 기반 (Chrome · Firefox · Safari 모던 PC 대응) ══ */
