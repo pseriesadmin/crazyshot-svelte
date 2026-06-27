@@ -3,8 +3,22 @@
 	import { onMount } from 'svelte';
 	import { locale } from 'svelte-i18n';
 	import { initializeAuth, subscribeToAuthChanges, authState } from '$lib/stores/auth';
+	import FloatingButton from '$lib/components/chat/FloatingButton.svelte';
 
 	let currentLocale = 'ko';
+
+	// PRD.1.7 — 채팅 FAB
+	let chatUserId = $derived($authState.user?.id ?? 'test-user')
+	let chatUserName = $derived(
+		($authState.user?.user_metadata?.full_name as string | undefined) ??
+		$authState.user?.email?.split('@')[0] ??
+		'테스트유저'
+	)
+	let chatUserHandle = $derived(
+		($authState.user?.user_metadata?.username as string | undefined) ??
+		$authState.user?.email?.split('@')[0] ??
+		'test'
+	)
 
 	onMount(() => {
 		locale.set(currentLocale);
@@ -57,6 +71,13 @@
 	<main class="flex-1">
 		<slot />
 	</main>
+
+	<!-- PRD.1.7 — 채팅 FAB: 모든 페이지 공통 -->
+	<FloatingButton
+		userId={chatUserId}
+		userName={chatUserName}
+		userHandle={chatUserHandle}
+	/>
 
 	<footer class="site-footer">
 		<div class="footer-inner">
