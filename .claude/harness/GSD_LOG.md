@@ -52,6 +52,20 @@
   - Attempted fixes: hooks.server.ts polyfill, conditional initialization - all failed
   - Recommend: Implement lazy client initialization or provide ws transport at startup
 
+[2026-06-28] FIX | Cursor AI 손상 복구 + CMS 초대링크 완성 | 20+ 파일 | ✅ SUCCESS (커밋 fed4fdb, 7f3dd76)
+  - [복구] supabase.ts: createBrowserClient 복원 (browser 분기 패턴)
+  - [복구] API 라우트 5개: PUBLIC_SUPABASE_URL 원복 (chat/session·message·admin-reply·admin-attachment·sessions)
+  - [복구] auth.ts onAuthStateChange cleanup 복원
+  - [마이그레이션] Migration 49: handle_new_user anon 500 수정 → Stage DB 적용 완료 / Production 미적용
+    · 파일: supabase/migrations/20260628010049_49_fix_handle_new_user_anon.sql
+    · 주의: Stage 적용 버전 20260627151934 ≠ 파일 타임스탬프 20260628010049 (MCP 먼저 적용)
+  - [CMS] 초대링크 흐름 완성: accounts(초대링크 정보 화면) + login(비밀번호 설정 폼 + setPassword 액션)
+  - [UI] CMS 영역 채팅 FAB 제거 (/cms/* 경로 조건 추가)
+  - [UI] FAB z-index 200 상향 → checkout 하단바 가림 해소
+  - [UI] 계정목록 컬럼 퍼센트 기반 균등 배분 (col-email auto → 22%)
+  - [학습] .claude/harness/learnings/migration_schema_2026-06-28.md 생성
+  - [학습] .claude/harness/SUPABASE_DB.md 현행화 (마이그레이션 현황 + 이슈 이력 추가)
+
 [2026-06-26] GSD | PRD.1.7 T5~T8 | src/routes/api/chat/, src/lib/components/chat/, src/routes/+layout.svelte | ✅ SUCCESS
   - T5: API 라우트 5개 (session / message[Claude AI 의도분류] / sessions / action-card / close)
     · ANTHROPIC_API_KEY → $env/static/private (H-05 준수)
