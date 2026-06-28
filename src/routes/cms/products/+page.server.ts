@@ -1,6 +1,6 @@
 import { redirect } from '@sveltejs/kit'
 import { env } from '$env/dynamic/private'
-import { PUBLIC_SUPABASE_URL } from '$env/static/public'
+import { getSupabaseUrl } from '$lib/env/supabasePublic'
 import { createClient } from '@supabase/supabase-js'
 import type { PageServerLoad, Actions } from './$types'
 
@@ -11,7 +11,7 @@ export const load: PageServerLoad = async ({ locals, url }) => {
   const category = url.searchParams.get('category') ?? 'all'
   const q = url.searchParams.get('q') ?? ''
 
-  const admin = createClient(PUBLIC_SUPABASE_URL, env.SUPABASE_SERVICE_ROLE_KEY ?? '')
+  const admin = createClient(getSupabaseUrl(), env.SUPABASE_SERVICE_ROLE_KEY ?? '')
 
   // 코드설정에서 생성된 활성 루트 분류 목록 (depth=0, is_active=true)
   const { data: rawCategories } = await admin
@@ -90,7 +90,7 @@ export const actions: Actions = {
     const id = form.get('id') as string
     const isActive = form.get('is_active') === 'true'
 
-    const admin = createClient(PUBLIC_SUPABASE_URL, env.SUPABASE_SERVICE_ROLE_KEY ?? '')
+    const admin = createClient(getSupabaseUrl(), env.SUPABASE_SERVICE_ROLE_KEY ?? '')
     await admin.from('products').update({ is_active: !isActive }).eq('id', id)
 
     return { success: true }

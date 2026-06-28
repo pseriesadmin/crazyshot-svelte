@@ -662,3 +662,16 @@ export type Database = {
     };
   };
 };
+
+// ────────────────────────────────────────────────────────────
+// 유틸 헬퍼 타입 — Supabase 표준 패턴
+// Tables<'products'> → ProductRow 타입과 동일
+// ────────────────────────────────────────────────────────────
+export type Tables<T extends keyof Database['public']['Tables']> =
+  Database['public']['Tables'][T]['Row']
+
+export type TablesInsert<T extends keyof Database['public']['Tables']> =
+  Database['public']['Tables'][T]['Insert']
+
+export type TablesUpdate<T extends keyof Database['public']['Tables']> =
+  Database['public']['Tables'][T]['Update']

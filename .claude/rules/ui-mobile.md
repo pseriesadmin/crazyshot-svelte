@@ -174,6 +174,70 @@ pickup     : 19:00 마감 표시
 
 ---
 
+## GNB 모바일 레이아웃 원칙
+
+> 확정 기준: 2026-06-28 피그마 시안 반영
+
+```
+모바일 GNB: position: fixed + background: transparent
+- GNB가 히어로/배너 콘텐츠 위에 오버레이 (별도 상단 공간 없음)
+- 콘텐츠는 top: 0 기준 시작 — GNB 높이만큼 padding 보정 금지
+- 래퍼: pointer-events: none / nav 자체: pointer-events: all
+```
+
+```css
+/* ✅ 모바일 GNB 필수 패턴 */
+.gnb-mobile-wrap {
+  position: fixed;
+  top: 0; left: 0; right: 0;
+  z-index: 50;
+  background: transparent;
+  pointer-events: none;
+}
+.gnb-mobile-nav {
+  pointer-events: all;
+}
+
+/* ❌ 절대 금지 */
+.gnb-mobile-wrap { position: sticky; }         /* 레이아웃 공간 점유 */
+.gnb-mobile-wrap { background: var(--cs-lilac); } /* 배경색 가림 */
+```
+
+---
+
+## FloatingBar 모바일 인터랙션 원칙
+
+> 확정 기준: 2026-06-28
+
+### FAB 아이콘 크기 (모바일 기준)
+```
+장바구니·검색: 55px × 55px
+채팅 FAB:      70px × 70px (FloatingButton.svelte 내부 — 강조 의도, 변경 금지)
+```
+
+### Peek & Expand 인터랙션
+```
+Peek 상태 (기본): transform: translateX(calc(50% + 24px))
+  → 진입 조건: 페이지 로드 / 라우트 변경 / 스크롤 발생
+
+Expand 상태: transform: translateX(0)
+  → 진입 조건: 플로팅 바 탭
+
+트랜지션: 0.42s cubic-bezier(0.34, 1.28, 0.64, 1)  ← 스프링 바운스
+버블 애니메이션: scale 1.12 최대, 0.32s ease-out
+```
+
+### ⚠️ CSS transform + position:fixed 충돌 규칙
+```
+transform이 적용된 조상 내 position:fixed 자식 → 뷰포트 기준 배치 무효화
+→ peek 상태(transform 활성) 중 fixed 모달(바텀시트) 열기 금지
+
+해결: peek 상태에서 FloatingButton wrapper에 pointer-events:none 적용
+     확장(transform 해제) 후에만 바텀시트 열기 허용
+```
+
+---
+
 ## GATE C 확인 항목 (UI 관련)
 
 ```
@@ -185,8 +249,12 @@ pickup     : 19:00 마감 표시
 [ ] Svelte 4 문법 없음? (on:event → onevent)
 [ ] writable store 대신 $state() 사용?
 [ ] 새 컴포넌트 생성 전 기존 컴포넌트 확인?
+[ ] GNB position: fixed + background: transparent?
+[ ] Hero 높이: 모바일 720px / PC 936px?
+[ ] FloatingBar peek 중 fixed 모달 차단(pointer-events:none)?
+[ ] 채팅 FAB 크기 70px(모바일) — 임의 변경 금지?
 ```
 
 ---
 
-*ui-mobile.md v3.1 | Harness Flow v3.1 | 모바일 퍼스트 UI*
+*ui-mobile.md v3.2 | Harness Flow v3.2 | 모바일 퍼스트 UI*

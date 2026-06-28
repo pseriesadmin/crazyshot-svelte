@@ -374,7 +374,7 @@
     font: var(--text-m-script-12);
     color: var(--cs-text-mid);
     font-weight: 700;
-    padding: 10px 10px;
+    padding: 10px 14px;
     text-align: left;
     white-space: nowrap;
   }
@@ -390,7 +390,7 @@
   td {
     font: var(--text-m-script-14);
     color: var(--cs-text);
-    padding: 9px 10px;
+    padding: 9px 14px;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
@@ -405,14 +405,14 @@
     font: var(--text-m-script-14);
   }
 
-  /* 컬럼 너비 */
-  .col-no     { width: 44px; text-align: center; }
-  .col-name   { width: 90px; }
-  .col-email  { width: auto; }
-  .col-phone  { width: 130px; }
-  .col-role   { width: 96px; }
-  .col-toggle { width: 62px; }
-  .col-delete { width: 48px; }
+  /* 컬럼 너비 — 퍼센트 기반으로 균등 배분 */
+  .col-no     { width: 5%;  text-align: center; }
+  .col-name   { width: 11%; }
+  .col-email  { width: 22%; }
+  .col-phone  { width: 15%; }
+  .col-role   { width: 12%; }
+  .col-toggle { width: 7%;  }
+  .col-delete { width: 8%;  }
 
   .email-text {
     font: var(--text-m-script-12);

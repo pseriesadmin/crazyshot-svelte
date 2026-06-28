@@ -1,6 +1,6 @@
 import { redirect, fail, error } from '@sveltejs/kit'
 import { env } from '$env/dynamic/private'
-import { PUBLIC_SUPABASE_URL } from '$env/static/public'
+import { getSupabaseUrl } from '$lib/env/supabasePublic'
 import { createClient } from '@supabase/supabase-js'
 import type { PageServerLoad, Actions } from './$types'
 
@@ -8,7 +8,7 @@ export const load: PageServerLoad = async ({ locals, params }) => {
   const { session } = await locals.safeGetSession()
   if (!session) throw redirect(303, '/cms/login')
 
-  const admin = createClient(PUBLIC_SUPABASE_URL, env.SUPABASE_SERVICE_ROLE_KEY ?? '')
+  const admin = createClient(getSupabaseUrl(), env.SUPABASE_SERVICE_ROLE_KEY ?? '')
 
   const { data: product } = await admin
     .from('products')
@@ -60,7 +60,7 @@ export const actions: Actions = {
     }
     image_urls = image_urls.filter(Boolean)
 
-    const admin = createClient(PUBLIC_SUPABASE_URL, env.SUPABASE_SERVICE_ROLE_KEY ?? '')
+    const admin = createClient(getSupabaseUrl(), env.SUPABASE_SERVICE_ROLE_KEY ?? '')
 
     const { data: existing } = await admin
       .from('products')

@@ -2,9 +2,25 @@
 	import '../app.css';
 	import { onMount } from 'svelte';
 	import { locale } from 'svelte-i18n';
+	import { page } from '$app/stores';
 	import { initializeAuth, subscribeToAuthChanges, authState } from '$lib/stores/auth';
+	import FloatingBar from '$lib/components/common/FloatingBar.svelte';
+	import GNB from '$lib/components/common/GNB.svelte';
 
 	let currentLocale = 'ko';
+
+	// PRD.1.7 — 채팅 FAB
+	let chatUserId = $derived($authState.user?.id ?? 'test-user')
+	let chatUserName = $derived(
+		($authState.user?.user_metadata?.full_name as string | undefined) ??
+		$authState.user?.email?.split('@')[0] ??
+		'테스트유저'
+	)
+	let chatUserHandle = $derived(
+		($authState.user?.user_metadata?.username as string | undefined) ??
+		$authState.user?.email?.split('@')[0] ??
+		'test'
+	)
 
 	onMount(() => {
 		locale.set(currentLocale);
@@ -22,41 +38,25 @@
 		};
 	});
 
-	function toggleLanguage() {
-		currentLocale = currentLocale === 'ko' ? 'en' : 'ko';
-		locale.set(currentLocale);
-	}
 </script>
 
 <div class="min-h-screen flex flex-col">
-	<header class="sticky top-0 z-100 bg-white shadow-sm">
-		<nav class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
-			<a href="/" class="font-bold text-2xl text-purple-600 hover:text-purple-800">📸 CRAZYSHOT</a>
-			<div class="flex gap-6 items-center">
-				<a href="/products" class="text-gray-700 hover:text-purple-600 font-medium">
-					렌탈 장비
-				</a>
-				{#if $authState.loading}
-					<div class="text-sm text-gray-500">Loading...</div>
-				{:else if $authState.user}
-					<div class="text-sm text-gray-700">{$authState.user.email}</div>
-					<a href="/auth/logout" class="px-3 py-1 text-sm rounded hover:bg-gray-100">Sign Out</a>
-				{:else}
-					<a href="/auth/login" class="px-3 py-1 text-sm rounded hover:bg-gray-100">Sign In</a>
-				{/if}
-				<button
-					onclick={toggleLanguage}
-					class="px-3 py-1 text-sm rounded hover:bg-gray-100"
-				>
-					{currentLocale === 'ko' ? '🇰🇷 KOR' : '🇺🇸 ENG'}
-				</button>
-			</div>
-		</nav>
-	</header>
+	{#if !$page.url.pathname.startsWith('/cms')}
+		<GNB pathname={$page.url.pathname} />
+	{/if}
 
 	<main class="flex-1">
 		<slot />
 	</main>
+
+	<!-- 공통 플로팅 바: /cms 제외 전체 사용자 화면 -->
+	{#if !$page.url.pathname.startsWith('/cms')}
+		<FloatingBar
+			userId={chatUserId}
+			userName={chatUserName}
+			userHandle={chatUserHandle}
+		/>
+	{/if}
 
 	<footer class="site-footer">
 		<div class="footer-inner">
@@ -144,7 +144,7 @@
 </div>
 
 <style>
-	:global(html) {
+:global(html) {
 		font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue',
 			Arial, sans-serif;
 	}

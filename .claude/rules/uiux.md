@@ -268,7 +268,133 @@
 
 ---
 
-## 8. 퍼블리싱 완료 전 체크리스트
+## 9. GNB (공통 헤더 네비게이션) 레이아웃 원칙
+
+> 확정 기준: 2026-06-28 피그마 시안 반영
+
+```
+GNB 포지셔닝 전략: position: fixed (오버레이) — 절대 sticky/static 금지
+- PC & 모바일 모두: GNB가 히어로/배너 콘텐츠 위에 오버레이
+- GNB 전용 영역(별도 레이아웃 공간) 존재 금지
+- 콘텐츠는 페이지 최상단(0px)부터 시작 — GNB가 레이아웃 흐름을 점유하지 않음
+```
+
+### GNB 래퍼 필수 CSS 패턴
+
+```css
+/* ✅ PC 데스크탑 GNB 래퍼 */
+.gnb-desktop-wrap {
+  position: fixed;
+  top: 0; left: 0; right: 0;
+  z-index: 50;
+  pointer-events: none;   /* 클릭 영역은 nav 자체에서만 */
+}
+
+/* ✅ 모바일 GNB 래퍼 */
+.gnb-mobile-wrap {
+  position: fixed;
+  top: 0; left: 0; right: 0;
+  z-index: 50;
+  background: transparent;   /* 배경색 없음 — 콘텐츠 투시 */
+  pointer-events: none;
+}
+
+/* ✅ 공통: 실제 nav 요소는 pointer-events 복원 */
+.gnb-desktop-nav,
+.gnb-mobile-nav {
+  pointer-events: all;
+}
+```
+
+### ❌ 절대 금지 패턴
+
+```css
+/* ❌ GNB에 sticky 사용 — 레이아웃 공간 점유 */
+.gnb-wrap { position: sticky; top: 0; }
+
+/* ❌ GNB 래퍼에 배경색 설정 — 콘텐츠 가림 */
+.gnb-mobile-wrap { background: var(--cs-lilac); }
+
+/* ❌ GNB 아래 콘텐츠에 margin-top으로 보정 */
+.hero { margin-top: -100px; }   /* GNB fixed → 보정 불필요 */
+```
+
+---
+
+## 10. Hero 섹션 높이 기준
+
+> 확정 기준: 2026-06-28
+
+```
+모바일 hero 기준 높이: 720px
+PC hero 높이: 모바일 × 1.3 = 936px
+
+비율 공식: PC hero height = 모바일 hero height × 1.3
+```
+
+```css
+/* ✅ 표준 hero 높이 */
+.m-hero { height: 720px; }   /* 모바일 */
+.d-hero { height: 936px; }   /* PC (720 × 1.3) */
+```
+
+---
+
+## 11. FloatingBar (모바일 플로팅 FAB) 인터랙션 원칙
+
+> 확정 기준: 2026-06-28
+
+### 아이콘 사이즈 기준
+
+```
+장바구니·검색 FAB: 모바일 55px / PC 40px
+채팅 FAB: 크기 변경 금지 — 채팅 강조 의도 유지 (FloatingButton 컴포넌트 자체 크기)
+```
+
+### 모바일 Peek & Expand 인터랙션
+
+```
+기본 상태 (peek): 화면 우측 절반만 노출
+  → transform: translateX(calc(50% + 24px))
+  → 진입 조건: 페이지 최초 로드, 라우트 변경, 스크롤 발생
+
+확장 상태 (expanded): 전체 노출 + 버블 애니메이션
+  → 진입 조건: 플로팅 바 터치(탭)
+  → 버블: scale 1.12, 0.32s ease-out
+
+peek↔expanded 트랜지션: cubic-bezier(0.34, 1.28, 0.64, 1) 0.42s (스프링 바운스)
+```
+
+### CSS transform + position:fixed 버그 방지 원칙
+
+```
+⚠️ CSS transform이 적용된 조상 요소 내부에서 position:fixed 자식은
+   뷰포트 기준이 아닌 transform 요소 기준으로 배치됨 → 모달 왜곡 발생
+
+해결: peek 상태(transform 활성) 시 채팅 바텀시트 진입 차단
+  → pointer-events: none으로 FloatingButton wrapper 차단
+  → 확장 후(transform 해제)에만 바텀시트 열기 허용
+```
+
+```svelte
+<!-- ✅ 올바른 패턴 -->
+<div style={peekMode ? 'pointer-events:none' : ''}>
+  <FloatingButton ... />
+</div>
+
+<!-- ❌ 금지: peek 상태에서 바텀시트 열림 허용 → 모달 왜곡 -->
+```
+
+### peek 상태에서 버튼 클릭 차단
+
+```svelte
+<!-- peek 중 장바구니·검색 직접 클릭 차단 (탭 → 확장 우선) -->
+<button style={peekMode ? 'pointer-events:none' : ''} ...>
+```
+
+---
+
+## 12. 퍼블리싱 완료 전 체크리스트
 
 ```
 [ ] CSS 변수 사용 (--cs-* / --text-* / --radius-*) — 하드코딩 #hex 없음?
@@ -282,6 +408,10 @@
 [ ] 이미지 alt 속성 존재?
 [ ] Svelte 4 문법 없음? (on:event → onevent)
 [ ] $state() 사용 (writable store 금지)?
+[ ] GNB position: fixed? (sticky 금지)
+[ ] GNB 래퍼 background: transparent?
+[ ] Hero 높이: 모바일 720px / PC 936px?
+[ ] FloatingBar peek 시 채팅 바텀시트 차단 (pointer-events:none)?
 ```
 
 ---

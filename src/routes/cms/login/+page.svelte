@@ -1,9 +1,9 @@
 <script lang="ts">
   import { enhance } from '$app/forms'
-  import type { ActionData } from './$types'
+  import type { ActionData, PageData } from './$types'
 
-  interface Props { form: ActionData }
-  let { form }: Props = $props()
+  interface Props { form: ActionData; data: PageData }
+  let { form, data }: Props = $props()
 
   let isLoading = $state(false)
 
@@ -33,41 +33,86 @@
       <p class="error-msg" role="alert">{result.error}</p>
     {/if}
 
-    <form
-      method="POST"
-      action="?/login"
-      use:enhance={() => {
-        isLoading = true
-        return async ({ update }) => { await update(); isLoading = false }
-      }}
-      class="login-form"
-    >
-      <label class="field-label" for="email">이메일</label>
-      <input
-        id="email"
-        name="email"
-        type="email"
-        class="f-input"
-        placeholder="admin@crazyshot.kr"
-        autocomplete="email"
-        required
-      />
+    {#if data.inviteExpired}
+      <p class="error-msg" role="alert">초대 링크가 만료되었거나 이미 사용된 링크입니다.</p>
+    {:else if data.inviteMode}
+      <!-- 초대링크 진입: 비밀번호 설정 폼 -->
+      <p class="invite-greeting">안녕하세요. <strong>{data.inviteEmail}</strong>으로 초대받으셨습니다.<br>사용하실 비밀번호를 설정해 주세요.</p>
+      <form
+        method="POST"
+        action="?/setPassword"
+        use:enhance={() => {
+          isLoading = true
+          return async ({ update }) => { await update(); isLoading = false }
+        }}
+        class="login-form"
+      >
+        <input type="hidden" name="token" value={data.inviteToken} />
 
-      <label class="field-label" for="password">비밀번호</label>
-      <input
-        id="password"
-        name="password"
-        type="password"
-        class="f-input"
-        placeholder="비밀번호 입력"
-        autocomplete="current-password"
-        required
-      />
+        <label class="field-label" for="password">새 비밀번호</label>
+        <input
+          id="password"
+          name="password"
+          type="password"
+          class="f-input"
+          placeholder="8자 이상 입력"
+          autocomplete="new-password"
+          required
+        />
 
-      <button class="cta-btn" type="submit" disabled={isLoading}>
-        {isLoading ? '로그인 중...' : '로그인'}
-      </button>
-    </form>
+        <label class="field-label" for="confirm">비밀번호 확인</label>
+        <input
+          id="confirm"
+          name="confirm"
+          type="password"
+          class="f-input"
+          placeholder="비밀번호 재입력"
+          autocomplete="new-password"
+          required
+        />
+
+        <button class="cta-btn" type="submit" disabled={isLoading}>
+          {isLoading ? '설정 중...' : '비밀번호 설정 및 로그인'}
+        </button>
+      </form>
+    {:else}
+      <!-- 일반 로그인 폼 -->
+      <form
+        method="POST"
+        action="?/login"
+        use:enhance={() => {
+          isLoading = true
+          return async ({ update }) => { await update(); isLoading = false }
+        }}
+        class="login-form"
+      >
+        <label class="field-label" for="email">이메일</label>
+        <input
+          id="email"
+          name="email"
+          type="email"
+          class="f-input"
+          placeholder="admin@crazyshot.kr"
+          autocomplete="email"
+          required
+        />
+
+        <label class="field-label" for="password">비밀번호</label>
+        <input
+          id="password"
+          name="password"
+          type="password"
+          class="f-input"
+          placeholder="비밀번호 입력"
+          autocomplete="current-password"
+          required
+        />
+
+        <button class="cta-btn" type="submit" disabled={isLoading}>
+          {isLoading ? '로그인 중...' : '로그인'}
+        </button>
+      </form>
+    {/if}
   </div>
 </div>
 
@@ -150,5 +195,15 @@
     font: var(--text-m-script-14);
     color: var(--cs-red-badge);
     margin: 0;
+  }
+
+  .invite-greeting {
+    font: var(--text-m-script-14);
+    color: var(--cs-text);
+    line-height: 1.6;
+    margin: 0;
+    padding: 14px 16px;
+    background: var(--cs-lilac);
+    border-radius: var(--radius-md);
   }
 </style>

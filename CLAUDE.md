@@ -93,12 +93,14 @@ Class D (보안 위반) → 즉시 중단
    Project ID : vnbpmvxruyciuuaermyh
    URL        : https://vnbpmvxruyciuuaermyh.supabase.co
    용도       : 실사용자 서비스 배포용 — 검증 완료 마이그레이션만 적용
-   .env.local : ✅ 현재 연결 중 (개발 서버 기본값)
+   .env.local : ❌ 미연결 (Vercel 프로덕션 환경에서만 사용)
 
-🟡 테스트 DB   crazyshot-stage (Preview)
+🟡 테스트 DB   crazyshot-stage (Stage)
    Project ID : ezyvffjvuwmtuhpxdjrw
    URL        : https://ezyvffjvuwmtuhpxdjrw.supabase.co
-   용도       : 마이그레이션 1차 검증 전용 — 실서비스 반영 전 필수 통과
+   용도       : 로컬 개발 기본값 + 마이그레이션 1차 검증
+   .env.local : ✅ 현재 연결 중 (로컬 개발 서버)
+   백업파일   : .env.local.stage-backup
 
 ⛔ 마이그레이션 필수 적용 순서 (위반 시 즉시 중단)
    1단계 → crazyshot-stage (ezyvffjvuwmtuhpxdjrw) 검증
@@ -121,6 +123,8 @@ Class D (보안 위반) → 즉시 중단
 ❌ Svelte 4 문법 사용 금지 (on:event → onevent)
 ❌ 하네스 플래닝에 Claude 네이티브 Plan 에이전트 사용 금지 → @promptor 또는 @harness-executor 사용
 ❌ Claude 네이티브 TaskCreate/TaskUpdate 도구 사용 금지 → .claude/harness/TASK.md 직접 편집
+❌ 요청 범위 외 파일·코드 수정 금지 — 요청에 명시되지 않은 파일은 읽기만 허용, 수정 절대 금지
+   → 범위 외 수정이 필요하다고 판단될 경우 반드시 Stephen에게 먼저 확인 후 진행
 ```
 
 ---

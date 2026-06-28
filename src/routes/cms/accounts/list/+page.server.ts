@@ -1,6 +1,6 @@
 import { fail, redirect } from '@sveltejs/kit'
 import { env } from '$env/dynamic/private'
-import { PUBLIC_SUPABASE_URL } from '$env/static/public'
+import { getSupabaseUrl } from '$lib/env/supabasePublic'
 import { createClient } from '@supabase/supabase-js'
 import type { Actions, PageServerLoad } from './$types'
 import type { SupabaseClient } from '@supabase/supabase-js'
@@ -22,7 +22,7 @@ export const load: PageServerLoad = async ({ parent }) => {
   const serviceRoleKey = env.SUPABASE_SERVICE_ROLE_KEY
   if (!serviceRoleKey) return { accounts: [] as AccountRow[] }
 
-  const admin = createClient(PUBLIC_SUPABASE_URL, serviceRoleKey)
+  const admin = createClient(getSupabaseUrl(), serviceRoleKey)
 
   const [profilesRes, authRes] = await Promise.all([
     admin
@@ -88,7 +88,7 @@ async function requireSuperadmin(
 function makeAdmin(): SupabaseClient | null {
   const key = env.SUPABASE_SERVICE_ROLE_KEY
   if (!key) return null
-  return createClient(PUBLIC_SUPABASE_URL, key)
+  return createClient(getSupabaseUrl(), key)
 }
 
 export const actions: Actions = {

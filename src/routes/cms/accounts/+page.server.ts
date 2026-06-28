@@ -1,6 +1,6 @@
 import { fail, redirect } from '@sveltejs/kit'
 import { env } from '$env/dynamic/private'
-import { PUBLIC_SUPABASE_URL } from '$env/static/public'
+import { getSupabaseUrl } from '$lib/env/supabasePublic'
 import { createClient } from '@supabase/supabase-js'
 import type { Actions, PageServerLoad } from './$types'
 
@@ -30,7 +30,7 @@ export const actions: Actions = {
     const serviceRoleKey = env.SUPABASE_SERVICE_ROLE_KEY
     if (!serviceRoleKey) return fail(500, { error: '서버 설정 오류입니다.' })
 
-    const serviceClient = createClient(PUBLIC_SUPABASE_URL, serviceRoleKey)
+    const serviceClient = createClient(getSupabaseUrl(), serviceRoleKey)
 
     const { data: authData, error: createErr } = await serviceClient.auth.admin.createUser({
       email,

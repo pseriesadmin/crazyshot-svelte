@@ -1,13 +1,13 @@
 import { redirect, fail } from '@sveltejs/kit'
 import { env } from '$env/dynamic/private'
-import { PUBLIC_SUPABASE_URL } from '$env/static/public'
+import { getSupabaseUrl } from '$lib/env/supabasePublic'
 import { createClient } from '@supabase/supabase-js'
 import type { PageServerLoad, Actions } from './$types'
 
 const FORMAT_KEY = 'reservation_code_format'
 
 function db() {
-  return createClient(PUBLIC_SUPABASE_URL, env.SUPABASE_SERVICE_ROLE_KEY ?? '')
+  return createClient(getSupabaseUrl(), env.SUPABASE_SERVICE_ROLE_KEY ?? '')
 }
 
 export type TaxonomyCode = {

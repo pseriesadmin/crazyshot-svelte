@@ -1,6 +1,6 @@
 import { redirect, fail } from '@sveltejs/kit'
 import { env } from '$env/dynamic/private'
-import { PUBLIC_SUPABASE_URL } from '$env/static/public'
+import { getSupabaseUrl } from '$lib/env/supabasePublic'
 import { createClient } from '@supabase/supabase-js'
 import type { Actions } from './$types'
 
@@ -35,7 +35,7 @@ export const actions: Actions = {
     }
     image_urls = image_urls.filter(Boolean)
 
-    const admin = createClient(PUBLIC_SUPABASE_URL, env.SUPABASE_SERVICE_ROLE_KEY ?? '')
+    const admin = createClient(getSupabaseUrl(), env.SUPABASE_SERVICE_ROLE_KEY ?? '')
 
     const { data: existing } = await admin
       .from('products')

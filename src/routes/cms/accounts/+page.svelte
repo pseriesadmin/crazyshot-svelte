@@ -1,5 +1,6 @@
 <script lang="ts">
   import { enhance } from '$app/forms'
+  import { browser } from '$app/environment'
   import type { ActionData } from './$types'
 
   interface Props { form: ActionData }
@@ -9,6 +10,7 @@
   let cmsRole = $state<'manager' | 'partner'>('manager')
   let concurrent = $state(true)
   let sessionLimit = $state(false)
+  let copied = $state(false)
 
   type FormResult = {
     error?: string
@@ -18,94 +20,124 @@
   } | null
 
   let result = $derived(form as FormResult)
+
+  let fullInviteLink = $derived(
+    browser && result?.inviteLink
+      ? window.location.origin + result.inviteLink
+      : (result?.inviteLink ?? '')
+  )
+
+  // 성공 시 자동 복사
+  $effect(() => {
+    if (browser && result?.success && fullInviteLink) {
+      window.navigator.clipboard.writeText(fullInviteLink).catch(() => {})
+    }
+  })
+
+  async function copyLink() {
+    await window.navigator.clipboard.writeText(fullInviteLink)
+    copied = true
+    setTimeout(() => { copied = false }, 2000)
+  }
 </script>
 
 <svelte:head><title>계정 관리 — CrazyShot CMS</title></svelte:head>
 
 <div class="accounts-wrap">
   <div class="accounts-card">
-    <h1 class="page-title">관리자 계정 등록</h1>
-
-    {#if result?.error}
-      <p class="error-msg" role="alert">{result.error}</p>
-    {/if}
 
     {#if result?.success && result.inviteLink}
+      <!-- 초대링크 발행 완료 화면 -->
+      <h1 class="page-title">관리계정 초대링크 정보</h1>
+
       <div class="invite-box">
         <p class="invite-label">초대 링크가 생성되었습니다</p>
-        <code class="invite-link">{result.inviteLink}</code>
+        <code class="invite-link">{fullInviteLink}</code>
         <p class="invite-hint">{result.email}에 전달해 주세요.</p>
       </div>
+
+      <button class="cta-btn" type="button" onclick={copyLink}>
+        {copied ? '✓ 복사됨' : '초대링크 복사'}
+      </button>
+
+    {:else}
+      <!-- 계정 등록 폼 -->
+      <h1 class="page-title">관리자 계정 등록</h1>
+
+      {#if result?.error}
+        <p class="error-msg" role="alert">{result.error}</p>
+      {/if}
+
+      <form
+        method="POST"
+        action="?/createAccount"
+        use:enhance={() => {
+          isLoading = true
+          return async ({ update }) => { await update(); isLoading = false }
+        }}
+        class="account-form"
+      >
+        <label class="field-label" for="name">이름</label>
+        <input id="name" name="name" type="text" class="f-input" placeholder="홍길동" required />
+
+        <label class="field-label" for="email">계정 (이메일)</label>
+        <input id="email" name="email" type="email" class="f-input" placeholder="manager@crazyshot.kr" required />
+
+        <label class="field-label" for="phone">휴대번호</label>
+        <input id="phone" name="phone" type="tel" class="f-input" placeholder="010-0000-0000" required />
+
+        <input type="hidden" name="cms_role" value={cmsRole} />
+
+        <fieldset class="radio-group">
+          <legend class="field-label">접근 권한</legend>
+          <div class="radio-row">
+            <label class="radio-label">
+              <input type="radio" name="_role" value="manager" checked={cmsRole === 'manager'} onchange={() => cmsRole = 'manager'} />
+              매니저
+            </label>
+            <label class="radio-label">
+              <input type="radio" name="_role" value="partner" checked={cmsRole === 'partner'} onchange={() => cmsRole = 'partner'} />
+              파트너
+            </label>
+          </div>
+        </fieldset>
+
+        <input type="hidden" name="cms_allow_concurrent_login" value={String(concurrent)} />
+
+        <div class="toggle-row">
+          <span class="field-label">중복 로그인 허용</span>
+          <button
+            type="button"
+            class="toggle-btn"
+            class:on={concurrent}
+            onclick={() => concurrent = !concurrent}
+            aria-pressed={concurrent}
+          >
+            {concurrent ? 'ON' : 'OFF'}
+          </button>
+        </div>
+
+        <input type="hidden" name="cms_session_timeout_hours" value={String(sessionLimit)} />
+
+        <div class="toggle-row">
+          <span class="field-label">세션 제한 (24시간 미활동 시 로그아웃)</span>
+          <button
+            type="button"
+            class="toggle-btn"
+            class:on={sessionLimit}
+            onclick={() => sessionLimit = !sessionLimit}
+            aria-pressed={sessionLimit}
+          >
+            {sessionLimit ? 'ON' : 'OFF'}
+          </button>
+        </div>
+
+        <button class="cta-btn" type="submit" disabled={isLoading}>
+          {isLoading ? '처리 중...' : '등록 및 초대 링크 발송'}
+        </button>
+      </form>
     {/if}
 
-    <form
-      method="POST"
-      action="?/createAccount"
-      use:enhance={() => {
-        isLoading = true
-        return async ({ update }) => { await update(); isLoading = false }
-      }}
-      class="account-form"
-    >
-      <label class="field-label" for="name">이름</label>
-      <input id="name" name="name" type="text" class="f-input" placeholder="홍길동" required />
-
-      <label class="field-label" for="email">계정 (이메일)</label>
-      <input id="email" name="email" type="email" class="f-input" placeholder="manager@crazyshot.kr" required />
-
-      <label class="field-label" for="phone">휴대번호</label>
-      <input id="phone" name="phone" type="tel" class="f-input" placeholder="010-0000-0000" required />
-
-      <input type="hidden" name="cms_role" value={cmsRole} />
-
-      <fieldset class="radio-group">
-        <legend class="field-label">접근 권한</legend>
-        <div class="radio-row">
-          <label class="radio-label">
-            <input type="radio" name="_role" value="manager" checked={cmsRole === 'manager'} onchange={() => cmsRole = 'manager'} />
-            매니저
-          </label>
-          <label class="radio-label">
-            <input type="radio" name="_role" value="partner" checked={cmsRole === 'partner'} onchange={() => cmsRole = 'partner'} />
-            파트너
-          </label>
-        </div>
-      </fieldset>
-
-      <input type="hidden" name="cms_allow_concurrent_login" value={String(concurrent)} />
-
-      <div class="toggle-row">
-        <span class="field-label">중복 로그인 허용</span>
-        <button
-          type="button"
-          class="toggle-btn"
-          class:on={concurrent}
-          onclick={() => concurrent = !concurrent}
-          aria-pressed={concurrent}
-        >
-          {concurrent ? 'ON' : 'OFF'}
-        </button>
-      </div>
-
-      <input type="hidden" name="cms_session_timeout_hours" value={String(sessionLimit)} />
-
-      <div class="toggle-row">
-        <span class="field-label">세션 제한 (24시간 미활동 시 로그아웃)</span>
-        <button
-          type="button"
-          class="toggle-btn"
-          class:on={sessionLimit}
-          onclick={() => sessionLimit = !sessionLimit}
-          aria-pressed={sessionLimit}
-        >
-          {sessionLimit ? 'ON' : 'OFF'}
-        </button>
-      </div>
-
-      <button class="cta-btn" type="submit" disabled={isLoading}>
-        {isLoading ? '처리 중...' : '등록 및 초대 링크 발송'}
-      </button>
-    </form>
   </div>
 </div>
 
