@@ -529,6 +529,56 @@ button, a, [role="button"], input[type="checkbox"], input[type="radio"] {
    →  ✅ from '$env/static/private'
 ❌ .in('status', ['temp', 'confirmed'])  (만료 HOLD 포함)
    →  ✅ .or(`status.eq.confirmed,and(status.eq.temp,expires_at.gt.${now})`)
+
+❌ GNB에 position: sticky 사용 → ✅ position: fixed (오버레이)
+❌ GNB 래퍼에 background 색상 → ✅ background: transparent
+❌ hero 아래 margin-top 보정값 → ✅ fixed GNB는 레이아웃 공간 미점유, 보정 불필요
+❌ CSS transform 조상 내부에서 position:fixed 모달 열기 → ✅ transform 해제 후 열기
+```
+
+---
+
+## STEP 0 추가 — 공통 레이아웃 고정값 확인 (신규 페이지 작업 시 필수)
+
+> 피그마 시안에서 레이아웃 구조를 볼 때 반드시 아래 확정값과 대조할 것.
+
+### GNB (공통 헤더) 원칙
+```
+GNB는 항상 콘텐츠 위에 오버레이 — 별도 상단 영역 없음
+- position: fixed (PC & 모바일 공통)
+- pointer-events: none (래퍼) + pointer-events: all (nav 자체)
+- 모바일 래퍼 background: transparent
+- 콘텐츠(hero 포함)는 페이지 top: 0 기준 시작 (margin-top 보정 금지)
+```
+
+### Hero 섹션 높이 확정값
+```
+모바일 (.m-hero): 720px
+PC (.d-hero):     936px  (= 720 × 1.3)
+변경 시: 두 값의 비율 1.3 유지
+```
+
+### FloatingBar FAB 아이콘 크기 확정값
+```
+장바구니·검색 FAB:
+  모바일(< 640px): 55px × 55px
+  PC(≥ 640px):    40px × 40px
+
+채팅 FAB (FloatingButton 컴포넌트):
+  모바일(< 640px): 70px × 70px  ← 강조 의도, 변경 금지
+  PC(≥ 640px):    40px × 40px
+
+⚠️ 채팅 FAB 크기는 FloatingButton.svelte 내부 fab-btn svg에서 관리.
+   FloatingBar.svelte에서 직접 제어 금지.
+```
+
+### CSS transform + position:fixed 충돌 주의
+```
+⚠️ transform이 적용된 조상 내부의 position:fixed 자식은
+   뷰포트 기준이 아닌 transform 요소 기준으로 배치 → 모달 위치 왜곡
+
+해결 원칙: transform 활성 상태에서는 fixed 모달 열기 차단
+  peek 상태 예시: pointer-events:none 으로 FloatingButton 래퍼 차단
 ```
 
 ---

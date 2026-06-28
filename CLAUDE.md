@@ -123,6 +123,8 @@ Class D (보안 위반) → 즉시 중단
 ❌ Svelte 4 문법 사용 금지 (on:event → onevent)
 ❌ 하네스 플래닝에 Claude 네이티브 Plan 에이전트 사용 금지 → @promptor 또는 @harness-executor 사용
 ❌ Claude 네이티브 TaskCreate/TaskUpdate 도구 사용 금지 → .claude/harness/TASK.md 직접 편집
+❌ 요청 범위 외 파일·코드 수정 금지 — 요청에 명시되지 않은 파일은 읽기만 허용, 수정 절대 금지
+   → 범위 외 수정이 필요하다고 판단될 경우 반드시 Stephen에게 먼저 확인 후 진행
 ```
 
 ---

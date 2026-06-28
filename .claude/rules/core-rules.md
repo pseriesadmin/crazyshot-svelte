@@ -72,15 +72,77 @@ Realtime     : onDestroy 또는 $effect cleanup에서 .unsubscribe() 필수
 
 ---
 
+## CSS 레이아웃 충돌 주의사항 (필수 숙지)
+
+### ⚠️ CSS transform + position:fixed 충돌
+
+```
+transform이 적용된 조상 요소는 새로운 stacking context를 생성.
+그 내부의 position:fixed 자식은 뷰포트가 아닌 transform 요소 기준으로 배치됨.
+→ 모달·바텀시트·드롭다운 등 fixed 레이어가 왜곡되어 표시됨.
+
+발생 시나리오:
+  - FloatingBar peek 애니메이션(translateX) 도중 채팅 바텀시트 열기
+  - 슬라이드 패널(transform) 내부의 fixed 알림 레이어
+
+해결 원칙:
+  - transform 활성 상태에서는 fixed 모달 진입을 pointer-events:none으로 차단
+  - transform 해제 후에만 모달 열기 허용
+```
+
+### GNB position 원칙
+
+```
+GNB는 항상 position: fixed — sticky 금지
+이유: sticky는 레이아웃 공간을 점유 → 콘텐츠 시작 위치가 GNB 높이만큼 밀림
+     피그마 시안: GNB가 히어로 콘텐츠 위 오버레이 (별도 영역 없음)
+```
+
+---
+
+## 요청 범위 외 수정 금지 (최우선 원칙)
+
+```
+요청에 명시된 파일·기능만 수정한다. 그 외는 읽기(Read)만 허용.
+
+✅ 허용: 요청 파일 수정, 의존성 파악을 위한 읽기
+❌ 금지: 요청에 없는 파일 수정, "함께 고치면 좋을 것 같아서" 추가 수정
+❌ 금지: 관련 있어 보이는 코드 리팩터링, 스타일 정리, 주석 추가
+
+범위 외 수정이 반드시 필요하다고 판단될 경우:
+  → 수정 전 Stephen에게 이유와 대상 파일 명시 후 확인 받을 것
+  → 확인 없이 선수정 후 보고 금지
+```
+
+---
+
+## Frozen 파일 목록 (변경 시 CRITICAL + Claude 세션 필수)
+
+```
+src/lib/services/supabase.ts       ← auth baseline: fed4fdb (createBrowserClient 패턴)
+src/hooks.server.ts                ← 서버 세션 초기화
+src/lib/env/supabasePublic.ts      ← env 래퍼
+src/lib/stores/auth.ts             ← 인증 상태 스토어
+src/routes/api/**/*                ← API 라우트 전체
+supabase/migrations/**             ← 신규 ADD만 허용 (GP-10)
+$env import가 있는 모든 파일
+```
+
+Cursor 측 차단 규칙: `.cursor/rules/domain-frozen-boundary.mdc`
+Claude Code도 위 파일 변경 시 → GATE C 필수
+
+---
+
 ## 30초 규칙
 
 > 실행 전 반드시 묻는 것:
 > 1. 이 코드가 TDD 도메인인가? (AGENTS.md 키워드 대조)
 > 2. 범위 밖 파일을 건드리는가?
 > 3. 기존 마이그레이션 파일을 수정하는가?
+> 4. frozen 파일 목록에 있는 파일인가?
 >
 > 하나라도 "예" → 멈추고 Stephen 확인
 
 ---
 
-*core-rules.md v3.1 | Harness Flow v3.1*
+*core-rules.md v3.2 | Harness Flow v3.2 | 2026-06-28 frozen boundary 추가*
