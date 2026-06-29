@@ -1,13 +1,13 @@
 ---
-description: 크레이지샷 하네스 플로우 시스템 인덱스 (Cursor 독립판) — 에이전트·하네스·규칙 전체 구조 맵
+description: 크레이지샷 하네스 플로우 시스템 인덱스 — 에이전트·하네스·규칙 전체 구조 맵
 globs: ["**/*.svelte", "**/*.ts", "**/*.sql", "src/**/*"]
 alwaysApply: true
 ---
 
-# CrazyShot Harness Flow v3.2 — Cursor 독립 시스템 인덱스
+# CrazyShot Harness Flow v3.2 — 시스템 인덱스
 
-> 이 파일은 `.cursor/` 자체 완결 하네스 시스템의 전체 구조 맵입니다.
-> **`.claude/` 의존 없음** — `.cursor/harness/` 가 단독 운영 기준입니다.
+> SSOT 정본: `.claude/harness/` — 모든 상태 파일(TASK·GSD·HANDOFF·ROLLBACK)은 여기만 읽고 씁니다.
+> `.cursor/harness/`는 세션 시작 템플릿 + boundary-rules.yaml 전용입니다.
 
 ---
 
@@ -25,11 +25,14 @@ alwaysApply: true
 ## ⚡ 세션 시작 시 반드시 로드
 
 ```
-@AGENTS.md                                   ← 황금 원칙 + TDD 강제 키워드
-@CLAUDE.md                                   ← 에이전트 호출 규칙 + 현재 진행 상태
-@.cursor/harness/TASK.md                     ← NOW/DONE/BLOCKED ★ 세션 시작 시 필독
-@.cursor/harness/GSD_LOG.md                  ← 작업 이력·마지막 수정 파일
-@.cursor/harness/context-hook.md             ← HOOK-1~8 (드리프트 방지)
+@AGENTS.md                                       ← 황금 원칙 + TDD 강제 키워드
+@CLAUDE.md                                       ← 에이전트 호출 규칙 + 현재 진행 상태
+@.claude/harness/TASK.md                         ← NOW/DONE/BLOCKED ★ 세션 시작 시 필독
+@.claude/harness/GSD_LOG.md                      ← 작업 이력·마지막 수정 파일
+@.claude/harness/context-hook.md                 ← HOOK-1~8 (드리프트 방지)
+@.claude/harness/HANDOFF.md                      ← AI 전환 인수인계 (존재 시 최우선)
+@.claude/harness/AI_COLLAB_PROTOCOL.md           ← 혼성 AI 협업 헌장 + frozen 경계
+@.claude/harness/learnings/misidentifications.md ← 오인 카탈로그 (최근 5건)
 ```
 
 **도메인 작업 시 추가 로드:**
@@ -53,21 +56,25 @@ alwaysApply: true
 
 ---
 
-## 하네스 시스템 파일 (`.cursor/harness/` — 독립 실운영 기준)
+## 하네스 시스템 파일 (`.claude/harness/` — SSOT 정본)
 
 ```
-@.cursor/harness/TASK.md               ← 현재 NOW/DONE/BLOCKED ★
-@.cursor/harness/GSD_LOG.md            ← 작업 이력·마지막 수정 파일
-@.cursor/harness/context-hook.md       ← HOOK-1~8 (드리프트 방지)
-@.cursor/harness/ERROR_TAXONOMY.md     ← 에러 분류 Class A~D
-@.cursor/harness/HANDOFF_TEMPLATE.md   ← 세션 핸드오프 양식
-@.cursor/harness/ROLLBACK_LOG.md       ← 반려·롤백 이력
-@.cursor/harness/TASK.template.md      ← 새 TASK.md 작성 참조 템플릿
-@.cursor/harness/ARCHITECTURE.md       ← 5계층 + 3-Tier 아키텍처
-@.cursor/harness/middleware-guards.md  ← 7가지 보안/최적화 가드레일
-@.cursor/harness/boundary-rules.yaml  ← H-01~H-07 자동 검사 패턴
-@.cursor/harness/CURSOR_START.md       ← 세션 시작 복붙 템플릿 ★
-@.cursor/harness/learnings/            ← Self-Correction 학습 기록
+@.claude/harness/TASK.md                         ← 현재 NOW/DONE/BLOCKED ★
+@.claude/harness/GSD_LOG.md                      ← 작업 이력·마지막 수정 파일
+@.claude/harness/HANDOFF.md                      ← AI 전환 인수인계 ★
+@.claude/harness/AI_COLLAB_PROTOCOL.md           ← 혼성 AI 협업 헌장
+@.claude/harness/context-hook.md                 ← HOOK-1~8 (드리프트 방지)
+@.claude/harness/ERROR_TAXONOMY.md               ← 에러 분류 Class A~D
+@.claude/harness/HANDOFF_TEMPLATE.md             ← 세션 핸드오프 양식
+@.claude/harness/ROLLBACK_LOG.md                 ← 반려·롤백 이력
+@.claude/harness/ARCHITECTURE.md                 ← 5계층 + 3-Tier 아키텍처
+@.claude/harness/middleware-guards.md            ← 7가지 보안/최적화 가드레일
+@.claude/harness/learnings/misidentifications.md ← 오인 카탈로그 ★
+@.claude/harness/learnings/                      ← Self-Correction 학습 기록
+
+.cursor/harness/ (Cursor 전용 2개만):
+@.cursor/harness/CURSOR_START.md                 ← 세션 시작 복붙 템플릿
+@.cursor/harness/boundary-rules.yaml             ← H-01~H-07 자동 검사 패턴
 ```
 
 ---
@@ -135,10 +142,10 @@ alwaysApply: true
 
 ```
 Class A: 네트워크/API → 5회 Backoff
-Class B: 컴파일/테스트 → 3회 Self-Correction → .cursor/harness/learnings/ 저장
+Class B: 컴파일/테스트 → 3회 Self-Correction → .claude/harness/learnings/ 저장
 Class C: 요구사항 불명확 → Stephen 에스컬레이션
 Class D: 보안 위반 → 즉시 중단
-상세: .cursor/harness/ERROR_TAXONOMY.md
+상세: .claude/harness/ERROR_TAXONOMY.md
 ```
 
 ---
@@ -156,7 +163,7 @@ Class D: 보안 위반 → 즉시 중단
 ⏳ S1-M5: Shipments (GSD)
 ```
 
-> 최신 상태: `@.cursor/harness/TASK.md` 참조 (독립 운영 기준)
+> 최신 상태: `@.claude/harness/TASK.md` 참조 (SSOT 정본)
 
 ---
 
@@ -165,11 +172,12 @@ Class D: 보안 위반 → 즉시 중단
 ```
 "컨텍스트 체크"  → HOOK-4 재시작 브리핑
 "파일 확인해"    → HOOK-1 (파일 직접 Read)
-"핸드오프"       → HOOK-6 (HANDOFF.md 생성 → .cursor/harness/HANDOFF.md)
+"핸드오프"       → HOOK-6 (.claude/harness/HANDOFF.md 5필드 갱신)
 "스킵" / "다음"  → HOOK-8 (BLOCKED 처리)
 "스벨트 확인"    → HOOK-5 (Svelte 5 패턴 체크)
-"오인 기록"      → HOOK-7 (learnings/misidentifications.md)
+"오인 기록"      → HOOK-7 (.claude/harness/learnings/misidentifications.md 기록)
 "에러 분류"      → ERROR_TAXONOMY.md Class 판별
+"Claude로 복귀"  → .claude/harness/HANDOFF.md 갱신 후 Stephen에게 전환 안내
 ```
 
 ---
@@ -178,12 +186,12 @@ Class D: 보안 위반 → 즉시 중단
 
 ```
 npm run check 실패
-  → .cursor/harness/learnings/compile_error.md 저장
+  → .claude/harness/learnings/compile_error.md 저장
   → 에이전트 자동 수정 시도 (최대 3회)
   → 3회 실패 → GATE C + Stephen 개입
 
 npm run test 실패
-  → .cursor/harness/learnings/test_error.md 저장
+  → .claude/harness/learnings/test_error.md 저장
   → 자동 수정 + 재시도
 ```
 
@@ -202,5 +210,5 @@ npm run test 실패
 
 ---
 
-*crazyshot-system.mdc v3.0 | Cursor 독립 완전 자기완결형 | Harness Flow v3.2*
-*`.claude/` 의존 없음 — `.cursor/harness/` 단독 운영*
+*crazyshot-system.mdc v3.1 | Harness Flow v3.2 | 2026-06-28 SSOT 통합*
+*SSOT: `.claude/harness/` | `.cursor/harness/`는 CURSOR_START.md + boundary-rules.yaml 전용*

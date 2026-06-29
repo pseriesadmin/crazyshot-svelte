@@ -16,6 +16,15 @@ TDD도메인: 없음 (GSD 도메인 — UI + API 구현)
   - ANTHROPIC_API_KEY를 $env/static/public에 노출
   - 기존 마이그레이션 파일 수정
   - Svelte 4 문법 (on:event → onevent)
+frozen_files (Claude Code 전용 — Cursor 수정 금지):
+  - src/lib/services/supabase.ts  ← baseline: fed4fdb (createBrowserClient 패턴)
+  - src/hooks.server.ts
+  - src/lib/env/supabasePublic.ts
+  - src/lib/stores/auth.ts
+  - src/routes/api/**/*
+  - supabase/migrations/**
+  - $env import가 있는 모든 파일
+auth_baseline: fed4fdb — createBrowserClient 패턴 (절대 싱글톤 createClient로 대체 금지)
 
 ---
 

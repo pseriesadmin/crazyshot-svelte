@@ -66,6 +66,24 @@
   - [학습] .claude/harness/learnings/migration_schema_2026-06-28.md 생성
   - [학습] .claude/harness/SUPABASE_DB.md 현행화 (마이그레이션 현황 + 이슈 이력 추가)
 
+[2026-06-27] INCIDENT | Cursor AI 손상 — supabase.ts createBrowserClient 교체 | src/lib/services/supabase.ts | ❌ ROLLBACK
+  - 커밋 89e427b: Cursor가 createBrowserClient → createClient 싱글톤으로 변경
+  - 증상: 채팅 세션 401 Unauthorized (쿠키 세션 공유 단절)
+  - 원인: frozen boundary 미설정, Cursor가 설계 맥락 없이 "통일" 판단
+  - 조치: fed4fdb 원복 (createBrowserClient 복원 + API 라우트 PUBLIC_SUPABASE_URL 원복)
+  - 학습: learnings/misidentifications.md HOOK-7 기록
+
+[2026-06-28] FIX | 혼성 AI 협업 정합 — SSOT 통합 + Frozen Boundary 설정 | .claude/harness/, .cursor/ | ✅ SUCCESS
+  - AI_COLLAB_PROTOCOL.md 신규 (A~F 원칙 + frozen 목록 + 커밋 체크리스트)
+  - HANDOFF.md 신규 (5필드 초기화)
+  - CURSOR_START.md 경로 교체 (.cursor/harness/* → .claude/harness/*)
+  - crazyshot-system.mdc SSOT 통합 ("독립 운영" 제거)
+  - PORTABILITY.md crazyshot 예외 절 추가
+  - domain-frozen-boundary.mdc 신규 (Cursor frozen 파일 접근 차단)
+  - ROLLBACK_LOG.md 3건 소급 기록
+  - misidentifications.md 1건 기록
+  - TASK.md CONTEXT BRIDGE frozen 목록 + baseline 추가
+
 [2026-06-26] GSD | PRD.1.7 T5~T8 | src/routes/api/chat/, src/lib/components/chat/, src/routes/+layout.svelte | ✅ SUCCESS
   - T5: API 라우트 5개 (session / message[Claude AI 의도분류] / sessions / action-card / close)
     · ANTHROPIC_API_KEY → $env/static/private (H-05 준수)

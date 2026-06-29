@@ -258,9 +258,33 @@ function main() {
   const rulesContent = fs.readFileSync(RULES_FILE, 'utf8')
   const rules = parseSimpleYaml(rulesContent)
 
+  // ── supabase.ts createBrowserClient 패턴 검사 (frozen baseline: fed4fdb) ──
+  const SUPABASE_FILE = 'src/lib/services/supabase.ts'
+  const allViolations = []
+
+  if (fs.existsSync(SUPABASE_FILE)) {
+    const supabaseContent = fs.readFileSync(SUPABASE_FILE, 'utf8')
+    if (!supabaseContent.includes('createBrowserClient')) {
+      allViolations.push({
+        ruleId: 'auth_01_supabase_browser_client',
+        severity: 'ERROR',
+        message:
+          '❌ AUTH-01: supabase.ts에 createBrowserClient가 없습니다.\n' +
+          '  브라우저 환경은 createBrowserClient(쿠키 세션 공유)를 반드시 사용해야 합니다.\n' +
+          '  baseline 커밋: fed4fdb | 참고: .claude/harness/AI_COLLAB_PROTOCOL.md 원칙 E',
+        file: SUPABASE_FILE,
+        line: 0,
+        content: '(createBrowserClient 패턴 미존재 — 89e427b 재발 위험)',
+        documentation: 'security-auth.md',
+      })
+      console.log(c('red', `\n❌ AUTH-01: supabase.ts createBrowserClient 패턴 누락`))
+      console.log(c('gray', `  → baseline(fed4fdb) 패턴으로 복원하세요`))
+      console.log(c('gray', `  → 참고: .claude/harness/AI_COLLAB_PROTOCOL.md 원칙 E\n`))
+    }
+  }
+
   // 마이그레이션 파일 수정 감지
   const modifiedMigrations = checkMigrationModified()
-  const allViolations = []
 
   if (modifiedMigrations.length > 0) {
     modifiedMigrations.forEach(f => {

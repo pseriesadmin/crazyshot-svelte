@@ -394,7 +394,50 @@ peek↔expanded 트랜지션: cubic-bezier(0.34, 1.28, 0.64, 1) 0.42s (스프링
 
 ---
 
-## 12. 퍼블리싱 완료 전 체크리스트
+## 12. 표준 토스트 알림 (Toast Notification)
+
+> 확정 기준: 2026-06-29
+
+### 스타일 스펙
+
+```
+width: 545px
+max-width: calc(100vw - 40px)   ← 모바일 반응형
+height: 60px / max-height: 60px
+padding: 15px 30px
+display: flex / justify-content: space-between / align-items: center
+border-radius: 30px             ← var(--radius-xl)
+background: #201857             ← var(--cs-purple-dark)
+position: bottom-center
+```
+
+### 닫기(X) 버튼 규칙
+
+```
+원형 테두리·배경 없음 — 심플 아이콘만
+위치: 우측 끝 수직 중앙 (right: 20px, top: 50%, translateY(-50%))
+색상: rgba(255,255,255,0.7) → hover 시 #ffffff
+```
+
+### 구현 위치 (단일 소스 — 이 두 파일만 수정)
+
+```
+스타일 변경  → src/lib/utils/toast.ts (BASE 상수)
+버튼 오버라이드 → src/app.css ([data-sonner-toast] [data-close-button])
+```
+
+### 사용 규칙
+
+```
+✅ csToast.success() / .info() / .warning() / .error() 헬퍼 사용
+✅ Toaster는 레이아웃 파일에 1회만 등록 (현재: cms/+layout.svelte)
+❌ 별도 Toast 컴포넌트 생성 금지
+❌ 타입별 배경색 분기 금지 (단일 --cs-purple-dark 유지)
+```
+
+---
+
+## 13. 퍼블리싱 완료 전 체크리스트
 
 ```
 [ ] CSS 변수 사용 (--cs-* / --text-* / --radius-*) — 하드코딩 #hex 없음?

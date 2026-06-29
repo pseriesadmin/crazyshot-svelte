@@ -4,15 +4,7 @@
   import ProductHero from '$lib/components/products/ProductHero.svelte';
   import CalendarTimePicker from '$lib/components/products/CalendarTimePicker.svelte';
   import type { Tables } from '$lib/types/database';
-  import FloatingButton from '$lib/components/chat/FloatingButton.svelte';
-  import { authState } from '$lib/stores/auth';
-
-  let chatUserId = $derived($authState.user?.id ?? 'test-user')
-  let chatUserName = $derived(
-    ($authState.user?.user_metadata?.full_name as string | undefined) ??
-    $authState.user?.email?.split('@')[0] ??
-    '테스트유저'
-  )
+  import FloatingBar from '$lib/components/common/FloatingBar.svelte';
 
   /** 실서비스 DB products 행 (가격·status 등 런타임 컬럼 포함) */
   type ProductRow = Tables<'products'> & {
@@ -503,22 +495,7 @@
   <div class="toast-msg" role="status" aria-live="polite">{toastMsg}</div>
 {/if}
 
-<!-- ═══ FLOATING FAB BAR — 장바구니 + 검색 + 채팅 ═══ -->
-<div class="fab-bar" aria-label="빠른 메뉴">
-  <button class="fab-btn" aria-label="장바구니">
-    <svg xmlns="http://www.w3.org/2000/svg" width="52" height="52" viewBox="0 0 35 35" fill="none">
-      <path d="M35 17.5C35 27.165 27.165 35 17.5 35C7.83502 35 0 27.165 0 17.5C0 7.83502 7.83502 0 17.5 0C27.165 0 35 7.83502 35 17.5Z" fill="#3B2F8A"/>
-      <path d="M25.7736 14.25C26.461 14.3115 26.9685 14.918 26.9073 15.6055L26.5402 19.7188L26.5362 19.7559C26.3287 21.5004 25.6935 23.0646 24.588 24.2061C23.4647 25.3657 21.9392 26 20.1573 26H15.754C13.9724 25.9998 12.4475 25.3656 11.3243 24.2061C10.2189 23.0646 9.58361 21.5003 9.37609 19.7559L9.37316 19.7373L9.37219 19.7188L9.005 15.6055C8.94381 14.9181 9.45154 14.3116 10.1388 14.25C10.8264 14.1887 11.4339 14.6962 11.4952 15.3838L11.8614 19.4766C12.0227 20.8088 12.4854 21.8113 13.1202 22.4668C13.7398 23.1063 14.6009 23.4998 15.754 23.5H20.1573C21.3108 23.5 22.1724 23.1064 22.7921 22.4668C23.427 21.8113 23.8906 20.809 24.0519 19.4766L24.4171 15.3838C24.4784 14.6963 25.0861 14.1889 25.7736 14.25Z" fill="white"/>
-      <path d="M17.9562 9.10156C18.8942 9.10156 19.9275 9.43248 20.7423 10.1455C21.5869 10.8847 22.1417 11.9887 22.1417 13.3877V15.4326C22.1417 16.1229 21.582 16.6826 20.8917 16.6826C20.2447 16.6823 19.7125 16.1908 19.6486 15.5605L19.6417 15.4326V13.3877C19.6417 12.6973 19.3889 12.2829 19.0958 12.0264C18.7731 11.7441 18.3385 11.6016 17.9562 11.6016C17.5738 11.6017 17.1392 11.7441 16.8165 12.0264C16.5235 12.2829 16.2706 12.6975 16.2706 13.3877V15.4326C16.2706 16.1229 15.711 16.6826 15.0206 16.6826C14.3304 16.6825 13.7707 16.1228 13.7706 15.4326V13.3877C13.7706 11.9888 14.3256 10.8847 15.17 10.1455C15.9848 9.43242 17.0182 9.10166 17.9562 9.10156Z" fill="white"/>
-    </svg>
-  </button>
-  <button class="fab-btn" aria-label="검색">
-    <svg xmlns="http://www.w3.org/2000/svg" width="52" height="52" viewBox="0 0 35 35" fill="none">
-      <path fill-rule="evenodd" clip-rule="evenodd" d="M17.5 0C27.165 0 35 7.83502 35 17.5C35 27.165 27.165 35 17.5 35C7.83502 35 0 27.165 0 17.5C0 7.83502 7.83502 0 17.5 0ZM22.4912 21.1592C21.9717 20.4791 20.9753 20.362 20.3564 20.9531C19.7512 21.5315 19.8035 22.5066 20.4346 23.0566C21.3083 23.8178 21.9885 24.5282 22.7158 25.4443C23.2368 26.1002 24.2097 26.1977 24.8154 25.6191C25.4338 25.0284 25.363 24.0284 24.708 23.4785C23.8396 22.7498 23.1757 22.0552 22.4912 21.1592ZM19.8799 10.3262C18.4921 9.69815 16.9491 9.49557 15.4463 9.74414C13.9433 9.99289 12.5471 10.6819 11.4355 11.7236C10.324 12.7655 9.5467 14.1139 9.20117 15.5977C8.8558 17.0812 8.95733 18.6341 9.49414 20.0596C10.0312 21.4852 10.9793 22.7203 12.2178 23.6074C13.4563 24.4944 14.9305 24.9944 16.4531 25.0439C17.1427 25.0662 17.7204 24.5255 17.7432 23.8359C17.7655 23.1462 17.2239 22.5686 16.5342 22.5459C15.5059 22.5124 14.5103 22.1742 13.6738 21.5752C12.8372 20.976 12.1968 20.1417 11.834 19.1787C11.4713 18.2157 11.4024 17.1663 11.6357 16.1641C11.8692 15.1619 12.3947 14.2515 13.1455 13.5479C13.8964 12.8442 14.8393 12.379 15.8545 12.2109C16.8696 12.0431 17.9122 12.1793 18.8496 12.6035C19.787 13.0279 20.5783 13.7212 21.1221 14.5947C21.6655 15.4681 21.9383 16.4836 21.9053 17.5117C21.8832 18.2016 22.4243 18.7795 23.1143 18.8018C23.8038 18.8236 24.3809 18.2824 24.4033 17.5928C24.4524 16.0702 24.0491 14.5667 23.2441 13.2734C22.4391 11.9801 21.2677 10.9544 19.8799 10.3262Z" fill="#3B2F8A"/>
-    </svg>
-  </button>
-  <FloatingButton userId={chatUserId} userName={chatUserName} />
-</div>
+<FloatingBar />
 
 <style>
   /* ── Loading / Error */
@@ -1299,31 +1276,6 @@
     cursor: pointer;
     flex-shrink: 0;
   }
-
-  /* ── Floating Bar */
-  .fab-bar {
-    position: fixed;
-    right: 24px;
-    bottom: 100px;
-    z-index: 40;
-    display: flex;
-    flex-direction: column;
-    gap: 10px;
-  }
-  .fab-btn {
-    background: none;
-    border: none;
-    outline: none;
-    cursor: pointer;
-    padding: 0;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    transition: transform 0.15s;
-    filter: drop-shadow(0 4px 10px rgba(16,11,50,0.22));
-  }
-  .fab-btn:hover  { transform: scale(1.07); }
-  .fab-btn:active { transform: scale(0.95); }
 
   /* ── Toast */
   .toast-msg {
