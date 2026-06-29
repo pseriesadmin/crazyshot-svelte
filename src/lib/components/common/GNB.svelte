@@ -12,9 +12,9 @@
     { id: 'help',    label: 'Help Center', href: '/' },
   ]
 
-  function isActive(href: string): boolean {
-    if (href === '/products') return pathname.startsWith('/products')
-    return pathname === '/' && href === '/'
+  function isActive(item: { id: string; href: string }): boolean {
+    if (item.href === '/products') return pathname.startsWith('/products')
+    return false
   }
 </script>
 
@@ -27,7 +27,7 @@
 
     <div class="gnb-desktop-right">
       {#each MENU_ITEMS as item}
-        <a href={item.href} class="gnb-menu-item" class:active={isActive(item.href)}>
+        <a href={item.href} class="gnb-menu-item" class:active={isActive(item)}>
           {item.label}
         </a>
       {/each}
