@@ -1,6 +1,4 @@
 <script lang="ts">
-  import { calculateReservationPrice } from '$lib/services/reservationHelper';
-
   interface Props {
     startDate?: string;
     endDate?: string;

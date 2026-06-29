@@ -115,9 +115,11 @@ export default [
     rules: commonRules,
   },
 
-  // Tier B: CMS 관리자 UI — 카테고리 맵·폼 배열 인덱스는 서버 검증 전 UI 상태 전용
+  // Tier B: 모든 Svelte UI 파일 — 배열 인덱스는 클라이언트 내부 상태 전용
+  // detect-object-injection은 서버사이드(+server.ts, src/lib/services/)에서만 유의미.
+  // .svelte 파일의 $state/$derived 인덱스 접근은 실제 injection 위험 없음.
   {
-    files: ['src/routes/cms/**/*.{ts,svelte}'],
+    files: ['**/*.svelte'],
     rules: {
       'security/detect-object-injection': 'off',
     },
