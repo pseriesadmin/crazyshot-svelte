@@ -2,11 +2,12 @@ import { fail, redirect } from '@sveltejs/kit'
 import { env } from '$env/dynamic/private'
 import { getSupabaseUrl } from '$lib/env/supabasePublic'
 import { createClient } from '@supabase/supabase-js'
+import { hasSettingsAccess } from '$lib/utils/cmsPermissions'
 import type { Actions, PageServerLoad } from './$types'
 
 export const load: PageServerLoad = async ({ parent }) => {
   const { cmsRole } = await parent()
-  if (cmsRole !== 'superadmin') throw redirect(303, '/cms')
+  if (!hasSettingsAccess(cmsRole ?? '')) throw redirect(303, '/cms?notice=access_denied')
   return {}
 }
 
@@ -32,13 +33,33 @@ export const actions: Actions = {
 
     const serviceClient = createClient(getSupabaseUrl(), serviceRoleKey)
 
-    const { data: authData, error: createErr } = await serviceClient.auth.admin.createUser({
+    let { data: authData, error: createErr } = await serviceClient.auth.admin.createUser({
       email,
       email_confirm: true,
       user_metadata: { name },
     })
 
-    if (createErr || !authData.user) {
+    // 이미 auth.users에 존재하지만 CMS 계정이 없는 고아 상태 처리
+    if (createErr && createErr.message?.includes('already been registered')) {
+      const { data: listData } = await serviceClient.auth.admin.listUsers({ perPage: 1000 })
+      const existing = listData?.users.find((u) => u.email === email)
+      if (existing) {
+        const { data: profileData } = await serviceClient
+          .from('user_profiles')
+          .select('cms_role')
+          .eq('id', existing.id)
+          .single()
+        // cms_role이 있으면 실제 중복 — 에러 반환
+        if (profileData && (profileData as { cms_role: string | null }).cms_role) {
+          return fail(400, { error: '이미 등록된 관리자 계정입니다.' })
+        }
+        // 고아 상태 (auth.users만 있고 cms_role 없음) — 기존 auth 유저 재사용
+        authData = { user: existing }
+        createErr = null
+      }
+    }
+
+    if (createErr || !authData?.user) {
       return fail(500, { error: createErr?.message ?? '계정 생성에 실패했습니다.' })
     }
 

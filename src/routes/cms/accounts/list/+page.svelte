@@ -19,6 +19,7 @@
 
   // 삭제 confirm
   let pendingDelete = $state<AccountRow | null>(null)
+  let deleteError = $state<string | null>(null)
 
   function roleLabel(role: string): string {
     if (role === 'superadmin') return '슈퍼관리자'
@@ -294,14 +295,23 @@
           action="?/delete"
           use:enhance={() => {
             isProcessing = true
-            return async ({ update }) => {
-              await update()
-              isProcessing = false
-              pendingDelete = null
+            deleteError = null
+            return async ({ result, update }) => {
+              if (result.type === 'failure') {
+                deleteError = (result.data as { error?: string })?.error ?? '삭제 중 오류가 발생했습니다.'
+                isProcessing = false
+              } else {
+                await update()
+                isProcessing = false
+                pendingDelete = null
+              }
             }
           }}
         >
           <input type="hidden" name="user_id" value={pendingDelete.id} />
+          {#if deleteError}
+            <p class="delete-error" role="alert">{deleteError}</p>
+          {/if}
           <button type="submit" class="confirm-ok" disabled={isProcessing}>
             {isProcessing ? '처리 중...' : '삭제'}
           </button>
@@ -572,4 +582,11 @@
   .confirm-cancel:disabled,
   .confirm-ok:disabled { opacity: 0.5; cursor: not-allowed; }
   .confirm-actions form { flex: 1; display: contents; }
+  .delete-error {
+    font: var(--text-m-script-12);
+    color: var(--cs-red-badge);
+    margin: 8px 0 0;
+    text-align: center;
+    grid-column: 1 / -1;
+  }
 </style>

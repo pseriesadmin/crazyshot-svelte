@@ -3,6 +3,8 @@
   import { page } from '$app/state'
   import { supabase } from '$lib/services/supabase'
   import { Toaster } from 'svelte-sonner'
+  import { csToast } from '$lib/utils/toast'
+  import { hasSettingsAccess } from '$lib/utils/cmsPermissions'
   import type { LayoutData } from './$types'
 
   interface Props {
@@ -12,10 +14,36 @@
 
   let { data, children }: Props = $props()
 
+  // 접근 거부 notice 파라미터 감지 → toast 표시 후 URL 클린업
+  $effect(() => {
+    const notice = page.url.searchParams.get('notice')
+    if (notice === 'access_denied') {
+      csToast.error('사용 권한이 없습니다.')
+      const url = new window.URL(window.location.href)
+      url.searchParams.delete('notice')
+      history.replaceState(history.state, '', url.toString())
+    }
+  })
+
+  let manualLogout = false
+
   async function handleLogout(): Promise<void> {
+    manualLogout = true
     await supabase.auth.signOut()
-    goto('/cms/login')
+    const t = encodeURIComponent(new Date().toISOString())
+    goto(`/cms/login?logout=manual&t=${t}`)
   }
+
+  // 세션 만료 감지 (활성 중 token refresh 실패 시)
+  $effect(() => {
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((event) => {
+      if (event === 'SIGNED_OUT' && !manualLogout && data.cmsRole) {
+        const t = encodeURIComponent(new Date().toISOString())
+        goto(`/cms/login?logout=expired&t=${t}`)
+      }
+    })
+    return () => subscription.unsubscribe()
+  })
 
   type SubMenu = { label: string; href: string }
   type MainMenu = { id: string; label: string; subMenus: SubMenu[] }
@@ -41,7 +69,7 @@
       id: 'settings',
       label: '설정',
       subMenus: [
-        ...(data.cmsRole === 'superadmin'
+        ...(hasSettingsAccess(data.cmsRole ?? '')
           ? [
               { label: '계정관리', href: '/cms/accounts' },
               { label: '계정목록', href: '/cms/accounts/list' },
