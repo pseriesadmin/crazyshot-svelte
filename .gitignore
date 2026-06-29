@@ -69,3 +69,4 @@ out/
 
 # Supabase CLI (로컬 link/캐시 — 재생성됨)
 supabase/.temp/
+.env*

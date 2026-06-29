@@ -12,9 +12,9 @@
     { id: 'help',    label: 'Help Center', href: '/' },
   ]
 
-  function isActive(href: string): boolean {
-    if (href === '/products') return pathname.startsWith('/products')
-    return pathname === '/' && href === '/'
+  function isActive(item: { id: string; href: string }): boolean {
+    if (item.href === '/products') return pathname.startsWith('/products')
+    return false
   }
 </script>
 
@@ -27,11 +27,8 @@
 
     <div class="gnb-desktop-right">
       {#each MENU_ITEMS as item}
-        <a href={item.href} class="gnb-menu-item" class:active={isActive(item.href)}>
+        <a href={item.href} class="gnb-menu-item" class:active={isActive(item)}>
           {item.label}
-          {#if isActive(item.href)}
-            <span class="gnb-underline" aria-hidden="true"></span>
-          {/if}
         </a>
       {/each}
       <a href="/auth/login" class="gnb-signin-btn">Sign In</a>
@@ -122,21 +119,10 @@
     text-decoration: none;
     white-space: nowrap;
     opacity: 0.9;
-    transition: opacity 0.15s;
+    transition: color 0.15s, opacity 0.15s;
   }
-  .gnb-menu-item:hover { opacity: 1; }
-  .gnb-menu-item.active { opacity: 1; }
-
-  .gnb-underline {
-    position: absolute;
-    left: 0;
-    right: 0;
-    bottom: -6px;
-    height: 2.5px;
-    border-radius: 9999px;
-    background: var(--cs-red-badge);
-    display: block;
-  }
+  .gnb-menu-item:hover { color: var(--crazy-shot-red-80, #FF3535); opacity: 1; }
+  .gnb-menu-item.active { color: var(--crazy-shot-red-80, #FF3535); opacity: 1; }
 
   .gnb-signin-btn {
     display: flex;

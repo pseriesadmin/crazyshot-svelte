@@ -2,7 +2,7 @@
 	import '../app.css';
 	import { onMount } from 'svelte';
 	import { locale } from 'svelte-i18n';
-	import { page } from '$app/stores';
+	import { page } from '$app/state';
 	import { initializeAuth, subscribeToAuthChanges, authState } from '$lib/stores/auth';
 	import FloatingBar from '$lib/components/common/FloatingBar.svelte';
 	import GNB from '$lib/components/common/GNB.svelte';
@@ -41,8 +41,8 @@
 </script>
 
 <div class="min-h-screen flex flex-col">
-	{#if !$page.url.pathname.startsWith('/cms')}
-		<GNB pathname={$page.url.pathname} />
+	{#if !page.url.pathname.startsWith('/cms') && !page.url.pathname.startsWith('/products/') && !page.url.pathname.startsWith('/checkout')}
+		<GNB pathname={page.url.pathname} />
 	{/if}
 
 	<main class="flex-1">
@@ -50,7 +50,7 @@
 	</main>
 
 	<!-- 공통 플로팅 바: /cms 제외 전체 사용자 화면 -->
-	{#if !$page.url.pathname.startsWith('/cms')}
+	{#if !page.url.pathname.startsWith('/cms')}
 		<FloatingBar
 			userId={chatUserId}
 			userName={chatUserName}

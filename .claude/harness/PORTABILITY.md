@@ -138,6 +138,32 @@ harness-executor.md GATE C [GREEN] 수정:
 
 ---
 
+## crazyshot 예외 (Claude Code 정본 우선)
+
+> 이 절은 일반 Cursor AI 이식 가이드의 예외 사항입니다.
+
+**crazyshot 프로젝트에서 Cursor AI의 SSOT는 `.claude/harness/`입니다.**
+
+아래 이식 가이드에서 설명하는 "`.cursor/harness/`에 복사" 패턴은
+**crazyshot에 적용하지 않습니다.** 이유:
+
+```
+1. Claude Code가 아키텍처·DB·인증 설계 결정권을 가짐
+2. Cursor는 ROUTINE UI 퍼블리싱 전용으로 역할 고정
+3. SSOT 이중화가 89e427b 사고의 직접 원인이었음
+4. .cursor/harness/에는 CURSOR_START.md + boundary-rules.yaml만 유지
+```
+
+crazyshot에서 Cursor가 참조하는 파일:
+```
+읽기: @.claude/harness/TASK.md, GSD_LOG.md, HANDOFF.md, AI_COLLAB_PROTOCOL.md
+쓰기: @.claude/harness/TASK.md (DONE 추가만), HANDOFF.md (5필드 갱신)
+```
+
+참조: `.claude/harness/AI_COLLAB_PROTOCOL.md` 원칙 A·B
+
+---
+
 ## Cursor AI 이식 가이드
 
 ### Cursor AI와 Claude Code의 구조 차이

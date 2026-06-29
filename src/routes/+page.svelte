@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { goto } from '$app/navigation'
   // ── 로컬 컬러 (app.css 토큰에 없는 값) ──────────────────────────
   const navy     = '#100b32'
   const navyDeep = '#201857'
@@ -581,7 +582,7 @@
         class="m-tab-item"
         class:tab-active={mActiveTab === tab.id}
         class:tab-popping={poppingTab === tab.id}
-        onclick={() => { mActiveTab = tab.id; triggerPop(tab.id) }}
+        onclick={() => { mActiveTab = tab.id; triggerPop(tab.id); if (tab.id === 'All') goto('/products') }}
       >
         {#if tab.id === 'More'}
           <svg xmlns="http://www.w3.org/2000/svg" width="20" height="17" viewBox="0 0 20 17" fill="none" aria-hidden="true">

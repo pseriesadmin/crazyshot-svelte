@@ -1,0 +1,90 @@
+---
+description: Frozen 파일 보호 규칙 — Cursor AI가 건드려서는 안 되는 아키텍처·인증·API 파일 목록과 행동 지침
+globs:
+  - "src/lib/services/supabase.ts"
+  - "src/hooks.server.ts"
+  - "src/lib/env/supabasePublic.ts"
+  - "src/lib/stores/auth.ts"
+  - "src/routes/api/**/*"
+  - "supabase/migrations/**/*"
+alwaysApply: true
+---
+
+# Frozen Boundary — Cursor AI 접근 금지 파일
+
+> 이 규칙은 Claude Code가 설계한 아키텍처·인증·API 파일을
+> Cursor AI가 임의로 수정하지 못하도록 보호합니다.
+>
+> **위반 사례:** 2026-06-27 커밋 `89e427b` — Cursor가 `supabase.ts`의
+> `createBrowserClient`를 `createClient`로 변경 → 채팅 401 발생 → `fed4fdb` 원복
+
+---
+
+## Frozen 파일 목록
+
+```
+src/lib/services/supabase.ts       ← 인증 클라이언트 패턴 (baseline: fed4fdb)
+src/hooks.server.ts                ← 서버 세션 초기화
+src/lib/env/supabasePublic.ts      ← env 래퍼
+src/lib/stores/auth.ts             ← 인증 상태 스토어
+src/routes/api/**/*                ← 모든 API 라우트
+supabase/migrations/**/*           ← DB 마이그레이션 (신규 ADD만 Claude가 작성)
+$env import가 있는 모든 파일
+```
+
+---
+
+## 이 파일을 열거나 수정 요청을 받았을 때
+
+```
+1. 작업 즉시 중단
+2. Stephen에게 안내:
+   "이 파일은 Claude Code 전용 아키텍처 영역입니다.
+    변경이 필요하다면 Claude Code 세션으로 전환해주세요.
+    명령어: '@ Claude로 복귀'"
+3. HANDOFF.md 갱신 (건드린 파일 없음, 전환 이유 기록)
+```
+
+---
+
+## 정본 패턴 — supabase.ts (절대 변경 금지)
+
+```typescript
+// ✅ 정본 (fed4fdb 기준)
+export const supabase = browser
+  ? createBrowserClient<Database>(PUBLIC_SUPABASE_URL, PUBLIC_SUPABASE_ANON_KEY)
+  : createClient<Database>(PUBLIC_SUPABASE_URL, PUBLIC_SUPABASE_ANON_KEY, {
+      auth: { persistSession: false }
+    })
+
+// ❌ 절대 금지 — 아래 패턴으로 변경 시 쿠키 세션 공유 단절 → 채팅 401
+export const supabase = createClient<Database>(url, key)
+```
+
+**이유:** 브라우저에서 `createBrowserClient`를 써야 서버 `safeGetSession`과
+쿠키 기반 세션이 공유됩니다. `createClient`는 세션 없이 anonymous로 동작합니다.
+
+---
+
+## Cursor가 할 수 있는 작업 (frozen 아님)
+
+```
+✅ src/lib/components/**/*.svelte   ← UI 컴포넌트
+✅ src/routes/**/+page.svelte       ← 페이지 UI 레이어
+✅ src/app.css                      ← 글로벌 스타일
+✅ static/**                        ← 정적 파일
+✅ .claude/harness/TASK.md          ← DONE 1줄 추가 + GSD_LOG 기록만
+✅ .claude/harness/HANDOFF.md       ← 5필드 갱신
+```
+
+---
+
+## HOOK-5 연동 (context-hook.md 참조)
+
+supabase 클라이언트 생성 코드를 작성하려 할 때:
+→ 즉시 이 규칙 확인 → frozen 파일이면 작업 중단 → Stephen에게 전환 안내
+
+---
+
+*domain-frozen-boundary.mdc | Harness Flow v3.2 | 2026-06-28*
+*참조: .claude/harness/AI_COLLAB_PROTOCOL.md 원칙 A + 원칙 E*
