@@ -2,6 +2,7 @@ import { fail, redirect } from '@sveltejs/kit'
 import { env } from '$env/dynamic/private'
 import { getSupabaseUrl } from '$lib/env/supabasePublic'
 import { createClient } from '@supabase/supabase-js'
+import { hasSettingsAccess } from '$lib/utils/cmsPermissions'
 import type { Actions, PageServerLoad } from './$types'
 import type { SupabaseClient } from '@supabase/supabase-js'
 
@@ -17,7 +18,7 @@ interface ProfileRow {
 
 export const load: PageServerLoad = async ({ parent }) => {
   const { cmsRole } = await parent()
-  if (cmsRole !== 'superadmin') throw redirect(303, '/cms')
+  if (!hasSettingsAccess(cmsRole ?? '')) throw redirect(303, '/cms?notice=access_denied')
 
   const serviceRoleKey = env.SUPABASE_SERVICE_ROLE_KEY
   if (!serviceRoleKey) return { accounts: [] as AccountRow[] }
@@ -81,7 +82,7 @@ async function requireSuperadmin(
     .eq('id', session.user.id)
     .single()
   const p = data as { cms_role: string | null } | null
-  if (p?.cms_role !== 'superadmin') return '권한이 없습니다.'
+  if (!hasSettingsAccess(p?.cms_role ?? '')) return '권한이 없습니다.'
   return null
 }
 
@@ -208,8 +209,13 @@ export const actions: Actions = {
     if (!userId) return fail(400, { error: '잘못된 요청입니다.' })
     if (userId === session.user.id) return fail(400, { error: '본인 계정은 삭제할 수 없습니다.' })
 
-    const { error } = await admin.auth.admin.deleteUser(userId)
-    if (error) return fail(500, { error: error.message })
+    // auth.users 먼저 삭제 (실패 시 user_profiles 상태 변경 없이 롤백)
+    const { error: deleteErr } = await admin.auth.admin.deleteUser(userId)
+    if (deleteErr) return fail(500, { error: deleteErr.message || 'auth 삭제 실패' })
+
+    // auth 삭제 성공 후 user_profiles 정리 (FK ON DELETE SET NULL이므로 admin_invite_tokens는 자동 처리)
+    await admin.from('user_profiles').delete().eq('id', userId)
+
     return { success: true }
   },
 }

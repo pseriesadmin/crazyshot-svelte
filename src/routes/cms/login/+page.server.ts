@@ -12,8 +12,11 @@ export const load: PageServerLoad = async ({ locals, url }) => {
     if (profile?.cms_role) throw redirect(303, '/cms')
   }
 
+  const logoutType = url.searchParams.get('logout') as 'manual' | 'expired' | null
+  const logoutTime = url.searchParams.get('t') ?? null
+
   const inviteToken = url.searchParams.get('invite')
-  if (!inviteToken) return {}
+  if (!inviteToken) return { logoutType, logoutTime }
 
   const serviceRoleKey = env.SUPABASE_SERVICE_ROLE_KEY
   if (!serviceRoleKey) return { inviteExpired: true }
@@ -27,7 +30,7 @@ export const load: PageServerLoad = async ({ locals, url }) => {
     .maybeSingle()
 
   if (!tokenRow || tokenRow.used_at || new Date(tokenRow.expires_at) < new Date()) {
-    return { inviteExpired: true }
+    return { inviteExpired: true, logoutType, logoutTime }
   }
 
   const { data: { user } } = await admin.auth.admin.getUserById(tokenRow.created_by)
@@ -36,6 +39,8 @@ export const load: PageServerLoad = async ({ locals, url }) => {
     inviteMode: true,
     inviteToken,
     inviteEmail: user?.email ?? '',
+    logoutType,
+    logoutTime,
   }
 }
 

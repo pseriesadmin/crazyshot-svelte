@@ -1,14 +1,37 @@
 <script lang="ts">
   import { enhance } from '$app/forms'
+  import { csToast } from '$lib/utils/toast'
   import type { ActionData, PageData } from './$types'
 
   interface Props { form: ActionData; data: PageData }
   let { form, data }: Props = $props()
 
   let isLoading = $state(false)
+  let toastShown = false
 
   type FormResult = { error?: string } | null
   let result = $derived(form as FormResult)
+
+  function formatKoreanDateTime(iso: string): string {
+    const d = new Date(iso)
+    const mm = String(d.getMonth() + 1).padStart(2, '0')
+    const dd = String(d.getDate()).padStart(2, '0')
+    const hh = String(d.getHours()).padStart(2, '0')
+    const min = String(d.getMinutes()).padStart(2, '0')
+    return `${mm}월${dd}일 ${hh}시${min}분`
+  }
+
+  // 본인 로그아웃: 토스트 + URL 클린업
+  $effect(() => {
+    if (data.logoutType === 'manual' && data.logoutTime && !toastShown) {
+      toastShown = true
+      csToast.info(`로그아웃되었습니다. (${formatKoreanDateTime(data.logoutTime)})`)
+      const clean = new window.URL(window.location.href)
+      clean.searchParams.delete('logout')
+      clean.searchParams.delete('t')
+      history.replaceState(history.state, '', clean.toString())
+    }
+  })
 </script>
 
 <svelte:head><title>CMS 로그인 — CrazyShot</title></svelte:head>
@@ -33,7 +56,16 @@
       <p class="error-msg" role="alert">{result.error}</p>
     {/if}
 
-    {#if data.inviteExpired}
+    {#if data.logoutType === 'expired'}
+      <!-- 세션 만료 자동 로그아웃 완료 화면 -->
+      <div class="expired-body">
+        <p class="expired-msg">세션 제한으로 자동 로그아웃되었습니다.</p>
+        {#if data.logoutTime}
+          <p class="expired-time">{formatKoreanDateTime(data.logoutTime)}</p>
+        {/if}
+        <a href="/cms/login" class="cta-btn expired-btn">로그인하기</a>
+      </div>
+    {:else if data.inviteExpired}
       <p class="error-msg" role="alert">초대 링크가 만료되었거나 이미 사용된 링크입니다.</p>
     {:else if data.inviteMode}
       <!-- 초대링크 진입: 비밀번호 설정 폼 -->
@@ -205,5 +237,34 @@
     padding: 14px 16px;
     background: var(--cs-lilac);
     border-radius: var(--radius-md);
+  }
+
+  /* 세션 만료 완료 화면 */
+  .expired-body {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 12px;
+    padding: 8px 0 4px;
+    text-align: center;
+  }
+  .expired-msg {
+    font: var(--text-m-body-16B);
+    color: var(--cs-text);
+    margin: 0;
+    line-height: 1.5;
+  }
+  .expired-time {
+    font: var(--text-m-script-14);
+    color: var(--cs-text-mid);
+    margin: 0;
+  }
+  .expired-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    text-decoration: none;
+    width: 100%;
+    margin-top: 8px;
   }
 </style>
