@@ -1,6 +1,6 @@
 <script lang="ts">
   import { goto } from '$app/navigation'
-  import { page } from '$app/state'
+  import { navigating, page } from '$app/state'
   import { supabase } from '$lib/services/supabase'
   import { Toaster } from 'svelte-sonner'
   import { csToast } from '$lib/utils/toast'
@@ -99,6 +99,11 @@
 {#if data.cmsRole}
   <div class="cms-shell">
 
+    <!-- 네비게이션 로딩 바 -->
+    {#if navigating}
+      <div class="nav-progress-bar" role="progressbar" aria-label="페이지 로딩 중"></div>
+    {/if}
+
     <!-- ① 최상단 탭바 (Figma top-global 스타일) -->
     <div class="cms-topbar-wrap">
       <header class="cms-topbar">
@@ -118,6 +123,7 @@
                 class="top-tab"
                 class:active={activeMenuId === menu.id}
                 aria-current={activeMenuId === menu.id ? 'page' : undefined}
+                data-sveltekit-preload-data="hover"
               >{menu.label}</a>
             {/each}
           </nav>
@@ -135,6 +141,7 @@
             href={sub.href}
             class="sub-tab"
             class:active={page.url.pathname === sub.href}
+            data-sveltekit-preload-data="hover"
           >{sub.label}</a>
         {/each}
       </div>
@@ -234,7 +241,7 @@
   /* ─── 탑바 래퍼 (여백 주어 pill 효과) ─── */
   .cms-topbar-wrap {
     flex-shrink: 0;
-    padding: 10px 16px 0;
+    padding: 20px 16px 0;
     background: var(--cs-lilac);
   }
 
@@ -341,6 +348,29 @@
   }
   .sub-tab:hover  { background: rgba(59, 47, 138, 0.08); color: var(--cs-text); }
   .sub-tab.active { background: var(--cs-white); color: var(--cs-purple); }
+
+  /* ─── 네비게이션 로딩 바 ─── */
+  .nav-progress-bar {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    height: 3px;
+    z-index: 9999;
+    background: linear-gradient(
+      90deg,
+      var(--cs-purple) 0%,
+      var(--cs-purple-light) 50%,
+      var(--cs-orange) 100%
+    );
+    background-size: 200% 100%;
+    animation: nav-progress 1.4s ease-in-out infinite;
+  }
+  @keyframes nav-progress {
+    0%   { background-position: 200% 0; opacity: 1; }
+    70%  { background-position: -50% 0; opacity: 1; }
+    100% { background-position: -100% 0; opacity: 0.6; }
+  }
 
   /* ─── 콘텐츠 ─── */
   .cms-main {
