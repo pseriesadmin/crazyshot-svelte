@@ -4,6 +4,29 @@
    모든 퍼블리싱 화면 공통 적용
    ════════════════════════════════════════════════════════ */
 
+/* ── SB AggroOTF 웹폰트 ── */
+@font-face {
+  font-family: 'SB AggroOTF';
+  src: url('/fonts/SBAggroOTF-L.woff2') format('woff2');
+  font-weight: 300;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'SB AggroOTF';
+  src: url('/fonts/SBAggroOTF-M.woff2') format('woff2');
+  font-weight: 500;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'SB AggroOTF';
+  src: url('/fonts/SBAggroOTF-B.woff2') format('woff2');
+  font-weight: 700;
+  font-style: normal;
+  font-display: swap;
+}
+
 :root {
 
   /* ── 브랜드 컬러 ── */
@@ -67,11 +90,11 @@
   --text-pc-ad-en-35: 400 35px/130% var(--font-en-display);       /* 영문 광고 중형 */
   --text-pc-ad-kr-60: 700 60px/100% var(--font-kr-heading);       /* 한글 광고 대형 */
   --text-pc-ad-kr-35: 700 35px/160% var(--font-kr-heading);       /* 한글 타이틀 대형 */
-  --text-pc-ad-kr-22: 500 22px/auto var(--font-kr-heading);       /* 한글 광고 소형 */
+  --text-pc-ad-kr-22: 500 22px/normal var(--font-kr-heading);     /* 한글 광고 소형 */
   --text-pc-htitle-25: 700 25px/200% var(--font-kr);              /* 헤더 타이틀 */
   --text-pc-hsub-22:  700 22px/160% var(--font-kr);               /* 헤더 서브타이틀 */
   --text-pc-menu-en-20: 400 20px/160% var(--font-en-display);     /* 영문 메뉴 */
-  --text-pc-menu-kr-20: 500 20px/auto var(--font-kr-heading);     /* 한글 메뉴 */
+  --text-pc-menu-kr-20: 500 20px/normal var(--font-kr-heading);   /* 한글 메뉴 */
   --text-pc-title-18: 700 18px/170% var(--font-kr);               /* 섹션 타이틀 */
   --text-pc-title-16: 700 16px/200% var(--font-kr);               /* 소형 타이틀 */
   --text-pc-body-14:  700 14px/200% var(--font-kr);               /* 본문 Bold */
@@ -81,7 +104,7 @@
   --text-m-ad-kr-40:  700 40px/140% var(--font-kr-heading);
   --text-m-ad-en-30:  400 30px/130% var(--font-en-display);
   --text-m-ad-kr-30:  700 30px/130% var(--font-kr-heading);
-  --text-m-menu-en-24: 400 24px/auto var(--font-en-display);
+  --text-m-menu-en-24: 400 24px/normal var(--font-en-display);
   --text-m-htitle-24B: 900 24px/160% var(--font-kr);
   --text-m-htitle-24L: 500 24px/160% var(--font-kr);
   --text-m-title-21:  700 21px/160% var(--font-kr);
