@@ -4,6 +4,7 @@
   import type { PageData } from './$types';
   import type { Product } from '$lib/types/database';
   import SubGnb from '$lib/components/common/SubGnb.svelte';
+  import CalendarGrid from '$lib/components/common/CalendarGrid.svelte';
   import { sampleSubItems, priceConfig } from '$lib/fixtures/cartFixtures';
 
   function readInputValue(event: { currentTarget: { value: string } }): string {
@@ -119,8 +120,6 @@
   // ── Calendar & Time
   let openCalId = $state<string | null>(null);
   let openTimeId = $state<string | null>(null);
-  let calViewYear = $state(new Date().getFullYear());
-  let calViewMonth = $state(new Date().getMonth()); // 0-indexed
   // Per-form date/time selections
   let c1RentalDate = $state('');   let c1RentalTime = $state('');
   let c1ReturnDate = $state('');   let c1ReturnTime = $state('');
@@ -129,12 +128,8 @@
   let rpRentalDateVal = $state(''); let rpRentalTimeVal2 = $state('');
   let rpReturnDateVal = $state(''); let rpReturnTimeVal2 = $state('');
 
-  function openCal(id: string, currentDate: string) {
-    if (openCalId === id) { openCalId = null; return; }
-    const base = currentDate ? new Date(currentDate) : new Date();
-    calViewYear = base.getFullYear();
-    calViewMonth = base.getMonth();
-    openCalId = id;
+  function openCal(id: string, _currentDate: string) {
+    openCalId = openCalId === id ? null : id;
     openTimeId = null;
   }
 
@@ -198,19 +193,6 @@
       rpReturnDateVal = rpRentalDateVal;
       rpReturnTimeVal2 = rpRentalTimeVal2;
     }
-  }
-
-  function calDays(year: number, month: number): (number | null)[] {
-    const firstDay = new Date(year, month, 1).getDay();
-    const daysInMonth = new Date(year, month + 1, 0).getDate();
-    const cells: (number | null)[] = Array(firstDay).fill(null);
-    for (let d = 1; d <= daysInMonth; d++) cells.push(d);
-    while (cells.length % 7 !== 0) cells.push(null);
-    return cells;
-  }
-
-  function fmtDate(year: number, month: number, day: number): string {
-    return `${year}-${String(month + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
   }
 
   function displayDate(iso: string): string {
@@ -870,8 +852,6 @@
     : '반납 방식이 대여 방식과 다를 경우 배송료 추가가 발생할 수 있습니다.'}
   {@const isCalOpen = openCalId === props.calId}
   {@const isTimeOpen = openTimeId === props.timeId}
-  {@const MONTHS = ['1월','2월','3월','4월','5월','6월','7월','8월','9월','10월','11월','12월']}
-  {@const DAYS = ['일','월','화','수','목','금','토']}
 
   <div class="rental-form">
     <!-- 수령/반납 방식 -->
@@ -935,39 +915,10 @@
           <!-- 달력 레이어 -->
           {#if isCalOpen}
             <div class="cal-layer" transition:slide={{ duration: 200 }}>
-              <div class="cal-header">
-                <button class="cal-nav" onclick={() => { if (calViewMonth === 0) { calViewMonth = 11; calViewYear -= 1; } else { calViewMonth -= 1; } }} aria-label="이전 달">
-                  <svg width="8" height="14" viewBox="0 0 8 14" fill="none"><path d="M7 1L1 7L7 13" stroke="#444" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"/></svg>
-                </button>
-                <span class="cal-title">{calViewYear}년 {MONTHS.at(calViewMonth) ?? ''}</span>
-                <button class="cal-nav" onclick={() => { if (calViewMonth === 11) { calViewMonth = 0; calViewYear += 1; } else { calViewMonth += 1; } }} aria-label="다음 달">
-                  <svg width="8" height="14" viewBox="0 0 8 14" fill="none"><path d="M1 1L7 7L1 13" stroke="#444" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"/></svg>
-                </button>
-              </div>
-              <div class="cal-grid">
-                {#each DAYS as d, i}
-                  <span class="cal-dow" class:cal-dow-sun={i===0} class:cal-dow-sat={i===6}>{d}</span>
-                {/each}
-                {#each calDays(calViewYear, calViewMonth) as day}
-                  {#if day === null}
-                    <span></span>
-                  {:else}
-                    {@const iso = fmtDate(calViewYear, calViewMonth, day)}
-                    {@const today = new Date()}
-                    {@const isPast = new Date(iso) < new Date(today.getFullYear(), today.getMonth(), today.getDate())}
-                    {@const isSel = props.selectedDate === iso}
-                    <button
-                      class="cal-day"
-                      class:cal-day-sel={isSel}
-                      class:cal-day-past={isPast}
-                      class:cal-day-sun={new Date(iso).getDay() === 0}
-                      class:cal-day-sat={new Date(iso).getDay() === 6}
-                      disabled={isPast}
-                      onclick={() => { props.onDateChange(iso); openCalId = null; }}
-                    >{day}</button>
-                  {/if}
-                {/each}
-              </div>
+              <CalendarGrid
+                value={props.selectedDate}
+                onselect={(iso) => { props.onDateChange(iso); openCalId = null; }}
+              />
             </div>
           {/if}
 
@@ -1674,72 +1625,6 @@
     width: 50%;
     box-sizing: border-box;
   }
-  .cal-header {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    margin-bottom: 16px;
-  }
-  .cal-nav {
-    background: none;
-    border: none;
-    cursor: pointer;
-    width: 32px;
-    height: 32px;
-    border-radius: 50%;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    transition: background 0.2s;
-    color: #100B32;
-    font-size: 18px;
-    font-weight: 700;
-    flex-shrink: 0;
-  }
-  .cal-nav:hover { background: #ECEBF4; }
-  .cal-title {
-    font-family: var(--font-kr);
-    font-size: 16px;
-    font-weight: 700;
-    color: #100B32;
-  }
-  .cal-grid {
-    display: grid;
-    grid-template-columns: repeat(7, 1fr);
-    gap: 2px;
-  }
-  .cal-dow {
-    text-align: center;
-    font-size: 12px;
-    font-weight: 500;
-    color: #AAAAAA;
-    font-family: var(--font-kr);
-    padding: 4px 0 8px;
-  }
-  .cal-dow-sun { color: #FF3535; }
-  .cal-dow-sat { color: #3B2F8A; }
-  .cal-day {
-    background: none;
-    border: none;
-    cursor: pointer;
-    width: 100%;
-    aspect-ratio: 1;
-    border-radius: 50%;
-    font-size: 13px;
-    font-family: var(--font-kr);
-    font-weight: 500;
-    color: #444;
-    transition: background 0.15s;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    min-height: 36px;
-  }
-  .cal-day:hover:not(:disabled) { background: #ECEBF4; }
-  .cal-day-sel { background: #3B2F8A !important; color: white !important; font-weight: 700; }
-  .cal-day-past { color: #CCCCCC; cursor: not-allowed; }
-  .cal-day-sun:not(.cal-day-past) { color: #FF3535; }
-  .cal-day-sat:not(.cal-day-past) { color: #3B2F8A; }
 
   /* ══ Time Layer ══ */
   .time-layer {
