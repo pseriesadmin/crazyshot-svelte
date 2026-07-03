@@ -1,6 +1,3 @@
-#!/bin/sh
-. "$(dirname "$0")/_/husky.sh"
-
 echo ""
 echo "🚀 Harness pre-push 검사 시작..."
 
