@@ -405,11 +405,12 @@
   .sessions-pane {
     width: 450px;
     flex-shrink: 0;
-    background: transparent;
+    background: var(--cs-white);
+    border-radius: var(--cms-radius-lg);
     display: flex;
     flex-direction: column;
     overflow: hidden;
-    padding: 16px 0 16px 16px;
+    margin: 16px 0 16px 16px;
   }
 
   .sessions-header {
@@ -419,7 +420,7 @@
     padding: 20px 16px 12px;
     flex-shrink: 0;
     background: var(--cs-white);
-    border-radius: var(--radius-2xl) var(--radius-2xl) 0 0;
+    border-radius: var(--cms-radius-lg) var(--cms-radius-lg) 0 0;
     position: relative;
   }
 
@@ -454,6 +455,7 @@
     gap: 4px;
     flex-shrink: 0;
     background: var(--cs-white);
+    margin: 20px 0;
   }
 
   .filter-tab {
@@ -462,7 +464,7 @@
     border: none;
     border-bottom: 2px solid transparent;
     padding: 10px 4px;
-    font: var(--text-m-script-14);
+    font: var(--text-pc-title-16);
     color: var(--cs-text-mid);
     cursor: pointer;
     display: flex;
@@ -476,6 +478,8 @@
     color: var(--cs-purple);
     border-bottom-color: var(--cs-purple);
     font-weight: 700;
+    background: var(--cs-lilac);
+    border-radius: var(--radius-sm);
   }
 
   .tab-count {
@@ -502,7 +506,7 @@
     flex-direction: column;
     gap: 12px;
     background: var(--cs-white);
-    border-radius: 0 0 var(--radius-2xl) var(--radius-2xl);
+    border-radius: 0 0 var(--cms-radius-lg) var(--cms-radius-lg);
   }
 
   .empty-sessions {
@@ -518,7 +522,7 @@
     width: 100%;
     background: var(--cs-surface-gray);
     border: none;
-    border-radius: var(--radius-md);
+    border-radius: var(--cms-radius-md);
     padding: 12px 50px 12px 14px;
     cursor: pointer;
     text-align: left;
@@ -564,7 +568,7 @@
     font-size: 11px;
     line-height: 1;
     cursor: pointer;
-    border-radius: var(--radius-xs);
+    border-radius: var(--radius-sm);
     min-height: 44px;
     min-width: 44px;
     display: flex;
@@ -589,7 +593,7 @@
     align-items: center;
   }
   .sc-last-msg {
-    font: var(--text-m-script-12);
+    font: var(--text-pc-body-14);
     color: var(--cs-text-mid);
     overflow: hidden;
     text-overflow: ellipsis;
@@ -625,7 +629,7 @@
     overflow: hidden;
     background: var(--cs-white);
     margin: 16px;
-    border-radius: var(--radius-2xl);
+    border-radius: var(--cms-radius-lg);
   }
 
   .no-session {
@@ -705,7 +709,7 @@
     font-size: 11px;
     line-height: 1;
     cursor: pointer;
-    border-radius: var(--radius-xs);
+    border-radius: var(--radius-sm);
     min-height: 44px;
     min-width: 44px;
     display: flex;

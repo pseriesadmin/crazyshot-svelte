@@ -151,7 +151,7 @@
 
   .accounts-card {
     background: var(--cs-white);
-    border-radius: var(--radius-2xl);
+    border-radius: var(--cms-radius-lg);
     padding: 48px 40px;
     width: 100%;
     display: flex;
@@ -160,8 +160,8 @@
   }
 
   .page-title {
-    font: var(--text-m-title-21);
-    color: var(--cs-dark);
+    font: var(--text-pc-htitle-25);
+    color: var(--cs-text);
     margin: 0 0 4px;
   }
 
@@ -172,7 +172,7 @@
   }
 
   .field-label {
-    font: var(--text-m-script-14B);
+    font: var(--text-pc-body-14);
     color: var(--cs-text);
     display: block;
     margin-bottom: -4px;
@@ -181,9 +181,9 @@
   .f-input {
     background: var(--cs-surface-gray);
     border: none;
-    border-radius: var(--radius-md);
+    border-radius: var(--cms-radius-sm);
     padding: 14px 18px;
-    font: var(--text-m-script-14);
+    font: var(--text-pc-body-14);
     color: var(--cs-text);
     width: 100%;
     box-sizing: border-box;
@@ -209,7 +209,7 @@
     display: flex;
     align-items: center;
     gap: 8px;
-    font: var(--text-m-script-14);
+    font: var(--text-pc-body-14);
     color: var(--cs-text);
     cursor: pointer;
     min-height: 44px;
@@ -227,7 +227,7 @@
     border: none;
     border-radius: var(--radius-full);
     padding: 8px 20px;
-    font: var(--text-m-script-14B);
+    font: var(--text-pc-body-14);
     color: var(--cs-text-mid);
     cursor: pointer;
     transition: background 0.15s, color 0.15s;
@@ -245,7 +245,7 @@
     border: none;
     border-radius: var(--radius-xl);
     height: 56px;
-    font: var(--text-m-body-16B);
+    font: var(--text-pc-title-16);
     cursor: pointer;
     margin-top: 8px;
     transition: background 0.15s;
@@ -255,23 +255,23 @@
 
   .error-msg {
     background: var(--cs-bg-error);
-    border-radius: var(--radius-md);
+    border-radius: var(--cms-radius-sm);
     padding: 12px 16px;
-    font: var(--text-m-script-14);
+    font: var(--text-pc-body-14);
     color: var(--cs-red-badge);
     margin: 0;
   }
 
   .invite-box {
     background: var(--cs-bg-success);
-    border-radius: var(--radius-md);
+    border-radius: var(--cms-radius-sm);
     padding: 16px;
     display: flex;
     flex-direction: column;
     gap: 6px;
   }
   .invite-label {
-    font: var(--text-m-script-14B);
+    font: var(--text-pc-body-14);
     color: var(--cs-text-success);
     margin: 0;
   }
@@ -279,12 +279,12 @@
     background: var(--cs-surface-gray);
     border-radius: var(--radius-sm);
     padding: 8px 12px;
-    font-size: 12px;
+    font: var(--text-pc-script-12);
     word-break: break-all;
     color: var(--cs-text);
   }
   .invite-hint {
-    font: var(--text-m-script-12);
+    font: var(--text-pc-script-12);
     color: var(--cs-text-mid);
     margin: 0;
   }

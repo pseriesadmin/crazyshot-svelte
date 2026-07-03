@@ -1,6 +1,6 @@
 <script lang="ts">
-  import { goto } from '$app/navigation'
-  import { navigating, page } from '$app/state'
+  import { goto, beforeNavigate, afterNavigate } from '$app/navigation'
+  import { page } from '$app/state'
   import { supabase } from '$lib/services/supabase'
   import { Toaster } from 'svelte-sonner'
   import { csToast } from '$lib/utils/toast'
@@ -13,6 +13,30 @@
   }
 
   let { data, children }: Props = $props()
+
+  // 네비게이션 로딩 상태 — beforeNavigate/afterNavigate 쌍으로 관리
+  // ($app/state의 navigating은 redirect/에러 시 null 미복귀 버그 있음)
+  let isNavigating = $state(false)
+  beforeNavigate(() => { isNavigating = true })
+  afterNavigate(() => { isNavigating = false })
+
+  // 모바일 접근 차단 — CMS는 PC 전용 (min 1280px)
+  let isMobileScreen = $state(false)
+  let mobileToastShown = false
+
+  $effect(() => {
+    const check = () => {
+      const mobile = window.innerWidth < 1280
+      isMobileScreen = mobile
+      if (mobile && !mobileToastShown) {
+        mobileToastShown = true
+        csToast.info('대화면(PC)에서 접속 가능합니다.')
+      }
+    }
+    check()
+    window.addEventListener('resize', check)
+    return () => window.removeEventListener('resize', check)
+  })
 
   // 접근 거부 notice 파라미터 감지 → toast 표시 후 URL 클린업
   $effect(() => {
@@ -48,7 +72,8 @@
   type SubMenu = { label: string; href: string }
   type MainMenu = { id: string; label: string; subMenus: SubMenu[] }
 
-  const mainMenus: MainMenu[] = [
+  // $derived 필수: use:enhance 로그인 후 data.cmsRole 갱신 시 subMenus 재계산
+  let mainMenus = $derived<MainMenu[]>([
     {
       id: 'consulting',
       label: '상담',
@@ -66,6 +91,15 @@
     },
     { id: 'rental', label: '대여', subMenus: [] },
     {
+      id: 'promotion',
+      label: '프로모션',
+      subMenus: [
+        { label: '홍보', href: '/cms/promotion/ad' },
+        { label: '쿠폰', href: '/cms/promotion/coupon' },
+        { label: '포인트', href: '/cms/promotion/point' },
+      ],
+    },
+    {
       id: 'settings',
       label: '설정',
       subMenus: [
@@ -77,9 +111,10 @@
           : []),
       ],
     },
-  ]
+  ])
 
   function resolveActiveMenuId(pathname: string): string {
+    if (pathname.startsWith('/cms/promotion')) return 'promotion'
     if (pathname.startsWith('/cms/codes')) return 'products'
     if (pathname.startsWith('/cms/accounts')) return 'settings'
     if (pathname.startsWith('/cms/reservation')) return 'reservation'
@@ -99,9 +134,16 @@
 {#if data.cmsRole}
   <div class="cms-shell">
 
-    <!-- 네비게이션 로딩 바 -->
-    {#if navigating}
-      <div class="nav-progress-bar" role="progressbar" aria-label="페이지 로딩 중"></div>
+    <!-- 네비게이션 로딩 오버레이 -->
+    {#if isNavigating}
+      <div class="nav-loading-overlay" role="status" aria-label="페이지 로딩 중">
+        <img src="/logo-bi2.svg" alt="CRAZYSHOT" class="nav-loading-logo" />
+        <div class="nav-loading-dots" aria-hidden="true">
+          <span></span>
+          <span></span>
+          <span></span>
+        </div>
+      </div>
     {/if}
 
     <!-- ① 최상단 탭바 (Figma top-global 스타일) -->
@@ -155,6 +197,14 @@
   </div>
 {:else}
   {@render children()}
+{/if}
+
+<!-- 모바일 접근 차단 오버레이 (1280px 미만) -->
+{#if isMobileScreen}
+  <div class="mobile-block-overlay" role="alert" aria-live="assertive">
+    <img src="/logo-bi2.svg" alt="CRAZYSHOT" class="mobile-block-logo" />
+    <p class="mobile-block-msg">대화면(PC)에서<br/>접속 가능합니다.</p>
+  </div>
 {/if}
 
 <Toaster position="bottom-center" richColors closeButton />
@@ -229,6 +279,11 @@
   :global(.cms-shell a) { color: inherit; }
 
   .cms-shell {
+    /* ── CMS 카드 반경 3단계 시스템 ── */
+    --cms-radius-sm: 10px;   /* 입력폼·알림·설명 카드 */
+    --cms-radius-md: 15px;   /* 목록형 카드 (테이블·패널) */
+    --cms-radius-lg: 30px;   /* 그룹·메인 카드 */
+
     display: flex;
     flex-direction: column;
     height: 100vh;
@@ -340,7 +395,7 @@
     border-radius: var(--radius-md);
     color: var(--cs-text-mid);
     text-decoration: none;
-    font: var(--text-m-script-14B);
+    font: var(--text-pc-title-18);
     background: transparent;
     white-space: nowrap;
     min-height: 34px;
@@ -349,27 +404,86 @@
   .sub-tab:hover  { background: rgba(59, 47, 138, 0.08); color: var(--cs-text); }
   .sub-tab.active { background: var(--cs-white); color: var(--cs-purple); }
 
-  /* ─── 네비게이션 로딩 바 ─── */
-  .nav-progress-bar {
+  /* ─── 네비게이션 로딩 오버레이 ─── */
+  .nav-loading-overlay {
     position: fixed;
-    top: 0;
-    left: 0;
-    right: 0;
-    height: 3px;
+    inset: 0;
     z-index: 9999;
-    background: linear-gradient(
-      90deg,
-      var(--cs-purple) 0%,
-      var(--cs-purple-light) 50%,
-      var(--cs-orange) 100%
-    );
-    background-size: 200% 100%;
-    animation: nav-progress 1.4s ease-in-out infinite;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 28px;
+    background: rgba(16, 11, 50, 0.78);
+    backdrop-filter: blur(3px);
+    animation: overlay-in 0.18s ease-out;
   }
-  @keyframes nav-progress {
-    0%   { background-position: 200% 0; opacity: 1; }
-    70%  { background-position: -50% 0; opacity: 1; }
-    100% { background-position: -100% 0; opacity: 0.6; }
+
+  .nav-loading-logo {
+    width: 120px;
+    animation: logo-pulse 1.8s ease-in-out infinite;
+  }
+
+  .nav-loading-dots {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+  }
+
+  .nav-loading-dots span {
+    display: block;
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: var(--cs-orange);
+    animation: dot-bounce 1.2s ease-in-out infinite;
+  }
+
+  .nav-loading-dots span:nth-child(2) { animation-delay: 0.18s; }
+  .nav-loading-dots span:nth-child(3) { animation-delay: 0.36s; }
+
+  @keyframes overlay-in {
+    from { opacity: 0; }
+    to   { opacity: 1; }
+  }
+
+  @keyframes logo-pulse {
+    0%, 100% { opacity: 1;   transform: scale(1); }
+    50%       { opacity: 0.6; transform: scale(0.92); }
+  }
+
+  @keyframes dot-bounce {
+    0%, 80%, 100% { transform: translateY(0);   opacity: 0.35; }
+    40%            { transform: translateY(-7px); opacity: 1; }
+  }
+
+  /* ─── 모바일 접근 차단 오버레이 ─── */
+  .mobile-block-overlay {
+    position: fixed;
+    inset: 0;
+    z-index: 99999;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 24px;
+    background: rgba(16, 11, 50, 0.88);
+    backdrop-filter: blur(10px);
+    -webkit-backdrop-filter: blur(10px);
+  }
+
+  .mobile-block-logo {
+    width: 100px;
+    opacity: 0.9;
+  }
+
+  .mobile-block-msg {
+    font: var(--text-pc-title-16);
+    font-weight: 500;
+    color: rgba(255, 255, 255, 0.85);
+    text-align: center;
+    line-height: 1.7;
+    margin: 0;
   }
 
   /* ─── 콘텐츠 ─── */

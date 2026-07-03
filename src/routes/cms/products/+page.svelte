@@ -183,7 +183,7 @@
     border-radius: var(--radius-md);
     background: transparent;
     color: var(--cs-text-mid);
-    font: var(--text-m-script-14B);
+    font: var(--text-pc-body-14);
     cursor: pointer;
     min-height: 36px;
     transition: background 0.12s, color 0.12s;
@@ -214,7 +214,7 @@
     border-radius: var(--radius-md);
     background: var(--cs-lilac);
     color: var(--cs-text);
-    font: var(--text-m-script-14B);
+    font: var(--text-pc-body-14);
     cursor: pointer;
     white-space: nowrap;
     transition: background 0.12s;
@@ -228,7 +228,7 @@
     background: var(--cs-purple);
     color: var(--cs-white);
     border-radius: var(--radius-xl);
-    font: var(--text-m-script-14B);
+    font: var(--text-pc-body-14);
     text-decoration: none;
     white-space: nowrap;
     transition: background 0.12s;
@@ -238,7 +238,7 @@
   /* 테이블 카드 */
   .table-card {
     background: var(--cs-white);
-    border-radius: var(--radius-2xl);
+    border-radius: var(--cms-radius-md);
     overflow: hidden;
   }
   .empty-state {
@@ -249,7 +249,7 @@
     padding: 60px 20px;
   }
   .empty-msg {
-    font: var(--text-m-body-16L);
+    font: var(--text-pc-title-16);
     color: var(--cs-text-light);
   }
 
@@ -263,7 +263,7 @@
   }
   th {
     padding: 12px 14px;
-    font: var(--text-m-script-14B);
+    font: var(--text-pc-body-14);
     color: var(--cs-text-mid);
     text-align: left;
     white-space: nowrap;
@@ -302,7 +302,7 @@
     align-items: center;
     justify-content: center;
     color: var(--cs-text-light);
-    font: var(--text-m-script-12);
+    font: var(--text-pc-script-12);
   }
 
   .cat-badge {
@@ -310,19 +310,19 @@
     padding: 2px 8px;
     background: var(--cs-lilac);
     color: var(--cs-purple);
-    border-radius: var(--radius-xs);
-    font: var(--text-m-script-12);
+    border-radius: var(--radius-sm);
+    font: var(--text-pc-script-12);
     white-space: nowrap;
   }
 
   .product-name {
     display: block;
-    font: var(--text-m-script-14B);
+    font: var(--text-pc-body-14);
     color: var(--cs-text);
   }
   .product-slug {
     display: block;
-    font: var(--text-m-script-12);
+    font: var(--text-pc-script-12);
     color: var(--cs-text-light);
     margin-top: 2px;
   }
@@ -332,8 +332,8 @@
     display: inline-block;
     padding: 4px 10px;
     border: none;
-    border-radius: var(--radius-xs);
-    font: var(--text-m-script-12);
+    border-radius: var(--radius-sm);
+    font: var(--text-pc-script-12);
     cursor: pointer;
     background: var(--cs-surface-gray);
     color: var(--cs-text-light);
@@ -354,7 +354,7 @@
     background: var(--cs-dark);
     color: var(--cs-white);
     border-radius: var(--radius-sm);
-    font: var(--text-m-script-12);
+    font: var(--text-pc-script-12);
     text-decoration: none;
     min-height: 32px;
     transition: opacity 0.12s;

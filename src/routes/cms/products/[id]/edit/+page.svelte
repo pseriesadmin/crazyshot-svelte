@@ -266,33 +266,33 @@
   .back-link {
     color: var(--cs-text-mid);
     text-decoration: none;
-    font: var(--text-m-script-14);
+    font: var(--text-pc-body-14);
     min-height: 44px;
     display: inline-flex;
     align-items: center;
     transition: color 0.12s;
   }
   .back-link:hover { color: var(--cs-text); }
-  .page-title { font: var(--text-m-title-21); color: var(--cs-text); margin: 0; }
+  .page-title { font: var(--text-pc-htitle-25); color: var(--cs-text); margin: 0; }
   .error-banner {
     padding: 14px 20px;
     background: rgba(255,53,53,0.08);
     border: 1px solid var(--cs-red-badge);
-    border-radius: var(--radius-md);
+    border-radius: var(--cms-radius-sm);
     color: var(--cs-red-badge);
-    font: var(--text-m-script-14B);
+    font: var(--text-pc-body-14);
   }
   .product-form { display: flex; flex-direction: column; gap: 16px; }
   .form-section {
     background: var(--cs-white);
-    border-radius: var(--radius-2xl);
+    border-radius: var(--cms-radius-lg);
     padding: 28px 32px;
     display: flex;
     flex-direction: column;
     gap: 16px;
   }
   .section-title {
-    font: var(--text-m-title-18B);
+    font: var(--text-pc-title-18);
     color: var(--cs-text);
     margin: 0 0 4px;
     padding-bottom: 12px;
@@ -300,20 +300,20 @@
   }
   .field-row { display: flex; flex-direction: column; gap: 6px; }
   .field-label {
-    font: var(--text-m-script-14B);
+    font: var(--text-pc-body-14);
     color: var(--cs-text-dark);
     display: flex;
     align-items: baseline;
     gap: 6px;
   }
-  .required { color: var(--cs-red-badge); font-size: 12px; }
-  .field-hint { font: var(--text-m-script-12); color: var(--cs-text-light); font-weight: 400; }
+  .required { color: var(--cs-red-badge); font: var(--text-pc-script-12); }
+  .field-hint { font: var(--text-pc-script-12); color: var(--cs-text-light); font-weight: 400; }
   .f-input {
     background: var(--cs-surface-gray);
     border: none;
-    border-radius: var(--radius-md);
+    border-radius: var(--cms-radius-sm);
     padding: 12px 16px;
-    font: var(--text-m-script-14);
+    font: var(--text-pc-body-14);
     color: var(--cs-text);
     width: 100%;
     box-sizing: border-box;
@@ -341,7 +341,7 @@
     box-shadow: 0 1px 3px rgba(0,0,0,0.2);
   }
   .toggle-btn.on .toggle-knob { transform: translateX(20px); }
-  .toggle-label { font: var(--text-m-script-14); color: var(--cs-text-dark); }
+  .toggle-label { font: var(--text-pc-body-14); color: var(--cs-text-dark); }
   .spec-list { display: flex; flex-direction: column; gap: 8px; }
   .spec-row { display: flex; gap: 8px; align-items: center; }
   .spec-key { flex: 2; }
@@ -357,14 +357,14 @@
     background: var(--cs-surface-gray);
     border-radius: var(--radius-sm);
     display: flex; align-items: center; justify-content: center;
-    font: var(--text-m-script-12); color: var(--cs-text-placeholder);
+    font: var(--text-pc-script-12); color: var(--cs-text-placeholder);
   }
   .image-url-input { flex: 1; }
   .remove-btn {
     flex-shrink: 0; width: 36px; height: 36px;
     border: none; border-radius: var(--radius-sm);
     background: var(--cs-surface-gray);
-    color: var(--cs-text-mid); cursor: pointer; font-size: 12px;
+    color: var(--cs-text-mid); cursor: pointer; font: var(--text-pc-script-12);
     transition: background 0.12s, color 0.12s;
   }
   .remove-btn:hover:not(:disabled) { background: rgba(255,53,53,0.1); color: var(--cs-red-badge); }
@@ -375,7 +375,7 @@
     border: 1.5px dashed rgba(59,47,138,0.25);
     border-radius: var(--radius-md);
     background: transparent; color: var(--cs-purple);
-    font: var(--text-m-script-14); cursor: pointer; min-height: 44px;
+    font: var(--text-pc-body-14); cursor: pointer; min-height: 44px;
     transition: background 0.12s, border-color 0.12s;
   }
   .add-btn:hover { background: var(--cs-lilac); border-color: var(--cs-purple); }
@@ -385,14 +385,14 @@
     height: 50px; padding: 0 28px;
     border-radius: var(--radius-xl);
     background: var(--cs-surface-gray); color: var(--cs-text-dark);
-    text-decoration: none; font: var(--text-m-script-14B); transition: background 0.12s;
+    text-decoration: none; font: var(--text-pc-body-14); transition: background 0.12s;
   }
   .cancel-btn:hover { background: #e0dff0; }
   .submit-btn {
     height: 50px; padding: 0 36px;
     border: none; border-radius: var(--radius-xl);
     background: var(--cs-purple); color: var(--cs-white);
-    font: var(--text-m-script-14B); cursor: pointer; transition: background 0.12s;
+    font: var(--text-pc-body-14); cursor: pointer; transition: background 0.12s;
   }
   .submit-btn:hover:not(:disabled) { background: var(--cs-purple-hover); }
   .submit-btn:disabled { background: #B0ABCC; cursor: not-allowed; }

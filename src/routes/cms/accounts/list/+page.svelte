@@ -339,13 +339,13 @@
   }
 
   .page-title {
-    font: var(--text-m-title-18B);
+    font: var(--text-pc-title-18);
     color: var(--cs-text);
     margin: 0;
   }
 
   .count-badge {
-    font: var(--text-m-script-12);
+    font: var(--text-pc-script-12);
     color: var(--cs-text-mid);
     background: var(--cs-lilac);
     border-radius: var(--radius-full);
@@ -353,10 +353,10 @@
   }
 
   .error-bar {
-    font: var(--text-m-script-14);
+    font: var(--text-pc-body-14);
     color: var(--cs-red-badge);
     background: #fff0f0;
-    border-radius: var(--radius-md);
+    border-radius: var(--cms-radius-sm);
     padding: 10px 14px;
     margin: 0;
   }
@@ -364,7 +364,7 @@
   /* ── 테이블 ─────────────────── */
   .table-wrap {
     background: var(--cs-white);
-    border-radius: var(--radius-lg);
+    border-radius: var(--cms-radius-md);
     overflow: hidden;
     border: 1px solid rgba(16, 11, 50, 0.07);
   }
@@ -381,7 +381,7 @@
   }
 
   th {
-    font: var(--text-m-script-12);
+    font: var(--text-pc-script-12);
     color: var(--cs-text-mid);
     font-weight: 700;
     padding: 10px 14px;
@@ -398,7 +398,7 @@
   tbody tr.suspended { opacity: 0.45; }
 
   td {
-    font: var(--text-m-script-14);
+    font: var(--text-pc-body-14);
     color: var(--cs-text);
     padding: 9px 14px;
     white-space: nowrap;
@@ -412,7 +412,7 @@
     text-align: center;
     color: var(--cs-text-light);
     padding: 40px;
-    font: var(--text-m-script-14);
+    font: var(--text-pc-body-14);
   }
 
   /* 컬럼 너비 — 퍼센트 기반으로 균등 배분 */
@@ -425,7 +425,7 @@
   .col-delete { width: 8%;  }
 
   .email-text {
-    font: var(--text-m-script-12);
+    font: var(--text-pc-script-12);
     color: var(--cs-text-dark);
   }
 
@@ -436,7 +436,7 @@
     border: none;
     padding: 0;
     cursor: pointer;
-    font: var(--text-m-script-14);
+    font: var(--text-pc-body-14);
     color: var(--cs-text);
     text-align: left;
     width: 100%;
@@ -447,11 +447,11 @@
   .editable-cell:hover { border-bottom-color: var(--cs-purple); }
 
   .inline-input {
-    font: var(--text-m-script-14);
+    font: var(--text-pc-body-14);
     color: var(--cs-text);
     background: var(--cs-surface-gray);
     border: 1px solid var(--cs-purple);
-    border-radius: var(--radius-xs);
+    border-radius: var(--radius-sm);
     padding: 2px 6px;
     width: 100%;
     box-sizing: border-box;
@@ -459,11 +459,11 @@
   }
 
   .inline-select {
-    font: var(--text-m-script-12);
+    font: var(--text-pc-script-12);
     color: var(--cs-text);
     background: var(--cs-surface-gray);
     border: 1px solid var(--cs-purple);
-    border-radius: var(--radius-xs);
+    border-radius: var(--radius-sm);
     padding: 2px 4px;
     width: 100%;
     box-sizing: border-box;
@@ -474,9 +474,9 @@
   /* ── 역할 태그 ───────────────── */
   .role-tag {
     display: inline-block;
-    font: var(--text-m-script-12);
+    font: var(--text-pc-script-12);
     font-weight: 700;
-    border-radius: var(--radius-xs);
+    border-radius: var(--radius-sm);
     padding: 2px 7px;
   }
   .role-tag.role-superadmin { background: rgba(59,47,138,0.12); color: var(--cs-purple); }
@@ -484,7 +484,7 @@
   .role-tag.role-partner    { background: rgba(255,69,0,0.08);  color: var(--cs-orange); }
 
   .editable-role {
-    border-radius: var(--radius-xs);
+    border-radius: var(--radius-sm);
     padding: 2px 7px !important;
     width: auto;
     display: inline-block;
@@ -499,7 +499,7 @@
     align-items: center;
     width: 36px;
     height: 20px;
-    border-radius: 10px;
+    border-radius: var(--cms-radius-sm);
     background: var(--cs-disabled-toggle);
     border: none;
     cursor: pointer;
@@ -526,17 +526,17 @@
 
   .toggle-disabled {
     color: var(--cs-text-light);
-    font: var(--text-m-script-12);
+    font: var(--text-pc-script-12);
   }
 
   /* ── 삭제 버튼 ───────────────── */
   .delete-btn {
-    font: var(--text-m-script-12);
+    font: var(--text-pc-script-12);
     font-weight: 700;
     background: rgba(255,53,53,0.08);
     color: var(--cs-red-badge);
     border: none;
-    border-radius: var(--radius-xs);
+    border-radius: var(--radius-sm);
     padding: 3px 8px;
     cursor: pointer;
     min-height: 26px;
@@ -558,22 +558,22 @@
   }
   .confirm-dialog {
     background: var(--cs-white);
-    border-radius: var(--radius-xl);
+    border-radius: var(--cms-radius-lg);
     padding: 24px 28px;
     width: min(360px, calc(100vw - 40px));
     display: flex;
     flex-direction: column;
     gap: 8px;
   }
-  .confirm-msg  { font: var(--text-m-body-16B); color: var(--cs-text); margin: 0; }
-  .confirm-sub  { font: var(--text-m-script-12); color: var(--cs-text-light); margin: 0; }
+  .confirm-msg  { font: var(--text-pc-title-16); color: var(--cs-text); margin: 0; }
+  .confirm-sub  { font: var(--text-pc-script-12); color: var(--cs-text-light); margin: 0; }
   .confirm-actions { display: flex; gap: 10px; margin-top: 12px; }
   .confirm-cancel,
   .confirm-ok {
     flex: 1; height: 44px;
     border: none;
     border-radius: var(--radius-xl);
-    font: var(--text-m-script-14B);
+    font: var(--text-pc-body-14);
     cursor: pointer;
     transition: opacity 0.12s;
   }
@@ -583,7 +583,7 @@
   .confirm-ok:disabled { opacity: 0.5; cursor: not-allowed; }
   .confirm-actions form { flex: 1; display: contents; }
   .delete-error {
-    font: var(--text-m-script-12);
+    font: var(--text-pc-script-12);
     color: var(--cs-red-badge);
     margin: 8px 0 0;
     text-align: center;

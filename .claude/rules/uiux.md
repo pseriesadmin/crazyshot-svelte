@@ -7,6 +7,75 @@
 
 ---
 
+## ⛔ 토큰 허용 범위 절대 지침
+
+> 이 지침은 사용자·CMS 영역 구분 없이 모든 UI 작업에 최우선 적용된다.
+
+### 허용 토큰 목록 (src/app.css 정의 범위)
+
+```
+컬러     : --cs-*         (--cs-orange, --cs-purple, --cs-text, --cs-surface-gray, ...)
+폰트     : --text-pc-*    (PC 타이포 스케일)
+           --text-m-*     (모바일 타이포 스케일 — CMS 본문에서는 사용 금지)
+           --font-*       (폰트 패밀리 변수)
+반경     : --radius-*     (--radius-sm ~ --radius-full)
+그림자   : --shadow-*     (--shadow-outsh1 ~ --shadow-bottom-bar)
+레이아웃 : --layout-*     (--layout-pc-max, --layout-header-h, ...)
+CMS 전용 : --cms-radius-* (+layout.svelte에 정의 — CMS 카드 반경 3종)
+```
+
+### ❌ 허용 범위 외 사용 절대 금지
+
+```
+❌ src/app.css에 없는 CSS 변수 임의 생성 금지
+   예) --my-color: #abc → 즉시 기각. src/app.css에 토큰 추가 후 사용.
+
+❌ 기존 토큰이 있는 값의 하드코딩 금지 (hex·rgb·px 직접 입력)
+   예) color: #3B2F8A → ✅ color: var(--cs-purple)
+   예) border-radius: 30px → ✅ border-radius: var(--radius-xl)
+
+❌ 범위 외 토큰 이름 참조 금지 (오타·추측 포함)
+   예) var(--cs-purple-80) → 존재하지 않음. var(--cs-purple) 또는 실제 정의된 토큰 사용.
+```
+
+### ✅ 예외적으로 허용된 하드코딩 (명시적 허용 목록)
+
+> 아래 목록에 없으면 허용되지 않는다.
+
+```css
+/* 1. 버튼 disabled 상태 — CSS 변수 미정의 (--cs-disabled-button과 동일값) */
+background: #B0ABCC;
+
+/* 2. CMS 전용 purple tint (rgba 계열 — CSS 변수 미정의) */
+rgba(59,47,138,0.04)  /* 행 배경 극연 */
+rgba(59,47,138,0.06)  /* 행 hover 연 */
+rgba(59,47,138,0.08)  /* 탭 hover 중 */
+rgba(59,47,138,0.10)  /* 선택 배경 강 */
+rgba(59,47,138,0.12)  /* 강조 영역 */
+rgba(255,53,53,0.08)  /* 에러 행 배경 */
+rgba(255,53,53,0.10)  /* 에러 강조 배경 */
+rgba(16,11,50,0.78)   /* 로딩 오버레이 dark */
+
+/* 3. CMS codes 페이지 카테고리 루트 컬러 (--bc CSS 변수 동적 주입용) */
+CAM:#FF4500  OPT:#3B2F8A  LGT:#F59E0B  AUD:#0EA5E9
+SPT:#10B981  MON:#6366F1  PWR:#EC4899  MED:#8B5CF6
+STD:#14B8A6  VID:#F97316  ACC:#84CC16  PKG:#06B6D4
+
+/* 4. 반투명 흰 테두리 (Nav 필 전용) */
+border: 1px solid rgba(255,255,255,0.6);
+```
+
+### 신규 토큰이 필요할 때
+
+```
+1. Stephen에게 토큰 추가 필요 이유와 Figma 값 보고
+2. Stephen 승인 후 src/app.css에 토큰 정의 추가
+3. 이후 var() 참조 사용
+→ 승인 없이 임시 하드코딩 후 나중에 교체하는 방식 금지
+```
+
+---
+
 ## 1. 컬러 팔레트
 
 ### 브랜드 컬러
@@ -169,8 +238,7 @@
 
 | 토큰 | 값 | 적용 대상 |
 |------|-----|----------|
-| `--radius-xs` | 4px | 쿠폰 태그, 뱃지 텍스트 |
-| `--radius-sm` | 8px | 소형 버튼, 검색 결과 |
+| `--radius-sm` | 8px | 소형 버튼, 배지·태그, 검색 결과 |
 | `--radius-md` | 15px | 폼 입력 필드 (`f-input`) |
 | `--radius-lg` | 20px | 날짜 행, 라디오 컨테이너, nav 필 |
 | `--radius-xl` | 30px | CTA 버튼, 총금액 다크 박스 |
@@ -474,6 +542,12 @@ position: bottom-center
 ## 13. 퍼블리싱 완료 전 체크리스트
 
 ```
+[토큰 범위 준수 — 절대 지침]
+[ ] 사용한 CSS 변수가 모두 src/app.css 정의 범위 내에 있는가?
+[ ] 허용 목록 외 하드코딩(#hex / rgba / px) 없는가?
+[ ] 임시 CSS 변수 임의 생성 없는가?
+
+[컴포넌트·스타일]
 [ ] CSS 변수 사용 (--cs-* / --text-* / --radius-*) — 하드코딩 #hex 없음?
 [ ] 흰 카드: border-radius: var(--radius-2xl) (50px)?
 [ ] CTA 버튼: var(--cs-purple) + var(--radius-xl)?
