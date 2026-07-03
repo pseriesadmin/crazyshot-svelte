@@ -160,7 +160,7 @@
 
   .login-card {
     background: var(--cs-white);
-    border-radius: var(--radius-2xl);
+    border-radius: var(--cms-radius-lg);
     padding: 48px 40px;
     width: 100%;
     max-width: 400px;
@@ -187,7 +187,7 @@
   }
 
   .field-label {
-    font: var(--text-m-script-14B);
+    font: var(--text-pc-body-14);
     color: var(--cs-text);
     display: block;
     margin-bottom: -4px;
@@ -196,9 +196,9 @@
   .f-input {
     background: var(--cs-surface-gray);
     border: none;
-    border-radius: var(--radius-md);
+    border-radius: var(--cms-radius-sm);
     padding: 14px 18px;
-    font: var(--text-m-script-14);
+    font: var(--text-pc-body-14);
     color: var(--cs-text);
     width: 100%;
     box-sizing: border-box;
@@ -212,7 +212,7 @@
     border: none;
     border-radius: var(--radius-xl);
     height: 56px;
-    font: var(--text-m-body-16B);
+    font: var(--text-pc-title-16);
     cursor: pointer;
     margin-top: 8px;
     transition: background 0.15s;
@@ -222,21 +222,21 @@
 
   .error-msg {
     background: var(--cs-bg-error);
-    border-radius: var(--radius-md);
+    border-radius: var(--cms-radius-sm);
     padding: 12px 16px;
-    font: var(--text-m-script-14);
+    font: var(--text-pc-body-14);
     color: var(--cs-red-badge);
     margin: 0;
   }
 
   .invite-greeting {
-    font: var(--text-m-script-14);
+    font: var(--text-pc-body-14);
     color: var(--cs-text);
     line-height: 1.6;
     margin: 0;
     padding: 14px 16px;
     background: var(--cs-lilac);
-    border-radius: var(--radius-md);
+    border-radius: var(--cms-radius-sm);
   }
 
   /* 세션 만료 완료 화면 */
@@ -249,13 +249,13 @@
     text-align: center;
   }
   .expired-msg {
-    font: var(--text-m-body-16B);
+    font: var(--text-pc-title-16);
     color: var(--cs-text);
     margin: 0;
     line-height: 1.5;
   }
   .expired-time {
-    font: var(--text-m-script-14);
+    font: var(--text-pc-body-14);
     color: var(--cs-text-mid);
     margin: 0;
   }

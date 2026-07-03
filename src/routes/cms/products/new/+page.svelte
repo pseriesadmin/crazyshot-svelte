@@ -368,7 +368,7 @@
   .back-link {
     color: var(--cs-text-mid);
     text-decoration: none;
-    font: var(--text-m-script-14);
+    font: var(--text-pc-body-14);
     min-height: 44px;
     display: inline-flex;
     align-items: center;
@@ -376,7 +376,7 @@
   }
   .back-link:hover { color: var(--cs-text); }
   .page-title {
-    font: var(--text-m-title-21);
+    font: var(--text-pc-htitle-25);
     color: var(--cs-text);
     margin: 0;
   }
@@ -385,9 +385,9 @@
     padding: 14px 20px;
     background: rgba(255,53,53,0.08);
     border: 1px solid var(--cs-red-badge);
-    border-radius: var(--radius-md);
+    border-radius: var(--cms-radius-sm);
     color: var(--cs-red-badge);
-    font: var(--text-m-script-14B);
+    font: var(--text-pc-body-14);
   }
 
   /* 폼 섹션 */
@@ -398,21 +398,21 @@
   }
   .form-section {
     background: var(--cs-white);
-    border-radius: var(--radius-2xl);
+    border-radius: var(--cms-radius-lg);
     padding: 28px 32px;
     display: flex;
     flex-direction: column;
     gap: 16px;
   }
   .section-title {
-    font: var(--text-m-title-18B);
+    font: var(--text-pc-title-18);
     color: var(--cs-text);
     margin: 0 0 4px;
     padding-bottom: 12px;
     border-bottom: 1px solid var(--cs-lilac);
   }
   .section-desc {
-    font: var(--text-m-script-12);
+    font: var(--text-pc-script-12);
     color: var(--cs-text-light);
     margin: -8px 0 0;
   }
@@ -424,15 +424,15 @@
     gap: 6px;
   }
   .field-label {
-    font: var(--text-m-script-14B);
+    font: var(--text-pc-body-14);
     color: var(--cs-text-dark);
     display: flex;
     align-items: baseline;
     gap: 6px;
   }
-  .required { color: var(--cs-red-badge); font-size: 12px; }
+  .required { color: var(--cs-red-badge); font: var(--text-pc-script-12); }
   .field-hint {
-    font: var(--text-m-script-12);
+    font: var(--text-pc-script-12);
     color: var(--cs-text-light);
     font-weight: 400;
   }
@@ -440,9 +440,9 @@
   .f-input {
     background: var(--cs-surface-gray);
     border: none;
-    border-radius: var(--radius-md);
+    border-radius: var(--cms-radius-sm);
     padding: 12px 16px;
-    font: var(--text-m-script-14);
+    font: var(--text-pc-body-14);
     color: var(--cs-text);
     width: 100%;
     box-sizing: border-box;
@@ -484,7 +484,7 @@
   }
   .toggle-btn.on .toggle-knob { transform: translateX(20px); }
   .toggle-label {
-    font: var(--text-m-script-14);
+    font: var(--text-pc-body-14);
     color: var(--cs-text-dark);
   }
 
@@ -521,7 +521,7 @@
     display: flex;
     align-items: center;
     justify-content: center;
-    font: var(--text-m-script-12);
+    font: var(--text-pc-script-12);
     color: var(--cs-text-placeholder);
   }
   .image-url-input { flex: 1; }
@@ -536,7 +536,7 @@
     background: var(--cs-surface-gray);
     color: var(--cs-text-mid);
     cursor: pointer;
-    font-size: 12px;
+    font: var(--text-pc-script-12);
     transition: background 0.12s, color 0.12s;
   }
   .remove-btn:hover:not(:disabled) { background: rgba(255,53,53,0.1); color: var(--cs-red-badge); }
@@ -548,7 +548,7 @@
     border-radius: var(--radius-md);
     background: transparent;
     color: var(--cs-purple);
-    font: var(--text-m-script-14);
+    font: var(--text-pc-body-14);
     cursor: pointer;
     min-height: 44px;
     transition: background 0.12s, border-color 0.12s;
@@ -563,16 +563,16 @@
     gap: 6px;
     padding: 16px 20px;
     background: white;
-    border-radius: var(--radius-lg);
+    border-radius: var(--cms-radius-sm);
     border-left: 3px solid var(--cs-purple);
   }
   .info-text {
-    font: var(--text-m-script-14);
+    font: var(--text-pc-body-14);
     color: var(--cs-text-dark);
     margin: 0;
   }
   .info-subtext {
-    font: var(--text-m-script-12);
+    font: var(--text-pc-script-12);
     color: var(--cs-text-light);
     margin: 0;
   }
@@ -581,9 +581,8 @@
     padding: 2px 8px;
     background: var(--cs-dark);
     color: var(--cs-orange);
-    border-radius: var(--radius-xs);
-    font-family: monospace;
-    font-size: 13px;
+    border-radius: var(--radius-sm);
+    font: var(--text-pc-script-12);
     letter-spacing: 0.5px;
   }
 
@@ -603,7 +602,7 @@
     background: var(--cs-surface-gray);
     color: var(--cs-text-dark);
     text-decoration: none;
-    font: var(--text-m-script-14B);
+    font: var(--text-pc-body-14);
     transition: background 0.12s;
   }
   .cancel-btn:hover { background: var(--cs-purple-op10); }
@@ -614,7 +613,7 @@
     border-radius: var(--radius-xl);
     background: var(--cs-purple);
     color: var(--cs-white);
-    font: var(--text-m-script-14B);
+    font: var(--text-pc-body-14);
     cursor: pointer;
     transition: background 0.12s;
   }

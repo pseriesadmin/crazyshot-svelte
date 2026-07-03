@@ -309,7 +309,7 @@
     width: 36px;
     height: 36px;
     background: var(--cs-purple);
-    border-radius: var(--radius-xs);
+    border-radius: var(--radius-sm);
     display: flex;
     align-items: center;
     justify-content: center;
@@ -352,7 +352,7 @@
     padding: 2px 4px;
     min-height: 20px;
     min-width: 20px;
-    border-radius: var(--radius-xs);
+    border-radius: var(--radius-sm);
     line-height: 1;
     transition: color 0.15s;
   }
