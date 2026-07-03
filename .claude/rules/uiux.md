@@ -13,20 +13,26 @@
 | 토큰 | 값 | 용도 |
 |------|-----|------|
 | `--cs-orange` | `#FF4500` | CrazyShot 대표 오렌지, 로고 강조 |
+| `--cs-orange-hover` | `#E03E00` | 오렌지 hover |
 | `--cs-dark` | `#100B32` | 헤더 배경, 총금액 박스, 주요 텍스트 다크 |
-| `--cs-purple` | `#3B2F8A` | CTA 버튼, 선택 상태, 강조 인터랙션 |
+| `--cs-purple` | `#3B2F8A` | CTA 버튼, 선택 상태, 강조 인터랙션 (purple-80%) |
 | `--cs-purple-hover` | `#2E2470` | 버튼 hover |
-| `--cs-purple-light` | `#553FE0` | 파란 멤버십 배지 |
-| `--cs-red-badge` | `#FF3535` | 빨간 딜 배지 |
-| `--cs-lilac` | `#ECEBF4` | 페이지 배경, 수량 박스 배경 |
-| `--cs-lilac-nav` | `rgba(225,222,243,0.7)` | Nav 필 반투명 배경 |
+| `--cs-purple-dark` | `#201857` | 강조 배경, 토스트 배경 (purple-90%) |
+| `--cs-purple-light` | `#553FE0` | 파란 멤버십 배지 (purple-60%) |
+| `--cs-purple-pale` | `#C1BBEC` | 연한 강조, 포인트 텍스트 (purple-20%) |
+| `--cs-purple-op10` | `#E1DEF3` | nav 배경 기본색 (purple-op-10%) |
+| `--cs-red` | `#CF0000` | 에러·경고 (red-100) |
+| `--cs-red-badge` | `#FF3535` | 빨간 딜 배지 (red-80%) |
+| `--cs-red-light` | `#FFB3B3` | 연한 빨강 강조 (red-30%) |
+| `--cs-lilac` | `#ECEBF4` | 페이지 배경, 수량 박스 배경 (purple-5%) |
+| `--cs-lilac-nav` | `rgba(225,222,243,0.4)` | Nav 필 반투명 배경 |
 
 ### 텍스트 컬러
 | 토큰 | 값 | 용도 |
 |------|-----|------|
 | `--cs-text` | `#100B32` | 기본 본문 텍스트 |
 | `--cs-text-dark` | `#444444` | 보조 텍스트 (가격, 레이블) |
-| `--cs-text-mid` | `#777777` | 3차 텍스트 |
+| `--cs-text-mid` | `#666666` | 3차 텍스트 |
 | `--cs-text-light` | `#AAAAAA` | 힌트, 비활성 |
 | `--cs-text-placeholder` | `#b6b6b6` | 폼 플레이스홀더 |
 
@@ -35,7 +41,30 @@
 |------|-----|------|
 | `--cs-white` | `#FFFFFF` | 카드 배경, 하단 바 배경 |
 | `--cs-surface-gray` | `#f6f6f6` | 폼 입력, 라디오 컨테이너, 결제금액 블록 |
-| `--cs-points` | `#c1bbec` | 포인트 텍스트 (다크 박스 위) |
+| `--cs-border` | `#E0E0E6` | 구분선·테두리 |
+| `--cs-points` | `#c1bbec` | 포인트 텍스트 (다크 박스 위) — `--cs-purple-pale`과 동일값 |
+
+### 상태 컬러
+| 토큰 | 값 | 용도 |
+|------|-----|------|
+| `--cs-error` | `#E53935` | 에러 상태 |
+| `--cs-success` | `#388E3C` | 성공 상태 |
+| `--cs-success-light` | `#10B981` | 통계·배지 강조 초록 |
+| `--cs-warning` | `#F59E0B` | 경고·강조 노랑 |
+| `--cs-info` | `#0EA5E9` | 정보·날짜 강조 파랑 |
+| `--cs-text-success` | `#1a7f37` | 성공 알림 텍스트 |
+| `--cs-text-warning` | `#a66000` | 경고 알림 텍스트 |
+| `--cs-bg-error` | `#fff0f0` | 에러 메시지 배경 |
+| `--cs-bg-success` | `#f0fff4` | 성공 알림 배경 |
+| `--cs-bg-warning` | `#fff8e6` | 경고 알림 배경 |
+| `--cs-bg-row-hover` | `#fafafa` | 테이블 행 hover |
+| `--cs-chat-in-bg` | `#FFCFCF` | 채팅 수신 배지 배경 (red-10%) |
+
+### UI 상태 컬러
+| 토큰 | 값 | 용도 |
+|------|-----|------|
+| `--cs-disabled-button` | `#B0ABCC` | 버튼 disabled (purple-pale 파생) |
+| `--cs-disabled-toggle` | `#d0d0d8` | 토글 off 상태 |
 
 ---
 
@@ -56,7 +85,9 @@
 | `--text-pc-ad-kr-60` | 60px Bold | SB AggroOTF | 랜딩 한글 광고 |
 | `--text-pc-ad-en-35` | 35px Regular | Tilt Warp | 영문 광고 서브 |
 | `--text-pc-ad-kr-35` | 35px Bold | SB AggroOTF | 한글 타이틀 대형 |
+| `--text-pc-ad-kr-22` | 22px Medium | SB AggroOTF | **한글 강조 메뉴** (CMS 대메뉴·네비 강조) |
 | `--text-pc-htitle-25` | 25px Bold | Noto Sans KR | 페이지 헤더 타이틀 |
+| `--text-pc-hsub-22` | 22px Bold | Noto Sans KR | 헤더 서브타이틀 |
 | `--text-pc-menu-en-20` | 20px Regular | Tilt Warp | 영문 메뉴·섹션 레이블 |
 | `--text-pc-menu-kr-20` | 20px Medium | SB AggroOTF | 한글 메뉴 |
 | `--text-pc-title-18` | 18px Bold | Noto Sans KR | 섹션 타이틀 |
@@ -68,11 +99,14 @@
 | 토큰 | 크기/굵기 | 용도 |
 |------|----------|------|
 | `--text-m-ad-kr-40` | 40px Bold SB Aggro | 모바일 랜딩 |
+| `--text-m-ad-en-30` | 30px Regular Tilt Warp | 모바일 영문 광고 서브 |
 | `--text-m-ad-kr-30` | 30px Bold SB Aggro | 모바일 섹션 헤드 |
 | `--text-m-menu-en-24` | 24px Tilt Warp | 모바일 영문 메뉴 |
-| `--text-m-htitle-24B` | 24px Black Noto | 모바일 주요 제목 |
+| `--text-m-htitle-24B` | 24px Black(900) Noto | 모바일 주요 제목 |
+| `--text-m-htitle-24L` | 24px Medium(500) Noto | 모바일 주요 제목 Light |
 | `--text-m-title-21` | 21px Bold Noto | 카드 제목 |
 | `--text-m-title-18B` | 18px Bold Noto | 소섹션 타이틀 |
+| `--text-m-title-18L` | 18px Medium Noto | 소섹션 타이틀 Light |
 | `--text-m-body-16B` | 16px Bold Noto | 본문 강조 |
 | `--text-m-body-16L` | 16px Medium Noto | 기본 본문 |
 | `--text-m-script-14B` | 14px Bold Noto | 레이블 강조 |

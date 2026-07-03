@@ -1,5 +1,14 @@
 <script lang="ts">
   import { goto } from '$app/navigation'
+  import MobileMoreMenu from '$lib/components/common/MobileMoreMenu.svelte'
+  import type { PageData } from './$types'
+
+  interface Props { data: PageData }
+  let { data }: Props = $props()
+
+  // DB 배너 (마이그레이션 #45 적용 후 활성화)
+  const heroPC     = $derived(data.bannerMap?.['hero_pc']     ?? [])
+  const heroMobile = $derived(data.bannerMap?.['hero_mobile'] ?? [])
   // ── 로컬 컬러 (app.css 토큰에 없는 값) ──────────────────────────
   const navy     = '#100b32'
   const navyDeep = '#201857'
@@ -121,6 +130,7 @@
   let mpickIdx = $state(0)
   let mActiveTab = $state('Home')
   let poppingTab = $state<string | null>(null)
+  let moreMenuOpen = $state(false)
   function triggerPop(id: string) {
     poppingTab = id
     setTimeout(() => { poppingTab = null }, 700)
@@ -159,8 +169,20 @@
 
   <!-- ① Hero -->
   <div class="d-hero">
-    <img src="/home/desktop/1fbafe64eb226e679021660588c1e5d840401f59.png" alt="" class="d-hero-left" aria-hidden="true"/>
-    <img src="/home/desktop/1bbde5f74b1d99829b62da01db4cd68c18c25510.png" alt="" class="d-hero-right" aria-hidden="true"/>
+    {#if heroPC.length > 0}
+      {#each heroPC as b (b.id)}
+        {#if b.link_url}
+          <a href={b.link_url} class="d-hero-banner-link">
+            <img src={b.image_url} alt={b.title ?? ''} class="d-hero-banner-img" />
+          </a>
+        {:else}
+          <img src={b.image_url} alt={b.title ?? ''} class="d-hero-banner-img" />
+        {/if}
+      {/each}
+    {:else}
+      <img src="/home/desktop/1fbafe64eb226e679021660588c1e5d840401f59.png" alt="" class="d-hero-left" aria-hidden="true"/>
+      <img src="/home/desktop/1bbde5f74b1d99829b62da01db4cd68c18c25510.png" alt="" class="d-hero-right" aria-hidden="true"/>
+    {/if}
     <div class="d-hero-copy">
       <div class="d-hero-line1">
         <span class="d-hero-saengae">생애</span>
@@ -390,7 +412,19 @@
     <div class="m-hero-watermark" aria-hidden="true">
       Get Your CRAZYSHOT!<br/>Get Your CRAZYSHOT!<br/>Get Your CRAZYSHOT!
     </div>
-    <img src="/home/mobile/ac4438597a6842bccc5d44da173a03a9f3614d50.png" alt="" class="m-hero-bg" aria-hidden="true"/>
+    {#if heroMobile.length > 0}
+      {#each heroMobile as b (b.id)}
+        {#if b.link_url}
+          <a href={b.link_url} class="m-hero-banner-link">
+            <img src={b.image_url} alt={b.title ?? ''} class="m-hero-bg" />
+          </a>
+        {:else}
+          <img src={b.image_url} alt={b.title ?? ''} class="m-hero-bg" />
+        {/if}
+      {/each}
+    {:else}
+      <img src="/home/mobile/ac4438597a6842bccc5d44da173a03a9f3614d50.png" alt="" class="m-hero-bg" aria-hidden="true"/>
+    {/if}
     <div class="m-hero-stripes" aria-hidden="true">
       {#each Array(10) as _, i}
         <div style="height:9px;background:{i%2===0 ? 'rgba(0,115,170,0.5)' : 'rgba(255,158,116,0.5)'}"></div>
@@ -582,7 +616,7 @@
         class="m-tab-item"
         class:tab-active={mActiveTab === tab.id}
         class:tab-popping={poppingTab === tab.id}
-        onclick={() => { mActiveTab = tab.id; triggerPop(tab.id); if (tab.id === 'All') goto('/products') }}
+        onclick={() => { mActiveTab = tab.id; triggerPop(tab.id); if (tab.id === 'All') goto('/products'); if (tab.id === 'More') moreMenuOpen = true }}
       >
         {#if tab.id === 'More'}
           <svg xmlns="http://www.w3.org/2000/svg" width="20" height="17" viewBox="0 0 20 17" fill="none" aria-hidden="true">
@@ -615,6 +649,7 @@
     {/each}
   </div>
 
+  <MobileMoreMenu open={moreMenuOpen} onclose={() => { moreMenuOpen = false; mActiveTab = 'Home' }} />
 </div><!-- /mobile-wrap -->
 
 <style>
@@ -671,6 +706,24 @@
     justify-content: center;
     height: 936px;
     background: linear-gradient(252deg, rgb(229,193,109) 2%, rgb(164,233,225) 98%);
+  }
+  /* DB 배너 오버레이 (마이그레이션 #45 이후) */
+  .d-hero-banner-link {
+    position: absolute;
+    inset: 0;
+    display: block;
+  }
+  .d-hero-banner-img {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+  }
+  .m-hero-banner-link {
+    position: absolute;
+    inset: 0;
+    display: block;
   }
   .d-hero-left {
     position: absolute;
