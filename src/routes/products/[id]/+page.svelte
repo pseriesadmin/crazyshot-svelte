@@ -1,9 +1,10 @@
 <script lang="ts">
   import { goto } from '$app/navigation';
   import { supabase } from '$lib/services/supabase';
+  import { trackProductView, trackCartAdd } from '$lib/analytics/behaviorTracker';
   import ProductHero from '$lib/components/products/ProductHero.svelte';
   import CalendarTimePicker from '$lib/components/products/CalendarTimePicker.svelte';
-  import type { Tables } from '$lib/types/database';
+  import type { Tables, ProductOptionLinkRow } from '$lib/types/database';
   import FloatingBar from '$lib/components/common/FloatingBar.svelte';
 
   /** 실서비스 DB products 행 (가격·status 등 런타임 컬럼 포함) */
@@ -19,19 +20,30 @@
     data: {
       product: ProductRow;
       productId: string;
+      optionLinks: ProductOptionLinkRow[];
     };
   }
   let { data }: Props = $props();
 
   const product = $derived(data.product);
 
+  $effect(() => {
+    trackProductView(data.productId, product?.name);
+  });
+
   // ── Product info state
   let qty = $state(1);
-  let optionItems = $state([
-    { label: '[옵션] 대포렌즈 100mm F2.8 L IS USM', price: 150000, qty: 0 },
-    { label: '[옵션] 대포렌즈 100mm F2.8 L IS USM', price: 150000, qty: 0 },
-    { label: '[옵션] 대포렌즈 100mm F2.8 L IS USM', price: 150000, qty: 0 },
-  ]);
+  let optionItems = $state(
+    data.optionLinks.map((link) => ({
+      id: link.option_product_id,
+      label: link.option_product_name,
+      price: link.price_24h ?? 0,
+      qty: 0,
+      is_required: link.is_required,
+      delivery_rental_disabled: link.delivery_rental_disabled,
+      image_url: link.image_url,
+    }))
+  );
   let optionsOpen = $state(true);
 
   // ── Toast
@@ -109,6 +121,7 @@
 
   function handleReserve(e: { startDate: string; endDate: string; startHour: number; endHour: number }) {
     if (!product) return;
+    trackCartAdd(data.productId);
     sessionStorage.setItem('pendingReservation', JSON.stringify({
       productId: product.id,
       productName: product.name,
@@ -258,7 +271,17 @@
         <div class="options-list">
           {#each optionItems as opt}
             <div class="option-item">
-              <p class="option-label">{opt.label}</p>
+              <div class="option-label-row">
+                <p class="option-label">{opt.label}</p>
+                <div class="option-badges">
+                  {#if opt.is_required}
+                    <span class="opt-badge opt-badge--required">필수</span>
+                  {/if}
+                  {#if opt.delivery_rental_disabled}
+                    <span class="opt-badge opt-badge--no-delivery">배송대여 불가</span>
+                  {/if}
+                </div>
+              </div>
               <div class="option-bottom-row">
                 <div class="option-price-wrap">
                   <span class="option-price-num">{fmt(opt.price)}</span>
@@ -733,6 +756,35 @@
     display: flex;
     flex-direction: column;
     gap: 20px;
+  }
+  .option-label-row {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    margin-bottom: 0;
+  }
+  .option-badges {
+    display: flex;
+    gap: 4px;
+    flex-wrap: wrap;
+  }
+  .opt-badge {
+    display: inline-flex;
+    align-items: center;
+    padding: 2px 8px;
+    border-radius: var(--radius-full);
+    font-size: 11px;
+    font-weight: 600;
+    line-height: 1.6;
+    white-space: nowrap;
+  }
+  .opt-badge--required {
+    background: rgba(59,47,138,0.10);
+    color: var(--cs-purple);
+  }
+  .opt-badge--no-delivery {
+    background: var(--cs-surface-gray);
+    color: var(--cs-text-mid);
   }
   .option-label {
     font: var(--text-m-script-14B);

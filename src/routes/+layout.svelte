@@ -1,9 +1,11 @@
 <script lang="ts">
 	import '../app.css';
 	import { onMount } from 'svelte';
+	import { afterNavigate } from '$app/navigation';
 	import { locale } from 'svelte-i18n';
 	import { page } from '$app/state';
 	import { initializeAuth, subscribeToAuthChanges, authState } from '$lib/stores/auth';
+	import { trackPageView } from '$lib/analytics/behaviorTracker';
 	import FloatingBar from '$lib/components/common/FloatingBar.svelte';
 	import GNB from '$lib/components/common/GNB.svelte';
 
@@ -21,6 +23,12 @@
 		$authState.user?.email?.split('@')[0] ??
 		'test'
 	)
+
+	afterNavigate(() => {
+		if (!page.url.pathname.startsWith('/cms')) {
+			trackPageView();
+		}
+	});
 
 	onMount(() => {
 		locale.set(currentLocale);

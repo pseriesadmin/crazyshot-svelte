@@ -244,6 +244,8 @@ border: 1px solid rgba(255,255,255,0.6);
 | `--radius-xl` | 30px | CTA 버튼, 총금액 다크 박스 |
 | `--radius-2xl` | 50px | **흰 카드** (Order Items, Rental Options, Order Total) |
 | `--radius-full` | 9999px | 배지 아이콘, 태그 |
+| `--radius-icon-box` | 25px | 결제 결과 아이콘 박스 (Figma exact) |
+| `--radius-asym-card` | 10px 50px 10px 50px | 결제 결과 카드 비대칭 반경 (Figma exact) |
 
 ---
 
