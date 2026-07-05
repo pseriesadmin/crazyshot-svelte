@@ -120,7 +120,7 @@ export function getValidNextStates(status: ReservationStatus): ReservationStatus
  * Validates reservation request input
  */
 export interface ReservationInput {
-	productId: number;
+	productId: string;
 	startDate: string;
 	endDate: string;
 }
@@ -130,14 +130,16 @@ export interface ValidationError {
 	message: string;
 }
 
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 export function validateReservationInput(input: ReservationInput): ValidationError[] {
 	const errors: ValidationError[] = [];
 
-	// Validate product ID
-	if (!input.productId || input.productId <= 0) {
+	// Validate product ID (UUID format)
+	if (!input.productId || !UUID_RE.test(input.productId)) {
 		errors.push({
 			field: 'productId',
-			message: 'Product ID must be a positive number'
+			message: 'Product ID must be a valid UUID'
 		});
 	}
 

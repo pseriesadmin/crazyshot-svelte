@@ -28,6 +28,50 @@ auth_baseline: fed4fdb — createBrowserClient 패턴 (절대 싱글톤 createCl
 
 ---
 
+## NOW — M1 products UUID 마이그레이션 + 옵션상품 DB 연동 (2026-07-05)
+
+[CONTEXT BRIDGE — products UUID migration]
+plan_source: 세션 내 설계 (Option B 근본 해결)
+핵심제약:
+  - stage(ezyvffjvuwmtuhpxdjrw) 검증 완료 → production(vnbpmvxruyciuuaermyh) 적용 대기
+  - 기존 마이그레이션 파일 수정 금지 (신규 61/62 파일로 해결)
+  - 20260703000049_49_product_option_links.sql → 구파일, 대체 완료 (사용 금지)
+절대금지:
+  - 기존 마이그레이션 파일 수정
+  - production DB에 미검증 마이그레이션 직접 적용
+
+- [ ] T-61a: Migration 61 stage 적용 | CRITICAL | ✅ 완료 (2026-07-05)
+  - products.id bigint→UUID (8행 보존)
+  - products 누락 컬럼 추가 (slug/brand/is_active/image_urls/specifications/stock_quantity/deleted_at)
+  - price_rules 테이블 생성 + RLS + 트리거
+  - assets/order_items/rental_reservations product_id bigint→UUID
+  - RPC 함수 업데이트: atomic_reserve_asset, batch_atomic_reserve (bigint→UUID)
+  - ✅ stage 검증: products.id=uuid, price_rules=exists, product_option_links=exists, 8행 보존
+
+- [ ] T-62a: Migration 62 stage 적용 | CRITICAL | ✅ 완료 (2026-07-05)
+  - product_option_links 테이블 + RLS + 트리거
+  - upsert_product_option_links / get_product_option_links RPC
+
+- [x] T-61b: Migration 61 production 적용 | CRITICAL | ✅ 완료 (2026-07-05)
+  - products.id bigint→UUID (8행 보존, assets 9행 매핑 포함)
+  - price_rules 테이블 + RLS + 트리거
+  - assets/order_items/rental_reservations product_id bigint→UUID
+  - RPC 업데이트: atomic_reserve_asset, batch_atomic_reserve
+- [x] T-62b: Migration 62 production 적용 | CRITICAL | ✅ 완료 (2026-07-05)
+  - product_option_links 테이블 + RLS + 트리거
+  - upsert_product_option_links / get_product_option_links RPC
+- [x] T-63: Migration 63 stage+production 적용 | CRITICAL | ✅ 완료 (2026-07-06)
+  - product_option_links.min_select_required BOOLEAN 컬럼 추가
+  - upsert_product_option_links RPC 업데이트 (min_select_required 포함)
+  - get_product_option_links RPC 업데이트 (min_select_required 반환)
+  - ProductOptionLinkRow 타입 업데이트 (database.ts)
+  - edit/+page.svelte linkToSelected: link.min_select_required 실제값 사용
+- [x] T-UI: CMS 옵션상품 UI 검증 | BOUNDARY | ✅ 완료 (2026-07-06)
+  - /cms/products/new 렌더링 정상
+  - 검색 모달: Canon 검색 → Canon EOS R5 결과 + 상세정보 더보기 링크 확인
+  - 추가 후 선택 카드: 썸네일+상품명+가격+재고 정상
+  - 일괄적용 + 개별 체크박스 3종 (필수선택/최소1개선택필수/배송대여불가) 정상
+
 ## NOW — CMS 프로모션 Phase 3 (2026-07-04)
 
 [CONTEXT BRIDGE — Phase 3]

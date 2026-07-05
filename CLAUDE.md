@@ -33,8 +33,7 @@
 ```
 ✅ S0: 환경 설정 완료 (Supabase 스키마 30+ 테이블, RLS, 9 RPC)
 ✅ S1-M1: Products 모듈 완료
-🔄 S1-M2: Reservation Flow (TDD RED/GREEN 완료, REFACTOR 진행중)
-   ⚠️ BLOCKED: Supabase Realtime SSR WebSocket 이슈
+✅ S1-M2: Reservation Flow (TDD RED/GREEN/REFACTOR 완료)
 ⏳ S1-M3: Payment Integration (TDD) — 다음 사이클
 ⏳ S1-M4: Subscriptions (GSD)
 ⏳ S1-M5: Shipments (GSD)

@@ -159,7 +159,7 @@ describe('Reservation State Machine', () => {
 describe('Reservation Input Validation', () => {
 	it('should validate correct reservation input', () => {
 		const errors = validateReservationInput({
-			productId: 1,
+			productId: '00000000-0000-0000-0000-000000000001',
 			startDate: '2026-06-10',
 			endDate: '2026-06-17'
 		});
@@ -171,7 +171,7 @@ describe('Reservation Input Validation', () => {
 
 	it('should reject invalid product ID', () => {
 		const errors = validateReservationInput({
-			productId: 0,
+			productId: '',
 			startDate: '2026-06-10',
 			endDate: '2026-06-17'
 		});
@@ -181,7 +181,7 @@ describe('Reservation Input Validation', () => {
 
 	it('should reject invalid date formats', () => {
 		const errors = validateReservationInput({
-			productId: 1,
+			productId: '00000000-0000-0000-0000-000000000001',
 			startDate: 'invalid',
 			endDate: '06/10/2026'
 		});
@@ -193,7 +193,7 @@ describe('Reservation Input Validation', () => {
 
 	it('should reject reversed date range', () => {
 		const errors = validateReservationInput({
-			productId: 1,
+			productId: '00000000-0000-0000-0000-000000000001',
 			startDate: '2026-06-17',
 			endDate: '2026-06-10'
 		});
@@ -211,7 +211,7 @@ describe('Reservation Input Validation', () => {
 		const futureDateStr = futureDate.toISOString().split('T')[0];
 
 		const errors = validateReservationInput({
-			productId: 1,
+			productId: '00000000-0000-0000-0000-000000000001',
 			startDate: pastDateStr,
 			endDate: futureDateStr
 		});

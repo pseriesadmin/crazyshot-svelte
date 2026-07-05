@@ -160,6 +160,36 @@ export type ProductOptionInsert = Omit<ProductOption, 'id' | 'created_at' | 'upd
 export type ProductOptionUpdate = Partial<ProductOptionInsert>;
 
 // ───────────────────────────────────────────────────────────
+// 상품 간 옵션 연결 (product_option_links)
+export interface ProductOptionLink {
+  id: string;
+  product_id: string;
+  option_product_id: string;
+  is_required: boolean;
+  delivery_rental_disabled: boolean;
+  display_order: number;
+  created_at: string;
+  updated_at: string;
+  deleted_at: string | null;
+}
+
+// get_product_option_links RPC 반환 행
+export interface ProductOptionLinkRow {
+  link_id: string;
+  option_product_id: string;
+  option_product_name: string;
+  price_24h: number | null;
+  stock_quantity: number;
+  is_required: boolean;
+  min_select_required: boolean;
+  delivery_rental_disabled: boolean;
+  display_order: number;
+  image_url: string | null;
+}
+
+export type ProductOptionLinkInsert = Omit<ProductOptionLink, 'id' | 'created_at' | 'updated_at'>;
+
+// ───────────────────────────────────────────────────────────
 export interface PickupPoint {
   id: string;                          // UUID PK
   name: string;
