@@ -136,7 +136,7 @@
     setTimeout(() => { poppingTab = null }, 700)
   }
 
-  let sliderEl: { scrollBy: (opts: { left: number; behavior: string }) => void } | undefined
+  let sliderEl: { scrollBy: (opts: { left: number; behavior: 'smooth' | 'instant' | 'auto' }) => void } | undefined
   function scrollSlider(dir: 'left' | 'right') {
     sliderEl?.scrollBy({ left: dir === 'right' ? 330 : -330, behavior: 'smooth' })
   }

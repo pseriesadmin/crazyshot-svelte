@@ -119,6 +119,31 @@
 
   function cancelAdd() { addingParentId = null }
 
+  // ── 이관 모달 상태 (superadmin 전용) ──────────────────────────────
+  let showTransfer  = $state(false)
+  let transferSrcId = $state('')
+  let transferSrcCode = $state('')
+  let transferSrcName = $state('')
+  let transferSrcProdCount = $state(0)
+  let transferDstId = $state('')
+
+  function openTransfer(node: TreeNode) {
+    const cat = node.product_category ?? node.code.toLowerCase()
+    transferSrcId       = node.id
+    transferSrcCode     = node.code
+    transferSrcName     = node.name
+    transferSrcProdCount = data.productCountMap[cat] ?? 0
+    transferDstId       = ''
+    showTransfer        = true
+  }
+
+  function closeTransfer() { showTransfer = false }
+
+  // 이관 대상 후보: depth=0 + 소스와 다른 코드
+  let transferTargetOptions = $derived(
+    data.codes.filter(c => c.depth === 0 && c.id !== transferSrcId && c.is_active && !c.deleted_at)
+  )
+
   // 상품 카테고리 정의
   const PRODUCT_CATS = [
     { value: 'camera',     label: '카메라' },
@@ -167,16 +192,22 @@
     if (f.error) { csToast.error(f.error); return }
     if (!f.success) return
     const msgs: Record<string, string> = {
-      addCode:     '분류코드가 추가되었습니다.',
-      editCode:    '수정되었습니다.',
-      deleteCode:  '삭제되었습니다.',
-      toggleActive:'활성 상태가 변경되었습니다.',
-      saveFormat:  '예약코드 형식이 저장되었습니다.',
-      saveMapping: '매핑이 저장되었습니다.',
+      addCode:      '분류코드가 추가되었습니다.',
+      editCode:     '수정되었습니다.',
+      deleteCode:   '삭제되었습니다.',
+      toggleActive: '활성 상태가 변경되었습니다.',
+      saveFormat:   '예약코드 형식이 저장되었습니다.',
+      saveMapping:  '매핑이 저장되었습니다.',
+    }
+    if (f.action === 'transferCode') {
+      const tf = form as { transferred?: number }
+      csToast.success(`이관 완료 — 상품 ${tf.transferred ?? 0}개 품번 재발행됨. 물리 태그·라벨을 파기하세요.`)
+      closeTransfer()
+      return
     }
     csToast.success(msgs[f.action ?? ''] ?? '저장되었습니다.')
-    if (f.action === 'addCode')  cancelAdd()
-    if (f.action === 'editCode') cancelEdit()
+    if (f.action === 'addCode')    cancelAdd()
+    if (f.action === 'editCode')   cancelEdit()
     if (f.action === 'saveFormat') fmtDirty = false
   })
 </script>
@@ -443,6 +474,16 @@
                           <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
                           하위
                         </button>
+                        {#if data.userRole === 'superadmin' && node.depth === 0}
+                          <button
+                            class="act-btn act-transfer"
+                            title="상품 이관"
+                            onclick={() => openTransfer(node)}
+                          >
+                            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 1l4 4-4 4"/><path d="M3 11V9a4 4 0 014-4h14"/><path d="M7 23l-4-4 4-4"/><path d="M21 13v2a4 4 0 01-4 4H3"/></svg>
+                            이관
+                          </button>
+                        {/if}
                         <button class="act-btn act-edit" title="편집" onclick={() => startEdit(node)}>
                           <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
                         </button>
@@ -737,6 +778,65 @@
   {/if}
 
 </div>
+
+<!-- ══ 이관 모달 (superadmin 전용) ════════════════════════════════════ -->
+{#if showTransfer}
+  <div class="transfer-backdrop" role="presentation" onclick={closeTransfer}>
+    <div class="transfer-dialog" role="dialog" aria-modal="true" aria-label="상품 이관"
+         onclick={(e) => e.stopPropagation()}>
+
+      <div class="td-header">
+        <h2 class="td-title">상품 이관</h2>
+        <button class="td-close-btn" onclick={closeTransfer} aria-label="닫기">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+        </button>
+      </div>
+
+      <div class="td-warn">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--cs-warning)" stroke-width="2" style="flex-shrink:0;margin-top:1px"><path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+        <p class="td-warn-txt">
+          이관 후 <strong>물리 태그·라벨에 인쇄된 기존 품번을 파기</strong>해야 합니다.<br>
+          프로모션·쿠폰에 연동된 기존 품번은 사용 불가 처리됩니다.<br>
+          이관된 상품 품번은 타겟 코드 규칙으로 <strong>새로 발행</strong>됩니다.
+        </p>
+      </div>
+
+      <div class="td-src">
+        <span class="td-src-label">이관 소스</span>
+        <span class="td-src-code">{transferSrcCode} ({transferSrcName})</span>
+        <span class="td-src-count">— 상품 {transferSrcProdCount}개</span>
+      </div>
+
+      <div class="td-field">
+        <label for="transfer-target">이관 대상 코드 선택 *</label>
+        <select id="transfer-target" class="td-select" bind:value={transferDstId}>
+          <option value="">— 대상 코드를 선택하세요 —</option>
+          {#each transferTargetOptions as t}
+            <option value={t.id}>{t.code} ({t.name})</option>
+          {/each}
+        </select>
+      </div>
+
+      <div class="td-actions">
+        <button class="td-btn-cancel" onclick={closeTransfer}>취소</button>
+        <form method="POST" action="?/transferCode" use:enhance>
+          <input type="hidden" name="source_id" value={transferSrcId} />
+          <input type="hidden" name="target_id"  value={transferDstId} />
+          <button
+            type="submit"
+            class="td-btn-confirm"
+            disabled={!transferDstId}
+            onclick={(e) => {
+              if (!confirm(`'${transferSrcCode}' 코드에 연결된 상품 ${transferSrcProdCount}개를 이관합니다.\n기존 품번이 모두 새로 발행되며 물리 태그를 파기해야 합니다.\n\n계속하시겠습니까?`)) {
+                e.preventDefault()
+              }
+            }}
+          >이관 실행</button>
+        </form>
+      </div>
+    </div>
+  </div>
+{/if}
 
 <style>
 /* ── 레이아웃 ── */
@@ -1178,4 +1278,79 @@ select.edit-in {
   font: var(--text-pc-script-12); color: var(--cs-text-light);
   border-top: 1px solid rgba(59,47,138,0.06);
 }
+
+/* ── 이관 버튼 ── */
+.act-transfer {
+  display: flex; align-items: center; gap: 4px;
+  padding: 4px 8px; height: 28px;
+  border: 1.5px solid var(--cs-warning);
+  border-radius: var(--radius-sm);
+  background: transparent; color: var(--cs-warning);
+  font: var(--text-pc-script-12); cursor: pointer;
+  transition: background 0.12s;
+  white-space: nowrap;
+}
+.act-transfer:hover { background: rgba(245,158,11,0.10); }
+
+/* ── 이관 모달 ── */
+.transfer-backdrop {
+  position: fixed; inset: 0; z-index: 300;
+  background: rgba(16,11,50,0.52);
+  display: flex; align-items: center; justify-content: center;
+}
+.transfer-dialog {
+  background: var(--cs-white);
+  border-radius: var(--cms-radius-lg);
+  padding: 28px 32px;
+  width: 480px; max-width: calc(100vw - 48px);
+  display: flex; flex-direction: column; gap: 18px;
+}
+.td-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+.td-title { font: var(--text-pc-title-18); color: var(--cs-text); margin: 0; }
+.td-close-btn {
+  border: none; background: transparent; cursor: pointer;
+  color: var(--cs-text-light); padding: 2px; flex-shrink: 0;
+  transition: color 0.12s;
+}
+.td-close-btn:hover { color: var(--cs-text); }
+.td-warn {
+  display: flex; gap: 10px; padding: 12px 14px;
+  background: rgba(245,158,11,0.08); border-radius: var(--cms-radius-sm);
+  border-left: 3px solid var(--cs-warning);
+}
+.td-warn-txt { font: var(--text-pc-script-12); color: var(--cs-text-dark); line-height: 1.55; }
+.td-warn-txt strong { color: var(--cs-text); font-weight: 700; }
+.td-src {
+  display: flex; align-items: center; gap: 10px; padding: 10px 14px;
+  background: var(--cs-lilac); border-radius: var(--cms-radius-sm);
+}
+.td-src-label { font: var(--text-pc-descript-10); font-weight: 700; text-transform: uppercase; color: var(--cs-text-mid); letter-spacing: 0.08em; }
+.td-src-code  { font: var(--text-pc-body-14); font-weight: 700; color: var(--cs-text); }
+.td-src-count { font: var(--text-pc-script-12); color: var(--cs-text-mid); }
+.td-field label { font: var(--text-pc-script-12); color: var(--cs-text-mid); display: block; margin-bottom: 6px; }
+.td-select {
+  width: 100%; height: 40px; padding: 0 32px 0 12px;
+  border: 1.5px solid rgba(59,47,138,0.15); border-radius: var(--cms-radius-sm);
+  background: var(--cs-surface-gray); font: var(--text-pc-body-14); color: var(--cs-text);
+  cursor: pointer;
+  -webkit-appearance: none; -moz-appearance: none; appearance: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%23888' stroke-width='2.5'%3E%3Cpolyline points='6,9 12,15 18,9'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 10px center;
+}
+.td-select:focus { outline: 2px solid var(--cs-purple); outline-offset: -2px; border-color: transparent; }
+.td-actions { display: flex; gap: 10px; justify-content: flex-end; }
+.td-btn-cancel {
+  height: 40px; padding: 0 20px; border: 1.5px solid var(--cs-border);
+  border-radius: var(--radius-sm); background: transparent; color: var(--cs-text-mid);
+  font: var(--text-pc-body-14); cursor: pointer; transition: background 0.12s;
+}
+.td-btn-cancel:hover { background: var(--cs-surface-gray); }
+.td-btn-confirm {
+  height: 40px; padding: 0 20px; border: none;
+  border-radius: var(--radius-sm); background: var(--cs-warning); color: var(--cs-white);
+  font: var(--text-pc-body-14); cursor: pointer; transition: background 0.12s;
+}
+.td-btn-confirm:hover  { background: #d97706; }
+.td-btn-confirm:disabled { background: var(--cs-disabled-button); cursor: not-allowed; }
 </style>
