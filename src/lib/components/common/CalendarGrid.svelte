@@ -14,6 +14,14 @@
   let viewYear = $state(value ? parseInt(value.slice(0,4)) : today.getFullYear())
   let viewMonth = $state(value ? parseInt(value.slice(5,7)) - 1 : today.getMonth())
 
+  // value prop 외부 변경 시 캘린더 표시 월/연도 동기화
+  $effect(() => {
+    if (value) {
+      viewYear = parseInt(value.slice(0, 4))
+      viewMonth = parseInt(value.slice(5, 7)) - 1
+    }
+  })
+
   function calDays(year: number, month: number): (number | null)[] {
     const firstDay = new Date(year, month, 1).getDay()
     const daysInMonth = new Date(year, month + 1, 0).getDate()
