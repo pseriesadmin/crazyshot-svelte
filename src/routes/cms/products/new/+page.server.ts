@@ -90,6 +90,17 @@ export const actions: Actions = {
       await admin.from('price_rules').insert(priceRules)
     }
 
+    // 옵션상품 연결 저장
+    const optionLinksRaw = (form.get('option_links') as string | null) ?? '[]'
+    let optionLinks: unknown[] = []
+    try { optionLinks = JSON.parse(optionLinksRaw) } catch { /* ignore */ }
+    if (Array.isArray(optionLinks) && optionLinks.length > 0) {
+      await admin.rpc('upsert_product_option_links', {
+        p_product_id: product.id,
+        p_option_links: JSON.stringify(optionLinks),
+      })
+    }
+
     throw redirect(303, '/cms/products')
   },
 }

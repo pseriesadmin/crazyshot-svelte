@@ -33,8 +33,7 @@
 ```
 ✅ S0: 환경 설정 완료 (Supabase 스키마 30+ 테이블, RLS, 9 RPC)
 ✅ S1-M1: Products 모듈 완료
-🔄 S1-M2: Reservation Flow (TDD RED/GREEN 완료, REFACTOR 진행중)
-   ⚠️ BLOCKED: Supabase Realtime SSR WebSocket 이슈
+✅ S1-M2: Reservation Flow (TDD RED/GREEN/REFACTOR 완료)
 ⏳ S1-M3: Payment Integration (TDD) — 다음 사이클
 ⏳ S1-M4: Subscriptions (GSD)
 ⏳ S1-M5: Shipments (GSD)
@@ -137,6 +136,7 @@ Class D (보안 위반) → 즉시 중단
 .claude/rules/payment.md           ← M3 결제·웹훅·PG 도메인
 .claude/rules/ui-mobile.md         ← SvelteKit 5 UI + 모바일 UX + 터치 타겟
 .claude/rules/uiux.md              ← 디자인 시스템 정본 (토큰·컴포넌트 패턴)
+.claude/rules/cms-design.md        ← CMS 전용 디자인 시스템 (레이아웃·컴포넌트·GATE C)
 .claude/rules/security-auth.md     ← 인증·RLS·보안
 .claude/rules/figma-publishing.md  ← Figma AI 퍼블리싱 스킬 (디자인→코드 변환)
 ```

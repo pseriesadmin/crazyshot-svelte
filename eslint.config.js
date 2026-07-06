@@ -107,6 +107,8 @@ export default [
         HTMLInputElement: 'readonly',
         HTMLButtonElement: 'readonly',
         HTMLElement: 'readonly',
+        KeyboardEvent: 'readonly',
+        URL: 'readonly',
       },
     },
     plugins: {

@@ -1,5 +1,6 @@
 <script lang="ts">
   import { enhance } from '$app/forms'
+  import { supabase } from '$lib/services/supabase'
   import { csToast } from '$lib/utils/toast'
   import type { ActionData } from './$types'
 
@@ -24,6 +25,114 @@
     camera: 'CAM', lens: 'LNS', camcorder: 'CMC', action_cam: 'ACT',
     drone: 'DRN', lighting: 'LGT', audio: 'AUD', accessory: 'ACC', package: 'PKG',
   }
+
+  // ─── 옵션상품 ───────────────────────────────────────────────
+  interface OptionSearchResult {
+    id: string
+    name: string
+    price_24h: number
+    stock_quantity: number
+    image_url: string | null
+  }
+  interface SelectedOption {
+    option_product_id: string
+    name: string
+    price_24h: number
+    stock_quantity: number
+    image_url: string | null
+    is_required: boolean
+    min_select_required: boolean
+    delivery_rental_disabled: boolean
+  }
+
+  let optionKeyword = $state('')
+  let showOptionModal = $state(false)
+  let optionResults = $state<OptionSearchResult[]>([])
+  let optionSearching = $state(false)
+  let selectedOptions = $state<SelectedOption[]>([])
+  let bulkRequired = $state(false)
+  let bulkMinSelectRequired = $state(false)
+  let bulkDeliveryDisabled = $state(false)
+
+  interface ProductSearchRow {
+    id: string
+    name: string
+    stock_quantity: number
+    image_urls: string[]
+    price_rules: { price: number; duration_type: string }[]
+  }
+
+  async function searchOptionProducts() {
+    const kw = optionKeyword.trim()
+    if (!kw) return
+    optionSearching = true
+    showOptionModal = true
+    const { data, error: err } = await supabase
+      .from('products')
+      .select<string, ProductSearchRow>('id, name, stock_quantity, image_urls, price_rules(price, duration_type)')
+      .ilike('name', `%${kw}%`)
+      .eq('is_active', true)
+      .is('deleted_at', null)
+      .limit(20)
+    optionSearching = false
+    if (err) { csToast.error('상품 검색 중 오류가 발생했습니다.'); return }
+    optionResults = (data ?? []).map((p) => ({
+      id: p.id,
+      name: p.name,
+      stock_quantity: p.stock_quantity ?? 0,
+      image_url: p.image_urls[0] ?? null,
+      price_24h: p.price_rules.find((r) => r.duration_type === '24h')?.price ?? 0,
+    }))
+  }
+
+  function addOptionProduct(item: OptionSearchResult) {
+    if (selectedOptions.some((o) => o.option_product_id === item.id)) {
+      csToast.info('이미 추가된 상품입니다.')
+      return
+    }
+    selectedOptions = [
+      ...selectedOptions,
+      {
+        option_product_id: item.id,
+        name: item.name,
+        price_24h: item.price_24h,
+        stock_quantity: item.stock_quantity,
+        image_url: item.image_url,
+        is_required: false,
+        min_select_required: false,
+        delivery_rental_disabled: false,
+      },
+    ]
+    showOptionModal = false
+    optionKeyword = ''
+    optionResults = []
+  }
+
+  function removeOption(id: string) {
+    selectedOptions = selectedOptions.filter((o) => o.option_product_id !== id)
+  }
+
+  function applyBulk() {
+    selectedOptions = selectedOptions.map((o) => ({
+      ...o,
+      is_required: bulkRequired,
+      min_select_required: bulkMinSelectRequired,
+      delivery_rental_disabled: bulkDeliveryDisabled,
+    }))
+  }
+
+  function serializeOptionLinks(): string {
+    return JSON.stringify(
+      selectedOptions.map((o, i) => ({
+        option_product_id: o.option_product_id,
+        is_required: o.is_required,
+        min_select_required: o.min_select_required,
+        delivery_rental_disabled: o.delivery_rental_disabled,
+        display_order: i,
+      }))
+    )
+  }
+  // ────────────────────────────────────────────────────────────
 
   let isLoading = $state(false)
   let isActive = $state(true)
@@ -117,6 +226,7 @@
     <input type="hidden" name="specifications" value={serializeSpecs()} />
     <input type="hidden" name="image_urls" value={serializeImages()} />
     <input type="hidden" name="is_active" value={isActive.toString()} />
+    <input type="hidden" name="option_links" value={serializeOptionLinks()} />
 
     <!-- ① 기본정보 -->
     <section class="form-section">
@@ -244,9 +354,178 @@
       </div>
     </section>
 
-    <!-- ③ 가격 정책 -->
+    <!-- ③ 옵션상품 -->
     <section class="form-section">
-      <h2 class="section-title">③ 가격 정책</h2>
+      <h2 class="section-title">③ 옵션상품</h2>
+      <p class="section-desc">함께 대여 가능한 옵션상품을 상품 DB에서 검색해 추가합니다.</p>
+
+      <!-- 검색 입력폼 -->
+      <div class="option-search-row">
+        <input
+          class="f-input option-search-input"
+          type="text"
+          placeholder="상품명 또는 키워드 입력 후 검색..."
+          bind:value={optionKeyword}
+          onkeydown={(e) => { if (e.key === 'Enter') { e.preventDefault(); searchOptionProducts() } }}
+          aria-label="옵션상품 검색"
+        />
+        <button type="button" class="btn-search" onclick={searchOptionProducts} disabled={optionSearching}>
+          {optionSearching ? '검색 중...' : '검색'}
+        </button>
+      </div>
+
+      <!-- 검색 결과 모달 -->
+      {#if showOptionModal}
+        <div
+          class="option-modal-backdrop"
+          onclick={() => { showOptionModal = false }}
+          role="presentation"
+        >
+          <div
+            class="option-modal"
+            role="dialog"
+            aria-modal="true"
+            aria-label="옵션상품 검색 결과"
+            onclick={(e) => e.stopPropagation()}
+          >
+            <div class="option-modal-header">
+              <p class="option-modal-title">검색 결과</p>
+              <button
+                type="button"
+                class="option-modal-close"
+                onclick={() => { showOptionModal = false }}
+                aria-label="닫기"
+              >✕</button>
+            </div>
+            {#if optionSearching}
+              <p class="option-modal-empty">검색 중...</p>
+            {:else if optionResults.length === 0}
+              <p class="option-modal-empty">검색 결과가 없습니다.</p>
+            {:else}
+              <ul class="option-result-list">
+                {#each optionResults as item (item.id)}
+                  <li class="option-result-item">
+                    {#if item.image_url}
+                      <img
+                        src={item.image_url}
+                        alt={item.name}
+                        class="option-result-thumb"
+                        width="56"
+                        height="42"
+                        loading="lazy"
+                      />
+                    {:else}
+                      <div class="option-result-thumb option-result-thumb--empty">No img</div>
+                    {/if}
+                    <div class="option-result-info">
+                      <p class="option-result-name">{item.name}</p>
+                      <p class="option-result-meta">
+                        24h: {item.price_24h.toLocaleString()}원 · 재고: {item.stock_quantity}개
+                      </p>
+                      <a
+                        href="/products/{item.id}"
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        class="btn-detail-link"
+                      >상세정보 더보기</a>
+                    </div>
+                    <button
+                      type="button"
+                      class="btn-add-option"
+                      onclick={() => addOptionProduct(item)}
+                    >추가</button>
+                  </li>
+                {/each}
+              </ul>
+            {/if}
+          </div>
+        </div>
+      {/if}
+
+      <!-- 선택된 옵션 목록 -->
+      {#if selectedOptions.length > 0}
+        <!-- 일괄 적용 행 -->
+        <div class="bulk-row">
+          <span class="bulk-label">일괄 적용</span>
+          <label class="cb-label">
+            <input type="checkbox" class="cb-input" bind:checked={bulkRequired} />
+            필수 선택
+          </label>
+          <label class="cb-label">
+            <input type="checkbox" class="cb-input" bind:checked={bulkMinSelectRequired} />
+            최소 1개 선택 필수
+          </label>
+          <label class="cb-label">
+            <input type="checkbox" class="cb-input" bind:checked={bulkDeliveryDisabled} />
+            배송 대여 불가
+          </label>
+          <button type="button" class="btn-bulk-apply" onclick={applyBulk}>적용</button>
+        </div>
+
+        <div class="selected-option-list">
+          {#each selectedOptions as opt, i (opt.option_product_id)}
+            <div class="selected-option-card">
+              {#if opt.image_url}
+                <img
+                  src={opt.image_url}
+                  alt={opt.name}
+                  class="selected-option-thumb"
+                  width="64"
+                  height="48"
+                  loading="lazy"
+                />
+              {:else}
+                <div class="selected-option-thumb selected-option-thumb--empty">No img</div>
+              {/if}
+              <div class="selected-option-info">
+                <p class="selected-option-name">{opt.name}</p>
+                <p class="selected-option-meta">
+                  24h: {opt.price_24h.toLocaleString()}원 · 재고: {opt.stock_quantity}개
+                </p>
+                <div class="selected-option-cbs">
+                  <label class="cb-label">
+                    <input
+                      type="checkbox"
+                      class="cb-input"
+                      bind:checked={selectedOptions[i].is_required}
+                    />
+                    필수 선택
+                  </label>
+                  <label class="cb-label">
+                    <input
+                      type="checkbox"
+                      class="cb-input"
+                      bind:checked={selectedOptions[i].min_select_required}
+                    />
+                    최소 1개 선택 필수
+                  </label>
+                  <label class="cb-label">
+                    <input
+                      type="checkbox"
+                      class="cb-input"
+                      bind:checked={selectedOptions[i].delivery_rental_disabled}
+                    />
+                    배송 대여 불가
+                  </label>
+                </div>
+              </div>
+              <button
+                type="button"
+                class="remove-btn"
+                onclick={() => removeOption(opt.option_product_id)}
+                aria-label="{opt.name} 옵션 제거"
+              >✕</button>
+            </div>
+          {/each}
+        </div>
+      {:else}
+        <p class="no-option-msg">추가된 옵션상품이 없습니다.</p>
+      {/if}
+    </section>
+
+    <!-- ④ 가격 정책 -->
+    <section class="form-section">
+      <h2 class="section-title">④ 가격 정책</h2>
       <p class="section-desc">24시간 가격은 필수입니다. 미입력 시 해당 유형 가격정책은 생성되지 않습니다.</p>
 
       <div class="price-grid">
@@ -280,9 +559,9 @@
       </div>
     </section>
 
-    <!-- ④ 이미지 -->
+    <!-- ⑤ 이미지 -->
     <section class="form-section">
-      <h2 class="section-title">④ 이미지</h2>
+      <h2 class="section-title">⑤ 이미지</h2>
       <p class="section-desc">Cloudinary Public ID 또는 이미지 URL을 입력하세요. 첫 번째 이미지가 대표 이미지입니다.</p>
 
       <div class="image-list">
@@ -324,9 +603,9 @@
       </div>
     </section>
 
-    <!-- ⑤ 재고 안내 -->
+    <!-- ⑥ 재고 안내 -->
     <section class="form-section info-section">
-      <h2 class="section-title">⑤ 실물 재고 (Asset) 등록 안내</h2>
+      <h2 class="section-title">⑥ 실물 재고 (Asset) 등록 안내</h2>
       <div class="info-box">
         <p class="info-text">
           상품 등록 후, 실물 재고는 <strong>[재고관리]</strong> 탭에서 시리얼번호 단위로 등록합니다.
@@ -620,9 +899,251 @@
   .submit-btn:hover:not(:disabled) { background: var(--cs-purple-hover); }
   .submit-btn:disabled { background: var(--cs-disabled-button); cursor: not-allowed; }
 
+  /* ─── 옵션상품 섹션 ──────────────────────────────────────── */
+  .option-search-row {
+    display: flex;
+    gap: 10px;
+    align-items: center;
+  }
+  .option-search-input { flex: 1; }
+  .btn-search {
+    flex-shrink: 0;
+    height: 44px;
+    padding: 0 20px;
+    border: 1.5px solid var(--cs-purple);
+    border-radius: var(--radius-sm);
+    background: transparent;
+    color: var(--cs-purple);
+    font: var(--text-pc-body-14);
+    cursor: pointer;
+    white-space: nowrap;
+    transition: background 0.12s;
+  }
+  .btn-search:hover:not(:disabled) { background: rgba(59,47,138,0.06); }
+  .btn-search:disabled { opacity: 0.5; cursor: not-allowed; }
+
+  /* 모달 */
+  .option-modal-backdrop {
+    position: fixed;
+    inset: 0;
+    z-index: 200;
+    background: rgba(16,11,50,0.45);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .option-modal {
+    background: var(--cs-white);
+    border-radius: var(--cms-radius-lg);
+    padding: 24px 28px;
+    width: 560px;
+    max-width: calc(100vw - 40px);
+    max-height: 70vh;
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+  }
+  .option-modal-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+  .option-modal-title {
+    font: var(--text-pc-title-16);
+    color: var(--cs-text);
+    margin: 0;
+  }
+  .option-modal-close {
+    width: 32px;
+    height: 32px;
+    border: none;
+    border-radius: var(--radius-sm);
+    background: var(--cs-surface-gray);
+    color: var(--cs-text-mid);
+    cursor: pointer;
+    font: var(--text-pc-script-12);
+    transition: background 0.12s;
+  }
+  .option-modal-close:hover { background: rgba(255,53,53,0.1); color: var(--cs-red-badge); }
+  .option-modal-empty {
+    font: var(--text-pc-body-14);
+    color: var(--cs-text-light);
+    margin: 0;
+    padding: 20px 0;
+    text-align: center;
+  }
+  .option-result-list {
+    list-style: none;
+    padding: 0;
+    margin: 0;
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+  .option-result-item {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 10px 12px;
+    border-radius: var(--cms-radius-sm);
+    background: var(--cs-surface-gray);
+  }
+  .option-result-thumb {
+    width: 56px;
+    height: 42px;
+    object-fit: cover;
+    border-radius: var(--radius-sm);
+    flex-shrink: 0;
+  }
+  .option-result-thumb--empty {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: var(--cs-lilac);
+    font: var(--text-pc-descript-10);
+    color: var(--cs-text-light);
+  }
+  .option-result-info { flex: 1; min-width: 0; }
+  .option-result-name {
+    font: var(--text-pc-body-14);
+    color: var(--cs-text);
+    margin: 0 0 2px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .option-result-meta {
+    font: var(--text-pc-script-12);
+    color: var(--cs-text-mid);
+    margin: 0 0 2px;
+  }
+  .btn-detail-link {
+    display: inline-flex;
+    align-items: center;
+    font: var(--text-pc-script-12);
+    color: var(--cs-purple);
+    text-decoration: none;
+  }
+  .btn-detail-link:hover { color: var(--cs-purple-hover); text-decoration: underline; }
+  .btn-add-option {
+    flex-shrink: 0;
+    height: 36px;
+    padding: 0 14px;
+    border: none;
+    border-radius: var(--radius-sm);
+    background: var(--cs-purple);
+    color: var(--cs-white);
+    font: var(--text-pc-script-12);
+    cursor: pointer;
+    transition: background 0.12s;
+  }
+  .btn-add-option:hover { background: var(--cs-purple-hover); }
+
+  /* 일괄 적용 행 */
+  .bulk-row {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    padding: 10px 14px;
+    background: rgba(59,47,138,0.04);
+    border-radius: var(--cms-radius-sm);
+  }
+  .bulk-label {
+    font: var(--text-pc-body-14);
+    color: var(--cs-text-mid);
+    white-space: nowrap;
+  }
+  .cb-label {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font: var(--text-pc-body-14);
+    color: var(--cs-text);
+    cursor: pointer;
+    min-height: 44px;
+  }
+  .cb-input {
+    accent-color: var(--cs-purple);
+    width: 16px;
+    height: 16px;
+    cursor: pointer;
+  }
+  .btn-bulk-apply {
+    margin-left: auto;
+    height: 36px;
+    padding: 0 16px;
+    border: 1.5px solid var(--cs-purple);
+    border-radius: var(--radius-sm);
+    background: transparent;
+    color: var(--cs-purple);
+    font: var(--text-pc-script-12);
+    cursor: pointer;
+    transition: background 0.12s;
+  }
+  .btn-bulk-apply:hover { background: rgba(59,47,138,0.08); }
+
+  /* 선택된 옵션 카드 */
+  .selected-option-list {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+  .selected-option-card {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 12px 14px;
+    background: var(--cs-white);
+    border: 1px solid var(--cs-border);
+    border-radius: var(--cms-radius-md);
+  }
+  .selected-option-thumb {
+    width: 64px;
+    height: 48px;
+    object-fit: cover;
+    border-radius: var(--radius-sm);
+    flex-shrink: 0;
+  }
+  .selected-option-thumb--empty {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: var(--cs-surface-gray);
+    font: var(--text-pc-descript-10);
+    color: var(--cs-text-light);
+  }
+  .selected-option-info { flex: 1; min-width: 0; }
+  .selected-option-name {
+    font: var(--text-pc-body-14);
+    color: var(--cs-text);
+    margin: 0 0 2px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .selected-option-meta {
+    font: var(--text-pc-script-12);
+    color: var(--cs-text-mid);
+    margin: 0 0 6px;
+  }
+  .selected-option-cbs {
+    display: flex;
+    gap: 14px;
+  }
+  .no-option-msg {
+    font: var(--text-pc-body-14);
+    color: var(--cs-text-light);
+    margin: 0;
+    padding: 16px 0;
+  }
+
   @media (max-width: 640px) {
     .form-section { padding: 20px 16px; }
     .price-grid { grid-template-columns: 1fr; }
     .price-grid-3 { grid-template-columns: 1fr; }
+    .bulk-row { flex-wrap: wrap; }
   }
 </style>

@@ -10,6 +10,36 @@ function db() {
   return createClient(getSupabaseUrl(), env.SUPABASE_SERVICE_ROLE_KEY ?? '')
 }
 
+type AdminClient = ReturnType<typeof db>
+
+/** 분류코드에 연결된 활성 상품 수 반환 */
+async function getLinkedProductCount(admin: AdminClient, codeId: string): Promise<number> {
+  const { data: codeRow } = await admin
+    .from('product_category_codes')
+    .select('code, product_category')
+    .eq('id', codeId)
+    .maybeSingle()
+  if (!codeRow) return 0
+
+  const categoryVal = codeRow.product_category ?? codeRow.code.toLowerCase()
+  const { count } = await admin
+    .from('products')
+    .select('id', { count: 'exact', head: true })
+    .eq('category', categoryVal)
+    .is('deleted_at', null)
+  return count ?? 0
+}
+
+/** 세션 사용자가 superadmin인지 확인 */
+async function checkSuperadmin(admin: AdminClient, userId: string): Promise<boolean> {
+  const { data } = await admin
+    .from('user_profiles')
+    .select('cms_role')
+    .eq('id', userId)
+    .maybeSingle()
+  return (data as { cms_role: string | null } | null)?.cms_role === 'superadmin'
+}
+
 export type TaxonomyCode = {
   id: string
   code: string
@@ -23,6 +53,7 @@ export type TaxonomyCode = {
   description: string | null
   code_rule: Record<string, unknown> | null
   created_at: string
+  deleted_at: string | null
 }
 
 export type CodeFormat = {
@@ -60,6 +91,7 @@ export const load: PageServerLoad = async ({ locals }) => {
     { data: fmtRow },
     { data: productCounts },
     { data: mappings },
+    { data: userProfile },
   ] = await Promise.all([
     admin
       .from('product_category_codes')
@@ -80,11 +112,17 @@ export const load: PageServerLoad = async ({ locals }) => {
     admin
       .from('category_taxonomy_map')
       .select('id, product_category, taxonomy_code_id, priority, is_auto'),
+    admin
+      .from('user_profiles')
+      .select('cms_role')
+      .eq('id', session.user.id)
+      .maybeSingle(),
   ])
 
   const productCountMap: Record<string, number> = {}
   for (const p of productCounts ?? []) {
     const cat = (p as { category: string }).category
+    // eslint-disable-next-line security/detect-object-injection
     productCountMap[cat] = (productCountMap[cat] ?? 0) + 1
   }
 
@@ -93,6 +131,7 @@ export const load: PageServerLoad = async ({ locals }) => {
     codeFormat: ((fmtRow as { value?: CodeFormat } | null)?.value ?? DEFAULT_FORMAT) as CodeFormat,
     productCountMap,
     mappings: (mappings ?? []) as TaxonomyMapping[],
+    userRole: (userProfile as { cms_role: string | null } | null)?.cms_role ?? null,
   }
 }
 
@@ -170,7 +209,14 @@ export const actions: Actions = {
 
     if (!name) return fail(400, { action: 'editCode', error: '코드명은 필수입니다.' })
 
-    const { error } = await db().rpc('cms_edit_taxonomy_code', {
+    const admin = db()
+
+    // 연결 상품 존재 시 수정 불가 (모든 관리자)
+    const linkedCount = await getLinkedProductCount(admin, id)
+    if (linkedCount > 0)
+      return fail(400, { action: 'editCode', error: `이 코드로 등록된 상품 ${linkedCount}개가 있어 수정할 수 없습니다.` })
+
+    const { error } = await admin.rpc('cms_edit_taxonomy_code', {
       p_id: id,
       p_name: name,
       p_description: description,
@@ -191,18 +237,41 @@ export const actions: Actions = {
     const admin = db()
 
     // 하위 코드 존재 시 삭제 불가
-    const { count } = await admin
+    const { count: childCount } = await admin
       .from('product_category_codes')
       .select('id', { count: 'exact', head: true })
       .eq('parent_id', id)
       .is('deleted_at', null)
-    if (count && count > 0)
-      return fail(400, { action: 'deleteCode', error: `하위 코드 ${count}개가 존재합니다. 하위 코드를 먼저 삭제해주세요.` })
+    if (childCount && childCount > 0)
+      return fail(400, { action: 'deleteCode', error: `하위 코드 ${childCount}개가 존재합니다. 하위 코드를 먼저 삭제해주세요.` })
+
+    // 연결 상품 존재 시 superadmin만 통삭제 가능
+    const linkedCount = await getLinkedProductCount(admin, id)
+    if (linkedCount > 0) {
+      const isSuperadmin = await checkSuperadmin(admin, session.user.id)
+      if (!isSuperadmin)
+        return fail(403, { action: 'deleteCode', error: '접근권한이 없습니다.' })
+
+      // superadmin 통삭제: 연결 상품의 product_code를 NULL로 초기화 (고아 상품 발생)
+      const { data: codeRow } = await admin
+        .from('product_category_codes')
+        .select('code, product_category')
+        .eq('id', id)
+        .maybeSingle()
+      if (codeRow) {
+        const categoryVal = codeRow.product_category ?? codeRow.code.toLowerCase()
+        await admin
+          .from('products')
+          .update({ product_code: null })
+          .eq('category', categoryVal)
+          .is('deleted_at', null)
+      }
+    }
 
     const { error } = await admin.rpc('cms_delete_taxonomy_code', { p_id: id })
 
     if (error) return fail(500, { action: 'deleteCode', error: '삭제 실패' })
-    return { action: 'deleteCode', success: true }
+    return { action: 'deleteCode', success: true, orphaned: linkedCount }
   },
 
   // ── 활성 토글 ──────────────────────────────────────────────────────────
@@ -220,7 +289,7 @@ export const actions: Actions = {
     return { action: 'toggleActive', success: true }
   },
 
-  // ── 예약코드 형식 저장 ────────────────────────────────────────────────
+  // ── 상품 품번 포맷 저장 (reservation_code_format 키 공용 — M3 예약코드 구현 시 분리 예정) ──
   saveFormat: async ({ request, locals }) => {
     const { session } = await locals.safeGetSession()
     if (!session) return fail(401, { action: 'saveFormat', error: '인증 필요' })
@@ -240,6 +309,98 @@ export const actions: Actions = {
 
     if (error) return fail(500, { action: 'saveFormat', error: '저장 실패' })
     return { action: 'saveFormat', success: true }
+  },
+
+  // ── 코드 이관 (superadmin 전용) ───────────────────────────────────────
+  // 소스 코드에 연결된 상품 → 타겟 코드로 이관 + 품번 재발행 + QR 재생성
+  transferCode: async ({ request, locals }) => {
+    const { session } = await locals.safeGetSession()
+    if (!session) return fail(401, { action: 'transferCode', error: '인증 필요' })
+
+    const isSuperadmin = await checkSuperadmin(db(), session.user.id)
+    if (!isSuperadmin) return fail(403, { action: 'transferCode', error: '접근권한이 없습니다.' })
+
+    const form = await request.formData()
+    const sourceId = (form.get('source_id') as string) ?? ''
+    const targetId = (form.get('target_id') as string) ?? ''
+
+    if (!sourceId || !targetId)
+      return fail(400, { action: 'transferCode', error: '소스·타겟 코드 ID가 필요합니다.' })
+    if (sourceId === targetId)
+      return fail(400, { action: 'transferCode', error: '소스와 타겟이 같습니다.' })
+
+    const admin = db()
+
+    // 소스·타겟 코드 정보 조회
+    const [{ data: sourceRow }, { data: targetRow }] = await Promise.all([
+      admin
+        .from('product_category_codes')
+        .select('code, product_category')
+        .eq('id', sourceId)
+        .is('deleted_at', null)
+        .maybeSingle(),
+      admin
+        .from('product_category_codes')
+        .select('code, product_category')
+        .eq('id', targetId)
+        .is('deleted_at', null)
+        .maybeSingle(),
+    ])
+
+    if (!sourceRow) return fail(400, { action: 'transferCode', error: '소스 코드를 찾을 수 없습니다.' })
+    if (!targetRow) return fail(400, { action: 'transferCode', error: '타겟 코드를 찾을 수 없습니다.' })
+
+    const sourceCat = sourceRow.product_category ?? sourceRow.code.toLowerCase()
+    const targetCat = targetRow.product_category ?? targetRow.code.toLowerCase()
+
+    // 소스 코드에 연결된 상품 조회
+    const { data: products } = await admin
+      .from('products')
+      .select('id')
+      .eq('category', sourceCat)
+      .is('deleted_at', null)
+
+    if (!products || products.length === 0)
+      return fail(400, { action: 'transferCode', error: '이관할 상품이 없습니다.' })
+
+    // 각 상품을 타겟 카테고리로 이관 + product_code NULL 초기화
+    const productIds = (products as { id: string }[]).map((p) => p.id)
+
+    await admin
+      .from('products')
+      .update({ category: targetCat, product_code: null })
+      .in('id', productIds)
+      .is('deleted_at', null)
+
+    // 각 상품 품번 재발행 (generate_product_code는 product_code를 항상 덮어씀)
+    for (const id of productIds) {
+      await admin.rpc('generate_product_code', {
+        p_product_id: id,
+        p_category: targetCat,
+      })
+    }
+
+    // QR payload 재생성 (경로 기반 — QR은 상품 ID로 고정)
+    const qrBase = 'https://crazyshot.kr/qr/product/'
+    await admin
+      .from('products')
+      .update({ qr_payload: null })
+      .in('id', productIds)
+      .is('deleted_at', null)
+    for (const id of productIds) {
+      await admin
+        .from('products')
+        .update({ qr_payload: qrBase + id })
+        .eq('id', id)
+    }
+
+    // taxonomy_map에서 소스 매핑 삭제 (타겟 매핑은 이미 존재하거나 없어도 무방)
+    await admin
+      .from('category_taxonomy_map')
+      .delete()
+      .eq('product_category', sourceCat)
+
+    return { action: 'transferCode', success: true, transferred: productIds.length }
   },
 
   // ── 상품 카테고리 매핑 저장 ───────────────────────────────────────────

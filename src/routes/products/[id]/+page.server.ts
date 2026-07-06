@@ -8,7 +8,7 @@ import {
 	mapLegacyProductIdToUuid,
 	type ProductDetailRow,
 } from '$lib/fixtures/productDetailFixtures';
-import type { Database } from '$lib/types/database';
+import type { Database, ProductOptionLinkRow } from '$lib/types/database';
 import type { PageServerLoad } from './$types';
 
 type ProductRow = Database['public']['Tables']['products']['Row'] & Record<string, unknown>;
@@ -91,8 +91,23 @@ export const load: PageServerLoad = async ({ params, locals }) => {
 	const row = product as ProductRow;
 	const enriched = await attachDailyPrice(locals.supabase, row);
 
+	// 옵션상품 링크 조회 (RPC 없으면 빈 배열 fallback)
+	let optionLinks: ProductOptionLinkRow[] = [];
+	if (isUuid(String(row.id))) {
+		// get_product_option_links is not yet registered in Database type; cast through unknown
+		type RpcFn = (name: string, args: Record<string, string>) => ReturnType<typeof locals.supabase.rpc>;
+		const { data: links, error: linksError } = await (locals.supabase.rpc as unknown as RpcFn)(
+			'get_product_option_links',
+			{ p_product_id: String(row.id) },
+		);
+		if (!linksError) {
+			optionLinks = (links ?? []) as ProductOptionLinkRow[];
+		}
+	}
+
 	return {
 		product: enriched,
 		productId: String(row.id),
+		optionLinks,
 	};
 };

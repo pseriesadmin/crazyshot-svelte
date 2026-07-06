@@ -97,6 +97,9 @@
         { label: '홍보', href: '/cms/promotion/ad' },
         { label: '쿠폰', href: '/cms/promotion/coupon' },
         { label: '포인트', href: '/cms/promotion/point' },
+        { label: '세그먼트', href: '/cms/promotion/segment' },
+        { label: '룰엔진', href: '/cms/promotion/rules' },
+        { label: '분석', href: '/cms/promotion/analytics' },
       ],
     },
     {

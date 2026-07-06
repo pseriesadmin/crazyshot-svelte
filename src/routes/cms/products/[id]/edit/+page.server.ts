@@ -26,7 +26,10 @@ export const load: PageServerLoad = async ({ locals, params }) => {
     .eq('is_active', true)
     .is('deleted_at', null)
 
-  return { product, priceRules: priceRules ?? [] }
+  const { data: optionLinks } = await admin
+    .rpc('get_product_option_links', { p_product_id: params.id })
+
+  return { product, priceRules: priceRules ?? [], optionLinks: optionLinks ?? [] }
 }
 
 export const actions: Actions = {
@@ -96,6 +99,7 @@ export const actions: Actions = {
     }
 
     for (const dtype of durationTypes) {
+      // eslint-disable-next-line security/detect-object-injection
       const price = priceMap[dtype]
       if (price && price > 0) {
         const { data: existing_rule } = await admin
@@ -124,6 +128,15 @@ export const actions: Actions = {
         }
       }
     }
+
+    // 옵션상품 연결 저장
+    const optionLinksRaw = (form.get('option_links') as string | null) ?? '[]'
+    let optionLinks: unknown[] = []
+    try { optionLinks = JSON.parse(optionLinksRaw) } catch { /* ignore */ }
+    await admin.rpc('upsert_product_option_links', {
+      p_product_id: params.id,
+      p_option_links: JSON.stringify(Array.isArray(optionLinks) ? optionLinks : []),
+    })
 
     throw redirect(303, '/cms/products')
   },

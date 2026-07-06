@@ -150,6 +150,8 @@
   --radius-xl:        30px;          /* 총금액 박스·CTA 버튼 */
   --radius-2xl:       50px;          /* 흰 카드 */
   --radius-full:      9999px;
+  --radius-icon-box:  25px;          /* 결제 결과 아이콘 박스 (Figma exact) */
+  --radius-asym-card: 10px 50px 10px 50px; /* 결제 결과 카드 비대칭 (Figma exact) */
 
   /* ── 스페이싱 (기존 유지 + 확장) ── */
   --spacing-1:  4px;
