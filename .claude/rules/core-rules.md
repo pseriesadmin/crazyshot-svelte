@@ -12,6 +12,25 @@ SvelteKit 5 (Svelte 5 Runes)
 - 이벤트: onclick={handler} — on:click 구문 금지 (Svelte 4 문법)
 - 타입: interface Props {}  + $props<Props>() 패턴
 
+⛔ $state(prop) 초기화 절대 금지 규칙 (2026-07-07 영구 등록)
+  문제: $state()는 컴포넌트 마운트 시 1회만 실행됨.
+        prop이 바뀌어도 $state 값은 첫 번째 값에 고정 → 다른 데이터인데 같은 UI 표시.
+
+  ❌ 금지 패턴
+    let local = $state(product.name)       ← prop 변경 시 stale
+    let local = $state(priceRules.find(…)) ← prop 변경 시 stale
+
+  ✅ 올바른 패턴 1 — 같은 페이지에서 다른 데이터를 같은 컴포넌트로 표시할 때
+    부모에서 {#key uniqueId} 로 컴포넌트 감싸기 → prop 변경 시 완전 재마운트
+    예) {#key data.selectedId}<ProductDetailPanel .../>{/key}
+
+  ✅ 올바른 패턴 2 — prop 변경을 실시간 동기화해야 할 때 (캘린더 등)
+    $effect(() => { localState = prop.value })  ← prop 추적 후 localState 갱신
+
+  적용 대상:
+    - 목록에서 항목 선택 시 같은 컴포넌트에 다른 데이터 표시하는 모든 패널·뷰어
+    - prop으로 받은 초기값으로 $state를 초기화하는 모든 컴포넌트
+
 TypeScript
 - any 타입 절대 금지 (H-06 ESLint 자동 차단)
 - as unknown as T 캐스팅 → 대신 타입 가드 함수 작성

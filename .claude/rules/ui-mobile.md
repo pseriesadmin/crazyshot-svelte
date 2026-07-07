@@ -3,6 +3,29 @@
 
 ---
 
+## ⛔ $state(prop) 초기화 절대 금지 (2026-07-07)
+
+> 동일 내용 core-rules.md에도 등록. 모든 컴포넌트 작성 시 반드시 준수.
+
+```svelte
+<!-- ❌ 절대 금지 — prop으로 $state 초기화 (마운트 시 1회만 실행, prop 변경 무시됨) -->
+let local = $state(product.name)
+let local = $state(priceRules.find(r => r.duration_type === '24h')?.price)
+
+<!-- ✅ 올바른 패턴 1 — 부모에서 {#key}로 재마운트 강제 -->
+{#key data.selectedId}
+  <DetailPanel product={data.selectedProduct} />
+{/key}
+
+<!-- ✅ 올바른 패턴 2 — prop 동기화가 필요할 때 $effect 사용 -->
+let viewYear = $state(value ? parseInt(value.slice(0,4)) : today.getFullYear())
+$effect(() => {
+  if (value) viewYear = parseInt(value.slice(0, 4))
+})
+```
+
+---
+
 ## SvelteKit 5 컴포넌트 패턴
 
 ```svelte
