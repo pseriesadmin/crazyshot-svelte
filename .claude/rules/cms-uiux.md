@@ -339,49 +339,70 @@ STD: #14B8A6   VID: #F97316   ACC: #84CC16   PKG: #06B6D4
 ### 7-3. 버튼 3종
 
 ```css
-/* Primary — CTA */
+/* =====================================================
+   CMS 표준 버튼 패턴 — 2가지 형태만 존재
+   공통 원칙: filled(채운) 배경 + var(--cs-white) 텍스트 + Noto Sans KR
+   ===================================================== */
+
+/* 기본형 — 주요 액션 (등록·저장·확인) */
 .btn-primary {
-  background: var(--cs-purple);
-  color: var(--cs-white);
+  display: inline-flex;
+  align-items: center;
+  height: 44px;
+  padding: 0 20px;
+  background: var(--cs-purple);   /* 필수 토큰 — 임의 변경 금지 */
+  color: var(--cs-white);         /* 필수 토큰 — 임의 변경 금지 */
   border: none;
-  border-radius: var(--radius-sm);
-  padding: 8px 16px;
-  font: var(--text-m-script-14B);
-  height: 36px;
+  border-radius: var(--radius-xl);
+  font: var(--text-pc-body-14);   /* Noto Sans KR 14px 700 — 필수 */
+  white-space: nowrap;
   cursor: pointer;
-  transition: background 0.15s;
+  transition: background 0.12s;
 }
 .btn-primary:hover    { background: var(--cs-purple-hover); }
 .btn-primary:disabled { background: var(--cs-disabled-button); cursor: not-allowed; }
 
-/* Ghost — 보조 */
-.btn-ghost {
-  background: transparent;
-  border: 1.5px solid var(--cs-purple);
-  border-radius: var(--radius-sm);
-  color: var(--cs-purple);
-  padding: 7px 14px;
-  font: var(--text-m-script-14);
-  height: 36px;
-  cursor: pointer;
-  transition: background 0.15s;
-}
-.btn-ghost:hover { background: rgba(59,47,138,0.06); }
-
-/* Danger — 삭제 */
+/* 삭제 경고형 — 파괴적 액션 (삭제·취소·철회) */
+/* 기본형과 동일 패턴, background 색만 --cs-red-badge로 변경 */
 .btn-danger {
-  background: transparent;
-  border: 1.5px solid var(--cs-red-badge);
-  border-radius: var(--radius-sm);
-  color: var(--cs-red-badge);
-  padding: 7px 14px;
-  font: var(--text-m-script-14);
-  height: 36px;
+  display: inline-flex;
+  align-items: center;
+  height: 44px;
+  padding: 0 20px;
+  background: var(--cs-red-badge); /* 필수 토큰 — 임의 변경 금지 */
+  color: var(--cs-white);          /* 필수 토큰 — 임의 변경 금지 */
+  border: none;
+  border-radius: var(--radius-xl);
+  font: var(--text-pc-body-14);    /* Noto Sans KR 14px 700 — 필수 */
+  white-space: nowrap;
   cursor: pointer;
-  transition: background 0.15s;
+  transition: background 0.12s;
 }
-.btn-danger:hover { background: rgba(255,53,53,0.08); }
+.btn-danger:hover { background: var(--cs-red); }
+
+/* Toolbar CTA — 페이지 상단 툴바 주요 액션 버튼 (등록·추가 등) */
+/* ⚠️ btn-primary(인라인 36px)와 별도 — 툴바 전용 44px 사이즈 */
+.cta-btn {
+  display: inline-flex;
+  align-items: center;
+  height: 44px;
+  padding: 0 20px;
+  background: var(--cs-purple);   /* 필수 — 임의 변경 금지 */
+  color: var(--cs-white);         /* 필수 — 임의 변경 금지 */
+  border: none;
+  border-radius: var(--radius-xl);
+  font: var(--text-pc-body-14);   /* Noto Sans KR 14px 700 */
+  text-decoration: none;
+  white-space: nowrap;
+  transition: background 0.12s;
+}
+.cta-btn:hover { background: var(--cs-purple-hover); }
 ```
+
+> **툴바 CTA 버튼 핵심 원칙**
+> - `background: var(--cs-purple)` + `color: var(--cs-white)` + `font: var(--text-pc-body-14)` (Noto Sans KR 14px 700) 조합이 CMS 표준 툴바 버튼 스타일
+> - 인라인 보조 버튼(`btn-primary` 36px)과 혼용 금지 — 툴바 전용 44px 유지
+> - `<a>` 태그(`href`)와 `<button>` 태그 모두 적용 가능
 
 ### 7-4. 카드 (흰 컨테이너) — 3단계 반경 시스템
 

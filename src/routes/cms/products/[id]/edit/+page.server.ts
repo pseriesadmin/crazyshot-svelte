@@ -19,6 +19,13 @@ export const load: PageServerLoad = async ({ locals, params }) => {
 
   if (!product) throw error(404, '상품을 찾을 수 없습니다.')
 
+  // qr_payload 미설정 상품 backfill (마이그레이션 이전 등록 상품 대응)
+  if (!product.qr_payload) {
+    const qrPayload = `https://crazyshot.kr/qr/product/${product.id}`
+    await admin.from('products').update({ qr_payload: qrPayload }).eq('id', product.id)
+    product.qr_payload = qrPayload
+  }
+
   const { data: priceRules } = await admin
     .from('price_rules')
     .select('duration_type, price, deposit_amount, late_fee_per_hour, damage_fee_percentage')

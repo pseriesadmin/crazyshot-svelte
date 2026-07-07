@@ -58,6 +58,16 @@ export const actions: Actions = {
       return fail(500, { error: '상품 등록에 실패했습니다. 다시 시도해주세요.' })
     }
 
+    // QR payload 자동 생성 및 저장 (UUID 기반 — 슬러그 변경 시에도 불변)
+    const qrPayload = `https://crazyshot.kr/qr/product/${product.id}`
+    await admin.from('products').update({ qr_payload: qrPayload }).eq('id', product.id)
+
+    // 품번(product_code) 자동 발행 — generate_product_code RPC (SECURITY DEFINER)
+    await admin.rpc('generate_product_code', {
+      p_product_id: product.id,
+      p_category: category,
+    })
+
     const depositAmount = parseFloat((form.get('deposit_amount') as string | null) ?? '0') || 0
     const lateFeePerHour = parseFloat((form.get('late_fee_per_hour') as string | null) ?? '0') || 0
     const damageFeePercentage = parseFloat((form.get('damage_fee_percentage') as string | null) ?? '0') || 0
@@ -101,6 +111,7 @@ export const actions: Actions = {
       })
     }
 
-    throw redirect(303, '/cms/products')
+    // 등록 완료 후 해당 상품 패널 자동 오픈
+    throw redirect(303, `/cms/products?selected=${product.id}`)
   },
 }

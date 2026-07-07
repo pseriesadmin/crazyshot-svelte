@@ -1,12 +1,14 @@
 <script lang="ts">
   import { goto } from '$app/navigation'
   import { enhance } from '$app/forms'
+  import { fly } from 'svelte/transition'
+  import { invalidateAll } from '$app/navigation'
+  import ProductDetailPanel from '$lib/components/cms/ProductDetailPanel.svelte'
   import type { PageData } from './$types'
 
   interface Props { data: PageData }
   let { data }: Props = $props()
 
-  // 코드설정에서 가져온 동적 카테고리 목록
   const CATEGORIES = $derived([
     { value: 'all', label: '전체' },
     ...data.categories,
@@ -17,6 +19,21 @@
   )
 
   let searchInput = $state(data.q)
+
+  const panelOpen = $derived(!!data.selectedId && !!data.selectedProduct)
+
+  function selectProduct(id: string) {
+    const params = new URLSearchParams(window.location.search)
+    params.set('selected', id)
+    goto(`/cms/products?${params.toString()}`, { replaceState: true, noScroll: true })
+  }
+
+  function closePanel() {
+    const params = new URLSearchParams(window.location.search)
+    params.delete('selected')
+    const qs = params.toString()
+    goto(`/cms/products${qs ? '?' + qs : ''}`, { replaceState: true, noScroll: true })
+  }
 
   function onCategoryClick(value: string) {
     const params = new URLSearchParams()
@@ -42,7 +59,16 @@
     const first = imageUrls[0]
     if (!first) return ''
     if (first.startsWith('http')) return first
-    return `https://res.cloudinary.com/crazyshot/image/upload/w_80,h_80,c_fill,f_auto,q_auto/${first}.jpg`
+    return `https://res.cloudinary.com/crazyshot/image/upload/w_64,h_64,c_fill,f_auto,q_auto/${first}.jpg`
+  }
+
+  // 토글 상태 변경 후 즉시 목록 갱신
+  function handleToggle() {
+    return async ({ result }: { result: { type: string } }) => {
+      if (result.type === 'success') {
+        await invalidateAll()
+      }
+    }
   }
 </script>
 
@@ -59,6 +85,7 @@
         class="cat-tab"
         class:active={data.category === cat.value}
         onclick={() => onCategoryClick(cat.value as string)}
+        type="button"
       >{cat.label}</button>
     {/each}
   </div>
@@ -78,84 +105,122 @@
     <a href="/cms/products/new" class="cta-btn">+ 상품등록</a>
   </div>
 
-  <!-- 상품 테이블 -->
-  <div class="table-card">
-    {#if data.products.length === 0}
-      <div class="empty-state">
-        <p class="empty-msg">등록된 상품이 없습니다.</p>
-        <a href="/cms/products/new" class="cta-btn">첫 상품 등록하기</a>
-      </div>
-    {:else}
-      <table class="product-table" aria-label="상품 목록">
-        <thead>
-          <tr>
-            <th class="col-thumb">이미지</th>
-            <th class="col-cat">카테고리</th>
-            <th class="col-name">상품명</th>
-            <th class="col-brand">브랜드</th>
-            <th class="col-price">일일가격(24h)</th>
-            <th class="col-stock">보유수량</th>
-            <th class="col-status">상태</th>
-            <th class="col-action">관리</th>
-          </tr>
-        </thead>
-        <tbody>
+  <!-- 마스터-디테일 레이아웃 -->
+  <div class="master-detail">
+
+    <!-- 카드 목록 패널 -->
+    <div class="list-pane" class:narrow={panelOpen}>
+
+      {#if data.products.length === 0}
+        <div class="empty-state">
+          <p class="empty-msg">등록된 상품이 없습니다.</p>
+          <a href="/cms/products/new" class="cta-btn">첫 상품 등록하기</a>
+        </div>
+      {:else}
+        <div class="card-list" role="list">
           {#each data.products as product (product.id)}
-            <tr class="product-row">
-              <td class="col-thumb">
-                {#if product.image_urls.length > 0}
-                  <img
-                    src={thumbUrl(product.image_urls)}
-                    alt={product.name}
-                    class="thumb-img"
-                    width="56"
-                    height="56"
-                    loading="lazy"
-                  />
-                {:else}
-                  <div class="thumb-empty" aria-label="이미지 없음">—</div>
-                {/if}
-              </td>
-              <td class="col-cat">
-                <span class="cat-badge">{CATEGORY_LABEL[product.category] ?? product.category}</span>
-              </td>
-              <td class="col-name">
-                <span class="product-name">{product.name}</span>
-                <span class="product-slug">{product.slug}</span>
-              </td>
-              <td class="col-brand">{product.brand ?? '—'}</td>
-              <td class="col-price">{formatPrice(product.price24h)}</td>
-              <td class="col-stock">{product.assetCount}개</td>
-              <td class="col-status">
+            <div
+              class="product-card"
+              class:selected={data.selectedId === product.id}
+              role="listitem"
+            >
+              <!-- 카드 클릭 영역 (썸네일 + 정보) -->
+              <button
+                class="card-body"
+                onclick={() => selectProduct(product.id)}
+                aria-pressed={data.selectedId === product.id}
+                aria-label={`${product.name} 상세 보기`}
+                type="button"
+              >
+                <!-- 썸네일 -->
+                <div class="card-thumb-wrap">
+                  {#if product.image_urls.length > 0}
+                    <img
+                      src={thumbUrl(product.image_urls)}
+                      alt={product.name}
+                      class="card-thumb"
+                      width="64"
+                      height="64"
+                      loading="lazy"
+                    />
+                  {:else}
+                    <div class="card-thumb-empty" aria-label="이미지 없음">📷</div>
+                  {/if}
+                </div>
+
+                <!-- 상품 정보 -->
+                <div class="card-info">
+                  <div class="card-info-top">
+                    <span class="cat-badge">{CATEGORY_LABEL[product.category] ?? product.category}</span>
+                    <span class="stock-badge">{product.assetCount}개</span>
+                  </div>
+                  <p class="card-name">{product.name}</p>
+                  {#if product.brand}
+                    <p class="card-brand">{product.brand}</p>
+                  {/if}
+                  <div class="card-prices">
+                    <span class="price-item">
+                      <span class="price-label">12시간</span>
+                      <span class="price-value">{formatPrice(product.price12h)}</span>
+                    </span>
+                    <span class="price-sep">·</span>
+                    <span class="price-item">
+                      <span class="price-label">1일</span>
+                      <span class="price-value">{formatPrice(product.price24h)}</span>
+                    </span>
+                  </div>
+                </div>
+              </button>
+
+              <!-- 상태 토글 (카드 우측) -->
+              <div class="card-actions">
                 <form
                   method="POST"
                   action="?/toggleStatus"
-                  use:enhance
+                  use:enhance={handleToggle}
                   class="toggle-form"
                 >
                   <input type="hidden" name="id" value={product.id} />
                   <input type="hidden" name="is_active" value={product.is_active.toString()} />
                   <button
                     type="submit"
-                    class="status-badge"
-                    class:active={product.is_active}
-                    aria-label={product.is_active ? '비활성화' : '활성화'}
-                    title={product.is_active ? '클릭하여 비활성화' : '클릭하여 활성화'}
+                    class="status-toggle"
+                    class:on={product.is_active}
+                    aria-label={product.is_active ? '미노출로 전환' : '노출로 전환'}
+                    title={product.is_active ? '클릭하여 미노출' : '클릭하여 노출'}
                   >
-                    {product.is_active ? '활성' : '비활성'}
+                    <span class="toggle-track">
+                      <span class="toggle-thumb"></span>
+                    </span>
+                    <span class="toggle-label">
+                      {product.is_active ? '노출(ON)' : '미노출(OFF)'}
+                    </span>
                   </button>
                 </form>
-              </td>
-              <td class="col-action">
-                <a href={`/cms/products/${product.id}/edit`} class="edit-btn">수정</a>
-              </td>
-            </tr>
+              </div>
+            </div>
           {/each}
-        </tbody>
-      </table>
-    {/if}
-  </div>
+        </div>
+      {/if}
+    </div>
 
+    <!-- 상세 뷰어 패널 — {#key}로 상품 전환 시 $state 완전 재초기화 -->
+    {#if panelOpen && data.selectedProduct}
+      <div class="detail-pane" transition:fly={{ x: 24, duration: 200 }}>
+        {#key data.selectedId}
+          <ProductDetailPanel
+            product={data.selectedProduct}
+            priceRules={data.selectedPriceRules}
+            categories={data.categories}
+            categoryLabel={CATEGORY_LABEL[data.selectedProduct.category] ?? data.selectedProduct.category}
+            initialTab={data.initialTab}
+            onclose={closePanel}
+          />
+        {/key}
+      </div>
+    {/if}
+
+  </div>
 </div>
 
 <style>
@@ -163,9 +228,7 @@
     display: flex;
     flex-direction: column;
     gap: 16px;
-    padding: 20px;
-    height: 100%;
-    overflow-y: auto;
+    padding: 20px 20px 48px;
   }
 
   /* 카테고리 탭 */
@@ -176,6 +239,7 @@
     padding: 12px 16px;
     background: var(--cs-white);
     border-radius: var(--radius-xl);
+    flex-shrink: 0;
   }
   .cat-tab {
     padding: 6px 14px;
@@ -196,22 +260,32 @@
     display: flex;
     align-items: center;
     gap: 10px;
+    flex-shrink: 0;
   }
   .search-form {
     display: flex;
     gap: 8px;
     flex: 1;
   }
+  .f-input {
+    background: var(--cs-surface-gray);
+    border: none;
+    border-radius: var(--cms-radius-sm);
+    padding: 0 16px;
+    font: var(--text-pc-body-14);
+    color: var(--cs-text);
+  }
+  .f-input:focus { outline: 2px solid var(--cs-purple); outline-offset: -2px; }
+  .f-input::placeholder { color: var(--cs-text-placeholder); }
   .search-input {
     flex: 1;
     height: 44px;
-    padding: 0 16px;
   }
   .search-btn {
     height: 44px;
     padding: 0 20px;
     border: none;
-    border-radius: var(--radius-md);
+    border-radius: var(--cms-radius-sm);
     background: var(--cs-lilac);
     color: var(--cs-text);
     font: var(--text-pc-body-14);
@@ -235,129 +309,220 @@
   }
   .cta-btn:hover { background: var(--cs-purple-hover); }
 
-  /* 테이블 카드 */
-  .table-card {
+  /* 마스터-디테일 */
+  .master-detail {
+    display: flex;
+    gap: 16px;
+    align-items: flex-start;
+  }
+
+  /* 카드 목록 패널 */
+  .list-pane {
+    width: 100%;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    transition: width 0.22s ease;
+  }
+  .list-pane.narrow {
+    width: 420px;
+    flex-shrink: 0;
+  }
+
+  /* 카드 목록 */
+  .card-list {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding-right: 4px;
+  }
+  /* 스크롤바 항상 표시 */
+  .card-list::-webkit-scrollbar {
+    width: 6px;
+  }
+  .card-list::-webkit-scrollbar-track {
+    background: var(--cs-surface-gray);
+    border-radius: 3px;
+  }
+  .card-list::-webkit-scrollbar-thumb {
+    background: rgba(59,47,138,0.20);
+    border-radius: 3px;
+  }
+  .card-list::-webkit-scrollbar-thumb:hover {
+    background: rgba(59,47,138,0.35);
+  }
+
+  /* 상품 카드 */
+  .product-card {
+    display: flex;
+    align-items: center;
+    gap: 0;
     background: var(--cs-white);
     border-radius: var(--cms-radius-md);
     overflow: hidden;
+    transition: background 0.15s;
+    flex-shrink: 0;
   }
+  .product-card:hover { background: var(--cs-lilac); }
+  .product-card.selected { background: rgba(59,47,138,0.06); }
+
+  /* 카드 클릭 영역 */
+  .card-body {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    flex: 1;
+    min-width: 0;
+    padding: 12px 14px;
+    background: transparent;
+    border: none;
+    cursor: pointer;
+    text-align: left;
+  }
+
+  /* 썸네일 */
+  .card-thumb-wrap { flex-shrink: 0; }
+  .card-thumb {
+    width: 64px;
+    height: 64px;
+    object-fit: cover;
+    border-radius: var(--radius-sm);
+    display: block;
+  }
+  .card-thumb-empty {
+    width: 64px;
+    height: 64px;
+    background: var(--cs-surface-gray);
+    border-radius: var(--radius-sm);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 22px;
+    color: var(--cs-text-light);
+  }
+
+  /* 카드 정보 */
+  .card-info { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+  .card-info-top { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+  .cat-badge {
+    display: inline-block;
+    padding: 2px 8px;
+    background: rgba(59,47,138,0.08);
+    color: var(--cs-purple);
+    border-radius: var(--radius-sm);
+    font: var(--text-pc-script-12);
+    white-space: nowrap;
+  }
+  .stock-badge {
+    display: inline-block;
+    padding: 2px 6px;
+    background: var(--cs-surface-gray);
+    color: var(--cs-text-mid);
+    border-radius: var(--radius-sm);
+    font: var(--text-pc-script-12);
+    white-space: nowrap;
+  }
+  .card-name {
+    font: var(--text-pc-body-14);
+    color: var(--cs-text);
+    margin: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .card-brand {
+    font: var(--text-pc-script-12);
+    color: var(--cs-text-light);
+    margin: 0;
+  }
+  .card-prices {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-wrap: wrap;
+  }
+  .price-item { display: flex; align-items: center; gap: 4px; }
+  .price-label {
+    font: var(--text-pc-script-12);
+    color: var(--cs-text-light);
+  }
+  .price-value {
+    font: var(--text-pc-script-12);
+    color: var(--cs-text);
+    font-weight: 700;
+  }
+  .price-sep { color: var(--cs-border); font-size: 12px; }
+
+  /* 카드 우측 액션 (토글) */
+  .card-actions {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 0 14px 0 8px;
+    flex-shrink: 0;
+  }
+  .toggle-form { display: flex; }
+  .status-toggle {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 4px;
+    background: transparent;
+    border: none;
+    cursor: pointer;
+    padding: 4px;
+    min-height: 44px;
+    min-width: 44px;
+    justify-content: center;
+  }
+  .toggle-track {
+    position: relative;
+    width: 36px;
+    height: 20px;
+    background: var(--cs-disabled-toggle);
+    border-radius: var(--radius-full);
+    transition: background 0.18s;
+    display: block;
+    flex-shrink: 0;
+  }
+  .status-toggle.on .toggle-track { background: var(--cs-purple); }
+  .toggle-thumb {
+    position: absolute;
+    top: 2px; left: 2px;
+    width: 16px; height: 16px;
+    border-radius: 50%;
+    background: var(--cs-white);
+    transition: transform 0.18s;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.18);
+    display: block;
+  }
+  .status-toggle.on .toggle-thumb { transform: translateX(16px); }
+  .toggle-label {
+    font: var(--text-pc-script-12);
+    color: var(--cs-text-light);
+    white-space: nowrap;
+    font-size: 10px;
+  }
+  .status-toggle.on .toggle-label { color: var(--cs-purple); }
+
+  /* 빈 상태 */
   .empty-state {
     display: flex;
     flex-direction: column;
     align-items: center;
     gap: 16px;
     padding: 60px 20px;
+    background: var(--cs-white);
+    border-radius: var(--cms-radius-md);
   }
   .empty-msg {
     font: var(--text-pc-title-16);
     color: var(--cs-text-light);
   }
 
-  /* 테이블 */
-  .product-table {
-    width: 100%;
-    border-collapse: collapse;
+  /* 상세 패널 */
+  .detail-pane {
+    flex: 1;
+    min-width: 0;
   }
-  thead tr {
-    background: var(--cs-lilac);
-  }
-  th {
-    padding: 12px 14px;
-    font: var(--text-pc-body-14);
-    color: var(--cs-text-mid);
-    text-align: left;
-    white-space: nowrap;
-    border-bottom: 1px solid rgba(59,47,138,0.08);
-  }
-  .product-row {
-    border-bottom: 1px solid rgba(59,47,138,0.06);
-    transition: background 0.1s;
-  }
-  .product-row:hover { background: rgba(236,235,244,0.4); }
-  .product-row:last-child { border-bottom: none; }
-  td { padding: 12px 14px; vertical-align: middle; }
-
-  /* 컬럼 너비 */
-  .col-thumb  { width: 72px; }
-  .col-cat    { width: 80px; }
-  .col-brand  { width: 100px; }
-  .col-price  { width: 120px; white-space: nowrap; }
-  .col-stock  { width: 80px; text-align: center; }
-  .col-status { width: 80px; }
-  .col-action { width: 64px; }
-
-  .thumb-img {
-    width: 56px;
-    height: 56px;
-    object-fit: cover;
-    border-radius: var(--radius-sm);
-    display: block;
-  }
-  .thumb-empty {
-    width: 56px;
-    height: 56px;
-    background: var(--cs-surface-gray);
-    border-radius: var(--radius-sm);
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    color: var(--cs-text-light);
-    font: var(--text-pc-script-12);
-  }
-
-  .cat-badge {
-    display: inline-block;
-    padding: 2px 8px;
-    background: var(--cs-lilac);
-    color: var(--cs-purple);
-    border-radius: var(--radius-sm);
-    font: var(--text-pc-script-12);
-    white-space: nowrap;
-  }
-
-  .product-name {
-    display: block;
-    font: var(--text-pc-body-14);
-    color: var(--cs-text);
-  }
-  .product-slug {
-    display: block;
-    font: var(--text-pc-script-12);
-    color: var(--cs-text-light);
-    margin-top: 2px;
-  }
-
-  .toggle-form { display: inline; }
-  .status-badge {
-    display: inline-block;
-    padding: 4px 10px;
-    border: none;
-    border-radius: var(--radius-sm);
-    font: var(--text-pc-script-12);
-    cursor: pointer;
-    background: var(--cs-surface-gray);
-    color: var(--cs-text-light);
-    transition: background 0.12s, color 0.12s;
-    min-height: 28px;
-  }
-  .status-badge.active {
-    background: rgba(85,63,224,0.12);
-    color: var(--cs-purple-light);
-  }
-  .status-badge:hover { opacity: 0.75; }
-
-  .edit-btn {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    padding: 6px 12px;
-    background: var(--cs-dark);
-    color: var(--cs-white);
-    border-radius: var(--radius-sm);
-    font: var(--text-pc-script-12);
-    text-decoration: none;
-    min-height: 32px;
-    transition: opacity 0.12s;
-  }
-  .edit-btn:hover { opacity: 0.8; }
 </style>

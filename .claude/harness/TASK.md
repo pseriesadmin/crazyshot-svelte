@@ -28,6 +28,28 @@ auth_baseline: fed4fdb — createBrowserClient 패턴 (절대 싱글톤 createCl
 
 ---
 
+## NOW — 상품 이력 탭 + 대여 메뉴 + 모바일 현장 촬영 앱 (2026-07-06)
+
+[CONTEXT BRIDGE — product history + mobile app]
+plan_source: cms-products-4-rosy-sifakis.md
+핵심제약:
+  - stage(ezyvffjvuwmtuhpxdjrw) migration #71 먼저 검증 → production 적용은 Stephen
+  - --text-m-* CMS 본문 사용 금지 / --cms-radius-* 3단계 준수
+  - tesseract.js npm install 필요
+  - RPC 경유 (직접 INSERT/UPDATE/DELETE 금지)
+절대금지:
+  - git 자율 실행
+  - 기존 마이그레이션 파일 수정 (신규 71만)
+  - Svelte 4 문법
+  - any 타입 / console.log
+
+- [x] T-HIS-1: DB 마이그레이션 #71 | CRITICAL | SQL 파일 생성 완료 — Stephen이 stage apply 필요
+- [x] T-HIS-2: API 라우트 신규 (product-history + assets patch) | BOUNDARY | cms_role 인증 + RPC 연동 완료
+- [x] T-HIS-3: ProductDetailPanel.svelte 이력 탭 추가 | BOUNDARY | 등록·수정·삭제·드래그 구현 완료
+- [x] T-HIS-4: 대여 메뉴 + 이력관리 랜딩 페이지 | BOUNDARY | GNB 서브메뉴 + 랜딩 페이지 완료
+- [x] T-MOB-1: 유틸 + OcrScanner 컴포넌트 | BOUNDARY | chosungSearch + OcrScanner 완료
+- [x] T-MOB-2: 모바일 앱 라우트 (/mobile) | BOUNDARY | 레이아웃 + 검색 + 3탭 화면 완료
+
 ## NOW — M1 products UUID 마이그레이션 + 옵션상품 DB 연동 (2026-07-05)
 
 [CONTEXT BRIDGE — products UUID migration]
@@ -133,6 +155,117 @@ plan_source: cms-transient-cupcake.md | Phase 3 섹션
 - [x] S1-M3 T3: TDD GREEN — 구현 | TDD | src/routes/api/payment/confirm/+server.ts + src/routes/api/webhooks/toss/+server.ts 생성 — svelte-check 결제 에러 0건
 - [x] S1-M3 T4: TDD REFACTOR | TDD | any 타입 없음 확인 / console.log 없음 / 타입 헬퍼 명확화(rpcCall·tableInsert·tableSelect) / svelte-check 결제 에러 0건 유지
 
+## NOW — CMS 이미지 탭 UX 개선 (2026-07-06)
+
+[CONTEXT BRIDGE]
+plan_source: cms-http-localhost-5173-cms-products-resilient-ladybug.md (보완 섹션)
+수정 파일: src/lib/components/cms/ProductDetailPanel.svelte (단일 파일)
+핵심제약:
+  - 기존 기능·UI 수정 변형 금지 (명시 3항목만 변경)
+  - 대표이미지 상태는 products.image_urls[0] 기준 (0번 인덱스 = 대표)
+  - DB 스키마 변경 없음 (별도 컬럼 불필요 — 배열 첫 항목 규칙)
+
+- [x] T-IMG-1: 드롭존 레이아웃 슬림화 | BOUNDARY | ✅ 완료 (2026-07-06)
+  - 폴더 아이콘(📁/📂 span) 제거
+  - URL 버튼 텍스트 "또는 URL로 추가" → "+URL"
+  - drop-zone flex-direction: column → row (텍스트+버튼 한 줄)
+  - min-height: 130px → 48px (패딩 줄임)
+  - dz-hint(포맷 안내 텍스트) 제거
+
+- [x] T-IMG-2: 대표이미지 선택 기능 | BOUNDARY | ✅ 완료 (2026-07-06)
+  - 대표이미지 = image_urls[0] (배열 첫 항목 규칙, DB 변경 없음)
+  - hover 2초 이상 mousedown 유지 시 대표이미지 설정 (hold-to-set 인터랙션)
+  - 대표 썸네일: 3px solid var(--cs-purple) 아웃라인 표시
+  - 대표이미지 설정 시 해당 URL을 배열 첫 번째로 이동 → autoSave()
+  - 다른 썸네일 동일 액션 → 기존 대표 해제 + 신규 대표 설정
+
+## NOW — 상품코드(품번) + 코드설정 연동 (2026-07-06)
+
+[CONTEXT BRIDGE — product_code 연동]
+plan_source: 코드설정 연동 재검수 세션 결과
+핵심 발견사항:
+  - product_category_codes 테이블 존재 (depth 0~N, code_rule JSONB per branch)
+  - cms_settings.reservation_code_format JSONB (prefix/date_format/seq_digits/reset_monthly/suffix)
+  - products 테이블 product_code 컬럼 없음 — CRITICAL 부재
+  - 신규 상품 등록 시 product_code 자동 생성 로직 완전 부재
+  - slug ≠ 상품코드: slug=URL 식별자, product_code=분류별 자동 품번 (별개 개념)
+  - 현재 패널 헤더 '코드'가 slug를 잘못 표시 중 → 즉시 수정 필요
+핵심제약:
+  - migration stage(ezyvffjvuwmtuhpxdjrw) 검증 → production(vnbpmvxruyciuuaermyh) 적용
+  - product_code 자동 생성: category → product_category_codes depth=0 조회 → cms_settings format 적용
+  - 예시 코드: CS-CAM-2607-001 (prefix + 카테고리코드 + YYMM + seq)
+  - category_taxonomy_map 테이블로 ProductCategoryEnum → taxonomy code 매핑
+절대금지:
+  - 기존 마이그레이션 파일 수정
+  - production DB에 미검증 마이그레이션 직접 적용
+
+- [x] T-CODE-0: 즉시 수정 — 헤더 slug→product_code 표시 오류 + slug 탭 복원 | ROUTINE | ✅ 완료 (2026-07-06)
+  - ProductDetailPanel: 헤더 '코드' 행 → slug 편집 폼 제거, product_code 표시(null='미발행')
+  - 기본정보 탭: slug 읽기 전용 항목 복원 (caption 아래)
+  - SelectedProduct 타입에 product_code?: string | null 추가
+
+- [x] T-CODE-1: DB 마이그레이션 #68 + #69 | CRITICAL | ✅ Stage + Production 적용 완료 (2026-07-06)
+  - #68: products.product_code VARCHAR(30) UNIQUE + product_code_sequences 테이블 + generate_product_code RPC (SECURITY DEFINER) + 기존 상품 backfill
+  - #69: CA 더미 코드 soft-delete + CAM 코드 복구 + CS-CA-all-001/002 → CS-CAM-all-001/002 재발행
+  - Stage 검증: CS-CAM-all-001(Sony A7S III) / CS-CAM-all-002(Canon EOS R5) 확인
+  - Production 검증: #68/#69 모두 적용 완료, product_code_sequences 테이블 존재 확인
+
+- [x] T-CODE-2: 신규 상품 등록 연동 | CRITICAL | ✅ 완료 (2026-07-06)
+  - new/+page.server.ts create 액션: INSERT → QR payload → generate_product_code RPC 순서로 자동 호출
+  - svelte-check 신규 오류 없음 (pre-existing 2건 유지)
+
+- [x] T-CODE-3: 패널 헤더 product_code 표시 완성 | BOUNDARY | ✅ 완료 (T-CODE-0 포함)
+  - product_code = null → '미발행' 배지 표시
+  - Migration #68 적용 후 기존 상품 product_code 정상 표시
+
+- [x] T-CODE-4: 기존 상품 backfill | CRITICAL | ✅ 완료 (Migration #68 DO 블록)
+  - created_at ASC 순으로 전체 상품 generate_product_code 호출
+  - Stage 8개 상품 전체 backfill 완료, NULL 0건 확인
+
+- [x] T-CODE-5: 코드설정 포맷 키명 재검수 | BOUNDARY | ✅ 완료 (2026-07-06)
+  - 결론: 현시점 분리 불필요 — M3 예약코드 미구현 상태, 충돌 위험 없음
+  - 공유 키(reservation_code_format)로 유지, +page.server.ts 주석 정정
+  - M3 구현 시 product_code_format 키 분리 예정 (BACKLOG 추가)
+
+## NOW — CMS 코드설정 권한 제한 + 이관 기능 (2026-07-06)
+
+[CONTEXT BRIDGE — 코드설정 권한·이관]
+plan_source: 세션 내 설계 (품번 정책 확정)
+핵심 설계:
+  - category 변경 시 품번 고정 (유지 현행)
+  - 연결 상품 있는 경우 편집 불가 (전 관리자)
+  - 통삭제는 superadmin만 가능 → 연결 상품 product_code = NULL 초기화 (고아 상품)
+  - 이관: 소스→타겟 카테고리 이전, 품번 재발행, QR 재생성
+
+- [x] BACKLOG-① category_taxonomy_map 기본 매핑 입력 | CRITICAL | ✅ 완료 (2026-07-06)
+  - Migration #70: depth=0 활성 코드 전체 자동 INSERT (COALESCE product_category / LOWER(code))
+  - Stage + Production 모두 적용 완료 (12개 rows)
+
+- [x] BACKLOG-② 삭제·편집 권한 제한 | BOUNDARY | ✅ 완료 (2026-07-06)
+  - editCode: 연결 상품 존재 시 모든 관리자 수정 차단
+  - deleteCode: 연결 상품 있을 때 superadmin만 통삭제 (product_code NULL 초기화)
+  - 비-superadmin 삭제 시도 → 403 + '접근권한이 없습니다.' 토스트
+  - getLinkedProductCount / checkSuperadmin 헬퍼 함수 추가
+
+- [x] BACKLOG-③ 이관 기능 | BOUNDARY | ✅ 완료 (2026-07-06)
+  - load 함수에 userRole 추가 (cms_role 조회)
+  - transferCode 액션: superadmin 확인 → 소스/타겟 코드 조회 → 상품 category+product_code 업데이트 → generate_product_code 재발행 → qr_payload 재생성 → taxonomy_map 소스 매핑 삭제
+  - +page.svelte: 이관 버튼 (depth=0 + superadmin만 표시) + 이관 모달 (경고·소스정보·타겟선택·confirm)
+  - svelte-check 에러 0건, 모달 정상 렌더링 확인
+
+- [ ] BACKLOG: 프로모션/쿠폰 비활성화 알림 | BOUNDARY | 미구현 (이관 후 자동 처리)
+  - 이관 시 기존 품번 연동 프로모션·쿠폰 → 사용 불가 자동 처리 + 고객 안내
+  - M3 쿠폰 시스템 구현 후 연동 예정
+
+## NOW — CMS DB 파편화 수정 + $state 버그 수정 (2026-07-07) ✅ 완료
+
+- [x] DB-1: 중복 상품 조사 + 수정 | CRITICAL | "Sony FX6-12" 3중 중복 → 2개 soft-delete (REST API), Migration #77 생성·적용 (Stage + Production)
+- [x] DB-2: price_rules UNIQUE 제약 수정 | CRITICAL | UNIQUE(product_id, duration_type) → partial index WHERE deleted_at IS NULL (Stage + Production)
+- [x] DB-3: updateSection/pricing 재INSERT 버그 수정 | BOUNDARY | soft-delete 행 포함 조회 후 UPDATE로 재활성화 (+page.server.ts)
+- [x] UI-1: $state(prop) 버그 수정 — 상품 전환 시 컴포넌트 재마운트 누락 | CRITICAL | {#key data.selectedId}로 ProductDetailPanel 재마운트 강제
+- [x] UI-2: CalendarGrid $state 동기화 | BOUNDARY | $effect로 value prop 변경 시 viewYear/viewMonth 갱신
+- [x] RULE: $state(prop) 초기화 절대 금지 규칙 영구 등록 | ROUTINE | core-rules.md + ui-mobile.md 동시 등록
+
 ## DONE
 - S0: 환경 설정 + DB 스키마 + RPC 함수 9개
 - S1-M1: Products 모듈 (리스트 + 상세)
@@ -156,6 +289,16 @@ plan_source: cms-transient-cupcake.md | Phase 3 섹션
 - T9: AdminChatPanel + admin 레이아웃 미구축 (별도 일정 확정 후 진행)
 
 ## BACKLOG
-- S1-M4: Subscriptions
-- S1-M5: Shipments
+
+### 소규모 (즉시 처리 가능)
+- BL-① category_taxonomy_map 기본 매핑 입력 | SPT/MON/PWR/MED/STD/VID product_category 연결 — 현재 null로 Fallback 2 적용 중 | Migration으로 일괄 처리 필요
+- BL-② edit/+page.server.ts category 변경 시 품번 재발행 정책 결정 | Stephen 결정 필요 | 현재 최초 등록 시만 발행
+- BL-③ M3 예약코드 구현 시 cms_settings product_code_format 키 분리 | 현재 reservation_code_format 공용
+
+### 다음 모듈 (대규모)
+- S1-M4: Subscriptions (GSD) — 멤버십 등급 + 구독 결제 흐름
+- S1-M5: Shipments (GSD) — 배송 정보 입력·추적·마감 시간 UI
+
+### 기타
 - 카카오 알림톡 fallback (PRD.1.7.7)
+- 프로모션/쿠폰 비활성화 알림 (이관 후 자동 처리)
