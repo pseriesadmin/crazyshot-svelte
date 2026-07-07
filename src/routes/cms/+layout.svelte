@@ -20,15 +20,13 @@
   beforeNavigate(() => { isNavigating = true })
   afterNavigate(() => { isNavigating = false })
 
-  // 모바일 접근 차단 — CMS는 PC 전용 (min 1280px)
-  let isMobileScreen = $state(false)
+  // 소화면 접속 시 토스트 안내 (레이아웃 차단 없음)
   let mobileToastShown = false
 
   $effect(() => {
+    if (page.url.pathname.startsWith('/cms/mobile')) return
     const check = () => {
-      const mobile = window.innerWidth < 1280
-      isMobileScreen = mobile
-      if (mobile && !mobileToastShown) {
+      if (window.innerWidth < 1280 && !mobileToastShown) {
         mobileToastShown = true
         csToast.info('대화면(PC)에서 접속 가능합니다.')
       }
@@ -89,7 +87,14 @@
         { label: '코드설정', href: '/cms/codes' },
       ],
     },
-    { id: 'rental', label: '대여', subMenus: [] },
+    {
+      id: 'rental',
+      label: '대여',
+      subMenus: [
+        { label: '이력관리', href: '/cms/rental/history' },
+
+      ],
+    },
     {
       id: 'promotion',
       label: '프로모션',
@@ -134,7 +139,7 @@
   }
 </script>
 
-{#if data.cmsRole}
+{#if data.cmsRole && !page.url.pathname.startsWith('/cms/mobile')}
   <div class="cms-shell">
 
     <!-- 네비게이션 로딩 오버레이 -->
@@ -202,24 +207,12 @@
   {@render children()}
 {/if}
 
-<!-- 모바일 접근 차단 오버레이 (1280px 미만) -->
-{#if isMobileScreen}
-  <div class="mobile-block-overlay" role="alert" aria-live="assertive">
-    <img src="/logo-bi2.svg" alt="CRAZYSHOT" class="mobile-block-logo" />
-    <p class="mobile-block-msg">대화면(PC)에서<br/>접속 가능합니다.</p>
-  </div>
-{/if}
 
 <Toaster position="bottom-center" richColors closeButton />
 
 <style>
   /* ══ CMS 크로스브라우저 기반 (Chrome · Firefox · Safari 모던 PC 대응) ══ */
 
-  /* PC 전체화면 고정 — 모바일 반응형 없음 */
-  :global(html), :global(body) {
-    min-width: 1280px;
-    overflow-x: auto;
-  }
 
   /* ── 폰트 렌더링 일관성 (Safari/Chrome 안티앨리어싱) ── */
   :global(.cms-shell *) {
@@ -460,40 +453,12 @@
     40%            { transform: translateY(-7px); opacity: 1; }
   }
 
-  /* ─── 모바일 접근 차단 오버레이 ─── */
-  .mobile-block-overlay {
-    position: fixed;
-    inset: 0;
-    z-index: 99999;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
-    gap: 24px;
-    background: rgba(16, 11, 50, 0.88);
-    backdrop-filter: blur(10px);
-    -webkit-backdrop-filter: blur(10px);
-  }
-
-  .mobile-block-logo {
-    width: 100px;
-    opacity: 0.9;
-  }
-
-  .mobile-block-msg {
-    font: var(--text-pc-title-16);
-    font-weight: 500;
-    color: rgba(255, 255, 255, 0.85);
-    text-align: center;
-    line-height: 1.7;
-    margin: 0;
-  }
 
   /* ─── 콘텐츠 ─── */
   .cms-main {
     flex: 1;
-    min-height: 0;        /* flex 자식이 컨텐츠 크기 이하로 수축할 수 있도록 */
-    overflow: hidden;
+    min-height: 0;
+    overflow-y: auto;
     display: flex;
     flex-direction: column;
   }
