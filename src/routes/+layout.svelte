@@ -66,6 +66,7 @@
 		/>
 	{/if}
 
+	{#if !page.url.pathname.startsWith('/cms')}
 	<footer class="site-footer">
 		<div class="footer-inner">
 			<div class="footer-top">
@@ -149,6 +150,7 @@
 			</div>
 		</div>
 	</footer>
+	{/if}
 </div>
 
 <style>

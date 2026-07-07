@@ -198,8 +198,14 @@ body {
 @tailwind components;
 @tailwind utilities;
 
-/* ══ svelte-sonner 토스트 닫기 버튼 오버라이드 ══
-   원형 테두리·배경 제거, 우측 끝 수직 중앙 배치 */
+/* ══ svelte-sonner 토스트 오버라이드 ══ */
+[data-sonner-toast] {
+  outline: none !important;
+  border: none !important;
+  box-shadow: none !important;
+}
+
+/* 닫기 버튼: 원형 테두리·배경 제거, 우측 끝 수직 중앙 배치 */
 [data-sonner-toast] [data-close-button] {
   position: absolute !important;
   top: 50% !important;
