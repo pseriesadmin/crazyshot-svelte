@@ -42,21 +42,39 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 
   const productIds = (products ?? []).map((p) => p.id)
 
-  let assetCounts: Record<string, number> = {}
+  const stockCounts: Record<string, number> = {}
   let prices24h: Record<string, number> = {}
   let prices12h: Record<string, number> = {}
 
   if (productIds.length > 0) {
-    const { data: assets } = await admin
-      .from('assets')
-      .select('product_id')
-      .in('product_id', productIds)
+    // 자식 재고 목록 (parent_product_id로 연결된 복제본)
+    const { data: childProducts } = await admin
+      .from('products')
+      .select('id, parent_product_id')
+      .in('parent_product_id', productIds)
       .is('deleted_at', null)
 
-    assetCounts = (assets ?? []).reduce<Record<string, number>>((acc, a) => {
-      acc[a.product_id] = (acc[a.product_id] ?? 0) + 1
-      return acc
-    }, {})
+    const allIds = [...productIds, ...(childProducts ?? []).map((c) => c.id)]
+
+    // 현재 대여 중(in_use) product_id 목록
+    const { data: inUseRentals } = await admin
+      .from('rental_reservations')
+      .select('product_id')
+      .eq('status', 'in_use')
+      .in('product_id', allIds)
+
+    const inUseSet = new Set((inUseRentals ?? []).map((r) => r.product_id))
+
+    // 가용 재고 수 계산 (self + children 중 in_use 아닌 것)
+    for (const product of products ?? []) {
+      const family = [
+        product.id,
+        ...(childProducts ?? [])
+          .filter((c) => c.parent_product_id === product.id)
+          .map((c) => c.id),
+      ]
+      stockCounts[product.id] = family.filter((id) => !inUseSet.has(id)).length
+    }
 
     // 24h 가격
     const { data: rules24h } = await admin
@@ -139,7 +157,7 @@ export const load: PageServerLoad = async ({ locals, url }) => {
     if (sp) {
       selectedProduct = {
         ...sp,
-        assetCount: assetCounts[sp.id] ?? 0,
+        assetCount: stockCounts[sp.id] ?? 0,
         price12h: prices12h[sp.id] ?? null,
         price24h: prices24h[sp.id] ?? null,
         product_code: (sp as Record<string, unknown>).product_code as string | null ?? null,
@@ -169,10 +187,38 @@ export const load: PageServerLoad = async ({ locals, url }) => {
     }
   }
 
+  // 선택된 상품의 재고 목록 (자신 + 자식 제품 — 동일 재고 그룹)
+  type InventoryUnit = {
+    id: string
+    name: string
+    product_code: string | null
+    is_active: boolean
+    price_rules: Array<{ duration_type: string; price: number }>
+  }
+  let inventoryList: InventoryUnit[] = []
+  if (selectedId) {
+    const { data: invData } = await admin
+      .from('products')
+      .select('id, name, product_code, is_active, price_rules!left(duration_type, price, is_active, deleted_at)')
+      .or(`id.eq.${selectedId},parent_product_id.eq.${selectedId}`)
+      .is('deleted_at', null)
+      .order('created_at', { ascending: true })
+
+    inventoryList = (invData ?? []).map((p) => ({
+      id: p.id as string,
+      name: p.name as string,
+      product_code: (p as Record<string, unknown>).product_code as string | null,
+      is_active: p.is_active as boolean,
+      price_rules: ((p as Record<string, unknown>).price_rules as Array<{ duration_type: string; price: number; is_active: boolean; deleted_at: string | null }> ?? [])
+        .filter((r) => r.is_active && !r.deleted_at)
+        .map((r) => ({ duration_type: r.duration_type, price: r.price })),
+    }))
+  }
+
   return {
     products: (products ?? []).map((p) => ({
       ...p,
-      assetCount: assetCounts[p.id] ?? 0,
+      assetCount: stockCounts[p.id] ?? 0,
       price24h: prices24h[p.id] ?? null as number | null,
       price12h: prices12h[p.id] ?? null as number | null,
     })),
@@ -183,6 +229,7 @@ export const load: PageServerLoad = async ({ locals, url }) => {
     initialTab,
     selectedProduct,
     selectedPriceRules,
+    inventoryList,
   }
 }
 
@@ -361,5 +408,218 @@ export const actions: Actions = {
 
     if (error) return fail(500, { error: '삭제에 실패했습니다.' })
     return { success: true, action: 'deleteProduct' }
+  },
+
+  cloneProduct: async ({ request, locals }) => {
+    const { session } = await locals.safeGetSession()
+    if (!session) return fail(401, { error: '인증 필요' })
+
+    const form = await request.formData()
+    const sourceProductId = form.get('source_product_id') as string | null
+    const count = Math.min(20, Math.max(1, Number(form.get('count')) || 1))
+    const autoCode = form.get('auto_code') !== 'false'
+    const partnerCode = form.get('partner_code') === 'true'
+    const partnerType = (form.get('partner_type') as string | null) ?? '제휴'
+    const mode = (form.get('mode') as string | null) ?? 'new_product'
+
+    if (!sourceProductId) return fail(400, { error: '원본 상품 ID가 누락됐습니다.' })
+
+    const admin = createClient(getSupabaseUrl(), env.SUPABASE_SERVICE_ROLE_KEY ?? '')
+
+    const { data: source, error: sourceError } = await admin
+      .from('products')
+      .select('id, category, name, slug, brand, description, product_caption, image_urls, specifications, sale_price, sale_only')
+      .eq('id', sourceProductId)
+      .is('deleted_at', null)
+      .single()
+
+    if (sourceError || !source) return fail(404, { error: '원본 상품을 찾을 수 없습니다.' })
+
+    // ── add_inventory 모드: 동일 상품 재고 추가 ──────────────────
+    if (mode === 'add_inventory') {
+      const productCode = (source as Record<string, unknown>).product_code as string | null
+      if (!productCode) {
+        return fail(400, { error: '부모 상품에 품번이 없습니다. 먼저 품번을 발행해주세요.' })
+      }
+
+      const { data: sourcePriceRulesInv } = await admin
+        .from('price_rules')
+        .select('duration_type, price, deposit_amount, late_fee_per_hour, damage_fee_percentage')
+        .eq('product_id', sourceProductId)
+        .eq('is_active', true)
+        .is('deleted_at', null)
+
+      const createdIds: string[] = []
+      for (let i = 1; i <= count; i++) {
+        const slug = `${source.slug}-inv-${Date.now()}-${i}`
+
+        const { data: newProduct, error: insertError } = await admin
+          .from('products')
+          .insert({
+            category: source.category,
+            name: source.name,
+            slug,
+            brand: source.brand,
+            description: source.description,
+            product_caption: source.product_caption,
+            image_urls: source.image_urls,
+            specifications: source.specifications,
+            is_active: false,
+            sale_price: source.sale_price,
+            sale_only: source.sale_only,
+            parent_product_id: sourceProductId,
+          })
+          .select('id')
+          .single()
+
+        if (insertError || !newProduct) {
+          return fail(500, { error: `${i}번째 재고 추가에 실패했습니다.` })
+        }
+
+        await admin
+          .from('products')
+          .update({ qr_payload: `https://crazyshot.kr/qr/product/${newProduct.id}` })
+          .eq('id', newProduct.id)
+
+        await admin.rpc('generate_child_product_code', {
+          p_product_id: newProduct.id,
+          p_parent_product_id: sourceProductId,
+        })
+
+        if (sourcePriceRulesInv && sourcePriceRulesInv.length > 0) {
+          await admin.from('price_rules').insert(
+            sourcePriceRulesInv.map((rule) => ({
+              product_id: newProduct.id,
+              duration_type: rule.duration_type,
+              price: rule.price,
+              deposit_amount: rule.deposit_amount,
+              late_fee_per_hour: rule.late_fee_per_hour,
+              damage_fee_percentage: rule.damage_fee_percentage,
+            }))
+          )
+        }
+        createdIds.push(newProduct.id)
+      }
+      return { success: true, cloned: createdIds.length, mode: 'add_inventory', partnerCode: false }
+    }
+
+    // ── new_product 모드: 기존 복제 로직 ─────────────────────────
+    // 제휴상품 품번용 하위 분류코드 조회 (source.category 기준)
+    let partnerCodeId: string | null = null
+    if (partnerCode) {
+      const { data: mainCode } = await admin
+        .from('product_category_codes')
+        .select('id')
+        .eq('product_category', source.category)
+        .eq('depth', 0)
+        .eq('is_active', true)
+        .is('deleted_at', null)
+        .maybeSingle()
+
+      if (mainCode) {
+        const { data: subCode } = await admin
+          .from('product_category_codes')
+          .select('id')
+          .eq('parent_id', mainCode.id)
+          .eq('name', partnerType)
+          .eq('depth', 1)
+          .eq('is_active', true)
+          .is('deleted_at', null)
+          .maybeSingle()
+
+        partnerCodeId = subCode?.id ?? null
+      }
+    }
+
+    const { data: sourcePriceRules } = await admin
+      .from('price_rules')
+      .select('duration_type, price, deposit_amount, late_fee_per_hour, damage_fee_percentage')
+      .eq('product_id', sourceProductId)
+      .eq('is_active', true)
+      .is('deleted_at', null)
+
+    const { data: sourceOptions } = await admin
+      .rpc('get_product_option_links', { p_product_id: sourceProductId })
+
+    const createdIds: string[] = []
+
+    for (let i = 1; i <= count; i++) {
+      let slug = `${source.slug}-copy`
+      let suffix = 1
+      while (true) {
+        const { data: existing } = await admin
+          .from('products').select('id').eq('slug', slug).is('deleted_at', null).maybeSingle()
+        if (!existing) break
+        slug = `${source.slug}-copy-${suffix++}`
+      }
+
+      const { data: newProduct, error: insertError } = await admin
+        .from('products')
+        .insert({
+          category: source.category,
+          name: source.name,
+          slug,
+          brand: source.brand,
+          description: source.description,
+          product_caption: source.product_caption,
+          image_urls: source.image_urls,
+          specifications: source.specifications,
+          is_active: false,
+          sale_price: source.sale_price,
+          sale_only: source.sale_only,
+        })
+        .select('id')
+        .single()
+
+      if (insertError || !newProduct) {
+        return fail(500, { error: `${i}번째 복제 등록에 실패했습니다.` })
+      }
+
+      await admin.from('products')
+        .update({ qr_payload: `https://crazyshot.kr/qr/product/${newProduct.id}` })
+        .eq('id', newProduct.id)
+
+      if (partnerCode) {
+        if (!partnerCodeId) {
+          return fail(400, {
+            error: `이 카테고리에 '${partnerType}' 하위 분류코드가 등록되지 않았습니다. 코드설정에서 먼저 추가해주세요.`,
+          })
+        }
+        await admin.rpc('generate_product_code', {
+          p_product_id: newProduct.id,
+          p_category: source.category,
+          p_code_id: partnerCodeId,
+        })
+      } else if (autoCode) {
+        await admin.rpc('generate_product_code', {
+          p_product_id: newProduct.id,
+          p_category: source.category,
+        })
+      }
+
+      if (sourcePriceRules && sourcePriceRules.length > 0) {
+        await admin.from('price_rules').insert(
+          sourcePriceRules.map((rule) => ({
+            product_id: newProduct.id,
+            duration_type: rule.duration_type,
+            price: rule.price,
+            deposit_amount: rule.deposit_amount,
+            late_fee_per_hour: rule.late_fee_per_hour,
+            damage_fee_percentage: rule.damage_fee_percentage,
+          }))
+        )
+      }
+
+      if (sourceOptions && Array.isArray(sourceOptions) && sourceOptions.length > 0) {
+        await admin.rpc('upsert_product_option_links', {
+          p_product_id: newProduct.id,
+          p_option_links: JSON.stringify(sourceOptions),
+        })
+      }
+
+      createdIds.push(newProduct.id)
+    }
+
+    return { success: true, cloned: createdIds.length, partnerCode }
   },
 }

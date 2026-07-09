@@ -4,6 +4,7 @@
   import { fly } from 'svelte/transition'
   import { invalidateAll } from '$app/navigation'
   import ProductDetailPanel from '$lib/components/cms/ProductDetailPanel.svelte'
+  import CmsSimilarNameInput from '$lib/components/cms/CmsSimilarNameInput.svelte'
   import type { PageData } from './$types'
 
   interface Props { data: PageData }
@@ -19,6 +20,10 @@
   )
 
   let searchInput = $state(data.q)
+
+  $effect(() => {
+    searchInput = data.q
+  })
 
   const panelOpen = $derived(!!data.selectedId && !!data.selectedProduct)
 
@@ -42,12 +47,17 @@
     goto(`/cms/products?${params.toString()}`)
   }
 
-  function onSearch(e: Event) {
-    e.preventDefault()
+  function runSearch(): void {
     const params = new URLSearchParams()
     if (data.category !== 'all') params.set('category', data.category)
-    if (searchInput) params.set('q', searchInput)
+    const q = searchInput.trim()
+    if (q) params.set('q', q)
     goto(`/cms/products?${params.toString()}`)
+  }
+
+  function onSearch(e: Event) {
+    e.preventDefault()
+    runSearch()
   }
 
   function formatPrice(price: number | null): string {
@@ -93,14 +103,44 @@
   <!-- 검색 + 등록 버튼 -->
   <div class="toolbar">
     <form class="search-form" onsubmit={onSearch}>
-      <input
-        class="f-input search-input"
-        type="search"
-        placeholder="상품명으로 검색"
-        bind:value={searchInput}
-        aria-label="상품 검색"
-      />
-      <button type="submit" class="search-btn">검색</button>
+      <div class="search-field">
+        <CmsSimilarNameInput
+          id="product-search"
+          bind:value={searchInput}
+          source="product_search"
+          minChars={1}
+          overlayLayer={true}
+          listLabel="상품 검색 제안"
+          placeholder="상품명·브랜드·키워드 검색"
+          categoryLabels={CATEGORY_LABEL}
+          onselect={() => runSearch()}
+        >
+          {#snippet field(c)}
+            <input
+              type="search"
+              class="f-input search-input"
+              id={c.id}
+              placeholder={c.placeholder}
+              value={c.value}
+              oninput={c.oninput}
+              onkeydown={(e) => {
+                c.onkeydown(e)
+                if (e.key === 'Enter' && !e.defaultPrevented) {
+                  e.preventDefault()
+                  runSearch()
+                }
+              }}
+              onfocus={c.onfocus}
+              onblur={c.onblur}
+              aria-label="상품 검색"
+              aria-autocomplete={c.ariaAutocomplete}
+              aria-expanded={c.ariaExpanded}
+              aria-controls={c.ariaControls}
+              autocomplete="off"
+            />
+          {/snippet}
+        </CmsSimilarNameInput>
+      </div>
     </form>
     <a href="/cms/products/new" class="cta-btn">+ 상품등록</a>
   </div>
@@ -152,7 +192,7 @@
                 <div class="card-info">
                   <div class="card-info-top">
                     <span class="cat-badge">{CATEGORY_LABEL[product.category] ?? product.category}</span>
-                    <span class="stock-badge">{product.assetCount}개</span>
+                    <span class="stock-badge" class:stock-zero={product.assetCount === 0}>{product.assetCount}개</span>
                   </div>
                   <p class="card-name">{product.name}</p>
                   {#if product.brand}
@@ -214,6 +254,7 @@
             categories={data.categories}
             categoryLabel={CATEGORY_LABEL[data.selectedProduct.category] ?? data.selectedProduct.category}
             initialTab={data.initialTab}
+            inventoryList={data.inventoryList}
             onclose={closePanel}
           />
         {/key}
@@ -227,7 +268,7 @@
   .products-wrap {
     display: flex;
     flex-direction: column;
-    gap: 16px;
+    gap: 30px;
     padding: 20px 20px 48px;
   }
 
@@ -244,7 +285,7 @@
   .cat-tab {
     padding: 6px 14px;
     border: none;
-    border-radius: var(--radius-md);
+    border-radius: var(--radius-sm);
     background: transparent;
     color: var(--cs-text-mid);
     font: var(--text-pc-body-14);
@@ -261,11 +302,24 @@
     align-items: center;
     gap: 10px;
     flex-shrink: 0;
+    position: relative;
+    z-index: 30;
   }
   .search-form {
-    display: flex;
-    gap: 8px;
     flex: 1;
+    min-width: 0;
+  }
+  .search-field {
+    flex: 1;
+    min-width: 0;
+    position: relative;
+    z-index: 31;
+  }
+  .search-field :global(.search-input) {
+    width: 100%;
+    height: 44px;
+    box-sizing: border-box;
+    display: block;
   }
   .f-input {
     background: var(--cs-surface-gray);
@@ -277,31 +331,14 @@
   }
   .f-input:focus { outline: 2px solid var(--cs-purple); outline-offset: -2px; }
   .f-input::placeholder { color: var(--cs-text-placeholder); }
-  .search-input {
-    flex: 1;
-    height: 44px;
-  }
-  .search-btn {
-    height: 44px;
-    padding: 0 20px;
-    border: none;
-    border-radius: var(--cms-radius-sm);
-    background: var(--cs-lilac);
-    color: var(--cs-text);
-    font: var(--text-pc-body-14);
-    cursor: pointer;
-    white-space: nowrap;
-    transition: background 0.12s;
-  }
-  .search-btn:hover { background: var(--cs-purple-op10); }
   .cta-btn {
     display: inline-flex;
     align-items: center;
     height: 44px;
-    padding: 0 20px;
+    padding: 0 30px;
     background: var(--cs-purple);
     color: var(--cs-white);
-    border-radius: var(--radius-xl);
+    border-radius: var(--radius-md);
     font: var(--text-pc-body-14);
     text-decoration: none;
     white-space: nowrap;
@@ -333,7 +370,7 @@
   .card-list {
     display: flex;
     flex-direction: column;
-    gap: 8px;
+    gap: 20px;
     padding-right: 4px;
   }
   /* 스크롤바 항상 표시 */
@@ -421,6 +458,10 @@
     border-radius: var(--radius-sm);
     font: var(--text-pc-script-12);
     white-space: nowrap;
+  }
+  .stock-badge.stock-zero {
+    background: rgba(255,53,53,0.10);
+    color: var(--cs-red-badge);
   }
   .card-name {
     font: var(--text-pc-body-14);

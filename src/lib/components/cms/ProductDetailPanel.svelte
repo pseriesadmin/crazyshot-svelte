@@ -46,16 +46,25 @@
     assets?: AssetDetail[]
   }
 
+  interface InventoryUnit {
+    id: string
+    name: string
+    product_code: string | null
+    is_active: boolean
+    price_rules: Array<{ duration_type: string; price: number }>
+  }
+
   interface Props {
     product: ProductDetail
     priceRules: PriceRule[]
     categories: Array<{ value: string; label: string }>
     categoryLabel: string
     initialTab?: string | null
+    inventoryList?: InventoryUnit[]
     onclose: () => void
   }
 
-  let { product, priceRules, categories, categoryLabel, initialTab = null, onclose }: Props = $props()
+  let { product, priceRules, categories, categoryLabel, initialTab = null, inventoryList = [], onclose }: Props = $props()
 
 
   // 카테고리 레이블 맵 (picker용)
@@ -650,6 +659,46 @@
   let showDeleteConfirm = $state(false)
   let isDeleting = $state(false)
 
+  // ─── 상품 복제 (빠른 재고 등록) ───────────────────────────────
+  let showCloneModal = $state(false)
+  let cloneMode = $state<'new_product' | 'add_inventory'>('new_product')
+  let cloneCount = $state(1)
+  let cloneAutoCode = $state(true)
+  let clonePartnerCode = $state(false)
+  let clonePartnerType = $state<'제휴' | '외부' | '외주'>('제휴')
+  let isCloning = $state(false)
+
+  function openCloneModal() {
+    cloneMode = 'new_product'
+    cloneCount = 1
+    cloneAutoCode = true
+    clonePartnerCode = false
+    clonePartnerType = '제휴'
+    showCloneModal = true
+  }
+
+  function closeCloneModal() {
+    if (!isCloning) showCloneModal = false
+  }
+
+  function handleCloneProduct() {
+    isCloning = true
+    return async ({ result }: { result: ActionResult }) => {
+      isCloning = false
+      if (result.type === 'success') {
+        const cloned = (result.data as { cloned?: number } | undefined)?.cloned ?? 0
+        showCloneModal = false
+        await invalidateAll()
+        csToast.success(`재고 ${cloned}개가 등록됐습니다.`)
+      } else if (result.type === 'failure') {
+        const msg = (result.data as { error?: string } | undefined)?.error ?? '복제 등록에 실패했습니다.'
+        csToast.error(msg)
+      } else {
+        await applyAction(result)
+      }
+    }
+  }
+
   function handleDeleteProduct() {
     isDeleting = true
     return async ({ result }: { result: ActionResult }) => {
@@ -664,6 +713,35 @@
     }
   }
 </script>
+
+{#if inventoryList && inventoryList.length > 1}
+  <div class="inv-list-wrap">
+    {#each inventoryList as unit (unit.id)}
+      <div
+        class="inv-row"
+        role="button"
+        tabindex="0"
+        onclick={() => {}}
+        onkeydown={() => {}}
+      >
+        <span class="inv-tag">품번</span>
+        <span class="inv-code">{unit.product_code ?? '—'}</span>
+        <span class="inv-name">{unit.name}</span>
+        <div class="inv-prices">
+          {#each unit.price_rules as rule (rule.duration_type)}
+            <span class="inv-pill">
+              {rule.duration_type === '12h' ? '12H' : rule.duration_type === '24h' ? 'Day' : '월'}
+              {rule.price.toLocaleString()}
+            </span>
+          {/each}
+        </div>
+        <span class="inv-status" class:inv-status--on={unit.is_active}>
+          {unit.is_active ? '노출' : '미노출'}
+        </span>
+      </div>
+    {/each}
+  </div>
+{/if}
 
 <div class="panel-wrap">
 <div class="detail-panel">
@@ -705,17 +783,20 @@
 
   <!-- 상태 요약 바 -->
   <div class="status-bar">
-    <span class="sb-item"><span class="sb-label">재고</span><span class="sb-value">{product.assetCount}개</span></span>
-    <span class="sb-divider">|</span>
-    <span class="sb-item"><span class="sb-label">12시간</span><span class="sb-value">{formatPrice(product.price12h)}</span></span>
-    <span class="sb-divider">|</span>
-    <span class="sb-item"><span class="sb-label">1일</span><span class="sb-value">{formatPrice(product.price24h)}</span></span>
-    <span class="sb-divider">|</span>
-    <span class="sb-item"><span class="sb-label">등록일</span><span class="sb-value">{formatDate(product.created_at)}</span></span>
-    <span class="sb-divider">|</span>
-    <span class="status-badge" class:active={product.is_active}>
-      {product.is_active ? '노출(ON)' : '미노출(OFF)'}
-    </span>
+    <div class="status-bar-left">
+      <span class="sb-item"><span class="sb-label">재고</span><span class="sb-value">{product.assetCount}개</span></span>
+      <span class="sb-divider">|</span>
+      <span class="sb-item"><span class="sb-label">12시간</span><span class="sb-value">{formatPrice(product.price12h)}</span></span>
+      <span class="sb-divider">|</span>
+      <span class="sb-item"><span class="sb-label">1일</span><span class="sb-value">{formatPrice(product.price24h)}</span></span>
+      <span class="sb-divider">|</span>
+      <span class="sb-item"><span class="sb-label">등록일</span><span class="sb-value">{formatDate(product.created_at)}</span></span>
+      <span class="sb-divider">|</span>
+      <span class="status-badge" class:active={product.is_active}>
+        {product.is_active ? '노출(ON)' : '미노출(OFF)'}
+      </span>
+    </div>
+    <button type="button" class="status-cta-btn" onclick={openCloneModal}>빠른 재고 등록</button>
   </div>
 
   <!-- 탭 네비게이션 -->
@@ -1350,6 +1431,134 @@
 </div>
 </div>
 
+<!-- 상품 복제 모달 -->
+{#if showCloneModal}
+  <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
+  <div class="clone-modal-backdrop" onclick={closeCloneModal} role="presentation">
+    <div
+      class="clone-modal"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="clone-modal-title"
+      onclick={(e) => e.stopPropagation()}
+    >
+      <div class="clone-modal-header">
+        <h3 id="clone-modal-title" class="clone-modal-title">상품정보 복제 자동 등록</h3>
+        <button type="button" class="clone-modal-close" onclick={closeCloneModal} aria-label="닫기" disabled={isCloning}>✕</button>
+      </div>
+      <div class="clone-modal-body">
+        <div class="clone-mode-toggle" role="group" aria-label="등록 방식">
+          <button
+            type="button"
+            class="clone-mode-btn"
+            class:clone-mode-btn--on={cloneMode === 'new_product'}
+            onclick={() => { cloneMode = 'new_product'; cloneAutoCode = true; clonePartnerCode = false }}
+            disabled={isCloning}
+            aria-pressed={cloneMode === 'new_product'}
+          >새 상품으로 복제</button>
+          <button
+            type="button"
+            class="clone-mode-btn"
+            class:clone-mode-btn--on={cloneMode === 'add_inventory'}
+            onclick={() => { cloneMode = 'add_inventory'; cloneAutoCode = false; clonePartnerCode = false }}
+            disabled={isCloning}
+            aria-pressed={cloneMode === 'add_inventory'}
+          >동일 상품 재고 추가</button>
+        </div>
+        <p class="clone-modal-desc">
+          {#if cloneMode === 'add_inventory'}
+            동일 상품의 재고를 추가 등록합니다.<br />
+            부모 품번 기반의 고유 품번이 자동 발행됩니다.
+          {:else}
+            동일 제품으로 재고 일괄 등록합니다.<br />
+            현재 상품의 모든 정보(이미지·가격·사양 포함)를 복제합니다.
+          {/if}
+        </p>
+        <div class="clone-source-box">
+          {#if product.image_urls && product.image_urls.length > 0}
+            <img
+              class="clone-source-thumb"
+              src={product.image_urls[0]}
+              alt={product.name}
+            />
+          {/if}
+          <div class="clone-source-info">
+            <span class="clone-source-label">원본 상품</span>
+            <span class="clone-source-name">{product.name}</span>
+            {#if product.product_code}
+              <span class="clone-source-code">{product.product_code}</span>
+            {/if}
+          </div>
+        </div>
+        <label class="clone-field">
+          <span class="clone-field-label">등록 수량</span>
+          <input
+            class="f-input clone-count-input"
+            type="number"
+            min="1"
+            max="20"
+            bind:value={cloneCount}
+            aria-label="등록 수량"
+            disabled={isCloning}
+          />
+        </label>
+        {#if cloneMode === 'new_product'}
+        <div class="clone-options-row">
+          <button
+            type="button"
+            class="clone-option-toggle"
+            class:clone-option-toggle--on={cloneAutoCode}
+            onclick={() => { cloneAutoCode = true; clonePartnerCode = false }}
+            disabled={isCloning}
+            aria-pressed={cloneAutoCode}
+          >
+            품번(분류코드) 자동 생성
+          </button>
+          <button
+            type="button"
+            class="clone-option-toggle"
+            class:clone-option-toggle--on={clonePartnerCode}
+            onclick={() => { clonePartnerCode = true; cloneAutoCode = false }}
+            disabled={isCloning}
+            aria-pressed={clonePartnerCode}
+          >
+            제휴상품 품번 자동 생성
+          </button>
+        </div>
+        {/if}
+        {#if cloneMode === 'new_product' && clonePartnerCode}
+          <div class="clone-partner-type-row" role="group" aria-label="제휴 유형 선택">
+            {#each ['제휴', '외부', '외주'] as type (type)}
+              <button
+                type="button"
+                class="clone-partner-type-btn"
+                class:clone-partner-type-btn--on={clonePartnerType === type}
+                onclick={() => (clonePartnerType = type as '제휴' | '외부' | '외주')}
+                disabled={isCloning}
+                aria-pressed={clonePartnerType === type}
+              >{type}</button>
+            {/each}
+          </div>
+        {/if}
+      </div>
+      <div class="clone-modal-actions clone-modal-actions--col">
+        <form method="POST" action="?/cloneProduct" use:enhance={handleCloneProduct} style="width:100%">
+          <input type="hidden" name="source_product_id" value={product.id} />
+          <input type="hidden" name="mode" value={cloneMode} />
+          <input type="hidden" name="count" value={cloneCount} />
+          <input type="hidden" name="auto_code" value={String(cloneAutoCode)} />
+          <input type="hidden" name="partner_code" value={String(clonePartnerCode)} />
+          <input type="hidden" name="partner_type" value={clonePartnerType} />
+          <button type="submit" class="cta-btn cta-btn--wide" disabled={isCloning || cloneCount < 1}>
+            {isCloning ? '등록 중...' : '재고 등록 실행'}
+          </button>
+        </form>
+        <button type="button" class="clone-cancel-link" onclick={closeCloneModal} disabled={isCloning}>취소</button>
+      </div>
+    </div>
+  </div>
+{/if}
+
 <!-- 상품 삭제 확인 모달 -->
 {#if showDeleteConfirm}
   <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
@@ -1536,10 +1745,38 @@
 
   /* 상태 바 */
   .status-bar {
-    display: flex; align-items: center; gap: 10px;
-    padding: 10px 20px; background: var(--cs-lilac);
-    flex-shrink: 0; flex-wrap: wrap;
+    display: flex; align-items: center; justify-content: space-between; gap: 12px;
+    padding: 15px 20px; background: var(--cs-surface-gray);
+    min-height: 75px;
+    flex-shrink: 0;
   }
+  .status-bar-left {
+    display: flex; align-items: center; gap: 10px;
+    flex-wrap: wrap; flex: 1; min-width: 0;
+  }
+  .status-cta-btn {
+    display: inline-flex; align-items: center; justify-content: center;
+    flex-shrink: 0;
+    height: 35px; padding: 0 16px;
+    background: var(--cs-purple); color: var(--cs-white);
+    border: none; border-radius: var(--radius-sm);
+    font: var(--text-pc-script-12);
+    white-space: nowrap; cursor: pointer;
+    transition: background 0.12s;
+  }
+  .status-cta-btn:hover:not(:disabled) { background: var(--cs-purple-hover); }
+  .status-cta-btn:disabled { background: var(--cs-disabled-button); cursor: not-allowed; }
+  .cta-btn {
+    display: inline-flex; align-items: center; justify-content: center;
+    height: 44px; padding: 0 20px;
+    background: var(--cs-purple); color: var(--cs-white);
+    border: none; border-radius: var(--radius-xl);
+    font: var(--text-pc-body-14);
+    white-space: nowrap; cursor: pointer;
+    transition: background 0.12s;
+  }
+  .cta-btn:hover:not(:disabled) { background: var(--cs-purple-hover); }
+  .cta-btn:disabled { background: var(--cs-disabled-button); cursor: not-allowed; }
   .sb-item { display: flex; align-items: center; gap: 4px; }
   .sb-label { font: var(--text-pc-script-12); color: var(--cs-text-light); }
   .sb-value { font: var(--text-pc-body-14); color: var(--cs-text); }
@@ -2228,6 +2465,251 @@
   .confirm-msg { font: var(--text-pc-body-14); color: var(--cs-text); margin: 0 0 8px; }
   .confirm-sub { font: var(--text-pc-script-12); color: var(--cs-text-mid); margin: 0 0 20px; }
   .confirm-actions { display: flex; gap: 10px; justify-content: center; }
+
+  /* 상품 복제 모달 */
+  .clone-modal-backdrop {
+    position: fixed; inset: 0; z-index: 200;
+    background: rgba(16,11,50,0.45);
+    display: flex; align-items: center; justify-content: center;
+  }
+  .clone-modal {
+    background: var(--cs-white);
+    border-radius: var(--cms-radius-lg);
+    padding: 24px 28px;
+    width: 520px;
+    max-width: calc(100vw - 40px);
+    display: flex;
+    flex-direction: column;
+    gap: 20px;
+  }
+  .clone-modal-header {
+    display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  }
+  .clone-modal-title {
+    font: var(--text-pc-title-16);
+    color: var(--cs-text);
+    margin: 0;
+  }
+  .clone-modal-close {
+    width: 32px; height: 32px;
+    border: none; border-radius: var(--radius-sm);
+    background: var(--cs-surface-gray); color: var(--cs-text-mid);
+    cursor: pointer; font-size: 14px;
+    transition: background 0.12s;
+  }
+  .clone-modal-close:hover:not(:disabled) { background: rgba(255,53,53,0.1); color: var(--cs-red-badge); }
+  .clone-modal-close:disabled { opacity: 0.5; cursor: not-allowed; }
+  .clone-modal-desc {
+    font: var(--text-pc-script-12);
+    color: var(--cs-text-mid);
+    margin: 0;
+    line-height: 1.6;
+  }
+  .clone-source-box {
+    display: flex; flex-direction: row; align-items: center; gap: 12px;
+    padding: 12px 16px;
+    background: var(--cs-surface-gray);
+    border-radius: var(--cms-radius-sm);
+  }
+  .clone-source-thumb {
+    width: 56px; height: 56px;
+    object-fit: cover;
+    border-radius: var(--radius-sm);
+    flex-shrink: 0;
+  }
+  .clone-source-info {
+    display: flex; flex-direction: column; gap: 4px;
+    min-width: 0;
+  }
+  .clone-source-label {
+    font: var(--text-pc-script-12);
+    color: var(--cs-text-light);
+  }
+  .clone-source-name {
+    font: var(--text-pc-body-14);
+    color: var(--cs-text);
+  }
+  .clone-source-code {
+    font: var(--text-pc-script-12);
+    color: var(--cs-text-mid);
+    font-family: monospace;
+  }
+  .clone-field { display: flex; flex-direction: column; gap: 6px; }
+  .clone-field-label {
+    font: var(--text-pc-script-12);
+    color: var(--cs-text-mid);
+  }
+  .clone-modal-actions {
+    display: flex; align-items: center; justify-content: flex-end; gap: 10px;
+  }
+  .clone-modal-actions form { margin: 0; }
+  .clone-modal-actions--col {
+    flex-direction: column; align-items: stretch; gap: 8px;
+  }
+  .clone-count-input { width: 100px; }
+  .clone-partner-type-row {
+    display: flex;
+    gap: 6px;
+    padding: 8px 12px;
+    background: rgba(59,47,138,0.04);
+    border-radius: var(--cms-radius-sm);
+  }
+  .clone-partner-type-btn {
+    flex: 1;
+    height: 34px;
+    border-radius: var(--radius-xl);
+    border: 1.5px solid var(--cs-border);
+    background: var(--cs-white);
+    color: var(--cs-text-mid);
+    font: var(--text-pc-script-12);
+    cursor: pointer;
+    transition: background 0.12s, color 0.12s, border-color 0.12s;
+  }
+  .clone-partner-type-btn:hover:not(:disabled) {
+    border-color: var(--cs-purple);
+    color: var(--cs-purple);
+  }
+  .clone-partner-type-btn--on {
+    background: rgba(59,47,138,0.10);
+    border-color: var(--cs-purple);
+    color: var(--cs-purple);
+  }
+  .clone-partner-type-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+  .clone-options-row {
+    display: flex;
+    gap: 8px;
+  }
+  .clone-option-toggle {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 9px 12px;
+    border-radius: var(--radius-xl);
+    border: 1.5px solid var(--cs-border);
+    background: var(--cs-white);
+    color: var(--cs-text-mid);
+    font: var(--text-pc-script-12);
+    cursor: pointer;
+    transition: background 0.15s, color 0.15s, border-color 0.15s;
+    text-align: center;
+    line-height: 1.4;
+    min-height: 44px;
+  }
+  .clone-option-toggle:hover:not(:disabled) {
+    border-color: var(--cs-purple);
+    color: var(--cs-purple);
+  }
+  .clone-option-toggle--on {
+    background: rgba(59,47,138,0.10);
+    border-color: var(--cs-purple);
+    color: var(--cs-purple);
+  }
+  .clone-option-toggle:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+  .cta-btn--wide { width: 100%; }
+
+  /* 재고 목록 섹션 */
+  .inv-list-wrap {
+    background: var(--cs-white);
+    border-radius: var(--cms-radius-md);
+    overflow: hidden;
+    margin-bottom: 8px;
+  }
+  .inv-row {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 12px 20px;
+    border-bottom: 1px solid var(--cs-surface-gray);
+    cursor: default;
+  }
+  .inv-row:last-child { border-bottom: none; }
+  .inv-tag {
+    font: var(--text-pc-script-12);
+    color: var(--cs-text-light);
+    flex-shrink: 0;
+  }
+  .inv-code {
+    font: var(--text-pc-script-12);
+    color: var(--cs-text-mid);
+    min-width: 120px;
+    flex-shrink: 0;
+    font-family: monospace;
+  }
+  .inv-name {
+    font: var(--text-pc-body-14);
+    color: var(--cs-text);
+    flex: 1;
+    text-align: left;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .inv-prices {
+    display: flex;
+    gap: 6px;
+    flex-shrink: 0;
+  }
+  .inv-pill {
+    background: rgba(59,47,138,0.08);
+    color: var(--cs-purple);
+    border-radius: var(--radius-full);
+    padding: 2px 10px;
+    font: var(--text-pc-script-12);
+    white-space: nowrap;
+  }
+  .inv-status {
+    font: var(--text-pc-script-12);
+    color: var(--cs-text-light);
+    flex-shrink: 0;
+    min-width: 40px;
+    text-align: right;
+  }
+  .inv-status--on {
+    color: var(--cs-success-light);
+  }
+
+  /* 클론 모드 토글 */
+  .clone-mode-toggle {
+    display: flex;
+    gap: 6px;
+    margin-bottom: 14px;
+  }
+  .clone-mode-btn {
+    flex: 1;
+    height: 36px;
+    border: 1px solid var(--cs-border);
+    border-radius: var(--radius-sm);
+    background: transparent;
+    color: var(--cs-text-mid);
+    font: var(--text-pc-script-12);
+    cursor: pointer;
+    transition: background 0.12s, color 0.12s, border-color 0.12s;
+  }
+  .clone-mode-btn:hover:not(:disabled) {
+    background: rgba(59,47,138,0.06);
+    color: var(--cs-text);
+  }
+  .clone-mode-btn--on {
+    background: var(--cs-purple);
+    color: var(--cs-white);
+    border-color: var(--cs-purple);
+  }
+  .clone-mode-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+  .clone-cancel-link {
+    background: none; border: none;
+    font: var(--text-pc-script-12);
+    color: var(--cs-text-light);
+    cursor: pointer; text-align: center;
+    padding: 4px 0;
+    transition: color 0.12s;
+  }
+  .clone-cancel-link:hover:not(:disabled) { color: var(--cs-text-mid); }
+  .clone-cancel-link:disabled { opacity: 0.5; cursor: not-allowed; }
 
   /* 장치 정보 섹션 */
   .device-info-section {

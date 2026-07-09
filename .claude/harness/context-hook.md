@@ -21,6 +21,8 @@ HOOK-2: 로직 재확인 요청
 HOOK-3: UI·컴포넌트 작업
   트리거: "컴포넌트", "디자인", "UI", "레이아웃",
           "화면", "버튼", "모달", "탭", "카드"
+  → 파일 경로가 src/routes/cms/ 또는 src/lib/components/cms/ 이면
+    HOOK-3A (CMS 표준 디자인 시스템 확인) 자동 실행
 
 HOOK-4: 새 채팅 재시작 후 첫 작업
   트리거: TASK.md 로드 직후 첫 번째 NOW 태스크 실행 시
@@ -84,35 +86,65 @@ HOOK-4: 새 채팅 재시작 후 첫 작업
 
 ## HOOK-3 — UI·컴포넌트 작업 시
 
-> 패턴: 존재하지 않는 컴포넌트 임의 생성
+> 패턴: 존재하지 않는 컴포넌트 임의 생성 / CMS 표준 디자인 토큰 미준수
 
 ```
 1. 구현 전 체크리스트 출력
-   "⏸ HOOK-3: UI 구현 진입. 컴포넌트 확인 먼저."
+   "⏸ HOOK-3: UI 구현 진입. 컴포넌트 + 디자인 시스템 확인 먼저."
 
-2. 사용할 컴포넌트 목록 선언
+2. ⚠️ CMS 영역 여부 판별 (HOOK-3A — 최우선)
+   파일 경로에 src/routes/cms/ 또는 src/lib/components/cms/ 포함 시 → HOOK-3A 즉시 실행
+
+   HOOK-3A: CMS 표준 디자인 시스템 강제 확인
+   ─────────────────────────────────────────────
+   "⏸ HOOK-3A: CMS 영역 UI 작업. 표준 디자인 시스템 확인 필수."
+
+   반드시 .claude/rules/cms-uiux.md Section 0 (CMS 표준 디자인 토큰 정본)을 Read하여
+   아래 항목을 작업 전 선언할 것:
+
+   "CMS 디자인 토큰 확인:
+    [ ] 컬러: [사용할 토큰명] → [CSS 변수] 확인
+    [ ] 버튼 반경: radius-base (8px = --radius-sm) — pill(30px) 아님
+    [ ] 버튼 shadow: shadow-button (4px 4px 0px rgba(39,27,122,0.5))
+    [ ] 토글 ON 색: primary-800 (#201857 = --cs-purple-dark) — --cs-purple 아님
+    [ ] 구분선: border-default (#ECEBF4) 사용 여부
+    [ ] 해당 컴포넌트 JSON 스펙 확인: [컴포넌트명] → [배경/텍스트/반경/패딩] 선언"
+
+   구현 중 토큰 값 불확실 시 → 추측 금지, cms-uiux.md Section 0 재확인 후 진행
+   허용 예외 하드코딩 목록 외 #hex / rgba 직접 입력 발견 시 → 즉시 수정 후 계속
+   ─────────────────────────────────────────────
+
+3. 사용할 컴포넌트 목록 선언
    "이 태스크에서 사용할 컴포넌트:
     - [컴포넌트명]: src/lib/comps/[경로] — 존재 확인 ✅/❌"
 
-3. 존재하지 않는 컴포넌트 발견 시
+4. 존재하지 않는 컴포넌트 발견 시
    "⚠️ [컴포넌트명]이 src/lib/comps/에 없습니다.
     대체 가능 컴포넌트: [대안]
     새로 만들어야 하면 Stephen 확인 필요."
    → 임의로 새 컴포넌트 생성하지 않고 대기
 
-4. CSS 변수·클래스 사전 확인
-   → ui-mobile.md에서 읽은 실제 값만 사용
+5. CSS 변수·클래스 사전 확인
+   → CMS 영역: cms-uiux.md Section 0 토큰 정본 기준
+   → 일반 영역: ui-mobile.md + uiux.md에서 읽은 실제 값만 사용
 
-5. 구현 완료 후 자가 체크
+6. 구현 완료 후 자가 체크
    "UI 자가 체크:
     [ ] 새 컴포넌트 생성 없음
-    [ ] 하드코딩 색상 없음 (var(--) 사용)
-    [ ] 터치 타겟 44px 이상"
+    [ ] 하드코딩 색상 없음 (var(--) 사용) — 허용 예외 목록 외
+    [ ] 터치 타겟 44px 이상
+    (CMS 영역 추가)
+    [ ] cms-uiux.md GATE C 확인 항목 전수 점검 완료
+    [ ] JSON 컴포넌트 스펙과 구현 값 1:1 대조 완료"
 
 금지:
 ❌ 컴포넌트 존재 확인 없이 import
 ❌ 없는 컴포넌트 임의 생성
 ❌ 하드코딩 색상값 사용
+❌ CMS 영역에서 cms-uiux.md Section 0 미확인 채 UI 구현 시작
+❌ CMS 버튼에 --radius-xl(30px) 사용 (--radius-sm 8px 사용)
+❌ CMS 토글 ON에 --cs-purple 사용 (--cs-purple-dark 사용)
+❌ src/app.css 미정의 CSS 변수 임의 생성
 ```
 
 ---
@@ -291,6 +323,7 @@ HOOK-4: 새 채팅 재시작 후 첫 작업
 "파일 확인해"    → HOOK-1 실행 (추측 없이 실제 파일 Read)
 "로직 읽어"      → HOOK-2 실행 (핵심 로직 파일 직접 Read)
 "컴포넌트 확인"  → HOOK-3 Step 2~3 실행
+"CMS 디자인 확인" → HOOK-3A 실행 (cms-uiux.md Section 0 강제 Read + 토큰 선언)
 "스벨트 확인"    → HOOK-5 실행 (SvelteKit 5 패턴 체크)
 "핸드오프"       → HOOK-6 실행 (세션 압축 + HANDOFF.md 생성)
 "오인 기록"      → HOOK-7 실행 (misidentifications.md 캡처)
