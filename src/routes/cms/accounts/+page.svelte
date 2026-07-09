@@ -243,8 +243,9 @@
     background: var(--cs-purple);
     color: var(--cs-white);
     border: none;
-    border-radius: var(--radius-xl);
+    border-radius: var(--radius-md);
     height: 56px;
+    padding: 0 30px;
     font: var(--text-pc-title-16);
     cursor: pointer;
     margin-top: 8px;

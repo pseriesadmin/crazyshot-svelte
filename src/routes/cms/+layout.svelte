@@ -83,7 +83,6 @@
       label: '상품',
       subMenus: [
         { label: '상품목록', href: '/cms/products' },
-        { label: '상품등록', href: '/cms/products/new' },
         { label: '코드설정', href: '/cms/codes' },
       ],
     },
@@ -136,6 +135,12 @@
 
   function mainMenuHref(menu: MainMenu): string {
     return menu.subMenus[0]?.href ?? '#'
+  }
+
+  function isSubTabActive(sub: SubMenu): boolean {
+    if (page.url.pathname === sub.href) return true
+    if (sub.href === '/cms/products' && page.url.pathname.startsWith('/cms/products')) return true
+    return false
   }
 </script>
 
@@ -190,7 +195,7 @@
           <a
             href={sub.href}
             class="sub-tab"
-            class:active={page.url.pathname === sub.href}
+            class:active={isSubTabActive(sub)}
             data-sveltekit-preload-data="hover"
           >{sub.label}</a>
         {/each}
