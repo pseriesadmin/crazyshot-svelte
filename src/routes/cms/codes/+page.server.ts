@@ -81,6 +81,8 @@ export type MappingGroup = {
   description: string | null
   keywords: string[]
   is_active: boolean
+  show_in_product_filter: boolean
+  is_partner_type: boolean
   sort_order: number
   created_at: string
   updated_at: string
@@ -154,7 +156,7 @@ export const load: PageServerLoad = async ({ locals }) => {
       .maybeSingle(),
     admin
       .from('code_mapping_groups')
-      .select('id, name, description, keywords, is_active, sort_order, created_at, updated_at')
+      .select('id, name, description, keywords, is_active, show_in_product_filter, is_partner_type, sort_order, created_at, updated_at')
       .order('sort_order')
       .order('name'),
     admin
@@ -207,7 +209,7 @@ export const actions: Actions = {
     const code_tier_raw = ((form.get('code_tier') as string) ?? '').trim()
     const code_tier = (['major', 'middle', 'minor'].includes(code_tier_raw) ? code_tier_raw : null) as 'major' | 'middle' | 'minor' | null
     const seq_limit_raw = parseInt((form.get('seq_limit') as string) ?? '0')
-    const seq_limit = (seq_limit_raw > 0 && seq_limit_raw <= 999) ? seq_limit_raw : null
+    const seq_limit = (seq_limit_raw > 0 && seq_limit_raw <= 9999999) ? seq_limit_raw : null
 
     if (!code || !name)
       return fail(400, { action: 'addCode', error: '코드와 코드명은 필수입니다.' })
@@ -305,7 +307,7 @@ export const actions: Actions = {
       : []
     const date_include = form.get('date_include') !== 'false'
     const seq_limit_raw = parseInt((form.get('seq_limit') as string) ?? '0')
-    const seq_limit = (seq_limit_raw > 0 && seq_limit_raw <= 9999) ? seq_limit_raw : null
+    const seq_limit = (seq_limit_raw > 0 && seq_limit_raw <= 9999999) ? seq_limit_raw : null
 
     if (!name) return fail(400, { action: 'editCode', error: '코드명은 필수입니다.' })
 
@@ -392,33 +394,18 @@ export const actions: Actions = {
     if (childCount && childCount > 0)
       return fail(400, { action: 'deleteCode', error: `하위 코드 ${childCount}개가 존재합니다. 하위 코드를 먼저 삭제해주세요.` })
 
-    // 연결 상품 존재 시 superadmin만 통삭제 가능
+    // 연결 상품이 있으면 삭제 차단 (superadmin 포함) — 코드 이관 후 삭제할 것
     const linkedCount = await getLinkedProductCount(admin, id)
-    if (linkedCount > 0) {
-      const isSuperadmin = await checkSuperadmin(admin, session.user.id)
-      if (!isSuperadmin)
-        return fail(403, { action: 'deleteCode', error: '접근권한이 없습니다.' })
-
-      // superadmin 통삭제: 연결 상품의 product_code를 NULL로 초기화 (고아 상품 발생)
-      const { data: codeRow } = await admin
-        .from('product_category_codes')
-        .select('code, product_category')
-        .eq('id', id)
-        .maybeSingle()
-      if (codeRow) {
-        const categoryVal = codeRow.product_category ?? codeRow.code.toLowerCase()
-        await admin
-          .from('products')
-          .update({ product_code: null })
-          .eq('category', categoryVal)
-          .is('deleted_at', null)
-      }
-    }
+    if (linkedCount > 0)
+      return fail(400, {
+        action: 'deleteCode',
+        error: `연결된 상품 ${linkedCount}개가 있습니다. 코드 이관(Transfer) 후 삭제해주세요.`
+      })
 
     const { error } = await admin.rpc('cms_delete_taxonomy_code', { p_id: id })
 
     if (error) return fail(500, { action: 'deleteCode', error: '삭제 실패' })
-    return { action: 'deleteCode', success: true, orphaned: linkedCount }
+    return { action: 'deleteCode', success: true, orphaned: 0 }
   },
 
   // ── 활성 토글 ──────────────────────────────────────────────────────────
@@ -720,6 +707,41 @@ export const actions: Actions = {
     return { action: 'toggleGroupActive', success: true }
   },
 
+  // ── 그룹 상품목록 필터 노출 토글 ─────────────────────────────────────
+  toggleGroupProductFilter: async ({ request, locals }) => {
+    const { session } = await locals.safeGetSession()
+    if (!session) return fail(401, { action: 'toggleGroupProductFilter', error: '인증 필요' })
+
+    const form = await request.formData()
+    const id      = (form.get('id')                     as string) ?? ''
+    const current = form.get('show_in_product_filter') === 'true'
+
+    const { error } = await db()
+      .from('code_mapping_groups')
+      .update({ show_in_product_filter: !current, updated_at: new Date().toISOString() })
+      .eq('id', id)
+
+    if (error) return fail(500, { action: 'toggleGroupProductFilter', error: '변경 실패' })
+    return { action: 'toggleGroupProductFilter', success: true }
+  },
+
+  toggleGroupPartnerType: async ({ request, locals }) => {
+    const { session } = await locals.safeGetSession()
+    if (!session) return fail(401, { action: 'toggleGroupPartnerType', error: '인증 필요' })
+
+    const form = await request.formData()
+    const id      = (form.get('id')              as string) ?? ''
+    const current = form.get('is_partner_type') === 'true'
+
+    const { error } = await db()
+      .from('code_mapping_groups')
+      .update({ is_partner_type: !current, updated_at: new Date().toISOString() })
+      .eq('id', id)
+
+    if (error) return fail(500, { action: 'toggleGroupPartnerType', error: '변경 실패' })
+    return { action: 'toggleGroupPartnerType', success: true }
+  },
+
   // ── 그룹 코드 추가 ────────────────────────────────────────────────────
   addGroupItem: async ({ request, locals }) => {
     const { session } = await locals.safeGetSession()
@@ -772,7 +794,7 @@ export const actions: Actions = {
       return fail(400, { action: 'updateGroupItemSettings', error: 'combo_row_id, group_id가 필요합니다.' })
     if (!['none', 'ym', 'ymd'].includes(date_option))
       return fail(400, { action: 'updateGroupItemSettings', error: '잘못된 date_option 값입니다.' })
-    const max_sequence = (max_seq_raw >= 1 && max_seq_raw <= 99999) ? max_seq_raw : 999
+    const max_sequence = (max_seq_raw >= 1 && max_seq_raw <= 9999999) ? max_seq_raw : 999
 
     // 동일 combo_row_id를 가진 모든 아이템에 일괄 적용
     const updatePayload: Record<string, unknown> = { date_option, max_sequence }
