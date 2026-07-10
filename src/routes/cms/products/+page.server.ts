@@ -10,35 +10,141 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 
   const category = url.searchParams.get('category') ?? 'all'
   const q = url.searchParams.get('q') ?? ''
+  const sort = (url.searchParams.get('sort') ?? 'newest') as 'newest' | 'oldest' | 'asc' | 'desc'
+  const pageParam = Math.max(1, parseInt(url.searchParams.get('page') ?? '1'))
   const selectedId = url.searchParams.get('selected') ?? null
   const initialTab = url.searchParams.get('tab') ?? null
 
+  const PAGE_SIZE = 20
+
   const admin = createClient(getSupabaseUrl(), env.SUPABASE_SERVICE_ROLE_KEY ?? '')
 
-  // 코드설정에서 생성된 활성 루트 분류 목록 (depth=0, is_active=true)
+  // 코드조합그룹 중 상품목록 카테고리 필터에 노출하도록 설정된 목록 (탭 필터용)
   const { data: rawCategories } = await admin
+    .from('code_mapping_groups')
+    .select('id, name, sort_order')
+    .eq('show_in_product_filter', true)
+    .eq('is_active', true)
+    .order('sort_order', { ascending: true })
+    .order('name', { ascending: true })
+
+  const categories = (rawCategories ?? []).map((g) => ({
+    value: g.id,
+    label: g.name,
+  }))
+
+  // 카드 배지용 product_category → 레이블 매핑 (depth=0 기준)
+  const { data: rawCatCodes } = await admin
     .from('product_category_codes')
-    .select('code, name, product_category, sort_order')
+    .select('product_category, name')
     .eq('depth', 0)
     .eq('is_active', true)
     .is('deleted_at', null)
+
+  const categoryLabels: Record<string, string> = Object.fromEntries(
+    (rawCatCodes ?? [])
+      .filter((c) => c.product_category)
+      .map((c) => [c.product_category as string, c.name as string])
+  )
+
+  // 협력사 전용코드 그룹(is_partner_type=true)의 조합코드 목록 (빠른 재고 등록 모달 조합코드 선택용)
+  const { data: rawPartnerGroups } = await admin
+    .from('code_mapping_groups')
+    .select('id, name')
+    .eq('is_partner_type', true)
+    .eq('is_active', true)
     .order('sort_order', { ascending: true })
+    .order('name', { ascending: true })
 
-  const categories = (rawCategories ?? []).map((c) => ({
-    value: c.product_category ?? c.code.toLowerCase(),
-    label: c.name,
-  }))
+  const partnerGroupIds = (rawPartnerGroups ?? []).map((g) => g.id)
+  const partnerGroupNameById: Record<string, string> = Object.fromEntries(
+    (rawPartnerGroups ?? []).map((g) => [g.id, g.name])
+  )
 
-  let query = admin
+  // combo_row_id 기준으로 중복 제거한 flat 조합코드 목록
+  const { data: rawPartnerItems } = partnerGroupIds.length > 0
+    ? await admin
+        .from('code_mapping_items')
+        .select('group_id, combo_row_id, combo_name, combo_keywords')
+        .in('group_id', partnerGroupIds)
+        .order('sort_order', { ascending: true })
+    : { data: [] as Array<{ group_id: string; combo_row_id: string; combo_name: string | null; combo_keywords: string[] }> }
+
+  const seenComboRows = new Set<string>()
+  const partnerComboItems: Array<{
+    combo_row_id: string
+    combo_name: string | null
+    combo_keywords: string[]
+    group_id: string
+    group_name: string
+  }> = []
+  for (const item of rawPartnerItems ?? []) {
+    if (!seenComboRows.has(item.combo_row_id)) {
+      seenComboRows.add(item.combo_row_id)
+      partnerComboItems.push({
+        combo_row_id: item.combo_row_id,
+        combo_name: item.combo_name,
+        combo_keywords: item.combo_keywords ?? [],
+        group_id: item.group_id,
+        group_name: partnerGroupNameById[item.group_id] ?? '',
+      })
+    }
+  }
+
+  // 카테고리 필터: 그룹 ID → product_category 값 해석
+  // categories.value = code_mapping_groups.id (UUID) → 해당 그룹의 taxonomy_code_ids → product_category 집합
+  let categoryValues: string[] | null = null
+  if (category !== 'all') {
+    const { data: items } = await admin
+      .from('code_mapping_items')
+      .select('taxonomy_code_id')
+      .eq('group_id', category)
+
+    const tcIds = (items ?? []).map((i) => i.taxonomy_code_id).filter(Boolean)
+    if (tcIds.length > 0) {
+      const { data: codes } = await admin
+        .from('product_category_codes')
+        .select('product_category')
+        .in('id', tcIds)
+        .not('product_category', 'is', null)
+
+      const distinct = [...new Set((codes ?? []).map((c) => c.product_category as string))]
+      categoryValues = distinct.length > 0 ? distinct : ['__none__']
+    } else {
+      categoryValues = ['__none__']
+    }
+  }
+
+  // 전체 개수 쿼리 (페이지네이션용) — 부모 상품만 (재고 자식 제외)
+  let countQ = admin
+    .from('products')
+    .select('*', { count: 'exact', head: true })
+    .is('deleted_at', null)
+    .is('parent_product_id', null)
+  if (categoryValues) countQ = countQ.in('category', categoryValues)
+  if (q) countQ = countQ.ilike('name', `%${q}%`)
+
+  // 목록 쿼리 — 부모 상품만 (재고 자식 제외)
+  let listQ = admin
     .from('products')
     .select('id, category, name, slug, brand, image_urls, is_active, created_at')
     .is('deleted_at', null)
-    .order('created_at', { ascending: false })
+    .is('parent_product_id', null)
 
-  if (category !== 'all') query = query.eq('category', category)
-  if (q) query = query.ilike('name', `%${q}%`)
+  if (sort === 'asc')         listQ = listQ.order('name', { ascending: true })
+  else if (sort === 'desc')   listQ = listQ.order('name', { ascending: false })
+  else if (sort === 'oldest') listQ = listQ.order('created_at', { ascending: true })
+  else                        listQ = listQ.order('created_at', { ascending: false })
 
-  const { data: products } = await query
+  if (categoryValues) listQ = listQ.in('category', categoryValues)
+  if (q) listQ = listQ.ilike('name', `%${q}%`)
+
+  listQ = listQ.range((pageParam - 1) * PAGE_SIZE, pageParam * PAGE_SIZE - 1)
+
+  const [{ count: totalCount }, { data: products }] = await Promise.all([countQ, listQ])
+
+  const totalPages = Math.max(1, Math.ceil((totalCount ?? 0) / PAGE_SIZE))
+  const page = Math.min(pageParam, totalPages)
 
   const productIds = (products ?? []).map((p) => p.id)
 
@@ -223,13 +329,18 @@ export const load: PageServerLoad = async ({ locals, url }) => {
       price12h: prices12h[p.id] ?? null as number | null,
     })),
     categories,
+    categoryLabels,
     category,
     q,
+    sort,
+    page,
+    totalPages,
     selectedId,
     initialTab,
     selectedProduct,
     selectedPriceRules,
     inventoryList,
+    partnerComboItems,
   }
 }
 
@@ -266,13 +377,12 @@ export const actions: Actions = {
       const name = ((form.get('name') as string | null) ?? '').trim()
       const brand = ((form.get('brand') as string | null) ?? '').trim() || null
       const caption = ((form.get('caption') as string | null) ?? '').trim().slice(0, 20) || null
-      const description = ((form.get('description') as string | null) ?? '').trim() || null
       const is_active = form.get('is_active') === 'true'
       const category = ((form.get('category') as string | null) ?? '').trim() || null
 
       if (!name) return fail(400, { error: '상품명은 필수입니다.' })
 
-      const updatePayload: Record<string, unknown> = { name, brand, product_caption: caption, description, is_active }
+      const updatePayload: Record<string, unknown> = { name, brand, product_caption: caption, is_active }
       if (category) updatePayload.category = category
 
       const { error: updateError } = await admin
@@ -389,6 +499,35 @@ export const actions: Actions = {
       if (updateError) return fail(500, { error: '사양 수정에 실패했습니다.' })
     }
 
+    if (sectionType === 'content') {
+      let content_blocks: unknown = null
+      let keywords: unknown = null
+      const blocksStr = form.get('content_blocks') as string | null
+      const keywordsStr = form.get('keywords') as string | null
+      if (blocksStr) { try { content_blocks = JSON.parse(blocksStr) } catch { /* ignore */ } }
+      if (keywordsStr) { try { keywords = JSON.parse(keywordsStr) } catch { /* ignore */ } }
+
+      const { error: updateError } = await admin
+        .from('products')
+        .update({ content_blocks, keywords })
+        .eq('id', productId)
+
+      if (updateError) return fail(500, { error: '상품설명 수정에 실패했습니다.' })
+    }
+
+    if (sectionType === 'options') {
+      let option_links: unknown = null
+      const optionsStr = form.get('option_links') as string | null
+      if (optionsStr) { try { option_links = JSON.parse(optionsStr) } catch { /* ignore */ } }
+
+      const { error: updateError } = await admin
+        .from('products')
+        .update({ option_links })
+        .eq('id', productId)
+
+      if (updateError) return fail(500, { error: '옵션상품 수정에 실패했습니다.' })
+    }
+
     return { success: true, sectionType }
   },
 
@@ -419,7 +558,7 @@ export const actions: Actions = {
     const count = Math.min(20, Math.max(1, Number(form.get('count')) || 1))
     const autoCode = form.get('auto_code') !== 'false'
     const partnerCode = form.get('partner_code') === 'true'
-    const partnerType = (form.get('partner_type') as string | null) ?? '제휴'
+    const partnerComboRowId = (form.get('partner_combo_row_id') as string | null) ?? ''
     const mode = (form.get('mode') as string | null) ?? 'new_product'
 
     if (!sourceProductId) return fail(400, { error: '원본 상품 ID가 누락됐습니다.' })
@@ -428,7 +567,7 @@ export const actions: Actions = {
 
     const { data: source, error: sourceError } = await admin
       .from('products')
-      .select('id, category, name, slug, brand, description, product_caption, image_urls, specifications, sale_price, sale_only')
+      .select('id, category, name, slug, brand, description, product_caption, image_urls, specifications, sale_price, sale_only, product_code')
       .eq('id', sourceProductId)
       .is('deleted_at', null)
       .single()
@@ -504,30 +643,46 @@ export const actions: Actions = {
     }
 
     // ── new_product 모드: 기존 복제 로직 ─────────────────────────
-    // 제휴상품 품번용 하위 분류코드 조회 (source.category 기준)
+    // 선택된 조합코드(combo_row_id) 기반 파트너 품번 taxonomy_code_id 해석
     let partnerCodeId: string | null = null
-    if (partnerCode) {
-      const { data: mainCode } = await admin
-        .from('product_category_codes')
-        .select('id')
-        .eq('product_category', source.category)
-        .eq('depth', 0)
-        .eq('is_active', true)
-        .is('deleted_at', null)
-        .maybeSingle()
+    if (partnerCode && partnerComboRowId) {
+      // 1. 선택 combo_row의 taxonomy_code_id 목록 수집
+      const { data: comboItems } = await admin
+        .from('code_mapping_items')
+        .select('taxonomy_code_id')
+        .eq('combo_row_id', partnerComboRowId)
 
-      if (mainCode) {
-        const { data: subCode } = await admin
+      const tcIds = (comboItems ?? []).map((i) => i.taxonomy_code_id).filter(Boolean)
+
+      if (tcIds.length > 0) {
+        // 2. source.category 기준 depth=0 코드 조회
+        const { data: mainCode } = await admin
           .from('product_category_codes')
           .select('id')
-          .eq('parent_id', mainCode.id)
-          .eq('name', partnerType)
-          .eq('depth', 1)
+          .eq('product_category', source.category)
+          .eq('depth', 0)
           .eq('is_active', true)
           .is('deleted_at', null)
           .maybeSingle()
 
-        partnerCodeId = subCode?.id ?? null
+        if (mainCode) {
+          // 3. 해당 카테고리 depth=1 자식 코드 중 이 combo_row에 포함된 것 탐색
+          const { data: subCode } = await admin
+            .from('product_category_codes')
+            .select('id')
+            .eq('parent_id', mainCode.id)
+            .eq('depth', 1)
+            .eq('is_active', true)
+            .is('deleted_at', null)
+            .in('id', tcIds)
+            .limit(1)
+            .maybeSingle()
+
+          partnerCodeId = subCode?.id ?? null
+        }
+
+        // fallback: 카테고리 매칭 불가 시 combo_row의 첫 번째 taxonomy_code_id 직접 사용
+        if (!partnerCodeId) partnerCodeId = tcIds[0]
       }
     }
 
@@ -582,7 +737,7 @@ export const actions: Actions = {
       if (partnerCode) {
         if (!partnerCodeId) {
           return fail(400, {
-            error: `이 카테고리에 '${partnerType}' 하위 분류코드가 등록되지 않았습니다. 코드설정에서 먼저 추가해주세요.`,
+            error: `이 카테고리에 선택한 조합코드 하위 분류코드가 등록되지 않았습니다. 코드설정에서 먼저 추가해주세요.`,
           })
         }
         await admin.rpc('generate_product_code', {

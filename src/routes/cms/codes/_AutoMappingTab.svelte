@@ -101,7 +101,7 @@
   const TIER_LABELS: Record<string, string> = { major: '대분류', middle: '중분류', minor: '소분류' }
 
   // 년월 옵션 레이블
-  const DATE_OPT_LABEL: Record<string, string> = { none: '없음', ym: '년/월', ymd: '연월일' }
+  const DATE_OPT_LABEL: Record<string, string> = { none: '없음', ym: '년월', ymd: '년월' }
 
   function comboCatCode(items: MappingItem[]): string {
     return items
@@ -119,7 +119,7 @@
     let date_format = data.codeFormat.date_format ?? 'YYMM'
     if (lead.date_option === 'none') date_format = 'NONE'
     else if (lead.date_option === 'ym') date_format = data.codeFormat.date_format ?? 'YYMM'
-    else if (lead.date_option === 'ymd') date_format = 'YYYYMMDD'
+    else if (lead.date_option === 'ymd') date_format = data.codeFormat.date_format ?? 'YYMM'
     return {
       ...data.codeFormat,
       ...(rootRule?.prefix ? { prefix: rootRule.prefix as string } : {}),
@@ -132,17 +132,6 @@
     const catCode = comboCatCode(items)
     if (!catCode) return '—'
     const fmt = comboPreviewFmt(items, lead)
-    if (lead.date_option === 'ymd') {
-      const now = new Date()
-      const yyyy = String(now.getFullYear())
-      const mm = String(now.getMonth() + 1).padStart(2, '0')
-      const dd = String(now.getDate()).padStart(2, '0')
-      const prefix = (fmt.prefix ?? 'CS').trim().toUpperCase()
-      const seqDigits = fmt.seq_digits ?? 3
-      const suffix = (fmt.suffix ?? '').trim().toUpperCase()
-      const s = '1'.padStart(seqDigits, '0')
-      return `${prefix || 'CS'}${catCode}${yyyy}${mm}${dd}${s}${suffix}`
-    }
     return buildPreview(catCode, fmt)
   }
 
@@ -409,6 +398,30 @@
         </div>
         <div class="dh-actions">
           {#if !isEditMode}
+            <form method="POST" action="?/toggleGroupProductFilter" use:enhance style="display:inline">
+              <input type="hidden" name="id" value={selectedGroup.id} />
+              <input type="hidden" name="show_in_product_filter" value={String(selectedGroup.show_in_product_filter)} />
+              <button type="submit"
+                class="btn-product-filter"
+                class:active={selectedGroup.show_in_product_filter}
+                title={selectedGroup.show_in_product_filter ? '상품목록 카테고리에서 제거' : '상품목록 카테고리에 노출'}
+                aria-pressed={selectedGroup.show_in_product_filter}>
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/></svg>
+                상품목록
+              </button>
+            </form>
+            <form method="POST" action="?/toggleGroupPartnerType" use:enhance style="display:inline">
+              <input type="hidden" name="id" value={selectedGroup.id} />
+              <input type="hidden" name="is_partner_type" value={String(selectedGroup.is_partner_type)} />
+              <button type="submit"
+                class="btn-partner-type"
+                class:active={selectedGroup.is_partner_type}
+                title={selectedGroup.is_partner_type ? '협력사 전용코드 해제' : '협력사 전용코드로 지정'}
+                aria-pressed={selectedGroup.is_partner_type}>
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 00-3-3.87"/><path d="M16 3.13a4 4 0 010 7.75"/></svg>
+                협력사 전용코드
+              </button>
+            </form>
             <button class="btn-icon" title="그룹 편집" onclick={() => startEdit(selectedGroup!)}>
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
             </button>
@@ -572,7 +585,7 @@
                           type="button"
                           class="date-toggle date-opt-{comboDateOptMap[combo.combo_row_id] ?? leadItem.date_option}"
                           onclick={() => {
-                            const opts = ['none', 'ym', 'ymd']
+                            const opts = ['none', 'ym']
                             const cur = comboDateOptMap[combo.combo_row_id] ?? leadItem.date_option
                             comboDateOptMap = { ...comboDateOptMap, [combo.combo_row_id]: opts[(opts.indexOf(cur) + 1) % 3] }
                           }}
@@ -580,15 +593,20 @@
                         >{DATE_OPT_LABEL[comboDateOptMap[combo.combo_row_id] ?? leadItem.date_option]}</button>
 
                         <!-- 순번상한 -->
-                        <input
-                          type="number"
-                          name="max_sequence"
-                          class="seq-input"
-                          value={comboSeqMap[combo.combo_row_id] ?? String(leadItem.max_sequence ?? '')}
-                          min="1" max="99999"
-                          placeholder="순번상한"
-                          oninput={(e) => { comboSeqMap = { ...comboSeqMap, [combo.combo_row_id]: (e.currentTarget as HTMLInputElement).value } }}
-                        />
+                        <div class="seq-wrap">
+                          <input
+                            type="number"
+                            name="max_sequence"
+                            class="seq-input"
+                            value={comboSeqMap[combo.combo_row_id] ?? String(leadItem.max_sequence ?? '')}
+                            min="1" max="9999999"
+                            placeholder="순번상한"
+                            oninput={(e) => { comboSeqMap = { ...comboSeqMap, [combo.combo_row_id]: (e.currentTarget as HTMLInputElement).value } }}
+                            onfocus={(e) => (e.currentTarget.nextElementSibling as HTMLElement)?.classList.add('show')}
+                            onblur={(e) => (e.currentTarget.nextElementSibling as HTMLElement)?.classList.remove('show')}
+                          />
+                          <span class="seq-bubble">최대 백만자리 (9,999,999)</span>
+                        </div>
 
                         <!-- 조합 이름 -->
                         <input
@@ -1106,6 +1124,44 @@
 .btn-icon:hover { background: rgba(59,47,138,0.06); color: var(--cs-text); }
 .btn-icon.danger:hover { background: rgba(255,53,53,0.08); color: var(--cs-red-badge); }
 
+.btn-product-filter {
+  display: inline-flex; align-items: center; gap: 4px;
+  height: 30px; padding: 0 10px;
+  background: var(--cs-surface-gray);
+  color: var(--cs-text-mid);
+  border: 1px solid #ECEBF4;
+  border-radius: var(--radius-sm);
+  font: var(--text-pc-script-12); font-weight: 700;
+  cursor: pointer;
+  transition: background 0.12s, color 0.12s, border-color 0.12s;
+  white-space: nowrap;
+}
+.btn-product-filter:hover { background: rgba(59,47,138,0.06); color: var(--cs-purple); border-color: var(--cs-purple); }
+.btn-product-filter.active {
+  background: var(--cs-purple-op10);
+  color: var(--cs-purple);
+  border-color: var(--cs-purple);
+}
+
+.btn-partner-type {
+  display: inline-flex; align-items: center; gap: 4px;
+  height: 30px; padding: 0 10px;
+  background: var(--cs-surface-gray);
+  color: var(--cs-text-mid);
+  border: 1px solid #ECEBF4;
+  border-radius: var(--radius-sm);
+  font: var(--text-pc-script-12); font-weight: 700;
+  cursor: pointer;
+  transition: background 0.12s, color 0.12s, border-color 0.12s;
+  white-space: nowrap;
+}
+.btn-partner-type:hover { background: rgba(16,185,129,0.06); color: var(--cs-success-light); border-color: var(--cs-success-light); }
+.btn-partner-type.active {
+  background: rgba(16,185,129,0.10);
+  color: var(--cs-success-light);
+  border-color: var(--cs-success-light);
+}
+
 .btn-text {
   height: 30px; padding: 0 12px;
   border: 1px solid #ECEBF4;
@@ -1444,6 +1500,22 @@
 }
 .seq-input::placeholder { color: var(--cs-text-light); text-align: left; font-size: 10px; }
 .seq-input:focus { outline: 2px solid var(--cs-purple); outline-offset: -2px; border-color: transparent; }
+
+/* 순번 버블 가이드 */
+.seq-wrap { position: relative; display: flex; flex-direction: column; }
+.seq-bubble {
+  display: none;
+  position: absolute; top: calc(100% + 5px); left: 0;
+  background: var(--cs-purple-dark); color: var(--cs-white);
+  font: var(--text-pc-script-12); white-space: nowrap;
+  padding: 4px 10px; border-radius: var(--radius-sm);
+  pointer-events: none; z-index: 10;
+}
+.seq-bubble::before {
+  content: ''; position: absolute; bottom: 100%; left: 12px;
+  border: 5px solid transparent; border-bottom-color: var(--cs-purple-dark);
+}
+.seq-bubble.show { display: block; }
 
 .node-code-preview {
   font: var(--text-pc-script-12); font-weight: 700; letter-spacing: 0.07em;
