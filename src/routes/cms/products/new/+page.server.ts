@@ -61,6 +61,8 @@ export const actions: Actions = {
     const name = (form.get('name') as string | null) ?? ''
     const slug = (form.get('slug') as string | null) ?? ''
     const brand = (form.get('brand') as string | null) || null
+    const captionRaw = ((form.get('caption') as string | null) ?? '').trim()
+    const product_caption = captionRaw || null
     const description = (form.get('description') as string | null) || null
     const is_active = form.get('is_active') === 'true'
 
@@ -77,6 +79,9 @@ export const actions: Actions = {
 
     if (!name || !slug) {
       return fail(400, { error: '상품명, 슬러그는 필수입니다.' })
+    }
+    if (product_caption && product_caption.length > 20) {
+      return fail(400, { error: '상품카피는 20자 이내로 입력해주세요.' })
     }
     if (!category) {
       return fail(400, { error: '카테고리를 설정할 수 없습니다. 코드설정 → 그룹 편집에서 기본 카테고리를 지정해주세요.' })
@@ -95,6 +100,19 @@ export const actions: Actions = {
     }
     image_urls = image_urls.filter(Boolean)
 
+    let content_blocks: unknown[] = []
+    const contentBlocksStr = form.get('content_blocks') as string | null
+    if (contentBlocksStr) {
+      try { content_blocks = JSON.parse(contentBlocksStr) } catch { /* ignore */ }
+    }
+
+    let keywords: string[] = []
+    const keywordsStr = form.get('keywords') as string | null
+    if (keywordsStr) {
+      try { keywords = JSON.parse(keywordsStr) } catch { /* ignore */ }
+    }
+    keywords = keywords.filter(Boolean).slice(0, 10)
+
     const admin = createClient(getSupabaseUrl(), env.SUPABASE_SERVICE_ROLE_KEY ?? '')
 
     const { data: existing } = await admin
@@ -108,9 +126,27 @@ export const actions: Actions = {
       return fail(400, { error: '이미 사용 중인 슬러그입니다. 다른 슬러그를 사용해주세요.' })
     }
 
+    const salePriceRaw = (form.get('sale_price') as string | null) ?? ''
+    const salePrice = parseInt(salePriceRaw, 10) || null
+    const saleOnly = form.get('sale_only') === 'true'
+
     const { data: product, error: productError } = await admin
       .from('products')
-      .insert({ category, name, slug, brand, description, image_urls, specifications, is_active })
+      .insert({
+        category,
+        name,
+        slug,
+        brand,
+        product_caption,
+        description,
+        image_urls,
+        specifications,
+        is_active,
+        sale_price: salePrice,
+        sale_only: saleOnly,
+        content_blocks,
+        keywords,
+      })
       .select('id')
       .single()
 

@@ -302,6 +302,11 @@
     min-width: 0;
   }
   .cms-similar-name-layer {
+    position: absolute;
+    top: calc(100% + 4px);
+    left: 0;
+    right: 0;
+    z-index: 40;
     display: flex;
     flex-direction: column;
     max-height: 280px;
@@ -310,18 +315,9 @@
     border: 1.5px solid rgba(59, 47, 138, 0.2);
     border-radius: var(--cms-radius-sm);
     box-shadow: 0 8px 24px rgba(16, 11, 50, 0.12);
-    position: relative;
-    margin-top: 4px;
-    z-index: 1;
   }
-  .cms-similar-name-layer-overlay {
-    position: absolute;
-    top: calc(100% + 4px);
-    left: 0;
-    right: 0;
-    margin-top: 0;
-    z-index: 40;
-  }
+  /* overlayLayer prop은 하위 호환성 유지 — 동작은 동일 */
+  .cms-similar-name-layer-overlay {}
   .cms-similar-name-status {
     margin: 0;
     padding: 12px 16px;

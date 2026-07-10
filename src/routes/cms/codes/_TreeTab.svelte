@@ -15,12 +15,35 @@
     return ROOT_COLORS[root] ?? '#888'
   }
 
+  // 정렬
+  type SortMode = 'asc' | 'desc' | 'newest' | 'oldest'
+  const SORT_CYCLE: SortMode[] = ['asc', 'desc', 'newest', 'oldest']
+  const SORT_LABELS: Record<SortMode, string> = {
+    asc:    '오름순',
+    desc:   '내림순',
+    newest: '최신 등록순',
+    oldest: '과거 등록순',
+  }
+  let sortMode = $state<SortMode>('asc')
+  function nextSort() {
+    const idx = SORT_CYCLE.indexOf(sortMode)
+    sortMode = SORT_CYCLE[(idx + 1) % SORT_CYCLE.length]
+  }
+  let sortedCodes = $derived.by(() => {
+    const codes = [...data.codes]
+    if      (sortMode === 'asc')    codes.sort((a, b) => a.code.localeCompare(b.code))
+    else if (sortMode === 'desc')   codes.sort((a, b) => b.code.localeCompare(a.code))
+    else if (sortMode === 'newest') codes.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
+    else                            codes.sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime())
+    return codes
+  })
+
   // 트리 빌드
   let treeRoots = $derived.by((): TreeNode[] => {
     const map = new Map<string, TreeNode>()
-    for (const c of data.codes) map.set(c.id, { ...c, children: [] })
+    for (const c of sortedCodes) map.set(c.id, { ...c, children: [] })
     const roots: TreeNode[] = []
-    for (const c of data.codes) {
+    for (const c of sortedCodes) {
       const node = map.get(c.id)!
       if (c.parent_id && map.has(c.parent_id)) {
         map.get(c.parent_id)!.children.push(node)
@@ -165,6 +188,15 @@
     <input class="search-in" type="search" placeholder="코드 또는 코드명 검색…" bind:value={searchQuery} aria-label="검색" />
   </div>
   <div class="tb-actions">
+    <button class="sort-btn" onclick={nextSort} aria-label="정렬: {SORT_LABELS[sortMode]}" title={SORT_LABELS[sortMode]}>
+      <svg xmlns="http://www.w3.org/2000/svg" width="30" height="30" viewBox="0 0 30 30" fill="none">
+        <rect width="30" height="30" rx="15" fill={sortMode !== 'asc' ? 'rgba(59,47,138,0.08)' : '#F6F6F6'}/>
+        <path d="M12.999 12V21L9 16.7651M17 18V9L21 13.2349"
+          stroke={sortMode !== 'asc' ? '#3B2F8A' : '#AAAAAA'}
+          stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+      </svg>
+      <span class="sort-label" class:sort-label-active={sortMode !== 'asc'}>{SORT_LABELS[sortMode]}</span>
+    </button>
     <button class="btn-primary" onclick={() => {
       newCode=''; newName=''; newDesc='';
       newKeywords=[]; newKwInput=''; newTier='major'; newPrefix='';
@@ -259,13 +291,18 @@
         {/if}
       </div>
       <div class="ac-opt-field">
-        <input class="ac-in ac-seq" name="seq_limit" type="number"
-          placeholder="순번 상한 · 최대 999"
-          aria-label="순번 상한"
-          bind:value={newSeqLimit} min="1" max="999" />
+        <div class="seq-wrap">
+          <input class="ac-in ac-seq" name="seq_limit" type="number"
+            placeholder="순번 상한 (최대 백만자리)"
+            aria-label="순번 상한"
+            bind:value={newSeqLimit} min="1" max="9999999"
+            onfocus={(e) => (e.currentTarget.nextElementSibling as HTMLElement)?.classList.add('show')}
+            onblur={(e) => (e.currentTarget.nextElementSibling as HTMLElement)?.classList.remove('show')} />
+          <span class="seq-bubble">최대 백만자리 (9,999,999)</span>
+        </div>
       </div>
       <label class="ac-toggle-wrap">
-        <span class="ac-toggle-lbl">년월 포함</span>
+        <span class="ac-toggle-lbl">년월</span>
         <button type="button" class="ac-toggle" class:on={newUseYearMonth}
           onclick={() => newUseYearMonth = !newUseYearMonth}
           role="switch" aria-checked={newUseYearMonth}>
@@ -387,24 +424,29 @@
                   >
                     <span class="edit-toggle-thumb"></span>
                   </button>
-                  <span class="edit-toggle-lbl">년월 포함</span>
+                  <span class="edit-toggle-lbl">년월</span>
                   <input type="hidden" name="date_include" value={editUseYearMonth ? 'true' : 'false'} />
                 </label>
                 <label class="edit-seq-field">
                   <span class="edit-seq-lbl">순번 제한</span>
-                  <input
-                    class="edit-in edit-seq-in"
-                    name="seq_limit"
-                    type="number"
-                    min="1"
-                    max="9999"
-                    placeholder="무제한"
-                    value={editSeqLimit}
-                    oninput={(e) => {
-                      const v = (e.currentTarget as HTMLInputElement).value
-                      editSeqLimit = v ? Number(v) : ''
-                    }}
-                  />
+                  <div class="seq-wrap">
+                    <input
+                      class="edit-in edit-seq-in"
+                      name="seq_limit"
+                      type="number"
+                      min="1"
+                      max="9999999"
+                      placeholder="무제한"
+                      value={editSeqLimit}
+                      oninput={(e) => {
+                        const v = (e.currentTarget as HTMLInputElement).value
+                        editSeqLimit = v ? Number(v) : ''
+                      }}
+                      onfocus={(e) => (e.currentTarget.nextElementSibling as HTMLElement)?.classList.add('show')}
+                      onblur={(e) => (e.currentTarget.nextElementSibling as HTMLElement)?.classList.remove('show')}
+                    />
+                    <span class="seq-bubble">최대 백만자리 (9,999,999)</span>
+                  </div>
                 </label>
               </div>
             </form>
@@ -657,7 +699,21 @@
 }
 .search-in:focus { outline: 2px solid var(--cs-purple); outline-offset: -2px; }
 .search-in::placeholder { color: var(--cs-text-placeholder); }
-.tb-actions { display: flex; gap: 6px; margin-left: auto; align-items: center; }
+.tb-actions { display: flex; gap: 12px; margin-left: auto; align-items: center; }
+
+/* 정렬 버튼 */
+.sort-btn {
+  display: inline-flex; flex-direction: row; align-items: center; gap: 10px;
+  background: none; border: none; cursor: pointer; padding: 0;
+  min-height: 44px; justify-content: center; opacity: 1;
+  transition: opacity 0.12s;
+}
+.sort-btn:hover { opacity: 0.75; }
+.sort-label {
+  font: var(--text-pc-script-12); color: var(--cs-text-light);
+  white-space: nowrap; line-height: 1;
+}
+.sort-label-active { color: var(--cs-purple); }
 
 /* 버튼 — CMS standardButtons (ctaPrimary / ctaSecondary) */
 .btn-primary {
@@ -754,6 +810,22 @@
 .ac-opt-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 .ac-opt-field { width: 160px; flex-shrink: 0; }
 .ac-seq { width: 100%; }
+
+/* 순번 버블 가이드 */
+.seq-wrap { position: relative; display: flex; flex-direction: column; width: 100%; }
+.seq-bubble {
+  display: none;
+  position: absolute; top: calc(100% + 5px); left: 0;
+  background: var(--cs-purple-dark); color: var(--cs-white);
+  font: var(--text-pc-script-12); white-space: nowrap;
+  padding: 4px 10px; border-radius: var(--radius-sm);
+  pointer-events: none; z-index: 10;
+}
+.seq-bubble::before {
+  content: ''; position: absolute; bottom: 100%; left: 12px;
+  border: 5px solid transparent; border-bottom-color: var(--cs-purple-dark);
+}
+.seq-bubble.show { display: block; }
 .ac-toggle-wrap { display: flex; align-items: center; gap: 8px; cursor: pointer; }
 .ac-toggle-lbl { font: var(--text-pc-script-12); color: var(--cs-text-mid); white-space: nowrap; }
 .ac-toggle {
@@ -1012,6 +1084,7 @@
 .edit-seq-field { display: flex; align-items: center; gap: 6px; }
 .edit-seq-lbl { font: var(--text-pc-script-12); color: var(--cs-text-mid); white-space: nowrap; }
 .edit-seq-in { width: 80px; }
+.edit-seq-field .seq-wrap { width: 80px; flex-direction: row; }
 .edit-preview-row {
   display: flex; align-items: center; gap: 8px;
   padding: 6px 10px;

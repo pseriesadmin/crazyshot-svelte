@@ -5,6 +5,7 @@
   import { invalidateAll } from '$app/navigation'
   import ProductDetailPanel from '$lib/components/cms/ProductDetailPanel.svelte'
   import CmsSimilarNameInput from '$lib/components/cms/CmsSimilarNameInput.svelte'
+  import CmsPagination from '$lib/components/cms/CmsPagination.svelte'
   import type { PageData } from './$types'
 
   interface Props { data: PageData }
@@ -15,15 +16,42 @@
     ...data.categories,
   ])
 
-  const CATEGORY_LABEL = $derived(
-    Object.fromEntries(data.categories.map((c) => [c.value, c.label]))
-  )
+  // 카드 배지용: product_category 값 → 레이블 (depth=0 기준, 서버 제공)
+  const CATEGORY_LABEL = $derived<Record<string, string>>(data.categoryLabels ?? {})
 
   let searchInput = $state(data.q)
 
   $effect(() => {
     searchInput = data.q
   })
+
+  type SortMode = 'newest' | 'oldest' | 'asc' | 'desc'
+  const SORT_CYCLE: SortMode[] = ['asc', 'desc', 'newest', 'oldest']
+  const SORT_LABELS: Record<SortMode, string> = {
+    asc: '오름순',
+    desc: '내림순',
+    newest: '최신 등록순',
+    oldest: '과거 등록순',
+  }
+
+  function nextSort() {
+    const current = data.sort as SortMode
+    const idx = SORT_CYCLE.indexOf(current)
+    const next = SORT_CYCLE[(idx + 1) % SORT_CYCLE.length]
+    const params = new URLSearchParams(window.location.search)
+    params.set('sort', next)
+    params.delete('page')
+    params.delete('selected')
+    goto(`/cms/products?${params.toString()}`)
+  }
+
+  // 페이지네이션
+  function goToPage(p: number) {
+    const params = new URLSearchParams(window.location.search)
+    params.set('page', p.toString())
+    params.delete('selected')
+    goto(`/cms/products?${params.toString()}`)
+  }
 
   const panelOpen = $derived(!!data.selectedId && !!data.selectedProduct)
 
@@ -44,6 +72,8 @@
     const params = new URLSearchParams()
     if (value !== 'all') params.set('category', value)
     if (searchInput) params.set('q', searchInput)
+    if (data.sort !== 'newest') params.set('sort', data.sort)
+    // page 리셋 (카테고리 변경 시 1페이지로)
     goto(`/cms/products?${params.toString()}`)
   }
 
@@ -52,6 +82,8 @@
     if (data.category !== 'all') params.set('category', data.category)
     const q = searchInput.trim()
     if (q) params.set('q', q)
+    if (data.sort !== 'newest') params.set('sort', data.sort)
+    // page 리셋 (검색 시 1페이지로)
     goto(`/cms/products?${params.toString()}`)
   }
 
@@ -142,8 +174,34 @@
         </CmsSimilarNameInput>
       </div>
     </form>
-    <a href="/cms/products/new" class="cta-btn">+ 상품등록</a>
+    <div class="tb-actions">
+      <button
+        type="button"
+        class="sort-btn"
+        onclick={nextSort}
+        aria-label="정렬: {SORT_LABELS[data.sort as SortMode]}"
+        title={SORT_LABELS[data.sort as SortMode]}
+      >
+        <svg xmlns="http://www.w3.org/2000/svg" width="30" height="30" viewBox="0 0 30 30" fill="none">
+          <rect width="30" height="30" rx="15" fill={data.sort !== 'newest' ? 'rgba(59,47,138,0.08)' : '#F6F6F6'}/>
+          <path d="M12.999 12V21L9 16.7651M17 18V9L21 13.2349"
+            stroke={data.sort !== 'newest' ? '#3B2F8A' : '#AAAAAA'}
+            stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+        <span class="sort-label" class:sort-label-active={data.sort !== 'newest'}>{SORT_LABELS[data.sort as SortMode]}</span>
+      </button>
+      <a href="/cms/products/new" class="cta-btn">+ 상품등록</a>
+    </div>
   </div>
+
+  <!-- 페이지네이션 상단 (검색 레이아웃과 카드목록 사이) -->
+  <CmsPagination
+    page={data.page}
+    totalPages={data.totalPages}
+    onpage={goToPage}
+    variant="top"
+    ariaLabel="상품 목록 페이지 탐색"
+  />
 
   <!-- 마스터-디테일 레이아웃 -->
   <div class="master-detail">
@@ -179,8 +237,8 @@
                       src={thumbUrl(product.image_urls)}
                       alt={product.name}
                       class="card-thumb"
-                      width="64"
-                      height="64"
+                      width="60"
+                      height="60"
                       loading="lazy"
                     />
                   {:else}
@@ -198,21 +256,16 @@
                   {#if product.brand}
                     <p class="card-brand">{product.brand}</p>
                   {/if}
-                  <div class="card-prices">
-                    <span class="price-item">
-                      <span class="price-label">12시간</span>
-                      <span class="price-value">{formatPrice(product.price12h)}</span>
-                    </span>
-                    <span class="price-sep">·</span>
-                    <span class="price-item">
-                      <span class="price-label">1일</span>
-                      <span class="price-value">{formatPrice(product.price24h)}</span>
-                    </span>
+                  <div class="card-bottom-row">
+                    <div class="card-prices">
+                      <span class="price-badge">12H {formatPrice(product.price12h)}</span>
+                      <span class="price-badge">Day {formatPrice(product.price24h)}</span>
+                    </div>
                   </div>
                 </div>
               </button>
 
-              <!-- 상태 토글 (카드 우측) -->
+              <!-- 상태 토글 (카드 우측 하단) -->
               <div class="card-actions">
                 <form
                   method="POST"
@@ -232,15 +285,21 @@
                     <span class="toggle-track">
                       <span class="toggle-thumb"></span>
                     </span>
-                    <span class="toggle-label">
-                      {product.is_active ? '노출(ON)' : '미노출(OFF)'}
-                    </span>
                   </button>
                 </form>
               </div>
             </div>
           {/each}
         </div>
+
+        <!-- 페이지네이션 하단 -->
+        <CmsPagination
+          page={data.page}
+          totalPages={data.totalPages}
+          onpage={goToPage}
+          variant="bottom"
+          ariaLabel="상품 목록 페이지 탐색 (하단)"
+        />
       {/if}
     </div>
 
@@ -255,6 +314,7 @@
             categoryLabel={CATEGORY_LABEL[data.selectedProduct.category] ?? data.selectedProduct.category}
             initialTab={data.initialTab}
             inventoryList={data.inventoryList}
+            partnerComboItems={data.partnerComboItems}
             onclose={closePanel}
           />
         {/key}
@@ -331,6 +391,34 @@
   }
   .f-input:focus { outline: 2px solid var(--cs-purple); outline-offset: -2px; }
   .f-input::placeholder { color: var(--cs-text-placeholder); }
+  .tb-actions {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    flex-shrink: 0;
+  }
+  .sort-btn {
+    display: inline-flex;
+    flex-direction: row;
+    align-items: center;
+    gap: 10px;
+    background: none;
+    border: none;
+    cursor: pointer;
+    padding: 0;
+    min-height: 44px;
+    justify-content: center;
+    opacity: 1;
+    transition: opacity 0.12s;
+  }
+  .sort-btn:hover { opacity: 0.75; }
+  .sort-label {
+    font: var(--text-pc-script-12);
+    color: var(--cs-text-light);
+    white-space: nowrap;
+    line-height: 1;
+  }
+  .sort-label-active { color: var(--cs-purple); }
   .cta-btn {
     display: inline-flex;
     align-items: center;
@@ -370,7 +458,7 @@
   .card-list {
     display: flex;
     flex-direction: column;
-    gap: 20px;
+    gap: 10px;
     padding-right: 4px;
   }
   /* 스크롤바 항상 표시 */
@@ -392,13 +480,13 @@
   /* 상품 카드 */
   .product-card {
     display: flex;
-    align-items: center;
-    gap: 0;
+    align-items: stretch;
     background: var(--cs-white);
-    border-radius: var(--cms-radius-md);
-    overflow: hidden;
+    border-radius: var(--radius-lg);
+    box-shadow: 0px 1px 2px rgba(0,0,0,0.06);
     transition: background 0.15s;
     flex-shrink: 0;
+    overflow: hidden;
   }
   .product-card:hover { background: var(--cs-lilac); }
   .product-card.selected { background: rgba(59,47,138,0.06); }
@@ -407,10 +495,10 @@
   .card-body {
     display: flex;
     align-items: center;
-    gap: 12px;
+    gap: 15px;
     flex: 1;
     min-width: 0;
-    padding: 12px 14px;
+    padding: 15px 0 15px 20px;
     background: transparent;
     border: none;
     cursor: pointer;
@@ -418,19 +506,26 @@
   }
 
   /* 썸네일 */
-  .card-thumb-wrap { flex-shrink: 0; }
+  .card-thumb-wrap {
+    flex-shrink: 0;
+    width: 60px;
+    height: 60px;
+    background: #E8E4F8;
+    border-radius: var(--cms-radius-sm);
+    overflow: hidden;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
   .card-thumb {
-    width: 64px;
-    height: 64px;
+    width: 60px;
+    height: 60px;
     object-fit: cover;
-    border-radius: var(--radius-sm);
     display: block;
   }
   .card-thumb-empty {
-    width: 64px;
-    height: 64px;
-    background: var(--cs-surface-gray);
-    border-radius: var(--radius-sm);
+    width: 60px;
+    height: 60px;
     display: flex;
     align-items: center;
     justify-content: center;
@@ -439,24 +534,24 @@
   }
 
   /* 카드 정보 */
-  .card-info { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+  .card-info { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 10px; }
   .card-info-top { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
   .cat-badge {
     display: inline-block;
-    padding: 2px 8px;
-    background: rgba(59,47,138,0.08);
-    color: var(--cs-purple);
+    padding: 5px 10px;
+    background: var(--cs-lilac);
+    color: var(--cs-purple-dark);
     border-radius: var(--radius-sm);
-    font: var(--text-pc-script-12);
+    font: var(--text-pc-descript-10);
     white-space: nowrap;
   }
   .stock-badge {
     display: inline-block;
-    padding: 2px 6px;
-    background: var(--cs-surface-gray);
+    padding: 5px 10px;
+    background: #F3F4F6;
     color: var(--cs-text-mid);
     border-radius: var(--radius-sm);
-    font: var(--text-pc-script-12);
+    font: var(--text-pc-descript-10);
     white-space: nowrap;
   }
   .stock-badge.stock-zero {
@@ -472,42 +567,46 @@
     white-space: nowrap;
   }
   .card-brand {
-    font: var(--text-pc-script-12);
+    font-family: 'Noto Sans KR', sans-serif;
+    font-size: 10px;
+    font-weight: 400;
     color: var(--cs-text-light);
     margin: 0;
+  }
+  .card-bottom-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    width: 100%;
   }
   .card-prices {
     display: flex;
     align-items: center;
     gap: 6px;
-    flex-wrap: wrap;
   }
-  .price-item { display: flex; align-items: center; gap: 4px; }
-  .price-label {
+  .price-badge {
+    display: inline-flex;
+    align-items: center;
+    padding: 5px 10px;
+    background: var(--cs-purple-op10);
+    color: var(--cs-purple);
+    border-radius: var(--radius-sm);
     font: var(--text-pc-script-12);
-    color: var(--cs-text-light);
-  }
-  .price-value {
-    font: var(--text-pc-script-12);
-    color: var(--cs-text);
     font-weight: 700;
+    white-space: nowrap;
   }
-  .price-sep { color: var(--cs-border); font-size: 12px; }
 
-  /* 카드 우측 액션 (토글) */
+  /* 카드 우측 하단 액션 (토글) */
   .card-actions {
     display: flex;
-    flex-direction: column;
-    align-items: center;
-    padding: 0 14px 0 8px;
+    align-items: flex-end;
+    padding: 0 20px 15px 8px;
     flex-shrink: 0;
   }
   .toggle-form { display: flex; }
   .status-toggle {
     display: flex;
-    flex-direction: column;
     align-items: center;
-    gap: 4px;
     background: transparent;
     border: none;
     cursor: pointer;
@@ -521,10 +620,12 @@
     width: 36px;
     height: 20px;
     background: var(--cs-disabled-toggle);
-    border-radius: var(--radius-full);
+    border-radius: var(--cms-radius-sm);
     transition: background 0.18s;
     display: block;
     flex-shrink: 0;
+    padding: 2px;
+    box-sizing: border-box;
   }
   .status-toggle.on .toggle-track { background: var(--cs-purple); }
   .toggle-thumb {
@@ -538,13 +639,6 @@
     display: block;
   }
   .status-toggle.on .toggle-thumb { transform: translateX(16px); }
-  .toggle-label {
-    font: var(--text-pc-script-12);
-    color: var(--cs-text-light);
-    white-space: nowrap;
-    font-size: 10px;
-  }
-  .status-toggle.on .toggle-label { color: var(--cs-purple); }
 
   /* 빈 상태 */
   .empty-state {

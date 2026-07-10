@@ -4,6 +4,8 @@
   import { csToast } from '$lib/utils/toast'
   import CmsSimilarNameInput from '$lib/components/cms/CmsSimilarNameInput.svelte'
   import CmsSuggestPicker from '$lib/components/cms/CmsSuggestPicker.svelte'
+  import CmsContentEditor from '$lib/components/cms/CmsContentEditor.svelte'
+  import type { ContentBlock } from '$lib/types/content-editor'
   import type { SimilarNameItem } from '$lib/types/cms-similar-name'
   import type { SuggestPickerOption } from '$lib/types/cms-suggest-picker'
   import { productSearchOrFilter } from '$lib/utils/similarNameSuggest'
@@ -358,9 +360,31 @@
 
   let isLoading = $state(false)
   let isActive = $state(true)
+  let saleOnly = $state(false)
   let category = $state('')
+
+  type PriceField = 'price_12h' | 'price_24h' | 'price_monthly' | 'sale_price' | 'deposit_amount' | 'late_fee_per_hour'
+  let localPricing = $state<Record<PriceField, string>>({
+    price_12h: '',
+    price_24h: '',
+    price_monthly: '',
+    sale_price: '',
+    deposit_amount: '',
+    late_fee_per_hour: '',
+  })
+
+  function handlePriceInput(field: PriceField, raw: string): void {
+    const digits = raw.replace(/[^0-9]/g, '')
+    const num = parseInt(digits, 10)
+    localPricing[field] = num ? num.toLocaleString('ko-KR') : ''
+  }
+
+  function priceSubmitValue(field: PriceField): string {
+    return localPricing[field].replace(/,/g, '')
+  }
   let nameVal = $state('')
   let brandVal = $state('')
+  let captionVal = $state('')
   let slugVal = $state('')
   let imageUrls = $state<string[]>([])
   const tempId = globalThis.crypto.randomUUID()
@@ -482,6 +506,10 @@
   function openLightbox(url: string) { lightboxUrl = url }
   function closeLightbox() { lightboxUrl = null }
 
+  // ── 콘텐츠 에디터 ──────────────────────────────────
+  let contentBlocks = $state<ContentBlock[]>([])
+  let contentKeywords = $state<string[]>([])
+
   function addSpec() { specs = [...specs, { key: '', value: '' }] }
   function removeSpec(i: number) { specs = specs.filter((_, idx) => idx !== i) }
 
@@ -538,16 +566,12 @@
       <h2 class="section-title">① 기본정보</h2>
 
       <div class="field-row">
-        <label class="field-label" for="cat-group-sel">
-          카테고리 <span class="required">*</span>
-        </label>
-
         {#if (data.mappingGroups as MappingGroupSimple[]).length > 0}
           <CmsSuggestPicker
             id="cat-group-sel"
             bind:selectedId={selectedGroupId}
             options={groupPickerOptions}
-            placeholder="조합그룹 검색 또는 선택..."
+            placeholder="분류선택-조합그룹 검색 또는 선택..."
             listLabel="조합그룹 제안"
             oninput={onGroupPickerInput}
             onselect={onGroupPickerSelect}
@@ -560,6 +584,7 @@
                 id={c.id}
                 placeholder={c.placeholder}
                 required={c.required}
+                aria-label="분류선택 (필수)"
                 value={c.value}
                 oninput={c.oninput}
                 onkeydown={c.onkeydown}
@@ -591,9 +616,10 @@
             class="f-input f-select"
             bind:value={category}
             onchange={onCategoryChange}
+            aria-label="분류선택 (필수)"
             required
           >
-            <option value="">카테고리 선택</option>
+            <option value="">분류선택-카테고리 선택</option>
             {#each CATEGORIES as cat}
               <option value={cat.value}>{cat.label}</option>
             {/each}
@@ -647,12 +673,11 @@
       {/if}
 
       <div class="field-row">
-        <label class="field-label" for="name">상품명 <span class="required">*</span></label>
         <CmsSimilarNameInput
           id="name"
           name="name"
           bind:value={nameVal}
-          placeholder="예: Sony FX3 Full-Frame Cinema Camera"
+          placeholder="상품명-예: Sony FX3 Full-Frame Cinema Camera"
           categoryLabels={CATEGORY_LABELS}
           oninput={onNameInput}
           onselect={onNameSelect}
@@ -666,6 +691,7 @@
               name={c.name}
               placeholder={c.placeholder}
               required={c.required}
+              aria-label="상품명 (필수)"
               value={c.value}
               oninput={c.oninput}
               onkeydown={c.onkeydown}
@@ -681,13 +707,12 @@
       </div>
 
       <div class="field-row">
-        <label class="field-label" for="brand">브랜드</label>
         <CmsSimilarNameInput
           id="brand"
           name="brand"
           bind:value={brandVal}
           source="brand"
-          placeholder="예: Sony"
+          placeholder="브랜드-예: Sony"
           categoryLabels={CATEGORY_LABELS}
           minChars={1}
         >
@@ -699,6 +724,7 @@
               name={c.name}
               placeholder={c.placeholder}
               required={c.required}
+              aria-label="브랜드"
               value={c.value}
               oninput={c.oninput}
               onkeydown={c.onkeydown}
@@ -714,16 +740,26 @@
       </div>
 
       <div class="field-row">
-        <label class="field-label" for="slug">
-          슬러그 <span class="required">*</span>
-          <span class="field-hint">URL에 사용됩니다 — 영문·숫자·하이픈만</span>
-        </label>
+        <input
+          id="product_caption"
+          name="caption"
+          type="text"
+          class="f-input"
+          placeholder="상품카피-예: 4K 풀프레임 시네마"
+          aria-label="상품카피 — 상품명 아래 노출, 20자 이내 (한·영·숫자)"
+          bind:value={captionVal}
+          maxlength="20"
+        />
+      </div>
+
+      <div class="field-row">
         <input
           id="slug"
           name="slug"
           type="text"
           class="f-input"
-          placeholder="예: sony-fx3-2607"
+          placeholder="슬러그-예: sony-fx3-2607"
+          aria-label="슬러그 (필수) — URL에 사용됩니다, 영문·숫자·하이픈만"
           bind:value={slugVal}
           pattern="[a-z0-9\-]+"
           required
@@ -752,31 +788,28 @@
     <section class="form-section">
       <h2 class="section-title">② 상품 설명 & 스펙</h2>
 
+      <!-- 콘텐츠 에디터 -->
       <div class="field-row">
-        <label class="field-label" for="description">상품 설명</label>
-        <textarea
-          id="description"
-          name="description"
-          class="f-input f-textarea"
-          placeholder="상품 특징, 구성품, 주의사항 등을 입력해주세요."
-          rows={4}
-        ></textarea>
+        <CmsContentEditor bind:blocks={contentBlocks} bind:keywords={contentKeywords} />
+        <!-- 직렬화 hidden inputs -->
+        <input type="hidden" name="content_blocks" value={JSON.stringify(contentBlocks)} />
+        <input type="hidden" name="keywords" value={JSON.stringify(contentKeywords)} />
       </div>
 
+      <!-- 스펙 (키-값 구조형) -->
       <div class="field-row">
-        <div class="field-label">
-          스펙 항목
-          <span class="field-hint">키-값 형식으로 입력 — JSON으로 저장됩니다</span>
-        </div>
+        <label class="field-label">기술 스펙 (항목-값)</label>
         <div class="spec-list">
           {#each specs as spec, i (i)}
             <div class="spec-row">
               <input
                 type="text"
                 class="f-input spec-key"
-                placeholder="항목명 (예: 센서)"
+                placeholder={i === 0 ? '스펙 항목-항목명 (예: 센서)' : '항목명 (예: 센서)'}
                 bind:value={spec.key}
-                aria-label={`스펙 항목명 ${i + 1}`}
+                aria-label={i === 0
+                  ? '스펙 항목 — 키-값 형식으로 입력, JSON으로 저장됩니다'
+                  : `스펙 항목명 ${i + 1}`}
               />
               <input
                 type="text"
@@ -1003,34 +1036,122 @@
       <p class="section-desc">24시간 가격은 필수입니다. 미입력 시 해당 유형 가격정책은 생성되지 않습니다.</p>
 
       <div class="price-grid">
-        <div class="field-row">
-          <label class="field-label" for="price_12h">12시간 가격 (원)</label>
-          <input id="price_12h" name="price_12h" type="number" class="f-input" placeholder="예: 45000" min="0" step="1000" />
+        <div class="field-row" class:row-disabled={saleOnly}>
+          <input
+            id="price_12h"
+            type="text"
+            inputmode="numeric"
+            class="f-input"
+            placeholder="12시간 가격 (원)-예: 45,000"
+            aria-label="12시간 가격 (원)"
+            disabled={saleOnly}
+            value={localPricing.price_12h}
+            oninput={(e) => handlePriceInput('price_12h', e.currentTarget.value)}
+          />
+        </div>
+        <div class="field-row" class:row-disabled={saleOnly}>
+          <input
+            id="price_24h"
+            type="text"
+            inputmode="numeric"
+            class="f-input"
+            placeholder="24시간 가격 (원)-예: 85,000"
+            aria-label="24시간 가격 (원) (필수)"
+            disabled={saleOnly}
+            value={localPricing.price_24h}
+            oninput={(e) => handlePriceInput('price_24h', e.currentTarget.value)}
+          />
+        </div>
+        <div class="field-row" class:row-disabled={saleOnly}>
+          <input
+            id="price_monthly"
+            type="text"
+            inputmode="numeric"
+            class="f-input"
+            placeholder="월정액 가격 (원)-예: 1,200,000"
+            aria-label="월정액 가격 (원)"
+            disabled={saleOnly}
+            value={localPricing.price_monthly}
+            oninput={(e) => handlePriceInput('price_monthly', e.currentTarget.value)}
+          />
         </div>
         <div class="field-row">
-          <label class="field-label" for="price_24h">24시간 가격 (원) <span class="required">*</span></label>
-          <input id="price_24h" name="price_24h" type="number" class="f-input" placeholder="예: 85000" min="0" step="1000" />
-        </div>
-        <div class="field-row">
-          <label class="field-label" for="price_monthly">월정액 가격 (원)</label>
-          <input id="price_monthly" name="price_monthly" type="number" class="f-input" placeholder="예: 1200000" min="0" step="10000" />
+          <div class="price-input-row">
+            <input
+              id="sale_price"
+              type="text"
+              inputmode="numeric"
+              class="f-input"
+              placeholder="판매금액 (원)-예: 3,500,000"
+              aria-label="판매금액 (원)"
+              value={localPricing.sale_price}
+              oninput={(e) => handlePriceInput('sale_price', e.currentTarget.value)}
+            />
+            <label class="sale-only-label">
+              <input
+                type="checkbox"
+                class="sale-only-cb"
+                checked={saleOnly}
+                onchange={(e) => {
+                  saleOnly = e.currentTarget.checked
+                  if (saleOnly) csToast.warning('판매금액만 표시되고 대여 불가능합니다.')
+                }}
+              />
+              <span>판매만 가능</span>
+            </label>
+          </div>
         </div>
       </div>
+      <input type="hidden" name="price_12h" value={priceSubmitValue('price_12h')} />
+      <input type="hidden" name="price_24h" value={priceSubmitValue('price_24h')} />
+      <input type="hidden" name="price_monthly" value={priceSubmitValue('price_monthly')} />
+      <input type="hidden" name="sale_price" value={priceSubmitValue('sale_price')} />
+      <input type="hidden" name="sale_only" value={saleOnly.toString()} />
 
       <div class="price-grid price-grid-3">
-        <div class="field-row">
-          <label class="field-label" for="deposit_amount">보증금 (원)</label>
-          <input id="deposit_amount" name="deposit_amount" type="number" class="f-input" placeholder="예: 500000" min="0" step="10000" />
+        <div class="field-row" class:row-disabled={saleOnly}>
+          <input
+            id="deposit_amount"
+            type="text"
+            inputmode="numeric"
+            class="f-input"
+            placeholder="보증금 (원)-예: 500,000"
+            aria-label="보증금 (원)"
+            disabled={saleOnly}
+            value={localPricing.deposit_amount}
+            oninput={(e) => handlePriceInput('deposit_amount', e.currentTarget.value)}
+          />
         </div>
-        <div class="field-row">
-          <label class="field-label" for="late_fee_per_hour">연체료/시간 (원)</label>
-          <input id="late_fee_per_hour" name="late_fee_per_hour" type="number" class="f-input" placeholder="예: 5000" min="0" />
+        <div class="field-row" class:row-disabled={saleOnly}>
+          <input
+            id="late_fee_per_hour"
+            type="text"
+            inputmode="numeric"
+            class="f-input"
+            placeholder="연체료/시간 (원)-예: 5,000"
+            aria-label="연체료/시간 (원)"
+            disabled={saleOnly}
+            value={localPricing.late_fee_per_hour}
+            oninput={(e) => handlePriceInput('late_fee_per_hour', e.currentTarget.value)}
+          />
         </div>
-        <div class="field-row">
-          <label class="field-label" for="damage_fee_percentage">파손 수수료 (%)</label>
-          <input id="damage_fee_percentage" name="damage_fee_percentage" type="number" class="f-input" placeholder="예: 20" min="0" max="100" step="1" />
+        <div class="field-row" class:row-disabled={saleOnly}>
+          <input
+            id="damage_fee_percentage"
+            name="damage_fee_percentage"
+            type="number"
+            class="f-input"
+            placeholder="파손 수수료 (%)-예: 20"
+            aria-label="파손 수수료 (%)"
+            min="0"
+            max="100"
+            step="1"
+            disabled={saleOnly}
+          />
         </div>
       </div>
+      <input type="hidden" name="deposit_amount" value={priceSubmitValue('deposit_amount')} />
+      <input type="hidden" name="late_fee_per_hour" value={priceSubmitValue('late_fee_per_hour')} />
     </section>
 
     <!-- ⑤ 이미지 -->
@@ -1286,6 +1407,31 @@
     gap: 12px;
   }
   .price-grid-3 { grid-template-columns: 1fr 1fr 1fr; }
+
+  .price-input-row {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+  .price-input-row .f-input { flex: 1; min-width: 0; }
+  .sale-only-label {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    flex-shrink: 0;
+    cursor: pointer;
+    white-space: nowrap;
+    font: var(--text-pc-script-12);
+    color: var(--cs-text-mid);
+    user-select: none;
+  }
+  .sale-only-cb {
+    accent-color: var(--cs-purple);
+    width: 14px;
+    height: 14px;
+    cursor: pointer;
+  }
+  .row-disabled { opacity: 0.45; }
 
   /* 이미지 업로드 */
   .img-status {

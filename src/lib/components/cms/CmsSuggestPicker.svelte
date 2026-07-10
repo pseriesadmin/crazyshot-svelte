@@ -193,12 +193,11 @@
     min-width: 0;
   }
   .cms-suggest-picker-layer {
-    position: relative;
-    top: auto;
-    left: auto;
-    right: auto;
-    z-index: 1;
-    margin-top: 4px;
+    position: absolute;
+    top: calc(100% + 4px);
+    left: 0;
+    right: 0;
+    z-index: 40;
     display: flex;
     flex-direction: column;
     max-height: 280px;
