@@ -1105,6 +1105,234 @@ autocomplete  : off (브라우저 자동완성과 충돌 방지)
 {/if}
 ```
 
+### 7-13. 목록 정렬 버튼 — 툴바 인라인 정렬 ★
+
+> **최초 적용**: `src/routes/cms/codes/_TreeTab.svelte` (코드목록 툴바)
+> **추가일**: 2026-07-10
+> **트리거**: "정렬 기능 반영" 요청 시 아래 로직·레이아웃을 그대로 적용
+
+#### 동작 규칙
+
+```
+클릭할 때마다 순환: 오름순 → 내림순 → 최신 등록순 → 과거 등록순 → 오름순
+선택된 정렬값은 변경 전까지 고정 (컴포넌트 마운트 간 상태 유지)
+기본값: 오름순(asc)
+```
+
+#### 스크립트 (Svelte 5 Runes)
+
+```typescript
+// ① 정렬 상태 선언부 — sortedCodes를 참조하는 $derived 보다 반드시 앞에 위치시킬 것
+type SortMode = 'asc' | 'desc' | 'newest' | 'oldest'
+const SORT_CYCLE: SortMode[] = ['asc', 'desc', 'newest', 'oldest']
+const SORT_LABELS: Record<SortMode, string> = {
+  asc:    '오름순',
+  desc:   '내림순',
+  newest: '최신 등록순',
+  oldest: '과거 등록순',
+}
+let sortMode = $state<SortMode>('asc')
+function nextSort() {
+  const idx = SORT_CYCLE.indexOf(sortMode)
+  sortMode = SORT_CYCLE[(idx + 1) % SORT_CYCLE.length]
+}
+
+// ② 정렬된 데이터 — data.{items}를 정렬 기준에 따라 반환
+// 정렬 기준 필드: code(영숫자), name(한글), created_at(날짜) 중 도메인에 맞게 선택
+let sortedItems = $derived.by(() => {
+  const items = [...data.codes]  // ← 도메인에 맞게 교체
+  if      (sortMode === 'asc')    items.sort((a, b) => a.code.localeCompare(b.code))
+  else if (sortMode === 'desc')   items.sort((a, b) => b.code.localeCompare(a.code))
+  else if (sortMode === 'newest') items.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
+  else                            items.sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime())
+  return items
+})
+// ③ 이후 목록 렌더링은 data.codes 대신 sortedItems 사용
+```
+
+#### 툴바 마크업
+
+```svelte
+<!-- 툴바 .tb-actions 내 CTA 버튼 좌측에 배치 -->
+<div class="tb-actions">
+  <button class="sort-btn" onclick={nextSort} aria-label="정렬: {SORT_LABELS[sortMode]}" title={SORT_LABELS[sortMode]}>
+    <svg xmlns="http://www.w3.org/2000/svg" width="30" height="30" viewBox="0 0 30 30" fill="none">
+      <rect width="30" height="30" rx="15" fill={sortMode !== 'asc' ? 'rgba(59,47,138,0.08)' : '#F6F6F6'}/>
+      <path d="M12.999 12V21L9 16.7651M17 18V9L21 13.2349"
+        stroke={sortMode !== 'asc' ? '#3B2F8A' : '#AAAAAA'}
+        stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+    </svg>
+    <span class="sort-label" class:sort-label-active={sortMode !== 'asc'}>{SORT_LABELS[sortMode]}</span>
+  </button>
+  <button class="btn-primary">...</button>  <!-- CTA 버튼 -->
+</div>
+```
+
+#### CSS
+
+```css
+/* 툴바 .tb-actions — gap을 12px 이상으로 설정 */
+.tb-actions { display: flex; gap: 12px; margin-left: auto; align-items: center; }
+
+/* 정렬 버튼 */
+.sort-btn {
+  display: inline-flex; flex-direction: row; align-items: center; gap: 10px;
+  background: none; border: none; cursor: pointer; padding: 0;
+  min-height: 44px; justify-content: center; opacity: 1;
+  transition: opacity 0.12s;
+}
+.sort-btn:hover { opacity: 0.75; }
+.sort-label {
+  font: var(--text-pc-script-12); color: var(--cs-text-light);
+  white-space: nowrap; line-height: 1;
+}
+.sort-label-active { color: var(--cs-purple); }
+```
+
+#### 비주얼 스펙
+
+| 상태 | rect fill | path stroke | 레이블 색 |
+|---|---|---|---|
+| 기본(오름순) | `#F6F6F6` | `#AAAAAA` | `--cs-text-light` |
+| 변경됨 | `rgba(59,47,138,0.08)` | `#3B2F8A` | `--cs-purple` |
+
+#### 적용 체크리스트 (GATE C)
+
+```
+[ ] sortMode $state 선언이 sortedItems $derived 보다 앞에 위치?
+[ ] 데이터 소스 배열을 [...spread]로 복사 후 정렬? (원본 불변)
+[ ] 렌더링에서 원본 data.* 대신 sortedItems 참조?
+[ ] 툴바 .tb-actions gap ≥ 12px?
+[ ] sort-btn min-height 44px (터치 타겟)?
+[ ] 아이콘·레이블 flex-direction: row / gap: 10px?
+```
+
+### 7-14. 페이지네이션 (`CmsPagination`) — 인덱스 UI 공통 컴포넌트 ★
+
+> **트리거**: "인덱스 UI 반영 배치해" 요청 시 이 컴포넌트를 즉시 적용  
+> **컴포넌트**: `src/lib/components/cms/CmsPagination.svelte`  
+> **최초 적용**: `src/routes/cms/products/+page.svelte` (상품목록 상단·하단)  
+> **추가일**: 2026-07-10
+
+목록이 일정 수(기본 20개)를 초과할 때 이전/다음 버튼과 페이지 번호를 표시하는 공통 페이지네이션 컴포넌트.  
+**페이지 단위 목록이 있는 모든 CMS 화면에서 인라인 구현 금지** — 이 컴포넌트를 재사용한다.
+
+#### Props
+
+| Prop | 타입 | 기본값 | 설명 |
+|---|---|---|---|
+| `page` | `number` | — | 현재 페이지 (1-indexed) |
+| `totalPages` | `number` | — | 전체 페이지 수 |
+| `onpage` | `(p: number) => void` | — | 페이지 변경 콜백 |
+| `variant` | `'top' \| 'bottom' \| 'inline'` | `'inline'` | 배치 위치 |
+| `ariaLabel` | `string` | `'페이지 탐색'` | 접근성 레이블 |
+
+#### variant 동작
+
+| variant | 추가 CSS | 용도 |
+|---|---|---|
+| `top` | `min-height: 44px` | 검색 레이아웃과 카드목록 사이 (수평·수직 중앙) |
+| `bottom` | `margin-top: 20px` | 카드목록 최하단 (수평 중앙) |
+| `inline` | 없음 | 기타 위치 |
+
+#### 서버사이드 구현 (필수 — +page.server.ts)
+
+```typescript
+// 페이지 크기 (20개 고정)
+const PAGE_SIZE = 20
+const pageParam = Math.max(1, parseInt(url.searchParams.get('page') ?? '1'))
+
+// 총 개수 쿼리 (head: true → 데이터 없이 count만)
+let countQ = admin.from('테이블명').select('*', { count: 'exact', head: true })
+// …필터 조건 동일하게 적용
+
+// 목록 쿼리
+let listQ = admin.from('테이블명').select('필드목록')
+// …필터·정렬 조건 적용
+listQ = listQ.range((pageParam - 1) * PAGE_SIZE, pageParam * PAGE_SIZE - 1)
+
+// 병렬 실행
+const [{ count: totalCount }, { data: items }] = await Promise.all([countQ, listQ])
+const totalPages = Math.max(1, Math.ceil((totalCount ?? 0) / PAGE_SIZE))
+const page = Math.min(pageParam, totalPages)
+
+return { items, page, totalPages }
+```
+
+#### 클라이언트 구현 (+page.svelte)
+
+```svelte
+<script lang="ts">
+  import { goto } from '$app/navigation'
+  import CmsPagination from '$lib/components/cms/CmsPagination.svelte'
+
+  // 페이지 이동 — URL params 방식 (sort 등 기존 파라미터 유지)
+  function goToPage(p: number) {
+    const params = new URLSearchParams(window.location.search)
+    params.set('page', p.toString())
+    params.delete('selected')   // 상세 패널 닫기
+    goto(`?${params.toString()}`)
+  }
+
+  // 필터·정렬 변경 시 page 초기화 필수
+  function onFilterChange() {
+    const params = new URLSearchParams()
+    // …새 필터값 설정
+    params.delete('page')       // page 파라미터 제거 → 서버에서 1페이지로 처리
+    goto(`?${params.toString()}`)
+  }
+</script>
+
+<!-- 상단 (검색 레이아웃과 카드목록 사이) -->
+<CmsPagination
+  page={data.page}
+  totalPages={data.totalPages}
+  onpage={goToPage}
+  variant="top"
+  ariaLabel="{페이지명} 페이지 탐색"
+/>
+
+<!-- 목록 렌더링 -->
+{#each data.items as item}...{/each}
+
+<!-- 하단 (목록 최하단) -->
+<CmsPagination
+  page={data.page}
+  totalPages={data.totalPages}
+  onpage={goToPage}
+  variant="bottom"
+  ariaLabel="{페이지명} 페이지 탐색 (하단)"
+/>
+```
+
+#### UI·접근성 규격 (컴포넌트 내장 — 재정의 금지)
+
+```
+이전/다음 버튼   : 22×22 원형 SVG 아이콘 / min 44×44px 터치 영역
+활성 아이콘      : circle fill rgba(59,47,138,0.08) / path stroke #3B2F8A
+비활성 아이콘    : circle fill #F6F6F6 / path stroke #AAAAAA
+opacity 상태     : 활성 100% / 비활성(:disabled) 50% / hover:not(:disabled) 75%
+
+페이지 번호 버튼 : 30×30px / --radius-sm / 최대 5개 슬라이딩 윈도우 표시
+현재 페이지      : --cs-purple BG + white 텍스트 + 700 bold
+비활성 번호      : 투명 BG + --cs-text-mid / hover: rgba(59,47,138,0.06) BG
+단일 페이지      : 버튼 없이 plain text 번호만 표시
+
+ARIA            : role="navigation" + aria-label / aria-current="page" (현재 번호)
+```
+
+#### 재활용 체크리스트 (GATE C)
+
+```
+[ ] "인덱스 UI 반영 배치해" 요청 → CmsPagination 사용 (인라인 구현 금지)?
+[ ] 서버에서 count 쿼리 + range() 페이지 슬라이싱 모두 구현?
+[ ] Promise.all([countQ, listQ]) 병렬 실행?
+[ ] totalPages = Math.max(1, Math.ceil(count / PAGE_SIZE))?
+[ ] 필터·검색·정렬 변경 시 page 파라미터 삭제(초기화) 처리?
+[ ] variant="top" (상단) + variant="bottom" (하단) 양쪽 배치?
+[ ] goToPage에서 기존 URL params 보존 (URLSearchParams 재사용)?
+```
+
 ---
 
 ## 8. 폼 레이아웃 패턴
@@ -1225,6 +1453,9 @@ autocomplete  : off (브라우저 자동완성과 충돌 방지)
 [ ] 토글: role="switch" + aria-checked 속성?
 [ ] 모달: role="dialog" + aria-modal="true"?
 [ ] 유사이름 제안: CmsSimilarNameInput 공통 컴포넌트 사용 (인라인 복제 금지)?
+[ ] 목록 정렬 기능: Section 7-13 패턴 적용 (sortMode/sortedItems/$derived 구조)?
+[ ] 페이지네이션: CmsPagination 사용 (인라인 구현 금지)? Section 7-14 참조?
+[ ] 드래그 순서 변경: CmsDragList 사용 (인라인 구현 금지)? Section 7-15 참조?
 
 타이포그래피 (pc-com 토큰 전용)
 [ ] --text-m-* 모바일 토큰 미사용 (금지)?
@@ -1248,11 +1479,95 @@ autocomplete  : off (브라우저 자동완성과 충돌 방지)
 
 ---
 
+### 7-15. 목록 드래그 이동 (`CmsDragList`) — 드래그 순서 변경 공통 컴포넌트 ★
+
+> **트리거**: "목록 드래그 이동 기능 추가해" 요청 시 이 컴포넌트를 즉시 적용  
+> **컴포넌트**: `src/lib/components/cms/CmsDragList.svelte`  
+> **최초 적용**: `src/lib/components/cms/ProductDetailPanel.svelte` 사양(specs) 탭  
+> **추가일**: 2026-07-10
+
+목록 아이템을 드래그하여 순서를 변경하는 제네릭 공통 컴포넌트.  
+**드래그 순서 변경이 필요한 모든 CMS 화면에서 인라인 구현 금지** — 이 컴포넌트를 재사용한다.
+
+#### Props
+
+| Prop | 타입 | 기본값 | 설명 |
+|---|---|---|---|
+| `items` | `T[]` (bindable) | `[]` | 순서 변경 대상 배열 (`bind:items` 필수) |
+| `renderItem` | `Snippet<[T, number]>` | — | 각 아이템 렌더 스니펫 (필수) |
+| `itemKey` | `(item: T, index: number) => string \| number` | — | 아이템 고유 키 함수 (선택, 없으면 index 사용) |
+| `class` | `string` | `''` | 추가 CSS 클래스 |
+
+#### 사용 예 (specs 탭)
+
+```svelte
+<script lang="ts">
+  import CmsDragList from '$lib/components/cms/CmsDragList.svelte'
+</script>
+
+<CmsDragList bind:items={localSpecs} class="specs-drag-list">
+  {#snippet renderItem(spec, i)}
+    <div class="spec-row-inner">
+      <input class="il-input spec-key" type="text" value={spec.key}
+        oninput={(e) => updateSpecKey(i, (e.target as HTMLInputElement).value)} />
+      <input class="il-input spec-val" type="text" value={spec.value}
+        oninput={(e) => updateSpecVal(i, (e.target as HTMLInputElement).value)} />
+      <button type="button" class="btn-icon-close" onclick={() => removeSpec(i)}>✕</button>
+    </div>
+  {/snippet}
+</CmsDragList>
+```
+
+#### CSS 패턴 (페이지 내 스타일)
+
+```css
+/* 드래그 리스트 컨테이너 gap 조정 */
+.specs-drag-list { gap: 4px; }
+
+/* renderItem 내부 레이아웃 래퍼 */
+.spec-row-inner {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1;
+  min-width: 0;
+}
+```
+
+#### dirty 상태 감지
+
+`items` 배열은 `$bindable()`이므로 드래그로 순서가 변경되면 부모의 `isDirty` 파생 값이 자동으로 갱신된다.  
+`JSON.stringify(items)` 비교 방식으로 dirty를 감지하는 경우, 순서 변경도 정상적으로 감지된다.
+
+#### UI·접근성 규격 (컴포넌트 내장 — 재정의 금지)
+
+```
+드래그 핸들    : 6-dot SVG / 24px 폭 / 최소 44px 높이
+핸들 컬러      : --cs-text-light (기본) → --cs-purple (hover)
+드래그 중 아이템: opacity 0.4
+드롭 대상 아이템: 보라 점선 outline + 연보라 배경
+반경           : --cms-radius-sm (10px)
+```
+
+#### 재활용 체크리스트 (GATE C)
+
+```
+[ ] "목록 드래그 이동 기능 추가해" 요청 → CmsDragList 사용 (인라인 구현 금지)?
+[ ] bind:items 전달 (단방향 items 전달 금지)?
+[ ] renderItem 스니펫 내부에 행 레이아웃 래퍼 div 포함?
+[ ] 드래그 핸들이 실제 클릭 가능 요소(input/button)와 분리되어 있는가?
+[ ] dirty 감지: JSON.stringify 비교 → 순서 변경 시 dirty 갱신 확인?
+```
+
+---
+
 ## 12. 절대 금지 사항
 
 ```
+❌ 페이지네이션 UI를 페이지에 인라인 구현 — `CmsPagination` 재사용 필수
 ❌ 유사이름 제안 UI를 페이지에 인라인 복제 — `CmsSimilarNameInput` 재사용 필수
 ❌ `CmsSimilarNameInput` 내부에 input 직접 생성 — `field` 스니펫 + 페이지 `.f-input` 필수
+❌ 드래그 순서 변경 UI를 인라인 구현 — `CmsDragList` 재사용 필수
 ❌ position: fixed 남용 — 레이아웃 컨텍스트 오염 주의
 ❌ 글로벌 스타일 :global() 임의 추가 — +layout.svelte에서만
 ❌ 별도 로딩 스피너 컴포넌트 생성 — 레이아웃 오버레이 재사용
