@@ -91,7 +91,15 @@
       label: '대여',
       subMenus: [
         { label: '이력관리', href: '/cms/rental/history' },
-
+      ],
+    },
+    {
+      id: 'customers',
+      label: '고객',
+      subMenus: [
+        { label: '고객목록', href: '/cms/customers' },
+        { label: '멤버십',   href: '/cms/customers/membership' },
+        { label: '스코어',   href: '/cms/customers/score' },
       ],
     },
     {
@@ -127,6 +135,7 @@
     if (pathname.startsWith('/cms/reservation')) return 'reservation'
     if (pathname.startsWith('/cms/products')) return 'products'
     if (pathname.startsWith('/cms/rental')) return 'rental'
+    if (pathname.startsWith('/cms/customers')) return 'customers'
     return 'consulting'
   }
 
@@ -140,6 +149,9 @@
   function isSubTabActive(sub: SubMenu): boolean {
     if (page.url.pathname === sub.href) return true
     if (sub.href === '/cms/products' && page.url.pathname.startsWith('/cms/products')) return true
+    if (sub.href === '/cms/customers' && page.url.pathname === '/cms/customers') return true
+    if (sub.href === '/cms/customers/membership' && page.url.pathname.startsWith('/cms/customers/membership')) return true
+    if (sub.href === '/cms/customers/score' && page.url.pathname.startsWith('/cms/customers/score')) return true
     return false
   }
 </script>

@@ -5,7 +5,7 @@
   let { pathname = '/' }: Props = $props()
 
   const MENU_ITEMS = [
-    { id: 'hype',    label: 'Hype Pack',   href: '/' },
+    { id: 'hype',    label: 'Hype Pack',   href: '/hype-pack' },
     { id: 'all',     label: 'ALL',         href: '/products' },
     { id: 'members', label: 'Members',     href: '/' },
     { id: 'log',     label: 'Crazylog',    href: '/' },
@@ -14,6 +14,7 @@
 
   function isActive(item: { id: string; href: string }): boolean {
     if (item.href === '/products') return pathname.startsWith('/products')
+    if (item.href === '/hype-pack') return pathname.startsWith('/hype-pack')
     return false
   }
 </script>
