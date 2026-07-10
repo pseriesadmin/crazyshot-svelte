@@ -19,12 +19,28 @@
   // 현재 코드를 추가할 조합 행 ID (null = 새 조합 자동 생성)
   let activeComboId  = $state<string | null>(null)
 
+  // 카테고리 키 정규화: 공백→하이픈, 10자 이내, 소문자 영문·숫자·_·- 만 허용
+  function sanitizeCategoryKey(raw: string): string {
+    return raw
+      .toLowerCase()
+      .replace(/\s+/g, '-')
+      .replace(/[^a-z0-9_-]/g, '')
+      .slice(0, 10)
+  }
+  function onNewCategoryInput(e: Event) {
+    newDefaultCategory = sanitizeCategoryKey((e.target as HTMLInputElement).value)
+  }
+  function onEditCategoryInput(e: Event) {
+    editDefaultCategory = sanitizeCategoryKey((e.target as HTMLInputElement).value)
+  }
+
   // 신규 그룹 폼
   let newName = $state('')
   let newDesc = $state('')
   let newKwInput = $state('')
   let newKws = $state<string[]>([])
   let newOrder = $state('99')
+  let newDefaultCategory = $state('')
 
   // 편집 폼
   let editName = $state('')
@@ -32,6 +48,7 @@
   let editKwInput = $state('')
   let editKws = $state<string[]>([])
   let editOrder = $state('99')
+  let editDefaultCategory = $state('')
 
   // ── 파생 값 ──────────────────────────────────────────────────────────
   let selectedGroup = $derived(
@@ -194,12 +211,13 @@
 
   // ── 그룹 편집 모드 진입 ───────────────────────────────────────────────
   function startEdit(g: MappingGroup) {
-    editName    = g.name
-    editDesc    = g.description ?? ''
-    editKws     = [...g.keywords]
-    editKwInput = ''
-    editOrder   = String(g.sort_order)
-    isEditMode  = true
+    editName            = g.name
+    editDesc            = g.description ?? ''
+    editKws             = [...g.keywords]
+    editKwInput         = ''
+    editOrder           = String(g.sort_order)
+    editDefaultCategory = g.default_category ?? ''
+    isEditMode          = true
   }
   function cancelEdit() { isEditMode = false }
 
@@ -299,6 +317,9 @@
         </div>
         <input type="hidden" name="keywords" value={newKws.join(',')} />
         <input type="hidden" name="sort_order" value={newOrder} />
+        <input class="ng-input ng-category" name="default_category" type="text" value={newDefaultCategory}
+          oninput={onNewCategoryInput}
+          placeholder="카테고리 키 (영문 10자, 예: camera)" maxlength="10" autocomplete="off" />
         <button type="submit" class="btn-save-group">그룹 추가</button>
       </form>
     {/if}
@@ -472,6 +493,12 @@
             <label class="ef-label" for="ef-order">정렬 순서</label>
             <input id="ef-order" class="ef-input ef-short" name="sort_order" type="number" bind:value={editOrder} min="0" max="999" />
           </div>
+          <div class="ef-row">
+            <label class="ef-label" for="ef-category">카테고리 키</label>
+            <input id="ef-category" class="ef-input" name="default_category" type="text" value={editDefaultCategory}
+              oninput={onEditCategoryInput}
+              placeholder="카테고리 키 (영문 10자, 예: camera)" maxlength="10" autocomplete="off" />
+          </div>
           <div class="ef-actions">
             <button type="submit" class="btn-primary">저장</button>
             <button type="button" class="btn-cancel" onclick={cancelEdit}>취소</button>
@@ -479,10 +506,15 @@
         </form>
       {:else}
         <!-- 그룹 정보 요약 -->
-        {#if selectedGroup.description || selectedGroup.keywords.length > 0}
+        {#if selectedGroup.description || selectedGroup.keywords.length > 0 || selectedGroup.default_category}
           <div class="group-info">
             {#if selectedGroup.description}
               <p class="gi-desc">{selectedGroup.description}</p>
+            {/if}
+            {#if selectedGroup.default_category}
+              <p class="gi-category">카테고리 키: <code>{selectedGroup.default_category}</code></p>
+            {:else if selectedGroup.show_in_product_filter}
+              <p class="gi-category gi-category-warn">⚠ 카테고리 키 미설정 — 상품필터에 노출되지 않음</p>
             {/if}
             {#if selectedGroup.keywords.length > 0}
               <div class="gi-kws">
@@ -556,7 +588,7 @@
                   <!-- 우측 설정 영역 (조합 행 단위) -->
                   <div class="combo-controls">
 
-                    {#if comboEditSet[combo.combo_row_id]}
+                    {#if comboEditSet[combo.combo_row_id] || isActiveCurrent}
                       <!-- ── 메타 편집 모드 (✎ 버튼 진입) ── -->
                       <form
                         id="combo-form-{combo.combo_row_id}"
@@ -587,10 +619,10 @@
                           onclick={() => {
                             const opts = ['none', 'ym']
                             const cur = comboDateOptMap[combo.combo_row_id] ?? leadItem.date_option
-                            comboDateOptMap = { ...comboDateOptMap, [combo.combo_row_id]: opts[(opts.indexOf(cur) + 1) % 3] }
+                            comboDateOptMap = { ...comboDateOptMap, [combo.combo_row_id]: opts[(opts.indexOf(cur) + 1) % 2] }
                           }}
-                          title="클릭하여 변경: 없음 → 년/월 → 연월일"
-                        >{DATE_OPT_LABEL[comboDateOptMap[combo.combo_row_id] ?? leadItem.date_option]}</button>
+                          title="클릭하여 변경: 없음 ↔ 년/월"
+                        >년월</button>
 
                         <!-- 순번상한 -->
                         <div class="seq-wrap">
@@ -662,7 +694,7 @@
                     {:else}
                       <!-- ── 일반 모드 ── -->
                       <!-- 날짜 옵션 배지 -->
-                      <span class="date-badge date-opt-{leadItem.date_option}">{DATE_OPT_LABEL[leadItem.date_option]}</span>
+                      <span class="date-badge date-opt-{leadItem.date_option}">년월</span>
 
                       <!-- 코드 프리뷰 -->
                       <code class="node-code-preview">{buildComboPreview(combo.items, leadItem)}</code>
@@ -906,6 +938,7 @@
 }
 .new-group-form .ng-name { width: 160px; }
 .new-group-form .ng-desc { width: 240px; }
+.new-group-form .ng-category { width: 200px; }
 .new-group-form .ng-kw {
   width: 320px;
   max-width: 320px;
@@ -1236,6 +1269,9 @@
 }
 .gi-desc { font: var(--text-pc-script-12); color: var(--cs-text-mid); margin: 0 0 8px; }
 .gi-kws  { display: flex; flex-wrap: wrap; gap: 5px; }
+.gi-category { font: var(--text-pc-script-12); color: var(--cs-text-mid); margin: 0 0 8px; }
+.gi-category code { font-family: monospace; background: var(--cs-lilac); padding: 1px 6px; border-radius: 4px; color: var(--cs-purple); }
+.gi-category-warn { color: var(--cs-warning); }
 
 /* 키워드 칩 */
 .kw-row {

@@ -31,6 +31,36 @@ async function getLinkedProductCount(admin: AdminClient, codeId: string): Promis
   return count ?? 0
 }
 
+/** 조합코드 그룹 내 전체 taxonomy_code에 연결된 상품 수 (중복 제거) */
+async function getGroupLinkedCount(admin: AdminClient, group_id: string): Promise<number> {
+  const { data: items } = await admin
+    .from('code_mapping_items')
+    .select('taxonomy_code_id')
+    .eq('group_id', group_id)
+  if (!items || items.length === 0) return 0
+  const uniqueIds = [...new Set(items.map(i => i.taxonomy_code_id))]
+  let total = 0
+  for (const codeId of uniqueIds) {
+    total += await getLinkedProductCount(admin, codeId)
+  }
+  return total
+}
+
+/** 특정 조합 행(combo_row_id)의 taxonomy_code에 연결된 상품 수 */
+async function getComboRowLinkedCount(admin: AdminClient, combo_row_id: string): Promise<number> {
+  const { data: items } = await admin
+    .from('code_mapping_items')
+    .select('taxonomy_code_id')
+    .eq('combo_row_id', combo_row_id)
+  if (!items || items.length === 0) return 0
+  const uniqueIds = [...new Set(items.map(i => i.taxonomy_code_id))]
+  let total = 0
+  for (const codeId of uniqueIds) {
+    total += await getLinkedProductCount(admin, codeId)
+  }
+  return total
+}
+
 /** 세션 사용자가 superadmin인지 확인 */
 async function checkSuperadmin(admin: AdminClient, userId: string): Promise<boolean> {
   const { data } = await admin
@@ -83,6 +113,7 @@ export type MappingGroup = {
   is_active: boolean
   show_in_product_filter: boolean
   is_partner_type: boolean
+  default_category: string | null
   sort_order: number
   created_at: string
   updated_at: string
@@ -156,7 +187,7 @@ export const load: PageServerLoad = async ({ locals }) => {
       .maybeSingle(),
     admin
       .from('code_mapping_groups')
-      .select('id, name, description, keywords, is_active, show_in_product_filter, is_partner_type, sort_order, created_at, updated_at')
+      .select('id, name, description, keywords, is_active, show_in_product_filter, is_partner_type, default_category, sort_order, created_at, updated_at')
       .order('sort_order')
       .order('name'),
     admin
@@ -379,6 +410,19 @@ export const actions: Actions = {
         children?.forEach(c => queue.push(c.id))
         toDelete.push(current)
       }
+
+      // cascade 대상 코드 중 연결 상품이 있으면 삭제 차단
+      let totalLinked = 0
+      for (const cid of toDelete) {
+        totalLinked += await getLinkedProductCount(admin, cid)
+        if (totalLinked > 0) break
+      }
+      if (totalLinked > 0)
+        return fail(400, {
+          action: 'deleteCode',
+          error: `삭제 대상 코드(${toDelete.length}개)에 연결된 상품 ${totalLinked}개 이상이 있습니다. 연결된 상품의 코드를 변경한 후 삭제해주세요.`
+        })
+
       for (const cid of [...toDelete].reverse()) {
         await admin.rpc('cms_delete_taxonomy_code', { p_id: cid })
       }
@@ -629,17 +673,19 @@ export const actions: Actions = {
     if (!session) return fail(401, { action: 'addGroup', error: '인증 필요' })
 
     const form = await request.formData()
-    const name        = ((form.get('name')        as string) ?? '').trim()
-    const description = ((form.get('description') as string) ?? '').trim() || null
-    const kwRaw       = ((form.get('keywords')    as string) ?? '').trim()
-    const keywords    = kwRaw ? kwRaw.split(',').map(k => k.trim()).filter(Boolean) : []
-    const sort_order  = parseInt((form.get('sort_order') as string) ?? '99') || 99
+    const name             = ((form.get('name')             as string) ?? '').trim()
+    const description      = ((form.get('description')      as string) ?? '').trim() || null
+    const kwRaw            = ((form.get('keywords')         as string) ?? '').trim()
+    const keywords         = kwRaw ? kwRaw.split(',').map(k => k.trim()).filter(Boolean) : []
+    const sort_order       = parseInt((form.get('sort_order') as string) ?? '99') || 99
+    const default_category = ((form.get('default_category') as string) ?? '')
+      .toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9_-]/g, '').slice(0, 10) || null
 
     if (!name) return fail(400, { action: 'addGroup', error: '그룹명은 필수입니다.' })
 
     const { data, error } = await db()
       .from('code_mapping_groups')
-      .insert({ name, description, keywords, sort_order })
+      .insert({ name, description, keywords, sort_order, default_category })
       .select('id')
       .single()
 
@@ -653,18 +699,20 @@ export const actions: Actions = {
     if (!session) return fail(401, { action: 'editGroup', error: '인증 필요' })
 
     const form = await request.formData()
-    const id          = (form.get('id')           as string) ?? ''
-    const name        = ((form.get('name')        as string) ?? '').trim()
-    const description = ((form.get('description') as string) ?? '').trim() || null
-    const kwRaw       = ((form.get('keywords')    as string) ?? '').trim()
-    const keywords    = kwRaw ? kwRaw.split(',').map(k => k.trim()).filter(Boolean) : []
-    const sort_order  = parseInt((form.get('sort_order') as string) ?? '99') || 99
+    const id               = (form.get('id')              as string) ?? ''
+    const name             = ((form.get('name')            as string) ?? '').trim()
+    const description      = ((form.get('description')     as string) ?? '').trim() || null
+    const kwRaw            = ((form.get('keywords')        as string) ?? '').trim()
+    const keywords         = kwRaw ? kwRaw.split(',').map(k => k.trim()).filter(Boolean) : []
+    const sort_order       = parseInt((form.get('sort_order') as string) ?? '99') || 99
+    const default_category = ((form.get('default_category') as string) ?? '')
+      .toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9_-]/g, '').slice(0, 10) || null
 
     if (!id || !name) return fail(400, { action: 'editGroup', error: '그룹명은 필수입니다.' })
 
     const { error } = await db()
       .from('code_mapping_groups')
-      .update({ name, description, keywords, sort_order, updated_at: new Date().toISOString() })
+      .update({ name, description, keywords, sort_order, default_category, updated_at: new Date().toISOString() })
       .eq('id', id)
 
     if (error) return fail(500, { action: 'editGroup', error: '수정 실패: ' + error.message })
@@ -680,7 +728,17 @@ export const actions: Actions = {
     const id = (form.get('id') as string) ?? ''
     if (!id) return fail(400, { action: 'deleteGroup', error: 'ID가 필요합니다.' })
 
-    const { error } = await db()
+    const admin = db()
+
+    // 그룹 내 taxonomy_code에 연결된 상품이 있으면 삭제 차단
+    const linkedCount = await getGroupLinkedCount(admin, id)
+    if (linkedCount > 0)
+      return fail(400, {
+        action: 'deleteGroup',
+        error: `이 조합코드그룹에 연결된 상품 ${linkedCount}개가 있습니다. 연결된 상품의 코드를 변경한 후 삭제해주세요.`
+      })
+
+    const { error } = await admin
       .from('code_mapping_groups')
       .delete()
       .eq('id', id)
@@ -823,7 +881,17 @@ export const actions: Actions = {
     if (!combo_row_id || !group_id)
       return fail(400, { action: 'removeGroupCombo', error: 'combo_row_id, group_id가 필요합니다.' })
 
-    const { error } = await db()
+    const admin = db()
+
+    // 조합 행의 taxonomy_code에 연결된 상품이 있으면 삭제 차단
+    const linkedCount = await getComboRowLinkedCount(admin, combo_row_id)
+    if (linkedCount > 0)
+      return fail(400, {
+        action: 'removeGroupCombo',
+        error: `이 조합코드에 연결된 상품 ${linkedCount}개가 있습니다. 연결된 상품의 코드를 변경한 후 삭제해주세요.`
+      })
+
+    const { error } = await admin
       .from('code_mapping_items')
       .delete()
       .eq('combo_row_id', combo_row_id)
@@ -845,7 +913,17 @@ export const actions: Actions = {
     if (!group_id || !taxonomy_code_id)
       return fail(400, { action: 'removeGroupItem', error: 'group_id, taxonomy_code_id가 필요합니다.' })
 
-    const { error } = await db()
+    const admin = db()
+
+    // 해당 taxonomy_code에 연결된 상품이 있으면 삭제 차단
+    const linkedCount = await getLinkedProductCount(admin, taxonomy_code_id)
+    if (linkedCount > 0)
+      return fail(400, {
+        action: 'removeGroupItem',
+        error: `이 코드에 연결된 상품 ${linkedCount}개가 있습니다. 연결된 상품의 코드를 변경한 후 제거해주세요.`
+      })
+
+    const { error } = await admin
       .from('code_mapping_items')
       .delete()
       .eq('group_id', group_id)
@@ -865,7 +943,25 @@ export const actions: Actions = {
 
     if (!id) return fail(400, { action: 'removeComboItem', error: 'id가 필요합니다.' })
 
-    const { error } = await db()
+    const admin = db()
+
+    // 해당 item의 taxonomy_code_id를 조회 후 연결 상품 체크
+    const { data: itemRow } = await admin
+      .from('code_mapping_items')
+      .select('taxonomy_code_id')
+      .eq('id', id)
+      .maybeSingle()
+
+    if (itemRow?.taxonomy_code_id) {
+      const linkedCount = await getLinkedProductCount(admin, itemRow.taxonomy_code_id)
+      if (linkedCount > 0)
+        return fail(400, {
+          action: 'removeComboItem',
+          error: `이 코드에 연결된 상품 ${linkedCount}개가 있습니다. 연결된 상품의 코드를 변경한 후 제거해주세요.`
+        })
+    }
+
+    const { error } = await admin
       .from('code_mapping_items')
       .delete()
       .eq('id', id)

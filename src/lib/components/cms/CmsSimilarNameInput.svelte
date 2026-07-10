@@ -132,6 +132,7 @@
 
       if (activeOnly) query = query.eq('is_active', true)
       if (excludeId) query = query.neq('id', excludeId)
+      query = query.is('parent_product_id', null)
 
       const { data, error } = await query
       if (error) {

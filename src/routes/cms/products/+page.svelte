@@ -1,7 +1,7 @@
 <script lang="ts">
   import { goto } from '$app/navigation'
   import { enhance } from '$app/forms'
-  import { fly } from 'svelte/transition'
+  import { fly, slide } from 'svelte/transition'
   import { invalidateAll } from '$app/navigation'
   import ProductDetailPanel from '$lib/components/cms/ProductDetailPanel.svelte'
   import CmsSimilarNameInput from '$lib/components/cms/CmsSimilarNameInput.svelte'
@@ -306,18 +306,99 @@
     <!-- 상세 뷰어 패널 — {#key}로 상품 전환 시 $state 완전 재초기화 -->
     {#if panelOpen && data.selectedProduct}
       <div class="detail-pane" transition:fly={{ x: 24, duration: 200 }}>
-        {#key data.selectedId}
-          <ProductDetailPanel
-            product={data.selectedProduct}
-            priceRules={data.selectedPriceRules}
-            categories={data.categories}
-            categoryLabel={CATEGORY_LABEL[data.selectedProduct.category] ?? data.selectedProduct.category}
-            initialTab={data.initialTab}
-            inventoryList={data.inventoryList}
-            partnerComboItems={data.partnerComboItems}
-            onclose={closePanel}
-          />
-        {/key}
+
+        <!-- 재고 아코디언: 2개 이상일 때 각 행이 펼쳐지며 상세 패널 인라인 표시 -->
+        {#if data.inventoryList && data.inventoryList.length > 1}
+          <div class="inv-accordion">
+            {#each data.inventoryList as unit, idx (unit.id)}
+              {@const isActive = data.selectedId === unit.id}
+              <div class="inv-acc-item" class:inv-acc-item--active={isActive}>
+                <!-- 아코디언 헤더 행 -->
+                <div class="inv-acc-header">
+                  <button
+                    type="button"
+                    class="inv-acc-trigger"
+                    onclick={() => selectProduct(unit.id)}
+                    aria-expanded={isActive}
+                    aria-label="{unit.product_code ?? '—'} {isActive ? '접기' : '펼치기'}"
+                  >
+                    <span class="inv-bar-index" class:inv-bar-index--active={isActive}>{idx + 1}</span>
+                    <div class="inv-bar-left">
+                      <div class="inv-bar-code-group">
+                        <span class="inv-bar-label">품번</span>
+                        <span class="inv-bar-code" class:inv-bar-code--active={isActive}>{unit.product_code ?? '—'}</span>
+                      </div>
+                      <span class="inv-bar-name">{unit.name}</span>
+                      {#if unit.price_rules.length > 0}
+                        <div class="inv-bar-badges">
+                          {#each unit.price_rules as rule (rule.duration_type)}
+                            <span class="inv-bar-badge">
+                              {rule.duration_type === '12h' ? '12H' : rule.duration_type === '24h' ? 'Day' : '월'}
+                              {rule.price.toLocaleString()}
+                            </span>
+                          {/each}
+                        </div>
+                      {/if}
+                    </div>
+                    <!-- 펼침 화살표 -->
+                    <svg
+                      class="inv-acc-chevron"
+                      class:inv-acc-chevron--open={isActive}
+                      width="16" height="16" viewBox="0 0 16 16" fill="none"
+                      xmlns="http://www.w3.org/2000/svg"
+                    >
+                      <path d="M4 6L8 10L12 6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+                    </svg>
+                  </button>
+                  <!-- 토글: 독립 영역 (클릭 전파 없음) -->
+                  <form method="POST" action="?/toggleStatus" use:enhance={handleToggle}>
+                    <input type="hidden" name="id" value={unit.id} />
+                    <input type="hidden" name="is_active" value={unit.is_active.toString()} />
+                    <button
+                      type="submit"
+                      class="inv-bar-toggle"
+                      class:inv-bar-toggle--on={unit.is_active}
+                      aria-label={unit.is_active ? '미노출로 전환' : '노출로 전환'}
+                    >
+                      <span class="inv-bar-thumb"></span>
+                    </button>
+                  </form>
+                </div>
+                <!-- 아코디언 바디: 선택된 항목만 펼쳐짐 -->
+                {#if isActive && data.selectedProduct}
+                  <div class="inv-acc-body" transition:slide={{ duration: 220 }}>
+                    {#key data.selectedId}
+                      <ProductDetailPanel
+                        product={data.selectedProduct}
+                        priceRules={data.selectedPriceRules}
+                        categories={data.categories}
+                        categoryLabel={CATEGORY_LABEL[data.selectedProduct.category] ?? data.selectedProduct.category}
+                        initialTab={data.initialTab}
+                        inventoryList={data.inventoryList}
+                        partnerComboItems={data.partnerComboItems}
+                        onclose={closePanel}
+                      />
+                    {/key}
+                  </div>
+                {/if}
+              </div>
+            {/each}
+          </div>
+        {:else}
+          <!-- 단일 상품: 아코디언 없이 바로 상세 패널 -->
+          {#key data.selectedId}
+            <ProductDetailPanel
+              product={data.selectedProduct}
+              priceRules={data.selectedPriceRules}
+              categories={data.categories}
+              categoryLabel={CATEGORY_LABEL[data.selectedProduct.category] ?? data.selectedProduct.category}
+              initialTab={data.initialTab}
+              inventoryList={data.inventoryList}
+              partnerComboItems={data.partnerComboItems}
+              onclose={closePanel}
+            />
+          {/key}
+        {/if}
       </div>
     {/if}
 
@@ -659,5 +740,172 @@
   .detail-pane {
     flex: 1;
     min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
   }
+
+  /* 재고 아코디언 */
+  .inv-accordion {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    flex-shrink: 0;
+  }
+  .inv-acc-item {
+    background: var(--cs-surface-gray);
+    border-radius: var(--cms-radius-md);
+    border: 1.5px solid transparent;
+    overflow: hidden;
+    transition: border-color 0.15s;
+  }
+  .inv-acc-item--active {
+    border-color: var(--cs-purple);
+    background: var(--cs-white);
+  }
+
+  /* 아코디언 헤더 행 */
+  .inv-acc-header {
+    display: flex;
+    align-items: center;
+  }
+  .inv-acc-trigger {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 14px 12px 14px 16px;
+    background: transparent;
+    border: none;
+    cursor: pointer;
+    text-align: left;
+    min-height: 48px;
+    min-width: 0;
+    transition: background 0.12s;
+  }
+  .inv-acc-trigger:hover { background: rgba(59,47,138,0.04); }
+  .inv-acc-item--active .inv-acc-trigger:hover { background: rgba(59,47,138,0.03); }
+
+  /* 순번 인덱스 */
+  .inv-bar-index {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 20px;
+    height: 20px;
+    border-radius: 50%;
+    background: var(--cs-lilac);
+    color: var(--cs-text-mid);
+    font-size: 10px;
+    font-weight: 700;
+    font-family: 'Noto Sans KR', sans-serif;
+    flex-shrink: 0;
+    transition: background 0.15s, color 0.15s;
+  }
+  .inv-bar-index--active {
+    background: var(--cs-purple);
+    color: var(--cs-white);
+  }
+
+  .inv-bar-left {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    min-width: 0;
+    flex: 1;
+  }
+  .inv-bar-code-group {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-shrink: 0;
+  }
+  .inv-bar-label {
+    font: var(--text-pc-descript-10);
+    color: #999999;
+    flex-shrink: 0;
+  }
+  .inv-bar-code {
+    font: var(--text-pc-descript-10);
+    font-weight: 700;
+    color: var(--cs-text-mid);
+    flex-shrink: 0;
+    white-space: nowrap;
+  }
+  .inv-bar-code--active { color: var(--cs-purple); }
+  .inv-bar-name {
+    font-size: 13px;
+    font-weight: 700;
+    font-family: 'Noto Sans KR', sans-serif;
+    color: var(--cs-text);
+    flex-shrink: 0;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .inv-bar-badges {
+    display: flex;
+    gap: 6px;
+    flex-shrink: 0;
+  }
+  .inv-bar-badge {
+    display: inline-flex;
+    align-items: center;
+    padding: 3px 8px;
+    background: var(--cs-purple-op10);
+    color: var(--cs-purple);
+    border-radius: var(--radius-sm);
+    font: var(--text-pc-script-12);
+    font-weight: 700;
+    white-space: nowrap;
+  }
+
+  /* 화살표 아이콘 */
+  .inv-acc-chevron {
+    color: var(--cs-text-light);
+    flex-shrink: 0;
+    transition: transform 0.22s cubic-bezier(0.4, 0, 0.2, 1), color 0.15s;
+  }
+  .inv-acc-chevron--open {
+    transform: rotate(180deg);
+    color: var(--cs-purple);
+  }
+
+  /* 아코디언 바디 */
+  .inv-acc-body {
+    overflow: hidden;
+  }
+
+  /* 토글 버튼 래퍼 */
+  .inv-acc-header form {
+    padding: 0 16px 0 0;
+    display: flex;
+    align-items: center;
+    flex-shrink: 0;
+  }
+  .inv-bar-toggle {
+    position: relative;
+    width: 36px;
+    height: 20px;
+    border: none;
+    border-radius: var(--cms-radius-sm);
+    background: var(--cs-disabled-toggle);
+    cursor: pointer;
+    padding: 2px;
+    transition: background 0.2s;
+    flex-shrink: 0;
+  }
+  .inv-bar-toggle.inv-bar-toggle--on { background: var(--cs-purple); }
+  .inv-bar-thumb {
+    position: absolute;
+    top: 2px;
+    left: 2px;
+    width: 16px;
+    height: 16px;
+    border-radius: 50%;
+    background: var(--cs-white);
+    transition: transform 0.2s;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.2);
+  }
+  .inv-bar-toggle.inv-bar-toggle--on .inv-bar-thumb { transform: translateX(16px); }
 </style>

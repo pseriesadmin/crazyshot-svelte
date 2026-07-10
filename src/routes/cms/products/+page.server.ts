@@ -22,7 +22,7 @@ export const load: PageServerLoad = async ({ locals, url }) => {
   // 코드조합그룹 중 상품목록 카테고리 필터에 노출하도록 설정된 목록 (탭 필터용)
   const { data: rawCategories } = await admin
     .from('code_mapping_groups')
-    .select('id, name, sort_order')
+    .select('id, name, sort_order, default_category')
     .eq('show_in_product_filter', true)
     .eq('is_active', true)
     .order('sort_order', { ascending: true })
@@ -31,6 +31,8 @@ export const load: PageServerLoad = async ({ locals, url }) => {
   const categories = (rawCategories ?? []).map((g) => ({
     value: g.id,
     label: g.name,
+    // categoryCode: 상세 패널에서 products.category에 저장할 실제 값 (default_category 문자열)
+    categoryCode: (g.default_category ?? null) as string | null,
   }))
 
   // 카드 배지용 product_category → 레이블 매핑 (depth=0 기준)
@@ -91,28 +93,16 @@ export const load: PageServerLoad = async ({ locals, url }) => {
     }
   }
 
-  // 카테고리 필터: 그룹 ID → product_category 값 해석
-  // categories.value = code_mapping_groups.id (UUID) → 해당 그룹의 taxonomy_code_ids → product_category 집합
+  // 카테고리 필터: code_mapping_groups.default_category → products.category 문자열 매핑
   let categoryValues: string[] | null = null
   if (category !== 'all') {
-    const { data: items } = await admin
-      .from('code_mapping_items')
-      .select('taxonomy_code_id')
-      .eq('group_id', category)
+    const { data: group } = await admin
+      .from('code_mapping_groups')
+      .select('default_category')
+      .eq('id', category)
+      .single()
 
-    const tcIds = (items ?? []).map((i) => i.taxonomy_code_id).filter(Boolean)
-    if (tcIds.length > 0) {
-      const { data: codes } = await admin
-        .from('product_category_codes')
-        .select('product_category')
-        .in('id', tcIds)
-        .not('product_category', 'is', null)
-
-      const distinct = [...new Set((codes ?? []).map((c) => c.product_category as string))]
-      categoryValues = distinct.length > 0 ? distinct : ['__none__']
-    } else {
-      categoryValues = ['__none__']
-    }
+    categoryValues = group?.default_category ? [group.default_category] : ['__none__']
   }
 
   // 전체 개수 쿼리 (페이지네이션용) — 부모 상품만 (재고 자식 제외)
@@ -303,10 +293,15 @@ export const load: PageServerLoad = async ({ locals, url }) => {
   }
   let inventoryList: InventoryUnit[] = []
   if (selectedId) {
+    // 자식 상품이 선택된 경우 → 부모 기준으로 전체 재고 그룹 로드
+    const parentProductId = selectedProduct
+      ? ((selectedProduct as unknown as Record<string, unknown>).parent_product_id as string | null)
+      : null
+    const rootId = parentProductId ?? selectedId
     const { data: invData } = await admin
       .from('products')
       .select('id, name, product_code, is_active, price_rules!left(duration_type, price, is_active, deleted_at)')
-      .or(`id.eq.${selectedId},parent_product_id.eq.${selectedId}`)
+      .or(`id.eq.${rootId},parent_product_id.eq.${rootId}`)
       .is('deleted_at', null)
       .order('created_at', { ascending: true })
 
@@ -567,7 +562,7 @@ export const actions: Actions = {
 
     const { data: source, error: sourceError } = await admin
       .from('products')
-      .select('id, category, name, slug, brand, description, product_caption, image_urls, specifications, sale_price, sale_only, product_code')
+      .select('id, category, name, slug, brand, description, product_caption, image_urls, specifications, sale_price, sale_only, product_code, parent_product_id, content_blocks, keywords')
       .eq('id', sourceProductId)
       .is('deleted_at', null)
       .single()
@@ -580,6 +575,10 @@ export const actions: Actions = {
       if (!productCode) {
         return fail(400, { error: '부모 상품에 품번이 없습니다. 먼저 품번을 발행해주세요.' })
       }
+
+      // source가 이미 재고 자식 상품인 경우 루트 ID 사용 (2단계 이상 중첩 방지)
+      const srcParentId = (source as Record<string, unknown>).parent_product_id as string | null
+      const rootProductId = srcParentId ?? sourceProductId
 
       const { data: sourcePriceRulesInv } = await admin
         .from('price_rules')
@@ -603,10 +602,12 @@ export const actions: Actions = {
             product_caption: source.product_caption,
             image_urls: source.image_urls,
             specifications: source.specifications,
+            content_blocks: (source as Record<string, unknown>).content_blocks ?? [],
+            keywords: (source as Record<string, unknown>).keywords ?? [],
             is_active: false,
             sale_price: source.sale_price,
             sale_only: source.sale_only,
-            parent_product_id: sourceProductId,
+            parent_product_id: rootProductId,
           })
           .select('id')
           .single()
@@ -620,9 +621,9 @@ export const actions: Actions = {
           .update({ qr_payload: `https://crazyshot.kr/qr/product/${newProduct.id}` })
           .eq('id', newProduct.id)
 
-        await admin.rpc('generate_child_product_code', {
+        await admin.rpc('generate_inventory_product_code', {
           p_product_id: newProduct.id,
-          p_parent_product_id: sourceProductId,
+          p_parent_product_id: rootProductId,
         })
 
         if (sourcePriceRulesInv && sourcePriceRulesInv.length > 0) {
@@ -637,6 +638,16 @@ export const actions: Actions = {
             }))
           )
         }
+
+        const { data: invSourceOptions } = await admin
+          .rpc('get_product_option_links', { p_product_id: rootProductId })
+        if (invSourceOptions && Array.isArray(invSourceOptions) && invSourceOptions.length > 0) {
+          await admin.rpc('upsert_product_option_links', {
+            p_product_id: newProduct.id,
+            p_option_links: JSON.stringify(invSourceOptions),
+          })
+        }
+
         createdIds.push(newProduct.id)
       }
       return { success: true, cloned: createdIds.length, mode: 'add_inventory', partnerCode: false }
@@ -693,9 +704,6 @@ export const actions: Actions = {
       .eq('is_active', true)
       .is('deleted_at', null)
 
-    const { data: sourceOptions } = await admin
-      .rpc('get_product_option_links', { p_product_id: sourceProductId })
-
     const createdIds: string[] = []
 
     for (let i = 1; i <= count; i++) {
@@ -719,6 +727,8 @@ export const actions: Actions = {
           product_caption: source.product_caption,
           image_urls: source.image_urls,
           specifications: source.specifications,
+          content_blocks: (source as Record<string, unknown>).content_blocks ?? [],
+          keywords: (source as Record<string, unknown>).keywords ?? [],
           is_active: false,
           sale_price: source.sale_price,
           sale_only: source.sale_only,
@@ -763,13 +773,6 @@ export const actions: Actions = {
             damage_fee_percentage: rule.damage_fee_percentage,
           }))
         )
-      }
-
-      if (sourceOptions && Array.isArray(sourceOptions) && sourceOptions.length > 0) {
-        await admin.rpc('upsert_product_option_links', {
-          p_product_id: newProduct.id,
-          p_option_links: JSON.stringify(sourceOptions),
-        })
       }
 
       createdIds.push(newProduct.id)

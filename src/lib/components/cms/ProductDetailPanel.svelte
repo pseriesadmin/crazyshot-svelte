@@ -66,7 +66,7 @@
   interface Props {
     product: ProductDetail
     priceRules: PriceRule[]
-    categories: Array<{ value: string; label: string }>
+    categories: Array<{ value: string; label: string; categoryCode?: string | null }>
     categoryLabel: string
     initialTab?: string | null
     inventoryList?: InventoryUnit[]
@@ -840,6 +840,7 @@
       .or(productSearchOrFilter(kw))
       .eq('is_active', true)
       .is('deleted_at', null)
+      .is('parent_product_id', null)
       .limit(20)
     optionSearching = false
     if (err) { csToast.error('상품 검색 중 오류가 발생했습니다.'); return }
@@ -941,10 +942,10 @@
   let clonePartnerComboRowId = $state('')
   let isCloning = $state(false)
 
-  function openCloneModal() {
-    cloneMode = 'new_product'
+  function openCloneModal(mode: 'new_product' | 'add_inventory' = 'new_product') {
+    cloneMode = mode
     cloneCount = 1
-    cloneAutoCode = true
+    cloneAutoCode = mode === 'new_product'
     clonePartnerCode = false
     clonePartnerComboRowId = ''
     showCloneModal = true
@@ -952,12 +953,6 @@
 
   function closeCloneModal() {
     if (!isCloning) showCloneModal = false
-  }
-
-  function handleInvToggle() {
-    return async ({ result }: { result: ActionResult }) => {
-      if (result.type === 'success') await invalidateAll()
-    }
   }
 
   function handleCloneProduct() {
@@ -993,44 +988,6 @@
   }
 </script>
 
-{#if inventoryList && inventoryList.length > 1}
-  <div class="inv-list">
-    {#each inventoryList as unit (unit.id)}
-      <div class="inv-row">
-        <div class="inv-left">
-          <div class="inv-code-group">
-            <span class="inv-label">품번</span>
-            <span class="inv-code">{unit.product_code ?? '—'}</span>
-          </div>
-          <span class="inv-name">{unit.name}</span>
-          {#if unit.price_rules.length > 0}
-            <div class="inv-badges">
-              {#each unit.price_rules as rule (rule.duration_type)}
-                <span class="inv-badge">
-                  {rule.duration_type === '12h' ? '12H' : rule.duration_type === '24h' ? 'Day' : '월'}
-                  {rule.price.toLocaleString()}
-                </span>
-              {/each}
-            </div>
-          {/if}
-        </div>
-        <form method="POST" action="?/toggleStatus" use:enhance={handleInvToggle}>
-          <input type="hidden" name="id" value={unit.id} />
-          <input type="hidden" name="is_active" value={unit.is_active.toString()} />
-          <button
-            type="submit"
-            class="inv-toggle"
-            class:inv-toggle--on={unit.is_active}
-            aria-label={unit.is_active ? '미노출로 전환' : '노출로 전환'}
-          >
-            <span class="inv-toggle-thumb"></span>
-          </button>
-        </form>
-      </div>
-    {/each}
-  </div>
-{/if}
-
 <div class="panel-wrap">
 <div class="detail-panel">
 
@@ -1049,6 +1006,16 @@
 
     <!-- 상품명 + 카피 | QR -->
     <div class="ph-body">
+      <!-- 대표 이미지 썸네일 (image_urls[0], thumb 사이즈) -->
+      <div class="ph-thumb">
+        {#if product.image_urls?.[0]}
+          <img
+            src={product.image_urls[0].replace('/large_', '/thumb_')}
+            alt={product.name}
+            class="ph-thumb-img"
+          />
+        {/if}
+      </div>
       <div class="ph-left">
         <span class="ph-cat">{categoryLabel}</span>
         <h2 class="ph-name">{product.name}</h2>
@@ -1081,7 +1048,7 @@
         {product.is_active ? '노출(ON)' : '미노출(OFF)'}
       </span>
     </div>
-    <button type="button" class="status-cta-btn" onclick={openCloneModal}>빠른 재고 등록</button>
+    <button type="button" class="status-cta-btn" onclick={() => openCloneModal('add_inventory')}>빠른 재고 등록</button>
   </div>
 
   <!-- 탭 네비게이션 -->
@@ -1330,7 +1297,6 @@
                       {/if}
                       <div class="option-result-info">
                         <p class="option-result-name">{item.name}</p>
-                        <p class="option-result-meta">24h: {item.price_24h.toLocaleString()}원 · 재고: {item.stock_quantity}개</p>
                       </div>
                       <button type="button" class="btn-add-option" onclick={() => addOptionProduct(item)}>추가</button>
                     </li>
@@ -1360,7 +1326,6 @@
                 {/if}
                 <div class="selected-option-info">
                   <p class="selected-option-name">{opt.name}</p>
-                  <p class="selected-option-meta">24h: {opt.price_24h.toLocaleString()}원 · 재고: {opt.stock_quantity}개</p>
                   <div class="selected-option-cbs">
                     <label class="cb-label"><input type="checkbox" class="cb-input" bind:checked={localOptions[i].is_required} /> 필수 선택</label>
                     <label class="cb-label"><input type="checkbox" class="cb-input" bind:checked={localOptions[i].min_select_required} /> 최소 1개 선택 필수</label>
@@ -1861,16 +1826,17 @@
 
   </div>
 
+  <!-- 상품 삭제 푸터 (흰 카드 안 최하단) -->
+  <div class="delete-footer">
+    <button
+      type="button"
+      class="btn-danger"
+      onclick={() => { showDeleteConfirm = true }}
+    >상품정보 삭제</button>
+  </div>
+
 </div>
 
-<!-- 상품 삭제 푸터 (흰 카드 밖, panel-wrap 안) -->
-<div class="delete-footer">
-  <button
-    type="button"
-    class="btn-danger"
-    onclick={() => { showDeleteConfirm = true }}
-  >상품정보 삭제</button>
-</div>
 </div>
 
 <!-- 상품 복제 모달 -->
@@ -2065,13 +2031,14 @@
     style={(() => { const r = catPickerRef!.getBoundingClientRect(); return `top:${r.bottom + 4}px;left:${r.left}px;width:${r.width}px` })()}
   >
     {#each categories as cat}
+      {@const catCode = cat.categoryCode ?? cat.value}
       <button
         type="button"
         role="option"
-        aria-selected={localBasic.category === cat.value}
+        aria-selected={localBasic.category === catCode}
         class="cat-option"
-        class:selected={localBasic.category === cat.value}
-        onclick={() => { localBasic.category = cat.value; showCategoryPicker = false }}
+        class:selected={localBasic.category === catCode}
+        onclick={() => { localBasic.category = catCode; showCategoryPicker = false }}
       >{cat.label}</button>
     {/each}
   </div>
@@ -2143,13 +2110,30 @@
     padding: 2px 8px;
   }
 
-  /* ph-body: 상품명·카피 + QR */
+  /* ph-body: 썸네일 + 상품명·카피 + QR */
   .ph-body {
     display: flex;
     justify-content: space-between;
     align-items: flex-start;
-    gap: 12px;
+    gap: 16px;
   }
+
+  /* 대표 이미지 썸네일 */
+  .ph-thumb {
+    width: 72px;
+    height: 72px;
+    flex-shrink: 0;
+    border-radius: var(--cms-radius-sm);
+    background: #2a2a40;
+    overflow: hidden;
+  }
+  .ph-thumb-img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    display: block;
+  }
+
   .ph-left { flex: 1; min-width: 0; }
   .ph-cat {
     display: inline-block;
@@ -3161,95 +3145,6 @@
   }
   .cta-btn--wide { width: 100%; }
 
-  /* 재고 목록 (Figma 2667:11166) */
-  .inv-list {
-    display: flex;
-    flex-direction: column;
-    gap: 10px;
-    margin-bottom: 12px;
-  }
-  .inv-row {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 12px;
-    padding: 15px 20px;
-    background: var(--cs-surface-gray);
-    border-radius: var(--cms-radius-md);
-  }
-  .inv-left {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    min-width: 0;
-  }
-  .inv-code-group {
-    display: flex;
-    align-items: center;
-    gap: 20px;
-    flex-shrink: 0;
-  }
-  .inv-label {
-    font: var(--text-pc-descript-10);
-    color: #999999;
-    flex-shrink: 0;
-  }
-  .inv-code {
-    font: var(--text-pc-descript-10);
-    color: var(--cs-text-mid);
-    flex-shrink: 0;
-    white-space: nowrap;
-  }
-  .inv-name {
-    font-size: 13px;
-    font-weight: 700;
-    font-family: 'Noto Sans KR', sans-serif;
-    color: var(--cs-text);
-    flex-shrink: 0;
-    white-space: nowrap;
-  }
-  .inv-badges {
-    display: flex;
-    gap: 6px;
-    flex-shrink: 0;
-  }
-  .inv-badge {
-    display: inline-flex;
-    align-items: center;
-    padding: 5px 10px;
-    background: var(--cs-purple-op10);
-    color: var(--cs-purple);
-    border-radius: var(--radius-sm);
-    font: var(--text-pc-script-12);
-    font-weight: 700;
-    white-space: nowrap;
-  }
-  .inv-toggle {
-    position: relative;
-    width: 36px;
-    height: 20px;
-    border: none;
-    border-radius: var(--cms-radius-sm);
-    background: var(--cs-disabled-toggle);
-    cursor: pointer;
-    padding: 2px;
-    transition: background 0.2s;
-    flex-shrink: 0;
-  }
-  .inv-toggle.inv-toggle--on { background: var(--cs-purple); }
-  .inv-toggle-thumb {
-    position: absolute;
-    top: 2px;
-    left: 2px;
-    width: 16px;
-    height: 16px;
-    border-radius: 50%;
-    background: var(--cs-white);
-    transition: transform 0.2s;
-    box-shadow: 0 1px 3px rgba(0,0,0,0.2);
-  }
-  .inv-toggle.inv-toggle--on .inv-toggle-thumb { transform: translateX(16px); }
-
   /* 클론 모드 토글 */
   .clone-mode-toggle {
     display: flex;
@@ -3424,7 +3319,9 @@
     flex-shrink: 0;
     display: flex;
     justify-content: flex-end;
-    padding: 6px 0 8px;
+    padding: 12px 20px 20px;
+    border-top: 1px solid var(--cs-lilac);
+    margin-top: 8px;
   }
 
   .btn-danger {

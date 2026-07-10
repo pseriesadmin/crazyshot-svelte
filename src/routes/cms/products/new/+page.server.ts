@@ -24,6 +24,7 @@ export const load: PageServerLoad = async ({ locals }) => {
     admin.from('code_mapping_groups')
       .select('id, name, description, default_category')
       .eq('is_active', true)
+      .eq('show_in_product_filter', true)   // 상품목록 노출 설정된 그룹만 (품번 배정 대상)
       .order('sort_order')
       .order('name'),
     admin.from('code_mapping_items')
