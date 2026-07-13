@@ -39,11 +39,8 @@ async function getGroupLinkedCount(admin: AdminClient, group_id: string): Promis
     .eq('group_id', group_id)
   if (!items || items.length === 0) return 0
   const uniqueIds = [...new Set(items.map(i => i.taxonomy_code_id))]
-  let total = 0
-  for (const codeId of uniqueIds) {
-    total += await getLinkedProductCount(admin, codeId)
-  }
-  return total
+  const counts = await Promise.all(uniqueIds.map(codeId => getLinkedProductCount(admin, codeId)))
+  return counts.reduce((sum, c) => sum + c, 0)
 }
 
 /** 특정 조합 행(combo_row_id)의 taxonomy_code에 연결된 상품 수 */
@@ -54,11 +51,8 @@ async function getComboRowLinkedCount(admin: AdminClient, combo_row_id: string):
     .eq('combo_row_id', combo_row_id)
   if (!items || items.length === 0) return 0
   const uniqueIds = [...new Set(items.map(i => i.taxonomy_code_id))]
-  let total = 0
-  for (const codeId of uniqueIds) {
-    total += await getLinkedProductCount(admin, codeId)
-  }
-  return total
+  const counts = await Promise.all(uniqueIds.map(codeId => getLinkedProductCount(admin, codeId)))
+  return counts.reduce((sum, c) => sum + c, 0)
 }
 
 /** 세션 사용자가 superadmin인지 확인 */

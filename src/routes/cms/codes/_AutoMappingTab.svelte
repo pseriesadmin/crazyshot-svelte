@@ -18,6 +18,10 @@
   let pickerTier     = $state<'major' | 'middle' | 'minor'>('major')
   // 현재 코드를 추가할 조합 행 ID (null = 새 조합 자동 생성)
   let activeComboId  = $state<string | null>(null)
+  // 삭제 로딩 추적
+  let deletingComboRowId = $state<string | null>(null)
+  let deletingItemId     = $state<string | null>(null)
+  let deletingPickerId   = $state<string | null>(null)
 
   // 카테고리 키 정규화: 공백→하이픈, 10자 이내, 소문자 영문·숫자·_·- 만 허용
   function sanitizeCategoryKey(raw: string): string {
@@ -83,8 +87,10 @@
       items: [...comboItems].sort((a, b) => {
         const ta = (data.codes as TaxonomyCode[]).find(c => c.id === a.taxonomy_code_id)
         const tb = (data.codes as TaxonomyCode[]).find(c => c.id === b.taxonomy_code_id)
-        const da = TIER_ORDER[ta?.code_tier ?? 'minor'] ?? 2
-        const db = TIER_ORDER[tb?.code_tier ?? 'minor'] ?? 2
+        const tierA = ta?.code_tier ?? (ta?.depth === 0 ? 'major' : ta?.depth === 1 ? 'middle' : 'minor')
+        const tierB = tb?.code_tier ?? (tb?.depth === 0 ? 'major' : tb?.depth === 1 ? 'middle' : 'minor')
+        const da = TIER_ORDER[tierA] ?? 2
+        const db = TIER_ORDER[tierB] ?? 2
         return da - db
       })
     }))
@@ -559,14 +565,19 @@
                       {#if tc}
                         {#if i > 0}<span class="combo-sep">+</span>{/if}
                         {#if isActiveCurrent}
-                          <form method="POST" action="?/removeComboItem" use:enhance class="chip-rm-form">
+                          <form method="POST" action="?/removeComboItem" use:enhance={() => {
+                            deletingItemId = item.id
+                            return async ({ update }) => { await update(); deletingItemId = null }
+                          }} class="chip-rm-form">
                             <input type="hidden" name="id" value={item.id} />
                             <button
                               type="submit"
                               class="combo-chip combo-chip-rm"
+                              class:combo-chip-deleting={deletingItemId === item.id}
                               style="background:{rootColor(tc)}20; color:{rootColor(tc)}; border-color:{rootColor(tc)}60"
                               title="{tc.name} 제거"
-                            >{tc.code} <span class="chip-rm-x">×</span></button>
+                              disabled={deletingItemId === item.id}
+                            >{#if deletingItemId === item.id}<span class="chip-spinner"></span>{:else}{tc.code} <span class="chip-rm-x">×</span>{/if}</button>
                           </form>
                         {:else}
                           <span
@@ -720,10 +731,19 @@
                     {/if}
 
                     <!-- 조합 전체 삭제 -->
-                    <form method="POST" action="?/removeGroupCombo" use:enhance class="ctrl-form">
+                    <form method="POST" action="?/removeGroupCombo" use:enhance={() => {
+                      deletingComboRowId = combo.combo_row_id
+                      return async ({ update }) => { await update(); deletingComboRowId = null }
+                    }} class="ctrl-form">
                       <input type="hidden" name="combo_row_id" value={combo.combo_row_id} />
                       <input type="hidden" name="group_id" value={selectedGroup!.id} />
-                      <button type="submit" class="combo-rm" aria-label="조합 삭제">×</button>
+                      <button
+                        type="submit"
+                        class="combo-rm"
+                        class:combo-rm-loading={deletingComboRowId === combo.combo_row_id}
+                        aria-label="조합 삭제"
+                        disabled={deletingComboRowId === combo.combo_row_id}
+                      >{#if deletingComboRowId === combo.combo_row_id}<span class="btn-spinner"></span>{:else}×{/if}</button>
                     </form>
                   </div> <!-- /combo-controls -->
                 </div>
@@ -809,10 +829,18 @@
                 {/if}
                 <div class="picker-actions" onclick={(e) => e.stopPropagation()}>
                   {#if included}
-                    <form method="POST" action="?/removeGroupItem" use:enhance style="display:inline">
+                    <form method="POST" action="?/removeGroupItem" use:enhance={() => {
+                      deletingPickerId = tc.id
+                      return async ({ update }) => { await update(); deletingPickerId = null }
+                    }} style="display:inline">
                       <input type="hidden" name="group_id" value={selectedGroup!.id} />
                       <input type="hidden" name="taxonomy_code_id" value={tc.id} />
-                      <button type="submit" class="btn-picker-rm">제거</button>
+                      <button
+                        type="submit"
+                        class="btn-picker-rm"
+                        class:btn-picker-rm-loading={deletingPickerId === tc.id}
+                        disabled={deletingPickerId === tc.id}
+                      >{#if deletingPickerId === tc.id}<span class="btn-spinner btn-spinner-sm"></span>{:else}제거{/if}</button>
                     </form>
                   {:else}
                     <form method="POST" action="?/addGroupItem" use:enhance style="display:inline">
@@ -1450,6 +1478,15 @@
   transition: opacity 0.1s, filter 0.1s;
 }
 .combo-chip-rm:hover { filter: brightness(0.85); opacity: 0.85; }
+.combo-chip-deleting { opacity: 0.6; cursor: not-allowed; }
+.chip-spinner {
+  display: inline-block;
+  width: 10px; height: 10px;
+  border: 1.5px solid currentColor;
+  border-top-color: transparent;
+  border-radius: 50%;
+  animation: spin 0.6s linear infinite;
+}
 .chip-rm-x {
   font-size: 12px;
   opacity: 0.7;
@@ -1725,6 +1762,17 @@
   flex-shrink: 0;
 }
 .combo-rm:hover { background: rgba(255,53,53,0.10); color: var(--cs-red-badge); }
+.combo-rm-loading { opacity: 0.5; cursor: not-allowed; }
+.btn-spinner {
+  display: inline-block;
+  width: 12px; height: 12px;
+  border: 1.5px solid currentColor;
+  border-top-color: transparent;
+  border-radius: 50%;
+  animation: spin 0.6s linear infinite;
+}
+.btn-spinner-sm { width: 10px; height: 10px; }
+@keyframes spin { to { transform: rotate(360deg); } }
 
 /* ── 코드 선택 피커 ─────────────────────────────────────────────── */
 .picker-block {
@@ -1817,6 +1865,7 @@
 .btn-picker-add:hover { background: rgba(59,47,138,0.16); }
 .btn-picker-rm  { background: rgba(255,53,53,0.08); color: var(--cs-red-badge); }
 .btn-picker-rm:hover  { background: rgba(255,53,53,0.16); }
+.btn-picker-rm-loading { opacity: 0.5; cursor: not-allowed; min-width: 40px; }
 
 .picker-empty { padding: 16px; font: var(--text-pc-script-12); color: var(--cs-text-light); text-align: center; }
 
