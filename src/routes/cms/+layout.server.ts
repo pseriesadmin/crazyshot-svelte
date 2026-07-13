@@ -30,5 +30,6 @@ export const load: LayoutServerLoad = async ({ locals, url, cookies }) => {
     throw redirect(303, '/cms?notice=access_denied')
   }
 
+  locals.cmsRole = role
   return { session, cmsRole: role }
 }

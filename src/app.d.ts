@@ -9,6 +9,7 @@ declare global {
     interface Locals {
       supabase: SupabaseClient<Database>
       safeGetSession: () => Promise<{ session: Session | null; user: Session['user'] | null }>
+      cmsRole?: string | null
     }
   }
 }

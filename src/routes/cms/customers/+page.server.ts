@@ -69,17 +69,12 @@ export const actions: Actions = {
     const { session } = await locals.safeGetSession()
     if (!session) return fail(403, { ok: false, error: '권한 없음' })
 
+    if (!hasSettingsAccess(locals.cmsRole ?? '')) return fail(403, { ok: false, error: '권한 없음' })
+
     const serviceRoleKey = env.SUPABASE_SERVICE_ROLE_KEY
     if (!serviceRoleKey) return fail(500, { ok: false, error: '서버 설정 오류' })
 
-    // cms_role 확인
     const admin = createClient(getSupabaseUrl(), serviceRoleKey)
-    const { data: profile } = await admin
-      .from('user_profiles')
-      .select('cms_role')
-      .eq('id', session.user.id)
-      .single()
-    if (!hasSettingsAccess(profile?.cms_role ?? '')) return fail(403, { ok: false, error: '권한 없음' })
 
     const form = await request.formData()
     const user_id     = String(form.get('user_id') ?? '')
@@ -104,11 +99,11 @@ export const actions: Actions = {
     const { session } = await locals.safeGetSession()
     if (!session) return fail(403, { ok: false, error: '권한 없음' })
 
+    if (!hasSettingsAccess(locals.cmsRole ?? '')) return fail(403, { ok: false, error: '권한 없음' })
+
     const serviceRoleKeyCheck = env.SUPABASE_SERVICE_ROLE_KEY
     if (!serviceRoleKeyCheck) return fail(500, { ok: false, error: '서버 설정 오류' })
     const adminCheck = createClient(getSupabaseUrl(), serviceRoleKeyCheck)
-    const { data: profileCheck } = await adminCheck.from('user_profiles').select('cms_role').eq('id', session.user.id).single()
-    if (!hasSettingsAccess(profileCheck?.cms_role ?? '')) return fail(403, { ok: false, error: '권한 없음' })
 
     const form = await request.formData()
     const subscription_id = String(form.get('subscription_id') ?? '')
@@ -133,11 +128,11 @@ export const actions: Actions = {
     const { session } = await locals.safeGetSession()
     if (!session) return fail(403, { ok: false, error: '권한 없음' })
 
+    if (!hasSettingsAccess(locals.cmsRole ?? '')) return fail(403, { ok: false, error: '권한 없음' })
+
     const serviceRoleKeyUpd = env.SUPABASE_SERVICE_ROLE_KEY
     if (!serviceRoleKeyUpd) return fail(500, { ok: false, error: '서버 설정 오류' })
     const adminUpd = createClient(getSupabaseUrl(), serviceRoleKeyUpd)
-    const { data: profileUpd } = await adminUpd.from('user_profiles').select('cms_role').eq('id', session.user.id).single()
-    if (!hasSettingsAccess(profileUpd?.cms_role ?? '')) return fail(403, { ok: false, error: '권한 없음' })
 
     const form = await request.formData()
     const user_id     = String(form.get('user_id') ?? '').trim()
@@ -171,11 +166,11 @@ export const actions: Actions = {
     const { session } = await locals.safeGetSession()
     if (!session) return fail(403, { ok: false, error: '권한 없음' })
 
+    if (!hasSettingsAccess(locals.cmsRole ?? '')) return fail(403, { ok: false, error: '권한 없음' })
+
     const serviceRoleKeyAdj = env.SUPABASE_SERVICE_ROLE_KEY
     if (!serviceRoleKeyAdj) return fail(500, { ok: false, error: '서버 설정 오류' })
     const adminAdj = createClient(getSupabaseUrl(), serviceRoleKeyAdj)
-    const { data: profileAdj } = await adminAdj.from('user_profiles').select('cms_role').eq('id', session.user.id).single()
-    if (!hasSettingsAccess(profileAdj?.cms_role ?? '')) return fail(403, { ok: false, error: '권한 없음' })
 
     const form = await request.formData()
     const user_id = String(form.get('user_id') ?? '')

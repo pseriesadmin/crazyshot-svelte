@@ -19,14 +19,36 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 
   const admin = createClient(getSupabaseUrl(), env.SUPABASE_SERVICE_ROLE_KEY ?? '')
 
-  // 코드조합그룹 중 상품목록 카테고리 필터에 노출하도록 설정된 목록 (탭 필터용)
-  const { data: rawCategories } = await admin
-    .from('code_mapping_groups')
-    .select('id, name, sort_order, default_category')
-    .eq('show_in_product_filter', true)
-    .eq('is_active', true)
-    .order('sort_order', { ascending: true })
-    .order('name', { ascending: true })
+  // 독립 메타데이터 3개 병렬 조회 (직렬 3 RTT → 1 RTT)
+  const [
+    { data: rawCategories },
+    { data: rawCatCodes },
+    { data: rawPartnerGroups },
+  ] = await Promise.all([
+    // 코드조합그룹 중 상품목록 카테고리 필터에 노출하도록 설정된 목록 (탭 필터용)
+    admin
+      .from('code_mapping_groups')
+      .select('id, name, sort_order, default_category')
+      .eq('show_in_product_filter', true)
+      .eq('is_active', true)
+      .order('sort_order', { ascending: true })
+      .order('name', { ascending: true }),
+    // 카드 배지용 product_category → 레이블 매핑 (depth=0 기준)
+    admin
+      .from('product_category_codes')
+      .select('product_category, name')
+      .eq('depth', 0)
+      .eq('is_active', true)
+      .is('deleted_at', null),
+    // 협력사 전용코드 그룹(is_partner_type=true)의 조합코드 목록 (빠른 재고 등록 모달 조합코드 선택용)
+    admin
+      .from('code_mapping_groups')
+      .select('id, name')
+      .eq('is_partner_type', true)
+      .eq('is_active', true)
+      .order('sort_order', { ascending: true })
+      .order('name', { ascending: true }),
+  ])
 
   const categories = (rawCategories ?? []).map((g) => ({
     value: g.id,
@@ -35,35 +57,18 @@ export const load: PageServerLoad = async ({ locals, url }) => {
     categoryCode: (g.default_category ?? null) as string | null,
   }))
 
-  // 카드 배지용 product_category → 레이블 매핑 (depth=0 기준)
-  const { data: rawCatCodes } = await admin
-    .from('product_category_codes')
-    .select('product_category, name')
-    .eq('depth', 0)
-    .eq('is_active', true)
-    .is('deleted_at', null)
-
   const categoryLabels: Record<string, string> = Object.fromEntries(
     (rawCatCodes ?? [])
       .filter((c) => c.product_category)
       .map((c) => [c.product_category as string, c.name as string])
   )
 
-  // 협력사 전용코드 그룹(is_partner_type=true)의 조합코드 목록 (빠른 재고 등록 모달 조합코드 선택용)
-  const { data: rawPartnerGroups } = await admin
-    .from('code_mapping_groups')
-    .select('id, name')
-    .eq('is_partner_type', true)
-    .eq('is_active', true)
-    .order('sort_order', { ascending: true })
-    .order('name', { ascending: true })
-
   const partnerGroupIds = (rawPartnerGroups ?? []).map((g) => g.id)
   const partnerGroupNameById: Record<string, string> = Object.fromEntries(
     (rawPartnerGroups ?? []).map((g) => [g.id, g.name])
   )
 
-  // combo_row_id 기준으로 중복 제거한 flat 조합코드 목록
+  // combo_row_id 기준으로 중복 제거한 flat 조합코드 목록 (rawPartnerGroups 의존 → 순차)
   const { data: rawPartnerItems } = partnerGroupIds.length > 0
     ? await admin
         .from('code_mapping_items')
@@ -590,10 +595,13 @@ export const actions: Actions = {
       const createdIds: string[] = []
       for (let i = 1; i <= count; i++) {
         const slug = `${source.slug}-inv-${Date.now()}-${i}`
+        const newId = crypto.randomUUID()
 
         const { data: newProduct, error: insertError } = await admin
           .from('products')
           .insert({
+            id: newId,
+            qr_payload: `https://crazyshot.kr/qr/product/${newId}`,
             category: source.category,
             name: source.name,
             slug,
@@ -615,11 +623,6 @@ export const actions: Actions = {
         if (insertError || !newProduct) {
           return fail(500, { error: `${i}번째 재고 추가에 실패했습니다.` })
         }
-
-        await admin
-          .from('products')
-          .update({ qr_payload: `https://crazyshot.kr/qr/product/${newProduct.id}` })
-          .eq('id', newProduct.id)
 
         await admin.rpc('generate_inventory_product_code', {
           p_product_id: newProduct.id,
@@ -716,9 +719,12 @@ export const actions: Actions = {
         slug = `${source.slug}-copy-${suffix++}`
       }
 
+      const cloneId = crypto.randomUUID()
       const { data: newProduct, error: insertError } = await admin
         .from('products')
         .insert({
+          id: cloneId,
+          qr_payload: `https://crazyshot.kr/qr/product/${cloneId}`,
           category: source.category,
           name: source.name,
           slug,
@@ -739,10 +745,6 @@ export const actions: Actions = {
       if (insertError || !newProduct) {
         return fail(500, { error: `${i}번째 복제 등록에 실패했습니다.` })
       }
-
-      await admin.from('products')
-        .update({ qr_payload: `https://crazyshot.kr/qr/product/${newProduct.id}` })
-        .eq('id', newProduct.id)
 
       if (partnerCode) {
         if (!partnerCodeId) {
