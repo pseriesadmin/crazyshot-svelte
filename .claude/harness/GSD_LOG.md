@@ -84,6 +84,14 @@
   - misidentifications.md 1건 기록
   - TASK.md CONTEXT BRIDGE frozen 목록 + baseline 추가
 
+[2026-07-14] BOUNDARY | Crazylog 작성 화면 퍼블리싱 | src/routes/crazylog/ | ✅ GATE E PASS
+  - [slug]/+page.svelte: Mobile UserInfoCard(m-user-card) + ContentOptions(m-content-options) 추가
+    · State 초기값 수정: memberPublic/cafeScrap/aiSave = true (Figma defaultChecked)
+    · CSS 토큰: --cs-purple→red-badge 그라디언트 / --cs-purple-op10 / --cs-purple-light / --radius-lg / --radius-full
+    · 터치 타겟: m-check-row min-height 44px / plus 아이콘 a 태그 44px
+    · TODO 주석 제거 → BACKLOG(BL-CRAZYLOG-SUBMIT) 이관
+  - +page.svelte: 헤더 카드 plus SVG → <a href="/crazylog/new" aria-label="로그 작성"> 래핑 (3개 섹션)
+
 [2026-06-26] GSD | PRD.1.7 T5~T8 | src/routes/api/chat/, src/lib/components/chat/, src/routes/+layout.svelte | ✅ SUCCESS
   - T5: API 라우트 5개 (session / message[Claude AI 의도분류] / sessions / action-card / close)
     · ANTHROPIC_API_KEY → $env/static/private (H-05 준수)
