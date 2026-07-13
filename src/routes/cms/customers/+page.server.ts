@@ -22,6 +22,10 @@ export interface CustomerRow {
   blacklist_reason: string | null
   is_student: boolean
   is_foreign: boolean
+  identity_type: string | null
+  identity_doc_url: string | null
+  identity_verified_at: string | null
+  password_set: boolean
   created_at: string
   total_count: number
   cms_role: string | null
@@ -122,6 +126,44 @@ export const actions: Actions = {
 
     const result = data as { ok: boolean; error?: string } | null
     if (!result?.ok) return fail(400, { ok: false, error: result?.error ?? '처리 실패' })
+    return { ok: true }
+  },
+
+  updateCustomerInfo: async ({ request, locals }) => {
+    const { session } = await locals.safeGetSession()
+    if (!session) return fail(403, { ok: false, error: '권한 없음' })
+
+    const serviceRoleKeyUpd = env.SUPABASE_SERVICE_ROLE_KEY
+    if (!serviceRoleKeyUpd) return fail(500, { ok: false, error: '서버 설정 오류' })
+    const adminUpd = createClient(getSupabaseUrl(), serviceRoleKeyUpd)
+    const { data: profileUpd } = await adminUpd.from('user_profiles').select('cms_role').eq('id', session.user.id).single()
+    if (!hasSettingsAccess(profileUpd?.cms_role ?? '')) return fail(403, { ok: false, error: '권한 없음' })
+
+    const form = await request.formData()
+    const user_id     = String(form.get('user_id') ?? '').trim()
+    const name        = String(form.get('name') ?? '').trim()
+    const email       = String(form.get('email') ?? '').trim()
+    const phone       = String(form.get('phone') ?? '').trim()
+    const member_type = String(form.get('member_type') ?? '').trim()
+    const created_at  = String(form.get('created_at') ?? '').trim()
+
+    if (!user_id) return fail(400, { ok: false, error: '사용자 ID 필수' })
+    if (!name)    return fail(400, { ok: false, error: '이름 필수' })
+    if (!email)   return fail(400, { ok: false, error: '이메일 필수' })
+
+    const createdAtTs = created_at ? new Date(created_at).toISOString() : null
+
+    const { data } = await adminUpd.rpc('update_customer_info', {
+      p_user_id:     user_id,
+      p_name:        name    || null,
+      p_email:       email   || null,
+      p_phone:       phone   || null,
+      p_member_type: member_type || null,
+      p_created_at:  createdAtTs,
+    })
+
+    const result = data as { ok: boolean; error?: string } | null
+    if (!result?.ok) return fail(400, { ok: false, error: result?.error ?? '수정 실패' })
     return { ok: true }
   },
 

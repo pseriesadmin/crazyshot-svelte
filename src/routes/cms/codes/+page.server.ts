@@ -807,11 +807,24 @@ export const actions: Actions = {
     if (!group_id || !taxonomy_code_id)
       return fail(400, { action: 'addGroupItem', error: 'group_id, taxonomy_code_id가 필요합니다.' })
 
-    // combo_row_id 제공 시 해당 조합 행에 추가, 미제공 시 DB 기본값(gen_random_uuid) 사용
-    const payload: { group_id: string; taxonomy_code_id: string; combo_row_id: string } = {
+    // combo_row_id 제공 시 해당 조합 행에 추가, 미제공 시 새 UUID 생성
+    const resolvedComboRowId = combo_row_id || globalThis.crypto.randomUUID()
+
+    // 선택 순서 유지를 위해 sort_order = 해당 combo 내 현재 최대값 + 1
+    const { data: maxRow } = await db()
+      .from('code_mapping_items')
+      .select('sort_order')
+      .eq('combo_row_id', resolvedComboRowId)
+      .order('sort_order', { ascending: false })
+      .limit(1)
+      .maybeSingle()
+    const nextSortOrder = ((maxRow?.sort_order ?? -1) + 1)
+
+    const payload: { group_id: string; taxonomy_code_id: string; combo_row_id: string; sort_order: number } = {
       group_id,
       taxonomy_code_id,
-      combo_row_id: combo_row_id || globalThis.crypto.randomUUID(),
+      combo_row_id: resolvedComboRowId,
+      sort_order: nextSortOrder,
     }
 
     const { error } = await db()

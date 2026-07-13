@@ -45,8 +45,11 @@
 
 <div class="list-wrap">
   <div class="list-header">
-    <h1 class="page-title">관리자 계정 목록</h1>
-    <span class="count-badge">{data.accounts.length}명</span>
+    <div class="list-header-left">
+      <h1 class="page-title">관리자 계정 목록</h1>
+      <span class="count-badge">{data.accounts.length}명</span>
+    </div>
+    <a href="/cms/accounts" class="btn-primary">관리자 등록</a>
   </div>
 
   {#if result?.error}
@@ -335,8 +338,15 @@
   .list-header {
     display: flex;
     align-items: center;
+    justify-content: space-between;
+  }
+  .list-header-left {
+    display: flex;
+    align-items: center;
     gap: 10px;
   }
+
+
 
   .page-title {
     font: var(--text-pc-title-18);
