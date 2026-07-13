@@ -28,6 +28,48 @@ auth_baseline: fed4fdb — createBrowserClient 패턴 (절대 싱글톤 createCl
 
 ---
 
+## NOW — CMS 고객 기본정보 수정 기능 (2026-07-13) ✅ 완료
+
+[CONTEXT BRIDGE — customer info edit]
+plan_source: 세션 내 설계
+수정 파일:
+  - src/lib/components/cms/CustomerDetailPanel.svelte
+  - src/routes/cms/customers/+page.server.ts
+  - supabase/migrations/20260712000102_102_auto_assign_member_code.sql (신규)
+  - supabase/migrations/20260713000103_103_get_customer_list_exclude_cms.sql (신규)
+  - supabase/migrations/20260713000104_104_update_customer_info_rpc.sql (신규)
+핵심제약:
+  - stage(ezyvffjvuwmtuhpxdjrw) 검증 후 production 적용 (Stephen)
+  - member_type CHECK 제약 제거 → code_mapping_groups.name 자유 선택
+  - SECURITY DEFINER RPC 경유 (is_cms_user() 내부 권한 확인)
+  - $state(prop) 초기화 + $effect 동기화 패턴 사용 (규칙 허용 패턴 2)
+
+- [x] T-CUST-1: Migration #102 — 멤버코드 자동배정 RPC | CRITICAL | SQL 파일 생성 완료 (stage 미적용 — Stephen 액션 필요)
+  - auto_assign_member_code() 함수: member_code NULL인 신규 가입 유저 자동 배정
+  - 기존 NULL 회원 backfill 포함
+
+- [x] T-CUST-2: Migration #103 — get_customer_list cms_role 컬럼 추가 | CRITICAL | ✅ Stage 적용 완료 (2026-07-13)
+  - get_customer_list RPC 재생성: cms_role TEXT 컬럼 추가 (NULL=일반고객, 값 있음=관리자 배지)
+  - CustomerRow 타입 cms_role: string | null 추가
+
+- [x] T-CUST-3: Migration #104 — update_customer_info RPC + member_type CHECK 제거 | CRITICAL | ✅ Stage 적용 완료 (2026-07-13)
+  - user_profiles_member_type_check DROP (B2C/B2B 고정 제약 해제)
+  - update_customer_info(p_user_id, p_name, p_email, p_phone, p_member_type, p_created_at) SECURITY DEFINER
+
+- [x] T-CUST-4: +page.server.ts updateCustomerInfo 액션 추가 | BOUNDARY | ✅ 완료 (2026-07-13)
+  - cms_role 확인 → update_customer_info RPC 호출
+  - 필수값 검증: user_id / name / email
+
+- [x] T-CUST-5: CustomerDetailPanel.svelte 기본정보 탭 편집 UI | BOUNDARY | ✅ 완료 (2026-07-13)
+  - localInfo $state + isDirtyInfo $derived + $effect 동기화
+  - 이름·이메일·전화번호(자동 하이픈) 인라인 input
+  - 회원유형: 버튼 클릭 → 레이어 모달 → code_mapping_groups 콤보버튼 선택
+  - 가입일: date input (달력 선택)
+  - 학생 여부: 읽기전용 + "학생증 보기" 버튼 (is_student 기반 활성/비활성)
+  - 외국인 여부: 읽기전용 + "여권 보기" 버튼 (is_foreign 기반 활성/비활성)
+  - dirty 시 "변경사항 저장" 버튼 노출 → use:enhance → invalidateAll() 후 $effect 재동기화
+  - svelte-check: 에러 0건 (경고만 — 기존 포함)
+
 ## NOW — 상품 이력 탭 + 대여 메뉴 + 모바일 현장 촬영 앱 (2026-07-06)
 
 [CONTEXT BRIDGE — product history + mobile app]
