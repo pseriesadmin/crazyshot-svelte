@@ -26,14 +26,12 @@
 
   interface Subscription {
     id: string
-    tier: string
+    plan_id: number | null
+    plan_name: string | null
     status: string
-    price_per_month: number | null
-    billing_cycle_start: string | null
-    billing_cycle_end: string | null
-    auto_renew: boolean
+    started_at: string | null
+    expires_at: string | null
     cancelled_at: string | null
-    cancellation_reason: string | null
     created_at: string
   }
 
@@ -84,13 +82,23 @@
   async function loadSubscriptions() {
     loadingSubscriptions = true
     const { data, error } = await supabase
-      .from('subscriptions')
-      .select('id, tier, status, price_per_month, billing_cycle_start, billing_cycle_end, auto_renew, cancelled_at, cancellation_reason, created_at')
+      .from('user_subscriptions')
+      .select('id, plan_id, status, started_at, expires_at, cancelled_at, created_at, subscription_plans(name)')
       .eq('user_id', row.user_id)
-      .is('deleted_at', null)
       .order('created_at', { ascending: false })
     loadingSubscriptions = false
-    if (!error && data) subscriptions = data as Subscription[]
+    if (!error && data) {
+      subscriptions = data.map((r: Record<string, unknown>) => ({
+        id: String(r.id),
+        plan_id: r.plan_id as number | null,
+        plan_name: (r.subscription_plans as Record<string, unknown> | null)?.name as string | null,
+        status: r.status as string,
+        started_at: r.started_at as string | null,
+        expires_at: r.expires_at as string | null,
+        cancelled_at: r.cancelled_at as string | null,
+        created_at: r.created_at as string,
+      }))
+    }
   }
 
   async function loadAuditLog() {
@@ -441,21 +449,14 @@
         {#each subscriptions as sub (sub.id)}
           <div class="sub-card" class:sub-active={sub.status === 'active'}>
             <div class="sub-row">
-              <span class="sub-tier grade-badge grade-{sub.tier}">{tierLabel(sub.tier)}</span>
-              <span class="sub-status status-{sub.status}">{statusLabel(sub.status)}</span>
-              {#if sub.auto_renew}
-                <span class="sub-renew">자동갱신</span>
+              {#if sub.plan_name}
+                <span class="sub-tier grade-badge grade-{sub.plan_name.toLowerCase()}">{tierLabel(sub.plan_name)}</span>
               {/if}
+              <span class="sub-status status-{sub.status}">{statusLabel(sub.status)}</span>
             </div>
             <div class="sub-meta">
-              <span>{formatDate(sub.billing_cycle_start)} ~ {formatDate(sub.billing_cycle_end)}</span>
-              {#if sub.price_per_month != null}
-                <span>{sub.price_per_month.toLocaleString('ko-KR')}원/월</span>
-              {/if}
+              <span>{formatDate(sub.started_at)} ~ {formatDate(sub.expires_at)}</span>
             </div>
-            {#if sub.cancellation_reason}
-              <div class="sub-reason">취소 사유: {sub.cancellation_reason}</div>
-            {/if}
             {#if sub.status === 'active'}
               <div class="sub-actions">
                 <button

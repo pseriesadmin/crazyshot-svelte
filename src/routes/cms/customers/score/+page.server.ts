@@ -33,7 +33,7 @@ export const load: PageServerLoad = async ({ parent, url }) => {
     .from('credit_score_audit')
     .select(`
       id, user_id, old_score, new_score, reason, metadata, created_at,
-      user_profiles!inner(name, email, membership_grade)
+      user_profiles!inner(full_name, email, membership_grade)
     `)
     .order('created_at', { ascending: false })
     .limit(100)
@@ -53,7 +53,7 @@ export const load: PageServerLoad = async ({ parent, url }) => {
       reason: r.reason as string,
       metadata: r.metadata as Record<string, unknown> | null,
       created_at: r.created_at as string,
-      user_name: up?.name as string | null,
+      user_name: up?.full_name as string | null,
       user_email: up?.email as string | null,
       user_membership_grade: up?.membership_grade as string | null,
     }
