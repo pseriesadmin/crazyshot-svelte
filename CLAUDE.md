@@ -135,8 +135,9 @@ Class D (보안 위반) → 즉시 중단
 .claude/rules/rental.md            ← M2 예약·가용성 도메인
 .claude/rules/payment.md           ← M3 결제·웹훅·PG 도메인
 .claude/rules/ui-mobile.md         ← SvelteKit 5 UI + 모바일 UX + 터치 타겟
-.claude/rules/uiux.md              ← 디자인 시스템 정본 (토큰·컴포넌트 패턴)
-.claude/rules/cms-design.md        ← CMS 전용 디자인 시스템 (레이아웃·컴포넌트·GATE C)
+.claude/rules/uiux.md              ← 공통 디자인 시스템 정본 (토큰·컴포넌트 패턴)
+.claude/rules/front-uiux.md        ← 사용자(USER) 화면 전용 디자인 시스템 (CMS 혼용 절대 금지)
+.claude/rules/cms-uiux.md          ← CMS 전용 디자인 시스템 (레이아웃·컴포넌트·GATE C)
 .claude/rules/security-auth.md     ← 인증·RLS·보안
 .claude/rules/figma-publishing.md  ← Figma AI 퍼블리싱 스킬 (디자인→코드 변환)
 ```

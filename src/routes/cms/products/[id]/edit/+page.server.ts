@@ -50,11 +50,16 @@ export const actions: Actions = {
     const name = (form.get('name') as string | null) ?? ''
     const slug = (form.get('slug') as string | null) ?? ''
     const brand = (form.get('brand') as string | null) || null
+    const captionRaw = ((form.get('caption') as string | null) ?? '').trim()
+    const product_caption = captionRaw || null
     const description = (form.get('description') as string | null) || null
     const is_active = form.get('is_active') === 'true'
 
     if (!category || !name || !slug) {
       return fail(400, { error: '카테고리, 상품명, 슬러그는 필수입니다.' })
+    }
+    if (product_caption && product_caption.length > 20) {
+      return fail(400, { error: '상품카피는 20자 이내로 입력해주세요.' })
     }
 
     let specifications: Record<string, string> | null = null
@@ -69,6 +74,19 @@ export const actions: Actions = {
       try { image_urls = JSON.parse(imagesStr) } catch { /* ignore */ }
     }
     image_urls = image_urls.filter(Boolean)
+
+    let content_blocks: unknown[] = []
+    const contentBlocksStr = form.get('content_blocks') as string | null
+    if (contentBlocksStr) {
+      try { content_blocks = JSON.parse(contentBlocksStr) } catch { /* ignore */ }
+    }
+
+    let keywords: string[] = []
+    const keywordsStr = form.get('keywords') as string | null
+    if (keywordsStr) {
+      try { keywords = JSON.parse(keywordsStr) } catch { /* ignore */ }
+    }
+    keywords = keywords.filter(Boolean).slice(0, 10)
 
     const admin = createClient(getSupabaseUrl(), env.SUPABASE_SERVICE_ROLE_KEY ?? '')
 
@@ -86,7 +104,7 @@ export const actions: Actions = {
 
     const { error: updateError } = await admin
       .from('products')
-      .update({ category, name, slug, brand, description, image_urls, specifications, is_active })
+      .update({ category, name, slug, brand, product_caption, description, image_urls, specifications, is_active, content_blocks, keywords })
       .eq('id', params.id)
 
     if (updateError) {

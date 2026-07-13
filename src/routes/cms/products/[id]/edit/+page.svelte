@@ -4,6 +4,8 @@
   import { csToast } from '$lib/utils/toast'
   import type { PageData, ActionData } from './$types'
   import type { ProductOptionLinkRow } from '$lib/types/database'
+  import CmsContentEditor from '$lib/components/cms/CmsContentEditor.svelte'
+  import type { ContentBlock } from '$lib/types/content-editor'
 
   interface Props { data: PageData; form: ActionData }
   let { data, form }: Props = $props()
@@ -34,10 +36,23 @@
     return entries.map(([k, v]) => ({ key: k, value: String(v) }))
   }
 
+  function parseContentBlocks(raw: unknown): ContentBlock[] {
+    if (!Array.isArray(raw)) return []
+    return raw as ContentBlock[]
+  }
+
+  function parseKeywords(raw: unknown): string[] {
+    if (!Array.isArray(raw)) return []
+    return raw.filter((k): k is string => typeof k === 'string')
+  }
+
   let isLoading = $state(false)
   let isActive = $state(data.product.is_active)
+  let contentBlocks = $state<ContentBlock[]>(parseContentBlocks((data.product as { content_blocks?: unknown }).content_blocks))
+  let contentKeywords = $state<string[]>(parseKeywords((data.product as { keywords?: unknown }).keywords))
   let category = $state(data.product.category)
   let nameVal = $state(data.product.name)
+  let captionVal = $state(data.product.product_caption ?? '')
   let slugVal = $state(data.product.slug)
   let imageUrls = $state<string[]>(
     data.product.image_urls.length > 0 ? [...data.product.image_urls] : ['']
@@ -253,6 +268,22 @@
       </div>
 
       <div class="field-row">
+        <label class="field-label" for="product_caption">
+          상품카피
+          <span class="field-hint">상품명 아래 노출 — 20자 이내 (한·영·숫자)</span>
+        </label>
+        <input
+          id="product_caption"
+          name="caption"
+          type="text"
+          class="f-input"
+          placeholder="예: 4K 풀프레임 시네마"
+          bind:value={captionVal}
+          maxlength="20"
+        />
+      </div>
+
+      <div class="field-row">
         <label class="field-label" for="slug">
           슬러그 <span class="required">*</span>
           <span class="field-hint">URL에 사용됩니다 — 영문·숫자·하이픈만</span>
@@ -282,13 +313,16 @@
     <section class="form-section">
       <h2 class="section-title">② 상품 설명 & 스펙</h2>
 
+      <!-- 콘텐츠 에디터 -->
       <div class="field-row">
-        <label class="field-label" for="description">상품 설명</label>
-        <textarea id="description" name="description" class="f-input f-textarea" rows={4}>{data.product.description ?? ''}</textarea>
+        <CmsContentEditor bind:blocks={contentBlocks} bind:keywords={contentKeywords} />
+        <input type="hidden" name="content_blocks" value={JSON.stringify(contentBlocks)} />
+        <input type="hidden" name="keywords" value={JSON.stringify(contentKeywords)} />
       </div>
 
+      <!-- 스펙 (기술 항목-값) -->
       <div class="field-row">
-        <div class="field-label">스펙 항목</div>
+        <div class="field-label">기술 스펙 (항목-값)</div>
         <div class="spec-list">
           {#each specs as spec, i (i)}
             <div class="spec-row">

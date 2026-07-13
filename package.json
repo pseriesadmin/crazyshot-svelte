@@ -21,13 +21,15 @@
     "boundary:report": "node scripts/boundary-validator.cjs --verbose",
     "harness:health": "bash scripts/harness-health-check.sh",
     "harness:health:fix": "bash scripts/harness-health-check.sh --fix",
-    "check": "svelte-check --tsconfig ./tsconfig.json"
+    "check": "svelte-check --tsconfig ./tsconfig.json",
+    "postinstall": "patch-package"
   },
   "keywords": [],
   "author": "",
   "license": "ISC",
   "description": "",
   "devDependencies": {
+    "patch-package": "^8.0.0",
     "@eslint/js": "^10.0.1",
     "@sveltejs/adapter-auto": "^7.0.1",
     "@sveltejs/adapter-vercel": "^6.3.3",

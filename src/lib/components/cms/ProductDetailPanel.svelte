@@ -4,6 +4,12 @@
   import type { ActionResult } from '@sveltejs/kit'
   import { resizeProductImage } from '$lib/utils/imageResize'
   import { csToast } from '$lib/utils/toast'
+  import { supabase } from '$lib/services/supabase'
+  import CmsContentEditor from '$lib/components/cms/CmsContentEditor.svelte'
+  import type { ContentBlock } from '$lib/types/content-editor'
+  import CmsSimilarNameInput from '$lib/components/cms/CmsSimilarNameInput.svelte'
+  import CmsDragList from '$lib/components/cms/CmsDragList.svelte'
+  import { productSearchOrFilter } from '$lib/utils/similarNameSuggest'
 
   interface PriceRule {
     duration_type: string
@@ -44,18 +50,37 @@
     price12h: number | null
     price24h: number | null
     assets?: AssetDetail[]
+    content_blocks?: unknown
+    keywords?: unknown
+    option_links?: unknown
+  }
+
+  interface InventoryUnit {
+    id: string
+    name: string
+    product_code: string | null
+    is_active: boolean
+    price_rules: Array<{ duration_type: string; price: number }>
   }
 
   interface Props {
     product: ProductDetail
     priceRules: PriceRule[]
-    categories: Array<{ value: string; label: string }>
+    categories: Array<{ value: string; label: string; categoryCode?: string | null }>
     categoryLabel: string
     initialTab?: string | null
+    inventoryList?: InventoryUnit[]
+    partnerComboItems?: Array<{
+      combo_row_id: string
+      combo_name: string | null
+      combo_keywords: string[]
+      group_id: string
+      group_name: string
+    }>
     onclose: () => void
   }
 
-  let { product, priceRules, categories, categoryLabel, initialTab = null, onclose }: Props = $props()
+  let { product, priceRules, categories, categoryLabel, initialTab = null, inventoryList = [], partnerComboItems = [], onclose }: Props = $props()
 
 
   // 카테고리 레이블 맵 (picker용)
@@ -63,8 +88,8 @@
     Object.fromEntries(categories.map(c => [c.value, c.label]))
   )
 
-  type TabKey = 'basic' | 'pricing' | 'images' | 'specs' | 'history'
-  const validTabs: TabKey[] = ['basic', 'pricing', 'images', 'specs', 'history']
+  type TabKey = 'basic' | 'options' | 'pricing' | 'content' | 'images' | 'specs' | 'history'
+  const validTabs: TabKey[] = ['basic', 'options', 'pricing', 'content', 'images', 'specs', 'history']
   const parsedInitialTab: TabKey = (validTabs.includes(initialTab as TabKey) ? initialTab : 'basic') as TabKey
   let activeTab = $state<TabKey>(parsedInitialTab)
   let canvasEl = $state<HTMLCanvasElement | null>(null)
@@ -81,7 +106,6 @@
     name: product.name,
     brand: product.brand ?? '',
     caption: product.product_caption ?? '',
-    description: product.description ?? '',
     is_active: product.is_active,
     category: product.category,
   })
@@ -89,10 +113,13 @@
     localBasic.name !== product.name ||
     localBasic.brand !== (product.brand ?? '') ||
     localBasic.caption !== (product.product_caption ?? '') ||
-    localBasic.description !== (product.description ?? '') ||
     localBasic.is_active !== product.is_active ||
     localBasic.category !== product.category
   )
+
+  // ── 슬러그 (별도 section_type='slug' 저장) ─────────────────
+  let localSlug = $state(product.slug)
+  const isDirtySlug = $derived(localSlug !== product.slug)
 
   // ── 가격 포맷 헬퍼 (천단위 콤마) ───────────────────────────
   function fmtPriceStr(val: number | null | undefined): string {
@@ -168,6 +195,7 @@
   $effect(() => {
     localImages = [...product.image_urls]
     localSpecs = Object.entries(product.specifications ?? {}).map(([key, value]) => ({ key, value }))
+    localSlug = product.slug
     // priceRules/product 변경 시(저장 후 invalidateAll) localPricing 동기화 → isDirtyPricing 초기화
     localPricing = {
       price_12h:             fmtPriceStr(priceRules.find(r => r.duration_type === '12h')?.price),
@@ -184,9 +212,11 @@
   // 탭 전환: 미저장 변경 존재 시 경고 토스트
   function switchTab(tab: TabKey) {
     const dirty =
-      (activeTab === 'basic'   && isDirtyBasic)   ||
-      (activeTab === 'pricing' && isDirtyPricing)  ||
-      (activeTab === 'specs'   && isDirtySpecs)
+      (activeTab === 'basic'    && isDirtyBasic)    ||
+      (activeTab === 'pricing'  && isDirtyPricing)  ||
+      (activeTab === 'specs'    && isDirtySpecs)    ||
+      (activeTab === 'content'  && isDirtyContent)  ||
+      (activeTab === 'options'  && isDirtyOptions)
     if (dirty) csToast.warning('변경 정보 저장 확인')
     activeTab = tab
     if (tab === 'history' && !historyLoaded) {
@@ -222,9 +252,36 @@
 
   function downloadQR() {
     if (!canvasEl) return
+    const code = product.product_code
+    if (!code) {
+      // 품번 없으면 QR만 저장
+      const a = document.createElement('a')
+      a.href = canvasEl.toDataURL('image/png')
+      a.download = `qr-${product.slug}.png`
+      a.click()
+      return
+    }
+    // 품번 텍스트를 QR 아래에 합성해서 저장
+    const qrSize = canvasEl.width
+    const fontSize = 11
+    const padding = 6
+    const textH = fontSize + padding * 2
+    const out = document.createElement('canvas')
+    out.width = qrSize
+    out.height = qrSize + textH
+    const ctx = out.getContext('2d')
+    if (!ctx) return
+    ctx.fillStyle = '#FFFFFF'
+    ctx.fillRect(0, 0, out.width, out.height)
+    ctx.drawImage(canvasEl, 0, 0)
+    ctx.fillStyle = '#100B32'
+    ctx.font = `700 ${fontSize}px "Noto Sans KR", sans-serif`
+    ctx.textAlign = 'center'
+    ctx.textBaseline = 'middle'
+    ctx.fillText(code, qrSize / 2, qrSize + textH / 2)
     const a = document.createElement('a')
-    a.href = canvasEl.toDataURL('image/png')
-    a.download = `qr-${product.slug}.png`
+    a.href = out.toDataURL('image/png')
+    a.download = `qr-${code}.png`
     a.click()
   }
 
@@ -638,9 +695,235 @@
     localSpecs = localSpecs.map((s, idx) => idx === i ? { ...s, value: val } : s)
   }
 
+  // ── 상품설명 (content_blocks / keywords) ────────────────────
+  function parseContentBlocks(p: ProductDetail): ContentBlock[] {
+    const raw = p.content_blocks
+    if (!raw) return []
+    try { return Array.isArray(raw) ? (raw as ContentBlock[]) : [] } catch { return [] }
+  }
+  function parseKeywords(p: ProductDetail): string[] {
+    const raw = p.keywords
+    if (!raw) return []
+    try { return Array.isArray(raw) ? (raw as string[]) : [] } catch { return [] }
+  }
+  let localContentBlocks = $state<ContentBlock[]>(parseContentBlocks(product))
+  let localKeywords = $state<string[]>(parseKeywords(product))
+  let isSavingContent = $state(false)
+  const isDirtyContent = $derived(
+    JSON.stringify(localContentBlocks) !== JSON.stringify(parseContentBlocks(product)) ||
+    JSON.stringify(localKeywords) !== JSON.stringify(parseKeywords(product))
+  )
+
+  async function saveContent() {
+    isSavingContent = true
+    try {
+      const fd = new FormData()
+      fd.append('product_id', product.id)
+      fd.append('section_type', 'content')
+      fd.append('content_blocks', JSON.stringify(localContentBlocks))
+      fd.append('keywords', JSON.stringify(localKeywords))
+      const res = await fetch('?/updateSection', { method: 'POST', body: fd })
+      if (!res.ok) throw new Error('저장 실패')
+      await invalidateAll()
+      csToast.success('저장됐습니다.')
+    } catch {
+      csToast.error('저장에 실패했습니다.')
+    } finally {
+      isSavingContent = false
+    }
+  }
+
+  // ── 옵션상품 (option_links) ──────────────────────────────────
+  interface OptionLink {
+    option_product_id: string
+    name: string
+    price_24h: number
+    stock_quantity: number
+    image_url: string | null
+    is_required: boolean
+    min_select_required: boolean
+    delivery_rental_disabled: boolean
+  }
+  interface OptionSearchResult {
+    id: string
+    name: string
+    price_24h: number
+    stock_quantity: number
+    image_url: string | null
+  }
+  interface ProductSearchRow {
+    id: string
+    name: string
+    stock_quantity: number
+    image_urls: string[]
+    price_rules: { price: number; duration_type: string }[]
+  }
+
+  function parseOptionLinks(p: ProductDetail): OptionLink[] {
+    const raw = p.option_links
+    if (!raw) return []
+    try {
+      const arr = Array.isArray(raw) ? raw : JSON.parse(raw as string)
+      return (arr as Record<string, unknown>[]).map((l) => ({
+        option_product_id: l.option_product_id as string,
+        name: '',
+        price_24h: 0,
+        stock_quantity: 0,
+        image_url: null,
+        is_required: (l.is_required as boolean) ?? false,
+        min_select_required: (l.min_select_required as boolean) ?? false,
+        delivery_rental_disabled: (l.delivery_rental_disabled as boolean) ?? false,
+      }))
+    } catch { return [] }
+  }
+
+  let localOptions = $state<OptionLink[]>(parseOptionLinks(product))
+  let optionNamesLoaded = $state(false)
+  let optionKeyword = $state('')
+  let showOptionModal = $state(false)
+  let optionResults = $state<OptionSearchResult[]>([])
+  let optionSearching = $state(false)
+  let bulkRequired = $state(false)
+  let bulkMinSelectRequired = $state(false)
+  let bulkDeliveryDisabled = $state(false)
+  let isSavingOptions = $state(false)
+  const isDirtyOptions = $derived.by(() => {
+    const toSaveKey = (opts: OptionLink[]) =>
+      JSON.stringify(opts.map((o, i) => ({
+        option_product_id: o.option_product_id,
+        is_required: o.is_required,
+        min_select_required: o.min_select_required,
+        delivery_rental_disabled: o.delivery_rental_disabled,
+        display_order: i,
+      })))
+    return toSaveKey(localOptions) !== toSaveKey(parseOptionLinks(product))
+  })
+
+  async function loadOptionNames() {
+    const ids = localOptions.filter(o => !o.name).map(o => o.option_product_id)
+    if (ids.length === 0) { optionNamesLoaded = true; return }
+    const { data } = await supabase
+      .from('products')
+      .select<string, ProductSearchRow>('id, name, stock_quantity, image_urls, price_rules(price, duration_type)')
+      .in('id', ids)
+      .is('deleted_at', null)
+    if (data) {
+      localOptions = localOptions.map((o) => {
+        const p = data.find((d) => d.id === o.option_product_id)
+        if (!p) return o
+        return {
+          ...o,
+          name: p.name,
+          stock_quantity: p.stock_quantity ?? 0,
+          image_url: p.image_urls[0] ?? null,
+          price_24h: p.price_rules.find((r) => r.duration_type === '24h')?.price ?? 0,
+        }
+      })
+    }
+    optionNamesLoaded = true
+  }
+
+  $effect(() => {
+    if (activeTab === 'options' && !optionNamesLoaded) {
+      void loadOptionNames()
+    }
+  })
+
+  async function searchOptionProducts() {
+    const kw = optionKeyword.trim()
+    if (!kw) return
+    optionSearching = true
+    showOptionModal = true
+    const { data, error: err } = await supabase
+      .from('products')
+      .select<string, ProductSearchRow>('id, name, stock_quantity, image_urls, price_rules(price, duration_type)')
+      .or(productSearchOrFilter(kw))
+      .eq('is_active', true)
+      .is('deleted_at', null)
+      .is('parent_product_id', null)
+      .limit(20)
+    optionSearching = false
+    if (err) { csToast.error('상품 검색 중 오류가 발생했습니다.'); return }
+    optionResults = (data ?? []).map((p) => ({
+      id: p.id,
+      name: p.name,
+      stock_quantity: p.stock_quantity ?? 0,
+      image_url: p.image_urls[0] ?? null,
+      price_24h: p.price_rules.find((r) => r.duration_type === '24h')?.price ?? 0,
+    }))
+  }
+
+  function onOptionSuggestSelect() {
+    void searchOptionProducts()
+  }
+
+  function addOptionProduct(item: OptionSearchResult) {
+    if (localOptions.some((o) => o.option_product_id === item.id)) {
+      csToast.info('이미 추가된 상품입니다.')
+      return
+    }
+    localOptions = [
+      ...localOptions,
+      {
+        option_product_id: item.id,
+        name: item.name,
+        price_24h: item.price_24h,
+        stock_quantity: item.stock_quantity,
+        image_url: item.image_url,
+        is_required: false,
+        min_select_required: false,
+        delivery_rental_disabled: false,
+      },
+    ]
+    showOptionModal = false
+    optionKeyword = ''
+    optionResults = []
+  }
+
+  function removeOption(id: string) {
+    localOptions = localOptions.filter((o) => o.option_product_id !== id)
+  }
+
+  function applyBulk() {
+    localOptions = localOptions.map((o) => ({
+      ...o,
+      is_required: bulkRequired,
+      min_select_required: bulkMinSelectRequired,
+      delivery_rental_disabled: bulkDeliveryDisabled,
+    }))
+  }
+
+  async function saveOptions() {
+    isSavingOptions = true
+    try {
+      const fd = new FormData()
+      fd.append('product_id', product.id)
+      fd.append('section_type', 'options')
+      fd.append('option_links', JSON.stringify(
+        localOptions.map((o, i) => ({
+          option_product_id: o.option_product_id,
+          is_required: o.is_required,
+          min_select_required: o.min_select_required,
+          delivery_rental_disabled: o.delivery_rental_disabled,
+          display_order: i,
+        }))
+      ))
+      const res = await fetch('?/updateSection', { method: 'POST', body: fd })
+      if (!res.ok) throw new Error('저장 실패')
+      await invalidateAll()
+      csToast.success('저장됐습니다.')
+    } catch {
+      csToast.error('저장에 실패했습니다.')
+    } finally {
+      isSavingOptions = false
+    }
+  }
+
   const TABS: { key: TabKey; label: string }[] = [
     { key: 'basic', label: '기본정보' },
+    { key: 'options', label: '옵션상품' },
     { key: 'pricing', label: '가격정책' },
+    { key: 'content', label: '상품설명' },
     { key: 'images', label: '이미지' },
     { key: 'specs', label: '사양' },
     { key: 'history', label: '이력' },
@@ -649,6 +932,46 @@
   // ─── 상품 삭제 ───────────────────────────────────────────────
   let showDeleteConfirm = $state(false)
   let isDeleting = $state(false)
+
+  // ─── 상품 복제 (빠른 재고 등록) ───────────────────────────────
+  let showCloneModal = $state(false)
+  let cloneMode = $state<'new_product' | 'add_inventory'>('new_product')
+  let cloneCount = $state(1)
+  let cloneAutoCode = $state(true)
+  let clonePartnerCode = $state(false)
+  let clonePartnerComboRowId = $state('')
+  let isCloning = $state(false)
+
+  function openCloneModal(mode: 'new_product' | 'add_inventory' = 'new_product') {
+    cloneMode = mode
+    cloneCount = 1
+    cloneAutoCode = mode === 'new_product'
+    clonePartnerCode = false
+    clonePartnerComboRowId = ''
+    showCloneModal = true
+  }
+
+  function closeCloneModal() {
+    if (!isCloning) showCloneModal = false
+  }
+
+  function handleCloneProduct() {
+    isCloning = true
+    return async ({ result }: { result: ActionResult }) => {
+      isCloning = false
+      if (result.type === 'success') {
+        const cloned = (result.data as { cloned?: number } | undefined)?.cloned ?? 0
+        showCloneModal = false
+        await invalidateAll()
+        csToast.success(`재고 ${cloned}개가 등록됐습니다.`)
+      } else if (result.type === 'failure') {
+        const msg = (result.data as { error?: string } | undefined)?.error ?? '복제 등록에 실패했습니다.'
+        csToast.error(msg)
+      } else {
+        await applyAction(result)
+      }
+    }
+  }
 
   function handleDeleteProduct() {
     isDeleting = true
@@ -683,6 +1006,16 @@
 
     <!-- 상품명 + 카피 | QR -->
     <div class="ph-body">
+      <!-- 대표 이미지 썸네일 (image_urls[0], thumb 사이즈) -->
+      <div class="ph-thumb">
+        {#if product.image_urls?.[0]}
+          <img
+            src={product.image_urls[0].replace('/large_', '/thumb_')}
+            alt={product.name}
+            class="ph-thumb-img"
+          />
+        {/if}
+      </div>
       <div class="ph-left">
         <span class="ph-cat">{categoryLabel}</span>
         <h2 class="ph-name">{product.name}</h2>
@@ -703,19 +1036,19 @@
     </div>
   </div>
 
-  <!-- 상태 요약 바 -->
-  <div class="status-bar">
-    <span class="sb-item"><span class="sb-label">재고</span><span class="sb-value">{product.assetCount}개</span></span>
-    <span class="sb-divider">|</span>
-    <span class="sb-item"><span class="sb-label">12시간</span><span class="sb-value">{formatPrice(product.price12h)}</span></span>
-    <span class="sb-divider">|</span>
-    <span class="sb-item"><span class="sb-label">1일</span><span class="sb-value">{formatPrice(product.price24h)}</span></span>
-    <span class="sb-divider">|</span>
-    <span class="sb-item"><span class="sb-label">등록일</span><span class="sb-value">{formatDate(product.created_at)}</span></span>
-    <span class="sb-divider">|</span>
-    <span class="status-badge" class:active={product.is_active}>
-      {product.is_active ? '노출(ON)' : '미노출(OFF)'}
-    </span>
+  <!-- 요약 바 -->
+  <div class="summary-bar">
+    <div class="summary-bar-left">
+      <div class="summary-badges">
+        <span class="sb-price-badge">12H {formatPrice(product.price12h)}</span>
+        <span class="sb-price-badge">Day {formatPrice(product.price24h)}</span>
+        <span class="sb-date-badge">등록(수정): {formatDate(product.created_at)}</span>
+      </div>
+      <span class="sb-status-pill" class:sb-status-on={product.is_active}>
+        {product.is_active ? '노출(ON)' : '미노출(OFF)'}
+      </span>
+    </div>
+    <button type="button" class="status-cta-btn" onclick={() => openCloneModal('add_inventory')}>빠른 재고 등록</button>
   </div>
 
   <!-- 탭 네비게이션 -->
@@ -784,15 +1117,6 @@
             </div>
           </div>
           <div class="inline-row">
-            <span class="vr-label">슬러그</span>
-            <span class="vr-value vr-mono">{product.slug}</span>
-          </div>
-          <div class="inline-row inline-row-top">
-            <label class="vr-label" for="ib-desc">설명</label>
-            <textarea id="ib-desc" class="il-input il-textarea" name="description" rows="3"
-              bind:value={localBasic.description}></textarea>
-          </div>
-          <div class="inline-row">
             <span class="vr-label">노출 상태</span>
             <div class="toggle-group">
               <label class="radio-label">
@@ -805,6 +1129,26 @@
                   checked={!localBasic.is_active}
                   onchange={() => { localBasic.is_active = false }} /><span>미노출(OFF)</span>
               </label>
+            </div>
+          </div>
+        </form>
+
+        <!-- slug 편집 (별도 form) -->
+        <form id="form-slug" method="POST" action="?/updateSection" use:enhance={handleSectionSave} class="inline-form">
+          <input type="hidden" name="product_id" value={product.id} />
+          <input type="hidden" name="section_type" value="slug" />
+          <div class="inline-row">
+            <label class="vr-label" for="ib-slug">슬러그</label>
+            <div class="slug-edit-wrap">
+              <input id="ib-slug" class="il-input vr-mono" type="text" name="slug"
+                bind:value={localSlug}
+                pattern="[a-z0-9\-]+"
+                placeholder="영소문자·숫자·하이픈만" />
+              <button form="form-slug" type="submit" class="btn-save-inline"
+                class:dirty={isDirtySlug}
+                disabled={!isDirtySlug || isSaving}>
+                {isSaving ? '저장 중...' : '저장'}
+              </button>
             </div>
           </div>
         </form>
@@ -872,7 +1216,133 @@
       </div>
     {/if}
 
-    <!-- ② 가격정책 -->
+    <!-- ② 옵션상품 -->
+    {#if activeTab === 'options'}
+      <div class="section" role="tabpanel">
+        <div class="section-header">
+          <span class="section-title">옵션상품</span>
+          <button type="button" class="btn-save-inline"
+            class:dirty={isDirtyOptions}
+            disabled={!isDirtyOptions || isSavingOptions}
+            onclick={saveOptions}>
+            {isSavingOptions ? '저장 중...' : '저장'}
+          </button>
+        </div>
+
+        <p class="section-desc">함께 대여 가능한 옵션상품을 상품 DB에서 검색해 추가합니다.</p>
+
+        <!-- 검색 입력폼 -->
+        <div class="option-search-row">
+          <div class="option-search-field">
+            <CmsSimilarNameInput
+              id="opt-search"
+              bind:value={optionKeyword}
+              source="product_search"
+              activeOnly={true}
+              placeholder="상품명 또는 키워드 입력 후 검색..."
+              categoryLabels={{}}
+              onselect={onOptionSuggestSelect}
+            >
+              {#snippet field(c)}
+                <input
+                  type="text"
+                  class="opt-search-input"
+                  id={c.id}
+                  placeholder={c.placeholder}
+                  value={c.value}
+                  oninput={c.oninput}
+                  onkeydown={(e) => {
+                    c.onkeydown(e)
+                    if (e.key === 'Enter' && !e.defaultPrevented) {
+                      e.preventDefault()
+                      void searchOptionProducts()
+                    }
+                  }}
+                  onfocus={c.onfocus}
+                  onblur={c.onblur}
+                  aria-label="옵션상품 검색"
+                  aria-autocomplete={c.ariaAutocomplete}
+                  aria-expanded={c.ariaExpanded}
+                  aria-controls={c.ariaControls}
+                  autocomplete="off"
+                />
+              {/snippet}
+            </CmsSimilarNameInput>
+          </div>
+          <button type="button" class="btn-opt-search" onclick={searchOptionProducts} disabled={optionSearching}>
+            {optionSearching ? '검색 중...' : '검색'}
+          </button>
+        </div>
+
+        <!-- 검색 결과 모달 -->
+        {#if showOptionModal}
+          <div class="option-modal-backdrop" onclick={() => { showOptionModal = false }} role="presentation">
+            <div class="option-modal" role="dialog" aria-modal="true" aria-label="옵션상품 검색 결과" onclick={(e) => e.stopPropagation()}>
+              <div class="option-modal-header">
+                <p class="option-modal-title">검색 결과</p>
+                <button type="button" class="option-modal-close" onclick={() => { showOptionModal = false }} aria-label="닫기">✕</button>
+              </div>
+              {#if optionSearching}
+                <p class="option-modal-empty">검색 중...</p>
+              {:else if optionResults.length === 0}
+                <p class="option-modal-empty">검색 결과가 없습니다.</p>
+              {:else}
+                <ul class="option-result-list">
+                  {#each optionResults as item (item.id)}
+                    <li class="option-result-item">
+                      {#if item.image_url}
+                        <img src={item.image_url} alt={item.name} class="option-result-thumb" width="56" height="42" loading="lazy" />
+                      {:else}
+                        <div class="option-result-thumb option-result-thumb--empty">No img</div>
+                      {/if}
+                      <div class="option-result-info">
+                        <p class="option-result-name">{item.name}</p>
+                      </div>
+                      <button type="button" class="btn-add-option" onclick={() => addOptionProduct(item)}>추가</button>
+                    </li>
+                  {/each}
+                </ul>
+              {/if}
+            </div>
+          </div>
+        {/if}
+
+        <!-- 선택된 옵션 목록 -->
+        {#if localOptions.length > 0}
+          <div class="bulk-row">
+            <span class="bulk-label">일괄 적용</span>
+            <label class="cb-label"><input type="checkbox" class="cb-input" bind:checked={bulkRequired} /> 필수 선택</label>
+            <label class="cb-label"><input type="checkbox" class="cb-input" bind:checked={bulkMinSelectRequired} /> 최소 1개 선택 필수</label>
+            <label class="cb-label"><input type="checkbox" class="cb-input" bind:checked={bulkDeliveryDisabled} /> 배송 대여 불가</label>
+            <button type="button" class="btn-bulk-apply" onclick={applyBulk}>적용</button>
+          </div>
+          <div class="selected-option-list">
+            {#each localOptions as opt, i (opt.option_product_id)}
+              <div class="selected-option-card">
+                {#if opt.image_url}
+                  <img src={opt.image_url} alt={opt.name} class="selected-option-thumb" width="64" height="48" loading="lazy" />
+                {:else}
+                  <div class="selected-option-thumb selected-option-thumb--empty">No img</div>
+                {/if}
+                <div class="selected-option-info">
+                  <p class="selected-option-name">{opt.name}</p>
+                  <div class="selected-option-cbs">
+                    <label class="cb-label"><input type="checkbox" class="cb-input" bind:checked={localOptions[i].is_required} /> 필수 선택</label>
+                    <label class="cb-label"><input type="checkbox" class="cb-input" bind:checked={localOptions[i].min_select_required} /> 최소 1개 선택 필수</label>
+                    <label class="cb-label"><input type="checkbox" class="cb-input" bind:checked={localOptions[i].delivery_rental_disabled} /> 배송 대여 불가</label>
+                  </div>
+                </div>
+                <button type="button" class="remove-btn" onclick={() => removeOption(opt.option_product_id)} aria-label="{opt.name} 옵션 제거">✕</button>
+              </div>
+            {/each}
+          </div>
+        {:else}
+          <p class="no-option-msg">{optionNamesLoaded ? '추가된 옵션상품이 없습니다.' : '로딩 중...'}</p>
+        {/if}
+      </div>
+    {/if}
+
+    <!-- ③ 가격정책 -->
     {#if activeTab === 'pricing'}
       <div class="section" role="tabpanel">
         <div class="section-header">
@@ -964,7 +1434,23 @@
       </div>
     {/if}
 
-    <!-- ③ 이미지 — 통합 모드 (보기+수정 결합, 자동저장) -->
+    <!-- ④ 상품설명(content_blocks) -->
+    {#if activeTab === 'content'}
+      <div class="section" role="tabpanel">
+        <div class="section-header">
+          <span class="section-title">상품설명</span>
+          <button type="button" class="btn-save-inline"
+            class:dirty={isDirtyContent}
+            disabled={!isDirtyContent || isSavingContent}
+            onclick={saveContent}>
+            {isSavingContent ? '저장 중...' : '저장'}
+          </button>
+        </div>
+        <CmsContentEditor bind:blocks={localContentBlocks} bind:keywords={localKeywords} />
+      </div>
+    {/if}
+
+    <!-- ⑤ 이미지 — 통합 모드 (보기+수정 결합, 자동저장) -->
     {#if activeTab === 'images'}
       <div class="section img-section" role="tabpanel">
 
@@ -1088,15 +1574,17 @@
           <input type="hidden" name="specifications"
             value={JSON.stringify(Object.fromEntries(localSpecs.filter(s => s.key).map(s => [s.key, s.value])))} />
           <div class="specs-list">
-            {#each localSpecs as spec, i}
-              <div class="spec-row">
-                <input class="il-input spec-key" type="text" placeholder="항목명" value={spec.key}
-                  oninput={(e) => updateSpecKey(i, (e.target as HTMLInputElement).value)} />
-                <input class="il-input spec-val" type="text" placeholder="값" value={spec.value}
-                  oninput={(e) => updateSpecVal(i, (e.target as HTMLInputElement).value)} />
-                <button type="button" class="btn-icon-close" onclick={() => removeSpec(i)} aria-label="항목 제거">✕</button>
-              </div>
-            {/each}
+            <CmsDragList bind:items={localSpecs} class="specs-drag-list">
+              {#snippet renderItem(spec, i)}
+                <div class="spec-row-inner">
+                  <input class="il-input spec-key" type="text" placeholder="항목명" value={spec.key}
+                    oninput={(e) => updateSpecKey(i, (e.target as HTMLInputElement).value)} />
+                  <input class="il-input spec-val" type="text" placeholder="값" value={spec.value}
+                    oninput={(e) => updateSpecVal(i, (e.target as HTMLInputElement).value)} />
+                  <button type="button" class="btn-icon-close" onclick={() => removeSpec(i)} aria-label="항목 제거">✕</button>
+                </div>
+              {/snippet}
+            </CmsDragList>
             <button type="button" class="btn-add-dashed" onclick={addSpec}>+ 항목 추가</button>
           </div>
         </form>
@@ -1338,17 +1826,165 @@
 
   </div>
 
+  <!-- 상품 삭제 푸터 (흰 카드 안 최하단) -->
+  <div class="delete-footer">
+    <button
+      type="button"
+      class="btn-danger"
+      onclick={() => { showDeleteConfirm = true }}
+    >상품정보 삭제</button>
+  </div>
+
 </div>
 
-<!-- 상품 삭제 푸터 (흰 카드 밖, panel-wrap 안) -->
-<div class="delete-footer">
-  <button
-    type="button"
-    class="btn-danger"
-    onclick={() => { showDeleteConfirm = true }}
-  >상품정보 삭제</button>
 </div>
-</div>
+
+<!-- 상품 복제 모달 -->
+{#if showCloneModal}
+  <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
+  <div class="clone-modal-backdrop" onclick={closeCloneModal} role="presentation">
+    <div
+      class="clone-modal"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="clone-modal-title"
+      onclick={(e) => e.stopPropagation()}
+    >
+      <div class="clone-modal-header">
+        <h3 id="clone-modal-title" class="clone-modal-title">상품정보 복제 자동 등록</h3>
+        <button type="button" class="clone-modal-close" onclick={closeCloneModal} aria-label="닫기" disabled={isCloning}>✕</button>
+      </div>
+      <div class="clone-modal-body">
+        <div class="clone-mode-toggle" role="group" aria-label="등록 방식">
+          <button
+            type="button"
+            class="clone-mode-btn"
+            class:clone-mode-btn--on={cloneMode === 'new_product'}
+            onclick={() => { cloneMode = 'new_product'; cloneAutoCode = true; clonePartnerCode = false }}
+            disabled={isCloning}
+            aria-pressed={cloneMode === 'new_product'}
+          >새 상품으로 복제</button>
+          <button
+            type="button"
+            class="clone-mode-btn"
+            class:clone-mode-btn--on={cloneMode === 'add_inventory'}
+            onclick={() => { cloneMode = 'add_inventory'; cloneAutoCode = false; clonePartnerCode = false }}
+            disabled={isCloning}
+            aria-pressed={cloneMode === 'add_inventory'}
+          >동일 상품 재고 추가</button>
+        </div>
+        <p class="clone-modal-desc">
+          {#if cloneMode === 'add_inventory'}
+            동일 상품의 재고를 추가 등록합니다.<br />
+            부모 품번 기반의 고유 품번이 자동 발행됩니다.
+          {:else}
+            동일 제품으로 재고 일괄 등록합니다.<br />
+            현재 상품의 모든 정보(이미지·가격·사양 포함)를 복제합니다.
+          {/if}
+        </p>
+        <div class="clone-source-box">
+          {#if product.image_urls && product.image_urls.length > 0}
+            <img
+              class="clone-source-thumb"
+              src={product.image_urls[0]}
+              alt={product.name}
+            />
+          {/if}
+          <div class="clone-source-info">
+            <span class="clone-source-label">원본 상품</span>
+            <span class="clone-source-name">{product.name}</span>
+            {#if product.product_code}
+              <span class="clone-source-code">{product.product_code}</span>
+            {/if}
+          </div>
+        </div>
+        <label class="clone-field">
+          <span class="clone-field-label">등록 수량</span>
+          <input
+            class="f-input clone-count-input"
+            type="number"
+            min="1"
+            max="20"
+            bind:value={cloneCount}
+            aria-label="등록 수량"
+            disabled={isCloning}
+          />
+        </label>
+        {#if cloneMode === 'new_product'}
+        <div class="clone-options-row">
+          <button
+            type="button"
+            class="clone-option-toggle"
+            class:clone-option-toggle--on={cloneAutoCode}
+            onclick={() => { cloneAutoCode = true; clonePartnerCode = false }}
+            disabled={isCloning}
+            aria-pressed={cloneAutoCode}
+          >
+            품번(분류코드) 자동 생성
+          </button>
+          <button
+            type="button"
+            class="clone-option-toggle"
+            class:clone-option-toggle--on={clonePartnerCode}
+            onclick={() => { clonePartnerCode = true; cloneAutoCode = false }}
+            disabled={isCloning}
+            aria-pressed={clonePartnerCode}
+          >
+            제휴상품 품번 자동 생성
+          </button>
+        </div>
+        {/if}
+        {#if cloneMode === 'new_product' && clonePartnerCode}
+          {#if partnerComboItems.length === 0}
+            <p class="clone-combo-empty">협력사 전용코드로 지정된 조합코드그룹이 없습니다.<br/>코드설정 &gt; 코드조합에서 그룹을 설정해주세요.</p>
+          {:else}
+            <div class="clone-combo-list" role="listbox" aria-label="조합코드 선택">
+              {#each partnerComboItems as item (item.combo_row_id)}
+                <button
+                  type="button"
+                  class="clone-combo-row"
+                  class:clone-combo-row--on={clonePartnerComboRowId === item.combo_row_id}
+                  onclick={() => (clonePartnerComboRowId = item.combo_row_id)}
+                  disabled={isCloning}
+                  role="option"
+                  aria-selected={clonePartnerComboRowId === item.combo_row_id}
+                >
+                  <span class="ccr-group">{item.group_name}</span>
+                  <span class="ccr-name">{item.combo_name ?? '(이름 없음)'}</span>
+                  {#if item.combo_keywords && item.combo_keywords.length > 0}
+                    <span class="ccr-tags">
+                      {#each item.combo_keywords as kw}
+                        <span class="ccr-tag">{kw}</span>
+                      {/each}
+                    </span>
+                  {/if}
+                </button>
+              {/each}
+            </div>
+          {/if}
+        {/if}
+      </div>
+      <div class="clone-modal-actions clone-modal-actions--col">
+        <form method="POST" action="?/cloneProduct" use:enhance={handleCloneProduct} style="width:100%">
+          <input type="hidden" name="source_product_id" value={product.id} />
+          <input type="hidden" name="mode" value={cloneMode} />
+          <input type="hidden" name="count" value={cloneCount} />
+          <input type="hidden" name="auto_code" value={String(cloneAutoCode)} />
+          <input type="hidden" name="partner_code" value={String(clonePartnerCode)} />
+          <input type="hidden" name="partner_combo_row_id" value={clonePartnerComboRowId} />
+          <button
+            type="submit"
+            class="cta-btn cta-btn--wide"
+            disabled={isCloning || cloneCount < 1 || (clonePartnerCode && !clonePartnerComboRowId)}
+          >
+            {isCloning ? '등록 중...' : '재고 등록 실행'}
+          </button>
+        </form>
+        <button type="button" class="clone-cancel-link" onclick={closeCloneModal} disabled={isCloning}>취소</button>
+      </div>
+    </div>
+  </div>
+{/if}
 
 <!-- 상품 삭제 확인 모달 -->
 {#if showDeleteConfirm}
@@ -1395,13 +2031,14 @@
     style={(() => { const r = catPickerRef!.getBoundingClientRect(); return `top:${r.bottom + 4}px;left:${r.left}px;width:${r.width}px` })()}
   >
     {#each categories as cat}
+      {@const catCode = cat.categoryCode ?? cat.value}
       <button
         type="button"
         role="option"
-        aria-selected={localBasic.category === cat.value}
+        aria-selected={localBasic.category === catCode}
         class="cat-option"
-        class:selected={localBasic.category === cat.value}
-        onclick={() => { localBasic.category = cat.value; showCategoryPicker = false }}
+        class:selected={localBasic.category === catCode}
+        onclick={() => { localBasic.category = catCode; showCategoryPicker = false }}
       >{cat.label}</button>
     {/each}
   </div>
@@ -1473,13 +2110,30 @@
     padding: 2px 8px;
   }
 
-  /* ph-body: 상품명·카피 + QR */
+  /* ph-body: 썸네일 + 상품명·카피 + QR */
   .ph-body {
     display: flex;
     justify-content: space-between;
     align-items: flex-start;
-    gap: 12px;
+    gap: 16px;
   }
+
+  /* 대표 이미지 썸네일 */
+  .ph-thumb {
+    width: 72px;
+    height: 72px;
+    flex-shrink: 0;
+    border-radius: var(--cms-radius-sm);
+    background: #2a2a40;
+    overflow: hidden;
+  }
+  .ph-thumb-img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    display: block;
+  }
+
   .ph-left { flex: 1; min-width: 0; }
   .ph-cat {
     display: inline-block;
@@ -1535,23 +2189,95 @@
   .close-btn:hover { background: rgba(255,53,53,0.08); color: var(--cs-red-badge); }
 
   /* 상태 바 */
-  .status-bar {
-    display: flex; align-items: center; gap: 10px;
-    padding: 10px 20px; background: var(--cs-lilac);
-    flex-shrink: 0; flex-wrap: wrap;
+  /* ─── 요약 바 ─────────────────────────────── */
+  .summary-bar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 6px;
+    padding: 25px 20px;
+    background: var(--cs-surface-gray);
+    border-top: 1px solid var(--cs-lilac);
+    border-bottom: 1px solid var(--cs-lilac);
+    flex-shrink: 0;
   }
-  .sb-item { display: flex; align-items: center; gap: 4px; }
-  .sb-label { font: var(--text-pc-script-12); color: var(--cs-text-light); }
-  .sb-value { font: var(--text-pc-body-14); color: var(--cs-text); }
-  .sb-divider { color: var(--cs-border); font-size: 12px; }
-
-  .status-badge {
-    display: inline-flex; align-items: center;
-    padding: 3px 10px; border-radius: var(--radius-full);
+  .summary-bar-left {
+    display: flex;
+    align-items: center;
+    gap: 20px;
+    flex-wrap: wrap;
+  }
+  .summary-badges {
+    display: flex;
+    align-items: center;
+    gap: 20px;
+  }
+  /* 12H / Day 가격 배지 — bg purpleTint-200 #E1DEF3, 16px/700, letter-spacing -0.5 */
+  .sb-price-badge {
+    display: inline-flex;
+    align-items: center;
+    padding: 5px 10px;
+    background: var(--cs-purple-op10);
+    color: var(--cs-purple);
+    border-radius: var(--radius-sm);
+    font: var(--text-pc-title-16);
+    letter-spacing: -0.5px;
+    white-space: nowrap;
+  }
+  /* 등록(수정) 날짜 배지 — bg purpleTint-100 #ECEBF4, 10px/400 */
+  .sb-date-badge {
+    display: inline-flex;
+    align-items: center;
+    padding: 5px 10px;
+    background: var(--cs-lilac);
+    color: var(--cs-text-mid);
+    border-radius: var(--radius-sm);
+    font: var(--text-pc-descript-10);
+    white-space: nowrap;
+  }
+  /* 노출상태 필 — bg #ECEBF4, 11px/700, radius 20px */
+  .sb-status-pill {
+    display: inline-flex;
+    align-items: center;
+    padding: 5px 10px;
+    background: var(--cs-lilac);
+    color: var(--cs-text-mid);
+    border-radius: var(--radius-lg);
+    font-family: 'Noto Sans KR', sans-serif;
+    font-size: 11px;
+    font-weight: 700;
+    line-height: normal;
+    white-space: nowrap;
+  }
+  .sb-status-pill.sb-status-on {
+    background: var(--cs-lilac);
+    color: var(--cs-text-mid);
+  }
+  /* 빠른 재고 등록 버튼 — bg purple, padding 10px 20px, radius 10px */
+  .status-cta-btn {
+    display: inline-flex; align-items: center; justify-content: center;
+    flex-shrink: 0;
+    padding: 10px 20px;
+    background: var(--cs-purple); color: var(--cs-white);
+    border: none; border-radius: var(--cms-radius-sm);
     font: var(--text-pc-script-12);
-    background: var(--cs-surface-gray); color: var(--cs-text-light); white-space: nowrap;
+    white-space: nowrap; cursor: pointer;
+    transition: background 0.12s;
   }
-  .status-badge.active { background: rgba(59,47,138,0.10); color: var(--cs-purple); }
+  .status-cta-btn:hover:not(:disabled) { background: var(--cs-purple-hover); }
+  .status-cta-btn:disabled { background: var(--cs-disabled-button); cursor: not-allowed; }
+  .cta-btn {
+    display: inline-flex; align-items: center; justify-content: center;
+    height: 44px; padding: 0 20px;
+    background: var(--cs-purple); color: var(--cs-white);
+    border: none; border-radius: var(--radius-xl);
+    font: var(--text-pc-body-14);
+    white-space: nowrap; cursor: pointer;
+    transition: background 0.12s;
+  }
+  .cta-btn:hover:not(:disabled) { background: var(--cs-purple-hover); }
+  .cta-btn:disabled { background: var(--cs-disabled-button); cursor: not-allowed; }
 
   /* 탭 */
   .tab-nav {
@@ -2229,6 +2955,235 @@
   .confirm-sub { font: var(--text-pc-script-12); color: var(--cs-text-mid); margin: 0 0 20px; }
   .confirm-actions { display: flex; gap: 10px; justify-content: center; }
 
+  /* 상품 복제 모달 */
+  .clone-modal-backdrop {
+    position: fixed; inset: 0; z-index: 200;
+    background: rgba(16,11,50,0.45);
+    display: flex; align-items: center; justify-content: center;
+  }
+  .clone-modal {
+    background: var(--cs-white);
+    border-radius: var(--cms-radius-lg);
+    padding: 24px 28px;
+    width: 520px;
+    max-width: calc(100vw - 40px);
+    display: flex;
+    flex-direction: column;
+    gap: 20px;
+  }
+  .clone-modal-header {
+    display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  }
+  .clone-modal-title {
+    font: var(--text-pc-title-16);
+    color: var(--cs-text);
+    margin: 0;
+  }
+  .clone-modal-close {
+    width: 32px; height: 32px;
+    border: none; border-radius: var(--radius-sm);
+    background: var(--cs-surface-gray); color: var(--cs-text-mid);
+    cursor: pointer; font-size: 14px;
+    transition: background 0.12s;
+  }
+  .clone-modal-close:hover:not(:disabled) { background: rgba(255,53,53,0.1); color: var(--cs-red-badge); }
+  .clone-modal-close:disabled { opacity: 0.5; cursor: not-allowed; }
+  .clone-modal-desc {
+    font: var(--text-pc-script-12);
+    color: var(--cs-text-mid);
+    margin: 0;
+    line-height: 1.6;
+  }
+  .clone-source-box {
+    display: flex; flex-direction: row; align-items: center; gap: 12px;
+    padding: 12px 16px;
+    background: var(--cs-surface-gray);
+    border-radius: var(--cms-radius-sm);
+  }
+  .clone-source-thumb {
+    width: 56px; height: 56px;
+    object-fit: cover;
+    border-radius: var(--radius-sm);
+    flex-shrink: 0;
+  }
+  .clone-source-info {
+    display: flex; flex-direction: column; gap: 4px;
+    min-width: 0;
+  }
+  .clone-source-label {
+    font: var(--text-pc-script-12);
+    color: var(--cs-text-light);
+  }
+  .clone-source-name {
+    font: var(--text-pc-body-14);
+    color: var(--cs-text);
+  }
+  .clone-source-code {
+    font: var(--text-pc-script-12);
+    color: var(--cs-text-mid);
+    font-family: monospace;
+  }
+  .clone-field { display: flex; flex-direction: column; gap: 6px; }
+  .clone-field-label {
+    font: var(--text-pc-script-12);
+    color: var(--cs-text-mid);
+  }
+  .clone-modal-actions {
+    display: flex; align-items: center; justify-content: flex-end; gap: 10px;
+  }
+  .clone-modal-actions form { margin: 0; }
+  .clone-modal-actions--col {
+    flex-direction: column; align-items: stretch; gap: 8px;
+  }
+  .clone-count-input { width: 100px; }
+  /* ── 조합코드 목록 리스트 ── */
+  .clone-combo-empty {
+    margin: 0;
+    padding: 12px 14px;
+    background: #F3F4F6;
+    border-radius: var(--cms-radius-sm);
+    font: var(--text-pc-script-12);
+    color: var(--cs-text-mid);
+    line-height: 160%;
+  }
+  .clone-combo-list {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    max-height: 220px;
+    overflow-y: auto;
+    padding: 4px 0;
+  }
+  .clone-combo-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    width: 100%;
+    padding: 9px 12px;
+    background: var(--cs-white);
+    border: 1.5px solid #ECEBF4;
+    border-radius: var(--cms-radius-sm);
+    text-align: left;
+    cursor: pointer;
+    transition: background 0.12s, border-color 0.12s;
+  }
+  .clone-combo-row:hover:not(:disabled) {
+    background: rgba(59,47,138,0.04);
+    border-color: var(--cs-purple);
+  }
+  .clone-combo-row--on {
+    background: rgba(59,47,138,0.08);
+    border-color: var(--cs-purple);
+  }
+  .clone-combo-row:disabled { opacity: 0.5; cursor: not-allowed; }
+  .ccr-group {
+    flex-shrink: 0;
+    font: var(--text-pc-script-12);
+    color: var(--cs-text-light);
+    white-space: nowrap;
+    min-width: 56px;
+  }
+  .ccr-name {
+    flex: 1;
+    font: var(--text-pc-body-14);
+    color: var(--cs-text);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .clone-combo-row--on .ccr-name { color: var(--cs-purple); }
+  .ccr-tags {
+    display: flex;
+    gap: 4px;
+    flex-wrap: nowrap;
+    flex-shrink: 0;
+  }
+  .ccr-tag {
+    display: inline-flex;
+    align-items: center;
+    padding: 2px 6px;
+    background: var(--cs-purple-op10);
+    color: var(--cs-purple);
+    border-radius: 4px;
+    font: var(--text-pc-script-12);
+    font-weight: 700;
+    white-space: nowrap;
+  }
+  .clone-options-row {
+    display: flex;
+    gap: 8px;
+  }
+  .clone-option-toggle {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 9px 12px;
+    border-radius: var(--radius-xl);
+    border: 1.5px solid var(--cs-border);
+    background: var(--cs-white);
+    color: var(--cs-text-mid);
+    font: var(--text-pc-script-12);
+    cursor: pointer;
+    transition: background 0.15s, color 0.15s, border-color 0.15s;
+    text-align: center;
+    line-height: 1.4;
+    min-height: 44px;
+  }
+  .clone-option-toggle:hover:not(:disabled) {
+    border-color: var(--cs-purple);
+    color: var(--cs-purple);
+  }
+  .clone-option-toggle--on {
+    background: rgba(59,47,138,0.10);
+    border-color: var(--cs-purple);
+    color: var(--cs-purple);
+  }
+  .clone-option-toggle:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+  .cta-btn--wide { width: 100%; }
+
+  /* 클론 모드 토글 */
+  .clone-mode-toggle {
+    display: flex;
+    gap: 6px;
+    margin-bottom: 14px;
+  }
+  .clone-mode-btn {
+    flex: 1;
+    height: 36px;
+    border: 1px solid var(--cs-border);
+    border-radius: var(--radius-sm);
+    background: transparent;
+    color: var(--cs-text-mid);
+    font: var(--text-pc-script-12);
+    cursor: pointer;
+    transition: background 0.12s, color 0.12s, border-color 0.12s;
+  }
+  .clone-mode-btn:hover:not(:disabled) {
+    background: rgba(59,47,138,0.06);
+    color: var(--cs-text);
+  }
+  .clone-mode-btn--on {
+    background: var(--cs-purple);
+    color: var(--cs-white);
+    border-color: var(--cs-purple);
+  }
+  .clone-mode-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+  .clone-cancel-link {
+    background: none; border: none;
+    font: var(--text-pc-script-12);
+    color: var(--cs-text-light);
+    cursor: pointer; text-align: center;
+    padding: 4px 0;
+    transition: color 0.12s;
+  }
+  .clone-cancel-link:hover:not(:disabled) { color: var(--cs-text-mid); }
+  .clone-cancel-link:disabled { opacity: 0.5; cursor: not-allowed; }
+
   /* 장치 정보 섹션 */
   .device-info-section {
     margin-top: 20px;
@@ -2364,7 +3319,9 @@
     flex-shrink: 0;
     display: flex;
     justify-content: flex-end;
-    padding: 6px 0 8px;
+    padding: 12px 20px 20px;
+    border-top: 1px solid var(--cs-lilac);
+    margin-top: 8px;
   }
 
   .btn-danger {
@@ -2382,4 +3339,195 @@
     transition: background 0.12s;
   }
   .btn-danger:hover { background: var(--cs-red); }
+
+  /* ─── slug 편집 ──────────────────────────────── */
+  .slug-edit-wrap {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex: 1;
+  }
+  .slug-edit-wrap .il-input { flex: 1; }
+
+  /* ─── 옵션상품 탭 ─────────────────────────────── */
+  .section-desc {
+    font: var(--text-pc-script-12);
+    color: var(--cs-text-mid);
+    margin: 0 0 12px;
+  }
+  .option-search-row {
+    display: flex;
+    gap: 10px;
+    align-items: flex-start;
+    margin-bottom: 16px;
+  }
+  .option-search-field { flex: 1; min-width: 0; }
+  .opt-search-input {
+    background: var(--cs-surface-gray);
+    border: none;
+    border-radius: var(--cms-radius-sm);
+    padding: 12px 16px;
+    font: var(--text-pc-body-14);
+    color: var(--cs-text);
+    width: 100%;
+  }
+  .opt-search-input::placeholder { color: var(--cs-text-light); }
+  .opt-search-input:focus { outline: 2px solid var(--cs-purple); outline-offset: -2px; }
+  .btn-opt-search {
+    flex-shrink: 0;
+    height: 44px; padding: 0 20px;
+    background: transparent; color: var(--cs-purple);
+    border: 1.5px solid var(--cs-purple); border-radius: var(--radius-sm);
+    font: var(--text-pc-body-14); cursor: pointer;
+    white-space: nowrap;
+    transition: background 0.12s;
+  }
+  .btn-opt-search:hover:not(:disabled) { background: rgba(59,47,138,0.06); }
+  .btn-opt-search:disabled { opacity: 0.5; cursor: not-allowed; }
+  .option-modal-backdrop {
+    position: fixed;
+    inset: 0;
+    z-index: 300;
+    background: rgba(16,11,50,0.45);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .option-modal {
+    background: var(--cs-white);
+    border-radius: var(--cms-radius-lg);
+    width: 520px;
+    max-width: calc(100vw - 40px);
+    max-height: 70vh;
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+    padding: 24px 28px;
+    box-shadow: 0 4px 20px rgba(16,11,50,0.2);
+  }
+  .option-modal-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+  .option-modal-title { font: var(--text-pc-body-14); color: var(--cs-text); margin: 0; }
+  .option-modal-close {
+    width: 32px; height: 32px;
+    background: var(--cs-surface-gray); border: none;
+    border-radius: var(--radius-sm);
+    cursor: pointer; font-size: 14px; color: var(--cs-text-mid);
+    display: flex; align-items: center; justify-content: center;
+    transition: background 0.12s;
+  }
+  .option-modal-close:hover { background: rgba(255,53,53,0.1); color: var(--cs-red-badge); }
+  .option-modal-empty { padding: 20px; text-align: center; color: var(--cs-text-light); font: var(--text-pc-script-12); margin: 0; }
+  .option-result-list {
+    list-style: none; padding: 0; margin: 0;
+    display: flex; flex-direction: column; gap: 8px;
+    overflow-y: auto;
+  }
+  .option-result-item {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 10px 12px;
+    border-radius: var(--cms-radius-sm);
+    background: var(--cs-surface-gray);
+  }
+  .option-result-thumb {
+    width: 56px; height: 42px;
+    object-fit: cover;
+    border-radius: var(--radius-sm);
+    flex-shrink: 0;
+  }
+  .option-result-thumb--empty {
+    background: var(--cs-lilac);
+    display: flex; align-items: center; justify-content: center;
+    font: var(--text-pc-script-12); color: var(--cs-text-light);
+  }
+  .option-result-info { flex: 1; min-width: 0; }
+  .option-result-name { font: var(--text-pc-body-14); color: var(--cs-text); margin: 0 0 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .option-result-meta { font: var(--text-pc-script-12); color: var(--cs-text-mid); margin: 0; }
+  .btn-add-option {
+    flex-shrink: 0;
+    height: 36px; padding: 0 16px;
+    background: var(--cs-purple); color: var(--cs-white);
+    border: none; border-radius: var(--radius-sm);
+    font: var(--text-pc-script-12); cursor: pointer;
+    min-width: 44px;
+    transition: background 0.12s;
+  }
+  .btn-add-option:hover { background: var(--cs-purple-hover); }
+  .bulk-row {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    padding: 10px 14px;
+    background: rgba(59,47,138,0.04);
+    border-radius: var(--cms-radius-sm);
+    margin-bottom: 12px;
+    flex-wrap: wrap;
+  }
+  .bulk-label { font: var(--text-pc-body-14); color: var(--cs-text-mid); }
+  .cb-label {
+    display: inline-flex; align-items: center; gap: 6px;
+    font: var(--text-pc-body-14); color: var(--cs-text);
+    cursor: pointer; white-space: nowrap; min-height: 44px;
+  }
+  .cb-input { cursor: pointer; accent-color: var(--cs-purple); width: 16px; height: 16px; }
+  .btn-bulk-apply {
+    margin-left: auto;
+    display: inline-flex; align-items: center;
+    height: 36px; padding: 0 16px;
+    background: transparent; color: var(--cs-purple);
+    border: 1.5px solid var(--cs-purple); border-radius: var(--radius-sm);
+    font: var(--text-pc-script-12); cursor: pointer;
+    transition: background 0.12s;
+    white-space: nowrap;
+  }
+  .btn-bulk-apply:hover { background: rgba(59,47,138,0.06); }
+  .selected-option-list { display: flex; flex-direction: column; gap: 8px; }
+  .selected-option-card {
+    display: flex;
+    align-items: flex-start;
+    gap: 12px;
+    padding: 12px 14px;
+    background: var(--cs-white);
+    border: 1px solid var(--cs-border);
+    border-radius: var(--cms-radius-md);
+  }
+  .selected-option-thumb {
+    width: 64px; height: 48px;
+    object-fit: cover;
+    border-radius: var(--radius-sm);
+    flex-shrink: 0;
+  }
+  .selected-option-thumb--empty {
+    background: var(--cs-surface-gray);
+    display: flex; align-items: center; justify-content: center;
+    font: var(--text-pc-script-12); color: var(--cs-text-light);
+  }
+  .selected-option-info { flex: 1; min-width: 0; }
+  .selected-option-name { font: var(--text-pc-body-14); color: var(--cs-text); margin: 0 0 2px; }
+  .selected-option-meta { font: var(--text-pc-script-12); color: var(--cs-text-mid); margin: 0 0 6px; }
+  .selected-option-cbs { display: flex; flex-wrap: wrap; gap: 14px; }
+  .remove-btn {
+    background: none; border: none; cursor: pointer;
+    color: var(--cs-text-light); font-size: 14px;
+    min-width: 44px; min-height: 44px;
+    display: flex; align-items: center; justify-content: center;
+    flex-shrink: 0;
+  }
+  .remove-btn:hover { color: var(--cs-red-badge); }
+  .no-option-msg { font: var(--text-pc-script-12); color: var(--cs-text-light); padding: 20px 0; text-align: center; margin: 0; }
+
+  /* ─── specs 드래그 ─────────────────────────────── */
+  .specs-drag-list { gap: 4px; }
+  .spec-row-inner {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex: 1;
+    min-width: 0;
+  }
 </style>

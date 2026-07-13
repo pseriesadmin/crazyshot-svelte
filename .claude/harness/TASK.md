@@ -285,8 +285,35 @@ plan_source: 세션 내 설계 (품번 정책 확정)
 - CMS 프로모션 Phase 1 완료 (T1 GNB/T2 DB #45~#51/T3 홍보/T4 쿠폰/T5 포인트/T6 홈배너)
 - CMS 프로모션 Phase 2 완료 (DB #52~#55/behaviorTracker/세그먼트 페이지/API)
 
+## DONE — T9 AdminChatPanel (2026-07-09 완료) ✅
+
+- [x] T9-1: /cms/chat 라우트 — +page.server.ts + +page.svelte 기완성 확인
+- [x] T9-2: AdminChatPanel.svelte — 3탭(open/pending/closed) + Realtime + 메시지 전송 + 닫기 기완성
+- [x] T9-3: CMS GNB 채팅 서브메뉴 — layout.svelte 라인 78에 이미 연결됨 ('/cms/chat')
+- [x] TYPE ERRORS: svelte-check 8→0 수정 완료 (similarNameSuggest, codes +page.server.ts, products/new +page.svelte)
+
+---
+
+## NEXT — 우선순위 로드맵 (2026-07-09 확정)
+
+### ① T9 AdminChatPanel (현재 진행 중 — 위 참조)
+- 사유: PRD.1.7 채팅 시스템 API·컴포넌트 완료, 관리자 화면만 미구현
+- 시범서비스 오픈 시 고객 CS 대응 불가 → 즉시 해제 필요
+
+### ② S1-M5 Shipments (T9 완료 후)
+- 배송방법 선택(epost/CJ/quick/locker/pickup/두발히어로) + 마감시간 UI
+- 예약 플로우 완성에 직결 — rental.md 배송 마감 기준 적용
+- 배송비 계산 (CRAZY 등급 무료) + 운송장 추적 연동
+
+### ③ S1-M4 Subscriptions (M5 완료 후)
+- 멤버십 등급(CRAZY/PRO/BASIC) + 크레이지스코어 보증금 감면
+- 구독 결제 흐름 + TossPayments 정기결제 연동
+- 가장 복잡도 높음 → M5 이후 충분한 컨텍스트 확보 후 진행
+
+---
+
 ## BLOCKED
-- T9: AdminChatPanel + admin 레이아웃 미구축 (별도 일정 확정 후 진행)
+~~T9: AdminChatPanel~~ → NOW로 이동 (2026-07-09 해제)
 
 ## BACKLOG
 
@@ -294,10 +321,7 @@ plan_source: 세션 내 설계 (품번 정책 확정)
 - BL-① category_taxonomy_map 기본 매핑 입력 | SPT/MON/PWR/MED/STD/VID product_category 연결 — 현재 null로 Fallback 2 적용 중 | Migration으로 일괄 처리 필요
 - BL-② edit/+page.server.ts category 변경 시 품번 재발행 정책 결정 | Stephen 결정 필요 | 현재 최초 등록 시만 발행
 - BL-③ M3 예약코드 구현 시 cms_settings product_code_format 키 분리 | 현재 reservation_code_format 공용
-
-### 다음 모듈 (대규모)
-- S1-M4: Subscriptions (GSD) — 멤버십 등급 + 구독 결제 흐름
-- S1-M5: Shipments (GSD) — 배송 정보 입력·추적·마감 시간 UI
+- BL-④ combo_keywords → 상품 검색 태그 자동 제안 연동 (products/new 미활용 상태)
 
 ### 기타
 - 카카오 알림톡 fallback (PRD.1.7.7)

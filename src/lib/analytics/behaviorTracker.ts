@@ -52,8 +52,8 @@ export async function trackEvent(
     data: { user },
   } = await supabase.auth.getUser()
 
-  // track_behavior_event RPC는 자동생성 타입 미포함 — unknown 경유 우회
-  const rpc = supabase.rpc as unknown as (fn: string, args: Record<string, unknown>) => Promise<unknown>
+  // track_behavior_event RPC는 자동생성 타입 미포함 — bind로 this 보존 후 우회
+  const rpc = supabase.rpc.bind(supabase) as unknown as (fn: string, args: Record<string, unknown>) => Promise<unknown>
   await rpc('track_behavior_event', {
     p_user_id:    user?.id ?? null,
     p_session_id: getSessionId(),

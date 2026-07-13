@@ -1,8 +1,14 @@
-# uiux.md — CrazyShot UI/UX 디자인 시스템 v1.0
-# Harness Flow v3.2 | 정본 (클로드 + 커서 공통 참조)
+# uiux.md — CrazyShot 공통 디자인 시스템 토큰 정본 v1.0
+# Harness Flow v3.2 | 공통 CSS 변수·토큰 정본 (클로드 + 커서 공통 참조)
 # 소스: Figma variables.json + Figma Make 0701OrderList
 # 커서 자동 로딩: .cursor/rules/uiux.mdc (래퍼) → 이 파일을 참조
 
+> ⚠️ 이 파일은 src/app.css에 정의된 공통 CSS 변수·토큰 정본이다.
+> 화면별 구현 지침은 아래 전용 파일을 참조할 것:
+>
+> - 사용자(USER) 화면 → `.claude/rules/front-uiux.md`
+> - CMS 화면         → `.claude/rules/cms-uiux.md`
+>
 > 모든 CSS 값은 `src/app.css`의 CSS 변수를 통해 참조한다. 하드코딩 금지.
 
 ---

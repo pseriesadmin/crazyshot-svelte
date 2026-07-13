@@ -2,10 +2,21 @@
   import { enhance } from '$app/forms'
   import { supabase } from '$lib/services/supabase'
   import { csToast } from '$lib/utils/toast'
-  import type { ActionData } from './$types'
+  import CmsSimilarNameInput from '$lib/components/cms/CmsSimilarNameInput.svelte'
+  import CmsSuggestPicker from '$lib/components/cms/CmsSuggestPicker.svelte'
+  import CmsContentEditor from '$lib/components/cms/CmsContentEditor.svelte'
+  import type { ContentBlock } from '$lib/types/content-editor'
+  import type { SimilarNameItem } from '$lib/types/cms-similar-name'
+  import type { SuggestPickerOption } from '$lib/types/cms-suggest-picker'
+  import { productSearchOrFilter } from '$lib/utils/similarNameSuggest'
+  import { resizeProductImage } from '$lib/utils/imageResize'
+  import { buildPreview, datePart } from '../../codes/_shared'
+  import type { CodeFormat } from '../../codes/+page.server'
+  import type { PageData, ActionData } from './$types'
+  import type { MappingGroupSimple, MappingItemSimple, TaxonomyCodeSimple } from './+page.server'
 
-  interface Props { form: ActionData }
-  let { form }: Props = $props()
+  interface Props { data: PageData; form: ActionData }
+  let { data, form }: Props = $props()
 
   type FormResult = { error?: string } | null
 
@@ -70,7 +81,7 @@
     const { data, error: err } = await supabase
       .from('products')
       .select<string, ProductSearchRow>('id, name, stock_quantity, image_urls, price_rules(price, duration_type)')
-      .ilike('name', `%${kw}%`)
+      .or(productSearchOrFilter(kw))
       .eq('is_active', true)
       .is('deleted_at', null)
       .limit(20)
@@ -83,6 +94,10 @@
       image_url: p.image_urls[0] ?? null,
       price_24h: p.price_rules.find((r) => r.duration_type === '24h')?.price ?? 0,
     }))
+  }
+
+  function onOptionSuggestSelect() {
+    void searchOptionProducts()
   }
 
   function addOptionProduct(item: OptionSearchResult) {
@@ -134,12 +149,253 @@
   }
   // ────────────────────────────────────────────────────────────
 
+  // ── 조합그룹 / 콤보 선택 ─────────────────────────────────────────────────
+  interface ComboRow {
+    combo_row_id: string
+    combo_name: string | null
+    date_option: 'none' | 'ym' | 'ymd'
+    max_sequence: number
+    codes: TaxonomyCodeSimple[]
+  }
+
+  let selectedGroupId    = $state<string | null>(null)
+  let selectedComboRowId = $state<string | null>(null)
+  let comboNameByRowId   = $state<Record<string, string | null>>({})
+
+  const DEFAULT_CODE_FORMAT: CodeFormat = {
+    prefix: 'CS',
+    date_format: 'YYMM',
+    seq_digits: 3,
+    reset_monthly: true,
+    suffix: '',
+  }
+  let codeFormat = $state<CodeFormat>(DEFAULT_CODE_FORMAT)
+  let codeRuleById = $state<Record<string, Record<string, unknown> | null>>({})
+
+  $effect(() => {
+    const codeIds = [...new Set((data.mappingItems as MappingItemSimple[]).map((i) => i.taxonomy_code_id))]
+    void (async () => {
+      try {
+        type CodeRuleRow = { id: string; code_rule: Record<string, unknown> | null }
+        type SettingRow = { value: unknown } | null
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const fmtPromise = (supabase as any).from('cms_settings').select('value').eq('key', 'reservation_code_format').maybeSingle() as Promise<{ data: SettingRow; error: unknown }>
+        const codesPromise: Promise<{ data: CodeRuleRow[] | null; error: unknown }> = codeIds.length > 0
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          ? (supabase as any).from('product_category_codes').select('id, code_rule').in('id', codeIds)
+          : Promise.resolve({ data: [] as CodeRuleRow[], error: null })
+        const [{ data: fmtRow }, codesRes] = await Promise.all([fmtPromise, codesPromise])
+        if (fmtRow?.value && typeof fmtRow.value === 'object') {
+          codeFormat = { ...DEFAULT_CODE_FORMAT, ...(fmtRow.value as CodeFormat) }
+        }
+        const map: Record<string, Record<string, unknown> | null> = {}
+        for (const row of codesRes.data ?? []) {
+          map[row.id] = row.code_rule
+        }
+        codeRuleById = map
+      } catch {
+        /* 기본 포맷 유지 */
+      }
+    })()
+  })
+
+  $effect(() => {
+    const items = data.mappingItems as MappingItemSimple[]
+    const rowIds = [...new Set(items.map((i) => i.combo_row_id))]
+    if (rowIds.length === 0) {
+      comboNameByRowId = {}
+      return
+    }
+    void (async () => {
+      try {
+        type ComboNameRow = { combo_row_id: string; combo_name: string | null }
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const { data: rows } = await (supabase as any)
+          .from('code_mapping_items')
+          .select('combo_row_id, combo_name')
+          .in('combo_row_id', rowIds) as { data: ComboNameRow[] | null }
+        const map: Record<string, string | null> = {}
+        for (const row of rows ?? []) {
+          if (!(row.combo_row_id in map)) {
+            map[row.combo_row_id] = row.combo_name
+          }
+        }
+        comboNameByRowId = map
+      } catch {
+        comboNameByRowId = {}
+      }
+    })()
+  })
+
+  function comboCatCodeStr(codes: TaxonomyCodeSimple[]): string {
+    return codes
+      .map((c) => c.code)
+      .filter(Boolean)
+      .join('')
+      .toUpperCase()
+  }
+
+  function comboPreviewFmt(combo: ComboRow): CodeFormat {
+    const root = combo.codes.find((c) => c.depth === 0) ?? combo.codes[0]
+    const rootRule = root ? codeRuleById[root.id] : null
+    let date_format: CodeFormat['date_format'] = codeFormat.date_format ?? 'YYMM'
+    if (combo.date_option === 'none') date_format = 'NONE'
+    else if (combo.date_option === 'ym') date_format = codeFormat.date_format ?? 'YYMM'
+    else if (combo.date_option === 'ymd') date_format = 'YYYYMMDD'
+    return {
+      ...codeFormat,
+      ...(rootRule?.prefix ? { prefix: rootRule.prefix as string } : {}),
+      date_format,
+      seq_digits: combo.max_sequence ? String(combo.max_sequence).length : (codeFormat.seq_digits ?? 3),
+    }
+  }
+
+  function buildComboPreview(combo: ComboRow): string {
+    const catCode = comboCatCodeStr(combo.codes)
+    if (!catCode) return '—'
+    const fmt = comboPreviewFmt(combo)
+    if (combo.date_option === 'ymd') {
+      const now = new Date()
+      const yyyy = String(now.getFullYear())
+      const mm = String(now.getMonth() + 1).padStart(2, '0')
+      const dd = String(now.getDate()).padStart(2, '0')
+      const prefix = (fmt.prefix ?? 'CS').trim().toUpperCase()
+      const seqDigits = fmt.seq_digits ?? 3
+      const suffix = (fmt.suffix ?? '').trim().toUpperCase()
+      const s = '1'.padStart(seqDigits, '0')
+      return `${prefix || 'CS'}${catCode}${yyyy}${mm}${dd}${s}${suffix}`
+    }
+    return buildPreview(catCode, fmt)
+  }
+
+  function comboPrefix(combo: ComboRow): string {
+    return (comboPreviewFmt(combo).prefix ?? 'CS').trim().toUpperCase() || 'CS'
+  }
+
+  function comboDatePart(combo: ComboRow): string | null {
+    if (combo.date_option === 'none') return null
+    const fmt = comboPreviewFmt(combo)
+    if (combo.date_option === 'ymd') {
+      const now = new Date()
+      return `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, '0')}${String(now.getDate()).padStart(2, '0')}`
+    }
+    const df = fmt.date_format ?? 'YYMM'
+    if (df === 'YYYYMMDD') {
+      const now = new Date()
+      return `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, '0')}${String(now.getDate()).padStart(2, '0')}`
+    }
+    return datePart(df === 'YYYYMM' ? 'YYYYMM' : 'YYMM')
+  }
+
+  function comboSeqMax(combo: ComboRow): string {
+    const digits = String(combo.max_sequence).length || 3
+    return String(combo.max_sequence).padStart(digits, '0')
+  }
+
+  let combosForGroup = $derived<ComboRow[]>(
+    selectedGroupId
+      ? (() => {
+          const items = (data.mappingItems as MappingItemSimple[]).filter(i => i.group_id === selectedGroupId)
+          const rowIds = [...new Set(items.map(i => i.combo_row_id))]
+          return rowIds.map(rid => {
+            const rowItems = items.filter(i => i.combo_row_id === rid)
+            const first = rowItems[0]
+            const codes = rowItems
+              .map(i => (data.taxonomyCodes as TaxonomyCodeSimple[]).find(tc => tc.id === i.taxonomy_code_id))
+              .filter((tc): tc is TaxonomyCodeSimple => tc !== undefined)
+              .sort((a, b) => a.depth - b.depth)
+            return {
+              combo_row_id: rid,
+              combo_name: comboNameByRowId[rid] ?? null,
+              date_option: first.date_option,
+              max_sequence: first.max_sequence,
+              codes,
+            }
+          })
+        })()
+      : []
+  )
+
+  function onGroupChange() {
+    selectedComboRowId = null
+    category = ''
+  }
+
+  const CATEGORY_LABELS: Record<string, string> = Object.fromEntries(
+    CATEGORIES.map((c) => [c.value, c.label])
+  )
+
+  let groupPickerOptions = $derived<SuggestPickerOption[]>(
+    (data.mappingGroups as MappingGroupSimple[]).map((mg) => ({
+      id: mg.id,
+      label: mg.name,
+      meta: [
+        mg.description,
+        mg.default_category ? (CATEGORY_LABELS[mg.default_category] ?? mg.default_category) : null,
+      ].filter((v): v is string => Boolean(v)),
+    }))
+  )
+
+  function onGroupPickerSelect(opt: SuggestPickerOption, previousId: string | null) {
+    if (opt.id !== previousId) onGroupChange()
+  }
+
+  function onGroupPickerInput(val: string) {
+    if (!val.trim() && selectedGroupId) {
+      selectedGroupId = null
+      onGroupChange()
+    }
+  }
+
+  function selectCombo(combo: ComboRow) {
+    selectedComboRowId = combo.combo_row_id
+    const codeWithCat = combo.codes.find(tc => tc.product_category)
+    const cat = codeWithCat?.product_category ?? ''
+    if (cat) {
+      category = cat
+      if (nameVal) slugVal = autoSlug(nameVal, cat)
+    }
+  }
+  // ─────────────────────────────────────────────────────────────────────────
+
   let isLoading = $state(false)
   let isActive = $state(true)
+  let saleOnly = $state(false)
   let category = $state('')
+
+  type PriceField = 'price_12h' | 'price_24h' | 'price_monthly' | 'sale_price' | 'deposit_amount' | 'late_fee_per_hour'
+  let localPricing = $state<Record<PriceField, string>>({
+    price_12h: '',
+    price_24h: '',
+    price_monthly: '',
+    sale_price: '',
+    deposit_amount: '',
+    late_fee_per_hour: '',
+  })
+
+  function handlePriceInput(field: PriceField, raw: string): void {
+    const digits = raw.replace(/[^0-9]/g, '')
+    const num = parseInt(digits, 10)
+    localPricing[field] = num ? num.toLocaleString('ko-KR') : ''
+  }
+
+  function priceSubmitValue(field: PriceField): string {
+    return localPricing[field].replace(/,/g, '')
+  }
   let nameVal = $state('')
+  let brandVal = $state('')
+  let captionVal = $state('')
   let slugVal = $state('')
-  let imageUrls = $state<string[]>([''])
+  let imageUrls = $state<string[]>([])
+  const tempId = globalThis.crypto.randomUUID()
+  let isUploading = $state(false)
+  let uploadError = $state<string | null>(null)
+  let isDragging = $state(false)
+  let dragCounter = $state(0)
+  let showUrlInput = $state(false)
+  let urlInputVal = $state('')
+  let fileInputEl = $state<HTMLInputElement | null>(null)
+  let lightboxUrl = $state<string | null>(null)
   let specs = $state<{ key: string; value: string }[]>([{ key: '', value: '' }])
 
   let result = $derived(form as FormResult)
@@ -161,17 +417,98 @@
     return parts.join('-').slice(0, 200)
   }
 
-  function onNameInput() {
-    if (!slugVal || slugVal === autoSlug(nameVal.slice(0, -1), category)) {
-      slugVal = autoSlug(nameVal, category)
+  function onNameInput(val: string) {
+    if (!slugVal || slugVal === autoSlug(val.slice(0, -1), category)) {
+      slugVal = autoSlug(val, category)
+    }
+  }
+
+  function onNameSelect(item: SimilarNameItem, previousValue: string) {
+    const prevAuto = autoSlug(previousValue, category)
+    if (!slugVal || slugVal === prevAuto) {
+      slugVal = autoSlug(item.name, category)
     }
   }
   function onCategoryChange() {
     if (nameVal) slugVal = autoSlug(nameVal, category)
   }
 
-  function addImage() { imageUrls = [...imageUrls, ''] }
-  function removeImage(i: number) { imageUrls = imageUrls.filter((_, idx) => idx !== i) }
+  async function uploadFile(file: File): Promise<string | null> {
+    isUploading = true
+    uploadError = null
+    try {
+      const { thumb, large } = await resizeProductImage(file)
+      const fd = new FormData()
+      fd.append('product_id', 'temp/' + tempId) // '/' 포함 → append_product_image_url RPC 스킵
+      fd.append('thumb', new File([thumb], 'thumb.webp', { type: 'image/webp' }))
+      fd.append('large', new File([large], 'large.webp', { type: 'image/webp' }))
+      const res = await fetch('/api/cms/upload', { method: 'POST', body: fd })
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}))
+        uploadError = (err as { message?: string }).message ?? '업로드 실패'
+        return null
+      }
+      const data = await res.json() as { largeUrl: string }
+      return data.largeUrl
+    } catch (e) {
+      uploadError = e instanceof Error ? e.message : '업로드 실패'
+      return null
+    } finally {
+      isUploading = false
+    }
+  }
+
+  async function handleFilesUpload(files: FileList | File[]) {
+    for (const file of Array.from(files)) {
+      if (imageUrls.filter(Boolean).length >= 8) break
+      const url = await uploadFile(file)
+      if (url) imageUrls = [...imageUrls.filter(Boolean), url]
+    }
+  }
+
+  function handleDragEnter(e: DragEvent) { e.preventDefault(); dragCounter++; isDragging = true }
+  function handleDragLeave() { dragCounter--; if (dragCounter <= 0) { dragCounter = 0; isDragging = false } }
+  function handleDragOver(e: DragEvent) { e.preventDefault() }
+  function handleDrop(e: DragEvent) {
+    e.preventDefault(); dragCounter = 0; isDragging = false
+    const files = e.dataTransfer?.files
+    if (files?.length) handleFilesUpload(files)
+  }
+  function triggerFileInput(e: MouseEvent) {
+    if ((e.target as HTMLElement).closest('.dz-url-btn')) return
+    fileInputEl?.click()
+  }
+  function handleFileSelect(e: Event) {
+    const files = (e.target as HTMLInputElement).files
+    if (files?.length) handleFilesUpload(files)
+    ;(e.target as HTMLInputElement).value = ''
+  }
+  function toggleUrlInput(e: MouseEvent) { e.stopPropagation(); showUrlInput = !showUrlInput; urlInputVal = '' }
+  function addByUrl() {
+    const url = urlInputVal.trim()
+    if (!url || imageUrls.filter(Boolean).length >= 8) return
+    imageUrls = [...imageUrls.filter(Boolean), url]
+    urlInputVal = ''
+    showUrlInput = false
+  }
+  function removeImage(i: number) {
+    const list = imageUrls.filter(Boolean)
+    const removed = list[i]
+    imageUrls = list.filter((_, idx) => idx !== i)
+    if (removed) {
+      fetch('/api/cms/upload', {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ largeUrl: removed }),
+      }).catch(() => {})
+    }
+  }
+  function openLightbox(url: string) { lightboxUrl = url }
+  function closeLightbox() { lightboxUrl = null }
+
+  // ── 콘텐츠 에디터 ──────────────────────────────────
+  let contentBlocks = $state<ContentBlock[]>([])
+  let contentKeywords = $state<string[]>([])
 
   function addSpec() { specs = [...specs, { key: '', value: '' }] }
   function removeSpec(i: number) { specs = specs.filter((_, idx) => idx !== i) }
@@ -188,8 +525,9 @@
     return JSON.stringify(imageUrls.filter(Boolean))
   }
 
-  function thumbPreview(url: string): string {
+  function thumbUrl(url: string): string {
     if (!url) return ''
+    if (url.includes('/large_')) return url.replace('/large_', '/thumb_')
     if (url.startsWith('http')) return url
     return `https://res.cloudinary.com/crazyshot/image/upload/w_120,h_90,c_fill,f_auto,q_auto/${url}.jpg`
   }
@@ -204,11 +542,6 @@
 <svelte:head><title>상품등록 — CrazyShot CMS</title></svelte:head>
 
 <div class="form-wrap">
-  <div class="form-header">
-    <a href="/cms/products" class="back-link">← 목록으로</a>
-    <h1 class="page-title">상품 등록</h1>
-  </div>
-
   {#if result?.error}
     <div class="error-banner" role="alert">{result.error}</div>
   {/if}
@@ -233,54 +566,202 @@
       <h2 class="section-title">① 기본정보</h2>
 
       <div class="field-row">
-        <label class="field-label" for="category">카테고리 <span class="required">*</span></label>
-        <select
-          id="category"
-          name="category"
-          class="f-input f-select"
-          bind:value={category}
-          onchange={onCategoryChange}
+        {#if (data.mappingGroups as MappingGroupSimple[]).length > 0}
+          <CmsSuggestPicker
+            id="cat-group-sel"
+            bind:selectedId={selectedGroupId}
+            options={groupPickerOptions}
+            placeholder="분류선택-조합그룹 검색 또는 선택..."
+            listLabel="조합그룹 제안"
+            oninput={onGroupPickerInput}
+            onselect={onGroupPickerSelect}
+            required
+          >
+            {#snippet field(c)}
+              <input
+                type="text"
+                class="f-input"
+                id={c.id}
+                placeholder={c.placeholder}
+                required={c.required}
+                aria-label="분류선택 (필수)"
+                value={c.value}
+                oninput={c.oninput}
+                onkeydown={c.onkeydown}
+                onfocus={c.onfocus}
+                onblur={c.onblur}
+                aria-autocomplete={c.ariaAutocomplete}
+                aria-expanded={c.ariaExpanded}
+                aria-controls={c.ariaControls}
+                autocomplete="off"
+              />
+            {/snippet}
+          </CmsSuggestPicker>
+
+          <!-- 폼 전송용 hidden 필드 -->
+          {#if category}
+            <input type="hidden" name="category" value={category} />
+          {/if}
+          {#if selectedGroupId}
+            <input type="hidden" name="group_id" value={selectedGroupId} />
+          {/if}
+          {#if selectedComboRowId}
+            <input type="hidden" name="combo_row_id" value={selectedComboRowId} />
+          {/if}
+        {:else}
+          <!-- 그룹 미등록 시 기존 카테고리 선택 -->
+          <select
+            id="cat-group-sel"
+            name="category"
+            class="f-input f-select"
+            bind:value={category}
+            onchange={onCategoryChange}
+            aria-label="분류선택 (필수)"
+            required
+          >
+            <option value="">분류선택-카테고리 선택</option>
+            {#each CATEGORIES as cat}
+              <option value={cat.value}>{cat.label}</option>
+            {/each}
+          </select>
+        {/if}
+      </div>
+
+      {#if (data.mappingGroups as MappingGroupSimple[]).length > 0 && selectedGroupId}
+        <div class="field-row field-row-combo">
+          <div class="field-label">코드 조합 <span class="required">*</span></div>
+          {#if combosForGroup.length > 0}
+            <div class="combo-rows">
+              {#each combosForGroup as combo (combo.combo_row_id)}
+                <button
+                  type="button"
+                  class="combo-row-btn"
+                  class:combo-row-selected={selectedComboRowId === combo.combo_row_id}
+                  onclick={() => selectCombo(combo)}
+                  title={buildComboPreview(combo)}
+                >
+                  {#if combo.combo_name}
+                    <span class="combo-name-label">{combo.combo_name}</span>
+                  {/if}
+                  <span class="combo-row-chips">
+                    <span class="combo-prefix-chip">{comboPrefix(combo)}</span>
+                    <span class="combo-sep">·</span>
+                    <span class="combo-chips">
+                      {#each combo.codes as tc, i}
+                        {#if i > 0}<span class="combo-sep">·</span>{/if}
+                        <span class="combo-chip">{tc.code}</span>
+                      {/each}
+                    </span>
+                    {#if comboDatePart(combo)}
+                      <span class="combo-sep">·</span>
+                      <span class="combo-meta-chip combo-ym-chip" title="등록일 기준 년월">
+                        {comboDatePart(combo)}
+                      </span>
+                    {/if}
+                    <span class="combo-sep">·</span>
+                    <span class="combo-meta-chip combo-seq-chip" title="순번 상한">
+                      ~{comboSeqMax(combo)}
+                    </span>
+                  </span>
+                </button>
+              {/each}
+            </div>
+          {:else}
+            <p class="combo-empty">이 그룹에 등록된 조합이 없습니다.</p>
+          {/if}
+        </div>
+      {/if}
+
+      <div class="field-row">
+        <CmsSimilarNameInput
+          id="name"
+          name="name"
+          bind:value={nameVal}
+          placeholder="상품명-예: Sony FX3 Full-Frame Cinema Camera"
+          categoryLabels={CATEGORY_LABELS}
+          oninput={onNameInput}
+          onselect={onNameSelect}
           required
         >
-          <option value="">카테고리 선택</option>
-          {#each CATEGORIES as cat}
-            <option value={cat.value}>{cat.label}</option>
-          {/each}
-        </select>
+          {#snippet field(c)}
+            <input
+              type="text"
+              class="f-input"
+              id={c.id}
+              name={c.name}
+              placeholder={c.placeholder}
+              required={c.required}
+              aria-label="상품명 (필수)"
+              value={c.value}
+              oninput={c.oninput}
+              onkeydown={c.onkeydown}
+              onfocus={c.onfocus}
+              onblur={c.onblur}
+              aria-autocomplete={c.ariaAutocomplete}
+              aria-expanded={c.ariaExpanded}
+              aria-controls={c.ariaControls}
+              autocomplete="off"
+            />
+          {/snippet}
+        </CmsSimilarNameInput>
       </div>
 
       <div class="field-row">
-        <label class="field-label" for="name">상품명 <span class="required">*</span></label>
+        <CmsSimilarNameInput
+          id="brand"
+          name="brand"
+          bind:value={brandVal}
+          source="brand"
+          placeholder="브랜드-예: Sony"
+          categoryLabels={CATEGORY_LABELS}
+          minChars={1}
+        >
+          {#snippet field(c)}
+            <input
+              type="text"
+              class="f-input"
+              id={c.id}
+              name={c.name}
+              placeholder={c.placeholder}
+              required={c.required}
+              aria-label="브랜드"
+              value={c.value}
+              oninput={c.oninput}
+              onkeydown={c.onkeydown}
+              onfocus={c.onfocus}
+              onblur={c.onblur}
+              aria-autocomplete={c.ariaAutocomplete}
+              aria-expanded={c.ariaExpanded}
+              aria-controls={c.ariaControls}
+              autocomplete="off"
+            />
+          {/snippet}
+        </CmsSimilarNameInput>
+      </div>
+
+      <div class="field-row">
         <input
-          id="name"
-          name="name"
+          id="product_caption"
+          name="caption"
           type="text"
           class="f-input"
-          placeholder="예: Sony FX3 Full-Frame Cinema Camera"
-          bind:value={nameVal}
-          oninput={onNameInput}
-          required
+          placeholder="상품카피-예: 4K 풀프레임 시네마"
+          aria-label="상품카피 — 상품명 아래 노출, 20자 이내 (한·영·숫자)"
+          bind:value={captionVal}
+          maxlength="20"
         />
       </div>
 
       <div class="field-row">
-        <label class="field-label" for="brand">브랜드</label>
-        <input id="brand" name="brand" type="text" class="f-input" placeholder="예: Sony" />
-      </div>
-
-      <div class="field-row">
-        <label class="field-label" for="slug">
-          슬러그 <span class="required">*</span>
-          <span class="field-hint">URL에 사용됩니다 — 영문·숫자·하이픈만</span>
-        </label>
         <input
           id="slug"
           name="slug"
           type="text"
           class="f-input"
-          placeholder="예: sony-fx3-2607"
+          placeholder="슬러그-예: sony-fx3-2607"
+          aria-label="슬러그 (필수) — URL에 사용됩니다, 영문·숫자·하이픈만"
           bind:value={slugVal}
-          pattern="[a-z0-9-]+"
+          pattern="[a-z0-9\-]+"
           required
         />
       </div>
@@ -307,31 +788,28 @@
     <section class="form-section">
       <h2 class="section-title">② 상품 설명 & 스펙</h2>
 
+      <!-- 콘텐츠 에디터 -->
       <div class="field-row">
-        <label class="field-label" for="description">상품 설명</label>
-        <textarea
-          id="description"
-          name="description"
-          class="f-input f-textarea"
-          placeholder="상품 특징, 구성품, 주의사항 등을 입력해주세요."
-          rows={4}
-        ></textarea>
+        <CmsContentEditor bind:blocks={contentBlocks} bind:keywords={contentKeywords} />
+        <!-- 직렬화 hidden inputs -->
+        <input type="hidden" name="content_blocks" value={JSON.stringify(contentBlocks)} />
+        <input type="hidden" name="keywords" value={JSON.stringify(contentKeywords)} />
       </div>
 
+      <!-- 스펙 (키-값 구조형) -->
       <div class="field-row">
-        <div class="field-label">
-          스펙 항목
-          <span class="field-hint">키-값 형식으로 입력 — JSON으로 저장됩니다</span>
-        </div>
+        <label class="field-label">기술 스펙 (항목-값)</label>
         <div class="spec-list">
           {#each specs as spec, i (i)}
             <div class="spec-row">
               <input
                 type="text"
                 class="f-input spec-key"
-                placeholder="항목명 (예: 센서)"
+                placeholder={i === 0 ? '스펙 항목-항목명 (예: 센서)' : '항목명 (예: 센서)'}
                 bind:value={spec.key}
-                aria-label={`스펙 항목명 ${i + 1}`}
+                aria-label={i === 0
+                  ? '스펙 항목 — 키-값 형식으로 입력, JSON으로 저장됩니다'
+                  : `스펙 항목명 ${i + 1}`}
               />
               <input
                 type="text"
@@ -361,14 +839,43 @@
 
       <!-- 검색 입력폼 -->
       <div class="option-search-row">
-        <input
-          class="f-input option-search-input"
-          type="text"
-          placeholder="상품명 또는 키워드 입력 후 검색..."
-          bind:value={optionKeyword}
-          onkeydown={(e) => { if (e.key === 'Enter') { e.preventDefault(); searchOptionProducts() } }}
-          aria-label="옵션상품 검색"
-        />
+        <div class="option-search-field">
+          <CmsSimilarNameInput
+            id="option-search"
+            bind:value={optionKeyword}
+            source="product_search"
+            activeOnly={true}
+            placeholder="상품명 또는 키워드 입력 후 검색..."
+            categoryLabels={CATEGORY_LABELS}
+            onselect={onOptionSuggestSelect}
+          >
+            {#snippet field(c)}
+              <input
+                type="text"
+                class="f-input option-search-input"
+                id={c.id}
+                placeholder={c.placeholder}
+                required={c.required}
+                value={c.value}
+                oninput={c.oninput}
+                onkeydown={(e) => {
+                  c.onkeydown(e)
+                  if (e.key === 'Enter' && !e.defaultPrevented) {
+                    e.preventDefault()
+                    void searchOptionProducts()
+                  }
+                }}
+                onfocus={c.onfocus}
+                onblur={c.onblur}
+                aria-label="옵션상품 검색"
+                aria-autocomplete={c.ariaAutocomplete}
+                aria-expanded={c.ariaExpanded}
+                aria-controls={c.ariaControls}
+                autocomplete="off"
+              />
+            {/snippet}
+          </CmsSimilarNameInput>
+        </div>
         <button type="button" class="btn-search" onclick={searchOptionProducts} disabled={optionSearching}>
           {optionSearching ? '검색 중...' : '검색'}
         </button>
@@ -529,78 +1036,209 @@
       <p class="section-desc">24시간 가격은 필수입니다. 미입력 시 해당 유형 가격정책은 생성되지 않습니다.</p>
 
       <div class="price-grid">
-        <div class="field-row">
-          <label class="field-label" for="price_12h">12시간 가격 (원)</label>
-          <input id="price_12h" name="price_12h" type="number" class="f-input" placeholder="예: 45000" min="0" step="1000" />
+        <div class="field-row" class:row-disabled={saleOnly}>
+          <input
+            id="price_12h"
+            type="text"
+            inputmode="numeric"
+            class="f-input"
+            placeholder="12시간 가격 (원)-예: 45,000"
+            aria-label="12시간 가격 (원)"
+            disabled={saleOnly}
+            value={localPricing.price_12h}
+            oninput={(e) => handlePriceInput('price_12h', e.currentTarget.value)}
+          />
+        </div>
+        <div class="field-row" class:row-disabled={saleOnly}>
+          <input
+            id="price_24h"
+            type="text"
+            inputmode="numeric"
+            class="f-input"
+            placeholder="24시간 가격 (원)-예: 85,000"
+            aria-label="24시간 가격 (원) (필수)"
+            disabled={saleOnly}
+            value={localPricing.price_24h}
+            oninput={(e) => handlePriceInput('price_24h', e.currentTarget.value)}
+          />
+        </div>
+        <div class="field-row" class:row-disabled={saleOnly}>
+          <input
+            id="price_monthly"
+            type="text"
+            inputmode="numeric"
+            class="f-input"
+            placeholder="월정액 가격 (원)-예: 1,200,000"
+            aria-label="월정액 가격 (원)"
+            disabled={saleOnly}
+            value={localPricing.price_monthly}
+            oninput={(e) => handlePriceInput('price_monthly', e.currentTarget.value)}
+          />
         </div>
         <div class="field-row">
-          <label class="field-label" for="price_24h">24시간 가격 (원) <span class="required">*</span></label>
-          <input id="price_24h" name="price_24h" type="number" class="f-input" placeholder="예: 85000" min="0" step="1000" />
-        </div>
-        <div class="field-row">
-          <label class="field-label" for="price_monthly">월정액 가격 (원)</label>
-          <input id="price_monthly" name="price_monthly" type="number" class="f-input" placeholder="예: 1200000" min="0" step="10000" />
+          <div class="price-input-row">
+            <input
+              id="sale_price"
+              type="text"
+              inputmode="numeric"
+              class="f-input"
+              placeholder="판매금액 (원)-예: 3,500,000"
+              aria-label="판매금액 (원)"
+              value={localPricing.sale_price}
+              oninput={(e) => handlePriceInput('sale_price', e.currentTarget.value)}
+            />
+            <label class="sale-only-label">
+              <input
+                type="checkbox"
+                class="sale-only-cb"
+                checked={saleOnly}
+                onchange={(e) => {
+                  saleOnly = e.currentTarget.checked
+                  if (saleOnly) csToast.warning('판매금액만 표시되고 대여 불가능합니다.')
+                }}
+              />
+              <span>판매만 가능</span>
+            </label>
+          </div>
         </div>
       </div>
+      <input type="hidden" name="price_12h" value={priceSubmitValue('price_12h')} />
+      <input type="hidden" name="price_24h" value={priceSubmitValue('price_24h')} />
+      <input type="hidden" name="price_monthly" value={priceSubmitValue('price_monthly')} />
+      <input type="hidden" name="sale_price" value={priceSubmitValue('sale_price')} />
+      <input type="hidden" name="sale_only" value={saleOnly.toString()} />
 
       <div class="price-grid price-grid-3">
-        <div class="field-row">
-          <label class="field-label" for="deposit_amount">보증금 (원)</label>
-          <input id="deposit_amount" name="deposit_amount" type="number" class="f-input" placeholder="예: 500000" min="0" step="10000" />
+        <div class="field-row" class:row-disabled={saleOnly}>
+          <input
+            id="deposit_amount"
+            type="text"
+            inputmode="numeric"
+            class="f-input"
+            placeholder="보증금 (원)-예: 500,000"
+            aria-label="보증금 (원)"
+            disabled={saleOnly}
+            value={localPricing.deposit_amount}
+            oninput={(e) => handlePriceInput('deposit_amount', e.currentTarget.value)}
+          />
         </div>
-        <div class="field-row">
-          <label class="field-label" for="late_fee_per_hour">연체료/시간 (원)</label>
-          <input id="late_fee_per_hour" name="late_fee_per_hour" type="number" class="f-input" placeholder="예: 5000" min="0" />
+        <div class="field-row" class:row-disabled={saleOnly}>
+          <input
+            id="late_fee_per_hour"
+            type="text"
+            inputmode="numeric"
+            class="f-input"
+            placeholder="연체료/시간 (원)-예: 5,000"
+            aria-label="연체료/시간 (원)"
+            disabled={saleOnly}
+            value={localPricing.late_fee_per_hour}
+            oninput={(e) => handlePriceInput('late_fee_per_hour', e.currentTarget.value)}
+          />
         </div>
-        <div class="field-row">
-          <label class="field-label" for="damage_fee_percentage">파손 수수료 (%)</label>
-          <input id="damage_fee_percentage" name="damage_fee_percentage" type="number" class="f-input" placeholder="예: 20" min="0" max="100" step="1" />
+        <div class="field-row" class:row-disabled={saleOnly}>
+          <input
+            id="damage_fee_percentage"
+            name="damage_fee_percentage"
+            type="number"
+            class="f-input"
+            placeholder="파손 수수료 (%)-예: 20"
+            aria-label="파손 수수료 (%)"
+            min="0"
+            max="100"
+            step="1"
+            disabled={saleOnly}
+          />
         </div>
       </div>
+      <input type="hidden" name="deposit_amount" value={priceSubmitValue('deposit_amount')} />
+      <input type="hidden" name="late_fee_per_hour" value={priceSubmitValue('late_fee_per_hour')} />
     </section>
 
     <!-- ⑤ 이미지 -->
     <section class="form-section">
       <h2 class="section-title">⑤ 이미지</h2>
-      <p class="section-desc">Cloudinary Public ID 또는 이미지 URL을 입력하세요. 첫 번째 이미지가 대표 이미지입니다.</p>
+      <p class="section-desc">파일을 드래그하거나 클릭해 업로드하세요. 첫 번째 이미지가 대표 이미지입니다.</p>
 
-      <div class="image-list">
-        {#each imageUrls as url, i}
-          <div class="image-row">
-            <div class="image-preview-wrap">
-              {#if thumbPreview(url)}
-                <img
-                  src={thumbPreview(url)}
-                  alt={`이미지 ${i + 1} 미리보기`}
-                  class="image-preview"
-                  width="80"
-                  height="60"
-                  loading="lazy"
-                />
-              {:else}
-                <div class="image-preview-empty">미리보기</div>
-              {/if}
+      {#if isUploading}
+        <span class="img-status uploading">업로드 중...</span>
+      {:else if uploadError}
+        <span class="img-status error">{uploadError}</span>
+      {/if}
+
+      {#if imageUrls.filter(Boolean).length < 8}
+        <div
+          class="drop-zone"
+          class:drag-over={isDragging}
+          class:uploading={isUploading}
+          role="button"
+          tabindex="0"
+          aria-label="이미지 파일을 드래그하거나 클릭하여 업로드"
+          ondragenter={handleDragEnter}
+          ondragleave={handleDragLeave}
+          ondragover={handleDragOver}
+          ondrop={handleDrop}
+          onclick={triggerFileInput}
+          onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') triggerFileInput(e as unknown as MouseEvent) }}
+        >
+          <input
+            bind:this={fileInputEl}
+            type="file"
+            accept="image/jpeg,image/png,image/webp,image/gif,image/bmp"
+            multiple
+            style="display:none"
+            onchange={handleFileSelect}
+          />
+          <p class="dz-text">이미지를 드래그하거나 클릭하여 업로드</p>
+          <button
+            type="button"
+            class="dz-url-btn"
+            onclick={toggleUrlInput}
+            aria-label="URL로 이미지 추가"
+          >+URL</button>
+        </div>
+      {/if}
+
+      {#if showUrlInput}
+        <div class="url-input-row">
+          <input
+            class="f-input url-field"
+            type="text"
+            placeholder="Cloudinary Public ID 또는 전체 URL"
+            bind:value={urlInputVal}
+            onkeydown={(e) => { if (e.key === 'Enter') addByUrl() }}
+            autofocus
+          />
+          <button type="button" class="btn-url-add" onclick={addByUrl} disabled={!urlInputVal.trim()}>추가</button>
+          <button type="button" class="btn-icon-close" onclick={(e) => { e.stopPropagation(); showUrlInput = false; urlInputVal = '' }} aria-label="URL 입력 닫기">✕</button>
+        </div>
+      {/if}
+
+      {#if imageUrls.filter(Boolean).length > 0}
+        <div class="img-card-grid">
+          {#each imageUrls.filter(Boolean) as url, i}
+            <div class="img-card" class:primary={i === 0} role="group" aria-label={`이미지 ${i + 1}${i === 0 ? ' (대표)' : ''}`}>
+              <button
+                type="button"
+                class="img-card-view"
+                onclick={() => openLightbox(url)}
+                aria-label={`이미지 ${i + 1} 확대 보기`}
+              >
+                <img src={thumbUrl(url)} alt={`이미지 ${i + 1}`} class="img-card-thumb" loading="lazy" />
+                <span class="img-card-overlay">🔍 확대</span>
+              </button>
+              <button
+                type="button"
+                class="img-card-remove"
+                onclick={() => removeImage(i)}
+                aria-label={`이미지 ${i + 1} 제거`}
+                title="이미지 제거"
+              >✕</button>
             </div>
-            <input
-              type="text"
-              class="f-input image-url-input"
-              placeholder={i === 0 ? '대표 이미지 URL 또는 Cloudinary Public ID' : `이미지 ${i + 1} URL`}
-              bind:value={imageUrls[i]}
-              aria-label={`이미지 ${i + 1} URL`}
-            />
-            <button
-              type="button"
-              class="remove-btn"
-              onclick={() => removeImage(i)}
-              aria-label="이미지 삭제"
-              disabled={imageUrls.length === 1}
-            >✕</button>
-          </div>
-        {/each}
-        {#if imageUrls.length < 8}
-          <button type="button" class="add-btn" onclick={addImage}>+ 이미지 추가 (최대 8장)</button>
-        {/if}
-      </div>
+          {/each}
+        </div>
+      {:else}
+        <p class="empty-hint">이미지를 드래그하거나 URL을 추가하세요.</p>
+      {/if}
     </section>
 
     <!-- ⑥ 재고 안내 -->
@@ -627,6 +1265,13 @@
       </button>
     </div>
   </form>
+
+  {#if lightboxUrl}
+    <div class="lightbox-backdrop" onclick={closeLightbox} role="dialog" aria-modal="true" aria-label="이미지 확대">
+      <button class="lightbox-close" onclick={closeLightbox} aria-label="닫기">✕</button>
+      <img src={lightboxUrl} alt="이미지 확대" class="lightbox-img" />
+    </div>
+  {/if}
 </div>
 
 <style>
@@ -637,27 +1282,6 @@
     padding: 20px;
     overflow-y: auto;
     height: 100%;
-  }
-
-  .form-header {
-    display: flex;
-    align-items: center;
-    gap: 16px;
-  }
-  .back-link {
-    color: var(--cs-text-mid);
-    text-decoration: none;
-    font: var(--text-pc-body-14);
-    min-height: 44px;
-    display: inline-flex;
-    align-items: center;
-    transition: color 0.12s;
-  }
-  .back-link:hover { color: var(--cs-text); }
-  .page-title {
-    font: var(--text-pc-htitle-25);
-    color: var(--cs-text);
-    margin: 0;
   }
 
   .error-banner {
@@ -701,6 +1325,9 @@
     display: flex;
     flex-direction: column;
     gap: 6px;
+  }
+  .field-row-combo {
+    gap: 10px;
   }
   .field-label {
     font: var(--text-pc-body-14);
@@ -781,41 +1408,127 @@
   }
   .price-grid-3 { grid-template-columns: 1fr 1fr 1fr; }
 
-  /* 이미지 */
-  .image-list { display: flex; flex-direction: column; gap: 10px; }
-  .image-row { display: flex; gap: 10px; align-items: center; }
-  .image-preview-wrap { flex-shrink: 0; }
-  .image-preview {
-    width: 80px;
-    height: 60px;
-    object-fit: cover;
-    border-radius: var(--radius-sm);
-    display: block;
-  }
-  .image-preview-empty {
-    width: 80px;
-    height: 60px;
-    background: var(--cs-surface-gray);
-    border-radius: var(--radius-sm);
+  .price-input-row {
     display: flex;
     align-items: center;
-    justify-content: center;
-    font: var(--text-pc-script-12);
-    color: var(--cs-text-placeholder);
+    gap: 12px;
   }
-  .image-url-input { flex: 1; }
+  .price-input-row .f-input { flex: 1; min-width: 0; }
+  .sale-only-label {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    flex-shrink: 0;
+    cursor: pointer;
+    white-space: nowrap;
+    font: var(--text-pc-script-12);
+    color: var(--cs-text-mid);
+    user-select: none;
+  }
+  .sale-only-cb {
+    accent-color: var(--cs-purple);
+    width: 14px;
+    height: 14px;
+    cursor: pointer;
+  }
+  .row-disabled { opacity: 0.45; }
 
-  /* 공통 버튼 */
+  /* 이미지 업로드 */
+  .img-status {
+    display: inline-flex; align-items: center;
+    padding: 4px 12px; border-radius: var(--radius-full);
+    font: var(--text-pc-script-12); margin-bottom: 4px;
+  }
+  .img-status.uploading { background: rgba(59,47,138,0.08); color: var(--cs-purple); }
+  .img-status.error { background: rgba(255,53,53,0.08); color: var(--cs-red-badge); }
+
+  .drop-zone {
+    display: flex; flex-direction: row; align-items: center; justify-content: center;
+    gap: 10px; min-height: 48px;
+    border: 2px dashed var(--cs-border); border-radius: var(--cms-radius-md);
+    background: var(--cs-surface-gray);
+    cursor: pointer; padding: 10px 20px;
+    transition: border-color 0.15s, background 0.15s; user-select: none;
+  }
+  .drop-zone:hover, .drop-zone:focus-visible {
+    border-color: var(--cs-purple); background: rgba(59,47,138,0.04); outline: none;
+  }
+  .drop-zone.drag-over { border-color: var(--cs-purple); background: rgba(59,47,138,0.08); transform: scale(1.01); }
+  .drop-zone.uploading { pointer-events: none; opacity: 0.6; }
+  .dz-text { font: var(--text-pc-body-14); color: var(--cs-text-mid); margin: 0; }
+  .dz-url-btn {
+    background: transparent; border: 1px solid var(--cs-border); border-radius: var(--radius-full);
+    color: var(--cs-text-mid); font: var(--text-pc-script-12); padding: 4px 14px;
+    cursor: pointer; min-height: 28px; transition: border-color 0.12s, color 0.12s;
+  }
+  .dz-url-btn:hover { border-color: var(--cs-purple); color: var(--cs-purple); }
+
+  .url-input-row { display: flex; align-items: center; gap: 8px; }
+  .url-field { flex: 1; }
+  .btn-url-add {
+    padding: 8px 16px; background: var(--cs-purple); color: var(--cs-white);
+    border: none; border-radius: var(--radius-sm); font: var(--text-pc-script-12);
+    cursor: pointer; min-height: 36px; white-space: nowrap; transition: background 0.12s;
+  }
+  .btn-url-add:hover { background: var(--cs-purple-hover); }
+  .btn-url-add:disabled { background: var(--cs-disabled-button); cursor: not-allowed; }
+  .btn-icon-close {
+    width: 32px; height: 32px; border: none; background: transparent; color: var(--cs-text-light);
+    border-radius: var(--radius-sm); cursor: pointer; min-height: 32px;
+    transition: background 0.12s, color 0.12s;
+  }
+  .btn-icon-close:hover { background: rgba(255,53,53,0.08); color: var(--cs-red-badge); }
+
+  .img-card-grid { display: flex; flex-wrap: wrap; gap: 10px; }
+  .img-card { position: relative; width: 120px; height: 90px; border-radius: var(--radius-sm); }
+  .img-card-view {
+    display: block; width: 100%; height: 100%;
+    border: none; background: transparent; padding: 0;
+    cursor: pointer; border-radius: var(--radius-sm); overflow: hidden; position: relative;
+  }
+  .img-card-thumb { width: 100%; height: 100%; object-fit: cover; display: block; transition: opacity 0.15s; }
+  .img-card-overlay {
+    position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+    background: rgba(0,0,0,0.35); color: white; font-size: 18px;
+    opacity: 0; transition: opacity 0.15s; border-radius: var(--radius-sm);
+  }
+  .img-card-view:hover .img-card-overlay { opacity: 1; }
+  .img-card-view:hover .img-card-thumb { opacity: 0.85; }
+  .img-card-remove {
+    position: absolute; top: -8px; right: -8px;
+    width: 24px; height: 24px; border-radius: 50%;
+    border: none; background: var(--cs-surface-gray); color: var(--cs-text-mid);
+    font-size: 12px; cursor: pointer; display: flex; align-items: center; justify-content: center;
+    opacity: 0; transition: opacity 0.15s, background 0.12s;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.2);
+  }
+  .img-card:hover .img-card-remove { opacity: 1; }
+  .img-card-remove:hover { background: var(--cs-red-badge); color: var(--cs-white); }
+  .img-card.primary { outline: 3px solid var(--cs-purple); outline-offset: -1px; }
+  .empty-hint { font: var(--text-pc-script-12); color: var(--cs-text-light); margin: 0; }
+
+  .lightbox-backdrop {
+    position: fixed; inset: 0; z-index: 500;
+    background: rgba(16,11,50,0.85);
+    display: flex; align-items: center; justify-content: center;
+  }
+  .lightbox-img { max-width: 90vw; max-height: 85vh; object-fit: contain; border-radius: var(--radius-sm); }
+  .lightbox-close {
+    position: absolute; top: 20px; right: 24px;
+    background: rgba(255,255,255,0.15); border: none; color: white;
+    width: 40px; height: 40px; border-radius: 50%;
+    font-size: 20px; cursor: pointer; display: flex; align-items: center; justify-content: center;
+    transition: background 0.12s;
+  }
+  .lightbox-close:hover { background: rgba(255,255,255,0.3); }
+
+  /* 공통 버튼 (스펙 행 삭제 / 스펙 항목 추가) */
   .remove-btn {
     flex-shrink: 0;
-    width: 36px;
-    height: 36px;
-    border: none;
-    border-radius: var(--radius-sm);
-    background: var(--cs-surface-gray);
-    color: var(--cs-text-mid);
-    cursor: pointer;
-    font: var(--text-pc-script-12);
+    width: 36px; height: 36px;
+    border: none; border-radius: var(--radius-sm);
+    background: var(--cs-surface-gray); color: var(--cs-text-mid);
+    cursor: pointer; font: var(--text-pc-script-12);
     transition: background 0.12s, color 0.12s;
   }
   .remove-btn:hover:not(:disabled) { background: rgba(255,53,53,0.1); color: var(--cs-red-badge); }
@@ -903,9 +1616,13 @@
   .option-search-row {
     display: flex;
     gap: 10px;
-    align-items: center;
+    align-items: flex-start;
   }
-  .option-search-input { flex: 1; }
+  .option-search-field {
+    flex: 1;
+    min-width: 0;
+  }
+  .option-search-input { width: 100%; }
   .btn-search {
     flex-shrink: 0;
     height: 44px;
@@ -1146,4 +1863,98 @@
     .price-grid-3 { grid-template-columns: 1fr; }
     .bulk-row { flex-wrap: wrap; }
   }
+
+  /* ── 카테고리 콤보 선택 ─────────────────────────────────────────── */
+  .combo-rows {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-top: 4px;
+  }
+  .combo-row-btn {
+    display: inline-flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 4px;
+    padding: 8px 14px;
+    border: 1.5px solid #ECEBF4;
+    border-radius: var(--radius-sm);
+    background: var(--cs-white);
+    cursor: pointer;
+    transition: border-color 0.12s, background 0.12s;
+    min-height: 44px;
+  }
+  .combo-row-btn:hover { border-color: rgba(59,47,138,0.35); background: rgba(59,47,138,0.04); }
+  .combo-row-selected { border-color: var(--cs-purple) !important; background: var(--cs-purple-op10) !important; }
+
+  .combo-name-label {
+    font: var(--text-pc-descript-10);
+    color: var(--cs-text-light);
+    line-height: 1.2;
+    align-self: flex-start;
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .combo-row-chips {
+    display: inline-flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 4px 6px;
+  }
+
+  .combo-prefix-chip {
+    padding: 2px 7px;
+    background: var(--cs-dark);
+    color: var(--cs-white);
+    border-radius: 4px;
+    font: var(--text-pc-body-14);
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    font-family: 'Courier New', monospace;
+  }
+  .combo-row-selected .combo-prefix-chip {
+    background: var(--cs-purple-dark);
+  }
+  .combo-chips { display: flex; align-items: center; gap: 4px; }
+  .combo-chip {
+    padding: 2px 7px;
+    background: var(--cs-lilac);
+    color: var(--cs-purple-dark);
+    border-radius: 4px;
+    font: var(--text-pc-body-14);
+    font-weight: 700;
+    letter-spacing: 0.01em;
+  }
+  .combo-row-selected .combo-chip {
+    background: var(--cs-purple);
+    color: var(--cs-white);
+  }
+  .combo-sep { color: var(--cs-text-light); font-size: 11px; }
+  .combo-meta-chip {
+    padding: 2px 7px;
+    border-radius: 4px;
+    font: var(--text-pc-script-12);
+    font-weight: 600;
+    font-family: 'Courier New', monospace;
+    letter-spacing: 0.02em;
+  }
+  .combo-ym-chip {
+    color: var(--cs-text-dark);
+    background: var(--cs-surface-gray);
+  }
+  .combo-seq-chip {
+    color: var(--cs-purple-dark);
+    background: rgba(59, 47, 138, 0.08);
+  }
+  .combo-row-selected .combo-ym-chip {
+    color: var(--cs-purple-dark);
+    background: rgba(59, 47, 138, 0.12);
+  }
+  .combo-row-selected .combo-seq-chip {
+    color: var(--cs-white);
+    background: var(--cs-purple);
+  }
+  .combo-empty { font: var(--text-pc-script-12); color: var(--cs-text-light); margin: 4px 0 0; }
 </style>
