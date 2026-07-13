@@ -12,7 +12,7 @@ export interface CustomerRow {
   name: string | null
   member_code: string | null
   member_type: string | null
-  membership_grade: 'none' | 'easy' | 'pop' | 'crazy' | 'admin'
+  membership_grade: string
   credit_score: number
   rental_count: number
   late_return_count: number
@@ -24,6 +24,7 @@ export interface CustomerRow {
   is_foreign: boolean
   created_at: string
   total_count: number
+  cms_role: string | null
 }
 
 export const load: PageServerLoad = async ({ parent, url }) => {
@@ -72,7 +73,7 @@ export const actions: Actions = {
     const { data: profile } = await admin
       .from('user_profiles')
       .select('cms_role')
-      .eq('user_id', session.user.id)
+      .eq('id', session.user.id)
       .single()
     if (!hasSettingsAccess(profile?.cms_role ?? '')) return fail(403, { ok: false, error: '권한 없음' })
 
@@ -102,7 +103,7 @@ export const actions: Actions = {
     const serviceRoleKeyCheck = env.SUPABASE_SERVICE_ROLE_KEY
     if (!serviceRoleKeyCheck) return fail(500, { ok: false, error: '서버 설정 오류' })
     const adminCheck = createClient(getSupabaseUrl(), serviceRoleKeyCheck)
-    const { data: profileCheck } = await adminCheck.from('user_profiles').select('cms_role').eq('user_id', session.user.id).single()
+    const { data: profileCheck } = await adminCheck.from('user_profiles').select('cms_role').eq('id', session.user.id).single()
     if (!hasSettingsAccess(profileCheck?.cms_role ?? '')) return fail(403, { ok: false, error: '권한 없음' })
 
     const form = await request.formData()
@@ -131,7 +132,7 @@ export const actions: Actions = {
     const serviceRoleKeyAdj = env.SUPABASE_SERVICE_ROLE_KEY
     if (!serviceRoleKeyAdj) return fail(500, { ok: false, error: '서버 설정 오류' })
     const adminAdj = createClient(getSupabaseUrl(), serviceRoleKeyAdj)
-    const { data: profileAdj } = await adminAdj.from('user_profiles').select('cms_role').eq('user_id', session.user.id).single()
+    const { data: profileAdj } = await adminAdj.from('user_profiles').select('cms_role').eq('id', session.user.id).single()
     if (!hasSettingsAccess(profileAdj?.cms_role ?? '')) return fail(403, { ok: false, error: '권한 없음' })
 
     const form = await request.formData()

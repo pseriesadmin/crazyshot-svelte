@@ -5,11 +5,11 @@
   interface Props { data: PageData }
   let { data }: Props = $props()
 
-  const TIERS = [
-    { value: '',      label: '전체 등급', price: '' },
-    { value: 'easy',  label: 'EASY',     price: '9,900원' },
-    { value: 'pop',   label: 'POP',      price: '19,900원' },
-    { value: 'crazy', label: 'CRAZY',    price: '29,900원' },
+  const PLAN_FILTERS = [
+    { value: '',      label: '전체 등급' },
+    { value: 'easy',  label: 'EASY' },
+    { value: 'pop',   label: 'POP' },
+    { value: 'crazy', label: 'CRAZY' },
   ]
 
   const STATUSES = [
@@ -69,11 +69,11 @@
   <!-- 필터 -->
   <div class="filter-row">
     <div class="filter-chips">
-      {#each TIERS as t}
+      {#each PLAN_FILTERS as t}
         <button
           class="chip"
-          class:chip-active={(data.tier ?? '') === t.value}
-          onclick={() => setFilter('tier', t.value)}
+          class:chip-active={(data.filterPlan ?? '') === t.value}
+          onclick={() => setFilter('plan', t.value)}
         >{t.label}</button>
       {/each}
     </div>
@@ -81,7 +81,7 @@
       {#each STATUSES as s}
         <button
           class="chip"
-          class:chip-active={(data.status ?? '') === s.value}
+          class:chip-active={(data.filterStatus ?? '') === s.value}
           onclick={() => setFilter('status', s.value)}
         >{s.label}</button>
       {/each}
@@ -95,16 +95,15 @@
         <thead>
           <tr>
             <th>이름 / 이메일</th>
-            <th>등급</th>
-            <th>월 요금</th>
+            <th>플랜</th>
             <th>구독 기간</th>
-            <th>자동갱신</th>
             <th>상태</th>
-            <th>가입일</th>
+            <th>등록일</th>
           </tr>
         </thead>
         <tbody>
           {#each data.subscriptions as sub (sub.id)}
+            {@const planKey = (sub.plan_name ?? '').toLowerCase()}
             <tr>
               <td>
                 <div class="user-cell">
@@ -113,18 +112,12 @@
                 </div>
               </td>
               <td>
-                <span class="grade-badge grade-{sub.tier}">{sub.tier.toUpperCase()}</span>
+                <span class="grade-badge grade-{planKey}">{sub.plan_name ?? '-'}</span>
               </td>
-              <td>{sub.price_per_month != null ? sub.price_per_month.toLocaleString('ko-KR') + '원' : '-'}</td>
               <td class="date-range">
-                <span>{formatDate(sub.billing_cycle_start)}</span>
+                <span>{formatDate(sub.started_at)}</span>
                 <span class="date-sep">~</span>
-                <span>{formatDate(sub.billing_cycle_end)}</span>
-              </td>
-              <td>
-                <span class="toggle-display" class:toggle-on={sub.auto_renew}>
-                  {sub.auto_renew ? 'ON' : 'OFF'}
-                </span>
+                <span>{formatDate(sub.expires_at)}</span>
               </td>
               <td>
                 <span class="status-badge status-{sub.status}">{statusLabel(sub.status)}</span>
@@ -133,7 +126,7 @@
             </tr>
           {:else}
             <tr>
-              <td colspan="7" class="no-data">조건에 맞는 구독 이력이 없습니다.</td>
+              <td colspan="5" class="no-data">조건에 맞는 구독 이력이 없습니다.</td>
             </tr>
           {/each}
         </tbody>
@@ -216,13 +209,6 @@
 
   .date-range { display: flex; gap: 4px; align-items: center; font: var(--text-pc-script-12); }
   .date-sep   { color: var(--cs-text-light); }
-
-  .toggle-display {
-    display: inline-flex; align-items: center; padding: 2px 8px;
-    border-radius: var(--radius-sm); font: var(--text-pc-script-12); font-weight: 700;
-    background: var(--cs-surface-gray); color: var(--cs-text-light);
-  }
-  .toggle-display.toggle-on { background: rgba(59,47,138,0.10); color: var(--cs-purple); }
 
   .status-badge {
     display: inline-flex; align-items: center; padding: 2px 8px;

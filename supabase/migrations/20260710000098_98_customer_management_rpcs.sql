@@ -1,13 +1,58 @@
--- Migration #98: 고객관리 CMS RPCs
--- 목적: /cms/customers 섹션에서 사용할 관리자 전용 RPC 4종
---   - get_customer_list: 회원 목록 페이지네이션 조회
---   - adjust_credit_score: 크레이지스코어 수동 조정 + 감사 로그
---   - admin_update_subscription_status: 구독 취소/일시정지 (등급 변경 금지)
---   - toggle_blacklist: 블랙리스트 등록/해제
--- 전제: Migration #97 (member_code, member_type 컬럼) 적용 완료 후 실행
+-- Migration #98 v2: 고객관리 CMS 기반 스키마 + RPC 4종
+-- 목적: /cms/customers 섹션 구동에 필요한 스키마 + 관리자 RPC 4종
+--   1. user_profiles 고객관리 컬럼 추가 (ADD COLUMN IF NOT EXISTS)
+--   2. credit_score_audit 테이블 신설
+--   3. get_customer_list / adjust_credit_score / admin_update_subscription_status / toggle_blacklist
+-- 실제 DB 기반: user_profiles.id(PK), full_name, user_subscriptions 테이블
+-- 프런트 호환: id→user_id alias, full_name→name alias 로 반환
+-- 전제: Migration #97 (member_code, member_type) 적용 완료
 -- ─────────────────────────────────────────────────────────────────────────────
 
--- 인덱스 (RPC 실행 성능 보장)
+-- 1. user_profiles 고객관리 컬럼 추가
+
+ALTER TABLE user_profiles
+  ADD COLUMN IF NOT EXISTS membership_grade TEXT
+    NOT NULL DEFAULT 'NONE'
+    CHECK (membership_grade IN ('NONE', 'EASY', 'POP', 'CRAZY')),
+  ADD COLUMN IF NOT EXISTS credit_score SMALLINT
+    NOT NULL DEFAULT 70
+    CHECK (credit_score BETWEEN 0 AND 100),
+  ADD COLUMN IF NOT EXISTS rental_count INT NOT NULL DEFAULT 0,
+  ADD COLUMN IF NOT EXISTS late_return_count INT NOT NULL DEFAULT 0,
+  ADD COLUMN IF NOT EXISTS damage_count INT NOT NULL DEFAULT 0,
+  ADD COLUMN IF NOT EXISTS points INT NOT NULL DEFAULT 0,
+  ADD COLUMN IF NOT EXISTS blacklisted BOOLEAN NOT NULL DEFAULT false,
+  ADD COLUMN IF NOT EXISTS blacklist_reason TEXT,
+  ADD COLUMN IF NOT EXISTS is_foreign BOOLEAN NOT NULL DEFAULT false,
+  ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ;
+
+COMMENT ON COLUMN user_profiles.membership_grade IS 'NONE/EASY/POP/CRAZY 멤버십 등급';
+COMMENT ON COLUMN user_profiles.credit_score IS '크레이지스코어 0~100, 기본 70';
+COMMENT ON COLUMN user_profiles.rental_count IS '총 대여 횟수';
+COMMENT ON COLUMN user_profiles.late_return_count IS '연체 반납 횟수';
+COMMENT ON COLUMN user_profiles.damage_count IS '파손 건수';
+COMMENT ON COLUMN user_profiles.points IS '보유 포인트';
+COMMENT ON COLUMN user_profiles.blacklisted IS '블랙리스트 여부';
+COMMENT ON COLUMN user_profiles.blacklist_reason IS '블랙리스트 사유';
+COMMENT ON COLUMN user_profiles.is_foreign IS '외국인 여부';
+COMMENT ON COLUMN user_profiles.deleted_at IS 'Soft delete 타임스탬프';
+
+-- 2. credit_score_audit 테이블 신설
+
+CREATE TABLE IF NOT EXISTS credit_score_audit (
+  id          UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id     UUID        NOT NULL REFERENCES user_profiles(id) ON DELETE CASCADE,
+  old_score   SMALLINT    NOT NULL,
+  new_score   SMALLINT    NOT NULL,
+  reason      TEXT        NOT NULL,
+  metadata    JSONB,
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+COMMENT ON TABLE credit_score_audit IS
+  '크레이지스코어 조정 이력 — 수동/자동 조정 모두 기록';
+
+-- 3. 인덱스
 
 CREATE INDEX IF NOT EXISTS idx_user_profiles_membership_grade
   ON user_profiles(membership_grade)
@@ -20,7 +65,8 @@ CREATE INDEX IF NOT EXISTS idx_user_profiles_blacklisted
 CREATE INDEX IF NOT EXISTS idx_credit_score_audit_user_created
   ON credit_score_audit(user_id, created_at DESC);
 
--- 1. get_customer_list: 회원 목록 페이지네이션
+-- 4. get_customer_list
+-- id → user_id 별칭, full_name → name 별칭 반환 (프런트엔드 인터페이스 호환)
 
 CREATE OR REPLACE FUNCTION get_customer_list(
   p_search           TEXT    DEFAULT NULL,
@@ -58,10 +104,10 @@ DECLARE
 BEGIN
   RETURN QUERY
   SELECT
-    up.user_id,
+    up.id                  AS user_id,
     up.email::TEXT,
     up.phone::TEXT,
-    up.name::TEXT,
+    up.full_name::TEXT     AS name,
     up.member_code::TEXT,
     up.member_type::TEXT,
     up.membership_grade::TEXT,
@@ -75,19 +121,19 @@ BEGIN
     up.is_student,
     up.is_foreign,
     up.created_at,
-    COUNT(*) OVER() AS total_count
+    COUNT(*) OVER()        AS total_count
   FROM user_profiles up
   WHERE up.deleted_at IS NULL
     AND (
       p_search IS NULL OR p_search = '' OR (
-        up.name  ILIKE '%' || p_search || '%'
-        OR up.email ILIKE '%' || p_search || '%'
-        OR up.phone ILIKE '%' || p_search || '%'
+        up.full_name ILIKE '%' || p_search || '%'
+        OR up.email  ILIKE '%' || p_search || '%'
+        OR up.phone  ILIKE '%' || p_search || '%'
       )
     )
     AND (
       p_membership_grade IS NULL OR p_membership_grade = ''
-      OR up.membership_grade::TEXT = p_membership_grade
+      OR up.membership_grade = p_membership_grade
     )
     AND (p_blacklisted IS NULL OR up.blacklisted = p_blacklisted)
   ORDER BY up.created_at DESC
@@ -97,9 +143,10 @@ END;
 $$;
 
 COMMENT ON FUNCTION get_customer_list(TEXT, TEXT, BOOLEAN, INT, INT) IS
-  '관리자 전용: 회원 목록 페이지네이션 조회. is_cms_user() 체크는 RLS가 담당.';
+  '관리자 전용: 회원 목록 페이지네이션. id→user_id, full_name→name 별칭으로 반환.';
 
--- 2. adjust_credit_score: 크레이지스코어 수동 조정 + 감사 로그 원자적 처리
+-- 5. adjust_credit_score
+-- p_user_id = user_profiles.id
 
 CREATE OR REPLACE FUNCTION adjust_credit_score(
   p_user_id UUID,
@@ -115,10 +162,9 @@ DECLARE
   v_old_score SMALLINT;
   v_new_score SMALLINT;
 BEGIN
-  -- 사용자 존재 및 스코어 조회
   SELECT credit_score INTO v_old_score
   FROM user_profiles
-  WHERE user_id = p_user_id AND deleted_at IS NULL;
+  WHERE id = p_user_id AND deleted_at IS NULL;
 
   IF NOT FOUND THEN
     RETURN jsonb_build_object('ok', false, 'error', 'user not found');
@@ -128,15 +174,12 @@ BEGIN
     RETURN jsonb_build_object('ok', false, 'error', 'delta cannot be zero');
   END IF;
 
-  -- 0~100 클램프
   v_new_score := GREATEST(0, LEAST(100, v_old_score + p_delta))::SMALLINT;
 
-  -- 스코어 업데이트
   UPDATE user_profiles
   SET credit_score = v_new_score, updated_at = NOW()
-  WHERE user_id = p_user_id;
+  WHERE id = p_user_id;
 
-  -- 감사 로그 (원자적)
   INSERT INTO credit_score_audit(user_id, old_score, new_score, reason, metadata)
   VALUES (
     p_user_id,
@@ -157,11 +200,13 @@ $$;
 COMMENT ON FUNCTION adjust_credit_score(UUID, INT, TEXT) IS
   '관리자 전용: 크레이지스코어 수동 조정. 0~100 클램프 + credit_score_audit 원자적 INSERT.';
 
--- 3. admin_update_subscription_status: 구독 취소/일시정지 전용 (등급 변경 금지)
+-- 6. admin_update_subscription_status
+-- user_subscriptions 테이블 사용 (id: BIGINT)
+-- 컬럼: id(bigint), user_id, plan_id, status(text), started_at, expires_at, cancelled_at, updated_at
 
 CREATE OR REPLACE FUNCTION admin_update_subscription_status(
-  p_subscription_id UUID,
-  p_status          TEXT,   -- 'cancelled' | 'paused' 만 허용
+  p_subscription_id BIGINT,
+  p_status          TEXT,
   p_reason          TEXT
 )
 RETURNS JSONB
@@ -170,19 +215,16 @@ SECURITY DEFINER
 SET search_path = public
 AS $$
 BEGIN
-  -- 등급 변경 차단: cancel/pause 만 허용
   IF p_status NOT IN ('cancelled', 'paused') THEN
     RETURN jsonb_build_object('ok', false, 'error', 'invalid status — only cancelled or paused allowed');
   END IF;
 
-  UPDATE subscriptions
+  UPDATE user_subscriptions
   SET
-    status              = p_status::subscription_status,
-    cancellation_reason = CASE WHEN p_status = 'cancelled' THEN p_reason ELSE cancellation_reason END,
-    cancelled_at        = CASE WHEN p_status = 'cancelled' THEN NOW()    ELSE cancelled_at END,
-    auto_renew          = CASE WHEN p_status = 'cancelled' THEN false     ELSE auto_renew END,
-    updated_at          = NOW()
-  WHERE id = p_subscription_id AND deleted_at IS NULL;
+    status       = p_status,
+    cancelled_at = CASE WHEN p_status = 'cancelled' THEN NOW() ELSE cancelled_at END,
+    updated_at   = NOW()
+  WHERE id = p_subscription_id;
 
   IF NOT FOUND THEN
     RETURN jsonb_build_object('ok', false, 'error', 'subscription not found');
@@ -192,10 +234,11 @@ BEGIN
 END;
 $$;
 
-COMMENT ON FUNCTION admin_update_subscription_status(UUID, TEXT, TEXT) IS
-  '관리자 전용: 구독 취소(cancelled) 또는 일시정지(paused) 만 허용. 등급 변경은 사용자 직접만.';
+COMMENT ON FUNCTION admin_update_subscription_status(BIGINT, TEXT, TEXT) IS
+  '관리자 전용: user_subscriptions 취소(cancelled)/일시정지(paused). 등급 변경은 사용자 직접만.';
 
--- 4. toggle_blacklist: 블랙리스트 등록/해제
+-- 7. toggle_blacklist
+-- p_user_id = user_profiles.id
 
 CREATE OR REPLACE FUNCTION toggle_blacklist(
   p_user_id     UUID,
@@ -208,7 +251,6 @@ SECURITY DEFINER
 SET search_path = public
 AS $$
 BEGIN
-  -- 블랙리스트 등록 시 사유 필수
   IF p_blacklisted = true AND (p_reason IS NULL OR trim(p_reason) = '') THEN
     RETURN jsonb_build_object('ok', false, 'error', 'reason is required when blacklisting');
   END IF;
@@ -218,7 +260,7 @@ BEGIN
     blacklisted      = p_blacklisted,
     blacklist_reason = CASE WHEN p_blacklisted THEN p_reason ELSE NULL END,
     updated_at       = NOW()
-  WHERE user_id = p_user_id AND deleted_at IS NULL;
+  WHERE id = p_user_id AND deleted_at IS NULL;
 
   IF NOT FOUND THEN
     RETURN jsonb_build_object('ok', false, 'error', 'user not found');

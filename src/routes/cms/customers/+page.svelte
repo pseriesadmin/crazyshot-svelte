@@ -166,7 +166,9 @@
         <table>
           <thead>
             <tr>
-              <th>이름 / 이메일</th>
+              <th class="th-badge"></th>
+              <th>이름</th>
+              <th>이메일</th>
               <th>회원번호</th>
               <th>전화번호</th>
               <th>등급</th>
@@ -188,12 +190,13 @@
                 onkeydown={(e) => e.key === 'Enter' && selectUser(row)}
                 aria-label="{row.name ?? row.email} 상세 보기"
               >
-                <td>
-                  <div class="user-cell">
-                    <span class="user-name">{row.name ?? '-'}</span>
-                    <span class="user-email">{row.email}</span>
-                  </div>
+                <td class="td-badge">
+                  {#if row.cms_role}
+                    <span class="badge-m" title={row.cms_role}>M</span>
+                  {/if}
                 </td>
+                <td><span class="user-name">{row.name ?? '-'}</span></td>
+                <td><span class="user-email">{row.email}</span></td>
                 <td>
                   {#if row.member_code}
                     <code class="member-code">{row.member_code}</code>
@@ -227,7 +230,7 @@
               </tr>
             {:else}
               <tr>
-                <td colspan="9" class="no-data">조건에 맞는 회원이 없습니다.</td>
+                <td colspan="11" class="no-data">조건에 맞는 회원이 없습니다.</td>
               </tr>
             {/each}
           </tbody>
@@ -430,9 +433,20 @@
   }
 
   /* 셀 요소 */
-  .user-cell { display: flex; flex-direction: column; gap: 2px; }
   .user-name  { font-weight: 700; color: var(--cs-text); }
   .user-email { font: var(--text-pc-script-12); color: var(--cs-text-mid); }
+
+  /* 관리자 배지 컬럼 */
+  .th-badge { width: 36px; padding: 10px 8px 10px 16px; }
+  .td-badge { padding: 10px 4px 10px 16px; vertical-align: middle; }
+  .badge-m {
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 22px; height: 22px;
+    border-radius: 6px;
+    background: rgba(59,47,138,0.10); color: var(--cs-purple);
+    font-size: 11px; font-weight: 700; font-family: 'Noto Sans KR', sans-serif;
+    line-height: 1; cursor: default;
+  }
   .member-code {
     font: var(--text-pc-script-12);
     font-family: monospace;
