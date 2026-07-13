@@ -121,8 +121,7 @@
         { label: '코드설정', href: '/cms/codes' },
         ...(hasSettingsAccess(data.cmsRole ?? '')
           ? [
-              { label: '계정관리', href: '/cms/accounts' },
-              { label: '계정목록', href: '/cms/accounts/list' },
+              { label: '관리정보', href: '/cms/accounts/list' },
             ]
           : []),
       ],

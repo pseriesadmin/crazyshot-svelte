@@ -198,6 +198,138 @@ body {
 @tailwind components;
 @tailwind utilities;
 
+/* ══════════════════════════════════════════════════════════════════
+   CMS 전용 버튼 컴포넌트 — .cms-shell 스코프 격리
+   참조: .claude/rules/cms-uiux.md Section 7-3 standardButtons
+   최종 업데이트: 2026-07-13
+
+   ⛔ 사용자(USER) 화면 오염 차단 원칙
+      - .cms-shell 조상 없이는 이 블록의 스타일이 절대 적용되지 않음
+      - 사용자 버튼: .cs-btn-primary / .cs-btn-secondary (front-uiux.md) — 별개 클래스
+      - 이 블록과 front-uiux.md 버튼 스타일은 클래스명·스코프 모두 분리됨
+
+   컨텍스트 → 클래스 자동 매칭 기준:
+      페이지 헤더 CTA (등록·저장)  → .btn-primary   44px
+      보조 액션 (검색·확인)        → .btn-secondary  44px
+      테이블·패널 인라인 소형      → .btn-action     34px
+      삭제·철회                    → .btn-danger     40px
+      취소·보조 아웃라인           → .btn-ghost      36px
+   ══════════════════════════════════════════════════════════════════ */
+
+/* ① CTA 기본 — 주요 액션 (등록·저장) | JSON: ctaPrimary */
+.cms-shell .btn-primary {
+  display: inline-flex;
+  align-items: center;
+  height: 44px;
+  padding: 0 30px;
+  background: var(--cs-purple);
+  color: var(--cs-white);
+  border: none;
+  border-radius: var(--radius-md);
+  font: var(--text-pc-body-14);
+  letter-spacing: -0.5px;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background 0.12s;
+  text-decoration: none;
+  box-sizing: border-box;
+}
+.cms-shell .btn-primary:hover    { background: var(--cs-purple-hover); }
+.cms-shell .btn-primary:disabled { background: var(--cs-disabled-button); cursor: not-allowed; }
+
+/* ② CTA 보조 — 검색·확인 | JSON: ctaSecondary */
+.cms-shell .btn-secondary {
+  display: inline-flex;
+  align-items: center;
+  height: 44px;
+  padding: 0 30px;
+  background: var(--cs-white);
+  color: var(--cs-purple-dark);
+  border: 1px solid #201857;
+  border-radius: var(--radius-md);
+  font: var(--text-pc-body-14);
+  letter-spacing: -0.5px;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background 0.12s;
+  text-decoration: none;
+  box-sizing: border-box;
+}
+.cms-shell .btn-secondary:hover    { background: rgba(59,47,138,0.06); }
+.cms-shell .btn-secondary:disabled { background: var(--cs-disabled-button); color: var(--cs-white); border-color: transparent; cursor: not-allowed; }
+
+/* ③ 액션 소형 — 패널·테이블 인라인 | JSON: actionSave */
+.cms-shell .btn-action {
+  display: inline-flex;
+  align-items: center;
+  height: 34px;
+  padding: 0 16px;
+  background: var(--cs-purple);
+  color: var(--cs-white);
+  border: none;
+  border-radius: var(--cms-radius-sm); /* 10px — .cms-shell에서 상속 */
+  font: var(--text-pc-script-12);
+  font-weight: 700;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background 0.12s;
+  text-decoration: none;
+  box-sizing: border-box;
+}
+.cms-shell .btn-action:hover    { background: var(--cs-purple-hover); }
+.cms-shell .btn-action:disabled { background: var(--cs-disabled-button); cursor: not-allowed; }
+
+/* ④ 위험 — 삭제·철회 | JSON: danger (연분홍 BG + 빨강 텍스트) */
+.cms-shell .btn-danger {
+  display: inline-flex;
+  align-items: center;
+  height: 40px;
+  padding: 0 20px;
+  background: var(--cs-chat-in-bg); /* danger-50 #FFCFCF */
+  color: var(--cs-red-badge);        /* danger-500 #FF3535 */
+  border: none;
+  border-radius: var(--radius-sm);
+  font: var(--text-pc-body-14);
+  letter-spacing: -0.5px;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background 0.12s;
+  text-decoration: none;
+  box-sizing: border-box;
+}
+.cms-shell .btn-danger:hover    { background: var(--cs-red-light); }
+.cms-shell .btn-danger:disabled { opacity: 0.6; cursor: not-allowed; }
+
+/* ⑤ 고스트 — 아웃라인 보조 (취소·프로모션 보조 액션) */
+.cms-shell .btn-ghost {
+  display: inline-flex;
+  align-items: center;
+  height: 36px;
+  padding: 0 16px;
+  background: transparent;
+  color: var(--cs-purple);
+  border: 1.5px solid var(--cs-purple);
+  border-radius: var(--radius-sm);
+  font: var(--text-pc-body-14);
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background 0.12s;
+  text-decoration: none;
+  box-sizing: border-box;
+}
+.cms-shell .btn-ghost:hover    { background: rgba(59,47,138,0.06); }
+.cms-shell .btn-ghost:disabled { opacity: 0.6; cursor: not-allowed; }
+
+/* ── 소형 변형 (.sm) ── */
+.cms-shell .btn-primary.sm,
+.cms-shell .btn-ghost.sm,
+.cms-shell .btn-danger.sm {
+  height: 28px;
+  padding: 0 10px;
+  font: var(--text-pc-script-12);
+  letter-spacing: 0;
+}
+
 /* ══ svelte-sonner 토스트 오버라이드 ══ */
 [data-sonner-toast] {
   outline: none !important;

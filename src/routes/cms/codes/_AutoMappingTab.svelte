@@ -91,12 +91,12 @@
         const tierB = tb?.code_tier ?? (tb?.depth === 0 ? 'major' : tb?.depth === 1 ? 'middle' : 'minor')
         const da = TIER_ORDER[tierA] ?? 2
         const db = TIER_ORDER[tierB] ?? 2
-        return da - db
+        return da - db || a.sort_order - b.sort_order
       })
     }))
   }
 
-  let combos = $derived((): ComboGroup[] => selectedId ? combosForGroup(selectedId) : [])
+  let combos = $derived.by((): ComboGroup[] => selectedId ? combosForGroup(selectedId) : [])
 
   // 활성 코드만, deleted_at 제외
   let activeCodes = $derived(
@@ -104,7 +104,7 @@
   )
 
   // 피커용 — tier별 필터 + 검색
-  let filteredByTier = $derived(() => {
+  let filteredByTier = $derived.by(() => {
     const q = pickerSearch.trim().toLowerCase()
     return activeCodes.filter(c => {
       const tier = c.code_tier ?? (c.depth === 0 ? 'major' : c.depth === 1 ? 'middle' : 'minor')
@@ -546,11 +546,11 @@
             </button>
           </div>
 
-          {#if combos().length === 0 && !activeComboId}
+          {#if combos.length === 0 && !activeComboId}
             <p class="empty-codes">아래 피커에서 '+ 새 조합' 후 코드를 추가하세요.</p>
           {:else}
             <div class="combo-rows">
-              {#each combos() as combo (combo.combo_row_id)}
+              {#each combos as combo (combo.combo_row_id)}
                 {@const leadItem = combo.items[0]}
                 {@const isActiveCurrent = activeComboId === combo.combo_row_id}
                 <div class="combo-row" class:combo-row-active={isActiveCurrent}>
@@ -750,7 +750,7 @@
               {/each}
 
               <!-- 빈 조합 행: activeComboId가 새로 생성되었지만 아직 코드 미추가 -->
-              {#if activeComboId && !combos().some(c => c.combo_row_id === activeComboId)}
+              {#if activeComboId && !combos.some(c => c.combo_row_id === activeComboId)}
                 <div class="combo-row combo-row-active combo-row-pending">
                   <div class="combo-chips">
                     <span class="combo-pending-hint">← 아래 피커에서 코드를 선택하세요</span>
@@ -799,7 +799,7 @@
           {/if}
 
           <div class="picker-list">
-            {#each filteredByTier() as tc (tc.id)}
+            {#each filteredByTier as tc (tc.id)}
               {@const inAnyCombo = selectedCodeIds.has(tc.id)}
               {@const inActiveCombo = activeComboId ? activeComboCodeIds().has(tc.id) : false}
               {@const included = activeComboId ? inActiveCombo : inAnyCombo}

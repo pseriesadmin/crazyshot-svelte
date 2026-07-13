@@ -1,5 +1,6 @@
 <script lang="ts">
   import { enhance } from '$app/forms'
+  import { invalidateAll } from '$app/navigation'
   import { csToast } from '$lib/utils/toast'
   import { supabase } from '$lib/services/supabase'
   // CustomerRow 타입을 인라인으로 정의 (circular import 방지)
@@ -10,7 +11,7 @@
     name: string | null
     member_code: string | null
     member_type: string | null
-    membership_grade: 'none' | 'easy' | 'pop' | 'crazy' | 'admin'
+    membership_grade: string
     credit_score: number
     rental_count: number
     late_return_count: number
@@ -20,6 +21,10 @@
     blacklist_reason: string | null
     is_student: boolean
     is_foreign: boolean
+    identity_type: string | null
+    identity_doc_url: string | null
+    identity_verified_at: string | null
+    password_set: boolean
     created_at: string
     total_count: number
   }
@@ -152,6 +157,129 @@
 
   const scoreDelta = $derived(adjustDelta > 0 ? `+${adjustDelta}` : `${adjustDelta}`)
   const newScore = $derived(Math.max(0, Math.min(100, row.credit_score + adjustDelta)))
+
+  // 기본정보 편집 상태
+  interface MemberTypeGroup {
+    id: string
+    name: string
+    is_active: boolean
+    sort_order: number
+  }
+
+  let localInfo = $state({
+    name: row.name ?? '',
+    email: row.email,
+    phone: row.phone ?? '',
+    member_type: row.member_type ?? 'B2C',
+    created_at_date: row.created_at ? row.created_at.slice(0, 10) : '',
+  })
+
+  // row 변경(invalidateAll) 시 localInfo 동기화
+  $effect(() => {
+    localInfo.name = row.name ?? ''
+    localInfo.email = row.email
+    localInfo.phone = row.phone ?? ''
+    localInfo.member_type = row.member_type ?? 'B2C'
+    localInfo.created_at_date = row.created_at ? row.created_at.slice(0, 10) : ''
+  })
+
+  const isDirtyInfo = $derived(
+    localInfo.name !== (row.name ?? '') ||
+    localInfo.email !== row.email ||
+    localInfo.phone !== (row.phone ?? '') ||
+    localInfo.member_type !== (row.member_type ?? 'B2C') ||
+    localInfo.created_at_date !== (row.created_at ? row.created_at.slice(0, 10) : '')
+  )
+
+  let isSavingInfo = $state(false)
+
+  function formatPhone(val: string): string {
+    const digits = val.replace(/\D/g, '')
+    if (digits.length <= 3) return digits
+    if (digits.length <= 7) return `${digits.slice(0, 3)}-${digits.slice(3)}`
+    if (digits.length <= 11) return `${digits.slice(0, 3)}-${digits.slice(3, 7)}-${digits.slice(7)}`
+    return `${digits.slice(0, 3)}-${digits.slice(3, 7)}-${digits.slice(7, 11)}`
+  }
+
+  function handlePhoneInput(e: Event) {
+    const target = e.target as HTMLInputElement
+    localInfo.phone = formatPhone(target.value)
+    target.value = localInfo.phone
+  }
+
+  // 이메일 허용 문자: 영문·숫자·@·.·_·-·+ 만 허용 (한글 및 그 외 불허)
+  const EMAIL_ALLOWED = /^[a-zA-Z0-9@._+\-]$/
+
+  function handleEmailKeydown(e: KeyboardEvent) {
+    // 제어키(백스페이스, Delete, 방향키, Tab, Enter, Home, End) 허용
+    const ctrl = e.ctrlKey || e.metaKey
+    if (ctrl) return  // Ctrl/Cmd 조합 (복붙 등) 허용
+    if (['Backspace','Delete','ArrowLeft','ArrowRight','ArrowUp','ArrowDown',
+         'Tab','Enter','Home','End'].includes(e.key)) return
+    if (e.key.length > 1) return  // 나머지 비문자 키 허용
+    if (!EMAIL_ALLOWED.test(e.key)) e.preventDefault()
+  }
+
+  function handleEmailInput(e: Event) {
+    const target = e.target as HTMLInputElement
+    // 한글 IME 조합 후 삽입된 경우 사후 제거
+    const cleaned = target.value.replace(/[^a-zA-Z0-9@._+\-]/g, '')
+    if (cleaned !== target.value) {
+      const pos = target.selectionStart ?? cleaned.length
+      target.value = cleaned
+      target.setSelectionRange(pos, pos)
+      localInfo.email = cleaned
+    }
+  }
+
+  // ── 본인증명 뷰어 ──────────────────────────────────────────────
+  let identityDocUrl = $state<string | null>(null)
+
+  function openIdentityDoc(url: string) {
+    identityDocUrl = url
+  }
+
+  function closeIdentityDoc() {
+    identityDocUrl = null
+  }
+
+  function formatIdentityDate(iso: string): string {
+    const d = new Date(iso)
+    return `${d.getFullYear()}.${String(d.getMonth() + 1).padStart(2, '0')}.${String(d.getDate()).padStart(2, '0')}`
+  }
+
+  function isIdentityExpired(iso: string): boolean {
+    const sixMonthsAgo = new Date()
+    sixMonthsAgo.setMonth(sixMonthsAgo.getMonth() - 6)
+    return new Date(iso) < sixMonthsAgo
+  }
+
+  const isPdf = $derived(identityDocUrl ? identityDocUrl.toLowerCase().includes('.pdf') : false)
+
+  let showMemberTypeModal = $state(false)
+  let memberTypeGroups = $state<MemberTypeGroup[]>([])
+  let loadingGroups = $state(false)
+  let groupsLoaded = $state(false)
+
+  async function openMemberTypeModal() {
+    showMemberTypeModal = true
+    if (groupsLoaded) return
+    loadingGroups = true
+    const { data, error } = await supabase
+      .from('code_mapping_groups')
+      .select('id, name, is_active, sort_order')
+      .order('sort_order', { ascending: true })
+    loadingGroups = false
+    if (!error && data) {
+      memberTypeGroups = data as MemberTypeGroup[]
+      groupsLoaded = true
+    }
+  }
+
+  function selectMemberType(type: string) {
+    localInfo.member_type = type
+    showMemberTypeModal = false
+  }
 </script>
 
 <div class="panel">
@@ -190,22 +318,44 @@
 
     <!-- 기본정보 탭 -->
     {#if activeTab === 'info'}
-      <div class="info-grid">
+      <form
+        method="POST"
+        action="/cms/customers?/updateCustomerInfo"
+        use:enhance={() => {
+          isSavingInfo = true
+          return async ({ result }) => {
+            isSavingInfo = false
+            if (result.type === 'success') {
+              csToast.success('고객 정보가 수정되었습니다.')
+              await invalidateAll()
+            } else if (result.type === 'failure') {
+              csToast.error((result.data as { error?: string })?.error ?? '수정 실패')
+            }
+          }
+        }}
+        class="info-grid"
+      >
+        <input type="hidden" name="user_id" value={row.user_id} />
+        <input type="hidden" name="member_type" value={localInfo.member_type} />
+
         <div class="info-row">
           <span class="info-label">이름</span>
-          <span class="info-val">{row.name ?? '-'}</span>
+          <input class="info-input" type="text" name="name" bind:value={localInfo.name} placeholder="이름" />
         </div>
         <div class="info-row">
           <span class="info-label">이메일</span>
-          <span class="info-val">{row.email}</span>
+          <input class="info-input" type="email" name="email" bind:value={localInfo.email} placeholder="이메일" onkeydown={handleEmailKeydown} oninput={handleEmailInput} />
         </div>
         <div class="info-row">
           <span class="info-label">전화번호</span>
-          <span class="info-val">{row.phone ?? '-'}</span>
+          <input class="info-input" type="text" name="phone" value={localInfo.phone} oninput={handlePhoneInput} placeholder="010-0000-0000" />
         </div>
         <div class="info-row">
           <span class="info-label">회원유형</span>
-          <span class="info-val">{row.member_type ?? 'B2C'}</span>
+          <button type="button" class="info-select-btn" onclick={openMemberTypeModal}>
+            {localInfo.member_type}
+            <span class="info-select-arrow">▾</span>
+          </button>
         </div>
         <div class="info-row">
           <span class="info-label">등급</span>
@@ -216,16 +366,34 @@
           <span class="info-val">{row.points.toLocaleString('ko-KR')}P</span>
         </div>
         <div class="info-row">
-          <span class="info-label">학생 여부</span>
-          <span class="info-val">{row.is_student ? '학생' : '일반'}</span>
+          <span class="info-label">본인 증명</span>
+          <button
+            type="button"
+            class="btn-file-view"
+            disabled={!row.identity_type || !row.identity_doc_url}
+            onclick={() => row.identity_doc_url && openIdentityDoc(row.identity_doc_url)}
+          >
+            {#if row.identity_type === 'student'}학생증 보기
+            {:else if row.identity_type === 'general'}일반증명 보기
+            {:else}미등록{/if}
+          </button>
+          {#if row.identity_type && row.identity_verified_at}
+            <span class="identity-date">
+              {formatIdentityDate(row.identity_verified_at)}
+              {#if isIdentityExpired(row.identity_verified_at)}
+                <span class="identity-expired">경과</span>
+              {/if}
+            </span>
+          {/if}
         </div>
         <div class="info-row">
           <span class="info-label">외국인 여부</span>
-          <span class="info-val">{row.is_foreign ? '외국인' : '-'}</span>
+          {#if row.is_foreign}<span class="info-val">외국인</span>{/if}
+          <button type="button" class="btn-file-view" disabled={!row.is_foreign}>여권 보기</button>
         </div>
         <div class="info-row">
           <span class="info-label">가입일</span>
-          <span class="info-val">{formatDate(row.created_at)}</span>
+          <input class="info-input" type="date" name="created_at" bind:value={localInfo.created_at_date} />
         </div>
         <div class="info-row">
           <span class="info-label">대여 횟수</span>
@@ -239,7 +407,49 @@
           <span class="info-label">파손 횟수</span>
           <span class="info-val">{row.damage_count}건</span>
         </div>
-      </div>
+
+        {#if isDirtyInfo}
+          <div class="save-bar">
+            <button type="submit" class="btn-primary" disabled={isSavingInfo}>
+              {isSavingInfo ? '저장 중...' : '변경사항 저장'}
+            </button>
+          </div>
+        {/if}
+      </form>
+
+      <!-- 회원유형 선택 모달 -->
+      {#if showMemberTypeModal}
+        <div class="modal-backdrop" role="presentation" onclick={() => (showMemberTypeModal = false)}>
+          <div class="modal-dialog member-type-dialog" role="dialog" aria-modal="true">
+            <p class="modal-title">회원유형 선택</p>
+            {#if loadingGroups}
+              <p class="modal-loading">불러오는 중...</p>
+            {:else}
+              <div class="member-type-grid">
+                {#each memberTypeGroups.filter(g => g.is_active) as group (group.id)}
+                  <button
+                    type="button"
+                    class="member-type-chip"
+                    class:member-type-chip-active={localInfo.member_type === group.name}
+                    onclick={() => selectMemberType(group.name)}
+                  >{group.name}</button>
+                {/each}
+                {#each ['B2C', 'B2B'] as preset}
+                  {#if !memberTypeGroups.find(g => g.name === preset)}
+                    <button
+                      type="button"
+                      class="member-type-chip"
+                      class:member-type-chip-active={localInfo.member_type === preset}
+                      onclick={() => selectMemberType(preset)}
+                    >{preset}</button>
+                  {/if}
+                {/each}
+              </div>
+            {/if}
+            <button type="button" class="btn-secondary modal-close-btn" onclick={() => (showMemberTypeModal = false)}>닫기</button>
+          </div>
+        </div>
+      {/if}
 
       <!-- 블랙리스트 -->
       <div class="section-divider"></div>
@@ -523,6 +733,43 @@
   </div>
 {/if}
 
+<!-- 본인증명 파일 뷰어 -->
+{#if identityDocUrl}
+  <div
+    class="doc-viewer-backdrop"
+    role="presentation"
+    onclick={closeIdentityDoc}
+  >
+    <div
+      class="doc-viewer-dialog"
+      role="dialog"
+      aria-modal="true"
+      aria-label="본인증명 문서 보기"
+      onclick={(e) => e.stopPropagation()}
+    >
+      <div class="doc-viewer-header">
+        <span class="doc-viewer-title">본인증명 문서</span>
+        <button type="button" class="doc-viewer-close" onclick={closeIdentityDoc} aria-label="닫기">✕</button>
+      </div>
+      <div class="doc-viewer-body">
+        {#if isPdf}
+          <iframe
+            src={identityDocUrl}
+            title="본인증명 문서"
+            class="doc-viewer-iframe"
+          ></iframe>
+        {:else}
+          <img
+            src={identityDocUrl}
+            alt="본인증명 문서"
+            class="doc-viewer-img"
+          />
+        {/if}
+      </div>
+    </div>
+  </div>
+{/if}
+
 <style>
   .panel {
     background: var(--cs-white);
@@ -773,4 +1020,165 @@
   .modal-sub   { font: var(--text-pc-script-12); color: var(--cs-text-mid); margin: 0; }
   .modal-form  { display: flex; flex-direction: column; gap: 10px; }
   .modal-actions { display: flex; gap: 8px; justify-content: flex-end; }
+  .modal-loading { font: var(--text-pc-script-12); color: var(--cs-text-light); margin: 0; }
+  .modal-close-btn { align-self: flex-end; margin-top: 4px; }
+
+  /* 기본정보 편집 입력 */
+  .info-input {
+    flex: 1;
+    background: var(--cs-surface-gray);
+    border: none;
+    border-radius: var(--cms-radius-sm);
+    padding: 5px 10px;
+    font: var(--text-pc-body-14);
+    color: var(--cs-text);
+    min-width: 0;
+  }
+  .info-input:focus { outline: 2px solid var(--cs-purple); outline-offset: -2px; }
+  .info-input[type="date"] { cursor: pointer; }
+
+  /* 회원유형 선택 버튼 */
+  .info-select-btn {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    background: var(--cs-surface-gray);
+    border: none;
+    border-radius: var(--cms-radius-sm);
+    padding: 5px 10px;
+    font: var(--text-pc-body-14);
+    color: var(--cs-text);
+    cursor: pointer;
+    text-align: left;
+    min-height: 30px;
+  }
+  .info-select-btn:hover { background: rgba(59,47,138,0.06); }
+  .info-select-arrow { color: var(--cs-text-light); font-size: 11px; }
+
+  /* 파일 보기 버튼 */
+  .btn-file-view {
+    height: 24px;
+    padding: 0 8px;
+    background: var(--cs-purple-op10);
+    color: var(--cs-purple);
+    border: none;
+    border-radius: var(--radius-sm);
+    font: var(--text-pc-script-12);
+    font-weight: 700;
+    cursor: pointer;
+    white-space: nowrap;
+    flex-shrink: 0;
+  }
+  .btn-file-view:disabled { opacity: 0.35; cursor: not-allowed; }
+  .btn-file-view:not(:disabled):hover { background: rgba(59,47,138,0.12); }
+
+  /* 저장 바 */
+  .save-bar {
+    grid-column: 1 / -1;
+    display: flex;
+    justify-content: flex-end;
+    padding-top: 8px;
+    border-top: 1px solid var(--cs-lilac);
+    margin-top: 4px;
+  }
+
+  /* 회원유형 모달 */
+  .member-type-dialog { width: 320px; }
+  .member-type-grid {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+  .member-type-chip {
+    height: 30px;
+    padding: 0 14px;
+    border-radius: var(--radius-sm);
+    background: var(--cs-white);
+    color: var(--cs-text);
+    border: 1px solid #ECEBF4;
+    font: var(--text-pc-script-12);
+    cursor: pointer;
+    transition: background 0.12s, color 0.12s;
+  }
+  .member-type-chip:hover { background: rgba(59,47,138,0.06); }
+  .member-type-chip-active {
+    background: var(--cs-purple-dark);
+    color: var(--cs-white);
+    border-color: var(--cs-purple-dark);
+  }
+
+  /* 본인증명 날짜 + 경과 */
+  .identity-date {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font: var(--text-pc-script-12);
+    color: var(--cs-text-mid);
+  }
+  .identity-expired {
+    display: inline-flex;
+    align-items: center;
+    height: 20px;
+    padding: 0 7px;
+    background: rgba(255,53,53,0.10);
+    color: var(--cs-red-badge);
+    border-radius: var(--radius-sm);
+    font: var(--text-pc-script-12);
+    font-weight: 700;
+  }
+  .info-val-empty {
+    font: var(--text-pc-script-12);
+    color: var(--cs-text-light);
+  }
+
+  /* 본인증명 파일 뷰어 모달 */
+  .doc-viewer-backdrop {
+    position: fixed; inset: 0; z-index: 400;
+    background: rgba(16,11,50,0.72);
+    display: flex; align-items: center; justify-content: center;
+  }
+  .doc-viewer-dialog {
+    background: var(--cs-white);
+    border-radius: var(--cms-radius-lg);
+    display: flex; flex-direction: column;
+    width: min(860px, calc(100vw - 40px));
+    max-height: calc(100vh - 80px);
+    overflow: hidden;
+  }
+  .doc-viewer-header {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 16px 20px;
+    border-bottom: 1px solid #ECEBF4;
+    flex-shrink: 0;
+  }
+  .doc-viewer-title {
+    font: var(--text-pc-body-14);
+    font-weight: 700;
+    color: var(--cs-text);
+  }
+  .doc-viewer-close {
+    display: flex; align-items: center; justify-content: center;
+    width: 28px; height: 28px;
+    background: none; border: none;
+    border-radius: var(--radius-sm);
+    font-size: 14px; color: var(--cs-text-mid);
+    cursor: pointer;
+    transition: background 0.12s;
+  }
+  .doc-viewer-close:hover { background: rgba(59,47,138,0.08); color: var(--cs-text); }
+  .doc-viewer-body {
+    flex: 1; overflow: auto;
+    display: flex; align-items: center; justify-content: center;
+    background: #F3F4F6;
+    min-height: 400px;
+  }
+  .doc-viewer-img {
+    max-width: 100%; max-height: calc(100vh - 160px);
+    object-fit: contain;
+  }
+  .doc-viewer-iframe {
+    width: 100%; height: calc(100vh - 160px);
+    border: none;
+  }
 </style>

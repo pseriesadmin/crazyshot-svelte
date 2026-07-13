@@ -31,6 +31,14 @@
   let selectedUserId = $state<string | null>(null)
   let selectedRow = $state<CustomerRow | null>(null)
 
+  // invalidateAll() 후 data.customers가 갱신되면 selectedRow도 최신 데이터로 동기화
+  $effect(() => {
+    if (selectedUserId) {
+      const updated = data.customers.find(c => c.user_id === selectedUserId)
+      if (updated) selectedRow = updated
+    }
+  })
+
   $effect(() => { searchInput = data.search ?? '' })
 
   $effect(() => {
@@ -73,7 +81,7 @@
 
   function selectUser(row: CustomerRow) {
     selectedUserId = row.user_id
-    selectedRow    = row
+    selectedRow = row  // 즉시 패널 표시; $effect가 data 갱신 후 최신값으로 덮어씀
     const params = new URLSearchParams(window.location.search)
     params.set('selected', row.user_id)
     goto(`/cms/customers?${params.toString()}`, { replaceState: true, noScroll: true })
@@ -81,7 +89,7 @@
 
   function closePanel() {
     selectedUserId = null
-    selectedRow    = null
+    selectedRow = null
     const params = new URLSearchParams(window.location.search)
     params.delete('selected')
     goto(`/cms/customers?${params.toString()}`, { replaceState: true, noScroll: true })
