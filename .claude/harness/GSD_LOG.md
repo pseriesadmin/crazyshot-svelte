@@ -84,6 +84,34 @@
   - misidentifications.md 1건 기록
   - TASK.md CONTEXT BRIDGE frozen 목록 + baseline 추가
 
+[2026-07-14] AUDIT | CMS 전역 DB 고아·로직 이상 정밀 진단 | Production DB (vnbpmvxruyciuuaermyh) | ✅ 완료
+  - 7개 영역 전수 검사 (상품/예약/주문/프로모션/코드/채팅/계정)
+  - 고아 데이터: product_code_sequences TRI·LIG 2건 삭제 (production)
+  - 기능 이상 3종 확인 (콘텐츠 미완성, 구조 이상 아님):
+    · 상품 8건 slug = NULL (상품 상세 URL 불가)
+    · 상품 8건 price_rules 없음 (예약·결제 불가)
+    · 자산 9건 asset_code = NULL (QR 코드 연동 불가)
+  - 아키텍처 주의: products.category(소문자) ↔ product_category_codes.code(대문자) 별개 운영
+  - 스키마 주의: payment_transactions.order_id TEXT — Toss order key 저장 설계, 실데이터 0건
+  - 정상 영역: 예약/주문/프로모션/채팅(anon 23건 정상)/계정 고아 0건
+
+  Migration 109~116 (CMS 성능 + 통합 검색) Stage→Production 적용 완료:
+  - 109: rental_reservations.product_id 인덱스
+  - 110: user_profiles trgm 인덱스 + created_at 정렬
+  - 111: rental_reservations 복합 인덱스 (created_at / status_dates / user_created)
+  - 112: chat_messages·products 복합 인덱스
+  - 113: products search_vector (FTS) + trgm 인덱스 + 백필
+  - 114: search_logs·product_search_stats 테이블 생성
+  - 115: search_products RPC (3단계 검색 + AI 학습 루프)
+  - 116: mv_active_products_by_category·mv_top_search_terms MV + pg_cron 3개
+  수정 파일:
+  - src/lib/services/searchService.ts (신규): image_url 필드명 수정 (thumbnail_url→image_url)
+  - src/routes/api/search/products/+server.ts (신규): 통합 검색 API 엔드포인트
+  BACKLOG:
+  - supabase gen types 재생성 (searchService.ts (supabase.rpc as any) 해소)
+  - migrations 113~116 ROLLBACK 주석 추가
+  - Stephen git commit/push + Vercel 배포
+
 [2026-07-14] BOUNDARY | Crazylog 작성 화면 퍼블리싱 | src/routes/crazylog/ | ✅ GATE E PASS
   - [slug]/+page.svelte: Mobile UserInfoCard(m-user-card) + ContentOptions(m-content-options) 추가
     · State 초기값 수정: memberPublic/cafeScrap/aiSave = true (Figma defaultChecked)
