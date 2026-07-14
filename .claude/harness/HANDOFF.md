@@ -4,7 +4,86 @@
 
 ---
 
-## 최종 업데이트: 2026-07-07 (DB 파편화 수정 + $state 버그 수정 세션)
+## 최종 업데이트: 2026-07-14 (CMS 성능 Migration 109~116 + 통합 검색 + DB 전역 정밀 진단)
+
+---
+
+## 이번 세션 완료 내역
+
+### CMS 성능 최적화 Migration 109~116 + 통합 검색 + DB 진단
+
+| ID | 내용 | 산출물 |
+|----|------|--------|
+| MIG-109 | rental_reservations.product_id 인덱스 복구 | migrations/20260714000109_... |
+| MIG-110 | user_profiles trgm 3종 + created_at + 중복 제거 | migrations/20260714000110_... |
+| MIG-111 | rental_reservations 복합 인덱스 3종 | migrations/20260714000111_... |
+| MIG-112 | chat_messages·products 복합 인덱스 | migrations/20260714000112_... |
+| MIG-113 | products search_vector FTS + trgm 백필 | migrations/20260714000113_... |
+| MIG-114 | search_logs·product_search_stats (AI 학습 인프라) | migrations/20260714000114_... |
+| MIG-115 | search_products RPC (3단계 + AI 랭킹) | migrations/20260714000115_... |
+| MIG-116 | MV 2개 + pg_cron 3개 | migrations/20260714000116_... |
+| FILE-1 | searchService.ts 신규 (image_url 수정 포함) | src/lib/services/searchService.ts |
+| FILE-2 | 검색 API 엔드포인트 신규 | src/routes/api/search/products/+server.ts |
+| AUDIT | Production DB 7영역 전수 진단 | — |
+| FIX | product_code_sequences TRI·LIG 고아 2건 삭제 | Production DB |
+
+---
+
+## 즉시 재개 (NOW)
+
+- [ ] **Stephen: git commit + push + Vercel 배포** — 로컬 파일 수정 완료, 미커밋 상태
+  → 커밋 대상: searchService.ts, api/search/products/+server.ts, migrations 109~116
+- [ ] **supabase gen types 재생성** → `(supabase.rpc as any)` 제거 (searchService.ts)
+  → `supabase gen types typescript --project-id vnbpmvxruyciuuaermyh`
+
+## 다음 세션 권장 작업 (NEXT)
+
+1. **상품 콘텐츠 입력** (CMS UI 직접): 8개 slug 없음·8개 price_rules 없음·9개 asset_code 없음
+2. **products.category ↔ product_category_codes 정책 결정** (Stephen CRITICAL):
+   → 현재 두 시스템 별개 운영 (소문자 vs 대문자 약어), FK 없음
+3. **migrations 113~116 ROLLBACK 주석 추가** (ROUTINE)
+4. **S1-M3: TossPayments 결제 통합** (TDD, 다음 주요 사이클)
+
+## DB 현재 상태
+
+### Stage (ezyvffjvuwmtuhpxdjrw)
+- 마이그레이션 최신: **#116** 적용 완료
+
+### Production (vnbpmvxruyciuuaermyh)
+- 마이그레이션 최신: **#116** 적용 완료
+- product_code_sequences TRI·LIG 고아 2건 삭제 완료
+
+---
+
+## 주의사항 (전체 세션 누적)
+
+- **git 자율 실행 금지** — Stephen만 직접 실행
+- **마이그레이션 적용 순서**: stage(ezyvffjvuwmtuhpxdjrw) → production(vnbpmvxruyciuuaermyh)
+- **searchService.ts `(supabase.rpc as any)`**: types regen 후 제거 필요
+- **search_products RPC 실제 컬럼명**: `base_price_daily` (price_per_day 아님), `image_url = (image_urls->>0)` (thumbnail_url 아님)
+- **auth.ts / supabase.ts frozen** (baseline: fed4fdb) 절대 변경 금지
+- **payment_transactions.order_id TEXT**: Toss order key 저장 — orders.id bigint와 다름 (의도된 설계)
+- **chat anon 23건**: auth.users is_anonymous=true → 정상 동작
+
+## 새 세션 시작 명령
+
+```
+.claude/harness/HANDOFF.md 읽고 이어서 진행해줘.
+B-START: supabase gen types 재생성 → searchService.ts (supabase.rpc as any) 제거
+```
+
+또는:
+
+```
+.claude/harness/HANDOFF.md 읽고 이어서 진행해줘.
+B-START: S1-M3: TossPayments 결제 통합 (TDD)
+```
+
+---
+
+## 이전 세션 완료 내역 (2026-07-07)
+
+### DB 파편화 수정 + Svelte $state 버그 수정
 
 ---
 
