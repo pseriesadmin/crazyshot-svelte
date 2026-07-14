@@ -10,6 +10,13 @@
 		'취미 로그'
 	]
 
+	import { onMount } from 'svelte'
+
+	onMount(() => {
+		document.body.classList.add('crazylog-write')
+		return () => document.body.classList.remove('crazylog-write')
+	})
+
 	let logType = $state('')
 	let title = $state('')
 	let content = $state('')
@@ -37,6 +44,17 @@
 		// submission logic — BACKLOG: BL-CRAZYLOG-SUBMIT
 	}
 </script>
+
+<svelte:head>
+  <style>
+    @media (max-width: 767px) {
+      body.crazylog-write .gnb-mobile-wrap,
+      body.crazylog-write .gnb-desktop-wrap { display: none !important; }
+      body.crazylog-write .fab-bar           { display: none !important; }
+      body.crazylog-write .site-footer       { display: none !important; }
+    }
+  </style>
+</svelte:head>
 
 <!-- ============================================================
      MOBILE LAYOUT
@@ -603,22 +621,6 @@
 </div>
 
 <style>
-	/* ──────────────────────────────────────────────
-	   공통 GNB / FloatingBar / Footer — 모바일에서 숨김
-	   ────────────────────────────────────────────── */
-	@media (max-width: 767px) {
-		:global(.gnb-mobile-wrap),
-		:global(.gnb-desktop-wrap) {
-			display: none !important;
-		}
-		:global(.fab-bar) {
-			display: none !important;
-		}
-		:global(.site-footer) {
-			display: none !important;
-		}
-	}
-
 	/* ──────────────────────────────────────────────
 	   MOBILE LAYOUT
 	   ────────────────────────────────────────────── */

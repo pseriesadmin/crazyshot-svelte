@@ -90,7 +90,20 @@
     { title: 'onn. 52인치 삼각대, 컴팩트 카메라, 스마트폰 및 GoPro 액션 카메라용', time: '2시간 전·by 유말자', img: '/hype-pack/m-post-2.png' },
     { title: 'K-트레일로그를 남기는 멋진 일은 우리들에게 즐거움의 폭증이다!!',           time: '2시간 전·by 유말자', img: '/hype-pack/m-post-3.png' },
   ]
+
+  $effect(() => {
+    document.body.classList.add('hype-pack-page')
+    return () => document.body.classList.remove('hype-pack-page')
+  })
 </script>
+
+<svelte:head>
+  <style>
+    @media (max-width: 767px) {
+      body.hype-pack-page .gnb-mobile-wrap { display: none !important; }
+    }
+  </style>
+</svelte:head>
 
 <!-- ─── MOBILE NAV ──────────────────────────────────────────────────── -->
 <div class="m-nav-wrap">
@@ -397,10 +410,6 @@
 
 
 <style>
-  /* ─── 공통 GNB 모바일 숨김 ─── */
-  @media (max-width: 767px) {
-    :global(.gnb-mobile-wrap) { display: none !important; }
-  }
 
   /* ═══════════════════════════════════════════════════════════
      MOBILE LAYOUT  (≤767px)

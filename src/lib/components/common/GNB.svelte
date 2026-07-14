@@ -9,7 +9,7 @@
     { id: 'all',     label: 'ALL',         href: '/products' },
     { id: 'members', label: 'Members',     href: '/members' },
     { id: 'log',     label: 'Crazylog',    href: '/crazylog' },
-    { id: 'help',    label: 'Help Center', href: '/' },
+    { id: 'help',    label: 'Help Center', href: '/help' },
   ]
 
   function isActive(item: { id: string; href: string }): boolean {
@@ -17,6 +17,7 @@
     if (item.href === '/hype-pack') return pathname.startsWith('/hype-pack')
     if (item.href === '/crazylog') return pathname.startsWith('/crazylog')
     if (item.href === '/members') return pathname.startsWith('/members')
+    if (item.href === '/help') return pathname.startsWith('/help')
     return false
   }
 </script>
