@@ -7,7 +7,7 @@
   const MENU_ITEMS = [
     { id: 'hype',    label: 'Hype Pack',   href: '/hype-pack' },
     { id: 'all',     label: 'ALL',         href: '/products' },
-    { id: 'members', label: 'Members',     href: '/' },
+    { id: 'members', label: 'Members',     href: '/members' },
     { id: 'log',     label: 'Crazylog',    href: '/crazylog' },
     { id: 'help',    label: 'Help Center', href: '/' },
   ]
@@ -16,6 +16,7 @@
     if (item.href === '/products') return pathname.startsWith('/products')
     if (item.href === '/hype-pack') return pathname.startsWith('/hype-pack')
     if (item.href === '/crazylog') return pathname.startsWith('/crazylog')
+    if (item.href === '/members') return pathname.startsWith('/members')
     return false
   }
 </script>
@@ -68,6 +69,8 @@
     right: 0;
     z-index: 50;
     pointer-events: none;
+    -webkit-transform: translateZ(0);
+    transform: translateZ(0);
   }
   @media (min-width: 768px) {
     .gnb-desktop-wrap { display: flex; }
@@ -77,15 +80,15 @@
     display: flex;
     align-items: center;
     justify-content: space-between;
-    gap: 150px;
-    padding: 0 30px;
+    gap: clamp(16px, 5vw, 150px);   /* 고정 150px → fluid: 소형 PC 오버플로 방지 */
+    padding: 0 clamp(16px, 2.5vw, 30px);
     height: 100px;
     width: 100%;
     max-width: var(--layout-pc-max);
     border-radius: 30px;
     background: var(--cs-dark);
     pointer-events: all;
-    overflow: visible;
+    overflow: visible;               /* 로고 110px 수직 오버플로 유지 (브랜드 아이덴티티) */
   }
 
   .gnb-logo {
@@ -101,22 +104,23 @@
 
   /* PC 로고: 110px tall in 100px nav → 5px overflow top & bottom (브랜드 아이덴티티) */
   .gnb-logo-pc {
-    width: 178px;
-    height: 110px;
+    width: clamp(120px, 14vw, 178px);
+    height: auto;
   }
 
   .gnb-desktop-right {
     display: flex;
     align-items: center;
-    gap: 50px;
-    flex-shrink: 0;
+    gap: clamp(12px, 2.2vw, 50px);  /* 고정 50px → fluid */
+    flex-shrink: 1;                   /* 0 → 1: 소형 PC에서 축소 허용 */
+    min-width: 0;                     /* flex 축소 허용 */
   }
 
   .gnb-menu-item {
     position: relative;
     color: white;
     font-family: var(--font-en-display);
-    font-size: 20px;
+    font-size: clamp(14px, 1.5vw, 20px);  /* fluid: 소형 PC 대응 */
     letter-spacing: -0.5px;
     line-height: 1.6;
     text-decoration: none;
@@ -134,14 +138,17 @@
     background: var(--cs-red-badge);
     color: white;
     font-family: var(--font-en-display);
-    font-size: 20px;
+    font-size: clamp(14px, 1.5vw, 20px);  /* fluid */
     letter-spacing: -0.5px;
     text-decoration: none;
-    border-radius: 20px;
-    width: 145px;
-    height: 70px;
-    flex-shrink: 0;
+    border-radius: clamp(14px, 1.5vw, 20px);
+    min-width: clamp(90px, 10vw, 145px);  /* fluid: pill 내부 유지 */
+    width: auto;
+    padding: 0 clamp(14px, 2vw, 24px);
+    height: clamp(50px, 6.5vw, 70px);    /* fluid 높이 */
+    flex-shrink: 0;                        /* Sign In은 항상 완전 노출 */
     transition: filter 0.15s;
+    white-space: nowrap;
   }
   .gnb-signin-btn:hover { filter: brightness(1.12); }
 
@@ -158,6 +165,9 @@
     z-index: 50;
     background: transparent;
     pointer-events: none;
+    /* iOS Safari: html/body height:100% 환경에서 fixed 요소가 스크롤 중 사라지는 버그 방지 */
+    -webkit-transform: translateZ(0);
+    transform: translateZ(0);
   }
   @media (min-width: 768px) {
     .gnb-mobile-wrap { display: none; }
