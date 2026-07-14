@@ -1,11 +1,15 @@
 <script lang="ts">
-  let activeTab = $state(0)
-
   const TABS = [
     { label: 'Review',      count: 212 },
     { label: 'Share',       count: 43  },
     { label: 'K-Trail log', count: 39  },
   ]
+
+  const TAB_MAP: Record<string, string> = {
+    'Review':      '리뷰',
+    'Share':       '공유',
+    'K-Trail log': '이벤트',
+  }
 
   const M_KEYWORDS = ['양양의 기억 로그', 'Mini2se 리뷰 로그', '신상로그', 'Air 3S Drone', 'Air 3S Drone', 'Air 3S Drone']
 
@@ -64,15 +68,25 @@
     { img: '/crazylog/article-img5.png', title: 'K-트레일로그를 남기는 멋진 일은 우리들에게 즐거움의 폭증이다!!',         meta: '2시간 전·by 유말자' },
   ]
 
-  const D_POSTS = [
-    { bar: '#3b2f8a', title: 'SONY FE 24-105 F4 G OSS',                                         desc: 'Bower 6-in-1 Multi Selfie Tripod with Smartphone & GoPro Mount, Rechargeable Wireless Remote - Black',                                                img: '/crazylog/post-img1.png' },
-    { bar: '#553fe0', title: 'GoPro HERO13 Black',                                               desc: 'Best-in-Class 5.3K Video - 5.3K video delivers breathtaking image quality with 91% more resolution than 4K and an incredible 665% more than 1080p.', img: '/crazylog/post-img2.png' },
-    { bar: '#3b2f8a', title: 'SONY FE 24-105 F4 G OSS',                                         desc: 'Bower 6-in-1 Multi Selfie Tripod with Smartphone & GoPro Mount, Rechargeable Wireless Remote - Black',                                                img: '/crazylog/post-img3.png' },
-    { bar: '#ff3535', title: '[Accessories] onn USB C/USB 2.0 Memory Card Reader for SD/Mic...', desc: 'SD and microSD card reader with USB and USB-C connectors for versatile connectivity',                                                                   img: '/crazylog/post-img4.png' },
-    { bar: '#3b2f8a', title: 'SONY FE 24-105 F4 G OSS',                                         desc: 'Bower 6-in-1 Multi Selfie Tripod with Smartphone & GoPro Mount, Rechargeable Wireless Remote - Black',                                                img: '/crazylog/post-img1.png' },
-    { bar: '#553fe0', title: 'GoPro HERO13 Black',                                               desc: 'Best-in-Class 5.3K Video - 5.3K video delivers breathtaking image quality with 91% more resolution than 4K and an incredible 665% more than 1080p.', img: '/crazylog/post-img2.png' },
-    { bar: '#3b2f8a', title: 'SONY FE 24-105 F4 G OSS',                                         desc: 'Bower 6-in-1 Multi Selfie Tripod with Smartphone & GoPro Mount, Rechargeable Wireless Remote - Black',                                                img: '/crazylog/post-img3.png' },
-    { bar: '#ff3535', title: '[Accessories] onn USB C/USB 2.0 Memory Card Reader for SD/Mic...', desc: 'SD and microSD card reader with USB and USB-C connectors for versatile connectivity',                                                                   img: '/crazylog/post-img4.png' },
+  interface PostItem {
+    bar: string
+    title: string
+    desc: string
+    img: string
+    rounded?: boolean
+    cover?: boolean
+    isList?: boolean
+  }
+
+  const D_POSTS: PostItem[] = [
+    { bar: '#3b2f8a', rounded: true,  title: 'SONY FE 24-105 F4 G OSS',                                         desc: 'Bower 6-in-1 Multi Selfie Tripod with Smartphone & GoPro Mount, Rechargeable Wireless Remote - Black',                                                img: '/crazylog/post-img1.png' },
+    { bar: '#553fe0', cover: true,    title: 'GoPro HERO13 Black',                                               desc: 'Best-in-Class 5.3K Video - 5.3K video delivers breathtaking image quality with 91% more resolution than 4K and an incredible 665% more than 1080p.', img: '/crazylog/post-img2.png' },
+    { bar: '#3b2f8a', rounded: true,  title: 'SONY FE 24-105 F4 G OSS',                                         desc: 'Bower 6-in-1 Multi Selfie Tripod with Smartphone & GoPro Mount, Rechargeable Wireless Remote - Black',                                                img: '/crazylog/post-img3.png' },
+    { bar: '#ff3535', isList: true,   title: '[Accessories] onn USB C/USB 2.0 Memory Card Reader for SD/Mic...', desc: 'SD and microSD card reader with USB and USB-C connectors for versatile connectivity',                                                                   img: '/crazylog/post-img4.png' },
+    { bar: '#3b2f8a', rounded: true,  title: 'SONY FE 24-105 F4 G OSS',                                         desc: 'Bower 6-in-1 Multi Selfie Tripod with Smartphone & GoPro Mount, Rechargeable Wireless Remote - Black',                                                img: '/crazylog/post-img1.png' },
+    { bar: '#553fe0', cover: true,    title: 'GoPro HERO13 Black',                                               desc: 'Best-in-Class 5.3K Video - 5.3K video delivers breathtaking image quality with 91% more resolution than 4K and an incredible 665% more than 1080p.', img: '/crazylog/post-img2.png' },
+    { bar: '#3b2f8a', rounded: true,  title: 'SONY FE 24-105 F4 G OSS',                                         desc: 'Bower 6-in-1 Multi Selfie Tripod with Smartphone & GoPro Mount, Rechargeable Wireless Remote - Black',                                                img: '/crazylog/post-img3.png' },
+    { bar: '#ff3535', isList: true,   title: '[Accessories] onn USB C/USB 2.0 Memory Card Reader for SD/Mic...', desc: 'SD and microSD card reader with USB and USB-C connectors for versatile connectivity',                                                                   img: '/crazylog/post-img4.png' },
   ]
 </script>
 
@@ -86,6 +100,9 @@
   <section class="d-wb-section">
     <div class="d-wb-wrap">
       <div class="d-wb-grid">
+
+        <!-- col-1: 병렬 래퍼 — text tile + Flash Deals 수직 스택 -->
+        <div class="d-col1-wrap">
 
         <!-- col-1 row-1: Title1 — 텍스트 타이틀 박스 (lilac bg) -->
         <!-- Figma: col-1 row-1, justify-self-stretch, self-start -->
@@ -106,8 +123,8 @@
         </div>
 
         <!-- col-1 row-2: Shotlog (Flash Deals card) -->
-        <!-- Figma: col-1 row-2, h-[400px], bg hero-shotlog1.png, bg-[#201857] header + gradient writing -->
-        <div class="d-shotlog">
+        <!-- Figma: h-[400px], bg hero-shotlog1.png, bg-[#201857] header + gradient writing -->
+        <a href="/crazylog/view/1" class="d-shotlog">
           <div class="d-shotlog-bg">
             <img src="/crazylog/hero-shotlog1.png" alt="" class="d-shotlog-bg-img" />
           </div>
@@ -125,11 +142,16 @@
             <p class="d-shotlog-writing-text">From Portraits to Panoramas-One Lens to Rule Them All</p>
             <p class="d-shotlog-writing-sub">올어라운드 렌즈의 끝판왕</p>
           </div>
-        </div>
+        </a>
+
+        </div><!-- /d-col1-wrap -->
+
+        <!-- col-2: 병렬 래퍼 — grid-row 1/3 span, justify-end으로 bottom 730px 정렬 -->
+        <div class="d-col2-wrap">
 
         <!-- col-2 row-1: Shotlog1 (hero-shotlog.png) -->
         <!-- Figma: col-2 row-1, bg-[#cf0000] "K-Trail log" header + writing -->
-        <a href="/crazylog/review-1" class="d-shotlog1">
+        <a href="/crazylog/view/1" class="d-shotlog1">
           <div class="d-shotlog1-bg">
             <img src="/crazylog/hero-shotlog.png" alt="" class="d-shotlog1-bg-img" />
           </div>
@@ -147,7 +169,7 @@
 
         <!-- col-2 row-2: Shotlog2 (hero-shotlog2.png) -->
         <!-- Figma: col-2 row-2, bg-[#3b2f8a] "Release" header + writing -->
-        <a href="/crazylog/review-1" class="d-shotlog2">
+        <a href="/crazylog/view/1" class="d-shotlog2">
           <div class="d-shotlog2-bg">
             <img src="/crazylog/hero-shotlog2.png" alt="" class="d-shotlog2-img" />
           </div>
@@ -163,6 +185,8 @@
           </div>
         </a>
 
+        </div><!-- /d-col2-wrap -->
+
       </div>
     </div>
   </section>
@@ -174,15 +198,11 @@
       <!-- ItemIndexBar: Review / Share / K-Trail log -->
       <!-- Figma: bg-[#3b2f8a] rounded-[30px] px-40 py-30, flex gap-[10px] -->
       <div class="d-index-bar">
-        {#each TABS as tab, i}
-          <button
-            class="d-index-btn"
-            class:d-index-btn-active={activeTab === i}
-            onclick={() => activeTab = i}
-          >
+        {#each TABS as tab}
+          <a href="/crazylog/list?tab={TAB_MAP[tab.label]}" class="d-index-btn">
             <span class="d-index-label">{tab.label}</span>
             <span class="d-index-count-pill">{tab.count}</span>
-          </button>
+          </a>
         {/each}
       </div>
 
@@ -193,13 +213,19 @@
           <article class="d-post">
             <!-- Figma: IndexBar — 15px wide colored left bar -->
             <div class="d-post-bar" style="background:{post.bar}"></div>
-            <!-- Figma: Writing — flex-[1_0_0] p-[40px] gap-[15px] -->
+            <!-- Figma: Writing — flex-[7_0_0%] p-[40px] gap-[15px] -->
             <div class="d-post-writing">
               <p class="d-post-title">{post.title}</p>
-              <p class="d-post-desc">{post.desc}</p>
+              {#if post.isList}
+                <ul class="d-post-desc-list">
+                  <li class="d-post-desc-list-item">{post.desc}</li>
+                </ul>
+              {:else}
+                <p class="d-post-desc">{post.desc}</p>
+              {/if}
             </div>
-            <!-- Figma: Img — 600px wide, 300px tall -->
-            <div class="d-post-img-wrap">
+            <!-- Figma: Img — flex-[3_0_0%] h-[210px] -->
+            <div class="d-post-img-wrap" style={post.rounded ? 'border-radius:0 30px 30px 0' : ''}>
               <img src={post.img} alt="" class="d-post-img" />
             </div>
           </article>
@@ -274,7 +300,7 @@
       <!-- Figma: horizontal scroll snap carousel -->
       <div class="m-carousel">
         {#each list.cards as card, ci}
-          <a href="/crazylog/review-1" class="m-card">
+          <a href="/crazylog/view/1" class="m-card">
             <div class="m-card-bg">
               <img src={card.img} alt="" class="m-card-bg-img" />
             </div>
@@ -312,7 +338,7 @@
   <section class="m-content">
     <div class="m-content-inner">
       {#each M_ARTICLES as article}
-        <a href="/crazylog/review-1" class="m-article">
+        <a href="/crazylog/view/1" class="m-article">
           <div class="m-article-img-wrap">
             <img src={article.img} alt="" class="m-article-img" />
           </div>
@@ -332,40 +358,62 @@
      DESKTOP — 기본 숨김, 768px+ 표시
   ════════════════════════════════════════ */
   .d-page { display: none; }
-  @media (min-width: 768px) { .d-page { display: block; } }
+  @media (min-width: 768px) {
+    .d-page {
+      display: flex;
+      flex-direction: column;
+      gap: 50px;
+      align-items: center;
+      padding: 150px 0 50px; /* GNB 100px + Figma py-[50px] */
+    }
+  }
 
   /* ── What's Buzzing 섹션 ── */
-  .d-wb-section {
-    padding-top: 130px;    /* GNB 100px + 여백 30px */
-    padding-bottom: 150px;
-  }
+  .d-wb-section { width: 100%; }
   .d-wb-wrap {
     max-width: 1240px;
     margin: 0 auto;
     padding: 0 30px;
   }
 
-  /* Figma: 2×2 grid, 630px, gap 30px, rounded-50px overflow-clip */
+  /* 병렬 flex: col-1(text+Flash Deals) / col-2 래퍼(K-Trail+Release) 나란히
+     되돌리기: display:flex → display:grid / grid-template-columns/rows 복원
+               d-col2-wrap 삭제 / d-shotlog1·d-shotlog2 grid-column/row 복원 */
   .d-wb-grid {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    grid-template-rows: 300px 300px;   /* Figma: grid-rows-2 h-[630px] gap-30px → 300px each */
+    display: flex;
+    flex-direction: row;
     gap: 30px;
-    height: 630px;
+    height: 730px;
     border-radius: 50px;
     overflow: hidden;
   }
 
+  /* col-2 래퍼: 730px 전체 높이 / 카드 2개를 하단 정렬 */
+  .d-col2-wrap {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    gap: 30px;
+    justify-content: flex-end;   /* K-Trail log + Release를 bottom 기준 정렬 */
+  }
+
+  /* col-1 래퍼: text tile(300px) + Flash Deals(400px) 수직 스택 */
+  .d-col1-wrap {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    gap: 30px;
+  }
+
   /* ── col-1 row-1: Title1 (lilac bg) ── */
   .d-title1 {
-    grid-column: 1;
-    grid-row: 1;
     background: var(--cs-lilac);
     border-radius: 50px;
     display: flex;
     flex-direction: column;
     justify-content: flex-end;
     overflow: hidden;
+    height: 300px;
   }
   /* Figma: content-stretch flex-col gap-[20px] items-start px-[40px] */
   .d-title1-inner {
@@ -404,14 +452,16 @@
 
   /* ── col-1 row-2: Shotlog (Flash Deals, h-400px) ── */
   .d-shotlog {
-    grid-column: 1;
-    grid-row: 2;
     position: relative;
     border-radius: 50px;
     overflow: hidden;
     display: flex;
     flex-direction: column;
+    flex: 1;
+    text-decoration: none;
+    cursor: pointer;
   }
+  .d-shotlog:hover .d-shotlog-bg-img { transform: scale(1.05); }
   .d-shotlog-bg {
     position: absolute;
     inset: 0;
@@ -423,6 +473,7 @@
     width: 100%;
     height: 100%;
     object-fit: cover;
+    transition: transform 0.4s ease;
   }
   /* Figma: bg-[#201857] px-[50px] py-[20px] flex justify-between */
   .d-shotlog-header {
@@ -477,13 +528,12 @@
 
   /* ── col-2 row-1: Shotlog1 (hero-shotlog.png) ── */
   .d-shotlog1 {
-    grid-column: 2;
-    grid-row: 1;
     position: relative;
     border-radius: 50px;
     overflow: hidden;
     display: flex;
     flex-direction: column;
+    height: 300px;
   }
   .d-shotlog1-bg {
     position: absolute;
@@ -546,13 +596,12 @@
 
   /* ── col-2 row-2: Shotlog2 (hero-shotlog2.png, fill) ── */
   .d-shotlog2 {
-    grid-column: 2;
-    grid-row: 2;
     position: relative;
     border-radius: 50px;
     overflow: hidden;
     display: flex;
     flex-direction: column;
+    height: 300px;
   }
   .d-shotlog2-bg {
     position: absolute;
@@ -613,7 +662,7 @@
   }
 
   /* ── 포스트 섹션 ── */
-  .d-posts-section { padding-bottom: 80px; }
+  .d-posts-section { width: 100%; }
   .d-posts-wrap {
     max-width: 1240px;
     margin: 0 auto;
@@ -633,10 +682,10 @@
     display: inline-flex;
     align-items: center;
     justify-content: space-between;
-    background: rgba(59,47,138,0.55);
+    background: #3b2f8a;
     border: none;
     border-radius: var(--radius-xl);
-    padding: 30px 40px;
+    padding: 27px 40px;
     cursor: pointer;
     transition: background 0.2s, transform 0.2s, box-shadow 0.2s;
     min-height: 44px;
@@ -673,13 +722,14 @@
     gap: 50px;
   }
 
-  /* Figma: List — bg-white overflow-clip rounded-[30px] flex items-start justify-between */
+  /* list 카드 스타일 반영 */
   .d-post {
-    background: white;
-    border-radius: 30px;
+    background: var(--cs-white);
+    border-radius: var(--radius-lg);  /* 20px — /list 카드와 동일 */
     overflow: hidden;
     display: flex;
     align-items: stretch;
+    height: 180px;
   }
 
   /* D-7: grid card hover */
@@ -692,64 +742,67 @@
   .d-shotlog:hover .d-shotlog-bg-img { transform: scale(1.10); }
   .d-shotlog2:hover .d-shotlog2-img { transform: scale(1.10); }
 
-  /* D-8: post item hover */
-  .d-post { transition: transform 0.2s ease, box-shadow 0.2s ease; }
-  .d-post:hover { transform: translateY(-2px); box-shadow: 0 12px 40px rgba(59,47,138,0.2); }
-
-  /* Figma: IndexBar — 15px wide colored bar (shrink-0) */
+  /* list 스타일: colored bar */
   .d-post-bar {
     width: 15px;
     flex-shrink: 0;
-    transition: width 0.3s ease;
   }
 
-  /* D-9: post bar grow on hover */
-  .d-post:hover .d-post-bar { width: 22px; }
-
-  /* Figma: Writing — flex-[1_0_0] p-[40px] gap-[15px] flex-col justify-center */
+  /* list 스타일: writing 영역 — padding·gap 축소 */
   .d-post-writing {
-    flex: 1 0 0;
+    flex: 7;
     min-width: 0;
     display: flex;
     flex-direction: column;
     justify-content: center;
-    gap: 15px;
-    padding: 40px;
+    gap: 12px;
+    padding: 24px 30px;
   }
-  /* Figma: 16px Bold Noto #444 leading-[2] whitespace-nowrap */
+  /* list 카드 타이틀: 16px */
   .d-post-title {
     font-family: 'Noto Sans KR', sans-serif;
     font-size: 16px;
     font-weight: 700;
-    color: #444444;
+    color: var(--cs-text-dark);
     margin: 0;
-    line-height: 2;
+    line-height: 1.5;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
   }
-  /* Figma: 14px Bold Noto #444 leading-[1] */
   .d-post-desc {
     font-family: 'Noto Sans KR', sans-serif;
     font-size: 14px;
     font-weight: 700;
-    color: #444444;
+    color: var(--cs-text-dark);
     margin: 0;
-    line-height: 1.6;
+    line-height: 1.5;
     overflow: hidden;
     display: -webkit-box;
     -webkit-line-clamp: 2;
     -webkit-box-orient: vertical;
   }
+  /* isList 항목 — <ul><li> 형식 */
+  .d-post-desc-list {
+    margin: 0;
+    padding-left: 21px;
+  }
+  .d-post-desc-list-item {
+    font-family: 'Noto Sans KR', sans-serif;
+    font-size: 14px;
+    font-weight: 700;
+    color: var(--cs-text-dark);
+    line-height: 1.5;
+  }
 
-  /* Figma: Img — 600px wide, 300px tall */
+  /* list 스타일: 이미지 영역 */
   .d-post-img-wrap {
-    width: 600px;
-    height: 300px;
+    flex: 3;
     flex-shrink: 0;
+    min-width: 180px;
     position: relative;
     overflow: hidden;
-    border-radius: 0 30px 30px 0;
+    /* border-radius는 rounded 항목에만 인라인 style로 적용 */
   }
   .d-post-img {
     position: absolute;
