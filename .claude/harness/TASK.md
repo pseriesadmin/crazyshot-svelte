@@ -308,6 +308,67 @@ plan_source: 세션 내 설계 (품번 정책 확정)
 - [x] UI-2: CalendarGrid $state 동기화 | BOUNDARY | $effect로 value prop 변경 시 viewYear/viewMonth 갱신
 - [x] RULE: $state(prop) 초기화 절대 금지 규칙 영구 등록 | ROUTINE | core-rules.md + ui-mobile.md 동시 등록
 
+## NOW — CMS 성능 개선 + 통합 검색 + AI 학습 인덱싱 (2026-07-14) ✅ 완료
+
+[CONTEXT BRIDGE — DB 성능 + 통합 검색]
+plan_source: declarative-wandering-catmull.md
+수정 파일:
+  - supabase/migrations/20260714000109_109_idx_rental_reservations_product_id.sql (신규)
+  - supabase/migrations/20260714000110_110_idx_user_profiles_trgm_created_at.sql (신규)
+  - supabase/migrations/20260714000111_111_idx_rental_reservations_scale.sql (신규)
+  - supabase/migrations/20260714000112_112_idx_chat_products_scale.sql (신규)
+  - supabase/migrations/20260714000113_113_products_search_foundation.sql (신규, 113a/113b 분할)
+  - supabase/migrations/20260714000114_114_search_logs_ai_learning.sql (신규)
+  - supabase/migrations/20260714000115_115_search_products_rpc.sql (신규)
+  - supabase/migrations/20260714000116_116_mv_search_cache.sql (신규)
+  - src/routes/api/search/products/+server.ts (신규)
+  - src/lib/services/searchService.ts (신규)
+  - src/routes/cms/customers/+page.server.ts (locals.cmsRole 패턴 적용)
+핵심제약:
+  - stage(ezyvffjvuwmtuhpxdjrw) 검증 완료 → production(vnbpmvxruyciuuaermyh) 적용 완료
+  - CREATE INDEX CONCURRENTLY → 트랜잭션 블록 불가 → 113a/113b 분할로 해결
+  - rental_reservations: deleted_at 컬럼 없음 / start_date·end_date 컬럼명
+  - products.image_urls JSONB → (image_urls->>0) TEXT / base_price_daily 컬럼명
+  - query_tokens: tsvector 컬럼 → to_tsvector('simple', p_query) 삽입
+
+- [x] T-PERF-1: Migration #109 — rental_reservations.product_id 인덱스 | CRITICAL | ✅ Stage + Production 완료
+- [x] T-PERF-2: Migration #110 — user_profiles trgm + created_at + 중복 제거 | CRITICAL | ✅ Stage + Production 완료
+- [x] T-PERF-3: Migration #111 — rental_reservations 복합 인덱스 (status/dates) | CRITICAL | ✅ Stage + Production 완료
+- [x] T-PERF-4: Migration #112 — chat_messages + products 규모 인덱스 | CRITICAL | ✅ Stage + Production 완료
+- [x] T-SEARCH-1: Migration #113 — products.search_vector + 트리거 + GIN 인덱스 | CRITICAL | ✅ Stage + Production 완료 (113a/113b 분할)
+- [x] T-SEARCH-2: Migration #114 — search_logs + product_search_stats + RLS | CRITICAL | ✅ Stage + Production 완료
+- [x] T-SEARCH-3: Migration #115 — search_products RPC + record_search_click 함수 | CRITICAL | ✅ Stage + Production 완료
+- [x] T-SEARCH-4: Migration #116 — MV 2개 + pg_cron 3개 | CRITICAL | ✅ Stage + Production 완료
+- [x] T-SEARCH-5: 통합 검색 API + 서비스 레이어 신규 생성 | BOUNDARY | ✅ 완료
+  - src/routes/api/search/products/+server.ts
+  - src/lib/services/searchService.ts
+- [x] T-QA: sp3-qa-agent 검수 | GATE C | ✅ 완료 — searchService.ts thumbnail_url→image_url 수정 후 GATE E 통과
+
+## NOW — Crazylog 콘텐츠 작성 화면 퍼블리싱 + 링크 연동 (2026-07-14) ✅ 완료
+
+[CONTEXT BRIDGE — crazylog publishing]
+plan_source: tranquil-prancing-key.md
+수정 파일:
+  - src/routes/crazylog/[slug]/+page.svelte (작성 화면)
+  - src/routes/crazylog/+page.svelte (메인 화면)
+핵심제약:
+  - 사용자 화면 디자인 시스템 토큰 (front-uiux.md)
+  - Svelte 5 Runes / GNB 모바일 숨김 (:global)
+  - ZERO-INTERPRETATION 원칙 (Figma 1:1)
+
+- [x] T-CL-1: [slug]/+page.svelte Mobile UserInfoCard 추가 | BOUNDARY | ✅ 완료
+  - m-user-card: 그라데이션 아바타 + 이름/배지/레벨/인증 행 (Figma compact spec 1:1)
+  - CSS: --cs-purple→red-badge 그라디언트 / --radius-lg / --radius-full / --cs-purple-op10
+
+- [x] T-CL-2: [slug]/+page.svelte Mobile ContentOptions 추가 | BOUNDARY | ✅ 완료
+  - m-content-options: 공개설정 / 댓글허용 / 기타 3섹션 + m-divider
+  - State 초기값 수정: memberPublic=true / cafeScrap=true / aiSave=true (Figma defaultChecked)
+  - checkbox accent-color: --cs-purple-light (#553FE0)
+
+- [x] T-CL-3: +page.svelte 헤더 카드 3개 + 아이콘 링크 연동 | BOUNDARY | ✅ 완료
+  - {#each} 내 plus SVG → <a href="/crazylog/new" aria-label="로그 작성"> 래핑
+  - 3개 섹션 카드 동일 적용 (루프 1개 수정으로 일괄 처리)
+
 ## DONE
 - S0: 환경 설정 + DB 스키마 + RPC 함수 9개
 - S1-M1: Products 모듈 (리스트 + 상세)
@@ -364,6 +425,7 @@ plan_source: 세션 내 설계 (품번 정책 확정)
 - BL-② edit/+page.server.ts category 변경 시 품번 재발행 정책 결정 | Stephen 결정 필요 | 현재 최초 등록 시만 발행
 - BL-③ M3 예약코드 구현 시 cms_settings product_code_format 키 분리 | 현재 reservation_code_format 공용
 - BL-④ combo_keywords → 상품 검색 태그 자동 제안 연동 (products/new 미활용 상태)
+- BL-CRAZYLOG-SUBMIT: crazylog 작성 폼 실제 서버 제출 로직 구현 (현재 handleSubmit 빈 함수)
 
 ### 기타
 - 카카오 알림톡 fallback (PRD.1.7.7)

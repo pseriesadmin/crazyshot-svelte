@@ -7,7 +7,7 @@
     { label: 'K-Trail log', count: 39  },
   ]
 
-  const M_KEYWORDS = ['양양의 기억 로그', 'Mini2se 리뷰 로그', '신상로그', 'Air 3S Drone']
+  const M_KEYWORDS = ['양양의 기억 로그', 'Mini2se 리뷰 로그', '신상로그', 'Air 3S Drone', 'Air 3S Drone', 'Air 3S Drone']
 
   interface CardItem {
     category: string
@@ -123,26 +123,45 @@
           <!-- Figma: Writing2 — gradient bg-gradient-to-t from-rgba(16,11,50,0) to-#100b32 via-40% -->
           <div class="d-shotlog-writing">
             <p class="d-shotlog-writing-text">From Portraits to Panoramas-One Lens to Rule Them All</p>
+            <p class="d-shotlog-writing-sub">올어라운드 렌즈의 끝판왕</p>
           </div>
         </div>
 
-        <!-- col-2 row-1: Shotlog1 (hero-shotlog.png, h-[300px]) -->
-        <!-- Figma: col-2 row-1, h-[300px], self-start -->
-        <div class="d-shotlog1">
+        <!-- col-2 row-1: Shotlog1 (hero-shotlog.png) -->
+        <!-- Figma: col-2 row-1, bg-[#cf0000] "K-Trail log" header + writing -->
+        <a href="/crazylog/review-1" class="d-shotlog1">
           <div class="d-shotlog1-bg">
             <img src="/crazylog/hero-shotlog.png" alt="" class="d-shotlog1-bg-img" />
           </div>
-          <!-- Figma: Writing1 — h-[90px] gradient -->
-          <div class="d-shotlog1-writing"></div>
-        </div>
+          <div class="d-shotlog1-header">
+            <span class="d-shotlog1-label">K-Trail log</span>
+            <svg width="13" height="13" viewBox="0 0 16 16" fill="none" style="transform:scaleY(-1)">
+              <path d="M2 5L8 11L14 5" stroke="white" stroke-linecap="round" stroke-linejoin="round" stroke-width="3"/>
+            </svg>
+          </div>
+          <div class="d-shotlog1-writing">
+            <p class="d-shotlog1-title">경복궁 한복 체험</p>
+            <p class="d-shotlog1-sub">K-트레일 나들이 완벽 가이드</p>
+          </div>
+        </a>
 
-        <!-- col-2 row-2: Shotlog2 (hero-shotlog2.png, fill remaining) -->
-        <!-- Figma: col-2 row-2, self-stretch, fills remaining height -->
-        <div class="d-shotlog2">
-          <img src="/crazylog/hero-shotlog2.png" alt="" class="d-shotlog2-img" />
-          <!-- Figma: Writing — h-[104px] gradient bottom -->
-          <div class="d-shotlog2-writing"></div>
-        </div>
+        <!-- col-2 row-2: Shotlog2 (hero-shotlog2.png) -->
+        <!-- Figma: col-2 row-2, bg-[#3b2f8a] "Release" header + writing -->
+        <a href="/crazylog/review-1" class="d-shotlog2">
+          <div class="d-shotlog2-bg">
+            <img src="/crazylog/hero-shotlog2.png" alt="" class="d-shotlog2-img" />
+          </div>
+          <div class="d-shotlog2-header">
+            <span class="d-shotlog2-label">Release</span>
+            <svg width="13" height="13" viewBox="0 0 16 16" fill="none" style="transform:scaleY(-1)">
+              <path d="M2 5L8 11L14 5" stroke="white" stroke-linecap="round" stroke-linejoin="round" stroke-width="3"/>
+            </svg>
+          </div>
+          <div class="d-shotlog2-writing">
+            <p class="d-shotlog2-title">DJI Mini2se Aerial Drone</p>
+            <p class="d-shotlog2-sub">드론시장에서 품질은 없다.</p>
+          </div>
+        </a>
 
       </div>
     </div>
@@ -162,7 +181,7 @@
             onclick={() => activeTab = i}
           >
             <span class="d-index-label">{tab.label}</span>
-            <span class="d-index-count">{tab.count}</span>
+            <span class="d-index-count-pill">{tab.count}</span>
           </button>
         {/each}
       </div>
@@ -244,16 +263,18 @@
           <svg width="13" height="13" viewBox="0 0 16 16" fill="none" style="transform:scaleY(-1)">
             <path d="M2 5L8 11L14 5" stroke="#3B2F8A" stroke-linecap="round" stroke-linejoin="round" stroke-width="3"/>
           </svg>
-          <svg width="22" height="22" viewBox="0 0 22 22" fill="none">
-            <rect width="22" height="22" rx="7" fill="#E1DEF3"/>
-            <path d="M11 6v10M6 11h10" stroke="#553FE0" stroke-width="2" stroke-linecap="round"/>
-          </svg>
+          <a href="/crazylog/new" aria-label="로그 작성" style="display:inline-flex;min-width:44px;min-height:44px;align-items:center;justify-content:center;">
+            <svg width="22" height="22" viewBox="0 0 22 22" fill="none">
+              <rect width="22" height="22" rx="7" fill="#E1DEF3"/>
+              <path d="M11 6v10M6 11h10" stroke="#553FE0" stroke-width="2" stroke-linecap="round"/>
+            </svg>
+          </a>
         </div>
       </div>
       <!-- Figma: horizontal scroll snap carousel -->
       <div class="m-carousel">
         {#each list.cards as card, ci}
-          <div class="m-card">
+          <a href="/crazylog/review-1" class="m-card">
             <div class="m-card-bg">
               <img src={card.img} alt="" class="m-card-bg-img" />
             </div>
@@ -281,7 +302,7 @@
                 {/each}
               </div>
             </div>
-          </div>
+          </a>
         {/each}
       </div>
     </section>
@@ -291,7 +312,7 @@
   <section class="m-content">
     <div class="m-content-inner">
       {#each M_ARTICLES as article}
-        <article class="m-article">
+        <a href="/crazylog/review-1" class="m-article">
           <div class="m-article-img-wrap">
             <img src={article.img} alt="" class="m-article-img" />
           </div>
@@ -299,7 +320,7 @@
             <p class="m-article-title">{article.title}</p>
             <p class="m-article-meta">{article.meta}</p>
           </div>
-        </article>
+        </a>
       {/each}
     </div>
   </section>
@@ -328,7 +349,7 @@
   .d-wb-grid {
     display: grid;
     grid-template-columns: 1fr 1fr;
-    grid-template-rows: 230px 370px;   /* row1=Title/Shotlog1, row2=FlashDeals/Shotlog2 */
+    grid-template-rows: 300px 300px;   /* Figma: grid-rows-2 h-[630px] gap-30px → 300px each */
     gap: 30px;
     height: 630px;
     border-radius: 50px;
@@ -443,7 +464,18 @@
     line-height: 2;
   }
 
-  /* ── col-2 row-1: Shotlog1 (hero-shotlog.png, h-300px, self-start) ── */
+  /* D-4: writing subtitle */
+  .d-shotlog-writing-sub {
+    font-family: 'Noto Sans KR', sans-serif;
+    font-size: 16px;
+    font-weight: 700;
+    color: white;
+    margin: 0;
+    line-height: 2;
+    letter-spacing: -0.5px;
+  }
+
+  /* ── col-2 row-1: Shotlog1 (hero-shotlog.png) ── */
   .d-shotlog1 {
     grid-column: 2;
     grid-row: 1;
@@ -464,14 +496,52 @@
     width: 100%;
     height: 100%;
     object-fit: cover;
+    transition: transform 0.5s ease;
   }
-  /* Figma: Writing1 — h-[90px] gradient */
-  .d-shotlog1-writing {
+  .d-shotlog1:hover .d-shotlog1-bg-img { transform: scale(1.10); }
+  /* Figma: bg-[#cf0000] header */
+  .d-shotlog1-header {
     position: relative;
     z-index: 1;
     flex-shrink: 0;
-    height: 90px;
+    background: #cf0000;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 20px 50px;
+  }
+  .d-shotlog1-label {
+    font-family: 'Tilt Warp', sans-serif;
+    font-size: 20px;
+    color: white;
+    letter-spacing: -0.5px;
+  }
+  .d-shotlog1-writing {
+    position: relative;
+    z-index: 1;
+    flex: 1;
     background: linear-gradient(to top, rgba(16,11,50,0) 0%, rgba(16,11,50,0.6) 40%, #100b32 100%);
+    padding: 20px 40px;
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+  }
+  .d-shotlog1-title {
+    font-family: 'Noto Sans KR', sans-serif;
+    font-size: 25px;
+    font-weight: 900;
+    color: white;
+    margin: 0;
+    line-height: 2;
+  }
+  .d-shotlog1-sub {
+    font-family: 'Noto Sans KR', sans-serif;
+    font-size: 16px;
+    font-weight: 700;
+    color: white;
+    margin: 0;
+    line-height: 2;
+    letter-spacing: -0.5px;
   }
 
   /* ── col-2 row-2: Shotlog2 (hero-shotlog2.png, fill) ── */
@@ -481,6 +551,13 @@
     position: relative;
     border-radius: 50px;
     overflow: hidden;
+    display: flex;
+    flex-direction: column;
+  }
+  .d-shotlog2-bg {
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
   }
   .d-shotlog2-img {
     position: absolute;
@@ -490,13 +567,49 @@
     object-fit: cover;
     pointer-events: none;
   }
-  /* Figma: Writing — h-[104px] gradient bottom */
-  .d-shotlog2-writing {
-    position: absolute;
-    bottom: 0; left: 0; right: 0;
-    height: 104px;
-    background: linear-gradient(to top, rgba(16,11,50,0) 0%, rgba(16,11,50,0.6) 40%, #100b32 100%);
+  /* Figma: bg-[#3b2f8a] header */
+  .d-shotlog2-header {
+    position: relative;
     z-index: 1;
+    flex-shrink: 0;
+    background: #3b2f8a;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 20px 50px;
+  }
+  .d-shotlog2-label {
+    font-family: 'Tilt Warp', sans-serif;
+    font-size: 20px;
+    color: white;
+    letter-spacing: -0.5px;
+  }
+  .d-shotlog2-writing {
+    position: relative;
+    z-index: 1;
+    flex: 1;
+    background: linear-gradient(to top, rgba(16,11,50,0) 0%, rgba(16,11,50,0.6) 40%, #100b32 100%);
+    padding: 20px 40px;
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+  }
+  .d-shotlog2-title {
+    font-family: 'Noto Sans KR', sans-serif;
+    font-size: 25px;
+    font-weight: 900;
+    color: white;
+    margin: 0;
+    line-height: 2;
+  }
+  .d-shotlog2-sub {
+    font-family: 'Noto Sans KR', sans-serif;
+    font-size: 16px;
+    font-weight: 700;
+    color: white;
+    margin: 0;
+    line-height: 2;
+    letter-spacing: -0.5px;
   }
 
   /* ── 포스트 섹션 ── */
@@ -520,17 +633,20 @@
     display: inline-flex;
     align-items: center;
     justify-content: space-between;
-    background: var(--cs-purple);
+    background: rgba(59,47,138,0.55);
     border: none;
     border-radius: var(--radius-xl);
     padding: 30px 40px;
     cursor: pointer;
-    transition: opacity 0.15s;
-    opacity: 0.55;
+    transition: background 0.2s, transform 0.2s, box-shadow 0.2s;
     min-height: 44px;
   }
-  .d-index-btn-active { opacity: 1; }
-  .d-index-btn:hover:not(.d-index-btn-active) { opacity: 0.8; }
+  .d-index-btn-active { background: var(--cs-purple); }
+  .d-index-btn:hover:not(.d-index-btn-active) {
+    background: #553fe0;
+    transform: translateY(-3px);
+    box-shadow: 0 8px 28px rgba(85,63,224,0.45);
+  }
   /* Figma: Tilt Warp 20px white */
   .d-index-label {
     font-family: 'Tilt Warp', sans-serif;
@@ -538,8 +654,11 @@
     color: white;
     letter-spacing: -0.5px;
   }
-  /* Figma: Noto 16px 700 white leading-[2] */
-  .d-index-count {
+  /* D-5: Figma: Noto 16px 700 white leading-[2] — bg-white/15 rounded-full pill */
+  .d-index-count-pill {
+    background: rgba(255,255,255,0.15);
+    border-radius: 9999px;
+    padding: 2px 12px;
     font-family: 'Noto Sans KR', sans-serif;
     font-size: 16px;
     font-weight: 700;
@@ -563,11 +682,29 @@
     align-items: stretch;
   }
 
+  /* D-7: grid card hover */
+  .d-shotlog, .d-shotlog1, .d-shotlog2 { transition: transform 0.5s ease, box-shadow 0.5s ease; }
+  .d-shotlog:hover, .d-shotlog1:hover, .d-shotlog2:hover {
+    transform: translateY(-4px);
+    box-shadow: 0 20px 60px rgba(16,11,50,0.45);
+  }
+  .d-shotlog-bg-img { transition: transform 0.5s ease; }
+  .d-shotlog:hover .d-shotlog-bg-img { transform: scale(1.10); }
+  .d-shotlog2:hover .d-shotlog2-img { transform: scale(1.10); }
+
+  /* D-8: post item hover */
+  .d-post { transition: transform 0.2s ease, box-shadow 0.2s ease; }
+  .d-post:hover { transform: translateY(-2px); box-shadow: 0 12px 40px rgba(59,47,138,0.2); }
+
   /* Figma: IndexBar — 15px wide colored bar (shrink-0) */
   .d-post-bar {
     width: 15px;
     flex-shrink: 0;
+    transition: width 0.3s ease;
   }
+
+  /* D-9: post bar grow on hover */
+  .d-post:hover .d-post-bar { width: 22px; }
 
   /* Figma: Writing — flex-[1_0_0] p-[40px] gap-[15px] flex-col justify-center */
   .d-post-writing {
@@ -862,7 +999,7 @@
     overflow: hidden;
     display: flex;
     flex-direction: column;
-    width: 340px;
+    width: 100%;
   }
   /* Figma: h-[150px] min-w-[340px] */
   .m-article-img-wrap {
