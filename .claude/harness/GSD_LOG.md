@@ -1,6 +1,82 @@
 # GSD_LOG.md — 크레이지샷 실행 이력
 # 형식: [YYYY-MM-DD HH:MM] 타입 | 태스크명 | 파일 | 소요 | 결과
 
+[2026-07-20] FEAT | crazylog 메인·목록 DB 연동 + 플로팅 write-card | +page.server.ts(crazylog) · list/+page.server.ts · list/+page.svelte | ✅ DONE
+  - crazylog/+page.server.ts 신규 생성: Promise.all 병렬(카운트 3종 + 포스트 30개) → shuffleArray → 10개 슬라이스
+  - extractFirstImageUrl / extractFirstText / BAR_COLORS 헬퍼 (content_blocks JSONB 파싱)
+  - list/+page.server.ts: safeGetSession → user_profiles 조회 → LV.1~LV.5 계산 → isLoggedIn/currentUser 반환
+  - list/+page.svelte: writeCardVisible $state + $effect 스크롤 핸들러 + write-card HTML(아바타·이름·레벨·쓰기버튼) + CSS
+  - 브라우저 정상 확인: 인덱스 바(상품리뷰:2/일상공유:1/채널홍보:0) + 포스트 카드 + 플로팅 카드
+
+[2026-07-20] FIX | Migration 재번호 #123→#124 (product_reviews) | supabase/migrations/ | ✅ DONE
+  - 20260720000123_123_product_reviews.sql 삭제 (product_page_keywords #123과 번호 충돌)
+  - 20260720000124_124_product_reviews.sql 신규 생성 (동일 내용, 번호만 변경)
+  - Production(vnbpmvxruyciuuaermyh) product_reviews 존재 확인 (이전 세션에서 이미 적용됨)
+  - TASK.md T-123-A → T-124-A 참조 수정
+
+[2026-07-20] FEAT | Migration #123 + 상품 키워드 설정 (ProductCategoryModal) | migration #123 · ProductCategoryModal · +page.svelte | ✅ DONE
+  - 123: cms_settings product_page_keywords 기본값 + upsert/get RPC 확장
+  - ProductCategoryModal.svelte: 키워드 설정 UI 추가 (CmsSuggestPicker, 최대 10개)
+  - products/+page.svelte: displayKeywords $derived (DB 우선, fallback 폴백)
+  - Stage + Production 적용 완료
+
+[2026-07-20] FIX | Crazylog view/[slug] 모바일 이미지 리사이징 + 댓글폼 수정 | src/routes/crazylog/view/[slug]/+page.svelte | ✅ DONE
+  - FIX-1: 본문 이미지 원본 크기 넘침 버그 → .article-images + .m-article-img CSS 추가 (width:100%, height:auto, object-fit:contain)
+  - FIX-2: 댓글 폼 placeholder text-align: center → left / 텍스트 → '후기를 등록해 주세요.'
+  - /crazylog 카드 목록: 최신 30개 셔플 → 10개 슬라이스 + view/{id} 링크 연동 완료 (이전 세션 완료)
+
+[2026-07-20] FEAT | Migration #123 + 상품 후기 기능 구현 | +page.server.ts · +page.svelte · migration #123 | ✅ DONE
+  - 123: product_reviews 테이블 + RLS 2정책 + create_product_review RPC (SECURITY DEFINER) + get_product_reviews RPC
+  - Stage(ezyvffjvuwmtuhpxdjrw) + Production(vnbpmvxruyciuuaermyh) 적용 완료
+  - +page.server.ts: safeGetSession + get_product_reviews RPC 로드 → session/reviews 반환
+  - +page.svelte: MOCK_REVIEWS 제거, 실제 reviews 연결, 단일 textarea 폼 (제목 자동추출 10자), 낙관적 업데이트
+  - 비로그인 클릭 → /auth/login 리다이렉트
+  - 토큰 위반 4건 수정: #e1def3→var(--cs-purple-op10), #553FE0→var(--cs-purple-light), 하드코딩 font→var(--text-m-body-16L)
+  - 고아 CSS 정리: .review-inputs-col / .review-title-input (폼 개편 후 미사용)
+
+[2026-07-20] MIGRATION | Migration 118~122 Production 반영 | vnbpmvxruyciuuaermyh | ✅ DONE
+  - 118: product_page_settings + RPC 3종 (get_product_page_settings, upsert_product_page_setting, get_products_by_ids)
+  - 119: user_posts log_type 3종 제한 CHECK + thumbnail_url 컬럼 추가
+  - 120: post_comments 테이블 생성 + RLS + create_post_comment RPC
+  - 121: create_user_post / update_user_post p_thumbnail_url 파라미터 추가 (구버전 DROP+재생성)
+  - 122: delete_own_post RPC (소프트 삭제, SECURITY DEFINER)
+
+[2026-07-19] FIX | ProductHeroModal 버그 수정 + UI 통일 | ProductHeroModal.svelte | ✅ DONE
+  - Fix 1: $effect + get_products_by_ids → 저장 상품 복원 (항상 빈 목록 버그)
+  - Fix 2+3: doSearch 내 product_id→id, price_min→base_price_daily 정규화
+  - Fix 4+5: 검색 UI → f-input + suggest-layer (CmsSuggestPicker 시각 규격 통일)
+  - ProductMdPickModal 자동 수혜 (wrapper) / svelte-check 0 ERRORS / 로컬 확인 완료
+
+[2026-07-15] GSD | /products 페이지 DB 연동 + CMS 하이브리드 UI | migration 118 · +page.server.ts · +page.svelte | ✅ NOW-1~3 DONE
+  - NOW-1: supabase/migrations/20260715000118_118_product_page_settings.sql (신규)
+    * cms_settings 4키 기본값 삽입 (ON CONFLICT DO NOTHING)
+    * get_product_page_settings() RPC (STABLE, SECURITY DEFINER, anon 허용)
+    * upsert_product_page_setting(TEXT, JSONB) RPC (is_cms_user() 검증)
+    * get_products_by_ids(UUID[]) RPC (anon 허용)
+  - NOW-2: src/routes/products/+page.server.ts (신규)
+    * isCms: user_profiles.cms_role 확인
+    * 병렬 로드: categories + heroProducts + gridProducts + mdProducts
+    * TypeScript 에러 0 (svelte-check 통과)
+  - NOW-3: src/routes/products/+page.svelte (리팩터링)
+    * 기존 UI/CSS/DOM 구조 100% 보존
+    * DB 데이터 교체 + 정적 폴백 유지
+    * admin 오버레이 버튼 4종 + 모달 placeholder 추가
+    * 0 TypeScript errors (224 warnings — 기존 파일)
+  - NOW-4 완료: src/lib/components/products/admin/ 4종 신규
+    * ProductCategoryModal.svelte — 카테고리 목록 + 활성 상태 표시
+    * ProductHeroModal.svelte — 상품 검색/CmsDragList + mode 라디오
+    * ProductGridModal.svelte — 카테고리 칩 + 수량/정렬 라디오
+    * ProductMdPickModal.svelte — HeroModal 재사용 (settingKey prop 전달)
+    * +page.svelte: placeholder → 실제 컴포넌트 + unused CSS 제거
+    * 최종 svelte-check: 0 ERRORS, 231 WARNINGS
+
+[2026-07-14] ROUTINE | PRD v1.7 작성 + 하네스 연동 | CRAZYSHOT_PRD_v1.7.md · CLAUDE.md · HANDOFF.md | ✅ DONE
+  - PRD v1.6 → v1.7 업그레이드: plannode v1.44(205노드) → v1.60(552노드), DB 24→53 테이블
+  - S1-M2.5·PRD.1.7 완료 반영, S1-M3 BLOCKED(Realtime WebSocket SSR) 기록
+  - CMS 모듈(accounts·codes·login·chat) + 검색 인프라 + Members 모듈 추가
+  - 위험 항목 2개 신규: Realtime SSR 블로커, database.ts 타입 갭(25/53 테이블)
+  - CLAUDE.md 현재 진행 상태 업데이트, HANDOFF.md 참조 문서 섹션 추가
+
 [2026-05-29 14:30] SETUP | S0-2 Database Schema | migrations 001-005 | 15m | ✅ SUCCESS
   - 001_initial_schema: 10 테이블 생성 (DDL)
   - 002_rls_policies: 24 RLS 정책 (모든 테이블)
@@ -111,6 +187,16 @@
   - supabase gen types 재생성 (searchService.ts (supabase.rpc as any) 해소)
   - migrations 113~116 ROLLBACK 주석 추가
   - Stephen git commit/push + Vercel 배포
+
+[2026-07-15] PUBLISHING | Crazylog view/[slug] QA 재검수 통과 | src/routes/crazylog/view/[slug]/+page.svelte | ✅ GATE E PASS
+  - m-post-more <div> → <button> + min 44×44px 터치 타겟 (최종 잔류 이슈 해결)
+  - PC 후기(댓글) 섹션 추가 (.d-comments — 목록 3개 + 입력폼)
+  - 모바일 히어로 재생버튼 중앙 정렬 + hover scale 트랜지션 추가
+  - PC hover scale 트랜지션 <svelte:head> global CSS 정합 완료
+  - PC 댓글 섹션 max-width 1240px 오버플로우 버그 수정
+  - CSS 변수 전환 (5종 하드코딩 hex 제거)
+  - list/+page.svelte :global() → $effect + body class + <svelte:head> 패턴 교체
+  - TS 에러 0 / console.log 0 / :global() scoped 0
 
 [2026-07-14] BOUNDARY | Crazylog 작성 화면 퍼블리싱 | src/routes/crazylog/ | ✅ GATE E PASS
   - [slug]/+page.svelte: Mobile UserInfoCard(m-user-card) + ContentOptions(m-content-options) 추가

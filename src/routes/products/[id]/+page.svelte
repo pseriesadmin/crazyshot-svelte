@@ -16,11 +16,21 @@
     image_url?: string;
   };
 
+  interface ReviewItem {
+    id: string;
+    author_name: string;
+    title: string;
+    content: string;
+    created_at: string;
+  }
+
   interface Props {
     data: {
       product: ProductRow;
       productId: string;
       optionLinks: ProductOptionLinkRow[];
+      session: { user: { id: string; email?: string } } | null;
+      reviews: ReviewItem[];
     };
   }
   let { data }: Props = $props();
@@ -62,8 +72,8 @@
     if (!qaText.trim() || qaSubmitting) return;
     qaSubmitting = true;
     try {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      await (supabase as any).rpc('submit_product_inquiry', {
+      type RpcFn = (name: string, args: Record<string, unknown>) => ReturnType<typeof supabase.rpc>;
+      await (supabase.rpc as unknown as RpcFn)('submit_product_inquiry', {
         p_product_id: data.productId,
         p_content: qaText.trim(),
       });
@@ -109,11 +119,49 @@
     { title: 'K-트레일로그를 남기는 멋진 일은 우리들에게 즐거움의 폭증이다!!', meta: '5시간 전·by 홍기동', image: '/sample/shotlog-1.png' },
   ];
 
-  const MOCK_REVIEWS = [
-    { title: '가성비 최고예요!', bydate: 'Tawny /  Apr 26, 2025', body: '정말 훌륭한 제품입니다. 함께 제공된 매뉴얼은 조금 모호하지만, 사용하는 데 큰 어려움은 없었습니다. 설치와 사용을 돕는 온라인 영상도 많이 있습니다.' },
-    { title: '잘 작동해요, 설명서는 혼란스럽습니다.', bydate: 'Tawny /  Apr 26, 2025', body: '안정화 기능이 정말 좋아서 영상이 매끄럽게 나오네요. 설명서를 이해하기 어렵다 보니 제가 제대로 사용하고 있는 건지는 확신이 없지만, 필요한 용도로는 잘 쓰이고 있습니다.' },
-    { title: 'light weight!', bydate: 'Samantha /  Jul 17, 2025', body: 'Its a great product! Was fairly easy to setup and use! It works great and lasts a long while before having to recharge it!' },
-  ];
+  let reviews = $state(data.reviews);
+  const session = $derived(data.session);
+
+  // ── Review form
+  let reviewContent = $state('');
+  let isSubmittingReview = $state(false);
+
+  async function submitReview() {
+    if (!session) {
+      goto('/auth/login');
+      return;
+    }
+    const trimmed = reviewContent.trim();
+    if (!trimmed) return;
+    const autoTitle = trimmed.slice(0, 10);
+    isSubmittingReview = true;
+    try {
+      type RpcFn = (name: string, args: Record<string, unknown>) => ReturnType<typeof supabase.rpc>;
+      const { data: newId, error } = await (supabase.rpc as unknown as RpcFn)('create_product_review', {
+        p_product_id: data.productId,
+        p_title: autoTitle,
+        p_content: trimmed,
+      });
+      if (error) throw error;
+      reviews = [
+        {
+          id: newId as string,
+          author_name: session.user.email?.split('@')[0] ?? '익명',
+          title: autoTitle,
+          content: trimmed,
+          created_at: new Date().toISOString(),
+        },
+        ...reviews,
+      ];
+      reviewContent = '';
+      showToast('후기가 등록되었습니다.');
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : '후기 등록에 실패했습니다.';
+      showToast(msg);
+    } finally {
+      isSubmittingReview = false;
+    }
+  }
 
   function fmt(n: number): string {
     return n.toLocaleString('ko-KR');
@@ -437,24 +485,39 @@
   <div class="review-inner">
     <div class="review-header">
       <span class="review-title">Review</span>
-      <span class="review-count">03</span>
+      <span class="review-count">{String(reviews.length).padStart(2, '0')}</span>
     </div>
     <div class="review-list">
-      {#each MOCK_REVIEWS as review}
+      {#each reviews as review (review.id)}
         <article class="review-card">
           <div class="review-top">
             <p class="review-card-title">{review.title}</p>
-            <p class="review-meta-text">{review.bydate}</p>
+            <p class="review-meta-text">{review.author_name} / {new Date(review.created_at).toLocaleDateString('ko-KR')}</p>
           </div>
           <div class="review-bottom">
-            <p class="review-body">{review.body}</p>
+            <p class="review-body">{review.content}</p>
           </div>
         </article>
       {/each}
+      {#if reviews.length === 0}
+        <p class="review-empty">아직 등록된 후기가 없습니다.</p>
+      {/if}
     </div>
-    <div class="review-form">
-      <input type="text" placeholder="후기 입력..." class="review-input" readonly onclick={() => showToast('로그인 후 등록해주세요.')} />
-      <button class="review-send-btn" aria-label="후기 등록" onclick={() => showToast('로그인 후 등록해주세요.')}>
+    <div class="review-form review-form-expanded">
+      <textarea
+        class="review-input review-content-input"
+        maxlength="500"
+        placeholder={session ? '후기를 입력해주세요. (최대 500자)' : '로그인 후 작성해주세요.'}
+        bind:value={reviewContent}
+        onclick={() => { if (!session) goto('/auth/login'); }}
+        readonly={!session}
+      ></textarea>
+      <button
+        class="review-send-btn"
+        aria-label="후기 등록"
+        onclick={submitReview}
+        disabled={isSubmittingReview || !reviewContent.trim()}
+      >
         <svg width="15" height="10" viewBox="0 0 17 12" fill="none">
           <path d="M1 6H16M16 6L11 1M16 6L11 11" stroke="var(--cs-text)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
         </svg>
@@ -831,7 +894,7 @@
   .tab-nav {
     display: flex;
     gap: 4px;
-    background: #e1def3;
+    background: var(--cs-purple-op10);
     border-radius: 20px;
     padding: 5px 10px;
   }
@@ -875,7 +938,7 @@
   /* ── Shotlog */
   .shotlog-section {
     padding: var(--layout-section-gap) 0;
-    background: #e1def3;
+    background: var(--cs-purple-op10);
     border-radius: 0 50px 0 0;
   }
   @media (min-width: 641px) {
@@ -980,9 +1043,7 @@
     .shotlog-writing { padding: 20px 30px; }
   }
   .shotlog-post-title {
-    font-size: 18px;
-    font-weight: 700;
-    font-family: var(--font-kr);
+    font: var(--text-pc-title-18);
     color: var(--cs-text-dark);
     margin: 0;
     line-height: 1.6;
@@ -1056,7 +1117,7 @@
     flex-shrink: 0;
     width: 200px;
     height: 280px;
-    border-radius: 40px;
+    border-radius: var(--radius-2xl);
     overflow: hidden;
     position: relative;
     display: flex;
@@ -1064,7 +1125,7 @@
     justify-content: flex-end;
   }
   @media (min-width: 641px) {
-    .popular-card { width: 290px; height: 410px; border-radius: 50px; }
+    .popular-card { width: 290px; height: 410px; border-radius: var(--radius-2xl); }
   }
   .popular-card-img {
     position: absolute;
@@ -1146,7 +1207,7 @@
     background: var(--cs-white);
   }
   .review-top {
-    background: #e1def3;
+    background: var(--cs-purple-op10);
     padding: 14px 20px;
     display: flex;
     align-items: center;
@@ -1154,9 +1215,7 @@
     gap: 12px;
   }
   .review-card-title {
-    font-size: 16px;
-    font-weight: 500;
-    font-family: var(--font-kr);
+    font: var(--text-m-body-16L);
     color: var(--cs-text);
     margin: 0;
   }
@@ -1183,18 +1242,15 @@
     justify-content: space-between;
     background: var(--cs-white);
     height: 70px;
-    border-radius: 25px;
+    border-radius: var(--radius-xl);
     padding: 0 16px 0 24px;
     margin-top: 8px;
-  }
-  .review-placeholder {
-    font: var(--text-m-script-14);
-    color: var(--cs-text-placeholder);
-    margin: 0;
   }
   .review-send-btn {
     width: 35px;
     height: 35px;
+    min-width: 44px;
+    min-height: 44px;
     border-radius: 30px;
     background: var(--cs-lilac);
     border: none;
@@ -1234,7 +1290,7 @@
 
   /* ── Q&A */
   .qa-section {
-    background: #ffeae2;
+    background: var(--cs-lilac);
     border-radius: 30px 30px 0 0;
     padding: 50px var(--layout-mob-pad) 100px;
   }
@@ -1270,7 +1326,7 @@
   .qa-icon {
     width: 70px;
     height: 70px;
-    border-radius: 25px;
+    border-radius: var(--radius-xl);
     background: var(--cs-red-badge);
     display: flex;
     align-items: center;
@@ -1283,8 +1339,15 @@
     justify-content: space-between;
     background: var(--cs-white);
     height: 70px;
-    border-radius: 25px;
+    border-radius: var(--radius-xl);
     padding: 0 16px 0 24px;
+  }
+  .review-form-expanded {
+    flex-direction: row;
+    align-items: flex-end;
+    height: auto;
+    padding: 16px;
+    gap: 12px;
   }
   .review-input {
     flex: 1;
@@ -1293,13 +1356,23 @@
     border: none;
     outline: none;
     font: var(--text-m-script-14);
-    color: var(--cs-text-placeholder);
-    cursor: pointer;
-    caret-color: transparent;
+    color: var(--cs-text);
+    width: 100%;
+    resize: none;
   }
   .review-input::placeholder {
     color: var(--cs-text-placeholder);
-    opacity: 0.6;
+  }
+  .review-content-input {
+    min-height: 80px;
+    line-height: 1.6;
+  }
+  .review-empty {
+    font: var(--text-m-script-14);
+    color: var(--cs-text-light);
+    text-align: center;
+    padding: 20px 0;
+    margin: 0;
   }
 
   .qa-input {
@@ -1319,6 +1392,8 @@
   .qa-send-btn {
     width: 35px;
     height: 35px;
+    min-width: 44px;
+    min-height: 44px;
     border-radius: 30px;
     background: var(--cs-lilac);
     border: none;
@@ -1335,7 +1410,7 @@
     bottom: 24px;
     left: 50%;
     transform: translateX(-50%);
-    background: #553FE0;
+    background: var(--cs-purple-light);
     color: white;
     padding: 14px 28px;
     border-radius: 30px;

@@ -28,6 +28,275 @@ auth_baseline: fed4fdb — createBrowserClient 패턴 (절대 싱글톤 createCl
 
 ---
 
+## NOW — crazylog 메인·목록 DB 연동 + 플로팅 카드 (2026-07-20) ✅ 완료
+
+[CONTEXT BRIDGE — crazylog main & list activation]
+수정/신규 파일:
+  - src/routes/crazylog/+page.server.ts ← 신규 생성 ✅
+  - src/routes/crazylog/list/+page.server.ts ← isLoggedIn·currentUser 추가 ✅
+  - src/routes/crazylog/list/+page.svelte ← writeCardVisible + 스크롤 핸들러 + write-card HTML·CSS 추가 ✅
+
+- [x] T-CL-1: /crazylog +page.server.ts — 실DB 카운트 3종 + 포스트 랜덤 10개 연동 | BOUNDARY | ✅ 완료 (2026-07-20)
+  - Promise.all 병렬 쿼리: reviewCount / shareCount / promoCount + 포스트 최신 30개 → shuffleArray → 10개
+  - extractFirstImageUrl / extractFirstText / BAR_COLORS 헬퍼 구현
+  - return { counts: {review, share, promo}, posts }
+- [x] T-CL-2: /crazylog 메인 .d-post 카드 CSS 검증 | ROUTINE | ✅ 완료 (2026-07-20)
+  - JS computed style 검사: height 180px, display flex, position absolute — 정상 렌더
+  - 수정 불필요 (모바일 뷰포트에서 .d-page { display:none } 적용이 원인)
+- [x] T-CL-3: /crazylog/list +page.server.ts — isLoggedIn + currentUser 조회 추가 | BOUNDARY | ✅ 완료 (2026-07-20)
+  - safeGetSession → user_profiles 조회 (full_name, avatar_url, membership_grade, credit_score)
+  - credit_score → LV.1~LV.5 레벨 계산 로직
+- [x] T-CL-4: /crazylog/list +page.svelte — 플로팅 사용자 write-card 구현 | BOUNDARY | ✅ 완료 (2026-07-20)
+  - writeCardVisible $state + $effect 스크롤 핸들러 (스크롤 다운 숨김/업 노출)
+  - write-card HTML: 아바타 + 이름 + 멤버십배지 + 레벨 + 쓰기 버튼
+  - 브라우저 정상 확인: 익명 LV.1 · 쓰기 버튼 하단 플로팅 표시
+
+---
+
+## NOW — Crazylog 뷰어 UI 픽스 (2026-07-20) ✅ 완료
+
+[CONTEXT BRIDGE — crazylog view/[slug] mobile fixes]
+수정 파일:
+  - src/routes/crazylog/view/[slug]/+page.svelte (단일 파일 수정)
+
+- [x] FIX-1: 본문 이미지 모바일 반응형 — 원본 크기 넘침 버그 | ROUTINE | ✅ 완료 (2026-07-20)
+  - `.article-images` + `.m-article-img` CSS 추가 (width:100%, max-width:100%, height:auto, object-fit:contain)
+  - img 태그에 class="m-article-img" 추가
+- [x] FIX-2: 댓글 폼 placeholder 정렬·텍스트 수정 | ROUTINE | ✅ 완료 (2026-07-20)
+  - text-align: center → left
+  - 텍스트: '후기 입력...' / '로그인 후 작성 가능' → '후기를 등록해 주세요.'
+
+---
+
+## NOW — 상품 후기 기능 구현 (2026-07-20) ✅ 완료
+
+[CONTEXT BRIDGE — product reviews]
+plan_source: launch-selected-element-element-tag-sec-floating-papert.md
+수정/신규 파일:
+  - supabase/migrations/20260720000124_124_product_reviews.sql ← 신규 생성 ✅ (재번호: 123 keywords 충돌 → 124로 정정)
+  - src/routes/products/[id]/+page.server.ts ← 수정 ✅
+  - src/routes/products/[id]/+page.svelte ← 수정 ✅
+
+- [x] T-124-A: Migration #124 — product_reviews 테이블 + RPC 2종 | CRITICAL | ✅ Stage + Production 적용 완료 (2026-07-20)
+- [x] T-123-B: +page.server.ts — session + reviews 로드 추가 | BOUNDARY | ✅ 완료 (2026-07-20)
+- [x] T-123-C: +page.svelte — 후기 폼 실제 구현 + MOCK 제거 + 토큰 위반 4건 수정 + CSS 정리 | BOUNDARY | ✅ 완료 (2026-07-20)
+
+---
+
+## NOW — crazylog view/[slug] UI 픽스 (2026-07-18) ✅ 완료
+
+[CONTEXT BRIDGE — crazylog view page UI fixes]
+수정 파일:
+  - src/routes/crazylog/view/[slug]/+page.svelte (단일 파일 수정)
+
+### ✅ 완료된 픽스 (2026-07-18)
+
+- [x] 수정/삭제 → write-card 이동: d-navi-actions·m-admin-bar에서 제거, write-card 내 `wc-actions` 래퍼로 이동
+- [x] 삭제 버튼 isOwner 복원: `{#if data?.isAdmin}` 단독 → `{#if data?.isOwner}` (write-card 내) / `{#if data?.isAdmin}` (navi-bar 관리자 버튼 전용)
+- [x] 쓰기 버튼 항상 노출: wc-write-btn은 조건 없이 렌더, 수정/삭제는 `{#if data?.isOwner}`만 조건
+- [x] write-card 폭 유연화: `width: 460px` 고정 → `width: auto / min-width: 460px / max-width: 700px`
+- [x] svelte-check 0 errors 확인
+
+### ⏳ 후속 필요 (Stephen 확인 후 진행)
+
+- [ ] write-card 수정/삭제 버튼 브라우저 실 확인 (자신의 포스트 vs 타인 포스트)
+
+---
+
+## NOW — /products 페이지 DB 연동 + CMS 하이브리드 UI (2026-07-15)
+
+[CONTEXT BRIDGE — products page DB activation]
+plan_source: products-ui-sorted-map.md (세션 내 설계)
+수정/신규 파일:
+  - supabase/migrations/20260715000118_118_product_page_settings.sql ← ✅ 완료 (NOW-1)
+  - src/routes/products/+page.server.ts ← ✅ 완료 (NOW-2)
+  - src/routes/products/+page.svelte ← ✅ 완료 (NOW-3)
+  - src/lib/components/products/admin/*.svelte ← ⏳ 미완 (NOW-4)
+
+- [x] NOW-1: Migration 118 — product_page_settings + RPC 4종 | ✅ 완료 (2026-07-15)
+- [x] NOW-2: +page.server.ts 신규 — isCms, 설정 로드, 상품 병렬 쿼리 | ✅ 완료 (2026-07-15)
+- [x] NOW-3: +page.svelte 리팩터링 — DB 데이터 교체, isCms 오버레이, 폴백 | ✅ 완료 (2026-07-15)
+  - 0 TypeScript errors (svelte-check 통과)
+  - 기존 CSS/DOM 구조 보존, 정적 폴백 유지
+  - admin 모달 placeholder 렌더 포함 (NOW-4 대기)
+- [x] NOW-4: 관리 모달 4종 | ✅ 완료 (2026-07-15)
+  - src/lib/components/products/admin/ProductCategoryModal.svelte (신규)
+  - src/lib/components/products/admin/ProductHeroModal.svelte (신규)
+  - src/lib/components/products/admin/ProductGridModal.svelte (신규)
+  - src/lib/components/products/admin/ProductMdPickModal.svelte (신규 — HeroModal 재사용)
+  - +page.svelte placeholder → 실제 컴포넌트로 교체 + unused CSS 제거
+  - 0 TypeScript errors (svelte-check 통과)
+- [x] NOW-5: ProductHeroModal 버그 수정 + UI 통일 | ✅ 완료 (2026-07-19)
+  - Fix 1: 저장 상품 복원 — $effect + get_products_by_ids RPC (항상 빈 목록 버그 해소)
+  - Fix 2: search_products product_id → id 정규화 (id: undefined 버그 해소)
+  - Fix 3: search_products price_min → base_price_daily 정규화 (0원 버그 해소)
+  - Fix 4+5: 검색 UI → CmsSuggestPicker 시각 규격 통일 (f-input + suggest-layer)
+  - ProductMdPickModal 자동 수혜 (wrapper 구조)
+  - 로컬 브라우저 정상 확인 완료
+  - svelte-check: 0 ERRORS
+- [x] NOW-6: Migration 118~122 Production 적용 | ✅ 완료 (2026-07-20)
+  - 118: product_page_settings + RPC 3종 (get_product_page_settings, upsert_product_page_setting, get_products_by_ids)
+  - 119: user_posts log_type 3종 제한 + thumbnail_url 컬럼
+  - 120: post_comments 테이블 + create_post_comment RPC
+  - 121: create_user_post / update_user_post p_thumbnail_url 파라미터 추가 (구버전 DROP 후 재생성)
+  - 122: delete_own_post RPC (소프트 삭제)
+  - Production DB: vnbpmvxruyciuuaermyh ✅
+
+---
+
+## NOW — Crazylog 글등록·수정 기능 활성화 (2026-07-15)
+
+[CONTEXT BRIDGE — crazylog write/edit activation]
+plan_source: 세션 내 UI 분석 결과 (2026-07-15)
+현재 상태:
+  - src/routes/crazylog/[slug]/+page.svelte — UI 완성, 기능 전무
+    → textarea 에디터 (CmsContentEditor 미연동)
+    → 유저 카드 하드코딩 ("스티븐봉재", "로그닷", "LV.4MD")
+    → handleSubmit() 빈 함수 (BL-CRAZYLOG-SUBMIT 백로그)
+    → +page.server.ts 없음 (인증 없음, 서버 데이터 없음)
+  - DB: crazylog 전용 테이블 없음 (최신 Migration #116)
+  - CmsContentEditor: src/lib/components/cms/CmsContentEditor.svelte
+    → ContentBlock[] 기반 블록 에디터 (재활용 확정 — content-editor.ts 주석 확인)
+핵심제약:
+  - stage(ezyvffjvuwmtuhpxdjrw) 검증 후 production 적용
+  - front-uiux.md 사용자 디자인 토큰 (CTA = --cs-red-badge / 버튼 반경 30px)
+  - CmsContentEditor 재활용 시 CMS 스타일이 사용자 화면에 노출되지 않도록 scope 처리
+  - 현재 SVG 아이콘 toolbar UI 유지 — 아이콘 클릭 → CmsContentEditor 블록 추가 연결
+  - 직접 INSERT/UPDATE/DELETE 금지 → RPC 경유
+  - Svelte 5 Runes 문법 ($state / $derived / $props / $effect)
+  - $state(prop) 초기화 절대 금지 (수정 모드 로드 시 {#key}로 재마운트)
+절대금지:
+  - git 자율 실행
+  - production DB에 미검증 migration 직접 적용
+  - CMS 디자인 토큰(--cms-radius-* / --text-pc-*) 사용자 화면 적용
+  - Svelte 4 문법 (on:event)
+
+### Phase 1 — DB 설계 + 마이그레이션
+
+- [x] T-CL-1: Migration #117 — user_posts 테이블 신규 생성 | CRITICAL | ✅ Stage + Production 완료 (2026-07-15)
+  - 테이블: user_posts
+    id UUID DEFAULT gen_random_uuid() PK
+    user_id UUID FK → auth.users NOT NULL
+    log_type TEXT NOT NULL (CHECK: '일상 로그'|'여행 로그'|'맛집 로그'|'운동 로그'|'독서 로그'|'영화·드라마 로그'|'공부 로그'|'취미 로그')
+    title TEXT NOT NULL (max 100자)
+    content_blocks JSONB NOT NULL DEFAULT '[]'   -- ContentBlock[] 직렬화
+    keywords TEXT[] NOT NULL DEFAULT '{}'        -- CmsContentEditor keywords 대응
+    tags TEXT[] NOT NULL DEFAULT '{}'            -- 태그 칩
+    is_public BOOLEAN NOT NULL DEFAULT true
+    allow_comments BOOLEAN NOT NULL DEFAULT true
+    allow_scrap BOOLEAN NOT NULL DEFAULT true
+    allow_ai_save BOOLEAN NOT NULL DEFAULT true
+    auto_source BOOLEAN NOT NULL DEFAULT false
+    ccl TEXT DEFAULT NULL                         -- CC라이선스 선택값
+    status TEXT NOT NULL DEFAULT 'published'
+      CHECK (status IN ('draft','published','hidden','deleted'))
+    view_count BIGINT NOT NULL DEFAULT 0
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+  - 인덱스: user_id, status, created_at DESC, (user_id + status)
+  - updated_at 트리거: set_updated_at()
+  - RLS 4정책:
+    SELECT: (is_public=true AND status='published') OR user_id=auth.uid() OR is_cms_user()
+    INSERT: user_id=auth.uid() / WITH CHECK user_id=auth.uid()
+    UPDATE: user_id=auth.uid() OR is_cms_user()
+    DELETE: 금지 (status='deleted' UPDATE로 대체)
+  - RPC (SECURITY DEFINER):
+    create_user_post(p_log_type, p_title, p_content_blocks, p_keywords, p_tags, p_is_public,
+                     p_allow_comments, p_allow_scrap, p_allow_ai_save, p_auto_source, p_ccl)
+      → RETURNS user_posts (새 행 반환)
+    update_user_post(p_id UUID, p_log_type, p_title, p_content_blocks, p_keywords, p_tags,
+                     p_is_public, p_allow_comments, p_allow_scrap, p_allow_ai_save, p_auto_source, p_ccl)
+      → 권한 확인(user_id=auth.uid() OR is_cms_user()) → UPDATE → RETURNS user_posts
+    update_post_status(p_id UUID, p_status TEXT)
+      → is_cms_user() 확인 → status 변경 (관리자 전용)
+    get_user_post_stats(p_user_id UUID)
+      → RETURNS (post_count BIGINT, total_view_count BIGINT)
+  - Stage 적용 후 Stephen 확인, 이후 Production 적용
+
+### Phase 2 — 서버사이드 인증 + 데이터 로드
+
+- [x] T-CL-2: +page.server.ts 신규 생성 | CRITICAL | ✅ 완료 (2026-07-15)
+  - 파일: src/routes/crazylog/[slug]/+page.server.ts
+  - load 함수:
+    1. locals.safeGetSession() → 미인증 시 redirect(303, '/login')
+    2. user_profiles 조회: display_name, avatar_url, membership_type, crazy_score
+    3. get_user_post_stats(user_id) RPC → post_count, total_view_count
+    4. slug !== 'new': user_posts 조회 → existingPost 반환 (수정 모드)
+       → 포스트의 user_id !== session.user.id && !is_cms_role → 403 or redirect
+    5. RETURN { session, profile, stats, existingPost }
+  - 레벨 계산 함수 (서버측): crazy_score 기반 LV.1~LV.5 파생
+    LV.1: score < 30 / LV.2: 30~49 / LV.3: 50~69 / LV.4: 70~84 / LV.5: ≥ 85
+
+### Phase 3 — 에디터 통합 (CmsContentEditor 재활용)
+
+- [x] T-CL-3: CmsContentEditor 통합 — SVG 아이콘 UI 유지 | BOUNDARY | ✅ 완료 (2026-07-15) — textarea 유지, submit 시 content_blocks 변환
+  - 파일: src/routes/crazylog/[slug]/+page.svelte (단일 파일 수정)
+  - 접근 방식:
+    1. CmsContentEditor import, blocks/keywords $state 선언
+    2. 모바일(m-) / PC(d-) textarea → <CmsContentEditor bind:blocks bind:keywords hideInternalMediaToolbar={true} />
+       OR: CmsContentEditor의 내부 툴바를 CSS :global()로 숨김 처리
+    3. 현재 SVG 아이콘 toolbar 버튼(m-toolbar / d-toolbar)을 다음에 연결:
+       - "텍스트" 아이콘 → addBlock(makeEmptyTextBlock()) 호출
+       - "사진" 아이콘 → addBlock(makeEmptyImageBlock()) 호출
+       - "유튜브" 아이콘 → addBlock(makeEmptyYoutubeBlock()) 호출
+       - "나누기" 아이콘 → addBlock(makeEmptyDividerBlock()) 호출
+       - "삭제" 아이콘 → clearConfirm 모달 → blocks = []
+    4. CmsContentEditor에 prop 추가 고려: hideMediaToolbar (내부 미디어 툴바 숨김)
+       → CmsContentEditor.svelte에 간단한 prop 추가 (최소 수정)
+    5. 이미지 업로드: 기존 /api/cms/upload 재사용 (인증 있으면 허용)
+  - 포맷 툴바 (Bold/Italic/Underline 등): CmsContentEditor 내부 포맷 툴바 노출 유지
+    → 사용자 UX에 맞게 CSS 스타일 override (front-uiux.md 토큰)
+  - 태그: 기존 m-tags-input / d-tags-input 유지 (CmsContentEditor keywords와 분리)
+  - 수정 모드: {#key existingPost?.id} 로 컴포넌트 재마운트 → $state(prop) 초기화 버그 방지
+    → $effect로 existingPost.content_blocks → blocks 초기화
+
+- [x] T-CL-3b: CmsContentEditor.svelte 최소 수정 | BOUNDARY | ✅ 완료 (2026-07-15)
+  - hideMediaToolbar?: boolean $props() 추가
+  - {#if !hideMediaToolbar} ... {/if} 로 내부 미디어 툴바 조건부 숨김
+  - 기존 CMS 동작 영향 없음 (기본값 false = 현재와 동일)
+  - 아이콘 툴바 버튼 → makeEmptyTextBlock/ImageBlock/YoutubeBlock/DividerBlock 연결
+  - textarea → CmsContentEditor bind:blocks bind:keywords 교체 (모바일·PC 양쪽)
+
+### Phase 4 — 사용자 카드 실제 데이터 연동
+
+- [x] T-CL-4: 유저 카드 서버 데이터 연동 | BOUNDARY | ✅ 완료 (2026-07-15)
+  - 파일: src/routes/crazylog/[slug]/+page.svelte
+  - let { data } = $props() → data.profile, data.stats 구조 분해
+  - m-user-card:
+    - 아바타: data.profile.avatar_url 있으면 <img>, 없으면 기존 그라데이션 배경 유지
+    - 이름: data.profile.display_name (없으면 '익명')
+    - 배지: data.profile.membership_type → '정기구독' 텍스트 or 배지
+    - 레벨: data.profile.level (서버에서 파생)
+    - 콘텐츠 등록: data.stats.post_count
+    - 콘텐츠 조회: data.stats.total_view_count
+  - d-user-card: 동일 데이터 (PC 사이드바)
+  - 통계 타일 '임시등록' → '콘텐츠 조회' 텍스트 + data.stats.total_view_count 수치
+
+### Phase 5 — 제출 로직 구현
+
+- [x] T-CL-5: handleSubmit 구현 | BOUNDARY | ✅ 완료 (2026-07-15)
+  - 파일: src/routes/crazylog/[slug]/+page.svelte
+  - 제출 전 검증: logType 선택 여부, title 최소 1자, blocks.length > 0
+  - 신규(slug==='new'): supabase.rpc('create_user_post', {...}) 호출
+  - 수정: supabase.rpc('update_user_post', { p_id: existingPost.id, ...}) 호출
+  - isSubmitting $state: 제출 중 버튼 disabled + 텍스트 '저장 중...'
+  - 성공: goto('/crazylog/view/' + newPost.id) (또는 slug 필드가 있으면 slug 사용)
+  - 실패: error $state → role="alert" 표시
+
+### Phase 6 — 관리자 삭제/보류 기능
+
+- [x] T-CL-6: view/[slug] 관리자 액션 버튼 추가 | BOUNDARY | ✅ 완료 (2026-07-15)
+  - 파일: src/routes/crazylog/view/[slug]/+page.svelte (수정)
+         src/routes/crazylog/view/[slug]/+page.server.ts (수정 or 신규)
+  - +page.server.ts: is_cms_user 여부 load에서 반환 (user_profiles.cms_role 조회)
+  - data.isAdmin이 true일 때만 관리자 버튼 렌더:
+    - "보류 처리" 버튼 → update_post_status(id, 'hidden') RPC
+    - "삭제" 버튼 → update_post_status(id, 'deleted') RPC (확인 모달 포함)
+    - 현재 status='hidden'이면 "공개" 버튼 → update_post_status(id, 'published')
+  - 관리자 버튼 스타일: front-uiux.md 고스트/위험 버튼 패턴
+
+---
+
 ## NOW — CMS 고객 기본정보 수정 기능 (2026-07-13) ✅ 완료
 
 [CONTEXT BRIDGE — customer info edit]
