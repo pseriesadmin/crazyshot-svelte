@@ -1,74 +1,66 @@
 <script lang="ts">
-  import { page } from '$app/state'
+  import { goto } from '$app/navigation'
+  import type { PageData } from './$types'
 
-  const TABS = ['공유', '리뷰', '이벤트', '전체'] as const
+  interface Props { data: PageData }
+  let { data }: Props = $props()
+
+  const TABS = ['상품리뷰', '일상공유', '채널홍보', '전체'] as const
   type Tab = typeof TABS[number]
 
-  const STAT_TAB_MAP: Record<string, Tab> = {
-    'Review':      '리뷰',
-    'Share':       '공유',
-    'K-Trail log': '이벤트',
-  }
-
-  const urlTab = page.url.searchParams.get('tab') as Tab | null
+  const initialTab = data.activeTab
   let activeTab = $state<Tab>(
-    (urlTab && (TABS as readonly string[]).includes(urlTab)) ? (urlTab as Tab) : '공유'
+    (TABS as readonly string[]).includes(initialTab) ? (initialTab as Tab) : '전체'
   )
 
-  interface MobilePost {
-    id: number
-    title: string
-    time: string
-    author: string
-    img: string
+  const BAR_COLORS: Record<string, string> = {
+    '상품리뷰': '#ff3535',
+    '일상공유': '#553fe0',
+    '채널홍보': '#3b2f8a',
   }
 
-  interface PcPost {
-    id: number
-    bar: string
-    title: string
-    desc: string
-    img: string
-    rounded: boolean
-    isBullet?: boolean
+  function barColor(logType: string): string {
+    return BAR_COLORS[logType] ?? '#3b2f8a'
   }
 
-  const MOBILE_POSTS: MobilePost[] = [
-    { id: 1, title: '[사용기] SONY FE 24-105  가볍게 고퀄 영상을 바로 만들어주다',       time: '1시간 전', author: '홍기동', img: '/crazylog/article-img1.png' },
-    { id: 2, title: '액션캠의 왕좌를 되찾으러 돌아왔다.\nGoPro HERO13 Black',           time: '2시간 전', author: '유말자', img: '/crazylog/article-img2.png' },
-    { id: 3, title: '휴대용 디자인으로 이동 중에도 미디어 카드에 쉽게 접근 가능',         time: '2시간 전', author: '유말자', img: '/crazylog/article-img3.png' },
-    { id: 4, title: 'onn. 52인치 삼각대, 컴팩트 카메라, 스마트폰 및 GoPro 액션 카메라용 스', time: '2시간 전', author: '유말자', img: '/crazylog/article-img4.png' },
-    { id: 5, title: 'K-트레일로그를 남기는 멋진 일은 우리들에게 즐거움의 폭증이다!!',     time: '2시간 전', author: '유말자', img: '/crazylog/article-img5.png' },
+  function relativeTime(iso: string): string {
+    const diff = Date.now() - new Date(iso).getTime()
+    const mins  = Math.floor(diff / 60000)
+    const hours = Math.floor(diff / 3600000)
+    const days  = Math.floor(diff / 86400000)
+    if (mins  <  1) return '방금 전'
+    if (hours <  1) return `${mins}분 전`
+    if (days  <  1) return `${hours}시간 전`
+    if (days  < 30) return `${days}일 전`
+    return new Date(iso).toLocaleDateString('ko-KR')
+  }
+
+  function onTabClick(tab: Tab) {
+    activeTab = tab
+    goto(`?tab=${tab}`, { replaceState: true })
+  }
+
+  const PC_STAT_TABS: { label: string; tab: Tab; countKey: 'review' | 'share' | 'promo' }[] = [
+    { label: '상품리뷰', tab: '상품리뷰', countKey: 'review' },
+    { label: '일상공유', tab: '일상공유', countKey: 'share'  },
+    { label: '채널홍보', tab: '채널홍보', countKey: 'promo'  },
   ]
 
-  const PC_POSTS: PcPost[] = [
-    { id: 1, bar: '#3b2f8a', title: 'SONY FE 24-105 F4 G OSS',                          desc: 'Bower 6-in-1 Multi Selfie Tripod with Smartphone & GoPro Mount, Rechargeable Wireless Remote - Black',                                                img: '/crazylog/post-img1.png', rounded: true  },
-    { id: 2, bar: '#553fe0', title: 'GoPro HERO13 Black',                               desc: 'Best-in-Class 5.3K Video - 5.3K video delivers breathtaking image quality with 91% more resolution than 4K and an incredible 665% more than 1080p.', img: '/crazylog/post-img2.png', rounded: false },
-    { id: 3, bar: '#3b2f8a', title: 'SONY FE 24-105 F4 G OSS',                          desc: 'Bower 6-in-1 Multi Selfie Tripod with Smartphone & GoPro Mount, Rechargeable Wireless Remote - Black',                                                img: '/crazylog/post-img3.png', rounded: true  },
-    { id: 4, bar: '#ff3535', title: '[Accessories] onn USB C/USB 2.0 Memory Card Reader for SD/Mic...', desc: 'SD and microSD card reader with USB and USB-C connectors for versatile connectivity',                                                img: '/crazylog/post-img4.png', rounded: false, isBullet: true },
-    { id: 5, bar: '#3b2f8a', title: 'SONY FE 24-105 F4 G OSS',                          desc: 'Bower 6-in-1 Multi Selfie Tripod with Smartphone & GoPro Mount, Rechargeable Wireless Remote - Black',                                                img: '/crazylog/post-img1.png', rounded: true  },
-    { id: 6, bar: '#553fe0', title: 'GoPro HERO13 Black',                               desc: 'Best-in-Class 5.3K Video - 5.3K video delivers breathtaking image quality with 91% more resolution than 4K and an incredible 665% more than 1080p.', img: '/crazylog/post-img2.png', rounded: false },
-    { id: 7, bar: '#3b2f8a', title: 'SONY FE 24-105 F4 G OSS',                          desc: 'Bower 6-in-1 Multi Selfie Tripod with Smartphone & GoPro Mount, Rechargeable Wireless Remote - Black',                                                img: '/crazylog/post-img3.png', rounded: true  },
-    { id: 8, bar: '#ff3535', title: '[Accessories] onn USB C/USB 2.0 Memory Card Reader for SD/Mic...', desc: 'SD and microSD card reader with USB and USB-C connectors for versatile connectivity',                                                img: '/crazylog/post-img4.png', rounded: false, isBullet: true },
-  ]
-
-  const PC_STATS = [
-    { label: 'Review',      count: '212' },
-    { label: 'Share',       count: '43'  },
-    { label: 'K-Trail log', count: '39'  },
-  ]
-
-  let filteredPosts = $derived(
-    activeTab === '전체' || activeTab === '공유'
-      ? MOBILE_POSTS
-      : activeTab === '리뷰'
-        ? MOBILE_POSTS.slice(0, 3)
-        : MOBILE_POSTS.slice(2, 4)
-  )
+  let writeCardVisible = $state(true)
 
   $effect(() => {
     document.body.classList.add('crazylog-list')
-    return () => document.body.classList.remove('crazylog-list')
+    let lastY = window.scrollY
+    function onScroll() {
+      const currentY = window.scrollY
+      writeCardVisible = currentY <= lastY
+      lastY = currentY
+    }
+    window.addEventListener('scroll', onScroll, { passive: true })
+    return () => {
+      document.body.classList.remove('crazylog-list')
+      window.removeEventListener('scroll', onScroll)
+    }
   })
 </script>
 
@@ -113,7 +105,7 @@
           <button
             class="tab-btn"
             class:tab-btn-active={activeTab === tab}
-            onclick={() => activeTab = tab}
+            onclick={() => onTabClick(tab)}
           >
             {tab}
           </button>
@@ -128,30 +120,32 @@
           <p class="m-cta-title">내로그 등록</p>
           <p class="m-cta-sub">멋진 로그로 <span class="m-cta-accent">내 채널</span> 알리기</p>
         </div>
-        <button class="m-write-btn" aria-label="로그 작성하기">
+        <a href="/crazylog/new" class="m-write-btn" aria-label="로그 작성하기">
           <svg width="25" height="27" viewBox="0 0 25 27" fill="none" aria-hidden="true">
             <path fill-rule="evenodd" clip-rule="evenodd"
               d="M17.5 2.5L22.5 7.5L8.5 21.5H3.5V16.5L17.5 2.5ZM17.5 5.33L19.67 7.5L7.5 19.67V18.5H6.33L17.5 5.33ZM3.5 23.5H21.5V25.5H3.5V23.5Z"
               fill="white"/>
           </svg>
-        </button>
+        </a>
       </div>
     </div>
 
     <!-- ④ 모바일 전용: MobileContentList ────────────────────── -->
     <div class="m-content">
       <div class="m-posts">
-        {#each filteredPosts as post (post.id)}
-          <div class="m-post-card">
-            <div class="m-post-img-wrap">
-              <img src={post.img} alt="" class="m-post-img" loading="lazy"/>
-            </div>
-            <div class="m-post-body">
-              <p class="m-post-title">{post.title}</p>
-              <p class="m-post-meta">{post.time}·by {post.author}</p>
-            </div>
-          </div>
-        {/each}
+        {#if data.posts.length === 0}
+          <p class="m-empty">아직 등록된 로그가 없습니다.</p>
+        {:else}
+          {#each data.posts as post (post.id)}
+            <a href="/crazylog/view/{post.id}" class="m-post-card">
+              <div class="m-post-body m-post-body-only">
+                <span class="m-post-log-type">{post.logType}</span>
+                <p class="m-post-title">{post.title}</p>
+                <p class="m-post-meta">{relativeTime(post.createdAt)}·by {post.author}</p>
+              </div>
+            </a>
+          {/each}
+        {/if}
       </div>
     </div>
 
@@ -159,43 +153,44 @@
     <div class="pc-content">
       <div class="pc-inner">
 
-        <!-- PcIndexBar (gradient 영역 내부) -->
+        <!-- PcIndexBar -->
         <div class="pc-index-bar">
-          {#each PC_STATS as stat}
+          {#each PC_STAT_TABS as stat}
             <button
               class="pc-stat-pill"
-              class:pc-stat-pill-active={activeTab === STAT_TAB_MAP[stat.label]}
-              onclick={() => activeTab = STAT_TAB_MAP[stat.label]}
+              class:pc-stat-pill-active={activeTab === stat.tab}
+              onclick={() => onTabClick(stat.tab)}
             >
               <span class="pc-stat-label">{stat.label}</span>
-              <span class="pc-stat-count">{stat.count}</span>
+              <span class="pc-stat-count-pill">{data.counts[stat.countKey]}</span>
             </button>
           {/each}
         </div>
 
         <!-- PC 포스트 목록 -->
         <div class="pc-posts">
-          {#each PC_POSTS as post (post.id)}
-            <div class="pc-post">
-              <div class="pc-bar" style="background: {post.bar}"></div>
-              <div class="pc-text">
-                <p class="pc-title">{post.title}</p>
-                {#if post.isBullet}
-                  <ul class="pc-desc-list">
-                    <li class="pc-desc-bullet">{post.desc}</li>
-                  </ul>
-                {:else}
-                  <p class="pc-desc">{post.desc}</p>
-                {/if}
-              </div>
-              <div
-                class="pc-img-wrap"
-                style="border-radius: {post.rounded ? '0 20px 20px 0' : '0'}"
-              >
-                <img src={post.img} alt="" class="pc-img" loading="lazy"/>
-              </div>
-            </div>
-          {/each}
+          {#if data.posts.length === 0}
+            <p class="pc-empty">아직 등록된 로그가 없습니다.</p>
+          {:else}
+            {#each data.posts as post (post.id)}
+              <a href="/crazylog/view/{post.id}" class="pc-post">
+                <div class="pc-bar" style="background: {barColor(post.logType)}"></div>
+                <div class="pc-text">
+                  <span class="pc-log-type">{post.logType}</span>
+                  <p class="pc-title">{post.title}</p>
+                  <p class="pc-meta">{relativeTime(post.createdAt)}·by {post.author}</p>
+                </div>
+                <div class="pc-thumb">
+                  <img
+                    src={post.thumbnailUrl ?? '/crazylog/content-hero.png'}
+                    alt={post.title}
+                    loading="lazy"
+                    class="pc-thumb-img"
+                  />
+                </div>
+              </a>
+            {/each}
+          {/if}
         </div>
 
       </div>
@@ -203,6 +198,35 @@
 
   </div>
 </div>
+
+{#if data.isLoggedIn && data.currentUser}
+<div class="write-card" class:write-card-hidden={!writeCardVisible} aria-label="내 로그 작성" role="complementary">
+  <div class="wc-user">
+    <div class="wc-avatar">
+      {#if data.currentUser.avatarUrl}
+        <img src={data.currentUser.avatarUrl} alt={data.currentUser.displayName} class="wc-avatar-img" />
+      {:else}
+        {data.currentUser.displayName[0] ?? '?'}
+      {/if}
+    </div>
+    <div class="wc-info">
+      <span class="wc-name">{data.currentUser.displayName}</span>
+      {#if data.currentUser.membershipGrade}
+        <span class="wc-badge wc-badge-c">{data.currentUser.membershipGrade[0]}</span>
+      {/if}
+      <span class="wc-level">{data.currentUser.level}</span>
+    </div>
+  </div>
+  <div class="wc-actions">
+    <a href="/crazylog/new" class="wc-write-btn" aria-label="로그 작성하기">
+      <svg width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden="true">
+        <path d="M1 13L5 9M9.5 1.5L12.5 4.5L5 12H2V9L9.5 1.5Z" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+      </svg>
+      쓰기
+    </a>
+  </div>
+</div>
+{/if}
 
 <style>
   /* ── 루트 컨테이너 ─────────────────────────────────────────── */
@@ -346,6 +370,7 @@
     border: none;
     cursor: pointer;
     transition: filter 0.15s;
+    text-decoration: none;
   }
   .m-write-btn:hover { filter: brightness(1.1); }
 
@@ -373,25 +398,35 @@
     width: 100%;
     overflow: hidden;
   }
-  .m-post-img-wrap {
-    width: 100%;
-    height: 150px;
-    overflow: hidden;
-    position: relative;
-  }
-  .m-post-img {
-    position: absolute;
-    inset: 0;
-    width: 100%;
-    height: 100%;
-    object-fit: cover;
-    pointer-events: none;
+  .m-post-card {
+    text-decoration: none;
+    color: inherit;
   }
   .m-post-body {
     display: flex;
     flex-direction: column;
     gap: 10px;
     padding: 20px 30px;
+  }
+  .m-post-body-only {
+    background: var(--cs-white);
+    border-radius: var(--radius-md);
+  }
+  .m-post-log-type {
+    font-family: 'Noto Sans KR', sans-serif;
+    font-size: 11px;
+    font-weight: 700;
+    color: var(--cs-purple);
+    letter-spacing: 0.3px;
+    text-transform: uppercase;
+  }
+  .m-empty {
+    text-align: center;
+    color: var(--cs-text-light);
+    font-family: 'Noto Sans KR', sans-serif;
+    font-size: 14px;
+    padding: 40px 0;
+    margin: 0;
   }
   .m-post-title {
     font-family: 'Noto Sans KR', sans-serif;
@@ -440,13 +475,13 @@
     gap: 10px;
   }
   .pc-stat-pill {
-    background: rgba(59,47,138,0.55);
+    background: var(--cs-purple);
     flex: 1;
     border-radius: var(--radius-xl);
     display: flex;
     align-items: center;
     justify-content: space-between;
-    padding: 21px 40px;
+    padding: 27px 40px;
     border: none;
     cursor: pointer;
     transition: background 0.2s, transform 0.2s, box-shadow 0.2s;
@@ -467,12 +502,14 @@
     letter-spacing: -0.5px;
     line-height: 1.6;
   }
-  .pc-stat-count {
+  .pc-stat-count-pill {
+    background: rgba(255,255,255,0.15);
+    border-radius: 9999px;
+    padding: 2px 12px;
     font-family: 'Noto Sans KR', sans-serif;
     font-weight: 700;
     font-size: 16px;
     color: var(--cs-white);
-    letter-spacing: -0.5px;
     line-height: 2;
   }
 
@@ -485,12 +522,14 @@
   }
   .pc-post {
     background: var(--cs-white);
-    border-radius: var(--radius-lg);  /* card.pc = 20px (front design system) */
+    border-radius: var(--radius-lg);
     overflow: hidden;
     display: flex;
     align-items: stretch;
     width: 100%;
-    height: 180px;      /* 명시 고정 높이: 300px → 180px */
+    height: 180px;
+    text-decoration: none;
+    color: inherit;
   }
   .pc-bar {
     width: 15px;
@@ -517,47 +556,171 @@
     text-overflow: ellipsis;
     margin: 0;
   }
-  .pc-desc {
+  .pc-log-type {
     font-family: 'Noto Sans KR', sans-serif;
+    font-size: 11px;
     font-weight: 700;
-    font-size: 14px;
-    color: var(--cs-text-dark);
-    letter-spacing: -0.5px;
+    color: var(--cs-purple);
+    letter-spacing: 0.3px;
+    text-transform: uppercase;
+    margin: 0 0 4px;
+    display: block;
+  }
+  .pc-meta {
+    font-family: 'Noto Sans KR', sans-serif;
+    font-size: 12px;
+    font-weight: 500;
+    color: var(--cs-text-mid);
+    letter-spacing: -0.3px;
     line-height: 1.5;
-    display: -webkit-box;
-    -webkit-line-clamp: 2;
-    -webkit-box-orient: vertical;
-    overflow: hidden;
     margin: 0;
   }
-  .pc-desc-list {
-    margin: 0;
-    padding-left: 21px;
-  }
-  .pc-desc-bullet {
-    font-family: 'Noto Sans KR', sans-serif;
-    font-weight: 700;
-    font-size: 14px;
-    color: var(--cs-text-dark);
-    letter-spacing: -0.5px;
-    line-height: 1.5;
-  }
-  .pc-img-wrap {
-    flex: 3;            /* 30% */
+  .pc-thumb {
+    flex: 3;               /* 30% */
     flex-shrink: 0;
-    min-width: 180px;   /* 최소 너비 보장 */
     overflow: hidden;
-    position: relative;
+    border-radius: 0 var(--radius-lg) var(--radius-lg) 0;
+    background: var(--cs-lilac);
   }
-  .pc-img {
-    position: absolute;
-    inset: 0;
+  .pc-thumb-img {
     width: 100%;
     height: 100%;
     object-fit: cover;
     display: block;
+  }
+  .pc-empty {
+    text-align: center;
+    color: var(--cs-text-light);
+    font-family: 'Noto Sans KR', sans-serif;
+    font-size: 14px;
+    padding: 40px 0;
+    margin: 0;
+  }
+
+  /* ── 플로팅 사용자 카드 ───────────────────────────────────── */
+  .write-card {
+    position: fixed;
+    bottom: 24px;
+    left: 24px;
+    right: 24px;
+    width: auto;
+    transform: translateY(0);
+    z-index: 100;
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    background: var(--cs-white);
+    border-radius: var(--radius-lg);
+    padding: 12px 16px 12px 20px;
+    box-shadow: 0 4px 24px rgba(16, 11, 50, 0.14);
+    min-height: 64px;
+    transition: transform 0.35s cubic-bezier(0.4, 0, 0.2, 1), opacity 0.35s cubic-bezier(0.4, 0, 0.2, 1);
+    opacity: 1;
+    pointer-events: auto;
+  }
+  .write-card-hidden {
+    transform: translateY(calc(100% + 32px));
+    opacity: 0;
     pointer-events: none;
   }
+  @media (min-width: 640px) {
+    .write-card {
+      left: 50%;
+      right: auto;
+      min-width: 460px;
+      max-width: 700px;
+      transform: translateX(-50%) translateY(0);
+      white-space: nowrap;
+    }
+    .write-card-hidden {
+      transform: translateX(-50%) translateY(calc(100% + 32px));
+    }
+  }
+  .wc-user {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    flex: 1;
+    min-width: 0;
+  }
+  .wc-avatar {
+    width: 38px;
+    height: 38px;
+    border-radius: 50%;
+    background: linear-gradient(135deg, var(--cs-purple) 0%, var(--cs-red-badge) 100%);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 15px;
+    font-weight: 900;
+    color: var(--cs-white);
+    flex-shrink: 0;
+    overflow: hidden;
+  }
+  .wc-avatar-img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    border-radius: 50%;
+  }
+  .wc-info {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-wrap: wrap;
+    min-width: 0;
+  }
+  .wc-name {
+    font: var(--text-pc-body-14);
+    color: var(--cs-text);
+    letter-spacing: -0.5px;
+  }
+  .wc-badge {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 20px;
+    height: 20px;
+    border-radius: 6px;
+    font-size: 11px;
+    font-weight: 900;
+    color: var(--cs-white);
+    flex-shrink: 0;
+  }
+  .wc-badge-e { background: var(--cs-text-mid); }
+  .wc-badge-p { background: var(--cs-purple); }
+  .wc-badge-c { background: var(--cs-orange); }
+  .wc-level {
+    font-size: 11px;
+    font-weight: 500;
+    color: var(--cs-purple-light);
+    background: var(--cs-purple-op10);
+    padding: 2px 8px;
+    border-radius: var(--radius-full);
+  }
+  .wc-actions {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-shrink: 0;
+  }
+  .wc-write-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 0 20px;
+    height: 40px;
+    background: var(--cs-red-badge);
+    color: var(--cs-white);
+    border-radius: var(--radius-xl);
+    font: var(--text-pc-body-14);
+    font-weight: 700;
+    letter-spacing: -0.3px;
+    text-decoration: none;
+    flex-shrink: 0;
+    transition: background 0.15s;
+  }
+  .wc-write-btn:hover { background: var(--cs-red); }
 
   /* ── 반응형 ───────────────────────────────────────────────── */
   @media (max-width: 767px) {
