@@ -1,14 +1,18 @@
 <script lang="ts">
+  import type { PageData } from './$types'
+  interface Props { data: PageData }
+  let { data }: Props = $props()
+
   const TABS = [
-    { label: 'Review',      count: 212 },
-    { label: 'Share',       count: 43  },
-    { label: 'K-Trail log', count: 39  },
+    { label: '상품리뷰', countKey: 'review' as const },
+    { label: '일상공유', countKey: 'share'  as const },
+    { label: '채널홍보', countKey: 'promo'  as const },
   ]
 
   const TAB_MAP: Record<string, string> = {
-    'Review':      '리뷰',
-    'Share':       '공유',
-    'K-Trail log': '이벤트',
+    '상품리뷰': '상품리뷰',
+    '일상공유': '일상공유',
+    '채널홍보': '채널홍보',
   }
 
   const M_KEYWORDS = ['양양의 기억 로그', 'Mini2se 리뷰 로그', '신상로그', 'Air 3S Drone', 'Air 3S Drone', 'Air 3S Drone']
@@ -60,34 +64,7 @@
     },
   ]
 
-  const M_ARTICLES = [
-    { img: '/crazylog/article-img1.png', title: '[사용기] SONY FE 24-105  가볍게 고퀄 영상을 바로 만들어주다',            meta: '1시간 전·by 홍기동' },
-    { img: '/crazylog/article-img2.png', title: '액션캠의 왕좌를 되찾으러 돌아왔다. GoPro HERO13 Black',                 meta: '2시간 전·by 유말자' },
-    { img: '/crazylog/article-img3.png', title: '휴대용 디자인으로 이동 중에도 미디어 카드에 쉽게 접근 가능',             meta: '2시간 전·by 유말자' },
-    { img: '/crazylog/article-img4.png', title: 'onn. 52인치 삼각대, 컴팩트 카메라, 스마트폰 및 GoPro 액션 카메라용 스', meta: '2시간 전·by 유말자' },
-    { img: '/crazylog/article-img5.png', title: 'K-트레일로그를 남기는 멋진 일은 우리들에게 즐거움의 폭증이다!!',         meta: '2시간 전·by 유말자' },
-  ]
 
-  interface PostItem {
-    bar: string
-    title: string
-    desc: string
-    img: string
-    rounded?: boolean
-    cover?: boolean
-    isList?: boolean
-  }
-
-  const D_POSTS: PostItem[] = [
-    { bar: '#3b2f8a', rounded: true,  title: 'SONY FE 24-105 F4 G OSS',                                         desc: 'Bower 6-in-1 Multi Selfie Tripod with Smartphone & GoPro Mount, Rechargeable Wireless Remote - Black',                                                img: '/crazylog/post-img1.png' },
-    { bar: '#553fe0', cover: true,    title: 'GoPro HERO13 Black',                                               desc: 'Best-in-Class 5.3K Video - 5.3K video delivers breathtaking image quality with 91% more resolution than 4K and an incredible 665% more than 1080p.', img: '/crazylog/post-img2.png' },
-    { bar: '#3b2f8a', rounded: true,  title: 'SONY FE 24-105 F4 G OSS',                                         desc: 'Bower 6-in-1 Multi Selfie Tripod with Smartphone & GoPro Mount, Rechargeable Wireless Remote - Black',                                                img: '/crazylog/post-img3.png' },
-    { bar: '#ff3535', isList: true,   title: '[Accessories] onn USB C/USB 2.0 Memory Card Reader for SD/Mic...', desc: 'SD and microSD card reader with USB and USB-C connectors for versatile connectivity',                                                                   img: '/crazylog/post-img4.png' },
-    { bar: '#3b2f8a', rounded: true,  title: 'SONY FE 24-105 F4 G OSS',                                         desc: 'Bower 6-in-1 Multi Selfie Tripod with Smartphone & GoPro Mount, Rechargeable Wireless Remote - Black',                                                img: '/crazylog/post-img1.png' },
-    { bar: '#553fe0', cover: true,    title: 'GoPro HERO13 Black',                                               desc: 'Best-in-Class 5.3K Video - 5.3K video delivers breathtaking image quality with 91% more resolution than 4K and an incredible 665% more than 1080p.', img: '/crazylog/post-img2.png' },
-    { bar: '#3b2f8a', rounded: true,  title: 'SONY FE 24-105 F4 G OSS',                                         desc: 'Bower 6-in-1 Multi Selfie Tripod with Smartphone & GoPro Mount, Rechargeable Wireless Remote - Black',                                                img: '/crazylog/post-img3.png' },
-    { bar: '#ff3535', isList: true,   title: '[Accessories] onn USB C/USB 2.0 Memory Card Reader for SD/Mic...', desc: 'SD and microSD card reader with USB and USB-C connectors for versatile connectivity',                                                                   img: '/crazylog/post-img4.png' },
-  ]
 </script>
 
 <!-- ═══════════════════════════════════════
@@ -156,7 +133,7 @@
             <img src="/crazylog/hero-shotlog.png" alt="" class="d-shotlog1-bg-img" />
           </div>
           <div class="d-shotlog1-header">
-            <span class="d-shotlog1-label">K-Trail log</span>
+            <span class="d-shotlog1-label">채널홍보</span>
             <svg width="13" height="13" viewBox="0 0 16 16" fill="none" style="transform:scaleY(-1)">
               <path d="M2 5L8 11L14 5" stroke="white" stroke-linecap="round" stroke-linejoin="round" stroke-width="3"/>
             </svg>
@@ -201,7 +178,7 @@
         {#each TABS as tab}
           <a href="/crazylog/list?tab={TAB_MAP[tab.label]}" class="d-index-btn">
             <span class="d-index-label">{tab.label}</span>
-            <span class="d-index-count-pill">{tab.count}</span>
+            <span class="d-index-count-pill">{data.counts[tab.countKey]}</span>
           </a>
         {/each}
       </div>
@@ -209,26 +186,23 @@
       <!-- PostsEng: 8 rows -->
       <!-- Figma: flex-col gap-[50px] -->
       <div class="d-posts">
-        {#each D_POSTS as post}
-          <article class="d-post">
-            <!-- Figma: IndexBar — 15px wide colored left bar -->
+        {#each data.posts as post}
+          <a href="/crazylog/view/{post.id}" class="d-post">
             <div class="d-post-bar" style="background:{post.bar}"></div>
-            <!-- Figma: Writing — flex-[7_0_0%] p-[40px] gap-[15px] -->
             <div class="d-post-writing">
               <p class="d-post-title">{post.title}</p>
-              {#if post.isList}
-                <ul class="d-post-desc-list">
-                  <li class="d-post-desc-list-item">{post.desc}</li>
-                </ul>
-              {:else}
+              {#if post.desc}
                 <p class="d-post-desc">{post.desc}</p>
               {/if}
             </div>
-            <!-- Figma: Img — flex-[3_0_0%] h-[210px] -->
             <div class="d-post-img-wrap" style={post.rounded ? 'border-radius:0 30px 30px 0' : ''}>
-              <img src={post.img} alt="" class="d-post-img" />
+              {#if post.img}
+                <img src={post.img} alt={post.title} class="d-post-img" />
+              {:else}
+                <div class="d-post-img-placeholder" style="background:{post.bar}20"></div>
+              {/if}
             </div>
-          </article>
+          </a>
         {/each}
       </div>
 
@@ -337,14 +311,18 @@
   <!-- Component (콘텐츠): gradient bg + article cards -->
   <section class="m-content">
     <div class="m-content-inner">
-      {#each M_ARTICLES as article}
-        <a href="/crazylog/view/1" class="m-article">
-          <div class="m-article-img-wrap">
-            <img src={article.img} alt="" class="m-article-img" />
-          </div>
+      {#each data.posts as post}
+        <a href="/crazylog/view/{post.id}" class="m-article">
+          {#if post.img}
+            <div class="m-article-img-wrap">
+              <img src={post.img} alt={post.title} class="m-article-img" />
+            </div>
+          {/if}
           <div class="m-article-body">
-            <p class="m-article-title">{article.title}</p>
-            <p class="m-article-meta">{article.meta}</p>
+            <p class="m-article-title">{post.title}</p>
+            {#if post.desc}
+              <p class="m-article-meta">{post.desc}</p>
+            {/if}
           </div>
         </a>
       {/each}
@@ -730,7 +708,11 @@
     display: flex;
     align-items: stretch;
     height: 180px;
+    text-decoration: none;
+    cursor: pointer;
+    transition: box-shadow 0.2s;
   }
+  .d-post:hover { box-shadow: 0 4px 20px rgba(16,11,50,0.12); }
 
   /* D-7: grid card hover */
   .d-shotlog, .d-shotlog1, .d-shotlog2 { transition: transform 0.5s ease, box-shadow 0.5s ease; }
@@ -811,6 +793,12 @@
     height: 100%;
     object-fit: cover;
     pointer-events: none;
+  }
+  .d-post-img-placeholder {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
   }
 
   /* ════════════════════════════════════════
