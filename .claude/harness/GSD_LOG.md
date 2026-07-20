@@ -1,6 +1,22 @@
 # GSD_LOG.md — 크레이지샷 실행 이력
 # 형식: [YYYY-MM-DD HH:MM] 타입 | 태스크명 | 파일 | 소요 | 결과
 
+[2026-07-20] FIX+UX | Crazylog 작성/뷰 페이지 UX 개선 + 태그·이미지 버그픽스 | crazylog/[slug]/+page.svelte · view/[slug]/+page.svelte · view/[slug]/+page.server.ts · CmsContentEditor.svelte · CrazylogWriteCard.svelte · src/app.css | ✅ DONE
+  - UX-1: 작성 모바일 사용자 카드 한 행 재정렬, 아바타 1.2배(53px), 폰트 토큰 정렬, wc-name 모바일 숨김
+  - UX-2: 모바일 옵션 카드 m-toggle-label 컬러 → --cs-text-mid (PC 동일)
+  - UX-3: 모바일 폼(m-user-card/m-select/m-input/m-submit) 패딩 10% 증가, 제출버튼 전폭+18B
+  - UX-4: PC 에디터·사이드바 폰트 토큰 7곳 업그레이드 (d-select-label/d-input/d-submit/d-user-name/d-stat-label/d-stat-value/kw-tag)
+  - BUG-1: 뷰 페이지 태그 누락 — server.ts keywords 쿼리 추가 + PC·모바일 태그 렌더링 신규 추가
+  - BUG-2: 뷰 페이지 이미지 좌측 쏠림 — .d-content-images/.d-content-img CSS 신규 추가
+  - UX-5: 뷰 PC 내비바 내비명 우측 끝 배치 (order:3), --text-pc-menu-kr-20, --cs-text-mid
+  - UX-6: CrazylogWriteCard 쓰기 버튼 아이콘 제거+--cs-purple-dark BG, 삭제 버튼 --cs-red-xlight(신규 토큰 #FFE7E7)
+
+[2026-07-20] FIX+FEAT | /crazylog/list UI 픽스 + 디자인 토큰 정렬 + 멤버십 배지 전역 방어 | list/+page.svelte · list/+page.server.ts · src/app.css · membership.ts(신규) · CrazylogWriteCard.svelte · crazylog/+page.svelte · crazylog/+page.server.ts · view/[slug]/+page.server.ts · [slug]/+page.server.ts | ✅ DONE
+  - FIX-1: 모바일 카드 썸네일 미노출 → m-post-thumb + m-post-thumb-img 추가
+  - FIX-2: 폰트 하드코딩 6곳 → CSS 토큰 교체 + --text-m-tag-11 · --text-pc-tag-11 신규 등록
+  - FIX-3: NONE 배지 노출 → resolveGrade() 헬퍼(membership.ts) 신규 생성, 서버 3곳 + 컴포넌트 이중 방어
+  - FEAT: /crazylog 메인 PC 카드 → /list 구조 동기화 (log-type 레이블 + 날짜·작성자 + gap 20px + 토큰)
+
 [2026-07-20] FEAT | SuggestPicker 공통 컴포넌트화 + 디자인 시스템 등록 | src/lib/types/suggest-picker.ts(신규) · src/lib/components/common/SuggestPicker.svelte(신규) · CmsSuggestPicker.svelte(shim) · cms-suggest-picker.ts(shim) · ProductCategoryModal.svelte · ProductHeroModal.svelte · cms/products/new/+page.svelte · .claude/rules-ref/cms-uiux.md · .claude/rules-ref/front-uiux.md · .claude/rules/uiux-index.md | ✅ DONE
   - 신규: SuggestPickerOption · SuggestPickerVariant 타입 → suggest-picker.ts 단일 소스
   - 신규: SuggestPicker.svelte 공통 컴포넌트 (noFilter / renderItem 스니펫 / itemLayout / variant props 추가)

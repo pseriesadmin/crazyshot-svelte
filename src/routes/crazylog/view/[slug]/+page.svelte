@@ -1,6 +1,7 @@
 <script lang="ts">
   import { supabase } from '$lib/services/supabase'
   import type { PageData } from './$types'
+  import CrazylogWriteCard from '$lib/components/common/CrazylogWriteCard.svelte'
 
   interface Props { data: PageData }
   let { data }: Props = $props()
@@ -302,17 +303,7 @@
         <span>Back</span>
       </button>
       <span class="d-navi-title">{post?.logType ?? ''}</span>
-      <div class="d-navi-actions">
-        {#if data?.isAdmin}
-          {#if data?.postStatus === 'hidden'}
-            <button class="admin-btn admin-btn-publish" disabled={adminBusy}
-              onclick={() => handleAdminStatus('published')}>공개</button>
-          {:else}
-            <button class="admin-btn admin-btn-hold" disabled={adminBusy}
-              onclick={() => handleAdminStatus('hidden')}>보류 처리</button>
-          {/if}
-        {/if}
-      </div>
+      <div class="d-navi-actions"></div>
     </div>
 
     <!-- 2. PostsEng (본문 카드) -->
@@ -376,6 +367,14 @@
             <p class="d-article-empty">포스트를 불러올 수 없습니다.</p>
           {/if}
         </div>
+
+        {#if post?.keywords && post.keywords.length > 0}
+          <div class="d-tags">
+            {#each post.keywords as kw}
+              <span class="d-tag">#{kw}</span>
+            {/each}
+          </div>
+        {/if}
       </div>
     </div>
 
@@ -549,23 +548,15 @@
           {/each}
         </div>
 
-      </div>
-      {#if data?.isAdmin}
-        <div class="m-admin-bar">
-          {#if adminError}
-            <p class="m-admin-error" role="alert">{adminError}</p>
-          {/if}
-          <div class="m-admin-btns">
-            {#if data?.postStatus === 'hidden'}
-              <button class="admin-btn admin-btn-publish" disabled={adminBusy}
-                onclick={() => handleAdminStatus('published')}>공개</button>
-            {:else}
-              <button class="admin-btn admin-btn-hold" disabled={adminBusy}
-                onclick={() => handleAdminStatus('hidden')}>보류 처리</button>
-            {/if}
+        {#if post?.keywords && post.keywords.length > 0}
+          <div class="m-tags">
+            {#each post.keywords as kw}
+              <span class="m-tag">#{kw}</span>
+            {/each}
           </div>
-        </div>
-      {/if}
+        {/if}
+
+      </div>
 
     </div><!-- /m-posts-eng -->
 
@@ -674,157 +665,19 @@
 {/if}
 
 <!-- ══════════════════════════════════
-     FLOATING WRITE CARD (로그인 상태에 따라 분기)
+     FLOATING WRITE CARD
 ══════════════════════════════════ -->
-<div class="write-card" class:write-card-hidden={!writeCardVisible} aria-label="내 로그 작성" role="complementary">
-  {#if data.isLoggedIn && data.currentUser}
-    <!-- 로그인 상태 -->
-    <div class="wc-user">
-      <div class="wc-avatar">
-        {#if data.currentUser.avatarUrl}
-          <img src={data.currentUser.avatarUrl} alt={data.currentUser.displayName} class="wc-avatar-img" />
-        {:else}
-          {data.currentUser.displayName[0] ?? '?'}
-        {/if}
-      </div>
-      <div class="wc-info">
-        <span class="wc-name">{data.currentUser.displayName}</span>
-        {#if data.currentUser.membershipGrade}
-          <span class="wc-badge wc-badge-c" aria-label="{data.currentUser.membershipGrade} 멤버십">{data.currentUser.membershipGrade[0]}</span>
-        {/if}
-        <span class="wc-level">{data.currentUser.level}</span>
-      </div>
-    </div>
-    <div class="wc-actions">
-      <a href="/crazylog/new" class="wc-write-btn" aria-label="로그 작성하기">
-        <svg width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden="true">
-          <path d="M1 13L5 9M9.5 1.5L12.5 4.5L5 12H2V9L9.5 1.5Z" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
-        </svg>
-        쓰기
-      </a>
-      {#if data?.isOwner}
-        <a href="/crazylog/{data.postId}" class="wc-edit-btn" aria-label="이 로그 수정">수정</a>
-        <button class="wc-delete-btn" disabled={adminBusy}
-          onclick={() => showDeleteConfirm = true} aria-label="이 로그 삭제">삭제</button>
-      {/if}
-    </div>
-  {:else}
-    <!-- 비로그인 상태 -->
-    <div class="wc-user">
-      <div class="wc-avatar wc-avatar-guest">
-        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-          <circle cx="12" cy="8" r="4" stroke="currentColor" stroke-width="1.8"/>
-          <path d="M4 20c0-4 3.582-7 8-7s8 3 8 7" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
-        </svg>
-      </div>
-      <div class="wc-info">
-        <span class="wc-name wc-guest-msg">로그인해 로그 작성해주세요.</span>
-      </div>
-    </div>
-  {/if}
-</div>
+<CrazylogWriteCard
+  currentUser={data.currentUser}
+  isLoggedIn={data.isLoggedIn}
+  visible={writeCardVisible}
+  postId={data.postId}
+  isOwner={data.isOwner ?? false}
+  deleteBusy={adminBusy}
+  onDelete={() => showDeleteConfirm = true}
+/>
 
 <style>
-  /* ══════════════════════════════════
-     FLOATING WRITE CARD
-  ══════════════════════════════════ */
-  /* 모바일: 좌우 여백만 두고 가득 채움 */
-  .write-card {
-    position: fixed;
-    bottom: 24px;
-    left: 24px;
-    right: 24px;
-    width: auto;
-    transform: translateY(0);
-    z-index: 100;
-    display: flex;
-    align-items: center;
-    gap: 16px;
-    background: var(--cs-white);
-    border-radius: var(--radius-lg);
-    padding: 12px 16px 12px 20px;
-    box-shadow: 0 4px 24px rgba(16, 11, 50, 0.14);
-    min-height: 64px;
-    transition: transform 0.35s cubic-bezier(0.4, 0, 0.2, 1),
-                opacity  0.35s cubic-bezier(0.4, 0, 0.2, 1);
-    opacity: 1;
-    pointer-events: auto;
-  }
-
-  .write-card-hidden {
-    transform: translateY(calc(100% + 32px));
-    opacity: 0;
-    pointer-events: none;
-  }
-
-  /* PC: 중앙 고정 + 고정 폭 */
-  @media (min-width: 640px) {
-    .write-card {
-      left: 50%;
-      right: auto;
-      width: auto;
-      min-width: 460px;
-      max-width: 700px;
-      transform: translateX(-50%) translateY(0);
-      white-space: nowrap;
-    }
-    .write-card-hidden {
-      transform: translateX(-50%) translateY(calc(100% + 32px));
-    }
-  }
-
-  /* ── write-card 내부: 사용자 정보 ── */
-  .wc-user {
-    display: flex; align-items: center; gap: 12px; flex: 1; min-width: 0;
-  }
-  .wc-avatar {
-    width: 38px; height: 38px; border-radius: 50%;
-    background: linear-gradient(135deg, var(--cs-purple) 0%, var(--cs-red-badge) 100%);
-    display: flex; align-items: center; justify-content: center;
-    font-size: 15px; font-weight: 900; color: var(--cs-white); flex-shrink: 0; overflow: hidden;
-  }
-  .wc-avatar-img { width: 100%; height: 100%; object-fit: cover; border-radius: 50%; }
-  .wc-info { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; min-width: 0; }
-  .wc-name { font: var(--text-pc-body-14); color: var(--cs-text); letter-spacing: -0.5px; }
-  .wc-avatar-guest { background: var(--cs-surface-gray); color: var(--cs-text-light); }
-  .wc-guest-msg { color: var(--cs-text-mid); font: var(--text-pc-script-12); letter-spacing: -0.3px; }
-  .wc-badge {
-    display: inline-flex; align-items: center; justify-content: center;
-    width: 20px; height: 20px; border-radius: 6px;
-    font-size: 11px; font-weight: 900; color: var(--cs-white);
-    flex-shrink: 0; letter-spacing: 0; line-height: 1;
-  }
-  .wc-badge-e { background: var(--cs-text-mid); }
-  .wc-badge-p { background: var(--cs-purple); }
-  .wc-badge-c { background: var(--cs-orange); }
-  .wc-level {
-    font-size: 11px; font-weight: 500; color: var(--cs-purple-light);
-    background: var(--cs-purple-op10); padding: 2px 8px; border-radius: var(--radius-full);
-  }
-  .wc-write-btn {
-    display: inline-flex; align-items: center; gap: 6px; padding: 0 20px; height: 40px;
-    background: var(--cs-red-badge); color: var(--cs-white);
-    border-radius: var(--radius-xl); font: var(--text-pc-body-14); font-weight: 700;
-    letter-spacing: -0.3px; text-decoration: none; flex-shrink: 0; transition: background 0.15s;
-  }
-  .wc-write-btn:hover { background: var(--cs-red); }
-  .wc-actions { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
-  .wc-edit-btn {
-    display: inline-flex; align-items: center; height: 40px; padding: 0 16px;
-    background: var(--cs-surface-gray); color: var(--cs-text);
-    border-radius: var(--radius-xl); font: var(--text-pc-body-14); font-weight: 700;
-    letter-spacing: -0.3px; text-decoration: none; flex-shrink: 0; transition: background 0.15s;
-  }
-  .wc-edit-btn:hover { background: var(--cs-border); }
-  .wc-delete-btn {
-    display: inline-flex; align-items: center; height: 40px; padding: 0 16px;
-    background: var(--cs-chat-in-bg); color: var(--cs-red-badge); border: none;
-    border-radius: var(--radius-xl); font: var(--text-pc-body-14); font-weight: 700;
-    letter-spacing: -0.3px; cursor: pointer; flex-shrink: 0; transition: background 0.15s;
-  }
-  .wc-delete-btn:hover:not(:disabled) { background: var(--cs-red-light); }
-  .wc-delete-btn:disabled { opacity: 0.5; cursor: not-allowed; }
-
   /* ══ 레이아웃 분기 (1024px) ════════════════════════ */
   .d-view { display: none; }
   .m-view { display: block; }
@@ -874,15 +727,11 @@
   }
   .d-back-btn:hover { opacity: 0.7; }
   .d-navi-title {
-    font-family: 'Tilt Warp', sans-serif;
-    font-size: 20px;
-    font-weight: 400;
-    color: var(--cs-purple-light);
-    position: absolute;
-    left: 50%;
-    transform: translateX(-50%);
+    font: var(--text-pc-menu-kr-20);
+    color: var(--cs-text-mid);
+    margin-left: auto;
+    order: 3;
   }
-  .d-navi-bar { position: relative; }
 
   /* 2. PostsEng */
   .d-posts-eng {
@@ -962,6 +811,45 @@
     color: var(--cs-text-dark);
     margin: 0;
     line-height: 1.8;
+  }
+
+  /* 이미지 블록 */
+  .d-content-images {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    justify-content: center;
+    width: 100%;
+  }
+  .d-content-img {
+    max-width: 100%;
+    height: auto;
+    border-radius: var(--radius-md);
+    display: block;
+  }
+  .d-content-images--individual .d-content-img {
+    width: 100%;
+  }
+  .d-content-images--collage .d-content-img {
+    flex: 1 1 45%;
+    object-fit: cover;
+    max-height: 400px;
+  }
+
+  /* 태그 */
+  .d-tags {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    padding-top: 8px;
+  }
+  .d-tag {
+    font: var(--text-pc-body-14);
+    font-weight: 700;
+    color: var(--cs-purple);
+    background: var(--cs-purple-op10);
+    padding: 4px 12px;
+    border-radius: var(--radius-full);
   }
 
   /* 3. Comments */
@@ -1353,6 +1241,20 @@
     height: auto;
     display: block;
     object-fit: contain;
+  }
+
+  .m-tags {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    padding-top: 8px;
+  }
+  .m-tag {
+    font: var(--text-m-script-14B);
+    color: var(--cs-purple);
+    background: var(--cs-purple-op10);
+    padding: 4px 12px;
+    border-radius: var(--radius-full);
   }
 
   /* 후기 div: px-[25px] pb-[100px] on #ecebf4 bg */

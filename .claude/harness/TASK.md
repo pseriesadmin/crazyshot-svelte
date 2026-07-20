@@ -28,6 +28,36 @@ auth_baseline: fed4fdb — createBrowserClient 패턴 (절대 싱글톤 createCl
 
 ---
 
+## NOW — /crazylog/list UI 픽스 + 디자인 토큰 정렬 + 멤버십 배지 전역 방어 (2026-07-20) ✅ 완료
+
+수정/신규 파일:
+  - src/routes/crazylog/list/+page.svelte ← 모바일 썸네일 렌더 추가 + 폰트 토큰 6곳 교체
+  - src/routes/crazylog/list/+page.server.ts ← resolveGrade() 적용
+  - src/app.css ← --text-m-tag-11 · --text-pc-tag-11 신규 토큰 등록
+  - src/lib/utils/membership.ts ← resolveGrade() 헬퍼 신규 생성
+  - src/lib/components/common/CrazylogWriteCard.svelte ← NONE 배지 방어 조건 추가
+  - src/routes/crazylog/+page.svelte ← PC 포스트 카드 /list 레이아웃 동기화 + 폰트 토큰
+  - src/routes/crazylog/+page.server.ts ← user_id + author 조회 + createdAt 추가
+  - src/routes/crazylog/view/[slug]/+page.server.ts ← resolveGrade() 적용
+  - src/routes/crazylog/[slug]/+page.server.ts ← resolveGrade() 적용
+
+- [x] FIX-1: 모바일 카드 썸네일 미노출 | ROUTINE | ✅ 완료 (2026-07-20)
+  - m-post-card 마크업에 `<img>` 태그 누락 → thumbnailUrl 있을 때 m-post-thumb 렌더 추가
+  - 썸네일 없을 때 기존 m-post-body-only 카드 유지
+- [x] FIX-2: 폰트 디자인 토큰 정렬 | ROUTINE | ✅ 완료 (2026-07-20)
+  - 모바일·PC 카드 텍스트 6곳 하드코딩 → CSS 변수 토큰 교체
+  - 신규 토큰 2종 등록: --text-m-tag-11 (700 11px) · --text-pc-tag-11 (700 11px)
+- [x] FIX-3: NONE 멤버십 배지 전역 미노출 | BOUNDARY | ✅ 완료 (2026-07-20)
+  - 원인: DB membership_grade = 'NONE' 문자열 → truthy 통과 → 배지 노출
+  - resolveGrade() 헬퍼 신규 생성 (src/lib/utils/membership.ts) — 서버 3곳 일괄 적용
+  - CrazylogWriteCard.svelte 컴포넌트에 `!== 'NONE'` 방어 조건 추가 (이중 방어)
+- [x] FEAT: /crazylog 메인 PC 포스트 카드 /list 레이아웃 동기화 | BOUNDARY | ✅ 완료 (2026-07-20)
+  - +page.server.ts: user_id + author(user_profiles 조회) + createdAt 추가, desc 제거
+  - +page.svelte: d-post-log-type + d-post-meta 추가, gap 50px→20px, 폰트 토큰 교체
+- [x] QA: svelte-check 타입 오류 0건 확인 | GATE C | ✅ 완료 (2026-07-20)
+
+---
+
 ## NOW — SuggestPicker 공통 컴포넌트화 + 디자인 시스템 등록 (2026-07-20) ✅ 완료
 
 [CONTEXT BRIDGE — SuggestPicker 공통화]
@@ -61,6 +91,55 @@ auth_baseline: fed4fdb — createBrowserClient 패턴 (절대 싱글톤 createCl
   - front-uiux.md §12 신규: USER 화면 호출 규칙 + 2종 variant 기준 + 금지항목
   - uiux-index.md: 공통 컴포넌트 빠른 참조 표 + 로드 조건 갱신
 - [x] SP-6: svelte-check 0 ERRORS 확인 | GATE C | ✅ 완료 (2026-07-20)
+
+---
+
+## NOW — Crazylog 작성/뷰 페이지 UX 개선 + 버그픽스 (2026-07-20) ✅ 완료
+
+수정 파일:
+  - src/routes/crazylog/[slug]/+page.svelte ← 작성 페이지 모바일·PC UX 전반 개선
+  - src/routes/crazylog/view/[slug]/+page.svelte ← 뷰 페이지 PC 내비바 + 태그·이미지 버그픽스
+  - src/routes/crazylog/view/[slug]/+page.server.ts ← keywords 쿼리 추가
+  - src/routes/crazylog/list/+page.svelte ← 목록 PC 폰트 토큰 수정 (원복)
+  - src/lib/components/cms/CmsContentEditor.svelte ← 태그 kw-tag 폰트 토큰 업그레이드
+  - src/lib/components/common/CrazylogWriteCard.svelte ← 쓰기·삭제 버튼 디자인 + wc-name 모바일 숨김
+  - src/app.css ← --cs-red-xlight (#FFE7E7) 신규 토큰 등록
+
+- [x] UX-1: 작성 페이지 모바일 사용자 카드 개선 | ROUTINE | ✅ 완료 (2026-07-20)
+  - 레이아웃 한 행 재정렬 (m-user-info flex-row + m-user-row display:contents)
+  - 아바타 44px→53px (1.2배), 폰트 21px
+  - 콘텐츠·조회 폰트 --text-m-script-12 적용
+  - 사용자명(wc-name) 모바일 숨김 처리
+- [x] UX-2: 작성 페이지 모바일 옵션 카드 폰트 토큰 개선 | ROUTINE | ✅ 완료 (2026-07-20)
+  - m-toggle-label 컬러 --cs-text-dark → --cs-text-mid (PC 동일 토큰 적용)
+  - m-opts-heading --text-m-title-18B (18px Bold) 확정
+- [x] UX-3: 작성 페이지 모바일 폼 패딩 10% 증가 | ROUTINE | ✅ 완료 (2026-07-20)
+  - m-user-card: 14/16px → 15/18px
+  - m-select · m-input: 10/20px → 11/22px
+  - m-submit: 15/20px → 17/22px, max-width 제거(전폭), --text-m-title-18B 적용
+- [x] UX-4: 작성 페이지 PC 에디터·사이드바 폰트 토큰 업그레이드 | ROUTINE | ✅ 완료 (2026-07-20)
+  - d-select-label: body-14 → title-16
+  - d-input: body-14 → title-18
+  - d-submit: title-16 → title-18
+  - d-user-name: title-16 → title-18
+  - d-stat-label: script-12 → body-14
+  - d-stat-value: title-16 → title-18
+  - kw-tag (CmsContentEditor): script-12 → body-14
+- [x] BUG-1: 뷰 페이지 태그 누락 수정 | BOUNDARY | ✅ 완료 (2026-07-20)
+  - view/+page.server.ts: PostRow에 keywords 필드 추가, SELECT 쿼리 포함, post 객체에 반환
+  - view/+page.svelte PC: d-tags / d-tag 렌더링 + CSS 추가
+  - view/+page.svelte 모바일: m-tags / m-tag 렌더링 + CSS 추가 (--text-m-script-14B)
+- [x] BUG-2: 뷰 페이지 이미지 좌측 쏠림 수정 | ROUTINE | ✅ 완료 (2026-07-20)
+  - .d-content-images: justify-content:center, individual/collage 레이아웃 CSS 신규 추가
+  - .d-content-img: max-width:100%, border-radius, display:block
+- [x] UX-5: 뷰 페이지 PC 서브 내비바 개선 | ROUTINE | ✅ 완료 (2026-07-20)
+  - 내비명 중앙→우측 끝 배치 (margin-left:auto + order:3)
+  - 폰트: Tilt Warp 20px → --text-pc-menu-kr-20 (500 20px)
+  - 컬러: --cs-purple-light → --cs-text-mid
+- [x] UX-6: CrazylogWriteCard 쓰기·삭제 버튼 디자인 | ROUTINE | ✅ 완료 (2026-07-20)
+  - 쓰기 버튼: SVG 아이콘 제거, BG --cs-red-badge → --cs-purple-dark (#201857)
+  - 삭제 버튼: BG --cs-chat-in-bg → --cs-red-xlight (#FFE7E7, 신규 토큰)
+  - --cs-red-xlight 신규 토큰 app.css 등록
 
 ---
 

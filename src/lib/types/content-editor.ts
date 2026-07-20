@@ -11,6 +11,7 @@ export interface TextBlock {
 export interface ImageItem {
   url: string
   alt: string
+  isHead?: boolean
 }
 
 export interface ImageBlock {
@@ -34,7 +35,13 @@ export interface DividerBlock {
   type: 'divider'
 }
 
-export type ContentBlock = TextBlock | ImageBlock | YoutubeBlock | HtmlBlock | DividerBlock
+export interface LinkEntryBlock {
+  type: 'link-entry'
+  url: string
+  text: string
+}
+
+export type ContentBlock = TextBlock | ImageBlock | YoutubeBlock | HtmlBlock | DividerBlock | LinkEntryBlock
 
 export function extractYoutubeId(url: string): string | null {
   const patterns = [
@@ -66,4 +73,8 @@ export function makeEmptyHtmlBlock(): HtmlBlock {
 
 export function makeEmptyDividerBlock(): DividerBlock {
   return { type: 'divider' }
+}
+
+export function makeEmptyLinkEntryBlock(): LinkEntryBlock {
+  return { type: 'link-entry', url: '', text: '' }
 }
