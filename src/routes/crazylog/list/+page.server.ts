@@ -1,4 +1,5 @@
 import type { PageServerLoad } from './$types'
+import { resolveGrade } from '$lib/utils/membership'
 
 // user_posts는 migration #117에서 추가 — supabase gen types 재생성 전까지 로컬 타입 선언
 type PostRow = {
@@ -37,16 +38,16 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 	if (session) {
 		const { data: profile } = await locals.supabase
 			.from('user_profiles')
-			.select('full_name, avatar_url, membership_grade, credit_score')
+			.select('full_name, membership_grade, credit_score')
 			.eq('id', session.user.id)
 			.maybeSingle()
-		const p = profile as { full_name: string | null; avatar_url: string | null; membership_grade: string | null; credit_score: number | null } | null
+		const p = profile as { full_name: string | null; membership_grade: string | null; credit_score: number | null } | null
 		const score = p?.credit_score ?? 0
 		const level = score >= 85 ? 'LV.5' : score >= 70 ? 'LV.4' : score >= 50 ? 'LV.3' : score >= 30 ? 'LV.2' : 'LV.1'
 		currentUser = {
 			displayName:     p?.full_name ?? '익명',
-			avatarUrl:       p?.avatar_url ?? null,
-			membershipGrade: p?.membership_grade ?? null,
+			avatarUrl:       null,
+			membershipGrade: resolveGrade(p?.membership_grade),
 			level,
 		}
 	}
@@ -55,11 +56,15 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 	// user_profiles.id도 auth.users.id와 동일(PK = auth UID)이지만
 	// user_posts → user_profiles 간 직접 FK가 없어 PostgREST !inner join 불가.
 	// → 포스트 조회 후 user_profiles 별도 쿼리로 작성자명 조회.
+	// 로그인 작성자는 본인의 보류(is_public=false) 포스트도 목록에 노출
+	const userId = session?.user.id
 	let query = locals.supabase
 		.from('user_posts')
 		.select('id, title, log_type, content_blocks, created_at, user_id, thumbnail_url')
 		.eq('status', 'published')
-		.eq('is_public', true)
+		.or(userId
+			? `is_public.eq.true,user_id.eq.${userId}`
+			: 'is_public.eq.true')
 		.order('created_at', { ascending: false })
 		.limit(50)
 

@@ -6,6 +6,12 @@ type PostRow = {
 	log_type: string | null
 	content_blocks: unknown
 	created_at: string
+	user_id: string
+}
+
+type ProfileRow = {
+	id: string
+	full_name: string | null
 }
 
 function extractFirstImageUrl(blocks: unknown): string | null {
@@ -69,7 +75,7 @@ export const load: PageServerLoad = async ({ locals }) => {
 		// 최신 30개 취득 후 랜덤 셔플 → 10개 슬라이스
 		locals.supabase
 			.from('user_posts')
-			.select('id, title, log_type, content_blocks, created_at')
+			.select('id, title, log_type, content_blocks, created_at, user_id')
 			.eq('status', 'published')
 			.eq('is_public', true)
 			.order('created_at', { ascending: false })
@@ -81,14 +87,27 @@ export const load: PageServerLoad = async ({ locals }) => {
 	const rawPosts = (rawAny ?? []) as PostRow[]
 	const shuffled = shuffleArray(rawPosts).slice(0, 10)
 
+	const userIds = [...new Set(shuffled.map(p => p.user_id).filter(Boolean))]
+	const authorMap: Record<string, string> = {}
+	if (userIds.length > 0) {
+		const { data: profilesAny } = await locals.supabase
+			.from('user_profiles')
+			.select('id, full_name')
+			.in('id', userIds)
+		for (const profile of (profilesAny ?? []) as ProfileRow[]) {
+			if (profile.id) authorMap[profile.id] = profile.full_name ?? '익명'
+		}
+	}
+
 	const posts = shuffled.map((p, i) => ({
-		id:      p.id,
-		title:   p.title,
-		logType: p.log_type ?? '',
-		desc:    extractFirstText(p.content_blocks),
-		img:     extractFirstImageUrl(p.content_blocks) ?? null,
-		bar:     BAR_COLORS[p.log_type ?? ''] ?? '#3b2f8a',
-		rounded: i % 2 === 0,
+		id:        p.id,
+		title:     p.title,
+		logType:   p.log_type ?? '',
+		createdAt: p.created_at,
+		author:    authorMap[p.user_id] ?? '익명',
+		img:       extractFirstImageUrl(p.content_blocks) ?? null,
+		bar:       BAR_COLORS[p.log_type ?? ''] ?? '#3b2f8a',
+		rounded:   i % 2 === 0,
 	}))
 
 	return {

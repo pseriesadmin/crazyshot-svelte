@@ -1,10 +1,12 @@
 import type { PageServerLoad } from './$types'
+import { resolveGrade } from '$lib/utils/membership'
 
 type PostRow = {
 	id: string
 	title: string
 	log_type: string | null
 	content_blocks: unknown
+	keywords: string[] | null
 	created_at: string
 	user_id: string
 	thumbnail_url: string | null
@@ -55,13 +57,12 @@ export const load: PageServerLoad = async ({ locals, params }) => {
 	if (session) {
 		const { data: profile } = await locals.supabase
 			.from('user_profiles')
-			.select('cms_role, full_name, avatar_url, membership_grade, credit_score')
+			.select('cms_role, full_name, membership_grade, credit_score')
 			.eq('id', session.user.id)
 			.maybeSingle()
 		const profileData = profile as {
 			cms_role: string | null
 			full_name: string | null
-			avatar_url: string | null
 			membership_grade: string | null
 			credit_score: number | null
 		} | null
@@ -71,8 +72,8 @@ export const load: PageServerLoad = async ({ locals, params }) => {
 		const level = score >= 85 ? 'LV.5' : score >= 70 ? 'LV.4' : score >= 50 ? 'LV.3' : score >= 30 ? 'LV.2' : 'LV.1'
 		currentUser = {
 			displayName: profileData?.full_name ?? '익명',
-			avatarUrl:   profileData?.avatar_url ?? null,
-			membershipGrade: profileData?.membership_grade ?? null,
+			avatarUrl:   null,
+			membershipGrade: resolveGrade(profileData?.membership_grade),
 			level,
 		}
 	}
@@ -84,7 +85,7 @@ export const load: PageServerLoad = async ({ locals, params }) => {
 
 	const { data: rawPost } = await locals.supabase
 		.from('user_posts')
-		.select('id, title, log_type, content_blocks, created_at, user_id, thumbnail_url, status')
+		.select('id, title, log_type, content_blocks, keywords, created_at, user_id, thumbnail_url, status')
 		.eq('id', params.slug)
 		.maybeSingle()
 
@@ -133,6 +134,7 @@ export const load: PageServerLoad = async ({ locals, params }) => {
 		title:         postData.title,
 		logType:       postData.log_type ?? '',
 		contentBlocks: postData.content_blocks as unknown[],
+		keywords:      (postData.keywords ?? []) as string[],
 		createdAt:     postData.created_at,
 		author:        authorName,
 		thumbnailUrl:  derivedThumbnail,

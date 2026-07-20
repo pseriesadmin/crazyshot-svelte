@@ -9,6 +9,18 @@
     { label: '채널홍보', countKey: 'promo'  as const },
   ]
 
+  function relativeTime(iso: string): string {
+    const diff = Date.now() - new Date(iso).getTime()
+    const mins  = Math.floor(diff / 60000)
+    const hours = Math.floor(diff / 3600000)
+    const days  = Math.floor(diff / 86400000)
+    if (mins  <  1) return '방금 전'
+    if (hours <  1) return `${mins}분 전`
+    if (days  <  1) return `${hours}시간 전`
+    if (days  < 30) return `${days}일 전`
+    return new Date(iso).toLocaleDateString('ko-KR')
+  }
+
   const TAB_MAP: Record<string, string> = {
     '상품리뷰': '상품리뷰',
     '일상공유': '일상공유',
@@ -190,10 +202,9 @@
           <a href="/crazylog/view/{post.id}" class="d-post">
             <div class="d-post-bar" style="background:{post.bar}"></div>
             <div class="d-post-writing">
+              <span class="d-post-log-type">{post.logType}</span>
               <p class="d-post-title">{post.title}</p>
-              {#if post.desc}
-                <p class="d-post-desc">{post.desc}</p>
-              {/if}
+              <p class="d-post-meta">{relativeTime(post.createdAt)}·by {post.author}</p>
             </div>
             <div class="d-post-img-wrap" style={post.rounded ? 'border-radius:0 30px 30px 0' : ''}>
               {#if post.img}
@@ -693,11 +704,11 @@
     line-height: 2;
   }
 
-  /* Figma: PostsEng — flex-col gap-[50px] */
+  /* /list와 동일: gap 20px */
   .d-posts {
     display: flex;
     flex-direction: column;
-    gap: 50px;
+    gap: 20px;
   }
 
   /* list 카드 스타일 반영 */
@@ -730,7 +741,7 @@
     flex-shrink: 0;
   }
 
-  /* list 스타일: writing 영역 — padding·gap 축소 */
+  /* writing 영역 — /list pc-text와 동일 구조 */
   .d-post-writing {
     flex: 7;
     min-width: 0;
@@ -740,41 +751,27 @@
     gap: 12px;
     padding: 24px 30px;
   }
-  /* list 카드 타이틀: 16px */
+  .d-post-log-type {
+    font: var(--text-pc-tag-11);
+    color: var(--cs-purple);
+    letter-spacing: 0.3px;
+    text-transform: uppercase;
+    margin: 0 0 4px;
+    display: block;
+  }
   .d-post-title {
-    font-family: 'Noto Sans KR', sans-serif;
-    font-size: 16px;
-    font-weight: 700;
+    font: var(--text-pc-title-16);
     color: var(--cs-text-dark);
     margin: 0;
-    line-height: 1.5;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
   }
-  .d-post-desc {
-    font-family: 'Noto Sans KR', sans-serif;
-    font-size: 14px;
-    font-weight: 700;
-    color: var(--cs-text-dark);
+  .d-post-meta {
+    font: var(--text-pc-script-12);
+    color: var(--cs-text-mid);
+    letter-spacing: -0.3px;
     margin: 0;
-    line-height: 1.5;
-    overflow: hidden;
-    display: -webkit-box;
-    -webkit-line-clamp: 2;
-    -webkit-box-orient: vertical;
-  }
-  /* isList 항목 — <ul><li> 형식 */
-  .d-post-desc-list {
-    margin: 0;
-    padding-left: 21px;
-  }
-  .d-post-desc-list-item {
-    font-family: 'Noto Sans KR', sans-serif;
-    font-size: 14px;
-    font-weight: 700;
-    color: var(--cs-text-dark);
-    line-height: 1.5;
   }
 
   /* list 스타일: 이미지 영역 */

@@ -42,6 +42,7 @@
   --cs-red:           #CF0000;       /* 에러·경고 = red-100 */
   --cs-red-badge:     #FF3535;       /* 빨간 배지 = red-80% */
   --cs-red-light:     #FFB3B3;       /* 연한 강조 = red-30% */
+  --cs-red-xlight:    #FFE7E7;       /* 극연한 레드 = red-5% */
   --cs-lilac:         #ECEBF4;       /* 페이지 배경 = purple-5% */
   --cs-lilac-nav:     rgba(225,222,243,0.4); /* nav 필 반투명 배경 */
 
