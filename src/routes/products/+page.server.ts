@@ -1,7 +1,8 @@
 import type { PageServerLoad } from './$types'
 
-export const load: PageServerLoad = async ({ locals }) => {
+export const load: PageServerLoad = async ({ locals, url }) => {
   const { session } = await locals.safeGetSession()
+  const urlCategory = url.searchParams.get('category') ?? 'all'
 
   // CMS 역할 확인
   let isCms = false
@@ -32,12 +33,13 @@ export const load: PageServerLoad = async ({ locals }) => {
   const catSettings      = (settings['product_page_categories'] as CatSettings)      ?? { items: [] }
   const keywordsSettings = (settings['product_page_keywords']   as KeywordsSettings) ?? { items: [] }
 
-  // code_mapping_groups.default_category → 플랫폼 전역 카테고리 SSOT
+  // code_mapping_groups.default_category → 플랫폼 전역 카테고리 SSOT (상품필터 노출 설정 그룹만)
   const { data: groupsRaw } = await locals.supabase
     .from('code_mapping_groups')
     .select('name, default_category, sort_order')
     .not('default_category', 'is', null)
     .eq('is_active', true)
+    .eq('show_in_product_filter', true)
     .order('sort_order')
 
   type GroupRow = { name: string; default_category: string; sort_order: number }
@@ -59,10 +61,12 @@ export const load: PageServerLoad = async ({ locals }) => {
       : Promise.resolve({ data: [] as unknown[], error: null }),
 
     // 상품 그리드 (search_products RPC)
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    (locals.supabase.rpc as any)('search_products', {
+    // URL ?category= 파라미터가 CMS 그리드 설정보다 우선
+    (locals.supabase.rpc as any)('search_products', { // eslint-disable-line @typescript-eslint/no-explicit-any
       p_query: '',
-      p_category: gridSettings.category === 'all' ? null : gridSettings.category,
+      p_category: urlCategory !== 'all'
+        ? urlCategory
+        : (gridSettings.category === 'all' ? null : gridSettings.category),
       p_page: 1,
       p_limit: gridSettings.count === 0 ? 100 : (gridSettings.count || 16),
       p_session_id: null,
@@ -78,6 +82,7 @@ export const load: PageServerLoad = async ({ locals }) => {
 
   return {
     isCms,
+    urlCategory,
     settings: {
       hero:       heroSettings,
       grid:       gridSettings,
