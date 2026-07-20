@@ -28,6 +28,45 @@ auth_baseline: fed4fdb — createBrowserClient 패턴 (절대 싱글톤 createCl
 
 ---
 
+## NOW — 카테고리 SSOT 정합 + SuggestPicker 무한루프 근본 수정 + 콤보행 레이아웃 버그 (2026-07-20) ⏳ QA 중
+
+수정 파일:
+  - src/lib/components/common/SuggestPicker.svelte ← effect_update_depth_exceeded 근본 수정 (commit 38f4a28)
+  - src/routes/products/[id]/+page.server.ts ← UUID 타입 불일치 503→404 정정 (commit 8e45c73)
+  - src/routes/products/[id]/+page.svelte ← 중복 FloatingBar 제거 (commit 8e45c73)
+  - src/routes/products/+page.server.ts ← CMS_CATEGORIES 하드코딩 제거 → code_mapping_groups 동적 조회
+  - src/routes/products/+page.svelte ← CAT_ICON·CAT_LABELS 실제 키 정정 (actcam/dronegim/light/accessorie/hypepack)
+  - src/routes/cms/codes/_AutoMappingTab.svelte ← combo-row 키워드 오버플로우 → flex-wrap 수정
+  - Production DB (vnbpmvxruyciuuaermyh): products.category 정합 (lighting→light, audio·tripod→accessorie)
+
+- [x] FIX-1: SuggestPicker effect_update_depth_exceeded 근본 수정 | CRITICAL | ✅ 완료 (2026-07-20)
+  - 원인: refreshSuggestions()에서 suggestions = filterOptions(kw) 쓰기 후 suggestions.length 읽기
+    → Svelte 5 $effect가 suggestions를 의존성으로 추적 → filterOptions()가 항상 새 배열 반환 → 무한 루프
+  - 해결: next 로컬 변수로 먼저 계산 → next.length 사용 → suggestions = next 마지막에 1회 할당
+  - 두 $effect를 하나로 통합 (isFocused 기준 분기)
+
+- [x] FIX-2: /products/[id] UUID 타입 불일치 503→404 | BOUNDARY | ✅ 완료 (2026-07-20)
+  - 원인: 구형 숫자 ID(예: /products/9)로 접근 시 PostgreSQL 22P02 오류 → 503 반환
+  - 해결: fetchError.code === '22P02' || isLegacyNumericId(rawId) 조건 → error(404, ...) 반환
+
+- [x] FIX-3: /products/[id] 중복 FloatingBar 제거 | ROUTINE | ✅ 완료 (2026-07-20)
+  - 레이아웃이 이미 FloatingBar 렌더 중 → 페이지 자체의 중복 import·렌더 제거
+
+- [x] FIX-4: 카테고리 SSOT 정합 — code_mapping_groups 동적 조회 | CRITICAL | ✅ 완료 (2026-07-20)
+  - 정책: code_mapping_groups.default_category = 플랫폼 전역 카테고리 SSOT
+  - 기존 +page.server.ts CMS_CATEGORIES 9개 하드코딩 → 정책 위반 (구키: action_cam/drone/lighting 등)
+  - 해결: code_mapping_groups WHERE default_category IS NOT NULL AND is_active = true 동적 로드
+  - CAT_ICON·CAT_LABELS 실제 키(actcam/dronegim/light/accessorie/hypepack)로 정정
+  - Production DB products.category 정정: lighting→light (1건), audio·tripod→accessorie (2건)
+
+- [ ] FIX-5: CMS 콤보행 키워드 오버플로우 수정 | ROUTINE | ⏳ QA 중
+  - 원인: .combo-row flex-wrap 없음 + .combo-controls flex-shrink:0 max-width:70% → 키워드 태그 우측 잘림
+  - 해결: .combo-row align-items:flex-start + flex-wrap:wrap / .combo-controls flex:1 1 0 + flex-wrap:wrap / .combo-chips flex:0 0 auto
+
+- [ ] QA: sp3-qa-agent 검수 | GATE C | ⏳ 진행 중
+
+---
+
 ## NOW — /crazylog/list UI 픽스 + 디자인 토큰 정렬 + 멤버십 배지 전역 방어 (2026-07-20) ✅ 완료
 
 수정/신규 파일:

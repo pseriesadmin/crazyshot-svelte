@@ -1433,7 +1433,8 @@
 
 .combo-row {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
+  flex-wrap: wrap;
   gap: 8px;
   padding: 10px 20px;
   border: none;
@@ -1451,7 +1452,7 @@
   align-items: center;
   flex-wrap: wrap;
   gap: 5px;
-  flex: 1;
+  flex: 0 0 auto;
   min-width: 0;
 }
 
@@ -1512,10 +1513,10 @@
 .combo-controls {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 6px;
-  flex-shrink: 0;
-  flex: 0 1 auto;
-  max-width: 70%;
+  flex: 1 1 0;
+  min-width: 0;
 }
 
 /* 폼 — flex item처럼 동작 */
