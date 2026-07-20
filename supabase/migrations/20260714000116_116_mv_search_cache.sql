@@ -87,3 +87,14 @@ SELECT cron.schedule(
   '5 * * * *',
   $$SELECT batch_update_search_impressions()$$
 );
+
+-- ============================================================
+-- ROLLBACK (역순 실행)
+-- ============================================================
+-- SELECT cron.unschedule('batch-update-search-impressions');
+-- SELECT cron.unschedule('refresh-top-search-terms');
+-- SELECT cron.unschedule('refresh-product-category-stats');
+-- DROP FUNCTION IF EXISTS batch_update_search_impressions();
+-- DROP MATERIALIZED VIEW IF EXISTS mv_top_search_terms;
+-- DROP MATERIALIZED VIEW IF EXISTS mv_active_products_by_category;
+-- ============================================================

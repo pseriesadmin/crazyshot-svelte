@@ -125,3 +125,10 @@ BEGIN
   WHERE id = p_search_log_id;
 END;
 $$;
+
+-- ============================================================
+-- ROLLBACK (역순 실행)
+-- ============================================================
+-- DROP FUNCTION IF EXISTS record_search_click(UUID, UUID);
+-- DROP FUNCTION IF EXISTS search_products(TEXT, TEXT, INT, INT, TEXT, UUID);
+-- ============================================================

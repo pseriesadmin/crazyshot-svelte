@@ -52,3 +52,14 @@ CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_products_name_trgm
 CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_products_brand_trgm
   ON products USING GIN(brand gin_trgm_ops)
   WHERE deleted_at IS NULL AND brand IS NOT NULL;
+
+-- ============================================================
+-- ROLLBACK (역순 실행)
+-- ============================================================
+-- DROP INDEX CONCURRENTLY IF EXISTS idx_products_brand_trgm;
+-- DROP INDEX CONCURRENTLY IF EXISTS idx_products_name_trgm;
+-- DROP INDEX CONCURRENTLY IF EXISTS idx_products_search_vector;
+-- DROP TRIGGER IF EXISTS trig_products_search_vector ON products;
+-- DROP FUNCTION IF EXISTS products_search_vector_update();
+-- ALTER TABLE products DROP COLUMN IF EXISTS search_vector;
+-- ============================================================
