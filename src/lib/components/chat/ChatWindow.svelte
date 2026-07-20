@@ -87,6 +87,13 @@
       return
     }
 
+    // 관리자 RLS bypass 2차 방어: loadUserSession이 타 사용자 세션을 반환하면 무시
+    const { data: { session: authSession } } = await supabase.auth.getSession()
+    const currentUid = authSession?.user.id
+    if (existing && currentUid && existing.user_id !== currentUid) {
+      existing = null
+    }
+
     if (!existing || existing.status === 'closed') {
       // 세션 없거나 종료됨 → 서버에서 closed 재활성화 또는 신규 생성
       const created = await createChatSession({ context_type: contextType as never, context_id: contextId })
