@@ -138,7 +138,12 @@
         {:else}
           {#each data.posts as post (post.id)}
             <a href="/crazylog/view/{post.id}" class="m-post-card">
-              <div class="m-post-body m-post-body-only">
+              {#if post.thumbnailUrl}
+                <div class="m-post-thumb">
+                  <img src={post.thumbnailUrl} alt={post.title} loading="lazy" class="m-post-thumb-img" />
+                </div>
+              {/if}
+              <div class="m-post-body" class:m-post-body-only={!post.thumbnailUrl}>
                 <span class="m-post-log-type">{post.logType}</span>
                 <p class="m-post-title">{post.title}</p>
                 <p class="m-post-meta">{relativeTime(post.createdAt)}·by {post.author}</p>
@@ -402,6 +407,18 @@
     text-decoration: none;
     color: inherit;
   }
+  .m-post-thumb {
+    width: 100%;
+    height: 200px;
+    overflow: hidden;
+    border-radius: var(--radius-md) var(--radius-md) 0 0;
+  }
+  .m-post-thumb-img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    display: block;
+  }
   .m-post-body {
     display: flex;
     flex-direction: column;
@@ -413,9 +430,7 @@
     border-radius: var(--radius-md);
   }
   .m-post-log-type {
-    font-family: 'Noto Sans KR', sans-serif;
-    font-size: 11px;
-    font-weight: 700;
+    font: var(--text-m-tag-11);
     color: var(--cs-purple);
     letter-spacing: 0.3px;
     text-transform: uppercase;
@@ -429,22 +444,15 @@
     margin: 0;
   }
   .m-post-title {
-    font-family: 'Noto Sans KR', sans-serif;
-    font-weight: 700;
-    font-size: 18px;
+    font: var(--text-m-title-18B);
     color: var(--cs-text-dark);
-    letter-spacing: -0.3px;
-    line-height: 1.6;
     white-space: pre-wrap;
     margin: 0;
   }
   .m-post-meta {
-    font-family: 'Noto Sans KR', sans-serif;
-    font-weight: 500;
-    font-size: 12px;
+    font: var(--text-m-script-12);
     color: var(--cs-text-mid);
     letter-spacing: -0.5px;
-    line-height: 1.6;
     margin: 0;
   }
 
@@ -545,21 +553,15 @@
     padding: 24px 30px; /* 40px → 24px 30px */
   }
   .pc-title {
-    font-family: 'Noto Sans KR', sans-serif;
-    font-weight: 700;
-    font-size: 16px;
+    font: var(--text-pc-title-16);
     color: var(--cs-text-dark);
-    letter-spacing: -0.5px;
-    line-height: 1.5;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
     margin: 0;
   }
   .pc-log-type {
-    font-family: 'Noto Sans KR', sans-serif;
-    font-size: 11px;
-    font-weight: 700;
+    font: var(--text-pc-tag-11);
     color: var(--cs-purple);
     letter-spacing: 0.3px;
     text-transform: uppercase;
@@ -567,12 +569,9 @@
     display: block;
   }
   .pc-meta {
-    font-family: 'Noto Sans KR', sans-serif;
-    font-size: 12px;
-    font-weight: 500;
+    font: var(--text-pc-script-12);
     color: var(--cs-text-mid);
     letter-spacing: -0.3px;
-    line-height: 1.5;
     margin: 0;
   }
   .pc-thumb {
