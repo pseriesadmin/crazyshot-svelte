@@ -86,14 +86,17 @@
 
   function refreshSuggestions(): void {
     const kw = query.trim()
+    // next를 먼저 계산 후 한번에 할당 — suggestions 쓰고 바로 읽으면
+    // Svelte 5 $effect가 suggestions를 의존성으로 추적 → effect 재실행 무한 루프
+    let next: SuggestPickerOption[]
     if (!noFilter && kw.length < minChars) {
-      suggestions = minChars === 0 ? options : []
-      suggestOpen = isFocused && suggestions.length > 0
-      suggestIdx = -1
-      return
+      next = minChars === 0 ? options : []
+      suggestOpen = isFocused && next.length > 0
+    } else {
+      next = filterOptions(kw)
+      suggestOpen = next.length > 0
     }
-    suggestions = filterOptions(kw)
-    suggestOpen = suggestions.length > 0
+    suggestions = next
     suggestIdx = -1
   }
 

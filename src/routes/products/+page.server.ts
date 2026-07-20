@@ -32,18 +32,21 @@ export const load: PageServerLoad = async ({ locals }) => {
   const catSettings      = (settings['product_page_categories'] as CatSettings)      ?? { items: [] }
   const keywordsSettings = (settings['product_page_keywords']   as KeywordsSettings) ?? { items: [] }
 
-  // CMS 상품 등록과 동일한 카테고리 목록 (products.category 컬럼 값 기준)
-  const CMS_CATEGORIES: { id: string; code: string; name: string; sort_order: number }[] = [
-    { id: 'camera',     code: 'camera',     name: '카메라',   sort_order: 0 },
-    { id: 'lens',       code: 'lens',       name: '렌즈',     sort_order: 1 },
-    { id: 'camcorder',  code: 'camcorder',  name: '캠코더',   sort_order: 2 },
-    { id: 'action_cam', code: 'action_cam', name: '액션캠',   sort_order: 3 },
-    { id: 'drone',      code: 'drone',      name: '드론',     sort_order: 4 },
-    { id: 'lighting',   code: 'lighting',   name: '조명',     sort_order: 5 },
-    { id: 'audio',      code: 'audio',      name: '오디오',   sort_order: 6 },
-    { id: 'accessory',  code: 'accessory',  name: '보조용품', sort_order: 7 },
-    { id: 'package',    code: 'package',    name: '패키지',   sort_order: 8 },
-  ]
+  // code_mapping_groups.default_category → 플랫폼 전역 카테고리 SSOT
+  const { data: groupsRaw } = await locals.supabase
+    .from('code_mapping_groups')
+    .select('name, default_category, sort_order')
+    .not('default_category', 'is', null)
+    .eq('is_active', true)
+    .order('sort_order')
+
+  type GroupRow = { name: string; default_category: string; sort_order: number }
+  const CMS_CATEGORIES = ((groupsRaw ?? []) as GroupRow[]).map((g) => ({
+    id:         g.default_category,
+    code:       g.default_category,
+    name:       g.name,
+    sort_order: g.sort_order,
+  }))
 
   const heroIds = heroSettings.products.map((p) => p.id)
   const mdIds   = mdSettings.products.map((p) => p.id)

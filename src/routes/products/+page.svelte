@@ -17,25 +17,33 @@
 
   // ── 카테고리 아이콘 매핑 (code → SVG 인덱스 0~7) ───────────────────────
   const CAT_ICON: Record<string, number> = {
-    package:    0,
+    hypepack:   0,
     camera:     1,
     lens:       2,
-    camcorder:  6,
-    action_cam: 3,
-    drone:      5,
-    lighting:   4,
-    audio:      3,
-    accessory:  7,
+    actcam:     3,
+    dronegim:   5,
+    light:      4,
+    accessorie: 7,
+    phone:      6,
+    partner:    7,
+    'used-item': 7,
   }
   function catIconIdx(code: string): number {
     return CAT_ICON[code] ?? 7
   }
 
-  // ── 카테고리 한글 라벨 ───────────────────────────────────────────────────
+  // ── 카테고리 한글 라벨 (code_mapping_groups.name 우선, 폴백용) ──────────
   const CAT_LABELS: Record<string, string> = {
-    camera: '카메라', lens: '렌즈', camcorder: '캠코더',
-    action_cam: '액션캠', drone: '드론', lighting: '조명',
-    audio: '오디오', accessory: '보조용품', package: '패키지',
+    camera:     '카메라',
+    lens:       '렌즈',
+    actcam:     '액션캠',
+    dronegim:   '드론/짐벌',
+    light:      '조명',
+    accessorie: '악세서리',
+    hypepack:   '추천패키지',
+    phone:      '스마트폰',
+    partner:    '협력사',
+    'used-item': '중고',
   }
 
   const KEYWORDS_FALLBACK = ['SONY', 'CANON', 'NIKON', 'Fujitsu', 'Olympus', 'Panasonic']
