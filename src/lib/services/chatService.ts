@@ -49,10 +49,16 @@ export async function loadUserSession(
   contextType?: string,
   contextId?: string
 ): Promise<{ session: ChatSession | null; error: string | null }> {
+  // 관리자 RLS bypass(admin_select_all_sessions) 방어:
+  // user_id를 명시적으로 필터링해야 타 사용자 세션이 반환되지 않음
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user) return { session: null, error: null }
+
   // open/pending 우선, 없으면 closed도 포함 (재활성화 흐름)
   let query = supabase
     .from('chat_sessions')
     .select('*')
+    .eq('user_id', user.id)
     .in('status', ['open', 'pending', 'closed'])
     .order('updated_at', { ascending: false })
     .limit(1)
