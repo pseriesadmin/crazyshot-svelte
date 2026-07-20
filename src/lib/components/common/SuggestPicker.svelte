@@ -114,14 +114,13 @@
   }
 
   $effect(() => {
-    void options
-    if (isFocused) refreshSuggestions()
-    else syncQueryFromSelection()
-  })
-
-  $effect(() => {
-    void selectedId
-    if (!isFocused) syncQueryFromSelection()
+    if (isFocused) {
+      void options   // 비동기 결과 갱신 시 포커스 중이면 드롭다운 새로고침
+      refreshSuggestions()
+    } else {
+      // syncQueryFromSelection 내부에서 selectedId·options를 읽으므로 자동 추적
+      syncQueryFromSelection()
+    }
   })
 
   function handleNativeInput(e: Event): void {
