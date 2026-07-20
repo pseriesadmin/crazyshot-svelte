@@ -13,9 +13,10 @@
   interface Props {
     blocks: ContentBlock[]
     keywords: string[]
+    hideMediaToolbar?: boolean
   }
 
-  let { blocks = $bindable([]), keywords = $bindable([]) }: Props = $props()
+  let { blocks = $bindable([]), keywords = $bindable([]), hideMediaToolbar = false }: Props = $props()
 
   // ── 상태 ────────────────────────────────────────────
   let focusedEditorEl = $state<HTMLDivElement | null>(null)
@@ -23,6 +24,21 @@
   let pendingImageBlock = $state<{ idx: number } | null>(null)
   let showPreview = $state(false)
   let kwInput = $state('')
+  let isComposing = false  // IME composition 추적 (리액티브 불필요)
+
+  // ── contenteditable action — 포커스 중 innerHTML 덮어쓰기 방지 ──
+  // oninput → blocks 상태 갱신 → Svelte가 {@html} 재렌더 → innerHTML 리셋 → 커서 맨 앞 이동
+  // action의 update()가 포커스 여부를 확인해 리셋을 차단함
+  function initContent(node: HTMLDivElement, content: string) {
+    node.innerHTML = content
+    return {
+      update(newContent: string) {
+        if (document.activeElement !== node) {
+          node.innerHTML = newContent
+        }
+      },
+    }
+  }
 
   // ── 블록 조작 ──────────────────────────────────────
   function insertBlock(block: ContentBlock, afterIdx = blocks.length - 1) {
@@ -131,6 +147,45 @@
     blocks = next
   }
 
+  // ── Head 이미지 롱프레스 (2초) ────────────────────
+  let longPressTimers = $state<Record<string, ReturnType<typeof setTimeout>>>({})
+
+  function startLongPress(blockIdx: number, imgIdx: number) {
+    const key = `${blockIdx}-${imgIdx}`
+    const timer = setTimeout(() => {
+      setHeadImage(blockIdx, imgIdx)
+      longPressTimers = { ...longPressTimers, [key]: undefined as unknown as ReturnType<typeof setTimeout> }
+    }, 2000)
+    longPressTimers = { ...longPressTimers, [key]: timer }
+  }
+
+  function cancelLongPress(blockIdx: number, imgIdx: number) {
+    const key = `${blockIdx}-${imgIdx}`
+    const timer = longPressTimers[key]
+    if (timer) {
+      clearTimeout(timer)
+      const next = { ...longPressTimers }
+      delete next[key]
+      longPressTimers = next
+    }
+  }
+
+  function setHeadImage(blockIdx: number, imgIdx: number) {
+    // 모든 블록에서 isHead 초기화 후 해당 이미지만 지정
+    const next = blocks.map((b, bi) => {
+      if (b.type !== 'image') return b
+      const block = b as ImageBlock
+      return {
+        ...block,
+        images: block.images.map((img, ii) => ({
+          ...img,
+          isHead: bi === blockIdx && ii === imgIdx ? true : undefined,
+        })),
+      }
+    }) as typeof blocks
+    blocks = next
+  }
+
   function removeImage(blockIdx: number, imgIdx: number) {
     const block = blocks[blockIdx] as ImageBlock
     const next = [...blocks]
@@ -181,6 +236,7 @@
   }
 
   function handleKwKeydown(e: KeyboardEvent) {
+    if (e.isComposing) return  // IME 조합 중 무시 (한글 이중 등록 방지)
     if (e.key === 'Enter' || e.key === ',') {
       e.preventDefault()
       addKeyword()
@@ -268,13 +324,24 @@
   const contentUploadPrefix = 'content/' + (typeof globalThis !== 'undefined' && globalThis.crypto?.randomUUID ? globalThis.crypto.randomUUID() : 'tmp')
 
   // ── 포커스 블록 동기화 ────────────────────────────
+  // DOM .ce-text-body 순서 ≠ blocks 배열 인덱스 (이미지·유튜브 블록이 사이에 끼어 있을 수 있음)
+  // 텍스트 블록만 세어 실제 blocks 위치를 찾아야 이미지 블록 손실 버그를 막을 수 있음
   function syncFocusedBlock() {
     if (!focusedEditorEl) return
-    const els = Array.from(document.querySelectorAll<HTMLDivElement>('.ce-text-body'))
-    const idx = els.indexOf(focusedEditorEl)
-    if (idx < 0) return
+    const textEls = Array.from(document.querySelectorAll<HTMLDivElement>('.ce-text-body'))
+    const textIdx = textEls.indexOf(focusedEditorEl)
+    if (textIdx < 0) return
+    let count = 0
+    let realIdx = -1
+    for (let i = 0; i < blocks.length; i++) {
+      if (blocks[i].type === 'text') {
+        if (count === textIdx) { realIdx = i; break }
+        count++
+      }
+    }
+    if (realIdx < 0) return
     const next = [...blocks]
-    next[idx] = { type: 'text', html: focusedEditorEl.innerHTML }
+    next[realIdx] = { type: 'text', html: focusedEditorEl.innerHTML }
     blocks = next
   }
 
@@ -363,6 +430,7 @@
 
 <div class="cms-editor">
   <!-- ① 미디어 툴바 -->
+  {#if !hideMediaToolbar}
   <div class="media-toolbar" role="toolbar" aria-label="미디어 삽입">
     <button type="button" class="tb-btn" onclick={addText} title="텍스트 블록 추가">
       <span class="tb-icon">T</span>
@@ -392,6 +460,7 @@
       미리보기
     </button>
   </div>
+  {/if}
 
   <!-- ② 텍스트 서식 툴바 -->
   <div class="fmt-toolbar" role="toolbar" aria-label="텍스트 서식">
@@ -504,17 +573,24 @@
             aria-multiline="true"
             aria-label="텍스트 입력"
             class="ce-text-body"
+            use:initContent={block.html}
             onfocus={(e) => { focusedEditorEl = e.currentTarget as HTMLDivElement }}
-            oninput={(e) => {
+            onblur={(e) => {
               const el = e.currentTarget as HTMLDivElement
               const next = [...blocks]
               next[i] = { type: 'text', html: el.innerHTML }
               blocks = next
             }}
-          >
-            <!-- eslint-disable-next-line svelte/no-at-html-tags -->
-            {@html block.html}
-          </div>
+            oncompositionstart={() => { isComposing = true }}
+            oncompositionend={() => { isComposing = false }}
+            oninput={(e) => {
+              if (isComposing) return
+              const el = e.currentTarget as HTMLDivElement
+              const next = [...blocks]
+              next[i] = { type: 'text', html: el.innerHTML }
+              blocks = next
+            }}
+          ></div>
 
         <!-- 이미지 블록 -->
         {:else if block.type === 'image'}
@@ -604,7 +680,21 @@
               <div class="img-thumbs" class:img-collage={block.layout === 'collage'} class:img-slide-wrap={block.layout === 'slide'}>
                 {#each block.images as img, j}
                   <div class="img-thumb-item">
-                    <img src={img.url} alt={img.alt || '상품 이미지'} class="thumb-img" />
+                    <div
+                      class="thumb-img-wrap"
+                      onpointerdown={() => startLongPress(i, j)}
+                      onpointerup={() => cancelLongPress(i, j)}
+                      onpointerleave={() => cancelLongPress(i, j)}
+                      onpointercancel={() => cancelLongPress(i, j)}
+                      role="button"
+                      tabindex="-1"
+                      aria-label={img.isHead ? 'Head 이미지 (2초 누르면 해제)' : '2초 누르면 Head 이미지로 지정'}
+                    >
+                      <img src={img.url} alt={img.alt || '상품 이미지'} class="thumb-img" />
+                      {#if img.isHead}
+                        <span class="head-badge">Head</span>
+                      {/if}
+                    </div>
                     <div class="thumb-ctrl">
                       <button type="button" class="thumb-btn" onclick={() => moveImageLeft(i, j)} disabled={j === 0} aria-label="왼쪽으로">←</button>
                       <button type="button" class="thumb-btn" onclick={() => moveImageRight(i, j)} disabled={j === block.images.length - 1} aria-label="오른쪽으로">→</button>
@@ -688,6 +778,42 @@
         <!-- 구분선 블록 -->
         {:else if block.type === 'divider'}
           <hr class="divider-block" aria-hidden="true" />
+        {:else if block.type === 'link-entry'}
+          <div class="link-entry-block">
+            <input
+              class="f-input link-entry-input"
+              type="url"
+              placeholder="URL 입력 (https://...)"
+              value={block.url}
+              oninput={(e) => {
+                const next = [...blocks]
+                next[i] = { type: 'link-entry', url: (e.target as HTMLInputElement).value, text: block.text }
+                blocks = next
+              }}
+            />
+            <input
+              class="f-input link-entry-input"
+              type="text"
+              placeholder="링크 텍스트 (선택)"
+              value={block.text}
+              oninput={(e) => {
+                const next = [...blocks]
+                next[i] = { type: 'link-entry', url: block.url, text: (e.target as HTMLInputElement).value }
+                blocks = next
+              }}
+            />
+            <div class="link-entry-btns">
+              <button type="button" class="link-entry-cancel" onclick={() => removeBlock(i)}>취소</button>
+              <button type="button" class="link-entry-confirm" onclick={() => {
+                if (!block.url.trim()) { removeBlock(i); return }
+                const url = block.url.trim().startsWith('http') ? block.url.trim() : `https://${block.url.trim()}`
+                const label = block.text.trim() || url
+                const next = [...blocks]
+                next[i] = { type: 'text', html: `<p><a href="${url}" target="_blank">${label}</a></p>` }
+                blocks = next
+              }}>삽입</button>
+            </div>
+          </div>
         {/if}
       </div>
     {/each}
@@ -1319,12 +1445,39 @@
     width: 120px;
   }
 
+  .thumb-img-wrap {
+    position: relative;
+    width: 120px;
+    height: 80px;
+    border-radius: var(--radius-sm);
+    overflow: hidden;
+    cursor: pointer;
+    user-select: none;
+    -webkit-user-select: none;
+  }
+
   .thumb-img {
     width: 120px;
     height: 80px;
     object-fit: cover;
     border-radius: var(--radius-sm);
     background: var(--cs-surface-gray);
+    display: block;
+    pointer-events: none;
+  }
+
+  .head-badge {
+    position: absolute;
+    top: 4px;
+    left: 4px;
+    background: var(--cs-red-badge);
+    color: var(--cs-white);
+    font: var(--text-pc-descript-10);
+    font-weight: 700;
+    padding: 2px 6px;
+    border-radius: 4px;
+    letter-spacing: 0.5px;
+    pointer-events: none;
   }
 
   .thumb-ctrl {
@@ -1461,7 +1614,7 @@
     background: var(--cs-purple-op10);
     color: var(--cs-purple);
     border-radius: 6px;
-    font: var(--text-pc-script-12);
+    font: var(--text-pc-body-14);
     font-weight: 700;
     white-space: nowrap;
   }
@@ -1759,6 +1912,7 @@
     .modal-backdrop { align-items: flex-end; }
     .img-thumbs { gap: 6px; }
     .img-thumb-item { width: 90px; }
+    .thumb-img-wrap { width: 90px; height: 60px; }
     .thumb-img { width: 90px; height: 60px; }
     .fmt-toolbar { gap: 1px; }
     .fmt-btn { min-width: 28px; height: 28px; padding: 0 5px; }
@@ -1767,4 +1921,50 @@
     .tb-label { display: none; }
     .tb-btn { padding: 0 8px; }
   }
+
+  /* ── 링크 입력 블록 ──────────────────────────────────── */
+  .link-entry-block {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .link-entry-input {
+    width: 100%;
+  }
+
+  .link-entry-btns {
+    display: flex;
+    gap: 6px;
+    justify-content: flex-end;
+    margin-top: 2px;
+  }
+
+  .link-entry-cancel {
+    height: 30px;
+    padding: 0 14px;
+    background: var(--cs-surface-gray);
+    border: none;
+    border-radius: var(--radius-sm);
+    font: var(--text-pc-script-12);
+    color: var(--cs-text-mid);
+    cursor: pointer;
+    transition: background 0.12s;
+  }
+  .link-entry-cancel:hover { background: #ECEBF4; }
+
+  .link-entry-confirm {
+    height: 30px;
+    padding: 0 18px;
+    background: var(--cs-purple);
+    border: none;
+    border-radius: var(--radius-sm);
+    font: var(--text-pc-script-12);
+    font-weight: 700;
+    color: var(--cs-white);
+    cursor: pointer;
+    transition: background 0.12s;
+  }
+  .link-entry-confirm:hover { background: var(--cs-purple-dark); }
 </style>

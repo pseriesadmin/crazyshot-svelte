@@ -1,15 +1,83 @@
 <script lang="ts">
-  const YOUTUBE_VIDEO_ID = 'NUYvbT6vTPs'
+  import { supabase } from '$lib/services/supabase'
+  import type { PageData } from './$types'
+  import CrazylogWriteCard from '$lib/components/common/CrazylogWriteCard.svelte'
+
+  interface Props { data: PageData }
+  let { data }: Props = $props()
+
+  const post = data.post
+  const YOUTUBE_VIDEO_ID = post?.youtubeVideoId ?? null
+
   let showModal = $state(false)
   let liked    = $state(false)
+  let showDeleteConfirm = $state(false)
+  let adminBusy = $state(false)
+  let adminError = $state<string | null>(null)
 
-  const relatedPosts = [
-    { id: 1, title: '[사용기] SONY FE 24-105  가볍게 고퀄 영상을 바로 만들어주다', meta: '1시간 전·by 홍기동', img: '/crazylog/post-img1.png', imgStyle: 'object-fit:cover;width:100%;height:100%;' },
-    { id: 2, title: '액션캠의 왕좌를 되찾으러 돌아왔다.\nGoPro HERO13 Black',          meta: '2시간 전·by 유말자',  img: '/crazylog/post-img2.png', imgStyle: 'object-fit:cover;width:100%;height:100%;' },
-    { id: 3, title: '휴대용 디자인으로 이동 중에도 미디어 카드에 쉽게 접근 가능',     meta: '2시간 전·by 유말자',  img: '/crazylog/post-img3.png', imgStyle: 'position:absolute;height:226.67%;left:0.04%;top:-94.28%;width:100%;max-width:none;' },
-    { id: 4, title: 'onn. 52인치 삼각대, 컴팩트 카메라, 스마트폰 및 GoPro 액션 카메라용 스', meta: '2시간 전·by 유말자', img: '/crazylog/post-img4.png', imgStyle: 'position:absolute;height:540.57%;left:-70.79%;top:-135.73%;width:238.49%;max-width:none;' },
-    { id: 5, title: 'K-트레일로그를 남기는 멋진 일은 우리들에게 즐거움의 폭증이다!!', meta: '2시간 전·by 유말자',  img: '/crazylog/post-img5.png', imgStyle: 'object-fit:cover;width:100%;height:100%;' },
-  ]
+  function formatDate(iso: string): string {
+    const d = new Date(iso)
+    return `${d.getFullYear()}. ${d.getMonth() + 1}. ${d.getDate()}`
+  }
+
+  function formatCommentDate(iso: string): string {
+    const d = new Date(iso)
+    const now = new Date()
+    const diffMs = now.getTime() - d.getTime()
+    const diffMin = Math.floor(diffMs / 60000)
+    const month = d.getMonth() + 1
+    const day = d.getDate()
+    let rel: string
+    if (diffMin < 1) {
+      rel = '지금'
+    } else if (diffMin < 60) {
+      rel = `${diffMin}분전`
+    } else if (diffMin < 60 * 24 * 30) {
+      rel = `${Math.floor(diffMin / (60 * 24))}일전`
+    } else {
+      rel = `${Math.floor(diffMin / (60 * 24 * 30))}달전`
+    }
+    return `${month}/${day} ${rel}`
+  }
+
+  type TextBlock  = { type: 'text';  html: string }
+  type ImageItem  = { url: string;   alt: string; isHead?: boolean }
+  type ImageBlock = { type: 'image'; layout: string; images: ImageItem[] }
+  type Block = TextBlock | ImageBlock
+
+  function getBlocks(): Block[] {
+    if (!post?.contentBlocks) return []
+    return post.contentBlocks as Block[]
+  }
+
+  async function handleAdminStatus(status: string) {
+    if (!data?.postId) return
+    adminBusy = true
+    adminError = null
+    try {
+      if (status === 'deleted' && data?.isOwner && !data?.isAdmin) {
+        // 작성자 본인 삭제 — delete_own_post RPC
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const { error } = await (supabase.rpc as any)('delete_own_post', { p_id: data.postId })
+        if (error) throw new Error(error.message)
+      } else {
+        // 관리자 상태 변경 (보류/공개/삭제) — is_cms_user() 필요
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const { error } = await (supabase.rpc as any)('update_post_status', {
+          p_id: data.postId,
+          p_status: status,
+        })
+        if (error) throw new Error(error.message)
+      }
+
+      showDeleteConfirm = false
+      history.back()
+    } catch (e) {
+      adminError = e instanceof Error ? e.message : '처리 중 오류가 발생했습니다.'
+    } finally {
+      adminBusy = false
+    }
+  }
 
   const PC_SVG = {
     backArrow:  'M19.8844 8.5707L1.5 8.57107M8.57107 1.5L1.5 8.57107L8.57107 15.6421',
@@ -30,6 +98,43 @@
   }
 
   let writeCardVisible = $state(true)
+
+  // ── 댓글 상태 ─────────────────────────────────────────
+  type Comment = { id: string; authorName: string; content: string; createdAt: string }
+  let comments    = $state<Comment[]>((data.comments ?? []) as Comment[])
+  let commentText = $state('')
+  let commentBusy = $state(false)
+  let commentError = $state<string | null>(null)
+
+  async function handleCommentSubmit() {
+    const content = commentText.trim()
+    if (!content || commentBusy) return
+    if (!data.isLoggedIn) { commentError = '댓글은 로그인 후 작성할 수 있습니다.'; return }
+    commentBusy = true
+    commentError = null
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const { data: newId, error } = await (supabase as any).rpc('create_post_comment', {
+        p_post_id: data.postId,
+        p_content: content,
+      })
+      if (error) throw new Error(error.message)
+      if (newId) {
+        const now = new Date().toISOString()
+        comments = [...comments, { id: newId, authorName: '나', content, createdAt: now }]
+        commentText = ''
+      }
+    } catch (e) {
+      commentError = e instanceof Error ? e.message : '댓글 등록 중 오류가 발생했습니다.'
+    } finally {
+      commentBusy = false
+    }
+  }
+
+  function onCommentKeydown(e: KeyboardEvent) {
+    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleCommentSubmit() }
+  }
+  // ─────────────────────────────────────────────────────
 
   $effect(() => {
     document.body.classList.add('crazylog-view')
@@ -59,9 +164,13 @@
       body.crazylog-view .site-footer { display: none !important; }
     }
 
-    [data-name="Posts-eng"] [data-name="img"] { cursor: pointer; }
+    /* YouTube 영상 있을 때만 클릭 커서 */
+    [data-name="Posts-eng"] [data-name="img"].d-hero--clickable,
+    [data-name="Posts-eng"] [data-name="img"].m-hero--clickable { cursor: pointer; }
 
-    [data-name="Posts-eng"] [data-name="img"]::after {
+    /* 호버 다크 오버레이 — YouTube 있을 때만 */
+    [data-name="Posts-eng"] [data-name="img"].d-hero--clickable::after,
+    [data-name="Posts-eng"] [data-name="img"].m-hero--clickable::after {
       content: '';
       position: absolute;
       inset: 0;
@@ -71,11 +180,14 @@
       pointer-events: none;
       border-radius: inherit;
     }
-    [data-name="Posts-eng"] [data-name="img"]:hover::after {
+    [data-name="Posts-eng"] [data-name="img"].d-hero--clickable:hover::after,
+    [data-name="Posts-eng"] [data-name="img"].m-hero--clickable:hover::after {
       background: rgba(16,11,50,0.35);
     }
 
-    [data-name="Posts-eng"] [data-name="img"]::before {
+    /* 호버 "▶ 영상 재생" 레이블 — YouTube 있을 때만 */
+    [data-name="Posts-eng"] [data-name="img"].d-hero--clickable::before,
+    [data-name="Posts-eng"] [data-name="img"].m-hero--clickable::before {
       content: '▶  영상 재생';
       position: absolute;
       bottom: 36px;
@@ -98,12 +210,15 @@
       white-space: nowrap;
       pointer-events: none;
     }
-    [data-name="Posts-eng"] [data-name="img"]:hover::before {
+    [data-name="Posts-eng"] [data-name="img"].d-hero--clickable:hover::before,
+    [data-name="Posts-eng"] [data-name="img"].m-hero--clickable:hover::before {
       opacity: 1;
       transform: translateX(-50%) translateY(0);
     }
 
-    [data-name="Posts-eng"] [data-name="img"] > div:last-child {
+    /* play 버튼 위치 · hover 애니메이션 */
+    [data-name="Posts-eng"] [data-name="img"] .d-play-btn,
+    [data-name="Posts-eng"] [data-name="img"] .m-play-btn {
       position: absolute;
       top: 50%;
       left: 50%;
@@ -111,12 +226,15 @@
       transform: translate(-50%, -50%) scale(1);
       transition: transform 0.4s cubic-bezier(0.34,1.56,0.64,1), filter 0.4s ease;
     }
-    [data-name="Posts-eng"] [data-name="img"]:hover > div:last-child {
+    [data-name="Posts-eng"] [data-name="img"].d-hero--clickable:hover .d-play-btn,
+    [data-name="Posts-eng"] [data-name="img"].m-hero--clickable:hover .m-play-btn {
       transform: translate(-50%, -50%) scale(1.4);
       filter: drop-shadow(0 0 32px rgba(255,53,53,0.9)) drop-shadow(0 0 12px rgba(59,47,138,0.55));
     }
 
-    [data-name="Posts-eng"] [data-name="img"] > div:last-child::after {
+    /* play 버튼 펄스 애니메이션 */
+    [data-name="Posts-eng"] [data-name="img"] .d-play-btn::after,
+    [data-name="Posts-eng"] [data-name="img"] .m-play-btn::after {
       content: '';
       position: absolute;
       inset: -10px;
@@ -129,12 +247,15 @@
       0%, 100% { transform: scale(0.86); opacity: 0; }
       50%       { transform: scale(1.12); opacity: 1; }
     }
-    [data-name="Posts-eng"] [data-name="img"]:hover > div:last-child::after {
+    [data-name="Posts-eng"] [data-name="img"].d-hero--clickable:hover .d-play-btn::after,
+    [data-name="Posts-eng"] [data-name="img"].m-hero--clickable:hover .m-play-btn::after {
       animation: none;
       opacity: 0;
     }
 
-    [data-name="Posts-eng"] [data-name="img"] > div:first-child::after {
+    /* YouTube 배지 — YouTube 있을 때만 */
+    [data-name="Posts-eng"] [data-name="img"].d-hero--clickable > div:first-child::after,
+    [data-name="Posts-eng"] [data-name="img"].m-hero--clickable > div:first-child::after {
       content: 'YouTube';
       position: absolute;
       top: 16px;
@@ -159,7 +280,8 @@
       z-index: 3;
       pointer-events: none;
     }
-    [data-name="Posts-eng"] [data-name="img"]:hover > div:first-child::after {
+    [data-name="Posts-eng"] [data-name="img"].d-hero--clickable:hover > div:first-child::after,
+    [data-name="Posts-eng"] [data-name="img"].m-hero--clickable:hover > div:first-child::after {
       opacity: 1;
       transform: translateY(0);
     }
@@ -180,8 +302,8 @@
         </svg>
         <span>Back</span>
       </button>
-      <span class="d-navi-title">K-Trail log</span>
-      <div class="d-navi-spacer"></div>
+      <span class="d-navi-title">{post?.logType ?? ''}</span>
+      <div class="d-navi-actions"></div>
     </div>
 
     <!-- 2. PostsEng (본문 카드) -->
@@ -189,59 +311,70 @@
       <!-- Img() -->
       <div
         class="d-hero"
+        class:d-hero--clickable={!!YOUTUBE_VIDEO_ID}
         data-name="img"
-        onclick={() => showModal = true}
-        role="button"
-        tabindex="0"
-        onkeydown={(e) => e.key === 'Enter' && (showModal = true)}
-        aria-label="영상 재생"
+        onclick={() => YOUTUBE_VIDEO_ID && (showModal = true)}
+        role={YOUTUBE_VIDEO_ID ? 'button' : undefined}
+        tabindex={YOUTUBE_VIDEO_ID ? 0 : undefined}
+        onkeydown={(e) => YOUTUBE_VIDEO_ID && e.key === 'Enter' && (showModal = true)}
+        aria-label={YOUTUBE_VIDEO_ID ? '영상 재생' : undefined}
       >
         <!-- first child (background layer) — YouTube badge target -->
         <div class="d-hero-img-wrap">
           <img
-            src="/crazylog/content-hero-desktop.png"
-            alt="경복궁 한복 체험 — K-Trail log 영상 썸네일"
+            src={post?.thumbnailUrl ?? '/crazylog/content-hero-desktop.png'}
+            alt={post?.title ?? '포스트 썸네일'}
             loading="eager"
             class="d-hero-img"
           />
         </div>
-        <!-- last child (play button) — scale/glow target -->
-        <div class="d-play-btn" aria-hidden="true">
-          <svg width="100" height="100" viewBox="0 0 100 100" fill="none">
-            <defs>
-              <linearGradient id="d-play-grad" x1="0" y1="0" x2="100" y2="100" gradientUnits="userSpaceOnUse">
-                <stop offset="0%" stop-color="#3B2F8A"/>
-                <stop offset="100%" stop-color="#FF3535"/>
-              </linearGradient>
-            </defs>
-            <path d={PC_SVG.playCircle} fill="url(#d-play-grad)"/>
-            <path d={PC_SVG.playTri} fill="white"/>
-          </svg>
-        </div>
+        <!-- last child (play button) — YouTube 영상 있을 때만 표시 -->
+        {#if YOUTUBE_VIDEO_ID}
+          <div class="d-play-btn" aria-hidden="true">
+            <svg width="100" height="100" viewBox="0 0 100 100" fill="none">
+              <defs>
+                <linearGradient id="d-play-grad" x1="0" y1="0" x2="100" y2="100" gradientUnits="userSpaceOnUse">
+                  <stop offset="0%" stop-color="#3B2F8A"/>
+                  <stop offset="100%" stop-color="#FF3535"/>
+                </linearGradient>
+              </defs>
+              <path d={PC_SVG.playCircle} fill="url(#d-play-grad)"/>
+              <path d={PC_SVG.playTri} fill="white"/>
+            </svg>
+          </div>
+        {/if}
       </div>
 
       <!-- Writing() -->
       <div class="d-writing">
-        <p class="d-author">Steven lee • Oct 24, 2022</p>
-        <h1 class="d-title">Gyeongbokgung Hanbok Experience</h1>
+        <p class="d-author">{post?.author ?? ''} • {post ? formatDate(post.createdAt) : ''}</p>
+        <h1 class="d-title">{post?.title ?? ''}</h1>
 
         <div class="d-article">
-          <h2 class="d-section-title">A Royal Capital Wrapped in Tradition</h2>
-          <p>Seoul's Gyeongbokgung Palace sits at the heart of the city like a quiet sovereign — its sweeping tiled rooftops framed against the granite shoulders of Bugaksan. On a crisp October morning, we arrived before the tourist crowds, cameras in hand, to document the revival of joseon-era hanbok culture that has quietly taken over the palace grounds.</p>
-          <p>The experience is deceptively simple: rent a hanbok from one of the dozens of shops lining the palace's northern gate, slip into billowing silk and cotton, then spend a few hours wandering courtyards that are normally a blur of selfie sticks. But wearing hanbok unlocks something different. The costume invites slowness. You walk differently, stand differently, and for a few hours, you inhabit a version of the city that most visitors never access.</p>
-
-          <h2 class="d-section-title">The Gear Decision</h2>
-          <p>For a shoot like this — rich textiles, rapidly shifting natural light, tight corridors between stone walls — we reached for the Sony FE 24-105mm f/4 G OSS mounted on the A7IV. The focal range is almost unfairly convenient: wide enough to capture the full sweep of Geunjeongjeon's throne hall, long enough to isolate a single embroidered sleeve against the glazed tile beyond.</p>
-          <p>Optical stabilisation smoothed out movement in the narrow stone passages where tripods are impractical, and the linear AF transition kept focus pulls cinematic rather than hunting. The colour science on the A7IV renders deep indigo and crimson with exactly the saturation that hanbok deserves — very little grading needed in post.</p>
-
-          <h2 class="d-section-title">Light and Timing</h2>
-          <p>The palace faces south in the traditional Korean manner, which means golden-hour light rakes across the main courtyard in the late afternoon — something most visitors miss because they arrive at midday. We stayed through closing, watching the hanbok-clad visitors thin out until only a handful remained, the light going amber then copper against the painted eaves.</p>
-          <p>If you plan a similar shoot, arrive when the gates open at 09:00, find your hanbok rental by 09:30, and use the first two hours while the light is low and crowds are manageable. Return just before 16:00 for the golden hour sequence.</p>
-
-          <h2 class="d-section-title">A Note on Respect</h2>
-          <p>The hanbok rental phenomenon has attracted its share of debate — questions of cultural appropriation versus appreciation, of historical accuracy versus Instagram aesthetics. What we observed at Gyeongbokgung was largely the latter: visitors from across Korea and the world treating the garments with genuine care and curiosity, palace guards joining impromptu photos with visitors, and older Koreans pausing to nod approvingly at particularly well-coordinated ensembles.</p>
-          <p>The experience works because the setting demands a certain seriousness. The palace is not a theme park. Its weight — five centuries of Korean history — presses through even the most casual visit. Hanbok, worn here, becomes more than costume. It becomes a small act of homage.</p>
+          {#each getBlocks() as block}
+            {#if block.type === 'text'}
+              <!-- eslint-disable-next-line svelte/no-at-html-tags -->
+              {@html block.html}
+            {:else if block.type === 'image'}
+              <div class="d-content-images d-content-images--{block.layout}">
+                {#each block.images.filter(img => !img.isHead) as img}
+                  <img src={img.url} alt={img.alt} loading="lazy" class="d-content-img" />
+                {/each}
+              </div>
+            {/if}
+          {/each}
+          {#if !post}
+            <p class="d-article-empty">포스트를 불러올 수 없습니다.</p>
+          {/if}
         </div>
+
+        {#if post?.keywords && post.keywords.length > 0}
+          <div class="d-tags">
+            {#each post.keywords as kw}
+              <span class="d-tag">#{kw}</span>
+            {/each}
+          </div>
+        {/if}
       </div>
     </div>
 
@@ -251,42 +384,23 @@
       <!-- Title bar -->
       <div class="d-comments-bar">
         <span class="d-comments-label">댓글</span>
-        <span class="d-comments-count">03</span>
+        <span class="d-comments-count">{String(comments.length).padStart(2, '0')}</span>
       </div>
 
-      <!-- Review cards -->
+      <!-- 댓글 목록 -->
       <div class="d-comments-list">
-
-        <div class="d-review-card">
-          <div class="d-review-header">
-            <p class="d-review-title">가성비 최고예요!</p>
-            <p class="d-review-date">Tawny / Apr 26, 2025</p>
+        {#each comments as c (c.id)}
+          <div class="d-comment-item">
+            <div class="d-comment-meta">
+              <span class="d-comment-author">{c.authorName}</span>
+              <span class="d-comment-date">{formatCommentDate(c.createdAt)}</span>
+            </div>
+            <span class="d-comment-content">{c.content}</span>
           </div>
-          <div class="d-review-body">
-            <p>정말 훌륭한 제품입니다. 함께 제공된 매뉴얼은 조금 모호하지만, 사용하는 데 큰 어려움은 없었습니다. 설치와 사용을 돕는 온라인 영상도 많이 있습니다.</p>
-          </div>
-        </div>
-
-        <div class="d-review-card">
-          <div class="d-review-header">
-            <p class="d-review-title">잘 작동해요, 설명서는 혼란스럽습니다.</p>
-            <p class="d-review-date">Tawny / Apr 26, 2025</p>
-          </div>
-          <div class="d-review-body">
-            <p>안정화 기능이 정말 좋아서 영상이 매끄럽게 나오네요. 설명서를 이해하기 어렵다 보니 제가 제대로 사용하고 있는 건지는 확신이 없지만, 필요한 용도로는 잘 쓰이고 있습니다.</p>
-          </div>
-        </div>
-
-        <div class="d-review-card">
-          <div class="d-review-header">
-            <p class="d-review-title">light weight!</p>
-            <p class="d-review-date">Samantha / Jul 17, 2025</p>
-          </div>
-          <div class="d-review-body">
-            <p>Its a great product! Was fairly easy to setup and use! It works great and lasts a long while before having to recharge it!</p>
-          </div>
-        </div>
-
+        {/each}
+        {#if commentError}
+          <p class="d-comment-error" role="alert">{commentError}</p>
+        {/if}
       </div><!-- /d-comments-list -->
 
       <!-- Comment input form -->
@@ -294,10 +408,16 @@
         <input
           class="d-comment-input"
           type="text"
-          placeholder="후기 입력..."
+          placeholder={data.isLoggedIn ? '후기 입력...' : '로그인 후 댓글을 작성할 수 있습니다.'}
           aria-label="후기 입력"
+          value={commentText}
+          oninput={(e) => { commentText = (e.target as HTMLInputElement).value }}
+          onkeydown={onCommentKeydown}
+          disabled={commentBusy || !data.isLoggedIn}
         />
-        <button class="d-comment-send" aria-label="등록">
+        <button class="d-comment-send" aria-label="등록"
+          onclick={handleCommentSubmit}
+          disabled={commentBusy || !data.isLoggedIn}>
           <svg width="17" height="12" viewBox="0 0 17 12" fill="none">
             <path d="M16 6.00001H1M5.61549 1.00001L1 6.00001L5.61549 11" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
           </svg>
@@ -305,61 +425,6 @@
       </div>
 
     </div><!-- /d-comments -->
-
-    <!-- 4. PostsMore — Popular items -->
-    <div class="d-posts-more">
-      <div class="d-popular">
-
-        <!-- Header -->
-        <div class="d-pop-header">
-          <span class="d-pop-title">Popular items</span>
-          <div class="d-pop-header-icons">
-            <!-- more (dots) -->
-            <button class="d-pop-more-btn" aria-label="더보기">
-              <svg width="22" height="22" viewBox="0 0 22 22" fill="none">
-                <rect width="22" height="22" rx="7" fill="#ECEBF4"/>
-                <path d={PC_SVG.dots} fill="#100B32"/>
-              </svg>
-            </button>
-            <!-- go (diagonal arrow) -->
-            <button class="d-pop-go-btn" aria-label="전체보기">
-              <svg width="18" height="18" viewBox="0 0 16 16" fill="none">
-                <path d={PC_SVG.goArrow} fill="#553FE0"/>
-              </svg>
-            </button>
-          </div>
-        </div>
-
-        <!-- Cards -->
-        <div class="d-pop-cards">
-
-          <!-- List() — SONY (red bar) -->
-          <div class="d-pop-card">
-            <div class="d-pop-bar" style="background:#FF3535;"></div>
-            <div class="d-pop-text">
-              <p class="d-pop-name">[사용기] SONY FE 24-105  가볍게 고퀄 영상을 바로 만들어주다</p>
-              <p class="d-pop-desc">Bower 6-in-1 Multi Selfie Tripod with Wireless Remote Shutter and Carrying Case — Compatible with iPhone...</p>
-            </div>
-            <div class="d-pop-img">
-              <img src="/crazylog/post-img1.png" alt="SONY FE 24-105mm 렌즈" loading="lazy" />
-            </div>
-          </div>
-
-          <!-- List1() — GoPro (purple bar) -->
-          <div class="d-pop-card">
-            <div class="d-pop-bar" style="background:#3B2F8A;"></div>
-            <div class="d-pop-text">
-              <p class="d-pop-name">액션캠의 왕좌를 되찾으러 돌아왔다. GoPro HERO13 Black</p>
-              <p class="d-pop-desc">Best-in-Class 5.3K Video — the Ultimate Hero is now the most powerful action camera we've ever made, featuring the GP2 chip.</p>
-            </div>
-            <div class="d-pop-img">
-              <img src="/crazylog/popular-img2.png" alt="GoPro HERO13 Black 액션캠" loading="lazy" />
-            </div>
-          </div>
-
-        </div>
-      </div>
-    </div>
 
   </div>
 </div>
@@ -377,7 +442,7 @@
           <path d={MOB_SVG.back} stroke="#444444" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
         </svg>
       </button>
-      <span class="m-nav-title">리뷰</span>
+      <span class="m-nav-title">{post?.logType ?? ''}</span>
       <!-- Single SVG: viewBox="0 0 20 16.5", both bars in one <g> -->
       <button class="m-hamburger" aria-label="메뉴">
         <div class="m-hamburger-icon">
@@ -401,35 +466,38 @@
       <!-- Img() — h-[450px], play button centered -->
       <div
         class="m-hero"
+        class:m-hero--clickable={!!YOUTUBE_VIDEO_ID}
         data-name="img"
-        onclick={() => showModal = true}
-        role="button"
-        tabindex="0"
-        onkeydown={(e) => e.key === 'Enter' && (showModal = true)}
-        aria-label="영상 재생"
+        onclick={() => YOUTUBE_VIDEO_ID && (showModal = true)}
+        role={YOUTUBE_VIDEO_ID ? 'button' : undefined}
+        tabindex={YOUTUBE_VIDEO_ID ? 0 : undefined}
+        onkeydown={(e) => YOUTUBE_VIDEO_ID && e.key === 'Enter' && (showModal = true)}
+        aria-label={YOUTUBE_VIDEO_ID ? '영상 재생' : undefined}
       >
         <!-- first child: image wrapper (YouTube badge target) -->
         <div class="m-hero-img-wrap">
           <img
-            src="/crazylog/content-hero.png"
-            alt="경복궁 한복 체험"
+            src={post?.thumbnailUrl ?? '/crazylog/content-hero.png'}
+            alt={post?.title ?? '포스트 썸네일'}
             loading="eager"
             class="m-hero-img"
           />
         </div>
-        <!-- last child: play button (scale/glow target) -->
-        <div class="m-play-btn" aria-hidden="true">
-          <svg width="100" height="100" viewBox="0 0 100 100" fill="none">
-            <defs>
-              <linearGradient id="m-play-grad" x1="0" y1="0" x2="100" y2="100" gradientUnits="userSpaceOnUse">
-                <stop offset="0%" stop-color="#3B2F8A"/>
-                <stop offset="100%" stop-color="#FF3535"/>
-              </linearGradient>
-            </defs>
-            <path d={MOB_SVG.playCircle} fill="url(#m-play-grad)"/>
-            <path d={MOB_SVG.playTri} fill="white"/>
-          </svg>
-        </div>
+        <!-- last child: play button — YouTube 영상 있을 때만 표시 -->
+        {#if YOUTUBE_VIDEO_ID}
+          <div class="m-play-btn" aria-hidden="true">
+            <svg width="100" height="100" viewBox="0 0 100 100" fill="none">
+              <defs>
+                <linearGradient id="m-play-grad" x1="0" y1="0" x2="100" y2="100" gradientUnits="userSpaceOnUse">
+                  <stop offset="0%" stop-color="#3B2F8A"/>
+                  <stop offset="100%" stop-color="#FF3535"/>
+                </linearGradient>
+              </defs>
+              <path d={MOB_SVG.playCircle} fill="url(#m-play-grad)"/>
+              <path d={MOB_SVG.playTri} fill="white"/>
+            </svg>
+          </div>
+        {/if}
       </div>
 
       <!-- Writing(): pb-[100px] pt-[50px] px-[25px] gap-[30px] -->
@@ -438,7 +506,7 @@
         <!-- Frame2: author + wish -->
         <div class="m-frame2">
           <div class="m-author">
-            <span>Steven lee </span><span>• Oct 24, 2022</span>
+            <span>{post?.author ?? ''} </span><span>• {post ? formatDate(post.createdAt) : ''}</span>
           </div>
           <button
             class="m-wish"
@@ -463,36 +531,33 @@
         </div>
 
         <!-- Title -->
-        <h1 class="m-title">경복궁 한복 체험</h1>
+        <h1 class="m-title">{post?.title ?? ''}</h1>
 
-        <!-- Body (Figma 원본 텍스트) -->
+        <!-- Body -->
         <div class="m-article">
-          <p>1. 메인 테마 소개: 경복궁 한복 체험<br/>
-            아름답게 맞춤 제작된 한복을 입고 한국의 왕실 유산 속으로 걸어 들어가며 경복궁에서 특별한 순간을 기록해보세요.<br/>
-            전문 브이로그 디렉터가 동행하여 동선을 안내하고, 고급 미러리스 카메라와 짐벌로 촬영을 진행합니다.<br/>
-            한복 대여는 궁 근처에서 바로 진행되므로, 기다림 없이 체험을 시작할 수 있습니다.<br/>
-            촬영한 원본 영상과 하이라이트 클립은 48시간 이내에 클라우드로 전달됩니다.</p>
-          <p>2. 로드 트레일 일정 &amp; 주요 명소<br/>
-            (2시간 기본 코스)<br/>
-            이동 경로: 경복궁 → 국립민속박물관 → 북촌 한옥마을</p>
-          <ul>
-            <li>경복궁 – 조선 왕조 최대의 궁궐로, 웅장한 대문과 아름다운 전각, 계절별 정원이 특징입니다. 공공 구역 내 촬영이 가능하며(드론 사용 불가), 멋진 영상을 남길 수 있습니다.</li>
-            <li>국립민속박물관 – 한국의 전통 생활문화를 직접 체험할 수 있는 야외 전시 공간.</li>
-            <li>북촌 한옥마을 – 전통 한옥이 늘어선 그림 같은 골목길을 걸으며 자연스러운 순간과 영화 같은 장면을 담을 수 있습니다.</li>
-          </ul>
-          <p>(3시간 확장 코스) 에서는 삼청동 거리와 청와대 광장이 추가되어 더욱 다양한 촬영이 가능합니다.</p>
-          <p>3. 예약 상세</p>
-          <ul>
-            <li>소요 시간: 2시간 또는 3시간 (도보 투어 &amp; 촬영 포함)</li>
-            <li>포함 사항: 한복 대여 안내, 전문 촬영, 원본 &amp; 편집 하이라이트 클립 48시간 내 클라우드 제공</li>
-            <li>미팅 장소: 경복궁역 4번 출구</li>
-            <li>가격: 2시간 코스 – 100달러부터 / 3시간 코스 – 150달러부터</li>
-            <li>예약 방법: 크레이지샷(CrazyShot) 계정 로그인 후 예약 진행</li>
-          </ul>
-          <p>참고: 날씨나 궁궐 규정에 따라 일정이 일부 조정될 수 있습니다.</p>
+          {#each getBlocks() as block}
+            {#if block.type === 'text'}
+              {@html block.html}
+            {:else if block.type === 'image'}
+              <div class="article-images article-images--{block.layout}">
+                {#each block.images.filter(img => !img.isHead) as img}
+                  <img src={img.url} alt={img.alt} loading="lazy" class="m-article-img" />
+                {/each}
+              </div>
+            {/if}
+          {/each}
         </div>
 
+        {#if post?.keywords && post.keywords.length > 0}
+          <div class="m-tags">
+            {#each post.keywords as kw}
+              <span class="m-tag">#{kw}</span>
+            {/each}
+          </div>
+        {/if}
+
       </div>
+
     </div><!-- /m-posts-eng -->
 
     <!-- 후기 div — w-[390px] px-[25px] pb-[100px] on #ecebf4 background -->
@@ -501,45 +566,23 @@
       <!-- 댓글 title bar: flex justify-between -->
       <div class="m-huri-bar">
         <span class="m-huri-label">댓글</span>
-        <span class="m-huri-count">03</span>
+        <span class="m-huri-count">{String(comments.length).padStart(2, '0')}</span>
       </div>
 
       <!-- Frame1: gap-[30px] pb-[50px] -->
       <div class="m-frame1">
-
-        <!-- List2: "가성비 최고예요!" -->
-        <div class="m-review-card">
-          <div class="m-review-header">
-            <p class="m-review-title">가성비 최고예요!</p>
-            <p class="m-review-date">Tawny /  Apr 26, 2025</p>
+        {#each comments as c (c.id)}
+          <div class="m-comment-item">
+            <div class="m-comment-meta">
+              <span class="m-comment-author">{c.authorName}</span>
+              <span class="m-comment-date">{formatCommentDate(c.createdAt)}</span>
+            </div>
+            <span class="m-comment-content">{c.content}</span>
           </div>
-          <div class="m-review-body">
-            <p>정말 훌륭한 제품입니다. 함께 제공된 매뉴얼은 조금 모호하지만, 사용하는 데 큰 어려움은 없었습니다. 설치와 사용을 돕는 온라인 영상도 많이 있습니다.</p>
-          </div>
-        </div>
-
-        <!-- List3: "잘 작동해요..." -->
-        <div class="m-review-card">
-          <div class="m-review-header">
-            <p class="m-review-title">잘 작동해요, 설명서는 혼란스럽습니다.</p>
-            <p class="m-review-date">Tawny /  Apr 26, 2025</p>
-          </div>
-          <div class="m-review-body">
-            <p>안정화 기능이 정말 좋아서 영상이 매끄럽게 나오네요. 설명서를 이해하기 어렵다 보니 제가 제대로 사용하고 있는 건지는 확신이 없지만, 필요한 용도로는 잘 쓰이고 있습니다.</p>
-          </div>
-        </div>
-
-        <!-- List4: "light weight!" -->
-        <div class="m-review-card">
-          <div class="m-review-header">
-            <p class="m-review-title">light weight!</p>
-            <p class="m-review-date">Samantha /  Jul 17, 2025</p>
-          </div>
-          <div class="m-review-body">
-            <p>Its a great product! Was fairly easy to setup and use! It works great and lasts a long while before having to recharge it!</p>
-          </div>
-        </div>
-
+        {/each}
+        {#if commentError}
+          <p class="m-comment-error" role="alert">{commentError}</p>
+        {/if}
       </div><!-- /m-frame1 -->
 
       <!-- Component: comment input form -->
@@ -547,10 +590,16 @@
         <input
           class="m-comment-input"
           type="text"
-          placeholder="후기 입력..."
+          placeholder="후기를 등록해 주세요."
           aria-label="후기 입력"
+          value={commentText}
+          oninput={(e) => { commentText = (e.target as HTMLInputElement).value }}
+          onkeydown={onCommentKeydown}
+          disabled={commentBusy || !data.isLoggedIn}
         />
-        <button class="m-send-btn" aria-label="등록">
+        <button class="m-send-btn" aria-label="등록"
+          onclick={handleCommentSubmit}
+          disabled={commentBusy || !data.isLoggedIn}>
           <div style="transform: rotate(90deg); display:flex; align-items:center; justify-content:center; width:15px; height:10px;">
             <svg width="17" height="12" viewBox="0 0 17 12" fill="none" style="width:17px;height:12px;">
               <path d={MOB_SVG.back} stroke="#100B32" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
@@ -561,47 +610,30 @@
 
     </div><!-- /m-huri -->
 
-    <!-- Post: 연관정보 -->
-    <div class="m-post">
-
-      <!-- title bar: flex items-center (no justify-between!) -->
-      <div class="m-post-bar">
-        <span class="m-post-label">연관정보</span>
-        <button class="m-post-more" aria-label="더보기">
-          <svg width="22" height="22" viewBox="0 0 22 22" fill="none">
-            <rect width="22" height="22" rx="7" fill="#E1DEF3"/>
-            <path d={MOB_SVG.dots} fill="#553FE0"/>
-          </svg>
-        </button>
-      </div>
-
-      <!-- 5 related cards: gap-[30px] w-[340px] -->
-      <div class="m-post-list">
-        {#each relatedPosts as post, i}
-          <a href="/crazylog/view/{post.id}" class="m-rel-card">
-            <!-- Img: h-[150px] overflow-hidden -->
-            <div class="m-rel-img-wrap">
-              <img
-                src={post.img}
-                alt={post.title}
-                loading="lazy"
-                style={post.imgStyle}
-              />
-            </div>
-            <!-- Writing: px-[30px] py-[20px] gap-[10px] -->
-            <div class="m-rel-text">
-              <p class="m-rel-title">{post.title}</p>
-              <p class="m-rel-meta">{post.meta}</p>
-            </div>
-          </a>
-        {/each}
-      </div>
-
-    </div><!-- /m-post -->
-
   </div><!-- /m-body -->
 
 </div><!-- /m-view -->
+
+<!-- ══════════════════════════════════
+     ADMIN: 삭제 확인 모달
+══════════════════════════════════ -->
+{#if showDeleteConfirm}
+  <div class="yt-overlay" onclick={() => showDeleteConfirm = false} role="presentation">
+    <div class="admin-confirm-dialog" onclick={(e) => e.stopPropagation()} role="dialog" aria-modal="true" aria-label="포스트 삭제 확인">
+      <p class="admin-confirm-msg">이 포스트를 삭제하시겠습니까?</p>
+      <p class="admin-confirm-sub">삭제된 포스트는 복구할 수 없습니다.</p>
+      {#if adminError}
+        <p class="admin-confirm-error" role="alert">{adminError}</p>
+      {/if}
+      <div class="admin-confirm-actions">
+        <button class="admin-btn admin-btn-hold" onclick={() => showDeleteConfirm = false} disabled={adminBusy}>취소</button>
+        <button class="admin-btn admin-btn-delete" onclick={() => handleAdminStatus('deleted')} disabled={adminBusy}>
+          {adminBusy ? '처리 중...' : '삭제'}
+        </button>
+      </div>
+    </div>
+  </div>
+{/if}
 
 <!-- ══════════════════════════════════
      YOUTUBE MODAL
@@ -633,161 +665,19 @@
 {/if}
 
 <!-- ══════════════════════════════════
-     FLOATING WRITE CARD (로그인 사용자 요약 + 쓰기)
+     FLOATING WRITE CARD
 ══════════════════════════════════ -->
-<div class="write-card" class:write-card-hidden={!writeCardVisible} aria-label="내 로그 작성" role="complementary">
-  <div class="wc-user">
-    <div class="wc-avatar">S</div>
-    <div class="wc-info">
-      <span class="wc-name">스티븐봉재</span>
-      <!-- 멤버십 배지: E=이지팩 / P=팝팩 / C=크레이지팩 -->
-      <span class="wc-badge wc-badge-c" aria-label="크레이지팩 멤버십">C</span>
-      <span class="wc-level">LV.4MD</span>
-    </div>
-  </div>
-  <a href="/crazylog/1" class="wc-write-btn" aria-label="로그 작성하기">
-    <svg width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden="true">
-      <path d="M1 13L5 9M9.5 1.5L12.5 4.5L5 12H2V9L9.5 1.5Z" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
-    </svg>
-    쓰기
-  </a>
-</div>
+<CrazylogWriteCard
+  currentUser={data.currentUser}
+  isLoggedIn={data.isLoggedIn}
+  visible={writeCardVisible}
+  postId={data.postId}
+  isOwner={data.isOwner ?? false}
+  deleteBusy={adminBusy}
+  onDelete={() => showDeleteConfirm = true}
+/>
 
 <style>
-  /* ══════════════════════════════════
-     FLOATING WRITE CARD
-  ══════════════════════════════════ */
-  /* 모바일: 좌우 여백만 두고 가득 채움 */
-  .write-card {
-    position: fixed;
-    bottom: 24px;
-    left: 24px;
-    right: 24px;
-    width: auto;
-    transform: translateY(0);
-    z-index: 100;
-    display: flex;
-    align-items: center;
-    gap: 16px;
-    background: var(--cs-white);
-    border-radius: var(--radius-lg);
-    padding: 12px 16px 12px 20px;
-    box-shadow: 0 4px 24px rgba(16, 11, 50, 0.14);
-    min-height: 64px;
-    transition: transform 0.35s cubic-bezier(0.4, 0, 0.2, 1),
-                opacity  0.35s cubic-bezier(0.4, 0, 0.2, 1);
-    opacity: 1;
-    pointer-events: auto;
-  }
-
-  .write-card-hidden {
-    transform: translateY(calc(100% + 32px));
-    opacity: 0;
-    pointer-events: none;
-  }
-
-  /* PC: 중앙 고정 + 고정 폭 (콘텐츠 자연폭 × 1.3) */
-  @media (min-width: 640px) {
-    .write-card {
-      left: 50%;
-      right: auto;
-      width: 460px;
-      transform: translateX(-50%) translateY(0);
-      white-space: nowrap;
-    }
-    .write-card-hidden {
-      transform: translateX(-50%) translateY(calc(100% + 32px));
-    }
-  }
-
-  /* 사용자 정보 영역 */
-  .wc-user {
-    display: flex;
-    align-items: center;
-    gap: 12px;
-    flex: 1;
-    min-width: 0;
-  }
-
-  .wc-avatar {
-    width: 38px;
-    height: 38px;
-    border-radius: 50%;
-    background: linear-gradient(135deg, var(--cs-purple) 0%, var(--cs-red-badge) 100%);
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    font-size: 15px;
-    font-weight: 900;
-    color: var(--cs-white);
-    flex-shrink: 0;
-  }
-
-  .wc-info {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    flex-wrap: wrap;
-    min-width: 0;
-  }
-
-  .wc-name {
-    font: var(--text-pc-body-14);
-    color: var(--cs-text);
-    letter-spacing: -0.5px;
-  }
-
-  /* 멤버십 배지 — 라운드 정사각형 */
-  .wc-badge {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    width: 20px;
-    height: 20px;
-    border-radius: 6px;
-    font-size: 11px;
-    font-weight: 900;
-    color: var(--cs-white);
-    flex-shrink: 0;
-    letter-spacing: 0;
-    line-height: 1;
-  }
-  /* E: 이지팩 — 회색 계열 */
-  .wc-badge-e { background: var(--cs-text-mid); }
-  /* P: 팝팩 — 보라 */
-  .wc-badge-p { background: var(--cs-purple); }
-  /* C: 크레이지팩 — 오렌지 */
-  .wc-badge-c { background: var(--cs-orange); }
-
-  .wc-level {
-    font-size: 11px;
-    font-weight: 500;
-    color: var(--cs-purple-light);
-    background: var(--cs-purple-op10);
-    padding: 2px 8px;
-    border-radius: var(--radius-full);
-  }
-
-  /* 쓰기 버튼 */
-  .wc-write-btn {
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    padding: 0 20px;
-    height: 40px;
-    background: var(--cs-red-badge);
-    color: var(--cs-white);
-    border-radius: var(--radius-xl);
-    font: var(--text-pc-body-14);
-    font-weight: 700;
-    letter-spacing: -0.3px;
-    text-decoration: none;
-    flex-shrink: 0;
-    transition: background 0.15s;
-  }
-
-  .wc-write-btn:hover { background: var(--cs-red); }
-
   /* ══ 레이아웃 분기 (1024px) ════════════════════════ */
   .d-view { display: none; }
   .m-view { display: block; }
@@ -837,16 +727,11 @@
   }
   .d-back-btn:hover { opacity: 0.7; }
   .d-navi-title {
-    font-family: 'Tilt Warp', sans-serif;
-    font-size: 20px;
-    font-weight: 400;
-    color: var(--cs-purple-light);
-    position: absolute;
-    left: 50%;
-    transform: translateX(-50%);
+    font: var(--text-pc-menu-kr-20);
+    color: var(--cs-text-mid);
+    margin-left: auto;
+    order: 3;
   }
-  .d-navi-bar { position: relative; }
-  .d-navi-spacer { width: 80px; }
 
   /* 2. PostsEng */
   .d-posts-eng {
@@ -926,6 +811,45 @@
     color: var(--cs-text-dark);
     margin: 0;
     line-height: 1.8;
+  }
+
+  /* 이미지 블록 */
+  .d-content-images {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    justify-content: center;
+    width: 100%;
+  }
+  .d-content-img {
+    max-width: 100%;
+    height: auto;
+    border-radius: var(--radius-md);
+    display: block;
+  }
+  .d-content-images--individual .d-content-img {
+    width: 100%;
+  }
+  .d-content-images--collage .d-content-img {
+    flex: 1 1 45%;
+    object-fit: cover;
+    max-height: 400px;
+  }
+
+  /* 태그 */
+  .d-tags {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    padding-top: 8px;
+  }
+  .d-tag {
+    font: var(--text-pc-body-14);
+    font-weight: 700;
+    color: var(--cs-purple);
+    background: var(--cs-purple-op10);
+    padding: 4px 12px;
+    border-radius: var(--radius-full);
   }
 
   /* 3. Comments */
@@ -1024,111 +948,40 @@
   .d-comment-send:hover {
     background: var(--cs-purple);
   }
+  .d-comment-send:disabled { opacity: 0.45; cursor: not-allowed; }
+  .d-comment-input:disabled { opacity: 0.6; cursor: not-allowed; }
 
-  /* 4. PostsMore */
-  .d-posts-more {
-    width: 100%;
-    max-width: 1240px;
-  }
-  .d-popular {
+  .d-comment-item {
     display: flex;
     flex-direction: column;
-    gap: 30px;
+    gap: 2px;
+    padding: 10px 0;
+    border-bottom: 1px solid var(--cs-surface-gray);
   }
-  .d-pop-header {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    padding: 20px 40px;
-  }
-  .d-pop-title {
-    font-family: 'Tilt Warp', sans-serif;
-    font-size: 20px;
-    font-weight: 400;
-    color: var(--cs-purple-light);
-  }
-  .d-pop-header-icons {
+  .d-comment-meta {
     display: flex;
     align-items: center;
     gap: 8px;
   }
-  .d-pop-more-btn {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    min-width: 44px;
-    min-height: 44px;
-    background: none;
-    border: none;
-    cursor: pointer;
-    padding: 0;
-  }
-  .d-pop-go-btn {
-    background: none;
-    border: none;
-    cursor: pointer;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    min-width: 44px;
-    min-height: 44px;
-    padding: 0;
-    transition: opacity 0.15s;
-  }
-  .d-pop-go-btn:hover { opacity: 0.7; }
-
-  .d-pop-cards {
-    display: flex;
-    flex-direction: row;
-    gap: 30px;
-  }
-  .d-pop-card {
-    background: var(--cs-white);
-    border-radius: 30px;
-    display: flex;
-    overflow: hidden;
-    flex: 1;
-    max-width: 600px;
-  }
-  .d-pop-bar {
-    width: 10px;
-    flex-shrink: 0;
-  }
-  .d-pop-text {
-    flex: 1;
-    padding: 20px 40px;
-    display: flex;
-    flex-direction: column;
-    gap: 5px;
-  }
-  .d-pop-name {
-    font-size: 16px;
+  .d-comment-author {
+    font-size: 12px;
     font-weight: 700;
-    font-family: 'Noto Sans KR', sans-serif;
-    color: var(--cs-text);
-    margin: 0;
-    line-height: 1.4;
+    color: var(--cs-purple);
   }
-  .d-pop-desc {
+  .d-comment-date {
+    font-size: 11px;
+    color: var(--cs-text-light);
+  }
+  .d-comment-content {
     font-size: 14px;
-    font-weight: 400;
-    font-family: 'Noto Sans KR', sans-serif;
-    color: var(--cs-text-mid);
-    margin: 0;
-    line-height: 1.6;
+    color: var(--cs-text);
+    white-space: pre-wrap;
+    word-break: break-word;
   }
-  .d-pop-img {
-    flex-shrink: 0;
-    width: 150px;
-    height: 150px;
-    overflow: hidden;
-    border-radius: 0 30px 30px 0;
-  }
-  .d-pop-img img {
-    width: 100%;
-    height: 100%;
-    object-fit: cover;
-    display: block;
+  .d-comment-error {
+    font-size: 12px;
+    color: var(--cs-error);
+    margin: 6px 0 0;
   }
 
   /* ══════════════════════════════════
@@ -1252,20 +1105,9 @@
     display: block;
   }
   .m-play-btn {
-    position: absolute;
-    top: 50%;
-    left: 50%;
-    transform: translate(-50%, -50%) scale(1);
-    z-index: 2;
     width: 100px;
     height: 100px;
     flex-shrink: 0;
-    transition: transform 0.4s cubic-bezier(0.34, 1.56, 0.64, 1), filter 0.4s ease;
-  }
-
-  .m-hero:hover .m-play-btn {
-    transform: translate(-50%, -50%) scale(1.4);
-    filter: drop-shadow(0 0 32px rgba(255, 53, 53, 0.9)) drop-shadow(0 0 12px rgba(59, 47, 138, 0.55));
   }
 
   /* Writing(): pb-[100px] pt-[50px] px-[25px] gap-[30px] */
@@ -1387,6 +1229,33 @@
     list-style: disc;
   }
   .m-article li { margin-bottom: 0; }
+  /* 본문 이미지 모바일 리사이징 */
+  .article-images {
+    width: 100%;
+    max-width: 100%;
+    overflow: hidden;
+  }
+  .m-article-img {
+    width: 100%;
+    max-width: 100%;
+    height: auto;
+    display: block;
+    object-fit: contain;
+  }
+
+  .m-tags {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    padding-top: 8px;
+  }
+  .m-tag {
+    font: var(--text-m-script-14B);
+    color: var(--cs-purple);
+    background: var(--cs-purple-op10);
+    padding: 4px 12px;
+    border-radius: var(--radius-full);
+  }
 
   /* 후기 div: px-[25px] pb-[100px] on #ecebf4 bg */
   .m-huri {
@@ -1509,13 +1378,13 @@
   .m-comment-input::placeholder {
     color: var(--cs-text-mid);
     opacity: 0.6;
-    text-align: center;
+    text-align: left;
   }
   /* Send button: bg-[#e1def3] rounded-[30px] size-[35px] */
   .m-send-btn {
     flex-shrink: 0;
-    width: 35px;
-    height: 35px;
+    width: 44px;
+    height: 44px;
     border-radius: 30px;
     background: var(--cs-purple-op10);
     border: none;
@@ -1528,108 +1397,40 @@
     transition: background 0.15s;
   }
   .m-send-btn:hover { background: var(--cs-purple-pale); }
+  .m-send-btn:disabled { opacity: 0.45; cursor: not-allowed; }
+  .m-comment-input:disabled { opacity: 0.6; cursor: not-allowed; }
 
-  /* Post: 연관정보 — 3-stop gradient, rounded-bl-[50px] rounded-tr-[50px] */
-  .m-post {
-    width: 100%;
-    background: linear-gradient(to bottom,
-      rgba(225,222,243,0.95) 0%,
-      rgba(225,222,243,0.8) 25.962%,
-      rgba(225,222,243,0) 50.481%
-    );
-    border-radius: 0 50px 0 50px;
-    padding: 0 25px 100px;
+  .m-comment-item {
     display: flex;
     flex-direction: column;
-    align-items: flex-start;
-    flex-shrink: 0;
+    gap: 2px;
+    padding: 10px 0;
+    border-bottom: 1px solid var(--cs-border);
   }
-
-  /* Post title bar: flex items-center (no justify-between) */
-  .m-post-bar {
+  .m-comment-meta {
     display: flex;
     align-items: center;
-    padding: 40px 0;
-    width: 100%;
-    flex-shrink: 0;
+    gap: 8px;
   }
-  .m-post-label {
-    font-size: 21px;
-    font-weight: 700;
-    font-family: 'Noto Sans KR', sans-serif;
-    color: var(--cs-text);
-    line-height: 1.6;
-    letter-spacing: -0.3px;
-    white-space: nowrap;
-    text-align: center;
-    flex-shrink: 0;
-  }
-  .m-post-more {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    min-width: 44px;
-    min-height: 44px;
-    flex-shrink: 0;
-    background: none;
-    border: none;
-    cursor: pointer;
-    padding: 0;
-  }
-
-  /* 5 related cards: gap-[30px] */
-  .m-post-list {
-    display: flex;
-    flex-direction: column;
-    gap: 30px;
-    width: 100%;
-    flex-shrink: 0;
-  }
-  .m-rel-card {
-    background: var(--cs-white);
-    border-radius: 30px;
-    overflow: hidden;
-    text-decoration: none;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    width: 100%;
-    flex-shrink: 0;
-  }
-  /* Img: h-[150px] */
-  .m-rel-img-wrap {
-    position: relative;
-    height: 150px;
-    width: 100%;
-    overflow: hidden;
-    flex-shrink: 0;
-  }
-  /* Writing: px-[30px] py-[20px] gap-[10px] */
-  .m-rel-text {
-    width: 100%;
-    padding: 20px 30px;
-    display: flex;
-    flex-direction: column;
-    gap: 10px;
-  }
-  .m-rel-title {
-    font-size: 18px;
-    font-weight: 700;
-    font-family: 'Noto Sans KR', sans-serif;
-    color: var(--cs-text-dark);
-    margin: 0;
-    white-space: pre-line;
-    line-height: 1.6;
-    letter-spacing: -0.3px;
-  }
-  .m-rel-meta {
+  .m-comment-author {
     font-size: 12px;
-    font-weight: 500;
-    font-family: 'Noto Sans KR', sans-serif;
-    color: var(--cs-text-mid);
-    margin: 0;
-    line-height: 1.6;
-    letter-spacing: -0.5px;
+    font-weight: 700;
+    color: var(--cs-purple);
+  }
+  .m-comment-date {
+    font-size: 11px;
+    color: var(--cs-text-light);
+  }
+  .m-comment-content {
+    font-size: 14px;
+    color: var(--cs-text);
+    white-space: pre-wrap;
+    word-break: break-word;
+  }
+  .m-comment-error {
+    font-size: 12px;
+    color: var(--cs-error);
+    margin: 6px 0 0;
   }
 
   /* ══ YouTube Modal ════════════════════════════════ */
@@ -1701,5 +1502,128 @@
     font-size: 12px;
     font-family: 'Noto Sans KR', sans-serif;
     margin: 0;
+  }
+
+  /* ══════════════════════════════════
+     ADMIN BUTTONS
+  ══════════════════════════════════ */
+  .d-navi-actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 80px;
+    justify-content: flex-end;
+  }
+
+  .admin-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    height: 40px;
+    padding: 0 20px;
+    border-radius: var(--radius-xl);
+    font-size: 13px;
+    font-weight: 700;
+    font-family: 'Noto Sans KR', sans-serif;
+    letter-spacing: -0.3px;
+    white-space: nowrap;
+    cursor: pointer;
+    border: none;
+    transition: opacity 0.15s, background 0.15s;
+    min-height: 44px;
+  }
+  .admin-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+  /* 공개: primary (보라) */
+  .admin-btn-publish {
+    background: var(--cs-purple);
+    color: var(--cs-white);
+  }
+  .admin-btn-publish:hover:not(:disabled) { background: var(--cs-purple-hover); }
+
+  /* 보류 처리: ghost (보라 테두리) */
+  .admin-btn-hold {
+    background: transparent;
+    color: var(--cs-purple);
+    border: 2px solid var(--cs-purple);
+  }
+  .admin-btn-hold:hover:not(:disabled) { background: var(--cs-purple); color: var(--cs-white); }
+
+  /* 삭제: 위험 (빨강) */
+  .admin-btn-delete {
+    background: var(--cs-chat-in-bg);
+    color: var(--cs-red-badge);
+  }
+  .admin-btn-delete:hover:not(:disabled) { background: var(--cs-red-light); }
+
+  /* 수정: 본인 소유 편집 링크 */
+  .admin-btn-edit {
+    background: var(--cs-purple-op10);
+    color: var(--cs-purple);
+    text-decoration: none;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .admin-btn-edit:hover { background: var(--cs-purple); color: var(--cs-white); }
+
+  /* 관리자 모바일 바 */
+  .m-admin-bar {
+    width: 100%;
+    padding: 0 25px 30px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+  .m-admin-btns {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+  }
+  .m-admin-error {
+    font-size: 12px;
+    color: var(--cs-red-badge);
+    margin: 0;
+    font-family: 'Noto Sans KR', sans-serif;
+  }
+
+  /* 삭제 확인 모달 */
+  .admin-confirm-dialog {
+    background: var(--cs-white);
+    border-radius: var(--radius-2xl);
+    padding: 32px 36px;
+    min-width: 300px;
+    max-width: 420px;
+    width: 100%;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    text-align: center;
+  }
+  .admin-confirm-msg {
+    font-size: 18px;
+    font-weight: 700;
+    font-family: 'Noto Sans KR', sans-serif;
+    color: var(--cs-text);
+    margin: 0;
+  }
+  .admin-confirm-sub {
+    font-size: 14px;
+    font-weight: 400;
+    font-family: 'Noto Sans KR', sans-serif;
+    color: var(--cs-text-mid);
+    margin: 0;
+  }
+  .admin-confirm-error {
+    font-size: 12px;
+    color: var(--cs-red-badge);
+    margin: 0;
+    font-family: 'Noto Sans KR', sans-serif;
+  }
+  .admin-confirm-actions {
+    display: flex;
+    gap: 10px;
+    justify-content: center;
+    margin-top: 8px;
   }
 </style>

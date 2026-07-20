@@ -560,7 +560,7 @@
   /* PC 인풋 */
   .d-inputs {
     display: flex;
-    flex-wrap: nowrap;
+    flex-wrap: wrap;
     gap: 20px;
   }
   .d-input-field {
@@ -570,10 +570,9 @@
     align-items: center;
     gap: 10px;
     padding: 15px 25px;
-    flex: 1;
-    min-width: 0;
+    flex: 1 1 220px;
+    min-width: 220px;
     min-height: 60px;
-    flex-shrink: 1;
     position: relative;
   }
   .d-input-icon {

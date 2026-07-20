@@ -4,11 +4,55 @@
 
 ---
 
-## 최종 업데이트: 2026-07-14 (CMS 성능 Migration 109~116 + 통합 검색 + DB 전역 정밀 진단)
+## 최종 업데이트: 2026-07-20 (상품 후기 + 키워드 설정 기능 구현 완료)
 
 ---
 
 ## 이번 세션 완료 내역
+
+### 상품 후기 + 키워드 설정 (2026-07-20)
+
+| 항목 | 내용 |
+|------|------|
+| Migration #123 | product_page_keywords 키 추가 + upsert/get RPC 확장 |
+| Migration #124 | product_reviews 테이블 + RLS 2종 + create/get RPC 2종 |
+| ProductCategoryModal | 키워드 설정 UI (CmsSuggestPicker, 최대 10개) |
+| products/+page.svelte | displayKeywords $derived (DB 우선 → fallback) |
+| products/[id]/+page.server.ts | safeGetSession + get_product_reviews RPC |
+| products/[id]/+page.svelte | MOCK 제거 + 실후기 폼 구현 + 토큰 위반 수정 |
+| DB | Stage + Production 모두 최신 (#124 까지 적용) |
+
+**현재 마이그레이션 최신 번호**: #124  
+**다음 마이그레이션**: #125부터 사용
+
+---
+
+## 다음 세션 시작 포인트
+
+```
+TASK.md BACKLOG:
+  - write-card 수정/삭제 버튼 브라우저 실 확인 (자신 vs 타인 포스트)
+
+다음 NOW 후보:
+  - S1-M4: Subscriptions (멤버십 구독 기능)
+  - S1-M5: Shipments (배송 관리)
+```
+
+---
+
+## 이전 세션 완료 내역
+
+### Crazylog view/[slug] 퍼블리싱 완성 + QA 통과 (2026-07-15)
+
+| 항목 | 내용 |
+|------|------|
+| PC 댓글 섹션 | .d-comments 추가 (목록 3개 + 입력폼, max-width: 1240px) |
+| 모바일 재생 버튼 | 중앙 정렬 + hover scale 트랜지션 |
+| PC hover scale | <svelte:head> global CSS 정합 |
+| QA 수정 | m-post-more / d-pop-more-btn div→button + 44px / CSS 변수 전환 / :global() 제거 |
+| QA 결과 | GATE E PASS ✅ TS 0 / console 0 / :global() 0 |
+
+---
 
 ### CMS 성능 최적화 Migration 109~116 + 통합 검색 + DB 진단
 
@@ -29,10 +73,21 @@
 
 ---
 
+## 참조 문서
+
+| 문서 | 경로 | 상태 |
+|------|------|------|
+| PRD v1.7 | `/Users/stevenmac/Documents/PSERIES/CRAZYSHOT/Dev/CRAZYSHOT_PRD_v1.7.md` | ✅ 최신 (2026-07-14) |
+| Plannode tree | `/Users/stevenmac/Documents/PSERIES/CRAZYSHOT/Dev/crazyshot-re_v1.60-plannode-tree.json` | ✅ 552 노드, schema v5.56 |
+| DB 현황 | 53 테이블 / Migration #116 / 65+ RPC / 35 트리거 / 2 MV | Stage + Production 동기 |
+
+---
+
 ## 즉시 재개 (NOW)
 
 - [ ] **Stephen: git commit + push + Vercel 배포** — 로컬 파일 수정 완료, 미커밋 상태
-  → 커밋 대상: searchService.ts, api/search/products/+server.ts, migrations 109~116
+  → 커밋 대상 1: src/routes/crazylog/ 3개 파일 + static/crazylog/ 에셋 (crazylog 퍼블리싱)
+  → 커밋 대상 2: searchService.ts, api/search/products/+server.ts, migrations 109~116, CLAUDE.md, HANDOFF.md
 - [ ] **supabase gen types 재생성** → `(supabase.rpc as any)` 제거 (searchService.ts)
   → `supabase gen types typescript --project-id vnbpmvxruyciuuaermyh`
 

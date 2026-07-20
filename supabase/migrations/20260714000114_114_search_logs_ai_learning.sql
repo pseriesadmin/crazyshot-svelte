@@ -60,3 +60,14 @@ CREATE POLICY pss_read_all ON product_search_stats
   FOR SELECT USING (true);
 CREATE POLICY pss_service_write ON product_search_stats
   FOR ALL USING (auth.role() = 'service_role');
+
+-- ============================================================
+-- ROLLBACK (역순 실행)
+-- ============================================================
+-- DROP POLICY IF EXISTS pss_service_write ON product_search_stats;
+-- DROP POLICY IF EXISTS pss_read_all ON product_search_stats;
+-- DROP POLICY IF EXISTS search_logs_service_all ON search_logs;
+-- DROP POLICY IF EXISTS search_logs_user_select ON search_logs;
+-- DROP TABLE IF EXISTS product_search_stats;
+-- DROP TABLE IF EXISTS search_logs;
+-- ============================================================

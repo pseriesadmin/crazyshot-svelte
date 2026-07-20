@@ -3,11 +3,11 @@
   import { supabase } from '$lib/services/supabase'
   import { csToast } from '$lib/utils/toast'
   import CmsSimilarNameInput from '$lib/components/cms/CmsSimilarNameInput.svelte'
-  import CmsSuggestPicker from '$lib/components/cms/CmsSuggestPicker.svelte'
+  import SuggestPicker from '$lib/components/common/SuggestPicker.svelte'
   import CmsContentEditor from '$lib/components/cms/CmsContentEditor.svelte'
   import type { ContentBlock } from '$lib/types/content-editor'
   import type { SimilarNameItem } from '$lib/types/cms-similar-name'
-  import type { SuggestPickerOption } from '$lib/types/cms-suggest-picker'
+  import type { SuggestPickerOption } from '$lib/types/suggest-picker'
   import { productSearchOrFilter } from '$lib/utils/similarNameSuggest'
   import { resizeProductImage } from '$lib/utils/imageResize'
   import { buildPreview, datePart } from '../../codes/_shared'
@@ -567,7 +567,7 @@
 
       <div class="field-row">
         {#if (data.mappingGroups as MappingGroupSimple[]).length > 0}
-          <CmsSuggestPicker
+          <SuggestPicker
             id="cat-group-sel"
             bind:selectedId={selectedGroupId}
             options={groupPickerOptions}
@@ -596,7 +596,7 @@
                 autocomplete="off"
               />
             {/snippet}
-          </CmsSuggestPicker>
+          </SuggestPicker>
 
           <!-- 폼 전송용 hidden 필드 -->
           {#if category}

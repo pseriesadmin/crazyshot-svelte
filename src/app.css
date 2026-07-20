@@ -42,6 +42,7 @@
   --cs-red:           #CF0000;       /* 에러·경고 = red-100 */
   --cs-red-badge:     #FF3535;       /* 빨간 배지 = red-80% */
   --cs-red-light:     #FFB3B3;       /* 연한 강조 = red-30% */
+  --cs-red-xlight:    #FFE7E7;       /* 극연한 레드 = red-5% */
   --cs-lilac:         #ECEBF4;       /* 페이지 배경 = purple-5% */
   --cs-lilac-nav:     rgba(225,222,243,0.4); /* nav 필 반투명 배경 */
 
@@ -100,6 +101,7 @@
   --text-pc-title-16: 700 16px/200% var(--font-kr);               /* 소형 타이틀 */
   --text-pc-body-14:  700 14px/200% var(--font-kr);               /* 본문 Bold */
   --text-pc-script-12: 400 12px/200% var(--font-kr);              /* 캡션 */
+  --text-pc-tag-11:    700 11px/160% var(--font-kr);              /* 카테고리 태그·배지 레이블 */
   --text-pc-descript-10: 300 10px/160% var(--font-kr);            /* 최소 보조 텍스트 (pc-descript_com_10) */
 
   /* ── 타이포그래피 스케일 (Mobile) ── */
@@ -117,6 +119,7 @@
   --text-m-script-14B: 700 14px/200% var(--font-kr);
   --text-m-script-14: 500 14px/160% var(--font-kr);
   --text-m-script-12: 500 12px/160% var(--font-kr);
+  --text-m-tag-11:    700 11px/160% var(--font-kr);               /* 카테고리 태그·배지 레이블 */
 
   /* ── 이펙트 (그림자) ── */
   /* outsh1: 강한 다크 그림자 (텍스트 강조) */

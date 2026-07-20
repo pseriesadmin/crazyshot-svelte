@@ -56,6 +56,7 @@ function devFallbackForLegacyNine(rawId: string): { product: ProductDetailRow; p
 
 export const load: PageServerLoad = async ({ params, locals }) => {
 	const rawId = params.id;
+	const { session } = await locals.safeGetSession();
 
 	let query = locals.supabase.from('products').select('*');
 
@@ -93,9 +94,9 @@ export const load: PageServerLoad = async ({ params, locals }) => {
 
 	// 옵션상품 링크 조회 (RPC 없으면 빈 배열 fallback)
 	let optionLinks: ProductOptionLinkRow[] = [];
+	type RpcFn = (name: string, args: Record<string, unknown>) => ReturnType<typeof locals.supabase.rpc>;
 	if (isUuid(String(row.id))) {
 		// get_product_option_links is not yet registered in Database type; cast through unknown
-		type RpcFn = (name: string, args: Record<string, string>) => ReturnType<typeof locals.supabase.rpc>;
 		const { data: links, error: linksError } = await (locals.supabase.rpc as unknown as RpcFn)(
 			'get_product_option_links',
 			{ p_product_id: String(row.id) },
@@ -105,9 +106,22 @@ export const load: PageServerLoad = async ({ params, locals }) => {
 		}
 	}
 
+	// 상품 후기 목록 로드
+	type ReviewItem = { id: string; author_name: string; title: string; content: string; created_at: string };
+	let reviews: ReviewItem[] = [];
+	if (isUuid(String(row.id))) {
+		const { data: reviewData } = await (locals.supabase.rpc as unknown as RpcFn)(
+			'get_product_reviews',
+			{ p_product_id: String(row.id) },
+		);
+		reviews = (reviewData ?? []) as ReviewItem[];
+	}
+
 	return {
 		product: enriched,
 		productId: String(row.id),
 		optionLinks,
+		session,
+		reviews,
 	};
 };

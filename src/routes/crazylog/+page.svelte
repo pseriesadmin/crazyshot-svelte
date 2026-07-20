@@ -1,14 +1,30 @@
 <script lang="ts">
+  import type { PageData } from './$types'
+  interface Props { data: PageData }
+  let { data }: Props = $props()
+
   const TABS = [
-    { label: 'Review',      count: 212 },
-    { label: 'Share',       count: 43  },
-    { label: 'K-Trail log', count: 39  },
+    { label: '상품리뷰', countKey: 'review' as const },
+    { label: '일상공유', countKey: 'share'  as const },
+    { label: '채널홍보', countKey: 'promo'  as const },
   ]
 
+  function relativeTime(iso: string): string {
+    const diff = Date.now() - new Date(iso).getTime()
+    const mins  = Math.floor(diff / 60000)
+    const hours = Math.floor(diff / 3600000)
+    const days  = Math.floor(diff / 86400000)
+    if (mins  <  1) return '방금 전'
+    if (hours <  1) return `${mins}분 전`
+    if (days  <  1) return `${hours}시간 전`
+    if (days  < 30) return `${days}일 전`
+    return new Date(iso).toLocaleDateString('ko-KR')
+  }
+
   const TAB_MAP: Record<string, string> = {
-    'Review':      '리뷰',
-    'Share':       '공유',
-    'K-Trail log': '이벤트',
+    '상품리뷰': '상품리뷰',
+    '일상공유': '일상공유',
+    '채널홍보': '채널홍보',
   }
 
   const M_KEYWORDS = ['양양의 기억 로그', 'Mini2se 리뷰 로그', '신상로그', 'Air 3S Drone', 'Air 3S Drone', 'Air 3S Drone']
@@ -60,34 +76,7 @@
     },
   ]
 
-  const M_ARTICLES = [
-    { img: '/crazylog/article-img1.png', title: '[사용기] SONY FE 24-105  가볍게 고퀄 영상을 바로 만들어주다',            meta: '1시간 전·by 홍기동' },
-    { img: '/crazylog/article-img2.png', title: '액션캠의 왕좌를 되찾으러 돌아왔다. GoPro HERO13 Black',                 meta: '2시간 전·by 유말자' },
-    { img: '/crazylog/article-img3.png', title: '휴대용 디자인으로 이동 중에도 미디어 카드에 쉽게 접근 가능',             meta: '2시간 전·by 유말자' },
-    { img: '/crazylog/article-img4.png', title: 'onn. 52인치 삼각대, 컴팩트 카메라, 스마트폰 및 GoPro 액션 카메라용 스', meta: '2시간 전·by 유말자' },
-    { img: '/crazylog/article-img5.png', title: 'K-트레일로그를 남기는 멋진 일은 우리들에게 즐거움의 폭증이다!!',         meta: '2시간 전·by 유말자' },
-  ]
 
-  interface PostItem {
-    bar: string
-    title: string
-    desc: string
-    img: string
-    rounded?: boolean
-    cover?: boolean
-    isList?: boolean
-  }
-
-  const D_POSTS: PostItem[] = [
-    { bar: '#3b2f8a', rounded: true,  title: 'SONY FE 24-105 F4 G OSS',                                         desc: 'Bower 6-in-1 Multi Selfie Tripod with Smartphone & GoPro Mount, Rechargeable Wireless Remote - Black',                                                img: '/crazylog/post-img1.png' },
-    { bar: '#553fe0', cover: true,    title: 'GoPro HERO13 Black',                                               desc: 'Best-in-Class 5.3K Video - 5.3K video delivers breathtaking image quality with 91% more resolution than 4K and an incredible 665% more than 1080p.', img: '/crazylog/post-img2.png' },
-    { bar: '#3b2f8a', rounded: true,  title: 'SONY FE 24-105 F4 G OSS',                                         desc: 'Bower 6-in-1 Multi Selfie Tripod with Smartphone & GoPro Mount, Rechargeable Wireless Remote - Black',                                                img: '/crazylog/post-img3.png' },
-    { bar: '#ff3535', isList: true,   title: '[Accessories] onn USB C/USB 2.0 Memory Card Reader for SD/Mic...', desc: 'SD and microSD card reader with USB and USB-C connectors for versatile connectivity',                                                                   img: '/crazylog/post-img4.png' },
-    { bar: '#3b2f8a', rounded: true,  title: 'SONY FE 24-105 F4 G OSS',                                         desc: 'Bower 6-in-1 Multi Selfie Tripod with Smartphone & GoPro Mount, Rechargeable Wireless Remote - Black',                                                img: '/crazylog/post-img1.png' },
-    { bar: '#553fe0', cover: true,    title: 'GoPro HERO13 Black',                                               desc: 'Best-in-Class 5.3K Video - 5.3K video delivers breathtaking image quality with 91% more resolution than 4K and an incredible 665% more than 1080p.', img: '/crazylog/post-img2.png' },
-    { bar: '#3b2f8a', rounded: true,  title: 'SONY FE 24-105 F4 G OSS',                                         desc: 'Bower 6-in-1 Multi Selfie Tripod with Smartphone & GoPro Mount, Rechargeable Wireless Remote - Black',                                                img: '/crazylog/post-img3.png' },
-    { bar: '#ff3535', isList: true,   title: '[Accessories] onn USB C/USB 2.0 Memory Card Reader for SD/Mic...', desc: 'SD and microSD card reader with USB and USB-C connectors for versatile connectivity',                                                                   img: '/crazylog/post-img4.png' },
-  ]
 </script>
 
 <!-- ═══════════════════════════════════════
@@ -156,7 +145,7 @@
             <img src="/crazylog/hero-shotlog.png" alt="" class="d-shotlog1-bg-img" />
           </div>
           <div class="d-shotlog1-header">
-            <span class="d-shotlog1-label">K-Trail log</span>
+            <span class="d-shotlog1-label">채널홍보</span>
             <svg width="13" height="13" viewBox="0 0 16 16" fill="none" style="transform:scaleY(-1)">
               <path d="M2 5L8 11L14 5" stroke="white" stroke-linecap="round" stroke-linejoin="round" stroke-width="3"/>
             </svg>
@@ -201,7 +190,7 @@
         {#each TABS as tab}
           <a href="/crazylog/list?tab={TAB_MAP[tab.label]}" class="d-index-btn">
             <span class="d-index-label">{tab.label}</span>
-            <span class="d-index-count-pill">{tab.count}</span>
+            <span class="d-index-count-pill">{data.counts[tab.countKey]}</span>
           </a>
         {/each}
       </div>
@@ -209,26 +198,22 @@
       <!-- PostsEng: 8 rows -->
       <!-- Figma: flex-col gap-[50px] -->
       <div class="d-posts">
-        {#each D_POSTS as post}
-          <article class="d-post">
-            <!-- Figma: IndexBar — 15px wide colored left bar -->
+        {#each data.posts as post}
+          <a href="/crazylog/view/{post.id}" class="d-post">
             <div class="d-post-bar" style="background:{post.bar}"></div>
-            <!-- Figma: Writing — flex-[7_0_0%] p-[40px] gap-[15px] -->
             <div class="d-post-writing">
+              <span class="d-post-log-type">{post.logType}</span>
               <p class="d-post-title">{post.title}</p>
-              {#if post.isList}
-                <ul class="d-post-desc-list">
-                  <li class="d-post-desc-list-item">{post.desc}</li>
-                </ul>
+              <p class="d-post-meta">{relativeTime(post.createdAt)}·by {post.author}</p>
+            </div>
+            <div class="d-post-img-wrap" style={post.rounded ? 'border-radius:0 30px 30px 0' : ''}>
+              {#if post.img}
+                <img src={post.img} alt={post.title} class="d-post-img" />
               {:else}
-                <p class="d-post-desc">{post.desc}</p>
+                <div class="d-post-img-placeholder" style="background:{post.bar}20"></div>
               {/if}
             </div>
-            <!-- Figma: Img — flex-[3_0_0%] h-[210px] -->
-            <div class="d-post-img-wrap" style={post.rounded ? 'border-radius:0 30px 30px 0' : ''}>
-              <img src={post.img} alt="" class="d-post-img" />
-            </div>
-          </article>
+          </a>
         {/each}
       </div>
 
@@ -337,14 +322,18 @@
   <!-- Component (콘텐츠): gradient bg + article cards -->
   <section class="m-content">
     <div class="m-content-inner">
-      {#each M_ARTICLES as article}
-        <a href="/crazylog/view/1" class="m-article">
-          <div class="m-article-img-wrap">
-            <img src={article.img} alt="" class="m-article-img" />
-          </div>
+      {#each data.posts as post}
+        <a href="/crazylog/view/{post.id}" class="m-article">
+          {#if post.img}
+            <div class="m-article-img-wrap">
+              <img src={post.img} alt={post.title} class="m-article-img" />
+            </div>
+          {/if}
           <div class="m-article-body">
-            <p class="m-article-title">{article.title}</p>
-            <p class="m-article-meta">{article.meta}</p>
+            <p class="m-article-title">{post.title}</p>
+            {#if post.desc}
+              <p class="m-article-meta">{post.desc}</p>
+            {/if}
           </div>
         </a>
       {/each}
@@ -715,11 +704,11 @@
     line-height: 2;
   }
 
-  /* Figma: PostsEng — flex-col gap-[50px] */
+  /* /list와 동일: gap 20px */
   .d-posts {
     display: flex;
     flex-direction: column;
-    gap: 50px;
+    gap: 20px;
   }
 
   /* list 카드 스타일 반영 */
@@ -730,7 +719,11 @@
     display: flex;
     align-items: stretch;
     height: 180px;
+    text-decoration: none;
+    cursor: pointer;
+    transition: box-shadow 0.2s;
   }
+  .d-post:hover { box-shadow: 0 4px 20px rgba(16,11,50,0.12); }
 
   /* D-7: grid card hover */
   .d-shotlog, .d-shotlog1, .d-shotlog2 { transition: transform 0.5s ease, box-shadow 0.5s ease; }
@@ -748,7 +741,7 @@
     flex-shrink: 0;
   }
 
-  /* list 스타일: writing 영역 — padding·gap 축소 */
+  /* writing 영역 — /list pc-text와 동일 구조 */
   .d-post-writing {
     flex: 7;
     min-width: 0;
@@ -758,41 +751,27 @@
     gap: 12px;
     padding: 24px 30px;
   }
-  /* list 카드 타이틀: 16px */
+  .d-post-log-type {
+    font: var(--text-pc-tag-11);
+    color: var(--cs-purple);
+    letter-spacing: 0.3px;
+    text-transform: uppercase;
+    margin: 0 0 4px;
+    display: block;
+  }
   .d-post-title {
-    font-family: 'Noto Sans KR', sans-serif;
-    font-size: 16px;
-    font-weight: 700;
+    font: var(--text-pc-title-16);
     color: var(--cs-text-dark);
     margin: 0;
-    line-height: 1.5;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
   }
-  .d-post-desc {
-    font-family: 'Noto Sans KR', sans-serif;
-    font-size: 14px;
-    font-weight: 700;
-    color: var(--cs-text-dark);
+  .d-post-meta {
+    font: var(--text-pc-script-12);
+    color: var(--cs-text-mid);
+    letter-spacing: -0.3px;
     margin: 0;
-    line-height: 1.5;
-    overflow: hidden;
-    display: -webkit-box;
-    -webkit-line-clamp: 2;
-    -webkit-box-orient: vertical;
-  }
-  /* isList 항목 — <ul><li> 형식 */
-  .d-post-desc-list {
-    margin: 0;
-    padding-left: 21px;
-  }
-  .d-post-desc-list-item {
-    font-family: 'Noto Sans KR', sans-serif;
-    font-size: 14px;
-    font-weight: 700;
-    color: var(--cs-text-dark);
-    line-height: 1.5;
   }
 
   /* list 스타일: 이미지 영역 */
@@ -811,6 +790,12 @@
     height: 100%;
     object-fit: cover;
     pointer-events: none;
+  }
+  .d-post-img-placeholder {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
   }
 
   /* ════════════════════════════════════════
