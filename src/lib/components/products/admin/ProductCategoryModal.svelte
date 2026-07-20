@@ -2,8 +2,8 @@
   import { invalidateAll } from '$app/navigation'
   import { supabase } from '$lib/services/supabase'
   import CmsDragList from '$lib/components/cms/CmsDragList.svelte'
-  import CmsSuggestPicker from '$lib/components/cms/CmsSuggestPicker.svelte'
-  import type { SuggestPickerOption } from '$lib/types/cms-suggest-picker'
+  import SuggestPicker from '$lib/components/common/SuggestPicker.svelte'
+  import type { SuggestPickerOption } from '$lib/types/suggest-picker'
 
   interface CategoryItem {
     id: string
@@ -235,7 +235,7 @@
   <!-- 스크롤 영역: 모달 내 전체 콘텐츠 -->
   <div class="modal-scroll">
     <p class="section-label">카테고리 선택</p>
-    <CmsSuggestPicker
+    <SuggestPicker
       id="cat-picker"
       bind:selectedId={pickerSelectedId}
       options={pickerOptions}
@@ -261,7 +261,7 @@
           autocomplete="off"
         />
       {/snippet}
-    </CmsSuggestPicker>
+    </SuggestPicker>
 
     <!-- ② 카테고리 추가목록 -->
     {#if selected.length > 0}
@@ -376,7 +376,7 @@
     </p>
 
     {#if selectedKeywords.length < 10}
-      <CmsSuggestPicker
+      <SuggestPicker
         id="kw-picker"
         bind:selectedId={kwPickerSelectedId}
         options={availableKwOptions}
@@ -402,7 +402,7 @@
             autocomplete="off"
           />
         {/snippet}
-      </CmsSuggestPicker>
+      </SuggestPicker>
     {:else}
       <p class="kw-max-hint">최대 10개 선택 완료</p>
     {/if}

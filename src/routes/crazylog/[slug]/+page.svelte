@@ -1,47 +1,194 @@
 <script lang="ts">
+	import { onMount } from 'svelte'
+	import { goto } from '$app/navigation'
+	import { supabase } from '$lib/services/supabase'
+	import type { PageData } from './$types'
+	import CmsContentEditor from '$lib/components/cms/CmsContentEditor.svelte'
+	import {
+		makeEmptyTextBlock,
+		makeEmptyImageBlock,
+		makeEmptyYoutubeBlock,
+		makeEmptyDividerBlock,
+		makeEmptyLinkEntryBlock,
+		type ContentBlock,
+	} from '$lib/types/content-editor'
+	import { resizeProductImage } from '$lib/utils/imageResize'
+
 	const LOG_TYPES = [
-		'일상 로그',
-		'여행 로그',
-		'맛집 로그',
-		'운동 로그',
-		'독서 로그',
-		'영화·드라마 로그',
-		'공부 로그',
-		'취미 로그'
+		'상품리뷰',
+		'일상공유',
+		'채널홍보',
 	]
 
-	import { onMount } from 'svelte'
+	interface Props {
+		data: PageData
+	}
+
+	let { data }: Props = $props()
+
+	const ep = data.existingPost
+	const isEdit = !!ep
 
 	onMount(() => {
 		document.body.classList.add('crazylog-write')
 		return () => document.body.classList.remove('crazylog-write')
 	})
 
-	let logType = $state('')
-	let title = $state('')
-	let content = $state('')
-	let tags = $state('')
+	// 폼 상태 (수정 모드 초기값 적용)
+	let logType = $state((ep?.log_type as string) ?? '')
+	let title = $state((ep?.title as string) ?? '')
+	let blocks = $state<ContentBlock[]>(
+		ep?.content_blocks && Array.isArray(ep.content_blocks) && (ep.content_blocks as ContentBlock[]).length > 0
+			? (ep.content_blocks as ContentBlock[])
+			: [makeEmptyTextBlock()]
+	)
+	let keywords = $state<string[]>((ep?.keywords as string[]) ?? [])
 	let typeOpen = $state(false)
+	let isSubmitting = $state(false)
+	let errorMsg = $state<string | null>(null)
 
-	// Mobile toggles
-	let logPublic = $state(false)
-	let commentNotify = $state(false)
+	// 공개/허용 옵션
+	let isPublic = $state((ep?.is_public as boolean) ?? true)
+	let allowComments = $state((ep?.allow_comments as boolean) ?? true)
+	let allowScrap = $state((ep?.allow_scrap as boolean) ?? true)
+	let allowAiSave = $state((ep?.allow_ai_save as boolean) ?? true)
+	let autoSource = $state((ep?.auto_source as boolean) ?? false)
+	let cclEnabled = $state(ep?.ccl != null)
 
-	// PC sidebar options
-	let memberPublic = $state(true)
-	let cafePublic = $state(false)
-	let cafeScrap = $state(true)
-	let aiSave = $state(true)
-	let autoSource = $state(false)
-	let ccl = $state(false)
+	// 유저 정보
+	const avatarChar = data.profile.displayName[0] ?? '?'
+	const avatarUrl = data.profile.avatarUrl
+	const membershipGrade = data.profile.membershipGrade
+	const level = data.profile.level
+
+	// 이모지 피커
+	const EMOJI_LIST = [
+		'😀','😂','🥰','😎','🤔','😭','😡','🥳',
+		'👍','👎','👏','🙏','💪','🤝','✌️','👋',
+		'❤️','💔','💯','🔥','⭐','✨','🎉','🎊',
+		'📷','🎬','🎵','🎮','📚','✏️','💡','🔑',
+		'🌸','🌊','⛅','🌙','🌈','🍕','☕','🍀',
+	]
+	let showEmojiPicker = $state(false)
+	let showLinkDialog = $state(false)
+
+	function insertEmoji(emoji: string) {
+		blocks = [...blocks, { type: 'text' as const, html: `<p>${emoji}</p>` }]
+		showEmojiPicker = false
+	}
+
+	// 파일 첨부 업로드
+	let attachFileInput: HTMLInputElement
+	const attachUploadPrefix = typeof globalThis !== 'undefined' && globalThis.crypto?.randomUUID
+		? 'log/' + globalThis.crypto.randomUUID()
+		: 'log/tmp'
+	let isAttachUploading = $state(false)
+
+	async function handleAttachFiles(files: FileList | null) {
+		if (!files || files.length === 0) return
+		isAttachUploading = true
+		for (const file of Array.from(files)) {
+			try {
+				const { thumb, large } = await resizeProductImage(file)
+				const fd = new FormData()
+				fd.append('product_id', attachUploadPrefix)
+				fd.append('thumb', new File([thumb], 'thumb.webp', { type: 'image/webp' }))
+				fd.append('large', new File([large], 'large.webp', { type: 'image/webp' }))
+				const res = await fetch('/api/cms/upload', { method: 'POST', body: fd })
+				if (res.ok) {
+					const json = await res.json() as { largeUrl: string }
+					blocks = [...blocks, { type: 'image', layout: 'individual', images: [{ url: json.largeUrl, alt: file.name }] }]
+				}
+			} catch { /* ignore */ }
+		}
+		isAttachUploading = false
+		if (attachFileInput) attachFileInput.value = ''
+	}
+
+	function insertLinkEntryBlock() {
+		blocks = [...blocks, makeEmptyLinkEntryBlock()]
+		showEmojiPicker = false
+	}
 
 	function selectType(t: string) {
 		logType = t
 		typeOpen = false
 	}
 
-	function handleSubmit() {
-		// submission logic — BACKLOG: BL-CRAZYLOG-SUBMIT
+	async function handleSubmit() {
+		errorMsg = null
+		if (!logType) { errorMsg = '로그 타입을 선택해주세요.'; return }
+		if (!title.trim()) { errorMsg = '제목을 입력해주세요.'; return }
+
+		// link-entry 블록은 저장 대상에서 제외 (미완성 입력폼)
+		blocks = blocks.filter(b => b.type !== 'link-entry')
+
+		const hasImage = blocks.some(
+			b => b.type === 'image' && Array.isArray((b as { images?: { url: string }[] }).images) &&
+				(b as { images: { url: string }[] }).images.some(img => img.url)
+		)
+		if (!hasImage) {
+			errorMsg = '1개 이상 이미지를 등록하세요.'
+			return
+		}
+
+		// Head 이미지 추출 (isHead=true인 첫 이미지 URL)
+		type ImageItem = { url: string; alt: string; isHead?: boolean }
+		type ImageBlockType = { type: 'image'; images: ImageItem[] }
+		let headImageUrl: string | null = null
+		for (const b of blocks) {
+			if (b.type !== 'image') continue
+			const imgBlock = b as ImageBlockType
+			const head = imgBlock.images.find(img => img.isHead && img.url)
+			if (head) { headImageUrl = head.url; break }
+		}
+
+		isSubmitting = true
+
+		try {
+			if (isEdit) {
+				// eslint-disable-next-line @typescript-eslint/no-explicit-any
+				const { error } = await (supabase.rpc as any)('update_user_post', {
+					p_id: ep!.id,
+					p_log_type: logType,
+					p_title: title.trim(),
+					p_content_blocks: blocks,
+					p_keywords: keywords,
+					p_tags: keywords,
+					p_is_public: isPublic,
+					p_allow_comments: allowComments,
+					p_allow_scrap: allowScrap,
+					p_allow_ai_save: allowAiSave,
+					p_auto_source: autoSource,
+					p_ccl: cclEnabled ? 'BY' : null,
+					p_thumbnail_url: headImageUrl,
+				})
+				if (error) throw new Error((error as { message: string }).message)
+			} else {
+				// eslint-disable-next-line @typescript-eslint/no-explicit-any
+				const { error } = await (supabase.rpc as any)('create_user_post', {
+					p_log_type: logType,
+					p_title: title.trim(),
+					p_content_blocks: blocks,
+					p_keywords: keywords,
+					p_tags: keywords,
+					p_is_public: isPublic,
+					p_allow_comments: allowComments,
+					p_allow_scrap: allowScrap,
+					p_allow_ai_save: allowAiSave,
+					p_auto_source: autoSource,
+					p_ccl: cclEnabled ? 'BY' : null,
+					p_thumbnail_url: headImageUrl,
+				})
+				if (error) throw new Error((error as { message: string }).message)
+			}
+
+			await goto('/crazylog/list')
+		} catch (e) {
+			errorMsg = e instanceof Error ? e.message : '등록 중 오류가 발생했습니다.'
+		} finally {
+			isSubmitting = false
+		}
 	}
 </script>
 
@@ -59,6 +206,15 @@
 <!-- ============================================================
      MOBILE LAYOUT
      ============================================================ -->
+<input
+	type="file"
+	accept="image/*"
+	multiple
+	style="display:none"
+	bind:this={attachFileInput}
+	onchange={(e) => handleAttachFiles((e.target as HTMLInputElement).files)}
+/>
+
 <div class="m-page">
 	<!-- Mobile GNB (custom — replaces common GNB on mobile) -->
 	<header class="m-gnb-wrap">
@@ -104,15 +260,23 @@
 	<div class="m-card">
 		<!-- User info card (compact) -->
 		<div class="m-user-card">
-			<div class="m-avatar">S</div>
+			<div class="m-avatar">
+				{#if avatarUrl}
+					<img src={avatarUrl} alt={data.profile.displayName} class="m-avatar-img" />
+				{:else}
+					{avatarChar}
+				{/if}
+			</div>
 			<div class="m-user-info">
 				<div class="m-user-row">
-					<span class="m-user-name">스티븐봉재</span>
-					<span class="m-user-badge">로그닷</span>
+					<span class="m-user-name">{data.profile.displayName}</span>
+					{#if membershipGrade && membershipGrade !== 'NONE'}
+						<span class="m-user-badge">{membershipGrade}</span>
+					{/if}
 				</div>
 				<div class="m-user-row">
-					<span class="m-user-level">LV.4MD</span>
-					<span class="m-user-cert">본인인증 · 내증서</span>
+					<span class="m-user-level">{level}</span>
+					<span class="m-user-cert">콘텐츠 {data.stats.postCount}개{data.stats.postViewCount !== null ? ` · 조회 ${data.stats.postViewCount}` : ''}</span>
 				</div>
 			</div>
 		</div>
@@ -165,10 +329,11 @@
 		<!-- Title input -->
 		<input class="m-input" type="text" placeholder="로그 제목" bind:value={title} />
 
-		<!-- Content editor (toolbar + textarea) -->
+		<!-- Content editor (toolbar + CmsContentEditor) -->
 		<div class="m-editor-box">
 			<div class="m-toolbar">
-				<button class="m-tb-btn" aria-label="이미지">
+				<button class="m-tb-btn" aria-label="이미지"
+					onclick={() => { blocks = [...blocks, makeEmptyImageBlock()] }}>
 					<svg width="20" height="20" viewBox="0 0 20 20" fill="none">
 						<rect x="2" y="4" width="16" height="13" rx="2" stroke="#444444" stroke-width="1.5" />
 						<circle cx="7" cy="8.5" r="1.5" fill="#444444" />
@@ -180,7 +345,8 @@
 						/>
 					</svg>
 				</button>
-				<button class="m-tb-btn" aria-label="동영상">
+				<button class="m-tb-btn" aria-label="동영상"
+					onclick={() => { blocks = [...blocks, makeEmptyYoutubeBlock()] }}>
 					<svg width="20" height="20" viewBox="0 0 20 20" fill="none">
 						<rect x="2" y="4" width="11" height="13" rx="2" stroke="#444444" stroke-width="1.5" />
 						<path
@@ -191,7 +357,8 @@
 						/>
 					</svg>
 				</button>
-				<button class="m-tb-btn" aria-label="텍스트">
+				<button class="m-tb-btn" aria-label="텍스트"
+					onclick={() => { blocks = [...blocks, makeEmptyTextBlock()] }}>
 					<svg width="20" height="20" viewBox="0 0 20 20" fill="none">
 						<path
 							d="M4 5h12M10 5v11M8 16h4"
@@ -201,7 +368,8 @@
 						/>
 					</svg>
 				</button>
-				<button class="m-tb-btn" aria-label="이모지">
+				<button class="m-tb-btn" aria-label="이모지" aria-expanded={showEmojiPicker}
+					onclick={() => { showEmojiPicker = !showEmojiPicker; showLinkDialog = false }}>
 					<svg width="20" height="20" viewBox="0 0 20 20" fill="none">
 						<circle cx="10" cy="10" r="7" stroke="#444444" stroke-width="1.5" />
 						<circle cx="7.5" cy="8.5" r="1" fill="#444444" />
@@ -214,13 +382,15 @@
 						/>
 					</svg>
 				</button>
-				<button class="m-tb-btn" aria-label="인용">
+				<button class="m-tb-btn" aria-label="인용"
+					onclick={() => { blocks = [...blocks, { type: 'text', html: '<blockquote>인용문을 입력하세요.</blockquote>' }]; showEmojiPicker = false; showLinkDialog = false }}>
 					<svg width="20" height="20" viewBox="0 0 20 20" fill="none">
 						<rect x="4" y="7" width="3" height="6" rx="1" fill="#444444" />
 						<rect x="10" y="7" width="3" height="6" rx="1" fill="#444444" />
 					</svg>
 				</button>
-				<button class="m-tb-btn" aria-label="구분선">
+				<button class="m-tb-btn" aria-label="구분선"
+					onclick={() => { blocks = [...blocks, makeEmptyDividerBlock()]; showEmojiPicker = false; showLinkDialog = false }}>
 					<svg width="20" height="20" viewBox="0 0 20 20" fill="none">
 						<path
 							d="M3 10h14"
@@ -231,7 +401,8 @@
 						/>
 					</svg>
 				</button>
-				<button class="m-tb-btn" aria-label="링크">
+				<button class="m-tb-btn" aria-label="링크"
+					onclick={insertLinkEntryBlock}>
 					<svg width="20" height="20" viewBox="0 0 20 20" fill="none">
 						<path
 							d="M8 12a4 4 0 0 0 5.66 0l2-2a4 4 0 0 0-5.66-5.66L9 5.34"
@@ -247,7 +418,8 @@
 						/>
 					</svg>
 				</button>
-				<button class="m-tb-btn" aria-label="첨부파일">
+				<button class="m-tb-btn" aria-label="첨부파일" disabled={isAttachUploading}
+					onclick={() => { showEmojiPicker = false; attachFileInput.click() }}>
 					<svg width="20" height="20" viewBox="0 0 20 20" fill="none">
 						<path
 							d="M16 8l-7 7a4 4 0 0 1-5.66-5.66l7-7A2.5 2.5 0 0 1 14 5.87L7 12.87A1 1 0 0 1 5.59 11.5L12 5"
@@ -259,82 +431,126 @@
 					</svg>
 				</button>
 			</div>
-			<textarea
-				class="m-textarea"
-				placeholder="로그 내용을 입력해주세요"
-				bind:value={content}
-			></textarea>
+			{#if showEmojiPicker}
+				<div class="emoji-panel">
+					{#each EMOJI_LIST as emoji}
+						<button class="emoji-btn" onclick={() => insertEmoji(emoji)} aria-label={emoji}>{emoji}</button>
+					{/each}
+				</div>
+			{/if}
+			<div class="m-editor-inner">
+				<CmsContentEditor bind:blocks bind:keywords hideMediaToolbar={true} />
+			</div>
 		</div>
-
-		<!-- Tags input -->
-		<input class="m-input" type="text" placeholder="# 태그 추가 (최대 10개)" bind:value={tags} />
 
 		<!-- Content options -->
-		<div class="m-content-options">
-			<h3 class="m-opts-heading">공개 설정</h3>
-			<label class="m-check-row"><input type="checkbox" bind:checked={memberPublic} />멤버공개</label>
-			<label class="m-check-row"><input type="checkbox" bind:checked={cafePublic} />카페 · 네이버 서비스 공개</label>
-			<div class="m-divider"></div>
-			<h3 class="m-opts-heading">댓글 허용</h3>
-			<label class="m-check-row"><input type="checkbox" bind:checked={cafeScrap} />카페 · 블로그 스크랩 허용</label>
-			<label class="m-check-row"><input type="checkbox" bind:checked={aiSave} />AI · 자동 저장 허용</label>
-			<div class="m-divider"></div>
-			<label class="m-check-row"><input type="checkbox" bind:checked={autoSource} />자동출처 사용</label>
-			<label class="m-check-row"><input type="checkbox" bind:checked={ccl} />CCL 사용</label>
-		</div>
-
 		<!-- Options (toggles) -->
 		<div class="m-options">
+			<h3 class="m-opts-heading">공개설정</h3>
 			<div class="m-toggle-row">
-				<span class="m-toggle-label">로그 공개</span>
+				<span class="m-toggle-label">보류 <span class="m-toggle-hint">(목록 숨김)</span></span>
 				<button
-					class="m-toggle"
-					class:m-toggle-on={logPublic}
-					onclick={() => (logPublic = !logPublic)}
+					class="m-toggle m-toggle-hold"
+					class:m-toggle-on={!isPublic}
+					onclick={() => (isPublic = !isPublic)}
 					role="switch"
-					aria-checked={logPublic}
-					aria-label="로그 공개"
+					aria-checked={!isPublic}
+					aria-label="보류 — 목록에서 숨김"
 				>
 					<span class="m-toggle-thumb"></span>
 				</button>
 			</div>
 			<div class="m-toggle-row">
-				<span class="m-toggle-label">댓글 알림</span>
+				<span class="m-toggle-label">멤버공개</span>
 				<button
 					class="m-toggle"
-					class:m-toggle-on={commentNotify}
-					onclick={() => (commentNotify = !commentNotify)}
+					class:m-toggle-on={isPublic}
+					onclick={() => (isPublic = !isPublic)}
 					role="switch"
-					aria-checked={commentNotify}
-					aria-label="댓글 알림"
+					aria-checked={isPublic}
+					aria-label="멤버공개"
 				>
 					<span class="m-toggle-thumb"></span>
 				</button>
 			</div>
-			<p class="m-options-hint">내정보에서 모든 로그를 볼 수 있음</p>
+			<div class="m-divider"></div>
+			<h3 class="m-opts-heading">댓글허용</h3>
+			<div class="m-toggle-row">
+				<span class="m-toggle-label">댓글 허용</span>
+				<button
+					class="m-toggle"
+					class:m-toggle-on={allowComments}
+					onclick={() => (allowComments = !allowComments)}
+					role="switch"
+					aria-checked={allowComments}
+					aria-label="댓글 허용"
+				>
+					<span class="m-toggle-thumb"></span>
+				</button>
+			</div>
+			<div class="m-toggle-row">
+				<span class="m-toggle-label">카페·블로그 스크랩</span>
+				<button
+					class="m-toggle"
+					class:m-toggle-on={allowScrap}
+					onclick={() => (allowScrap = !allowScrap)}
+					role="switch"
+					aria-checked={allowScrap}
+					aria-label="카페·블로그 스크랩 허용"
+				>
+					<span class="m-toggle-thumb"></span>
+				</button>
+			</div>
+			<div class="m-toggle-row">
+				<span class="m-toggle-label">AI·자동 저장</span>
+				<button
+					class="m-toggle"
+					class:m-toggle-on={allowAiSave}
+					onclick={() => (allowAiSave = !allowAiSave)}
+					role="switch"
+					aria-checked={allowAiSave}
+					aria-label="AI·자동 저장 허용"
+				>
+					<span class="m-toggle-thumb"></span>
+				</button>
+			</div>
+			<div class="m-divider"></div>
+			<h3 class="m-opts-heading">기타</h3>
+			<div class="m-toggle-row">
+				<span class="m-toggle-label">자동출처</span>
+				<button
+					class="m-toggle"
+					class:m-toggle-on={autoSource}
+					onclick={() => (autoSource = !autoSource)}
+					role="switch"
+					aria-checked={autoSource}
+					aria-label="자동출처 사용"
+				>
+					<span class="m-toggle-thumb"></span>
+				</button>
+			</div>
+			<div class="m-toggle-row">
+				<span class="m-toggle-label">CCL</span>
+				<button
+					class="m-toggle"
+					class:m-toggle-on={cclEnabled}
+					onclick={() => (cclEnabled = !cclEnabled)}
+					role="switch"
+					aria-checked={cclEnabled}
+					aria-label="CCL 사용"
+				>
+					<span class="m-toggle-thumb"></span>
+				</button>
+			</div>
 		</div>
 
+		{#if errorMsg}
+			<p role="alert" class="m-error">{errorMsg}</p>
+		{/if}
+
 		<!-- Submit button -->
-		<button class="m-submit" onclick={handleSubmit}>
-			<svg width="15" height="10" viewBox="0 0 17 12" fill="none">
-				<path
-					d="M16 6H1M5.615 1L1 6l4.615 5"
-					stroke="#AAAAAA"
-					stroke-width="2"
-					stroke-linecap="round"
-					stroke-linejoin="round"
-				/>
-			</svg>
-			<span>로그 등록</span>
-			<svg class="m-submit-r" width="15" height="10" viewBox="0 0 17 12" fill="none">
-				<path
-					d="M16 6H1M5.615 1L1 6l4.615 5"
-					stroke="#AAAAAA"
-					stroke-width="2"
-					stroke-linecap="round"
-					stroke-linejoin="round"
-				/>
-			</svg>
+		<button class="m-submit" onclick={handleSubmit} disabled={isSubmitting}>
+			<span>{isSubmitting ? '등록 중...' : isEdit ? '로그 수정' : '로그 등록'}</span>
 		</button>
 	</div>
 </div>
@@ -406,152 +622,84 @@
 				<!-- Title input -->
 				<input class="d-input" type="text" placeholder="로그 제목" bind:value={title} />
 
-				<!-- Content editor (toolbar + textarea) -->
+				<!-- Content editor (toolbar + CmsContentEditor) -->
 				<div class="d-editor-box">
 					<div class="d-toolbar">
-						<button class="d-tb-btn" aria-label="이미지">
+						<button class="d-tb-btn" aria-label="이미지"
+							onclick={() => { blocks = [...blocks, makeEmptyImageBlock()] }}>
 							<svg width="20" height="20" viewBox="0 0 20 20" fill="none">
-								<rect
-									x="2"
-									y="4"
-									width="16"
-									height="13"
-									rx="2"
-									stroke="#444444"
-									stroke-width="1.5"
-								/>
+								<rect x="2" y="4" width="16" height="13" rx="2" stroke="#444444" stroke-width="1.5" />
 								<circle cx="7" cy="8.5" r="1.5" fill="#444444" />
-								<path
-									d="M2 14l4-4 3 3 3-3 4 4"
-									stroke="#444444"
-									stroke-width="1.5"
-									stroke-linecap="round"
-								/>
+								<path d="M2 14l4-4 3 3 3-3 4 4" stroke="#444444" stroke-width="1.5" stroke-linecap="round" />
 							</svg>
 						</button>
-						<button class="d-tb-btn" aria-label="동영상">
+						<button class="d-tb-btn" aria-label="동영상"
+							onclick={() => { blocks = [...blocks, makeEmptyYoutubeBlock()] }}>
 							<svg width="20" height="20" viewBox="0 0 20 20" fill="none">
-								<rect
-									x="2"
-									y="4"
-									width="11"
-									height="13"
-									rx="2"
-									stroke="#444444"
-									stroke-width="1.5"
-								/>
-								<path
-									d="M13 8l5-3v10l-5-3V8Z"
-									stroke="#444444"
-									stroke-width="1.5"
-									stroke-linejoin="round"
-								/>
+								<rect x="2" y="4" width="11" height="13" rx="2" stroke="#444444" stroke-width="1.5" />
+								<path d="M13 8l5-3v10l-5-3V8Z" stroke="#444444" stroke-width="1.5" stroke-linejoin="round" />
 							</svg>
 						</button>
-						<button class="d-tb-btn" aria-label="텍스트">
+						<button class="d-tb-btn" aria-label="텍스트"
+							onclick={() => { blocks = [...blocks, makeEmptyTextBlock()] }}>
 							<svg width="20" height="20" viewBox="0 0 20 20" fill="none">
-								<path
-									d="M4 5h12M10 5v11M8 16h4"
-									stroke="#444444"
-									stroke-width="1.5"
-									stroke-linecap="round"
-								/>
+								<path d="M4 5h12M10 5v11M8 16h4" stroke="#444444" stroke-width="1.5" stroke-linecap="round" />
 							</svg>
 						</button>
-						<button class="d-tb-btn" aria-label="이모지">
+						<button class="d-tb-btn" aria-label="이모지" aria-expanded={showEmojiPicker}
+							onclick={() => { showEmojiPicker = !showEmojiPicker; showLinkDialog = false }}>
 							<svg width="20" height="20" viewBox="0 0 20 20" fill="none">
 								<circle cx="10" cy="10" r="7" stroke="#444444" stroke-width="1.5" />
 								<circle cx="7.5" cy="8.5" r="1" fill="#444444" />
 								<circle cx="12.5" cy="8.5" r="1" fill="#444444" />
-								<path
-									d="M7 13c.8 1.2 5.2 1.2 6 0"
-									stroke="#444444"
-									stroke-width="1.5"
-									stroke-linecap="round"
-								/>
+								<path d="M7 13c.8 1.2 5.2 1.2 6 0" stroke="#444444" stroke-width="1.5" stroke-linecap="round" />
 							</svg>
 						</button>
-						<button class="d-tb-btn" aria-label="인용">
+						<button class="d-tb-btn" aria-label="인용"
+							onclick={() => { blocks = [...blocks, { type: 'text', html: '<blockquote>인용문을 입력하세요.</blockquote>' }]; showEmojiPicker = false; showLinkDialog = false }}>
 							<svg width="20" height="20" viewBox="0 0 20 20" fill="none">
 								<rect x="4" y="7" width="3" height="6" rx="1" fill="#444444" />
 								<rect x="10" y="7" width="3" height="6" rx="1" fill="#444444" />
 							</svg>
 						</button>
-						<button class="d-tb-btn" aria-label="구분선">
+						<button class="d-tb-btn" aria-label="구분선"
+							onclick={() => { blocks = [...blocks, makeEmptyDividerBlock()]; showEmojiPicker = false }}>
 							<svg width="20" height="20" viewBox="0 0 20 20" fill="none">
-								<path
-									d="M3 10h14"
-									stroke="#444444"
-									stroke-width="1.5"
-									stroke-linecap="round"
-									stroke-dasharray="2 2"
-								/>
+								<path d="M3 10h14" stroke="#444444" stroke-width="1.5" stroke-linecap="round" stroke-dasharray="2 2" />
 							</svg>
 						</button>
-						<button class="d-tb-btn" aria-label="링크">
+						<button class="d-tb-btn" aria-label="링크"
+							onclick={insertLinkEntryBlock}>
 							<svg width="20" height="20" viewBox="0 0 20 20" fill="none">
-								<path
-									d="M8 12a4 4 0 0 0 5.66 0l2-2a4 4 0 0 0-5.66-5.66L9 5.34"
-									stroke="#444444"
-									stroke-width="1.5"
-									stroke-linecap="round"
-								/>
-								<path
-									d="M12 8a4 4 0 0 0-5.66 0l-2 2a4 4 0 0 0 5.66 5.66L11 14.66"
-									stroke="#444444"
-									stroke-width="1.5"
-									stroke-linecap="round"
-								/>
+								<path d="M8 12a4 4 0 0 0 5.66 0l2-2a4 4 0 0 0-5.66-5.66L9 5.34" stroke="#444444" stroke-width="1.5" stroke-linecap="round" />
+								<path d="M12 8a4 4 0 0 0-5.66 0l-2 2a4 4 0 0 0 5.66 5.66L11 14.66" stroke="#444444" stroke-width="1.5" stroke-linecap="round" />
 							</svg>
 						</button>
-						<button class="d-tb-btn" aria-label="첨부파일">
+						<button class="d-tb-btn" aria-label="첨부파일" disabled={isAttachUploading}
+							onclick={() => { showEmojiPicker = false; attachFileInput.click() }}>
 							<svg width="20" height="20" viewBox="0 0 20 20" fill="none">
-								<path
-									d="M16 8l-7 7a4 4 0 0 1-5.66-5.66l7-7A2.5 2.5 0 0 1 14 5.87L7 12.87A1 1 0 0 1 5.59 11.5L12 5"
-									stroke="#444444"
-									stroke-width="1.5"
-									stroke-linecap="round"
-									stroke-linejoin="round"
-								/>
+								<path d="M16 8l-7 7a4 4 0 0 1-5.66-5.66l7-7A2.5 2.5 0 0 1 14 5.87L7 12.87A1 1 0 0 1 5.59 11.5L12 5" stroke="#444444" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" />
 							</svg>
 						</button>
 					</div>
-					<textarea
-						class="d-textarea"
-						placeholder="로그 내용을 입력해주세요"
-						bind:value={content}
-					></textarea>
+					{#if showEmojiPicker}
+						<div class="emoji-panel">
+							{#each EMOJI_LIST as emoji}
+								<button class="emoji-btn" onclick={() => insertEmoji(emoji)} aria-label={emoji}>{emoji}</button>
+							{/each}
+						</div>
+					{/if}
+					<div class="d-editor-inner">
+						<CmsContentEditor bind:blocks bind:keywords hideMediaToolbar={true} />
+					</div>
 				</div>
 
-				<!-- Tags -->
-				<input
-					class="d-input"
-					type="text"
-					placeholder="# 태그 추가 (최대 10개)"
-					bind:value={tags}
-				/>
-
 				<!-- Submit -->
-				<button class="d-submit" onclick={handleSubmit}>
-					<svg width="15" height="10" viewBox="0 0 17 12" fill="none">
-						<path
-							d="M16 6H1M5.615 1L1 6l4.615 5"
-							stroke="#AAAAAA"
-							stroke-width="2"
-							stroke-linecap="round"
-							stroke-linejoin="round"
-						/>
-					</svg>
-					<span>로그 등록</span>
-					<svg class="d-submit-r" width="15" height="10" viewBox="0 0 17 12" fill="none">
-						<path
-							d="M16 6H1M5.615 1L1 6l4.615 5"
-							stroke="#AAAAAA"
-							stroke-width="2"
-							stroke-linecap="round"
-							stroke-linejoin="round"
-						/>
-					</svg>
+				{#if errorMsg}
+					<p role="alert" class="d-error">{errorMsg}</p>
+				{/if}
+				<button class="d-submit" onclick={handleSubmit} disabled={isSubmitting}>
+					<span>{isSubmitting ? '등록 중...' : isEdit ? '로그 수정' : '로그 등록'}</span>
 				</button>
 			</div>
 
@@ -559,23 +707,33 @@
 			<aside class="d-sidebar">
 				<!-- User info card -->
 				<div class="d-user-card">
-					<div class="d-avatar">S</div>
+					<div class="d-avatar">
+						{#if avatarUrl}
+							<img src={avatarUrl} alt={data.profile.displayName} class="d-avatar-img" />
+						{:else}
+							{avatarChar}
+						{/if}
+					</div>
 					<div class="d-user-meta">
 						<div class="d-user-name-row">
-							<span class="d-user-name">스티븐봉재</span>
-							<span class="d-user-badge">로그닷</span>
+							<span class="d-user-name">{data.profile.displayName}</span>
+							{#if membershipGrade && membershipGrade !== 'NONE'}
+								<span class="d-user-badge">{membershipGrade}</span>
+							{/if}
+							<span class="d-user-level">{level}</span>
 						</div>
-						<span class="d-user-level">LV.4MD</span>
 					</div>
 					<div class="d-user-stats">
 						<div class="d-stat-tile">
-							<span class="d-stat-label">내블로그</span>
-							<span class="d-stat-value">0</span>
+							<span class="d-stat-label">로그</span>
+							<span class="d-stat-value">{data.stats.postCount}</span>
 						</div>
+						{#if data.stats.postViewCount !== null}
 						<div class="d-stat-tile">
-							<span class="d-stat-label">임시등록</span>
-							<span class="d-stat-value">0</span>
+							<span class="d-stat-label">조회</span>
+							<span class="d-stat-value">{data.stats.postViewCount}</span>
 						</div>
+						{/if}
 					</div>
 				</div>
 
@@ -583,36 +741,103 @@
 				<div class="d-options-card">
 					<div class="d-opts-section">
 						<h3 class="d-opts-heading">공개설정</h3>
-						<label class="d-check-row">
-							<input type="checkbox" class="d-checkbox" bind:checked={memberPublic} />
-							<span>멤버공개</span>
-						</label>
-						<label class="d-check-row">
-							<input type="checkbox" class="d-checkbox" bind:checked={cafePublic} />
-							<span>카페·네이버 서비스 공개</span>
-						</label>
+						<div class="d-opt-row">
+							<span class="d-opt-label" class:d-hold-active={!isPublic}>보류 <span class="m-toggle-hint">(목록 숨김)</span></span>
+							<button
+								class="m-toggle m-toggle-hold"
+								class:m-toggle-on={!isPublic}
+								onclick={() => (isPublic = !isPublic)}
+								role="switch"
+								aria-checked={!isPublic}
+								aria-label="보류 — 목록에서 숨김"
+							>
+								<span class="m-toggle-thumb"></span>
+							</button>
+						</div>
+						<div class="d-opt-row">
+							<span class="d-opt-label">멤버공개</span>
+							<button
+								class="m-toggle"
+								class:m-toggle-on={isPublic}
+								onclick={() => (isPublic = !isPublic)}
+								role="switch"
+								aria-checked={isPublic}
+								aria-label="멤버공개"
+							>
+								<span class="m-toggle-thumb"></span>
+							</button>
+						</div>
 					</div>
 					<div class="d-opts-section">
 						<h3 class="d-opts-heading">댓글허용</h3>
-						<label class="d-check-row">
-							<input type="checkbox" class="d-checkbox" bind:checked={cafeScrap} />
-							<span>카페·블로그 스크랩</span>
-						</label>
-						<label class="d-check-row">
-							<input type="checkbox" class="d-checkbox" bind:checked={aiSave} />
-							<span>AI·자동 저장</span>
-						</label>
+						<div class="d-opt-row">
+							<span class="d-opt-label">댓글 허용</span>
+							<button
+								class="m-toggle"
+								class:m-toggle-on={allowComments}
+								onclick={() => (allowComments = !allowComments)}
+								role="switch"
+								aria-checked={allowComments}
+								aria-label="댓글 허용"
+							>
+								<span class="m-toggle-thumb"></span>
+							</button>
+						</div>
+						<div class="d-opt-row">
+							<span class="d-opt-label">카페·블로그 스크랩</span>
+							<button
+								class="m-toggle"
+								class:m-toggle-on={allowScrap}
+								onclick={() => (allowScrap = !allowScrap)}
+								role="switch"
+								aria-checked={allowScrap}
+								aria-label="카페·블로그 스크랩 허용"
+							>
+								<span class="m-toggle-thumb"></span>
+							</button>
+						</div>
+						<div class="d-opt-row">
+							<span class="d-opt-label">AI·자동 저장</span>
+							<button
+								class="m-toggle"
+								class:m-toggle-on={allowAiSave}
+								onclick={() => (allowAiSave = !allowAiSave)}
+								role="switch"
+								aria-checked={allowAiSave}
+								aria-label="AI·자동 저장 허용"
+							>
+								<span class="m-toggle-thumb"></span>
+							</button>
+						</div>
 					</div>
 					<div class="d-opts-section">
 						<h3 class="d-opts-heading">기타</h3>
-						<label class="d-check-row">
-							<input type="checkbox" class="d-checkbox" bind:checked={autoSource} />
-							<span>자동출처</span>
-						</label>
-						<label class="d-check-row">
-							<input type="checkbox" class="d-checkbox" bind:checked={ccl} />
-							<span>CCL</span>
-						</label>
+						<div class="d-opt-row">
+							<span class="d-opt-label">자동출처</span>
+							<button
+								class="m-toggle"
+								class:m-toggle-on={autoSource}
+								onclick={() => (autoSource = !autoSource)}
+								role="switch"
+								aria-checked={autoSource}
+								aria-label="자동출처 사용"
+							>
+								<span class="m-toggle-thumb"></span>
+							</button>
+						</div>
+						<div class="d-opt-row">
+							<span class="d-opt-label">CCL</span>
+							<button
+								class="m-toggle"
+								class:m-toggle-on={cclEnabled}
+								onclick={() => (cclEnabled = !cclEnabled)}
+								role="switch"
+								aria-checked={cclEnabled}
+								aria-label="CCL 사용"
+							>
+								<span class="m-toggle-thumb"></span>
+							</button>
+						</div>
 					</div>
 				</div>
 			</aside>
@@ -725,33 +950,39 @@
 		gap: 12px;
 		background: var(--cs-surface-gray);
 		border-radius: var(--radius-lg);
-		padding: 14px 16px;
+		padding: 15px 18px;
 	}
 
 	.m-avatar {
-		width: 44px;
-		height: 44px;
+		width: 53px;
+		height: 53px;
 		border-radius: 50%;
 		background: linear-gradient(135deg, var(--cs-purple) 0%, var(--cs-red-badge) 100%);
 		display: flex;
 		align-items: center;
 		justify-content: center;
-		font-size: 18px;
+		font-size: 21px;
 		font-weight: 900;
 		color: var(--cs-white);
 		flex-shrink: 0;
+		overflow: hidden;
+	}
+	.m-avatar-img {
+		width: 100%;
+		height: 100%;
+		object-fit: cover;
+		border-radius: 50%;
 	}
 
 	.m-user-info {
 		display: flex;
-		flex-direction: column;
-		gap: 4px;
+		flex-direction: row;
+		align-items: center;
+		gap: 6px;
 	}
 
 	.m-user-row {
-		display: flex;
-		align-items: center;
-		gap: 6px;
+		display: contents;
 	}
 
 	.m-user-name {
@@ -779,46 +1010,16 @@
 	}
 
 	.m-user-cert {
-		font-size: 11px;
+		font: var(--text-m-script-12);
 		color: #888888;
 	}
 
 	/* Content options */
-	.m-content-options {
-		display: flex;
-		flex-direction: column;
-		gap: 12px;
-		background: var(--cs-surface-gray);
-		border-radius: var(--radius-lg);
-		padding: 20px;
-	}
-
 	.m-opts-heading {
-		font-size: 13px;
-		font-weight: 700;
+		font: var(--text-m-title-18B);
 		color: var(--cs-text);
 		margin: 0;
 		letter-spacing: -0.3px;
-	}
-
-	.m-check-row {
-		display: flex;
-		align-items: center;
-		gap: 10px;
-		font-size: 13px;
-		font-weight: 500;
-		color: var(--cs-text-dark);
-		cursor: pointer;
-		min-height: 44px;
-		letter-spacing: -0.3px;
-	}
-
-	.m-check-row input[type='checkbox'] {
-		width: 16px;
-		height: 16px;
-		accent-color: var(--cs-purple-light);
-		cursor: pointer;
-		flex-shrink: 0;
 	}
 
 	.m-divider {
@@ -840,7 +1041,7 @@
 		background: var(--cs-surface-gray);
 		border: none;
 		border-radius: var(--radius-md);
-		padding: 10px 20px;
+		padding: 11px 22px;
 		cursor: pointer;
 		text-align: left;
 	}
@@ -903,6 +1104,7 @@
 		font-weight: 700;
 	}
 
+
 	/* Text input */
 	.m-input {
 		display: block;
@@ -911,8 +1113,8 @@
 		background: var(--cs-surface-gray);
 		border: none;
 		border-radius: var(--radius-md);
-		padding: 10px 20px;
-		font: var(--text-m-script-14);
+		padding: 11px 22px;
+		font: var(--text-m-body-16B);
 		color: var(--cs-text);
 		letter-spacing: -0.5px;
 	}
@@ -962,87 +1164,142 @@
 		background: rgba(59, 47, 138, 0.08);
 	}
 
-	.m-textarea {
-		min-height: 280px;
+	.m-editor-inner {
 		background: var(--cs-surface-gray);
+		min-height: 280px;
+	}
+
+	/* 이모지 피커 패널 */
+	.emoji-panel {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 2px;
+		padding: 10px 12px;
+		background: var(--cs-white);
+		border-bottom: 1px solid var(--cs-border);
+	}
+
+	.emoji-btn {
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		width: 36px;
+		height: 36px;
+		font-size: 20px;
+		background: none;
 		border: none;
+		border-radius: 8px;
+		cursor: pointer;
+		line-height: 1;
+		padding: 0;
+		transition: background 0.12s;
+	}
+
+	.emoji-btn:hover {
+		background: rgba(59, 47, 138, 0.08);
+	}
+
+	/* 링크 다이얼로그 패널 */
+	/* CmsContentEditor 내부 스타일 override — 사용자 화면 적응 */
+	.m-editor-inner :global(.cms-editor) {
+		background: transparent;
+		border: none;
+		padding: 0;
+	}
+	.m-editor-inner :global(.fmt-toolbar) {
+		background: var(--cs-surface-gray);
+		border-bottom: 1px solid var(--cs-border);
+		position: sticky;
+		top: 0;
+		z-index: 5;
+	}
+	.m-editor-inner :global(.ce-block-wrap) {
+		padding: 12px 16px;
+	}
+	.m-editor-inner :global(.empty-hint) {
 		padding: 16px 20px;
 		font: var(--text-m-body-16L);
-		color: var(--cs-text);
-		resize: vertical;
-		letter-spacing: -0.5px;
-		line-height: 1.6;
-		width: 100%;
-		box-sizing: border-box;
-	}
-
-	.m-textarea::placeholder {
 		color: var(--cs-text-placeholder);
-	}
-
-	.m-textarea:focus {
-		outline: none;
 	}
 
 	/* Toggle options */
 	.m-options {
 		display: flex;
 		flex-direction: column;
-		gap: 20px;
+		gap: 4px;
+		background: var(--cs-surface-gray);
+		border-radius: var(--radius-lg);
+		padding: 16px 20px;
+	}
+
+	.m-options .m-opts-heading {
+		margin: 8px 0 4px;
+	}
+
+	.m-options .m-opts-heading:first-child {
+		margin-top: 0;
+	}
+
+	.m-options .m-divider {
+		margin: 8px 0;
 	}
 
 	.m-toggle-row {
 		display: flex;
 		align-items: center;
 		justify-content: space-between;
+		min-height: 44px;
 	}
 
 	.m-toggle-label {
-		font: var(--text-m-script-14);
-		color: var(--cs-text-dark);
+		font: var(--text-m-body-16B);
+		color: var(--cs-text-mid);
 		letter-spacing: -0.5px;
+	}
+
+	.m-toggle-hint {
+		font: var(--text-m-script-12);
+		color: var(--cs-text-light);
+	}
+
+	.m-toggle-hold.m-toggle-on {
+		background: var(--cs-orange);
 	}
 
 	.m-toggle {
 		position: relative;
-		width: 32px;
+		width: 36px;
 		height: 20px;
 		flex-shrink: 0;
-		background: var(--cs-text-dark);
+		background: var(--cs-disabled-toggle);
 		border: none;
 		border-radius: 100px;
 		cursor: pointer;
-		padding: 3px;
-		display: flex;
-		align-items: center;
-		justify-content: flex-start;
+		padding: 2px;
 		transition: background 0.2s;
-		/* extend touch area */
-		margin: -12px 0;
-		padding-block: 12px;
-		padding-inline: 3px;
-		box-sizing: content-box;
+		box-sizing: border-box;
 	}
 
 	.m-toggle.m-toggle-on {
 		background: var(--cs-purple);
-		justify-content: flex-end;
+	}
+
+	.m-toggle.m-toggle-on .m-toggle-thumb {
+		transform: translateX(16px);
 	}
 
 	.m-toggle-thumb {
-		width: 14px;
-		height: 14px;
+		position: absolute;
+		top: 2px;
+		left: 2px;
+		width: 16px;
+		height: 16px;
 		background: var(--cs-white);
 		border-radius: 50%;
-		flex-shrink: 0;
+		transition: transform 0.2s;
+		box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
 	}
 
-	.m-options-hint {
-		font: var(--text-m-script-12);
-		color: var(--cs-text-light);
-		letter-spacing: -0.5px;
-		margin: 0;
-	}
 
 	/* Submit button */
 	.m-submit {
@@ -1051,26 +1308,33 @@
 		justify-content: center;
 		gap: 15px;
 		width: 100%;
-		max-width: 340px;
 		margin: 0 auto;
-		padding: 15px 20px;
+		padding: 17px 22px;
 		background: var(--cs-text-dark);
 		color: var(--cs-white);
 		border: none;
 		border-radius: var(--radius-xl);
-		font: var(--text-m-body-16B);
+		font: var(--text-m-title-18B);
 		cursor: pointer;
 		letter-spacing: -0.5px;
 		min-height: 44px;
 		transition: opacity 0.15s;
 	}
 
-	.m-submit:hover {
+	.m-submit:hover:not(:disabled) {
 		opacity: 0.85;
 	}
 
-	.m-submit-r {
-		transform: rotate(180deg) scaleY(-1);
+	.m-submit:disabled {
+		opacity: 0.5;
+		cursor: not-allowed;
+	}
+
+	.m-error {
+		font: var(--text-m-script-12);
+		color: var(--cs-red);
+		margin: 0;
+		letter-spacing: -0.3px;
 	}
 
 	/* ──────────────────────────────────────────────
@@ -1152,7 +1416,7 @@
 
 	/* Editor card */
 	.d-editor-card {
-		flex: 1;
+		flex: 4 1 0;
 		background: var(--cs-white);
 		border-radius: var(--radius-xl);
 		padding: 40px;
@@ -1176,13 +1440,13 @@
 		background: var(--cs-surface-gray);
 		border: none;
 		border-radius: var(--radius-md);
-		padding: 10px 20px;
+		padding: 11px 22px;
 		cursor: pointer;
 		text-align: left;
 	}
 
 	.d-select-label {
-		font: var(--text-pc-body-14);
+		font: var(--text-pc-title-16);
 		color: var(--cs-text);
 		letter-spacing: -0.5px;
 	}
@@ -1239,6 +1503,7 @@
 		font-weight: 700;
 	}
 
+
 	/* Input */
 	.d-input {
 		display: block;
@@ -1247,8 +1512,8 @@
 		background: var(--cs-surface-gray);
 		border: none;
 		border-radius: var(--radius-md);
-		padding: 10px 20px;
-		font: var(--text-pc-body-14);
+		padding: 11px 22px;
+		font: var(--text-pc-title-18);
 		color: var(--cs-text);
 		letter-spacing: -0.5px;
 	}
@@ -1297,26 +1562,31 @@
 		background: rgba(59, 47, 138, 0.08);
 	}
 
-	.d-textarea {
-		min-height: 280px;
+	.d-editor-inner {
 		background: var(--cs-surface-gray);
+		min-height: 280px;
+	}
+
+	/* CmsContentEditor 내부 스타일 override — 사용자 화면 PC */
+	.d-editor-inner :global(.cms-editor) {
+		background: transparent;
 		border: none;
+		padding: 0;
+	}
+	.d-editor-inner :global(.fmt-toolbar) {
+		background: var(--cs-surface-gray);
+		border-bottom: 1px solid var(--cs-border);
+		position: sticky;
+		top: 0;
+		z-index: 5;
+	}
+	.d-editor-inner :global(.ce-block-wrap) {
+		padding: 12px 20px;
+	}
+	.d-editor-inner :global(.empty-hint) {
 		padding: 16px 20px;
 		font: var(--text-pc-body-14);
-		color: var(--cs-text);
-		resize: vertical;
-		letter-spacing: -0.5px;
-		line-height: 1.6;
-		width: 100%;
-		box-sizing: border-box;
-	}
-
-	.d-textarea::placeholder {
 		color: var(--cs-text-placeholder);
-	}
-
-	.d-textarea:focus {
-		outline: none;
 	}
 
 	/* Submit */
@@ -1331,25 +1601,34 @@
 		color: var(--cs-white);
 		border: none;
 		border-radius: var(--radius-xl);
-		font: var(--text-pc-title-16);
+		font: var(--text-pc-title-18);
 		cursor: pointer;
 		letter-spacing: -0.5px;
 		min-height: 50px;
 		transition: opacity 0.15s;
 	}
 
-	.d-submit:hover {
+	.d-submit:hover:not(:disabled) {
 		opacity: 0.85;
 	}
 
-	.d-submit-r {
-		transform: rotate(180deg) scaleY(-1);
+	.d-submit:disabled {
+		opacity: 0.5;
+		cursor: not-allowed;
 	}
 
-	/* Sidebar */
+	.d-error {
+		font: var(--text-pc-script-12);
+		color: var(--cs-red);
+		margin: 0;
+		letter-spacing: -0.3px;
+	}
+
+	/* Sidebar — 8:2 비율 (flex: 1 = 20%) */
 	.d-sidebar {
-		width: 300px;
-		flex-shrink: 0;
+		flex: 1 0 0;
+		min-width: 220px;
+		max-width: 340px;
 		position: sticky;
 		top: calc(var(--layout-header-h) + 20px);
 		display: flex;
@@ -1357,17 +1636,11 @@
 		gap: 20px;
 	}
 
-	@media (min-width: 1280px) {
-		.d-sidebar {
-			width: 320px;
-		}
-	}
-
 	/* User card */
 	.d-user-card {
 		background: var(--cs-white);
 		border-radius: 25px;
-		padding: 24px;
+		padding: 20px 16px;
 		display: flex;
 		flex-direction: column;
 		align-items: center;
@@ -1387,13 +1660,19 @@
 		color: var(--cs-white);
 		font-family: 'Noto Sans KR', sans-serif;
 		flex-shrink: 0;
+		overflow: hidden;
+	}
+	.d-avatar-img {
+		width: 100%;
+		height: 100%;
+		object-fit: cover;
+		border-radius: 50%;
 	}
 
 	.d-user-meta {
 		display: flex;
 		flex-direction: column;
 		align-items: center;
-		gap: 6px;
 		width: 100%;
 	}
 
@@ -1404,7 +1683,7 @@
 	}
 
 	.d-user-name {
-		font: var(--text-pc-title-16);
+		font: var(--text-pc-title-18);
 		color: var(--cs-text);
 		letter-spacing: -0.5px;
 	}
@@ -1445,12 +1724,14 @@
 	}
 
 	.d-stat-label {
-		font: var(--text-pc-script-12);
+		font: var(--text-pc-body-14);
 		color: var(--cs-text-mid);
+		text-align: center;
+		word-break: keep-all;
 	}
 
 	.d-stat-value {
-		font: var(--text-pc-title-16);
+		font: var(--text-pc-title-18);
 		color: var(--cs-text);
 	}
 
@@ -1458,7 +1739,7 @@
 	.d-options-card {
 		background: var(--cs-white);
 		border-radius: 25px;
-		padding: 24px;
+		padding: 20px 16px;
 		display: flex;
 		flex-direction: column;
 		gap: 20px;
@@ -1482,22 +1763,22 @@
 		letter-spacing: -0.5px;
 	}
 
-	.d-check-row {
+	.d-opt-row {
 		display: flex;
 		align-items: center;
-		gap: 10px;
-		cursor: pointer;
-		min-height: 28px;
-		font: var(--text-pc-script-12);
-		color: var(--cs-text-mid);
-		letter-spacing: -0.5px;
+		justify-content: space-between;
+		min-height: 36px;
 	}
 
-	.d-checkbox {
-		width: 16px;
-		height: 16px;
-		accent-color: var(--cs-purple);
-		cursor: pointer;
-		flex-shrink: 0;
+	.d-opt-label {
+		font: var(--text-pc-script-12);
+		color: var(--cs-text-mid);
+		letter-spacing: -0.3px;
+		transition: color 0.2s;
+	}
+
+	.d-opt-label.d-hold-active {
+		color: var(--cs-orange);
+		font-weight: 700;
 	}
 </style>

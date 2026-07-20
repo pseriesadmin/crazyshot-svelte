@@ -2,6 +2,8 @@
   import { invalidateAll } from '$app/navigation'
   import { supabase } from '$lib/services/supabase'
   import CmsDragList from '$lib/components/cms/CmsDragList.svelte'
+  import SuggestPicker from '$lib/components/common/SuggestPicker.svelte'
+  import type { SuggestPickerOption } from '$lib/types/suggest-picker'
 
   interface ProductItem {
     id: string
@@ -29,13 +31,25 @@
 
   let mode = $state<'random' | 'fixed'>(initialSettings.mode)
   let selected = $state<ProductItem[]>([])
-  let searchQuery = $state('')
   let searchResults = $state<ProductItem[]>([])
   let isSearching = $state(false)
   let isLoadingInitial = $state(false)
   let isSaving = $state(false)
   let error = $state<string | null>(null)
   let debounceTimer = $state<ReturnType<typeof setTimeout> | null>(null)
+  let pickerSelectedId = $state<string | null>(null)
+
+  const selectedIds = $derived(new Set(selected.map((s) => s.id)))
+
+  const pickerOptions = $derived<SuggestPickerOption[]>(
+    searchResults
+      .filter((p) => !selectedIds.has(p.id))
+      .map((p) => ({
+        id:    p.id,
+        label: p.name,
+        meta:  [formatPrice(p.base_price_daily) + '원/일'],
+      }))
+  )
 
   const MAX_ITEMS = 10
 
@@ -43,15 +57,16 @@
     return n.toLocaleString('ko-KR')
   }
 
-  function onSearchInput(e: Event) {
-    const val = (e.target as HTMLInputElement).value
-    searchQuery = val
+  function onPickerInput(val: string) {
     if (debounceTimer) clearTimeout(debounceTimer)
-    if (!val.trim()) {
-      searchResults = []
-      return
-    }
+    if (!val.trim()) { searchResults = []; return }
     debounceTimer = setTimeout(() => doSearch(val.trim()), 280)
+  }
+
+  function onProductSelect(opt: SuggestPickerOption) {
+    const product = searchResults.find((p) => p.id === opt.id)
+    if (product) addProduct(product)
+    setTimeout(() => { pickerSelectedId = null; searchResults = [] }, 0)
   }
 
   // Fix 1 — 초기 저장 상품 복원
@@ -108,8 +123,6 @@
     if (selected.length >= MAX_ITEMS) return
     if (selected.some((s) => s.id === p.id)) return
     selected = [...selected, p]
-    searchQuery = ''
-    searchResults = []
   }
 
   function removeProduct(id: string) {
@@ -169,37 +182,43 @@
     <div class="section">
       <p class="section-label">상품 추가 <span class="count-badge">{selected.length}/{MAX_ITEMS}</span></p>
       <div class="search-wrap">
-        <input
-          class="f-input"
-          type="text"
-          placeholder="상품명으로 검색..."
-          value={searchQuery}
-          oninput={onSearchInput}
-          disabled={selected.length >= MAX_ITEMS}
-          autocomplete="off"
-        />
-        {#if isLoadingInitial}
-          <p class="search-hint">저장된 상품 불러오는 중…</p>
-        {:else if isSearching}
-          <p class="search-hint">검색 중…</p>
-        {:else if searchResults.length > 0}
-          <div class="suggest-layer" role="listbox" aria-label="상품 제안">
-            {#each searchResults as p (p.id)}
-              <button
-                type="button"
-                class="suggest-item"
-                role="option"
-                aria-selected={selected.some((s) => s.id === p.id)}
-                onmousedown={(e) => e.preventDefault()}
-                onclick={() => addProduct(p)}
-                disabled={selected.some((s) => s.id === p.id)}
-              >
-                <span class="suggest-name">{p.name}</span>
-                <span class="suggest-price">{formatPrice(p.base_price_daily)}원/일</span>
-              </button>
-            {/each}
-          </div>
+        {#if isLoadingInitial || isSearching}
+          <p class="search-hint">{isLoadingInitial ? '저장된 상품 불러오는 중…' : '검색 중…'}</p>
         {/if}
+        <SuggestPicker
+          id="product-search"
+          bind:selectedId={pickerSelectedId}
+          options={pickerOptions}
+          noFilter
+          itemLayout="row"
+          placeholder="상품명으로 검색..."
+          listLabel="상품 검색 결과"
+          oninput={onPickerInput}
+          onselect={onProductSelect}
+        >
+          {#snippet field(c)}
+            <input
+              type="text"
+              class="f-input"
+              id={c.id}
+              placeholder={c.placeholder}
+              value={c.value}
+              oninput={c.oninput}
+              onkeydown={c.onkeydown}
+              onfocus={c.onfocus}
+              onblur={c.onblur}
+              aria-autocomplete={c.ariaAutocomplete}
+              aria-expanded={c.ariaExpanded}
+              aria-controls={c.ariaControls}
+              autocomplete="off"
+              disabled={selected.length >= MAX_ITEMS}
+            />
+          {/snippet}
+          {#snippet renderItem(item, _i, _sel)}
+            <span class="suggest-name">{item.label}</span>
+            <span class="suggest-price">{item.meta?.[0] ?? ''}</span>
+          {/snippet}
+        </SuggestPicker>
       </div>
     </div>
 
@@ -346,44 +365,10 @@
   .search-hint {
     font: var(--text-pc-script-12);
     color: var(--cs-text-light);
-    margin: 6px 0 0;
+    margin: 0 0 4px;
   }
 
-  /* suggest-layer — cms-suggest-picker-layer 동일 규격 */
-  .suggest-layer {
-    position: absolute;
-    top: calc(100% + 4px);
-    left: 0; right: 0;
-    z-index: 40;
-    display: flex;
-    flex-direction: column;
-    max-height: 280px;
-    overflow-y: auto;
-    background: var(--cs-white);
-    border: 1.5px solid rgba(59, 47, 138, 0.2);
-    border-radius: 10px;
-    box-shadow: 0 8px 24px rgba(16, 11, 50, 0.12);
-  }
-
-  /* suggest-item — cms-suggest-picker-item 동일 규격 */
-  .suggest-item {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    gap: 8px;
-    width: 100%;
-    padding: 10px 16px;
-    border: none;
-    border-bottom: 1px solid var(--cs-lilac);
-    background: transparent;
-    text-align: left;
-    cursor: pointer;
-    transition: background 0.1s;
-  }
-  .suggest-item:last-child { border-bottom: none; }
-  .suggest-item:hover:not(:disabled) { background: var(--cs-purple-op10); }
-  .suggest-item:disabled { opacity: 0.5; cursor: not-allowed; }
-
+  /* SuggestPicker renderItem 스타일 — 이름(좌) + 가격(우) 행 레이아웃 */
   .suggest-name {
     flex: 1;
     font: var(--text-pc-body-14);

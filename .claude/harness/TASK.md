@@ -28,6 +28,130 @@ auth_baseline: fed4fdb — createBrowserClient 패턴 (절대 싱글톤 createCl
 
 ---
 
+## NOW — SuggestPicker 공통 컴포넌트화 + 디자인 시스템 등록 (2026-07-20) ✅ 완료
+
+[CONTEXT BRIDGE — SuggestPicker 공통화]
+수정/신규 파일:
+  - src/lib/types/suggest-picker.ts ← 신규 (SuggestPickerOption · SuggestPickerVariant)
+  - src/lib/components/common/SuggestPicker.svelte ← 신규 공통 컴포넌트
+  - src/lib/types/cms-suggest-picker.ts ← re-export shim (구경로 호환)
+  - src/lib/components/cms/CmsSuggestPicker.svelte ← re-export shim (구경로 호환)
+  - src/lib/components/products/admin/ProductCategoryModal.svelte ← import 공통 경로 교체
+  - src/lib/components/products/admin/ProductHeroModal.svelte ← 수동 suggest → SuggestPicker 교체
+  - src/routes/cms/products/new/+page.svelte ← import 공통 경로 교체
+  - .claude/rules-ref/cms-uiux.md ← §7-7-2 + §12 전면 개편
+  - .claude/rules-ref/front-uiux.md ← §12 신규 추가 (USER 화면 호출 규칙)
+  - .claude/rules/uiux-index.md ← 공통 컴포넌트 빠른 참조 표 추가
+
+- [x] SP-1: SuggestPicker 공통 타입 + 컴포넌트 신규 생성 | BOUNDARY | ✅ 완료 (2026-07-20)
+  - src/lib/types/suggest-picker.ts: SuggestPickerOption · SuggestPickerVariant (category/brand/generic)
+  - src/lib/components/common/SuggestPicker.svelte: 기존 CmsSuggestPicker 로직 100% 동일 이동
+  - 추가 prop: variant (listLabel 기본값 자동), noFilter (비동기 검색용), renderItem 스니펫, itemLayout (column/row)
+- [x] SP-2: 구경로 re-export shim 처리 | ROUTINE | ✅ 완료 (2026-07-20)
+  - CmsSuggestPicker.svelte → SuggestPicker 위임 shim
+  - cms-suggest-picker.ts → suggest-picker.ts re-export shim
+- [x] SP-3: 호출처 2곳 import 교체 | ROUTINE | ✅ 완료 (2026-07-20)
+  - ProductCategoryModal · cms/products/new → 공통 경로로 교체
+- [x] SP-4: ProductHeroModal 수동 suggest → SuggestPicker 교체 | BOUNDARY | ✅ 완료 (2026-07-20)
+  - 비동기 DB 검색 특성 → noFilter + itemLayout="row" + renderItem 스니펫 활용
+  - 수동 .suggest-layer/.suggest-item CSS 50줄 제거
+  - 선택 후 입력창 자동 초기화: pickerSelectedId = null + searchResults = []
+- [x] SP-5: 디자인 시스템 규칙 업데이트 | ROUTINE | ✅ 완료 (2026-07-20)
+  - cms-uiux.md §7-7-2 · §12: 경로·variant표·2종 예시코드·금지항목 갱신
+  - front-uiux.md §12 신규: USER 화면 호출 규칙 + 2종 variant 기준 + 금지항목
+  - uiux-index.md: 공통 컴포넌트 빠른 참조 표 + 로드 조건 갱신
+- [x] SP-6: svelte-check 0 ERRORS 확인 | GATE C | ✅ 완료 (2026-07-20)
+
+---
+
+## NOW — Crazylog 보류 기능 재배치 (2026-07-20) ✅ 완료
+
+수정 파일:
+  - src/routes/crazylog/view/[slug]/+page.svelte
+  - src/routes/crazylog/[slug]/+page.svelte
+  - src/routes/crazylog/list/+page.server.ts
+
+- [x] FIX: view 페이지 "보류 처리" 버튼 제거 (PC d-navi-actions + 모바일 m-admin-bar) | ROUTINE | ✅ 완료
+- [x] FEAT: 수정화면 "공개설정" 우측 보류 토글 배치 (PC+모바일) | BOUNDARY | ✅ 완료
+- [x] FEAT: 목록 쿼리 — 로그인 작성자 보류 포스트 노출 (.or 조건) | BOUNDARY | ✅ 완료
+
+---
+
+## PREV — Crazylog avatar_url 버그 + 사용자 정보카드 컴포넌트화 (2026-07-20) ✅ 완료
+
+수정 파일:
+  - src/routes/crazylog/[slug]/+page.server.ts
+  - src/routes/crazylog/list/+page.server.ts
+  - src/routes/crazylog/view/[slug]/+page.server.ts
+  - src/routes/crazylog/list/+page.svelte
+  - src/routes/crazylog/view/[slug]/+page.svelte
+  - src/lib/components/common/CrazylogWriteCard.svelte (신규)
+  - supabase stage DB: user_profiles.full_name = '이기성' 업데이트
+
+- [x] FIX-3: avatar_url 컬럼 부재 → 3개 page.server.ts 쿼리 실패 → '익명' 표시 | BOUNDARY | ✅ 완료
+- [x] FEAT: CrazylogWriteCard.svelte 컴포넌트 단일화 (list + view 인라인 중복 제거) | BOUNDARY | ✅ 완료
+
+---
+
+## PREV — Crazylog 글등록 무반응 + 토글 UI 픽스 (2026-07-20) ✅ 완료
+
+[CONTEXT BRIDGE — crazylog write page bugfix]
+수정 파일:
+  - src/routes/crazylog/[slug]/+page.svelte (단일 파일 수정)
+
+- [x] FIX-1: 로그 등록 버튼 무반응 버그 | BOUNDARY | ✅ 완료 (2026-07-20)
+  - 원인: handleSubmit() 이미지 없음 분기에서 csToast.warning() 호출 → 사용자 화면 <Toaster> 미등록(CMS 전용) → toast 무음 실행 = 버튼 무반응
+  - 해결: csToast.warning() → errorMsg 할당 (기존 validation 패턴과 통일)
+  - import { csToast } 미사용 → 제거
+
+- [x] FIX-2: 토글 버튼 시각 왜곡 (크기 비정상) | ROUTINE | ✅ 완료 (2026-07-20)
+  - 원인: padding-block:12px + box-sizing:content-box → 배경이 20+12+12=44px 높이로 확대됨
+  - 해결: position:relative(컨테이너) + thumb position:absolute top:2px left:2px + transform:translateX(16px)(ON)
+  - width 32px→36px, off 배경 --cs-text-dark→--cs-disabled-toggle 정정 (cms-uiux.md Section 7-8 표준)
+
+---
+
+## NOW — write-card 사용자 정보 카드 복원 (2026-07-20) ✅ 완료
+
+[CONTEXT BRIDGE — view/[slug] write-card revert]
+수정 파일:
+  - src/routes/crazylog/view/[slug]/+page.server.ts ← counts 3종 쿼리 + counts 반환 제거
+  - src/routes/crazylog/view/[slug]/+page.svelte ← 탭+스탯 UI → 사용자 정보 카드 복원
+
+원인: 이전 세션 마지막 메시지가 컨텍스트 컴팩션으로 신규 세션에 이월 → 자동 실행됨.
+      요청 범위 외 수정으로 판정 → 즉시 복원.
+
+- [x] REVERT-1: +page.server.ts — counts 쿼리 + 반환값 제거 | ROUTINE | ✅ 완료 (2026-07-20)
+- [x] REVERT-2~5: +page.svelte — TABS/PC_STAT_TABS 제거, write-card HTML+CSS 복원, PC 미디어쿼리 복원 | ROUTINE | ✅ 완료 (2026-07-20)
+- [x] REVERT-6: svelte-check 0 errors 확인 | GATE C | ✅ 완료 (2026-07-20)
+
+---
+
+## NOW — Crazylog 헤드이미지 지정 기능 (2026-07-20) ✅ 완료
+
+[CONTEXT BRIDGE — head image long-press]
+수정 파일:
+  - src/lib/types/content-editor.ts ← isHead?: boolean 추가 ✅
+  - src/lib/components/cms/CmsContentEditor.svelte ← 롱프레스 로직 + Head 배지 UI ✅
+  - src/routes/crazylog/[slug]/+page.svelte ← headImageUrl 추출 + p_thumbnail_url RPC 전달 ✅
+  - src/routes/crazylog/view/[slug]/+page.svelte ← isHead 이미지 본문 필터링 ✅
+
+- [x] HEAD-1: ImageItem에 isHead?: boolean 추가 | ROUTINE | ✅ 완료
+  - src/lib/types/content-editor.ts: ImageItem interface에 isHead?: boolean 필드 추가
+- [x] HEAD-2: CmsContentEditor 롱프레스 UX 구현 | BOUNDARY | ✅ 완료
+  - longPressTimers $state + startLongPress/cancelLongPress/setHeadImage 함수 3종
+  - 포인터 이벤트(pointerdown/pointerup/pointerleave/pointercancel) → 2초 setTimeout
+  - .thumb-img-wrap 래퍼 + head-badge CSS 추가 (Head 배지 우측상단 표시)
+  - setHeadImage: 전체 이미지 isHead=undefined 초기화 → 대상만 true (중복 지정 방지)
+- [x] HEAD-3: [slug]/+page.svelte 제출 로직 — headImageUrl 추출 + RPC 전달 | BOUNDARY | ✅ 완료
+  - blocks 순회 → isHead===true 이미지 URL 추출 → p_thumbnail_url 파라미터로 create/update RPC 전달
+- [x] HEAD-4: view/[slug]/+page.svelte 본문 렌더링 — Head 이미지 필터링 | BOUNDARY | ✅ 완료
+  - PC/모바일 이미지 블록 렌더: block.images.filter(img => !img.isHead) → 본문 중복 노출 방지
+  - 헤드 이미지는 post?.thumbnailUrl로 서버에서 derivedThumbnail → 최상단 단독 노출
+- [x] HEAD-5: TypeScript 검증 | ROUTINE | ✅ 완료 — 0 ERRORS, 238 WARNINGS (기존 경고 유지)
+
+---
+
 ## NOW — crazylog 메인·목록 DB 연동 + 플로팅 카드 (2026-07-20) ✅ 완료
 
 [CONTEXT BRIDGE — crazylog main & list activation]

@@ -1,6 +1,43 @@
 # GSD_LOG.md — 크레이지샷 실행 이력
 # 형식: [YYYY-MM-DD HH:MM] 타입 | 태스크명 | 파일 | 소요 | 결과
 
+[2026-07-20] FEAT | SuggestPicker 공통 컴포넌트화 + 디자인 시스템 등록 | src/lib/types/suggest-picker.ts(신규) · src/lib/components/common/SuggestPicker.svelte(신규) · CmsSuggestPicker.svelte(shim) · cms-suggest-picker.ts(shim) · ProductCategoryModal.svelte · ProductHeroModal.svelte · cms/products/new/+page.svelte · .claude/rules-ref/cms-uiux.md · .claude/rules-ref/front-uiux.md · .claude/rules/uiux-index.md | ✅ DONE
+  - 신규: SuggestPickerOption · SuggestPickerVariant 타입 → suggest-picker.ts 단일 소스
+  - 신규: SuggestPicker.svelte 공통 컴포넌트 (noFilter / renderItem 스니펫 / itemLayout / variant props 추가)
+  - re-export shim: CmsSuggestPicker.svelte → SuggestPicker 위임 / cms-suggest-picker.ts → suggest-picker.ts re-export (구경로 호환)
+  - 호출처 2곳 import 공통 경로 교체: ProductCategoryModal · cms/products/new
+  - ProductHeroModal: 수동 .suggest-layer/.suggest-item 구조 → SuggestPicker(noFilter+itemLayout="row"+renderItem) 교체, ~50줄 수동 CSS 제거
+  - 디자인 시스템 업데이트: cms-uiux.md §7-7-2+§12 / front-uiux.md §12 신규 / uiux-index.md 공통 컴포넌트 표 추가
+  - svelte-check: 0 ERRORS (기존 crazylog/[slug] pre-existing 5건 제외 확인)
+
+[2026-07-20] FIX+FEAT | Crazylog 보류 기능 재배치 — view 버튼 제거 + 수정화면 토글 이동 | crazylog/view/[slug]/+page.svelte · crazylog/[slug]/+page.svelte · crazylog/list/+page.server.ts | ✅ DONE
+  - view/[slug]: d-navi-actions + m-admin-bar 내 "보류 처리" 버튼 제거
+  - [slug] 수정화면 PC: "공개설정" 헤딩 우측에 보류 토글 배치 (d-opts-heading-row)
+  - [slug] 수정화면 모바일: "로그 공개" 토글 → "보류(목록 숨김)" 토글로 교체
+  - 보류 ON = isPublic=false → p_is_public:false 전달 (기존 create/update RPC 그대로 활용)
+  - list/+page.server.ts: 로그인 작성자 본인 보류 포스트 목록 노출 (.or() 조건 추가)
+
+[2026-07-20] FIX+FEAT | Crazylog avatar_url 버그 수정 + 사용자 정보카드 컴포넌트화 | crazylog/[slug]/+page.server.ts · list/+page.server.ts · view/[slug]/+page.server.ts · list/+page.svelte · view/[slug]/+page.svelte · CrazylogWriteCard.svelte(신규) | ✅ DONE
+  - FIX-3: 3개 page.server.ts SELECT에 존재하지 않는 avatar_url 컬럼 포함 → PostgREST 쿼리 전체 실패 → profileRaw=null → '익명' fallback 표시
+  - 해결: 3개 파일 모두 avatar_url 제거, avatarUrl: null 고정 반환
+  - Stage DB: user_profiles.full_name 'Stephen' → '이기성' 업데이트 (steven@pseries.net)
+  - FEAT: CrazylogWriteCard.svelte 신규 생성 (src/lib/components/common/)
+    Props: currentUser / isLoggedIn / visible / postId? / isOwner? / deleteBusy? / onDelete?
+    list/+page.svelte + view/[slug]/+page.svelte 인라인 마크업·CSS 225줄 제거 → 컴포넌트 1줄 호출로 단일화
+
+[2026-07-20] FIX | Crazylog 글등록 무반응 버그 + 토글 UI 픽스 | src/routes/crazylog/[slug]/+page.svelte | ✅ DONE
+  - FIX-1(무반응): handleSubmit() 내 csToast.warning() → errorMsg 할당으로 교체 (사용자 화면에 <Toaster> 미등록 → toast 무음 실행 = 무반응)
+  - FIX-2(토글 크기): .m-toggle content-box + padding-block:12px + negative-margin 터치 타겟 핵(배경이 44px 높이로 늘어나는 시각 왜곡) → border-box + position:relative / thumb absolute top:2px left:2px + translateX(16px) 패턴으로 교체 (cms-uiux.md Section 7-8 표준)
+  - 토글 width 32px→36px, off 배경 --cs-text-dark→--cs-disabled-toggle 정정
+  - unused import { csToast } 제거
+
+[2026-07-20] FEAT | Crazylog 헤드이미지 지정 기능 (롱프레스 2초) | content-editor.ts · CmsContentEditor.svelte · crazylog/[slug]/+page.svelte · crazylog/view/[slug]/+page.svelte | ✅ DONE
+  - content-editor.ts: ImageItem.isHead?: boolean 추가
+  - CmsContentEditor: longPressTimers + startLongPress/cancelLongPress/setHeadImage 3종 함수, .thumb-img-wrap + head-badge CSS
+  - [slug]/+page.svelte: blocks 순회 → headImageUrl 추출 → create/update RPC p_thumbnail_url 전달
+  - view/[slug]/+page.svelte: PC/모바일 이미지 블록 filter(!img.isHead) → 본문 중복 방지
+  - svelte-check: 0 ERRORS, 238 WARNINGS (기존 유지)
+
 [2026-07-20] FEAT | crazylog 메인·목록 DB 연동 + 플로팅 write-card | +page.server.ts(crazylog) · list/+page.server.ts · list/+page.svelte | ✅ DONE
   - crazylog/+page.server.ts 신규 생성: Promise.all 병렬(카운트 3종 + 포스트 30개) → shuffleArray → 10개 슬라이스
   - extractFirstImageUrl / extractFirstText / BAR_COLORS 헬퍼 (content_blocks JSONB 파싱)
