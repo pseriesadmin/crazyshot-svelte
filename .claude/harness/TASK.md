@@ -28,16 +28,18 @@ auth_baseline: fed4fdb — createBrowserClient 패턴 (절대 싱글톤 createCl
 
 ---
 
-## NOW — 카테고리 SSOT 정합 + SuggestPicker 무한루프 근본 수정 + 콤보행 레이아웃 버그 (2026-07-20) ⏳ QA 중
+## NOW — 카테고리 SSOT 정합 + SuggestPicker 무한루프 근본 수정 + 콤보행 레이아웃 버그 + /products 카테고리 UI 정합 (2026-07-20) ✅ 완료
 
 수정 파일:
   - src/lib/components/common/SuggestPicker.svelte ← effect_update_depth_exceeded 근본 수정 (commit 38f4a28)
   - src/routes/products/[id]/+page.server.ts ← UUID 타입 불일치 503→404 정정 (commit 8e45c73)
   - src/routes/products/[id]/+page.svelte ← 중복 FloatingBar 제거 (commit 8e45c73)
-  - src/routes/products/+page.server.ts ← CMS_CATEGORIES 하드코딩 제거 → code_mapping_groups 동적 조회
-  - src/routes/products/+page.svelte ← CAT_ICON·CAT_LABELS 실제 키 정정 (actcam/dronegim/light/accessorie/hypepack)
+  - src/routes/products/+page.server.ts ← CMS_CATEGORIES 하드코딩 제거 → code_mapping_groups 동적 조회 + show_in_product_filter 필터 추가
+  - src/routes/products/+page.svelte ← CAT_ICON·CAT_LABELS 실제 키 정정 / displayCats DB폴백 제거 / cat-icon-box 조건부 렌더 / 호버 인터랙션 수정
   - src/routes/cms/codes/_AutoMappingTab.svelte ← combo-row 키워드 오버플로우 → flex-wrap 수정
+  - src/lib/components/products/admin/ProductCategoryModal.svelte ← uploadIcon 에러 표면화 / 저장버튼 활성 유지
   - Production DB (vnbpmvxruyciuuaermyh): products.category 정합 (lighting→light, audio·tripod→accessorie)
+  - Stage DB (ezyvffjvuwmtuhpxdjrw): cms-assets Storage 버킷 생성 + RLS 4정책 적용
 
 - [x] FIX-1: SuggestPicker effect_update_depth_exceeded 근본 수정 | CRITICAL | ✅ 완료 (2026-07-20)
   - 원인: refreshSuggestions()에서 suggestions = filterOptions(kw) 쓰기 후 suggestions.length 읽기
@@ -59,11 +61,73 @@ auth_baseline: fed4fdb — createBrowserClient 패턴 (절대 싱글톤 createCl
   - CAT_ICON·CAT_LABELS 실제 키(actcam/dronegim/light/accessorie/hypepack)로 정정
   - Production DB products.category 정정: lighting→light (1건), audio·tripod→accessorie (2건)
 
-- [ ] FIX-5: CMS 콤보행 키워드 오버플로우 수정 | ROUTINE | ⏳ QA 중
+- [x] FIX-5: CMS 콤보행 키워드 오버플로우 수정 | ROUTINE | ✅ 완료 (2026-07-20)
   - 원인: .combo-row flex-wrap 없음 + .combo-controls flex-shrink:0 max-width:70% → 키워드 태그 우측 잘림
   - 해결: .combo-row align-items:flex-start + flex-wrap:wrap / .combo-controls flex:1 1 0 + flex-wrap:wrap / .combo-chips flex:0 0 auto
 
-- [ ] QA: sp3-qa-agent 검수 | GATE C | ⏳ 진행 중
+- [x] FIX-6: /products SuggestPicker 카테고리 목록 show_in_product_filter 필터 적용 | BOUNDARY | ✅ 완료 (2026-07-20)
+  - 원인: code_mapping_groups 전체 조회 → Used Sales Codes(used-item)·협력사(partner) 노출 = 정책 위반
+  - 해결: +page.server.ts .eq('show_in_product_filter', true) 추가
+
+- [x] FIX-7: /products 카테고리 UI 하드코딩 완전 제거 | CRITICAL | ✅ 완료 (2026-07-20)
+  - catIconIdx / CAT_ICON Record 전체 제거 (하드코딩 SVG fallback 제거)
+  - "전체" 버튼 하드코딩 제거
+  - displayCats DB 전체 폴백 로직 제거 → CMS 설정 없으면 빈 상태(빈 회색 블록)로 표시
+  - cat-icon-box: icon_url 있을 때만 렌더 (빈 회색 박스 노출 제거)
+
+- [x] FIX-8: 카테고리 아이콘 이미지 업로드 — cms-assets 버킷 미존재 | CRITICAL | ✅ 완료 (2026-07-20)
+  - 원인: Stage DB에 cms-assets Storage 버킷 없음 → uploadIcon 실패 시 에러 삼킴 → icon_url null 유지
+  - 해결: uploadIcon 에러 throw로 표면화 / Stage DB에 cms-assets 버킷 생성 (public, 5MB 제한, svg+xml·png·jpeg·webp 허용) + RLS 4정책 (SELECT public, INSERT/UPDATE/DELETE authenticated)
+
+- [x] FIX-9: 카테고리 버튼 호버 인터랙션 — img 덮임으로 배경 변경 미반영 | ROUTINE | ✅ 완료 (2026-07-20)
+  - 원인: cat-icon-box:hover → background 변경이지만 img(100%×100%)가 배경 덮음 / 호버 트리거도 박스 직접 hover로 레이블 호버 미반영
+  - 해결: .cat-btn:hover .cat-icon-box로 트리거 변경 + ::after 오버레이(#3b2f8a, opacity 0→0.45, transition 0.2s) 추가
+
+- [x] QA: sp3-qa-agent 검수 (FIX-6~9) | GATE C | ✅ 완료 (2026-07-20) — GATE E 통과, 수정 건 0건
+
+- [x] FIX-10: 헤더 슬라이드 하드코딩 폴백 완전 제거 | CRITICAL | ✅ 완료 (2026-07-20)
+  - mobileSlides / desktopSlides 하드코딩 배열 제거
+  - MobileSlide / DesktopSlide 인터페이스 제거
+  - useDbHero 파생 변수 제거 → data.heroProducts 직접 사용
+  - 모바일·데스크탑 슬라이더 {:else} 하드코딩 블록 완전 제거
+  - D_MAX_PAGE / visibleDesktopSlides 폴백 참조 제거
+  - 미사용 CSS 셀렉터 2건 제거 (.cam-body, .cat-icon-box svg)
+  - 설정 없으면 슬라이더 영역 비움 (카테고리 UI와 동일 정책)
+
+- [x] FIX-11: 헤더 슬라이드 빈 상태 BG 블록 UX 보완 | ROUTINE | ✅ 완료 (2026-07-20)
+  - 슬라이드 미설정 시 .slider-empty 클래스 조건부 적용
+  - 모바일: min-height 300px / 데스크탑: min-height 400px + var(--cs-surface-gray) + var(--radius-2xl)
+  - 카테고리 빈 상태와 동일한 UX 패턴
+
+- [x] FIX-12: 카테고리 설정 버튼 상시 노출 | ROUTINE | ✅ 완료 (2026-07-20)
+  - .admin-cat-btn opacity:0 / pointer-events:none / hover 조건 제거
+  - 다른 관리자 버튼(헤더 상품 설정 등)과 동일하게 상시 노출
+
+- [x] QA: sp3-qa-agent 검수 (FIX-10~12) | GATE C | ✅ 완료 (2026-07-20) — GATE E 통과, 주석 불일치 1건 즉시 수정
+
+- [x] FIX-13: /products 카테고리 버튼 URL 기반 이동 구현 (단계 ⑧) | CRITICAL | ✅ 완료 (2026-07-20)
+  - 원인: 카테고리 버튼 onclick이 $state 로컬 토글만 → URL 변경·SSR 재조회 없음 → 그리드 필터링 미동작
+  - 해결:
+    - +page.server.ts: `url` 파라미터 추가 → `urlCategory = url.searchParams.get('category') ?? 'all'`
+    - search_products RPC p_category: urlCategory !== 'all' ? urlCategory : CMS 그리드 설정값
+    - +page.svelte: `import { goto }` 추가 + `activeCategory = $derived(data.urlCategory ?? 'all')`
+    - 카테고리 버튼: onclick → `goto('/products?category=${cat.id}')` (URL 이동 + SSR 재조회)
+    - "전체" 고정 버튼 추가 (SVG 원형 과녁 아이콘) → `goto('/products')`
+  - 수정 파일: src/routes/products/+page.server.ts · src/routes/products/+page.svelte
+
+- [x] FIX-14: Migration 124 get_active_categories RPC 신규 생성 + 양 DB 적용 | CRITICAL | ✅ 완료 (2026-07-20)
+  - product_category_codes는 RLS "cms only" → 공개 조회 불가
+  - get_active_categories() SECURITY DEFINER: depth=0 + is_active + product_category IS NOT NULL 필터
+  - Stage DB (ezyvffjvuwmtuhpxdjrw) ✅ + Production DB (vnbpmvxruyciuuaermyh) ✅ 적용 완료
+  - GRANT EXECUTE TO anon, authenticated
+
+- [x] VER-1: show_in_product_filter 동작 검증 — SuggestPicker 노출 정합 확인 | BOUNDARY | ✅ 완료 (2026-07-20)
+  - DB 직접 조회: 카메라(camera)/렌즈(lens)/협력사(partner)/중고품(used-item) → show_in_product_filter=true
+  - 회원 분류·거래 관리 → show_in_product_filter=false (default_category=null) → picker 미노출 정상
+  - "협력사"·"중고품" picker 노출 = 정책 위반 아님 (DB에서 관리자가 명시적 true 설정)
+  - 결론: 코드 필터 정상 작동. 피커 목록 변경 필요 시 `/cms/codes` → "상품목록" 버튼으로 토글
+
+- [x] QA: sp3-qa-agent 검수 (FIX-13~14 + VER-1) | GATE C | ✅ 완료 (2026-07-20) — GATE E 통과. "전체" 버튼 미존재는 의도적 설계 (Stephen 확인)
 
 ---
 
