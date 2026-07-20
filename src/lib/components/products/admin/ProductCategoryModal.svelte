@@ -67,7 +67,9 @@
     const saved = initialSettings?.items ?? []
     const matched: SelectedItem[] = []
     for (const item of saved) {
+      // code_id 직접 일치 우선, 실패 시 icon_key(=code) 폴백 (이전 저장 포맷 호환)
       const cat = categories.find((c) => c.id === item.code_id)
+               ?? categories.find((c) => c.code === item.icon_key)
       if (!cat) continue
       matched.push({
         code_id:    cat.id,
