@@ -80,6 +80,10 @@ export const load: PageServerLoad = async ({ params, locals }) => {
 		console.error('[products/[id]] Supabase error:', fetchError.message);
 		const fallback = devFallbackForLegacyNine(rawId);
 		if (fallback) return fallback;
+		// 타입 불일치(숫자 ID → UUID 컬럼) 또는 존재하지 않는 레거시 ID → 404
+		if (fetchError.code === '22P02' || isLegacyNumericId(rawId)) {
+			error(404, '상품을 찾을 수 없습니다.');
+		}
 		error(503, '일시적으로 상품 정보를 불러올 수 없습니다. Supabase 연결을 확인해 주세요.');
 	}
 

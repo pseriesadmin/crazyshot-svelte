@@ -5,7 +5,6 @@
   import ProductHero from '$lib/components/products/ProductHero.svelte';
   import CalendarTimePicker from '$lib/components/products/CalendarTimePicker.svelte';
   import type { Tables, ProductOptionLinkRow } from '$lib/types/database';
-  import FloatingBar from '$lib/components/common/FloatingBar.svelte';
 
   /** 실서비스 DB products 행 (가격·status 등 런타임 컬럼 포함) */
   type ProductRow = Tables<'products'> & {
@@ -580,8 +579,6 @@
 {#if toastVisible}
   <div class="toast-msg" role="status" aria-live="polite">{toastMsg}</div>
 {/if}
-
-<FloatingBar />
 
 <style>
   /* ── Loading / Error */
