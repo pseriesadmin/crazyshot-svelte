@@ -5,10 +5,11 @@
     items: T[]
     renderItem: Snippet<[T, number]>
     itemKey?: (item: T, index: number) => string | number
+    onreorder?: () => void
     class?: string
   }
 
-  let { items = $bindable([]), renderItem, itemKey, class: cls = '' }: Props = $props()
+  let { items = $bindable([]), renderItem, itemKey, onreorder, class: cls = '' }: Props = $props()
 
   let dragIdx = $state<number | null>(null)
   let overIdx = $state<number | null>(null)
@@ -28,6 +29,7 @@
       const [moved] = arr.splice(dragIdx, 1)
       arr.splice(overIdx, 0, moved)
       items = arr
+      onreorder?.()
     }
     dragIdx = null
     overIdx = null
@@ -71,6 +73,7 @@
     display: flex;
     align-items: center;
     gap: 8px;
+    width: 100%;
     cursor: grab;
     transition: opacity 0.15s, background 0.12s;
     border-radius: var(--cms-radius-sm);
@@ -82,7 +85,7 @@
   }
 
   .drag-list-item--over {
-    background: rgba(59,47,138,0.06);
+    background: color-mix(in srgb, var(--cs-purple) 6%, transparent);
     outline: 2px dashed var(--cs-purple);
     outline-offset: -2px;
   }

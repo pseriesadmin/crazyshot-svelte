@@ -1,6 +1,23 @@
 # GSD_LOG.md — 크레이지샷 실행 이력
 # 형식: [YYYY-MM-DD HH:MM] 타입 | 태스크명 | 파일 | 소요 | 결과
 
+[2026-07-21] MIGRATION | CMS 대여관리 설정 Migration #126~130 Production DB 적용 | vnbpmvxruyciuuaermyh | ✅ DONE
+  - 126a: pickup_points 테이블 신규 생성 (Production 자체 누락 확인 후 선행 적용)
+  - 126: pickup_points.contact_person VARCHAR(10) + rental_period_options / rental_method_options / rental_guide_settings / rental_consent_items 4개 테이블 생성 + RLS + 트리거
+  - 127: RPC 12종 (upsert_rental_period_option / delete / reorder × 3 도메인, upsert_pickup_point / delete, upsert_rental_guide, upsert_rental_consent_item / delete / reorder)
+  - 128: upsert_rental_guide — UPDATE rental_guide_settings WHERE id IS NOT NULL (PostgREST WHERE 없는 UPDATE 차단 수정)
+  - 129: check_rental_period/method/pickup_in_use 3종 (placeholder RETURN FALSE)
+  - 130: 동 3종 실제 구현 — products.allowed_period/method/pickup_ids @> ARRAY[p_id] UUID 배열 포함 체크
+  - 최종 검증: 테이블 5종 + RPC 15종 Production DB 존재 확인 완료
+
+[2026-07-21] FEAT | CMS 상품 '구성품' 기능 추가 (Migration #128 + 5개 파일) | supabase/migrations/20260721000128_128_products_components_column.sql · cms/products/new/+page.svelte · cms/products/new/+page.server.ts · lib/components/cms/ProductDetailPanel.svelte · cms/products/+page.server.ts | ✅ DONE
+  - Migration #128: products.components JSONB 컬럼 추가 → Stage + Production 양 DB 적용 완료
+  - new/+page.svelte: components $state + addComponent/removeComponent/serializeComponents 함수 + hidden input + UI 블록 (기술스펙 위 배치, .spec-list/.spec-row CSS 재사용)
+  - new/+page.server.ts: components JSON.parse + INSERT 포함
+  - ProductDetailPanel.svelte: TabKey/TABS에 'components' 추가 ('상품설명' 탭 우측), localComponents $state + isDirtyComponents $derived + 4종 함수, CmsDragList 재사용 탭 콘텐츠, ProductWithComponents 로컬 타입 캐스팅(database.ts 미수정)
+  - products/+page.server.ts: updateSection sectionType==='components' 케이스 추가
+  - svelte-check 신규 오류 0건 / Stage DB 직접 테스트로 저장·조회 정상 확인
+
 [2026-07-20] FIX+UX | Crazylog 작성/뷰 페이지 UX 개선 + 태그·이미지 버그픽스 | crazylog/[slug]/+page.svelte · view/[slug]/+page.svelte · view/[slug]/+page.server.ts · CmsContentEditor.svelte · CrazylogWriteCard.svelte · src/app.css | ✅ DONE
   - UX-1: 작성 모바일 사용자 카드 한 행 재정렬, 아바타 1.2배(53px), 폰트 토큰 정렬, wc-name 모바일 숨김
   - UX-2: 모바일 옵션 카드 m-toggle-label 컬러 → --cs-text-mid (PC 동일)

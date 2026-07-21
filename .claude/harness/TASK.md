@@ -28,6 +28,106 @@ auth_baseline: fed4fdb — createBrowserClient 패턴 (절대 싱글톤 createCl
 
 ---
 
+## NOW — CMS 대여관리 설정 (/cms/set/rental) Production DB 마이그레이션 적용 (2026-07-21) ✅ 완료
+
+수정/신규 파일:
+  - (코드 변경 없음 — DB 마이그레이션 전용)
+
+DB 적용 (vnbpmvxruyciuuaermyh — Production):
+  - 126a: pickup_points 테이블 신규 생성 (Production 누락분 선행 적용)
+  - 126: contact_person 컬럼 + 대여설정 4개 테이블 (rental_period_options / rental_method_options / rental_guide_settings / rental_consent_items)
+  - 127: RPC 12종 (upsert/delete/reorder × 4 도메인)
+  - 128: upsert_rental_guide WHERE id IS NOT NULL 수정
+  - 129: in-use check 3종 (placeholder FALSE)
+  - 130: in-use check 3종 (real — products.allowed_*_ids @> ARRAY[p_id])
+
+- [x] MIG-PROD: Migration #126~130 Production DB 적용 | CRITICAL | ✅ 완료 (2026-07-21)
+  - 검증: 테이블 5종 + RPC 15종 모두 Production DB 존재 확인
+  - Stage (ezyvffjvuwmtuhpxdjrw) 검증 완료 → Production (vnbpmvxruyciuuaermyh) 순서 준수
+
+---
+
+## NOW — 상품 대여 정책 섹션 + 상세패널 탭 추가 (2026-07-21) ✅ 완료
+
+수정/신규 파일:
+  - supabase/migrations/20260721000125_125_products_rental_policy.sql ← 신규 생성
+  - src/routes/cms/products/new/+page.server.ts ← untypedFrom 헬퍼 + 3종 타입 + 병렬 조회 + create action 3필드 수신
+  - src/routes/cms/products/new/+page.svelte ← ⑤ 대여 정책 섹션 추가 + 기존 ⑤⑥ 재번호
+  - src/routes/cms/products/+page.server.ts ← untypedFrom 헬퍼 + RentalOption/PickupPointOption 타입 + selectedId 병렬 조회 + updateSection rental 핸들러
+  - src/lib/components/cms/ProductDetailPanel.svelte ← 대여정책 탭 추가 + dirty 감지 + rental form + CSS
+  - src/routes/cms/products/+page.svelte ← ProductDetailPanel rental props 전달
+
+- [x] MIG-125: Migration 125 — products 컬럼 3종 추가 | CRITICAL | ✅ Stage(ezyvffjvuwmtuhpxdjrw) + Production(vnbpmvxruyciuuaermyh) 양 DB 적용 완료 (2026-07-21)
+  - allowed_period_ids UUID[] NOT NULL DEFAULT ARRAY[]::UUID[]
+  - allowed_method_ids UUID[] NOT NULL DEFAULT ARRAY[]::UUID[]
+  - allowed_pickup_ids UUID[] NOT NULL DEFAULT ARRAY[]::UUID[]
+  - 데이터 SSOT: rental_period_options / rental_method_options / pickup_points 테이블 (/cms/set/rental 화면에서 관리)
+
+- [x] FEAT-1: /cms/products/new ⑤ 대여 정책 섹션 | BOUNDARY | ✅ 완료 (2026-07-21)
+  - rental_period_options · rental_method_options · pickup_points 동적 조회 (하드코딩 전면 금지)
+  - 콤보 버튼 복수선택 + hidden input 3종 → products INSERT 시 UUID 배열 포함
+  - 기존 ⑤ 이미지 → ⑥ / ⑥ 실물재고 → ⑦ 재번호
+  - database.ts 미등록 테이블 → untypedFrom() 헬퍼 적용
+
+- [x] FEAT-2: /cms/products?selected= 대여정책 탭 | BOUNDARY | ✅ 완료 (2026-07-21)
+  - ProductDetailPanel 탭 목록: 가격정책 우측에 '대여정책' 탭 추가
+  - localPeriodIds / localMethodIds / localPickupIds $state + isDirtyRental $derived (정렬 JSON 비교)
+  - $effect 동기화 + switchTab dirty 체크
+  - form id="form-rental" + use:enhance={handleSectionSave} + updateSection sectionType='rental' 핸들러
+  - Stage DB UUID[] 저장 검증 완료
+
+- [x] QA: svelte-check 수정 파일 기준 0 ERRORS 확인 | GATE C | ✅ 완료 (2026-07-21)
+
+---
+
+## NOW — CMS 상품 '구성품' 기능 추가 (2026-07-21) ✅ 완료
+
+plan_source: cms-products-new-glimmering-lantern.md
+수정/신규 파일:
+  - supabase/migrations/20260721000128_128_products_components_column.sql ← 신규 생성 ✅
+  - src/routes/cms/products/new/+page.svelte ← 구성품 UI 블록 + $state + 함수 추가 ✅
+  - src/routes/cms/products/new/+page.server.ts ← components 파싱 + INSERT 포함 ✅
+  - src/lib/components/cms/ProductDetailPanel.svelte ← 구성품 탭 추가 (TabKey/TABS/state/콘텐츠 블록) ✅
+  - src/routes/cms/products/+page.server.ts ← updateSection components 케이스 추가 ✅
+
+DB 적용:
+  - Stage DB (ezyvffjvuwmtuhpxdjrw): Migration #128 적용 완료 ✅
+  - Production DB (vnbpmvxruyciuuaermyh): Migration #128 적용 완료 ✅
+
+- [x] FEAT-1: Migration #128 — products.components JSONB 컬럼 추가 | CRITICAL | ✅ Stage + Production 완료 (2026-07-21)
+  - ALTER TABLE products ADD COLUMN IF NOT EXISTS components JSONB
+  - 기존 specifications 컬럼과 독립 분리 (혼용 금지)
+
+- [x] FEAT-2: /cms/products/new — 구성품 UI 추가 | BOUNDARY | ✅ 완료 (2026-07-21)
+  - let components $state<{key,value}[]> 추가 (specifications 패턴 동일)
+  - addComponent / removeComponent / serializeComponents 함수 3종 추가
+  - <input type="hidden" name="components"> 추가
+  - UI: 콘텐츠 에디터 하단, 기술스펙 위 배치 / placeholder: "품명(예: 배터리)" / "수량 or 기타(예: 1개, 단일)"
+  - 기존 .spec-list/.spec-row/.spec-key/.spec-val/.remove-btn/.add-btn CSS 재사용
+
+- [x] FEAT-3: new/+page.server.ts — components 파싱 + INSERT | BOUNDARY | ✅ 완료 (2026-07-21)
+  - specifications 파싱 직후 components JSON.parse 추가
+  - admin.from('products').insert() 호출에 components 포함
+
+- [x] FEAT-4: ProductDetailPanel.svelte — '구성품' 탭 추가 | BOUNDARY | ✅ 완료 (2026-07-21)
+  - TabKey 유니온에 'components' 추가 (content와 images 사이)
+  - TABS 배열에 { key: 'components', label: '구성품' } 추가 ('상품설명' 탭 우측)
+  - localComponents $state + origComponentsJson + isDirtyComponents $derived 추가
+  - addComponent / removeComponent / updateComponentKey / updateComponentVal 함수 4종
+  - switchTab() dirty 체크에 'components' 탭 조건 추가
+  - 탭 콘텐츠 블록: form id="form-components" + CmsDragList 재사용 + handleSectionSave enhance
+  - database.ts 수정 없음 — ProductWithComponents 로컬 타입 캐스팅으로 처리
+
+- [x] FEAT-5: products/+page.server.ts — updateSection components 케이스 | BOUNDARY | ✅ 완료 (2026-07-21)
+  - sectionType === 'components' 분기 추가
+  - admin.from('products').update({ components }).eq('id', productId)
+
+- [x] QA: svelte-check 신규 오류 없음 | GATE C | ✅ 완료 (2026-07-21)
+  - 기존 pre-existing 오류 2건(crazylog/+page.svelte) 유지, 신규 0건
+  - Stage DB 직접 UPDATE 테스트로 DB 저장/조회 정상 확인
+
+---
+
 ## NOW — 카테고리 SSOT 정합 + SuggestPicker 무한루프 근본 수정 + 콤보행 레이아웃 버그 + /products 카테고리 UI 정합 (2026-07-20) ✅ 완료
 
 수정 파일:
