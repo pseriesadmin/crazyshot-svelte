@@ -106,10 +106,7 @@
 </script>
 
 <div class="page-wrap">
-  <div class="page-header">
-    <h1 class="page-title">대여관리 설정</h1>
-    <p class="page-desc">상품등록 및 결제 화면에 노출될 대여 조건을 관리합니다.</p>
-  </div>
+
 
   <div class="sections">
 
@@ -118,10 +115,10 @@
     ══════════════════════════════════════════ -->
     <section class="setting-section">
       <div class="section-head">
-        <h2 class="section-title">대여 기간 조건</h2>
+        <h2 class="section-title">대여 기간 제한 옵션</h2>
         <span class="section-badge">{periods.length} / 10</span>
       </div>
-      <p class="section-desc">상품 예약 시 선택 가능한 대여 기간 조건 목록을 등록합니다.</p>
+      <p class="section-desc">상품상세정보에 최대 대여 기간을 표시하고 설정을 반영합니다.</p>
 
       <form
         method="POST"
@@ -201,10 +198,10 @@
     ══════════════════════════════════════════ -->
     <section class="setting-section">
       <div class="section-head">
-        <h2 class="section-title">대여 방식</h2>
+        <h2 class="section-title">대여 방식 옵션</h2>
         <span class="section-badge">{methods.length} / 10</span>
       </div>
-      <p class="section-desc">상품 예약 시 선택 가능한 대여 방식 목록을 등록합니다.</p>
+      <p class="section-desc">상품 예약등록 화면에 선택 가능한 대여방식 목록을 등록합니다.</p>
 
       <form
         method="POST"
@@ -612,26 +609,11 @@
   .page-wrap {
     flex: 1;
     overflow-y: auto;
-    padding: 32px 40px;
+    padding: 32px 16px;
     min-width: 0;
   }
 
   /* ─── 페이지 헤더 ─── */
-  .page-header {
-    margin-bottom: 32px;
-  }
-
-  .page-title {
-    font: var(--text-pc-htitle-25);
-    color: var(--cs-dark);
-    margin: 0 0 6px;
-  }
-
-  .page-desc {
-    font: var(--text-pc-body-14);
-    color: var(--cs-text-mid);
-    margin: 0;
-  }
 
   /* ─── 섹션 레이아웃 ─── */
   .sections {
@@ -643,7 +625,7 @@
   .setting-section {
     background: var(--cs-white);
     border-radius: var(--cms-radius-lg);
-    padding: 28px 32px;
+    padding: 34px 32px;
   }
 
   .section-head {
@@ -654,7 +636,7 @@
   }
 
   .section-title {
-    font: var(--text-pc-htitle-25);
+    font: var(--text-pc-menu-kr-20);
     color: var(--cs-dark);
     margin: 0;
   }
@@ -672,14 +654,14 @@
   .section-desc {
     font: var(--text-pc-body-14);
     color: var(--cs-text-mid);
-    margin: 0 0 20px;
+    margin: 0 0 40px;
   }
 
   /* ─── 추가 폼 ─── */
   .add-form {
     display: flex;
     gap: 10px;
-    margin-bottom: 16px;
+    margin-bottom: 32px;
   }
 
   .add-input {
@@ -701,7 +683,7 @@
   }
 
   .add-input::placeholder {
-    color: var(--cs-text-mid);
+    color: var(--cs-text-placeholder);
   }
 
   .btn-add {
