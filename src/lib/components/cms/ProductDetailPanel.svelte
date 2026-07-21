@@ -2922,18 +2922,18 @@
   .btn-ghost-sm:hover { background: rgba(59,47,138,0.06); }
 
   .btn-danger-sm {
-    background: transparent;
-    border: 1.5px solid var(--cs-red-badge);
-    border-radius: var(--radius-sm);
-    color: var(--cs-red-badge);
-    padding: 5px 12px;
+    height: 28px;
+    padding: 0 12px;
+    background: var(--cs-error, #E53E3E);
+    border: none;
+    border-radius: var(--cms-radius-sm);
+    color: var(--cs-white);
     font: var(--text-pc-script-12);
-    height: 32px;
     cursor: pointer;
-    transition: background 0.15s;
-    white-space: nowrap;
+    transition: opacity 0.15s;
+    flex-shrink: 0;
   }
-  .btn-danger-sm:hover { background: rgba(255,53,53,0.08); }
+  .btn-danger-sm:hover { opacity: 0.8; }
 
   .history-editor-card {
     background: var(--cs-lilac);

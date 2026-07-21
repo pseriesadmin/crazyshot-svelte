@@ -3,6 +3,7 @@
   import { invalidateAll } from '$app/navigation'
   import { csToast } from '$lib/utils/toast'
   import CmsDragList from '$lib/components/cms/CmsDragList.svelte'
+  import CmsDeleteButton from '$lib/components/cms/CmsDeleteButton.svelte'
   import type { PageData, ActionData } from './$types'
   import type { RentalPeriodOption, RentalMethodOption, PickupPoint, RentalConsentItem } from './+page.server'
 
@@ -33,7 +34,6 @@
   let branchLoading = $state(false)
   let expandedBranchId = $state<string | null>(null)
   let branchForms = $state<Record<string, { address: string; phone: string; contact_person: string }>>({})
-  let pendingDeleteBranchId = $state<string | null>(null)
 
   $effect(() => {
     branches = data.branches
@@ -168,23 +168,7 @@
           {#snippet renderItem(item: RentalPeriodOption)}
             <div class="list-row">
               <span class="list-row-name">{item.name}</span>
-              <form
-                method="POST"
-                action="?/deletePeriod"
-                use:enhance={() => {
-                  return async ({ result, update }) => {
-                    if (result.type === 'success') {
-                      csToast.success('삭제되었습니다.')
-                      await update()
-                    } else if (result.type === 'failure') {
-                      csToast.error((result.data as { error?: string })?.error ?? '삭제에 실패했습니다.')
-                    }
-                  }
-                }}
-              >
-                <input type="hidden" name="id" value={item.id} />
-                <button type="submit" class="btn-danger-sm" aria-label="삭제">삭제</button>
-              </form>
+              <CmsDeleteButton action="?/deletePeriod" id={item.id} />
             </div>
           {/snippet}
         </CmsDragList>
@@ -251,23 +235,7 @@
           {#snippet renderItem(item: RentalMethodOption)}
             <div class="list-row">
               <span class="list-row-name">{item.name}</span>
-              <form
-                method="POST"
-                action="?/deleteMethod"
-                use:enhance={() => {
-                  return async ({ result, update }) => {
-                    if (result.type === 'success') {
-                      csToast.success('삭제되었습니다.')
-                      await update()
-                    } else if (result.type === 'failure') {
-                      csToast.error((result.data as { error?: string })?.error ?? '삭제에 실패했습니다.')
-                    }
-                  }
-                }}
-              >
-                <input type="hidden" name="id" value={item.id} />
-                <button type="submit" class="btn-danger-sm" aria-label="삭제">삭제</button>
-              </form>
+              <CmsDeleteButton action="?/deleteMethod" id={item.id} />
             </div>
           {/snippet}
         </CmsDragList>
@@ -337,49 +305,22 @@
                   class="accordion-toggle"
                   onclick={() => {
                     expandedBranchId = expandedBranchId === branch.id ? null : branch.id
-                    pendingDeleteBranchId = null
                   }}
                   aria-expanded={expandedBranchId === branch.id}
                 >
                   <span class="accordion-name">{branch.name}</span>
                 </button>
-                <form
-                  method="POST"
+                <CmsDeleteButton
                   action="?/deleteBranch"
-                  use:enhance={({ cancel }) => {
-                    if (pendingDeleteBranchId !== branch.id) {
-                      pendingDeleteBranchId = branch.id
-                      csToast.warning('한번 더 선택 시 삭제됩니다.')
-                      cancel()
-                      return
-                    }
-                    pendingDeleteBranchId = null
-                    return async ({ result, update }) => {
-                      if (result.type === 'success') {
-                        expandedBranchId = null
-                        csToast.success('지점이 삭제되었습니다.')
-                        await update()
-                      } else if (result.type === 'failure') {
-                        csToast.error((result.data as { error?: string })?.error ?? '삭제에 실패했습니다.')
-                      }
-                    }
-                  }}
-                >
-                  <input type="hidden" name="id" value={branch.id} />
-                  <button
-                    type="submit"
-                    class="btn-danger-sm"
-                    class:btn-danger-sm--pending={pendingDeleteBranchId === branch.id}
-                  >
-                    {pendingDeleteBranchId === branch.id ? '삭제 확인' : '삭제'}
-                  </button>
-                </form>
+                  id={branch.id}
+                  successMessage="지점이 삭제되었습니다."
+                  onsuccess={() => { expandedBranchId = null }}
+                />
                 <button
                   type="button"
                   class="accordion-arrow-btn"
                   onclick={() => {
                     expandedBranchId = expandedBranchId === branch.id ? null : branch.id
-                    pendingDeleteBranchId = null
                   }}
                   aria-hidden="true"
                   tabindex="-1"
@@ -578,21 +519,7 @@
             {#snippet renderItem(item: RentalConsentItem)}
               <div class="list-row">
                 <span class="list-row-name consent-text">{item.content}</span>
-                <form
-                  method="POST"
-                  action="?/deleteConsent"
-                  use:enhance={() => {
-                    return async ({ result, update }) => {
-                      if (result.type === 'success') {
-                        csToast.success('삭제되었습니다.')
-                        await update()
-                      }
-                    }
-                  }}
-                >
-                  <input type="hidden" name="id" value={item.id} />
-                  <button type="submit" class="btn-danger-sm" aria-label="삭제">삭제</button>
-                </form>
+                <CmsDeleteButton action="?/deleteConsent" id={item.id} />
               </div>
             {/snippet}
           </CmsDragList>
@@ -742,6 +669,17 @@
   }
 
   /* ─── 위험 버튼 (삭제) ─── */
+  .act-del {
+    display: inline-flex; align-items: center; justify-content: center;
+    height: 28px; padding: 0 8px;
+    border: none; border-radius: var(--radius-sm);
+    background: transparent; cursor: pointer;
+    color: var(--cs-text-light);
+    transition: background 0.1s, color 0.1s;
+    flex-shrink: 0;
+  }
+  .act-del:hover { background: rgba(255,53,53,0.08); color: var(--cs-red-badge); }
+
   .btn-danger-sm {
     height: 28px;
     padding: 0 12px;
@@ -762,6 +700,11 @@
 
   .btn-danger-sm--pending {
     background: color-mix(in srgb, var(--cs-error, #E53E3E) 60%, black);
+  }
+
+  .act-del--pending {
+    color: var(--cs-red-badge);
+    background: rgba(255,53,53,0.08);
   }
 
   /* ─── 저장 버튼 ─── */

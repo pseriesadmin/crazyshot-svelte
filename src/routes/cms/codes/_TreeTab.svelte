@@ -359,7 +359,6 @@
             {:else}
               <span class="leaf-dot" style="background:{color}"></span>
             {/if}
-            <span class="color-bar" style="background:{color}"></span>
           </div>
 
           <!-- 코드 배지 -->
@@ -965,7 +964,6 @@
 .expand-btn.expanded svg { transform: rotate(90deg); }
 .expand-btn svg { transition: transform 0.15s; }
 .leaf-dot { display: inline-block; width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0; margin-left: 7px; }
-.color-bar { display: inline-block; width: 3px; height: 24px; border-radius: 2px; flex-shrink: 0; margin-left: 4px; }
 
 /* 토글 스위치 */
 .if { display: inline; }
@@ -989,8 +987,7 @@
   background: transparent; cursor: pointer; transition: background 0.1s, color 0.1s;
   font: var(--text-pc-script-12); font-weight: 700;
 }
-.act-edit { padding: 0 8px; color: var(--cs-text-mid); }
-.act-edit:hover { background: var(--cs-lilac); color: var(--cs-text); }
+.act-edit { padding: 0 8px; color: var(--cs-text-light); }
 .act-del  { padding: 0 8px; color: var(--cs-text-light); }
 .act-del:hover  { background: rgba(255,53,53,0.08); color: var(--cs-red-badge); }
 .act-transfer {

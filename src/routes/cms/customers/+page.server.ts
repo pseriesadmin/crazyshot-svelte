@@ -191,4 +191,31 @@ export const actions: Actions = {
     if (!result?.ok) return fail(400, { ok: false, error: result?.error ?? '조정 실패' })
     return { ok: true, old_score: result.old_score, new_score: result.new_score }
   },
+
+  deleteCustomer: async ({ request, locals }) => {
+    const { session } = await locals.safeGetSession()
+    if (!session) return fail(403, { ok: false, error: '권한 없음' })
+
+    // manager / superadmin 전용
+    const role = locals.cmsRole ?? ''
+    if (!['manager', 'superadmin'].includes(role)) return fail(403, { ok: false, error: '삭제 권한이 없습니다.' })
+
+    const serviceRoleKey = env.SUPABASE_SERVICE_ROLE_KEY
+    if (!serviceRoleKey) return fail(500, { ok: false, error: '서버 설정 오류' })
+    const adminClient = createClient(getSupabaseUrl(), serviceRoleKey)
+
+    const form = await request.formData()
+    const user_id = String(form.get('user_id') ?? '').trim()
+
+    if (!user_id) return fail(400, { ok: false, error: '사용자 ID 필수' })
+
+    const { data } = await adminClient.rpc('soft_delete_customer', {
+      p_user_id:    user_id,
+      p_deleted_by: session.user.email ?? session.user.id,
+    })
+
+    const result = data as { ok: boolean; error?: string } | null
+    if (!result?.ok) return fail(400, { ok: false, error: result?.error ?? '삭제 실패' })
+    return { ok: true, deleted: true }
+  },
 }
