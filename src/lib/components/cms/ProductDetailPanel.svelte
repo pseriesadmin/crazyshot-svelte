@@ -30,6 +30,9 @@
     ocr_raw_text: string | null
   }
 
+  interface RentalOption   { id: string; name: string; display_order: number }
+  interface PickupPointOpt { id: string; name: string; address: string }
+
   interface ProductDetail {
     id: string
     category: string
@@ -53,6 +56,9 @@
     content_blocks?: unknown
     keywords?: unknown
     option_links?: unknown
+    allowed_period_ids?: string[]
+    allowed_method_ids?: string[]
+    allowed_pickup_ids?: string[]
   }
 
   interface InventoryUnit {
@@ -77,10 +83,13 @@
       group_id: string
       group_name: string
     }>
+    rentalPeriods?: RentalOption[]
+    rentalMethods?: RentalOption[]
+    pickupPoints?: PickupPointOpt[]
     onclose: () => void
   }
 
-  let { product, priceRules, categories, categoryLabel, initialTab = null, inventoryList = [], partnerComboItems = [], onclose }: Props = $props()
+  let { product, priceRules, categories, categoryLabel, initialTab = null, inventoryList = [], partnerComboItems = [], rentalPeriods = [], rentalMethods = [], pickupPoints = [], onclose }: Props = $props()
 
 
   // 카테고리 레이블 맵 (picker용)
@@ -88,8 +97,8 @@
     Object.fromEntries(categories.map(c => [c.value, c.label]))
   )
 
-  type TabKey = 'basic' | 'options' | 'pricing' | 'content' | 'images' | 'specs' | 'history'
-  const validTabs: TabKey[] = ['basic', 'options', 'pricing', 'content', 'images', 'specs', 'history']
+  type TabKey = 'basic' | 'options' | 'pricing' | 'rental' | 'content' | 'components' | 'images' | 'specs' | 'history'
+  const validTabs: TabKey[] = ['basic', 'options', 'pricing', 'rental', 'content', 'components', 'images', 'specs', 'history']
   const parsedInitialTab: TabKey = (validTabs.includes(initialTab as TabKey) ? initialTab : 'basic') as TabKey
   let activeTab = $state<TabKey>(parsedInitialTab)
   let canvasEl = $state<HTMLCanvasElement | null>(null)
@@ -167,6 +176,45 @@
     localSaleOnly                      !== origSaleOnly
   )
 
+  // ── 대여정책 로컬 상태 ──────────────────────────────────────
+  let localPeriodIds = $state<string[]>([...(product.allowed_period_ids ?? [])])
+  let localMethodIds = $state<string[]>([...(product.allowed_method_ids ?? [])])
+  let localPickupIds = $state<string[]>([...(product.allowed_pickup_ids ?? [])])
+
+  const origRental = $derived({
+    periodIds: JSON.stringify([...(product.allowed_period_ids ?? [])].sort()),
+    methodIds: JSON.stringify([...(product.allowed_method_ids ?? [])].sort()),
+    pickupIds: JSON.stringify([...(product.allowed_pickup_ids ?? [])].sort()),
+  })
+  const isDirtyRental = $derived(
+    JSON.stringify([...localPeriodIds].sort()) !== origRental.periodIds ||
+    JSON.stringify([...localMethodIds].sort()) !== origRental.methodIds ||
+    JSON.stringify([...localPickupIds].sort()) !== origRental.pickupIds
+  )
+
+  function togglePeriod(id: string) {
+    localPeriodIds = localPeriodIds.includes(id) ? localPeriodIds.filter(v => v !== id) : [...localPeriodIds, id]
+  }
+  function toggleMethod(id: string) {
+    localMethodIds = localMethodIds.includes(id) ? localMethodIds.filter(v => v !== id) : [...localMethodIds, id]
+  }
+  function togglePickup(id: string) {
+    localPickupIds = localPickupIds.includes(id) ? localPickupIds.filter(v => v !== id) : [...localPickupIds, id]
+  }
+
+  // ── 구성품 로컬 상태 ─────────────────────────────────────────
+  type ProductWithComponents = typeof product & { components?: Record<string, string> | null }
+  let localComponents = $state<Array<{ key: string; value: string }>>(
+    Object.entries((product as ProductWithComponents).components ?? {}).map(([key, value]) => ({ key, value }))
+  )
+  const origComponentsJson = JSON.stringify(
+    Object.fromEntries(Object.entries((product as ProductWithComponents).components ?? {}).map(([k, v]) => [k, v]))
+  )
+  const isDirtyComponents = $derived(
+    JSON.stringify(Object.fromEntries(localComponents.filter(c => c.key).map(c => [c.key, c.value])))
+    !== origComponentsJson
+  )
+
   // ── 사양 로컬 상태 ──────────────────────────────────────────
   let localSpecs = $state<Array<{ key: string; value: string }>>(
     Object.entries(product.specifications ?? {}).map(([key, value]) => ({ key, value }))
@@ -195,6 +243,7 @@
   $effect(() => {
     localImages = [...product.image_urls]
     localSpecs = Object.entries(product.specifications ?? {}).map(([key, value]) => ({ key, value }))
+    localComponents = Object.entries((product as ProductWithComponents).components ?? {}).map(([key, value]) => ({ key, value }))
     localSlug = product.slug
     // priceRules/product 변경 시(저장 후 invalidateAll) localPricing 동기화 → isDirtyPricing 초기화
     localPricing = {
@@ -207,16 +256,21 @@
       sale_price:            fmtPriceStr(product.sale_price),
     }
     localSaleOnly = product.sale_only ?? false
+    localPeriodIds = [...(product.allowed_period_ids ?? [])]
+    localMethodIds = [...(product.allowed_method_ids ?? [])]
+    localPickupIds = [...(product.allowed_pickup_ids ?? [])]
   })
 
   // 탭 전환: 미저장 변경 존재 시 경고 토스트
   function switchTab(tab: TabKey) {
     const dirty =
-      (activeTab === 'basic'    && isDirtyBasic)    ||
-      (activeTab === 'pricing'  && isDirtyPricing)  ||
-      (activeTab === 'specs'    && isDirtySpecs)    ||
-      (activeTab === 'content'  && isDirtyContent)  ||
-      (activeTab === 'options'  && isDirtyOptions)
+      (activeTab === 'basic'       && isDirtyBasic)       ||
+      (activeTab === 'pricing'     && isDirtyPricing)     ||
+      (activeTab === 'rental'      && isDirtyRental)      ||
+      (activeTab === 'specs'       && isDirtySpecs)       ||
+      (activeTab === 'components'  && isDirtyComponents)  ||
+      (activeTab === 'content'     && isDirtyContent)     ||
+      (activeTab === 'options'     && isDirtyOptions)
     if (dirty) csToast.warning('변경 정보 저장 확인')
     activeTab = tab
     if (tab === 'history' && !historyLoaded) {
@@ -684,6 +738,17 @@
     }
   }
 
+  // ─── 구성품 관리 ──────────────────────────────────────────
+
+  function addComponent() { localComponents = [...localComponents, { key: '', value: '' }] }
+  function removeComponent(i: number) { localComponents = localComponents.filter((_, idx) => idx !== i) }
+  function updateComponentKey(i: number, val: string) {
+    localComponents = localComponents.map((c, idx) => idx === i ? { ...c, key: val } : c)
+  }
+  function updateComponentVal(i: number, val: string) {
+    localComponents = localComponents.map((c, idx) => idx === i ? { ...c, value: val } : c)
+  }
+
   // ─── 사양 관리 ────────────────────────────────────────────
 
   function addSpec() { localSpecs = [...localSpecs, { key: '', value: '' }] }
@@ -923,7 +988,9 @@
     { key: 'basic', label: '기본정보' },
     { key: 'options', label: '옵션상품' },
     { key: 'pricing', label: '가격정책' },
+    { key: 'rental', label: '대여정책' },
     { key: 'content', label: '상품설명' },
+    { key: 'components', label: '구성품' },
     { key: 'images', label: '이미지' },
     { key: 'specs', label: '사양' },
     { key: 'history', label: '이력' },
@@ -1434,7 +1501,88 @@
       </div>
     {/if}
 
-    <!-- ④ 상품설명(content_blocks) -->
+    <!-- ④ 대여정책 -->
+    {#if activeTab === 'rental'}
+      <div class="section" role="tabpanel">
+        <div class="section-header">
+          <span class="section-title">대여정책</span>
+          <button
+            form="form-rental"
+            type="submit"
+            class="btn-save-inline"
+            class:dirty={isDirtyRental}
+            disabled={!isDirtyRental || isSaving}
+          >{isSaving ? '저장 중...' : '저장'}</button>
+        </div>
+        <form id="form-rental" method="POST" action="?/updateSection" use:enhance={handleSectionSave} class="inline-form">
+          <input type="hidden" name="product_id" value={product.id} />
+          <input type="hidden" name="section_type" value="rental" />
+          <input type="hidden" name="allowed_period_ids" value={JSON.stringify(localPeriodIds)} />
+          <input type="hidden" name="allowed_method_ids" value={JSON.stringify(localMethodIds)} />
+          <input type="hidden" name="allowed_pickup_ids" value={JSON.stringify(localPickupIds)} />
+
+          <!-- 허용 대여 기간 -->
+          <div class="inline-row inline-row--wrap">
+            <span class="vr-label">허용 대여 기간</span>
+            {#if rentalPeriods.length === 0}
+              <a href="/cms/set/rental" class="il-empty-link">대여 설정에서 등록</a>
+            {:else}
+              <div class="combo-chips">
+                {#each rentalPeriods as period}
+                  <button
+                    type="button"
+                    class="combo-row-btn"
+                    class:combo-row-selected={localPeriodIds.includes(period.id)}
+                    onclick={() => togglePeriod(period.id)}
+                  >{period.name}</button>
+                {/each}
+              </div>
+            {/if}
+          </div>
+
+          <!-- 허용 대여 방식 -->
+          <div class="inline-row inline-row--wrap">
+            <span class="vr-label">허용 대여 방식</span>
+            {#if rentalMethods.length === 0}
+              <a href="/cms/set/rental" class="il-empty-link">대여 설정에서 등록</a>
+            {:else}
+              <div class="combo-chips">
+                {#each rentalMethods as method}
+                  <button
+                    type="button"
+                    class="combo-row-btn"
+                    class:combo-row-selected={localMethodIds.includes(method.id)}
+                    onclick={() => toggleMethod(method.id)}
+                  >{method.name}</button>
+                {/each}
+              </div>
+            {/if}
+          </div>
+
+          <!-- 허용 방문 지점 -->
+          {#if pickupPoints.length > 0}
+            <div class="inline-row inline-row--wrap">
+              <span class="vr-label">허용 방문 지점</span>
+              <div class="combo-chips">
+                {#each pickupPoints as pt}
+                  <button
+                    type="button"
+                    class="combo-row-btn"
+                    class:combo-row-selected={localPickupIds.includes(pt.id)}
+                    onclick={() => togglePickup(pt.id)}
+                  >
+                    {pt.name}
+                    {#if pt.address}<span class="combo-sub">{pt.address}</span>{/if}
+                  </button>
+                {/each}
+              </div>
+            </div>
+          {/if}
+        </form>
+      </div>
+    {/if}
+
+    <!-- ⑤ 상품설명(content_blocks) -->
     {#if activeTab === 'content'}
       <div class="section" role="tabpanel">
         <div class="section-header">
@@ -1552,6 +1700,42 @@
           <p class="empty-hint">이미지를 드래그하거나 URL을 추가하세요.</p>
         {/if}
 
+      </div>
+    {/if}
+
+    <!-- ④-1 구성품 -->
+    {#if activeTab === 'components'}
+      <div class="section" role="tabpanel">
+        <div class="section-header">
+          <span class="section-title">구성품</span>
+          <button
+            form="form-components"
+            type="submit"
+            class="btn-save-inline"
+            class:dirty={isDirtyComponents}
+            disabled={!isDirtyComponents || isSaving}
+          >{isSaving ? '저장 중...' : '저장'}</button>
+        </div>
+        <form id="form-components" method="POST" action="?/updateSection" use:enhance={handleSectionSave} class="inline-form">
+          <input type="hidden" name="product_id" value={product.id} />
+          <input type="hidden" name="section_type" value="components" />
+          <input type="hidden" name="components"
+            value={JSON.stringify(Object.fromEntries(localComponents.filter(c => c.key).map(c => [c.key, c.value])))} />
+          <div class="specs-list">
+            <CmsDragList bind:items={localComponents} class="specs-drag-list">
+              {#snippet renderItem(comp, i)}
+                <div class="spec-row-inner">
+                  <input class="il-input spec-key" type="text" placeholder="품명 (예: 배터리)" value={comp.key}
+                    oninput={(e) => updateComponentKey(i, (e.target as HTMLInputElement).value)} />
+                  <input class="il-input spec-val" type="text" placeholder="수량 or 기타 (예: 1개, 단일)" value={comp.value}
+                    oninput={(e) => updateComponentVal(i, (e.target as HTMLInputElement).value)} />
+                  <button type="button" class="btn-icon-close" onclick={() => removeComponent(i)} aria-label="구성품 항목 제거">✕</button>
+                </div>
+              {/snippet}
+            </CmsDragList>
+            <button type="button" class="btn-add-dashed" onclick={addComponent}>+ 구성품 추가</button>
+          </div>
+        </form>
       </div>
     {/if}
 
@@ -3530,4 +3714,18 @@
     flex: 1;
     min-width: 0;
   }
+
+  /* 대여정책 탭 */
+  .combo-chips { display: flex; flex-wrap: wrap; gap: 6px; flex: 1; }
+  .combo-row-btn {
+    display: inline-flex; flex-direction: column; align-items: flex-start;
+    padding: 6px 12px; border: 1px solid var(--cs-lilac); border-radius: var(--radius-sm);
+    background: var(--color-surface, #fff); cursor: pointer; font: var(--text-pc-body-14);
+    color: var(--cs-text); transition: border-color .15s, background .15s;
+  }
+  .combo-row-btn:hover { border-color: rgba(59,47,138,.35); background: rgba(59,47,138,.04); }
+  .combo-row-btn.combo-row-selected { border-color: var(--cs-purple) !important; background: var(--cs-purple-op10, rgba(59,47,138,.08)) !important; }
+  .combo-sub { display: block; font: var(--text-pc-script-12); color: var(--cs-text-mid, #666); margin-top: 2px; }
+  .inline-row--wrap { align-items: flex-start; flex-wrap: wrap; gap: 6px; }
+  .il-empty-link { font: var(--text-pc-script-12); color: var(--cs-purple); text-decoration: underline; }
 </style>

@@ -1,8 +1,13 @@
 import { redirect, fail } from '@sveltejs/kit'
 import { env } from '$env/dynamic/private'
 import { getSupabaseUrl } from '$lib/env/supabasePublic'
-import { createClient } from '@supabase/supabase-js'
+import { createClient, type SupabaseClient } from '@supabase/supabase-js'
 import type { PageServerLoad, Actions } from './$types'
+
+// rental_period_options / rental_method_options 는 database.ts 미등록 — 우회 헬퍼
+function untypedFrom(sb: SupabaseClient, table: string) {
+  return (sb as unknown as { from: (t: string) => ReturnType<SupabaseClient['from']> }).from(table)
+}
 
 export const load: PageServerLoad = async ({ locals, url }) => {
   const { session } = await locals.safeGetSession()
@@ -217,6 +222,8 @@ export const load: PageServerLoad = async ({ locals, url }) => {
     label_image_url: string | null
     ocr_raw_text: string | null
   }
+  type RentalOption = { id: string; name: string; display_order: number }
+  type PickupPointOption = { id: string; name: string; address: string }
   type SelectedProduct = {
     id: string
     category: string
@@ -237,6 +244,9 @@ export const load: PageServerLoad = async ({ locals, url }) => {
     price12h: number | null
     price24h: number | null
     assets: AssetDetail[]
+    allowed_period_ids: string[]
+    allowed_method_ids: string[]
+    allowed_pickup_ids: string[]
   }
   let selectedProduct: SelectedProduct | null = null
   let selectedPriceRules: Array<{
@@ -247,13 +257,21 @@ export const load: PageServerLoad = async ({ locals, url }) => {
     damage_fee_percentage: number | null
   }> = []
 
+  let rentalPeriods: RentalOption[] = []
+  let rentalMethods: RentalOption[] = []
+  let pickupPoints: PickupPointOption[] = []
+
   if (selectedId) {
-    const { data: sp } = await admin
-      .from('products')
-      .select('*')
-      .eq('id', selectedId)
-      .is('deleted_at', null)
-      .single()
+    const [{ data: sp }, periodsRes, methodsRes, pickupsRes] = await Promise.all([
+      admin.from('products').select('*').eq('id', selectedId).is('deleted_at', null).single(),
+      untypedFrom(admin, 'rental_period_options').select('id, name, display_order').eq('is_active', true).is('deleted_at', null).order('display_order'),
+      untypedFrom(admin, 'rental_method_options').select('id, name, display_order').eq('is_active', true).is('deleted_at', null).order('display_order'),
+      admin.from('pickup_points').select('id, name, address').eq('is_active', true).is('deleted_at', null).order('created_at'),
+    ])
+
+    rentalPeriods = ((periodsRes as { data: RentalOption[] | null }).data ?? [])
+    rentalMethods = ((methodsRes as { data: RentalOption[] | null }).data ?? [])
+    pickupPoints  = (pickupsRes.data ?? []) as PickupPointOption[]
 
     if (sp) {
       selectedProduct = {
@@ -265,6 +283,9 @@ export const load: PageServerLoad = async ({ locals, url }) => {
         product_caption: (sp as Record<string, unknown>).product_caption as string | null ?? null,
         sale_price: (sp as Record<string, unknown>).sale_price as number | null ?? null,
         sale_only: (sp as Record<string, unknown>).sale_only as boolean ?? false,
+        allowed_period_ids: ((sp as Record<string, unknown>).allowed_period_ids as string[] | null) ?? [],
+        allowed_method_ids: ((sp as Record<string, unknown>).allowed_method_ids as string[] | null) ?? [],
+        allowed_pickup_ids: ((sp as Record<string, unknown>).allowed_pickup_ids as string[] | null) ?? [],
       }
 
       const { data: priceRules } = await admin
@@ -341,6 +362,9 @@ export const load: PageServerLoad = async ({ locals, url }) => {
     selectedPriceRules,
     inventoryList,
     partnerComboItems,
+    rentalPeriods,
+    rentalMethods,
+    pickupPoints,
   }
 }
 
@@ -499,6 +523,21 @@ export const actions: Actions = {
       if (updateError) return fail(500, { error: '사양 수정에 실패했습니다.' })
     }
 
+    if (sectionType === 'components') {
+      let components: Record<string, string> | null = null
+      const compStr = form.get('components') as string | null
+      if (compStr) {
+        try { components = JSON.parse(compStr) } catch { /* ignore */ }
+      }
+
+      const { error: updateError } = await admin
+        .from('products')
+        .update({ components })
+        .eq('id', productId)
+
+      if (updateError) return fail(500, { error: '구성품 수정에 실패했습니다.' })
+    }
+
     if (sectionType === 'content') {
       let content_blocks: unknown = null
       let keywords: unknown = null
@@ -526,6 +565,25 @@ export const actions: Actions = {
         .eq('id', productId)
 
       if (updateError) return fail(500, { error: '옵션상품 수정에 실패했습니다.' })
+    }
+
+    if (sectionType === 'rental') {
+      let allowed_period_ids: string[] = []
+      let allowed_method_ids: string[] = []
+      let allowed_pickup_ids: string[] = []
+      const periodStr = form.get('allowed_period_ids') as string | null
+      const methodStr = form.get('allowed_method_ids') as string | null
+      const pickupStr = form.get('allowed_pickup_ids') as string | null
+      if (periodStr) { try { allowed_period_ids = JSON.parse(periodStr) } catch { /* ignore */ } }
+      if (methodStr) { try { allowed_method_ids = JSON.parse(methodStr) } catch { /* ignore */ } }
+      if (pickupStr) { try { allowed_pickup_ids = JSON.parse(pickupStr) } catch { /* ignore */ } }
+
+      const { error: updateError } = await admin
+        .from('products')
+        .update({ allowed_period_ids, allowed_method_ids, allowed_pickup_ids })
+        .eq('id', productId)
+
+      if (updateError) return fail(500, { error: '대여정책 수정에 실패했습니다.' })
     }
 
     return { success: true, sectionType }
