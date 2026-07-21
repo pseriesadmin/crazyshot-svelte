@@ -3,6 +3,7 @@
   import { invalidateAll } from '$app/navigation'
   import { csToast } from '$lib/utils/toast'
   import CmsDragList from '$lib/components/cms/CmsDragList.svelte'
+  import CmsDeleteButton from '$lib/components/cms/CmsDeleteButton.svelte'
   import type { PageData, ActionData } from './$types'
   import type { RentalPeriodOption, RentalMethodOption, PickupPoint, RentalConsentItem } from './+page.server'
 
@@ -33,7 +34,6 @@
   let branchLoading = $state(false)
   let expandedBranchId = $state<string | null>(null)
   let branchForms = $state<Record<string, { address: string; phone: string; contact_person: string }>>({})
-  let pendingDeleteBranchId = $state<string | null>(null)
 
   $effect(() => {
     branches = data.branches
@@ -106,10 +106,7 @@
 </script>
 
 <div class="page-wrap">
-  <div class="page-header">
-    <h1 class="page-title">대여관리 설정</h1>
-    <p class="page-desc">상품등록 및 결제 화면에 노출될 대여 조건을 관리합니다.</p>
-  </div>
+
 
   <div class="sections">
 
@@ -118,10 +115,10 @@
     ══════════════════════════════════════════ -->
     <section class="setting-section">
       <div class="section-head">
-        <h2 class="section-title">대여 기간 조건</h2>
+        <h2 class="section-title">대여 기간 제한 옵션</h2>
         <span class="section-badge">{periods.length} / 10</span>
       </div>
-      <p class="section-desc">상품 예약 시 선택 가능한 대여 기간 조건 목록을 등록합니다.</p>
+      <p class="section-desc">상품상세정보에 최대 대여 기간을 표시하고 설정을 반영합니다.</p>
 
       <form
         method="POST"
@@ -171,23 +168,7 @@
           {#snippet renderItem(item: RentalPeriodOption)}
             <div class="list-row">
               <span class="list-row-name">{item.name}</span>
-              <form
-                method="POST"
-                action="?/deletePeriod"
-                use:enhance={() => {
-                  return async ({ result, update }) => {
-                    if (result.type === 'success') {
-                      csToast.success('삭제되었습니다.')
-                      await update()
-                    } else if (result.type === 'failure') {
-                      csToast.error((result.data as { error?: string })?.error ?? '삭제에 실패했습니다.')
-                    }
-                  }
-                }}
-              >
-                <input type="hidden" name="id" value={item.id} />
-                <button type="submit" class="btn-danger-sm" aria-label="삭제">삭제</button>
-              </form>
+              <CmsDeleteButton action="?/deletePeriod" id={item.id} />
             </div>
           {/snippet}
         </CmsDragList>
@@ -201,10 +182,10 @@
     ══════════════════════════════════════════ -->
     <section class="setting-section">
       <div class="section-head">
-        <h2 class="section-title">대여 방식</h2>
+        <h2 class="section-title">대여 방식 옵션</h2>
         <span class="section-badge">{methods.length} / 10</span>
       </div>
-      <p class="section-desc">상품 예약 시 선택 가능한 대여 방식 목록을 등록합니다.</p>
+      <p class="section-desc">상품 예약등록 화면에 선택 가능한 대여방식 목록을 등록합니다.</p>
 
       <form
         method="POST"
@@ -254,23 +235,7 @@
           {#snippet renderItem(item: RentalMethodOption)}
             <div class="list-row">
               <span class="list-row-name">{item.name}</span>
-              <form
-                method="POST"
-                action="?/deleteMethod"
-                use:enhance={() => {
-                  return async ({ result, update }) => {
-                    if (result.type === 'success') {
-                      csToast.success('삭제되었습니다.')
-                      await update()
-                    } else if (result.type === 'failure') {
-                      csToast.error((result.data as { error?: string })?.error ?? '삭제에 실패했습니다.')
-                    }
-                  }
-                }}
-              >
-                <input type="hidden" name="id" value={item.id} />
-                <button type="submit" class="btn-danger-sm" aria-label="삭제">삭제</button>
-              </form>
+              <CmsDeleteButton action="?/deleteMethod" id={item.id} />
             </div>
           {/snippet}
         </CmsDragList>
@@ -340,49 +305,22 @@
                   class="accordion-toggle"
                   onclick={() => {
                     expandedBranchId = expandedBranchId === branch.id ? null : branch.id
-                    pendingDeleteBranchId = null
                   }}
                   aria-expanded={expandedBranchId === branch.id}
                 >
                   <span class="accordion-name">{branch.name}</span>
                 </button>
-                <form
-                  method="POST"
+                <CmsDeleteButton
                   action="?/deleteBranch"
-                  use:enhance={({ cancel }) => {
-                    if (pendingDeleteBranchId !== branch.id) {
-                      pendingDeleteBranchId = branch.id
-                      csToast.warning('한번 더 선택 시 삭제됩니다.')
-                      cancel()
-                      return
-                    }
-                    pendingDeleteBranchId = null
-                    return async ({ result, update }) => {
-                      if (result.type === 'success') {
-                        expandedBranchId = null
-                        csToast.success('지점이 삭제되었습니다.')
-                        await update()
-                      } else if (result.type === 'failure') {
-                        csToast.error((result.data as { error?: string })?.error ?? '삭제에 실패했습니다.')
-                      }
-                    }
-                  }}
-                >
-                  <input type="hidden" name="id" value={branch.id} />
-                  <button
-                    type="submit"
-                    class="btn-danger-sm"
-                    class:btn-danger-sm--pending={pendingDeleteBranchId === branch.id}
-                  >
-                    {pendingDeleteBranchId === branch.id ? '삭제 확인' : '삭제'}
-                  </button>
-                </form>
+                  id={branch.id}
+                  successMessage="지점이 삭제되었습니다."
+                  onsuccess={() => { expandedBranchId = null }}
+                />
                 <button
                   type="button"
                   class="accordion-arrow-btn"
                   onclick={() => {
                     expandedBranchId = expandedBranchId === branch.id ? null : branch.id
-                    pendingDeleteBranchId = null
                   }}
                   aria-hidden="true"
                   tabindex="-1"
@@ -581,21 +519,7 @@
             {#snippet renderItem(item: RentalConsentItem)}
               <div class="list-row">
                 <span class="list-row-name consent-text">{item.content}</span>
-                <form
-                  method="POST"
-                  action="?/deleteConsent"
-                  use:enhance={() => {
-                    return async ({ result, update }) => {
-                      if (result.type === 'success') {
-                        csToast.success('삭제되었습니다.')
-                        await update()
-                      }
-                    }
-                  }}
-                >
-                  <input type="hidden" name="id" value={item.id} />
-                  <button type="submit" class="btn-danger-sm" aria-label="삭제">삭제</button>
-                </form>
+                <CmsDeleteButton action="?/deleteConsent" id={item.id} />
               </div>
             {/snippet}
           </CmsDragList>
@@ -612,26 +536,11 @@
   .page-wrap {
     flex: 1;
     overflow-y: auto;
-    padding: 32px 40px;
+    padding: 32px 16px;
     min-width: 0;
   }
 
   /* ─── 페이지 헤더 ─── */
-  .page-header {
-    margin-bottom: 32px;
-  }
-
-  .page-title {
-    font: var(--text-pc-htitle-25);
-    color: var(--cs-dark);
-    margin: 0 0 6px;
-  }
-
-  .page-desc {
-    font: var(--text-pc-body-14);
-    color: var(--cs-text-mid);
-    margin: 0;
-  }
 
   /* ─── 섹션 레이아웃 ─── */
   .sections {
@@ -643,7 +552,7 @@
   .setting-section {
     background: var(--cs-white);
     border-radius: var(--cms-radius-lg);
-    padding: 28px 32px;
+    padding: 34px 32px;
   }
 
   .section-head {
@@ -654,7 +563,7 @@
   }
 
   .section-title {
-    font: var(--text-pc-htitle-25);
+    font: var(--text-pc-menu-kr-20);
     color: var(--cs-dark);
     margin: 0;
   }
@@ -672,14 +581,14 @@
   .section-desc {
     font: var(--text-pc-body-14);
     color: var(--cs-text-mid);
-    margin: 0 0 20px;
+    margin: 0 0 40px;
   }
 
   /* ─── 추가 폼 ─── */
   .add-form {
     display: flex;
     gap: 10px;
-    margin-bottom: 16px;
+    margin-bottom: 32px;
   }
 
   .add-input {
@@ -701,7 +610,7 @@
   }
 
   .add-input::placeholder {
-    color: var(--cs-text-mid);
+    color: var(--cs-text-placeholder);
   }
 
   .btn-add {
@@ -760,6 +669,17 @@
   }
 
   /* ─── 위험 버튼 (삭제) ─── */
+  .act-del {
+    display: inline-flex; align-items: center; justify-content: center;
+    height: 28px; padding: 0 8px;
+    border: none; border-radius: var(--radius-sm);
+    background: transparent; cursor: pointer;
+    color: var(--cs-text-light);
+    transition: background 0.1s, color 0.1s;
+    flex-shrink: 0;
+  }
+  .act-del:hover { background: rgba(255,53,53,0.08); color: var(--cs-red-badge); }
+
   .btn-danger-sm {
     height: 28px;
     padding: 0 12px;
@@ -780,6 +700,11 @@
 
   .btn-danger-sm--pending {
     background: color-mix(in srgb, var(--cs-error, #E53E3E) 60%, black);
+  }
+
+  .act-del--pending {
+    color: var(--cs-red-badge);
+    background: rgba(255,53,53,0.08);
   }
 
   /* ─── 저장 버튼 ─── */

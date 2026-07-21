@@ -70,6 +70,9 @@
   let blacklistReason = $state('')
   let showBlacklistForm = $state(false)
 
+  // 회원 삭제 2단계 경고 상태
+  let deleteWarnPending = $state(false)
+
   // 구독 취소 모달 상태
   let showCancelModal = $state(false)
   let cancelTargetId = $state<string | null>(null)
@@ -503,6 +506,46 @@
             </button>
           </form>
         {/if}
+      </div>
+
+      <!-- 회원 삭제 -->
+      <div class="delete-account-section">
+        <form
+          method="POST"
+          action="/cms/customers?/deleteCustomer"
+          use:enhance={() => {
+            return async ({ result, update }) => {
+              if (result.type === 'success') {
+                csToast.success('회원이 삭제되었습니다.')
+                deleteWarnPending = false
+                await update()
+                onclose()
+              } else if (result.type === 'failure') {
+                const err = (result.data as { error?: string })?.error ?? '삭제 실패'
+                csToast.error(err)
+                deleteWarnPending = false
+              }
+            }
+          }}
+        >
+          <input type="hidden" name="user_id" value={row.user_id} />
+          <button
+            type={deleteWarnPending ? 'submit' : 'button'}
+            class="act-del act-del-account"
+            aria-label="회원 삭제"
+            title="회원 삭제"
+            onclick={() => {
+              if (!deleteWarnPending) {
+                deleteWarnPending = true
+                csToast.warning('한번 더 선택 시 삭제됩니다.')
+                setTimeout(() => { deleteWarnPending = false }, 4000)
+              }
+            }}
+          >
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3,6 5,6 21,6"/><path d="M19,6l-1,14H6L5,6"/><path d="M10,11v6M14,11v6"/><path d="M9,6V4h6v2"/></svg>
+            회원 삭제
+          </button>
+        </form>
       </div>
     {/if}
 
@@ -985,13 +1028,39 @@
   }
   .btn-secondary:hover { background: rgba(59,47,138,0.06); }
 
+  /* 회원 삭제 섹션 */
+  .delete-account-section {
+    margin-top: 24px;
+    padding-top: 16px;
+    border-top: 1px solid var(--cs-lilac);
+    display: flex;
+    justify-content: flex-end;
+  }
+
+  .act-del {
+    display: inline-flex; align-items: center; justify-content: center;
+    height: 28px; padding: 0 8px;
+    border: none; border-radius: var(--radius-sm);
+    background: transparent; cursor: pointer;
+    color: var(--cs-text-light);
+    transition: background 0.1s, color 0.1s;
+    flex-shrink: 0;
+  }
+  .act-del:hover { background: rgba(255,53,53,0.08); color: var(--cs-red-badge); }
+
+  .act-del-account {
+    gap: 6px;
+    padding: 0 12px;
+    font: var(--text-pc-script-12);
+  }
+
   .btn-danger {
     display: inline-flex; align-items: center; height: 40px; padding: 0 16px;
     background: var(--cs-chat-in-bg); color: var(--cs-red-badge); border: none;
     border-radius: var(--radius-sm); font: var(--text-pc-body-14);
     cursor: pointer; transition: background 0.12s; white-space: nowrap;
   }
-  .btn-danger:hover    { background: #ffb3b3; }
+  .btn-danger:hover    { background: var(--cs-bg-error); }
   .btn-danger:disabled { opacity: 0.5; cursor: not-allowed; }
 
   .f-input {

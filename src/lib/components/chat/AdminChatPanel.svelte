@@ -305,7 +305,9 @@
                     onclick={(e) => handleDeleteRequest(e, session.id)}
                     aria-label="채팅 삭제"
                     title="완전 삭제"
-                  >✕</button>
+                  >
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3,6 5,6 21,6"/><path d="M19,6l-1,14H6L5,6"/><path d="M10,11v6M14,11v6"/><path d="M9,6V4h6v2"/></svg>
+                  </button>
                 {/if}
               </div>
               <div class="sc-mid">
@@ -718,8 +720,8 @@
     transition: background 0.12s, color 0.12s;
   }
   .delete-session-btn:hover {
-    background: var(--cs-red-badge);
-    color: var(--cs-white);
+    background: rgba(255,53,53,0.08);
+    color: var(--cs-red-badge);
   }
 
   /* ── 완전 삭제 확인 토스트 ── */

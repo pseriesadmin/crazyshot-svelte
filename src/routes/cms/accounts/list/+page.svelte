@@ -259,7 +259,10 @@
                   onclick={() => { pendingDelete = account }}
                   disabled={isProcessing || account.cms_role === 'superadmin'}
                   aria-label="계정 삭제"
-                >삭제</button>
+                  title="계정 삭제"
+                >
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3,6 5,6 21,6"/><path d="M19,6l-1,14H6L5,6"/><path d="M10,11v6M14,11v6"/><path d="M9,6V4h6v2"/></svg>
+                </button>
               </td>
 
             </tr>
@@ -349,7 +352,7 @@
 
 
   .page-title {
-    font: var(--text-pc-title-18);
+    font: var(--text-pc-menu-kr-20);
     color: var(--cs-text);
     margin: 0;
   }
@@ -365,7 +368,7 @@
   .error-bar {
     font: var(--text-pc-body-14);
     color: var(--cs-red-badge);
-    background: #fff0f0;
+    background: var(--cs-bg-error);
     border-radius: var(--cms-radius-sm);
     padding: 10px 14px;
     margin: 0;
@@ -410,7 +413,7 @@
   td {
     font: var(--text-pc-body-14);
     color: var(--cs-text);
-    padding: 9px 14px;
+    padding: 14px 14px;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
@@ -519,7 +522,7 @@
     vertical-align: middle;
   }
   .toggle-btn.on     { background: var(--cs-purple); }
-  .toggle-btn.danger { background: #d0d0d8; }
+  .toggle-btn.danger { background: var(--cs-disabled-button); }
   .toggle-btn:disabled { opacity: 0.5; cursor: not-allowed; }
 
   .toggle-thumb {
@@ -541,19 +544,16 @@
 
   /* ── 삭제 버튼 ───────────────── */
   .delete-btn {
-    font: var(--text-pc-script-12);
-    font-weight: 700;
-    background: rgba(255,53,53,0.08);
-    color: var(--cs-red-badge);
-    border: none;
-    border-radius: var(--radius-sm);
-    padding: 3px 8px;
-    cursor: pointer;
-    min-height: 26px;
-    transition: opacity 0.12s;
+    display: inline-flex; align-items: center; justify-content: center;
+    height: 28px; padding: 0 8px;
+    border: none; border-radius: var(--radius-sm);
+    background: transparent; cursor: pointer;
+    color: var(--cs-text-light);
+    transition: background 0.1s, color 0.1s;
+    flex-shrink: 0;
   }
   .delete-btn:disabled { opacity: 0.3; cursor: not-allowed; }
-  .delete-btn:not(:disabled):hover { opacity: 0.75; }
+  .delete-btn:not(:disabled):hover { background: rgba(255,53,53,0.08); color: var(--cs-red-badge); }
 
   /* ── 삭제 확인 다이얼로그 ─────── */
   .confirm-backdrop {

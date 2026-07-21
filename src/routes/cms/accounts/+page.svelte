@@ -145,7 +145,7 @@
   .accounts-wrap {
     flex: 1;
     overflow-y: auto;
-    padding: 20px;
+    padding: 32px 16px;
     background: var(--cs-lilac);
   }
 
@@ -160,7 +160,7 @@
   }
 
   .page-title {
-    font: var(--text-pc-htitle-25);
+    font: var(--text-pc-menu-kr-20);
     color: var(--cs-text);
     margin: 0 0 4px;
   }
@@ -244,7 +244,7 @@
     color: var(--cs-white);
     border: none;
     border-radius: var(--radius-md);
-    height: 56px;
+    height: 36px;
     padding: 0 30px;
     font: var(--text-pc-title-16);
     cursor: pointer;
