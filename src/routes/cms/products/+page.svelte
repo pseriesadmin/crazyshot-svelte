@@ -376,6 +376,9 @@
                         initialTab={data.initialTab}
                         inventoryList={data.inventoryList}
                         partnerComboItems={data.partnerComboItems}
+                        rentalPeriods={data.rentalPeriods}
+                        rentalMethods={data.rentalMethods}
+                        pickupPoints={data.pickupPoints}
                         onclose={closePanel}
                       />
                     {/key}
@@ -395,6 +398,9 @@
               initialTab={data.initialTab}
               inventoryList={data.inventoryList}
               partnerComboItems={data.partnerComboItems}
+              rentalPeriods={data.rentalPeriods}
+              rentalMethods={data.rentalMethods}
+              pickupPoints={data.pickupPoints}
               onclose={closePanel}
             />
           {/key}
