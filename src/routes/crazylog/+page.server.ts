@@ -53,6 +53,17 @@ const BAR_COLORS: Record<string, string> = {
 }
 
 export const load: PageServerLoad = async ({ locals }) => {
+	const { session } = await locals.safeGetSession()
+	let isCms = false
+	if (session?.user.id) {
+		const { data: profile } = await locals.supabase
+			.from('user_profiles')
+			.select('cms_role')
+			.eq('id', session.user.id)
+			.single()
+		isCms = !!(profile as { cms_role?: string | null } | null)?.cms_role
+	}
+
 	const [reviewCount, shareCount, promoCount, { data: rawAny, error }] = await Promise.all([
 		locals.supabase
 			.from('user_posts')
@@ -106,6 +117,7 @@ export const load: PageServerLoad = async ({ locals }) => {
 		createdAt: p.created_at,
 		author:    authorMap[p.user_id] ?? '익명',
 		img:       extractFirstImageUrl(p.content_blocks) ?? null,
+		desc:      extractFirstText(p.content_blocks) || null,
 		bar:       BAR_COLORS[p.log_type ?? ''] ?? '#3b2f8a',
 		rounded:   i % 2 === 0,
 	}))
@@ -117,5 +129,6 @@ export const load: PageServerLoad = async ({ locals }) => {
 			promo:  promoCount.count  ?? 0,
 		},
 		posts,
+		isCms,
 	}
 }

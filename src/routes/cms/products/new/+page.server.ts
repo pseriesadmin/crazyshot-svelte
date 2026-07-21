@@ -1,8 +1,13 @@
 import { redirect, fail } from '@sveltejs/kit'
 import { env } from '$env/dynamic/private'
 import { getSupabaseUrl } from '$lib/env/supabasePublic'
-import { createClient } from '@supabase/supabase-js'
+import { createClient, type SupabaseClient } from '@supabase/supabase-js'
 import type { PageServerLoad, Actions } from './$types'
+
+// rental_period_options / rental_method_options 는 database.ts 미등록 — 우회 헬퍼
+function untypedFrom(sb: SupabaseClient, table: string) {
+  return (sb as unknown as { from: (t: string) => ReturnType<SupabaseClient['from']> }).from(table)
+}
 
 export type MappingGroupSimple = { id: string; name: string; description: string | null; default_category: string | null }
 export type MappingItemSimple = {
@@ -13,6 +18,9 @@ export type MappingItemSimple = {
   max_sequence: number
 }
 export type TaxonomyCodeSimple = { id: string; code: string; name: string; product_category: string | null; depth: number }
+export type RentalPeriodSimple = { id: string; name: string; display_order: number }
+export type RentalMethodSimple = { id: string; name: string; display_order: number }
+export type PickupPointSimple  = { id: string; name: string; address: string }
 
 export const load: PageServerLoad = async ({ locals }) => {
   const { session } = await locals.safeGetSession()
@@ -20,7 +28,7 @@ export const load: PageServerLoad = async ({ locals }) => {
 
   const admin = createClient(getSupabaseUrl(), env.SUPABASE_SERVICE_ROLE_KEY ?? '')
 
-  const [{ data: rawGroups }, { data: rawItems }] = await Promise.all([
+  const [{ data: rawGroups }, { data: rawItems }, periodsRes, methodsRes, pickupsRes] = await Promise.all([
     admin.from('code_mapping_groups')
       .select('id, name, description, default_category')
       .eq('is_active', true)
@@ -29,6 +37,21 @@ export const load: PageServerLoad = async ({ locals }) => {
       .order('name'),
     admin.from('code_mapping_items')
       .select('group_id, taxonomy_code_id, combo_row_id, date_option, max_sequence'),
+    untypedFrom(admin, 'rental_period_options')
+      .select('id, name, display_order')
+      .eq('is_active', true)
+      .is('deleted_at', null)
+      .order('display_order'),
+    untypedFrom(admin, 'rental_method_options')
+      .select('id, name, display_order')
+      .eq('is_active', true)
+      .is('deleted_at', null)
+      .order('display_order'),
+    admin.from('pickup_points')
+      .select('id, name, address')
+      .eq('is_active', true)
+      .is('deleted_at', null)
+      .order('created_at'),
   ])
 
   const codeIds = [...new Set((rawItems ?? []).map((i: MappingItemSimple) => i.taxonomy_code_id))]
@@ -47,6 +70,9 @@ export const load: PageServerLoad = async ({ locals }) => {
     mappingGroups: (rawGroups ?? []) as MappingGroupSimple[],
     mappingItems: (rawItems ?? []) as MappingItemSimple[],
     taxonomyCodes,
+    rentalPeriods: ((periodsRes as { data: RentalPeriodSimple[] | null }).data ?? []),
+    rentalMethods: ((methodsRes as { data: RentalMethodSimple[] | null }).data ?? []),
+    pickupPoints:  (pickupsRes.data ?? []) as PickupPointSimple[],
   }
 }
 
@@ -93,6 +119,24 @@ export const actions: Actions = {
     if (specsStr) {
       try { specifications = JSON.parse(specsStr) } catch { /* ignore */ }
     }
+
+    let components: Record<string, string> | null = null
+    const compStr = form.get('components') as string | null
+    if (compStr) {
+      try { components = JSON.parse(compStr) } catch { /* ignore */ }
+    }
+
+    let allowedPeriodIds: string[] = []
+    const periodIdsStr = form.get('allowed_period_ids') as string | null
+    if (periodIdsStr) { try { allowedPeriodIds = JSON.parse(periodIdsStr) } catch { /* ignore */ } }
+
+    let allowedMethodIds: string[] = []
+    const methodIdsStr = form.get('allowed_method_ids') as string | null
+    if (methodIdsStr) { try { allowedMethodIds = JSON.parse(methodIdsStr) } catch { /* ignore */ } }
+
+    let allowedPickupIds: string[] = []
+    const pickupIdsStr = form.get('allowed_pickup_ids') as string | null
+    if (pickupIdsStr) { try { allowedPickupIds = JSON.parse(pickupIdsStr) } catch { /* ignore */ } }
 
     let image_urls: string[] = []
     const imagesStr = form.get('image_urls') as string | null
@@ -142,11 +186,15 @@ export const actions: Actions = {
         description,
         image_urls,
         specifications,
+        components,
         is_active,
         sale_price: salePrice,
         sale_only: saleOnly,
         content_blocks,
         keywords,
+        allowed_period_ids: allowedPeriodIds,
+        allowed_method_ids: allowedMethodIds,
+        allowed_pickup_ids: allowedPickupIds,
       })
       .select('id')
       .single()

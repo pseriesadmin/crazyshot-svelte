@@ -13,7 +13,7 @@
   import { buildPreview, datePart } from '../../codes/_shared'
   import type { CodeFormat } from '../../codes/+page.server'
   import type { PageData, ActionData } from './$types'
-  import type { MappingGroupSimple, MappingItemSimple, TaxonomyCodeSimple } from './+page.server'
+  import type { MappingGroupSimple, MappingItemSimple, TaxonomyCodeSimple, RentalPeriodSimple, RentalMethodSimple, PickupPointSimple } from './+page.server'
 
   interface Props { data: PageData; form: ActionData }
   let { data, form }: Props = $props()
@@ -363,6 +363,28 @@
   let saleOnly = $state(false)
   let category = $state('')
 
+  // ─── 대여 정책 ───────────────────────────────────────────────
+  let allowedPeriodIds = $state<string[]>([])
+  let allowedMethodIds = $state<string[]>([])
+  let allowedPickupIds = $state<string[]>([])
+
+  function toggleRentalPeriod(id: string) {
+    allowedPeriodIds = allowedPeriodIds.includes(id)
+      ? allowedPeriodIds.filter((v) => v !== id)
+      : [...allowedPeriodIds, id]
+  }
+  function toggleRentalMethod(id: string) {
+    allowedMethodIds = allowedMethodIds.includes(id)
+      ? allowedMethodIds.filter((v) => v !== id)
+      : [...allowedMethodIds, id]
+  }
+  function togglePickupPoint(id: string) {
+    allowedPickupIds = allowedPickupIds.includes(id)
+      ? allowedPickupIds.filter((v) => v !== id)
+      : [...allowedPickupIds, id]
+  }
+  // ────────────────────────────────────────────────────────────
+
   type PriceField = 'price_12h' | 'price_24h' | 'price_monthly' | 'sale_price' | 'deposit_amount' | 'late_fee_per_hour'
   let localPricing = $state<Record<PriceField, string>>({
     price_12h: '',
@@ -397,6 +419,7 @@
   let fileInputEl = $state<HTMLInputElement | null>(null)
   let lightboxUrl = $state<string | null>(null)
   let specs = $state<{ key: string; value: string }[]>([{ key: '', value: '' }])
+  let components = $state<{ key: string; value: string }[]>([{ key: '', value: '' }])
 
   let result = $derived(form as FormResult)
 
@@ -513,6 +536,16 @@
   function addSpec() { specs = [...specs, { key: '', value: '' }] }
   function removeSpec(i: number) { specs = specs.filter((_, idx) => idx !== i) }
 
+  function addComponent() { components = [...components, { key: '', value: '' }] }
+  function removeComponent(i: number) { components = components.filter((_, idx) => idx !== i) }
+  function serializeComponents(): string {
+    const obj: Record<string, string> = {}
+    for (const c of components) {
+      if (c.key.trim()) obj[c.key.trim()] = c.value
+    }
+    return JSON.stringify(obj)
+  }
+
   function serializeSpecs(): string {
     const obj: Record<string, string> = {}
     for (const s of specs) {
@@ -557,6 +590,7 @@
   >
     <!-- Hidden serialized fields -->
     <input type="hidden" name="specifications" value={serializeSpecs()} />
+    <input type="hidden" name="components" value={serializeComponents()} />
     <input type="hidden" name="image_urls" value={serializeImages()} />
     <input type="hidden" name="is_active" value={isActive.toString()} />
     <input type="hidden" name="option_links" value={serializeOptionLinks()} />
@@ -794,6 +828,39 @@
         <!-- 직렬화 hidden inputs -->
         <input type="hidden" name="content_blocks" value={JSON.stringify(contentBlocks)} />
         <input type="hidden" name="keywords" value={JSON.stringify(contentKeywords)} />
+      </div>
+
+      <!-- 구성품 -->
+      <div class="field-row">
+        <label class="field-label">구성품</label>
+        <div class="spec-list">
+          {#each components as comp, i (i)}
+            <div class="spec-row">
+              <input
+                type="text"
+                class="f-input spec-key"
+                placeholder={i === 0 ? '품명 (예: 배터리)' : '품명 (예: 배터리)'}
+                bind:value={comp.key}
+                aria-label={i === 0 ? '구성품 품명 — 키-값 형식으로 입력합니다' : `구성품 품명 ${i + 1}`}
+              />
+              <input
+                type="text"
+                class="f-input spec-val"
+                placeholder="수량 or 기타 (예: 1개, 단일)"
+                bind:value={comp.value}
+                aria-label={`구성품 수량/기타 ${i + 1}`}
+              />
+              <button
+                type="button"
+                class="remove-btn"
+                onclick={() => removeComponent(i)}
+                aria-label="구성품 항목 삭제"
+                disabled={components.length === 1}
+              >✕</button>
+            </div>
+          {/each}
+          <button type="button" class="add-btn" onclick={addComponent}>+ 구성품 추가</button>
+        </div>
       </div>
 
       <!-- 스펙 (키-값 구조형) -->
@@ -1154,9 +1221,74 @@
       <input type="hidden" name="late_fee_per_hour" value={priceSubmitValue('late_fee_per_hour')} />
     </section>
 
-    <!-- ⑤ 이미지 -->
+    <!-- ⑤ 대여 정책 -->
     <section class="form-section">
-      <h2 class="section-title">⑤ 이미지</h2>
+      <h2 class="section-title">⑤ 대여 정책</h2>
+      <p class="section-desc">허용할 대여 조건과 방식을 설정합니다. 미선택 시 모두 허용으로 처리됩니다.</p>
+
+      <div class="field-row">
+        <span class="field-label">허용 대여 기간</span>
+        {#if data.rentalPeriods.length === 0}
+          <p class="no-option-msg"><a href="/cms/set/rental" class="f-link">대여 설정</a>에서 대여 기간을 등록하세요.</p>
+        {:else}
+          <div class="combo-rows">
+            {#each data.rentalPeriods as period}
+              <button
+                type="button"
+                class="combo-row-btn"
+                class:combo-row-selected={allowedPeriodIds.includes(period.id)}
+                onclick={() => toggleRentalPeriod(period.id)}
+              >{period.name}</button>
+            {/each}
+          </div>
+        {/if}
+      </div>
+
+      <div class="field-row">
+        <span class="field-label">허용 대여 방식</span>
+        {#if data.rentalMethods.length === 0}
+          <p class="no-option-msg"><a href="/cms/set/rental" class="f-link">대여 설정</a>에서 대여 방식을 등록하세요.</p>
+        {:else}
+          <div class="combo-rows">
+            {#each data.rentalMethods as method}
+              <button
+                type="button"
+                class="combo-row-btn"
+                class:combo-row-selected={allowedMethodIds.includes(method.id)}
+                onclick={() => toggleRentalMethod(method.id)}
+              >{method.name}</button>
+            {/each}
+          </div>
+        {/if}
+      </div>
+
+      {#if data.pickupPoints.length > 0}
+        <div class="field-row">
+          <span class="field-label">허용 방문 지점</span>
+          <div class="combo-rows">
+            {#each data.pickupPoints as pt}
+              <button
+                type="button"
+                class="combo-row-btn"
+                class:combo-row-selected={allowedPickupIds.includes(pt.id)}
+                onclick={() => togglePickupPoint(pt.id)}
+              >
+                {pt.name}
+                {#if pt.address}<span class="combo-sub">{pt.address}</span>{/if}
+              </button>
+            {/each}
+          </div>
+        </div>
+      {/if}
+
+      <input type="hidden" name="allowed_period_ids" value={JSON.stringify(allowedPeriodIds)} />
+      <input type="hidden" name="allowed_method_ids" value={JSON.stringify(allowedMethodIds)} />
+      <input type="hidden" name="allowed_pickup_ids" value={JSON.stringify(allowedPickupIds)} />
+    </section>
+
+    <!-- ⑥ 이미지 -->
+    <section class="form-section">
+      <h2 class="section-title">⑥ 이미지</h2>
       <p class="section-desc">파일을 드래그하거나 클릭해 업로드하세요. 첫 번째 이미지가 대표 이미지입니다.</p>
 
       {#if isUploading}
@@ -1241,9 +1373,9 @@
       {/if}
     </section>
 
-    <!-- ⑥ 재고 안내 -->
+    <!-- ⑦ 재고 안내 -->
     <section class="form-section info-section">
-      <h2 class="section-title">⑥ 실물 재고 (Asset) 등록 안내</h2>
+      <h2 class="section-title">⑦ 실물 재고 (Asset) 등록 안내</h2>
       <div class="info-box">
         <p class="info-text">
           상품 등록 후, 실물 재고는 <strong>[재고관리]</strong> 탭에서 시리얼번호 단위로 등록합니다.
@@ -1886,6 +2018,7 @@
   }
   .combo-row-btn:hover { border-color: rgba(59,47,138,0.35); background: rgba(59,47,138,0.04); }
   .combo-row-selected { border-color: var(--cs-purple) !important; background: var(--cs-purple-op10) !important; }
+  .combo-sub { display: block; font: var(--text-pc-script-12); color: var(--cs-text-mid); margin-top: 2px; }
 
   .combo-name-label {
     font: var(--text-pc-descript-10);
