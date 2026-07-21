@@ -118,10 +118,11 @@
       id: 'settings',
       label: '설정',
       subMenus: [
-        { label: '코드설정', href: '/cms/codes' },
+        { label: '코드설정', href: '/cms/set/code' },
+        { label: '대여관리', href: '/cms/set/rental' },
         ...(hasSettingsAccess(data.cmsRole ?? '')
           ? [
-              { label: '관리정보', href: '/cms/accounts/list' },
+              { label: '관리정보', href: '/cms/set/admin' },
             ]
           : []),
       ],
@@ -130,11 +131,12 @@
 
   function resolveActiveMenuId(pathname: string): string {
     if (pathname.startsWith('/cms/promotion')) return 'promotion'
-    if (pathname.startsWith('/cms/codes')) return 'settings'
+    if (pathname.startsWith('/cms/set'))      return 'settings'
+    if (pathname.startsWith('/cms/codes'))    return 'settings'
     if (pathname.startsWith('/cms/accounts')) return 'settings'
     if (pathname.startsWith('/cms/reservation')) return 'reservation'
     if (pathname.startsWith('/cms/products')) return 'products'
-    if (pathname.startsWith('/cms/rental')) return 'rental'
+    if (pathname.startsWith('/cms/rental'))   return 'rental'
     if (pathname.startsWith('/cms/customers')) return 'customers'
     return 'consulting'
   }
@@ -153,6 +155,10 @@
     if (sub.href === '/cms/customers' && page.url.pathname === '/cms/customers') return true
     if (sub.href === '/cms/customers/membership' && page.url.pathname.startsWith('/cms/customers/membership')) return true
     if (sub.href === '/cms/customers/score' && page.url.pathname.startsWith('/cms/customers/score')) return true
+    // 설정 서브메뉴: 리디렉트 대상 URL에서도 서브탭 활성 유지
+    if (sub.href === '/cms/set/code' && page.url.pathname.startsWith('/cms/codes')) return true
+    if (sub.href === '/cms/set/rental' && page.url.pathname.startsWith('/cms/set/rental')) return true
+    if (sub.href === '/cms/set/admin' && page.url.pathname.startsWith('/cms/accounts')) return true
     return false
   }
 </script>
