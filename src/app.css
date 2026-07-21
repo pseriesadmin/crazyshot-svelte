@@ -153,7 +153,12 @@
   --radius-xl:        30px;          /* 총금액 박스·CTA 버튼 */
   --radius-2xl:       50px;          /* 흰 카드 */
   --radius-full:      9999px;
-  --radius-icon-box:  25px;          /* 결제 결과 아이콘 박스 (Figma exact) */
+  --radius-icon-box:  25px;
+
+  /* CMS 전용 반경 — 전역 선언 (로그인 페이지 등 .cms-shell 미적용 영역 대응) */
+  --cms-radius-sm:    10px;
+  --cms-radius-md:    15px;
+  --cms-radius-lg:    30px;          /* 결제 결과 아이콘 박스 (Figma exact) */
   --radius-asym-card: 10px 50px 10px 50px; /* 결제 결과 카드 비대칭 (Figma exact) */
 
   /* ── 스페이싱 (기존 유지 + 확장) ── */

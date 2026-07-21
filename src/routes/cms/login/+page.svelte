@@ -175,7 +175,7 @@
     margin-bottom: 8px;
   }
   .brand-logo {
-    height: 60px;
+    height: 90px;
     width: auto;
     display: block;
   }
