@@ -36,7 +36,7 @@ export type PaymentStatusEnum =
   | 'pending' | 'completed' | 'failed' | 'refunded' | 'partial_refund';
 
 export type ShipmentMethodEnum =
-  | 'crazydelivery' | 'quick' | 'locker' | 'visit' | 'airport';
+  | 'crazydelivery' | 'quick' | 'locker' | 'visit' | 'epost' | 'airport';
 
 export type ShipmentStatusEnum =
   | 'preparing' | 'shipped' | 'in_transit' | 'delivered' | 'pickup_ready' | 'failed';
@@ -240,6 +240,8 @@ export interface RentalReservation {
   actual_return_date: string | null;
   pickup_method: ShipmentMethodEnum;
   return_method: ShipmentMethodEnum;
+  pickup_time: string | null;
+  return_time: string | null;
   pickup_point_id: string | null;      // FK pickup_points.id
   return_point_id: string | null;      // FK pickup_points.id
   hold_expiration_at: string | null;   // timestamptz — 10분 hold 만료
@@ -457,13 +459,13 @@ export interface AssetInspection {
 // ───────────────────────────────────────────────────────────
 export interface Contract {
   id: string;                          // UUID PK
-  order_id: string;                    // FK orders.id
+  reservation_id: number;              // FK rental_reservations.id (BIGINT)
   user_id: string;                     // FK auth.users.id
   contract_type: 'rental' | 'subscription';
   status: ContractStatusEnum;
-  document_url: string;
+  document_url: string | null;
   signed_at: string | null;
-  terms_accepted_at: string;
+  terms_accepted_at: string | null;
   created_at: string;
   updated_at: string;
   deleted_at: string | null;

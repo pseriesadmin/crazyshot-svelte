@@ -77,7 +77,9 @@
       label: '상담',
       subMenus: [{ label: '채팅', href: '/cms/chat' }],
     },
-    { id: 'reservation', label: '예약', subMenus: [] },
+    { id: 'reservation', label: '예약', subMenus: [
+      { label: '예약목록', href: '/cms/rentals' },
+    ] },
     {
       id: 'products',
       label: '상품',
@@ -135,6 +137,7 @@
     if (pathname.startsWith('/cms/codes'))    return 'settings'
     if (pathname.startsWith('/cms/accounts')) return 'settings'
     if (pathname.startsWith('/cms/reservation')) return 'reservation'
+    if (pathname.startsWith('/cms/rentals'))     return 'reservation'
     if (pathname.startsWith('/cms/products')) return 'products'
     if (pathname.startsWith('/cms/rental'))   return 'rental'
     if (pathname.startsWith('/cms/customers')) return 'customers'
