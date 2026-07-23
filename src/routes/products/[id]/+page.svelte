@@ -1,5 +1,6 @@
 <script lang="ts">
   import { goto } from '$app/navigation';
+  import BottomTabBar from '$lib/components/common/BottomTabBar.svelte';
   import { supabase } from '$lib/services/supabase';
   import { trackProductView, trackCartAdd } from '$lib/analytics/behaviorTracker';
   import ProductHero from '$lib/components/products/ProductHero.svelte';
@@ -579,6 +580,8 @@
 {#if toastVisible}
   <div class="toast-msg" role="status" aria-live="polite">{toastMsg}</div>
 {/if}
+
+<BottomTabBar />
 
 <style>
   /* ── Loading / Error */
