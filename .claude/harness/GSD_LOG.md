@@ -1,6 +1,82 @@
 # GSD_LOG.md — 크레이지샷 실행 이력
 # 형식: [YYYY-MM-DD HH:MM] 타입 | 태스크명 | 파일 | 소요 | 결과
 
+[2026-07-23] FEAT | 회원 프로필 개편 + Aligo SMS 연동 + Stage DB 마이그레이션 (#137~#139) | 6개 파일 수정/신규 | ✅ DONE
+  수정/신규 파일:
+  - supabase/migrations/20260722000139_139_fix_customer_list_no_student_cols.sql ← 신규 (Stage 전용)
+  - src/routes/api/profile/send-otp/+server.ts ← Solapi → Aligo REST API 교체
+  - .env.local ← ALIGO_API_KEY / ALIGO_USER_ID / SMS_SENDER_PHONE 키 추가 (값 미입력)
+  - src/lib/components/members/profile/ProfileTabContent.svelte ← 아바타 + 카드 정보 개편
+  - src/routes/account/profile/+page.server.ts ← UserProfile 인터페이스 + SELECT에 created_at 추가
+  - src/routes/account/+page.server.ts ← AccountProfile 인터페이스 + SELECT에 created_at 추가
+  QA 수정 (sp3-qa-agent):
+  - send-otp/+server.ts:15 console.log 제거 (GATE E 기준)
+  - ProfileTabContent.svelte:29 KakaoPostcodeCtor 타입 확장 (width/height 옵션 + embed() 메서드)
+  DB:
+  - Migration #137 Stage(ezyvffjvuwmtuhpxdjrw) ✅ / Production(vnbpmvxruyciuuaermyh) ✅ (기적용 확인)
+  - Migration #138 Stage ✅ / Production ✅ (기적용 확인)
+  - Migration #139 Stage ✅ / Production ⛔ 적용 금지 (Stage 전용 COALESCE 제거 패치)
+  미완: ALIGO_API_KEY 등 환경변수 실값 입력 및 Vercel 등록 (Stephen 직접)
+  svelte-check: 13 errors (기준선 유지, 신규 0건)
+
+[2026-07-23] MIGRATION | Production DB Migration #132~#135 순차 적용 완료 | supabase/migrations/ | ✅ DONE
+  - Migration #132: birth_date 컬럼(IF NOT EXISTS) + phone_otps 테이블 + update_user_profile / verify_and_update_phone RPC (WHERE id 기준) → Production(vnbpmvxruyciuuaermyh) ✅
+  - Migration #133: allow_rental_alert / allow_benefit_alert 컬럼(IF NOT EXISTS) + update_notification_settings RPC (WHERE id 기준) → Production ✅
+  - Migration #134: is_cms_admin() SECURITY DEFINER + "user_profiles: cms 관리자 전체 조회" RLS 정책 → Production ✅
+  - Migration #135: update_user_profile / update_notification_settings RPC WHERE id 교체 (Production 스키마 정합) → Stage + Production ✅
+  - account/+page.server.ts: SELECT user_id → id, .eq('user_id') → .eq('id') 코드 수정
+
+[2026-07-23] BUG FIX | Production DB RPC + 코드 정합 (Migration #135 + account/+page.server.ts) | supabase/migrations/20260723000135_135_fix_rpcs_for_production_id_column.sql · src/routes/account/+page.server.ts | ✅ DONE
+  - Production user_profiles PK=id (user_id 컬럼 없음) 발견 → RPC 및 클라이언트 쿼리 Production 실패 예방 수정
+  - Migration #135: update_user_profile / update_notification_settings RPC WHERE user_id → WHERE id 교체 → Stage + Production 양쪽 적용
+  - account/+page.server.ts: SELECT user_id → id, .eq('user_id') → .eq('id') 수정
+
+[2026-07-23] MIGRATION | Migration #146 Stage DB 적용 + TASK-F duration_type 탭 UI | checkout/+page.svelte | ✅ DONE
+  - Migration #146: contract_signings.expires_at TIMESTAMPTZ + 기본값 30일 + 인덱스 — Stage DB(ezyvffjvuwmtuhpxdjrw) 적용 완료
+  - TASK-F: DurationType='12h'|'24h'|'1day'|'purchase' 타입 추가
+  - c1DurType / c2DurType $state (기본값 '24h')
+  - cardRate() 헬퍼: 12h→halfday / 24h+1day→daily / purchase→별도 문의(fixture임시)
+  - c1CardRate / c2CardRate $derived → fixtureSubtotal 기간유형 반영
+  - 두 카드 product-meta: dur-tabs (12H|24H|1일|구매) pill 탭 + 선택 단가 동적 표시
+  - purchase 선택 시 가격 '별도 문의' 표시 (실 DB price_rules 연동 예정)
+  - svelte-check: 신규 에러 0건 (기존 13건 유지)
+
+[2026-07-21] UI | Front 설정 UI 컴포넌트 정교 재개발 + /products ProductDPCard 교체 | AdminModalShell.svelte · AdminEditButton.svelte · routes/products/+page.svelte | ✅ DONE
+  - UI-SHELL: AdminModalShell.svelte CSS 전면 재작성 — 헤더 var(--cs-dark) 배경·흰색 타이틀/닫기, 패널 border-radius(radius-2xl 0 0 radius-2xl)·box-shadow(0.15), 바디 gap 20px
+  - UI-BTN: AdminEditButton.svelte CSS 재작성 — border-radius radius-sm(8px), min-height 32px, padding 6px 12px, font-weight 700, hover rgba(16,11,50,0.92)
+  - UI-GRID: /products 그리드 d-prod-flat/d-prod-card 인라인 카드 → ProductDPCard 단일 컴포넌트 교체. 잔존 CSS 11선택자 완전 제거. .d-prod-grid justify-content flex-start / gap 24px
+  - svelte-check: 신규 에러 0건
+
+[2026-07-23] FEAT | CMS 고객 증명서 타이머 + 재등록 업로드 기능 | CustomerDetailPanel.svelte · api/cms/upload-doc/+server.ts(신규) | ✅ DONE
+  - FEAT-TIMER: 본인 증명·외국인 증명 6개월 기간경과 배지 자동 노출
+    · 배지 텍스트 "경과" → "기간경과" 변경
+    · 등록파일 없거나 기간경과 시 [재등록] 버튼 자동 노출 (양쪽 항목 동일 패턴)
+  - FEAT-REUPLOAD: 인라인 재등록 업로드 UI (form 중첩 없이 fetch+FormData 방식)
+    · DOC_ACCEPT: PNG·JPEG·WebP·HEIF·PDF 5종 (front-uiux.md §15)
+    · validateUploadFile() 클라이언트 MIME 검증 + 이미지 미리보기(createObjectURL)
+    · $effect cleanup으로 revokeObjectURL 메모리 누수 방지
+    · 성공: csToast.success + invalidateAll() / 실패: csToast.error
+  - FEAT-API: /api/cms/upload-doc POST 신규 (CMS manager 전용)
+    · hasSettingsAccess() 권한 체크 (50+ manager)
+    · service_role 클라이언트 — user-documents 버킷 업로드 + user_profiles 직접 UPDATE
+    · 서버사이드 MIME 재검증 (front-uiux.md §15-4)
+    · 실패 시 업로드 파일 자동 롤백
+  - svelte-check: 신규 에러 0건 (기존 13건 유지)
+
+[2026-07-23] BUG FIX | 회원 프로필 DB 연동 버그픽스 3종 — Stage DB 스키마 정합 | Stage DB(ezyvffjvuwmtuhpxdjrw) 직접 적용 | ✅ DONE
+  - BUG-1 CMS 알림설정 미반영: user_profiles RLS `id=auth.uid()` → CMS 관리자 타계정 조회 불가
+    · 해결: migration #134 is_cms_admin() SECURITY DEFINER + CMS 전체 SELECT 정책 추가
+    · 검증: CMS 알림설정(대여예약/혜택) 배지 정상 반영 확인
+  - BUG-2 CMS 배송지 미표시: PostgREST schema cache stale → get_user_shipping_addresses RPC 400
+    · 해결: `NOTIFY pgrst, 'reload schema'` 실행
+    · 검증: cconzy@daum.net 배송지 4개 CMS 정상 표시 확인
+  - BUG-3 생년월일 저장 불가: Stage DB에 migration #132(update_user_profile RPC) 미적용
+    · 해결: migration #132 Stage DB 직접 적용 (update_user_profile + verify_and_update_phone + phone_otps 테이블)
+    · 검증: 생년월일 저장·CMS 반영 정상 확인
+  - BUG-4 Stage DB 스키마 정합: user_profiles PK=id (vs Production PK=user_id) → user_id 기준 쿼리 전체 실패
+    · 해결: user_id UUID 컬럼 추가 + id 값 동기화 트리거(trg_sync_user_id) 적용
+  - 참고: #132~#134는 Stage에만 직접 적용. Production 마이그레이션은 별도 진행 필요.
+
 [2026-07-21] MIGRATION | CMS 대여관리 설정 Migration #126~130 Production DB 적용 | vnbpmvxruyciuuaermyh | ✅ DONE
   - 126a: pickup_points 테이블 신규 생성 (Production 자체 누락 확인 후 선행 적용)
   - 126: pickup_points.contact_person VARCHAR(10) + rental_period_options / rental_method_options / rental_guide_settings / rental_consent_items 4개 테이블 생성 + RLS + 트리거

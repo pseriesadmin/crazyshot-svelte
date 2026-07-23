@@ -28,6 +28,478 @@ auth_baseline: fed4fdb — createBrowserClient 패턴 (절대 싱글톤 createCl
 
 ---
 
+## NOW — Front 설정 UI 컴포넌트 정교 재개발 + /products ProductDPCard 교체 (2026-07-21) ✅ 완료
+
+plan_source: products-jaunty-lollipop.md (v3)
+핵심제약:
+  - 레퍼런스: ProductCategoryModal / ProductHeroModal / ProductGridModal 3종 기준
+  - AdminModalShell·AdminEditButton 픽셀 수준 정합
+  - 요청 범위 외 수정 없음
+
+신규/수정 파일:
+  - src/lib/components/common/admin/AdminModalShell.svelte ← CSS 전면 재작성 (레퍼런스 정합)
+  - src/lib/components/common/admin/AdminEditButton.svelte ← CSS 재작성 (레퍼런스 정합)
+  - src/routes/products/+page.svelte ← 구 flat/card 카드 → ProductDPCard 교체 + 잔존 CSS 제거
+
+- [x] UI-SHELL: AdminModalShell.svelte 레퍼런스 정합 재작성 | ROUTINE | ✅ 완료 (2026-07-21)
+  - 헤더: background: var(--cs-dark) (다크 네이비) 적용
+  - 타이틀: color: var(--cs-white) + font: var(--text-pc-title-16)
+  - 닫기 버튼: rgba(255,255,255,0.7) / 18px / padding 4px 8px / min-height 32px / hover → var(--cs-white)
+  - 헤더 border-bottom 제거 (레퍼런스 없음)
+  - 패널: border-radius var(--radius-2xl) 0 0 var(--radius-2xl) 추가
+  - 패널: box-shadow -4px 0 24px rgba(16,11,50,0.15) (0.12→0.15)
+  - 바디: gap 20px 추가
+
+- [x] UI-BTN: AdminEditButton.svelte 레퍼런스 정합 재작성 | ROUTINE | ✅ 완료 (2026-07-21)
+  - border-radius: var(--radius-sm) (8px) — xl(30px)에서 수정
+  - min-height: 32px — 44px에서 수정
+  - padding: 6px 12px
+  - font-weight: 700 (600→700)
+  - hover: background rgba(16,11,50,0.92) (opacity 방식에서 교체)
+  - empty-state: border-radius var(--radius-xl) 유지 (이 variant만 xl)
+
+- [x] UI-GRID: /products 상품 그리드 → ProductDPCard 표준 컴포넌트 교체 | BOUNDARY | ✅ 완료 (2026-07-21)
+  - 구 d-prod-flat (idx<4) + d-prod-card (idx≥4) 인라인 렌더 → ProductDPCard 단일 컴포넌트 통일
+  - price24h=base_price_daily / price12h=Math.round(base_price_daily*0.7) / category / href 연동
+  - 잔존 CSS 제거: .d-prod-flat / .d-flat-img-box / .d-flat-img / .d-flat-info / .d-flat-price / .d-flat-name / .d-prod-card / .d-prod-bg / .d-prod-img-box / .d-prod-info / .d-prod-price / .d-prod-name (11선택자)
+  - .d-prod-grid: justify-content flex-start / column-gap 24px (ProductDPCard 290px 고정폭 정렬)
+  - svelte-check: 신규 에러 0건
+
+---
+
+## NOW — CMS 고객 증명서 타이머 + 재등록 업로드 기능 (2026-07-23) ✅ 완료
+
+plan_source: 세션 내 아젠다
+핵심제약:
+  - CMS 화면 디자인 토큰 적용 (--cms-radius-sm / --cs-purple / --cs-disabled-button)
+  - CMS 브라우저 auth 패턴: 타 사용자 프로필 업데이트 → +server.ts + service_role 필수
+  - front-uiux.md §15 업로드 정책 적용 (5 MIME 타입 + 클라이언트·서버 양쪽 검증)
+  - 요구범위: 본인 증명 / 외국인 증명 두 항목만 수정 — 범위 외 수정 없음
+
+신규/수정 파일:
+  - src/lib/components/cms/CustomerDetailPanel.svelte ← 수정 (타이머 배지 + 재등록 UI)
+  - src/routes/api/cms/upload-doc/+server.ts ← 신규 (CMS 문서 재등록 API)
+
+- [x] FEAT-TIMER: 본인 증명·외국인 증명 6개월 기간경과 배지 자동 노출 | BOUNDARY | ✅ 완료 (2026-07-23)
+  - isIdentityExpired(iso): 6개월 이전 날짜 비교 함수 (기존 유지)
+  - 배지 텍스트 "경과" → "기간경과"로 변경
+  - 등록일 없거나 기간경과 시 `[재등록]` 버튼 자동 노출
+  - 적용 대상: 본인 증명(identity_verified_at) · 외국인 증명(foreign_verified_at) 양쪽
+
+- [x] FEAT-REUPLOAD: 인라인 재등록 업로드 UI | BOUNDARY | ✅ 완료 (2026-07-23)
+  - DOC_ACCEPT: PNG·JPEG·WebP·HEIF·PDF 5종 (front-uiux.md §15 표준)
+  - validateUploadFile() 클라이언트 사이드 MIME 검증
+  - 이미지: URL.createObjectURL 미리보기 / PDF: 파일명 표시
+  - 업로드 중 버튼 비활성화 + "업로드 중..." 텍스트
+  - 성공: csToast.success + invalidateAll() 패널 갱신 / 실패: csToast.error
+  - $effect cleanup: URL.revokeObjectURL 메모리 누수 방지
+
+- [x] FEAT-API: /api/cms/upload-doc POST 엔드포인트 신규 생성 | BOUNDARY | ✅ 완료 (2026-07-23)
+  - CMS 권한 체크: hasSettingsAccess(locals.cmsRole) — manager(50+) 전용
+  - 서버사이드 MIME 재검증 (클라이언트 우회 방어)
+  - Supabase service_role로 user-documents 버킷 업로드
+  - user_profiles 직접 UPDATE (service_role RLS 우회 — 타 사용자 프로필 수정)
+  - 실패 시 스토리지 파일 자동 롤백 (.remove([path]))
+  - type: 'identity' → identity_doc_url + identity_verified_at 갱신
+  - type: 'foreign' → foreign_doc_url + foreign_verified_at 갱신
+
+---
+
+## NOW — 회원 프로필 개편 + Aligo SMS 연동 + Stage DB 마이그레이션 (2026-07-23) ✅ 완료
+
+plan_source: 세션 내 아젠다 (컨텍스트 이관)
+핵심제약:
+  - Stage(ezyvffjvuwmtuhpxdjrw) 스키마 분기 처리 (#139 Stage 전용)
+  - Production DB에 Migration #139 적용 금지
+  - Aligo SMS env 미설정 시 콘솔 출력 모드 유지
+
+신규/수정 파일:
+  - supabase/migrations/20260722000139_139_fix_customer_list_no_student_cols.sql ← 신규 (Stage 전용)
+  - src/routes/api/profile/send-otp/+server.ts ← Solapi → Aligo REST API 교체
+  - .env.local ← ALIGO_API_KEY / ALIGO_USER_ID / SMS_SENDER_PHONE 키 추가 (값 미입력)
+  - src/lib/components/members/profile/ProfileTabContent.svelte ← 아바타 + 카드 정보 개편
+  - src/routes/account/profile/+page.server.ts ← created_at 필드 추가
+  - src/routes/account/+page.server.ts ← created_at 필드 추가
+
+DB 적용:
+  - Migration #137 — Stage(ezyvffjvuwmtuhpxdjrw) ✅ / Production(vnbpmvxruyciuuaermyh) ✅ (기적용 확인 2026-07-23)
+  - Migration #138 — Stage ✅ / Production ✅ (기적용 확인 2026-07-23, COALESCE 버전 정본)
+  - Migration #139 — Stage ✅ / Production ⛔ 적용 금지
+    → 이유: Production에 student_doc_url 컬럼 존재 → #138 COALESCE로 하위호환 유지 필요
+    → #139는 Stage 스키마 결함 보완 패치 (COALESCE 제거 버전) — Production에 적용 시 구 데이터 유실
+
+- [x] MIG-139: Stage DB get_customer_list RPC COALESCE 오류 수정 | BOUNDARY | ✅ 완료 (2026-07-23)
+  - 원인: Migration #138 COALESCE(up.student_doc_url, ...) → Stage에 해당 컬럼 없음
+  - 해결: Migration #139로 Stage 전용 RPC 재정의 (COALESCE 제거, identity 컬럼만 참조)
+  - Production은 #138(COALESCE 버전)이 정본 — #139 적용 금지
+
+- [x] FEAT-ALIGO: SMS 제공사 Solapi → Aligo REST API 교체 | BOUNDARY | ✅ 완료 (2026-07-23)
+  - sendSms() 함수: FormData multipart/form-data POST to https://apis.aligo.in/send/
+  - 인증: key(ALIGO_API_KEY) + user_id(ALIGO_USER_ID), 발신번호(SMS_SENDER_PHONE)
+  - 성공 판단: result_code === 1
+  - env 미설정 시 console.log 모드 (개발 환경 폴백)
+  - .env.local에 키 추가 (값은 Stephen이 직접 입력)
+
+- [x] UI-AVATAR: 프로필 카드 아바타 노란 SVG → 이메일 이니셜 아바타 | ROUTINE | ✅ 완료 (2026-07-23)
+  - 노란 아바타 SVG + "로그인됨" 텍스트 제거
+  - 이메일 첫 글자 이니셜 div 아바타 (70×70px, border-radius:50%, --cs-purple-pale BG)
+  - 폰트: var(--font-en-display) 28px Bold / --cs-dark 컬러
+  - GNB.svelte gnb-avatar-initial 패턴 참조, 독립 CSS 구현
+
+- [x] UI-PROFILE-CARD: 프로필 카드 정보 행 개편 (아이디 + 가입일) | ROUTINE | ✅ 완료 (2026-07-23)
+  - "아이디": 이메일 앞단 영문 (displayEmail.split('@')[0]) — 폰트 700 20px var(--font-kr) --cs-text
+  - "가입일": profile.created_at → toLocaleDateString('ko-KR') → 년.월.일 형식
+  - 폰트: var(--text-m-script-14B) / --cs-text-mid
+  - "●●●●" 더미 마스킹 행 완전 제거
+  - user_profiles 쿼리에 created_at 추가 (profile/+page.server.ts · account/+page.server.ts 양쪽)
+
+⚠️ 추후 진행 (Stephen 직접):
+  - [ ] .env.local ALIGO_API_KEY / ALIGO_USER_ID / SMS_SENDER_PHONE 실제 값 입력 (알리고 콘솔에서 발급)
+  - [ ] Vercel 대시보드 동일 3개 환경변수 등록 (Production·Preview·Development)
+
+DB 적용:
+  - Migration #137 + #138 — Production(vnbpmvxruyciuuaermyh) ✅ 적용 완료 (2026-07-23)
+
+---
+
+## NOW — 회원 프로필 DB 연동 버그픽스 (2026-07-23) ✅ 완료
+
+수정/신규 파일 (Stage DB 전용):
+  - supabase Stage DB: migration #132 직접 적용 (update_user_profile RPC + phone_otps 테이블 + verify_and_update_phone RPC)
+  - supabase Stage DB: migration #133 직접 적용 (allow_rental_alert / allow_benefit_alert 컬럼 + update_notification_settings RPC) — 이전 세션 완료
+  - supabase Stage DB: migration #134 직접 적용 (is_cms_admin() SECURITY DEFINER + user_profiles CMS SELECT 정책) — 이전 세션 완료
+  - supabase Stage DB: user_id UUID 컬럼 + 트리거 직접 추가 (stage 스키마 id-only 정합)
+  - supabase Stage DB: birth_date DATE 컬럼 직접 추가
+
+DB 적용:
+  - Migration #132 — Stage(ezyvffjvuwmtuhpxdjrw) ✅ / Production(vnbpmvxruyciuuaermyh) ✅ 적용 완료 (2026-07-23)
+  - Migration #133 — Stage(ezyvffjvuwmtuhpxdjrw) ✅ / Production(vnbpmvxruyciuuaermyh) ✅ 적용 완료 (2026-07-23)
+  - Migration #134 — Stage(ezyvffjvuwmtuhpxdjrw) ✅ / Production(vnbpmvxruyciuuaermyh) ✅ 적용 완료 (2026-07-23)
+
+- [x] BUG-1: CMS 알림설정 미반영 — user_profiles RLS 차단 | BOUNDARY | ✅ 완료 (2026-07-23)
+  - 원인: RLS 정책 `id = auth.uid()` → CMS 관리자가 타 사용자 프로필 SELECT 불가
+  - 해결: migration #134 is_cms_admin() SECURITY DEFINER + "user_profiles: cms 관리자 전체 조회" 정책 추가
+  - 검증: mublues@gmail.com 알림설정 배지 정상 반영 확인
+
+- [x] BUG-2: CMS 배송지 미표시 — PostgREST schema cache stale | BOUNDARY | ✅ 완료 (2026-07-23)
+  - 원인: Stage DB에 새 함수 적용 후 PostgREST schema cache 갱신 미완료 → get_user_shipping_addresses RPC 400 반환
+  - 해결: `NOTIFY pgrst, 'reload schema'` 실행
+  - 검증: cconzy@daum.net 배송지 4개 CMS 정상 표시 확인
+
+- [x] BUG-3: 생년월일 저장 불가 — Stage DB migration #132 미적용 | BOUNDARY | ✅ 완료 (2026-07-23)
+  - 원인: Stage DB에 update_user_profile RPC 미존재 → updateProfile 액션에서 RPC 호출 실패 (네트워크 200이나 내부 오류)
+  - 해결: Stage DB에 migration #132 직접 적용 (update_user_profile + verify_and_update_phone + phone_otps 테이블)
+  - 검증: 생년월일 저장 및 CMS 반영 정상 확인
+
+- [x] BUG-4: Stage DB 스키마 정합 — user_id 컬럼 누락 | BOUNDARY | ✅ 완료 (2026-07-23)
+  - 원인: Stage DB user_profiles PK = id (Production = user_id) → user_id 기준 쿼리 전체 실패
+  - 해결: user_id UUID 컬럼 추가 + id 값 동기화 트리거 (trg_sync_user_id) 적용
+  - 영향: update_notification_settings RPC WHERE user_id 정상 작동
+
+- [x] BUG-5: Production DB RPC + 코드 정합 — user_id 컬럼 없음 | CRITICAL | ✅ 완료 (2026-07-23)
+  - 원인: Production user_profiles PK = id (user_id 컬럼 없음) → Migration #132/#133 RPC 및 account/+page.server.ts 쿼리 Production 실패 예정
+  - 해결 1: Migration #135 신규 생성 — update_user_profile / update_notification_settings RPC WHERE id 기준으로 교체 → Stage + Production 양쪽 적용 완료
+  - 해결 2: src/routes/account/+page.server.ts SELECT 'id' + .eq('id', ...) 수정 (구 user_id → id)
+  - 적용: Stage(ezyvffjvuwmtuhpxdjrw) ✅ / Production(vnbpmvxruyciuuaermyh) ✅
+
+---
+
+## NOW — FloatingBar 버그픽스 + 디자인 시스템 문서 등록 (2026-07-23) ✅ 완료
+
+수정/신규 파일:
+  - .claude/rules-ref/front-uiux.md ← §13-3 FloatingBar 상세 스펙 확장 + §13-3-1 FloatingButton 신규 섹션 + §13-4 명칭 대조표 갱신
+  - src/routes/+layout.svelte ← FloatingBar 조건에서 /products/ 제외 삭제 (Fix A)
+  - src/lib/components/common/FloatingBar.svelte ← peek translateX 값 수정 (Fix B)
+  - src/routes/products/search/+page.svelte ← FloatingBar 중복 인스턴스 제거 (Fix C)
+
+- [x] DS-1: front-uiux.md §13-3 FloatingBar 상세 스펙 확장 | ROUTINE | ✅ 완료 (2026-07-23)
+  - 구성 개요 표 (4요소: FloatingBar·장바구니·검색·채팅FAB 파일·크기 매핑)
+  - 레이아웃 스펙 표 (위치/정렬/Peek·Expand 트랜지션 값/PC 대응)
+  - FloatingBar Props 표 (5개 prop 타입·기본값·설명)
+- [x] DS-2: front-uiux.md §13-3-1 FloatingButton 채팅 FAB 서브섹션 신규 추가 | ROUTINE | ✅ 완료 (2026-07-23)
+  - 상태별 시각 3종 (기본/미읽음/열림)
+  - 미읽음 배지 상세 (레드 원점 크기·위치·색상 + ripple 2개 타이밍)
+  - Props 표 5개 + 내부 동작 4종 + 표준 사용 패턴 코드 + GATE C 체크리스트 6항목
+- [x] DS-3: front-uiux.md §13-4 명칭 대조표 갱신 | ROUTINE | ✅ 완료 (2026-07-23)
+  - `채팅 플로팅 그룹` Stephen 명칭을 FloatingBar 항목에 추가
+  - `채팅 FAB` / `채팅 버튼` → FloatingButton 행 신규 추가
+- [x] BUG-A: +layout.svelte FloatingBar 조건 — /products/ 제외 조건 삭제 | BOUNDARY | ✅ 완료 (2026-07-23)
+  - 원인: /products/[id] 상세 페이지가 레이아웃 조건에서 제외됐으나 자체 FloatingBar 없음 → 완전 누락
+  - 수정: `&& !page.url.pathname.startsWith('/products/')` 조건 삭제
+  - 영향: /products/[id], /products/search 등 전체 하위 경로 FAB 복원
+- [x] BUG-B: FloatingBar.svelte peek CSS translateX 수정 | ROUTINE | ✅ 완료 (2026-07-23)
+  - 원인: calc(50% + 24px) = 59px 이동 → 화면 노출 35px (44px 최소 터치 타겟 미달)
+  - 수정: calc(50% + 24px) → calc(50% + 15px) = 50px 이동 → 노출 44px
+  - 애니메이션·클릭 동작·PC 동작 무변경
+- [x] BUG-C: products/search/+page.svelte 중복 FloatingBar 제거 | ROUTINE | ✅ 완료 (2026-07-23)
+  - 원인: 검색 페이지가 props 없이 독립 FloatingBar 렌더 → 로그인 사용자도 guest 컨텍스트 고정
+  - 수정: import FloatingBar + `<FloatingBar />` 2줄 제거 → 레이아웃 인증 인스턴스로 통일
+  - BottomTabBar 및 기타 코드 무변경
+
+sp3-qa-agent GATE C 검수 결과:
+  - [x] QA-1: layout.svelte FloatingBar 조건 — /checkout · /account 제외 추가 | ROUTINE | ✅ 완료 (2026-07-23)
+    → Stephen 결정: /checkout · /account 에서 FloatingBar 숨김 (GNB 동일 패턴)
+    → 수정: `!cms && !contract` → `!cms && !checkout && !account && !contract`
+    → 주석도 4가지 제외 경로 명시로 갱신
+  - [x] QA-2: front-uiux.md §13-3 Peek 값 문서↔코드 불일치 수정 | ROUTINE | ✅ 완료 (2026-07-23)
+    → `calc(50% + 24px)` → `calc(50% + 15px)` 수정 (FloatingBar.svelte 코드와 동기화)
+
+GATE E: ✅ QA-1 · QA-2 모두 해결 완료 — git commit 허가
+
+---
+
+## NOW — /checkout 재검증 + 전자계약 보완 (2026-07-23) 진행 중
+
+plan_source: users-stevenmac-documents-pseries-crazy-sorted-quail.md
+핵심제약:
+  - 5-Zone PRD + BE Arch v1.55 정합
+  - Stage(ezyvffjvuwmtuhpxdjrw) 검증 완료 마이그레이션만 Production 적용
+
+신규/수정 파일:
+  - supabase/migrations/20260723000146_146_contract_signings_expiry.sql ← 신규 (Stage 미적용)
+  - src/routes/contract/expired/+page.svelte ← 신규 (만료 링크 안내 페이지)
+  - src/routes/contract/[token]/+page.server.ts ← 수정 (expires_at 만료 체크 추가)
+  - src/routes/api/contracts/[token]/sign/+server.ts ← 수정 (expires_at 만료 체크 + 서명 후 채팅 알림)
+  - src/routes/api/cms/contracts/[id]/send-chat/+server.ts ← 수정 (context_type 'payment'→'reservation')
+  - src/lib/types/database.ts ← 수정 (Contract 인터페이스 reservation_id: number, nullable 필드 정정)
+  - src/lib/components/cms/RentalContractViewer.svelte ← 수정 (재발송 확인 다이얼로그 추가)
+  - src/routes/checkout/+page.server.ts ← 신규 (세션 검증 + 실 카트 데이터 로드)
+  - src/routes/checkout/+page.ts ← 수정 (픽스처 폴백 명시)
+
+- [x] I-2: RentalContractViewer 재발송 확인 다이얼로그 | ROUTINE | ✅ 완료 (2026-07-23)
+- [x] I-3: Migration #146 expires_at 컬럼 + expired 페이지 + 만료 체크 로직 | BOUNDARY | ✅ 코드 완료 (Stage 적용 필요)
+- [x] I-4: context_type 'payment'→'reservation' 수정 | ROUTINE | ✅ 완료 (2026-07-23)
+- [x] I-5: Contract TypeScript 인터페이스 정합 (reservation_id/nullable) | ROUTINE | ✅ 완료 (2026-07-23)
+- [x] TASK-B: checkout/+page.server.ts 신설 — 세션 검증 + cart_items 실 데이터 로드 | CRITICAL | ✅ 완료 (2026-07-23)
+  - 세션 있으면: cart_items 쿼리 + 상품 정보 병렬 로드 + 멤버십 등급·crazyScore 로드
+  - 세션 없으면: 게스트 빈 배열 (OTP 흐름 유지)
+  - serverCartItems / serverProducts / userId / membershipGrade / crazyScore / isServerLoaded 노출
+  - +page.ts: 픽스처 폴백 유지 (isServerLoaded=false 시 픽스처 사용)
+  - svelte-check: 기존 에러와 동일 (checkout 신규 에러 0건)
+- [x] TASK-C: 배송 방식 5탭 UI 구현 (crazy/quick/locker/pickup/epost-CJ) | BOUNDARY | ✅ 완료 (2026-07-23)
+  - DeliveryType+VisitLocation+DeliveryService 3타입 → DeliveryMethod 단일 5종 enum으로 통합
+  - CardOptions: rentalDelivery/rentalVisit/rentalService → rentalMethod / returnMethod
+  - RentalForm 스니펫: delivery/visitLoc/service props → method 단일 prop + onMethodChange
+  - 배송 탭 UI: 5개 버튼 (탭명 + 배송비 + 마감시간 표시), 선택 탭 마감시간 별도 배너
+  - 아코디언 헤더 값 표시: optionLabel() → methodLabel() 교체
+  - 6개 RentalForm 호출 모두 업데이트 + CSS delivery-tabs 신규 추가
+  - svelte-check: checkout 신규 에러 0건
+- [x] TASK-D: calculate_cart_total() RPC 연동 + 보증금 별도 표시 | CRITICAL | ✅ 완료 (2026-07-23)
+  - DB 확정 등급: user_profiles.membership_grade CHECK → NONE/EASY/POP/CRAZY (PRD Plannode 정본)
+  - BE Arch v1.55 "PRO" 등급명 오류 확인 — DB CHECK 제약 기준이 SSOT
+  - subscription_plans 미시딩 (A안) → FE에서 grade 직접 계산 (NONE/EASY:0%, POP:10%, CRAZY:20%)
+  - calculate_cart_total() RPC: p_reservation_ids 기반 → checkout 시점(pre-reservation) 직접 호출 불가
+    → FE 계산으로 동일 breakdown 구조 구현 (RPC는 HOLD 예약 생성 후 결제 확인 시 활용)
+  - Zone3 산출 로직: otSubtotal / otMembershipDiscount / otDeliveryFee / otVat / otTotal / otDeposit / otEarnPoints
+  - 배송비 로직: crazy배송 + 비CRAZY등급 → 3,500원, 나머지 → 0원(착불/무료)
+  - 대여기간 동적 계산: rentalDays(start, end) → 날짜 미선택 시 "날짜 미선택" 표시
+  - 보증금(otDeposit) 합계금액과 분리된 별도 고지 박스 (PRD.1.2.2.1.11)
+  - fmtKrw() 통화 포맷 헬퍼 추가
+  - 하드코딩 Order Total 값 전부 derived 변수로 교체
+  - svelte-check: 13 errors (기존 동일, checkout 신규 에러 0건)
+- [x] TASK-E: 개별/묶음 일정 설정 UX 재구조화 | BOUNDARY | ✅ 완료 (2026-07-23)
+  - 전역 Rental Options 패널(rpRentalMethod/rpReturnMethod/rpRentalOpen/rpReturnOpen 등) 완전 제거
+  - rp* 상태 변수 12개 + 핸들러 5개 제거
+  - "전체 상품 날짜/배송 일괄 설정" 배너를 Order items 섹션 상단에 신규 추가
+  - 배너: 접이식(slide) + 날짜/시간/배송방식 입력 + "전체 적용" 버튼 → 전체 카드에 일괄 적용
+  - 적용 시 bulkApplied=true → 배너에 "적용됨" 배지 + 실선 테두리 전환
+  - sync_cart_dates() RPC 스텁 (TASK-D 연동 예정)
+  - no-gap-top 고아 CSS 제거
+  - svelte-check: 13 errors (기존 동일, checkout 신규 에러 0건)
+- [x] TASK-F: duration_type 탭 (12h|24h|1day|구매) | BOUNDARY | ✅ 완료 (2026-07-23)
+  - DurationType = '12h'|'24h'|'1day'|'purchase' 타입 추가
+  - c1DurType / c2DurType $state — 기본값 '24h'
+  - cardRate() 헬퍼: 12h→halfday_rate / 24h+1day→daily_rate / purchase→별도 문의(fixture×8)
+  - c1CardRate / c2CardRate $derived → fixtureSubtotal 기간 유형 반영
+  - 각 카드 product-meta에 dur-tabs (12H|24H|1일|구매) pill 탭 UI
+  - product-price: 선택 기간 유형·가격 동적 표시 / purchase는 '별도 문의'
+  - dur-tab CSS: var(--radius-full) pill / active → --cs-purple fill
+- [x] TASK-G: canProceed 5조건 가드 완성 | BOUNDARY | ✅ 완료 (2026-07-23)
+  - 기존 약관 체크 1조건 → 5조건으로 확장
+  - 조건1: hasItems(!c1Deleted || !c2Deleted)
+  - 조건2: datesSet(비삭제 카드 전부 rentalDate+returnDate 입력됨)
+  - 조건3: deadlineOk(스텁 true — TASK-D check_delivery_deadline 연동 예정)
+  - 조건4: identityOk(로그인 세션 OR 게스트 OTP 인증)
+  - 조건5: agreed(약관 동의)
+  - footer-guide 인라인 안내 메시지 (조건 미충족 시 footerVisible 상태에서만 노출)
+  - @ts-expect-error 주석 1개 — data.userId (dev server 기동 시 PageData 자동 병합으로 해소 예정)
+  - svelte-check: 13 errors (기존 동일)
+- [ ] I-1: 계약서 없는 상태 관리자 조작 UI (계약서 연결/PDF 업로드) | CRITICAL | ⏳ 대기
+
+Migration 적용 완료:
+  - Migration #146 — Stage(ezyvffjvuwmtuhpxdjrw) ✅ 적용 완료 (2026-07-23)
+
+---
+
+## NOW — Search Publishing 08.01 (/products/search 화면) (2026-07-23) ✅ 완료
+
+수정 파일:
+  - src/routes/products/search/+page.svelte ← SuggestPicker 오류·더미·푸터 수정
+  - src/lib/components/products/SearchProductGrid.svelte ← row-gap 상하 여백 + 더미 제거
+  - src/routes/+layout.svelte ← GNB /products/ 조건 복원
+
+- [x] SP-1: SearchProductGrid 상하 여백 추가 | ROUTINE | ✅ 완료 (2026-07-23)
+  - row-gap: 40px (모바일) / 60px (PC ≥768px)
+  - 기존 gap: 15px → column-gap: 15px / row-gap: 40px 분리
+
+- [x] SP-2: SuggestPicker 드롭다운 선택 시 상세 이동 오류 수정 | BOUNDARY | ✅ 완료 (2026-07-23)
+  - 원인: onProductSelect()에서 goto('/products/${opt.id}') 호출
+  - 수정: searchQuery = opt.label 만 할당 → 검색결과 그리드 유지 (goto·import 제거)
+
+- [x] SP-3: 하드코딩 더미 상품 제거 → DB 추천 상품 기본 노출 | BOUNDARY | ✅ 완료 (2026-07-23)
+  - SearchProductGrid 더미 6건 제거 → products=[] 기본값
+  - search/+page.svelte $effect: is_active=true 상품 6건 + price_rules 서브쿼리 조회
+  - 12h 가격 없을 시 Math.round(p24h * 0.7) 근사값
+  - 검색 시 searchResults / 비검색 시 recommendedProducts 노출 분기
+
+- [x] SP-4: GNB 이중 표시 버그 수정 | BOUNDARY | ✅ 완료 (2026-07-23)
+  - 원인: +layout.svelte GNB 조건에서 !startsWith('/products/') 누락 (이전 세션 실수)
+  - 수정: !startsWith('/products/') 복원 → /products/search GNB 완전 숨김
+
+- [x] SP-5: 푸터 이중 표시 버그 수정 | BOUNDARY | ✅ 완료 (2026-07-23)
+  - 원인: search/+page.svelte에 인라인 site-footer 복사본 존재 (레이아웃 푸터 충돌)
+  - 수정: 인라인 footer HTML 전체 제거 + 관련 state(snsOpen/legalOpen/companyOpen) + CSS 제거
+  - 검증: document.querySelectorAll('footer').length === 1 확인 ✅
+
+---
+
+## NOW — 대여정보·결제정보 탭 고도화 + 전자서명 캔버스 (2026-07-23) ✅ 완료
+
+plan_source: users-stevenmac-documents-pseries-crazy-vivid-lightning.md (Plan v4)
+핵심제약:
+  - 기존 DB 구조·API·메뉴 보호 (순수 추가 원칙)
+  - Stage(ezyvffjvuwmtuhpxdjrw) 검증 완료 → Production 보류
+
+신규/수정 파일:
+  - supabase/migrations/20260723000144_144_reservation_code_and_rpc.sql ← 신규 (Stage 적용 완료)
+  - supabase/migrations/20260723000145_145_contract_signings_signature.sql ← 신규 (Stage 적용 완료)
+  - src/routes/api/cms/reservations/[id]/payment/+server.ts ← 신규 (CMS 결제상세 lazy-fetch API)
+  - src/lib/components/common/SignatureCanvas.svelte ← 신규 (HTML Canvas 전자서명 컴포넌트)
+  - src/lib/components/cms/RentalDetailPanel.svelte ← 수정 (대여정보·결제정보·계약서 탭 고도화)
+  - src/routes/cms/rentals/+page.server.ts ← RentalListRow 인터페이스 확장
+  - src/routes/contract/[token]/+page.svelte ← 수정 (서명 캔버스 연동)
+  - src/routes/api/contracts/[token]/sign/+server.ts ← 수정 (signature_data 저장 + status 자동전환)
+  - src/lib/components/cms/RentalContractViewer.svelte ← 수정 (대여품목 카드 + CMS 표준화)
+
+DB 적용:
+  - Migration #144 — Stage(ezyvffjvuwmtuhpxdjrw) ✅ 적용 완료
+    → rental_reservations: reservation_code TEXT UNIQUE + pickup_method TEXT 컬럼 추가
+    → generate_reservation_code() 함수 + 자동 트리거
+    → 기존 예약 백필 (CZ-YYYYMMDD-XXXXX 형식)
+    → get_rental_list RPC 확장 (6개 신규 컬럼 반환)
+  - Migration #145 — Stage(ezyvffjvuwmtuhpxdjrw) ✅ 적용 완료
+    → contract_signings: signature_data TEXT + stroke_count INTEGER 컬럼 추가
+  - Migration #144, #145 — Production(vnbpmvxruyciuuaermyh) ⛔ 보류
+
+- [x] TASK-A: Migration #144 (reservation_code + get_rental_list RPC 확장) | BOUNDARY | ✅ Stage 완료
+- [x] TASK-B: GET /api/cms/reservations/[id]/payment — payment_transactions lazy-fetch API | BOUNDARY | ✅ 완료
+- [x] TASK-C: RentalDetailPanel 대여정보 탭 완성 (예약코드·상품이미지·대여일수·대여방식) | ROUTINE | ✅ 완료
+- [x] TASK-D: RentalDetailPanel 결제정보 탭 완성 (주문번호·쿠폰·포인트·Toss PG 정보 lazy-fetch) | ROUTINE | ✅ 완료
+- [x] TASK-E-1: Migration #145 (contract_signings 서명 컬럼) | BOUNDARY | ✅ Stage 완료
+- [x] TASK-E-2: SignatureCanvas.svelte (HTML Canvas 전자서명 — 외부 라이브러리 없음) | BOUNDARY | ✅ 완료
+- [x] TASK-E-3: contract/[token]/+page.svelte 서명 캔버스 연동 | BOUNDARY | ✅ 완료
+- [x] TASK-E-4: api/contracts/[token]/sign 서명 데이터 저장 + shipped→in_use 자동전환 | BOUNDARY | ✅ 완료
+- [x] TASK-E-5: RentalContractViewer 대여품목 카드 + CMS 표준화 (34px/.btn-action/이모지 제거/재발송 버튼) | ROUTINE | ✅ 완료
+- [x] TASK-E-6: RentalDetailPanel → RentalContractViewer 신규 props 전달 | ROUTINE | ✅ 완료
+- [x] QA: svelte-check 신규 에러 0건 (SignatureCanvas clientX 타입 오류 즉시 수정) | GATE C | ✅ 완료 (2026-07-23)
+- [x] 브라우저 검증: 대여정보·결제정보·계약서 탭 전 기능 확인 완료 | GATE C | ✅ 완료 (2026-07-23)
+
+---
+
+## NOW — CMS 예약 관리 화면 + 전자계약 서명 시스템 구현 (2026-07-22) ✅ 완료
+
+plan_source: users-stevenmac-documents-pseries-crazy-vivid-lightning.md (Plan v2)
+핵심제약:
+  - 기존 DB 테이블·RLS·RPC·컴포넌트·메뉴 구조를 변경하지 않는다 (순수 추가 원칙)
+  - Stage(ezyvffjvuwmtuhpxdjrw) 검증 완료 → Production 보류 (아래 BLOCKED 참조)
+
+신규/수정 파일:
+  - supabase/migrations/20260722001000_140_rental_cms_additions.sql ← 신규 (Stage 적용 완료)
+  - src/routes/cms/+layout.svelte ← 최소 2줄 수정 (예약 서브메뉴 추가)
+  - src/routes/cms/rentals/+page.server.ts ← 신규 (get_rental_list + 2 actions)
+  - src/routes/cms/rentals/+page.svelte ← 신규 (9컬럼 목록 + 필터 + 패널 연동)
+  - src/lib/components/cms/RentalDetailPanel.svelte ← 신규 (4탭: 대여/고객/결제/계약)
+  - src/lib/components/cms/RentalContractViewer.svelte ← 신규 (계약 상태 배너 + PDF iframe + 발송 버튼)
+  - src/routes/api/cms/contracts/[id]/send-chat/+server.ts ← 신규 (계약서 채팅 발송 API)
+  - src/routes/contract/[token]/+page.server.ts ← 신규 (서명 페이지 서버 로드)
+  - src/routes/contract/[token]/+page.svelte ← 신규 (고객 서명 UI — USER 화면 토큰)
+  - src/routes/api/contracts/[token]/sign/+server.ts ← 신규 (서명 처리 API)
+  - src/routes/contract/signed/+page.svelte ← 신규 (이미 서명된 링크 안내)
+  - src/routes/contract/complete/+page.svelte ← 신규 (서명 완료 페이지)
+
+DB 적용:
+  - Migration #140 — Stage(ezyvffjvuwmtuhpxdjrw) ✅ 적용 완료
+  - Migration #140 — Production(vnbpmvxruyciuuaermyh) ⛔ 보류 (is_cms_admin() 미존재)
+
+핵심 발견사항 (스키마 실제 vs 계획):
+  - rental_reservations.id = BIGINT (계획: UUID)
+  - order_items로 JOIN (계획: order_reservations — 미존재)
+  - products.image_urls = JSONB (->>0 사용, [1] 불가)
+  - rental_reservations.deleted_at 컬럼 없음
+  - user_profiles.address = TEXT (계획: JSONB)
+  - is_cms_admin() — Stage만 존재, Production 누락
+
+- [x] TASK-1: Migration #140 (contracts + contract_signings + get_rental_list + sync_checkout_to_profile) | CRITICAL | ✅ Stage 완료 — Production 보류
+- [x] TASK-2: /cms/rentals 예약 목록 페이지 (+page.server.ts + +page.svelte) | BOUNDARY | ✅ 완료
+- [x] TASK-3: RentalDetailPanel.svelte (4탭) | BOUNDARY | ✅ 완료
+- [x] TASK-4: 전자계약 뷰어 + 서명 흐름 6개 파일 | BOUNDARY | ✅ 완료
+- [x] TASK-5: CMS layout 최소 수정 (예약 서브메뉴 2줄) | ROUTINE | ✅ 완료
+- [ ] TASK-6: checkout OTP 연동 | CRITICAL | ⏳ 대기 (Stephen GATE 확인 필요)
+
+- [x] QA: svelte-check 신규 에러 0건 확인 | GATE C | ✅ 완료 (2026-07-22)
+  - 전체 에러 15→13건: 2건 수정 (RentalDetailPanel 임포트 경로 + contract 타입 캐스팅)
+  - 잔여 13건 = 모두 pre-existing (account/profile/products/search)
+
+⛔ BLOCKED — Production DB Migration #140 적용 불가
+  - 원인: Production DB에 is_cms_admin() 함수 미존재 (Migration #134 미적용)
+  - 해결 방법: Migration #134~139 순차 적용 후 #140 적용
+  - Stephen 액션 필요: Production DB 중간 마이그레이션 순차 적용
+
+---
+
+## NOW — CMS UI 토큰 정형화 + 삭제 버튼 2종 표준화 + 회원 소프트 삭제 (2026-07-21) ✅ 완료
+
+수정/신규 파일:
+  - supabase/migrations/20260721000131_131_soft_delete_customer_rpc.sql ← 신규 생성
+  - src/routes/cms/customers/+page.server.ts ← deleteCustomer 액션 추가
+  - src/lib/components/cms/CustomerDetailPanel.svelte ← 회원 삭제 버튼 + deleteWarnPending + CSS
+  - src/routes/cms/set/rental/+page.svelte ← drag-list + accordion-header 삭제버튼 아이콘형 교체 + act-del CSS + act-del--pending
+  - src/routes/cms/accounts/list/+page.svelte ← delete-btn 아이콘형 교체 + CSS 교체
+  - src/lib/components/chat/AdminChatPanel.svelte ← delete-session-btn ✕ → SVG 아이콘 + hover 표준화
+  - src/lib/components/cms/ProductDetailPanel.svelte ← btn-danger-sm 표준 토큰 교체
+  - src/routes/cms/codes/_TreeTab.svelte ← color-bar 제거 + act-edit 스타일 복원
+  - src/routes/cms/accounts/+page.svelte ← page-title 폰트 + accounts-wrap 패딩 + cta-btn 높이
+  - src/routes/cms/accounts/list/+page.svelte ← page-title 폰트 + td 패딩 1.5배
+  - src/routes/cms/set/rental/+page.svelte ← 대여 기간 조건 → 대여 기간 제한 옵션 텍스트 수정
+
+DB 적용:
+  - Migration #131 soft_delete_customer — Stage(ezyvffjvuwmtuhpxdjrw) ✅ + Production(vnbpmvxruyciuuaermyh) ✅
+
+- [x] TOKEN-1: CMS 표준 삭제 버튼 2종 정형화 지침 메모리 등록 | ROUTINE | ✅ 완료 (2026-07-21)
+  - 텍스트형(btn-danger-sm): cs-error 채움 배경 / cms-radius-sm / text-pc-script-12 / hover: opacity 0.8
+  - 아이콘형(act-del): transparent 배경 / cs-text-light / hover: rgba(255,53,53,0.08) + cs-red-badge
+
+- [x] UI-1: 삭제 버튼 아이콘형 전수 교체 (5곳) | BOUNDARY | ✅ 완료 (2026-07-21)
+  - rental/+page.svelte — drag-list 3곳 + accordion-header 1곳
+  - accounts/list/+page.svelte — delete-btn
+  - AdminChatPanel.svelte — delete-session-btn ✕ → SVG 휴지통
+  - ProductDetailPanel.svelte — btn-danger-sm 표준 토큰 정합
+
+- [x] UI-2: CMS 계정 페이지 디자인 토큰 정합 | ROUTINE | ✅ 완료 (2026-07-21)
+  - accounts/+page.svelte: page-title → text-pc-menu-kr-20 / padding → 32px 16px / cta-btn → 36px
+  - accounts/list/+page.svelte: page-title → text-pc-menu-kr-20 / td padding → 14px (1.5배)
+  - set/rental/+page.svelte: "대여 기간 조건" → "대여 기간 제한 옵션"
+  - codes/_TreeTab.svelte: color-bar 레이아웃 제거
+
+- [x] FEAT-1: 회원 소프트 삭제 기능 신규 구현 | CRITICAL | ✅ 완료 (2026-07-21)
+  - Migration #131: soft_delete_customer RPC — user_profiles.deleted_at 설정 + 개인정보 마스킹
+  - deleteCustomer 서버 액션: manager/superadmin 전용 권한 체크
+  - CustomerDetailPanel 최하단 아이콘형 삭제 버튼 (act-del-account)
+  - 2단계 경고: 1차 클릭 → csToast.warning + 4초 타이머 / 2차 클릭 → 실제 삭제
+  - 예약·대여 기록 보존: auth.users 미삭제 → user_id FK 정합 유지
+
+---
+
 ## NOW — CMS 대여관리 설정 (/cms/set/rental) Production DB 마이그레이션 적용 (2026-07-21) ✅ 완료
 
 수정/신규 파일:
