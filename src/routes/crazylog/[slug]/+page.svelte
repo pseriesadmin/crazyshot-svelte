@@ -4,6 +4,8 @@
 	import { supabase } from '$lib/services/supabase'
 	import type { PageData } from './$types'
 	import CmsContentEditor from '$lib/components/cms/CmsContentEditor.svelte'
+	import MobileMoreMenu from '$lib/components/common/MobileMoreMenu.svelte'
+	import BottomTabBar from '$lib/components/common/BottomTabBar.svelte'
 	import {
 		makeEmptyTextBlock,
 		makeEmptyImageBlock,
@@ -44,6 +46,7 @@
 	)
 	let keywords = $state<string[]>((ep?.keywords as string[]) ?? [])
 	let typeOpen = $state(false)
+	let moreMenuOpen = $state(false)
 	let isSubmitting = $state(false)
 	let errorMsg = $state<string | null>(null)
 
@@ -219,7 +222,7 @@
 	<!-- Mobile GNB (custom — replaces common GNB on mobile) -->
 	<header class="m-gnb-wrap">
 		<nav class="m-gnb">
-			<button class="m-gnb-close" aria-label="닫기">
+			<button class="m-gnb-close" aria-label="닫기" onclick={() => history.back()}>
 				<svg width="16" height="16" viewBox="0 0 16 16" fill="none">
 					<path
 						d="M15 1L8 8M8 8L1 15M8 8L15 15M8 8L1 1"
@@ -231,18 +234,12 @@
 				</svg>
 			</button>
 			<span class="m-gnb-title">로그 등록</span>
-			<div class="m-gnb-logo" aria-hidden="true">
-				<svg width="20" height="16.5" viewBox="0 0 20 16.5" fill="none">
-					<path
-						d="M18.5 6.75C19.3284 6.75 20 7.42157 20 8.25C20 9.07843 19.3284 9.75 18.5 9.75H1.5C0.671573 9.75 0 9.07843 0 8.25C0 7.42157 0.671573 6.75 1.5 6.75H18.5Z"
-						fill="#CF0000"
-					/>
-					<path
-						d="M18.5 14C19.1904 14 19.75 14.5596 19.75 15.25C19.75 15.9404 19.1904 16.5 18.5 16.5H1.5C0.809644 16.5 0.25 15.9404 0.25 15.25C0.25 14.5596 0.809644 14 1.5 14H18.5ZM18.5 0C19.1904 0 19.75 0.559644 19.75 1.25C19.75 1.94036 19.1904 2.5 18.5 2.5H1.5C0.809644 2.5 0.25 1.94036 0.25 1.25C0.25 0.559644 0.809644 0 1.5 0H18.5Z"
-						fill="#201857"
-					/>
+			<button class="m-gnb-ham" aria-label="더보기 메뉴" onclick={() => moreMenuOpen = true}>
+				<svg width="20" height="17" viewBox="0 0 20 17" fill="none" aria-hidden="true">
+					<path d="M18.5 6.75C19.3284 6.75 20 7.42157 20 8.25C20 9.07843 19.3284 9.75 18.5 9.75H1.5C0.671573 9.75 0 9.07843 0 8.25C0 7.42157 0.671573 6.75 1.5 6.75H18.5Z" fill="#CF0000"/>
+					<path d="M18.5 14C19.1904 14 19.75 14.5596 19.75 15.25C19.75 15.9404 19.1904 16.5 18.5 16.5H1.5C0.809644 16.5 0.25 15.9404 0.25 15.25C0.25 14.5596 0.809644 14 1.5 14H18.5ZM18.5 0C19.1904 0 19.75 0.559644 19.75 1.25C19.75 1.94036 19.1904 2.5 18.5 2.5H1.5C0.809644 2.5 0.25 1.94036 0.25 1.25C0.25 0.559644 0.809644 0 1.5 0H18.5Z" fill="#201857"/>
 				</svg>
-			</div>
+			</button>
 		</nav>
 	</header>
 
@@ -891,12 +888,16 @@
 		letter-spacing: -0.5px;
 	}
 
-	.m-gnb-logo {
+	.m-gnb-ham {
 		display: flex;
 		align-items: center;
-		justify-content: flex-end;
+		justify-content: center;
 		min-width: 44px;
 		min-height: 44px;
+		background: none;
+		border: none;
+		cursor: pointer;
+		padding: 0;
 		margin-right: -12px;
 	}
 
@@ -1782,3 +1783,6 @@
 		font-weight: 700;
 	}
 </style>
+
+<MobileMoreMenu open={moreMenuOpen} onclose={() => moreMenuOpen = false} />
+<BottomTabBar />

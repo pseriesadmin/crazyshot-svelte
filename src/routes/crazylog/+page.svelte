@@ -1,4 +1,5 @@
 <script lang="ts">
+  import BottomTabBar from '$lib/components/common/BottomTabBar.svelte'
   import type { PageData } from './$types'
   interface Props { data: PageData }
   let { data }: Props = $props()
@@ -274,12 +275,6 @@
           <svg width="13" height="13" viewBox="0 0 16 16" fill="none" style="transform:scaleY(-1)">
             <path d="M2 5L8 11L14 5" stroke="#3B2F8A" stroke-linecap="round" stroke-linejoin="round" stroke-width="3"/>
           </svg>
-          <a href="/crazylog/new" aria-label="로그 작성" style="display:inline-flex;min-width:44px;min-height:44px;align-items:center;justify-content:center;">
-            <svg width="22" height="22" viewBox="0 0 22 22" fill="none">
-              <rect width="22" height="22" rx="7" fill="#E1DEF3"/>
-              <path d="M11 6v10M6 11h10" stroke="#553FE0" stroke-width="2" stroke-linecap="round"/>
-            </svg>
-          </a>
         </div>
       </div>
       <!-- Figma: horizontal scroll snap carousel -->
@@ -341,6 +336,8 @@
   </section>
 
 </div>
+
+<BottomTabBar />
 
 <style>
   /* ════════════════════════════════════════

@@ -2,6 +2,8 @@
   import { goto } from '$app/navigation'
   import type { PageData } from './$types'
   import CrazylogWriteCard from '$lib/components/common/CrazylogWriteCard.svelte'
+  import BottomTabBar from '$lib/components/common/BottomTabBar.svelte'
+  import SubGnb from '$lib/components/common/SubGnb.svelte'
 
   interface Props { data: PageData }
   let { data }: Props = $props()
@@ -50,7 +52,6 @@
   let writeCardVisible = $state(true)
 
   $effect(() => {
-    document.body.classList.add('crazylog-list')
     let lastY = window.scrollY
     function onScroll() {
       const currentY = window.scrollY
@@ -58,46 +59,17 @@
       lastY = currentY
     }
     window.addEventListener('scroll', onScroll, { passive: true })
-    return () => {
-      document.body.classList.remove('crazylog-list')
-      window.removeEventListener('scroll', onScroll)
-    }
+    return () => window.removeEventListener('scroll', onScroll)
   })
 </script>
-
-<svelte:head>
-  <style>
-    @media (max-width: 767px) {
-      body.crazylog-list .gnb-mobile-wrap { display: none !important; }
-    }
-  </style>
-</svelte:head>
 
 <!-- ══════════════════════════════════════════════════════════════
      Crazylog 목록 리스트 — 퍼블리싱 소스: Publish Crazylog list Design/App.tsx
 ══════════════════════════════════════════════════════════════ -->
+<SubGnb title="모든 로그" />
+
 <div class="list-root">
   <div class="list-wrap">
-
-    <!-- ① 모바일 전용: TopNavBar ─────────────────────────────── -->
-    <div class="m-top-nav">
-      <div class="m-nav-pill">
-        <button class="m-nav-icon-btn" onclick={() => history.back()} aria-label="뒤로 가기">
-          <svg width="17" height="12" viewBox="0 0 17 12" fill="none" aria-hidden="true">
-            <path d="M16 6H1M1 6L6 1M1 6L6 11" stroke="#444444" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
-          </svg>
-        </button>
-        <span class="m-nav-title">모든 로그</span>
-        <button class="m-nav-icon-btn" aria-label="메뉴 열기">
-          <svg width="20" height="17" viewBox="0 0 20 17" fill="none" aria-hidden="true">
-            <path d="M1 1.5H19"  stroke="#201857" stroke-width="2" stroke-linecap="round"/>
-            <path d="M1 8.5H19"  stroke="#201857" stroke-width="2" stroke-linecap="round"/>
-            <path d="M1 15.5H12" stroke="#201857" stroke-width="2" stroke-linecap="round"/>
-            <circle cx="17" cy="15.5" r="3" fill="#CF0000"/>
-          </svg>
-        </button>
-      </div>
-    </div>
 
     <!-- ② 공통: TabMenu ──────────────────────────────────────── -->
     <div class="tab-section">
@@ -211,6 +183,8 @@
   visible={writeCardVisible}
 />
 
+<BottomTabBar />
+
 <style>
   /* ── 루트 컨테이너 ─────────────────────────────────────────── */
   .list-root {
@@ -225,42 +199,6 @@
     flex-direction: column;
   }
 
-  /* ── TopNavBar (모바일 전용) ──────────────────────────────── */
-  .m-top-nav {
-    width: 100%;
-    padding: 40px 25px 0;
-  }
-  .m-nav-pill {
-    background: var(--cs-purple-op10);
-    border-radius: 20px;
-    min-height: 60px;
-    max-width: 1240px;
-    margin: 0 auto;
-    width: 100%;
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    padding: 5px 20px;
-  }
-  .m-nav-icon-btn {
-    background: none;
-    border: none;
-    cursor: pointer;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    min-width: 44px;
-    min-height: 44px;
-    flex-shrink: 0;
-  }
-  .m-nav-title {
-    font-family: 'Noto Sans KR', sans-serif;
-    font-weight: 700;
-    font-size: 16px;
-    color: var(--cs-text);
-    letter-spacing: -0.5px;
-    line-height: 1.6;
-  }
 
   /* ── TabMenu (모바일 전용) ────────────────────────────────── */
   .tab-section {
@@ -582,7 +520,6 @@
 
   @media (min-width: 768px) {
     .list-wrap  { max-width: 1600px; }
-    .m-top-nav,
     .m-write-cta,
     .m-content  { display: none; }
     /* Common GNB(100px) + 상단 여백 50px */

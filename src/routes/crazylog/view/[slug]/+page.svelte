@@ -2,6 +2,7 @@
   import { supabase } from '$lib/services/supabase'
   import type { PageData } from './$types'
   import CrazylogWriteCard from '$lib/components/common/CrazylogWriteCard.svelte'
+  import BottomTabBar from '$lib/components/common/BottomTabBar.svelte'
 
   interface Props { data: PageData }
   let { data }: Props = $props()
@@ -613,6 +614,8 @@
   </div><!-- /m-body -->
 
 </div><!-- /m-view -->
+
+<BottomTabBar />
 
 <!-- ══════════════════════════════════
      ADMIN: 삭제 확인 모달
