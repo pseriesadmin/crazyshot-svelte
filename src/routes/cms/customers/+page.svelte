@@ -3,6 +3,7 @@
   import { enhance } from '$app/forms'
   import { fly } from 'svelte/transition'
   import CustomerDetailPanel from '$lib/components/cms/CustomerDetailPanel.svelte'
+  import CmsPagination from '$lib/components/cms/CmsPagination.svelte'
   import { csToast } from '$lib/utils/toast'
   import type { PageData, ActionData } from './$types'
   import type { CustomerRow } from './+page.server'
@@ -117,7 +118,7 @@
     return dt ? dt.slice(0, 10) : '-'
   }
 
-  const totalPages = $derived(Math.ceil((data.totalCount ?? 0) / 50))
+  const totalPages = $derived(Math.ceil((data.totalCount ?? 0) / 30))
 </script>
 
 <div class="page-wrap">
@@ -170,6 +171,13 @@
   <div class="content-area" class:panel-open={!!selectedUserId}>
     <!-- 테이블 -->
     <div class="table-card">
+      <CmsPagination
+        page={data.page}
+        totalPages={totalPages}
+        onpage={goPage}
+        variant="top"
+        ariaLabel="고객 목록 페이지 탐색"
+      />
       <div class="table-wrap">
         <table>
           <thead>
@@ -177,14 +185,14 @@
               <th class="th-badge"></th>
               <th>이름</th>
               <th>이메일</th>
-              <th>회원번호</th>
-              <th>전화번호</th>
+              <th class="col-hide">회원번호</th>
+              <th class="col-hide">전화번호</th>
               <th>등급</th>
-              <th>크레이지스코어</th>
-              <th>보증금율</th>
-              <th>포인트</th>
+              <th class="col-hide">크레이지스코어</th>
+              <th class="col-hide">보증금율</th>
+              <th class="col-hide">포인트</th>
               <th>상태</th>
-              <th>가입일</th>
+              <th class="col-hide">가입일</th>
             </tr>
           </thead>
           <tbody>
@@ -205,28 +213,28 @@
                 </td>
                 <td><span class="user-name">{row.name ?? '-'}</span></td>
                 <td><span class="user-email">{row.email}</span></td>
-                <td>
+                <td class="col-hide">
                   {#if row.member_code}
                     <code class="member-code">{row.member_code}</code>
                   {:else}
                     <span class="text-light">미배정</span>
                   {/if}
                 </td>
-                <td>{row.phone ?? '-'}</td>
+                <td class="col-hide">{row.phone ?? '-'}</td>
                 <td>
                   <span class="grade-badge grade-{row.membership_grade}">
                     {gradeLabel(row.membership_grade)}
                   </span>
                 </td>
-                <td>
+                <td class="col-hide">
                   <span class="score-val {getScoreClass(row.credit_score)}">
                     {row.credit_score}점
                   </span>
                 </td>
-                <td>
+                <td class="col-hide">
                   <span class="deposit-rate">{getDepositRate(row.credit_score)}</span>
                 </td>
-                <td>{row.points.toLocaleString('ko-KR')}P</td>
+                <td class="col-hide">{row.points.toLocaleString('ko-KR')}P</td>
                 <td>
                   {#if row.blacklisted}
                     <span class="badge-danger">블랙리스트</span>
@@ -234,7 +242,7 @@
                     <span class="badge-normal">정상</span>
                   {/if}
                 </td>
-                <td>{formatDate(row.created_at)}</td>
+                <td class="col-hide">{formatDate(row.created_at)}</td>
               </tr>
             {:else}
               <tr>
@@ -245,22 +253,13 @@
         </table>
       </div>
 
-      <!-- 페이지네이션 -->
-      {#if totalPages > 1}
-        <div class="pagination">
-          <button
-            class="btn-action"
-            disabled={data.page <= 1}
-            onclick={() => goPage(data.page - 1)}
-          >이전</button>
-          <span class="page-info">{data.page} / {totalPages}</span>
-          <button
-            class="btn-action"
-            disabled={data.page >= totalPages}
-            onclick={() => goPage(data.page + 1)}
-          >다음</button>
-        </div>
-      {/if}
+      <CmsPagination
+        page={data.page}
+        totalPages={totalPages}
+        onpage={goPage}
+        variant="bottom"
+        ariaLabel="고객 목록 페이지 탐색"
+      />
     </div>
 
     <!-- 상세 패널 -->
@@ -410,8 +409,20 @@
   }
   .table-wrap { overflow-x: auto; flex: 1; }
 
+  /* 패널 오픈 시 4:6 비율 */
+  .panel-open .table-card {
+    flex: 4;
+  }
+  .panel-open .col-hide {
+    display: none;
+  }
+  .panel-open table {
+    min-width: 0;
+  }
+
   table {
     width: 100%;
+    min-width: 720px;
     border-collapse: collapse;
     font: var(--text-pc-body-14);
     color: var(--cs-text);
@@ -421,7 +432,7 @@
     color: var(--cs-text-mid);
     font: var(--text-pc-script-12);
     font-weight: 700;
-    padding: 10px 16px;
+    padding: 16px 8px;
     text-align: left;
     white-space: nowrap;
     border-bottom: 1px solid #ECEBF4;
@@ -436,13 +447,14 @@
   tbody tr.blacklisted-row { background: rgba(255,53,53,0.04); }
   tbody tr:last-child { border-bottom: none; }
   td {
-    padding: 10px 16px;
+    padding: 16px 8px;
     vertical-align: middle;
+    white-space: nowrap;
   }
 
   /* 셀 요소 */
-  .user-name  { font-weight: 700; color: var(--cs-text); }
-  .user-email { font: var(--text-pc-script-12); color: var(--cs-text-mid); }
+  .user-name  { font-weight: 700; color: var(--cs-text); white-space: nowrap; }
+  .user-email { font: var(--text-pc-script-12); color: var(--cs-text-mid); white-space: nowrap; }
 
   /* 관리자 배지 컬럼 */
   .th-badge { width: 36px; padding: 10px 8px 10px 16px; }
@@ -494,20 +506,9 @@
 
   .no-data { text-align: center; padding: 40px 20px; color: var(--cs-text-light); font: var(--text-pc-body-14); }
 
-  /* 페이지네이션 */
-  .pagination {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    gap: 12px;
-    padding: 12px;
-    border-top: 1px solid #ECEBF4;
-  }
-  .page-info { font: var(--text-pc-script-12); color: var(--cs-text-mid); }
-
   /* 상세 패널 */
   .detail-panel-wrap {
-    width: 420px;
-    flex-shrink: 0;
+    flex: 6;
+    min-width: 0;
   }
 </style>

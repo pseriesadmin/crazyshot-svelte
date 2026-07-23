@@ -25,10 +25,13 @@ export interface CustomerRow {
   identity_type: string | null
   identity_doc_url: string | null
   identity_verified_at: string | null
+  foreign_doc_url: string | null
+  foreign_verified_at: string | null
   password_set: boolean
   created_at: string
   total_count: number
   cms_role: string | null
+  birth_date: string | null
 }
 
 export const load: PageServerLoad = async ({ parent, url }) => {
@@ -50,7 +53,7 @@ export const load: PageServerLoad = async ({ parent, url }) => {
     p_membership_grade: grade  || null,
     p_blacklisted:      bl === 'true' ? true : bl === 'false' ? false : null,
     p_page:             page,
-    p_limit:            50,
+    p_limit:            30,
   })
 
   if (error) {
@@ -141,6 +144,7 @@ export const actions: Actions = {
     const phone       = String(form.get('phone') ?? '').trim()
     const member_type = String(form.get('member_type') ?? '').trim()
     const created_at  = String(form.get('created_at') ?? '').trim()
+    const birth_date  = String(form.get('birth_date') ?? '').trim()
 
     if (!user_id) return fail(400, { ok: false, error: '사용자 ID 필수' })
     if (!name)    return fail(400, { ok: false, error: '이름 필수' })
@@ -155,6 +159,7 @@ export const actions: Actions = {
       p_phone:       phone   || null,
       p_member_type: member_type || null,
       p_created_at:  createdAtTs,
+      p_birth_date:  birth_date || null,
     })
 
     const result = data as { ok: boolean; error?: string } | null

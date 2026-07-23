@@ -3,6 +3,7 @@
   import { invalidateAll } from '$app/navigation'
   import { csToast } from '$lib/utils/toast'
   import { supabase } from '$lib/services/supabase'
+  import { validateUploadFile } from '$lib/utils/fileValidation'
   // CustomerRow 타입을 인라인으로 정의 (circular import 방지)
   interface CustomerRow {
     user_id: string
@@ -24,9 +25,12 @@
     identity_type: string | null
     identity_doc_url: string | null
     identity_verified_at: string | null
+    foreign_doc_url: string | null
+    foreign_verified_at: string | null
     password_set: boolean
     created_at: string
     total_count: number
+    birth_date: string | null
   }
 
   interface Subscription {
@@ -55,7 +59,7 @@
   }
   let { row, onclose }: Props = $props()
 
-  let activeTab = $state<'info' | 'score' | 'subscription'>('info')
+  let activeTab = $state<'info' | 'score' | 'subscription' | 'blacklist'>('info')
   let subscriptions = $state<Subscription[]>([])
   let auditLog = $state<AuditEntry[]>([])
   let loadingSubscriptions = $state(false)
@@ -89,36 +93,36 @@
 
   async function loadSubscriptions() {
     loadingSubscriptions = true
-    const { data, error } = await supabase
-      .from('user_subscriptions')
-      .select('id, plan_id, status, started_at, expires_at, cancelled_at, created_at, subscription_plans(name)')
-      .eq('user_id', row.user_id)
-      .order('created_at', { ascending: false })
-    loadingSubscriptions = false
-    if (!error && data) {
-      subscriptions = data.map((r: Record<string, unknown>) => ({
-        id: String(r.id),
-        plan_id: r.plan_id as number | null,
-        plan_name: (r.subscription_plans as Record<string, unknown> | null)?.name as string | null,
-        status: r.status as string,
-        started_at: r.started_at as string | null,
-        expires_at: r.expires_at as string | null,
-        cancelled_at: r.cancelled_at as string | null,
-        created_at: r.created_at as string,
-      }))
+    try {
+      const res = await fetch(`/cms/customers/subscriptions?userId=${encodeURIComponent(row.user_id)}`)
+      if (res.ok) {
+        const data = await res.json() as Array<Record<string, unknown>>
+        subscriptions = data.map(r => ({
+          id: String(r.id),
+          plan_id: r.plan_id as number | null,
+          plan_name: (r.subscription_plans as Record<string, unknown> | null)?.name as string | null,
+          status: r.status as string,
+          started_at: r.started_at as string | null,
+          expires_at: r.expires_at as string | null,
+          cancelled_at: r.cancelled_at as string | null,
+          created_at: r.created_at as string,
+        }))
+      }
+    } finally {
+      loadingSubscriptions = false
     }
   }
 
   async function loadAuditLog() {
     loadingAudit = true
-    const { data, error } = await supabase
-      .from('credit_score_audit')
-      .select('id, old_score, new_score, reason, metadata, created_at')
-      .eq('user_id', row.user_id)
-      .order('created_at', { ascending: false })
-      .limit(10)
-    loadingAudit = false
-    if (!error && data) auditLog = data as AuditEntry[]
+    try {
+      const res = await fetch(`/cms/customers/credit-audit?userId=${encodeURIComponent(row.user_id)}`)
+      if (res.ok) {
+        auditLog = await res.json() as AuditEntry[]
+      }
+    } finally {
+      loadingAudit = false
+    }
   }
 
   function getScoreClass(score: number): string {
@@ -173,6 +177,7 @@
     name: row.name ?? '',
     email: row.email,
     phone: row.phone ?? '',
+    birth_date: row.birth_date ? row.birth_date.slice(0, 10) : '',
     member_type: row.member_type ?? 'B2C',
     created_at_date: row.created_at ? row.created_at.slice(0, 10) : '',
   })
@@ -182,6 +187,7 @@
     localInfo.name = row.name ?? ''
     localInfo.email = row.email
     localInfo.phone = row.phone ?? ''
+    localInfo.birth_date = row.birth_date ? row.birth_date.slice(0, 10) : ''
     localInfo.member_type = row.member_type ?? 'B2C'
     localInfo.created_at_date = row.created_at ? row.created_at.slice(0, 10) : ''
   })
@@ -190,6 +196,7 @@
     localInfo.name !== (row.name ?? '') ||
     localInfo.email !== row.email ||
     localInfo.phone !== (row.phone ?? '') ||
+    localInfo.birth_date !== (row.birth_date ? row.birth_date.slice(0, 10) : '') ||
     localInfo.member_type !== (row.member_type ?? 'B2C') ||
     localInfo.created_at_date !== (row.created_at ? row.created_at.slice(0, 10) : '')
   )
@@ -235,6 +242,85 @@
     }
   }
 
+  // ── 알림설정 + 개인정보 동의 (통합 서버 엔드포인트) ──────────
+  interface NotificationSettings {
+    rental_alert: boolean
+    benefit_alert: boolean
+  }
+
+  interface ConsentSettings {
+    privacy_consent: boolean
+    third_party_consent: boolean
+  }
+
+  let notifSettings   = $state<NotificationSettings | null>(null)
+  let notifLoaded     = $state(false)
+  let consentSettings = $state<ConsentSettings | null>(null)
+  let consentLoaded   = $state(false)
+
+  async function loadProfileSettings(userId: string) {
+    const res = await fetch(`/cms/customers/profile-settings?userId=${encodeURIComponent(userId)}`)
+    if (res.ok) {
+      const d = await res.json() as {
+        rental_alert: boolean; benefit_alert: boolean
+        privacy_consent: boolean; third_party_consent: boolean
+      }
+      notifSettings   = { rental_alert: d.rental_alert,   benefit_alert: d.benefit_alert }
+      consentSettings = { privacy_consent: d.privacy_consent, third_party_consent: d.third_party_consent }
+    } else {
+      notifSettings   = { rental_alert: true,  benefit_alert: false }
+      consentSettings = { privacy_consent: false, third_party_consent: false }
+    }
+    notifLoaded   = true
+    consentLoaded = true
+  }
+
+  // ── 배송지 목록 ────────────────────────────────────────────────
+  interface ShippingAddress {
+    id: string
+    label: string
+    recipient: string | null
+    phone: string | null
+    road_address: string
+    detail_address: string | null
+    postal_code: string | null
+    is_default: boolean
+    sort_order: number
+    created_at: string
+  }
+
+  let shippingAddresses = $state<ShippingAddress[]>([])
+  let loadingAddresses  = $state(false)
+  let addressesLoaded   = $state(false)
+
+  async function loadShippingAddresses(userId: string) {
+    loadingAddresses = true
+    try {
+      const res = await fetch(`/cms/customers/addresses?userId=${encodeURIComponent(userId)}`)
+      if (res.ok) {
+        shippingAddresses = await res.json() as ShippingAddress[]
+      }
+    } finally {
+      loadingAddresses = false
+      addressesLoaded  = true
+    }
+  }
+
+  // row 변경 또는 info 탭 진입 시 배송지·알림설정·동의설정 재로드
+  $effect(() => {
+    const uid = row.user_id
+    shippingAddresses = []
+    addressesLoaded   = false
+    notifSettings     = null
+    notifLoaded       = false
+    consentSettings   = null
+    consentLoaded     = false
+    if (activeTab === 'info') {
+      loadShippingAddresses(uid)
+      loadProfileSettings(uid)
+    }
+  })
+
   // ── 본인증명 뷰어 ──────────────────────────────────────────────
   let identityDocUrl = $state<string | null>(null)
 
@@ -258,6 +344,107 @@
   }
 
   const isPdf = $derived(identityDocUrl ? identityDocUrl.toLowerCase().includes('.pdf') : false)
+
+  // ── 증명서 재업로드 (기간경과 / 미등록) ───────────────────────
+  const DOC_ACCEPT = 'image/png,image/jpeg,image/webp,image/heif,image/heic,application/pdf'
+
+  let reuploadIdentityOpen = $state(false)
+  let reuploadForeignOpen  = $state(false)
+  let identityFile         = $state<File | null>(null)
+  let foreignFile          = $state<File | null>(null)
+  let identityPreviewUrl   = $state<string | null>(null)
+  let foreignPreviewUrl    = $state<string | null>(null)
+  let identityFileError    = $state('')
+  let foreignFileError     = $state('')
+  let uploadingIdentity    = $state(false)
+  let uploadingForeign     = $state(false)
+
+  $effect(() => {
+    return () => {
+      if (identityPreviewUrl) URL.revokeObjectURL(identityPreviewUrl)
+      if (foreignPreviewUrl)  URL.revokeObjectURL(foreignPreviewUrl)
+    }
+  })
+
+  function handleDocFile(e: Event, type: 'identity' | 'foreign') {
+    const input = e.target as HTMLInputElement
+    const file  = input.files?.[0] ?? null
+    // 파일 선택 취소 시 무시
+    if (!file) return
+
+    if (file.size > 10 * 1024 * 1024) {
+      if (type === 'identity') { identityFileError = '파일 크기는 10MB 이하여야 합니다.'; identityFile = null }
+      else                     { foreignFileError  = '파일 크기는 10MB 이하여야 합니다.'; foreignFile  = null }
+      input.value = ''
+      return
+    }
+
+    const validation = validateUploadFile(file)
+    if (!validation.ok) {
+      if (type === 'identity') { identityFileError = validation.error!; identityFile = null }
+      else                     { foreignFileError  = validation.error!; foreignFile  = null }
+      input.value = ''
+      return
+    }
+
+    if (type === 'identity') {
+      identityFileError = ''
+      identityFile      = file
+      if (identityPreviewUrl) URL.revokeObjectURL(identityPreviewUrl)
+      identityPreviewUrl = file.type.startsWith('image/') ? URL.createObjectURL(file) : null
+    } else {
+      foreignFileError = ''
+      foreignFile      = file
+      if (foreignPreviewUrl) URL.revokeObjectURL(foreignPreviewUrl)
+      foreignPreviewUrl = file.type.startsWith('image/') ? URL.createObjectURL(file) : null
+    }
+  }
+
+  async function submitDocUpload(type: 'identity' | 'foreign') {
+    const file = type === 'identity' ? identityFile : foreignFile
+    if (!file) return
+
+    if (type === 'identity') uploadingIdentity = true
+    else                     uploadingForeign  = true
+
+    try {
+      const fd = new FormData()
+      fd.append('user_id', row.user_id)
+      fd.append('type', type)
+      fd.append('file', file)
+      if (type === 'identity' && row.identity_type) fd.append('identity_type', row.identity_type)
+
+      const res  = await fetch('/api/cms/upload-doc', { method: 'POST', body: fd })
+      const data = await res.json() as { ok: boolean; error?: string }
+
+      if (data.ok) {
+        csToast.success('증명서가 재등록되었습니다.')
+        await invalidateAll()
+        cancelDocUpload(type)
+      } else {
+        csToast.error(data.error ?? '업로드 실패')
+      }
+    } catch {
+      csToast.error('네트워크 오류가 발생했습니다.')
+    } finally {
+      if (type === 'identity') uploadingIdentity = false
+      else                     uploadingForeign  = false
+    }
+  }
+
+  function cancelDocUpload(type: 'identity' | 'foreign') {
+    if (type === 'identity') {
+      reuploadIdentityOpen = false
+      identityFile         = null
+      identityFileError    = ''
+      if (identityPreviewUrl) { URL.revokeObjectURL(identityPreviewUrl); identityPreviewUrl = null }
+    } else {
+      reuploadForeignOpen = false
+      foreignFile         = null
+      foreignFileError    = ''
+      if (foreignPreviewUrl)  { URL.revokeObjectURL(foreignPreviewUrl);  foreignPreviewUrl  = null }
+    }
+  }
 
   let showMemberTypeModal = $state(false)
   let memberTypeGroups = $state<MemberTypeGroup[]>([])
@@ -314,6 +501,12 @@
       class:active={activeTab === 'subscription'}
       onclick={() => (activeTab = 'subscription')}
     >구독이력</button>
+    <button
+      class="panel-tab"
+      class:active={activeTab === 'blacklist'}
+      class:tab-blacklist={row.blacklisted}
+      onclick={() => (activeTab = 'blacklist')}
+    >블랙리스트</button>
   </div>
 
   <!-- 탭 콘텐츠 -->
@@ -354,6 +547,10 @@
           <input class="info-input" type="text" name="phone" value={localInfo.phone} oninput={handlePhoneInput} placeholder="010-0000-0000" />
         </div>
         <div class="info-row">
+          <span class="info-label">생년월일</span>
+          <input class="info-input" type="date" name="birth_date" bind:value={localInfo.birth_date} />
+        </div>
+        <div class="info-row">
           <span class="info-label">회원유형</span>
           <button type="button" class="info-select-btn" onclick={openMemberTypeModal}>
             {localInfo.member_type}
@@ -368,6 +565,7 @@
           <span class="info-label">포인트</span>
           <span class="info-val">{row.points.toLocaleString('ko-KR')}P</span>
         </div>
+        <!-- 본인 증명 -->
         <div class="info-row">
           <span class="info-label">본인 증명</span>
           <button
@@ -377,6 +575,9 @@
             onclick={() => row.identity_doc_url && openIdentityDoc(row.identity_doc_url)}
           >
             {#if row.identity_type === 'student'}학생증 보기
+            {:else if row.identity_type === 'resident'}주민등록증 보기
+            {:else if row.identity_type === 'driver'}운전면허증 보기
+            {:else if row.identity_type === 'other'}기타 증명 보기
             {:else if row.identity_type === 'general'}일반증명 보기
             {:else}미등록{/if}
           </button>
@@ -384,16 +585,123 @@
             <span class="identity-date">
               {formatIdentityDate(row.identity_verified_at)}
               {#if isIdentityExpired(row.identity_verified_at)}
-                <span class="identity-expired">경과</span>
+                <span class="identity-expired">기간경과</span>
               {/if}
             </span>
           {/if}
+          {#if !row.identity_doc_url || (row.identity_verified_at && isIdentityExpired(row.identity_verified_at))}
+            <button
+              type="button"
+              class="btn-reupload"
+              class:btn-reupload-cancel={reuploadIdentityOpen}
+              onclick={() => reuploadIdentityOpen ? cancelDocUpload('identity') : (reuploadIdentityOpen = true)}
+            >{reuploadIdentityOpen ? '취소' : '재등록'}</button>
+          {/if}
         </div>
+        {#if reuploadIdentityOpen}
+          <div class="reupload-box">
+            <p class="reupload-hint">PNG · JPEG · WebP · HEIF · PDF (최대 10MB)</p>
+            <label class="btn-file-pick">
+              파일 선택
+              <input
+                type="file"
+                accept={DOC_ACCEPT}
+                class="sr-only"
+                onchange={(e) => handleDocFile(e, 'identity')}
+              />
+            </label>
+            {#if identityFile}
+              <div class="reupload-preview">
+                {#if identityPreviewUrl}
+                  <img src={identityPreviewUrl} alt="미리보기" class="reupload-img" />
+                {:else}
+                  <span class="reupload-pdf-name">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+                    {identityFile.name}
+                  </span>
+                {/if}
+              </div>
+            {/if}
+            {#if identityFileError}
+              <p class="reupload-error" role="alert">{identityFileError}</p>
+            {/if}
+            <div class="reupload-actions">
+              <button
+                type="button"
+                class="btn-doc-confirm"
+                disabled={!identityFile || uploadingIdentity}
+                onclick={() => submitDocUpload('identity')}
+              >{uploadingIdentity ? '업로드 중...' : '등록 확인'}</button>
+              <button type="button" class="btn-doc-cancel" onclick={() => cancelDocUpload('identity')}>취소</button>
+            </div>
+          </div>
+        {/if}
+
+        <!-- 외국인 증명 -->
         <div class="info-row">
           <span class="info-label">외국인 여부</span>
           {#if row.is_foreign}<span class="info-val">외국인</span>{/if}
-          <button type="button" class="btn-file-view" disabled={!row.is_foreign}>여권 보기</button>
+          <button
+            type="button"
+            class="btn-file-view"
+            disabled={!row.is_foreign || !row.foreign_doc_url}
+            onclick={() => row.foreign_doc_url && openIdentityDoc(row.foreign_doc_url)}
+          >여권 보기</button>
+          {#if row.is_foreign && row.foreign_verified_at}
+            <span class="identity-date">
+              {formatIdentityDate(row.foreign_verified_at)}
+              {#if isIdentityExpired(row.foreign_verified_at)}
+                <span class="identity-expired">기간경과</span>
+              {/if}
+            </span>
+          {/if}
+          {#if row.is_foreign && (!row.foreign_doc_url || (row.foreign_verified_at && isIdentityExpired(row.foreign_verified_at)))}
+            <button
+              type="button"
+              class="btn-reupload"
+              class:btn-reupload-cancel={reuploadForeignOpen}
+              onclick={() => reuploadForeignOpen ? cancelDocUpload('foreign') : (reuploadForeignOpen = true)}
+            >{reuploadForeignOpen ? '취소' : '재등록'}</button>
+          {/if}
         </div>
+        {#if reuploadForeignOpen}
+          <div class="reupload-box">
+            <p class="reupload-hint">PNG · JPEG · WebP · HEIF · PDF (최대 10MB)</p>
+            <label class="btn-file-pick">
+              파일 선택
+              <input
+                type="file"
+                accept={DOC_ACCEPT}
+                class="sr-only"
+                onchange={(e) => handleDocFile(e, 'foreign')}
+              />
+            </label>
+            {#if foreignFile}
+              <div class="reupload-preview">
+                {#if foreignPreviewUrl}
+                  <img src={foreignPreviewUrl} alt="미리보기" class="reupload-img" />
+                {:else}
+                  <span class="reupload-pdf-name">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+                    {foreignFile.name}
+                  </span>
+                {/if}
+              </div>
+            {/if}
+            {#if foreignFileError}
+              <p class="reupload-error" role="alert">{foreignFileError}</p>
+            {/if}
+            <div class="reupload-actions">
+              <button
+                type="button"
+                class="btn-doc-confirm"
+                disabled={!foreignFile || uploadingForeign}
+                onclick={() => submitDocUpload('foreign')}
+              >{uploadingForeign ? '업로드 중...' : '등록 확인'}</button>
+              <button type="button" class="btn-doc-cancel" onclick={() => cancelDocUpload('foreign')}>취소</button>
+            </div>
+          </div>
+        {/if}
         <div class="info-row">
           <span class="info-label">가입일</span>
           <input class="info-input" type="date" name="created_at" bind:value={localInfo.created_at_date} />
@@ -409,6 +717,114 @@
         <div class="info-row">
           <span class="info-label">파손 횟수</span>
           <span class="info-val">{row.damage_count}건</span>
+        </div>
+
+        <!-- 배송지 정보 -->
+        <div class="addr-section">
+          <div class="addr-section-header">
+            <span class="info-label addr-section-label">배송지</span>
+            {#if loadingAddresses}
+              <span class="addr-loading">로딩 중...</span>
+            {:else if shippingAddresses.length === 0 && addressesLoaded}
+              <span class="addr-empty">등록 없음</span>
+            {/if}
+          </div>
+          {#if shippingAddresses.length > 0}
+            <div class="addr-list">
+              {#each shippingAddresses as addr (addr.id)}
+                <div class="addr-item" class:addr-default={addr.is_default}>
+                  <div class="addr-item-top">
+                    <span class="addr-badge" class:addr-badge-default={addr.is_default} class:addr-badge-extra={!addr.is_default}>
+                      {addr.is_default ? '기본' : '추가'}
+                    </span>
+                    {#if addr.label && addr.label !== '기본' && addr.label !== '추가'}
+                      <span class="addr-tag">{addr.label}</span>
+                    {/if}
+                  </div>
+                  <p class="addr-road">
+                    {addr.road_address}{addr.detail_address ? ' ' + addr.detail_address : ''}
+                  </p>
+                  {#if addr.recipient || addr.phone}
+                    <p class="addr-meta">{[addr.recipient, addr.phone].filter(Boolean).join(' · ')}</p>
+                  {/if}
+                </div>
+              {/each}
+            </div>
+          {/if}
+        </div>
+
+        <!-- 알림설정 -->
+        <div class="notif-section">
+          <div class="notif-section-header">
+            <span class="info-label notif-section-label">알림설정</span>
+            {#if !notifLoaded}
+              <span class="addr-loading">로딩 중...</span>
+            {:else}
+              <button
+                type="button"
+                class="notif-refresh-btn"
+                aria-label="알림설정 새로고침"
+                onclick={() => { notifLoaded = false; notifSettings = null; consentLoaded = false; consentSettings = null; loadProfileSettings(row.user_id) }}
+              >↺</button>
+            {/if}
+          </div>
+          {#if notifLoaded}
+            <div class="notif-rows">
+              <div class="notif-row">
+                <span class="notif-row-label">대여예약 정보 알림</span>
+                {#if notifSettings?.rental_alert}
+                  <span class="notif-badge notif-allow">허용</span>
+                {:else}
+                  <span class="notif-badge notif-deny">거부</span>
+                {/if}
+              </div>
+              <div class="notif-row">
+                <span class="notif-row-label">혜택 정보 알림</span>
+                {#if notifSettings?.benefit_alert}
+                  <span class="notif-badge notif-allow">허용</span>
+                {:else}
+                  <span class="notif-badge notif-deny">거부</span>
+                {/if}
+              </div>
+            </div>
+          {/if}
+        </div>
+
+        <!-- 개인정보 동의 -->
+        <div class="notif-section">
+          <div class="notif-section-header">
+            <span class="info-label notif-section-label">개인정보 동의</span>
+            {#if !consentLoaded}
+              <span class="addr-loading">로딩 중...</span>
+            {:else}
+              <button
+                type="button"
+                class="notif-refresh-btn"
+                aria-label="동의 정보 새로고침"
+                onclick={() => { consentLoaded = false; consentSettings = null; notifLoaded = false; notifSettings = null; loadProfileSettings(row.user_id) }}
+              >↺</button>
+            {/if}
+          </div>
+          {#if consentLoaded}
+            <div class="notif-rows">
+              <div class="notif-row">
+                <span class="notif-row-label">개인정보 수집·이용 동의</span>
+                {#if consentSettings?.privacy_consent}
+                  <span class="notif-badge notif-allow">동의</span>
+                {:else}
+                  <span class="notif-badge notif-deny">미동의</span>
+                {/if}
+              </div>
+              <div class="notif-row">
+                <span class="notif-row-label">개인정보 제3자 제공 동의</span>
+                {#if consentSettings?.third_party_consent}
+                  <span class="notif-badge notif-allow">동의</span>
+                {:else}
+                  <span class="notif-badge notif-deny">미동의</span>
+                {/if}
+              </div>
+            </div>
+          {/if}
         </div>
 
         {#if isDirtyInfo}
@@ -453,60 +869,6 @@
           </div>
         </div>
       {/if}
-
-      <!-- 블랙리스트 -->
-      <div class="section-divider"></div>
-      <div class="blacklist-section">
-        <div class="blacklist-header">
-          <span class="section-title">블랙리스트</span>
-          <button
-            class="btn-toggle"
-            class:bl-on={row.blacklisted}
-            onclick={() => (showBlacklistForm = !showBlacklistForm)}
-          >
-            {row.blacklisted ? '해제' : '등록'}
-          </button>
-        </div>
-        {#if row.blacklisted && row.blacklist_reason}
-          <div class="info-panel">사유: {row.blacklist_reason}</div>
-        {/if}
-        {#if showBlacklistForm}
-          <form
-            method="POST"
-            action="/cms/customers?/toggleBlacklist"
-            use:enhance={() => {
-              return ({ result }) => {
-                if (result.type === 'success') {
-                  csToast.success(row.blacklisted ? '블랙리스트가 해제되었습니다.' : '블랙리스트에 등록되었습니다.')
-                  showBlacklistForm = false
-                  blacklistReason = ''
-                } else if (result.type === 'failure') {
-                  csToast.error((result.data as { error?: string })?.error ?? '처리 실패')
-                }
-              }
-            }}
-            class="bl-form"
-          >
-            <input type="hidden" name="user_id" value={row.user_id} />
-            <input type="hidden" name="blacklisted" value={row.blacklisted ? 'false' : 'true'} />
-            {#if !row.blacklisted}
-              <textarea
-                name="reason"
-                class="f-input"
-                placeholder="블랙리스트 등록 사유를 입력하세요 (필수)"
-                rows="2"
-                bind:value={blacklistReason}
-                required
-              ></textarea>
-            {:else}
-              <input type="hidden" name="reason" value="" />
-            {/if}
-            <button type="submit" class="btn-danger">
-              {row.blacklisted ? '블랙리스트 해제 확인' : '블랙리스트 등록'}
-            </button>
-          </form>
-        {/if}
-      </div>
 
       <!-- 회원 삭제 -->
       <div class="delete-account-section">
@@ -721,6 +1083,78 @@
           </div>
         {/each}
       {/if}
+    {/if}
+
+    <!-- 블랙리스트 탭 -->
+    {#if activeTab === 'blacklist'}
+      <div class="bl-tab-section">
+
+        <!-- 현재 상태 배너 -->
+        <div class="bl-status-banner" class:bl-active={row.blacklisted}>
+          <div class="bl-status-left">
+            {#if row.blacklisted}
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="4.93" y1="4.93" x2="19.07" y2="19.07"/></svg>
+              <span class="bl-status-text">블랙리스트 등록 중</span>
+            {:else}
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>
+              <span class="bl-status-text">정상 회원</span>
+            {/if}
+          </div>
+          <button
+            class="btn-toggle"
+            class:bl-on={row.blacklisted}
+            onclick={() => (showBlacklistForm = !showBlacklistForm)}
+          >
+            {row.blacklisted ? '해제' : '등록'}
+          </button>
+        </div>
+
+        {#if row.blacklisted && row.blacklist_reason}
+          <div class="bl-reason-panel">
+            <span class="bl-reason-label">등록 사유</span>
+            <p class="bl-reason-text">{row.blacklist_reason}</p>
+          </div>
+        {/if}
+
+        {#if showBlacklistForm}
+          <form
+            method="POST"
+            action="/cms/customers?/toggleBlacklist"
+            use:enhance={() => {
+              return async ({ result }) => {
+                if (result.type === 'success') {
+                  csToast.success(row.blacklisted ? '블랙리스트가 해제되었습니다.' : '블랙리스트에 등록되었습니다.')
+                  showBlacklistForm = false
+                  blacklistReason = ''
+                  await invalidateAll()
+                } else if (result.type === 'failure') {
+                  csToast.error((result.data as { error?: string })?.error ?? '처리 실패')
+                }
+              }
+            }}
+            class="bl-form"
+          >
+            <input type="hidden" name="user_id" value={row.user_id} />
+            <input type="hidden" name="blacklisted" value={row.blacklisted ? 'false' : 'true'} />
+            {#if !row.blacklisted}
+              <textarea
+                name="reason"
+                class="f-input"
+                placeholder="블랙리스트 등록 사유를 입력하세요 (필수)"
+                rows="3"
+                bind:value={blacklistReason}
+                required
+              ></textarea>
+            {:else}
+              <input type="hidden" name="reason" value="" />
+            {/if}
+            <button type="submit" class="btn-danger" disabled={!row.blacklisted && !blacklistReason.trim()}>
+              {row.blacklisted ? '블랙리스트 해제 확인' : '블랙리스트 등록'}
+            </button>
+          </form>
+        {/if}
+
+      </div>
     {/if}
   </div>
 </div>
@@ -1201,6 +1635,124 @@
     color: var(--cs-text-light);
   }
 
+  /* 재등록 버튼 */
+  .btn-reupload {
+    height: 22px;
+    padding: 0 8px;
+    background: rgba(59,47,138,0.08);
+    color: var(--cs-purple);
+    border: none;
+    border-radius: var(--radius-sm);
+    font: var(--text-pc-descript-10);
+    font-weight: 700;
+    cursor: pointer;
+    white-space: nowrap;
+    flex-shrink: 0;
+    transition: background 0.12s;
+  }
+  .btn-reupload:hover { background: rgba(59,47,138,0.15); }
+  .btn-reupload.btn-reupload-cancel {
+    background: rgba(255,53,53,0.08);
+    color: var(--cs-red-badge);
+  }
+  .btn-reupload.btn-reupload-cancel:hover { background: rgba(255,53,53,0.14); }
+
+  /* 재업로드 폼 박스 */
+  .reupload-box {
+    margin-left: 92px;
+    padding: 12px 14px;
+    background: var(--cs-surface-gray);
+    border-radius: var(--cms-radius-sm);
+    border: 1px solid var(--cs-lilac);
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+  .reupload-hint {
+    font: var(--text-pc-descript-10);
+    color: var(--cs-text-light);
+    margin: 0;
+  }
+  .btn-file-pick {
+    display: inline-flex;
+    align-items: center;
+    height: 28px;
+    padding: 0 12px;
+    background: var(--cs-white);
+    border: 1px solid var(--cs-lilac);
+    border-radius: var(--cms-radius-sm);
+    font: var(--text-pc-script-12);
+    color: var(--cs-text);
+    cursor: pointer;
+    transition: background 0.12s, border-color 0.12s;
+    width: fit-content;
+  }
+  .btn-file-pick:hover { background: var(--cs-purple-op10); border-color: var(--cs-purple); }
+  .sr-only {
+    position: absolute;
+    width: 1px; height: 1px;
+    padding: 0; margin: -1px;
+    overflow: hidden;
+    clip: rect(0,0,0,0);
+    white-space: nowrap;
+    border-width: 0;
+  }
+  .reupload-preview { display: flex; align-items: center; }
+  .reupload-img {
+    max-width: 120px;
+    max-height: 80px;
+    object-fit: contain;
+    border-radius: var(--cms-radius-sm);
+    border: 1px solid var(--cs-lilac);
+  }
+  .reupload-pdf-name {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font: var(--text-pc-script-12);
+    color: var(--cs-text-mid);
+  }
+  .reupload-error {
+    font: var(--text-pc-script-12);
+    color: var(--cs-red-badge);
+    margin: 0;
+  }
+  .reupload-actions { display: flex; gap: 8px; align-items: center; }
+
+  .btn-doc-confirm {
+    display: inline-flex;
+    align-items: center;
+    height: 30px;
+    padding: 0 14px;
+    background: var(--cs-purple);
+    color: var(--cs-white);
+    border: none;
+    border-radius: var(--cms-radius-sm);
+    font: var(--text-pc-script-12);
+    font-weight: 700;
+    cursor: pointer;
+    transition: background 0.12s;
+    white-space: nowrap;
+  }
+  .btn-doc-confirm:hover    { background: var(--cs-purple-hover); }
+  .btn-doc-confirm:disabled { background: var(--cs-disabled-button); cursor: not-allowed; }
+
+  .btn-doc-cancel {
+    display: inline-flex;
+    align-items: center;
+    height: 30px;
+    padding: 0 12px;
+    background: var(--cs-white);
+    color: var(--cs-text-mid);
+    border: 1px solid var(--cs-lilac);
+    border-radius: var(--cms-radius-sm);
+    font: var(--text-pc-script-12);
+    cursor: pointer;
+    transition: background 0.12s;
+    white-space: nowrap;
+  }
+  .btn-doc-cancel:hover { background: var(--cs-surface-gray); }
+
   /* 본인증명 파일 뷰어 모달 */
   .doc-viewer-backdrop {
     position: fixed; inset: 0; z-index: 400;
@@ -1249,5 +1801,239 @@
   .doc-viewer-iframe {
     width: 100%; height: calc(100vh - 160px);
     border: none;
+  }
+
+  /* 배송지 섹션 */
+  .addr-section {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding: 6px 0;
+    border-bottom: 1px solid var(--cs-surface-gray);
+  }
+
+  .addr-section-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .addr-section-label { min-width: 80px; flex-shrink: 0; }
+
+  .addr-loading {
+    font: var(--text-pc-script-12);
+    color: var(--cs-text-light);
+  }
+
+  .addr-empty {
+    font: var(--text-pc-script-12);
+    color: var(--cs-text-light);
+  }
+
+  .addr-list {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    padding-left: 92px;
+  }
+
+  .addr-item {
+    background: var(--cs-surface-gray);
+    border-radius: var(--cms-radius-sm);
+    padding: 8px 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    border: 1px solid transparent;
+  }
+
+  .addr-item.addr-default {
+    border-color: var(--cs-purple);
+    background: rgba(59,47,138,0.04);
+  }
+
+  .addr-item-top {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+
+  .addr-badge {
+    display: inline-flex;
+    align-items: center;
+    height: 18px;
+    padding: 0 7px;
+    border-radius: 30px;
+    font: var(--text-pc-descript-10);
+    font-weight: 700;
+    flex-shrink: 0;
+  }
+
+  .addr-badge-default {
+    background: var(--cs-purple);
+    color: var(--cs-white);
+  }
+
+  .addr-badge-extra {
+    background: var(--cs-surface-gray);
+    border: 1px solid #ddd;
+    color: var(--cs-text-mid);
+  }
+
+  .addr-tag {
+    font: var(--text-pc-descript-10);
+    color: var(--cs-text-mid);
+  }
+
+  .addr-road {
+    font: var(--text-pc-script-12);
+    color: var(--cs-text);
+    font-weight: 600;
+    margin: 0;
+    line-height: 1.4;
+  }
+
+  .addr-meta {
+    font: var(--text-pc-descript-10);
+    color: var(--cs-text-mid);
+    margin: 0;
+  }
+
+  /* 알림설정 섹션 */
+  .notif-section {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding: 6px 0;
+    border-bottom: 1px solid var(--cs-surface-gray);
+  }
+
+  .notif-section-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .notif-section-label { min-width: 80px; flex-shrink: 0; }
+
+  .notif-refresh-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 20px;
+    height: 20px;
+    background: none;
+    border: none;
+    border-radius: 4px;
+    font-size: 14px;
+    color: var(--cs-text-light);
+    cursor: pointer;
+    transition: color 0.12s, background 0.12s;
+    padding: 0;
+    line-height: 1;
+  }
+  .notif-refresh-btn:hover { color: var(--cs-purple); background: rgba(59,47,138,0.08); }
+
+  .notif-rows {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    padding-left: 92px;
+  }
+
+  .notif-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 5px 10px;
+    background: var(--cs-surface-gray);
+    border-radius: var(--cms-radius-sm);
+  }
+
+  .notif-row-label {
+    font: var(--text-pc-script-12);
+    color: var(--cs-text);
+  }
+
+  .notif-badge {
+    display: inline-flex;
+    align-items: center;
+    height: 18px;
+    padding: 0 8px;
+    border-radius: 30px;
+    font: var(--text-pc-descript-10);
+    font-weight: 700;
+    flex-shrink: 0;
+  }
+
+  .notif-allow {
+    background: rgba(16,185,129,0.12);
+    color: var(--cs-success-light);
+  }
+
+  .notif-deny {
+    background: var(--cs-surface-gray);
+    color: var(--cs-text-light);
+    border: 1px solid #ddd;
+  }
+
+  /* 블랙리스트 탭 */
+  .bl-tab-section { display: flex; flex-direction: column; gap: 12px; }
+
+  .bl-status-banner {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 12px 14px;
+    background: var(--cs-surface-gray);
+    border-radius: var(--cms-radius-sm);
+    border: 1px solid transparent;
+  }
+  .bl-status-banner.bl-active {
+    background: rgba(255,53,53,0.06);
+    border-color: rgba(255,53,53,0.20);
+  }
+
+  .bl-status-left {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    color: var(--cs-text-mid);
+  }
+  .bl-status-banner.bl-active .bl-status-left { color: var(--cs-red-badge); }
+
+  .bl-status-text {
+    font: var(--text-pc-body-14);
+    font-weight: 700;
+  }
+
+  .bl-reason-panel {
+    background: rgba(255,53,53,0.04);
+    border: 1px solid rgba(255,53,53,0.15);
+    border-radius: var(--cms-radius-sm);
+    padding: 12px 14px;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+  .bl-reason-label {
+    font: var(--text-pc-descript-10);
+    font-weight: 700;
+    color: var(--cs-red-badge);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+  }
+  .bl-reason-text {
+    font: var(--text-pc-script-12);
+    color: var(--cs-text);
+    margin: 0;
+    line-height: 1.6;
+  }
+
+  /* 블랙리스트 탭 활성 시 강조 */
+  .panel-tab.tab-blacklist { color: var(--cs-red-badge); }
+  .panel-tab.tab-blacklist.active {
+    color: var(--cs-red-badge);
+    border-bottom-color: var(--cs-red-badge);
   }
 </style>
