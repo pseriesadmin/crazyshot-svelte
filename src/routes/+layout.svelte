@@ -49,7 +49,7 @@
 </script>
 
 <div class="min-h-screen flex flex-col">
-	{#if !page.url.pathname.startsWith('/cms') && !page.url.pathname.startsWith('/products/') && !page.url.pathname.startsWith('/checkout')}
+	{#if !page.url.pathname.startsWith('/cms') && !page.url.pathname.startsWith('/products/') && !page.url.pathname.startsWith('/checkout') && !page.url.pathname.startsWith('/account') && !page.url.pathname.startsWith('/contract')}
 		<GNB pathname={page.url.pathname} />
 	{/if}
 
@@ -57,8 +57,8 @@
 		<slot />
 	</main>
 
-	<!-- 공통 플로팅 바: /cms 제외 전체 사용자 화면 -->
-	{#if !page.url.pathname.startsWith('/cms')}
+	<!-- 공통 플로팅 바: /cms · /contract 제외 전체 사용자 화면 -->
+	{#if !page.url.pathname.startsWith('/cms') && !page.url.pathname.startsWith('/contract')}
 		<FloatingBar
 			userId={chatUserId}
 			userName={chatUserName}
@@ -66,7 +66,7 @@
 		/>
 	{/if}
 
-	{#if !page.url.pathname.startsWith('/cms')}
+	{#if !page.url.pathname.startsWith('/cms') && !page.url.pathname.startsWith('/contract')}
 	<footer class="site-footer">
 		<div class="footer-inner">
 			<div class="footer-top">
