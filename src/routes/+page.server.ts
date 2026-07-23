@@ -16,6 +16,17 @@ export type BannerSlot = {
 export const load: PageServerLoad = async ({ locals }) => {
   const now = new Date().toISOString()
 
+  const { session } = await locals.safeGetSession()
+  let isCms = false
+  if (session?.user.id) {
+    const { data: profile } = await locals.supabase
+      .from('user_profiles')
+      .select('cms_role')
+      .eq('id', session.user.id)
+      .single()
+    isCms = !!(profile as { cms_role?: string | null } | null)?.cms_role
+  }
+
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const db = locals.supabase as unknown as any
 
@@ -35,5 +46,5 @@ export const load: PageServerLoad = async ({ locals }) => {
     bannerMap[b.slot_key].push(b as BannerSlot)
   }
 
-  return { bannerMap }
+  return { bannerMap, isCms }
 }

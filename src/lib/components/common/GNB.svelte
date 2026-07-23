@@ -9,6 +9,22 @@
 
   let isLoggingOut = $state(false)
 
+  // 스크롤 인터랙션: 다운 → 보임, 업 → 가림
+  let gnbHidden = $state(false)
+  let lastScrollY = 0
+
+  function onScroll() {
+    const y = window.scrollY
+    gnbHidden = y > lastScrollY && y > 60
+    lastScrollY = y
+  }
+
+  $effect(() => {
+    lastScrollY = window.scrollY
+    window.addEventListener('scroll', onScroll, { passive: true })
+    return () => window.removeEventListener('scroll', onScroll)
+  })
+
   let userInitial = $derived(() => {
     const user = $authState.user
     if (!user) return ''
@@ -46,7 +62,7 @@
 </script>
 
 <!-- ── Desktop GNB (768px↑) ────────────────────────────────────── -->
-<div class="gnb-desktop-wrap">
+<div class="gnb-desktop-wrap" class:gnb-hidden={gnbHidden}>
   <nav class="gnb-desktop-nav">
     <a href="/" class="gnb-logo" aria-label="CRAZYSHOT 홈">
       <img src="/logo-bi2.svg" alt="CRAZYSHOT" class="gnb-logo-img gnb-logo-pc" width="178" height="110" />
@@ -59,7 +75,7 @@
         </a>
       {/each}
       {#if $authState.user}
-        <button class="gnb-avatar-initial" onclick={handleSignOut} disabled={isLoggingOut} aria-label="로그아웃">
+        <button class="gnb-avatar-initial" onclick={() => goto('/account')} aria-label="내 계정">
           {userInitial()}
         </button>
       {:else}
@@ -70,14 +86,14 @@
 </div>
 
 <!-- ── Mobile Top Bar (768px 미만) ──────────────────────────────── -->
-<div class="gnb-mobile-wrap">
+<div class="gnb-mobile-wrap" class:gnb-hidden={gnbHidden}>
   <nav class="gnb-mobile-nav">
     <a href="/" class="gnb-logo" aria-label="CRAZYSHOT 홈">
       <img src="/logo-bi2.svg" alt="CRAZYSHOT" class="gnb-logo-img gnb-logo-mobile" width="96" height="59" />
     </a>
 
     {#if $authState.user}
-      <button class="gnb-avatar-btn gnb-avatar-btn-initial" onclick={handleSignOut} disabled={isLoggingOut} aria-label="로그아웃">
+      <button class="gnb-avatar-btn gnb-avatar-btn-initial" onclick={() => goto('/account')} aria-label="내 계정">
         {userInitial()}
       </button>
     {:else}
@@ -91,8 +107,17 @@
 
   </nav>
 </div>
-
 <style>
+  /* ── 스크롤 인터랙션 공통 ── */
+  .gnb-desktop-wrap,
+  .gnb-mobile-wrap {
+    transition: transform 0.3s ease;
+  }
+  .gnb-desktop-wrap.gnb-hidden,
+  .gnb-mobile-wrap.gnb-hidden {
+    transform: translateY(-100%);
+  }
+
   /* ── Desktop ── */
   .gnb-desktop-wrap {
     display: none;
@@ -108,6 +133,7 @@
     -webkit-transform: translateZ(0);
     transform: translateZ(0);
   }
+  .gnb-desktop-wrap.gnb-hidden { transform: translateY(-100%); }
   @media (min-width: 768px) {
     .gnb-desktop-wrap { display: flex; }
   }
@@ -237,7 +263,6 @@
     padding: 0 20px;
     height: 55px;
     width: 100%;
-    max-width: 390px;
     border-radius: 20px;
     background: #1d183e;
     overflow: visible;

@@ -616,7 +616,7 @@
         class="m-tab-item"
         class:tab-active={mActiveTab === tab.id}
         class:tab-popping={poppingTab === tab.id}
-        onclick={() => { mActiveTab = tab.id; triggerPop(tab.id); if (tab.id === 'All') goto('/products'); if (tab.id === 'More') moreMenuOpen = true }}
+        onclick={() => { mActiveTab = tab.id; triggerPop(tab.id); if (tab.id === 'All') goto('/products'); if (tab.id === 'Cart') goto('/checkout'); if (tab.id === 'My') goto('/account'); if (tab.id === 'More') moreMenuOpen = true }}
       >
         {#if tab.id === 'More'}
           <svg xmlns="http://www.w3.org/2000/svg" width="20" height="17" viewBox="0 0 20 17" fill="none" aria-hidden="true">
