@@ -3,6 +3,7 @@
   import PricingCards from '$lib/components/members/PricingCards.svelte'
   import FeaturesTable from '$lib/components/members/FeaturesTable.svelte'
   import CommonBenefits from '$lib/components/members/CommonBenefits.svelte'
+  import BottomTabBar from '$lib/components/common/BottomTabBar.svelte'
 </script>
 
 <svelte:head>
@@ -28,6 +29,8 @@
   </div>
 </div>
 
+<BottomTabBar />
+
 <style>
   .members-page {
     background: var(--cs-lilac);
@@ -36,6 +39,11 @@
     flex-direction: column;
     align-items: center;
     min-height: 100vh;
+    padding-bottom: 80px;
+  }
+
+  @media (min-width: 768px) {
+    .members-page { padding-bottom: 0; }
   }
 
   /* Mobile: 섹션 간격 없이 연속 배치 */
