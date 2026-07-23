@@ -1,4 +1,5 @@
 <script lang="ts">
+  import BottomTabBar from '$lib/components/common/BottomTabBar.svelte'
   let carouselEl: HTMLElement | null = null
   let carouselIdx = $state(0)
 
@@ -91,34 +92,7 @@
     { title: 'K-트레일로그를 남기는 멋진 일은 우리들에게 즐거움의 폭증이다!!',           time: '2시간 전·by 유말자', img: '/hype-pack/m-post-3.png' },
   ]
 
-  $effect(() => {
-    document.body.classList.add('hype-pack-page')
-    return () => document.body.classList.remove('hype-pack-page')
-  })
 </script>
-
-<svelte:head>
-  <style>
-    @media (max-width: 767px) {
-      body.hype-pack-page .gnb-mobile-wrap { display: none !important; }
-    }
-  </style>
-</svelte:head>
-
-<!-- ─── MOBILE NAV ──────────────────────────────────────────────────── -->
-<div class="m-nav-wrap">
-  <nav class="m-nav">
-    <a href="/" class="m-nav-logo" aria-label="CRAZYSHOT 홈">
-      <img src="/logo-bi2.svg" alt="CRAZYSHOT" width="96" height="59" class="m-nav-logo-img" />
-    </a>
-    <a href="/auth/login" class="m-nav-avatar" aria-label="내 계정">
-      <svg xmlns="http://www.w3.org/2000/svg" width="40" height="40" viewBox="0 0 40 40" fill="none" aria-hidden="true">
-        <path d="M0 20C0 5 5 0 20 0C35 0 40 5 40 20C40 35 35 40 20 40C5 40 0 35 0 20Z" fill="#C1BBEC"/>
-        <path d="M19.719 20.383C22.325 20.383 24.514 21.136 26.071 22.504C27.637 23.881 28.469 25.802 28.469 27.923C28.469 28.613 27.909 29.173 27.219 29.173C26.529 29.173 25.969 28.613 25.969 27.923C25.969 26.483 25.419 25.26 24.42 24.382C23.411 23.495 21.85 22.883 19.719 22.883C17.588 22.883 16.027 23.495 15.018 24.382C14.019 25.26 13.469 26.484 13.469 27.924C13.469 28.614 12.909 29.174 12.219 29.174C11.529 29.174 10.969 28.614 10.969 27.924C10.969 25.803 11.801 23.881 13.367 22.504C14.924 21.136 17.113 20.383 19.719 20.383ZM19.719 9.676C22.383 9.676 24.522 11.815 24.522 14.479C24.522 17.142 22.383 19.281 19.719 19.281C17.055 19.281 14.916 17.142 14.916 14.479C14.916 11.815 17.055 9.676 19.719 9.676ZM19.719 12.176C18.436 12.176 17.416 13.195 17.416 14.479C17.416 15.762 18.436 16.781 19.719 16.781C21.002 16.781 22.022 15.762 22.022 14.479C22.022 13.195 21.002 12.176 19.719 12.176Z" fill="white"/>
-      </svg>
-    </a>
-  </nav>
-</div>
 
 <!-- ─── MOBILE BODY ────────────────────────────────────────────────── -->
 <div class="m-body">
@@ -408,6 +382,7 @@
 
 </div><!-- /d-body -->
 
+<BottomTabBar />
 
 <style>
 
@@ -415,43 +390,11 @@
      MOBILE LAYOUT  (≤767px)
   ═══════════════════════════════════════════════════════════ */
 
-  .m-nav-wrap { display: none; }
-  .m-body     { display: none; }
+  .m-body { display: none; }
 
   @media (max-width: 767px) {
-    .m-nav-wrap { display: flex; }
-    .m-body     { display: block; }
-    .d-body     { display: none; }
-  }
-
-  /* 모바일 Nav */
-  .m-nav-wrap {
-    position: fixed;
-    top: 0; left: 0; right: 0;
-    z-index: 50;
-    justify-content: center;
-    padding: 16px 20px 8px;
-    background: transparent;
-    pointer-events: none;
-  }
-  .m-nav {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    padding: 0 20px;
-    height: 55px;
-    width: 100%;
-    max-width: 390px;
-    border-radius: 20px;
-    background: linear-gradient(90deg, #1d183e 0%, #1d183e 100%);
-    pointer-events: all;
-    overflow: visible;
-  }
-  .m-nav-logo { display: block; text-decoration: none; line-height: 0; }
-  .m-nav-logo-img { display: block; width: 96px; height: 59px; }
-  .m-nav-avatar {
-    display: flex; align-items: center; justify-content: center;
-    min-width: 44px; min-height: 44px; text-decoration: none; flex-shrink: 0;
+    .m-body  { display: block; }
+    .d-body  { display: none; }
   }
 
   /* 모바일 바디 전체 */

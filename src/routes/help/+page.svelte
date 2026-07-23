@@ -1,4 +1,6 @@
 <script lang="ts">
+  import BottomTabBar from '$lib/components/common/BottomTabBar.svelte'
+
   type TabId = 'all' | 'howto' | 'members' | 'etc'
 
   interface FaqItem {
@@ -279,6 +281,8 @@
   </main>
 
 </div>
+
+<BottomTabBar />
 
 <style>
 /* ── Root ───────────────────────────────────────────────────────── */
