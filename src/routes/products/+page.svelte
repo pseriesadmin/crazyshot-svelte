@@ -2,6 +2,8 @@
   import { goto } from '$app/navigation'
   import type { PageData } from './$types'
   import type { ProductCard } from './+page.server'
+  import BottomTabBar from '$lib/components/common/BottomTabBar.svelte'
+  import ProductDPCard from '$lib/components/products/ProductDPCard.svelte'
   import ProductCategoryModal from '$lib/components/products/admin/ProductCategoryModal.svelte'
   import ProductHeroModal from '$lib/components/products/admin/ProductHeroModal.svelte'
   import ProductGridModal from '$lib/components/products/admin/ProductGridModal.svelte'
@@ -505,60 +507,24 @@
       </div>
       <div class="d-prod-grid">
         {#if useDbGrid}
-          {#each data.gridProducts as prod, idx}
-            {#if idx < 4}
-              <!-- flat card style for first 4 -->
-              <a href={productLink(prod)} class="d-prod-flat">
-                <div class="d-flat-img-box">
-                  <img src={productImg(prod)} alt={prod.name} loading="lazy" class="d-flat-img" />
-                </div>
-                <div class="d-flat-info">
-                  <p class="d-flat-price">{dayPrice(prod)}</p>
-                  <p class="d-flat-name">{prod.name}</p>
-                </div>
-              </a>
-            {:else}
-              <!-- overlay card style for the rest -->
-              <a href={productLink(prod)} class="d-prod-card">
-                <div class="d-prod-bg"></div>
-                <div class="d-prod-img-box">
-                  <img src={productImg(prod)} alt={prod.name} class="abs-img"
-                    style="width:100%;height:100%;object-fit:cover;left:0;top:0"
-                    loading="lazy" />
-                </div>
-                <div class="d-prod-info">
-                  <p class="d-prod-price">{dayPrice(prod)}</p>
-                  <p class="d-prod-name">{prod.name}</p>
-                </div>
-              </a>
-            {/if}
+          {#each data.gridProducts as prod}
+            <ProductDPCard
+              id={prod.id}
+              name={prod.name}
+              imageUrl={productImg(prod)}
+              price24h={prod.base_price_daily}
+              price12h={Math.round(prod.base_price_daily * 0.7)}
+              href={productLink(prod)}
+              category={prod.category}
+            />
           {/each}
         {:else}
           {#each desktopProducts as prod}
-            {#if prod.flat}
-              <a href="/products/9" class="d-prod-flat">
-                <div class="d-flat-img-box">
-                  <img src={prod.img} alt={prod.name} loading="lazy" class="d-flat-img" />
-                </div>
-                <div class="d-flat-info">
-                  <p class="d-flat-price">{prod.price}</p>
-                  <p class="d-flat-name">{prod.name}</p>
-                </div>
-              </a>
-            {:else}
-              <a href="/products/9" class="d-prod-card">
-                <div class="d-prod-bg"></div>
-                <div class="d-prod-img-box">
-                  <img src={prod.img} alt={prod.name} class="abs-img"
-                    style="height:{prod.imgStyle?.h};left:{prod.imgStyle?.l};top:{prod.imgStyle?.t};width:{prod.imgStyle?.w}"
-                    loading="lazy" />
-                </div>
-                <div class="d-prod-info">
-                  <p class="d-prod-price">{prod.price}</p>
-                  <p class="d-prod-name">{prod.name}</p>
-                </div>
-              </a>
-            {/if}
+            <ProductDPCard
+              name={prod.name}
+              imageUrl={prod.img}
+              href="/products"
+            />
           {/each}
         {/if}
       </div>
@@ -585,6 +551,8 @@
   </div>
 
 </div>
+
+<BottomTabBar />
 
 <!-- ─────────────────────────────────────────────────────────────────────── -->
 <!-- 관리자 설정 모달 (isCms 시에만 렌더) -->
@@ -1250,123 +1218,10 @@
   .d-prod-grid {
     display: flex;
     flex-wrap: wrap;
-    gap: 50px 20px;
+    gap: 50px 24px;
     align-items: flex-start;
-    justify-content: space-between;
+    justify-content: flex-start;
     width: 100%;
-  }
-
-  /* Flat card */
-  .d-prod-flat {
-    width: 290px;
-    height: 410px;
-    border-radius: 40px;
-    overflow: clip;
-    display: flex;
-    flex-direction: column;
-    align-items: flex-start;
-    text-decoration: none;
-    cursor: pointer;
-    transition: transform 0.2s;
-  }
-  .d-prod-flat:hover { transform: scale(1.02); }
-  .d-flat-img-box {
-    width: 100%;
-    height: 290px;
-    overflow: hidden;
-    flex-shrink: 0;
-  }
-  .d-flat-img { width: 100%; height: 100%; object-fit: cover; }
-  .d-flat-info {
-    background: #e1def3;
-    width: 100%;
-    padding: 20px;
-    display: flex;
-    flex-direction: column;
-    gap: 10px;
-    flex: 1;
-  }
-  .d-flat-price {
-    font-family: 'Noto Sans KR', sans-serif;
-    font-weight: 900;
-    font-size: 18px;
-    color: #100b32;
-    line-height: 1;
-    letter-spacing: -0.5px;
-    margin: 0;
-    white-space: nowrap;
-  }
-  .d-flat-name {
-    font-family: 'Noto Sans KR', sans-serif;
-    font-weight: 700;
-    font-size: 14px;
-    color: #444;
-    line-height: 2;
-    letter-spacing: -0.5px;
-    margin: 0;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-  }
-
-  /* Overlay card */
-  .d-prod-card {
-    width: 290px;
-    height: 410px;
-    border-radius: 50px;
-    overflow: clip;
-    position: relative;
-    text-decoration: none;
-    display: flex;
-    flex-direction: column;
-    align-items: flex-start;
-    justify-content: flex-end;
-    cursor: pointer;
-    transition: transform 0.2s;
-  }
-  .d-prod-card:hover { transform: scale(1.02); }
-  .d-prod-bg {
-    position: absolute;
-    inset: 0;
-    background: #e1def3;
-    border-radius: 50px;
-  }
-  .d-prod-img-box {
-    position: absolute;
-    inset: 0;
-    overflow: hidden;
-    border-radius: 50px;
-  }
-  .d-prod-info {
-    background: #e1def3;
-    position: relative;
-    z-index: 2;
-    width: 100%;
-    padding: 15px 30px 25px;
-    display: flex;
-    flex-direction: column;
-    gap: 10px;
-  }
-  .d-prod-price {
-    font-family: 'Noto Sans KR', sans-serif;
-    font-weight: 900;
-    font-size: 25px;
-    color: #1d183e;
-    line-height: 2;
-    white-space: nowrap;
-    margin: 0;
-  }
-  .d-prod-name {
-    font-family: 'Noto Sans KR', sans-serif;
-    font-weight: 700;
-    font-size: 16px;
-    color: #444;
-    line-height: 2;
-    letter-spacing: -0.5px;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    margin: 0;
   }
 
   /* ─────────────────────────────────────────────────────────────────── */
