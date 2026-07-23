@@ -467,6 +467,7 @@
           {:else}
             <button class="btn-text" onclick={cancelEdit}>취소</button>
           {/if}
+          <button class="close-btn" type="button" aria-label="패널 닫기" onclick={() => { selectedId = null; activeComboId = null; isEditMode = false; showNewForm = false }}>✕</button>
         </div>
       </div>
 
@@ -1184,6 +1185,16 @@
 }
 .btn-icon:hover { background: rgba(59,47,138,0.06); color: var(--cs-text); }
 .btn-icon.danger:hover { background: rgba(255,53,53,0.08); color: var(--cs-red-badge); }
+
+.close-btn {
+  margin-left: auto; flex-shrink: 0;
+  width: 28px; height: 28px; min-height: 28px;
+  display: flex; align-items: center; justify-content: center;
+  background: transparent; border: none; border-radius: var(--radius-sm);
+  color: var(--cs-text-light); font-size: 14px; cursor: pointer;
+  transition: background 0.12s, color 0.12s;
+}
+.close-btn:hover { background: rgba(255,53,53,0.08); color: var(--cs-red-badge); }
 
 .btn-product-filter {
   display: inline-flex; align-items: center; gap: 4px;

@@ -67,7 +67,7 @@
 		class="fab-btn"
 		style={peekMode ? 'pointer-events:none' : ''}
 		aria-label="검색"
-		onclick={() => window.location.href = '/products'}
+		onclick={() => window.location.href = '/products/search'}
 	>
 		<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 70 70" fill="none" aria-hidden="true">
 			<path d="M70 35C70 54.33 54.33 70 35 70C15.67 70 0 54.33 0 35C0 15.67 15.67 0 35 0C54.33 0 70 15.67 70 35Z" fill="#3B2F8A"/>
@@ -137,7 +137,7 @@
 
 		/* peek: 우측 절반 숨김 — 아이콘 왼쪽 절반만 노출 */
 		.fab-bar.peek {
-			transform: translateX(calc(50% + 24px));
+			transform: translateX(calc(50% + 15px));
 		}
 
 		@keyframes fab-expand-bubble {

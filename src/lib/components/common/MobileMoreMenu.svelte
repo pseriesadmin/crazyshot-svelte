@@ -11,11 +11,11 @@
   let isLoggedIn = $derived(!!$authState.user)
 
   const MENU_ITEMS = [
-    { label: 'Hypepack', href: '/' },
+    { label: 'Hypepack', href: '/hype-pack' },
     { label: 'All',      href: '/products' },
-    { label: 'Members',  href: '/' },
-    { label: 'Crazylog', href: '/' },
-    { label: 'Help',     href: '/' },
+    { label: 'Members',  href: '/members' },
+    { label: 'Crazylog', href: '/crazylog' },
+    { label: 'Help',     href: '/help' },
   ]
 
   // 메뉴 열릴 때 body 스크롤 차단
