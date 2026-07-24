@@ -85,6 +85,7 @@ export type TaxonomyCode = {
 
 export type CodeFormat = {
   prefix: string
+  cat_code?: string
   date_format: string
   seq_digits: number
   reset_monthly: boolean
@@ -128,6 +129,7 @@ export type MappingItem = {
 
 const DEFAULT_FORMAT: CodeFormat = {
   prefix: 'CS',
+  cat_code: '',
   date_format: 'YYMM',
   seq_digits: 3,
   reset_monthly: true,
@@ -468,12 +470,13 @@ export const actions: Actions = {
 
     const form = await request.formData()
     const prefix       = ((form.get('prefix') as string) ?? 'CS').trim().toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 6) || 'CS'
+    const cat_code     = ((form.get('cat_code') as string) ?? '').trim().toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 10)
     const date_format  = form.get('date_format') === 'YYYYMM' ? 'YYYYMM' : 'YYMM'
     const seq_digits   = Math.min(6, Math.max(2, parseInt((form.get('seq_digits') as string) ?? '3') || 3))
     const reset_monthly = form.get('reset_monthly') !== 'false'
     const suffix       = ((form.get('suffix') as string) ?? '').trim().toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 4)
 
-    const value: CodeFormat = { prefix, date_format, seq_digits, reset_monthly, suffix }
+    const value: CodeFormat = { prefix, cat_code, date_format, seq_digits, reset_monthly, suffix }
 
     const { error } = await db()
       .from('cms_settings')

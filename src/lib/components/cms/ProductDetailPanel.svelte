@@ -59,6 +59,9 @@
     allowed_period_ids?: string[]
     allowed_method_ids?: string[]
     allowed_pickup_ids?: string[]
+    shipping_round_trip?: boolean
+    shipping_delivery?: boolean
+    shipping_return?: boolean
   }
 
   interface InventoryUnit {
@@ -67,6 +70,16 @@
     product_code: string | null
     is_active: boolean
     price_rules: Array<{ duration_type: string; price: number }>
+  }
+
+  interface ShippingSettings {
+    enable_round_trip: boolean
+    round_trip_fee: number | null
+    enable_delivery: boolean
+    delivery_fee: number | null
+    enable_return: boolean
+    return_fee: number | null
+    shipping_guide: string
   }
 
   interface Props {
@@ -86,10 +99,11 @@
     rentalPeriods?: RentalOption[]
     rentalMethods?: RentalOption[]
     pickupPoints?: PickupPointOpt[]
+    shippingSettings?: ShippingSettings | null
     onclose: () => void
   }
 
-  let { product, priceRules, categories, categoryLabel, initialTab = null, inventoryList = [], partnerComboItems = [], rentalPeriods = [], rentalMethods = [], pickupPoints = [], onclose }: Props = $props()
+  let { product, priceRules, categories, categoryLabel, initialTab = null, inventoryList = [], partnerComboItems = [], rentalPeriods = [], rentalMethods = [], pickupPoints = [], shippingSettings = null, onclose }: Props = $props()
 
 
   // 카테고리 레이블 맵 (picker용)
@@ -174,6 +188,23 @@
     localPricing.damage_fee_percentage !== origPricing.damage_fee_percentage ||
     localPricing.sale_price            !== origPricing.sale_price ||
     localSaleOnly                      !== origSaleOnly
+  )
+
+  // ── 배송 옵션 로컬 상태 ──────────────────────────────────────
+  let shipRoundTrip = $state<boolean>(product.shipping_round_trip ?? true)
+  let shipDelivery  = $state<boolean>(product.shipping_delivery   ?? true)
+  let shipReturn    = $state<boolean>(product.shipping_return     ?? true)
+  let shipSaving    = $state(false)
+
+  const origShip = $derived({
+    roundTrip: product.shipping_round_trip ?? true,
+    delivery:  product.shipping_delivery   ?? true,
+    returnOpt: product.shipping_return     ?? true,
+  })
+  const isDirtyShip = $derived(
+    shipRoundTrip !== origShip.roundTrip ||
+    shipDelivery  !== origShip.delivery  ||
+    shipReturn    !== origShip.returnOpt
   )
 
   // ── 대여정책 로컬 상태 ──────────────────────────────────────
@@ -1579,6 +1610,88 @@
             </div>
           {/if}
         </form>
+
+        <!-- 배송 정책 — 상품별 옵션 선택 -->
+        <div class="inline-row inline-row--wrap rental-shipping-row">
+          <span class="vr-label">배송 정책</span>
+          {#if shippingSettings}
+            {#if !shippingSettings.enable_round_trip && !shippingSettings.enable_delivery && !shippingSettings.enable_return}
+              <a href="/cms/set/rental" class="il-empty-link">배송 설정에서 등록</a>
+            {:else}
+              <form
+                method="POST"
+                action="/cms/products?/updateShippingOptions"
+                class="shipping-form"
+                use:enhance={() => {
+                  shipSaving = true
+                  return async ({ result, update }) => {
+                    shipSaving = false
+                    if (result.type === 'success') {
+                      csToast.success('배송 옵션이 저장되었습니다.')
+                      await update()
+                      await invalidateAll()
+                    } else if (result.type === 'failure') {
+                      csToast.error((result.data as { error?: string })?.error ?? '저장에 실패했습니다.')
+                    }
+                  }
+                }}
+              >
+                <input type="hidden" name="product_id" value={product.id} />
+                <input type="hidden" name="shipping_round_trip" value={String(shipRoundTrip)} />
+                <input type="hidden" name="shipping_delivery"   value={String(shipDelivery)} />
+                <input type="hidden" name="shipping_return"     value={String(shipReturn)} />
+
+                <div class="shipping-combo-wrap">
+                  {#if shippingSettings.enable_round_trip}
+                    <button
+                      type="button"
+                      class="ship-combo-btn"
+                      class:ship-combo-btn--on={shipRoundTrip}
+                      onclick={() => { shipRoundTrip = !shipRoundTrip }}
+                    >
+                      왕복 요금
+                      <span class="ship-fee">{(shippingSettings.round_trip_fee ?? 0).toLocaleString()}원</span>
+                    </button>
+                  {/if}
+                  {#if shippingSettings.enable_delivery}
+                    <button
+                      type="button"
+                      class="ship-combo-btn"
+                      class:ship-combo-btn--on={shipDelivery}
+                      onclick={() => { shipDelivery = !shipDelivery }}
+                    >
+                      배송요금
+                      <span class="ship-fee">{(shippingSettings.delivery_fee ?? 0).toLocaleString()}원</span>
+                    </button>
+                  {/if}
+                  {#if shippingSettings.enable_return}
+                    <button
+                      type="button"
+                      class="ship-combo-btn"
+                      class:ship-combo-btn--on={shipReturn}
+                      onclick={() => { shipReturn = !shipReturn }}
+                    >
+                      반송요금
+                      <span class="ship-fee">{(shippingSettings.return_fee ?? 0).toLocaleString()}원</span>
+                    </button>
+                  {/if}
+                </div>
+
+                {#if shippingSettings.shipping_guide}
+                  <p class="shipping-guide-text">{shippingSettings.shipping_guide}</p>
+                {/if}
+
+                {#if isDirtyShip}
+                  <button type="submit" class="btn-ship-save" disabled={shipSaving}>
+                    {shipSaving ? '저장 중...' : '저장'}
+                  </button>
+                {/if}
+              </form>
+            {/if}
+          {:else}
+            <a href="/cms/set/rental" class="il-empty-link">배송 설정에서 등록</a>
+          {/if}
+        </div>
       </div>
     {/if}
 
@@ -3728,4 +3841,62 @@
   .combo-sub { display: block; font: var(--text-pc-script-12); color: var(--cs-text-mid, #666); margin-top: 2px; }
   .inline-row--wrap { align-items: flex-start; flex-wrap: wrap; gap: 6px; }
   .il-empty-link { font: var(--text-pc-script-12); color: var(--cs-purple); text-decoration: underline; }
+
+  /* 배송 정책 표시 */
+  .rental-shipping-row { border-top: 1px solid var(--cs-lilac); margin-top: 4px; padding-top: 12px; }
+
+  /* 배송 옵션 콤보 버튼 */
+  .shipping-form { display: flex; flex-direction: column; gap: 8px; flex: 1; }
+  .shipping-combo-wrap { display: flex; flex-wrap: wrap; gap: 8px; }
+  .ship-combo-btn {
+    display: inline-flex; flex-direction: row; align-items: center; gap: 6px;
+    padding: 6px 14px;
+    border: 1.5px solid var(--cs-lilac);
+    border-radius: var(--cms-radius-md);
+    background: var(--cs-white);
+    cursor: pointer;
+    transition: border-color .15s, background .15s, color .15s;
+    font: var(--text-pc-body-14);
+    color: var(--cs-text-mid);
+  }
+  .ship-combo-btn:hover:not(.ship-combo-btn--on) {
+    border-color: var(--cs-purple);
+    background: rgba(59,47,138,.06);
+    color: var(--cs-purple);
+  }
+  .ship-combo-btn--on {
+    border-color: var(--cs-purple);
+    background: var(--cs-purple);
+    color: var(--cs-white);
+    font-weight: 600;
+  }
+  .ship-combo-btn--on:hover {
+    background: var(--cs-dark);
+    border-color: var(--cs-dark);
+  }
+  .ship-fee {
+    font: var(--text-pc-script-12);
+    color: var(--cs-text-mid);
+  }
+  .ship-combo-btn--on .ship-fee { color: rgba(255,255,255,0.75); }
+  .btn-ship-save {
+    align-self: flex-start;
+    height: 28px; padding: 0 14px;
+    background: var(--cs-purple); color: var(--cs-white);
+    border: none; border-radius: var(--cms-radius-sm);
+    font: var(--text-pc-body-14); cursor: pointer;
+    transition: opacity .15s;
+  }
+  .btn-ship-save:disabled { opacity: .6; cursor: not-allowed; }
+
+  .shipping-guide-text {
+    margin: 0;
+    padding: 8px 12px;
+    background: var(--cs-surface-gray);
+    border-radius: var(--cms-radius-sm);
+    font: var(--text-pc-script-12);
+    color: var(--cs-text-mid);
+    white-space: pre-wrap;
+    line-height: 1.6;
+  }
 </style>
