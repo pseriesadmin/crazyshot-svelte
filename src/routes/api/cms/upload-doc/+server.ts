@@ -5,6 +5,7 @@ import { createClient } from '@supabase/supabase-js'
 import { getSupabaseUrl } from '$lib/env/supabasePublic'
 import { UPLOAD_ACCEPTED_TYPES, getMimeExtension } from '$lib/utils/fileValidation'
 import { hasSettingsAccess } from '$lib/utils/cmsPermissions'
+import { getCmsRoleForAction } from '$lib/server/getCmsRoleForAction'
 
 const BUCKET = 'user-documents'
 const MAX_SIZE = 10 * 1024 * 1024 // 10MB
@@ -12,7 +13,8 @@ const MAX_SIZE = 10 * 1024 * 1024 // 10MB
 export const POST: RequestHandler = async ({ request, locals }) => {
   const { session } = await locals.safeGetSession()
   if (!session) return json({ ok: false, error: '로그인 필요' }, { status: 403 })
-  if (!hasSettingsAccess(locals.cmsRole ?? '')) return json({ ok: false, error: '권한 없음' }, { status: 403 })
+  const cmsRole = await getCmsRoleForAction(locals)
+  if (!hasSettingsAccess(cmsRole ?? '')) return json({ ok: false, error: '권한 없음' }, { status: 403 })
 
   const serviceRoleKey = env.SUPABASE_SERVICE_ROLE_KEY
   if (!serviceRoleKey) return json({ ok: false, error: '서버 설정 오류' }, { status: 500 })

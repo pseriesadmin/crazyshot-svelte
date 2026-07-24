@@ -59,11 +59,31 @@
   }
   let { row, onclose }: Props = $props()
 
-  let activeTab = $state<'info' | 'score' | 'subscription' | 'blacklist'>('info')
+  interface CsInquiryReply {
+    id: string
+    response: string
+    is_resolution: boolean
+    created_at: string
+  }
+
+  interface CsPost {
+    id: string
+    title: string
+    content: string
+    category: string
+    status: string
+    created_at: string
+    cs_inquiries: CsInquiryReply[]
+  }
+
+  let activeTab = $state<'info' | 'score' | 'subscription' | 'blacklist' | 'inquiry'>('info')
   let subscriptions = $state<Subscription[]>([])
   let auditLog = $state<AuditEntry[]>([])
+  let inquiryPosts = $state<CsPost[]>([])
   let loadingSubscriptions = $state(false)
   let loadingAudit = $state(false)
+  let loadingInquiries = $state(false)
+  let inquiryExpandedId = $state<string | null>(null)
 
   // 스코어 탭 폼 상태
   let adjustDelta = $state(0)
@@ -88,6 +108,9 @@
     }
     if (activeTab === 'score' && auditLog.length === 0 && !loadingAudit) {
       loadAuditLog()
+    }
+    if (activeTab === 'inquiry' && inquiryPosts.length === 0 && !loadingInquiries) {
+      loadInquiries()
     }
   })
 
@@ -123,6 +146,44 @@
     } finally {
       loadingAudit = false
     }
+  }
+
+  async function loadInquiries() {
+    loadingInquiries = true
+    try {
+      const res = await fetch(`/api/cms/customers/${encodeURIComponent(row.user_id)}/inquiries`)
+      if (res.ok) {
+        inquiryPosts = await res.json() as CsPost[]
+      }
+    } finally {
+      loadingInquiries = false
+    }
+  }
+
+  function toggleInquiry(id: string) {
+    inquiryExpandedId = inquiryExpandedId === id ? null : id
+  }
+
+  const INQUIRY_STATUS_LABEL: Record<string, string> = {
+    open:        '답변대기',
+    in_progress: '처리중',
+    resolved:    '해결됨',
+    closed:      '종결',
+  }
+
+  const INQUIRY_STATUS_STYLE: Record<string, { bg: string; color: string }> = {
+    open:        { bg: 'rgba(14,165,233,0.12)',  color: '#0369A1' },
+    in_progress: { bg: 'rgba(59,47,138,0.12)',   color: '#3B2F8A' },
+    resolved:    { bg: 'rgba(16,185,129,0.12)',  color: '#047857' },
+    closed:      { bg: 'rgba(102,102,102,0.12)', color: '#666666' },
+  }
+
+  const INQUIRY_CATEGORY_LABEL: Record<string, string> = {
+    general: '일반',
+    rental:  '대여',
+    payment: '결제·환불',
+    product: '상품',
+    other:   '기타',
   }
 
   function getScoreClass(score: number): string {
@@ -507,6 +568,11 @@
       class:tab-blacklist={row.blacklisted}
       onclick={() => (activeTab = 'blacklist')}
     >블랙리스트</button>
+    <button
+      class="panel-tab"
+      class:active={activeTab === 'inquiry'}
+      onclick={() => (activeTab = 'inquiry')}
+    >빠른문의</button>
   </div>
 
   <!-- 탭 콘텐츠 -->
@@ -1156,6 +1222,74 @@
 
       </div>
     {/if}
+
+    <!-- 빠른문의 탭 -->
+    {#if activeTab === 'inquiry'}
+      <div class="inquiry-tab-section">
+        {#if loadingInquiries}
+          <div class="inq-loading">불러오는 중...</div>
+        {:else if inquiryPosts.length === 0}
+          <div class="inq-empty">등록된 문의가 없습니다.</div>
+        {:else}
+          {#each inquiryPosts as post (post.id)}
+            {@const st = INQUIRY_STATUS_STYLE[post.status] ?? INQUIRY_STATUS_STYLE['open']}
+            {@const isOpen = inquiryExpandedId === post.id}
+            {@const replyCount = post.cs_inquiries?.length ?? 0}
+            <div class="inq-card" class:inq-open={isOpen}>
+              <button
+                class="inq-head"
+                onclick={() => toggleInquiry(post.id)}
+                aria-expanded={isOpen}
+              >
+                <span class="inq-chip" style="background:{st.bg};color:{st.color}">
+                  {INQUIRY_STATUS_LABEL[post.status] ?? post.status}
+                </span>
+                <div class="inq-summary">
+                  <span class="inq-title">{post.title}</span>
+                  <span class="inq-meta">
+                    <span>{INQUIRY_CATEGORY_LABEL[post.category] ?? post.category}</span>
+                    <span>{post.created_at.slice(0,10)}</span>
+                    {#if replyCount > 0}
+                      <span class="inq-reply-badge">답변 {replyCount}</span>
+                    {/if}
+                  </span>
+                </div>
+                <span class="inq-chevron" class:rotated={isOpen}>
+                  <svg width="12" height="12" viewBox="0 0 14 14" fill="none">
+                    <path d="M2 5L7 9L12 5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+                  </svg>
+                </span>
+              </button>
+
+              {#if isOpen}
+                <div class="inq-body">
+                  <div class="inq-section-label">고객 문의</div>
+                  <div class="inq-content">{post.content}</div>
+
+                  {#if post.cs_inquiries?.length > 0}
+                    <div class="inq-section-label inq-reply-label">관리자 답변</div>
+                    {#each post.cs_inquiries as reply (reply.id)}
+                      <div class="inq-reply">
+                        <div class="inq-reply-text">{reply.response}</div>
+                        <div class="inq-reply-meta">
+                          {#if reply.is_resolution}
+                            <span class="inq-resolved-tag">종결 답변</span>
+                          {/if}
+                          <span>{reply.created_at.slice(0,10)}</span>
+                        </div>
+                      </div>
+                    {/each}
+                  {:else}
+                    <div class="inq-no-reply">아직 답변이 등록되지 않았습니다.</div>
+                  {/if}
+                </div>
+              {/if}
+            </div>
+          {/each}
+        {/if}
+      </div>
+    {/if}
+
   </div>
 </div>
 
@@ -2035,5 +2169,144 @@
   .panel-tab.tab-blacklist.active {
     color: var(--cs-red-badge);
     border-bottom-color: var(--cs-red-badge);
+  }
+
+  /* 빠른문의 탭 */
+  .inquiry-tab-section { display: flex; flex-direction: column; gap: 6px; }
+  .inq-loading, .inq-empty {
+    font-family: 'Noto Sans KR', sans-serif;
+    font-size: 13px;
+    color: var(--cs-text-mid);
+    padding: 40px 0;
+    text-align: center;
+  }
+  .inq-card {
+    border: 1px solid var(--cs-lilac);
+    border-radius: var(--radius-sm);
+    overflow: hidden;
+    background: var(--cs-white);
+  }
+  .inq-card.inq-open { border-color: var(--cs-purple); }
+  .inq-head {
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+    width: 100%;
+    padding: 10px 14px;
+    background: none;
+    border: none;
+    cursor: pointer;
+    text-align: left;
+  }
+  .inq-chip {
+    display: inline-flex;
+    align-items: center;
+    padding: 2px 8px;
+    border-radius: var(--radius-xl);
+    font-family: 'Noto Sans KR', sans-serif;
+    font-size: 11px;
+    font-weight: 700;
+    white-space: nowrap;
+    flex-shrink: 0;
+    margin-top: 1px;
+  }
+  .inq-summary { flex: 1; display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+  .inq-title {
+    font-family: 'Noto Sans KR', sans-serif;
+    font-size: 13px;
+    font-weight: 700;
+    color: var(--cs-text);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .inq-meta {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-family: 'Noto Sans KR', sans-serif;
+    font-size: 11px;
+    color: var(--cs-text-mid);
+    flex-wrap: wrap;
+  }
+  .inq-reply-badge {
+    display: inline-flex;
+    align-items: center;
+    padding: 1px 6px;
+    border-radius: var(--radius-xl);
+    background: rgba(59,47,138,0.10);
+    color: var(--cs-purple);
+    font-family: 'Noto Sans KR', sans-serif;
+    font-size: 10px;
+    font-weight: 700;
+  }
+  .inq-chevron {
+    flex-shrink: 0;
+    color: var(--cs-text-mid);
+    transition: transform 0.2s;
+    margin-top: 2px;
+  }
+  .inq-chevron.rotated { transform: rotate(180deg); }
+  .inq-body {
+    padding: 10px 14px 14px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    border-top: 1px solid var(--cs-lilac);
+  }
+  .inq-section-label {
+    font-family: 'Noto Sans KR', sans-serif;
+    font-size: 11px;
+    font-weight: 700;
+    color: var(--cs-text-mid);
+  }
+  .inq-reply-label { color: var(--cs-purple); }
+  .inq-content {
+    font-family: 'Noto Sans KR', sans-serif;
+    font-size: 13px;
+    color: var(--cs-text);
+    white-space: pre-wrap;
+    line-height: 1.7;
+    background: var(--cs-surface-gray);
+    border-radius: var(--radius-sm);
+    padding: 10px 12px;
+  }
+  .inq-reply {
+    background: rgba(59,47,138,0.05);
+    border-left: 3px solid var(--cs-purple);
+    border-radius: 0 8px 8px 0;
+    padding: 8px 12px;
+  }
+  .inq-reply-text {
+    font-family: 'Noto Sans KR', sans-serif;
+    font-size: 13px;
+    color: var(--cs-text);
+    white-space: pre-wrap;
+    line-height: 1.7;
+  }
+  .inq-reply-meta {
+    margin-top: 4px;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-family: 'Noto Sans KR', sans-serif;
+    font-size: 11px;
+    color: var(--cs-text-mid);
+  }
+  .inq-resolved-tag {
+    display: inline-flex;
+    align-items: center;
+    padding: 1px 6px;
+    border-radius: var(--radius-xl);
+    background: rgba(16,185,129,0.12);
+    color: #047857;
+    font-family: 'Noto Sans KR', sans-serif;
+    font-size: 10px;
+    font-weight: 700;
+  }
+  .inq-no-reply {
+    font-family: 'Noto Sans KR', sans-serif;
+    font-size: 12px;
+    color: var(--cs-text-mid);
   }
 </style>

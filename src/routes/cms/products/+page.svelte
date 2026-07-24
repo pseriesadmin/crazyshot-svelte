@@ -379,6 +379,7 @@
                         rentalPeriods={data.rentalPeriods}
                         rentalMethods={data.rentalMethods}
                         pickupPoints={data.pickupPoints}
+                        shippingSettings={data.shippingSettings}
                         onclose={closePanel}
                       />
                     {/key}
@@ -401,6 +402,7 @@
               rentalPeriods={data.rentalPeriods}
               rentalMethods={data.rentalMethods}
               pickupPoints={data.pickupPoints}
+              shippingSettings={data.shippingSettings}
               onclose={closePanel}
             />
           {/key}

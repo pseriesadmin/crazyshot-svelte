@@ -1,5 +1,6 @@
 import { redirect } from '@sveltejs/kit'
 import { hasSettingsAccess } from '$lib/utils/cmsPermissions'
+import { getCmsRoleForAction } from '$lib/server/getCmsRoleForAction'
 import type { PageServerLoad, Actions } from './$types'
 import type { Coupon } from '$lib/types/database'
 
@@ -118,6 +119,10 @@ export const load: PageServerLoad = async ({ parent, locals, url }) => {
 
 export const actions: Actions = {
   createCoupon: async ({ request, locals }) => {
+    const { session } = await locals.safeGetSession()
+    if (!session) return { ok: false, error: '인증 필요' }
+    const cmsRole = await getCmsRoleForAction(locals)
+    if (!hasSettingsAccess(cmsRole ?? '')) return { ok: false, error: '권한 없음' }
     const form = await request.formData()
 
     const code         = String(form.get('code') ?? '').trim().toUpperCase()
@@ -193,6 +198,10 @@ export const actions: Actions = {
   },
 
   toggleCoupon: async ({ request, locals }) => {
+    const { session: sess2 } = await locals.safeGetSession()
+    if (!sess2) return { ok: false, error: '인증 필요' }
+    const cmsRole2 = await getCmsRoleForAction(locals)
+    if (!hasSettingsAccess(cmsRole2 ?? '')) return { ok: false, error: '권한 없음' }
     const form = await request.formData()
     const id = String(form.get('id'))
     const is_active = form.get('is_active') === 'true'
@@ -209,6 +218,10 @@ export const actions: Actions = {
   },
 
   deleteCoupon: async ({ request, locals }) => {
+    const { session: sess3 } = await locals.safeGetSession()
+    if (!sess3) return { ok: false, error: '인증 필요' }
+    const cmsRole3 = await getCmsRoleForAction(locals)
+    if (!hasSettingsAccess(cmsRole3 ?? '')) return { ok: false, error: '권한 없음' }
     const form = await request.formData()
     const id = String(form.get('id'))
 
@@ -224,6 +237,10 @@ export const actions: Actions = {
   },
 
   distributeCoupon: async ({ request, locals }) => {
+    const { session: sess4 } = await locals.safeGetSession()
+    if (!sess4) return { ok: false, error: '인증 필요' }
+    const cmsRole4 = await getCmsRoleForAction(locals)
+    if (!hasSettingsAccess(cmsRole4 ?? '')) return { ok: false, error: '권한 없음' }
     const form = await request.formData()
     const coupon_id   = String(form.get('coupon_id') ?? '')
     const target_type = String(form.get('target_type') ?? 'all')
@@ -247,6 +264,10 @@ export const actions: Actions = {
   },
 
   extendCoupon: async ({ request, locals }) => {
+    const { session: sess5 } = await locals.safeGetSession()
+    if (!sess5) return { ok: false, error: '인증 필요' }
+    const cmsRole5 = await getCmsRoleForAction(locals)
+    if (!hasSettingsAccess(cmsRole5 ?? '')) return { ok: false, error: '권한 없음' }
     const form = await request.formData()
     const coupon_id = String(form.get('coupon_id') ?? '')
     const new_until = String(form.get('new_until') ?? '')

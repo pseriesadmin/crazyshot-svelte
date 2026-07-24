@@ -1,5 +1,6 @@
 import { redirect } from '@sveltejs/kit'
 import { hasSettingsAccess } from '$lib/utils/cmsPermissions'
+import { getCmsRoleForAction } from '$lib/server/getCmsRoleForAction'
 import type { PageServerLoad, Actions } from './$types'
 
 export type PointStats = {
@@ -110,6 +111,10 @@ export const load: PageServerLoad = async ({ parent, locals, url }) => {
 
 export const actions: Actions = {
   grantPoints: async ({ request, locals }) => {
+    const { session } = await locals.safeGetSession()
+    if (!session) return { ok: false, error: '인증 필요' }
+    const cmsRole = await getCmsRoleForAction(locals)
+    if (!hasSettingsAccess(cmsRole ?? '')) return { ok: false, error: '권한 없음' }
     const form = await request.formData()
     const user_id    = String(form.get('user_id') ?? '').trim()
     const amount_raw = Number(form.get('amount') ?? 0)
@@ -137,6 +142,10 @@ export const actions: Actions = {
   },
 
   bulkGrantPoints: async ({ request, locals }) => {
+    const { session: sess2 } = await locals.safeGetSession()
+    if (!sess2) return { ok: false, error: '인증 필요' }
+    const cmsRole2 = await getCmsRoleForAction(locals)
+    if (!hasSettingsAccess(cmsRole2 ?? '')) return { ok: false, error: '권한 없음' }
     const form = await request.formData()
     const grantsRaw = String(form.get('grants') ?? '[]')
 
@@ -161,6 +170,10 @@ export const actions: Actions = {
   },
 
   updateEarnRule: async ({ request, locals }) => {
+    const { session: sess3 } = await locals.safeGetSession()
+    if (!sess3) return { ok: false, error: '인증 필요' }
+    const cmsRole3 = await getCmsRoleForAction(locals)
+    if (!hasSettingsAccess(cmsRole3 ?? '')) return { ok: false, error: '권한 없음' }
     const form = await request.formData()
     const event_type = String(form.get('event_type') ?? '')
     const amount_raw = form.get('amount')

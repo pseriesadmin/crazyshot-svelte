@@ -13,13 +13,14 @@
   let { data, form, dirty = $bindable(false) }: Props = $props()
 
   let fmtPrefix  = $state(data.codeFormat.prefix       ?? 'CS')
+  let fmtCat     = $state(data.codeFormat.cat_code     ?? '')
   let fmtDate    = $state(data.codeFormat.date_format  ?? 'YYMM')
   let fmtSeq     = $state(String(data.codeFormat.seq_digits ?? 3))
   let fmtReset   = $state(data.codeFormat.reset_monthly !== false)
   let fmtSuffix  = $state(data.codeFormat.suffix       ?? '')
 
   // 현재 탭의 설정값으로 buildPreview 래퍼
-  function preview(catCode: string): string {
+  function preview(catCode?: string): string {
     const fmt: CodeFormat = {
       prefix: fmtPrefix || 'CS',
       date_format: fmtDate as 'YYMM' | 'YYYYMM',
@@ -27,7 +28,7 @@
       reset_monthly: fmtReset,
       suffix: fmtSuffix,
     }
-    return buildPreview(catCode, fmt)
+    return buildPreview(catCode ?? (fmtCat.trim().toUpperCase() || 'CAMML'), fmt)
   }
 
   $effect(() => {
@@ -45,7 +46,7 @@
   <div class="fmt-section-title">코드 구조 시각화</div>
   <div class="token-row">
     <div class="token tk-prefix"><span class="tk-val">{fmtPrefix||'CS'}</span><span class="tk-role">접두어</span></div>
-    <div class="token tk-cat"><span class="tk-val">CAMML</span><span class="tk-role">분류코드</span></div>
+    <div class="token tk-cat"><span class="tk-val">{fmtCat.trim().toUpperCase() || 'CAMML'}</span><span class="tk-role">분류코드</span></div>
     <div class="token tk-date"><span class="tk-val">{datePart(fmtDate)}</span><span class="tk-role">{fmtDate}</span></div>
     <div class="token tk-seq"><span class="tk-val">{'1'.padStart(Number(fmtSeq)||3,'0')}</span><span class="tk-role">{fmtSeq}자리</span></div>
     {#if fmtSuffix.trim()}
@@ -54,7 +55,7 @@
   </div>
   <div class="full-preview-box">
     <span class="fp-label">실제 생성 예시</span>
-    <span class="fp-code">{preview('CAMML')}</span>
+    <span class="fp-code">{preview()}</span>
   </div>
 </div>
 
@@ -67,6 +68,12 @@
       <div class="fc-title"><span class="fc-dot" style="background:var(--cs-dark)"></span>접두어</div>
       <input class="fc-in mono-in" name="prefix" type="text" bind:value={fmtPrefix} maxlength="6" placeholder="CS" autocomplete="off" />
       <p class="fc-hint">영문 대문자·숫자, 최대 6자. 브랜드 식별자.</p>
+    </div>
+
+    <div class="fmt-card">
+      <div class="fc-title"><span class="fc-dot" style="background:var(--cs-purple)"></span>분류코드</div>
+      <input class="fc-in mono-in" name="cat_code" type="text" bind:value={fmtCat} maxlength="10" placeholder="CAMML" autocomplete="off" />
+      <p class="fc-hint">예약코드에 포함할 분류 식별자. 영문 대문자·숫자 최대 10자.</p>
     </div>
 
     <div class="fmt-card">

@@ -3,6 +3,7 @@ import { env } from '$env/dynamic/private'
 import { getSupabaseUrl } from '$lib/env/supabasePublic'
 import { createClient } from '@supabase/supabase-js'
 import { hasSettingsAccess } from '$lib/utils/cmsPermissions'
+import { getCmsRoleForAction } from '$lib/server/getCmsRoleForAction'
 import type { Actions, PageServerLoad } from './$types'
 
 export interface CustomerRow {
@@ -71,8 +72,8 @@ export const actions: Actions = {
   toggleBlacklist: async ({ request, locals }) => {
     const { session } = await locals.safeGetSession()
     if (!session) return fail(403, { ok: false, error: '권한 없음' })
-
-    if (!hasSettingsAccess(locals.cmsRole ?? '')) return fail(403, { ok: false, error: '권한 없음' })
+    const cmsRole = await getCmsRoleForAction(locals)
+    if (!hasSettingsAccess(cmsRole ?? '')) return fail(403, { ok: false, error: '권한 없음' })
 
     const serviceRoleKey = env.SUPABASE_SERVICE_ROLE_KEY
     if (!serviceRoleKey) return fail(500, { ok: false, error: '서버 설정 오류' })
@@ -101,8 +102,8 @@ export const actions: Actions = {
   cancelSubscription: async ({ request, locals }) => {
     const { session } = await locals.safeGetSession()
     if (!session) return fail(403, { ok: false, error: '권한 없음' })
-
-    if (!hasSettingsAccess(locals.cmsRole ?? '')) return fail(403, { ok: false, error: '권한 없음' })
+    const cmsRole = await getCmsRoleForAction(locals)
+    if (!hasSettingsAccess(cmsRole ?? '')) return fail(403, { ok: false, error: '권한 없음' })
 
     const serviceRoleKeyCheck = env.SUPABASE_SERVICE_ROLE_KEY
     if (!serviceRoleKeyCheck) return fail(500, { ok: false, error: '서버 설정 오류' })
@@ -130,8 +131,8 @@ export const actions: Actions = {
   updateCustomerInfo: async ({ request, locals }) => {
     const { session } = await locals.safeGetSession()
     if (!session) return fail(403, { ok: false, error: '권한 없음' })
-
-    if (!hasSettingsAccess(locals.cmsRole ?? '')) return fail(403, { ok: false, error: '권한 없음' })
+    const cmsRole = await getCmsRoleForAction(locals)
+    if (!hasSettingsAccess(cmsRole ?? '')) return fail(403, { ok: false, error: '권한 없음' })
 
     const serviceRoleKeyUpd = env.SUPABASE_SERVICE_ROLE_KEY
     if (!serviceRoleKeyUpd) return fail(500, { ok: false, error: '서버 설정 오류' })
@@ -170,8 +171,8 @@ export const actions: Actions = {
   adjustScore: async ({ request, locals }) => {
     const { session } = await locals.safeGetSession()
     if (!session) return fail(403, { ok: false, error: '권한 없음' })
-
-    if (!hasSettingsAccess(locals.cmsRole ?? '')) return fail(403, { ok: false, error: '권한 없음' })
+    const cmsRole = await getCmsRoleForAction(locals)
+    if (!hasSettingsAccess(cmsRole ?? '')) return fail(403, { ok: false, error: '권한 없음' })
 
     const serviceRoleKeyAdj = env.SUPABASE_SERVICE_ROLE_KEY
     if (!serviceRoleKeyAdj) return fail(500, { ok: false, error: '서버 설정 오류' })
@@ -202,7 +203,7 @@ export const actions: Actions = {
     if (!session) return fail(403, { ok: false, error: '권한 없음' })
 
     // manager / superadmin 전용
-    const role = locals.cmsRole ?? ''
+    const role = (await getCmsRoleForAction(locals)) ?? ''
     if (!['manager', 'superadmin'].includes(role)) return fail(403, { ok: false, error: '삭제 권한이 없습니다.' })
 
     const serviceRoleKey = env.SUPABASE_SERVICE_ROLE_KEY

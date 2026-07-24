@@ -286,6 +286,9 @@ export const load: PageServerLoad = async ({ locals, url }) => {
         allowed_period_ids: ((sp as Record<string, unknown>).allowed_period_ids as string[] | null) ?? [],
         allowed_method_ids: ((sp as Record<string, unknown>).allowed_method_ids as string[] | null) ?? [],
         allowed_pickup_ids: ((sp as Record<string, unknown>).allowed_pickup_ids as string[] | null) ?? [],
+        shipping_round_trip: ((sp as Record<string, unknown>).shipping_round_trip as boolean) ?? true,
+        shipping_delivery:   ((sp as Record<string, unknown>).shipping_delivery   as boolean) ?? true,
+        shipping_return:     ((sp as Record<string, unknown>).shipping_return     as boolean) ?? true,
       }
 
       const { data: priceRules } = await admin
@@ -342,6 +345,22 @@ export const load: PageServerLoad = async ({ locals, url }) => {
     }))
   }
 
+  // 배송 설정 (전역 singleton — selectedId 무관)
+  type ShippingSettingsRow = {
+    enable_round_trip: boolean
+    round_trip_fee: number | null
+    enable_delivery: boolean
+    delivery_fee: number | null
+    enable_return: boolean
+    return_fee: number | null
+    shipping_guide: string
+  }
+  const { data: shippingRaw } = await untypedFrom(admin, 'rental_shipping_settings')
+    .select('enable_round_trip, round_trip_fee, enable_delivery, delivery_fee, enable_return, return_fee, shipping_guide')
+    .limit(1)
+    .single()
+  const shippingSettings = (shippingRaw as ShippingSettingsRow | null) ?? null
+
   return {
     products: (products ?? []).map((p) => ({
       ...p,
@@ -365,6 +384,7 @@ export const load: PageServerLoad = async ({ locals, url }) => {
     rentalPeriods,
     rentalMethods,
     pickupPoints,
+    shippingSettings,
   }
 }
 
@@ -839,5 +859,29 @@ export const actions: Actions = {
     }
 
     return { success: true, cloned: createdIds.length, partnerCode }
+  },
+
+  updateShippingOptions: async ({ request, locals }) => {
+    const { session } = await locals.safeGetSession()
+    if (!session) return fail(401, { error: '인증 필요' })
+
+    const form = await request.formData()
+    const productId    = form.get('product_id') as string
+    const roundTrip    = form.get('shipping_round_trip') === 'true'
+    const delivery     = form.get('shipping_delivery') === 'true'
+    const returnOpt    = form.get('shipping_return') === 'true'
+
+    if (!productId) return fail(400, { error: '상품 ID가 필요합니다.' })
+
+    const admin = createClient(getSupabaseUrl(), env.SUPABASE_SERVICE_ROLE_KEY ?? '')
+    const { error } = await admin.rpc('update_product_shipping_options', {
+      p_product_id: productId,
+      p_round_trip: roundTrip,
+      p_delivery:   delivery,
+      p_return:     returnOpt,
+    })
+
+    if (error) return fail(500, { error: error.message })
+    return { success: true, action: 'updateShippingOptions' }
   },
 }

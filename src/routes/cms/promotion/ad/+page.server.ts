@@ -1,5 +1,6 @@
 import { redirect } from '@sveltejs/kit'
 import { hasSettingsAccess } from '$lib/utils/cmsPermissions'
+import { getCmsRoleForAction } from '$lib/server/getCmsRoleForAction'
 import type { PageServerLoad, Actions } from './$types'
 
 export type Banner = {
@@ -41,6 +42,10 @@ export const load: PageServerLoad = async ({ parent, locals, url }) => {
 
 export const actions: Actions = {
   createBanner: async ({ request, locals }) => {
+    const { session } = await locals.safeGetSession()
+    if (!session) return { ok: false, error: '인증 필요' }
+    const cmsRole = await getCmsRoleForAction(locals)
+    if (!hasSettingsAccess(cmsRole ?? '')) return { ok: false, error: '권한 없음' }
     const form = await request.formData()
     const slot_key    = String(form.get('slot_key') ?? '')
     const title       = String(form.get('title') ?? '').trim() || null
@@ -72,6 +77,10 @@ export const actions: Actions = {
   },
 
   toggleBanner: async ({ request, locals }) => {
+    const { session: sess2 } = await locals.safeGetSession()
+    if (!sess2) return { ok: false, error: '인증 필요' }
+    const cmsRole2 = await getCmsRoleForAction(locals)
+    if (!hasSettingsAccess(cmsRole2 ?? '')) return { ok: false, error: '권한 없음' }
     const form = await request.formData()
     const id = String(form.get('id'))
     const is_active = form.get('is_active') === 'true'
@@ -88,6 +97,10 @@ export const actions: Actions = {
   },
 
   deleteBanner: async ({ request, locals }) => {
+    const { session: sess3 } = await locals.safeGetSession()
+    if (!sess3) return { ok: false, error: '인증 필요' }
+    const cmsRole3 = await getCmsRoleForAction(locals)
+    if (!hasSettingsAccess(cmsRole3 ?? '')) return { ok: false, error: '권한 없음' }
     const form = await request.formData()
     const id = String(form.get('id'))
 
