@@ -290,6 +290,8 @@
     localPeriodIds = [...(product.allowed_period_ids ?? [])]
     localMethodIds = [...(product.allowed_method_ids ?? [])]
     localPickupIds = [...(product.allowed_pickup_ids ?? [])]
+    localOptions = parseOptionLinks(product)
+    optionNamesLoaded = false
   })
 
   // 탭 전환: 미저장 변경 존재 시 경고 토스트
@@ -861,11 +863,11 @@
     try {
       const arr = Array.isArray(raw) ? raw : JSON.parse(raw as string)
       return (arr as Record<string, unknown>[]).map((l) => ({
-        option_product_id: l.option_product_id as string,
-        name: '',
-        price_24h: 0,
-        stock_quantity: 0,
-        image_url: null,
+        option_product_id: (l.option_product_id as string),
+        name: (l.option_product_name as string) ?? (l.name as string) ?? '',
+        price_24h: (l.price_24h as number) ?? 0,
+        stock_quantity: (l.stock_quantity as number) ?? 0,
+        image_url: (l.image_url as string | null)?.replace(/^"|"$/g, '') ?? null,
         is_required: (l.is_required as boolean) ?? false,
         min_select_required: (l.min_select_required as boolean) ?? false,
         delivery_rental_disabled: (l.delivery_rental_disabled as boolean) ?? false,
@@ -896,7 +898,7 @@
   })
 
   async function loadOptionNames() {
-    const ids = localOptions.filter(o => !o.name).map(o => o.option_product_id)
+    const ids = localOptions.filter(o => !o.name || o.name === '').map(o => o.option_product_id)
     if (ids.length === 0) { optionNamesLoaded = true; return }
     const { data } = await supabase
       .from('products')
@@ -1409,9 +1411,14 @@
         {#if localOptions.length > 0}
           <div class="bulk-row">
             <span class="bulk-label">일괄 적용</span>
-            <label class="cb-label"><input type="checkbox" class="cb-input" bind:checked={bulkRequired} /> 필수 선택</label>
-            <label class="cb-label"><input type="checkbox" class="cb-input" bind:checked={bulkMinSelectRequired} /> 최소 1개 선택 필수</label>
-            <label class="cb-label"><input type="checkbox" class="cb-input" bind:checked={bulkDeliveryDisabled} /> 배송 대여 불가</label>
+            <div class="opt-combo-group">
+              <button type="button" class="opt-combo-btn" class:opt-combo-btn--on={bulkRequired}
+                onclick={() => { bulkRequired = !bulkRequired }}>필수 선택</button>
+              <button type="button" class="opt-combo-btn" class:opt-combo-btn--on={bulkMinSelectRequired}
+                onclick={() => { bulkMinSelectRequired = !bulkMinSelectRequired }}>최소 1개 선택 필수</button>
+              <button type="button" class="opt-combo-btn" class:opt-combo-btn--on={bulkDeliveryDisabled}
+                onclick={() => { bulkDeliveryDisabled = !bulkDeliveryDisabled }}>배송 대여 불가</button>
+            </div>
             <button type="button" class="btn-bulk-apply" onclick={applyBulk}>적용</button>
           </div>
           <div class="selected-option-list">
@@ -1425,9 +1432,12 @@
                 <div class="selected-option-info">
                   <p class="selected-option-name">{opt.name}</p>
                   <div class="selected-option-cbs">
-                    <label class="cb-label"><input type="checkbox" class="cb-input" bind:checked={localOptions[i].is_required} /> 필수 선택</label>
-                    <label class="cb-label"><input type="checkbox" class="cb-input" bind:checked={localOptions[i].min_select_required} /> 최소 1개 선택 필수</label>
-                    <label class="cb-label"><input type="checkbox" class="cb-input" bind:checked={localOptions[i].delivery_rental_disabled} /> 배송 대여 불가</label>
+                    <button type="button" class="opt-combo-btn" class:opt-combo-btn--on={opt.is_required}
+                      onclick={() => { opt.is_required = !opt.is_required }}>필수 선택</button>
+                    <button type="button" class="opt-combo-btn" class:opt-combo-btn--on={opt.min_select_required}
+                      onclick={() => { opt.min_select_required = !opt.min_select_required }}>최소 1개 선택 필수</button>
+                    <button type="button" class="opt-combo-btn" class:opt-combo-btn--on={opt.delivery_rental_disabled}
+                      onclick={() => { opt.delivery_rental_disabled = !opt.delivery_rental_disabled }}>배송 대여 불가</button>
                   </div>
                 </div>
                 <button type="button" class="remove-btn" onclick={() => removeOption(opt.option_product_id)} aria-label="{opt.name} 옵션 제거">✕</button>
@@ -3758,20 +3768,43 @@
   .bulk-row {
     display: flex;
     align-items: center;
-    gap: 16px;
+    gap: 10px;
     padding: 10px 14px;
     background: rgba(59,47,138,0.04);
     border-radius: var(--cms-radius-sm);
     margin-bottom: 12px;
     flex-wrap: wrap;
   }
-  .bulk-label { font: var(--text-pc-body-14); color: var(--cs-text-mid); }
-  .cb-label {
-    display: inline-flex; align-items: center; gap: 6px;
-    font: var(--text-pc-body-14); color: var(--cs-text);
-    cursor: pointer; white-space: nowrap; min-height: 44px;
+  .bulk-label { font: var(--text-pc-body-14); color: var(--cs-text-mid); flex-shrink: 0; }
+  .opt-combo-group { display: flex; flex-wrap: wrap; gap: 6px; flex: 1; }
+  .opt-combo-btn {
+    display: inline-flex; align-items: center;
+    padding: 5px 12px;
+    border: 1.5px solid var(--cs-lilac);
+    border-radius: var(--cms-radius-md);
+    background: var(--cs-white);
+    font: var(--text-pc-script-12); font-weight: 500;
+    color: var(--cs-text-mid);
+    cursor: pointer;
+    white-space: nowrap;
+    transition: border-color .15s, background .15s, color .15s;
   }
-  .cb-input { cursor: pointer; accent-color: var(--cs-purple); width: 16px; height: 16px; }
+  .opt-combo-btn:hover:not(.opt-combo-btn--on) {
+    border-color: var(--cs-purple);
+    background: rgba(59,47,138,.06);
+    color: var(--cs-purple);
+  }
+  .opt-combo-btn--on {
+    border-color: var(--cs-purple);
+    background: var(--cs-purple);
+    color: var(--cs-white);
+    font-weight: 600;
+  }
+  .opt-combo-btn--on:hover {
+    background: var(--cs-dark);
+    border-color: var(--cs-dark);
+  }
+  .selected-option-cbs { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
   .btn-bulk-apply {
     margin-left: auto;
     display: inline-flex; align-items: center;
@@ -3807,7 +3840,6 @@
   .selected-option-info { flex: 1; min-width: 0; }
   .selected-option-name { font: var(--text-pc-body-14); color: var(--cs-text); margin: 0 0 2px; }
   .selected-option-meta { font: var(--text-pc-script-12); color: var(--cs-text-mid); margin: 0 0 6px; }
-  .selected-option-cbs { display: flex; flex-wrap: wrap; gap: 14px; }
   .remove-btn {
     background: none; border: none; cursor: pointer;
     color: var(--cs-text-light); font-size: 14px;

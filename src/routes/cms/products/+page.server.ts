@@ -262,11 +262,12 @@ export const load: PageServerLoad = async ({ locals, url }) => {
   let pickupPoints: PickupPointOption[] = []
 
   if (selectedId) {
-    const [{ data: sp }, periodsRes, methodsRes, pickupsRes] = await Promise.all([
+    const [{ data: sp }, periodsRes, methodsRes, pickupsRes, { data: optionLinksData }] = await Promise.all([
       admin.from('products').select('*').eq('id', selectedId).is('deleted_at', null).single(),
       untypedFrom(admin, 'rental_period_options').select('id, name, display_order').eq('is_active', true).is('deleted_at', null).order('display_order'),
       untypedFrom(admin, 'rental_method_options').select('id, name, display_order').eq('is_active', true).is('deleted_at', null).order('display_order'),
       admin.from('pickup_points').select('id, name, address').eq('is_active', true).is('deleted_at', null).order('created_at'),
+      admin.rpc('get_product_option_links', { p_product_id: selectedId }),
     ])
 
     rentalPeriods = ((periodsRes as { data: RentalOption[] | null }).data ?? [])
@@ -289,6 +290,7 @@ export const load: PageServerLoad = async ({ locals, url }) => {
         shipping_round_trip: ((sp as Record<string, unknown>).shipping_round_trip as boolean) ?? true,
         shipping_delivery:   ((sp as Record<string, unknown>).shipping_delivery   as boolean) ?? true,
         shipping_return:     ((sp as Record<string, unknown>).shipping_return     as boolean) ?? true,
+        option_links:        optionLinksData ?? [],
       }
 
       const { data: priceRules } = await admin
@@ -575,16 +577,18 @@ export const actions: Actions = {
     }
 
     if (sectionType === 'options') {
-      let option_links: unknown = null
       const optionsStr = form.get('option_links') as string | null
+      let option_links: unknown[] = []
       if (optionsStr) { try { option_links = JSON.parse(optionsStr) } catch { /* ignore */ } }
 
+      // JSONB 파라미터는 JS 배열 직접 전달 (JSON.stringify 금지 — string으로 처리되어 silent fail)
       const { error: updateError } = await admin
-        .from('products')
-        .update({ option_links })
-        .eq('id', productId)
+        .rpc('upsert_product_option_links', {
+          p_product_id:   productId,
+          p_option_links: option_links,
+        })
 
-      if (updateError) return fail(500, { error: '옵션상품 수정에 실패했습니다.' })
+      if (updateError) return fail(500, { error: `옵션상품 수정에 실패했습니다: ${updateError.message}` })
     }
 
     if (sectionType === 'rental') {
