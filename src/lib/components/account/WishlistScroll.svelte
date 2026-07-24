@@ -1,34 +1,45 @@
 <script lang="ts">
   import ProductDPCard from '$lib/components/products/ProductDPCard.svelte'
-  import type { ProductCategoryEnum } from '$lib/types/database'
-  import thumb1 from '$lib/assets/account/product-thumb-1.png'
-  import thumb2 from '$lib/assets/account/product-thumb-2.png'
-  import thumb3 from '$lib/assets/account/product-thumb-3.png'
-  import thumb4 from '$lib/assets/account/product-thumb-4.png'
+  import { supabase } from '$lib/services/supabase'
 
   interface WishItem {
-    id?: string
-    imageUrl: string
-    name: string
-    category?: ProductCategoryEnum | string
-    price24h?: number | null
-    price12h?: number | null
-    href?: string
+    wishlist_id: string
+    product_id: string
+    product_name: string
+    category: string
+    image_url: string
+    slug: string
+    price24h: number | null
+    price12h: number | null
+    wished_at: string
   }
-
-  const defaultItems: WishItem[] = [
-    { imageUrl: thumb1, name: 'SONY A7S3',   category: 'camera',     price24h: 120000, price12h: 80000 },
-    { imageUrl: thumb2, name: 'SONY CAM',    category: 'camcorder',  price24h: 120000, price12h: 80000 },
-    { imageUrl: thumb3, name: 'SONY A7S3',   category: 'camera',     price24h: 120000, price12h: 80000 },
-    { imageUrl: thumb4, name: '인스타 360',  category: 'action_cam', price24h: 120000, price12h: 80000 },
-  ]
 
   interface Props {
     items?: WishItem[]
     totalCount?: number
   }
 
-  let { items = defaultItems, totalCount = 6 }: Props = $props()
+  let { items = [], totalCount = 0 }: Props = $props()
+
+  let localItems = $state([...items])
+  let localCount = $state(totalCount)
+
+  $effect(() => {
+    localItems = [...items]
+    localCount = totalCount
+  })
+
+  async function handleWishToggle(productId: string | undefined) {
+    if (!productId) return
+    const rpc = supabase.rpc as unknown as (fn: string, params: Record<string, string>) => Promise<{ data: { ok: boolean; action: string } | null }>
+    const { data } = await rpc('toggle_product_wishlist', { p_product_id: productId })
+    if (!data?.ok) return
+
+    if (data.action === 'removed') {
+      localItems = localItems.filter(i => i.product_id !== productId)
+      localCount = Math.max(0, localCount - 1)
+    }
+  }
 </script>
 
 <div class="relative shrink-0 w-full">
@@ -38,7 +49,7 @@
     <div class="section-header">
       <p class="section-title">관심가져봄</p>
       <div class="section-right">
-        <p class="section-count">{totalCount}</p>
+        <p class="section-count">{localCount}</p>
         <div class="chevron-wrap">
           <svg width="8" height="14" viewBox="0 0 8 14" fill="none">
             <path d="M1 1L7 7L1 13" stroke="#444444" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"/>
@@ -48,21 +59,30 @@
     </div>
 
     <!-- 가로 스크롤 카드 목록 -->
-    <div class="scroll-track">
-      <div class="scroll-inner">
-        {#each items as item}
-          <ProductDPCard
-            id={item.id}
-            name={item.name}
-            category={item.category}
-            imageUrl={item.imageUrl}
-            price24h={item.price24h ?? null}
-            price12h={item.price12h ?? null}
-            href={item.href}
-          />
-        {/each}
+    {#if localItems.length === 0}
+      <div class="empty-wish">
+        <p class="empty-wish-msg">관심 상품이 없습니다</p>
+        <p class="empty-wish-sub">마음에 드는 상품에 하트를 눌러 보세요</p>
       </div>
-    </div>
+    {:else}
+      <div class="scroll-track">
+        <div class="scroll-inner">
+          {#each localItems as item (item.wishlist_id)}
+            <ProductDPCard
+              id={item.product_id}
+              name={item.product_name}
+              category={item.category}
+              imageUrl={item.image_url || '/placeholder.png'}
+              price24h={item.price24h}
+              price12h={item.price12h}
+              href={`/products/${item.slug}`}
+              wished
+              onWishToggle={handleWishToggle}
+            />
+          {/each}
+        </div>
+      </div>
+    {/if}
 
   </div>
 </div>
@@ -120,5 +140,26 @@
     gap: 20px;
     align-items: flex-start;
     width: max-content;
+  }
+
+  .empty-wish {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    width: 100%;
+    padding: 40px 0 30px;
+  }
+  .empty-wish-msg {
+    font-family: var(--font-kr);
+    font-size: 15px;
+    font-weight: 700;
+    color: var(--cs-text);
+  }
+  .empty-wish-sub {
+    font-family: var(--font-kr);
+    font-size: 13px;
+    color: var(--cs-text-mid);
   }
 </style>
