@@ -131,14 +131,18 @@ export const load: PageServerLoad = async ({ params, locals }) => {
 		enable_return: boolean; return_fee: number | null;
 		shipping_guide: string;
 	} | null;
+	if (shippingSettingsRes.error) {
+		console.error('[products/[id]] rental_shipping_settings error:', shippingSettingsRes.error.message);
+	}
 	if (ss) {
 		const pr = row as unknown as Record<string, unknown>;
 		const items: ShippingPolicyItem[] = [];
-		if (ss.enable_round_trip && pr['shipping_round_trip'] === true)
+		// [E-1] Boolean() 캐스트 — DB 컬럼 타입(bool/int/string) 무관하게 truthy 판단
+		if (ss.enable_round_trip && Boolean(pr['shipping_round_trip']))
 			items.push({ label: '왕복 요금', fee: ss.round_trip_fee ?? 0 });
-		if (ss.enable_delivery && pr['shipping_delivery'] === true)
+		if (ss.enable_delivery && Boolean(pr['shipping_delivery']))
 			items.push({ label: '배송요금', fee: ss.delivery_fee ?? 0 });
-		if (ss.enable_return && pr['shipping_return'] === true)
+		if (ss.enable_return && Boolean(pr['shipping_return']))
 			items.push({ label: '반송요금', fee: ss.return_fee ?? 0 });
 		if (items.length > 0 || ss.shipping_guide) {
 			shippingPolicy = { items, guide: ss.shipping_guide ?? '' };
@@ -226,13 +230,34 @@ export const load: PageServerLoad = async ({ params, locals }) => {
 			.order('created_at', { ascending: false })
 			.limit(5);
 
-		popularProducts = ((popRaw ?? []) as Array<{ id: string; name: string; slug: string | null; image_urls: string[]; base_price_daily: number }>).map((p) => ({
-			id:       p.id,
-			name:     p.name,
-			slug:     p.slug,
-			imageUrl: p.image_urls?.[0] ?? null,
-			price24h: p.base_price_daily ?? 0,
-		}));
+		const popRows = (popRaw ?? []) as Array<{ id: string; name: string; slug: string | null; image_urls: string[]; base_price_daily: number }>;
+
+		// base_price_daily=0인 상품은 price_rules 24H 룰로 폴백
+		const popIds = popRows.map((p) => p.id);
+		const pop24hMap: Record<string, number> = {};
+		if (popIds.length > 0) {
+			const { data: popRules } = await locals.supabase
+				.from('price_rules')
+				.select('product_id, price')
+				.in('product_id', popIds)
+				.eq('duration_type', '24h')
+				.eq('is_active', true)
+				.is('deleted_at', null);
+			for (const r of (popRules ?? []) as Array<{ product_id: string; price: number }>) {
+				pop24hMap[r.product_id] = Number(r.price);
+			}
+		}
+
+		popularProducts = popRows.map((p) => {
+			const legacy = p.base_price_daily ?? 0;
+			return {
+				id:       p.id,
+				name:     p.name,
+				slug:     p.slug,
+				imageUrl: p.image_urls?.[0] ?? null,
+				price24h: legacy > 0 ? legacy : (pop24hMap[p.id] ?? 0),
+			};
+		});
 	}
 
 	return {

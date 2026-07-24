@@ -14,8 +14,9 @@
     rentalPeriods?: RentalOption[];
     selectedMethodId?: string;
     selectedPeriodId?: string;
-    onreserve?: (data: { startDate: string; endDate: string; startHour: number; endHour: number; methodId: string; periodId: string }) => void;
-    onchange?: (data: { startDate: string; endDate: string; startHour: number; endHour: number }) => void;
+    reserveDisabled?: boolean;
+    onreserve?: (data: { startDate: string; endDate: string; startHour: number; startMin: number; endHour: number; endMin: number; methodId: string; periodId: string }) => void;
+    onchange?: (data: { startDate: string; endDate: string; startHour: number; startMin: number; endHour: number; endMin: number }) => void;
     chatCallback?: () => void;
   }
 
@@ -32,6 +33,7 @@
     rentalPeriods = [],
     selectedMethodId = $bindable(''),
     selectedPeriodId = $bindable(''),
+    reserveDisabled = false,
     onreserve,
     onchange,
     chatCallback,
@@ -175,16 +177,23 @@
     return fee + optionsTotal;
   });
 
+  // [A-3] startMin/endMin 포함 emit
   function emit() {
     if (startDate) {
-      onchange?.({ startDate, endDate: endDate || startDate, startHour, endHour });
+      onchange?.({ startDate, endDate: endDate || startDate, startHour, startMin, endHour, endMin });
     }
   }
 
   function handleReserve() {
     if (!startDate) return;
-    onreserve?.({ startDate, endDate: endDate || startDate, startHour, endHour, methodId: selectedMethodId, periodId: selectedPeriodId });
+    onreserve?.({ startDate, endDate: endDate || startDate, startHour, startMin, endHour, endMin, methodId: selectedMethodId, periodId: selectedPeriodId });
   }
+
+  // [B-1] 당일 대여 시 종료시각 ≤ 시작시각 경고
+  let sameDayTimeError = $derived(
+    isSameDayRental &&
+    (endHour * 60 + endMin) <= (startHour * 60 + startMin)
+  );
 
   function handleChat() {
     chatCallback?.();
@@ -349,7 +358,11 @@
       </div>
     </div>
 
-    <p class="fee-note">단순 합계요금으로 실제 결제요금과 다를 수 있습니다.</p>
+    {#if sameDayTimeError}
+      <p class="fee-note fee-note--warn">반납 시각이 반출 시각보다 앞서 있습니다.</p>
+    {:else}
+      <p class="fee-note">단순 합계요금으로 실제 결제요금과 다를 수 있습니다.</p>
+    {/if}
 
     <!-- 대여정책 (대여기간·방식) -->
     {#if rentalPeriods.length > 0 || rentalMethods.length > 0}
@@ -395,10 +408,10 @@
       <button
         class="reserve-btn"
         onclick={handleReserve}
-        disabled={!startDate}
-        aria-label="예약담기"
+        disabled={!startDate || reserveDisabled}
+        aria-label="예약신청"
       >
-        예약담기
+        {reserveDisabled ? '필수 옵션을 선택해주세요' : '예약신청'}
       </button>
       <button class="chat-btn" onclick={handleChat} aria-label="채팅 문의">
         <svg xmlns="http://www.w3.org/2000/svg" width="60" height="60" viewBox="0 0 60 60" fill="none">
@@ -686,6 +699,10 @@
     font: var(--text-m-script-12);
     color: var(--cs-text-light);
     margin: -8px 0;
+  }
+  .fee-note--warn {
+    color: var(--cs-error, #d32f2f);
+    font-weight: 600;
   }
 
   /* CTAs */
