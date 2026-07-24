@@ -248,6 +248,153 @@ GATE E: ✅ QA-1 · QA-2 모두 해결 완료 — git commit 허가
 
 ---
 
+## NOW — CMS 옵션상품 탭 버그픽스 보완 (2026-07-24) ✅ 완료
+
+plan_source: 세션 내 아젠다 (컨텍스트 이관)
+핵심제약:
+  - upsert_product_option_links RPC UNIQUE 제약 충돌 수정
+  - 요청 범위 외 수정 없음
+
+신규 파일:
+  - supabase/migrations/20260724000161_161_fix_option_links_image_url.sql ← get_product_option_links RPC image_url ->>0 수정 (이전 세션 잔여)
+  - supabase/migrations/20260724000162_162_fix_upsert_option_links_conflict.sql ← upsert UNIQUE 충돌 근본 수정
+
+- [x] BUG-161: get_product_option_links image_url 따옴표 버그 | ROUTINE | ✅ 완료 (2026-07-24)
+  - 원인: image_urls JSONB [1] 접근 → "url" 따옴표 포함 반환
+  - 수정: ->>0 연산자 (JSONB text 추출, 따옴표 없음 + 0-indexed)
+  - DB 적용: Stage(ezyvffjvuwmtuhpxdjrw) ✅ / Production(vnbpmvxruyciuuaermyh) ✅
+
+- [x] BUG-162: upsert_product_option_links UNIQUE 제약 충돌 | BOUNDARY | ✅ 완료 (2026-07-24)
+  - 원인: soft-delete 후 동일 (product_id, option_product_id) 재삽입 → UNIQUE 위반 → 두 번째 저장부터 전부 실패
+  - 수정: 제거 항목 하드 DELETE + 유지/신규 항목 ON CONFLICT DO UPDATE (멱등 upsert)
+  - DB 적용: Stage(ezyvffjvuwmtuhpxdjrw) ✅ / Production(vnbpmvxruyciuuaermyh) ✅
+
+- [x] BUG-OPT: 개별 옵션 combo btn Svelte 5 반응성 패턴 수정 | ROUTINE | ✅ 완료 (이전 커밋 8da5849 포함)
+  - localOptions[i].prop → opt.prop 직접 참조 ({#each} 표준 패턴)
+
+⏳ QA: sp3-qa-agent 검수 예정
+
+---
+
+## NOW — 상품 상세 페이지 로직 전면 점검 + 버그픽스 (2026-07-24) ✅ 완료
+
+plan_source: 세션 내 아젠다
+핵심제약:
+  - 기존 정상 작동 로직(예약담기 흐름) 보호 최우선
+  - E-2(optionLinks 빈 배열) — 숫자 ID 상품 설계 의도 확인 → Skip
+  - reserveDisabled prop: 기존 !startDate 조건 병렬 보호
+
+신규/수정 파일:
+  - src/routes/products/[id]/+page.server.ts ← E-1(Boolean 캐스트) · E-3(인기상품 price24h 폴백) · E-4(에러 로깅)
+  - src/routes/products/[id]/+page.svelte ← A-1·A-2·A-3·C-1·D-2 롤백 + 필수옵션 제한 로직
+  - src/lib/components/products/CalendarTimePicker.svelte ← A-3·B-1 + 필수옵션 버튼 텍스트 분기 + "예약신청" 텍스트 변경
+
+- [x] E-3: 인기 상품 price24h 폴백 | ROUTINE | ✅ 완료 (2026-07-24)
+  - base_price_daily=0인 인기 상품 → price_rules 24H 배치 조회 후 폴백 적용
+  - products 목록 페이지 동일 패턴 적용
+
+- [x] A-1: 비로그인 예약신청 → 로그인 리다이렉트 | BOUNDARY | ✅ 완료 (2026-07-24)
+  - handleReserve() 진입 시 !data.session → goto('/auth/login?next=' + encodeURIComponent(window.location.pathname))
+  - 상품 정보 유실 방지 (return URL 포함)
+
+- [x] A-2: create_hold_reservation endDate 폴백 + 시간 정보 저장 | BOUNDARY | ✅ 완료 (2026-07-24)
+  - endDate = e.endDate || e.startDate (당일 대여 폴백)
+  - 예약 생성 후 set_reservation_shipment_method RPC로 pickup_time / return_time 저장 (HH:MM 형식)
+  - 새 마이그레이션 불필요 (기존 Migration #147 RPC 활용)
+
+- [x] A-3: handleReserve/onreserve 시그니처 startMin/endMin 확장 | ROUTINE | ✅ 완료 (2026-07-24)
+  - CalendarTimePicker onreserve/onchange 콜백: startMin / endMin 필드 추가
+  - page.svelte: startMin / endMin $state 추가 + handleCalChange 동기화
+
+- [x] B-1: 당일 반납 시각 역전 경고 | ROUTINE | ✅ 완료 (2026-07-24)
+  - sameDayTimeError $derived: isSameDayRental && endTime <= startTime
+  - 요금 안내 하단 경고 문구 조건부 표시 (fee-note--warn CSS 추가)
+
+- [x] C-1: is_required 옵션 초기 qty=1 | ROUTINE | ✅ 완료 (2026-07-24)
+  - optionItems 초기화 시 link.is_required ? 1 : 0 기본 수량 적용
+
+- [x] E-1: shipping Boolean 캐스트 | ROUTINE | ✅ 완료 (2026-07-24)
+  - pr['shipping_round_trip'] 등 Boolean() 캐스트 — DB 컬럼 타입 무관 truthy 판단 통일
+
+- [x] E-4: shippingSettingsRes 에러 로깅 추가 | ROUTINE | ✅ 완료 (2026-07-24)
+  - console.error('[products/[id]] rental_shipping_settings error:', ...) 추가
+
+- [x] FEAT-REQUIRED-GUARD: 필수 옵션 미선택 시 예약신청 제한 | BOUNDARY | ✅ 완료 (2026-07-24)
+  - hasUnfilledRequired $derived: optionItems에 is_required && qty===0 항목 존재 시 true
+  - CalendarTimePicker reserveDisabled prop: disabled={!startDate || reserveDisabled}
+  - 버튼 텍스트: reserveDisabled ? '필수 옵션을 선택해주세요' : '예약신청'
+  - 기존 !startDate 조건 완전 보호 (병렬 OR 연산)
+
+- [x] TEXT-CHANGE: "예약담기" → "예약신청" 텍스트 변경 | ROUTINE | ✅ 완료 (2026-07-24)
+
+- [x] D-2 ROLLBACK: 리뷰 등록 버튼 !session 제거 | BUGFIX | ✅ 완료 (2026-07-24)
+  - 원인: $derived(data.session) SvelteKit hydration 타이밍 이슈 → 로그인 상태에서도 session 일시 null → 버튼 영구 비활성화
+  - 수정: disabled={isSubmittingReview || !reviewTitle.trim() || !reviewContent.trim()} (!session 제거)
+  - 비로그인 보호: submitReview() 내부 if(!session) goto('/auth/login') 유지 (충분)
+
+- [x] E-2 SKIP: optionLinks 빈 배열 — 숫자 ID 상품 설계 의도 확인 | SKIP | ✅ 완료 (2026-07-24)
+  - product_option_links UUID FK → 숫자 ID 상품 연결 불가 (설계 의도). 코드 수정 불필요.
+
+⏳ QA: sp3-qa-agent 검수 예정
+
+---
+
+## NOW — /account 마이페이지 기능 완성 (2026-07-24) ✅ 완료
+
+plan_source: 세션 내 아젠다 (컨텍스트 이관)
+핵심제약:
+  - 요구 범위 외 수정 없음
+  - Svelte 5 Runes 패턴 준수
+  - front-uiux.md 디자인 토큰 적용
+
+신규/수정 파일:
+  - supabase/migrations/20260724000158_158_product_wishlists.sql ← 신규 (Stage 적용 완료)
+  - src/lib/components/cms/CustomerDetailPanel.svelte ← 빠른문의 탭 콘텐츠 완성
+  - src/lib/components/account/WishlistScroll.svelte ← mock 제거 + 실DB 연동 + 하트 토글
+  - src/routes/account/+page.server.ts ← get_user_wishlists RPC + orders→products JOIN + PC 패널 데이터
+  - src/routes/account/+page.svelte ← PC 로그아웃 버튼 추가 (handleLogout + CSS)
+  - src/routes/account/rental/+page.server.ts ← MyRental 인터페이스 + product_name/category
+  - src/routes/account/rental/+page.svelte ← 상품명·카테고리 product-row 추가
+  - src/routes/account/cancel/+page.svelte ← SubGnb mobileOnly 수정
+  - src/lib/components/account/PcRentalPanel.svelte ← product_name/category props + 카드 UI
+  - src/lib/components/common/RentalJourneyStepper.svelte ← 20% 축소 + padding 20px + radius 30px + 폰트 토큰
+  - src/lib/components/account/MenuSection.svelte ← 로그아웃 버튼 추가 (모바일)
+
+DB 적용:
+  - Migration #158 product_wishlists — Stage(ezyvffjvuwmtuhpxdjrw) ✅ 적용 완료
+  - Migration #158 — Production(vnbpmvxruyciuuaermyh) ⛔ Stephen 확인 후 적용
+
+- [x] FEAT-WISHLIST: product_wishlists 테이블 신규 + WishlistScroll 실DB 연동 | BOUNDARY | ✅ 완료 (2026-07-24)
+  - Migration #158: product_wishlists (user_id + product_id UNIQUE), RLS 3정책, RPC 2종(toggle/get)
+  - WishlistScroll: mock 배열 제거 → items/totalCount props + $effect 동기화 + handleWishToggle 즉시 필터링
+  - RPC 타입 캐스팅: supabase.rpc as unknown as (fn, params) => Promise<...>
+
+- [x] FEAT-RENTAL-CARD: 대여 카드 상품명·카테고리 추가 | BOUNDARY | ✅ 완료 (2026-07-24)
+  - orders(order_items(products(name, category))) Supabase nested select
+  - rental/+page.server.ts, account/+page.server.ts, PcRentalPanel.svelte 3곳 적용
+
+- [x] FEAT-STEPPER: RentalJourneyStepper 다단계 CSS 조정 | ROUTINE | ✅ 완료 (2026-07-24)
+  - 전체 20% 축소, padding 20px, border-radius 30px, 폰트 한 단계 작은 토큰
+
+- [x] FEAT-LOGOUT: 로그아웃 버튼 추가 (모바일 + PC) | BOUNDARY | ✅ 완료 (2026-07-24)
+  - MenuSection.svelte variant='myinfo': supabase.auth.signOut() + goto('/')
+  - account/+page.svelte PC 내정보 카드 하단: pc-btn-logout + pc-logout-wrap CSS
+
+- [x] FEAT-INQ-TAB: CMS 고객 패널 빠른문의 탭 콘텐츠 완성 | BOUNDARY | ✅ 완료 (2026-07-24)
+  - CustomerDetailPanel.svelte 빠른문의 탭 아코디언 목록 + 로딩/빈 상태 + 관리자 답변 UI
+
+DB 적용 (최종):
+  - Migration #158 product_wishlists — Stage(ezyvffjvuwmtuhpxdjrw) ✅ 적용 완료
+  - Migration #158 — Production(vnbpmvxruyciuuaermyh) ✅ 적용 완료 (2026-07-24)
+
+추가 수정 (2026-07-24):
+  - src/lib/components/account/WishlistScroll.svelte ← 브라우저 supabase.rpc 제거 → /api/wishlist fetch 교체
+  - src/routes/api/wishlist/+server.ts ← 신규 (toggle_product_wishlist RPC 래퍼 — 서버사이드 인증)
+
+⏳ QA: sp3-qa-agent 검수 예정
+
+---
+
 ## NOW — /checkout 재검증 + 전자계약 보완 (2026-07-23) 진행 중
 
 plan_source: users-stevenmac-documents-pseries-crazy-sorted-quail.md
