@@ -5,30 +5,22 @@ import { json } from '@sveltejs/kit'
 import type { RequestHandler } from './$types'
 import { getCmsRoleForAction } from '$lib/server/getCmsRoleForAction'
 
-export const GET: RequestHandler = async ({ params, locals }) => {
+export const GET: RequestHandler = async ({ locals }) => {
   const cmsRole = await getCmsRoleForAction(locals)
-  if (!cmsRole) return json({ error: 'Unauthorized' }, { status: 401 })
+  if (!cmsRole) {
+    return json({ error: '권한 없음' }, { status: 401 })
+  }
 
   const admin = createClient(PUBLIC_SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
 
   const { data, error } = await admin
-    .from('payment_transactions')
-    .select(`
-      order_id,
-      payment_key,
-      payment_method,
-      total_amount,
-      paid_amount,
-      point_amount,
-      coupon_discount,
-      confirmed_at,
-      toss_response
-    `)
-    .eq('reservation_id', Number(params.id))
+    .from('contract_templates')
+    .select('id, title, content_blocks, created_at')
+    .eq('status', 'active')
+    .is('deleted_at', null)
     .order('created_at', { ascending: false })
-    .limit(1)
-    .maybeSingle()
 
   if (error) return json({ error: error.message }, { status: 500 })
-  return json({ payment: data ?? null })
+
+  return json(data ?? [])
 }

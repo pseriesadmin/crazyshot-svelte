@@ -3,10 +3,11 @@ import { SUPABASE_SERVICE_ROLE_KEY } from '$env/static/private'
 import { PUBLIC_SUPABASE_URL } from '$env/static/public'
 import { json } from '@sveltejs/kit'
 import type { RequestHandler } from './$types'
+import { getCmsRoleForAction } from '$lib/server/getCmsRoleForAction'
 
 export const POST: RequestHandler = async ({ params, locals, url }) => {
-  const { session } = await locals.safeGetSession()
-  if (!session || !locals.cmsRole) {
+  const cmsRole = await getCmsRoleForAction(locals)
+  if (!cmsRole) {
     return json({ error: '권한 없음' }, { status: 401 })
   }
 
