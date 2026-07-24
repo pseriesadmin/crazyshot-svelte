@@ -1,5 +1,6 @@
 <script lang="ts">
-  import { invalidate } from '$app/navigation'
+  import { invalidate, goto } from '$app/navigation'
+  import { supabase } from '$lib/services/supabase'
   import SubGnb from '$lib/components/common/SubGnb.svelte'
   import BottomTabBar from '$lib/components/common/BottomTabBar.svelte'
   import RentalJourneyStepper from '$lib/components/common/RentalJourneyStepper.svelte'
@@ -51,6 +52,11 @@
 
   /* PC 우측 패널 전환 — 'home': 기본 대시보드, 그 외: 내정보 서브섹션 */
   let activePcSection = $state('home')
+
+  async function handleLogout() {
+    await supabase.auth.signOut()
+    goto('/')
+  }
 
 
 </script>
@@ -184,6 +190,9 @@
                 </div>
               </button>
             {/each}
+          </div>
+          <div class="pc-logout-wrap">
+            <button class="pc-btn-logout" onclick={handleLogout}>로그아웃</button>
           </div>
         </div>
 
@@ -415,6 +424,35 @@
       border-radius: 30px;
       overflow: hidden;
       background: #ffffff;
+    }
+
+    /* PC 로그아웃 버튼 */
+    .pc-logout-wrap {
+      width: 100%;
+      padding: 24px 0 0;
+      margin-top: 16px;
+      border-top: 1px solid var(--cs-lilac);
+    }
+    .pc-btn-logout {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 100%;
+      height: 44px;
+      border: none;
+      border-radius: var(--radius-xl);
+      background: rgba(236, 235, 244, 0.6);
+      font-family: 'Noto Sans KR', sans-serif;
+      font-size: var(--text-m-script-14B);
+      font-weight: 500;
+      color: var(--cs-text-light);
+      cursor: pointer;
+      transition: background 0.15s, color 0.15s;
+      letter-spacing: -0.3px;
+    }
+    .pc-btn-logout:hover {
+      background: var(--cs-lilac);
+      color: var(--cs-text-mid);
     }
   }
 </style>
