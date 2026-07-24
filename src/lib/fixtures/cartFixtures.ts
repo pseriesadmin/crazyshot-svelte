@@ -1,176 +1,145 @@
 /**
  * cartFixtures.ts — 장바구니 UI 개발용 더미 데이터
- * 목적: /dev/cart 라우트에서 모킹된 더미 상품/예약/가격 정보 제공
- * 
- * 샘플:
- *   상품 4개: Sony FX6 (카메라), DJI RS4 Pro (짐벌), Godox AD600 (조명), Sony 24-70 GM2 (렌즈)
- *   예약: 오늘부터 3일 대여 기본값
- *   크레이지스코어: 72 → 보증금 30%
- *   멤버십: PRO → 10% 할인
+ * 목적: /checkout 라우트에서 isDevMode=true 시 폴백 데이터 제공
+ *
+ * Stage DB (ezyvffjvuwmtuhpxdjrw) 실제 상품 정보 반영:
+ *   Card 1 Main : Sony FX6-12           (98f44cf6-...) 24h 23,000 / 12h 53,000
+ *   Card 2 Main : SONY PXW-Z90          (467c8f9b-...) 24h 30,000 / 12h 25,000
+ *   Sub-item 1  : Idol SET07 Canon R6   (924919dc-...) 24h 75,000 / 12h 55,000
+ *   Sub-item 2  : Canon RF 24-70mm F2.8L (955238da-...) 24h 25,000 / 12h 20,000
  */
 
 import type { Product, Asset, CartItem, RentalReservation } from '$lib/types/database';
 
 // ─────────────────────────────────────────────────────
-// 샘플 상품 (4개)
+// 상수 — Stage DB 실제 product UUID
+// ─────────────────────────────────────────────────────
+
+const P1_ID = '98f44cf6-6056-4053-81dc-b439d5f886ac';   // Sony FX6-12
+const P2_ID = '467c8f9b-ca0e-4143-8c27-d04c993a8baa';   // SONY PXW-Z90
+const P3_ID = '924919dc-369f-4ce1-a529-951afe4167ef';   // Idol SET07
+const P4_ID = '955238da-5440-47b1-906d-4865232f3a6c';   // Canon RF 24-70mm
+
+// Stage Supabase Storage base
+const STORAGE = 'https://ezyvffjvuwmtuhpxdjrw.supabase.co/storage/v1/object/public/product-images';
+
+// ─────────────────────────────────────────────────────
+// 샘플 상품 (Stage DB 실 데이터 기반 4개)
 // ─────────────────────────────────────────────────────
 
 export const sampleProducts: Product[] = [
   {
-    id: 'prod-001',
-    category: 'camera',
-    name: 'Sony FX6',
-    slug: 'sony-fx6',
-    brand: 'Sony',
-    description: 'Professional cinema camera with 4K recording',
-    image_urls: ['https://res.cloudinary.com/crazyshot/image/upload/w_400,h_300,c_fill,f_auto,q_auto/sony-fx6.jpg'],
-    specifications: {
-      sensor: 'Full Frame',
-      resolution: '4K UHD',
-      weight: '680g'
-    },
-    is_active: true,
-    created_at: new Date().toISOString(),
-    updated_at: new Date().toISOString(),
-    deleted_at: null
-  },
-  {
-    id: 'prod-002',
-    category: 'accessory',
-    name: 'DJI RS4 Pro',
-    slug: 'dji-rs4-pro',
-    brand: 'DJI',
-    description: 'Professional gimbal for cinema cameras',
-    image_urls: ['https://res.cloudinary.com/crazyshot/image/upload/w_400,h_300,c_fill,f_auto,q_auto/dji-rs4.jpg'],
-    specifications: {
-      type: 'Gimbal',
-      payload: '3kg',
-      weight: '1.3kg'
-    },
-    is_active: true,
-    created_at: new Date().toISOString(),
-    updated_at: new Date().toISOString(),
-    deleted_at: null
-  },
-  {
-    id: 'prod-003',
+    id: P1_ID,
     category: 'lighting',
-    name: 'Godox AD600',
-    slug: 'godox-ad600',
-    brand: 'Godox',
-    description: 'Portable studio flash with TTL',
-    image_urls: ['https://res.cloudinary.com/crazyshot/image/upload/w_400,h_300,c_fill,f_auto,q_auto/godox-ad600.jpg'],
-    specifications: {
-      power: '600W',
-      type: 'Strobe',
-      weight: '0.8kg'
-    },
+    name: 'Sony FX6-12',
+    slug: 'sony-fx6-12',
+    brand: 'Sony',
+    description: 'Professional cinema camera with full-frame sensor',
+    image_urls: [
+      `${STORAGE}/${P1_ID}/large_d50aee6f-15ec-47db-a162-574277d6d37b.webp`,
+      `${STORAGE}/${P1_ID}/large_ccfcbd0d-c7b0-4666-88b4-d7ae4e64d52d.webp`,
+    ],
+    specifications: { sensor: 'Full Frame', resolution: '4K UHD' },
     is_active: true,
     created_at: new Date().toISOString(),
     updated_at: new Date().toISOString(),
-    deleted_at: null
+    deleted_at: null,
   },
   {
-    id: 'prod-004',
-    category: 'lens',
-    name: 'Sony 24-70mm GM2',
-    slug: 'sony-24-70-gm2',
-    brand: 'Sony',
-    description: 'Premium zoom lens for full frame cameras',
-    image_urls: ['https://res.cloudinary.com/crazyshot/image/upload/w_400,h_300,c_fill,f_auto,q_auto/sony-24-70.jpg'],
-    specifications: {
-      mount: 'E-Mount',
-      focal_length: '24-70mm',
-      weight: '680g'
-    },
+    id: P2_ID,
+    category: 'camera',
+    name: 'SONY PXW-Z90',
+    slug: 'cam-zo-2607',
+    brand: 'SONY',
+    description: 'Professional 4K HDR camcorder',
+    image_urls: [
+      `${STORAGE}/${P2_ID}/large_c5d6b57c-7383-4f7a-b1dc-f23eea280033.webp`,
+      `${STORAGE}/${P2_ID}/large_65c5f462-20d7-4ce3-b0c8-999c7f181a32.webp`,
+    ],
+    specifications: { type: 'Camcorder', resolution: '4K HDR' },
     is_active: true,
     created_at: new Date().toISOString(),
     updated_at: new Date().toISOString(),
-    deleted_at: null
-  }
+    deleted_at: null,
+  },
+  {
+    id: P3_ID,
+    category: 'camera',
+    name: 'Idol SET07 Canon EOS R6 Mark II + Canon 100-500mm',
+    slug: 'pkg-idol-set07-canon-eos-r6-mark-ii-canon-100-500mm-f45-71l-is-usm-2607',
+    brand: 'CANON',
+    description: 'Camera package set for idol photography',
+    image_urls: [
+      `${STORAGE}/${P3_ID}/large_32b3c571-8218-4e47-88da-7fd6e48834b9.webp`,
+    ],
+    specifications: { type: 'Package' },
+    is_active: true,
+    created_at: new Date().toISOString(),
+    updated_at: new Date().toISOString(),
+    deleted_at: null,
+  },
+  {
+    id: P4_ID,
+    category: 'lens',
+    name: 'Canon RF 24-70mm F2.8L',
+    slug: 'lns-canon-rf-24-70mm-f28l-2607',
+    brand: 'CANON',
+    description: 'Professional zoom lens for Canon RF mount',
+    image_urls: [
+      `${STORAGE}/${P4_ID}/large_c7707730-27bf-4cce-8f3e-8dbbb3a6c107.webp`,
+      `${STORAGE}/${P4_ID}/large_7e1ff9d7-d839-4f45-8b4d-171afbde8d1f.webp`,
+    ],
+    specifications: { mount: 'RF', focal_length: '24-70mm', aperture: 'f/2.8' },
+    is_active: true,
+    created_at: new Date().toISOString(),
+    updated_at: new Date().toISOString(),
+    deleted_at: null,
+  },
 ];
 
 // ─────────────────────────────────────────────────────
-// 샘플 자산 (각 상품당 1개)
+// 샘플 자산 (Stage DB asset_id=2 → Sony FX6-12 자산 존재)
 // ─────────────────────────────────────────────────────
 
 export const sampleAssets: Asset[] = [
   {
-    id: 'asset-001',
-    product_id: 'prod-001',
-    asset_code: 'SONY-FX6-001',
-    serial_number: 'FX6-2024-0001',
+    id: 'asset-fx6',
+    product_id: P1_ID,
+    asset_code: 'SONY-FX6-12-001',
+    serial_number: 'FX6-STAGE-001',
     status: 'available',
-    condition_notes: 'Excellent condition',
+    condition_notes: 'Stage DB asset',
     purchase_date: '2024-01-01',
     last_maintenance_date: '2026-06-01',
     next_maintenance_date: '2026-07-01',
     maintenance_interval_days: 30,
     is_insured: true,
     insurance_provider: 'AIG',
-    insurance_policy_number: 'POL-SONY-001',
+    insurance_policy_number: 'POL-FX6-001',
     warehouse_location: 'Seoul-A1-01',
     created_at: new Date().toISOString(),
     updated_at: new Date().toISOString(),
-    deleted_at: null
+    deleted_at: null,
   },
   {
-    id: 'asset-002',
-    product_id: 'prod-002',
-    asset_code: 'DJI-RS4-001',
-    serial_number: 'RS4-2024-0001',
+    id: 'asset-z90',
+    product_id: P2_ID,
+    asset_code: 'SONY-Z90-001',
+    serial_number: 'Z90-STAGE-001',
     status: 'available',
-    condition_notes: 'Like new',
+    condition_notes: 'Stage DB mock asset',
     purchase_date: '2024-02-15',
     last_maintenance_date: '2026-06-10',
     next_maintenance_date: '2026-07-10',
     maintenance_interval_days: 30,
     is_insured: true,
     insurance_provider: 'AIG',
-    insurance_policy_number: 'POL-DJI-001',
+    insurance_policy_number: 'POL-Z90-001',
     warehouse_location: 'Seoul-A1-02',
     created_at: new Date().toISOString(),
     updated_at: new Date().toISOString(),
-    deleted_at: null
+    deleted_at: null,
   },
-  {
-    id: 'asset-003',
-    product_id: 'prod-003',
-    asset_code: 'GODOX-AD600-001',
-    serial_number: 'AD600-2024-0001',
-    status: 'available',
-    condition_notes: 'Good condition',
-    purchase_date: '2024-03-20',
-    last_maintenance_date: '2026-06-05',
-    next_maintenance_date: '2026-07-05',
-    maintenance_interval_days: 30,
-    is_insured: true,
-    insurance_provider: 'AIG',
-    insurance_policy_number: 'POL-GODOX-001',
-    warehouse_location: 'Seoul-A1-03',
-    created_at: new Date().toISOString(),
-    updated_at: new Date().toISOString(),
-    deleted_at: null
-  },
-  {
-    id: 'asset-004',
-    product_id: 'prod-004',
-    asset_code: 'SONY-24-70-001',
-    serial_number: '24-70-2024-0001',
-    status: 'available',
-    condition_notes: 'Excellent condition',
-    purchase_date: '2024-01-15',
-    last_maintenance_date: '2026-06-08',
-    next_maintenance_date: '2026-07-08',
-    maintenance_interval_days: 30,
-    is_insured: true,
-    insurance_provider: 'AIG',
-    insurance_policy_number: 'POL-SONY-LENS-001',
-    warehouse_location: 'Seoul-A1-04',
-    created_at: new Date().toISOString(),
-    updated_at: new Date().toISOString(),
-    deleted_at: null
-  }
 ];
 
 // ─────────────────────────────────────────────────────
@@ -194,7 +163,7 @@ export const sampleReservations: RentalReservation[] = [
   {
     id: 'res-001',
     user_id: 'user-demo',
-    asset_id: 'asset-001',
+    asset_id: 'asset-fx6',
     order_id: null,
     status: 'hold',
     rental_start_date: formatDate(tomorrow),
@@ -203,6 +172,8 @@ export const sampleReservations: RentalReservation[] = [
     actual_return_date: null,
     pickup_method: 'quick',
     return_method: 'quick',
+    pickup_time: null,
+    return_time: null,
     pickup_point_id: null,
     return_point_id: null,
     hold_expiration_at: new Date(Date.now() + 10 * 60 * 1000).toISOString(),
@@ -210,12 +181,12 @@ export const sampleReservations: RentalReservation[] = [
     damage_notes: null,
     created_at: new Date().toISOString(),
     updated_at: new Date().toISOString(),
-    deleted_at: null
+    deleted_at: null,
   },
   {
     id: 'res-002',
     user_id: 'user-demo',
-    asset_id: 'asset-002',
+    asset_id: 'asset-z90',
     order_id: null,
     status: 'hold',
     rental_start_date: formatDate(tomorrow),
@@ -224,6 +195,8 @@ export const sampleReservations: RentalReservation[] = [
     actual_return_date: null,
     pickup_method: 'crazydelivery',
     return_method: 'crazydelivery',
+    pickup_time: null,
+    return_time: null,
     pickup_point_id: null,
     return_point_id: null,
     hold_expiration_at: new Date(Date.now() + 10 * 60 * 1000).toISOString(),
@@ -231,20 +204,20 @@ export const sampleReservations: RentalReservation[] = [
     damage_notes: null,
     created_at: new Date().toISOString(),
     updated_at: new Date().toISOString(),
-    deleted_at: null
-  }
+    deleted_at: null,
+  },
 ];
 
 // ─────────────────────────────────────────────────────
-// 샘플 장바구니 아이템 (Zone 정보 포함)
+// 샘플 장바구니 아이템 (Stage DB product_id 기준)
 // ─────────────────────────────────────────────────────
 
 export const sampleCartItems: CartItem[] = [
   {
     id: 'cart-001',
     user_id: 'user-demo',
-    product_id: 'prod-001',
-    asset_id: 'asset-001',
+    product_id: P1_ID,
+    asset_id: 'asset-fx6',
     duration_type: '24h',
     quantity: 1,
     rental_start_date: formatDate(tomorrow),
@@ -252,13 +225,13 @@ export const sampleCartItems: CartItem[] = [
     selected_options: [],
     zone: 1,
     created_at: new Date().toISOString(),
-    updated_at: new Date().toISOString()
+    updated_at: new Date().toISOString(),
   },
   {
     id: 'cart-002',
     user_id: 'user-demo',
-    product_id: 'prod-002',
-    asset_id: 'asset-002',
+    product_id: P2_ID,
+    asset_id: 'asset-z90',
     duration_type: '24h',
     quantity: 1,
     rental_start_date: formatDate(tomorrow),
@@ -266,8 +239,8 @@ export const sampleCartItems: CartItem[] = [
     selected_options: [],
     zone: 1,
     created_at: new Date().toISOString(),
-    updated_at: new Date().toISOString()
-  }
+    updated_at: new Date().toISOString(),
+  },
 ];
 
 // ─────────────────────────────────────────────────────
@@ -281,43 +254,26 @@ export const mockUserProfile = {
   phone: '+82-10-1234-5678',
   address: 'Seoul, South Korea',
   postal_code: '06000',
-  membership_grade: 'pro' as const,
+  membership_grade: 'NONE' as const,
   crazy_score: 72,
   is_verified: true,
   terms_agreed: true,
-  created_at: new Date().toISOString()
+  created_at: new Date().toISOString(),
 };
 
 // ─────────────────────────────────────────────────────
-// 렌탈료 정보 (기본 가격 설정)
+// 렌탈료 정보 — Stage DB price_rules 기준 (24h / 12h)
 // ─────────────────────────────────────────────────────
 
-export const priceConfig = {
-  'prod-001': {
-    daily_rate: 150000,      // Sony FX6: 150k/day
-    weekly_rate: 900000,     // 900k/week
-    monthly_rate: 3000000    // 3M/month
-  },
-  'prod-002': {
-    daily_rate: 80000,       // DJI RS4 Pro: 80k/day
-    weekly_rate: 480000,     // 480k/week
-    monthly_rate: 1600000    // 1.6M/month
-  },
-  'prod-003': {
-    daily_rate: 50000,       // Godox AD600: 50k/day
-    weekly_rate: 300000,     // 300k/week
-    monthly_rate: 1000000    // 1M/month
-  },
-  'prod-004': {
-    daily_rate: 60000,       // Sony 24-70: 60k/day
-    weekly_rate: 360000,     // 360k/week
-    monthly_rate: 1200000    // 1.2M/month
-  }
+export const priceConfig: Record<string, { daily_rate: number; halfday_rate: number }> = {
+  [P1_ID]: { daily_rate: 23000, halfday_rate: 53000 },   // Sony FX6-12
+  [P2_ID]: { daily_rate: 30000, halfday_rate: 25000 },   // SONY PXW-Z90
+  [P3_ID]: { daily_rate: 75000, halfday_rate: 55000 },   // Idol SET07
+  [P4_ID]: { daily_rate: 25000, halfday_rate: 20000 },   // Canon RF 24-70mm
 };
 
 // ─────────────────────────────────────────────────────
-// 하위 옵션 상품 목록 (Figma: Sub1 └ 화살표 아이템)
-// parent_cart_id → 어떤 장바구니 항목의 하위 옵션인지
+// 하위 옵션 상품 목록 (Card 1 소속 sub-items)
 // ─────────────────────────────────────────────────────
 
 export interface SubCartItem {
@@ -326,7 +282,9 @@ export interface SubCartItem {
   product_id: string;
   name: string;
   slug: string;
+  imageUrl: string;
   daily_rate: number;
+  halfday_rate: number;
   quantity: number;
 }
 
@@ -334,21 +292,25 @@ export const sampleSubItems: SubCartItem[] = [
   {
     id: 'sub-001',
     parent_cart_id: 'cart-001',
-    product_id: 'prod-003',
-    name: 'Godox AD600',
-    slug: 'godox-ad600',
-    daily_rate: 50000,
-    quantity: 1
+    product_id: P3_ID,
+    name: 'Idol SET07 Canon EOS R6 Mark II + 100-500mm',
+    slug: 'pkg-idol-set07',
+    imageUrl: `${STORAGE}/${P3_ID}/large_32b3c571-8218-4e47-88da-7fd6e48834b9.webp`,
+    daily_rate: 75000,
+    halfday_rate: 55000,
+    quantity: 1,
   },
   {
     id: 'sub-002',
     parent_cart_id: 'cart-001',
-    product_id: 'prod-004',
-    name: 'Sony 24-70mm GM2',
-    slug: 'sony-24-70-gm2',
-    daily_rate: 60000,
-    quantity: 1
-  }
+    product_id: P4_ID,
+    name: 'Canon RF 24-70mm F2.8L',
+    slug: 'lns-canon-rf-24-70mm-f28l-2607',
+    imageUrl: `${STORAGE}/${P4_ID}/large_c7707730-27bf-4cce-8f3e-8dbbb3a6c107.webp`,
+    daily_rate: 25000,
+    halfday_rate: 20000,
+    quantity: 1,
+  },
 ];
 
 // ─────────────────────────────────────────────────────
@@ -356,9 +318,9 @@ export const sampleSubItems: SubCartItem[] = [
 // ─────────────────────────────────────────────────────
 
 export const shippingDeadlines = {
-  'crazydelivery': { deadline: '19:00', free: true },
-  'quick': { deadline: '17:00', free: false },
-  'locker': { deadline: '18:00', free: false },
-  'visit': { deadline: '19:00', free: false },
-  'airport': { deadline: '15:00', free: false }
+  crazydelivery: { deadline: '15:00', free: true },
+  quick:         { deadline: '17:00', free: false },
+  locker:        { deadline: '18:00', free: false },
+  visit:         { deadline: '19:00', free: false },
+  epost:         { deadline: '15:00', free: false },
 };

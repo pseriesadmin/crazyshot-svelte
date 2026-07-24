@@ -18,8 +18,8 @@ export const load: PageServerLoad = async ({ url, locals }) => {
   const orderId       = url.searchParams.get('orderId') ?? ''
   const amount        = Number(url.searchParams.get('amount') ?? '0')
 
-  // successUrl에 포함시켜야 하는 파라미터
-  const reservationId = Number(url.searchParams.get('reservationId') ?? '0')
+  // successUrl에 포함시켜야 하는 파라미터 (UUID 문자열)
+  const reservationId = url.searchParams.get('reservationId') ?? ''
   const idemKey       = url.searchParams.get('idemKey') ?? ''
 
   if (!paymentKey || !orderId || !amount || !reservationId || !idemKey) {
@@ -95,8 +95,8 @@ export const load: PageServerLoad = async ({ url, locals }) => {
     if (p?.name) productName = p.name
   }
 
-  // 주문번호: CZ + reservationId 5자리 패딩
-  const orderNumber = `CZ${String(reservationId).padStart(5, '0')}`
+  // 주문번호: TossPayments orderId (사용자 화면 · CMS 정합)
+  const orderNumber = orderId
 
   // 결제일시 포맷 (ISO → "YYYY.MM.DD·HH:mm")
   const confirmedAt = (tossData.approvedAt as string) ?? new Date().toISOString()

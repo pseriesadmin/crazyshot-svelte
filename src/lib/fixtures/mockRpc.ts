@@ -46,23 +46,8 @@ function getPriceByDuration(
   const config = priceConfig[productId as keyof typeof priceConfig];
   if (!config) return 0;
 
-  if (days <= 7) {
-    return config.daily_rate * days;
-  } else if (days <= 30) {
-    const weeks = Math.floor(days / 7);
-    const remainDays = days % 7;
-    return config.weekly_rate * weeks + config.daily_rate * remainDays;
-  } else {
-    const months = Math.floor(days / 30);
-    const remainDays = days % 30;
-    const remainWeeks = Math.floor(remainDays / 7);
-    const finalDays = remainDays % 7;
-    return (
-      config.monthly_rate * months +
-      config.weekly_rate * remainWeeks +
-      config.daily_rate * finalDays
-    );
-  }
+  // 주간·월간 단가는 Stage DB에 없으므로 일 단가로 계산
+  return config.daily_rate * days;
 }
 
 /**
