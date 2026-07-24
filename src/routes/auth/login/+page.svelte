@@ -3,6 +3,7 @@
   import { page } from '$app/stores'
   import { performSignIn } from '$lib/stores/auth'
   import MobileMoreMenu from '$lib/components/common/MobileMoreMenu.svelte'
+  import SignUpModal from '$lib/components/auth/SignUpModal.svelte'
   import type { PageData } from './$types'
 
   // ── 서버 데이터 (CMS → 프로모션 → 광고 배너) ──
@@ -16,6 +17,10 @@
   let showPassword = $state(false)
   let isLoading = $state(false)
   let errorMsg = $state<string | null>(null)
+  let showSignUpModal = $state(false)
+
+  // 이메일+비밀번호 모두 입력 시 Sign In 모드, 아니면 Sign Up 모드
+  let isSignInMode = $derived(email.trim().length > 0 && password.length > 0)
 
   async function handleSignIn() {
     if (!email || !password) {
@@ -202,26 +207,52 @@
             <p class="d-error" role="alert">{errorMsg}</p>
           {/if}
 
-          <!-- 로그인 버튼 -->
-          <button
-            class="d-signin-submit"
-            onclick={handleSignIn}
-            disabled={isLoading}
-            aria-busy={isLoading}
-          >
-            {isLoading ? '로그인 중...' : 'Sign In'}
-            {#if !isLoading}
+          <!-- Sign Up / Sign In 전환 버튼 -->
+          {#if isSignInMode}
+            <!-- 이메일+비밀번호 입력 완료 → Sign In 버튼 -->
+            <button
+              class="d-signin-submit"
+              onclick={handleSignIn}
+              disabled={isLoading}
+              aria-busy={isLoading}
+            >
+              {isLoading ? '로그인 중...' : 'Sign In'}
+              {#if !isLoading}
+                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                  <path d="M14.43 18.82C14.24 18.82 14.05 18.75 13.9 18.6C13.61 18.31 13.61 17.83 13.9 17.54L19.44 12L13.9 6.46C13.61 6.17 13.61 5.69 13.9 5.4C14.19 5.11 14.67 5.11 14.96 5.4L21.03 11.47C21.32 11.76 21.32 12.24 21.03 12.53L14.96 18.6C14.81 18.75 14.62 18.82 14.43 18.82Z" fill="white"/>
+                  <path d="M20.33 12.75H3.5C3.09 12.75 2.75 12.41 2.75 12C2.75 11.59 3.09 11.25 3.5 11.25H20.33C20.74 11.25 21.08 11.59 21.08 12C21.08 12.41 20.74 12.75 20.33 12.75Z" fill="white"/>
+                </svg>
+              {/if}
+            </button>
+          {:else}
+            <!-- 기본 상태 → Sign Up 버튼 -->
+            <button
+              class="d-signup-submit"
+              onclick={() => showSignUpModal = true}
+              type="button"
+            >
+              Sign Up
               <svg width="24" height="24" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-                <path d="M14.43 18.82C14.24 18.82 14.05 18.75 13.9 18.6C13.61 18.31 13.61 17.83 13.9 17.54L19.44 12L13.9 6.46C13.61 6.17 13.61 5.69 13.9 5.4C14.19 5.11 14.67 5.11 14.96 5.4L21.03 11.47C21.32 11.76 21.32 12.24 21.03 12.53L14.96 18.6C14.81 18.75 14.62 18.82 14.43 18.82Z" fill="white"/>
-                <path d="M20.33 12.75H3.5C3.09 12.75 2.75 12.41 2.75 12C2.75 11.59 3.09 11.25 3.5 11.25H20.33C20.74 11.25 21.08 11.59 21.08 12C21.08 12.41 20.74 12.75 20.33 12.75Z" fill="white"/>
+                <path d="M12 5V19M5 12H19" stroke="white" stroke-width="2.5" stroke-linecap="round"/>
               </svg>
-            {/if}
-          </button>
+            </button>
+          {/if}
         </div>
       </div>
     </div>
   </div>
 </div>
+
+<!-- 회원가입 모달 -->
+<SignUpModal
+  open={showSignUpModal}
+  onclose={() => showSignUpModal = false}
+  onsuccess={() => {
+    showSignUpModal = false
+    const redirectTo = $page.url.searchParams.get('redirect') ?? '/'
+    goto(redirectTo)
+  }}
+/>
 
 
 <!-- ═══════════════════════════════════════════════
@@ -406,21 +437,34 @@
         <p class="m-error" role="alert">{errorMsg}</p>
       {/if}
 
-      <!-- 로그인 버튼 -->
-      <button
-        class="m-signin-submit"
-        onclick={handleSignIn}
-        disabled={isLoading}
-        aria-busy={isLoading}
-      >
-        {isLoading ? '로그인 중...' : 'Sign In'}
-        {#if !isLoading}
+      <!-- Sign Up / Sign In 전환 버튼 -->
+      {#if isSignInMode}
+        <button
+          class="m-signin-submit"
+          onclick={handleSignIn}
+          disabled={isLoading}
+          aria-busy={isLoading}
+        >
+          {isLoading ? '로그인 중...' : 'Sign In'}
+          {#if !isLoading}
+            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+              <path d="M14.43 18.82C14.24 18.82 14.05 18.75 13.9 18.6C13.61 18.31 13.61 17.83 13.9 17.54L19.44 12L13.9 6.46C13.61 6.17 13.61 5.69 13.9 5.4C14.19 5.11 14.67 5.11 14.96 5.4L21.03 11.47C21.32 11.76 21.32 12.24 21.03 12.53L14.96 18.6C14.81 18.75 14.62 18.82 14.43 18.82Z" fill="white"/>
+              <path d="M20.33 12.75H3.5C3.09 12.75 2.75 12.41 2.75 12C2.75 11.59 3.09 11.25 3.5 11.25H20.33C20.74 11.25 21.08 11.59 21.08 12C21.08 12.41 20.74 12.75 20.33 12.75Z" fill="white"/>
+            </svg>
+          {/if}
+        </button>
+      {:else}
+        <button
+          class="m-signup-submit"
+          onclick={() => showSignUpModal = true}
+          type="button"
+        >
+          Sign Up
           <svg width="24" height="24" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-            <path d="M14.43 18.82C14.24 18.82 14.05 18.75 13.9 18.6C13.61 18.31 13.61 17.83 13.9 17.54L19.44 12L13.9 6.46C13.61 6.17 13.61 5.69 13.9 5.4C14.19 5.11 14.67 5.11 14.96 5.4L21.03 11.47C21.32 11.76 21.32 12.24 21.03 12.53L14.96 18.6C14.81 18.75 14.62 18.82 14.43 18.82Z" fill="white"/>
-            <path d="M20.33 12.75H3.5C3.09 12.75 2.75 12.41 2.75 12C2.75 11.59 3.09 11.25 3.5 11.25H20.33C20.74 11.25 21.08 11.59 21.08 12C21.08 12.41 20.74 12.75 20.33 12.75Z" fill="white"/>
+            <path d="M12 5V19M5 12H19" stroke="white" stroke-width="2.5" stroke-linecap="round"/>
           </svg>
-        {/if}
-      </button>
+        </button>
+      {/if}
     </div>
   </div>
 </div>
@@ -1018,6 +1062,25 @@
     text-align: center;
   }
 
+  /* PC Sign Up 버튼 (기본 노출) */
+  .d-signup-submit {
+    background: var(--cs-purple);
+    border: none;
+    border-radius: var(--radius-full);
+    height: 56px;
+    width: 100%;
+    color: var(--cs-white);
+    font: var(--text-pc-title-16);
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
+    transition: background 0.2s, transform 0.15s;
+  }
+  .d-signup-submit:hover { background: var(--cs-purple-dark); transform: translateY(-1px); }
+  .d-signup-submit:active { transform: translateY(0); }
+
   /* 모바일 로그인 버튼 */
   .m-signin-submit {
     background: var(--cs-login-btn-gradient);
@@ -1038,4 +1101,22 @@
   .m-signin-submit:hover:not(:disabled) { opacity: 0.9; transform: translateY(-1px); }
   .m-signin-submit:active:not(:disabled) { transform: translateY(0); }
   .m-signin-submit:disabled { background: #B0ABCC; cursor: not-allowed; }
+
+  /* 모바일 Sign Up 버튼 (기본 노출) */
+  .m-signup-submit {
+    background: var(--cs-purple);
+    border: none;
+    border-radius: var(--radius-full);
+    height: 56px;
+    width: 100%;
+    color: var(--cs-white);
+    font: var(--text-pc-title-16);
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
+    transition: background 0.2s;
+  }
+  .m-signup-submit:hover { background: var(--cs-purple-dark); }
 </style>
