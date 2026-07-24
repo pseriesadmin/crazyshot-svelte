@@ -78,7 +78,8 @@
       subMenus: [{ label: '채팅', href: '/cms/chat' }],
     },
     { id: 'reservation', label: '예약', subMenus: [
-      { label: '예약목록', href: '/cms/rentals' },
+      { label: '예약목록', href: '/cms/reservation' },
+      { label: '계약서양식', href: '/cms/reservation/contracts' },
     ] },
     {
       id: 'products',
@@ -92,6 +93,7 @@
       id: 'rental',
       label: '대여',
       subMenus: [
+        { label: '대여현황', href: '/cms/rentals' },
         { label: '이력관리', href: '/cms/rental/history' },
       ],
     },
@@ -102,6 +104,7 @@
         { label: '고객목록', href: '/cms/customers' },
         { label: '멤버십',   href: '/cms/customers/membership' },
         { label: '스코어',   href: '/cms/customers/score' },
+        { label: '빠른문의', href: '/cms/customers/inquiry' },
       ],
     },
     {
@@ -137,7 +140,6 @@
     if (pathname.startsWith('/cms/codes'))    return 'settings'
     if (pathname.startsWith('/cms/accounts')) return 'settings'
     if (pathname.startsWith('/cms/reservation')) return 'reservation'
-    if (pathname.startsWith('/cms/rentals'))     return 'reservation'
     if (pathname.startsWith('/cms/products')) return 'products'
     if (pathname.startsWith('/cms/rental'))   return 'rental'
     if (pathname.startsWith('/cms/customers')) return 'customers'
@@ -158,10 +160,12 @@
     if (sub.href === '/cms/customers' && page.url.pathname === '/cms/customers') return true
     if (sub.href === '/cms/customers/membership' && page.url.pathname.startsWith('/cms/customers/membership')) return true
     if (sub.href === '/cms/customers/score' && page.url.pathname.startsWith('/cms/customers/score')) return true
+    if (sub.href === '/cms/customers/inquiry' && page.url.pathname.startsWith('/cms/customers/inquiry')) return true
     // 설정 서브메뉴: 리디렉트 대상 URL에서도 서브탭 활성 유지
     if (sub.href === '/cms/set/code' && page.url.pathname.startsWith('/cms/codes')) return true
     if (sub.href === '/cms/set/rental' && page.url.pathname.startsWith('/cms/set/rental')) return true
     if (sub.href === '/cms/set/admin' && page.url.pathname.startsWith('/cms/accounts')) return true
+    if (sub.href === '/cms/reservation/contracts' && page.url.pathname.startsWith('/cms/reservation/contracts')) return true
     return false
   }
 </script>

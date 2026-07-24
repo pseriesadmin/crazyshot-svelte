@@ -2,6 +2,7 @@
   import { enhance } from '$app/forms'
   import { csToast } from '$lib/utils/toast'
   import RentalContractViewer from '$lib/components/cms/RentalContractViewer.svelte'
+  import RentalJourneyStepper from '$lib/components/common/RentalJourneyStepper.svelte'
 
   interface RentalListRow {
     reservation_id:    number
@@ -43,6 +44,7 @@
   }
 
   interface PaymentDetail {
+    toss_order_id:   string | null
     payment_key:     string | null
     payment_method:  string | null
     total_amount:    number | null
@@ -54,11 +56,13 @@
   }
 
   interface Props {
-    row:       RentalListRow
-    onclose:   () => void
-    onrefresh: () => void
+    row:          RentalListRow
+    onclose:      () => void
+    onrefresh:    () => void
+    stepFilter?:  string[]
+    isRentalView?: boolean   // true = /cms/rentals 컨텍스트 (예약 단계 UI 숨김)
   }
-  let { row, onclose, onrefresh }: Props = $props()
+  let { row, onclose, onrefresh, stepFilter, isRentalView = false }: Props = $props()
 
   let activeTab   = $state<'rental' | 'customer' | 'payment' | 'contract'>('rental')
   let isSubmitting = $state(false)
@@ -82,7 +86,14 @@
     fetch(`/api/cms/reservations/${id}/payment`)
       .then(r => r.json())
       .then(d => {
-        if (fetchedForId === id) { paymentDetail = d.payment; paymentLoading = false }
+        if (fetchedForId === id) {
+          if (d.payment) {
+            paymentDetail = { ...d.payment, toss_order_id: d.payment.order_id ?? null }
+          } else {
+            paymentDetail = null
+          }
+          paymentLoading = false
+        }
       })
       .catch(() => {
         if (fetchedForId === id) { paymentError = '결제 정보를 불러오지 못했습니다.'; paymentLoading = false }
@@ -101,6 +112,7 @@
     locker:        '무인 보관함',
     visit:         '본점 방문수령',
     epost:         '택배',
+    airport:       '공항 수령',
   }
 
   const PAYMENT_METHOD_LABELS: Record<string, string> = {
@@ -116,18 +128,35 @@
 
   function isTerminal(s: string): boolean { return TERMINAL.has(s) }
 
-  function nextStatus(s: string): string | null {
+  function nextStatus(s: string, pickupMethod?: string | null, returnMethod?: string | null): string | null {
+    // 방문 수령: 어드민이 현장 확인 → shipped 단계 스킵, confirmed → in_use 직접 전환
+    if (s === 'confirmed' && pickupMethod === 'visit') return 'in_use'
+    // 방문 반납: 어드민이 현장 반납 확인 → return_requested 단계 스킵, in_use → returned 직접 전환
+    if (s === 'in_use' && returnMethod === 'visit') return 'returned'
     const map: Record<string, string> = {
-      confirmed: 'shipped', shipped: 'in_use',
-      in_use: 'return_requested', return_requested: 'returned', returned: 'completed',
+      confirmed:        'shipped',
+      shipped:          'in_use',
+      in_use:           'return_requested',
+      return_requested: 'returned',
+      returned:         'completed',
     }
     return map[s] ?? null
   }
 
-  function nextLabel(s: string): string {
+  function nextLabel(s: string, pickupMethod?: string | null, returnMethod?: string | null): string {
+    if (s === 'confirmed') {
+      return pickupMethod === 'visit' ? '방문 출고 처리' : '택배 출고 처리'
+    }
+    if (s === 'shipped') {
+      return pickupMethod === 'visit' ? '방문수령 확인' : '택배수령 확인'
+    }
+    if (s === 'in_use') {
+      // 방문 반납: 현장 즉시 반납완료 처리 / 택배·퀵: 고객 채팅 반납접수 후 처리
+      return returnMethod === 'visit' ? '방문 반납 처리' : '반납 접수'
+    }
     const map: Record<string, string> = {
-      confirmed: '출고 처리', shipped: '수령 확인',
-      in_use: '반납 접수', return_requested: '반납 완료', returned: '완료 처리',
+      return_requested: '반납 처리',
+      returned:         '완료 처리',
     }
     return map[s] ?? '다음 단계'
   }
@@ -155,13 +184,32 @@
   function reservationCode(): string {
     return row.reservation_code ?? `CZ-${String(row.reservation_id).padStart(5, '0')}`
   }
+
+  const NOTIFY_TYPE_MAP: Record<string, string> = {
+    confirmed:        'shipment_notify',
+    in_use:           'return_remind',
+    return_requested: 'return_registration',
+    returned:         'rental_complete',
+  }
+
+  let notifyType = $derived(NOTIFY_TYPE_MAP[row.status] ?? null)
+
+  function chatNotifyLabel(type: string): string {
+    const map: Record<string, string> = {
+      shipment_notify:     '반출 알림 발송 💬',
+      return_remind:       '반납 예정 알림 💬',
+      return_registration: '반납 정보 요청 💬',
+      rental_complete:     '대여 종료 알림 💬',
+    }
+    return map[type] ?? '알림 발송 💬'
+  }
 </script>
 
 <div class="panel">
   <!-- 패널 헤더 -->
   <div class="panel-header">
     <div class="panel-title-wrap">
-      <span class="panel-label">예약</span>
+      <span class="panel-label">대여</span>
       <span class="panel-id">{reservationCode()}</span>
       <span class="panel-status">{STATUS_LABEL[row.status] ?? row.status}</span>
     </div>
@@ -189,10 +237,14 @@
   <!-- 탭 바디 -->
   <div class="panel-body">
 
-    <!-- ─── Tab 1: 대여정보 ─── -->
+    <!-- ─── Tab 1: 예약정보 ─── -->
     {#if activeTab === 'rental'}
+
+      <!-- 대여 여정 스텝퍼 -->
+      <RentalJourneyStepper status={row.status} steps={stepFilter} />
+
       <!-- 예약 정보 -->
-      <div class="section-title">예약 정보</div>
+      <div class="section-title">대여 정보</div>
       <div class="info-section">
         <div class="info-row">
           <span class="info-label">예약코드</span>
@@ -275,10 +327,11 @@
 
       <!-- 상태 액션 버튼 -->
       <div class="action-section">
-        {#if row.status === 'hold'}
+        <!-- 예약 단계: 승인하기 / 거부 — reservation 뷰 전용 -->
+        {#if row.status === 'hold' && !isRentalView}
           <form
             method="POST"
-            action="/cms/rentals?/approveReservation"
+            action="/cms/reservation?/approveReservation"
             use:enhance={() => {
               isSubmitting = true
               return async ({ result, update }) => {
@@ -294,7 +347,7 @@
           </form>
           <form
             method="POST"
-            action="/cms/rentals?/updateStatus"
+            action="/cms/reservation?/updateStatus"
             use:enhance={() => {
               isSubmitting = true
               return async ({ result, update }) => {
@@ -310,10 +363,11 @@
             <button type="submit" class="btn-danger-sm" disabled={isSubmitting}>거부</button>
           </form>
 
-        {:else if nextStatus(row.status)}
+        <!-- 대여 라이프사이클: 출고 처리 → 수령 확인 → 반납 접수/처리 → 완료 처리 -->
+        {:else if nextStatus(row.status, row.pickup_method, row.return_method)}
           <form
             method="POST"
-            action="/cms/rentals?/updateStatus"
+            action="/cms/reservation?/updateStatus"
             use:enhance={() => {
               isSubmitting = true
               return async ({ result, update }) => {
@@ -325,15 +379,18 @@
             }}
           >
             <input type="hidden" name="reservation_id" value={row.reservation_id} />
-            <input type="hidden" name="status" value={nextStatus(row.status)} />
-            <button type="submit" class="btn-action" disabled={isSubmitting}>{nextLabel(row.status)}</button>
+            <input type="hidden" name="status" value={nextStatus(row.status, row.pickup_method, row.return_method)} />
+            <button type="submit" class="btn-action" disabled={isSubmitting}>
+              {nextLabel(row.status, row.pickup_method, row.return_method)}
+            </button>
           </form>
         {/if}
 
-        {#if !isTerminal(row.status) && row.status !== 'hold'}
+        <!-- 예약 취소 — reservation 뷰 전용 (대여 현황에서는 별도 처리 플로우) -->
+        {#if !isTerminal(row.status) && row.status !== 'hold' && !isRentalView}
           <form
             method="POST"
-            action="/cms/rentals?/updateStatus"
+            action="/cms/reservation?/updateStatus"
             use:enhance={() => {
               isSubmitting = true
               return async ({ result, update }) => {
@@ -350,6 +407,31 @@
           </form>
         {/if}
       </div>
+
+      <!-- 채팅 알림 발송 -->
+      {#if notifyType && row.status !== 'cancelled' && row.status !== 'damage_claimed'}
+        <div class="notify-section">
+          <form
+            method="POST"
+            action="/cms/rentals?/sendChatNotify"
+            use:enhance={() => {
+              isSubmitting = true
+              return async ({ result, update }) => {
+                isSubmitting = false
+                if (result.type === 'success') csToast.success('채팅 알림을 발송했습니다.')
+                else csToast.error('알림 발송에 실패했습니다.')
+                await update()
+              }
+            }}
+          >
+            <input type="hidden" name="reservation_id" value={row.reservation_id} />
+            <input type="hidden" name="notify_type" value={notifyType} />
+            <button type="submit" class="btn-notify" disabled={isSubmitting}>
+              {chatNotifyLabel(notifyType)}
+            </button>
+          </form>
+        </div>
+      {/if}
     {/if}
 
     <!-- ─── Tab 2: 고객정보 ─── -->
@@ -400,7 +482,9 @@
       <div class="info-section">
         <div class="info-row">
           <span class="info-label">주문번호</span>
-          <span class="info-value mono">{row.order_key ?? '-'}</span>
+          <span class="info-value mono">
+            {paymentDetail?.toss_order_id ?? (paymentLoading ? '조회 중…' : (row.order_key ?? '-'))}
+          </span>
         </div>
         <div class="info-row">
           <span class="info-label">기본 이용요금</span>
@@ -506,12 +590,12 @@
 
 <style>
   .panel {
-    height: 100%;
     background: var(--cs-white);
     border-radius: var(--cms-radius-md);
     box-shadow: 0px 1px 4px rgba(0,0,0,0.06);
     display: flex;
     flex-direction: column;
+    height: 100%;
     overflow: hidden;
   }
 
@@ -585,11 +669,13 @@
   /* 패널 바디 */
   .panel-body {
     flex: 1;
+    min-height: 0;
     overflow-y: auto;
     padding: 16px 20px 20px;
-    display: flex;
-    flex-direction: column;
-    gap: 10px;
+    display: block;
+  }
+  .panel-body > * + * {
+    margin-top: 10px;
   }
 
   /* 섹션 타이틀 */
@@ -776,4 +862,27 @@
   }
   .btn-cancel:hover    { opacity: 0.85; }
   .btn-cancel:disabled { opacity: 0.5; cursor: not-allowed; }
+
+  /* 채팅 알림 섹션 */
+  .notify-section {
+    margin-top: 4px;
+    padding-top: 4px;
+    border-top: 1px dashed var(--cs-lilac);
+  }
+  .btn-notify {
+    display: inline-flex;
+    align-items: center;
+    height: 34px;
+    padding: 0 16px;
+    background: transparent;
+    color: var(--cs-purple);
+    border: 1px solid var(--cs-purple);
+    border-radius: var(--cms-radius-sm);
+    font: var(--text-pc-script-12);
+    font-weight: 700;
+    cursor: pointer;
+    transition: background 0.12s, color 0.12s;
+  }
+  .btn-notify:hover    { background: rgba(59,47,138,0.08); }
+  .btn-notify:disabled { opacity: 0.5; cursor: not-allowed; }
 </style>

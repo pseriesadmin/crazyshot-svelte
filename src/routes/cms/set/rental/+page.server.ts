@@ -40,10 +40,20 @@ export interface RentalConsentItem {
   is_active: boolean
 }
 
+export interface RentalShippingSettings {
+  enable_round_trip: boolean
+  round_trip_fee: number | null
+  enable_delivery: boolean
+  delivery_fee: number | null
+  enable_return: boolean
+  return_fee: number | null
+  shipping_guide: string
+}
+
 export const load: PageServerLoad = async ({ locals }) => {
   const supabase = locals.supabase
 
-  const [periods, methods, branches, guide, consents] = await Promise.all([
+  const [periods, methods, branches, guide, consents, shippingRow] = await Promise.all([
     untypedFrom(supabase, 'rental_period_options')
       .select('id, name, display_order, is_active')
       .is('deleted_at', null)
@@ -69,6 +79,11 @@ export const load: PageServerLoad = async ({ locals }) => {
       .select('id, content, display_order, is_active')
       .is('deleted_at', null)
       .order('display_order'),
+
+    untypedFrom(supabase, 'rental_shipping_settings')
+      .select('enable_round_trip, round_trip_fee, enable_delivery, delivery_fee, enable_return, return_fee, shipping_guide')
+      .limit(1)
+      .single(),
   ])
 
   type GuideRow = { guide_text: string | null }
@@ -79,12 +94,15 @@ export const load: PageServerLoad = async ({ locals }) => {
     branches: (branches.data ?? []) as PickupPoint[],
     guideText: ((guide as { data: GuideRow | null }).data?.guide_text ?? ''),
     consents: ((consents as { data: RentalConsentItem[] | null }).data ?? []),
+    shippingSettings: ((shippingRow as { data: RentalShippingSettings | null }).data ?? null),
   }
 }
 
 export const actions: Actions = {
   // ─── 대여 기간 조건 ───────────────────────────
   addPeriod: async ({ request, locals }) => {
+    const { session } = await locals.safeGetSession()
+    if (!session) return fail(401, { error: '인증 필요' })
     const data = await request.formData()
     const name = (data.get('name') as string | null)?.trim() ?? ''
     const count = parseInt(data.get('count') as string, 10)
@@ -102,6 +120,8 @@ export const actions: Actions = {
   },
 
   deletePeriod: async ({ request, locals }) => {
+    const { session } = await locals.safeGetSession()
+    if (!session) return fail(401, { error: '인증 필요' })
     const data = await request.formData()
     const id = data.get('id') as string
     const { data: inUse } = await untypedRpc(locals.supabase, 'check_rental_period_option_in_use', { p_id: id })
@@ -112,6 +132,8 @@ export const actions: Actions = {
   },
 
   reorderPeriods: async ({ request, locals }) => {
+    const { session } = await locals.safeGetSession()
+    if (!session) return fail(401, { error: '인증 필요' })
     const data = await request.formData()
     const raw = data.get('ids')
     if (!raw) return fail(400, { error: 'ids required' })
@@ -123,6 +145,8 @@ export const actions: Actions = {
 
   // ─── 대여 방식 ────────────────────────────────
   addMethod: async ({ request, locals }) => {
+    const { session } = await locals.safeGetSession()
+    if (!session) return fail(401, { error: '인증 필요' })
     const data = await request.formData()
     const name = (data.get('name') as string | null)?.trim() ?? ''
     const count = parseInt(data.get('count') as string, 10)
@@ -140,6 +164,8 @@ export const actions: Actions = {
   },
 
   deleteMethod: async ({ request, locals }) => {
+    const { session } = await locals.safeGetSession()
+    if (!session) return fail(401, { error: '인증 필요' })
     const data = await request.formData()
     const id = data.get('id') as string
     const { data: inUse } = await untypedRpc(locals.supabase, 'check_rental_method_option_in_use', { p_id: id })
@@ -150,6 +176,8 @@ export const actions: Actions = {
   },
 
   reorderMethods: async ({ request, locals }) => {
+    const { session } = await locals.safeGetSession()
+    if (!session) return fail(401, { error: '인증 필요' })
     const data = await request.formData()
     const raw = data.get('ids')
     if (!raw) return fail(400, { error: 'ids required' })
@@ -161,6 +189,8 @@ export const actions: Actions = {
 
   // ─── 지점 정보 ────────────────────────────────
   addBranch: async ({ request, locals }) => {
+    const { session } = await locals.safeGetSession()
+    if (!session) return fail(401, { error: '인증 필요' })
     const data = await request.formData()
     const name = (data.get('name') as string | null)?.trim() ?? ''
     const count = parseInt(data.get('count') as string, 10)
@@ -180,6 +210,8 @@ export const actions: Actions = {
   },
 
   updateBranch: async ({ request, locals }) => {
+    const { session } = await locals.safeGetSession()
+    if (!session) return fail(401, { error: '인증 필요' })
     const data = await request.formData()
     const id = data.get('id') as string
     const name = (data.get('name') as string | null)?.trim() ?? ''
@@ -202,6 +234,8 @@ export const actions: Actions = {
   },
 
   deleteBranch: async ({ request, locals }) => {
+    const { session } = await locals.safeGetSession()
+    if (!session) return fail(401, { error: '인증 필요' })
     const data = await request.formData()
     const id = data.get('id') as string
     const { data: inUse } = await untypedRpc(locals.supabase, 'check_pickup_point_in_use', { p_id: id })
@@ -211,8 +245,45 @@ export const actions: Actions = {
     return { success: true }
   },
 
+  // ─── 배송 설정 ────────────────────────────────
+  saveShipping: async ({ request, locals }) => {
+    const { session } = await locals.safeGetSession()
+    if (!session) return fail(401, { error: '인증 필요' })
+    const data = await request.formData()
+
+    const enableRoundTrip = data.get('enable_round_trip') === 'true'
+    const roundTripFeeRaw = (data.get('round_trip_fee') as string | null) ?? ''
+    const roundTripFee = roundTripFeeRaw !== '' ? parseInt(roundTripFeeRaw, 10) : null
+
+    const enableDelivery = data.get('enable_delivery') === 'true'
+    const deliveryFeeRaw = (data.get('delivery_fee') as string | null) ?? ''
+    const deliveryFee = deliveryFeeRaw !== '' ? parseInt(deliveryFeeRaw, 10) : null
+
+    const enableReturn = data.get('enable_return') === 'true'
+    const returnFeeRaw = (data.get('return_fee') as string | null) ?? ''
+    const returnFee = returnFeeRaw !== '' ? parseInt(returnFeeRaw, 10) : null
+
+    const shippingGuide = (data.get('shipping_guide') as string | null) ?? ''
+
+    if (shippingGuide.length > 200) return fail(400, { error: '배송 안내문은 최대 200자까지 입력 가능합니다.' })
+
+    const { error } = await untypedRpc(locals.supabase, 'upsert_rental_shipping_settings', {
+      p_enable_round_trip: enableRoundTrip,
+      p_round_trip_fee:    roundTripFee,
+      p_enable_delivery:   enableDelivery,
+      p_delivery_fee:      deliveryFee,
+      p_enable_return:     enableReturn,
+      p_return_fee:        returnFee,
+      p_shipping_guide:    shippingGuide,
+    })
+    if (error) return fail(500, { error: error.message })
+    return { success: true }
+  },
+
   // ─── 이용안내 ─────────────────────────────────
   saveGuide: async ({ request, locals }) => {
+    const { session } = await locals.safeGetSession()
+    if (!session) return fail(401, { error: '인증 필요' })
     const data = await request.formData()
     const guideText = (data.get('guide_text') as string | null) ?? ''
 
@@ -227,6 +298,8 @@ export const actions: Actions = {
 
   // ─── 필수 동의문 ──────────────────────────────
   addConsent: async ({ request, locals }) => {
+    const { session } = await locals.safeGetSession()
+    if (!session) return fail(401, { error: '인증 필요' })
     const data = await request.formData()
     const content = (data.get('content') as string | null)?.trim() ?? ''
     const count = parseInt(data.get('count') as string, 10)
@@ -245,6 +318,8 @@ export const actions: Actions = {
   },
 
   deleteConsent: async ({ request, locals }) => {
+    const { session } = await locals.safeGetSession()
+    if (!session) return fail(401, { error: '인증 필요' })
     const data = await request.formData()
     const id = data.get('id') as string
     const { error } = await untypedRpc(locals.supabase, 'delete_rental_consent_item', { p_id: id })
@@ -253,6 +328,8 @@ export const actions: Actions = {
   },
 
   reorderConsents: async ({ request, locals }) => {
+    const { session } = await locals.safeGetSession()
+    if (!session) return fail(401, { error: '인증 필요' })
     const data = await request.formData()
     const raw = data.get('ids')
     if (!raw) return fail(400, { error: 'ids required' })

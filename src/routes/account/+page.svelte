@@ -1,6 +1,8 @@
 <script lang="ts">
+  import { invalidate } from '$app/navigation'
   import SubGnb from '$lib/components/common/SubGnb.svelte'
   import BottomTabBar from '$lib/components/common/BottomTabBar.svelte'
+  import RentalJourneyStepper from '$lib/components/common/RentalJourneyStepper.svelte'
   import ProfileCard from '$lib/components/account/ProfileCard.svelte'
   import RentalStatRow from '$lib/components/account/RentalStatRow.svelte'
   import WishlistScroll from '$lib/components/account/WishlistScroll.svelte'
@@ -10,10 +12,18 @@
   import ProfileTabContent from '$lib/components/members/profile/ProfileTabContent.svelte'
   import AddressTabContent from '$lib/components/members/profile/AddressTabContent.svelte'
   import NotificationTabContent from '$lib/components/members/profile/NotificationTabContent.svelte'
+  import PcRentalPanel from '$lib/components/account/PcRentalPanel.svelte'
+  import PcCancelPanel from '$lib/components/account/PcCancelPanel.svelte'
+  import PcInquiryPanel from '$lib/components/account/PcInquiryPanel.svelte'
 
   import type { PageData } from './$types'
 
   let { data }: { data: PageData } = $props()
+
+  $effect(() => {
+    const timer = setInterval(() => invalidate('app:rental-status'), 30_000)
+    return () => clearInterval(timer)
+  })
 
   const rentalStats = $derived([
     { label: '대여중',    count: data.rentalStats.active },
@@ -23,9 +33,9 @@
   ])
 
   const rentalMenuItems = [
-    { label: '대여',      href: '#', panel: 'rental' },
-    { label: '취소·반품', href: '#', panel: 'cancel' },
-    { label: '빠른 문의', href: '#', panel: 'inquiry' },
+    { label: '대여',      href: '/account/rental',  panel: 'rental' },
+    { label: '취소·반품', href: '/account/cancel',  panel: 'cancel' },
+    { label: '빠른 문의', href: '/account/inquiry', panel: 'inquiry' },
   ]
 
   const myInfoMenuItems = [
@@ -75,11 +85,17 @@
               </div>
             </div>
             <RentalStatRow stats={rentalStats} />
+            {#if data.recentRental}
+              <div class="w-full mt-[12px]">
+                <p class="font-['Noto_Sans_KR',sans-serif] font-medium text-[#444] text-[12px] tracking-[-0.3px] mb-[8px]">최근 예약 진행 상태</p>
+                <RentalJourneyStepper status={data.recentRental.status} />
+              </div>
+            {/if}
           </div>
         </div>
 
         <!-- 관심가져봄 -->
-        <WishlistScroll />
+        <WishlistScroll items={data.wishlists} totalCount={data.wishlists.length} />
 
         <!-- 대여 정보 + 내정보 메뉴 -->
         <div class="flex flex-col items-start pt-[50px] relative shrink-0 w-full">
@@ -187,6 +203,12 @@
                 <p class="font-['Noto_Sans_KR',sans-serif] font-medium text-[#666] text-[14px] tracking-[-0.5px]">최근 3개월 동안 0건의 대여정보가 있어요.</p>
               </div>
               <RentalStatRow stats={rentalStats} />
+              {#if data.recentRental}
+                <div class="mt-[12px]">
+                  <p class="font-['Noto_Sans_KR',sans-serif] font-medium text-[#444] text-[12px] tracking-[-0.3px] mb-[8px]">최근 예약 진행 상태</p>
+                  <RentalJourneyStepper status={data.recentRental.status} />
+                </div>
+              {/if}
             </div>
           </div>
 
@@ -213,7 +235,7 @@
                 </div>
               </div>
               <div class="overflow-x-auto">
-                <WishlistScroll cardsOnly />
+                <WishlistScroll items={data.wishlists} totalCount={data.wishlists.length} />
               </div>
             </div>
           </div>
@@ -241,24 +263,39 @@
             </div>
             <div class="flex flex-col gap-[20px]">
               {#each rentalMenuItems as item}
-                <a href={item.href} class="flex items-center justify-between relative shrink-0 w-full cursor-pointer hover:opacity-70 transition-opacity">
-                  <span class="font-['Noto_Sans_KR',sans-serif] font-medium text-[#444] text-[16px] tracking-[-0.5px]">{item.label}</span>
+                <button
+                  onclick={() => activePcSection = item.panel}
+                  class="flex items-center justify-between relative shrink-0 w-full cursor-pointer hover:opacity-70 transition-opacity text-left"
+                  style="border:none;background:none;padding:0;"
+                >
+                  <span
+                    class="font-['Noto_Sans_KR',sans-serif] text-[16px] tracking-[-0.5px]"
+                    style="color:{activePcSection === item.panel ? 'var(--cs-purple)' : '#444'};font-weight:{activePcSection === item.panel ? '700' : '500'};"
+                  >{item.label}</span>
                   <div class="h-[12px] relative shrink-0 w-[6px]">
                     <div class="absolute inset-[-8.33%_-16.67%]">
                       <svg class="block size-full" fill="none" preserveAspectRatio="none" viewBox="0 0 8 14">
-                        <path d="M1 1L7 7L1 13" stroke="#aaaaaa" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" />
+                        <path d="M1 1L7 7L1 13"
+                          stroke="{activePcSection === item.panel ? '#553FE0' : '#aaaaaa'}"
+                          stroke-linecap="round" stroke-linejoin="round" stroke-width="2" />
                       </svg>
                     </div>
                   </div>
-                </a>
+                </button>
               {/each}
             </div>
           </div>
 
         {:else}
-          <!-- 내정보 서브섹션 랜딩 패널 -->
+          <!-- 서브섹션 패널 -->
           <div class="pc-panel-wrap">
-            {#if activePcSection === 'log'}
+            {#if activePcSection === 'rental'}
+              <PcRentalPanel rentals={data.rentals} onback={() => activePcSection = 'home'} />
+            {:else if activePcSection === 'cancel'}
+              <PcCancelPanel cancels={data.cancels} onback={() => activePcSection = 'home'} />
+            {:else if activePcSection === 'inquiry'}
+              <PcInquiryPanel inquiries={data.inquiries} onback={() => activePcSection = 'home'} />
+            {:else if activePcSection === 'log'}
               <LogTabContent />
             {:else if activePcSection === 'review'}
               <ReviewTabContent />
