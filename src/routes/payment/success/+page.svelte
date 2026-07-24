@@ -51,7 +51,10 @@
       <!-- 상품명 섹션 -->
       <div class="order-product">
         <p class="product-name">{data.productName}</p>
-        <p class="product-code">{data.orderNumber}</p>
+        <div class="product-order-row">
+          <span class="product-order-label">주문번호</span>
+          <span class="product-code">{data.orderNumber}</span>
+        </div>
       </div>
 
       <!-- 상세 정보 섹션 -->
@@ -227,6 +230,17 @@
     color: var(--cs-text-dark);
     letter-spacing: -0.3px;
     margin: 0;
+  }
+  .product-order-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .product-order-label {
+    font: var(--text-m-script-14B);
+    color: var(--cs-text-light);
+    letter-spacing: -0.5px;
+    white-space: nowrap;
   }
   .product-code {
     font: var(--text-m-script-14B);

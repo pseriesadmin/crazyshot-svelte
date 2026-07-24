@@ -15,6 +15,8 @@ export function isLegacyNumericId(value: string): boolean {
 
 export type ProductDetailRow = Product & {
 	base_price_daily: number;
+	base_price_12h: number | null;
+	deposit_amount: number | null;
 };
 
 /** 로컬 dev 전용 — DB 연결 실패 시 UI 확인 (id=9 / Canon EOS R5) */
@@ -33,6 +35,8 @@ export const CANON_EOS_R5_FIXTURE: ProductDetailRow = {
 	},
 	is_active: true,
 	base_price_daily: 85000,
+	base_price_12h: 60000,
+	deposit_amount: null,
 	created_at: '2026-01-01T00:00:00.000Z',
 	updated_at: '2026-01-01T00:00:00.000Z',
 	deleted_at: null,

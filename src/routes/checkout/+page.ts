@@ -1,8 +1,3 @@
-/**
- * +page.ts — /checkout 라우트 로드 함수
- * 목적: 더미 데이터 반환 (실제 Supabase 호출 없음)
- */
-
 import type { PageLoad } from './$types';
 import {
   sampleProducts,
@@ -12,13 +7,17 @@ import {
   sampleReservations
 } from '$lib/fixtures/cartFixtures';
 
-export const load: PageLoad = async () => {
+// +page.server.ts 가 실 카트 데이터(serverCartItems / serverProducts / cartProducts 등)를 제공.
+// data param을 spread해 서버 데이터가 컴포넌트까지 도달하도록 한다.
+// 픽스처는 isServerLoaded=false 시 폴백으로만 사용 (서버 데이터가 없는 키에만 적용).
+export const load: PageLoad = async ({ data }) => {
   return {
-    products: sampleProducts,
-    assets: sampleAssets,
-    cartItems: sampleCartItems,
+    products:     sampleProducts,
+    assets:       sampleAssets,
+    cartItems:    sampleCartItems,
     reservations: sampleReservations,
-    userProfile: mockUserProfile,
-    isDevMode: true
-  };
-};
+    userProfile:  mockUserProfile,
+    isDevMode:    true,
+    ...data,  // 서버 데이터(cartProducts, reservationIds, deliveryOptions 등)를 덮어씌움
+  }
+}

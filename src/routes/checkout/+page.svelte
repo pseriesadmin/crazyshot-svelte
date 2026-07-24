@@ -4,8 +4,11 @@
   import type { PageData } from './$types';
   import type { Product } from '$lib/types/database';
   import SubGnb from '$lib/components/common/SubGnb.svelte';
+  import BottomTabBar from '$lib/components/common/BottomTabBar.svelte';
   import CalendarGrid from '$lib/components/common/CalendarGrid.svelte';
   import { sampleSubItems, priceConfig } from '$lib/fixtures/cartFixtures';
+  import { supabase } from '$lib/services/supabase';
+  import { csToast } from '$lib/utils/toast';
 
   function readInputValue(event: { currentTarget: { value: string } }): string {
     return event.currentTarget.value;
@@ -15,17 +18,14 @@
   let { data }: Props = $props();
 
   // ── Types
-  type DeliveryType = 'visit' | 'delivery';
-  type VisitLocation = 'main' | 'branch1' | 'branch2' | 'none';
-  type DeliveryService = 'crazy' | 'quick';
+  // 5탭 배송 방식 (PRD.1.2.2 Zone2 기준) — ShipmentMethodEnum 정합
+  type DeliveryMethod = 'crazydelivery' | 'quick' | 'locker' | 'visit' | 'epost';
+  // 대여 기간 유형 (price_rules.duration_type 정합)
+  type DurationType = '12h' | '24h' | '1day' | 'purchase';
 
   interface CardOptions {
-    rentalDelivery: DeliveryType;
-    rentalVisit: VisitLocation;
-    rentalService: DeliveryService;
-    returnDelivery: DeliveryType;
-    returnVisit: VisitLocation;
-    returnService: DeliveryService;
+    rentalMethod: DeliveryMethod;
+    returnMethod: DeliveryMethod;
     copyToReturn: boolean;
     couponWelcome: boolean;
     couponMembership: boolean;
@@ -49,15 +49,9 @@
     memberCheck2: boolean;
   }
 
-  function defaultOptions(type: 1 | 2): CardOptions {
-    if (type === 1) return {
-      rentalDelivery: 'delivery', rentalVisit: 'branch1', rentalService: 'crazy',
-      returnDelivery: 'visit', returnVisit: 'main', returnService: 'quick',
-      copyToReturn: false, couponWelcome: false, couponMembership: false
-    };
+  function defaultOptions(_type: 1 | 2): CardOptions {
     return {
-      rentalDelivery: 'visit', rentalVisit: 'branch1', rentalService: 'quick',
-      returnDelivery: 'delivery', returnVisit: 'branch1', returnService: 'quick',
+      rentalMethod: 'crazydelivery', returnMethod: 'crazydelivery',
       copyToReturn: false, couponWelcome: false, couponMembership: false
     };
   }
@@ -66,26 +60,12 @@
     return { name: '', email: '', phone: '', authCode: '', addr: '', addrDetail: '', notes: '', memberCheck: false, memberCheck2: false };
   }
 
-  // ── Pending reservation from product detail (예약담기 → 카트 연동)
-  interface PendingReservation {
-    productId: string;
-    productName: string;
-    imageUrl: string;
-    startDate: string;
-    endDate: string;
-    startHour: number;
-    endHour: number;
-    qty: number;
-    dailyPrice: number;
-    halfDayPrice: number;
-  }
-  let pendingReservation = $state<PendingReservation | null>(null);
-
   // ── Card 1 state
   let c1Checked = $state(false);
   let c1Deleted = $state(false);
   let c1Qty = $state(1);
   let c1Acc = $state<CardAccordion>({ rental: false, return_: false, fee: false });
+  let c1DurType = $state<DurationType>('24h');
   let c1Opts = $state<CardOptions>(defaultOptions(1));
   let c1RentalForm = $state<FormState>(defaultForm());
   let c1ReturnForm = $state<FormState>(defaultForm());
@@ -95,27 +75,21 @@
   let c2Deleted = $state(false);
   let c2Qtys = $state([1, 1, 1]);
   let c2Acc = $state<CardAccordion>({ rental: false, return_: false, fee: false });
+  let c2DurType = $state<DurationType>('24h');
   let c2Opts = $state<CardOptions>(defaultOptions(2));
   let c2RentalForm = $state<FormState>(defaultForm());
   let c2ReturnForm = $state<FormState>(defaultForm());
 
-  // ── Rental Options Panel
-  let rpRentalDelivery = $state<DeliveryType>('delivery');
-  let rpRentalVisit = $state<VisitLocation>('branch1');
-  let rpRentalService = $state<DeliveryService>('quick');
-  let rpRentalOpen = $state(false);
-  let rpRentalForm = $state<FormState>(defaultForm());
-
-  let rpReturnDelivery = $state<DeliveryType>('delivery');
-  let rpReturnVisit = $state<VisitLocation>('branch1');
-  let rpReturnService = $state<DeliveryService>('quick');
-  let rpReturnOpen = $state(false);
-  let rpReturnForm = $state<FormState>(defaultForm());
-  let rpCopyToReturn = $state(false);
+  // ── 전체 일괄 설정 배너
+  let bulkOpen    = $state(false)
+  let bulkDate    = $state('')
+  let bulkTime    = $state('')
+  let bulkMethod  = $state<DeliveryMethod>('crazydelivery')
+  let bulkApplied = $state(false)
 
   // ── Order Total
-  let otCouponWelcome = $state(false);
-  let otCouponMembership = $state(false);
+  let otSelectedCouponIds = $state(new Set<string>())
+  let otPointsUsed = $state(0)
 
   // ── Calendar & Time
   let openCalId = $state<string | null>(null);
@@ -125,8 +99,7 @@
   let c1ReturnDate = $state('');   let c1ReturnTime = $state('');
   let c2RentalDate = $state('');   let c2RentalTime = $state('');
   let c2ReturnDate = $state('');   let c2ReturnTime = $state('');
-  let rpRentalDateVal = $state(''); let rpRentalTimeVal2 = $state('');
-  let rpReturnDateVal = $state(''); let rpReturnTimeVal2 = $state('');
+  // (bulk date/time managed by bulkDate / bulkTime above)
 
   function openCal(id: string, _currentDate: string) {
     openCalId = openCalId === id ? null : id;
@@ -143,15 +116,23 @@
   }
 
   // ── Copy-to-return sync handlers
-  function c1HandleDelivery(v: DeliveryType) { c1Opts = { ...c1Opts, rentalDelivery: v, ...(c1Opts.copyToReturn ? { returnDelivery: v } : {}) }; }
-  function c1HandleVisit(v: VisitLocation) { c1Opts = { ...c1Opts, rentalVisit: v, ...(c1Opts.copyToReturn ? { returnVisit: v } : {}) }; }
-  function c1HandleService(v: DeliveryService) { c1Opts = { ...c1Opts, rentalService: v, ...(c1Opts.copyToReturn ? { returnService: v } : {}) }; }
+  function c1HandleMethod(v: DeliveryMethod) {
+    const ret = c1Opts.copyToReturn ? v : c1Opts.returnMethod
+    c1Opts = { ...c1Opts, rentalMethod: v, ...(c1Opts.copyToReturn ? { returnMethod: v } : {}) }
+    // @ts-expect-error — reservationIds: +page.server.ts 제공
+    saveShipmentMethod((data.reservationIds as string[] | undefined)?.[0], v, ret, c1RentalTime, c1ReturnTime)
+  }
+  function c1HandleReturnMethod(v: DeliveryMethod) {
+    c1Opts = { ...c1Opts, returnMethod: v }
+    // @ts-expect-error — reservationIds: +page.server.ts 제공
+    saveShipmentMethod((data.reservationIds as string[] | undefined)?.[0], c1Opts.rentalMethod, v, c1RentalTime, c1ReturnTime)
+  }
   function c1HandleRentalForm(f: FormState) { c1RentalForm = f; if (c1Opts.copyToReturn) c1ReturnForm = { ...f }; }
   function c1HandleRentalDate(d: string) { c1RentalDate = d; if (c1Opts.copyToReturn) c1ReturnDate = d; }
   function c1HandleRentalTime(t: string) { c1RentalTime = t; if (c1Opts.copyToReturn) c1ReturnTime = t; }
   function c1HandleCopy(v: boolean) {
     if (v) {
-      c1Opts = { ...c1Opts, copyToReturn: true, returnDelivery: c1Opts.rentalDelivery, returnVisit: c1Opts.rentalVisit, returnService: c1Opts.rentalService };
+      c1Opts = { ...c1Opts, copyToReturn: true, returnMethod: c1Opts.rentalMethod };
       c1ReturnForm = { ...c1RentalForm };
       c1ReturnDate = c1RentalDate;
       c1ReturnTime = c1RentalTime;
@@ -160,15 +141,23 @@
     }
   }
 
-  function c2HandleDelivery(v: DeliveryType) { c2Opts = { ...c2Opts, rentalDelivery: v, ...(c2Opts.copyToReturn ? { returnDelivery: v } : {}) }; }
-  function c2HandleVisit(v: VisitLocation) { c2Opts = { ...c2Opts, rentalVisit: v, ...(c2Opts.copyToReturn ? { returnVisit: v } : {}) }; }
-  function c2HandleService(v: DeliveryService) { c2Opts = { ...c2Opts, rentalService: v, ...(c2Opts.copyToReturn ? { returnService: v } : {}) }; }
+  function c2HandleMethod(v: DeliveryMethod) {
+    const ret = c2Opts.copyToReturn ? v : c2Opts.returnMethod
+    c2Opts = { ...c2Opts, rentalMethod: v, ...(c2Opts.copyToReturn ? { returnMethod: v } : {}) }
+    // @ts-expect-error — reservationIds: +page.server.ts 제공
+    saveShipmentMethod((data.reservationIds as string[] | undefined)?.[1], v, ret, c2RentalTime, c2ReturnTime)
+  }
+  function c2HandleReturnMethod(v: DeliveryMethod) {
+    c2Opts = { ...c2Opts, returnMethod: v }
+    // @ts-expect-error — reservationIds: +page.server.ts 제공
+    saveShipmentMethod((data.reservationIds as string[] | undefined)?.[1], c2Opts.rentalMethod, v, c2RentalTime, c2ReturnTime)
+  }
   function c2HandleRentalForm(f: FormState) { c2RentalForm = f; if (c2Opts.copyToReturn) c2ReturnForm = { ...f }; }
   function c2HandleRentalDate(d: string) { c2RentalDate = d; if (c2Opts.copyToReturn) c2ReturnDate = d; }
   function c2HandleRentalTime(t: string) { c2RentalTime = t; if (c2Opts.copyToReturn) c2ReturnTime = t; }
   function c2HandleCopy(v: boolean) {
     if (v) {
-      c2Opts = { ...c2Opts, copyToReturn: true, returnDelivery: c2Opts.rentalDelivery, returnVisit: c2Opts.rentalVisit, returnService: c2Opts.rentalService };
+      c2Opts = { ...c2Opts, copyToReturn: true, returnMethod: c2Opts.rentalMethod };
       c2ReturnForm = { ...c2RentalForm };
       c2ReturnDate = c2RentalDate;
       c2ReturnTime = c2RentalTime;
@@ -177,22 +166,27 @@
     }
   }
 
-  function rpHandleDelivery(v: DeliveryType) { rpRentalDelivery = v; if (rpCopyToReturn) rpReturnDelivery = v; }
-  function rpHandleVisit(v: VisitLocation) { rpRentalVisit = v; if (rpCopyToReturn) rpReturnVisit = v; }
-  function rpHandleService(v: DeliveryService) { rpRentalService = v; if (rpCopyToReturn) rpReturnService = v; }
-  function rpHandleRentalForm(f: FormState) { rpRentalForm = f; if (rpCopyToReturn) rpReturnForm = { ...f }; }
-  function rpHandleRentalDate(d: string) { rpRentalDateVal = d; if (rpCopyToReturn) rpReturnDateVal = d; }
-  function rpHandleRentalTime(t: string) { rpRentalTimeVal2 = t; if (rpCopyToReturn) rpReturnTimeVal2 = t; }
-  function rpHandleCopy(v: boolean) {
-    rpCopyToReturn = v;
-    if (v) {
-      rpReturnDelivery = rpRentalDelivery;
-      rpReturnVisit = rpRentalVisit;
-      rpReturnService = rpRentalService;
-      rpReturnForm = { ...rpRentalForm };
-      rpReturnDateVal = rpRentalDateVal;
-      rpReturnTimeVal2 = rpRentalTimeVal2;
+  function applyBulkSettings() {
+    const m = bulkMethod
+    if (bulkDate) {
+      c1RentalDate = bulkDate; c1ReturnDate = bulkDate
+      c2RentalDate = bulkDate; c2ReturnDate = bulkDate
     }
+    if (bulkTime) {
+      c1RentalTime = bulkTime; c1ReturnTime = bulkTime
+      c2RentalTime = bulkTime; c2ReturnTime = bulkTime
+    }
+    c1Opts = { ...c1Opts, rentalMethod: m, returnMethod: m }
+    c2Opts = { ...c2Opts, rentalMethod: m, returnMethod: m }
+    bulkApplied = true
+    bulkOpen = false
+    // sync_cart_dates() RPC — TASK-D 연동 시 호출 예정
+    csToast.success('전체 상품에 일정이 적용되었습니다.')
+  }
+
+  function resetBulkSettings() {
+    bulkApplied = false
+    // 개별 카드 값은 유지 — 사용자가 필요 시 개별 수정
   }
 
   function displayDate(iso: string): string {
@@ -201,30 +195,91 @@
     return `${y}.${m}.${d}`;
   }
 
-  // ── Footer
+  // ── Guest OTP (비로그인 인증)
+  let guestOtpSent     = $state(false)
+  let guestOtpVerified = $state(false)
+
+  async function requestGuestOtp(email: string) {
+    if (!email) { csToast.error('이메일을 먼저 입력해 주세요.'); return }
+    const { error } = await supabase.auth.signInWithOtp({ email })
+    if (!error) {
+      guestOtpSent = true
+      csToast.success('인증 이메일을 발송했습니다. 메일함을 확인해 주세요.')
+    } else {
+      csToast.error('인증 이메일 발송에 실패했습니다.')
+    }
+  }
+
+  async function verifyGuestOtp(email: string, code: string, form: FormState) {
+    if (!code) { csToast.error('인증번호를 입력해 주세요.'); return }
+    const { error } = await supabase.auth.verifyOtp({ email, token: code, type: 'email' })
+    if (error) { csToast.error('인증번호가 올바르지 않습니다.'); return }
+    const { data: { user } } = await supabase.auth.getUser()
+    if (user) {
+      // @ts-expect-error — sync_checkout_to_profile은 database.ts 미등록 RPC
+      await supabase.rpc('sync_checkout_to_profile', {
+        p_user_id: user.id,
+        p_name:    form.name  || null,
+        p_phone:   form.phone || null,
+        p_address: form.addr  ? `${form.addr} ${form.addrDetail}`.trim() : null,
+      })
+      guestOtpVerified = true
+      csToast.success('인증이 완료되었습니다!')
+    }
+  }
+
+  // ── Footer + canProceed 5조건 가드
   let agreed = $state(false);
   let footerVisible = $state(false);
 
-  onMount(() => {
-    // pendingReservation 처리 (상품 상세 → 예약담기 → 카트)
-    const raw = typeof window !== 'undefined' ? sessionStorage.getItem('pendingReservation') : null;
-    if (raw) {
-      try {
-        pendingReservation = JSON.parse(raw) as PendingReservation;
-        sessionStorage.removeItem('pendingReservation');
-        // 수령일/반납일 자동 세팅 (카드 1 기준)
-        if (pendingReservation.startDate) c1RentalDate = pendingReservation.startDate;
-        if (pendingReservation.endDate) c1ReturnDate = pendingReservation.endDate;
-        if (pendingReservation.startHour != null) c1RentalTime = `${String(pendingReservation.startHour).padStart(2,'0')}:00`;
-        if (pendingReservation.endHour != null) c1ReturnTime = `${String(pendingReservation.endHour).padStart(2,'0')}:00`;
-        if (pendingReservation.qty) c1Qty = pendingReservation.qty;
-        // 수령 아코디언 자동 오픈
-        c1Acc = { ...c1Acc, rental: true };
-      } catch {
-        // ignore malformed data
-      }
-    }
+  // 조건 1: 장바구니에 상품이 1개 이상
+  const hasItems = $derived(!c1Deleted || !c2Deleted)
 
+  // 조건 2: 삭제되지 않은 모든 상품의 날짜(수령일·반납일) 입력됨
+  const datesSet = $derived(
+    (c1Deleted || (c1RentalDate !== '' && c1ReturnDate !== '')) &&
+    (c2Deleted || (c2RentalDate !== '' && c2ReturnDate !== ''))
+  )
+
+  // 조건 3: 배송 마감 미초과 (TASK-D: check_delivery_deadline() 연동 후 대체)
+  const deadlineOk = $derived(true)
+
+  // 조건 4: 신원 확인 완료 — 로그인 세션 또는 게스트 OTP 인증
+  // data.userId는 +page.server.ts 반환값 (PageData 병합 — dev server 기동 시 $types 자동 재생성)
+  const identityOk = $derived(
+    guestOtpVerified ||
+    // @ts-expect-error — userId: +page.server.ts 제공, $types 정적 캐시 미반영
+    (data.userId != null)
+  )
+
+  // 조건 5: 약관 동의
+  // canProceed: 5가지 조건 모두 충족
+  const canProceed = $derived(hasItems && datesSet && deadlineOk && identityOk && agreed)
+
+  function proceedGuideMessage(): string {
+    if (!hasItems)   return '장바구니가 비어 있습니다.'
+    if (!datesSet)   return '모든 상품의 수령일과 반납일을 선택해 주세요.'
+    if (!identityOk) return '본인 확인이 필요합니다. 이메일 인증을 완료해 주세요.'
+    if (!agreed)     return '대여 조건에 동의해 주세요.'
+    return ''
+  }
+
+  // 서버 예약의 대여일·반납일 자동 세팅 (카드 1·2 기준 — 날짜 미선택 시에만)
+  $effect(() => {
+    type CartItemRow = { start_date: string; end_date: string }
+    // @ts-expect-error — serverCartItems: +page.server.ts 제공
+    const items = (data.serverCartItems as CartItemRow[] | undefined) ?? []
+    if (items[0]) {
+      if (!c1RentalDate) c1RentalDate = items[0].start_date
+      if (!c1ReturnDate) c1ReturnDate = items[0].end_date
+    }
+    if (items[1]) {
+      if (!c2RentalDate) c2RentalDate = items[1].start_date
+      if (!c2ReturnDate) c2ReturnDate = items[1].end_date
+    }
+  })
+
+  onMount(() => {
     let lastY = window.scrollY;
     function onScroll() {
       const y = window.scrollY;
@@ -240,12 +295,23 @@
   });
 
   // ── Helpers
-  function optionLabel(delivery: DeliveryType, visit: VisitLocation, service: DeliveryService): string {
-    if (delivery === 'visit') {
-      return visit === 'main' ? '본점' : visit === 'branch1' ? '지점1' : '지점2';
-    }
-    return service === 'crazy' ? '크레이지샷배송' : '당일 퀵배송';
+  const DUR_LABELS: Record<DurationType, string> = {
+    '12h': '12H', '24h': '24H', '1day': '1일', 'purchase': '구매',
   }
+  const DUR_TYPES: DurationType[] = ['12h', '24h', '1day', 'purchase']
+
+  // 기간 유형별 단가 반환 (fixture 폴백용 — 실 DB는 calculate_cart_total RPC)
+  function cardRate(daily: number, half: number, dur: DurationType): number {
+    if (dur === '12h') return half
+    if (dur === 'purchase') return daily * 8  // fixture 임시값 — 실 DB price_rules 기준 연동 예정
+    return daily  // '24h' | '1day'
+  }
+
+  const DELIVERY_LABELS: Record<DeliveryMethod, string> = {
+    crazydelivery: '크레이지배송', quick: '퀵서비스',
+    locker:        '무인보관함',   visit: '직접방문', epost: '택배',
+  };
+  function methodLabel(m: DeliveryMethod): string { return DELIVERY_LABELS[m]; }
 
   function toggleAcc(acc: CardAccordion, key: keyof CardAccordion): CardAccordion {
     if (key === 'rental') return { ...acc, rental: !acc.rental };
@@ -253,12 +319,162 @@
     return { ...acc, fee: !acc.fee };
   }
 
-  // ── Product data helpers
-  const p1 = $derived(data.products.find((p: Product) => p.id === data.cartItems[0]?.product_id));
-  const p2 = $derived(data.products.find((p: Product) => p.id === data.cartItems[1]?.product_id));
-  const p1Rate = $derived(priceConfig[data.cartItems[0]?.product_id as keyof typeof priceConfig]?.daily_rate ?? 150000);
-  const p2Rate = $derived(priceConfig[data.cartItems[1]?.product_id as keyof typeof priceConfig]?.daily_rate ?? 80000);
-  const subItems = $derived(sampleSubItems.filter(s => s.parent_cart_id === data.cartItems[0]?.id));
+  // ── 서버 데이터 추출 (PageData는 +page.ts 기준이므로 server 필드는 캐스트 필요)
+  type ProductRow = { id: string; name: string; category: string; brand: string | null; slug: string; image_urls: string[]; is_active: boolean }
+  type UserCouponExt = { id: string; coupon_id: string; coupons: { id: string; code: string; discount_type: string; discount_value: number; description: string | null; valid_until: string } | null }
+  type ServerExt = { isServerLoaded: boolean; calcTotal: number; calcDiscount: number; calcFinal: number; depositTotal: number; membershipGrade: string | null; userPoints: number; userCoupons: UserCouponExt[]; cartProducts: ProductRow[] }
+  const sd = $derived(data as unknown as ServerExt)
+
+  // ── Product data helpers — 서버 cartProducts 우선, 없으면 fixture 폴백
+  const sdCartProducts = $derived<ProductRow[]>((sd as { cartProducts?: ProductRow[] }).cartProducts ?? [])
+  const p1 = $derived(
+    sdCartProducts[0] ?? data.products.find((p: Product) => p.id === data.cartItems[0]?.product_id) ?? null
+  )
+  const p2 = $derived(sdCartProducts[1] ?? null)
+  // 단가: priceConfig에서 실 product_id 우선 조회 (없으면 기본 단가 폴백)
+  const p1Rate    = $derived(priceConfig[p1?.id ?? '']?.daily_rate   ?? priceConfig[data.cartItems[0]?.product_id]?.daily_rate   ?? 150000)
+  const p1Rate12h = $derived(priceConfig[p1?.id ?? '']?.halfday_rate ?? priceConfig[data.cartItems[0]?.product_id]?.halfday_rate ?? Math.round(p1Rate * 0.6))
+  const p2Rate    = $derived(priceConfig[p2?.id ?? '']?.daily_rate   ?? priceConfig[data.cartItems[1]?.product_id]?.daily_rate   ?? 80000)
+  const p2Rate12h = $derived(priceConfig[p2?.id ?? '']?.halfday_rate ?? priceConfig[data.cartItems[1]?.product_id]?.halfday_rate ?? Math.round(p2Rate * 0.6))
+  const subItems = $derived(sampleSubItems.filter(s => s.parent_cart_id === data.cartItems[0]?.id))
+
+  // 카드별 기간 유형 단가 (fixture 폴백용)
+  const c1CardRate = $derived(cardRate(p1Rate, p1Rate12h, c1DurType))
+  const c2CardRate = $derived(cardRate(p2Rate, p2Rate12h, c2DurType))
+
+  // ── 등급별 할인율 (픽스처 폴백용)
+  const GRADE_RATE: Record<string, number> = { NONE: 0, EASY: 0, POP: 10, CRAZY: 20 }
+
+  const otGrade = $derived<string>(sd.membershipGrade ?? 'NONE')
+  const otDiscountRate = $derived(GRADE_RATE[otGrade] ?? 0)
+
+  // 픽스처 기반 소계 (서버 미로드 시 폴백) — 선택 duration 단가 사용
+  const fixtureSubtotal = $derived(
+    (c1Deleted ? 0 : c1CardRate * Math.max(c1Qty, 1)) +
+    (c2Deleted ? 0 : c2CardRate * c2Qtys.reduce((a, b) => a + b, 0))
+  )
+
+  // 대여료 소계 — RPC subtotal 우선, 없으면 픽스처
+  const otSubtotal = $derived(
+    sd.isServerLoaded && sd.calcTotal > 0 ? sd.calcTotal : fixtureSubtotal
+  )
+
+  // 멤버십 할인 — RPC discount_amount 우선
+  const otMembershipDiscount = $derived(
+    sd.isServerLoaded ? sd.calcDiscount : Math.round(otSubtotal * otDiscountRate / 100)
+  )
+
+  // 배송비: DB rental_method_options.fee_amount 우선, 없으면 하드코딩 폴백
+  // @ts-expect-error — deliveryOptions: +page.server.ts 제공
+  const sdDeliveryOpts = $derived((data.deliveryOptions as Array<{ method_key: string; fee_amount: number; is_free_for_top_grade: boolean }> | undefined) ?? [])
+  function deliveryFee(method: DeliveryMethod, grade: string): number {
+    if (sdDeliveryOpts.length) {
+      const opt = sdDeliveryOpts.find(o => o.method_key === method)
+      if (opt) return (opt.is_free_for_top_grade && grade === 'CRAZY') ? 0 : opt.fee_amount
+    }
+    return method === 'crazydelivery' && grade !== 'CRAZY' ? 3500 : 0
+  }
+
+  // 수령·반납 방식 DB 저장 (hold 예약에만, devMode 무시)
+  type RpcFn = (name: string, args: Record<string, unknown>) => Promise<unknown>
+  async function saveShipmentMethod(
+    resId: string | undefined,
+    pickup: DeliveryMethod,
+    return_: DeliveryMethod,
+    pickupTime?: string,
+    returnTime?: string,
+  ) {
+    if (!resId || !sd.isServerLoaded) return
+    await (supabase.rpc as unknown as RpcFn)('set_reservation_shipment_method', {
+      p_reservation_id: Number(resId),
+      p_pickup_method:  pickup,
+      p_return_method:  return_,
+      p_pickup_time:    pickupTime || null,
+      p_return_time:    returnTime || null,
+    })
+  }
+
+  // 배송 탭 — 카트 상품의 allowed_method_ids 기준으로 rental_method_options 필터링
+  interface DeliveryTabMeta { v: DeliveryMethod; label: string; fee: string; deadline: string }
+  interface DeliveryOptionRow { id: string; method_key: string; name: string; fee_description: string | null; deadline_time: string | null }
+
+  function computeAllowedMethodIds(prods: ProductRow[]): Set<string> | 'all' | 'none' {
+    type P = ProductRow & { allowed_method_ids?: string[] | null }
+    const configured = prods.filter(p => Array.isArray((p as P).allowed_method_ids))
+    // 카트에 실제 DB 상품이 없으면 → 전체 표시 (미로그인/개발모드)
+    if (configured.length === 0) return 'all'
+    const sets = configured.map(p => (p as P).allowed_method_ids as string[])
+    // 모든 카트 상품의 교집합
+    const intersection = sets.reduce((acc, ids) => {
+      const s = new Set(ids)
+      return acc.filter(id => s.has(id))
+    }, [...sets[0]])
+    return intersection.length > 0 ? new Set<string>(intersection) : 'none'
+  }
+
+  // 카트 상품에 설정된 허용 방식 ID 교집합 ('all'=전체, 'none'=없음, Set=필터)
+  const allowedMethodIds = $derived(computeAllowedMethodIds(sdCartProducts))
+  const deliveryTabs = $derived<DeliveryTabMeta[]>(
+    allowedMethodIds === 'none' ? [] :
+    ((data.deliveryOptions as DeliveryOptionRow[] | undefined) ?? [])
+      .filter((o: DeliveryOptionRow) => o.method_key && (allowedMethodIds === 'all' || allowedMethodIds.has(o.id)))
+      .map((o: DeliveryOptionRow) => ({ v: o.method_key as DeliveryMethod, label: o.name, fee: o.fee_description ?? '', deadline: o.deadline_time ?? '' }))
+  );
+  const otDeliveryFee = $derived(
+    (c1Deleted ? 0 : deliveryFee(c1Opts.rentalMethod, otGrade)) +
+    (c2Deleted ? 0 : deliveryFee(c2Opts.rentalMethod, otGrade))
+  )
+
+  // 서버 데이터 안전 추출
+  const sdCoupons = $derived<UserCouponExt[]>((sd as { userCoupons?: UserCouponExt[] }).userCoupons ?? [])
+  const sdUserPoints = $derived<number>((sd as { userPoints?: number }).userPoints ?? 0)
+
+  // 쿠폰 할인 합산
+  const otCouponDiscount = $derived(
+    sdCoupons
+      .filter((uc) => otSelectedCouponIds.has(uc.id) && uc.coupons !== null)
+      .reduce((sum, uc) => {
+        const c = uc.coupons!
+        return sum + (c.discount_type === 'fixed'
+          ? c.discount_value
+          : Math.round(otSubtotal * c.discount_value / 100))
+      }, 0)
+  )
+
+  // 할인 후 금액 (VAT 부과 기준) — RPC final_total 우선
+  const otNetBeforeVat = $derived(
+    sd.isServerLoaded && sd.calcFinal > 0 ? sd.calcFinal : otSubtotal - otMembershipDiscount
+  )
+
+  // VAT 10%
+  const otVat = $derived(Math.round(otNetBeforeVat * 0.1))
+
+  // 포인트 사용 최대값 (보유 포인트 & 결제 금액 중 작은 값)
+  const otMaxPoints = $derived(Math.min(sdUserPoints, Math.max(0, otNetBeforeVat + otVat + otDeliveryFee - otCouponDiscount)))
+
+  // 합계 (VAT + 배송비 + 쿠폰 할인 - 포인트 사용)
+  const otTotal = $derived(Math.max(0, otNetBeforeVat + otVat + otDeliveryFee - otCouponDiscount - otPointsUsed))
+
+  // 보증금 (PRD.1.2.2.1.11) — RPC deposit_required 우선, 없으면 소계 10%
+  const otDeposit = $derived(sd.isServerLoaded ? sd.depositTotal : Math.round(otSubtotal * 0.1))
+
+  // 적립 예정 포인트 (5%)
+  const otEarnPoints = $derived(Math.round(otTotal * 0.05))
+
+  // 대여 기간 (일수)
+  function rentalDays(start: string, end: string): number {
+    if (!start || !end) return 0
+    const diff = new Date(end).getTime() - new Date(start).getTime()
+    return Math.max(0, Math.ceil(diff / 86400000))
+  }
+  const otTotalDays = $derived(
+    (c1Deleted ? 0 : rentalDays(c1RentalDate, c1ReturnDate)) +
+    (c2Deleted ? 0 : rentalDays(c2RentalDate, c2ReturnDate))
+  )
+
+  function fmtKrw(n: number): string {
+    return n === 0 ? '0' : n.toLocaleString('ko-KR')
+  }
 </script>
 
 <!-- ══ 공통 Sub GNB (PC + 모바일) ══ -->
@@ -361,30 +577,6 @@
   <main class="cart-main">
     <div class="cart-content">
 
-      <!-- ── PENDING RESERVATION BANNER ── -->
-      {#if pendingReservation}
-        <div class="pending-banner">
-          <div class="pending-banner-left">
-            <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
-              <circle cx="10" cy="10" r="9" fill="var(--cs-purple)" opacity="0.15"/>
-              <path d="M10 6v4l3 2" stroke="var(--cs-purple)" stroke-width="1.5" stroke-linecap="round"/>
-            </svg>
-            <div>
-              <p class="pending-name">{pendingReservation.productName}</p>
-              <p class="pending-dates">
-                {pendingReservation.startDate} {String(pendingReservation.startHour).padStart(2,'0')}:00
-                → {pendingReservation.endDate} {String(pendingReservation.endHour).padStart(2,'0')}:00
-              </p>
-            </div>
-          </div>
-          <button class="pending-close" onclick={() => pendingReservation = null} aria-label="닫기">
-            <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
-              <path d="M1 1L13 13M13 1L1 13" stroke="var(--cs-text-light)" stroke-width="2" stroke-linecap="round"/>
-            </svg>
-          </button>
-        </div>
-      {/if}
-
       <!-- ── ORDER ITEMS ── -->
       <section class="cs-section">
         <div class="sec-header">
@@ -394,6 +586,65 @@
               <path d="M14.4996 0C15.3281 1.64973e-05 15.9996 0.671583 15.9996 1.5V11.5C15.9992 12.328 15.3278 13 14.4996 13C13.6717 12.9998 13.0001 12.3279 12.9996 11.5V5.12109L10.5602 7.56055L2.5602 15.5596C1.97438 16.1449 1.02473 16.1451 0.439102 15.5596C-0.146507 14.9739 -0.146228 14.0243 0.439102 13.4385L10.8776 3H4.49965C3.67171 2.99979 3.00014 2.32788 2.99965 1.5C2.99965 0.671704 3.6714 0.000212116 4.49965 0H14.4996Z" fill="#100B32"/>
             </svg>
           </div>
+        </div>
+
+        <!-- ── 전체 일괄 설정 패널 -->
+        <div class="bulk-panel" class:bulk-panel-on={bulkApplied}>
+          <button class="bulk-head" onclick={() => bulkOpen = !bulkOpen}>
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true" class="bulk-lock">
+              <rect x="2" y="6" width="12" height="9" rx="2" stroke="currentColor" stroke-width="1.5"/>
+              <path d="M5 6V4.5C5 2.84 6.34 1.5 8 1.5C9.66 1.5 11 2.84 11 4.5V6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+              <circle cx="8" cy="10.5" r="1.5" fill="currentColor"/>
+            </svg>
+            <span class="bulk-head-title">날짜 / 배송 일괄 설정</span>
+            {#if bulkApplied}<span class="bulk-on-chip">적용 중</span>{/if}
+            <svg width="11" height="7" viewBox="0 0 12 8" fill="none" aria-hidden="true" class="bulk-chevron"
+                 style="transform:{bulkOpen ? 'rotate(180deg)' : 'rotate(0deg)'}">
+              <path d="M1 1L6 7L11 1" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+            </svg>
+          </button>
+          {#if bulkOpen}
+            <div transition:slide={{ duration: 250 }} class="bulk-body">
+              <!-- 날짜 + 시간 (2컬럼) -->
+              <div class="bulk-row2">
+                <label class="bulk-group">
+                  <span class="bulk-lbl">날짜</span>
+                  <input type="date" class="bulk-inp" bind:value={bulkDate} />
+                </label>
+                <label class="bulk-group">
+                  <span class="bulk-lbl">시간</span>
+                  <select class="bulk-inp" bind:value={bulkTime}>
+                    {#each Array.from({ length: 24 }, (_, i) => i) as h}
+                      <option value={fmtTime(h)}>{fmtTime(h)}</option>
+                    {/each}
+                  </select>
+                </label>
+              </div>
+              <!-- 배송 방식 — 표준 콤보 버튼 (§16) -->
+              <div class="bulk-group">
+                <span class="bulk-lbl">배송 방식</span>
+                <div class="delivery-combo">
+                  {#each deliveryTabs as tab}
+                    <button
+                      class="combo-btn"
+                      class:combo-btn-active={bulkMethod === tab.v}
+                      onclick={() => bulkMethod = tab.v}
+                    >
+                      <span class="combo-label">{tab.label}</span>
+                      {#if tab.fee}<span class="combo-fee">{tab.fee}</span>{/if}
+                    </button>
+                  {/each}
+                </div>
+              </div>
+              <!-- 버튼 -->
+              <div class="bulk-foot">
+                {#if bulkApplied}
+                  <button class="bulk-reset" onclick={resetBulkSettings}>개별 설정</button>
+                {/if}
+                <button class="bulk-apply" onclick={applyBulkSettings}>전체 적용</button>
+              </div>
+            </div>
+          {/if}
         </div>
 
         <!-- Card 1: Simple -->
@@ -423,11 +674,13 @@
               <!-- Product Row -->
               <div class="product-row">
                 <div class="product-img">
-                  <img src="https://picsum.photos/seed/{p1?.slug ?? 'cam'}/150/150" alt={p1?.name ?? 'Sony FX6'} width="150" height="150"/>
+                  <img src={p1?.image_urls?.[0] ?? 'https://picsum.photos/seed/cam/150/150'} alt={p1?.name ?? 'Sony FX6'} width="150" height="150"/>
                 </div>
                 <div class="product-meta">
                   <p class="product-name">{p1?.name ?? 'Sony FX6'}</p>
-                  <p class="product-price">day {p1Rate.toLocaleString()} 원 &nbsp;|&nbsp; 12H {Math.round(p1Rate * 0.6).toLocaleString()} 원</p>
+                  <p class="product-price">
+                    {c1CardRate.toLocaleString()} 원
+                  </p>
                   <div class="product-badges">
                     <div class="badge-mem">
                       <svg viewBox="0 0 40 40" fill="none" class="badge-svg">
@@ -458,13 +711,13 @@
               </div>
 
               <!-- Accordions -->
-              <div class="accordions">
+              <div class="accordions" class:bulk-locked={bulkApplied}>
                 <!-- 대여 방법 -->
                 <div class="acc-item">
                   <button class="acc-head" onclick={() => c1Acc = toggleAcc(c1Acc, 'rental')}>
                     <span class="acc-label">대여 방법</span>
                     <div class="acc-head-right">
-                      <span class="acc-value">{optionLabel(c1Opts.rentalDelivery, c1Opts.rentalVisit, c1Opts.rentalService)}</span>
+                      <span class="acc-value">{methodLabel(c1Opts.rentalMethod)}</span>
                       <svg width="12" height="8" viewBox="0 0 12 8" fill="none" style="transition:transform 0.3s;transform:{c1Acc.rental ? 'rotate(180deg)' : 'none'}">
                         <path d="M1 1L6 7L11 1" stroke="#444" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
                       </svg>
@@ -472,7 +725,7 @@
                   </button>
                   {#if c1Acc.rental}
                     <div transition:slide={{ duration: 300 }} class="acc-body">
-                      {@render RentalForm({ type: 'rental', calId: 'c1-rental', selectedDate: c1RentalDate, onDateChange: c1HandleRentalDate, timeId: 'c1-rental-t', selectedTime: c1RentalTime, onTimeChange: c1HandleRentalTime, delivery: c1Opts.rentalDelivery, visitLoc: c1Opts.rentalVisit, service: c1Opts.rentalService, form: c1RentalForm, copyToReturn: c1Opts.copyToReturn, onDeliveryChange: c1HandleDelivery, onVisitChange: c1HandleVisit, onServiceChange: c1HandleService, onFormChange: c1HandleRentalForm, onCopyChange: c1HandleCopy })}
+                      {@render RentalForm({ type: 'rental', calId: 'c1-rental', selectedDate: c1RentalDate, onDateChange: c1HandleRentalDate, timeId: 'c1-rental-t', selectedTime: c1RentalTime, onTimeChange: c1HandleRentalTime, method: c1Opts.rentalMethod, form: c1RentalForm, copyToReturn: c1Opts.copyToReturn, onMethodChange: c1HandleMethod, onFormChange: c1HandleRentalForm, onCopyChange: c1HandleCopy })}
                     </div>
                   {/if}
                 </div>
@@ -481,7 +734,7 @@
                   <button class="acc-head" onclick={() => c1Acc = toggleAcc(c1Acc, 'return_')}>
                     <span class="acc-label">반납 방법</span>
                     <div class="acc-head-right">
-                      <span class="acc-value">{optionLabel(c1Opts.returnDelivery, c1Opts.returnVisit, c1Opts.returnService)}</span>
+                      <span class="acc-value">{methodLabel(c1Opts.returnMethod)}</span>
                       <svg width="12" height="8" viewBox="0 0 12 8" fill="none" style="transition:transform 0.3s;transform:{c1Acc.return_ ? 'rotate(180deg)' : 'none'}">
                         <path d="M1 1L6 7L11 1" stroke="#444" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
                       </svg>
@@ -489,7 +742,7 @@
                   </button>
                   {#if c1Acc.return_}
                     <div transition:slide={{ duration: 300 }} class="acc-body">
-                      {@render RentalForm({ type: 'return', calId: 'c1-return', selectedDate: c1ReturnDate, onDateChange: (d) => c1ReturnDate = d, timeId: 'c1-return-t', selectedTime: c1ReturnTime, onTimeChange: (t) => c1ReturnTime = t, delivery: c1Opts.returnDelivery, visitLoc: c1Opts.returnVisit, service: c1Opts.returnService, form: c1ReturnForm, onDeliveryChange: (v) => c1Opts = { ...c1Opts, returnDelivery: v }, onVisitChange: (v) => c1Opts = { ...c1Opts, returnVisit: v }, onServiceChange: (v) => c1Opts = { ...c1Opts, returnService: v }, onFormChange: (f) => c1ReturnForm = f })}
+                      {@render RentalForm({ type: 'return', calId: 'c1-return', selectedDate: c1ReturnDate, onDateChange: (d) => c1ReturnDate = d, timeId: 'c1-return-t', selectedTime: c1ReturnTime, onTimeChange: (t) => c1ReturnTime = t, method: c1Opts.returnMethod, form: c1ReturnForm, onMethodChange: c1HandleReturnMethod, onFormChange: (f) => c1ReturnForm = f })}
                     </div>
                   {/if}
                 </div>
@@ -498,7 +751,7 @@
                   <button class="acc-head" onclick={() => c1Acc = toggleAcc(c1Acc, 'fee')}>
                     <span class="acc-label">약정 요금</span>
                     <div class="acc-head-right">
-                      <span class="acc-value">153,000 원</span>
+                      <span class="acc-value">{(c1CardRate * c1Qty).toLocaleString()} 원</span>
                       <svg width="12" height="8" viewBox="0 0 12 8" fill="none" style="transition:transform 0.3s;transform:{c1Acc.fee ? 'rotate(180deg)' : 'none'}">
                         <path d="M1 1L6 7L11 1" stroke="#444" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
                       </svg>
@@ -506,7 +759,17 @@
                   </button>
                   {#if c1Acc.fee}
                     <div transition:slide={{ duration: 300 }} class="acc-body">
-                      {@render FeeContent({ couponWelcome: c1Opts.couponWelcome, couponMembership: c1Opts.couponMembership, onCouponWelcome: () => c1Opts = { ...c1Opts, couponWelcome: !c1Opts.couponWelcome }, onCouponMembership: () => c1Opts = { ...c1Opts, couponMembership: !c1Opts.couponMembership } })}
+                      {@render FeeContent({
+                        couponWelcome: c1Opts.couponWelcome,
+                        couponMembership: c1Opts.couponMembership,
+                        onCouponWelcome: () => c1Opts = { ...c1Opts, couponWelcome: !c1Opts.couponWelcome },
+                        onCouponMembership: () => c1Opts = { ...c1Opts, couponMembership: !c1Opts.couponMembership },
+                        subtotal: c1CardRate * Math.max(c1Qty, 1),
+                        discountAmt: Math.round(c1CardRate * Math.max(c1Qty, 1) * otDiscountRate / 100),
+                        deliveryFeeAmt: deliveryFee(c1Opts.rentalMethod, otGrade),
+                        totalDays: rentalDays(c1RentalDate, c1ReturnDate),
+                        durLabel: DUR_LABELS[c1DurType],
+                      })}
                     </div>
                   {/if}
                 </div>
@@ -515,8 +778,8 @@
           </div>
         {/if}
 
-        <!-- Card 2: Complex with sub-items -->
-        {#if !c2Deleted}
+        <!-- Card 2: Complex with sub-items — 실 DB 2번째 예약이 있을 때만 노출 -->
+        {#if !c2Deleted && p2 !== null}
           <div class="order-card">
             <div class="order-card-inner">
               <!-- Check & Delete -->
@@ -542,11 +805,24 @@
               <!-- Main product -->
               <div class="product-row">
                 <div class="product-img">
-                  <img src="https://picsum.photos/seed/{p2?.slug ?? 'gimbal'}/150/150" alt={p2?.name ?? 'DJI RS4 Pro'} width="150" height="150"/>
+                  <img src={p2?.image_urls?.[0] ?? 'https://picsum.photos/seed/gimbal/150/150'} alt={p2?.name ?? 'DJI RS4 Pro'} width="150" height="150"/>
                 </div>
                 <div class="product-meta">
                   <p class="product-name">{p2?.name ?? 'DJI RS4 Pro'}</p>
-                  <p class="product-price">day {p2Rate.toLocaleString()} 원 &nbsp;|&nbsp; 12H {Math.round(p2Rate * 0.6).toLocaleString()} 원</p>
+                  <div class="dur-tabs" role="group" aria-label="대여 기간 유형">
+                    {#each DUR_TYPES as d}
+                      <button
+                        class="dur-tab"
+                        class:dur-tab-active={c2DurType === d}
+                        onclick={() => c2DurType = d}
+                        aria-pressed={c2DurType === d}
+                      >{DUR_LABELS[d]}</button>
+                    {/each}
+                  </div>
+                  <p class="product-price">
+                    {DUR_LABELS[c2DurType]}&nbsp;
+                    {c2DurType === 'purchase' ? '별도 문의' : `${c2CardRate.toLocaleString()} 원`}
+                  </p>
                   <div class="product-badges">
                     <div class="badge-mem">
                       <svg viewBox="0 0 40 40" fill="none" class="badge-svg">
@@ -587,11 +863,11 @@
                   <div class="sub-content">
                     <div class="product-row">
                       <div class="product-img sub-img">
-                        <img src="https://picsum.photos/seed/{sub.slug}/150/150" alt={sub.name} width="150" height="150"/>
+                        <img src={sub.imageUrl ?? 'https://picsum.photos/seed/' + sub.slug + '/150/150'} alt={sub.name} width="150" height="150"/>
                       </div>
                       <div class="product-meta">
                         <p class="product-name">{sub.name}</p>
-                        <p class="product-price">day {sub.daily_rate.toLocaleString()} 원 &nbsp;|&nbsp; 12H {Math.round(sub.daily_rate * 0.6).toLocaleString()} 원</p>
+                        <p class="product-price">day {sub.daily_rate.toLocaleString()} 원 &nbsp;|&nbsp; 12H {(sub.halfday_rate ?? Math.round(sub.daily_rate * 0.6)).toLocaleString()} 원</p>
                         <div class="product-badges">
                           <div class="badge-mem">
                             <svg viewBox="0 0 40 40" fill="none" class="badge-svg">
@@ -619,12 +895,12 @@
               {/each}
 
               <!-- Accordions -->
-              <div class="accordions">
+              <div class="accordions" class:bulk-locked={bulkApplied}>
                 <div class="acc-item">
                   <button class="acc-head" onclick={() => c2Acc = toggleAcc(c2Acc, 'rental')}>
                     <span class="acc-label">대여 방법</span>
                     <div class="acc-head-right">
-                      <span class="acc-value">{optionLabel(c2Opts.rentalDelivery, c2Opts.rentalVisit, c2Opts.rentalService)}</span>
+                      <span class="acc-value">{methodLabel(c2Opts.rentalMethod)}</span>
                       <svg width="12" height="8" viewBox="0 0 12 8" fill="none" style="transition:transform 0.3s;transform:{c2Acc.rental ? 'rotate(180deg)' : 'none'}">
                         <path d="M1 1L6 7L11 1" stroke="#444" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
                       </svg>
@@ -632,7 +908,7 @@
                   </button>
                   {#if c2Acc.rental}
                     <div transition:slide={{ duration: 300 }} class="acc-body">
-                      {@render RentalForm({ type: 'rental', calId: 'c2-rental', selectedDate: c2RentalDate, onDateChange: c2HandleRentalDate, timeId: 'c2-rental-t', selectedTime: c2RentalTime, onTimeChange: c2HandleRentalTime, delivery: c2Opts.rentalDelivery, visitLoc: c2Opts.rentalVisit, service: c2Opts.rentalService, form: c2RentalForm, copyToReturn: c2Opts.copyToReturn, onDeliveryChange: c2HandleDelivery, onVisitChange: c2HandleVisit, onServiceChange: c2HandleService, onFormChange: c2HandleRentalForm, onCopyChange: c2HandleCopy })}
+                      {@render RentalForm({ type: 'rental', calId: 'c2-rental', selectedDate: c2RentalDate, onDateChange: c2HandleRentalDate, timeId: 'c2-rental-t', selectedTime: c2RentalTime, onTimeChange: c2HandleRentalTime, method: c2Opts.rentalMethod, form: c2RentalForm, copyToReturn: c2Opts.copyToReturn, onMethodChange: c2HandleMethod, onFormChange: c2HandleRentalForm, onCopyChange: c2HandleCopy })}
                     </div>
                   {/if}
                 </div>
@@ -640,7 +916,7 @@
                   <button class="acc-head" onclick={() => c2Acc = toggleAcc(c2Acc, 'return_')}>
                     <span class="acc-label">반납 방법</span>
                     <div class="acc-head-right">
-                      <span class="acc-value">{optionLabel(c2Opts.returnDelivery, c2Opts.returnVisit, c2Opts.returnService)}</span>
+                      <span class="acc-value">{methodLabel(c2Opts.returnMethod)}</span>
                       <svg width="12" height="8" viewBox="0 0 12 8" fill="none" style="transition:transform 0.3s;transform:{c2Acc.return_ ? 'rotate(180deg)' : 'none'}">
                         <path d="M1 1L6 7L11 1" stroke="#444" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
                       </svg>
@@ -648,7 +924,7 @@
                   </button>
                   {#if c2Acc.return_}
                     <div transition:slide={{ duration: 300 }} class="acc-body">
-                      {@render RentalForm({ type: 'return', calId: 'c2-return', selectedDate: c2ReturnDate, onDateChange: (d) => c2ReturnDate = d, timeId: 'c2-return-t', selectedTime: c2ReturnTime, onTimeChange: (t) => c2ReturnTime = t, delivery: c2Opts.returnDelivery, visitLoc: c2Opts.returnVisit, service: c2Opts.returnService, form: c2ReturnForm, onDeliveryChange: (v) => c2Opts = { ...c2Opts, returnDelivery: v }, onVisitChange: (v) => c2Opts = { ...c2Opts, returnVisit: v }, onServiceChange: (v) => c2Opts = { ...c2Opts, returnService: v }, onFormChange: (f) => c2ReturnForm = f })}
+                      {@render RentalForm({ type: 'return', calId: 'c2-return', selectedDate: c2ReturnDate, onDateChange: (d) => c2ReturnDate = d, timeId: 'c2-return-t', selectedTime: c2ReturnTime, onTimeChange: (t) => c2ReturnTime = t, method: c2Opts.returnMethod, form: c2ReturnForm, onMethodChange: c2HandleReturnMethod, onFormChange: (f) => c2ReturnForm = f })}
                     </div>
                   {/if}
                 </div>
@@ -656,7 +932,7 @@
                   <button class="acc-head" onclick={() => c2Acc = toggleAcc(c2Acc, 'fee')}>
                     <span class="acc-label">약정 요금</span>
                     <div class="acc-head-right">
-                      <span class="acc-value">154,000 원</span>
+                      <span class="acc-value">{(c2CardRate * c2Qtys[0]).toLocaleString()} 원</span>
                       <svg width="12" height="8" viewBox="0 0 12 8" fill="none" style="transition:transform 0.3s;transform:{c2Acc.fee ? 'rotate(180deg)' : 'none'}">
                         <path d="M1 1L6 7L11 1" stroke="#444" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
                       </svg>
@@ -664,7 +940,17 @@
                   </button>
                   {#if c2Acc.fee}
                     <div transition:slide={{ duration: 300 }} class="acc-body">
-                      {@render FeeContent({ couponWelcome: c2Opts.couponWelcome, couponMembership: c2Opts.couponMembership, onCouponWelcome: () => c2Opts = { ...c2Opts, couponWelcome: !c2Opts.couponWelcome }, onCouponMembership: () => c2Opts = { ...c2Opts, couponMembership: !c2Opts.couponMembership } })}
+                      {@render FeeContent({
+                        couponWelcome: c2Opts.couponWelcome,
+                        couponMembership: c2Opts.couponMembership,
+                        onCouponWelcome: () => c2Opts = { ...c2Opts, couponWelcome: !c2Opts.couponWelcome },
+                        onCouponMembership: () => c2Opts = { ...c2Opts, couponMembership: !c2Opts.couponMembership },
+                        subtotal: c2CardRate * (c2Qtys[0] ?? 1),
+                        discountAmt: Math.round(c2CardRate * (c2Qtys[0] ?? 1) * otDiscountRate / 100),
+                        deliveryFeeAmt: deliveryFee(c2Opts.rentalMethod, otGrade),
+                        totalDays: rentalDays(c2RentalDate, c2ReturnDate),
+                        durLabel: DUR_LABELS[c2DurType],
+                      })}
                     </div>
                   {/if}
                 </div>
@@ -680,51 +966,6 @@
         {/if}
       </section>
 
-      <!-- ── RENTAL OPTIONS ── -->
-      <section class="cs-section">
-        <div class="sec-header">
-          <span class="sec-title">Rental Options</span>
-        </div>
-        <div class="order-card">
-          <div class="order-card-inner no-gap-top">
-            <!-- 대여 방법 -->
-            <div class="acc-item">
-              <button class="acc-head" onclick={() => rpRentalOpen = !rpRentalOpen}>
-                <span class="acc-label">대여 방법</span>
-                <div class="acc-head-right">
-                  <span class="acc-value">{optionLabel(rpRentalDelivery, rpRentalVisit, rpRentalService)}</span>
-                  <svg width="12" height="8" viewBox="0 0 12 8" fill="none" style="transition:transform 0.3s;transform:{rpRentalOpen ? 'rotate(180deg)' : 'none'}">
-                    <path d="M1 1L6 7L11 1" stroke="#444" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
-                  </svg>
-                </div>
-              </button>
-              {#if rpRentalOpen}
-                <div transition:slide={{ duration: 300 }} class="acc-body">
-                  {@render RentalForm({ type: 'rental', calId: 'rp-rental', selectedDate: rpRentalDateVal, onDateChange: rpHandleRentalDate, timeId: 'rp-rental-t', selectedTime: rpRentalTimeVal2, onTimeChange: rpHandleRentalTime, delivery: rpRentalDelivery, visitLoc: rpRentalVisit, service: rpRentalService, form: rpRentalForm, copyToReturn: rpCopyToReturn, onDeliveryChange: rpHandleDelivery, onVisitChange: rpHandleVisit, onServiceChange: rpHandleService, onFormChange: rpHandleRentalForm, onCopyChange: rpHandleCopy })}
-                </div>
-              {/if}
-            </div>
-            <!-- 반납 방법 -->
-            <div class="acc-item">
-              <button class="acc-head" onclick={() => rpReturnOpen = !rpReturnOpen}>
-                <span class="acc-label">반납 방법</span>
-                <div class="acc-head-right">
-                  <span class="acc-value">{optionLabel(rpReturnDelivery, rpReturnVisit, rpReturnService)}</span>
-                  <svg width="12" height="8" viewBox="0 0 12 8" fill="none" style="transition:transform 0.3s;transform:{rpReturnOpen ? 'rotate(180deg)' : 'none'}">
-                    <path d="M1 1L6 7L11 1" stroke="#444" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
-                  </svg>
-                </div>
-              </button>
-              {#if rpReturnOpen}
-                <div transition:slide={{ duration: 300 }} class="acc-body">
-                  {@render RentalForm({ type: 'return', calId: 'rp-return', selectedDate: rpReturnDateVal, onDateChange: (d) => rpReturnDateVal = d, timeId: 'rp-return-t', selectedTime: rpReturnTimeVal2, onTimeChange: (t) => rpReturnTimeVal2 = t, delivery: rpReturnDelivery, visitLoc: rpReturnVisit, service: rpReturnService, form: rpReturnForm, onDeliveryChange: (v) => rpReturnDelivery = v, onVisitChange: (v) => rpReturnVisit = v, onServiceChange: (v) => rpReturnService = v, onFormChange: (f) => rpReturnForm = f })}
-                </div>
-              {/if}
-            </div>
-          </div>
-        </div>
-      </section>
-
       <!-- ── ORDER TOTAL ── -->
       <section class="cs-section">
         <div class="sec-header">
@@ -737,10 +978,44 @@
           <div class="total-white-section">
             <span class="section-sub-label">사용 가능한 쿠폰</span>
             <div class="coupon-list">
-              {@render CouponRow({ label: '월컴쿠폰 10%', days: 52, checked: otCouponWelcome, onToggle: () => otCouponWelcome = !otCouponWelcome })}
-              {@render CouponRow({ label: '멤버십 할인 쿠폰 10%', days: 250, checked: otCouponMembership, onToggle: () => otCouponMembership = !otCouponMembership })}
+              {#each sdCoupons as uc (uc.id)}
+                {#if uc.coupons}
+                  {@const c = uc.coupons}
+                  {@const daysLeft = Math.max(0, Math.ceil((new Date(c.valid_until).getTime() - Date.now()) / 86400000))}
+                  {@const couponLabel = c.description ?? (c.discount_type === 'fixed' ? `${fmtKrw(c.discount_value)}원 할인` : `${c.discount_value}% 할인`)}
+                  {@render CouponRow({
+                    label: couponLabel,
+                    days: daysLeft,
+                    checked: otSelectedCouponIds.has(uc.id),
+                    onToggle: () => {
+                      const s = new Set(otSelectedCouponIds)
+                      if (s.has(uc.id)) s.delete(uc.id); else s.add(uc.id)
+                      otSelectedCouponIds = s
+                    },
+                  })}
+                {/if}
+              {:else}
+                <p class="hint-text">사용 가능한 쿠폰이 없습니다.</p>
+              {/each}
             </div>
-            <p class="hint-text">선택 불가능한 쿠폰은 본 결제 시 중복 적용이 불가능합니다.</p>
+            <p class="hint-text">중복 쿠폰 적용은 불가능합니다.</p>
+
+            <!-- 포인트 사용 -->
+            <span class="section-sub-label" style="margin-top: 16px; display: block;">포인트 사용</span>
+            <div class="points-input-row">
+              <input
+                type="number"
+                class="points-input"
+                min="0"
+                max={otMaxPoints}
+                value={otPointsUsed}
+                oninput={(e) => {
+                  const v = Math.min(otMaxPoints, Math.max(0, parseInt((e.target as HTMLInputElement).value) || 0))
+                  otPointsUsed = v
+                }}
+              />
+              <span class="points-avail">보유 <strong>{fmtKrw(sdUserPoints)}</strong>p</span>
+            </div>
           </div>
 
           <!-- 약정요금 섹션 (gray bg) -->
@@ -748,24 +1023,47 @@
             <span class="section-sub-label">약정 요금</span>
             <div class="price-detail-list">
               <div class="price-period-row">
-                <span class="price-period-label">총 대여일정</span>
+                <span class="price-period-label">총 대여기간</span>
                 <div class="price-period-values">
-                  <div class="period-val"><span class="period-num">3</span><span class="period-unit">일</span></div>
-                  <div class="period-val"><span class="period-num">12:00</span><span class="period-unit">시간</span></div>
+                  {#if otTotalDays > 0}
+                    <div class="period-val"><span class="period-num">{otTotalDays}</span><span class="period-unit">일</span></div>
+                  {:else}
+                    <span class="period-unset">날짜 미선택</span>
+                  {/if}
                 </div>
               </div>
-              {@render PriceRow({ label: '대여요금', value: '150,000' })}
-              {@render PriceRow({ label: '할인요금', value: '-110,000' })}
-              {@render PriceRow({ label: '배송요금', value: '7,000' })}
-              {@render PriceRow({ label: '부가세(10%)', value: '7,000' })}
+              {@render PriceRow({ label: '대여요금', value: fmtKrw(otSubtotal) })}
+              {#if otMembershipDiscount > 0}
+                {@render PriceRow({ label: `멤버십 할인 (${otDiscountRate}%)`, value: `-${fmtKrw(otMembershipDiscount)}` })}
+              {/if}
+              {#if otCouponDiscount > 0}
+                {@render PriceRow({ label: '쿠폰 할인', value: `-${fmtKrw(otCouponDiscount)}` })}
+              {/if}
+              {@render PriceRow({ label: '배송요금', value: otDeliveryFee > 0 ? fmtKrw(otDeliveryFee) : '무료' })}
+              {@render PriceRow({ label: '부가세 (10%)', value: fmtKrw(otVat) })}
+              {#if otPointsUsed > 0}
+                {@render PriceRow({ label: '포인트 사용', value: `-${fmtKrw(otPointsUsed)}` })}
+              {/if}
               <div class="price-divider"></div>
-              {@render PriceRow({ label: '합계요금', value: '154,000', large: true })}
+              {@render PriceRow({ label: '합계요금', value: fmtKrw(otTotal), large: true })}
               <div class="points-row">
-                <span class="points-label">적립포인트</span>
-                <div class="points-value"><span class="points-num">7,000</span><span class="points-unit">p</span></div>
+                <span class="points-label">적립 예정 포인트</span>
+                <div class="points-value"><span class="points-num">{fmtKrw(otEarnPoints)}</span><span class="points-unit">p</span></div>
               </div>
             </div>
           </div>
+        </div>
+
+        <!-- 보증금 별도 고지 (PRD.1.2.2.1.11) -->
+        <div class="deposit-notice">
+          <div class="deposit-notice-row">
+            <span class="deposit-label">보증금 (별도)</span>
+            <div class="deposit-amount">
+              <span class="deposit-num">{fmtKrw(otDeposit)}</span>
+              <span class="deposit-unit">원</span>
+            </div>
+          </div>
+          <p class="deposit-note">보증금은 대여 합계금액과 별도로 청구되며 반납 완료 후 전액 환불됩니다.</p>
         </div>
 
         <!-- Total dark box -->
@@ -773,14 +1071,14 @@
           <div class="total-dark-row">
             <span class="total-label">총 약정요금</span>
             <div class="total-amount">
-              <span class="total-num">254,000</span>
+              <span class="total-num">{fmtKrw(otTotal)}</span>
               <span class="total-unit">원</span>
             </div>
           </div>
           <div class="total-dark-row total-points-row">
-            <span class="total-points-label">적립포인트</span>
+            <span class="total-points-label">적립 예정 포인트</span>
             <div class="total-points-val">
-              <span>7,000</span>
+              <span>{fmtKrw(otEarnPoints)}</span>
               <span>p</span>
             </div>
           </div>
@@ -808,12 +1106,15 @@
         </button>
         <span class="footer-terms-text">등록한 대여 조건에 모두 동의합니다.</span>
       </label>
+      {#if !canProceed && footerVisible}
+        <p class="footer-guide" role="alert">{proceedGuideMessage()}</p>
+      {/if}
       <button
         class="footer-cta"
-        class:footer-cta-active={agreed}
-        class:footer-cta-disabled={!agreed}
-        disabled={!agreed}
-        onclick={() => { if (agreed) alert('결제 시뮬레이션 — 실제 TossPayments 연동은 M3에서 구현됩니다.'); }}
+        class:footer-cta-active={canProceed}
+        class:footer-cta-disabled={!canProceed}
+        disabled={!canProceed}
+        onclick={() => { if (canProceed) alert('결제 시뮬레이션 — 실제 TossPayments 연동은 M3에서 구현됩니다.'); }}
       >
         가입하고 지금 예약하세요
       </button>
@@ -822,13 +1123,13 @@
 
 </div>
 
+<BottomTabBar />
+
 <!-- ═══════════════════════ SNIPPET COMPONENTS ═══════════════════════ -->
 
 {#snippet RentalForm(props: {
   type: 'rental' | 'return';
-  delivery: DeliveryType;
-  visitLoc: VisitLocation;
-  service: DeliveryService;
+  method: DeliveryMethod;
   form: FormState;
   calId: string;
   selectedDate: string;
@@ -837,54 +1138,43 @@
   selectedTime: string;
   onTimeChange: (t: string) => void;
   copyToReturn?: boolean;
-  onDeliveryChange: (v: DeliveryType) => void;
-  onVisitChange: (v: VisitLocation) => void;
-  onServiceChange: (v: DeliveryService) => void;
+  onMethodChange: (v: DeliveryMethod) => void;
   onFormChange: (f: FormState) => void;
   onCopyChange?: (v: boolean) => void;
 })}
-  {@const methodLabel = props.type === 'rental' ? '수령 방식' : '반납 방식'}
+  {@const sectionLabel = props.type === 'rental' ? '수령 방식' : '반납 방식'}
   {@const dateLabel = props.type === 'rental' ? '수령일' : '반납일'}
   {@const timeLabel = props.type === 'rental' ? '수령시간' : '반납시간'}
   {@const addrLabel = props.type === 'rental' ? '배송지 정보' : '반납위치 지정정보'}
   {@const addrNote = props.type === 'rental'
-    ? '배송 선택 시 대여 시작일은 상품 예약승인 및 배송일을 고려해 최소 2일 전까지 가능합니다.'
-    : '반납 방식이 대여 방식과 다를 경우 배송료 추가가 발생할 수 있습니다.'}
+    ? '대여 시작일은 배송일 기준 최소 2일 전까지 선택 가능합니다.'
+    : '반납 방식이 수령 방식과 다를 경우 추가 비용이 발생할 수 있습니다.'}
   {@const isCalOpen = openCalId === props.calId}
   {@const isTimeOpen = openTimeId === props.timeId}
+
 
   <div class="rental-form">
     <!-- 수령/반납 방식 -->
     <div class="form-section">
-      <span class="form-section-label">{methodLabel}</span>
+      <span class="form-section-label">{sectionLabel}</span>
       <div class="form-section-body">
-        <!-- Location selector -->
-        <div class="location-selector">
-          <div class="location-group">
-            <span class="location-cat-label">방문</span>
-            <div class="location-options">
-              {#each [{ v: 'main' as VisitLocation, l: '본점' }, { v: 'branch1' as VisitLocation, l: '지점1' }, { v: 'branch2' as VisitLocation, l: '지점2' }] as opt}
-                <button
-                  class="loc-badge"
-                  class:loc-badge-active={props.delivery === 'visit' && props.visitLoc === opt.v}
-                  onclick={() => { props.onDeliveryChange('visit'); props.onVisitChange(opt.v); }}
-                >{opt.l}</button>
-              {/each}
-            </div>
-          </div>
-          <div class="location-group">
-            <span class="location-cat-label">배송</span>
-            <div class="location-options">
-              {#each [{ v: 'crazy' as DeliveryService, l: '크레이지샷배송' }, { v: 'quick' as DeliveryService, l: '당일 퀵배송' }] as opt}
-                <button
-                  class="loc-badge"
-                  class:loc-badge-active={props.delivery === 'delivery' && props.service === opt.v}
-                  onclick={() => { props.onDeliveryChange('delivery'); props.onServiceChange(opt.v); }}
-                >{opt.l}</button>
-              {/each}
-            </div>
-          </div>
+        <!-- DB rental_method_options → 콤보 버튼 -->
+        <div class="delivery-combo">
+          {#each deliveryTabs as tab}
+            <button
+              class="combo-btn"
+              class:combo-btn-active={props.method === tab.v}
+              onclick={() => props.onMethodChange(tab.v)}
+            >
+              <span class="combo-label">{tab.label}</span>
+              {#if tab.fee}<span class="combo-fee">{tab.fee}</span>{/if}
+            </button>
+          {/each}
         </div>
+        <!-- 선택된 방식 마감 정보 -->
+        {#each deliveryTabs.filter(t => t.v === props.method) as tab}
+          {#if tab.deadline}<p class="delivery-deadline">⏰ {tab.deadline}</p>{/if}
+        {/each}
         <!-- Date/Time buttons + Calendar -->
         <div class="datetime-wrap">
           <div class="datetime-btns">
@@ -967,11 +1257,11 @@
         <input class="f-input" placeholder="전자메일주소 입력" value={props.form.email} oninput={(e) => props.onFormChange({ ...props.form, email: readInputValue(e) })}/>
         <div class="f-row">
           <input class="f-input f-grow" placeholder="휴대번호를 '-' 없이 입력" value={props.form.phone} oninput={(e) => props.onFormChange({ ...props.form, phone: readInputValue(e) })}/>
-          <button class="f-action-btn">인증실행</button>
+          <button class="f-action-btn" onclick={() => requestGuestOtp(props.form.email)}>인증실행</button>
         </div>
         <div class="f-row">
           <input class="f-input f-grow" placeholder="6자리 인증번호를 입력" value={props.form.authCode} oninput={(e) => props.onFormChange({ ...props.form, authCode: readInputValue(e) })}/>
-          <button class="f-action-btn">인증확인</button>
+          <button class="f-action-btn" onclick={() => verifyGuestOtp(props.form.email, props.form.authCode, props.form)}>인증확인</button>
         </div>
       </div>
     </div>
@@ -1001,8 +1291,7 @@
         <input class="f-input" placeholder="기본주소 입력" value={props.form.addr} oninput={(e) => props.onFormChange({ ...props.form, addr: readInputValue(e) })}/>
         <input class="f-input" placeholder="상세주소 입력" value={props.form.addrDetail} oninput={(e) => props.onFormChange({ ...props.form, addrDetail: readInputValue(e) })}/>
       </div>
-      <p class="form-note-sm">-직접 {props.type === 'rental' ? '수령' : '반납'}(공항, 고객센터) 선택 시 자동 노출 스크립트</p>
-      {#if props.visitLoc !== 'none'}
+      {#if props.method === 'visit'}
         <div class="visit-info">
           <p>인천공항 제1터미널 도착홀 D, 5번 게이트 대면 수령</p>
           <p>가양동 사옥 1층 고객센터 방문 수령</p>
@@ -1042,7 +1331,15 @@
   couponMembership: boolean;
   onCouponWelcome: () => void;
   onCouponMembership: () => void;
+  subtotal: number;
+  discountAmt: number;
+  deliveryFeeAmt: number;
+  totalDays: number;
+  durLabel: string;
 })}
+  {@const vat = Math.round((props.subtotal - props.discountAmt) * 0.1)}
+  {@const cardTotal = props.subtotal - props.discountAmt + vat + props.deliveryFeeAmt}
+  {@const earnPts = Math.round(cardTotal * 0.05)}
   <div class="fee-content">
     <div class="form-section">
       <span class="form-section-label">사용 가능한 쿠폰</span>
@@ -1058,19 +1355,25 @@
         <div class="price-period-row">
           <span class="price-period-label">총 대여일정</span>
           <div class="price-period-values">
-            <div class="period-val"><span class="period-num">3</span><span class="period-unit">일</span></div>
-            <div class="period-val"><span class="period-num">12:00</span><span class="period-unit">시간</span></div>
+            {#if props.totalDays > 0}
+              <div class="period-val"><span class="period-num">{props.totalDays}</span><span class="period-unit">일</span></div>
+            {:else}
+              <span class="period-unset">날짜 미선택</span>
+            {/if}
+            <div class="period-val"><span class="period-num">{props.durLabel}</span></div>
           </div>
         </div>
-        {@render PriceRow({ label: '기본요금', value: '150,000' })}
-        {@render PriceRow({ label: '할인요금', value: '-110,000' })}
-        {@render PriceRow({ label: '배송요금', value: '7,000' })}
-        {@render PriceRow({ label: '부가세(10%)', value: '7,000' })}
+        {@render PriceRow({ label: '기본요금', value: fmtKrw(props.subtotal) })}
+        {#if props.discountAmt > 0}
+          {@render PriceRow({ label: `할인요금 (${otDiscountRate}%)`, value: `-${fmtKrw(props.discountAmt)}` })}
+        {/if}
+        {@render PriceRow({ label: '배송요금', value: props.deliveryFeeAmt > 0 ? fmtKrw(props.deliveryFeeAmt) : '무료' })}
+        {@render PriceRow({ label: '부가세(10%)', value: fmtKrw(vat) })}
         <div class="price-divider"></div>
-        {@render PriceRow({ label: '합계요금', value: '154,000', large: true })}
+        {@render PriceRow({ label: '합계요금', value: fmtKrw(cardTotal), large: true })}
         <div class="points-row">
           <span class="points-label">적립포인트</span>
-          <div class="points-value"><span class="points-num">7,000</span><span class="points-unit">p</span></div>
+          <div class="points-value"><span class="points-num">{fmtKrw(earnPts)}</span><span class="points-unit">p</span></div>
         </div>
       </div>
     </div>
@@ -1272,7 +1575,6 @@
     gap: 50px;
     padding: 40px;
   }
-  .no-gap-top { gap: 10px; padding: 20px 40px; }
   .empty-card { padding: 40px; text-align: center; }
   .empty-text { color: #AAAAAA; font-size: 16px; font-weight: 500; }
 
@@ -1343,6 +1645,36 @@
   .product-badges { display: flex; gap: 15px; align-items: center; }
   .badge-mem, .badge-deal { width: 40px; height: 40px; flex-shrink: 0; }
   .badge-svg { width: 40px; height: 40px; }
+
+  /* ══ Duration Type Tabs ══ */
+  .dur-tabs {
+    display: flex;
+    gap: 6px;
+    flex-wrap: wrap;
+    margin: 4px 0 2px;
+  }
+  .dur-tab {
+    padding: 5px 11px;
+    border-radius: var(--radius-full);
+    border: 1.5px solid var(--cs-lilac);
+    background: transparent;
+    font-size: 12px;
+    font-weight: 700;
+    color: var(--cs-text-mid);
+    cursor: pointer;
+    min-height: 30px;
+    line-height: 1;
+    transition: background 0.15s, border-color 0.15s, color 0.15s;
+  }
+  .dur-tab:hover:not(.dur-tab-active) {
+    background: var(--cs-lilac);
+    border-color: var(--cs-purple-pale, #d0c8f0);
+  }
+  .dur-tab-active {
+    background: var(--cs-purple);
+    border-color: var(--cs-purple);
+    color: white;
+  }
 
   /* ══ Quantity Control ══ */
   .qty-wrap {
@@ -1418,6 +1750,10 @@
     display: flex;
     flex-direction: column;
     gap: 10px;
+  }
+  .accordions.bulk-locked {
+    opacity: 0.4;
+    pointer-events: none;
   }
   .acc-item { display: flex; flex-direction: column; }
   .acc-head {
@@ -1531,51 +1867,54 @@
     justify-content: center;
   }
 
-  /* Location selector */
-  .location-selector {
-    background: #F6F6F6;
-    border-radius: 20px;
+  /* 5탭 배송 방식 선택기 */
+  .delivery-combo {
     display: flex;
-    flex-wrap: wrap;
-    align-items: center;
-    justify-content: center;
-    padding: 15px 20px;
-    gap: 100px;
+    gap: 6px;
+    overflow-x: auto;
+    padding-bottom: 2px;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: none;
   }
-  .location-group {
+  .delivery-combo::-webkit-scrollbar { display: none; }
+  .combo-btn {
     display: flex;
     align-items: center;
-    gap: 20px;
-  }
-  .location-cat-label {
-    font-size: 14px;
-    font-weight: 500;
-    color: #AAAAAA;
-    letter-spacing: -0.5px;
-    white-space: nowrap;
-    flex-shrink: 0;
-  }
-  .location-options {
-    display: flex;
-    gap: 30px;
-    align-items: center;
-    flex-wrap: wrap;
-  }
-  .loc-badge {
-    background: none;
-    border: none;
+    gap: 6px;
+    padding: 9px 16px;
+    border-radius: var(--radius-xl, 30px);
+    border: 1.5px solid #DCDCDC;
+    background: #fff;
     cursor: pointer;
-    padding: 5px 20px;
-    border-radius: 30px;
-    font-size: 14px;
-    font-weight: 700;
-    color: #444;
-    transition: all 0.2s;
+    transition: all 0.18s;
+    flex-shrink: 0;
+    white-space: nowrap;
   }
-  .loc-badge:hover { background: #F0F0F0; }
-  .loc-badge-active {
-    background: #666;
-    color: white;
+  .combo-btn:hover {
+    border-color: var(--cs-purple, #3B2F8A);
+    background: #F5F4FA;
+  }
+  .combo-btn-active {
+    border-color: var(--cs-purple, #3B2F8A);
+    background: var(--cs-purple, #3B2F8A);
+  }
+  .combo-label {
+    font-size: 13px;
+    font-weight: 700;
+    color: var(--cs-text, #100B32);
+  }
+  .combo-btn-active .combo-label { color: #fff; }
+  .combo-fee {
+    font-size: 11px;
+    font-weight: 500;
+    color: var(--cs-text-mid, #666);
+  }
+  .combo-btn-active .combo-fee { color: rgba(255,255,255,0.8); }
+  .delivery-deadline {
+    font-size: 12px;
+    color: var(--cs-orange, #FF4500);
+    font-weight: 600;
+    margin: 4px 0 0;
   }
 
   /* Datetime buttons */
@@ -1800,6 +2139,33 @@
     letter-spacing: -0.5px;
   }
 
+  .points-input-row {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-top: 8px;
+  }
+  .points-input {
+    flex: 1;
+    height: 44px;
+    border: 1px solid var(--cs-lilac);
+    border-radius: var(--radius-sm);
+    padding: 0 12px;
+    font-size: 16px;
+    font-weight: 500;
+    color: var(--cs-text);
+    background: white;
+    outline: none;
+    max-width: 180px;
+  }
+  .points-input:focus { border-color: var(--cs-purple); }
+  .points-avail {
+    font-size: 14px;
+    color: #888;
+    white-space: nowrap;
+  }
+  .points-avail strong { color: var(--cs-purple); }
+
   .total-dark-box {
     background: #100B32;
     border-radius: 30px;
@@ -1841,6 +2207,56 @@
     font-weight: 700;
     color: #C1BBEC;
     line-height: 1.6;
+  }
+
+  /* 날짜 미선택 */
+  .period-unset {
+    font-size: 12px;
+    font-weight: 700;
+    color: var(--cs-error, #D32F2F);
+  }
+
+  /* 보증금 별도 고지 (PRD.1.2.2.1.11) */
+  .deposit-notice {
+    background: var(--cs-white);
+    border: 1.5px solid var(--cs-border, #e0e0e0);
+    border-radius: var(--radius-lg);
+    padding: 16px 24px;
+    margin-top: 10px;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+  .deposit-notice-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+  .deposit-label {
+    font: var(--text-pc-body-14);
+    font-weight: 700;
+    color: var(--cs-text-dark);
+  }
+  .deposit-amount {
+    display: flex;
+    align-items: baseline;
+    gap: 4px;
+  }
+  .deposit-num {
+    font-size: 16px;
+    font-weight: 700;
+    color: var(--cs-text);
+  }
+  .deposit-unit {
+    font-size: 13px;
+    font-weight: 700;
+    color: var(--cs-text-dark);
+  }
+  .deposit-note {
+    font-size: 11px;
+    color: var(--cs-text-light, #888888);
+    margin: 0;
+    line-height: 1.5;
   }
 
   /* ══ Footer ══ */
@@ -1904,6 +2320,13 @@
     background: #CCCCCC;
     cursor: not-allowed;
   }
+  .footer-guide {
+    font-size: 12px;
+    font-weight: 700;
+    color: var(--cs-error, #D32F2F);
+    margin: 0;
+    text-align: center;
+  }
 
   /* ══ Responsive ══ */
   @media (max-width: 1024px) {
@@ -1950,7 +2373,6 @@
     .sec-title { font-size: 18px; }
     .order-card { border-radius: 40px; }
     .order-card-inner { padding: 20px; gap: 30px; }
-    .no-gap-top { padding: 16px 20px; gap: 8px; }
     .product-img { width: 80px; height: 80px; border-radius: 16px; }
     .sub-img { width: 70px; height: 70px; border-radius: 14px; }
     .product-name { font-size: 14px; }
@@ -1965,8 +2387,6 @@
     .acc-label { font-size: 15px; }
     .acc-value { font-size: 14px; }
     .acc-body { padding-top: 20px; }
-    .location-selector { gap: 20px; padding: 12px 16px; flex-direction: column; align-items: flex-start; }
-    .location-options { gap: 16px; }
     .datetime-btn { padding: 12px 16px; }
     .datetime-btn-label { font-size: 14px; }
     .total-white-section, .total-gray-section { padding: 20px; }
@@ -1987,7 +2407,9 @@
     .coupon-expiry { letter-spacing: -0.5px; }
     .price-row-label { letter-spacing: -0.5px; }
     .price-row-val { letter-spacing: -0.5px; }
-    .location-cat-label { letter-spacing: -0.5px; }
+    .combo-btn { padding: 8px 12px; }
+    .combo-label { font-size: 12px; }
+    .combo-fee { font-size: 10px; }
     .f-input { letter-spacing: -0.5px; }
     .copy-label { letter-spacing: -0.5px; }
     .acc-label { letter-spacing: -0.3px; }
@@ -1995,45 +2417,119 @@
   }
 
   /* ── Pending reservation banner */
-  .pending-banner {
-    background: var(--cs-white);
-    border: 1.5px solid var(--cs-purple);
-    border-radius: var(--radius-lg);
-    padding: 14px 20px;
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 12px;
-    margin-bottom: 8px;
-  }
-  .pending-banner-left {
-    display: flex;
-    align-items: center;
-    gap: 12px;
-    min-width: 0;
-  }
-  .pending-name {
-    font: var(--text-m-script-14B);
-    color: var(--cs-text);
-    margin: 0;
-    white-space: nowrap;
+  /* ── 전체 일괄 설정 배너 ── */
+  /* ── bulk-panel: 화이트 카드 (front-uiux §16 준수) ── */
+  .bulk-panel {
+    background: #fff;
+    border-radius: var(--radius-2xl, 20px);
+    margin-bottom: 12px;
     overflow: hidden;
-    text-overflow: ellipsis;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.06);
   }
-  .pending-dates {
-    font: var(--text-m-script-12);
-    color: var(--cs-text-dark);
-    margin: 3px 0 0;
+  .bulk-panel.bulk-panel-on {
+    box-shadow: 0 0 0 2px var(--cs-purple, #3B2F8A), 0 2px 8px rgba(0,0,0,0.06);
   }
-  .pending-close {
-    min-width: 44px;
-    min-height: 44px;
+  .bulk-head {
+    width: 100%;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 16px 20px;
     background: none;
     border: none;
     cursor: pointer;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    flex-shrink: 0;
+    min-height: 54px;
   }
+  .bulk-lock { color: var(--cs-purple, #3B2F8A); flex-shrink: 0; }
+  .bulk-head-title {
+    font: var(--text-m-script-14B);
+    color: var(--cs-purple, #3B2F8A);
+    flex: 1;
+    text-align: left;
+  }
+  .bulk-on-chip {
+    font-size: 11px;
+    font-weight: 700;
+    color: #fff;
+    background: var(--cs-purple, #3B2F8A);
+    border-radius: var(--radius-full, 99px);
+    padding: 2px 8px;
+    white-space: nowrap;
+  }
+  .bulk-chevron {
+    color: var(--cs-text-dark, #444);
+    flex-shrink: 0;
+    transition: transform 0.3s;
+  }
+  .bulk-body {
+    padding: 0 20px 20px;
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+    border-top: 1px solid var(--cs-lilac, #ECEBF4);
+  }
+  /* 날짜 + 시간 2컬럼 */
+  .bulk-row2 {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 10px;
+    margin-top: 16px;
+  }
+  .bulk-group {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+  .bulk-lbl {
+    font-size: 12px;
+    font-weight: 700;
+    color: var(--cs-text-dark, #444);
+  }
+  /* 입력 — surface-gray, no border (front-uiux 표준) */
+  .bulk-inp {
+    height: 44px;
+    border: none;
+    border-radius: var(--radius-sm, 8px);
+    padding: 0 12px;
+    font-size: 14px;
+    font-weight: 700;
+    color: var(--cs-text, #100B32);
+    background: var(--cs-surface-gray, #f6f6f6);
+    outline: none;
+    width: 100%;
+    box-sizing: border-box;
+    appearance: auto;
+  }
+  /* 버튼 행 */
+  .bulk-foot {
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+    margin-top: 2px;
+  }
+  .bulk-reset {
+    padding: 0 20px;
+    background: none;
+    color: var(--cs-purple, #3B2F8A);
+    border: 1.5px solid var(--cs-purple, #3B2F8A);
+    border-radius: var(--radius-xl, 30px);
+    font: var(--text-m-script-14B);
+    cursor: pointer;
+    min-height: 44px;
+    transition: opacity 0.15s;
+  }
+  .bulk-reset:hover { opacity: 0.7; }
+  .bulk-apply {
+    padding: 0 24px;
+    background: var(--cs-purple, #3B2F8A);
+    color: #fff;
+    border: none;
+    border-radius: var(--radius-xl, 30px);
+    font: var(--text-m-script-14B);
+    cursor: pointer;
+    min-height: 44px;
+    transition: opacity 0.15s;
+  }
+  .bulk-apply:hover { opacity: 0.85; }
+
 </style>

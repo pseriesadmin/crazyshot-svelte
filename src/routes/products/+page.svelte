@@ -158,10 +158,16 @@
     return `/products/${p.slug ?? p.id}`
   }
   function dayPrice(p: ProductCard): string {
-    return `Day ${formatPrice(p.base_price_daily)} / 12H ${formatPrice(Math.round(p.base_price_daily * 0.7))}`
+    const d24 = p.price_24h ?? (p.base_price_daily > 0 ? p.base_price_daily : null)
+    const d12 = p.price_12h ?? null
+    const parts: string[] = []
+    if (d24 != null) parts.push(`Day ${formatPrice(d24)}`)
+    if (d12 != null) parts.push(`12H ${formatPrice(d12)}`)
+    return parts.join(' / ') || '–'
   }
   function heroMobilePrice(p: ProductCard): string {
-    return `${formatPrice(p.base_price_daily)} 원 / 1일`
+    const d24 = p.price_24h ?? (p.base_price_daily > 0 ? p.base_price_daily : null)
+    return d24 != null ? `${formatPrice(d24)} 원 / 1일` : '–'
   }
   function productImg(p: ProductCard): string {
     return p.image_urls?.[0] ?? '/images/products/grid-flat.png'
@@ -512,8 +518,8 @@
               id={prod.id}
               name={prod.name}
               imageUrl={productImg(prod)}
-              price24h={prod.base_price_daily}
-              price12h={Math.round(prod.base_price_daily * 0.7)}
+              price24h={prod.price_24h ?? (prod.base_price_daily > 0 ? prod.base_price_daily : null)}
+              price12h={prod.price_12h ?? null}
               href={productLink(prod)}
               category={prod.category}
             />

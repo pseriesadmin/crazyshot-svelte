@@ -53,7 +53,7 @@
 		class="fab-btn"
 		style={peekMode ? 'pointer-events:none' : ''}
 		aria-label="장바구니"
-		onclick={() => window.location.href = '/cart'}
+		onclick={() => window.location.href = '/checkout'}
 	>
 		<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 35 35" fill="none" aria-hidden="true">
 			<path d="M35 17.5C35 27.165 27.165 35 17.5 35C7.83502 35 0 27.165 0 17.5C0 7.83502 7.83502 0 17.5 0C27.165 0 35 7.83502 35 17.5Z" fill="#3B2F8A"/>

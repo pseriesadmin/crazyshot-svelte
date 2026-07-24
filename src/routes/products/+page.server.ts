@@ -80,6 +80,55 @@ export const load: PageServerLoad = async ({ locals, url }) => {
       : Promise.resolve({ data: [] as unknown[], error: null }),
   ])
 
+  const heroProducts: ProductCard[] = (heroRes.data ?? []) as ProductCard[]
+  const gridProducts: ProductCard[] = ((gridRes.data ?? []) as Record<string, unknown>[]).map((r) => ({
+    id:               String(r['product_id'] ?? r['id'] ?? ''),
+    name:             String(r['name'] ?? ''),
+    slug:             (r['slug'] as string | null) ?? null,
+    category:         String(r['category'] ?? ''),
+    image_urls:       r['image_urls'] != null
+                        ? (r['image_urls'] as string[])
+                        : r['image_url'] != null
+                          ? [String(r['image_url'])]
+                          : null,
+    base_price_daily: Number(r['base_price_daily'] ?? r['price_min'] ?? 0),
+    product_caption:  (r['product_caption'] as string | null) ?? null,
+    is_active:        Boolean(r['is_active'] ?? true),
+    price_12h:        null,
+    price_24h:        null,
+  }))
+  const mdProducts: ProductCard[] = (mdRes.data ?? []) as ProductCard[]
+
+  // 12H·24H 실가격 배치 조회 — 전체 상품 ID 수집 후 price_rules 단일 쿼리
+  const allIds = [
+    ...heroProducts.map((p) => p.id),
+    ...gridProducts.map((p) => p.id),
+    ...mdProducts.map((p) => p.id),
+  ].filter(Boolean)
+
+  const price12hMap: Record<string, number> = {}
+  const price24hMap: Record<string, number> = {}
+  if (allIds.length > 0) {
+    const { data: priceRules } = await locals.supabase
+      .from('price_rules')
+      .select('product_id, duration_type, price')
+      .in('product_id', allIds)
+      .in('duration_type', ['12h', '24h'])
+      .eq('is_active', true)
+      .is('deleted_at', null)
+    for (const r of (priceRules ?? []) as { product_id: string; duration_type: string; price: number }[]) {
+      if (r.duration_type === '12h') price12hMap[r.product_id] = Number(r.price)
+      if (r.duration_type === '24h') price24hMap[r.product_id] = Number(r.price)
+    }
+  }
+
+  const mergePrice = (cards: ProductCard[]): ProductCard[] =>
+    cards.map((c) => {
+      const legacyDaily = c.base_price_daily
+      const price_24h = legacyDaily > 0 ? legacyDaily : (price24hMap[c.id] ?? null)
+      return { ...c, price_12h: price12hMap[c.id] ?? null, price_24h }
+    })
+
   return {
     isCms,
     urlCategory,
@@ -91,23 +140,9 @@ export const load: PageServerLoad = async ({ locals, url }) => {
       keywords:   keywordsSettings,
     },
     categories:   CMS_CATEGORIES,
-    heroProducts: (heroRes.data   ?? []) as ProductCard[],
-    // search_products RPC는 product_id·price_min·image_url(단일) 반환 → ProductCard 형태로 정규화
-    gridProducts: ((gridRes.data ?? []) as Record<string, unknown>[]).map((r) => ({
-      id:               String(r['product_id'] ?? r['id'] ?? ''),
-      name:             String(r['name'] ?? ''),
-      slug:             (r['slug'] as string | null) ?? null,
-      category:         String(r['category'] ?? ''),
-      image_urls:       r['image_urls'] != null
-                          ? (r['image_urls'] as string[])
-                          : r['image_url'] != null
-                            ? [String(r['image_url'])]
-                            : null,
-      base_price_daily: Number(r['base_price_daily'] ?? r['price_min'] ?? 0),
-      product_caption:  (r['product_caption'] as string | null) ?? null,
-      is_active:        Boolean(r['is_active'] ?? true),
-    })) as ProductCard[],
-    mdProducts:   (mdRes.data     ?? []) as ProductCard[],
+    heroProducts: mergePrice(heroProducts),
+    gridProducts: mergePrice(gridProducts),
+    mdProducts:   mergePrice(mdProducts),
   }
 }
 
@@ -121,4 +156,6 @@ export interface ProductCard {
   base_price_daily: number
   product_caption: string | null
   is_active: boolean
+  price_12h: number | null
+  price_24h: number | null
 }
