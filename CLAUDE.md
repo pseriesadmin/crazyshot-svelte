@@ -31,12 +31,16 @@
 ## 현재 진행 상태
 
 ```
-✅ S0: 환경 설정 완료 (Supabase 스키마 30+ 테이블, RLS, 9 RPC)
-✅ S1-M1: Products 모듈 완료
+✅ S0: 환경 설정 완료 (Supabase 스키마 53 테이블, RLS, 65+ RPC, Migration #116)
+✅ S1-M1: Products 모듈 완료 (QR, 코드체계, 검색 인프라 포함)
 ✅ S1-M2: Reservation Flow (TDD RED/GREEN/REFACTOR 완료)
-⏳ S1-M3: Payment Integration (TDD) — 다음 사이클
+✅ S1-M2.5: Cart Dev Route + CMS 관리 모듈 (accounts·codes·login·chat) 완료
+✅ PRD.1.7: 채팅 어시스턴트 시스템 V1.0 완료 (AI 의도분류 + 세션정책 4종)
+⛔ S1-M3: Payment Integration (TDD) — BLOCKED: Supabase Realtime WebSocket SSR 이슈
 ⏳ S1-M4: Subscriptions (GSD)
 ⏳ S1-M5: Shipments (GSD)
+
+참조 문서: CRAZYSHOT_PRD_v1.7.md · crazyshot-re_v1.60-plannode-tree.json (552 노드)
 ```
 
 ---
@@ -113,6 +117,13 @@ Class D (보안 위반) → 즉시 중단
 
 ## 절대 기억할 것
 
+> ⛔⛔⛔ **요구범위 외 수정 절대 금지 — 이 규칙은 모든 작업의 최우선 기본값이다** ⛔⛔⛔
+>
+> 요청에 명시된 파일·기능만 수정한다. 범위 밖은 읽기(Read)만 허용.
+> "함께 고치면 좋을 것 같아서", "연관된 코드라서", "리팩터링 기회라서" — 모두 금지.
+> 범위 외 수정이 필요하다고 판단되면 **반드시 Stephen에게 먼저 확인** 후 진행.
+> 확인 없이 선수정 후 보고 금지. 위반 시 "치명적인 오류"로 간주한다.
+
 ```
 ❌ git 명령어 자율 실행 금지 (Stephen만)
 ❌ CRITICAL GATE 없이 다음 태스크 진행 금지 (BOUNDARY·ROUTINE은 자동)
@@ -130,17 +141,34 @@ Class D (보안 위반) → 즉시 중단
 
 ## 도메인 규칙 파일
 
+### ✅ 상시 로드 (자동)
+
 ```
 .claude/rules/core-rules.md        ← 개발 실행 원칙 (스택, 파일 경로)
-.claude/rules/rental.md            ← M2 예약·가용성 도메인
-.claude/rules/payment.md           ← M3 결제·웹훅·PG 도메인
-.claude/rules/ui-mobile.md         ← SvelteKit 5 UI + 모바일 UX + 터치 타겟
-.claude/rules/uiux.md              ← 공통 디자인 시스템 정본 (토큰·컴포넌트 패턴)
-.claude/rules/front-uiux.md        ← 사용자(USER) 화면 전용 디자인 시스템 (CMS 혼용 절대 금지)
-.claude/rules/cms-uiux.md          ← CMS 전용 디자인 시스템 (레이아웃·컴포넌트·GATE C)
 .claude/rules/security-auth.md     ← 인증·RLS·보안
-.claude/rules/figma-publishing.md  ← Figma AI 퍼블리싱 스킬 (디자인→코드 변환)
+.claude/rules/ui-mobile.md         ← SvelteKit 5 UI + 모바일 UX + 터치 타겟
+.claude/rules/uiux-index.md        ← UI/UX 빠른 참조 인덱스 (컬러·버튼·반경 핵심값)
+.claude/rules/rental-lifecycle.md  ← 대여 라이프사이클 상태 머신·버튼·스텝퍼 정책 (확정)
 ```
+
+> UI 작업 시 uiux-index.md로 핵심값 먼저 확인 → 세부 패턴 필요 시 아래 참조 파일 호출
+> 대여·예약 상태 변경·버튼·스텝퍼 작업 시 rental-lifecycle.md 최우선 확인
+
+### 📂 섹션별 참조 로드 (작업 전 명시적 호출)
+
+> 해당 섹션 작업 시작 전 프롬프트에 `@파일경로` 를 포함해 호출할 것.
+
+| 작업 영역 | 호출 파일 | 트리거 |
+|---|---|---|
+| 예약·가용성 (M2) | `@.claude/rules-ref/rental.md` | 예약 흐름·HOLD·가용성 쿼리 작업 시 |
+| 대여 라이프사이클 버튼·스텝퍼 | `@.claude/rules/rental-lifecycle.md` | RentalDetailPanel·RentalJourneyStepper 작업 시 |
+| 결제·웹훅 (M3) | `@.claude/rules-ref/payment.md` | 결제 승인·환불·웹훅 작업 시 |
+| 채팅 시스템 (PRD.1.7) | `@.claude/rules-ref/chat.md` | 채팅·세션·Realtime 작업 시 |
+| CMS 화면 퍼블리싱 | `@.claude/rules-ref/cms-uiux.md` | CMS 컴포넌트·레이아웃 작업 시 |
+| 사용자 화면 퍼블리싱 | `@.claude/rules-ref/front-uiux.md` | USER 화면 UI 작업 시 |
+| 공통 디자인 토큰 | `@.claude/rules-ref/uiux.md` | CSS 변수·토큰 확인 시 |
+| Figma → 코드 변환 | `@.claude/rules-ref/figma-publishing.md` | Figma 퍼블리싱 작업 시 |
+| Plannode JSON 수정 | `@.claude/rules-ref/plannode-update.md` | plannode-tree.json 작업 시 |
 
 ---
 
