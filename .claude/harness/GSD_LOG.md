@@ -31,6 +31,61 @@
   - Migration #135: update_user_profile / update_notification_settings RPC WHERE user_id → WHERE id 교체 → Stage + Production 양쪽 적용
   - account/+page.server.ts: SELECT user_id → id, .eq('user_id') → .eq('id') 수정
 
+[2026-07-24] BUG FIX | CMS 옵션상품 탭 upsert UNIQUE 충돌 + image_url 따옴표 수정 | 2개 마이그레이션 신규 | ✅ DONE
+  신규 파일 2종:
+  - supabase/migrations/20260724000161_161_fix_option_links_image_url.sql
+      get_product_option_links RPC: image_urls[1] → image_urls->>0 (JSONB text 추출, 따옴표 제거)
+  - supabase/migrations/20260724000162_162_fix_upsert_option_links_conflict.sql
+      upsert_product_option_links: soft-delete+재INSERT(UNIQUE 충돌) → 하드DELETE+ON CONFLICT DO UPDATE 멱등 패턴
+  코드 변경 (이전 커밋 8da5849 포함):
+  - ProductDetailPanel.svelte: 개별 옵션 combo btn localOptions[i].prop → opt.prop (Svelte 5 #{each} 표준)
+  - cms/products/+page.server.ts: option_links 로드(get_product_option_links RPC) + save(upsert RPC) 연동
+  DB 적용:
+  - Migration #161 Stage ✅ / Production ✅
+  - Migration #162 Stage ✅ / Production ✅
+  "No img" 분석: Manfrotto 055 image_urls=[] (이미지 미등록) → 코드 정상 동작 확인
+
+[2026-07-24] FEAT | 관심상품(찜) 실DB 연동 — WishlistScroll + API 엔드포인트 신규 | 2개 파일 수정/신규 | ✅ DONE
+  수정/신규 파일:
+  - src/lib/components/account/WishlistScroll.svelte ← 브라우저 supabase.rpc 직접 호출 제거 → /api/wishlist POST fetch 패턴으로 교체 (CMS 브라우저 auth 패턴 준수)
+  - src/routes/api/wishlist/+server.ts ← 신규 생성 (toggle_product_wishlist RPC 서버사이드 래퍼 — safeGetSession 인증 + error 반환)
+  DB:
+  - Migration #158 product_wishlists — Stage(ezyvffjvuwmtuhpxdjrw) ✅ RPC 재적용 완료
+  - Migration #158 — Production(vnbpmvxruyciuuaermyh) ✅ 테이블 기존재 확인 + RPC 신규 적용 완료
+  배경: account/+page.server.ts(get_user_wishlists) + +page.svelte(items/totalCount 전달)는 이전 세션 완료 상태 확인. 이번 세션은 보안 패턴 수정 + Production DB 적용 완료.
+
+[2026-07-24] BUG FIX + FEAT | 상품 상세 페이지 로직 전면 점검 + 버그픽스 (10개 항목) | products/[id]/+page.svelte · +page.server.ts · CalendarTimePicker.svelte | ✅ DONE
+  수정 파일 3종:
+  - src/routes/products/[id]/+page.server.ts ← E-1 Boolean캐스트 · E-3 인기상품 price24h 폴백 · E-4 에러로깅
+  - src/routes/products/[id]/+page.svelte ← A-1 비로그인 리다이렉트 · A-2 endDate폴백+시간저장 · A-3 startMin/endMin · C-1 is_required qty=1 · D-2롤백(!session 제거) · 필수옵션 hasUnfilledRequired
+  - src/lib/components/products/CalendarTimePicker.svelte ← A-3 콜백시그니처 · B-1 sameDayTimeError · reserveDisabled prop · "예약신청" 텍스트
+  주요 내용:
+  - E-3: 인기 상품 base_price_daily=0 → price_rules 24H 배치 조회 폴백
+  - A-1: 비로그인 예약신청 → /auth/login?next=pathname 리다이렉트
+  - A-2: endDate 폴백(e.startDate) + set_reservation_shipment_method RPC로 pickup_time/return_time HH:MM 저장
+  - B-1: 당일 대여 반납 시각 역전 경고 (sameDayTimeError $derived)
+  - C-1: is_required 옵션 초기 qty=1 자동 설정
+  - 필수 옵션 미선택 시 예약신청 버튼 비활성화 + 안내 텍스트 분기
+  - D-2 롤백: 리뷰 submit disabled에서 !session 제거 (hydration 타이밍 버그 수정)
+  - E-2 Skip: optionLinks 빈 배열 = 숫자 ID 상품 설계 의도 (수정 불필요)
+  svelte-check: 기존 기준선 유지 (신규 에러 0건 예상, QA 검수 중)
+
+[2026-07-24] FEAT | /account 마이페이지 기능 완성 (찜·대여카드·스텝퍼·로그아웃) | 11개 파일 수정/신규 | ✅ DONE
+  수정/신규 파일:
+  - supabase/migrations/20260724000158_158_product_wishlists.sql ← 신규 (Stage 적용 완료)
+  - src/lib/components/cms/CustomerDetailPanel.svelte ← 빠른문의 탭 콘텐츠 완성
+  - src/lib/components/account/WishlistScroll.svelte ← 실DB 연동 + 하트 토글
+  - src/routes/account/+page.server.ts ← get_user_wishlists RPC + nested JOIN
+  - src/routes/account/+page.svelte ← PC 로그아웃 버튼 추가
+  - src/routes/account/rental/+page.server.ts ← product_name/category
+  - src/routes/account/rental/+page.svelte ← product-row UI
+  - src/routes/account/cancel/+page.svelte ← SubGnb mobileOnly
+  - src/lib/components/account/PcRentalPanel.svelte ← product 정보 추가
+  - src/lib/components/common/RentalJourneyStepper.svelte ← CSS 다단계 조정
+  - src/lib/components/account/MenuSection.svelte ← 로그아웃 버튼 (모바일)
+  DB: Migration #158 Stage ✅ / Production ⛔ 보류
+  svelte-check: 기존 기준선 유지 (신규 에러 0건)
+
 [2026-07-23] MIGRATION | Migration #146 Stage DB 적용 + TASK-F duration_type 탭 UI | checkout/+page.svelte | ✅ DONE
   - Migration #146: contract_signings.expires_at TIMESTAMPTZ + 기본값 30일 + 인덱스 — Stage DB(ezyvffjvuwmtuhpxdjrw) 적용 완료
   - TASK-F: DurationType='12h'|'24h'|'1day'|'purchase' 타입 추가

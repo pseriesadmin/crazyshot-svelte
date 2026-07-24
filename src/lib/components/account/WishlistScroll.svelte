@@ -1,6 +1,5 @@
 <script lang="ts">
   import ProductDPCard from '$lib/components/products/ProductDPCard.svelte'
-  import { supabase } from '$lib/services/supabase'
 
   interface WishItem {
     wishlist_id: string
@@ -31,9 +30,14 @@
 
   async function handleWishToggle(productId: string | undefined) {
     if (!productId) return
-    const rpc = supabase.rpc as unknown as (fn: string, params: Record<string, string>) => Promise<{ data: { ok: boolean; action: string } | null }>
-    const { data } = await rpc('toggle_product_wishlist', { p_product_id: productId })
-    if (!data?.ok) return
+    const res = await fetch('/api/wishlist', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ product_id: productId }),
+    })
+    if (!res.ok) return
+    const data = await res.json() as { ok: boolean; action?: string }
+    if (!data.ok) return
 
     if (data.action === 'removed') {
       localItems = localItems.filter(i => i.product_id !== productId)
