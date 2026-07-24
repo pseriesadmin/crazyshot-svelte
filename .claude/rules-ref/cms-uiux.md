@@ -178,6 +178,61 @@ toggleSwitch : ON 색 primary-600(#3B2F8A) / 크기 36×20 / radius lg(10px)
 
 ---
 
+### 0-10-A. 패널 닫기 버튼 표준 (`.close-btn`) ★
+
+> 정본 컴포넌트: `ProductDetailPanel.svelte` → 모든 CMS Detail Panel의 닫기 버튼 표준
+
+**스펙**
+
+| 항목 | 값 |
+|---|---|
+| 크기 | 28×28px (`min-height: 28px`) |
+| 배경 | transparent |
+| 텍스트 | `✕` (문자, SVG 아이콘 금지) |
+| 색상 | `var(--cs-text-light)` |
+| 반경 | `var(--radius-sm)` |
+| hover BG | `rgba(255,53,53,0.08)` |
+| hover 색상 | `var(--cs-red-badge)` |
+| 위치 | `margin-left: auto` (헤더 우측 끝 자동 배치) |
+
+**표준 HTML 패턴**
+
+```html
+<button class="close-btn" type="button" aria-label="패널 닫기" onclick={onCloseHandler}>✕</button>
+```
+
+**표준 CSS (컴포넌트 scoped)**
+
+```css
+.close-btn {
+  margin-left: auto; flex-shrink: 0;
+  width: 28px; height: 28px; min-height: 28px;
+  display: flex; align-items: center; justify-content: center;
+  background: transparent; border: none; border-radius: var(--radius-sm);
+  color: var(--cs-text-light); font-size: 14px; cursor: pointer;
+  transition: background 0.12s, color 0.12s;
+}
+.close-btn:hover { background: rgba(255,53,53,0.08); color: var(--cs-red-badge); }
+```
+
+**적용 규칙**
+
+```
+⛔ SVG 아이콘 닫기 버튼 금지 — 반드시 ✕ 문자 사용
+⛔ btn-icon 클래스로 닫기 기능 구현 금지
+✅ Detail Panel 헤더 최상단 우측에 배치
+✅ aria-label="패널 닫기" 필수
+✅ 클릭 시 panel state 초기화 (selectedId, activeComboId, isEditMode 등) 포함
+```
+
+**적용 화면**
+
+- `ProductDetailPanel.svelte` (정본)
+- `_AutoMappingTab.svelte` (코드조합 Detail Panel)
+- CMS 내 Detail Panel을 가진 모든 화면
+
+---
+
 ### 0-11. standardCards — 실측 카드 BG UI 스펙 (정본)
 
 > 출처: JSON `standardCards` 섹션 — "디자인 시안에서 측정된 카드 레이아웃 BG UI 스펙"
@@ -312,6 +367,101 @@ border: 1px solid #ECEBF4;   /* purpleTint-100 = --cs-lilac */
   overflow-y: auto;
   padding: 20px 24px 32px;
 }
+```
+
+---
+
+### ⛔ 목록카드 + DetailPanel 필수 구조 지침 (2026-07-23 확정)
+
+> **위반 시 패널 내용 잘림·스크롤 불가 버그 발생 — 반드시 준수**
+
+#### 목록 + 패널 분할 레이아웃 (content-area)
+
+```css
+/* 목록카드 + 패널 분할 영역 */
+.content-area {
+  display: flex;
+  gap: 16px;
+  flex: 1;
+  min-height: 0;        /* ← 필수: flex 높이 제한 */
+}
+
+/* 목록카드 */
+.table-card {
+  flex: 4;              /* 패널 오픈 시 비율 */
+  min-width: 0;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+/* 상세 패널 래퍼 */
+.detail-panel-wrap {
+  flex: 6;
+  min-width: 0;
+  /* ❌ overflow: hidden 추가 금지 — 패널 스크롤 파괴 */
+}
+```
+
+#### DetailPanel 내부 필수 CSS 구조
+
+```css
+/* 패널 루트 — height: 100% + overflow: hidden 필수 */
+.panel {
+  height: 100%;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  background: var(--cs-white);
+  border-radius: var(--cms-radius-md);
+  box-shadow: 0px 1px 4px rgba(0,0,0,0.06);
+}
+
+/* 패널 헤더·탭 — 고정 */
+.panel-header,
+.panel-tabs {
+  flex-shrink: 0;
+}
+
+/* 패널 바디 — 스크롤 핵심 */
+.panel-body {
+  flex: 1;
+  min-height: 0;        /* ← 필수: flex-shrink 방지 */
+  overflow-y: auto;
+  display: block;       /* ← 필수: flex 금지 (자식 압축 버그) */
+  padding: 16px 20px 20px;
+}
+.panel-body > * + * {
+  margin-top: 10px;     /* gap 대체 (display:block) */
+}
+```
+
+#### ⛔ 왜 `display: block`인가 (필수 이해)
+
+```
+panel-body를 display: flex + flex-direction: column 으로 설정하면:
+
+  flex 자식 기본값 = flex-shrink: 1 (압축 가능)
+  info-section 등 overflow: hidden 자식이 압축될 때 → 내부 행이 사라짐
+  결과: 각 섹션에 첫 번째 행만 보이고 나머지가 클립됨
+
+display: block으로 변경 시:
+  자식이 압축되지 않고 자연 높이 유지
+  overflow-y: auto 가 정상 동작 → 패널 스크롤 활성화
+
+✅ 올바른 패턴: display: block + margin-top으로 gap 대체
+❌ 금지 패턴:  display: flex + flex-direction: column (자식에 overflow:hidden 있을 때)
+```
+
+#### GATE C 확인 항목 (목록+패널 레이아웃)
+
+```
+[ ] .content-area에 min-height: 0 있음?
+[ ] .detail-panel-wrap에 overflow: hidden 없음?
+[ ] .panel에 height: 100%; overflow: hidden 있음?
+[ ] .panel-body에 flex: 1; min-height: 0; overflow-y: auto 있음?
+[ ] .panel-body가 display: block? (flex 금지)
+[ ] 패널 내 자식 섹션이 overflow: hidden이면 panel-body는 반드시 block
 ```
 
 ---
@@ -1210,7 +1360,7 @@ let sortedItems = $derived.by(() => {
 
 ### 7-14. 페이지네이션 (`CmsPagination`) — 인덱스 UI 공통 컴포넌트 ★
 
-> **트리거**: "인덱스 UI 반영 배치해" 요청 시 이 컴포넌트를 즉시 적용  
+> **트리거**: "표준 인덱스 UI 반영해" 또는 "인덱스 UI 반영 배치해" 요청 시 이 컴포넌트를 즉시 적용  
 > **컴포넌트**: `src/lib/components/cms/CmsPagination.svelte`  
 > **최초 적용**: `src/routes/cms/products/+page.svelte` (상품목록 상단·하단)  
 > **추가일**: 2026-07-10

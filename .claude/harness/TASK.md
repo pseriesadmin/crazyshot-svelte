@@ -1565,6 +1565,37 @@ plan_source: tranquil-prancing-key.md
 ## BLOCKED
 ~~T9: AdminChatPanel~~ → NOW로 이동 (2026-07-09 해제)
 
+---
+
+## NOW — CMS 계약서 서브메뉴 + 에디터 UI (2026-07-23) ✅ 완료
+
+plan_source: users-stevenmac-documents-pseries-crazy-vivid-lightning.md (v5)
+
+신규/수정 파일:
+  - src/routes/cms/+layout.svelte ← 계약서양식 서브메뉴 추가
+  - src/lib/types/contract-template.ts ← ContractTemplate / ContractTemplateSummary 타입
+  - supabase/migrations/20260723000148_148_contract_templates.sql ← 계약서양식 테이블
+  - supabase/migrations/20260723000149_149_contracts_content_fields.sql ← contracts 테이블 확장
+  - src/routes/cms/reservation/contracts/+page.server.ts ← load + 3 actions
+  - src/lib/components/cms/ContractTemplatePanel.svelte ← 에디터 패널 컴포넌트
+  - src/routes/cms/reservation/contracts/+page.svelte ← 목록 + 마스터디테일 페이지
+  - src/lib/components/cms/ContractEditorModal.svelte ← 예약 상세 계약서 편집 모달
+  - src/routes/api/cms/contracts/[id]/content/+server.ts ← GET/PATCH API
+  - src/lib/components/cms/RentalContractViewer.svelte ← 편집 버튼 + 모달 진입 추가
+
+⚠️ 대기 중: Migration #148 #149 Stage(ezyvffjvuwmtuhpxdjrw) 검증 후 Production 배포 필요
+
+- [x] TASK-B: 레이아웃 계약서양식 서브메뉴 추가 | ROUTINE | ✅
+- [x] TASK-A: Migration #148 contract_templates | BOUNDARY | ✅ (파일 생성 — DB 적용 대기)
+- [x] TASK-F: Migration #149 contracts 콘텐츠 필드 | BOUNDARY | ✅ (파일 생성 — DB 적용 대기)
+- [x] TASK-C: /reservation/contracts/+page.server.ts | BOUNDARY | ✅
+- [x] TASK-D: ContractTemplatePanel.svelte | BOUNDARY | ✅
+- [x] TASK-E: /reservation/contracts/+page.svelte | BOUNDARY | ✅
+- [x] TASK-G: ContractEditorModal + RentalContractViewer | BOUNDARY | ✅
+- [x] npm run check: 신규 파일 오류 0개 (기존 오류 13개는 pre-existing, 범위 외) | ✅
+
+---
+
 ## BACKLOG
 
 ### 소규모 (즉시 처리 가능)

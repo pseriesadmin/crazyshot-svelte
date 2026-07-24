@@ -160,7 +160,7 @@ background: #f5f5f5;
     <div class="skeleton-line"></div>
   </div>
 {:else}
-  <ProductCard {product} />
+  <ProductDPCard {product} />
 {/if}
 
 <!-- ✅ 버튼 로딩 상태 -->
@@ -224,6 +224,150 @@ pickup     : 19:00 마감 표시
 /* ❌ 절대 금지 */
 .gnb-mobile-wrap { position: sticky; }         /* 레이아웃 공간 점유 */
 .gnb-mobile-wrap { background: var(--cs-lilac); } /* 배경색 가림 */
+```
+
+---
+
+## 바텀 탭바 스크롤 인터랙션 — 강제 정책 (2026-07-22 확정)
+
+> `BottomTabBar.svelte` 구현·수정 시 **반드시** 아래 스크롤 인터랙션을 포함한다.
+> 정본 컴포넌트: `src/lib/components/common/BottomTabBar.svelte`
+
+### 동작 규칙
+
+```
+스크롤 다운 → 바텀 탭바 가림  (translateY(+100%))
+스크롤 업   → 바텀 탭바 보임  (translateY(0))
+scrollY ≤ 50px → 항상 보임 (최상단 보호)
+PC (≥768px) → 항상 숨김 (display: none) — 모바일 전용
+```
+
+### 표준 구현 패턴 (BottomTabBar.svelte 정본 기준)
+
+```svelte
+<script lang="ts">
+  // 스크롤 인터랙션: 다운 → 가림, 업 → 보임
+  let hidden = $state(false)
+  let lastY = 0
+
+  function onScroll() {
+    const y = window.scrollY
+    if (y > lastY && y > 50) hidden = true   // 스크롤 다운 → 가림
+    else if (y < lastY)       hidden = false  // 스크롤 업 → 보임
+    lastY = y
+  }
+
+  $effect(() => {
+    lastY = window.scrollY
+    window.addEventListener('scroll', onScroll, { passive: true })
+    return () => window.removeEventListener('scroll', onScroll)
+  })
+</script>
+
+<div class="tab-bar" class:hidden>
+  ...
+</div>
+```
+
+```css
+.tab-bar {
+  position: fixed;
+  bottom: 0; left: 0; right: 0;
+  z-index: 50;
+  background: var(--cs-lilac);
+  box-shadow: 0 -4px 24px rgba(0,0,0,0.1);
+  height: 70px;
+  transform: translateY(0);
+  transition: transform 0.3s ease;   /* ← 필수 */
+}
+.tab-bar.hidden {
+  transform: translateY(100%);       /* ← 아래로 가림 */
+}
+@media (min-width: 768px) {
+  .tab-bar { display: none; }        /* ← PC 숨김 */
+}
+```
+
+### GATE C 확인 항목
+
+```
+[ ] 스크롤 다운 → translateY(+100%) 가림 동작?
+[ ] 스크롤 업 → translateY(0) 보임 동작?
+[ ] scrollY ≤ 50px 구간 항상 보임 처리?
+[ ] transition: transform 0.3s ease 적용?
+[ ] passive 스크롤 리스너 사용?
+[ ] $effect cleanup에서 removeEventListener 호출?
+[ ] PC(≥768px)에서 display:none 처리?
+```
+
+---
+
+## GNB · SubGnb 스크롤 인터랙션 — 강제 정책 (2026-07-22 확정)
+
+> GNB (`GNB.svelte`) 또는 SubGnb (`SubGnb.svelte`) 구현·수정 시 **반드시** 아래 스크롤 인터랙션을 함께 적용한다.
+
+### 동작 규칙
+
+```
+스크롤 다운 → GNB / SubGnb 가림  (translateY(-100%))
+스크롤 업   → GNB / SubGnb 보임  (translateY(0))
+최상단(scrollY ≤ 60px) → 항상 보임
+```
+
+### 표준 구현 패턴 (Svelte 5 Runes)
+
+```svelte
+<script lang="ts">
+  import { browser } from '$app/environment'
+
+  let lastScrollY = $state(0)
+  let hidden = $state(false)
+
+  $effect(() => {
+    if (!browser) return
+    const onScroll = () => {
+      const y = window.scrollY
+      hidden = y > lastScrollY && y > 60   // 다운 → 가림 / 60px 이하 항상 보임
+      lastScrollY = y
+    }
+    window.addEventListener('scroll', onScroll, { passive: true })
+    return () => window.removeEventListener('scroll', onScroll)
+  })
+</script>
+
+<!-- 래퍼에 hidden 클래스 바인딩 -->
+<div class="gnb-wrap" class:gnb-hidden={hidden}>
+  ...
+</div>
+```
+
+```css
+/* ✅ 필수 트랜지션 */
+.gnb-wrap {
+  transition: transform 0.3s ease;
+}
+.gnb-wrap.gnb-hidden {
+  transform: translateY(-100%);
+}
+```
+
+### PC · Mobile 공통 적용
+
+```
+PC (≥641px)  : GNB 데스크탑 래퍼에 동일 패턴 적용
+Mobile (≤640px): GNB 모바일 래퍼에 동일 패턴 적용
+SubGnb       : PC SubGnb 래퍼에 동일 패턴 적용 (sticky top 연동)
+```
+
+### GATE C 확인 항목
+
+```
+[ ] GNB 구현 시 스크롤 다운 → 가림 / 스크롤 업 → 보임 인터랙션 포함?
+[ ] SubGnb 구현 시 동일 스크롤 인터랙션 포함?
+[ ] transition: transform 0.3s ease 적용?
+[ ] scrollY ≤ 60 구간 항상 보임 처리?
+[ ] passive 스크롤 리스너 사용?
+[ ] $effect cleanup에서 removeEventListener 호출?
 ```
 
 ---
