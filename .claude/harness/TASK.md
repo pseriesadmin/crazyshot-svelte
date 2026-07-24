@@ -1596,6 +1596,49 @@ plan_source: users-stevenmac-documents-pseries-crazy-vivid-lightning.md (v5)
 
 ---
 
+---
+
+## NOW — 로그인 PC 반응형 + 회원가입 기능 + 트리거 버그 수정 (2026-07-24) ✅ 완료
+
+plan_source: 세션 내 아젠다
+핵심제약:
+  - front-uiux.md 디자인 시스템 준수 (CTA: --cs-red-badge, 모달: --radius-2xl)
+  - performSignUp() auth.ts 기존 함수 재활용
+  - 전화 인증: 더미 모드 (알리고 SMS 추후 연동 주석 기록)
+  - DB 트리거 수정: Stage → Production 순서 필수 적용
+  - git 자율 실행 금지
+
+신규/수정 파일:
+  - src/routes/auth/login/+page.svelte ← PC 반응형 폼 개선 + Sign Up↔Sign In 전환 + SignUpModal 연동
+  - src/lib/components/auth/SignUpModal.svelte ← 신규 (회원가입 모달 — 이메일·비번·전화 더미 인증)
+  - supabase/migrations/20260724000163_163_fix_handle_new_user_trigger.sql ← 신규 (트리거 버그 수정)
+
+- [x] FIX-LAYOUT: /auth/login PC 반응형 입력폼 찌그러짐 수정 | ROUTINE | ✅ 완료 (2026-07-24)
+  - .d-inputs flex-wrap: nowrap → wrap 변경
+  - .d-input-field flex: 1 1 220px + min-width: 220px 고정 (찌그러짐 방지)
+  - 좁은 PC 화면에서 비밀번호 필드 자동 다음 행 이동
+
+- [x] FEAT-SIGNUP-BTN: Sign Up ↔ Sign In 버튼 자동 전환 인터랙션 | BOUNDARY | ✅ 완료 (2026-07-24)
+  - isSignInMode = $derived(email.trim().length > 0 && password.length > 0)
+  - 기본: 보라색 Sign Up 버튼 노출 → 이메일+비번 둘 다 입력 시 그라데이션 Sign In 버튼 자동 전환
+  - PC(.d-signup-submit) + 모바일(.m-signup-submit) 양쪽 동일 인터랙션 적용
+
+- [x] FEAT-SIGNUP-MODAL: SignUpModal.svelte 신규 생성 | BOUNDARY | ✅ 완료 (2026-07-24)
+  - 2단계 폼: 1단계(이메일·비밀번호·비밀번호확인) → 2단계(전화번호 + 더미 인증)
+  - front 디자인 시스템 적용: 모달 --radius-2xl / 헤더 --cs-dark / CTA --cs-red-badge 30px
+  - 전화 인증 더미 처리: 인증번호 아무 값 입력 → 통과 (테스트 모드)
+  - TODO 주석 2곳: 알리고 SMS API 연동 포인트 명시 (send-otp / verify-otp 엔드포인트)
+  - 가입 완료 → redirect 또는 '/' 이동
+  - svelte-check 신규 에러 0건
+
+- [x] BUG-TRIGGER: handle_new_user 트리거 user_id 누락 버그 수정 | BOUNDARY | ✅ 완료 (2026-07-24)
+  - 원인: INSERT INTO user_profiles (id, email) → user_id NOT NULL 위반 → 가입 후 user_profiles 미생성 → CMS 고객목록 미반영
+  - 수정: INSERT INTO user_profiles (id, user_id, email) VALUES (NEW.id, NEW.id, ...) 로 교체
+  - Migration #163 Stage(ezyvffjvuwmtuhpxdjrw) 적용 ✅ + Production(vnbpmvxruyciuuaermyh) 적용 ✅
+  - 양쪽 DB pg_get_functiondef 검증 완료
+
+---
+
 ## BACKLOG
 
 ### 소규모 (즉시 처리 가능)
