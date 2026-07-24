@@ -1,5 +1,6 @@
 <script lang="ts">
   import { goto } from '$app/navigation'
+  import { supabase } from '$lib/services/supabase'
 
   interface MenuItem {
     label: string
@@ -14,6 +15,11 @@
   }
 
   let { title, count = 0, items, variant = 'myinfo' }: Props = $props()
+
+  async function handleLogout() {
+    await supabase.auth.signOut()
+    goto('/')
+  }
 </script>
 
 <div class="bg-white relative shrink-0 w-full" class:rounded-top={variant === 'rental'} class:pb-tall={variant === 'myinfo'}>
@@ -64,6 +70,14 @@
           </button>
         {/each}
       </div>
+
+      {#if variant === 'myinfo'}
+        <div class="logout-wrap">
+          <button class="btn-logout" onclick={handleLogout}>
+            로그아웃
+          </button>
+        </div>
+      {/if}
     </div>
   </div>
 </div>
@@ -77,4 +91,32 @@
   button { border: none; background: none; padding: 0; }
   button:focus { outline: none; }
   button:focus-visible { outline: 2px solid var(--cs-purple); outline-offset: 2px; border-radius: 4px; }
+
+  /* 로그아웃 */
+  .logout-wrap {
+    width: 100%;
+    padding: 24px 0 0;
+    margin-top: 16px;
+    border-top: 1px solid var(--cs-lilac);
+  }
+  .btn-logout {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 100%;
+    height: 44px;
+    border-radius: var(--radius-xl);
+    background: rgba(236, 235, 244, 0.6);
+    font-family: 'Noto Sans KR', sans-serif;
+    font-size: var(--text-m-script-14B);
+    font-weight: 500;
+    color: var(--cs-text-light);
+    cursor: pointer;
+    transition: background 0.15s, color 0.15s;
+    letter-spacing: -0.3px;
+  }
+  .btn-logout:hover {
+    background: var(--cs-lilac);
+    color: var(--cs-text-mid);
+  }
 </style>

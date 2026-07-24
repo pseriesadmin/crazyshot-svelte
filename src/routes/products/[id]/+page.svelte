@@ -74,7 +74,7 @@
       id: link.option_product_id,
       label: link.option_product_name,
       price: link.price_24h ?? 0,
-      qty: 0,
+      qty: link.is_required ? 1 : 0,  // [C-1] 필수 옵션 기본 수량 1
       is_required: link.is_required,
       delivery_rental_disabled: link.delivery_rental_disabled,
       image_url: link.image_url,
@@ -117,7 +117,9 @@
   let startDate = $state('');
   let endDate = $state('');
   let startHour = $state(12);
+  let startMin = $state(0);   // [A-3]
   let endHour = $state(13);
+  let endMin = $state(0);     // [A-3]
   let selectedMethodId = $state('');
   let selectedPeriodId = $state('');
 
@@ -191,12 +193,12 @@
     return n.toLocaleString('ko-KR');
   }
 
-  async function handleReserve(e: { startDate: string; endDate: string; startHour: number; endHour: number; methodId?: string; periodId?: string }) {
+  async function handleReserve(e: { startDate: string; endDate: string; startHour: number; startMin: number; endHour: number; endMin: number; methodId?: string; periodId?: string }) {
     if (!product || isReserving) return;
 
-    // 비로그인: hold RPC는 건너뛰고 체크아웃으로 바로 이동 (결제 단계에서 로그인 유도)
+    // A-1: 비로그인 → 로그인 후 현재 페이지로 복귀
     if (!data.session) {
-      goto('/checkout');
+      goto('/auth/login?next=' + encodeURIComponent(window.location.pathname));
       return;
     }
 
@@ -204,36 +206,57 @@
     trackCartAdd(data.productId);
     try {
       type ReserveRpcFn = (name: string, args: Record<string, unknown>) => Promise<{
-        data: Array<{ success: boolean; reservation_id: string | null; asset_id: string | null; error_message: string | null }> | null;
+        data: Array<{ success: boolean; reservation_id: number | null; asset_id: number | null; error_message: string | null }> | null;
         error: unknown;
       }>
+      // A-2: endDate 미선택(반출일만 선택) 시 startDate로 대체 → 당일 대여
+      const endDate = e.endDate || e.startDate;
       const { data: rows } = await (supabase.rpc as unknown as ReserveRpcFn)('create_hold_reservation', {
         p_product_id: product.id,
         p_start_date: e.startDate,
-        p_end_date:   e.endDate,
-      })
-      const row = rows?.[0]
+        p_end_date:   endDate,
+      });
+      const row = rows?.[0];
       if (!row?.success) {
-        showToast(row?.error_message ?? '예약 가능한 장비가 없습니다.')
-        return
+        showToast(row?.error_message ?? '예약 가능한 장비가 없습니다.');
+        return;
+      }
+      // A-2: 반출·반납 시각 저장 (Migration 147 set_reservation_shipment_method)
+      if (row.reservation_id != null) {
+        const padTime = (h: number, m: number) =>
+          String(h).padStart(2, '0') + ':' + String(m).padStart(2, '0');
+        type ShipRpcFn = (name: string, args: Record<string, unknown>) => Promise<{ error: unknown }>;
+        await (supabase.rpc as unknown as ShipRpcFn)('set_reservation_shipment_method', {
+          p_reservation_id: row.reservation_id,
+          p_pickup_method:  'visit',
+          p_pickup_time:    padTime(e.startHour, e.startMin),
+          p_return_time:    padTime(e.endHour, e.endMin),
+        });
       }
       goto('/checkout');
     } catch {
-      showToast('예약 중 오류가 발생했습니다.')
+      showToast('예약 중 오류가 발생했습니다.');
     } finally {
       isReserving = false;
     }
   }
 
-  function handleCalChange(e: { startDate: string; endDate: string; startHour: number; endHour: number }) {
+  function handleCalChange(e: { startDate: string; endDate: string; startHour: number; startMin: number; endHour: number; endMin: number }) {
     startDate = e.startDate;
     endDate = e.endDate;
     startHour = e.startHour;
+    startMin = e.startMin;
     endHour = e.endHour;
+    endMin = e.endMin;
   }
 
   let optionsTotal = $derived(
     optionItems.reduce((sum, opt) => sum + opt.price * opt.qty, 0)
+  );
+
+  // 필수 옵션 중 수량 0인 항목이 있으면 예약담기 비활성
+  let hasUnfilledRequired = $derived(
+    optionItems.some((o) => o.is_required && o.qty === 0)
   );
 
   let imageUrls = $derived(product.image_urls ?? []);
@@ -442,6 +465,7 @@
           {optionsTotal}
           rentalMethods={data.rentalMethods}
           rentalPeriods={data.rentalPeriods}
+          reserveDisabled={hasUnfilledRequired}
           mode="product"
           onreserve={handleReserve}
           onchange={handleCalChange}
@@ -464,6 +488,7 @@
         {optionsTotal}
         rentalMethods={data.rentalMethods}
         rentalPeriods={data.rentalPeriods}
+        reserveDisabled={hasUnfilledRequired}
         mode="product"
         onreserve={handleReserve}
         onchange={handleCalChange}
