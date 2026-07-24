@@ -6,14 +6,18 @@
   import ProductHero from '$lib/components/products/ProductHero.svelte';
   import CalendarTimePicker from '$lib/components/products/CalendarTimePicker.svelte';
   import type { Tables, ProductOptionLinkRow } from '$lib/types/database';
+  import type { ContentBlock } from '$lib/types/content-editor';
 
   /** 실서비스 DB products 행 (가격·status 등 런타임 컬럼 포함) */
   type ProductRow = Tables<'products'> & {
     base_price_daily: number;
+    base_price_12h?: number | null;
     base_price_weekly?: number;
     base_price_monthly?: number;
     status?: string;
     image_url?: string;
+    content_blocks?: unknown;
+    product_caption?: string | null;
   };
 
   interface ReviewItem {
@@ -24,6 +28,22 @@
     created_at: string;
   }
 
+  interface ShotlogItem {
+    id: string;
+    title: string;
+    author: string;
+    img: string | null;
+    createdAt: string;
+  }
+
+  interface PopularItem {
+    id: string;
+    name: string;
+    slug: string | null;
+    imageUrl: string | null;
+    price24h: number;
+  }
+
   interface Props {
     data: {
       product: ProductRow;
@@ -31,6 +51,12 @@
       optionLinks: ProductOptionLinkRow[];
       session: { user: { id: string; email?: string } } | null;
       reviews: ReviewItem[];
+      depositAmount: number | null;
+      rentalPeriods: { id: string; name: string }[];
+      rentalMethods: { id: string; name: string }[];
+      shippingPolicy: { items: { label: string; fee: number }[]; guide: string } | null;
+      shotlogs: ShotlogItem[];
+      popularProducts: PopularItem[];
     };
   }
   let { data }: Props = $props();
@@ -55,6 +81,7 @@
     }))
   );
   let optionsOpen = $state(true);
+  let isReserving = $state(false);
 
   // ── Toast
   let toastMsg = $state('');
@@ -91,6 +118,8 @@
   let endDate = $state('');
   let startHour = $state(12);
   let endHour = $state(13);
+  let selectedMethodId = $state('');
+  let selectedPeriodId = $state('');
 
   // ── Tab
   let activeTab = $state<'spec' | 'info' | 'review' | 'qa'>('info');
@@ -110,19 +139,14 @@
     }
   }
 
-  // ── Mock data (외부 퍼블리싱 코드 텍스트 기준)
-  const MOCK_SHOTLOGS = [
-    { title: '[사용기] SONY FE 24-105  가볍게 고퀄 영상을 바로 만들어주다', meta: '1시간 전·by 홍기동', image: '/sample/shotlog-1.png' },
-    { title: '액션캠의 왕좌를 되찾으러 돌아왔다.', meta: '2시간 전·by 유말자', image: '/sample/shotlog-2.png' },
-    { title: '휴대용 디자인으로 이동 중에도 미디어 카드에 쉽게 접근 가능', meta: '3시간 전·by 홍기동', image: '/sample/shotlog-3.png' },
-    { title: 'onn. 52인치 삼각대, 컴팩트 카메라, 스마트폰 및 GoPro 액션 카메라용 스', meta: '4시간 전·by 유말자', image: '/sample/shotlog-4.png' },
-    { title: 'K-트레일로그를 남기는 멋진 일은 우리들에게 즐거움의 폭증이다!!', meta: '5시간 전·by 홍기동', image: '/sample/shotlog-1.png' },
-  ];
+  const shotlogs = $derived(data.shotlogs);
+  const popularProducts = $derived(data.popularProducts);
 
   let reviews = $state(data.reviews);
   const session = $derived(data.session);
 
   // ── Review form
+  let reviewTitle = $state('');
   let reviewContent = $state('');
   let isSubmittingReview = $state(false);
 
@@ -131,28 +155,28 @@
       goto('/auth/login');
       return;
     }
-    const trimmed = reviewContent.trim();
-    if (!trimmed) return;
-    const autoTitle = trimmed.slice(0, 10);
+    if (!reviewTitle.trim() || !reviewContent.trim()) return;
     isSubmittingReview = true;
     try {
       type RpcFn = (name: string, args: Record<string, unknown>) => ReturnType<typeof supabase.rpc>;
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const { data: newId, error } = await (supabase.rpc as unknown as RpcFn)('create_product_review', {
         p_product_id: data.productId,
-        p_title: autoTitle,
-        p_content: trimmed,
+        p_title: reviewTitle.trim(),
+        p_content: reviewContent.trim(),
       });
       if (error) throw error;
       reviews = [
         {
           id: newId as string,
           author_name: session.user.email?.split('@')[0] ?? '익명',
-          title: autoTitle,
-          content: trimmed,
+          title: reviewTitle.trim(),
+          content: reviewContent.trim(),
           created_at: new Date().toISOString(),
         },
         ...reviews,
       ];
+      reviewTitle = '';
       reviewContent = '';
       showToast('후기가 등록되었습니다.');
     } catch (err) {
@@ -167,22 +191,38 @@
     return n.toLocaleString('ko-KR');
   }
 
-  function handleReserve(e: { startDate: string; endDate: string; startHour: number; endHour: number }) {
-    if (!product) return;
+  async function handleReserve(e: { startDate: string; endDate: string; startHour: number; endHour: number; methodId?: string; periodId?: string }) {
+    if (!product || isReserving) return;
+
+    // 비로그인: hold RPC는 건너뛰고 체크아웃으로 바로 이동 (결제 단계에서 로그인 유도)
+    if (!data.session) {
+      goto('/checkout');
+      return;
+    }
+
+    isReserving = true;
     trackCartAdd(data.productId);
-    sessionStorage.setItem('pendingReservation', JSON.stringify({
-      productId: product.id,
-      productName: product.name,
-      imageUrl: (product as unknown as Record<string, unknown>).image_url ?? '',
-      startDate: e.startDate,
-      endDate: e.endDate,
-      startHour: e.startHour,
-      endHour: e.endHour,
-      qty,
-      dailyPrice: product.base_price_daily,
-      halfDayPrice: Math.round(product.base_price_daily * 0.7),
-    }));
-    goto('/checkout');
+    try {
+      type ReserveRpcFn = (name: string, args: Record<string, unknown>) => Promise<{
+        data: Array<{ success: boolean; reservation_id: string | null; asset_id: string | null; error_message: string | null }> | null;
+        error: unknown;
+      }>
+      const { data: rows } = await (supabase.rpc as unknown as ReserveRpcFn)('create_hold_reservation', {
+        p_product_id: product.id,
+        p_start_date: e.startDate,
+        p_end_date:   e.endDate,
+      })
+      const row = rows?.[0]
+      if (!row?.success) {
+        showToast(row?.error_message ?? '예약 가능한 장비가 없습니다.')
+        return
+      }
+      goto('/checkout');
+    } catch {
+      showToast('예약 중 오류가 발생했습니다.')
+    } finally {
+      isReserving = false;
+    }
   }
 
   function handleCalChange(e: { startDate: string; endDate: string; startHour: number; endHour: number }) {
@@ -196,14 +236,17 @@
     optionItems.reduce((sum, opt) => sum + opt.price * opt.qty, 0)
   );
 
-  const SAMPLE_IMAGES = [
-    '/sample/product-main.png',
-    '/sample/product-main.png',
-    '/sample/product-main.png',
-    '/sample/product-main.png',
-  ];
-  let imageUrls = $derived(
-    (product.image_urls?.length ? product.image_urls : SAMPLE_IMAGES)
+  let imageUrls = $derived(product.image_urls ?? []);
+
+  let contentBlocks = $derived.by((): ContentBlock[] => {
+    const raw = (product as ProductRow).content_blocks;
+    if (!raw) return [];
+    try { return Array.isArray(raw) ? (raw as ContentBlock[]) : []; }
+    catch { return []; }
+  });
+
+  let price12h = $derived(
+    (product as ProductRow).base_price_12h ?? Math.round(product.base_price_daily * 0.7)
   );
 
 </script>
@@ -221,8 +264,13 @@
       <!-- TitleInfo card -->
       <div class="title-card">
         <div class="title-block">
+          {#if product.brand}
+            <p class="product-brand">{product.brand}</p>
+          {/if}
           <h1 class="product-name">{product.name}</h1>
-          {#if product.description}
+          {#if (product as ProductRow).product_caption}
+            <p class="product-sub">{(product as ProductRow).product_caption}</p>
+          {:else if product.description}
             <p class="product-sub">{product.description.split('\n')[0]}</p>
           {/if}
         </div>
@@ -237,34 +285,57 @@
           <span class="price-sep">/</span>
           <div class="price-unit">
             <span class="price-period-label">12H</span>
-            <span class="price-amount">{fmt(Math.round(product.base_price_daily * 0.7))}</span>
+            <span class="price-amount">{fmt(price12h)}</span>
             <span class="price-currency">원</span>
           </div>
         </div>
 
-        <!-- Delivery info -->
-        <div class="delivery-block">
-          <p class="delivery-text">1일 대여 기준 크레이지샷배송 가능 · 12시간 대여 기준 퀵배송 가능</p>
-          <div class="delivery-icons">
-            <!-- 빨간 이벤트 배지 -->
-            <div class="delivery-icon" aria-label="이벤트 배지">
-              <svg xmlns="http://www.w3.org/2000/svg" width="40" height="40" viewBox="0 0 40 40" fill="none">
-                <path d="M20 0L23.9714 3.03625L28.9008 1.98062L31.1277 6.39613L36.0388 7.5302L36.08 12.4504L40 15.5496L37.8475 20L40 24.4504L36.08 27.5496L36.0388 32.4698L31.1277 33.6039L28.9008 38.0194L23.9714 36.9637L20 40L16.0286 36.9637L11.0992 38.0194L8.87228 33.6039L3.96124 32.4698L3.91998 27.5496L0 24.4504L2.15253 20L0 15.5496L3.91998 12.4504L3.96124 7.5302L8.87228 6.39613L11.0992 1.98062L16.0286 3.03625L20 0Z" fill="#FF3535"/>
-                <path d="M19.4403 10.1182C19.7518 9.98059 20.1022 9.96301 20.4234 10.0661L20.5596 10.1182L20.6714 10.1749C20.9194 10.3175 21.0707 10.522 21.1556 10.6483C21.2556 10.7971 21.358 10.9873 21.4518 11.1599L22.4739 13.0405L24.7589 12.3318C24.9706 12.266 25.1867 12.1981 25.3667 12.1588C25.5101 12.1274 25.7621 12.0806 26.0409 12.1458L26.1617 12.1811L26.2998 12.2378C26.6159 12.3887 26.881 12.6629 27.0076 13.0284C27.1369 13.4022 27.0471 13.7447 27.0003 13.9036C26.9478 14.0816 26.863 14.2909 26.7859 14.483L26.1054 16.1776L28.4231 17.1523C28.8982 17.3522 29.1251 17.9085 28.93 18.3949C28.7469 18.851 28.2582 19.0838 27.8062 18.9465L27.7162 18.9139L25.155 17.8369C25.0597 17.7968 24.9401 17.7466 24.8389 17.6946C24.73 17.6387 24.572 17.5463 24.4291 17.3858C24.2415 17.1751 24.1177 16.9046 24.0884 16.6083C24.0658 16.3784 24.1114 16.1876 24.1493 16.0642C24.1837 15.9522 24.2334 15.8299 24.2692 15.7405L24.8489 14.2942L22.8801 14.9053C22.789 14.9335 22.6752 14.9696 22.5721 14.9936C22.4581 15.0202 22.2988 15.0477 22.1123 15.029C21.8672 15.0044 21.6273 14.914 21.4218 14.7602C21.263 14.6411 21.1601 14.5046 21.093 14.4012C21.0336 14.3099 20.9765 14.2023 20.934 14.124L20 12.4062L19.0669 14.124C19.0243 14.2024 18.9664 14.3098 18.907 14.4012C18.8398 14.5045 18.7378 14.6412 18.579 14.7602C18.3735 14.9143 18.133 15.0044 17.8876 15.029C17.7013 15.0476 17.5428 15.0202 17.4288 14.9936C17.3255 14.9696 17.2111 14.9336 17.1199 14.9053L15.1502 14.2933L15.7308 15.7405C15.7666 15.8299 15.8163 15.9522 15.8507 16.0642C15.8886 16.1876 15.9342 16.3784 15.9115 16.6083C15.8823 16.9046 15.7584 17.1751 15.5708 17.3858C15.4282 17.546 15.2708 17.6386 15.162 17.6946C15.0609 17.7465 14.9412 17.7968 14.8458 17.8369L12.2837 18.9139C11.8085 19.1138 11.2652 18.8814 11.0699 18.3949C10.8749 17.9085 11.1018 17.3522 11.5769 17.1523L13.8937 16.1776L13.2141 14.483C13.137 14.2909 13.0522 14.0816 12.9997 13.9036C12.9529 13.7447 12.8631 13.4022 12.9924 13.0284L13.0551 12.8777C13.2194 12.539 13.5096 12.2962 13.8383 12.1811L13.96 12.1458C14.2388 12.0808 14.4909 12.1275 14.6341 12.1588C14.8141 12.1981 15.0295 12.2661 15.241 12.3318L17.5251 13.0405L18.5481 11.1599C18.6419 10.9873 18.7444 10.7971 18.8443 10.6483C18.9413 10.5041 19.125 10.2576 19.4403 10.1182Z" fill="white"/>
-                <path d="M13.3056 26.1913C13.3058 24.5807 14.5747 23.2961 16.0976 22.6589L16.1875 22.6264C16.6398 22.4898 17.1282 22.7242 17.3105 23.1807C17.5047 23.6675 17.2773 24.2234 16.8017 24.4223L16.59 24.5172C15.5707 25.0085 15.1664 25.7127 15.1663 26.1913L15.1809 26.3299C15.2487 26.6667 15.5758 27.0817 16.4673 27.4637C17.4273 27.875 18.7383 28.0952 19.9998 28.0952C21.2614 28.0952 22.5731 27.875 23.5331 27.4637C24.5513 27.0273 24.834 26.5479 24.8341 26.1913C24.8341 25.6809 24.3736 24.9141 23.1978 24.4223C22.7223 24.2234 22.4948 23.6675 22.689 23.1807C22.8834 22.6938 23.4263 22.46 23.9019 22.6589C25.4253 23.2961 26.6947 24.5805 26.6948 26.1913C26.6947 27.7629 25.4416 28.7117 24.2517 29.2215C23.0031 29.7565 21.4318 30 19.9998 30C18.5678 30 16.9972 29.7565 15.7487 29.2215C14.5958 28.7276 13.3838 27.8217 13.3093 26.3364L13.3056 26.1913Z" fill="white"/>
-                <path d="M23.0742 19.2136C23.0742 20.9516 21.6979 22.3606 20.0001 22.3606C18.3022 22.3606 16.9259 20.9516 16.9259 19.2136C16.9259 17.4755 18.3022 16.0665 20.0001 16.0665C21.6979 16.0665 23.0742 17.4755 23.0742 19.2136Z" fill="white"/>
-              </svg>
-            </div>
-            <!-- 파란 이벤트 배지 -->
-            <div class="delivery-icon" aria-label="멤버십 배지">
-              <svg xmlns="http://www.w3.org/2000/svg" width="40" height="40" viewBox="0 0 40 40" fill="none">
-                <path d="M20 0L23.9714 3.03625L28.9008 1.98062L31.1277 6.39613L36.0388 7.5302L36.08 12.4504L40 15.5496L37.8475 20L40 24.4504L36.08 27.5496L36.0388 32.4698L31.1277 33.6039L28.9008 38.0194L23.9714 36.9637L20 40L16.0286 36.9637L11.0992 38.0194L8.87228 33.6039L3.96124 32.4698L3.91998 27.5496L0 24.4504L2.15253 20L0 15.5496L3.91998 12.4504L3.96124 7.5302L8.87228 6.39613L11.0992 1.98062L16.0286 3.03625L20 0Z" fill="#553FE0"/>
-                <path d="M19.6856 10.0798C19.9888 9.97331 20.318 9.97348 20.6212 10.0798L20.771 10.1414L20.8851 10.2046C21.1378 10.3634 21.2933 10.592 21.3898 10.7495C21.5066 10.9401 21.6293 11.19 21.7588 11.4512L23.0171 13.989C23.0322 14.0195 23.046 14.0468 23.0584 14.0716C23.0831 14.0633 23.1103 14.0549 23.1404 14.0446L25.887 13.1093C26.1736 13.0116 26.4444 12.9182 26.6671 12.8647C26.8482 12.8213 27.1287 12.7684 27.4282 12.8445L27.5581 12.885L27.7087 12.9533C28.0004 13.1056 28.2318 13.3545 28.3664 13.6575L28.4259 13.8135L28.459 13.946C28.5195 14.2512 28.4579 14.5322 28.4086 14.716C28.348 14.9417 28.2471 15.2158 28.1405 15.5071L26.931 18.8132C26.7674 19.2598 26.2797 19.4867 25.8415 19.3201C25.4033 19.1534 25.1801 18.6561 25.3434 18.2093L26.5529 14.9041C26.5837 14.8199 26.6098 14.7443 26.634 14.6772C26.5712 14.6983 26.5015 14.7216 26.4239 14.748L23.6773 15.6834C23.5518 15.7261 23.4129 15.774 23.2893 15.8056C23.1551 15.84 22.9798 15.8717 22.7772 15.8495C22.5023 15.8194 22.2422 15.7094 22.0276 15.5332C21.8699 15.4037 21.7681 15.2555 21.6967 15.1351C21.6307 15.0238 21.565 14.8889 21.5048 14.7674L20.2465 12.2296C20.2126 12.1613 20.1815 12.1003 20.1538 12.0449C20.1262 12.1003 20.095 12.1613 20.0612 12.2296L18.8029 14.7674C18.7426 14.8889 18.6769 15.0238 18.6109 15.1351C18.5396 15.2555 18.4378 15.4037 18.28 15.5332C18.0654 15.7095 17.8053 15.8194 17.5305 15.8495C17.3278 15.8717 17.1525 15.84 17.0184 15.8056C16.8948 15.774 16.7558 15.7261 16.6304 15.6834L13.8838 14.748C13.8054 14.7213 13.7352 14.6976 13.672 14.6763C13.6963 14.7438 13.7237 14.8194 13.7547 14.9041L14.6482 17.3457C14.6991 17.4848 14.7546 17.636 14.7921 17.7699C14.8325 17.9139 14.8715 18.1033 14.8517 18.3232C14.8249 18.6196 14.7109 18.9021 14.5241 19.132C14.3853 19.3027 14.2259 19.4087 14.0972 19.4812C13.9778 19.5485 13.8333 19.6145 13.7018 19.6752L11.2761 20.7944C11.1894 20.8344 11.1124 20.8702 11.0437 20.9023C11.1125 20.9344 11.1892 20.971 11.2761 21.0111L13.7018 22.1303C13.8333 22.191 13.9778 22.257 14.0972 22.3243C14.1938 22.3787 14.3079 22.4518 14.4174 22.5571L14.5241 22.6743L14.5911 22.7629C14.7173 22.9446 14.8014 23.1528 14.8376 23.3718L14.8517 23.4823L14.8567 23.6408C14.8522 23.7938 14.8224 23.9274 14.7921 24.0355C14.7546 24.1694 14.6991 24.3206 14.6482 24.4598L13.7547 26.9014C13.7239 26.9857 13.6963 27.061 13.672 27.1283C13.7351 27.1071 13.8056 27.0849 13.8838 27.0583L17.4064 25.8581L17.4899 25.8345C17.9089 25.7382 18.3394 25.9789 18.4786 26.403C18.6268 26.8554 18.387 27.3449 17.9433 27.496L14.4207 28.6962C14.134 28.7938 13.8633 28.8873 13.6405 28.9408C13.4336 28.9904 13.0963 29.053 12.7495 28.9205C12.3351 28.762 12.0167 28.4184 11.8817 27.9919C11.7694 27.6369 11.8427 27.2995 11.8991 27.0895C11.9597 26.8637 12.0605 26.5898 12.1671 26.2984L13.0606 23.8559C13.0752 23.816 13.0872 23.7805 13.0987 23.7488C13.07 23.7354 13.0384 23.7206 13.0027 23.7041L10.5779 22.5849C10.2858 22.4501 10.0122 22.3249 9.80521 22.2054C9.61574 22.096 9.31573 21.9031 9.14834 21.5551C8.95057 21.1438 8.95053 20.6616 9.14834 20.2504L9.21701 20.1272C9.38913 19.8556 9.6394 19.6959 9.80521 19.6001C10.0122 19.4806 10.2858 19.3554 10.5779 19.2206L13.0027 18.1014C13.0384 18.0849 13.07 18.07 13.0987 18.0567C13.0872 18.0249 13.0752 17.9894 13.0606 17.9496L12.1671 15.5071C12.0606 15.2158 11.9597 14.9417 11.8991 14.716C11.8427 14.5059 11.7694 14.1685 11.8817 13.8135L11.9413 13.6575C12.0983 13.304 12.3869 13.0236 12.7495 12.885C13.0963 12.7524 13.4336 12.815 13.6405 12.8647C13.8632 12.9182 14.134 13.0117 14.4207 13.1093L17.1673 14.0446C17.197 14.0548 17.2239 14.0633 17.2484 14.0716C17.2608 14.0467 17.2753 14.0197 17.2906 13.989L18.5489 11.4512C18.6783 11.19 18.801 10.9401 18.9178 10.7495C19.0281 10.5695 19.2156 10.2969 19.5367 10.1414L19.6856 10.0798Z" fill="white"/>
-                <path d="M20.8933 22.0948C21.6768 21.3308 22.9468 21.331 23.7304 22.0948L25.2906 23.6163L25.3467 23.5626C26.4927 22.4451 27.066 21.8865 27.5579 21.8487C27.9846 21.816 28.4015 21.9845 28.6795 22.3018C29 22.6677 29 23.4579 29 25.0381V27.9131C29 28.6436 29.0005 29.0091 28.8548 29.2881C28.7265 29.5335 28.5216 29.7333 28.2699 29.8584C27.9838 30.0005 27.609 30 26.8599 30H23.9117C22.2912 30 21.4808 30 21.1056 29.6875C20.7802 29.4164 20.6074 29.0099 20.6409 28.5938C20.6797 28.114 21.2525 27.555 22.3985 26.4375L22.4536 26.3828L20.8933 24.8614C20.11 24.0973 20.1098 22.8588 20.8933 22.0948Z" fill="white"/>
-              </svg>
-            </div>
+        {#if data.depositAmount}
+          <p class="deposit-info">보증금 <strong>{fmt(data.depositAmount)}</strong>원</p>
+        {/if}
+
+        {#if data.rentalPeriods.length > 0 || data.rentalMethods.length > 0}
+          <div class="policy-block">
+            {#if data.rentalPeriods.length > 0}
+              <div class="policy-row">
+                <span class="policy-label">대여 기간</span>
+                <div class="policy-chips">
+                  {#each data.rentalPeriods as period}
+                    <span class="policy-chip">{period.name}</span>
+                  {/each}
+                </div>
+              </div>
+            {/if}
+            {#if data.rentalMethods.length > 0}
+              <div class="policy-row">
+                <span class="policy-label">대여 방식</span>
+                <div class="policy-chips">
+                  {#each data.rentalMethods as method}
+                    <span class="policy-chip">{method.name}</span>
+                  {/each}
+                </div>
+              </div>
+            {/if}
           </div>
-        </div>
+        {/if}
+
+        {#if data.shippingPolicy && (data.shippingPolicy.items.length > 0 || data.shippingPolicy.guide)}
+          <div class="shipping-policy-block">
+            {#if data.shippingPolicy.items.length > 0}
+              <div class="policy-row">
+                <span class="policy-label">배송 정책</span>
+                <div class="policy-chips">
+                  {#each data.shippingPolicy.items as item}
+                    <span class="policy-chip policy-chip--active">{item.label} <strong>{item.fee.toLocaleString('ko-KR')}원</strong></span>
+                  {/each}
+                </div>
+              </div>
+            {/if}
+            {#if data.shippingPolicy.guide}
+              <p class="sp-guide">{data.shippingPolicy.guide}</p>
+            {/if}
+          </div>
+        {/if}
 
         <!-- Quantity control -->
         <div class="qty-row">
@@ -364,9 +435,13 @@
           bind:endDate
           bind:startHour
           bind:endHour
+          bind:selectedMethodId
+          bind:selectedPeriodId
           dailyPrice={product.base_price_daily * qty}
-          halfDayPrice={Math.round(product.base_price_daily * 0.7 * qty)}
+          halfDayPrice={price12h * qty}
           {optionsTotal}
+          rentalMethods={data.rentalMethods}
+          rentalPeriods={data.rentalPeriods}
           mode="product"
           onreserve={handleReserve}
           onchange={handleCalChange}
@@ -382,14 +457,19 @@
         bind:endDate
         bind:startHour
         bind:endHour
+        bind:selectedMethodId
+        bind:selectedPeriodId
         dailyPrice={product.base_price_daily * qty}
-        halfDayPrice={Math.round(product.base_price_daily * 0.7 * qty)}
+        halfDayPrice={price12h * qty}
         {optionsTotal}
+        rentalMethods={data.rentalMethods}
+        rentalPeriods={data.rentalPeriods}
         mode="product"
         onreserve={handleReserve}
         onchange={handleCalChange}
         chatCallback={() => showToast('준비중입니다.')}
       />
+
     </div>
 
   </div>
@@ -415,18 +495,78 @@
     <div class="tab-content" role="tabpanel">
       {#if activeTab === 'info'}
         <div class="tab-pane">
-          <h2 class="tab-heading">About this item</h2>
-          <div class="product-desc">{product.description ?? ''}</div>
+          {#if contentBlocks.length > 0}
+            <div class="cb-body">
+              {#each contentBlocks as block}
+                {#if block.type === 'text'}
+                  <!-- eslint-disable-next-line svelte/no-at-html-tags -->
+                  <div class="cb-text">{@html block.html}</div>
+                {:else if block.type === 'image'}
+                  <div class="cb-images cb-images--{block.layout}">
+                    {#each block.images.filter(img => !img.isHead) as img}
+                      <img src={img.url} alt={img.alt} loading="lazy" class="cb-img" />
+                    {/each}
+                  </div>
+                {:else if block.type === 'youtube'}
+                  <div class="cb-youtube">
+                    <iframe
+                      src="https://www.youtube.com/embed/{block.videoId}"
+                      title="YouTube 영상"
+                      allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+                      allowfullscreen
+                      loading="lazy"
+                    ></iframe>
+                  </div>
+                {:else if block.type === 'html'}
+                  <!-- eslint-disable-next-line svelte/no-at-html-tags -->
+                  <div class="cb-html">{@html block.content}</div>
+                {:else if block.type === 'divider'}
+                  <hr class="cb-divider" />
+                {:else if block.type === 'link-entry'}
+                  <a href={block.url} class="cb-link" target="_blank" rel="noopener noreferrer">{block.text}</a>
+                {/if}
+              {/each}
+            </div>
+          {:else if product.description}
+            <div class="product-desc">{product.description}</div>
+          {:else}
+            <p class="tab-empty">상품 설명이 없습니다.</p>
+          {/if}
         </div>
       {:else if activeTab === 'spec'}
         <div class="tab-pane">
-          <h2 class="tab-heading">사양</h2>
-          <p class="tab-empty">사양 정보가 준비 중입니다.</p>
+          {#if product.specifications && typeof product.specifications === 'object' && !Array.isArray(product.specifications) && Object.keys(product.specifications).length > 0}
+            <dl class="spec-table">
+              {#each Object.entries(product.specifications as Record<string, unknown>) as [key, val]}
+                <div class="spec-row">
+                  <dt class="spec-key">{key}</dt>
+                  <dd class="spec-val">{String(val ?? '')}</dd>
+                </div>
+              {/each}
+            </dl>
+          {:else}
+            <p class="tab-empty">사양 정보가 준비 중입니다.</p>
+          {/if}
         </div>
       {:else if activeTab === 'review'}
         <div class="tab-pane">
-          <h2 class="tab-heading">후기</h2>
-          <p class="tab-empty">등록된 후기가 없습니다.</p>
+          {#if reviews.length === 0}
+            <p class="review-empty">아직 등록된 후기가 없습니다.</p>
+          {:else}
+            <div class="review-list">
+              {#each reviews as r (r.id)}
+                <article class="review-card">
+                  <div class="review-top">
+                    <p class="review-card-title">{r.title}</p>
+                    <p class="review-meta-text">{r.author_name} / {new Date(r.created_at).toLocaleDateString('ko-KR')}</p>
+                  </div>
+                  <div class="review-bottom">
+                    <p class="review-body">{r.content}</p>
+                  </div>
+                </article>
+              {/each}
+            </div>
+          {/if}
         </div>
       {:else}
         <div class="tab-pane">
@@ -453,29 +593,33 @@
       </div>
     </div>
     <div class="shotlog-list">
-      {#each MOCK_SHOTLOGS as post}
-        <div class="shotlog-card">
-          <!-- 모바일: 이미지 상단 -->
-          <div class="shotlog-img-mobile" aria-hidden="true">
-            {#if post.image}
-              <img src={post.image} alt="" class="shotlog-img-tag" />
-            {/if}
-          </div>
-          <!-- PC: 좌측 보라 바 -->
-          <div class="shotlog-purple-bar" aria-hidden="true"></div>
-          <!-- 텍스트 (공통) -->
-          <div class="shotlog-writing">
-            <p class="shotlog-post-title">{post.title}</p>
-            <p class="shotlog-post-meta">{post.meta}</p>
-          </div>
-          <!-- PC: 우측 이미지 -->
-          <div class="shotlog-img-pc" aria-hidden="true">
-            {#if post.image}
-              <img src={post.image} alt="" class="shotlog-img-tag" />
-            {/if}
-          </div>
-        </div>
-      {/each}
+      {#if shotlogs.length === 0}
+        <p class="shotlog-empty">등록된 Shotlog가 없습니다.</p>
+      {:else}
+        {#each shotlogs as post (post.id)}
+          <a href="/crazylog/{post.id}" class="shotlog-card" aria-label={post.title}>
+            <!-- 모바일: 이미지 상단 -->
+            <div class="shotlog-img-mobile" aria-hidden="true">
+              {#if post.img}
+                <img src={post.img} alt="" class="shotlog-img-tag" />
+              {/if}
+            </div>
+            <!-- PC: 좌측 보라 바 -->
+            <div class="shotlog-purple-bar" aria-hidden="true"></div>
+            <!-- 텍스트 (공통) -->
+            <div class="shotlog-writing">
+              <p class="shotlog-post-title">{post.title}</p>
+              <p class="shotlog-post-meta">{new Date(post.createdAt).toLocaleDateString('ko-KR')}·by {post.author}</p>
+            </div>
+            <!-- PC: 우측 이미지 -->
+            <div class="shotlog-img-pc" aria-hidden="true">
+              {#if post.img}
+                <img src={post.img} alt="" class="shotlog-img-tag" />
+              {/if}
+            </div>
+          </a>
+        {/each}
+      {/if}
     </div>
   </div>
 </section>
@@ -504,23 +648,29 @@
       {/if}
     </div>
     <div class="review-form review-form-expanded">
+      <input
+        class="review-input review-title-input"
+        type="text"
+        maxlength="20"
+        placeholder={session ? '제목 (최대 20자)' : '로그인 후 작성해주세요.'}
+        bind:value={reviewTitle}
+        onclick={() => { if (!session) goto('/auth/login'); }}
+        readonly={!session}
+      />
       <textarea
         class="review-input review-content-input"
         maxlength="500"
-        placeholder={session ? '후기를 입력해주세요. (최대 500자)' : '로그인 후 작성해주세요.'}
+        placeholder={session ? '내용 (최대 500자)' : '로그인 후 작성해주세요.'}
         bind:value={reviewContent}
         onclick={() => { if (!session) goto('/auth/login'); }}
         readonly={!session}
       ></textarea>
       <button
-        class="review-send-btn"
-        aria-label="후기 등록"
+        class="review-submit-btn"
         onclick={submitReview}
-        disabled={isSubmittingReview || !reviewContent.trim()}
+        disabled={isSubmittingReview || !reviewTitle.trim() || !reviewContent.trim()}
       >
-        <svg width="15" height="10" viewBox="0 0 17 12" fill="none">
-          <path d="M1 6H16M16 6L11 1M16 6L11 11" stroke="var(--cs-text)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
-        </svg>
+        {isSubmittingReview ? '등록 중...' : '후기 등록'}
       </button>
     </div>
   </div>
@@ -536,17 +686,25 @@
       <p class="popular-sub">Best selling items that customers love</p>
     </div>
     <div class="popular-scroll">
-      {#each Array(5) as _}
-        <div class="popular-card">
-          <div class="popular-card-img" aria-hidden="true">
-            <img src="/sample/product-main.png" alt="" class="popular-card-img-tag" />
-          </div>
-          <div class="popular-card-info">
-            <p class="popular-card-price">Day 35,000 / 12H 25,000</p>
-            <p class="popular-card-name">SONY FE 24-105 F4 G OSS</p>
-          </div>
-        </div>
-      {/each}
+      {#if popularProducts.length === 0}
+        <p class="popular-empty">관련 상품이 없습니다.</p>
+      {:else}
+        {#each popularProducts as item (item.id)}
+          <a href="/products/{item.slug ?? item.id}" class="popular-card" aria-label={item.name}>
+            <div class="popular-card-img" aria-hidden="true">
+              {#if item.imageUrl}
+                <img src={item.imageUrl} alt={item.name} class="popular-card-img-tag" />
+              {:else}
+                <img src="/sample/product-main.png" alt="" class="popular-card-img-tag" />
+              {/if}
+            </div>
+            <div class="popular-card-info">
+              <p class="popular-card-price">Day {fmt(item.price24h)}</p>
+              <p class="popular-card-name">{item.name}</p>
+            </div>
+          </a>
+        {/each}
+      {/if}
     </div>
   </div>
 </section>
@@ -740,18 +898,6 @@
 
   /* Delivery */
   .delivery-block { display: flex; flex-direction: column; gap: 10px; }
-  .delivery-text {
-    font: var(--text-m-script-14B);
-    color: var(--cs-text-dark);
-    margin: 0;
-  }
-  .delivery-icons { display: flex; gap: 16px; }
-  .delivery-icon {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    flex-shrink: 0;
-  }
 
   /* Qty control */
   .qty-row {
@@ -918,6 +1064,115 @@
     padding: 30px 0 var(--layout-section-gap);
     background: var(--cs-lilac);
   }
+  /* ── Brand label */
+  .product-brand {
+    font: var(--text-m-script-12);
+    font-weight: 700;
+    color: var(--cs-text-light);
+    letter-spacing: 0.5px;
+    text-transform: uppercase;
+    margin: 0 0 4px;
+  }
+
+  /* ── Deposit + Policy */
+  .deposit-info {
+    font: var(--text-m-script-14B);
+    color: var(--cs-text-dark);
+    margin: 0;
+  }
+  .deposit-info strong { font-weight: 900; color: var(--cs-text); }
+
+  .policy-block {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding: 12px 0;
+    border-top: 1px solid var(--cs-lilac);
+  }
+  .policy-row {
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+  }
+  .policy-label {
+    font: var(--text-m-script-14B);
+    color: var(--cs-text-dark);
+    min-width: 62px;
+    flex-shrink: 0;
+    padding-top: 3px;
+  }
+  .policy-chips {
+    display: flex;
+    gap: 6px;
+    flex-wrap: wrap;
+  }
+  .policy-chip {
+    font: var(--text-m-script-12);
+    font-weight: 700;
+    color: var(--cs-purple);
+    background: var(--cs-lilac);
+    border-radius: var(--radius-full);
+    padding: 4px 10px;
+    line-height: 1.4;
+  }
+
+  /* ── 배송정책 */
+  .shipping-policy-block {
+    margin-top: 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+  .policy-chip--active {
+    color: var(--cs-white);
+    background: var(--cs-purple);
+  }
+  .policy-chip--active strong {
+    font-weight: 400;
+    opacity: 0.85;
+  }
+  .sp-guide {
+    font: var(--text-m-script-12);
+    color: var(--cs-text-light);
+    padding-left: 70px;
+    line-height: 1.6;
+  }
+
+  /* ── Spec table */
+  .spec-table {
+    display: flex;
+    flex-direction: column;
+    gap: 0;
+    border-top: 1px solid var(--cs-lilac);
+    margin: 0;
+  }
+  .spec-row {
+    display: grid;
+    grid-template-columns: 130px 1fr;
+    gap: 0 16px;
+    padding: 12px 0;
+    border-bottom: 1px solid var(--cs-lilac);
+    align-items: start;
+  }
+  .spec-key {
+    font: var(--text-m-script-14B);
+    color: var(--cs-text-dark);
+    margin: 0;
+    word-break: keep-all;
+  }
+  .spec-val {
+    font: var(--text-m-body-16L);
+    color: var(--cs-text);
+    margin: 0;
+    word-break: break-word;
+  }
+  @media (min-width: 768px) {
+    .spec-row { grid-template-columns: 160px 1fr; padding: 14px 0; }
+    .spec-key  { font: var(--text-pc-body-14); color: var(--cs-text-dark); }
+    .spec-val  { font: var(--text-pc-body-14); color: var(--cs-text); font-weight: 400; }
+    .product-brand { font: var(--text-pc-script-12); font-weight: 700; color: var(--cs-text-light); }
+  }
+
   .tab-heading {
     font: var(--text-m-title-21);
     color: var(--cs-text);
@@ -934,6 +1189,75 @@
     color: var(--cs-text-light);
     margin: 0;
   }
+
+  /* ── content_blocks 렌더러 */
+  .cb-body {
+    display: flex;
+    flex-direction: column;
+    gap: 24px;
+  }
+  .cb-text {
+    font: var(--text-m-body-16L);
+    color: var(--cs-text-dark);
+    line-height: 1.8;
+  }
+  .cb-text :global(p)  { margin: 0 0 12px; }
+  .cb-text :global(ul),
+  .cb-text :global(ol) { padding-left: 20px; margin: 0 0 12px; }
+  .cb-text :global(h1),
+  .cb-text :global(h2),
+  .cb-text :global(h3) { margin: 0 0 8px; }
+  .cb-images {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+  }
+  .cb-images--full .cb-img  { width: 100%; }
+  .cb-images--half .cb-img  { width: calc(50% - 4px); }
+  .cb-images--third .cb-img { width: calc(33.333% - 6px); }
+  .cb-img {
+    border-radius: var(--radius-md);
+    object-fit: cover;
+    display: block;
+    max-width: 100%;
+  }
+  .cb-youtube {
+    position: relative;
+    width: 100%;
+    padding-bottom: 56.25%;
+    border-radius: var(--radius-md);
+    overflow: hidden;
+    background: #000;
+  }
+  .cb-youtube iframe {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    border: none;
+  }
+  .cb-html {
+    font: var(--text-m-body-16L);
+    color: var(--cs-text-dark);
+    line-height: 1.8;
+  }
+  .cb-divider {
+    border: none;
+    border-top: 1px solid var(--cs-lilac);
+    margin: 0;
+  }
+  .cb-link {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 10px 16px;
+    border: 1px solid var(--cs-purple);
+    border-radius: var(--radius-md);
+    font: var(--text-m-script-14B);
+    color: var(--cs-purple);
+    text-decoration: none;
+  }
+  .cb-link:hover { background: var(--cs-lilac); }
 
   /* ── Shotlog */
   .shotlog-section {
@@ -1363,9 +1687,30 @@
   .review-input::placeholder {
     color: var(--cs-text-placeholder);
   }
+  .review-title-input {
+    width: 100%;
+    margin-bottom: 8px;
+  }
   .review-content-input {
+    width: 100%;
     min-height: 80px;
     line-height: 1.6;
+    resize: vertical;
+    margin-bottom: 12px;
+  }
+  .review-submit-btn {
+    background: var(--cs-purple);
+    color: #fff;
+    border: none;
+    border-radius: var(--radius-md);
+    padding: 10px 24px;
+    font: var(--text-m-body-16B);
+    cursor: pointer;
+    min-height: 44px;
+  }
+  .review-submit-btn:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
   }
   .review-empty {
     font: var(--text-m-script-14);

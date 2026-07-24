@@ -1,4 +1,6 @@
 <script lang="ts">
+  interface RentalOption { id: string; name: string }
+
   interface Props {
     startDate?: string;
     endDate?: string;
@@ -8,7 +10,11 @@
     halfDayPrice?: number;
     optionsTotal?: number;
     mode?: 'product' | 'cart';
-    onreserve?: (data: { startDate: string; endDate: string; startHour: number; endHour: number }) => void;
+    rentalMethods?: RentalOption[];
+    rentalPeriods?: RentalOption[];
+    selectedMethodId?: string;
+    selectedPeriodId?: string;
+    onreserve?: (data: { startDate: string; endDate: string; startHour: number; endHour: number; methodId: string; periodId: string }) => void;
     onchange?: (data: { startDate: string; endDate: string; startHour: number; endHour: number }) => void;
     chatCallback?: () => void;
   }
@@ -22,6 +28,10 @@
     halfDayPrice = 25000,
     optionsTotal = 0,
     mode = 'product',
+    rentalMethods = [],
+    rentalPeriods = [],
+    selectedMethodId = $bindable(''),
+    selectedPeriodId = $bindable(''),
     onreserve,
     onchange,
     chatCallback,
@@ -63,10 +73,15 @@
 
   function handleDateClick(day: number) {
     const iso = toIso(viewYear, viewMonth, day);
-    if (pickPhase === 'start' || (startDate && iso <= startDate)) {
+    if (pickPhase === 'start' || (startDate && iso < startDate)) {
       startDate = iso;
       endDate = '';
       pickPhase = 'end';
+    } else if (iso === startDate) {
+      // 당일 대여: 반출·반납 같은 날
+      endDate = iso;
+      pickPhase = 'start';
+      emit();
     } else {
       endDate = iso;
       pickPhase = 'start';
@@ -109,34 +124,66 @@
     return Math.max(0, Math.floor(ms / 86400000));
   });
 
+  // 당일 대여 여부 (startDate === endDate)
+  let isSameDayRental = $derived(!!startDate && !!endDate && startDate === endDate);
+
+  // 시간 차이: 당일 대여는 단순 시각 차이, 다일 대여는 날짜 오프셋 + 시각 차이
   let remainHours = $derived.by(() => {
     if (!startDate || !endDate) return 0;
+    if (isSameDayRental) {
+      // 당일: 순수 시각 차이 (음수 방지)
+      return Math.max(0, endHour - startHour);
+    }
     const hourDiff = endHour - startHour;
     return ((hourDiff % 24) + 24) % 24;
   });
 
   let remainMins = $derived.by(() => {
     if (!startDate || !endDate) return 0;
+    if (isSameDayRental) {
+      return Math.max(0, endMin - startMin);
+    }
     const minDiff = endMin - startMin;
     return ((minDiff % 60) + 60) % 60;
   });
 
+  // 총 대여시간(분) — 요금 계산 기준
+  let totalRentalMinutes = $derived.by(() => {
+    if (!startDate || !endDate) return 0;
+    const dayMins = totalDays * 24 * 60;
+    const hourMins = (endHour - startHour) * 60;
+    const minDiff = endMin - startMin;
+    return Math.max(0, dayMins + hourMins + minDiff);
+  });
+
   let estimatedFee = $derived.by(() => {
-    if (!startDate || !endDate || totalDays === 0) return optionsTotal;
+    if (!startDate || !endDate) return optionsTotal;
+
+    if (isSameDayRental) {
+      // 당일 대여: 시간 기준
+      const mins = (endHour * 60 + endMin) - (startHour * 60 + startMin);
+      if (mins <= 0) return optionsTotal;
+      const hours = mins / 60;
+      if (hours <= 12) return halfDayPrice + optionsTotal;
+      return dailyPrice + optionsTotal;
+    }
+
+    // 다일 대여: 기존 로직 (일수 × 일요금 + 잔여시간 12시간 이상 시 반일 추가)
+    if (totalDays === 0) return optionsTotal;
     let fee = totalDays * dailyPrice;
     if (remainHours >= 12) fee += halfDayPrice;
     return fee + optionsTotal;
   });
 
   function emit() {
-    if (startDate && endDate) {
-      onchange?.({ startDate, endDate, startHour, endHour });
+    if (startDate) {
+      onchange?.({ startDate, endDate: endDate || startDate, startHour, endHour });
     }
   }
 
   function handleReserve() {
-    if (!startDate || !endDate) return;
-    onreserve?.({ startDate, endDate, startHour, endHour });
+    if (!startDate) return;
+    onreserve?.({ startDate, endDate: endDate || startDate, startHour, endHour, methodId: selectedMethodId, periodId: selectedPeriodId });
   }
 
   function handleChat() {
@@ -297,19 +344,58 @@
     <div class="fee-row">
       <span class="fee-label">예상 대여요금</span>
       <div class="fee-val-wrap">
-        <span class="fee-val">{startDate && endDate ? estimatedFee.toLocaleString('ko-KR') : '–'}</span>
+        <span class="fee-val">{startDate ? estimatedFee.toLocaleString('ko-KR') : '–'}</span>
         <span class="fee-unit">원</span>
       </div>
     </div>
 
     <p class="fee-note">단순 합계요금으로 실제 결제요금과 다를 수 있습니다.</p>
 
+    <!-- 대여정책 (대여기간·방식) -->
+    {#if rentalPeriods.length > 0 || rentalMethods.length > 0}
+      <div class="policy-section">
+        {#if rentalPeriods.length > 0}
+          <div class="policy-row">
+            <span class="policy-lbl">대여 기간</span>
+            <div class="policy-chips">
+              {#each rentalPeriods as p}
+                <button
+                  type="button"
+                  class="policy-chip"
+                  class:chip-active={selectedPeriodId === p.id}
+                  onclick={() => { selectedPeriodId = selectedPeriodId === p.id ? '' : p.id }}
+                  aria-pressed={selectedPeriodId === p.id}
+                >{p.name}</button>
+              {/each}
+            </div>
+          </div>
+        {/if}
+        {#if rentalMethods.length > 0}
+          <div class="policy-row">
+            <span class="policy-lbl">대여 방식</span>
+            <div class="policy-chips">
+              {#each rentalMethods as m}
+                <button
+                  type="button"
+                  class="policy-chip"
+                  class:chip-active={selectedMethodId === m.id}
+                  onclick={() => { selectedMethodId = selectedMethodId === m.id ? '' : m.id }}
+                  aria-pressed={selectedMethodId === m.id}
+                >{m.name}</button>
+              {/each}
+            </div>
+          </div>
+        {/if}
+      </div>
+    {/if}
+
+
     <!-- CTAs -->
     <div class="cta-row">
       <button
         class="reserve-btn"
         onclick={handleReserve}
-        disabled={!startDate || !endDate}
+        disabled={!startDate}
         aria-label="예약담기"
       >
         예약담기
@@ -638,4 +724,49 @@
     overflow: hidden;
   }
   .chat-btn:hover { opacity: 0.85; }
+
+  /* ── 대여정책 */
+  .policy-section {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    padding-top: 20px;
+    border-top: 1px solid rgba(59, 47, 138, 0.12);
+  }
+  .policy-row {
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+  }
+  .policy-lbl {
+    font: var(--text-m-script-14B);
+    color: var(--cs-text-dark);
+    min-width: 58px;
+    flex-shrink: 0;
+    padding-top: 5px;
+  }
+  .policy-chips {
+    display: flex;
+    gap: 6px;
+    flex-wrap: wrap;
+  }
+  .policy-chip {
+    font: var(--text-m-script-12);
+    font-weight: 700;
+    color: var(--cs-purple);
+    background: var(--cs-lilac);
+    border: none;
+    border-radius: var(--radius-full);
+    padding: 6px 14px;
+    min-height: 30px;
+    cursor: pointer;
+    line-height: 1.4;
+    transition: background 0.15s, color 0.15s;
+  }
+  .policy-chip:hover { background: var(--cs-purple-op10); }
+  .policy-chip.chip-active {
+    background: var(--cs-purple);
+    color: var(--cs-white);
+  }
+
 </style>

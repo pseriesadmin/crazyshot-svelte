@@ -56,39 +56,39 @@
   <!-- Bottom: Mobile dots / PC thumbnails -->
   <div class="hero-bottom">
     <!-- Mobile dot indicator -->
-    <div class="dots-mobile">
-      {#each Array(Math.max(imageUrls.length, 4)) as _, i}
-        <button
-          class="dot"
-          class:dot-active={i === activeThumb}
-          onclick={() => activeThumb = i}
-          aria-label="{i+1}번째 이미지"
-        ></button>
-      {/each}
-    </div>
+    {#if imageUrls.length > 0}
+      <div class="dots-mobile">
+        {#each imageUrls as _, i}
+          <button
+            class="dot"
+            class:dot-active={i === activeThumb}
+            onclick={() => activeThumb = i}
+            aria-label="{i+1}번째 이미지"
+          ></button>
+        {/each}
+      </div>
+    {/if}
 
     <!-- PC thumbnail strip -->
-    <div class="thumbs-pc">
-      {#each Array(Math.max(imageUrls.length, 4)).fill(0) as _, i}
-        <button
-          class="thumb"
-          class:thumb-active={i === activeThumb}
-          onclick={() => activeThumb = i}
-          aria-label="{i+1}번째 이미지"
-        >
-          {#if imageUrls[i]}
+    {#if imageUrls.length > 0}
+      <div class="thumbs-pc">
+        {#each imageUrls as url, i}
+          <button
+            class="thumb"
+            class:thumb-active={i === activeThumb}
+            onclick={() => activeThumb = i}
+            aria-label="{i+1}번째 이미지"
+          >
             <img
-              src={getCloudinaryUrl(imageUrls[i].startsWith('http') ? imageUrls[i].split('/').pop() ?? '' : imageUrls[i], 140, 140)}
+              src={url.startsWith('http') ? url : getCloudinaryUrl(url, 140, 140)}
               alt="{productName} 이미지 {i+1}"
               loading="lazy"
             />
-          {:else}
-            <div class="thumb-fallback"></div>
-          {/if}
-          <div class="thumb-overlay"></div>
-        </button>
-      {/each}
-    </div>
+            <div class="thumb-overlay"></div>
+          </button>
+        {/each}
+      </div>
+    {/if}
   </div>
 </div>
 
@@ -288,7 +288,8 @@
     inset: 0;
     width: 100%;
     height: 100%;
-    object-fit: cover;
+    object-fit: contain;
+    background: rgba(255,255,255,0.08);
   }
   .thumb-fallback { background: var(--cs-purple-op10); }
   .thumb-overlay {
