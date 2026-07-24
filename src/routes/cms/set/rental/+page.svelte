@@ -5,7 +5,7 @@
   import CmsDragList from '$lib/components/cms/CmsDragList.svelte'
   import CmsDeleteButton from '$lib/components/cms/CmsDeleteButton.svelte'
   import type { PageData, ActionData } from './$types'
-  import type { RentalPeriodOption, RentalMethodOption, PickupPoint, RentalConsentItem } from './+page.server'
+  import type { RentalPeriodOption, RentalMethodOption, PickupPoint, RentalConsentItem, RentalShippingSettings } from './+page.server'
 
   interface Props {
     data: PageData
@@ -62,6 +62,27 @@
       branchForms[branchId].phone = formatPhone(raw)
     }
   }
+
+  // ─── 배송 설정 ───
+  let enableRoundTrip  = $state(data.shippingSettings?.enable_round_trip  ?? false)
+  let roundTripFee     = $state<number | ''>(data.shippingSettings?.round_trip_fee  ?? '')
+  let enableDelivery   = $state(data.shippingSettings?.enable_delivery    ?? false)
+  let deliveryFee      = $state<number | ''>(data.shippingSettings?.delivery_fee    ?? '')
+  let enableReturn     = $state(data.shippingSettings?.enable_return       ?? false)
+  let returnFee        = $state<number | ''>(data.shippingSettings?.return_fee       ?? '')
+  let shippingGuide    = $state(data.shippingSettings?.shipping_guide      ?? '')
+  let shippingLoading  = $state(false)
+  let shippingGuideCount = $derived(shippingGuide.length)
+
+  $effect(() => {
+    enableRoundTrip = data.shippingSettings?.enable_round_trip  ?? false
+    roundTripFee    = data.shippingSettings?.round_trip_fee     ?? ''
+    enableDelivery  = data.shippingSettings?.enable_delivery    ?? false
+    deliveryFee     = data.shippingSettings?.delivery_fee       ?? ''
+    enableReturn    = data.shippingSettings?.enable_return       ?? false
+    returnFee       = data.shippingSettings?.return_fee          ?? ''
+    shippingGuide   = data.shippingSettings?.shipping_guide      ?? ''
+  })
 
   // ─── 이용안내 ───
   let guideText = $state(data.guideText)
@@ -245,7 +266,147 @@
     </section>
 
     <!-- ══════════════════════════════════════════
-         섹션 3: 지점 정보 등록
+         섹션 3: 배송 설정
+    ══════════════════════════════════════════ -->
+    <section class="setting-section">
+      <div class="section-head">
+        <h2 class="section-title">배송 설정</h2>
+      </div>
+      <p class="section-desc">택배 유형별 요금을 설정하고 고객에게 표시할 배송 안내문을 입력하세요.</p>
+
+      <form
+        method="POST"
+        action="?/saveShipping"
+        class="shipping-form"
+        use:enhance={() => {
+          shippingLoading = true
+          return async ({ result, update }) => {
+            shippingLoading = false
+            if (result.type === 'success') {
+              csToast.success('배송 설정이 저장되었습니다.')
+              await update()
+            } else if (result.type === 'failure') {
+              csToast.error((result.data as { error?: string })?.error ?? '저장에 실패했습니다.')
+            }
+          }
+        }}
+      >
+        <!-- 택배 적용 옵션 콤보버튼 -->
+        <div class="sf-row">
+          <span class="sf-label">택배 적용 옵션</span>
+          <div class="shipping-chips">
+            <button
+              type="button"
+              class="s-chip"
+              class:s-chip--on={enableRoundTrip}
+              onclick={() => { enableRoundTrip = !enableRoundTrip }}
+            >왕복 요금</button>
+            <button
+              type="button"
+              class="s-chip"
+              class:s-chip--on={enableDelivery}
+              onclick={() => { enableDelivery = !enableDelivery }}
+            >배송요금</button>
+            <button
+              type="button"
+              class="s-chip"
+              class:s-chip--on={enableReturn}
+              onclick={() => { enableReturn = !enableReturn }}
+            >반송요금</button>
+          </div>
+        </div>
+
+        <!-- boolean 플래그 hidden inputs -->
+        <input type="hidden" name="enable_round_trip" value={enableRoundTrip ? 'true' : 'false'} />
+        <input type="hidden" name="enable_delivery"   value={enableDelivery   ? 'true' : 'false'} />
+        <input type="hidden" name="enable_return"      value={enableReturn      ? 'true' : 'false'} />
+
+        <!-- 요금 입력 (활성/비활성) -->
+        <div class="fee-grid">
+          <div class="fee-row" class:fee-row--disabled={!enableRoundTrip}>
+            <span class="fee-label">왕복 요금</span>
+            <div class="fee-input-wrap">
+              <input
+                type="number"
+                name="round_trip_fee"
+                class="add-input fee-input"
+                bind:value={roundTripFee}
+                disabled={!enableRoundTrip}
+                min="0"
+                step="100"
+                placeholder="0"
+                aria-label="왕복 요금"
+              />
+              <span class="fee-unit">원</span>
+            </div>
+          </div>
+          <div class="fee-row" class:fee-row--disabled={!enableDelivery}>
+            <span class="fee-label">배송요금</span>
+            <div class="fee-input-wrap">
+              <input
+                type="number"
+                name="delivery_fee"
+                class="add-input fee-input"
+                bind:value={deliveryFee}
+                disabled={!enableDelivery}
+                min="0"
+                step="100"
+                placeholder="0"
+                aria-label="배송요금"
+              />
+              <span class="fee-unit">원</span>
+            </div>
+          </div>
+          <div class="fee-row" class:fee-row--disabled={!enableReturn}>
+            <span class="fee-label">반송요금</span>
+            <div class="fee-input-wrap">
+              <input
+                type="number"
+                name="return_fee"
+                class="add-input fee-input"
+                bind:value={returnFee}
+                disabled={!enableReturn}
+                min="0"
+                step="100"
+                placeholder="0"
+                aria-label="반송요금"
+              />
+              <span class="fee-unit">원</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- 배송 안내문 (200자) -->
+        <div class="subsection shipping-guide-sub">
+          <div class="subsection-head">
+            <h3 class="subsection-title">배송 안내문</h3>
+          </div>
+          <div class="textarea-wrap">
+            <textarea
+              name="shipping_guide"
+              class="guide-textarea"
+              maxlength="200"
+              rows="4"
+              bind:value={shippingGuide}
+              placeholder="고객에게 표시될 배송 안내문을 입력하세요. (200자 이내)"
+              aria-label="배송 안내문"
+            ></textarea>
+            <span class="char-count" class:char-count--warn={shippingGuideCount > 180}
+              >{shippingGuideCount} / 200</span
+            >
+          </div>
+        </div>
+
+        <div class="guide-actions">
+          <button type="submit" class="btn-save" disabled={shippingLoading}>
+            {shippingLoading ? '저장 중...' : '배송 설정 저장'}
+          </button>
+        </div>
+      </form>
+    </section>
+
+    <!-- ══════════════════════════════════════════
+         섹션 4: 지점 정보 등록
     ══════════════════════════════════════════ -->
     <section class="setting-section">
       <div class="section-head">
@@ -944,5 +1105,103 @@
     font: var(--text-pc-script-12);
     color: var(--cs-text-mid);
     pointer-events: none;
+  }
+
+  /* ─── 배송 설정 섹션 ─── */
+  .shipping-form {
+    display: flex;
+    flex-direction: column;
+    gap: 0;
+  }
+
+  .sf-row {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    margin-bottom: 24px;
+  }
+
+  .sf-label {
+    flex: 0 0 100px;
+    font: var(--text-pc-body-14);
+    font-weight: 700;
+    color: var(--cs-text);
+    white-space: nowrap;
+  }
+
+  .shipping-chips {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+  }
+
+  .s-chip {
+    height: 36px;
+    padding: 0 18px;
+    border: 1px solid var(--cs-lilac);
+    border-radius: var(--cms-radius-md);
+    background: var(--cs-white);
+    color: var(--cs-text-mid);
+    font: var(--text-pc-body-14);
+    cursor: pointer;
+    transition: background 0.15s, color 0.15s, border-color 0.15s;
+  }
+
+  .s-chip--on {
+    background: var(--cs-purple);
+    color: var(--cs-white);
+    border-color: var(--cs-purple);
+  }
+
+  .s-chip:not(.s-chip--on):hover {
+    border-color: rgba(59, 47, 138, 0.4);
+    background: rgba(59, 47, 138, 0.04);
+  }
+
+  .fee-grid {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    margin-bottom: 28px;
+  }
+
+  .fee-row {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    transition: opacity 0.15s;
+  }
+
+  .fee-row--disabled {
+    opacity: 0.35;
+    pointer-events: none;
+  }
+
+  .fee-label {
+    flex: 0 0 100px;
+    font: var(--text-pc-body-14);
+    color: var(--cs-text);
+    white-space: nowrap;
+  }
+
+  .fee-input-wrap {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .fee-input {
+    width: 160px;
+    text-align: right;
+    flex: none;
+  }
+
+  .fee-unit {
+    font: var(--text-pc-body-14);
+    color: var(--cs-text-mid);
+  }
+
+  .shipping-guide-sub {
+    margin-bottom: 20px;
   }
 </style>

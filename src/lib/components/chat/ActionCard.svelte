@@ -37,6 +37,8 @@
       case 'shipment_notify':        return { label: '배송 추적', color: 'green' }
       case 'return_remind':          return { label: '반납 등록하기', color: 'orange' }
       case 'coupon_issued':          return { label: '쿠폰 적용하기', color: 'purple' }
+      case 'contract_link':          return { label: '전자계약 보기', color: 'purple' }
+      case 'contract_signed':        return { label: '전자계약 확인', color: 'purple' }
       default:                       return { label: '확인하기', color: 'purple' }
     }
   }
