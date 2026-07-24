@@ -21,6 +21,8 @@ export type ActionCardType =
   | 'shipment_notify'
   | 'return_remind'
   | 'coupon_issued'
+  | 'contract_link'    // 전자계약 서명 링크 발송 (고객 수신)
+  | 'contract_signed'  // 전자계약 서명 완료 알림 (관리자 수신)
 
 export type ActionCardButtonColor = 'purple' | 'red' | 'green' | 'orange'
 
