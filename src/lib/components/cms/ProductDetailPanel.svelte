@@ -43,6 +43,7 @@
     description: string | null
     product_caption: string | null
     image_urls: string[]
+    parent_product_id?: string | null
     specifications: Record<string, string> | null
     is_active: boolean
     created_at: string
@@ -194,7 +195,6 @@
   let shipRoundTrip = $state<boolean>(product.shipping_round_trip ?? true)
   let shipDelivery  = $state<boolean>(product.shipping_delivery   ?? true)
   let shipReturn    = $state<boolean>(product.shipping_return     ?? true)
-  let shipSaving    = $state(false)
 
   const origShip = $derived({
     roundTrip: product.shipping_round_trip ?? true,
@@ -220,7 +220,8 @@
   const isDirtyRental = $derived(
     JSON.stringify([...localPeriodIds].sort()) !== origRental.periodIds ||
     JSON.stringify([...localMethodIds].sort()) !== origRental.methodIds ||
-    JSON.stringify([...localPickupIds].sort()) !== origRental.pickupIds
+    JSON.stringify([...localPickupIds].sort()) !== origRental.pickupIds ||
+    isDirtyShip
   )
 
   function togglePeriod(id: string) {
@@ -238,8 +239,11 @@
   let localComponents = $state<Array<{ key: string; value: string }>>(
     Object.entries((product as ProductWithComponents).components ?? {}).map(([key, value]) => ({ key, value }))
   )
-  const origComponentsJson = JSON.stringify(
-    Object.fromEntries(Object.entries((product as ProductWithComponents).components ?? {}).map(([k, v]) => [k, v]))
+  // $derived: product 갱신 시 재계산 → 저장 후 isDirty 즉시 false 전환
+  const origComponentsJson = $derived(
+    JSON.stringify(
+      Object.fromEntries(Object.entries((product as ProductWithComponents).components ?? {}).map(([k, v]) => [k, v]))
+    )
   )
   const isDirtyComponents = $derived(
     JSON.stringify(Object.fromEntries(localComponents.filter(c => c.key).map(c => [c.key, c.value])))
@@ -250,8 +254,11 @@
   let localSpecs = $state<Array<{ key: string; value: string }>>(
     Object.entries(product.specifications ?? {}).map(([key, value]) => ({ key, value }))
   )
-  const origSpecsJson = JSON.stringify(
-    Object.fromEntries(Object.entries(product.specifications ?? {}).map(([k, v]) => [k, v]))
+  // $derived: product 갱신 시 재계산 → 저장 후 isDirty 즉시 false 전환
+  const origSpecsJson = $derived(
+    JSON.stringify(
+      Object.fromEntries(Object.entries(product.specifications ?? {}).map(([k, v]) => [k, v]))
+    )
   )
   const isDirtySpecs = $derived(
     JSON.stringify(Object.fromEntries(localSpecs.filter(s => s.key).map(s => [s.key, s.value])))
@@ -276,6 +283,9 @@
     localSpecs = Object.entries(product.specifications ?? {}).map(([key, value]) => ({ key, value }))
     localComponents = Object.entries((product as ProductWithComponents).components ?? {}).map(([key, value]) => ({ key, value }))
     localSlug = product.slug
+    // is_active 재동기화: inv-bar-toggle 클릭 후 invalidateAll 시 product.is_active가 변경되나
+    // localBasic.is_active는 마운트 시점 값에 고정 → isDirtyBasic 오탐 방지
+    localBasic.is_active = product.is_active
     // priceRules/product 변경 시(저장 후 invalidateAll) localPricing 동기화 → isDirtyPricing 초기화
     localPricing = {
       price_12h:             fmtPriceStr(priceRules.find(r => r.duration_type === '12h')?.price),
@@ -1561,6 +1571,9 @@
           <input type="hidden" name="allowed_period_ids" value={JSON.stringify(localPeriodIds)} />
           <input type="hidden" name="allowed_method_ids" value={JSON.stringify(localMethodIds)} />
           <input type="hidden" name="allowed_pickup_ids" value={JSON.stringify(localPickupIds)} />
+          <input type="hidden" name="shipping_round_trip" value={String(shipRoundTrip)} />
+          <input type="hidden" name="shipping_delivery"   value={String(shipDelivery)} />
+          <input type="hidden" name="shipping_return"     value={String(shipReturn)} />
 
           <!-- 허용 대여 기간 -->
           <div class="inline-row inline-row--wrap">
@@ -1628,29 +1641,7 @@
             {#if !shippingSettings.enable_round_trip && !shippingSettings.enable_delivery && !shippingSettings.enable_return}
               <a href="/cms/set/rental" class="il-empty-link">배송 설정에서 등록</a>
             {:else}
-              <form
-                method="POST"
-                action="/cms/products?/updateShippingOptions"
-                class="shipping-form"
-                use:enhance={() => {
-                  shipSaving = true
-                  return async ({ result, update }) => {
-                    shipSaving = false
-                    if (result.type === 'success') {
-                      csToast.success('배송 옵션이 저장되었습니다.')
-                      await update()
-                      await invalidateAll()
-                    } else if (result.type === 'failure') {
-                      csToast.error((result.data as { error?: string })?.error ?? '저장에 실패했습니다.')
-                    }
-                  }
-                }}
-              >
-                <input type="hidden" name="product_id" value={product.id} />
-                <input type="hidden" name="shipping_round_trip" value={String(shipRoundTrip)} />
-                <input type="hidden" name="shipping_delivery"   value={String(shipDelivery)} />
-                <input type="hidden" name="shipping_return"     value={String(shipReturn)} />
-
+              <div class="shipping-form">
                 <div class="shipping-combo-wrap">
                   {#if shippingSettings.enable_round_trip}
                     <button
@@ -1690,13 +1681,7 @@
                 {#if shippingSettings.shipping_guide}
                   <p class="shipping-guide-text">{shippingSettings.shipping_guide}</p>
                 {/if}
-
-                {#if isDirtyShip}
-                  <button type="submit" class="btn-ship-save" disabled={shipSaving}>
-                    {shipSaving ? '저장 중...' : '저장'}
-                  </button>
-                {/if}
-              </form>
+              </div>
             {/if}
           {:else}
             <a href="/cms/set/rental" class="il-empty-link">배송 설정에서 등록</a>
@@ -1738,6 +1723,13 @@
             {/if}
           </div>
         </div>
+
+        <!-- 자식 상품 선택 시 이미지 관리 안내 -->
+        {#if product.parent_product_id}
+          <div class="child-image-notice" role="alert">
+            ℹ️ 이 항목은 재고 단위(자식)입니다. 이미지는 자동으로 <strong>부모 상품</strong>에 통합 저장되며 목록 카드·썸네일에 반영됩니다.
+          </div>
+        {/if}
 
         <!-- 드롭존 (클릭: 파일 피커 / 드래그: 파일 업로드) -->
         <div
@@ -2803,6 +2795,19 @@
   .img-status.uploading { background: rgba(59,47,138,0.08); color: var(--cs-purple); }
   .img-status.saving    { background: rgba(59,47,138,0.06); color: var(--cs-text-mid); }
   .img-status.error     { background: rgba(255,53,53,0.08); color: var(--cs-red-badge); }
+
+  /* 자식 상품 이미지 안내 배너 */
+  .child-image-notice {
+    margin-bottom: 12px;
+    padding: 10px 14px;
+    background: rgba(255,160,0,0.08);
+    border: 1px solid rgba(255,160,0,0.3);
+    border-radius: var(--cms-radius-sm);
+    font: var(--text-pc-script-12);
+    color: var(--cs-text-mid);
+    line-height: 1.5;
+  }
+  .child-image-notice strong { color: var(--cs-text); }
 
   /* 드롭존 */
   .drop-zone {
@@ -3911,16 +3916,6 @@
     color: var(--cs-text-mid);
   }
   .ship-combo-btn--on .ship-fee { color: rgba(255,255,255,0.75); }
-  .btn-ship-save {
-    align-self: flex-start;
-    height: 28px; padding: 0 14px;
-    background: var(--cs-purple); color: var(--cs-white);
-    border: none; border-radius: var(--cms-radius-sm);
-    font: var(--text-pc-body-14); cursor: pointer;
-    transition: opacity .15s;
-  }
-  .btn-ship-save:disabled { opacity: .6; cursor: not-allowed; }
-
   .shipping-guide-text {
     margin: 0;
     padding: 8px 12px;

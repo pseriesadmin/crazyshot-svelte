@@ -1786,6 +1786,89 @@ plan_source: 세션 내 아젠다
 
 ---
 
+## NOW — 상품 상세 페이지 구성품(components) 노출 + 이미지 버그픽스 + isDirty 버그 수정 (2026-07-25) ✅ 완료
+
+plan_source: 세션 내 아젠다
+핵심제약:
+  - CMS ProductDetailPanel의 모든 필드 → 사용자 화면 노출 검증 완료 기반
+  - $state(prop) 초기화 금지 원칙 준수 ($effect 재동기화 패턴)
+  - components 필드 TypeScript 타입 미등록 → unknown 캐스트 패턴 적용
+  - 요청 범위 외 수정 없음
+
+신규/수정 파일:
+  - src/routes/products/[id]/+page.svelte ← 구성품 정보탭 노출 (핵심 수정)
+  - src/routes/cms/products/+page.server.ts ← 자식 상품 선택 시 image_urls 부모 기준 저장 버그 수정
+  - src/lib/components/cms/ProductDetailPanel.svelte ← isDirty 저장 후 즉시 비활성 버그 수정
+
+- [x] FEAT-COMPONENTS-DISPLAY: 사용자 화면 정보탭 구성품 노출 | BOUNDARY | ✅ 완료 (2026-07-25)
+  - productComponents $derived.by() 추가 (unknown 캐스트 → [string, string][] 반환)
+  - 정보 탭: comp-section 최상단 배치 (구성품 → 상품설명 순서)
+  - empty state 오탐 방지: `!productComponents` 조건 추가 (구성품만 있을 때 "설명 없음" 미표시)
+  - CSS: .comp-section / .comp-heading / .comp-list / .comp-item / .comp-item-key / .comp-item-val 추가
+  - 모바일/PC 반응형 CSS 분리 (font: var(--text-m-title-18B) / var(--text-pc-title-18))
+  - 보더 라인: var(--cs-lilac) 1px (spec-table과 동일 스타일)
+  - 데이터가 없으면 섹션 미렌더 (CMS 구성품 탭 입력 후 사용자 화면 표시)
+
+- [x] BUG-IMAGE: 자식 상품 선택 시 이미지 업로드 → 목록 카드 썸네일 미반영 버그 수정 | BOUNDARY | ✅ 완료 (이전 세션)
+  - 원인: 자식 selectedProduct로 images 탭 저장 시 자식 ID 기준 image_urls UPDATE → 부모 미갱신
+  - 수정 (cms/products/+page.server.ts): sectionType==='images' + 자식이면 → 부모 ID 기준 UPDATE
+  - 아코디언 선택 상태에서도 이미지는 항상 부모 products.image_urls에 저장
+  - invalidateAll() 후 카드 썸네일 즉시 반영
+
+- [x] BUG-ISDIRTY: 사양/구성품 탭 저장 후 isDirty 즉시 비활성화 안 되는 버그 수정 | ROUTINE | ✅ 완료 (이전 세션)
+  - 원인: origComponentsJson / origSpecsJson이 const 초기화 → 저장 후 props 변경돼도 원본 고정
+  - 수정 (ProductDetailPanel.svelte): const → $derived로 변경 → 저장 후 prop 재수신 시 자동 재계산
+  - 저장 직후 isDirtyComponents / isDirtySpecs = false 전환 정상 동작
+
+- [x] QA: sp3-qa-agent GATE C 검수 | GATE C | ✅ 완료 (2026-07-25) — GATE E 통과, 즉시 수정 건 0건
+  - 논리 정합성 4시나리오(components×description) 전부 통과
+  - 이미지 저장 경로: 부모/자식 분기 정합
+  - Svelte 5 패턴, CSS 토큰, TypeScript 안전성 모두 통과
+  - 권고 1건: `SelectedProduct` 타입에 `assetTotal` 미선언 (다음 작업 시 추가 권장)
+
+GATE E: ✅ 커밋 허가 — Stephen git commit 진행
+
+---
+
+## NOW — Auth 회원가입 오류 수정 + Production DB 정합 (2026-07-25) ✅ 완료
+
+plan_source: 세션 직접 수행 (GSD 도메인 — 버그픽스)
+TDD도메인: 없음
+
+### 완료 태스크
+
+- [x] FEAT-AUTH-PC: 로그인 화면 PC 반응형 수정 | BOUNDARY | ✅ 완료 (커밋 1b00927)
+  - flex-wrap + min-width: 220px → 좁은 화면에서 이메일·비밀번호 입력창 깨짐 방지
+  - Sign Up / Sign In 버튼 $derived isSignInMode 자동 전환 로직 추가
+
+- [x] FEAT-SIGNUP-MODAL: SignUpModal.svelte 신규 | BOUNDARY | ✅ 완료 (커밋 1b00927)
+  - 파일: src/lib/components/auth/SignUpModal.svelte
+  - 2단계 가입 모달: 1단계(이메일·비밀번호·이름) + 2단계(휴대폰 OTP 더미)
+  - TODO: 알리고 SMS 실연동 필요 (더미 OTP, line ~73, ~102)
+  - 에러 메시지 한국어화: 이미 가입된 이메일 / 잠시 후 다시 시도 / 일반 오류
+
+- [x] BUG-TRIGGER-163: handle_new_user 트리거 user_id 컬럼 누락 | CRITICAL | ✅ 완료 (커밋 1b00927)
+  - Migration #163: INSERT INTO user_profiles(id, user_id, email, ...) 정상 동작
+  - Stage ✅ Production ✅
+
+- [x] BUG-PROD-164: user_profiles Production user_id 컬럼 누락 → 가입 500 오류 | CRITICAL | ✅ 완료
+  - 원인: Stage에는 user_id 컬럼 존재, Production에는 미적용 → 트리거 INSERT 실패 → Auth 500
+  - 파일: supabase/migrations/20260724000164_164_add_user_id_to_user_profiles_prod.sql
+  - ALTER TABLE ADD COLUMN IF NOT EXISTS + backfill(user_id = id) + NOT NULL 제약
+  - Stage ✅ Production ✅
+
+- [x] BUG-CMS-RPC-165: get_customer_list RPC 없는 컬럼 참조 → CMS 고객목록 조회 실패 | CRITICAL | ✅ 완료
+  - 원인: COALESCE(up.identity_doc_url, up.student_doc_url) — student_doc_url 컬럼 없음
+  - 파일: supabase/migrations/20260724000165_165_fix_get_customer_list_rpc.sql
+  - 수정: student_doc_url / student_verified_at 참조 제거 → identity_doc_url / identity_verified_at 단독 사용
+  - Stage ✅ Production ✅
+
+- [x] QA: sp3-qa-agent GATE C 검수 | GATE C | ✅ 완료 (2026-07-25)
+
+GATE E: ✅ 커밋 허가 — Stephen git commit 진행
+
+---
+
 ## BACKLOG
 
 ### 소규모 (즉시 처리 가능)
@@ -1794,6 +1877,8 @@ plan_source: 세션 내 아젠다
 - BL-③ M3 예약코드 구현 시 cms_settings product_code_format 키 분리 | 현재 reservation_code_format 공용
 - BL-④ combo_keywords → 상품 검색 태그 자동 제안 연동 (products/new 미활용 상태)
 - BL-CRAZYLOG-SUBMIT: crazylog 작성 폼 실제 서버 제출 로직 구현 (현재 handleSubmit 빈 함수)
+- BL-ALIGO-SMS: SignUpModal 알리고 SMS 실연동 (현재 더미 OTP — line ~73, ~102 TODO 표시)
+- BL-SUPABASE-SMTP: Supabase 커스텀 SMTP 설정 (내장 이메일 서비스는 프로덕션 Rate Limit 있음)
 
 ### 기타
 - 카카오 알림톡 fallback (PRD.1.7.7)

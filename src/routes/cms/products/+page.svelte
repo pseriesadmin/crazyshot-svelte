@@ -250,7 +250,7 @@
                 <div class="card-info">
                   <div class="card-info-top">
                     <span class="cat-badge">{CATEGORY_LABEL[product.category] ?? product.category}</span>
-                    <span class="stock-badge" class:stock-zero={product.assetCount === 0}>{product.assetCount}개</span>
+                    <span class="stock-badge" class:stock-zero={product.assetCount === 0}>{product.assetCount}(on) / {product.assetTotal ?? 0}</span>
                   </div>
                   <p class="card-name">{product.name}</p>
                   {#if product.brand}
@@ -308,7 +308,7 @@
       <div class="detail-pane" transition:fly={{ x: 24, duration: 200 }}>
 
         <!-- 재고 아코디언: 2개 이상일 때 각 행이 펼쳐지며 상세 패널 인라인 표시 -->
-        {#if data.inventoryList && data.inventoryList.length > 1}
+        {#if data.inventoryList && data.inventoryList.length > 0}
           <div class="inv-accordion">
             {#each data.inventoryList as unit, idx (unit.id)}
               {@const isActive = data.selectedId === unit.id}

@@ -1,6 +1,22 @@
 # GSD_LOG.md — 크레이지샷 실행 이력
 # 형식: [YYYY-MM-DD HH:MM] 타입 | 태스크명 | 파일 | 소요 | 결과
 
+[2026-07-25] FEAT+BUG FIX | 상품 상세 구성품(components) 정보탭 노출 + CMS 이미지·isDirty 버그 수정 | 5개 파일 수정 | ✅ DONE
+  수정 파일 3종:
+  - src/routes/products/[id]/+page.svelte ← 구성품 정보탭 최상단 노출 + CSS 추가
+      · productComponents $derived.by() — (product as unknown as {components?}).components → [string, string][] 변환
+      · 정보 탭: comp-section 최상단 배치 (구성품 → 상품설명 순서)
+      · empty state 오탐 방지: !productComponents 조건 추가
+      · CSS: .comp-section/.comp-heading/.comp-list/.comp-item/.comp-item-key/.comp-item-val + 반응형
+  - src/routes/cms/products/+page.server.ts ← 자식 상품 선택 시 이미지 업로드 부모 기준 저장 버그 수정
+      · sectionType==='images' + selectedProduct.parent_product_id → 부모 ID로 image_urls UPDATE
+      · 연관 selectedProduct 로드 로직 조정 (+page.svelte 4줄, new/+page.server.ts 3줄)
+  - src/lib/components/cms/ProductDetailPanel.svelte ← 저장 후 isDirty 즉시 비활성 버그 수정
+      · origComponentsJson: const → $derived (저장 후 prop 재수신 시 자동 재계산)
+      · origSpecsJson: const → $derived (동일 패턴)
+  비고: SONY PXW-Z90 구성품 DB 데이터 없음 → CMS 구성품 탭 입력 후 사용자 화면 표시됨
+  svelte-check: 기존 기준선 유지 (신규 에러 0건)
+
 [2026-07-23] FEAT | 회원 프로필 개편 + Aligo SMS 연동 + Stage DB 마이그레이션 (#137~#139) | 6개 파일 수정/신규 | ✅ DONE
   수정/신규 파일:
   - supabase/migrations/20260722000139_139_fix_customer_list_no_student_cols.sql ← 신규 (Stage 전용)

@@ -272,6 +272,13 @@
     (product as ProductRow).base_price_12h ?? Math.round(product.base_price_daily * 0.7)
   );
 
+  let productComponents = $derived.by(() => {
+    const raw = (product as unknown as { components?: unknown }).components;
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+    const entries = Object.entries(raw as Record<string, unknown>).filter(([k]) => k.trim());
+    return entries.length > 0 ? entries as [string, string][] : null;
+  });
+
 </script>
 
 <!-- ① Hero (PC sub-GNB는 ProductHero 내부에서 hero overlay 배치) -->
@@ -520,6 +527,19 @@
     <div class="tab-content" role="tabpanel">
       {#if activeTab === 'info'}
         <div class="tab-pane">
+          {#if productComponents}
+            <section class="comp-section">
+              <h3 class="comp-heading">구성품</h3>
+              <ul class="comp-list">
+                {#each productComponents as [key, val]}
+                  <li class="comp-item">
+                    <span class="comp-item-key">{key}</span>
+                    {#if val}<span class="comp-item-val">{val}</span>{/if}
+                  </li>
+                {/each}
+              </ul>
+            </section>
+          {/if}
           {#if contentBlocks.length > 0}
             <div class="cb-body">
               {#each contentBlocks as block}
@@ -554,7 +574,7 @@
             </div>
           {:else if product.description}
             <div class="product-desc">{product.description}</div>
-          {:else}
+          {:else if !productComponents}
             <p class="tab-empty">상품 설명이 없습니다.</p>
           {/if}
         </div>
@@ -1196,6 +1216,46 @@
     .spec-key  { font: var(--text-pc-body-14); color: var(--cs-text-dark); }
     .spec-val  { font: var(--text-pc-body-14); color: var(--cs-text); font-weight: 400; }
     .product-brand { font: var(--text-pc-script-12); font-weight: 700; color: var(--cs-text-light); }
+  }
+
+  /* ── 구성품 섹션 (정보 탭 최상단) */
+  .comp-section {
+    margin-bottom: 28px;
+  }
+  .comp-heading {
+    font: var(--text-m-title-18B);
+    color: var(--cs-text);
+    margin: 0 0 10px;
+  }
+  .comp-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    border-top: 1px solid var(--cs-lilac);
+  }
+  .comp-item {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    gap: 12px;
+    padding: 10px 0;
+    border-bottom: 1px solid var(--cs-lilac);
+  }
+  .comp-item-key {
+    font: var(--text-m-body-16L);
+    color: var(--cs-text-dark);
+  }
+  .comp-item-val {
+    font: var(--text-m-script-14B);
+    color: var(--cs-text-mid);
+    white-space: nowrap;
+    flex-shrink: 0;
+  }
+  @media (min-width: 768px) {
+    .comp-heading { font: var(--text-pc-title-18); }
+    .comp-item { padding: 12px 0; }
+    .comp-item-key { font: var(--text-pc-body-14); }
+    .comp-item-val { font: var(--text-pc-body-14); font-weight: 400; color: var(--cs-text-mid); }
   }
 
   .tab-heading {

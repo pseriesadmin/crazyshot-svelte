@@ -110,7 +110,14 @@
       reset()
       onsuccess()
     } catch (err) {
-      errorMsg = err instanceof Error ? err.message : '회원가입에 실패했습니다.'
+      const msg = err instanceof Error ? err.message : ''
+      if (msg.includes('already registered') || msg.includes('already been registered')) {
+        errorMsg = '이미 가입된 이메일입니다.'
+      } else if (msg.includes('rate limit') || msg.includes('429')) {
+        errorMsg = '잠시 후 다시 시도해주세요.'
+      } else {
+        errorMsg = '회원가입에 실패했습니다. 다시 시도해주세요.'
+      }
     } finally {
       isLoading = false
     }
