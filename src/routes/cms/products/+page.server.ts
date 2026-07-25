@@ -148,41 +148,45 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 
   const productIds = (products ?? []).map((p) => p.id)
 
-  const stockCounts: Record<string, number> = {}
+  const stockCounts: Record<string, { active: number; total: number }> = {}
   let prices24h: Record<string, number> = {}
   let prices12h: Record<string, number> = {}
 
+  // 자식 price_rules fallback을 위한 맵 (부모에 price_rules 없을 때 카드 표시용)
+  const childFallback12h: Record<string, number> = {}
+  const childFallback24h: Record<string, number> = {}
+
   if (productIds.length > 0) {
-    // 자식 재고 목록 (parent_product_id로 연결된 복제본)
-    const { data: childProducts } = await admin
+    // 재고 수 + 자식 price_rules (부모 미설정 시 카드 표시 fallback)
+    // active: is_active=true (대여 가능) / total: 전체
+    const { data: childRows } = await admin
       .from('products')
-      .select('id, parent_product_id')
+      .select('parent_product_id, is_active, price_rules!left(duration_type, price, is_active, deleted_at)')
       .in('parent_product_id', productIds)
       .is('deleted_at', null)
 
-    const allIds = [...productIds, ...(childProducts ?? []).map((c) => c.id)]
+    type ChildRow = {
+      parent_product_id: string
+      is_active: boolean
+      price_rules: Array<{ duration_type: string; price: number; is_active: boolean; deleted_at: string | null }> | null
+    }
+    for (const row of (childRows ?? []) as ChildRow[]) {
+      const pid = row.parent_product_id
+      if (!stockCounts[pid]) stockCounts[pid] = { active: 0, total: 0 }
+      stockCounts[pid].total += 1
+      if (row.is_active) stockCounts[pid].active += 1
 
-    // 현재 대여 중(in_use) product_id 목록
-    const { data: inUseRentals } = await admin
-      .from('rental_reservations')
-      .select('product_id')
-      .eq('status', 'in_use')
-      .in('product_id', allIds)
-
-    const inUseSet = new Set((inUseRentals ?? []).map((r) => r.product_id))
-
-    // 가용 재고 수 계산 (self + children 중 in_use 아닌 것)
-    for (const product of products ?? []) {
-      const family = [
-        product.id,
-        ...(childProducts ?? [])
-          .filter((c) => c.parent_product_id === product.id)
-          .map((c) => c.id),
-      ]
-      stockCounts[product.id] = family.filter((id) => !inUseSet.has(id)).length
+      // 자식 가격 수집 (첫 번째 자식 기준 — 부모 price_rules 없을 때 카드 fallback용)
+      if (!childFallback12h[pid] || !childFallback24h[pid]) {
+        for (const r of row.price_rules ?? []) {
+          if (!r.is_active || r.deleted_at) continue
+          if (r.duration_type === '12h' && !childFallback12h[pid]) childFallback12h[pid] = r.price
+          if (r.duration_type === '24h' && !childFallback24h[pid]) childFallback24h[pid] = r.price
+        }
+      }
     }
 
-    // 24h 가격
+    // 24h 가격 (부모 기준)
     const { data: rules24h } = await admin
       .from('price_rules')
       .select('product_id, price')
@@ -196,7 +200,7 @@ export const load: PageServerLoad = async ({ locals, url }) => {
       return acc
     }, {})
 
-    // 12h 가격
+    // 12h 가격 (부모 기준)
     const { data: rules12h } = await admin
       .from('price_rules')
       .select('product_id, price')
@@ -277,7 +281,8 @@ export const load: PageServerLoad = async ({ locals, url }) => {
     if (sp) {
       selectedProduct = {
         ...sp,
-        assetCount: stockCounts[sp.id] ?? 0,
+        assetCount: stockCounts[sp.id]?.active ?? 0,
+        assetTotal: stockCounts[sp.id]?.total ?? 0,
         price12h: prices12h[sp.id] ?? null,
         price24h: prices24h[sp.id] ?? null,
         product_code: (sp as Record<string, unknown>).product_code as string | null ?? null,
@@ -301,6 +306,24 @@ export const load: PageServerLoad = async ({ locals, url }) => {
         .is('deleted_at', null)
 
       selectedPriceRules = priceRules ?? []
+
+      // 선택된 상품이 자식일 경우 prices12h/prices24h 맵에 해당 ID가 없어 null이 됨
+      // selectedPriceRules는 selectedId 기준으로 정확히 조회되었으므로 여기서 덮어씀
+      selectedProduct!.price12h = selectedPriceRules.find(r => r.duration_type === '12h')?.price ?? null
+      selectedProduct!.price24h = selectedPriceRules.find(r => r.duration_type === '24h')?.price ?? null
+
+      // 자식 상품인 경우 image_urls를 부모에서 가져옴 (카드 썸네일과 일치)
+      const spParentId = (sp as Record<string, unknown>).parent_product_id as string | null
+      if (spParentId) {
+        const { data: parentImgData } = await admin
+          .from('products')
+          .select('image_urls')
+          .eq('id', spParentId)
+          .single()
+        if (parentImgData) {
+          selectedProduct!.image_urls = (parentImgData as Record<string, unknown>).image_urls as string[] ?? []
+        }
+      }
 
       const { data: assetDetails } = await admin
         .from('assets')
@@ -332,7 +355,7 @@ export const load: PageServerLoad = async ({ locals, url }) => {
     const { data: invData } = await admin
       .from('products')
       .select('id, name, product_code, is_active, price_rules!left(duration_type, price, is_active, deleted_at)')
-      .or(`id.eq.${rootId},parent_product_id.eq.${rootId}`)
+      .eq('parent_product_id', rootId)
       .is('deleted_at', null)
       .order('created_at', { ascending: true })
 
@@ -366,9 +389,10 @@ export const load: PageServerLoad = async ({ locals, url }) => {
   return {
     products: (products ?? []).map((p) => ({
       ...p,
-      assetCount: stockCounts[p.id] ?? 0,
-      price24h: prices24h[p.id] ?? null as number | null,
-      price12h: prices12h[p.id] ?? null as number | null,
+      assetCount: stockCounts[p.id]?.active ?? 0,
+      assetTotal: stockCounts[p.id]?.total ?? 0,
+      price24h: (prices24h[p.id] ?? childFallback24h[p.id] ?? null) as number | null,
+      price12h: (prices12h[p.id] ?? childFallback12h[p.id] ?? null) as number | null,
     })),
     categories,
     categoryLabels,
@@ -522,10 +546,20 @@ export const actions: Actions = {
       }
       image_urls = image_urls.filter(Boolean)
 
+      // 자식 상품인 경우 부모 ID 기준으로 저장 (카드·목록 썸네일에 반영)
+      let imgTargetId = productId
+      const { data: imgSelfCheck } = await admin
+        .from('products')
+        .select('parent_product_id')
+        .eq('id', productId)
+        .single()
+      const imgParentId = (imgSelfCheck as Record<string, unknown> | null)?.parent_product_id as string | null
+      if (imgParentId) imgTargetId = imgParentId
+
       const { error: updateError } = await admin
         .from('products')
         .update({ image_urls })
-        .eq('id', productId)
+        .eq('id', imgTargetId)
 
       if (updateError) return fail(500, { error: '이미지 수정에 실패했습니다.' })
     }
@@ -608,6 +642,18 @@ export const actions: Actions = {
         .eq('id', productId)
 
       if (updateError) return fail(500, { error: '대여정책 수정에 실패했습니다.' })
+
+      // 배송 옵션 (대여정책 탭에 통합 저장)
+      const shipRoundTripStr = form.get('shipping_round_trip')
+      if (shipRoundTripStr !== null) {
+        const { error: shipError } = await admin.rpc('update_product_shipping_options', {
+          p_product_id: productId,
+          p_round_trip: shipRoundTripStr === 'true',
+          p_delivery:   form.get('shipping_delivery') === 'true',
+          p_return:     form.get('shipping_return') === 'true',
+        })
+        if (shipError) return fail(500, { error: '배송 옵션 저장에 실패했습니다.' })
+      }
     }
 
     return { success: true, sectionType }

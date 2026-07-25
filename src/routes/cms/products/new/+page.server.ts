@@ -310,6 +310,9 @@ export const actions: Actions = {
       })
     }
 
+    // 재고 1개 자동 생성 (자식 상품 — create_hold_reservation 기준)
+    await admin.rpc('auto_create_inventory_for_product', { p_product_id: product.id })
+
     // 등록 완료 후 해당 상품 패널 자동 오픈
     throw redirect(303, `/cms/products?selected=${product.id}`)
   },

@@ -1786,6 +1786,50 @@ plan_source: 세션 내 아젠다
 
 ---
 
+## NOW — 상품 상세 페이지 구성품(components) 노출 + 이미지 버그픽스 + isDirty 버그 수정 (2026-07-25) ✅ 완료
+
+plan_source: 세션 내 아젠다
+핵심제약:
+  - CMS ProductDetailPanel의 모든 필드 → 사용자 화면 노출 검증 완료 기반
+  - $state(prop) 초기화 금지 원칙 준수 ($effect 재동기화 패턴)
+  - components 필드 TypeScript 타입 미등록 → unknown 캐스트 패턴 적용
+  - 요청 범위 외 수정 없음
+
+신규/수정 파일:
+  - src/routes/products/[id]/+page.svelte ← 구성품 정보탭 노출 (핵심 수정)
+  - src/routes/cms/products/+page.server.ts ← 자식 상품 선택 시 image_urls 부모 기준 저장 버그 수정
+  - src/lib/components/cms/ProductDetailPanel.svelte ← isDirty 저장 후 즉시 비활성 버그 수정
+
+- [x] FEAT-COMPONENTS-DISPLAY: 사용자 화면 정보탭 구성품 노출 | BOUNDARY | ✅ 완료 (2026-07-25)
+  - productComponents $derived.by() 추가 (unknown 캐스트 → [string, string][] 반환)
+  - 정보 탭: comp-section 최상단 배치 (구성품 → 상품설명 순서)
+  - empty state 오탐 방지: `!productComponents` 조건 추가 (구성품만 있을 때 "설명 없음" 미표시)
+  - CSS: .comp-section / .comp-heading / .comp-list / .comp-item / .comp-item-key / .comp-item-val 추가
+  - 모바일/PC 반응형 CSS 분리 (font: var(--text-m-title-18B) / var(--text-pc-title-18))
+  - 보더 라인: var(--cs-lilac) 1px (spec-table과 동일 스타일)
+  - 데이터가 없으면 섹션 미렌더 (CMS 구성품 탭 입력 후 사용자 화면 표시)
+
+- [x] BUG-IMAGE: 자식 상품 선택 시 이미지 업로드 → 목록 카드 썸네일 미반영 버그 수정 | BOUNDARY | ✅ 완료 (이전 세션)
+  - 원인: 자식 selectedProduct로 images 탭 저장 시 자식 ID 기준 image_urls UPDATE → 부모 미갱신
+  - 수정 (cms/products/+page.server.ts): sectionType==='images' + 자식이면 → 부모 ID 기준 UPDATE
+  - 아코디언 선택 상태에서도 이미지는 항상 부모 products.image_urls에 저장
+  - invalidateAll() 후 카드 썸네일 즉시 반영
+
+- [x] BUG-ISDIRTY: 사양/구성품 탭 저장 후 isDirty 즉시 비활성화 안 되는 버그 수정 | ROUTINE | ✅ 완료 (이전 세션)
+  - 원인: origComponentsJson / origSpecsJson이 const 초기화 → 저장 후 props 변경돼도 원본 고정
+  - 수정 (ProductDetailPanel.svelte): const → $derived로 변경 → 저장 후 prop 재수신 시 자동 재계산
+  - 저장 직후 isDirtyComponents / isDirtySpecs = false 전환 정상 동작
+
+- [x] QA: sp3-qa-agent GATE C 검수 | GATE C | ✅ 완료 (2026-07-25) — GATE E 통과, 즉시 수정 건 0건
+  - 논리 정합성 4시나리오(components×description) 전부 통과
+  - 이미지 저장 경로: 부모/자식 분기 정합
+  - Svelte 5 패턴, CSS 토큰, TypeScript 안전성 모두 통과
+  - 권고 1건: `SelectedProduct` 타입에 `assetTotal` 미선언 (다음 작업 시 추가 권장)
+
+GATE E: ✅ 커밋 허가 — Stephen git commit 진행
+
+---
+
 ## BACKLOG
 
 ### 소규모 (즉시 처리 가능)
