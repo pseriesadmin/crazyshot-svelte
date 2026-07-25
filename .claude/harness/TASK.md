@@ -1830,6 +1830,45 @@ GATE E: ✅ 커밋 허가 — Stephen git commit 진행
 
 ---
 
+## NOW — Auth 회원가입 오류 수정 + Production DB 정합 (2026-07-25) ✅ 완료
+
+plan_source: 세션 직접 수행 (GSD 도메인 — 버그픽스)
+TDD도메인: 없음
+
+### 완료 태스크
+
+- [x] FEAT-AUTH-PC: 로그인 화면 PC 반응형 수정 | BOUNDARY | ✅ 완료 (커밋 1b00927)
+  - flex-wrap + min-width: 220px → 좁은 화면에서 이메일·비밀번호 입력창 깨짐 방지
+  - Sign Up / Sign In 버튼 $derived isSignInMode 자동 전환 로직 추가
+
+- [x] FEAT-SIGNUP-MODAL: SignUpModal.svelte 신규 | BOUNDARY | ✅ 완료 (커밋 1b00927)
+  - 파일: src/lib/components/auth/SignUpModal.svelte
+  - 2단계 가입 모달: 1단계(이메일·비밀번호·이름) + 2단계(휴대폰 OTP 더미)
+  - TODO: 알리고 SMS 실연동 필요 (더미 OTP, line ~73, ~102)
+  - 에러 메시지 한국어화: 이미 가입된 이메일 / 잠시 후 다시 시도 / 일반 오류
+
+- [x] BUG-TRIGGER-163: handle_new_user 트리거 user_id 컬럼 누락 | CRITICAL | ✅ 완료 (커밋 1b00927)
+  - Migration #163: INSERT INTO user_profiles(id, user_id, email, ...) 정상 동작
+  - Stage ✅ Production ✅
+
+- [x] BUG-PROD-164: user_profiles Production user_id 컬럼 누락 → 가입 500 오류 | CRITICAL | ✅ 완료
+  - 원인: Stage에는 user_id 컬럼 존재, Production에는 미적용 → 트리거 INSERT 실패 → Auth 500
+  - 파일: supabase/migrations/20260724000164_164_add_user_id_to_user_profiles_prod.sql
+  - ALTER TABLE ADD COLUMN IF NOT EXISTS + backfill(user_id = id) + NOT NULL 제약
+  - Stage ✅ Production ✅
+
+- [x] BUG-CMS-RPC-165: get_customer_list RPC 없는 컬럼 참조 → CMS 고객목록 조회 실패 | CRITICAL | ✅ 완료
+  - 원인: COALESCE(up.identity_doc_url, up.student_doc_url) — student_doc_url 컬럼 없음
+  - 파일: supabase/migrations/20260724000165_165_fix_get_customer_list_rpc.sql
+  - 수정: student_doc_url / student_verified_at 참조 제거 → identity_doc_url / identity_verified_at 단독 사용
+  - Stage ✅ Production ✅
+
+- [x] QA: sp3-qa-agent GATE C 검수 | GATE C | ✅ 완료 (2026-07-25)
+
+GATE E: ✅ 커밋 허가 — Stephen git commit 진행
+
+---
+
 ## BACKLOG
 
 ### 소규모 (즉시 처리 가능)
@@ -1838,6 +1877,8 @@ GATE E: ✅ 커밋 허가 — Stephen git commit 진행
 - BL-③ M3 예약코드 구현 시 cms_settings product_code_format 키 분리 | 현재 reservation_code_format 공용
 - BL-④ combo_keywords → 상품 검색 태그 자동 제안 연동 (products/new 미활용 상태)
 - BL-CRAZYLOG-SUBMIT: crazylog 작성 폼 실제 서버 제출 로직 구현 (현재 handleSubmit 빈 함수)
+- BL-ALIGO-SMS: SignUpModal 알리고 SMS 실연동 (현재 더미 OTP — line ~73, ~102 TODO 표시)
+- BL-SUPABASE-SMTP: Supabase 커스텀 SMTP 설정 (내장 이메일 서비스는 프로덕션 Rate Limit 있음)
 
 ### 기타
 - 카카오 알림톡 fallback (PRD.1.7.7)
