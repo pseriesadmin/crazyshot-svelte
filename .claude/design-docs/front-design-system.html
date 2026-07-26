@@ -1,0 +1,1447 @@
+<title>CrazyShot — Front Design System</title>
+<style>
+  :root {
+    --bg:         #0c0926;
+    --bg-card:    #16123a;
+    --bg-section: #201857;
+    --border:     rgba(193,187,236,0.10);
+    --border-mid: rgba(193,187,236,0.16);
+    --text:       #ECEBF4;
+    --text-sub:   #C1BBEC;
+    --text-muted: #6B65A8;
+    --accent:     #FF3535;
+    --accent-sub: #3B2F8A;
+    --mono:       'SF Mono','Fira Code','Cascadia Code','Consolas',monospace;
+    --sans:       'Apple SD Gothic Neo','Noto Sans KR','Malgun Gothic','Segoe UI',sans-serif;
+  }
+
+  @media (prefers-color-scheme: light) {
+    :root {
+      --bg:         #ECEBF4;
+      --bg-card:    #ffffff;
+      --bg-section: #f0eef9;
+      --border:     rgba(59,47,138,0.10);
+      --border-mid: rgba(59,47,138,0.18);
+      --text:       #100B32;
+      --text-sub:   #3B2F8A;
+      --text-muted: #8B83C0;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg:         #0c0926;
+    --bg-card:    #16123a;
+    --bg-section: #201857;
+    --border:     rgba(193,187,236,0.10);
+    --border-mid: rgba(193,187,236,0.16);
+    --text:       #ECEBF4;
+    --text-sub:   #C1BBEC;
+    --text-muted: #6B65A8;
+  }
+  :root[data-theme="light"] {
+    --bg:         #ECEBF4;
+    --bg-card:    #ffffff;
+    --bg-section: #f0eef9;
+    --border:     rgba(59,47,138,0.10);
+    --border-mid: rgba(59,47,138,0.18);
+    --text:       #100B32;
+    --text-sub:   #3B2F8A;
+    --text-muted: #8B83C0;
+  }
+
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--sans);
+    font-size: 12px;
+    line-height: 1.5;
+    min-height: 100vh;
+  }
+
+  .wrap {
+    max-width: 1100px;
+    margin: 0 auto;
+    padding: 48px 32px 80px;
+  }
+
+  /* ─── HEADER ─── */
+  .page-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 48px;
+    padding-bottom: 20px;
+    border-bottom: 1px solid var(--border-mid);
+  }
+  .page-title-wrap { display: flex; align-items: center; gap: 12px; }
+  .page-title {
+    font-size: 18px;
+    font-weight: 800;
+    color: var(--text);
+    letter-spacing: -0.5px;
+  }
+  .page-tag {
+    font-size: 9px;
+    font-weight: 800;
+    background: var(--accent);
+    color: #fff;
+    padding: 3px 8px;
+    border-radius: 99px;
+    letter-spacing: 0.8px;
+    text-transform: uppercase;
+  }
+  .page-env {
+    font-size: 10px;
+    color: var(--text-muted);
+    font-family: var(--mono);
+    border: 1px solid var(--border-mid);
+    padding: 4px 10px;
+    border-radius: 6px;
+  }
+
+  /* ─── SECTION ─── */
+  .sec { margin-bottom: 36px; }
+  .sec-head {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 12px;
+  }
+  .sec-title {
+    font-size: 9px;
+    font-weight: 800;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 1.2px;
+  }
+  .sec-count {
+    font-family: var(--mono);
+    font-size: 9px;
+    color: var(--text-muted);
+    background: rgba(193,187,236,0.07);
+    border: 1px solid var(--border);
+    padding: 1px 6px;
+    border-radius: 4px;
+  }
+
+  /* ─── COLOR PALETTE ─── */
+  .color-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 5px;
+  }
+  .color-card {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 9px 11px;
+    position: relative;
+    overflow: hidden;
+  }
+  .color-card::after {
+    content: '';
+    position: absolute;
+    left: 0; top: 0; bottom: 0;
+    width: 3px;
+  }
+  .color-swatch {
+    width: 30px; height: 30px;
+    border-radius: 6px;
+    flex-shrink: 0;
+    border: 1px solid rgba(255,255,255,0.07);
+  }
+  .color-name {
+    font-family: var(--mono);
+    font-size: 10px;
+    font-weight: 700;
+    color: var(--text);
+    display: flex;
+    align-items: center;
+    gap: 5px;
+  }
+  .color-hex { font-family: var(--mono); font-size: 9px; color: var(--text-muted); margin-top: 1px; }
+  .color-desc { font-size: 10px; color: var(--text-muted); margin-top: 1px; line-height: 1.3; }
+  .cta-star { color: var(--accent); font-size: 9px; }
+
+  /* ─── TABLE ─── */
+  .tbl-wrap { border-radius: 10px; overflow: hidden; border: 1px solid var(--border); }
+  .tbl-wrap table { width: 100%; border-collapse: collapse; background: var(--bg-card); }
+  .tbl-wrap th {
+    background: rgba(193,187,236,0.05);
+    color: var(--text-muted);
+    font-size: 9px;
+    font-weight: 800;
+    text-transform: uppercase;
+    letter-spacing: 0.9px;
+    padding: 7px 12px;
+    text-align: left;
+    border-bottom: 1px solid var(--border);
+  }
+  .tbl-wrap td {
+    padding: 8px 12px;
+    font-size: 11px;
+    border-bottom: 1px solid rgba(193,187,236,0.04);
+    vertical-align: middle;
+    color: var(--text);
+  }
+  .tbl-wrap tr:last-child td { border-bottom: none; }
+  .tbl-wrap tr:hover td { background: rgba(193,187,236,0.02); }
+  .mono { font-family: var(--mono); font-size: 10px; color: var(--text-sub); }
+  .muted { color: var(--text-muted); }
+  .sw {
+    display: inline-block;
+    width: 12px; height: 12px;
+    border-radius: 3px;
+    vertical-align: middle;
+    margin-right: 5px;
+    border: 1px solid rgba(255,255,255,0.08);
+    flex-shrink: 0;
+  }
+  .pill {
+    display: inline-block;
+    font-size: 9px;
+    font-weight: 700;
+    padding: 1px 7px;
+    border-radius: 4px;
+    letter-spacing: 0.3px;
+  }
+  .pill-cta { background: rgba(255,53,53,0.14); color: #FF3535; }
+  .pill-hover { background: rgba(207,0,0,0.12); color: #CF0000; }
+  .pill-sub { background: rgba(59,47,138,0.25); color: #C1BBEC; }
+  .pill-text { background: rgba(193,187,236,0.07); color: var(--text-muted); }
+  .pill-bg { background: rgba(193,187,236,0.05); color: var(--text-muted); }
+  .pill-brand { background: rgba(255,69,0,0.15); color: #FF4500; }
+
+  /* ─── RADIUS ─── */
+  .radius-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 5px;
+  }
+  .radius-card {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 12px;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+  .radius-demo {
+    width: 34px; height: 34px;
+    background: rgba(59,47,138,0.35);
+    border: 2px solid rgba(59,47,138,0.7);
+    flex-shrink: 0;
+  }
+  .radius-label { font-size: 11px; font-weight: 700; color: var(--text); }
+  .radius-vals { font-family: var(--mono); font-size: 9px; color: var(--text-sub); margin-top: 1px; }
+  .radius-var { font-family: var(--mono); font-size: 8px; color: var(--text-muted); margin-top: 2px; }
+
+  /* ─── LAYOUT SPEC ─── */
+  .layout-grid {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 5px;
+  }
+  .layout-card {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 12px;
+  }
+  .layout-name { font-size: 11px; font-weight: 700; color: var(--text); margin-bottom: 8px; }
+  .layout-row { display: flex; justify-content: space-between; align-items: center; padding: 3px 0; border-bottom: 1px solid rgba(193,187,236,0.05); }
+  .layout-row:last-child { border-bottom: none; }
+  .layout-key { font-size: 10px; color: var(--text-muted); }
+  .layout-val { font-family: var(--mono); font-size: 10px; color: var(--text-sub); }
+
+  /* ─── SPACING ─── */
+  .spacing-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 4px;
+  }
+  .spacing-item {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 7px 10px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .sp-label { font-family: var(--mono); font-size: 9px; color: var(--text-sub); min-width: 36px; }
+  .sp-bar-w { flex: 1; height: 5px; background: rgba(193,187,236,0.07); border-radius: 3px; overflow: hidden; }
+  .sp-bar { height: 100%; background: linear-gradient(to right, var(--accent-sub), #553FE0); border-radius: 3px; }
+  .sp-val { font-family: var(--mono); font-size: 9px; color: var(--text-muted); min-width: 28px; text-align: right; }
+
+  /* ─── SECTION PADDING ─── */
+  .pad-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 5px;
+  }
+  .pad-card {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 14px;
+  }
+  .pad-label { font-size: 10px; font-weight: 700; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.8px; margin-bottom: 10px; }
+  .pad-demo {
+    position: relative;
+    border: 1px dashed rgba(193,187,236,0.2);
+    border-radius: 4px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    height: 60px;
+  }
+  .pad-inner {
+    background: rgba(59,47,138,0.25);
+    border: 1px solid rgba(59,47,138,0.5);
+    border-radius: 2px;
+    font-family: var(--mono);
+    font-size: 9px;
+    color: var(--text-sub);
+    padding: 4px 8px;
+  }
+  .pad-tag {
+    position: absolute;
+    font-family: var(--mono);
+    font-size: 8px;
+    color: var(--accent);
+    background: rgba(255,53,53,0.1);
+    padding: 1px 4px;
+    border-radius: 3px;
+  }
+  .pad-tag-top { top: -9px; left: 50%; transform: translateX(-50%); }
+  .pad-tag-left { left: -1px; top: 50%; transform: translateY(-50%) translateX(-100%) translateX(-2px); }
+
+  /* ─── SHADOW ─── */
+  .shadow-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 5px; }
+  .shadow-card {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 14px 12px;
+  }
+  .shadow-demo {
+    width: 48px; height: 28px;
+    background: #3B2F8A;
+    border-radius: 4px;
+    margin-bottom: 10px;
+  }
+  .shadow-name { font-family: var(--mono); font-size: 10px; font-weight: 700; color: var(--text); }
+  .shadow-role { font-size: 10px; color: var(--text-muted); margin-top: 2px; }
+  .shadow-val { font-family: var(--mono); font-size: 8px; color: var(--text-muted); margin-top: 4px; line-height: 1.5; }
+
+  /* ─── GRADIENT ─── */
+  .grad-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 5px; }
+  .grad-card { border-radius: 8px; overflow: hidden; border: 1px solid var(--border); }
+  .grad-preview { height: 52px; }
+  .grad-info { background: var(--bg-card); padding: 8px 12px; }
+  .grad-name { font-family: var(--mono); font-size: 10px; font-weight: 700; color: var(--text); }
+  .grad-desc { font-size: 10px; color: var(--text-muted); margin-top: 1px; }
+
+  /* ─── STROKE ─── */
+  .stroke-grid { display: flex; flex-direction: column; gap: 4px; }
+  .stroke-item {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 8px 12px;
+    display: grid;
+    grid-template-columns: 80px 60px 1fr 100px;
+    align-items: center;
+    gap: 12px;
+  }
+  .stroke-demo { height: 100%; display: flex; align-items: center; }
+  .stroke-line { width: 100%; }
+  .stroke-key { font-family: var(--mono); font-size: 10px; color: var(--text-sub); }
+  .stroke-hex { font-family: var(--mono); font-size: 10px; color: var(--text-muted); }
+
+  /* ─── BLUR ─── */
+  .blur-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 5px; }
+  .blur-card {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 14px 12px;
+    display: flex;
+    align-items: center;
+    gap: 14px;
+  }
+  .blur-demo {
+    width: 48px; height: 48px;
+    border-radius: 8px;
+    position: relative;
+    overflow: hidden;
+    flex-shrink: 0;
+  }
+  .blur-bg {
+    position: absolute; inset: 0;
+    background: linear-gradient(135deg, #FF3535 0%, #3B2F8A 100%);
+  }
+  .blur-layer {
+    position: absolute; inset: 0;
+    background: rgba(255,255,255,0.15);
+  }
+  .blur-name { font-family: var(--mono); font-size: 11px; font-weight: 700; color: var(--text); }
+  .blur-role { font-size: 10px; color: var(--text-muted); margin-top: 2px; }
+  .blur-val { font-family: var(--mono); font-size: 10px; color: var(--accent-sub); margin-top: 3px; }
+
+  hr.divider { border: none; border-top: 1px solid var(--border); margin: 32px 0 36px; }
+
+  @media (max-width: 700px) {
+    .color-grid, .radius-grid, .spacing-grid, .shadow-grid { grid-template-columns: 1fr 1fr; }
+    .grad-grid, .layout-grid { grid-template-columns: 1fr; }
+    .blur-grid { grid-template-columns: 1fr; }
+    .wrap { padding: 28px 16px 60px; }
+  }
+  @media (max-width: 480px) {
+    .color-grid { grid-template-columns: 1fr; }
+    .stroke-item { grid-template-columns: 70px 50px 1fr; }
+    .stroke-hex { display: none; }
+  }
+</style>
+
+<div class="wrap">
+
+  <!-- HEADER -->
+  <header class="page-head">
+    <div class="page-title-wrap">
+      <span class="page-title">Front Design System</span>
+      <span class="page-tag">USER</span>
+    </div>
+    <span class="page-env">crazyshot-Front_design-system.json</span>
+  </header>
+
+  <!-- 1. 브랜드 팔레트 -->
+  <section class="sec">
+    <div class="sec-head">
+      <span class="sec-title">컬러 — 브랜드 팔레트</span>
+      <span class="sec-count">12종</span>
+    </div>
+    <div class="color-grid">
+      <div class="color-card">
+        <div class="color-swatch" style="background:#100B32"></div>
+        <div>
+          <div class="color-name">purple-100</div>
+          <div class="color-hex">#100B32</div>
+          <div class="color-desc">최상위 다크 / 주요 배경</div>
+        </div>
+      </div>
+      <div class="color-card">
+        <div class="color-swatch" style="background:#201857"></div>
+        <div>
+          <div class="color-name">purple-90</div>
+          <div class="color-hex">#201857</div>
+          <div class="color-desc">GNB 배경 / CTA 강조</div>
+        </div>
+      </div>
+      <div class="color-card">
+        <div class="color-swatch" style="background:#3B2F8A"></div>
+        <div>
+          <div class="color-name">purple-80</div>
+          <div class="color-hex">#3B2F8A</div>
+          <div class="color-desc">보조 액션 / 보조 배경</div>
+        </div>
+      </div>
+      <div class="color-card">
+        <div class="color-swatch" style="background:#553FE0"></div>
+        <div>
+          <div class="color-name">purple-60</div>
+          <div class="color-hex">#553FE0</div>
+          <div class="color-desc">인터랙션 / 멤버십 배지</div>
+        </div>
+      </div>
+      <div class="color-card">
+        <div class="color-swatch" style="background:#C1BBEC"></div>
+        <div>
+          <div class="color-name">purple-20</div>
+          <div class="color-hex">#C1BBEC</div>
+          <div class="color-desc">카드 배경 / 보조 강조</div>
+        </div>
+      </div>
+      <div class="color-card">
+        <div class="color-swatch" style="background:#E1DEF3"></div>
+        <div>
+          <div class="color-name">purple-10</div>
+          <div class="color-hex">#E1DEF3</div>
+          <div class="color-desc">배경 영역 구분</div>
+        </div>
+      </div>
+      <div class="color-card">
+        <div class="color-swatch" style="background:#ECEBF4;border:1px solid rgba(0,0,0,0.1)"></div>
+        <div>
+          <div class="color-name">purple-5</div>
+          <div class="color-hex">#ECEBF4</div>
+          <div class="color-desc">페이지 배경 / 섹션 구분</div>
+        </div>
+      </div>
+      <div class="color-card">
+        <div class="color-swatch" style="background:#CF0000"></div>
+        <div>
+          <div class="color-name">red-100</div>
+          <div class="color-hex">#CF0000</div>
+          <div class="color-desc">CTA hover 색</div>
+        </div>
+      </div>
+      <div class="color-card">
+        <div class="color-swatch" style="background:#FF3535"></div>
+        <div>
+          <div class="color-name" style="color:#FF3535">red-80 <span class="cta-star">★ CTA</span></div>
+          <div class="color-hex">#FF3535</div>
+          <div class="color-desc">주 CTA 버튼 / 시각 강조</div>
+        </div>
+      </div>
+      <div class="color-card">
+        <div class="color-swatch" style="background:#FFB3B3"></div>
+        <div>
+          <div class="color-name">red-30</div>
+          <div class="color-hex">#FFB3B3</div>
+          <div class="color-desc">연한 레드 / 포인트</div>
+        </div>
+      </div>
+      <div class="color-card">
+        <div class="color-swatch" style="background:#FFCFCF"></div>
+        <div>
+          <div class="color-name">red-10</div>
+          <div class="color-hex">#FFCFCF</div>
+          <div class="color-desc">아주 연한 레드 / 배경 틴트</div>
+        </div>
+      </div>
+      <div class="color-card">
+        <div class="color-swatch" style="background:#FFEAEA;border:1px solid rgba(0,0,0,0.06)"></div>
+        <div>
+          <div class="color-name">red-5</div>
+          <div class="color-hex">#FFEAEA</div>
+          <div class="color-desc">아주 연한 레드 / 배경</div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 2. 뉴트럴 -->
+  <section class="sec">
+    <div class="sec-head">
+      <span class="sec-title">컬러 — 뉴트럴</span>
+      <span class="sec-count">4종</span>
+    </div>
+    <div class="color-grid" style="grid-template-columns:repeat(4,1fr)">
+      <div class="color-card">
+        <div class="color-swatch" style="background:#444444"></div>
+        <div>
+          <div class="color-name">grey-90</div>
+          <div class="color-hex">#444444</div>
+          <div class="color-desc">본문 텍스트</div>
+        </div>
+      </div>
+      <div class="color-card">
+        <div class="color-swatch" style="background:#666666"></div>
+        <div>
+          <div class="color-name">grey-70</div>
+          <div class="color-hex">#666666</div>
+          <div class="color-desc">보조 텍스트 / 탭</div>
+        </div>
+      </div>
+      <div class="color-card">
+        <div class="color-swatch" style="background:#AAAAAA"></div>
+        <div>
+          <div class="color-name">grey-30</div>
+          <div class="color-hex">#AAAAAA</div>
+          <div class="color-desc">플레이스홀더 / 비활성</div>
+        </div>
+      </div>
+      <div class="color-card">
+        <div class="color-swatch" style="background:#F6F6F6;border:1px solid rgba(0,0,0,0.08)"></div>
+        <div>
+          <div class="color-name">grey-5</div>
+          <div class="color-hex">#F6F6F6</div>
+          <div class="color-desc">연한 배경 배경</div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 3. 시맨틱 컬러 -->
+  <section class="sec">
+    <div class="sec-head">
+      <span class="sec-title">시맨틱 컬러 — 역할별 매핑</span>
+      <span class="sec-count">10종</span>
+    </div>
+    <div class="tbl-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>역할</th>
+            <th>참조 토큰</th>
+            <th>Hex</th>
+            <th>구분</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><strong style="color:#FF3535">★ 주 액션 (CTA)</strong></td>
+            <td><span class="mono">red-80</span></td>
+            <td><span class="sw" style="background:#FF3535"></span><span class="mono">#FF3535</span></td>
+            <td><span class="pill pill-cta">CTA</span></td>
+          </tr>
+          <tr>
+            <td>주 액션 hover</td>
+            <td><span class="mono">red-100</span></td>
+            <td><span class="sw" style="background:#CF0000"></span><span class="mono">#CF0000</span></td>
+            <td><span class="pill pill-hover">hover</span></td>
+          </tr>
+          <tr>
+            <td>보조 액션</td>
+            <td><span class="mono">purple-80</span></td>
+            <td><span class="sw" style="background:#3B2F8A"></span><span class="mono">#3B2F8A</span></td>
+            <td><span class="pill pill-sub">보조</span></td>
+          </tr>
+          <tr>
+            <td>기본 텍스트</td>
+            <td><span class="mono">purple-100</span></td>
+            <td><span class="sw" style="background:#100B32"></span><span class="mono">#100B32</span></td>
+            <td><span class="pill pill-text">텍스트</span></td>
+          </tr>
+          <tr>
+            <td>보조 텍스트</td>
+            <td><span class="mono">grey-90</span></td>
+            <td><span class="sw" style="background:#444444"></span><span class="mono">#444444</span></td>
+            <td><span class="pill pill-text">텍스트</span></td>
+          </tr>
+          <tr>
+            <td>힌트 / 비활성</td>
+            <td><span class="mono">grey-30</span></td>
+            <td><span class="sw" style="background:#AAAAAA"></span><span class="mono">#AAAAAA</span></td>
+            <td><span class="pill pill-text">텍스트</span></td>
+          </tr>
+          <tr>
+            <td>페이지 배경</td>
+            <td><span class="mono">purple-5</span></td>
+            <td><span class="sw" style="background:#ECEBF4;border:1px solid rgba(0,0,0,0.1)"></span><span class="mono">#ECEBF4</span></td>
+            <td><span class="pill pill-bg">배경</span></td>
+          </tr>
+          <tr>
+            <td>다크 배경</td>
+            <td><span class="mono">purple-100</span></td>
+            <td><span class="sw" style="background:#100B32"></span><span class="mono">#100B32</span></td>
+            <td><span class="pill pill-bg">배경</span></td>
+          </tr>
+          <tr>
+            <td>보더 (구분선)</td>
+            <td><span class="mono">purple-5</span></td>
+            <td><span class="sw" style="background:#ECEBF4;border:1px solid rgba(0,0,0,0.1)"></span><span class="mono">#ECEBF4</span></td>
+            <td><span class="pill pill-bg">보더</span></td>
+          </tr>
+          <tr>
+            <td>브랜드 오렌지 <span class="muted" style="font-size:9px">(로고 전용)</span></td>
+            <td><span class="mono">orange</span></td>
+            <td><span class="sw" style="background:#FF4500"></span><span class="mono">#FF4500</span></td>
+            <td><span class="pill pill-brand">브랜드</span></td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <hr class="divider">
+
+  <!-- 4. 반경 -->
+  <section class="sec">
+    <div class="sec-head">
+      <span class="sec-title">반경 (Border Radius) — 반응형</span>
+      <span class="sec-count">6종</span>
+    </div>
+    <div class="radius-grid">
+      <div class="radius-card">
+        <div class="radius-demo" style="border-radius:30px"></div>
+        <div>
+          <div class="radius-label">button</div>
+          <div class="radius-vals">PC 30px / Mobile 30px</div>
+          <div class="radius-var">--radius-xl</div>
+        </div>
+      </div>
+      <div class="radius-card">
+        <div class="radius-demo" style="border-radius:20px"></div>
+        <div>
+          <div class="radius-label">card</div>
+          <div class="radius-vals">PC 20px / Mobile 15px</div>
+          <div class="radius-var">--radius-2xl / --radius-lg</div>
+        </div>
+      </div>
+      <div class="radius-card">
+        <div class="radius-demo" style="border-radius:99px"></div>
+        <div>
+          <div class="radius-label">badge</div>
+          <div class="radius-vals">PC 99px / Mobile 99px</div>
+          <div class="radius-var">--radius-full</div>
+        </div>
+      </div>
+      <div class="radius-card">
+        <div class="radius-demo" style="border-radius:8px"></div>
+        <div>
+          <div class="radius-label">input</div>
+          <div class="radius-vals">PC 8px / Mobile 8px</div>
+          <div class="radius-var">--radius-sm</div>
+        </div>
+      </div>
+      <div class="radius-card">
+        <div class="radius-demo" style="border-radius:10px"></div>
+        <div>
+          <div class="radius-label">image</div>
+          <div class="radius-vals">PC 10px / Mobile 10px</div>
+          <div class="radius-var">--cms-radius-sm</div>
+        </div>
+      </div>
+      <div class="radius-card">
+        <div class="radius-demo" style="border-radius:50px"></div>
+        <div>
+          <div class="radius-label">avatar</div>
+          <div class="radius-vals">PC 50px / Mobile 50px</div>
+          <div class="radius-var">50px (원형)</div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 5. 레이아웃 스펙 -->
+  <section class="sec">
+    <div class="sec-head">
+      <span class="sec-title">레이아웃 컴포넌트 스펙</span>
+      <span class="sec-count">4종</span>
+    </div>
+    <div class="layout-grid">
+      <div class="layout-card">
+        <div class="layout-name">Container</div>
+        <div class="layout-row"><span class="layout-key">PC max-width (신규)</span><span class="layout-val">1600px</span></div>
+        <div class="layout-row"><span class="layout-key">PC max-width (기존변수)</span><span class="layout-val">1240px</span></div>
+        <div class="layout-row"><span class="layout-key">Mobile</span><span class="layout-val">100%</span></div>
+        <div class="layout-row"><span class="layout-key">그리드</span><span class="layout-val">12col / gap 30px</span></div>
+      </div>
+      <div class="layout-card">
+        <div class="layout-name">Header (GNB)</div>
+        <div class="layout-row"><span class="layout-key">PC height</span><span class="layout-val">80px</span></div>
+        <div class="layout-row"><span class="layout-key">Mobile height</span><span class="layout-val">56px</span></div>
+        <div class="layout-row"><span class="layout-key">position</span><span class="layout-val">fixed + overlay</span></div>
+      </div>
+      <div class="layout-card">
+        <div class="layout-name">Section Padding</div>
+        <div class="layout-row"><span class="layout-key">PC top/bottom</span><span class="layout-val">80px</span></div>
+        <div class="layout-row"><span class="layout-key">PC left/right</span><span class="layout-val">100px</span></div>
+        <div class="layout-row"><span class="layout-key">Mobile top/bot</span><span class="layout-val">60px</span></div>
+        <div class="layout-row"><span class="layout-key">Mobile left/right</span><span class="layout-val">20px</span></div>
+      </div>
+      <div class="layout-card">
+        <div class="layout-name">Hero Section</div>
+        <div class="layout-row"><span class="layout-key">PC height</span><span class="layout-val">936px</span></div>
+        <div class="layout-row"><span class="layout-key">Mobile height</span><span class="layout-val">720px</span></div>
+        <div class="layout-row"><span class="layout-key">비율</span><span class="layout-val">Mobile × 1.3</span></div>
+      </div>
+    </div>
+
+    <!-- PC 반응형 최대폭 옵션 정책 -->
+    <div style="margin-top:20px;border-radius:12px;overflow:hidden;border:1px solid rgba(255,255,255,0.08)">
+      <div style="background:#3B2F8A;padding:10px 18px;font-size:12px;font-weight:700;letter-spacing:0.05em;color:#fff">PC 반응형 최대폭 옵션 정책 — 2026-07-22 확정</div>
+      <div style="background:rgba(59,47,138,0.10);padding:16px 18px;display:flex;flex-direction:column;gap:12px">
+        <div style="color:#C1BBEC;font-size:12px;line-height:1.7">화면 레이아웃 개발 시 Stephen이 아래 옵션을 명시하면 <strong style="color:#fff">해당 화면 컨테이너에 즉시 적용</strong>한다.</div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+          <div style="background:rgba(56,142,60,0.12);border-radius:8px;padding:14px 16px;border:1px solid rgba(16,185,129,0.2)">
+            <div style="color:#10B981;font-size:13px;font-weight:700;margin-bottom:8px">PC반응형 최대</div>
+            <div style="color:#fff;font-size:20px;font-weight:900;margin-bottom:6px">1600px</div>
+            <code style="background:rgba(255,255,255,0.07);padding:3px 8px;border-radius:4px;font-size:11px;color:#aaa">max-width: 1600px</code>
+          </div>
+          <div style="background:rgba(255,165,0,0.08);border-radius:8px;padding:14px 16px;border:1px solid rgba(255,165,0,0.2)">
+            <div style="color:#F59E0B;font-size:13px;font-weight:700;margin-bottom:8px">PC반응형 최소</div>
+            <div style="color:#fff;font-size:20px;font-weight:900;margin-bottom:6px">1240px</div>
+            <code style="background:rgba(255,255,255,0.07);padding:3px 8px;border-radius:4px;font-size:11px;color:#aaa">max-width: 1240px</code>
+          </div>
+        </div>
+        <div style="height:1px;background:rgba(255,255,255,0.06)"></div>
+        <div style="display:flex;gap:16px;font-size:11px;color:#888">
+          <span>⛔ 전역 일괄 교체 금지 — 요청된 화면만 수정</span>
+          <span>⛔ <code style="background:rgba(255,255,255,0.06);padding:1px 5px;border-radius:3px">--layout-pc-max</code> 변수값 변경 금지</span>
+        </div>
+        <div style="font-size:11px;color:#888">적용 방식: 하드코딩 직접 작성 (변수 참조 금지 — 변수값 혼용 방지)</div>
+      </div>
+    </div>
+  </section>
+
+  <hr class="divider">
+
+  <!-- 6. 간격 스케일 -->
+  <section class="sec">
+    <div class="sec-head">
+      <span class="sec-title">간격 스케일 — Spacing</span>
+      <span class="sec-count">17종</span>
+    </div>
+    <div class="spacing-grid">
+      <div class="spacing-item">
+        <span class="sp-label">3xs</span>
+        <div class="sp-bar-w"><div class="sp-bar" style="width:3%"></div></div>
+        <span class="sp-val">3px</span>
+      </div>
+      <div class="spacing-item">
+        <span class="sp-label">2xs</span>
+        <div class="sp-bar-w"><div class="sp-bar" style="width:5%"></div></div>
+        <span class="sp-val">5px</span>
+      </div>
+      <div class="spacing-item">
+        <span class="sp-label">xs</span>
+        <div class="sp-bar-w"><div class="sp-bar" style="width:8%"></div></div>
+        <span class="sp-val">8px</span>
+      </div>
+      <div class="spacing-item">
+        <span class="sp-label">sm</span>
+        <div class="sp-bar-w"><div class="sp-bar" style="width:10%"></div></div>
+        <span class="sp-val">10px</span>
+      </div>
+      <div class="spacing-item">
+        <span class="sp-label">md-sm</span>
+        <div class="sp-bar-w"><div class="sp-bar" style="width:12%"></div></div>
+        <span class="sp-val">12px</span>
+      </div>
+      <div class="spacing-item">
+        <span class="sp-label">md</span>
+        <div class="sp-bar-w"><div class="sp-bar" style="width:15%"></div></div>
+        <span class="sp-val">15px</span>
+      </div>
+      <div class="spacing-item">
+        <span class="sp-label">lg</span>
+        <div class="sp-bar-w"><div class="sp-bar" style="width:20%"></div></div>
+        <span class="sp-val">20px</span>
+      </div>
+      <div class="spacing-item">
+        <span class="sp-label">xl-sm</span>
+        <div class="sp-bar-w"><div class="sp-bar" style="width:24%"></div></div>
+        <span class="sp-val">24px</span>
+      </div>
+      <div class="spacing-item">
+        <span class="sp-label">xl</span>
+        <div class="sp-bar-w"><div class="sp-bar" style="width:25%"></div></div>
+        <span class="sp-val">25px</span>
+      </div>
+      <div class="spacing-item">
+        <span class="sp-label">2xl-sm</span>
+        <div class="sp-bar-w"><div class="sp-bar" style="width:28%"></div></div>
+        <span class="sp-val">28px</span>
+      </div>
+      <div class="spacing-item">
+        <span class="sp-label">2xl</span>
+        <div class="sp-bar-w"><div class="sp-bar" style="width:30%"></div></div>
+        <span class="sp-val">30px</span>
+      </div>
+      <div class="spacing-item">
+        <span class="sp-label">3xl</span>
+        <div class="sp-bar-w"><div class="sp-bar" style="width:40%"></div></div>
+        <span class="sp-val">40px</span>
+      </div>
+      <div class="spacing-item">
+        <span class="sp-label">4xl</span>
+        <div class="sp-bar-w"><div class="sp-bar" style="width:50%"></div></div>
+        <span class="sp-val">50px</span>
+      </div>
+      <div class="spacing-item">
+        <span class="sp-label">5xl</span>
+        <div class="sp-bar-w"><div class="sp-bar" style="width:60%"></div></div>
+        <span class="sp-val">60px</span>
+      </div>
+      <div class="spacing-item">
+        <span class="sp-label">6xl</span>
+        <div class="sp-bar-w"><div class="sp-bar" style="width:80%"></div></div>
+        <span class="sp-val">80px</span>
+      </div>
+      <div class="spacing-item">
+        <span class="sp-label">7xl</span>
+        <div class="sp-bar-w"><div class="sp-bar" style="width:100%"></div></div>
+        <span class="sp-val">100px</span>
+      </div>
+      <div class="spacing-item" style="opacity:0.3">
+        <span class="sp-label" style="color:var(--text-muted)">—</span>
+        <div class="sp-bar-w"></div>
+        <span class="sp-val"></span>
+      </div>
+    </div>
+  </section>
+
+  <!-- 7. 섹션 패딩 -->
+  <section class="sec">
+    <div class="sec-head">
+      <span class="sec-title">섹션 패딩 — 반응형</span>
+    </div>
+    <div class="pad-grid">
+      <div class="pad-card">
+        <div class="pad-label">PC</div>
+        <div class="pad-demo">
+          <span class="pad-tag pad-tag-top">top/bottom 80px</span>
+          <span class="pad-tag pad-tag-left">100px</span>
+          <div class="pad-inner">content</div>
+        </div>
+      </div>
+      <div class="pad-card">
+        <div class="pad-label">Mobile</div>
+        <div class="pad-demo">
+          <span class="pad-tag pad-tag-top">top/bottom 60px</span>
+          <span class="pad-tag pad-tag-left">20px</span>
+          <div class="pad-inner">content</div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <hr class="divider">
+
+  <!-- 8. 이펙트 그림자 -->
+  <section class="sec">
+    <div class="sec-head">
+      <span class="sec-title">이펙트 — 그림자</span>
+      <span class="sec-count">6종</span>
+    </div>
+    <div class="shadow-grid">
+      <div class="shadow-card">
+        <div class="shadow-demo" style="box-shadow:10px 10px 0 rgba(5,0,38,1)"></div>
+        <div class="shadow-name">outsh1</div>
+        <div class="shadow-role">강한 다크 오프셋</div>
+        <div class="shadow-val">Drop 10px 10px 0<br>rgba(5,0,38,1) 100%</div>
+      </div>
+      <div class="shadow-card">
+        <div class="shadow-demo" style="box-shadow:4px 4px 0 rgba(39,27,122,0.5)"></div>
+        <div class="shadow-name">outsh2</div>
+        <div class="shadow-role">보라 반투명</div>
+        <div class="shadow-val">Drop 4px 4px 0<br>rgba(39,27,122,0.5) 50%</div>
+      </div>
+      <div class="shadow-card">
+        <div class="shadow-demo" style="box-shadow:5px 5px 0 rgba(16,11,50,1)"></div>
+        <div class="shadow-name">outsh3</div>
+        <div class="shadow-role">#100B32 단색</div>
+        <div class="shadow-val">Drop 5px 5px 0<br>rgba(16,11,50,1) 100%</div>
+      </div>
+      <div class="shadow-card">
+        <div class="shadow-demo" style="background:#553FE0;box-shadow:0 0 15px rgba(255,255,255,0.5)"></div>
+        <div class="shadow-name">outsh4</div>
+        <div class="shadow-role">흰 글로우</div>
+        <div class="shadow-val">Drop 0 0 15px<br>rgba(255,255,255,0.5) 50%</div>
+      </div>
+      <div class="shadow-card">
+        <div class="shadow-demo" style="box-shadow:4px 5px 0 rgba(0,0,0,0.5)"></div>
+        <div class="shadow-name">outsh5</div>
+        <div class="shadow-role">검은 그림자</div>
+        <div class="shadow-val">Drop 4px 5px 0<br>rgba(0,0,0,0.5) 50%</div>
+      </div>
+      <div class="shadow-card">
+        <div class="shadow-demo" style="box-shadow:inset 0 0 60px rgba(0,0,0,0.6)"></div>
+        <div class="shadow-name">is01</div>
+        <div class="shadow-role">이너 이미지 오버레이</div>
+        <div class="shadow-val">Inner 0 0 60px<br>rgba(0,0,0,0.6) 60%</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 9. 그라데이션 -->
+  <section class="sec">
+    <div class="sec-head">
+      <span class="sec-title">그라데이션</span>
+      <span class="sec-count">4종 + BG 3종 = 7종</span>
+    </div>
+    <div class="grad-grid">
+      <div class="grad-card">
+        <div class="grad-preview" style="background:linear-gradient(to right,#FF3535 0%,#C1BBEC 100%)"></div>
+        <div class="grad-info">
+          <div class="grad-name">gradient-promo</div>
+          <div class="grad-desc">Red → Lilac (41% end) · 프로모 배너</div>
+        </div>
+      </div>
+      <div class="grad-card">
+        <div class="grad-preview" style="background:linear-gradient(to right,#FF3535 0%,#3B2F8A 100%)"></div>
+        <div class="grad-info">
+          <div class="grad-name">gradient-strong</div>
+          <div class="grad-desc">Red → Purple (41% end) · 강한 프로모</div>
+        </div>
+      </div>
+      <div class="grad-card">
+        <div class="grad-preview" style="background:linear-gradient(to bottom,transparent 0%,rgba(16,11,50,0.6) 40%,#100B32 100%)"></div>
+        <div class="grad-info">
+          <div class="grad-name">gradient-overlay</div>
+          <div class="grad-desc">투명 → Dark 60% → #100B32 · 이미지 오버레이</div>
+        </div>
+      </div>
+      <div class="grad-card">
+        <div class="grad-preview" style="background:linear-gradient(135deg,#100B32 0%,#3B2F8A 100%)"></div>
+        <div class="grad-info">
+          <div class="grad-name">gradient-dark</div>
+          <div class="grad-desc">Dark → Purple · 다크 배경 그라디언트</div>
+        </div>
+      </div>
+      <div class="grad-card">
+        <div class="grad-preview" style="background:linear-gradient(to right,#ECEBF4 0%,#E1DEF3 100%)"></div>
+        <div class="grad-info">
+          <div class="grad-name">bg-gradient-lilac</div>
+          <div class="grad-desc">Lilac → Purple-10 · 연한 BG</div>
+        </div>
+      </div>
+      <div class="grad-card">
+        <div class="grad-preview" style="background:linear-gradient(to bottom,#ffffff 0%,#ECEBF4 100%)"></div>
+        <div class="grad-info">
+          <div class="grad-name">bg-gradient-white</div>
+          <div class="grad-desc">White → Lilac · 카드 BG</div>
+        </div>
+      </div>
+      <div class="grad-card">
+        <div class="grad-preview" style="background:linear-gradient(to bottom,rgba(255,53,53,0.05) 0%,rgba(193,187,236,0.1) 100%)"></div>
+        <div class="grad-info">
+          <div class="grad-name">bg-gradient-tint</div>
+          <div class="grad-desc">Red tint → Purple tint · 섹션 BG</div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 10. 스트로크 -->
+  <section class="sec">
+    <div class="sec-head">
+      <span class="sec-title">스트로크</span>
+      <span class="sec-count">3 두께 × 4 색상 = 7종</span>
+    </div>
+    <div class="stroke-grid">
+      <div class="stroke-item">
+        <span class="stroke-key">1px</span>
+        <span class="stroke-key muted">solid</span>
+        <div class="stroke-demo"><div class="stroke-line" style="border-top:1px solid #ECEBF4"></div></div>
+        <span class="stroke-hex">#ECEBF4 (purple-5)</span>
+      </div>
+      <div class="stroke-item">
+        <span class="stroke-key">1px</span>
+        <span class="stroke-key muted">solid</span>
+        <div class="stroke-demo"><div class="stroke-line" style="border-top:1px solid #C1BBEC"></div></div>
+        <span class="stroke-hex">#C1BBEC (purple-20)</span>
+      </div>
+      <div class="stroke-item">
+        <span class="stroke-key">1px</span>
+        <span class="stroke-key muted">solid</span>
+        <div class="stroke-demo"><div class="stroke-line" style="border-top:1px solid #3B2F8A"></div></div>
+        <span class="stroke-hex">#3B2F8A (purple-80)</span>
+      </div>
+      <div class="stroke-item">
+        <span class="stroke-key">2px</span>
+        <span class="stroke-key muted">solid</span>
+        <div class="stroke-demo"><div class="stroke-line" style="border-top:2px solid #FF3535"></div></div>
+        <span class="stroke-hex">#FF3535 (red-80 · CTA)</span>
+      </div>
+      <div class="stroke-item">
+        <span class="stroke-key">2px</span>
+        <span class="stroke-key muted">solid</span>
+        <div class="stroke-demo"><div class="stroke-line" style="border-top:2px solid #3B2F8A"></div></div>
+        <span class="stroke-hex">#3B2F8A (purple-80)</span>
+      </div>
+      <div class="stroke-item">
+        <span class="stroke-key">2px</span>
+        <span class="stroke-key muted">solid</span>
+        <div class="stroke-demo"><div class="stroke-line" style="border-top:2px solid #C1BBEC"></div></div>
+        <span class="stroke-hex">#C1BBEC (purple-20)</span>
+      </div>
+      <div class="stroke-item">
+        <span class="stroke-key">4px</span>
+        <span class="stroke-key muted">solid</span>
+        <div class="stroke-demo"><div class="stroke-line" style="border-top:4px solid #100B32"></div></div>
+        <span class="stroke-hex">#100B32 (purple-100)</span>
+      </div>
+    </div>
+  </section>
+
+  <!-- 11. 블러 -->
+  <section class="sec">
+    <div class="sec-head">
+      <span class="sec-title">블러 이펙트</span>
+      <span class="sec-count">2종</span>
+    </div>
+    <div class="blur-grid">
+      <div class="blur-card">
+        <div class="blur-demo">
+          <div class="blur-bg"></div>
+          <div class="blur-layer" style="backdrop-filter:blur(30px);-webkit-backdrop-filter:blur(30px)"></div>
+        </div>
+        <div>
+          <div class="blur-name">lb01  Layer Blur</div>
+          <div class="blur-role">강한 효과</div>
+          <div class="blur-val">blur(30px)</div>
+        </div>
+      </div>
+      <div class="blur-card">
+        <div class="blur-demo">
+          <div class="blur-bg"></div>
+          <div class="blur-layer" style="backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px)"></div>
+        </div>
+        <div>
+          <div class="blur-name">lb02  Layer Blur</div>
+          <div class="blur-role">약한 효과</div>
+          <div class="blur-val">blur(8px)</div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+
+  <hr class="divider">
+
+  <!-- 12. isCms 관리자 오버레이 패턴 -->
+  <section class="sec">
+    <div class="sec-head">
+      <span class="sec-title">isCms 관리자 오버레이 버튼</span>
+      <span class="sec-count">3 변형</span>
+    </div>
+    <div class="tbl-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>클래스</th>
+            <th>시각 데모</th>
+            <th>배경</th>
+            <th>용도</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><span class="mono">.admin-edit-btn</span> 공통</td>
+            <td>
+              <button style="background:rgba(16,11,50,0.75);color:#fff;border:none;border-radius:8px;padding:6px 12px;font-size:12px;font-weight:700;min-height:32px;cursor:default">편집</button>
+            </td>
+            <td><span class="mono">rgba(16,11,50,0.75)</span></td>
+            <td>기본 반투명 다크 버튼</td>
+          </tr>
+          <tr>
+            <td><span class="mono">.admin-float-btn</span></td>
+            <td>
+              <div style="position:relative;width:80px;height:40px;background:rgba(59,47,138,0.1);border-radius:8px;">
+                <button style="position:absolute;top:4px;right:4px;background:rgba(16,11,50,0.75);color:#fff;border:none;border-radius:8px;padding:4px 8px;font-size:11px;font-weight:700;cursor:default">수정</button>
+              </div>
+            </td>
+            <td>position: absolute<br><span class="mono" style="font-size:9px">top:10px right:10px z-index:20</span></td>
+            <td>히어로·그리드 카드 우상단</td>
+          </tr>
+          <tr>
+            <td><span class="mono">.admin-cat-btn</span></td>
+            <td>
+              <div style="position:relative;width:80px;height:40px;background:rgba(59,47,138,0.1);border-radius:8px;display:flex;align-items:center;justify-content:center;">
+                <span style="font-size:9px;color:var(--text-muted)">hover → 노출</span>
+                <button style="position:absolute;top:2px;right:2px;background:rgba(16,11,50,0.75);color:#fff;border:none;border-radius:8px;padding:3px 7px;font-size:10px;font-weight:700;cursor:default;opacity:0.5">편집</button>
+              </div>
+            </td>
+            <td><span class="mono">opacity:0</span> 기본<br><span class="mono">opacity:1</span> on hover</td>
+            <td>분류 아이콘 hover 시 노출</td>
+          </tr>
+          <tr>
+            <td><span class="mono">.admin-md-empty-btn</span></td>
+            <td>
+              <button style="background:rgba(59,47,138,0.12);color:#3B2F8A;border:1px dashed #3B2F8A;padding:10px 20px;border-radius:30px;min-height:44px;font-weight:700;font-size:13px;cursor:default">+ 섹션 추가</button>
+            </td>
+            <td><span class="mono">rgba(59,47,138,0.12)</span><br>dashed border</td>
+            <td>빈 MD 섹션 추가 유도</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="tbl-wrap" style="margin-top:6px">
+      <table>
+        <thead>
+          <tr><th>모달 key</th><th>컴포넌트</th><th>역할</th></tr>
+        </thead>
+        <tbody>
+          <tr><td><span class="mono">'categories'</span></td><td><span class="mono">ProductCategoryModal</span></td><td>분류 관리</td></tr>
+          <tr><td><span class="mono">'hero'</span></td><td><span class="mono">ProductHeroModal</span></td><td>히어로 배너 편집</td></tr>
+          <tr><td><span class="mono">'grid'</span></td><td><span class="mono">ProductGridModal</span></td><td>그리드 레이아웃</td></tr>
+          <tr><td><span class="mono">'md_picks'</span></td><td><span class="mono">ProductMdPickModal</span></td><td>MD 추천 편집</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <!-- 13. 크레이지로그 쓰기 버튼 -->
+  <section class="sec">
+    <div class="sec-head">
+      <span class="sec-title">크레이지로그 쓰기 화면 — 제출 버튼</span>
+      <span class="sec-count">PC·Mobile</span>
+    </div>
+    <div class="layout-grid">
+      <div class="layout-card">
+        <div class="layout-name">Mobile <span class="mono" style="font-size:10px">.m-submit</span></div>
+        <div style="padding:12px 0">
+          <button style="display:flex;align-items:center;justify-content:center;gap:15px;width:100%;max-width:300px;padding:15px 20px;background:#444444;color:#fff;border:none;border-radius:30px;font-size:16px;font-weight:700;min-height:44px;cursor:default;margin:0 auto">
+            <svg width="12" height="9" viewBox="0 0 12 9" fill="none"><path d="M11 4.5H1M4.5 1L1 4.5L4.5 8" stroke="#AAAAAA" stroke-width="1.5" stroke-linecap="round"/></svg>
+            글 발행하기
+            <svg width="12" height="9" viewBox="0 0 12 9" fill="none" style="transform:scaleY(-1) rotate(180deg)"><path d="M11 4.5H1M4.5 1L1 4.5L4.5 8" stroke="#AAAAAA" stroke-width="1.5" stroke-linecap="round"/></svg>
+          </button>
+        </div>
+        <div class="layout-row"><span class="layout-key">배경</span><span class="layout-val">--cs-text-dark #444444</span></div>
+        <div class="layout-row"><span class="layout-key">반경</span><span class="layout-val">--radius-xl 30px</span></div>
+        <div class="layout-row"><span class="layout-key">최소높이</span><span class="layout-val">44px</span></div>
+        <div class="layout-row"><span class="layout-key">폰트</span><span class="layout-val">--text-m-body-16B</span></div>
+        <div class="layout-row" style="background:rgba(255,53,53,0.07)"><span class="layout-key" style="color:#FF3535">⛔ 금지</span><span class="layout-val" style="color:#FF3535">red·purple 사용 금지</span></div>
+      </div>
+      <div class="layout-card">
+        <div class="layout-name">body 클래스 — <span class="mono" style="font-size:10px">crazylog-write</span></div>
+        <div class="layout-row" style="margin-top:8px"><span class="layout-key">GNB</span><span class="layout-val">display:none</span></div>
+        <div class="layout-row"><span class="layout-key">FloatingBar</span><span class="layout-val">display:none</span></div>
+        <div class="layout-row"><span class="layout-key">Footer</span><span class="layout-val">display:none</span></div>
+        <div class="layout-row"><span class="layout-key">에디터 박스</span><span class="layout-val">radius-md + overflow:hidden</span></div>
+        <div class="layout-row"><span class="layout-key">서식 툴바</span><span class="layout-val">position:sticky top:0 z-index:5</span></div>
+        <div class="layout-row"><span class="layout-key">PC 최소높이</span><span class="layout-val">50px / font text-pc-title-16</span></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 14. CmsContentEditor 미디어 툴바 -->
+  <section class="sec">
+    <div class="sec-head">
+      <span class="sec-title">CmsContentEditor — 미디어 툴바 버튼</span>
+      <span class="sec-count">5 삽입 + 2 액션</span>
+    </div>
+    <div class="tbl-wrap">
+      <table>
+        <thead>
+          <tr><th>순서</th><th>라벨</th><th>클래스</th><th>배경</th><th>역할</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>1</td><td><span class="mono">텍스트</span></td><td><span class="mono">.tb-btn</span></td>
+            <td><span style="display:inline-block;width:10px;height:10px;background:rgba(59,47,138,0.12);border:1px solid rgba(59,47,138,0.25);border-radius:3px;margin-right:5px"></span><span class="mono">purple-op12</span></td>
+            <td>텍스트 블록 삽입</td>
+          </tr>
+          <tr>
+            <td>2</td><td><span class="mono">사진</span></td><td><span class="mono">.tb-btn</span></td>
+            <td><span style="display:inline-block;width:10px;height:10px;background:rgba(59,47,138,0.12);border:1px solid rgba(59,47,138,0.25);border-radius:3px;margin-right:5px"></span><span class="mono">purple-op12</span></td>
+            <td>이미지 블록 삽입</td>
+          </tr>
+          <tr>
+            <td>3</td><td><span class="mono">유튜브</span></td><td><span class="mono">.tb-btn</span></td>
+            <td><span style="display:inline-block;width:10px;height:10px;background:rgba(59,47,138,0.12);border:1px solid rgba(59,47,138,0.25);border-radius:3px;margin-right:5px"></span><span class="mono">purple-op12</span></td>
+            <td>유튜브 블록 삽입</td>
+          </tr>
+          <tr>
+            <td>4</td><td><span class="mono">HTML</span></td><td><span class="mono">.tb-btn</span></td>
+            <td><span style="display:inline-block;width:10px;height:10px;background:rgba(59,47,138,0.12);border:1px solid rgba(59,47,138,0.25);border-radius:3px;margin-right:5px"></span><span class="mono">purple-op12</span></td>
+            <td>HTML 임베드 블록 삽입</td>
+          </tr>
+          <tr>
+            <td>5</td><td><span class="mono">구분선</span></td><td><span class="mono">.tb-btn</span></td>
+            <td><span style="display:inline-block;width:10px;height:10px;background:rgba(59,47,138,0.12);border:1px solid rgba(59,47,138,0.25);border-radius:3px;margin-right:5px"></span><span class="mono">purple-op12</span></td>
+            <td>Divider 블록 삽입</td>
+          </tr>
+          <tr style="background:rgba(255,53,53,0.04)">
+            <td>6</td><td><span class="mono">모두삭제</span></td><td><span class="mono">.tb-clear</span></td>
+            <td><span style="display:inline-block;width:10px;height:10px;background:rgba(207,0,0,0.12);border-radius:3px;margin-right:5px"></span><span class="mono">rgba(207,0,0,0.12)</span></td>
+            <td>전체 블록 초기화</td>
+          </tr>
+          <tr style="background:rgba(59,47,138,0.04)">
+            <td>7</td><td><span class="mono">미리보기</span></td><td><span class="mono">.tb-preview</span></td>
+            <td><span style="display:inline-block;width:10px;height:10px;background:rgba(59,47,138,0.12);border:1px solid rgba(59,47,138,0.4);border-radius:3px;margin-right:5px"></span><span class="mono">purple-op12 + border</span></td>
+            <td>렌더링 미리보기 모달</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+    <div style="display:flex;gap:6px;margin-top:6px;flex-wrap:wrap">
+      <button style="background:rgba(59,47,138,0.12);border:1px solid rgba(59,47,138,0.25);border-radius:8px;padding:6px 12px;font-size:12px;font-weight:700;color:#3B2F8A;cursor:default">텍스트</button>
+      <button style="background:rgba(59,47,138,0.12);border:1px solid rgba(59,47,138,0.25);border-radius:8px;padding:6px 12px;font-size:12px;font-weight:700;color:#3B2F8A;cursor:default">사진</button>
+      <button style="background:rgba(59,47,138,0.12);border:1px solid rgba(59,47,138,0.25);border-radius:8px;padding:6px 12px;font-size:12px;font-weight:700;color:#3B2F8A;cursor:default">유튜브</button>
+      <button style="background:rgba(59,47,138,0.12);border:1px solid rgba(59,47,138,0.25);border-radius:8px;padding:6px 12px;font-size:12px;font-weight:700;color:#3B2F8A;cursor:default">HTML</button>
+      <button style="background:rgba(59,47,138,0.12);border:1px solid rgba(59,47,138,0.25);border-radius:8px;padding:6px 12px;font-size:12px;font-weight:700;color:#3B2F8A;cursor:default">구분선</button>
+      <div style="width:1px;background:rgba(59,47,138,0.2);align-self:stretch;margin:0 2px"></div>
+      <button style="background:rgba(207,0,0,0.12);border:none;border-radius:8px;padding:6px 12px;font-size:12px;font-weight:700;color:#CF0000;cursor:default">모두삭제</button>
+      <button style="background:rgba(59,47,138,0.12);border:1px solid rgba(59,47,138,0.4);border-radius:8px;padding:6px 12px;font-size:12px;font-weight:700;color:#3B2F8A;cursor:default">미리보기</button>
+    </div>
+  </section>
+
+  <hr class="divider">
+
+  <!-- 15. 페이지 내부 네비바 (GNB-NaviBar) -->
+  <section class="sec">
+    <div class="sec-head">
+      <span class="sec-title">페이지 내부 네비바 — PC · Mobile 반응형</span>
+      <span class="sec-count">2 variant</span>
+    </div>
+
+    <!-- PC Demo -->
+    <div style="margin-bottom:10px">
+      <div style="font-size:9px;font-weight:800;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.9px;margin-bottom:6px">PC — .d-navi-bar</div>
+      <div style="display:flex;align-items:center;justify-content:space-between;background:rgba(225,222,243,0.4);border-radius:25px;padding:16px 32px;max-width:700px">
+        <div style="display:flex;align-items:center;gap:8px;font-size:14px;font-weight:700;color:var(--text);cursor:default">
+          <svg width="16" height="13" viewBox="0 0 21.38 17.14" fill="none"><path d="M19.88 8.57L1.5 8.57M8.57 1.5L1.5 8.57L8.57 15.64" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          Back
+        </div>
+        <span style="font-size:14px;font-weight:700;color:var(--text-muted)">상품리뷰</span>
+      </div>
+      <div class="tbl-wrap" style="margin-top:6px;max-width:700px">
+        <table>
+          <tbody>
+            <tr><td class="muted" style="font-size:10px">배경</td><td><span class="mono">rgba(225,222,243,0.4)</span> — --cs-lilac 40%</td></tr>
+            <tr><td class="muted" style="font-size:10px">반경</td><td><span class="mono">25px</span> (토큰 없음 — 하드코딩)</td></tr>
+            <tr><td class="muted" style="font-size:10px">패딩</td><td><span class="mono">20px 40px</span></td></tr>
+            <tr><td class="muted" style="font-size:10px">타이틀</td><td><span class="mono">margin-left:auto; order:3</span> → 항상 우측</td></tr>
+            <tr><td class="muted" style="font-size:10px">폰트</td><td><span class="mono">--text-pc-menu-kr-20</span>, color: <span class="mono">--cs-text-mid</span></td></tr>
+            <tr><td class="muted" style="font-size:10px">Back 버튼</td><td><span class="mono">min-height:44px</span>, 화살표+텍스트, <span class="mono">stroke="#100B32"</span></td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- Mobile Demo -->
+    <div>
+      <div style="font-size:9px;font-weight:800;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.9px;margin-bottom:6px">Mobile — .m-nav-pill 변이 비교</div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;max-width:700px">
+        <!-- SubGnb variant -->
+        <div>
+          <div style="font-size:10px;color:var(--text-muted);margin-bottom:4px">SubGnb.svelte (상품·Cart)</div>
+          <div style="display:flex;align-items:center;justify-content:space-between;background:#ECEBF4;border:1px solid rgba(255,255,255,0.6);backdrop-filter:blur(8px);border-radius:20px;padding:12px 16px;min-height:52px">
+            <div style="width:44px;height:44px;display:flex;align-items:center;justify-content:center;cursor:default">
+              <svg width="14" height="10" viewBox="0 0 17 12" fill="none"><path d="M16 6H1M5.6 1L1 6L5.6 11" stroke="#444" stroke-width="2" stroke-linecap="round"/></svg>
+            </div>
+            <span style="font-size:14px;font-weight:700;color:#100B32;flex:1;text-align:center">상품리뷰</span>
+            <div style="width:44px;height:44px;display:flex;align-items:center;justify-content:center;cursor:default">
+              <svg width="20" height="17" viewBox="0 0 20 17" fill="none">
+                <path d="M18.5 6.75C19.33 6.75 20 7.42 20 8.25C20 9.08 19.33 9.75 18.5 9.75H1.5C0.67 9.75 0 9.08 0 8.25C0 7.42 0.67 6.75 1.5 6.75H18.5Z" fill="#CF0000"/>
+                <path d="M18.5 14C19.19 14 19.75 14.56 19.75 15.25C19.75 15.94 19.19 16.5 18.5 16.5H1.5C0.81 16.5 0.25 15.94 0.25 15.25C0.25 14.56 0.81 14 1.5 14H18.5ZM18.5 0C19.19 0 19.75 0.56 19.75 1.25C19.75 1.94 19.19 2.5 18.5 2.5H1.5C0.81 2.5 0.25 1.94 0.25 1.25C0.25 0.56 0.81 0 1.5 0H18.5Z" fill="#201857"/>
+              </svg>
+            </div>
+          </div>
+          <div style="font-size:9px;color:var(--text-muted);margin-top:4px;line-height:1.6">배경: <span class="mono">--cs-lilac</span> + blur(8px)<br>높이: 52px · 타이틀: flex 중앙</div>
+        </div>
+        <!-- m-nav-pill inline variant -->
+        <div>
+          <div style="font-size:10px;color:var(--text-muted);margin-bottom:4px">인라인 .m-nav-pill (크레이지로그)</div>
+          <div style="display:flex;align-items:center;justify-content:space-between;background:rgba(59,47,138,0.1);border-radius:20px;padding:5px 20px;min-height:60px;position:relative">
+            <div style="min-width:44px;min-height:44px;display:flex;align-items:center;justify-content:center;cursor:default">
+              <svg width="14" height="10" viewBox="0 0 17 12" fill="none"><path d="M16 6H1M5.6 1L1 6L5.6 11" stroke="#444" stroke-width="2" stroke-linecap="round"/></svg>
+            </div>
+            <span style="font-size:14px;font-weight:700;color:#100B32;position:absolute;left:50%;transform:translateX(-50%);letter-spacing:-0.5px">상품리뷰</span>
+            <div style="min-width:44px;min-height:44px;display:flex;align-items:center;justify-content:center;cursor:default">
+              <svg width="20" height="17" viewBox="0 0 20 17" fill="none">
+                <path d="M18.5 6.75C19.33 6.75 20 7.42 20 8.25C20 9.08 19.33 9.75 18.5 9.75H1.5C0.67 9.75 0 9.08 0 8.25C0 7.42 0.67 6.75 1.5 6.75H18.5Z" fill="#CF0000"/>
+                <path d="M18.5 14C19.19 14 19.75 14.56 19.75 15.25C19.75 15.94 19.19 16.5 18.5 16.5H1.5C0.81 16.5 0.25 15.94 0.25 15.25C0.25 14.56 0.81 14 1.5 14H18.5ZM18.5 0C19.19 0 19.75 0.56 19.75 1.25C19.75 1.94 19.19 2.5 18.5 2.5H1.5C0.81 2.5 0.25 1.94 0.25 1.25C0.25 0.56 0.81 0 1.5 0H18.5Z" fill="#201857"/>
+              </svg>
+            </div>
+          </div>
+          <div style="font-size:9px;color:var(--text-muted);margin-top:4px;line-height:1.6">배경: <span class="mono">--cs-purple-op10</span><br>높이: 60px · 타이틀: absolute 중앙</div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- §14 기본 상품 DP -->
+  <section>
+    <h2>§14 · 기본 상품 DP — 전역 공통 컴포넌트</h2>
+    <p style="font-size:12px;color:var(--text-muted);margin:0 0 16px">상품 노출 전 화면 (<code>/products</code>, <code>/hype-pack</code>, <code>/help</code> 등)에 동일하게 적용되는 표준 컴포넌트</p>
+
+    <!-- Mobile MD Picks 가로 스크롤 -->
+    <h3>Mobile — MD Picks 가로 스크롤 (.md-picks-track)</h3>
+    <div class="demo-row" style="overflow-x:auto;padding-bottom:8px">
+      <div style="display:flex;gap:15px;width:max-content">
+        <a href="#" style="flex:none;width:200px;text-decoration:none;display:flex;flex-direction:column;cursor:pointer" onclick="return false">
+          <div style="width:100%;height:200px;border-radius:20px 20px 0 0;overflow:hidden;background:#e1def3;display:flex;align-items:center;justify-content:center">
+            <span style="font-size:11px;color:#6B65A8">.md-pick-img-box</span>
+          </div>
+          <div style="padding:5px 5px 10px">
+            <div style="font-family:var(--sans);font-weight:700;font-size:16px;color:#1d183e;line-height:1.6;letter-spacing:-0.5px;margin:0 0 2px">SONY A7C II 바디</div>
+            <div style="font-family:var(--sans);font-weight:700;font-size:14px;color:#3b2f8a;line-height:2;letter-spacing:-0.5px">₩45,000 / 1일</div>
+          </div>
+        </a>
+        <a href="#" style="flex:none;width:200px;text-decoration:none;display:flex;flex-direction:column;cursor:pointer" onclick="return false">
+          <div style="width:100%;height:200px;border-radius:20px 20px 0 0;overflow:hidden;background:#e1def3;display:flex;align-items:center;justify-content:center">
+            <span style="font-size:11px;color:#6B65A8">.md-pick-img-box</span>
+          </div>
+          <div style="padding:5px 5px 10px">
+            <div style="font-family:var(--sans);font-weight:700;font-size:16px;color:#1d183e;line-height:1.6;letter-spacing:-0.5px;margin:0 0 2px">캐논 EOS R5 바디</div>
+            <div style="font-family:var(--sans);font-weight:700;font-size:14px;color:#3b2f8a;line-height:2;letter-spacing:-0.5px">₩60,000 / 1일</div>
+          </div>
+        </a>
+        <a href="#" style="flex:none;width:200px;text-decoration:none;display:flex;flex-direction:column;cursor:pointer" onclick="return false">
+          <div style="width:100%;height:200px;border-radius:20px 20px 0 0;overflow:hidden;background:#e1def3;display:flex;align-items:center;justify-content:center">
+            <span style="font-size:11px;color:#6B65A8">.md-pick-img-box</span>
+          </div>
+          <div style="padding:5px 5px 10px">
+            <div style="font-family:var(--sans);font-weight:700;font-size:16px;color:#1d183e;line-height:1.6;letter-spacing:-0.5px;margin:0 0 2px">Godox SL150W LED</div>
+            <div style="font-family:var(--sans);font-weight:700;font-size:14px;color:#3b2f8a;line-height:2;letter-spacing:-0.5px">₩18,000 / 1일</div>
+          </div>
+        </a>
+      </div>
+    </div>
+    <div class="spec-row" style="margin-top:8px">
+      <span class="tag">card w: 200px</span>
+      <span class="tag">img h: 200px</span>
+      <span class="tag">img-box r: 20px 20px 0 0</span>
+      <span class="tag">img bg: #e1def3</span>
+      <span class="tag">gap: 15px</span>
+      <span class="tag">name: 16px 700 #1d183e</span>
+      <span class="tag">price: 14px 700 #3b2f8a</span>
+      <span class="tag">hover: scale(1.02)</span>
+    </div>
+
+    <!-- PC 플랫 카드 그리드 -->
+    <h3 style="margin-top:28px">PC — 플랫 카드 그리드 (.d-prod-grid / .d-prod-flat)</h3>
+    <div class="demo-row" style="flex-wrap:wrap;gap:20px;justify-content:flex-start">
+      <a href="#" style="width:200px;height:280px;border-radius:40px;overflow:clip;display:flex;flex-direction:column;text-decoration:none;cursor:pointer;transition:transform 0.2s" onmouseover="this.style.transform='scale(1.02)'" onmouseout="this.style.transform=''" onclick="return false">
+        <div style="width:100%;height:195px;overflow:hidden;flex-shrink:0;background:#e1def3;display:flex;align-items:center;justify-content:center">
+          <span style="font-size:10px;color:#6B65A8">.d-flat-img-box</span>
+        </div>
+        <div style="background:#e1def3;width:100%;padding:14px;display:flex;flex-direction:column;gap:6px;flex:1">
+          <div style="font-family:var(--sans);font-weight:900;font-size:14px;color:#100b32;line-height:1;letter-spacing:-0.5px;white-space:nowrap">₩45,000 / 1일</div>
+          <div style="font-family:var(--sans);font-weight:700;font-size:11px;color:#444;line-height:1.8;letter-spacing:-0.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">SONY A7C II 바디</div>
+        </div>
+      </a>
+      <a href="#" style="width:200px;height:280px;border-radius:40px;overflow:clip;display:flex;flex-direction:column;text-decoration:none;cursor:pointer;transition:transform 0.2s" onmouseover="this.style.transform='scale(1.02)'" onmouseout="this.style.transform=''" onclick="return false">
+        <div style="width:100%;height:195px;overflow:hidden;flex-shrink:0;background:#e1def3;display:flex;align-items:center;justify-content:center">
+          <span style="font-size:10px;color:#6B65A8">.d-flat-img-box</span>
+        </div>
+        <div style="background:#e1def3;width:100%;padding:14px;display:flex;flex-direction:column;gap:6px;flex:1">
+          <div style="font-family:var(--sans);font-weight:900;font-size:14px;color:#100b32;line-height:1;letter-spacing:-0.5px;white-space:nowrap">₩60,000 / 1일</div>
+          <div style="font-family:var(--sans);font-weight:700;font-size:11px;color:#444;line-height:1.8;letter-spacing:-0.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">캐논 EOS R5 바디</div>
+        </div>
+      </a>
+      <a href="#" style="width:200px;height:280px;border-radius:40px;overflow:clip;display:flex;flex-direction:column;text-decoration:none;cursor:pointer;transition:transform 0.2s" onmouseover="this.style.transform='scale(1.02)'" onmouseout="this.style.transform=''" onclick="return false">
+        <div style="width:100%;height:195px;overflow:hidden;flex-shrink:0;background:#e1def3;display:flex;align-items:center;justify-content:center">
+          <span style="font-size:10px;color:#6B65A8">.d-flat-img-box</span>
+        </div>
+        <div style="background:#e1def3;width:100%;padding:14px;display:flex;flex-direction:column;gap:6px;flex:1">
+          <div style="font-family:var(--sans);font-weight:900;font-size:14px;color:#100b32;line-height:1;letter-spacing:-0.5px;white-space:nowrap">₩18,000 / 1일</div>
+          <div style="font-family:var(--sans);font-weight:700;font-size:11px;color:#444;line-height:1.8;letter-spacing:-0.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">Godox SL150W LED</div>
+        </div>
+      </a>
+    </div>
+    <div class="spec-row" style="margin-top:8px">
+      <span class="tag">card: 290×410px (demo: 200×280)</span>
+      <span class="tag">r: 40px (하드코딩)</span>
+      <span class="tag">img-box h: 290px</span>
+      <span class="tag">info bg: #e1def3</span>
+      <span class="tag">info padding: 20px</span>
+      <span class="tag">price: 18px 900 #100b32 (DOM 위)</span>
+      <span class="tag">name: 14px 700 #444 ellipsis (DOM 아래)</span>
+      <span class="tag">grid gap: 50px 20px</span>
+      <span class="tag">hover: scale(1.02)</span>
+    </div>
+
+    <!-- 전역 원칙 -->
+    <h3 style="margin-top:28px">전역 적용 원칙</h3>
+    <div style="overflow-x:auto">
+      <table>
+        <thead><tr><th>항목</th><th>규칙</th></tr></thead>
+        <tbody>
+          <tr><td>적용 화면</td><td>/products · /hype-pack · /help · /members 등 상품 노출 전 화면</td></tr>
+          <tr><td>PC 카드</td><td>.d-prod-grid + .d-prod-flat (290×410px, r:40px)</td></tr>
+          <tr><td>Mobile MD Picks</td><td>.md-picks-track + .md-pick-card (w:200px, 가로 스크롤)</td></tr>
+          <tr><td>Mobile 리스트</td><td>.m-prod-card (50% 2열, r:20px 상단만)</td></tr>
+          <tr><td>인포 블록</td><td>.m-prod-info + .m-prod-name + .m-prod-price — 모바일 카드 전역 공통</td></tr>
+          <tr><td>이미지 배경</td><td>#e1def3 (로딩 전 플레이스홀더)</td></tr>
+          <tr><td>가격 DOM 순서</td><td>PC: 가격→이름 (위→아래) / Mobile: 이름→가격 (위→아래)</td></tr>
+          <tr><td>hover 효과</td><td>transform: scale(1.02) 0.2s — 모바일·PC 동일</td></tr>
+          <tr><td>신규 상품 DP 추가 시</td><td>위 클래스 재사용 — 임의 신규 클래스 작성 금지</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+</div>
