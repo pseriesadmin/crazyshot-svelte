@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte';
+  import { goto } from '$app/navigation';
   import { slide } from 'svelte/transition';
   import type { PageData } from './$types';
   import type { Product } from '$lib/types/database';
@@ -231,6 +232,7 @@
   // ── Footer + canProceed 5조건 가드
   let agreed = $state(false);
   let footerVisible = $state(false);
+  let isConfirming = $state(false);
 
   // 조건 1: 장바구니에 상품이 1개 이상
   const hasItems = $derived(!c1Deleted || !c2Deleted)
@@ -336,7 +338,9 @@
   const p1Rate12h = $derived(priceConfig[p1?.id ?? '']?.halfday_rate ?? priceConfig[data.cartItems[0]?.product_id]?.halfday_rate ?? Math.round(p1Rate * 0.6))
   const p2Rate    = $derived(priceConfig[p2?.id ?? '']?.daily_rate   ?? priceConfig[data.cartItems[1]?.product_id]?.daily_rate   ?? 80000)
   const p2Rate12h = $derived(priceConfig[p2?.id ?? '']?.halfday_rate ?? priceConfig[data.cartItems[1]?.product_id]?.halfday_rate ?? Math.round(p2Rate * 0.6))
-  const subItems = $derived(sampleSubItems.filter(s => s.parent_cart_id === data.cartItems[0]?.id))
+  const subItems = $derived(
+    sd.isServerLoaded ? [] : sampleSubItems.filter(s => s.parent_cart_id === data.cartItems[0]?.id)
+  )
 
   // 카드별 기간 유형 단가 (fixture 폴백용)
   const c1CardRate = $derived(cardRate(p1Rate, p1Rate12h, c1DurType))
@@ -1111,12 +1115,28 @@
       {/if}
       <button
         class="footer-cta"
-        class:footer-cta-active={canProceed}
-        class:footer-cta-disabled={!canProceed}
-        disabled={!canProceed}
-        onclick={() => { if (canProceed) alert('결제 시뮬레이션 — 실제 TossPayments 연동은 M3에서 구현됩니다.'); }}
+        class:footer-cta-active={canProceed && !isConfirming}
+        class:footer-cta-disabled={!canProceed || isConfirming}
+        disabled={!canProceed || isConfirming}
+        onclick={async () => {
+          if (!canProceed || isConfirming) return
+          isConfirming = true
+          try {
+            const res = await fetch('/api/checkout/confirm-mock', { method: 'POST' })
+            const result = await res.json()
+            if (res.ok && result.success) {
+              await goto('/account/rental')
+            } else {
+              csToast.error('예약 처리 중 오류가 발생했습니다.')
+            }
+          } catch {
+            csToast.error('네트워크 오류가 발생했습니다.')
+          } finally {
+            isConfirming = false
+          }
+        }}
       >
-        가입하고 지금 예약하세요
+        {isConfirming ? '처리 중...' : '가입하고 지금 예약하세요'}
       </button>
     </div>
   </footer>

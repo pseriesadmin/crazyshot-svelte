@@ -233,6 +233,14 @@
           p_return_time:    padTime(e.endHour, e.endMin),
         });
       }
+      // 예약신청(hold) 채팅 알림 발송 — fire-and-forget
+      if (row.reservation_id != null) {
+        fetch('/api/checkout/notify-hold', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ reservationId: row.reservation_id }),
+        }).catch(() => {})
+      }
       goto('/checkout');
     } catch {
       showToast('예약 중 오류가 발생했습니다.');

@@ -33,6 +33,7 @@
       case 'PRODUCT_CARD':           return { label: '바로 예약하기', color: 'purple' }
       // 관리자 발행 액션 타입
       case 'payment_request':        return { label: '대여 계약 결제하기', color: 'purple' }
+      case 'reservation_hold':        return { label: '예약 신청 확인', color: 'purple' }
       case 'reservation_approval':   return { label: '예약 승인 확인', color: 'purple' }
       case 'shipment_notify':        return { label: '배송 추적', color: 'green' }
       case 'return_remind':          return { label: '반납 등록하기', color: 'orange' }
