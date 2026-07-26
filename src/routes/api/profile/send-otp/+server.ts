@@ -1,15 +1,15 @@
 import { json } from '@sveltejs/kit'
 import type { RequestHandler } from './$types'
-import { SUPABASE_SERVICE_ROLE_KEY } from '$env/static/private'
+import { SUPABASE_SERVICE_ROLE_KEY, ALIGO_API_KEY, ALIGO_USER_ID, SMS_SENDER_PHONE } from '$env/static/private'
 import { PUBLIC_SUPABASE_URL } from '$env/static/public'
 import { createClient } from '@supabase/supabase-js'
 
 // SMS 발송: Aligo REST API (multipart/form-data)
-// env 미설정 시 개발 콘솔 출력 (실제 SMS 미전송)
+// env 미설정 시 SMS 미전송 (graceful skip)
 async function sendSms(to: string, code: string): Promise<void> {
-  const apiKey      = process.env.ALIGO_API_KEY      ?? ''
-  const userId      = process.env.ALIGO_USER_ID      ?? ''
-  const senderPhone = process.env.SMS_SENDER_PHONE   ?? ''
+  const apiKey      = ALIGO_API_KEY
+  const userId      = ALIGO_USER_ID
+  const senderPhone = SMS_SENDER_PHONE
 
   if (!apiKey || !userId || !senderPhone) {
     return
