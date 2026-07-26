@@ -1,0 +1,747 @@
+<title>CrazyShot — CMS Design System</title>
+<style>
+  :root {
+    --bg:         #f0eef9;
+    --bg-card:    #ffffff;
+    --bg-section: #e8e4f8;
+    --border:     rgba(59,47,138,0.10);
+    --border-mid: rgba(59,47,138,0.18);
+    --text:       #100B32;
+    --text-sub:   #3B2F8A;
+    --text-muted: #8B83C0;
+    --accent:     #3B2F8A;
+    --accent-sub: #201857;
+    --mono:       'SF Mono','Fira Code','Cascadia Code','Consolas',monospace;
+    --sans:       'Apple SD Gothic Neo','Noto Sans KR','Malgun Gothic','Segoe UI',sans-serif;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg:         #0c0926;
+      --bg-card:    #16123a;
+      --bg-section: #201857;
+      --border:     rgba(193,187,236,0.10);
+      --border-mid: rgba(193,187,236,0.16);
+      --text:       #ECEBF4;
+      --text-sub:   #C1BBEC;
+      --text-muted: #6B65A8;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg:         #0c0926;
+    --bg-card:    #16123a;
+    --bg-section: #201857;
+    --border:     rgba(193,187,236,0.10);
+    --border-mid: rgba(193,187,236,0.16);
+    --text:       #ECEBF4;
+    --text-sub:   #C1BBEC;
+    --text-muted: #6B65A8;
+  }
+  :root[data-theme="light"] {
+    --bg:         #f0eef9;
+    --bg-card:    #ffffff;
+    --bg-section: #e8e4f8;
+    --border:     rgba(59,47,138,0.10);
+    --border-mid: rgba(59,47,138,0.18);
+    --text:       #100B32;
+    --text-sub:   #3B2F8A;
+    --text-muted: #8B83C0;
+  }
+
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--sans);
+    font-size: 12px;
+    line-height: 1.5;
+    min-height: 100vh;
+  }
+  .wrap { max-width: 1100px; margin: 0 auto; padding: 48px 32px 80px; }
+
+  /* HEADER */
+  .page-head {
+    display: flex; align-items: center; justify-content: space-between;
+    margin-bottom: 48px; padding-bottom: 20px;
+    border-bottom: 1px solid var(--border-mid);
+  }
+  .page-title-wrap { display: flex; align-items: center; gap: 12px; }
+  .page-title { font-size: 18px; font-weight: 800; color: var(--text); letter-spacing: -0.5px; }
+  .page-tag { font-size: 9px; font-weight: 800; background: #3B2F8A; color: #fff; padding: 3px 8px; border-radius: 99px; letter-spacing: 0.8px; text-transform: uppercase; }
+  .page-env { font-size: 10px; color: var(--text-muted); font-family: var(--mono); border: 1px solid var(--border-mid); padding: 4px 10px; border-radius: 6px; }
+
+  /* SECTION */
+  .sec { margin-bottom: 36px; }
+  .sec-head { display: flex; align-items: center; gap: 8px; margin-bottom: 12px; }
+  .sec-title { font-size: 9px; font-weight: 800; color: var(--text-muted); text-transform: uppercase; letter-spacing: 1.2px; }
+  .sec-count { font-family: var(--mono); font-size: 9px; color: var(--text-muted); background: rgba(193,187,236,0.07); border: 1px solid var(--border); padding: 1px 6px; border-radius: 4px; }
+
+  /* NOTICE BOX */
+  .notice-box {
+    background: rgba(59,47,138,0.08); border: 1px solid rgba(59,47,138,0.2);
+    border-radius: 8px; padding: 10px 14px; font-size: 11px; color: var(--text-sub);
+    margin-bottom: 20px;
+  }
+  .notice-box strong { font-weight: 800; }
+
+  /* COLOR GRID */
+  .color-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 5px; }
+  .color-card { display: flex; align-items: center; gap: 10px; background: var(--bg-card); border: 1px solid var(--border); border-radius: 8px; padding: 9px 11px; }
+  .color-swatch { width: 30px; height: 30px; border-radius: 6px; flex-shrink: 0; border: 1px solid rgba(0,0,0,0.07); }
+  .color-name { font-family: var(--mono); font-size: 10px; font-weight: 700; color: var(--text); }
+  .color-hex { font-family: var(--mono); font-size: 9px; color: var(--text-muted); margin-top: 1px; }
+  .color-desc { font-size: 10px; color: var(--text-muted); margin-top: 1px; line-height: 1.3; }
+
+  /* TABLE */
+  .tbl-wrap { border-radius: 10px; overflow: hidden; border: 1px solid var(--border); }
+  .tbl-wrap table { width: 100%; border-collapse: collapse; background: var(--bg-card); }
+  .tbl-wrap th { background: rgba(59,47,138,0.05); color: var(--text-muted); font-size: 9px; font-weight: 800; text-transform: uppercase; letter-spacing: 0.9px; padding: 7px 12px; text-align: left; border-bottom: 1px solid var(--border); }
+  .tbl-wrap td { padding: 8px 12px; font-size: 11px; border-bottom: 1px solid rgba(59,47,138,0.04); vertical-align: middle; color: var(--text); }
+  .tbl-wrap tr:last-child td { border-bottom: none; }
+  .tbl-wrap tr:hover td { background: rgba(59,47,138,0.02); }
+  .mono { font-family: var(--mono); font-size: 10px; color: var(--text-sub); }
+  .muted { color: var(--text-muted); }
+  .sw { display: inline-block; width: 12px; height: 12px; border-radius: 3px; vertical-align: middle; margin-right: 5px; border: 1px solid rgba(0,0,0,0.08); }
+
+  /* PILL */
+  .pill { display: inline-block; font-size: 9px; font-weight: 700; padding: 1px 7px; border-radius: 4px; letter-spacing: 0.3px; }
+  .pill-cta   { background: rgba(59,47,138,0.18); color: #3B2F8A; }
+  .pill-sub   { background: rgba(32,24,87,0.14); color: #201857; }
+  .pill-danger{ background: rgba(255,53,53,0.14); color: #FF3535; }
+  .pill-chip  { background: rgba(59,47,138,0.10); color: #3B2F8A; }
+  .pill-gray  { background: rgba(102,102,102,0.12); color: #666; }
+
+  /* RADIUS GRID */
+  .radius-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 5px; }
+  .radius-card { background: var(--bg-card); border: 1px solid var(--border); border-radius: 8px; padding: 12px; display: flex; align-items: center; gap: 10px; }
+  .radius-demo { width: 30px; height: 30px; background: rgba(59,47,138,0.35); border: 2px solid rgba(59,47,138,0.7); flex-shrink: 0; }
+  .radius-label { font-size: 11px; font-weight: 700; color: var(--text); }
+  .radius-vals { font-family: var(--mono); font-size: 9px; color: var(--text-sub); margin-top: 1px; }
+  .radius-var { font-family: var(--mono); font-size: 8px; color: var(--text-muted); margin-top: 2px; }
+
+  /* LAYOUT GRID */
+  .layout-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 5px; }
+  .layout-card { background: var(--bg-card); border: 1px solid var(--border); border-radius: 8px; padding: 14px; }
+  .layout-name { font-size: 11px; font-weight: 700; color: var(--text); margin-bottom: 8px; }
+  .layout-row { display: flex; justify-content: space-between; align-items: center; padding: 4px 0; border-bottom: 1px solid rgba(59,47,138,0.05); }
+  .layout-row:last-child { border-bottom: none; }
+  .layout-key { font-size: 10px; color: var(--text-muted); }
+  .layout-val { font-family: var(--mono); font-size: 10px; color: var(--text-sub); }
+
+  hr.divider { border: none; border-top: 1px solid var(--border); margin: 32px 0 36px; }
+
+  /* BUTTON DEMOS */
+  .btn-demo-grid { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-top: 10px; }
+
+  @media (max-width: 700px) {
+    .color-grid, .radius-grid { grid-template-columns: 1fr 1fr; }
+    .layout-grid { grid-template-columns: 1fr; }
+    .wrap { padding: 28px 16px 60px; }
+  }
+</style>
+
+<div class="wrap">
+
+  <!-- HEADER -->
+  <header class="page-head">
+    <div class="page-title-wrap">
+      <span class="page-title">CMS Design System</span>
+      <span class="page-tag">ADMIN</span>
+    </div>
+    <span class="page-env">CMS-Design-System-Tokens.json · 2026-07-19</span>
+  </header>
+
+  <div class="notice-box">
+    <strong>⚠️ CMS는 PC 전용 (min-width: 1280px)</strong> — 모바일 반응형 없음.
+    모든 CSS는 <code>--text-pc-*</code> 토큰만 사용. <code>--text-m-*</code> 모바일 토큰 사용 절대 금지.
+    USER 화면 토큰(<code>--cs-red-badge</code> CTA, <code>--cs-lilac</code> 버튼 등)과 혼용 금지.
+  </div>
+
+  <!-- 1. 컬러 팔레트 -->
+  <section class="sec">
+    <div class="sec-head">
+      <span class="sec-title">컬러 팔레트 — CMS 빈도순</span>
+      <span class="sec-count">15종</span>
+    </div>
+    <div class="color-grid">
+      <div class="color-card">
+        <div class="color-swatch" style="background:#100B32"></div>
+        <div>
+          <div class="color-name">--cs-text / --cs-dark</div>
+          <div class="color-hex">#100B32</div>
+          <div class="color-desc">기본 본문·아이콘·GNB 배경</div>
+        </div>
+      </div>
+      <div class="color-card">
+        <div class="color-swatch" style="background:#201857"></div>
+        <div>
+          <div class="color-name">--cs-purple-dark</div>
+          <div class="color-hex">#201857</div>
+          <div class="color-desc">강조 제목·활성 탭·GNB 텍스트</div>
+        </div>
+      </div>
+      <div class="color-card">
+        <div class="color-swatch" style="background:#3B2F8A"></div>
+        <div>
+          <div class="color-name" style="color:#3B2F8A">★ --cs-purple</div>
+          <div class="color-hex">#3B2F8A</div>
+          <div class="color-desc">CTA 버튼 배경·가격·활성 강조</div>
+        </div>
+      </div>
+      <div class="color-card">
+        <div class="color-swatch" style="background:#FFFFFF;border:1px solid rgba(0,0,0,0.1)"></div>
+        <div>
+          <div class="color-name">--cs-white</div>
+          <div class="color-hex">#FFFFFF</div>
+          <div class="color-desc">카드·패널·활성 서브탭 배경</div>
+        </div>
+      </div>
+      <div class="color-card">
+        <div class="color-swatch" style="background:#ECEBF4;border:1px solid rgba(0,0,0,0.08)"></div>
+        <div>
+          <div class="color-name">--cs-lilac</div>
+          <div class="color-hex">#ECEBF4</div>
+          <div class="color-desc">페이지 배경·주력 보더</div>
+        </div>
+      </div>
+      <div class="color-card">
+        <div class="color-swatch" style="background:#F6F6F6;border:1px solid rgba(0,0,0,0.06)"></div>
+        <div>
+          <div class="color-name">--cs-surface-gray</div>
+          <div class="color-hex">#F6F6F6</div>
+          <div class="color-desc">입력 필드·행 hover 배경</div>
+        </div>
+      </div>
+      <div class="color-card">
+        <div class="color-swatch" style="background:#666666"></div>
+        <div>
+          <div class="color-name">--cs-text-mid</div>
+          <div class="color-hex">#666666</div>
+          <div class="color-desc">보조 텍스트·비활성 탭</div>
+        </div>
+      </div>
+      <div class="color-card">
+        <div class="color-swatch" style="background:#AAAAAA"></div>
+        <div>
+          <div class="color-name">--cs-text-light</div>
+          <div class="color-hex">#AAAAAA</div>
+          <div class="color-desc">힌트·플레이스홀더</div>
+        </div>
+      </div>
+      <div class="color-card">
+        <div class="color-swatch" style="background:#444444"></div>
+        <div>
+          <div class="color-name">--cs-text-dark</div>
+          <div class="color-hex">#444444</div>
+          <div class="color-desc">보조 레이블·설명</div>
+        </div>
+      </div>
+      <div class="color-card">
+        <div class="color-swatch" style="background:#FF3535"></div>
+        <div>
+          <div class="color-name">--cs-red-badge</div>
+          <div class="color-hex">#FF3535</div>
+          <div class="color-desc">삭제 텍스트·경고·에러</div>
+        </div>
+      </div>
+      <div class="color-card">
+        <div class="color-swatch" style="background:#FFCFCF;border:1px solid rgba(0,0,0,0.05)"></div>
+        <div>
+          <div class="color-name">--cs-chat-in-bg</div>
+          <div class="color-hex">#FFCFCF</div>
+          <div class="color-desc">danger 버튼 배경 (danger-50)</div>
+        </div>
+      </div>
+      <div class="color-card">
+        <div class="color-swatch" style="background:#E1DEF3;border:1px solid rgba(0,0,0,0.06)"></div>
+        <div>
+          <div class="color-name">--cs-purple-op10</div>
+          <div class="color-hex">#E1DEF3</div>
+          <div class="color-desc">활성 영역·선택 배경 (purpleTint-200)</div>
+        </div>
+      </div>
+      <div class="color-card">
+        <div class="color-swatch" style="background:#10B981"></div>
+        <div>
+          <div class="color-name">--cs-success-light</div>
+          <div class="color-hex">#10B981</div>
+          <div class="color-desc">성공 배지·통계</div>
+        </div>
+      </div>
+      <div class="color-card">
+        <div class="color-swatch" style="background:#0EA5E9"></div>
+        <div>
+          <div class="color-name">--cs-info</div>
+          <div class="color-hex">#0EA5E9</div>
+          <div class="color-desc">정보·날짜 강조 파랑</div>
+        </div>
+      </div>
+      <div class="color-card">
+        <div class="color-swatch" style="background:#B0ABCC"></div>
+        <div>
+          <div class="color-name">--cs-disabled-button</div>
+          <div class="color-hex">#B0ABCC</div>
+          <div class="color-desc">비활성 버튼</div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <hr class="divider">
+
+  <!-- 2. 타이포그래피 -->
+  <section class="sec">
+    <div class="sec-head">
+      <span class="sec-title">타이포그래피 — pc-com 토큰 전용</span>
+      <span class="sec-count">6 본문 + 2 GNB</span>
+    </div>
+    <div class="tbl-wrap">
+      <table>
+        <thead>
+          <tr><th>CSS 변수</th><th>크기/굵기</th><th>용도</th><th>미리보기</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><span class="mono">--text-pc-htitle-25</span></td>
+            <td><span class="mono">25px / 700</span></td>
+            <td>페이지 h1 제목</td>
+            <td><span style="font-size:16px;font-weight:700;color:var(--text)">상품 목록</span></td>
+          </tr>
+          <tr>
+            <td><span class="mono">--text-pc-title-18</span></td>
+            <td><span class="mono">18px / 700</span></td>
+            <td>섹션 타이틀·stat 수치</td>
+            <td><span style="font-size:14px;font-weight:700;color:var(--text)">총 328건</span></td>
+          </tr>
+          <tr>
+            <td><span class="mono">--text-pc-title-16</span></td>
+            <td><span class="mono">16px / 700</span></td>
+            <td>CTA 버튼·모달 메시지</td>
+            <td><span style="font-size:13px;font-weight:700;color:#3B2F8A">+ 상품 등록</span></td>
+          </tr>
+          <tr>
+            <td><span class="mono">--text-pc-body-14</span></td>
+            <td><span class="mono">14px / 700</span></td>
+            <td>기본 본문·레이블·탭·입력값</td>
+            <td><span style="font-size:12px;font-weight:700;color:var(--text)">Canon EOS R5</span></td>
+          </tr>
+          <tr>
+            <td><span class="mono">--text-pc-script-12</span></td>
+            <td><span class="mono">12px / 400</span></td>
+            <td>배지·캡션·테이블 헤더·힌트</td>
+            <td><span style="font-size:10px;color:var(--text-muted)">품번 C-2501-A</span></td>
+          </tr>
+          <tr>
+            <td><span class="mono">--text-pc-descript-10</span></td>
+            <td><span class="mono">10px / 300</span></td>
+            <td>최소 보조 텍스트·라벨·뎁스 배지</td>
+            <td><span style="font-size:9px;color:var(--text-muted)">카메라 · CAM</span></td>
+          </tr>
+          <tr style="background:rgba(59,47,138,0.03)">
+            <td><span class="mono">--text-pc-ad-kr-22</span></td>
+            <td><span class="mono">22px / 500 SB Aggro</span></td>
+            <td>GNB 대메뉴 (한글) — 변경 금지</td>
+            <td><span style="font-size:13px;font-weight:700;color:#201857">상품관리</span></td>
+          </tr>
+          <tr style="background:rgba(59,47,138,0.03)">
+            <td><span class="mono">--text-pc-menu-en-20</span></td>
+            <td><span class="mono">20px / 400 Tilt Warp</span></td>
+            <td>GNB 영문 버튼 — 변경 금지</td>
+            <td><span style="font-size:12px;color:#fff;background:#100B32;padding:2px 8px;border-radius:6px">SIGN OUT</span></td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+    <div style="margin-top:6px;padding:8px 12px;background:rgba(255,53,53,0.06);border-radius:6px;font-size:10px;color:#CF0000">
+      ⛔ <strong>--text-m-* 모바일 토큰 CMS 본문 사용 절대 금지</strong> — GNB 제외한 모든 CMS 영역에서 pc-com 6종만 허용
+    </div>
+  </section>
+
+  <hr class="divider">
+
+  <!-- 3. 버튼 스펙 -->
+  <section class="sec">
+    <div class="sec-head">
+      <span class="sec-title">버튼 스펙 — standardButtons JSON 실측 정본</span>
+      <span class="sec-count">4 주요 + 칩·배지·태그</span>
+    </div>
+    <div class="tbl-wrap">
+      <table>
+        <thead>
+          <tr><th>클래스</th><th>높이</th><th>배경</th><th>텍스트</th><th>반경</th><th>용도</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><span class="mono">.btn-primary</span> / <span class="mono">.cta-btn</span></td>
+            <td><strong>44px</strong></td>
+            <td><span class="sw" style="background:#3B2F8A"></span><span class="mono">#3B2F8A</span></td>
+            <td><span style="color:#fff;background:#3B2F8A;padding:1px 6px;border-radius:3px;font-size:9px">white</span></td>
+            <td><span class="pill pill-cta">15px</span></td>
+            <td>주요 액션 (등록·저장)</td>
+          </tr>
+          <tr>
+            <td><span class="mono">.btn-secondary</span></td>
+            <td><strong>44px</strong></td>
+            <td><span class="sw" style="background:#fff;border:1px solid rgba(0,0,0,0.15)"></span>white</td>
+            <td><span class="mono">#201857</span></td>
+            <td><span class="pill pill-cta">15px</span></td>
+            <td>보조 (검색·취소) <span class="muted" style="font-size:9px">border: 1px #201857</span></td>
+          </tr>
+          <tr>
+            <td><span class="mono">.btn-action</span></td>
+            <td><strong>34px</strong></td>
+            <td><span class="sw" style="background:#3B2F8A"></span><span class="mono">#3B2F8A</span></td>
+            <td><span style="color:#fff;background:#3B2F8A;padding:1px 6px;border-radius:3px;font-size:9px">white</span></td>
+            <td><span class="pill pill-chip">10px</span></td>
+            <td>소형 인라인 (빠른 등록)</td>
+          </tr>
+          <tr>
+            <td><span class="mono">.btn-danger</span></td>
+            <td><strong>40px</strong></td>
+            <td><span class="sw" style="background:#FFCFCF;border:1px solid rgba(0,0,0,0.06)"></span><span class="mono">#FFCFCF</span></td>
+            <td><span class="mono" style="color:#FF3535">#FF3535</span></td>
+            <td><span class="pill pill-gray">8px</span></td>
+            <td>삭제·위험 — <strong>빨강 배경 아님</strong>, 연분홍 배경</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="btn-demo-grid">
+      <button style="display:inline-flex;align-items:center;height:44px;padding:0 24px;background:#3B2F8A;color:#fff;border:none;border-radius:15px;font-size:13px;font-weight:700;cursor:default">+ 상품 등록</button>
+      <button style="display:inline-flex;align-items:center;height:44px;padding:0 24px;background:#fff;color:#201857;border:1px solid #201857;border-radius:15px;font-size:13px;font-weight:700;cursor:default">검색</button>
+      <button style="display:inline-flex;align-items:center;height:34px;padding:0 16px;background:#3B2F8A;color:#fff;border:none;border-radius:10px;font-size:11px;font-weight:700;cursor:default">빠른 등록</button>
+      <button style="display:inline-flex;align-items:center;height:40px;padding:0 16px;background:#FFCFCF;color:#FF3535;border:none;border-radius:8px;font-size:13px;font-weight:700;cursor:default">삭제</button>
+    </div>
+
+    <!-- 표준 삭제 버튼 2종 -->
+    <div style="margin-top:16px">
+      <div style="font-size:9px;font-weight:800;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.9px;margin-bottom:8px">CMS 표준 삭제 버튼 2종 (CmsDeleteButton)</div>
+      <div class="tbl-wrap">
+        <table>
+          <thead><tr><th>종류</th><th>클래스</th><th>배경</th><th>hover</th><th>데모</th></tr></thead>
+          <tbody>
+            <tr>
+              <td>텍스트형</td>
+              <td><span class="mono">.btn-danger-sm</span></td>
+              <td><span class="mono">--cs-error(#FF3535) 채움</span></td>
+              <td><span class="mono">opacity:0.85</span></td>
+              <td><button style="background:#FF3535;color:#fff;border:none;border-radius:8px;padding:6px 14px;font-size:12px;font-weight:700;cursor:default">삭제</button></td>
+            </tr>
+            <tr>
+              <td>아이콘형</td>
+              <td><span class="mono">.act-del</span></td>
+              <td><span class="mono">transparent</span></td>
+              <td><span class="mono">rgba(255,53,53,0.1)</span></td>
+              <td>
+                <button style="background:transparent;border:none;width:32px;height:32px;display:inline-flex;align-items:center;justify-content:center;border-radius:6px;cursor:default">
+                  <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M1 3.5H13M5 3.5V2H9V3.5M3 3.5L3.8 11.5C3.9 12.3 4.5 12.5 5 12.5H9C9.5 12.5 10.1 12.3 10.2 11.5L11 3.5" stroke="#FF3535" stroke-width="1.5" stroke-linecap="round"/></svg>
+                </button>
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- 칩·배지 -->
+    <div style="margin-top:16px">
+      <div style="font-size:9px;font-weight:800;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.9px;margin-bottom:8px">칩·배지·태그 (JSON 실측)</div>
+      <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center">
+        <span style="display:inline-flex;align-items:center;height:30px;padding:0 14px;background:#201857;color:#fff;border:none;border-radius:8px;font-size:11px;cursor:default">카메라</span>
+        <span style="display:inline-flex;align-items:center;height:30px;padding:0 14px;background:#fff;color:#100B32;border:1px solid #ECEBF4;border-radius:8px;font-size:11px;cursor:default">렌즈</span>
+        <span style="display:inline-flex;align-items:center;height:22px;padding:0 10px;background:#ECEBF4;color:#201857;border-radius:10px;font-size:10px;cursor:default">CAM</span>
+        <span style="display:inline-flex;align-items:center;height:22px;padding:0 10px;background:#F3F4F6;color:#666;border-radius:8px;font-size:10px;cursor:default">재고 3</span>
+        <span style="display:inline-flex;align-items:center;height:24px;padding:0 10px;background:#E1DEF3;color:#3B2F8A;border-radius:8px;font-size:11px;font-weight:700;cursor:default">₩ 80,000</span>
+        <span style="display:inline-flex;align-items:center;height:42px;padding:0 12px;background:#E1DEF3;color:#3B2F8A;border-radius:8px;font-size:15px;font-weight:700;cursor:default">₩ 80,000</span>
+      </div>
+    </div>
+  </section>
+
+  <hr class="divider">
+
+  <!-- 4. 반경 토큰 -->
+  <section class="sec">
+    <div class="sec-head">
+      <span class="sec-title">반경 (Border Radius) — CMS 3단계 시스템</span>
+      <span class="sec-count">3 CMS 전용 + 4 공통</span>
+    </div>
+    <div class="radius-grid">
+      <div class="radius-card">
+        <div class="radius-demo" style="border-radius:30px"></div>
+        <div>
+          <div class="radius-label">pill</div>
+          <div class="radius-vals">30px</div>
+          <div class="radius-var">--cms-radius-lg / --radius-xl</div>
+          <div class="radius-var" style="color:var(--text-sub);margin-top:2px">GNB·카테고리칩·메인카드</div>
+        </div>
+      </div>
+      <div class="radius-card">
+        <div class="radius-demo" style="border-radius:15px"></div>
+        <div>
+          <div class="radius-label">CTA btn</div>
+          <div class="radius-vals">15px</div>
+          <div class="radius-var">--cms-radius-md / --radius-md</div>
+          <div class="radius-var" style="color:var(--text-sub);margin-top:2px">CTA 버튼·서브탭·목록카드</div>
+        </div>
+      </div>
+      <div class="radius-card">
+        <div class="radius-demo" style="border-radius:10px"></div>
+        <div>
+          <div class="radius-label">panel</div>
+          <div class="radius-vals">10px</div>
+          <div class="radius-var">--cms-radius-sm</div>
+          <div class="radius-var" style="color:var(--text-sub);margin-top:2px">패널·모달·정보박스</div>
+        </div>
+      </div>
+      <div class="radius-card">
+        <div class="radius-demo" style="border-radius:8px"></div>
+        <div>
+          <div class="radius-label">card / input</div>
+          <div class="radius-vals">8px</div>
+          <div class="radius-var">--radius-sm (radius-base)</div>
+          <div class="radius-var" style="color:var(--text-sub);margin-top:2px">카드·입력필드·검색·칩</div>
+        </div>
+      </div>
+    </div>
+    <div style="margin-top:6px;padding:8px 12px;background:rgba(59,47,138,0.05);border-radius:6px;font-size:10px;color:var(--text-muted)">
+      CMS 전용 변수 (<code>--cms-radius-*</code>)는 <code>src/routes/cms/+layout.svelte</code>에 정의됨 · 전역 <code>src/app.css</code>에 없음
+    </div>
+  </section>
+
+  <!-- 5. 레이아웃 구조 -->
+  <section class="sec">
+    <div class="sec-head">
+      <span class="sec-title">레이아웃 구조 — 3-tier Shell</span>
+    </div>
+    <div class="layout-grid">
+      <div class="layout-card">
+        <div class="layout-name">Shell (.cms-shell)</div>
+        <div class="layout-row"><span class="layout-key">방향</span><span class="layout-val">flex-column / 100vh</span></div>
+        <div class="layout-row"><span class="layout-key">최소폭</span><span class="layout-val">1280px</span></div>
+        <div class="layout-row"><span class="layout-key">배경</span><span class="layout-val">--cs-lilac #ECEBF4</span></div>
+        <div class="layout-row"><span class="layout-key">overflow</span><span class="layout-val">hidden</span></div>
+      </div>
+      <div class="layout-card">
+        <div class="layout-name">GNB pill (.cms-topbar-wrap)</div>
+        <div class="layout-row"><span class="layout-key">높이</span><span class="layout-val">74px pill</span></div>
+        <div class="layout-row"><span class="layout-key">상단 패딩</span><span class="layout-val">padding-top: 20px</span></div>
+        <div class="layout-row"><span class="layout-key">GNB 배경</span><span class="layout-val">--cs-dark #100B32</span></div>
+        <div class="layout-row"><span class="layout-key">GNB 반경</span><span class="layout-val">30px (radius-pill)</span></div>
+      </div>
+      <div class="layout-card">
+        <div class="layout-name">서브 탭바 (.cms-subtabbar)</div>
+        <div class="layout-row"><span class="layout-key">높이</span><span class="layout-val">약 48px</span></div>
+        <div class="layout-row"><span class="layout-key">활성 탭</span><span class="layout-val">white bg + --cs-purple</span></div>
+        <div class="layout-row"><span class="layout-key">비활성</span><span class="layout-val">transparent + --cs-text-mid</span></div>
+        <div class="layout-row"><span class="layout-key">반경</span><span class="layout-val">--radius-md 15px</span></div>
+      </div>
+      <div class="layout-card">
+        <div class="layout-name">페이지 래퍼 (.page-wrap)</div>
+        <div class="layout-row"><span class="layout-key">overflow</span><span class="layout-val">overflow-y: auto</span></div>
+        <div class="layout-row"><span class="layout-key">상하 패딩</span><span class="layout-val">20px top / 32px bottom</span></div>
+        <div class="layout-row"><span class="layout-key">좌우 패딩</span><span class="layout-val">24px</span></div>
+        <div class="layout-row"><span class="layout-key">flex</span><span class="layout-val">flex:1; min-height:0</span></div>
+      </div>
+    </div>
+
+    <!-- GNB 시각 데모 -->
+    <div style="margin-top:12px">
+      <div style="background:#100B32;border-radius:30px;padding:0 30px;height:54px;display:flex;align-items:center;justify-content:space-between;max-width:800px">
+        <span style="font-size:14px;font-weight:800;color:#FF4500;letter-spacing:-0.5px">CRAZYSHOT</span>
+        <div style="display:flex;gap:28px;align-items:center">
+          <span style="color:rgba(255,255,255,0.5);font-size:12px;font-weight:700">상품</span>
+          <span style="color:#fff;font-size:12px;font-weight:700">대여</span>
+          <span style="color:rgba(255,255,255,0.5);font-size:12px;font-weight:700">회원</span>
+          <button style="background:#3B2F8A;color:#fff;border:none;border-radius:20px;padding:6px 18px;font-size:11px;font-weight:700;cursor:default">SIGN OUT</button>
+        </div>
+      </div>
+      <div style="display:flex;gap:4px;padding:6px 0;max-width:800px">
+        <span style="background:#fff;color:#3B2F8A;border-radius:12px;padding:5px 16px;font-size:11px;font-weight:700">목록</span>
+        <span style="color:#666;border-radius:12px;padding:5px 16px;font-size:11px;font-weight:700">등록</span>
+        <span style="color:#666;border-radius:12px;padding:5px 16px;font-size:11px;font-weight:700">분류</span>
+      </div>
+    </div>
+  </section>
+
+  <hr class="divider">
+
+  <!-- 6. 카드 시스템 -->
+  <section class="sec">
+    <div class="sec-head">
+      <span class="sec-title">카드 시스템 — standardCards JSON 실측</span>
+      <span class="sec-count">5종</span>
+    </div>
+    <div class="tbl-wrap">
+      <table>
+        <thead>
+          <tr><th>카드 종류</th><th>배경</th><th>반경</th><th>패딩</th><th>그림자</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>그룹·메인 카드 <span class="muted">(폼 섹션·로그인)</span></td>
+            <td><span class="sw" style="background:#fff;border:1px solid rgba(0,0,0,0.1)"></span>white</td>
+            <td><span class="pill pill-cta">30px --cms-radius-lg</span></td>
+            <td><span class="mono">20px</span></td>
+            <td>—</td>
+          </tr>
+          <tr>
+            <td>목록형 카드 <span class="muted">(테이블·데이터 패널)</span></td>
+            <td><span class="sw" style="background:#fff;border:1px solid rgba(0,0,0,0.1)"></span>white</td>
+            <td><span class="pill pill-cta">15px --cms-radius-md</span></td>
+            <td><span class="mono">15px 20px</span></td>
+            <td><span class="mono">shadow-card</span></td>
+          </tr>
+          <tr>
+            <td>인라인 리스트 행</td>
+            <td><span class="sw" style="background:#F6F6F6;border:1px solid rgba(0,0,0,0.06)"></span><span class="mono">gray-150 #F6F6F6</span></td>
+            <td><span class="pill pill-chip">15px</span></td>
+            <td><span class="mono">15px 20px</span></td>
+            <td>—</td>
+          </tr>
+          <tr>
+            <td>안내 정보 패널</td>
+            <td><span class="sw" style="background:#F3F4F6;border:1px solid rgba(0,0,0,0.06)"></span><span class="mono">gray-250 #F3F4F6</span></td>
+            <td><span class="pill pill-chip">10px --cms-radius-sm</span></td>
+            <td><span class="mono">16px</span></td>
+            <td>—</td>
+          </tr>
+          <tr>
+            <td>페이지 컨테이너 배경</td>
+            <td><span class="sw" style="background:#ECEBF4;border:1px solid rgba(0,0,0,0.08)"></span><span class="mono">--cs-lilac #ECEBF4</span></td>
+            <td>0</td>
+            <td>—</td>
+            <td>—</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <hr class="divider">
+
+  <!-- 7. 보더 & 허용 하드코딩 -->
+  <section class="sec">
+    <div class="sec-head">
+      <span class="sec-title">보더 토큰 + 허용 하드코딩 목록</span>
+    </div>
+    <div class="layout-grid">
+      <div class="layout-card">
+        <div class="layout-name">보더 3종 (JSON 정본)</div>
+        <div class="layout-row">
+          <span class="layout-key">default (주력)</span>
+          <span class="layout-val mono">1px solid #ECEBF4</span>
+        </div>
+        <div class="layout-row">
+          <span class="layout-key">active (선택)</span>
+          <span class="layout-val mono">2px solid #201857</span>
+        </div>
+        <div class="layout-row">
+          <span class="layout-key">inactive</span>
+          <span class="layout-val mono">2px solid #CCCCCC</span>
+        </div>
+        <div class="layout-row">
+          <span class="layout-key">shadow-card</span>
+          <span class="layout-val mono">0 1px 4px rgba(0,0,0,0.06)</span>
+        </div>
+      </div>
+      <div class="layout-card">
+        <div class="layout-name">허용 rgba 하드코딩 (이 목록이 전부)</div>
+        <div class="layout-row"><span class="layout-key">purple 극연</span><span class="layout-val mono">rgba(59,47,138,0.04)</span></div>
+        <div class="layout-row"><span class="layout-key">purple 연</span><span class="layout-val mono">rgba(59,47,138,0.06)</span></div>
+        <div class="layout-row"><span class="layout-key">purple 중</span><span class="layout-val mono">rgba(59,47,138,0.08)</span></div>
+        <div class="layout-row"><span class="layout-key">purple 강</span><span class="layout-val mono">rgba(59,47,138,0.10~0.12)</span></div>
+        <div class="layout-row"><span class="layout-key">red 에러 배경</span><span class="layout-val mono">rgba(255,53,53,0.08~0.10)</span></div>
+        <div class="layout-row"><span class="layout-key">dark 오버레이</span><span class="layout-val mono">rgba(16,11,50,0.78)</span></div>
+      </div>
+    </div>
+  </section>
+
+  <hr class="divider">
+
+  <!-- 8. CmsSuggestPicker 규칙 -->
+  <section class="sec">
+    <div class="sec-head">
+      <span class="sec-title">CmsSuggestPicker — 명시적 UI × 규칙</span>
+      <span class="sec-count">⛔ select 대체</span>
+    </div>
+
+    <div style="margin-bottom:10px;padding:8px 14px;background:rgba(255,53,53,0.06);border-radius:6px;font-size:10px;color:#CF0000;font-weight:700">
+      ⛔ &lt;select&gt; 태그 사용 절대 금지 — 드롭다운 목록 선택은 CmsSuggestPicker 단독 표준
+    </div>
+
+    <div class="layout-grid">
+      <div class="layout-card">
+        <div class="layout-name">컴포넌트 비교</div>
+        <div class="layout-row"><span class="layout-key">CmsSuggestPicker</span><span class="layout-val">DB 목록 검색+선택</span></div>
+        <div class="layout-row"><span class="layout-key">CmsSimilarNameInput</span><span class="layout-val">중복명 경고</span></div>
+        <div class="layout-row" style="background:rgba(255,53,53,0.04)"><span class="layout-key" style="color:#FF3535">&lt;select&gt;</span><span class="layout-val" style="color:#FF3535">⛔ 완전 금지</span></div>
+        <div class="layout-row" style="background:rgba(255,53,53,0.04)"><span class="layout-key" style="color:#FF3535">CmsSuggestPicker 구경로</span><span class="layout-val" style="color:#FF3535">⛔ 신규 작성 금지</span></div>
+      </div>
+      <div class="layout-card">
+        <div class="layout-name">레이어 스타일</div>
+        <div class="layout-row"><span class="layout-key">보더</span><span class="layout-val mono">1.5px rgba(59,47,138,0.2)</span></div>
+        <div class="layout-row"><span class="layout-key">반경</span><span class="layout-val mono">10px</span></div>
+        <div class="layout-row"><span class="layout-key">그림자</span><span class="layout-val mono">0 8px 24px rgba(16,11,50,0.12)</span></div>
+        <div class="layout-row"><span class="layout-key">최대높이</span><span class="layout-val mono">280px (스크롤)</span></div>
+        <div class="layout-row"><span class="layout-key">z-index</span><span class="layout-val mono">40</span></div>
+        <div class="layout-row"><span class="layout-key">hover/selected</span><span class="layout-val mono">--cs-purple-op10</span></div>
+      </div>
+    </div>
+
+    <div class="tbl-wrap" style="margin-top:8px">
+      <table>
+        <thead><tr><th>⛔ 금지 규칙</th><th>이유</th></tr></thead>
+        <tbody>
+          <tr style="background:rgba(255,53,53,0.03)"><td><span class="mono">field</span> 스니펫 없이 사용 금지</td><td>렌더링 안 됨</td></tr>
+          <tr style="background:rgba(255,53,53,0.03)"><td><span class="mono">bind:selectedId</span> 없이 사용 금지</td><td>선택값 수신 불가</td></tr>
+          <tr style="background:rgba(255,53,53,0.03)"><td>분류 선택 시 <span class="mono">minChars</span> 1 이상 설정 금지</td><td>즉시 전체 목록 필요</td></tr>
+          <tr style="background:rgba(255,53,53,0.03)"><td><span class="mono">overflow:hidden</span> 부모 안 배치 금지</td><td>z-index 40 레이어 차단됨</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <!-- 시각 데모 -->
+    <div style="margin-top:10px;position:relative;max-width:300px">
+      <div style="background:#fff;border:1px solid #ECEBF4;border-radius:8px;padding:8px 12px;font-size:13px;color:#666;display:flex;justify-content:space-between;align-items:center">
+        카메라
+        <svg width="10" height="6" viewBox="0 0 10 6" fill="none"><path d="M1 1L5 5L9 1" stroke="#3B2F8A" stroke-width="1.5" stroke-linecap="round"/></svg>
+      </div>
+      <div style="position:absolute;top:calc(100% + 4px);left:0;right:0;background:#fff;border:1.5px solid rgba(59,47,138,0.2);border-radius:10px;box-shadow:0 8px 24px rgba(16,11,50,0.12);z-index:40;max-height:120px;overflow-y:auto">
+        <div style="padding:8px 12px;font-size:12px;background:rgba(225,222,243,1);color:#3B2F8A;font-weight:700">카메라 · CAM</div>
+        <div style="padding:8px 12px;font-size:12px;color:#100B32">렌즈 · OPT</div>
+        <div style="padding:8px 12px;font-size:12px;color:#100B32">조명 · LGT</div>
+      </div>
+    </div>
+    <div style="margin-top:100px;font-size:9px;color:var(--text-muted)">↑ CmsSuggestPicker 레이어 데모 (z-index:40, shadow 적용)</div>
+  </section>
+
+  <hr class="divider">
+
+  <!-- 9. 간격 시스템 -->
+  <section class="sec">
+    <div class="sec-head">
+      <span class="sec-title">간격 시스템 — Spacing & Padding 토큰</span>
+    </div>
+    <div class="layout-grid">
+      <div class="layout-card">
+        <div class="layout-name">Spacing</div>
+        <div class="layout-row"><span class="layout-key">xs</span><span class="layout-val">6px — 아이콘·텍스트 간격</span></div>
+        <div class="layout-row"><span class="layout-key">sm</span><span class="layout-val">8px — 칩 내부</span></div>
+        <div class="layout-row"><span class="layout-key">md</span><span class="layout-val">10px — 리스트 아이템</span></div>
+        <div class="layout-row"><span class="layout-key">base</span><span class="layout-val">12px — 카드 내부 요소</span></div>
+        <div class="layout-row"><span class="layout-key">lg</span><span class="layout-val">16px — 섹션 내 그룹</span></div>
+        <div class="layout-row"><span class="layout-key">xl</span><span class="layout-val">20px — 카드 간 간격</span></div>
+        <div class="layout-row"><span class="layout-key">2xl / 3xl / 4xl</span><span class="layout-val">24 / 30 / 32px</span></div>
+      </div>
+      <div class="layout-card">
+        <div class="layout-name">Padding</div>
+        <div class="layout-row"><span class="layout-key">chip</span><span class="layout-val">5px 10px</span></div>
+        <div class="layout-row"><span class="layout-key">button</span><span class="layout-val">8px 14px</span></div>
+        <div class="layout-row"><span class="layout-key">listItem</span><span class="layout-val">10px 0px</span></div>
+        <div class="layout-row"><span class="layout-key">card</span><span class="layout-val">15px 20px</span></div>
+        <div class="layout-row"><span class="layout-key">section</span><span class="layout-val">20px</span></div>
+        <div class="layout-row"><span class="layout-key">pageSm / pageMd / pageLg</span><span class="layout-val">0 20px / 0 30px / 0 40px</span></div>
+      </div>
+    </div>
+  </section>
+
+</div>
