@@ -97,6 +97,11 @@ export const actions: Actions = {
     if (error) return fail(500, { message: error.message })
     const res = result as { ok: boolean; error?: string } | null
     if (!res?.ok) return fail(400, { message: res?.error ?? '처리 실패' })
+    // 예약 승인 채팅 알림 자동 발송
+    await admin.rpc('send_rental_chat_notification', {
+      p_reservation_id: reservationId,
+      p_notify_type: 'reservation_approval',
+    })
     return { ok: true }
   },
 
@@ -119,6 +124,21 @@ export const actions: Actions = {
     if (error) return fail(500, { message: error.message })
     const res = result as { ok: boolean; error?: string } | null
     if (!res?.ok) return fail(400, { message: res?.error ?? '처리 실패' })
+    // 상태 전환별 채팅 알림 자동 발송
+    const AUTO_NOTIFY: Partial<Record<string, string>> = {
+      confirmed:        'reservation_approval',
+      shipped:          'shipment_notify',
+      in_use:           'return_remind',
+      return_requested: 'return_registration',
+      returned:         'rental_complete',
+    }
+    const notifyType = AUTO_NOTIFY[newStatus]
+    if (notifyType) {
+      await admin.rpc('send_rental_chat_notification', {
+        p_reservation_id: reservationId,
+        p_notify_type: notifyType,
+      })
+    }
     return { ok: true }
   },
 }

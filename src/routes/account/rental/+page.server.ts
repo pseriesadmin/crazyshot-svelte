@@ -18,7 +18,7 @@ export const load: PageServerLoad = async ({ locals }) => {
 
   const { data, error } = await locals.supabase
     .from('rental_reservations')
-    .select('id, status, reservation_code, start_date, end_date, created_at, orders(order_items(products(name, category)))')
+    .select('id, status, reservation_code, start_date, end_date, created_at, product_id, products(name, category)')
     .eq('user_id', session.user.id)
     .in('status', ['hold', 'confirmed', 'shipped', 'in_use', 'return_requested', 'returned', 'completed'])
     .order('created_at', { ascending: false })
@@ -29,8 +29,7 @@ export const load: PageServerLoad = async ({ locals }) => {
   }
 
   const rentals: MyRental[] = (data ?? []).map((r: Record<string, unknown>) => {
-    const orders = r.orders as Array<{ order_items: Array<{ products: { name: string; category: string } | null }> }> | null
-    const firstProduct = orders?.[0]?.order_items?.[0]?.products ?? null
+    const product = (r.products as { name: string; category: string } | null) ?? null
     return {
       id:               r.id as string,
       status:           r.status as string,
@@ -38,8 +37,8 @@ export const load: PageServerLoad = async ({ locals }) => {
       start_date:       r.start_date as string | null,
       end_date:         r.end_date as string | null,
       created_at:       r.created_at as string,
-      product_name:     firstProduct?.name ?? null,
-      product_category: firstProduct?.category ?? null,
+      product_name:     product?.name ?? null,
+      product_category: product?.category ?? null,
     }
   })
 
