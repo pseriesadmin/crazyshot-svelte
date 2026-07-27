@@ -395,6 +395,85 @@ DB 적용 (최종):
 
 ---
 
+## NOW — CMS 자식 상품 수정 제한 전면 적용 (2026-07-27) ✅ 완료
+
+plan_source: cms-ticklish-storm.md
+핵심제약:
+  - history 탭만 수정 허용 / 나머지 탭 읽기 전용 + 토스트 경고
+  - 사용자 화면(/products/) 영향 없음 (부모 기준 조회 — 자식 수정과 무관)
+  - 요청 범위 외 수정 없음
+
+수정 파일:
+  - src/lib/components/cms/ProductDetailPanel.svelte ← isChildProduct + 저장 차단 + 배너 + CSS
+  - src/routes/cms/products/+page.server.ts ← updateSection 자식 차단 통합 블록
+
+- [x] TASK-CMS-CHILD-LOCK: 자식 상품 수정 제한 전면 적용 | BOUNDARY | ✅ 완료 (2026-07-27)
+  - isChildProduct = $derived(!!product.parent_product_id) 파생값 추가
+  - handleSectionSave / handleFilesUpload / removeImageAndSave / saveContent / saveOptions: 자식 차단
+  - basic·slug·pricing·content·components·specs 저장 버튼 disabled 조건 추가
+  - 8개 탭(history 제외) child-readonly-notice 배너 삽입 / 기존 child-image-notice 통일
+  - CSS: .child-readonly-notice (lilac bg + purple 왼쪽 보더)
+  - +page.server.ts: childBlockedSections 통합 블록으로 서버 사이드 차단
+
+⏳ QA: sp3-qa-agent 검수 예정
+
+---
+
+## NOW — /checkout CTA → TossPayments PG 연동 + 결제완료 화면 PC 반응형 (2026-07-27) ✅ 완료
+
+plan_source: 세션 내 아젠다
+핵심제약:
+  - TossPayments v2 CDN SDK (클라이언트 동적 로드)
+  - PUBLIC_TOSS_CLIENT_KEY: $env/static/public (클라이언트 공개 허용)
+  - SUPABASE_SERVICE_ROLE_KEY: $env/dynamic/private (서버 전용)
+  - isDevMode=true 구간: API·Toss 건너뜀 → /payment/success/dev 우회 경로
+  - reservationId 타입: UUID string (기존 Number 변환 버그 수정)
+  - Svelte 5 Runes / Svelte 4 문법 금지
+
+신규/수정 파일:
+  - src/routes/api/checkout/initiate/+server.ts ← 신규 (HOLD 예약 생성 + 금액 계산 + Toss 파라미터 반환)
+  - src/routes/checkout/+page.svelte ← 수정 (CTA onclick devMode 분기 + Toss SDK 연동 handlePay)
+  - src/routes/payment/success/+page.server.ts ← 수정 (reservationId string 타입 + Toss confirm API + RPC)
+  - src/routes/payment/success/+page.svelte ← 수정 (PC 반응형 CSS ≥768px 추가)
+  - src/routes/payment/success/dev/+page.ts ← 신규 (URL 파라미터 → PageData 반환)
+  - src/routes/payment/success/dev/+page.svelte ← 신규 (DEV 배너 + 동일 UI + PC 반응형)
+  - .env.local ← PUBLIC_TOSS_CLIENT_KEY 추가 (test_ck_live_xxxxx)
+
+- [x] FEAT-INITIATE: POST /api/checkout/initiate 신규 엔드포인트 | CRITICAL | ✅ 완료 (2026-07-27)
+  - atomic_reserve_asset RPC → HOLD 예약 생성 (UUID reservationId 반환)
+  - calculate_cart_total RPC → 최종 결제금액 산출
+  - orderId: CZ-{timestamp}-{uuid8} / idemKey: uuid 멱등키 생성
+  - 세션 미존재 401 / 파라미터 누락 400 / 재고 없음 409 처리
+
+- [x] FEAT-TOSS-SDK: checkout CTA → TossPayments SDK requestPayment 연동 | CRITICAL | ✅ 완료 (2026-07-27)
+  - type TossWindow 패턴 (declare global 불가 → 타입 별칭 캐스팅)
+  - loadTossScript() CDN 동적 로드 (중복 방지)
+  - successUrl: /payment/success?reservationId=...&idemKey=...
+  - failUrl: /payment/fail?reservationId=...
+  - PAYMENT_CANCEL 코드 사용자 취소 → 에러 미표시
+
+- [x] FIX-RESERVATION-ID: reservationId Number 변환 → UUID string 유지 | BOUNDARY | ✅ 완료 (2026-07-27)
+  - 기존: Number(url.searchParams.get('reservationId') ?? '0') → UUID 파싱 시 NaN
+  - 수정: url.searchParams.get('reservationId') ?? '' (string 그대로 유지)
+
+- [x] FEAT-DEV-BYPASS: isDevMode=true 시 API·Toss 없이 /payment/success/dev 우회 | BOUNDARY | ✅ 완료 (2026-07-27)
+  - checkout CTA onclick devMode 분기 추가 (canProceed 검증 후 즉시 분기)
+  - URLSearchParams: productName / orderNumber / startDate / endDate / amount / paymentMethod / notes
+  - /payment/success/dev/+page.ts: URL 파라미터 → PageData (isDev: true)
+  - /payment/success/dev/+page.svelte: 오렌지 배너 "🛠 DEV 테스트 모드" + 동일 완료 화면 UI
+
+- [x] UI-SUCCESS-PC: /payment/success PC 반응형 CSS | ROUTINE | ✅ 완료 (2026-07-27)
+  - ≥768px: .gnb-wrap display:none / .title-bar + .body max-width:900px 중앙정렬
+  - .confirm-btn max-width:480px 중앙정렬
+  - dev 완료 화면 동일 패턴 적용
+
+- [x] FIX-400: checkout 날짜 미선택 시 API 400 → 클라이언트 preflight 검증 | ROUTINE | ✅ 완료 (2026-07-27)
+  - productId / startDate / endDate 미충족 시 alert() 후 early return (API 호출 차단)
+
+⏳ QA: sp3-qa-agent 검수 예정
+
+---
+
 ## NOW — /checkout 재검증 + 전자계약 보완 (2026-07-23) 진행 중
 
 plan_source: users-stevenmac-documents-pseries-crazy-sorted-quail.md
@@ -1869,7 +1948,195 @@ GATE E: ✅ 커밋 허가 — Stephen git commit 진행
 
 ---
 
+## NOW — 대여 라이프사이클 정밀 감사 (2026-07-26) ✅ 완료 (연구)
+
+plan_source: 세션 내 아젠다 — 전체 코드베이스 Explore 탐색 + 빌드 로그 분석
+감사 범위: 상품 상세 → 예약신청 → 예약승인 → 대여확인 → 반납요청 → 반납완료
+
+결과 상세: `.claude/harness/learnings/rental_lifecycle_audit_2026-07-26.md` 참조
+
+- [x] 전체 대여 라이프사이클 코드베이스 탐색 | RESEARCH | ✅ 완료 (2026-07-26)
+- [x] 8개 결함 항목 목록화 (CRITICAL 2건, BOUNDARY 3건, ROUTINE 3건) | RESEARCH | ✅ 완료
+- [x] 정상 구현 항목 확인 및 문서화 | RESEARCH | ✅ 완료
+- [x] 하네스 플로 시스템 반영 (TASK.md + learnings) | ROUTINE | ✅ 완료
+
+✅ 정상 구현 확인 목록:
+  - create_hold_reservation RPC → 상품 상세 예약신청 ✅
+  - 비로그인 예약 → /auth/login?next= 리다이렉트 ✅
+  - 체크아웃 서버 로드 (hold예약→assets→products) ✅
+  - calculate_cart_total RPC 연동 ✅
+  - CMS cms/reservation 예약 목록 + 승인/거부 ✅
+  - CMS cms/rentals 대여 현황 + 상태 전환 ✅
+  - 전자계약 발송·서명·PDF 전체 흐름 ✅
+  - 채팅 시스템 (세션·메시지·Realtime·읽음) ✅
+  - cancel_payment_and_release_hold (실패·취소 경로) ✅
+
+---
+
 ## BACKLOG
+
+### 🔴 CRITICAL — 대여 라이프사이클 결함 (감사 2026-07-26)
+
+- **BL-LC-C1: 결제 CTA — Mock 자동 예약승인 임시 구현** | CRITICAL | S1-M3 연계 (BLOCKED)
+  - ✅ 2026-07-27: `/api/checkout/confirm-mock` API 신규 생성. hold→confirmed 자동 전환 + reservation_approval 채팅 알림
+  - `src/routes/checkout/+page.svelte`: alert() → async fetch('/api/checkout/confirm-mock') 교체 완료
+  - 최종: TossPayments SDK `requestPayment` 구현 → S1-M3 Payment Integration 해제 시 처리
+
+- **BL-LC-C3: Production DB return_method 컬럼 누락 (예약신청 전체 불가)** | CRITICAL | ✅ 완료 (2026-07-27)
+  - 증상: 실서비스에서 예약신청 시 "column return_method does not exist" 에러 (로컬/Stage 재현 안 됨)
+  - 원인: `147b_add_return_method_to_rentals` 마이그레이션이 과거 Stage DB에 직접 실행되고 파일로 저장 안 됨
+    → Production 배포 절차에서 누락 → Stage/Production 스키마 드리프트
+  - 해결: `supabase/migrations/20260727000169_169_add_return_method_column.sql` 신규 생성
+    → Stage(idempotent) + Production(Stephen 승인 후) 양쪽 적용 완료 · 컬럼 생성 검증 완료
+  - 재발 방지: DB 변경은 반드시 마이그레이션 파일 선(先) 저장 → MCP apply_migration 적용 원칙 재확인 필요
+    (SQL 편집기/execute_sql 직접 실행 후 파일 누락 사례 추가 발견: 159b/159c/159e_create_hold_reservation_* — 단, 최종 함수는 Production과 동일하여 실질 영향 없음)
+
+- **BL-LC-C4: send_rental_chat_notification Production 드리프트 (채팅 알림 100% 실패)** | CRITICAL | ✅ 완료 (2026-07-27)
+  - 증상: Production 함수가 sender_type='system'으로 INSERT → chat_sender_type_enum에 'system' 값 없음(user/admin/ai만 존재)
+    → 채팅 알림 발송 시도 시 매번 enum 오류로 실패 (이전에 추가한 CMS 자동알림 포함 전부 무효)
+  - 추가 문제: content(text)에 JSONB 직접 삽입 + action_payload 미사용 → ActionCard.svelte 기대 구조 불일치로 카드 렌더링 불가
+  - 해결: `supabase/migrations/20260727000170_170_sync_send_rental_chat_notification.sql` 생성
+    → Stage 정본 함수를 Production에 이식 (sender_type='admin' + action_payload 사용) → 양쪽 적용 + 검증 완료
+  - 후속 백로그 등록: BL-LC-R6(update_reservation_status 반환타입 Stage jsonb vs Production void),
+    BL-LC-R7(set_reservation_shipment_method 오버로드 개수 불일치 정리)
+
+- **BL-LC-R6: update_reservation_status 반환타입 드리프트 (CMS 예약승인·상태변경 100% 실패)** | ✅ 완료 (2026-07-27, CRITICAL로 재분류)
+  - 증상: Production 함수가 RETURNS void → cms/reservation/+page.server.ts의 approveReservation·updateStatus
+    action이 result.ok 검사 → result 항상 null → 조건 항상 거짓 → CMS 승인/상태변경 버튼이 Production에서 100% "처리 실패" 응답
+  - 해결: `supabase/migrations/20260727000171_171_sync_reservation_status_and_shipment_rpcs.sql`
+    → CREATE OR REPLACE로 반환타입 변경 시도 시 Postgres 오류(42P13) 발생
+      → DROP FUNCTION 후 재생성으로 처리 (Stage는 원래 jsonb라 OR REPLACE로 정상 처리됨)
+    → Production 적용 후 반환타입 jsonb 확인 완료
+  - 권한 재확인: DROP 후 재생성으로 GRANT 초기화 우려 → anon/authenticated/service_role 모두 EXECUTE 가능 확인
+    → Stage도 동일 상태로 확인되어 회귀 아님(기존부터 존재하던 상태) — 별도 이슈로 백로그 남김
+
+- **BL-LC-R7: set_reservation_shipment_method(3-arg) 내부 role 체크 방식 통일** | ✅ 완료 (2026-07-27)
+  - 차이: Stage `current_setting('role')='service_role'` vs Production `auth.jwt()->>'role'='service_role'`
+  - 확인: 클라이언트는 5-arg 오버로드만 호출(products/[id], checkout) → 3-arg 오버로드는 현재 미사용 경로, 실질 영향 없음
+  - 해결: Stage 기준으로 Production 통일 (동일 마이그레이션 171에 포함)
+
+- **BL-SEC-1: 서버 전용 RPC 4종 anon/authenticated 노출 (소유자 검증 우회 가능)** | ✅ 완료 (2026-07-27)
+  - 발견 경위: R6 수정 중 GRANT 확인 과정에서 update_reservation_status에 소유자 검증이 없고
+    anon/authenticated도 EXECUTE 가능함을 발견 → 유사 RPC 전수 재조사
+  - 확인 결과 (grep으로 실사용 호출부 전수 검사):
+    · update_reservation_status / send_rental_chat_notification /
+      confirm_payment_and_update_reservation / cancel_payment_and_release_hold
+      → 코드베이스 전체에서 100% admin.rpc()(service_role)로만 호출, 클라이언트 직접 호출 경로 전혀 없음
+    · 그런데 실제 DB 권한은 anon/authenticated에게도 EXECUTE 허용된 상태(Postgres 기본 PUBLIC 권한 미회수)
+    · confirm_payment_and_update_reservation / cancel_payment_and_release_hold는 p_user_id를
+      파라미터로 직접 신뢰(auth.uid() 미검증) → 노출 시 타인 명의 결제 확정·취소 임의 호출 가능한 심각한 취약점
+    · create_hold_reservation은 제외 — 클라이언트 직접 호출이 의도된 설계이며 내부 auth.uid() 검증 존재 확인
+  - 해결: `supabase/migrations/20260727000172_172_lock_server_only_rpcs_to_service_role.sql` 신규 생성
+    → REVOKE EXECUTE FROM PUBLIC,anon,authenticated + GRANT TO service_role (4개 함수)
+    → Stage 적용 + 검증(anon/authenticated=false, service_role=true) → Production 적용(Stephen 승인) + 검증 완료
+    → create_hold_reservation 권한 변경 없음(anon/authenticated=true 유지) 확인
+
+- **BL-LC-C2: Vercel Production 빌드 실패 (env var 36개 누락)** | CRITICAL | Stephen 직접 조치 필요
+  - 빌드 에러: `PUBLIC_SUPABASE_URL`, `ANTHROPIC_API_KEY` 등 MISSING_EXPORT
+  - 조치: Vercel Dashboard → Settings → Environment Variables → Production 체크박스 활성화
+  - Preview는 정상. Production만 미설정 상태.
+
+### 🟡 BOUNDARY — 대여 라이프사이클 결함 (감사 2026-07-26)
+
+- **BL-LC-B1: log_rental_action RPC 전체 미사용** | BOUNDARY
+  - Migration 154에 정의된 RPC — 코드베이스 어디서도 호출 없음
+  - 방문 출고/반납 등 중요 행위 DB 로그 누락
+  - 해결: `cms/rentals/+page.server.ts` 상태 전환 action에 `log_rental_action` RPC 추가
+
+- **BL-LC-B2: 채팅 알림 수동 전용 (자동화 연결 없음)** | BOUNDARY | ✅ COMPLETE
+  - ✅ 2026-07-27 커밋 605f660: `updateStatus` + `approveReservation` action 완료 후 `send_rental_chat_notification` 자동 호출
+    - 파일: `src/routes/cms/reservation/+page.server.ts`
+    - AUTO_NOTIFY 맵: confirmed→reservation_approval / shipped→shipment_notify / in_use→return_remind / return_requested→return_registration / returned→rental_complete
+  - ✅ 2026-07-27 커밋 605f660: 예약신청(hold) 채팅 알림 신규 구현
+    - `src/routes/api/checkout/notify-hold/+server.ts` 신규 생성 (본인 예약 검증 + RPC 호출)
+    - `src/routes/products/[id]/+page.svelte`: hold 생성 후 notify-hold API fire-and-forget 호출
+    - `src/lib/components/chat/ActionCard.svelte`: reservation_hold 케이스 추가 ("예약 신청 확인")
+  - ✅ 2026-07-27 커밋 605f660: 체크아웃 더미 sub-items 제거
+    - `src/routes/checkout/+page.svelte`: sd.isServerLoaded 시 subItems = [] (fixture 차단)
+  - ✅ 2026-07-27 이후: account/rental orders 조인 버그 수정
+    - 원인: rental_reservations → orders PostgREST 관계 없음
+    - 해결: product_id FK → products 직접 조인만 사용
+    - 브라우저 검증: 마이페이지 3개 카드 정상 표시
+
+- **BL-LC-B3: 마이페이지 대여 카드 — hold 상태 상품명** | BOUNDARY
+  - ✅ 2026-07-27: `rental_reservations.product_id FK → products(name, category)` 직접 JOIN fallback 추가
+  - 기존 `orders(order_items(products(...)))` 경로 1순위 유지, direct JOIN을 2순위 fallback으로 사용
+  - 파일: `src/routes/account/rental/+page.server.ts`
+
+- **BL-LC-B7: 예약 카트(/checkout) 더미상품·합계금액·단일상품 결제불가 수정** | BOUNDARY | ✅ COMPLETE (2026-07-27)
+  - ✅ 더미상품 표시: asset_id 경유(구조) → product_id 직접 조회로 교체 — `src/routes/checkout/+page.server.ts`
+  - ✅ 합계금액: `calculate_cart_total` RPC 전면 재작성(price_rules 12h/24h 기준) — Migration 173, Stage+Production 적용 완료
+  - ✅ 단일상품 결제불가: `datesSet`·`otDeliveryFee`가 카드2(p2) 존재 여부 확인하도록 수정 — `src/routes/checkout/+page.svelte`
+  - 상세: `.claude/harness/GSD_LOG.md` 2026-07-27 CRITICAL FIX 항목 참조
+  - ✅ 2026-07-27 후속: 카드1/카드2 고정 2개 제한 폐기 → 무제한 동적 리스트로 전면 재설계 완료
+    (Stephen 확정: "여러 상품 동시 담기 가능해야 함" — 자동취소 정책 거부)
+    - `src/routes/checkout/+page.svelte`: `itemsState`(배열) 기반 카드 렌더링(`{#each}` + `OrderCard` 스니펫)
+    - `src/routes/checkout/+page.server.ts`: `cartLineItems` 신규 반환(예약↔상품↔요금 1:1 매핑, 인덱스 불일치 위험 제거)
+    - `+page.ts`: `isDevMode` 하드코딩(`true`) 제거 → 서버가 실 예약 존재 여부로 판단(실 예약 시 confirm-mock 경로 보장)
+    - 브라우저 검증: 서로 다른 상품 3건(Manfrotto 055·DJI RS4 Pro·Canon RF) 동시 예약 → 전부 카드 노출 +
+      합계(50,000+40,000+25,000=115,000원) 정확 → 결제 완료까지 통과
+    - 발견(범위 외, 별도 확인 필요): Manfrotto 055의 배정된 자식 재고(2e5af80c...) price_rules가
+      부모 상품 화면에 표시되는 가격(20,000/14,000)과 다름(24h=50,000/12h=30,000) — products.md §9에
+      이미 문서화된 "자식 price_rules 드리프트" 현상 실사례. 체크아웃/RPC는 실제 배정된 자식 기준으로
+      일관되게 계산 중이라 버그는 아니나, 카탈로그 데이터 정합성 점검 필요.
+
+### 🟢 ROUTINE — 대여 라이프사이클 결함 (감사 2026-07-26)
+
+- **BL-LC-R1: 결제 경로 이중화 정리** | ROUTINE (M3 Payment 구현 시 처리)
+  - `/api/payment/confirm` (완전) vs `/payment/success` (파라미터 누락) 병존
+  - `/payment/success` 경로를 `/api/payment/confirm`으로 통일 또는 deprecate 처리 필요
+
+- **BL-LC-R2: 계약서 서명 상태 전환 조건 확장** | ROUTINE
+  - 파일: `src/routes/api/contracts/[token]/sign/+server.ts:67`
+  - `status='shipped'`에서만 `in_use` 자동 전환 — hold/confirmed 상태 서명 시 무반응
+  - Stephen과 업무 흐름 재확인 후 조건 확장 여부 결정 필요
+
+- **BL-LC-R3: 상품 상세 배송 방식 하드코딩 수정** | ROUTINE
+  - 파일: `src/routes/products/[id]/+page.svelte`
+  - `set_reservation_shipment_method` 호출 시 `p_pickup_method: 'visit'` 하드코딩
+  - CalendarTimePicker 선택값을 RPC에 전달하는 연결 구현 필요
+
+- **BL-LC-B6: Toss 성공 페이지 redirect 경로 오류** | BOUNDARY
+  - 파일: `src/routes/payment/success/+page.svelte`
+  - `goto('/mypage/reservations')` → 미존재 라우트 (올바른 경로: `/account/rental`)
+  - S1-M3 Payment Integration 구현 시 함께 수정 필요
+
+- **BL-LC-B7: 체크아웃 예약완료 랜딩 화면 오류** | ✅ 완료 + 브라우저 실검증 완료 (2026-07-27)
+  - Stephen 지적: /account/rental(마이페이지 목록)로 랜딩되는 건 잘못된 설계
+    → 정상 랜딩은 /payment/success/dev (결제완료 UI, PG 승인 단계는 임시 스킵)
+  - 해결: confirm-mock API가 confirmedReservations(id, reservationCode) 반환하도록 확장
+    → checkout onclick에서 실 예약 데이터로 /payment/success/dev?productName=...&orderNumber=...&amount=... 이동
+    → 기존 isDevMode(예약 0건) 분기와 동일한 URLSearchParams 패턴 재사용
+  - 파일: `src/routes/api/checkout/confirm-mock/+server.ts`, `src/routes/checkout/+page.svelte`
+  - 실검증(Stephen 직접 클릭, localhost:5173): 랜딩 URL의 productName/orderNumber(실 reservation_code
+    CSREV260700019)/startDate·endDate/amount(22,000원) 전부 실DB 데이터와 일치 확인. 더미값 노출 없음.
+  - 트러블슈팅 경과: "아무 반응 없음" 최초 보고 시 원인 오판(Production 미배포 문제로 착각) →
+    재확인 결과 실제 원인은 "등록한 대여 조건에 모두 동의합니다" 체크박스 미체크로 인한
+    canProceed=false(버튼 disabled) — 정상 가드 동작이었음. 체크 후 정상 작동 확인.
+
+- **BL-LC-R4: CMS RentalDetailPanel 액션 경로 하드코딩** | ROUTINE
+  - 파일: `src/lib/components/cms/RentalDetailPanel.svelte`
+  - `action="/cms/reservation?/updateStatus"`, `action="/cms/reservation?/approveReservation"` 절대경로 하드코딩
+  - `/cms/rentals` 뷰에서 `/cms/reservation` 서버 액션 호출 — 라우트 변경 시 파손 위험
+
+- **BL-LC-R5: 예약 생성 RPC 이중화** | ROUTINE
+  - `create_hold_reservation` (상품 상세 → 직접 사용) vs `atomic_reserve_asset` (`/api/checkout/initiate` — UI 미연결)
+  - 실제 사용 경로: create_hold_reservation. atomic_reserve_asset 정리 또는 통일 필요
+
+### 🖼️ 누락 UI 화면 — BACKLOG (감사 2026-07-27)
+
+- **BL-UI-M1: QR 스캔 사용자 랜딩 페이지 없음** | BOUNDARY
+  - 경로: `/qr/product/[id]` — `+page.svelte` 미존재
+  - 현재: QR 스캔 시 CMS 화면으로 이동 (사용자 화면 없음)
+  - 필요: 상품 상세 또는 예약 화면으로 이동하는 USER 랜딩 페이지 구현
+
+- **BL-UI-M2: 상품 상세 사양(스펙) 탭 미연동** | BOUNDARY
+  - 파일: `src/routes/products/[id]/+page.svelte:593`
+  - "사양 정보가 준비 중입니다." 플레이스홀더 — DB `products.specifications` JSONB 연동 미구현
+
+- **BL-UI-M3: PAYMENT_REQUEST_CARD 발송 메커니즘 없음** | BOUNDARY (M3 연계)
+  - `src/lib/components/chat/ActionCard.svelte`에 `payment_request` 타입 정의됨 ("대여 계약 결제하기" 버튼)
+  - 이 카드를 발송하는 API/RPC 없음 — S1-M3 Payment Integration 구현 시 함께 처리 필요
 
 ### 소규모 (즉시 처리 가능)
 - BL-① category_taxonomy_map 기본 매핑 입력 | SPT/MON/PWR/MED/STD/VID product_category 연결 — 현재 null로 Fallback 2 적용 중 | Migration으로 일괄 처리 필요
