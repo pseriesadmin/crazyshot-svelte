@@ -330,16 +330,53 @@ cancelled / damage_claimed → 취소 UI (✕ 아이콘 + 빨간 텍스트)
 
 ---
 
-## 채팅 알림 발송 매핑 (NOTIFY_TYPE_MAP)
+## 채팅 알림 발송 매핑
+
+> 2026-07-27부터 **자동발송(AUTO_NOTIFY)** 과 **수동버튼(NOTIFY_TYPE_MAP)** 이 서로 다른 notify_type을
+> 쓰는 상태(`in_use`)가 생겼다 — 반드시 아래 두 표를 구분해서 볼 것.
+
+### 자동발송 (AUTO_NOTIFY) — `cms/reservation/+page.server.ts`
+
+상태 전이(`updateStatus`/`approveReservation` 액션)가 성공하면 관리자 조작 없이 자동으로 발송된다.
+
+| 전이 후 상태 | notifyType | 비고 |
+|---|---|---|
+| `confirmed` | `reservation_approval` | 승인 완료 알림 (실결제 경로도 동일 타입, 2026-07-27 추가) |
+| `shipped` | `shipment_notify` | 반출 알림 |
+| `in_use` | `rental_confirm` | **대여확인**(수령확인) 알림 — 2026-07-27 신규. 반납예정 알림(`return_remind`)과는 별개 이벤트 |
+| `return_requested` | `return_registration` | 반납 정보 요청 |
+| `returned` | `rental_complete` | 대여 종료 알림 |
+
+### 수동버튼 (NOTIFY_TYPE_MAP) — `cms/rentals` `RentalDetailPanel.svelte`
+
+관리자가 "…알림 발송 💬" 버튼을 직접 눌러야 발송된다. 상태 전이와 독립적으로 언제든 재발송 가능.
 
 | 상태 | notifyType | 버튼 텍스트 |
 |---|---|---|
 | `confirmed` | `shipment_notify` | 반출 알림 발송 💬 |
-| `in_use` | `return_remind` | 반납 예정 알림 💬 |
+| `in_use` | `return_remind` | 반납 예정 알림 💬 — **반납일 임박 시 관리자가 수동으로 보내는 용도**(자동발송 아님) |
 | `return_requested` | `return_registration` | 반납 정보 요청 💬 |
 | `returned` | `rental_complete` | 대여 종료 알림 💬 |
 
 > `cancelled`, `damage_claimed` 상태에서는 채팅 알림 버튼 미표시.
+> `in_use` 진입 시 자동으로는 `rental_confirm`(대여확인)만 발송되고, `return_remind`(반납예정)는 절대
+> 자동발송되지 않는다 — 반납일 임박 리마인드는 관리자가 이 표의 수동 버튼으로 직접 판단해서 보낸다.
+
+### 상담채팅 세션 상태(chat_sessions.status) — 대기(pending) 재진입 조건
+
+> ⚠️ 위 예약/대여 상태와는 별개 개념. `chat_sessions.status`(open/pending/closed)는 CMS `/cms/chat`
+> 상담세션 목록의 진행중/대기/종료 탭 분류 기준이다.
+
+```
+2026-07-27 변경: 세션이 대기/종료 상태였다면 새 메시지(고객 발신이든 관리자 발신이든)가 도착하는
+  즉시 AI 의도분류 결과와 무관하게 무조건 진행중(open)으로 전환된다(src/routes/api/chat/message/+server.ts).
+  대기(pending) 상태는 이제 오직 auto_pending_inactive_sessions RPC(1시간 무응답 자동전환)로만
+  재진입한다 — AI가 CS_ESCALATE로 분류해도 더 이상 즉시 대기로 강등되지 않는다.
+
+긴급 배지: 관리자 응답이 아직 없는 상태에서 마지막 고객 메시지가 CS_ESCALATE로 분류된 세션은
+  상담세션 목록 카드 제목 우측에 "긴급" 배지로 표시된다(/api/chat/sessions 응답의 is_urgent 필드,
+  AdminChatPanel.svelte). 관리자가 답변하면 자동 해제.
+```
 
 ---
 
@@ -401,8 +438,11 @@ const RENTAL_STATUSES = new Set([
 [ ] 계약서 미리보기 & 발송 버튼: 모든 상태에서 항상 표시?
 [ ] PDF 뷰어·다운로드: customerSignedAt 없으면 숨김 (서명 완료 후에만 표시)?
 [ ] 서명 링크 확인 ↗: customerSignedAt 있으면 숨김?
+[ ] in_use 진입 시 자동발송은 rental_confirm(대여확인)만 — return_remind는 수동 버튼 전용 유지?
+[ ] 상담세션이 대기/종료 상태에서 새 메시지 도착 시 AI 판단과 무관하게 진행중으로 전환되는가?
+[ ] 긴급 배지(is_urgent)가 관리자 응답 후 자동 해제되는가?
 ```
 
 ---
 
-*rental-lifecycle.md v1.2 | Harness Flow v3.2 | 2026-07-23 편집 제한 정책 추가*
+*rental-lifecycle.md v1.3 | Harness Flow v3.2 | 2026-07-27 채팅 알림 자동/수동 매핑 분리 + 대기 재진입 조건 문서화*

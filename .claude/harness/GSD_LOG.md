@@ -1,6 +1,59 @@
 # GSD_LOG.md — 크레이지샷 실행 이력
 # 형식: [YYYY-MM-DD HH:MM] 타입 | 태스크명 | 파일 | 소요 | 결과
 
+[2026-07-27] QA | sp3-qa-agent GATE C 검수 — QA 후속 4건 처리분 | 8개 파일 | ✅ 통과 (GATE E 진행 가능)
+  검수 대상: 결제 알림 idempotent 가드, 카드 승인번호 표시, 긴급 배지, chat_intent_logs
+    service_role 수정, 타입 정의 보강, rental-lifecycle.md 문서 갱신
+  결과: console.log/any/TODO/빈catch 0건, svelte-check 신규 에러 0건, 보안·RLS 문제 없음,
+    지정 확인사항 5건 전부 이상 없음. 참고용 비차단 권고 1건(세션 목록 조회 쿼리 수 증가 —
+    세션 규모 커지면 단일 쿼리/뷰로 통합 검토 권장, 지금은 문제 아님)
+  수정 필요 항목: 없음
+
+[2026-07-27] BOUNDARY FIX | QA 후속 개선 4건 + 숨어있던 의도분류 로그 미적재 버그 발견·수정 | 8개 파일 수정 | ✅ DONE
+  배경: 직전 QA 검수에서 나온 후속 권장 4건을 Stephen이 전부 진행 지시
+  1) 결제 승인 알림 중복 발송 방지 + 카드 승인번호 노출
+    - src/routes/api/payment/confirm/+server.ts, src/routes/payment/success/+page.server.ts:
+      RPC가 idempotent(재시도) 응답 시 채팅 알림 재발송하지 않도록 가드 추가
+    - src/lib/components/cms/RentalDetailPanel.svelte: 결제정보 탭에 "카드 승인번호"
+      (Toss 응답의 card.approveNo) 행 추가 — 기존 주문번호·승인시간·Toss 승인코드 옆에 배치
+  2) 상담세션 "긴급" 배지
+    - src/routes/api/chat/sessions/+server.ts: 관리자 응답 없이 마지막 고객 메시지가
+      CS_ESCALATE로 분류된 세션에 is_urgent 플래그 계산 추가
+    - src/lib/components/chat/AdminChatPanel.svelte: 카드 제목 우측에 "긴급" 배지 노출
+    - src/lib/types/chat.ts: ChatSession.is_urgent 필드 추가
+    - 구현 중 발견: chat_intent_logs 테이블이 서비스 계정 전용 RLS로 잠겨 있는데
+      /api/chat/message가 일반 세션 클라이언트로 INSERT를 시도해 지금까지 단 한 건도
+      적재되지 않고 있었음(테이블 row count 0, 에러도 조용히 무시됨) — 이 기능의
+      직접적인 선행 결함이라 이번에 함께 수정: src/routes/api/chat/message/+server.ts에서
+      해당 INSERT만 service_role 클라이언트로 교체
+  3) rental-lifecycle.md 문서 갱신
+    - 자동발송(AUTO_NOTIFY) 표 신규 추가 + 수동버튼(NOTIFY_TYPE_MAP) 표와 명확히 분리
+    - in_use 상태에서 자동(rental_confirm) vs 수동(return_remind)이 다른 이유 명시
+    - 상담채팅 세션 대기 재진입 조건(1시간 무응답 전용) + 긴급 배지 로직 문서화
+    - GATE C 체크리스트 3항목 추가, 문서 버전 v1.2 → v1.3
+  4) 타입 정의 누락 해결
+    - src/lib/types/chat.ts ActionCardType 유니언에 'reservation_hold', 'rental_confirm' 추가
+  검증:
+    - svelte-check 신규 에러 0건 (기존 11 errors 유지)
+    - 브라우저 실측: CS_ESCALATE 유발 메시지 전송 → chat_intent_logs 적재 확인(DB 직접 조회) →
+      상담세션 목록에 "긴급" 배지 정상 노출 확인
+    - 결제정보 탭(결제 전 예약) 정상 렌더링 확인 — 카드 승인번호 행은 실 결제 데이터 없어
+      코드 경로만 확인(기존 승인코드 행과 동일 패턴 재사용이라 위험 낮음)
+
+[2026-07-27] BOUNDARY | /cms/set/rental 대여방식 method_key 선택 UI 구현 + Migration #175 | 3개 파일 수정/신규 | ✅ DONE
+  파일:
+    NEW  supabase/migrations/20260727000175_175_add_method_key_to_upsert_rpc.sql
+    MOD  src/routes/cms/set/rental/+page.server.ts
+    MOD  src/routes/cms/set/rental/+page.svelte
+  내용:
+    - Migration #175: upsert_rental_method_option RPC에 p_method_key TEXT DEFAULT NULL 파라미터 추가
+      (INSERT 시 method_key 저장, UPDATE 시 COALESCE로 기존 값 보존, 빈 문자열→NULL 처리)
+    - +page.server.ts: RentalMethodOption.method_key 필드 추가, select 쿼리 확장, addMethod 액션 파싱
+    - +page.svelte: METHOD_KEYS(5종) 콤보칩 선택 UI, usedMethodKeys $derived 비활성 처리,
+      기존 방식 목록에 method_key 배지(METHOD_KEY_LABELS 변환) 표시, epost→'택배(구)' 레거시 대응
+  DB 적용: Stage(ezyvffjvuwmtuhpxdjrw) ✅ → Production(vnbpmvxruyciuuaermyh) ✅ (Stephen 명시 승인)
+  svelte-check: 신규 ERROR 0건
+
 [2026-07-27] BOUNDARY FIX | 전자계약 서명 완료 알림 세션 선택 pending 우선순위 적용 | 1개 파일 수정 | ✅ DONE
   파일: src/routes/api/contracts/[token]/sign/+server.ts
   원인: 서명 완료 채팅 알림이 open 세션만 조회 → pending(관리자 대화 중) 세션에 알림 미전달

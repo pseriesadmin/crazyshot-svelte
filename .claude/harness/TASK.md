@@ -2173,6 +2173,15 @@ plan_source: 세션 내 아젠다 (위 정밀 감사 결과를 바탕으로 Step
   - Stephen 재확인 대기 중
 - [x] 종료 탭 실시간 반영 확인 | VERIFY | ✅ 완료 (정상, 코드 수정 없음)
   - 관리자 브라우저 2개로 교차 검증 — 기존 세션 상태 구독 로직이 종료 탭에도 정상 적용됨을 확인
+- [x] QA 후속 권장 4건 처리 | BOUNDARY | ✅ 완료 (2026-07-27)
+  - 결제 승인 알림 idempotent 재시도 시 중복발송 방지 가드 추가
+  - 결제정보 탭에 "카드 승인번호"(Toss card.approveNo) 행 신규 추가
+  - 상담세션 "긴급" 배지 신규 구현(관리자 미응답 + 마지막 고객 메시지 CS_ESCALATE 시 노출)
+  - 구현 중 발견: `chat_intent_logs`가 service_role 전용 RLS인데 일반 세션 클라이언트로
+    INSERT하고 있어 지금까지 단 한 건도 적재되지 않던 결함 발견·수정(긴급 배지의 직접 선행 결함)
+  - `rental-lifecycle.md` 자동/수동 알림 매핑 표 분리 + 대기 재진입 조건 문서화 (v1.2→v1.3)
+  - `ActionCardType`에 `reservation_hold`/`rental_confirm` 누락 값 추가
+  - 브라우저 실측: CS_ESCALATE 메시지 전송 → chat_intent_logs 적재 확인 → 긴급 배지 노출 확인
 
 결과 상세: `.claude/harness/GSD_LOG.md` 2026-07-27 이후 항목 참조
 
@@ -2690,3 +2699,113 @@ plan_source: 세션 내 아젠다 (Stephen 신고 기반)
 svelte-check: 신규 ERROR 0건
 
 ⏳ QA: sp3-qa-agent 검수 예정
+
+---
+
+## NOW — /cms/set/rental 대여방식 method_key 선택 UI 구현 (2026-07-27) ✅ 완료
+
+plan_source: 세션 내 아젠다 (Stephen 직접 요청)
+등급: 🟡 BOUNDARY (CMS 설정 UI + RPC 확장)
+핵심제약:
+  - 기존 `rental_method_options.method_key` 컬럼 이미 존재 (Migration #156) — 컬럼 추가 불필요
+  - RPC `upsert_rental_method_option` 파라미터 확장 필요 (Migration #175)
+  - 유니크 부분 인덱스 (method_key IS NOT NULL AND deleted_at IS NULL) → 중복 키 선택 UI 차단 필요
+  - Stage/Production DB 데이터 상이 (Stage: epost, Production: 5종 완전 세팅)
+  - 마이그레이션 순서 준수: Stage(ezyvffjvuwmtuhpxdjrw) → Production(vnbpmvxruyciuuaermyh)
+
+수정 파일:
+  - supabase/migrations/20260727000175_175_add_method_key_to_upsert_rpc.sql (NEW)
+  - src/routes/cms/set/rental/+page.server.ts (MODIFY)
+  - src/routes/cms/set/rental/+page.svelte (MODIFY)
+
+- [x] MIGRATION-175: upsert_rental_method_option RPC p_method_key TEXT DEFAULT NULL 파라미터 추가 | BOUNDARY | ✅ 완료 (2026-07-27)
+  - INSERT 시: `INSERT INTO rental_method_options (name, display_order, method_key) VALUES (..., p_method_key)`
+  - UPDATE 시: `method_key = COALESCE(p_method_key, method_key)` (기존 값 보존)
+  - 빈 문자열 → NULL 자동 처리
+  - 이전 시그니처(3인자) + 신규 시그니처(4인자) 양쪽 GRANT 부여
+  - Stage 적용 ✅ → Production 적용 ✅ (Stephen 명시 승인 후)
+
+- [x] SERVER-METHOD-KEY: +page.server.ts RentalMethodOption 인터페이스 + addMethod 액션 확장 | BOUNDARY | ✅ 완료 (2026-07-27)
+  - `RentalMethodOption` 인터페이스: `method_key: string | null` 필드 추가
+  - select 쿼리: `'id, name, method_key, display_order, is_active'` 포함
+  - `addMethod` 액션: `data.get('method_key')?.trim() || null` 파싱 → RPC 전달
+
+- [x] UI-METHOD-KEY-CHIPS: +page.svelte 대여방식 추가 폼에 method_key 콤보칩 선택 UI 추가 | BOUNDARY | ✅ 완료 (2026-07-27)
+  - METHOD_KEYS 상수 (5종): visit/quick/delivery/locker/crazydelivery + 각 label·desc
+  - METHOD_KEY_LABELS 맵: epost → '택배(구)' 포함 (Stage DB 레거시 값 대응)
+  - `let methodKey = $state('')` + `let usedMethodKeys = $derived(...)` 
+  - 기사용 키 → chip disabled + opacity 0.45 (중복 방지)
+  - 선택 키 → `<input type="hidden" name="method_key">` 전달
+  - 기존 방식 목록: method_key 있으면 배지(METHOD_KEY_LABELS 변환) 표시
+  - 브라우저 검증: Production 5개 방식 배지 정상(방문/크레이지배송/퀵/무인/택배(구)) + 사용 칩 비활성 확인
+
+svelte-check: 신규 ERROR 0건 (기존 경고 1건 — 관련 없는 products page unused CSS selector)
+
+⏳ QA: sp3-qa-agent 검수 완료 예정
+
+---
+
+## NOW — rental_method_options method_key 구조 재검증 + Production 백필 (2026-07-27) ✅ 완료
+
+plan_source: 세션 내 아젠다 (Stephen 신고 기반, 배송충돌 토스트 오탐 후속 조사)
+핵심제약:
+  - Production DB 직접 수정 — 매 단계 Stephen 확인 후 진행
+  - 체크아웃(/checkout) 코드는 이번 세션 범위 밖 — 발견한 위험만 보고, 수정은 별도 확인 후
+
+배경: 직전 세션에서 고친 "배송충돌 토스트 오탐"(방문 선택 시에도 경고) 버그의 근본 원인이
+  Production `rental_method_options.method_key` 미설정이었음 — 그 후속으로 Stephen이
+  "설정(/cms/set/rental)에서 대여방식 이름 수정·삭제 시 예약신청 판정이 깨지지 않는지" 재검증 요청
+
+- [x] VERIFY-RENAME-SAFE: 설정 화면 이름수정이 method_key·판정로직에 영향 없음 확인 | ROUTINE | ✅ 완료 (2026-07-27)
+  - 예약신청 판정 로직은 `name`을 전혀 읽지 않고 `id`로 조회 후 `method_key`만 비교 — 이름 변경 무관
+  - `upsert_rental_method_option` RPC 정의 직접 확인: 파라미터 `(p_id, p_name, p_display_order)` — method_key
+    컬럼은 어떤 경로로도 이 RPC가 건드리지 않음(업데이트 시에도 `SET name=.., display_order=..`만 실행)
+  - 참고로 확인된 사실: `/cms/set/rental` 대여방식 목록에는 현재 "이름 수정" UI 자체가 없음(추가·삭제·순서변경만
+    존재, 목록 항목은 읽기전용 텍스트) — 질문하신 시나리오는 현재 코드로는 애초에 발생 불가능한 상황이었음
+
+- [x] VERIFY-DELETE-SAFE: 대여방식 옵션 삭제 시 상품 연결 깨짐 여부 확인 | ROUTINE | ✅ 완료 (2026-07-27)
+  - `deleteMethod` 액션은 삭제 전 `check_rental_method_option_in_use` RPC로 해당 방식을 사용 중인 상품이
+    하나라도 있으면(`allowed_method_ids @> ARRAY[id]`) 삭제 자체를 차단(409) — 사용 중인 항목은 삭제 불가능
+    → 상품상세·CMS 패널에서 "갑자기 사라지는" 상황 발생 안 함
+
+- [x] BUG-STRUCTURAL-NEW-METHOD-KEY-GAP: CMS로 신규 대여방식 추가 시 method_key 영구 미설정 구조 확인 | CRITICAL | ✅ 완료 (2026-07-27, 확인·데이터로 해소)
+  - `addMethod` 액션/RPC 어디에도 `method_key` 입력 경로가 없어, CMS에서 새로 "추가"하는 대여방식은
+    영구히 `method_key = null` → 예약신청 배송충돌 판정 및 체크아웃 배송비 판정에서 계속 누락되는 구조적 공백
+  - Stephen 확인: "5종 범위 안에서만 운영" (크레이지배송×2 변형·방문·무인보관함·퀵서비스) — 신규 임의
+    확장 없음, 기존 5개만 method_key 백필하면 됨으로 확정
+
+- [x] DATA-BACKFILL-METHOD-KEY: Production rental_method_options.method_key 5건 백필 | CRITICAL | ✅ 완료 (2026-07-27, Stephen 승인)
+  - 조사 중 발견: 이전에 이미 soft-delete된 항목 2개("방문(무인보관함)", "택배")가 최초 감사 쿼리에 섞여
+    들어와 있었음(`deleted_at` 필터 누락) → 재조사로 실제 활성 대여방식은 정확히 5개임을 확인
+  - UNIQUE 제약 발견: `rental_method_options_method_key_active_unique` — 활성 상태에서 동일 method_key
+    중복 불가(partial unique index `WHERE deleted_at IS NULL`) → "크레이지배송" 2개를 둘 다 `crazydelivery`로
+    설정하려던 최초 계획이 DB 제약 위반으로 즉시 실패, Stephen 재확인 거쳐 최종 매핑 확정
+  - 최종 반영 완료 (Production, ezyvffjvuwmtuhpxdjrw 대상 아님 — vnbpmvxruyciuuaermyh):
+    · 방문(f1947845...) → `visit`
+    · 무인보관함(667d6caf...) → `locker` (기존 값 유지)
+    · 퀵서비스(364a30d9...) → `quick`
+    · 크레이지배송(택배)(4e23b9ba...) → `delivery` (Stephen 지정 — 기존 5종 코드 상수에 없던 신규 값)
+    · 크레이지배송(자체배송)(ec4cf0be...) → `crazydelivery`
+  - 코드 후속 수정: `src/routes/products/[id]/+page.svelte`의 `DELIVERY_METHOD_KEYS`에 `'delivery'` 추가
+    (Stephen이 'delivery'를 지정하면서 배송판정 상수 4종 → 5종으로 확장 필요해짐)
+
+⚠️ Stephen 확인 필요 — 체크아웃 화면 동일 위험 (수정 안 함, 이번 세션 범위 밖):
+  - `src/routes/checkout/+page.svelte:21` `type DeliveryMethod = 'crazydelivery' | 'quick' | 'locker' | 'visit' | 'epost'`
+    에도 `'delivery'`가 없음 — 고객이 체크아웃에서 "크레이지배송(택배)" 선택 시 `method_key === method` 매칭
+    실패로 배송비 조회가 안 될 가능성 있음. 체크아웃도 함께 수정할지 Stephen 확인 후 별도 진행 필요.
+
+관련 파일: src/routes/products/[id]/+page.svelte (DELIVERY_METHOD_KEYS 상수 1건 수정)
+관련 DB: Production(vnbpmvxruyciuuaermyh) rental_method_options.method_key 5건 UPDATE (마이그레이션 파일 없음 — MCP 직접 실행)
+
+svelte-check: 신규 ERROR 0건
+
+sp3-qa-agent GATE C 검수 결과 (2026-07-27): ✅ 통과
+  - 실제 코드 변경분(DELIVERY_METHOD_KEYS 'delivery' 1건 추가)만 정확히 범위 확정 후 검수 —
+    이전 세션 산출물(체크아웃 마스터-디테일 리팩터 등 별도 미커밋 작업)과 명확히 분리 확인
+  - isDeliveryMethod 판정 로직 회귀 없음(기존 4개 값 보존 + 신규 1개만 추가)
+  - checkout/+page.svelte에 실제로 손댄 흔적 없음(범위 준수 재확인) — 'delivery' 누락 위험은
+    TASK.md 대기 항목으로만 남아있고 코드는 미수정 상태임을 diff로 직접 확인
+  - 참고: QA agent 세션엔 Supabase MCP가 없어 Production DB 실측 대조는 못 했으나(문서 기반 판정),
+    본 세션에서 직접 쿼리로 이미 실측 확인된 값과 일치함(방문→visit·무인보관함→locker·퀵서비스→quick·
+    크레이지배송(택배)→delivery·크레이지배송(자체배송)→crazydelivery)
+  - GATE E 통과, 커밋 허가

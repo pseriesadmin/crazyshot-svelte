@@ -3,7 +3,10 @@
 
 import { json } from '@sveltejs/kit'
 import Anthropic from '@anthropic-ai/sdk'
+import { env } from '$env/dynamic/private'
 import { ANTHROPIC_API_KEY } from '$env/static/private'
+import { createClient } from '@supabase/supabase-js'
+import { getSupabaseUrl } from '$lib/env/supabasePublic'
 import type { RequestHandler } from './$types'
 import type { ChatMessage, ChatIntent } from '$lib/types/chat'
 
@@ -163,14 +166,10 @@ export const POST: RequestHandler = async ({ request, locals }) => {
   }
 
   // 5. 세션 상태 전환
-  // CS_ESCALATE → pending(대기, 관리자 응답 필요)
-  // 그 외 + pending 상태 → open(진행중, 대화 재개)
-  if (classified.intent === 'CS_ESCALATE') {
-    await db
-      .from('chat_sessions')
-      .update({ status: 'pending' })
-      .eq('id', body.session_id)
-  } else if (chatSession.status === 'pending') {
+  // 새 메시지가 도착한 것 자체로 무조건 진행중 복귀 (AI 분류 결과와 무관하게 적용)
+  //   — CMS 관리자가 "대기" 목록에서 새 활동을 놓치지 않도록. 대기 상태는 오직
+  //     auto_pending_inactive_sessions RPC(1시간 무응답)로만 재진입한다.
+  if (chatSession.status !== 'open') {
     await db
       .from('chat_sessions')
       .update({ status: 'open' })
@@ -197,16 +196,22 @@ export const POST: RequestHandler = async ({ request, locals }) => {
   }
 
   // 7. chat_intent_logs INSERT
-  const { data: intentLog } = await db
-    .from('chat_intent_logs')
-    .insert({
-      message_id: userMessage.id,
-      intent: classified.intent,
-      confidence: classified.confidence,
-      raw_response: classified,
-    })
-    .select()
-    .single()
+  //    RLS가 service_role 전용(모든 authenticated 요청 차단)이라 locals.supabase로는
+  //    항상 조용히 실패했음(0건 적재) — service_role 클라이언트로 교체
+  const serviceRoleKey = env.SUPABASE_SERVICE_ROLE_KEY
+  const admin = serviceRoleKey ? createClient(getSupabaseUrl(), serviceRoleKey) : null
+  const { data: intentLog } = admin
+    ? await admin
+        .from('chat_intent_logs')
+        .insert({
+          message_id: userMessage.id,
+          intent: classified.intent,
+          confidence: classified.confidence,
+          raw_response: classified,
+        })
+        .select()
+        .single()
+    : { data: null }
 
   // 8. chat_sessions updated_at 갱신
   await db

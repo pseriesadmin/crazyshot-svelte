@@ -36,6 +36,7 @@
       case 'reservation_hold':        return { label: '예약 신청 확인', color: 'purple' }
       case 'reservation_approval':   return { label: '예약 승인 확인', color: 'purple' }
       case 'shipment_notify':        return { label: '배송 추적', color: 'green' }
+      case 'rental_confirm':         return { label: '대여 정보 확인', color: 'purple' }
       case 'return_remind':          return { label: '반납 등록하기', color: 'orange' }
       case 'coupon_issued':          return { label: '쿠폰 적용하기', color: 'purple' }
       case 'contract_link':          return { label: '전자계약 보기', color: 'purple' }
