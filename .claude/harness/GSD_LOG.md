@@ -1,6 +1,45 @@
 # GSD_LOG.md — 크레이지샷 실행 이력
 # 형식: [YYYY-MM-DD HH:MM] 타입 | 태스크명 | 파일 | 소요 | 결과
 
+[2026-07-27] BOUNDARY | 예약 카트(/checkout) 미로그인 게스트 예약 허용 + 완료 버튼 문구 회원/비회원 분기 | src/routes/products/[id]/+page.svelte, src/routes/checkout/+page.server.ts, +page.svelte, 삭제 checkout/+page.ts | ✅ DONE
+  배경: Stephen 요청 3건
+    ① 미로그인 사용자도 실제 예약 후 /checkout에 로그인 사용자와 동일한 UI·실 데이터로 랜딩
+    ② 미로그인 사용자의 대여 예약 자체를 허용 — 임시 계정 자동 생성 로직 필요
+    ③ 기존 "비로그인 시 데모 미리보기 노출" 설계 제거
+  해결:
+    · `products/[id]/+page.svelte` handleReserve(): 비로그인 시 로그인 페이지로 리다이렉트하던 로직을
+      제거하고 `supabase.auth.signInAnonymously()`로 실 UUID를 가진 임시(익명) 세션을 투명하게 생성한
+      뒤 동일한 create_hold_reservation 플로우로 진행. 이 패턴은 신규 도입이 아니라 채팅 위젯
+      (`ChatWindow.svelte` ensureAuth())에서 이미 쓰던 것과 동일 — DB 확인 결과 해당 방식으로 생성된
+      익명 계정이 이미 20건 존재해 실사용 검증된 방식임을 확인.
+    · RLS 재확인: rental_reservations/products/price_rules 정책이 전부 auth.uid() 또는 공개조회 기준이라
+      익명 세션도 실회원과 동일하게 동작(별도 예외 처리 불필요).
+    · `+page.server.ts`/`+page.svelte`: fixture 데모 분기(fixtureLineItems, sampleSubItems, priceConfig,
+      isDevMode, `/payment/success/dev` 미리보기 분기) 전면 제거 — 이제 예외 없이 실 DB 데이터만 사용.
+      `checkout/+page.ts`(fixture 로더) 파일 자체를 삭제.
+  후속 요청 — 완료 버튼 문구 회원/비회원 분기:
+    · `+page.server.ts`: `session.user.is_anonymous`를 `isGuest`로 반환.
+    · `+page.svelte`: `confirmLabel = isGuest ? '비회원 예약신청완료' : '예약신청완료'`로 기존 고정 문구
+      ("가입하고 지금 예약하세요") 대체.
+  검증: 로그인 회원 계정으로 실측 — 버튼 문구 "예약신청완료" 정상 노출, svelte-check 에러 0건 확인.
+    게스트(비회원) 라벨은 로그아웃 클릭이 브라우저 자동화 도구에서 반복적으로 반응하지 않아
+    (환경/툴 문제로 추정 — 콘솔 에러 없음, 좌표상 정상 클릭은 기록되나 페이지 상태 불변) 실측하지 못함.
+    로직은 대칭적인 삼항 조건이라 코드 검토 및 타입체크로 정확성 확인 — Stephen 직접 확인 권장.
+
+[2026-07-27] CRITICAL FIX | 전자계약 채팅 발송 세션 오선택 — pending 우선순위 적용 | src/routes/api/cms/contracts/[id]/send-chat/+server.ts | ✅ DONE
+  증상: mublues@gmail.com 기준 CMS "채팅으로 발송" 클릭 시 사용자 채팅에 '전자계약 보기' 카드가 수신되지 않음
+         '예약 승인 확인' 등 다른 알림은 정상 수신 → Realtime 문제가 아님
+  근본 원인: 해당 유저의 채팅 세션이 3개 존재
+    · Session A (cb94b7d9, open, reservation): send-chat이 반복 발송 → updated_at이 가장 최신
+    · Session B (2b2cbaa0, pending, general): 실제 사용자-관리자 대화가 있는 세션 (예약승인 알림 등 수신됨)
+    · Session C (e7da0640, pending, reservation): 또 다른 pending 세션
+  오선택 메커니즘: 기존 코드 `.in('status', ['open', 'pending']).order('updated_at', DESC)` →
+    send-chat이 Session A를 선택해 발송 → trigger가 Session A의 updated_at 갱신 →
+    다음 발송에도 Session A가 최신 → 반복 오선택
+  해결: 세션 선택 우선순위를 pending → open → closed 재활성화 → 신규생성 순으로 변경
+    · pending 세션(관리자 핸드오프 중인 실제 대화)이 open(상품탐색)보다 항상 우선
+    · 검증: Stephen이 발송 재테스트 → mublues@gmail.com 채팅(Session B)에서 '전자계약 보기' 카드 수신 확인 ✅
+
 [2026-07-27] BOUNDARY | CMS 자식 상품 수정 제한 전면 적용 | 수정 2파일 | ✅ DONE
   수정: src/lib/components/cms/ProductDetailPanel.svelte
     - isChildProduct $derived 추가 (parent_product_id 존재 여부)
