@@ -53,7 +53,7 @@
       reviews: ReviewItem[];
       depositAmount: number | null;
       rentalPeriods: { id: string; name: string }[];
-      rentalMethods: { id: string; name: string }[];
+      rentalMethods: { id: string; name: string; method_key: string | null }[];
       shippingPolicy: { items: { label: string; fee: number }[]; guide: string } | null;
       shotlogs: ShotlogItem[];
       popularProducts: PopularItem[];
@@ -69,18 +69,25 @@
 
   // ── Product info state
   let qty = $state(1);
-  let optionItems = $state(
-    data.optionLinks.map((link) => ({
+  function buildOptionItems(links: ProductOptionLinkRow[]) {
+    return links.map((link) => ({
       id: link.option_product_id,
       label: link.option_product_name,
       price: link.price_24h ?? 0,
       qty: link.is_required ? 1 : 0,  // [C-1] 필수 옵션 기본 수량 1
       is_required: link.is_required,
+      min_select_required: link.min_select_required,
       delivery_rental_disabled: link.delivery_rental_disabled,
       image_url: link.image_url,
-    }))
-  );
+    }));
+  }
+  let optionItems = $state(buildOptionItems(data.optionLinks));
+  // 상품 상세는 같은 컴포넌트가 SPA 네비게이션으로 재사용됨 — data.optionLinks 변경 시 재동기화 필수
+  $effect(() => {
+    optionItems = buildOptionItems(data.optionLinks);
+  });
   let optionsOpen = $state(true);
+  let hasOptionItems = $derived(optionItems.length > 0);
   let isReserving = $state(false);
 
   // ── Toast
@@ -145,6 +152,10 @@
   const popularProducts = $derived(data.popularProducts);
 
   let reviews = $state(data.reviews);
+  // SPA 네비게이션으로 다른 상품 상세로 이동 시 이전 상품의 후기가 남아있지 않도록 재동기화
+  $effect(() => {
+    reviews = data.reviews;
+  });
   const session = $derived(data.session);
 
   // ── Review form
@@ -152,12 +163,24 @@
   let reviewContent = $state('');
   let isSubmittingReview = $state(false);
 
+  function requireLoginForReview() {
+    showToast('로그인 후 이용해주세요.');
+  }
+
   async function submitReview() {
+    if (isSubmittingReview) return;
     if (!session) {
-      goto('/auth/login');
+      requireLoginForReview();
       return;
     }
-    if (!reviewTitle.trim() || !reviewContent.trim()) return;
+    if (!reviewTitle.trim()) {
+      showToast('제목을 입력해주세요.');
+      return;
+    }
+    if (!reviewContent.trim()) {
+      showToast('내용을 입력해주세요.');
+      return;
+    }
     isSubmittingReview = true;
     try {
       type RpcFn = (name: string, args: Record<string, unknown>) => ReturnType<typeof supabase.rpc>;
@@ -196,15 +219,40 @@
   async function handleReserve(e: { startDate: string; endDate: string; startHour: number; startMin: number; endHour: number; endMin: number; methodId?: string; periodId?: string }) {
     if (!product || isReserving) return;
 
-    // A-1: 비로그인 → 로그인 후 현재 페이지로 복귀
-    if (!data.session) {
-      goto('/auth/login?next=' + encodeURIComponent(window.location.pathname));
+    // 필수 옵션 미선택
+    if (optionItems.some((o) => o.is_required && o.qty === 0)) {
+      showToast('필수 옵션상품을 선택하세요.');
+      return;
+    }
+
+    // 최소 1개 선택 필수 그룹 — 그룹 내 전부 미선택
+    const minSelectGroup = optionItems.filter((o) => o.min_select_required);
+    if (minSelectGroup.length > 0 && !minSelectGroup.some((o) => o.qty > 0)) {
+      showToast('최소 1개 이상의 옵션상품을 선택하세요.');
+      return;
+    }
+
+    // 배송대여 불가 옵션 선택 + 배송(방문 아닌) 방식 선택 시 충돌
+    const selectedMethod = data.rentalMethods.find((m) => m.id === e.methodId);
+    const isDeliveryMethod = !!selectedMethod && selectedMethod.method_key !== 'visit';
+    if (isDeliveryMethod && optionItems.some((o) => o.delivery_rental_disabled && o.qty > 0)) {
+      showToast('선택한 옵션상품은 배송이 불가능합니다.');
       return;
     }
 
     isReserving = true;
     trackCartAdd(data.productId);
     try {
+      // 비로그인 → 익명 로그인으로 임시 계정(real UUID) 확보 후 그대로 예약 진행
+      // (회원가입/로그인 화면으로 이탈시키지 않음 — 게스트도 기존 회원과 동일하게 예약·체크아웃 가능)
+      const { data: { session: currentSession } } = await supabase.auth.getSession();
+      if (!currentSession) {
+        const { error: anonError } = await supabase.auth.signInAnonymously();
+        if (anonError) {
+          showToast('예약 진행 중 오류가 발생했습니다.');
+          return;
+        }
+      }
       type ReserveRpcFn = (name: string, args: Record<string, unknown>) => Promise<{
         data: Array<{ success: boolean; reservation_id: number | null; asset_id: number | null; error_message: string | null }> | null;
         error: unknown;
@@ -228,7 +276,7 @@
         type ShipRpcFn = (name: string, args: Record<string, unknown>) => Promise<{ error: unknown }>;
         await (supabase.rpc as unknown as ShipRpcFn)('set_reservation_shipment_method', {
           p_reservation_id: row.reservation_id,
-          p_pickup_method:  'visit',
+          p_pickup_method:  selectedMethod?.method_key ?? 'visit',
           p_pickup_time:    padTime(e.startHour, e.startMin),
           p_return_time:    padTime(e.endHour, e.endMin),
         });
@@ -260,11 +308,6 @@
 
   let optionsTotal = $derived(
     optionItems.reduce((sum, opt) => sum + opt.price * opt.qty, 0)
-  );
-
-  // 필수 옵션 중 수량 0인 항목이 있으면 예약담기 비활성
-  let hasUnfilledRequired = $derived(
-    optionItems.some((o) => o.is_required && o.qty === 0)
   );
 
   let imageUrls = $derived(product.image_urls ?? []);
@@ -332,46 +375,16 @@
           <p class="deposit-info">보증금 <strong>{fmt(data.depositAmount)}</strong>원</p>
         {/if}
 
-        {#if data.rentalPeriods.length > 0 || data.rentalMethods.length > 0}
+        {#if data.rentalPeriods.length > 0}
           <div class="policy-block">
-            {#if data.rentalPeriods.length > 0}
-              <div class="policy-row">
-                <span class="policy-label">대여 기간</span>
-                <div class="policy-chips">
-                  {#each data.rentalPeriods as period}
-                    <span class="policy-chip">{period.name}</span>
-                  {/each}
-                </div>
+            <div class="policy-row">
+              <span class="policy-label">대여 기간</span>
+              <div class="policy-chips">
+                {#each data.rentalPeriods as period}
+                  <span class="policy-chip">{period.name}</span>
+                {/each}
               </div>
-            {/if}
-            {#if data.rentalMethods.length > 0}
-              <div class="policy-row">
-                <span class="policy-label">대여 방식</span>
-                <div class="policy-chips">
-                  {#each data.rentalMethods as method}
-                    <span class="policy-chip">{method.name}</span>
-                  {/each}
-                </div>
-              </div>
-            {/if}
-          </div>
-        {/if}
-
-        {#if data.shippingPolicy && (data.shippingPolicy.items.length > 0 || data.shippingPolicy.guide)}
-          <div class="shipping-policy-block">
-            {#if data.shippingPolicy.items.length > 0}
-              <div class="policy-row">
-                <span class="policy-label">배송 정책</span>
-                <div class="policy-chips">
-                  {#each data.shippingPolicy.items as item}
-                    <span class="policy-chip policy-chip--active">{item.label} <strong>{item.fee.toLocaleString('ko-KR')}원</strong></span>
-                  {/each}
-                </div>
-              </div>
-            {/if}
-            {#if data.shippingPolicy.guide}
-              <p class="sp-guide">{data.shippingPolicy.guide}</p>
-            {/if}
+            </div>
           </div>
         {/if}
 
@@ -406,25 +419,27 @@
       <div class="options-section">
         <div
           class="options-header"
-          onclick={() => optionsOpen = !optionsOpen}
+          class:options-header--disabled={!hasOptionItems}
+          onclick={() => { if (hasOptionItems) optionsOpen = !optionsOpen; }}
           role="button"
-          tabindex="0"
-          onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') optionsOpen = !optionsOpen; }}
-          aria-expanded={optionsOpen}
+          tabindex={hasOptionItems ? 0 : -1}
+          aria-disabled={!hasOptionItems}
+          onkeydown={(e) => { if (hasOptionItems && (e.key === 'Enter' || e.key === ' ')) optionsOpen = !optionsOpen; }}
+          aria-expanded={hasOptionItems ? optionsOpen : undefined}
         >
           <span class="options-title">옵션 상품</span>
           <div class="options-more-btn">
             <span class="options-more-text">더보기</span>
             <svg
               class="options-chevron"
-              class:open={optionsOpen}
+              class:open={hasOptionItems && optionsOpen}
               width="8" height="14" viewBox="0 0 8 14" fill="none"
             >
               <path d="M1 1L7 7L1 13" stroke="var(--cs-text-dark)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
             </svg>
           </div>
         </div>
-        {#if optionsOpen}
+        {#if hasOptionItems && optionsOpen}
         <div class="options-list">
           {#each optionItems as opt}
             <div class="option-item">
@@ -433,6 +448,9 @@
                 <div class="option-badges">
                   {#if opt.is_required}
                     <span class="opt-badge opt-badge--required">필수</span>
+                  {/if}
+                  {#if opt.min_select_required}
+                    <span class="opt-badge opt-badge--min-select">최소 1개 선택</span>
                   {/if}
                   {#if opt.delivery_rental_disabled}
                     <span class="opt-badge opt-badge--no-delivery">배송대여 불가</span>
@@ -479,8 +497,7 @@
           halfDayPrice={price12h * qty}
           {optionsTotal}
           rentalMethods={data.rentalMethods}
-          rentalPeriods={data.rentalPeriods}
-          reserveDisabled={hasUnfilledRequired}
+          shippingPolicy={data.shippingPolicy}
           mode="product"
           onreserve={handleReserve}
           onchange={handleCalChange}
@@ -502,8 +519,7 @@
         halfDayPrice={price12h * qty}
         {optionsTotal}
         rentalMethods={data.rentalMethods}
-        rentalPeriods={data.rentalPeriods}
-        reserveDisabled={hasUnfilledRequired}
+        shippingPolicy={data.shippingPolicy}
         mode="product"
         onreserve={handleReserve}
         onchange={handleCalChange}
@@ -707,7 +723,7 @@
         maxlength="20"
         placeholder={session ? '제목 (최대 20자)' : '로그인 후 작성해주세요.'}
         bind:value={reviewTitle}
-        onclick={() => { if (!session) goto('/auth/login'); }}
+        onclick={() => { if (!session) requireLoginForReview(); }}
         readonly={!session}
       />
       <textarea
@@ -715,13 +731,13 @@
         maxlength="500"
         placeholder={session ? '내용 (최대 500자)' : '로그인 후 작성해주세요.'}
         bind:value={reviewContent}
-        onclick={() => { if (!session) goto('/auth/login'); }}
+        onclick={() => { if (!session) requireLoginForReview(); }}
         readonly={!session}
       ></textarea>
       <button
         class="review-submit-btn"
         onclick={submitReview}
-        disabled={isSubmittingReview || !reviewTitle.trim() || !reviewContent.trim()}
+        disabled={isSubmittingReview}
       >
         {isSubmittingReview ? '등록 중...' : '후기 등록'}
       </button>
@@ -1048,6 +1064,10 @@
     background: var(--cs-surface-gray);
     color: var(--cs-text-mid);
   }
+  .opt-badge--min-select {
+    background: rgba(59,47,138,0.10);
+    color: var(--cs-purple);
+  }
   .option-label {
     font: var(--text-m-script-14B);
     color: var(--cs-text);
@@ -1167,28 +1187,6 @@
     border-radius: var(--radius-full);
     padding: 4px 10px;
     line-height: 1.4;
-  }
-
-  /* ── 배송정책 */
-  .shipping-policy-block {
-    margin-top: 12px;
-    display: flex;
-    flex-direction: column;
-    gap: 6px;
-  }
-  .policy-chip--active {
-    color: var(--cs-white);
-    background: var(--cs-purple);
-  }
-  .policy-chip--active strong {
-    font-weight: 400;
-    opacity: 0.85;
-  }
-  .sp-guide {
-    font: var(--text-m-script-12);
-    color: var(--cs-text-light);
-    padding-left: 70px;
-    line-height: 1.6;
   }
 
   /* ── Spec table */
@@ -1688,6 +1686,10 @@
     user-select: none;
   }
   .options-header:focus-visible { outline: 2px solid var(--cs-purple); outline-offset: 2px; border-radius: 4px; }
+  .options-header--disabled {
+    cursor: default;
+    opacity: 0.45;
+  }
   .options-more-btn {
     display: flex;
     align-items: center;

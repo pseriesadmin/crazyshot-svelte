@@ -11,7 +11,7 @@
     optionsTotal?: number;
     mode?: 'product' | 'cart';
     rentalMethods?: RentalOption[];
-    rentalPeriods?: RentalOption[];
+    shippingPolicy?: { items: { label: string; fee: number }[]; guide: string } | null;
     selectedMethodId?: string;
     selectedPeriodId?: string;
     reserveDisabled?: boolean;
@@ -30,7 +30,7 @@
     optionsTotal = 0,
     mode = 'product',
     rentalMethods = [],
-    rentalPeriods = [],
+    shippingPolicy = null,
     selectedMethodId = $bindable(''),
     selectedPeriodId = $bindable(''),
     reserveDisabled = false,
@@ -364,25 +364,9 @@
       <p class="fee-note">단순 합계요금으로 실제 결제요금과 다를 수 있습니다.</p>
     {/if}
 
-    <!-- 대여정책 (대여기간·방식) -->
-    {#if rentalPeriods.length > 0 || rentalMethods.length > 0}
+    <!-- 대여정책 (대여방식·배송정책) -->
+    {#if rentalMethods.length > 0 || (shippingPolicy && (shippingPolicy.items.length > 0 || shippingPolicy.guide))}
       <div class="policy-section">
-        {#if rentalPeriods.length > 0}
-          <div class="policy-row">
-            <span class="policy-lbl">대여 기간</span>
-            <div class="policy-chips">
-              {#each rentalPeriods as p}
-                <button
-                  type="button"
-                  class="policy-chip"
-                  class:chip-active={selectedPeriodId === p.id}
-                  onclick={() => { selectedPeriodId = selectedPeriodId === p.id ? '' : p.id }}
-                  aria-pressed={selectedPeriodId === p.id}
-                >{p.name}</button>
-              {/each}
-            </div>
-          </div>
-        {/if}
         {#if rentalMethods.length > 0}
           <div class="policy-row">
             <span class="policy-lbl">대여 방식</span>
@@ -398,6 +382,19 @@
               {/each}
             </div>
           </div>
+        {/if}
+        {#if shippingPolicy && shippingPolicy.items.length > 0}
+          <div class="policy-row">
+            <span class="policy-lbl">배송 정책</span>
+            <div class="policy-chips">
+              {#each shippingPolicy.items as item}
+                <span class="policy-chip policy-chip--active">{item.label} <strong>{item.fee.toLocaleString('ko-KR')}원</strong></span>
+              {/each}
+            </div>
+          </div>
+        {/if}
+        {#if shippingPolicy?.guide}
+          <p class="sp-guide">{shippingPolicy.guide}</p>
         {/if}
       </div>
     {/if}
@@ -784,6 +781,21 @@
   .policy-chip.chip-active {
     background: var(--cs-purple);
     color: var(--cs-white);
+  }
+  .policy-chip--active {
+    cursor: default;
+    background: var(--cs-purple);
+    color: var(--cs-white);
+  }
+  .policy-chip--active strong {
+    font-weight: 400;
+    opacity: 0.85;
+  }
+  .sp-guide {
+    font: var(--text-m-script-12);
+    color: var(--cs-text-light);
+    padding-left: 68px;
+    line-height: 1.6;
   }
 
 </style>
