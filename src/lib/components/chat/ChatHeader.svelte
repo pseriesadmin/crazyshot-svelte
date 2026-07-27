@@ -3,12 +3,19 @@
   // Figma node: 2497:8692 (user-info)
 
   interface Props {
+    userId?: string
     userName: string
     userHandle: string
+    guestMode?: 'prompt' | 'info'
+    onGuestInfo?: () => void
     onclose?: () => void
   }
 
-  let { userName = 'CS', userHandle = '', onclose }: Props = $props()
+  let { userId = '', userName = 'CS', userHandle = '', guestMode = 'prompt', onGuestInfo, onclose }: Props = $props()
+
+  // 실 로그인 판별: userName이 '게스트'가 아닌 경우만 로그인 상태
+  // (익명 auth UUID가 userId로 들어와도 userName='게스트'면 비로그인으로 처리)
+  let isLoggedIn = $derived(!!userName && userName !== '게스트')
 
   // 이니셜 2자 추출
   let initials = $derived(
@@ -30,10 +37,33 @@
   <div class="avatar" aria-label="{userName} 아바타">
     <span class="avatar-initials">{initials}</span>
   </div>
-  <div class="user-info">
-    <p class="user-name">{displayName}</p>
-    <p class="user-handle">{userHandle}</p>
-  </div>
+
+  {#if isLoggedIn}
+    <!-- 로그인 사용자: 내정보 페이지 링크 -->
+    <a class="user-info user-info-link" href="/account" aria-label="내 정보 보기">
+      <p class="user-name">{displayName}</p>
+      <p class="user-handle">{userHandle}</p>
+    </a>
+  {:else if guestMode === 'prompt'}
+    <!-- 비로그인: 로그인 / 비회원 선택 프롬프트 -->
+    <div class="user-info guest-prompt">
+      <button
+        class="btn-login"
+        onclick={() => window.location.href = '/auth/login'}
+      >로그인</button>
+      <button
+        class="btn-guest"
+        onclick={onGuestInfo}
+      >비회원</button>
+    </div>
+  {:else}
+    <!-- 비회원 선택 후: 기존 게스트 정보 표시 (링크 없음) -->
+    <div class="user-info">
+      <p class="user-name">{displayName}</p>
+      <p class="user-handle">{userHandle}</p>
+    </div>
+  {/if}
+
   {#if onclose}
     <button class="close-btn" onclick={onclose} aria-label="채팅 닫기">✕</button>
   {/if}
@@ -78,6 +108,59 @@
     gap: 3px;
     flex: 1;
   }
+
+  /* 로그인 사용자 링크 */
+  .user-info-link {
+    text-decoration: none;
+    border-radius: var(--radius-sm);
+    transition: opacity 0.15s;
+  }
+  .user-info-link:hover {
+    opacity: 0.75;
+  }
+
+  /* 게스트 프롬프트: 로그인 / 비회원 버튼 행 */
+  .guest-prompt {
+    flex-direction: row;
+    align-items: center;
+    gap: 8px;
+  }
+
+  /* 로그인 버튼 — filled (cs-purple) */
+  .btn-login {
+    height: 36px;
+    padding: 0 18px;
+    border-radius: var(--radius-xl);
+    background: var(--cs-purple);
+    color: #fff;
+    border: none;
+    font-family: 'Noto Sans KR', sans-serif;
+    font-size: 13px;
+    font-weight: 700;
+    cursor: pointer;
+    white-space: nowrap;
+    transition: opacity 0.15s;
+  }
+  .btn-login:hover { opacity: 0.85; }
+  .btn-login:active { opacity: 0.7; }
+
+  /* 비회원 버튼 — outlined */
+  .btn-guest {
+    height: 36px;
+    padding: 0 18px;
+    border-radius: var(--radius-xl);
+    background: transparent;
+    color: var(--cs-purple);
+    border: 1.5px solid var(--cs-purple);
+    font-family: 'Noto Sans KR', sans-serif;
+    font-size: 13px;
+    font-weight: 700;
+    cursor: pointer;
+    white-space: nowrap;
+    transition: background 0.15s;
+  }
+  .btn-guest:hover { background: rgba(59, 47, 138, 0.07); }
+  .btn-guest:active { background: rgba(59, 47, 138, 0.14); }
 
   /* Noto Sans KR Black 21px — Figma 22px 대비 1pt 축소 */
   .user-name {
