@@ -1,5 +1,6 @@
 <script lang="ts">
 	import FloatingButton from '$lib/components/chat/FloatingButton.svelte'
+	import { chatStore } from '$lib/stores/chat.svelte'
 	import { page } from '$app/state'
 
 	interface Props {
@@ -29,14 +30,17 @@
 	}
 
 	$effect(() => {
-		function onScroll() { peekMode = true }
+		function onScroll() {
+			if (chatStore.isOpen) return  // 채팅 열려 있으면 peek 전환 안 함 (transform+fixed 충돌 방지)
+			peekMode = true
+		}
 		window.addEventListener('scroll', onScroll, { passive: true })
 		return () => window.removeEventListener('scroll', onScroll)
 	})
 
 	$effect(() => {
 		void page.url.pathname
-		peekMode = true
+		if (!chatStore.isOpen) peekMode = true
 	})
 </script>
 
@@ -76,8 +80,8 @@
 		</svg>
 	</button>
 
-	<!-- 채팅 FAB: peek 시 차단 → 확장 후 탭 시 바텀시트 열림 (transform 중 fixed 포지셔닝 왜곡 방지) -->
-	<div style={peekMode ? 'pointer-events:none' : ''}>
+	<!-- 채팅 FAB: peek 시 차단. 채팅 열린 동안은 pointer-events 유지 (모달 조작 가능) -->
+	<div style={(peekMode && !chatStore.isOpen) ? 'pointer-events:none' : ''}>
 		<FloatingButton
 			{userId}
 			{userName}

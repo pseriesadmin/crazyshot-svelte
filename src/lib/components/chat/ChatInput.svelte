@@ -8,9 +8,10 @@
     placeholder?: string
     onsend?: (content: string) => void
     onattach?: (file: File) => void
+    oninputstart?: () => void
   }
 
-  let { disabled = false, placeholder = '메시지를 입력하세요...', onsend, onattach }: Props = $props()
+  let { disabled = false, placeholder = '메시지를 입력하세요...', onsend, onattach, oninputstart }: Props = $props()
 
   let content = $state('')
   let textareaEl = $state<HTMLTextAreaElement | null>(null)
@@ -38,6 +39,7 @@
     textareaEl.style.height = 'auto'
     const maxH = 44 // 2행 (line-height 22px × 2)
     textareaEl.style.height = Math.min(textareaEl.scrollHeight, maxH) + 'px'
+    oninputstart?.()
   }
 
   function handleAttach() {

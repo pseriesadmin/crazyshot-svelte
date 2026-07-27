@@ -32,6 +32,11 @@
     return email[0]?.toUpperCase() ?? '?'
   })
 
+  // 익명 auth(채팅 게스트) 판별: email 없음 또는 is_anonymous=true
+  let isGuestUser = $derived(
+    !!$authState.user && (($authState.user as { is_anonymous?: boolean }).is_anonymous === true || !$authState.user.email)
+  )
+
   async function handleSignOut() {
     if (isLoggingOut) return
     isLoggingOut = true
@@ -74,7 +79,7 @@
           {item.label}
         </a>
       {/each}
-      {#if $authState.user}
+      {#if $authState.user && !isGuestUser}
         <button class="gnb-avatar-initial" onclick={() => goto('/account')} aria-label="내 계정">
           {userInitial()}
         </button>
@@ -92,7 +97,7 @@
       <img src="/logo-bi2.svg" alt="CRAZYSHOT" class="gnb-logo-img gnb-logo-mobile" width="96" height="59" />
     </a>
 
-    {#if $authState.user}
+    {#if $authState.user && !isGuestUser}
       <button class="gnb-avatar-btn gnb-avatar-btn-initial" onclick={() => goto('/account')} aria-label="내 계정">
         {userInitial()}
       </button>

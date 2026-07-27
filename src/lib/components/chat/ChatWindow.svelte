@@ -47,6 +47,10 @@
   let isSending = $state(false)
   let isUploading = $state(false)
 
+  // 게스트 헤더 모드: 입력 시작 또는 '비회원' 선택 시 'info'로 전환
+  let guestMode = $state<'prompt' | 'info'>('prompt')
+  function setGuestInfo() { guestMode = 'info' }
+
   // 세션 ID 앞 8자를 핸들로 표시 (비로그인 식별용)
   // 관리자 목록과 동일하게 user_id 앞 8자 표시
   let displayHandle = $derived(
@@ -215,7 +219,7 @@
 <!-- Figma node 2497:8691: bg #E1DEF3, border-radius 30px, flex-col -->
 <div class="chat-window">
   <!-- 헤더 -->
-  <ChatHeader {userName} userHandle={displayHandle} {onclose} />
+  <ChatHeader {userId} {userName} userHandle={displayHandle} {guestMode} onGuestInfo={setGuestInfo} {onclose} />
 
   <!-- 메시지 목록 -->
   {#if isLoading}
@@ -239,6 +243,7 @@
     placeholder={isUploading ? '업로드 중...' : isSending ? '응답 중...' : '메시지를 입력하세요...'}
     onsend={handleSend}
     onattach={handleAttach}
+    oninputstart={setGuestInfo}
   />
 </div>
 
