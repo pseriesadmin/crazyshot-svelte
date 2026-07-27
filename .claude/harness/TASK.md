@@ -406,6 +406,15 @@ plan_source: cms-ticklish-storm.md
 수정 파일:
   - src/lib/components/cms/ProductDetailPanel.svelte ← isChildProduct + 저장 차단 + 배너 + CSS
   - src/routes/cms/products/+page.server.ts ← updateSection 자식 차단 통합 블록
+  - src/routes/cms/products/+page.svelte ← 부모 상품 목록 UI 구조 개선 (대표 상품정보 등록관리 / 실 상품코드 반영 목록 섹션 분리)
+
+- [x] TASK-CMS-PARENT-RESTRUCTURE: 부모(대표) 상품 목록 UI 구조 개선 | BOUNDARY | ✅ 완료 (2026-07-27)
+  - 상세 뷰어 패널을 "대표 상품정보 등록관리"(부모, rep-section) / "실 상품코드 반영 목록"(자식, inv-accordion) 2개 섹션으로 완전 분리
+  - panelOpen 판정 기준: data.selectedId+selectedProduct 존재 → data.rootProduct 존재로 교체 (자식 선택 시에도 부모 rep-section이 항상 함께 표시되도록)
+  - +page.server.ts: rootProduct 신규 로드 로직 — 자식 선택 시 parent_product_id로 부모 정보(이름·브랜드·카테고리·이미지·가격·품번·재고 카운트) 별도 조회, 부모 선택 시 selectedProduct를 그대로 rootProduct로 사용
+  - rep-section: 미니 카드(썸네일·카테고리·재고배지·이름·브랜드·가격) + 펼침/접힘(repBodyOpen) + 부모 ProductDetailPanel 인라인 렌더
+  - inv-accordion(실 상품코드 반영 목록): 기존 아코디언 로직 그대로 유지, 섹션 타이틀만 신규 추가
+  - svelte-check: 신규 에러 0건
 
 - [x] TASK-CMS-CHILD-LOCK: 자식 상품 수정 제한 전면 적용 | BOUNDARY | ✅ 완료 (2026-07-27)
   - isChildProduct = $derived(!!product.parent_product_id) 파생값 추가
@@ -414,6 +423,55 @@ plan_source: cms-ticklish-storm.md
   - 8개 탭(history 제외) child-readonly-notice 배너 삽입 / 기존 child-image-notice 통일
   - CSS: .child-readonly-notice (lilac bg + purple 왼쪽 보더)
   - +page.server.ts: childBlockedSections 통합 블록으로 서버 사이드 차단
+
+추가 수정 (동일 세션 연속 요청, 2026-07-27):
+  - src/lib/components/cms/ProductDetailPanel.svelte ← 저장버튼 완전 숨김 전환 + 입력 포커스 가드 + 삭제 버튼 토스트 패턴 교체 + 이력 탭 업로드 버그 수정
+  - src/routes/cms/products/+page.server.ts ← deleteProduct 액션에 부모 자동 비노출 로직 추가
+
+- [x] TASK-CMS-CHILD-HIDE: 자식 상품 저장 버튼 disabled → 완전 숨김 전환 | ROUTINE | ✅ 완료 (2026-07-27)
+  - basic(기본정보+슬러그)·options·pricing·rental·content·components·specs 7개 탭 8개 저장 버튼
+  - disabled={isChildProduct || ...} → {#if !isChildProduct}...{/if} 래핑으로 버튼 자체 제거
+
+- [x] TASK-CMS-CHILD-FOCUS-GUARD: 자식 상품 입력 필드 포커스 시 즉시 차단 | ROUTINE | ✅ 완료 (2026-07-27)
+  - blockChildInputFocus(e) 함수 추가 — INPUT/TEXTAREA/SELECT/contentEditable 포커스 시 blur() + csToast.warning('대표 상품정보에서 수정하세요.')
+  - 위 7개 탭 section에 onfocusin={blockChildInputFocus} 적용
+
+- [x] TASK-DELETE-TOAST: 상품정보 삭제 버튼 모달 → 토스트 2단계 확인 패턴 교체 | BOUNDARY | ✅ 완료 (2026-07-27)
+  - 기존 showDeleteConfirm 모달 방식 제거
+  - CmsDeleteButton.svelte와 동일한 "1차 클릭 → csToast.warning('한번 더 누르면 삭제됩니다') + cancel() → 2차 클릭 → 실제 제출" 패턴 적용
+  - deletePending $state 추가, handleDeleteProduct() enhance 콜백 재작성
+  - 부모·자식 패널 공용 컴포넌트라 양쪽에 자동 적용됨
+
+- [x] TASK-CHILD-DELETE-PARENT-OFF: 자식 삭제 시 부모 재고 0개면 부모 자동 비노출 | BOUNDARY | ✅ 완료 (2026-07-27)
+  - +page.server.ts deleteProduct 액션: 삭제 대상의 parent_product_id 조회 → soft-delete 후 해당 부모의 남은 재고(deleted_at IS NULL) count 조회 → 0이면 부모 is_active=false 자동 전환
+  - 자식 삭제는 여전히 자기 자신의 행만 soft-delete (부모 정보 자체는 미변경) — 코드 검토로 확인
+
+- [x] BUG-HISTORY-UPLOAD: 자식 상품 이력 탭 이미지 추가 기능 미작동 버그 수정 | CRITICAL FIX | ✅ 완료 (2026-07-27)
+  - 증상: 자식 패널의 유일한 편집 가능 탭인 '이력'에서 이미지 추가 클릭 시 업로더가 실행되지 않음
+  - 원인: handleHistoryFileSelect()에서 input.value = '' 초기화를 Array.from(files) 변환보다 먼저 실행
+    → FileList는 input의 live 참조라 value 초기화 시 즉시 파일 목록도 함께 비워짐 → 항상 빈 배열로 처리되어 업로드 자체가 실행되지 않음
+  - 수정: Array.from(files)로 먼저 복사한 뒤 input.value 초기화 (이미지 탭 handleFileSelect와 동일 순서로 통일)
+  - 부수 수정: {#each historyRecords as rec} 언키드 → (rec.id) 키 추가 (add/delete 후 목록 재정렬 시 수정폼·업로드 인풋 바인딩 오귀속 방지)
+  - 검증: 실제 브라우저(Chrome DevTools MCP) 네이티브 파일 업로드로 재현 확인 후 수정 → 업로드→저장→목록반영→삭제 전체 라이프사이클 재검증 완료, Stephen 실측 확인 ✅
+
+- [x] TASK-CMS-CHILD-HIDE-QUICKADD: '빠른 재고 등록' 버튼 자식 상품에서 제외 | ROUTINE | ✅ 완료 (2026-07-27)
+  - 정합 원칙: 빠른 재고 등록 기능·버튼 UI는 부모(대표) ProductDetailPanel에만 존재·작동해야 함
+  - summary-bar 내 status-cta-btn을 {#if !isChildProduct}로 래핑 — 자식 패널에서 버튼 완전 숨김
+  - openCloneModal 호출부가 이 버튼 하나뿐임을 grep으로 확인 — 자식 진입 경로 없음
+
+- [x] TASK-CMS-CLOSE-BTN-MOVE: 자식 패널 '닫기' 버튼 위치를 토글 우측 끝으로 이동 | ROUTINE | ✅ 완료 (2026-07-27)
+  - ProductDetailPanel.svelte: ph-code-row 내 close-btn(✕) 제거 (품번 표시는 유지), 이제 사용되지 않는 .close-btn CSS도 함께 정리
+  - +page.svelte: inv-acc-header의 노출 토글(form) 바로 뒤에 신규 .inv-acc-close-btn 추가 (해당 아코디언 행이 펼쳐진 상태(isActive)일 때만 노출), 기존과 동일한 closePanel() 호출
+  - 기능 변경 없음 — 위치만 ProductDetailPanel 내부 → 상위 아코디언 헤더로 이동
+  - 실브라우저 클릭 검증: URL에서 ?selected= 파라미터 제거되며 패널 정상 닫힘 확인
+
+svelte-check: 신규 ERROR 0건 (기존 11 errors 그대로 — account/profile RPC 타입 무관 이슈)
+
+⚠️ TASK-CMS-PARENT-RESTRUCTURE 관련 하네스 기록 누락 원인 분석: 이 항목(부모 상품
+목록 UI 구조 개선)은 커밋 준비 단계에서 Stephen이 TASK.md에 대응 기록이 없음을
+지적해 발견됨 — 세션 시작 시 하네스 문서 점검(TASK.md/HANDOFF.md) 절차를 생략하고
+바로 코드 diff만 확인한 것이 1차 원인. 상세 원인 분석·재발 방지 원칙:
+`.claude/harness/learnings/task_md_documentation_gap_cms_products_2026-07-27.md` 참조
 
 ⏳ QA: sp3-qa-agent 검수 예정
 
@@ -1978,6 +2036,35 @@ plan_source: 세션 내 아젠다 — 전체 코드베이스 Explore 탐색 + �
 
 ---
 
+## NOW — CMS 상담채팅 대여 라이프사이클 알림 정합성 정밀 감사 (2026-07-27) ✅ 완료 (연구)
+
+plan_source: 세션 내 아젠다 (Explore 에이전트 2개 병렬 탐색)
+감사 범위: `/cms/chat` 상담세션 목록 + 상품선택~반납완료 전 구간 사용자 채팅 알림 정합성
+핵심제약: 코드 수정 없음(검증/리포트 전용) — 결제(PG)는 미구현 상태로 "예약신청→예약승인" 직행으로 간주하고 그 위에서 알림 로직만 검증
+
+결과 상세: `.claude/harness/learnings/chat_notification_lifecycle_audit_2026-07-27.md` 참조
+선행 감사: [[rental_lifecycle_audit_2026-07-26]] — 상태전이 축, 이번은 채팅 알림 축
+
+- [x] 체크아웃/예약/결제mock/승인/라이프사이클 상태머신 전체 탐색 | RESEARCH | ✅ 완료
+- [x] 채팅알림 트리거·CMS 세션목록·전자계약 알림 경로 전체 탐색 | RESEARCH | ✅ 완료
+- [x] 요청 7개 항목별 정합/격차 목록화 (CRITICAL 4건, BOUNDARY 6건, ROUTINE 4건) | RESEARCH | ✅ 완료
+- [x] 하네스 플로 시스템 반영 (TASK.md BACKLOG + learnings 신규 + GSD_LOG) | ROUTINE | ✅ 완료
+
+신규 발견 핵심 (코드 미수정, Stephen 확인 대기):
+  - 실결제(Toss) 확인 경로에서 예약승인 알림 미발송 (BL-CHAT-C1)
+  - "대여확인"(수령확인) 전용 알림 타입 부재 (BL-CHAT-C2)
+  - 계약서명 시 상태 직접 UPDATE(H-01 위반) + 알림 유실 가능 (BL-CHAT-C3)
+  - confirm-mock이 무관한 hold 예약까지 일괄 승인 (BL-CHAT-C4)
+
+✅ 정상 구현 확인 목록 (채팅 알림 축):
+  - hold/shipped/in_use/return_requested/returned AUTO_NOTIFY 자동발송 배선 정상 연결 ✅
+  - send_rental_chat_notification service_role 전용 잠금 + sender_type/action_payload 스키마 정합 ✅
+  - nextStatus()/nextLabel() 상태머신 — rental-lifecycle.md 문서와 100% 일치(재확인) ✅
+  - chat_sessions.user_id 기반 계정 연동 정상 ✅
+  - /cms/reservation ↔ /cms/rentals 목록 조회 정합 (알림 축과 별개로 문제 없음) ✅
+
+---
+
 ## BACKLOG
 
 ### 🔴 CRITICAL — 대여 라이프사이클 결함 (감사 2026-07-26)
@@ -2096,10 +2183,11 @@ plan_source: 세션 내 아젠다 — 전체 코드베이스 Explore 탐색 + �
   - `status='shipped'`에서만 `in_use` 자동 전환 — hold/confirmed 상태 서명 시 무반응
   - Stephen과 업무 흐름 재확인 후 조건 확장 여부 결정 필요
 
-- **BL-LC-R3: 상품 상세 배송 방식 하드코딩 수정** | ROUTINE
+- **BL-LC-R3: 상품 상세 배송 방식 하드코딩 수정** | ROUTINE | ✅ 완료 (2026-07-27)
   - 파일: `src/routes/products/[id]/+page.svelte`
-  - `set_reservation_shipment_method` 호출 시 `p_pickup_method: 'visit'` 하드코딩
-  - CalendarTimePicker 선택값을 RPC에 전달하는 연결 구현 필요
+  - `set_reservation_shipment_method` 호출 시 `p_pickup_method: 'visit'` 하드코딩되던 것을
+    `selectedMethod?.method_key ?? 'visit'`로 수정 — CalendarTimePicker 선택값이 RPC에 정상 전달됨
+  - 브라우저+DB 실검증: 크레이지샷배송 선택 시 pickup_method='crazydelivery' 정상 저장 확인
 
 - **BL-LC-B6: Toss 성공 페이지 redirect 경로 오류** | BOUNDARY
   - 파일: `src/routes/payment/success/+page.svelte`
@@ -2128,6 +2216,66 @@ plan_source: 세션 내 아젠다 — 전체 코드베이스 Explore 탐색 + �
   - `create_hold_reservation` (상품 상세 → 직접 사용) vs `atomic_reserve_asset` (`/api/checkout/initiate` — UI 미연결)
   - 실제 사용 경로: create_hold_reservation. atomic_reserve_asset 정리 또는 통일 필요
 
+### 🔴 CRITICAL — 채팅 알림 정합성 결함 (감사 2026-07-27)
+
+- **BL-CHAT-C1: 실결제(Toss) 확인 경로에서 예약승인 알림 미발송** | CRITICAL | S1-M3 연계
+  - `confirm_payment_and_update_reservation` RPC 및 `api/payment/confirm/+server.ts` 어디에도 `send_rental_chat_notification` 호출 없음
+  - 현재 `reservation_approval`은 CMS 수동승인 + `confirm-mock`(Mock)만 발송 — 실결제 붙으면 사용자가 승인 알림을 못 받음
+  - S1-M3 Payment Integration 구현 시 반드시 함께 처리
+
+- **BL-CHAT-C2: "대여확인"(수령확인) 전용 알림 타입 부재** | CRITICAL
+  - `in_use` 진입 시 자동 발송되는 유일한 타입은 `return_remind`("반납 예정")뿐 — 수령/대여시작 확인 카드 없음
+  - Stephen 요청 시퀀스(예약신청→승인→계약발송→**대여확인**→택배→반납요청→반납완료)의 대여확인 단계가 통째로 비어있음
+
+- **BL-CHAT-C3: 계약서명 완료 시 rental_reservations 직접 UPDATE(H-01 위반) + 알림 유실** | CRITICAL
+  - 파일: `src/routes/api/contracts/[token]/sign/+server.ts:66-69`
+  - `shipped→in_use` 상태전이를 RPC 미경유 직접 UPDATE로 처리 — H-01 원칙 위반, AUTO_NOTIFY 맵도 안 탐(정상 in_use 진입 알림 누락)
+  - 알림 대상 세션이 `status='open'`만 조회(88-95행) — pending/closed뿐이면 서명완료 알림 자체가 조용히 유실됨
+
+- **BL-CHAT-C4: confirm-mock이 무관한 hold 예약까지 일괄 승인** | CRITICAL (Mock 한정, 실결제 전환 시 재검토 필수)
+  - 파일: `src/routes/api/checkout/confirm-mock/+server.ts:15-35`
+  - 현재 카트와 무관하게 유저의 모든 hold 예약을 조회해 일괄 confirmed 전환 + 알림 발송
+
+### 🟡 BOUNDARY — 채팅 알림 정합성 결함 (감사 2026-07-27)
+
+- **BL-CHAT-B1: reservation_hold/reservation_approval 콘텐츠 CASE 미매핑** | BOUNDARY
+  - `supabase/migrations/20260727000170...sql`의 `v_content` CASE가 4종(shipment_notify/return_remind/return_registration/rental_complete)만 처리
+  - 가장 빈번한 reservation_hold/reservation_approval은 제네릭 "상품명 알림" 텍스트로 발송됨
+
+- **BL-CHAT-B2: 택배/배송 추적 알림 부재** | BOUNDARY
+  - Stephen 요청 "택배알림"에 대응하는 송장/배송상태 추적 알림 없음. `shipment_notify`는 출고 시점 1회성일 뿐
+
+- **BL-CHAT-B3: send_rental_chat_notification이 context_type 무시하고 세션 재사용** | BOUNDARY
+  - 알림 발송 시 해당 유저의 아무 open/pending 세션에나 카드 삽입(context_type 구분 없음)
+  - product_inquiry로 연 세션에 반납알림이 섞여 들어갈 수 있음 — chat.md 컨텍스트 분리 설계 위반
+
+- **BL-CHAT-B4: 계약 발송/서명 경로가 세션 재사용 정책 위반** | BOUNDARY
+  - `api/cms/contracts/[id]/send-chat`: open만 찾고 없으면 재활성화 없이 신규 세션 생성(chat.md "신규 세션 생성 금지" 위반)
+  - `api/contracts/[token]/sign`: 마찬가지로 open만 찾고 없으면 알림 유실(BL-CHAT-C3과 동일 근본원인)
+
+- **BL-CHAT-B5: 수동 알림버튼과 자동발송 알림 중복 발송 가능 (멱등성 없음)** | BOUNDARY
+  - `cms/rentals` 수동 버튼과 `cms/reservation` AUTO_NOTIFY가 동일 notify_type 독립 발송 가능, "이미 발송됨" 표시 없음
+
+- **BL-CHAT-B6: return_remind 발송 시점이 라벨과 불일치** | BOUNDARY
+  - `AUTO_NOTIFY['in_use']='return_remind'`가 대여 시작 즉시 발송 — "반납 예정 알림" 라벨과 실제 동작(반납일 임박 아님) 불일치
+  - 반납일 임박 자동 리마인드(cron)는 별도로 없음
+
+### 🟢 ROUTINE — 채팅 알림 정합성 결함 (감사 2026-07-27)
+
+- **BL-CHAT-R1: /api/chat/action-card 죽은 코드** | ROUTINE
+  - 존재하지 않는 `user_profiles.is_admin` 컬럼 참조(실제는 cms_role) — 호출부도 없음
+
+- **BL-CHAT-R2: CMS 세션목록 페이지네이션 없음 + N+1 쿼리** | ROUTINE
+  - `api/chat/sessions/+server.ts` `.limit(100)` 고정 + 세션별 마지막 메시지 개별 쿼리
+
+- **BL-CHAT-R3: AUTO_NOTIFY['confirmed'] 도달 불가능한 데드 코드** | ROUTINE
+  - `cms/reservation/+page.server.ts:129` — nextStatus()가 confirmed를 targeting하는 경로 없음(무해)
+
+- **BL-CHAT-R4: rental-lifecycle.md 문서에 AUTO_NOTIFY 자동발송 매핑 누락** | ROUTINE
+  - 문서는 수동 NOTIFY_TYPE_MAP만 기술, cms/reservation의 자동 AUTO_NOTIFY 트리거 미기재 → 갱신 필요
+
+상세 근거·표·정상구현 확인 목록: `.claude/harness/learnings/chat_notification_lifecycle_audit_2026-07-27.md`
+
 ### 🖼️ 누락 UI 화면 — BACKLOG (감사 2026-07-27)
 
 - **BL-UI-M1: QR 스캔 사용자 랜딩 페이지 없음** | BOUNDARY
@@ -2155,3 +2303,98 @@ plan_source: 세션 내 아젠다 — 전체 코드베이스 Explore 탐색 + �
 ### 기타
 - 카카오 알림톡 fallback (PRD.1.7.7)
 - 프로모션/쿠폰 비활성화 알림 (이관 후 자동 처리)
+
+---
+
+## NOW — 상품 상세 화면(/products/[id]) 심층 재검수 + 옵션·CMS 버그픽스 (2026-07-27) ✅ 완료
+
+plan_source: 세션 내 아젠다 (Stephen 순차 지시 기반 진행)
+핵심제약:
+  - 요청 범위 외 수정 없음
+  - $state(prop) 초기화 금지 원칙 준수 ($effect 재동기화 패턴 적용)
+  - DB 데이터 이동(옵션상품/대여정책 자식→부모) 전 Stephen 승인 필수 (CRITICAL — 다중 파일·DB 변경)
+
+신규/수정 파일:
+  - src/routes/products/[id]/+page.svelte ← 다수 수정 (아래 상세)
+  - src/routes/products/[id]/+page.server.ts ← parent_product_id 필터 2곳 + rental_method_options method_key 추가
+  - src/lib/components/products/CalendarTimePicker.svelte ← rentalPeriods prop 제거 + shippingPolicy prop 신규
+  - src/lib/components/cms/ProductDetailPanel.svelte ← 옵션상품/대여정책 탭 자식(재고) 저장 차단
+  - src/routes/cms/products/+page.server.ts ← updateSection 서버사이드 자식 차단 가드 추가
+
+DB 적용 (Stage: ezyvffjvuwmtuhpxdjrw, Stephen 승인 후 진행):
+  - SONY PXW-Z90(467c8f9b) 옵션상품 1건 + 대여방식 3건 — 자식(7c095ca2)→부모 UPDATE 이동, 자식 값 초기화
+
+- [x] BUG-OPT-STALE: 옵션상품 목록 SPA 네비게이션 stale 상태 버그 | CRITICAL FIX | ✅ 완료 (2026-07-27)
+  - 원인: `optionItems = $state(data.optionLinks.map(...))` — $state(prop) 초기화는 마운트 시 1회만 실행되는데,
+    상품 상세는 같은 컴포넌트가 SPA 네비게이션으로 재사용되어 이전 상품의 옵션이 그대로 잔존/미갱신
+  - 수정: buildOptionItems() 함수 추출 + `$effect(() => { optionItems = buildOptionItems(data.optionLinks) })` 재동기화
+  - 동일 원인의 `reviews` $state에도 동일 패턴 적용 (SPA 이동 시 후기 목록 상품간 혼입 방지)
+  - 브라우저 실검증: Canon RF ↔ SONY PXW-Z90 SPA 이동 시 옵션/후기 정확히 교체되는 것 확인
+
+- [x] FEAT-OPT-ACCORDION: 옵션상품 아코디언 화살표 활성/비활성 | BOUNDARY | ✅ 완료 (2026-07-27)
+  - hasOptionItems 파생값 추가 — 옵션 0건 시 화살표 비활성(aria-disabled + tabindex=-1 + opacity 0.45)
+  - 옵션 1건 이상 시 기존 펼침/닫힘 토글 유지
+
+- [x] BUG-REVIEW-TOAST: 후기등록 버튼 비로그인/미입력 무반응 버그 | BOUNDARY | ✅ 완료 (2026-07-27)
+  - 원인: `disabled={isSubmittingReview || !reviewTitle.trim() || !reviewContent.trim()}` — 조건 미충족 시
+    버튼이 네이티브 disabled로 죽어 클릭 자체가 막혀 토스트를 띄울 방법이 없었음
+  - 수정: 버튼 disabled를 isSubmittingReview만으로 축소, 클릭 시 상황별 토스트로 안내
+    (비로그인 "로그인 후 이용해주세요." / 제목 누락 "제목을 입력해주세요." / 내용 누락 "내용을 입력해주세요.")
+  - 브라우저 실검증(MutationObserver): 비로그인 클릭 시 토스트 노출 확인, 로그인 후 실제 등록 성공까지 확인
+
+- [x] FEAT-OPTION-VALIDATION: 예약신청 옵션 검증 토스트 3종 | CRITICAL | ✅ 완료 (2026-07-27)
+  - handleReserve() 진입 시 옵션 검증 순차 체크 (기존 reserveDisabled 네이티브 버튼 비활성 방식 → 전량 토스트 전환)
+    1. 필수(is_required) 옵션 qty=0 → "필수 옵션상품을 선택하세요."
+    2. min_select_required 그룹 전부 qty=0 → "최소 1개 이상의 옵션상품을 선택하세요."
+    3. delivery_rental_disabled 옵션 선택 + 배송(비-visit) 방식 선택 충돌 → "선택한 옵션상품은 배송이 불가능합니다."
+  - min_select_required 필드가 프론트에서 전혀 매핑되지 않고 있던 것 발견 → buildOptionItems()에 추가 + "최소 1개 선택" 배지 신규 추가
+  - +page.server.ts: rental_method_options select에 method_key 추가(visit 판별용) — RentalOption과 분리된 RentalMethodOption 타입 신규
+  - 브라우저 실검증: 필수 미선택 토스트 확인 / 배송충돌 토스트 확인 / 방문대여+정상입력 시 정상 통과(재고없음 메시지까지 도달) 확인
+  - ⚠️ min_select_required 단독(필수 아님) 케이스는 현재 운영 데이터상 격리 테스트 불가(유일 옵션이 필수와 중복 설정) — 로직은 동일 패턴이라 코드 검토로 확신, Stephen에 CMS 테스트 데이터 구성 필요시 안내
+
+- [x] BUG-CMS-CHILD-OPTION-RENTAL: CMS 옵션상품/대여정책 자식(재고) 저장 사고 | CRITICAL FIX | ✅ 완료 (2026-07-27)
+  - Stephen 신고: SONY PXW-Z90(cam-zo-2607) 옵션상품 전혀 반영 안 됨 + CMS 옵션상품/대여정책 미반영
+  - 원인: CMS 재고(인벤토리) 아코디언에서 개별 재고가 선택된 상태로 옵션상품/대여정책 탭 저장 시
+    product_id=자식으로 저장됨(모든 탭이 공통으로 product.id 사용) → 고객화면(부모 기준 조회)에 미반영
+  - 데이터 복구(Stephen 승인 후): SONY PXW-Z90 옵션링크 1건 + 대여방식 3건 자식→부모 UPDATE 이동, 자식 값 초기화
+  - 전체 점검(리포트만, 미수정): Manfrotto 055도 동일 패턴 발견 — 옵션 중 1건이 자기 자신을 옵션으로 참조하는
+    이상 데이터가 있어 자동이동 보류, Stephen 별도 확인 필요
+  - 재발방지: ProductDetailPanel.svelte 옵션상품/대여정책 탭 — product.parent_product_id 존재 시 저장버튼
+    비활성화 + 안내배너("상품 대표에서만 설정 가능") + saveOptions() 함수 자체 가드
+  - 서버사이드 동일 가드 추가: cms/products/+page.server.ts updateSection에서 sectionType이
+    options/rental일 때 대상 product의 parent_product_id 조회 후 존재 시 fail(400)
+
+- [x] BUG-CHILD-URL-404: 상품 상세 자식(재고) UUID/slug 직접 접근 시 부모 정보 혼입 | CRITICAL FIX | ✅ 완료 (2026-07-27)
+  - Stephen 직접 진단·지시: +page.server.ts 기본 쿼리에 parent_product_id IS NULL 필터 누락
+  - 수정 2줄: 메인 조회 쿼리 + popularProducts(많이 본 상품) 쿼리 양쪽에 .is('parent_product_id', null) 추가
+  - 효과: 자식 UUID/slug 직접 접근 → 404 정상 처리. "많이 본 상품"에 자식 재고 중복 노출되던 것도 해결
+  - 브라우저 실검증: 부모 slug 정상 노출 / 자식 slug 404 확인 / 많이 본 상품 중복 사라짐 확인
+
+- [x] FEAT-INFO-LAYOUT: 기본정보/예약영역 노출 항목 재배치 | BOUNDARY | ✅ 완료 (2026-07-27)
+  - Stephen 지시: 기본 상품 정보 영역 = 대여기간만 / 예약신청 버튼 상단 = 대여방식+배송정책만
+  - +page.svelte 상단(title-card): 대여방식·배송정책 블록 제거, 대여기간만 유지
+  - CalendarTimePicker.svelte: rentalPeriods prop 제거(대여기간 UI 삭제) + shippingPolicy prop 신규 추가(배송정책 표시)
+  - 브라우저 실검증 + Stephen 직접 확인: 대여기간 상단 노출, 대여방식+배송정책 예약영역 상단 노출 확인
+
+- [x] BUG-PICKUP-METHOD-HARDCODE: 예약 시 수령방식 무조건 'visit' 저장 | CRITICAL FIX | ✅ 완료 (2026-07-27)
+  - 세션 중 최종 재검수에서 발견 — BL-LC-R3(2026-07-26 감사)로 이미 백로그 등록돼 있던 기존 결함
+  - 원인: set_reservation_shipment_method 호출 시 p_pickup_method: 'visit' 하드코딩 — 고객이 실제
+    선택한 방식(크레이지샷배송/퀵배송 등)이 전혀 반영 안 됨
+  - 수정: `selectedMethod?.method_key ?? 'visit'` — handleReserve() 내 이미 계산된 selectedMethod 재사용
+  - 브라우저+DB 실검증: 크레이지샷배송 선택 → reservation.pickup_method='crazydelivery' 정상 저장 확인,
+    방문대여 선택 시 기존과 동일하게 'visit' 저장 확인(회귀 없음)
+  - BL-LC-R3 백로그 항목 ✅ 완료로 갱신함
+
+svelte-check: 신규 ERROR 0건 (기존 warning만, 오늘 수정 파일 관련 신규 warning 없음)
+
+sp3-qa-agent GATE C 검수 결과 (2026-07-27):
+  - 위 8개 항목(옵션 stale/아코디언/후기토스트/옵션검증3종/CMS자식차단/자식URL404/정보영역재배치/pickup_method) 전부 ✅ 결함 없음 확인
+  - $effect 재동기화 순환 재실행 위험 없음, handleReserve() 3종 토스트 로직 결함 없음, CMS 서버가드가 options/rental에만 정확히 적용됨, parent_product_id 필터가 legacy numeric id 분기와 충돌 없음 확인
+  - ⚠️ GATE E 보류 사유 2건 (Stephen 확인 요청, 아래 참조) — 둘 다 이번 세션 작업 범위 밖(src/routes/cms/products/+page.svelte 관련 별도 진행 중인 작업)에서 발견됨
+    1. ProductDetailPanel.svelte의 대표(부모) 상품 QR 조회·다운로드(ph-body/qr-wrap)가 `{#if isChildProduct}`로 감싸져 부모 선택 시 노출 안 됨
+       → Stephen 확인(2026-07-27): **의도된 설계임.** 부모는 대표 상품정보 영역일 뿐 실존 재고가 아니므로 QR 불필요.
+         실제 QR은 자식(재고) 상품 코드 발행 시점에 동시 반영되는 것이 정본 흐름. → 결함 아님, 조치 불필요.
+    2. src/routes/cms/products/+page.svelte(411줄 변경, 미커밋)가 TASK.md 어디에도 기록되어 있지 않음 — 별도 작업분으로 보이며 이번 세션 범위 아님, 해당 작업 세션에서 별도 문서화·검수 필요
+  - 미차단 참고사항: CalendarTimePicker.svelte의 reserveDisabled/selectedPeriodId prop이 이제 죽은 코드(기능 결함 아님, 정리 권장)
+
+⏳ 후속: 문제 1은 Stephen 확인 완료(의도된 설계, 조치 불필요). 문제 2는 이번 세션 범위 밖 별도 작업(cms/products/+page.svelte 관련) — 해당 작업 세션에서 별도 문서화·검수 필요. 오늘 세션 8개 항목은 GATE E 통과.

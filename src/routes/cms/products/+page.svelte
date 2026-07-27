@@ -53,7 +53,8 @@
     goto(`/cms/products?${params.toString()}`)
   }
 
-  const panelOpen = $derived(!!data.selectedId && !!data.selectedProduct)
+  const panelOpen = $derived(!!data.rootProduct)
+  let repBodyOpen = $state(true)
 
   function selectProduct(id: string) {
     const params = new URLSearchParams(window.location.search)
@@ -303,110 +304,179 @@
       {/if}
     </div>
 
-    <!-- 상세 뷰어 패널 — {#key}로 상품 전환 시 $state 완전 재초기화 -->
-    {#if panelOpen && data.selectedProduct}
+    <!-- 상세 뷰어 패널 -->
+    {#if panelOpen && data.rootProduct}
+      {@const rp = data.rootProduct}
+      {@const isRootOpen = data.selectedId === rp.id}
       <div class="detail-pane" transition:fly={{ x: 24, duration: 200 }}>
 
-        <!-- 재고 아코디언: 2개 이상일 때 각 행이 펼쳐지며 상세 패널 인라인 표시 -->
-        {#if data.inventoryList && data.inventoryList.length > 0}
-          <div class="inv-accordion">
-            {#each data.inventoryList as unit, idx (unit.id)}
-              {@const isActive = data.selectedId === unit.id}
-              <div class="inv-acc-item" class:inv-acc-item--active={isActive}>
-                <!-- 아코디언 헤더 행 -->
-                <div class="inv-acc-header">
-                  <button
-                    type="button"
-                    class="inv-acc-trigger"
-                    onclick={() => selectProduct(unit.id)}
-                    aria-expanded={isActive}
-                    aria-label="{unit.product_code ?? '—'} {isActive ? '접기' : '펼치기'}"
-                  >
-                    <span class="inv-bar-index" class:inv-bar-index--active={isActive}>{idx + 1}</span>
-                    <div class="inv-bar-left">
-                      <div class="inv-bar-code-group">
-                        <span class="inv-bar-label">품번</span>
-                        <span class="inv-bar-code" class:inv-bar-code--active={isActive}>{unit.product_code ?? '—'}</span>
-                      </div>
-                      <span class="inv-bar-name">{unit.name}</span>
-                      {#if unit.price_rules.length > 0}
-                        <div class="inv-bar-badges">
-                          {#each unit.price_rules as rule (rule.duration_type)}
-                            <span class="inv-bar-badge">
-                              {rule.duration_type === '12h' ? '12H' : rule.duration_type === '24h' ? 'Day' : '월'}
-                              {rule.price.toLocaleString()}
-                            </span>
-                          {/each}
-                        </div>
-                      {/if}
-                    </div>
-                    <!-- 펼침 화살표 -->
-                    <svg
-                      class="inv-acc-chevron"
-                      class:inv-acc-chevron--open={isActive}
-                      width="16" height="16" viewBox="0 0 16 16" fill="none"
-                      xmlns="http://www.w3.org/2000/svg"
-                    >
-                      <path d="M4 6L8 10L12 6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
-                    </svg>
-                  </button>
-                  <!-- 토글: 독립 영역 (클릭 전파 없음) -->
-                  <form method="POST" action="?/toggleStatus" use:enhance={handleToggle}>
-                    <input type="hidden" name="id" value={unit.id} />
-                    <input type="hidden" name="is_active" value={unit.is_active.toString()} />
-                    <button
-                      type="submit"
-                      class="inv-bar-toggle"
-                      class:inv-bar-toggle--on={unit.is_active}
-                      aria-label={unit.is_active ? '미노출로 전환' : '노출로 전환'}
-                    >
-                      <span class="inv-bar-thumb"></span>
-                    </button>
-                  </form>
-                </div>
-                <!-- 아코디언 바디: 선택된 항목만 펼쳐짐 -->
-                {#if isActive && data.selectedProduct}
-                  <div class="inv-acc-body" transition:slide={{ duration: 220 }}>
-                    {#key data.selectedId}
-                      <ProductDetailPanel
-                        product={data.selectedProduct}
-                        priceRules={data.selectedPriceRules}
-                        categories={data.categories}
-                        categoryLabel={CATEGORY_LABEL[data.selectedProduct.category] ?? data.selectedProduct.category}
-                        initialTab={data.initialTab}
-                        inventoryList={data.inventoryList}
-                        partnerComboItems={data.partnerComboItems}
-                        rentalPeriods={data.rentalPeriods}
-                        rentalMethods={data.rentalMethods}
-                        pickupPoints={data.pickupPoints}
-                        shippingSettings={data.shippingSettings}
-                        onclose={closePanel}
-                      />
-                    {/key}
-                  </div>
+        <!-- 섹션 1: 대표 상품정보 등록관리 -->
+        <div class="rep-section" class:rep-section--open={isRootOpen}>
+          {#if isRootOpen}
+            <button type="button" class="rep-close-btn" onclick={closePanel} aria-label="패널 닫기">✕</button>
+          {/if}
+          <button
+            type="button"
+            class="rep-header"
+            onclick={() => {
+              if (isRootOpen) { repBodyOpen = !repBodyOpen }
+              else { repBodyOpen = true; selectProduct(rp.id) }
+            }}
+            aria-expanded={isRootOpen}
+            aria-label="대표 상품정보 {isRootOpen ? '접기' : '펼치기'}"
+          >
+            <!-- 섹션 레이블 -->
+            <span class="rep-section-label">대표 상품정보 등록관리</span>
+            <!-- 미니 카드 -->
+            <div class="rep-card">
+              <div class="rep-card-thumb-wrap">
+                {#if rp.image_urls.length > 0}
+                  <img
+                    src={thumbUrl(rp.image_urls)}
+                    alt={rp.name}
+                    class="rep-card-thumb"
+                    width="48"
+                    height="48"
+                    loading="lazy"
+                  />
+                {:else}
+                  <div class="rep-card-thumb-empty" aria-label="이미지 없음">📷</div>
                 {/if}
               </div>
-            {/each}
-          </div>
-        {:else}
-          <!-- 단일 상품: 아코디언 없이 바로 상세 패널 -->
-          {#key data.selectedId}
-            <ProductDetailPanel
-              product={data.selectedProduct}
-              priceRules={data.selectedPriceRules}
-              categories={data.categories}
-              categoryLabel={CATEGORY_LABEL[data.selectedProduct.category] ?? data.selectedProduct.category}
-              initialTab={data.initialTab}
-              inventoryList={data.inventoryList}
-              partnerComboItems={data.partnerComboItems}
-              rentalPeriods={data.rentalPeriods}
-              rentalMethods={data.rentalMethods}
-              pickupPoints={data.pickupPoints}
-              shippingSettings={data.shippingSettings}
-              onclose={closePanel}
-            />
-          {/key}
-        {/if}
+              <div class="rep-card-info">
+                <div class="rep-card-top">
+                  <span class="cat-badge">{CATEGORY_LABEL[rp.category] ?? rp.category}</span>
+                  <span class="stock-badge" class:stock-zero={rp.assetCount === 0}>{rp.assetCount}(on) / {rp.assetTotal}</span>
+                </div>
+                <p class="rep-card-name">{rp.name}</p>
+                {#if rp.brand}<p class="card-brand">{rp.brand}</p>{/if}
+                <div class="rep-card-prices">
+                  <span class="price-badge">12H {formatPrice(rp.price12h)}</span>
+                  <span class="price-badge">Day {formatPrice(rp.price24h)}</span>
+                </div>
+              </div>
+              <svg class="rep-chevron" class:rep-chevron--open={isRootOpen && repBodyOpen}
+                width="16" height="16" viewBox="0 0 16 16" fill="none">
+                <path d="M4 6L8 10L12 6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+              </svg>
+            </div>
+          </button>
+          <!-- 대표 상품 패널 (부모 선택 시) -->
+          {#if isRootOpen && repBodyOpen && data.selectedProduct}
+            <div class="rep-body" transition:slide={{ duration: 220 }}>
+              {#key data.selectedId}
+                <ProductDetailPanel
+                  product={data.selectedProduct}
+                  priceRules={data.selectedPriceRules}
+                  categories={data.categories}
+                  categoryLabel={CATEGORY_LABEL[data.selectedProduct.category] ?? data.selectedProduct.category}
+                  initialTab={data.initialTab}
+                  inventoryList={data.inventoryList}
+                  partnerComboItems={data.partnerComboItems}
+                  rentalPeriods={data.rentalPeriods}
+                  rentalMethods={data.rentalMethods}
+                  pickupPoints={data.pickupPoints}
+                  shippingSettings={data.shippingSettings}
+                  onclose={closePanel}
+                />
+              {/key}
+            </div>
+          {/if}
+        </div>
+
+        <!-- 섹션 2: 실 상품코드 반영 목록 -->
+        <div class="inv-section">
+          <div class="inv-section-title">실 상품코드 반영 목록</div>
+          {#if data.inventoryList && data.inventoryList.length > 0}
+            <div class="inv-accordion">
+              {#each data.inventoryList as unit, idx (unit.id)}
+                {@const isActive = data.selectedId === unit.id}
+                <div class="inv-acc-item" class:inv-acc-item--active={isActive}>
+                  <!-- 아코디언 헤더 행 -->
+                  <div class="inv-acc-header">
+                    <button
+                      type="button"
+                      class="inv-acc-trigger"
+                      onclick={() => selectProduct(unit.id)}
+                      aria-expanded={isActive}
+                      aria-label="{unit.product_code ?? '—'} {isActive ? '접기' : '펼치기'}"
+                    >
+                      <span class="inv-bar-index" class:inv-bar-index--active={isActive}>{idx + 1}</span>
+                      <div class="inv-bar-left">
+                        <div class="inv-bar-code-group">
+                          <span class="inv-bar-label">품번</span>
+                          <span class="inv-bar-code" class:inv-bar-code--active={isActive}>{unit.product_code ?? '—'}</span>
+                        </div>
+                        <span class="inv-bar-name">{unit.name}</span>
+                        {#if unit.price_rules.length > 0}
+                          <div class="inv-bar-badges">
+                            {#each unit.price_rules as rule (rule.duration_type)}
+                              <span class="inv-bar-badge">
+                                {rule.duration_type === '12h' ? '12H' : rule.duration_type === '24h' ? 'Day' : '월'}
+                                {rule.price.toLocaleString()}
+                              </span>
+                            {/each}
+                          </div>
+                        {/if}
+                      </div>
+                      <!-- 펼침 화살표 -->
+                      <svg
+                        class="inv-acc-chevron"
+                        class:inv-acc-chevron--open={isActive}
+                        width="16" height="16" viewBox="0 0 16 16" fill="none"
+                        xmlns="http://www.w3.org/2000/svg"
+                      >
+                        <path d="M4 6L8 10L12 6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+                      </svg>
+                    </button>
+                    <!-- 토글: 독립 영역 (클릭 전파 없음) -->
+                    <form method="POST" action="?/toggleStatus" use:enhance={handleToggle}>
+                      <input type="hidden" name="id" value={unit.id} />
+                      <input type="hidden" name="is_active" value={unit.is_active.toString()} />
+                      <button
+                        type="submit"
+                        class="inv-bar-toggle"
+                        class:inv-bar-toggle--on={unit.is_active}
+                        aria-label={unit.is_active ? '미노출로 전환' : '노출로 전환'}
+                      >
+                        <span class="inv-bar-thumb"></span>
+                      </button>
+                    </form>
+                    {#if isActive}
+                      <button type="button" class="inv-acc-close-btn" onclick={closePanel} aria-label="패널 닫기">✕</button>
+                    {/if}
+                  </div>
+                  <!-- 아코디언 바디: 자식 상품 선택 시 (이력 탭만 편집 가능 — isChildProduct 자동 적용) -->
+                  {#if isActive && data.selectedProduct}
+                    <div class="inv-acc-body" transition:slide={{ duration: 220 }}>
+                      {#key data.selectedId}
+                        <ProductDetailPanel
+                          product={data.selectedProduct}
+                          priceRules={data.selectedPriceRules}
+                          categories={data.categories}
+                          categoryLabel={CATEGORY_LABEL[data.selectedProduct.category] ?? data.selectedProduct.category}
+                          initialTab={data.initialTab}
+                          inventoryList={data.inventoryList}
+                          partnerComboItems={data.partnerComboItems}
+                          rentalPeriods={data.rentalPeriods}
+                          rentalMethods={data.rentalMethods}
+                          pickupPoints={data.pickupPoints}
+                          shippingSettings={data.shippingSettings}
+                          onclose={closePanel}
+                        />
+                      {/key}
+                    </div>
+                  {/if}
+                </div>
+              {/each}
+            </div>
+          {:else}
+            <div class="inv-empty-notice">
+              재고 미등록 상태입니다. 빠른재고등록으로 실 상품코드를 추가하세요.
+            </div>
+          {/if}
+        </div>
+
       </div>
     {/if}
 
@@ -753,6 +823,135 @@
     gap: 10px;
   }
 
+  /* 대표 상품정보 섹션 */
+  .rep-section {
+    position: relative;
+    background: var(--cs-white);
+    border-radius: var(--cms-radius-md);
+    border: 1.5px solid transparent;
+    overflow: hidden;
+    transition: border-color 0.15s;
+    flex-shrink: 0;
+  }
+  .rep-close-btn {
+    position: absolute;
+    top: 10px;
+    right: 14px;
+    z-index: 2;
+    flex-shrink: 0;
+    width: 28px; height: 28px; min-height: 28px;
+    display: flex; align-items: center; justify-content: center;
+    background: transparent; border: none; border-radius: var(--radius-sm);
+    color: var(--cs-text-light); font-size: 14px; cursor: pointer;
+    transition: background 0.12s, color 0.12s;
+  }
+  .rep-close-btn:hover { background: rgba(255,53,53,0.08); color: var(--cs-red-badge); }
+  .rep-section--open {
+    border-color: var(--cs-purple);
+  }
+  .rep-header {
+    width: 100%;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    padding: 14px 16px;
+    background: transparent;
+    border: none;
+    cursor: pointer;
+    text-align: left;
+    transition: background 0.12s;
+  }
+  .rep-header:hover { background: rgba(59,47,138,0.03); }
+  .rep-section-label {
+    font: var(--text-pc-descript-10);
+    font-weight: 700;
+    color: var(--cs-purple);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+  }
+  .rep-card {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+  .rep-card-thumb-wrap {
+    flex-shrink: 0;
+    width: 48px;
+    height: 48px;
+    background: #E8E4F8;
+    border-radius: var(--cms-radius-sm);
+    overflow: hidden;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .rep-card-thumb {
+    width: 48px;
+    height: 48px;
+    object-fit: cover;
+    display: block;
+  }
+  .rep-card-thumb-empty {
+    width: 48px;
+    height: 48px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 18px;
+    color: var(--cs-text-light);
+  }
+  .rep-card-info {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+  .rep-card-top { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+  .rep-card-name {
+    font: var(--text-pc-body-14);
+    color: var(--cs-text);
+    margin: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .rep-card-prices { display: flex; align-items: center; gap: 6px; }
+  .rep-chevron {
+    color: var(--cs-text-light);
+    flex-shrink: 0;
+    transition: transform 0.22s cubic-bezier(0.4, 0, 0.2, 1), color 0.15s;
+  }
+  .rep-chevron--open {
+    transform: rotate(180deg);
+    color: var(--cs-purple);
+  }
+  .rep-body { overflow: hidden; }
+
+  /* 실 상품코드 반영 목록 섹션 */
+  .inv-section {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    flex-shrink: 0;
+  }
+  .inv-section-title {
+    padding: 0 4px;
+    font: var(--text-pc-descript-10);
+    font-weight: 700;
+    color: var(--cs-text-mid);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+  }
+  .inv-empty-notice {
+    padding: 20px 16px;
+    background: var(--cs-surface-gray);
+    border-radius: var(--cms-radius-md);
+    font: var(--text-pc-script-12);
+    color: var(--cs-text-mid);
+    text-align: center;
+  }
+
   /* 재고 아코디언 */
   .inv-accordion {
     display: flex;
@@ -886,11 +1085,23 @@
 
   /* 토글 버튼 래퍼 */
   .inv-acc-header form {
-    padding: 0 16px 0 0;
+    padding: 0 8px 0 0;
     display: flex;
     align-items: center;
     flex-shrink: 0;
   }
+
+  /* 닫기 버튼 — 토글 우측 끝 배치 (자식 상품 ProductDetailPanel에서 이동) */
+  .inv-acc-close-btn {
+    flex-shrink: 0;
+    width: 28px; height: 28px;
+    margin-right: 8px;
+    display: flex; align-items: center; justify-content: center;
+    background: transparent; border: none; border-radius: var(--radius-sm);
+    color: var(--cs-text-light); font-size: 14px; cursor: pointer; min-height: 28px;
+    transition: background 0.12s, color 0.12s;
+  }
+  .inv-acc-close-btn:hover { background: rgba(255,53,53,0.08); color: var(--cs-red-badge); }
   .inv-bar-toggle {
     position: relative;
     width: 36px;
