@@ -22,9 +22,24 @@
   $effect(() => { periods = data.periods })
 
   // ─── 대여 방식 ───
+  const METHOD_KEYS = [
+    { key: 'visit',         label: '방문',              desc: '방문, 내방' },
+    { key: 'quick',         label: '퀵서비스',           desc: '퀵서비스, 오토바이 배달' },
+    { key: 'delivery',      label: '택배/배송',           desc: '배송, 택배, 자체배송' },
+    { key: 'locker',        label: '무인보관함',           desc: '무인, 무인보관함' },
+    { key: 'crazydelivery', label: '크레이지배송(자체)', desc: '크레이지배송(자체배송)' },
+  ] as const satisfies { key: string; label: string; desc: string }[]
+
+  const METHOD_KEY_LABELS: Record<string, string> = {
+    visit: '방문', quick: '퀵', delivery: '택배', locker: '무인', crazydelivery: '크레이지배송', epost: '택배(구)',
+  }
+
   let methods = $state<RentalMethodOption[]>(data.methods)
   let methodInput = $state('')
+  let methodKey = $state('')
   let methodLoading = $state(false)
+
+  let usedMethodKeys = $derived(new Set(methods.map((m) => m.method_key).filter(Boolean)))
 
   $effect(() => { methods = data.methods })
 
@@ -211,7 +226,7 @@
       <form
         method="POST"
         action="?/addMethod"
-        class="add-form"
+        class="add-form add-form--method"
         use:enhance={({ formData }) => {
           formData.set('count', String(methods.length))
           methodLoading = true
@@ -219,6 +234,7 @@
             methodLoading = false
             if (result.type === 'success') {
               methodInput = ''
+              methodKey = ''
               csToast.success('대여 방식이 추가되었습니다.')
               await update()
             } else if (result.type === 'failure') {
@@ -227,23 +243,44 @@
           }
         }}
       >
-        <input
-          type="text"
-          name="name"
-          class="add-input"
-          placeholder="대여방식명 입력 (예: 일반 대여)"
-          maxlength="50"
-          bind:value={methodInput}
-          disabled={methodLoading}
-          aria-label="대여방식명"
-        />
-        <button
-          type="submit"
-          class="btn-add"
-          disabled={methodLoading || !methodInput.trim() || methods.length >= 10}
-        >
-          {methodLoading ? '추가 중...' : '추가'}
-        </button>
+        <!-- method_key 선택 -->
+        <div class="mk-select-row">
+          <span class="mk-select-label">방식 유형</span>
+          <div class="mk-chips">
+            {#each METHOD_KEYS as mk}
+              <button
+                type="button"
+                class="mk-chip"
+                class:mk-chip--on={methodKey === mk.key}
+                class:mk-chip--used={usedMethodKeys.has(mk.key)}
+                disabled={usedMethodKeys.has(mk.key) && methodKey !== mk.key}
+                title={usedMethodKeys.has(mk.key) ? '이미 사용 중' : mk.desc}
+                onclick={() => { methodKey = methodKey === mk.key ? '' : mk.key }}
+              >{mk.label}</button>
+            {/each}
+          </div>
+        </div>
+        <input type="hidden" name="method_key" value={methodKey} />
+
+        <div class="mk-name-row">
+          <input
+            type="text"
+            name="name"
+            class="add-input"
+            placeholder="대여방식명 입력 (예: 일반 대여)"
+            maxlength="50"
+            bind:value={methodInput}
+            disabled={methodLoading}
+            aria-label="대여방식명"
+          />
+          <button
+            type="submit"
+            class="btn-add"
+            disabled={methodLoading || !methodInput.trim() || methods.length >= 10}
+          >
+            {methodLoading ? '추가 중...' : '추가'}
+          </button>
+        </div>
       </form>
 
       {#if methods.length > 0}
@@ -256,6 +293,9 @@
           {#snippet renderItem(item: RentalMethodOption)}
             <div class="list-row">
               <span class="list-row-name">{item.name}</span>
+              {#if item.method_key}
+                <span class="mk-badge">{METHOD_KEY_LABELS[item.method_key] ?? item.method_key}</span>
+              {/if}
               <CmsDeleteButton action="?/deleteMethod" id={item.id} />
             </div>
           {/snippet}
@@ -750,6 +790,77 @@
     display: flex;
     gap: 10px;
     margin-bottom: 32px;
+  }
+
+  .add-form--method {
+    flex-direction: column;
+    gap: 12px;
+  }
+
+  .mk-select-row {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+
+  .mk-select-label {
+    font: var(--text-pc-body-14);
+    color: var(--cs-text-mid);
+    flex-shrink: 0;
+    width: 56px;
+  }
+
+  .mk-chips {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+  }
+
+  .mk-chip {
+    height: 32px;
+    padding: 0 14px;
+    border: 1.5px solid var(--cs-lilac);
+    border-radius: var(--cms-radius-xl, 30px);
+    background: var(--cs-white);
+    color: var(--cs-text-mid);
+    font: var(--text-pc-script-12);
+    font-weight: 600;
+    cursor: pointer;
+    transition: background 0.15s, color 0.15s, border-color 0.15s;
+  }
+
+  .mk-chip--on {
+    background: var(--cs-purple);
+    color: var(--cs-white);
+    border-color: var(--cs-purple);
+  }
+
+  .mk-chip--used {
+    opacity: 0.45;
+    cursor: not-allowed;
+  }
+
+  .mk-chip:not(.mk-chip--on):not(.mk-chip--used):hover {
+    border-color: var(--cs-purple);
+    color: var(--cs-purple);
+  }
+
+  .mk-name-row {
+    display: flex;
+    gap: 10px;
+  }
+
+  .mk-badge {
+    flex-shrink: 0;
+    height: 22px;
+    padding: 0 10px;
+    background: var(--cs-lilac);
+    color: var(--cs-purple);
+    border-radius: var(--cms-radius-xl, 30px);
+    font: var(--text-pc-script-12);
+    font-weight: 700;
+    display: inline-flex;
+    align-items: center;
   }
 
   .add-input {

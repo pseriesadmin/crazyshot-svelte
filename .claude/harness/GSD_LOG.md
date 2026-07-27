@@ -1,6 +1,106 @@
 # GSD_LOG.md — 크레이지샷 실행 이력
 # 형식: [YYYY-MM-DD HH:MM] 타입 | 태스크명 | 파일 | 소요 | 결과
 
+[2026-07-27] BOUNDARY FIX | 전자계약 서명 완료 알림 세션 선택 pending 우선순위 적용 | 1개 파일 수정 | ✅ DONE
+  파일: src/routes/api/contracts/[token]/sign/+server.ts
+  원인: 서명 완료 채팅 알림이 open 세션만 조회 → pending(관리자 대화 중) 세션에 알림 미전달
+  수정: send-chat API와 동일한 pending → open 2단계 우선순위 쿼리로 교체 (88-109행)
+  Vercel 배포: e428c9f stage ✅
+
+[2026-07-27] BOUNDARY FIX | CMS 상담채팅 목록카드 점멸 애니메이션 재검증 + 강화 | 1개 파일 수정 | ⚠️ Stephen 재확인 대기
+  배경: Stephen이 목록카드 점멸 애니메이션이 동작하지 않는다고 재보고
+  검증: 새 메시지 도착 시 카드에 flash 클래스가 정확한 시점에 붙었다 떨어지는지 브라우저
+    DOM 변화 감지(MutationObserver)로 직접 확인 → 클래스 부착·해제 자체는 정상 동작 확인.
+    CSS 애니메이션 설정(지속시간·반복횟수·키프레임 매칭)도 브라우저 계산 스타일로 직접 대조해
+    전부 정상 연결 확인. 코드 레벨에서는 결함을 찾지 못함.
+  조치: 원인이 "색상 대비가 옅어 놓치기 쉬움" 가능성이 높다고 판단 → 애니메이션을
+    배경색 변화 단독 → 배경색 + 좌측 강조 보더(기존 CMS "child-readonly-notice"에서
+    쓰던 것과 동일한 옅은보라 배경 + 보라 보더 조합) 2중 신호로 강화, 지속시간도
+    0.5초→0.6초(총 1.5초→1.8초)로 소폭 연장
+  파일: src/lib/components/chat/AdminChatPanel.svelte
+  svelte-check: 신규 에러 0건 (기존 11 errors 유지)
+  Stephen 실환경 재확인 요청 — 여전히 안 보이면 다른 원인(예: 다른 탭/창에 가려짐 등) 추가 확인 필요
+
+[2026-07-27] VERIFY | CMS 상담채팅 종료 탭 실시간 반영 확인 | 코드 수정 없음 | ✅ DONE (정상 확인)
+  확인 방법: 관리자 브라우저 세션 2개로 재현 — 한쪽에서 세션 종료 처리, 다른 쪽 화면을
+    새로고침 없이 관찰
+  결과: 종료 처리한 세션이 새로고침 없이 다른 관리자 화면의 "종료" 탭 최상단에 즉시 노출,
+    탭 숫자(진행중/대기/종료)도 함께 정확히 갱신됨을 확인. 기존에 이미 구현되어 있던
+    세션 상태 실시간 구독 로직이 종료 탭에도 그대로 적용되고 있어 별도 수정 불필요.
+
+[2026-07-27] BOUNDARY FIX | CMS 상담채팅 대기→진행중 자동 이동 + 카드 점멸 애니메이션 | 3개 파일 수정 | ✅ DONE (브라우저 실검증 완료)
+  요청: 대기 탭 목록도 실시간 반영되는지 확인 + 대기 탭 세션에 새 메시지(수신/발신) 발생 시
+    진행중 탭으로 자동 이동 + 목록카드에 옅은 색상 점멸 애니메이션(3회) 적용 + 진행중 탭 숫자 반영
+  해결:
+    - src/routes/api/chat/message/+server.ts: 세션이 대기/종료 상태였다면 새 메시지 도착 시
+      AI 판단과 무관하게 무조건 진행중(open)으로 전환하도록 수정. 대기 상태는 이제
+      1시간 무응답 자동전환(auto_pending_inactive_sessions) 경로로만 재진입.
+    - src/lib/components/chat/AdminChatPanel.svelte: 새 세션 등장·새 메시지 도착 시
+      해당 카드에 옅은 보라 점멸 애니메이션(0.5초 x 3회) 적용, 1.5초 후 자동 해제
+  검증 중 추가 발견·수정: 최초 구현 시 "진행중으로 이동은 되지만 바로 다음 메시지에서
+    AI가 다시 담당자연결 필요로 판단하면 즉시 대기로 되돌아가는" 충돌 확인 →
+    새 메시지 도착 시 진행중 유지가 항상 우선하도록 로직 정리해 재검증 완료
+  svelte-check: 신규 에러 0건 (기존 11 errors 유지)
+  검증: 브라우저 2개 세션으로 실제 메시지 송수신 → 대기(17→16)·진행중(5→6) 카운트 정확히 반영,
+    세션이 대기 목록에서 사라지고 진행중 목록 최상단에 새 내용으로 즉시 노출됨을 확인.
+    재전송 테스트로 진행중 유지(되돌아가지 않음)도 재확인 완료.
+
+[2026-07-27] BOUNDARY FIX | CMS 상담채팅 세션 목록 실시간 미반영 수정 | 2개 파일 수정 | ✅ DONE (브라우저 실검증 완료)
+  증상: /cms/chat 좌측 "상담 세션" 목록에서 새 메시지가 오가도 목록의 마지막 메시지 미리보기·
+    순서가 그 자리에서 갱신되지 않음. 우측 대화창(선택된 세션 내부)은 정상 실시간 반영됨.
+  원인: 세션 목록은 세션 상태 변경에는 실시간 반응하도록 연결돼 있었으나, 그 처리 로직이
+    마지막 메시지 미리보기·발신자 정보는 화면 진입 시 불러온 값 그대로 유지하도록 되어 있었음
+    (메시지가 와도 목록 카드 내용·정렬 순서는 5분 주기 자동 새로고침 전까지 갱신되지 않던 상태).
+  해결: 우측 대화창에 이미 쓰던 "새 메시지 실시간 수신" 방식을 좌측 목록에도 동일하게 연결 —
+    새 메시지가 도착하면 해당 세션 카드의 미리보기 문구를 즉시 갱신하고 목록 맨 위로 올리도록 처리.
+    - src/lib/services/chatService.ts: 전체 메시지 실시간 구독 함수 추가
+    - src/lib/stores/chat.svelte.ts: 새 메시지로 세션 미리보기 갱신 + 재정렬 함수 추가
+    - src/lib/components/chat/AdminChatPanel.svelte: 위 구독을 화면에 연결
+  svelte-check: 신규 에러 0건 (기존 11 errors 유지)
+  검증: 브라우저에서 실제 관리자 답변 전송 → 좌측 목록 카드의 미리보기 문구·시간이 새로고침 없이
+    즉시 갱신됨을 DOM 상태로 직접 확인 완료
+
+[2026-07-27] CRITICAL FIX | "대여확인" 채팅 알림 타입 신규 추가 (BL-CHAT-C2) | 신규 마이그레이션 1개 + 2개 파일 수정 | ✅ DONE (Stage+Production 적용 완료)
+  배경: 직전 감사에서 발견한 4개 CRITICAL 중 두 번째로 Stephen이 지목한 BL-CHAT-C2 처리 요청.
+    Stephen이 요청한 알림 시퀀스(예약신청→승인→계약발송→대여확인→택배→반납요청→반납완료)에서
+    "대여확인"(상품 수령·대여시작 확인) 단계에 대응하는 알림 타입이 코드에 아예 없었음 —
+    in_use 진입 시 자동 발송되는 유일한 타입은 return_remind("반납 예정")뿐이었음.
+  해결:
+    · supabase/migrations/20260727000174_174_add_rental_confirm_notify_type.sql 신규 생성
+      → send_rental_chat_notification RPC의 v_content CASE에 'rental_confirm' 분기만 추가
+        (기존 4개 분기 무변경, CREATE OR REPLACE 전체 재발행 — 기존 마이그레이션 파일 직접 수정 아님)
+      → v_card_type은 기존 ELSE p_notify_type 경로를 그대로 타서 별도 분기 불필요
+        (reservation_hold/reservation_approval과 동일한 패턴)
+    · src/routes/cms/reservation/+page.server.ts: AUTO_NOTIFY['in_use']를 'return_remind' →
+      'rental_confirm'로 교체. cms/rentals의 수동 "반납 예정 알림 💬" 버튼(NOTIFY_TYPE_MAP)은
+      그대로 return_remind를 사용하도록 미변경 — 대여시작 확인과 반납예정 리마인드를 별개 이벤트로 분리
+    · src/lib/components/chat/ActionCard.svelte: case 'rental_confirm' 추가 ("대여 정보 확인" 라벨)
+  부수 해결: BL-CHAT-B6(return_remind가 대여시작 즉시 발송되어 "반납 예정" 라벨과 실제 동작이
+    불일치하던 문제)도 AUTO_NOTIFY 교체로 함께 해소됨 — return_remind는 이제 관리자가 실제
+    반납 임박 시점에 수동으로만 보내는 용도로 의미가 정리됨. (단, 반납일 임박 자동 cron 리마인드
+    자체는 여전히 없음 — 별도 미해결 항목으로 남김)
+  DB 적용: Stage(ezyvffjvuwmtuhpxdjrw) ✅ 적용 + pg_get_functiondef로 rental_confirm 포함 검증 완료
+    Production(vnbpmvxruyciuuaermyh) ✅ Stephen 승인 후 적용 + 동일 방식 검증 완료 (2026-07-27)
+  svelte-check: 신규 에러 0건 (기존 11 errors 유지, 수정 파일 무관)
+  TASK.md BACKLOG BL-CHAT-C2/B6 항목 갱신
+
+[2026-07-27] CRITICAL FIX | 실결제(Toss) 확인 경로 예약승인 채팅 알림 누락 수정 (BL-CHAT-C1) | src/routes/api/payment/confirm/+server.ts, src/routes/payment/success/+page.server.ts | ✅ DONE
+  배경: 직전 "CMS 상담채팅 대여 라이프사이클 알림 정합성 정밀 감사"에서 발견한 4개 CRITICAL 항목 중
+    Stephen이 최우선으로 지목한 BL-CHAT-C1 처리 요청
+  원인: `confirm_payment_and_update_reservation` RPC 및 이를 호출하는 두 실결제 경로 어디에도
+    `send_rental_chat_notification` 호출이 없어, 실제 Toss 결제가 성공해도 사용자에게
+    "예약 승인" 채팅 알림이 전혀 발송되지 않는 상태였음(현재 Mock 체크아웃 경로에만 존재).
+  해결: `api/checkout/confirm-mock/+server.ts`가 이미 쓰고 있던 패턴(RPC 성공 직후
+    `send_rental_chat_notification(reservation_approval)` 호출, 알림 실패는 결제 확정 성공 여부에
+    영향 주지 않도록 await만 하고 에러 무시)을 실결제 경로 2곳에 동일하게 이식:
+    · `api/payment/confirm/+server.ts` — `confirm_payment_and_update_reservation` 성공 응답 직후 추가
+    · `payment/success/+page.server.ts` — 동일 RPC 성공 확인 직후, 예약/상품 상세 조회 이전에 추가
+  비고: 두 경로 모두 현재 체크아웃 UI가 호출하지 않는 미연결 상태(실 Toss SDK 연동은 M3 예정,
+    현재는 confirm-mock 경로만 라이브)라 즉시 사용자 영향은 없으나, S1-M3에서 실 결제를 이
+    경로들에 다시 연결하는 순간 알림 로직이 이미 준비되어 있도록 선제 수정.
+  svelte-check: 신규 에러 0건 (기존 11 errors 그대로 유지, 수정 파일 무관)
+  TASK.md BACKLOG BL-CHAT-C1 항목 완료로 갱신
+
 [2026-07-27] BOUNDARY | 예약 카트(/checkout) 체크박스 기본 체크 + 체크 해제 시 결제 확정 대상에서도 제외 | src/routes/checkout/+page.svelte, src/routes/api/checkout/confirm-mock/+server.ts | ✅ DONE
   배경: Stephen 요청 2건 (연속) — ① 상품별 선택 체크박스 기본 체크 상태 + 체크 해제 시 "약정요금" 합계에서
     제외, ② 체크 해제 시 실제 결제 확정(confirm-mock) 대상에서도 제외

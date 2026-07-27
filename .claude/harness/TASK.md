@@ -613,6 +613,12 @@ plan_source: users-stevenmac-documents-pseries-crazy-sorted-quail.md
           → 실제 대화가 있는 pending(관리자 핸드오프) 세션 대신 잘못된 세션에 contract_link 발송
   - 수정: 세션 선택 순서를 pending → open → closed 재활성화 → 신규생성으로 명시적 우선순위화
   - 검증: mublues@gmail.com — '전자계약 보기' 카드 pending 세션(실 대화)에서 정상 수신 확인 ✅
+- [x] BUG-SIGN-CHAT: sign API 서명 완료 알림 세션 선택 불일치 수정 | BOUNDARY FIX | ✅ 완료 (2026-07-27)
+  - 파일: src/routes/api/contracts/[token]/sign/+server.ts (88-109행)
+  - 원인: 서명 완료 후 관리자 채팅 알림 발송 시 open 세션만 조회 → pending(관리자 대화 중) 세션이
+          있을 때 '서명 완료' 카드가 해당 세션에 전달되지 않던 버그 (BUG-SEND-CHAT와 동일 계열)
+  - 수정: BUG-SEND-CHAT 수정 패턴과 동일하게 pending → open 2단계 우선순위 쿼리로 교체
+  - 검증: Vercel 배포 완료 (e428c9f) ✅ — 수동 서명 테스트는 Stephen 확인 권장
 - [ ] I-1: 계약서 없는 상태 관리자 조작 UI (계약서 연결/PDF 업로드) | CRITICAL | ⏳ 대기
 
 - [x] TASK-H: 예약 카트 더미상품 노출 + 합계금액 계산 오류 근본 수정 | CRITICAL | ✅ 완료 (2026-07-27)
@@ -2138,6 +2144,40 @@ plan_source: 세션 내 아젠다 (Explore 에이전트 2개 병렬 탐색)
 
 ---
 
+## NOW — CMS 상담채팅 알림·실시간 반영 개선 구현 (2026-07-27) ✅ 완료
+
+plan_source: 세션 내 아젠다 (위 정밀 감사 결과를 바탕으로 Stephen이 순차 지시)
+범위: 위 감사에서 발견한 CRITICAL 항목 중 채팅 관련 2건 처리 + `/cms/chat` 상담세션 목록 실시간 반영 전면 점검
+
+- [x] BL-CHAT-C1: 실결제(Toss) 확인 경로 예약승인 알림 누락 수정 | CRITICAL | ✅ 완료
+  - `src/routes/api/payment/confirm/+server.ts`, `src/routes/payment/success/+page.server.ts`에
+    `send_rental_chat_notification(reservation_approval)` 호출 추가(confirm-mock과 동일 패턴)
+  - 비고: 두 경로 모두 현재 체크아웃 UI에서 호출되지 않는 미연결 상태 — S1-M3 실결제 연동 시 대비한 선제 수정
+- [x] BL-CHAT-C2: "대여확인" 전용 알림 타입 신규 추가 | CRITICAL | ✅ 완료 (Stage+Production 적용)
+  - 신규 마이그레이션(`send_rental_chat_notification`에 `rental_confirm` 분기 추가)
+  - `cms/reservation/+page.server.ts`의 자동발송 매핑에서 in_use 진입 시 `return_remind` → `rental_confirm`으로 교체
+  - 부수 해결: BL-CHAT-B6(반납예정 알림이 대여시작 즉시 발송되던 라벨 불일치) 함께 해소
+- [x] 상담세션 목록 실시간 미반영 수정 | BOUNDARY | ✅ 완료
+  - 좌측 세션 목록의 마지막 메시지 미리보기·정렬이 새 메시지 도착 시 갱신되지 않던 문제 수정
+  - 전체 메시지 Realtime 구독 신규 추가 → 도착 즉시 미리보기 갱신 + 최신순 재정렬
+  - 파일: `chatService.ts`, `chat.svelte.ts`, `AdminChatPanel.svelte`
+- [x] 대기 탭 세션 새 활동 시 진행중 자동 이동 | BOUNDARY | ✅ 완료
+  - 새 메시지 도착 시 AI 판단과 무관하게 대기/종료 세션을 무조건 진행중으로 승격
+  - 검증 중 "진행중 승격 직후 다음 메시지에서 다시 대기로 되돌아가는" 충돌 추가 발견·수정
+  - 대기 상태는 이제 1시간 무응답 자동전환(auto_pending_inactive_sessions) 경로로만 재진입
+  - 파일: `src/routes/api/chat/message/+server.ts`
+- [x] 목록카드 점멸 애니메이션(신규 채팅·새 대화 시 3회) | BOUNDARY | ✅ 완료 (강화 1회 포함)
+  - 최초 구현: 옅은보라 배경 점멸(0.5초×3)
+  - Stephen 재보고("미작동") → MutationObserver·computed style로 트리거·CSS 연결 자체는 정상 확인
+  - 노출성 강화: 배경색 + 좌측 강조 보더(기존 child-readonly-notice 패턴 재사용) 2중 신호로 변경, 0.6초×3으로 연장
+  - Stephen 재확인 대기 중
+- [x] 종료 탭 실시간 반영 확인 | VERIFY | ✅ 완료 (정상, 코드 수정 없음)
+  - 관리자 브라우저 2개로 교차 검증 — 기존 세션 상태 구독 로직이 종료 탭에도 정상 적용됨을 확인
+
+결과 상세: `.claude/harness/GSD_LOG.md` 2026-07-27 이후 항목 참조
+
+---
+
 ## BACKLOG
 
 ### 🔴 CRITICAL — 대여 라이프사이클 결함 (감사 2026-07-26)
@@ -2291,14 +2331,29 @@ plan_source: 세션 내 아젠다 (Explore 에이전트 2개 병렬 탐색)
 
 ### 🔴 CRITICAL — 채팅 알림 정합성 결함 (감사 2026-07-27)
 
-- **BL-CHAT-C1: 실결제(Toss) 확인 경로에서 예약승인 알림 미발송** | CRITICAL | S1-M3 연계
-  - `confirm_payment_and_update_reservation` RPC 및 `api/payment/confirm/+server.ts` 어디에도 `send_rental_chat_notification` 호출 없음
-  - 현재 `reservation_approval`은 CMS 수동승인 + `confirm-mock`(Mock)만 발송 — 실결제 붙으면 사용자가 승인 알림을 못 받음
-  - S1-M3 Payment Integration 구현 시 반드시 함께 처리
+- **BL-CHAT-C1: 실결제(Toss) 확인 경로에서 예약승인 알림 미발송** | CRITICAL | ✅ 완료 (2026-07-27)
+  - 원인: `confirm_payment_and_update_reservation` RPC 및 호출부 어디에도 `send_rental_chat_notification` 호출 없음
+    → `reservation_approval`은 CMS 수동승인 + `confirm-mock`(Mock)만 발송 — 실결제 붙으면 사용자가 승인 알림을 못 받는 상태였음
+  - 해결: 실결제 확인 경로 2곳에 `confirm-mock`과 동일 패턴으로 `send_rental_chat_notification(reservation_approval)` 추가
+    - `src/routes/api/payment/confirm/+server.ts`: RPC 성공 응답(`data.success`) 직후, 최종 `return json(...)` 이전에 추가
+    - `src/routes/payment/success/+page.server.ts`: RPC 성공 확인(`result.success`) 직후, 예약/상품 조회 이전에 추가
+  - 두 경로 모두 알림 실패가 결제 확정 자체를 막지 않도록 `await`만 하고 에러는 무시(confirm-mock과 동일 설계)
+  - 참고: 두 경로 모두 현재 UI에서 체크아웃 CTA가 호출하지 않는 미연결(dead) 코드 상태(BL-LC-R1/BL-CHAT-C4 관련) —
+    S1-M3에서 실제 Toss 연동을 이 경로들에 다시 붙일 때 이 알림 로직이 이미 포함되어 있음
+  - svelte-check: 신규 에러 0건 (기존 11 errors 그대로 유지, 수정 파일 무관)
 
-- **BL-CHAT-C2: "대여확인"(수령확인) 전용 알림 타입 부재** | CRITICAL
-  - `in_use` 진입 시 자동 발송되는 유일한 타입은 `return_remind`("반납 예정")뿐 — 수령/대여시작 확인 카드 없음
-  - Stephen 요청 시퀀스(예약신청→승인→계약발송→**대여확인**→택배→반납요청→반납완료)의 대여확인 단계가 통째로 비어있음
+- **BL-CHAT-C2: "대여확인"(수령확인) 전용 알림 타입 부재** | CRITICAL | ✅ 완료 (2026-07-27, Stage+Production 적용)
+  - 원인: `in_use` 진입 시 자동 발송되는 유일한 타입이 `return_remind`("반납 예정")뿐 — 수령/대여시작 확인 카드 없음
+  - 해결: 신규 notify_type `rental_confirm` 추가 (기존 4종 분기 무변경, `rental_confirm` 분기만 추가)
+    - `supabase/migrations/20260727000174_174_add_rental_confirm_notify_type.sql` 신규 생성
+    - `src/routes/cms/reservation/+page.server.ts`: `AUTO_NOTIFY['in_use']` = `'return_remind'` → `'rental_confirm'` 교체
+      (return_remind는 `cms/rentals`의 수동 "반납 예정 알림 💬" 버튼용으로 그대로 유지 — NOTIFY_TYPE_MAP 미변경)
+    - `src/lib/components/chat/ActionCard.svelte`: `case 'rental_confirm'` 추가 ("대여 정보 확인" 라벨)
+  - DB 적용: Stage(ezyvffjvuwmtuhpxdjrw) ✅ 적용+검증 완료 / Production(vnbpmvxruyciuuaermyh) ✅ Stephen 승인 후 적용+검증 완료 (2026-07-27)
+  - svelte-check: 신규 에러 0건 (기존 11 errors 유지)
+  - 부수 효과: BL-CHAT-B6("return_remind가 대여시작 즉시 발송되어 라벨과 불일치")도 자동 해소됨
+    — in_use 자동발송이 이제 의미가 맞는 rental_confirm으로 발송되고, return_remind는 관리자가
+    실제 반납 임박 시점에 수동으로만 보내는 용도로 정리됨
 
 - **BL-CHAT-C3: 계약서명 완료 시 rental_reservations 직접 UPDATE(H-01 위반) + 알림 유실** | CRITICAL
   - 파일: `src/routes/api/contracts/[token]/sign/+server.ts:66-69`
@@ -2329,9 +2384,11 @@ plan_source: 세션 내 아젠다 (Explore 에이전트 2개 병렬 탐색)
 - **BL-CHAT-B5: 수동 알림버튼과 자동발송 알림 중복 발송 가능 (멱등성 없음)** | BOUNDARY
   - `cms/rentals` 수동 버튼과 `cms/reservation` AUTO_NOTIFY가 동일 notify_type 독립 발송 가능, "이미 발송됨" 표시 없음
 
-- **BL-CHAT-B6: return_remind 발송 시점이 라벨과 불일치** | BOUNDARY
-  - `AUTO_NOTIFY['in_use']='return_remind'`가 대여 시작 즉시 발송 — "반납 예정 알림" 라벨과 실제 동작(반납일 임박 아님) 불일치
-  - 반납일 임박 자동 리마인드(cron)는 별도로 없음
+- **BL-CHAT-B6: return_remind 발송 시점이 라벨과 불일치** | BOUNDARY | ✅ 절반 완료 (2026-07-27, BL-CHAT-C2 부수 해결)
+  - 원인: `AUTO_NOTIFY['in_use']='return_remind'`가 대여 시작 즉시 발송 — "반납 예정 알림" 라벨과 실제 동작(반납일 임박 아님) 불일치
+  - 해결: BL-CHAT-C2 처리로 `AUTO_NOTIFY['in_use']`가 `rental_confirm`으로 교체되며 자동으로 해소
+    — return_remind는 이제 `cms/rentals` 관리자가 실제 반납 임박 시점에 수동 발송하는 용도로만 사용됨
+  - 잔여: 반납일 임박 자동 리마인드(cron 기반 스케줄 발송)는 여전히 없음 — 별도 기능 구현 필요(범위 외, 미해결)
 
 ### 🟢 ROUTINE — 채팅 알림 정합성 결함 (감사 2026-07-27)
 
@@ -2471,3 +2528,165 @@ sp3-qa-agent GATE C 검수 결과 (2026-07-27):
   - 미차단 참고사항: CalendarTimePicker.svelte의 reserveDisabled/selectedPeriodId prop이 이제 죽은 코드(기능 결함 아님, 정리 권장)
 
 ⏳ 후속: 문제 1은 Stephen 확인 완료(의도된 설계, 조치 불필요). 문제 2는 이번 세션 범위 밖 별도 작업(cms/products/+page.svelte 관련) — 해당 작업 세션에서 별도 문서화·검수 필요. 오늘 세션 8개 항목은 GATE E 통과.
+
+---
+
+## NOW — 채팅 모달·GNB 게스트 UX 개선 (2026-07-27 연속 세션)
+
+plan_source: 세션 내 아젠다 (Stephen 순차 지시 기반 진행)
+핵심제약:
+  - 요청 범위 외 수정 없음
+  - Svelte 5 Runes 패턴 준수 ($state, $derived, $effect)
+  - pointer-events 캐스케이드 · transform+fixed 충돌 원칙 준수 (core-rules.md 등록 패턴)
+
+신규/수정 파일:
+  - src/lib/components/common/FloatingBar.svelte ← 채팅 모달 동결 버그 수정
+  - src/lib/components/chat/ChatHeader.svelte ← /account 링크 + 게스트 프롬프트 UI + guestMode prop화
+  - src/lib/components/chat/ChatWindow.svelte ← guestMode 상태 소유 + setGuestInfo 콜백 + oninputstart 전달
+  - src/lib/components/chat/ChatInput.svelte ← oninputstart prop 추가
+  - src/lib/components/common/GNB.svelte ← isGuestUser 파생값 + 아바타/로그인버튼 분기
+
+- [x] BUG-CHAT-FROZEN: 채팅 모달 클릭·스크롤·입력 완전 동결 | CRITICAL FIX | ✅ 완료 (2026-07-27)
+  - 원인: `.fab-bar.peek { transform: translateX(calc(50%+15px)) }` → 이 조상에 transform이 적용되어
+    내부 `position:fixed` 자식(ChatBottomSheet backdrop/bottom-sheet)의 stacking context가 뷰포트 기준에서
+    `.fab-bar` 기준으로 전환. 또한 임의 스크롤 시 `peekMode=true` → 래퍼에 `pointer-events:none` 캐스케이드
+    → 모달 전체 클릭·스크롤 불가
+  - 수정:
+    1. FloatingBar 스크롤 핸들러 — `chatStore.isOpen` 일 때 peekMode 전환 건너뜀
+    2. 라우트 변경 $effect — `chatStore.isOpen` 일 때 peekMode 전환 건너뜀
+    3. FloatingButton 래퍼 div — `(peekMode && !chatStore.isOpen)` 시에만 `pointer-events:none` 적용
+
+- [x] FEAT-CHAT-ACCOUNT-LINK: 채팅 헤더 내정보 링크 (로그인 사용자 전용) | BOUNDARY | ✅ 완료 (2026-07-27)
+  - 로그인 사용자(userName !== '게스트'): user-info 영역을 `<a href="/account">` 링크로 전환
+  - 비로그인/게스트: 기존 비링크 상태 유지
+  - `isLoggedIn = $derived(!!userName && userName !== '게스트')` — 익명 auth UUID가 userId로 들어와도
+    userName='게스트'이면 비로그인 처리 (userId 검사 대신 userName 검사가 안전)
+
+- [x] FEAT-CHAT-GUEST-PROMPT: 채팅 헤더 게스트 로그인/비회원 선택 UI | BOUNDARY | ✅ 완료 (2026-07-27)
+  - 비로그인 초기 상태: 로그인(filled cs-purple, radius-xl, h36) + 비회원(outlined) 버튼 나란히 표시
+  - 로그인 선택 → `/auth/login` 랜딩
+  - 비회원 선택 → 기존 게스트 이름·임시코드 표시 (링크 없음, guestMode='info')
+  - guestMode 상태를 ChatWindow로 끌어올려 ChatInput(형제 컴포넌트)에서도 동일 전환 가능하게 함
+
+- [x] FEAT-CHAT-INPUT-AUTOSWITCH: 입력 시 비회원 자동 전환 | BOUNDARY | ✅ 완료 (2026-07-27)
+  - ChatInput에 `oninputstart?: () => void` prop 추가
+  - `handleInput()` 내에서 `oninputstart?.()` 호출 → ChatWindow의 `setGuestInfo()`가 실행돼 guestMode='info' 전환
+  - 로그인 / 비회원 선택 없이 바로 타이핑 시 비회원 선택과 동일한 UI로 자동 전환
+
+- [x] BUG-GNB-GUEST-AVATAR: 익명 auth 게스트 전환 후 GNB 아바타 노출 | BOUNDARY FIX | ✅ 완료 (2026-07-27)
+  - 원인: `supabase.auth.signInAnonymously()` → 실 UUID auth 세션 생성 → `$authState.user !== null`
+    → GNB 아바타(?) 버튼 노출 + /account 링크 → 원치 않는 게스트 아바타 UI + 404 위험
+  - 수정: `isGuestUser = $derived(!!$authState.user && (is_anonymous===true || !user.email))`
+    파생값으로 익명 사용자 판별 → 데스크탑·모바일 GNB 모두:
+      · 실 로그인(`$authState.user && !isGuestUser`): 이니셜 아바타 → /account
+      · 익명 or 비로그인(`else`): Sign In 버튼 유지 (기존 로그인 버튼 보호)
+
+- [x] BUG-CHAT-LOGIN-404: 채팅 헤더 로그인 버튼 404 오류 | ROUTINE FIX | ✅ 완료 (2026-07-27)
+  - 원인: `window.location.href = '/login'` (잘못된 경로)
+  - 수정: `/auth/login` 으로 정정
+
+⏳ QA: sp3-qa-agent 검수 예정
+
+---
+
+## NOW — Production 옵션상품 노출 오류 점검 + 전수 데이터 정리 (2026-07-27) ✅ 완료
+
+plan_source: 세션 내 아젠다 (Stephen 신고 기반)
+핵심제약:
+  - Production DB(vnbpmvxruyciuuaermyh) 직접 조회 — 데이터 변경 전 Stephen 승인 필수
+  - 코드 수정 없음 — 이번 항목은 순수 데이터 진단·정리 작업 (당일 앞선 세션에서 이미 배포한
+    CMS 자식상품 저장 차단 가드가 재발 방지 역할)
+
+신고 내용:
+  - 사용자 화면: https://crazyshot-svelte.vercel.app/products/panasonic-lumix-gh5-2607 — 옵션상품 미노출
+  - CMS 확인 링크: https://crazyshot-svelte.vercel.app/cms/products?selected=48729961-fc70-4346-bbf6-a348572a0117 (자식/재고 id)
+
+- [x] DIAG-OPT-MISSING: 옵션상품 미노출 원인 분석 — DB 마이그레이션 문제 여부 확인 | CRITICAL | ✅ 완료 (2026-07-27)
+  - `get_product_option_links` RPC / `product_option_links` 테이블 / `min_select_required` 컬럼 — Production에
+    전부 정상 존재·정상 동작 확인 (RPC 직접 호출로 검증) → **마이그레이션 누락 아님**
+  - 실제 원인: 기존에 발견·수정한 것과 동일한 CMS UX 함정 — 재고(자식) 상품이 선택된 상태로 옵션상품을
+    저장하면 `product_id`가 대표(부모)가 아닌 자식으로 저장되어 고객 화면(부모 기준 조회)에 미반영
+  - PANASONIC LUMIX GH5(부모 8a577ba1 / 자식 48729961) 확인: 자식에 옵션 2건 저장돼 있었으나, 조사 시점엔
+    부모 쪽에도 이미 유효한 옵션 2건이 존재(2026-07-27 07:57 생성 — 당일 앞선 세션에서 배포된 자식상품
+    저장 차단 가드 이후 Stephen이 부모 기준으로 재설정한 것으로 추정) → 라이브 화면 정상 노출 재확인 완료
+
+- [x] AUDIT-OPT-FULL: Production 전체 상품 옵션상품 노출 상태 전수 점검 | CRITICAL | ✅ 완료 (2026-07-27)
+  - 부모 상품 41건 전수 조회 — 옵션상품이 설정된 상품은 3건뿐 (나머지는 미설정 상태이며 오류 아님)
+    · PANASONIC LUMIX GH5 — 2건
+    · SONY UWP-D21 — 2건 (동일 자식↔부모 오배치 패턴 추가 발견)
+    · Sony NP-F770 — 1건
+  - 위 3건 전부 브라우저로 라이브 화면 직접 로드해 정상 노출 확인 완료
+  - 자식(재고)에 옵션링크가 남아있는 경우 전수 스캔 — 정리 전 2건(GH5·UWP-D21) 발견, 정리 후 재스캔 0건 확인
+  - 옵션이 가리키는 option_product_id가 삭제·존재하지 않는 dangling reference 전수 스캔 — 0건 (RPC가 조용히
+    누락시키는 항목 없음 확인)
+  - 결론: 점검 시점 기준 Production 전체에 옵션상품 노출 관련 결함 0건
+
+- [x] DATA-CLEANUP-ORPHAN-OPTIONS: 자식(재고)에 남은 오배치 옵션 데이터 정리 | BOUNDARY | ✅ 완료 (2026-07-27, Stephen 승인)
+  - Stephen 확인: "네, 삭제해주세요" — soft-delete(`deleted_at = now()`) 처리
+  - 대상 4건:
+    · 자식 `48729961-fc70-4346-bbf6-a348572a0117`(GH5) → option_product_id `9fb5cb80...`(Panasonic DMW-XLR1),
+      `8a577ba1...`(부모 자기 자신을 옵션으로 참조하던 이상 데이터)
+    · 자식 `221edf93-7bda-4710-bae9-0e6774a81acc`(UWP-D21) → option_product_id `ed39edc1...`, `88cf7430...`
+  - 부모 옵션 데이터·고객 화면에는 영향 없음(자식 데이터는 애초에 비노출 상태였음) — 정리 후 라이브 화면
+    재확인 불필요(변경 전부터 부모 기준으로 정상 노출 중이었음)
+
+관련 파일: 없음 (코드 변경 없음, DB 데이터 조회·정리만 수행)
+
+⏳ QA: sp3-qa-agent 검수 예정
+
+---
+
+## NOW — 예약신청 배송충돌 토스트 오탐 버그 수정 (2026-07-27) ✅ 완료
+
+plan_source: 세션 내 아젠다 (Stephen 신고 기반)
+핵심제약:
+  - Production DB 데이터 직접 수정 금지 (Stephen이 직접 처리 예정 — 매핑만 문서화)
+  - 코드 수정은 안전한 기본값(양성 오판 방지) 원칙으로 진행
+
+신고 내용: 상품상세 화면에서 "배송대여 불가" 옵션 선택 → "방문" 선택 → 예약신청 실행 시
+  "선택한 옵션상품은 배송이 불가능합니다." 경고 토스트가 여전히 잘못 노출됨
+
+수정 파일:
+  - src/routes/products/[id]/+page.svelte ← handleReserve() 배송충돌 판정 로직 수정
+
+- [x] BUG-DELIVERY-TOAST-FALSEPOSITIVE: 방문 선택 시에도 배송충돌 경고 오탐 | CRITICAL FIX | ✅ 완료 (2026-07-27)
+  - 원인: `isDeliveryMethod = !!selectedMethod && selectedMethod.method_key !== 'visit'` — "배송 아님(visit)"만
+    제외하고 나머지는 전부 배송으로 간주하는 음성 배제 방식이었는데, Production DB `rental_method_options`의
+    "방문"(f1947845...) 행이 `method_key = null`로 미설정 상태 → `null !== 'visit'` → true로 오판정되어
+    방문 선택임에도 배송충돌 경고가 발동함
+  - Stage DB는 전부 method_key 정상 세팅(visit/crazydelivery/quick/locker/epost) → 이 버그가 안 보였던 이유
+  - Production DB 확인 결과: 7개 수령방식 중 `무인보관함`(locker)·`택배`(epost) 2개만 method_key 설정,
+    `크레이지배송(택배)`·`방문`·`방문(무인보관함)`·`퀵서비스`·`크레이지배송(자체배송)` 5개는 전부 null
+  - 수정: 판정 방식을 양성 확인(positive match)으로 전환 —
+    `DELIVERY_METHOD_KEYS = {crazydelivery, quick, locker, epost}`에 속할 때만 배송으로 간주,
+    method_key가 null/미지값이면 배송 아님으로 안전하게 처리(오탐 방지 우선)
+  - 부수 효과 확인: 이 수정으로 `method_key`가 null인 방식(방문·퀵서비스·크레이지배송 등) 선택 시
+    배송충돌 검증 자체가 발동하지 않게 됨(안전한 방향의 공백) — Production method_key 백필 전까지는
+    실제 배송+배송불가옵션 조합에 대한 진짜 충돌 경고도 발동하지 않는 상태
+  - 동일 원인으로 이전 세션에서 고친 `p_pickup_method: selectedMethod?.method_key ?? 'visit'`도
+    method_key가 null인 방식 선택 시 전부 'visit'로 저장되는 동일한 잠재 문제 있음 — 코드 추가 수정 없이
+    Production 데이터 백필로 해결 예정(아래 참조)
+
+⚠️ Stephen 직접 처리 예정 — Production `rental_method_options.method_key` 백필 매핑 (본인 확인·직접 진행 희망):
+  - 방문(f1947845-c42c-41dc-a3a2-97985289e2d9) → 'visit'
+  - 퀵서비스(364a30d9-cac9-4715-ab57-31368ad212a7) → 'quick'
+  - 크레이지배송(택배)(4e23b9ba-8c8a-4a3d-8d36-bcd17bf144fd) → 'crazydelivery'
+  - 크레이지배송(자체배송)(ec4cf0be-da5f-4990-842f-7a157cc076df) → 'crazydelivery' (Stephen 확인: 둘 다 동일 처리)
+  - 방문(무인보관함)(f00c8c04-fca6-4c10-9034-21cb8a301a72) → 'locker' (Stephen 확인: 무인보관함 계열로 처리)
+  - 백필 완료 시 별도 코드 수정 없이 배송충돌 검증·pickup_method 저장 양쪽 다 자동으로 정상 작동
+
+- [x] VERIFY-RENAME-SAFETY: 설정(/cms/set/rental) 대여방식 명칭 수정 시 판정 로직 영향 재검증 | ROUTINE | ✅ 완료 (2026-07-27, 코드 변경 없음)
+  - Stephen 우려: 상품별 대여방식 노출은 /cms/set/rental '대여방식 옵션' 목록을 참조하는 방식인데,
+    이 목록에서 명칭을 수정하면 방금 고친 배송충돌 판정 로직이 재작동 문제를 일으키지 않는지 확인 요청
+  - 검증 결과: 문제 없음 (영향 없음 확정)
+    1. 판정 로직(+page.svelte handleReserve)은 `id`로 찾은 뒤 `.method_key`만 비교 — `name` 미참조
+    2. 상품별 노출(`allowed_method_ids`)도 `id` 참조 방식이라 이름이 바뀌어도 연결 안 끊김
+    3. DB `upsert_rental_method_option(p_id, p_name, p_display_order)` RPC 정의 직접 확인 —
+       업데이트 시에도 `SET name = p_name, display_order = p_display_order`만 실행, method_key는
+       이 RPC 어디에도 없어 물리적으로 변경 불가능한 구조
+    4. 참고로 확인된 사실: `/cms/set/rental` 화면에는 대여방식 명칭 수정 기능 자체가 현재 없음
+       (추가/삭제/순서변경만 존재, 목록 항목은 읽기전용 텍스트) — 향후 추가되어도 위 구조상 안전
+
+svelte-check: 신규 ERROR 0건
+
+⏳ QA: sp3-qa-agent 검수 예정
