@@ -1,13 +1,11 @@
 <script lang="ts">
-  import { onMount } from 'svelte';
-  import { goto } from '$app/navigation';
+  import { onMount, untrack } from 'svelte';
+  import { goto, invalidateAll } from '$app/navigation';
   import { slide } from 'svelte/transition';
   import type { PageData } from './$types';
-  import type { Product } from '$lib/types/database';
   import SubGnb from '$lib/components/common/SubGnb.svelte';
   import BottomTabBar from '$lib/components/common/BottomTabBar.svelte';
   import CalendarGrid from '$lib/components/common/CalendarGrid.svelte';
-  import { sampleSubItems, priceConfig } from '$lib/fixtures/cartFixtures';
   import { supabase } from '$lib/services/supabase';
   import { csToast } from '$lib/utils/toast';
 
@@ -50,7 +48,7 @@
     memberCheck2: boolean;
   }
 
-  function defaultOptions(_type: 1 | 2): CardOptions {
+  function defaultOptions(): CardOptions {
     return {
       rentalMethod: 'crazydelivery', returnMethod: 'crazydelivery',
       copyToReturn: false, couponWelcome: false, couponMembership: false
@@ -61,25 +59,63 @@
     return { name: '', email: '', phone: '', authCode: '', addr: '', addrDetail: '', notes: '', memberCheck: false, memberCheck2: false };
   }
 
-  // ── Card 1 state
-  let c1Checked = $state(false);
-  let c1Deleted = $state(false);
-  let c1Qty = $state(1);
-  let c1Acc = $state<CardAccordion>({ rental: false, return_: false, fee: false });
-  let c1DurType = $state<DurationType>('24h');
-  let c1Opts = $state<CardOptions>(defaultOptions(1));
-  let c1RentalForm = $state<FormState>(defaultForm());
-  let c1ReturnForm = $state<FormState>(defaultForm());
+  // ── 카트 라인아이템 UI 상태 (무제한 — 카드1/카드2 고정 구조 폐기 2026-07-27)
+  interface CartItemUiState {
+    id: string;   // reservationId (rental_reservations.id)
+    checked: boolean;
+    deleted: boolean;
+    qty: number;
+    acc: CardAccordion;
+    durType: DurationType;
+    opts: CardOptions;
+    rentalForm: FormState;
+    returnForm: FormState;
+    rentalDate: string;
+    rentalTime: string;
+    returnDate: string;
+    returnTime: string;
+  }
 
-  // ── Card 2 state
-  let c2Checked = $state(false);
-  let c2Deleted = $state(false);
-  let c2Qtys = $state([1, 1, 1]);
-  let c2Acc = $state<CardAccordion>({ rental: false, return_: false, fee: false });
-  let c2DurType = $state<DurationType>('24h');
-  let c2Opts = $state<CardOptions>(defaultOptions(2));
-  let c2RentalForm = $state<FormState>(defaultForm());
-  let c2ReturnForm = $state<FormState>(defaultForm());
+  function newItemState(id: string, rentalDate: string, returnDate: string): CartItemUiState {
+    return {
+      id, checked: true, deleted: false, qty: 1,
+      acc: { rental: false, return_: false, fee: false },
+      durType: '24h',
+      opts: defaultOptions(),
+      rentalForm: defaultForm(),
+      returnForm: defaultForm(),
+      rentalDate, rentalTime: '',
+      returnDate, returnTime: '',
+    };
+  }
+
+  let itemsState = $state<CartItemUiState[]>([]);
+
+  function updateItem(id: string, patch: Partial<CartItemUiState>) {
+    itemsState = itemsState.map(it => it.id === id ? { ...it, ...patch } : it);
+  }
+
+  // 카트에서 상품 삭제 — 서버에 취소(cancelled) 반영 후 재로드
+  async function removeItem(item: CartItemUiState) {
+    updateItem(item.id, { deleted: true })
+    try {
+      const res = await fetch('/api/checkout/remove-item', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ reservationId: item.id }),
+      })
+      const result = await res.json()
+      if (!res.ok || !result.ok) {
+        updateItem(item.id, { deleted: false })
+        csToast.error('삭제 처리 중 오류가 발생했습니다.')
+        return
+      }
+      await invalidateAll()
+    } catch {
+      updateItem(item.id, { deleted: false })
+      csToast.error('네트워크 오류가 발생했습니다.')
+    }
+  }
 
   // ── 전체 일괄 설정 배너
   let bulkOpen    = $state(false)
@@ -95,12 +131,6 @@
   // ── Calendar & Time
   let openCalId = $state<string | null>(null);
   let openTimeId = $state<string | null>(null);
-  // Per-form date/time selections
-  let c1RentalDate = $state('');   let c1RentalTime = $state('');
-  let c1ReturnDate = $state('');   let c1ReturnTime = $state('');
-  let c2RentalDate = $state('');   let c2RentalTime = $state('');
-  let c2ReturnDate = $state('');   let c2ReturnTime = $state('');
-  // (bulk date/time managed by bulkDate / bulkTime above)
 
   function openCal(id: string, _currentDate: string) {
     openCalId = openCalId === id ? null : id;
@@ -116,69 +146,48 @@
     return `${String(h).padStart(2, '0')}:00`;
   }
 
-  // ── Copy-to-return sync handlers
-  function c1HandleMethod(v: DeliveryMethod) {
-    const ret = c1Opts.copyToReturn ? v : c1Opts.returnMethod
-    c1Opts = { ...c1Opts, rentalMethod: v, ...(c1Opts.copyToReturn ? { returnMethod: v } : {}) }
-    // @ts-expect-error — reservationIds: +page.server.ts 제공
-    saveShipmentMethod((data.reservationIds as string[] | undefined)?.[0], v, ret, c1RentalTime, c1ReturnTime)
+  // ── Copy-to-return sync handlers (item 단위 제네릭)
+  function itemHandleMethod(item: CartItemUiState, v: DeliveryMethod) {
+    const ret = item.opts.copyToReturn ? v : item.opts.returnMethod
+    updateItem(item.id, { opts: { ...item.opts, rentalMethod: v, ...(item.opts.copyToReturn ? { returnMethod: v } : {}) } })
+    saveShipmentMethod(item.id, v, ret, item.rentalTime, item.returnTime)
   }
-  function c1HandleReturnMethod(v: DeliveryMethod) {
-    c1Opts = { ...c1Opts, returnMethod: v }
-    // @ts-expect-error — reservationIds: +page.server.ts 제공
-    saveShipmentMethod((data.reservationIds as string[] | undefined)?.[0], c1Opts.rentalMethod, v, c1RentalTime, c1ReturnTime)
+  function itemHandleReturnMethod(item: CartItemUiState, v: DeliveryMethod) {
+    updateItem(item.id, { opts: { ...item.opts, returnMethod: v } })
+    saveShipmentMethod(item.id, item.opts.rentalMethod, v, item.rentalTime, item.returnTime)
   }
-  function c1HandleRentalForm(f: FormState) { c1RentalForm = f; if (c1Opts.copyToReturn) c1ReturnForm = { ...f }; }
-  function c1HandleRentalDate(d: string) { c1RentalDate = d; if (c1Opts.copyToReturn) c1ReturnDate = d; }
-  function c1HandleRentalTime(t: string) { c1RentalTime = t; if (c1Opts.copyToReturn) c1ReturnTime = t; }
-  function c1HandleCopy(v: boolean) {
+  function itemHandleRentalForm(item: CartItemUiState, f: FormState) {
+    updateItem(item.id, { rentalForm: f, ...(item.opts.copyToReturn ? { returnForm: { ...f } } : {}) })
+  }
+  function itemHandleRentalDate(item: CartItemUiState, d: string) {
+    updateItem(item.id, { rentalDate: d, ...(item.opts.copyToReturn ? { returnDate: d } : {}) })
+  }
+  function itemHandleRentalTime(item: CartItemUiState, t: string) {
+    updateItem(item.id, { rentalTime: t, ...(item.opts.copyToReturn ? { returnTime: t } : {}) })
+  }
+  function itemHandleCopy(item: CartItemUiState, v: boolean) {
     if (v) {
-      c1Opts = { ...c1Opts, copyToReturn: true, returnMethod: c1Opts.rentalMethod };
-      c1ReturnForm = { ...c1RentalForm };
-      c1ReturnDate = c1RentalDate;
-      c1ReturnTime = c1RentalTime;
+      updateItem(item.id, {
+        opts: { ...item.opts, copyToReturn: true, returnMethod: item.opts.rentalMethod },
+        returnForm: { ...item.rentalForm },
+        returnDate: item.rentalDate,
+        returnTime: item.rentalTime,
+      })
     } else {
-      c1Opts = { ...c1Opts, copyToReturn: false };
-    }
-  }
-
-  function c2HandleMethod(v: DeliveryMethod) {
-    const ret = c2Opts.copyToReturn ? v : c2Opts.returnMethod
-    c2Opts = { ...c2Opts, rentalMethod: v, ...(c2Opts.copyToReturn ? { returnMethod: v } : {}) }
-    // @ts-expect-error — reservationIds: +page.server.ts 제공
-    saveShipmentMethod((data.reservationIds as string[] | undefined)?.[1], v, ret, c2RentalTime, c2ReturnTime)
-  }
-  function c2HandleReturnMethod(v: DeliveryMethod) {
-    c2Opts = { ...c2Opts, returnMethod: v }
-    // @ts-expect-error — reservationIds: +page.server.ts 제공
-    saveShipmentMethod((data.reservationIds as string[] | undefined)?.[1], c2Opts.rentalMethod, v, c2RentalTime, c2ReturnTime)
-  }
-  function c2HandleRentalForm(f: FormState) { c2RentalForm = f; if (c2Opts.copyToReturn) c2ReturnForm = { ...f }; }
-  function c2HandleRentalDate(d: string) { c2RentalDate = d; if (c2Opts.copyToReturn) c2ReturnDate = d; }
-  function c2HandleRentalTime(t: string) { c2RentalTime = t; if (c2Opts.copyToReturn) c2ReturnTime = t; }
-  function c2HandleCopy(v: boolean) {
-    if (v) {
-      c2Opts = { ...c2Opts, copyToReturn: true, returnMethod: c2Opts.rentalMethod };
-      c2ReturnForm = { ...c2RentalForm };
-      c2ReturnDate = c2RentalDate;
-      c2ReturnTime = c2RentalTime;
-    } else {
-      c2Opts = { ...c2Opts, copyToReturn: false };
+      updateItem(item.id, { opts: { ...item.opts, copyToReturn: false } })
     }
   }
 
   function applyBulkSettings() {
     const m = bulkMethod
-    if (bulkDate) {
-      c1RentalDate = bulkDate; c1ReturnDate = bulkDate
-      c2RentalDate = bulkDate; c2ReturnDate = bulkDate
-    }
-    if (bulkTime) {
-      c1RentalTime = bulkTime; c1ReturnTime = bulkTime
-      c2RentalTime = bulkTime; c2ReturnTime = bulkTime
-    }
-    c1Opts = { ...c1Opts, rentalMethod: m, returnMethod: m }
-    c2Opts = { ...c2Opts, rentalMethod: m, returnMethod: m }
+    itemsState = itemsState.map(it => ({
+      ...it,
+      rentalDate: bulkDate || it.rentalDate,
+      returnDate: bulkDate || it.returnDate,
+      rentalTime: bulkTime || it.rentalTime,
+      returnTime: bulkTime || it.returnTime,
+      opts: { ...it.opts, rentalMethod: m, returnMethod: m },
+    }))
     bulkApplied = true
     bulkOpen = false
     // sync_cart_dates() RPC — TASK-D 연동 시 호출 예정
@@ -229,18 +238,38 @@
     }
   }
 
+  // ── 서버 데이터 추출 (PageData는 +page.ts 기준이므로 server 필드는 캐스트 필요)
+  // datesSet 등 canProceed 조건이 라인아이템 목록을 참조하므로 Footer 섹션보다 앞에 선언
+  type ProductRow = { id: string; name: string; category: string; brand: string | null; slug: string; image_urls: string[]; is_active: boolean }
+  type UserCouponExt = { id: string; coupon_id: string; coupons: { id: string; code: string; discount_type: string; discount_value: number; description: string | null; valid_until: string } | null }
+  type PriceRuleExt = { price12h: number | null; price24h: number | null; deposit: number | null }
+  type CartLineItem = { reservationId: string; productId: string | null; product: ProductRow | null; price12h: number | null; price24h: number | null; deposit: number | null; startDate: string; endDate: string }
+  type ServerExt = { calcTotal: number; calcDiscount: number; calcFinal: number; depositTotal: number; membershipGrade: string | null; userPoints: number; userCoupons: UserCouponExt[]; cartLineItems: CartLineItem[]; productPriceRules: Record<string, PriceRuleExt> }
+  const sd = $derived(data as unknown as ServerExt)
+
+  // 카트 라인아이템 — 항상 실 DB 기준 (게스트도 예약 시 익명 로그인으로 실 세션을 가지므로
+  // 별도 데모/미리보기 데이터가 필요 없음 — 2026-07-27 fixture 폴백 설계 제거)
+  const effectiveLineItems = $derived<CartLineItem[]>((sd as { cartLineItems?: CartLineItem[] }).cartLineItems ?? [])
+  const sdPriceRules = $derived<Record<string, PriceRuleExt>>((sd as { productPriceRules?: Record<string, PriceRuleExt> }).productPriceRules ?? {})
+
+  // effectiveLineItems ↔ itemsState 동기화 — 기존 로컬 UI 상태(아코디언 열림 등)는 보존
+  $effect(() => {
+    const lines = effectiveLineItems
+    const prev = untrack(() => itemsState)
+    itemsState = lines.map(line => prev.find(it => it.id === line.reservationId) ?? newItemState(line.reservationId, line.startDate ?? '', line.endDate ?? ''))
+  })
+
   // ── Footer + canProceed 5조건 가드
   let agreed = $state(false);
   let footerVisible = $state(false);
   let isConfirming = $state(false);
 
-  // 조건 1: 장바구니에 상품이 1개 이상
-  const hasItems = $derived(!c1Deleted || !c2Deleted)
+  // 조건 1: 결제 확정 대상(체크 해제·삭제되지 않은 상품)이 1개 이상
+  const hasItems = $derived(itemsState.some(it => !it.deleted && it.checked))
 
-  // 조건 2: 삭제되지 않은 모든 상품의 날짜(수령일·반납일) 입력됨
+  // 조건 2: 결제 확정 대상 상품의 날짜(수령일·반납일) 입력됨 (체크 해제한 상품은 제외)
   const datesSet = $derived(
-    (c1Deleted || (c1RentalDate !== '' && c1ReturnDate !== '')) &&
-    (c2Deleted || (c2RentalDate !== '' && c2ReturnDate !== ''))
+    itemsState.every(it => it.deleted || !it.checked || (it.rentalDate !== '' && it.returnDate !== ''))
   )
 
   // 조건 3: 배송 마감 미초과 (TASK-D: check_delivery_deadline() 연동 후 대체)
@@ -250,7 +279,6 @@
   // data.userId는 +page.server.ts 반환값 (PageData 병합 — dev server 기동 시 $types 자동 재생성)
   const identityOk = $derived(
     guestOtpVerified ||
-    // @ts-expect-error — userId: +page.server.ts 제공, $types 정적 캐시 미반영
     (data.userId != null)
   )
 
@@ -258,28 +286,16 @@
   // canProceed: 5가지 조건 모두 충족
   const canProceed = $derived(hasItems && datesSet && deadlineOk && identityOk && agreed)
 
+  // 완료 버튼 문구 — 회원/비회원(익명 게스트) 구분
+  const confirmLabel = $derived((data.isGuest as boolean | undefined) ? '비회원 예약신청완료' : '예약신청완료')
+
   function proceedGuideMessage(): string {
-    if (!hasItems)   return '장바구니가 비어 있습니다.'
-    if (!datesSet)   return '모든 상품의 수령일과 반납일을 선택해 주세요.'
+    if (!hasItems)   return itemsState.some(it => !it.deleted) ? '예약할 상품을 1개 이상 선택해 주세요.' : '장바구니가 비어 있습니다.'
+    if (!datesSet)   return '선택한 상품의 수령일과 반납일을 선택해 주세요.'
     if (!identityOk) return '본인 확인이 필요합니다. 이메일 인증을 완료해 주세요.'
     if (!agreed)     return '대여 조건에 동의해 주세요.'
     return ''
   }
-
-  // 서버 예약의 대여일·반납일 자동 세팅 (카드 1·2 기준 — 날짜 미선택 시에만)
-  $effect(() => {
-    type CartItemRow = { start_date: string; end_date: string }
-    // @ts-expect-error — serverCartItems: +page.server.ts 제공
-    const items = (data.serverCartItems as CartItemRow[] | undefined) ?? []
-    if (items[0]) {
-      if (!c1RentalDate) c1RentalDate = items[0].start_date
-      if (!c1ReturnDate) c1ReturnDate = items[0].end_date
-    }
-    if (items[1]) {
-      if (!c2RentalDate) c2RentalDate = items[1].start_date
-      if (!c2ReturnDate) c2ReturnDate = items[1].end_date
-    }
-  })
 
   onMount(() => {
     let lastY = window.scrollY;
@@ -302,10 +318,10 @@
   }
   const DUR_TYPES: DurationType[] = ['12h', '24h', '1day', 'purchase']
 
-  // 기간 유형별 단가 반환 (fixture 폴백용 — 실 DB는 calculate_cart_total RPC)
+  // 기간 유형별 단가 반환 (카드 표시용 — 실제 합계는 calculate_cart_total RPC 기준)
   function cardRate(daily: number, half: number, dur: DurationType): number {
     if (dur === '12h') return half
-    if (dur === 'purchase') return daily * 8  // fixture 임시값 — 실 DB price_rules 기준 연동 예정
+    if (dur === 'purchase') return daily * 8  // 임시값 — 구매(판매) 요금정책 연동 예정
     return daily  // '24h' | '1day'
   }
 
@@ -321,52 +337,42 @@
     return { ...acc, fee: !acc.fee };
   }
 
-  // ── 서버 데이터 추출 (PageData는 +page.ts 기준이므로 server 필드는 캐스트 필요)
-  type ProductRow = { id: string; name: string; category: string; brand: string | null; slug: string; image_urls: string[]; is_active: boolean }
-  type UserCouponExt = { id: string; coupon_id: string; coupons: { id: string; code: string; discount_type: string; discount_value: number; description: string | null; valid_until: string } | null }
-  type ServerExt = { isServerLoaded: boolean; calcTotal: number; calcDiscount: number; calcFinal: number; depositTotal: number; membershipGrade: string | null; userPoints: number; userCoupons: UserCouponExt[]; cartProducts: ProductRow[] }
-  const sd = $derived(data as unknown as ServerExt)
+  // 단가: 실제 요금정책(price_rules) 기준 (없으면 기본 단가 폴백)
+  function itemRate24h(line: CartLineItem | undefined): number {
+    if (!line) return 150000
+    return sdPriceRules[line.productId ?? '']?.price24h ?? line.price24h ?? 150000
+  }
+  function itemRate12h(line: CartLineItem | undefined, rate24: number): number {
+    if (!line) return Math.round(rate24 * 0.6)
+    return sdPriceRules[line.productId ?? '']?.price12h ?? line.price12h ?? Math.round(rate24 * 0.6)
+  }
+  function itemCardRate(line: CartLineItem | undefined, durType: DurationType): number {
+    const r24 = itemRate24h(line)
+    const r12 = itemRate12h(line, r24)
+    return cardRate(r24, r12, durType)
+  }
+  function itemDeposit(line: CartLineItem | undefined): number {
+    if (!line) return 0
+    return sdPriceRules[line.productId ?? '']?.deposit ?? line.deposit ?? 0
+  }
 
-  // ── Product data helpers — 서버 cartProducts 우선, 없으면 fixture 폴백
-  const sdCartProducts = $derived<ProductRow[]>((sd as { cartProducts?: ProductRow[] }).cartProducts ?? [])
-  const p1 = $derived(
-    sdCartProducts[0] ?? data.products.find((p: Product) => p.id === data.cartItems[0]?.product_id) ?? null
-  )
-  const p2 = $derived(sdCartProducts[1] ?? null)
-  // 단가: priceConfig에서 실 product_id 우선 조회 (없으면 기본 단가 폴백)
-  const p1Rate    = $derived(priceConfig[p1?.id ?? '']?.daily_rate   ?? priceConfig[data.cartItems[0]?.product_id]?.daily_rate   ?? 150000)
-  const p1Rate12h = $derived(priceConfig[p1?.id ?? '']?.halfday_rate ?? priceConfig[data.cartItems[0]?.product_id]?.halfday_rate ?? Math.round(p1Rate * 0.6))
-  const p2Rate    = $derived(priceConfig[p2?.id ?? '']?.daily_rate   ?? priceConfig[data.cartItems[1]?.product_id]?.daily_rate   ?? 80000)
-  const p2Rate12h = $derived(priceConfig[p2?.id ?? '']?.halfday_rate ?? priceConfig[data.cartItems[1]?.product_id]?.halfday_rate ?? Math.round(p2Rate * 0.6))
-  const subItems = $derived(
-    sd.isServerLoaded ? [] : sampleSubItems.filter(s => s.parent_cart_id === data.cartItems[0]?.id)
-  )
-
-  // 카드별 기간 유형 단가 (fixture 폴백용)
-  const c1CardRate = $derived(cardRate(p1Rate, p1Rate12h, c1DurType))
-  const c2CardRate = $derived(cardRate(p2Rate, p2Rate12h, c2DurType))
-
-  // ── 등급별 할인율 (픽스처 폴백용)
+  // ── 등급별 할인율
   const GRADE_RATE: Record<string, number> = { NONE: 0, EASY: 0, POP: 10, CRAZY: 20 }
 
   const otGrade = $derived<string>(sd.membershipGrade ?? 'NONE')
   const otDiscountRate = $derived(GRADE_RATE[otGrade] ?? 0)
 
-  // 픽스처 기반 소계 (서버 미로드 시 폴백) — 선택 duration 단가 사용
-  const fixtureSubtotal = $derived(
-    (c1Deleted ? 0 : c1CardRate * Math.max(c1Qty, 1)) +
-    (c2Deleted ? 0 : c2CardRate * c2Qtys.reduce((a, b) => a + b, 0))
-  )
-
-  // 대여료 소계 — RPC subtotal 우선, 없으면 픽스처
+  // 대여료 소계 — 체크된(선택된) 상품만 합산 (체크 해제 시 약정요금에서 제외)
   const otSubtotal = $derived(
-    sd.isServerLoaded && sd.calcTotal > 0 ? sd.calcTotal : fixtureSubtotal
+    itemsState.reduce((sum, it, i) => {
+      if (it.deleted || !it.checked) return sum
+      const line = effectiveLineItems[i]
+      return sum + itemCardRate(line, it.durType) * Math.max(it.qty, 1)
+    }, 0)
   )
 
-  // 멤버십 할인 — RPC discount_amount 우선
-  const otMembershipDiscount = $derived(
-    sd.isServerLoaded ? sd.calcDiscount : Math.round(otSubtotal * otDiscountRate / 100)
-  )
+  // 멤버십 할인 — 등급 할인율을 체크된 소계에 적용
+  const otMembershipDiscount = $derived(Math.round(otSubtotal * otDiscountRate / 100))
 
   // 배송비: DB rental_method_options.fee_amount 우선, 없으면 하드코딩 폴백
   // @ts-expect-error — deliveryOptions: +page.server.ts 제공
@@ -379,7 +385,7 @@
     return method === 'crazydelivery' && grade !== 'CRAZY' ? 3500 : 0
   }
 
-  // 수령·반납 방식 DB 저장 (hold 예약에만, devMode 무시)
+  // 수령·반납 방식 DB 저장 (hold 예약에만)
   type RpcFn = (name: string, args: Record<string, unknown>) => Promise<unknown>
   async function saveShipmentMethod(
     resId: string | undefined,
@@ -388,7 +394,7 @@
     pickupTime?: string,
     returnTime?: string,
   ) {
-    if (!resId || !sd.isServerLoaded) return
+    if (!resId) return
     await (supabase.rpc as unknown as RpcFn)('set_reservation_shipment_method', {
       p_reservation_id: Number(resId),
       p_pickup_method:  pickup,
@@ -405,7 +411,7 @@
   function computeAllowedMethodIds(prods: ProductRow[]): Set<string> | 'all' | 'none' {
     type P = ProductRow & { allowed_method_ids?: string[] | null }
     const configured = prods.filter(p => Array.isArray((p as P).allowed_method_ids))
-    // 카트에 실제 DB 상품이 없으면 → 전체 표시 (미로그인/개발모드)
+    // 카트가 비어있거나 allowed_method_ids 미설정 상품만 있으면 → 전체 표시
     if (configured.length === 0) return 'all'
     const sets = configured.map(p => (p as P).allowed_method_ids as string[])
     // 모든 카트 상품의 교집합
@@ -417,7 +423,8 @@
   }
 
   // 카트 상품에 설정된 허용 방식 ID 교집합 ('all'=전체, 'none'=없음, Set=필터)
-  const allowedMethodIds = $derived(computeAllowedMethodIds(sdCartProducts))
+  const cartProductRows = $derived<ProductRow[]>(effectiveLineItems.map(l => l.product).filter((p): p is ProductRow => p !== null))
+  const allowedMethodIds = $derived(computeAllowedMethodIds(cartProductRows))
   const deliveryTabs = $derived<DeliveryTabMeta[]>(
     allowedMethodIds === 'none' ? [] :
     ((data.deliveryOptions as DeliveryOptionRow[] | undefined) ?? [])
@@ -425,8 +432,7 @@
       .map((o: DeliveryOptionRow) => ({ v: o.method_key as DeliveryMethod, label: o.name, fee: o.fee_description ?? '', deadline: o.deadline_time ?? '' }))
   );
   const otDeliveryFee = $derived(
-    (c1Deleted ? 0 : deliveryFee(c1Opts.rentalMethod, otGrade)) +
-    (c2Deleted ? 0 : deliveryFee(c2Opts.rentalMethod, otGrade))
+    itemsState.reduce((sum, it) => sum + ((it.deleted || !it.checked) ? 0 : deliveryFee(it.opts.rentalMethod, otGrade)), 0)
   )
 
   // 서버 데이터 안전 추출
@@ -445,10 +451,8 @@
       }, 0)
   )
 
-  // 할인 후 금액 (VAT 부과 기준) — RPC final_total 우선
-  const otNetBeforeVat = $derived(
-    sd.isServerLoaded && sd.calcFinal > 0 ? sd.calcFinal : otSubtotal - otMembershipDiscount
-  )
+  // 할인 후 금액 (VAT 부과 기준)
+  const otNetBeforeVat = $derived(otSubtotal - otMembershipDiscount)
 
   // VAT 10%
   const otVat = $derived(Math.round(otNetBeforeVat * 0.1))
@@ -459,8 +463,13 @@
   // 합계 (VAT + 배송비 + 쿠폰 할인 - 포인트 사용)
   const otTotal = $derived(Math.max(0, otNetBeforeVat + otVat + otDeliveryFee - otCouponDiscount - otPointsUsed))
 
-  // 보증금 (PRD.1.2.2.1.11) — RPC deposit_required 우선, 없으면 소계 10%
-  const otDeposit = $derived(sd.isServerLoaded ? sd.depositTotal : Math.round(otSubtotal * 0.1))
+  // 보증금 (PRD.1.2.2.1.11) — 체크된(선택된) 상품만 합산
+  const otDeposit = $derived(
+    itemsState.reduce((sum, it, i) => {
+      if (it.deleted || !it.checked) return sum
+      return sum + itemDeposit(effectiveLineItems[i])
+    }, 0)
+  )
 
   // 적립 예정 포인트 (5%)
   const otEarnPoints = $derived(Math.round(otTotal * 0.05))
@@ -472,8 +481,7 @@
     return Math.max(0, Math.ceil(diff / 86400000))
   }
   const otTotalDays = $derived(
-    (c1Deleted ? 0 : rentalDays(c1RentalDate, c1ReturnDate)) +
-    (c2Deleted ? 0 : rentalDays(c2RentalDate, c2ReturnDate))
+    itemsState.reduce((sum, it) => sum + ((it.deleted || !it.checked) ? 0 : rentalDays(it.rentalDate, it.returnDate)), 0)
   )
 
   function fmtKrw(n: number): string {
@@ -651,319 +659,12 @@
           {/if}
         </div>
 
-        <!-- Card 1: Simple -->
-        {#if !c1Deleted}
-          <div class="order-card">
-            <div class="order-card-inner">
-              <!-- Check & Delete -->
-              <div class="card-top-row">
-                <button class="checkbox-btn" onclick={() => c1Checked = !c1Checked} aria-label="선택">
-                  <svg viewBox="0 0 20 20" fill="none" class="checkbox-svg">
-                    {#if c1Checked}
-                      <rect fill="#3B2F8A" height="18" rx="4" width="18" x="1" y="1"/>
-                      <path d="M5 10L8.5 13.5L15 6" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
-                    {:else}
-                      <rect fill="white" height="18" rx="4" width="18" x="1" y="1"/>
-                      <rect height="18" rx="4" stroke="#AAAAAA" stroke-width="2" width="18" x="1" y="1"/>
-                    {/if}
-                  </svg>
-                </button>
-                <button class="delete-btn" onclick={() => c1Deleted = true} aria-label="삭제">
-                  <svg width="14" height="14" viewBox="0 0 17 17" fill="none">
-                    <path d="M15.5 1.5L8.5 8.5M8.5 8.5L1.5 15.5M8.5 8.5L15.5 15.5M8.5 8.5L1.5 1.5" stroke="#AAAAAA" stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5"/>
-                  </svg>
-                </button>
-              </div>
+        <!-- 카트 라인아이템 — 무제한 (카드1/카드2 고정 구조 폐기 2026-07-27) -->
+        {#each itemsState as item, i (item.id)}
+          {@render OrderCard(item, effectiveLineItems[i])}
+        {/each}
 
-              <!-- Product Row -->
-              <div class="product-row">
-                <div class="product-img">
-                  <img src={p1?.image_urls?.[0] ?? 'https://picsum.photos/seed/cam/150/150'} alt={p1?.name ?? 'Sony FX6'} width="150" height="150"/>
-                </div>
-                <div class="product-meta">
-                  <p class="product-name">{p1?.name ?? 'Sony FX6'}</p>
-                  <p class="product-price">
-                    {c1CardRate.toLocaleString()} 원
-                  </p>
-                  <div class="product-badges">
-                    <div class="badge-mem">
-                      <svg viewBox="0 0 40 40" fill="none" class="badge-svg">
-                        <path d="M20 0L23.9714 3.03625L28.9008 1.98062L31.1277 6.39613L36.0388 7.5302L36.08 12.4504L40 15.5496L37.8475 20L40 24.4504L36.08 27.5496L36.0388 32.4698L31.1277 33.6039L28.9008 38.0194L23.9714 36.9637L20 40L16.0286 36.9637L11.0992 38.0194L8.87228 33.6039L3.96124 32.4698L3.91998 27.5496L0 24.4504L2.15253 20L0 15.5496L3.91998 12.4504L3.96124 7.5302L8.87228 6.39613L11.0992 1.98062L16.0286 3.03625L20 0Z" fill="#FF3535"/>
-                        <path d="M23.0742 19.2136C23.0742 20.9516 21.6979 22.3606 20.0001 22.3606C18.3022 22.3606 16.9259 20.9516 16.9259 19.2136C16.9259 17.4755 18.3022 16.0665 20.0001 16.0665C21.6979 16.0665 23.0742 17.4755 23.0742 19.2136Z" fill="white"/>
-                      </svg>
-                    </div>
-                    <div class="badge-deal">
-                      <svg viewBox="0 0 40 40" fill="none" class="badge-svg">
-                        <path d="M20 0L23.9714 3.03625L28.9008 1.98062L31.1277 6.39613L36.0388 7.5302L36.08 12.4504L40 15.5496L37.8475 20L40 24.4504L36.08 27.5496L36.0388 32.4698L31.1277 33.6039L28.9008 38.0194L23.9714 36.9637L20 40L16.0286 36.9637L11.0992 38.0194L8.87228 33.6039L3.96124 32.4698L3.91998 27.5496L0 24.4504L2.15253 20L0 15.5496L3.91998 12.4504L3.96124 7.5302L8.87228 6.39613L11.0992 1.98062L16.0286 3.03625L20 0Z" fill="#553FE0"/>
-                        <path d="M25 14L22 20L25 26H15L18 20L15 14H25Z" fill="white"/>
-                      </svg>
-                    </div>
-                  </div>
-                </div>
-                <div class="qty-wrap">
-                  <span class="qty-label">수량</span>
-                  <div class="qty-ctrl">
-                    <button class="qty-arrow" onclick={() => c1Qty = Math.max(1, c1Qty - 1)}>
-                      <svg width="8" height="14" viewBox="0 0 8 14" fill="none"><path d="M7 1L1 7L7 13" stroke="#444444" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"/></svg>
-                    </button>
-                    <div class="qty-num">{c1Qty}</div>
-                    <button class="qty-arrow" onclick={() => c1Qty = c1Qty + 1}>
-                      <svg width="8" height="14" viewBox="0 0 8 14" fill="none"><path d="M1 1L7 7L1 13" stroke="#444444" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"/></svg>
-                    </button>
-                  </div>
-                </div>
-              </div>
-
-              <!-- Accordions -->
-              <div class="accordions" class:bulk-locked={bulkApplied}>
-                <!-- 대여 방법 -->
-                <div class="acc-item">
-                  <button class="acc-head" onclick={() => c1Acc = toggleAcc(c1Acc, 'rental')}>
-                    <span class="acc-label">대여 방법</span>
-                    <div class="acc-head-right">
-                      <span class="acc-value">{methodLabel(c1Opts.rentalMethod)}</span>
-                      <svg width="12" height="8" viewBox="0 0 12 8" fill="none" style="transition:transform 0.3s;transform:{c1Acc.rental ? 'rotate(180deg)' : 'none'}">
-                        <path d="M1 1L6 7L11 1" stroke="#444" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
-                      </svg>
-                    </div>
-                  </button>
-                  {#if c1Acc.rental}
-                    <div transition:slide={{ duration: 300 }} class="acc-body">
-                      {@render RentalForm({ type: 'rental', calId: 'c1-rental', selectedDate: c1RentalDate, onDateChange: c1HandleRentalDate, timeId: 'c1-rental-t', selectedTime: c1RentalTime, onTimeChange: c1HandleRentalTime, method: c1Opts.rentalMethod, form: c1RentalForm, copyToReturn: c1Opts.copyToReturn, onMethodChange: c1HandleMethod, onFormChange: c1HandleRentalForm, onCopyChange: c1HandleCopy })}
-                    </div>
-                  {/if}
-                </div>
-                <!-- 반납 방법 -->
-                <div class="acc-item">
-                  <button class="acc-head" onclick={() => c1Acc = toggleAcc(c1Acc, 'return_')}>
-                    <span class="acc-label">반납 방법</span>
-                    <div class="acc-head-right">
-                      <span class="acc-value">{methodLabel(c1Opts.returnMethod)}</span>
-                      <svg width="12" height="8" viewBox="0 0 12 8" fill="none" style="transition:transform 0.3s;transform:{c1Acc.return_ ? 'rotate(180deg)' : 'none'}">
-                        <path d="M1 1L6 7L11 1" stroke="#444" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
-                      </svg>
-                    </div>
-                  </button>
-                  {#if c1Acc.return_}
-                    <div transition:slide={{ duration: 300 }} class="acc-body">
-                      {@render RentalForm({ type: 'return', calId: 'c1-return', selectedDate: c1ReturnDate, onDateChange: (d) => c1ReturnDate = d, timeId: 'c1-return-t', selectedTime: c1ReturnTime, onTimeChange: (t) => c1ReturnTime = t, method: c1Opts.returnMethod, form: c1ReturnForm, onMethodChange: c1HandleReturnMethod, onFormChange: (f) => c1ReturnForm = f })}
-                    </div>
-                  {/if}
-                </div>
-                <!-- 약정 요금 -->
-                <div class="acc-item">
-                  <button class="acc-head" onclick={() => c1Acc = toggleAcc(c1Acc, 'fee')}>
-                    <span class="acc-label">약정 요금</span>
-                    <div class="acc-head-right">
-                      <span class="acc-value">{(c1CardRate * c1Qty).toLocaleString()} 원</span>
-                      <svg width="12" height="8" viewBox="0 0 12 8" fill="none" style="transition:transform 0.3s;transform:{c1Acc.fee ? 'rotate(180deg)' : 'none'}">
-                        <path d="M1 1L6 7L11 1" stroke="#444" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
-                      </svg>
-                    </div>
-                  </button>
-                  {#if c1Acc.fee}
-                    <div transition:slide={{ duration: 300 }} class="acc-body">
-                      {@render FeeContent({
-                        couponWelcome: c1Opts.couponWelcome,
-                        couponMembership: c1Opts.couponMembership,
-                        onCouponWelcome: () => c1Opts = { ...c1Opts, couponWelcome: !c1Opts.couponWelcome },
-                        onCouponMembership: () => c1Opts = { ...c1Opts, couponMembership: !c1Opts.couponMembership },
-                        subtotal: c1CardRate * Math.max(c1Qty, 1),
-                        discountAmt: Math.round(c1CardRate * Math.max(c1Qty, 1) * otDiscountRate / 100),
-                        deliveryFeeAmt: deliveryFee(c1Opts.rentalMethod, otGrade),
-                        totalDays: rentalDays(c1RentalDate, c1ReturnDate),
-                        durLabel: DUR_LABELS[c1DurType],
-                      })}
-                    </div>
-                  {/if}
-                </div>
-              </div>
-            </div>
-          </div>
-        {/if}
-
-        <!-- Card 2: Complex with sub-items — 실 DB 2번째 예약이 있을 때만 노출 -->
-        {#if !c2Deleted && p2 !== null}
-          <div class="order-card">
-            <div class="order-card-inner">
-              <!-- Check & Delete -->
-              <div class="card-top-row">
-                <button class="checkbox-btn" onclick={() => c2Checked = !c2Checked} aria-label="선택">
-                  <svg viewBox="0 0 20 20" fill="none" class="checkbox-svg">
-                    {#if c2Checked}
-                      <rect fill="#3B2F8A" height="18" rx="4" width="18" x="1" y="1"/>
-                      <path d="M5 10L8.5 13.5L15 6" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
-                    {:else}
-                      <rect fill="white" height="18" rx="4" width="18" x="1" y="1"/>
-                      <rect height="18" rx="4" stroke="#AAAAAA" stroke-width="2" width="18" x="1" y="1"/>
-                    {/if}
-                  </svg>
-                </button>
-                <button class="delete-btn" onclick={() => c2Deleted = true} aria-label="삭제">
-                  <svg width="14" height="14" viewBox="0 0 17 17" fill="none">
-                    <path d="M15.5 1.5L8.5 8.5M8.5 8.5L1.5 15.5M8.5 8.5L15.5 15.5M8.5 8.5L1.5 1.5" stroke="#AAAAAA" stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5"/>
-                  </svg>
-                </button>
-              </div>
-
-              <!-- Main product -->
-              <div class="product-row">
-                <div class="product-img">
-                  <img src={p2?.image_urls?.[0] ?? 'https://picsum.photos/seed/gimbal/150/150'} alt={p2?.name ?? 'DJI RS4 Pro'} width="150" height="150"/>
-                </div>
-                <div class="product-meta">
-                  <p class="product-name">{p2?.name ?? 'DJI RS4 Pro'}</p>
-                  <div class="dur-tabs" role="group" aria-label="대여 기간 유형">
-                    {#each DUR_TYPES as d}
-                      <button
-                        class="dur-tab"
-                        class:dur-tab-active={c2DurType === d}
-                        onclick={() => c2DurType = d}
-                        aria-pressed={c2DurType === d}
-                      >{DUR_LABELS[d]}</button>
-                    {/each}
-                  </div>
-                  <p class="product-price">
-                    {DUR_LABELS[c2DurType]}&nbsp;
-                    {c2DurType === 'purchase' ? '별도 문의' : `${c2CardRate.toLocaleString()} 원`}
-                  </p>
-                  <div class="product-badges">
-                    <div class="badge-mem">
-                      <svg viewBox="0 0 40 40" fill="none" class="badge-svg">
-                        <path d="M20 0L23.9714 3.03625L28.9008 1.98062L31.1277 6.39613L36.0388 7.5302L36.08 12.4504L40 15.5496L37.8475 20L40 24.4504L36.08 27.5496L36.0388 32.4698L31.1277 33.6039L28.9008 38.0194L23.9714 36.9637L20 40L16.0286 36.9637L11.0992 38.0194L8.87228 33.6039L3.96124 32.4698L3.91998 27.5496L0 24.4504L2.15253 20L0 15.5496L3.91998 12.4504L3.96124 7.5302L8.87228 6.39613L11.0992 1.98062L16.0286 3.03625L20 0Z" fill="#FF3535"/>
-                        <path d="M23.0742 19.2136C23.0742 20.9516 21.6979 22.3606 20.0001 22.3606C18.3022 22.3606 16.9259 20.9516 16.9259 19.2136C16.9259 17.4755 18.3022 16.0665 20.0001 16.0665C21.6979 16.0665 23.0742 17.4755 23.0742 19.2136Z" fill="white"/>
-                      </svg>
-                    </div>
-                    <div class="badge-deal">
-                      <svg viewBox="0 0 40 40" fill="none" class="badge-svg">
-                        <path d="M20 0L23.9714 3.03625L28.9008 1.98062L31.1277 6.39613L36.0388 7.5302L36.08 12.4504L40 15.5496L37.8475 20L40 24.4504L36.08 27.5496L36.0388 32.4698L31.1277 33.6039L28.9008 38.0194L23.9714 36.9637L20 40L16.0286 36.9637L11.0992 38.0194L8.87228 33.6039L3.96124 32.4698L3.91998 27.5496L0 24.4504L2.15253 20L0 15.5496L3.91998 12.4504L3.96124 7.5302L8.87228 6.39613L11.0992 1.98062L16.0286 3.03625L20 0Z" fill="#553FE0"/>
-                        <path d="M25 14L22 20L25 26H15L18 20L15 14H25Z" fill="white"/>
-                      </svg>
-                    </div>
-                  </div>
-                </div>
-                <div class="qty-wrap">
-                  <span class="qty-label">수량</span>
-                  <div class="qty-ctrl">
-                    <button class="qty-arrow" onclick={() => c2Qtys = c2Qtys.map((q, i) => i === 0 ? Math.max(1, q - 1) : q)}>
-                      <svg width="8" height="14" viewBox="0 0 8 14" fill="none"><path d="M7 1L1 7L7 13" stroke="#444444" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"/></svg>
-                    </button>
-                    <div class="qty-num">{c2Qtys[0]}</div>
-                    <button class="qty-arrow" onclick={() => c2Qtys = c2Qtys.map((q, i) => i === 0 ? q + 1 : q)}>
-                      <svg width="8" height="14" viewBox="0 0 8 14" fill="none"><path d="M1 1L7 7L1 13" stroke="#444444" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"/></svg>
-                    </button>
-                  </div>
-                </div>
-              </div>
-
-              <!-- Sub items -->
-              {#each subItems as sub, i (sub.id)}
-                <div class="sub-row">
-                  <div class="sub-arrow">
-                    <svg width="82" height="25" viewBox="0 0 82 25" fill="none">
-                      <path d="M30.004 1.5C30.004 1.5 29.993 5.60062 30.0074 12.8098C30.0217 20.0189 35.5 23.5 40 23.5C44.5 23.5 52 23.5 52 23.5" stroke="#AAAAAA" stroke-linecap="round" stroke-width="3"/>
-                    </svg>
-                  </div>
-                  <div class="sub-content">
-                    <div class="product-row">
-                      <div class="product-img sub-img">
-                        <img src={sub.imageUrl ?? 'https://picsum.photos/seed/' + sub.slug + '/150/150'} alt={sub.name} width="150" height="150"/>
-                      </div>
-                      <div class="product-meta">
-                        <p class="product-name">{sub.name}</p>
-                        <p class="product-price">day {sub.daily_rate.toLocaleString()} 원 &nbsp;|&nbsp; 12H {(sub.halfday_rate ?? Math.round(sub.daily_rate * 0.6)).toLocaleString()} 원</p>
-                        <div class="product-badges">
-                          <div class="badge-mem">
-                            <svg viewBox="0 0 40 40" fill="none" class="badge-svg">
-                              <path d="M20 0L23.9714 3.03625L28.9008 1.98062L31.1277 6.39613L36.0388 7.5302L36.08 12.4504L40 15.5496L37.8475 20L40 24.4504L36.08 27.5496L36.0388 32.4698L31.1277 33.6039L28.9008 38.0194L23.9714 36.9637L20 40L16.0286 36.9637L11.0992 38.0194L8.87228 33.6039L3.96124 32.4698L3.91998 27.5496L0 24.4504L2.15253 20L0 15.5496L3.91998 12.4504L3.96124 7.5302L8.87228 6.39613L11.0992 1.98062L16.0286 3.03625L20 0Z" fill="#FF3535"/>
-                              <path d="M23.0742 19.2136C23.0742 20.9516 21.6979 22.3606 20.0001 22.3606C18.3022 22.3606 16.9259 20.9516 16.9259 19.2136C16.9259 17.4755 18.3022 16.0665 20.0001 16.0665C21.6979 16.0665 23.0742 17.4755 23.0742 19.2136Z" fill="white"/>
-                            </svg>
-                          </div>
-                        </div>
-                      </div>
-                    </div>
-                    <div class="qty-wrap">
-                      <span class="qty-label">수량</span>
-                      <div class="qty-ctrl">
-                        <button class="qty-arrow" onclick={() => { const idx = i + 1; c2Qtys = c2Qtys.map((q, j) => j === idx ? Math.max(1, q - 1) : q); }}>
-                          <svg width="8" height="14" viewBox="0 0 8 14" fill="none"><path d="M7 1L1 7L7 13" stroke="#444444" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"/></svg>
-                        </button>
-                        <div class="qty-num">{c2Qtys[i + 1]}</div>
-                        <button class="qty-arrow" onclick={() => { const idx = i + 1; c2Qtys = c2Qtys.map((q, j) => j === idx ? q + 1 : q); }}>
-                          <svg width="8" height="14" viewBox="0 0 8 14" fill="none"><path d="M1 1L7 7L1 13" stroke="#444444" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"/></svg>
-                        </button>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              {/each}
-
-              <!-- Accordions -->
-              <div class="accordions" class:bulk-locked={bulkApplied}>
-                <div class="acc-item">
-                  <button class="acc-head" onclick={() => c2Acc = toggleAcc(c2Acc, 'rental')}>
-                    <span class="acc-label">대여 방법</span>
-                    <div class="acc-head-right">
-                      <span class="acc-value">{methodLabel(c2Opts.rentalMethod)}</span>
-                      <svg width="12" height="8" viewBox="0 0 12 8" fill="none" style="transition:transform 0.3s;transform:{c2Acc.rental ? 'rotate(180deg)' : 'none'}">
-                        <path d="M1 1L6 7L11 1" stroke="#444" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
-                      </svg>
-                    </div>
-                  </button>
-                  {#if c2Acc.rental}
-                    <div transition:slide={{ duration: 300 }} class="acc-body">
-                      {@render RentalForm({ type: 'rental', calId: 'c2-rental', selectedDate: c2RentalDate, onDateChange: c2HandleRentalDate, timeId: 'c2-rental-t', selectedTime: c2RentalTime, onTimeChange: c2HandleRentalTime, method: c2Opts.rentalMethod, form: c2RentalForm, copyToReturn: c2Opts.copyToReturn, onMethodChange: c2HandleMethod, onFormChange: c2HandleRentalForm, onCopyChange: c2HandleCopy })}
-                    </div>
-                  {/if}
-                </div>
-                <div class="acc-item">
-                  <button class="acc-head" onclick={() => c2Acc = toggleAcc(c2Acc, 'return_')}>
-                    <span class="acc-label">반납 방법</span>
-                    <div class="acc-head-right">
-                      <span class="acc-value">{methodLabel(c2Opts.returnMethod)}</span>
-                      <svg width="12" height="8" viewBox="0 0 12 8" fill="none" style="transition:transform 0.3s;transform:{c2Acc.return_ ? 'rotate(180deg)' : 'none'}">
-                        <path d="M1 1L6 7L11 1" stroke="#444" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
-                      </svg>
-                    </div>
-                  </button>
-                  {#if c2Acc.return_}
-                    <div transition:slide={{ duration: 300 }} class="acc-body">
-                      {@render RentalForm({ type: 'return', calId: 'c2-return', selectedDate: c2ReturnDate, onDateChange: (d) => c2ReturnDate = d, timeId: 'c2-return-t', selectedTime: c2ReturnTime, onTimeChange: (t) => c2ReturnTime = t, method: c2Opts.returnMethod, form: c2ReturnForm, onMethodChange: c2HandleReturnMethod, onFormChange: (f) => c2ReturnForm = f })}
-                    </div>
-                  {/if}
-                </div>
-                <div class="acc-item">
-                  <button class="acc-head" onclick={() => c2Acc = toggleAcc(c2Acc, 'fee')}>
-                    <span class="acc-label">약정 요금</span>
-                    <div class="acc-head-right">
-                      <span class="acc-value">{(c2CardRate * c2Qtys[0]).toLocaleString()} 원</span>
-                      <svg width="12" height="8" viewBox="0 0 12 8" fill="none" style="transition:transform 0.3s;transform:{c2Acc.fee ? 'rotate(180deg)' : 'none'}">
-                        <path d="M1 1L6 7L11 1" stroke="#444" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
-                      </svg>
-                    </div>
-                  </button>
-                  {#if c2Acc.fee}
-                    <div transition:slide={{ duration: 300 }} class="acc-body">
-                      {@render FeeContent({
-                        couponWelcome: c2Opts.couponWelcome,
-                        couponMembership: c2Opts.couponMembership,
-                        onCouponWelcome: () => c2Opts = { ...c2Opts, couponWelcome: !c2Opts.couponWelcome },
-                        onCouponMembership: () => c2Opts = { ...c2Opts, couponMembership: !c2Opts.couponMembership },
-                        subtotal: c2CardRate * (c2Qtys[0] ?? 1),
-                        discountAmt: Math.round(c2CardRate * (c2Qtys[0] ?? 1) * otDiscountRate / 100),
-                        deliveryFeeAmt: deliveryFee(c2Opts.rentalMethod, otGrade),
-                        totalDays: rentalDays(c2RentalDate, c2ReturnDate),
-                        durLabel: DUR_LABELS[c2DurType],
-                      })}
-                    </div>
-                  {/if}
-                </div>
-              </div>
-            </div>
-          </div>
-        {/if}
-
-        {#if c1Deleted && c2Deleted}
+        {#if itemsState.length === 0 || itemsState.every(it => it.deleted)}
           <div class="order-card empty-card">
             <p class="empty-text">장바구니가 비어 있습니다.</p>
           </div>
@@ -1122,10 +823,29 @@
           if (!canProceed || isConfirming) return
           isConfirming = true
           try {
-            const res = await fetch('/api/checkout/confirm-mock', { method: 'POST' })
+            // 체크 해제한 상품은 이번 결제 확정 대상에서 제외 — 선택된(checked) 예약 id만 전송
+            const checkedIds = itemsState.filter(it => !it.deleted && it.checked).map(it => it.id)
+            const res = await fetch('/api/checkout/confirm-mock', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ reservationIds: checkedIds }),
+            })
             const result = await res.json()
             if (res.ok && result.success) {
-              await goto('/account/rental')
+              const firstIndex = itemsState.findIndex(it => !it.deleted && it.checked)
+              const first = firstIndex >= 0 ? itemsState[firstIndex] : undefined
+              const firstLine = firstIndex >= 0 ? effectiveLineItems[firstIndex] : undefined
+              const firstReservation = result.confirmedReservations?.[0] as { id: number; reservationCode: string | null } | undefined
+              const params = new URLSearchParams({
+                productName:   firstLine?.product?.name ?? '촬영 장비',
+                orderNumber:   firstReservation?.reservationCode ?? `CZ${String(firstReservation?.id ?? '').padStart(5, '0')}`,
+                startDate:     first?.rentalDate ?? '',
+                endDate:       first?.returnDate ?? '',
+                amount:        String(otTotal),
+                paymentMethod: '카드(테스트)',
+                notes:         first?.rentalForm.notes ?? '',
+              })
+              await goto(`/payment/success/dev?${params.toString()}`)
             } else {
               csToast.error('예약 처리 중 오류가 발생했습니다.')
             }
@@ -1136,7 +856,7 @@
           }
         }}
       >
-        {isConfirming ? '처리 중...' : '가입하고 지금 예약하세요'}
+        {isConfirming ? '처리 중...' : confirmLabel}
       </button>
     </div>
   </footer>
@@ -1146,6 +866,152 @@
 <BottomTabBar />
 
 <!-- ═══════════════════════ SNIPPET COMPONENTS ═══════════════════════ -->
+
+{#snippet OrderCard(item: CartItemUiState, line: CartLineItem | undefined)}
+  {#if !item.deleted}
+    {@const rate24 = itemRate24h(line)}
+    {@const rate12 = itemRate12h(line, rate24)}
+    {@const cardRateVal = cardRate(rate24, rate12, item.durType)}
+    <div class="order-card">
+      <div class="order-card-inner">
+        <!-- Check & Delete -->
+        <div class="card-top-row">
+          <button class="checkbox-btn" onclick={() => updateItem(item.id, { checked: !item.checked })} aria-label="선택">
+            <svg viewBox="0 0 20 20" fill="none" class="checkbox-svg">
+              {#if item.checked}
+                <rect fill="#3B2F8A" height="18" rx="4" width="18" x="1" y="1"/>
+                <path d="M5 10L8.5 13.5L15 6" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+              {:else}
+                <rect fill="white" height="18" rx="4" width="18" x="1" y="1"/>
+                <rect height="18" rx="4" stroke="#AAAAAA" stroke-width="2" width="18" x="1" y="1"/>
+              {/if}
+            </svg>
+          </button>
+          <button class="delete-btn" onclick={() => removeItem(item)} aria-label="삭제">
+            <svg width="14" height="14" viewBox="0 0 17 17" fill="none">
+              <path d="M15.5 1.5L8.5 8.5M8.5 8.5L1.5 15.5M8.5 8.5L15.5 15.5M8.5 8.5L1.5 1.5" stroke="#AAAAAA" stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5"/>
+            </svg>
+          </button>
+        </div>
+
+        <!-- Product Row -->
+        <div class="product-row">
+          <div class="product-img">
+            <img src={line?.product?.image_urls?.[0] ?? 'https://picsum.photos/seed/cam/150/150'} alt={line?.product?.name ?? '상품'} width="150" height="150"/>
+          </div>
+          <div class="product-meta">
+            <p class="product-name">{line?.product?.name ?? '상품'}</p>
+            <div class="dur-tabs" role="group" aria-label="대여 기간 유형">
+              {#each DUR_TYPES as d}
+                <button
+                  class="dur-tab"
+                  class:dur-tab-active={item.durType === d}
+                  onclick={() => updateItem(item.id, { durType: d })}
+                  aria-pressed={item.durType === d}
+                >{DUR_LABELS[d]}</button>
+              {/each}
+            </div>
+            <p class="product-price">
+              {DUR_LABELS[item.durType]}&nbsp;
+              {item.durType === 'purchase' ? '별도 문의' : `${cardRateVal.toLocaleString()} 원`}
+            </p>
+            <div class="product-badges">
+              <div class="badge-mem">
+                <svg viewBox="0 0 40 40" fill="none" class="badge-svg">
+                  <path d="M20 0L23.9714 3.03625L28.9008 1.98062L31.1277 6.39613L36.0388 7.5302L36.08 12.4504L40 15.5496L37.8475 20L40 24.4504L36.08 27.5496L36.0388 32.4698L31.1277 33.6039L28.9008 38.0194L23.9714 36.9637L20 40L16.0286 36.9637L11.0992 38.0194L8.87228 33.6039L3.96124 32.4698L3.91998 27.5496L0 24.4504L2.15253 20L0 15.5496L3.91998 12.4504L3.96124 7.5302L8.87228 6.39613L11.0992 1.98062L16.0286 3.03625L20 0Z" fill="#FF3535"/>
+                  <path d="M23.0742 19.2136C23.0742 20.9516 21.6979 22.3606 20.0001 22.3606C18.3022 22.3606 16.9259 20.9516 16.9259 19.2136C16.9259 17.4755 18.3022 16.0665 20.0001 16.0665C21.6979 16.0665 23.0742 17.4755 23.0742 19.2136Z" fill="white"/>
+                </svg>
+              </div>
+              <div class="badge-deal">
+                <svg viewBox="0 0 40 40" fill="none" class="badge-svg">
+                  <path d="M20 0L23.9714 3.03625L28.9008 1.98062L31.1277 6.39613L36.0388 7.5302L36.08 12.4504L40 15.5496L37.8475 20L40 24.4504L36.08 27.5496L36.0388 32.4698L31.1277 33.6039L28.9008 38.0194L23.9714 36.9637L20 40L16.0286 36.9637L11.0992 38.0194L8.87228 33.6039L3.96124 32.4698L3.91998 27.5496L0 24.4504L2.15253 20L0 15.5496L3.91998 12.4504L3.96124 7.5302L8.87228 6.39613L11.0992 1.98062L16.0286 3.03625L20 0Z" fill="#553FE0"/>
+                  <path d="M25 14L22 20L25 26H15L18 20L15 14H25Z" fill="white"/>
+                </svg>
+              </div>
+            </div>
+          </div>
+          <div class="qty-wrap">
+            <span class="qty-label">수량</span>
+            <div class="qty-ctrl">
+              <button class="qty-arrow" onclick={() => updateItem(item.id, { qty: Math.max(1, item.qty - 1) })}>
+                <svg width="8" height="14" viewBox="0 0 8 14" fill="none"><path d="M7 1L1 7L7 13" stroke="#444444" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"/></svg>
+              </button>
+              <div class="qty-num">{item.qty}</div>
+              <button class="qty-arrow" onclick={() => updateItem(item.id, { qty: item.qty + 1 })}>
+                <svg width="8" height="14" viewBox="0 0 8 14" fill="none"><path d="M1 1L7 7L1 13" stroke="#444444" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"/></svg>
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Accordions -->
+        <div class="accordions" class:bulk-locked={bulkApplied}>
+          <!-- 대여 방법 -->
+          <div class="acc-item">
+            <button class="acc-head" onclick={() => updateItem(item.id, { acc: toggleAcc(item.acc, 'rental') })}>
+              <span class="acc-label">대여 방법</span>
+              <div class="acc-head-right">
+                <span class="acc-value">{methodLabel(item.opts.rentalMethod)}</span>
+                <svg width="12" height="8" viewBox="0 0 12 8" fill="none" style="transition:transform 0.3s;transform:{item.acc.rental ? 'rotate(180deg)' : 'none'}">
+                  <path d="M1 1L6 7L11 1" stroke="#444" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                </svg>
+              </div>
+            </button>
+            {#if item.acc.rental}
+              <div transition:slide={{ duration: 300 }} class="acc-body">
+                {@render RentalForm({ type: 'rental', calId: `${item.id}-rental`, selectedDate: item.rentalDate, onDateChange: (d) => itemHandleRentalDate(item, d), timeId: `${item.id}-rental-t`, selectedTime: item.rentalTime, onTimeChange: (t) => itemHandleRentalTime(item, t), method: item.opts.rentalMethod, form: item.rentalForm, copyToReturn: item.opts.copyToReturn, onMethodChange: (v) => itemHandleMethod(item, v), onFormChange: (f) => itemHandleRentalForm(item, f), onCopyChange: (v) => itemHandleCopy(item, v) })}
+              </div>
+            {/if}
+          </div>
+          <!-- 반납 방법 -->
+          <div class="acc-item">
+            <button class="acc-head" onclick={() => updateItem(item.id, { acc: toggleAcc(item.acc, 'return_') })}>
+              <span class="acc-label">반납 방법</span>
+              <div class="acc-head-right">
+                <span class="acc-value">{methodLabel(item.opts.returnMethod)}</span>
+                <svg width="12" height="8" viewBox="0 0 12 8" fill="none" style="transition:transform 0.3s;transform:{item.acc.return_ ? 'rotate(180deg)' : 'none'}">
+                  <path d="M1 1L6 7L11 1" stroke="#444" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                </svg>
+              </div>
+            </button>
+            {#if item.acc.return_}
+              <div transition:slide={{ duration: 300 }} class="acc-body">
+                {@render RentalForm({ type: 'return', calId: `${item.id}-return`, selectedDate: item.returnDate, onDateChange: (d) => updateItem(item.id, { returnDate: d }), timeId: `${item.id}-return-t`, selectedTime: item.returnTime, onTimeChange: (t) => updateItem(item.id, { returnTime: t }), method: item.opts.returnMethod, form: item.returnForm, onMethodChange: (v) => itemHandleReturnMethod(item, v), onFormChange: (f) => updateItem(item.id, { returnForm: f }) })}
+              </div>
+            {/if}
+          </div>
+          <!-- 약정 요금 -->
+          <div class="acc-item">
+            <button class="acc-head" onclick={() => updateItem(item.id, { acc: toggleAcc(item.acc, 'fee') })}>
+              <span class="acc-label">약정 요금</span>
+              <div class="acc-head-right">
+                <span class="acc-value">{(cardRateVal * item.qty).toLocaleString()} 원</span>
+                <svg width="12" height="8" viewBox="0 0 12 8" fill="none" style="transition:transform 0.3s;transform:{item.acc.fee ? 'rotate(180deg)' : 'none'}">
+                  <path d="M1 1L6 7L11 1" stroke="#444" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                </svg>
+              </div>
+            </button>
+            {#if item.acc.fee}
+              <div transition:slide={{ duration: 300 }} class="acc-body">
+                {@render FeeContent({
+                  couponWelcome: item.opts.couponWelcome,
+                  couponMembership: item.opts.couponMembership,
+                  onCouponWelcome: () => updateItem(item.id, { opts: { ...item.opts, couponWelcome: !item.opts.couponWelcome } }),
+                  onCouponMembership: () => updateItem(item.id, { opts: { ...item.opts, couponMembership: !item.opts.couponMembership } }),
+                  subtotal: cardRateVal * Math.max(item.qty, 1),
+                  discountAmt: Math.round(cardRateVal * Math.max(item.qty, 1) * otDiscountRate / 100),
+                  deliveryFeeAmt: deliveryFee(item.opts.rentalMethod, otGrade),
+                  totalDays: rentalDays(item.rentalDate, item.returnDate),
+                  durLabel: DUR_LABELS[item.durType],
+                })}
+              </div>
+            {/if}
+          </div>
+        </div>
+      </div>
+    </div>
+  {/if}
+{/snippet}
 
 {#snippet RentalForm(props: {
   type: 'rental' | 'return';
@@ -1639,7 +1505,6 @@
     flex-shrink: 0;
   }
   .product-img img { width: 100%; height: 100%; object-fit: cover; }
-  .sub-img { width: 100px; height: 100px; border-radius: 20px; }
   .product-meta {
     flex: 1;
     min-width: 0;
@@ -1739,30 +1604,6 @@
     line-height: 2;
     min-width: 44px;
     text-align: center;
-  }
-
-  /* ══ Sub items ══ */
-  .sub-row {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 20px;
-    align-items: center;
-  }
-  .sub-arrow {
-    width: 82px;
-    height: 25px;
-    flex-shrink: 0;
-    display: flex;
-    align-items: flex-end;
-  }
-  .sub-content {
-    flex: 1;
-    min-width: 0;
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    flex-wrap: wrap;
-    gap: 20px;
   }
 
   /* ══ Accordions ══ */
@@ -2394,15 +2235,12 @@
     .order-card { border-radius: 40px; }
     .order-card-inner { padding: 20px; gap: 30px; }
     .product-img { width: 80px; height: 80px; border-radius: 16px; }
-    .sub-img { width: 70px; height: 70px; border-radius: 14px; }
     .product-name { font-size: 14px; }
     .product-price { font-size: 12px; }
     .badge-mem, .badge-deal, .badge-svg { width: 30px; height: 30px; }
     .qty-label { font-size: 14px; }
     .qty-ctrl { gap: 16px; }
     .qty-num { padding: 6px 14px; font-size: 13px; }
-    .sub-arrow { width: 40px; }
-    .sub-arrow svg { width: 40px; }
     .acc-head { padding: 16px 20px; border-radius: 20px; }
     .acc-label { font-size: 15px; }
     .acc-value { font-size: 14px; }
