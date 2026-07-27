@@ -486,7 +486,7 @@ plan_source: users-stevenmac-documents-pseries-crazy-sorted-quail.md
   - src/routes/contract/expired/+page.svelte ← 신규 (만료 링크 안내 페이지)
   - src/routes/contract/[token]/+page.server.ts ← 수정 (expires_at 만료 체크 추가)
   - src/routes/api/contracts/[token]/sign/+server.ts ← 수정 (expires_at 만료 체크 + 서명 후 채팅 알림)
-  - src/routes/api/cms/contracts/[id]/send-chat/+server.ts ← 수정 (context_type 'payment'→'reservation')
+  - src/routes/api/cms/contracts/[id]/send-chat/+server.ts ← 수정 (context_type 'payment'→'reservation' + 세션 선택 우선순위 pending→open 변경)
   - src/lib/types/database.ts ← 수정 (Contract 인터페이스 reservation_id: number, nullable 필드 정정)
   - src/lib/components/cms/RentalContractViewer.svelte ← 수정 (재발송 확인 다이얼로그 추가)
   - src/routes/checkout/+page.server.ts ← 신규 (세션 검증 + 실 카트 데이터 로드)
@@ -550,6 +550,11 @@ plan_source: users-stevenmac-documents-pseries-crazy-sorted-quail.md
   - footer-guide 인라인 안내 메시지 (조건 미충족 시 footerVisible 상태에서만 노출)
   - @ts-expect-error 주석 1개 — data.userId (dev server 기동 시 PageData 자동 병합으로 해소 예정)
   - svelte-check: 13 errors (기존 동일)
+- [x] BUG-SEND-CHAT: send-chat 세션 오선택 — pending 세션 우선순위 적용 | CRITICAL FIX | ✅ 완료 (2026-07-27)
+  - 원인: 사용자에게 open·pending 세션이 혼재할 때 `updated_at DESC` 정렬이 open(상품탐색) 세션을 선택
+          → 실제 대화가 있는 pending(관리자 핸드오프) 세션 대신 잘못된 세션에 contract_link 발송
+  - 수정: 세션 선택 순서를 pending → open → closed 재활성화 → 신규생성으로 명시적 우선순위화
+  - 검증: mublues@gmail.com — '전자계약 보기' 카드 pending 세션(실 대화)에서 정상 수신 확인 ✅
 - [ ] I-1: 계약서 없는 상태 관리자 조작 UI (계약서 연결/PDF 업로드) | CRITICAL | ⏳ 대기
 
 Migration 적용 완료:
