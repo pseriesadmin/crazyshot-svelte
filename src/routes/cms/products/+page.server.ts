@@ -345,7 +345,20 @@ export const load: PageServerLoad = async ({ locals, url }) => {
     is_active: boolean
     price_rules: Array<{ duration_type: string; price: number }>
   }
+  type RootProductInfo = {
+    id: string
+    name: string
+    brand: string | null
+    category: string
+    image_urls: string[]
+    price12h: number | null
+    price24h: number | null
+    product_code: string | null
+    assetCount: number
+    assetTotal: number
+  }
   let inventoryList: InventoryUnit[] = []
+  let rootProduct: RootProductInfo | null = null
   if (selectedId) {
     // 자식 상품이 선택된 경우 → 부모 기준으로 전체 재고 그룹 로드
     const parentProductId = selectedProduct
@@ -368,6 +381,44 @@ export const load: PageServerLoad = async ({ locals, url }) => {
         .filter((r) => r.is_active && !r.deleted_at)
         .map((r) => ({ duration_type: r.duration_type, price: r.price })),
     }))
+
+    // 대표 상품정보 (대표 섹션 카드 표시용)
+    if (parentProductId) {
+      // 자식 선택: 부모 데이터 별도 조회
+      const { data: rpData } = await admin
+        .from('products')
+        .select('id, name, brand, category, image_urls, product_code')
+        .eq('id', rootId)
+        .single()
+      if (rpData) {
+        rootProduct = {
+          id: rpData.id as string,
+          name: rpData.name as string,
+          brand: (rpData as Record<string, unknown>).brand as string | null,
+          category: rpData.category as string,
+          image_urls: (rpData.image_urls as string[]) ?? [],
+          price12h: prices12h[rootId] ?? childFallback12h[rootId] ?? null,
+          price24h: prices24h[rootId] ?? childFallback24h[rootId] ?? null,
+          product_code: (rpData as Record<string, unknown>).product_code as string | null,
+          assetCount: stockCounts[rootId]?.active ?? 0,
+          assetTotal: stockCounts[rootId]?.total ?? 0,
+        }
+      }
+    } else if (selectedProduct) {
+      // 부모 선택: selectedProduct = rootProduct
+      rootProduct = {
+        id: selectedProduct.id,
+        name: selectedProduct.name,
+        brand: (selectedProduct as unknown as Record<string, unknown>).brand as string | null,
+        category: (selectedProduct as unknown as Record<string, unknown>).category as string,
+        image_urls: selectedProduct.image_urls,
+        price12h: selectedProduct.price12h ?? null,
+        price24h: selectedProduct.price24h ?? null,
+        product_code: (selectedProduct as unknown as Record<string, unknown>).product_code as string | null,
+        assetCount: stockCounts[selectedProduct.id]?.active ?? 0,
+        assetTotal: stockCounts[selectedProduct.id]?.total ?? 0,
+      }
+    }
   }
 
   // 배송 설정 (전역 singleton — selectedId 무관)
@@ -405,6 +456,7 @@ export const load: PageServerLoad = async ({ locals, url }) => {
     initialTab,
     selectedProduct,
     selectedPriceRules,
+    rootProduct,
     inventoryList,
     partnerComboItems,
     rentalPeriods,
@@ -442,6 +494,20 @@ export const actions: Actions = {
     }
 
     const admin = createClient(getSupabaseUrl(), env.SUPABASE_SERVICE_ROLE_KEY ?? '')
+
+    // 재고 단위(자식) 상품은 images 외 모든 section 저장 차단 — 대표(부모) 기준 조회이므로
+    // 자식에 저장된 데이터는 고객 화면에 반영되지 않으며 데이터 불일치 사고로 이어짐
+    const childBlockedSections = ['basic', 'slug', 'pricing', 'content', 'components', 'specs', 'options', 'rental']
+    if (childBlockedSections.includes(sectionType)) {
+      const { data: childCheck } = await admin
+        .from('products')
+        .select('parent_product_id')
+        .eq('id', productId)
+        .single()
+      if ((childCheck as { parent_product_id: string | null } | null)?.parent_product_id) {
+        return fail(400, { error: '재고 단위 상품은 대표 상품에서 수정하세요.' })
+      }
+    }
 
     if (sectionType === 'basic') {
       const name = ((form.get('name') as string | null) ?? '').trim()
@@ -668,12 +734,33 @@ export const actions: Actions = {
     if (!productId) return fail(400, { error: '상품 ID 누락' })
 
     const admin = createClient(getSupabaseUrl(), env.SUPABASE_SERVICE_ROLE_KEY ?? '')
+
+    const { data: target } = await admin
+      .from('products')
+      .select('parent_product_id')
+      .eq('id', productId)
+      .single()
+
     const { error } = await admin
       .from('products')
       .update({ deleted_at: new Date().toISOString() })
       .eq('id', productId)
 
     if (error) return fail(500, { error: '삭제에 실패했습니다.' })
+
+    // 자식(재고 단위) 삭제로 부모의 남은 재고가 0이 되면 부모 노출을 자동 OFF — 재고 없는 상품이 사용자 화면에 그대로 노출되는 것 방지
+    const parentId = (target as { parent_product_id: string | null } | null)?.parent_product_id
+    if (parentId) {
+      const { count } = await admin
+        .from('products')
+        .select('id', { count: 'exact', head: true })
+        .eq('parent_product_id', parentId)
+        .is('deleted_at', null)
+      if ((count ?? 0) === 0) {
+        await admin.from('products').update({ is_active: false }).eq('id', parentId)
+      }
+    }
+
     return { success: true, action: 'deleteProduct' }
   },
 

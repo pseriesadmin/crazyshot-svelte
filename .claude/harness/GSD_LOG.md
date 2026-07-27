@@ -1,6 +1,95 @@
 # GSD_LOG.md — 크레이지샷 실행 이력
 # 형식: [YYYY-MM-DD HH:MM] 타입 | 태스크명 | 파일 | 소요 | 결과
 
+[2026-07-27] BOUNDARY | 예약 카트(/checkout) 체크박스 기본 체크 + 체크 해제 시 결제 확정 대상에서도 제외 | src/routes/checkout/+page.svelte, src/routes/api/checkout/confirm-mock/+server.ts | ✅ DONE
+  배경: Stephen 요청 2건 (연속) — ① 상품별 선택 체크박스 기본 체크 상태 + 체크 해제 시 "약정요금" 합계에서
+    제외, ② 체크 해제 시 실제 결제 확정(confirm-mock) 대상에서도 제외
+  해결:
+    · `newItemState()` 기본값 `checked: false` → `checked: true`
+    · 약정요금 관련 계산(대여료 소계·멤버십 할인·배송비·보증금·총 대여기간)을 전부
+      `!it.deleted && it.checked` 조건으로 재작성 — 서버 RPC 합계(sd.calcTotal 등, 체크 상태를
+      알 수 없음) 대신 카드에 이미 표시 중인 것과 동일한 방식(itemRate24h/12h + cardRate)으로
+      체크된 항목만 클라이언트에서 합산
+    · `hasItems`/`datesSet` 조건도 checked 기준으로 정합화 — 체크 해제한 상품은 카트에 남아있어도
+      "선택된 상품 없음"/날짜 필수 조건에서 제외되도록 수정 (그대로 두면 화면 합계·CTA 상태가
+      실제 제출 대상과 어긋나는 모순이 생김)
+    · footer CTA 클릭 시 `checkedIds = itemsState.filter(!deleted && checked).map(id)`를
+      `/api/checkout/confirm-mock`에 `{ reservationIds }`로 전송하도록 변경
+    · `confirm-mock/+server.ts`: `reservationIds` 파라미터를 받아 해당 목록만
+      `.in('id', ids)`로 필터링 후 confirmed 처리 (미전달 시 하위호환으로 전체 hold 확정 유지,
+      빈 배열 전달 시 즉시 0건 응답)
+  검증: svelte-check 에러 0건(신규 없음). 브라우저 자동화 도구가 이번 세션 후반부터 간헐적으로
+    응답 없음("Browser pane is currently hidden")을 반복해 체크박스 클릭 → 합계 변화 → 결제 확정
+    시 실제로 체크된 예약만 confirmed로 바뀌는지의 실측 클릭 검증은 완료하지 못함. 로직은 기존에
+    실측 검증된 `deleted` 배제 패턴과 동일한 구조로 작성해 정확성에 대한 확신은 높으나,
+    Stephen 직접 확인 권장(특히: 2개 이상 담고 1개만 체크 해제 후 결제 → 체크 해제한 건은
+    hold로 남고 나머지만 confirmed로 바뀌는지).
+
+[2026-07-27] RESEARCH | CMS 상담채팅 대여 라이프사이클 알림 정합성 정밀 감사 (전체 → 14개 결함 목록화) | 수정 파일 없음 · 학습파일 1건 생성 | ✅ DONE
+  감사 범위: /cms/chat 상담세션 목록 연동 + 상품선택~반납완료 전 구간 사용자 채팅 알림 정합성
+    (결제 PG 미구현 — Stephen 지시로 "예약신청→예약승인" 직행 Mock으로 간주하고 그 위에서 검증)
+  감사 방법: Explore 에이전트 2개 병렬(①체크아웃/예약/결제mock/승인/상태머신 ②채팅알림 트리거/CMS세션목록/전자계약)
+  발견 결함 14건:
+    🔴 CRITICAL (4): 실결제(Toss) 경로 예약승인 알림 미발송 / "대여확인" 알림 타입 부재 /
+      계약서명 시 상태 직접 UPDATE(H-01 위반)+알림 유실 / confirm-mock 무관 hold 예약 일괄승인
+    🟡 BOUNDARY (6): reservation_hold·approval 콘텐츠 텍스트 미매핑 / 택배·배송 추적 알림 부재 /
+      알림 세션선택 context_type 무시 / 계약발송·서명 세션재사용 정책 위반 / 수동·자동 알림 중복발송
+      가능(멱등성 없음) / return_remind 발송시점-라벨 불일치
+    🟢 ROUTINE (4): /api/chat/action-card 죽은 코드 / CMS 세션목록 페이지네이션·N+1 없음 /
+      AUTO_NOTIFY['confirmed'] 도달불가 데드코드 / rental-lifecycle.md AUTO_NOTIFY 매핑 문서 누락
+  정상 구현 재확인: AUTO_NOTIFY 배선 정상 연결 / send_rental_chat_notification 스키마 정합 /
+    nextStatus·nextLabel 상태머신 문서 100% 일치 / chat_sessions 사용자 연동 정상 / 예약↔대여 목록 정합
+  결과 파일:
+  - .claude/harness/learnings/chat_notification_lifecycle_audit_2026-07-27.md ← 상세 내용(항목별 file:line 근거)
+  - .claude/harness/TASK.md ← BACKLOG에 BL-CHAT-C1~C4/B1~B6/R1~R4 14개 항목 신규 추가 + NOW 섹션 완료 기록
+  본 감사는 코드 수정 없이 정적 분석만으로 진행 — 발견 항목은 전부 Stephen 확인 후 별도 세션에서 처리 예정
+
+[2026-07-27] BOUNDARY+CRITICAL FIX | CMS 대표/자식 상품 ProductDetailPanel 정보 관리 전면 정비 | src/lib/components/cms/ProductDetailPanel.svelte, src/routes/cms/products/+page.server.ts, src/routes/cms/products/+page.svelte | ✅ DONE
+  배경: "CMS 자식 상품 수정 제한 전면 적용" 완료 후 동일 세션에서 Stephen이 이어서 요청한 7건
+  ⓪ 부모(대표) 상품 목록 UI 구조 개선: 상세 뷰어 패널을 "대표 상품정보 등록관리"(rep-section,
+     부모 전용) / "실 상품코드 반영 목록"(inv-accordion, 자식 전용) 2개 섹션으로 완전 분리.
+     panelOpen 판정 기준을 selectedProduct 존재 → rootProduct(자식 선택 시에도 부모 정보를
+     함께 로드) 존재로 교체. +page.server.ts에 rootProduct 로드 로직 신규 추가(자식 선택 시
+     parent_product_id로 부모 이름·브랜드·카테고리·이미지·가격·품번·재고 카운트 별도 조회).
+  ① 저장 버튼 disabled → 완전 숨김: basic(기본정보+슬러그)·options·pricing·rental·content·components·specs
+     7개 탭 8개 저장 버튼을 {#if !isChildProduct} 래핑으로 자식 패널에서 아예 제거
+  ② 입력 필드 포커스 즉시 차단: blockChildInputFocus(e) 신규 함수 — 위 7개 탭 section에
+     onfocusin으로 연결, INPUT/TEXTAREA/SELECT/contentEditable 포커스 시 blur() +
+     csToast.warning('대표 상품정보에서 수정하세요.')
+  ③ 상품정보 삭제 버튼: 기존 모달(확인/취소) 방식 → CmsDeleteButton.svelte와 동일한
+     "1차 클릭(csToast.warning 경고 + 제출 취소) → 2차 클릭(실제 삭제)" 패턴으로 교체.
+     부모·자식 패널이 같은 컴포넌트를 쓰므로 양쪽에 자동 적용.
+     추가로 deleteProduct 서버 액션에 로직 보강: 자식 삭제로 부모의 남은 재고(soft-delete
+     안 된 자식)가 0개가 되면 부모 is_active를 자동으로 false 전환 — 재고 없는 상품이
+     사용자 화면에 그대로 노출되는 것 방지. 자식 삭제는 여전히 자기 자신의 행만 삭제.
+  ④ 자식 상품 '이력' 탭 — 유일하게 편집 가능한 탭인데 이미지 추가가 전혀 동작하지 않는
+     버그 발견 및 수정:
+     - 근본 원인: handleHistoryFileSelect()에서 `input.value = ''`를 `Array.from(files)`보다
+       먼저 실행. FileList는 input의 live 참조라 value를 비우면 그 즉시 참조 중인 files도
+       함께 비워져 항상 빈 배열로 처리됨 — 파일을 선택해도 업로더가 실행되지 않는 원인
+       (이미지 탭의 handleFileSelect는 순서가 반대로 되어 있어 정상 동작 중이었음)
+     - 수정: Array.from(files)로 먼저 복사 후 value 초기화하도록 순서 교체
+     - 부수 수정: {#each historyRecords as rec}에 키가 없어 add/delete 후 목록 순서가
+       바뀌면 수정 폼·업로드 인풋 바인딩이 잘못된 행에 붙을 위험 → (rec.id) 키 추가
+     - 검증 방법: Claude_Browser의 순수 JS DataTransfer 주입으로는 이 샌드박스에서
+       input.files 할당이 반영되지 않아(환경 제약) 신뢰 불가 → chrome-devtools-mcp의
+       네이티브 파일 업로드(upload_file, 실제 OS 파일 선택 경로 사용)로 전환해 재현·검증
+     - 결과: 업로드 → 저장 → 목록 반영 → 삭제 확인 모달 → 삭제까지 전체 라이프사이클
+       실제 브라우저에서 통과 확인, Stephen 본인 브라우저에서도 정상 동작 재확인 완료 ✅
+  ⑤ '빠른 재고 등록' 버튼 자식 상품에서 제외: 이 기능·버튼 UI는 부모(대표) ProductDetailPanel
+     에만 존재·작동해야 정합하다는 요청 — summary-bar의 status-cta-btn을
+     {#if !isChildProduct}로 래핑해 자식 패널에서 완전히 숨김. openCloneModal 호출부가
+     이 버튼 하나뿐임을 grep으로 확인해 자식 쪽 다른 진입 경로가 없음을 검증.
+  ⑥ 자식 패널 '닫기' 버튼을 토글 우측 끝으로 이동: 기존에는 ProductDetailPanel 내부
+     ph-code-row(품번 행)에 붙어있던 close-btn(✕)을 제거하고(품번 표시는 유지),
+     +page.svelte의 inv-acc-header에서 노출 토글(form) 바로 뒤에 신규 .inv-acc-close-btn
+     으로 재배치 — 해당 아코디언 행이 펼쳐진 상태(isActive)일 때만 노출. 클릭 시 호출하는
+     closePanel() 함수는 그대로 유지해 기능 변화 없음. 실브라우저에서 클릭 시 URL의
+     ?selected= 파라미터가 제거되며 패널이 정상적으로 닫히는 것까지 확인.
+  svelte-check: 신규 ERROR 0건 (기존 11 errors 그대로 유지 — account/profile RPC 타입 이슈, 무관)
+  참고: 상품 삭제 2차 클릭(실제 soft-delete 실행)까지는 스테이지 DB 실 데이터 보호를 위해
+    자동 실행하지 않음 — 1차 클릭(경고 토스트 노출)까지만 실측, 필요 시 Stephen 확인 요망
+
 [2026-07-27] BOUNDARY | 예약 카트(/checkout) 미로그인 게스트 예약 허용 + 완료 버튼 문구 회원/비회원 분기 | src/routes/products/[id]/+page.svelte, src/routes/checkout/+page.server.ts, +page.svelte, 삭제 checkout/+page.ts | ✅ DONE
   배경: Stephen 요청 3건
     ① 미로그인 사용자도 실제 예약 후 /checkout에 로그인 사용자와 동일한 UI·실 데이터로 랜딩

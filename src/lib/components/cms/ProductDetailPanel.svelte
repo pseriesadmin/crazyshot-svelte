@@ -116,6 +116,20 @@
   const validTabs: TabKey[] = ['basic', 'options', 'pricing', 'rental', 'content', 'components', 'images', 'specs', 'history']
   const parsedInitialTab: TabKey = (validTabs.includes(initialTab as TabKey) ? initialTab : 'basic') as TabKey
   let activeTab = $state<TabKey>(parsedInitialTab)
+  // 자식 상품(빠른재고등록 생성) 여부 — history 탭만 수정 허용, 나머지 읽기 전용
+  const isChildProduct = $derived(!!product.parent_product_id)
+
+  // 자식 상품 읽기전용 탭 — 입력요소 포커스 시 토스트 경고 + 즉시 블러(수정 차단)
+  function blockChildInputFocus(e: FocusEvent) {
+    if (!isChildProduct) return
+    const target = e.target as HTMLElement | null
+    if (!target) return
+    const tag = target.tagName
+    if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || target.isContentEditable) {
+      target.blur()
+      csToast.warning('대표 상품정보에서 수정하세요.')
+    }
+  }
   let canvasEl = $state<HTMLCanvasElement | null>(null)
   let isSaving = $state(false)
   let showCategoryPicker = $state(false)
@@ -408,6 +422,10 @@
 
   // 저장 핸들러 (enhance 콜백)
   function handleSectionSave() {
+    if (isChildProduct) {
+      csToast.warning('대표 상품에서 수정하세요.')
+      return () => {}
+    }
     isSaving = true
     return async ({ result }: { result: ActionResult }) => {
       isSaving = false
@@ -471,6 +489,7 @@
   }
 
   async function handleFilesUpload(files: FileList | File[]) {
+    if (isChildProduct) { csToast.warning('대표 상품에서 수정하세요.'); return }
     const arr = Array.from(files)
     let added = false
     for (const file of arr) {
@@ -535,6 +554,7 @@
   }
 
   async function removeImageAndSave(i: number) {
+    if (isChildProduct) { csToast.warning('대표 상품에서 수정하세요.'); return }
     const removedUrl = localImages[i]
     localImages = localImages.filter((_, idx) => idx !== i)
     await autoSave()
@@ -677,10 +697,12 @@
   }
 
   async function handleHistoryFileSelect(e: Event) {
-    const files = (e.target as HTMLInputElement).files
+    const input = e.target as HTMLInputElement
+    const files = input.files
     if (!files?.length || !editingRecord) return
-    ;(e.target as HTMLInputElement).value = ''
+    // FileList는 input의 live 참조 — value 초기화 전에 배열로 복사해야 함
     const arr = Array.from(files)
+    input.value = ''
     for (const file of arr) {
       if (editingRecord.images.length >= 20) break
       const result = await uploadHistoryFile(file)
@@ -823,6 +845,7 @@
   )
 
   async function saveContent() {
+    if (isChildProduct) { csToast.warning('대표 상품에서 수정하세요.'); return }
     isSavingContent = true
     try {
       const fd = new FormData()
@@ -1002,6 +1025,10 @@
   }
 
   async function saveOptions() {
+    if (isChildProduct) {
+      csToast.warning('대표 상품에서 수정하세요.')
+      return
+    }
     isSavingOptions = true
     try {
       const fd = new FormData()
@@ -1040,7 +1067,7 @@
   ]
 
   // ─── 상품 삭제 ───────────────────────────────────────────────
-  let showDeleteConfirm = $state(false)
+  let deletePending = $state(false)
   let isDeleting = $state(false)
 
   // ─── 상품 복제 (빠른 재고 등록) ───────────────────────────────
@@ -1083,11 +1110,18 @@
     }
   }
 
-  function handleDeleteProduct() {
+  // 1차 클릭: 토스트 경고 후 제출 취소(무장) / 2차 클릭: 실제 삭제 제출
+  function handleDeleteProduct({ cancel }: { cancel: () => void }) {
+    if (!deletePending) {
+      deletePending = true
+      csToast.warning('한번 더 누르면 삭제됩니다.')
+      cancel()
+      return
+    }
     isDeleting = true
     return async ({ result }: { result: ActionResult }) => {
       isDeleting = false
-      showDeleteConfirm = false
+      deletePending = false
       if (result.type === 'success') {
         csToast.success('상품이 삭제됐습니다.')
         onclose()
@@ -1101,50 +1135,50 @@
 <div class="panel-wrap">
 <div class="detail-panel">
 
-  <!-- 패널 헤더 -->
-  <div class="panel-header">
-    <!-- 상품코드(품번) 행 — 최상위 + 닫기 버튼 우측 정렬 -->
-    <div class="ph-code-row">
-      <span class="ph-code-label">품번</span>
-      {#if product.product_code}
-        <span class="ph-code-val">{product.product_code}</span>
-      {:else}
-        <span class="ph-code-pending">미발행</span>
-      {/if}
-      <button class="close-btn" onclick={onclose} aria-label="패널 닫기" type="button">✕</button>
-    </div>
+  <!-- 품번 행 — 자식(재고단위) 전용. 닫기 버튼은 상위 아코디언 헤더 토글 우측으로 이동 배치됨 -->
+  {#if isChildProduct}
+  <div class="ph-code-row">
+    <span class="ph-code-label">품번</span>
+    {#if product.product_code}
+      <span class="ph-code-val">{product.product_code}</span>
+    {:else}
+      <span class="ph-code-pending">미발행</span>
+    {/if}
+  </div>
+  {/if}
 
-    <!-- 상품명 + 카피 | QR -->
-    <div class="ph-body">
-      <!-- 대표 이미지 썸네일 (image_urls[0], thumb 사이즈) -->
-      <div class="ph-thumb">
-        {#if product.image_urls?.[0]}
-          <img
-            src={product.image_urls[0].replace('/large_', '/thumb_')}
-            alt={product.name}
-            class="ph-thumb-img"
-          />
+  <!-- 패널 헤더 본문 — 자식(재고단위) 전용. 부모 패널에서는 rep-section 카드가 대신함 -->
+  {#if isChildProduct}
+  <div class="ph-body">
+    <!-- 대표 이미지 썸네일 (image_urls[0], thumb 사이즈) -->
+    <div class="ph-thumb">
+      {#if product.image_urls?.[0]}
+        <img
+          src={product.image_urls[0].replace('/large_', '/thumb_')}
+          alt={product.name}
+          class="ph-thumb-img"
+        />
+      {/if}
+    </div>
+    <div class="ph-left">
+      <span class="ph-cat">{categoryLabel}</span>
+      <h2 class="ph-name">{product.name}</h2>
+      {#if product.product_caption}
+        <p class="ph-caption">{product.product_caption}</p>
+      {/if}
+    </div>
+    <div class="ph-right">
+      <div class="qr-wrap">
+        {#if product.qr_payload}
+          <canvas bind:this={canvasEl} width="88" height="88" aria-label="상품 QR 코드"></canvas>
+          <button class="qr-dl-btn" onclick={downloadQR} title="QR PNG 다운로드" type="button">↓ QR 저장</button>
+        {:else}
+          <div class="qr-placeholder" aria-label="QR 코드 준비 중">QR</div>
         {/if}
-      </div>
-      <div class="ph-left">
-        <span class="ph-cat">{categoryLabel}</span>
-        <h2 class="ph-name">{product.name}</h2>
-        {#if product.product_caption}
-          <p class="ph-caption">{product.product_caption}</p>
-        {/if}
-      </div>
-      <div class="ph-right">
-        <div class="qr-wrap">
-          {#if product.qr_payload}
-            <canvas bind:this={canvasEl} width="88" height="88" aria-label="상품 QR 코드"></canvas>
-            <button class="qr-dl-btn" onclick={downloadQR} title="QR PNG 다운로드" type="button">↓ QR 저장</button>
-          {:else}
-            <div class="qr-placeholder" aria-label="QR 코드 준비 중">QR</div>
-          {/if}
-        </div>
       </div>
     </div>
   </div>
+  {/if}
 
   <!-- 요약 바 -->
   <div class="summary-bar">
@@ -1158,7 +1192,9 @@
         {product.is_active ? '노출(ON)' : '미노출(OFF)'}
       </span>
     </div>
+    {#if !isChildProduct}
     <button type="button" class="status-cta-btn" onclick={() => openCloneModal('add_inventory')}>빠른 재고 등록</button>
+    {/if}
   </div>
 
   <!-- 탭 네비게이션 -->
@@ -1180,9 +1216,13 @@
 
     <!-- ① 기본정보 -->
     {#if activeTab === 'basic'}
-      <div class="section" role="tabpanel">
+      <div class="section" role="tabpanel" onfocusin={blockChildInputFocus}>
+        {#if isChildProduct}
+          <div class="child-readonly-notice" role="status">재고 단위 상품입니다. 수정은 <strong>대표 상품</strong>에서 해주세요.</div>
+        {/if}
         <div class="section-header">
           <span class="section-title">기본정보</span>
+          {#if !isChildProduct}
           <button
             form="form-basic"
             type="submit"
@@ -1190,6 +1230,7 @@
             class:dirty={isDirtyBasic}
             disabled={!isDirtyBasic || isSaving}
           >{isSaving ? '저장 중...' : '저장'}</button>
+          {/if}
         </div>
         <form id="form-basic" method="POST" action="?/updateSection" use:enhance={handleSectionSave} class="inline-form">
           <input type="hidden" name="product_id" value={product.id} />
@@ -1254,11 +1295,13 @@
                 bind:value={localSlug}
                 pattern="[a-z0-9\-]+"
                 placeholder="영소문자·숫자·하이픈만" />
+              {#if !isChildProduct}
               <button form="form-slug" type="submit" class="btn-save-inline"
                 class:dirty={isDirtySlug}
                 disabled={!isDirtySlug || isSaving}>
                 {isSaving ? '저장 중...' : '저장'}
               </button>
+              {/if}
             </div>
           </div>
         </form>
@@ -1328,16 +1371,22 @@
 
     <!-- ② 옵션상품 -->
     {#if activeTab === 'options'}
-      <div class="section" role="tabpanel">
+      <div class="section" role="tabpanel" onfocusin={blockChildInputFocus}>
         <div class="section-header">
           <span class="section-title">옵션상품</span>
+          {#if !isChildProduct}
           <button type="button" class="btn-save-inline"
             class:dirty={isDirtyOptions}
             disabled={!isDirtyOptions || isSavingOptions}
             onclick={saveOptions}>
             {isSavingOptions ? '저장 중...' : '저장'}
           </button>
+          {/if}
         </div>
+
+        {#if isChildProduct}
+          <div class="child-readonly-notice" role="status">재고 단위 상품입니다. 수정은 <strong>대표 상품</strong>에서 해주세요.</div>
+        {/if}
 
         <p class="section-desc">함께 대여 가능한 옵션상품을 상품 DB에서 검색해 추가합니다.</p>
 
@@ -1462,9 +1511,13 @@
 
     <!-- ③ 가격정책 -->
     {#if activeTab === 'pricing'}
-      <div class="section" role="tabpanel">
+      <div class="section" role="tabpanel" onfocusin={blockChildInputFocus}>
+        {#if isChildProduct}
+          <div class="child-readonly-notice" role="status">재고 단위 상품입니다. 수정은 <strong>대표 상품</strong>에서 해주세요.</div>
+        {/if}
         <div class="section-header">
           <span class="section-title">가격정책</span>
+          {#if !isChildProduct}
           <button
             form="form-pricing"
             type="submit"
@@ -1472,6 +1525,7 @@
             class:dirty={isDirtyPricing}
             disabled={!isDirtyPricing || isSaving}
           >{isSaving ? '저장 중...' : '저장'}</button>
+          {/if}
         </div>
         <form id="form-pricing" method="POST" action="?/updateSection" use:enhance={handleSectionSave} class="inline-form">
           <input type="hidden" name="product_id" value={product.id} />
@@ -1554,9 +1608,10 @@
 
     <!-- ④ 대여정책 -->
     {#if activeTab === 'rental'}
-      <div class="section" role="tabpanel">
+      <div class="section" role="tabpanel" onfocusin={blockChildInputFocus}>
         <div class="section-header">
           <span class="section-title">대여정책</span>
+          {#if !isChildProduct}
           <button
             form="form-rental"
             type="submit"
@@ -1564,7 +1619,11 @@
             class:dirty={isDirtyRental}
             disabled={!isDirtyRental || isSaving}
           >{isSaving ? '저장 중...' : '저장'}</button>
+          {/if}
         </div>
+        {#if isChildProduct}
+          <div class="child-readonly-notice" role="status">재고 단위 상품입니다. 수정은 <strong>대표 상품</strong>에서 해주세요.</div>
+        {/if}
         <form id="form-rental" method="POST" action="?/updateSection" use:enhance={handleSectionSave} class="inline-form">
           <input type="hidden" name="product_id" value={product.id} />
           <input type="hidden" name="section_type" value="rental" />
@@ -1692,15 +1751,20 @@
 
     <!-- ⑤ 상품설명(content_blocks) -->
     {#if activeTab === 'content'}
-      <div class="section" role="tabpanel">
+      <div class="section" role="tabpanel" onfocusin={blockChildInputFocus}>
+        {#if isChildProduct}
+          <div class="child-readonly-notice" role="status">재고 단위 상품입니다. 수정은 <strong>대표 상품</strong>에서 해주세요.</div>
+        {/if}
         <div class="section-header">
           <span class="section-title">상품설명</span>
+          {#if !isChildProduct}
           <button type="button" class="btn-save-inline"
             class:dirty={isDirtyContent}
             disabled={!isDirtyContent || isSavingContent}
             onclick={saveContent}>
             {isSavingContent ? '저장 중...' : '저장'}
           </button>
+          {/if}
         </div>
         <CmsContentEditor bind:blocks={localContentBlocks} bind:keywords={localKeywords} />
       </div>
@@ -1725,10 +1789,8 @@
         </div>
 
         <!-- 자식 상품 선택 시 이미지 관리 안내 -->
-        {#if product.parent_product_id}
-          <div class="child-image-notice" role="alert">
-            ℹ️ 이 항목은 재고 단위(자식)입니다. 이미지는 자동으로 <strong>부모 상품</strong>에 통합 저장되며 목록 카드·썸네일에 반영됩니다.
-          </div>
+        {#if isChildProduct}
+          <div class="child-readonly-notice" role="status">재고 단위 상품입니다. 수정은 <strong>대표 상품</strong>에서 해주세요.</div>
         {/if}
 
         <!-- 드롭존 (클릭: 파일 피커 / 드래그: 파일 업로드) -->
@@ -1820,9 +1882,13 @@
 
     <!-- ④-1 구성품 -->
     {#if activeTab === 'components'}
-      <div class="section" role="tabpanel">
+      <div class="section" role="tabpanel" onfocusin={blockChildInputFocus}>
+        {#if isChildProduct}
+          <div class="child-readonly-notice" role="status">재고 단위 상품입니다. 수정은 <strong>대표 상품</strong>에서 해주세요.</div>
+        {/if}
         <div class="section-header">
           <span class="section-title">구성품</span>
+          {#if !isChildProduct}
           <button
             form="form-components"
             type="submit"
@@ -1830,6 +1896,7 @@
             class:dirty={isDirtyComponents}
             disabled={!isDirtyComponents || isSaving}
           >{isSaving ? '저장 중...' : '저장'}</button>
+          {/if}
         </div>
         <form id="form-components" method="POST" action="?/updateSection" use:enhance={handleSectionSave} class="inline-form">
           <input type="hidden" name="product_id" value={product.id} />
@@ -1856,9 +1923,13 @@
 
     <!-- ④ 사양 -->
     {#if activeTab === 'specs'}
-      <div class="section" role="tabpanel">
+      <div class="section" role="tabpanel" onfocusin={blockChildInputFocus}>
+        {#if isChildProduct}
+          <div class="child-readonly-notice" role="status">재고 단위 상품입니다. 수정은 <strong>대표 상품</strong>에서 해주세요.</div>
+        {/if}
         <div class="section-header">
           <span class="section-title">상품 사양</span>
+          {#if !isChildProduct}
           <button
             form="form-specs"
             type="submit"
@@ -1866,6 +1937,7 @@
             class:dirty={isDirtySpecs}
             disabled={!isDirtySpecs || isSaving}
           >{isSaving ? '저장 중...' : '저장'}</button>
+          {/if}
         </div>
         <form id="form-specs" method="POST" action="?/updateSection" use:enhance={handleSectionSave} class="inline-form">
           <input type="hidden" name="product_id" value={product.id} />
@@ -1999,7 +2071,7 @@
           {#if historyRecords.length === 0 && !historyLoading}
             <div class="history-empty">등록된 이력이 없습니다.</div>
           {:else}
-            {#each historyRecords as rec}
+            {#each historyRecords as rec (rec.id)}
               <div class="history-card" class:editing={historyEditingId === rec.id}>
                 <div class="history-card-header">
                   <div class="history-card-meta">
@@ -2125,13 +2197,17 @@
 
   </div>
 
-  <!-- 상품 삭제 푸터 (흰 카드 안 최하단) -->
+  <!-- 상품 삭제 푸터 (흰 카드 안 최하단) — 1차 클릭: 토스트 경고, 2차 클릭: 실제 삭제 -->
   <div class="delete-footer">
-    <button
-      type="button"
-      class="btn-danger"
-      onclick={() => { showDeleteConfirm = true }}
-    >상품정보 삭제</button>
+    <form method="POST" action="?/deleteProduct" use:enhance={handleDeleteProduct}>
+      <input type="hidden" name="product_id" value={product.id} />
+      <button
+        type="submit"
+        class="btn-danger"
+        class:btn-danger--pending={deletePending}
+        disabled={isDeleting}
+      >{isDeleting ? '삭제 중...' : deletePending ? '한번 더 누르면 삭제됩니다' : '상품정보 삭제'}</button>
+    </form>
   </div>
 
 </div>
@@ -2285,25 +2361,6 @@
   </div>
 {/if}
 
-<!-- 상품 삭제 확인 모달 -->
-{#if showDeleteConfirm}
-  <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
-  <div class="confirm-backdrop" onclick={() => { if (!isDeleting) showDeleteConfirm = false }} role="presentation">
-    <div class="confirm-dialog" role="dialog" aria-modal="true" onclick={(e) => e.stopPropagation()}>
-      <p class="confirm-msg">{product.name}</p>
-      <p class="confirm-sub">상품정보를 삭제하면 목록에서 제거됩니다.<br/>이 작업은 되돌릴 수 없습니다.</p>
-      <div class="confirm-actions">
-        <button type="button" class="btn-ghost-sm" onclick={() => { showDeleteConfirm = false }} disabled={isDeleting}>취소</button>
-        <form method="POST" action="?/deleteProduct" use:enhance={handleDeleteProduct}>
-          <input type="hidden" name="product_id" value={product.id} />
-          <button type="submit" class="btn-danger-sm" disabled={isDeleting}>
-            {isDeleting ? '삭제 중...' : '삭제'}
-          </button>
-        </form>
-      </div>
-    </div>
-  </div>
-{/if}
 
 <!-- 이력 삭제 확인 모달 -->
 {#if historyConfirmDeleteId}
@@ -2476,17 +2533,6 @@
     display: flex; align-items: center; justify-content: center;
     color: var(--cs-text-light); font: var(--text-pc-script-12);
   }
-  .close-btn {
-    margin-left: auto;
-    flex-shrink: 0;
-    width: 28px; height: 28px;
-    display: flex; align-items: center; justify-content: center;
-    background: transparent; border: none; border-radius: var(--radius-sm);
-    color: var(--cs-text-light); font-size: 14px; cursor: pointer; min-height: 28px;
-    transition: background 0.12s, color 0.12s;
-  }
-  .close-btn:hover { background: rgba(255,53,53,0.08); color: var(--cs-red-badge); }
-
   /* 상태 바 */
   /* ─── 요약 바 ─────────────────────────────── */
   .summary-bar {
@@ -2796,7 +2842,7 @@
   .img-status.saving    { background: rgba(59,47,138,0.06); color: var(--cs-text-mid); }
   .img-status.error     { background: rgba(255,53,53,0.08); color: var(--cs-red-badge); }
 
-  /* 자식 상품 이미지 안내 배너 */
+  /* 자식 상품 이미지 안내 배너 (레거시 — 현재 미사용) */
   .child-image-notice {
     margin-bottom: 12px;
     padding: 10px 14px;
@@ -2808,6 +2854,20 @@
     line-height: 1.5;
   }
   .child-image-notice strong { color: var(--cs-text); }
+
+  /* 자식 상품 읽기 전용 안내 배너 */
+  .child-readonly-notice {
+    margin-bottom: 16px;
+    padding: 10px 14px;
+    background: var(--cs-lilac);
+    border-left: 3px solid var(--cs-purple);
+    border-radius: var(--cms-radius-sm);
+    font: var(--text-pc-script-12);
+    font-weight: 600;
+    color: var(--cs-text);
+    line-height: 1.5;
+  }
+  .child-readonly-notice strong { font-weight: 700; }
 
   /* 드롭존 */
   .drop-zone {
@@ -3651,6 +3711,8 @@
     transition: background 0.12s;
   }
   .btn-danger:hover { background: var(--cs-red); }
+  .btn-danger:disabled { opacity: 0.6; cursor: not-allowed; }
+  .btn-danger--pending { background: var(--cs-red); }
 
   /* ─── slug 편집 ──────────────────────────────── */
   .slug-edit-wrap {
