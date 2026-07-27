@@ -128,7 +128,7 @@ export const actions: Actions = {
     const AUTO_NOTIFY: Partial<Record<string, string>> = {
       confirmed:        'reservation_approval',
       shipped:          'shipment_notify',
-      in_use:           'return_remind',
+      in_use:           'rental_confirm',
       return_requested: 'return_registration',
       returned:         'rental_complete',
     }

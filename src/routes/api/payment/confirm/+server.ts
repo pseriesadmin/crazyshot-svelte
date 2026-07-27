@@ -142,6 +142,15 @@ export const POST: RequestHandler = async ({ request, locals }) => {
     )
   }
 
+  // 5. 예약승인 채팅 알림 (confirm-mock과 동일 패턴 — 실패해도 결제 확정 자체는 성공 처리)
+  //    idempotent 재시도(이미 처리된 결제 재확인)에는 중복 발송 방지
+  if (!data.idempotent) {
+    await admin.rpc('send_rental_chat_notification', {
+      p_reservation_id: reservationId,
+      p_notify_type:    'reservation_approval',
+    })
+  }
+
   return json({
     success: true,
     paymentId: data.payment_id,

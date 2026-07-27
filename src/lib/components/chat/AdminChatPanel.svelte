@@ -8,10 +8,11 @@
     loadAdminSessions,
     subscribeToSessions,
     subscribeToChatMessages,
+    subscribeToAllMessages,
     loadMessages,
     markMessagesRead,
   } from '$lib/services/chatService'
-  import { setSessions, upsertSession, pushMessage } from '$lib/stores/chat.svelte'
+  import { setSessions, upsertSession, pushMessage, applyIncomingMessagePreview } from '$lib/stores/chat.svelte'
   import { chatStore } from '$lib/stores/chat.svelte'
   import { supabase } from '$lib/services/supabase'
   import type { ChatSession, ChatMessage, ChatSessionStatus } from '$lib/types/chat'
@@ -32,6 +33,17 @@
   let isLoadingMessages = $state(false)
   let pendingDeleteId = $state<string | null>(null)
   let isDeleting = $state(false)
+  let flashingSessionIds = $state<Set<string>>(new Set())
+
+  // 신규 채팅목록 등장·기존 목록 새 대화 수신/발신 시 카드 배경 점멸 표시 (3회 반복 후 자동 종료)
+  function flashSession(sessionId: string): void {
+    flashingSessionIds = new Set(flashingSessionIds).add(sessionId)
+    setTimeout(() => {
+      const next = new Set(flashingSessionIds)
+      next.delete(sessionId)
+      flashingSessionIds = next
+    }, 1900)
+  }
 
   // 세션 목록 초기화 — 마운트 시 1회만 (Realtime이 이후 갱신 담당)
   let storeInitialized = false
@@ -45,7 +57,20 @@
   // 전체 세션 Realtime 구독 (INSERT/UPDATE만 — DELETE 방어는 서비스 레이어에서 처리)
   $effect(() => {
     const unsub = subscribeToSessions((session) => {
+      const existedBefore = chatStore.sessions.some((s) => s.id === session.id)
       upsertSession(session)
+      // 신규 채팅목록(세션) 등장 시 점멸 표시
+      if (!existedBefore) flashSession(session.id)
+    })
+    return unsub
+  })
+
+  // 전체 메시지 Realtime 구독 — 목록의 마지막 메시지 미리보기·정렬을 새 메시지 도착 즉시 갱신
+  $effect(() => {
+    const unsub = subscribeToAllMessages((message) => {
+      applyIncomingMessagePreview(message)
+      // 기존 채팅목록에 새 대화(수신/발신) 도착 시 점멸 표시
+      flashSession(message.session_id)
     })
     return unsub
   })
@@ -271,6 +296,7 @@
             <div
               class="session-card"
               class:selected={session.id === selectedSessionId}
+              class:flash={flashingSessionIds.has(session.id)}
               onclick={() => handleSelectSession(session.id)}
               onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') handleSelectSession(session.id) }}
               role="option"
@@ -279,6 +305,9 @@
             >
               <div class="sc-top">
                 <span class="sc-name">{sessionLabel(session)}</span>
+                {#if session.is_urgent}
+                  <span class="urgent-badge">긴급</span>
+                {/if}
                 {#if session.last_message_sender === 'user' || session.last_message_sender === 'ai'}
                   <span class="msg-dir-badge msg-dir-in" aria-label="수신">
                     <svg width="10" height="10" viewBox="0 0 12 12" fill="none" xmlns="http://www.w3.org/2000/svg">
@@ -537,6 +566,18 @@
   }
   .session-card:hover    { background: var(--cs-lilac); }
   .session-card.selected { background: var(--cs-lilac); }
+  .session-card.flash    { animation: session-card-flash 0.6s ease-in-out 3; }
+
+  @keyframes session-card-flash {
+    0%, 100% {
+      background-color: var(--cs-surface-gray);
+      box-shadow: none;
+    }
+    50% {
+      background-color: var(--cs-purple-pale);
+      box-shadow: inset 3px 0 0 var(--cs-purple);
+    }
+  }
 
   .sc-top {
     display: flex;
@@ -612,6 +653,17 @@
     color: var(--cs-text-light);
     flex-shrink: 0;
   }
+  .urgent-badge {
+    background: var(--cs-red-badge);
+    color: var(--cs-white);
+    border-radius: var(--radius-full);
+    font-size: 10px;
+    font-weight: 700;
+    padding: 1px 6px;
+    flex-shrink: 0;
+    line-height: 1.5;
+  }
+
   .unread-badge {
     background: var(--cs-red-badge);
     color: var(--cs-white);

@@ -20,6 +20,7 @@ export interface RentalPeriodOption {
 export interface RentalMethodOption {
   id: string
   name: string
+  method_key: string | null
   display_order: number
   is_active: boolean
 }
@@ -60,7 +61,7 @@ export const load: PageServerLoad = async ({ locals }) => {
       .order('display_order'),
 
     untypedFrom(supabase, 'rental_method_options')
-      .select('id, name, display_order, is_active')
+      .select('id, name, method_key, display_order, is_active')
       .is('deleted_at', null)
       .order('display_order'),
 
@@ -150,6 +151,7 @@ export const actions: Actions = {
     const data = await request.formData()
     const name = (data.get('name') as string | null)?.trim() ?? ''
     const count = parseInt(data.get('count') as string, 10)
+    const methodKey = (data.get('method_key') as string | null)?.trim() || null
 
     if (!name) return fail(400, { error: '대여방식명을 입력해주세요.' })
     if (count >= 10) return fail(400, { error: '대여 방식은 최대 10개까지 등록할 수 있습니다.' })
@@ -158,6 +160,7 @@ export const actions: Actions = {
       p_id: null,
       p_name: name,
       p_display_order: count,
+      p_method_key: methodKey,
     })
     if (error) return fail(500, { error: error.message })
     return { success: true }

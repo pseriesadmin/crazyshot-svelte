@@ -181,6 +181,13 @@
 
   function gradeLabel(g: string): string { return g?.toUpperCase() ?? '-' }
 
+  // 카드 승인번호 — Toss 응답의 card.approveNo (카드 결제가 아니면 없음)
+  function cardApprovalNumber(detail: PaymentDetail | null): string {
+    const card = detail?.toss_response?.card as Record<string, unknown> | undefined
+    const approveNo = card?.approveNo
+    return typeof approveNo === 'string' && approveNo ? approveNo : '-'
+  }
+
   function reservationCode(): string {
     return row.reservation_code ?? `CZ-${String(row.reservation_id).padStart(5, '0')}`
   }
@@ -548,6 +555,10 @@
           <div class="info-row">
             <span class="info-label">Toss 승인코드</span>
             <span class="info-value mono small">{paymentDetail.payment_key ?? '-'}</span>
+          </div>
+          <div class="info-row">
+            <span class="info-label">카드 승인번호</span>
+            <span class="info-value mono small">{cardApprovalNumber(paymentDetail)}</span>
           </div>
           <div class="info-row">
             <span class="info-label">결제 승인시간</span>

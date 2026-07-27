@@ -253,6 +253,25 @@ export function subscribeToChatMessages(
   }
 }
 
+// 관리자: 전체 메시지 Realtime 구독 (세션 필터 없음 — 목록의 마지막 메시지 미리보기·정렬 갱신용)
+export function subscribeToAllMessages(
+  onMessage: (message: ChatMessage) => void
+): () => void {
+  const uid = ++_channelSeq
+  const channel = supabase
+    .channel(`chat:all-messages:${uid}`)
+    .on(
+      'postgres_changes',
+      { event: 'INSERT', schema: 'public', table: 'chat_messages' },
+      (payload) => onMessage(payload.new as ChatMessage)
+    )
+    .subscribe()
+
+  return () => {
+    supabase.removeChannel(channel)
+  }
+}
+
 // 관리자: 전체 세션 목록 Realtime 구독
 // DELETE 이벤트는 payload.new가 빈 객체 → INSERT/UPDATE만 처리
 export function subscribeToSessions(

@@ -85,14 +85,28 @@ export const POST: RequestHandler = async ({ params, request, getClientAddress }
       const fullName        = (profileResult as { data: { full_name: string } | null })?.data?.full_name ?? null
 
       if (signing.user_id) {
-        const { data: chatSession } = await admin
+        // pending 세션 우선 (관리자 대화 중인 세션) → open 세션 폴백
+        const { data: pendingSession } = await admin
           .from('chat_sessions')
           .select('id')
           .eq('user_id', signing.user_id)
-          .eq('status', 'open')
-          .order('created_at', { ascending: false })
+          .eq('status', 'pending')
+          .order('updated_at', { ascending: false })
           .limit(1)
           .maybeSingle()
+
+        let chatSession = pendingSession
+        if (!chatSession) {
+          const { data: openSession } = await admin
+            .from('chat_sessions')
+            .select('id')
+            .eq('user_id', signing.user_id)
+            .eq('status', 'open')
+            .order('updated_at', { ascending: false })
+            .limit(1)
+            .maybeSingle()
+          chatSession = openSession
+        }
 
         if (chatSession) {
           const content = fullName

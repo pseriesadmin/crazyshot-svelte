@@ -66,6 +66,52 @@ export const GET: RequestHandler = async ({ url, locals }) => {
     }
   }
 
+  // 긴급 배지 판정 — 관리자 응답이 아직 없는 상태에서 마지막 고객 메시지가
+  // CS_ESCALATE로 분류된 세션만 긴급으로 표시 (관리자가 이미 답변했으면 해제)
+  const urgentIds = new Set<string>()
+  const needsUrgentCheck = sessionIds.filter((id) => lastMsgMap[id]?.sender_type !== 'admin')
+
+  if (needsUrgentCheck.length > 0) {
+    const lastUserMsgResults = await Promise.all(
+      needsUrgentCheck.map((id) =>
+        admin
+          .from('chat_messages')
+          .select('id, session_id')
+          .eq('session_id', id)
+          .eq('sender_type', 'user')
+          .order('created_at', { ascending: false })
+          .limit(1)
+          .maybeSingle()
+      )
+    )
+
+    const lastUserMsgIdBySession: Record<string, string> = {}
+    const lastUserMsgIds: string[] = []
+    for (const { data } of lastUserMsgResults) {
+      const m = data as { id: string; session_id: string } | null
+      if (m) {
+        lastUserMsgIdBySession[m.session_id] = m.id
+        lastUserMsgIds.push(m.id)
+      }
+    }
+
+    if (lastUserMsgIds.length > 0) {
+      const { data: intentLogs } = await admin
+        .from('chat_intent_logs')
+        .select('message_id, intent')
+        .in('message_id', lastUserMsgIds)
+        .eq('intent', 'CS_ESCALATE')
+
+      const escalatedMsgIds = new Set(
+        (intentLogs as { message_id: string; intent: string }[] ?? []).map((l) => l.message_id)
+      )
+
+      for (const [sid, msgId] of Object.entries(lastUserMsgIdBySession)) {
+        if (escalatedMsgIds.has(msgId)) urgentIds.add(sid)
+      }
+    }
+  }
+
   // 세션 유저 정보 조회 — user_profiles 우선, 없으면 auth.users email fallback
   const uniqueUserIds = [...new Set(rows.map((s: Record<string, unknown>) => s.user_id as string))]
   const userInfoMap: Record<string, { name: string; handle: string }> = {}
@@ -114,6 +160,7 @@ export const GET: RequestHandler = async ({ url, locals }) => {
       user_handle: info?.handle ?? `@${(s.user_id as string).slice(0, 8)}`,
       last_message_content: lastMsgMap[s.id as string]?.content ?? '',
       last_message_sender: lastMsgMap[s.id as string]?.sender_type ?? '',
+      is_urgent: urgentIds.has(s.id as string),
     }
   })
 

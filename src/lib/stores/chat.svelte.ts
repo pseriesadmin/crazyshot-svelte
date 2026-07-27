@@ -79,6 +79,25 @@ export function resetUnreadCount(): void {
   chatStore.unreadCount = 0
 }
 
+// 새 메시지 도착 시 세션 목록의 마지막 메시지 미리보기 갱신 + 최신순 재정렬(맨 위로)
+export function applyIncomingMessagePreview(message: ChatMessage): void {
+  const idx = chatStore.sessions.findIndex((s) => s.id === message.session_id)
+  if (idx < 0) return
+
+  const existing = chatStore.sessions[idx]
+  const updated: ChatSession = {
+    ...existing,
+    last_message_content: message.content ?? existing.last_message_content,
+    last_message_sender: message.sender_type,
+    updated_at: message.created_at ?? existing.updated_at,
+  }
+
+  chatStore.sessions = [
+    updated,
+    ...chatStore.sessions.filter((s) => s.id !== message.session_id),
+  ]
+}
+
 export function upsertSession(session: ChatSession): void {
   // DELETE 이벤트 방어: id 없는 페이로드 무시
   if (!session?.id) return

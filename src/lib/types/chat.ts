@@ -16,9 +16,11 @@ export type ActionCardType =
   | 'COUPON_GIFT_CARD'
   // 관리자 발행 액션
   | 'identity_request'
+  | 'reservation_hold'      // 예약 신청 접수 알림 (고객 수신)
   | 'reservation_approval'
   | 'payment_request'
   | 'shipment_notify'
+  | 'rental_confirm'        // 대여확인(수령확인) 알림 (고객 수신)
   | 'return_remind'
   | 'coupon_issued'
   | 'contract_link'    // 전자계약 서명 링크 발송 (고객 수신)
@@ -72,6 +74,7 @@ export interface ChatSession {
   unread_count?: number
   last_message_content?: string
   last_message_sender?: string
+  is_urgent?: boolean  // 마지막 고객 메시지가 CS_ESCALATE로 분류되고 이후 관리자 응답이 없는 경우
 }
 
 export interface ChatMessage {

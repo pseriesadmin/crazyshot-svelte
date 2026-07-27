@@ -67,6 +67,15 @@ export const load: PageServerLoad = async ({ url, locals }) => {
     throw redirect(303, `/payment/fail?reservationId=${reservationId}&code=RPC_ERROR&message=${encodeURIComponent(String(result?.error ?? '결제 처리 중 오류가 발생했습니다.'))}`)
   }
 
+  // ── 2-1. 예약승인 채팅 알림 (confirm-mock과 동일 패턴 — 실패해도 결제 확정 자체는 성공 처리) ──
+  //         idempotent 재시도(이미 처리된 결제 재확인)에는 중복 발송 방지
+  if (!result.idempotent) {
+    await admin.rpc('send_rental_chat_notification', {
+      p_reservation_id: reservationId,
+      p_notify_type:    'reservation_approval',
+    })
+  }
+
   // ── 3. 예약 + 상품 상세 조회 (SELECT — DML 아님) ─────────────────────────
   const { data: reservation } = await admin
     .from('rental_reservations')
