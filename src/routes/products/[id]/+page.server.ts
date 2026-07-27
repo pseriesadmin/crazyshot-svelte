@@ -60,7 +60,7 @@ export const load: PageServerLoad = async ({ params, locals }) => {
 	const rawId = params.id;
 	const { session } = await locals.safeGetSession();
 
-	let query = locals.supabase.from('products').select('*');
+	let query = locals.supabase.from('products').select('*').is('parent_product_id', null);
 
 	if (isLegacyNumericId(rawId)) {
 		// crazyshot-stage / 실서비스형 — 숫자 id (예: 9)
@@ -103,6 +103,7 @@ export const load: PageServerLoad = async ({ params, locals }) => {
 	const methodIds = ((row as unknown as Record<string, unknown>).allowed_method_ids as string[] | null) ?? [];
 
 	type RentalOption = { id: string; name: string };
+	type RentalMethodOption = { id: string; name: string; method_key: string | null };
 	// eslint-disable-next-line @typescript-eslint/no-explicit-any
 	const anyClient = locals.supabase as any;
 	const [periodsRes, methodsRes, shippingSettingsRes] = await Promise.all([
@@ -110,7 +111,7 @@ export const load: PageServerLoad = async ({ params, locals }) => {
 			? anyClient.from('rental_period_options').select('id, name').in('id', periodIds).eq('is_active', true)
 			: Promise.resolve({ data: [] }),
 		methodIds.length > 0
-			? anyClient.from('rental_method_options').select('id, name').in('id', methodIds).eq('is_active', true)
+			? anyClient.from('rental_method_options').select('id, name, method_key').in('id', methodIds).eq('is_active', true)
 			: Promise.resolve({ data: [] }),
 		anyClient
 			.from('rental_shipping_settings')
@@ -119,7 +120,7 @@ export const load: PageServerLoad = async ({ params, locals }) => {
 			.single(),
 	]);
 	const rentalPeriods: RentalOption[] = (periodsRes.data ?? []) as RentalOption[];
-	const rentalMethods: RentalOption[] = (methodsRes.data ?? []) as RentalOption[];
+	const rentalMethods: RentalMethodOption[] = (methodsRes.data ?? []) as RentalMethodOption[];
 
 	// 배송정책 — 상품별 ON 여부 × 전역 설정 교차
 	type ShippingPolicyItem = { label: string; fee: number };
@@ -226,6 +227,7 @@ export const load: PageServerLoad = async ({ params, locals }) => {
 			.eq('category', row.category as string)
 			.eq('is_active', true)
 			.is('deleted_at', null)
+			.is('parent_product_id', null)
 			.neq('id', String(row.id))
 			.order('created_at', { ascending: false })
 			.limit(5);
