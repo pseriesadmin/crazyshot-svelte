@@ -1,6 +1,44 @@
 # GSD_LOG.md — 크레이지샷 실행 이력
 # 형식: [YYYY-MM-DD HH:MM] 타입 | 태스크명 | 파일 | 소요 | 결과
 
+[2026-07-27] BOUNDARY | CMS 계약서 탭 편집 제한 정책 + PDF 뷰어 조건 보강 + Dead CSS 정리 | 1개 파일 수정 | ✅ DONE
+  편집 버튼 조건: !signingsentAt && !customerSignedAt — 발송 또는 서명 완료 시 숨김
+  미리보기 & 발송 버튼: 조건 없이 항상 표시 (재발송 용도 유지)
+  PDF 뷰어·다운로드: contractPdfUrl && customerSignedAt — 서명 완료 후에만 표시
+  서명 링크 확인 ↗: signingUrl && !customerSignedAt — 서명 완료 후 자동 숨김 (기존 동일)
+  Dead CSS 5개 선택자 제거: .pdf-placeholder / .pdf-placeholder p / .btn-action 계열 3개
+  rental-lifecycle.md: 편집 제한 정책 섹션 추가 + GATE C 4개 항목 추가 (v1.2)
+  sp3-qa-agent GATE C 검수: PASS, GATE E 통과
+  수정 파일: src/lib/components/cms/RentalContractViewer.svelte
+
+[2026-07-27] CRITICAL FIX+BOUNDARY | CMS 자식 패널 데이터 정합 보완 (부모 기준 전면 통일) + 헤더 패딩 버그 수정 | src/lib/components/cms/ProductDetailPanel.svelte, src/routes/cms/products/+page.server.ts | ✅ DONE
+  배경: "CMS 대표/자식 상품 ProductDetailPanel 정보 관리 전면 정비"(bd36b8a, 이미 stage→main 배포 완료)
+    커밋 이후, 동일 세션에서 Stephen이 이어서 발견·요청한 후속 3건
+  ① 자식 패널 헤더 패딩 누락 버그: 과거 리팩터링에서 ph-code-row/ph-body를 감싸던
+     .panel-header 래퍼(padding 16px 20px 14px + border-bottom)가 마크업에서 빠졌는데
+     CSS 규칙만 고아로 남아 실제 패딩이 전혀 적용되지 않고 있었음 — 썸네일·제목·QR이
+     카드 가장자리에 딱 붙어 렌더링되던 것을 발견해 수정. 패딩을 ph-code-row(상단)와
+     ph-body(하단+구분선)로 분리 이관, 죽은 .panel-header 규칙 삭제.
+  ② 자식 패널 데이터가 여전히 자식 자신의 행을 조회하던 버그(핵심): 옵션상품 탭에서
+     "부모가 수정한 옵션이 자식에 반영 안 됨"을 Stephen이 발견. 원인은 편집은 이미
+     부모에서만 가능하도록 잠갔는데(이전 커밋), 조회 로직은 여전히 자식 자신의 id로
+     get_product_option_links/price_rules/allowed_*_ids/shipping_*/sale_*/content_blocks/
+     keywords/components/specifications를 가져오고 있었던 것 — 이미지(image_urls)만
+     예외적으로 부모 기준이었고 나머지는 전부 누락 상태였음.
+     수정: +page.server.ts에서 자식 선택 시 parent_product_id로 부모 행을 한 번에 조회해
+     위 전 항목을 부모 데이터로 override. 자산(assets)은 재고 단위 고유값이라 그대로
+     selectedId(자식 자신) 기준 유지.
+  ③ Stephen 후속 지시 "이력 탭 제외 전부 부모 정보 반영"에 따라 기본정보 탭의 이름·
+     브랜드·카테고리·상품카피·슬러그까지 동일 원칙으로 확장(parentRow select에 컬럼 추가
+     + selectedProduct override). 단 노출상태(is_active)는 AskUserQuestion으로 Stephen께
+     직접 확인 후 자식 고유값으로 유지 확정 — 아코디언 토글 스위치가 실제로 조작하는
+     자식 자신의 재고가용 상태이기 때문에 부모 값으로 덮으면 패널 배지와 토글 스위치가
+     서로 다른 상태를 보여주는 모순이 생김. 품번·QR·자산·이력도 기존과 동일하게 유지.
+  검증: 실브라우저(SONY PXW-Z90 부모 / CSCMRall007 자식)로 옵션 2건·가격(25,000/30,000)·
+    사양 11건·대여정책·상품설명·기본정보(이름/브랜드/카테고리/슬러그)가 전부 부모 값으로
+    자식 패널에 동일 반영되는 것 확인, 노출상태만 자식 자신의 값(true)으로 분리 유지됨을 확인.
+  svelte-check: 신규 ERROR 0건 (기존 11 errors 그대로 유지)
+
 [2026-07-27] QA | sp3-qa-agent GATE C 검수 — QA 후속 4건 처리분 | 8개 파일 | ✅ 통과 (GATE E 진행 가능)
   검수 대상: 결제 알림 idempotent 가드, 카드 승인번호 표시, 긴급 배지, chat_intent_logs
     service_role 수정, 타입 정의 보강, rental-lifecycle.md 문서 갱신

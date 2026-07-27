@@ -269,41 +269,12 @@
     border: none;
     display: block;
   }
-  .pdf-placeholder {
-    padding: 32px 20px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    border: 1px dashed var(--cs-lilac);
-    border-radius: var(--cms-radius-sm);
-    color: var(--cs-text-light);
-  }
-  .pdf-placeholder p { font: var(--text-pc-body-14); margin: 0; }
-
   /* 액션 버튼 */
   .contract-actions {
     display: flex;
     gap: 8px;
     flex-wrap: wrap;
   }
-
-  .btn-action {
-    display: inline-flex;
-    align-items: center;
-    height: 34px;
-    padding: 0 16px;
-    background: var(--cs-purple);
-    color: var(--cs-white);
-    border: none;
-    border-radius: var(--cms-radius-sm);
-    font: var(--text-pc-script-12);
-    font-weight: 700;
-    cursor: pointer;
-    transition: background 0.12s;
-    text-decoration: none;
-  }
-  .btn-action:hover    { background: var(--cs-purple-hover); }
-  .btn-action:disabled { background: var(--cs-disabled-button); cursor: not-allowed; }
 
   .btn-secondary {
     display: inline-flex;
