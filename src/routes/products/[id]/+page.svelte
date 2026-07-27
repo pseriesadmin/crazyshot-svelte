@@ -233,8 +233,10 @@
     }
 
     // 배송대여 불가 옵션 선택 + 배송(방문 아닌) 방식 선택 시 충돌
+    // method_key가 미설정(null)인 방식이 존재할 수 있어 "배송으로 확인된 키"만 양성 판정 (오탐 방지)
+    const DELIVERY_METHOD_KEYS = new Set(['crazydelivery', 'delivery', 'quick', 'locker', 'epost']);
     const selectedMethod = data.rentalMethods.find((m) => m.id === e.methodId);
-    const isDeliveryMethod = !!selectedMethod && selectedMethod.method_key !== 'visit';
+    const isDeliveryMethod = !!selectedMethod?.method_key && DELIVERY_METHOD_KEYS.has(selectedMethod.method_key);
     if (isDeliveryMethod && optionItems.some((o) => o.delivery_rental_disabled && o.qty > 0)) {
       showToast('선택한 옵션상품은 배송이 불가능합니다.');
       return;
