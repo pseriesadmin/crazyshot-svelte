@@ -615,8 +615,81 @@ plan_source: users-stevenmac-documents-pseries-crazy-sorted-quail.md
   - 검증: mublues@gmail.com — '전자계약 보기' 카드 pending 세션(실 대화)에서 정상 수신 확인 ✅
 - [ ] I-1: 계약서 없는 상태 관리자 조작 UI (계약서 연결/PDF 업로드) | CRITICAL | ⏳ 대기
 
+- [x] TASK-H: 예약 카트 더미상품 노출 + 합계금액 계산 오류 근본 수정 | CRITICAL | ✅ 완료 (2026-07-27)
+  - 원인: create_hold_reservation은 rental_reservations.product_id에 배정된 자식(재고) 상품 UUID를
+    직접 저장하는데, checkout/+page.server.ts는 구 방식(asset_id→assets.product_id 경유)으로 상품을
+    찾아 항상 실패 → 화면이 fixture 더미(cartFixtures.ts)로 폴백되던 것
+  - src/routes/checkout/+page.server.ts: product_id 직접 조회로 교체(asset_id/service_role admin
+    client 경로 제거 — products RLS가 status='active' 기준이라 일반 세션으로도 조회 가능함을 확인)
+  - calculate_cart_total RPC 전면 재작성 — 존재하지 않는 p_user_id 파라미터로 호출되어 매번 조용히
+    실패했고 반환 컬럼명도 불일치, 내부 계산도 폐기된 컬럼(base_price_daily 등) 참조 상태였음
+    → 상품상세 렌탈요금 계산기(CalendarTimePicker.svelte estimatedFee)와 동일한 알고리즘으로
+    price_rules(12h/24h) 기준 재작성. Migration 173, Stage(ezyvffjvuwmtuhpxdjrw)+Production
+    (vnbpmvxruyciuuaermyh) 양쪽 적용 완료
+  - 단일상품 결제불가 버그: datesSet·otDeliveryFee가 "카드2(p2) 존재"를 하드코딩 가정 → 실 예약
+    1건뿐일 때 canProceed가 영구 false로 막히던 구조적 버그 동시 수정
+  - 검증: 브라우저 실측 — 실 예약 4건 결제완료(합계 115,000원 계산기와 원 단위 일치), 신규 상품
+    1건만 예약 시에도 정상 결제완료까지 통과
+
+- [x] TASK-I: 카드1/카드2 고정 2개 제한 폐기 → 무제한 동적 리스트 재설계 | CRITICAL | ✅ 완료 (2026-07-27)
+  - Stephen 확정: "여러 상품 동시 담기 가능해야 함" — 새 예약 시 기존 hold 자동취소 정책은 거부
+    → 카드 2개 제한이 실사용 시나리오(다중상품 동시 hold)에서 실제로 발생하는 문제로 확인
+  - +page.server.ts: cartLineItems 신규 반환(예약↔상품↔요금 1:1 매핑, 상품 미해결 예약도 누락
+    없이 포함 — 기존 필터링 방식의 인덱스 불일치 위험 제거)
+  - +page.svelte: c1*/c2* 개별 변수 전체를 itemsState($state 배열)로 통합, {#snippet OrderCard}
+    하나로 카드 템플릿 통일(기존 카드1 단순형 + 카드2 dur-tabs형 → dur-tabs 포함 단일 디자인),
+    hasItems/datesSet/합계 전부 itemsState.reduce 방식으로 재작성(개수 제한 없음)
+  - 부수 발견(카탈로그 데이터 이슈, 버그 아님): 자식 재고의 price_rules가 부모 상품 화면 가격과
+    다른 사례 확인(products.md §9 문서화된 드리프트 현상 실사례) — 체크아웃 계산은 실제 배정된
+    자식 기준으로 일관되게 동작 중, 카탈로그 데이터 정합성 점검은 별도 필요
+  - 검증: 서로 다른 실 상품 3건 동시 예약 → 3장 모두 카드 노출 + 합계 정확 일치 → 결제 완료까지 통과
+
+- [x] TASK-J: 삭제 버튼 서버 미반영 + 로그인 사용자 빈 카트 더미상품 재노출 수정 | CRITICAL | ✅ 완료 (2026-07-27)
+  - 삭제 버튼이 로컬 UI 상태만 변경하고 서버에 미반영 → 카드는 사라져도 합계는 삭제 상품 값을
+    그대로 포함(새로고침 시 삭제한 상품 재노출)
+  - 신규 src/routes/api/checkout/remove-item/+server.ts: 본인 소유+status='hold' 검증 후
+    update_reservation_status(cancelled) 호출. +page.svelte removeItem(): 낙관적 숨김 → API
+    호출 → 성공 시 invalidateAll()로 서버 기준 재동기화
+  - 로그인 사용자가 카트를 완전히 비우면 isServerLoaded(예약 존재 여부) 기준으로 fixture 데모가
+    다시 노출되던 버그 확인·수정 — 이번 세션 후속 작업(TASK-K)에서 fixture 자체를 제거하며 해결됨
+  - 검증: 실 상품 2건 중 1건 삭제 → 카드 삭제+합계 25,000원으로 정확 재계산 → DB status='cancelled'
+    반영 확인 → 남은 1건도 삭제 → "장바구니가 비어 있습니다" 정상 표시(더미 미노출) 확인
+
+- [x] TASK-K: 미로그인 게스트 예약 허용 + fixture 데모 미리보기 설계 전면 제거 | CRITICAL | ✅ 완료 (2026-07-27)
+  - Stephen 요청 3건: ① 미로그인도 실 상품목록+로그인과 동일 UI로 /checkout 랜딩 ② 미로그인 대여
+    예약 자체 허용(임시 계정 자동생성) ③ "비로그인 시 데모 미리보기" 설계 제거
+  - products/[id]/+page.svelte handleReserve(): 비로그인 시 로그인 페이지 리다이렉트 제거 →
+    supabase.auth.signInAnonymously()로 실 UUID 임시 세션 투명 생성 후 동일 create_hold_reservation
+    플로우 진행. 신규 도입 아님 — 채팅 위젯(ChatWindow.svelte ensureAuth())에서 이미 쓰던 동일
+    패턴, DB 확인 결과 해당 방식 익명 계정 20건 기존 존재로 실사용 검증됨을 확인
+  - RLS 재확인: rental_reservations/products/price_rules 전부 auth.uid() 또는 공개조회 기준 —
+    익명 세션도 실회원과 동일하게 동작(예외 처리 불필요)
+  - fixture 데모 분기(fixtureLineItems, sampleSubItems, priceConfig, isDevMode,
+    /payment/success/dev 미리보기 강제 분기) 전면 제거. checkout/+page.ts(fixture 로더) 파일 삭제
+  - 완료 버튼 문구 회원/비회원 분기 추가: +page.server.ts가 session.user.is_anonymous를 isGuest로
+    반환 → 비회원("비회원 예약신청완료") / 회원("예약신청완료") 텍스트 분기
+  - 검증: 로그인 회원 계정 버튼 문구 실측 확인. 게스트(익명) 분기는 브라우저 자동화 도구가 세션
+    후반 간헐적 응답 없음("Browser pane is currently hidden")을 반복해 실측 클릭 검증 미완료 —
+    Supabase 프로젝트에 기존 익명 계정 20건 존재로 메커니즘 자체는 실사용 검증됨, 코드·타입체크만 확인
+
+- [x] TASK-L: 상품 체크박스 기본 체크 + 체크 해제 시 약정요금·결제 확정 대상에서 제외 | BOUNDARY | ✅ 완료 (2026-07-27)
+  - newItemState() 기본값 checked: false → true. 약정요금 관련 계산(소계·멤버십 할인·배송비·
+    보증금·총 대여기간) 전부 "!deleted && checked" 조건으로 재작성(서버 RPC 합계는 체크 상태를
+    모르므로 카드에 이미 표시 중인 방식과 동일하게 클라이언트에서 체크 항목만 합산)
+  - hasItems/datesSet도 checked 기준 정합화 — 체크 해제 상품은 카트에 남아도 필수 조건에서 제외
+  - footer CTA: checkedIds만 /api/checkout/confirm-mock에 전송 → confirm-mock/+server.ts가
+    reservationIds 파라미터로 필터링 후 해당 목록만 confirmed 처리(미전달 시 하위호환 유지)
+  - 검증: svelte-check 신규 에러 0건. 실측 클릭 검증은 TASK-K와 동일한 브라우저 도구 응답 없음
+    문제로 미완료 — Stephen 직접 확인 권장(2건 담고 1건만 체크 해제 후 결제 시 체크 해제 건은
+    hold로 남고 나머지만 confirmed로 전환되는지)
+
+⚠️ 다음 세션 QA 필요 항목(브라우저 자동화 도구 문제로 미완료된 실측):
+  - TASK-K 게스트(비회원) 라벨/예약 플로우 실제 클릭 검증
+  - TASK-L 체크박스 해제 → 합계 감소 → 결제 확정 시 해당 건만 hold 유지 확인
+
 Migration 적용 완료:
   - Migration #146 — Stage(ezyvffjvuwmtuhpxdjrw) ✅ 적용 완료 (2026-07-23)
+  - Migration #173 (calculate_cart_total 재작성) — Stage + Production 양쪽 ✅ 적용 완료 (2026-07-27)
 
 ---
 

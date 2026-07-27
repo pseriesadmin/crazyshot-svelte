@@ -1,6 +1,3 @@
-import { createClient } from '@supabase/supabase-js'
-import { SUPABASE_SERVICE_ROLE_KEY } from '$env/static/private'
-import { PUBLIC_SUPABASE_URL } from '$env/static/public'
 import type { PageServerLoad } from './$types'
 
 export const load: PageServerLoad = async ({ locals }) => {
@@ -21,8 +18,11 @@ export const load: PageServerLoad = async ({ locals }) => {
     return {
       deliveryOptions,
       userId:          null as string | null,
+      isGuest:         true,
       reservationIds:  [] as string[],
       cartProducts:    [] as ProductRow[],
+      cartLineItems:   [] as CartLineItem[],
+      productPriceRules: {} as Record<string, { price12h: number | null; price24h: number | null; deposit: number | null }>,
       depositTotal:    0,
       calcTotal:       0,
       calcDiscount:    0,
@@ -40,10 +40,10 @@ export const load: PageServerLoad = async ({ locals }) => {
   const [cartResult, profileResult, couponResult] = await Promise.all([
     supabase
       .from('rental_reservations')
-      .select('id, asset_id, start_date, end_date, status')
+      .select('id, product_id, start_date, end_date, status')
       .eq('user_id', session.user.id)
       .eq('status', 'hold')
-      .order('created_at', { ascending: true }),
+      .order('created_at', { ascending: false }),
 
     supabase
       .from('user_profiles')
@@ -63,37 +63,58 @@ export const load: PageServerLoad = async ({ locals }) => {
   const reservationIds  = rawReservations.map(r => String(r.id))
 
   let serverProducts: ProductRow[] = []
-  let cartProducts:   ProductRow[] = []   // 예약 순서대로 정렬된 카드용 상품
+  let cartProducts:   ProductRow[] = []   // 예약 순서대로 정렬된 카드용 상품 (하위호환)
+  let cartLineItems:  CartLineItem[] = []
+  let productPriceRules: Record<string, { price12h: number | null; price24h: number | null; deposit: number | null }> = {}
   let calcTotal = 0, calcDiscount = 0, calcFinal = 0, depositTotal = 0
 
   if (rawReservations.length > 0) {
-    // asset_id → product_id 경유로 상품 조회 (카드 표시용)
-    // RLS "assets: 본인 렌탈 자산 조회"는 confirmed/in_use만 허용 — hold 단계에서도 읽을 수 있도록 service_role 클라이언트 사용
-    const admin = createClient(PUBLIC_SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
-    // null asset_id (구 예약 등)를 제거해야 .in() 쿼리가 에러 없이 동작함
-    const validAssetIds = rawReservations.map(r => r.asset_id).filter((id): id is string | number => id != null)
-    const assetRows: Array<{ id: string | number; product_id: string }> = []
-    if (validAssetIds.length > 0) {
-      const assetsRes = await admin.from('assets').select('id, product_id').in('id', validAssetIds)
-      assetRows.push(...((assetsRes.data as Array<{ id: string | number; product_id: string }> | null) ?? []))
-    }
-
-    const productIds = [...new Set(assetRows.map(a => a.product_id))]
+    // rental_reservations.product_id는 예약 시 배정된 자식 상품(재고 유닛)의 UUID를 직접 보관
+    // (create_hold_reservation RPC 참조) — products RLS는 status='active' 기준이라 일반 세션으로도 조회 가능
+    const productIds = [...new Set(rawReservations.map(r => r.product_id).filter((id): id is string => id != null))]
     if (productIds.length > 0) {
-      const { data: products } = await supabase
-        .from('products')
-        .select('id, name, category, brand, slug, image_urls, is_active, created_at, updated_at, deleted_at, allowed_method_ids')
-        .in('id', productIds)
-        .eq('is_active', true)
+      const [{ data: products }, { data: priceRows }] = await Promise.all([
+        supabase
+          .from('products')
+          .select('id, name, category, brand, slug, image_urls, is_active, created_at, updated_at, deleted_at, allowed_method_ids')
+          .in('id', productIds),
+        supabase
+          .from('price_rules')
+          .select('product_id, duration_type, price, deposit_amount')
+          .in('product_id', productIds)
+          .in('duration_type', ['12h', '24h']),
+      ])
       serverProducts = (products ?? []) as ProductRow[]
+
+      for (const row of (priceRows ?? []) as Array<{ product_id: string; duration_type: string; price: number; deposit_amount: number | null }>) {
+        const entry = productPriceRules[row.product_id] ?? { price12h: null, price24h: null, deposit: null }
+        if (row.duration_type === '12h') entry.price12h = row.price
+        if (row.duration_type === '24h') { entry.price24h = row.price; entry.deposit = row.deposit_amount }
+        productPriceRules[row.product_id] = entry
+      }
     }
 
-    // 예약 순서 그대로 상품 매핑 (Card 1 = 첫 예약, Card 2 = 두 번째 예약)
+    // 예약 순서 그대로 상품 매핑 (하위호환 — 카드 UI는 cartLineItems 사용)
     cartProducts = rawReservations.map(r => {
-      if (r.asset_id == null) return null
-      const asset = assetRows.find(a => String(a.id) === String(r.asset_id))
-      return asset ? (serverProducts.find(p => p.id === asset.product_id) ?? null) : null
+      if (r.product_id == null) return null
+      return serverProducts.find(p => p.id === r.product_id) ?? null
     }).filter((p): p is ProductRow => p !== null)
+
+    // 예약-상품-요금 1:1 매핑 (상품 미해결 예약도 누락 없이 포함 — 카트 화면 무제한 목록용)
+    cartLineItems = rawReservations.map(r => {
+      const product = r.product_id != null ? serverProducts.find(p => p.id === r.product_id) ?? null : null
+      const rules = r.product_id != null ? productPriceRules[r.product_id] : undefined
+      return {
+        reservationId: String(r.id),
+        productId:     r.product_id,
+        product,
+        price12h:      rules?.price12h ?? null,
+        price24h:      rules?.price24h ?? null,
+        deposit:       rules?.deposit ?? null,
+        startDate:     r.start_date,
+        endDate:       r.end_date,
+      }
+    })
 
     // calculate_cart_total RPC — subtotal, discount_amount, final_total, deposit_required 반환
     // (Database.Functions 타입 불일치로 as unknown as 캐스트 사용 — 기존 products/[id] 패턴 동일)
@@ -101,7 +122,6 @@ export const load: PageServerLoad = async ({ locals }) => {
     type CalcRpcFn = (name: string, args: Record<string, unknown>) => Promise<{ data: CalcRow[] | null; error: unknown }>
     const calcResp = await (supabase.rpc as unknown as CalcRpcFn)('calculate_cart_total', {
       p_reservation_ids: reservationIds,
-      p_user_id:         session.user.id,
     })
     const row = calcResp.data?.[0] ?? null
     if (row) {
@@ -115,8 +135,12 @@ export const load: PageServerLoad = async ({ locals }) => {
   return {
     deliveryOptions,
     userId:          session.user.id,
+    // 익명(게스트) 로그인 여부 — 체크아웃 완료 버튼 문구 분기(회원/비회원)에 사용
+    isGuest:         session.user.is_anonymous ?? false,
     reservationIds,
     cartProducts,
+    cartLineItems,
+    productPriceRules,
     depositTotal,
     calcTotal,
     calcDiscount,
@@ -135,7 +159,7 @@ export const load: PageServerLoad = async ({ locals }) => {
 
 interface ReservationRow {
   id:         number | string
-  asset_id:   number | string | null
+  product_id: string | null
   start_date: string
   end_date:   string
   status:     string
@@ -153,6 +177,17 @@ interface ProductRow {
   updated_at:          string
   deleted_at:          string | null
   allowed_method_ids?: string[] | null
+}
+
+interface CartLineItem {
+  reservationId: string
+  productId:     string | null
+  product:       ProductRow | null
+  price12h:      number | null
+  price24h:      number | null
+  deposit:       number | null
+  startDate:     string
+  endDate:       string
 }
 
 interface ProfileRow {
