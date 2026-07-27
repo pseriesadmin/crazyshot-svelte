@@ -465,6 +465,34 @@ plan_source: cms-ticklish-storm.md
   - 기능 변경 없음 — 위치만 ProductDetailPanel 내부 → 상위 아코디언 헤더로 이동
   - 실브라우저 클릭 검증: URL에서 ?selected= 파라미터 제거되며 패널 정상 닫힘 확인
 
+- [x] BUG-PH-PADDING: 자식 패널 헤더(품번·썸네일·QR) 좌우상하 패딩 누락 수정 | ROUTINE | ✅ 완료 (2026-07-27)
+  - 원인: 과거 리팩터링에서 ph-code-row/ph-body를 감싸던 .panel-header 래퍼(padding: 16px 20px 14px + border-bottom)가
+    마크업에서 제거됐으나 CSS 규칙만 고아 상태로 남아있었음 — 두 행이 패딩 없이 카드 가장자리에 붙어 렌더링됨
+  - 수정: .panel-header 삭제, 패딩을 .ph-code-row(16px 20px 0)·.ph-body(10px 20px 14px + border-bottom)에 직접 분리 이관
+  - 실브라우저 확인: 썸네일·제목·QR 영역이 카드 안쪽으로 정상 인셋됨
+
+- [x] TASK-CMS-CHILD-DATA-MIRROR: 자식 패널 전 탭 데이터를 부모 기준으로 통일 (이력 제외) | CRITICAL FIX | ✅ 완료 (2026-07-27)
+  - 증상: 옵션상품 탭에서 부모가 수정한 옵션 정보가 자식 패널에 반영되지 않음 (Stephen 발견) — 편집은 이미 부모에서만
+    가능하도록 잠겨있는데, 조회는 여전히 자식 자신의 행/관계를 보고 있어 부모 수정분이 자식에 반영 안 됨
+  - +page.server.ts 수정: 자식 선택 시 parent_product_id로 부모 행을 조회해 아래 항목을 전부 부모 기준으로 override
+    · 옵션상품(get_product_option_links → policySourceId=부모ID)
+    · 가격정책(price_rules → 부모ID, 판매금액/판매전용 포함)
+    · 대여정책(allowed_period_ids/method_ids/pickup_ids, 배송정책 3종)
+    · 상품설명(content_blocks/keywords) · 구성품(components) · 사양(specifications)
+    · 이미지(image_urls) — 기존 별도 부모조회 로직을 이번 쿼리에 통합
+  - 자산(assets)·이력은 selectedId(자식 자신) 기준 그대로 유지
+  - 실브라우저 검증(SONY PXW-Z90/CSCMRall007): 부모 옵션 2건(Sony FX6-12·Manfrotto 055)·가격(25,000/30,000)·
+    사양 11건·대여정책·상품설명 에디터 전부 자식 패널에 동일 반영 확인
+
+- [x] TASK-CMS-CHILD-BASICINFO-MIRROR: 기본정보 탭(이름·브랜드·카테고리·카피·슬러그)도 부모 기준 통일 | BOUNDARY | ✅ 완료 (2026-07-27)
+  - Stephen 후속 요청: "이력 탭 제외 전부 부모 정보 반영" — 위 CHILD-DATA-MIRROR에 이어 기본정보 탭 식별 필드까지 확장
+  - parentRow select에 name·brand·category·product_caption·slug 추가, selectedProduct 구성 시 src(부모 데이터) 기준으로 override
+  - ⛔ is_active(노출 상태)는 예외 — AskUserQuestion으로 Stephen 확인: 자식 고유값 유지 확정
+    (이유: 아코디언 토글 스위치가 실제로 조작하는 자식 자신의 재고가용 상태라 부모 값으로 덮으면 배지↔토글 상태 불일치 발생)
+  - 품번(product_code)·QR(qr_payload)·자산·이력도 기존과 동일하게 자식 고유값 유지
+  - 실브라우저 검증: 자식 CSCMRall007의 기본정보 탭이 부모(SONY PXW-Z90/SONY/lens/cam-zo-2607) 값으로 표시,
+    노출상태만 자식 자신의 값(true) 유지 확인
+
 svelte-check: 신규 ERROR 0건 (기존 11 errors 그대로 — account/profile RPC 타입 무관 이슈)
 
 ⚠️ TASK-CMS-PARENT-RESTRUCTURE 관련 하네스 기록 누락 원인 분석: 이 항목(부모 상품
@@ -2741,7 +2769,7 @@ plan_source: 세션 내 아젠다 (Stephen 직접 요청)
 
 svelte-check: 신규 ERROR 0건 (기존 경고 1건 — 관련 없는 products page unused CSS selector)
 
-⏳ QA: sp3-qa-agent 검수 완료 예정
+sp3-qa-agent GATE C 검수 결과 (2026-07-27): ✅ 통과 (이전 세션 산출물)
 
 ---
 
@@ -2808,4 +2836,51 @@ sp3-qa-agent GATE C 검수 결과 (2026-07-27): ✅ 통과
   - 참고: QA agent 세션엔 Supabase MCP가 없어 Production DB 실측 대조는 못 했으나(문서 기반 판정),
     본 세션에서 직접 쿼리로 이미 실측 확인된 값과 일치함(방문→visit·무인보관함→locker·퀵서비스→quick·
     크레이지배송(택배)→delivery·크레이지배송(자체배송)→crazydelivery)
+  - GATE E 통과, 커밋 허가
+
+---
+
+## NOW — CMS 계약서 탭 편집 제한 정책 + PDF 뷰어 조건 보강 (2026-07-27) ✅ 완료
+
+plan_source: 세션 내 아젠다 (Stephen 직접 요청)
+등급: 🟡 BOUNDARY (CMS 계약서 탭 UI 제어)
+
+수정 배경:
+  - 계약서 발송 또는 서명 완료 이후에도 편집 버튼이 표시되어 내용 변경 혼란 가능성
+  - 서명 전 PDF 미리보기 뷰어가 빈 상태로 렌더링되는 불필요 UI 존재
+  - rental-lifecycle.md에 편집 제한 정책이 누락되어 있었음
+
+수정 파일:
+  - src/lib/components/cms/RentalContractViewer.svelte (MODIFY)
+  - .claude/rules/rental-lifecycle.md (MODIFY — 정책 문서 보강, v1.2)
+
+- [x] CONTRACT-EDIT-RESTRICT: 편집 버튼 조건 강화 | BOUNDARY | ✅ 완료 (2026-07-27)
+  - 기존: `{#if !customerSignedAt}` — 서명 미완료 상태에서도 발송 후 편집 가능
+  - 수정: `{#if !signingsentAt && !customerSignedAt}` — 발송(signingsentAt 있음) 또는 서명 완료(customerSignedAt 있음) 시 편집 버튼 숨김
+  - 미리보기 & 발송 버튼은 모든 상태에서 항상 유지 (재발송 용도)
+
+- [x] PDF-SIGNED-ONLY: PDF 뷰어·다운로드 서명 완료 후에만 표시 | BOUNDARY | ✅ 완료 (2026-07-27)
+  - 기존: contractPdfUrl 존재 시 항상 표시 (서명 전 빈 뷰어 렌더링)
+  - 수정: `{#if contractPdfUrl && customerSignedAt}` — 서명된 최종본만 PDF 뷰어·다운로드 표시
+  - 서명 링크 확인 ↗: `{#if signingUrl && !customerSignedAt}` — 서명 완료 후 자동 숨김 (기존 동일)
+  - 대여중·반출중·반납중 상태도 customerSignedAt 있으면 PDF 표시 — 상태 무관, 서명 완료 여부만 체크
+
+- [x] RENTAL-LIFECYCLE-POLICY-UPDATE: rental-lifecycle.md 편집 제한 정책 반영 | ROUTINE | ✅ 완료 (2026-07-27)
+  - "전자계약 발송 흐름" 섹션 내 "계약서 양식 편집 제한 정책 (2026-07-23 확정)" 서브섹션 추가
+  - 편집/미리보기/PDF/서명링크 각 표시 조건 명시
+  - 구현 코드 스니펫 포함
+  - GATE C 체크리스트 4개 항목 추가
+  - 버전 v1.1 → v1.2
+
+svelte-check: 신규 ERROR 0건
+
+sp3-qa-agent GATE C 검수 결과 (2026-07-27): ✅ 통과
+  - 편집 버튼 조건(`!signingsentAt && !customerSignedAt`) 정확히 구현 — PASS
+  - 미리보기 & 발송 버튼 조건 없이 항상 렌더링 — PASS
+  - PDF 뷰어·다운로드 조건(`contractPdfUrl && customerSignedAt`) 정확히 구현 — PASS
+  - 서명 링크 조건(`signingUrl && !customerSignedAt`) 정확히 구현 — PASS
+  - Svelte 5 Runes 문법 준수, any 타입 0건, CSS Variables 사용 — PASS
+  - BLOCKING 이슈 없음 / Dead CSS 5개 선택자 경고 (비기능, 기존 잔류 스타일)
+    → .pdf-placeholder / .pdf-placeholder p (272-281행)
+    → .btn-action / :hover / :disabled (290-306행) — 다음 유지보수 커밋 정리 권장
   - GATE E 통과, 커밋 허가
