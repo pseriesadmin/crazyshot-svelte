@@ -46,6 +46,12 @@
   let hoverDate = $state<string | null>(null);
   let pickPhase = $state<'start' | 'end'>('start'); // which date to pick next
 
+  // 과거 날짜 예약 방지 — 오늘 이전 날짜는 선택 불가
+  const todayIso = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
+  function isPastDate(iso: string): boolean {
+    return iso < todayIso;
+  }
+
   const MONTH_NAMES = ['January','February','March','April','May','June','July','August','September','October','November','December'];
   const DAY_LABELS = ['S','M','T','W','T','F','S'];
 
@@ -75,6 +81,7 @@
 
   function handleDateClick(day: number) {
     const iso = toIso(viewYear, viewMonth, day);
+    if (isPastDate(iso)) return;
     if (pickPhase === 'start' || (startDate && iso < startDate)) {
       startDate = iso;
       endDate = '';
@@ -95,7 +102,10 @@
     hoverDate = day ? toIso(viewYear, viewMonth, day) : null;
   }
 
+  let isAtCurrentMonth = $derived(viewYear === today.getFullYear() && viewMonth === today.getMonth());
+
   function prevMonth() {
+    if (isAtCurrentMonth) return;
     if (viewMonth === 0) { viewMonth = 11; viewYear--; }
     else viewMonth--;
   }
@@ -219,7 +229,7 @@
   <!-- Calendar -->
   <div class="calendar">
     <div class="cal-nav">
-      <button onclick={prevMonth} class="nav-btn" aria-label="이전 달">
+      <button onclick={prevMonth} class="nav-btn" aria-label="이전 달" disabled={isAtCurrentMonth}>
         <svg width="8" height="14" viewBox="0 0 8 14" fill="none">
           <path d="M7 1L1 7L7 13" stroke="var(--cs-text-light)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
         </svg>
@@ -246,11 +256,14 @@
               <div class="cal-cell empty"></div>
             {:else}
               {@const iso = toIso(viewYear, viewMonth, day)}
+              {@const past = isPastDate(iso)}
               <button
                 class="cal-cell"
                 class:is-start={isStart(iso)}
                 class:is-end={isEnd(iso)}
                 class:in-range={inRange(iso)}
+                class:past-date={past}
+                disabled={past}
                 onclick={() => handleDateClick(day)}
                 onmouseenter={() => handleDateHover(day)}
                 onmouseleave={() => handleDateHover(null)}
@@ -353,7 +366,7 @@
     <div class="fee-row">
       <span class="fee-label">예상 대여요금</span>
       <div class="fee-val-wrap">
-        <span class="fee-val">{startDate ? estimatedFee.toLocaleString('ko-KR') : '–'}</span>
+        <span class="fee-val">{startDate && endDate ? estimatedFee.toLocaleString('ko-KR') : '–'}</span>
         <span class="fee-unit">원</span>
       </div>
     </div>
@@ -486,6 +499,10 @@
     border: none;
     cursor: pointer;
   }
+  .nav-btn:disabled {
+    opacity: 0.3;
+    cursor: not-allowed;
+  }
   .cal-month {
     font: var(--text-m-script-14);
     color: var(--cs-text-dark);
@@ -536,6 +553,14 @@
   .cal-cell:not(.empty):hover {
     background: var(--cs-lilac);
   }
+  .cal-cell.past-date {
+    color: var(--cs-text-light);
+    opacity: 0.35;
+    cursor: not-allowed;
+  }
+  .cal-cell.past-date:hover {
+    background: none;
+  }
   .cal-cell.is-start,
   .cal-cell.is-end {
     background: var(--cs-purple-light);
@@ -558,13 +583,17 @@
   @media (min-width: 641px) {
     .cal-time-wrapper {
       flex-direction: row;
-      gap: 40px;
+      gap: 24px;
       align-items: flex-start;
     }
     /* Fix: calendar must not fill 100% width in PC row layout */
     .calendar {
       flex: 1;
       width: auto;
+      gap: 10px;
+    }
+    .cal-cell {
+      font-size: 12px;
     }
   }
 
@@ -580,6 +609,7 @@
     .time-col {
       flex: 1;
       width: auto;
+      gap: 10px;
     }
   }
   .time-spinner {
@@ -595,7 +625,13 @@
     min-width: 0;
   }
   @media (min-width: 641px) {
-    .time-spinner { gap: 24px; padding: 10px 20px; }
+    .time-spinner { gap: 12px; padding: 8px 12px; }
+    .time-label { min-width: 22px; }
+    .spinner-col { gap: 10px; }
+    .spin-btn { min-width: 22px; min-height: 16px; }
+    .time-val { min-width: 16px; font-size: 12px; }
+    .time-colon { font-size: 12px; }
+    .time-ampm { font-size: 12px; }
   }
   .time-label {
     font: var(--text-m-script-12);
@@ -777,7 +813,7 @@
     line-height: 1.4;
     transition: background 0.15s, color 0.15s;
   }
-  .policy-chip:hover { background: var(--cs-purple-op10); }
+  .policy-chip:not(.policy-chip--active):hover { background: var(--cs-purple-op10); }
   .policy-chip.chip-active {
     background: var(--cs-purple);
     color: var(--cs-white);

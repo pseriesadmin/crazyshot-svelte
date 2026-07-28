@@ -3269,6 +3269,44 @@ svelte-check: 신규 ERROR 0건 (기존 11 errors 그대로)
     cms/products/[id]/edit/+page.svelte(세션 이전부터의 별도 미커밋 변경분)에서 발생 —
     이번 수정과 무관
 
+- [x] UI-7: 옵션상품 표시를 텍스트 라인 → 본상품 카드 형태의 하위 카드로 재구성 | BOUNDARY | ✅ 완료 (2026-07-28)
+  - Stephen이 재검증 요청("옵션이 전혀 반영 안 됨") → Stage DB 직접 대조로 재조사: 최신 hold
+    예약(#66)에 실제로 reservation_options 행이 정상 존재함을 확인, 저장 파이프라인은
+    정상 동작 중이었음(사용자가 확인한 시점과 화면 갱신 타이밍 차이로 추정) — 이어서
+    사용자가 실제 옵션이 보이는 스크린샷 제시, 논의가 "표시 형태" 개선 요청으로 전환됨
+  - 요청: 옵션상품을 "이름 × 수량 (금액)" 텍스트 한 줄이 아닌, 본상품 카드와 동일한 느낌의
+    하위 카드 UI로 표시 — Figma 시안(node 2447:12056) 참고
+  - Figma 조사 결과: 각 옵션이 본상품과 동일한 카드 구조(썸네일+이름+가격)로 나열되고 좌측에
+    작은 'ㄴ' 연결선으로 하위관계 표시. 단, Figma는 12H/24H 이중가격·회원/특가 배지까지
+    포함하나 옵션상품은 이 데이터 자체가 없어(별도 요금정책·배지 개념 미존재) 정직하게
+    이름·수량·합계금액·썸네일만 반영하고 배지·이중가격은 제외
+  - src/routes/checkout/+page.server.ts: reservation_options 조회 후 옵션상품 자체의
+    products.image_urls를 추가 조회해 CartLineItemOption.imageUrl 필드로 포함
+  - src/routes/checkout/+page.svelte: OrderCard(모바일)는 product-row 형제 요소로 풀폭
+    하위카드 목록 추가, ItemListCard(PC 목록행)는 컴팩트 축소판(--compact 모디파이어)으로
+    동일 컴포넌트 재사용. 연결선은 Figma 에셋(7일 만료) 대신 CSS border로 직접 구현(장식용
+    단순 도형이라 자산 커밋 불필요하다고 판단)
+  - 기존 .option-list/.option-list-item/.item-options(텍스트 라인) CSS 완전 제거
+  - svelte-check: 신규 ERROR 0건, 전체 11 errors 그대로 (경고도 기존 6개 그대로, 줄번호만 이동)
+
+- [x] UI-8: 옵션상품 하위 카드 크기를 Figma 시안대로 본상품과 동일하게 확대 | ROUTINE | ✅ 완료 (2026-07-28)
+  - Stephen 재요청: Figma 원본 스크린샷을 직접 다시 받아 픽셀 대조 → 시안은 옵션 카드도
+    본상품과 완전히 동일한 크기(150×150 썸네일·18px Bold 이름·14px Bold 가격)를 쓰고
+    연결선(ㄴ) 하나로만 하위 관계를 표시하는데, 직전 구현은 임의로 축소(60px/32px)해서
+    시안과 다름을 확인 후 보고
+  - AskUserQuestion으로 확인: "크기만 시안대로 맞춤" 선택 — 가격 이중표시·회원/특가 배지·
+    수량 스테퍼(옵션상품에 해당 데이터·기능 자체가 없음)는 계속 제외, 가짜 데이터로 채우지
+    않음
+  - src/routes/checkout/+page.svelte: .option-subcard-img를 150×150/radius 30px(본상품
+    .product-img와 동일)로, .option-subcard-name을 18px Bold #100B32(본상품 .product-name과
+    동일)로, .option-subcard-price를 14px Bold #444444(본상품 .product-price와 동일)로 확대.
+    좁은 화면 반응형 다운스케일(120px/14px/12px)도 본상품과 동일하게 추가
+  - .option-subcard--compact(ItemListCard 전용)는 "본상품과 동일 크기" 기준을 그 카드
+    자체의 실제 크기(.item-thumb-wrap 90px·radius var(--radius-md)·.item-name 폰트)에
+    맞춰 적용 — ItemListCard 자체가 이미 축소형 카드이므로 Figma의 절대값(150px)이 아닌
+    상대적 동일 크기 원칙 적용
+  - svelte-check: 신규 ERROR 0건, 전체 11 errors 그대로
+
 - [x] UI-2: 배송 마감시간 안내(delivery-deadline) 디자인 토큰 위반 수정 | ROUTINE | ✅ 완료 (2026-07-28)
   - Stephen 질의: "⏰ 19:00 마감"이 무슨 정보인지 + 마감시간 안내라면 표준 디자인 시스템의
     도움말 안내 스타일로 재작성 요청
@@ -3630,3 +3668,80 @@ sp3-qa-agent GATE C 검수 결과 (2026-07-28):
 
 GATE E: ✅ 통과 — BLOCKING 0건 (참고 3건 non-blocking) — git commit 진행 가능
 (Migration #178 Production 적용은 GATE E 통과와 별개로 Stephen 별도 승인 필요)
+
+---
+
+## NOW — CalendarTimePicker 예상 대여요금 표시 오류 수정 + 체크아웃 옵션 연동 재검증 (2026-07-28) ✅ 완료
+
+plan_source: 세션 내 아젠다 (컨텍스트 이관)
+핵심제약:
+  - 요청 범위 외 수정 없음
+  - Claude Browser 도구 사용 금지(2026-07-28 CLAUDE.md 확정 규칙) → svelte-check + 소스코드 Read로 검증 대체
+
+수정 파일:
+  - src/lib/components/products/CalendarTimePicker.svelte ← fee-row 표시 조건 수정 1줄
+
+- [x] FIX-FEE-DISPLAY: "예상 대여요금"이 옵션가만 표시되고 기본요금과 합산 안 되는 것처럼
+  보이는 버그 수정 | BOUNDARY | ✅ 완료 (2026-07-28)
+  - Stephen 제보: SONY PXW-Z90 옵션(30,000원) 선택 상태에서 "예상 대여요금"이 30,000원으로만
+    표시됨(기본 대여요금 Day 25,000/12H 20,000 미반영처럼 보임)
+  - 원인 분석: estimatedFee $derived 자체는 모든 분기에서 이미 optionsTotal을 정상 합산하고
+    있었음(반출·반납일 모두 선택된 상태에서는 버그 없음). 문제는 화면 표시 조건 — fee-val
+    span이 `{startDate ? estimatedFee... : '–'}`로 반출일(startDate) 하나만 선택돼도 즉시
+    숫자를 렌더링했는데, estimatedFee 함수는 `!endDate`(반납일 미선택)면 `return optionsTotal`
+    (옵션가만)로 조기 반환하도록 되어 있어 — 반출일만 클릭한 시점에 옵션가 단독 숫자가
+    "예상 대여요금"으로 노출되어 마치 기본요금이 합산 안 되는 것처럼 보였음
+  - 바로 위 "총 대여일" 영역은 이미 `startDate && endDate` 기준으로 '–' 처리하고 있어 두 영역의
+    표시 조건이 서로 불일치했던 것이 근본 원인
+  - 수정: fee-val 표시 조건을 `startDate` → `startDate && endDate`로 통일 (1줄) — 반출·반납일을
+    모두 선택해야 (기본요금 + 옵션가) 합산된 최종 금액이 표시되고, 그 전까지는 duration-row와
+    동일하게 '–' 표시
+  - svelte-check: 신규 ERROR 0건
+
+- [x] VERIFY-CHECKOUT-OPTIONS: 상품상세 옵션상품 선택정보 → 체크아웃 전달 여부 재검증 (수정
+  없음, 검증만) | ROUTINE | ✅ 완료 (2026-07-28)
+  - Stephen 요청: 옵션상품 선택 시 체크아웃에서 이름·수량 등 정보만 정상적으로 넘어가면
+    가격정보 처리는 자동으로 따라오는지, 기본상품 정보와 함께 넘어가는지만 확인
+  - 확인 결과: set_reservation_options RPC(reservation_id 기준 저장) → checkout/+page.server.ts
+    reservation_options 조회(reservation_id별 그룹핑, option_product_id로 products 이미지
+    추가 조회) → checkout/+page.svelte에서 본상품 카드와 동일 형태의 하위 서브카드(이미지+
+    이름+수량+가격)로 통합 렌더링 — 전 구간 정상 확인
+  - 검증 시점 기준으로 이미 별도 세션(같은 워킹트리, "체크아웃 옵션상품 금액 미반영 버그 수정"
+    NOW 섹션 — 이 문서 상위 참고)에서 itemOptionsAmount()/otSubtotal/fee-badge 3곳과 Migration
+    #178(calculate_cart_total 옵션가 반영)까지 이미 동시 진행·완료·QA통과 되어 있음을 함께
+    확인 — 본 세션에서는 별도 수정 불필요(중복 작업 아님, 확인만 하고 종료)
+  - 다중 상품 카트 시 옵션 교차오염 없음 확인 (reservation_id 기준 격리)
+
+sp3-qa-agent GATE C 검수 결과 (2026-07-28):
+  - 검수 대상: src/lib/components/products/CalendarTimePicker.svelte (fee-val 표시조건 1줄)
+  - 규칙 정합성: 보안·rental-lifecycle.md·products.md·ui-mobile.md 전부 해당없음/위반없음 확인
+  - 부작용 확인: estimatedFee는 $derived 선언부(171행)와 fee-val 표시부(369행) 단 2곳에서만
+    쓰이고 handleReserve()/emit()은 이 값을 전혀 참조하지 않음 — 이번 표시조건 변경이 예약신청
+    로직에 영향 없음 확인
+  - 당일 대여(같은 날짜 두 번 클릭) 플로우 재확인: handleDateClick()의 iso===startDate 분기에서
+    endDate=iso(=startDate와 동일값)로 즉시 설정되므로 startDate && endDate 조건이 바로 참이
+    되어 요금이 정상 표시됨 — 반출일만 선택된 중간 상태에서만 '–' 유지, 요구 동작과 일치
+  - svelte-check: 대상 파일 신규 ERROR/WARNING 0건 (프로젝트 전체 11 ERROR는 products/search
+    SuggestPicker 타입 이슈 1건으로 이번 세션과 무관)
+  - 참고 1건(non-blocking): 워킹트리 diff상 CalendarTimePicker.svelte 전체 변경량이 이번 1줄보다
+    훨씬 큰 것은 직전 NOW 섹션(3405행, PC 크기 축소 등)이 이미 GATE E 통과된 코드가 같은
+    파일이라 함께 남아있는 것 — 신규 이슈 아님, 커밋 단위 분리만 인지 필요
+
+GATE E: ✅ 통과 — 수정 필요 항목 0건 — git commit 진행 가능
+
+---
+
+## NOW — 체크아웃 옵션상품 카드 위치 수정 (2026-07-28, 이 세션) ✅ 완료
+
+plan_source: 세션 내 아젠다 (Stephen 직접 요청 — launch-selected-element로 직접 지목)
+등급: 🟢 ROUTINE (레이아웃 순서 조정)
+
+- [x] UI-9: ItemListCard(PC 목록행) 옵션상품 하위 카드 위치를 12H/24H 가격 정보 아래로 이동 | ROUTINE | ✅ 완료 (2026-07-28)
+  - Stephen 지적: "본상품 카드 내에서 옵션상품카드를 기본 금액 레이아웃 아래로 재배치할 것"
+  - 확인 결과: OrderCard(모바일)는 이미 본상품 가격 정보(product-row 전체) 다음에 옵션
+    카드가 오도록 올바르게 배치돼 있었음 — ItemListCard(PC 목록행)에서만 옵션 카드가
+    상품명 바로 아래, 가격 배지(item-bottom-row, "12H/24H XX,000원")보다 위에 표시되고
+    있어서 정보 순서가 부자연스러웠음
+  - src/routes/checkout/+page.svelte ItemListCard: item-name → item-bottom-row(가격 배지)
+    → option-subcard-list 순서로 마크업 재배치 (내용·스타일 변경 없음, 순서만 이동)
+  - svelte-check: 신규 ERROR 0건, 전체 11 errors 그대로 (기존 6개 경고도 그대로)
