@@ -1,6 +1,20 @@
 # GSD_LOG.md — 크레이지샷 실행 이력
 # 형식: [YYYY-MM-DD HH:MM] 타입 | 태스크명 | 파일 | 소요 | 결과
 
+[2026-07-28] BOUNDARY | /payment/success/dev 다중 상품 목록 + 요금 분해 카드 재구현 | 3개 파일 수정 | ✅ DONE
+  checkout CTA: items JSON + 요금 분해 6개 파라미터 전송 (구 단일상품 파라미터 제거)
+  success/dev/+page.ts: SuccessItem 인터페이스 + items 파싱 + 구 폴백 유지
+  success/dev/+page.svelte: {#each data.items} 상품 카드 × N + 결제내역 분해 카드 + option-chip
+  수정 파일: src/routes/checkout/+page.svelte · src/routes/payment/success/dev/+page.ts · src/routes/payment/success/dev/+page.svelte
+
+[2026-07-28] BOUNDARY | /cms/rentals 대여현황 Realtime 실시간 갱신 | 2개 파일 수정 + 마이그레이션 1개 | ✅ DONE
+  rental_reservations 테이블 supabase_realtime 퍼블리케이션 등록 + REPLICA IDENTITY FULL 설정
+  Migration 177 — stage(ezyvffjvuwmtuhpxdjrw) 적용 완료 · production 대기 (Stephen 확인 필요)
+  +page.svelte: supabase.channel('cms-rentals-realtime').on('postgres_changes') 구독 추가
+  $effect cleanup: supabase.removeChannel(channel) 처리
+  수정 파일: src/routes/cms/rentals/+page.svelte
+  신규 파일: supabase/migrations/20260728000177_177_enable_realtime_rental_reservations.sql
+
 [2026-07-27] BOUNDARY | CMS 계약서 탭 편집 제한 정책 + PDF 뷰어 조건 보강 + Dead CSS 정리 | 1개 파일 수정 | ✅ DONE
   편집 버튼 조건: !signingsentAt && !customerSignedAt — 발송 또는 서명 완료 시 숨김
   미리보기 & 발송 버튼: 조건 없이 항상 표시 (재발송 용도 유지)

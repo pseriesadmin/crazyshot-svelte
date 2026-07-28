@@ -4,8 +4,8 @@
 
   let { data }: { data: PageData } = $props()
 
-  function formatAmount(amount: number): string {
-    return amount.toLocaleString('ko-KR')
+  function fmt(n: number): string {
+    return n.toLocaleString('ko-KR')
   }
 
   function handleConfirm() {
@@ -52,54 +52,140 @@
     <p class="title-text">대여 결제 성공적!</p>
   </div>
 
-  <!-- 주문 상세 카드 -->
   <div class="body">
-    <div class="order-card">
 
-      <!-- 상품명 섹션 -->
-      <div class="order-product">
-        <p class="product-name">{data.productName}</p>
-        <p class="product-code">{data.orderNumber}</p>
+    <!-- ── 상품 목록 (1개 이상) ── -->
+    {#each data.items as item, i (item.code || i)}
+      <div class="order-card">
+
+        <!-- 상품 헤더 -->
+        <div class="order-product">
+          <p class="product-name">{item.name}</p>
+          {#if item.code}
+            <p class="product-code">{item.code}</p>
+          {/if}
+        </div>
+
+        <!-- 대여 상세 -->
+        <div class="order-detail">
+          {#if item.startDate && item.endDate}
+            <div class="detail-row">
+              <span class="detail-label">대여일정</span>
+              <span class="detail-value">{item.startDate} — {item.endDate}</span>
+            </div>
+          {/if}
+
+          {#if item.pickupMethod}
+            <div class="detail-row">
+              <span class="detail-label">수령방식</span>
+              <span class="detail-value">{item.pickupMethod}</span>
+            </div>
+          {/if}
+
+          {#if item.returnMethod}
+            <div class="detail-row">
+              <span class="detail-label">반납방식</span>
+              <span class="detail-value">{item.returnMethod}</span>
+            </div>
+          {/if}
+
+          {#if item.price > 0}
+            <div class="detail-row">
+              <span class="detail-label">대여요금</span>
+              <span class="detail-value">{fmt(item.price)} 원</span>
+            </div>
+          {/if}
+
+          {#if item.options && item.options.length > 0}
+            <div class="detail-row detail-row--option">
+              <span class="detail-label">포함 옵션</span>
+              <span class="detail-value detail-value--options">
+                {#each item.options as opt (opt.name)}
+                  <span class="option-chip">{opt.name} {opt.qty}개</span>
+                {/each}
+              </span>
+            </div>
+          {/if}
+        </div>
+
       </div>
+    {/each}
 
-      <!-- 상세 정보 섹션 -->
+    <!-- ── 결제 요금 분해 카드 ── -->
+    <div class="order-card">
+      <div class="order-product">
+        <p class="product-name">결제 내역</p>
+      </div>
       <div class="order-detail">
-        {#if data.startDate && data.endDate}
+
+        {#if data.subtotal > 0}
           <div class="detail-row">
-            <span class="detail-label">대여일정</span>
-            <span class="detail-value">
-              {data.startDate}
-              <span class="detail-dash"> - </span>
-              {data.endDate}
-            </span>
+            <span class="detail-label">대여요금</span>
+            <span class="detail-value">{fmt(data.subtotal)} 원</span>
           </div>
         {/if}
-        <div class="detail-row">
-          <span class="detail-label">결제요금</span>
-          <span class="detail-value">
-            {formatAmount(data.amount)}
-            <span class="detail-unit">원</span>
-          </span>
+
+        {#if data.membershipDiscount > 0}
+          <div class="detail-row">
+            <span class="detail-label">멤버십 할인</span>
+            <span class="detail-value detail-value--discount">−{fmt(data.membershipDiscount)} 원</span>
+          </div>
+        {/if}
+
+        {#if data.couponDiscount > 0}
+          <div class="detail-row">
+            <span class="detail-label">쿠폰 할인</span>
+            <span class="detail-value detail-value--discount">−{fmt(data.couponDiscount)} 원</span>
+          </div>
+        {/if}
+
+        {#if data.deliveryFee > 0}
+          <div class="detail-row">
+            <span class="detail-label">배송요금</span>
+            <span class="detail-value">{fmt(data.deliveryFee)} 원</span>
+          </div>
+        {:else}
+          <div class="detail-row">
+            <span class="detail-label">배송요금</span>
+            <span class="detail-value detail-value--free">무료</span>
+          </div>
+        {/if}
+
+        {#if data.vat > 0}
+          <div class="detail-row">
+            <span class="detail-label">부가세 (10%)</span>
+            <span class="detail-value">{fmt(data.vat)} 원</span>
+          </div>
+        {/if}
+
+        {#if data.pointsUsed > 0}
+          <div class="detail-row">
+            <span class="detail-label">포인트 사용</span>
+            <span class="detail-value detail-value--discount">−{fmt(data.pointsUsed)} 원</span>
+          </div>
+        {/if}
+
+        <div class="price-divider"></div>
+
+        <div class="detail-row detail-row--total">
+          <span class="detail-label detail-label--total">합계요금</span>
+          <span class="detail-value detail-value--total">{fmt(data.amount)} 원</span>
         </div>
+
         <div class="detail-row">
           <span class="detail-label">결제일시</span>
           <span class="detail-value">{data.confirmedAt}</span>
         </div>
+
         <div class="detail-row">
           <span class="detail-label">결제수단</span>
           <span class="detail-value">{data.paymentMethod}</span>
         </div>
-        {#if data.specialRequests}
-          <div class="detail-row">
-            <span class="detail-label">요청사항</span>
-            <span class="detail-value detail-value--medium">{data.specialRequests}</span>
-          </div>
-        {/if}
-      </div>
 
+      </div>
     </div>
 
-    <!-- 확인 버튼 (체크아웃으로 복귀) -->
+    <!-- 확인 버튼 -->
     <button class="confirm-btn" onclick={handleConfirm}>
       <svg width="15" height="10" viewBox="0 0 15 10" fill="none" aria-hidden="true">
         <path d="M14 5H1M1 5L5.5 1M1 5L5.5 9" stroke="white" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
@@ -109,6 +195,7 @@
         <path d="M1 5H14M14 5L9.5 1M14 5L9.5 9" stroke="white" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
       </svg>
     </button>
+
   </div>
 
 </div>
@@ -117,9 +204,7 @@
   /* DEV 배너 */
   .dev-banner {
     position: fixed;
-    top: 0;
-    left: 0;
-    right: 0;
+    top: 0; left: 0; right: 0;
     z-index: 9999;
     background: #FF8C00;
     color: #fff;
@@ -136,7 +221,8 @@
     align-items: center;
     min-height: 100vh;
     background: var(--cs-lilac);
-    padding-top: 28px; /* dev-banner 높이 보정 */
+    padding-top: 28px;
+    padding-bottom: 60px;
   }
 
   /* GNB */
@@ -156,23 +242,7 @@
     padding: 5px 20px;
     min-height: 60px;
   }
-  .gnb-back {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    width: 44px;
-    height: 44px;
-    border: none;
-    background: transparent;
-    color: var(--cs-text);
-    cursor: pointer;
-  }
-  .gnb-title {
-    font: var(--text-m-body-16B);
-    color: var(--cs-text);
-    letter-spacing: -0.5px;
-  }
-  .gnb-ham {
+  .gnb-back, .gnb-ham {
     display: flex;
     align-items: center;
     justify-content: center;
@@ -180,9 +250,15 @@
     min-height: 44px;
     background: none;
     border: none;
+    color: var(--cs-text);
     cursor: pointer;
     padding: 0;
-    margin-right: -8px;
+  }
+  .gnb-ham { margin-right: -8px; }
+  .gnb-title {
+    font: var(--text-m-body-16B);
+    color: var(--cs-text);
+    letter-spacing: -0.5px;
   }
 
   /* 타이틀 */
@@ -191,7 +267,6 @@
     flex-direction: column;
     gap: 20px;
     align-items: flex-start;
-    justify-content: center;
     width: 100%;
     max-width: 1240px;
     min-width: 340px;
@@ -218,8 +293,8 @@
   .body {
     display: flex;
     flex-direction: column;
-    gap: 50px;
-    align-items: flex-start;
+    gap: 16px;
+    align-items: stretch;
     width: 100%;
     padding: 0 25px;
   }
@@ -234,14 +309,13 @@
     overflow: hidden;
   }
 
-  /* 상품명 섹션 */
+  /* 상품 헤더 */
   .order-product {
     display: flex;
     flex-direction: column;
     gap: 5px;
     background: var(--cs-surface-gray);
     padding: 20px 30px;
-    width: 100%;
   }
   .product-name {
     font: var(--text-m-title-18B);
@@ -257,20 +331,27 @@
     margin: 0;
   }
 
-  /* 상세 정보 섹션 */
+  /* 상세 */
   .order-detail {
     display: flex;
     flex-direction: column;
     gap: 5px;
     background: var(--cs-surface-gray);
-    padding: 30px;
-    width: 100%;
+    padding: 20px 30px 30px;
   }
   .detail-row {
     display: flex;
-    align-items: center;
+    align-items: flex-start;
     justify-content: space-between;
+    gap: 12px;
     width: 100%;
+    min-height: 32px;
+  }
+  .detail-row--total {
+    padding-top: 4px;
+  }
+  .detail-row--option {
+    align-items: flex-start;
   }
   .detail-label {
     font: var(--text-m-script-14B);
@@ -278,22 +359,52 @@
     letter-spacing: -0.5px;
     line-height: 2;
     white-space: nowrap;
+    flex-shrink: 0;
+  }
+  .detail-label--total {
+    font: var(--text-m-body-16B);
+    color: var(--cs-text-dark);
   }
   .detail-value {
     font: var(--text-m-body-16B);
     color: var(--cs-text-mid);
     letter-spacing: -0.5px;
-    line-height: 1.6;
+    line-height: 2;
+    text-align: right;
+  }
+  .detail-value--discount { color: var(--cs-error, #e53e3e); }
+  .detail-value--free     { color: var(--cs-purple); font: var(--text-m-script-14B); line-height: 2; }
+  .detail-value--total    {
+    font: var(--text-m-title-18B);
+    color: var(--cs-purple-dark);
+    letter-spacing: -0.3px;
+  }
+  .detail-value--options {
     display: flex;
-    align-items: center;
-    gap: 5px;
+    flex-wrap: wrap;
+    gap: 6px;
+    justify-content: flex-end;
+    line-height: 1;
+    padding-top: 6px;
   }
-  .detail-value--medium {
-    font: var(--text-m-script-14);
-    font-size: 14px;
+  .option-chip {
+    display: inline-block;
+    font: var(--text-m-script-12);
+    font-size: 11px;
+    font-weight: 700;
+    color: var(--cs-purple);
+    background: var(--cs-purple-op10);
+    border-radius: var(--radius-full);
+    padding: 3px 10px;
+    white-space: nowrap;
   }
-  .detail-dash { font: var(--text-m-body-16B); line-height: 2; }
-  .detail-unit { font: var(--text-m-script-14B); line-height: 2; }
+
+  .price-divider {
+    width: 100%;
+    height: 1px;
+    background: var(--cs-lilac);
+    margin: 8px 0;
+  }
 
   /* 확인 버튼 */
   .confirm-btn {
@@ -313,19 +424,28 @@
     cursor: pointer;
     min-height: 44px;
     transition: opacity 0.15s;
+    align-self: center;
+    margin-top: 18px;
   }
   .confirm-btn:hover { opacity: 0.85; }
 
   /* PC 반응형 */
   @media (min-width: 768px) {
     .gnb-wrap { display: none; }
-    .title-bar { max-width: 900px; margin: 0 auto; }
+    .title-bar {
+      max-width: 900px;
+      margin-left: auto;
+      margin-right: auto;
+    }
     .body {
       max-width: 900px;
-      margin: 0 auto;
+      margin-left: auto;
+      margin-right: auto;
       padding-left: clamp(24px, 4vw, 48px);
       padding-right: clamp(24px, 4vw, 48px);
     }
-    .confirm-btn { max-width: 480px; margin: 0 auto; }
+    .confirm-btn {
+      max-width: 480px;
+    }
   }
 </style>

@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount, untrack } from 'svelte';
   import { goto, invalidateAll } from '$app/navigation';
-  import { slide } from 'svelte/transition';
+  import { slide, fly } from 'svelte/transition';
   import type { PageData } from './$types';
   import SubGnb from '$lib/components/common/SubGnb.svelte';
   import BottomTabBar from '$lib/components/common/BottomTabBar.svelte';
@@ -21,6 +21,8 @@
   type DeliveryMethod = 'crazydelivery' | 'quick' | 'locker' | 'visit' | 'epost';
   // 대여 기간 유형 (price_rules.duration_type 정합)
   type DurationType = '12h' | '24h' | '1day' | 'purchase';
+  // 상품 상세에서 저장된 실제 선택값 (서버 cartLineItems에서 넘어오는 시드값)
+  type CartLineItemSeed = { pickupMethod: string | null; returnMethod: string | null; pickupTime: string | null; returnTime: string | null; durationType: string | null };
 
   interface CardOptions {
     rentalMethod: DeliveryMethod;
@@ -33,8 +35,10 @@
   interface CardAccordion {
     rental: boolean;
     return_: boolean;
-    fee: boolean;
   }
+
+  // 단일 오픈(상호배타) 아코디언 키 — PC 상품 DetailPanel · 일괄설정 패널 공용
+  type AccKey = 'rental' | 'return_'
 
   interface FormState {
     name: string;
@@ -53,6 +57,15 @@
       rentalMethod: 'crazydelivery', returnMethod: 'crazydelivery',
       copyToReturn: false, couponWelcome: false, couponMembership: false
     };
+  }
+
+  // 상품 상세에서 저장된 값 → 체크아웃 표시값 매핑 (알 수 없는 method_key는 기존 기본값으로 폴백)
+  const KNOWN_DELIVERY_METHODS: DeliveryMethod[] = ['crazydelivery', 'quick', 'locker', 'visit', 'epost'];
+  function toDeliveryMethod(v: string | null, fallback: DeliveryMethod): DeliveryMethod {
+    return v && (KNOWN_DELIVERY_METHODS as string[]).includes(v) ? (v as DeliveryMethod) : fallback;
+  }
+  function toDurationType(v: string | null): DurationType {
+    return v === '12h' ? '12h' : '24h';
   }
 
   function defaultForm(): FormState {
@@ -76,16 +89,21 @@
     returnTime: string;
   }
 
-  function newItemState(id: string, rentalDate: string, returnDate: string): CartItemUiState {
+  function newItemState(id: string, rentalDate: string, returnDate: string, seed?: CartLineItemSeed): CartItemUiState {
+    const defaults = defaultOptions();
     return {
       id, checked: true, deleted: false, qty: 1,
-      acc: { rental: false, return_: false, fee: false },
-      durType: '24h',
-      opts: defaultOptions(),
+      acc: { rental: false, return_: false },
+      durType: toDurationType(seed?.durationType ?? null),
+      opts: {
+        ...defaults,
+        rentalMethod: toDeliveryMethod(seed?.pickupMethod ?? null, defaults.rentalMethod),
+        returnMethod: toDeliveryMethod(seed?.returnMethod ?? null, defaults.returnMethod),
+      },
       rentalForm: defaultForm(),
       returnForm: defaultForm(),
-      rentalDate, rentalTime: '',
-      returnDate, returnTime: '',
+      rentalDate, rentalTime: seed?.pickupTime ?? '',
+      returnDate, returnTime: seed?.returnTime ?? '',
     };
   }
 
@@ -121,8 +139,23 @@
   let bulkOpen    = $state(false)
   let bulkDate    = $state('')
   let bulkTime    = $state('')
-  let bulkMethod  = $state<DeliveryMethod>('crazydelivery')
   let bulkApplied = $state(false)
+  // 대여방법/반납방법/약정요금 아코디언 — 상품 카드와 동일 UI(RentalForm/FeeContent) 재사용
+  // 단일 오픈(상호배타) — 개별 상품 PC DetailPanel(detailOpenAcc)과 동일 인터랙션
+  let bulkOpenAcc     = $state<AccKey>('rental')
+  let bulkOpts        = $state<CardOptions>(defaultOptions())
+  let bulkRentalForm  = $state<FormState>(defaultForm())
+  let bulkReturnForm  = $state<FormState>(defaultForm())
+
+  // 패널을 열 때 첫 번째(가장 위) 상품 카드의 현재 대여/반납 방식으로 시딩 — 항상 기본값
+  // (크레이지배송)으로 빈 상태로 열리던 문제 수정. 이 대입 자체는 다른 카드에 되쓰지 않음
+  // (실 반영은 아래 applyBulkToItems() 호출부에서만 발생 — 시딩과 반영을 분리)
+  $effect(() => {
+    if (!bulkOpen) return
+    const first = itemsState.find(it => !it.deleted)
+    if (!first) return
+    bulkOpts = { ...bulkOpts, rentalMethod: first.opts.rentalMethod, returnMethod: first.opts.returnMethod }
+  })
 
   // ── Order Total
   let otSelectedCouponIds = $state(new Set<string>())
@@ -178,20 +211,74 @@
     }
   }
 
-  function applyBulkSettings() {
-    const m = bulkMethod
+  // ── 일괄설정용 핸들러 (item 핸들러와 동일 로직 — bulkOpts/bulkRentalForm/bulkReturnForm 대상)
+  // 2026-07-28: 버튼("전체 적용") 클릭 없이 입력 즉시 전체 상품 카드에 반영 — 각 핸들러 끝에
+  // applyBulkToItems() 호출
+  function bulkHandleMethod(v: DeliveryMethod) {
+    bulkOpts = { ...bulkOpts, rentalMethod: v, ...(bulkOpts.copyToReturn ? { returnMethod: v } : {}) }
+    applyBulkToItems()
+  }
+  function bulkHandleReturnMethod(v: DeliveryMethod) {
+    bulkOpts = { ...bulkOpts, returnMethod: v }
+    applyBulkToItems()
+  }
+  function bulkHandleRentalForm(f: FormState) {
+    bulkRentalForm = f
+    if (bulkOpts.copyToReturn) bulkReturnForm = { ...f }
+    applyBulkToItems()
+  }
+  function bulkHandleReturnForm(f: FormState) {
+    bulkReturnForm = f
+    applyBulkToItems()
+  }
+  function bulkHandleCopy(v: boolean) {
+    if (v) {
+      bulkOpts = { ...bulkOpts, copyToReturn: true, returnMethod: bulkOpts.rentalMethod }
+      bulkReturnForm = { ...bulkRentalForm }
+    } else {
+      bulkOpts = { ...bulkOpts, copyToReturn: false }
+    }
+    applyBulkToItems()
+  }
+  function bulkHandleDate(d: string) {
+    bulkDate = d
+    applyBulkToItems()
+  }
+  function bulkHandleTime(t: string) {
+    bulkTime = t
+    applyBulkToItems()
+  }
+
+  // 일괄 입력값이 비어있으면(사용자가 손대지 않은 필드) 기존 개별 값 유지 — 덮어써서 날리지 않도록 방어
+  function mergeFormForBulk(bulkForm: FormState, itemForm: FormState): FormState {
+    return {
+      name: bulkForm.name || itemForm.name,
+      email: bulkForm.email || itemForm.email,
+      phone: bulkForm.phone || itemForm.phone,
+      authCode: bulkForm.authCode || itemForm.authCode,
+      addr: bulkForm.addr || itemForm.addr,
+      addrDetail: bulkForm.addrDetail || itemForm.addrDetail,
+      notes: bulkForm.notes || itemForm.notes,
+      memberCheck: bulkForm.memberCheck || itemForm.memberCheck,
+      memberCheck2: bulkForm.memberCheck2 || itemForm.memberCheck2,
+    }
+  }
+
+  // 일괄설정 필드 변경 즉시(버튼 없이) 전체 상품 카드에 반영 — 카드별 기존 설정값은 무시되고
+  // bulkOpts/bulkDate/bulkTime/bulkRentalForm/bulkReturnForm 값으로 전부 덮어씀
+  function applyBulkToItems() {
     itemsState = itemsState.map(it => ({
       ...it,
       rentalDate: bulkDate || it.rentalDate,
       returnDate: bulkDate || it.returnDate,
       rentalTime: bulkTime || it.rentalTime,
       returnTime: bulkTime || it.returnTime,
-      opts: { ...it.opts, rentalMethod: m, returnMethod: m },
+      opts: { ...it.opts, rentalMethod: bulkOpts.rentalMethod, returnMethod: bulkOpts.returnMethod },
+      rentalForm: mergeFormForBulk(bulkRentalForm, it.rentalForm),
+      returnForm: mergeFormForBulk(bulkReturnForm, it.returnForm),
     }))
     bulkApplied = true
-    bulkOpen = false
     // sync_cart_dates() RPC — TASK-D 연동 시 호출 예정
-    csToast.success('전체 상품에 일정이 적용되었습니다.')
   }
 
   function resetBulkSettings() {
@@ -243,8 +330,9 @@
   type ProductRow = { id: string; name: string; category: string; brand: string | null; slug: string; image_urls: string[]; is_active: boolean }
   type UserCouponExt = { id: string; coupon_id: string; coupons: { id: string; code: string; discount_type: string; discount_value: number; description: string | null; valid_until: string } | null }
   type PriceRuleExt = { price12h: number | null; price24h: number | null; deposit: number | null }
-  type CartLineItem = { reservationId: string; productId: string | null; product: ProductRow | null; price12h: number | null; price24h: number | null; deposit: number | null; startDate: string; endDate: string }
-  type ServerExt = { calcTotal: number; calcDiscount: number; calcFinal: number; depositTotal: number; membershipGrade: string | null; userPoints: number; userCoupons: UserCouponExt[]; cartLineItems: CartLineItem[]; productPriceRules: Record<string, PriceRuleExt> }
+  type CartLineItemOption = { optionProductId: string | null; name: string; qty: number; unitPrice: number }
+  type CartLineItem = { reservationId: string; productId: string | null; product: ProductRow | null; price12h: number | null; price24h: number | null; deposit: number | null; startDate: string; endDate: string; pickupMethod: string | null; returnMethod: string | null; pickupTime: string | null; returnTime: string | null; durationType: string | null; options: CartLineItemOption[] }
+  type ServerExt = { calcTotal: number; calcDiscount: number; calcFinal: number; depositTotal: number; membershipGrade: string | null; userPoints: number; userCoupons: UserCouponExt[]; cartLineItems: CartLineItem[]; productPriceRules: Record<string, PriceRuleExt>; hasUserAddress: boolean }
   const sd = $derived(data as unknown as ServerExt)
 
   // 카트 라인아이템 — 항상 실 DB 기준 (게스트도 예약 시 익명 로그인으로 실 세션을 가지므로
@@ -256,7 +344,37 @@
   $effect(() => {
     const lines = effectiveLineItems
     const prev = untrack(() => itemsState)
-    itemsState = lines.map(line => prev.find(it => it.id === line.reservationId) ?? newItemState(line.reservationId, line.startDate ?? '', line.endDate ?? ''))
+    itemsState = lines.map(line => prev.find(it => it.id === line.reservationId) ?? newItemState(line.reservationId, line.startDate ?? '', line.endDate ?? '', {
+      pickupMethod: line.pickupMethod, returnMethod: line.returnMethod,
+      pickupTime: line.pickupTime, returnTime: line.returnTime,
+      durationType: line.durationType,
+    }))
+  })
+
+  // ── 마스터-디테일 레이아웃 (CMS /cms/products 목록·상세 패널 구조 동일 적용 2026-07-27)
+  // 좌측: 상품목록 카드 리스트 / 우측: 선택된 상품의 대여옵션(DetailPanel)
+  let selectedCartItemId = $state<string | null>(null)
+
+  // 선택된 항목이 삭제되었거나 아직 선택되지 않은 경우 → 첫 번째 유효 항목 자동 선택
+  $effect(() => {
+    const items = itemsState
+    const stillValid = items.some(it => it.id === selectedCartItemId && !it.deleted)
+    if (!stillValid) {
+      const first = items.find(it => !it.deleted)
+      selectedCartItemId = first ? first.id : null
+    }
+  })
+
+  const selectedCartIndex = $derived(itemsState.findIndex(it => it.id === selectedCartItemId && !it.deleted))
+  const selectedCartItem = $derived(selectedCartIndex >= 0 ? itemsState[selectedCartIndex] : null)
+  const panelOpen = $derived(selectedCartItem !== null)
+
+  // PC DetailPanel 전용 — 아코디언 단일 오픈(상호배타) 상태. 첫 아코디언(대여 방법) 기본 오픈.
+  // 모바일 OrderCard는 기존 item.acc(다중 오픈) 그대로 유지 — 이 상태와 무관.
+  let detailOpenAcc = $state<AccKey>('rental')
+  $effect(() => {
+    selectedCartItemId
+    detailOpenAcc = 'rental'
   })
 
   // ── Footer + canProceed 5조건 가드
@@ -289,14 +407,6 @@
   // 완료 버튼 문구 — 회원/비회원(익명 게스트) 구분
   const confirmLabel = $derived((data.isGuest as boolean | undefined) ? '비회원 예약신청완료' : '예약신청완료')
 
-  function proceedGuideMessage(): string {
-    if (!hasItems)   return itemsState.some(it => !it.deleted) ? '예약할 상품을 1개 이상 선택해 주세요.' : '장바구니가 비어 있습니다.'
-    if (!datesSet)   return '선택한 상품의 수령일과 반납일을 선택해 주세요.'
-    if (!identityOk) return '본인 확인이 필요합니다. 이메일 인증을 완료해 주세요.'
-    if (!agreed)     return '대여 조건에 동의해 주세요.'
-    return ''
-  }
-
   onMount(() => {
     let lastY = window.scrollY;
     function onScroll() {
@@ -325,16 +435,20 @@
     return daily  // '24h' | '1day'
   }
 
+  // CMS 대여관리(/cms/set/rental)에서 설정한 실제 이름을 우선 사용 — 아래 맵은 CMS 데이터가
+  // 아직 로드되지 않았거나 해당 method_key가 CMS 목록에 없을 때만 쓰는 최후 폴백
   const DELIVERY_LABELS: Record<DeliveryMethod, string> = {
     crazydelivery: '크레이지배송', quick: '퀵서비스',
     locker:        '무인보관함',   visit: '직접방문', epost: '택배',
   };
-  function methodLabel(m: DeliveryMethod): string { return DELIVERY_LABELS[m]; }
+  function methodLabel(m: DeliveryMethod): string {
+    const cmsOpt = sdDeliveryOpts.find(o => o.method_key === m)
+    return cmsOpt?.name ?? DELIVERY_LABELS[m] ?? m;
+  }
 
   function toggleAcc(acc: CardAccordion, key: keyof CardAccordion): CardAccordion {
     if (key === 'rental') return { ...acc, rental: !acc.rental };
-    if (key === 'return_') return { ...acc, return_: !acc.return_ };
-    return { ...acc, fee: !acc.fee };
+    return { ...acc, return_: !acc.return_ };
   }
 
   // 단가: 실제 요금정책(price_rules) 기준 (없으면 기본 단가 폴백)
@@ -355,6 +469,11 @@
     if (!line) return 0
     return sdPriceRules[line.productId ?? '']?.deposit ?? line.deposit ?? 0
   }
+  // 옵션상품 금액 합계 (unit_price × qty) — 상품상세에서 선택한 옵션이 체크아웃 합계에도 반영되도록
+  function itemOptionsAmount(line: CartLineItem | undefined): number {
+    if (!line) return 0
+    return line.options.reduce((s, o) => s + o.unitPrice * o.qty, 0)
+  }
 
   // ── 등급별 할인율
   const GRADE_RATE: Record<string, number> = { NONE: 0, EASY: 0, POP: 10, CRAZY: 20 }
@@ -363,11 +482,12 @@
   const otDiscountRate = $derived(GRADE_RATE[otGrade] ?? 0)
 
   // 대여료 소계 — 체크된(선택된) 상품만 합산 (체크 해제 시 약정요금에서 제외)
+  // 옵션상품 금액(itemOptionsAmount)도 기본 대여료와 동일하게 qty 배수 적용해 합산
   const otSubtotal = $derived(
     itemsState.reduce((sum, it, i) => {
       if (it.deleted || !it.checked) return sum
       const line = effectiveLineItems[i]
-      return sum + itemCardRate(line, it.durType) * Math.max(it.qty, 1)
+      return sum + (itemCardRate(line, it.durType) + itemOptionsAmount(line)) * Math.max(it.qty, 1)
     }, 0)
   )
 
@@ -376,7 +496,7 @@
 
   // 배송비: DB rental_method_options.fee_amount 우선, 없으면 하드코딩 폴백
   // @ts-expect-error — deliveryOptions: +page.server.ts 제공
-  const sdDeliveryOpts = $derived((data.deliveryOptions as Array<{ method_key: string; fee_amount: number; is_free_for_top_grade: boolean }> | undefined) ?? [])
+  const sdDeliveryOpts = $derived((data.deliveryOptions as Array<{ method_key: string; name: string; fee_amount: number; is_free_for_top_grade: boolean }> | undefined) ?? [])
   function deliveryFee(method: DeliveryMethod, grade: string): number {
     if (sdDeliveryOpts.length) {
       const opt = sdDeliveryOpts.find(o => o.method_key === method)
@@ -405,8 +525,8 @@
   }
 
   // 배송 탭 — 카트 상품의 allowed_method_ids 기준으로 rental_method_options 필터링
-  interface DeliveryTabMeta { v: DeliveryMethod; label: string; fee: string; deadline: string }
-  interface DeliveryOptionRow { id: string; method_key: string; name: string; fee_description: string | null; deadline_time: string | null }
+  interface DeliveryTabMeta { v: DeliveryMethod; label: string; deadline: string }
+  interface DeliveryOptionRow { id: string; method_key: string; name: string; deadline_time: string | null }
 
   function computeAllowedMethodIds(prods: ProductRow[]): Set<string> | 'all' | 'none' {
     type P = ProductRow & { allowed_method_ids?: string[] | null }
@@ -429,7 +549,7 @@
     allowedMethodIds === 'none' ? [] :
     ((data.deliveryOptions as DeliveryOptionRow[] | undefined) ?? [])
       .filter((o: DeliveryOptionRow) => o.method_key && (allowedMethodIds === 'all' || allowedMethodIds.has(o.id)))
-      .map((o: DeliveryOptionRow) => ({ v: o.method_key as DeliveryMethod, label: o.name, fee: o.fee_description ?? '', deadline: o.deadline_time ?? '' }))
+      .map((o: DeliveryOptionRow) => ({ v: o.method_key as DeliveryMethod, label: o.name, deadline: o.deadline_time ?? '' }))
   );
   const otDeliveryFee = $derived(
     itemsState.reduce((sum, it) => sum + ((it.deleted || !it.checked) ? 0 : deliveryFee(it.opts.rentalMethod, otGrade)), 0)
@@ -438,6 +558,8 @@
   // 서버 데이터 안전 추출
   const sdCoupons = $derived<UserCouponExt[]>((sd as { userCoupons?: UserCouponExt[] }).userCoupons ?? [])
   const sdUserPoints = $derived<number>((sd as { userPoints?: number }).userPoints ?? 0)
+  // "회원정보 반영"(배송지) 체크박스 활성화 조건 — 저장된 배송지 주소가 있을 때만 사용 가능
+  const sdHasUserAddress = $derived<boolean>((sd as { hasUserAddress?: boolean }).hasUserAddress ?? false)
 
   // 쿠폰 할인 합산
   const otCouponDiscount = $derived(
@@ -495,93 +617,18 @@
 <!-- ═══════════════════════ MAIN ═══════════════════════ -->
 <div class="cart-root">
   <!-- 기존 PC 헤더 제거 — SubGnb로 통합 -->
-  <header class="cart-header">
-    <div class="cart-header-inner">
+  <header class="sub-gnb-b">
+    <div class="sub-gnb-b-inner">
       <!-- Back + Cart pill -->
-      <button type="button" class="header-pill" onclick={() => history.back()} aria-label="뒤로 가기, 장바구니">
-        <div class="header-pill-left">
-          <svg class="header-pill-arrow" viewBox="0 0 21.3844 17.1421" fill="none" aria-hidden="true">
+      <button type="button" class="sub-gnb-b-pill" onclick={() => history.back()} aria-label="뒤로 가기, 장바구니">
+        <div class="sub-gnb-b-pill-left">
+          <svg class="sub-gnb-b-arrow" viewBox="0 0 21.3844 17.1421" fill="none" aria-hidden="true">
             <path d="M19.8844 8.5707L1.5 8.57107M8.57107 1.5L1.5 8.57107L8.57107 15.6421" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="3"/>
           </svg>
-          <span class="header-back-text">Back</span>
+          <span class="sub-gnb-b-back">Back</span>
         </div>
-        <span class="header-cart-text">Cart</span>
+        <span class="sub-gnb-b-title">Order items</span>
       </button>
-      <!-- Category icons -->
-      <div class="cat-icons">
-        <!-- 카메라 -->
-        <button class="cat-icon-btn" title="카메라">
-          <svg viewBox="0 0 31.5078 33.5626" fill="none" style="width:28px;height:28px">
-            <path d="M0.68501 24.2755C0.68501 25.836 2.35608 26.827 3.72543 26.0786L14.7683 20.0424C15.3825 19.7067 16.1253 19.7067 16.7395 20.0424L27.7824 26.0786C29.1517 26.8271 30.8228 25.836 30.8228 24.2755V11.1677C30.8228 10.4164 30.4128 9.72499 29.7535 9.36464L16.7395 2.25109C16.1253 1.91538 15.3825 1.91538 14.7683 2.25109L1.75429 9.36464C1.09504 9.72499 0.68501 10.4164 0.68501 11.1677V24.2755Z" fill="#FF3535"/>
-            <path d="M28.8434 11.1306C28.8434 10.16 28.3173 9.26548 27.4702 8.79494L17.0454 3.00442C16.2421 2.55823 15.2658 2.55832 14.4624 3.00442L4.03699 8.79494C3.18993 9.2655 2.66446 10.16 2.66446 11.1306V22.432C2.66446 23.4026 3.18989 24.2971 4.03699 24.7676L14.4624 30.5575C15.2658 31.0037 16.242 31.0038 17.0454 30.5575L27.4702 24.7676C28.3173 24.2971 28.8434 23.4026 28.8434 22.432V11.1306ZM31.5078 22.432C31.5078 24.3732 30.4562 26.1615 28.762 27.1026L18.3373 32.8931C16.7303 33.7857 14.7775 33.7857 13.1705 32.8931L2.74577 27.1026C1.05147 26.1615 6.00964e-05 24.3732 6.00964e-05 22.432V11.1306C6.00964e-05 9.18934 1.05147 7.40103 2.74577 6.45996L13.1705 0.669437C14.7775 -0.223146 16.7303 -0.223146 18.3373 0.669437L28.762 6.45996C30.4562 7.40106 31.5078 9.18942 31.5078 11.1306V22.432Z" fill="#3B2F8A"/>
-            <path d="M0.68501 12.5932C0.68501 10.3148 3.12471 8.868 5.1239 9.96077L14.315 14.9847C15.2117 15.4748 16.2961 15.4748 17.1928 14.9847L26.3839 9.96077C28.3831 8.868 30.8228 10.3148 30.8228 12.5932V23.5467C30.8228 24.6436 30.2242 25.653 29.2617 26.1791L17.1928 32.776C16.2961 33.2662 15.2117 33.2662 14.315 32.776L2.24612 26.1791C1.28364 25.653 0.68501 24.6436 0.68501 23.5467V12.5932Z" fill="#3B2F8A"/>
-          </svg>
-        </button>
-        <!-- 렌즈 -->
-        <button class="cat-icon-btn" title="렌즈">
-          <svg viewBox="0 0 32 27.1304" fill="none" style="width:28px;height:24px">
-            <path d="M32 18.6487V12.0642C32 9.09528 32 7.61084 31.4311 6.47687C30.2661 4.1549 28.1659 3.58242 25.7391 3.58242C25.0736 3.58242 24.5623 3.0188 24.2933 2.41001C23.5455 0.717442 21.2087 0 19.4783 0H13.2174C11.3836 0 8.6128 0.805645 7.96747 2.72357C7.81367 3.18068 7.43881 3.58242 6.95652 3.58242C4.17243 3.58242 1.97727 3.66983 0.56893 6.47687C0 7.61084 0 9.09528 0 12.0642V18.6487C0 21.6176 0 23.102 0.56893 24.236C1.06938 25.2335 1.86791 26.0444 2.85009 26.5527C3.96668 27.1304 5.42838 27.1304 8.35177 27.1304H23.6482C26.5716 27.1304 28.0333 27.1304 29.1499 26.5527C30.1321 26.0444 30.9306 25.2335 31.4311 24.236C32 23.102 32 21.6176 32 18.6487Z" fill="#3B2F8A"/>
-            <path d="M22.2609 14.6087C22.2609 11.343 19.6135 8.69565 16.3478 8.69565C13.0821 8.69565 10.4348 11.343 10.4348 14.6087C10.4348 17.8744 13.0821 20.5217 16.3478 20.5217C19.6135 20.5217 22.2609 17.8744 22.2609 14.6087ZM25.0435 14.6087C25.0435 19.4112 21.1503 23.3043 16.3478 23.3043C11.5454 23.3043 7.65217 19.4112 7.65217 14.6087C7.65217 9.80622 11.5454 5.91304 16.3478 5.91304C21.1503 5.91304 25.0435 9.80622 25.0435 14.6087Z" fill="#FF3535"/>
-            <path d="M16.3478 20.5217C19.6135 20.5217 22.2609 17.8744 22.2609 14.6087C22.2609 11.343 19.6135 8.69565 16.3478 8.69565C13.0821 8.69565 10.4348 11.343 10.4348 14.6087C10.4348 17.8744 13.0821 20.5217 16.3478 20.5217Z" fill="#E1DEF3"/>
-          </svg>
-        </button>
-        <!-- 드론 -->
-        <button class="cat-icon-btn" title="드론">
-          <svg viewBox="0 0 32.8777 32.8777" fill="none" style="width:28px;height:28px">
-            <path d="M16.439 2.7398C24.0047 2.73992 30.1382 8.87334 30.1382 16.439C30.1381 24.0046 24.0046 30.1381 16.439 30.1382C8.87334 30.1382 2.73992 24.0047 2.7398 16.439C2.7398 8.87327 8.87327 2.7398 16.439 2.7398Z" fill="#FF3535"/>
-            <path d="M30.1378 16.4388C30.1378 8.87305 24.0045 2.7398 16.4388 2.7398C8.87305 2.7398 2.7398 8.87305 2.7398 16.4388C2.7398 24.0045 8.87305 30.1378 16.4388 30.1378C24.0045 30.1378 30.1378 24.0045 30.1378 16.4388ZM32.8776 16.4388C32.8776 25.5177 25.5177 32.8776 16.4388 32.8776C7.3599 32.8776 0 25.5177 0 16.4388C1.76525e-07 7.3599 7.3599 2.24761e-06 16.4388 0C25.5177 0 32.8776 7.3599 32.8776 16.4388Z" fill="#3B2F8A"/>
-            <path d="M27.398 16.4388C27.398 22.4914 22.4914 27.398 16.4388 27.398C10.3862 27.398 5.4796 22.4914 5.4796 16.4388C5.4796 10.3862 10.3862 5.4796 16.4388 5.4796C22.4914 5.4796 27.398 10.3862 27.398 16.4388Z" fill="#3B2F8A"/>
-            <path d="M16.4388 21.2334C19.0868 21.2334 21.2334 19.0868 21.2334 16.4388C21.2334 13.7908 19.0868 11.6441 16.4388 11.6441C13.7908 11.6441 11.6441 13.7908 11.6441 16.4388C11.6441 19.0868 13.7908 21.2334 16.4388 21.2334Z" fill="#E1DEF3"/>
-          </svg>
-        </button>
-        <!-- 폰 -->
-        <button class="cat-icon-btn" title="폰">
-          <svg viewBox="0 0 32 29" fill="none" style="width:28px;height:26px">
-            <path d="M24.3607 0C28.1868 0.000100914 31.4716 3.30714 31.4716 7.15929C31.4716 8.59163 31.4699 11.5467 31.4688 14.1431C31.4682 15.4412 31.4678 16.6498 31.4674 17.534C31.4672 17.9761 31.4668 18.3371 31.4667 18.5876V18.9777C31.4662 19.9661 30.67 20.7672 29.6883 20.7668C28.7066 20.7663 27.9109 19.9647 27.9113 18.9763V18.5855C27.9114 18.3351 27.9118 17.9744 27.912 17.5326C27.9124 16.6484 27.9128 15.4392 27.9134 14.141C27.9145 11.5445 27.9161 8.59061 27.9161 7.15929C27.9161 5.28412 26.2232 3.57975 24.3607 3.57964C22.939 3.57964 19.3377 3.5806 15.7361 3.58174C12.1351 3.58288 8.53335 3.58454 7.1108 3.58454C5.24828 3.58454 3.5554 5.28896 3.5554 7.16418C3.5554 8.59646 3.55523 13.6078 3.5554 18.2611C3.55549 20.5878 3.55603 22.8251 3.5561 24.4807V27.2102C3.5561 28.1986 2.76014 28.9999 1.7784 29C0.858025 29 0.100835 28.2958 0.0097218 27.3934L0.000694414 27.2102V18.2611C0.000520826 13.6079 2.82461e-08 8.59655 0 7.16418C2.91092e-07 3.31197 3.28468 0.00419489 7.1108 0.00419489C8.53265 0.00419486 12.1339 0.00323361 15.7354 0.00209745C19.3365 0.000961433 22.9383 0 24.3607 0ZM29.5112 23.6305C30.8857 23.6305 32 24.7524 32 26.1363C32 27.5202 30.8857 28.642 29.5112 28.642C28.1367 28.642 27.0224 27.5202 27.0224 26.1363C27.0224 24.7524 28.1367 23.6305 29.5112 23.6305ZM11.7335 6.62514C14.8753 6.62514 17.4222 9.18939 17.4222 12.3526V20.2271C17.4222 23.3903 14.8753 25.9552 11.7335 25.9552C8.59177 25.9552 6.04488 23.3903 6.04488 20.2271V12.3526C6.04488 9.18939 8.59177 6.62514 11.7335 6.62514ZM11.7335 17.3641C10.1626 17.3641 8.8892 18.6462 8.8892 20.2278C8.88939 21.8092 10.1628 23.0915 11.7335 23.0915C13.3043 23.0915 14.5777 21.8092 14.5778 20.2278C14.5778 18.6462 13.3044 17.3641 11.7335 17.3641Z" fill="#3B2F8A"/>
-            <path d="M14.5778 12.3522C14.5778 13.9338 13.3044 15.2159 11.7335 15.2159C10.1626 15.2159 8.8892 13.9338 8.8892 12.3522C8.8892 10.7706 10.1626 9.4885 11.7335 9.4885C13.3044 9.4885 14.5778 10.7706 14.5778 12.3522Z" fill="#FF3535"/>
-          </svg>
-        </button>
-        <!-- 영상 -->
-        <button class="cat-icon-btn" title="영상">
-          <svg viewBox="0 0 32 20.9674" fill="none" style="width:28px;height:20px">
-            <path d="M0 14.6413C0 12.7203 1.55727 11.163 3.47826 11.163H6.26087C8.18186 11.163 9.73913 12.7203 9.73913 14.6413V17.4239C9.73913 19.3449 8.18186 20.9022 6.26087 20.9022H3.47826C1.55727 20.9022 0 19.3449 0 17.4239V14.6413Z" fill="#3B2F8A"/>
-            <path d="M22.2609 14.7065C22.2609 12.7855 23.8181 11.2283 25.7391 11.2283H28.5217C30.4427 11.2283 32 12.7855 32 14.7065V17.4891C32 19.4101 30.4427 20.9674 28.5217 20.9674H25.7391C23.8181 20.9674 22.2609 19.4101 22.2609 17.4891V14.7065Z" fill="#3B2F8A"/>
-            <path d="M11.1304 14.6413C11.1304 12.7203 12.6877 11.163 14.6087 11.163H17.3913C19.3123 11.163 20.8696 12.7203 20.8696 14.6413V17.4239C20.8696 19.3449 19.3123 20.9022 17.3913 20.9022H14.6087C12.6877 20.9022 11.1304 19.3449 11.1304 17.4239V14.6413Z" fill="#FF3535"/>
-            <path d="M0 3.47826C0 1.55727 1.55727 0 3.47826 0H6.26087C8.18186 0 9.73913 1.55727 9.73913 3.47826V6.26087C9.73913 8.18186 8.18186 9.73913 6.26087 9.73913H3.47826C1.55727 9.73913 0 8.18186 0 6.26087V3.47826Z" fill="#3B2F8A"/>
-            <path d="M11.1304 3.47826C11.1304 1.55727 12.6877 0 14.6087 0H17.3913C19.3123 0 20.8696 1.55727 20.8696 3.47826V6.26087C20.8696 8.18186 19.3123 9.73913 17.3913 9.73913H14.6087C12.6877 9.73913 11.1304 8.18186 11.1304 6.26087V3.47826Z" fill="#FF3535"/>
-            <path d="M22.2609 3.54348C22.2609 1.62249 23.8181 0.0652174 25.7391 0.0652174H28.5217C30.4427 0.0652174 32 1.62249 32 3.54348V6.32609C32 8.24708 30.4427 9.80435 28.5217 9.80435H25.7391C23.8181 9.80435 22.2609 8.24708 22.2609 6.32609V3.54348Z" fill="#3B2F8A"/>
-          </svg>
-        </button>
-        <!-- 악세서리 -->
-        <button class="cat-icon-btn" title="악세서리">
-          <svg viewBox="0 0 30 30" fill="none" style="width:26px;height:26px">
-            <path d="M24 28.6667C26.5773 28.6667 28.6667 26.5773 28.6667 24C28.6667 21.4227 26.5773 19.3333 24 19.3333C21.4227 19.3333 19.3333 21.4227 19.3333 24C19.3333 26.5773 21.4227 28.6667 24 28.6667Z" fill="#FF3535"/>
-            <path d="M6 10.6667C8.57733 10.6667 10.6667 8.57733 10.6667 6C10.6667 3.42267 8.57733 1.33333 6 1.33333C3.42267 1.33333 1.33333 3.42267 1.33333 6C1.33333 8.57733 3.42267 10.6667 6 10.6667Z" fill="#FF3535"/>
-            <path d="M27.3333 24C27.3333 22.1591 25.8409 20.6667 24 20.6667C22.1591 20.6667 20.6667 22.1591 20.6667 24C20.6667 25.8409 22.1591 27.3333 24 27.3333C25.8409 27.3333 27.3333 25.841 27.3333 24ZM30 24C30 27.3137 27.3137 30 24 30C20.6863 30 18 27.3137 18 24C18 20.6863 20.6863 18 24 18C27.3137 18 30 20.6863 30 24Z" fill="#3B2F8A"/>
-            <path d="M9.33333 24C9.33333 22.1591 7.84095 20.6667 6 20.6667C4.15905 20.6667 2.66667 22.1591 2.66667 24C2.66667 25.8409 4.15905 27.3333 6 27.3333C7.84095 27.3333 9.33333 25.841 9.33333 24ZM12 24C12 27.3137 9.31371 30 6 30C2.68629 30 0 27.3137 0 24C0 20.6863 2.68629 18 6 18C9.31371 18 12 20.6863 12 24Z" fill="#3B2F8A"/>
-            <path d="M27.3333 6C27.3333 4.15905 25.8409 2.66667 24 2.66667C22.1591 2.66667 20.6667 4.15905 20.6667 6C20.6667 7.84095 22.1591 9.33333 24 9.33333C25.8409 9.33333 27.3333 7.84095 27.3333 6ZM30 6C30 9.31371 27.3137 12 24 12C20.6863 12 18 9.31371 18 6C18 2.68629 20.6863 6.5213e-07 24 0C27.3137 0 30 2.68629 30 6Z" fill="#3B2F8A"/>
-            <path d="M9.33333 6C9.33333 4.15905 7.84095 2.66667 6 2.66667C4.15905 2.66667 2.66667 4.15905 2.66667 6C2.66667 7.84095 4.15905 9.33333 6 9.33333C7.84095 9.33333 9.33333 7.84095 9.33333 6ZM12 6C12 9.31371 9.31371 12 6 12C2.68629 12 0 9.31371 0 6C0 2.68629 2.68629 6.87206e-07 6 0C9.31371 0 12 2.68629 12 6Z" fill="#3B2F8A"/>
-            <path d="M10.9408 13.5912C10.7885 12.093 12.0936 10.7861 13.5922 10.9345C14.5654 11.0308 15.4855 11.0278 16.4718 10.9246C17.9541 10.7694 19.2505 12.0504 19.1059 13.5338C19.0073 14.5453 19.0089 15.493 19.1106 16.5067C19.2584 17.9798 17.9805 19.2557 16.5078 19.1042C15.5032 19.0008 14.5662 18.9964 13.5704 19.092C12.0776 19.2352 10.7863 17.9273 10.9395 16.4355C11.0389 15.4678 11.0391 14.558 10.9408 13.5912Z" fill="#3B2F8A"/>
-            <path d="M19.714 16.8856C20.4951 17.6667 20.4951 18.933 19.714 19.714C18.933 20.4951 17.6667 20.4951 16.8856 19.714L10.286 13.1144C9.50491 12.3333 9.50491 11.067 10.286 10.286C11.067 9.50491 12.3333 9.50491 13.1144 10.286L19.714 16.8856Z" fill="#3B2F8A"/>
-            <path d="M13.1144 19.714C12.3333 20.4951 11.067 20.4951 10.286 19.714C9.50491 18.933 9.50491 17.6667 10.286 16.8856L16.8856 10.286C17.6667 9.50491 18.933 9.50491 19.714 10.286C20.4951 11.067 20.4951 12.3333 19.714 13.1144L13.1144 19.714Z" fill="#3B2F8A"/>
-          </svg>
-        </button>
-        <!-- 항공 -->
-        <button class="cat-icon-btn" title="항공">
-          <svg viewBox="0 0 32 26" fill="none" style="width:28px;height:24px">
-            <path d="M19.9111 0C18.5419 4.75329e-05 17.302 0.561862 16.4021 1.47054H12.0889C11.1071 1.47064 10.3111 2.27899 10.3111 3.2761C10.3112 4.27312 11.1072 5.08156 12.0889 5.08165H14.9333V12.2778C14.9333 15.0698 17.162 17.3332 19.9111 17.3333H26.8889V19.1389C26.8889 21.0306 25.5515 22.3889 23.6889 22.3889H6.75556C4.89304 22.3888 3.55556 21.0305 3.55556 19.1389V9.38889L3.54653 9.2041C3.45539 8.29374 2.69818 7.58333 1.77778 7.58333C0.857442 7.58342 0.100144 8.29378 0.00902778 9.2041L0 9.38889V19.1389C0 23.0249 2.92936 25.9999 6.75556 26H23.6889C27.5152 26 30.4444 23.0249 30.4444 19.1389V15.9474C31.402 15.026 32 13.7232 32 12.2778V5.05556C32 2.26345 29.7714 0 27.0222 0H19.9111ZM5.38333 0.722222C4.00884 0.722317 2.89444 1.85401 2.89444 3.25C2.89444 4.64599 4.00884 5.77768 5.38333 5.77778C6.75791 5.77778 7.87222 4.64605 7.87222 3.25C7.87222 1.85395 6.75791 0.722222 5.38333 0.722222Z" fill="#3B2F8A"/>
-            <path d="M19.2002 8.66667C19.2002 11.2593 21.2696 13.3611 23.8224 13.3611C26.3752 13.3611 28.4446 11.2593 28.4446 8.66667C28.4446 6.074 26.3752 3.97222 23.8224 3.97222C21.2696 3.97222 19.2002 6.074 19.2002 8.66667Z" fill="#FF3535"/>
-          </svg>
-        </button>
-        <!-- 기타 -->
-        <button class="cat-icon-btn" title="기타">
-          <svg viewBox="0 0 28 32" fill="none" style="width:26px;height:30px">
-            <path d="M0 6.8495C0 3.06663 3.09606 0 6.91525 0H13.8305C17.6497 0 20.7457 3.06663 20.7457 6.8495V19.1786C20.7457 22.9615 17.6497 26.0281 13.8305 26.0281H6.91525C3.09606 26.0281 0 22.9615 0 19.1786V6.8495Z" fill="#3B2F8A"/>
-            <path d="M17.2814 28.5753C21.2955 28.5753 24.3467 25.7235 24.5336 22.3953L24.5424 22.0716V12.404C24.5424 11.4583 25.3164 10.6916 26.2712 10.6916C27.226 10.6916 28 11.4583 28 12.404V22.0716L27.9966 22.3338C27.8458 27.816 22.9771 32 17.2814 32C11.4952 32 6.56274 27.682 6.56273 22.0716V17.9632C6.56291 17.0176 7.33686 16.2508 8.29154 16.2508C9.24623 16.2508 10.0202 17.0176 10.0204 17.9632L10.0204 22.0716C10.0204 25.5364 13.1376 28.5752 17.2814 28.5753Z" fill="#3B2F8A"/>
-            <path d="M9.32208 7.5893C9.7151 6.94081 10.5642 6.73069 11.219 7.11973C11.874 7.50899 12.0868 8.35057 11.6938 8.99933L10.046 11.7191H12.4441C12.9423 11.7191 13.402 11.9846 13.6475 12.414C13.893 12.8435 13.8863 13.3708 13.6299 13.794L10.7254 18.5886C10.3324 19.2371 9.48329 19.4472 8.82842 19.0582C8.17344 18.6689 7.96068 17.8274 8.35367 17.1786L10.0014 14.4589H7.6034C7.10513 14.4589 6.64548 14.1933 6.39998 13.7639C6.15448 13.3344 6.16118 12.8072 6.41754 12.3839L9.32208 7.5893Z" fill="#FF3535"/>
-          </svg>
-        </button>
-      </div>
     </div>
   </header>
 
@@ -591,16 +638,47 @@
 
       <!-- ── ORDER ITEMS ── -->
       <section class="cs-section">
-        <div class="sec-header">
-          <span class="sec-title">Order items</span>
-          <div class="sec-icon">
-            <svg viewBox="0 0 16 16" fill="none" class="sec-icon-svg">
-              <path d="M14.4996 0C15.3281 1.64973e-05 15.9996 0.671583 15.9996 1.5V11.5C15.9992 12.328 15.3278 13 14.4996 13C13.6717 12.9998 13.0001 12.3279 12.9996 11.5V5.12109L10.5602 7.56055L2.5602 15.5596C1.97438 16.1449 1.02473 16.1451 0.439102 15.5596C-0.146507 14.9739 -0.146228 14.0243 0.439102 13.4385L10.8776 3H4.49965C3.67171 2.99979 3.00014 2.32788 2.99965 1.5C2.99965 0.671704 3.6714 0.000212116 4.49965 0H14.4996Z" fill="#100B32"/>
-            </svg>
-          </div>
+        <!-- 모바일 전용(<641px): 상품별 개별 카드 (기존 레이아웃 그대로 유지 — 2026-07-27 마스터-디테일 변경은 PC 전용) -->
+        <div class="mobile-cart-list">
+          {#each itemsState as item, i (item.id)}
+            {@render OrderCard(item, effectiveLineItems[i])}
+          {/each}
+
+          {#if itemsState.length === 0 || itemsState.every(it => it.deleted)}
+            <div class="order-card empty-card">
+              <p class="empty-text">장바구니가 비어 있습니다.</p>
+            </div>
+          {/if}
         </div>
 
-        <!-- ── 전체 일괄 설정 패널 -->
+        <!-- PC 전용(≥641px) 마스터-디테일 레이아웃: 상품목록(좌) / 대여옵션 DetailPanel(우) — CMS /cms/products 구조 동일 적용 -->
+        <div class="master-detail">
+          <!-- 카드 목록 패널 -->
+          <div class="list-pane" class:narrow={panelOpen}>
+            {#if itemsState.length === 0 || itemsState.every(it => it.deleted)}
+              <div class="order-card empty-card">
+                <p class="empty-text">장바구니가 비어 있습니다.</p>
+              </div>
+            {:else}
+              <div class="card-list" role="list">
+                {#each itemsState as item, i (item.id)}
+                  {#if !item.deleted}
+                    {@render ItemListCard(item, effectiveLineItems[i])}
+                  {/if}
+                {/each}
+              </div>
+            {/if}
+          </div>
+
+          <!-- 대여옵션 DetailPanel -->
+          {#if panelOpen && selectedCartItem}
+            <div class="detail-pane" transition:fly={{ x: 24, duration: 200 }}>
+              {@render ItemDetailPanel(selectedCartItem, effectiveLineItems[selectedCartIndex])}
+            </div>
+          {/if}
+        </div>
+
+        <!-- ── 전체 일괄 설정 패널 (2026-07-28: Order Total 바로 위로 재배치 — 상품 목록을 먼저 확인한 뒤 일괄 적용하는 흐름에 정합) -->
         <div class="bulk-panel" class:bulk-panel-on={bulkApplied}>
           <button class="bulk-head" onclick={() => bulkOpen = !bulkOpen}>
             <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true" class="bulk-lock">
@@ -617,58 +695,52 @@
           </button>
           {#if bulkOpen}
             <div transition:slide={{ duration: 250 }} class="bulk-body">
-              <!-- 날짜 + 시간 (2컬럼) -->
-              <div class="bulk-row2">
-                <label class="bulk-group">
-                  <span class="bulk-lbl">날짜</span>
-                  <input type="date" class="bulk-inp" bind:value={bulkDate} />
-                </label>
-                <label class="bulk-group">
-                  <span class="bulk-lbl">시간</span>
-                  <select class="bulk-inp" bind:value={bulkTime}>
-                    {#each Array.from({ length: 24 }, (_, i) => i) as h}
-                      <option value={fmtTime(h)}>{fmtTime(h)}</option>
-                    {/each}
-                  </select>
-                </label>
-              </div>
-              <!-- 배송 방식 — 표준 콤보 버튼 (§16) -->
-              <div class="bulk-group">
-                <span class="bulk-lbl">배송 방식</span>
-                <div class="delivery-combo">
-                  {#each deliveryTabs as tab}
-                    <button
-                      class="combo-btn"
-                      class:combo-btn-active={bulkMethod === tab.v}
-                      onclick={() => bulkMethod = tab.v}
-                    >
-                      <span class="combo-label">{tab.label}</span>
-                      {#if tab.fee}<span class="combo-fee">{tab.fee}</span>{/if}
-                    </button>
-                  {/each}
+              <!-- 대여방법 · 반납방법 · 약정요금 — 상품 카드와 동일 아코디언 UI (일괄 적용용, 날짜/시간 선택 포함) -->
+              <div class="accordions">
+                <!-- 대여 방법 -->
+                <div class="acc-item">
+                  <button class="acc-head" onclick={() => bulkOpenAcc = 'rental'}>
+                    <span class="acc-label">대여 방법</span>
+                    <div class="acc-head-right">
+                      <span class="acc-value">{methodLabel(bulkOpts.rentalMethod)}</span>
+                      <svg width="12" height="8" viewBox="0 0 12 8" fill="none" style="transition:transform 0.3s;transform:{bulkOpenAcc === 'rental' ? 'rotate(180deg)' : 'none'}">
+                        <path d="M1 1L6 7L11 1" stroke="#444" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                      </svg>
+                    </div>
+                  </button>
+                  {#if bulkOpenAcc === 'rental'}
+                    <div transition:slide={{ duration: 300 }} class="acc-body">
+                      {@render RentalForm({ type: 'rental', calId: 'bulk-rental', selectedDate: bulkDate, onDateChange: bulkHandleDate, timeId: 'bulk-rental-t', selectedTime: bulkTime, onTimeChange: bulkHandleTime, method: bulkOpts.rentalMethod, form: bulkRentalForm, copyToReturn: bulkOpts.copyToReturn, onMethodChange: bulkHandleMethod, onFormChange: bulkHandleRentalForm, onCopyChange: bulkHandleCopy, hasUserAddress: sdHasUserAddress })}
+                    </div>
+                  {/if}
+                </div>
+                <!-- 반납 방법 -->
+                <div class="acc-item">
+                  <button class="acc-head" onclick={() => bulkOpenAcc = 'return_'}>
+                    <span class="acc-label">반납 방법</span>
+                    <div class="acc-head-right">
+                      <span class="acc-value">{methodLabel(bulkOpts.returnMethod)}</span>
+                      <svg width="12" height="8" viewBox="0 0 12 8" fill="none" style="transition:transform 0.3s;transform:{bulkOpenAcc === 'return_' ? 'rotate(180deg)' : 'none'}">
+                        <path d="M1 1L6 7L11 1" stroke="#444" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                      </svg>
+                    </div>
+                  </button>
+                  {#if bulkOpenAcc === 'return_'}
+                    <div transition:slide={{ duration: 300 }} class="acc-body">
+                      {@render RentalForm({ type: 'return', calId: 'bulk-return', selectedDate: bulkDate, onDateChange: bulkHandleDate, timeId: 'bulk-return-t', selectedTime: bulkTime, onTimeChange: bulkHandleTime, method: bulkOpts.returnMethod, form: bulkReturnForm, onMethodChange: bulkHandleReturnMethod, onFormChange: bulkHandleReturnForm })}
+                    </div>
+                  {/if}
                 </div>
               </div>
-              <!-- 버튼 -->
-              <div class="bulk-foot">
-                {#if bulkApplied}
+              <!-- 입력 즉시 전체 카드 반영(applyBulkToItems) — 별도 적용 버튼 불필요 -->
+              {#if bulkApplied}
+                <div class="bulk-foot">
                   <button class="bulk-reset" onclick={resetBulkSettings}>개별 설정</button>
-                {/if}
-                <button class="bulk-apply" onclick={applyBulkSettings}>전체 적용</button>
-              </div>
+                </div>
+              {/if}
             </div>
           {/if}
         </div>
-
-        <!-- 카트 라인아이템 — 무제한 (카드1/카드2 고정 구조 폐기 2026-07-27) -->
-        {#each itemsState as item, i (item.id)}
-          {@render OrderCard(item, effectiveLineItems[i])}
-        {/each}
-
-        {#if itemsState.length === 0 || itemsState.every(it => it.deleted)}
-          <div class="order-card empty-card">
-            <p class="empty-text">장바구니가 비어 있습니다.</p>
-          </div>
-        {/if}
       </section>
 
       <!-- ── ORDER TOTAL ── -->
@@ -811,9 +883,6 @@
         </button>
         <span class="footer-terms-text">등록한 대여 조건에 모두 동의합니다.</span>
       </label>
-      {#if !canProceed && footerVisible}
-        <p class="footer-guide" role="alert">{proceedGuideMessage()}</p>
-      {/if}
       <button
         class="footer-cta"
         class:footer-cta-active={canProceed && !isConfirming}
@@ -836,14 +905,36 @@
               const first = firstIndex >= 0 ? itemsState[firstIndex] : undefined
               const firstLine = firstIndex >= 0 ? effectiveLineItems[firstIndex] : undefined
               const firstReservation = result.confirmedReservations?.[0] as { id: number; reservationCode: string | null } | undefined
+              const nowDt = new Date()
+              const padN = (n: number) => String(n).padStart(2, '0')
+              const confirmedAt = `${nowDt.getFullYear()}.${padN(nowDt.getMonth()+1)}.${padN(nowDt.getDate())}·${padN(nowDt.getHours())}:${padN(nowDt.getMinutes())}`
+              const activeItems = itemsState
+                .filter(it => !it.deleted && it.checked)
+                .map((it) => {
+                  const line = effectiveLineItems.find(l => l.reservationId === it.id)
+                  const res = (result.confirmedReservations as Array<{id: number; reservationCode: string | null}>).find(r => String(r.id) === it.id)
+                  return {
+                    name: line?.product?.name ?? '촬영 장비',
+                    code: res?.reservationCode ?? '',
+                    startDate: it.rentalDate,
+                    endDate: it.returnDate,
+                    pickupMethod: DELIVERY_LABELS[it.opts.rentalMethod] ?? it.opts.rentalMethod,
+                    returnMethod: DELIVERY_LABELS[it.opts.returnMethod] ?? it.opts.returnMethod,
+                    price: itemCardRate(line, it.durType) * Math.max(it.qty, 1),
+                    options: (line?.options ?? []).map(o => ({ name: o.name, qty: o.qty })),
+                  }
+                })
               const params = new URLSearchParams({
-                productName:   firstLine?.product?.name ?? '촬영 장비',
-                orderNumber:   firstReservation?.reservationCode ?? `CZ${String(firstReservation?.id ?? '').padStart(5, '0')}`,
-                startDate:     first?.rentalDate ?? '',
-                endDate:       first?.returnDate ?? '',
-                amount:        String(otTotal),
-                paymentMethod: '카드(테스트)',
-                notes:         first?.rentalForm.notes ?? '',
+                items:              JSON.stringify(activeItems),
+                amount:             String(otTotal),
+                subtotal:           String(otSubtotal),
+                membershipDiscount: String(otMembershipDiscount),
+                couponDiscount:     String(otCouponDiscount),
+                deliveryFee:        String(otDeliveryFee),
+                vat:                String(otVat),
+                pointsUsed:         String(otPointsUsed),
+                paymentMethod:      '카드(테스트)',
+                confirmedAt,
               })
               await goto(`/payment/success/dev?${params.toString()}`)
             } else {
@@ -929,6 +1020,13 @@
                 </svg>
               </div>
             </div>
+            {#if line?.options?.length}
+              <ul class="option-list">
+                {#each line.options as opt}
+                  <li class="option-list-item">{opt.name} × {opt.qty} ({fmtKrw(opt.unitPrice * opt.qty)}원)</li>
+                {/each}
+              </ul>
+            {/if}
           </div>
           <div class="qty-wrap">
             <span class="qty-label">수량</span>
@@ -959,7 +1057,7 @@
             </button>
             {#if item.acc.rental}
               <div transition:slide={{ duration: 300 }} class="acc-body">
-                {@render RentalForm({ type: 'rental', calId: `${item.id}-rental`, selectedDate: item.rentalDate, onDateChange: (d) => itemHandleRentalDate(item, d), timeId: `${item.id}-rental-t`, selectedTime: item.rentalTime, onTimeChange: (t) => itemHandleRentalTime(item, t), method: item.opts.rentalMethod, form: item.rentalForm, copyToReturn: item.opts.copyToReturn, onMethodChange: (v) => itemHandleMethod(item, v), onFormChange: (f) => itemHandleRentalForm(item, f), onCopyChange: (v) => itemHandleCopy(item, v) })}
+                {@render RentalForm({ type: 'rental', calId: `${item.id}-rental`, selectedDate: item.rentalDate, onDateChange: (d) => itemHandleRentalDate(item, d), timeId: `${item.id}-rental-t`, selectedTime: item.rentalTime, onTimeChange: (t) => itemHandleRentalTime(item, t), method: item.opts.rentalMethod, form: item.rentalForm, copyToReturn: item.opts.copyToReturn, onMethodChange: (v) => itemHandleMethod(item, v), onFormChange: (f) => itemHandleRentalForm(item, f), onCopyChange: (v) => itemHandleCopy(item, v), hasUserAddress: sdHasUserAddress })}
               </div>
             {/if}
           </div>
@@ -980,37 +1078,108 @@
               </div>
             {/if}
           </div>
-          <!-- 약정 요금 -->
+        </div>
+      </div>
+    </div>
+  {/if}
+{/snippet}
+
+{#snippet ItemListCard(item: CartItemUiState, line: CartLineItem | undefined)}
+  {@const rate24 = itemRate24h(line)}
+  {@const rate12 = itemRate12h(line, rate24)}
+  {@const cardRateVal = cardRate(rate24, rate12, item.durType)}
+  <div class="item-card" class:selected={selectedCartItemId === item.id} role="listitem">
+    <button class="checkbox-btn item-card-checkbox" onclick={(e) => { e.stopPropagation(); updateItem(item.id, { checked: !item.checked }); }} aria-label="선택">
+      <svg viewBox="0 0 20 20" fill="none" class="checkbox-svg">
+        {#if item.checked}
+          <rect fill="#3B2F8A" height="18" rx="4" width="18" x="1" y="1"/>
+          <path d="M5 10L8.5 13.5L15 6" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+        {:else}
+          <rect fill="white" height="18" rx="4" width="18" x="1" y="1"/>
+          <rect height="18" rx="4" stroke="#AAAAAA" stroke-width="2" width="18" x="1" y="1"/>
+        {/if}
+      </svg>
+    </button>
+    <button
+      class="item-card-body"
+      onclick={() => selectedCartItemId = item.id}
+      aria-pressed={selectedCartItemId === item.id}
+      aria-label={`${line?.product?.name ?? '상품'} 대여옵션 보기`}
+      type="button"
+    >
+      <div class="item-thumb-wrap">
+        <img src={line?.product?.image_urls?.[0] ?? 'https://picsum.photos/seed/cam/150/150'} alt={line?.product?.name ?? '상품'} class="item-thumb" width="90" height="90" loading="lazy"/>
+      </div>
+      <div class="item-info">
+        <div class="item-info-top">
+          <span class="dur-badge">{DUR_LABELS[item.durType]}</span>
+          <span class="fee-badge">{((cardRateVal + itemOptionsAmount(line)) * item.qty).toLocaleString()}원</span>
+        </div>
+        <p class="item-name">{line?.product?.name ?? '상품'}</p>
+        {#if line?.options?.length}
+          <p class="item-options">{line.options.map(o => `${o.name} ${o.qty}개 (${fmtKrw(o.unitPrice * o.qty)}원)`).join(' · ')}</p>
+        {/if}
+        <div class="item-bottom-row">
+          <div class="item-prices">
+            <span class="price-badge">12H {rate12.toLocaleString()}원</span>
+            <span class="price-badge">24H {rate24.toLocaleString()}원</span>
+          </div>
+        </div>
+      </div>
+    </button>
+    <button class="delete-btn item-card-delete" onclick={() => removeItem(item)} aria-label="삭제">
+      <svg width="14" height="14" viewBox="0 0 17 17" fill="none">
+        <path d="M15.5 1.5L8.5 8.5M8.5 8.5L1.5 15.5M8.5 8.5L15.5 15.5M8.5 8.5L1.5 1.5" stroke="#AAAAAA" stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5"/>
+      </svg>
+    </button>
+  </div>
+{/snippet}
+
+{#snippet ItemDetailPanel(item: CartItemUiState, line: CartLineItem | undefined)}
+  {@const rate24 = itemRate24h(line)}
+  {@const rate12 = itemRate12h(line, rate24)}
+  {@const cardRateVal = cardRate(rate24, rate12, item.durType)}
+  <div class="order-card">
+    <div class="order-card-inner">
+      <!-- Accordions -->
+      <div class="accordions" class:bulk-locked={bulkApplied}>
+          <!-- 대여 방법 -->
           <div class="acc-item">
-            <button class="acc-head" onclick={() => updateItem(item.id, { acc: toggleAcc(item.acc, 'fee') })}>
-              <span class="acc-label">약정 요금</span>
+            <button class="acc-head" onclick={() => detailOpenAcc = 'rental'}>
+              <span class="acc-label">대여 방법</span>
               <div class="acc-head-right">
-                <span class="acc-value">{(cardRateVal * item.qty).toLocaleString()} 원</span>
-                <svg width="12" height="8" viewBox="0 0 12 8" fill="none" style="transition:transform 0.3s;transform:{item.acc.fee ? 'rotate(180deg)' : 'none'}">
+                <span class="acc-value">{methodLabel(item.opts.rentalMethod)}</span>
+                <svg width="12" height="8" viewBox="0 0 12 8" fill="none" style="transition:transform 0.3s;transform:{detailOpenAcc === 'rental' ? 'rotate(180deg)' : 'none'}">
                   <path d="M1 1L6 7L11 1" stroke="#444" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
                 </svg>
               </div>
             </button>
-            {#if item.acc.fee}
+            {#if detailOpenAcc === 'rental'}
               <div transition:slide={{ duration: 300 }} class="acc-body">
-                {@render FeeContent({
-                  couponWelcome: item.opts.couponWelcome,
-                  couponMembership: item.opts.couponMembership,
-                  onCouponWelcome: () => updateItem(item.id, { opts: { ...item.opts, couponWelcome: !item.opts.couponWelcome } }),
-                  onCouponMembership: () => updateItem(item.id, { opts: { ...item.opts, couponMembership: !item.opts.couponMembership } }),
-                  subtotal: cardRateVal * Math.max(item.qty, 1),
-                  discountAmt: Math.round(cardRateVal * Math.max(item.qty, 1) * otDiscountRate / 100),
-                  deliveryFeeAmt: deliveryFee(item.opts.rentalMethod, otGrade),
-                  totalDays: rentalDays(item.rentalDate, item.returnDate),
-                  durLabel: DUR_LABELS[item.durType],
-                })}
+                {@render RentalForm({ type: 'rental', calId: `${item.id}-rental`, selectedDate: item.rentalDate, onDateChange: (d) => itemHandleRentalDate(item, d), timeId: `${item.id}-rental-t`, selectedTime: item.rentalTime, onTimeChange: (t) => itemHandleRentalTime(item, t), method: item.opts.rentalMethod, form: item.rentalForm, copyToReturn: item.opts.copyToReturn, onMethodChange: (v) => itemHandleMethod(item, v), onFormChange: (f) => itemHandleRentalForm(item, f), onCopyChange: (v) => itemHandleCopy(item, v), hasUserAddress: sdHasUserAddress })}
+              </div>
+            {/if}
+          </div>
+          <!-- 반납 방법 -->
+          <div class="acc-item">
+            <button class="acc-head" onclick={() => detailOpenAcc = 'return_'}>
+              <span class="acc-label">반납 방법</span>
+              <div class="acc-head-right">
+                <span class="acc-value">{methodLabel(item.opts.returnMethod)}</span>
+                <svg width="12" height="8" viewBox="0 0 12 8" fill="none" style="transition:transform 0.3s;transform:{detailOpenAcc === 'return_' ? 'rotate(180deg)' : 'none'}">
+                  <path d="M1 1L6 7L11 1" stroke="#444" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                </svg>
+              </div>
+            </button>
+            {#if detailOpenAcc === 'return_'}
+              <div transition:slide={{ duration: 300 }} class="acc-body">
+                {@render RentalForm({ type: 'return', calId: `${item.id}-return`, selectedDate: item.returnDate, onDateChange: (d) => updateItem(item.id, { returnDate: d }), timeId: `${item.id}-return-t`, selectedTime: item.returnTime, onTimeChange: (t) => updateItem(item.id, { returnTime: t }), method: item.opts.returnMethod, form: item.returnForm, onMethodChange: (v) => itemHandleReturnMethod(item, v), onFormChange: (f) => updateItem(item.id, { returnForm: f }) })}
               </div>
             {/if}
           </div>
         </div>
       </div>
     </div>
-  {/if}
 {/snippet}
 
 {#snippet RentalForm(props: {
@@ -1027,6 +1196,7 @@
   onMethodChange: (v: DeliveryMethod) => void;
   onFormChange: (f: FormState) => void;
   onCopyChange?: (v: boolean) => void;
+  hasUserAddress?: boolean;
 })}
   {@const sectionLabel = props.type === 'rental' ? '수령 방식' : '반납 방식'}
   {@const dateLabel = props.type === 'rental' ? '수령일' : '반납일'}
@@ -1053,13 +1223,12 @@
               onclick={() => props.onMethodChange(tab.v)}
             >
               <span class="combo-label">{tab.label}</span>
-              {#if tab.fee}<span class="combo-fee">{tab.fee}</span>{/if}
             </button>
           {/each}
         </div>
         <!-- 선택된 방식 마감 정보 -->
         {#each deliveryTabs.filter(t => t.v === props.method) as tab}
-          {#if tab.deadline}<p class="delivery-deadline">⏰ {tab.deadline}</p>{/if}
+          {#if tab.deadline}<p class="delivery-deadline">{tab.deadline}</p>{/if}
         {/each}
         <!-- Date/Time buttons + Calendar -->
         <div class="datetime-wrap">
@@ -1157,8 +1326,13 @@
       <div class="form-section-header">
         <span class="form-section-label">{addrLabel}</span>
         {#if props.type === 'rental'}
-          <label class="form-check-label">
-            <button class="checkbox-btn small" onclick={() => props.onFormChange({ ...props.form, memberCheck2: !props.form.memberCheck2 })} aria-label="회원정보 반영">
+          <label class="form-check-label" class:form-check-label-disabled={!props.hasUserAddress}>
+            <button
+              class="checkbox-btn small"
+              disabled={!props.hasUserAddress}
+              onclick={() => props.onFormChange({ ...props.form, memberCheck2: !props.form.memberCheck2 })}
+              aria-label="회원정보 반영"
+            >
               <svg viewBox="0 0 20 20" fill="none" class="checkbox-svg">
                 {#if props.form.memberCheck2}
                   <rect fill="#3B2F8A" height="18" rx="4" width="18" x="1" y="1"/>
@@ -1212,60 +1386,6 @@
   </div>
 {/snippet}
 
-{#snippet FeeContent(props: {
-  couponWelcome: boolean;
-  couponMembership: boolean;
-  onCouponWelcome: () => void;
-  onCouponMembership: () => void;
-  subtotal: number;
-  discountAmt: number;
-  deliveryFeeAmt: number;
-  totalDays: number;
-  durLabel: string;
-})}
-  {@const vat = Math.round((props.subtotal - props.discountAmt) * 0.1)}
-  {@const cardTotal = props.subtotal - props.discountAmt + vat + props.deliveryFeeAmt}
-  {@const earnPts = Math.round(cardTotal * 0.05)}
-  <div class="fee-content">
-    <div class="form-section">
-      <span class="form-section-label">사용 가능한 쿠폰</span>
-      <div class="coupon-list">
-        {@render CouponRow({ label: '월컴쿠폰 10%', days: 52, checked: props.couponWelcome, onToggle: props.onCouponWelcome })}
-        {@render CouponRow({ label: '멤버십 할인 쿠폰 10%', days: 250, checked: props.couponMembership, onToggle: props.onCouponMembership })}
-      </div>
-      <p class="hint-text">선택 불가능한 쿠폰은 본 결제 시 중복 적용이 불가능합니다.</p>
-    </div>
-    <div class="form-section">
-      <span class="form-section-label">약정 요금</span>
-      <div class="price-detail-list">
-        <div class="price-period-row">
-          <span class="price-period-label">총 대여일정</span>
-          <div class="price-period-values">
-            {#if props.totalDays > 0}
-              <div class="period-val"><span class="period-num">{props.totalDays}</span><span class="period-unit">일</span></div>
-            {:else}
-              <span class="period-unset">날짜 미선택</span>
-            {/if}
-            <div class="period-val"><span class="period-num">{props.durLabel}</span></div>
-          </div>
-        </div>
-        {@render PriceRow({ label: '기본요금', value: fmtKrw(props.subtotal) })}
-        {#if props.discountAmt > 0}
-          {@render PriceRow({ label: `할인요금 (${otDiscountRate}%)`, value: `-${fmtKrw(props.discountAmt)}` })}
-        {/if}
-        {@render PriceRow({ label: '배송요금', value: props.deliveryFeeAmt > 0 ? fmtKrw(props.deliveryFeeAmt) : '무료' })}
-        {@render PriceRow({ label: '부가세(10%)', value: fmtKrw(vat) })}
-        <div class="price-divider"></div>
-        {@render PriceRow({ label: '합계요금', value: fmtKrw(cardTotal), large: true })}
-        <div class="points-row">
-          <span class="points-label">적립포인트</span>
-          <div class="points-value"><span class="points-num">{fmtKrw(earnPts)}</span><span class="points-unit">p</span></div>
-        </div>
-      </div>
-    </div>
-  </div>
-{/snippet}
-
 {#snippet CouponRow(props: { label: string; days: number; checked: boolean; onToggle: () => void })}
   <div class="coupon-row">
     <label class="coupon-row-left">
@@ -1316,19 +1436,19 @@
   }
 
   /* ══ Header ══ */
-  .cart-header {
+  .sub-gnb-b {
     position: sticky;
     top: 0;
     z-index: 50;
-    background: #ECEBF4;
-    border-bottom: 1px solid rgba(0,0,0,0.1);
+    background: transparent;
+    border-bottom: none;
     /* 모바일: SubGnb가 대체 — 헤더 숨김 */
     display: none;
   }
   @media (min-width: 641px) {
-    .cart-header { display: block; }
+    .sub-gnb-b { display: block; }
   }
-  .cart-header-inner {
+  .sub-gnb-b-inner {
     display: flex;
     align-items: center;
     justify-content: space-between;
@@ -1340,7 +1460,7 @@
     flex-wrap: nowrap;
     box-sizing: border-box;
   }
-  .header-pill {
+  .sub-gnb-b-pill {
     background: rgba(225, 222, 243, 0.4);
     border: none;
     cursor: pointer;
@@ -1351,63 +1471,37 @@
     padding: 20px 40px;
     border-radius: 25px;
     width: 100%;
-    max-width: 460px;
+    max-width: none;
     min-width: 0;
     min-height: 62px;
-    flex: 0 1 460px;
+    flex: 1 1 auto;
     box-sizing: border-box;
     color: var(--cs-text);
     transition: background 0.2s;
   }
-  .header-pill:hover { background: rgba(225, 222, 243, 0.85); }
-  .header-pill-left {
+  .sub-gnb-b-pill:hover { background: rgba(225, 222, 243, 0.85); }
+  .sub-gnb-b-pill-left {
     display: flex;
     align-items: center;
     gap: 9px;
     min-width: 0;
   }
-  .header-pill-arrow {
+  .sub-gnb-b-arrow {
     width: 22px;
     height: 18px;
     flex-shrink: 0;
   }
-  .header-back-text {
+  .sub-gnb-b-back {
     font: var(--text-pc-title-16);
     color: var(--cs-text);
     white-space: nowrap;
   }
-  .header-cart-text {
+  .sub-gnb-b-title {
     font: var(--text-pc-menu-en-20);
     color: var(--cs-text);
     flex-shrink: 0;
     white-space: nowrap;
   }
-
-  /* Category icons */
-  .cat-icons {
-    display: flex;
-    flex-wrap: nowrap;
-    gap: 30px;
-    align-items: center;
-    justify-content: flex-end;
-    flex-shrink: 0;
-  }
-  .cat-icon-btn {
-    background: #E1DEF3;
-    border: none;
-    outline: none;
-    cursor: pointer;
-    border-radius: 30px;
-    width: 60px;
-    height: 60px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    flex-shrink: 0;
-    transition: background 0.2s;
-  }
-  .cat-icon-btn:hover { background: #D0CCEB; }
-  .cat-icon-svg { width: 28px; height: 28px; }
 
   /* ══ Main ══ */
   .cart-main {
@@ -1436,7 +1530,6 @@
   .sec-header {
     display: flex;
     align-items: center;
-    justify-content: space-between;
     padding: 20px 40px;
   }
   .sec-title {
@@ -1445,10 +1538,147 @@
     color: #100B32;
     line-height: 1.6;
   }
-  .sec-icon { width: 16px; height: 16px; position: relative; }
-  .sec-icon-svg { width: 16px; height: 16px; }
+  /* ══ 모바일 전용(<641px) 카트 목록 — 상품별 개별 카드 (기존 레이아웃) ══ */
+  .mobile-cart-list {
+    display: flex;
+    flex-direction: column;
+    gap: 30px;
+  }
+  @media (min-width: 641px) {
+    .mobile-cart-list { display: none; }
+  }
 
-  /* ══ Order Card ══ */
+  /* ══ PC 전용(≥641px) 마스터-디테일 레이아웃: 상품목록(좌) / 대여옵션 DetailPanel(우) — CMS /cms/products 구조 동일 ══ */
+  .master-detail {
+    display: none;
+  }
+  @media (min-width: 641px) {
+    .master-detail {
+      display: flex;
+      flex-direction: row;
+      gap: 16px;
+      align-items: flex-start;
+    }
+  }
+
+  /* 카드 목록 패널 */
+  .list-pane {
+    width: 100%;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    transition: width 0.22s ease;
+  }
+  @media (min-width: 641px) {
+    /* 목록(좌) : 상세(우) = 5:5 비율 */
+    .list-pane.narrow { width: auto; flex: 1 1 0; }
+  }
+
+  /* 카드 목록 */
+  .card-list {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+
+  /* 상품 리스트 카드 */
+  .item-card {
+    display: flex;
+    align-items: stretch;
+    background: white;
+    border-radius: var(--radius-lg, 20px);
+    box-shadow: 0px 1px 2px rgba(0,0,0,0.06);
+    border: 1.5px solid transparent;
+    transition: background 0.15s, border-color 0.15s;
+    flex-shrink: 0;
+    overflow: hidden;
+    padding: var(--spacing-5, 20px);   /* 카드 내부 상하좌우 패딩 — front 표준 spacing 토큰(lg=20px) */
+  }
+  .item-card:hover { background: var(--cs-lilac); }
+  .item-card.selected { background: var(--cs-purple-op10); }
+  .item-card-checkbox { display: flex; align-items: center; justify-content: center; }
+  .item-card-delete { align-self: center; }
+  .item-card-body {
+    display: flex;
+    align-items: center;
+    gap: 15px;
+    flex: 1;
+    min-width: 0;
+    padding: 0 12px;
+    background: transparent;
+    border: none;
+    cursor: pointer;
+    text-align: left;
+  }
+  .item-thumb-wrap {
+    flex-shrink: 0;
+    width: 90px;
+    height: 90px;
+    border-radius: var(--radius-md, 15px);
+    overflow: hidden;
+    background: #F2F2F8;
+  }
+  .item-thumb { width: 90px; height: 90px; object-fit: cover; display: block; }
+  .item-info { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 6px; }
+  .item-info-top { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+  .dur-badge {
+    display: inline-block;
+    padding: 4px 9px;
+    background: var(--cs-lilac);
+    color: var(--cs-purple);
+    border-radius: var(--radius-full, 9999px);
+    font: var(--text-pc-script-12);
+    font-weight: 700;
+    white-space: nowrap;
+  }
+  .fee-badge {
+    display: inline-block;
+    padding: 4px 9px;
+    background: #F3F4F6;
+    color: var(--cs-text-dark);
+    border-radius: var(--radius-full, 9999px);
+    font: var(--text-pc-script-12);
+    font-weight: 700;
+    white-space: nowrap;
+  }
+  .item-name {
+    font: var(--text-pc-body-14);
+    color: var(--cs-text);
+    margin: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .item-options {
+    font: var(--text-pc-script-12);
+    color: var(--cs-text-mid);
+    margin: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .item-bottom-row { display: flex; align-items: center; }
+  .item-prices { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+  .price-badge {
+    display: inline-flex;
+    align-items: center;
+    padding: 4px 9px;
+    background: rgba(59,47,138,0.08);
+    color: var(--cs-purple);
+    border-radius: var(--radius-full, 9999px);
+    font: var(--text-pc-script-12);
+    font-weight: 700;
+    white-space: nowrap;
+  }
+
+  /* 대여옵션 DetailPanel — 목록(좌) : 상세(우) = 5:5 비율 */
+  .detail-pane {
+    flex: 1 1 0;
+    min-width: 0;
+    width: 100%;
+  }
+
+  /* ══ Order Card (DetailPanel 내부 카드) ══ */
   .order-card {
     background: white;
     border-radius: 50px;
@@ -1464,7 +1694,7 @@
   .empty-card { padding: 40px; text-align: center; }
   .empty-text { color: #AAAAAA; font-size: 16px; font-weight: 500; }
 
-  /* Card top row */
+  /* Card top row (모바일 개별 카드 전용) */
   .card-top-row {
     display: flex;
     align-items: center;
@@ -1530,6 +1760,19 @@
   .product-badges { display: flex; gap: 15px; align-items: center; }
   .badge-mem, .badge-deal { width: 40px; height: 40px; flex-shrink: 0; }
   .badge-svg { width: 40px; height: 40px; }
+  .option-list {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    margin: 6px 0 0;
+    padding: 0;
+    list-style: none;
+  }
+  .option-list-item {
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--cs-text-mid);
+  }
 
   /* ══ Duration Type Tabs ══ */
   .dur-tabs {
@@ -1613,15 +1856,16 @@
     gap: 10px;
   }
   .accordions.bulk-locked {
-    opacity: 0.4;
+    opacity: 0.5;
     pointer-events: none;
+    cursor: not-allowed;
   }
   .acc-item { display: flex; flex-direction: column; }
   .acc-head {
-    background: #ECEBF4;
+    background: var(--cs-lilac);
     border: none;
     cursor: pointer;
-    border-radius: 30px;
+    border-radius: var(--radius-lg, 20px);
     padding: 30px;
     display: flex;
     align-items: center;
@@ -1633,8 +1877,8 @@
   .acc-head:hover { background: #D9D6F0; }
   .acc-label {
     font-size: 18px;
-    font-weight: 500;
-    color: #444444;
+    font-weight: 400;
+    color: var(--cs-text-dark);
     letter-spacing: -0.3px;
     line-height: 1.6;
   }
@@ -1644,13 +1888,14 @@
     gap: 20px;
   }
   .acc-value {
-    font-size: 18px;
-    font-weight: 700;
-    color: #444;
+    font: var(--text-pc-title-18);
+    color: var(--cs-text-dark);
   }
   .acc-body {
     padding-top: 30px;
-    overflow: hidden;
+    /* overflow는 지정하지 않음 — transition:slide가 애니메이션 중에만 자체적으로 clip 처리.
+       여기서 overflow:hidden을 고정하면 달력/시간 팝업(.cal-layer/.time-layer, position:absolute)이
+       아코디언 높이를 넘어서는 부분에서 배경까지 잘려 보이는 문제가 있었음. */
   }
   .rotate-180 { transform: rotate(180deg); }
 
@@ -1693,6 +1938,11 @@
     color: #444;
     white-space: nowrap;
   }
+  .form-check-label-disabled {
+    cursor: not-allowed;
+    opacity: 0.4;
+  }
+  .form-check-label-disabled .checkbox-btn { cursor: not-allowed; }
   .form-fields { display: flex; flex-direction: column; gap: 15px; }
   .form-note {
     font-size: 14px;
@@ -1765,16 +2015,16 @@
     color: var(--cs-text, #100B32);
   }
   .combo-btn-active .combo-label { color: #fff; }
-  .combo-fee {
-    font-size: 11px;
-    font-weight: 500;
-    color: var(--cs-text-mid, #666);
-  }
-  .combo-btn-active .combo-fee { color: rgba(255,255,255,0.8); }
   .delivery-deadline {
-    font-size: 12px;
-    color: var(--cs-orange, #FF4500);
-    font-weight: 600;
+    display: block;
+    width: 100%;
+    box-sizing: border-box;
+    text-align: center;
+    font: var(--text-m-script-14B);
+    color: var(--cs-text-mid);
+    background: var(--cs-red-xlight);
+    border-radius: var(--radius-full, 9999px);
+    padding: 10px 16px;
     margin: 4px 0 0;
   }
 
@@ -1805,14 +2055,13 @@
   }
   .datetime-btn-label {
     color: white;
-    font-size: 16px;
-    font-weight: 700;
+    font: var(--text-m-title-18B);
     letter-spacing: -0.5px;
     white-space: nowrap;
   }
 
   /* ══ Calendar + Time Layer ══ */
-  .datetime-wrap { position: relative; display: flex; flex-direction: column; gap: 0; }
+  .datetime-wrap { position: relative; display: flex; flex-direction: column; gap: 0; padding: 30px 0; }
   .cal-layer {
     position: absolute;
     top: calc(100% + 8px);
@@ -1822,7 +2071,7 @@
     border-radius: 20px;
     padding: 20px;
     box-shadow: 0 8px 30px rgba(16,11,50,0.15);
-    width: 50%;
+    width: 100%;
     box-sizing: border-box;
   }
 
@@ -1830,13 +2079,13 @@
   .time-layer {
     position: absolute;
     top: calc(100% + 8px);
-    right: 0;
+    left: 0;
     z-index: 100;
     background: white;
     border-radius: 20px;
     padding: 16px;
     box-shadow: 0 8px 30px rgba(16,11,50,0.15);
-    width: 50%;
+    width: 100%;
     box-sizing: border-box;
   }
   .time-grid {
@@ -1891,14 +2140,6 @@
     transition: color 0.2s;
   }
   .f-action-btn:hover { color: #3B2F8A; }
-
-  /* ══ Fee Content ══ */
-  .fee-content {
-    display: flex;
-    flex-direction: column;
-    gap: 40px;
-    padding-bottom: 30px;
-  }
 
   /* ══ Coupon Row ══ */
   .coupon-list { display: flex; flex-direction: column; gap: 15px; }
@@ -2181,41 +2422,31 @@
     background: #CCCCCC;
     cursor: not-allowed;
   }
-  .footer-guide {
-    font-size: 12px;
-    font-weight: 700;
-    color: var(--cs-error, #D32F2F);
-    margin: 0;
-    text-align: center;
-  }
-
   /* ══ Responsive ══ */
   @media (max-width: 1024px) {
     .cart-content { padding: 0 var(--layout-tab-pad); }
-    .cart-header-inner {
+    .sub-gnb-b-inner {
       padding: 16px var(--layout-tab-pad);
       gap: 20px;
       justify-content: space-between;
     }
-    .header-pill {
+    .sub-gnb-b-pill {
       flex: 1 1 auto;
-      max-width: min(460px, 100%);
+      max-width: none;
       padding: 14px 28px;
       min-height: 56px;
     }
     .footer-inner { padding: 20px 32px; gap: 30px; }
-    .cat-icons { gap: 16px; padding: 0 10px; }
-    .cat-icon-btn { width: 50px; height: 50px; }
   }
 
   @media (max-width: 640px) {
-    .cart-header-inner {
+    .sub-gnb-b-inner {
       padding: 12px var(--layout-mob-pad);
       gap: 12px;
       flex-direction: column;
       align-items: stretch;
     }
-    .header-pill {
+    .sub-gnb-b-pill {
       flex: 1 1 auto;
       max-width: none;
       width: 100%;
@@ -2223,18 +2454,17 @@
       min-height: 48px;
       border-radius: var(--radius-lg);
     }
-    .header-pill-left { gap: 6px; }
-    .header-pill-arrow { width: 18px; height: 15px; }
-    .header-back-text { font: var(--text-m-body-16B); }
-    .header-cart-text { font: var(--text-m-title-18B); font-family: var(--font-en-display); font-weight: 400; }
-    .cat-icons { display: none; }
+    .sub-gnb-b-pill-left { gap: 6px; }
+    .sub-gnb-b-arrow { width: 18px; height: 15px; }
+    .sub-gnb-b-back { font: var(--text-m-body-16B); }
+    .sub-gnb-b-title { font: var(--text-m-title-18B); font-family: var(--font-en-display); font-weight: 400; }
     .cart-main { padding: 30px 0; }
     .cart-content { padding: 0 12px; gap: 30px; }
     .sec-header { padding: 16px 20px; }
     .sec-title { font-size: 18px; }
     .order-card { border-radius: 40px; }
     .order-card-inner { padding: 20px; gap: 30px; }
-    .product-img { width: 80px; height: 80px; border-radius: 16px; }
+    .product-img { width: 120px; height: 120px; border-radius: 24px; }
     .product-name { font-size: 14px; }
     .product-price { font-size: 12px; }
     .badge-mem, .badge-deal, .badge-svg { width: 30px; height: 30px; }
@@ -2246,7 +2476,7 @@
     .acc-value { font-size: 14px; }
     .acc-body { padding-top: 20px; }
     .datetime-btn { padding: 12px 16px; }
-    .datetime-btn-label { font-size: 14px; }
+    .datetime-btn-label { font: var(--text-m-body-16B); letter-spacing: -0.5px; }
     .total-white-section, .total-gray-section { padding: 20px; }
     .total-dark-box { padding: 16px 20px; border-radius: 20px; }
     .total-label { font-size: 14px; }
@@ -2267,11 +2497,10 @@
     .price-row-val { letter-spacing: -0.5px; }
     .combo-btn { padding: 8px 12px; }
     .combo-label { font-size: 12px; }
-    .combo-fee { font-size: 10px; }
     .f-input { letter-spacing: -0.5px; }
     .copy-label { letter-spacing: -0.5px; }
     .acc-label { letter-spacing: -0.3px; }
-    .header-pill { padding: 12px 20px; border-radius: 18px; min-height: 44px; }
+    .sub-gnb-b-pill { padding: 12px 20px; border-radius: 18px; min-height: 44px; }
   }
 
   /* ── Pending reservation banner */
@@ -2292,7 +2521,7 @@
     display: flex;
     align-items: center;
     gap: 8px;
-    padding: 16px 20px;
+    padding: 30px 20px 16px;
     background: none;
     border: none;
     cursor: pointer;
@@ -2320,43 +2549,11 @@
     transition: transform 0.3s;
   }
   .bulk-body {
-    padding: 0 20px 20px;
+    padding: 16px 20px 30px;
     display: flex;
     flex-direction: column;
     gap: 14px;
     border-top: 1px solid var(--cs-lilac, #ECEBF4);
-  }
-  /* 날짜 + 시간 2컬럼 */
-  .bulk-row2 {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 10px;
-    margin-top: 16px;
-  }
-  .bulk-group {
-    display: flex;
-    flex-direction: column;
-    gap: 6px;
-  }
-  .bulk-lbl {
-    font-size: 12px;
-    font-weight: 700;
-    color: var(--cs-text-dark, #444);
-  }
-  /* 입력 — surface-gray, no border (front-uiux 표준) */
-  .bulk-inp {
-    height: 44px;
-    border: none;
-    border-radius: var(--radius-sm, 8px);
-    padding: 0 12px;
-    font-size: 14px;
-    font-weight: 700;
-    color: var(--cs-text, #100B32);
-    background: var(--cs-surface-gray, #f6f6f6);
-    outline: none;
-    width: 100%;
-    box-sizing: border-box;
-    appearance: auto;
   }
   /* 버튼 행 */
   .bulk-foot {
@@ -2377,17 +2574,5 @@
     transition: opacity 0.15s;
   }
   .bulk-reset:hover { opacity: 0.7; }
-  .bulk-apply {
-    padding: 0 24px;
-    background: var(--cs-purple, #3B2F8A);
-    color: #fff;
-    border: none;
-    border-radius: var(--radius-xl, 30px);
-    font: var(--text-m-script-14B);
-    cursor: pointer;
-    min-height: 44px;
-    transition: opacity 0.15s;
-  }
-  .bulk-apply:hover { opacity: 0.85; }
 
 </style>
