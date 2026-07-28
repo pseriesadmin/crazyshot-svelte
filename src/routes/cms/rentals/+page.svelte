@@ -1,5 +1,7 @@
 <script lang="ts">
   import { goto, invalidateAll } from '$app/navigation'
+  import { browser } from '$app/environment'
+  import { supabase } from '$lib/services/supabase'
   import { fly } from 'svelte/transition'
   import RentalDetailPanel from '$lib/components/cms/RentalDetailPanel.svelte'
   import CmsPagination from '$lib/components/cms/CmsPagination.svelte'
@@ -50,7 +52,9 @@
   }
 
   let searchInput = $state('')
-  let selectedId  = $state<number | null>(null)
+  // 채팅 액션카드 등 외부 링크(?selected=)로 진입 시 초기 진입 1회만 반영 —
+  // 이후 선택/해제는 openPanel()/closePanel()이 직접 제어(재동기화 effect 없음)
+  let selectedId  = $state<number | null>(data.selectedId ?? null)
   let selectedRow = $state<RentalListRow | null>(null)
 
   $effect(() => { searchInput = data.search ?? '' })
@@ -60,6 +64,22 @@
       const updated = data.rentals.find(r => r.reservation_id === selectedId)
       if (updated) selectedRow = updated
     }
+  })
+
+  // Realtime: rental_reservations 상태 변경 시 목록 자동 갱신
+  $effect(() => {
+    if (!browser) return
+    const channel = supabase
+      .channel('cms-rentals-realtime')
+      .on('postgres_changes', {
+        event: '*',
+        schema: 'public',
+        table: 'rental_reservations',
+      }, () => {
+        invalidateAll()
+      })
+      .subscribe()
+    return () => { supabase.removeChannel(channel) }
   })
 
   function applyFilters() {
