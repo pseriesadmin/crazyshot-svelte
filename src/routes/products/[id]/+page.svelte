@@ -158,9 +158,8 @@
   });
   const session = $derived(data.session);
 
-  // ── Review form
-  let reviewTitle = $state('');
-  let reviewContent = $state('');
+  // ── Review form (피그마 정본: 단일 입력 + 앞 10자 자동 제목)
+  let reviewText = $state('');
   let isSubmittingReview = $state(false);
 
   function requireLoginForReview() {
@@ -173,36 +172,33 @@
       requireLoginForReview();
       return;
     }
-    if (!reviewTitle.trim()) {
-      showToast('제목을 입력해주세요.');
-      return;
-    }
-    if (!reviewContent.trim()) {
+    if (!reviewText.trim()) {
       showToast('내용을 입력해주세요.');
       return;
     }
     isSubmittingReview = true;
     try {
+      const content = reviewText.trim();
+      const title = content.slice(0, 10);
       type RpcFn = (name: string, args: Record<string, unknown>) => ReturnType<typeof supabase.rpc>;
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const { data: newId, error } = await (supabase.rpc as unknown as RpcFn)('create_product_review', {
         p_product_id: data.productId,
-        p_title: reviewTitle.trim(),
-        p_content: reviewContent.trim(),
+        p_title: title,
+        p_content: content,
       });
       if (error) throw error;
       reviews = [
         {
           id: newId as string,
           author_name: session.user.email?.split('@')[0] ?? '익명',
-          title: reviewTitle.trim(),
-          content: reviewContent.trim(),
+          title,
+          content,
           created_at: new Date().toISOString(),
         },
         ...reviews,
       ];
-      reviewTitle = '';
-      reviewContent = '';
+      reviewText = '';
       showToast('후기가 등록되었습니다.');
     } catch (err) {
       const msg = err instanceof Error ? err.message : '후기 등록에 실패했습니다.';
@@ -218,6 +214,12 @@
 
   async function handleReserve(e: { startDate: string; endDate: string; startHour: number; startMin: number; endHour: number; endMin: number; methodId?: string; periodId?: string }) {
     if (!product || isReserving) return;
+
+    // 대여 방식 미선택 (선택 가능한 방식이 있는 상품에 한해 필수)
+    if (data.rentalMethods.length > 0 && !e.methodId) {
+      showToast('대여 방식을 선택해주세요.');
+      return;
+    }
 
     // 필수 옵션 미선택
     if (optionItems.some((o) => o.is_required && o.qty === 0)) {
@@ -240,6 +242,31 @@
     if (isDeliveryMethod && optionItems.some((o) => o.delivery_rental_disabled && o.qty > 0)) {
       showToast('선택한 옵션상품은 배송이 불가능합니다.');
       return;
+    }
+
+    // 예약 일시 리드타임 검증 (배송불가옵션 충돌 판정과는 별개 분류 — 택배(외부 courier)만 2일 리드타임 필요)
+    // 택배(크레이지배송(택배)): 대여일이 오늘로부터 2일 이후여야 예약 가능
+    // 방문·퀵·무인보관함·자체배송(크레이지배송(자체배송)): 당일 대여 시 대여시각이 현재시각 기준 3시간 이후여야 예약 가능
+    const TWO_DAY_LEADTIME_KEYS = new Set(['delivery', 'epost']);
+    const needsTwoDayLeadtime = !!selectedMethod?.method_key && TWO_DAY_LEADTIME_KEYS.has(selectedMethod.method_key);
+    const nowTime = new Date();
+    if (needsTwoDayLeadtime) {
+      const twoDaysLater = new Date(nowTime.getFullYear(), nowTime.getMonth(), nowTime.getDate() + 2);
+      const startDateOnly = new Date(`${e.startDate}T00:00:00`);
+      if (startDateOnly < twoDaysLater) {
+        showToast('택배 대여는 대여일 2일 전 예약 가능합니다.');
+        return;
+      }
+    } else {
+      const todayIso = `${nowTime.getFullYear()}-${String(nowTime.getMonth() + 1).padStart(2, '0')}-${String(nowTime.getDate()).padStart(2, '0')}`;
+      if (e.startDate === todayIso) {
+        const startDateTime = new Date(`${e.startDate}T${String(e.startHour).padStart(2, '0')}:${String(e.startMin).padStart(2, '0')}:00`);
+        const threeHoursLater = new Date(nowTime.getTime() + 3 * 60 * 60 * 1000);
+        if (startDateTime < threeHoursLater) {
+          showToast('당일 대여는 대여시간 기준 3시간 전 방문만 가능합니다.');
+          return;
+        }
+      }
     }
 
     isReserving = true;
@@ -276,12 +303,47 @@
         const padTime = (h: number, m: number) =>
           String(h).padStart(2, '0') + ':' + String(m).padStart(2, '0');
         type ShipRpcFn = (name: string, args: Record<string, unknown>) => Promise<{ error: unknown }>;
-        await (supabase.rpc as unknown as ShipRpcFn)('set_reservation_shipment_method', {
+        const { error: shipError } = await (supabase.rpc as unknown as ShipRpcFn)('set_reservation_shipment_method', {
           p_reservation_id: row.reservation_id,
           p_pickup_method:  selectedMethod?.method_key ?? 'visit',
+          p_return_method:  selectedMethod?.method_key ?? 'visit',
           p_pickup_time:    padTime(e.startHour, e.startMin),
           p_return_time:    padTime(e.endHour, e.endMin),
         });
+        if (shipError) {
+          console.error('[products/[id]] set_reservation_shipment_method 저장 실패:', shipError);
+          showToast('수령/반납 방식 저장에 실패했습니다. 체크아웃에서 다시 확인해 주세요.');
+        }
+
+        // 실제 선택한 대여시간 기준 요금구간(12h/24h) 저장 — CalendarTimePicker estimatedFee와 동일 판정 기준
+        // (당일 대여 12시간 이하 → 12h, 그 외(당일 12시간 초과·복수일) → 24h)
+        const isSameDayRental = e.startDate === endDate;
+        const sameDayMinutes = (e.endHour * 60 + e.endMin) - (e.startHour * 60 + e.startMin);
+        const durationType = isSameDayRental && sameDayMinutes > 0 && sameDayMinutes <= 720 ? '12h' : '24h';
+        type DurationRpcFn = (name: string, args: Record<string, unknown>) => Promise<{ error: unknown }>;
+        const { error: durationError } = await (supabase.rpc as unknown as DurationRpcFn)('set_reservation_duration', {
+          p_reservation_id: row.reservation_id,
+          p_duration_type:  durationType,
+        });
+        if (durationError) {
+          console.error('[products/[id]] set_reservation_duration 저장 실패:', durationError);
+        }
+
+        // 옵션상품 + 수량 저장 (Migration 176 reservation_options)
+        const selectedOptions = optionItems
+          .filter((o) => o.qty > 0)
+          .map((o) => ({ option_product_id: o.id, option_name: o.label, qty: o.qty, unit_price: o.price }));
+        if (selectedOptions.length > 0) {
+          type OptionsRpcFn = (name: string, args: Record<string, unknown>) => Promise<{ error: unknown }>;
+          const { error: optionsError } = await (supabase.rpc as unknown as OptionsRpcFn)('set_reservation_options', {
+            p_reservation_id: row.reservation_id,
+            p_options:        selectedOptions,
+          });
+          if (optionsError) {
+            console.error('[products/[id]] set_reservation_options 저장 실패:', optionsError);
+            showToast('선택한 옵션상품 저장에 실패했습니다. 체크아웃에서 다시 확인해 주세요.');
+          }
+        }
       }
       // 예약신청(hold) 채팅 알림 발송 — fire-and-forget
       if (row.reservation_id != null) {
@@ -718,30 +780,21 @@
         <p class="review-empty">아직 등록된 후기가 없습니다.</p>
       {/if}
     </div>
-    <div class="review-form review-form-expanded">
+    <div class="review-form">
       <input
-        class="review-input review-title-input"
         type="text"
-        maxlength="20"
-        placeholder={session ? '제목 (최대 20자)' : '로그인 후 작성해주세요.'}
-        bind:value={reviewTitle}
+        class="review-input"
+        maxlength="500"
+        placeholder={session ? '후기 입력...' : '로그인 후 작성해주세요.'}
+        bind:value={reviewText}
         onclick={() => { if (!session) requireLoginForReview(); }}
+        onkeydown={(e) => { if (e.key === 'Enter') submitReview(); }}
         readonly={!session}
       />
-      <textarea
-        class="review-input review-content-input"
-        maxlength="500"
-        placeholder={session ? '내용 (최대 500자)' : '로그인 후 작성해주세요.'}
-        bind:value={reviewContent}
-        onclick={() => { if (!session) requireLoginForReview(); }}
-        readonly={!session}
-      ></textarea>
-      <button
-        class="review-submit-btn"
-        onclick={submitReview}
-        disabled={isSubmittingReview}
-      >
-        {isSubmittingReview ? '등록 중...' : '후기 등록'}
+      <button class="review-send-btn" aria-label="후기 등록" onclick={submitReview} disabled={isSubmittingReview}>
+        <svg width="15" height="10" viewBox="0 0 17 12" fill="none" style="transform: rotate(-90deg)">
+          <path d="M1 6H16M16 6L11 1M16 6L11 11" stroke="var(--cs-text)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
       </button>
     </div>
   </div>
@@ -1763,13 +1816,6 @@
     border-radius: var(--radius-xl);
     padding: 0 16px 0 24px;
   }
-  .review-form-expanded {
-    flex-direction: row;
-    align-items: flex-end;
-    height: auto;
-    padding: 16px;
-    gap: 12px;
-  }
   .review-input {
     flex: 1;
     min-width: 0;
@@ -1778,36 +1824,11 @@
     outline: none;
     font: var(--text-m-script-14);
     color: var(--cs-text);
-    width: 100%;
-    resize: none;
+    cursor: text;
   }
   .review-input::placeholder {
     color: var(--cs-text-placeholder);
-  }
-  .review-title-input {
-    width: 100%;
-    margin-bottom: 8px;
-  }
-  .review-content-input {
-    width: 100%;
-    min-height: 80px;
-    line-height: 1.6;
-    resize: vertical;
-    margin-bottom: 12px;
-  }
-  .review-submit-btn {
-    background: var(--cs-purple);
-    color: #fff;
-    border: none;
-    border-radius: var(--radius-md);
-    padding: 10px 24px;
-    font: var(--text-m-body-16B);
-    cursor: pointer;
-    min-height: 44px;
-  }
-  .review-submit-btn:disabled {
-    opacity: 0.4;
-    cursor: not-allowed;
+    opacity: 0.6;
   }
   .review-empty {
     font: var(--text-m-script-14);
