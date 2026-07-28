@@ -51,7 +51,9 @@
   let searchInput  = $state(data.search ?? '')
   let dateFrom     = $state(data.dateFrom ?? '')
   let dateTo       = $state(data.dateTo ?? '')
-  let selectedId   = $state<number | null>(null)
+  // 채팅 액션카드 등 외부 링크(?selected=)로 진입 시 초기 진입 1회만 반영 —
+  // 이후 선택/해제는 openPanel()/closePanel()이 직접 제어(재동기화 effect 없음)
+  let selectedId   = $state<number | null>(data.selectedId ?? null)
   let selectedRow  = $state<RentalListRow | null>(null)
 
   $effect(() => { searchInput = data.search ?? '' })

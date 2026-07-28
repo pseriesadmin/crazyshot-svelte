@@ -16,6 +16,8 @@ export const load: PageServerLoad = async ({ parent, url }) => {
   const status = url.searchParams.get('status') ?? ''
   const search = url.searchParams.get('search') ?? ''
   const page   = parseInt(url.searchParams.get('page') ?? '1', 10)
+  const selectedParam = url.searchParams.get('selected')
+  const selectedId    = selectedParam ? parseInt(selectedParam, 10) : null
 
   const { data: rows, error } = await admin.rpc('get_rental_list', {
     p_status:    status   || null,
@@ -35,7 +37,7 @@ export const load: PageServerLoad = async ({ parent, url }) => {
   const totalCount = allRows[0]?.total_count ?? 0
   const totalPages = Math.max(1, Math.ceil(totalCount / 30))
 
-  return { rentals, totalCount, totalPages, status, search, page, cmsRole }
+  return { rentals, totalCount, totalPages, status, search, page, selectedId, cmsRole }
 }
 
 export const actions: Actions = {

@@ -8,16 +8,14 @@
   }
 
   interface Props {
-    width?:      number
-    height?:     number
-    minStrokes?: number
-    onchange?:   (valid: boolean, data: SignatureData | null) => void
+    width?:    number
+    height?:   number
+    onchange?: (valid: boolean, data: SignatureData | null) => void
   }
 
   let {
-    width      = 360,
-    height     = 160,
-    minStrokes = 3,
+    width  = 360,
+    height = 160,
     onchange,
   }: Props = $props()
 
@@ -58,12 +56,14 @@
   function endDraw() {
     if (!isDrawing) return
     isDrawing = false
-    strokes += 1
+    strokes  += 1
     notify()
   }
 
+  // 서명 여부는 1회라도 그렸는지로만 판정 — 실제 서명은 펜을 떼지 않고 한 번에 이어그리는
+  // 필기체가 대부분이라 다회 스트로크를 요구할 근거가 없음
   function notify() {
-    const valid = strokes >= minStrokes
+    const valid = strokes >= 1
     if (!onchange) return
     if (!valid || !canvas) {
       onchange(valid, null)
@@ -146,8 +146,6 @@
     <span class="sig-hint">
       {#if strokes === 0}
         여기에 서명하세요
-      {:else if strokes < minStrokes}
-        조금 더 서명해 주세요 ({strokes}/{minStrokes})
       {:else}
         서명 완료
       {/if}
