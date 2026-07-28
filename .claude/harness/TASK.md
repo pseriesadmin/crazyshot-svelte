@@ -556,7 +556,25 @@ plan_source: 세션 내 아젠다
 - [x] FIX-400: checkout 날짜 미선택 시 API 400 → 클라이언트 preflight 검증 | ROUTINE | ✅ 완료 (2026-07-27)
   - productId / startDate / endDate 미충족 시 alert() 후 early return (API 호출 차단)
 
-⏳ QA: sp3-qa-agent 검수 예정
+- [x] UI-SUCCESS-MULTI: /payment/success/dev 다중 상품 목록 + 요금 분해 카드 재구현 | BOUNDARY | ✅ 완료 (2026-07-28)
+  - 배경: 단일 productName 노출 구조 → 다중 아이템 카드 + 통합 결제내역 카드로 전면 재구현
+  - checkout/+page.svelte CTA: URLSearchParams 구조 변경
+      · items: JSON.stringify(activeItems) — 아이템별 {name, code, startDate, endDate, pickupMethod, returnMethod, price, options[]}
+      · pickupMethod/returnMethod: DELIVERY_LABELS 한국어 레이블로 변환 후 전송
+      · price: itemCardRate(line, it.durType) × qty (수량 반영 단가)
+      · 요금 분해 파라미터 추가: subtotal / membershipDiscount / couponDiscount / deliveryFee / vat / pointsUsed / confirmedAt
+      · 구 단일 파라미터(productName/orderNumber/startDate/endDate/notes) 제거
+  - /payment/success/dev/+page.ts: SuccessItem 인터페이스 추가 + items JSON 파싱
+      · items[] 파싱 실패 시 구 단일상품 파라미터 폴백 (하위호환)
+      · 요금 분해 6개 필드 파싱: subtotal/membershipDiscount/couponDiscount/deliveryFee/vat/pointsUsed
+  - /payment/success/dev/+page.svelte: 전면 재구현
+      · {#each data.items} 반복 → 상품 카드 × N개 (상품명 / 예약코드 / 대여일정 / 수령방식 / 반납방식 / 개별 대여요금 / 옵션 칩)
+      · 결제 내역 카드: 대여요금·멤버십할인·쿠폰할인·배송요금·부가세·포인트사용·합계 + 결제일시·수단
+      · option-chip: 퍼플 pill 스타일 (--cs-purple-op10 배경)
+      · 날짜 구분자 Svelte 화이트스페이스 버그 수정: detail-dash span → '{startDate} — {endDate}' 단순 문자열
+      · price-divider 구분선 + detail-row--total 합계 강조 (--text-m-title-18B, --cs-purple-dark)
+
+✅ QA: sp3-qa-agent GATE C 통과 (2026-07-28) — Dead CSS 1건(.detail-dash) 정리 완료 → GATE E 진행 가능
 
 ---
 
@@ -2884,3 +2902,731 @@ sp3-qa-agent GATE C 검수 결과 (2026-07-27): ✅ 통과
     → .pdf-placeholder / .pdf-placeholder p (272-281행)
     → .btn-action / :hover / :disabled (290-306행) — 다음 유지보수 커밋 정리 권장
   - GATE E 통과, 커밋 허가
+
+---
+
+## NOW — 고객용 전자계약 서명 화면(/contract/[token]) 버그픽스 + UI 개선 (2026-07-28) ✅ 완료
+
+plan_source: 세션 내 아젠다 (Stephen 직접 요청 — 채팅 '전자계약 확인' 버튼 진입 화면)
+등급: 🟡 BOUNDARY (고객용 단일 화면 UI + 버그픽스, DB 마이그레이션 없음)
+핵심제약:
+  - 요청 범위 외 수정 없음 (해당 페이지 + 공용 SignatureCanvas 컴포넌트만)
+  - Svelte 5 Runes 문법 준수
+  - CMS 반영 여부는 코드 조사 우선 → 실제 결함 있을 때만 수정
+
+수정 배경:
+  - Stephen이 실기기 스크린샷으로 신고: 타이틀 텍스트 오기, "계약서 문서를 불러오는 중입니다" 무한 로딩,
+    예약자 정보 노출 부재, 서명 가이드 텍스트 중복
+  - 근본 원인 조사(Explore 없이 직접 grep): `contracts.document_url` 컬럼이 코드베이스 전체에서
+    한 번도 SET된 적 없는 필드로 확인 — PDF 생성 파이프라인 자체가 미구현 상태라 이 필드를 기다리는
+    한 항상 로딩 문구에서 멈춤. CMS 발송 시점(`ContractTemplatePreviewModal.send()`)에 이미
+    변수 치환 완료된 `contracts.content_blocks`가 저장되고 있음을 확인 → 이를 직접 렌더링하는
+    방식으로 전환(document_url iframe 방식 폐기)
+
+신규/수정 파일:
+  - src/routes/contract/[token]/+page.server.ts (MODIFY) — contracts 셀렉트에 title·content_blocks·
+    specifications 추가, rental_reservations에 reservation_code 추가, user_profiles(고객 이름·전화번호·
+    이메일) 별도 조회 추가
+  - src/routes/contract/[token]/+page.svelte (MODIFY) — 타이틀 텍스트 변경, 헤더 요약카드에 예약코드·
+    예약자·전화번호·이메일 행 추가, document_url iframe 섹션 → content_blocks 렌더링(doc-section)으로
+    전면 교체, 서명 가이드 문구("아래 칸에 직접 서명해 주세요") 제거, 관련 CSS 교체
+  - src/lib/components/common/SignatureCanvas.svelte (MODIFY) — sig-hint 3단계 분기("여기에
+    서명하세요" / "조금 더 서명해 주세요 (n/3)" / "서명 완료") → 2단계로 단순화(스트로크 카운트 문구 제거)
+    · grep으로 이 컴포넌트의 유일한 사용처가 해당 계약서 화면임을 확인 후 안전하게 공용 컴포넌트 수정
+
+- [x] TITLE-CHANGE: "전자 대여 계약서" → "크레이지샷 상품대여 전자계약서" | ROUTINE | ✅ 완료 (2026-07-28)
+
+- [x] BUG-DOC-LOAD: 계약서 문서 무한 로딩 버그 수정 | BOUNDARY | ✅ 완료 (2026-07-28)
+  - 원인: document_url 컬럼이 애플리케이션 전체에서 한 번도 write되지 않음 (PDF 생성 로직 미구현)
+  - 수정: content_blocks(발송 시점 변수 치환 완료본)를 CMS ContractTemplatePreviewModal과 동일한
+    렌더링 패턴(text/html/divider 블록 타입 분기)으로 직접 표시
+  - 실브라우저 검증: 로컬 dev + Stage DB(ezyvffjvuwmtuhpxdjrw) 실제 미서명 토큰으로 계약 본문
+    정상 렌더링 확인 (표준 계약서 템플릿, 성명·연락처·이메일·주소·예약코드 등 치환값 정상 표시)
+
+- [x] FEAT-HEADER-INFO: 헤더 요약카드에 예약코드 + 예약자 정보(이름·전화번호·이메일) 노출 | BOUNDARY | ✅ 완료 (2026-07-28)
+  - +page.server.ts에서 user_profiles(full_name, phone, email) 서버사이드 별도 조회 (service_role,
+    RLS 우회 — 계약 서명은 비로그인/토큰 기반 접근이라 CMS 인증 경로 재사용 불가)
+
+- [x] VERIFY-CMS-SYNC: 서명 완료 시 CMS 예약목록 "서명완료" 반영 여부 검증 | ROUTINE | ✅ 검증 완료, 코드 수정 없음 (2026-07-28)
+  - 조사 결과: /api/contracts/[token]/sign가 `contract_signings.signed_at` UPDATE →
+    `get_rental_list` RPC가 `cs.signed_at AS customer_signed_at`로 조인 →
+    `/cms/reservation/+page.svelte`의 `contractBadge()`가 이 값으로 "서명완료" 배지 표시
+  - 이미 정상 연결되어 있어 코드 수정 불필요 — Supabase MCP로 Stage DB 직접 쿼리하여 실증:
+    실제 서명 실행(reservation_id=32, CSREV260700015) 후 contract_signings.signed_at 기록 확인 +
+    get_rental_list RPC 결과에 customer_signed_at 정상 반영 확인
+  - ⚠️ 부작용: 위 검증을 위해 Stage DB의 실제 테스트 예약 건(reservation_id 32)에 실제 서명 완료
+    처리가 발생함 (테스트/스테이지 데이터, Stephen에게 세션 중 고지 완료)
+
+- [x] UI-CLEANUP: 불필요 서명 안내 텍스트 제거 | ROUTINE | ✅ 완료 (2026-07-28)
+  - "아래 칸에 직접 서명해 주세요" (+page.svelte sig-guide) 완전 제거
+  - "조금 더 서명해 주세요 (n/3)" (SignatureCanvas.svelte sig-hint 중간 분기) 제거 — "여기에
+    서명하세요"는 유지 요청대로 존치
+
+svelte-check: 수정 3개 파일 기준 신규 ERROR 0건 (기존 무관 파일 에러(account/profile RPC 타입)만 잔존)
+
+실브라우저 검증(로컬 dev + Stage DB): 계약 화면 헤더정보 렌더링 → 계약본문 표시 → 체크박스 동의 →
+서명 캔버스 3획 서명 → 제출 → /contract/complete 리다이렉트 → DB signed_at 기록 → get_rental_list
+customer_signed_at 반영까지 전체 플로우 1회 실측 완료
+
+sp3-qa-agent GATE C 검수 결과 (2026-07-28): ✅ 통과
+  - 범위 정합성: git diff 대상 3개 파일 외 요청 외 로직 변경 없음 확인 (워킹트리의 다른 미커밋 변경은
+    이번 세션 범위 밖이라 판정 제외 — 커밋 시 대상 파일 명시적 스테이징 필요)
+  - 요청 5개 항목 전부 코드 레벨 재검증 완료 — 5/5 PASS (타이틀 문구 / document_url 무한로딩 원인·수정 /
+    헤더 예약코드·예약자 정보 / CMS 서명완료 배지 반영 경로 / 불필요 문구 제거)
+  - svelte-check: git stash 전후 비교로 신규 ERROR 0건 재확인 (기존 11 errors는 무관 파일 그대로)
+  - 보안: SUPABASE_SERVICE_ROLE_KEY는 $env/static/private 전용 유지, RLS 우회는 기존에도 있던 익명
+    토큰 접근 구조(신규 도입 아님), 교차 고객 정보 노출 없음(토큰 소유자=예약 당사자 본인 정보만)
+  - {@html} content_blocks 렌더링: CMS 관리자만 작성 가능한 기존 신뢰 경계를 고객 화면까지 연장한 것 —
+    "CMS 계정 침해 시 고객 브라우저 스크립트 실행 가능"이라는 공격표면 확대 소지는 있으나 CMS 계정 자체가
+    이미 전체 서비스 신뢰 주체 수준이라 추가 승인 없이 진행 가능한 리스크로 판단 (Stephen 인지 필요, blocking 아님)
+  - BLOCKING 이슈 없음 / 참고 2건(non-blocking, 백로그 권장):
+    → doc-block :global(table.cs-contract-table) 색상 하드코딩(#DDDDDD/#f6f6f6/#666) — CMS
+      ContractTemplatePreviewModal.svelte 동일 패턴 답습, 양쪽 CSS 변수화 권장
+    → +page.server.ts specifications select 추가했으나 화면 미사용 (죽은 페치, 필요 없으면 제거)
+  - GATE E 통과, 커밋 허가 (단, 워킹트리의 이번 세션 범위 외 변경분은 Stephen이 별도 판단 후 스테이징)
+
+---
+
+## NOW — /checkout 렌탈정보 미반영 + 옵션상품 미노출 버그픽스 (2026-07-28) ✅ 완료
+
+plan_source: 세션 내 아젠다 (Stephen 직접 요청)
+등급: 🔴 CRITICAL (예약 흐름 다중 파일 + DB 마이그레이션) — AskUserQuestion으로 두 버그 각각
+수정범위(전체 수정 vs 부분 보류) 서비스 의도 확인 후 진행 (두 항목 모두 "전체 수정" 선택)
+
+수정 배경 (Explore 에이전트 근본원인 조사 결과):
+  - 버그1: 상품상세에서 선택한 대여시간·대여기간(12h/24h)·수령/반납방식이 체크아웃에 반영 안 됨
+    → 시간·수령방식은 DB에 저장은 되나 체크아웃 서버 쿼리가 컬럼을 조회하지 않았고,
+      대여기간(duration_type)은 Migration 154에서 컬럼만 추가된 후 실제로 쓰인 적이 없었으며,
+      반납방식(return_method)은 애초에 RPC 호출 시 파라미터 자체가 누락되어 있었음
+  - 버그2: 상품상세에서 선택한 옵션상품+수량이 체크아웃 카드에 전혀 노출 안 됨
+    → 저장할 DB 테이블 자체가 존재하지 않아 예약 신청 시점에 선택값이 그대로 버려지고 있었음
+      (신규 테이블+RPC 필요 — 부분 수정 불가능한 근본 원인)
+
+신규/수정 파일:
+  - supabase/migrations/20260728000176_176_reservation_duration_and_options.sql ← 신규
+    (set_reservation_duration RPC + reservation_options 테이블·RLS·set_reservation_options RPC)
+  - src/routes/products/[id]/+page.svelte ← handleReserve(): return_method 파라미터 추가,
+    실제 선택 시간 기준 duration_type(12h/24h) 계산 후 저장, 선택된 옵션상품+수량 저장 호출 추가
+  - src/routes/checkout/+page.server.ts ← rental_reservations select에 pickup_method·
+    return_method·pickup_time·return_time·duration_type 추가, reservation_options 병렬 조회 +
+    reservationId별 그룹핑, CartLineItem에 5개 필드 + options 배열 추가
+  - src/routes/checkout/+page.svelte ← CartLineItem 타입 확장, newItemState()에 seed 파라미터
+    추가(toDeliveryMethod/toDurationType 안전 매핑 헬�터), 신규 카드 생성 시 서버 저장값으로
+    durType/opts.rentalMethod/opts.returnMethod/rentalTime/returnTime 시딩, OrderCard·
+    ItemListCard에 옵션상품 목록(이름×수량) 렌더링 추가
+
+- [x] BUG-1: 체크아웃 렌탈정보(시간·기간·수령방식) 미반영 수정 | CRITICAL | ✅ 완료 (2026-07-28)
+  - set_reservation_shipment_method 호출에 p_return_method 추가 (기존 pickup만 전달되던 것 수정)
+  - 상품상세 CalendarTimePicker의 estimatedFee와 동일 판정 기준(당일 12시간 이하→12h, 그 외→24h)으로
+    duration_type 계산 후 신규 RPC(set_reservation_duration)로 저장
+  - checkout 서버 쿼리 확장 + 신규 카드 시딩 시 하드코딩 기본값('24h'/'crazydelivery') 대신
+    실제 저장값 사용 (기존 로컬 UI 편집 상태가 있는 카드는 건드리지 않음 — prev.find 우선순위 유지)
+  - toDeliveryMethod(): 알 수 없는 method_key(예: 별도 이슈로 남아있는 'delivery' 값)는 기존
+    기본값으로 안전 폴백 — 체크아웃 DeliveryMethod enum 자체 확장은 이번 요청 범위 밖이라 손대지 않음
+
+- [x] BUG-2: 옵션상품+수량 체크아웃 미노출 수정 | CRITICAL | ✅ 완료 (2026-07-28)
+  - Migration 176: reservation_options 테이블 신규(RLS 본인 예약만 SELECT) +
+    set_reservation_options RPC(SECURITY DEFINER, hold 상태 본인 예약만 저장 허용, H-01 준수)
+  - 상품상세 handleReserve(): qty>0인 옵션만 배열로 변환해 예약 생성 직후 저장
+  - checkout 서버: reservationId 목록으로 reservation_options 병렬 조회 후 그룹핑
+  - OrderCard(모바일 풀카드)·ItemListCard(PC 목록행) 양쪽에 "이름 × 수량" 표시 추가
+  - 범위 제한: 표시만 구현 — 옵션 금액을 calculate_cart_total/결제 총액에 반영하는 것은
+    이번 요청(표시 버그) 범위 밖이라 미포함. 결제 총액 산정에도 반영이 필요하면 별도 확인 필요
+
+DB 적용:
+  - Migration #176 — Stage(ezyvffjvuwmtuhpxdjrw) ✅ / Production(vnbpmvxruyciuuaermyh) ✅
+    (양쪽 적용 후 테이블·RLS·RPC 존재 실측 확인 완료, 2026-07-28)
+
+svelte-check: 신규 ERROR 0건 (기존 11 errors 그대로 — account/profile RPC 타입 무관 이슈,
+products/search noCatIcons 등 전부 이번 세션과 무관 파일)
+
+⚠️ 미검증 항목 (Claude Browser 사용 금지 규칙으로 인해 실브라우저 확인 불가):
+  - 실제 상품상세 → 예약신청 → 체크아웃 화면에서 시간·기간·수령방식·옵션상품이 화면에
+    정확히 표시되는지는 Stephen의 실기기/로컬 dev 서버 확인 필요
+  - RPC는 Stage에서 SQL 직접 호출로 문법·무오류만 확인 (auth.uid() 기반 소유권 체크는
+    실제 로그인 세션에서만 검증 가능 — service_role 직접 호출로는 재현 불가)
+
+⏳ QA: sp3-qa-agent 검수 권장 (Stephen 실기기 확인과 별도로)
+
+추가 수정 (동일 세션 연속 요청, 2026-07-28 — Stephen이 launch-selected-element로 직접 지목):
+
+- [x] BUG-3: 체크아웃 '수령 방식'·'반납 방식' 콤보 버튼 UI 미노출 | BOUNDARY | ✅ 완료 (2026-07-28)
+  - 증상: 대여 방법/반납 방법 아코디언을 펼치면 선택 가능한 배송방식 콤보 버튼이 하나도 안 보임
+    (아코디언 헤더의 현재값 라벨은 정상 표시 — 바로 위 BUG-1 수정분)
+  - 근본원인(Stage DB 직접 조회로 실측 확인): rental_reservations.product_id는 예약 시 배정된
+    자식 재고 유닛 UUID인데, 대여방식(allowed_method_ids) 정책은 CMS 대여정책 탭에서 부모
+    상품에만 설정됨 — 자식 자신의 allowed_method_ids는 항상 빈 배열([])이 기본값.
+    checkout의 computeAllowedMethodIds()가 이 빈 배열을 "명시적으로 0개 방식만 허용"으로
+    해석해 'none' 반환 → 콤보 버튼 0개 렌더링 (products.md §5 정책과 동일한 부모/자식 소싱 문제,
+    CMS ProductDetailPanel의 TASK-CMS-CHILD-DATA-MIRROR와 같은 계열 버그)
+  - 수정: src/routes/checkout/+page.server.ts — products 쿼리에 parent_product_id 추가,
+    자식의 allowed_method_ids가 비어있으면 부모 상품 행을 추가 조회해 그 값으로 대체
+  - 효과: 수령 방식·반납 방식 콤보 버튼 둘 다 동일한 deliveryTabs를 쓰므로 한 번의 수정으로
+    양쪽 다 상품상세화면과 동일한 전체 옵션 목록이 노출됨
+
+- [x] CHECK-1: 콤보 버튼 UI 하드코딩 여부 확인 | ROUTINE | ✅ 확인 완료, 코드 수정 없음 (2026-07-28)
+  - 콤보 버튼 자체(라벨·요금·마감정보)는 100% data.deliveryOptions(CMS rental_method_options
+    실시간 조회 결과)에서만 렌더링됨 — CMS 목록에 없는 방식이 버튼으로 노출되는 경우 없음 확인
+  - 단, 콤보 버튼과는 별개 위치인 아코디언 헤더의 현재값 라벨(methodLabel())은 CMS 조회값이
+    아닌 파일 내 하드코딩 DELIVERY_LABELS 맵을 사용 — 기존에 이미 알려진 별도 이슈(TASK.md
+    2026-07-27 항목 "체크아웃 화면 동일 위험" 참고, 'delivery' 키 누락)와 동일 지점이며
+    이번 요청 범위(콤보 버튼) 밖이라 미수정. deliveryFee()의 하드코딩 폴백(3500원)도 CMS
+    데이터가 비어있을 때만 쓰이는 방어값이라 동일하게 미수정.
+
+svelte-check: 신규 ERROR 0건 (기존 11 errors 그대로)
+
+추가 재검증 (Stephen이 CHECK-1 결과에 재이의 제기, 2026-07-28):
+  - Stephen이 "대여 방법" 아코디언 헤더 값("직접방문")이 CMS 설정값과 다른 것 같다고 재확인 요청
+  - Stage DB 직접 조회로 실측: rental_method_options에 method_key='visit' 행의 name 컬럼은
+    "방문대여"(콤보 버튼에 정확히 이렇게 표시됨) — 그런데 아코디언 헤더는 "직접방문"으로 표시됨
+  - 확인 결과 CHECK-1에서 "범위 밖"으로 넘겼던 DELIVERY_LABELS 하드코딩 맵이 실제로 헤더 값과
+    콤보 버튼 값을 서로 다르게 만드는 육안 확인 가능한 불일치였음 — 이번 세션에서 함께 수정
+
+- [x] BUG-4: 아코디언 헤더 대여방식 라벨 하드코딩 → CMS 값 사용으로 수정 | BOUNDARY | ✅ 완료 (2026-07-28)
+  - src/routes/checkout/+page.svelte methodLabel(): DELIVERY_LABELS 하드코딩 맵 직접 반환 →
+    sdDeliveryOpts(CMS rental_method_options 실시간 조회 결과)에서 method_key로 먼저 찾고,
+    CMS에 없을 때만(로딩 지연·미설정 등 방어용) 기존 하드코딩 맵으로 폴백
+  - sdDeliveryOpts 타입에 name 필드 추가 (+page.server.ts select에는 이미 포함되어 있었음)
+  - 부수효과: 기존에 알려져있던 'delivery' method_key 누락 이슈(TASK.md 2026-07-27 항목)도
+    이 수정으로 함께 해소됨 — CMS 이름을 동적으로 찾으므로 더 이상 고정 5개 키에 의존하지 않음
+  - 적용 범위: bulkOpts(일괄설정)·item.opts(개별 카드) 6개 호출부 전부 동일 함수 사용이라
+    한 번의 수정으로 전체 반영
+
+⚠️ 미해결로 남긴 별도 발견 (이번 요청 범위 밖, Stephen 확인 대기):
+  - deliveryFee() 실 결제 금액 계산 버그: rental_method_options.fee_amount 컬럼이 전체 행에서
+    0으로 방치되어 있고(실제 금액은 fee_description 텍스트에만 존재), is_free_for_top_grade
+    컬럼은 DB엔 있으나 checkout 서버 쿼리가 선택하지 않아 매번 undefined → 크레이지샷배송
+    등급별 배송비가 화면 텍스트("3,500원")와 무관하게 항상 0원으로 청구됨. 결제 금액 로직이라
+    Stephen 별도 확인 후 진행 필요 (이번 답변에서 확답 못 받음 — 대기 상태로 기록만).
+
+- [x] BUG-5: 콤보 버튼 UI에서 fee_description 텍스트 제거 | ROUTINE | ✅ 완료 (2026-07-28)
+  - Stephen 판단: "변경 전 기획의 잔재로 보임" — 콤보 버튼에 표시되던 "무료"/"CRAZY등급 무료 /
+    3,500원" 같은 fee_description 텍스트를 완전히 제거
+  - src/routes/checkout/+page.svelte: combo-fee span 렌더링 제거 + DeliveryTabMeta.fee 필드·
+    DeliveryOptionRow.fee_description 필드·deliveryTabs map의 fee 매핑·.combo-fee CSS(본문+
+    반응형) 전부 제거 (죽은 코드 남기지 않음)
+  - deadline(마감 정보) 표시는 그대로 유지 — 이번 제거 대상은 fee_description 한정
+  - 참고: 바로 위 미해결 항목(deliveryFee 실결제 버그)은 fee_amount/is_free_for_top_grade
+    컬럼 기반이라 fee_description 제거와 무관 — 그대로 별도 대기 상태 유지
+
+- [x] BUG-6: 하단 footer 검증 안내 문구("대여 조건에 동의해 주세요." 등) 완전 제거 | ROUTINE | ✅ 완료 (2026-07-28)
+  - Stephen이 launch-selected-element로 footer-guide(<p role="alert">) 직접 지목, "불필요 UI 제거" 요청
+  - src/routes/checkout/+page.svelte: {#if !canProceed && footerVisible}<p class="footer-guide">
+    {proceedGuideMessage()}</p>{/if} 블록 제거
+  - proceedGuideMessage() 함수(다른 참조 없음 확인 후 완전 삭제) + .footer-guide CSS 규칙 삭제
+  - canProceed 5조건 가드·footer-terms 체크박스·footer-cta 버튼 disabled 로직은 무변경 (안내
+    문구만 제거 — 조건 미충족 시 버튼이 비활성 상태로 남는 동작 자체는 그대로 유지)
+
+- [x] BUG-7: 수령/반납 방식 하단 달력·시간 팝업 레이어 가로폭 깨짐 | ROUTINE | ✅ 완료 (2026-07-28)
+  - 증상: 날짜/시간 버튼(datetime-btns)을 눌러 열리는 달력·시간 팝업이 상단 바 폭의 절반만
+    차지해 달력 7열 그리드가 좁게 눌리고, 배경 뒤 다른 UI(Order items 패널 등)가 겹쳐 비침
+  - 원인: src/routes/checkout/+page.svelte .cal-layer·.time-layer가 부모(.datetime-wrap,
+    상단 datetime-btns와 폭이 같음)의 50%로 고정되어 있었음 — 반면 공용 컴포넌트
+    CalendarGrid.svelte의 .cal-root/.cal-grid(7열)는 항상 100% 폭 기준으로 설계됨
+  - 수정: .cal-layer·.time-layer width: 50% → 100%, time-layer는 right:0 → left:0으로 통일
+    (달력/시간 팝업은 한 번에 하나만 열리므로 나란히 배치될 필요 없음 — 각각 상단 datetime
+    바 전체 폭에 맞춤)
+  - CalendarGrid.svelte(공용 컴포넌트)는 무변경 — 컨테이너 폭만 넓혀 기존 100% 그리드 설계가
+    의도대로 동작하게 함
+
+- [x] UI-1: 수령/반납일시 버튼 바(datetime-wrap) 상하 패딩 추가 | ROUTINE | ✅ 완료 (2026-07-28)
+  - Stephen이 launch-selected-element로 datetime-wrap 직접 지목, 위아래 여백 부족 지적
+  - .datetime-wrap: padding: 10px 0 추가 (gap:0은 유지 — 날짜/시간 버튼 사이 간격과 무관)
+    → Stephen 후속 요청으로 20px 0으로 값 조정 (동일 세션, 2026-07-28)
+
+- [x] UI-3: 배송 마감시간 안내를 라운드 배지(pill) 스타일로 재작성 | ROUTINE | ✅ 완료 (2026-07-28)
+  - Stephen 후속 요청 4건: ① 배경에 매우 옅은 red-5 토큰(--cs-red-xlight) 적용 ② 시계 이모지
+    (⏰) 제거 ③ 폰트 토큰 한 단계 위로(--text-m-script-12 → --text-m-script-14B) ④ 상하 패딩
+    10px 적용
+  - 마크업: {tab.deadline} 앞 "⏰ " 접두 제거
+  - CSS: display:inline-block + width:fit-content로 배지 형태화, background:
+    var(--cs-red-xlight), border-radius: var(--radius-full)로 라운드 처리, padding: 10px 16px
+    (좌우 값은 라운드 배지가 정상적으로 보이도록 기존 파일 내 유사 배지(.price-badge 등) 비율을
+    참고해 자체 판단 추가 — 상하 10px만 명시 요청받음, 좌우 없으면 텍스트가 라운드 끝에 붙어
+    보여서 임의로 16px 부여함, 조정 필요 시 알려달라고 안내)
+  - 글자색은 이번 요청에 포함되지 않아 직전 커밋(UI-2)의 --cs-text-mid 그대로 유지
+  - Stephen 후속 요청("가로폭 채움"): display:inline-block+width:fit-content →
+    display:block+width:100%+box-sizing:border-box+text-align:center로 변경 (라운드 배지가
+    콤보 버튼 줄과 동일한 가로폭을 채우도록, 텍스트는 중앙 정렬)
+
+- [x] UI-4: 개별 상품·일괄설정 "약정 요금" 아코디언 3곳 완전 제거 (중복 판단) | BOUNDARY | ✅ 완료 (2026-07-28)
+  - Stephen 판단: 하단 "Order Total"(통합 약정 요금·전체 카트 합산) 섹션에서 어차피 최종
+    결제 합계가 노출되므로, 상품 카드별/일괄설정의 개별 "약정 요금" 아코디언(쿠폰 선택 +
+    해당 아이템 단위 요금 세부내역)은 중복 기능 — 완전 제거 요청 (개별 카드 3곳 + 일괄설정
+    1곳, 총 4개 호출부 전부 동일 FeeContent 스니펫 재사용 중이었음)
+  - 확인: 스크린샷의 아코디언 바디 안에 "사용 가능한 쿠폰" + 내부 "약정 요금" 소제목이 다시
+    나오는 구조 — 외부 아코디언 헤더 라벨("약정 요금")과 내부 소제목이 중복 표시되고 있었음
+  - 제거 대상: bulk-panel의 약정요금 acc-item, OrderCard(모바일)의 약정요금 acc-item,
+    ItemDetailPanel(PC)의 약정요금 acc-item — 3개 호출부 + FeeContent 스니펫 정의 자체 삭제
+  - 부수 정리(죽은 코드 완전 제거, dead code 미잔존 확인):
+    · CardAccordion.fee 필드 제거, AccKey 타입 'fee' 제거 → 'rental'|'return_'만 남김
+    · toggleAcc() 함수의 fee 분기 제거 (rental/return_ 2분기로 단순화)
+    · newItemState() acc 기본값에서 fee:false 제거
+    · .fee-content CSS 규칙 삭제 (FeeContent 전용, 다른 곳 재사용 없음 확인)
+  - 유지: CouponRow·PriceRow 스니펫과 .hint-text/.price-detail-list/.price-period-*/
+    .period-*/.price-divider/.points-* CSS 전부 — 하단 Order Total 섹션(통합 약정 요금)이
+    동일 스니펫·클래스를 그대로 재사용 중이라 삭제하면 통합 섹션이 깨짐 (grep으로 재사용
+    여부 전수 확인 후 판단)
+  - svelte-check: checkout/+page.svelte 자체 경고 6건은 기존과 동일 내용(줄 번호만 이동),
+    신규 ERROR 0건. 프로젝트 전체 신규 WARNING 2건은 cms/rentals·cms/reservation
+    +page.svelte에서 발생 — 이번 세션에서 손대지 않은 파일이며 세션 시작 전부터 워킹트리에
+    있던 별도 미커밋 변경분으로 확인(diff로 대조), 이번 수정과 무관
+
+- [x] UI-5: 수령/반납일시 버튼 바 상하 패딩 30px + 날짜·시간 라벨 폰트 토큰 상향 | ROUTINE | ✅ 완료 (2026-07-28)
+  - Stephen 후속 요청: "중요한 영역"이라 .datetime-wrap 상하 패딩 20px → 30px 확대,
+    날짜·시간 버튼 라벨(.datetime-btn-label) 폰트 토큰 한 단계 위로
+  - 현재 스타일(16px Bold, white-space nowrap)이 문서상 --text-m-body-16B(700 16px, "버튼·
+    본문")와 일치 → 한 단계 위 --text-m-title-18B(700 18px, "소제목")로 교체
+  - 480px 이하 초소형 화면 반응형 오버라이드(.datetime-btn-label{font-size:14px}, 2411행)는
+    이번 요청 범위(기본 토큰) 밖이라 무변경 유지 — 필요 시 별도 요청 안내
+    → Stephen 후속 요청으로 이 반응형 오버라이드도 동일하게 한 단계 상향: 14px(--text-m-
+      script-14B와 동일 크기) → --text-m-body-16B(16px Bold)로 교체, letter-spacing -0.5px
+      유지 (color: white는 기본 규칙에서 이미 상속되어 무변경)
+
+- [x] FEAT-1: "회원정보 반영"(배송지) 체크박스 — 저장된 주소 있을 때만 활성화 | BOUNDARY | ✅ 완료 (2026-07-28)
+  - Stephen 요청: 배송지/반납위치 정보 섹션의 "회원정보 반영" 체크박스는 회원 주소값이
+    실제로 존재할 때만 활성화, 없으면 비활성
+  - 확인: 기존 코드는 이 체크박스(memberCheck2)가 클릭 시 단순 boolean 토글만 하고 실제
+    저장된 주소를 불러와 반영하는 로직 자체가 없었음(별도 미구현 상태) — 이번 요청 범위는
+    "주소 존재 여부에 따른 활성/비활성"이므로 그 범위만 구현, 실제 자동입력 연동은 범위 밖
+  - src/routes/checkout/+page.server.ts: user_shipping_addresses 테이블에서 road_address
+    존재 여부만 조회하는 병렬 쿼리 추가 → hasUserAddress boolean 반환 (게스트 분기는 false
+    고정)
+  - src/routes/checkout/+page.svelte: ServerExt 타입에 hasUserAddress 추가, sdHasUserAddress
+    derived 값 생성, RentalForm props에 hasUserAddress? 추가, 체크박스 button에
+    disabled={!props.hasUserAddress} 적용 + .form-check-label-disabled(opacity 0.4,
+    cursor:not-allowed) 시각 처리
+  - 적용 범위: type==='rental'일 때만 렌더링되는 체크박스이므로 bulk-panel·OrderCard(모바일)·
+    ItemDetailPanel(PC) 3개 RentalForm 호출부 전부에 sdHasUserAddress 전달
+  - 이 체크박스가 없는 '고객 정보' 섹션의 다른 "회원정보 반영"(memberCheck, 이름/이메일/
+    전화번호용)은 주소와 무관해 이번 수정 대상에서 제외
+  - svelte-check: checkout 관련 신규 ERROR 0건, 전체 11 errors 그대로 유지
+
+- [x] UI-6: "날짜 / 배송 일괄 설정" 패널을 Order Total 바로 위로 재배치 | ROUTINE | ✅ 완료 (2026-07-28)
+  - 기존 순서: bulk-panel(일괄설정) → mobile-cart-list/master-detail(상품 목록) → Order Total
+  - 변경 순서: mobile-cart-list/master-detail(상품 목록) → bulk-panel(일괄설정) → Order Total
+  - Stephen 근거: 다수 대여상품을 먼저 확인한 뒤 일괄 설정을 적용하는 흐름이 UX상 더 정합
+  - 마크업 블록 자체는 내용 변경 없이 위치만 이동 (bulk-panel div 전체를 master-detail
+    닫는 태그 뒤·section 닫는 태그 앞으로 절단·재삽입)
+  - svelte-check: 신규 ERROR 0건
+
+- [x] FEAT-2: 일괄설정 패널 — 첫 상품 카드 시딩 + 입력 즉시 전체 카드 반영 | BOUNDARY | ✅ 완료 (2026-07-28)
+  - AskUserQuestion으로 확인한 두 결정: ① 패널 오픈 시 초기값은 첫 번째(최상단) 상품 카드
+    값으로 시딩 ② 일괄설정 필드 수정 시 "전체 적용" 버튼 없이 즉시 전체 카드에 반영
+  - 시딩: $effect(bulkOpen 의존) — 패널이 열릴 때 itemsState의 첫 번째 미삭제 항목의
+    opts.rentalMethod/returnMethod를 bulkOpts에 복사. 다른 카드에는 되쓰지 않음(시딩과
+    반영 분리 — 단순히 패널을 여는 것만으로 다른 카드가 바뀌면 안 됨)
+  - 즉시 반영: applyBulkToItems() 신설(기존 applyBulkSettings 로직 재사용, bulkOpen 강제
+    닫기·성공 토스트 제거) — bulkHandleMethod/bulkHandleReturnMethod/bulkHandleRentalForm/
+    bulkHandleCopy 끝에서 호출 + 신규 bulkHandleDate/bulkHandleTime/bulkHandleReturnForm
+    핸들러 추가(기존 인라인 람다를 명명 함수로 전환) 후 동일하게 호출
+  - "전체 적용" 버튼 제거(자동 반영되므로 더 이상 필요 없음) + 관련 .bulk-apply CSS 삭제.
+    "개별 설정"(resetBulkSettings) 버튼은 기존과 동일하게 유지("적용 중" 배지만 토글, 기존에도
+    데이터 자체를 되돌리지 않던 동작이라 이번 변경으로 인한 회귀 아님)
+  - ⚠️ 버그 수정 경위: 최초 구현 시 applyBulkToItems()를 호출부에서만 참조하고 실제 함수
+    정의(구 applyBulkSettings → 신규 이름 변경)를 누락한 채 커밋 전 상태로 남아 있었음 —
+    모든 일괄설정 입력이 존재하지 않는 함수를 호출해 즉시 런타임 오류로 실패하는 상태였음.
+    Stephen이 실브라우저에서 "값이 하나도 안 바뀐다"고 재현 확인 후 지적 → 함수 정의 완성 +
+    JSX 호출부 전체 재검증으로 해결
+  - svelte-check: checkout 관련 신규 ERROR/WARNING 0건 (기존 6개 경고 줄번호만 이동),
+    전체 11 errors 그대로
+
+- [x] FEAT-3: 결제완료(DEV) 화면 — 상품별 카드에 단건 대여요금 노출 추가 | ROUTINE | ✅ 완료 (2026-07-28)
+  - Stephen이 /payment/success/dev 화면의 상품별 카드(대여일정·수령방식·반납방식) 아래에
+    해당 건의 단건 대여요금이 없다고 지적 — 하단 "결제 내역" 카드의 합산 대여요금(subtotal)만
+    있고 건별 분해가 없었음
+  - src/routes/payment/success/dev/+page.ts: SuccessItem 인터페이스에 price:number 추가,
+    구버전 단일상품 폴백 경로는 subtotal 파라미터를 그대로 price로 사용
+  - src/routes/checkout/+page.svelte: DEV 결제완료 이동 시 items 배열 구성부(activeItems.map)
+    에 price: itemCardRate(line, it.durType) * Math.max(it.qty, 1) 추가 — 기존 대여료 소계
+    계산(otSubtotal)과 동일한 함수 재사용, 옵션비·배송비 제외한 순수 대여요금
+  - src/routes/payment/success/dev/+page.svelte: 반납방식 행과 포함옵션 행 사이에 "대여요금"
+    행 추가, item.price > 0일 때만 표시(기존 옵셔널 필드들과 동일한 조건부 패턴)
+  - 범위: DEV 전용 미리보기 화면만 수정 — 실 결제 완료 화면(/payment/success, 단일상품·
+    합계요금 구조로 상이함)은 이번 요청 대상 아님, 미수정
+  - svelte-check: 신규 ERROR/WARNING 0건, 전체 11 errors 그대로
+
+- [x] FIX-1: 예약신청 시 부가 RPC(수령/반납방식·대여기간·옵션상품) 실패 무음 처리 수정 | BOUNDARY | ✅ 완료 (2026-07-28)
+  - Stephen 신고: 상품상세에서 선택한 옵션상품 정보가 체크아웃에 반영 안 되는 경우 발견
+  - 근본원인 조사(Stage DB 직접 대조): 동일 상품의 이전 예약(#62)은 옵션(Manfrotto 055)이
+    reservation_options에 정상 저장되어 있었음 — 저장 파이프라인 자체는 정상 동작 확인.
+    문제의 예약(#64, 체크아웃에 표시 중인 hold 예약)은 reservation_options 행이 아예 없음
+  - 실제 원인은 브라우저에서 재현 확인이 불가해 100% 특정은 못 했으나(옵션 미선택이었을
+    가능성도 배제 못 함), 코드 감사 중 실제 결함 발견: set_reservation_shipment_method·
+    set_reservation_duration·set_reservation_options 3개 RPC 호출 전부 { error } 응답을
+    전혀 확인하지 않고 있었음 — RPC가 내부 소유권 검사 실패 등으로 조용히 no-op해도
+    사용자는 물론 개발자도 실패를 알 방법이 없는 상태였음. 이 침묵 실패가 관찰된 증상과
+    정확히 일치하는 유형이라 우선 수정
+  - src/routes/products/[id]/+page.svelte handleReserve(): 3개 RPC 호출 모두 { error }
+    구조분해 추가. 수령/반납방식·옵션상품 실패 시 console.error + showToast로 사용자에게
+    즉시 알림("체크아웃에서 다시 확인해 주세요"). 대여기간 실패는 console.error만(사용자
+    노출 영향도 낮다고 판단, 토스트 중첩으로 인한 UX 저하 방지)
+  - 한계: 이번 수정은 실패를 "보이게" 만드는 조치이며, 예약 #64가 왜 옵션 없이 생성됐는지
+    소급 확인·복구는 불가능(이미 지난 트랜잭션). 앞으로 동일 현상 재발 시 토스트로 즉시
+    확인 가능해짐
+  - svelte-check: products/[id]/+page.svelte 신규 ERROR 0건(기존 경고 4개 그대로), 전체
+    11 errors 그대로. 경고 총합 296→297은 이번 세션에서 손대지 않은
+    cms/products/[id]/edit/+page.svelte(세션 이전부터의 별도 미커밋 변경분)에서 발생 —
+    이번 수정과 무관
+
+- [x] UI-2: 배송 마감시간 안내(delivery-deadline) 디자인 토큰 위반 수정 | ROUTINE | ✅ 완료 (2026-07-28)
+  - Stephen 질의: "⏰ 19:00 마감"이 무슨 정보인지 + 마감시간 안내라면 표준 디자인 시스템의
+    도움말 안내 스타일로 재작성 요청
+  - 확인: rental_method_options.deadline_time(CMS /cms/set/rental 설정값) — ui-mobile.md
+    "배송 마감 UI 표시 기준"에 정의된 표준 마감 안내(방문 19:00/택배 15:00/퀵 17:00/무인보관함
+    18:00)와 동일한 정보. 현재 선택된 대여방식의 마감시간만 조건부 표시.
+  - 발견된 위반: 기존 스타일이 var(--cs-orange) 사용 — front-uiux.md에 "브랜드 오렌지 —
+    로고·이벤트 포인트 전용, 버튼 사용 금지"로 명시된 토큰을 일반 안내 텍스트에 오용
+  - 수정: color를 --cs-orange → --cs-text-mid(문서상 "보조 텍스트, 캡션" 용도)로 교체,
+    font-size 12px 하드코딩 → font: var(--text-m-script-12) 캡션 토큰으로 교체, font-weight
+    700 유지(도움말성 강조), 같은 폼 내 형제 요소 .form-note와 동일 카테고리로 통일
+
+---
+
+## NOW — 전자계약 시스템 보안·관리 피드백 재검증 + 확인된 결함 2건 수정 (2026-07-28) ✅ 완료
+
+plan_source: 세션 내 아젠다 (Stephen 직접 요청 — 별도 "전자계약 기술설명서" 첨부는 타 프로젝트
+(1TeamWorks) 문서로 확인, 경로·API 불일치 — 해당 문서의 일반적 갭 카테고리(서버 서명 검증·감사
+로그·상태 전이 검증·토큰 만료)만 크레이지샷 코드에 대입해 재검증에 활용)
+등급: 🔴 CRITICAL (고객 PII 노출 경로 + 예약 상태 연동 보안 검증 → 재검증 결과 보고 후 Stephen 승인
+받아 수정 진행)
+
+검증 범위:
+  1. 고객이 채팅 수신 링크로 전자계약을 안전하게 확인·서명 등록할 수 있는가
+  2. 관리자가 상담채팅을 통해 예약 사이클 내 전자계약 배포·확인을 빠르게 관리할 수 있는가
+  3. 첨부 문서의 일반적 갭 항목이 현재 구현에 반영될 여지가 있는가
+
+검증 결과 요약(수정 전 보고, Stephen 승인 후 진행):
+  - 토큰 엔트로피(256bit)·서명 원자적 UPDATE 가드·서버사이드 stroke 재검증·IP/timestamp 기록 등
+    핵심 무결성 장치는 이미 견고함을 확인
+  - 🔴 결함 A: Migration #146(expires_at)이 Stage·Production 양쪽 DB에 실제 적용되어 있음에도
+    `/contract/[token]/+page.server.ts`(GET 로드)가 이 컬럼을 전혀 조회·체크하지 않아, 만료된
+    링크로 접속해도 예약자 PII(이름·전화번호·이메일)와 계약 전문이 그대로 노출되고 서명 제출
+    시점(POST)에서야 410으로 막히는 구조였음
+  - 🟡 결함 B: 서명 완료 시 관리자 채팅에 삽입되는 액션카드의 `action_url`이 `'/cms/reservation'`
+    고정 문자열이라 특정 예약으로 딥링크되지 않음. 게다가 `/cms/reservation`은 hold/pending/
+    cancelled 상태만 보유하고 confirmed 이후(대부분의 계약 서명 시점)는 `/cms/rentals`가 정본
+    화면이라, 기존 코드는 애초에 잘못된 화면으로 안내하고 있었음. 추가로 두 목록 화면(`/cms/
+    reservation`, `/cms/rentals`) 모두 `?selected=` 쿼리파라미터를 쓰기만 하고 마운트 시 읽어서
+    패널을 자동으로 열어주는 로직 자체가 없어, 파라미터를 붙여도 무의미했음(딥링크 자체가
+    구조적으로 불가능한 상태)
+
+신규/수정 파일:
+  - src/routes/contract/[token]/+page.server.ts (MODIFY) — expires_at select 추가 + 만료 시
+    /contract/expired로 redirect (signed_at 체크 바로 다음)
+  - src/routes/api/contracts/[token]/sign/+server.ts (MODIFY) — 예약 상태 UPDATE를 먼저 await한
+    뒤 status를 조회하도록 순서 변경(레이스 컨디션 방지) + RENTAL_STATUSES 판정으로 confirmed
+    이후는 /cms/rentals, 그 이전은 /cms/reservation으로 액션카드 action_url 분기 + reservation_id
+    쿼리파라미터 추가
+  - src/routes/cms/reservation/+page.server.ts (MODIFY) — `selected` 쿼리파라미터 파싱 → data.selectedId
+  - src/routes/cms/reservation/+page.svelte (MODIFY) — selectedId 초기값을 data.selectedId로 초기화
+    (마운트 1회만 — openPanel/closePanel이 이후 직접 제어, 재동기화 effect 미추가로 필터 변경 시
+    패널 자동 닫힘 등 부가 동작 변경 없음)
+  - src/routes/cms/rentals/+page.server.ts (MODIFY) — 동일 패턴 (selected 파싱)
+  - src/routes/cms/rentals/+page.svelte (MODIFY) — 동일 패턴 (selectedId 초기화)
+
+- [x] SEC-EXPIRE-GUARD: 만료된 서명 링크 페이지 로드 단계 차단 | CRITICAL | ✅ 완료 (2026-07-28)
+  - 실브라우저 검증: Stage DB 테스트 토큰의 expires_at을 과거로 강제 설정 → /contract/[token] 접속 시
+    /contract/expired로 즉시 redirect 확인 (계약 내용·PII 노출 없음) → expires_at 원복 후 정상
+    미만료 토큰 접속 시 기존과 동일하게 정상 렌더링되는지 회귀 확인 완료
+  - svelte-check: 신규 ERROR 0건
+
+- [x] FEAT-ADMIN-DEEPLINK: 서명완료 알림 액션카드 → 정확한 예약 패널로 딥링크 | BOUNDARY | ✅ 완료 (2026-07-28)
+  - /cms/reservation·/cms/rentals 양쪽에 `?selected=` 초기 진입 반영 로직 신규 추가 (기존에는
+    URL에 쓰기만 하고 읽지는 않던 죽은 파라미터였음)
+  - sign 엔드포인트가 예약의 실제 현재 상태를 보고 confirmed 이후는 /cms/rentals, 그 이전은
+    /cms/reservation으로 정확히 분기 + reservation_id를 selected로 포함해 전달
+  - ⚠️ 알려진 한계(범위 내 최소 수정 원칙 유지, 별도 확장 안 함): 대상 예약이 관리자가 보고 있는
+    현재 필터·페이지네이션(30건/페이지) 밖에 있으면 `data.rentals`에서 못 찾아 패널이 자동으로
+    열리지 않음 — URL은 정확히 이동하나 패널만 비어있는 상태. id 기준 단건 조회로 페이지네이션과
+    무관하게 항상 열리게 하려면 추가 설계 필요(이번 요청 범위 밖으로 판단, 별도 확인 후 진행 권장)
+  - svelte-check: 신규 ERROR 0건, 기존과 동일한 패턴의 WARNING만 추가(state_referenced_locally,
+    같은 파일의 searchInput/dateFrom과 동일 성격)
+
+미반영 항목(이번 세션 범위 외, 백로그 권장):
+  - 감사 로그 테이블 부재(contract_signings의 sent/viewed/signed_at이 최소 추적은 제공)
+  - contracts.status 컬럼이 사실상 죽은 필드(UI 어디서도 렌더링 안 됨, 상태 전이 강제 로직 없음)
+  - hooks.server.ts에 Referrer-Policy 등 보안 헤더·레이트리밋 부재(토큰 엔트로피로 실질 위험은 낮음)
+
+---
+
+## NOW — CMS Dead CSS 정리 + 대여현황 Realtime 실시간 갱신 (2026-07-28) ✅ 완료
+
+plan_source: 세션 내 아젠다 (컨텍스트 이관)
+핵심제약:
+  - 요청 범위 외 수정 절대 금지
+  - Svelte 5 Runes 패턴 ($effect cleanup .removeChannel 필수)
+  - Realtime: $effect cleanup에서 supabase.removeChannel(channel) 필수
+  - 마이그레이션 순서: Stage 검증 → Production 적용
+
+수정/신규 파일:
+  - src/lib/components/cms/RentalContractViewer.svelte ← Dead CSS 5개 선택자 제거
+  - src/routes/cms/rentals/+page.svelte ← Realtime 구독 $effect 추가
+  - supabase/migrations/20260728000177_177_enable_realtime_rental_reservations.sql ← 신규
+
+- [x] DEAD-CSS: RentalContractViewer.svelte Dead CSS 5개 선택자 제거 | ROUTINE | ✅ 완료 (2026-07-28)
+  - 제거 선택자: .pdf-placeholder / .pdf-placeholder p / .btn-action / .btn-action:hover / .btn-action:disabled
+  - 대응 HTML 마크업이 이전 세션에서 이미 제거된 상태 — 스타일 블록만 잔류해있던 Dead CSS
+
+- [x] FEAT-REALTIME: /cms/rentals 대여현황 Realtime 실시간 갱신 | BOUNDARY | ✅ 완료 (2026-07-28)
+  - Migration 177: rental_reservations 테이블을 supabase_realtime 퍼블리케이션 등록 +
+    REPLICA IDENTITY FULL 설정
+  - Stage(ezyvffjvuwmtuhpxdjrw) ✅ / Production(vnbpmvxruyciuuaermyh) ✅ 양쪽 적용 완료
+  - +page.svelte: browser import + supabase import 추가
+  - $effect(() => { supabase.channel('cms-rentals-realtime').on('postgres_changes', ...,
+    () => { invalidateAll() }).subscribe() / return () => { supabase.removeChannel(channel) } })
+  - 동작: /cms/reservation 예약 승인(confirmed) → rental_reservations 상태 변경 → Realtime 이벤트 수신 → invalidateAll() → /cms/rentals 목록 자동 갱신
+  - svelte-check: 신규 ERROR 0건 (기존 11 errors 그대로)
+
+⏳ QA: sp3-qa-agent 검수 예정
+
+---
+
+## NOW — /products/[id] 예약 검증 로직 3종 보완 + 후기 등록 Figma 재현 + CalendarTimePicker PC 크기 축소 (2026-07-28) ✅ 완료
+
+plan_source: 세션 내 아젠다 (컨텍스트 이관, 이전 세션 옵션·CMS 버그픽스 연속)
+핵심제약:
+  - 요청 범위 외 수정 없음
+  - Svelte 5 Runes 패턴 준수 ($state(prop) 초기화 금지)
+  - Claude Browser 도구 사용 금지(2026-07-28 CLAUDE.md 확정 규칙) → svelte-check + 소스코드 Read로 검증 대체
+
+수정 파일:
+  - src/routes/products/[id]/+page.svelte ← handleReserve() 검증 가드 2종 추가 + 후기 폼 전면 재작성
+  - src/lib/components/products/CalendarTimePicker.svelte ← 과거 날짜/이전달 이동 차단 + 배송정책 chip hover 제거 + PC 반응형 크기 축소
+
+- [x] BUG-PASTDATE: 달력에서 현재 시점 이전 날짜 선택 가능 버그 수정 | BOUNDARY | ✅ 완료 (2026-07-28)
+  - CalendarTimePicker.svelte: todayIso 기준 isPastDate(iso) 함수 신규 + handleDateClick 진입 시 과거 날짜 즉시 return
+  - 템플릿: {@const past = isPastDate(iso)} → class:past-date + disabled={past} 적용, CSS로 흐림 처리(opacity 0.35)
+  - isAtCurrentMonth $derived 신규 + prevMonth()에서 현재 월일 때 이전 달 이동 차단(nav-btn disabled)
+
+- [x] FEAT-LEADTIME: 예약 일시 리드타임 검증 3종 신규 추가 | CRITICAL | ✅ 완료 (2026-07-28)
+  - Stephen 확정 규칙: 방문·퀵·무인택배함 = 당일 기준 "당일+3시간" 이후만 예약 가능 /
+    택배(배송)만 = "당일+2일" 이후만 예약 가능 (배송충돌 판정용 DELIVERY_METHOD_KEYS와는
+    별개로 TWO_DAY_LEADTIME_KEYS = {'delivery','epost'} 신규 분리)
+  - handleReserve(): needsTwoDayLeadtime 여부로 분기 — 2일 리드타임 미충족 시
+    "택배 대여는 대여일 2일 전 예약 가능합니다." / 당일+3시간 미충족 시 "당일 대여는
+    대여시간 기준 3시간 전 방문만 가능합니다." 토스트 후 예약 진행 차단
+  - 대여방식 미선택 시 예약신청 진행되던 버그도 동일 함수 내 가드 추가로 함께 차단
+    (data.rentalMethods.length > 0 && !e.methodId 체크)
+
+- [x] FIX-HOVER: 배송정책 콤보 chip 불필요 호버 인터랙션 제거 | ROUTINE | ✅ 완료 (2026-07-28)
+  - 원인: .policy-chip:hover가 사용자가 선택할 수 없는 읽기 전용 배송정책 표시 span(.policy-chip--active)
+    에도 동일하게 적용되어, 클릭 불가능한 정보성 UI에 호버 강조가 나타남
+  - 수정: .policy-chip:hover → .policy-chip:not(.policy-chip--active):hover로 범위 한정
+    (실제 선택 가능한 대여방식 chip에만 호버 유지, 배송정책 표시 chip은 호버 제거)
+  - 모바일 재확인: 터치 디바이스는 :hover 자체가 지속 발화하지 않아 별도 이슈 없음 확인
+
+- [x] FEAT-REVIEW-FIGMA: 후기 등록 폼 Figma 시안 재현 | BOUNDARY | ✅ 완료 (2026-07-28)
+  - Figma 참조: node-id 1188-7444 (Crazyshot.kr UI)
+  - 기존 확장형 2단 입력(제목+본문 별도 필드) 폼을 단일 인풋 + 전송 버튼 구조로 전면 교체
+  - submitReview(): 입력 전체 텍스트의 앞 10자를 title로 자동 생성(content.slice(0,10)),
+    본문은 입력 전체(content) 그대로 저장 → 목록/상세에는 content 전체 노출
+  - 비로그인 상태: input readonly + 클릭 시 requireLoginForReview() 토스트
+  - CSS: .review-form-expanded/.review-title-input/.review-content-input/.review-submit-btn
+    등 확장형 전용 선택자 제거, 기존에 죽어있던 .review-form/.review-send-btn(빠른문의
+    .qa-form/.qa-send-btn과 동일 패턴)을 실사용으로 전환
+  - PC·Mobile 반응형 별도 오버라이드 불필요 확인(기존 flex 구조가 두 해상도 모두 자연 대응)
+
+- [x] FIX-PC-CALTIME-SIZE: CalendarTimePicker PC반응형 캘린더+시간선택 UI 크기 축소 | ROUTINE | ✅ 완료 (2026-07-28)
+  - Stephen 피드백: 최초 제안한 컨테이너 쿼리(container-type/@container) 기반 좌우배치 전환
+    방식은 반려("수정전으로 복원해") — 대신 "PC반응형에서 무리한 UI, 달력·시간 UI 모두
+    이렇게 클 필요 없다"는 방향으로 재요청
+  - 처리: 컨테이너 쿼리 관련 수정 전체 원복(@media (min-width:641px) 뷰포트 기준 구조 복귀,
+    .calendar min-width:0 제거, .picker-wrap container-type 제거) 후, 기존 @media
+    (min-width:641px) 블록 내부 값만 축소하는 방식으로 재구현
+  - 축소 내역(PC 전용, 모바일 무변경):
+    · .cal-time-wrapper gap 40px→24px / .calendar gap 16px→10px / .cal-cell font-size 14px→12px
+    · .time-col gap 20px→10px / .time-spinner gap 24px→12px, padding 10px 20px→8px 12px
+    · .time-label min-width 28px→22px / .spinner-col gap 20px→10px
+    · .spin-btn 30×20px→22×16px / .time-val min-width 20px→16px, font-size 14px→12px
+    · .time-colon·.time-ampm font-size 14px→12px
+  - svelte-check: CalendarTimePicker.svelte 신규 ERROR 0건(기존 unused-selector 경고 2건만
+    잔존, 이번 수정과 무관)
+
+근본원인 분석(참고, 코드 미반영):
+  - .info-right(PC 예약영역) 컬럼은 페이지 콘텐츠 최대폭(--layout-pc-max: 1240px) 제약으로
+    뷰포트가 아무리 넓어져도 최대 ~605px로 고정됨 — 뷰포트 기준 641px 브레이크포인트로 좌우
+    배치를 켜면 "화면은 넓은데 실제 칼럼은 좁은" 중간 구간에서 항상 붕괴 위험이 남음
+  - 이번 세션은 Stephen 지시대로 UI 자체를 축소하는 방식으로 해결(구조 변경 없음) — 향후
+    유사 붕괴가 재발하면 이 근본원인(컨테이너 실폭 vs 뷰포트 불일치) 참고 필요
+
+sp3-qa-agent GATE C 검수 결과 (2026-07-28):
+  - 검수 대상: src/routes/products/[id]/+page.svelte · src/lib/components/products/CalendarTimePicker.svelte
+  - 규칙 정합성: 보안(서버 키 노출·RLS·H-01 RPC 경유) 전부 준수, rental.md 정합 확인
+  - handleReserve() 가드 순서 검증: 대여방식 미선택 → 필수옵션 → min_select_required →
+    배송충돌(DELIVERY_METHOD_KEYS) → 리드타임(TWO_DAY_LEADTIME_KEYS) 순서로 상호 배타적 early
+    return 확인
+  - DELIVERY_METHOD_KEYS(배송충돌 판정)와 TWO_DAY_LEADTIME_KEYS(2일 리드타임 판정) 완전히
+    별개 Set으로 분리, 혼용 없음 확인
+  - 리드타임 경계값(당일+2일 00:00 / 당일+3시간) 스펙과 일치 확인
+  - FIX-HOVER: .policy-chip.chip-active(선택형 button)와 .policy-chip--active(읽기전용 span)가
+    서로 다른 클래스라 :not(.policy-chip--active) 제외 규칙이 의도대로 동작 확인
+  - submitReview(): Runes 패턴 위반 없음, RPC 캐스팅은 파일 내 기존 ReserveRpcFn/ShipRpcFn과
+    동일 패턴 답습(신규 위반 아님)
+  - container-type/@container 잔재: 0건 — 컨테이너 쿼리 반려 후 원복 완전성 grep으로 확인
+  - svelte-check: 대상 2개 파일 신규 ERROR 0건 (프로젝트 전체 11 errors는 전부 세션 무관 기존 파일)
+  - 참고 4건(non-blocking): ① PC 전용 .spin-btn 22×16px — ui-mobile.md 44px 기준 미달이나
+    Stephen 명시적 요청 + PC 포인터 전용 + 기존 모바일 값(30×20px)도 원래 미달이었던 기존
+    패턴의 연장이라 신규 위반 아님(백로그 권장) ② 리드타임 검증 3종은 클라이언트 UX 가드만
+    존재, create_hold_reservation RPC 서버사이드 재검증 없음(요청 범위가 UI였으므로 범위 내,
+    악의적 우회 가능성은 별도 확인 권장) ③ .review-send-btn width/height:35px가
+    min-width/min-height:44px에 덮여 죽은 값(사소, 정리 권장) ④ +page.svelte git diff에 이번
+    5개 항목 외 별도 완료 섹션("/checkout 렌탈정보 미반영 + 옵션상품 미노출 버그픽스",
+    Migration #176)의 코드도 같은 파일이라 함께 포함되어 있음 — 코드 자체는 정상이나 커밋 시
+    두 아젠다 분이 함께 스테이징됨을 인지 필요
+
+GATE E: ✅ 통과 — 수정 필요 항목 0건 (참고 4건 모두 non-blocking) — git commit 진행 가능
+
+---
+
+## NOW — 전자계약 서명 버튼 비활성 고착 버그 수정 (2026-07-28) ✅ 완료
+
+plan_source: 세션 내 아젠다 (Stephen 실기기 스크린샷 신고 — 서명 완료했는데 "서명하기" 버튼 계속 비활성)
+등급: 🔴 CRITICAL (고객이 계약에 서명 자체를 못 해 예약 진행이 완전히 막히는 기능 결함)
+
+원인 분석:
+  - `SignatureCanvas.svelte`의 유효성 판정이 "펜을 뗀 횟수(stroke)가 3회 이상"이었음
+  - 실제 서명은 대부분 펜을 떼지 않고 한 번에 이어그리는 필기체(1획)라서, 정상적으로 서명해도
+    strokes=1에 영구적으로 머물러 버튼이 절대 활성화되지 않는 구조적 결함
+  - 직전 세션에 "조금 더 서명해 주세요 (1/3)" 안내 문구를 불필요 UI로 판단해 제거하면서, 정확히
+    이 상황(강제 요구조건 미충족)에 대한 유일한 피드백까지 함께 사라져 사용자가 원인을 알 수
+    없는 상태로 막혀 있었음
+
+수정 파일:
+  - src/lib/components/common/SignatureCanvas.svelte (MODIFY) — 판정 기준을 "stroke count ≥ 3"에서
+    "stroke ≥ 1 AND 누적 드로잉 길이(totalLength) ≥ minLength(기본 40px)"로 전면 교체.
+    SignatureData에 pathLength 필드 추가, minStrokes prop 제거 → minLength prop으로 대체,
+    힌트 문구 3단계 복원("여기에 서명하세요"/"여기에 조금 더 서명해 주세요"/"서명 완료" —
+    직전 세션에 제거했던 "(n/3)" 형태의 스트로크 카운트 문구는 재도입하지 않음, 단순 클릭·점
+    하나처럼 실제 미달 상황에서만 노출되는 문구로 재설계)
+  - src/routes/contract/[token]/+page.server.ts — 변경 없음 (이번 결함과 무관, 참고용 명시)
+  - src/routes/contract/[token]/+page.svelte (MODIFY) — minStrokes={3} prop 제거, path_length를
+    서명 제출 payload에 포함, 에러 문구에서 "(3획 이상)" 표현 제거
+  - src/routes/api/contracts/[token]/sign/+server.ts (MODIFY) — 서버사이드 검증도 동일 기준으로
+    동기화: `strokeCount < 3` → `strokeCount < 1 OR pathLength < 40`로 교체 (클라이언트만 고치면
+    서버가 여전히 3획 미만을 거부해 결함이 재현되므로 반드시 함께 수정 필요했음)
+
+- [x] BUG-SIG-STROKE-LOCK: 서명 유효성 판정을 스트로크 횟수 → 드로잉 길이 기준으로 전환 | CRITICAL | ✅ 완료 (2026-07-28)
+  - 실브라우저 검증(로컬 dev + Stage DB 실제 미서명 토큰): 캔버스에 단일 연속 드래그(1스트로크)로
+    서명 → 힌트 "서명 완료" 전환 + "서명하기" 버튼 disabled=false 확인 → 실제 제출까지 진행해
+    POST /api/contracts/[token]/sign 200 OK + '서명 완료' 페이지 전환 확인 → DB 조회로
+    contract_signings.stroke_count=1, signed_at 정상 기록 확인 (기존 로직이었다면 이 지점에서
+    클라이언트·서버 양쪽 모두 거부했을 케이스)
+  - svelte-check: 신규 ERROR 0건 (SignatureCanvas 사용처는 이 계약서 화면 1곳뿐임을 grep으로
+    재확인 후 컴포넌트 공개 API(minStrokes→minLength) 변경 — 타 화면 영향 없음)
+
+---
+
+## NOW — 전자계약 서명 유효성 판정 추가 완화 (2026-07-28) ✅ 완료
+
+plan_source: 세션 내 아젠다 (Stephen 직접 질의 — "서명 유효성 판정이 법적 근거 있나?")
+등급: 🔴 CRITICAL (서명 등록 가능 여부에 직결)
+
+배경: 바로 직전 항목(BUG-SIG-STROKE-LOCK)에서 "펜 뗀 횟수 3회"를 "누적 드로잉 길이 40px
+이상"으로 교체했으나, 이 minLength(40px) 기준 역시 Stephen 확인 없이 임의로 추가한 기준이었음.
+Stephen이 법적 근거를 질의 → 전자서명법상 스트로크 수·드로잉 길이에 대한 요구사항 없음을 확인,
+"1회만 서명 기록해도 버튼 활성화" 명시적 지시에 따라 길이 기준까지 완전히 제거.
+
+수정 파일:
+  - src/lib/components/common/SignatureCanvas.svelte (MODIFY) — totalLength/lastPos/minLength
+    전부 제거, 판정을 순수 `strokes >= 1`로 단순화, SignatureData.pathLength 필드 제거,
+    힌트 문구 2단계로 원복("여기에 서명하세요"/"서명 완료")
+  - src/routes/contract/[token]/+page.svelte (MODIFY) — payload에서 path_length 제거
+  - src/routes/api/contracts/[token]/sign/+server.ts (MODIFY) — 서버 검증도 `strokeCount < 1`
+    (등록 자체가 없는 경우)로만 단순화, pathLength 관련 검증 완전 제거
+
+- [x] SIMPLIFY-SIG-VALIDATION: 서명 유효성 = "1회 이상 등록" 단일 기준으로 단순화 | CRITICAL | ✅ 완료 (2026-07-28)
+  - 실브라우저 검증: 캔버스에 mousedown+mouseup을 동일 좌표(이동 없음, 사실상 점 하나)로 발생시켜도
+    즉시 "서명 완료" + 버튼 활성화 확인 → 제출까지 진행해 POST 200 OK + DB stroke_count=1,
+    signed_at 정상 기록 확인 (이전 minLength=40px 기준이었다면 거부됐을 가장 극단적인 케이스)
+  - svelte-check: 신규 ERROR 0건
+
+sp3-qa-agent GATE C 검수 결과 (2026-07-28, 결함 A/B 보안 수정 + 서명 유효성 판정 단순화 최종본 통합 검수): ✅ 통과
+  - 검수 대상 7개 파일 요청 범위와 정확히 일치 확인(cms/rentals/+page.svelte는 별도 커밋 02fcfaf에
+    이미 반영됨을 git log로 확인). 워킹트리에 섞인 타 세션 미커밋 변경(checkout/*, payment/success/dev/*,
+    ProductHero.svelte 등)은 검수 범위에서 명시적으로 제외
+  - 결함 A: load() 실행 순서상 expires_at 체크(3단계)가 PII 조회(5단계, user_profiles) 이전에
+    redirect로 실행을 즉시 중단시키므로 근본적으로 차단됨을 코드 순서로 재확인 — PASS
+  - 결함 B: UPDATE를 별도로 먼저 await한 뒤 SELECT하는 순서라 레이스 컨디션 없음, RENTAL_STATUSES가
+    rental-lifecycle.md 기준과 100% 일치 확인 — PASS
+  - `selectedId = $state(data.selectedId ?? null)` 패턴: core-rules.md가 금지하는 "재마운트 없는
+    prop 재동기화 문제"가 아니라 "외부 링크로 인한 풀 네비게이션 시 최초 1회 반영"이므로 위반 아님 —
+    PASS (단, 같은 탭에서 CMS를 켜둔 채 다른 selected 링크를 연속 클릭하는 극단적 엣지 케이스는
+    재마운트가 없어 갱신 안 될 수 있음 — 실사용 빈도 매우 낮아 non-blocking 참고 사항으로만 기록)
+  - 서명 유효성 판정: 클라이언트(`strokes >= 1`)·서버(`strokeCount < 1` 거부)가 완전히 일치,
+    SignatureData에서 pathLength/totalLength/minLength 등 이전 40px 기준 잔재 전부 제거 확인 — PASS
+  - TS 컴파일: 대상 파일 신규 에러 0건 (stash 전후 비교, 잔존 9건은 기존 무관 이슈로 재확인)
+  - 실측 검증 방법론(만료 링크 강제 설정 접속 / 이동없는 클릭 서명 / DB 조회) 3건 모두 코드 로직과
+    부합하는 타당한 검증 경로로 판단
+  - BLOCKING 이슈 없음
+  - GATE E 통과, 커밋 허가
+
+---
+
+## NOW — 체크아웃 옵션상품 금액 미반영 버그 수정 (2026-07-28) ✅ 완료
+
+plan_source: 세션 내 아젠다 (Stephen 검증 요청 → 결함 확인 → 수정 승인)
+핵심제약:
+  - 🔴 CRITICAL: 결제금액 정확성 직결 — 수정 전 Stephen에게 검증 결과 보고 후 승인받아 진행
+  - 마이그레이션 순서: Stage(ezyvffjvuwmtuhpxdjrw) 검증 → Production(vnbpmvxruyciuuaermyh) 확인 후 적용
+  - 요청 범위 외 수정 없음 (옵션 이미지·기타 메타정보 추가 노출은 이번 요청 범위 밖으로 판단, 미반영)
+
+검증 결과(수정 전 확인):
+  - 상품상세 → set_reservation_options RPC → reservation_options 테이블 저장은 정상(Migration #176)
+  - checkout/+page.server.ts가 reservation_options를 조회해 각 카드에 options 배열로 연결하는 것도 정상
+  - 그러나 체크아웃 화면 표시 합계(otSubtotal/otTotal, +page.svelte)와 개별 카드 요금 배지(fee-badge)
+    모두 옵션 unit_price를 전혀 더하지 않고 기본 대여요금만 합산 — 옵션 선택해도 결제금액 불변
+  - 서버 authoritative RPC(calculate_cart_total, Migration #173)도 옵션 테이블(Migration #176, #173보다
+    하루 늦게 생성됨) 자체를 참조하지 않음 — 애초에 두 마이그레이션이 서로 연결된 적이 없었음
+  - 부가 확인: 현재 실제 결제 CTA(footer-cta)는 /api/checkout/confirm-mock 호출 — PG 미연동 시범서비스
+    임시 자동승인이라 금액을 아예 참조하지 않음(주석: "PG 미연동 임시 자동 예약승인"). /api/checkout/
+    initiate·calculate_cart_total(p_user_id 파라미터 포함 호출)는 현재 UI 어디서도 호출되지 않는
+    죽은 코드로 확인(그대로 유지, 이번 요청 범위 아님) — 따라서 지금 실사용자에게 유일하게 노출되는
+    금액은 클라이언트 계산값(otSubtotal/otTotal)이며, calculate_cart_total은 향후 M3 실PG 연동 시
+    쓰일 것을 대비해 함께 수정
+
+신규/수정 파일:
+  - src/routes/checkout/+page.svelte ← itemOptionsAmount() 헬퍼 추가 + otSubtotal·fee-badge 옵션가 합산
+    + 옵션 목록 텍스트에 금액 표시 추가
+  - supabase/migrations/20260728000178_178_include_options_in_cart_total.sql ← 신규 (calculate_cart_total
+    옵션 합산 포함 재작성)
+
+- [x] FIX-OPTION-PRICE: 체크아웃 합계·개별 카드 요금에 옵션상품 금액 반영 | CRITICAL | ✅ 완료 (2026-07-28)
+  - itemOptionsAmount(line): line.options.reduce((s,o)=>s+o.unitPrice*o.qty,0) 신규 헬퍼
+  - otSubtotal: 기존 itemCardRate(line,durType) 단독 합산 → (itemCardRate + itemOptionsAmount) *
+    Math.max(it.qty,1)로 교체 — 기본 대여요금과 동일하게 카트 수량(it.qty) 배수 적용
+  - ItemListCard 스니펫 fee-badge: (cardRateVal * item.qty) → ((cardRateVal + itemOptionsAmount(line))
+    * item.qty)로 동일하게 교체(합계와 카드별 표시 금액 불일치 방지)
+  - OrderCard 스니펫의 옵션 목록(.option-list-item)과 ItemListCard의 옵션 텍스트(.item-options) 양쪽에
+    각 옵션의 금액(fmtKrw(unitPrice*qty)+"원") 추가 표시 — 총액만 오르고 사용자가 이유를 알 수 없는
+    상황 방지. 기존 CSS(overflow:hidden + text-overflow:ellipsis, 또는 자연 줄바꿈)가 텍스트 길이
+    증가를 이미 흡수하므로 별도 CSS 수정 불필요
+  - OrderCard의 .product-price(단가 라벨, cardRateVal 단독 표시)는 총액이 아닌 단가 표시 목적이라
+    수정 대상에서 제외(의미 변경 방지)
+  - svelte-check: 대상 파일 신규 ERROR 0건
+
+- [x] FIX-RPC-OPTION-PRICE: calculate_cart_total RPC 옵션 금액 합산 추가 (Migration #178) | CRITICAL | ✅ 완료 (2026-07-28)
+  - Migration #173 로직 그대로 유지 + 예약별 reservation_options SUM(unit_price*qty) 조회 추가 →
+    v_subtotal에 가산(멤버십 할인율도 옵션가 포함 소계에 동일하게 적용됨)
+  - 반환 컬럼명(subtotal/discount_amount/final_total/deposit_required) 무변경 — 호출부
+    (checkout/+page.server.ts) 수정 불필요
+  - 적용: Stage(ezyvffjvuwmtuhpxdjrw) ✅ 완료, 함수·reservation_options 테이블 존재 확인 완료
+  - Production(vnbpmvxruyciuuaermyh) ⛔ Stephen 확인 후 적용 필요 (현재 미적용)
+
+sp3-qa-agent GATE C 검수 결과 (2026-07-28):
+  - 보안: 서버 키 노출 0건, 직접 DML 없음(RPC 경유), RLS로 고객 A↔B 옵션 격리 확인
+  - itemOptionsAmount()/otSubtotal/fee-badge 3곳 계산식 일관성 확인, null 방어 확인
+  - Migration #178: #173 기존 대여요금 로직 100% 보존 + reservation_options 서브쿼리만 추가된
+    최소 diff 확인, 반환 컬럼명·GRANT·SECURITY DEFINER 원본과 동일
+  - 멤버십 할인율이 옵션가에도 적용되는 것은 클라이언트·RPC 양쪽이 이미 일관된 기존 설계 방식이라
+    신규 불일치 아님(참고 사항으로만 기록)
+  - svelte-check: 대상 파일 신규 ERROR 0건
+  - 참고 3건(non-blocking): ① /payment/success/dev 화면의 개별 항목 price가 옵션가 미포함
+    (itemCardRate*qty만 사용) — 반면 같은 화면 하단 총액은 옵션 포함 otSubtotal을 그대로 받아
+    표시돼 "대여요금" 라벨 아래 개별합↔총액이 옵션금액만큼 어긋나 보일 수 있음. 이번 승인 범위
+    (체크아웃 화면)엔 미포함, 같은 버그 계열이라 후속 태스크 등록 권장 ② .fee-badge CSS 하드코딩
+    색상은 이전 세션 잔존 이슈, 이번 수정과 무관 ③ diff에 이전 세션 완료분(마스터-디테일 레이아웃
+    등)이 같은 파일이라 함께 포함— 기존에도 확인된 사항
+
+GATE E: ✅ 통과 — BLOCKING 0건 (참고 3건 non-blocking) — git commit 진행 가능
+(Migration #178 Production 적용은 GATE E 통과와 별개로 Stephen 별도 승인 필요)
