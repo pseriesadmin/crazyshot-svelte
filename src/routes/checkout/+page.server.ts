@@ -34,13 +34,14 @@ export const load: PageServerLoad = async ({ locals }) => {
       userPoints:      0,
       userCoupons:     [] as UserCouponRow[],
       isServerLoaded:  false,
+      hasUserAddress:  false,
     }
   }
 
-  const [cartResult, profileResult, couponResult] = await Promise.all([
+  const [cartResult, profileResult, couponResult, addressResult] = await Promise.all([
     supabase
       .from('rental_reservations')
-      .select('id, product_id, start_date, end_date, status')
+      .select('id, product_id, start_date, end_date, status, pickup_method, return_method, pickup_time, return_time, duration_type')
       .eq('user_id', session.user.id)
       .eq('status', 'hold')
       .order('created_at', { ascending: false }),
@@ -56,7 +57,17 @@ export const load: PageServerLoad = async ({ locals }) => {
       .select('id, coupon_id, coupons(id, code, discount_type, discount_value, description, valid_until)')
       .eq('user_id', session.user.id)
       .is('used_at', null),
+
+    // "회원정보 반영" 체크박스 활성화 판단용 — 저장된 배송지가 하나라도 있는지만 확인
+    supabase
+      .from('user_shipping_addresses')
+      .select('road_address')
+      .eq('user_id', session.user.id)
+      .limit(1),
   ])
+
+  const hasUserAddress = ((addressResult.data ?? []) as Array<{ road_address: string | null }>)
+    .some(row => !!row.road_address)
 
   const rawReservations = (cartResult.data ?? []) as ReservationRow[]
   // id는 Stage DB bigint이지만 CalculateCartTotalArgs는 string[] — String() 변환으로 호환
@@ -72,26 +83,88 @@ export const load: PageServerLoad = async ({ locals }) => {
     // rental_reservations.product_id는 예약 시 배정된 자식 상품(재고 유닛)의 UUID를 직접 보관
     // (create_hold_reservation RPC 참조) — products RLS는 status='active' 기준이라 일반 세션으로도 조회 가능
     const productIds = [...new Set(rawReservations.map(r => r.product_id).filter((id): id is string => id != null))]
-    if (productIds.length > 0) {
-      const [{ data: products }, { data: priceRows }] = await Promise.all([
-        supabase
-          .from('products')
-          .select('id, name, category, brand, slug, image_urls, is_active, created_at, updated_at, deleted_at, allowed_method_ids')
-          .in('id', productIds),
-        supabase
-          .from('price_rules')
-          .select('product_id, duration_type, price, deposit_amount')
-          .in('product_id', productIds)
-          .in('duration_type', ['12h', '24h']),
-      ])
-      serverProducts = (products ?? []) as ProductRow[]
+    const reservationIdsRaw = rawReservations.map(r => r.id)
+    const [productsResult, priceRulesResult, optionsResult] = await Promise.all([
+      productIds.length > 0
+        ? supabase
+            .from('products')
+            .select('id, name, category, brand, slug, image_urls, is_active, created_at, updated_at, deleted_at, allowed_method_ids, parent_product_id')
+            .in('id', productIds)
+        : Promise.resolve({ data: [] as ProductRow[] }),
+      productIds.length > 0
+        ? supabase
+            .from('price_rules')
+            .select('product_id, duration_type, price, deposit_amount')
+            .in('product_id', productIds)
+            .in('duration_type', ['12h', '24h'])
+        : Promise.resolve({ data: [] as Array<{ product_id: string; duration_type: string; price: number; deposit_amount: number | null }> }),
+      // 옵션상품 + 수량 (Migration 176 reservation_options) — 상품 상세에서 선택한 옵션이 카드에 노출되도록
+      supabase
+        .from('reservation_options')
+        .select('reservation_id, option_product_id, option_name, qty, unit_price')
+        .in('reservation_id', reservationIdsRaw),
+    ])
+    serverProducts = (productsResult.data ?? []) as ProductRow[]
 
-      for (const row of (priceRows ?? []) as Array<{ product_id: string; duration_type: string; price: number; deposit_amount: number | null }>) {
-        const entry = productPriceRules[row.product_id] ?? { price12h: null, price24h: null, deposit: null }
-        if (row.duration_type === '12h') entry.price12h = row.price
-        if (row.duration_type === '24h') { entry.price24h = row.price; entry.deposit = row.deposit_amount }
-        productPriceRules[row.product_id] = entry
+    // 대여방식(allowed_method_ids)은 CMS 대여정책 탭이 부모 상품에만 설정되는 필드 — 예약에
+    // 배정된 자식 재고 유닛은 이 값이 항상 빈 배열([])이라, 자식 자신의 값이 비어있으면
+    // 부모 상품의 설정을 대신 조회해 채운다 (products.md §5 대여정책 ↔ 예약 흐름 연결 참고)
+    const parentIdsNeeded = [...new Set(
+      serverProducts
+        .filter(p => (!p.allowed_method_ids || p.allowed_method_ids.length === 0) && p.parent_product_id)
+        .map(p => p.parent_product_id as string)
+    )]
+    if (parentIdsNeeded.length > 0) {
+      const { data: parentRows } = await supabase
+        .from('products')
+        .select('id, allowed_method_ids')
+        .in('id', parentIdsNeeded)
+      const parentMethodMap = new Map(
+        ((parentRows ?? []) as Array<{ id: string; allowed_method_ids: string[] | null }>)
+          .map(p => [p.id, p.allowed_method_ids ?? []])
+      )
+      serverProducts = serverProducts.map(p => {
+        if ((!p.allowed_method_ids || p.allowed_method_ids.length === 0) && p.parent_product_id) {
+          return { ...p, allowed_method_ids: parentMethodMap.get(p.parent_product_id) ?? p.allowed_method_ids }
+        }
+        return p
+      })
+    }
+
+    for (const row of (priceRulesResult.data ?? []) as Array<{ product_id: string; duration_type: string; price: number; deposit_amount: number | null }>) {
+      const entry = productPriceRules[row.product_id] ?? { price12h: null, price24h: null, deposit: null }
+      if (row.duration_type === '12h') entry.price12h = row.price
+      if (row.duration_type === '24h') { entry.price24h = row.price; entry.deposit = row.deposit_amount }
+      productPriceRules[row.product_id] = entry
+    }
+
+    const optionRows = (optionsResult.data ?? []) as Array<{ reservation_id: number | string; option_product_id: string | null; option_name: string; qty: number; unit_price: number }>
+
+    // 옵션상품 썸네일 — 카드 UI에서 본상품과 동일한 카드 형태로 노출하기 위해 이미지 추가 조회
+    const optionProductIds = [...new Set(optionRows.map(r => r.option_product_id).filter((id): id is string => id != null))]
+    const optionImageMap = new Map<string, string | null>()
+    if (optionProductIds.length > 0) {
+      const { data: optionProducts } = await supabase
+        .from('products')
+        .select('id, image_urls')
+        .in('id', optionProductIds)
+      for (const p of (optionProducts ?? []) as Array<{ id: string; image_urls: string[] | null }>) {
+        optionImageMap.set(p.id, p.image_urls?.[0] ?? null)
       }
+    }
+
+    const optionsByReservation: Record<string, CartLineItemOption[]> = {}
+    for (const row of optionRows) {
+      const key = String(row.reservation_id)
+      const list = optionsByReservation[key] ?? []
+      list.push({
+        optionProductId: row.option_product_id,
+        name:            row.option_name,
+        qty:             row.qty,
+        unitPrice:       row.unit_price,
+        imageUrl:        row.option_product_id ? optionImageMap.get(row.option_product_id) ?? null : null,
+      })
+      optionsByReservation[key] = list
     }
 
     // 예약 순서 그대로 상품 매핑 (하위호환 — 카드 UI는 cartLineItems 사용)
@@ -113,6 +186,12 @@ export const load: PageServerLoad = async ({ locals }) => {
         deposit:       rules?.deposit ?? null,
         startDate:     r.start_date,
         endDate:       r.end_date,
+        pickupMethod:  r.pickup_method,
+        returnMethod:  r.return_method,
+        pickupTime:    r.pickup_time,
+        returnTime:    r.return_time,
+        durationType:  r.duration_type,
+        options:       optionsByReservation[String(r.id)] ?? [],
       }
     })
 
@@ -152,17 +231,23 @@ export const load: PageServerLoad = async ({ locals }) => {
     userPoints:      (profileResult.data as ProfileRow | null)?.points           ?? 0,
     userCoupons:     (couponResult.data ?? []) as UserCouponRow[],
     isServerLoaded:  rawReservations.length > 0,
+    hasUserAddress,
   }
 }
 
 // ─── 로컬 타입 ─────────────────────────────────────────────────────────────────
 
 interface ReservationRow {
-  id:         number | string
-  product_id: string | null
-  start_date: string
-  end_date:   string
-  status:     string
+  id:            number | string
+  product_id:    string | null
+  start_date:    string
+  end_date:      string
+  status:        string
+  pickup_method: string | null
+  return_method: string | null
+  pickup_time:   string | null
+  return_time:   string | null
+  duration_type: string | null
 }
 
 interface ProductRow {
@@ -177,6 +262,15 @@ interface ProductRow {
   updated_at:          string
   deleted_at:          string | null
   allowed_method_ids?: string[] | null
+  parent_product_id?:  string | null
+}
+
+interface CartLineItemOption {
+  optionProductId: string | null
+  name:            string
+  qty:             number
+  unitPrice:       number
+  imageUrl:        string | null
 }
 
 interface CartLineItem {
@@ -188,6 +282,12 @@ interface CartLineItem {
   deposit:       number | null
   startDate:     string
   endDate:       string
+  pickupMethod:  string | null
+  returnMethod:  string | null
+  pickupTime:    string | null
+  returnTime:    string | null
+  durationType:  string | null
+  options:       CartLineItemOption[]
 }
 
 interface ProfileRow {

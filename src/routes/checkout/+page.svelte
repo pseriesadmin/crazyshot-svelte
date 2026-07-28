@@ -150,10 +150,18 @@
   // 패널을 열 때 첫 번째(가장 위) 상품 카드의 현재 대여/반납 방식으로 시딩 — 항상 기본값
   // (크레이지배송)으로 빈 상태로 열리던 문제 수정. 이 대입 자체는 다른 카드에 되쓰지 않음
   // (실 반영은 아래 applyBulkToItems() 호출부에서만 발생 — 시딩과 반영을 분리)
+  // ⚠️ hasSeededBulk는 일반 변수(비-$state)로 유지할 것 — 이 이펙트는 itemsState를 읽으므로
+  // itemsState가 바뀔 때마다(=사용자가 일괄설정을 편집해 applyBulkToItems()가 실행될 때마다)
+  // 다시 실행된다. 가드 없이 매번 bulkOpts를 재대입하면 사용자가 값을 바꾸는 순간 바로 그
+  // 변경으로 인한 itemsState 갱신이 이 이펙트를 재실행시켜 방금 입력한 값을 계속 덮어써서
+  // "수정이 안 되는" 것처럼 보이는 버그가 생김 — 반드시 "패널이 열릴 때 1회만" 시딩되게 가드
+  let hasSeededBulk = false
   $effect(() => {
-    if (!bulkOpen) return
+    if (!bulkOpen) { hasSeededBulk = false; return }
+    if (hasSeededBulk) return
     const first = itemsState.find(it => !it.deleted)
     if (!first) return
+    hasSeededBulk = true
     bulkOpts = { ...bulkOpts, rentalMethod: first.opts.rentalMethod, returnMethod: first.opts.returnMethod }
   })
 
@@ -330,7 +338,7 @@
   type ProductRow = { id: string; name: string; category: string; brand: string | null; slug: string; image_urls: string[]; is_active: boolean }
   type UserCouponExt = { id: string; coupon_id: string; coupons: { id: string; code: string; discount_type: string; discount_value: number; description: string | null; valid_until: string } | null }
   type PriceRuleExt = { price12h: number | null; price24h: number | null; deposit: number | null }
-  type CartLineItemOption = { optionProductId: string | null; name: string; qty: number; unitPrice: number }
+  type CartLineItemOption = { optionProductId: string | null; name: string; qty: number; unitPrice: number; imageUrl: string | null }
   type CartLineItem = { reservationId: string; productId: string | null; product: ProductRow | null; price12h: number | null; price24h: number | null; deposit: number | null; startDate: string; endDate: string; pickupMethod: string | null; returnMethod: string | null; pickupTime: string | null; returnTime: string | null; durationType: string | null; options: CartLineItemOption[] }
   type ServerExt = { calcTotal: number; calcDiscount: number; calcFinal: number; depositTotal: number; membershipGrade: string | null; userPoints: number; userCoupons: UserCouponExt[]; cartLineItems: CartLineItem[]; productPriceRules: Record<string, PriceRuleExt>; hasUserAddress: boolean }
   const sd = $derived(data as unknown as ServerExt)
@@ -1020,13 +1028,6 @@
                 </svg>
               </div>
             </div>
-            {#if line?.options?.length}
-              <ul class="option-list">
-                {#each line.options as opt}
-                  <li class="option-list-item">{opt.name} × {opt.qty} ({fmtKrw(opt.unitPrice * opt.qty)}원)</li>
-                {/each}
-              </ul>
-            {/if}
           </div>
           <div class="qty-wrap">
             <span class="qty-label">수량</span>
@@ -1041,6 +1042,26 @@
             </div>
           </div>
         </div>
+
+        <!-- 옵션상품 — 본상품 카드와 동일한 형태의 하위 카드로 표시 -->
+        {#if line?.options?.length}
+          <div class="option-subcard-list">
+            {#each line.options as opt}
+              <div class="option-subcard">
+                <div class="option-subcard-connector" aria-hidden="true"></div>
+                <div class="option-subcard-img">
+                  {#if opt.imageUrl}
+                    <img src={opt.imageUrl} alt={opt.name} loading="lazy" />
+                  {/if}
+                </div>
+                <div class="option-subcard-info">
+                  <p class="option-subcard-name">{opt.name}</p>
+                  <p class="option-subcard-price">{opt.qty}개 · {fmtKrw(opt.unitPrice * opt.qty)}원</p>
+                </div>
+              </div>
+            {/each}
+          </div>
+        {/if}
 
         <!-- Accordions -->
         <div class="accordions" class:bulk-locked={bulkApplied}>
@@ -1107,25 +1128,36 @@
       aria-label={`${line?.product?.name ?? '상품'} 대여옵션 보기`}
       type="button"
     >
-      <div class="item-thumb-wrap">
-        <img src={line?.product?.image_urls?.[0] ?? 'https://picsum.photos/seed/cam/150/150'} alt={line?.product?.name ?? '상품'} class="item-thumb" width="90" height="90" loading="lazy"/>
-      </div>
-      <div class="item-info">
-        <div class="item-info-top">
-          <span class="dur-badge">{DUR_LABELS[item.durType]}</span>
-          <span class="fee-badge">{((cardRateVal + itemOptionsAmount(line)) * item.qty).toLocaleString()}원</span>
+      <div class="item-card-top-row">
+        <div class="item-thumb-wrap">
+          <img src={line?.product?.image_urls?.[0] ?? 'https://picsum.photos/seed/cam/150/150'} alt={line?.product?.name ?? '상품'} class="item-thumb" width="90" height="90" loading="lazy"/>
         </div>
-        <p class="item-name">{line?.product?.name ?? '상품'}</p>
-        {#if line?.options?.length}
-          <p class="item-options">{line.options.map(o => `${o.name} ${o.qty}개 (${fmtKrw(o.unitPrice * o.qty)}원)`).join(' · ')}</p>
-        {/if}
-        <div class="item-bottom-row">
-          <div class="item-prices">
-            <span class="price-badge">12H {rate12.toLocaleString()}원</span>
-            <span class="price-badge">24H {rate24.toLocaleString()}원</span>
+        <div class="item-info">
+          <p class="item-name">{line?.product?.name ?? '상품'}</p>
+          <div class="item-info-top">
+            <span class="dur-badge">{DUR_LABELS[item.durType]}</span>
+            <span class="fee-badge">{((cardRateVal + itemOptionsAmount(line)) * item.qty).toLocaleString()}원</span>
           </div>
         </div>
       </div>
+      {#if line?.options?.length}
+        <div class="option-subcard-list option-subcard-list--compact">
+          {#each line.options as opt}
+            <div class="option-subcard option-subcard--compact">
+              <div class="option-subcard-connector" aria-hidden="true"></div>
+              <div class="option-subcard-img">
+                {#if opt.imageUrl}
+                  <img src={opt.imageUrl} alt={opt.name} loading="lazy" />
+                {/if}
+              </div>
+              <div class="option-subcard-info">
+                <p class="option-subcard-name">{opt.name}</p>
+                <p class="option-subcard-price">{opt.qty}개 · {fmtKrw(opt.unitPrice * opt.qty)}원</p>
+              </div>
+            </div>
+          {/each}
+        </div>
+      {/if}
     </button>
     <button class="delete-btn item-card-delete" onclick={() => removeItem(item)} aria-label="삭제">
       <svg width="14" height="14" viewBox="0 0 17 17" fill="none">
@@ -1600,8 +1632,9 @@
   .item-card-delete { align-self: center; }
   .item-card-body {
     display: flex;
-    align-items: center;
-    gap: 15px;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 14px;
     flex: 1;
     min-width: 0;
     padding: 0 12px;
@@ -1609,6 +1642,12 @@
     border: none;
     cursor: pointer;
     text-align: left;
+  }
+  .item-card-top-row {
+    display: flex;
+    align-items: center;
+    gap: 15px;
+    width: 100%;
   }
   .item-thumb-wrap {
     flex-shrink: 0;
@@ -1649,28 +1688,6 @@
     text-overflow: ellipsis;
     white-space: nowrap;
   }
-  .item-options {
-    font: var(--text-pc-script-12);
-    color: var(--cs-text-mid);
-    margin: 0;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-  .item-bottom-row { display: flex; align-items: center; }
-  .item-prices { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
-  .price-badge {
-    display: inline-flex;
-    align-items: center;
-    padding: 4px 9px;
-    background: rgba(59,47,138,0.08);
-    color: var(--cs-purple);
-    border-radius: var(--radius-full, 9999px);
-    font: var(--text-pc-script-12);
-    font-weight: 700;
-    white-space: nowrap;
-  }
-
   /* 대여옵션 DetailPanel — 목록(좌) : 상세(우) = 5:5 비율 */
   .detail-pane {
     flex: 1 1 0;
@@ -1760,19 +1777,106 @@
   .product-badges { display: flex; gap: 15px; align-items: center; }
   .badge-mem, .badge-deal { width: 40px; height: 40px; flex-shrink: 0; }
   .badge-svg { width: 40px; height: 40px; }
-  .option-list {
+  /* ══ 옵션상품 하위 카드 — Figma(node 2447:12056) 기준: 본상품과 동일한 크기/폰트를 쓰고
+     연결선(ㄴ)만으로 하위 관계를 표시. 12H/24H 이중가격·회원/특가 배지·수량 스테퍼는
+     옵션상품에 해당 데이터·기능이 없어 제외(이름·수량·합계금액·썸네일만 정직하게 표시) */
+  .option-subcard-list {
     display: flex;
     flex-direction: column;
-    gap: 2px;
-    margin: 6px 0 0;
-    padding: 0;
-    list-style: none;
+    gap: 20px;
+    width: 100%;
   }
-  .option-list-item {
-    font-size: 13px;
-    font-weight: 500;
-    color: var(--cs-text-mid);
+  .option-subcard {
+    position: relative;
+    display: flex;
+    align-items: center;
+    gap: 20px;
+    width: 100%;
+    margin-left: 30px;
+    padding: 16px 20px;
+    background: var(--cs-lilac);
+    border-radius: 30px;
+    box-sizing: border-box;
   }
+  .option-subcard-connector {
+    position: absolute;
+    left: -18px;
+    top: -14px;
+    width: 16px;
+    height: calc(50% + 14px);
+    border-left: 2px solid var(--cs-lilac);
+    border-bottom: 2px solid var(--cs-lilac);
+    border-radius: 0 0 0 10px;
+    pointer-events: none;
+  }
+  /* 본상품 .product-img와 동일 크기(150×150, radius 30px) */
+  .option-subcard-img {
+    width: 150px;
+    height: 150px;
+    border-radius: 30px;
+    overflow: hidden;
+    background: #EDEDF2;
+    flex-shrink: 0;
+  }
+  .option-subcard-img img { width: 100%; height: 100%; object-fit: cover; display: block; }
+  .option-subcard-info {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+  /* 본상품 .product-name과 동일 스타일 */
+  .option-subcard-name {
+    font-size: 18px;
+    font-weight: 700;
+    color: #100B32;
+    line-height: 1.6;
+    letter-spacing: -0.3px;
+    margin: 0;
+    word-break: break-word;
+  }
+  /* 본상품 .product-price와 동일 스타일 */
+  .option-subcard-price {
+    font-size: 14px;
+    font-weight: 700;
+    color: #444444;
+    line-height: 1.6;
+    letter-spacing: -0.5px;
+    margin: 0;
+  }
+
+  /* 컴팩트 버전 — ItemListCard(PC 목록행) 전용. 이 카드 자체가 이미 축소형(.item-thumb 90px)
+     이므로 "본상품과 동일 크기" 기준을 이 카드의 실제 크기(90px)에 맞춰 적용 */
+  .option-subcard-list--compact { gap: 10px; margin-top: 4px; }
+  .option-subcard--compact {
+    margin-left: 20px;
+    padding: 10px 14px;
+    gap: 14px;
+    border-radius: 20px;
+  }
+  .option-subcard--compact .option-subcard-connector {
+    left: -12px;
+    top: -10px;
+    width: 12px;
+    height: calc(50% + 10px);
+    border-radius: 0 0 0 8px;
+  }
+  /* 본상품 .item-thumb-wrap과 동일 크기(90×90, radius var(--radius-md)) */
+  .option-subcard--compact .option-subcard-img {
+    width: 90px;
+    height: 90px;
+    border-radius: var(--radius-md, 15px);
+  }
+  /* 본상품 .item-name과 동일 스타일 */
+  .option-subcard--compact .option-subcard-name {
+    font: var(--text-pc-body-14);
+    color: var(--cs-text);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .option-subcard--compact .option-subcard-price { font-size: 13px; font-weight: 600; color: var(--cs-text-mid); }
 
   /* ══ Duration Type Tabs ══ */
   .dur-tabs {
@@ -1940,9 +2044,11 @@
   }
   .form-check-label-disabled {
     cursor: not-allowed;
-    opacity: 0.4;
+    opacity: 0.35;
+    filter: grayscale(1);
   }
   .form-check-label-disabled .checkbox-btn { cursor: not-allowed; }
+  .form-check-label-disabled span { color: var(--cs-text-light, #AAAAAA); }
   .form-fields { display: flex; flex-direction: column; gap: 15px; }
   .form-note {
     font-size: 14px;
@@ -2071,7 +2177,7 @@
     border-radius: 20px;
     padding: 20px;
     box-shadow: 0 8px 30px rgba(16,11,50,0.15);
-    width: 100%;
+    width: 50%;
     box-sizing: border-box;
   }
 
@@ -2079,13 +2185,13 @@
   .time-layer {
     position: absolute;
     top: calc(100% + 8px);
-    left: 0;
+    right: 0;
     z-index: 100;
     background: white;
     border-radius: 20px;
     padding: 16px;
     box-shadow: 0 8px 30px rgba(16,11,50,0.15);
-    width: 100%;
+    width: 50%;
     box-sizing: border-box;
   }
   .time-grid {
@@ -2467,6 +2573,9 @@
     .product-img { width: 120px; height: 120px; border-radius: 24px; }
     .product-name { font-size: 14px; }
     .product-price { font-size: 12px; }
+    .option-subcard-img { width: 120px; height: 120px; border-radius: 24px; }
+    .option-subcard-name { font-size: 14px; }
+    .option-subcard-price { font-size: 12px; }
     .badge-mem, .badge-deal, .badge-svg { width: 30px; height: 30px; }
     .qty-label { font-size: 14px; }
     .qty-ctrl { gap: 16px; }

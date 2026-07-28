@@ -3745,3 +3745,91 @@ plan_source: 세션 내 아젠다 (Stephen 직접 요청 — launch-selected-ele
   - src/routes/checkout/+page.svelte ItemListCard: item-name → item-bottom-row(가격 배지)
     → option-subcard-list 순서로 마크업 재배치 (내용·스타일 변경 없음, 순서만 이동)
   - svelte-check: 신규 ERROR 0건, 전체 11 errors 그대로 (기존 6개 경고도 그대로)
+
+- [x] UI-10: ItemListCard(PC 목록행) 옵션상품 하위 카드 구조적 오배치 수정 | BOUNDARY | ✅ 완료 (2026-07-28)
+  - Stephen 요청: Figma 시안(node 2447:12056)의 본상품·옵션상품 레이아웃을 다시 리뷰하고
+    실제 반영과 비교해 무엇이 틀렸는지 확인
+  - 재조사 결과(Figma 스크린샷 재확인): 시안에서는 연결선(ㄴ)이 카드 전체의 왼쪽 끝(본상품
+    썸네일과 같은 열)에 위치해 "위 항목에 매달려 있는" 느낌을 주는데, 실제 구현은 연결선이
+    전혀 다른 위치에 떠 있는 것처럼 보임
+  - 근본원인: ItemListCard의 DOM 구조상 .item-card-body가 [90px 썸네일] + [item-info(가격
+    정보 포함)]를 감싸는 가로 flex 행이었고, option-subcard-list를 그 .item-info 안쪽에
+    중첩시켜 버림 — 그 결과 옵션 카드가 텍스트 칼럼 폭 안에 갇혀 본상품 썸네일이 있는
+    왼쪽 열까지 전혀 도달하지 못하고, 연결선도 그 좁은 칼럼 기준으로 계산되어 엉뚱한
+    위치에 떠 보이는 것이었음. OrderCard(모바일)는 애초에 option-subcard-list가
+    product-row의 형제 요소라 이 문제가 없었음 — ItemListCard에만 있던 구조적 결함
+  - 수정: .item-thumb-wrap + .item-info를 새 래퍼 .item-card-top-row로 묶고,
+    option-subcard-list를 그 래퍼의 형제 요소(=.item-card-body의 직계 자식, 카드 전체
+    폭)로 이동. .item-card-body를 가로 flex → 세로 flex(column)로 변경, 기존 가로 배치
+    속성(align-items:center·gap:15px)은 신설 .item-card-top-row로 이전
+  - 효과: 옵션 카드가 이제 카드의 실제 왼쪽 끝을 기준으로 들여쓰기 되어 연결선이 본상품
+    썸네일과 같은 열 근처에 위치 — Figma 의도(위 항목에서 이어지는 느낌)에 부합
+  - svelte-check: 신규 ERROR 0건, 전체 11 errors 그대로
+
+- [x] UI-11: 옵션상품 하위 카드 배경을 purple-20 토큰으로 변경 | ROUTINE | ✅ 완료 (2026-07-28)
+  - .option-subcard 배경: var(--cs-surface-gray) → var(--cs-purple-pale)(purple-20%, #C1BBEC,
+    front-uiux.md 정의: "서브텍스트, 보조 강조" 용도)
+  - .option-subcard--compact(ItemListCard용)는 별도 background 오버라이드가 없어 동일하게
+    자동 적용됨 — 양쪽 다 한 번의 수정으로 반영
+  - svelte-check: 신규 ERROR 0건, 전체 11 errors 그대로
+
+- [x] UI-12: 옵션상품 하위 카드 배경 purple-20 → purple-10 토큰으로 재조정 | ROUTINE | ✅ 완료 (2026-07-28)
+  - .option-subcard 배경: var(--cs-purple-pale)(purple-20%) → var(--cs-purple-op10)
+    (purple-10%, #E1DEF3, front-uiux.md 정의: "카드 배경, 영역 구분" 용도)
+  - svelte-check: 신규 ERROR 0건, 전체 11 errors 그대로
+
+- [x] UI-13: 옵션상품 하위 카드 배경 purple-10 → purple-5 토큰으로 재조정 | ROUTINE | ✅ 완료 (2026-07-28)
+  - .option-subcard 배경: var(--cs-purple-op10)(purple-10%) → var(--cs-lilac)
+    (purple-5%, #ECEBF4, front-uiux.md 정의: "연한 배경, 섹션 구분" 용도)
+  - 참고: 페이지 전체 배경도 동일하게 --cs-lilac이나, 카드 자체(.item-card/.order-card)는
+    흰색이라 그 안에 --cs-lilac 인셋 박스를 넣는 패턴은 이미 프로젝트 내 다른 곳(예:
+    .qty-val-wrap)에서도 쓰이는 정상적인 톤 사용 방식
+  - svelte-check: 신규 ERROR 0건, 전체 11 errors 그대로
+
+- [x] UI-14: ItemListCard 12H/24H 가격 배지 행 제거 + 배지 위치 재배치 | ROUTINE | ✅ 완료 (2026-07-28)
+  - Stephen 판단: item-bottom-row(12H/24H 가격 배지)는 이미 상단 dur-badge("24H")로 선택된
+    기간이 표시되고 있어 중복 정보로 노출 불필요
+  - item-bottom-row(및 그 안의 item-prices/price-badge) 마크업 완전 제거 + 관련 CSS
+    (.item-bottom-row/.item-prices/.price-badge) 죽은 코드 없이 함께 삭제
+  - Stephen 후속 요청: 제거로 비게 된 하단 자리에 item-info-top(dur-badge+fee-badge)을
+    재배치 — item-name → item-info-top 순서로 변경(기존 item-info-top → item-name 순서에서
+    전환)
+  - svelte-check: 신규 ERROR 0건, 전체 11 errors 그대로
+
+- [x] BUG-2: 일괄설정 패널 자기 자신과의 반응성 충돌로 편집 불가 버그 수정 | CRITICAL FIX | ✅ 완료 (2026-07-28)
+  - Stephen 신고: "수정이 막혀있음" — 일괄설정 패널(대여방법/반납방법 콤보 등)에서 값을
+    바꿔도 반영이 안 되는 것처럼 보임
+  - 근본원인: bulkOpts 시딩용 $effect가 itemsState를 읽어 반응형 의존성으로 잡고 있는데,
+    사용자가 일괄설정을 조작할 때마다 호출되는 applyBulkToItems()가 바로 그 itemsState를
+    변경함 → 이펙트가 매번 재실행되어 사용자가 방금 바꾼 값을 곧바로 첫 번째 카드의
+    (아직 갱신 전이거나 동일한) 값으로 계속 되돌려씀 — 자기 자신의 변경으로 재트리거되는
+    반응형 피드백 루프. 클릭/입력이 무효화되는 것처럼 보이는 정확한 증상과 일치
+  - 수정: 시딩을 "패널이 열릴 때 최초 1회만" 실행되도록 비반응형 가드 변수(hasSeededBulk,
+    일반 let — $state 아님) 추가. 이펙트 자체는 여전히 itemsState 변경 시마다 재실행되지만
+    가드로 인해 재시딩 로직 자체가 스킵되어 루프가 끊어짐. 패널을 닫으면 가드 리셋 →
+    다음에 다시 열 때는 그 시점의 최신 첫 번째 카드 값으로 새로 시딩됨(기존 의도 유지)
+  - svelte-check: 신규 ERROR 0건, 전체 11 errors 그대로
+
+- [x] UI-15: 달력/시간 팝업 레이어 가로폭 100% → 50%로 되돌림 | ROUTINE | ✅ 완료 (2026-07-28)
+  - Stephen 지적: "수정 전에 수령일 바 가로폭만큼 크기였음" — 이전 세션(BUG-3)에서
+    .cal-layer/.time-layer를 50%→100%로 바꾼 것이 과교정이었음을 재확인
+  - 재분석: .datetime-btns는 수령일·수령시간 두 버튼이 각각 flex:1로 절반씩 차지하는
+    구조 — 원래 50%는 "그 버튼 자신의 폭"에 맞춘 의도된 크기였음(전체 바 폭이 아니라
+    클릭한 버튼 하나의 폭). 100%로 바꾸면서 항상 버튼 두 개를 합친 전체 폭으로 열리게 돼
+    현재 화면(특히 일괄설정 패널처럼 폭이 넓은 컨테이너)에서 지나치게 커짐
+  - 원복: .cal-layer width 100%→50%(left:0 유지), .time-layer width 100%→50% +
+    left:0→right:0(원래 수령시간 버튼 쪽에 붙는 위치로 복원)
+  - svelte-check: 신규 ERROR 0건, 전체 11 errors 그대로
+
+- [x] UI-16: "회원정보 반영"(주소) 체크박스 비활성 상태 시각 강화 | ROUTINE | ✅ 완료 (2026-07-28)
+  - Stephen 지적: 실주소 없을 때 비활성화하라고 했는데 UX가 불분명함 — 흐리게 표시 요청
+    (실주소 있으면 당연히 활성 상태로 보여야 함)
+  - 원인: opacity:0.4만으로는 비활성 상태가 명확히 구분되지 않음 — HTML disabled 속성
+    자체는 커스텀 SVG 체크박스 버튼에 브라우저 기본 시각효과를 전혀 주지 않아, 라벨 opacity
+    하나에만 의존하고 있던 상태
+  - 강화: opacity 0.4→0.35 + filter: grayscale(1) 추가(색상 요소를 완전히 무채색으로),
+    텍스트 색상도 명시적으로 --cs-text-light(#AAAAAA)로 오버라이드해 "비활성" 신호를
+    다중으로 강화
+  - hasUserAddress=true(실주소 있음)일 때는 클래스 자체가 안 붙어 완전 정상(활성) 색상
+    그대로 유지 — 별도 스타일 변경 없음, 기존처럼 정상 활성 표시
+  - svelte-check: 신규 ERROR 0건, 전체 11 errors 그대로
