@@ -266,12 +266,11 @@ export const load: PageServerLoad = async ({ locals, url }) => {
   let pickupPoints: PickupPointOption[] = []
 
   if (selectedId) {
-    const [{ data: sp }, periodsRes, methodsRes, pickupsRes, { data: optionLinksData }] = await Promise.all([
+    const [{ data: sp }, periodsRes, methodsRes, pickupsRes] = await Promise.all([
       admin.from('products').select('*').eq('id', selectedId).is('deleted_at', null).single(),
       untypedFrom(admin, 'rental_period_options').select('id, name, display_order').eq('is_active', true).is('deleted_at', null).order('display_order'),
       untypedFrom(admin, 'rental_method_options').select('id, name, display_order').eq('is_active', true).is('deleted_at', null).order('display_order'),
       admin.from('pickup_points').select('id, name, address').eq('is_active', true).is('deleted_at', null).order('created_at'),
-      admin.rpc('get_product_option_links', { p_product_id: selectedId }),
     ])
 
     rentalPeriods = ((periodsRes as { data: RentalOption[] | null }).data ?? [])
@@ -279,6 +278,36 @@ export const load: PageServerLoad = async ({ locals, url }) => {
     pickupPoints  = (pickupsRes.data ?? []) as PickupPointOption[]
 
     if (sp) {
+      // 자식(재고 단위) 상품은 편집이 부모에서만 가능하므로, 기본정보(이름·브랜드·
+      // 카테고리·카피·슬러그)를 포함해 옵션·가격·대여정책·상품설명·구성품·사양·
+      // 이미지까지 '이력' 탭을 제외한 전 항목의 조회를 항상 부모(대표) 기준으로 통일한다.
+      // 그래야 부모에서 수정한 내용이 자식 패널에도 즉시 반영되어 정합이 유지된다.
+      // (품번·QR·is_active(재고 노출 — 토글 스위치가 조작하는 실제 재고가용 상태)·
+      //  이력·자산 정보는 재고 단위 자신의 고유값이므로 예외 — Stephen 확정)
+      const spParentId = (sp as Record<string, unknown>).parent_product_id as string | null
+      const policySourceId = spParentId ?? selectedId
+
+      const [{ data: optionLinksData }, { data: priceRules }, parentRowRes] = await Promise.all([
+        admin.rpc('get_product_option_links', { p_product_id: policySourceId }),
+        admin
+          .from('price_rules')
+          .select('duration_type, price, deposit_amount, late_fee_per_hour, damage_fee_percentage')
+          .eq('product_id', policySourceId)
+          .eq('is_active', true)
+          .is('deleted_at', null),
+        spParentId
+          ? admin
+              .from('products')
+              .select('name, brand, category, product_caption, slug, image_urls, allowed_period_ids, allowed_method_ids, allowed_pickup_ids, shipping_round_trip, shipping_delivery, shipping_return, sale_price, sale_only, content_blocks, keywords, components, specifications')
+              .eq('id', spParentId)
+              .single()
+          : Promise.resolve({ data: null }),
+      ])
+
+      // 자식이면 부모 행(parentRowRes.data)을 정본으로, 부모 자신이면 sp를 그대로 사용
+      const policyRow = (parentRowRes.data ?? null) as Record<string, unknown> | null
+      const src: Record<string, unknown> = policyRow ?? (sp as Record<string, unknown>)
+
       selectedProduct = {
         ...sp,
         assetCount: stockCounts[sp.id]?.active ?? 0,
@@ -286,45 +315,35 @@ export const load: PageServerLoad = async ({ locals, url }) => {
         price12h: prices12h[sp.id] ?? null,
         price24h: prices24h[sp.id] ?? null,
         product_code: (sp as Record<string, unknown>).product_code as string | null ?? null,
-        product_caption: (sp as Record<string, unknown>).product_caption as string | null ?? null,
-        sale_price: (sp as Record<string, unknown>).sale_price as number | null ?? null,
-        sale_only: (sp as Record<string, unknown>).sale_only as boolean ?? false,
-        allowed_period_ids: ((sp as Record<string, unknown>).allowed_period_ids as string[] | null) ?? [],
-        allowed_method_ids: ((sp as Record<string, unknown>).allowed_method_ids as string[] | null) ?? [],
-        allowed_pickup_ids: ((sp as Record<string, unknown>).allowed_pickup_ids as string[] | null) ?? [],
-        shipping_round_trip: ((sp as Record<string, unknown>).shipping_round_trip as boolean) ?? true,
-        shipping_delivery:   ((sp as Record<string, unknown>).shipping_delivery   as boolean) ?? true,
-        shipping_return:     ((sp as Record<string, unknown>).shipping_return     as boolean) ?? true,
+        name: (src.name as string) ?? sp.name,
+        brand: (src.brand as string | null) ?? null,
+        category: (src.category as string) ?? sp.category,
+        slug: (src.slug as string) ?? sp.slug,
+        product_caption: (src.product_caption as string | null) ?? null,
+        sale_price: (src.sale_price as number | null) ?? null,
+        sale_only: (src.sale_only as boolean) ?? false,
+        allowed_period_ids: (src.allowed_period_ids as string[] | null) ?? [],
+        allowed_method_ids: (src.allowed_method_ids as string[] | null) ?? [],
+        allowed_pickup_ids: (src.allowed_pickup_ids as string[] | null) ?? [],
+        shipping_round_trip: (src.shipping_round_trip as boolean) ?? true,
+        shipping_delivery:   (src.shipping_delivery   as boolean) ?? true,
+        shipping_return:     (src.shipping_return     as boolean) ?? true,
         option_links:        optionLinksData ?? [],
+        content_blocks:      src.content_blocks,
+        keywords:            src.keywords,
+        components:          src.components,
+        specifications:      (src.specifications as Record<string, string> | null) ?? null,
+        image_urls:          (src.image_urls as string[] | null) ?? (sp as Record<string, unknown>).image_urls as string[] ?? [],
       }
-
-      const { data: priceRules } = await admin
-        .from('price_rules')
-        .select('duration_type, price, deposit_amount, late_fee_per_hour, damage_fee_percentage')
-        .eq('product_id', selectedId)
-        .eq('is_active', true)
-        .is('deleted_at', null)
 
       selectedPriceRules = priceRules ?? []
 
       // 선택된 상품이 자식일 경우 prices12h/prices24h 맵에 해당 ID가 없어 null이 됨
-      // selectedPriceRules는 selectedId 기준으로 정확히 조회되었으므로 여기서 덮어씀
+      // selectedPriceRules는 policySourceId(부모) 기준으로 정확히 조회되었으므로 여기서 덮어씀
       selectedProduct!.price12h = selectedPriceRules.find(r => r.duration_type === '12h')?.price ?? null
       selectedProduct!.price24h = selectedPriceRules.find(r => r.duration_type === '24h')?.price ?? null
 
-      // 자식 상품인 경우 image_urls를 부모에서 가져옴 (카드 썸네일과 일치)
-      const spParentId = (sp as Record<string, unknown>).parent_product_id as string | null
-      if (spParentId) {
-        const { data: parentImgData } = await admin
-          .from('products')
-          .select('image_urls')
-          .eq('id', spParentId)
-          .single()
-        if (parentImgData) {
-          selectedProduct!.image_urls = (parentImgData as Record<string, unknown>).image_urls as string[] ?? []
-        }
-      }
-
+      // 자산(assets)·장치정보는 재고 단위(자식) 고유값 — 항상 선택된 상품 자신(selectedId) 기준
       const { data: assetDetails } = await admin
         .from('assets')
         .select('id, asset_code, serial_number, status, condition_notes, warehouse_location, label_image_url, ocr_raw_text')

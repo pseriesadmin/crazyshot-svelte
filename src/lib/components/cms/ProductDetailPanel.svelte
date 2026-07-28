@@ -2430,22 +2430,14 @@
     overflow: hidden;
   }
 
-  /* 패널 헤더 */
-  .panel-header {
-    display: flex;
-    flex-direction: column;
-    gap: 10px;
-    padding: 16px 20px 14px;
-    border-bottom: 1px solid var(--cs-surface-gray);
-    flex-shrink: 0;
-  }
-
   /* 상품코드 행 */
   .ph-code-row {
     display: flex;
     align-items: center;
     gap: 8px;
     position: relative;
+    padding: 16px 20px 0;
+    flex-shrink: 0;
   }
   .ph-code-label {
     font: var(--text-pc-descript-10);
@@ -2472,6 +2464,9 @@
     justify-content: space-between;
     align-items: flex-start;
     gap: 16px;
+    padding: 10px 20px 14px;
+    border-bottom: 1px solid var(--cs-surface-gray);
+    flex-shrink: 0;
   }
 
   /* 대표 이미지 썸네일 */
