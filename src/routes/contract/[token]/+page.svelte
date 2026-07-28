@@ -2,24 +2,30 @@
   import type { PageData } from './$types'
   import SignatureCanvas from '$lib/components/common/SignatureCanvas.svelte'
   import type { SignatureData } from '$lib/components/common/SignatureCanvas.svelte'
+  import type { ContentBlock } from '$lib/types/content-editor'
 
   interface Props { data: PageData }
   let { data }: Props = $props()
 
   const signing = data.signing
+  const customer = data.customer
   const contract = signing.contracts as unknown as {
     id: string
+    title: string | null
+    content_blocks: ContentBlock[]
     document_url: string | null
     rental_reservations: {
       id: number
       start_date: string
       end_date: string
+      reservation_code: string | null
       products: { name: string; category: string } | null
     } | null
   } | null
 
   const reservation = contract?.rental_reservations
   const product     = reservation?.products
+  const contentBlocks = contract?.content_blocks ?? []
 
   let agreed    = $state(false)
   let sigValid  = $state(false)
@@ -39,7 +45,7 @@
 
   async function submitSign() {
     if (!agreed)   { signError = '약관에 동의해야 서명할 수 있습니다.'; return }
-    if (!sigValid) { signError = '서명을 완성해 주세요 (3획 이상).';    return }
+    if (!sigValid) { signError = '서명을 완성해 주세요.';    return }
     signError = ''
     signing_  = true
     try {
@@ -79,7 +85,13 @@
   <main class="contract-main">
     <!-- 계약 요약 -->
     <div class="summary-card">
-      <h1 class="summary-title">전자 대여 계약서</h1>
+      <h1 class="summary-title">크레이지샷 상품대여 전자계약서</h1>
+      {#if reservation?.reservation_code}
+        <div class="summary-item">
+          <span class="summary-label">예약코드</span>
+          <span class="summary-value">{reservation.reservation_code}</span>
+        </div>
+      {/if}
       {#if product}
         <div class="summary-item">
           <span class="summary-label">대여 상품</span>
@@ -94,20 +106,47 @@
           </span>
         </div>
       {/if}
+      {#if customer?.full_name}
+        <div class="summary-item">
+          <span class="summary-label">예약자</span>
+          <span class="summary-value">{customer.full_name}</span>
+        </div>
+      {/if}
+      {#if customer?.phone}
+        <div class="summary-item">
+          <span class="summary-label">전화번호</span>
+          <span class="summary-value">{customer.phone}</span>
+        </div>
+      {/if}
+      {#if customer?.email}
+        <div class="summary-item">
+          <span class="summary-label">이메일</span>
+          <span class="summary-value">{customer.email}</span>
+        </div>
+      {/if}
     </div>
 
-    <!-- PDF 미리보기 -->
-    {#if contract?.document_url}
-      <div class="pdf-section">
-        <iframe
-          src={contract.document_url}
-          title="계약서 내용"
-          class="pdf-frame"
-        ></iframe>
+    <!-- 계약서 본문 -->
+    {#if contentBlocks.length > 0}
+      <div class="doc-section">
+        {#if contract?.title}
+          <h2 class="doc-title">{contract.title}</h2>
+        {/if}
+        <div class="doc-content">
+          {#each contentBlocks as block (block)}
+            {#if block.type === 'text'}
+              <div class="doc-block">{@html block.html}</div>
+            {:else if block.type === 'html'}
+              <div class="doc-block">{@html block.content}</div>
+            {:else if block.type === 'divider'}
+              <hr class="doc-divider" />
+            {/if}
+          {/each}
+        </div>
       </div>
     {:else}
       <div class="pdf-placeholder">
-        <p>계약서 문서를 불러오는 중입니다.</p>
+        <p>계약서 내용을 준비 중입니다. 잠시 후 다시 시도해 주세요.</p>
       </div>
     {/if}
 
@@ -128,11 +167,9 @@
 
         <!-- 전자 서명 캔버스 -->
         <div class="sig-section">
-          <p class="sig-guide">아래 칸에 직접 서명해 주세요</p>
           <SignatureCanvas
             width={600}
             height={160}
-            minStrokes={3}
             onchange={handleSigChange}
           />
         </div>
@@ -230,18 +267,52 @@
     font-weight: 600;
   }
 
-  /* PDF */
-  .pdf-section {
+  /* 계약서 본문 */
+  .doc-section {
     background: #fff;
     border-radius: 20px;
-    overflow: hidden;
-    height: 420px;
+    padding: 24px;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
   }
-  .pdf-frame {
+  .doc-title {
+    font-size: 16px;
+    font-weight: 700;
+    color: var(--cs-dark, #100B32);
+    margin: 0 0 4px;
+  }
+  .doc-content {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+  }
+  .doc-block {
+    font-size: 14px;
+    line-height: 1.7;
+    color: var(--cs-dark, #100B32);
+  }
+  .doc-block :global(table.cs-contract-table) {
     width: 100%;
-    height: 100%;
+    border-collapse: collapse;
+    font-size: 12px;
+  }
+  .doc-block :global(table.cs-contract-table th),
+  .doc-block :global(table.cs-contract-table td) {
+    border: 1px solid #DDDDDD;
+    padding: 7px 10px;
+    text-align: left;
+  }
+  .doc-block :global(table.cs-contract-table th) {
+    background: #f6f6f6;
+    color: #666;
+    font-weight: 700;
+    white-space: nowrap;
+  }
+  .doc-divider {
     border: none;
-    display: block;
+    border-top: 1px solid var(--cs-lilac, #ECEBF4);
+    margin: 4px 0;
   }
   .pdf-placeholder {
     background: #fff;
@@ -285,13 +356,6 @@
     flex-direction: column;
     gap: 8px;
   }
-  .sig-guide {
-    font-size: 13px;
-    font-weight: 700;
-    color: var(--cs-dark, #100B32);
-    margin: 0;
-  }
-
   .sign-error {
     font-size: 13px;
     color: var(--cs-red-badge, #FF3535);
