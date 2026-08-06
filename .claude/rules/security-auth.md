@@ -101,6 +101,20 @@ hasSettingsAccess(role) → getRoleLevel(role) >= 50
 | 계정 생성 | `/cms/accounts` | ❌ | ✅ | ✅ |
 | 계정 목록·수정 | `/cms/accounts/list` | ❌ | ✅ | ✅ |
 | 코드 이관 | `/cms/codes` → `transferCode` | ❌ | ❌ | ✅ |
+| 코드설정 기타 전체(20개 액션 중 19개) | `/cms/codes` → `addCode`·`editCode`·`deleteCode`·`toggleActive`·`saveFormat`·`updateCodeRule`·`saveMapping`·`savePrefixCodes`·`addGroup`·`editGroup`·`deleteGroup`·`toggleGroupActive`·`toggleGroupProductFilter`·`toggleGroupPartnerType`·`addGroupItem`·`updateGroupItemSettings`·`removeGroupCombo`·`removeGroupItem`·`removeComboItem` | ❌ | ✅ | ✅ |
+
+> ⚠️ **QR-CASE-2(2026-08-XX 확정)**: `/cms/codes`의 액션 20개 중 `transferCode`만 superadmin
+> 게이트가 있었고, `saveFormat`(전 카테고리·전 상품의 향후 채번 방식을 좌우하는 전역 설정) 포함
+> 나머지 19개는 세션 체크만 있어 partner도 변경 가능한 무방비 상태였다. 전 카테고리 코드
+> 추가/수정/삭제, 조합코드그룹 관리 등은 전부 다른 상품·다른 파트너에게 영향을 주는 전역
+> 설정이라 전부 manager 이상(`hasSettingsAccess`)으로 통일 게이트했다.
+>
+> ⚠️ **QA 후속(2026-08-XX)**: 액션만 막고 페이지 자체는 role과 무관하게 항상 렌더링돼, partner가
+> 들어가면 모든 버튼이 보이는데 클릭해야만 403이 나는 혼란스러운 상태였다 — `/cms/codes`
+> `load()`에 `const { cmsRole } = await parent(); if (!hasSettingsAccess(cmsRole ?? ''))
+> throw redirect(303, '/cms?notice=access_denied')`를 추가해(accounts/customers 등 기존
+> manager+ 전용 페이지와 동일 패턴) 페이지 진입 자체를 막았다 — `/cms/codes`는 이제 예외 없이
+> partner 접근 불가.
 
 ### ⛔ form action에서 locals.cmsRole 직접 사용 절대 금지 (2026-07-23)
 
@@ -216,4 +230,4 @@ function verifyTossSignature(body: unknown, signature: string | null): boolean {
 
 ---
 
-*security-auth.md v3.2 | Harness Flow v3.2 | 보안·인증·RLS·CMS 역할*
+*security-auth.md v3.5 | Harness Flow v3.2 | 보안·인증·RLS·CMS 역할 | 2026-08-XX /cms/codes 20개 액션 전부 manager 이상(19개) + superadmin(transferCode) 게이트로 통일(QR-CASE-2), load() 페이지 진입 게이트 추가로 partner UI 노출 갭 해소*

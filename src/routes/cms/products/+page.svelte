@@ -1,12 +1,13 @@
 <script lang="ts">
   import { goto } from '$app/navigation'
-  import { enhance } from '$app/forms'
+  import { enhance, deserialize } from '$app/forms'
   import { fly, slide } from 'svelte/transition'
   import { invalidateAll } from '$app/navigation'
   import ProductDetailPanel from '$lib/components/cms/ProductDetailPanel.svelte'
   import CmsSimilarNameInput from '$lib/components/cms/CmsSimilarNameInput.svelte'
   import CmsPagination from '$lib/components/cms/CmsPagination.svelte'
   import type { PageData } from './$types'
+  import { csToast } from '$lib/utils/toast'
 
   interface Props { data: PageData }
   let { data }: Props = $props()
@@ -98,19 +99,193 @@
     return price.toLocaleString('ko-KR') + '원'
   }
 
+  // QR-LABEL-2: '기준 품번'은 실제 채번된(재고로 카운트되는) 자식 품번과 혼동되면 안 되므로,
+  // 실제 저장값을 그대로 노출하지 않고 코드 구조 + 순번 '0'(자리수만큼 0 패딩)으로 재구성해 표시한다.
+  function baseCodeDisplay(rp: { product_code: string | null; code_series?: Record<string, unknown> | null }): string | null {
+    const cs = rp.code_series
+    if (cs) {
+      const prefix = (cs.prefix as string) || 'CS'
+      const catCode = (cs.category_code as string) || ''
+      const yearMonth = cs.year_month as string | undefined
+      const datePart = yearMonth && yearMonth !== 'nodate' && yearMonth !== 'all' ? yearMonth : ''
+      const seqDigits = (cs.seq_digits as number) ?? 3
+      const suffix = (cs.suffix as string) || ''
+      return `${prefix}${catCode}${datePart}${'0'.repeat(seqDigits)}${suffix}`
+    }
+    if (rp.product_code) {
+      const seqDigits = 3
+      return rp.product_code.length > seqDigits
+        ? rp.product_code.slice(0, -seqDigits) + '0'.repeat(seqDigits)
+        : '0'.repeat(seqDigits)
+    }
+    return null
+  }
+
   function thumbUrl(imageUrls: string[]): string {
     const first = imageUrls[0]
     if (!first) return ''
     if (first.startsWith('http')) return first
-    return `https://res.cloudinary.com/crazyshot/image/upload/w_64,h_64,c_fill,f_auto,q_auto/${first}.jpg`
+    return `https://res.cloudinary.com/crazyshot/image/upload/w_108,h_108,c_fill,f_auto,q_auto/${first}.jpg`
   }
 
-  // 토글 상태 변경 후 즉시 목록 갱신
+  // BND-REGWARN-2: 상품 등록 후 경고 코드 → 한글 설명 매핑 + 1회 toast 표시
+  const REG_WARN_MSG: Record<string, string> = {
+    qr:      'QR 코드 생성에 실패했습니다. 상품 상세에서 QR을 재생성하거나 관리자에게 문의하세요.',
+    inv:     '재고(자식 상품) 자동 생성에 실패했습니다. 상품 상세 → 인벤토리에서 수동으로 추가하세요.',
+    code:    '품번(product_code) 발행에 실패했습니다. 코드설정 → 품번 탭에서 확인 후 재발행하세요.',
+    price:   '가격정책 저장에 실패했습니다. 상품 상세 → 가격정책 탭에서 다시 저장해주세요.',
+    options: '옵션상품 연결 저장에 실패했습니다. 상품 상세 → 옵션상품 탭에서 다시 저장해주세요.',
+    thumb:   '썸네일 이관이 실패해 원본 이미지를 대신 사용 중입니다. 이미지 탭에서 재업로드를 권장합니다.',
+  }
+
+  let regWarnShown = false
+  $effect(() => {
+    const warns = data.regWarn ?? []
+    if (warns.length === 0 || regWarnShown) return
+    regWarnShown = true
+    for (const code of warns) {
+      const msg = REG_WARN_MSG[code] ?? `등록 후 경고: ${code}`
+      csToast.warning(msg)
+    }
+    // URL에서 regWarn 파라미터 제거 (새로고침 시 재노출 방지)
+    const params = new URLSearchParams(window.location.search)
+    params.delete('regWarn')
+    const newUrl = params.toString() ? `/cms/products?${params.toString()}` : '/cms/products'
+    goto(newUrl, { replaceState: true, noScroll: true })
+  })
+
+  // BND-4: 토글 실패 시 toast 경고 + 토글 상태 롤백 (invalidateAll로 서버 상태 복원)
   function handleToggle() {
-    return async ({ result }: { result: { type: string } }) => {
+    return async ({ result }: { result: { type: string; data?: { error?: string } } }) => {
       if (result.type === 'success') {
         await invalidateAll()
+      } else {
+        // 실패 시 서버 상태로 롤백
+        const errMsg = (result as { data?: { error?: string } }).data?.error ?? '상태 변경에 실패했습니다.'
+        csToast.error(errMsg)
+        await invalidateAll()
       }
+    }
+  }
+
+  // QR-4: 재고 다건 QR 일괄 인쇄
+  let selectedInvIds = $state(new Set<string>())
+
+  // QR-STALE-1: selectedInvIds가 rootProduct(대표 상품)와 무관하게 유지돼, 다른 상품으로
+  // 이동해도 이전 상품에서 체크한 id가 그대로 남아있었다 — "선택 N개 QR 인쇄" 버튼은
+  // 그 N을 계속 보여주는데 실제 화면 체크박스는 전부 비어있고, 클릭하면 현재 상품의
+  // inventoryList에 그 id가 없어 "품번이 발행된 항목을 선택하세요" 경고만 뜨는 막다른 상태가
+  // 됐음. 대표 상품이 바뀔 때만 선택을 초기화한다(같은 상품 내 invalidateAll/자식 재선택으로는
+  // 유지되어야 하므로 rootProduct.id 변경 여부로만 판단).
+  let lastRootProductId = $state<string | null>(null)
+  $effect(() => {
+    const currentRootId = data.rootProduct?.id ?? null
+    if (currentRootId !== lastRootProductId) {
+      selectedInvIds = new Set()
+      lastRootProductId = currentRootId
+    }
+  })
+
+  function toggleInvSelect(id: string) {
+    const next = new Set(selectedInvIds)
+    if (next.has(id)) next.delete(id)
+    else next.add(id)
+    selectedInvIds = next
+    deleteInvPending = false // 선택이 바뀌면 삭제 무장 해제 — 다른 대상을 삭제하는 사고 방지
+  }
+
+  // INV-DEL-1: 선택 재고 일괄 삭제 — 기존 상품 삭제(handleDeleteProduct)와 동일한
+  // "1차 클릭: 토스트 경고 후 무장 / 2차 클릭: 실제 삭제" 안전장치 재사용
+  let deleteInvPending = $state(false)
+  let isDeletingInv = $state(false)
+
+  async function deleteSelectedInv() {
+    if (!deleteInvPending) {
+      deleteInvPending = true
+      csToast.warning('한번 더 누르면 선택한 재고가 삭제됩니다.')
+      return
+    }
+    isDeletingInv = true
+    try {
+      const fd = new FormData()
+      fd.append('ids', Array.from(selectedInvIds).join(','))
+      const res = await fetch('?/deleteSelectedInventory', { method: 'POST', body: fd })
+      const result = deserialize(await res.text()) as { type: string; data?: { error?: string } }
+      if (result.type !== 'success') {
+        throw new Error(result.data?.error ?? `삭제 요청이 실패했습니다 (status ${res.status})`)
+      }
+      csToast.success(`${selectedInvIds.size}개 재고가 삭제됐습니다.`)
+      selectedInvIds = new Set()
+      await invalidateAll()
+    } catch (e) {
+      csToast.error(e instanceof Error ? e.message : '삭제에 실패했습니다.')
+    } finally {
+      isDeletingInv = false
+      deleteInvPending = false
+    }
+  }
+
+  // QR-AUTO-1: '빠른 재고 등록'으로 생성된 재고는 몇 개든 즉시 QR 노출 영역(일괄 인쇄)에 반영
+  // ⚠️ printSelectedQR()을 여기서 자동 호출하지 않는다 — form 제출 → invalidateAll 등 여러 await를
+  // 거친 뒤 window.open()을 호출하면 사용자 제스처 유효기간이 끝나 브라우저가 거의 항상 팝업으로
+  // 차단한다(등록은 성공했는데 매번 에러 토스트가 뜨는 원인이었음). 체크박스만 선택해두고, 실제
+  // 인쇄창 열기는 이미 노출된 "선택 N개 QR 인쇄" 버튼의 직접 클릭에 맡긴다(그 클릭은 진짜 사용자
+  // 제스처라 절대 차단되지 않음).
+  function handleInventoryCreated(ids: string[]) {
+    selectedInvIds = new Set(ids)
+  }
+
+  async function printSelectedQR() {
+    const selected = (data.inventoryList ?? []).filter(
+      (u: { id: string; product_code: string | null }) => selectedInvIds.has(u.id) && u.product_code
+    )
+    if (selected.length === 0) {
+      csToast.warning('품번이 발행된 항목을 선택하세요.')
+      return
+    }
+    const QRCode = (await import('qrcode')).default
+    const items: Array<{ code: string; dataUrl: string }> = await Promise.all(
+      selected.map(async (u: { id: string; product_code: string | null }) => ({
+        code: u.product_code!,
+        dataUrl: await QRCode.toDataURL(u.product_code!, {
+          width: 160,
+          margin: 2,
+          color: { dark: '#100B32', light: '#FFFFFF' },
+        }),
+      }))
+    )
+    const html = `<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <title>QR 일괄 인쇄</title>
+  <style>
+    body { margin: 0; font-family: sans-serif; background: #fff; }
+    .qr-grid { display: flex; flex-wrap: wrap; gap: 12px; padding: 16px; }
+    .qr-item { display: flex; flex-direction: column; align-items: center; gap: 4px; border: 1px solid #ddd; padding: 10px; border-radius: 8px; width: 180px; box-sizing: border-box; }
+    .qr-img { width: 160px; height: 160px; display: block; }
+    .qr-code { font-size: 11px; font-weight: 700; color: #100B32; text-align: center; word-break: break-all; }
+    @media print { body { margin: 0; } .qr-grid { gap: 8px; padding: 8px; } }
+  </style>
+</head>
+<body>
+  <div class="qr-grid">
+    ${items.map(({ code, dataUrl }) => `
+      <div class="qr-item">
+        <img class="qr-img" src="${dataUrl}" alt="${code}" />
+        <span class="qr-code">${code}</span>
+      </div>
+    `).join('')}
+  </div>
+  <script>window.onload = function() { window.print(); }<\/script>
+</body>
+</html>`
+    const win = window.open('', '_blank')
+    if (win) {
+      win.document.write(html)
+      win.document.close()
+    } else {
+      csToast.error('팝업이 차단됐습니다. 팝업 허용 후 다시 시도하세요.')
     }
   }
 </script>
@@ -218,6 +393,7 @@
       {:else}
         <div class="card-list" role="list">
           {#each data.products as product (product.id)}
+            {@const rsc = data.rentalStatusCounts?.[product.id]}
             <div
               class="product-card"
               class:selected={data.selectedId === product.id}
@@ -253,6 +429,15 @@
                     <span class="cat-badge">{CATEGORY_LABEL[product.category] ?? product.category}</span>
                     <span class="stock-badge" class:stock-zero={product.assetCount === 0}>{product.assetCount}(on) / {product.assetTotal ?? 0}</span>
                   </div>
+                  {#if rsc && (rsc.holding + rsc.outgoing + rsc.renting + rsc.returning + rsc.returned) > 0}
+                    <div class="rs-row">
+                      {#if rsc.holding > 0}<span class="rs-chip">예약중 {rsc.holding}</span>{/if}
+                      {#if rsc.outgoing > 0}<span class="rs-chip">반출중 {rsc.outgoing}</span>{/if}
+                      {#if rsc.renting > 0}<span class="rs-chip rs-chip--active">대여중 {rsc.renting}</span>{/if}
+                      {#if rsc.returning > 0}<span class="rs-chip">반납중 {rsc.returning}</span>{/if}
+                      {#if rsc.returned > 0}<span class="rs-chip rs-chip--done">반납완료 {rsc.returned}</span>{/if}
+                    </div>
+                  {/if}
                   <p class="card-name">{product.name}</p>
                   {#if product.brand}
                     <p class="card-brand">{product.brand}</p>
@@ -308,6 +493,8 @@
     {#if panelOpen && data.rootProduct}
       {@const rp = data.rootProduct}
       {@const isRootOpen = data.selectedId === rp.id}
+      {@const rpsc = data.rentalStatusCounts?.[rp.id]}
+      {@const baseCode = baseCodeDisplay(rp)}
       <div class="detail-pane" transition:fly={{ x: 24, duration: 200 }}>
 
         <!-- 섹션 1: 대표 상품정보 등록관리 -->
@@ -335,8 +522,8 @@
                     src={thumbUrl(rp.image_urls)}
                     alt={rp.name}
                     class="rep-card-thumb"
-                    width="48"
-                    height="48"
+                    width="108"
+                    height="108"
                     loading="lazy"
                   />
                 {:else}
@@ -346,8 +533,23 @@
               <div class="rep-card-info">
                 <div class="rep-card-top">
                   <span class="cat-badge">{CATEGORY_LABEL[rp.category] ?? rp.category}</span>
-                  <span class="stock-badge" class:stock-zero={rp.assetCount === 0}>{rp.assetCount}(on) / {rp.assetTotal}</span>
+                  <span class="stock-badge" class:stock-zero={rp.assetCount === 0}>{rp.assetCount}(on) / {rp.assetTotal ?? 0}</span>
                 </div>
+                <!-- QR-LABEL-1: QR만으로는 코드를 읽을 수 없어 기준 품번을 텍스트로 병기.
+                     실제 채번값이 아닌 코드 구조 + 순번 '0'으로 재구성 표시(QR-LABEL-2) —
+                     재고로 카운트되는 실제 자식 품번과 혼동 방지 -->
+                {#if baseCode}
+                  <p class="rep-card-code">기준 품번 <span class="rep-card-code-val">{baseCode}</span></p>
+                {/if}
+                {#if rpsc && (rpsc.holding + rpsc.outgoing + rpsc.renting + rpsc.returning + rpsc.returned) > 0}
+                  <div class="rs-row">
+                    {#if rpsc.holding > 0}<span class="rs-chip">예약중 {rpsc.holding}</span>{/if}
+                    {#if rpsc.outgoing > 0}<span class="rs-chip">반출중 {rpsc.outgoing}</span>{/if}
+                    {#if rpsc.renting > 0}<span class="rs-chip rs-chip--active">대여중 {rpsc.renting}</span>{/if}
+                    {#if rpsc.returning > 0}<span class="rs-chip">반납중 {rpsc.returning}</span>{/if}
+                    {#if rpsc.returned > 0}<span class="rs-chip rs-chip--done">반납완료 {rpsc.returned}</span>{/if}
+                  </div>
+                {/if}
                 <p class="rep-card-name">{rp.name}</p>
                 {#if rp.brand}<p class="card-brand">{rp.brand}</p>{/if}
                 <div class="rep-card-prices">
@@ -377,7 +579,9 @@
                   rentalMethods={data.rentalMethods}
                   pickupPoints={data.pickupPoints}
                   shippingSettings={data.shippingSettings}
+                  rentalStatusCounts={data.rentalStatusCounts?.[rp.id]}
                   onclose={closePanel}
+                  oninventorycreated={handleInventoryCreated}
                 />
               {/key}
             </div>
@@ -386,7 +590,6 @@
 
         <!-- 섹션 2: 실 상품코드 반영 목록 -->
         <div class="inv-section">
-          <div class="inv-section-title">실 상품코드 반영 목록</div>
           {#if data.inventoryList && data.inventoryList.length > 0}
             <div class="inv-accordion">
               {#each data.inventoryList as unit, idx (unit.id)}
@@ -394,6 +597,19 @@
                 <div class="inv-acc-item" class:inv-acc-item--active={isActive}>
                   <!-- 아코디언 헤더 행 -->
                   <div class="inv-acc-header">
+                    <!-- QR-4: 개별 선택 체크박스 (품번 있는 항목만) -->
+                    {#if unit.product_code}
+                      <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
+                      <span class="inv-check-wrap" onclick={(e) => e.stopPropagation()}>
+                        <input
+                          type="checkbox"
+                          class="inv-check"
+                          checked={selectedInvIds.has(unit.id)}
+                          onchange={(e) => { e.stopPropagation(); toggleInvSelect(unit.id) }}
+                          aria-label="{unit.product_code} QR 인쇄 선택"
+                        />
+                      </span>
+                    {/if}
                     <button
                       type="button"
                       class="inv-acc-trigger"
@@ -408,16 +624,6 @@
                           <span class="inv-bar-code" class:inv-bar-code--active={isActive}>{unit.product_code ?? '—'}</span>
                         </div>
                         <span class="inv-bar-name">{unit.name}</span>
-                        {#if unit.price_rules.length > 0}
-                          <div class="inv-bar-badges">
-                            {#each unit.price_rules as rule (rule.duration_type)}
-                              <span class="inv-bar-badge">
-                                {rule.duration_type === '12h' ? '12H' : rule.duration_type === '24h' ? 'Day' : '월'}
-                                {rule.price.toLocaleString()}
-                              </span>
-                            {/each}
-                          </div>
-                        {/if}
                       </div>
                       <!-- 펼침 화살표 -->
                       <svg
@@ -463,6 +669,7 @@
                           pickupPoints={data.pickupPoints}
                           shippingSettings={data.shippingSettings}
                           onclose={closePanel}
+                          oninventorycreated={handleInventoryCreated}
                         />
                       {/key}
                     </div>
@@ -473,6 +680,21 @@
           {:else}
             <div class="inv-empty-notice">
               재고 미등록 상태입니다. 빠른재고등록으로 실 상품코드를 추가하세요.
+            </div>
+          {/if}
+          <!-- QR-4/INV-DEL-1: 선택 항목 액션 바 — 목록 최하단, 체크 시에만 노출 -->
+          {#if selectedInvIds.size > 0}
+            <div class="inv-action-bar">
+              <button type="button" class="inv-batch-print-btn" onclick={printSelectedQR}>
+                선택 {selectedInvIds.size}개 QR 인쇄
+              </button>
+              <button
+                type="button"
+                class="inv-batch-delete-btn"
+                class:inv-batch-delete-btn--pending={deleteInvPending}
+                disabled={isDeletingInv}
+                onclick={deleteSelectedInv}
+              >{isDeletingInv ? '삭제 중...' : deleteInvPending ? '한번 더 누르면 삭제됩니다' : `${selectedInvIds.size}개 삭제`}</button>
             </div>
           {/if}
         </div>
@@ -617,7 +839,7 @@
   .card-list {
     display: flex;
     flex-direction: column;
-    gap: 10px;
+    gap: 30px;
     padding-right: 4px;
   }
   /* 스크롤바 항상 표시 */
@@ -872,12 +1094,12 @@
   .rep-card {
     display: flex;
     align-items: center;
-    gap: 12px;
+    gap: 27px;
   }
   .rep-card-thumb-wrap {
     flex-shrink: 0;
-    width: 48px;
-    height: 48px;
+    width: 108px;
+    height: 108px;
     background: #E8E4F8;
     border-radius: var(--cms-radius-sm);
     overflow: hidden;
@@ -886,14 +1108,14 @@
     justify-content: center;
   }
   .rep-card-thumb {
-    width: 48px;
-    height: 48px;
+    width: 108px;
+    height: 108px;
     object-fit: cover;
     display: block;
   }
   .rep-card-thumb-empty {
-    width: 48px;
-    height: 48px;
+    width: 108px;
+    height: 108px;
     display: flex;
     align-items: center;
     justify-content: center;
@@ -908,6 +1130,15 @@
     gap: 6px;
   }
   .rep-card-top { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+  .rep-card-code {
+    font: var(--text-pc-script-12);
+    color: var(--cs-text-mid);
+    margin: 0;
+  }
+  .rep-card-code-val {
+    font-weight: 700;
+    color: var(--cs-purple);
+  }
   .rep-card-name {
     font: var(--text-pc-body-14);
     color: var(--cs-text);
@@ -935,13 +1166,66 @@
     gap: 6px;
     flex-shrink: 0;
   }
-  .inv-section-title {
-    padding: 0 4px;
-    font: var(--text-pc-descript-10);
-    font-weight: 700;
-    color: var(--cs-text-mid);
-    text-transform: uppercase;
-    letter-spacing: 0.04em;
+  /* QR-4/INV-DEL-1: 선택 항목 액션 바 — 목록 최하단, 스크롤 중에도 항상 보이도록 하단 고정.
+     BG 박스 레이아웃 없이 버튼만 배치(cms-uiux.md §7-3 표준 버튼 토큰 그대로 사용) */
+  .inv-action-bar {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 8px;
+    position: sticky;
+    bottom: 0;
+    z-index: 5;
+    padding-top: 8px;
+  }
+  /* QR-4: 일괄 인쇄 버튼 — cms-uiux.md §7-3 .btn-action(소형 인라인 액션) 표준 그대로 */
+  .inv-batch-print-btn {
+    display: inline-flex;
+    align-items: center;
+    height: 34px;
+    padding: 10px 20px;
+    background: var(--cs-purple);
+    color: var(--cs-white);
+    border: none;
+    border-radius: var(--cms-radius-sm);
+    font: var(--text-pc-script-12);
+    white-space: nowrap;
+    cursor: pointer;
+    transition: background 0.12s;
+  }
+  .inv-batch-print-btn:hover { background: var(--cs-purple-hover); }
+  /* INV-DEL-1: 선택 삭제 버튼 — CMS 표준 삭제 버튼(텍스트형 btn-danger-sm) 색상·반경·폰트는
+     그대로, 높이만 같은 액션 바의 .inv-batch-print-btn(34px)과 나란히 정렬되도록 맞춤 */
+  .inv-batch-delete-btn {
+    display: inline-flex;
+    align-items: center;
+    height: 34px;
+    padding: 0 16px;
+    background: var(--cs-error, #E53E3E);
+    border: none;
+    border-radius: var(--cms-radius-sm);
+    color: var(--cs-white);
+    font: var(--text-pc-script-12);
+    cursor: pointer;
+    white-space: nowrap;
+    transition: opacity 0.15s;
+  }
+  .inv-batch-delete-btn:hover:not(:disabled) { opacity: 0.8; }
+  .inv-batch-delete-btn--pending { opacity: 0.8; }
+  .inv-batch-delete-btn:disabled { opacity: 0.5; cursor: default; }
+  /* QR-4: 체크박스 래퍼 */
+  .inv-check-wrap {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    padding: 0 4px 0 8px;
+  }
+  .inv-check {
+    width: 16px;
+    height: 16px;
+    cursor: pointer;
+    accent-color: var(--cs-purple);
   }
   .inv-empty-notice {
     padding: 20px 16px;
@@ -956,7 +1240,7 @@
   .inv-accordion {
     display: flex;
     flex-direction: column;
-    gap: 4px;
+    gap: 20px;
     flex-shrink: 0;
   }
   .inv-acc-item {
@@ -975,6 +1259,7 @@
   .inv-acc-header {
     display: flex;
     align-items: center;
+    padding: 20px;
   }
   .inv-acc-trigger {
     flex: 1;
@@ -1050,23 +1335,6 @@
     overflow: hidden;
     text-overflow: ellipsis;
   }
-  .inv-bar-badges {
-    display: flex;
-    gap: 6px;
-    flex-shrink: 0;
-  }
-  .inv-bar-badge {
-    display: inline-flex;
-    align-items: center;
-    padding: 3px 8px;
-    background: var(--cs-purple-op10);
-    color: var(--cs-purple);
-    border-radius: var(--radius-sm);
-    font: var(--text-pc-script-12);
-    font-weight: 700;
-    white-space: nowrap;
-  }
-
   /* 화살표 아이콘 */
   .inv-acc-chevron {
     color: var(--cs-text-light);
@@ -1127,4 +1395,32 @@
     box-shadow: 0 1px 3px rgba(0,0,0,0.2);
   }
   .inv-bar-toggle.inv-bar-toggle--on .inv-bar-thumb { transform: translateX(16px); }
+
+  /* 대여 라이프사이클 상태별 재고 카운트 칩 */
+  .rs-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 3px;
+    margin-top: 3px;
+  }
+  .rs-chip {
+    display: inline-flex;
+    align-items: center;
+    padding: 2px 6px;
+    background: var(--cs-surface-gray);
+    color: var(--cs-text-mid);
+    border-radius: var(--radius-sm);
+    font-family: 'Noto Sans KR', sans-serif;
+    font-size: 10px;
+    font-weight: 500;
+    white-space: nowrap;
+  }
+  .rs-chip--active {
+    background: rgba(59, 47, 138, 0.08);
+    color: var(--cs-purple);
+  }
+  .rs-chip--done {
+    background: rgba(0, 0, 0, 0.04);
+    color: var(--cs-text-light);
+  }
 </style>

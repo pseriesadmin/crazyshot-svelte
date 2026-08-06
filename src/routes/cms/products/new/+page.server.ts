@@ -3,6 +3,7 @@ import { env } from '$env/dynamic/private'
 import { getSupabaseUrl } from '$lib/env/supabasePublic'
 import { createClient, type SupabaseClient } from '@supabase/supabase-js'
 import type { PageServerLoad, Actions } from './$types'
+import { invalidateProductSearchCache } from '$lib/server/searchEngine/adapters/productSearchIndex'
 
 // rental_period_options / rental_method_options 는 database.ts 미등록 — 우회 헬퍼
 function untypedFrom(sb: SupabaseClient, table: string) {
@@ -175,6 +176,26 @@ export const actions: Actions = {
     const salePrice = parseInt(salePriceRaw, 10) || null
     const saleOnly = form.get('sale_only') === 'true'
 
+    // BND-8/9: 가격 데이터를 INSERT 전에 파싱 + 검증 (실패 시 orphaned product 방지)
+    const depositAmountPre = parseFloat((form.get('deposit_amount') as string | null) ?? '0') || 0
+    const lateFeePerHourPre = parseFloat((form.get('late_fee_per_hour') as string | null) ?? '0') || 0
+    const damageFeePercentagePre = parseFloat((form.get('damage_fee_percentage') as string | null) ?? '0') || 0
+    const price12hPre = parseFloat((form.get('price_12h') as string | null) ?? '')
+    const price24hPre = parseFloat((form.get('price_24h') as string | null) ?? '')
+    const priceMonthlyPre = parseFloat((form.get('price_monthly') as string | null) ?? '')
+
+    if (depositAmountPre < 0 || depositAmountPre > 10_000_000)
+      return fail(400, { error: '보증금은 0~1,000만원 사이여야 합니다.' })
+    if (lateFeePerHourPre < 0 || lateFeePerHourPre > 500_000)
+      return fail(400, { error: '연체료는 0~500,000원 사이여야 합니다.' })
+    if (damageFeePercentagePre < 0 || damageFeePercentagePre > 100)
+      return fail(400, { error: '파손비율은 0~100 사이여야 합니다.' })
+    if (salePrice !== null && (salePrice < 0 || salePrice > 99_999_999))
+      return fail(400, { error: '판매가 범위를 초과했습니다.' })
+    // BND-9: 24시간 가격 필수 (sale_only 상품은 대여가격 불필요 — 스킵)
+    if (!saleOnly && (isNaN(price24hPre) || price24hPre <= 0))
+      return fail(400, { error: '24시간(1일) 가격은 필수입니다.' })
+
     const { data: product, error: productError } = await admin
       .from('products')
       .insert({
@@ -205,7 +226,9 @@ export const actions: Actions = {
 
     // QR payload 자동 생성 및 저장 (UUID 기반 — 슬러그 변경 시에도 불변)
     const qrPayload = `https://crazyshot.kr/qr/product/${product.id}`
-    await admin.from('products').update({ qr_payload: qrPayload }).eq('id', product.id)
+    const regWarnings: string[] = []
+    const { error: qrError } = await admin.from('products').update({ qr_payload: qrPayload }).eq('id', product.id)
+    if (qrError) regWarnings.push('qr')
 
     // 품번(product_code) 자동 발행 — generate_product_code RPC (SECURITY DEFINER)
     const comboRowId = (form.get('combo_row_id') as string | null) || null
@@ -254,22 +277,31 @@ export const actions: Actions = {
       }
     } else if (comboCodeId) {
       // 3-param 버전: code_id만 지정 (date_option은 taxonomy code_rule 또는 전역 설정)
-      await admin.rpc('generate_product_code', {
+      const { error: codeErr3 } = await admin.rpc('generate_product_code', {
         p_product_id: product.id,
         p_category: category,
         p_code_id: comboCodeId,
       })
+      if (codeErr3) regWarnings.push('code')
     } else {
       // 2-param 버전: 카테고리 기반 자동
-      await admin.rpc('generate_product_code', {
+      // ⚠️ p_code_id를 명시적으로 null 전달 — 생략 시 PostgREST가 2-param/3-param(default) 오버로드를
+      //    구분 못해 PGRST203(모호성) 에러 발생(2026-08-06 실제 curl 테스트로 확인된 라이브 버그)
+      const { error: codeErr2 } = await admin.rpc('generate_product_code', {
         p_product_id: product.id,
         p_category: category,
+        p_code_id: null,
       })
+      if (codeErr2) regWarnings.push('code')
     }
 
-    const depositAmount = parseFloat((form.get('deposit_amount') as string | null) ?? '0') || 0
-    const lateFeePerHour = parseFloat((form.get('late_fee_per_hour') as string | null) ?? '0') || 0
-    const damageFeePercentage = parseFloat((form.get('damage_fee_percentage') as string | null) ?? '0') || 0
+    // 위에서 INSERT 전에 파싱·검증된 값 재사용 (중복 파싱 없음)
+    const depositAmount = depositAmountPre
+    const lateFeePerHour = lateFeePerHourPre
+    const damageFeePercentage = damageFeePercentagePre
+    const price12h = price12hPre
+    const price24h = price24hPre
+    const priceMonthly = priceMonthlyPre
 
     type DurationTypeEnum = '12h' | '24h' | 'monthly'
     const priceRules: Array<{
@@ -280,10 +312,6 @@ export const actions: Actions = {
       late_fee_per_hour: number
       damage_fee_percentage: number
     }> = []
-
-    const price12h = parseFloat((form.get('price_12h') as string | null) ?? '')
-    const price24h = parseFloat((form.get('price_24h') as string | null) ?? '')
-    const priceMonthly = parseFloat((form.get('price_monthly') as string | null) ?? '')
 
     if (!isNaN(price12h) && price12h > 0) {
       priceRules.push({ product_id: product.id, duration_type: '12h', price: price12h, deposit_amount: depositAmount, late_fee_per_hour: lateFeePerHour, damage_fee_percentage: damageFeePercentage })
@@ -296,7 +324,8 @@ export const actions: Actions = {
     }
 
     if (priceRules.length > 0) {
-      await admin.from('price_rules').insert(priceRules)
+      const { error: priceInsertErr } = await admin.from('price_rules').insert(priceRules)
+      if (priceInsertErr) regWarnings.push('price')
     }
 
     // 옵션상품 연결 저장
@@ -304,16 +333,68 @@ export const actions: Actions = {
     let optionLinks: unknown[] = []
     try { optionLinks = JSON.parse(optionLinksRaw) } catch { /* ignore */ }
     if (Array.isArray(optionLinks) && optionLinks.length > 0) {
-      await admin.rpc('upsert_product_option_links', {
+      // JSONB 파라미터는 JS 배열 직접 전달 (JSON.stringify 금지 — string으로 처리되어 silent fail)
+      const { error: optionsErr } = await admin.rpc('upsert_product_option_links', {
         p_product_id: product.id,
-        p_option_links: JSON.stringify(optionLinks),
+        p_option_links: optionLinks,
       })
+      if (optionsErr) regWarnings.push('options')
     }
 
     // 재고 1개 자동 생성 (자식 상품 — create_hold_reservation 기준)
-    await admin.rpc('auto_create_inventory_for_product', { p_product_id: product.id })
+    const { error: invError } = await admin.rpc('auto_create_inventory_for_product', { p_product_id: product.id })
+    if (invError) regWarnings.push('inv')
+
+    // BND-11: 임시 업로드 이미지를 실제 product_id 폴더로 이관
+    const tempId = (form.get('temp_id') as string | null)?.trim()
+    if (tempId && image_urls.length > 0) {
+      const BUCKET = 'product-images'
+      const supabaseUrl = getSupabaseUrl()
+      const prefix = `${supabaseUrl}/storage/v1/object/public/${BUCKET}/`
+      const movedUrls: string[] = []
+      let anyMoved = false
+
+      for (const url of image_urls) {
+        const tempPrefix = `temp/${tempId}/`
+        if (!url.startsWith(prefix) || !url.slice(prefix.length).startsWith(tempPrefix)) {
+          movedUrls.push(url) // 외부 URL 또는 이미 이관된 URL → 그대로 유지
+          continue
+        }
+        const oldPath = url.slice(prefix.length)            // temp/{tempId}/large_{uuid}.webp
+        const fileName = oldPath.split('/').pop() ?? ''
+        const newLargePath = `${product.id}/${fileName}`
+        const thumbFileName = fileName.replace('large_', 'thumb_')
+        const thumbOldPath = `${tempPrefix}${thumbFileName}`
+        const thumbNewPath = `${product.id}/${thumbFileName}`
+
+        // Storage move (large + thumb)
+        const { error: moveErr } = await admin.storage.from(BUCKET).move(oldPath, newLargePath)
+        if (!moveErr) {
+          // thumb 이관: 실패 시 large 이미지를 thumb 경로로 copy (깨진 링크 방지 폴백)
+          const { error: thumbMoveErr } = await admin.storage.from(BUCKET).move(thumbOldPath, thumbNewPath)
+          if (thumbMoveErr) {
+            // BND-THUMB-1: thumb 이관 실패 → large → thumb 경로로 copy 폴백
+            await admin.storage.from(BUCKET).copy(newLargePath, thumbNewPath).catch(() => { /* copy도 실패하면 무시 */ })
+            regWarnings.push('thumb')
+          }
+          const newLargeUrl = admin.storage.from(BUCKET).getPublicUrl(newLargePath).data.publicUrl
+          movedUrls.push(newLargeUrl)
+          anyMoved = true
+        } else {
+          movedUrls.push(url) // large 이관 실패 시 temp URL 그대로 유지 (추후 배치 정리 대상)
+        }
+      }
+
+      if (anyMoved) {
+        // 이관된 URL로 products.image_urls 업데이트
+        await admin.from('products').update({ image_urls: movedUrls }).eq('id', product.id)
+      }
+    }
 
     // 등록 완료 후 해당 상품 패널 자동 오픈
-    throw redirect(303, `/cms/products?selected=${product.id}`)
+    // regWarn 파라미터가 있으면 products 페이지에서 경고 토스트 표시 (qr: QR생성 실패, inv: 재고생성 실패)
+    const warnParam = regWarnings.length > 0 ? `&regWarn=${encodeURIComponent(regWarnings.join(','))}` : ''
+    invalidateProductSearchCache() // 신규 상품 등록 → 검색 인덱스 즉시 무효화
+    throw redirect(303, `/cms/products?selected=${product.id}${warnParam}`)
   },
 }

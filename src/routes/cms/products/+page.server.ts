@@ -3,6 +3,8 @@ import { env } from '$env/dynamic/private'
 import { getSupabaseUrl } from '$lib/env/supabasePublic'
 import { createClient, type SupabaseClient } from '@supabase/supabase-js'
 import type { PageServerLoad, Actions } from './$types'
+import { productSearchOrFilter } from '$lib/utils/similarNameSuggest'
+import { invalidateProductSearchCache } from '$lib/server/searchEngine/adapters/productSearchIndex'
 
 // rental_period_options / rental_method_options 는 database.ts 미등록 — 우회 헬퍼
 function untypedFrom(sb: SupabaseClient, table: string) {
@@ -19,6 +21,12 @@ export const load: PageServerLoad = async ({ locals, url }) => {
   const pageParam = Math.max(1, parseInt(url.searchParams.get('page') ?? '1'))
   const selectedId = url.searchParams.get('selected') ?? null
   const initialTab = url.searchParams.get('tab') ?? null
+
+  // BND-REGWARN-1: 상품 등록 후 경고 파라미터 읽기 (qr/inv/code/price/options/thumb)
+  const regWarnParam = url.searchParams.get('regWarn') ?? null
+  const regWarn: string[] = regWarnParam
+    ? regWarnParam.split(',').map(s => s.trim()).filter(Boolean)
+    : []
 
   const PAGE_SIZE = 20
 
@@ -122,7 +130,14 @@ export const load: PageServerLoad = async ({ locals, url }) => {
     .is('deleted_at', null)
     .is('parent_product_id', null)
   if (categoryValues) countQ = countQ.in('category', categoryValues)
-  if (q) countQ = countQ.ilike('name', `%${q}%`)
+  // BND-5: 자동완성 매치 필드와 동일하게 name·brand·description·product_caption 확장 검색
+  if (q) countQ = countQ.or(productSearchOrFilter(q))
+
+  // BND-3: count 먼저 조회해 totalPages 산출 → pageParam을 clamp한 뒤 range 쿼리 실행
+  const { count: totalCount } = await countQ
+
+  const totalPages = Math.max(1, Math.ceil((totalCount ?? 0) / PAGE_SIZE))
+  const page = Math.min(pageParam, totalPages)
 
   // 목록 쿼리 — 부모 상품만 (재고 자식 제외)
   let listQ = admin
@@ -137,14 +152,12 @@ export const load: PageServerLoad = async ({ locals, url }) => {
   else                        listQ = listQ.order('created_at', { ascending: false })
 
   if (categoryValues) listQ = listQ.in('category', categoryValues)
-  if (q) listQ = listQ.ilike('name', `%${q}%`)
+  // BND-5: 동일 필드로 통일
+  if (q) listQ = listQ.or(productSearchOrFilter(q))
 
-  listQ = listQ.range((pageParam - 1) * PAGE_SIZE, pageParam * PAGE_SIZE - 1)
+  listQ = listQ.range((page - 1) * PAGE_SIZE, page * PAGE_SIZE - 1)
 
-  const [{ count: totalCount }, { data: products }] = await Promise.all([countQ, listQ])
-
-  const totalPages = Math.max(1, Math.ceil((totalCount ?? 0) / PAGE_SIZE))
-  const page = Math.min(pageParam, totalPages)
+  const { data: products } = await listQ
 
   const productIds = (products ?? []).map((p) => p.id)
 
@@ -156,22 +169,35 @@ export const load: PageServerLoad = async ({ locals, url }) => {
   const childFallback12h: Record<string, number> = {}
   const childFallback24h: Record<string, number> = {}
 
+  // 대여 라이프사이클 상태별 재고 집계 (자식 id → 부모 id 매핑 + rental_reservations 집계)
+  const childIdToParentId: Record<string, string> = {}
+  type RentalStatusBucket = {
+    holding: number    // 예약중: hold
+    outgoing: number   // 반출중: confirmed, shipped
+    renting: number    // 대여중: in_use
+    returning: number  // 반납중: return_requested
+    returned: number   // 반납완료: returned, completed
+  }
+  const rentalStatusCounts: Record<string, RentalStatusBucket> = {}
+
   if (productIds.length > 0) {
     // 재고 수 + 자식 price_rules (부모 미설정 시 카드 표시 fallback)
     // active: is_active=true (대여 가능) / total: 전체
     const { data: childRows } = await admin
       .from('products')
-      .select('parent_product_id, is_active, price_rules!left(duration_type, price, is_active, deleted_at)')
+      .select('id, parent_product_id, is_active, price_rules!left(duration_type, price, is_active, deleted_at)')
       .in('parent_product_id', productIds)
       .is('deleted_at', null)
 
     type ChildRow = {
+      id: string
       parent_product_id: string
       is_active: boolean
       price_rules: Array<{ duration_type: string; price: number; is_active: boolean; deleted_at: string | null }> | null
     }
     for (const row of (childRows ?? []) as ChildRow[]) {
       const pid = row.parent_product_id
+      childIdToParentId[row.id] = pid  // rental_reservations 집계용 매핑
       if (!stockCounts[pid]) stockCounts[pid] = { active: 0, total: 0 }
       stockCounts[pid].total += 1
       if (row.is_active) stockCounts[pid].active += 1
@@ -213,6 +239,33 @@ export const load: PageServerLoad = async ({ locals, url }) => {
       acc[p.product_id] = p.price
       return acc
     }, {})
+
+    // 대여 라이프사이클 상태별 집계 — 단일 쿼리로 모든 자식의 현재 예약 상태 취득
+    // rental_reservations.deleted_at 컬럼 없음 → 필터 없음
+    const allChildIds = Object.keys(childIdToParentId)
+    if (allChildIds.length > 0) {
+      const { data: rentalRows } = await admin
+        .from('rental_reservations')
+        .select('product_id, status')
+        .in('product_id', allChildIds)
+        .in('status', ['hold', 'confirmed', 'shipped', 'in_use', 'return_requested', 'returned', 'completed'])
+
+      type RentalRowEntry = { product_id: string; status: string | null }
+      for (const row of (rentalRows ?? []) as unknown as RentalRowEntry[]) {
+        const parentId = childIdToParentId[row.product_id]
+        if (!parentId || !row.status) continue
+        if (!rentalStatusCounts[parentId]) {
+          rentalStatusCounts[parentId] = { holding: 0, outgoing: 0, renting: 0, returning: 0, returned: 0 }
+        }
+        const sc = rentalStatusCounts[parentId]
+        const s = row.status
+        if (s === 'hold') sc.holding += 1
+        else if (s === 'confirmed' || s === 'shipped') sc.outgoing += 1
+        else if (s === 'in_use') sc.renting += 1
+        else if (s === 'return_requested') sc.returning += 1
+        else if (s === 'returned' || s === 'completed') sc.returned += 1
+      }
+    }
   }
 
   // 선택된 상품 상세 데이터 로드
@@ -234,6 +287,7 @@ export const load: PageServerLoad = async ({ locals, url }) => {
     name: string
     slug: string
     product_code: string | null
+    code_series: Record<string, unknown> | null
     brand: string | null
     description: string | null
     product_caption: string | null
@@ -300,6 +354,7 @@ export const load: PageServerLoad = async ({ locals, url }) => {
               .from('products')
               .select('name, brand, category, product_caption, slug, image_urls, allowed_period_ids, allowed_method_ids, allowed_pickup_ids, shipping_round_trip, shipping_delivery, shipping_return, sale_price, sale_only, content_blocks, keywords, components, specifications')
               .eq('id', spParentId)
+              .is('deleted_at', null)  // BND-2: 삭제된 부모가 선택된 경우 데이터 노출 차단
               .single()
           : Promise.resolve({ data: null }),
       ])
@@ -315,6 +370,7 @@ export const load: PageServerLoad = async ({ locals, url }) => {
         price12h: prices12h[sp.id] ?? null,
         price24h: prices24h[sp.id] ?? null,
         product_code: (sp as Record<string, unknown>).product_code as string | null ?? null,
+        code_series: (sp as Record<string, unknown>).code_series as Record<string, unknown> | null ?? null,
         name: (src.name as string) ?? sp.name,
         brand: (src.brand as string | null) ?? null,
         category: (src.category as string) ?? sp.category,
@@ -373,6 +429,7 @@ export const load: PageServerLoad = async ({ locals, url }) => {
     price12h: number | null
     price24h: number | null
     product_code: string | null
+    code_series: Record<string, unknown> | null
     assetCount: number
     assetTotal: number
   }
@@ -401,13 +458,44 @@ export const load: PageServerLoad = async ({ locals, url }) => {
         .map((r) => ({ duration_type: r.duration_type, price: r.price })),
     }))
 
+    // PAGE-SCOPE-1: stockCounts/rentalStatusCounts/prices12h·24h는 현재 페이지(productIds,
+    // 20개)로만 집계됨 — 다른 페이지·필터에 있는 상품이 선택되면 그 맵에 값이 없어 재고/가격/
+    // 예약상태가 전부 0 또는 빈 값으로 잘못 표시될 수 있었다. inventoryList는 selectedId와
+    // 무관하게 항상 rootId 기준으로 직접 조회되므로, 대표 상품의 재고 수는 이걸로 직접 계산해
+    // 페이지네이션과 완전히 무관하게 만든다.
+    const rootAssetCount = inventoryList.filter((u) => u.is_active).length
+    const rootAssetTotal = inventoryList.length
+
+    // 대표 상품의 실시간 예약상태 집계도 동일한 이유로 inventoryList의 자식 id 기준으로 직접
+    // 재조회한다(페이지네이션 무관, stockCounts와 동일하게 20개 집계 맵에 의존하지 않음).
+    const rootChildIds = inventoryList.map((u) => u.id)
+    if (rootChildIds.length > 0) {
+      const { data: rootRentalRows } = await admin
+        .from('rental_reservations')
+        .select('status')
+        .in('product_id', rootChildIds)
+        .in('status', ['hold', 'confirmed', 'shipped', 'in_use', 'return_requested', 'returned', 'completed'])
+
+      const bucket: RentalStatusBucket = { holding: 0, outgoing: 0, renting: 0, returning: 0, returned: 0 }
+      for (const row of (rootRentalRows ?? []) as Array<{ status: string | null }>) {
+        const s = row.status
+        if (s === 'hold') bucket.holding += 1
+        else if (s === 'confirmed' || s === 'shipped') bucket.outgoing += 1
+        else if (s === 'in_use') bucket.renting += 1
+        else if (s === 'return_requested') bucket.returning += 1
+        else if (s === 'returned' || s === 'completed') bucket.returned += 1
+      }
+      rentalStatusCounts[rootId] = bucket
+    }
+
     // 대표 상품정보 (대표 섹션 카드 표시용)
     if (parentProductId) {
-      // 자식 선택: 부모 데이터 별도 조회
+      // 자식 선택: 부모 데이터 별도 조회 (BND-2: 삭제된 부모 노출 차단)
       const { data: rpData } = await admin
         .from('products')
-        .select('id, name, brand, category, image_urls, product_code')
+        .select('id, name, brand, category, image_urls, product_code, code_series')
         .eq('id', rootId)
+        .is('deleted_at', null)
         .single()
       if (rpData) {
         rootProduct = {
@@ -416,11 +504,14 @@ export const load: PageServerLoad = async ({ locals, url }) => {
           brand: (rpData as Record<string, unknown>).brand as string | null,
           category: rpData.category as string,
           image_urls: (rpData.image_urls as string[]) ?? [],
-          price12h: prices12h[rootId] ?? childFallback12h[rootId] ?? null,
-          price24h: prices24h[rootId] ?? childFallback24h[rootId] ?? null,
+          // selectedProduct.price12h/24h는 policySourceId(=부모) 기준 전용 쿼리로 이미
+          // 페이지네이션과 무관하게 정확히 계산돼 있음(위 selectedPriceRules) — 재사용
+          price12h: selectedProduct?.price12h ?? null,
+          price24h: selectedProduct?.price24h ?? null,
           product_code: (rpData as Record<string, unknown>).product_code as string | null,
-          assetCount: stockCounts[rootId]?.active ?? 0,
-          assetTotal: stockCounts[rootId]?.total ?? 0,
+          code_series: (rpData as Record<string, unknown>).code_series as Record<string, unknown> | null,
+          assetCount: rootAssetCount,
+          assetTotal: rootAssetTotal,
         }
       }
     } else if (selectedProduct) {
@@ -434,8 +525,9 @@ export const load: PageServerLoad = async ({ locals, url }) => {
         price12h: selectedProduct.price12h ?? null,
         price24h: selectedProduct.price24h ?? null,
         product_code: (selectedProduct as unknown as Record<string, unknown>).product_code as string | null,
-        assetCount: stockCounts[selectedProduct.id]?.active ?? 0,
-        assetTotal: stockCounts[selectedProduct.id]?.total ?? 0,
+        code_series: selectedProduct.code_series,
+        assetCount: rootAssetCount,
+        assetTotal: rootAssetTotal,
       }
     }
   }
@@ -482,10 +574,106 @@ export const load: PageServerLoad = async ({ locals, url }) => {
     rentalMethods,
     pickupPoints,
     shippingSettings,
+    rentalStatusCounts,
+    regWarn,  // BND-REGWARN-1: 상품 등록 경고 코드 목록
   }
 }
 
 export const actions: Actions = {
+  // QR-RETRY-1: 과거 '빠른 재고 등록' 당시 품번 채번(generate_inventory_product_code)이 실패해
+  // 영구히 품번 없이 남은 자식(재고) 상품을 위한 자가복구 액션. 이미 품번이 있으면 아무 것도 하지
+  // 않음(§2-2 영구불변 — 재발급 아님, 미완료 채번을 완료시키는 것뿐).
+  retryProductCode: async ({ request, locals }) => {
+    const { session } = await locals.safeGetSession()
+    if (!session) return fail(401, { error: '인증 필요' })
+
+    const form = await request.formData()
+    const productId = form.get('product_id') as string | null
+    if (!productId) return fail(400, { error: '상품 ID 누락' })
+
+    const admin = createClient(getSupabaseUrl(), env.SUPABASE_SERVICE_ROLE_KEY ?? '')
+
+    const { data: child, error: childErr } = await admin
+      .from('products')
+      .select('id, product_code, parent_product_id')
+      .eq('id', productId)
+      .is('deleted_at', null)
+      .single()
+
+    if (childErr || !child) return fail(404, { error: '상품을 찾을 수 없습니다.' })
+    if (!child.parent_product_id) return fail(400, { error: '대표 상품에는 품번을 채번할 수 없습니다.' })
+    if (child.product_code) return { success: true, alreadyIssued: true }
+
+    let { error: codeErr } = await admin.rpc('generate_inventory_product_code', {
+      p_product_id: child.id,
+      p_parent_product_id: child.parent_product_id,
+    })
+
+    // QR-RETRY-3: 레거시 부모(product_code는 있으나 code_series 없음)의 품번 문자열 역산 폴백은
+    // prefix가 관례값 'CS'가 아니면 실패한다(migration 194 — 실사용 중 확인된 한계). 그런
+    // 경우 정공법(카테고리 기준 code_series 정식 설정)으로 자동 전환 후 1회 재시도한다.
+    if (codeErr) {
+      const { data: parent } = await admin
+        .from('products')
+        .select('category, code_series')
+        .eq('id', child.parent_product_id)
+        .is('deleted_at', null)
+        .single()
+
+      if (parent && !parent.code_series) {
+        const { error: seriesErr } = await admin.rpc('generate_product_code', {
+          p_product_id: child.parent_product_id,
+          p_category: parent.category,
+          p_code_id: null,
+        })
+        if (!seriesErr) {
+          ;({ error: codeErr } = await admin.rpc('generate_inventory_product_code', {
+            p_product_id: child.id,
+            p_parent_product_id: child.parent_product_id,
+          }))
+        }
+      }
+    }
+
+    if (codeErr) return fail(500, { error: `품번 채번에 실패했습니다: ${codeErr.message}` })
+
+    return { success: true }
+  },
+
+  // QR-RETRY-2: 등록 당시 generate_product_code 호출이 실패해(regWarn=code) code_series가
+  // 영구히 비어있는 대표 상품을 위한 자가복구 액션. code_series가 이미 있으면 아무 것도 하지
+  // 않음(generate_product_code 자체에도 동일 가드가 있어 이중 안전).
+  retryCodeSeries: async ({ request, locals }) => {
+    const { session } = await locals.safeGetSession()
+    if (!session) return fail(401, { error: '인증 필요' })
+
+    const form = await request.formData()
+    const productId = form.get('product_id') as string | null
+    if (!productId) return fail(400, { error: '상품 ID 누락' })
+
+    const admin = createClient(getSupabaseUrl(), env.SUPABASE_SERVICE_ROLE_KEY ?? '')
+
+    const { data: parent, error: parentErr } = await admin
+      .from('products')
+      .select('id, category, code_series, parent_product_id')
+      .eq('id', productId)
+      .is('deleted_at', null)
+      .single()
+
+    if (parentErr || !parent) return fail(404, { error: '상품을 찾을 수 없습니다.' })
+    if (parent.parent_product_id) return fail(400, { error: '자식(재고) 상품에는 품번 체계를 설정할 수 없습니다. 대표 상품에서 진행하세요.' })
+    if (parent.code_series) return { success: true, alreadySet: true }
+
+    const { error: seriesErr } = await admin.rpc('generate_product_code', {
+      p_product_id: parent.id,
+      p_category: parent.category,
+      p_code_id: null,
+    })
+    if (seriesErr) return fail(500, { error: `품번 체계 설정에 실패했습니다: ${seriesErr.message}` })
+
+    return { success: true }
+  },
+
   toggleStatus: async ({ request, locals }) => {
     const { session } = await locals.safeGetSession()
     if (!session) return fail(401, { error: '인증 필요' })
@@ -494,9 +682,18 @@ export const actions: Actions = {
     const id = form.get('id') as string
     const isActive = form.get('is_active') === 'true'
 
-    const admin = createClient(getSupabaseUrl(), env.SUPABASE_SERVICE_ROLE_KEY ?? '')
-    await admin.from('products').update({ is_active: !isActive }).eq('id', id)
+    if (!id) return fail(400, { error: '상품 ID 누락' })
 
+    const admin = createClient(getSupabaseUrl(), env.SUPABASE_SERVICE_ROLE_KEY ?? '')
+    // BND-4: 서버 UPDATE 실패 시 fail() 반환
+    const { error: toggleErr } = await admin
+      .from('products')
+      .update({ is_active: !isActive })
+      .eq('id', id)
+
+    if (toggleErr) return fail(500, { error: '상태 변경에 실패했습니다.' })
+
+    invalidateProductSearchCache() // is_active 변경 → 검색 인덱스 즉시 무효화
     return { success: true }
   },
 
@@ -572,12 +769,19 @@ export const actions: Actions = {
       const salePrice = parseInt((form.get('sale_price') as string | null) ?? '0') || null
       const saleOnly = form.get('sale_only') === 'true'
 
-      // sale_price / sale_only → products 테이블
-      await admin.from('products').update({ sale_price: salePrice, sale_only: saleOnly }).eq('id', productId)
-
       const depositAmount = parseFloat((form.get('deposit_amount') as string | null) ?? '0') || 0
       const lateFeePerHour = parseFloat((form.get('late_fee_per_hour') as string | null) ?? '0') || 0
       const damageFeePercentage = parseFloat((form.get('damage_fee_percentage') as string | null) ?? '0') || 0
+
+      // BND-8: 서버측 범위 검증 (클라이언트 min/max 우회 방어)
+      if (depositAmount < 0 || depositAmount > 10_000_000)
+        return fail(400, { error: '보증금은 0~1,000만원 사이여야 합니다.' })
+      if (lateFeePerHour < 0 || lateFeePerHour > 500_000)
+        return fail(400, { error: '연체료는 0~500,000원 사이여야 합니다.' })
+      if (damageFeePercentage < 0 || damageFeePercentage > 100)
+        return fail(400, { error: '파손비율은 0~100 사이여야 합니다.' })
+      if (salePrice !== null && (salePrice < 0 || salePrice > 99_999_999))
+        return fail(400, { error: '판매가 범위를 초과했습니다.' })
 
       type DurationTypeEnum = '12h' | '24h' | 'monthly'
       const durationTypes: DurationTypeEnum[] = ['12h', '24h', 'monthly']
@@ -587,20 +791,27 @@ export const actions: Actions = {
         'monthly': parseFloat((form.get('price_monthly') as string | null) ?? '') || null,
       }
 
+      // BND-9: 24시간 가격 필수 강제 (sale_only 상품은 대여가격 불필요 — 스킵)
+      if (!saleOnly && (!priceMap['24h'] || priceMap['24h'] <= 0))
+        return fail(400, { error: '24시간(1일) 가격은 필수입니다.' })
+
+      // sale_price / sale_only → products 테이블
+      await admin.from('products').update({ sale_price: salePrice, sale_only: saleOnly }).eq('id', productId)
+
       for (const dtype of durationTypes) {
         // eslint-disable-next-line security/detect-object-injection
         const price = priceMap[dtype]
-        if (price && price > 0) {
-          // soft-delete된 행 포함 조회 (partial unique index WHERE deleted_at IS NULL 대응)
-          const { data: anyRule } = await admin
-            .from('price_rules')
-            .select('id, deleted_at')
-            .eq('product_id', productId)
-            .eq('duration_type', dtype)
-            .maybeSingle()
+        // soft-delete된 행 포함 조회 (partial unique index WHERE deleted_at IS NULL 대응)
+        const { data: anyRule } = await admin
+          .from('price_rules')
+          .select('id, deleted_at')
+          .eq('product_id', productId)
+          .eq('duration_type', dtype)
+          .maybeSingle()
 
+        if (price && price > 0) {
+          // 가격 입력 있음 → 기존 행 재활성화 또는 신규 INSERT
           if (anyRule) {
-            // 기존 행(active 또는 soft-deleted) 모두 UPDATE로 재활성화
             await admin.from('price_rules').update({
               price,
               deposit_amount: depositAmount,
@@ -619,6 +830,13 @@ export const actions: Actions = {
               damage_fee_percentage: damageFeePercentage,
             })
           }
+        } else if (dtype !== '24h' && anyRule && !anyRule.deleted_at) {
+          // BND-PRICEDEL-1: 12h/monthly 가격을 비워서 저장하면 소프트삭제 (24h 제외 — 필수 보호됨)
+          // anyRule.deleted_at이 null인 active 행만 대상 (이미 soft-deleted인 행은 변경 불필요)
+          await admin.from('price_rules').update({
+            is_active: false,
+            deleted_at: new Date().toISOString(),
+          }).eq('id', anyRule.id)
         }
       }
     }
@@ -681,11 +899,13 @@ export const actions: Actions = {
 
     if (sectionType === 'content') {
       let content_blocks: unknown = null
-      let keywords: unknown = null
+      let keywords: string[] = []
       const blocksStr = form.get('content_blocks') as string | null
       const keywordsStr = form.get('keywords') as string | null
       if (blocksStr) { try { content_blocks = JSON.parse(blocksStr) } catch { /* ignore */ } }
       if (keywordsStr) { try { keywords = JSON.parse(keywordsStr) } catch { /* ignore */ } }
+      // RTN-LOW-1(3): 등록과 동일하게 최대 10개 cap
+      keywords = (Array.isArray(keywords) ? keywords : []).filter(Boolean).slice(0, 10)
 
       const { error: updateError } = await admin
         .from('products')
@@ -741,6 +961,10 @@ export const actions: Actions = {
       }
     }
 
+    // 검색 인덱스 대상 필드(name/brand/category/product_caption/content_blocks/slug)를 변경한 경우 즉시 무효화
+    if (['basic', 'slug', 'content'].includes(sectionType ?? '')) {
+      invalidateProductSearchCache()
+    }
     return { success: true, sectionType }
   },
 
@@ -760,16 +984,75 @@ export const actions: Actions = {
       .eq('id', productId)
       .single()
 
+    const now = new Date().toISOString()
     const { error } = await admin
       .from('products')
-      .update({ deleted_at: new Date().toISOString() })
+      .update({ deleted_at: now })
       .eq('id', productId)
 
     if (error) return fail(500, { error: '삭제에 실패했습니다.' })
 
-    // 자식(재고 단위) 삭제로 부모의 남은 재고가 0이 되면 부모 노출을 자동 OFF — 재고 없는 상품이 사용자 화면에 그대로 노출되는 것 방지
     const parentId = (target as { parent_product_id: string | null } | null)?.parent_product_id
+
     if (parentId) {
+      // 자식(재고 단위) 삭제 — 부모의 남은 재고가 0이 되면 부모 노출 자동 OFF
+      const { count } = await admin
+        .from('products')
+        .select('id', { count: 'exact', head: true })
+        .eq('parent_product_id', parentId)
+        .is('deleted_at', null)
+      if ((count ?? 0) === 0) {
+        await admin.from('products').update({ is_active: false }).eq('id', parentId)
+      }
+    } else {
+      // BND-1: 부모 삭제 시 활성 자식(재고) 모두 소프트삭제 → 예약 배정 대상 제외
+      await admin
+        .from('products')
+        .update({ deleted_at: now })
+        .eq('parent_product_id', productId)
+        .is('deleted_at', null)
+    }
+
+    invalidateProductSearchCache() // 상품 삭제 → 검색 인덱스 즉시 무효화
+    return { success: true, action: 'deleteProduct' }
+  },
+
+  // INV-DEL-1: 인벤토리 아코디언 "N개 삭제" — 체크된 자식(재고) 일괄 소프트삭제.
+  // deleteProduct의 자식 삭제 분기(부모 남은 재고 0이면 부모 노출 자동 OFF)와 동일 정책을
+  // 여러 건에 적용한다.
+  deleteSelectedInventory: async ({ request, locals }) => {
+    const { session } = await locals.safeGetSession()
+    if (!session) return fail(401, { error: '인증 필요' })
+
+    const form = await request.formData()
+    const idsRaw = (form.get('ids') as string | null) ?? ''
+    const ids = idsRaw.split(',').map((s) => s.trim()).filter(Boolean)
+    if (ids.length === 0) return fail(400, { error: '삭제할 항목이 없습니다.' })
+
+    const admin = createClient(getSupabaseUrl(), env.SUPABASE_SERVICE_ROLE_KEY ?? '')
+
+    const { data: targets } = await admin
+      .from('products')
+      .select('id, parent_product_id')
+      .in('id', ids)
+      .not('parent_product_id', 'is', null)
+      .is('deleted_at', null)
+
+    if (!targets || targets.length === 0) return fail(404, { error: '삭제할 항목을 찾을 수 없습니다.' })
+
+    const now = new Date().toISOString()
+    const { error } = await admin
+      .from('products')
+      .update({ deleted_at: now })
+      .in('id', ids)
+
+    if (error) return fail(500, { error: '삭제에 실패했습니다.' })
+
+    // 부모의 남은 재고가 0이 되면 부모 노출 자동 OFF (단일 삭제와 동일 정책)
+    const parentIds = [...new Set(
+      targets.map((t) => (t as { parent_product_id: string | null }).parent_product_id).filter((id): id is string => !!id)
+    )]
+    for (const parentId of parentIds) {
       const { count } = await admin
         .from('products')
         .select('id', { count: 'exact', head: true })
@@ -780,7 +1063,7 @@ export const actions: Actions = {
       }
     }
 
-    return { success: true, action: 'deleteProduct' }
+    return { success: true, action: 'deleteSelectedInventory', count: targets.length }
   },
 
   cloneProduct: async ({ request, locals }) => {
@@ -801,7 +1084,7 @@ export const actions: Actions = {
 
     const { data: source, error: sourceError } = await admin
       .from('products')
-      .select('id, category, name, slug, brand, description, product_caption, image_urls, specifications, sale_price, sale_only, product_code, parent_product_id, content_blocks, keywords')
+      .select('id, category, name, slug, brand, description, product_caption, image_urls, specifications, sale_price, sale_only, product_code, code_series, parent_product_id, content_blocks, keywords')
       .eq('id', sourceProductId)
       .is('deleted_at', null)
       .single()
@@ -810,9 +1093,14 @@ export const actions: Actions = {
 
     // ── add_inventory 모드: 동일 상품 재고 추가 ──────────────────
     if (mode === 'add_inventory') {
-      const productCode = (source as Record<string, unknown>).product_code as string | null
-      if (!productCode) {
-        return fail(400, { error: '부모 상품에 품번이 없습니다. 먼저 품번을 발행해주세요.' })
+      // CODE-SERIES-5: product_code 체크 → code_series 체크로 변경
+      // 부모에 채번 구조(code_series)가 없으면 자식 품번 채번 불가.
+      // 단, code_series 정책 이전에 이미 product_code를 발급받은 레거시 부모는
+      // generate_inventory_product_code의 즉석 역산 폴백(Migration 194)으로 계속 동작 가능하므로 허용.
+      const codeSeries = (source as Record<string, unknown>).code_series
+      const legacyProductCode = (source as Record<string, unknown>).product_code
+      if (!codeSeries && !legacyProductCode) {
+        return fail(400, { error: '부모 상품의 품번 체계가 설정되지 않았습니다. 먼저 상품을 다시 등록하거나 관리자에게 문의하세요.' })
       }
 
       // source가 이미 재고 자식 상품인 경우 루트 ID 사용 (2단계 이상 중첩 방지)
@@ -827,8 +1115,17 @@ export const actions: Actions = {
         .is('deleted_at', null)
 
       const createdIds: string[] = []
+      const invWarnings: string[] = []
       for (let i = 1; i <= count; i++) {
-        const slug = `${source.slug}-inv-${Date.now()}-${i}`
+        // RTN-3: new_product 모드와 동일하게 slug 중복 확인 루프 적용
+        let slug = `${source.slug}-inv`
+        let invSuffix = 1
+        while (true) {
+          const { data: slugCheck } = await admin
+            .from('products').select('id').eq('slug', slug).is('deleted_at', null).maybeSingle()
+          if (!slugCheck) break
+          slug = `${source.slug}-inv-${invSuffix++}`
+        }
         const newId = crypto.randomUUID()
 
         const { data: newProduct, error: insertError } = await admin
@@ -846,7 +1143,7 @@ export const actions: Actions = {
             specifications: source.specifications,
             content_blocks: (source as Record<string, unknown>).content_blocks ?? [],
             keywords: (source as Record<string, unknown>).keywords ?? [],
-            is_active: false,
+            is_active: true, // products.md §3: 신규 자식 기본값 true (즉시 대여 가능)
             sale_price: source.sale_price,
             sale_only: source.sale_only,
             parent_product_id: rootProductId,
@@ -858,13 +1155,22 @@ export const actions: Actions = {
           return fail(500, { error: `${i}번째 재고 추가에 실패했습니다.` })
         }
 
-        await admin.rpc('generate_inventory_product_code', {
+        let { error: codeErr } = await admin.rpc('generate_inventory_product_code', {
           p_product_id: newProduct.id,
           p_parent_product_id: rootProductId,
         })
+        if (codeErr) {
+          // products.md §2-3: 모든 재고는 생성과 동시에 품번(QR 콘텐츠)을 반드시 가져야 함 —
+          // 일시적 오류(락 경합 등) 대비 1회 재시도 후에도 실패하면 경고로 알림
+          ;({ error: codeErr } = await admin.rpc('generate_inventory_product_code', {
+            p_product_id: newProduct.id,
+            p_parent_product_id: rootProductId,
+          }))
+        }
+        if (codeErr) invWarnings.push(`${i}번째 재고 품번 발행 실패 (수동 확인 필요)`)
 
         if (sourcePriceRulesInv && sourcePriceRulesInv.length > 0) {
-          await admin.from('price_rules').insert(
+          const { error: priceErr } = await admin.from('price_rules').insert(
             sourcePriceRulesInv.map((rule) => ({
               product_id: newProduct.id,
               duration_type: rule.duration_type,
@@ -874,20 +1180,30 @@ export const actions: Actions = {
               damage_fee_percentage: rule.damage_fee_percentage,
             }))
           )
+          if (priceErr) invWarnings.push(`${i}번째 재고 가격정책 복사 실패 (수동 확인 필요)`)
         }
 
         const { data: invSourceOptions } = await admin
           .rpc('get_product_option_links', { p_product_id: rootProductId })
         if (invSourceOptions && Array.isArray(invSourceOptions) && invSourceOptions.length > 0) {
-          await admin.rpc('upsert_product_option_links', {
+          // JSONB 파라미터는 JS 배열 직접 전달 (JSON.stringify 금지 — string으로 처리되어 silent fail)
+          const { error: optErr } = await admin.rpc('upsert_product_option_links', {
             p_product_id: newProduct.id,
-            p_option_links: JSON.stringify(invSourceOptions),
+            p_option_links: invSourceOptions,
           })
+          if (optErr) invWarnings.push(`${i}번째 재고 옵션링크 복사 실패 (수동 확인 필요)`)
         }
 
         createdIds.push(newProduct.id)
       }
-      return { success: true, cloned: createdIds.length, mode: 'add_inventory', partnerCode: false }
+      return {
+        success: true,
+        cloned: createdIds.length,
+        createdIds,
+        mode: 'add_inventory',
+        partnerCode: false,
+        warnings: invWarnings.length > 0 ? invWarnings : undefined,
+      }
     }
 
     // ── new_product 모드: 기존 복제 로직 ─────────────────────────
@@ -929,8 +1245,10 @@ export const actions: Actions = {
           partnerCodeId = subCode?.id ?? null
         }
 
-        // fallback: 카테고리 매칭 불가 시 combo_row의 첫 번째 taxonomy_code_id 직접 사용
-        if (!partnerCodeId) partnerCodeId = tcIds[0]
+        // BND-PARTNERCODE-1: 카테고리 불일치 시 조용한 폴백 제거 → 명확 차단
+        if (!partnerCodeId) {
+          return fail(400, { error: '선택한 조합코드가 이 상품의 카테고리와 맞지 않습니다. 올바른 조합코드를 선택해주세요.' })
+        }
       }
     }
 
@@ -942,6 +1260,7 @@ export const actions: Actions = {
       .is('deleted_at', null)
 
     const createdIds: string[] = []
+    const cloneWarnings: string[] = []
 
     for (let i = 1; i <= count; i++) {
       let slug = `${source.slug}-copy`
@@ -969,7 +1288,7 @@ export const actions: Actions = {
           specifications: source.specifications,
           content_blocks: (source as Record<string, unknown>).content_blocks ?? [],
           keywords: (source as Record<string, unknown>).keywords ?? [],
-          is_active: false,
+          is_active: false, // 신규 부모 복제 상품은 미노출 상태로 시작 (의도된 동작)
           sale_price: source.sale_price,
           sale_only: source.sale_only,
         })
@@ -986,20 +1305,25 @@ export const actions: Actions = {
             error: `이 카테고리에 선택한 조합코드 하위 분류코드가 등록되지 않았습니다. 코드설정에서 먼저 추가해주세요.`,
           })
         }
-        await admin.rpc('generate_product_code', {
+        const { error: codeErr } = await admin.rpc('generate_product_code', {
           p_product_id: newProduct.id,
           p_category: source.category,
           p_code_id: partnerCodeId,
         })
+        if (codeErr) cloneWarnings.push(`${i}번째 복제 품번 발행 실패 (수동 확인 필요)`)
       } else if (autoCode) {
-        await admin.rpc('generate_product_code', {
+        // ⚠️ p_code_id를 명시적으로 null 전달 — 생략 시 PostgREST 오버로드 모호성(PGRST203) 발생
+        //    (2026-08-06 실제 curl 테스트로 확인된 라이브 버그, new/+page.server.ts와 동일 원인)
+        const { error: codeErr } = await admin.rpc('generate_product_code', {
           p_product_id: newProduct.id,
           p_category: source.category,
+          p_code_id: null,
         })
+        if (codeErr) cloneWarnings.push(`${i}번째 복제 품번 발행 실패 (수동 확인 필요)`)
       }
 
       if (sourcePriceRules && sourcePriceRules.length > 0) {
-        await admin.from('price_rules').insert(
+        const { error: priceErr } = await admin.from('price_rules').insert(
           sourcePriceRules.map((rule) => ({
             product_id: newProduct.id,
             duration_type: rule.duration_type,
@@ -1009,35 +1333,20 @@ export const actions: Actions = {
             damage_fee_percentage: rule.damage_fee_percentage,
           }))
         )
+        if (priceErr) cloneWarnings.push(`${i}번째 복제 가격정책 복사 실패 (수동 확인 필요)`)
       }
 
       createdIds.push(newProduct.id)
     }
 
-    return { success: true, cloned: createdIds.length, partnerCode }
+    return {
+      success: true,
+      cloned: createdIds.length,
+      partnerCode,
+      warnings: cloneWarnings.length > 0 ? cloneWarnings : undefined,
+    }
   },
 
-  updateShippingOptions: async ({ request, locals }) => {
-    const { session } = await locals.safeGetSession()
-    if (!session) return fail(401, { error: '인증 필요' })
-
-    const form = await request.formData()
-    const productId    = form.get('product_id') as string
-    const roundTrip    = form.get('shipping_round_trip') === 'true'
-    const delivery     = form.get('shipping_delivery') === 'true'
-    const returnOpt    = form.get('shipping_return') === 'true'
-
-    if (!productId) return fail(400, { error: '상품 ID가 필요합니다.' })
-
-    const admin = createClient(getSupabaseUrl(), env.SUPABASE_SERVICE_ROLE_KEY ?? '')
-    const { error } = await admin.rpc('update_product_shipping_options', {
-      p_product_id: productId,
-      p_round_trip: roundTrip,
-      p_delivery:   delivery,
-      p_return:     returnOpt,
-    })
-
-    if (error) return fail(500, { error: error.message })
-    return { success: true, action: 'updateShippingOptions' }
-  },
 }
+// RTN-8: updateShippingOptions 액션 제거 — updateSection(rental 섹션)과 중복, 호출부 0건 확인 후 삭제
+// 배송 옵션 저장은 updateSection sectionType='rental' 내 shipping 파라미터로 처리됨
