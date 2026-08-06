@@ -8155,4 +8155,65 @@ diff를 다시 확인**해야 한다 — 이번엔 다른 세션이 먼저 넣�
 기능의 나머지 파일이 뒤이어 커밋되면 새 환경변수 요구사항이 추가로 드러날 수 있으므로, 기능
 단위로 완전히 커밋이 끝날 때까지는 배포 실패 재발 가능성을 열어두고 매 커밋마다 재검증해야 한다.
 
+---
+
+## 배포 상태 독립 재검증 — Stage & Production (2026-08-07, Vercel MCP 직접 조회)
+
+Stephen이 "배포는?" 질문 → sp4-deploy-agent 호출을 중단시키고 "상위 커밋·푸시 건의 stage &
+production 정상 배포 반영 여부 점검"을 직접 요청 → Vercel MCP(`list_deployments`,
+`get_deployment_build_logs`, `get_project`, `get_project_deployment_protection`)로 실제
+배포 이력을 직접 조회해 독립 검증. 위 항목(재배포 성공, 환경변수 14건)과는 별도 세션 기록이라
+서로 교차검증됨.
+
+**git 이력 재확인**: `git fetch` 결과 로컬 `stage` 브랜치가 `origin/stage`와 완전히 동기화된
+상태 — 즉 FCM 커밋(`5f06083`)이 이미 push까지 완료돼 있었음(Stephen이 "커밋 완료됐어"라고만
+말했지만 실제로는 push까지 진행된 상태였음). `origin/main`에도 `5f06083`이 PR #84 병합으로
+이미 포함되어 있음을 `git merge-base --is-ancestor`로 확인.
+
+**Vercel 배포 이력 재구성** (`list_deployments`, 최근 20건):
+```
+dpl_qMMESKj8ghW5DcPvQccrFnJzkc8u (stage, a41c951) → ERROR
+dpl_CXGekY3HTqpdjkwRWMDbmDMebSBE (stage, 3dbb145 재배포) → READY
+  ⚠️ 3dbb145는 다른 세션이 만든 응급수정 커밋 — 같은 작업 디렉터리를 공유하는 특성상
+     당시 미커밋 상태였던 이번 세션의 push.ts/utils/push.ts/utils/rpc.ts가 그 세션의
+     git add에 같이 딸려가 먼저 커밋됨. 그 결과 이후 이번 세션이 직접 git add한 5f06083
+     커밋에는 이 3개 파일이 "변경사항 없음"으로 잡혀 stat에 나타나지 않았음(내용은 동일해
+     기능상 문제 없으나, 커밋 경계가 예상과 달라진 경위를 기록해둠)
+dpl_GNFUnXJKeya2ttZfnkrGvZxgJ9ek (stage, 5f06083 최초시도) → ERROR
+  → 빌드 로그 직접 확인: [MISSING_EXPORT] "PUBLIC_FIREBASE_VAPID_KEY" is not exported by
+    "virtual:env/static/public" at PushNotificationInit.svelte:8:2 — 처음부터 계속
+    경고했던 "Vercel 프로젝트 환경변수 미등록" 문제가 실제로 빌드 실패를 일으킨 것을 확인
+dpl_4UvNkBM1WTmYKHu8rpxnYTeANMv5 (stage, 5f06083 재배포) → READY, 빌드로그 에러 0건
+dpl_5woELcUeFsJnxpTWPpzTzm7wrvY2 (production, PR#84 병합) → READY, 빌드로그 에러 0건
+dpl_6ovdzi2V6audwkGM52iCvKixJFc5 (stage, e27ab44 — 이번 아젠다와 무관한 쿠폰UX세션) → READY
+dpl_BHwB1KZ5kHL6Zs7sc8PuUqMYxDA5 (production, PR#85 병합) → 조회 시점 INITIALIZING(진행중)
+dpl_3bPLtBz59ZXJMyQLTK1vLQtNwBrq (조회 중 새로 생성됨) → BUILDING(진행중, 계속 활동 중)
+```
+
+**결론**: FCM 기능은 **stage(Preview)·production 양쪽 모두 실제로 READY 상태로 배포 완료**
+확인. 중간에 1회씩 실패가 있었으나(둘 다 근본 원인은 Vercel 환경변수 미등록 — 위 GSD_LOG 항목의
+"14건 등록 완료" 조치로 해소된 것으로 판단, 재배포 빌드로그가 에러 0건인 것으로 뒷받침) 최종
+반영본은 정상. `get_project_deployment_protection` 확인 결과 password/SSO/IP 보호 전부
+비활성 — 라이브 URL 직접 fetch(`web_fetch_vercel_url`)는 도구 자체 한계로 실패했으나, Vite
+빌드가 `$env/static/public`·`private` 미존재 시 무조건 하드 실패하는 구조라 **빌드 성공 자체가
+7개 값 전부 실존재한다는 확정적 증거** — 별도 런타임 확인 없이도 신뢰 가능.
+
+**남은 것**: 값의 존재 여부는 확정됐으나 "실제 올바른 값인지"(오타·잘못된 프로젝트 값 등)는
+브라우저 알림권한→토큰발급 실측으로만 검증 가능 — Stephen 직접 확인 필요(기존 미완료 항목과 동일).
+
+---
+
+## 배포 완료 — CMS 상품 품번/QR/권한 게이트 세션 (커밋 0f5d4aa) (2026-08-07)
+
+- [x] DEPLOY-7: 커밋 `0f5d4aa` stage push + PR #87 main 머지(`de1a0ae`) 배포 검증 | CRITICAL | ✅ 완료 (2026-08-07)
+  - Stephen이 직접 git commit/push 실행(세션이 사전 제안한 커밋 메시지 그대로 사용,
+    migrations 190~194·196 git 히스토리 누락분 포함) → `origin/stage` HEAD 일치 확인
+  - Vercel MCP(`list_deployments`/`get_deployment`) 실측 조회:
+    · Stage: dpl_9RWmMt5cjiWxGauHt5SxaeMDc6Ch (branch stage, 0f5d4aa) → READY
+    · Production: dpl_GRMtmjUzYwb4ddkUdoxsT6GgMMmR (branch main, PR#87 머지커밋 de1a0ae) →
+      조회 시점 BUILDING → 재조회로 READY 확정(빌드 소요 약 38초, 에러 0건)
+  - GitHub Actions 상태가 아닌 Vercel 실제 배포 상태를 SSOT로 사용(기존 확립 원칙 재적용)
+  - 결론: 이번 세션(QR-CASE-1/2, 자가복구 버튼, 인벤토리 UX 개선 등) 전 항목 stage·production
+    양쪽 실배포 반영 완료 확인 — 추가 조치 불필요
+
 ## DONE
