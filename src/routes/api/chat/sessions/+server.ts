@@ -28,12 +28,15 @@ export const GET: RequestHandler = async ({ url, locals }) => {
   await admin.rpc('auto_pending_inactive_sessions')
 
   const status = url.searchParams.get('status')
+  const page  = Math.max(1, parseInt(url.searchParams.get('page')  ?? '1',   10))
+  const limit = Math.max(1, parseInt(url.searchParams.get('limit') ?? '100', 10))
+  const offset = (page - 1) * limit
 
   let query = admin
     .from('chat_sessions')
     .select('*')
     .order('updated_at', { ascending: false })
-    .limit(100)
+    .range(offset, offset + limit - 1)
 
   if (status) query = query.eq('status', status)
 
@@ -43,26 +46,25 @@ export const GET: RequestHandler = async ({ url, locals }) => {
 
   const rows = data ?? []
 
-  // 세션별 마지막 메시지 조회 — 세션마다 최신 1건 (closed 포함 모든 세션 정확히 처리)
+  // 세션별 마지막 메시지 조회 — 단일 .in() 쿼리로 N+1 해소
+  // (created_at DESC 정렬 후 JS에서 세션별 첫 건만 추출)
   const sessionIds = rows.map((s: Record<string, unknown>) => s.id as string)
   const lastMsgMap: Record<string, { content: string | null; sender_type: string }> = {}
 
   if (sessionIds.length > 0) {
-    const results = await Promise.all(
-      sessionIds.map((id) =>
-        admin
-          .from('chat_messages')
-          .select('session_id, content, sender_type')
-          .eq('session_id', id)
-          .order('created_at', { ascending: false })
-          .limit(1)
-          .maybeSingle()
-      )
-    )
+    const { data: allMsgs } = await admin
+      .from('chat_messages')
+      .select('session_id, content, sender_type, created_at')
+      .in('session_id', sessionIds)
+      .order('created_at', { ascending: false })
 
-    for (const { data } of results) {
-      const m = data as { session_id: string; content: string | null; sender_type: string } | null
-      if (m) lastMsgMap[m.session_id] = { content: m.content, sender_type: m.sender_type }
+    type MsgRow = { session_id: string; content: string | null; sender_type: string; created_at: string }
+    const seenSessions = new Set<string>()
+    for (const m of (allMsgs as MsgRow[] ?? [])) {
+      if (!seenSessions.has(m.session_id)) {
+        seenSessions.add(m.session_id)
+        lastMsgMap[m.session_id] = { content: m.content, sender_type: m.sender_type }
+      }
     }
   }
 
@@ -154,12 +156,13 @@ export const GET: RequestHandler = async ({ url, locals }) => {
 
   const sessions = rows.map((s: Record<string, unknown>) => {
     const info = userInfoMap[s.user_id as string]
+    const lastMsg = lastMsgMap[s.id as string]
     return {
       ...s,
       user_name: info?.name ?? '',
       user_handle: info?.handle ?? `@${(s.user_id as string).slice(0, 8)}`,
-      last_message_content: lastMsgMap[s.id as string]?.content ?? '',
-      last_message_sender: lastMsgMap[s.id as string]?.sender_type ?? '',
+      last_message_content: lastMsg?.content ?? '',
+      last_message_sender: lastMsg?.sender_type ?? '',
       is_urgent: urgentIds.has(s.id as string),
     }
   })

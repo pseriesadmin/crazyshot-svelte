@@ -8,4 +8,4 @@
 
 <svelte:head><title>상담 — CrazyShot CMS</title></svelte:head>
 
-<AdminChatPanel initialSessions={data.sessions} />
+<AdminChatPanel initialSessions={data.sessions} initialSessionId={data.initialSessionId} />

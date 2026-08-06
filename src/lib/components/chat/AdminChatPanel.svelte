@@ -17,11 +17,33 @@
   import { supabase } from '$lib/services/supabase'
   import type { ChatSession, ChatMessage, ChatSessionStatus } from '$lib/types/chat'
 
-  interface Props {
-    initialSessions?: ChatSession[]
+  // 로컬 타입 정의 (routes 크로스-임포트 금지 원칙) — /api/cms/customers/[userId]/summary 응답 형태
+  interface CustomerSummary {
+    user_id: string
+    email: string | null
+    member_code: string | null
+    membership_grade: string | null
+    credit_score: number | null
+    blacklisted: boolean
   }
 
-  let { initialSessions = [] }: Props = $props()
+  interface Props {
+    initialSessions?: ChatSession[]
+    initialSessionId?: string | null
+  }
+
+  let { initialSessions = [], initialSessionId = null }: Props = $props()
+
+  // 자동답변 상태 표시 pill (sessions-header)
+  let autoReplyEnabled = $state<boolean | null>(null)
+  $effect(() => {
+    fetch('/api/cms/auto-reply-settings')
+      .then((r) => r.ok ? r.json() : null)
+      .then((d: { enabled: boolean } | null) => {
+        if (d) autoReplyEnabled = d.enabled
+      })
+      .catch(() => {})
+  })
 
   type FilterTab = 'open' | 'pending' | 'closed'
 
@@ -51,6 +73,16 @@
     if (!storeInitialized) {
       storeInitialized = true
       setSessions(initialSessions)
+      // URL ?session= 딥링크: 해당 세션 자동 선택 + 필터탭 전환
+      if (initialSessionId) {
+        const target = initialSessions.find((s) => s.id === initialSessionId)
+        if (target) {
+          if (target.status === 'closed') filterTab = 'closed'
+          else if (target.status === 'pending') filterTab = 'pending'
+          else filterTab = 'open'
+          handleSelectSession(initialSessionId)
+        }
+      }
     }
   })
 
@@ -124,20 +156,48 @@
     chatStore.sessions.find((s) => s.id === selectedSessionId) ?? null
   )
 
+  // 고객 기본정보 요약 (chat-header 노출용) — 선택된 세션의 user_id가 바뀔 때만 재조회
+  let customerSummary = $state<CustomerSummary | null>(null)
+  $effect(() => {
+    const uid = selectedSession?.user_id
+    if (!uid) { customerSummary = null; return }
+    customerSummary = null
+    fetch(`/api/cms/customers/${uid}/summary`)
+      .then((r) => r.ok ? r.json() : null)
+      .then((d: CustomerSummary | null) => { customerSummary = d })
+      .catch(() => { customerSummary = null })
+  })
+
+  const GRADE_LABEL: Record<string, string> = {
+    none: 'NONE', easy: 'EASY', pop: 'POP', crazy: 'CRAZY', admin: 'ADMIN',
+  }
+
+  function scoreClass(score: number): string {
+    if (score >= 85) return 'score-high'
+    if (score >= 70) return 'score-mid'
+    if (score >= 50) return 'score-low'
+    return 'score-critical'
+  }
+
   async function handleSelectSession(sid: string): Promise<void> {
     selectedSessionId = sid
     // 세션 입장 API — admin_id 배정
     await fetch(`/api/chat/sessions/${sid}/join`, { method: 'POST' })
   }
 
-  async function handleSend(content: string): Promise<void> {
+  async function handleSend(content: string, cannedResponseId?: string): Promise<void> {
     if (!selectedSessionId || isSending) return
     isSending = true
     try {
       const res = await fetch('/api/chat/admin-reply', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ session_id: selectedSessionId, content }),
+        body: JSON.stringify({
+          session_id: selectedSessionId,
+          content,
+          // §E SYN-8: 캔드 리스폰스에서 비롯된 발신일 때만 포함 (undefined면 키 미포함)
+          ...(cannedResponseId ? { canned_response_id: cannedResponseId } : {}),
+        }),
       })
       if (res.ok) {
         const { message } = await res.json()
@@ -257,6 +317,12 @@
     return `익명 ${s.user_id.slice(0, 8)}`
   }
 
+  // 아바타 이니셜 2자 추출 (ChatHeader.svelte 고객용 아바타와 동일 로직)
+  function initialsOf(name: string): string {
+    if (!name) return '?'
+    return name.trim().split(/\s+/).map((w) => w[0]).join('').toUpperCase().slice(0, 2) || '?'
+  }
+
   const STATUS_LABEL: Record<FilterTab, string> = {
     open: '진행중',
     pending: '대기',
@@ -269,6 +335,15 @@
   <aside class="sessions-pane">
     <div class="sessions-header">
       <h2 class="pane-title">상담 세션</h2>
+      {#if autoReplyEnabled !== null}
+        <a
+          href="/cms/chat/qna"
+          class="ar-pill"
+          class:ar-pill--on={autoReplyEnabled}
+          title="자동답변 설정 바로가기"
+          aria-label="자동답변 {autoReplyEnabled ? 'ON' : 'OFF'} — QnA 설정으로 이동"
+        >자동답변 {autoReplyEnabled ? 'ON' : 'OFF'}</a>
+      {/if}
       <button class="refresh-btn" onclick={handleRefresh} aria-label="새로고침">↻</button>
     </div>
 
@@ -368,8 +443,52 @@
       </div>
     {:else}
       <div class="chat-header">
-        <span class="chat-user">{sessionLabel(selectedSession)}</span>
-        <span class="chat-status status-{selectedSession.status}">{STATUS_LABEL[selectedSession.status as FilterTab]}</span>
+        <div class="chat-avatar" aria-hidden="true">
+          <span class="chat-avatar-initials">{initialsOf(sessionLabel(selectedSession))}</span>
+        </div>
+
+        <div class="chat-header-info">
+          <div class="chat-header-top">
+            <span class="chat-user">{sessionLabel(selectedSession)}</span>
+            <span class="chat-status status-{selectedSession.status}">{STATUS_LABEL[selectedSession.status as FilterTab]}</span>
+          </div>
+
+          <!-- 고객 기본정보 요약 -->
+          {#if customerSummary}
+            <div class="customer-strip">
+              {#if customerSummary.email}
+                <span class="cs-item cs-email">{customerSummary.email}</span>
+              {/if}
+              {#if customerSummary.member_code}
+                <span class="cs-item cs-code">{customerSummary.member_code}</span>
+              {/if}
+              {#if customerSummary.membership_grade}
+                <span class="grade-badge grade-{customerSummary.membership_grade}">
+                  {GRADE_LABEL[customerSummary.membership_grade] ?? customerSummary.membership_grade.toUpperCase()}
+                </span>
+              {/if}
+              {#if customerSummary.credit_score !== null}
+                <span class="cs-score {scoreClass(customerSummary.credit_score)}">
+                  크레이지스코어 {customerSummary.credit_score}점
+                </span>
+              {/if}
+              {#if customerSummary.blacklisted}
+                <span class="badge-danger">블랙리스트</span>
+              {/if}
+              <a
+                class="cs-detail-link"
+                href="/cms/customers?selected={customerSummary.user_id}"
+                aria-label="고객 정보 화면으로 이동"
+                title="고객 정보 화면으로 이동"
+              >
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                  <line x1="5" y1="12" x2="19" y2="12"/>
+                  <polyline points="12 5 19 12 12 19"/>
+                </svg>
+              </a>
+            </div>
+          {/if}
+        </div>
       </div>
 
       <div class="chat-messages">
@@ -379,12 +498,14 @@
           <MessageList
             messages={messages.filter((m) => m.sender_type !== 'ai')}
             currentUserId="admin"
+            isAdmin={true}
           />
         {/if}
       </div>
 
       <div class="chat-input-wrap">
         <ChatInput
+          isAdmin={true}
           placeholder={isUploading ? '업로드 중...' : '관리자 답변을 입력하세요...'}
           disabled={isSending || isUploading}
           onsend={handleSend}
@@ -445,6 +566,7 @@
   }
 
   .sessions-header {
+    position: relative;
     display: flex;
     align-items: center;
     justify-content: center;
@@ -460,6 +582,27 @@
     color: var(--cs-dark);
     margin: 0;
   }
+
+  /* 자동답변 ON/OFF 상태 pill */
+  .ar-pill {
+    position: absolute;
+    left: 50%;
+    transform: translateX(-50%);
+    height: 22px;
+    padding: 0 10px;
+    border-radius: var(--radius-full, 99px);
+    font: 700 10px/22px 'Noto Sans KR', sans-serif;
+    background: var(--cs-surface-gray, #f6f6f6);
+    color: var(--cs-text-light, #aaa);
+    text-decoration: none;
+    white-space: nowrap;
+    transition: background 0.15s, color 0.15s;
+  }
+  .ar-pill--on {
+    background: var(--cs-purple-op10);
+    color: var(--cs-purple);
+  }
+  .ar-pill:hover { opacity: 0.8; }
 
   .refresh-btn {
     position: absolute;
@@ -709,13 +852,121 @@
     border-bottom: 1px solid rgba(16,11,50,0.06);
     display: flex;
     align-items: center;
-    gap: 12px;
+    gap: 30px;
     flex-shrink: 0;
+    background: var(--cs-purple-op10);
+  }
+
+  /* 48px 원형 아바타 — ChatHeader.svelte 고객용 아바타(65px)와 동일 패턴, CMS 헤더 밀도에 맞춰 축소 */
+  .chat-avatar {
+    width: 48px;
+    height: 48px;
+    border-radius: 50%;
+    background: var(--cs-purple);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+  }
+
+  .chat-avatar-initials {
+    font: 700 16px/1 'Noto Sans KR', sans-serif;
+    color: var(--cs-white);
+    letter-spacing: -0.2px;
+  }
+
+  .chat-header-info {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    min-width: 0;
+    flex: 1;
+  }
+
+  .chat-header-top {
+    display: flex;
+    align-items: center;
+    gap: 12px;
   }
 
   .chat-user {
     font: var(--text-m-title-18B);
     color: var(--cs-dark);
+  }
+
+  /* ── 고객 기본정보 요약 ── */
+  .customer-strip {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+
+  .cs-item {
+    font: var(--text-pc-script-12);
+    color: var(--cs-text-mid);
+  }
+
+  .cs-email { color: var(--cs-text-mid); }
+
+  .cs-code {
+    font-weight: 700;
+    color: var(--cs-purple);
+    background: var(--cs-purple-op10);
+    border-radius: 4px;
+    padding: 2px 6px;
+  }
+
+  .cs-score {
+    font: var(--text-pc-script-12);
+    font-weight: 700;
+  }
+  .cs-score.score-high     { color: var(--cs-success-light); }
+  .cs-score.score-mid      { color: var(--cs-text-mid); }
+  .cs-score.score-low      { color: var(--cs-warning); }
+  .cs-score.score-critical { color: var(--cs-red-badge); }
+
+  .grade-badge {
+    display: inline-flex;
+    align-items: center;
+    padding: 2px 8px;
+    border-radius: var(--radius-sm);
+    font: var(--text-pc-script-12);
+    font-weight: 700;
+  }
+  .grade-none  { background: var(--cs-surface-gray); color: var(--cs-text-mid); }
+  .grade-easy  { background: rgba(14,165,233,0.12);  color: var(--cs-info); }
+  .grade-pop   { background: rgba(59,47,138,0.10);   color: var(--cs-purple); }
+  .grade-crazy { background: rgba(255,69,0,0.12);    color: var(--cs-orange); }
+  .grade-admin { background: var(--cs-lilac);        color: var(--cs-purple-dark); }
+
+  .badge-danger {
+    display: inline-flex;
+    align-items: center;
+    padding: 2px 8px;
+    border-radius: var(--radius-sm);
+    font: var(--text-pc-script-12);
+    background: rgba(255,53,53,0.10);
+    color: var(--cs-red-badge);
+  }
+
+  /* 심플 화살표 아이콘 버튼 — .refresh-btn과 동일한 표준 아이콘버튼 컨벤션(투명 배경·원형 hover) */
+  .cs-detail-link {
+    margin-left: auto;
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 28px;
+    height: 28px;
+    border-radius: var(--radius-sm);
+    color: var(--cs-text-mid);
+    background: transparent;
+    transition: color 0.15s, background 0.15s;
+  }
+  .cs-detail-link:hover {
+    color: var(--cs-purple);
+    background: var(--cs-purple-op10);
   }
 
   .chat-status {

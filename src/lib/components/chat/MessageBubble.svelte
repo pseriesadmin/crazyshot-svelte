@@ -9,11 +9,17 @@
   interface Props {
     message: ChatMessage
     isOwn?: boolean
+    isAdmin?: boolean
     onaction?: (payload: ActionPayload) => void
     ondelete?: (messageId: string) => void
   }
 
-  let { message, isOwn = false, onaction, ondelete }: Props = $props()
+  let { message, isOwn = false, isAdmin = false, onaction, ondelete }: Props = $props()
+
+  // 자동답변 배지: 관리자 뷰에서만 표시 (고객 뷰 노출 금지)
+  let isAutoBadge = $derived(
+    isAdmin && (message.action_payload as { type?: string } | null)?.type === 'auto_canned_reply'
+  )
 
   // 시간 포맷 HH:MM
   let timeLabel = $derived(
@@ -214,6 +220,9 @@
       {#if isActionCard && message.action_payload}
         <ActionCard payload={message.action_payload} {onaction} />
       {/if}
+      {#if isAutoBadge}
+        <span class="auto-badge" aria-label="자동답변">자동답변</span>
+      {/if}
       {#if message.content}
         <p class="bubble-text">{message.content}</p>
       {/if}
@@ -357,6 +366,20 @@
     transition: color 0.15s;
   }
   .del-btn:hover { color: var(--cs-red-badge, #FF3535); }
+
+  /* ── 자동답변 배지 ── */
+  .auto-badge {
+    display: inline-block;
+    height: 18px;
+    padding: 0 7px;
+    background: var(--cs-purple-op10);
+    border-radius: var(--radius-full, 99px);
+    font: 700 10px/18px 'Noto Sans KR', sans-serif;
+    color: var(--cs-purple);
+    letter-spacing: 0.2px;
+    white-space: nowrap;
+    align-self: flex-start;
+  }
 
   /* ── 텍스트 버블 ── */
   .bubble-text {

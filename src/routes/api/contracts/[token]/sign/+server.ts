@@ -2,10 +2,29 @@ import { createClient } from '@supabase/supabase-js'
 import { SUPABASE_SERVICE_ROLE_KEY } from '$env/static/private'
 import { PUBLIC_SUPABASE_URL } from '$env/static/public'
 import { json } from '@sveltejs/kit'
+import { sendPushToAdmins } from '$lib/server/push'
 import type { RequestHandler } from './$types'
 
 export const POST: RequestHandler = async ({ params, request, getClientAddress }) => {
   const admin = createClient(PUBLIC_SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
+
+  // 채팅 세션 재사용 정책 보조 — 지정된 status의 최신 세션 1건 조회 (없으면 null)
+  // admin을 클로저로 참조 — 별도 함수 매개변수 타입 경계를 만들지 않아야
+  // SupabaseClient 제네릭 추론이 어긋나지 않음(REFACTOR 중 svelte-check 에러 유발 확인됨)
+  const findChatSessionByStatus = async (
+    userId: string,
+    status: 'pending' | 'open' | 'closed',
+  ): Promise<string | null> => {
+    const { data } = await admin
+      .from('chat_sessions')
+      .select('id')
+      .eq('user_id', userId)
+      .eq('status', status)
+      .order('updated_at', { ascending: false })
+      .limit(1)
+      .maybeSingle()
+    return data?.id ?? null
+  }
 
   const { data: signing, error: findErr } = await admin
     .from('contract_signings')
@@ -62,12 +81,21 @@ export const POST: RequestHandler = async ({ params, request, getClientAddress }
       .maybeSingle()
 
     if (contract?.reservation_id) {
-      // 상태 갱신을 먼저 확정한 뒤 조회해야 아래 RENTAL_STATUSES 판정이 최신 상태를 반영함
-      await admin
+      // H-01: 예약 상태 변경은 반드시 RPC 경유. update_reservation_status RPC는 이전 상태
+      // 가드가 없으므로, 직접 DML이 갖고 있던 .eq('status','shipped') 가드를 보존하기 위해
+      // RPC 호출 전 현재 상태를 먼저 조회해 shipped일 때만 in_use로 전환한다.
+      const { data: currentReservation } = await admin
         .from('rental_reservations')
-        .update({ status: 'in_use', updated_at: new Date().toISOString() })
+        .select('status')
         .eq('id', contract.reservation_id)
-        .eq('status', 'shipped')
+        .maybeSingle()
+
+      if (currentReservation?.status === 'shipped') {
+        await admin.rpc('update_reservation_status', {
+          p_reservation_id: contract.reservation_id,
+          p_new_status:     'in_use',
+        })
+      }
 
       const [reservationResult, profileResult] = await Promise.all([
         admin
@@ -94,30 +122,39 @@ export const POST: RequestHandler = async ({ params, request, getClientAddress }
       const cmsPath = reservationStatus && RENTAL_STATUSES.has(reservationStatus) ? '/cms/rentals' : '/cms/reservation'
 
       if (signing.user_id) {
-        // pending 세션 우선 (관리자 대화 중인 세션) → open 세션 폴백
-        const { data: pendingSession } = await admin
-          .from('chat_sessions')
-          .select('id')
-          .eq('user_id', signing.user_id)
-          .eq('status', 'pending')
-          .order('updated_at', { ascending: false })
-          .limit(1)
-          .maybeSingle()
+        // 채팅 세션 재사용 정책: pending → open → closed(재활성화) → 신규 생성
+        // (open/pending만 조회하면 세션이 전부 closed이거나 없을 때 알림이 조용히 유실됨)
+        let chatSessionId = await findChatSessionByStatus(signing.user_id, 'pending')
 
-        let chatSession = pendingSession
-        if (!chatSession) {
-          const { data: openSession } = await admin
-            .from('chat_sessions')
-            .select('id')
-            .eq('user_id', signing.user_id)
-            .eq('status', 'open')
-            .order('updated_at', { ascending: false })
-            .limit(1)
-            .maybeSingle()
-          chatSession = openSession
+        if (!chatSessionId) {
+          chatSessionId = await findChatSessionByStatus(signing.user_id, 'open')
         }
 
-        if (chatSession) {
+        if (!chatSessionId) {
+          const closedSessionId = await findChatSessionByStatus(signing.user_id, 'closed')
+          if (closedSessionId) {
+            await admin
+              .from('chat_sessions')
+              .update({ status: 'open', updated_at: new Date().toISOString() })
+              .eq('id', closedSessionId)
+            chatSessionId = closedSessionId
+          }
+        }
+
+        if (!chatSessionId) {
+          const { data: newSession } = await admin
+            .from('chat_sessions')
+            .insert({
+              user_id:      signing.user_id,
+              status:       'open',
+              context_type: 'reservation',
+            })
+            .select('id')
+            .single()
+          chatSessionId = newSession?.id ?? null
+        }
+
+        if (chatSessionId) {
           const content = fullName
             ? `${fullName} 고객님의 전자계약 서명이 완료되었습니다.`
             : '전자계약 서명이 완료되었습니다.'
@@ -125,7 +162,7 @@ export const POST: RequestHandler = async ({ params, request, getClientAddress }
           await admin
             .from('chat_messages')
             .insert({
-              session_id:   chatSession.id,
+              session_id:   chatSessionId,
               sender_type:  'admin',
               message_type: 'action_card',
               content,
@@ -138,6 +175,13 @@ export const POST: RequestHandler = async ({ params, request, getClientAddress }
             })
         }
       }
+
+      // 전자서명 완료 관리자 푸시 병행 발송 (채팅과 독립 — 실패해도 위 처리에 영향 없음)
+      await sendPushToAdmins('contract_signed', {
+        title: '전자계약 서명이 완료됐어요',
+        body: `${fullName ? `${fullName}님이 ` : ''}${reservationCode ? `${reservationCode} ` : ''}계약서에 서명했어요.`,
+        link: `${cmsPath}?selected=${contract.reservation_id}`,
+      })
     }
   }
 

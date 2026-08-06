@@ -9,11 +9,12 @@
   interface Props {
     messages: ChatMessage[]
     currentUserId: string
+    isAdmin?: boolean
     onaction?: (payload: ActionPayload) => void
     ondelete?: (messageId: string) => void
   }
 
-  let { messages, currentUserId, onaction, ondelete }: Props = $props()
+  let { messages, currentUserId, isAdmin = false, onaction, ondelete }: Props = $props()
 
   let listEl = $state<HTMLDivElement | null>(null)
 
@@ -40,6 +41,7 @@
         isOwn={currentUserId === 'admin'
           ? message.sender_type === 'admin'
           : message.sender_type === 'user'}
+        {isAdmin}
         {onaction}
         {ondelete}
       />

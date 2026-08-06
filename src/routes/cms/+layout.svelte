@@ -5,6 +5,7 @@
   import { Toaster } from 'svelte-sonner'
   import { csToast } from '$lib/utils/toast'
   import { hasSettingsAccess } from '$lib/utils/cmsPermissions'
+  import { unregisterCurrentPushToken } from '$lib/utils/push'
   import type { LayoutData } from './$types'
 
   interface Props {
@@ -51,6 +52,7 @@
 
   async function handleLogout(): Promise<void> {
     manualLogout = true
+    await unregisterCurrentPushToken()
     await supabase.auth.signOut()
     const t = encodeURIComponent(new Date().toISOString())
     goto(`/cms/login?logout=manual&t=${t}`)
@@ -75,26 +77,29 @@
     {
       id: 'consulting',
       label: '상담',
-      subMenus: [{ label: '채팅', href: '/cms/chat' }],
+      subMenus: [
+        { label: '채팅', href: '/cms/chat' },
+        { label: 'QnA', href: '/cms/chat/qna' },
+      ],
     },
     { id: 'reservation', label: '예약', subMenus: [
       { label: '예약목록', href: '/cms/reservation' },
       { label: '계약서양식', href: '/cms/reservation/contracts' },
     ] },
     {
-      id: 'products',
-      label: '상품',
-      subMenus: [
-        { label: '상품목록', href: '/cms/products' },
-        { label: '상품등록', href: '/cms/products/new' },
-      ],
-    },
-    {
       id: 'rental',
       label: '대여',
       subMenus: [
         { label: '대여현황', href: '/cms/rentals' },
         { label: '이력관리', href: '/cms/rental/history' },
+      ],
+    },
+    {
+      id: 'products',
+      label: '상품',
+      subMenus: [
+        { label: '상품목록', href: '/cms/products' },
+        { label: '상품등록', href: '/cms/products/new' },
       ],
     },
     {
@@ -127,6 +132,7 @@
         { label: '대여관리', href: '/cms/set/rental' },
         ...(hasSettingsAccess(data.cmsRole ?? '')
           ? [
+              { label: '푸시알림', href: '/cms/set/push' },
               { label: '관리정보', href: '/cms/set/admin' },
             ]
           : []),
@@ -136,13 +142,14 @@
 
   function resolveActiveMenuId(pathname: string): string {
     if (pathname.startsWith('/cms/promotion')) return 'promotion'
-    if (pathname.startsWith('/cms/set'))      return 'settings'
+    if (pathname.startsWith('/cms/set'))       return 'settings'
     if (pathname.startsWith('/cms/codes'))    return 'settings'
     if (pathname.startsWith('/cms/accounts')) return 'settings'
     if (pathname.startsWith('/cms/reservation')) return 'reservation'
     if (pathname.startsWith('/cms/products')) return 'products'
     if (pathname.startsWith('/cms/rental'))   return 'rental'
     if (pathname.startsWith('/cms/customers')) return 'customers'
+    if (pathname.startsWith('/cms/chat'))     return 'consulting'
     return 'consulting'
   }
 

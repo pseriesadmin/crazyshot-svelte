@@ -8,7 +8,6 @@ import type {
   CreateSessionRequest,
   SendMessageRequest,
   SendMessageResponse,
-  SendActionCardRequest,
   ActionPayload,
 } from '$lib/types/chat'
 
@@ -123,26 +122,6 @@ export async function sendMessage(
   }
   const response = await res.json()
   return { response, error: null }
-}
-
-// ──────────────────────────────────────────────
-// 관리자: 액션 카드 수동 발송 (PRD.1.7.5)
-// ──────────────────────────────────────────────
-
-export async function sendActionCard(
-  req: SendActionCardRequest
-): Promise<{ message: ChatMessage | null; error: string | null }> {
-  const res = await fetch('/api/chat/action-card', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(req),
-  })
-  if (!res.ok) {
-    const { error } = await res.json().catch(() => ({ error: 'Network error' }))
-    return { message: null, error }
-  }
-  const { message } = await res.json()
-  return { message, error: null }
 }
 
 // ──────────────────────────────────────────────
