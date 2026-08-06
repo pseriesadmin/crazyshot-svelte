@@ -1,6 +1,7 @@
 <script lang="ts">
   import { goto } from '$app/navigation'
   import { supabase } from '$lib/services/supabase'
+  import { unregisterCurrentPushToken } from '$lib/utils/push'
 
   interface MenuItem {
     label: string
@@ -17,6 +18,7 @@
   let { title, count = 0, items, variant = 'myinfo' }: Props = $props()
 
   async function handleLogout() {
+    await unregisterCurrentPushToken()
     await supabase.auth.signOut()
     goto('/')
   }

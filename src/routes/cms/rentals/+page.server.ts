@@ -4,6 +4,7 @@ import { PUBLIC_SUPABASE_URL } from '$env/static/public'
 import { redirect, fail } from '@sveltejs/kit'
 import type { Actions, PageServerLoad } from './$types'
 import { getCmsRoleForAction } from '$lib/server/getCmsRoleForAction'
+import { sendReservationLifecyclePush } from '$lib/server/push'
 
 import type { RentalListRow } from '../reservation/+page.server'
 export type { RentalListRow }
@@ -60,6 +61,8 @@ export const actions: Actions = {
     if (error) return fail(500, { message: error.message })
     const res = result as { ok: boolean; error?: string } | null
     if (!res?.ok) return fail(400, { message: res?.error ?? '알림 발송 실패' })
+    // 수동 발송 푸시 알림 병행 (채팅과 독립 — 실패해도 위 처리에 영향 없음)
+    await sendReservationLifecyclePush(admin, reservationId, notifyType)
     return { ok: true }
   },
 }

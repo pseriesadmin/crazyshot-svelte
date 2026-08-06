@@ -485,6 +485,11 @@ export interface NotificationToken {
   updated_at: string;
 }
 
+export type NotificationTokenInsert = Omit<NotificationToken, 'id' | 'created_at' | 'updated_at'> & {
+  id?: string; created_at?: string; updated_at?: string;
+};
+export type NotificationTokenUpdate = Partial<NotificationTokenInsert>;
+
 export interface NotificationLog {
   id: string;                          // UUID PK
   user_id: string;                     // FK auth.users.id
@@ -495,6 +500,10 @@ export interface NotificationLog {
   sent_at: string;
   created_at: string;
 }
+
+export type NotificationLogInsert = Omit<NotificationLog, 'id' | 'created_at'> & {
+  id?: string; created_at?: string;
+};
 
 export interface CsPost {
   id: string;                          // UUID PK
@@ -551,6 +560,22 @@ export interface ForeignUser {
   created_at: string;
   updated_at: string;
 }
+
+export interface PushNotificationConfig {
+  id: number;                          // BIGSERIAL PK
+  category: 'customer_lifecycle' | 'customer_marketing';
+  notify_type: string;
+  label: string;
+  push_enabled: boolean;
+  extra_config: Json;
+  updated_at: string;
+  updated_by: string | null;           // FK auth.users.id
+}
+
+export type PushNotificationConfigInsert = Omit<PushNotificationConfig, 'id' | 'updated_at'> & {
+  id?: number; updated_at?: string;
+};
+export type PushNotificationConfigUpdate = Partial<PushNotificationConfigInsert>;
 
 // =============================================================================
 // ★ RPC FUNCTION TYPES (14 functions)
@@ -617,6 +642,110 @@ export interface ProcessPaymentAndCreateOrderResult {
   error_message: string | null;
 }
 
+// ── 푸시알림 RPC (Migration #183~184) ──
+export interface PushRpcResult {
+  ok: boolean;
+  error?: string;
+}
+
+export interface RegisterPushTokenArgs {
+  p_token: string;
+  p_platform: string;
+}
+
+export interface UnregisterPushTokenArgs {
+  p_token: string;
+}
+
+export interface UpdatePushNotificationConfigArgs {
+  p_notify_type: string;
+  p_push_enabled: boolean;
+  p_extra_config?: Json | null;
+}
+
+export interface GetAdminPushRecipientsArgs {
+  p_event_key: string;
+}
+
+export interface UpdateAdminNotifySettingArgs {
+  p_target_user_id: string;
+  p_event_key: string;
+  p_enabled: boolean;
+}
+
+export interface LogPushNotificationArgs {
+  p_user_id: string;
+  p_type: string;
+  p_title: string;
+  p_body: string;
+  p_metadata?: Json;
+}
+
+export interface DeactivatePushTokensArgs {
+  p_tokens: string[];
+}
+
+// ── 계정(Account) RPC (Migration #109, #132~137, #158) ──
+export interface AccountRpcResult {
+  ok: boolean;
+  error?: string;
+}
+
+export interface UpdateUserConsentArgs {
+  p_allow_privacy_consent: boolean | null;
+  p_allow_third_party_consent: boolean | null;
+}
+
+export interface AddShippingAddressArgs {
+  p_label: string;
+  p_recipient: string | null;
+  p_phone: string | null;
+  p_road_address: string;
+  p_detail_address: string | null;
+  p_postal_code: string | null;
+  p_set_default: boolean;
+}
+
+export interface DeleteShippingAddressArgs {
+  p_address_id: string;
+}
+
+export interface SetDefaultShippingAddressArgs {
+  p_address_id: string;
+}
+
+export interface UpdateUserProfileArgs {
+  p_full_name: string | null;
+  p_email: string | null;
+  p_birth_date: string | null;
+}
+
+export interface VerifyAndUpdatePhoneArgs {
+  p_phone: string;
+  p_code: string;
+}
+
+export interface UpdateUserDocUrlArgs {
+  p_type: string;
+  p_doc_url: string;
+  p_identity_type: string | null;
+}
+
+export interface ToggleProductWishlistArgs {
+  p_product_id: string;
+}
+
+export interface ToggleProductWishlistResult {
+  ok: boolean;
+  action?: 'added' | 'removed';
+  error?: string;
+}
+
+export interface UpdateNotificationSettingsArgs {
+  p_rental_alert: boolean;
+  p_benefit_alert: boolean;
+}
+
 // =============================================================================
 // ★ SUPABASE DATABASE TYPE (for createClient<Database>())
 // =============================================================================
@@ -643,13 +772,14 @@ export type Database = {
       shipments: { Row: Shipment; Insert: Omit<Shipment, 'id' | 'created_at' | 'updated_at'>; Update: Partial<Shipment> };
       asset_inspections: { Row: AssetInspection; Insert: Omit<AssetInspection, 'id' | 'created_at' | 'updated_at'>; Update: Partial<AssetInspection> };
       contracts: { Row: Contract; Insert: Omit<Contract, 'id' | 'created_at' | 'updated_at'>; Update: Partial<Contract> };
-      notification_tokens: { Row: NotificationToken; Insert: Omit<NotificationToken, 'id' | 'created_at' | 'updated_at'>; Update: Partial<NotificationToken> };
-      notification_logs: { Row: NotificationLog; Insert: Omit<NotificationLog, 'id' | 'created_at'>; Update: never };
+      notification_tokens: { Row: NotificationToken; Insert: NotificationTokenInsert; Update: NotificationTokenUpdate };
+      notification_logs: { Row: NotificationLog; Insert: NotificationLogInsert; Update: never };
       cs_posts: { Row: CsPost; Insert: Omit<CsPost, 'id' | 'created_at' | 'updated_at'>; Update: Partial<CsPost> };
       cs_inquiries: { Row: CsInquiry; Insert: Omit<CsInquiry, 'id' | 'created_at' | 'updated_at'>; Update: Partial<CsInquiry> };
       public_holidays: { Row: PublicHoliday; Insert: Omit<PublicHoliday, 'id' | 'created_at' | 'updated_at'>; Update: Partial<PublicHoliday> };
       late_fees: { Row: LateFee; Insert: Omit<LateFee, 'id' | 'created_at' | 'updated_at'>; Update: Partial<LateFee> };
       foreign_users: { Row: ForeignUser; Insert: Omit<ForeignUser, 'id' | 'created_at' | 'updated_at'>; Update: Partial<ForeignUser> };
+      push_notification_config: { Row: PushNotificationConfig; Insert: PushNotificationConfigInsert; Update: PushNotificationConfigUpdate };
     };
     Views: {
       [_ in never]: never;
@@ -673,6 +803,22 @@ export type Database = {
       };
       is_admin: { Args: Record<string, never>; Returns: boolean };
       ensure_user_profile: { Args: Record<string, never>; Returns: string };
+      register_push_token: { Args: RegisterPushTokenArgs; Returns: PushRpcResult };
+      unregister_push_token: { Args: UnregisterPushTokenArgs; Returns: PushRpcResult };
+      update_push_notification_config: { Args: UpdatePushNotificationConfigArgs; Returns: PushRpcResult };
+      get_admin_push_recipients: { Args: GetAdminPushRecipientsArgs; Returns: string[] };
+      update_admin_notify_setting: { Args: UpdateAdminNotifySettingArgs; Returns: PushRpcResult };
+      log_push_notification: { Args: LogPushNotificationArgs; Returns: string };
+      deactivate_push_tokens: { Args: DeactivatePushTokensArgs; Returns: PushRpcResult };
+      update_user_consent: { Args: UpdateUserConsentArgs; Returns: AccountRpcResult };
+      add_shipping_address: { Args: AddShippingAddressArgs; Returns: AccountRpcResult };
+      delete_shipping_address: { Args: DeleteShippingAddressArgs; Returns: AccountRpcResult };
+      set_default_shipping_address: { Args: SetDefaultShippingAddressArgs; Returns: AccountRpcResult };
+      update_user_profile: { Args: UpdateUserProfileArgs; Returns: AccountRpcResult };
+      verify_and_update_phone: { Args: VerifyAndUpdatePhoneArgs; Returns: AccountRpcResult };
+      update_user_doc_url: { Args: UpdateUserDocUrlArgs; Returns: AccountRpcResult };
+      toggle_product_wishlist: { Args: ToggleProductWishlistArgs; Returns: ToggleProductWishlistResult };
+      update_notification_settings: { Args: UpdateNotificationSettingsArgs; Returns: AccountRpcResult };
     };
     Enums: {
       product_category_enum: ProductCategoryEnum;
