@@ -6,6 +6,9 @@
   import type { PageData, ActionData } from './$types'
   import type { EarnRule } from './+page.server'
   import CmsDatePicker from '$lib/components/cms/CmsDatePicker.svelte'
+  import CmsKpiGrid from '$lib/components/cms/CmsKpiGrid.svelte'
+  import CmsStatRing from '$lib/components/cms/CmsStatRing.svelte'
+  import CmsStatBars from '$lib/components/cms/CmsStatBars.svelte'
 
   let { data, form }: { data: PageData; form: ActionData } = $props()
 
@@ -136,36 +139,30 @@
   {#if activeTab === 'dashboard'}
     <div class="section-title">포인트 현황</div>
 
-    <div class="kpi-grid">
-      <div class="kpi-card">
-        <span class="kpi-label">총 발급 포인트</span>
-        <span class="kpi-val">{data.stats.total_granted.toLocaleString()}P</span>
+    <div class="hero-stats">
+      <div class="hero-ring">
+        <CmsStatRing value={data.stats.usage_rate} label="포인트 사용률" tone="primary" size={140} />
       </div>
-      <div class="kpi-card">
-        <span class="kpi-label">총 사용 포인트</span>
-        <span class="kpi-val">{data.stats.total_used.toLocaleString()}P</span>
-      </div>
-      <div class="kpi-card">
-        <span class="kpi-label">총 만료 소멸</span>
-        <span class="kpi-val kv-muted">{data.stats.total_expired.toLocaleString()}P</span>
-      </div>
-      <div class="kpi-card">
-        <span class="kpi-label">현재 유통 잔량 (부채)</span>
-        <span class="kpi-val kv-active">{data.stats.total_balance.toLocaleString()}P</span>
-      </div>
-      <div class="kpi-card">
-        <span class="kpi-label">포인트 사용률</span>
-        <span class="kpi-val">{data.stats.usage_rate}%</span>
-      </div>
-      <div class="kpi-card">
-        <span class="kpi-label">평균 사용자 보유</span>
-        <span class="kpi-val">{data.stats.avg_user_balance.toLocaleString()}P</span>
-      </div>
-      <div class="kpi-card">
-        <span class="kpi-label">이번 달 발급</span>
-        <span class="kpi-val">{data.stats.monthly_issued.toLocaleString()}P</span>
+      <div class="hero-bars">
+        <div class="hero-bars-title">발급 · 사용 · 만료 · 잔량 breakdown</div>
+        <CmsStatBars unit="P" items={[
+          { label: '총 발급',  value: data.stats.total_granted, tone: 'primary' },
+          { label: '총 사용',  value: data.stats.total_used,    tone: 'info' },
+          { label: '총 만료',  value: data.stats.total_expired, tone: 'danger' },
+          { label: '현재 잔량', value: data.stats.total_balance, tone: 'primary' },
+        ]} />
       </div>
     </div>
+
+    <CmsKpiGrid columns={3} cards={[
+      { label: '총 발급 포인트',           value: data.stats.total_granted,      unit: 'P', tone: 'primary' },
+      { label: '총 사용 포인트',           value: data.stats.total_used,         unit: 'P', tone: 'info' },
+      { label: '현재 유통 잔량 (부채)',     value: data.stats.total_balance,      unit: 'P', tone: 'primary' },
+      { label: '총 만료 소멸',             value: data.stats.total_expired,      unit: 'P', tone: 'danger', size: 'sm' },
+      { label: '포인트 사용률',            value: data.stats.usage_rate, unit: '%', tone: 'info', size: 'sm', progress: data.stats.usage_rate },
+      { label: '평균 사용자 보유',         value: data.stats.avg_user_balance,   unit: 'P', tone: 'neutral', size: 'sm' },
+      { label: '이번 달 발급',             value: data.stats.monthly_issued,     unit: 'P', tone: 'primary', size: 'sm' },
+    ]} />
 
     {#if data.txRows.length > 0}
       <div class="section-title">최근 이력</div>
@@ -467,19 +464,22 @@
 .section-title { font: var(--text-pc-title-18); color: var(--cs-text); margin: 0 0 16px; }
 .section-title.nm { margin: 0; }
 
-/* ─ KPI 그리드 ─ */
-.kpi-grid {
-  display: grid; grid-template-columns: repeat(3, 1fr);
-  gap: 12px; margin-bottom: 20px;
+/* ─ KPI 그리드: CmsKpiGrid/CmsKpiCard 공용 컴포넌트로 대체 (dashboard 탭) ─ */
+
+/* ─ 히어로 통계 (게이지 + 바그래프) ─ */
+.hero-stats {
+  display: flex; gap: 24px;
+  background: var(--cs-white); border-radius: var(--cms-radius-lg);
+  padding: 28px 32px; margin-bottom: 20px;
+  box-shadow: 0px 1px 4px rgba(0,0,0,0.06);
 }
-.kpi-card {
-  background: var(--cs-white); border-radius: var(--cms-radius-md);
-  padding: 20px 24px; display: flex; flex-direction: column; gap: 8px;
+.hero-ring {
+  display: flex; align-items: center; justify-content: center;
+  flex: 0 0 auto; padding-right: 24px;
+  border-right: 1px solid var(--cs-surface-gray);
 }
-.kpi-label { font: var(--text-pc-script-12); color: var(--cs-text-mid); }
-.kpi-val   { font: var(--text-pc-title-18); color: var(--cs-text); }
-.kv-active { color: var(--cs-purple); }
-.kv-muted  { color: var(--cs-text-light); }
+.hero-bars { flex: 1; min-width: 0; display: flex; flex-direction: column; justify-content: center; gap: 14px; }
+.hero-bars-title { font: var(--text-pc-body-14); font-weight: 700; color: var(--cs-text); }
 
 /* ─ 툴바 ─ */
 .toolbar { display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px; }

@@ -1712,6 +1712,172 @@ ARIA            : role="navigation" + aria-label / aria-current="page" (현재 �
 
 ---
 
+### 7-16. KPI/Stat 카드 (`CmsKpiCard`/`CmsKpiGrid`) — 대시보드 통계 공통 컴포넌트 ★
+
+> **트리거**: "대시보드 KPI 카드 추가해", "통계 카드 만들어" 요청 시 이 컴포넌트를 즉시 적용
+> **컴포넌트**: `src/lib/components/cms/CmsKpiCard.svelte` / `CmsKpiGrid.svelte`
+> **최초 적용**: `/cms/promotion/*` 6개 화면 (2026-08-06) — 이전엔 화면마다 `.kpi-card`/`.stat-card`
+> 등 제각각 마크업이 중복돼 있었음. 대시보드·통계 요약 UI가 필요한 모든 CMS 화면에서
+> **인라인 구현 금지** — 이 컴포넌트를 재사용한다.
+
+차트·SVG 그래프 라이브러리 없이도 시각적 위계를 주기 위해, 카드 좌측 4px 액센트바(tone별 색상)
++ delta 칩 + 선택적 CSS 비율바로 "시각화 요소"를 구현한다. 프로젝트 내 차트 라이브러리는
+존재하지 않으며(house style), 이 패턴이 텍스트 중심 CMS 톤을 유지하면서 볼드한 시각적 무게감을
+주는 표준 해법이다.
+
+#### Props — `CmsKpiCard`
+
+| Prop | 타입 | 기본값 | 설명 |
+|---|---|---|---|
+| `label` | `string` | — | 카드 상단 라벨 (필수) |
+| `value` | `string \| number` | — | 강조 표시할 수치/텍스트 (필수) |
+| `unit` | `string` | `''` | 값 옆에 붙는 단위 (원·%·건 등) |
+| `sub` | `string` | — | 값 아래 보조 설명 캡션 (선택) |
+| `delta` | `{ value: number; direction: 'up'\|'down'\|'flat' }` | — | 전기 대비 증감 칩 |
+| `tone` | `'primary'\|'neutral'\|'warn'\|'danger'` | `'neutral'` | 좌측 액센트바 색상 |
+| `size` | `'lg'\|'sm'` | `'lg'` | 1차/2차 지표 크기 위계 |
+| `progress` | `number` (0~100) | — | 카드 하단 CSS 비율바 (전환율 등) |
+
+#### Props — `CmsKpiGrid`
+
+| Prop | 타입 | 기본값 | 설명 |
+|---|---|---|---|
+| `cards` | `KpiCardProps[]` | — | 카드 배열 (필수) |
+| `columns` | `3` | `3` | 그리드 열 수 — **전 화면 3열 통일** |
+
+#### 사용 예 (대시보드 탭)
+
+```svelte
+<script lang="ts">
+  import CmsKpiGrid from '$lib/components/cms/CmsKpiGrid.svelte'
+</script>
+
+<CmsKpiGrid columns={3} cards={[
+  { label: '총 발급 수', value: stats.total_issued.toLocaleString(), tone: 'primary' },
+  { label: '전환율',     value: stats.conversion_rate, unit: '%', tone: 'primary', progress: stats.conversion_rate },
+  { label: '만료 수',    value: stats.total_expired.toLocaleString(), tone: 'neutral', size: 'sm' },
+]} />
+```
+
+#### tone 팔레트 (액센트바 색상, 2026-08-06 info 추가 + danger 색상 정정)
+
+```
+primary → var(--cs-purple)       (핵심 1차 지표)
+info    → var(--cs-info)         (파랑 — 활성·사용·전환 등 긍정적 흐름 지표)
+neutral → var(--cs-purple-dark)  (2차·보조 지표)
+warn    → var(--cs-warning)      (만료 임박 등 경고성 지표)
+danger  → var(--cs-red-badge)    (만료·소멸·위험 카운트 — 기존 --cs-error보다 채도 높은 레드로 강조)
+```
+
+> 컬러 단조로움 방지 원칙: 하나의 대시보드에 primary만 반복 사용하지 않는다 — 발급/활성 계열은
+> primary, 사용/전환 계열은 info(파랑), 만료/위험 계열은 danger(레드)로 구분해 최소 3색 이상
+> 혼용한다(2026-08-06 프로모션 5개 대시보드 리컬러링 기준).
+
+#### UI·토큰 규격 (컴포넌트 내장 — 재정의 금지)
+
+```
+카드 반경   : --cms-radius-md (15px)
+값 타이포   : --text-pc-title-18 (lg) / --text-pc-body-14 (sm)
+라벨 타이포 : --text-pc-script-12
+액센트바    : 좌측 4px 고정폭, tone별 색상
+delta 표기  : ▲/▼/— 유니코드 글리프 (SVG 아이콘 금지 — ✕ 텍스트 글리프 관례와 동일)
+delta 색상  : up→--cs-text-success / down→--cs-text-warning / flat→--cs-text-light
+progress bar: 4px 높이, --radius-full, 배경 --cs-lilac, 채움 --cs-purple
+```
+
+#### 재활용 체크리스트 (GATE C)
+
+```
+[ ] 대시보드/통계 카드 UI → CmsKpiCard/CmsKpiGrid 사용 (인라인 .kpi-card/.stat-card 구현 금지)?
+[ ] 그리드 열 수 3열 통일 (columns={3})?
+[ ] 1차 지표는 size 생략(lg 기본), 2차·보조 지표는 size='sm'?
+[ ] 경고성 지표(만료임박 등)는 tone='warn'?
+[ ] 차트·SVG 그래프 라이브러리 신규 도입하지 않았는가?
+```
+
+### 7-17. 히어로 통계 시각화 (`CmsStatRing`/`CmsStatBars`) — 대시보드 강조 시각화 ★
+
+> **트리거**: "대시보드에 시각적 요소 추가해", "원형/바 그래프 반영해" 요청 시 이 컴포넌트를 즉시 적용
+> **컴포넌트**: `src/lib/components/cms/CmsStatRing.svelte` / `CmsStatBars.svelte`
+> **최초 적용**: `/cms/promotion/*` 5개 대시보드(쿠폰·홍보·포인트·세그먼트·분석) (2026-08-06)
+
+`CmsKpiCard`/`CmsKpiGrid`(§7-16)만으로는 "성의없는 배치"로 지적된 평면 그리드 한계가 있어,
+대시보드 최상단에 순수 SVG(`CmsStatRing`)·CSS(`CmsStatBars`) 기반 히어로 시각화를 추가한다.
+차트 라이브러리는 여전히 도입하지 않는다 — SVG `<circle>` stroke-dasharray 원형 게이지와
+CSS 폭 비율 바그래프만으로 대시보드 사이트에서 흔히 보는 "핵심 지표 강조 + 비교 시각화" 톤을 구현한다.
+
+#### Props — `CmsStatRing` (원형 게이지)
+
+| Prop | 타입 | 기본값 | 설명 |
+|---|---|---|---|
+| `value` | `number` (0~100) | — | 게이지 진행률 (필수) |
+| `label` | `string` | — | 링 하단 라벨 (필수) |
+| `centerText` | `string` | `${value}%` | 링 중앙 강조 숫자 텍스트 (선택) |
+| `tone` | `'primary'\|'info'\|'neutral'\|'warn'\|'danger'` | `'primary'` | 링 색상 |
+| `size` | `number` (px) | `128` | 링 지름 |
+
+#### Props — `CmsStatBars` (가로 비교 바그래프)
+
+| Prop | 타입 | 기본값 | 설명 |
+|---|---|---|---|
+| `items` | `{label:string, value:number, tone?:string}[]` | — | 바 항목 배열 (필수) |
+| `unit` | `string` | `''` | 값 옆 단위 |
+| `formatValue` | `(n:number)=>string` | — | 값 포맷 커스텀 (선택) |
+
+바 너비는 `items` 중 최댓값을 100%로 자동 스케일링한다.
+
+#### 사용 예 (히어로 섹션 — 대시보드 최상단)
+
+```svelte
+<div class="hero-stats">
+  <div class="hero-ring">
+    <CmsStatRing value={stats.conversion_rate} label="쿠폰 사용 전환율" tone="primary" size={140} />
+  </div>
+  <div class="hero-bars">
+    <div class="hero-bars-title">발급 · 사용 · 만료 breakdown</div>
+    <CmsStatBars unit="건" items={[
+      { label: '총 발급',  value: stats.total_issued,  tone: 'primary' },
+      { label: '만료',    value: stats.total_expired, tone: 'warn' },
+    ]} />
+  </div>
+</div>
+```
+
+```css
+.hero-stats {
+  display: flex; gap: 24px;
+  background: var(--cs-white); border-radius: var(--cms-radius-lg);
+  padding: 28px 32px; margin-bottom: 20px;
+  box-shadow: 0px 1px 4px rgba(0,0,0,0.06);
+}
+.hero-ring { display: flex; align-items: center; justify-content: center; flex: 0 0 auto; padding-right: 24px; border-right: 1px solid var(--cs-surface-gray); }
+.hero-bars { flex: 1; min-width: 0; display: flex; flex-direction: column; justify-content: center; gap: 14px; }
+.hero-bars-title { font: var(--text-pc-body-14); font-weight: 700; color: var(--cs-text); }
+```
+
+`.hero-stats`/`.hero-ring`/`.hero-bars`/`.hero-bars-title`는 각 페이지 `<style>`에 동일하게
+인라인 정의한다(이 저장소는 CMS 페이지 스타일을 컴포넌트 외부 공용 CSS 파일로 분리하지 않는
+기존 관례를 따름 — `.table-card`/`.form-card` 등과 동일 패턴).
+
+#### 실데이터 매핑 원칙 (신규 쿼리 금지)
+
+```
+링 값        : 이미 로드된 stats의 비율 지표(conversion_rate/usage_rate 등) 재사용
+바그래프 항목 : 이미 로드된 배열/stats 필드에서 파생 — 신규 RPC·쿼리 추가 금지
+             (예: 세그먼트 인원 분포, 슬롯별 배너 수, 배너 슬롯별 클릭 수)
+```
+
+#### 재활용 체크리스트 (GATE C)
+
+```
+[ ] 대시보드 시각 강조 요청 → CmsStatRing/CmsStatBars 사용 (인라인 SVG/차트 라이브러리 금지)?
+[ ] 링 값은 0~100 범위의 비율 지표인가?
+[ ] 바그래프 항목이 기존 로드 데이터에서 파생됐는가(신규 쿼리 없음)?
+[ ] .hero-stats가 대시보드 탭 최상단(KPI 그리드 위)에 위치하는가?
+```
+
+---
+
 ## 12. `SuggestPicker` — 목록 선택 피커 명시적 UI 규칙 ★★★
 
 > **컴포넌트**: `src/lib/components/common/SuggestPicker.svelte` ← **CMS·USER 공통**

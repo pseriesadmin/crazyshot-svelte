@@ -3,6 +3,7 @@
   import { csToast } from '$lib/utils/toast'
   import type { PageData, ActionData } from './$types'
   import type { MarketingRule, MarketingRuleLog } from './+page.server'
+  import CmsKpiGrid from '$lib/components/cms/CmsKpiGrid.svelte'
 
   let { data, form }: { data: PageData; form: ActionData } = $props()
 
@@ -12,12 +13,28 @@
 
   // ─ 탭 ─
   const TABS = [
+    { id: 'dashboard', label: '대시보드' },
     { id: 'list',    label: '룰 목록' },
     { id: 'create',  label: '룰 생성' },
     { id: 'history', label: '실행 이력' },
   ] as const
 
-  let activeTab = $state<'list' | 'create' | 'history'>('list')
+  let activeTab = $state<'dashboard' | 'list' | 'create' | 'history'>('dashboard')
+
+  // 대시보드 KPI — 기존 로드된 rules/logs 배열에서 클라이언트 집계 (신규 쿼리 없음)
+  const kpiCards = $derived.by(() => {
+    const total  = rules.length
+    const active = rules.filter(r => r.is_active).length
+    const dayAgo = new Date(Date.now() - 24 * 3600000).toISOString()
+    const recent = logs.filter(l => l.triggered_at && l.triggered_at >= dayAgo).length
+    const failed = logs.filter(l => !l.result?.success).length
+    return [
+      { label: '전체 룰 수',        value: total,  tone: 'primary' as const },
+      { label: '활성 룰',           value: active, tone: 'primary' as const },
+      { label: '최근 24h 발동',     value: recent, tone: 'neutral' as const, size: 'sm' as const },
+      { label: '최근 50건 중 실패', value: failed, tone: failed > 0 ? 'danger' as const : 'neutral' as const, size: 'sm' as const },
+    ]
+  })
 
   // ─ 폼 상태 ─
   let f_name         = $state('')
@@ -105,9 +122,16 @@
   </div>
 
   <!-- ─────────────────────────────────
-       탭1: 룰 목록
+       탭1: 대시보드
   ───────────────────────────────── -->
-  {#if activeTab === 'list'}
+  {#if activeTab === 'dashboard'}
+    <div class="section-title">룰엔진 현황</div>
+    <CmsKpiGrid columns={3} cards={kpiCards} />
+
+  <!-- ─────────────────────────────────
+       탭2: 룰 목록
+  ───────────────────────────────── -->
+  {:else if activeTab === 'list'}
     <div class="toolbar">
       <span class="section-title nm">마케팅 룰</span>
       <button class="btn-primary" onclick={() => activeTab = 'create'}>+ 룰 생성</button>
@@ -166,7 +190,7 @@
     </div>
 
   <!-- ─────────────────────────────────
-       탭2: 룰 생성
+       탭3: 룰 생성
   ───────────────────────────────── -->
   {:else if activeTab === 'create'}
     <div class="section-title">새 룰 등록</div>
@@ -241,7 +265,7 @@
     </div>
 
   <!-- ─────────────────────────────────
-       탭3: 실행 이력
+       탭4: 실행 이력
   ───────────────────────────────── -->
   {:else if activeTab === 'history'}
     <div class="section-title">실행 이력 (최근 50건)</div>
@@ -282,7 +306,8 @@
 <!-- 삭제 확인 모달 -->
 {#if showDeleteModal}
   <div class="modal-bg" onclick={() => showDeleteModal = false} role="presentation">
-    <div class="modal-box" role="dialog" aria-modal="true" aria-label="룰 삭제 확인">
+    <div class="modal-box" role="dialog" aria-modal="true" aria-label="룰 삭제 확인"
+      onclick={(e) => e.stopPropagation()}>
       <p class="modal-title">룰 삭제</p>
       <p class="modal-sub"><strong>{deleteName}</strong> 룰을 삭제합니다.<br>이 작업은 되돌릴 수 없습니다.</p>
       <form method="POST" action="?/deleteRule" use:enhance>
@@ -310,7 +335,7 @@
   border-radius: var(--cms-radius-sm);
   background: transparent; color: var(--cs-text-mid);
   font: var(--text-pc-body-14); cursor: pointer;
-  min-height: 44px; transition: background 0.15s, color 0.15s;
+  min-height: 34px; transition: background 0.15s, color 0.15s;
 }
 .sub-tab-btn:hover  { background: rgba(59,47,138,0.08); color: var(--cs-text); }
 .sub-tab-btn.active { background: var(--cs-white); color: var(--cs-purple); }

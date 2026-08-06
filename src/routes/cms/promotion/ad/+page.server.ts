@@ -26,7 +26,7 @@ export const load: PageServerLoad = async ({ parent, locals, url }) => {
     throw redirect(303, '/cms?notice=access_denied')
   }
 
-  const tab = url.searchParams.get('tab') ?? 'slots'
+  const tab = url.searchParams.get('tab') ?? 'dashboard'
 
   // banners 테이블은 migration #45에서 신설 — 타입 생성 전 캐스트
   // eslint-disable-next-line @typescript-eslint/no-explicit-any

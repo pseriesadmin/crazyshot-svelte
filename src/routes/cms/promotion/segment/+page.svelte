@@ -2,6 +2,9 @@
   import { goto } from '$app/navigation'
   import { page } from '$app/stores'
   import type { PageData } from './$types'
+  import CmsKpiGrid from '$lib/components/cms/CmsKpiGrid.svelte'
+  import CmsStatRing from '$lib/components/cms/CmsStatRing.svelte'
+  import CmsStatBars from '$lib/components/cms/CmsStatBars.svelte'
 
   interface Props { data: PageData }
   let { data }: Props = $props()
@@ -24,6 +27,17 @@
     first_purchase_ready: 'var(--cs-success-light)',
     repurchase_ready:     'var(--cs-purple)',
     high_value:           'var(--cs-orange)',
+  }
+
+  // CmsStatBars 톤 매핑 — SEGMENT_COLOR의 의미를 5색 톤 팔레트로 근사
+  const SEGMENT_TONE: Record<string, 'primary' | 'info' | 'neutral' | 'warn' | 'danger'> = {
+    new_member:           'info',
+    vip:                  'warn',
+    dormant:              'neutral',
+    cart_abandon:         'danger',
+    first_purchase_ready: 'info',
+    repurchase_ready:     'primary',
+    high_value:           'primary',
   }
 
   let isRefreshing = $state(false)
@@ -108,23 +122,32 @@
     <div class="info-banner" role="alert">{refreshMsg}</div>
   {/if}
 
-  <!-- KPI 카드 3종 -->
-  <div class="kpi-row">
-    <div class="kpi-card">
-      <div class="kpi-label">추적 사용자</div>
-      <div class="kpi-value">{(data.stats.total_tracked_users ?? 0).toLocaleString()}</div>
-    </div>
-    <div class="kpi-card">
-      <div class="kpi-label">최근 7일 이벤트</div>
-      <div class="kpi-value">{(data.stats.total_events_7d ?? 0).toLocaleString()}</div>
-    </div>
-    <div class="kpi-card">
-      <div class="kpi-label">마지막 갱신</div>
-      <div class="kpi-value kpi-value--sm">
-        {data.stats.last_refresh ? fmtDate(data.stats.last_refresh) : '미실행'}
+  <!-- 히어로 통계: 최대 세그먼트 점유율 게이지 + 세그먼트별 인원 바그래프 -->
+  {#if orderedSegments.length > 0}
+    {@const totalUsers = data.stats.total_tracked_users ?? 0}
+    {@const topCount = Math.max(...orderedSegments.map(k => segmentMap[k]?.count ?? 0))}
+    {@const topShare = totalUsers > 0 ? Math.round((topCount / totalUsers) * 100) : 0}
+    <div class="hero-stats">
+      <div class="hero-ring">
+        <CmsStatRing value={topShare} label="최대 세그먼트 점유율" tone="primary" size={140} />
+      </div>
+      <div class="hero-bars">
+        <div class="hero-bars-title">세그먼트별 인원 분포</div>
+        <CmsStatBars unit="명" items={orderedSegments.map(key => ({
+          label: data.segmentLabels[key] ?? key,
+          value: segmentMap[key]?.count ?? 0,
+          tone: SEGMENT_TONE[key] ?? 'primary',
+        }))} />
       </div>
     </div>
-  </div>
+  {/if}
+
+  <!-- KPI 카드 3종 -->
+  <CmsKpiGrid columns={3} cards={[
+    { label: '추적 사용자',    value: data.stats.total_tracked_users ?? 0, tone: 'primary' },
+    { label: '최근 7일 이벤트', value: data.stats.total_events_7d ?? 0,      tone: 'info' },
+    { label: '마지막 갱신',    value: data.stats.last_refresh ? fmtDate(data.stats.last_refresh) : '미실행', tone: 'neutral', size: 'sm' },
+  ]} />
 
   <!-- 세그먼트 카드 목록 -->
   <div class="seg-cards">
@@ -161,7 +184,7 @@
           <span class="user-panel-count">({data.segmentUsers.length}명)</span>
         </h2>
         <a
-          href="/cms/promotion/coupon?tab=distribute&segment={data.activeSegment}"
+          href="/cms/promotion/coupon?tab=manage"
           class="btn-primary"
         >
           쿠폰 배포
@@ -245,29 +268,22 @@
     color: var(--cs-text-success);
   }
 
-  /* KPI */
-  .kpi-row {
-    display: grid;
-    grid-template-columns: repeat(3, 1fr);
-    gap: 12px;
+  /* KPI: CmsKpiGrid/CmsKpiCard 공용 컴포넌트로 대체 */
+
+  /* ─ 히어로 통계 (게이지 + 바그래프) ─ */
+  .hero-stats {
+    display: flex; gap: 24px;
+    background: var(--cs-white); border-radius: var(--cms-radius-lg);
+    padding: 28px 32px; margin-bottom: 20px;
+    box-shadow: 0px 1px 4px rgba(0,0,0,0.06);
   }
-  .kpi-card {
-    background: var(--cs-white);
-    border-radius: var(--cms-radius-md);
-    padding: 20px;
+  .hero-ring {
+    display: flex; align-items: center; justify-content: center;
+    flex: 0 0 auto; padding-right: 24px;
+    border-right: 1px solid var(--cs-surface-gray);
   }
-  .kpi-label {
-    font: var(--text-pc-script-12);
-    color: var(--cs-text-mid);
-    margin-bottom: 8px;
-  }
-  .kpi-value {
-    font: var(--text-pc-title-18);
-    color: var(--cs-text);
-  }
-  .kpi-value--sm {
-    font: var(--text-pc-body-14);
-  }
+  .hero-bars { flex: 1; min-width: 0; display: flex; flex-direction: column; justify-content: center; gap: 14px; }
+  .hero-bars-title { font: var(--text-pc-body-14); font-weight: 700; color: var(--cs-text); }
 
   /* 세그먼트 카드 */
   .seg-cards {
