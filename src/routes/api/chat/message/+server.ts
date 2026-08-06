@@ -9,6 +9,9 @@ import { createClient } from '@supabase/supabase-js'
 import { getSupabaseUrl } from '$lib/env/supabasePublic'
 import type { RequestHandler } from './$types'
 import type { ChatMessage, ChatIntent } from '$lib/types/chat'
+import { matchCannedResponse } from '$lib/server/matchCannedResponse'
+import type { CannedResponseForMatch } from '$lib/server/matchCannedResponse'
+import { loadSynonymGroups } from '$lib/server/synonymLearning'
 
 const anthropic = new Anthropic({ apiKey: ANTHROPIC_API_KEY })
 
@@ -70,11 +73,13 @@ export const POST: RequestHandler = async ({ request, locals }) => {
   }
 
   // closed 세션: 반환 대신 자동 재활성화 (race condition 대비 — admin이 닫는 동안 사용자 전송)
+  // §F FIX-6: 로컬 변수 갱신 — 아래 "상태 전환(공통)" 블록의 중복 업데이트 쿼리를 방지
   if (chatSession.status === 'closed') {
     await db
       .from('chat_sessions')
       .update({ status: 'open', updated_at: new Date().toISOString() })
       .eq('id', body.session_id)
+    chatSession.status = 'open' // 로컬 변수 갱신: 이 블록이 실행된 후 아래 조건이 false가 됨
   }
 
   // 1. 사용자 메시지 INSERT
@@ -93,7 +98,76 @@ export const POST: RequestHandler = async ({ request, locals }) => {
     return json({ error: insertError?.message ?? '메시지 저장 실패' }, { status: 500 })
   }
 
-  // 2. 최근 10턴 히스토리 로드
+  // 세션 상태 전환(어느 경로든 공통) — 새 메시지 도착 자체로 무조건 진행중 복귀
+  if (chatSession.status !== 'open') {
+    await db
+      .from('chat_sessions')
+      .update({ status: 'open' })
+      .eq('id', body.session_id)
+  }
+
+  // service_role 클라이언트 (자동답변 매칭 + intent_logs RLS bypass 공통 사용)
+  const serviceRoleKey = env.SUPABASE_SERVICE_ROLE_KEY
+  const admin = serviceRoleKey ? createClient(getSupabaseUrl(), serviceRoleKey) : null
+
+  // 1-a. 하이브리드 자동답변 1단계 — 키워드 매칭을 AI보다 먼저 시도
+  //   Claude 호출·API 키 상태와 완전히 무관하게 동작(장애 시에도 매칭되는 빠른답변은 계속 나감).
+  //   매칭 성공 시 Claude를 아예 호출하지 않고 즉시 응답 — 이 메시지는 intent 분류를 거치지
+  //   않았으므로 chat_intent_logs에는 기록하지 않음(분류한 적이 없으므로).
+  if (admin) {
+    try {
+      const { data: arSettings } = await admin
+        .from('auto_reply_settings')
+        .select('enabled')
+        .limit(1)
+        .maybeSingle()
+      const arEnabled = (arSettings as { enabled: boolean } | null)?.enabled ?? false
+
+      if (arEnabled) {
+        const { data: candidates } = await admin
+          .from('canned_responses')
+          .select('id, title, content, category, shortcut, match_keywords, usage_count')
+        // §E SYN-9: 확정된 동의어 그룹을 로드해 키워드 매칭 범위를 확장
+        const synonymGroups = await loadSynonymGroups()
+        const match = matchCannedResponse(body.content.trim(), (candidates as CannedResponseForMatch[] ?? []), synonymGroups)
+
+        if (match) {
+          const { data: matchedMessage, error: matchInsertErr } = await db
+            .from('chat_messages')
+            .insert({
+              session_id: body.session_id,
+              sender_type: 'admin',
+              content: match.content,
+              message_type: 'text',
+              action_payload: { type: 'auto_canned_reply', canned_response_id: match.id },
+            })
+            .select()
+            .single()
+
+          if (!matchInsertErr && matchedMessage) {
+            await admin.rpc('increment_canned_response_usage', { p_id: match.id })
+            await db
+              .from('chat_sessions')
+              .update({ updated_at: new Date().toISOString() })
+              .eq('id', body.session_id)
+
+            return json(
+              {
+                user_message: userMessage as ChatMessage,
+                ai_message: matchedMessage as ChatMessage,
+                intent_log: null,
+              },
+              { status: 201 },
+            )
+          }
+        }
+      }
+    } catch {
+      // 자동답변 매칭 실패 시 조용히 2단계(AI 파이프라인)로 폴백
+    }
+  }
+
+  // 2. 매칭 실패(또는 자동답변 꺼짐) — 2단계: 기존 AI 파이프라인. 최근 10턴 히스토리 로드
   const { data: history } = await db
     .from('chat_messages')
     .select('sender_type, content')
@@ -143,7 +217,7 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 
   try {
     const response = await anthropic.messages.create({
-      model: 'claude-haiku-4-5',
+      model: 'claude-haiku-4-5-20251001',
       max_tokens: 512,
       system: SYSTEM_PROMPT,
       messages: validHistory,
@@ -165,18 +239,7 @@ export const POST: RequestHandler = async ({ request, locals }) => {
       classified.reply || '담당자에게 연결해 드리겠습니다. 잠시만 기다려 주세요.'
   }
 
-  // 5. 세션 상태 전환
-  // 새 메시지가 도착한 것 자체로 무조건 진행중 복귀 (AI 분류 결과와 무관하게 적용)
-  //   — CMS 관리자가 "대기" 목록에서 새 활동을 놓치지 않도록. 대기 상태는 오직
-  //     auto_pending_inactive_sessions RPC(1시간 무응답)로만 재진입한다.
-  if (chatSession.status !== 'open') {
-    await db
-      .from('chat_sessions')
-      .update({ status: 'open' })
-      .eq('id', body.session_id)
-  }
-
-  // 6. AI 응답 메시지 INSERT
+  // 5. 응답 메시지 INSERT (Claude 자유응답 — 1단계에서 매칭 실패했을 때만 여기 도달)
   const { data: aiMessage, error: aiInsertError } = await db
     .from('chat_messages')
     .insert({
@@ -195,11 +258,9 @@ export const POST: RequestHandler = async ({ request, locals }) => {
     return json({ error: aiInsertError.message }, { status: 500 })
   }
 
-  // 7. chat_intent_logs INSERT
+  // 6. chat_intent_logs INSERT
   //    RLS가 service_role 전용(모든 authenticated 요청 차단)이라 locals.supabase로는
   //    항상 조용히 실패했음(0건 적재) — service_role 클라이언트로 교체
-  const serviceRoleKey = env.SUPABASE_SERVICE_ROLE_KEY
-  const admin = serviceRoleKey ? createClient(getSupabaseUrl(), serviceRoleKey) : null
   const { data: intentLog } = admin
     ? await admin
         .from('chat_intent_logs')
@@ -213,7 +274,7 @@ export const POST: RequestHandler = async ({ request, locals }) => {
         .single()
     : { data: null }
 
-  // 8. chat_sessions updated_at 갱신
+  // 7. chat_sessions updated_at 갱신
   await db
     .from('chat_sessions')
     .update({ updated_at: new Date().toISOString() })

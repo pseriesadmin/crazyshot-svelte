@@ -1,0 +1,574 @@
+<script lang="ts">
+  // CannedResponsePanel.svelte — 빠른답변 상세/편집 패널
+  // create/update: 기존 /api/cms/canned-responses REST API fetch 재사용 (로직 중복 없음)
+  // delete: CmsDeleteButton.svelte action="?/delete" 재사용
+
+  import { invalidateAll } from '$app/navigation'
+  import CmsDeleteButton from '$lib/components/cms/CmsDeleteButton.svelte'
+  import { csToast } from '$lib/utils/toast'
+  import { CANNED_RESPONSE_CATEGORIES } from '$lib/constants/cannedResponseCategories'
+  // 로컬 타입 정의 (routes 크로스-임포트 금지 원칙)
+  interface CannedResponseRow {
+    id: string
+    title: string
+    content: string
+    category: string | null
+    shortcut: string | null
+    match_keywords: string[]
+    usage_count: number
+    created_at: string
+  }
+
+  const MAX_KEYWORDS = 10
+
+  interface Props {
+    item: CannedResponseRow | null
+    onclose?: () => void
+    oncreated?: (id: string) => void
+  }
+
+  let { item, onclose, oncreated }: Props = $props()
+
+  const isNew = $derived(item === null)
+
+  // 로컬 편집 상태
+  let localTitle    = $state('')
+  let localContent  = $state('')
+  let localCategory = $state<string | null>(null)
+  let localShortcut = $state('')
+  let localKeywords = $state<string[]>([])
+  let kwInput       = $state('')
+  let isSaving      = $state(false)
+
+  // item 변경 시 로컬 상태 동기화
+  $effect(() => {
+    localTitle    = item?.title    ?? ''
+    localContent  = item?.content  ?? ''
+    localCategory = item?.category ?? null
+    localShortcut = item?.shortcut ?? ''
+    localKeywords = item?.match_keywords ? [...item.match_keywords] : []
+    kwInput       = ''
+  })
+
+  // ── 고객 매칭 키워드 (단축키와 분리 — IME-safe, CmsContentEditor 키워드 패턴 참고) ──
+  function addKeyword(): void {
+    const kw = kwInput.trim()
+    if (!kw || localKeywords.length >= MAX_KEYWORDS || localKeywords.includes(kw)) {
+      kwInput = ''
+      return
+    }
+    localKeywords = [...localKeywords, kw]
+    kwInput = ''
+  }
+
+  function removeKeyword(kw: string): void {
+    localKeywords = localKeywords.filter((k) => k !== kw)
+  }
+
+  function handleKwKeydown(e: KeyboardEvent): void {
+    if (e.isComposing) return // IME 조합 중 무시 (한글 이중 등록 방지)
+    if (e.key === 'Enter' || e.key === ',') {
+      e.preventDefault()
+      addKeyword()
+    } else if (e.key === 'Backspace' && kwInput === '' && localKeywords.length > 0) {
+      localKeywords = localKeywords.slice(0, -1)
+    }
+  }
+
+  const contentLength = $derived(localContent.length)
+  const shortcutDisplay = $derived(
+    localShortcut ? (localShortcut.startsWith('/') ? localShortcut : `/${localShortcut}`) : ''
+  )
+
+  async function handleSave(): Promise<void> {
+    if (!localTitle.trim() || !localContent.trim() || isSaving) return
+    isSaving = true
+    try {
+      const url    = isNew ? '/api/cms/canned-responses' : `/api/cms/canned-responses/${item!.id}`
+      const method = isNew ? 'POST' : 'PATCH'
+      const body = {
+        title:    localTitle.trim(),
+        content:  localContent.trim(),
+        category: localCategory || null,
+        shortcut: localShortcut.replace(/^\//, '').trim() || null,
+        match_keywords: localKeywords,
+      }
+      const res = await fetch(url, {
+        method,
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      })
+      if (!res.ok) {
+        const d = await res.json().catch(() => ({})) as { error?: string }
+        csToast.error(d.error ?? '저장 실패')
+        return
+      }
+      const created = await res.json() as { id?: string }
+      csToast.success(isNew ? '빠른답변이 등록됐습니다.' : '빠른답변이 수정됐습니다.')
+      await invalidateAll()
+      if (isNew && created.id) oncreated?.(created.id)
+    } finally {
+      isSaving = false
+    }
+  }
+
+  function handleDeleteSuccess(): void {
+    csToast.success('빠른답변이 삭제됐습니다.')
+    invalidateAll()
+    onclose?.()
+  }
+</script>
+
+<div class="panel">
+  <div class="panel-head">
+    <h3 class="panel-title">{isNew ? '새 빠른답변' : '빠른답변 편집'}</h3>
+    <button class="btn-close" onclick={onclose} aria-label="닫기">✕</button>
+  </div>
+
+  <div class="panel-body">
+    <!-- 제목 -->
+    <div class="field">
+      <label class="field-label" for="cr-title">제목 <span class="req">*</span></label>
+      <input
+        id="cr-title"
+        type="text"
+        class="field-input"
+        bind:value={localTitle}
+        placeholder="빠른답변 제목을 입력하세요"
+        maxlength="100"
+      />
+    </div>
+
+    <!-- 카테고리 (콤보 버튼) -->
+    <div class="field">
+      <span class="field-label">카테고리</span>
+      <div class="cat-pills">
+        <button
+          type="button"
+          class="cat-pill"
+          class:active={localCategory === null}
+          onclick={() => localCategory = null}
+        >전체</button>
+        {#each CANNED_RESPONSE_CATEGORIES as cat}
+          <button
+            type="button"
+            class="cat-pill"
+            class:active={localCategory === cat.value}
+            onclick={() => localCategory = cat.value}
+          >{cat.label}</button>
+        {/each}
+      </div>
+    </div>
+
+    <!-- 단축키 -->
+    <div class="field">
+      <label class="field-label" for="cr-shortcut">단축키</label>
+      <div class="shortcut-wrap">
+        <span class="shortcut-prefix">/</span>
+        <input
+          id="cr-shortcut"
+          type="text"
+          class="field-input field-input--shortcut"
+          bind:value={localShortcut}
+          placeholder="예: return, payment"
+          maxlength="30"
+        />
+      </div>
+      <!-- 단축키 미리보기 — ChatInput /드롭다운이 어떻게 보일지 -->
+      {#if shortcutDisplay}
+        <div class="shortcut-preview">
+          <span class="preview-label">미리보기</span>
+          <div class="preview-row">
+            <span class="preview-shortcut">{shortcutDisplay}</span>
+            <span class="preview-title">{localTitle || '(제목 없음)'}</span>
+          </div>
+        </div>
+      {/if}
+    </div>
+
+    <!-- 고객 매칭 키워드 (단축키와 분리 — 자동답변이 고객 메시지를 판단할 때 쓰는 값) -->
+    <div class="field">
+      <label class="field-label" for="cr-kw-input">
+        매칭 키워드
+        <span class="field-hint">(자동답변이 이 단어를 보면 이 답변을 보냅니다)</span>
+      </label>
+      <div class="kw-tag-list" role="group" aria-label="매칭 키워드 (최대 10개)">
+        {#each localKeywords as kw (kw)}
+          <span class="kw-tag">
+            {kw}
+            <button type="button" class="kw-del" onclick={() => removeKeyword(kw)} aria-label={`${kw} 키워드 삭제`}>×</button>
+          </span>
+        {/each}
+        {#if localKeywords.length < MAX_KEYWORDS}
+          <input
+            id="cr-kw-input"
+            type="text"
+            class="kw-input"
+            placeholder={localKeywords.length === 0 ? '예: 파손, 고장, 깨짐 (Enter로 추가)' : '키워드 추가...'}
+            bind:value={kwInput}
+            onkeydown={handleKwKeydown}
+            onblur={addKeyword}
+          />
+        {/if}
+      </div>
+      <span class="kw-count">{localKeywords.length}/{MAX_KEYWORDS}</span>
+    </div>
+
+    <!-- 내용 -->
+    <div class="field">
+      <label class="field-label" for="cr-content">
+        내용 <span class="req">*</span>
+        <span class="char-count">{contentLength}자</span>
+      </label>
+      <textarea
+        id="cr-content"
+        class="field-textarea"
+        bind:value={localContent}
+        placeholder="고객에게 전송할 답변 내용을 입력하세요"
+        rows={6}
+      ></textarea>
+    </div>
+
+    <!-- 내용 전체 미리보기 -->
+    {#if localContent}
+      <div class="content-preview">
+        <span class="preview-label">내용 미리보기</span>
+        <div class="preview-bubble">{localContent}</div>
+      </div>
+    {/if}
+  </div>
+
+  <div class="panel-foot">
+    {#if !isNew && item}
+      <CmsDeleteButton
+        action="?/delete"
+        id={item.id}
+        warnMessage="빠른답변을 삭제하면 복구할 수 없습니다."
+        successMessage="삭제됐습니다."
+        onsuccess={handleDeleteSuccess}
+      />
+    {/if}
+    <div class="foot-right">
+      <button type="button" class="btn-cancel" onclick={onclose}>취소</button>
+      <button
+        type="button"
+        class="btn-save"
+        onclick={handleSave}
+        disabled={!localTitle.trim() || !localContent.trim() || isSaving}
+      >
+        {isSaving ? '저장 중...' : isNew ? '등록' : '저장'}
+      </button>
+    </div>
+  </div>
+</div>
+
+<style>
+  .panel {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+    background: var(--cs-white);
+    border-radius: var(--cms-radius-lg, 16px);
+    overflow: hidden;
+  }
+
+  .panel-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 20px 24px 16px;
+    border-bottom: 1px solid var(--cs-lilac);
+    flex-shrink: 0;
+  }
+
+  .panel-title {
+    font: var(--text-pc-title-18, 700 18px/1.4 'Noto Sans KR', sans-serif);
+    color: var(--cs-dark);
+    margin: 0;
+  }
+
+  .btn-close {
+    background: none;
+    border: none;
+    font-size: 16px;
+    color: var(--cs-text-mid, #666);
+    cursor: pointer;
+    padding: 4px 8px;
+    min-height: 32px;
+    border-radius: var(--radius-sm);
+    transition: color 0.15s;
+  }
+  .btn-close:hover { color: var(--cs-dark); }
+
+  .panel-body {
+    flex: 1;
+    overflow-y: auto;
+    padding: 24px;
+    display: flex;
+    flex-direction: column;
+    gap: 20px;
+  }
+
+  .field {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+
+  .field-label {
+    font: 700 13px/1.4 'Noto Sans KR', sans-serif;
+    color: var(--cs-text-mid, #666);
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+
+  .req { color: var(--cs-red-badge, #FF3535); font-weight: 400; }
+
+  .field-hint {
+    font: 400 11px/1.4 'Noto Sans KR', sans-serif;
+    color: var(--cs-text-light, #aaa);
+  }
+
+  /* 고객 매칭 키워드 태그 입력 (CmsContentEditor 키워드 패턴 참고) */
+  .kw-tag-list {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 6px;
+    min-height: 38px;
+    padding: 8px 10px;
+    border: 1.5px solid var(--cs-lilac);
+    border-radius: var(--radius-sm);
+  }
+  .kw-tag-list:focus-within { border-color: var(--cs-purple); }
+
+  .kw-tag {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 4px 8px;
+    background: var(--cs-purple-op10);
+    color: var(--cs-purple);
+    border-radius: 6px;
+    font: 700 13px/1 'Noto Sans KR', sans-serif;
+    white-space: nowrap;
+  }
+
+  .kw-del {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 16px;
+    height: 16px;
+    border: none;
+    border-radius: 50%;
+    background: transparent;
+    color: var(--cs-purple);
+    font-size: 12px;
+    cursor: pointer;
+    opacity: 0.7;
+    line-height: 1;
+    padding: 0;
+  }
+  .kw-del:hover { opacity: 1; }
+
+  .kw-input {
+    flex: 1;
+    min-width: 140px;
+    border: none;
+    background: transparent;
+    outline: none;
+    font: 400 13px/1.4 'Noto Sans KR', sans-serif;
+    color: var(--cs-dark);
+  }
+  .kw-input::placeholder { color: var(--cs-text-light, #aaa); }
+
+  .kw-count {
+    align-self: flex-end;
+    font: 400 11px/1 'Noto Sans KR', sans-serif;
+    color: var(--cs-text-light, #aaa);
+  }
+
+  .char-count {
+    margin-left: auto;
+    font: 400 12px/1 'Noto Sans KR', sans-serif;
+    color: var(--cs-text-light, #aaa);
+  }
+
+  .field-input,
+  .field-textarea {
+    border: 1.5px solid var(--cs-lilac);
+    border-radius: var(--radius-sm);
+    padding: 10px 14px;
+    font: 400 14px/1.5 'Noto Sans KR', sans-serif;
+    color: var(--cs-dark);
+    background: var(--cs-white);
+    transition: border-color 0.15s;
+    width: 100%;
+    box-sizing: border-box;
+    resize: vertical;
+  }
+  .field-input:focus,
+  .field-textarea:focus {
+    outline: none;
+    border-color: var(--cs-purple);
+  }
+
+  .field-textarea { min-height: 120px; }
+
+  /* 카테고리 콤보 버튼 */
+  .cat-pills {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+
+  .cat-pill {
+    height: 34px;
+    padding: 0 14px;
+    border-radius: var(--radius-xl, 30px);
+    border: 1.5px solid #DCDCDC;
+    background: var(--cs-white);
+    font: 700 13px/1 'Noto Sans KR', sans-serif;
+    color: var(--cs-text);
+    cursor: pointer;
+    transition: background 0.15s, border-color 0.15s, color 0.15s;
+  }
+  .cat-pill.active {
+    background: var(--cs-purple);
+    border-color: var(--cs-purple);
+    color: var(--cs-white);
+  }
+  .cat-pill:hover:not(.active) {
+    border-color: var(--cs-purple);
+    color: var(--cs-purple);
+  }
+
+  /* 단축키 */
+  .shortcut-wrap {
+    display: flex;
+    align-items: center;
+    gap: 0;
+    border: 1.5px solid var(--cs-lilac);
+    border-radius: var(--radius-sm);
+    overflow: hidden;
+    transition: border-color 0.15s;
+  }
+  .shortcut-wrap:focus-within { border-color: var(--cs-purple); }
+
+  .shortcut-prefix {
+    padding: 10px 10px 10px 14px;
+    font: 700 14px/1 'Noto Sans KR', sans-serif;
+    color: var(--cs-purple);
+    background: var(--cs-lilac);
+    user-select: none;
+  }
+
+  .field-input--shortcut {
+    border: none;
+    border-radius: 0;
+    flex: 1;
+  }
+  .field-input--shortcut:focus { border-color: transparent; }
+
+  /* 미리보기 공통 */
+  .shortcut-preview,
+  .content-preview {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    margin-top: 4px;
+  }
+
+  .preview-label {
+    font: 700 11px/1 'Noto Sans KR', sans-serif;
+    color: var(--cs-text-light, #aaa);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+  }
+
+  .preview-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    background: var(--cs-surface-gray, #f6f6f6);
+    border-radius: var(--radius-sm);
+    padding: 8px 12px;
+  }
+
+  .preview-shortcut {
+    font: 700 13px/1 'Noto Sans KR', sans-serif;
+    color: var(--cs-purple);
+    background: rgba(59,47,138,0.08);
+    padding: 3px 8px;
+    border-radius: 4px;
+    flex-shrink: 0;
+  }
+
+  .preview-title {
+    font: 400 13px/1.4 'Noto Sans KR', sans-serif;
+    color: var(--cs-text-mid, #666);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .preview-bubble {
+    background: var(--cs-lilac);
+    border-radius: var(--radius-md, 15px);
+    padding: 12px 16px;
+    font: 400 13px/1.6 'Noto Sans KR', sans-serif;
+    color: var(--cs-dark);
+    white-space: pre-wrap;
+    word-break: break-word;
+  }
+
+  /* 하단 액션 */
+  .panel-foot {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 16px 24px;
+    border-top: 1px solid var(--cs-lilac);
+    flex-shrink: 0;
+    gap: 12px;
+  }
+
+  .foot-right {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-left: auto;
+  }
+
+  .btn-cancel {
+    height: 36px;
+    padding: 0 16px;
+    border-radius: var(--radius-md, 15px);
+    border: 1.5px solid var(--cs-lilac);
+    background: var(--cs-white);
+    font: 700 13px/1 'Noto Sans KR', sans-serif;
+    color: var(--cs-text-mid, #666);
+    cursor: pointer;
+    transition: border-color 0.15s;
+  }
+  .btn-cancel:hover { border-color: var(--cs-purple); color: var(--cs-purple); }
+
+  .btn-save {
+    height: 36px;
+    padding: 0 20px;
+    border-radius: var(--radius-md, 15px);
+    border: none;
+    background: var(--cs-purple);
+    font: 700 13px/1 'Noto Sans KR', sans-serif;
+    color: var(--cs-white);
+    cursor: pointer;
+    transition: background 0.15s;
+  }
+  .btn-save:hover:not(:disabled) { background: var(--cs-purple-hover, #2e2468); }
+  .btn-save:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+</style>

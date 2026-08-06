@@ -25,6 +25,8 @@ export type ActionCardType =
   | 'coupon_issued'
   | 'contract_link'    // 전자계약 서명 링크 발송 (고객 수신)
   | 'contract_signed'  // 전자계약 서명 완료 알림 (관리자 수신)
+  // 자동답변 메타데이터 (message_type: 'text', sender_type: 'admin')
+  | 'auto_canned_reply'   // 빠른답변 자동매칭 성공 (하이브리드 1단계, AI 호출 전)
 
 export type ActionCardButtonColor = 'purple' | 'red' | 'green' | 'orange'
 
@@ -56,6 +58,8 @@ export interface ActionPayload {
   return_methods?: string[]    // ['택배', '직접 방문']
   // 만료 처리
   is_expired?: boolean
+  // 자동답변 전용
+  canned_response_id?: string
 }
 
 export interface ChatSession {
@@ -143,8 +147,3 @@ export interface SendMessageResponse {
   intent_log: ChatIntentLog | null
 }
 
-export interface SendActionCardRequest {
-  session_id: string
-  action_payload: ActionPayload
-  content?: string
-}

@@ -4,6 +4,7 @@ import { env } from '$env/dynamic/private'
 import { PUBLIC_SUPABASE_URL } from '$env/static/public'
 import { createClient } from '@supabase/supabase-js'
 import type { RequestHandler } from './$types'
+import { recordSynonymLearning } from '$lib/server/synonymLearning'
 
 export const POST: RequestHandler = async ({ request, locals }) => {
   const { session } = await locals.safeGetSession()
@@ -25,8 +26,9 @@ export const POST: RequestHandler = async ({ request, locals }) => {
   if (!p?.cms_role) return json({ error: '관리자 권한이 필요합니다.' }, { status: 403 })
 
   const body = await request.json().catch(() => null)
-  const sessionId = (body?.session_id as string | undefined)?.trim() ?? ''
-  const content   = (body?.content   as string | undefined)?.trim() ?? ''
+  const sessionId       = (body?.session_id        as string | undefined)?.trim() ?? ''
+  const content         = (body?.content            as string | undefined)?.trim() ?? ''
+  const cannedResponseId = (body?.canned_response_id as string | undefined)?.trim() || null
 
   if (!sessionId || !content) {
     return json({ error: 'session_id와 content는 필수입니다.' }, { status: 400 })
@@ -78,6 +80,11 @@ export const POST: RequestHandler = async ({ request, locals }) => {
     .single()
 
   if (insertErr) return json({ error: insertErr.message }, { status: 500 })
+
+  // §E SYN-8: 동의어 학습 — 관리자가 미리답변을 선택해 실제 발신한 경우에만 fire-and-forget
+  if (cannedResponseId) {
+    recordSynonymLearning(cannedResponseId, sessionId).catch(() => {})
+  }
 
   // updated_at 갱신
   await admin
