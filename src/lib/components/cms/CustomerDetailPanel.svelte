@@ -76,14 +76,44 @@
     cs_inquiries: CsInquiryReply[]
   }
 
-  let activeTab = $state<'info' | 'score' | 'subscription' | 'blacklist' | 'inquiry'>('info')
+  interface RentalRow {
+    id: number
+    status: string | null
+    reservation_code: string | null
+    start_date: string | null
+    end_date: string | null
+    rental_days: number | null
+    duration_type: string | null
+    pickup_method: string | null
+    return_method: string | null
+    created_at: string
+    products: { name: string; product_code: string | null } | null
+  }
+
+  interface CustomerChatSession {
+    id: string
+    status: string
+    context_type: string
+    context_id: string | null
+    created_at: string
+    updated_at: string
+    closed_at: string | null
+  }
+
+  let activeTab = $state<'info' | 'score' | 'subscription' | 'rental' | 'blacklist' | 'inquiry'>('info')
   let subscriptions = $state<Subscription[]>([])
   let auditLog = $state<AuditEntry[]>([])
   let inquiryPosts = $state<CsPost[]>([])
   let loadingSubscriptions = $state(false)
   let loadingAudit = $state(false)
   let loadingInquiries = $state(false)
+  let inquiryPostsLoaded = $state(false)
   let inquiryExpandedId = $state<string | null>(null)
+  let rentals = $state<RentalRow[]>([])
+  let loadingRentals = $state(false)
+  let chatSessions = $state<CustomerChatSession[]>([])
+  let loadingChatSessions = $state(false)
+  let chatSessionsLoaded = $state(false)
 
   // 스코어 탭 폼 상태
   let adjustDelta = $state(0)
@@ -109,8 +139,14 @@
     if (activeTab === 'score' && auditLog.length === 0 && !loadingAudit) {
       loadAuditLog()
     }
-    if (activeTab === 'inquiry' && inquiryPosts.length === 0 && !loadingInquiries) {
+    if (activeTab === 'rental' && rentals.length === 0 && !loadingRentals) {
+      loadRentals()
+    }
+    if (activeTab === 'inquiry' && !inquiryPostsLoaded && !loadingInquiries) {
       loadInquiries()
+    }
+    if (activeTab === 'inquiry' && !chatSessionsLoaded && !loadingChatSessions) {
+      loadChatSessions()
     }
   })
 
@@ -154,9 +190,43 @@
       const res = await fetch(`/api/cms/customers/${encodeURIComponent(row.user_id)}/inquiries`)
       if (res.ok) {
         inquiryPosts = await res.json() as CsPost[]
+      } else {
+        csToast.error(`문의 내역 조회 실패 (${res.status})`)
+      }
+    } catch {
+      csToast.error('문의 내역 조회 중 오류가 발생했습니다.')
+    } finally {
+      inquiryPostsLoaded = true
+      loadingInquiries = false
+    }
+  }
+
+  async function loadRentals() {
+    loadingRentals = true
+    try {
+      const res = await fetch(`/cms/customers/rentals?userId=${encodeURIComponent(row.user_id)}`)
+      if (res.ok) {
+        rentals = await res.json() as RentalRow[]
       }
     } finally {
-      loadingInquiries = false
+      loadingRentals = false
+    }
+  }
+
+  async function loadChatSessions() {
+    loadingChatSessions = true
+    try {
+      const res = await fetch(`/cms/customers/chat-sessions?userId=${encodeURIComponent(row.user_id)}`)
+      if (res.ok) {
+        chatSessions = await res.json() as CustomerChatSession[]
+      } else {
+        csToast.error(`채팅 상담 조회 실패 (${res.status})`)
+      }
+    } catch {
+      csToast.error('채팅 상담 조회 중 오류가 발생했습니다.')
+    } finally {
+      chatSessionsLoaded = true
+      loadingChatSessions = false
     }
   }
 
@@ -184,6 +254,59 @@
     payment: '결제·환불',
     product: '상품',
     other:   '기타',
+  }
+
+  const RENTAL_STATUS_LABEL: Record<string, string> = {
+    hold:             '신청대기',
+    confirmed:        '예약승인',
+    shipped:          '반출중',
+    in_use:           '대여중',
+    return_requested: '반납중',
+    returned:         '반납완료',
+    completed:        '대여완료',
+    cancelled:        '취소',
+    expired:          '만료',
+    damage_claimed:   '파손신고',
+  }
+
+  const RENTAL_STATUS_STYLE: Record<string, { bg: string; color: string }> = {
+    hold:             { bg: 'rgba(14,165,233,0.12)',  color: '#0369A1' },
+    confirmed:        { bg: 'rgba(59,47,138,0.12)',   color: '#3B2F8A' },
+    shipped:          { bg: 'rgba(245,158,11,0.12)',  color: '#B45309' },
+    in_use:           { bg: 'rgba(16,185,129,0.12)',  color: '#047857' },
+    return_requested: { bg: 'rgba(245,158,11,0.12)',  color: '#B45309' },
+    returned:         { bg: 'rgba(102,102,102,0.12)', color: '#555555' },
+    completed:        { bg: 'rgba(16,185,129,0.12)',  color: '#047857' },
+    cancelled:        { bg: 'rgba(239,68,68,0.12)',   color: '#DC2626' },
+    expired:          { bg: 'rgba(102,102,102,0.12)', color: '#666666' },
+    damage_claimed:   { bg: 'rgba(239,68,68,0.12)',   color: '#DC2626' },
+  }
+
+  const CHAT_STATUS_LABEL: Record<string, string> = {
+    open:    '상담중',
+    pending: '대기중',
+    closed:  '종료',
+  }
+
+  const CHAT_STATUS_STYLE: Record<string, { bg: string; color: string }> = {
+    open:    { bg: 'rgba(59,47,138,0.12)',   color: '#3B2F8A' },
+    pending: { bg: 'rgba(245,158,11,0.12)',  color: '#B45309' },
+    closed:  { bg: 'rgba(102,102,102,0.12)', color: '#666666' },
+  }
+
+  const CONTEXT_TYPE_LABEL: Record<string, string> = {
+    general:         '일반상담',
+    product_inquiry: '상품문의',
+    reservation:     '예약관련',
+    payment:         '결제관련',
+    return:          '반납관련',
+  }
+
+  function formatRentalPeriod(start: string | null, end: string | null): string {
+    if (!start) return '-'
+    const s = start.slice(0, 10)
+    const e = end ? end.slice(0, 10) : '-'
+    return `${s} ~ ${e}`
   }
 
   function getScoreClass(score: number): string {
@@ -562,6 +685,11 @@
       class:active={activeTab === 'subscription'}
       onclick={() => (activeTab = 'subscription')}
     >구독이력</button>
+    <button
+      class="panel-tab"
+      class:active={activeTab === 'rental'}
+      onclick={() => (activeTab = 'rental')}
+    >상품대여이력</button>
     <button
       class="panel-tab"
       class:active={activeTab === 'blacklist'}
@@ -1151,6 +1279,41 @@
       {/if}
     {/if}
 
+    <!-- 상품대여이력 탭 -->
+    {#if activeTab === 'rental'}
+      <div class="rental-tab-section">
+        {#if loadingRentals}
+          <div class="inq-loading">불러오는 중...</div>
+        {:else if rentals.length === 0}
+          <div class="inq-empty">대여 이력이 없습니다.</div>
+        {:else}
+          {#each rentals as rental (rental.id)}
+            {@const st = RENTAL_STATUS_STYLE[rental.status ?? ''] ?? { bg: 'rgba(102,102,102,0.12)', color: '#666' }}
+            <a
+              class="rental-card"
+              href="/cms/rentals?selected={rental.id}"
+              target="_blank"
+              rel="noopener"
+            >
+              <div class="rental-card-top">
+                <span class="inq-chip" style="background:{st.bg};color:{st.color}">
+                  {RENTAL_STATUS_LABEL[rental.status ?? ''] ?? rental.status}
+                </span>
+                <span class="rental-code">{rental.reservation_code ?? '-'}</span>
+              </div>
+              <div class="rental-product-name">{rental.products?.name ?? '-'}</div>
+              <div class="rental-meta">
+                <span>{formatRentalPeriod(rental.start_date, rental.end_date)}</span>
+                {#if rental.rental_days}
+                  <span class="rental-days">{rental.rental_days}일</span>
+                {/if}
+              </div>
+            </a>
+          {/each}
+        {/if}
+      </div>
+    {/if}
+
     <!-- 블랙리스트 탭 -->
     {#if activeTab === 'blacklist'}
       <div class="bl-tab-section">
@@ -1226,11 +1389,34 @@
     <!-- 빠른문의 탭 -->
     {#if activeTab === 'inquiry'}
       <div class="inquiry-tab-section">
-        {#if loadingInquiries}
+        {#if loadingInquiries || loadingChatSessions}
           <div class="inq-loading">불러오는 중...</div>
-        {:else if inquiryPosts.length === 0}
-          <div class="inq-empty">등록된 문의가 없습니다.</div>
+        {:else if inquiryPosts.length === 0 && chatSessions.length === 0}
+          <div class="inq-empty">등록된 문의 및 상담 내역이 없습니다.</div>
         {:else}
+          <!-- 채팅 상담 목록 -->
+          {#each chatSessions as cs (cs.id)}
+            {@const csSt = CHAT_STATUS_STYLE[cs.status] ?? CHAT_STATUS_STYLE['closed']}
+            <a
+              class="chat-card"
+              href="/cms/chat?session={cs.id}"
+              target="_blank"
+              rel="noopener"
+            >
+              <div class="chat-card-top">
+                <span class="inq-chip" style="background:{csSt.bg};color:{csSt.color}">
+                  {CHAT_STATUS_LABEL[cs.status] ?? cs.status}
+                </span>
+                <span class="chat-source-badge">채팅상담</span>
+                <span class="chat-date">{cs.updated_at.slice(0,10)}</span>
+              </div>
+              <div class="chat-context">
+                {CONTEXT_TYPE_LABEL[cs.context_type] ?? cs.context_type}
+              </div>
+            </a>
+          {/each}
+
+          <!-- 빠른문의(cs_posts) 목록 -->
           {#each inquiryPosts as post (post.id)}
             {@const st = INQUIRY_STATUS_STYLE[post.status] ?? INQUIRY_STATUS_STYLE['open']}
             {@const isOpen = inquiryExpandedId === post.id}
@@ -1245,7 +1431,10 @@
                   {INQUIRY_STATUS_LABEL[post.status] ?? post.status}
                 </span>
                 <div class="inq-summary">
-                  <span class="inq-title">{post.title}</span>
+                  <div class="inq-title-row">
+                    <span class="inq-title">{post.title}</span>
+                    <span class="chat-source-badge inq-source-badge">빠른문의</span>
+                  </div>
                   <span class="inq-meta">
                     <span>{INQUIRY_CATEGORY_LABEL[post.category] ?? post.category}</span>
                     <span>{post.created_at.slice(0,10)}</span>
@@ -2308,5 +2497,113 @@
     font-family: 'Noto Sans KR', sans-serif;
     font-size: 12px;
     color: var(--cs-text-mid);
+  }
+
+  /* 상품대여이력 탭 */
+  .rental-tab-section { display: flex; flex-direction: column; gap: 6px; }
+  .rental-card {
+    display: block;
+    text-decoration: none;
+    border: 1px solid var(--cs-lilac);
+    border-radius: var(--radius-sm);
+    background: var(--cs-white);
+    padding: 10px 14px;
+    transition: border-color 0.15s, box-shadow 0.15s;
+  }
+  .rental-card:hover {
+    border-color: var(--cs-purple);
+    box-shadow: 0 2px 8px rgba(59,47,138,0.08);
+  }
+  .rental-card-top {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 5px;
+  }
+  .rental-code {
+    font-family: 'Noto Sans KR', sans-serif;
+    font-size: 11px;
+    font-weight: 700;
+    color: var(--cs-text-mid);
+    letter-spacing: 0.3px;
+  }
+  .rental-product-name {
+    font-family: 'Noto Sans KR', sans-serif;
+    font-size: 13px;
+    font-weight: 700;
+    color: var(--cs-text);
+    margin-bottom: 4px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .rental-meta {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-family: 'Noto Sans KR', sans-serif;
+    font-size: 11px;
+    color: var(--cs-text-mid);
+  }
+  .rental-days {
+    padding: 1px 6px;
+    border-radius: var(--radius-xl);
+    background: rgba(59,47,138,0.08);
+    color: var(--cs-purple);
+    font-weight: 700;
+  }
+
+  /* 채팅 상담 카드 (빠른문의 탭 내) */
+  .chat-card {
+    display: block;
+    text-decoration: none;
+    border: 1px solid var(--cs-lilac);
+    border-radius: var(--radius-sm);
+    background: var(--cs-white);
+    padding: 10px 14px;
+    transition: border-color 0.15s, box-shadow 0.15s;
+  }
+  .chat-card:hover {
+    border-color: var(--cs-purple);
+    box-shadow: 0 2px 8px rgba(59,47,138,0.08);
+  }
+  .chat-card-top {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 5px;
+  }
+  .chat-source-badge {
+    display: inline-flex;
+    align-items: center;
+    padding: 1px 7px;
+    border-radius: var(--radius-xl);
+    background: rgba(59,47,138,0.08);
+    color: var(--cs-purple);
+    font-family: 'Noto Sans KR', sans-serif;
+    font-size: 10px;
+    font-weight: 700;
+  }
+  .inq-source-badge {
+    background: rgba(102,102,102,0.08);
+    color: var(--cs-text-mid);
+    flex-shrink: 0;
+  }
+  .chat-date {
+    font-family: 'Noto Sans KR', sans-serif;
+    font-size: 11px;
+    color: var(--cs-text-mid);
+    margin-left: auto;
+  }
+  .chat-context {
+    font-family: 'Noto Sans KR', sans-serif;
+    font-size: 13px;
+    font-weight: 700;
+    color: var(--cs-text);
+  }
+  .inq-title-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
   }
 </style>
