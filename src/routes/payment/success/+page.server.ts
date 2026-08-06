@@ -5,6 +5,7 @@ import { redirect } from '@sveltejs/kit'
 import { env } from '$env/dynamic/private'
 import { createClient } from '@supabase/supabase-js'
 import { getSupabaseUrl } from '$lib/env/supabasePublic'
+import { sendPaymentCompletedAdminPush } from '$lib/server/push'
 import type { PageServerLoad } from './$types'
 
 const TOSS_CONFIRM_URL = 'https://api.tosspayments.com/v1/payments/confirm'
@@ -74,6 +75,8 @@ export const load: PageServerLoad = async ({ url, locals }) => {
       p_reservation_id: reservationId,
       p_notify_type:    'reservation_approval',
     })
+    // 결제완료 관리자 푸시 병행 발송 (채팅과 독립 — 실패해도 위 처리에 영향 없음)
+    await sendPaymentCompletedAdminPush(admin, reservationId, session.user.id, amount)
   }
 
   // ── 3. 예약 + 상품 상세 조회 (SELECT — DML 아님) ─────────────────────────

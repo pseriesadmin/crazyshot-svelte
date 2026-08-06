@@ -8,6 +8,7 @@
 	import { trackPageView } from '$lib/analytics/behaviorTracker';
 	import FloatingBar from '$lib/components/common/FloatingBar.svelte';
 	import GNB from '$lib/components/common/GNB.svelte';
+	import PushNotificationInit from '$lib/components/common/PushNotificationInit.svelte';
 
 	let currentLocale = 'ko';
 
@@ -47,6 +48,8 @@
 	});
 
 </script>
+
+<PushNotificationInit />
 
 <div class="min-h-screen flex flex-col">
 	{#if !page.url.pathname.startsWith('/cms') && !page.url.pathname.startsWith('/products/') && !page.url.pathname.startsWith('/checkout') && !page.url.pathname.startsWith('/account') && !page.url.pathname.startsWith('/contract')}

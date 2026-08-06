@@ -1,6 +1,7 @@
 <script lang="ts">
   import { invalidate, goto } from '$app/navigation'
   import { supabase } from '$lib/services/supabase'
+  import { unregisterCurrentPushToken } from '$lib/utils/push'
   import SubGnb from '$lib/components/common/SubGnb.svelte'
   import BottomTabBar from '$lib/components/common/BottomTabBar.svelte'
   import RentalJourneyStepper from '$lib/components/common/RentalJourneyStepper.svelte'
@@ -54,6 +55,7 @@
   let activePcSection = $state('home')
 
   async function handleLogout() {
+    await unregisterCurrentPushToken()
     await supabase.auth.signOut()
     goto('/')
   }

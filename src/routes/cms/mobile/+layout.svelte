@@ -2,6 +2,7 @@
   import { supabase } from '$lib/services/supabase'
   import { goto } from '$app/navigation'
   import { Toaster } from 'svelte-sonner'
+  import { unregisterCurrentPushToken } from '$lib/utils/push'
 
   interface Props {
     children: import('svelte').Snippet
@@ -10,6 +11,7 @@
   let { children }: Props = $props()
 
   async function logout(): Promise<void> {
+    await unregisterCurrentPushToken()
     await supabase.auth.signOut()
     goto('/cms/login')
   }
