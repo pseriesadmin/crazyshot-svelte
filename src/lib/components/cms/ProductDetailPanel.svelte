@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { enhance, applyAction } from '$app/forms'
+  import { enhance, applyAction, deserialize } from '$app/forms'
   import { invalidateAll } from '$app/navigation'
   import type { ActionResult } from '@sveltejs/kit'
   import { resizeProductImage } from '$lib/utils/imageResize'
@@ -39,6 +39,7 @@
     name: string
     slug: string
     product_code?: string | null
+    code_series?: Record<string, unknown> | null
     brand: string | null
     description: string | null
     product_caption: string | null
@@ -83,6 +84,14 @@
     shipping_guide: string
   }
 
+  interface RentalStatusBucket {
+    holding: number    // 예약중: hold
+    outgoing: number   // 반출중: confirmed, shipped
+    renting: number    // 대여중: in_use
+    returning: number  // 반납중: return_requested
+    returned: number   // 반납완료: returned, completed
+  }
+
   interface Props {
     product: ProductDetail
     priceRules: PriceRule[]
@@ -101,10 +110,14 @@
     rentalMethods?: RentalOption[]
     pickupPoints?: PickupPointOpt[]
     shippingSettings?: ShippingSettings | null
+    rentalStatusCounts?: RentalStatusBucket | null
+    tabs?: TabKey[]  // 미지정 시 전체 탭 노출. 지정 시 해당 탭만 탭바에 표시(이력관리 전용 화면 등)
     onclose: () => void
+    // '빠른 재고 등록' 성공 시 생성된 자식 상품 id 목록 — 부모(+page.svelte)가 QR 노출 영역에 자동 반영
+    oninventorycreated?: (ids: string[]) => void
   }
 
-  let { product, priceRules, categories, categoryLabel, initialTab = null, inventoryList = [], partnerComboItems = [], rentalPeriods = [], rentalMethods = [], pickupPoints = [], shippingSettings = null, onclose }: Props = $props()
+  let { product, priceRules, categories, categoryLabel, initialTab = null, inventoryList = [], partnerComboItems = [], rentalPeriods = [], rentalMethods = [], pickupPoints = [], shippingSettings = null, rentalStatusCounts = null, tabs: tabsFilter, onclose, oninventorycreated }: Props = $props()
 
 
   // 카테고리 레이블 맵 (picker용)
@@ -114,10 +127,18 @@
 
   type TabKey = 'basic' | 'options' | 'pricing' | 'rental' | 'content' | 'components' | 'images' | 'specs' | 'history'
   const validTabs: TabKey[] = ['basic', 'options', 'pricing', 'rental', 'content', 'components', 'images', 'specs', 'history']
-  const parsedInitialTab: TabKey = (validTabs.includes(initialTab as TabKey) ? initialTab : 'basic') as TabKey
+  // 자식(재고) 상품은 나머지 8개 탭이 부모와 동일한 내용을 읽기전용으로 중복 노출할 뿐이라
+  // 실질 정보가 없음 — history 탭으로 고정 진입
+  const parsedInitialTab: TabKey = product.parent_product_id
+    ? 'history'
+    : ((validTabs.includes(initialTab as TabKey) && (!tabsFilter || tabsFilter.includes(initialTab as TabKey))
+        ? initialTab
+        : (tabsFilter?.[0] ?? 'basic')) as TabKey)
   let activeTab = $state<TabKey>(parsedInitialTab)
   // 자식 상품(빠른재고등록 생성) 여부 — history 탭만 수정 허용, 나머지 읽기 전용
   const isChildProduct = $derived(!!product.parent_product_id)
+  // 부모 상품이면서 자식(인벤토리)이 1개 이상인 경우 — 이력 탭을 집계 모드로 표시
+  const isAggregatedMode = $derived(!isChildProduct && inventoryList.length > 0)
 
   // 자식 상품 읽기전용 탭 — 입력요소 포커스 시 토스트 경고 + 즉시 블러(수정 차단)
   function blockChildInputFocus(e: FocusEvent) {
@@ -335,9 +356,9 @@
     }
   }
 
-  // QR 코드 렌더링
+  // QR 코드 렌더링 — QR-CONTENT-1: product_code를 QR 콘텐츠로 사용
   $effect(() => {
-    const qr = product.qr_payload
+    const qr = product.product_code
     const canvas = canvasEl
     if (!qr || !canvas) return
     renderQR(canvas, qr)
@@ -421,17 +442,35 @@
   }
 
   // 저장 핸들러 (enhance 콜백)
-  function handleSectionSave() {
+  // RTN-LOW-1(2): SubmitFunction 시그니처 — { cancel }을 외부 파라미터로 받아 폼 제출 방지
+  function handleSectionSave({ cancel }: { cancel: () => void }) {
     if (isChildProduct) {
       csToast.warning('대표 상품에서 수정하세요.')
-      return () => {}
+      cancel()
+      return
     }
     isSaving = true
     return async ({ result }: { result: ActionResult }) => {
       isSaving = false
       if (result.type === 'success') {
+        // BND-6: 다른 탭에 미저장 변경이 있으면 경고 (invalidateAll 후 해당 탭 로컬 상태 초기화됨)
+        const otherDirtyTabs = [
+          activeTab !== 'basic'      && isDirtyBasic      ? '기본정보' : null,
+          activeTab !== 'pricing'    && isDirtyPricing    ? '가격정책' : null,
+          activeTab !== 'rental'     && isDirtyRental     ? '대여정책' : null,
+          activeTab !== 'specs'      && isDirtySpecs      ? '사양'     : null,
+          activeTab !== 'components' && isDirtyComponents ? '구성품'   : null,
+          activeTab !== 'content'    && isDirtyContent    ? '상품설명' : null,
+          activeTab !== 'options'    && isDirtyOptions    ? '옵션상품' : null,
+        ].filter(Boolean) as string[]
+
         await invalidateAll()
-        csToast.success('저장됐습니다.')
+
+        if (otherDirtyTabs.length > 0) {
+          csToast.warning(`저장됐습니다. [${otherDirtyTabs.join('·')}] 탭의 미저장 내용이 초기화됐습니다.`)
+        } else {
+          csToast.success('저장됐습니다.')
+        }
       } else {
         await applyAction(result)
       }
@@ -500,7 +539,9 @@
         added = true
       }
     }
-    if (added) await autoSave()
+    // BND-10: 업로드 API가 이미 append_product_image_url RPC로 DB에 직접 기록했으므로
+    // 중복 autoSave() 호출 제거 → invalidateAll()로 서버 상태를 가져와 localImages 갱신
+    if (added) await invalidateAll()
   }
 
   function handleDragEnter(e: DragEvent) {
@@ -544,6 +585,8 @@
   }
 
   async function addByUrl() {
+    // RTN-LOW-1(1): isChildProduct 가드 추가 (handleFilesUpload/removeImageAndSave와 동일 패턴)
+    if (isChildProduct) { csToast.warning('대표 상품에서 수정하세요.'); return }
     const url = urlInputVal.trim()
     if (!url) return
     if (localImages.filter(Boolean).length >= 8) return
@@ -573,6 +616,8 @@
 
   // 대표이미지: image_urls[0] = 대표 (2초 홀드로 설정)
   function startHold(url: string) {
+    // RTN-LOW-1(1): isChildProduct 가드 추가
+    if (isChildProduct) return
     holdTimer = setTimeout(async () => {
       holdTimer = null
       const filtered = localImages.filter(Boolean)
@@ -639,7 +684,16 @@
     historyLoading = true
     historyUploadError = null
     try {
-      const res = await fetch(`/api/cms/product-history?product_id=${product.id}`)
+      let fetchUrl: string
+      if (!isChildProduct && inventoryList.length > 0) {
+        // 부모 상품 + 자식 존재 → 자식 전체 이력 집계
+        const ids = inventoryList.map(u => u.id).join(',')
+        fetchUrl = `/api/cms/product-history?product_ids=${encodeURIComponent(ids)}`
+      } else {
+        // 자식 상품 또는 자식 없는 단일 부모 → 해당 상품만 조회
+        fetchUrl = `/api/cms/product-history?product_id=${product.id}`
+      }
+      const res = await fetch(fetchUrl)
       if (!res.ok) throw new Error('이력 로드 실패')
       const json = await res.json() as { records: HistoryRecord[] }
       historyRecords = json.records
@@ -843,6 +897,54 @@
     JSON.stringify(localContentBlocks) !== JSON.stringify(parseContentBlocks(product)) ||
     JSON.stringify(localKeywords) !== JSON.stringify(parseKeywords(product))
   )
+
+  // QR-RETRY-1: 과거 등록 당시 품번 채번이 실패해 영구히 '미발행'으로 남은 자식 상품 자가복구
+  let isRetryingCode = $state(false)
+  async function retryProductCode() {
+    if (isRetryingCode) return
+    isRetryingCode = true
+    try {
+      const fd = new FormData()
+      fd.append('product_id', product.id)
+      const res = await fetch('?/retryProductCode', { method: 'POST', body: fd })
+      // res.ok만으로는 실제 실패 사유를 알 수 없어 deserialize로 ActionResult를 직접 해석 —
+      // 액션 자체가 라우트에 아직 반영 안 됐거나(dev server 미반영) 다른 사유로 실패해도
+      // 정확한 원인이 토스트에 표시되도록 함
+      const result = deserialize(await res.text()) as { type: string; data?: { error?: string } }
+      if (result.type !== 'success') {
+        throw new Error(result.data?.error ?? `채번 요청이 실패했습니다 (status ${res.status})`)
+      }
+      await invalidateAll()
+      csToast.success('품번이 발급됐습니다.')
+    } catch (e) {
+      csToast.error(e instanceof Error ? e.message : '품번 채번에 실패했습니다.')
+    } finally {
+      isRetryingCode = false
+    }
+  }
+
+  // QR-RETRY-2: 등록 당시 품번 체계(code_series) 설정이 실패해 '빠른 재고 등록'이 막힌
+  // 대표 상품 자가복구 — 자식 품번과 달리 이 값은 QR로 직접 노출되지 않음(§2-1)
+  let isRetryingSeries = $state(false)
+  async function retryCodeSeries() {
+    if (isRetryingSeries) return
+    isRetryingSeries = true
+    try {
+      const fd = new FormData()
+      fd.append('product_id', product.id)
+      const res = await fetch('?/retryCodeSeries', { method: 'POST', body: fd })
+      const result = deserialize(await res.text()) as { type: string; data?: { error?: string } }
+      if (result.type !== 'success') {
+        throw new Error(result.data?.error ?? `설정 요청이 실패했습니다 (status ${res.status})`)
+      }
+      await invalidateAll()
+      csToast.success('품번 체계가 설정됐습니다. 이제 빠른 재고 등록을 사용할 수 있습니다.')
+    } catch (e) {
+      csToast.error(e instanceof Error ? e.message : '품번 체계 설정에 실패했습니다.')
+    } finally {
+      isRetryingSeries = false
+    }
+  }
 
   async function saveContent() {
     if (isChildProduct) { csToast.warning('대표 상품에서 수정하세요.'); return }
@@ -1054,7 +1156,7 @@
     }
   }
 
-  const TABS: { key: TabKey; label: string }[] = [
+  const ALL_TABS: { key: TabKey; label: string }[] = [
     { key: 'basic', label: '기본정보' },
     { key: 'options', label: '옵션상품' },
     { key: 'pricing', label: '가격정책' },
@@ -1065,6 +1167,11 @@
     { key: 'specs', label: '사양' },
     { key: 'history', label: '이력' },
   ]
+  const TABS = $derived(
+    isChildProduct
+      ? ALL_TABS.filter(t => t.key === 'history')
+      : (tabsFilter ? ALL_TABS.filter(t => tabsFilter.includes(t.key)) : ALL_TABS)
+  )
 
   // ─── 상품 삭제 ───────────────────────────────────────────────
   let deletePending = $state(false)
@@ -1097,12 +1204,26 @@
     return async ({ result }: { result: ActionResult }) => {
       isCloning = false
       if (result.type === 'success') {
-        const cloned = (result.data as { cloned?: number } | undefined)?.cloned ?? 0
+        const data = result.data as { cloned?: number; createdIds?: string[]; mode?: string; warnings?: string[] } | undefined
+        const cloned = data?.cloned ?? 0
+        const warnings = data?.warnings ?? []
+        showCloneModal = false
+        await invalidateAll()  // 성공·실패 양쪽 모두 실제 생성분 목록 반영
+        csToast.success(`재고 ${cloned}개가 등록됐습니다.`)
+        // BND-BATCH-1: 개별 항목 품번/가격 복사 실패 경고 표시
+        for (const warn of warnings) {
+          csToast.warning(warn)
+        }
+        // QR-AUTO-1: '빠른 재고 등록'으로 생성된 재고는 품번+QR이 즉시 발행되므로,
+        // 부모 화면의 QR 노출 영역(일괄 인쇄 선택)에 자동 반영해 바로 노출되게 한다
+        if (data?.mode === 'add_inventory' && data.createdIds && data.createdIds.length > 0) {
+          oninventorycreated?.(data.createdIds)
+        }
+      } else if (result.type === 'failure') {
+        // BND-BATCH-1: 실패 시에도 모달 닫고 실제 생성분 목록 반영 (재시도는 관리자 직접 판단)
+        const msg = (result.data as { error?: string } | undefined)?.error ?? '재고 등록 중 오류가 발생했습니다.'
         showCloneModal = false
         await invalidateAll()
-        csToast.success(`재고 ${cloned}개가 등록됐습니다.`)
-      } else if (result.type === 'failure') {
-        const msg = (result.data as { error?: string } | undefined)?.error ?? '복제 등록에 실패했습니다.'
         csToast.error(msg)
       } else {
         await applyAction(result)
@@ -1143,6 +1264,9 @@
       <span class="ph-code-val">{product.product_code}</span>
     {:else}
       <span class="ph-code-pending">미발행</span>
+      <button type="button" class="ph-code-retry-btn" onclick={retryProductCode} disabled={isRetryingCode}>
+        {isRetryingCode ? '채번 중...' : '품번 채번'}
+      </button>
     {/if}
   </div>
   {/if}
@@ -1168,36 +1292,67 @@
       {/if}
     </div>
     <div class="ph-right">
+      <!-- QR-CONTENT-1: product_code를 QR 콘텐츠로 사용 -->
       <div class="qr-wrap">
-        {#if product.qr_payload}
+        {#if product.product_code}
           <canvas bind:this={canvasEl} width="88" height="88" aria-label="상품 QR 코드"></canvas>
           <button class="qr-dl-btn" onclick={downloadQR} title="QR PNG 다운로드" type="button">↓ QR 저장</button>
         {:else}
-          <div class="qr-placeholder" aria-label="QR 코드 준비 중">QR</div>
+          <div class="qr-placeholder" aria-label="품번 발급 후 QR 생성 가능">QR</div>
         {/if}
       </div>
     </div>
   </div>
+  {:else}
+  <!-- QR-HIDE-1: 부모는 실물 재고 단위가 아니므로 QR을 표시하지 않는다(레거시 부모의 자체
+       품번이 있어도 동일) — §2-4 BND-7 정책 폐기, 텍스트 기준 품번 표시로 대체(+page.svelte
+       rep-card-code). QR은 자식(재고)에만 노출한다. -->
+  <!-- §2-3 레거시 폴백(migration 194): code_series가 없어도 product_code(레거시)만 있으면
+       generate_inventory_product_code가 그 문자열을 역산해 정상 채번 가능 — 경고는 둘 다
+       없을 때만 표시해야 함(둘 중 하나라도 있으면 '빠른 재고 등록' 정상 동작) -->
+  {#if !product.code_series && !product.product_code}
+  <!-- QR-RETRY-2: 등록 당시 품번 체계 설정 실패로 '빠른 재고 등록'이 막힌 상태 자가복구 -->
+  <div class="ph-code-series-warn">
+    <span>품번 체계가 설정되지 않아 빠른 재고 등록을 사용할 수 없습니다.</span>
+    <button type="button" class="ph-code-retry-btn" onclick={retryCodeSeries} disabled={isRetryingSeries}>
+      {isRetryingSeries ? '설정 중...' : '품번 체계 설정'}
+    </button>
+  </div>
+  {/if}
   {/if}
 
   <!-- 요약 바 -->
   <div class="summary-bar">
     <div class="summary-bar-left">
       <div class="summary-badges">
-        <span class="sb-price-badge">12H {formatPrice(product.price12h)}</span>
-        <span class="sb-price-badge">Day {formatPrice(product.price24h)}</span>
+        <!-- QR-DUP-1: 자식 선택 시 가격은 대표 상품과 동일 값(관리도 자식에서 불가)이라
+             중복 노출 — 부모 패널에서만 표시 -->
+        {#if !isChildProduct}
+          <span class="sb-price-badge">12H {formatPrice(product.price12h)}</span>
+          <span class="sb-price-badge">Day {formatPrice(product.price24h)}</span>
+        {/if}
         <span class="sb-date-badge">등록(수정): {formatDate(product.created_at)}</span>
       </div>
       <span class="sb-status-pill" class:sb-status-on={product.is_active}>
         {product.is_active ? '노출(ON)' : '미노출(OFF)'}
       </span>
+      {#if !isChildProduct && rentalStatusCounts && (rentalStatusCounts.holding + rentalStatusCounts.outgoing + rentalStatusCounts.renting + rentalStatusCounts.returning + rentalStatusCounts.returned) > 0}
+        <div class="sb-rental-status-row">
+          {#if rentalStatusCounts.holding > 0}<span class="sb-rs-chip">예약중 {rentalStatusCounts.holding}</span>{/if}
+          {#if rentalStatusCounts.outgoing > 0}<span class="sb-rs-chip">반출중 {rentalStatusCounts.outgoing}</span>{/if}
+          {#if rentalStatusCounts.renting > 0}<span class="sb-rs-chip sb-rs-chip--active">대여중 {rentalStatusCounts.renting}</span>{/if}
+          {#if rentalStatusCounts.returning > 0}<span class="sb-rs-chip">반납중 {rentalStatusCounts.returning}</span>{/if}
+          {#if rentalStatusCounts.returned > 0}<span class="sb-rs-chip sb-rs-chip--done">반납완료 {rentalStatusCounts.returned}</span>{/if}
+        </div>
+      {/if}
     </div>
-    {#if !isChildProduct}
+    {#if !isChildProduct && !tabsFilter}
     <button type="button" class="status-cta-btn" onclick={() => openCloneModal('add_inventory')}>빠른 재고 등록</button>
     {/if}
   </div>
 
-  <!-- 탭 네비게이션 -->
+  <!-- 탭 네비게이션 (탭이 1개로 제한된 경우 선택 UI 불필요 — 숨김) -->
+  {#if TABS.length > 1}
   <div class="tab-nav" role="tablist">
     {#each TABS as tab}
       <button
@@ -1210,6 +1365,7 @@
       >{tab.label}</button>
     {/each}
   </div>
+  {/if}
 
   <!-- 탭 콘텐츠 -->
   <div class="tab-content">
@@ -1967,11 +2123,20 @@
       <div class="section" role="tabpanel">
         <div class="section-header">
           <span class="section-title">상품 이력</span>
+          {#if !isAggregatedMode}
           <button type="button" class="btn-primary-sm" onclick={openNewHistory}
             disabled={historyEditingId === 'new'}>
             + 이력 등록
           </button>
+          {/if}
         </div>
+
+        {#if isAggregatedMode}
+          <div class="history-aggregate-note">
+            재고 단위(자식 상품)들의 이력을 모아서 보고 있습니다.
+            이력 등록·수정·삭제는 각 자식 상품 패널의 이력 탭에서 진행하세요.
+          </div>
+        {/if}
 
         {#if historyLoading}
           <div class="history-empty">이력을 불러오는 중...</div>
@@ -2076,10 +2241,16 @@
                 <div class="history-card-header">
                   <div class="history-card-meta">
                     <span class="history-card-date">{rec.recorded_date}</span>
+                    {#if isAggregatedMode}
+                      {@const unitCode = inventoryList.find(u => u.id === rec.product_id)?.product_code}
+                      {#if unitCode}
+                        <span class="history-unit-badge">{unitCode}</span>
+                      {/if}
+                    {/if}
                     <span class="history-card-by">{rec.created_by_email ?? ''}</span>
                   </div>
                   <div class="history-card-actions">
-                    {#if historyEditingId !== rec.id}
+                    {#if !isAggregatedMode && historyEditingId !== rec.id}
                       <button type="button" class="btn-ghost-sm" onclick={() => openEditHistory(rec)}>수정</button>
                       <button type="button" class="btn-danger-sm" onclick={() => { historyConfirmDeleteId = rec.id }}>삭제</button>
                     {/if}
@@ -2198,6 +2369,8 @@
   </div>
 
   <!-- 상품 삭제 푸터 (흰 카드 안 최하단) — 1차 클릭: 토스트 경고, 2차 클릭: 실제 삭제 -->
+  <!-- tabs 제한 화면(이력관리 전용 등)에서는 상품 관리 액션 노출 안 함 -->
+  {#if !tabsFilter}
   <div class="delete-footer">
     <form method="POST" action="?/deleteProduct" use:enhance={handleDeleteProduct}>
       <input type="hidden" name="product_id" value={product.id} />
@@ -2209,6 +2382,7 @@
       >{isDeleting ? '삭제 중...' : deletePending ? '한번 더 누르면 삭제됩니다' : '상품정보 삭제'}</button>
     </form>
   </div>
+  {/if}
 
 </div>
 
@@ -2457,6 +2631,20 @@
     border-radius: var(--cms-radius-sm);
     padding: 2px 8px;
   }
+  .ph-code-retry-btn {
+    font: var(--text-pc-script-12);
+    font-weight: 700;
+    color: var(--cs-purple);
+    background: #fff;
+    border: 1px solid var(--cs-purple);
+    border-radius: var(--radius-sm);
+    padding: 2px 10px;
+    min-height: 24px;
+    cursor: pointer;
+    transition: background 0.12s, color 0.12s;
+  }
+  .ph-code-retry-btn:hover:not(:disabled) { background: var(--cs-purple); color: #fff; }
+  .ph-code-retry-btn:disabled { opacity: 0.5; cursor: default; }
 
   /* ph-body: 썸네일 + 상품명·카피 + QR */
   .ph-body {
@@ -2528,6 +2716,17 @@
     display: flex; align-items: center; justify-content: center;
     color: var(--cs-text-light); font: var(--text-pc-script-12);
   }
+  /* QR-RETRY-2: 품번 체계 미설정 경고 */
+  .ph-code-series-warn {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 10px;
+    padding: 8px 16px 0;
+    font: var(--text-pc-script-12);
+    color: var(--cs-error, #e0433c);
+    text-align: right;
+  }
   /* 상태 바 */
   /* ─── 요약 바 ─────────────────────────────── */
   .summary-bar {
@@ -2594,6 +2793,32 @@
     background: var(--cs-lilac);
     color: var(--cs-text-mid);
   }
+  /* 대여 라이프사이클 상태별 재고 카운트 — 부모 상품 선택 시 요약바에 표시 */
+  .sb-rental-status-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 3px;
+  }
+  .sb-rs-chip {
+    display: inline-flex;
+    align-items: center;
+    padding: 2px 6px;
+    background: var(--cs-surface-gray);
+    color: var(--cs-text-mid);
+    border-radius: var(--radius-sm);
+    font-family: 'Noto Sans KR', sans-serif;
+    font-size: 10px;
+    font-weight: 500;
+    white-space: nowrap;
+  }
+  .sb-rs-chip--active {
+    background: rgba(59, 47, 138, 0.08);
+    color: var(--cs-purple);
+  }
+  .sb-rs-chip--done {
+    background: rgba(0, 0, 0, 0.04);
+    color: var(--cs-text-light);
+  }
   /* 빠른 재고 등록 버튼 — bg purple, padding 10px 20px, radius 10px */
   .status-cta-btn {
     display: inline-flex; align-items: center; justify-content: center;
@@ -2636,7 +2861,7 @@
   .tab-btn.active { color: var(--cs-purple); border-bottom-color: var(--cs-purple); font-weight: 700; }
 
   /* 탭 콘텐츠 */
-  .tab-content { padding: 20px 20px 50px; }
+  .tab-content { padding: 26px 26px 65px; }
 
   /* 섹션 공통 */
   .section { display: flex; flex-direction: column; gap: 16px; }
@@ -3269,6 +3494,24 @@
   .history-card-by {
     font: var(--text-pc-script-12);
     color: var(--cs-text-mid);
+  }
+
+  .history-unit-badge {
+    font: var(--text-pc-script-12);
+    font-weight: 700;
+    color: var(--cs-purple);
+    background: rgba(59,47,138,0.08);
+    border-radius: var(--radius-sm);
+    padding: 2px 7px;
+  }
+
+  .history-aggregate-note {
+    font: var(--text-pc-script-12);
+    color: var(--cs-text-mid);
+    background: var(--cs-lilac);
+    border-radius: var(--radius-sm);
+    padding: 8px 12px;
+    margin-bottom: 12px;
   }
 
   .history-card-actions {

@@ -2,6 +2,8 @@ import { redirect, fail } from '@sveltejs/kit'
 import { env } from '$env/dynamic/private'
 import { getSupabaseUrl } from '$lib/env/supabasePublic'
 import { createClient } from '@supabase/supabase-js'
+import { getCmsRoleForAction } from '$lib/server/getCmsRoleForAction'
+import { hasSettingsAccess } from '$lib/utils/cmsPermissions'
 import type { PageServerLoad, Actions } from './$types'
 
 const FORMAT_KEY   = 'reservation_code_format'
@@ -136,9 +138,15 @@ const DEFAULT_FORMAT: CodeFormat = {
   suffix: '',
 }
 
-export const load: PageServerLoad = async ({ locals }) => {
+export const load: PageServerLoad = async ({ locals, parent }) => {
   const { session } = await locals.safeGetSession()
   if (!session) throw redirect(303, '/cms/login')
+
+  // QR-CASE-2 후속: 이 화면의 20개 액션 중 19개가 manager 이상만 실행 가능하도록 서버에서
+  // 막혀 있는데, 화면 자체는 role과 무관하게 항상 보여줘서 partner가 접근해도 모든 버튼이
+  // 노출되고 클릭 시에만 403이 나는 혼란스러운 상태였다 — 페이지 진입 자체를 막아 일관되게 함
+  const { cmsRole } = await parent()
+  if (!hasSettingsAccess(cmsRole ?? '')) throw redirect(303, '/cms?notice=access_denied')
 
   const admin = db()
 
@@ -219,6 +227,8 @@ export const actions: Actions = {
   addCode: async ({ request, locals }) => {
     const { session } = await locals.safeGetSession()
     if (!session) return fail(401, { action: 'addCode', error: '인증 필요' })
+    const cmsRole = await getCmsRoleForAction(locals)
+    if (!hasSettingsAccess(cmsRole ?? '')) return fail(403, { action: 'addCode', error: '권한 없음' })
 
     const form = await request.formData()
     const code       = ((form.get('code')      as string) ?? '').trim().toUpperCase()
@@ -321,6 +331,8 @@ export const actions: Actions = {
   editCode: async ({ request, locals }) => {
     const { session } = await locals.safeGetSession()
     if (!session) return fail(401, { action: 'editCode', error: '인증 필요' })
+    const cmsRole = await getCmsRoleForAction(locals)
+    if (!hasSettingsAccess(cmsRole ?? '')) return fail(403, { action: 'editCode', error: '권한 없음' })
 
     const form = await request.formData()
     const id               = (form.get('id')               as string) ?? ''
@@ -386,6 +398,8 @@ export const actions: Actions = {
   deleteCode: async ({ request, locals }) => {
     const { session } = await locals.safeGetSession()
     if (!session) return fail(401, { action: 'deleteCode', error: '인증 필요' })
+    const cmsRole = await getCmsRoleForAction(locals)
+    if (!hasSettingsAccess(cmsRole ?? '')) return fail(403, { action: 'deleteCode', error: '권한 없음' })
 
     const formData = await request.formData()
     const id = (formData.get('id') as string) ?? ''
@@ -452,6 +466,8 @@ export const actions: Actions = {
   toggleActive: async ({ request, locals }) => {
     const { session } = await locals.safeGetSession()
     if (!session) return fail(401, { action: 'toggleActive', error: '인증 필요' })
+    const cmsRole = await getCmsRoleForAction(locals)
+    if (!hasSettingsAccess(cmsRole ?? '')) return fail(403, { action: 'toggleActive', error: '권한 없음' })
 
     const form = await request.formData()
     const id      = (form.get('id')        as string) ?? ''
@@ -464,9 +480,15 @@ export const actions: Actions = {
   },
 
   // ── 상품 품번 포맷 저장 (reservation_code_format 키 공용 — M3 예약코드 구현 시 분리 예정) ──
+  // QR-CASE-2: 전 카테고리·전 상품의 향후 채번 방식을 좌우하는 전역 설정이라 manager 이상만
+  // 변경 가능해야 함(2026-08-XX 확정) — form action에서는 locals.cmsRole 대신
+  // getCmsRoleForAction() 사용(security-auth.md 필수 패턴, load 시점과 달리 액션 실행 시점엔
+  // locals.cmsRole이 항상 undefined이기 때문)
   saveFormat: async ({ request, locals }) => {
     const { session } = await locals.safeGetSession()
     if (!session) return fail(401, { action: 'saveFormat', error: '인증 필요' })
+    const cmsRole = await getCmsRoleForAction(locals)
+    if (!hasSettingsAccess(cmsRole ?? '')) return fail(403, { action: 'saveFormat', error: '권한 없음' })
 
     const form = await request.formData()
     const prefix       = ((form.get('prefix') as string) ?? 'CS').trim().toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 6) || 'CS'
@@ -487,7 +509,8 @@ export const actions: Actions = {
   },
 
   // ── 코드 이관 (superadmin 전용) ───────────────────────────────────────
-  // 소스 코드에 연결된 상품 → 타겟 코드로 이관 + 품번 재발행 + QR 재생성
+  // 소스 코드에 연결된 상품 → 타겟 카테고리로 이관 (품번·QR은 ID 기반 고정, 변경 없음)
+  // 품번 영구고정 정책: 카테고리가 바뀌어도 product_code는 절대 변경하지 않는다.
   transferCode: async ({ request, locals }) => {
     const { session } = await locals.safeGetSession()
     if (!session) return fail(401, { action: 'transferCode', error: '인증 필요' })
@@ -538,35 +561,17 @@ export const actions: Actions = {
     if (!products || products.length === 0)
       return fail(400, { action: 'transferCode', error: '이관할 상품이 없습니다.' })
 
-    // 각 상품을 타겟 카테고리로 이관 + product_code NULL 초기화
+    // 각 상품을 타겟 카테고리로 이관 (product_code는 영구고정 정책 — 건드리지 않음)
     const productIds = (products as { id: string }[]).map((p) => p.id)
 
-    await admin
+    const { error: updateError } = await admin
       .from('products')
-      .update({ category: targetCat, product_code: null })
+      .update({ category: targetCat })
       .in('id', productIds)
       .is('deleted_at', null)
 
-    // 각 상품 품번 재발행 (generate_product_code는 product_code를 항상 덮어씀)
-    for (const id of productIds) {
-      await admin.rpc('generate_product_code', {
-        p_product_id: id,
-        p_category: targetCat,
-      })
-    }
-
-    // QR payload 재생성 (경로 기반 — QR은 상품 ID로 고정)
-    const qrBase = 'https://crazyshot.kr/qr/product/'
-    await admin
-      .from('products')
-      .update({ qr_payload: null })
-      .in('id', productIds)
-      .is('deleted_at', null)
-    for (const id of productIds) {
-      await admin
-        .from('products')
-        .update({ qr_payload: qrBase + id })
-        .eq('id', id)
+    if (updateError) {
+      return fail(500, { action: 'transferCode', error: `카테고리 이관에 실패했습니다: ${updateError.message}` })
     }
 
     // taxonomy_map에서 소스 매핑 삭제 (타겟 매핑은 이미 존재하거나 없어도 무방)
@@ -582,6 +587,8 @@ export const actions: Actions = {
   updateCodeRule: async ({ request, locals }) => {
     const { session } = await locals.safeGetSession()
     if (!session) return fail(401, { action: 'updateCodeRule', error: '인증 필요' })
+    const cmsRole = await getCmsRoleForAction(locals)
+    if (!hasSettingsAccess(cmsRole ?? '')) return fail(403, { action: 'updateCodeRule', error: '권한 없음' })
 
     const form = await request.formData()
     const id             = (form.get('id') as string) ?? ''
@@ -617,6 +624,8 @@ export const actions: Actions = {
   saveMapping: async ({ request, locals }) => {
     const { session } = await locals.safeGetSession()
     if (!session) return fail(401, { action: 'saveMapping', error: '인증 필요' })
+    const cmsRole = await getCmsRoleForAction(locals)
+    if (!hasSettingsAccess(cmsRole ?? '')) return fail(403, { action: 'saveMapping', error: '권한 없음' })
 
     const form     = await request.formData()
     const category = (form.get('product_category') as string) ?? ''
@@ -641,6 +650,8 @@ export const actions: Actions = {
   savePrefixCodes: async ({ request, locals }) => {
     const { session } = await locals.safeGetSession()
     if (!session) return fail(401, { action: 'savePrefixCodes', error: '인증 필요' })
+    const cmsRole = await getCmsRoleForAction(locals)
+    if (!hasSettingsAccess(cmsRole ?? '')) return fail(403, { action: 'savePrefixCodes', error: '권한 없음' })
 
     const form  = await request.formData()
     const raw   = (form.get('prefix_codes') as string) ?? '[]'
@@ -668,6 +679,8 @@ export const actions: Actions = {
   addGroup: async ({ request, locals }) => {
     const { session } = await locals.safeGetSession()
     if (!session) return fail(401, { action: 'addGroup', error: '인증 필요' })
+    const cmsRole = await getCmsRoleForAction(locals)
+    if (!hasSettingsAccess(cmsRole ?? '')) return fail(403, { action: 'addGroup', error: '권한 없음' })
 
     const form = await request.formData()
     const name             = ((form.get('name')             as string) ?? '').trim()
@@ -694,6 +707,8 @@ export const actions: Actions = {
   editGroup: async ({ request, locals }) => {
     const { session } = await locals.safeGetSession()
     if (!session) return fail(401, { action: 'editGroup', error: '인증 필요' })
+    const cmsRole = await getCmsRoleForAction(locals)
+    if (!hasSettingsAccess(cmsRole ?? '')) return fail(403, { action: 'editGroup', error: '권한 없음' })
 
     const form = await request.formData()
     const id               = (form.get('id')              as string) ?? ''
@@ -720,6 +735,8 @@ export const actions: Actions = {
   deleteGroup: async ({ request, locals }) => {
     const { session } = await locals.safeGetSession()
     if (!session) return fail(401, { action: 'deleteGroup', error: '인증 필요' })
+    const cmsRole = await getCmsRoleForAction(locals)
+    if (!hasSettingsAccess(cmsRole ?? '')) return fail(403, { action: 'deleteGroup', error: '권한 없음' })
 
     const form = await request.formData()
     const id = (form.get('id') as string) ?? ''
@@ -748,6 +765,8 @@ export const actions: Actions = {
   toggleGroupActive: async ({ request, locals }) => {
     const { session } = await locals.safeGetSession()
     if (!session) return fail(401, { action: 'toggleGroupActive', error: '인증 필요' })
+    const cmsRole = await getCmsRoleForAction(locals)
+    if (!hasSettingsAccess(cmsRole ?? '')) return fail(403, { action: 'toggleGroupActive', error: '권한 없음' })
 
     const form = await request.formData()
     const id      = (form.get('id')        as string) ?? ''
@@ -766,6 +785,8 @@ export const actions: Actions = {
   toggleGroupProductFilter: async ({ request, locals }) => {
     const { session } = await locals.safeGetSession()
     if (!session) return fail(401, { action: 'toggleGroupProductFilter', error: '인증 필요' })
+    const cmsRole = await getCmsRoleForAction(locals)
+    if (!hasSettingsAccess(cmsRole ?? '')) return fail(403, { action: 'toggleGroupProductFilter', error: '권한 없음' })
 
     const form = await request.formData()
     const id      = (form.get('id')                     as string) ?? ''
@@ -783,6 +804,8 @@ export const actions: Actions = {
   toggleGroupPartnerType: async ({ request, locals }) => {
     const { session } = await locals.safeGetSession()
     if (!session) return fail(401, { action: 'toggleGroupPartnerType', error: '인증 필요' })
+    const cmsRole = await getCmsRoleForAction(locals)
+    if (!hasSettingsAccess(cmsRole ?? '')) return fail(403, { action: 'toggleGroupPartnerType', error: '권한 없음' })
 
     const form = await request.formData()
     const id      = (form.get('id')              as string) ?? ''
@@ -801,6 +824,8 @@ export const actions: Actions = {
   addGroupItem: async ({ request, locals }) => {
     const { session } = await locals.safeGetSession()
     if (!session) return fail(401, { action: 'addGroupItem', error: '인증 필요' })
+    const cmsRole = await getCmsRoleForAction(locals)
+    if (!hasSettingsAccess(cmsRole ?? '')) return fail(403, { action: 'addGroupItem', error: '권한 없음' })
 
     const form = await request.formData()
     const group_id         = (form.get('group_id')         as string) ?? ''
@@ -845,6 +870,8 @@ export const actions: Actions = {
   updateGroupItemSettings: async ({ request, locals }) => {
     const { session } = await locals.safeGetSession()
     if (!session) return fail(401, { action: 'updateGroupItemSettings', error: '인증 필요' })
+    const cmsRole = await getCmsRoleForAction(locals)
+    if (!hasSettingsAccess(cmsRole ?? '')) return fail(403, { action: 'updateGroupItemSettings', error: '권한 없음' })
 
     const form = await request.formData()
     const combo_row_id = ((form.get('combo_row_id') as string) ?? '').trim()
@@ -883,6 +910,8 @@ export const actions: Actions = {
   removeGroupCombo: async ({ request, locals }) => {
     const { session } = await locals.safeGetSession()
     if (!session) return fail(401, { action: 'removeGroupCombo', error: '인증 필요' })
+    const cmsRole = await getCmsRoleForAction(locals)
+    if (!hasSettingsAccess(cmsRole ?? '')) return fail(403, { action: 'removeGroupCombo', error: '권한 없음' })
 
     const form = await request.formData()
     const combo_row_id = ((form.get('combo_row_id') as string) ?? '').trim()
@@ -915,6 +944,8 @@ export const actions: Actions = {
   removeGroupItem: async ({ request, locals }) => {
     const { session } = await locals.safeGetSession()
     if (!session) return fail(401, { action: 'removeGroupItem', error: '인증 필요' })
+    const cmsRole = await getCmsRoleForAction(locals)
+    if (!hasSettingsAccess(cmsRole ?? '')) return fail(403, { action: 'removeGroupItem', error: '권한 없음' })
 
     const form = await request.formData()
     const group_id         = (form.get('group_id')         as string) ?? ''
@@ -947,6 +978,8 @@ export const actions: Actions = {
   removeComboItem: async ({ request, locals }) => {
     const { session } = await locals.safeGetSession()
     if (!session) return fail(401, { action: 'removeComboItem', error: '인증 필요' })
+    const cmsRole = await getCmsRoleForAction(locals)
+    if (!hasSettingsAccess(cmsRole ?? '')) return fail(403, { action: 'removeComboItem', error: '권한 없음' })
 
     const form = await request.formData()
     const id = ((form.get('id') as string) ?? '').trim()
