@@ -1,6 +1,9 @@
 <script lang="ts">
   import type { PageData } from './$types'
   import type { AnalyticsData, BannerStats } from './+page.server'
+  import CmsKpiGrid from '$lib/components/cms/CmsKpiGrid.svelte'
+  import CmsStatRing from '$lib/components/cms/CmsStatRing.svelte'
+  import CmsStatBars from '$lib/components/cms/CmsStatBars.svelte'
 
   interface Props { data: PageData }
   let { data }: Props = $props()
@@ -83,43 +86,28 @@
 
   <!-- 탭1: 전체 KPI -->
   {#if activeTab === 'kpi'}
-    <div class="kpi-grid">
-      <div class="stat-card">
-        <span class="stat-label">총 매출</span>
-        <span class="stat-value">{fmtKRW(analytics.total_revenue)}</span>
-        <span class="stat-sub">확정 예약 기준 누적 매출</span>
+    <div class="hero-stats">
+      <div class="hero-ring">
+        <CmsStatRing value={analytics.conversion_rate} label="구매 전환율" tone="primary" size={140} />
       </div>
-
-      <div class="stat-card">
-        <span class="stat-label">구매 전환율</span>
-        <span class="stat-value">{fmtPct(analytics.conversion_rate)}</span>
-        <span class="stat-sub">방문 대비 예약 완료 비율</span>
-      </div>
-
-      <div class="stat-card">
-        <span class="stat-label">CTR (배너)</span>
-        <span class="stat-value">{fmtPct(analytics.ctr)}</span>
-        <span class="stat-sub">배너 노출 대비 클릭률</span>
-      </div>
-
-      <div class="stat-card">
-        <span class="stat-label">활성 캠페인</span>
-        <span class="stat-value">{analytics.active_campaigns}<span class="stat-unit">건</span></span>
-        <span class="stat-sub">현재 진행 중인 프로모션</span>
-      </div>
-
-      <div class="stat-card stat-pending">
-        <span class="stat-label">LTV</span>
-        <span class="stat-value stat-na">—</span>
-        <span class="stat-sub">데이터 수집 중 (Phase 4 예정)</span>
-      </div>
-
-      <div class="stat-card stat-pending">
-        <span class="stat-label">CAC</span>
-        <span class="stat-value stat-na">—</span>
-        <span class="stat-sub">데이터 수집 중 (Phase 4 예정)</span>
+      <div class="hero-bars">
+        <div class="hero-bars-title">배너 슬롯별 클릭 수</div>
+        <CmsStatBars unit="회" items={BANNER_SLOTS.map((slot, i) => ({
+          label: SLOT_LABELS[slot] ?? slot,
+          value: bannerStats[slot]?.clicks ?? 0,
+          tone: (i % 2 === 0 ? 'primary' : 'info') as 'primary' | 'info',
+        }))} />
       </div>
     </div>
+
+    <CmsKpiGrid columns={3} cards={[
+      { label: '총 매출',       value: fmtKRW(analytics.total_revenue),   sub: '확정 예약 기준 누적 매출',   tone: 'primary' },
+      { label: '구매 전환율',   value: fmtPct(analytics.conversion_rate), sub: '방문 대비 예약 완료 비율',   tone: 'info' },
+      { label: 'CTR (배너)',    value: fmtPct(analytics.ctr),             sub: '배너 노출 대비 클릭률',      tone: 'info' },
+      { label: '활성 캠페인',   value: analytics.active_campaigns, unit: '건', sub: '현재 진행 중인 프로모션', tone: 'primary', size: 'sm' },
+      { label: 'LTV',           value: '—', sub: '데이터 수집 중 (Phase 4 예정)', tone: 'neutral', size: 'sm' },
+      { label: 'CAC',           value: '—', sub: '데이터 수집 중 (Phase 4 예정)', tone: 'neutral', size: 'sm' },
+    ]} />
   {/if}
 
   <!-- 탭2: 쿠폰 성과 -->
@@ -242,77 +230,46 @@
   .page-title  { font: var(--text-pc-htitle-25); color: var(--cs-text); margin: 0 0 4px; }
   .page-sub    { font: var(--text-pc-script-12);  color: var(--cs-text-mid); margin: 0; }
 
-  /* ── 탭 바 ── */
+  /* ── 탭 바 (cms-uiux.md §505-514 표준 .sub-tab 패턴 통일) ── */
   .tab-bar {
     display: flex;
     gap: 4px;
-    background: var(--cs-white);
-    border-radius: var(--cms-radius-md);
-    padding: 6px;
+    margin-bottom: 20px;
   }
 
   .tab-btn {
-    flex: 1;
-    padding: 8px 12px;
+    padding: 6px 18px;
     border: none;
-    border-radius: var(--radius-sm);
+    border-radius: var(--cms-radius-sm);
     background: transparent;
     color: var(--cs-text-mid);
     font: var(--text-pc-body-14);
     cursor: pointer;
-    min-height: 36px;
+    min-height: 34px;
     transition: background 0.15s, color 0.15s;
   }
   .tab-btn:hover   { background: rgba(59,47,138,0.08); color: var(--cs-text); }
   .tab-btn.tab-active {
-    background: rgba(59,47,138,0.10);
+    background: var(--cs-white);
     color: var(--cs-purple);
   }
 
-  /* ── KPI 그리드 ── */
-  .kpi-grid {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 12px;
-  }
+  /* ── KPI 그리드: CmsKpiGrid/CmsKpiCard 공용 컴포넌트로 대체 ── */
 
-  .stat-card {
-    background: var(--cs-white);
-    border-radius: var(--cms-radius-lg);
-    padding: 24px 28px;
-    display: flex;
-    flex-direction: column;
-    gap: 6px;
+  /* ─ 히어로 통계 (게이지 + 바그래프) ─ */
+  .hero-stats {
+    display: flex; gap: 24px;
+    background: var(--cs-white); border-radius: var(--cms-radius-lg);
+    padding: 28px 32px; margin-bottom: 20px;
+    box-shadow: 0px 1px 4px rgba(0,0,0,0.06);
   }
-
-  .stat-pending {
-    background: var(--cs-surface-gray);
+  .hero-ring {
+    display: flex; align-items: center; justify-content: center;
+    flex: 0 0 auto; padding-right: 24px;
+    border-right: 1px solid var(--cs-surface-gray);
   }
-
-  .stat-label {
-    font: var(--text-pc-script-12);
-    color: var(--cs-text-mid);
-    text-transform: uppercase;
-    letter-spacing: 0.04em;
-  }
-
-  .stat-value {
-    font: var(--text-pc-htitle-25);
-    color: var(--cs-text);
-    line-height: 1.2;
-  }
-  .stat-value.stat-na { color: var(--cs-text-light); }
-
-  .stat-unit {
-    font: var(--text-pc-body-14);
-    color: var(--cs-text-mid);
-    margin-left: 4px;
-  }
-
-  .stat-sub {
-    font: var(--text-pc-descript-10);
-    color: var(--cs-text-light);
-  }
+  .hero-bars { flex: 1; min-width: 0; display: flex; flex-direction: column; justify-content: center; gap: 14px; }
+  .hero-bars-title { font: var(--text-pc-body-14); font-weight: 700; color: var(--cs-text); }
 
   /* ── 배너 요약 정보 ── */
   .section-info {

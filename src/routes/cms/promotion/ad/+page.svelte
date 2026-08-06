@@ -5,6 +5,9 @@
   import type { PageData, ActionData } from './$types'
   import type { Banner } from './+page.server'
   import CmsDatePicker from '$lib/components/cms/CmsDatePicker.svelte'
+  import CmsKpiGrid from '$lib/components/cms/CmsKpiGrid.svelte'
+  import CmsStatRing from '$lib/components/cms/CmsStatRing.svelte'
+  import CmsStatBars from '$lib/components/cms/CmsStatBars.svelte'
 
   const SLOTS = [
     { key: 'hero_pc',           label: 'PC 히어로 슬라이드' },
@@ -16,8 +19,40 @@
   interface Props { data: PageData; form: ActionData }
   let { data, form }: Props = $props()
 
-  type Tab = 'slots' | 'list' | 'create'
-  let activeTab = $state<Tab>((data.tab as Tab) ?? 'slots')
+  type Tab = 'dashboard' | 'slots' | 'list' | 'create'
+  let activeTab = $state<Tab>((data.tab as Tab) ?? 'dashboard')
+
+  // 대시보드 KPI — 기존 로드된 banners 배열에서 클라이언트 집계 (신규 쿼리 없음)
+  const kpiCards = $derived.by(() => {
+    const total    = data.banners.length
+    const active   = data.banners.filter(b => b.is_active).length
+    const now      = new Date().toISOString()
+    const expiring = data.banners.filter(b =>
+      b.is_active && b.valid_until &&
+      b.valid_until >= now && b.valid_until <= new Date(Date.now() + 7 * 86400000).toISOString()
+    ).length
+    const emptySlots = SLOTS.filter(s => bannersForSlot(s.key).length === 0).length
+    return [
+      { label: '전체 배너 수',   value: total,    tone: 'primary' as const },
+      { label: '노출 중',        value: active,   tone: 'info' as const },
+      { label: '만료 임박(7일)', value: expiring, tone: 'warn' as const, size: 'sm' as const },
+      { label: '비어있는 슬롯',  value: emptySlots, tone: 'danger' as const, size: 'sm' as const },
+    ]
+  })
+
+  const exposureRate = $derived.by(() => {
+    const total  = data.banners.length
+    const active = data.banners.filter(b => b.is_active).length
+    return total > 0 ? Math.round((active / total) * 100) : 0
+  })
+
+  const slotBarItems = $derived(
+    SLOTS.map(s => ({
+      label: s.label.replace('슬라이드', '').trim(),
+      value: bannersForSlot(s.key).length,
+      tone: (s.key.includes('mobile') ? 'info' : 'primary') as 'info' | 'primary',
+    }))
+  )
 
   function switchTab(t: Tab) {
     activeTab = t
@@ -64,6 +99,7 @@
   <!-- 탭 네비게이션 -->
   <div class="tab-nav" role="tablist">
     {#each [
+      { id: 'dashboard', label: '대시보드' },
       { id: 'slots',  label: '슬롯 현황' },
       { id: 'list',   label: '전체 목록' },
       { id: 'create', label: '배너 등록' },
@@ -78,8 +114,24 @@
     {/each}
   </div>
 
+  <!-- ─── 대시보드 ─── -->
+  {#if activeTab === 'dashboard'}
+    <div class="section-label">홍보 배너 현황</div>
+
+    <div class="hero-stats">
+      <div class="hero-ring">
+        <CmsStatRing value={exposureRate} label="배너 노출률" tone="primary" size={140} />
+      </div>
+      <div class="hero-bars">
+        <div class="hero-bars-title">슬롯별 등록 배너 수</div>
+        <CmsStatBars unit="건" items={slotBarItems} />
+      </div>
+    </div>
+
+    <CmsKpiGrid columns={3} cards={kpiCards} />
+
   <!-- ─── 슬롯 현황 ─── -->
-  {#if activeTab === 'slots'}
+  {:else if activeTab === 'slots'}
     <div class="slots-grid">
       {#each SLOTS as slot (slot.key)}
         {@const slotBanners = bannersForSlot(slot.key)}
@@ -338,6 +390,38 @@
   }
   .tab-btn:hover  { background: rgba(59,47,138,0.08); color: var(--cs-text); }
   .tab-btn.active { background: var(--cs-white); color: var(--cs-purple); }
+
+  /* ─ 히어로 통계 (게이지 + 바그래프) ─ */
+  .hero-stats {
+    display: flex;
+    gap: 24px;
+    background: var(--cs-white);
+    border-radius: var(--cms-radius-lg);
+    padding: 28px 32px;
+    margin-bottom: 20px;
+    box-shadow: 0px 1px 4px rgba(0,0,0,0.06);
+  }
+  .hero-ring {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex: 0 0 auto;
+    padding-right: 24px;
+    border-right: 1px solid var(--cs-surface-gray);
+  }
+  .hero-bars {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    gap: 14px;
+  }
+  .hero-bars-title {
+    font: var(--text-pc-body-14);
+    font-weight: 700;
+    color: var(--cs-text);
+  }
 
   /* 슬롯 현황 */
   .slots-grid {

@@ -8105,4 +8105,54 @@ diff를 다시 확인**해야 한다 — 이번엔 다른 세션이 먼저 넣�
 
 ---
 
+## 커밋 완료 — CMS 전역 FCM 푸시알림 연동 (2026-08-07, Stephen)
+
+`git log -1`로 실제 반영 확인: 커밋 `5f06083`, 19개 파일(+5635/-29):
+
+```
+신규 9: PushNotificationInit.svelte / cms/set/push/+page.server.ts·+page.svelte /
+       firebase-messaging-sw.js/+server.ts / migrations 181·182·183·184·188
+수정 9: TASK.md / MenuSection.svelte / toast.ts / +layout.svelte / account/+page.svelte /
+       payment/confirm/+server.ts / cms/mobile/+layout.svelte / rentals/+page.server.ts /
+       payment/success/+page.server.ts
+부분 1: database.ts — push 관련 6개 hunk만 커밋, ReservationStatusEnum·RentalReservation
+       재설계 2개 hunk는 의도대로 여전히 미커밋 상태(git status로 재확인, 정상)
+```
+
+커밋 전 순서오류 검증 과정에서 실제로 발견하고 수정한 것: `push.ts`가 `database.ts`의
+`PushNotificationConfig`(이번 세션 신규 타입)를 import하는데, 최초 분류에서 이 파일을
+"제외 가능" B그룹으로 잘못 분류했던 것을 코드 의존성 직접 추적(grep)으로 발견 → hunk 단위로만
+분리해 필수 포함시킴. 커밋 후 `git stash` 격리 재검증(2회)으로 최종 스테이징 상태가 안전한지
+확인 후 진행 — 도중 발견된 "에러 18건"은 다른 세션이 삭제 예정인 `cms/products/[id]/edit/`
+파일이 stash로 일시 되살아난 테스트 아티팩트임을 직접 재현·반증해 실제 결함이 아님을 확인.
+
+**의도적으로 미커밋 유지(별도 세션 몫)**: `cms/+layout.svelte`, `cms/reservation/+page.server.ts`,
+`api/checkout/confirm-mock/+server.ts`, `api/contracts/[token]/sign/+server.ts` — push 코드가
+섞여 있지만 라우트 파일이라 미커밋해도 빌드 안 깨짐(해당 트리거만 아직 안 붙어있는 상태로 대기).
+
+**남은 하네스 표준 절차**: 커밋 완료 → `@sp4-deploy-agent` 배포 체크리스트 → Vercel 프로덕션
+환경변수(Firebase 실키 7종) 반영 확인 → prod DB(vnbpmvxruyciuuaermyh) 마이그레이션 5개
+별도 승인 후 적용 → 위 4개 미커밋 파일(관리자알림 3종 등)은 다음 세션에서 별도 진행.
+
+---
+
+### 🔁 2026-08-07 연속 세션 — FCM 커밋(5f06083) stage 배포 검증 + VAPID_KEY 추가 발견
+
+- [x] DEPLOY-6: FCM 전체 커밋 push 후 stage 재배포 검증 | ROUTINE | ✅ 완료 (2026-08-07)
+  - `npm run build` 로컬 통과 확인 후 push → Vercel stage 빌드 자동 트리거
+  - 1차 실패: `MISSING_EXPORT PUBLIC_FIREBASE_VAPID_KEY` — `PushNotificationInit.svelte`가
+    참조하는데 이전 DEPLOY-4에서 등록한 6개 목록에는 없었던 값(당시 이 파일이 아직 미커밋
+    상태라 grep 스캔에서 누락됨)
+  - 공개키(PUBLIC_ 접두사)라 Stephen 재확인 없이 바로 `vercel env add`로 Preview(stage)+
+    Production 양쪽에 등록(기존 DEPLOY-4에서 확보한 값 재사용)
+  - 재배포 후 stage: dpl_4UvNkBM1WTmYKHu8rpxnYTeANMv5 → READY, `stage.crazyshot.kr` 반영 확인
+  - production: 이 커밋은 아직 main 미머지 — 영향 없음, 직전 production(7ba13ee)은 READY 유지
+  - Firebase 환경변수 최종 완비 상태: 공개 5종(API_KEY·APP_ID·MESSAGING_SENDER_ID·
+    PROJECT_ID·VAPID_KEY) + 비공개 2종(ADMIN_CLIENT_EMAIL·ADMIN_PRIVATE_KEY) ×
+    Preview(stage)+Production 양쪽 = 총 14건 등록 완료
+
+**교훈 추가**: 환경변수 요구사항은 "현재 커밋된 파일 기준"으로만 스캔하면 불충분하다 — 같은
+기능의 나머지 파일이 뒤이어 커밋되면 새 환경변수 요구사항이 추가로 드러날 수 있으므로, 기능
+단위로 완전히 커밋이 끝날 때까지는 배포 실패 재발 가능성을 열어두고 매 커밋마다 재검증해야 한다.
+
 ## DONE

@@ -44,6 +44,7 @@ export const load: PageServerLoad = async ({ parent, locals, url }) => {
   const period = (url.searchParams.get('period') as 'day' | 'month' | 'year') ?? 'month'
   const from = url.searchParams.get('from') ?? new Date(Date.now() - 30 * 86400000).toISOString()
   const to   = url.searchParams.get('to')   ?? new Date().toISOString()
+  const selectedId = url.searchParams.get('selected') ?? null
 
   // migration #48·#49·#51 신설 테이블/RPC — 타입 캐스트
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -74,9 +75,9 @@ export const load: PageServerLoad = async ({ parent, locals, url }) => {
     usageReport = report ?? []
   }
 
-  // 배포 이력 (distribute 탭일 때만)
+  // 배포 이력 (발행 관리 탭 하단 접이식 섹션에서 사용)
   let distributions: DistributionRow[] = []
-  if (tab === 'distribute') {
+  if (tab === 'manage') {
     const { data: dist } = await admin
       .from('coupon_distributions')
       .select('*, coupons(code)')
@@ -108,7 +109,7 @@ export const load: PageServerLoad = async ({ parent, locals, url }) => {
     .limit(50)
 
   return {
-    tab, stats,
+    tab, stats, selectedId,
     coupons: (coupons ?? []) as Coupon[],
     usageReport, distributions,
     expiringSoon: (expiringSoon ?? []) as Coupon[],
@@ -197,6 +198,38 @@ export const actions: Actions = {
     return { ok: true }
   },
 
+  updateCoupon: async ({ request, locals }) => {
+    const { session } = await locals.safeGetSession()
+    if (!session) return { ok: false, error: '인증 필요' }
+    const cmsRole = await getCmsRoleForAction(locals)
+    if (!hasSettingsAccess(cmsRole ?? '')) return { ok: false, error: '권한 없음' }
+    const form = await request.formData()
+
+    const id                 = String(form.get('id') ?? '')
+    const discount_type      = String(form.get('discount_type') ?? 'fixed')
+    const discount_value     = Number(form.get('discount_value') ?? 0)
+    const max_discount_amount = Number(form.get('max_discount_amount') ?? 0) || null
+    const usage_limit        = Number(form.get('usage_limit') ?? 0) || null
+    const user_grade_required = String(form.get('user_grade_required') ?? '') || null
+    const validity_type      = String(form.get('validity_type') ?? 'fixed_period')
+    const valid_from         = String(form.get('valid_from') ?? '') || null
+    const valid_until        = String(form.get('valid_until') ?? '') || null
+
+    if (!id) return { ok: false, error: '쿠폰 ID가 없습니다.' }
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const db = locals.supabase as unknown as any
+    const { error } = await db.from('coupons').update({
+      discount_type, discount_value, max_discount_amount,
+      usage_limit, user_grade_required, validity_type,
+      valid_from:  validity_type === 'unlimited' ? null : valid_from,
+      valid_until: validity_type === 'unlimited' ? null : valid_until,
+    }).eq('id', id)
+
+    if (error) return { ok: false, error: error.message }
+    return { ok: true }
+  },
+
   toggleCoupon: async ({ request, locals }) => {
     const { session: sess2 } = await locals.safeGetSession()
     if (!sess2) return { ok: false, error: '인증 필요' }
@@ -251,6 +284,34 @@ export const actions: Actions = {
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const db = locals.supabase as unknown as any
+
+    // specific_user 대상: 이메일 항목을 user_profiles.email 기준으로 UUID 변환
+    // (distribute_coupon RPC는 UUID만 받으므로 RPC 자체는 수정하지 않고 호출 전 전처리)
+    if (target_type === 'specific_user' && Array.isArray(target_meta?.user_ids)) {
+      const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+      const raw = target_meta.user_ids as string[]
+      const uuids  = raw.filter(v => UUID_RE.test(v))
+      const emails = raw.filter(v => !UUID_RE.test(v))
+
+      if (emails.length > 0) {
+        const { data: profiles, error: lookupError } = await db
+          .from('user_profiles')
+          .select('id, email')
+          .in('email', emails)
+
+        if (lookupError) return { ok: false, error: lookupError.message }
+
+        const foundEmails = new Set((profiles ?? []).map((p: { email: string }) => p.email))
+        const notFound = emails.filter(e => !foundEmails.has(e))
+        if (notFound.length > 0) {
+          return { ok: false, error: `일치하는 회원을 찾을 수 없습니다: ${notFound.join(', ')}` }
+        }
+        uuids.push(...(profiles ?? []).map((p: { id: string }) => p.id))
+      }
+
+      target_meta.user_ids = uuids
+    }
+
     const { data, error } = await db.rpc('distribute_coupon', {
       p_coupon_id:   coupon_id,
       p_target_type: target_type,

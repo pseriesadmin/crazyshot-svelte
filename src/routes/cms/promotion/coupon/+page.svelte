@@ -2,10 +2,16 @@
   import { enhance } from '$app/forms'
   import { goto } from '$app/navigation'
   import { page } from '$app/state'
+  import { fly } from 'svelte/transition'
   import { csToast } from '$lib/utils/toast'
   import type { PageData, ActionData } from './$types'
   import type { Coupon } from '$lib/types/database'
   import CmsDatePicker from '$lib/components/cms/CmsDatePicker.svelte'
+  import CmsKpiGrid from '$lib/components/cms/CmsKpiGrid.svelte'
+  import CmsKpiCard from '$lib/components/cms/CmsKpiCard.svelte'
+  import CmsStatRing from '$lib/components/cms/CmsStatRing.svelte'
+  import CmsStatBars from '$lib/components/cms/CmsStatBars.svelte'
+  import CouponDetailPanel from '$lib/components/cms/CouponDetailPanel.svelte'
 
   let { data, form }: { data: PageData; form: ActionData } = $props()
 
@@ -13,7 +19,6 @@
   const TABS = [
     { id: 'dashboard',  label: '대시보드' },
     { id: 'manage',     label: '발행 관리' },
-    { id: 'distribute', label: '직접 배포' },
     { id: 'report',     label: '사용량 리포트' },
     { id: 'expire',     label: '만료 관리' },
   ] as const
@@ -87,20 +92,27 @@
       : JSON.stringify({ type: 'all' })
   )
 
-  // ─ 배포 폼 상태 ─
-  let distCouponId = $state('')
-  let distTargetT  = $state<'all' | 'grade' | 'specific_user'>('all')
-  let distGrade    = $state('')
-  let distUuids    = $state('')
-  let distLoading  = $state(false)
+  // ─ 목록카드 + DetailPanel 선택 상태 (cms-uiux.md 표준 구조) ─
+  let selectedCouponId = $state<string | null>(data.selectedId ?? null)
+  let showDistHistory  = $state(false)
 
-  let distTargetMeta = $derived(
-    distTargetT === 'grade'
-      ? JSON.stringify({ grade: distGrade })
-      : distTargetT === 'specific_user' && distUuids.trim()
-        ? JSON.stringify({ user_ids: distUuids.split('\n').map((s: string) => s.trim()).filter(Boolean) })
-        : null
+  const selectedCoupon = $derived(
+    selectedCouponId ? data.coupons.find(c => c.id === selectedCouponId) ?? null : null
   )
+
+  function selectCoupon(c: Coupon) {
+    selectedCouponId = c.id
+    const u = new URL(page.url)
+    u.searchParams.set('selected', c.id)
+    goto(u.toString(), { replaceState: true, noScroll: true })
+  }
+
+  function closePanel() {
+    selectedCouponId = null
+    const u = new URL(page.url)
+    u.searchParams.delete('selected')
+    goto(u.toString(), { replaceState: true, noScroll: true })
+  }
 
   // ─ 만료 연장 상태 ─
   let reportFrom = $state(data.from.substring(0, 10))
@@ -129,6 +141,7 @@
       showCreateForm  = false
       showDeleteModal = false
       extendCouponId  = ''
+      if (deleteId && deleteId === selectedCouponId) closePanel()
     } else if ('error' in form && form.error) {
       csToast.error(String(form.error))
     }
@@ -180,43 +193,39 @@
   {#if activeTab === 'dashboard'}
     <div class="section-title">쿠폰 현황</div>
 
-    <div class="kpi-grid">
-      <div class="kpi-card">
-        <span class="kpi-label">총 발급 수</span>
-        <span class="kpi-val">{data.stats.total_issued.toLocaleString()}</span>
+    <!-- 히어로 통계: 전환율 게이지 + 발급/사용 breakdown 바 -->
+    <div class="hero-stats">
+      <div class="hero-ring">
+        <CmsStatRing value={data.stats.conversion_rate} label="쿠폰 사용 전환율" tone="primary" size={140} />
       </div>
-      <div class="kpi-card">
-        <span class="kpi-label">현재 활성</span>
-        <span class="kpi-val kv-active">{data.stats.total_active.toLocaleString()}</span>
-      </div>
-      <div class="kpi-card">
-        <span class="kpi-label">누적 사용</span>
-        <span class="kpi-val">{data.stats.total_used.toLocaleString()}</span>
-      </div>
-      <div class="kpi-card">
-        <span class="kpi-label">만료 수</span>
-        <span class="kpi-val kv-muted">{data.stats.total_expired.toLocaleString()}</span>
-      </div>
-      <div class="kpi-card">
-        <span class="kpi-label">총 할인 제공액</span>
-        <span class="kpi-val">{data.stats.total_discount_amount.toLocaleString()}원</span>
-      </div>
-      <div class="kpi-card">
-        <span class="kpi-label">쿠폰 사용 전환율</span>
-        <span class="kpi-val">{data.stats.conversion_rate}%</span>
+      <div class="hero-bars">
+        <div class="hero-bars-title">발급 · 사용 · 만료 breakdown</div>
+        <CmsStatBars unit="건" items={[
+          { label: '총 발급',  value: data.stats.total_issued,  tone: 'primary' },
+          { label: '현재 활성', value: data.stats.total_active,  tone: 'info' },
+          { label: '누적 사용', value: data.stats.total_used,    tone: 'primary' },
+          { label: '만료',    value: data.stats.total_expired, tone: 'danger' },
+        ]} />
       </div>
     </div>
 
+    <CmsKpiGrid columns={3} cards={[
+      { label: '총 발급 수',        value: data.stats.total_issued,  tone: 'primary' },
+      { label: '현재 활성',         value: data.stats.total_active,  tone: 'info' },
+      { label: '누적 사용',         value: data.stats.total_used,    tone: 'primary', size: 'sm' },
+      { label: '만료 수',           value: data.stats.total_expired, tone: 'danger', size: 'sm' },
+      { label: '총 할인 제공액',    value: data.stats.total_discount_amount, unit: '원', tone: 'info', size: 'sm' },
+      { label: '쿠폰 사용 전환율',  value: data.stats.conversion_rate, unit: '%', tone: 'primary', size: 'sm', progress: data.stats.conversion_rate },
+    ]} />
+
     {#if data.expiringSoon.length > 0}
-      <div class="expire-alert">
-        <div class="expire-alert-title">⚠ 만료 임박 쿠폰 (7일 이내)</div>
-        {#each data.expiringSoon.slice(0, 5) as c}
-          <div class="expire-row">
-            <span class="expire-code">{c.code}</span>
-            <span class="badge badge-info">{typeLabel(c.type)}</span>
-            <span class="expire-date">{formatDate(c.valid_until)}</span>
-          </div>
-        {/each}
+      <div class="expire-section">
+        <div class="expire-section-title">⚠ 만료 임박 쿠폰 (7일 이내)</div>
+        <div class="expire-grid">
+          {#each data.expiringSoon.slice(0, 5) as c}
+            <CmsKpiCard label={c.code} value={formatDate(c.valid_until)} tone="warn" size="sm" />
+          {/each}
+        </div>
       </div>
     {/if}
 
@@ -503,143 +512,101 @@
       </div>
     {/if}
 
-    <!-- 목록 테이블 -->
-    <div class="table-card">
-      <table>
-        <thead>
-          <tr>
-            <th>코드</th><th>유형</th><th>할인</th>
-            <th>유효기간</th><th>사용/한도</th><th>상태</th><th>관리</th>
-          </tr>
-        </thead>
-        <tbody>
-          {#each data.coupons as c}
-            {@const cc = c as unknown as Record<string, unknown>}
-            <tr>
-              <td class="td-code">{c.code}</td>
-              <td><span class="badge badge-info">{typeLabel(c.type)}</span></td>
-              <td>{discountLabel(c)}</td>
-              <td class="td-date">
-                {#if cc.validity_type === 'unlimited'}
-                  <span class="badge badge-active">무제한</span>
-                {:else}
-                  {formatDate(c.valid_from)} ~ {formatDate(c.valid_until)}
-                {/if}
-              </td>
-              <td>{c.usage_count} / {c.usage_limit ?? '∞'}</td>
-              <td>
-                <form method="POST" action="?/toggleCoupon" use:enhance>
-                  <input type="hidden" name="id" value={c.id} />
-                  <input type="hidden" name="is_active" value={String(c.is_active)} />
-                  <button type="submit" class="tog" class:tog-on={c.is_active}
-                    role="switch" aria-checked={c.is_active} aria-label="활성화 토글">
-                    <span class="tog-thumb"></span>
-                  </button>
-                </form>
-              </td>
-              <td>
-                <button class="btn-danger sm" onclick={() => confirmDelete(c)}>삭제</button>
-              </td>
-            </tr>
-          {:else}
-            <tr><td colspan="7" class="no-data">등록된 쿠폰이 없습니다.</td></tr>
-          {/each}
-        </tbody>
-      </table>
-    </div>
-
-  <!-- ────────────────────────────────────────────
-       탭3: 직접 배포
-  ──────────────────────────────────────────── -->
-  {:else if activeTab === 'distribute'}
-    <div class="section-title">쿠폰 직접 배포</div>
-    <div class="form-card">
-      <form method="POST" action="?/distributeCoupon"
-        use:enhance={() => {
-          distLoading = true
-          return ({ update }) => { distLoading = false; update() }
-        }}
-      >
-        <div class="form-grid">
-          <div class="form-field form-full">
-            <label for="dist-coupon">배포할 쿠폰</label>
-            <select id="dist-coupon" name="coupon_id" class="f-input"
-              bind:value={distCouponId} required>
-              <option value="">— 쿠폰 선택 —</option>
-              {#each data.coupons.filter(c => c.is_active) as c}
-                <option value={c.id}>{c.code} ({typeLabel(c.type)})</option>
-              {/each}
-            </select>
-          </div>
-          <div class="form-field form-full">
-            <label>배포 대상</label>
-            <div class="radio-group">
-              <label class="radio-lbl">
-                <input type="radio" bind:group={distTargetT} value="all" />
-                전체 회원
-              </label>
-              <label class="radio-lbl">
-                <input type="radio" bind:group={distTargetT} value="grade" />
-                특정 등급
-              </label>
-              <label class="radio-lbl">
-                <input type="radio" bind:group={distTargetT} value="specific_user" />
-                특정 사용자 UUID
-              </label>
-            </div>
-          </div>
-          {#if distTargetT === 'grade'}
-            <div class="form-field">
-              <label for="dist-grade">등급</label>
-              <select id="dist-grade" class="f-input" bind:value={distGrade}>
-                <option value="BASIC">BASIC</option>
-                <option value="PRO">PRO</option>
-                <option value="CRAZY">CRAZY</option>
-              </select>
-            </div>
-          {/if}
-          {#if distTargetT === 'specific_user'}
-            <div class="form-field form-full">
-              <label for="dist-uuids">사용자 UUID (줄바꿈 구분)</label>
-              <textarea id="dist-uuids" class="f-input ta" rows="5"
-                placeholder="uuid-1&#10;uuid-2" bind:value={distUuids}></textarea>
-            </div>
-          {/if}
-        </div>
-        <input type="hidden" name="target_type" value={distTargetT} />
-        <input type="hidden" name="target_meta" value={distTargetMeta ?? ''} />
-        <div class="form-actions">
-          <button type="submit" class="btn-primary"
-            disabled={distLoading || !distCouponId}>
-            {distLoading ? '배포 중...' : '배포 실행'}
-          </button>
-        </div>
-      </form>
-    </div>
-
-    {#if data.distributions.length > 0}
-      <div class="section-title">배포 이력</div>
+    <!-- 목록카드 + DetailPanel (cms-uiux.md 표준 구조 — /cms/reservation과 동일 패턴) -->
+    <div class="content-area" class:panel-open={selectedCouponId != null}>
       <div class="table-card">
+      <div class="table-wrap">
         <table>
           <thead>
-            <tr><th>배포일</th><th>쿠폰 코드</th><th>대상</th><th>발급 수</th></tr>
+            <tr>
+              <th>코드</th><th>유형</th><th class="col-hide">할인</th>
+              <th class="col-hide">유효기간</th><th>사용/한도</th><th>상태</th><th>관리</th>
+            </tr>
           </thead>
           <tbody>
-            {#each data.distributions as d}
-              <tr>
-                <td class="td-date">{formatDate(d.created_at)}</td>
-                <td class="td-code">{d.coupons?.code ?? '—'}</td>
-                <td>{d.target_type}</td>
-                <td>{d.issued_count.toLocaleString()}명</td>
+            {#each data.coupons as c (c.id)}
+              {@const cc = c as unknown as Record<string, unknown>}
+              <tr
+                class:selected={selectedCouponId === c.id}
+                onclick={() => selectCoupon(c)}
+                role="button"
+                tabindex="0"
+                onkeydown={(e) => e.key === 'Enter' && selectCoupon(c)}
+                aria-label="{c.code} 쿠폰 상세 보기"
+              >
+                <td class="td-code">{c.code}</td>
+                <td><span class="badge badge-info">{typeLabel(c.type)}</span></td>
+                <td class="td-date col-hide">
+                  {#if cc.validity_type === 'unlimited'}
+                    <span class="badge badge-active">무제한</span>
+                  {:else}
+                    {formatDate(c.valid_from)} ~ {formatDate(c.valid_until)}
+                  {/if}
+                </td>
+                <td class="col-hide">{discountLabel(c)}</td>
+                <td>{c.usage_count} / {c.usage_limit ?? '∞'}</td>
+                <td>
+                  <form method="POST" action="?/toggleCoupon" use:enhance
+                    onclick={(e) => e.stopPropagation()}
+                  >
+                    <input type="hidden" name="id" value={c.id} />
+                    <input type="hidden" name="is_active" value={String(c.is_active)} />
+                    <button type="submit" class="tog" class:tog-on={c.is_active}
+                      role="switch" aria-checked={c.is_active} aria-label="활성화 토글">
+                      <span class="tog-thumb"></span>
+                    </button>
+                  </form>
+                </td>
+                <td>
+                  <button class="btn-danger sm" onclick={(e) => { e.stopPropagation(); confirmDelete(c) }}>삭제</button>
+                </td>
               </tr>
+            {:else}
+              <tr><td colspan="7" class="no-data">등록된 쿠폰이 없습니다.</td></tr>
             {/each}
           </tbody>
         </table>
       </div>
-    {/if}
+
+        <!-- 배포 이력 (접이식) -->
+        <button type="button" class="dist-history-toggle" onclick={() => showDistHistory = !showDistHistory}>
+          {showDistHistory ? '▾' : '▸'} 배포 이력 {data.distributions.length > 0 ? `(${data.distributions.length})` : ''}
+        </button>
+        {#if showDistHistory}
+          <div class="dist-history-table">
+            <table>
+              <thead>
+                <tr><th>배포일</th><th>쿠폰 코드</th><th>대상</th><th>발급 수</th></tr>
+              </thead>
+              <tbody>
+                {#each data.distributions as d}
+                  <tr>
+                    <td class="td-date">{formatDate(d.created_at)}</td>
+                    <td class="td-code">{d.coupons?.code ?? '—'}</td>
+                    <td>{d.target_type}</td>
+                    <td>{d.issued_count.toLocaleString()}명</td>
+                  </tr>
+                {:else}
+                  <tr><td colspan="4" class="no-data">배포 이력이 없습니다.</td></tr>
+                {/each}
+              </tbody>
+            </table>
+          </div>
+        {/if}
+      </div>
+
+      <!-- 상세 패널 -->
+      {#if selectedCouponId != null && selectedCoupon}
+        <div class="detail-panel-wrap" transition:fly={{ x: 30, duration: 220 }}>
+          {#key selectedCouponId}
+            <CouponDetailPanel coupon={selectedCoupon} onclose={closePanel} />
+          {/key}
+        </div>
+      {/if}
+    </div>
 
   <!-- ────────────────────────────────────────────
-       탭4: 사용량 리포트
+       탭3: 사용량 리포트
   ──────────────────────────────────────────── -->
   {:else if activeTab === 'report'}
     <div class="toolbar">
@@ -682,7 +649,7 @@
     </div>
 
   <!-- ────────────────────────────────────────────
-       탭5: 만료 관리
+       탭4: 만료 관리
   ──────────────────────────────────────────── -->
   {:else if activeTab === 'expire'}
     <div class="section-title">만료 임박 (7일 이내)</div>
@@ -741,7 +708,8 @@
 <!-- 기간 연장 모달 -->
 {#if extendCouponId}
   <div class="modal-bg" onclick={() => extendCouponId = ''} role="presentation">
-    <div class="modal-box" role="dialog" aria-modal="true" aria-label="기간 연장">
+    <div class="modal-box" role="dialog" aria-modal="true" aria-label="기간 연장"
+      onclick={(e) => e.stopPropagation()}>
       <p class="modal-title">쿠폰 유효기간 연장</p>
       <form method="POST" action="?/extendCoupon"
         use:enhance={() => {
@@ -768,7 +736,8 @@
 <!-- 삭제 확인 모달 -->
 {#if showDeleteModal}
   <div class="modal-bg" onclick={() => showDeleteModal = false} role="presentation">
-    <div class="modal-box" role="dialog" aria-modal="true" aria-label="삭제 확인">
+    <div class="modal-box" role="dialog" aria-modal="true" aria-label="삭제 확인"
+      onclick={(e) => e.stopPropagation()}>
       <p class="modal-title">쿠폰 삭제</p>
       <p class="modal-sub"><strong>{deleteCode}</strong> 쿠폰을 삭제합니다.<br>이 작업은 되돌릴 수 없습니다.</p>
       <form method="POST" action="?/deleteCoupon" use:enhance>
@@ -805,30 +774,52 @@
 .section-title { font: var(--text-pc-title-18); color: var(--cs-text); margin: 0 0 16px; }
 .section-title.nm { margin: 0; }
 
-/* ─ KPI 그리드 ─ */
-.kpi-grid {
-  display: grid; grid-template-columns: repeat(3, 1fr);
-  gap: 12px; margin-bottom: 20px;
-}
-.kpi-card {
-  background: var(--cs-white); border-radius: var(--cms-radius-md);
-  padding: 20px 24px; display: flex; flex-direction: column; gap: 8px;
-}
-.kpi-label { font: var(--text-pc-script-12); color: var(--cs-text-mid); }
-.kpi-val   { font: var(--text-pc-title-18); color: var(--cs-text); }
-.kv-active { color: var(--cs-purple); }
-.kv-muted  { color: var(--cs-text-light); }
+/* ─ KPI 그리드: CmsKpiGrid/CmsKpiCard 공용 컴포넌트로 대체 (dashboard 탭) ─ */
 
-/* ─ 만료 임박 알림 ─ */
-.expire-alert {
-  background: var(--cs-white); border-radius: var(--cms-radius-md);
-  border-left: 3px solid var(--cs-warning);
-  padding: 16px 20px; margin-bottom: 16px;
+/* ─ 히어로 통계 (게이지 + 바그래프) ─ */
+.hero-stats {
+  display: flex;
+  gap: 24px;
+  background: var(--cs-white);
+  border-radius: var(--cms-radius-lg);
+  padding: 28px 32px;
+  margin-bottom: 20px;
+  box-shadow: 0px 1px 4px rgba(0,0,0,0.06);
 }
-.expire-alert-title { font: var(--text-pc-body-14); color: var(--cs-text); margin-bottom: 10px; }
-.expire-row  { display: flex; align-items: center; gap: 12px; margin-bottom: 6px; font: var(--text-pc-script-12); }
-.expire-code { font: var(--text-pc-body-14); color: var(--cs-text); }
-.expire-date { color: var(--cs-text-mid); margin-left: auto; }
+.hero-ring {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  padding-right: 24px;
+  border-right: 1px solid var(--cs-surface-gray);
+}
+.hero-bars {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 14px;
+}
+.hero-bars-title {
+  font: var(--text-pc-body-14);
+  font-weight: 700;
+  color: var(--cs-text);
+}
+
+/* ─ 만료 임박 섹션 ─ */
+.expire-section       { margin: 20px 0 16px; }
+.expire-section-title { font: var(--text-pc-body-14); color: var(--cs-text); margin-bottom: 10px; }
+.expire-grid          { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
+
+/* ─ 배포 이력 토글 ─ */
+.dist-history-toggle {
+  display: flex; align-items: center; gap: 6px;
+  background: transparent; border: none; cursor: pointer;
+  font: var(--text-pc-body-14); color: var(--cs-purple);
+  padding: 8px 0; margin-bottom: 8px;
+}
 
 /* ─ 툴바 ─ */
 .toolbar { display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px; }
@@ -848,7 +839,6 @@
 .fs-title.sm { margin-top: 12px; font: var(--text-pc-script-12); }
 
 .form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
-.form-full { grid-column: 1 / -1; }
 .form-field { display: flex; flex-direction: column; gap: 6px; }
 .form-field label { font: var(--text-pc-script-12); color: var(--cs-text-mid); }
 
@@ -898,6 +888,29 @@
   border-top: 1px solid var(--cs-surface-gray);
 }
 
+/* ─ 목록카드 + DetailPanel 분할 (cms-uiux.md §목록카드+DetailPanel 필수 구조) ─ */
+.content-area {
+  display: flex;
+  gap: 16px;
+  flex: 1;
+  min-height: 0;
+}
+.content-area .table-card {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+.content-area.panel-open .table-card { flex: 4; }
+.content-area .table-wrap { flex: 1; min-height: 0; overflow-y: auto; overflow-x: auto; }
+.detail-panel-wrap {
+  flex: 6;
+  min-width: 0;
+  /* overflow: hidden 추가 금지 — 패널 스크롤 파괴 */
+}
+.content-area.panel-open .col-hide { display: none; }
+
 /* ─ 테이블 ─ */
 .table-card {
   background: var(--cs-white); border-radius: var(--cms-radius-md);
@@ -909,13 +922,20 @@ thead th {
   font: var(--text-pc-script-12); padding: 10px 16px;
   text-align: left; white-space: nowrap;
 }
-tbody tr { border-bottom: 1px solid var(--cs-surface-gray); }
+tbody tr { border-bottom: 1px solid var(--cs-surface-gray); cursor: pointer; }
 tbody tr:hover { background: rgba(59,47,138,0.04); }
+tbody tr.selected { background: rgba(59,47,138,0.08); }
 tbody tr:last-child { border-bottom: none; }
 td { padding: 10px 16px; vertical-align: middle; }
 .td-code { font: var(--text-pc-body-14); color: var(--cs-purple); letter-spacing: .04em; }
 .td-date { font: var(--text-pc-script-12); color: var(--cs-text-mid); white-space: nowrap; }
 .no-data { text-align: center; color: var(--cs-text-light); padding: 32px; }
+
+/* ─ 배포 이력 (접이식 하위 테이블) ─ */
+.dist-history-table {
+  border-top: 1px solid var(--cs-surface-gray);
+  overflow-x: auto;
+}
 
 /* ─ 배지 ─ */
 .badge {
@@ -977,7 +997,6 @@ td { padding: 10px 16px; vertical-align: middle; }
 }
 .f-input::placeholder { color: var(--cs-text-placeholder); }
 .f-input:focus { outline: 2px solid var(--cs-purple); outline-offset: -2px; }
-.f-input.ta { resize: vertical; height: auto; }
 
 /* ─ 모달 ─ */
 .modal-bg {
