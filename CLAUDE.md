@@ -135,6 +135,9 @@ Class D (보안 위반) → 즉시 중단
 ❌ Claude 네이티브 TaskCreate/TaskUpdate 도구 사용 금지 → .claude/harness/TASK.md 직접 편집
 ❌ 요청 범위 외 파일·코드 수정 금지 — 요청에 명시되지 않은 파일은 읽기만 허용, 수정 절대 금지
    → 범위 외 수정이 필요하다고 판단될 경우 반드시 Stephen에게 먼저 확인 후 진행
+❌ Claude Browser(mcp__Claude_Browser__*) 사용 금지 — 브라우저 기동·스크린샷·DOM 읽기 모든 동작 포함
+   → UI 확인은 Stephen이 직접 선택한 <launch-selected-element> 컨텍스트 또는 소스코드 Read로 대체
+   → 이유: 이미지 토큰 과소비 + 실행 시간 과다 → 효용성 없음 (2026-07-28 확정)
 ```
 
 ---
@@ -149,7 +152,7 @@ Class D (보안 위반) → 즉시 중단
 .claude/rules/ui-mobile.md         ← SvelteKit 5 UI + 모바일 UX + 터치 타겟
 .claude/rules/uiux-index.md        ← UI/UX 빠른 참조 인덱스 (컬러·버튼·반경 핵심값)
 .claude/rules/rental-lifecycle.md  ← 대여 라이프사이클 상태 머신·버튼·스텝퍼 정책 (확정)
-.claude/rules/products.md          ← 상품 구조·독립QR·재고정책 (부모/자식·qr_payload 필수)
+.claude/rules/products.md          ← 상품 구조·품번(product_code)·QR·재고정책 (부모=무품번/자식=실채번)
 ```
 
 > UI 작업 시 uiux-index.md로 핵심값 먼저 확인 → 세부 패턴 필요 시 아래 참조 파일 호출
@@ -165,6 +168,7 @@ Class D (보안 위반) → 즉시 중단
 | 대여 라이프사이클 버튼·스텝퍼 | `@.claude/rules/rental-lifecycle.md` | RentalDetailPanel·RentalJourneyStepper 작업 시 |
 | 결제·웹훅 (M3) | `@.claude/rules-ref/payment.md` | 결제 승인·환불·웹훅 작업 시 |
 | 채팅 시스템 (PRD.1.7) | `@.claude/rules-ref/chat.md` | 채팅·세션·Realtime 작업 시 |
+| 자연어검색엔진 (NLSearch) | `@.claude/rules-ref/nlsearch.md` | NLSearch·자연어검색·상품검색 매칭·상담매칭·동의어학습 작업 시 |
 | CMS 화면 퍼블리싱 | `@.claude/rules-ref/cms-uiux.md` | CMS 컴포넌트·레이아웃 작업 시 |
 | 사용자 화면 퍼블리싱 | `@.claude/rules-ref/front-uiux.md` | USER 화면 UI 작업 시 |
 | 공통 디자인 토큰 | `@.claude/rules-ref/uiux.md` | CSS 변수·토큰 확인 시 |
