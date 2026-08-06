@@ -57,23 +57,28 @@
 
   async function doSearch(q: string) {
     isSearching = true
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const { data } = await (supabase.rpc as any)('search_products', {
-      p_query: q, p_category: null, p_page: 1, p_limit: 12,
-      p_session_id: null, p_user_id: null,
-    })
-    searchResults = ((data ?? []) as Record<string, unknown>[]).map(r => {
-      const p24 = Number(r['price_min'] ?? r['base_price_daily'] ?? 0)
-      return {
-        id:       String(r['product_id'] ?? r['id'] ?? ''),
-        name:     String(r['name'] ?? ''),
-        category: String(r['category'] ?? ''),
-        price24h: p24,
-        price12h: Math.round(p24 * 0.7),
-        img:      ((r['image_urls'] as string[] | null)?.[0]) ?? (r['image_url'] ? String(r['image_url']) : '/images/products/grid-flat.png'),
-      }
-    })
-    isSearching = false
+    try {
+      // 2026-08-06: 브라우저 직접 RPC → /api/search/products API 라우트 경유로 전환
+      // 자연어 레이어(MiniSearch)는 서버에서만 동작 가능 — 이 배선 변경이 필수 전제조건
+      const resp = await fetch(`/api/search/products?q=${encodeURIComponent(q)}&limit=12`)
+      if (!resp.ok) throw new Error(`검색 API 오류: ${resp.status}`)
+      const { results } = await resp.json() as { results: Record<string, unknown>[] }
+      searchResults = (results ?? []).map(r => {
+        const p24 = Number(r['price_min'] ?? r['base_price_daily'] ?? 0)
+        return {
+          id:       String(r['product_id'] ?? r['id'] ?? ''),
+          name:     String(r['name'] ?? ''),
+          category: String(r['category'] ?? ''),
+          price24h: p24,
+          price12h: Math.round(p24 * 0.7),
+          img:      ((r['image_urls'] as string[] | null)?.[0]) ?? (r['image_url'] ? String(r['image_url']) : '/images/products/grid-flat.png'),
+        }
+      })
+    } catch {
+      searchResults = []
+    } finally {
+      isSearching = false
+    }
   }
 
   function onProductSelect(opt: SuggestPickerOption) {
