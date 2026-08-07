@@ -20,22 +20,26 @@ export const load: PageServerLoad = async ({ parent, url }) => {
   const selectedParam = url.searchParams.get('selected')
   const selectedId    = selectedParam ? parseInt(selectedParam, 10) : null
 
+  // 대여 라이프사이클 전용: 예약 단계(pending/hold/cancelled)는 /cms/reservation에서 관리
+  // p_include_statuses를 SQL WHERE에 반영해 LIMIT/OFFSET·total_count가 이 스코프 기준으로
+  // 계산되도록 함(2026-08-07 페이지네이션 정합성 수정 — RPC에서 필터링 전 count를 쓰면
+  // "총 N건"·페이지 수가 실제 표시 목록과 어긋남, migration 201 참고)
+  const RENTAL_STATUSES = ['confirmed', 'shipped', 'in_use', 'return_requested', 'returned', 'completed', 'damage_claimed']
+
   const { data: rows, error } = await admin.rpc('get_rental_list', {
-    p_status:    status   || null,
-    p_search:    search   || null,
-    p_date_from: null,
-    p_date_to:   null,
-    p_page:      page,
-    p_per_page:  30,
+    p_status:           status   || null,
+    p_search:           search   || null,
+    p_date_from:        null,
+    p_date_to:          null,
+    p_page:             page,
+    p_per_page:         30,
+    p_include_statuses: RENTAL_STATUSES,
   })
 
   if (error) console.error('[cms/rentals] get_rental_list error:', error.message)
 
-  // 대여 라이프사이클 전용: 예약 단계(pending/hold/cancelled)는 /cms/reservation에서 관리
-  const allRows = rows ?? []
-  const RENTAL_STATUSES = new Set(['confirmed', 'shipped', 'in_use', 'return_requested', 'returned', 'completed', 'damage_claimed'])
-  const rentals: RentalListRow[] = allRows.filter((r: RentalListRow) => RENTAL_STATUSES.has(r.status))
-  const totalCount = allRows[0]?.total_count ?? 0
+  const rentals: RentalListRow[] = rows ?? []
+  const totalCount = rentals[0]?.total_count ?? 0
   const totalPages = Math.max(1, Math.ceil(totalCount / 30))
 
   return { rentals, totalCount, totalPages, status, search, page, selectedId, cmsRole }
