@@ -1,6 +1,7 @@
 <script lang="ts">
   import { supabase } from '$lib/services/supabase'
   import { csToast } from '$lib/utils/toast'
+  import { callTypedRpc } from '$lib/utils/rpc'
 
   interface Props {
     rentalAlert:  boolean
@@ -15,10 +16,11 @@
   async function save(nextRental: boolean, nextBenefit: boolean) {
     if (saving) return
     saving = true
-    const { data, error } = await supabase.rpc('update_notification_settings', {
-      p_rental_alert:  nextRental,
-      p_benefit_alert: nextBenefit,
-    })
+    const { data, error } = await callTypedRpc<{ ok: boolean; error?: string }>(
+      supabase,
+      'update_notification_settings',
+      { p_rental_alert: nextRental, p_benefit_alert: nextBenefit },
+    )
     saving = false
     if (error || !(data as { ok?: boolean })?.ok) {
       csToast.error('알림 설정 변경에 실패했습니다.')

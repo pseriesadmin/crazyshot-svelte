@@ -4,6 +4,7 @@ import { env } from '$env/dynamic/private'
 import { createClient } from '@supabase/supabase-js'
 import { getSupabaseUrl } from '$lib/env/supabasePublic'
 import { UPLOAD_ACCEPTED_TYPES, getMimeExtension } from '$lib/utils/fileValidation'
+import { callTypedRpc } from '$lib/utils/rpc'
 
 const BUCKET = 'user-documents'
 const MAX_SIZE = 10 * 1024 * 1024 // 10MB
@@ -47,11 +48,11 @@ export const POST: RequestHandler = async ({ request, locals }) => {
   const { data: { publicUrl } } = admin.storage.from(BUCKET).getPublicUrl(path)
 
   // 사용자 세션으로 RPC 호출 (auth.uid() 기반 본인 데이터 업데이트)
-  const { data, error: rpcError } = await locals.supabase.rpc('update_user_doc_url', {
-    p_type:          type,
-    p_doc_url:       publicUrl,
-    p_identity_type: identityType,
-  })
+  const { data, error: rpcError } = await callTypedRpc<{ ok: boolean; error?: string }>(
+    locals.supabase,
+    'update_user_doc_url',
+    { p_type: type, p_doc_url: publicUrl, p_identity_type: identityType },
+  )
 
   if (rpcError || !(data as { ok: boolean } | null)?.ok) {
     console.error('[upload-doc] rpc error:', rpcError?.message)

@@ -1,5 +1,6 @@
 import { redirect, fail } from '@sveltejs/kit'
 import type { PageServerLoad, Actions } from './$types'
+import { callTypedRpc } from '$lib/utils/rpc'
 
 interface AccountProfile {
   id: string
@@ -149,10 +150,11 @@ export const actions: Actions = {
     const p_allow_privacy_consent     = privacyRaw    !== null ? privacyRaw    === 'true' : null
     const p_allow_third_party_consent = thirdPartyRaw !== null ? thirdPartyRaw === 'true' : null
 
-    const { data, error } = await locals.supabase.rpc('update_user_consent', {
-      p_allow_privacy_consent,
-      p_allow_third_party_consent,
-    })
+    const { data, error } = await callTypedRpc<{ ok: boolean; error?: string }>(
+      locals.supabase,
+      'update_user_consent',
+      { p_allow_privacy_consent, p_allow_third_party_consent },
+    )
 
     if (error) return fail(500, { ok: false, error: error.message })
     const result = data as { ok: boolean; error?: string } | null

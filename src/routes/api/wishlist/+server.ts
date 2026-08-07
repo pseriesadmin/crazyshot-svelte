@@ -1,5 +1,6 @@
 import { json, error } from '@sveltejs/kit'
 import type { RequestHandler } from './$types'
+import { callTypedRpc } from '$lib/utils/rpc'
 
 export const POST: RequestHandler = async ({ request, locals }) => {
   const { session } = await locals.safeGetSession()
@@ -9,9 +10,11 @@ export const POST: RequestHandler = async ({ request, locals }) => {
   const productId = body.product_id
   if (!productId) throw error(400, 'product_id 필요')
 
-  const { data, error: rpcError } = await locals.supabase.rpc('toggle_product_wishlist', {
-    p_product_id: productId,
-  })
+  const { data, error: rpcError } = await callTypedRpc<{ ok: boolean; action?: string; error?: string }>(
+    locals.supabase,
+    'toggle_product_wishlist',
+    { p_product_id: productId },
+  )
 
   if (rpcError) throw error(500, rpcError.message)
 
