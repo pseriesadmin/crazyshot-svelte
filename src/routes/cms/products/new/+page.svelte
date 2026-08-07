@@ -594,6 +594,8 @@
     <input type="hidden" name="image_urls" value={serializeImages()} />
     <input type="hidden" name="is_active" value={isActive.toString()} />
     <input type="hidden" name="option_links" value={serializeOptionLinks()} />
+    <!-- BND-11: 임시 업로드 폴더 식별자 — 서버에서 temp/{tempId} → {productId} 이관 처리 -->
+    <input type="hidden" name="temp_id" value={tempId} />
 
     <!-- ① 기본정보 -->
     <section class="form-section">
