@@ -4,6 +4,7 @@ import { PUBLIC_SUPABASE_URL } from '$env/static/public'
 import { redirect, fail } from '@sveltejs/kit'
 import type { Actions, PageServerLoad } from './$types'
 import { getCmsRoleForAction } from '$lib/server/getCmsRoleForAction'
+import { sendReservationLifecyclePush } from '$lib/server/push'
 
 export interface RentalListRow {
   reservation_id:    number
@@ -60,21 +61,27 @@ export const load: PageServerLoad = async ({ parent, url }) => {
   const selectedParam = url.searchParams.get('selected')
   const selectedId    = selectedParam ? parseInt(selectedParam, 10) : null
 
+  // confirmed 이후 상태는 /cms/rentals에서 관리 → 예약 목록에서 제외
+  // draft(날짜 미정 임시예약)도 제외 — 고객이 체크아웃에서 날짜를 입력해 hold로 승격해야 관리자에게 노출됨(Default-Exclude)
+  // p_exclude_statuses를 SQL WHERE에 반영해 LIMIT/OFFSET·total_count가 이 스코프 기준으로
+  // 계산되도록 함(2026-08-07 페이지네이션 정합성 수정 — RPC에서 필터링 전 count를 쓰면
+  // "총 N건"·페이지 수가 실제 표시 목록과 어긋남, migration 201 참고)
+  const RENTAL_VIEW_STATUSES = ['confirmed', 'shipped', 'in_use', 'return_requested', 'returned', 'completed', 'damage_claimed', 'draft']
+
   const { data: rows, error } = await admin.rpc('get_rental_list', {
-    p_status:    status   || null,
-    p_search:    search   || null,
-    p_date_from: dateFrom || null,
-    p_date_to:   dateTo   || null,
-    p_page:      page,
-    p_per_page:  30,
+    p_status:           status   || null,
+    p_search:           search   || null,
+    p_date_from:        dateFrom || null,
+    p_date_to:          dateTo   || null,
+    p_page:             page,
+    p_per_page:         30,
+    p_exclude_statuses: RENTAL_VIEW_STATUSES,
   })
 
   if (error) console.error('[cms/reservation] get_rental_list error:', error.message)
 
-  // confirmed 이후 상태는 /cms/rentals에서 관리 → 예약 목록에서 제외
-  const RENTAL_VIEW_STATUSES = new Set(['confirmed', 'shipped', 'in_use', 'return_requested', 'returned', 'completed', 'damage_claimed'])
-  const rentals: RentalListRow[] = (rows ?? []).filter((r: RentalListRow) => !RENTAL_VIEW_STATUSES.has(r.status))
-  const totalCount = (rows ?? [])[0]?.total_count ?? 0
+  const rentals: RentalListRow[] = rows ?? []
+  const totalCount = rentals[0]?.total_count ?? 0
   const totalPages = Math.max(1, Math.ceil(totalCount / 30))
 
   return { rentals, totalCount, totalPages, status, search, dateFrom, dateTo, page, selectedId, cmsRole }
@@ -104,6 +111,8 @@ export const actions: Actions = {
       p_reservation_id: reservationId,
       p_notify_type: 'reservation_approval',
     })
+    // 예약 승인 푸시 알림 병행 발송 (채팅과 독립 — 실패해도 위 처리에 영향 없음)
+    await sendReservationLifecyclePush(admin, reservationId, 'reservation_approval')
     return { ok: true }
   },
 
@@ -128,7 +137,6 @@ export const actions: Actions = {
     if (!res?.ok) return fail(400, { message: res?.error ?? '처리 실패' })
     // 상태 전환별 채팅 알림 자동 발송
     const AUTO_NOTIFY: Partial<Record<string, string>> = {
-      confirmed:        'reservation_approval',
       shipped:          'shipment_notify',
       in_use:           'rental_confirm',
       return_requested: 'return_registration',
@@ -140,6 +148,8 @@ export const actions: Actions = {
         p_reservation_id: reservationId,
         p_notify_type: notifyType,
       })
+      // 상태 전환 푸시 알림 병행 발송 (채팅과 독립 — 실패해도 위 처리에 영향 없음)
+      await sendReservationLifecyclePush(admin, reservationId, notifyType)
     }
     return { ok: true }
   },

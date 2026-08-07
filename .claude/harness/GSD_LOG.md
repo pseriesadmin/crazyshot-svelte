@@ -1,6 +1,29 @@
 # GSD_LOG.md — 크레이지샷 실행 이력
 # 형식: [YYYY-MM-DD HH:MM] 타입 | 태스크명 | 파일 | 소요 | 결과
 
+[2026-08-07 19:20] ⚡GSD | CMS 대여현황(/cms/rentals)↔예약목록(/cms/reservation) 정합성 정밀
+  검증 + get_rental_list 페이지네이션 버그 발견·수정(Stage+Production) |
+  검증파일: src/lib/utils/rentalTransition.ts, src/lib/components/cms/RentalDetailPanel.svelte,
+  src/lib/components/cms/RentalContractViewer.svelte,
+  src/lib/components/common/RentalJourneyStepper.svelte, src/routes/cms/rentals/+page.server.ts,
+  src/routes/cms/rentals/+page.svelte, src/routes/cms/reservation/+page.server.ts,
+  src/routes/cms/mobile/qr/[product_id]/+page.server.ts |
+  수정파일: src/routes/cms/rentals/+page.server.ts, src/routes/cms/reservation/+page.server.ts |
+  신규 마이그레이션: supabase/migrations/20260807000201_201_get_rental_list_scope_filter.sql,
+  20260807000202_202_drop_get_rental_list_old_overload.sql |
+  결과: 상태전이(nextStatus/update_reservation_status RPC)·알림(AUTO_NOTIFY/NOTIFY_TYPE_MAP)·
+  계약서 노출조건·스텝퍼·QR반출입 전부 rental-lifecycle.md와 정합 확인(불일치 0건).
+  🔴 CRITICAL 1건 발견: get_rental_list가 화면 스코프(RENTAL_STATUSES/RENTAL_VIEW_STATUSES)
+  적용 전 total_count·LIMIT/OFFSET을 계산해 "전체" 상태칩(기본 진입)에서 총건수·페이지네이션이
+  실제 표시 목록과 어긋남 — Stephen 승인 후 p_include_statuses/p_exclude_statuses 파라미터
+  추가(migration 201)로 수정. 배포 직후 CREATE OR REPLACE가 신규 오버로드를 별도 추가함을
+  자체 발견(PGRST203 위험, products.md generate_product_code 사례와 동일 패턴) → migration
+  202로 구 6-인자 오버로드 DROP, 단일 8-인자 함수로 확정. Stage(confirmed26+shipped1=27,
+  cancelled26+hold1=27) · Production(confirmed3→rentals=3/reservation=0) 양쪽 실측 SQL로
+  total_count 정확성 검증 완료. svelte-check 신규 에러 0건. TASK.md 동일 항목 기록,
+  git 커밋 미실행(Stephen 요청 대기)
+  GATE C: 승인 완료 (Stephen "페이지네이션 버그 지금 고쳐줘" → "production까지 적용해줘")
+
 [2026-08-07 18:30] ⚡GSD | NLSearch 확장 아젠다(§G~§J, §I) 전체 완료 — DB 적용 이력 소급기록 |
   대상: 이번 세션(2026-08-06~07) NLSearch 신설 + 확장 전체 마이그레이션(198~200, 203~205)의
   stage·production 적용 이력이 GSD_LOG에 누락되어 있어 TASK.md/실제 DB 상태 기준으로 소급 기록함.

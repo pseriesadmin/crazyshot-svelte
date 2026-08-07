@@ -8759,4 +8759,13 @@ Supabase MCP 실측 SQL로 total_count 정합성 재확인(pg_proc 오버로드 
     일부 매칭 품질 이슈 관찰됨 — match_keywords 빈 배열 항목(파손/반납 등 대표 항목) 보강이
     매칭 정확도 개선에 도움될 것으로 보이나 이번 세션 범위 밖, 별도 후속 필요
 
+- [x] PROD-FIX-4: match_keywords 빈 배열 항목 키워드 보강 (Stephen 지시) | 🟡 BOUNDARY | ✅ 완료 (2026-08-07)
+  - 대상 발견: `match_keywords is null or array_length=null` 전수 조회 — production 6건
+    (파손 접수 안내·매장정보안내·결제 방법 안내·예약 확인 안내·반납 안내 기본·연장 요청 안내),
+    stage 4건(파손·매장정보 2건은 stage에서 이미 채워져 있거나 행 자체가 없어 제외)
+  - 각 항목 content 기준 자연스러운 고객 질문 표현으로 5~6개씩 채움(예: 반납 안내 기본 →
+    반납/반납방법/반납안내/택배반납/방문반납, 파손 접수 안내 → 파손/고장/망가짐/망가뜨림/
+    부서짐/깨짐 — 직전 세션에서 미매칭 확인된 "망가뜨렸어요" 케이스 커버)
+  - production·stage 양쪽 UPDATE 적용 + 결과 SELECT로 반영 확인
+
 ## DONE
