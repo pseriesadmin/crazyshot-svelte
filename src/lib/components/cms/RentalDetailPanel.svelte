@@ -3,6 +3,7 @@
   import { csToast } from '$lib/utils/toast'
   import RentalContractViewer from '$lib/components/cms/RentalContractViewer.svelte'
   import RentalJourneyStepper from '$lib/components/common/RentalJourneyStepper.svelte'
+  import { nextStatus, nextLabel } from '$lib/utils/rentalTransition'
 
   interface RentalListRow {
     reservation_id:    number
@@ -128,39 +129,6 @@
 
   function isTerminal(s: string): boolean { return TERMINAL.has(s) }
 
-  function nextStatus(s: string, pickupMethod?: string | null, returnMethod?: string | null): string | null {
-    // 방문 수령: 어드민이 현장 확인 → shipped 단계 스킵, confirmed → in_use 직접 전환
-    if (s === 'confirmed' && pickupMethod === 'visit') return 'in_use'
-    // 방문 반납: 어드민이 현장 반납 확인 → return_requested 단계 스킵, in_use → returned 직접 전환
-    if (s === 'in_use' && returnMethod === 'visit') return 'returned'
-    const map: Record<string, string> = {
-      confirmed:        'shipped',
-      shipped:          'in_use',
-      in_use:           'return_requested',
-      return_requested: 'returned',
-      returned:         'completed',
-    }
-    return map[s] ?? null
-  }
-
-  function nextLabel(s: string, pickupMethod?: string | null, returnMethod?: string | null): string {
-    if (s === 'confirmed') {
-      return pickupMethod === 'visit' ? '방문 출고 처리' : '택배 출고 처리'
-    }
-    if (s === 'shipped') {
-      return pickupMethod === 'visit' ? '방문수령 확인' : '택배수령 확인'
-    }
-    if (s === 'in_use') {
-      // 방문 반납: 현장 즉시 반납완료 처리 / 택배·퀵: 고객 채팅 반납접수 후 처리
-      return returnMethod === 'visit' ? '방문 반납 처리' : '반납 접수'
-    }
-    const map: Record<string, string> = {
-      return_requested: '반납 처리',
-      returned:         '완료 처리',
-    }
-    return map[s] ?? '다음 단계'
-  }
-
   function formatDate(dt: string | null): string {
     if (!dt) return '-'
     return dt.slice(0, 10)
@@ -209,6 +177,24 @@
       rental_complete:     '대여 종료 알림 💬',
     }
     return map[type] ?? '알림 발송 💬'
+  }
+
+  // 중복 발송 가드 — 5분 내 동일 알림 발송 이력 추적 (세션 내 휘발, 새로고침 시 초기화)
+  const RECENT_NOTIFY_TTL_MS = 5 * 60 * 1000
+  let lastSentMap = $state<Map<string, number>>(new Map())
+
+  function notifySentKey(rid: number, type: string): string {
+    return `${rid}:${type}`
+  }
+
+  function markNotifySent(rid: number, type: string): void {
+    const key = notifySentKey(rid, type)
+    lastSentMap = new Map(lastSentMap).set(key, Date.now())
+  }
+
+  function wasRecentlySent(rid: number, type: string): boolean {
+    const ts = lastSentMap.get(notifySentKey(rid, type))
+    return ts != null && Date.now() - ts < RECENT_NOTIFY_TTL_MS
   }
 </script>
 
@@ -425,15 +411,30 @@
               isSubmitting = true
               return async ({ result, update }) => {
                 isSubmitting = false
-                if (result.type === 'success') csToast.success('채팅 알림을 발송했습니다.')
-                else csToast.error('알림 발송에 실패했습니다.')
+                if (result.type === 'success') {
+                  csToast.success('채팅 알림을 발송했습니다.')
+                  if (notifyType) markNotifySent(row.reservation_id, notifyType)
+                } else {
+                  csToast.error('알림 발송에 실패했습니다.')
+                }
                 await update()
               }
             }}
           >
             <input type="hidden" name="reservation_id" value={row.reservation_id} />
             <input type="hidden" name="notify_type" value={notifyType} />
-            <button type="submit" class="btn-notify" disabled={isSubmitting}>
+            <button
+              type="submit"
+              class="btn-notify"
+              disabled={isSubmitting}
+              onclick={(e) => {
+                if (notifyType && wasRecentlySent(row.reservation_id, notifyType)) {
+                  if (!window.confirm('이미 최근에 발송된 알림입니다. 다시 보내시겠습니까?')) {
+                    e.preventDefault()
+                  }
+                }
+              }}
+            >
               {chatNotifyLabel(notifyType)}
             </button>
           </form>
