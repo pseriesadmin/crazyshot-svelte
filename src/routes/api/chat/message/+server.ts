@@ -231,7 +231,7 @@ export const POST: RequestHandler = async ({ request, locals }) => {
     classified = parsed
   } catch (err) {
     // 파싱 실패 시 CS_ESCALATE 유지 — 원인 진단을 위해 로그는 남긴다
-    console.error('[chat/message] DEBUG Claude 호출/파싱 실패:', err)
+    console.error('[chat/message] Claude 호출/파싱 실패:', err)
   }
 
   // 4. confidence < 0.6 → CS_ESCALATE 강제
