@@ -4,6 +4,7 @@
 
   import MessageList from './MessageList.svelte'
   import ChatInput from './ChatInput.svelte'
+  import ChevronIcon from '$lib/components/common/ChevronIcon.svelte'
   import {
     loadAdminSessions,
     subscribeToSessions,
@@ -481,10 +482,7 @@
                 aria-label="고객 정보 화면으로 이동"
                 title="고객 정보 화면으로 이동"
               >
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                  <line x1="5" y1="12" x2="19" y2="12"/>
-                  <polyline points="12 5 19 12 12 19"/>
-                </svg>
+                <ChevronIcon size={10} color="currentColor" direction="right" />
               </a>
             </div>
           {/if}
