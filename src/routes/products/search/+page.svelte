@@ -6,12 +6,15 @@
   import SearchKeywordBar from '$lib/components/products/SearchKeywordBar.svelte'
   import SearchProductGrid from '$lib/components/products/SearchProductGrid.svelte'
   import type { SuggestPickerOption } from '$lib/types/suggest-picker'
+  import { recordSearchClick } from '$lib/services/searchService'
 
   // ── 검색 상태 ──────────────────────────────────────────────
   let searchQuery      = $state('')
   let isSearching      = $state(false)
   let pickerSelectedId = $state<string | null>(null)
   let debounceTimer: ReturnType<typeof setTimeout> | null = null
+  /** G-3: 현재 검색 세션의 log ID — recordSearchClick에 전달 */
+  let searchLogId      = $state<string | null>(null)
 
   interface SearchProduct { id: string; name: string; category: string; price24h: number; price12h: number; img: string; slug?: string }
   let searchResults      = $state<SearchProduct[]>([])
@@ -57,13 +60,16 @@
 
   async function doSearch(q: string) {
     isSearching = true
+    searchLogId = null  // 새 검색 시 이전 log ID 초기화
     try {
       // 2026-08-06: 브라우저 직접 RPC → /api/search/products API 라우트 경유로 전환
       // 자연어 레이어(MiniSearch)는 서버에서만 동작 가능 — 이 배선 변경이 필수 전제조건
       const resp = await fetch(`/api/search/products?q=${encodeURIComponent(q)}&limit=12`)
       if (!resp.ok) throw new Error(`검색 API 오류: ${resp.status}`)
-      const { results } = await resp.json() as { results: Record<string, unknown>[] }
-      searchResults = (results ?? []).map(r => {
+      const payload = await resp.json() as { results: Record<string, unknown>[]; search_log_id?: string | null }
+      // G-3: search_log_id 캡처 (migration 203 이후 RPC가 반환)
+      searchLogId = payload.search_log_id ?? null
+      searchResults = (payload.results ?? []).map(r => {
         const p24 = Number(r['price_min'] ?? r['base_price_daily'] ?? 0)
         return {
           id:       String(r['product_id'] ?? r['id'] ?? ''),
@@ -78,6 +84,14 @@
       searchResults = []
     } finally {
       isSearching = false
+    }
+  }
+
+  /** G-3: 상품 클릭 시 CTR 기록 — fire-and-forget (UX 차단 없음) */
+  function handleProductClick(productId: string) {
+    if (searchLogId && productId) {
+      recordSearchClick(searchLogId, productId)
+        .catch(() => {/* CTR 기록 실패는 UX에 영향 없음 — 무시 */})
     }
   }
 
@@ -145,6 +159,7 @@
   <SearchProductGrid
     title={searchQuery.trim() ? `"${searchQuery}" 검색결과` : '추천 상품'}
     products={searchQuery.trim() ? searchResults : recommendedProducts}
+    onProductClick={searchQuery.trim() ? handleProductClick : undefined}
   />
 
 </div>

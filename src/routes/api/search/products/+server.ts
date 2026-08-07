@@ -10,6 +10,8 @@
 //
 // 세션 조회: event.locals.safeGetSession() 사용 — 쿠키 기반 인증 (anon 클라이언트 .auth.getSession()은
 //   항상 null 반환 → 로그인 사용자 CTR 개인화 학습이 죽는 버그 FIX-2 수정, 2026-08-06)
+//
+// G-3 (2026-08-07): RPC 응답에 search_log_id 포함 — 클라이언트에서 클릭 시 record_search_click RPC 호출에 사용
 
 import { json, error as httpError } from '@sveltejs/kit'
 import { supabase } from '$lib/services/supabase'
@@ -44,11 +46,15 @@ export const GET: RequestHandler = async ({ url, locals }) => {
 
   const rpcResults: Record<string, unknown>[] = rpcData ?? []
 
+  // G-3: RPC 응답에서 search_log_id 추출 (migration 203에서 RETURNS TABLE에 추가됨)
+  // 모든 결과 행에 동일한 값이 들어있으므로 첫 번째 행에서만 읽음
+  const searchLogId = (rpcResults[0]?.['search_log_id'] as string | null) ?? null
+
   // q가 비어있거나 RPC 결과가 충분하면 자연어 폴백 없이 바로 반환
   const shouldFallback = q.length >= 1 && rpcResults.length <= WEAK_MATCH_THRESHOLD
 
   if (!shouldFallback) {
-    return json({ results: rpcResults, query: q, page, limit })
+    return json({ results: rpcResults, query: q, page, limit, search_log_id: searchLogId })
   }
 
   // ── 2차: MiniSearch 자연어 폴백 (RPC 결과 약할 때만) ──────────────────────
@@ -61,7 +67,7 @@ export const GET: RequestHandler = async ({ url, locals }) => {
     })
 
     if (naturalResults.length === 0) {
-      return json({ results: rpcResults, query: q, page, limit })
+      return json({ results: rpcResults, query: q, page, limit, search_log_id: searchLogId })
     }
 
     // RPC 결과 id 집합
@@ -87,10 +93,10 @@ export const GET: RequestHandler = async ({ url, locals }) => {
     // 병합: RPC 결과 먼저, 자연어 폴백 결과를 뒤에 추가
     const merged = [...rpcResults, ...fallbackResults].slice(0, limit)
 
-    return json({ results: merged, query: q, page, limit })
+    return json({ results: merged, query: q, page, limit, search_log_id: searchLogId })
   } catch (e) {
     // 자연어 폴백 실패 시 RPC 결과만 반환 (서비스 중단 방지)
     console.error('[search/products] 자연어 폴백 오류:', e)
-    return json({ results: rpcResults, query: q, page, limit })
+    return json({ results: rpcResults, query: q, page, limit, search_log_id: searchLogId })
   }
 }
