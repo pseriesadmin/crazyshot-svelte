@@ -65,6 +65,8 @@
   let suggestLoading = $state(false)
   let suggestIdx = $state(-1)
   let suggestTimer: ReturnType<typeof setTimeout> | null = null
+  // RTN-2: stale-response race 방지 — 진행 중인 fetch 취소용 AbortController
+  let fetchController: AbortController | null = null
 
   const listboxId = $derived(`${id}-suggest-list`)
   const listAriaLabel = $derived(
@@ -99,7 +101,8 @@
     return items
   }
 
-  async function fetchSuggestions(kw: string): Promise<void> {
+  // RTN-2: signal 파라미터로 stale-response 감지 (signal.aborted 시 상태 업데이트 생략)
+  async function fetchSuggestions(kw: string, signal: AbortSignal): Promise<void> {
     if (source === 'brand') {
       const { data, error } = await supabase
         .from('products')
@@ -110,6 +113,7 @@
         .order('brand')
         .limit(limit * 4)
 
+      if (signal.aborted) return  // 후속 요청이 있으면 stale 결과 버림
       if (error) {
         suggestions = []
         suggestOpen = false
@@ -135,6 +139,7 @@
       query = query.is('parent_product_id', null)
 
       const { data, error } = await query
+      if (signal.aborted) return
       if (error) {
         suggestions = []
         suggestOpen = false
@@ -162,6 +167,7 @@
     }
 
     const { data, error } = await query
+    if (signal.aborted) return
     if (error) {
       suggestions = []
       suggestOpen = false
@@ -173,7 +179,12 @@
   }
 
   function scheduleSuggest(): void {
+    // RTN-2: 기존 타이머 취소 + 진행 중인 fetch abort (stale-response race 방지)
     if (suggestTimer) clearTimeout(suggestTimer)
+    if (fetchController) {
+      fetchController.abort()  // 이전 fetch의 signal.aborted = true → fetchSuggestions 내 체크로 결과 버림
+      fetchController = null
+    }
     const kw = value.trim()
     if (kw.length < minChars) {
       suggestions = []
@@ -184,8 +195,14 @@
     }
     suggestLoading = true
     suggestTimer = setTimeout(() => {
-      void fetchSuggestions(kw).finally(() => {
-        suggestLoading = false
+      const controller = new AbortController()
+      fetchController = controller
+      void fetchSuggestions(kw, controller.signal).finally(() => {
+        // 이 fetch가 여전히 최신인 경우에만 로딩 상태 해제 (unhandled rejection 방지)
+        if (fetchController === controller) {
+          suggestLoading = false
+          fetchController = null
+        }
       })
     }, debounceMs)
   }

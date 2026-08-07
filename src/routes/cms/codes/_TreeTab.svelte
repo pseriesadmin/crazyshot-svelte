@@ -168,7 +168,7 @@
       toggleActive: '활성 상태가 변경되었습니다.',
     }
     if (f.action === 'transferCode') {
-      csToast.success(`이관 완료 — 상품 ${f.transferred ?? 0}개 품번 재발행됨. 물리 태그·라벨을 파기하세요.`)
+      csToast.success(`이관 완료 — 상품 ${f.transferred ?? 0}개 카테고리 변경됨. 품번·물리 태그는 그대로 유지됩니다.`)
       closeTransfer()
       return
     }
@@ -640,9 +640,9 @@
       <div class="td-warn">
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--cs-warning)" stroke-width="2" style="flex-shrink:0;margin-top:1px"><path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
         <p class="td-warn-txt">
-          이관 후 <strong>물리 태그·라벨에 인쇄된 기존 품번을 파기</strong>해야 합니다.<br>
-          프로모션·쿠폰에 연동된 기존 품번은 사용 불가 처리됩니다.<br>
-          이관된 상품 품번은 타겟 코드 규칙으로 <strong>새로 발행</strong>됩니다.
+          이관 후 상품의 <strong>카테고리 메타데이터만 변경</strong>됩니다.<br>
+          <strong>품번(product_code)은 절대 변경되지 않습니다</strong> — 물리 태그·라벨 재발급 불필요.<br>
+          소스 코드의 taxonomy_map 매핑이 삭제됩니다.
         </p>
       </div>
 
@@ -672,7 +672,7 @@
             class="td-btn-confirm"
             disabled={!transferDstId}
             onclick={(e) => {
-              if (!confirm(`'${transferSrcCode}' 코드에 연결된 상품 ${transferSrcProdCount}개를 이관합니다.\n기존 품번이 모두 새로 발행되며 물리 태그를 파기해야 합니다.\n\n계속하시겠습니까?`)) {
+              if (!confirm(`'${transferSrcCode}' 코드에 연결된 상품 ${transferSrcProdCount}개의 카테고리를 이관합니다.\n품번은 변경되지 않으며 물리 태그·라벨 재발급은 불필요합니다.\n\n계속하시겠습니까?`)) {
                 e.preventDefault()
               }
             }}

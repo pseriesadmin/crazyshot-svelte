@@ -1,6 +1,8 @@
 import type { PageServerLoad, Actions } from './$types'
-import { fail } from '@sveltejs/kit'
+import { fail, redirect } from '@sveltejs/kit'
 import type { SupabaseClient } from '@supabase/supabase-js'
+import { hasSettingsAccess } from '$lib/utils/cmsPermissions'
+import { getCmsRoleForAction } from '$lib/server/getCmsRoleForAction'
 
 export type MarketingRule = {
   id: string
@@ -28,7 +30,12 @@ function db(supabase: SupabaseClient) {
   return supabase as unknown as any
 }
 
-export const load: PageServerLoad = async ({ locals }) => {
+export const load: PageServerLoad = async ({ parent, locals }) => {
+  const { cmsRole } = await parent()
+  if (!hasSettingsAccess(cmsRole ?? '')) {
+    throw redirect(303, '/cms?notice=access_denied')
+  }
+
   const client = db(locals.supabase)
   const [rulesRes, logsRes] = await Promise.all([
     client.from('marketing_rules').select('*').order('created_at', { ascending: false }),
@@ -42,6 +49,12 @@ export const load: PageServerLoad = async ({ locals }) => {
 
 export const actions: Actions = {
   createRule: async ({ request, locals }) => {
+    const { session } = await locals.safeGetSession()
+    if (!session) return fail(401, { error: '인증 필요' })
+    const cmsRole = await getCmsRoleForAction(locals)
+    if (!cmsRole) return fail(403, { error: '권한 없음' })
+    if (!hasSettingsAccess(cmsRole)) return fail(403, { error: '권한 없음' })
+
     const data = await request.formData()
     const client = db(locals.supabase)
 
@@ -73,6 +86,12 @@ export const actions: Actions = {
   },
 
   toggleRule: async ({ request, locals }) => {
+    const { session } = await locals.safeGetSession()
+    if (!session) return fail(401, { error: '인증 필요' })
+    const cmsRole = await getCmsRoleForAction(locals)
+    if (!cmsRole) return fail(403, { error: '권한 없음' })
+    if (!hasSettingsAccess(cmsRole)) return fail(403, { error: '권한 없음' })
+
     const data      = await request.formData()
     const id        = data.get('id') as string
     const is_active = data.get('is_active') === 'true'
@@ -83,6 +102,12 @@ export const actions: Actions = {
   },
 
   deleteRule: async ({ request, locals }) => {
+    const { session } = await locals.safeGetSession()
+    if (!session) return fail(401, { error: '인증 필요' })
+    const cmsRole = await getCmsRoleForAction(locals)
+    if (!cmsRole) return fail(403, { error: '권한 없음' })
+    if (!hasSettingsAccess(cmsRole)) return fail(403, { error: '권한 없음' })
+
     const data   = await request.formData()
     const client = db(locals.supabase)
     const { error } = await client.from('marketing_rules').delete().eq('id', data.get('id') as string)
