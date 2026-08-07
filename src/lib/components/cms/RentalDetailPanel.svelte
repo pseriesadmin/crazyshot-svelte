@@ -1,9 +1,12 @@
 <script lang="ts">
   import { enhance } from '$app/forms'
+  import { goto } from '$app/navigation'
   import { csToast } from '$lib/utils/toast'
   import RentalContractViewer from '$lib/components/cms/RentalContractViewer.svelte'
   import RentalJourneyStepper from '$lib/components/common/RentalJourneyStepper.svelte'
+  import QrScannerOverlay from '$lib/components/common/QrScannerOverlay.svelte'
   import { nextStatus, nextLabel } from '$lib/utils/rentalTransition'
+  import { extractProductId, isProductMatch } from '$lib/utils/qrProductId'
 
   interface RentalListRow {
     reservation_id:    number
@@ -62,8 +65,53 @@
     onrefresh:    () => void
     stepFilter?:  string[]
     isRentalView?: boolean   // true = /cms/rentals 컨텍스트 (예약 단계 UI 숨김)
+    enableQrVerify?: boolean // true일 때만 "상품 정보"에 QR 확인 아이콘 노출 (모바일 대여목록 전용)
   }
-  let { row, onclose, onrefresh, stepFilter, isRentalView = false }: Props = $props()
+  let { row, onclose, onrefresh, stepFilter, isRentalView = false, enableQrVerify = false }: Props = $props()
+
+  let qrOverlayOpen = $state(false)
+
+  // QR 일치 시: '승인완료'는 반출로, '반납중'은 반납으로 확인 탭 없이 즉시 자동 기록.
+  // 그 외 상태는 기존처럼 /cms/mobile/qr/[id] 수동 처리 화면으로 이동 —
+  // 이 패널의 상태전이 버튼(대여 탭 하단)은 그대로 유지되는 하이브리드 관리.
+  const QR_AUTO_STATUSES = new Set(['confirmed', 'return_requested'])
+
+  function handleProductQrDetected(raw: string): boolean {
+    const scannedId = extractProductId(raw)
+    if (!scannedId) return false
+    processProductQrMatch(scannedId)
+    return true
+  }
+
+  async function processProductQrMatch(scannedId: string): Promise<void> {
+    if (!isProductMatch(scannedId, row)) {
+      csToast.error('스캔한 상품이 예약 상품과 일치하지 않습니다')
+      return
+    }
+
+    const target = nextStatus(row.status, row.pickup_method, row.return_method)
+    if (!QR_AUTO_STATUSES.has(row.status) || !target) {
+      goto(`/cms/mobile/qr/${encodeURIComponent(scannedId)}`)
+      return
+    }
+
+    try {
+      const res = await fetch('/api/cms/rental-qr-transition', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ reservationId: row.reservation_id, newStatus: target, productId: scannedId }),
+      })
+      const body = await res.json()
+      if (body.ok) {
+        csToast.success(row.status === 'confirmed' ? '반출로 자동 기록되었습니다' : '반납으로 자동 기록되었습니다')
+        onrefresh()
+      } else {
+        csToast.error(body.message ?? '처리에 실패했습니다')
+      }
+    } catch {
+      csToast.error('처리 중 오류가 발생했습니다')
+    }
+  }
 
   let activeTab   = $state<'rental' | 'customer' | 'payment' | 'contract'>('rental')
   let isSubmitting = $state(false)
@@ -254,7 +302,25 @@
       </div>
 
       <!-- 상품 정보 -->
-      <div class="section-title">상품 정보</div>
+      <div class="section-title-row">
+        <span class="section-title">상품 정보</span>
+        {#if enableQrVerify}
+          <button
+            type="button"
+            class="qr-verify-icon-btn"
+            onclick={() => (qrOverlayOpen = true)}
+            aria-label="상품 QR 확인"
+            title="상품 QR 확인"
+          >
+            <svg width="18" height="18" viewBox="0 0 20 20" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+              <rect x="2" y="2" width="6" height="6" rx="1" stroke="currentColor" stroke-width="1.6"/>
+              <rect x="12" y="2" width="6" height="6" rx="1" stroke="currentColor" stroke-width="1.6"/>
+              <rect x="2" y="12" width="6" height="6" rx="1" stroke="currentColor" stroke-width="1.6"/>
+              <path d="M12 12h3v3M18 15v3h-3M15 18h-3v-3" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+            </svg>
+          </button>
+        {/if}
+      </div>
       <div class="info-section">
         {#if row.product_image_url}
           <div class="info-row">
@@ -600,6 +666,14 @@
   </div>
 </div>
 
+{#if enableQrVerify}
+  <QrScannerOverlay
+    bind:open={qrOverlayOpen}
+    onDetected={handleProductQrDetected}
+    onClose={() => (qrOverlayOpen = false)}
+  />
+{/if}
+
 <style>
   .panel {
     background: var(--cs-white);
@@ -696,6 +770,26 @@
     font-weight: 700;
     color: var(--cs-text-mid);
     padding: 4px 0 2px;
+  }
+
+  .section-title-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+  .section-title-row .section-title { padding: 4px 0 2px; }
+
+  .qr-verify-icon-btn {
+    width: 32px;
+    height: 32px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: var(--cs-surface-gray);
+    border: none;
+    border-radius: var(--radius-sm);
+    color: var(--cs-purple);
+    cursor: pointer;
   }
 
   /* 정보 섹션 */

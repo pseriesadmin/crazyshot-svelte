@@ -8726,4 +8726,37 @@ Supabase MCP 실측 SQL로 total_count 정합성 재확인(pg_proc 오버로드 
 파일: supabase/migrations/20260807000201_201_get_rental_list_scope_filter.sql,
 20260807000202_202_drop_get_rental_list_old_overload.sql. git 커밋 미실행(Stephen 요청 대기).
 
+---
+
+### 🔁 2026-08-07 연속 세션 — PROD-FIX-1/2 후속: 자동응답 최종 정상화 확인
+
+> DEPLOY-1~6, PROD-FIX-1/2에 이어지는 마무리 — env var 6종 등록 + push 마이그레이션 7종 적용
+> 이후에도 실서비스 자동응답이 계속 CS_ESCALATE(confidence:0) 기본값만 반환하는 문제가 지속돼
+> 추가 진단 진행.
+
+- [x] PROD-FIX-3: 자동답변 1·2단계 진단 로그 추가 → 실서비스 정상화 확인 → 로그 정리 | 🔴 CRITICAL | ✅ 완료 (2026-08-07)
+  - 증상: `chat_intent_logs` 전수 조회 결과 모든 메시지가 confidence:0/CS_ESCALATE — 1단계(키워드
+    매칭)가 매번 조용히 미매칭 처리되고 2단계(Claude) 호출도 매번 기본값으로 떨어짐
+  - 1차 조치: 1단계 catch 블록에 `console.error` 추가(원인 파악 불가능하던 완전 침묵 실패를
+    관측 가능하게 전환) — PR #92
+  - 조사 중 데이터 결함 추가 발견: "파손 접수 안내"·"반납 안내 기본" 등 대표 항목들의
+    `match_keywords`가 빈 배열(§QnA 초기 시딩 당시 shortcut(`/파손`,`/반납`)만 채우고 고객 매칭용
+    키워드는 누락) — 그러나 이것만으로는 제목 기반 MiniSearch 매칭까지 실패하는 이유가 설명 안 됨
+  - 2차 조치: arEnabled/candidates.length/match 결과를 단계별로 찍는 임시 DEBUG 로그 추가(PR #94)
+  - 배포 확인 중 발견한 별개 이슈: 이 세션 동안 **다른 세션들의 PR(#91~#94)이 거의 동시다발로
+    머지**되면서 Vercel production 별칭이 매번 최신 머지로 갱신됨 — 배포 상태를 `list_deployments`
+    타임스탬프만으로 판단하면 실제로는 이미 교체된 구버전을 보고 있을 위험이 있어, 항상
+    `vercel inspect crazyshot-svelte.vercel.app`(실제 별칭 대상 직접 조회)로 재확인하는 방식으로 전환
+  - 결과: PR #94 배포 반영 직후 실서비스 채팅에서 정상 매칭 확인
+    (`chat_messages.action_payload = {"type":"auto_canned_reply", ...}`) — Stephen도 "정상 자동
+    반영 중" 확인. 정확한 근본원인(무엇이 정확히 실패를 유발했었는지)은 로그에 캡처되지 않았으나,
+    수 차례의 배포·서버리스 콜드스타트 갱신을 거치며 정상화된 것으로 추정(예: 오래된 서버리스
+    인스턴스에 남아있던 stale 모듈 상태 가능성) — 재발 시 남겨둔 상시 로깅(1·2단계 실패 시
+    console.error)으로 즉시 원인 추적 가능
+  - 3차 조치: 목적을 다한 일회성 DEBUG 라인 3개 제거, 상시 에러 로깅 2곳(1단계 catch, Claude
+    호출 catch)은 유지 — PR #95(비긴급, Stephen 편한 시점에 머지)
+  - 잔여 관찰사항(블로커 아님): "대여일정을 알려주세요"가 이벤트 홍보 콘텐츠로 오매칭되는 등
+    일부 매칭 품질 이슈 관찰됨 — match_keywords 빈 배열 항목(파손/반납 등 대표 항목) 보강이
+    매칭 정확도 개선에 도움될 것으로 보이나 이번 세션 범위 밖, 별도 후속 필요
+
 ## DONE

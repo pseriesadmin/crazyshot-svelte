@@ -4,18 +4,11 @@ import { getSupabaseUrl } from '$lib/env/supabasePublic'
 import { redirect, error, fail } from '@sveltejs/kit'
 import { getCmsRoleForAction } from '$lib/server/getCmsRoleForAction'
 import { escapeLikePattern } from '$lib/server/escapeLikePattern'
+import { processRentalQrTransition } from '$lib/server/rentalQrTransition'
 import type { Actions, PageServerLoad } from './$types'
 
 // 반출 전 ~ 반납 직전까지 처리 가능한 상태
 const ACTIVE_STATUSES = ['confirmed', 'shipped', 'in_use', 'return_requested', 'returned']
-
-// 전이 후 상태 → 채팅 알림 타입 (rental-lifecycle.md AUTO_NOTIFY 매핑)
-const AUTO_NOTIFY: Partial<Record<string, string>> = {
-  shipped:          'shipment_notify',
-  in_use:           'rental_confirm',
-  return_requested: 'return_registration',
-  returned:         'rental_complete',
-}
 
 // QR-CONTENT-1: UUID vs product_code 판별
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
@@ -106,50 +99,25 @@ export const actions: Actions = {
 
     if (!reservationId || !newStatus) return fail(400, { ok: false as const, message: '잘못된 요청' })
 
-    // H-01: 직접 DML 금지 — RPC 경유
-    const { data: result, error: rpcErr } = await admin.rpc('update_reservation_status', {
-      p_reservation_id: reservationId,
-      p_new_status: newStatus,
-    })
-    if (rpcErr) return fail(500, { ok: false as const, message: rpcErr.message })
-    const res = result as { ok: boolean; error?: string } | null
-    if (!res?.ok) return fail(400, { ok: false as const, message: res?.error ?? '처리 실패' })
-
-    // 자동 채팅 알림 발송 — 실패해도 메인 처리에 영향 없음
-    const notifyType = AUTO_NOTIFY[newStatus]
-    if (notifyType) {
-      try {
-        await admin.rpc('send_rental_chat_notification', {
-          p_reservation_id: reservationId,
-          p_notify_type: notifyType,
-        })
-      } catch { /* 알림 실패는 무시 */ }
+    // QR-CONTENT-1 이후 params.product_id는 UUID 또는 product_code 둘 다 가능
+    let historyProductId: string | null = UUID_RE.test(params.product_id) ? params.product_id : null
+    if (!historyProductId) {
+      const { data: pRow } = await admin
+        .from('products')
+        .select('id')
+        .ilike('product_code', escapeLikePattern(params.product_id))
+        .is('deleted_at', null)
+        .maybeSingle()
+      historyProductId = (pRow as { id: string } | null)?.id ?? null
     }
 
-    // QR-3: 상품 이력 자동 기록 — 실패해도 메인 처리에 영향 없음
-    try {
-      // QR-CONTENT-1 이후 params.product_id는 UUID 또는 product_code 둘 다 가능
-      let historyProductId: string | null = UUID_RE.test(params.product_id) ? params.product_id : null
-      if (!historyProductId) {
-        const { data: pRow } = await admin
-          .from('products')
-          .select('id')
-          .ilike('product_code', escapeLikePattern(params.product_id))
-          .is('deleted_at', null)
-          .maybeSingle()
-        historyProductId = (pRow as { id: string } | null)?.id ?? null
-      }
-      if (historyProductId) {
-        const today = new Date().toISOString().slice(0, 10)
-        await admin.rpc('upsert_product_history_record', {
-          p_id: null,
-          p_product_id: historyProductId,
-          p_recorded_date: today,
-          p_images: [],
-          p_user_id: session.user.id,
-        })
-      }
-    } catch { /* 이력 기록 실패는 무시 */ }
+    const result = await processRentalQrTransition(admin, {
+      reservationId,
+      newStatus,
+      productId: historyProductId ?? '',
+      userId: session.user.id,
+    })
+    if (!result.ok) return fail(result.message === '잘못된 요청' ? 400 : 500, { ok: false as const, message: result.message })
 
     return { ok: true as const, newStatus }
   },

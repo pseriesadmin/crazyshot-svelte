@@ -10,7 +10,11 @@ import {
   PUBLIC_FIREBASE_PROJECT_ID,
 } from '$env/static/public'
 
-const FIREBASE_JS_SDK_VERSION = '10.13.2'
+// package.json의 firebase(npm) 설치 버전과 반드시 일치시켜야 함 — 버전이 어긋나면
+// 메인 스레드(firebase/messaging ESM)와 서비스워커(CDN compat)가 같은 IndexedDB
+// (firebase-messaging-database)를 서로 다른 스키마 버전으로 열려다 충돌
+// ("VersionError: requested version is less than the existing version") 발생
+const FIREBASE_JS_SDK_VERSION = '12.17.0'
 
 export const GET = () => {
   const body = `

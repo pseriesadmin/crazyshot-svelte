@@ -14,11 +14,18 @@ export const load: LayoutServerLoad = async ({ locals, url, cookies }) => {
     const hadSession = cookies.getAll().some(
       (c) => c.name.startsWith('sb-') && c.name.includes('auth-token')
     )
+    // /cms/mobile 경로 진입 시 로그인 후 돌아올 수 있도록 returnTo 전달
+    const returnTo = url.pathname.startsWith('/cms/mobile') ? url.pathname : null
     if (hadSession) {
       const t = encodeURIComponent(new Date().toISOString())
-      throw redirect(303, `/cms/login?logout=expired&t=${t}`)
+      const params = new URLSearchParams({ logout: 'expired', t })
+      if (returnTo) params.set('returnTo', returnTo)
+      throw redirect(303, `/cms/login?${params}`)
     }
-    throw redirect(303, '/cms/login')
+    const loginUrl = returnTo
+      ? `/cms/login?returnTo=${encodeURIComponent(returnTo)}`
+      : '/cms/login'
+    throw redirect(303, loginUrl)
   }
 
   const profile = await fetchCmsProfileByAuthId(locals.supabase, session.user.id)
