@@ -122,17 +122,14 @@ export const POST: RequestHandler = async ({ request, locals }) => {
         .limit(1)
         .maybeSingle()
       const arEnabled = (arSettings as { enabled: boolean } | null)?.enabled ?? false
-      console.error('[chat/message] DEBUG arEnabled=', arEnabled, 'arSettings=', arSettings)
 
       if (arEnabled) {
-        const { data: candidates, error: candidatesErr } = await admin
+        const { data: candidates } = await admin
           .from('canned_responses')
           .select('id, title, content, category, shortcut, match_keywords, usage_count')
         // §E SYN-9: 확정된 동의어 그룹을 로드해 키워드 매칭 범위를 확장
         const synonymGroups = await loadSynonymGroups()
-        console.error('[chat/message] DEBUG candidates.length=', candidates?.length, 'candidatesErr=', candidatesErr, 'synonymGroups.length=', synonymGroups.length)
         const match = matchCannedResponse(body.content.trim(), (candidates as CannedResponseForMatch[] ?? []), synonymGroups)
-        console.error('[chat/message] DEBUG match=', match ? match.id : null)
 
         if (match) {
           const { data: matchedMessage, error: matchInsertErr } = await db
