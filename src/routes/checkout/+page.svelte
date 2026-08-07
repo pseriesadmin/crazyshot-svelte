@@ -32,12 +32,7 @@
     couponMembership: boolean;
   }
 
-  interface CardAccordion {
-    rental: boolean;
-    return_: boolean;
-  }
-
-  // 단일 오픈(상호배타) 아코디언 키 — PC 상품 DetailPanel · 일괄설정 패널 공용
+  // 단일 오픈(상호배타) 아코디언 키 — 일괄설정 패널 공용
   type AccKey = 'rental' | 'return_'
 
   interface FormState {
@@ -78,7 +73,6 @@
     checked: boolean;
     deleted: boolean;
     qty: number;
-    acc: CardAccordion;
     durType: DurationType;
     opts: CardOptions;
     rentalForm: FormState;
@@ -93,7 +87,6 @@
     const defaults = defaultOptions();
     return {
       id, checked: true, deleted: false, qty: 1,
-      acc: { rental: false, return_: false },
       durType: toDurationType(seed?.durationType ?? null),
       opts: {
         ...defaults,
@@ -135,13 +128,12 @@
     }
   }
 
-  // ── 전체 일괄 설정 배너
+  // ── 통합 대여예약옵션 상태 (통합 단일 정책 — 2026-08-05)
   let bulkOpen    = $state(false)
   let bulkDate    = $state('')
   let bulkTime    = $state('')
-  let bulkApplied = $state(false)
-  // 대여방법/반납방법/약정요금 아코디언 — 상품 카드와 동일 UI(RentalForm/FeeContent) 재사용
-  // 단일 오픈(상호배타) — 개별 상품 PC DetailPanel(detailOpenAcc)과 동일 인터랙션
+  // 대여방법/반납방법 아코디언 — RentalForm 재사용
+  // 단일 오픈(상호배타)
   let bulkOpenAcc     = $state<AccKey>('rental')
   let bulkOpts        = $state<CardOptions>(defaultOptions())
   let bulkRentalForm  = $state<FormState>(defaultForm())
@@ -151,13 +143,12 @@
   // (크레이지배송)으로 빈 상태로 열리던 문제 수정. 이 대입 자체는 다른 카드에 되쓰지 않음
   // (실 반영은 아래 applyBulkToItems() 호출부에서만 발생 — 시딩과 반영을 분리)
   // ⚠️ hasSeededBulk는 일반 변수(비-$state)로 유지할 것 — 이 이펙트는 itemsState를 읽으므로
-  // itemsState가 바뀔 때마다(=사용자가 일괄설정을 편집해 applyBulkToItems()가 실행될 때마다)
+  // itemsState가 바뀔 때마다(=사용자가 통합설정을 편집해 applyBulkToItems()가 실행될 때마다)
   // 다시 실행된다. 가드 없이 매번 bulkOpts를 재대입하면 사용자가 값을 바꾸는 순간 바로 그
   // 변경으로 인한 itemsState 갱신이 이 이펙트를 재실행시켜 방금 입력한 값을 계속 덮어써서
-  // "수정이 안 되는" 것처럼 보이는 버그가 생김 — 반드시 "패널이 열릴 때 1회만" 시딩되게 가드
+  // "수정이 안 되는" 것처럼 보이는 버그가 생김 — "itemsState 최초 1회만" 시딩되게 가드
   let hasSeededBulk = false
   $effect(() => {
-    if (!bulkOpen) { hasSeededBulk = false; return }
     if (hasSeededBulk) return
     const first = itemsState.find(it => !it.deleted)
     if (!first) return
@@ -187,39 +178,8 @@
     return `${String(h).padStart(2, '0')}:00`;
   }
 
-  // ── Copy-to-return sync handlers (item 단위 제네릭)
-  function itemHandleMethod(item: CartItemUiState, v: DeliveryMethod) {
-    const ret = item.opts.copyToReturn ? v : item.opts.returnMethod
-    updateItem(item.id, { opts: { ...item.opts, rentalMethod: v, ...(item.opts.copyToReturn ? { returnMethod: v } : {}) } })
-    saveShipmentMethod(item.id, v, ret, item.rentalTime, item.returnTime)
-  }
-  function itemHandleReturnMethod(item: CartItemUiState, v: DeliveryMethod) {
-    updateItem(item.id, { opts: { ...item.opts, returnMethod: v } })
-    saveShipmentMethod(item.id, item.opts.rentalMethod, v, item.rentalTime, item.returnTime)
-  }
-  function itemHandleRentalForm(item: CartItemUiState, f: FormState) {
-    updateItem(item.id, { rentalForm: f, ...(item.opts.copyToReturn ? { returnForm: { ...f } } : {}) })
-  }
-  function itemHandleRentalDate(item: CartItemUiState, d: string) {
-    updateItem(item.id, { rentalDate: d, ...(item.opts.copyToReturn ? { returnDate: d } : {}) })
-  }
-  function itemHandleRentalTime(item: CartItemUiState, t: string) {
-    updateItem(item.id, { rentalTime: t, ...(item.opts.copyToReturn ? { returnTime: t } : {}) })
-  }
-  function itemHandleCopy(item: CartItemUiState, v: boolean) {
-    if (v) {
-      updateItem(item.id, {
-        opts: { ...item.opts, copyToReturn: true, returnMethod: item.opts.rentalMethod },
-        returnForm: { ...item.rentalForm },
-        returnDate: item.rentalDate,
-        returnTime: item.rentalTime,
-      })
-    } else {
-      updateItem(item.id, { opts: { ...item.opts, copyToReturn: false } })
-    }
-  }
-
-  // ── 일괄설정용 핸들러 (item 핸들러와 동일 로직 — bulkOpts/bulkRentalForm/bulkReturnForm 대상)
+  // ── 통합설정용 핸들러 (bulkOpts/bulkRentalForm/bulkReturnForm 대상 — 개별 아이템 편집 UI는
+  // 통합 단일 정책 전환(2026-08-05)으로 제거되어 item 단위 핸들러는 더 이상 필요 없음)
   // 2026-07-28: 버튼("전체 적용") 클릭 없이 입력 즉시 전체 상품 카드에 반영 — 각 핸들러 끝에
   // applyBulkToItems() 호출
   function bulkHandleMethod(v: DeliveryMethod) {
@@ -257,7 +217,7 @@
     applyBulkToItems()
   }
 
-  // 일괄 입력값이 비어있으면(사용자가 손대지 않은 필드) 기존 개별 값 유지 — 덮어써서 날리지 않도록 방어
+  // 통합 입력값이 비어있으면(사용자가 손대지 않은 필드) 기존 개별 값 유지 — 덮어써서 날리지 않도록 방어
   function mergeFormForBulk(bulkForm: FormState, itemForm: FormState): FormState {
     return {
       name: bulkForm.name || itemForm.name,
@@ -272,7 +232,7 @@
     }
   }
 
-  // 일괄설정 필드 변경 즉시(버튼 없이) 전체 상품 카드에 반영 — 카드별 기존 설정값은 무시되고
+  // 통합설정 필드 변경 즉시(버튼 없이) 전체 상품 카드에 반영 — 카드별 기존 설정값은 무시되고
   // bulkOpts/bulkDate/bulkTime/bulkRentalForm/bulkReturnForm 값으로 전부 덮어씀
   function applyBulkToItems() {
     itemsState = itemsState.map(it => ({
@@ -285,13 +245,7 @@
       rentalForm: mergeFormForBulk(bulkRentalForm, it.rentalForm),
       returnForm: mergeFormForBulk(bulkReturnForm, it.returnForm),
     }))
-    bulkApplied = true
     // sync_cart_dates() RPC — TASK-D 연동 시 호출 예정
-  }
-
-  function resetBulkSettings() {
-    bulkApplied = false
-    // 개별 카드 값은 유지 — 사용자가 필요 시 개별 수정
   }
 
   function displayDate(iso: string): string {
@@ -339,7 +293,7 @@
   type UserCouponExt = { id: string; coupon_id: string; coupons: { id: string; code: string; discount_type: string; discount_value: number; description: string | null; valid_until: string } | null }
   type PriceRuleExt = { price12h: number | null; price24h: number | null; deposit: number | null }
   type CartLineItemOption = { optionProductId: string | null; name: string; qty: number; unitPrice: number; imageUrl: string | null }
-  type CartLineItem = { reservationId: string; productId: string | null; product: ProductRow | null; price12h: number | null; price24h: number | null; deposit: number | null; startDate: string; endDate: string; pickupMethod: string | null; returnMethod: string | null; pickupTime: string | null; returnTime: string | null; durationType: string | null; options: CartLineItemOption[] }
+  type CartLineItem = { reservationId: string; productId: string | null; product: ProductRow | null; price12h: number | null; price24h: number | null; deposit: number | null; startDate: string; endDate: string; pickupMethod: string | null; returnMethod: string | null; pickupTime: string | null; returnTime: string | null; durationType: string | null; options: CartLineItemOption[]; status: string }
   type ServerExt = { calcTotal: number; calcDiscount: number; calcFinal: number; depositTotal: number; membershipGrade: string | null; userPoints: number; userCoupons: UserCouponExt[]; cartLineItems: CartLineItem[]; productPriceRules: Record<string, PriceRuleExt>; hasUserAddress: boolean }
   const sd = $derived(data as unknown as ServerExt)
 
@@ -357,32 +311,6 @@
       pickupTime: line.pickupTime, returnTime: line.returnTime,
       durationType: line.durationType,
     }))
-  })
-
-  // ── 마스터-디테일 레이아웃 (CMS /cms/products 목록·상세 패널 구조 동일 적용 2026-07-27)
-  // 좌측: 상품목록 카드 리스트 / 우측: 선택된 상품의 대여옵션(DetailPanel)
-  let selectedCartItemId = $state<string | null>(null)
-
-  // 선택된 항목이 삭제되었거나 아직 선택되지 않은 경우 → 첫 번째 유효 항목 자동 선택
-  $effect(() => {
-    const items = itemsState
-    const stillValid = items.some(it => it.id === selectedCartItemId && !it.deleted)
-    if (!stillValid) {
-      const first = items.find(it => !it.deleted)
-      selectedCartItemId = first ? first.id : null
-    }
-  })
-
-  const selectedCartIndex = $derived(itemsState.findIndex(it => it.id === selectedCartItemId && !it.deleted))
-  const selectedCartItem = $derived(selectedCartIndex >= 0 ? itemsState[selectedCartIndex] : null)
-  const panelOpen = $derived(selectedCartItem !== null)
-
-  // PC DetailPanel 전용 — 아코디언 단일 오픈(상호배타) 상태. 첫 아코디언(대여 방법) 기본 오픈.
-  // 모바일 OrderCard는 기존 item.acc(다중 오픈) 그대로 유지 — 이 상태와 무관.
-  let detailOpenAcc = $state<AccKey>('rental')
-  $effect(() => {
-    selectedCartItemId
-    detailOpenAcc = 'rental'
   })
 
   // ── Footer + canProceed 5조건 가드
@@ -452,11 +380,6 @@
   function methodLabel(m: DeliveryMethod): string {
     const cmsOpt = sdDeliveryOpts.find(o => o.method_key === m)
     return cmsOpt?.name ?? DELIVERY_LABELS[m] ?? m;
-  }
-
-  function toggleAcc(acc: CardAccordion, key: keyof CardAccordion): CardAccordion {
-    if (key === 'rental') return { ...acc, rental: !acc.rental };
-    return { ...acc, return_: !acc.return_ };
   }
 
   // 단가: 실제 요금정책(price_rules) 기준 (없으면 기본 단가 폴백)
@@ -530,6 +453,39 @@
       p_pickup_time:    pickupTime || null,
       p_return_time:    returnTime || null,
     })
+  }
+
+  // 옵션상품 수량 변경 — set_reservation_options는 전체 옵션 목록을 통째로 교체(delete+insert)하는
+  // RPC라, 바뀐 항목 하나만이 아니라 이 예약의 옵션 전체를 다시 보내야 함(상품상세 handleReserve와
+  // 동일한 페이로드 형태 재사용). 성공 시 invalidateAll()로 서버 실값(금액 포함) 재조회 — 로컬
+  // 낙관적 갱신 없음(effectiveLineItems가 서버 파생값이라 직접 변형 불가)
+  let pendingOptionKey = $state<string | null>(null)
+  type SetOptionsRpcFn = (name: string, args: Record<string, unknown>) => Promise<{ error: unknown }>
+  async function updateOptionQty(reservationId: string, line: CartLineItem | undefined, optionProductId: string | null, newQty: number) {
+    if (!line || newQty < 1) return
+    const key = `${reservationId}:${optionProductId}`
+    pendingOptionKey = key
+    try {
+      const payload = line.options.map(o => ({
+        option_product_id: o.optionProductId,
+        option_name:       o.name,
+        qty:                o.optionProductId === optionProductId ? newQty : o.qty,
+        unit_price:        o.unitPrice,
+      }))
+      const { error } = await (supabase.rpc as unknown as SetOptionsRpcFn)('set_reservation_options', {
+        p_reservation_id: Number(reservationId),
+        p_options:        payload,
+      })
+      if (error) {
+        csToast.error('옵션 수량 변경에 실패했습니다.')
+        return
+      }
+      await invalidateAll()
+    } catch {
+      csToast.error('네트워크 오류가 발생했습니다.')
+    } finally {
+      pendingOptionKey = null
+    }
   }
 
   // 배송 탭 — 카트 상품의 allowed_method_ids 기준으로 rental_method_options 필터링
@@ -662,7 +618,7 @@
         <!-- PC 전용(≥641px) 마스터-디테일 레이아웃: 상품목록(좌) / 대여옵션 DetailPanel(우) — CMS /cms/products 구조 동일 적용 -->
         <div class="master-detail">
           <!-- 카드 목록 패널 -->
-          <div class="list-pane" class:narrow={panelOpen}>
+          <div class="list-pane" class:narrow={hasItems}>
             {#if itemsState.length === 0 || itemsState.every(it => it.deleted)}
               <div class="order-card empty-card">
                 <p class="empty-text">장바구니가 비어 있습니다.</p>
@@ -678,77 +634,40 @@
             {/if}
           </div>
 
-          <!-- 대여옵션 DetailPanel -->
-          {#if panelOpen && selectedCartItem}
+          <!-- 통합 대여예약옵션 패널 (체크된 상품 1개 이상 시 활성화) -->
+          {#if hasItems}
             <div class="detail-pane" transition:fly={{ x: 24, duration: 200 }}>
-              {@render ItemDetailPanel(selectedCartItem, effectiveLineItems[selectedCartIndex])}
+              <div class="order-card">
+                <div class="order-card-inner">
+                  {@render RentalOptionsEditor()}
+                </div>
+              </div>
             </div>
           {/if}
         </div>
 
-        <!-- ── 전체 일괄 설정 패널 (2026-07-28: Order Total 바로 위로 재배치 — 상품 목록을 먼저 확인한 뒤 일괄 적용하는 흐름에 정합) -->
-        <div class="bulk-panel" class:bulk-panel-on={bulkApplied}>
-          <button class="bulk-head" onclick={() => bulkOpen = !bulkOpen}>
-            <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true" class="bulk-lock">
-              <rect x="2" y="6" width="12" height="9" rx="2" stroke="currentColor" stroke-width="1.5"/>
-              <path d="M5 6V4.5C5 2.84 6.34 1.5 8 1.5C9.66 1.5 11 2.84 11 4.5V6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
-              <circle cx="8" cy="10.5" r="1.5" fill="currentColor"/>
-            </svg>
-            <span class="bulk-head-title">날짜 / 배송 일괄 설정</span>
-            {#if bulkApplied}<span class="bulk-on-chip">적용 중</span>{/if}
-            <svg width="11" height="7" viewBox="0 0 12 8" fill="none" aria-hidden="true" class="bulk-chevron"
-                 style="transform:{bulkOpen ? 'rotate(180deg)' : 'rotate(0deg)'}">
-              <path d="M1 1L6 7L11 1" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
-            </svg>
-          </button>
-          {#if bulkOpen}
-            <div transition:slide={{ duration: 250 }} class="bulk-body">
-              <!-- 대여방법 · 반납방법 · 약정요금 — 상품 카드와 동일 아코디언 UI (일괄 적용용, 날짜/시간 선택 포함) -->
-              <div class="accordions">
-                <!-- 대여 방법 -->
-                <div class="acc-item">
-                  <button class="acc-head" onclick={() => bulkOpenAcc = 'rental'}>
-                    <span class="acc-label">대여 방법</span>
-                    <div class="acc-head-right">
-                      <span class="acc-value">{methodLabel(bulkOpts.rentalMethod)}</span>
-                      <svg width="12" height="8" viewBox="0 0 12 8" fill="none" style="transition:transform 0.3s;transform:{bulkOpenAcc === 'rental' ? 'rotate(180deg)' : 'none'}">
-                        <path d="M1 1L6 7L11 1" stroke="#444" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
-                      </svg>
-                    </div>
-                  </button>
-                  {#if bulkOpenAcc === 'rental'}
-                    <div transition:slide={{ duration: 300 }} class="acc-body">
-                      {@render RentalForm({ type: 'rental', calId: 'bulk-rental', selectedDate: bulkDate, onDateChange: bulkHandleDate, timeId: 'bulk-rental-t', selectedTime: bulkTime, onTimeChange: bulkHandleTime, method: bulkOpts.rentalMethod, form: bulkRentalForm, copyToReturn: bulkOpts.copyToReturn, onMethodChange: bulkHandleMethod, onFormChange: bulkHandleRentalForm, onCopyChange: bulkHandleCopy, hasUserAddress: sdHasUserAddress })}
-                    </div>
-                  {/if}
-                </div>
-                <!-- 반납 방법 -->
-                <div class="acc-item">
-                  <button class="acc-head" onclick={() => bulkOpenAcc = 'return_'}>
-                    <span class="acc-label">반납 방법</span>
-                    <div class="acc-head-right">
-                      <span class="acc-value">{methodLabel(bulkOpts.returnMethod)}</span>
-                      <svg width="12" height="8" viewBox="0 0 12 8" fill="none" style="transition:transform 0.3s;transform:{bulkOpenAcc === 'return_' ? 'rotate(180deg)' : 'none'}">
-                        <path d="M1 1L6 7L11 1" stroke="#444" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
-                      </svg>
-                    </div>
-                  </button>
-                  {#if bulkOpenAcc === 'return_'}
-                    <div transition:slide={{ duration: 300 }} class="acc-body">
-                      {@render RentalForm({ type: 'return', calId: 'bulk-return', selectedDate: bulkDate, onDateChange: bulkHandleDate, timeId: 'bulk-return-t', selectedTime: bulkTime, onTimeChange: bulkHandleTime, method: bulkOpts.returnMethod, form: bulkReturnForm, onMethodChange: bulkHandleReturnMethod, onFormChange: bulkHandleReturnForm })}
-                    </div>
-                  {/if}
-                </div>
+        <!-- ── 통합 대여예약옵션 패널 (체크된 상품 1개 이상일 때만 렌더 — 모바일 전용, PC는 detail-pane) -->
+        {#if hasItems}
+          <div class="bulk-panel">
+            <button class="bulk-head" onclick={() => bulkOpen = !bulkOpen}>
+              <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true" class="bulk-lock">
+                <rect x="2" y="6" width="12" height="9" rx="2" stroke="currentColor" stroke-width="1.5"/>
+                <path d="M5 6V4.5C5 2.84 6.34 1.5 8 1.5C9.66 1.5 11 2.84 11 4.5V6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+                <circle cx="8" cy="10.5" r="1.5" fill="currentColor"/>
+              </svg>
+              <span class="bulk-head-title">대여예약옵션</span>
+              <svg width="11" height="7" viewBox="0 0 12 8" fill="none" aria-hidden="true" class="bulk-chevron"
+                   style="transform:{bulkOpen ? 'rotate(180deg)' : 'rotate(0deg)'}">
+                <path d="M1 1L6 7L11 1" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+              </svg>
+            </button>
+            {#if bulkOpen}
+              <div transition:slide={{ duration: 250 }} class="bulk-body">
+                {@render RentalOptionsEditor()}
               </div>
-              <!-- 입력 즉시 전체 카드 반영(applyBulkToItems) — 별도 적용 버튼 불필요 -->
-              {#if bulkApplied}
-                <div class="bulk-foot">
-                  <button class="bulk-reset" onclick={resetBulkSettings}>개별 설정</button>
-                </div>
-              {/if}
-            </div>
-          {/if}
-        </div>
+            {/if}
+          </div>
+        {/if}
       </section>
 
       <!-- ── ORDER TOTAL ── -->
@@ -902,6 +821,79 @@
           try {
             // 체크 해제한 상품은 이번 결제 확정 대상에서 제외 — 선택된(checked) 예약 id만 전송
             const checkedIds = itemsState.filter(it => !it.deleted && it.checked).map(it => it.id)
+
+            // draft 항목(날짜 없는 임시예약)을 먼저 승격(promote_draft_reservation) — 모두 성공한 뒤 confirm-mock 진행
+            const draftItemIds = new Set(
+              effectiveLineItems
+                .filter(l => l.status === 'draft' && checkedIds.includes(l.reservationId))
+                .map(l => l.reservationId)
+            )
+            if (draftItemIds.size > 0) {
+              const TWO_DAY_LEADTIME_KEYS_CO = new Set(['delivery', 'epost'])
+              const nowTimeCo = new Date()
+              for (const it of itemsState.filter(x => !x.deleted && x.checked && draftItemIds.has(x.id))) {
+                // 리드타임 재검증 (날짜 없이 예약됐으므로 여기서 처음 검증)
+                const needsTwoDayLeadtime = TWO_DAY_LEADTIME_KEYS_CO.has(it.opts.rentalMethod)
+                if (needsTwoDayLeadtime) {
+                  const twoDaysLater = new Date(nowTimeCo.getFullYear(), nowTimeCo.getMonth(), nowTimeCo.getDate() + 2)
+                  const startDateOnly = new Date(`${it.rentalDate}T00:00:00`)
+                  if (startDateOnly < twoDaysLater) {
+                    csToast.error('택배 대여는 대여일 2일 전 예약 가능합니다.')
+                    return
+                  }
+                } else {
+                  const todayIsoCo = `${nowTimeCo.getFullYear()}-${String(nowTimeCo.getMonth() + 1).padStart(2, '0')}-${String(nowTimeCo.getDate()).padStart(2, '0')}`
+                  if (it.rentalDate === todayIsoCo) {
+                    const [hStr, mStr] = (it.rentalTime || '00:00').split(':')
+                    const startH = parseInt(hStr ?? '0', 10)
+                    const startM = parseInt(mStr ?? '0', 10)
+                    const startDt = new Date(`${it.rentalDate}T${String(startH).padStart(2, '0')}:${String(startM).padStart(2, '0')}:00`)
+                    const threeHoursLater = new Date(nowTimeCo.getTime() + 3 * 60 * 60 * 1000)
+                    if (startDt < threeHoursLater) {
+                      csToast.error('당일 대여는 대여시간 기준 3시간 전 방문만 가능합니다.')
+                      return
+                    }
+                  }
+                }
+                // promote_draft_reservation RPC 호출
+                type PromoteRpcFn = (name: string, args: Record<string, unknown>) => Promise<{
+                  data: Array<{ success: boolean; reservation_id: number | null; error_message: string | null }> | null;
+                  error: unknown;
+                }>
+                const { data: promoteRows } = await (supabase.rpc as unknown as PromoteRpcFn)('promote_draft_reservation', {
+                  p_reservation_id: Number(it.id),
+                  p_start_date:     it.rentalDate,
+                  p_end_date:       it.returnDate,
+                })
+                const promoteRow = promoteRows?.[0]
+                if (!promoteRow?.success) {
+                  csToast.error(promoteRow?.error_message ?? '해당 기간에 예약 가능한 재고가 없습니다.')
+                  return
+                }
+                // 수령·반납 방식 저장 (기존 saveShipmentMethod 재사용)
+                await saveShipmentMethod(it.id, it.opts.rentalMethod, it.opts.returnMethod, it.rentalTime, it.returnTime)
+                // 대여 기간 유형 저장 (products/[id]/+page.svelte L320-322와 동일 판정 기준)
+                const isSameDayRentalCo = it.rentalDate === it.returnDate
+                const [rhStr, rmStr] = (it.rentalTime || '00:00').split(':')
+                const [etStr, emStr] = (it.returnTime || '00:00').split(':')
+                const startMinsCo = parseInt(rhStr ?? '0', 10) * 60 + parseInt(rmStr ?? '0', 10)
+                const endMinsCo   = parseInt(etStr ?? '0', 10) * 60 + parseInt(emStr ?? '0', 10)
+                const sameDayMinsCo   = endMinsCo - startMinsCo
+                const durationTypeCo  = isSameDayRentalCo && sameDayMinsCo > 0 && sameDayMinsCo <= 720 ? '12h' : '24h'
+                type DurationRpcFnCo = (name: string, args: Record<string, unknown>) => Promise<{ error: unknown }>
+                await (supabase.rpc as unknown as DurationRpcFnCo)('set_reservation_duration', {
+                  p_reservation_id: Number(it.id),
+                  p_duration_type:  durationTypeCo,
+                })
+                // 채팅 알림 발송 (draft 생성 시 미발송 → 승격 성공 시점에 최초 발송 — FE-2 STEP4 참고)
+                fetch('/api/checkout/notify-hold', {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ reservationId: Number(it.id) }),
+                }).catch(() => {})
+              }
+            }
+            // 모든 draft 승격 완료 후 confirm-mock 호출 (confirm-mock은 status='hold' 행만 처리)
             const res = await fetch('/api/checkout/confirm-mock', {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
@@ -1048,7 +1040,9 @@
           <div class="option-subcard-list">
             {#each line.options as opt}
               <div class="option-subcard">
-                <div class="option-subcard-connector" aria-hidden="true"></div>
+                <svg class="option-subcard-connector" aria-hidden="true" width="25" height="25" viewBox="0 0 25 25" fill="none" xmlns="http://www.w3.org/2000/svg">
+                  <path d="M1.50404 1.5C1.50404 1.5 1.49303 5.60062 1.50738 12.8098C1.52173 20.0189 7 23.5 11.5 23.5C16 23.5 23.5 23.5 23.5 23.5" stroke="var(--cs-text-light)" stroke-width="3" stroke-linecap="round"/>
+                </svg>
                 <div class="option-subcard-img">
                   {#if opt.imageUrl}
                     <img src={opt.imageUrl} alt={opt.name} loading="lazy" />
@@ -1056,50 +1050,20 @@
                 </div>
                 <div class="option-subcard-info">
                   <p class="option-subcard-name">{opt.name}</p>
-                  <p class="option-subcard-price">{opt.qty}개 · {fmtKrw(opt.unitPrice * opt.qty)}원</p>
+                  <div class="option-subcard-bottom">
+                    <p class="option-subcard-price">{fmtKrw(opt.unitPrice * opt.qty)}원</p>
+                    <div class="opt-qty-ctrl">
+                      <button class="opt-qty-arrow" onclick={() => updateOptionQty(item.id, line, opt.optionProductId, opt.qty - 1)} disabled={opt.qty <= 1 || pendingOptionKey === `${item.id}:${opt.optionProductId}`} aria-label="옵션 수량 감소">−</button>
+                      <span class="opt-qty-num">{opt.qty}</span>
+                      <button class="opt-qty-arrow" onclick={() => updateOptionQty(item.id, line, opt.optionProductId, opt.qty + 1)} disabled={pendingOptionKey === `${item.id}:${opt.optionProductId}`} aria-label="옵션 수량 증가">+</button>
+                    </div>
+                  </div>
                 </div>
               </div>
             {/each}
           </div>
         {/if}
 
-        <!-- Accordions -->
-        <div class="accordions" class:bulk-locked={bulkApplied}>
-          <!-- 대여 방법 -->
-          <div class="acc-item">
-            <button class="acc-head" onclick={() => updateItem(item.id, { acc: toggleAcc(item.acc, 'rental') })}>
-              <span class="acc-label">대여 방법</span>
-              <div class="acc-head-right">
-                <span class="acc-value">{methodLabel(item.opts.rentalMethod)}</span>
-                <svg width="12" height="8" viewBox="0 0 12 8" fill="none" style="transition:transform 0.3s;transform:{item.acc.rental ? 'rotate(180deg)' : 'none'}">
-                  <path d="M1 1L6 7L11 1" stroke="#444" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
-                </svg>
-              </div>
-            </button>
-            {#if item.acc.rental}
-              <div transition:slide={{ duration: 300 }} class="acc-body">
-                {@render RentalForm({ type: 'rental', calId: `${item.id}-rental`, selectedDate: item.rentalDate, onDateChange: (d) => itemHandleRentalDate(item, d), timeId: `${item.id}-rental-t`, selectedTime: item.rentalTime, onTimeChange: (t) => itemHandleRentalTime(item, t), method: item.opts.rentalMethod, form: item.rentalForm, copyToReturn: item.opts.copyToReturn, onMethodChange: (v) => itemHandleMethod(item, v), onFormChange: (f) => itemHandleRentalForm(item, f), onCopyChange: (v) => itemHandleCopy(item, v), hasUserAddress: sdHasUserAddress })}
-              </div>
-            {/if}
-          </div>
-          <!-- 반납 방법 -->
-          <div class="acc-item">
-            <button class="acc-head" onclick={() => updateItem(item.id, { acc: toggleAcc(item.acc, 'return_') })}>
-              <span class="acc-label">반납 방법</span>
-              <div class="acc-head-right">
-                <span class="acc-value">{methodLabel(item.opts.returnMethod)}</span>
-                <svg width="12" height="8" viewBox="0 0 12 8" fill="none" style="transition:transform 0.3s;transform:{item.acc.return_ ? 'rotate(180deg)' : 'none'}">
-                  <path d="M1 1L6 7L11 1" stroke="#444" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
-                </svg>
-              </div>
-            </button>
-            {#if item.acc.return_}
-              <div transition:slide={{ duration: 300 }} class="acc-body">
-                {@render RentalForm({ type: 'return', calId: `${item.id}-return`, selectedDate: item.returnDate, onDateChange: (d) => updateItem(item.id, { returnDate: d }), timeId: `${item.id}-return-t`, selectedTime: item.returnTime, onTimeChange: (t) => updateItem(item.id, { returnTime: t }), method: item.opts.returnMethod, form: item.returnForm, onMethodChange: (v) => itemHandleReturnMethod(item, v), onFormChange: (f) => updateItem(item.id, { returnForm: f }) })}
-              </div>
-            {/if}
-          </div>
-        </div>
       </div>
     </div>
   {/if}
@@ -1109,28 +1073,19 @@
   {@const rate24 = itemRate24h(line)}
   {@const rate12 = itemRate12h(line, rate24)}
   {@const cardRateVal = cardRate(rate24, rate12, item.durType)}
-  <div class="item-card" class:selected={selectedCartItemId === item.id} role="listitem">
-    <button class="checkbox-btn item-card-checkbox" onclick={(e) => { e.stopPropagation(); updateItem(item.id, { checked: !item.checked }); }} aria-label="선택">
-      <svg viewBox="0 0 20 20" fill="none" class="checkbox-svg">
-        {#if item.checked}
-          <rect fill="#3B2F8A" height="18" rx="4" width="18" x="1" y="1"/>
-          <path d="M5 10L8.5 13.5L15 6" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
-        {:else}
-          <rect fill="white" height="18" rx="4" width="18" x="1" y="1"/>
-          <rect height="18" rx="4" stroke="#AAAAAA" stroke-width="2" width="18" x="1" y="1"/>
-        {/if}
-      </svg>
-    </button>
-    <button
+  <div class="item-card" class:selected={item.checked} role="listitem">
+    <div
       class="item-card-body"
-      onclick={() => selectedCartItemId = item.id}
-      aria-pressed={selectedCartItemId === item.id}
-      aria-label={`${line?.product?.name ?? '상품'} 대여옵션 보기`}
-      type="button"
+      role="button"
+      tabindex="0"
+      onclick={() => updateItem(item.id, { checked: !item.checked })}
+      onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); updateItem(item.id, { checked: !item.checked }) } }}
+      aria-pressed={item.checked}
+      aria-label={`${line?.product?.name ?? '상품'} 결제 포함 선택`}
     >
       <div class="item-card-top-row">
         <div class="item-thumb-wrap">
-          <img src={line?.product?.image_urls?.[0] ?? 'https://picsum.photos/seed/cam/150/150'} alt={line?.product?.name ?? '상품'} class="item-thumb" width="90" height="90" loading="lazy"/>
+          <img src={line?.product?.image_urls?.[0] ?? 'https://picsum.photos/seed/cam/150/150'} alt={line?.product?.name ?? '상품'} class="item-thumb" width="108" height="108" loading="lazy"/>
         </div>
         <div class="item-info">
           <p class="item-name">{line?.product?.name ?? '상품'}</p>
@@ -1138,13 +1093,26 @@
             <span class="dur-badge">{DUR_LABELS[item.durType]}</span>
             <span class="fee-badge">{((cardRateVal + itemOptionsAmount(line)) * item.qty).toLocaleString()}원</span>
           </div>
+          <div class="qty-wrap qty-wrap--sm">
+            <div class="qty-ctrl" role="group" aria-label="수량">
+              <button class="qty-arrow" onclick={(e) => { e.stopPropagation(); updateItem(item.id, { qty: Math.max(1, item.qty - 1) }) }} aria-label="수량 감소">
+                <svg width="8" height="14" viewBox="0 0 8 14" fill="none"><path d="M7 1L1 7L7 13" stroke="#444444" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"/></svg>
+              </button>
+              <div class="qty-num">{item.qty}</div>
+              <button class="qty-arrow" onclick={(e) => { e.stopPropagation(); updateItem(item.id, { qty: item.qty + 1 }) }} aria-label="수량 증가">
+                <svg width="8" height="14" viewBox="0 0 8 14" fill="none"><path d="M1 1L7 7L1 13" stroke="#444444" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"/></svg>
+              </button>
+            </div>
+          </div>
         </div>
       </div>
       {#if line?.options?.length}
         <div class="option-subcard-list option-subcard-list--compact">
           {#each line.options as opt}
             <div class="option-subcard option-subcard--compact">
-              <div class="option-subcard-connector" aria-hidden="true"></div>
+              <svg class="option-subcard-connector" aria-hidden="true" width="18" height="18" viewBox="0 0 25 25" fill="none" xmlns="http://www.w3.org/2000/svg">
+                <path d="M1.50404 1.5C1.50404 1.5 1.49303 5.60062 1.50738 12.8098C1.52173 20.0189 7 23.5 11.5 23.5C16 23.5 23.5 23.5 23.5 23.5" stroke="var(--cs-text-light)" stroke-width="3" stroke-linecap="round"/>
+              </svg>
               <div class="option-subcard-img">
                 {#if opt.imageUrl}
                   <img src={opt.imageUrl} alt={opt.name} loading="lazy" />
@@ -1152,13 +1120,20 @@
               </div>
               <div class="option-subcard-info">
                 <p class="option-subcard-name">{opt.name}</p>
-                <p class="option-subcard-price">{opt.qty}개 · {fmtKrw(opt.unitPrice * opt.qty)}원</p>
+                <div class="option-subcard-bottom">
+                  <p class="option-subcard-price">{fmtKrw(opt.unitPrice * opt.qty)}원</p>
+                  <div class="opt-qty-ctrl">
+                    <button class="opt-qty-arrow" onclick={(e) => { e.stopPropagation(); updateOptionQty(item.id, line, opt.optionProductId, opt.qty - 1) }} disabled={opt.qty <= 1 || pendingOptionKey === `${item.id}:${opt.optionProductId}`} aria-label="옵션 수량 감소">−</button>
+                    <span class="opt-qty-num">{opt.qty}</span>
+                    <button class="opt-qty-arrow" onclick={(e) => { e.stopPropagation(); updateOptionQty(item.id, line, opt.optionProductId, opt.qty + 1) }} disabled={pendingOptionKey === `${item.id}:${opt.optionProductId}`} aria-label="옵션 수량 증가">+</button>
+                  </div>
+                </div>
               </div>
             </div>
           {/each}
         </div>
       {/if}
-    </button>
+    </div>
     <button class="delete-btn item-card-delete" onclick={() => removeItem(item)} aria-label="삭제">
       <svg width="14" height="14" viewBox="0 0 17 17" fill="none">
         <path d="M15.5 1.5L8.5 8.5M8.5 8.5L1.5 15.5M8.5 8.5L15.5 15.5M8.5 8.5L1.5 1.5" stroke="#AAAAAA" stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5"/>
@@ -1167,51 +1142,44 @@
   </div>
 {/snippet}
 
-{#snippet ItemDetailPanel(item: CartItemUiState, line: CartLineItem | undefined)}
-  {@const rate24 = itemRate24h(line)}
-  {@const rate12 = itemRate12h(line, rate24)}
-  {@const cardRateVal = cardRate(rate24, rate12, item.durType)}
-  <div class="order-card">
-    <div class="order-card-inner">
-      <!-- Accordions -->
-      <div class="accordions" class:bulk-locked={bulkApplied}>
-          <!-- 대여 방법 -->
-          <div class="acc-item">
-            <button class="acc-head" onclick={() => detailOpenAcc = 'rental'}>
-              <span class="acc-label">대여 방법</span>
-              <div class="acc-head-right">
-                <span class="acc-value">{methodLabel(item.opts.rentalMethod)}</span>
-                <svg width="12" height="8" viewBox="0 0 12 8" fill="none" style="transition:transform 0.3s;transform:{detailOpenAcc === 'rental' ? 'rotate(180deg)' : 'none'}">
-                  <path d="M1 1L6 7L11 1" stroke="#444" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
-                </svg>
-              </div>
-            </button>
-            {#if detailOpenAcc === 'rental'}
-              <div transition:slide={{ duration: 300 }} class="acc-body">
-                {@render RentalForm({ type: 'rental', calId: `${item.id}-rental`, selectedDate: item.rentalDate, onDateChange: (d) => itemHandleRentalDate(item, d), timeId: `${item.id}-rental-t`, selectedTime: item.rentalTime, onTimeChange: (t) => itemHandleRentalTime(item, t), method: item.opts.rentalMethod, form: item.rentalForm, copyToReturn: item.opts.copyToReturn, onMethodChange: (v) => itemHandleMethod(item, v), onFormChange: (f) => itemHandleRentalForm(item, f), onCopyChange: (v) => itemHandleCopy(item, v), hasUserAddress: sdHasUserAddress })}
-              </div>
-            {/if}
-          </div>
-          <!-- 반납 방법 -->
-          <div class="acc-item">
-            <button class="acc-head" onclick={() => detailOpenAcc = 'return_'}>
-              <span class="acc-label">반납 방법</span>
-              <div class="acc-head-right">
-                <span class="acc-value">{methodLabel(item.opts.returnMethod)}</span>
-                <svg width="12" height="8" viewBox="0 0 12 8" fill="none" style="transition:transform 0.3s;transform:{detailOpenAcc === 'return_' ? 'rotate(180deg)' : 'none'}">
-                  <path d="M1 1L6 7L11 1" stroke="#444" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
-                </svg>
-              </div>
-            </button>
-            {#if detailOpenAcc === 'return_'}
-              <div transition:slide={{ duration: 300 }} class="acc-body">
-                {@render RentalForm({ type: 'return', calId: `${item.id}-return`, selectedDate: item.returnDate, onDateChange: (d) => updateItem(item.id, { returnDate: d }), timeId: `${item.id}-return-t`, selectedTime: item.returnTime, onTimeChange: (t) => updateItem(item.id, { returnTime: t }), method: item.opts.returnMethod, form: item.returnForm, onMethodChange: (v) => itemHandleReturnMethod(item, v), onFormChange: (f) => updateItem(item.id, { returnForm: f }) })}
-              </div>
-            {/if}
-          </div>
+{#snippet RentalOptionsEditor()}
+  <!-- 통합 단일 대여예약옵션 편집기 — bulkOpts/bulkDate/bulkTime/bulkRentalForm/bulkReturnForm 클로저 참조 -->
+  <div class="accordions">
+    <!-- 대여 방법 -->
+    <div class="acc-item">
+      <button class="acc-head" onclick={() => bulkOpenAcc = 'rental'}>
+        <span class="acc-label">대여 방법</span>
+        <div class="acc-head-right">
+          <span class="acc-value">{methodLabel(bulkOpts.rentalMethod)}</span>
+          <svg width="12" height="8" viewBox="0 0 12 8" fill="none" style="transition:transform 0.3s;transform:{bulkOpenAcc === 'rental' ? 'rotate(180deg)' : 'none'}">
+            <path d="M1 1L6 7L11 1" stroke="#444" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
         </div>
-      </div>
+      </button>
+      {#if bulkOpenAcc === 'rental'}
+        <div transition:slide={{ duration: 300 }} class="acc-body">
+          {@render RentalForm({ type: 'rental', calId: 'bulk-rental', selectedDate: bulkDate, onDateChange: bulkHandleDate, timeId: 'bulk-rental-t', selectedTime: bulkTime, onTimeChange: bulkHandleTime, method: bulkOpts.rentalMethod, form: bulkRentalForm, copyToReturn: bulkOpts.copyToReturn, onMethodChange: bulkHandleMethod, onFormChange: bulkHandleRentalForm, onCopyChange: bulkHandleCopy, hasUserAddress: sdHasUserAddress })}
+        </div>
+      {/if}
     </div>
+    <!-- 반납 방법 -->
+    <div class="acc-item">
+      <button class="acc-head" onclick={() => bulkOpenAcc = 'return_'}>
+        <span class="acc-label">반납 방법</span>
+        <div class="acc-head-right">
+          <span class="acc-value">{methodLabel(bulkOpts.returnMethod)}</span>
+          <svg width="12" height="8" viewBox="0 0 12 8" fill="none" style="transition:transform 0.3s;transform:{bulkOpenAcc === 'return_' ? 'rotate(180deg)' : 'none'}">
+            <path d="M1 1L6 7L11 1" stroke="#444" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+        </div>
+      </button>
+      {#if bulkOpenAcc === 'return_'}
+        <div transition:slide={{ duration: 300 }} class="acc-body">
+          {@render RentalForm({ type: 'return', calId: 'bulk-return', selectedDate: bulkDate, onDateChange: bulkHandleDate, timeId: 'bulk-return-t', selectedTime: bulkTime, onTimeChange: bulkHandleTime, method: bulkOpts.returnMethod, form: bulkReturnForm, onMethodChange: bulkHandleReturnMethod, onFormChange: bulkHandleReturnForm })}
+        </div>
+      {/if}
+    </div>
+  </div>
 {/snippet}
 
 {#snippet RentalForm(props: {
@@ -1615,6 +1583,7 @@
 
   /* 상품 리스트 카드 */
   .item-card {
+    position: relative;
     display: flex;
     align-items: stretch;
     background: white;
@@ -1627,9 +1596,15 @@
     padding: var(--spacing-5, 20px);   /* 카드 내부 상하좌우 패딩 — front 표준 spacing 토큰(lg=20px) */
   }
   .item-card:hover { background: var(--cs-lilac); }
+  /* 결제 포함 여부(item.checked) — 이전 세대 체크박스 아이콘 UI 대체, 카드 자체 배경색으로 표현 */
   .item-card.selected { background: var(--cs-purple-op10); }
-  .item-card-checkbox { display: flex; align-items: center; justify-content: center; }
-  .item-card-delete { align-self: center; }
+  /* 카드(BG 영역) 최상단 우측 고정 — 옵션상품이 늘어나 카드가 길어져도 항상 카드 첫 줄
+     높이에 맞춰 고정. 12px = 카드 패딩(20px) - 버튼 자체 여백(8px), 콘텐츠 여백과 시각적으로 정렬 */
+  .item-card-delete {
+    position: absolute;
+    top: 12px;
+    right: 12px;
+  }
   .item-card-body {
     display: flex;
     flex-direction: column;
@@ -1637,7 +1612,7 @@
     gap: 14px;
     flex: 1;
     min-width: 0;
-    padding: 0 12px;
+    padding: 0 34px 0 12px;
     background: transparent;
     border: none;
     cursor: pointer;
@@ -1651,13 +1626,13 @@
   }
   .item-thumb-wrap {
     flex-shrink: 0;
-    width: 90px;
-    height: 90px;
+    width: 108px;
+    height: 108px;
     border-radius: var(--radius-md, 15px);
     overflow: hidden;
     background: #F2F2F8;
   }
-  .item-thumb { width: 90px; height: 90px; object-fit: cover; display: block; }
+  .item-thumb { width: 108px; height: 108px; object-fit: cover; display: block; }
   .item-info { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 6px; }
   .item-info-top { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
   .dur-badge {
@@ -1792,7 +1767,7 @@
     align-items: center;
     gap: 20px;
     width: 100%;
-    margin-left: 30px;
+    margin-left: 40px;
     padding: 16px 20px;
     background: var(--cs-lilac);
     border-radius: 30px;
@@ -1800,13 +1775,9 @@
   }
   .option-subcard-connector {
     position: absolute;
-    left: -18px;
-    top: -14px;
-    width: 16px;
-    height: calc(50% + 14px);
-    border-left: 2px solid var(--cs-lilac);
-    border-bottom: 2px solid var(--cs-lilac);
-    border-radius: 0 0 0 10px;
+    left: -40px;
+    top: 50%;
+    transform: translateY(-50%);
     pointer-events: none;
   }
   /* 본상품 .product-img와 동일 크기(150×150, radius 30px) */
@@ -1845,22 +1816,61 @@
     letter-spacing: -0.5px;
     margin: 0;
   }
+  /* 옵션상품 수량 조절 — 본상품 .qty-wrap과 동일 인터랙션 패턴(± 버튼) 축소 적용 */
+  .option-subcard-bottom {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    flex-wrap: wrap;
+  }
+  .opt-qty-ctrl {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-shrink: 0;
+  }
+  .opt-qty-arrow {
+    background: none;
+    border: none;
+    cursor: pointer;
+    width: 22px;
+    height: 22px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 14px;
+    font-weight: 700;
+    line-height: 1;
+    color: var(--cs-text-dark, #444444);
+    transition: background 0.2s;
+    flex-shrink: 0;
+  }
+  .opt-qty-arrow:hover:not(:disabled) { background: rgba(0,0,0,0.06); }
+  .opt-qty-arrow:disabled { opacity: 0.35; cursor: not-allowed; }
+  .opt-qty-num {
+    background: var(--cs-white, #fff);
+    border-radius: 8px;
+    padding: 2px 10px;
+    font-size: 12px;
+    font-weight: 700;
+    color: var(--cs-text, #100B32);
+    min-width: 22px;
+    text-align: center;
+  }
 
   /* 컴팩트 버전 — ItemListCard(PC 목록행) 전용. 이 카드 자체가 이미 축소형(.item-thumb 90px)
      이므로 "본상품과 동일 크기" 기준을 이 카드의 실제 크기(90px)에 맞춰 적용 */
   .option-subcard-list--compact { gap: 10px; margin-top: 4px; }
   .option-subcard--compact {
-    margin-left: 20px;
+    margin-left: 30px;
     padding: 10px 14px;
     gap: 14px;
     border-radius: 20px;
   }
   .option-subcard--compact .option-subcard-connector {
-    left: -12px;
-    top: -10px;
-    width: 12px;
-    height: calc(50% + 10px);
-    border-radius: 0 0 0 8px;
+    left: -30px;
   }
   /* 본상품 .item-thumb-wrap과 동일 크기(90×90, radius var(--radius-md)) */
   .option-subcard--compact .option-subcard-img {
@@ -1877,6 +1887,8 @@
     white-space: nowrap;
   }
   .option-subcard--compact .option-subcard-price { font-size: 13px; font-weight: 600; color: var(--cs-text-mid); }
+  .option-subcard--compact .opt-qty-arrow { width: 18px; height: 18px; font-size: 12px; }
+  .option-subcard--compact .opt-qty-num { font-size: 11px; padding: 1px 8px; min-width: 18px; }
 
   /* ══ Duration Type Tabs ══ */
   .dur-tabs {
@@ -1952,17 +1964,18 @@
     min-width: 44px;
     text-align: center;
   }
+  /* PC ItemListCard 전용 축소 스케일(30% 작게) — 모바일 OrderCard의 기본 .qty-wrap 크기는 그대로 유지 */
+  .qty-wrap--sm { gap: 10px; }
+  .qty-wrap--sm .qty-ctrl { gap: 21px; padding: 0 7px; }
+  .qty-wrap--sm .qty-arrow { width: 22px; height: 22px; }
+  .qty-wrap--sm .qty-arrow svg { width: 6px; height: 10px; }
+  .qty-wrap--sm .qty-num { padding: 7px 14px; font-size: 10px; min-width: 31px; }
 
   /* ══ Accordions ══ */
   .accordions {
     display: flex;
     flex-direction: column;
     gap: 10px;
-  }
-  .accordions.bulk-locked {
-    opacity: 0.5;
-    pointer-events: none;
-    cursor: not-allowed;
   }
   .acc-item { display: flex; flex-direction: column; }
   .acc-head {
@@ -2622,8 +2635,9 @@
     overflow: hidden;
     box-shadow: 0 2px 8px rgba(0,0,0,0.06);
   }
-  .bulk-panel.bulk-panel-on {
-    box-shadow: 0 0 0 2px var(--cs-purple, #3B2F8A), 0 2px 8px rgba(0,0,0,0.06);
+  /* PC에서는 detail-pane이 동일 역할 — bulk-panel 중복 노출 방지 */
+  @media (min-width: 641px) {
+    .bulk-panel { display: none; }
   }
   .bulk-head {
     width: 100%;
@@ -2643,15 +2657,6 @@
     flex: 1;
     text-align: left;
   }
-  .bulk-on-chip {
-    font-size: 11px;
-    font-weight: 700;
-    color: #fff;
-    background: var(--cs-purple, #3B2F8A);
-    border-radius: var(--radius-full, 99px);
-    padding: 2px 8px;
-    white-space: nowrap;
-  }
   .bulk-chevron {
     color: var(--cs-text-dark, #444);
     flex-shrink: 0;
@@ -2664,24 +2669,5 @@
     gap: 14px;
     border-top: 1px solid var(--cs-lilac, #ECEBF4);
   }
-  /* 버튼 행 */
-  .bulk-foot {
-    display: flex;
-    justify-content: flex-end;
-    gap: 8px;
-    margin-top: 2px;
-  }
-  .bulk-reset {
-    padding: 0 20px;
-    background: none;
-    color: var(--cs-purple, #3B2F8A);
-    border: 1.5px solid var(--cs-purple, #3B2F8A);
-    border-radius: var(--radius-xl, 30px);
-    font: var(--text-m-script-14B);
-    cursor: pointer;
-    min-height: 44px;
-    transition: opacity 0.15s;
-  }
-  .bulk-reset:hover { opacity: 0.7; }
 
 </style>

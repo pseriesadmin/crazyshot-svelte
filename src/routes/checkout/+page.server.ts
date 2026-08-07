@@ -43,7 +43,7 @@ export const load: PageServerLoad = async ({ locals }) => {
       .from('rental_reservations')
       .select('id, product_id, start_date, end_date, status, pickup_method, return_method, pickup_time, return_time, duration_type')
       .eq('user_id', session.user.id)
-      .eq('status', 'hold')
+      .in('status', ['hold', 'draft'])
       .order('created_at', { ascending: false }),
 
     supabase
@@ -54,7 +54,14 @@ export const load: PageServerLoad = async ({ locals }) => {
 
     supabase
       .from('user_coupons')
-      .select('id, coupon_id, coupons(id, code, discount_type, discount_value, description, valid_until)')
+      .select(`id, coupon_id, used_count,
+        coupons(
+          id, code, discount_type, discount_value, description,
+          is_active, deleted_at, valid_from, valid_until,
+          user_grade_required, usage_limit, usage_count, total_usage_limit,
+          is_first_rental_only, is_student_only, is_subscription_only, is_walk_in_only,
+          min_purchase_amount, min_rental_amount, min_rental_days
+        )`)
       .eq('user_id', session.user.id)
       .is('used_at', null),
 
@@ -68,6 +75,26 @@ export const load: PageServerLoad = async ({ locals }) => {
 
   const hasUserAddress = ((addressResult.data ?? []) as Array<{ road_address: string | null }>)
     .some(row => !!row.road_address)
+
+  // ── 쿠폰 노출 조건 필터 ─────────────────────────────────────────────────────
+  const now = new Date().toISOString()
+  const memberGrade = (profileResult.data as ProfileRow | null)?.membership_grade ?? null
+
+  const filteredCoupons = ((couponResult.data ?? []) as RawUserCouponRow[]).filter(uc => {
+    const c = uc.coupons
+    if (!c) return false
+    if (!c.is_active) return false
+    if (c.deleted_at) return false
+    if (c.valid_from && c.valid_from > now) return false
+    if (c.valid_until && c.valid_until < now) return false
+    // 등급 조건: user_grade_required가 설정된 쿠폰은 회원 등급 일치 필수
+    if (c.user_grade_required && c.user_grade_required !== memberGrade) return false
+    // 전체 발급 한도 소진
+    if (c.total_usage_limit !== null && c.usage_count >= c.total_usage_limit) return false
+    // 개별 사용 한도 소진
+    if (c.usage_limit > 0 && c.usage_count >= c.usage_limit) return false
+    return true
+  })
 
   const rawReservations = (cartResult.data ?? []) as ReservationRow[]
   // id는 Stage DB bigint이지만 CalculateCartTotalArgs는 string[] — String() 변환으로 호환
@@ -192,15 +219,18 @@ export const load: PageServerLoad = async ({ locals }) => {
         returnTime:    r.return_time,
         durationType:  r.duration_type,
         options:       optionsByReservation[String(r.id)] ?? [],
+        status:        r.status,
       }
     })
 
     // calculate_cart_total RPC — subtotal, discount_amount, final_total, deposit_required 반환
     // (Database.Functions 타입 불일치로 as unknown as 캐스트 사용 — 기존 products/[id] 패턴 동일)
+    // draft 행(날짜 NULL)이 섞이면 subtotal이 NULL로 오염되므로 hold 상태 행만 필터링해 전달 (DB-5는 2차 방어)
+    const holdReservationIds = rawReservations.filter(r => r.status === 'hold').map(r => String(r.id))
     type CalcRow = { subtotal: number; discount_amount: number; final_total: number; deposit_required: number }
     type CalcRpcFn = (name: string, args: Record<string, unknown>) => Promise<{ data: CalcRow[] | null; error: unknown }>
     const calcResp = await (supabase.rpc as unknown as CalcRpcFn)('calculate_cart_total', {
-      p_reservation_ids: reservationIds,
+      p_reservation_ids: holdReservationIds,
     })
     const row = calcResp.data?.[0] ?? null
     if (row) {
@@ -229,7 +259,7 @@ export const load: PageServerLoad = async ({ locals }) => {
     membershipGrade: (profileResult.data as ProfileRow | null)?.membership_grade ?? null,
     crazyScore:      (profileResult.data as ProfileRow | null)?.credit_score     ?? null,
     userPoints:      (profileResult.data as ProfileRow | null)?.points           ?? 0,
-    userCoupons:     (couponResult.data ?? []) as UserCouponRow[],
+    userCoupons:     filteredCoupons as UserCouponRow[],
     isServerLoaded:  rawReservations.length > 0,
     hasUserAddress,
   }
@@ -288,6 +318,7 @@ interface CartLineItem {
   returnTime:    string | null
   durationType:  string | null
   options:       CartLineItemOption[]
+  status:        string
 }
 
 interface ProfileRow {
@@ -296,17 +327,52 @@ interface ProfileRow {
   points:           number
 }
 
+// 노출 필터링 후 클라이언트로 전달되는 타입
 interface UserCouponRow {
-  id:        string
-  coupon_id: string
+  id:         string
+  coupon_id:  string
+  used_count: number
   coupons: {
-    id:             string
-    code:           string
-    discount_type:  string
-    discount_value: number
-    description:    string | null
-    valid_until:    string
+    id:                  string
+    code:                string
+    discount_type:       string
+    discount_value:      number
+    description:         string | null
+    valid_until:         string | null
+    min_purchase_amount: number
+    min_rental_amount:   number
+    min_rental_days:     number
   } | null
+}
+
+// 쿠폰 조회 raw 타입 (필터링 전)
+interface RawCouponFields {
+  id:                   string
+  code:                 string
+  discount_type:        string
+  discount_value:       number
+  description:          string | null
+  is_active:            boolean
+  deleted_at:           string | null
+  valid_from:           string | null
+  valid_until:          string | null
+  user_grade_required:  string | null
+  usage_limit:          number
+  usage_count:          number
+  total_usage_limit:    number | null
+  is_first_rental_only: boolean
+  is_student_only:      boolean
+  is_subscription_only: boolean
+  is_walk_in_only:      boolean
+  min_purchase_amount:  number
+  min_rental_amount:    number
+  min_rental_days:      number
+}
+interface RawUserCouponRow {
+  id:         string
+  coupon_id:  string
+  used_count: number
+  coupons:    RawCouponFields | null
 }
 
 interface DeliveryOptionRow {
