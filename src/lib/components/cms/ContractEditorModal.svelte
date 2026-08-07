@@ -100,7 +100,7 @@
 
         <div class="field-section">
           <p class="section-label">계약서 본문</p>
-          <CmsContentEditor bind:blocks bind:keywords />
+          <CmsContentEditor bind:blocks bind:keywords documentStyle />
         </div>
 
         <div class="field-section">
@@ -195,6 +195,7 @@
 
   .modal-body {
     flex: 1;
+    min-height: 0;
     overflow-y: auto;
     padding: 20px;
     display: flex;

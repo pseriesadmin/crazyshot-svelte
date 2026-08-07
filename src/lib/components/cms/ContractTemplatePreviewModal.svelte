@@ -160,22 +160,24 @@
           {/each}
         </div>
 
-        <!-- 우측: 미리보기 -->
+        <!-- 우측: 미리보기 (문서 뷰어) -->
         <div class="preview-pane">
           {#if !selectedTemplate}
             <div class="preview-empty">양식을 선택하세요.</div>
           {:else}
-            <div class="preview-title">{selectedTemplate.title}</div>
-            <div class="preview-content">
-              {#each previewBlocks as block (block)}
-                {#if block.type === 'text'}
-                  <div class="preview-block">{@html block.html}</div>
-                {:else if block.type === 'html'}
-                  <div class="preview-block">{@html block.content}</div>
-                {:else if block.type === 'divider'}
-                  <hr class="preview-divider" />
-                {/if}
-              {/each}
+            <div class="doc-page">
+              <div class="preview-title">{selectedTemplate.title}</div>
+              <div class="preview-content">
+                {#each previewBlocks as block (block)}
+                  {#if block.type === 'text'}
+                    <div class="preview-block">{@html block.html}</div>
+                  {:else if block.type === 'html'}
+                    <div class="preview-block">{@html block.content}</div>
+                  {:else if block.type === 'divider'}
+                    <hr class="preview-divider" />
+                  {/if}
+                {/each}
+              </div>
             </div>
           {/if}
         </div>
@@ -212,7 +214,7 @@
   .modal-wrap {
     background: var(--cs-white);
     border-radius: var(--cms-radius-sm);
-    width: 860px;
+    width: 960px;
     max-width: 100%;
     max-height: calc(100vh - 48px);
     display: flex;
@@ -311,12 +313,14 @@
   .tpl-item:hover    { background: var(--cs-surface-gray); }
   .tpl-item.selected { background: var(--cs-purple-op10); color: var(--cs-purple); }
 
-  /* 우측 미리보기 */
+  /* 우측 미리보기 — 문서 뷰어 (실제 계약서처럼 종이 카드로 표시) */
   .preview-pane {
     flex: 1;
     overflow-y: auto;
     display: flex;
     flex-direction: column;
+    background: var(--cs-surface-gray);
+    padding: 28px 24px;
   }
   .preview-empty {
     flex: 1;
@@ -326,25 +330,35 @@
     font: var(--text-pc-body-14);
     color: var(--cs-text-light);
   }
+
+  /* 종이 문서 카드 */
+  .doc-page {
+    width: 100%;
+    max-width: 620px;
+    margin: 0 auto;
+    background: var(--cs-white);
+    box-shadow: 0 1px 2px rgba(16,11,50,0.06), 0 10px 28px rgba(16,11,50,0.10);
+    padding: 44px 52px 60px;
+  }
   .preview-title {
-    padding: 14px 20px 0;
-    font: var(--text-pc-title-16);
+    padding: 0 0 18px;
+    margin: 0 0 22px;
+    font: var(--text-pc-title-18);
     font-weight: 700;
     color: var(--cs-text);
-    border-bottom: 1px solid var(--cs-lilac);
-    padding-bottom: 12px;
-    flex-shrink: 0;
+    border-bottom: 2px solid var(--cs-text);
+    text-align: center;
   }
   .preview-content {
-    padding: 16px 20px 20px;
+    padding: 0;
     display: flex;
     flex-direction: column;
-    gap: 12px;
+    gap: 16px;
   }
   .preview-block {
     font: var(--text-pc-body-14);
     color: var(--cs-text);
-    line-height: 1.7;
+    line-height: 1.9;
   }
   .preview-block :global(table.cs-contract-table) {
     width: 100%;
