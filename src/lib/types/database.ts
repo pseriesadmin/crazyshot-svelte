@@ -28,15 +28,17 @@ export type AssetStatusEnum =
 
 export type DurationTypeEnum = '12h' | '24h' | 'purchase' | 'monthly';
 
+// rental_reservations_status_check CHECK 제약조건 기준 (2026-08-05 stage 실측)
 export type ReservationStatusEnum =
-  | 'hold' | 'confirmed' | 'in_use' | 'returned'
-  | 'cancelled' | 'overdue' | 'damaged' | 'disputed';
+  | 'draft' | 'pending' | 'hold' | 'confirmed' | 'active'
+  | 'shipped' | 'in_use' | 'return_requested' | 'returned'
+  | 'completed' | 'cancelled' | 'damage_claimed';
 
 export type PaymentStatusEnum =
   | 'pending' | 'completed' | 'failed' | 'refunded' | 'partial_refund';
 
 export type ShipmentMethodEnum =
-  | 'crazydelivery' | 'quick' | 'locker' | 'visit' | 'epost' | 'airport';
+  | 'crazydelivery' | 'quick' | 'locker' | 'visit' | 'epost' | 'cj' | 'airport';
 
 export type ShipmentStatusEnum =
   | 'preparing' | 'shipped' | 'in_transit' | 'delivered' | 'pickup_ready' | 'failed';
@@ -228,32 +230,31 @@ export type CartItemUpdate = Partial<CartItemInsert>;
 // ★ M2: RENTAL RESERVATION MODULE
 // =============================================================================
 
+// Migration 166(reservation_redesign_child_products) 이후 실제 스키마 기준
+// (2026-08-05 stage=ezyvffjvuwmtuhpxdjrw / production=vnbpmvxruyciuuaermyh 컬럼 직접 대조)
+// ⚠️ deleted_at 컬럼 없음 — soft delete 미지원 테이블. .is('deleted_at', null) 필터 절대 금지.
 export interface RentalReservation {
-  id: string;                          // UUID PK
-  user_id: string;                     // FK auth.users.id
-  asset_id: string;                    // FK assets.id
-  order_id: string | null;             // FK orders.id (post-checkout)
-  status: ReservationStatusEnum;
-  rental_start_date: string;           // date
-  rental_end_date: string;             // date
-  actual_pickup_date: string | null;
-  actual_return_date: string | null;
-  pickup_method: ShipmentMethodEnum;
-  return_method: ShipmentMethodEnum;
+  id: number;                          // BIGINT PK (identity, nextval)
+  user_id: string;                     // UUID — FK auth.users.id / user_profiles.id
+  product_id: string;                  // UUID — FK products.id (자식/재고단위 상품)
+  asset_id: number | null;             // BIGINT — Migration 166 이전 레거시 컬럼, 현재 미사용
+  status: ReservationStatusEnum | null;
+  start_date: string | null;           // date — draft(날짜 미정 임시예약)는 null 허용
+  end_date: string | null;             // date
+  rental_days: number | null;
+  duration_type: string | null;        // '12h' | '24h' | '1day' | 'monthly'
+  reservation_code: string | null;
+  pickup_method: ShipmentMethodEnum | null;
+  return_method: ShipmentMethodEnum | null;
   pickup_time: string | null;
   return_time: string | null;
-  pickup_point_id: string | null;      // FK pickup_points.id
-  return_point_id: string | null;      // FK pickup_points.id
-  hold_expiration_at: string | null;   // timestamptz — 10분 hold 만료
-  damage_reported: boolean;
-  damage_notes: string | null;
+  notes: string | null;
   created_at: string;
   updated_at: string;
-  deleted_at: string | null;
 }
 
 export type RentalReservationInsert = Omit<RentalReservation, 'id' | 'created_at' | 'updated_at'> & {
-  id?: string; created_at?: string; updated_at?: string;
+  id?: number; created_at?: string; updated_at?: string;
 };
 export type RentalReservationUpdate = Partial<RentalReservationInsert>;
 
