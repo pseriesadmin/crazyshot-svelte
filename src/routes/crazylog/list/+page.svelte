@@ -40,7 +40,12 @@
 
   function onTabClick(tab: Tab) {
     activeTab = tab
-    goto(`?tab=${tab}`, { replaceState: true })
+    // 검색 중이면 탭만 바꾸고 URL 이동 없음 — 검색 API에서 log_type으로 필터
+    if (!searchQuery.trim()) {
+      goto(`?tab=${tab}`, { replaceState: true })
+    } else {
+      triggerSearch(searchQuery, tab)
+    }
   }
 
   const PC_STAT_TABS: { label: string; tab: Tab; countKey: 'review' | 'share' | 'promo' }[] = [
@@ -61,6 +66,78 @@
     window.addEventListener('scroll', onScroll, { passive: true })
     return () => window.removeEventListener('scroll', onScroll)
   })
+
+  // ── 검색 상태 ─────────────────────────────────────────────────────────────
+  // data.posts와 동일한 shape으로 정규화해 템플릿을 공유한다
+
+  interface ApiSearchResult {
+    id: string
+    title: string
+    category: string
+    author: string
+    thumbnail_url: string | null
+    created_at: string
+  }
+
+  let searchQuery   = $state('')
+  let isSearching   = $state(false)
+  // data.posts와 동일 타입으로 정규화된 검색 결과 저장
+  let searchResults = $state<typeof data.posts>([])
+  let searchError   = $state(false)
+  let debounceTimer: ReturnType<typeof setTimeout> | null = null
+
+  // 검색 중이면 서버 데이터 대신 검색 결과 표시
+  const displayPosts = $derived(
+    searchQuery.trim() ? searchResults : data.posts
+  )
+
+  function onSearchInput(e: Event) {
+    const val = (e.target as HTMLInputElement).value
+    searchQuery = val
+    if (debounceTimer) clearTimeout(debounceTimer)
+    if (!val.trim()) {
+      searchResults = []
+      searchError = false
+      return
+    }
+    debounceTimer = setTimeout(() => triggerSearch(val.trim(), activeTab), 280)
+  }
+
+  async function triggerSearch(q: string, tab: Tab) {
+    isSearching = true
+    searchError = false
+    try {
+      const logType = tab !== '전체' ? tab : null
+      const params  = new URLSearchParams({ q, limit: '30' })
+      if (logType) params.set('log_type', logType)
+
+      const res  = await fetch(`/api/search/crazylog?${params}`)
+      if (!res.ok) throw new Error(`HTTP ${res.status}`)
+      const body = await res.json() as { results: ApiSearchResult[] }
+
+      // API 응답(snake_case)을 data.posts 형태(camelCase)로 정규화 — 템플릿 공유
+      searchResults = (body.results ?? []).map((r) => ({
+        id:           r.id,
+        title:        r.title,
+        logType:      r.category,
+        createdAt:    r.created_at,
+        author:       r.author,
+        thumbnailUrl: r.thumbnail_url ?? null,
+      }))
+    } catch {
+      searchError   = true
+      searchResults = []
+    } finally {
+      isSearching = false
+    }
+  }
+
+  function clearSearch() {
+    searchQuery   = ''
+    searchResults = []
+    searchError   = false
+    if (debounceTimer) clearTimeout(debounceTimer)
+  }
 </script>
 
 <!-- ══════════════════════════════════════════════════════════════
@@ -71,7 +148,7 @@
 <div class="list-root">
   <div class="list-wrap">
 
-    <!-- ② 공통: TabMenu ──────────────────────────────────────── -->
+    <!-- ② 공통: TabMenu + 검색창 ───────────────────────────── -->
     <div class="tab-section">
       <div class="tab-inner">
         {#each TABS as tab}
@@ -83,6 +160,33 @@
             {tab}
           </button>
         {/each}
+      </div>
+      <!-- 검색 입력 (모바일 전용: tab-section 내, PC는 pc-search-wrap에서 별도 노출) -->
+      <div class="search-wrap">
+        <div class="search-bar">
+          <svg class="search-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+            <circle cx="11" cy="11" r="8" stroke="currentColor" stroke-width="2"/>
+            <path d="M21 21l-4.35-4.35" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+          </svg>
+          <input
+            type="search"
+            class="search-input"
+            placeholder="로그 검색..."
+            value={searchQuery}
+            oninput={onSearchInput}
+            aria-label="크레이지로그 검색"
+          />
+          {#if searchQuery}
+            <button class="search-clear" onclick={clearSearch} aria-label="검색어 지우기">✕</button>
+          {/if}
+        </div>
+        {#if isSearching}
+          <p class="search-status">검색 중...</p>
+        {:else if searchQuery && searchResults.length === 0 && !searchError}
+          <p class="search-status">"{searchQuery}"에 대한 결과가 없습니다.</p>
+        {:else if searchError}
+          <p class="search-status search-status-error">검색 중 오류가 발생했습니다.</p>
+        {/if}
       </div>
     </div>
 
@@ -106,10 +210,10 @@
     <!-- ④ 모바일 전용: MobileContentList ────────────────────── -->
     <div class="m-content">
       <div class="m-posts">
-        {#if data.posts.length === 0}
-          <p class="m-empty">아직 등록된 로그가 없습니다.</p>
+        {#if displayPosts.length === 0 && !isSearching}
+          <p class="m-empty">{searchQuery ? '검색 결과가 없습니다.' : '아직 등록된 로그가 없습니다.'}</p>
         {:else}
-          {#each data.posts as post (post.id)}
+          {#each displayPosts as post (post.id)}
             <a href="/crazylog/view/{post.id}" class="m-post-card">
               {#if post.thumbnailUrl}
                 <div class="m-post-thumb">
@@ -131,26 +235,55 @@
     <div class="pc-content">
       <div class="pc-inner">
 
-        <!-- PcIndexBar -->
-        <div class="pc-index-bar">
-          {#each PC_STAT_TABS as stat}
-            <button
-              class="pc-stat-pill"
-              class:pc-stat-pill-active={activeTab === stat.tab}
-              onclick={() => onTabClick(stat.tab)}
-            >
-              <span class="pc-stat-label">{stat.label}</span>
-              <span class="pc-stat-count-pill">{data.counts[stat.countKey]}</span>
-            </button>
-          {/each}
+        <!-- PcIndexBar + PC 검색창 -->
+        <div class="pc-top-bar">
+          <div class="pc-index-bar">
+            {#each PC_STAT_TABS as stat}
+              <button
+                class="pc-stat-pill"
+                class:pc-stat-pill-active={activeTab === stat.tab}
+                onclick={() => onTabClick(stat.tab)}
+              >
+                <span class="pc-stat-label">{stat.label}</span>
+                <span class="pc-stat-count-pill">{data.counts[stat.countKey]}</span>
+              </button>
+            {/each}
+          </div>
+          <!-- PC 전용 검색창 -->
+          <div class="pc-search-wrap">
+            <div class="search-bar pc-search-bar">
+              <svg class="search-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                <circle cx="11" cy="11" r="8" stroke="currentColor" stroke-width="2"/>
+                <path d="M21 21l-4.35-4.35" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+              </svg>
+              <input
+                type="search"
+                class="search-input"
+                placeholder="로그 검색..."
+                value={searchQuery}
+                oninput={onSearchInput}
+                aria-label="크레이지로그 검색"
+              />
+              {#if searchQuery}
+                <button class="search-clear" onclick={clearSearch} aria-label="검색어 지우기">✕</button>
+              {/if}
+            </div>
+            {#if isSearching}
+              <p class="search-status">검색 중...</p>
+            {:else if searchQuery && searchResults.length === 0 && !searchError}
+              <p class="search-status">"{searchQuery}"에 대한 결과가 없습니다.</p>
+            {:else if searchError}
+              <p class="search-status search-status-error">검색 중 오류가 발생했습니다.</p>
+            {/if}
+          </div>
         </div>
 
         <!-- PC 포스트 목록 -->
         <div class="pc-posts">
-          {#if data.posts.length === 0}
-            <p class="pc-empty">아직 등록된 로그가 없습니다.</p>
+          {#if displayPosts.length === 0 && !isSearching}
+            <p class="pc-empty">{searchQuery ? '검색 결과가 없습니다.' : '아직 등록된 로그가 없습니다.'}</p>
           {:else}
-            {#each data.posts as post (post.id)}
+            {#each displayPosts as post (post.id)}
               <a href="/crazylog/view/{post.id}" class="pc-post">
                 <div class="pc-bar" style="background: {barColor(post.logType)}"></div>
                 <div class="pc-text">
@@ -204,6 +337,9 @@
   .tab-section {
     width: 100%;
     padding: 50px 25px 0;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
   }
   @media (min-width: 768px) {
     .tab-section { display: none; }
@@ -237,6 +373,71 @@
   .tab-btn-active {
     background: var(--cs-purple-dark);
     color: var(--cs-white);
+  }
+
+  /* ── 검색창 공통 ──────────────────────────────────────────── */
+  .search-wrap {
+    width: 100%;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+  .search-bar {
+    display: flex;
+    align-items: center;
+    background: var(--cs-white);
+    border: 1.5px solid var(--cs-lilac);
+    border-radius: var(--radius-xl);
+    padding: 0 16px;
+    gap: 8px;
+    height: 44px;
+    transition: border-color 0.15s;
+  }
+  .search-bar:focus-within {
+    border-color: var(--cs-purple);
+  }
+  .search-icon {
+    color: var(--cs-text-mid);
+    flex-shrink: 0;
+  }
+  .search-input {
+    flex: 1;
+    border: none;
+    outline: none;
+    font-family: 'Noto Sans KR', sans-serif;
+    font-size: 14px;
+    color: var(--cs-text);
+    background: transparent;
+    min-width: 0;
+  }
+  .search-input::placeholder {
+    color: var(--cs-text-light);
+  }
+  /* native search clear 버튼 숨김 */
+  .search-input::-webkit-search-cancel-button { display: none; }
+  .search-clear {
+    flex-shrink: 0;
+    background: none;
+    border: none;
+    cursor: pointer;
+    color: var(--cs-text-mid);
+    font-size: 12px;
+    padding: 4px;
+    min-height: 24px;
+    min-width: 24px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .search-status {
+    font-family: 'Noto Sans KR', sans-serif;
+    font-size: 12px;
+    color: var(--cs-text-mid);
+    margin: 0;
+    padding: 0 4px;
+  }
+  .search-status-error {
+    color: var(--cs-error, #e53e3e);
   }
 
   /* ── WriteCtaCard (모바일 전용) ───────────────────────────── */
@@ -393,8 +594,26 @@
     gap: 50px;
   }
 
+  /* PC 상단 바 (인덱스 + 검색창) */
+  .pc-top-bar {
+    display: flex;
+    align-items: flex-start;
+    gap: 16px;
+  }
+  .pc-search-wrap {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    flex-shrink: 0;
+    width: 260px;
+  }
+  .pc-search-bar {
+    height: 44px;
+  }
+
   /* PcIndexBar */
   .pc-index-bar {
+    flex: 1;
     display: flex;
     gap: 10px;
   }

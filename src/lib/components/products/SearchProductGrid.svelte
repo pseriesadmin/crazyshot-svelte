@@ -14,11 +14,14 @@
   interface Props {
     title?: string
     products?: Product[]
+    /** G-3: 상품 클릭 시 호출 — recordSearchClick 배선용 */
+    onProductClick?: (productId: string) => void
   }
 
   let {
     title = '검색 해봄',
     products = [],
+    onProductClick,
   }: Props = $props()
 
   let expanded = $state(true)
@@ -35,15 +38,18 @@
     {#if expanded}
       <div class="product-grid">
         {#each products as p (p.id)}
-          <ProductDPCard
-            id={String(p.id)}
-            name={p.name}
-            category={p.category}
-            imageUrl={p.img}
-            price24h={p.price24h ?? null}
-            price12h={p.price12h ?? null}
-            href={p.href ?? `/products/${p.id}`}
-          />
+          <!-- svelte-ignore a11y_no_static_element_interactions -->
+          <div onclick={() => onProductClick?.(String(p.id))}>
+            <ProductDPCard
+              id={String(p.id)}
+              name={p.name}
+              category={p.category}
+              imageUrl={p.img}
+              price24h={p.price24h ?? null}
+              price12h={p.price12h ?? null}
+              href={p.href ?? `/products/${p.id}`}
+            />
+          </div>
         {/each}
       </div>
     {/if}

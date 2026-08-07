@@ -28,7 +28,14 @@ src/lib/server/searchEngine/
 
   adapters/                 ← crazyshot DB 스키마를 core가 이해하는 문서 포맷으로 변환하는 접착 코드
     productSearchIndex.ts     상품 검색 인덱스 (부모 상품만, TTL 60초 캐시, invalidateProductSearchCache())
+                              H-1(2026-08-07): components·specifications JSONB 색인 추가 (boost=3)
+                              J-2(2026-08-07): product_search_stats 학습 기반 키워드 자동승격
+                              extractContentBlocksText() — export됨 (crazylogSearchIndex가 재사용)
+                              extractJsonbKeyValues() — export됨 (JSONB key-value 텍스트 추출 공유)
     cannedResponseSearchIndex.ts  빠른답변 검색 인덱스 (TTL 60초 캐시, invalidateCannedResponseIndex())
+    crazylogSearchIndex.ts    크레이지로그 검색 인덱스 (2026-08-07 신설, §I)
+                              user_posts(published+is_public=true), TTL 60초 캐시
+                              getCrazylogSearchIndex() / invalidateCrazylogSearchCache()
 
 src/lib/server/matchCannedResponse.ts   ← 상담채팅 자동매칭 순수함수 (calls core+adapters)
 src/lib/server/synonymLearning.ts       ← 동의어 자동학습 (calls DB RPC + core/koreanTokenizer)
@@ -60,6 +67,39 @@ DB: supabase/migrations/20260806000198_198_products_search_vector_extend.sql
 캐시 무효화(FIX-1): invalidateProductSearchCache()가 상품 등록(new/+page.server.ts)·수정
   (updateSection 액션)·삭제(deleteProduct) 지점에 실제 연결되어 있음 — 값 바꿀 때 이 함수 호출부
   누락되지 않았는지 항상 확인.
+```
+
+---
+
+## 2-2. 크레이지로그 검색 연동 (`/crazylog/list`, §I, 2026-08-07 신설)
+
+```
+클라이언트: src/routes/crazylog/list/+page.svelte
+  → onSearchInput()이 280ms 디바운스 후 fetch('/api/search/crazylog?q=...&log_type=...')를 호출
+  → displayPosts = $derived(searchQuery.trim() ? searchResults : data.posts) — 단일 파생값으로 탭 전환과 검색을 함께 구동
+  → 탭 전환 시 search query가 활성 상태이면 goto() 대신 triggerSearch()를 재호출 (AND 조합)
+
+서버: src/routes/api/search/crazylog/+server.ts
+  → 순수 MiniSearch 전용 (하이브리드 RPC+MiniSearch 구조 없음 — 크레이지로그는 RPC FTS 인프라 없음)
+  → getCrazylogSearchIndex() 호출 → fuzzy:0.2, prefix:true, limit×3 과조회 후 페이징
+  → log_type 파라미터: 서버 측에서 MiniSearch 결과를 category 필드로 후필터 (AND 조합)
+  → 응답 형식: { results, query, page, limit } — 상품검색 API와 동일 구조
+
+어댑터: src/lib/server/searchEngine/adapters/crazylogSearchIndex.ts
+  → 대상: user_posts (status='published' AND is_public=true) — 비공개·초안 문서 색인 제외
+  → 저자명: user_profiles.id IN (user_ids) 로 별도 조회 후 authorMap 구성 (N+1 금지)
+  → boost: title(5) > keywords_text·tags_text(3) > content_text·category(1)
+  → content_text: extractContentBlocksText() — productSearchIndex.ts에서 재사용(export 공유)
+  → TTL 60초 모듈 스코프 캐시 + invalidateCrazylogSearchCache()
+
+테스트: src/__tests__/server/searchEngine/crazylogSearchIndex.test.ts
+  → 17개 케이스 전부 통과 (2026-08-07)
+  → published/public 필터 / fuzzy 매칭(3~4자 이상 — MiniSearch v7 max_edit = Math.round(len*0.2))
+     prefix 부분일치 / boost 우선순위 / extractContentBlocksText 재사용 검증
+
+⚠️ 2자 한국어 토큰 fuzzy 한계: Math.round(2 * 0.2) = 0 → edit distance 0 = 완전 일치만
+   3자: Math.round(3 * 0.2) = 1 → 오타 1자 허용 / 4자: Math.round(4 * 0.2) = 1 → 오타 1자 허용
+   → 짧은 브랜드명·약어 검색은 prefix:true 로 보완 (부분일치로 대체)
 ```
 
 ---
@@ -147,4 +187,6 @@ RPC: find_or_create_synonym_group(p_canonical_term), upsert_synonym_member(p_gro
 
 ---
 
-*nlsearch.md v1.0 | Harness Flow v3.2 | 2026-08-06 신설 — §A~§F 전체 구현 완료 시점 기준 정본*
+*nlsearch.md v1.1 | Harness Flow v3.2 | 2026-08-06 신설(§A~§F) | 2026-08-07 갱신(§G~§J) —
+H-1: components·specs 색인 추가 / J-2: 학습 기반 키워드 승격 / §I: 크레이지로그 검색엔진 신설
+(crazylogSearchIndex.ts + /api/search/crazylog + /crazylog/list 검색 UI + 17개 테스트 완료)*
