@@ -11,6 +11,7 @@ export const load: PageServerLoad = async () => {
     .from('products')
     .select('id, name, product_code, category, image_urls, is_active')
     .is('deleted_at', null)
+    .is('parent_product_id', null)
     .eq('is_active', true)
     .order('name', { ascending: true })
     .limit(200)
