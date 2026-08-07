@@ -88,7 +88,7 @@
     <div class="field-section">
       <p class="section-label">계약서 본문</p>
       <ContractModuleBar onInsertBlocks={insertModuleBlocks} />
-      <CmsContentEditor bind:blocks bind:keywords />
+      <CmsContentEditor bind:blocks bind:keywords documentStyle />
     </div>
 
     <div class="field-section">
@@ -170,6 +170,7 @@
     padding: 20px;
     overflow-y: auto;
     flex: 1;
+    min-height: 0;
   }
 
   .field-row {

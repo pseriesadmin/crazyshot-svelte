@@ -259,8 +259,11 @@
   /* 상세 패널 */
   .detail-pane {
     flex: 1;
+    min-height: 0;
     overflow: hidden;
     background: var(--cs-white);
+    display: flex;
+    flex-direction: column;
   }
   .detail-empty {
     display: flex;

@@ -1,6 +1,50 @@
 # GSD_LOG.md — 크레이지샷 실행 이력
 # 형식: [YYYY-MM-DD HH:MM] 타입 | 태스크명 | 파일 | 소요 | 결과
 
+[2026-08-07 18:30] ⚡GSD | NLSearch 확장 아젠다(§G~§J, §I) 전체 완료 — DB 적용 이력 소급기록 |
+  대상: 이번 세션(2026-08-06~07) NLSearch 신설 + 확장 전체 마이그레이션(198~200, 203~205)의
+  stage·production 적용 이력이 GSD_LOG에 누락되어 있어 TASK.md/실제 DB 상태 기준으로 소급 기록함.
+  ── §D MIGRATION-198(search_vector에 keywords·product_caption·content_blocks 반영) ──
+    stage 적용·검증 완료(2026-08-06, 메인 세션 Supabase MCP 직접 적용) |
+    production 적용·검증 완료(2026-08-06, Stephen 명시 승인 후 메인 세션 직접 적용)
+  ── §E SYN-2(synonym_groups/synonym_group_members 테이블+RPC 2종+'파손' 시드) ──
+    stage 적용·검증 완료(2026-08-06) | production 적용·검증 완료(2026-08-06, SYN-7-PROD, Stephen 승인)
+  ── §E SYN-13(synonym_learning_settings 튜닝 테이블, migration 200) ──
+    stage 적용·검증 완료(2026-08-06) | production 적용·검증 완료(2026-08-06, Stephen 승인)
+  ── §F FIX-1(상품검색 캐시 무효화 6곳 연결, cms/products/+page.server.ts·new/+page.server.ts) GATE C:승인 ──
+  ── §F FIX-2(로그인 세션 조회 event.locals.safeGetSession() 전환, api/search/products/+server.ts) GATE C:승인 ──
+  ── §F FIX-3(loadSynonymGroups 60초 TTL 캐시, synonymLearning.ts) GATE C:승인 ──
+  ── §F FIX-4(buildCannedResponseIndex 60초 TTL 캐시+keySignature, cannedResponseSearchIndex.ts) GATE C:승인 ──
+  ── §F FIX-6(상담세션 closed 재활성화 중복 UPDATE 제거, api/chat/message/+server.ts) GATE C:승인 ──
+  ── §G G-1~G-4(search_products RPC result_count 실매칭 재계산 + search_log_id 반환 + recordSearchClick
+     실배선, migration 203) ── stage 적용·검증 완료(2026-08-07, "Canon" 검색 result_count=3 실측 확인) |
+     production 적용·검증 완료(2026-08-07, Stephen 승인). ⚠️ RETURNS TABLE 컬럼 추가는 Postgres
+     42P13(반환타입 변경)로 CREATE OR REPLACE 불가 — DROP FUNCTION 선행 필요함을 실제 적용 중 확인,
+     마이그레이션 파일에도 반영해둠(향후 RETURNS TABLE 확장 시 참고)
+  ── §H H-1(productSearchIndex.ts에 components·specifications 색인 추가, boost=3) GATE C:승인 ──
+  ── §H H-2(search_vector 트리거에 components·specifications 반영, migration 204) ── stage 적용·검증
+     완료(2026-08-07, 임시 components={"배터리":"2개"} → search_vector 매칭 확인 후 ROLLBACK) |
+     production 적용·검증 완료(2026-08-07, Stephen 승인)
+  ── §I I-1~I-4(크레이지로그 검색엔진 신설 — crazylogSearchIndex.ts, api/search/crazylog/+server.ts,
+     crazylog/list 검색 UI, 유닛테스트 17개) GATE C:불필요(전부 BOUNDARY, 자동완료) ──
+  ── §J J-1(search_learning_settings 싱글턴 튜닝 테이블, migration 205) ── stage 적용·검증
+     완료(2026-08-07, promote_threshold=3 기본값 확인) | production 적용·검증 완료(2026-08-07, Stephen 승인)
+  ── §J J-2~J-3(product_search_stats 클릭통계 기반 검색어→상품 키워드 자동승격,
+     productSearchIndex.ts + searchLearning.test.ts 24개) GATE C:승인(위 상단 항목의 최종 승인 상태) ──
+  ── DOC-1(.claude/rules-ref/nlsearch.md v1.1 갱신 — 크레이지로그 어댑터·§G~§J 반영) GATE C:불필요 ──
+  종합: 이번 아젠다 전 태스크(§D 후속 SYN 시리즈 포함 총 30여개) stage+production 양쪽 DB 적용·검증
+  완료. Vercel 배포(stage dpl_3bPLtBz5.../production dpl_9TpGFphb...) 둘 다 READY 확인됨(별도 배포
+  점검 기록 참고). 코드(TS) 커밋은 부분적으로 완료(150da4f 등) — 이번 §G~§J 신규 코드는 아직 커밋 전.
+
+[2026-08-07 16:20] GSD | J-2: productSearchIndex.ts 학습 검색어 확장 |
+  src/lib/server/searchEngine/adapters/productSearchIndex.ts |
+  loadPromoteThreshold(service_role TTL60s) + loadLearnedSearchTerms(anon) 신설,
+  getProductSearchIndex() 병렬 조회 + keywords_text 병합, invalidateProductSearchCache() 확장 |
+  GATE C: 승인 완료 (Stephen 확인 — 임계값 3회, MiniSearch 폴백 전용 반영 둘 다 의도대로)
+[2026-08-07 16:20] GSD | J-3: searchLearning.test.ts 유닛테스트 신설 |
+  src/__tests__/server/searchEngine/searchLearning.test.ts |
+  24개 테스트 (promote_threshold 분기·keyword 병합·extractJsonbKeyValues·캐시·폴백) 전원 통과 |
+  GATE C: 승인 완료
 [2026-08-06] AUDIT | AUDIT-4 최종 종합 — CMS 백오피스 전역 정밀 검증(AUDIT v2) 전체 완료 |
   산출: .claude/harness/learnings/cms_full_audit_2026-08-06.md(신규), TASK.md BACKLOG 15건 등록 |
   총괄: CRITICAL 0건(기해결 2건), BOUNDARY 4건, ROUTINE 11건
@@ -1437,3 +1481,42 @@
   - production: dpl_GRMtmjUzYwb4ddkUdoxsT6GgMMmR (PR#87 머지 de1a0ae) → READY(재조회로 확정, 빌드 ~38초, 에러 0건)
   - SSOT: Vercel API 상태(GitHub Actions 상태 아님) 기준 검증 원칙 재적용
     Stephen 확인 필요 → TASK.md DATA-4 참고
+
+[2026-08-07] GSD | CMS 예약(계약서) 정합성 검증 + 계약서 에디터 스크롤·기능 보완 | 6개 파일 | GATE E 대기
+  검증(정합성): RentalDetailPanel/rentalTransition.ts의 nextStatus·nextLabel·AUTO_NOTIFY·
+    NOTIFY_TYPE_MAP·계약서 편집버튼 노출조건 모두 rental-lifecycle.md 문서와 일치(불일치 0건).
+  BUG-1(데이터 자동삽입): contract-data/+server.ts — {{부가세}} 가 orders.tax_amount 실컬럼
+    존재(Stage DB information_schema로 실측 확인)에도 항상 '-' 하드코딩돼 있던 버그 수정
+    (select에 tax_amount 추가 + formatAmount 적용). rental-lifecycle.md 변수표도 함께 정정
+    (기본대여요금 소스가 존재하지 않는 orders.base_amount로 잘못 기재돼 있던 것 → total_amount).
+  BUG-2(스크롤): ContractEditorModal.svelte .modal-body — flex:1인데 min-height:0 누락으로
+    콘텐츠가 90vh를 넘으면 스크롤 대신 부모 overflow:hidden에 잘려 안 보이던 버그(형제 컴포넌트
+    ContractTemplatePreviewModal은 min-height:0 있어 정상이었음, 대조로 확정) → 한 줄 수정.
+  FEAT-1(HTML 붙여넣기): CmsContentEditor.svelte HTML 블록 — 기본 textarea 붙여넣기는 클립보드
+    text/plain만 사용해 외부 웹페이지 복사 시 태그·표·스타일이 전부 사라지던 문제 → onpaste에서
+    clipboardData의 text/html을 직접 읽어 원문 삽입하도록 수정(handleHtmlPaste).
+  FEAT-2(표 삽입): CmsContentEditor.svelte 툴바에 "표" 버튼 신규 — 행/열 입력 모달로 커스텀
+    편집 가능 표를 삽입(ContractModuleBar 프리셋 2종과 별개로 임의 표 작성 가능해짐).
+  FEAT-3(문서형 미리보기): ContractTemplatePreviewModal.svelte 미리보기 패널을 종이 문서 카드
+    스타일로 개편(회색 배경+흰 카드+그림자+여백). CmsContentEditor.svelte에는 옵트인
+    documentStyle prop 추가(기본 false=기존 동작 무변화) → ContractEditorModal·
+    ContractTemplatePanel 두 계약서 에디터 진입점에만 documentStyle 적용, 상품설명·크레이지로그
+    에디터는 영향 없음.
+  svelte-check: 터치 파일 기준 신규 에러 0건(전체 1건은 미터치 파일 products/search/+page.svelte 기존 이슈)
+
+[2026-08-07] FIX | 계약서 스크롤 버그 재조사 — Stephen 재현 확인 후 실제 원인 추가 수정 | 2개 파일 | GATE E 대기
+  1차 수정(ContractEditorModal.svelte)은 실재하는 버그였으나 Stephen이 실제로 열어본 화면은
+  /cms/reservation/contracts(계약서 양식 관리, "데이터 자동 삽입" 모듈바가 있는 화면)였음 —
+  거기서 여전히 재현됨을 보고받고 flex 조상 체인을 처음부터 끝까지 다시 추적해 진짜 원인 확정.
+  BUG(진짜 원인): contracts/+page.svelte .detail-pane — display:flex 가 누락돼 있어 자식인
+    ContractTemplatePanel의 .template-panel(flex:1)이 flex 아이템으로 인식되지 않고 그냥
+    height:auto로 내용만큼 늘어난 뒤 .detail-pane의 overflow:hidden에 잘림(스크롤 자체가
+    발생할 수 없는 상태) → display:flex; flex-direction:column; min-height:0 추가.
+  BUG(2단계): ContractTemplatePanel.svelte form — flex:1인데 min-height:0 누락(1차 수정 때
+    발견한 ContractEditorModal .modal-body와 동일 패턴의 버그, 이 컴포넌트에서도 별도로 존재)
+    → min-height:0 추가. 이 두 개가 함께 있어야 실제로 스크롤이 동작함.
+  검증: /cms/+layout.svelte(.cms-main) → contracts/+page.svelte(.contracts-page→.master-detail→
+    .detail-pane) → ContractTemplatePanel(.template-panel→form) 전체 체인을 min-height:0/
+    display:flex 기준으로 재점검 — 이제 끊긴 구간 없음. "+ 작성"(.editor-full 경로)은 원래도
+    정상이었으나 form의 min-height:0 누락은 그 경로에도 있었으므로 같이 해소됨.
+  svelte-check: 신규 에러 0건

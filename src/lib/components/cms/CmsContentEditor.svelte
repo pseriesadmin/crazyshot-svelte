@@ -14,9 +14,15 @@
     blocks: ContentBlock[]
     keywords: string[]
     hideMediaToolbar?: boolean
+    documentStyle?: boolean
   }
 
-  let { blocks = $bindable([]), keywords = $bindable([]), hideMediaToolbar = false }: Props = $props()
+  let {
+    blocks = $bindable([]),
+    keywords = $bindable([]),
+    hideMediaToolbar = false,
+    documentStyle = false,
+  }: Props = $props()
 
   // ── 상태 ────────────────────────────────────────────
   let focusedEditorEl = $state<HTMLDivElement | null>(null)
@@ -104,8 +110,59 @@
     insertBlock(makeEmptyHtmlBlock())
   }
 
+  // ── HTML 블록 붙여넣기 — 외부 사이트에서 복사한 서식(HTML)을 그대로 보존 ──
+  // 기본 <textarea> 붙여넣기는 클립보드의 text/plain만 사용해 태그·스타일이 전부 사라짐.
+  // 클립보드에 text/html이 있으면(외부 웹페이지 복사 시 항상 함께 담김) 그 원문을
+  // 직접 읽어 커서 위치에 삽입 — 표·스타일 등 서식이 있는 그대로 저장/렌더링된다.
+  function handleHtmlPaste(i: number, e: ClipboardEvent) {
+    const html = e.clipboardData?.getData('text/html')
+    if (!html) return
+    e.preventDefault()
+    const el = e.currentTarget as HTMLTextAreaElement
+    const start = el.selectionStart
+    const end = el.selectionEnd
+    const current = (blocks[i] as { content: string }).content
+    const nextContent = current.slice(0, start) + html + current.slice(end)
+    const next = [...blocks]
+    next[i] = { type: 'html', content: nextContent }
+    blocks = next
+    const caret = start + html.length
+    requestAnimationFrame(() => {
+      el.selectionStart = el.selectionEnd = caret
+    })
+  }
+
   function addDivider() {
     insertBlock(makeEmptyDividerBlock())
+  }
+
+  // ── 표 삽입 ────────────────────────────────────────
+  let showTableModal = $state(false)
+  let tableRows = $state(3)
+  let tableCols = $state(2)
+
+  function buildTableHtml(rows: number, cols: number): string {
+    const cellStyle = 'padding:6px 10px;border:1px solid #ddd;'
+    const headStyle = cellStyle + 'background:#f6f6f6;font-weight:700;text-align:left;'
+    let trs = ''
+    for (let r = 0; r < rows; r++) {
+      let tds = ''
+      for (let c = 0; c < cols; c++) {
+        const tag = r === 0 ? 'th' : 'td'
+        const style = r === 0 ? headStyle : cellStyle
+        const label = r === 0 ? `항목${c + 1}` : ''
+        tds += `<${tag} style="${style}">${label}</${tag}>`
+      }
+      trs += `<tr>${tds}</tr>`
+    }
+    return `<table class="cs-contract-table" style="width:100%;border-collapse:collapse;"><tbody>${trs}</tbody></table>`
+  }
+
+  function insertTable() {
+    const rows = Math.min(20, Math.max(1, tableRows || 1))
+    const cols = Math.min(10, Math.max(1, tableCols || 1))
+    insertBlock({ type: 'text', html: buildTableHtml(rows, cols) })
+    showTableModal = false
   }
 
   // ── 텍스트 서식 (execCommand) ───────────────────────
@@ -289,6 +346,7 @@
       showPreview = false
       showPhotoModal = false
       showClearConfirm = false
+      showTableModal = false
       if (showLinkInput) cancelLink()
     }
   }
@@ -447,6 +505,10 @@
     <button type="button" class="tb-btn" onclick={addHtml} title="HTML 붙여넣기">
       <span class="tb-icon">{`</>`}</span>
       <span class="tb-label">HTML</span>
+    </button>
+    <button type="button" class="tb-btn" onclick={() => (showTableModal = true)} title="표 삽입">
+      <span class="tb-icon">▦</span>
+      <span class="tb-label">표</span>
     </button>
     <button type="button" class="tb-btn" onclick={addDivider} title="구분선 삽입">
       <span class="tb-icon">──</span>
@@ -760,6 +822,7 @@
                 next[i] = { type: 'html', content: (e.currentTarget as HTMLTextAreaElement).value }
                 blocks = next
               }}
+              onpaste={(e) => handleHtmlPaste(i, e)}
               rows={5}
               aria-label="HTML 입력"
               spellcheck={false}
@@ -894,6 +957,32 @@
   </div>
 {/if}
 
+<!-- ⑤-1 표 삽입 모달 -->
+{#if showTableModal}
+  <div
+    class="modal-backdrop"
+    role="presentation"
+    onclick={() => (showTableModal = false)}
+  >
+    <div class="table-modal" role="dialog" aria-modal="true" aria-labelledby="table-modal-title" tabindex="-1" onclick={(e) => e.stopPropagation()} onkeydown={(e) => e.stopPropagation()}>
+      <button type="button" class="modal-close" onclick={() => (showTableModal = false)} aria-label="닫기">✕</button>
+      <h3 class="modal-title" id="table-modal-title">표 삽입</h3>
+      <p class="modal-sub">행·열 개수를 정하면 편집 가능한 표가 삽입됩니다. 첫 행은 제목 행입니다.</p>
+      <div class="table-size-row">
+        <label class="table-size-field">
+          <span>행</span>
+          <input type="number" min="1" max="20" bind:value={tableRows} />
+        </label>
+        <label class="table-size-field">
+          <span>열</span>
+          <input type="number" min="1" max="10" bind:value={tableCols} />
+        </label>
+      </div>
+      <button type="button" class="btn-action table-insert-btn" onclick={insertTable}>표 삽입</button>
+    </div>
+  </div>
+{/if}
+
 <!-- ⑥ 모두삭제 확인 모달 -->
 {#if showClearConfirm}
   <div
@@ -919,12 +1008,13 @@
     role="presentation"
     onclick={() => (showPreview = false)}
   >
-    <div class="preview-modal" role="dialog" aria-modal="true" aria-label="콘텐츠 미리보기" tabindex="-1" onclick={(e) => e.stopPropagation()} onkeydown={(e) => e.stopPropagation()}>
+    <div class="preview-modal" class:preview-doc={documentStyle} role="dialog" aria-modal="true" aria-label="콘텐츠 미리보기" tabindex="-1" onclick={(e) => e.stopPropagation()} onkeydown={(e) => e.stopPropagation()}>
       <div class="preview-header">
         <span class="preview-title">미리보기</span>
         <button type="button" class="modal-close" onclick={() => (showPreview = false)} aria-label="미리보기 닫기">✕</button>
       </div>
-      <div class="preview-body">
+      <div class="preview-body" class:preview-body-doc={documentStyle}>
+        <div class="doc-page-wrap" class:doc-page={documentStyle}>
         {#each blocks as block, i}
           {#if block.type === 'text'}
             <div class="pv-text">
@@ -991,6 +1081,7 @@
             {/each}
           </div>
         {/if}
+      </div>
       </div>
     </div>
   </div>
@@ -1766,6 +1857,43 @@
   .lt-dot { width: 6px; height: 6px; border-radius: 50%; background: #CCCCCC; }
   .lt-dot.active { background: var(--cs-purple); }
 
+  /* ── 표 삽입 모달 ──────────────────────────────────── */
+  .table-modal {
+    position: relative;
+    background: var(--cs-white);
+    border-radius: var(--cms-radius-lg);
+    padding: 28px 32px;
+    width: 360px;
+    max-width: calc(100vw - 40px);
+    text-align: center;
+  }
+  .table-size-row {
+    display: flex;
+    gap: 16px;
+    justify-content: center;
+    margin-bottom: 20px;
+  }
+  .table-size-field {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 4px;
+    font: var(--text-pc-script-12);
+    color: var(--cs-text-mid);
+  }
+  .table-size-field input {
+    width: 72px;
+    height: 34px;
+    padding: 0 10px;
+    border: 1px solid #ECEBF4;
+    border-radius: var(--radius-sm);
+    font: var(--text-pc-body-14);
+    color: var(--cs-text);
+    outline: none;
+  }
+  .table-size-field input:focus { border-color: var(--cs-purple); }
+  .table-insert-btn { width: 100%; justify-content: center; }
+
   /* ── 미리보기 모달 ─────────────────────────────────── */
   .preview-modal {
     position: relative;
@@ -1800,6 +1928,34 @@
     display: flex;
     flex-direction: column;
     gap: 16px;
+  }
+
+  /* documentStyle 옵트인 — 계약서 등 문서형 미리보기 전용 (기본 false는 레이아웃 무변화) */
+  .preview-modal.preview-doc {
+    width: 720px;
+  }
+  .preview-body-doc {
+    padding: 28px 24px;
+    background: var(--cs-surface-gray);
+    gap: 0;
+  }
+  .doc-page-wrap {
+    display: contents;
+  }
+  .doc-page-wrap.doc-page {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+    max-width: 620px;
+    width: 100%;
+    margin: 0 auto;
+    background: var(--cs-white);
+    box-shadow: 0 1px 2px rgba(16,11,50,0.06), 0 10px 28px rgba(16,11,50,0.10);
+    padding: 44px 52px 60px;
+  }
+  .doc-page .pv-text,
+  .doc-page .pv-html {
+    line-height: 1.9;
   }
 
   /* 미리보기 블록 스타일 */

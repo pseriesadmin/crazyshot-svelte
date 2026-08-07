@@ -52,11 +52,11 @@ export const GET: RequestHandler = async ({ params, locals }) => {
       .maybeSingle(),
   ])
 
-  let orderData: { total_amount: number | null; discount_amount: number | null; final_amount: number | null } | null = null
+  let orderData: { total_amount: number | null; discount_amount: number | null; tax_amount: number | null; final_amount: number | null } | null = null
   if (orderItemRes.data?.order_id) {
     const { data: o } = await admin
       .from('orders')
-      .select('total_amount, discount_amount, final_amount')
+      .select('total_amount, discount_amount, tax_amount, final_amount')
       .eq('id', orderItemRes.data.order_id)
       .maybeSingle()
     orderData = o
@@ -82,7 +82,7 @@ export const GET: RequestHandler = async ({ params, locals }) => {
     반납일시:     res.return_time ?? '-',
     기본대여요금: formatAmount(orderData?.total_amount),
     할인금액:     formatAmount(orderData?.discount_amount),
-    부가세:       '-',
+    부가세:       formatAmount(orderData?.tax_amount),
     최종합계:     formatAmount(orderData?.final_amount),
   }
 

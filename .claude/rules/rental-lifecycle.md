@@ -156,9 +156,9 @@ PDF 뷰어 · PDF 다운로드:
 | `{{상품코드}}` | `products.product_code` |
 | `{{수령형태}}` / `{{수령일시}}` | pickup_method(레이블 치환) / pickup_time |
 | `{{반납형태}}` / `{{반납일시}}` | return_method(레이블 치환) / return_time |
-| `{{기본대여요금}}` | `orders.base_amount` |
+| `{{기본대여요금}}` | `orders.total_amount` |
 | `{{할인금액}}` | `orders.discount_amount` (쿠폰+포인트 통합) |
-| `{{부가세}}` | `orders.tax_amount` |
+| `{{부가세}}` | `orders.tax_amount` (2026-08-07 이전: 코드가 항상 '-' 하드코딩 — 실제 컬럼 미조회 버그, 수정 완료) |
 | `{{최종합계}}` | `orders.final_amount` |
 
 ---
