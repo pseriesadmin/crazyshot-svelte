@@ -521,7 +521,8 @@
     </div>
   </div>
 
-  <!-- 탭 네비게이션 -->
+  <!-- 탭 네비게이션 + 탭 콘텐츠 (단일 그룹) -->
+  <div class="mob-tab-group">
   <div class="mob-tab-nav" role="tablist">
     <button
       type="button"
@@ -946,6 +947,7 @@
     {/if}
 
   </div>
+  </div>
 
   <!-- 하단 고정 액션 바 -->
   {#if activeTab === 'images'}
@@ -1021,7 +1023,7 @@
     display: flex;
     align-items: center;
     gap: 10px;
-    padding: 10px 16px 6px;
+    padding: 15px 16px 6px;
     background: var(--cs-lilac);
   }
 
@@ -1062,12 +1064,20 @@
     color: var(--cs-text-mid);
   }
 
+  /* 탭 네비 + 탭 콘텐츠 단일 그룹 래퍼 */
+  .mob-tab-group {
+    display: flex;
+    flex-direction: column;
+    flex: 1;
+    min-height: 0;
+  }
+
   /* 서브탭 — CMS cms-subtabbar 표준 */
   .mob-tab-nav {
     display: flex;
     justify-content: center;
     gap: 4px;
-    padding: 6px 14px 8px;
+    padding: 21px 14px 12px;
     background: transparent;
   }
 
@@ -1090,6 +1100,7 @@
 
   .mob-tab-content {
     flex: 1;
+    min-height: 0;
     overflow-y: auto;
   }
 
@@ -1121,7 +1132,7 @@
 
   .image-cell {
     position: relative;
-    aspect-ratio: 4/3;
+    aspect-ratio: 1/1;
     border-radius: var(--radius-sm);
     overflow: hidden;
     background: var(--cs-surface-gray);

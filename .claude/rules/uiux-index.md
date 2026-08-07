@@ -90,7 +90,8 @@ Mobile: --text-m-htitle-24B  (24px Black)  제목
 | Stephen 명칭 | 실제 컴포넌트 | 파일 위치 | 비고 |
 |---|---|---|---|
 | **`sub-gnb_navi`** | 모바일 탑바 pill (←·타이틀·☰) | 페이지 인라인 또는 `common/SubGnb.svelte` | ☰ 클릭 → 반드시 MobileMoreMenu |
-| **`sub-gnb_navi_b`** | **PC 전용** 서브 GNB B타입 (Back Pill + 카테고리 아이콘 행) | 페이지 인라인 `.sub-gnb-b` | **PC ≥641px 전용 · 모바일 미지원** |
+| **`sub-gnb_navi_b`** | **PC 전용** 서브 GNB B타입 (Back Pill 단독 — 카테고리 아이콘 없음) | 페이지 인라인 `.sub-gnb-b` | **PC ≥641px 전용 · 모바일 미지원** · bg transparent · 아웃라인 없음 |
+| **`sub-gnb_navi_c`** | **상품상세정보 전용 GNB** (Back Pill + 카테고리 아이콘 행 포함 — sub-gnb_navi_b와 별도 독립 스펙) | 페이지 인라인 `.sub-gnb-b` | `/products/[id]` 전용 · PC ≥641px · 카테고리 아이콘 행 필수 포함 |
 | **`더보기 메뉴`** | `MobileMoreMenu` | `common/MobileMoreMenu.svelte` | ☰ 통해서만 열림 |
 | **`FloatingBar`** | FAB 바 (장바구니·검색·채팅) | `common/FloatingBar.svelte` | 우하단 fixed |
 | **`GNB`** | 전역 상단 네비 | `common/GNB.svelte` | PC·모바일 공용 |
@@ -98,7 +99,9 @@ Mobile: --text-m-htitle-24B  (24px Black)  제목
 
 > 세부 규칙 → `@.claude/rules-ref/front-uiux.md §13`
 
-> **🔴 `sub-gnb_navi_b 적용해` 입력 시 → `front-uiux.md §13-2` 스펙 즉시 적용. Back Pill + 카테고리 아이콘 행 구조, PC(≥641px) 전용, 모바일 display:none 강제.**
+> **🔴 `sub-gnb_navi_b 적용해` 입력 시 → `front-uiux.md §13-2` 스펙 즉시 적용. Back Pill 단독 구조(카테고리 아이콘 없음), PC(≥641px) 전용, 모바일 display:none 강제.**
+>
+> **🔴 `sub-gnb_navi_c 적용해` 또는 `상품상세정보 전용 GNB 적용해` 입력 시 → `front-uiux.md §13-3` 스펙 즉시 적용. Back Pill + 카테고리 아이콘 행 포함, `/products/[id]` 전용, PC(≥641px) 전용.**
 
 > ⚠️ **GNB · SubGnb 구현·수정 시 스크롤 인터랙션 의무 적용**
 > 스크롤 다운 → 가림 / 스크롤 업 → 보임 — 표준 패턴: `ui-mobile.md §GNB 스크롤 인터랙션`
@@ -111,9 +114,15 @@ Mobile: --text-m-htitle-24B  (24px Black)  제목
 |---|---|---|---|
 | **SuggestPicker** | `$lib/components/common/SuggestPicker.svelte` | `category` / `brand` / `generic` | cms §12 · front §12 |
 | 타입 | `$lib/types/suggest-picker.ts` | — | `SuggestPickerOption`, `SuggestPickerVariant` |
+| **ChevronIcon**(`arrow01`) | `$lib/components/common/ChevronIcon.svelte` | `direction`: `right`(기본)/`left`/`up`/`down` | props: `size`(기본 8) · `color`(기본 `#aaaaaa`) — 흰 카드 위 리스트 이동 화살표 표준 |
+| **Arrow02Icon**(`arrow02`) | `$lib/components/common/Arrow02Icon.svelte` | 방향 고정(우측, 직선+화살촉형) | props: `size`(기본 16) · `color`(기본 `currentColor`) — 랜딩·상세이동 버튼용 심플 화살표 표준(2026-08-07, `AdminChatPanel.svelte` `.cs-detail-link` 최초 적용) |
+| **close-red**(강조닫기버튼) | 클래스 `.close-btn`/`.rep-close-btn` (CMS 전용, 컴포넌트 파일 없음) | 배치: `flex`(margin-left:auto) 또는 `absolute`(카드 코너) | cms-uiux.md §0-10-A · 28×28px · `✕` 문자(SVG 금지) · hover 시 `--cs-red-badge` 강조 |
 
 > ⛔ `<select>` 금지 — 드롭다운 목록 선택은 `SuggestPicker` 단독 표준
 > ⛔ 구경로 `CmsSuggestPicker` / `cms-suggest-picker` 신규 작성 금지
+> ⛔ 리스트·아코디언·페이지 이동 화살표(`M1 1L7 7L1 13` 패턴) 인라인 SVG 신규 작성 금지 — `ChevronIcon`(`arrow01`) 단독 표준
+> ⛔ 랜딩·상세이동 버튼용 직선+화살촉형 화살표(`line`+`polyline`, viewBox `0 0 24 24`) 인라인 SVG 신규 작성 금지 — `Arrow02Icon`(`arrow02`) 단독 표준
+> ⛔ CMS Detail Panel/카드 닫기 버튼에 SVG 아이콘 신규 작성 금지 — `close-red`(✕ 문자) 단독 표준
 
 ---
 
@@ -164,6 +173,71 @@ Mobile: --text-m-htitle-24B  (24px Black)  제목
 ```
 
 > ⛔ 페이지네이션 인라인 구현 금지 — `CmsPagination` 단독 표준
+
+---
+
+## 🔴 CmsKpiCard / CmsKpiGrid — CMS 대시보드 KPI 카드 표준 ★★★
+
+> **"대시보드 KPI 카드 추가해" 언급 시 → 아래 컴포넌트를 즉시 적용. 인라인 `.kpi-card`/`.stat-card` 구현 절대 금지.**
+
+| 항목 | 내용 |
+|---|---|
+| **공식 명칭** | `CmsKpiCard` / `CmsKpiGrid` |
+| **파일** | `$lib/components/cms/CmsKpiCard.svelte` / `CmsKpiGrid.svelte` |
+| **적용 화면** | 대시보드·통계 요약이 있는 모든 CMS 화면 (`/cms/promotion/*` 6개 화면 최초 적용) |
+| **세부 규칙** | `cms-uiux.md §7-16` |
+
+### Props (CmsKpiGrid)
+
+| Prop | 타입 | 설명 |
+|---|---|---|
+| `cards` | `KpiCardProps[]` | 카드 배열 (label/value/unit/sub/delta/tone/size/progress) |
+| `columns` | `3` | 그리드 열 수 — 전 화면 3열 통일 |
+
+### 표준 사용 패턴
+
+```svelte
+<script>
+  import CmsKpiGrid from '$lib/components/cms/CmsKpiGrid.svelte'
+</script>
+
+<CmsKpiGrid columns={3} cards={[
+  { label: '총 발급 수', value: stats.total_issued.toLocaleString(), tone: 'primary' },
+  { label: '전환율', value: stats.conversion_rate, unit: '%', tone: 'primary', progress: stats.conversion_rate },
+]} />
+```
+
+> ⛔ 대시보드 KPI 카드 인라인 구현 금지 — `CmsKpiCard`/`CmsKpiGrid` 단독 표준
+> ⛔ 차트·SVG 그래프 라이브러리 신규 도입 금지 — 액센트바+delta칩+CSS 비율바로 시각화 표현
+
+---
+
+## 🔴 CmsStatRing / CmsStatBars — 대시보드 히어로 시각화 표준 ★★★
+
+> **"대시보드에 원형/바 그래프 반영해" 언급 시 → 아래 컴포넌트를 즉시 적용.**
+
+| 항목 | 내용 |
+|---|---|
+| **공식 명칭** | `CmsStatRing` (원형 게이지) / `CmsStatBars` (가로 바그래프) |
+| **파일** | `$lib/components/cms/CmsStatRing.svelte` / `CmsStatBars.svelte` |
+| **적용 화면** | `/cms/promotion/*` 5개 대시보드 최초 적용 — 대시보드 최상단 히어로 섹션 |
+| **세부 규칙** | `cms-uiux.md §7-17` |
+
+### 표준 사용 패턴
+
+```svelte
+<div class="hero-stats">
+  <div class="hero-ring">
+    <CmsStatRing value={stats.conversion_rate} label="전환율" tone="primary" size={140} />
+  </div>
+  <div class="hero-bars">
+    <CmsStatBars unit="건" items={[{ label: '총 발급', value: stats.total_issued, tone: 'primary' }]} />
+  </div>
+</div>
+```
+
+> ⛔ 차트 라이브러리 신규 도입 금지 — SVG stroke-dasharray(링) + CSS 폭 비율(바)만 사용
+> ⛔ 바그래프 항목은 신규 쿼리 없이 기존 로드 데이터에서만 파생
 
 ---
 

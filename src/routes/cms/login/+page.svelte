@@ -63,7 +63,7 @@
         {#if data.logoutTime}
           <p class="expired-time">{formatKoreanDateTime(data.logoutTime)}</p>
         {/if}
-        <a href="/cms/login" class="cta-btn expired-btn">로그인하기</a>
+        <a href="/cms/login{data.returnTo ? `?returnTo=${encodeURIComponent(data.returnTo)}` : ''}" class="cta-btn expired-btn">로그인하기</a>
       </div>
     {:else if data.inviteExpired}
       <p class="error-msg" role="alert">초대 링크가 만료되었거나 이미 사용된 링크입니다.</p>
@@ -118,6 +118,9 @@
         }}
         class="login-form"
       >
+        {#if data.returnTo}
+          <input type="hidden" name="redirectTo" value={data.returnTo} />
+        {/if}
         <label class="field-label" for="email">이메일</label>
         <input
           id="email"

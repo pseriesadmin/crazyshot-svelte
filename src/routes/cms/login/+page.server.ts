@@ -14,9 +14,11 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 
   const logoutType = url.searchParams.get('logout') as 'manual' | 'expired' | null
   const logoutTime = url.searchParams.get('t') ?? null
+  // /cms/mobile 진입 후 로그인 시 원래 경로로 복귀
+  const returnTo = url.searchParams.get('returnTo') ?? null
 
   const inviteToken = url.searchParams.get('invite')
-  if (!inviteToken) return { logoutType, logoutTime }
+  if (!inviteToken) return { logoutType, logoutTime, returnTo }
 
   const serviceRoleKey = env.SUPABASE_SERVICE_ROLE_KEY
   if (!serviceRoleKey) return { inviteExpired: true }
@@ -30,7 +32,7 @@ export const load: PageServerLoad = async ({ locals, url }) => {
     .maybeSingle()
 
   if (!tokenRow || tokenRow.used_at || new Date(tokenRow.expires_at) < new Date()) {
-    return { inviteExpired: true, logoutType, logoutTime }
+    return { inviteExpired: true, logoutType, logoutTime, returnTo }
   }
 
   const { data: { user } } = await admin.auth.admin.getUserById(tokenRow.created_by)
@@ -41,6 +43,7 @@ export const load: PageServerLoad = async ({ locals, url }) => {
     inviteEmail: user?.email ?? '',
     logoutType,
     logoutTime,
+    returnTo,
   }
 }
 
@@ -66,7 +69,10 @@ export const actions: Actions = {
       return fail(403, { error: 'CMS 접근 권한이 없습니다.' })
     }
 
-    throw redirect(303, '/cms')
+    // 로그인 후 원래 경로(/cms/mobile/*)로 복귀 — 그 외 경로는 /cms로
+    const redirectTo = (form.get('redirectTo') as string | null)?.trim() ?? ''
+    const safePath = redirectTo.startsWith('/cms/mobile') ? redirectTo : '/cms'
+    throw redirect(303, safePath)
   },
 
   setPassword: async ({ request, locals }) => {
