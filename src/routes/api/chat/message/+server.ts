@@ -162,8 +162,9 @@ export const POST: RequestHandler = async ({ request, locals }) => {
           }
         }
       }
-    } catch {
-      // 자동답변 매칭 실패 시 조용히 2단계(AI 파이프라인)로 폴백
+    } catch (err) {
+      // 자동답변 매칭 실패 시 2단계(AI 파이프라인)로 폴백 — 단, 원인 진단을 위해 로그는 남긴다
+      console.error('[chat/message] 하이브리드 자동답변 1단계 실패:', err)
     }
   }
 
