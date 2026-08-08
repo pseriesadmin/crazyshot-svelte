@@ -29,7 +29,6 @@
   "license": "ISC",
   "description": "",
   "devDependencies": {
-    "patch-package": "^8.0.0",
     "@eslint/js": "^10.0.1",
     "@sveltejs/adapter-auto": "^7.0.1",
     "@sveltejs/adapter-vercel": "^6.3.3",
@@ -48,8 +47,10 @@
     "husky": "^9.1.7",
     "jsdom": "^29.1.1",
     "lint-staged": "^16.4.0",
+    "patch-package": "^8.0.0",
     "postcss": "^8.5.15",
     "prettier": "^3.8.3",
+    "supabase": "^2.111.0",
     "svelte": "^5.55.10",
     "svelte-i18n": "^4.0.1",
     "tailwindcss": "^4.3.0",

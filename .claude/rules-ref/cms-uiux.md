@@ -178,9 +178,14 @@ toggleSwitch : ON 색 primary-600(#3B2F8A) / 크기 36×20 / radius lg(10px)
 
 ---
 
-### 0-10-A. 패널 닫기 버튼 표준 (`.close-btn`) ★
+### 0-10-A. 패널 닫기 버튼 표준 (`.close-btn`) — 공식 명칭 `close-red`(강조닫기버튼) ★
 
+> **아이콘 라이브러리 공식 등록명**: `close-red` (강조닫기버튼) — hover 시 레드(`--cs-red-badge`)로
+> 강조되는 것이 식별 특징
+> "close-red 적용해"/"강조닫기버튼 등록해" 언급 시 이 섹션의 스펙을 즉시 적용한다.
 > 정본 컴포넌트: `ProductDetailPanel.svelte` → 모든 CMS Detail Panel의 닫기 버튼 표준
+> 클래스명은 화면마다 `.close-btn`/`.rep-close-btn` 등으로 다를 수 있으나, 아래 스펙과
+> 일치하면 전부 `close-red` 동일 컴포넌트로 취급한다(2026-08-07 라이브러리 등록).
 
 **스펙**
 
@@ -213,6 +218,26 @@ toggleSwitch : ON 색 primary-600(#3B2F8A) / 크기 36×20 / radius lg(10px)
   transition: background 0.12s, color 0.12s;
 }
 .close-btn:hover { background: rgba(255,53,53,0.08); color: var(--cs-red-badge); }
+```
+
+**위치 변형(variant) — 오버레이/절대배치 헤더용**
+
+일반 Detail Panel 헤더(`flex` 레이아웃)에서는 `margin-left: auto`로 우측 배치하지만,
+`/cms/products` 대표 카드 `rep-section`처럼 헤더가 아닌 카드 코너에 겹쳐 배치되는 경우
+`position: absolute`로 대체한다 — 크기·색상·hover 스펙은 동일, 배치 방식만 다름.
+
+```css
+/* close-red 절대배치 변형 (rep-close-btn 등) */
+.rep-close-btn {
+  position: absolute; top: 10px; right: 14px; z-index: 2;
+  flex-shrink: 0;
+  width: 28px; height: 28px; min-height: 28px;
+  display: flex; align-items: center; justify-content: center;
+  background: transparent; border: none; border-radius: var(--radius-sm);
+  color: var(--cs-text-light); font-size: 14px; cursor: pointer;
+  transition: background 0.12s, color 0.12s;
+}
+.rep-close-btn:hover { background: rgba(255,53,53,0.08); color: var(--cs-red-badge); }
 ```
 
 **적용 규칙**
