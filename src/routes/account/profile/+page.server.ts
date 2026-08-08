@@ -1,5 +1,6 @@
 import { redirect, fail } from '@sveltejs/kit'
 import type { PageServerLoad, Actions } from './$types'
+import { callTypedRpc } from '$lib/utils/rpc'
 
 export interface UserProfile {
   id: string
@@ -87,15 +88,19 @@ export const actions: Actions = {
 
     if (!road_address) return fail(400, { ok: false, error: '기본주소는 필수입니다.' })
 
-    const { data, error } = await locals.supabase.rpc('add_shipping_address', {
-      p_label:          label || '추가',
-      p_recipient:      recipient  || null,
-      p_phone:          phone      || null,
-      p_road_address:   road_address,
-      p_detail_address: detail_address || null,
-      p_postal_code:    postal_code    || null,
-      p_set_default:    set_default,
-    })
+    const { data, error } = await callTypedRpc<{ ok: boolean; error?: string }>(
+      locals.supabase,
+      'add_shipping_address',
+      {
+        p_label:          label || '추가',
+        p_recipient:      recipient  || null,
+        p_phone:          phone      || null,
+        p_road_address:   road_address,
+        p_detail_address: detail_address || null,
+        p_postal_code:    postal_code    || null,
+        p_set_default:    set_default,
+      },
+    )
 
     if (error) return fail(500, { ok: false, error: error.message })
     const result = data as { ok: boolean; error?: string } | null
@@ -111,9 +116,11 @@ export const actions: Actions = {
     const address_id = String(form.get('address_id') ?? '').trim()
     if (!address_id) return fail(400, { ok: false, error: 'address_id 필수' })
 
-    const { data, error } = await locals.supabase.rpc('delete_shipping_address', {
-      p_address_id: address_id,
-    })
+    const { data, error } = await callTypedRpc<{ ok: boolean; error?: string }>(
+      locals.supabase,
+      'delete_shipping_address',
+      { p_address_id: address_id },
+    )
 
     if (error) return fail(500, { ok: false, error: error.message })
     const result = data as { ok: boolean; error?: string } | null
@@ -135,11 +142,11 @@ export const actions: Actions = {
       return fail(400, { ok: false, error: '올바른 이메일 형식을 입력해 주세요.' })
     }
 
-    const { data, error } = await locals.supabase.rpc('update_user_profile', {
-      p_full_name:  full_name,
-      p_email:      email,
-      p_birth_date: birth_date,
-    })
+    const { data, error } = await callTypedRpc<{ ok: boolean; error?: string }>(
+      locals.supabase,
+      'update_user_profile',
+      { p_full_name: full_name, p_email: email, p_birth_date: birth_date },
+    )
 
     if (error) return fail(500, { ok: false, error: error.message })
     const result = data as { ok: boolean; error?: string } | null
@@ -157,10 +164,11 @@ export const actions: Actions = {
 
     if (!phone || !code) return fail(400, { ok: false, error: '전화번호와 인증번호를 입력해 주세요.' })
 
-    const { data, error } = await locals.supabase.rpc('verify_and_update_phone', {
-      p_phone: phone,
-      p_code:  code,
-    })
+    const { data, error } = await callTypedRpc<{ ok: boolean; error?: string }>(
+      locals.supabase,
+      'verify_and_update_phone',
+      { p_phone: phone, p_code: code },
+    )
 
     if (error) return fail(500, { ok: false, error: error.message })
     const result = data as { ok: boolean; error?: string } | null
@@ -176,9 +184,11 @@ export const actions: Actions = {
     const address_id = String(form.get('address_id') ?? '').trim()
     if (!address_id) return fail(400, { ok: false, error: 'address_id 필수' })
 
-    const { data, error } = await locals.supabase.rpc('set_default_shipping_address', {
-      p_address_id: address_id,
-    })
+    const { data, error } = await callTypedRpc<{ ok: boolean; error?: string }>(
+      locals.supabase,
+      'set_default_shipping_address',
+      { p_address_id: address_id },
+    )
 
     if (error) return fail(500, { ok: false, error: error.message })
     const result = data as { ok: boolean; error?: string } | null
@@ -197,10 +207,11 @@ export const actions: Actions = {
     const p_allow_privacy_consent     = privacyRaw    !== null ? privacyRaw    === 'true' : null
     const p_allow_third_party_consent = thirdPartyRaw !== null ? thirdPartyRaw === 'true' : null
 
-    const { data, error } = await locals.supabase.rpc('update_user_consent', {
-      p_allow_privacy_consent,
-      p_allow_third_party_consent,
-    })
+    const { data, error } = await callTypedRpc<{ ok: boolean; error?: string }>(
+      locals.supabase,
+      'update_user_consent',
+      { p_allow_privacy_consent, p_allow_third_party_consent },
+    )
 
     if (error) return fail(500, { ok: false, error: error.message })
     const result = data as { ok: boolean; error?: string } | null

@@ -3,6 +3,7 @@ import { env } from '$env/dynamic/private'
 import { getSupabaseUrl } from '$lib/env/supabasePublic'
 import { createClient } from '@supabase/supabase-js'
 import { hasSettingsAccess } from '$lib/utils/cmsPermissions'
+import { getCmsRoleForAction } from '$lib/server/getCmsRoleForAction'
 import type { Actions, PageServerLoad } from './$types'
 
 export const load: PageServerLoad = async ({ parent }) => {
@@ -12,19 +13,25 @@ export const load: PageServerLoad = async ({ parent }) => {
 }
 
 export const actions: Actions = {
-  createAccount: async ({ request }) => {
+  createAccount: async ({ request, locals }) => {
+    const { session } = await locals.safeGetSession()
+    if (!session) return fail(401, { error: '인증 필요' })
+    const cmsRole = await getCmsRoleForAction(locals)
+    if (!cmsRole) return fail(403, { error: '권한 없음' })
+    if (!hasSettingsAccess(cmsRole)) return fail(403, { error: '권한 없음' })
+
     const form = await request.formData()
-    const name      = (form.get('name') as string | null)?.trim() ?? ''
-    const email     = (form.get('email') as string | null)?.trim() ?? ''
-    const phone     = (form.get('phone') as string | null)?.trim() ?? ''
-    const cmsRole   = (form.get('cms_role') as string | null) ?? 'manager'
-    const concurrent = form.get('cms_allow_concurrent_login') === 'true'
-    const timeout    = form.get('cms_session_timeout_hours') === 'true' ? 24 : null
+    const name           = (form.get('name') as string | null)?.trim() ?? ''
+    const email          = (form.get('email') as string | null)?.trim() ?? ''
+    const phone          = (form.get('phone') as string | null)?.trim() ?? ''
+    const newAccountRole = (form.get('cms_role') as string | null) ?? 'manager'
+    const concurrent     = form.get('cms_allow_concurrent_login') === 'true'
+    const timeout        = form.get('cms_session_timeout_hours') === 'true' ? 24 : null
 
     if (!name || !email || !phone) {
       return fail(400, { error: '이름, 이메일, 휴대번호는 필수입니다.' })
     }
-    if (!['manager', 'partner'].includes(cmsRole)) {
+    if (!['manager', 'partner'].includes(newAccountRole)) {
       return fail(400, { error: '유효하지 않은 권한입니다.' })
     }
 
@@ -69,7 +76,7 @@ export const actions: Actions = {
       p_user_id: userId,
       p_full_name: name,
       p_phone: phone,
-      p_cms_role: cmsRole,
+      p_cms_role: newAccountRole,
       p_allow_concurrent_login: concurrent,
       p_session_timeout_hours: timeout,
     })

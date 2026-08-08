@@ -195,7 +195,6 @@
   }
 
   function handleReserve() {
-    if (!startDate) return;
     onreserve?.({ startDate, endDate: endDate || startDate, startHour, startMin, endHour, endMin, methodId: selectedMethodId, periodId: selectedPeriodId });
   }
 
@@ -209,6 +208,11 @@
     chatCallback?.();
   }
 
+  // 대여 방식 선택 기능 off (2026-08-03 UX 판단) — 모든 대여옵션 설정은 체크아웃에서 진행.
+  // 지금은 클릭 불가한 "가능한 대여 방식" 안내 목록으로만 노출. 재활성화 시 true로 되돌리면
+  // 원래의 클릭 선택 UI(policy-chip 버튼 + selectedMethodId 토글)가 그대로 복원됨.
+  const rentalMethodSelectable = false;
+
   let cells = $derived(calCells(viewYear, viewMonth));
   let rows = $derived.by(() => {
     const r: (number | null)[][] = [];
@@ -219,13 +223,13 @@
 
 <div class="picker-wrap" class:cart-mode={mode === 'cart'}>
   {#if mode === 'product'}
-    <div class="picker-header">
+    <div class="picker-header calc-hidden">
       <span class="header-label">렌탈요금 계산기</span>
     </div>
   {/if}
 
-  <!-- Calendar + Time wrapper: mobile = col, PC = row -->
-  <div class="cal-time-wrapper">
+  <!-- Calendar + Time wrapper: mobile = col, PC = row (날짜 미정 임시예약 기능으로 CSS 가림 — 추후 재활용 대비 마크업/로직 유지) -->
+  <div class="cal-time-wrapper calc-hidden">
   <!-- Calendar -->
   <div class="calendar">
     <div class="cal-nav">
@@ -347,35 +351,38 @@
   </div><!-- /cal-time-wrapper -->
 
   {#if mode === 'product'}
-    <!-- Duration summary -->
-    <div class="duration-row">
-      <span class="duration-label">총 대여일</span>
-      <div class="duration-vals">
-        <div class="dur-group">
-          <div class="dur-badge">{startDate && endDate ? totalDays : '–'}</div>
-          <span class="dur-unit">일</span>
-        </div>
-        <div class="dur-group">
-          <div class="dur-badge">{startDate && endDate ? `${pad(remainHours)}:${pad(remainMins)}` : '–:––'}</div>
-          <span class="dur-unit">시간</span>
+    <!-- 렌탈요금 계산기 요약(총 대여일·예상 대여요금) — UX 판단에 따라 노출 가림, 추후 재활용 대비 코드 유지 -->
+    <div class="calc-hidden calc-summary-group">
+      <!-- Duration summary -->
+      <div class="duration-row">
+        <span class="duration-label">총 대여일</span>
+        <div class="duration-vals">
+          <div class="dur-group">
+            <div class="dur-badge">{startDate && endDate ? totalDays : '–'}</div>
+            <span class="dur-unit">일</span>
+          </div>
+          <div class="dur-group">
+            <div class="dur-badge">{startDate && endDate ? `${pad(remainHours)}:${pad(remainMins)}` : '–:––'}</div>
+            <span class="dur-unit">시간</span>
+          </div>
         </div>
       </div>
-    </div>
 
-    <!-- Estimated fee -->
-    <div class="fee-row">
-      <span class="fee-label">예상 대여요금</span>
-      <div class="fee-val-wrap">
-        <span class="fee-val">{startDate && endDate ? estimatedFee.toLocaleString('ko-KR') : '–'}</span>
-        <span class="fee-unit">원</span>
+      <!-- Estimated fee -->
+      <div class="fee-row">
+        <span class="fee-label">예상 대여요금</span>
+        <div class="fee-val-wrap">
+          <span class="fee-val">{startDate && endDate ? estimatedFee.toLocaleString('ko-KR') : '–'}</span>
+          <span class="fee-unit">원</span>
+        </div>
       </div>
-    </div>
 
-    {#if sameDayTimeError}
-      <p class="fee-note fee-note--warn">반납 시각이 반출 시각보다 앞서 있습니다.</p>
-    {:else}
-      <p class="fee-note">단순 합계요금으로 실제 결제요금과 다를 수 있습니다.</p>
-    {/if}
+      {#if sameDayTimeError}
+        <p class="fee-note fee-note--warn">반납 시각이 반출 시각보다 앞서 있습니다.</p>
+      {:else}
+        <p class="fee-note">단순 합계요금으로 실제 결제요금과 다를 수 있습니다.</p>
+      {/if}
+    </div>
 
     <!-- 대여정책 (대여방식·배송정책) -->
     {#if rentalMethods.length > 0 || (shippingPolicy && (shippingPolicy.items.length > 0 || shippingPolicy.guide))}
@@ -385,13 +392,17 @@
             <span class="policy-lbl">대여 방식</span>
             <div class="policy-chips">
               {#each rentalMethods as m}
-                <button
-                  type="button"
-                  class="policy-chip"
-                  class:chip-active={selectedMethodId === m.id}
-                  onclick={() => { selectedMethodId = selectedMethodId === m.id ? '' : m.id }}
-                  aria-pressed={selectedMethodId === m.id}
-                >{m.name}</button>
+                {#if rentalMethodSelectable}
+                  <button
+                    type="button"
+                    class="policy-chip"
+                    class:chip-active={selectedMethodId === m.id}
+                    onclick={() => { selectedMethodId = selectedMethodId === m.id ? '' : m.id }}
+                    aria-pressed={selectedMethodId === m.id}
+                  >{m.name}</button>
+                {:else}
+                  <span class="policy-chip policy-chip--static">{m.name}</span>
+                {/if}
               {/each}
             </div>
           </div>
@@ -418,7 +429,7 @@
       <button
         class="reserve-btn"
         onclick={handleReserve}
-        disabled={!startDate || reserveDisabled}
+        disabled={reserveDisabled}
         aria-label="예약신청"
       >
         {reserveDisabled ? '필수 옵션을 선택해주세요' : '예약신청'}
@@ -460,6 +471,23 @@
     display: flex;
     align-items: center;
     justify-content: space-between;
+  }
+
+  /* 렌탈요금 계산기 헤더·총대여일·예상요금·캘린더 노출 가림 (2026-07-31 UX 판단) — 추후 재활용 대비
+     마크업/로직 유지, CSS만으로 가림. !important 필수: .cal-time-wrapper 등 동일 클래스 선택자가
+     이 규칙보다 스타일시트 뒤쪽(특히 PC 미디어쿼리)에 있어 !important 없이는 display 값이
+     그 규칙에 덮어써져 다시 보임 */
+  .calc-hidden {
+    display: none !important;
+  }
+  /* calc-hidden 그룹 내부 레이아웃 — picker-wrap의 원래 50px gap(직계 자식 간)을 재현.
+     이 div로 감싸면서 duration-row/fee-row/fee-note가 picker-wrap의 직계 자식이 아니게 되어
+     기존 gap이 내부에 적용되지 않으므로, 추후 calc-hidden만 해제해 재노출할 때도 원래
+     레이아웃 그대로 복원되도록 별도 지정 */
+  .calc-summary-group {
+    display: flex;
+    flex-direction: column;
+    gap: 50px;
   }
   .header-label {
     font: var(--text-m-script-14);
@@ -780,8 +808,6 @@
     display: flex;
     flex-direction: column;
     gap: 12px;
-    padding-top: 20px;
-    border-top: 1px solid rgba(59, 47, 138, 0.12);
   }
   .policy-row {
     display: flex;
@@ -813,7 +839,11 @@
     line-height: 1.4;
     transition: background 0.15s, color 0.15s;
   }
-  .policy-chip:not(.policy-chip--active):hover { background: var(--cs-purple-op10); }
+  .policy-chip:not(.policy-chip--active):not(.policy-chip--static):hover { background: var(--cs-purple-op10); }
+  /* 대여 방식 선택 off 상태의 안내용 chip — 클릭 가능해 보이는 커서·호버 효과 제거 */
+  .policy-chip--static {
+    cursor: default;
+  }
   .policy-chip.chip-active {
     background: var(--cs-purple);
     color: var(--cs-white);

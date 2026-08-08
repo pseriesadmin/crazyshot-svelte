@@ -215,8 +215,9 @@
   async function handleReserve(e: { startDate: string; endDate: string; startHour: number; startMin: number; endHour: number; endMin: number; methodId?: string; periodId?: string }) {
     if (!product || isReserving) return;
 
-    // 대여 방식 미선택 (선택 가능한 방식이 있는 상품에 한해 필수)
-    if (data.rentalMethods.length > 0 && !e.methodId) {
+    // 대여 방식 미선택 (선택 가능한 방식이 있는 상품에 한해 필수) — 날짜가 있는 경우에만
+    // (draft 경로는 대여방식 선택 UI 자체가 off라 e.methodId가 항상 비어있음 — 체크아웃에서 선택)
+    if (e.startDate && data.rentalMethods.length > 0 && !e.methodId) {
       showToast('대여 방식을 선택해주세요.');
       return;
     }
@@ -244,27 +245,30 @@
       return;
     }
 
-    // 예약 일시 리드타임 검증 (배송불가옵션 충돌 판정과는 별개 분류 — 택배(외부 courier)만 2일 리드타임 필요)
-    // 택배(크레이지배송(택배)): 대여일이 오늘로부터 2일 이후여야 예약 가능
-    // 방문·퀵·무인보관함·자체배송(크레이지배송(자체배송)): 당일 대여 시 대여시각이 현재시각 기준 3시간 이후여야 예약 가능
-    const TWO_DAY_LEADTIME_KEYS = new Set(['delivery', 'epost']);
-    const needsTwoDayLeadtime = !!selectedMethod?.method_key && TWO_DAY_LEADTIME_KEYS.has(selectedMethod.method_key);
-    const nowTime = new Date();
-    if (needsTwoDayLeadtime) {
-      const twoDaysLater = new Date(nowTime.getFullYear(), nowTime.getMonth(), nowTime.getDate() + 2);
-      const startDateOnly = new Date(`${e.startDate}T00:00:00`);
-      if (startDateOnly < twoDaysLater) {
-        showToast('택배 대여는 대여일 2일 전 예약 가능합니다.');
-        return;
-      }
-    } else {
-      const todayIso = `${nowTime.getFullYear()}-${String(nowTime.getMonth() + 1).padStart(2, '0')}-${String(nowTime.getDate()).padStart(2, '0')}`;
-      if (e.startDate === todayIso) {
-        const startDateTime = new Date(`${e.startDate}T${String(e.startHour).padStart(2, '0')}:${String(e.startMin).padStart(2, '0')}:00`);
-        const threeHoursLater = new Date(nowTime.getTime() + 3 * 60 * 60 * 1000);
-        if (startDateTime < threeHoursLater) {
-          showToast('당일 대여는 대여시간 기준 3시간 전 방문만 가능합니다.');
+    // 예약 일시 리드타임 검증 — 날짜가 있는 경우에만 (draft 경로는 날짜 없어 skip, 실제 검증은 FE-4 체크아웃 승격 시점에 재수행)
+    if (e.startDate) {
+      // 택배(외부 courier)만 2일 리드타임 필요
+      // 택배(크레이지배송(택배)): 대여일이 오늘로부터 2일 이후여야 예약 가능
+      // 방문·퀵·무인보관함·자체배송(크레이지배송(자체배송)): 당일 대여 시 대여시각이 현재시각 기준 3시간 이후여야 예약 가능
+      const TWO_DAY_LEADTIME_KEYS = new Set(['delivery', 'epost']);
+      const needsTwoDayLeadtime = !!selectedMethod?.method_key && TWO_DAY_LEADTIME_KEYS.has(selectedMethod.method_key);
+      const nowTime = new Date();
+      if (needsTwoDayLeadtime) {
+        const twoDaysLater = new Date(nowTime.getFullYear(), nowTime.getMonth(), nowTime.getDate() + 2);
+        const startDateOnly = new Date(`${e.startDate}T00:00:00`);
+        if (startDateOnly < twoDaysLater) {
+          showToast('택배 대여는 대여일 2일 전 예약 가능합니다.');
           return;
+        }
+      } else {
+        const todayIso = `${nowTime.getFullYear()}-${String(nowTime.getMonth() + 1).padStart(2, '0')}-${String(nowTime.getDate()).padStart(2, '0')}`;
+        if (e.startDate === todayIso) {
+          const startDateTime = new Date(`${e.startDate}T${String(e.startHour).padStart(2, '0')}:${String(e.startMin).padStart(2, '0')}:00`);
+          const threeHoursLater = new Date(nowTime.getTime() + 3 * 60 * 60 * 1000);
+          if (startDateTime < threeHoursLater) {
+            showToast('당일 대여는 대여시간 기준 3시간 전 방문만 가능합니다.');
+            return;
+          }
         }
       }
     }
@@ -282,78 +286,116 @@
           return;
         }
       }
-      type ReserveRpcFn = (name: string, args: Record<string, unknown>) => Promise<{
-        data: Array<{ success: boolean; reservation_id: number | null; asset_id: number | null; error_message: string | null }> | null;
-        error: unknown;
-      }>
-      // A-2: endDate 미선택(반출일만 선택) 시 startDate로 대체 → 당일 대여
-      const endDate = e.endDate || e.startDate;
-      const { data: rows } = await (supabase.rpc as unknown as ReserveRpcFn)('create_hold_reservation', {
-        p_product_id: product.id,
-        p_start_date: e.startDate,
-        p_end_date:   endDate,
-      });
-      const row = rows?.[0];
-      if (!row?.success) {
-        showToast(row?.error_message ?? '예약 가능한 장비가 없습니다.');
-        return;
-      }
-      // A-2: 반출·반납 시각 저장 (Migration 147 set_reservation_shipment_method)
-      if (row.reservation_id != null) {
-        const padTime = (h: number, m: number) =>
-          String(h).padStart(2, '0') + ':' + String(m).padStart(2, '0');
-        type ShipRpcFn = (name: string, args: Record<string, unknown>) => Promise<{ error: unknown }>;
-        const { error: shipError } = await (supabase.rpc as unknown as ShipRpcFn)('set_reservation_shipment_method', {
-          p_reservation_id: row.reservation_id,
-          p_pickup_method:  selectedMethod?.method_key ?? 'visit',
-          p_return_method:  selectedMethod?.method_key ?? 'visit',
-          p_pickup_time:    padTime(e.startHour, e.startMin),
-          p_return_time:    padTime(e.endHour, e.endMin),
-        });
-        if (shipError) {
-          console.error('[products/[id]] set_reservation_shipment_method 저장 실패:', shipError);
-          showToast('수령/반납 방식 저장에 실패했습니다. 체크아웃에서 다시 확인해 주세요.');
-        }
 
-        // 실제 선택한 대여시간 기준 요금구간(12h/24h) 저장 — CalendarTimePicker estimatedFee와 동일 판정 기준
-        // (당일 대여 12시간 이하 → 12h, 그 외(당일 12시간 초과·복수일) → 24h)
-        const isSameDayRental = e.startDate === endDate;
-        const sameDayMinutes = (e.endHour * 60 + e.endMin) - (e.startHour * 60 + e.startMin);
-        const durationType = isSameDayRental && sameDayMinutes > 0 && sameDayMinutes <= 720 ? '12h' : '24h';
-        type DurationRpcFn = (name: string, args: Record<string, unknown>) => Promise<{ error: unknown }>;
-        const { error: durationError } = await (supabase.rpc as unknown as DurationRpcFn)('set_reservation_duration', {
-          p_reservation_id: row.reservation_id,
-          p_duration_type:  durationType,
+      if (!e.startDate) {
+        // ── draft 경로 (날짜 없는 임시예약 — 체크아웃에서 날짜 입력 후 promote_draft_reservation로 승격)
+        type DraftRpcFn = (name: string, args: Record<string, unknown>) => Promise<{
+          data: Array<{ success: boolean; reservation_id: number | null; error_message: string | null }> | null;
+          error: unknown;
+        }>
+        const { data: draftRows } = await (supabase.rpc as unknown as DraftRpcFn)('create_draft_reservation', {
+          p_product_id: product.id,
         });
-        if (durationError) {
-          console.error('[products/[id]] set_reservation_duration 저장 실패:', durationError);
+        const draftRow = draftRows?.[0];
+        if (!draftRow?.success) {
+          showToast(draftRow?.error_message ?? '예약을 생성할 수 없습니다.');
+          return;
         }
-
-        // 옵션상품 + 수량 저장 (Migration 176 reservation_options)
-        const selectedOptions = optionItems
-          .filter((o) => o.qty > 0)
-          .map((o) => ({ option_product_id: o.id, option_name: o.label, qty: o.qty, unit_price: o.price }));
-        if (selectedOptions.length > 0) {
-          type OptionsRpcFn = (name: string, args: Record<string, unknown>) => Promise<{ error: unknown }>;
-          const { error: optionsError } = await (supabase.rpc as unknown as OptionsRpcFn)('set_reservation_options', {
-            p_reservation_id: row.reservation_id,
-            p_options:        selectedOptions,
-          });
-          if (optionsError) {
-            console.error('[products/[id]] set_reservation_options 저장 실패:', optionsError);
-            showToast('선택한 옵션상품 저장에 실패했습니다. 체크아웃에서 다시 확인해 주세요.');
+        if (draftRow.reservation_id != null) {
+          // 옵션상품 + 수량 저장 (draft 상태에서도 가능 — DB-4)
+          // set_reservation_duration / set_reservation_shipment_method는 날짜 없어 의미 없음 — 체크아웃 승격(FE-4) 시점에 호출
+          const selectedOptions = optionItems
+            .filter((o) => o.qty > 0)
+            .map((o) => ({ option_product_id: o.id, option_name: o.label, qty: o.qty, unit_price: o.price }));
+          if (selectedOptions.length > 0) {
+            type OptionsRpcFn = (name: string, args: Record<string, unknown>) => Promise<{ error: unknown }>;
+            const { error: optionsError } = await (supabase.rpc as unknown as OptionsRpcFn)('set_reservation_options', {
+              p_reservation_id: draftRow.reservation_id,
+              p_options:        selectedOptions,
+            });
+            if (optionsError) {
+              console.error('[products/[id]] set_reservation_options (draft) 저장 실패:', optionsError);
+              showToast('선택한 옵션상품 저장에 실패했습니다. 체크아웃에서 다시 확인해 주세요.');
+            }
           }
         }
+        // notify-hold는 draft 생성 시 발송하지 않음 — 체크아웃 승격(FE-4) 성공 시점에 발송
+        goto('/checkout');
+      } else {
+        // ── hold 경로 (기존 로직 그대로 — 하위호환)
+        type ReserveRpcFn = (name: string, args: Record<string, unknown>) => Promise<{
+          data: Array<{ success: boolean; reservation_id: number | null; asset_id: number | null; error_message: string | null }> | null;
+          error: unknown;
+        }>
+        // A-2: endDate 미선택(반출일만 선택) 시 startDate로 대체 → 당일 대여
+        const endDate = e.endDate || e.startDate;
+        const { data: rows } = await (supabase.rpc as unknown as ReserveRpcFn)('create_hold_reservation', {
+          p_product_id: product.id,
+          p_start_date: e.startDate,
+          p_end_date:   endDate,
+        });
+        const row = rows?.[0];
+        if (!row?.success) {
+          showToast(row?.error_message ?? '예약 가능한 장비가 없습니다.');
+          return;
+        }
+        // A-2: 반출·반납 시각 저장 (Migration 147 set_reservation_shipment_method)
+        if (row.reservation_id != null) {
+          const padTime = (h: number, m: number) =>
+            String(h).padStart(2, '0') + ':' + String(m).padStart(2, '0');
+          type ShipRpcFn = (name: string, args: Record<string, unknown>) => Promise<{ error: unknown }>;
+          const { error: shipError } = await (supabase.rpc as unknown as ShipRpcFn)('set_reservation_shipment_method', {
+            p_reservation_id: row.reservation_id,
+            p_pickup_method:  selectedMethod?.method_key ?? 'visit',
+            p_return_method:  selectedMethod?.method_key ?? 'visit',
+            p_pickup_time:    padTime(e.startHour, e.startMin),
+            p_return_time:    padTime(e.endHour, e.endMin),
+          });
+          if (shipError) {
+            console.error('[products/[id]] set_reservation_shipment_method 저장 실패:', shipError);
+            showToast('수령/반납 방식 저장에 실패했습니다. 체크아웃에서 다시 확인해 주세요.');
+          }
+
+          // 실제 선택한 대여시간 기준 요금구간(12h/24h) 저장 — CalendarTimePicker estimatedFee와 동일 판정 기준
+          // (당일 대여 12시간 이하 → 12h, 그 외(당일 12시간 초과·복수일) → 24h)
+          const isSameDayRental = e.startDate === endDate;
+          const sameDayMinutes = (e.endHour * 60 + e.endMin) - (e.startHour * 60 + e.startMin);
+          const durationType = isSameDayRental && sameDayMinutes > 0 && sameDayMinutes <= 720 ? '12h' : '24h';
+          type DurationRpcFn = (name: string, args: Record<string, unknown>) => Promise<{ error: unknown }>;
+          const { error: durationError } = await (supabase.rpc as unknown as DurationRpcFn)('set_reservation_duration', {
+            p_reservation_id: row.reservation_id,
+            p_duration_type:  durationType,
+          });
+          if (durationError) {
+            console.error('[products/[id]] set_reservation_duration 저장 실패:', durationError);
+          }
+
+          // 옵션상품 + 수량 저장 (Migration 176 reservation_options)
+          const selectedOptions = optionItems
+            .filter((o) => o.qty > 0)
+            .map((o) => ({ option_product_id: o.id, option_name: o.label, qty: o.qty, unit_price: o.price }));
+          if (selectedOptions.length > 0) {
+            type OptionsRpcFn = (name: string, args: Record<string, unknown>) => Promise<{ error: unknown }>;
+            const { error: optionsError } = await (supabase.rpc as unknown as OptionsRpcFn)('set_reservation_options', {
+              p_reservation_id: row.reservation_id,
+              p_options:        selectedOptions,
+            });
+            if (optionsError) {
+              console.error('[products/[id]] set_reservation_options 저장 실패:', optionsError);
+              showToast('선택한 옵션상품 저장에 실패했습니다. 체크아웃에서 다시 확인해 주세요.');
+            }
+          }
+        }
+        // 예약신청(hold) 채팅 알림 발송 — fire-and-forget
+        if (row.reservation_id != null) {
+          fetch('/api/checkout/notify-hold', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ reservationId: row.reservation_id }),
+          }).catch(() => {})
+        }
+        goto('/checkout');
       }
-      // 예약신청(hold) 채팅 알림 발송 — fire-and-forget
-      if (row.reservation_id != null) {
-        fetch('/api/checkout/notify-hold', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ reservationId: row.reservation_id }),
-        }).catch(() => {})
-      }
-      goto('/checkout');
     } catch {
       showToast('예약 중 오류가 발생했습니다.');
     } finally {
@@ -402,6 +444,76 @@
 <!-- ② ProductInfo Section -->
 <section class="info-section">
   <div class="info-inner">
+
+    {#snippet optionsSection()}
+    <div class="options-section">
+      <div
+        class="options-header"
+        class:options-header--disabled={!hasOptionItems}
+        onclick={() => { if (hasOptionItems) optionsOpen = !optionsOpen; }}
+        role="button"
+        tabindex={hasOptionItems ? 0 : -1}
+        aria-disabled={!hasOptionItems}
+        onkeydown={(e) => { if (hasOptionItems && (e.key === 'Enter' || e.key === ' ')) optionsOpen = !optionsOpen; }}
+        aria-expanded={hasOptionItems ? optionsOpen : undefined}
+      >
+        <span class="options-title">옵션 상품</span>
+        <div class="options-more-btn">
+          <span class="options-more-text">더보기</span>
+          <svg
+            class="options-chevron"
+            class:open={hasOptionItems && optionsOpen}
+            width="8" height="14" viewBox="0 0 8 14" fill="none"
+          >
+            <path d="M1 1L7 7L1 13" stroke="var(--cs-text-dark)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+        </div>
+      </div>
+      {#if hasOptionItems && optionsOpen}
+      <div class="options-list">
+        {#each optionItems as opt}
+          <div class="option-item">
+            <div class="option-label-row">
+              <p class="option-label">{opt.label}</p>
+              <div class="option-badges">
+                {#if opt.is_required}
+                  <span class="opt-badge opt-badge--required">필수</span>
+                {/if}
+                {#if opt.min_select_required}
+                  <span class="opt-badge opt-badge--min-select">최소 1개 선택</span>
+                {/if}
+                {#if opt.delivery_rental_disabled}
+                  <span class="opt-badge opt-badge--no-delivery">배송대여 불가</span>
+                {/if}
+              </div>
+            </div>
+            <div class="option-bottom-row">
+              <div class="option-price-wrap">
+                <span class="option-price-num">{fmt(opt.price)}</span>
+                <span class="option-price-unit">원</span>
+              </div>
+              <div class="qty-control small">
+                <button onclick={() => { opt.qty = Math.max(0, opt.qty - 1); }} class="qty-btn" aria-label="옵션 수량 감소">
+                  <svg width="12" height="2" viewBox="0 0 14 2" fill="none">
+                    <path d="M1 1H13" stroke="var(--cs-text-dark)" stroke-width="2" stroke-linecap="round"/>
+                  </svg>
+                </button>
+                <div class="qty-val-wrap">
+                  <input type="number" bind:value={opt.qty} min="0" class="qty-input" aria-label="옵션 수량"/>
+                </div>
+                <button onclick={() => { opt.qty += 1; }} class="qty-btn" aria-label="옵션 수량 증가">
+                  <svg width="12" height="12" viewBox="0 0 14 14" fill="none">
+                    <path d="M1 7H13M7 1V13" stroke="var(--cs-text-dark)" stroke-width="2" stroke-linecap="round"/>
+                  </svg>
+                </button>
+              </div>
+            </div>
+          </div>
+        {/each}
+      </div>
+      {/if}
+    </div>
+    {/snippet}
 
     <!-- Left column -->
     <div class="info-left">
@@ -479,73 +591,9 @@
         </div>
       </div>
 
-      <!-- Options -->
-      <div class="options-section">
-        <div
-          class="options-header"
-          class:options-header--disabled={!hasOptionItems}
-          onclick={() => { if (hasOptionItems) optionsOpen = !optionsOpen; }}
-          role="button"
-          tabindex={hasOptionItems ? 0 : -1}
-          aria-disabled={!hasOptionItems}
-          onkeydown={(e) => { if (hasOptionItems && (e.key === 'Enter' || e.key === ' ')) optionsOpen = !optionsOpen; }}
-          aria-expanded={hasOptionItems ? optionsOpen : undefined}
-        >
-          <span class="options-title">옵션 상품</span>
-          <div class="options-more-btn">
-            <span class="options-more-text">더보기</span>
-            <svg
-              class="options-chevron"
-              class:open={hasOptionItems && optionsOpen}
-              width="8" height="14" viewBox="0 0 8 14" fill="none"
-            >
-              <path d="M1 1L7 7L1 13" stroke="var(--cs-text-dark)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
-            </svg>
-          </div>
-        </div>
-        {#if hasOptionItems && optionsOpen}
-        <div class="options-list">
-          {#each optionItems as opt}
-            <div class="option-item">
-              <div class="option-label-row">
-                <p class="option-label">{opt.label}</p>
-                <div class="option-badges">
-                  {#if opt.is_required}
-                    <span class="opt-badge opt-badge--required">필수</span>
-                  {/if}
-                  {#if opt.min_select_required}
-                    <span class="opt-badge opt-badge--min-select">최소 1개 선택</span>
-                  {/if}
-                  {#if opt.delivery_rental_disabled}
-                    <span class="opt-badge opt-badge--no-delivery">배송대여 불가</span>
-                  {/if}
-                </div>
-              </div>
-              <div class="option-bottom-row">
-                <div class="option-price-wrap">
-                  <span class="option-price-num">{fmt(opt.price)}</span>
-                  <span class="option-price-unit">원</span>
-                </div>
-                <div class="qty-control small">
-                  <button onclick={() => { opt.qty = Math.max(0, opt.qty - 1); }} class="qty-btn" aria-label="옵션 수량 감소">
-                    <svg width="12" height="2" viewBox="0 0 14 2" fill="none">
-                      <path d="M1 1H13" stroke="var(--cs-text-dark)" stroke-width="2" stroke-linecap="round"/>
-                    </svg>
-                  </button>
-                  <div class="qty-val-wrap">
-                    <input type="number" bind:value={opt.qty} min="0" class="qty-input" aria-label="옵션 수량"/>
-                  </div>
-                  <button onclick={() => { opt.qty += 1; }} class="qty-btn" aria-label="옵션 수량 증가">
-                    <svg width="12" height="12" viewBox="0 0 14 14" fill="none">
-                      <path d="M1 7H13M7 1V13" stroke="var(--cs-text-dark)" stroke-width="2" stroke-linecap="round"/>
-                    </svg>
-                  </button>
-                </div>
-              </div>
-            </div>
-          {/each}
-        </div>
-        {/if}
+      <!-- Options: mobile stacking position (PC에서는 우측 컬럼으로 이동 — options-mobile-slot 참고) -->
+      <div class="options-mobile-slot">
+        {@render optionsSection()}
       </div>
 
       <!-- Mobile: CalendarTimePicker (stacked below options on mobile) -->
@@ -572,6 +620,9 @@
 
     <!-- Right column: PC only -->
     <div class="info-right">
+      <!-- 옵션상품: PC에서는 대여방식·배송정책·예약신청 그룹 상단에 배치 -->
+      {@render optionsSection()}
+
       <CalendarTimePicker
         bind:startDate
         bind:endDate
@@ -945,7 +996,9 @@
   }
   @media (min-width: 641px) {
     .info-right {
-      display: block;
+      display: flex;
+      flex-direction: column;
+      gap: 30px;
       flex: 1;
       min-width: 0;
       position: sticky;
@@ -960,6 +1013,14 @@
   }
   @media (min-width: 641px) {
     .cal-mobile { display: none; }
+  }
+
+  /* 옵션상품: 모바일 전용 위치 — PC(≥641px)에서는 우측 컬럼(info-right)으로 이동 */
+  .options-mobile-slot {
+    display: block;
+  }
+  @media (min-width: 641px) {
+    .options-mobile-slot { display: none; }
   }
 
   /* TitleInfo card */
