@@ -1152,7 +1152,7 @@ hover/선택: background var(--cs-purple-op10)
 
 ---
 
-### 13-2. `sub-gnb_navi_b` — PC 전용 서브 GNB B타입 (Back Pill + 카테고리 아이콘 행)
+### 13-2. `sub-gnb_navi_b` — PC 전용 서브 GNB B타입 (Back Pill 단독)
 
 > **"sub-gnb_navi_b 적용해" 언급 시 → 아래 스펙을 즉시 적용. 모바일 미지원(PC ≥641px 전용).**
 
@@ -1163,26 +1163,24 @@ hover/선택: background var(--cs-purple-op10)
 | **Stephen 명칭** | `sub-gnb_navi_b` |
 | **반응형** | **PC 전용** (`≥641px`) — 모바일에서 `display: none` |
 | **위치** | `position: sticky; top: 0; z-index: 50` — GNB 바로 아래 |
-| **배경** | `var(--cs-lilac)` (`#ECEBF4`) + `border-bottom: 1px solid rgba(0,0,0,0.1)` |
-| **레이아웃** | 좌: Back+타이틀 Pill / 우: 카테고리 아이콘 행 |
-| **소스 정본** | `src/routes/checkout/+page.svelte` `.cart-header` |
+| **배경** | `transparent` · `border-bottom: none` |
+| **레이아웃** | Back+타이틀 Pill 단독 (카테고리 아이콘 없음) |
+| **소스 정본** | `src/routes/checkout/+page.svelte` `.sub-gnb-b` |
 
 #### 구조 개요
 
 ```
 [sub-gnb_navi_b]
-  ├── [.header-pill]            ← Back pill (뒤로가기 + 현재 페이지명)
-  │     ├── ← 화살표 SVG (22×18px)
-  │     ├── "Back" 텍스트 (--text-pc-title-16)
-  │     └── "Cart" 타이틀 (--text-pc-menu-en-20)   ← 페이지별 교체
-  └── [.cat-icons]             ← 카테고리 원형 아이콘 행 (≥641px에서 표시)
-        └── .cat-icon-btn × N  ← 60×60px 원형 버튼
+  └── [.sub-gnb-b-pill]        ← Back pill (뒤로가기 + 현재 페이지명)
+        ├── ← 화살표 SVG (22×18px)
+        ├── "Back" 텍스트 (--text-pc-title-16)
+        └── 페이지명 타이틀 (--text-pc-menu-en-20)   ← 화면별 교체
 ```
 
 #### 표준 DOM 구조 (Svelte 5)
 
 ```svelte
-<!-- PC 전용 서브 GNB B타입 — 모바일에서 display:none -->
+<!-- PC 전용 서브 GNB B타입 — 카테고리 아이콘 없음, 모바일 display:none -->
 <header class="sub-gnb-b">
   <div class="sub-gnb-b-inner">
 
@@ -1198,14 +1196,6 @@ hover/선택: background var(--cs-purple-op10)
       <span class="sub-gnb-b-title">페이지명</span>  <!-- 화면별 교체 -->
     </button>
 
-    <!-- 카테고리 아이콘 행 (선택 사항 — 필요 시 추가) -->
-    <div class="sub-gnb-b-cats">
-      <button class="sub-gnb-b-cat-btn" title="카테고리명">
-        <svg class="sub-gnb-b-cat-svg" viewBox="..." fill="none">...</svg>
-      </button>
-      <!-- 추가 카테고리 버튼 반복 -->
-    </div>
-
   </div>
 </header>
 ```
@@ -1218,8 +1208,8 @@ hover/선택: background var(--cs-purple-op10)
   position: sticky;
   top: 0;
   z-index: 50;
-  background: var(--cs-lilac);           /* #ECEBF4 */
-  border-bottom: 1px solid rgba(0,0,0,0.1);
+  background: transparent;
+  border-bottom: none;
   display: none;                          /* 모바일 숨김 */
 }
 @media (min-width: 641px) {
@@ -1287,8 +1277,142 @@ hover/선택: background var(--cs-purple-op10)
   flex-shrink: 0;
   white-space: nowrap;
 }
+```
 
-/* ━━━ 카테고리 아이콘 행 ━━━ */
+#### 타이포 토큰 요약
+
+| 요소 | 토큰 | 크기 |
+|---|---|---|
+| Back 텍스트 | `--text-pc-title-16` | 16px Bold |
+| 페이지 타이틀 | `--text-pc-menu-en-20` | 20px |
+
+#### 적용 시 필수 확인 (⛔)
+
+```
+❌ 모바일에서 display:block 금지 — .sub-gnb-b { display: none } 기본값 필수
+❌ position: fixed 금지 — sticky + top: 0 으로만 구현
+❌ 카테고리 아이콘 행(.sub-gnb-b-cats) 추가 금지 — 카테고리 포함 화면은 sub-gnb_navi_c 사용
+```
+
+---
+
+### 13-3. `sub-gnb_navi_c` — PC 전용 서브 GNB C타입 (Back Pill + 카테고리 아이콘 행, 상품상세 전용)
+
+> **"sub-gnb_navi_c 적용해"** 또는 **"상품상세정보 전용 GNB 적용해"** 언급 시 → 아래 스펙을 즉시 적용.
+
+#### 개요
+
+| 항목 | 값 |
+|---|---|
+| **Stephen 명칭** | `sub-gnb_navi_c` |
+| **부칭** | 상품상세정보 전용 GNB |
+| **반응형** | **PC 전용** (`≥641px`) — 모바일에서 `display: none` |
+| **위치** | `position: sticky; top: 0; z-index: 50` |
+| **배경** | `transparent` · `border-bottom: none` |
+| **레이아웃** | 좌: Back+타이틀 Pill / 우: 카테고리 아이콘 행 |
+| **적용 화면** | `/products/[id]` 상품 상세 페이지 전용 |
+
+#### 구조 개요
+
+```
+[sub-gnb_navi_c]
+  ├── [.sub-gnb-b-pill]        ← Back pill (뒤로가기 + 현재 카테고리명)
+  │     ├── ← 화살표 SVG (22×18px)
+  │     ├── "Back" 텍스트 (--text-pc-title-16)
+  │     └── 카테고리명 타이틀 (--text-pc-menu-en-20)
+  └── [.sub-gnb-b-cats]        ← 카테고리 원형 아이콘 행
+        └── .sub-gnb-b-cat-btn × N  ← 60×60px 원형 버튼
+```
+
+#### 표준 DOM 구조 (Svelte 5)
+
+```svelte
+<!-- 상품상세 전용 PC 서브 GNB — Back Pill + 카테고리 아이콘 행 -->
+<header class="sub-gnb-b">
+  <div class="sub-gnb-b-inner">
+
+    <!-- Back + 카테고리명 Pill -->
+    <button type="button" class="sub-gnb-b-pill" onclick={() => history.back()} aria-label="뒤로 가기">
+      <div class="sub-gnb-b-pill-left">
+        <svg class="sub-gnb-b-arrow" viewBox="0 0 21.3844 17.1421" fill="none" aria-hidden="true">
+          <path d="M19.8844 8.5707L1.5 8.57107M8.57107 1.5L1.5 8.57107L8.57107 15.6421"
+            stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="3"/>
+        </svg>
+        <span class="sub-gnb-b-back">Back</span>
+      </div>
+      <span class="sub-gnb-b-title">카테고리명</span>  <!-- 현재 카테고리 교체 -->
+    </button>
+
+    <!-- 카테고리 아이콘 행 -->
+    <div class="sub-gnb-b-cats">
+      <button class="sub-gnb-b-cat-btn" title="카테고리명" type="button">
+        <svg class="sub-gnb-b-cat-svg" viewBox="..." fill="none" aria-hidden="true">...</svg>
+      </button>
+      <!-- 추가 카테고리 버튼 반복 -->
+    </div>
+
+  </div>
+</header>
+```
+
+#### 표준 CSS 패턴
+
+```css
+/* sub-gnb_navi_b CSS 전체 포함 + 카테고리 아이콘 행 추가 */
+
+/* ━━━ 래퍼 (sub-gnb_navi_b와 동일) ━━━ */
+.sub-gnb-b {
+  position: sticky;
+  top: 0;
+  z-index: 50;
+  background: transparent;
+  border-bottom: none;
+  display: none;
+}
+@media (min-width: 641px) {
+  .sub-gnb-b { display: block; }
+}
+
+.sub-gnb-b-inner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 30px;
+  width: 100%;
+  max-width: var(--layout-pc-max);
+  margin: 0 auto;
+  padding: 20px var(--layout-pc-pad);
+  flex-wrap: nowrap;
+  box-sizing: border-box;
+}
+
+.sub-gnb-b-pill {
+  background: rgba(225, 222, 243, 0.4);
+  border: none;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 20px 40px;
+  border-radius: 25px;
+  width: 100%;
+  max-width: 460px;
+  min-width: 0;
+  min-height: 62px;
+  flex: 0 1 460px;
+  box-sizing: border-box;
+  color: var(--cs-text);
+  transition: background 0.2s;
+}
+.sub-gnb-b-pill:hover { background: rgba(225, 222, 243, 0.85); }
+
+.sub-gnb-b-pill-left { display: flex; align-items: center; gap: 9px; min-width: 0; }
+.sub-gnb-b-arrow { width: 22px; height: 18px; flex-shrink: 0; }
+.sub-gnb-b-back { font: var(--text-pc-title-16); color: var(--cs-text); white-space: nowrap; }
+.sub-gnb-b-title { font: var(--text-pc-menu-en-20); color: var(--cs-text); flex-shrink: 0; white-space: nowrap; }
+
+/* ━━━ 카테고리 아이콘 행 (sub-gnb_navi_c 전용) ━━━ */
 .sub-gnb-b-cats {
   display: flex;
   flex-wrap: nowrap;
@@ -1313,19 +1437,16 @@ hover/선택: background var(--cs-purple-op10)
 }
 .sub-gnb-b-cat-btn:hover { background: #D0CCEB; }
 
-.sub-gnb-b-cat-svg {
-  width: 28px;
-  height: 28px;
-}
+.sub-gnb-b-cat-svg { width: 28px; height: 28px; }
 ```
 
-#### 타이포 토큰 요약
+#### 타이포·크기 토큰 요약
 
 | 요소 | 토큰 | 크기 |
 |---|---|---|
 | Back 텍스트 | `--text-pc-title-16` | 16px Bold |
-| 페이지 타이틀 | `--text-pc-menu-en-20` | 20px |
-| 카테고리 아이콘 버튼 | — | 60×60px (border-radius: 30px) |
+| 카테고리명 타이틀 | `--text-pc-menu-en-20` | 20px |
+| 카테고리 아이콘 버튼 | — | 60×60px (`border-radius: 30px`) |
 | 아이콘 SVG | — | 28×28px |
 
 #### 적용 시 필수 확인 (⛔)
@@ -1333,7 +1454,8 @@ hover/선택: background var(--cs-purple-op10)
 ```
 ❌ 모바일에서 display:block 금지 — .sub-gnb-b { display: none } 기본값 필수
 ❌ position: fixed 금지 — sticky + top: 0 으로만 구현
-❌ 카테고리 없는 화면에서 .sub-gnb-b-cats 렌더링 금지 — 조건부 렌더링
+❌ 배경색·border-bottom 재추가 금지
+❌ /products/[id] 외 화면에 sub-gnb_navi_c 적용 금지 — 일반 PC 화면은 sub-gnb_navi_b 사용
 ```
 
 **GATE C 확인 항목**
@@ -1346,6 +1468,8 @@ hover/선택: background var(--cs-purple-op10)
 [ ] Back 텍스트 --text-pc-title-16 / 타이틀 --text-pc-menu-en-20?
 [ ] 카테고리 버튼 60×60px; border-radius: 30px?
 [ ] 아이콘 SVG 28×28px?
+[ ] sub-gnb_navi_c (상품상세정보 전용): background: transparent + border-bottom: none?
+[ ] sub-gnb_navi_b (Cart 등 일반 화면): --cs-lilac 배경 + 아웃라인 유지?
 ```
 
 ---

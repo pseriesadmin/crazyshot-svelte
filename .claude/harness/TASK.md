@@ -8418,7 +8418,7 @@ TDD도메인: AGENTS.md 키워드(결제·예약·핵심RPC·보안·특화로�
   - svelte-check 신규 에러 0건
   - 파일: src/lib/components/chat/AdminChatPanel.svelte, src/lib/components/common/Arrow02Icon.svelte
 
-## NOW — 모바일 대여목록 FAB + 아코디언 카드 + QR 상품 일치검증 (2026-08-07) — 🚦 GATE B 승인 완료(Plan Mode 사전승인)
+## NOW — 모바일 대여목록 FAB + 아코디언 카드 + QR 상품 일치검증 (2026-08-07) ✅ 완료 (sp3-qa-agent GATE E 통과, stage+production 배포 확인)
 
 [CONTEXT BRIDGE]
 plan_source: /Users/stevenmac/.claude/plans/ethereal-leaping-cray.md (Plan Mode, Stephen 승인)
@@ -8491,7 +8491,7 @@ svelte-check: 신규 에러 0건 (기존 products/search/+page.svelte noCatIcons
     viewBox 0 0 24 24 패턴 — arrow02 단독 표준으로 명시)
   - GATE E 최종 통과 — 커밋은 Stephen이 직접 실행
 
-## NOW — 대여 채팅알림 세션 라우팅 버그 수정: context_type 통일 (2026-08-07, Stephen 실사용 테스트 리포트)
+## NOW — 대여 채팅알림 세션 라우팅 버그 수정: context_type 통일 (2026-08-07, Stephen 실사용 테스트 리포트) ✅ 완료 (stage QA 완료 — 채팅·푸시 정상 수신 확인, FCM SW 버전 수정 포함, stage+production 배포 확인)
 
 [CONTEXT BRIDGE]
 plan_source: Stephen 리포트("반납 예정 알림 버튼 클릭 시 고객 채팅/푸시에 전혀 수신 안 됨") + DB 직접 조회 진단
@@ -8546,7 +8546,7 @@ TDD도메인: 있음 (키워드: 예약 채팅알림 RPC — DB 함수 변경) �
   - Stephen 안내: 기존 등록된 구버전 서비스워커/손상된 IndexedDB가 브라우저에 남아있을 수 있어
     재테스트 전 DevTools에서 서비스워커 Unregister + IndexedDB(firebase-messaging-database) 삭제 필요
 
-⚠️ Stephen 수동 QA 권장: 서비스워커 재등록 후 반납 예정 알림 재발송 → 채팅(FloatingBar 진입)·푸시 모두 수신 확인
+✅ Stephen 수동 QA 완료: 서비스워커 재등록 후 반납 예정 알림 재발송 → 채팅(FloatingBar 진입)·푸시 모두 정상 수신 확인 (2026-08-07)
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 GATE E — @sp3-qa-agent 세션 전체 검수 결과 (2026-08-07)
