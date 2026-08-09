@@ -1,8 +1,17 @@
 <script lang="ts">
   import BottomTabBar from '$lib/components/common/BottomTabBar.svelte'
+  import CrazylogBannerModal from '$lib/components/crazylog/admin/CrazylogBannerModal.svelte'
   import type { PageData } from './$types'
   interface Props { data: PageData }
   let { data }: Props = $props()
+
+  const BANNER_HEADER_BG: Record<string, string> = {
+    crazylog_banner_slot1: '#201857',
+    crazylog_banner_slot2: '#cf0000',
+    crazylog_banner_slot3: '#3b2f8a',
+  }
+
+  let activeModal = $state<string | null>(null)
 
   const TABS = [
     { label: '상품리뷰', countKey: 'review' as const },
@@ -31,6 +40,8 @@
   const M_KEYWORDS = ['양양의 기억 로그', 'Mini2se 리뷰 로그', '신상로그', 'Air 3S Drone', 'Air 3S Drone', 'Air 3S Drone']
 
   interface CardItem {
+    id: string | null
+    href: string
     category: string
     headerBg: string
     img: string
@@ -38,45 +49,35 @@
     sub: string
   }
   interface ListSection {
-    titleParts: { text: string; accent?: boolean; accentColor?: string }[]
+    titleText: string
     cards: CardItem[]
   }
 
-  const M_LISTS: ListSection[] = [
-    {
-      titleParts: [
-        { text: '주목받는 신상 ' },
-        { text: '리뷰', accent: true, accentColor: '#ff3535' },
-      ],
-      cards: [
-        { category: 'Flash Deals', headerBg: '#3b2f8a', img: '/crazylog/card-img1.png', title: '다양한 액션캠 대잔치',                sub: 'DJI, 오즈모, 인스타 모두 맛봅시다' },
-        { category: 'Release',     headerBg: '#3b2f8a', img: '/crazylog/card-img3.png', title: 'DJI Mini2se Aerial Drone',            sub: '드론시장에서 품질은 없다.' },
-        { category: 'Release',     headerBg: '#3b2f8a', img: '/crazylog/card-img4.png', title: 'Panoramas-One Lens to Rule Them All', sub: '올어라운드 렌즈의 끝판왕' },
-      ],
-    },
-    {
-      titleParts: [
-        { text: '공유', accent: true, accentColor: '#ff3535' },
-        { text: "하면 '좋아요'" },
-      ],
-      cards: [
-        { category: 'Fan vlog', headerBg: '#cf0000', img: '/crazylog/card-img2.png', title: '양양의 기억 담기', sub: '동해 양양바다의 기억을 담은 브이로그' },
-        { category: 'Fan vlog', headerBg: '#cf0000', img: '/crazylog/card-img6.png', title: '해외 콘서트 현장', sub: '올어라운드 렌즈의 끝판왕' },
-      ],
-    },
-    {
-      titleParts: [
-        { text: '광활한 ' },
-        { text: '할인', accent: true, accentColor: '#553fe0' },
-        { text: '이벤트' },
-      ],
-      cards: [
-        { category: 'Flash Deals', headerBg: '#553fe0', img: '/crazylog/card-img1.png', title: '다양한 액션캠 대잔치', sub: 'DJI, 오즈모, 인스타 모두 맛봅시다' },
-        { category: 'Flash Deals', headerBg: '#553fe0', img: '/crazylog/card-img7.png', title: '패키지 렌탈 타임세일', sub: '소니 알파 패키지 맛보기' },
-      ],
-    },
+  // 슬롯이 비어있을 때(관리자 미설정) 폴백 — 기존 정적 데이터
+  const M_FALLBACK: { titleText: string; headerBg: string; card: Omit<CardItem, 'id' | 'href' | 'headerBg'> }[] = [
+    { titleText: 'Flash Deals', headerBg: '#3b2f8a', card: { category: 'Flash Deals', img: '/crazylog/card-img1.png', title: '다양한 액션캠 대잔치', sub: 'DJI, 오즈모, 인스타 모두 맛봅시다' } },
+    { titleText: '채널홍보',    headerBg: '#cf0000', card: { category: '채널홍보',    img: '/crazylog/card-img2.png', title: '양양의 기억 담기',      sub: '동해 양양바다의 기억을 담은 브이로그' } },
+    { titleText: 'Release',     headerBg: '#553fe0', card: { category: 'Release',     img: '/crazylog/card-img3.png', title: 'DJI Mini2se Aerial Drone', sub: '드론시장에서 품질은 없다.' } },
   ]
 
+  const M_LISTS: ListSection[] = $derived(data.bannerSlots.map((slot, i) => {
+    const fb = M_FALLBACK[i]
+    if (slot.items.length === 0) {
+      return { titleText: fb.titleText, cards: [{ ...fb.card, id: null, href: '/crazylog', headerBg: fb.headerBg }] }
+    }
+    return {
+      titleText: slot.badgeLabel,
+      cards: slot.items.map((item) => ({
+        id: item.id,
+        href: `/crazylog/view/${item.id}`,
+        category: slot.badgeLabel,
+        headerBg: fb.headerBg,
+        img: item.img ?? fb.card.img,
+        title: item.title,
+        sub: item.desc ?? '',
+      })),
+    }
+  }))
 
 </script>
 
@@ -114,25 +115,32 @@
 
         <!-- col-1 row-2: Shotlog (Flash Deals card) -->
         <!-- Figma: h-[400px], bg hero-shotlog1.png, bg-[#201857] header + gradient writing -->
-        <a href="/crazylog/view/1" class="d-shotlog">
-          <div class="d-shotlog-bg">
-            <img src="/crazylog/hero-shotlog1.png" alt="" class="d-shotlog-bg-img" />
-          </div>
-          <!-- Figma: Title — bg-[#201857] px-[50px] py-[20px] flex justify-between -->
-          <div class="d-shotlog-header">
-            <span class="d-shotlog-label">Flash Deals</span>
-            <div class="d-shotlog-arrow">
-              <svg width="13" height="13" viewBox="0 0 16 16" fill="none" style="transform: scaleY(-1)">
-                <path d="M2 5L8 11L14 5" stroke="white" stroke-linecap="round" stroke-linejoin="round" stroke-width="3"/>
-              </svg>
+        <div class="d-shotlog-wrap">
+          {#if data.isCms}
+            <button class="admin-edit-btn admin-banner-btn" onclick={() => { activeModal = 'crazylog_banner_slot1' }} aria-label="Flash Deals 배너 설정">
+              ✦ 목록 선택
+            </button>
+          {/if}
+          <a href={data.bannerSlots[0].items[0] ? `/crazylog/view/${data.bannerSlots[0].items[0].id}` : '/crazylog'} class="d-shotlog">
+            <div class="d-shotlog-bg">
+              <img src={data.bannerSlots[0].items[0]?.img ?? '/crazylog/hero-shotlog1.png'} alt="" class="d-shotlog-bg-img" />
             </div>
-          </div>
-          <!-- Figma: Writing2 — gradient bg-gradient-to-t from-rgba(16,11,50,0) to-#100b32 via-40% -->
-          <div class="d-shotlog-writing">
-            <p class="d-shotlog-writing-text">From Portraits to Panoramas-One Lens to Rule Them All</p>
-            <p class="d-shotlog-writing-sub">올어라운드 렌즈의 끝판왕</p>
-          </div>
-        </a>
+            <!-- Figma: Title — bg-[#201857] px-[50px] py-[20px] flex justify-between -->
+            <div class="d-shotlog-header">
+              <span class="d-shotlog-label">{data.bannerSlots[0].badgeLabel}</span>
+              <div class="d-shotlog-arrow">
+                <svg width="13" height="13" viewBox="0 0 16 16" fill="none" style="transform: scaleY(-1)">
+                  <path d="M2 5L8 11L14 5" stroke="white" stroke-linecap="round" stroke-linejoin="round" stroke-width="3"/>
+                </svg>
+              </div>
+            </div>
+            <!-- Figma: Writing2 — gradient bg-gradient-to-t from-rgba(16,11,50,0) to-#100b32 via-40% -->
+            <div class="d-shotlog-writing">
+              <p class="d-shotlog-writing-text">{data.bannerSlots[0].items[0]?.title ?? 'From Portraits to Panoramas-One Lens to Rule Them All'}</p>
+              <p class="d-shotlog-writing-sub">{data.bannerSlots[0].items[0]?.desc ?? '올어라운드 렌즈의 끝판왕'}</p>
+            </div>
+          </a>
+        </div>
 
         </div><!-- /d-col1-wrap -->
 
@@ -141,39 +149,53 @@
 
         <!-- col-2 row-1: Shotlog1 (hero-shotlog.png) -->
         <!-- Figma: col-2 row-1, bg-[#cf0000] "K-Trail log" header + writing -->
-        <a href="/crazylog/view/1" class="d-shotlog1">
-          <div class="d-shotlog1-bg">
-            <img src="/crazylog/hero-shotlog.png" alt="" class="d-shotlog1-bg-img" />
-          </div>
-          <div class="d-shotlog1-header">
-            <span class="d-shotlog1-label">채널홍보</span>
-            <svg width="13" height="13" viewBox="0 0 16 16" fill="none" style="transform:scaleY(-1)">
-              <path d="M2 5L8 11L14 5" stroke="white" stroke-linecap="round" stroke-linejoin="round" stroke-width="3"/>
-            </svg>
-          </div>
-          <div class="d-shotlog1-writing">
-            <p class="d-shotlog1-title">경복궁 한복 체험</p>
-            <p class="d-shotlog1-sub">K-트레일 나들이 완벽 가이드</p>
-          </div>
-        </a>
+        <div class="d-shotlog-wrap">
+          {#if data.isCms}
+            <button class="admin-edit-btn admin-banner-btn" onclick={() => { activeModal = 'crazylog_banner_slot2' }} aria-label="채널홍보 배너 설정">
+              ✦ 목록 선택
+            </button>
+          {/if}
+          <a href={data.bannerSlots[1].items[0] ? `/crazylog/view/${data.bannerSlots[1].items[0].id}` : '/crazylog'} class="d-shotlog1">
+            <div class="d-shotlog1-bg">
+              <img src={data.bannerSlots[1].items[0]?.img ?? '/crazylog/hero-shotlog.png'} alt="" class="d-shotlog1-bg-img" />
+            </div>
+            <div class="d-shotlog1-header">
+              <span class="d-shotlog1-label">{data.bannerSlots[1].badgeLabel}</span>
+              <svg width="13" height="13" viewBox="0 0 16 16" fill="none" style="transform:scaleY(-1)">
+                <path d="M2 5L8 11L14 5" stroke="white" stroke-linecap="round" stroke-linejoin="round" stroke-width="3"/>
+              </svg>
+            </div>
+            <div class="d-shotlog1-writing">
+              <p class="d-shotlog1-title">{data.bannerSlots[1].items[0]?.title ?? '경복궁 한복 체험'}</p>
+              <p class="d-shotlog1-sub">{data.bannerSlots[1].items[0]?.desc ?? 'K-트레일 나들이 완벽 가이드'}</p>
+            </div>
+          </a>
+        </div>
 
         <!-- col-2 row-2: Shotlog2 (hero-shotlog2.png) -->
         <!-- Figma: col-2 row-2, bg-[#3b2f8a] "Release" header + writing -->
-        <a href="/crazylog/view/1" class="d-shotlog2">
-          <div class="d-shotlog2-bg">
-            <img src="/crazylog/hero-shotlog2.png" alt="" class="d-shotlog2-img" />
-          </div>
-          <div class="d-shotlog2-header">
-            <span class="d-shotlog2-label">Release</span>
-            <svg width="13" height="13" viewBox="0 0 16 16" fill="none" style="transform:scaleY(-1)">
-              <path d="M2 5L8 11L14 5" stroke="white" stroke-linecap="round" stroke-linejoin="round" stroke-width="3"/>
-            </svg>
-          </div>
-          <div class="d-shotlog2-writing">
-            <p class="d-shotlog2-title">DJI Mini2se Aerial Drone</p>
-            <p class="d-shotlog2-sub">드론시장에서 품질은 없다.</p>
-          </div>
-        </a>
+        <div class="d-shotlog-wrap">
+          {#if data.isCms}
+            <button class="admin-edit-btn admin-banner-btn" onclick={() => { activeModal = 'crazylog_banner_slot3' }} aria-label="Release 배너 설정">
+              ✦ 목록 선택
+            </button>
+          {/if}
+          <a href={data.bannerSlots[2].items[0] ? `/crazylog/view/${data.bannerSlots[2].items[0].id}` : '/crazylog'} class="d-shotlog2">
+            <div class="d-shotlog2-bg">
+              <img src={data.bannerSlots[2].items[0]?.img ?? '/crazylog/hero-shotlog2.png'} alt="" class="d-shotlog2-img" />
+            </div>
+            <div class="d-shotlog2-header">
+              <span class="d-shotlog2-label">{data.bannerSlots[2].badgeLabel}</span>
+              <svg width="13" height="13" viewBox="0 0 16 16" fill="none" style="transform:scaleY(-1)">
+                <path d="M2 5L8 11L14 5" stroke="white" stroke-linecap="round" stroke-linejoin="round" stroke-width="3"/>
+              </svg>
+            </div>
+            <div class="d-shotlog2-writing">
+              <p class="d-shotlog2-title">{data.bannerSlots[2].items[0]?.title ?? 'DJI Mini2se Aerial Drone'}</p>
+              <p class="d-shotlog2-sub">{data.bannerSlots[2].items[0]?.desc ?? '드론시장에서 품질은 없다.'}</p>
+            </div>
+          </a>
+        </div>
 
         </div><!-- /d-col2-wrap -->
 
@@ -262,15 +284,7 @@
     <section class="m-list">
       <!-- Figma: com.product.title.bar — flex items-center justify-between py-[40px] -->
       <div class="m-list-header">
-        <p class="m-list-title">
-          {#each list.titleParts as part}
-            {#if part.accent}
-              <span style="color:{part.accentColor}">{part.text}</span>
-            {:else}
-              {part.text}
-            {/if}
-          {/each}
-        </p>
+        <p class="m-list-title">{list.titleText}</p>
         <div class="m-list-icons">
           <svg width="13" height="13" viewBox="0 0 16 16" fill="none" style="transform:scaleY(-1)">
             <path d="M2 5L8 11L14 5" stroke="#3B2F8A" stroke-linecap="round" stroke-linejoin="round" stroke-width="3"/>
@@ -280,7 +294,7 @@
       <!-- Figma: horizontal scroll snap carousel -->
       <div class="m-carousel">
         {#each list.cards as card, ci}
-          <a href="/crazylog/view/1" class="m-card">
+          <a href={card.href} class="m-card">
             <div class="m-card-bg">
               <img src={card.img} alt="" class="m-card-bg-img" />
             </div>
@@ -339,6 +353,18 @@
 
 <BottomTabBar />
 
+{#if data.isCms && activeModal}
+  {#each data.bannerSlots as slot}
+    {#if activeModal === slot.slotKey}
+      <CrazylogBannerModal
+        slotKey={slot.slotKey}
+        initialSettings={slot.settings}
+        onclose={() => { activeModal = null }}
+      />
+    {/if}
+  {/each}
+{/if}
+
 <style>
   /* ════════════════════════════════════════
      DESKTOP — 기본 숨김, 768px+ 표시
@@ -389,6 +415,34 @@
     display: flex;
     flex-direction: column;
     gap: 30px;
+  }
+
+  /* 배너 카드 관리자 트리거 래퍼 */
+  .d-shotlog-wrap { position: relative; display: flex; flex-direction: column; }
+  .d-col1-wrap .d-shotlog-wrap { flex: 1; min-height: 0; }
+  .admin-edit-btn {
+    background: rgba(16,11,50,0.75);
+    color: var(--cs-white);
+    border: none;
+    border-radius: var(--radius-sm);
+    padding: 6px 12px;
+    font-family: 'Noto Sans KR', sans-serif;
+    font-size: 12px;
+    font-weight: 700;
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    min-height: 32px;
+    white-space: nowrap;
+    transition: background 0.12s;
+  }
+  .admin-edit-btn:hover { background: rgba(16,11,50,0.92); }
+  .admin-banner-btn {
+    position: absolute;
+    top: 10px;
+    right: 10px;
+    z-index: 20;
   }
 
   /* ── col-1 row-1: Title1 (lilac bg) ── */

@@ -1,4 +1,7 @@
+import type { SupabaseClient } from '@supabase/supabase-js'
 import type { PageServerLoad } from './$types'
+import type { Database } from '$lib/types/database'
+import { pickBannerItems, deriveBadgeLabel, type BannerPost, type BannerSlotConfig } from '$lib/utils/crazylogBanner'
 
 type PostRow = {
 	id: string
@@ -52,6 +55,77 @@ const BAR_COLORS: Record<string, string> = {
 	'채널홍보': '#3b2f8a',
 }
 
+type BannerSettingsRow = Record<string, BannerSlotConfig | undefined>
+
+type BannerPostRow = {
+	id: string
+	title: string
+	log_type: string | null
+	thumbnail_url: string | null
+	view_count: number
+	status: string
+	is_public: boolean
+}
+
+const BANNER_SLOTS = [
+	{ key: 'crazylog_banner_slot1', fallbackLabel: 'Flash Deals' },
+	{ key: 'crazylog_banner_slot2', fallbackLabel: '채널홍보' },
+	{ key: 'crazylog_banner_slot3', fallbackLabel: 'Release' },
+] as const
+
+const MAX_BANNER_ITEMS = 3
+
+export interface BannerSlotResult {
+	slotKey: string
+	badgeLabel: string
+	items: BannerPost[]
+	settings: BannerSlotConfig
+}
+
+async function loadBannerSlots(
+	supabase: SupabaseClient<Database>
+): Promise<BannerSlotResult[]> {
+	// database.ts는 마이그레이션 210 신규 RPC를 아직 반영하지 않음 — rpc 호출부만 국소 캐스트
+	// eslint-disable-next-line @typescript-eslint/no-explicit-any
+	const { data: settingsData } = await (supabase.rpc as any)('get_crazylog_banner_settings')
+	const settings = (settingsData ?? {}) as BannerSettingsRow
+
+	const allIds = new Set<string>()
+	for (const slot of BANNER_SLOTS) {
+		const cfg = settings[slot.key]
+		if (cfg) for (const p of cfg.posts) allIds.add(p.id)
+	}
+
+	let postMap = new Map<string, BannerPost>()
+	if (allIds.size > 0) {
+		// eslint-disable-next-line @typescript-eslint/no-explicit-any
+		const { data: postsData } = await (supabase.rpc as any)('get_crazylog_posts_by_ids', {
+			p_ids: [...allIds],
+		})
+		for (const row of (postsData ?? []) as BannerPostRow[]) {
+			postMap.set(row.id, {
+				id: row.id,
+				title: row.title,
+				logType: row.log_type,
+				img: row.thumbnail_url,
+				desc: null,
+			})
+		}
+	}
+
+	return BANNER_SLOTS.map((slot) => {
+		const cfg = settings[slot.key] ?? { posts: [], mode: 'random' as const }
+		const pool = cfg.posts.map((p) => postMap.get(p.id)).filter((p): p is BannerPost => !!p)
+		const items = pickBannerItems(pool, cfg, MAX_BANNER_ITEMS, shuffleArray)
+		return {
+			slotKey: slot.key,
+			badgeLabel: deriveBadgeLabel(items, slot.fallbackLabel),
+			items,
+			settings: cfg,
+		}
+	})
+}
+
 export const load: PageServerLoad = async ({ locals }) => {
 	const { session } = await locals.safeGetSession()
 	let isCms = false
@@ -64,7 +138,7 @@ export const load: PageServerLoad = async ({ locals }) => {
 		isCms = !!(profile as { cms_role?: string | null } | null)?.cms_role
 	}
 
-	const [reviewCount, shareCount, promoCount, { data: rawAny, error }] = await Promise.all([
+	const [reviewCount, shareCount, promoCount, { data: rawAny, error }, bannerSlots] = await Promise.all([
 		locals.supabase
 			.from('user_posts')
 			.select('id', { count: 'exact', head: true })
@@ -91,6 +165,7 @@ export const load: PageServerLoad = async ({ locals }) => {
 			.eq('is_public', true)
 			.order('created_at', { ascending: false })
 			.limit(30),
+		loadBannerSlots(locals.supabase),
 	])
 
 	if (error) console.error('[crazylog] posts query error:', error)
@@ -129,6 +204,7 @@ export const load: PageServerLoad = async ({ locals }) => {
 			promo:  promoCount.count  ?? 0,
 		},
 		posts,
+		bannerSlots,
 		isCms,
 	}
 }

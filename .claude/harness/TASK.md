@@ -28,7 +28,7 @@ auth_baseline: fed4fdb — createBrowserClient 패턴 (절대 싱글톤 createCl
 
 ---
 
-## NOW — 크레이지로그 배너 카드 선택 UI + CMS 콘텐츠 탭 (2026-08-09)
+## NOW — 크레이지로그 배너 카드 선택 UI + CMS 콘텐츠 탭 (2026-08-09) ✅ GATE E 통과
 
 plan_source: hazy-honking-willow.md
 아젠다: `/crazylog` 3개 배너 카드(Flash Deals·채널홍보·Release, 하드코딩) → 관리자 선택형 풀(최대 8개/슬롯)에서 SSR 랜덤 최대 3개 노출로 전환. 배지 라벨 자동 반영(log_type 다수결). PC+모바일(M_LISTS) 공용. CMS `/cms/promotion/content` 신규 탭(콘텐츠 대시보드).
@@ -66,10 +66,11 @@ TDD도메인: `src/lib/utils/crazylogBanner.ts` (배지 라벨 다수결 도출 
 - [x] GSD-7: /cms/promotion/content 페이지(role 게이트 + KPI/Ring/Bars + TOP10) | GSD | ✅ 완료
 
 GATE B: ✅ 통과 — stage(ezyvffjvuwmtuhpxdjrw) 마이그레이션 210/211 적용 완료, RPC 동작 검증 완료
-GATE C: 대기 — production(vnbpmvxruyciuuaermyh) 마이그레이션 적용 전 Stephen 확인 + 브라우저 QA 필요
+GATE C: ✅ production(vnbpmvxruyciuuaermyh) 마이그레이션 210/211 적용 완료 (2026-08-10), RPC 동작 검증 완료
   - npx svelte-check: 신규/수정 파일 0 에러 (전체 315 warning은 대부분 기존 코드, 신규 파일 접근성 warning 3건만 추가)
   - npx vitest run: crazylogBanner.test.ts 8/8 통과 (기존 실패 2개 파일은 무관한 pre-existing 이슈, stage 브랜치 기준 재확인)
   - 브라우저 수동 QA 미실시 (Claude_Browser 사용 금지 규칙) — Stephen 직접 확인 필요
+  - git commit/push는 Stephen이 직접 진행 (자율 실행 금지)
 
 ---
 

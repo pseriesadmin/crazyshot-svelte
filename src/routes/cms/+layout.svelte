@@ -122,6 +122,7 @@
         { label: '세그먼트', href: '/cms/promotion/segment' },
         { label: '룰엔진', href: '/cms/promotion/rules' },
         { label: '분석', href: '/cms/promotion/analytics' },
+        { label: '콘텐츠', href: '/cms/promotion/content' },
       ],
     },
     {

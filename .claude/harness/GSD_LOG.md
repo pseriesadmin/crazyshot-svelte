@@ -1,6 +1,72 @@
 # GSD_LOG.md — 크레이지샷 실행 이력
 # 형식: [YYYY-MM-DD HH:MM] 타입 | 태스크명 | 파일 | 소요 | 결과
 
+[2026-08-10] ⚡GSD | 크레이지로그 배너 카드 선택 UI + CMS 콘텐츠 탭 (plan_source: hazy-honking-willow.md)
+  | 신규 10개·수정 3개 파일 | GATE B·C 전부 통과 (stage+production DB 적용 완료)
+  배경: `/crazylog` 메인 3개 배너 카드(Flash Deals·채널홍보·Release)가 완전 하드코딩(정적 이미지·
+  제목, 전부 `/crazylog/view/1` 고정 링크 버그 포함)이라 관리자가 실제 게시물을 노출시킬 방법이
+  없었음. `/products` 페이지의 `ProductHeroModal`+`cms_settings` jsonb 픽커 패턴을 재사용해 이식.
+  ── DB (GATE B: stage 검증 → GATE C: production 적용, Stephen 승인 하에 순차 진행) ──
+    - `supabase/migrations/20260809000210_210_crazylog_banner_settings.sql`: `cms_settings`에
+      슬롯 3개 시드(`crazylog_banner_slot1/2/3`) + RPC 4종(`get_crazylog_banner_settings`,
+      `upsert_crazylog_banner_setting`[is_cms_user 게이트+풀 최대 8개 제한],
+      `get_crazylog_posts_by_ids`, `search_crazylog_posts`)
+    - `supabase/migrations/20260809000211_211_crazylog_content_stats.sql`: CMS 대시보드용
+      `get_crazylog_content_stats()` RPC(총 게시물·게시됨·조회수·카테고리별 건수·TOP10)
+    - stage(ezyvffjvuwmtuhpxdjrw) 적용·검증 → production(vnbpmvxruyciuuaermyh) 적용·검증 순서 준수
+  ── `/crazylog` 서버·렌더링 ──
+    - `src/lib/utils/crazylogBanner.ts` 신규(TDD): `pickBannerItems`(fixed=order순/random=shuffle,
+      최대 3개) + `deriveBadgeLabel`(노출된 최대 3개 중 다수 log_type, 동률 시 0번 인덱스) 순수 함수.
+      `src/__tests__/server/crazylogBanner.test.ts` 8개 테스트 전부 통과
+    - `src/routes/crazylog/+page.server.ts`: `loadBannerSlots()` 추가 — 슬롯 설정 조회 →
+      전체 post id 배치 하이드레이션(N+1 금지) → 슬롯별 선택·배지 도출 → `bannerSlots` 반환.
+      기존 30개 랜덤 셔플 로직과 독립적 병렬 쿼리
+    - `src/routes/crazylog/+page.svelte`: PC 3카드(`d-shotlog`/1/2) + 모바일 `M_LISTS` 하드코딩
+      배열을 `data.bannerSlots` 바인딩으로 교체. 풀이 비어있으면 기존 정적 이미지/텍스트로 폴백.
+      전체 카드가 `/crazylog/view/1`로 고정되던 버그도 함께 수정(`/crazylog/view/{item.id}`)
+  ── 관리자 픽커 UI ──
+    - `src/lib/components/crazylog/admin/CrazylogBannerModal.svelte` 신규 — `ProductHeroModal`
+      로직 이식(SuggestPicker 검색 + CmsDragList 드래그정렬 + fixed/random 모드), 단 비주얼은
+      front-uiux 톤 적용(CTA `--cs-red-badge`, 패널 radius `--radius-xl`) — `/crazylog`가 USER
+      라우트이므로 CMS 퍼플/15px 대신 사용자 화면 토큰 사용(Stephen 확정)
+    - `data.isCms` 조건부 "✦ 목록 선택" 트리거 버튼 3개, `activeModal` 상태로 모달 전환
+    - 저장은 `upsert_crazylog_banner_setting` RPC(서버에서 `is_cms_user()` 재검증 — 클라이언트
+      `isCms`는 UI 노출용일 뿐 실제 보안 경계 아님, `/products`와 동일 패턴)
+  ── CMS `/cms/promotion/content` 신규 탭 ──
+    - `src/routes/cms/promotion/content/+page.server.ts`: `hasSettingsAccess`(manager+) 게이트 +
+      `get_crazylog_content_stats` 로드
+    - `src/routes/cms/promotion/content/+page.svelte`: 기존 `CmsKpiGrid`/`CmsStatRing`/
+      `CmsStatBars` 재사용(신규 컴포넌트 없음) + TOP10 인기 게시물 테이블
+    - `src/routes/cms/+layout.svelte` MENU '분석' 뒤에 '콘텐츠' 탭 항목 1줄 추가
+  검증: `npx svelte-check` 신규/수정 파일 0 에러(products/search 사전 존재 에러 1건은 무관),
+  `npx vitest run` crazylogBanner.test.ts 8/8 통과(기존 productClone.test.ts 실패 2건은 stage
+  브랜치 기준 무관한 pre-existing 이슈, git stash로 회귀 확인 완료).
+  Stephen 확인 완료: SSR 랜덤 로테이션 O, 모바일 포함 O, 슬롯별 log_type 자유선택 O, front-uiux
+  모달 톤 O, stage 적용 승인 → production 적용 승인.
+  미완료: 브라우저 수동 QA(Claude_Browser 사용 금지 규칙상 미실시) — Stephen 직접 확인 필요.
+  git commit/push 미실행(자율 실행 금지, Stephen 진행 대기).
+
+  ── @sp3-qa-agent 1차 검수 (2026-08-10) → 재검수 필요 판정, 3건 발견·즉시 수정 ──
+    - #1 (버그, 우선순위 높음): `+page.svelte`의 `M_LISTS`가 `$derived`가 아닌 일반 `const`라서
+      관리자가 배너 편집 저장(`invalidateAll()`) 후에도 모바일 캐러셀은 갱신 안 됨(PC 3카드는
+      `data.bannerSlots` 직접 참조라 정상 반영). `const M_LISTS = data.bannerSlots.map(...)` →
+      `const M_LISTS = $derived(data.bannerSlots.map(...))`로 수정
+    - #2 (H-06 위반): `+page.server.ts` `loadBannerSlots(supabase: any)` — 함수 시그니처 자체가
+      any. `SupabaseClient<Database>`로 명시하고, database.ts에 아직 없는 신규 RPC 2건
+      (get_crazylog_banner_settings/get_crazylog_posts_by_ids) 호출부만 `(supabase.rpc as any)`
+      국소 캐스트 + 사유 주석으로 축소(ProductHeroModal.svelte와 동일 기존 관례)
+    - #3 (S2 기준): 마이그레이션 210/211에 rollback 섹션 없음 → 두 파일 상단에 DROP
+      FUNCTION/DELETE 롤백 주석 블록 추가(이미 stage+production 적용 완료된 함수라 재적용 불필요,
+      문서화만)
+    - 수정 후 npx svelte-check 0 에러, npx vitest run crazylogBanner.test.ts 8/8 재확인 완료
+
+  ── @sp3-qa-agent 재검수 (2026-08-10) → GATE E 통과 ✅ ──
+    - 3건 전부 정상 반영 확인(M_LISTS $derived 문법 정상, loadBannerSlots 함수 시그니처 any 제거+
+      국소 캐스트 2건만 잔존, migration 210/211 rollback 섹션이 실제 정의된 오브젝트 전부 커버)
+    - npx svelte-check 대상 파일 0 에러, npx vitest run crazylogBanner.test.ts 8/8 재확인
+    - 1차 통과 항목(H-01/보안/N+1/Svelte5 문법/$state prop 초기화/도메인 무영향)은 재확인 생략
+    - GATE E 통과 — commit은 Stephen 직접 실행 대기
+
 [2026-08-09] ⚡GSD | NLSearch: CMS 상품검색 연동(§K) + 검색학습 루프 빈틈 수정(§L) + 500 에러 긴급
   핫픽스 | 6개 파일(신규 2·수정 4) | GATE C 전부 승인 완료
   배경: 메인 세션이 NLSearch 3개 화면(상품검색·상담채팅·CMS 상품목록)을 production 실데이터로 정밀
@@ -39,7 +105,7 @@
   종합: DB 마이그레이션 추가 없음(순수 TS 로직 변경, 신규 마이그레이션 0건) — stage/production DB
   적용 자체가 불필요한 작업. 코드(TS)는 아직 미커밋 상태 — Stephen 커밋 대기 중.
 
-[2026-08-09] CRITICAL | 내정보 프로필 사진(아바타) 업로드 기능 신규 구축 + 로그인정보카드 이메일 전체노출 | 신규 마이그레이션 1개 + 5개 파일 | ✅ Stage 적용 완료(Production 대기)
+[2026-08-09] CRITICAL | 내정보 프로필 사진(아바타) 업로드 기능 신규 구축 + 로그인정보카드 이메일 전체노출 | 신규 마이그레이션 1개 + 5개 파일 | ✅ Stage+Production 적용 완료
   배경: Stephen이 launch-selected-element로 /account/profile 개인정보 탭 상단 "로그인 정보 카드"
   (이메일ID+가입일+아바타)와 /account 메인 인사카드를 함께 선택하며 "기능성 점검 후 account와
   중복되면 제거" 지시. 조사 결과 두 카드는 표시 데이터가 달라(이름+혜택+QR vs 이메일+가입일+
@@ -66,9 +132,10 @@
       CSS 클래스 재사용, 오버레이만 avatar-modal-overlay로 분리해 카카오 주소검색 모달의
       모바일 바텀시트 강제 스타일과 결합 방지)
   검증: svelte-check 신규 에러 0건(11→1건 기준 변동 없음)
-  [2026-08-09 후속] 마이그레이션 #212 stage(ezyvffjvuwmtuhpxdjrw) 적용 완료(Stephen 지시) —
-  avatar_url text 컬럼 + update_user_avatar RPC 존재 SQL로 직접 확인. Production
-  (vnbpmvxruyciuuaermyh) 미적용 — 실사용 브라우저 검증 후 Stephen 확인 필요
+  [2026-08-09 후속1] 마이그레이션 #212 stage(ezyvffjvuwmtuhpxdjrw) 적용 완료(Stephen 지시) —
+  avatar_url text 컬럼 + update_user_avatar RPC 존재 SQL로 직접 확인.
+  [2026-08-09 후속2] Production(vnbpmvxruyciuuaermyh) 적용 완료(Stephen 지시) — avatar_url
+  text 컬럼 존재 SQL로 직접 확인. Stage/Production 양쪽 DB 반영 완료.
 
 [2026-08-09] GSD | CMS 상담(/cms/chat) 관리자 답장 FCM 푸시 미작동 검증 + 신규 연결 |
   수정파일: src/routes/api/chat/admin-reply/+server.ts, src/routes/api/chat/admin-attachment/+server.ts |
