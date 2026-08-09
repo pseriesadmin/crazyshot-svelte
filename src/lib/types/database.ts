@@ -747,6 +747,10 @@ export interface UpdateNotificationSettingsArgs {
   p_benefit_alert: boolean;
 }
 
+export interface UpdateUserAvatarArgs {
+  p_avatar_url: string;
+}
+
 // =============================================================================
 // ★ SUPABASE DATABASE TYPE (for createClient<Database>())
 // =============================================================================
@@ -820,6 +824,7 @@ export type Database = {
       update_user_doc_url: { Args: UpdateUserDocUrlArgs; Returns: AccountRpcResult };
       toggle_product_wishlist: { Args: ToggleProductWishlistArgs; Returns: ToggleProductWishlistResult };
       update_notification_settings: { Args: UpdateNotificationSettingsArgs; Returns: AccountRpcResult };
+      update_user_avatar: { Args: UpdateUserAvatarArgs; Returns: AccountRpcResult };
     };
     Enums: {
       product_category_enum: ProductCategoryEnum;

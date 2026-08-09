@@ -6,6 +6,7 @@ export interface UserProfile {
   id: string
   email: string
   full_name: string | null
+  avatar_url: string | null
   phone: string | null
   birth_date: string | null
   address: Record<string, string> | null
@@ -49,7 +50,7 @@ export const load: PageServerLoad = async ({ locals }) => {
   const [profileRes, addressRes] = await Promise.all([
     locals.supabase
       .from('user_profiles')
-      .select('id, email, full_name, phone, birth_date, address, member_code, member_type, membership_grade, credit_score, rental_count, points, allow_rental_alert, allow_benefit_alert, allow_privacy_consent, allow_third_party_consent, identity_type, identity_doc_url, identity_verified_at, is_foreign, foreign_doc_url, foreign_verified_at, created_at')
+      .select('id, email, full_name, avatar_url, phone, birth_date, address, member_code, member_type, membership_grade, credit_score, rental_count, points, allow_rental_alert, allow_benefit_alert, allow_privacy_consent, allow_third_party_consent, identity_type, identity_doc_url, identity_verified_at, is_foreign, foreign_doc_url, foreign_verified_at, created_at')
       .eq('id', session.user.id)
       .maybeSingle(),
     locals.supabase

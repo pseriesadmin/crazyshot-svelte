@@ -2,6 +2,7 @@
   import { invalidate, goto } from '$app/navigation'
   import { supabase } from '$lib/services/supabase'
   import { unregisterCurrentPushToken } from '$lib/utils/push'
+  import { csToast } from '$lib/utils/toast'
   import SubGnb from '$lib/components/common/SubGnb.svelte'
   import BottomTabBar from '$lib/components/common/BottomTabBar.svelte'
   import RentalJourneyStepper from '$lib/components/common/RentalJourneyStepper.svelte'
@@ -25,6 +26,15 @@
   $effect(() => {
     const timer = setInterval(() => invalidate('app:rental-status'), 30_000)
     return () => clearInterval(timer)
+  })
+
+  // 개인정보 미등록 안내: full_name 미등록 시 1회 경고 토스트 (등록 완료 시 자연 소멸)
+  let profileWarnShown = false
+  $effect(() => {
+    if (!data.profile?.full_name && !profileWarnShown) {
+      profileWarnShown = true
+      csToast.warning('상세 개인정보를 등록해주세요.')
+    }
   })
 
   const rentalStats = $derived([
