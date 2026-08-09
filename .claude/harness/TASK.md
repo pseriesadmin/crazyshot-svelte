@@ -2130,9 +2130,26 @@ TDD도메인: 없음
   - 수정: student_doc_url / student_verified_at 참조 제거 → identity_doc_url / identity_verified_at 단독 사용
   - Stage ✅ Production ✅
 
+- [x] BUG-SIGNUP-207: 동일 이메일 재가입 시 signup 500 오류 | CRITICAL | ✅ 완료 (2026-08-09)
+  - 원인: user_profiles.email UNIQUE 제약(user_profiles_email_key) — 재가입 시 트리거 email 중복 23505 오류
+  - auth.users.email이 이미 unique를 보장하므로 user_profiles 측 제약 불필요
+  - 파일: supabase/migrations/20260809000207_207_drop_user_profiles_email_unique.sql
+  - ALTER TABLE user_profiles DROP CONSTRAINT IF EXISTS user_profiles_email_key
+  - Stage ✅ Production ✅
+
 - [x] QA: sp3-qa-agent GATE C 검수 | GATE C | ✅ 완료 (2026-07-25)
 
 GATE E: ✅ 커밋 허가 — Stephen git commit 진행
+
+---
+
+## NOW — signup 500 재발 수정 (2026-08-09)
+
+- [x] BUG-SIGNUP-207: user_profiles_email_key 제거 | CRITICAL | ✅ 완료
+  - 파일: supabase/migrations/20260809000207_207_drop_user_profiles_email_unique.sql
+  - Stage ✅ Production ✅
+
+- [ ] QA: sp3-qa-agent GATE C 검수 | GATE C | 진행 중
 
 ---
 
@@ -8768,4 +8785,452 @@ Supabase MCP 실측 SQL로 total_count 정합성 재확인(pg_proc 오버로드 
     부서짐/깨짐 — 직전 세션에서 미매칭 확인된 "망가뜨렸어요" 케이스 커버)
   - production·stage 양쪽 UPDATE 적용 + 결과 SELECT로 반영 확인
 
+## NOW — CMS 상품목록(/cms/products) 선택·패널 전환 로딩 지연 근본 해결 (2026-08-09) — 🚦 GATE B 승인 완료(Plan Mode 사전승인)
+
+[CONTEXT BRIDGE]
+plan_source: Stephen 아젠다("상품 목록 선택 시 로딩 시간 최소화 — ProductDetailPanel 열림/닫힘 시
+  3~5초 로딩 지연 원인 분석 + 원천적·장기적 해결안", 하네스 플로 시스템 정밀 플랜 요청)
+핵심제약:
+  - 요청 범위: `src/routes/cms/products/+page.server.ts`, `src/routes/cms/products/+page.svelte`,
+    `src/app.d.ts`, 신규 `src/lib/server/products/loadSelectedProductDetail.ts`,
+    신규 `src/routes/cms/products/[id]/detail/+server.ts` — 이 5개 파일(2개 신규)로 한정
+  - `ProductDetailPanel.svelte`는 수정하지 않는다 (설계상 불필요 — 기존 `invalidateAll()` 흐름
+    100% 유지) — 구현 중 이 파일 수정이 필요하다고 판단되면 반드시 먼저 Stephen 확인
+  - 신규 API 엔드포인트는 `src/routes/api/**`(frozen 경로) 대신
+    `src/routes/cms/products/[id]/detail/+server.ts`에 배치하기로 Stephen과 확정(frozen-path
+    GATE 회피, AskUserQuestion으로 확인)
+  - 원인 분석: `selectProduct()`/`closePanel()`이 `goto()`로 `?selected=` 파라미터만 바꾸는데도
+    `+page.server.ts`의 `load()` 전체(선택 무관 ①그룹 9~10쿼리 + 선택상세 ②그룹 8~10쿼리)가
+    매번 재실행돼 선택 시 ~20쿼리, 닫기 시에도 ~9~10쿼리가 불필요하게 재실행됨
+  - 해결 설계: 선택/닫기 전환만 SvelteKit shallow routing(`pushState`)으로 분리하고 나머지
+    흐름(탭 저장·토글·삭제·복제 등 `invalidateAll()` 기반)은 완전히 그대로 유지 —
+    `ProductDetailPanel.svelte`(4229줄, invalidateAll() 호출 13곳 이상) 무변경으로 회귀 위험 최소화
+  - 상세 설계는 plan 파일 참고: `/Users/stevenmac/.claude/plans/streamed-jumping-gray.md`
+TDD도메인: 없음 — GSD. 결제·예약·재고 *상태전이*(HOLD/atomic_reserve 등)나 가격 계산 로직을
+  전혀 건드리지 않고, 기존 데이터 조회 결과를 "언제 다시 읽어오는가"(캐싱·네비게이션 방식)만
+  바꾸는 순수 조회 구조 리팩터. `inventoryList` 등에 "재고"라는 단어가 등장하나 AGENTS.md TDD
+  강제 키워드의 "예약·재고" 클러스터가 지칭하는 대상은 HOLD/이중예약/원자적 배정 로직이며 본
+  작업 범위 밖. AUDIT-2.1 선례 준용.
+절대금지:
+  - `ProductDetailPanel.svelte` 내부 form action·`invalidateAll()` 흐름 변경 금지 (범위 외)
+  - 기존 마이그레이션 파일 수정 금지 (본 작업은 마이그레이션 불필요)
+  - Claude Browser(mcp__Claude_Browser__*) 사용 금지 — 동작검증은 정적 대조+svelte-check,
+    실브라우저 검증은 Stephen 직접 수행
+  - git 자율 커밋 금지 (Stephen 실행 대기)
+frozen_files: 없음 (신규 API 경로를 frozen `src/routes/api/**` 밖에 배치하기로 확정)
+auth_baseline: 변경 없음 (신규 엔드포인트는 `assets/[id]/+server.ts`와 동일 인증 패턴 재사용)
+
+---
+
+- [x] PERF-1: 목록 집계 쿼리 병렬화 | GSD | ✅ 완료 — `childRows`/`rules24h`/`rules12h` 3개
+    Promise.all 병렬화(`rentalRows`만 childIdToParentId 완성 후 실행), 반환 데이터 구조 무변경
+- [x] PERF-2: 전역 메타데이터 인메모리 TTL 캐시 도입 | GSD | ✅ 완료 — `loadProductsMetadata()`
+    신설(60초 TTL, 모듈 스코프), categories/categoryLabels/partnerComboItems/rentalPeriods/
+    rentalMethods/pickupPoints/shippingSettings 7종 통합, rentalPeriods 등은 selectedId
+    조건부→상시 캐시 조회로 전환
+- [x] PERF-3: 선택상세 로딩 헬퍼 추출 | GSD | ✅ 완료 — 신규
+    `src/lib/server/products/loadSelectedProductDetail.ts`로 ②그룹 로직 그대로 이관,
+    `+page.server.ts`는 호출로 교체. assetCount/assetTotal(선택상품 자신 기준, 죽은 필드)은
+    0 고정 — rootProduct.assetCount/assetTotal(대표 카드, 실사용)은 inventoryList 직접 계산
+    그대로 유지돼 영향 없음. rentalStatusCounts 집계는 rootRentalStatusCounts로 반환해
+    `+page.server.ts`가 자신의 rentalStatusCounts 맵에 병합(이관 전과 동일 응답 형태)
+- [x] PERF-4: 상세 조회 API 엔드포인트 신설 | GSD | ✅ 완료 — 신규
+    `src/routes/cms/products/[id]/detail/+server.ts`(GET), `assets/[id]/+server.ts`와 동일
+    인증 패턴(safeGetSession→401, cms_role→403), 404 처리, PERF-3 헬퍼 재사용
+- [x] PERF-5: `app.d.ts` App.PageState 확장 | GSD | ✅ 완료 — `selectedId?: string | null` 추가
+- [x] PERF-6: `+page.svelte` shallow routing 기반 로컬 선택 상태 도입 | GSD | ✅ 완료 —
+    selectProduct/closePanel을 goto()→`replaceState()`로 교체(초안은 `pushState`였으나 재검증
+    중 발견해 수정 — 아래 재검증 로그 참고), `activeSelectedId`(page.state 기준)/
+    `activeDetail`($derived, data 직접 사용 또는 fetch 결과) 도입, `$effect`로
+    `/cms/products/[id]/detail` fetch 트리거(동일 id 중복 fetch 가드 + stale response 가드 포함)
+- [x] PERF-7: `+page.svelte` 참조 전환 | GSD | ✅ 완료 — panelOpen/QR-STALE-1 effect(lastRootProductId)/
+    printSelectedQR + 카드 목록 선택 하이라이트 + 두 ProductDetailPanel 호출부(대표/자식) 전체
+    `activeSelectedId`/`activeDetail` 기준으로 전환. rentalPeriods/rentalMethods/pickupPoints/
+    categories/partnerComboItems/shippingSettings/initialTab은 선택과 무관해 `data.*` 그대로 유지
+- [x] PERF-8: 정적 검증 완료(코드 대조 + svelte-check) | GSD | ✅ svelte-check 베이스라인과
+    동일(1 error/308 warnings, 터치 파일 신규 에러·경고 0건 — 재검증 포함 5회 반복 실행으로 확인).
+    ⏳ **실브라우저 동작 검증은 Stephen 대기** (Claude Browser 사용 금지 원칙) — 카드 선택
+    전환/닫기 체감속도, 각 탭 저장 후 반영, 토글/삭제/복제/재시도, 정렬·검색·카테고리·페이지
+    이동 시 선택 해제, 딥링크·새로고침을 직접 확인 필요.
+    ⚠️ 정정: "브라우저 뒤로가기가 이전 선택으로 복원"은 처음에 pushState 전제로 잘못 적어둔
+    검증항목이었음 — replaceState로 수정한 뒤에는 원본 코드(`goto(...,{replaceState:true})`)와
+    동일하게 카드 선택이 히스토리에 쌓이지 않는 것이 올바른 동작. 확인할 것은 반대로
+    "여러 상품을 연속 클릭해도 뒤로가기 1회로 목록 화면을 바로 벗어날 수 있는가"임.
+- [x] PERF-9: 하네스 기록 갱신 | GSD | ✅ 완료 (본 항목) — GSD_LOG.md 기록 추가.
+    git 커밋은 Stephen 요청 대기(PERF-8 실브라우저 검증 완료 후 권장)
+
+검증(1차): svelte-check 전체 실행 결과 터치 파일(loadSelectedProductDetail.ts 신규,
+[id]/detail/+server.ts 신규, +page.server.ts, +page.svelte, app.d.ts) 기준 신규 에러·경고
+0건(3회 반복 확인, 베이스라인 1 error/308 warnings 유지 — products/search/+page.svelte의
+기존 무관 에러 1건만 잔존). ProductDetailPanel.svelte는 요청대로 0줄 수정.
+
+재검증(2026-08-09 Stephen 요청 — "잠재오류 여부 정밀 검증"): 코드를 처음부터 다시 정밀
+대조해 아래 2건을 발견·즉시 수정.
+1. 🔴 회귀 발견·수정: `selectProduct`/`closePanel`을 `pushState`로 구현했었는데, 원본 코드가
+   `goto(url, {replaceState:true})`를 쓴 이유(카드를 여러 번 클릭할 때마다 브라우저 히스토리
+   항목이 쌓이면 "뒤로가기" 한 번으로 목록 화면을 벗어날 수 없고 클릭 횟수만큼 눌러야 하는
+   문제)를 승계하지 못하고 있었음 — `pushState` → `replaceState`로 수정.
+2. 🟡 상태 불일치 방지: 상세 조회 fetch가 실패(네트워크 오류·404 등)하면 URL(`?selected=`)은
+   남아있는데 패널만 빈 채로 열려있는 불일치 상태가 될 수 있었음 — catch 핸들러에서
+   `closePanel()`을 호출해 실패 시 URL과 화면을 함께 정리하도록 보강.
+3. ℹ️ 코드 아님, 확인사항: `+page.server.ts`/`src/lib/server/products/`/
+   `src/routes/cms/products/[id]/`가 **세션 시작 시점부터 이미 dirty/untracked 상태**였음
+   (git status 최초 스냅샷 기준) — `+page.server.ts`에는 이번 세션과 무관한 NLSearch 하이브리드
+   검색 폴백 기능(`WEAK_MATCH_THRESHOLD`, `getProductSearchIndex` 등)이 이미 섞여 있었고, 이
+   PERF 작업은 그 위에 추가로 얹혀짐 — 구조적 충돌·덮어쓰기는 없음을 `git diff HEAD` 라인 단위
+   대조로 확인했으나, 이 파일의 diff를 커밋할 때는 두 작업(NLSearch 기능 + 본 PERF 성능개선)이
+   섞여 있다는 점을 반드시 인지하고 리뷰할 것 — `src/lib/server/products/`·
+   `src/routes/cms/products/[id]/`는 실제로는 이번 세션에서 신규 생성한 내용만 있어(다른
+   파일과의 충돌 없음) 문제 없음.
+4. 검토했으나 수정하지 않기로 한 항목(버그 아님, 낮은 리스크 트레이드오프로 판단):
+   선택 전환 중(fetch 대기 중) 짧은 순간 상세 패널 전체가 비었다 다시 나타나는 미세한 깜빡임
+   가능성 — 이전 상품 데이터를 그대로 보여주며 전환하는 대안도 검토했으나, 그 경우 "선택
+   하이라이트는 새 상품인데 내용은 이전 상품"이라는 더 나쁜 오인 위험이 생겨 현재 방식(짧게
+   비었다가 채워짐)을 유지. 원본 구현은 3~5초간 이전 상품이 고정 표시되다 한번에 바뀌는
+   방식이었으므로 이 변경도 원본보다 나쁘지 않음.
+svelte-check 재실행(수정 후): 신규 에러·경고 0건, 베이스라인과 동일함을 재확인.
+
 ## DONE
+
+---
+
+## NOW — NLSearch: CMS 상품검색 연동 + §J 학습루프 빈틈 수정 (2026-08-09) — 🚦 GATE B 승인 완료(in-session 확인)
+
+생성일: 2026-08-09
+아젠다: 메인 세션이 NLSearch 3개 화면(상품검색·상담채팅·CMS 상품목록)을 production 실데이터로 정밀
+검증한 결과 (1) `/cms/products` 목록 검색창은 NLSearch와 무관한 별도 단순 ilike 필터로 확인됨,
+(2) `/products/search`에서 RPC 0건→자연어 폴백 발동 시 `search_log_id`가 null이 되어 그 결과의
+클릭이 학습 데이터로 못 쌓이는 구조적 빈틈 발견. Stephen이 두 가지를 지시: CMS 검색창에 NLSearch
+연동(단, 기존 추천 검색목록 UX는 보존) + §J 빈틈 후속 수정.
+
+> ⚠️ Stephen이 검증 리포트를 확인하고 직접 두 가지 작업을 지시함(in-session, 별도 AskUserQuestion
+> 불필요할 만큼 명확한 지시). → **GATE B 승인 완료 — 아래 NOW 태스크는 추가 승인 없이 즉시 실행 가능.**
+
+[CONTEXT BRIDGE]
+plan_source: 이 세션의 정밀 검증 결과(production 실측)가 SSOT — 아래 요약이 배경.
+핵심 발견(조사 완료, 그대로 신뢰):
+  - CMS 상품 목록 검색은 `src/lib/components/cms/CmsSimilarNameInput.svelte`(source="product_search"
+    모드)가 담당 — `/cms/products/+page.svelte`에서 검색창+추천 드롭다운 둘 다 이 컴포넌트 하나가
+    처리. 내부적으로 `src/lib/utils/similarNameSuggest.ts`의 `productSearchOrFilter()`(name/brand/
+    description/product_caption 4필드 ilike OR)로 브라우저에서 직접 `supabase.from('products')`
+    쿼리 — NLSearch 미사용.
+  - 같은 컴포넌트가 `source="brand"`(브랜드 제안)와 기본 `source`(상품명 중복확인, `new/+page.server.ts`·
+    `ProductDetailPanel.svelte`에서 사용)로도 쓰임 — **이 두 모드는 이번 범위 아님, 절대 건드리지 말 것**
+    (브랜드 제안·중복명 확인은 정확한 부분일치가 맞는 용도라 fuzzy 매칭 도입 시 오탐 위험)
+  - `/cms/products/+page.server.ts`의 목록 필터(`countQ`/`listQ`)도 동일한 `productSearchOrFilter()`
+    사용 — 검색창 제안과 실제 목록 필터링 둘 다 같은 4필드 ilike에 의존
+  - §J 빈틈: `search_products` RPC가 0건을 반환하면(자연어 폴백 발동 조건) `RETURN QUERY`가 빈
+    row-set이라 `search_log_id`를 실어 나를 행 자체가 없음 — `rpcResults[0]?.search_log_id`가
+    `undefined`가 되어 `/api/search/products/+server.ts`가 `null`을 응답. 그런데 `search_logs`
+    행 자체는 RPC 내부에서 이미 INSERT됨(v_log_id 존재) — TS 레이어가 그 값을 못 받아올 뿐
+핵심제약:
+  - §K: `CmsSimilarNameInput.svelte`는 `source==='product_search'` 분기의 데이터 fetch 로직만
+    교체 — 디바운스·오버레이·키보드 내비게이션·`suggestions`/`suggestOpen`/`suggestIdx` state 등
+    기존 UX/인터랙션 코드는 전부 그대로 유지("기존 추천 검색목록 기능 보존" 명시 지시)
+  - §K: 목록 필터(`+page.server.ts`)와 검색창 제안(`CmsSimilarNameInput`) 둘 다 "기존 ilike 결과
+    우선 + NLSearch(productSearchIndex.ts) 약한매칭시 폴백" 하이브리드 패턴 — `/products/search`에서
+    이미 검증된 동일 설계를 재사용(새로운 패턴 발명 금지)
+  - §K: CMS는 공개 검색이 아니지만 productSearchIndex.ts의 필터 조건(parent_product_id IS NULL,
+    is_active=true, deleted_at IS NULL)과 현재 CmsSimilarNameInput의 RLS 노출 범위가 이미 동일 —
+    새 엔드포인트도 이 범위를 벗어나지 않을 것(비활성·삭제 상품까지 노출하지 말 것)
+  - §L: RPC(migration 203) 시그니처·구조는 손대지 않는다 — TS 레이어(`+api/search/products/
+    +server.ts`)에서만 후속 조회로 해결
+TDD도메인: AGENTS.md 키워드 미해당 → 전체 GSD
+절대금지:
+  - `CmsSimilarNameInput.svelte`의 `source==='brand'` 또는 기본(`product_name`) 분기 수정
+  - `search_products` RPC(migration 203) 재정의/신규 마이그레이션으로 시그니처 변경
+  - 요청 범위 외 파일 수정, 기존 마이그레이션 파일 직접 수정
+실패롤백: §K/§L 각각 신규 파일(엔드포인트) 또는 단일 함수 블록 단위 격리 — 독립 롤백 가능
+
+---
+
+### 🟡 BOUNDARY — §K CMS 상품 목록 검색에 NLSearch 연동 (추천 목록 UX 보존)
+
+- [x] K-1: `/api/cms/products/search-suggestions/+server.ts` 신설 | GSD | 🟡 BOUNDARY ✅ 완료(2026-08-09)
+  - 완료기준: ilike(`productSearchOrFilter`) 결과를 1차로 실행, 결과가 약하거나(예: 3건 이하) 0건일
+    때만 `adapters/productSearchIndex.ts`(NLSearch) 폴백 병합(id 기준 dedupe, ilike 결과 우선).
+    응답은 `SimilarNameItem` 배열 형태(id/name/brand/category/product_code/description/
+    product_caption + match_label). 활성·미삭제·부모상품만(기존 필터 조건 그대로 유지)
+  - 구현: WEAK_MATCH_THRESHOLD=3, getCmsRoleForAction 인증, excludeId/activeOnly 파라미터 지원, NLSearch 폴백 match_label='키워드·상세'
+- [x] K-2: `CmsSimilarNameInput.svelte`의 `source==='product_search'` fetch 로직을 K-1 API 호출로 교체 | GSD | 🟡 BOUNDARY ✅ 완료(2026-08-09)
+  - 완료기준: `fetchSuggestions()`의 `product_search` 분기만 `fetch('/api/cms/products/search-
+    suggestions?q=...')`로 교체, 나머지 UX 코드(디바운스·overlay·키보드 내비·state) 완전 무변경.
+    `source==='brand'`/기본 분기는 0줄 수정
+  - 구현: AbortController signal → fetch signal 전달(RTN-2 패턴 유지), productSearchOrFilter import 제거
+- [x] K-3: `/cms/products/+page.server.ts` 목록 필터에도 동일 하이브리드 적용 | GSD | 🔴 CRITICAL ✅ 완료(2026-08-09) — GATE C 대기
+  - 완료기준: `countQ`/`listQ`의 `productSearchOrFilter(q)` 결과가 약할 때 NLSearch 폴백으로 매칭된
+    id를 `.or()` 조건에 추가 병합. 페이지네이션(`totalCount`/`totalPages`) 계산과 정합 유지
+  - 구현: ilikeCount<=3 시 getProductSearchIndex 폴백, expandedOrFilter로 countQ 재구성→totalCount 재계산, listQ도 확장 필터 적용
+- [x] K-4: 유닛테스트 + stage 검증 | GSD | 🟡 BOUNDARY ✅ 완료(2026-08-09)
+  - 완료기준: 키워드·구성품·사양 전용 검색어로 CMS 목록/제안 둘 다에서 매칭되는지 확인,
+    브랜드 제안·중복명 확인 기존 동작 회귀 없음 확인
+  - 결과: 신규 23개 통과 + 기존 NLSearch 116개 전부 통과, 컴파일 에러 0건(신규)
+
+예상(§K): GSD 4개 (20분×1 + 25분×1 + 30분×2) = 총 105분
+
+---
+
+### 🔴 CRITICAL — §L §J 학습루프 빈틈 수정 (자연어 폴백 전용 결과의 클릭 미기록 문제)
+
+- [x] L-1: `/api/search/products/+server.ts` — RPC 0건일 때 방금 생성된 search_log_id 후속 조회 | GSD | 🔴 CRITICAL ✅ 완료(2026-08-09)
+  - 완료기준: `rpcResults.length === 0 && q.length >= 2`(RPC가 내부적으로 로그를 남겼을 조건)일 때
+    `search_logs`에서 `query = q ORDER BY created_at DESC LIMIT 1`(최근 수 초 이내로 range 제한)로
+    방금 생성된 로그 id를 조회해 `search_log_id`에 채움. 조회 실패해도 기존처럼 null 폴백(에러로
+    검색 자체를 막지 않음)
+  - 구현: `fetchRecentSearchLogId(query)` 헬퍼 추가 (service_role 클라이언트 + 10초 window), `let searchLogId`로 변경 + 발동조건 분기
+  - 🔴 **긴급 핫픽스 (2026-08-09, 메인 세션 직접 수정)**: Stephen이 `/products/search`에서 검색어
+    입력 시 500 에러를 실제로 보고(launch-selected-element로 재현) — 원인은 `fetchRecentSearchLogId`가
+    `+server.ts`에 **`export`** 상태로 추가돼 있었던 것. SvelteKit은 `+server.ts`에서 GET/POST 등
+    정해진 이름 외의 export를 전부 거부(`Invalid export` 런타임 에러)하기 때문에, 검색어와 무관하게
+    **이 라우트로 오는 모든 요청이 500으로 실패**하고 있었음(RPC/MiniSearch 자체는 정상 — 격리
+    재현으로 확인 완료). 수정: `export` 키워드 제거(로컬 함수로 전환) — `searchLogIdFallback.test.ts`는
+    이 함수를 직접 import하지 않고 로직을 자체 재현해 검증하는 구조라 테스트 영향 없음. 수정 후
+    fresh dev server(포트 5199)로 재현했던 두 검색어("카메라", 0건 유도 검색어) 재테스트 → 둘 다
+    200 + `search_log_id` non-null 정상 확인. 전체 검색엔진 테스트 스위트 139/139 통과(회귀 없음).
+    ⚠️ production/stage에는 영향 없음(이 버그는 로컬 미커밋 상태에서만 존재 — L-1이 아직 커밋 전이었음)
+  - 예상: 25분
+- [x] L-2: 유닛/통합 테스트 — 자연어 폴백 전용 검색에서도 클릭이 기록되는지 검증 | GSD | 🔴 CRITICAL ✅ 완료(2026-08-09)
+  - 완료기준: RPC 0건 + MiniSearch 폴백만 매칭되는 시나리오에서 `search_log_id`가 null이 아님을
+    확인, 그 id로 `record_search_click` 호출 시 정상 동작(stage 실측 권장)
+  - 구현: `src/__tests__/server/searchEngine/searchLogIdFallback.test.ts` 신설 (14개 테스트, 5개 describe 그룹)
+    발동조건(L-1-A)·성공(L-1-B)·실패폴백(L-1-C)·스킵케이스(L-1-D)·§J 학습루프 전체흐름(L-1-E) 검증
+  - 예상: 20분
+
+예상(§L): GSD 2개 (20분+25분) = 총 45분
+
+전체 예상: GSD 6개 = 총 150분(≈2.5시간). 스트림 분리: [스트림1] §K(K-1→K-2→K-3→K-4 순차, CMS 상품
+파일 전용) / [스트림2] §L(L-1→L-2, /api/search/products 전용) — 서로 다른 파일이라 완전 병행 가능
+
+---
+
+## NOW — 채팅 고도화 항목 (2026-08-09)
+
+생성일: 2026-08-09
+아젠다: 직전 세션에서 USER-CMS 채팅 시스템(PRD.1.7)을 감사하며 발견한 버그 3건을 수정 완료
+(비회원 자동답변 RLS 차단, 세션 상태전환 무시, Claude API 키 무효화 — API 키는 Stephen이
+"추후 등록 예정"이라 지금은 보류). Stephen이 "AI 키는 나중에 등록할 테니 다른 고도화 항목을
+진행하라"고 지시해, 후보 5개 항목을 실제 코드 대조로 조사한 결과를 태스크로 등록.
+
+[CONTEXT BRIDGE]
+plan_source: 이 세션의 코드 조사 결과(아래 각 항목 "조사 결과" 참고)가 SSOT
+핵심제약:
+  - ANTHROPIC_API_KEY 관련 코드는 이번 범위에서 절대 건드리지 않는다(Stephen 확인 전까지 보류)
+  - chat.md/rental-lifecycle.md 등 정본 문서와 실제 동작이 어긋나면 "버그 수정"과 "문서 갱신"을
+    구분해서 처리 — 의도된 최신 설계를 문서가 못 따라간 경우는 코드를 문서에 맞추지 않는다
+TDD도메인: 없음 (AGENTS.md 키워드 미해당 — 전체 GSD)
+절대금지:
+  - git 자율 실행
+  - 카카오 알림톡/FCM 등 외부 서비스 연동을 Stephen 확인 없이 임의로 선택·구현
+  - Claude API 키 관련 코드·환경변수 수정
+  - 요청 범위 외 파일 수정
+실패롤백: 항목별로 독립된 파일/함수 단위 — 항목 단위로 개별 롤백 가능
+
+---
+
+### 🟡 BOUNDARY — 항목1: 액션카드 실데이터 연동 (AI 파이프라인 전용)
+
+조사 결과 (`src/routes/api/chat/message/+server.ts` L253-264, `$lib/components/chat/ActionCard.svelte`,
+`$lib/types/chat.ts` `ActionPayload`):
+- AI(Claude)가 반환하는 `classified.action_card`는 시스템 프롬프트상 `{ "type": "PRODUCT_CARD" | ... }`
+  뿐이다. 서버는 여기에 `is_expired: false`만 덧붙여 그대로 `action_payload`에 저장한다 —
+  `product_name`/`product_image`/`daily_rate`/`amount`/`reservation_no` 등 `ActionPayload`가 지원하는
+  나머지 필드는 AI 경로에서 **한 번도 채워지지 않는다.** 즉 지금은 "타입만 있고 데이터가 없는
+  빈 카드"가 나가는 구조 — `ActionCard.svelte`는 이 필드들이 없으면 이미지 placeholder + 기본
+  CTA 레이블만 보이는 뼈대 카드로 렌더링된다(크래시는 안 나지만 실사용 가치가 없음).
+- 대조: 관리자(CMS)가 발행하는 액션카드(`rental-lifecycle.md` AUTO_NOTIFY/NOTIFY_TYPE_MAP,
+  `RentalDetailPanel.svelte`·`cms/reservation/+page.server.ts`·`contracts/[id]/send-chat/+server.ts`)는
+  실제 예약/상품 데이터를 조회해서 `reservation_no`·`product_name` 등을 채워 넣는 기존 패턴이
+  이미 있다 — AI 경로만 이 패턴이 빠져 있는 상태.
+- 결론: "AI 키가 없어서 지금 테스트는 못 하지만, 설계·구현 자체는 지금 해둘 수 있는가?" →
+  가능하다고 판단. AI는 의도(intent)와 카드 타입만 결정하고, 실데이터 채우기는 서버가
+  intent/타입별로 DB를 조회해 채우는 후처리 단계로 분리하면 AI 키 유무와 무관하게 개발·검증
+  가능(목(mock) classified 값으로 유닛테스트 가능).
+
+- [x] AC-1: intent/action_card.type별 실데이터 조회 후처리 함수 설계·구현 | GSD | 완료기준:
+      `classified.action_card`가 null이 아닐 때, 타입별로 필요한 최소 데이터를 세션의
+      `context_type`/`context_id`(있으면) 또는 로그인 사용자의 최근 활성 예약/장바구니 기준으로
+      조회해 `ActionPayload` 필드를 채우는 순수 함수(예: `enrichActionCard(type, userId, sessionContext)`)
+      신설. 조회 실패 시에도 카드 자체는 계속 나가되(타입+기본 CTA만) 크래시 없이 폴백. | 예상: 30분
+      구현: `src/lib/server/chatActionEnrich.ts` | 2026-08-09
+- [x] AC-2: `/api/chat/message/+server.ts`에 AC-1 함수 연결 | GSD | 완료기준: 5번 INSERT 직전에
+      `enrichActionCard()` 호출 결과를 `action_payload`에 병합. Claude 응답이 없거나 파싱 실패한
+      기존 CS_ESCALATE 폴백 경로(`action_card: null`)는 변경 없음. | 예상: 15분 | 2026-08-09
+- [x] AC-3: 유닛테스트 — classified 값을 목(mock)으로 주입해 PRODUCT_CARD/RESERVATION_STATUS_CARD
+      최소 2종 타입에 대해 실데이터가 채워지는지 검증 | GSD | 완료기준: AI 키 없이(Claude 호출 없이)
+      `enrichActionCard()` 단위로 테스트 통과 — API 키 복구 후 별도 통합 검증은 BACKLOG로 미룸.
+      구현: `src/__tests__/server/chatActionEnrich.test.ts` 9/9 통과 | 2026-08-09
+
+예상(항목1): GSD 3개 = 총 65분
+
+---
+
+### 🟢 ROUTINE — 항목2: CS_ESCALATE → pending 전환 로직 확인 (문서-코드 불일치, 버그 아님)
+
+조사 결과 (`/api/chat/message/+server.ts` L110-116, `rental-lifecycle.md` "상담채팅 세션 상태"절,
+`.claude/rules-ref/chat.md` §3·§6·§10):
+- `chat.md`(2026-06-27 최종 갱신)는 여전히 "CS_ESCALATE → status=pending" 전환을 정본 스펙으로
+  문서화하고 있으나, **실제 코드에는 이 전환 로직이 없다.** 현재 코드는 새 메시지가 도착하면
+  AI 의도분류 결과와 무관하게 무조건 `status='open'`으로만 전환한다.
+- 그런데 이건 미구현 버그가 아니라 **2026-07-27에 의도적으로 변경된 최신 설계**다 —
+  `rental-lifecycle.md`에 이미 "대기(pending) 상태는 이제 오직 `auto_pending_inactive_sessions`
+  RPC(1시간 무응답 자동전환)로만 재진입한다 — AI가 CS_ESCALATE로 분류해도 더 이상 즉시 대기로
+  강등되지 않는다"고 명시돼 있고, 코드도 이 최신 설계와 일치한다. 즉 `chat.md`가 6주 전 스펙을
+  못 따라간 **문서 노후화**이지, 고쳐야 할 코드 버그가 아니다.
+- 결론: 코드 수정 불필요. `chat.md`만 최신 상태에 맞게 갱신해 향후 다른 세션·에이전트가 이
+  섹션을 보고 "버그"로 오인해 되돌리는 것을 예방.
+
+- [x] CS-1: `chat.md` §3(세션 상태 머신)·§6(API 명세)·§10(Intent Classifier)의 "CS_ESCALATE →
+      pending" 서술을 실제 동작(무조건 open 전환 + 1시간 무응답 자동 pending만)으로 갱신,
+      `rental-lifecycle.md`를 정본으로 교차 참조 추가 | GSD | 완료기준: 세 섹션 모두 코드와
+      일치하는 문구로 수정 + "2026-07-27 설계 변경, rental-lifecycle.md 참조" 각주 추가 |
+      완료: `.claude/rules-ref/chat.md` §3·§6·§10 갱신 | 2026-08-09
+
+예상(항목2): GSD 1개 = 총 15분
+
+---
+
+### 🔴 CRITICAL — 항목3: 게스트→회원 전환 시 대화 이력 연결 (Stephen 확인 필요)
+
+조사 결과 (`src/lib/components/chat/ChatWindow.svelte` L69 `signInAnonymously()`,
+`src/lib/services/supabase.ts` L36-40 `auth.signUp()`, `src/lib/components/auth/SignUpModal.svelte`):
+- 게스트는 `supabase.auth.signInAnonymously()`로 임시 UID를 받고, 그 UID로 `chat_sessions.user_id`가
+  연결된다(정책 3·4, `chat.md` §2).
+- 회원가입은 `authService.signUp(email, password)` → `supabase.auth.signUp({ email, password })`를
+  그대로 호출한다. 이건 Supabase의 "익명 계정을 영구 계정으로 전환"하는 공식 방식
+  (`updateUser()`로 이메일/비밀번호를 추가하거나 `linkIdentity()`로 소셜 계정을 연결해 **같은
+  UID를 유지**하는 방식)이 아니라, **완전히 새로운 `auth.users` 행을 만드는 일반 회원가입**이다.
+- 결과: 게스트로 채팅하다가 그 자리에서 회원가입하면, 로그인 UID가 바뀌면서 방금까지 나눈 채팅
+  세션(`chat_sessions.user_id` = 옛 익명 UID)과 새 회원 계정이 서로 연결되지 않는다. 채팅 이력
+  자체는 DB에서 삭제되지 않지만(정책 4 "영구 보존"), 새로 로그인한 회원 화면에서는 그 이력이
+  전혀 보이지 않고 완전히 새 세션이 시작된다 — 사실상 고객 입장에서는 "방금 상담한 내용이
+  통째로 사라진 것"처럼 보인다.
+
+**Stephen 결정 (2026-08-09 GATE B 승인 완료):**
+
+```
+Q1. 지금 고침 (권장안 채택)
+Q2. 범위는 채팅 이력 연결로 한정 — 비회원 예약·장바구니 등 다른 도메인까지 확장하지 않음
+    (요청범위 외 수정 금지 원칙 적용, 필요시 별도 아젠다로 분리)
+```
+
+- [x] GC-1: 회원가입 시 이미 익명 세션(anon auth)이 있는 경우, Supabase 표준 방식
+      (`updateUser()`로 이메일/비밀번호 부여해 동일 UID 유지 — `signUp()`으로 새 계정을 만들지
+      않음)으로 전환해 `chat_sessions.user_id`가 그대로 유지되게 한다. **주의: 관련 코드가
+      Frozen 파일(`src/lib/services/supabase.ts`)에 있을 수 있음 — 건드릴 경우 GATE C 필수,
+      기존 `createBrowserClient`·세션 초기화 패턴은 절대 변경하지 말고 signUp 로직만 최소
+      수정** | GSD | 완료기준: 익명 세션 보유 상태에서 회원가입 시 auth.uid()가 유지되어
+      기존 `chat_sessions`가 그대로 조회되는지 확인 | 예상: 40분 | 완료: 2026-08-09
+
+예상(항목3): GSD 1개 = 총 40분 (승인 완료, 착수 가능)
+
+---
+
+### 🟢 ROUTINE — 항목4: 관리자용 빠른답변 추천 UI (확인 결과: 이미 구현 완료, 조치 불필요)
+
+조사 결과 (`src/lib/components/chat/ChatInput.svelte`, `AdminChatPanel.svelte` L189-200):
+- 관리자 입력창에 `/`를 입력하면 캔드 리스폰스(빠른답변) 검색 드롭다운이 이미 동작한다 —
+  단축키(`shortcut`) prefix 매칭 우선 → 제목/본문 포함 검색 순, 최대 8건 표시, 방향키로 탐색,
+  Enter/클릭으로 선택, 카테고리 배지·단축키 배지까지 렌더링된다(§E SYN-8 태그로 이미 구현·주석
+  완료). 선택 시 `pendingCannedId`에 보관했다가 실제 전송 시점에 `onsend(content, cannedResponseId)`로
+  `AdminChatPanel.svelte`에 전달 → `canned_response_id`로 API에 실림(동의어 학습 신호로 사용).
+- 결론: 별도 구현 불필요. TASK.md에는 조사 완료 사실만 기록.
+
+- [x] CR-0: 코드 확인 완료 — 추가 구현 없음 | GSD | 완료기준: 이미 충족(조사만으로 종료) | 2026-08-09
+
+예상(항목4): 0분 (조치 불필요)
+
+---
+
+### 🔴 CRITICAL — 항목5: 관리자 미응답 알림 + CS 상담기록 저장 + 액션카드 만료 처리 (Stephen 확인 필요)
+
+조사 결과 (`.claude/rules-ref/chat.md` §14 "미구현" 목록과 대조 — 여전히 미구현 상태 확인):
+- 3가지 모두 코드 자체가 존재하지 않는다(웹 검색으로 재확인한 게 아니라 관련 파일/함수를
+  전수 검색했으나 매치 없음). `cs_records` 테이블은 스키마(§4)에는 정의돼 있으나 INSERT하는
+  코드가 어디에도 없고, 액션카드 만료(`is_expired`)는 프론트에서 `expires_at` 비교로 뱃지만
+  바뀔 뿐 백엔드에서 만료된 카드의 버튼 클릭을 서버측으로 재검증하는 로직이 없다(현재는
+  프론트 신뢰 기반).
+- 3가지는 성격이 다르므로 분리해서 판단 필요:
+  1. **CS 상담기록(cs_records) 저장** — 외부 서비스 없이 자사 DB만으로 구현 가능. 관리자가
+     상담 종료 시 요약을 남기는 UI+API만 추가하면 됨. 외부 의존성 없음.
+  2. **액션카드 만료 서버측 검증** — 외부 서비스 없이 구현 가능. 만료된 카드 클릭 시 서버가
+     `expires_at`을 재확인해 거부하는 정도.
+  3. **관리자 미응답 알림(카카오 알림톡/푸시)** — 외부 서비스(카카오 알림톡 API 또는 이미
+     붙어있는 FCM) 연동과 비용/정책 결정이 필요.
+
+**Stephen 결정 (2026-08-09 GATE B 승인 완료):**
+
+```
+① CS 상담기록 저장 → 지금 추가 (권장안 채택)
+② 액션카드 만료 후 재검증 → 지금 막기 (권장안 채택)
+③ 관리자 미응답 알림 → 이미 붙은 앱 푸시(FCM)만 사용 (권장안 채택, 카카오 알림톡 추가 안 함)
+```
+
+- [x] CS-A1: `cs_records` 저장 UI+API — 관리자가 세션을 닫거나(`/api/chat/sessions/{id}/close`)
+      상담 중 직접 요약을 남길 수 있는 최소 UI(제목 없이 summary 텍스트 1줄) + API 신설.
+      `cs_records` 스키마는 이미 존재(§4) | GSD | 완료기준: AdminChatPanel에서 요약 입력 →
+      저장 → 재조회 시 표시 | 2026-08-09 완료
+      → 신설: GET+POST /api/chat/sessions/[id]/cs-record (+server.ts)
+      → 수정: AdminChatPanel.svelte — 세션 선택 시 기존 기록 로드 + 하단 "상담 메모" UI 추가
+- [x] CS-A2: 액션카드 만료 서버측 재검증 — 결제요청(PAYMENT_REQUEST_CARD) 등 금액이 걸린
+      카드의 버튼 클릭 처리 API에서 `action_payload.expires_at`(또는 `is_expired`)을 서버가
+      재확인, 만료 시 400 거부 | GSD | 2026-08-09 완료
+      → 신설: POST /api/chat/messages/[id]/execute-action (+server.ts) — 410 만료 반환
+      → 수정: ActionCard.svelte — messageId prop 추가, handleCta() 서버 재검증 후 실행
+      → 수정: MessageBubble.svelte — message.id를 ActionCard.messageId로 전달
+- [x] CS-A3: 관리자 미응답 알림(FCM 전용) — 이미 붙어있는 push 인프라(`notification_tokens`/
+      `notification_logs`, `PushNotificationInit.svelte`) 재사용. 상담 세션이 일정 시간(예:
+      30분) 관리자 응답 없이 유지되면 고객에게 FCM 푸시 발송. **카카오 알림톡 연동은 이번
+      범위에 포함하지 않음** | GSD | 2026-08-09 완료
+      → 신설 마이그레이션: 20260809000209_209_chat_unanswered_notify.sql
+        (chat_sessions.unanswered_notified_at 컬럼, get_and_mark_unanswered_sessions() RPC,
+         push_notification_config chat_unanswered 등록) — stage(ezyvffjvuwmtuhpxdjrw) 적용 필요
+      → 수정: GET /api/chat/sessions — auto_pending 호출 뒤 미응답 세션 fire-and-forget 발송
+      → 수정: POST /api/chat/admin-reply — 관리자 답장 시 unanswered_notified_at = NULL 리셋
+
+예상(항목5): GSD 3개 = 총 115분 (승인 완료, 착수 가능)
+
+---
+
+전체 요약: 즉시 착수 가능(GATE B 승인 시) — 항목1(65분) + 항목2(15분) = 80분.
+조치 불필요 — 항목4(0분, 이미 구현됨).
+Stephen 결정 대기(착수 보류) — 항목3(게스트-회원 이력 연결), 항목5(CS기록/만료검증/미응답알림 3종).
+
+---
+
+## NOW — CMS 상담(/cms/chat) 관리자 답장 FCM 푸시 미작동 검증 + 신규 연결 (2026-08-09) ✅ 완료
+
+[CONTEXT BRIDGE]
+plan_source: Stephen 리포트("CMS 상담 관리자 발행 대화 카드 내역의 대상 고객 푸시알림(FCM)이
+  정상 동작하지 않음 — 모바일 반응형·PC 브라우저 둘 다 미확인")
+핵심제약:
+  - 요청 범위: admin-reply·admin-attachment 두 API + push_notification_config 신규 항목 1건으로 한정
+  - 신규 옵트인 컬럼 추가 없이 기존 category='customer_lifecycle' → allow_rental_alert 매핑 재사용
+  - 마이그레이션 신규 파일만(기존 파일 수정 금지), stage 선적용 → Stephen 승인 후 production
+TDD도메인: 없음 (GSD — 기존 push.ts 발신 허브에 연결만 추가, 신규 로직 없음)
+절대금지: git 자율 실행
+
+---
+- [x] 원인 진단 | GSD | 완료기준: FCM 미작동이 코드 결함인지 설정 문제인지 실측으로 확정
+  - `src/lib/server/push.ts`(발신 허브) 자체는 정상 — 예약 라이프사이클·결제완료·계약서명
+    알림은 이미 연결·QA 완료 상태(2026-08-07 세션)
+  - `admin-reply`/`admin-attachment`(`/cms/chat` 관리자 답장 API) 두 곳 다 `sendPushToUser`
+    호출이 전혀 없음 — 애초에 미구현이었음(버그 아님, chat.md §14 "미구현" 기재와 일치하나
+    문서 갱신 누락 상태였음)
+  - `push_notification_config`(stage/production 공통)에 채팅 답장용 notify_type 자체가
+    존재하지 않았음(예약 7종+이벤트쿠폰 1종만 등록)
+  - 인프라 자체(토큰 등록·Firebase Admin)는 실서비스에도 정상 반영 확인(활성 토큰 4건) —
+    모바일/PC 동일 증상은 서버측 미연결이라는 진단과 일치(플랫폼 무관 원인)
+- [x] Stephen 확인(AskUserQuestion): "지금 구현 진행" 선택
+- [x] 신규 알림 유형 등록 | GSD | 파일: `supabase/migrations/20260809000208_208_push_notification_config_admin_chat_reply.sql`
+  — `push_notification_config`에 `admin_chat_reply`(category=customer_lifecycle) 신규 INSERT
+  | stage(ezyvffjvuwmtuhpxdjrw) 적용·조회 확인 완료
+- [x] API 연결 | GSD | 완료기준: 관리자 답장 저장 성공 후 고객에게 `sendPushToUser` 호출
+  - `src/routes/api/chat/admin-reply/+server.ts`: 세션 조회에 `user_id` 추가, 메시지 저장 후
+    `sendPushToUser(cs.user_id, 'admin_chat_reply', {title, body: content 60자 절단, link:'/'})`
+  - `src/routes/api/chat/admin-attachment/+server.ts`: 동일 패턴, body는 이미지/파일명 분기
+  - svelte-check: 터치 파일 2개 신규 에러 0건(전체 기존 무관 에러 1건만 잔존)
+- [x] Stephen 확인(AskUserQuestion): "지금 실서비스까지 적용" 선택
+- [x] production(vnbpmvxruyciuuaermyh) 적용 | 완료기준: INSERT 후 재조회로 9번째 행(`admin_chat_reply`) 확인 | 완료
+
+git 커밋 미실행(Stephen 요청 대기) — 변경 파일 3개: admin-reply/+server.ts,
+admin-attachment/+server.ts, migration 208(신규)
