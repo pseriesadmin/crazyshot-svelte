@@ -7,9 +7,14 @@
   interface Props {
     payload: ActionPayload
     onaction?: (payload: ActionPayload) => void
+    /** 서버측 만료 재검증용 메시지 ID (MessageBubble에서 전달, 선택적) */
+    messageId?: string
   }
 
-  let { payload, onaction }: Props = $props()
+  let { payload, onaction, messageId }: Props = $props()
+
+  // CS-A2: 서버측 재검증 실패 시 에러 메시지 표시
+  let serverExpiredError = $state(false)
 
   // 상품 이미지 URL (Cloudinary)
   let imageUrl = $derived(
@@ -45,8 +50,34 @@
     }
   }
 
-  function handleCta() {
-    if (payload.is_expired) return
+  // CS-A2: 서버측 만료 재검증 후 CTA 실행
+  async function handleCta(): Promise<void> {
+    if (isExpired) return
+    serverExpiredError = false
+
+    // messageId가 있으면 서버에 만료 여부 재확인 (클라이언트 시계 신뢰 X)
+    if (messageId) {
+      try {
+        const res = await fetch(`/api/chat/messages/${messageId}/execute-action`, {
+          method: 'POST',
+        })
+        if (res.status === 410) {
+          // 서버가 만료 확인 → 로컬 상태 갱신 후 중단
+          serverExpiredError = true
+          return
+        }
+        if (!res.ok) {
+          // 네트워크 ��류 등 — 진행 불가로 처리
+          serverExpiredError = true
+          return
+        }
+      } catch {
+        // fetch 자체 ���패 — 진행 불가
+        serverExpiredError = true
+        return
+      }
+    }
+
     if (onaction) onaction(payload)
     if (ctaUrl) window.location.href = ctaUrl
   }
@@ -58,7 +89,7 @@
   )
 </script>
 
-<div class="action-card" class:expired={isExpired}>
+<div class="action-card" class:expired={isExpired || serverExpiredError}>
   <!-- 상품 정보 행 (이미지 + 메타) -->
   {#if payload.product_name || imageUrl}
     <div class="product-row">
@@ -98,10 +129,10 @@
         <button
           class="cta-btn cta-btn--{ctaColor}"
           onclick={handleCta}
-          disabled={isExpired}
-          aria-label={isExpired ? '기한 만료된 액션' : ctaLabel}
+          disabled={isExpired || serverExpiredError}
+          aria-label={isExpired || serverExpiredError ? '기한 만료된 액션' : ctaLabel}
         >
-          {isExpired ? '기한 만료' : ctaLabel}
+          {isExpired || serverExpiredError ? '기한 만료' : ctaLabel}
         </button>
       </div>
     </div>
@@ -117,9 +148,9 @@
       <button
         class="cta-btn cta-btn--{ctaColor} cta-btn--full"
         onclick={handleCta}
-        disabled={isExpired}
+        disabled={isExpired || serverExpiredError}
       >
-        {isExpired ? '기한 만료' : ctaLabel}
+        {isExpired || serverExpiredError ? '기한 만료' : ctaLabel}
       </button>
     </div>
   {/if}

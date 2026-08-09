@@ -151,7 +151,22 @@
     if (!session || isSending) return
     isSending = true
 
+    // 낙관적(optimistic) 렌더링 — 서버 응답(AI 답변 생성 포함) 완료 전에 내 메시지 즉시 표시
+    const tempId = `temp-${crypto.randomUUID()}`
+    pushMessage({
+      id: tempId,
+      session_id: session.id,
+      sender_type: 'user',
+      content,
+      message_type: 'text',
+      action_payload: null,
+      is_read: false,
+      created_at: new Date().toISOString(),
+    })
+
     const { response, error } = await sendMessage({ session_id: session.id, content })
+
+    removeMessage(tempId)
 
     if (error) {
       errorMsg = error

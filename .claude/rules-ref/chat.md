@@ -81,22 +81,26 @@ PRD.1.7 — 대화형 렌탈예약 어시스턴트 시스템 V1.0
 ```
 상태: open (진행중) | pending (대기) | closed (종료)
 
-전환 규칙:
-  사용자 메시지 + CS_ESCALATE     → pending
-  사용자 메시지 + 비-에스컬레이션 + pending → open
-  사용자 메시지 + 비-에스컬레이션 + open   → open (유지)
-  사용자 메시지 + closed (race)            → open (자동 재활성화)
+전환 규칙 (2026-07-27 설계 변경 반영 — rental-lifecycle.md "상담채팅 세션 상태" 참조):
+  사용자 메시지 (어떤 intent든) → 무조건 open 전환
+    · CS_ESCALATE가 분류돼도 즉시 pending으로 가지 않음
+    · pending/closed 상태에서도 새 메시지 도착 자체로 open 복귀
 
   관리자 메시지 (텍스트·첨부) + closed  → open
   관리자 메시지 (텍스트·첨부) + pending → open
   관리자 메시지 + open                  → open (유지)
 
-  1시간 비활성 (auto_pending_inactive_sessions) → pending
-  관리자 닫기 버튼                              → closed
+  1시간 비활성 (auto_pending_inactive_sessions RPC) → pending  ← pending 재진입 유일 경로
+  관리자 닫기 버튼                                  → closed
 
 신규 세션 생성 조건 (유일):
   - 로그인 사용자: 동일 context_type+context_id에 세션이 전혀 없을 때만
   - 게스트: 새 anon auth 발급 후 첫 채팅 시
+
+⚠️ 구버전(2026-06-27 이전) 서술: "사용자 메시지 + CS_ESCALATE → pending"은
+   2026-07-27 설계 변경으로 폐기됐다. 코드(/api/chat/message)에서 CS_ESCALATE를 이유로
+   pending으로 강등하는 로직은 존재하지 않는다. 코드 수정 시 이 동작을 "버그"로 오인해
+   되돌리지 않도록 주의.
 ```
 
 ---
@@ -186,14 +190,18 @@ POST /api/chat/session
 POST /api/chat/message
   역할: 사용자 메시지 전송 + Claude AI 의도 분류 + AI 응답 생성
   로직:
-    1. 세션 소유자 확인
+    1. 세션 소유자 확인 (context_type·context_id도 조회 — AC-2 enrichActionCard용)
     2. closed 세션 → 자동 open 전환 (race condition 대비)
     3. 사용자 메시지 INSERT
-    4. Claude API (claude-haiku-4-5) Intent Classifier 호출
-    5. confidence < 0.6 → CS_ESCALATE 강제
-    6. CS_ESCALATE → status=pending / 비-에스컬레이션+pending → status=open
-    7. AI 응답 메시지 INSERT
-    8. chat_intent_logs INSERT
+    4. 세션 상태 → 메시지 도착 자체로 무조건 open 전환 (intent와 무관)
+       ※ 2026-07-27 설계 변경: CS_ESCALATE여도 pending으로 강등하지 않음
+    5. 하이브리드 1단계: 빠른답변(canned_response) 키워드 매칭 시도
+       → 매칭 성공: 자동답변 INSERT 후 즉시 반환 (Claude 호출 생략)
+    6. Claude API (claude-haiku-4-5) Intent Classifier 호출
+    7. confidence < 0.6 → CS_ESCALATE 강제
+    8. action_card 있음 → enrichActionCard로 실데이터(상품명·예약번호 등) 채움 (AC-2)
+    9. AI 응답 메시지 INSERT
+   10. chat_intent_logs INSERT
 
 POST /api/chat/admin-reply
   역할: 관리자 텍스트 메시지 전송
@@ -317,12 +325,19 @@ Intent 분류:
   PAYMENT_REQUEST     → 결제 링크 액션 카드 생성
   RETURN_GUIDE        → 반납 안내 카드
   PRODUCT_RECOMMEND   → 상품 추천 카드
-  CS_ESCALATE         → pending 전환 (관리자 개입 필요)
+  CS_ESCALATE         → 긴급 배지 표시 (관리자 주의 신호) — 세션 pending 강제는 하지 않음
   GENERAL             → 일반 텍스트 응답
 
 confidence < 0.6 → CS_ESCALATE 강제
-CS_ESCALATE      → session.status = 'pending' (대기 탭)
-비-에스컬레이션 + pending → session.status = 'open' (진행중 탭)
+
+세션 상태 전환 정책 (2026-07-27 설계 변경 — rental-lifecycle.md §채팅세션상태 정본):
+  사용자 메시지 도착 → intent 결과와 무관하게 무조건 open 전환
+  CS_ESCALATE 분류   → 관리자 패널에 "긴급" 배지(is_urgent)만 표시 — pending 전환 없음
+  pending 재진입     → auto_pending_inactive_sessions RPC(1시간 무응답)만 가능
+
+⚠️ 구버전 서술 "CS_ESCALATE → session.status='pending'" 및
+   "비-에스컬레이션+pending → session.status='open'"은
+   2026-07-27 변경으로 폐기. 코드(/api/chat/message)에 해당 로직 없음.
 ```
 
 ---
@@ -413,11 +428,17 @@ is_expired: false (초기) → 만료 시 true (버튼 비활성화)
 
 ✅ 채팅 세션 정책 4개 전체 코드 반영 완료
 
+✅ 웹 푸시 알림 (FCM) — 관리자 답장 경로 (2026-08-09 추가)
+   admin-reply·admin-attachment → sendPushToUser(고객, 'admin_chat_reply') 연결 완료
+   (src/lib/server/push.ts 발신 허브 재사용, push_notification_config 신규 항목 등록)
+   ⚠️ 예약 라이프사이클(승인·반출·반납 등) 푸시는 이보다 먼저 별도로 연결·QA 완료된 상태였음
+      (rental-lifecycle.md AUTO_NOTIFY 매핑 참고) — 이번 건은 그 인프라를 채팅 답장에도 확장한 것
+
 ⏳ 미구현 (다음 사이클):
-   - 웹 푸시 알림 (FCM) 연동
    - 카카오 알림톡 fallback 자동 발송
    - cs_records 관리자 CS 기록 저장
    - 액션 카드 만료 처리 로직
+   - 관리자 미응답 알림(FCM) — TASK.md CS-A3 참고, Stephen 승인 대기 중 별건
 ```
 
 ---

@@ -8,10 +8,12 @@ import { ANTHROPIC_API_KEY } from '$env/static/private'
 import { createClient } from '@supabase/supabase-js'
 import { getSupabaseUrl } from '$lib/env/supabasePublic'
 import type { RequestHandler } from './$types'
-import type { ChatMessage, ChatIntent } from '$lib/types/chat'
+import type { ChatMessage, ChatIntent, ActionPayload } from '$lib/types/chat'
 import { matchCannedResponse } from '$lib/server/matchCannedResponse'
 import type { CannedResponseForMatch } from '$lib/server/matchCannedResponse'
 import { loadSynonymGroups } from '$lib/server/synonymLearning'
+import { enrichActionCard } from '$lib/server/chatActionEnrich'
+import type { EnrichContext } from '$lib/server/chatActionEnrich'
 
 const anthropic = new Anthropic({ apiKey: ANTHROPIC_API_KEY })
 
@@ -62,9 +64,18 @@ export const POST: RequestHandler = async ({ request, locals }) => {
   // 세션 소유자 확인 (chat 테이블은 database.ts 미등록 — untyped 처리)
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const db = locals.supabase as any
+
+  // service_role 클라이언트 (chat_sessions 상태 전환 + 자동답변 매칭 + intent_logs RLS bypass 공통 사용)
+  // chat_sessions UPDATE RLS는 admin_update_session(is_cms_user()) 하나뿐 — 일반 고객(비 CMS
+  // 직원) 세션의 status 전환은 db(고객 세션 클라이언트)로는 항상 조용히 무시됨(0행 UPDATE, 에러
+  // 없음). updated_at은 trg_chat_message_update_session 트리거가 별도로 채워주지만 status는
+  // 그렇지 않으므로 상태 전환은 반드시 admin으로 수행해야 함.
+  const serviceRoleKey = env.SUPABASE_SERVICE_ROLE_KEY
+  const admin = serviceRoleKey ? createClient(getSupabaseUrl(), serviceRoleKey) : null
+
   const { data: chatSession } = await db
     .from('chat_sessions')
-    .select('user_id, status')
+    .select('user_id, status, context_type, context_id')
     .eq('id', body.session_id)
     .single()
 
@@ -74,8 +85,8 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 
   // closed 세션: 반환 대신 자동 재활성화 (race condition 대비 — admin이 닫는 동안 사용자 전송)
   // §F FIX-6: 로컬 변수 갱신 — 아래 "상태 전환(공통)" 블록의 중복 업데이트 쿼리를 방지
-  if (chatSession.status === 'closed') {
-    await db
+  if (chatSession.status === 'closed' && admin) {
+    await admin
       .from('chat_sessions')
       .update({ status: 'open', updated_at: new Date().toISOString() })
       .eq('id', body.session_id)
@@ -99,16 +110,12 @@ export const POST: RequestHandler = async ({ request, locals }) => {
   }
 
   // 세션 상태 전환(어느 경로든 공통) — 새 메시지 도착 자체로 무조건 진행중 복귀
-  if (chatSession.status !== 'open') {
-    await db
+  if (chatSession.status !== 'open' && admin) {
+    await admin
       .from('chat_sessions')
       .update({ status: 'open' })
       .eq('id', body.session_id)
   }
-
-  // service_role 클라이언트 (자동답변 매칭 + intent_logs RLS bypass 공통 사용)
-  const serviceRoleKey = env.SUPABASE_SERVICE_ROLE_KEY
-  const admin = serviceRoleKey ? createClient(getSupabaseUrl(), serviceRoleKey) : null
 
   // 1-a. 하이브리드 자동답변 1단계 — 키워드 매칭을 AI보다 먼저 시도
   //   Claude 호출·API 키 상태와 완전히 무관하게 동작(장애 시에도 매칭되는 빠른답변은 계속 나감).
@@ -132,7 +139,11 @@ export const POST: RequestHandler = async ({ request, locals }) => {
         const match = matchCannedResponse(body.content.trim(), (candidates as CannedResponseForMatch[] ?? []), synonymGroups)
 
         if (match) {
-          const { data: matchedMessage, error: matchInsertErr } = await db
+          // sender_type='admin' INSERT는 RLS(participant_insert_message)가 실제 cms_role
+          // 보유 계정에게만 허용 — 이 메시지는 관리자가 아니라 시스템 자동응답이므로
+          // service_role(admin) 클라이언트로 삽입해야 함. db(고객 세션 클라이언트)로 삽입하면
+          // 비회원(user_profiles 행 자체가 없음)은 항상 RLS에 막혀 자동답변이 나가지 않았음.
+          const { data: matchedMessage, error: matchInsertErr } = await admin
             .from('chat_messages')
             .insert({
               session_id: body.session_id,
@@ -146,7 +157,7 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 
           if (!matchInsertErr && matchedMessage) {
             await admin.rpc('increment_canned_response_usage', { p_id: match.id })
-            await db
+            await admin
               .from('chat_sessions')
               .update({ updated_at: new Date().toISOString() })
               .eq('id', body.session_id)
@@ -242,16 +253,32 @@ export const POST: RequestHandler = async ({ request, locals }) => {
   }
 
   // 5. 응답 메시지 INSERT (Claude 자유응답 — 1단계에서 매칭 실패했을 때만 여기 도달)
+  // AC-2: action_card가 있으면 enrichActionCard로 실데이터(상품명·예약번호 등)를 채운 후 INSERT
+  let enrichedPayload: ActionPayload | null = classified.action_card
+    ? { type: classified.action_card.type as ActionPayload['type'], is_expired: false }
+    : null
+
+  if (classified.action_card && admin) {
+    const sessionCtx: EnrichContext = {
+      context_type: (chatSession.context_type as string | null) ?? 'general',
+      context_id: (chatSession.context_id as string | null) ?? null,
+    }
+    enrichedPayload = await enrichActionCard(
+      classified.action_card.type,
+      session.user.id,
+      sessionCtx,
+      admin,
+    )
+  }
+
   const { data: aiMessage, error: aiInsertError } = await db
     .from('chat_messages')
     .insert({
       session_id: body.session_id,
       sender_type: 'ai',
       content: classified.reply,
-      message_type: classified.action_card ? 'action_card' : 'text',
-      action_payload: classified.action_card
-        ? { ...classified.action_card, is_expired: false }
-        : null,
+      message_type: enrichedPayload ? 'action_card' : 'text',
+      action_payload: enrichedPayload,
     })
     .select()
     .single()
@@ -277,10 +304,12 @@ export const POST: RequestHandler = async ({ request, locals }) => {
     : { data: null }
 
   // 7. chat_sessions updated_at 갱신
-  await db
-    .from('chat_sessions')
-    .update({ updated_at: new Date().toISOString() })
-    .eq('id', body.session_id)
+  if (admin) {
+    await admin
+      .from('chat_sessions')
+      .update({ updated_at: new Date().toISOString() })
+      .eq('id', body.session_id)
+  }
 
   return json(
     {

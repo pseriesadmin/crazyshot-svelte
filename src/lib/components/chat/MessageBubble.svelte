@@ -218,7 +218,7 @@
   <div class="bubble-row" class:bubble-row--own={isOwn}>
     <div class="bubble" class:bubble--own={isOwn} class:bubble--other={!isOwn}>
       {#if isActionCard && message.action_payload}
-        <ActionCard payload={message.action_payload} {onaction} />
+        <ActionCard payload={message.action_payload} {onaction} messageId={message.id} />
       {/if}
       {#if isAutoBadge}
         <span class="auto-badge" aria-label="자동답변">자동답변</span>
