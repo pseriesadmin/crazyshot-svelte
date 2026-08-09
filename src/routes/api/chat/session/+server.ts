@@ -2,6 +2,9 @@
 // PRD.1.7.6
 
 import { json } from '@sveltejs/kit'
+import { env } from '$env/dynamic/private'
+import { createClient } from '@supabase/supabase-js'
+import { getSupabaseUrl } from '$lib/env/supabasePublic'
 import type { RequestHandler } from './$types'
 import type { CreateSessionRequest, ChatSession } from '$lib/types/chat'
 
@@ -13,6 +16,14 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const db = locals.supabase as any
+
+  // chat_sessions UPDATE RLS는 admin_update_session(is_cms_user()) 하나뿐 — 일반 고객
+  // (비 CMS 직원) 세션의 closed→open 재활성화 UPDATE는 db로는 항상 조용히 막혀(0행) reopenErr가
+  // 발생하고, 그 결과 기존 세션을 재사용하지 않고 매번 새 세션을 만들게 됨(정책 위반). 반드시
+  // service_role로 수행해야 함.
+  const serviceRoleKey = env.SUPABASE_SERVICE_ROLE_KEY
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const admin: any = serviceRoleKey ? createClient(getSupabaseUrl(), serviceRoleKey) : db
 
   let body: CreateSessionRequest = {}
   try {
@@ -40,7 +51,7 @@ export const POST: RequestHandler = async ({ request, locals }) => {
   const { data: closedSession } = await query.maybeSingle()
 
   if (closedSession) {
-    const { data: reopened, error: reopenErr } = await db
+    const { data: reopened, error: reopenErr } = await admin
       .from('chat_sessions')
       .update({ status: 'open', updated_at: new Date().toISOString() })
       .eq('id', closedSession.id)

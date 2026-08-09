@@ -4,6 +4,7 @@ import { env } from '$env/dynamic/private'
 import { getSupabaseUrl } from '$lib/env/supabasePublic'
 import { createClient } from '@supabase/supabase-js'
 import type { RequestHandler } from './$types'
+import { sendPushToUser } from '$lib/server/push'
 
 export const GET: RequestHandler = async ({ url, locals }) => {
   const { session } = await locals.safeGetSession()
@@ -26,6 +27,27 @@ export const GET: RequestHandler = async ({ url, locals }) => {
 
   // 1시간 이상 비활성 open 세션 → pending 자동 전환 (호출 시마다 실행)
   await admin.rpc('auto_pending_inactive_sessions')
+
+  // CS-A3: 30분 이상 관리자 미응답 세션 → 고객 FCM 푸시 (fire-and-forget)
+  // get_and_mark_unanswered_sessions()가 동시에 unanswered_notified_at을 갱신해 중복 발송 방지
+  ;(async () => {
+    try {
+      const { data: userIds } = await admin.rpc('get_and_mark_unanswered_sessions') as { data: string[] | null }
+      if (userIds && userIds.length > 0) {
+        await Promise.allSettled(
+          userIds.map((uid) =>
+            sendPushToUser(uid, 'chat_unanswered', {
+              title: '아직 답변을 기다리고 있어요',
+              body: '문의하신 내용에 아직 답변이 없어요. 잠시 후 다시 확인해 주세요.',
+              link: '/',
+            })
+          )
+        )
+      }
+    } catch {
+      // 발송 실패는 세션 목록 응답에 영향 주지 않음
+    }
+  })()
 
   const status = url.searchParams.get('status')
   const page  = Math.max(1, parseInt(url.searchParams.get('page')  ?? '1',   10))

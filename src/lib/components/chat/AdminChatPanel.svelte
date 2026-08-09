@@ -16,7 +16,7 @@
   import { setSessions, upsertSession, pushMessage, applyIncomingMessagePreview } from '$lib/stores/chat.svelte'
   import { chatStore } from '$lib/stores/chat.svelte'
   import { supabase } from '$lib/services/supabase'
-  import type { ChatSession, ChatMessage, ChatSessionStatus } from '$lib/types/chat'
+  import type { ChatSession, ChatMessage, ChatSessionStatus, CsRecord } from '$lib/types/chat'
 
   // 로컬 타입 정의 (routes 크로스-임포트 금지 원칙) — /api/cms/customers/[userId]/summary 응답 형태
   interface CustomerSummary {
@@ -57,6 +57,12 @@
   let pendingDeleteId = $state<string | null>(null)
   let isDeleting = $state(false)
   let flashingSessionIds = $state<Set<string>>(new Set())
+
+  // CS-A1: CS 상담기록 상태
+  let csRecord = $state<CsRecord | null>(null)
+  let csSummaryDraft = $state('')
+  let isSavingCsRecord = $state(false)
+  let csSaveResult = $state<'saved' | 'error' | null>(null)
 
   // 신규 채팅목록 등장·기존 목록 새 대화 수신/발신 시 카드 배경 점멸 표시 (3회 반복 후 자동 종료)
   function flashSession(sessionId: string): void {
@@ -184,6 +190,54 @@
     selectedSessionId = sid
     // 세션 입장 API — admin_id 배정
     await fetch(`/api/chat/sessions/${sid}/join`, { method: 'POST' })
+  }
+
+  // CS-A1: 세션 선택 시 기존 CS 기록 로드
+  $effect(() => {
+    const sid = selectedSessionId
+    if (!sid) {
+      csRecord = null
+      csSummaryDraft = ''
+      csSaveResult = null
+      return
+    }
+    csRecord = null
+    csSummaryDraft = ''
+    csSaveResult = null
+    fetch(`/api/chat/sessions/${sid}/cs-record`)
+      .then((r) => r.ok ? r.json() : null)
+      .then((d: { record: CsRecord | null } | null) => {
+        if (d?.record) {
+          csRecord = d.record
+          csSummaryDraft = d.record.summary ?? ''
+        }
+      })
+      .catch(() => {})
+  })
+
+  async function handleSaveCsRecord(): Promise<void> {
+    if (!selectedSessionId || isSavingCsRecord) return
+    const trimmed = csSummaryDraft.trim()
+    if (!trimmed) return
+    isSavingCsRecord = true
+    csSaveResult = null
+    try {
+      const res = await fetch(`/api/chat/sessions/${selectedSessionId}/cs-record`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ summary: trimmed, status: 'in_progress' }),
+      })
+      if (res.ok) {
+        const { record } = await res.json()
+        if (record) csRecord = record
+        csSaveResult = 'saved'
+        setTimeout(() => { csSaveResult = null }, 2500)
+      } else {
+        csSaveResult = 'error'
+      }
+    } finally {
+      isSavingCsRecord = false
+    }
   }
 
   async function handleSend(content: string, cannedResponseId?: string): Promise<void> {
@@ -509,6 +563,34 @@
           onsend={handleSend}
           onattach={handleAdminAttach}
         />
+      </div>
+
+      <!-- CS-A1: 상담 요약 기록 -->
+      <div class="cs-record-section">
+        <div class="cs-record-header">
+          <span class="cs-record-label">상담 메모</span>
+          {#if csRecord?.updated_at}
+            <span class="cs-record-saved-at">{formatDateTime(csRecord.updated_at)} 저장됨</span>
+          {/if}
+        </div>
+        <div class="cs-record-input-row">
+          <textarea
+            class="cs-record-textarea"
+            placeholder="상담 요약 또는 메모를 남기세요…"
+            rows={2}
+            bind:value={csSummaryDraft}
+            disabled={isSavingCsRecord}
+            aria-label="상담 메모 입력"
+          ></textarea>
+          <button
+            class="cs-record-save-btn"
+            onclick={handleSaveCsRecord}
+            disabled={isSavingCsRecord || !csSummaryDraft.trim()}
+            aria-label="상담 메모 저장"
+          >
+            {#if isSavingCsRecord}저장 중{:else if csSaveResult === 'saved'}저장됨 ✓{:else if csSaveResult === 'error'}오류{:else}저장{/if}
+          </button>
+        </div>
       </div>
     {/if}
   </section>
@@ -996,9 +1078,80 @@
   }
 
   .chat-input-wrap {
-    padding: 16px 24px 20px;
+    padding: 16px 24px 0;
     flex-shrink: 0;
   }
+
+  /* ── CS-A1 상담 메모 섹션 ── */
+  .cs-record-section {
+    padding: 10px 24px 16px;
+    flex-shrink: 0;
+    border-top: 1px solid rgba(16, 11, 50, 0.06);
+  }
+
+  .cs-record-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 6px;
+  }
+
+  .cs-record-label {
+    font: var(--text-pc-script-12);
+    font-weight: 700;
+    color: var(--cs-text-mid);
+  }
+
+  .cs-record-saved-at {
+    font: var(--text-pc-script-12);
+    color: var(--cs-text-light);
+  }
+
+  .cs-record-input-row {
+    display: flex;
+    gap: 8px;
+    align-items: flex-start;
+  }
+
+  .cs-record-textarea {
+    flex: 1;
+    resize: none;
+    border: 1px solid var(--cs-lilac);
+    border-radius: var(--radius-sm);
+    padding: 8px 10px;
+    font: var(--text-pc-body-14);
+    color: var(--cs-text);
+    background: var(--cs-surface-gray);
+    outline: none;
+    line-height: 1.5;
+    transition: border-color 0.15s;
+  }
+  .cs-record-textarea:focus {
+    border-color: var(--cs-purple);
+    background: var(--cs-white);
+  }
+  .cs-record-textarea:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
+  }
+
+  .cs-record-save-btn {
+    flex-shrink: 0;
+    height: 36px;
+    padding: 0 16px;
+    border: none;
+    border-radius: var(--radius-md);
+    background: var(--cs-purple);
+    color: var(--cs-white);
+    font: var(--text-pc-script-12);
+    font-weight: 700;
+    cursor: pointer;
+    white-space: nowrap;
+    transition: opacity 0.15s;
+    align-self: center;
+  }
+  .cs-record-save-btn:hover:not(:disabled) { opacity: 0.85; }
+  .cs-record-save-btn:disabled { opacity: 0.45; cursor: not-allowed; }
 
   /* ── 삭제 버튼 (close-session-btn과 동일 스타일) ── */
   .delete-session-btn {
