@@ -1,6 +1,113 @@
 # GSD_LOG.md — 크레이지샷 실행 이력
 # 형식: [YYYY-MM-DD HH:MM] 타입 | 태스크명 | 파일 | 소요 | 결과
 
+[2026-08-09] ⚡GSD | NLSearch: CMS 상품검색 연동(§K) + 검색학습 루프 빈틈 수정(§L) + 500 에러 긴급
+  핫픽스 | 6개 파일(신규 2·수정 4) | GATE C 전부 승인 완료
+  배경: 메인 세션이 NLSearch 3개 화면(상품검색·상담채팅·CMS 상품목록)을 production 실데이터로 정밀
+  검증한 결과 (1) `/cms/products` 목록 검색창이 NLSearch와 무관한 별도 단순 ilike 필터였음을 발견,
+  (2) `/products/search`에서 RPC 0건→자연어 폴백 발동 시 `search_log_id`가 null이 되어 그 결과의
+  클릭이 §J 학습 데이터로 못 쌓이는 구조적 빈틈 발견(실제 재현으로 확정). Stephen이 두 가지를 지시.
+  ── §K CMS 상품검색 NLSearch 연동 (K-1~K-4, 전부 GATE C 승인) ──
+    - K-1: `src/routes/api/cms/products/search-suggestions/+server.ts` 신규 — ilike(productSearchOrFilter)
+      1차 + NLSearch(productSearchIndex.ts) 폴백(3건 이하일 때만) 하이브리드. 응답은 SimilarNameItem
+      형태(id/name/brand/category/product_code/match_label)
+    - K-2: `src/lib/components/cms/CmsSimilarNameInput.svelte`의 `source==='product_search'` 분기만
+      K-1 API 호출로 교체 — 디바운스·overlay·키보드 내비 등 기존 추천 드롭다운 UX 100% 무변경.
+      `source==='brand'`/기본(product_name 중복확인) 분기는 0줄 수정(요청 범위 엄격 준수)
+    - K-3: `src/routes/cms/products/+page.server.ts` 목록 필터(countQ/listQ)에도 동일 하이브리드
+      적용 — ilike 약할 때 NLSearch 매칭 id를 `.or()`에 병합, totalCount/totalPages 정합 유지
+    - K-4: `src/__tests__/server/cmsProductSearchSuggestions.test.ts` 신규 23개 테스트 전부 통과,
+      brand/product_name 소스 회귀 없음(0줄 변경) 확인
+    - Stephen 확인 완료: 구성품·사양 전용 검색어 매칭 반영 O, 4건 이상이면 자연어 보강 생략 방식 O
+  ── §L 검색학습 루프 빈틈 수정 (L-1~L-2, GATE C 승인) ──
+    - L-1: `src/routes/api/search/products/+server.ts`에 `fetchRecentSearchLogId(query)` 헬퍼 추가 —
+      RPC 0건+검색어 2자 이상일 때 service_role로 `search_logs`에서 최근 10초 이내 동일 검색어 로그를
+      후속 조회해 `search_log_id`에 채움(실패 시 null 폴백, 검색 자체는 안 막음). RPC(migration 203)
+      시그니처는 무변경 — TS 레이어에서만 해결
+    - L-2: `src/__tests__/server/searchEngine/searchLogIdFallback.test.ts` 신규 14개 테스트 전부 통과
+    - Stephen 확인 완료: 자연어 폴백 결과 클릭이 학습 데이터로 정상 축적 O, 10초 기준 적절 O
+  ── 🔴 긴급 핫픽스: `/products/search` 검색 시 500 에러 (2026-08-09, 메인 세션 직접 진단·수정) ──
+    Stephen이 launch-selected-element로 실제 500 에러를 보고(검색어 입력 시마다 재현). 메인 세션이
+    직접 원인 진단: L-1의 `fetchRecentSearchLogId`가 `+server.ts`에 **`export`** 상태로 추가돼 있었음
+    — SvelteKit은 `+server.ts`에서 GET/POST 등 정해진 이름 외 export를 전부 거부(`Invalid export`
+    런타임 에러)하므로, 검색어와 무관하게 **이 라우트로 오는 모든 요청이 500으로 실패** 중이었음
+    (RPC·MiniSearch 각각은 격리 재현으로 정상 확인 — fresh vite dev 프로세스로 재현·스택트레이스
+    확보해 원인 특정). 수정: `export` 키워드 제거(로컬 함수 전환) — `searchLogIdFallback.test.ts`는
+    이 함수를 직접 import하지 않고 로직만 재현하는 구조라 테스트 영향 없음. 재현했던 두 검색어
+    재테스트 → 200 + `search_log_id` non-null 정상. 검색엔진 테스트 스위트 139/139 통과.
+    ⚠️ production/stage 배포엔 영향 없었음(L-1이 아직 미커밋 상태에서만 존재하던 버그)
+  종합: DB 마이그레이션 추가 없음(순수 TS 로직 변경, 신규 마이그레이션 0건) — stage/production DB
+  적용 자체가 불필요한 작업. 코드(TS)는 아직 미커밋 상태 — Stephen 커밋 대기 중.
+
+[2026-08-09] CRITICAL | 내정보 프로필 사진(아바타) 업로드 기능 신규 구축 + 로그인정보카드 이메일 전체노출 | 신규 마이그레이션 1개 + 5개 파일 | ✅ Stage 적용 완료(Production 대기)
+  배경: Stephen이 launch-selected-element로 /account/profile 개인정보 탭 상단 "로그인 정보 카드"
+  (이메일ID+가입일+아바타)와 /account 메인 인사카드를 함께 선택하며 "기능성 점검 후 account와
+  중복되면 제거" 지시. 조사 결과 두 카드는 표시 데이터가 달라(이름+혜택+QR vs 이메일+가입일+
+  아바타) 완전 중복이 아니었고, 유일한 겹침은 이메일ID 부분이 같은 컴포넌트 내 바로 아래 편집
+  가능한 이메일 필드와 겹치는 정도였음. UI 삭제 오인 방지 지침(과거 학습기록)에 따라 삭제
+  전 대상을 명확히 확인받는 과정에서 Stephen이 "DB 기능이 있었어(사진 업로드)"라며 방향 전환 —
+  전체 마이그레이션 이력 조사 결과 avatar_url 등 프로필사진 관련 컬럼은 DB에 전혀 존재한 적
+  없음(신규 기능 확정, AskUserQuestion으로 Stephen 재확인 완료).
+  DB 변경 + 다중 파일이라 CRITICAL 게이트로 분류, 서비스 의도 확인 질문 후 진행.
+  구현:
+    · supabase/migrations/20260809000212_212_user_profiles_avatar_url.sql (신규) —
+      user_profiles.avatar_url TEXT 컬럼 + update_user_avatar(p_avatar_url) RPC
+      (SECURITY DEFINER, WHERE id = auth.uid() — Migration #135 정정 패턴 준수, user_id 아님)
+    · src/lib/types/database.ts — UpdateUserAvatarArgs 타입 + Functions 맵 등록
+    · src/routes/account/+page.server.ts, src/routes/account/profile/+page.server.ts —
+      avatar_url을 각각 AccountProfile/UserProfile 인터페이스 + select 쿼리에 추가
+    · src/routes/api/profile/upload-avatar/+server.ts (신규) — upload-doc과 동일 패턴
+      (user-documents 버킷 재사용, 세션 검증, callTypedRpc 경유) 단 이미지 전용(PDF 제외) MIME
+      검증만 별도 배열로 분리
+    · src/lib/components/members/profile/ProfileTabContent.svelte — 로그인 정보 카드:
+      이메일 표시를 split('@')[0] → 전체 이메일로 변경(word-break 추가로 모바일 줄바꿈 대응),
+      아바타를 비활성 div → 클릭 가능 button으로 전환(avatar_url 있으면 이미지, 없으면 기존
+      이니셜 폴백 유지) + 클릭 시 간단한 업로드 모달(미리보기+저장, 기존 kakao-modal/doc-upload
+      CSS 클래스 재사용, 오버레이만 avatar-modal-overlay로 분리해 카카오 주소검색 모달의
+      모바일 바텀시트 강제 스타일과 결합 방지)
+  검증: svelte-check 신규 에러 0건(11→1건 기준 변동 없음)
+  [2026-08-09 후속] 마이그레이션 #212 stage(ezyvffjvuwmtuhpxdjrw) 적용 완료(Stephen 지시) —
+  avatar_url text 컬럼 + update_user_avatar RPC 존재 SQL로 직접 확인. Production
+  (vnbpmvxruyciuuaermyh) 미적용 — 실사용 브라우저 검증 후 Stephen 확인 필요
+
+[2026-08-09] GSD | CMS 상담(/cms/chat) 관리자 답장 FCM 푸시 미작동 검증 + 신규 연결 |
+  수정파일: src/routes/api/chat/admin-reply/+server.ts, src/routes/api/chat/admin-attachment/+server.ts |
+  신규 마이그레이션: supabase/migrations/20260809000208_208_push_notification_config_admin_chat_reply.sql |
+  결과: 진단 — push.ts 발신 허브·인프라(토큰 4건 활성)는 정상, admin-reply/admin-attachment
+  두 API에 sendPushToUser 호출 자체가 없었음(미구현, 버그 아님) + push_notification_config에
+  채팅용 notify_type 부재. Stephen 승인 하에 admin_chat_reply notify_type 신규 등록(신규
+  옵트인 컬럼 없이 기존 allow_rental_alert 재사용) + 두 API에 발송 연결. stage 적용·검증 →
+  Stephen 승인 → production(vnbpmvxruyciuuaermyh) 적용 완료. svelte-check 터치 파일 신규
+  에러 0건. git 커밋 미실행(Stephen 요청 대기)
+
+[2026-08-09 14:35] ⚡GSD  | K-1: /api/cms/products/search-suggestions 신설 | src/routes/api/cms/products/search-suggestions/+server.ts | ~25분 | GATE C:자동(BOUNDARY)
+[2026-08-09 14:35] ⚡GSD  | K-2: CmsSimilarNameInput product_search 분기 → API fetch 교체 | src/lib/components/cms/CmsSimilarNameInput.svelte | ~15분 | GATE C:자동(BOUNDARY)
+[2026-08-09 14:35] ⚡GSD  | K-3: /cms/products/+page.server.ts 하이브리드 NLSearch 폴백 적용 | src/routes/cms/products/+page.server.ts | ~20분 | GATE C:CRITICAL 대기
+[2026-08-09 14:35] ⚡GSD  | K-4: 유닛테스트 23개 신규 + 116개 회귀 통과 | src/__tests__/server/cmsProductSearchSuggestions.test.ts | ~10분 | GATE C:자동(BOUNDARY)
+[2026-08-09] BOUNDARY | /account 개인정보 미등록 안내(경고토스트+'고객'님 플레이스홀더) | src/routes/account/+page.server.ts, src/routes/account/+page.svelte | ✅ DONE
+  Stephen 요청: 이메일 최초 가입 후 /account 상단 이름 노출 영역이 비어보이는 문제 해소.
+  기존: data.user.name이 session.user_metadata.full_name → 이메일 앞부분 → '회원' 순 폴백이라
+  user_profiles.full_name(실제 개인정보 등록 원본, /account/profile에서 편집)과 무관하게 표시되던
+  구조 — 신규가입자는 이메일 파편이 이름처럼 노출되는 어색한 상태였음.
+  수정: +page.server.ts user.name을 profile.full_name(user_profiles 테이블, 단일 소스) 기준으로
+  교체, 미등록 시 폴백을 '고객'으로 변경. +page.svelte에 $effect + toastShown 플래그(기존
+  cms/login/+page.svelte 패턴 재사용)로 profile.full_name 미등록 상태일 때만 진입 시 1회
+  csToast.warning('상세 개인정보를 등록해주세요.') 노출 — 30초 간격 rental-status invalidate로
+  인한 재발송 없음. /account/profile에서 이름 저장(update_user_profile RPC) 후 재진입하면
+  full_name이 채워져 토스트·플레이스홀더 모두 자연 해제(별도 "최초 1회" 플래그/컬럼 불필요).
+  svelte-check: 신규 에러 0건(11→1건 기준 변동 없음, 남은 1건은 무관한 기존 이슈)
+
+[2026-08-09 14:33] ⚡GSD | §L-1 §J 학습루프 빈틈 수정 — RPC 0건 시 search_log_id 후속 조회 |
+  src/routes/api/search/products/+server.ts | 25분 | GATE C 대기
+  변경요약: fetchRecentSearchLogId(service_role, 10초 window) 헬퍼 추가,
+  const searchLogId → let searchLogId 변경, rpcResults.length===0 && q.length>=2 조건에서
+  후속 조회 발동. 후속 조회 실패 시 null 폴백 유지(검색 차단 없음). svelte-check 오류 0건.
+
+[2026-08-09 14:33] ⚡GSD | §L-2 테스트 신설 — searchLogIdFallback 14개 테스트 |
+  src/__tests__/server/searchEngine/searchLogIdFallback.test.ts (신규) | 20분 | GATE C 대기
+  테스트 그룹: L-1-A(발동조건)·L-1-B(후속조회성공)·L-1-C(실패폴백)·L-1-D(스킵케이스)·L-1-E(§J 전체흐름)
+  vitest run: 7개 파일 116개 테스트 전부 통과, 회귀 없음.
+
 [2026-08-07 19:20] ⚡GSD | CMS 대여현황(/cms/rentals)↔예약목록(/cms/reservation) 정합성 정밀
   검증 + get_rental_list 페이지네이션 버그 발견·수정(Stage+Production) |
   검증파일: src/lib/utils/rentalTransition.ts, src/lib/components/cms/RentalDetailPanel.svelte,
@@ -1543,3 +1650,78 @@
     display:flex 기준으로 재점검 — 이제 끊긴 구간 없음. "+ 작성"(.editor-full 경로)은 원래도
     정상이었으나 form의 min-height:0 누락은 그 경로에도 있었으므로 같이 해소됨.
   svelte-check: 신규 에러 0건
+
+[2026-08-09] GSD | CMS 상품목록(/cms/products) 선택·패널 전환 로딩 지연 근본 해결 | 5개 파일(2개 신규) | GATE E 대기
+  배경: 카드 선택/패널 닫기 시 3~5초 로딩 지연 — `selectProduct()`/`closePanel()`이 goto()로
+    `?selected=` 파라미터만 바꿔도 +page.server.ts의 load() 전체(선택 무관 ①그룹 9~10쿼리 +
+    선택상세 ②그룹 8~10쿼리)가 매번 재실행되던 구조적 문제. Plan Mode로 정밀 설계 후 GATE B
+    사전승인(plan 파일: streamed-jumping-gray.md) 받아 진행.
+  PERF-1(병렬화): +page.server.ts — childRows/rules24h/rules12h 3개 쿼리를 Promise.all 병렬
+    실행으로 전환(rentalRows만 childIdToParentId 완성 후 순차 실행 유지), 반환 데이터 구조 무변경.
+  PERF-2(캐싱): +page.server.ts — `loadProductsMetadata()` 신설, categories/categoryLabels/
+    partnerComboItems/rentalPeriods/rentalMethods/pickupPoints/shippingSettings 7종 전역
+    메타데이터를 모듈 스코프 60초 TTL 인메모리 캐시로 전환(rentalPeriods 등은 selectedId 조건부
+    조회에서 상시 캐시 조회로 이동 — 선택 여부와 무관하게 항상 최신값 서빙).
+  PERF-3(헬퍼 추출): 신규 src/lib/server/products/loadSelectedProductDetail.ts — 기존
+    "선택된 상품 상세 데이터 로드"(② 그룹: selectedProduct/selectedPriceRules/rootProduct/
+    inventoryList) 로직을 로직 변경 없이 그대로 이관. assetCount/assetTotal(선택상품 자신
+    기준, products.md §9 Q2 확인 결과 실제 렌더링에 미사용되는 죽은 필드)만 0 고정으로 대체.
+    rentalStatusCounts 페이지 집계 맵 의존을 rootRentalStatusCounts 단일값 반환으로 분리해
+    +page.server.ts/신규 API 양쪽에서 재사용 가능하게 함.
+  PERF-4(신규 API): 신규 src/routes/cms/products/[id]/detail/+server.ts(GET) — PERF-3 헬퍼
+    재사용, assets/[id]/+server.ts와 동일 인증 패턴(safeGetSession→401, cms_role→403).
+    frozen 경로 src/routes/api/** 를 피해 /cms/products 하위에 배치(AskUserQuestion으로
+    Stephen 확인 후 확정).
+  PERF-5(타입): src/app.d.ts — App.PageState에 selectedId?: string | null 추가.
+  PERF-6/7(클라이언트 전환): +page.svelte — selectProduct()/closePanel()을 goto() → SvelteKit
+    shallow routing(pushState)으로 교체. `activeSelectedId`($derived, page.state 우선·없으면
+    data.selectedId)와 `activeDetail`($derived, 서버 데이터와 일치 시 data 직접 사용·다르면
+    fetch 결과) 도입, `$effect`로 `/cms/products/[id]/detail`을 필요할 때만 fetch(동일 id
+    중복 fetch 가드 + 늦게 도착한 stale response 가드 포함). panelOpen/QR-STALE-1
+    effect(lastRootProductId)/printSelectedQR/카드 선택 하이라이트/두 ProductDetailPanel
+    호출부(대표·자식) 전체를 activeSelectedId/activeDetail 기준으로 전환.
+    rentalPeriods/rentalMethods/pickupPoints/categories/partnerComboItems/shippingSettings/
+    initialTab은 선택과 무관해 data.* 그대로 유지(불필요한 재조회 없음).
+  설계 핵심: 탭 저장·토글·삭제·복제·품번재시도 등 기존 invalidateAll() 기반 흐름은 전혀
+    건드리지 않음 — ProductDetailPanel.svelte(4229줄, invalidateAll 호출 13곳 이상) 0줄 수정.
+    invalidateAll() 이후에도 activeSelectedId===data.selectedId 분기라 activeDetail이 자동으로
+    최신 data를 반영하므로 저장 직후 패널 갱신도 기존과 동일하게 동작.
+  svelte-check: 터치 파일(신규 2개 + 기존 3개) 기준 신규 에러·경고 0건, 베이스라인(1 error/308
+    warnings, products/search/+page.svelte 기존 무관 이슈)과 3회 반복 확인으로 동일함을 검증.
+  잔여: 실브라우저 동작 검증(카드 선택 전환·닫기 체감속도, 전체 탭 저장/토글/삭제/복제/재시도,
+    정렬·검색·카테고리·페이지 이동 시 선택 해제, 딥링크·새로고침)은 Claude Browser 사용 금지
+    원칙에 따라 Stephen 직접 수행 필요 — 완료 후 git 커밋 진행 예정.
+
+[2026-08-09] FIX | 위 항목 Stephen 요청 재검증("잠재오류 여부 정밀 검증") — 회귀 1건 발견·수정 | 2개 파일 | GATE E 대기
+  history 회귀(🔴): +page.svelte selectProduct/closePanel을 pushState로 구현했었는데, 원본
+    코드가 `goto(url, {replaceState:true})`를 쓴 이유(카드를 여러 번 클릭할 때마다 브라우저
+    히스토리 항목이 쌓이면 "뒤로가기" 한 번으로 목록을 벗어날 수 없고 클릭 횟수만큼 눌러야
+    하는 문제)를 승계하지 못하고 있었음 — pushState → replaceState로 수정(import도 교체).
+  상태 불일치 방지(🟡): 선택 상세 fetch 실패 시 URL(?selected=)만 남고 패널은 빈 채로 열린
+    상태가 될 수 있어, catch 핸들러에서 closePanel() 호출해 실패 시 URL·화면을 함께 정리하도록
+    보강.
+  확인·정리(ℹ️ 코드 변경 아님): +page.server.ts에 이번 세션과 무관한 NLSearch 하이브리드 검색
+    폴백 기능(WEAK_MATCH_THRESHOLD 등)이 세션 시작 시점부터 이미 uncommitted 상태로 섞여
+    있었음을 git diff HEAD 라인 단위 대조로 재확인 — 구조적 충돌·덮어쓰기 없음(신규 파일
+    src/lib/server/products/, src/routes/cms/products/[id]/는 이번 세션 산출물만 존재, 다른
+    작업과 충돌 없음). 다만 +page.server.ts의 diff를 커밋할 때는 두 작업이 섞여 있다는 점을
+    반드시 인지 필요 — Stephen에게 별도 안내.
+  검토했으나 미수정(버그 아님): 선택 전환 fetch 대기 중 패널이 짧게 비었다 채워지는 미세한
+    깜빡임 — 이전 상품 데이터를 유지하며 전환하는 대안도 검토했으나 "하이라이트는 새 상품인데
+    내용은 이전 상품"이라는 더 나쁜 오인 위험이 있어 현재(짧은 공백) 방식 유지, 원본(3~5초 고정
+    표시 후 전환)보다 나쁘지 않음.
+  svelte-check: 수정 후 재실행, 신규 에러·경고 0건 재확인.
+
+[2026-08-09] GATE E | @sp3-qa-agent 검수 — CMS 상품목록 로딩 지연 근본 해결(PERF-1~9) | 1개 파일 수정 | GATE E 통과
+  검수 대상 5개 파일 표준 3단계 검수(규칙 정합성·기술부채·시범오픈 기준) 전부 통과 — 보안·
+    frozen 경로·ProductDetailPanel.svelte 0줄 수정·loadSelectedProductDetail.ts 로직 동등성
+    전부 정적 대조로 재확인.
+  🔴 발견·즉시수정: `eslint --max-warnings=0`(lint-staged/husky pre-commit 실조건) 기준
+    `src/lib/server/products/loadSelectedProductDetail.ts:186` `no-useless-assignment` 에러
+    — `let inventoryList: InventoryUnit[] = []` 초기값이 항상 무조건 재할당돼 미사용이던 것을
+    `const inventoryList: InventoryUnit[] = (invData ?? []).map(...)`로 병합 수정.
+    eslint --max-warnings=0 재검증 통과.
+  ℹ️ 참고(미조치, 세션 범위 밖): +page.server.ts(13건)·+page.svelte(1건)에 세션 시작 전부터
+    있던 기존 ESLint 위반(security/detect-object-injection, no-useless-escape)이 있어 이
+    두 파일 커밋 시 lint-staged가 걸릴 수 있음 — Stephen 처리방침 결정 필요.
+  GATE E 통과 — 커밋은 Stephen이 직접 실행.

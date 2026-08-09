@@ -28,7 +28,52 @@ auth_baseline: fed4fdb — createBrowserClient 패턴 (절대 싱글톤 createCl
 
 ---
 
-## NOW — Front 설정 UI 컴포넌트 정교 재개발 + /products ProductDPCard 교체 (2026-07-21) ✅ 완료
+## NOW — 크레이지로그 배너 카드 선택 UI + CMS 콘텐츠 탭 (2026-08-09)
+
+plan_source: hazy-honking-willow.md
+아젠다: `/crazylog` 3개 배너 카드(Flash Deals·채널홍보·Release, 하드코딩) → 관리자 선택형 풀(최대 8개/슬롯)에서 SSR 랜덤 최대 3개 노출로 전환. 배지 라벨 자동 반영(log_type 다수결). PC+모바일(M_LISTS) 공용. CMS `/cms/promotion/content` 신규 탭(콘텐츠 대시보드).
+
+핵심제약:
+  - `/products` `ProductHeroModal` + `cms_settings` jsonb 패턴 재사용 (신규 테이블 없음, H-01)
+  - 모달 로직은 CMS 패턴 재사용하되 비주얼은 front-uiux 톤(CTA `--cs-red`, radius 30px) — /crazylog는 USER 라우트
+  - AdminModalShell/AdminEditButton(`src/lib/components/common/admin/`) + `isCmsMode` 스토어 재사용
+  - 슬롯별 log_type 제약 없음(자유 선택), 로테이션은 SSR 랜덤(페이지 로드 1회, 클라이언트 캐러셀 없음)
+  - CMS 콘텐츠 탭은 `hasSettingsAccess`(manager+) 게이트, `CmsKpiGrid`/`CmsStatRing`/`CmsStatBars` 재사용(신규 컴포넌트 금지)
+  - 마이그레이션: stage(ezyvffjvuwmtuhpxdjrw) 검증 → production(vnbpmvxruyciuuaermyh), 최신 파일 209 다음 210/211 사용
+TDD도메인: `src/lib/utils/crazylogBanner.ts` (배지 라벨 다수결 도출 + 랜덤 서브셋 선택 순수 함수) — 나머지는 GSD
+절대금지:
+  - git 자율 실행 / production 마이그레이션 자동 적용(GATE C 전 Stephen 확인 필수)
+  - 기존 마이그레이션 파일 수정
+  - Svelte 4 문법
+
+신규/수정 파일:
+  - supabase/migrations/20260809000210_210_crazylog_banner_settings.sql (신규)
+  - supabase/migrations/20260809000211_211_crazylog_content_stats.sql (신규)
+  - src/lib/utils/crazylogBanner.ts (신규, TDD)
+  - src/routes/crazylog/+page.server.ts, +page.svelte
+  - src/lib/components/crazylog/admin/CrazylogBannerModal.svelte (신규)
+  - src/routes/cms/+layout.svelte (MENU 항목 추가)
+  - src/routes/cms/promotion/content/+page.server.ts, +page.svelte (신규)
+
+- [x] DB-1: 마이그레이션 210 (banner_settings 시드 + 4개 RPC) 작성 + stage 적용 검증 | CRITICAL | ✅ stage 적용 완료 (2026-08-09)
+- [x] DB-2: 마이그레이션 211 (get_crazylog_content_stats RPC) 작성 + stage 적용 검증 | CRITICAL | ✅ stage 적용 완료 (2026-08-09)
+- [x] GSD-1: crazylogBanner.ts 순수 함수 + 유닛테스트 (배지 다수결, 랜덤 서브셋) | TDD | ✅ 8/8 통과
+- [x] GSD-2: /crazylog +page.server.ts 확장 (설정 조회·하이드레이션·선택·배지 도출) | GSD | ✅ 완료
+- [x] GSD-3: /crazylog +page.svelte PC 3카드 + 모바일 M_LISTS 데이터 바인딩, href 버그 수정 | GSD | ✅ 완료
+- [x] GSD-4: CrazylogBannerModal.svelte (SuggestPicker+CmsDragList, front-uiux 스타일) | GSD | ✅ 완료 (ProductHeroModal 로직 이식, 자체 모달 셸 — 실사용 패턴과 일치)
+- [x] GSD-5: activeModal + admin-edit-btn 트리거 3개 연동, 저장/복원 RPC 검증 | GSD | ✅ 완료
+- [x] GSD-6: /cms/+layout.svelte MENU에 '콘텐츠' 탭 추가 | ROUTINE | ✅ 완료
+- [x] GSD-7: /cms/promotion/content 페이지(role 게이트 + KPI/Ring/Bars + TOP10) | GSD | ✅ 완료
+
+GATE B: ✅ 통과 — stage(ezyvffjvuwmtuhpxdjrw) 마이그레이션 210/211 적용 완료, RPC 동작 검증 완료
+GATE C: 대기 — production(vnbpmvxruyciuuaermyh) 마이그레이션 적용 전 Stephen 확인 + 브라우저 QA 필요
+  - npx svelte-check: 신규/수정 파일 0 에러 (전체 315 warning은 대부분 기존 코드, 신규 파일 접근성 warning 3건만 추가)
+  - npx vitest run: crazylogBanner.test.ts 8/8 통과 (기존 실패 2개 파일은 무관한 pre-existing 이슈, stage 브랜치 기준 재확인)
+  - 브라우저 수동 QA 미실시 (Claude_Browser 사용 금지 규칙) — Stephen 직접 확인 필요
+
+---
+
+## DONE — Front 설정 UI 컴포넌트 정교 재개발 + /products ProductDPCard 교체 (2026-07-21) ✅ 완료
 
 plan_source: products-jaunty-lollipop.md (v3)
 핵심제약:
@@ -8890,6 +8935,31 @@ auth_baseline: 변경 없음 (신규 엔드포인트는 `assets/[id]/+server.ts`
    방식이었으므로 이 변경도 원본보다 나쁘지 않음.
 svelte-check 재실행(수정 후): 신규 에러·경고 0건, 베이스라인과 동일함을 재확인.
 
+GATE E — @sp3-qa-agent 검수 결과 (2026-08-09)
+
+검수 대상: PERF-1~9 전체(5개 파일: +page.server.ts·+page.svelte 수정, app.d.ts 수정,
+loadSelectedProductDetail.ts·[id]/detail/+server.ts 신규). 표준 3단계 검수(규칙 정합성·기술
+부채·시범오픈 기준) 전부 통과 — 보안(서버키 격리, 세션+cms_role 이중 게이트, SQL Injection
+없음), frozen 경로 위반 없음, `ProductDetailPanel.svelte` 0줄 수정 재확인, `replaceState` 회귀
+수정 반영 확인, `loadSelectedProductDetail.ts` 로직이 원본과 라인 단위로 100% 동일 이관됐음을
+재확인.
+
+🔴 신규 발견(1건, 즉시 수정): `lint-staged`(husky pre-commit) 실조건인 `eslint
+--max-warnings=0` 기준으로 `src/lib/server/products/loadSelectedProductDetail.ts:186`에서
+`no-useless-assignment` 에러 — `let inventoryList: InventoryUnit[] = []` 초기값이 202행에서
+무조건 재할당돼 미사용. → `let` 선언 제거하고 `const inventoryList: InventoryUnit[] =
+(invData ?? []).map(...)`로 병합 수정, 재검증(`eslint --max-warnings=0`) 통과 확인.
+
+ℹ️ 참고(이번 세션 범위 밖, 조치 안 함): `+page.server.ts`(13건)·`+page.svelte`(1건)에 세션
+시작 전부터 있던 기존 ESLint 위반(`security/detect-object-injection` 경고,
+`no-useless-escape` 에러)이 있어 이 두 파일을 커밋하려면 lint-staged가 어차피 걸림 — 이번
+PERF 작업 귀속 아니므로 수정하지 않음. Stephen이 (a) 별도로 정리 (b) 별도 세션 분리 (c)
+`eslint-disable` 최소 적용 중 방침을 정해야 함.
+
+GATE E 통과(1건 즉시수정 반영 완료) — 커밋은 Stephen이 직접 실행. 단, 위 ℹ️ 참고 항목(기존
+ESLint 부채 14건) 처리방침 결정 전에는 +page.server.ts/+page.svelte 커밋 시 pre-commit이
+막힐 수 있음을 사전 안내.
+
 ## DONE
 
 ---
@@ -8957,7 +9027,12 @@ TDD도메인: AGENTS.md 키워드 미해당 → 전체 GSD
     suggestions?q=...')`로 교체, 나머지 UX 코드(디바운스·overlay·키보드 내비·state) 완전 무변경.
     `source==='brand'`/기본 분기는 0줄 수정
   - 구현: AbortController signal → fetch signal 전달(RTN-2 패턴 유지), productSearchOrFilter import 제거
-- [x] K-3: `/cms/products/+page.server.ts` 목록 필터에도 동일 하이브리드 적용 | GSD | 🔴 CRITICAL ✅ 완료(2026-08-09) — GATE C 대기
+- [x] K-3: `/cms/products/+page.server.ts` 목록 필터에도 동일 하이브리드 적용 | GSD | 🔴 CRITICAL ✅ 완료(2026-08-09) — GATE C 승인 완료(Stephen 확인 — 구성품·사양 검색 반영, 4건 이상 시 자연어 보강 생략 둘 다 의도대로)
+
+**§K/§L 전체 마무리 (2026-08-09)**: K-1~K-4, L-1~L-2 전체 완료 + GATE C 승인 완료.
+검색 중 500 에러 긴급 핫픽스(`fetchRecentSearchLogId` export 규칙 위반) 포함 — 상세는 L-1 항목 참고.
+CMS 상품검색(NLSearch 연동, 추천 드롭다운 UX 100% 보존) + 상품검색 학습루프 빈틈 수정 둘 다 stage 대상
+코드 완료(DB 마이그레이션 추가 없음 — 순수 TS 로직 변경이라 별도 DB 적용 불필요).
   - 완료기준: `countQ`/`listQ`의 `productSearchOrFilter(q)` 결과가 약할 때 NLSearch 폴백으로 매칭된
     id를 `.or()` 조건에 추가 병합. 페이지네이션(`totalCount`/`totalPages`) 계산과 정합 유지
   - 구현: ilikeCount<=3 시 getProductSearchIndex 폴백, expandedOrFilter로 countQ 재구성→totalCount 재계산, listQ도 확장 필터 적용
@@ -9232,5 +9307,48 @@ TDD도메인: 없음 (GSD — 기존 push.ts 발신 허브에 연결만 추가, 
 - [x] Stephen 확인(AskUserQuestion): "지금 실서비스까지 적용" 선택
 - [x] production(vnbpmvxruyciuuaermyh) 적용 | 완료기준: INSERT 후 재조회로 9번째 행(`admin_chat_reply`) 확인 | 완료
 
-git 커밋 미실행(Stephen 요청 대기) — 변경 파일 3개: admin-reply/+server.ts,
-admin-attachment/+server.ts, migration 208(신규)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+GATE E — @sp3-qa-agent 검수 결과 (2026-08-09)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+검수 1(규칙 정합성)·검수 2(기술부채: console.log/any/TODO 0건, svelte-check 터치파일 신규
+에러 0건)·검수 3(S2) 핵심 항목(H-01·보안·sendPushToUser 절대 미throw 확인·cs.user_id
+NOT NULL 스키마 일치·CHECK 제약(customer_lifecycle/customer_marketing) 및 opt-in 컬럼
+매핑 일치·GP-10 신규파일) 전부 통과.
+
+⚠️ 최초 판정: 재검수 필요 — migration 208에 rollback 주석 누락(형제 마이그레이션 181·209와
+불일치, S2 체크리스트 항목). 즉시 보완: 파일 하단에
+`-- rollback: delete from push_notification_config where notify_type = 'admin_chat_reply';`
+추가 완료.
+
+참고(이번 스코프 밖, QA가 함께 발견): chat.md §14 "미구현" 목록에 이미 완료된 CS-A1/A2/A3
+(cs_records·액션카드만료·관리자미응답알림)가 아직 남아있음 — 별도 세션/커밋에서 정리 필요.
+참고(판정 미반영): 워킹트리에 이번 요청 스코프 외 다른 세션 완료건들이 함께 uncommitted
+상태로 쌓여있어, 커밋 시 스코프 분리 여부는 Stephen 판단 필요.
+
+GATE E: rollback 보완 완료로 통과 — 커밋은 Stephen이 직접 실행.
+
+git 커밋 미실행(Stephen 요청 대기) — 이번 GATE E 대상 변경 파일 3개: admin-reply/+server.ts,
+admin-attachment/+server.ts, migration 208(신규, rollback 주석 보완 완료)
+
+---
+
+### 🔁 2026-08-08 연속 세션 — QnA match_keywords 전수 점검 (PROD-FIX-4 후속)
+
+> Stephen 지시: "파손/반납 키워드 보강한 나머지 QnA 항목도 점검해줘." — PROD-FIX-4에서 빈
+> 배열이던 6건만 채웠던 것과 별개로, 전체 28건의 키워드 품질을 점검
+
+- [x] PROD-FIX-5: canned_responses match_keywords 전수 품질 점검 + 보강 | 🟡 BOUNDARY | ✅ 완료 (2026-08-08)
+  - 전체 28건(production) 전수 조회 — `kw_count`·내용 대조로 품질 점검
+  - 🔴 결함 발견: "예약확인 지연 안내" — match_keywords에 단어가 아니라 **문장 전체**
+    (`"예약을했는데 연락이 없어요"`, `"연락이 없어서"`)가 그대로 들어가 있어 고객 메시지가
+    정확히 그 문장과 일치해야만 매칭되는 사실상 비작동 상태 → 짧은 키워드 6개로 교체
+    (연락없음/연락이없어요/확인지연/예약확인안됨/언제연락/답장없음). 이 항목은 stage에는
+    존재하지 않아 production만 적용
+  - 🟡 보강 3건(키워드 3개뿐이라 커버리지 협소): 방수 여부 및 침수 고장 안내(+물에빠뜨림,
+    +젖음) / 특수환경(바다·사막·수중) 촬영 유의사항(+바다, +모래) / 퀵 배송 이용 안내(+퀵,
+    +퀵비용) — production·stage 양쪽 반영
+  - 나머지 24건은 이미 3개 이상의 구체적 단문 키워드로 적절히 구성돼 변경 불필요 판정
+  - 별도 관찰(이번 범위 밖): "대여일정을 알려주세요" → "블로그·인플루언서 리워드 안내" 오매칭
+    사례는 match_keywords가 아니라 MiniSearch 제목/본문 유사도 매칭 경로(boost 가중치·fuzzy
+    임계값)에서 발생한 것으로 추정 — 키워드 보강으로 해결 안 되는 별개 튜닝 영역, Stephen에게
+    보고만 하고 이번엔 미착수
