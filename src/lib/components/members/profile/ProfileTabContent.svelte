@@ -524,6 +524,66 @@
     if (foreignDocUrl) window.open(foreignDocUrl, '_blank', 'noopener,noreferrer')
   }
 
+  /* ── 아바타(프로필 사진) 업로드 */
+  const AVATAR_ACCEPTED_TYPES = ['image/png', 'image/jpeg', 'image/webp', 'image/heif', 'image/heic']
+
+  let avatarUrl        = $state(profile?.avatar_url ?? null)
+  let showAvatarModal  = $state(false)
+  let avatarFile       = $state<File | null>(null)
+  let avatarPreview    = $state<string | null>(null)
+  let isUploadingAvatar = $state(false)
+  let avatarError      = $state('')
+
+  $effect(() => {
+    avatarUrl = profile?.avatar_url ?? null
+  })
+
+  function openAvatarModal() {
+    avatarFile    = null
+    avatarPreview = null
+    avatarError   = ''
+    showAvatarModal = true
+  }
+
+  function closeAvatarModal() {
+    showAvatarModal = false
+    avatarFile     = null
+    avatarPreview  = null
+    avatarError    = ''
+  }
+
+  function handleAvatarFileChange(e: Event) {
+    const input = e.target as HTMLInputElement
+    const file  = input.files?.[0] ?? null
+    avatarError = ''
+    avatarFile    = null
+    avatarPreview = null
+    if (!file) return
+    if (!AVATAR_ACCEPTED_TYPES.includes(file.type)) {
+      avatarError = 'PNG, JPEG, WebP, HEIF 이미지 파일만 업로드할 수 있어요.'
+      return
+    }
+    avatarFile    = file
+    avatarPreview = URL.createObjectURL(file)
+  }
+
+  async function saveAvatar() {
+    if (!avatarFile) return
+    isUploadingAvatar = true
+    avatarError = ''
+    const fd = new FormData()
+    fd.set('file', avatarFile)
+    try {
+      const res  = await fetch('/api/profile/upload-avatar', { method: 'POST', body: fd })
+      const data = await res.json() as { ok: boolean; avatarUrl?: string; error?: string }
+      if (!data.ok) { avatarError = data.error ?? '업로드 실패'; return }
+      csToast.success('프로필 사진이 등록되었습니다.')
+      closeAvatarModal()
+      await invalidateAll()
+    } catch { avatarError = '네트워크 오류가 발생했습니다.' }
+    finally  { isUploadingAvatar = false }
+  }
+
 </script>
 
 <!-- ── 카카오 주소 검색 레이어 모달 ── -->
@@ -544,6 +604,58 @@
   </div>
 {/if}
 
+<!-- ── 프로필 사진(아바타) 업로드 모달 ── -->
+{#if showAvatarModal}
+  <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
+  <div class="avatar-modal-overlay" onclick={closeAvatarModal} role="dialog" aria-modal="true" aria-label="프로필 사진 등록">
+    <div class="avatar-modal-inner" onclick={(e) => e.stopPropagation()}>
+      <div class="kakao-modal-header">
+        <span class="kakao-modal-title">프로필 사진 등록</span>
+        <button class="kakao-close-btn" onclick={closeAvatarModal} aria-label="닫기">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" aria-hidden="true">
+            <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
+          </svg>
+        </button>
+      </div>
+
+      <div class="avatar-modal-body">
+        <label class="avatar-file-label">
+          <input
+            type="file"
+            class="sr-only"
+            accept="image/png,image/jpeg,image/webp,image/heif,image/heic"
+            onchange={handleAvatarFileChange}
+          />
+          <span class="avatar-preview-circle">
+            {#if avatarPreview}
+              <img src={avatarPreview} alt="미리보기" class="avatar-preview-img" />
+            {:else if avatarUrl}
+              <img src={avatarUrl} alt="현재 프로필 사진" class="avatar-preview-img" />
+            {:else}
+              <span class="avatar-preview-initial">{(displayEmail[0] ?? '?').toUpperCase()}</span>
+            {/if}
+          </span>
+          <span class="avatar-file-hint">{avatarFile ? avatarFile.name : '탭하여 사진 선택'}</span>
+        </label>
+
+        {#if avatarError}
+          <p class="doc-error" role="alert">{avatarError}</p>
+        {/if}
+
+        <div class="doc-upload-btns">
+          <button type="button" class="btn-doc-cancel" onclick={closeAvatarModal}>취소</button>
+          <button
+            type="button"
+            class="btn-doc-upload"
+            onclick={saveAvatar}
+            disabled={isUploadingAvatar || !avatarFile}
+          >{isUploadingAvatar ? '저장 중...' : '저장'}</button>
+        </div>
+      </div>
+    </div>
+  </div>
+{/if}
+
 <div class="flex flex-col gap-[10px] w-full">
 
   <!-- 개인정보 섹션 -->
@@ -553,17 +665,21 @@
       <!-- 로그인 정보 카드 -->
       <div class="bg-[#f6f6f6] rounded-[30px] w-full">
         <div class="flex items-center justify-between p-[20px]">
-          <div class="flex flex-col gap-[10px]">
+          <div class="flex flex-col gap-[10px] min-w-0">
             <p class="profile-card-id">
-              {displayEmail.split('@')[0] || '—'}
+              {displayEmail || '—'}
             </p>
             <p class="profile-card-date">
               {profile?.created_at ? new Date(profile.created_at).toLocaleDateString('ko-KR', { year: 'numeric', month: '2-digit', day: '2-digit' }).replace(/\. /g, '.').replace(/\.$/, '') : '—'}
             </p>
           </div>
-          <div class="profile-avatar-initial" aria-hidden="true">
-            {(displayEmail[0] ?? '?').toUpperCase()}
-          </div>
+          <button type="button" class="profile-avatar-initial" onclick={openAvatarModal} aria-label="프로필 사진 변경">
+            {#if avatarUrl}
+              <img src={avatarUrl} alt="" class="profile-avatar-img" />
+            {:else}
+              {(displayEmail[0] ?? '?').toUpperCase()}
+            {/if}
+          </button>
         </div>
       </div>
 
@@ -1318,6 +1434,7 @@
     font: 700 20px/160% var(--font-kr);
     color: var(--cs-text);
     letter-spacing: -0.5px;
+    word-break: break-all;
   }
   .profile-card-date {
     font: var(--text-m-script-14B);
@@ -1340,6 +1457,21 @@
     flex-shrink: 0;
     text-transform: uppercase;
     letter-spacing: -1px;
+    border: none;
+    padding: 0;
+    cursor: pointer;
+    overflow: hidden;
+    min-width: 44px;
+    min-height: 44px;
+    transition: opacity 0.15s;
+  }
+  .profile-avatar-initial:hover { opacity: 0.85; }
+
+  .profile-avatar-img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    border-radius: 50%;
   }
 
   .consent-btn {
@@ -1830,5 +1962,84 @@
     .doc-type-row { flex-wrap: nowrap; }
     .btn-doc-upload { height: 50px; }
     .btn-doc-cancel { height: 50px; }
+  }
+
+  /* ── 아바타 업로드 모달 */
+  .avatar-modal-overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(16, 11, 50, 0.55);
+    z-index: 300;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 20px;
+    backdrop-filter: blur(2px);
+  }
+
+  .avatar-modal-inner {
+    background: white;
+    border-radius: 24px;
+    width: 100%;
+    max-width: 360px;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    box-shadow: 0 20px 60px rgba(16,11,50,0.25);
+  }
+
+  .avatar-modal-body {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 14px;
+    padding: 28px 24px 24px;
+  }
+
+  .avatar-file-label {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 10px;
+    cursor: pointer;
+  }
+
+  .avatar-preview-circle {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 96px;
+    height: 96px;
+    border-radius: 50%;
+    background: var(--cs-purple-pale);
+    overflow: hidden;
+    border: 2px dashed #d0ceea;
+    transition: border-color 0.15s;
+  }
+  .avatar-file-label:hover .avatar-preview-circle { border-color: #3B2F8A; }
+
+  .avatar-preview-img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+  }
+
+  .avatar-preview-initial {
+    font-family: var(--font-en-display);
+    font-size: 32px;
+    font-weight: 700;
+    color: var(--cs-dark);
+    text-transform: uppercase;
+  }
+
+  .avatar-file-hint {
+    font-family: 'Noto Sans KR', sans-serif;
+    font-size: 13px;
+    color: #888;
+    letter-spacing: -0.3px;
+  }
+
+  @media (max-width: 640px) {
+    .avatar-modal-inner { max-width: 320px; }
   }
 </style>
