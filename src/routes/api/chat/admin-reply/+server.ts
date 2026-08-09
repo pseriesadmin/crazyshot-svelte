@@ -5,6 +5,7 @@ import { PUBLIC_SUPABASE_URL } from '$env/static/public'
 import { createClient } from '@supabase/supabase-js'
 import type { RequestHandler } from './$types'
 import { recordSynonymLearning } from '$lib/server/synonymLearning'
+import { sendPushToUser } from '$lib/server/push'
 
 export const POST: RequestHandler = async ({ request, locals }) => {
   const { session } = await locals.safeGetSession()
@@ -37,7 +38,7 @@ export const POST: RequestHandler = async ({ request, locals }) => {
   // 세션 확인
   const { data: chatSession, error: sessionErr } = await admin
     .from('chat_sessions')
-    .select('id, admin_id, status')
+    .select('id, user_id, admin_id, status')
     .eq('id', sessionId)
     .single()
 
@@ -45,7 +46,7 @@ export const POST: RequestHandler = async ({ request, locals }) => {
     return json({ error: '세션을 찾을 수 없습니다.' }, { status: 404 })
   }
 
-  const cs = chatSession as { id: string; admin_id: string | null; status: string }
+  const cs = chatSession as { id: string; user_id: string; admin_id: string | null; status: string }
 
   // 관리자 메시지 → 항상 '진행중'(open)으로 복구
   // closed: 종료 → 재개 / pending: 대기 → 진행중
@@ -86,11 +87,18 @@ export const POST: RequestHandler = async ({ request, locals }) => {
     recordSynonymLearning(cannedResponseId, sessionId).catch(() => {})
   }
 
-  // updated_at 갱신
+  // updated_at 갱신 + CS-A3: 관리자가 답장하면 미응답 알림 상태 초기화 (다음 미응답 알림 허용)
   await admin
     .from('chat_sessions')
-    .update({ updated_at: new Date().toISOString() })
+    .update({ updated_at: new Date().toISOString(), unanswered_notified_at: null })
     .eq('id', sessionId)
+
+  // 고객 FCM 푸시 — 채팅 발송과 완전히 독립적으로 동작(push.ts 내부에서 절대 throw 안 함)
+  await sendPushToUser(cs.user_id, 'admin_chat_reply', {
+    title: '상담 답장이 도착했어요',
+    body: content.length > 60 ? `${content.slice(0, 60)}…` : content,
+    link: '/',
+  })
 
   return json({ message })
 }

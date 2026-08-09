@@ -5,6 +5,7 @@ import { PUBLIC_SUPABASE_URL } from '$env/static/public'
 import { createClient } from '@supabase/supabase-js'
 import type { RequestHandler } from './$types'
 import type { ChatMessage } from '$lib/types/chat'
+import { sendPushToUser } from '$lib/server/push'
 
 export const POST: RequestHandler = async ({ request, locals }) => {
   const { session } = await locals.safeGetSession()
@@ -38,7 +39,7 @@ export const POST: RequestHandler = async ({ request, locals }) => {
   // 세션 확인
   const { data: chatSession, error: sessionErr } = await admin
     .from('chat_sessions')
-    .select('id, status')
+    .select('id, user_id, status')
     .eq('id', sessionId)
     .single()
 
@@ -46,7 +47,7 @@ export const POST: RequestHandler = async ({ request, locals }) => {
     return json({ error: '세션을 찾을 수 없습니다.' }, { status: 404 })
   }
 
-  const cs = chatSession as { id: string; status: string }
+  const cs = chatSession as { id: string; user_id: string; status: string }
   // 관리자 첨부 → closed/pending 모두 open으로 복구 (admin-reply와 동일 정책)
   if (cs.status === 'closed' || cs.status === 'pending') {
     await admin
@@ -76,6 +77,13 @@ export const POST: RequestHandler = async ({ request, locals }) => {
     .from('chat_sessions')
     .update({ updated_at: new Date().toISOString() })
     .eq('id', sessionId)
+
+  // 고객 FCM 푸시 — 채팅 발송과 완전히 독립적으로 동작(push.ts 내부에서 절대 throw 안 함)
+  await sendPushToUser(cs.user_id, 'admin_chat_reply', {
+    title: '상담 답장이 도착했어요',
+    body: isImage ? '사진을 보냈어요.' : (fileName || '파일을 보냈어요.'),
+    link: '/',
+  })
 
   return json({ message: message as ChatMessage }, { status: 201 })
 }
