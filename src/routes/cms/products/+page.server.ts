@@ -4,39 +4,65 @@ import { getSupabaseUrl } from '$lib/env/supabasePublic'
 import { createClient, type SupabaseClient } from '@supabase/supabase-js'
 import type { PageServerLoad, Actions } from './$types'
 import { productSearchOrFilter } from '$lib/utils/similarNameSuggest'
-import { invalidateProductSearchCache } from '$lib/server/searchEngine/adapters/productSearchIndex'
+import { invalidateProductSearchCache, getProductSearchIndex } from '$lib/server/searchEngine/adapters/productSearchIndex'
+
+// 하이브리드 검색: ilike 결과 "약한 매칭" 기준 — 이 건수 이하면 NLSearch 자연어 폴백 실행
+// (nlsearch.md §2, /api/search/products 및 /api/cms/products/search-suggestions와 동일 임계값)
+const WEAK_MATCH_THRESHOLD = 3
+import { loadSelectedProductDetail, type RentalStatusBucket, type SelectedProductDetail } from '$lib/server/products/loadSelectedProductDetail'
 
 // rental_period_options / rental_method_options 는 database.ts 미등록 — 우회 헬퍼
 function untypedFrom(sb: SupabaseClient, table: string) {
   return (sb as unknown as { from: (t: string) => ReturnType<SupabaseClient['from']> }).from(table)
 }
 
-export const load: PageServerLoad = async ({ locals, url }) => {
-  const { session } = await locals.safeGetSession()
-  if (!session) throw redirect(303, '/cms/login')
+// PERF-2: 상품 선택/해제와 무관한 전역 메타데이터(카테고리 필터·파트너 조합코드·대여옵션·
+// 배송설정)는 선택할 때마다 새로 조회할 필요가 없어 서버 프로세스 인메모리에 60초 TTL로
+// 캐시한다. 서버리스 콜드스타트마다 자연 초기화되므로 별도 무효화 로직은 불필요.
+type RentalOption = { id: string; name: string; display_order: number }
+type PickupPointOption = { id: string; name: string; address: string }
+type ShippingSettingsRow = {
+  enable_round_trip: boolean
+  round_trip_fee: number | null
+  enable_delivery: boolean
+  delivery_fee: number | null
+  enable_return: boolean
+  return_fee: number | null
+  shipping_guide: string
+}
+type ProductsMetadata = {
+  categories: Array<{ value: string; label: string; categoryCode: string | null }>
+  categoryLabels: Record<string, string>
+  partnerComboItems: Array<{
+    combo_row_id: string
+    combo_name: string | null
+    combo_keywords: string[]
+    group_id: string
+    group_name: string
+  }>
+  rentalPeriods: RentalOption[]
+  rentalMethods: RentalOption[]
+  pickupPoints: PickupPointOption[]
+  shippingSettings: ShippingSettingsRow | null
+}
 
-  const category = url.searchParams.get('category') ?? 'all'
-  const q = url.searchParams.get('q') ?? ''
-  const sort = (url.searchParams.get('sort') ?? 'newest') as 'newest' | 'oldest' | 'asc' | 'desc'
-  const pageParam = Math.max(1, parseInt(url.searchParams.get('page') ?? '1'))
-  const selectedId = url.searchParams.get('selected') ?? null
-  const initialTab = url.searchParams.get('tab') ?? null
+const METADATA_CACHE_TTL_MS = 60_000
+let metadataCache: { expiresAt: number; data: ProductsMetadata } | null = null
 
-  // BND-REGWARN-1: 상품 등록 후 경고 파라미터 읽기 (qr/inv/code/price/options/thumb)
-  const regWarnParam = url.searchParams.get('regWarn') ?? null
-  const regWarn: string[] = regWarnParam
-    ? regWarnParam.split(',').map(s => s.trim()).filter(Boolean)
-    : []
+async function loadProductsMetadata(admin: SupabaseClient): Promise<ProductsMetadata> {
+  if (metadataCache && metadataCache.expiresAt > Date.now()) {
+    return metadataCache.data
+  }
 
-  const PAGE_SIZE = 20
-
-  const admin = createClient(getSupabaseUrl(), env.SUPABASE_SERVICE_ROLE_KEY ?? '')
-
-  // 독립 메타데이터 3개 병렬 조회 (직렬 3 RTT → 1 RTT)
+  // 서로 독립적인 7개 쿼리 병렬 실행 (partnerComboItems만 partnerGroupIds에 의존해 아래 별도 처리)
   const [
     { data: rawCategories },
     { data: rawCatCodes },
     { data: rawPartnerGroups },
+    periodsRes,
+    methodsRes,
+    pickupsRes,
+    { data: shippingRaw },
   ] = await Promise.all([
     // 코드조합그룹 중 상품목록 카테고리 필터에 노출하도록 설정된 목록 (탭 필터용)
     admin
@@ -61,6 +87,13 @@ export const load: PageServerLoad = async ({ locals, url }) => {
       .eq('is_active', true)
       .order('sort_order', { ascending: true })
       .order('name', { ascending: true }),
+    untypedFrom(admin, 'rental_period_options').select('id, name, display_order').eq('is_active', true).is('deleted_at', null).order('display_order'),
+    untypedFrom(admin, 'rental_method_options').select('id, name, display_order').eq('is_active', true).is('deleted_at', null).order('display_order'),
+    admin.from('pickup_points').select('id, name, address').eq('is_active', true).is('deleted_at', null).order('created_at'),
+    untypedFrom(admin, 'rental_shipping_settings')
+      .select('enable_round_trip, round_trip_fee, enable_delivery, delivery_fee, enable_return, return_fee, shipping_guide')
+      .limit(1)
+      .single(),
   ])
 
   const categories = (rawCategories ?? []).map((g) => ({
@@ -91,13 +124,7 @@ export const load: PageServerLoad = async ({ locals, url }) => {
     : { data: [] as Array<{ group_id: string; combo_row_id: string; combo_name: string | null; combo_keywords: string[] }> }
 
   const seenComboRows = new Set<string>()
-  const partnerComboItems: Array<{
-    combo_row_id: string
-    combo_name: string | null
-    combo_keywords: string[]
-    group_id: string
-    group_name: string
-  }> = []
+  const partnerComboItems: ProductsMetadata['partnerComboItems'] = []
   for (const item of rawPartnerItems ?? []) {
     if (!seenComboRows.has(item.combo_row_id)) {
       seenComboRows.add(item.combo_row_id)
@@ -111,6 +138,53 @@ export const load: PageServerLoad = async ({ locals, url }) => {
     }
   }
 
+  const data: ProductsMetadata = {
+    categories,
+    categoryLabels,
+    partnerComboItems,
+    rentalPeriods: ((periodsRes as { data: RentalOption[] | null }).data ?? []),
+    rentalMethods: ((methodsRes as { data: RentalOption[] | null }).data ?? []),
+    pickupPoints: (pickupsRes.data ?? []) as PickupPointOption[],
+    shippingSettings: (shippingRaw as ShippingSettingsRow | null) ?? null,
+  }
+
+  metadataCache = { expiresAt: Date.now() + METADATA_CACHE_TTL_MS, data }
+  return data
+}
+
+export const load: PageServerLoad = async ({ locals, url }) => {
+  const { session } = await locals.safeGetSession()
+  if (!session) throw redirect(303, '/cms/login')
+
+  const category = url.searchParams.get('category') ?? 'all'
+  const q = url.searchParams.get('q') ?? ''
+  const sort = (url.searchParams.get('sort') ?? 'newest') as 'newest' | 'oldest' | 'asc' | 'desc'
+  const pageParam = Math.max(1, parseInt(url.searchParams.get('page') ?? '1'))
+  const selectedId = url.searchParams.get('selected') ?? null
+  const initialTab = url.searchParams.get('tab') ?? null
+
+  // BND-REGWARN-1: 상품 등록 후 경고 파라미터 읽기 (qr/inv/code/price/options/thumb)
+  const regWarnParam = url.searchParams.get('regWarn') ?? null
+  const regWarn: string[] = regWarnParam
+    ? regWarnParam.split(',').map(s => s.trim()).filter(Boolean)
+    : []
+
+  const PAGE_SIZE = 20
+
+  const admin = createClient(getSupabaseUrl(), env.SUPABASE_SERVICE_ROLE_KEY ?? '')
+
+  // PERF-2: 선택 무관 전역 메타데이터는 60초 TTL 인메모리 캐시에서 서빙(카테고리 필터·
+  // 파트너 조합코드·대여옵션·배송설정 — 상품 선택/해제로는 절대 바뀌지 않는 값들)
+  const {
+    categories,
+    categoryLabels,
+    partnerComboItems,
+    rentalPeriods,
+    rentalMethods,
+    pickupPoints,
+    shippingSettings,
+  } = await loadProductsMetadata(admin)
+
   // 카테고리 필터: code_mapping_groups.default_category → products.category 문자열 매핑
   let categoryValues: string[] | null = null
   if (category !== 'all') {
@@ -123,7 +197,7 @@ export const load: PageServerLoad = async ({ locals, url }) => {
     categoryValues = group?.default_category ? [group.default_category] : ['__none__']
   }
 
-  // 전체 개수 쿼리 (페이지네이션용) — 부모 상품만 (재고 자식 제외)
+  // 전체 개수 쿼리 (페이지네이션용, 1차: ilike 기본 필터) — 부모 상품만 (재고 자식 제외)
   let countQ = admin
     .from('products')
     .select('*', { count: 'exact', head: true })
@@ -134,9 +208,47 @@ export const load: PageServerLoad = async ({ locals, url }) => {
   if (q) countQ = countQ.or(productSearchOrFilter(q))
 
   // BND-3: count 먼저 조회해 totalPages 산출 → pageParam을 clamp한 뒤 range 쿼리 실행
-  const { count: totalCount } = await countQ
+  const { count: ilikeCount } = await countQ
 
-  const totalPages = Math.max(1, Math.ceil((totalCount ?? 0) / PAGE_SIZE))
+  // ── 하이브리드 NLSearch 폴백: ilike 결과 약할 때 자연어 검색으로 보강 (K-3) ─────
+  // (nlsearch.md §2 동일 패턴 — ilike 우선, NLSearch는 보강만)
+  let totalCount = ilikeCount ?? 0
+  let nlsearchFallbackIds: string[] = []
+
+  if (q && (ilikeCount ?? 0) <= WEAK_MATCH_THRESHOLD) {
+    try {
+      const index = await getProductSearchIndex()
+      const naturalResults = index.search(q, {
+        fuzzy: 0.2,
+        prefix: true,
+        limit: 50, // PAGE_SIZE(20)보다 충분히 큰 값 — dedupe 여유 확보
+      })
+
+      if (naturalResults.length > 0) {
+        nlsearchFallbackIds = naturalResults.map((r) => r.document.id)
+
+        // 확장 OR 필터: ilike + NLSearch 폴백 IDs 합집합
+        const expandedOrFilter = `${productSearchOrFilter(q)},id.in.(${nlsearchFallbackIds.join(',')})`
+
+        // 확장 필터로 totalCount 재계산 (정확한 페이지네이션을 위해 countQ 재구성)
+        let expandedCountQ = admin
+          .from('products')
+          .select('*', { count: 'exact', head: true })
+          .is('deleted_at', null)
+          .is('parent_product_id', null)
+        if (categoryValues) expandedCountQ = expandedCountQ.in('category', categoryValues)
+        expandedCountQ = expandedCountQ.or(expandedOrFilter)
+        const { count: expandedCount } = await expandedCountQ
+        totalCount = expandedCount ?? totalCount
+      }
+    } catch (e) {
+      console.error('[cms/products] NLSearch 폴백 오류:', e)
+      // 폴백 실패 시 ilike 카운트로 계속 진행 (서비스 중단 방지)
+    }
+  }
+  // ─────────────────────────────────────────────────────────────────────────────
+
+  const totalPages = Math.max(1, Math.ceil(totalCount / PAGE_SIZE))
   const page = Math.min(pageParam, totalPages)
 
   // 목록 쿼리 — 부모 상품만 (재고 자식 제외)
@@ -152,8 +264,14 @@ export const load: PageServerLoad = async ({ locals, url }) => {
   else                        listQ = listQ.order('created_at', { ascending: false })
 
   if (categoryValues) listQ = listQ.in('category', categoryValues)
-  // BND-5: 동일 필드로 통일
-  if (q) listQ = listQ.or(productSearchOrFilter(q))
+  // BND-5 + K-3 하이브리드: ilike 필터 (+ NLSearch 폴백 IDs OR 병합)
+  if (q) {
+    if (nlsearchFallbackIds.length > 0) {
+      listQ = listQ.or(`${productSearchOrFilter(q)},id.in.(${nlsearchFallbackIds.join(',')})`)
+    } else {
+      listQ = listQ.or(productSearchOrFilter(q))
+    }
+  }
 
   listQ = listQ.range((page - 1) * PAGE_SIZE, page * PAGE_SIZE - 1)
 
@@ -170,24 +288,34 @@ export const load: PageServerLoad = async ({ locals, url }) => {
   const childFallback24h: Record<string, number> = {}
 
   // 대여 라이프사이클 상태별 재고 집계 (자식 id → 부모 id 매핑 + rental_reservations 집계)
+  // (RentalStatusBucket 타입은 loadSelectedProductDetail.ts에서 단일 정의 후 재사용)
   const childIdToParentId: Record<string, string> = {}
-  type RentalStatusBucket = {
-    holding: number    // 예약중: hold
-    outgoing: number   // 반출중: confirmed, shipped
-    renting: number    // 대여중: in_use
-    returning: number  // 반납중: return_requested
-    returned: number   // 반납완료: returned, completed
-  }
   const rentalStatusCounts: Record<string, RentalStatusBucket> = {}
 
   if (productIds.length > 0) {
-    // 재고 수 + 자식 price_rules (부모 미설정 시 카드 표시 fallback)
-    // active: is_active=true (대여 가능) / total: 전체
-    const { data: childRows } = await admin
-      .from('products')
-      .select('id, parent_product_id, is_active, price_rules!left(duration_type, price, is_active, deleted_at)')
-      .in('parent_product_id', productIds)
-      .is('deleted_at', null)
+    // PERF-1: 재고 수(+ 자식 price_rules fallback) / 24h / 12h 가격 — 서로 독립적이므로 병렬 실행
+    // (rentalRows만 childIdToParentId 완성 후 실행 필요 — 아래에서 별도 처리)
+    const [{ data: childRows }, { data: rules24hRaw }, { data: rules12hRaw }] = await Promise.all([
+      admin
+        .from('products')
+        .select('id, parent_product_id, is_active, price_rules!left(duration_type, price, is_active, deleted_at)')
+        .in('parent_product_id', productIds)
+        .is('deleted_at', null),
+      admin
+        .from('price_rules')
+        .select('product_id, price')
+        .in('product_id', productIds)
+        .eq('duration_type', '24h')
+        .eq('is_active', true)
+        .is('deleted_at', null),
+      admin
+        .from('price_rules')
+        .select('product_id, price')
+        .in('product_id', productIds)
+        .eq('duration_type', '12h')
+        .eq('is_active', true)
+        .is('deleted_at', null),
+    ])
 
     type ChildRow = {
       id: string
@@ -212,30 +340,13 @@ export const load: PageServerLoad = async ({ locals, url }) => {
       }
     }
 
-    // 24h 가격 (부모 기준)
-    const { data: rules24h } = await admin
-      .from('price_rules')
-      .select('product_id, price')
-      .in('product_id', productIds)
-      .eq('duration_type', '24h')
-      .eq('is_active', true)
-      .is('deleted_at', null)
-
-    prices24h = (rules24h ?? []).reduce<Record<string, number>>((acc, p) => {
+    // 24h/12h 가격 (부모 기준) — 위에서 병렬 조회한 원시 결과를 맵으로 변환
+    prices24h = (rules24hRaw ?? []).reduce<Record<string, number>>((acc, p) => {
       acc[p.product_id] = p.price
       return acc
     }, {})
 
-    // 12h 가격 (부모 기준)
-    const { data: rules12h } = await admin
-      .from('price_rules')
-      .select('product_id, price')
-      .in('product_id', productIds)
-      .eq('duration_type', '12h')
-      .eq('is_active', true)
-      .is('deleted_at', null)
-
-    prices12h = (rules12h ?? []).reduce<Record<string, number>>((acc, p) => {
+    prices12h = (rules12hRaw ?? []).reduce<Record<string, number>>((acc, p) => {
       acc[p.product_id] = p.price
       return acc
     }, {})
@@ -268,285 +379,26 @@ export const load: PageServerLoad = async ({ locals, url }) => {
     }
   }
 
-  // 선택된 상품 상세 데이터 로드
-  type AssetDetail = {
-    id: string
-    asset_code: string | null
-    serial_number: string | null
-    status: string
-    condition_notes: string | null
-    warehouse_location: string | null
-    label_image_url: string | null
-    ocr_raw_text: string | null
-  }
-  type RentalOption = { id: string; name: string; display_order: number }
-  type PickupPointOption = { id: string; name: string; address: string }
-  type SelectedProduct = {
-    id: string
-    category: string
-    name: string
-    slug: string
-    product_code: string | null
-    code_series: Record<string, unknown> | null
-    brand: string | null
-    description: string | null
-    product_caption: string | null
-    image_urls: string[]
-    specifications: Record<string, string> | null
-    is_active: boolean
-    created_at: string
-    qr_payload: string | null
-    sale_price: number | null
-    sale_only: boolean
-    assetCount: number
-    price12h: number | null
-    price24h: number | null
-    assets: AssetDetail[]
-    allowed_period_ids: string[]
-    allowed_method_ids: string[]
-    allowed_pickup_ids: string[]
-  }
-  let selectedProduct: SelectedProduct | null = null
-  let selectedPriceRules: Array<{
-    duration_type: string
-    price: number
-    deposit_amount: number | null
-    late_fee_per_hour: number | null
-    damage_fee_percentage: number | null
-  }> = []
-
-  let rentalPeriods: RentalOption[] = []
-  let rentalMethods: RentalOption[] = []
-  let pickupPoints: PickupPointOption[] = []
+  // PERF-3: 선택된 상품 상세 데이터 로드 — loadSelectedProductDetail.ts로 이관된 로직 호출
+  // (+page.server.ts는 selectedId가 있을 때만 이 헬퍼를 호출, 응답 형태는 이관 전과 동일)
+  let selectedProduct: SelectedProductDetail['selectedProduct'] = null
+  let selectedPriceRules: SelectedProductDetail['selectedPriceRules'] = []
+  let rootProduct: SelectedProductDetail['rootProduct'] = null
+  let inventoryList: SelectedProductDetail['inventoryList'] = []
 
   if (selectedId) {
-    const [{ data: sp }, periodsRes, methodsRes, pickupsRes] = await Promise.all([
-      admin.from('products').select('*').eq('id', selectedId).is('deleted_at', null).single(),
-      untypedFrom(admin, 'rental_period_options').select('id, name, display_order').eq('is_active', true).is('deleted_at', null).order('display_order'),
-      untypedFrom(admin, 'rental_method_options').select('id, name, display_order').eq('is_active', true).is('deleted_at', null).order('display_order'),
-      admin.from('pickup_points').select('id, name, address').eq('is_active', true).is('deleted_at', null).order('created_at'),
-    ])
-
-    rentalPeriods = ((periodsRes as { data: RentalOption[] | null }).data ?? [])
-    rentalMethods = ((methodsRes as { data: RentalOption[] | null }).data ?? [])
-    pickupPoints  = (pickupsRes.data ?? []) as PickupPointOption[]
-
-    if (sp) {
-      // 자식(재고 단위) 상품은 편집이 부모에서만 가능하므로, 기본정보(이름·브랜드·
-      // 카테고리·카피·슬러그)를 포함해 옵션·가격·대여정책·상품설명·구성품·사양·
-      // 이미지까지 '이력' 탭을 제외한 전 항목의 조회를 항상 부모(대표) 기준으로 통일한다.
-      // 그래야 부모에서 수정한 내용이 자식 패널에도 즉시 반영되어 정합이 유지된다.
-      // (품번·QR·is_active(재고 노출 — 토글 스위치가 조작하는 실제 재고가용 상태)·
-      //  이력·자산 정보는 재고 단위 자신의 고유값이므로 예외 — Stephen 확정)
-      const spParentId = (sp as Record<string, unknown>).parent_product_id as string | null
-      const policySourceId = spParentId ?? selectedId
-
-      const [{ data: optionLinksData }, { data: priceRules }, parentRowRes] = await Promise.all([
-        admin.rpc('get_product_option_links', { p_product_id: policySourceId }),
-        admin
-          .from('price_rules')
-          .select('duration_type, price, deposit_amount, late_fee_per_hour, damage_fee_percentage')
-          .eq('product_id', policySourceId)
-          .eq('is_active', true)
-          .is('deleted_at', null),
-        spParentId
-          ? admin
-              .from('products')
-              .select('name, brand, category, product_caption, slug, image_urls, allowed_period_ids, allowed_method_ids, allowed_pickup_ids, shipping_round_trip, shipping_delivery, shipping_return, sale_price, sale_only, content_blocks, keywords, components, specifications')
-              .eq('id', spParentId)
-              .is('deleted_at', null)  // BND-2: 삭제된 부모가 선택된 경우 데이터 노출 차단
-              .single()
-          : Promise.resolve({ data: null }),
-      ])
-
-      // 자식이면 부모 행(parentRowRes.data)을 정본으로, 부모 자신이면 sp를 그대로 사용
-      const policyRow = (parentRowRes.data ?? null) as Record<string, unknown> | null
-      const src: Record<string, unknown> = policyRow ?? (sp as Record<string, unknown>)
-
-      selectedProduct = {
-        ...sp,
-        assetCount: stockCounts[sp.id]?.active ?? 0,
-        assetTotal: stockCounts[sp.id]?.total ?? 0,
-        price12h: prices12h[sp.id] ?? null,
-        price24h: prices24h[sp.id] ?? null,
-        product_code: (sp as Record<string, unknown>).product_code as string | null ?? null,
-        code_series: (sp as Record<string, unknown>).code_series as Record<string, unknown> | null ?? null,
-        name: (src.name as string) ?? sp.name,
-        brand: (src.brand as string | null) ?? null,
-        category: (src.category as string) ?? sp.category,
-        slug: (src.slug as string) ?? sp.slug,
-        product_caption: (src.product_caption as string | null) ?? null,
-        sale_price: (src.sale_price as number | null) ?? null,
-        sale_only: (src.sale_only as boolean) ?? false,
-        allowed_period_ids: (src.allowed_period_ids as string[] | null) ?? [],
-        allowed_method_ids: (src.allowed_method_ids as string[] | null) ?? [],
-        allowed_pickup_ids: (src.allowed_pickup_ids as string[] | null) ?? [],
-        shipping_round_trip: (src.shipping_round_trip as boolean) ?? true,
-        shipping_delivery:   (src.shipping_delivery   as boolean) ?? true,
-        shipping_return:     (src.shipping_return     as boolean) ?? true,
-        option_links:        optionLinksData ?? [],
-        content_blocks:      src.content_blocks,
-        keywords:            src.keywords,
-        components:          src.components,
-        specifications:      (src.specifications as Record<string, string> | null) ?? null,
-        image_urls:          (src.image_urls as string[] | null) ?? (sp as Record<string, unknown>).image_urls as string[] ?? [],
-      }
-
-      selectedPriceRules = priceRules ?? []
-
-      // 선택된 상품이 자식일 경우 prices12h/prices24h 맵에 해당 ID가 없어 null이 됨
-      // selectedPriceRules는 policySourceId(부모) 기준으로 정확히 조회되었으므로 여기서 덮어씀
-      selectedProduct!.price12h = selectedPriceRules.find(r => r.duration_type === '12h')?.price ?? null
-      selectedProduct!.price24h = selectedPriceRules.find(r => r.duration_type === '24h')?.price ?? null
-
-      // 자산(assets)·장치정보는 재고 단위(자식) 고유값 — 항상 선택된 상품 자신(selectedId) 기준
-      const { data: assetDetails } = await admin
-        .from('assets')
-        .select('id, asset_code, serial_number, status, condition_notes, warehouse_location, label_image_url, ocr_raw_text')
-        .eq('product_id', selectedId)
-        .is('deleted_at', null)
-        .order('created_at', { ascending: true })
-
-      // selectedProduct is non-null here (inside `if (sp)` block)
-      selectedProduct!.assets = (assetDetails ?? []) as AssetDetail[]
+    const detail = await loadSelectedProductDetail(admin, selectedId)
+    selectedProduct = detail.selectedProduct
+    selectedPriceRules = detail.selectedPriceRules
+    rootProduct = detail.rootProduct
+    inventoryList = detail.inventoryList
+    // rootRentalStatusCounts를 페이지 목록의 rentalStatusCounts 맵에 병합 — 이관 전 동작과 동일
+    if (rootProduct && detail.rootRentalStatusCounts) {
+      rentalStatusCounts[rootProduct.id] = detail.rootRentalStatusCounts
     }
   }
 
-  // 선택된 상품의 재고 목록 (자신 + 자식 제품 — 동일 재고 그룹)
-  type InventoryUnit = {
-    id: string
-    name: string
-    product_code: string | null
-    is_active: boolean
-    price_rules: Array<{ duration_type: string; price: number }>
-  }
-  type RootProductInfo = {
-    id: string
-    name: string
-    brand: string | null
-    category: string
-    image_urls: string[]
-    price12h: number | null
-    price24h: number | null
-    product_code: string | null
-    code_series: Record<string, unknown> | null
-    assetCount: number
-    assetTotal: number
-  }
-  let inventoryList: InventoryUnit[] = []
-  let rootProduct: RootProductInfo | null = null
-  if (selectedId) {
-    // 자식 상품이 선택된 경우 → 부모 기준으로 전체 재고 그룹 로드
-    const parentProductId = selectedProduct
-      ? ((selectedProduct as unknown as Record<string, unknown>).parent_product_id as string | null)
-      : null
-    const rootId = parentProductId ?? selectedId
-    const { data: invData } = await admin
-      .from('products')
-      .select('id, name, product_code, is_active, price_rules!left(duration_type, price, is_active, deleted_at)')
-      .eq('parent_product_id', rootId)
-      .is('deleted_at', null)
-      .order('created_at', { ascending: true })
-
-    inventoryList = (invData ?? []).map((p) => ({
-      id: p.id as string,
-      name: p.name as string,
-      product_code: (p as Record<string, unknown>).product_code as string | null,
-      is_active: p.is_active as boolean,
-      price_rules: ((p as Record<string, unknown>).price_rules as Array<{ duration_type: string; price: number; is_active: boolean; deleted_at: string | null }> ?? [])
-        .filter((r) => r.is_active && !r.deleted_at)
-        .map((r) => ({ duration_type: r.duration_type, price: r.price })),
-    }))
-
-    // PAGE-SCOPE-1: stockCounts/rentalStatusCounts/prices12h·24h는 현재 페이지(productIds,
-    // 20개)로만 집계됨 — 다른 페이지·필터에 있는 상품이 선택되면 그 맵에 값이 없어 재고/가격/
-    // 예약상태가 전부 0 또는 빈 값으로 잘못 표시될 수 있었다. inventoryList는 selectedId와
-    // 무관하게 항상 rootId 기준으로 직접 조회되므로, 대표 상품의 재고 수는 이걸로 직접 계산해
-    // 페이지네이션과 완전히 무관하게 만든다.
-    const rootAssetCount = inventoryList.filter((u) => u.is_active).length
-    const rootAssetTotal = inventoryList.length
-
-    // 대표 상품의 실시간 예약상태 집계도 동일한 이유로 inventoryList의 자식 id 기준으로 직접
-    // 재조회한다(페이지네이션 무관, stockCounts와 동일하게 20개 집계 맵에 의존하지 않음).
-    const rootChildIds = inventoryList.map((u) => u.id)
-    if (rootChildIds.length > 0) {
-      const { data: rootRentalRows } = await admin
-        .from('rental_reservations')
-        .select('status')
-        .in('product_id', rootChildIds)
-        .in('status', ['hold', 'confirmed', 'shipped', 'in_use', 'return_requested', 'returned', 'completed'])
-
-      const bucket: RentalStatusBucket = { holding: 0, outgoing: 0, renting: 0, returning: 0, returned: 0 }
-      for (const row of (rootRentalRows ?? []) as Array<{ status: string | null }>) {
-        const s = row.status
-        if (s === 'hold') bucket.holding += 1
-        else if (s === 'confirmed' || s === 'shipped') bucket.outgoing += 1
-        else if (s === 'in_use') bucket.renting += 1
-        else if (s === 'return_requested') bucket.returning += 1
-        else if (s === 'returned' || s === 'completed') bucket.returned += 1
-      }
-      rentalStatusCounts[rootId] = bucket
-    }
-
-    // 대표 상품정보 (대표 섹션 카드 표시용)
-    if (parentProductId) {
-      // 자식 선택: 부모 데이터 별도 조회 (BND-2: 삭제된 부모 노출 차단)
-      const { data: rpData } = await admin
-        .from('products')
-        .select('id, name, brand, category, image_urls, product_code, code_series')
-        .eq('id', rootId)
-        .is('deleted_at', null)
-        .single()
-      if (rpData) {
-        rootProduct = {
-          id: rpData.id as string,
-          name: rpData.name as string,
-          brand: (rpData as Record<string, unknown>).brand as string | null,
-          category: rpData.category as string,
-          image_urls: (rpData.image_urls as string[]) ?? [],
-          // selectedProduct.price12h/24h는 policySourceId(=부모) 기준 전용 쿼리로 이미
-          // 페이지네이션과 무관하게 정확히 계산돼 있음(위 selectedPriceRules) — 재사용
-          price12h: selectedProduct?.price12h ?? null,
-          price24h: selectedProduct?.price24h ?? null,
-          product_code: (rpData as Record<string, unknown>).product_code as string | null,
-          code_series: (rpData as Record<string, unknown>).code_series as Record<string, unknown> | null,
-          assetCount: rootAssetCount,
-          assetTotal: rootAssetTotal,
-        }
-      }
-    } else if (selectedProduct) {
-      // 부모 선택: selectedProduct = rootProduct
-      rootProduct = {
-        id: selectedProduct.id,
-        name: selectedProduct.name,
-        brand: (selectedProduct as unknown as Record<string, unknown>).brand as string | null,
-        category: (selectedProduct as unknown as Record<string, unknown>).category as string,
-        image_urls: selectedProduct.image_urls,
-        price12h: selectedProduct.price12h ?? null,
-        price24h: selectedProduct.price24h ?? null,
-        product_code: (selectedProduct as unknown as Record<string, unknown>).product_code as string | null,
-        code_series: selectedProduct.code_series,
-        assetCount: rootAssetCount,
-        assetTotal: rootAssetTotal,
-      }
-    }
-  }
-
-  // 배송 설정 (전역 singleton — selectedId 무관)
-  type ShippingSettingsRow = {
-    enable_round_trip: boolean
-    round_trip_fee: number | null
-    enable_delivery: boolean
-    delivery_fee: number | null
-    enable_return: boolean
-    return_fee: number | null
-    shipping_guide: string
-  }
-  const { data: shippingRaw } = await untypedFrom(admin, 'rental_shipping_settings')
-    .select('enable_round_trip, round_trip_fee, enable_delivery, delivery_fee, enable_return, return_fee, shipping_guide')
-    .limit(1)
-    .single()
-  const shippingSettings = (shippingRaw as ShippingSettingsRow | null) ?? null
+  // PERF-2: shippingSettings도 loadProductsMetadata()에서 이미 제공됨(위 상단 구조분해) — 재조회 없음
 
   return {
     products: (products ?? []).map((p) => ({
