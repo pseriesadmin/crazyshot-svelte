@@ -1,5 +1,6 @@
 <script lang="ts">
-  import { goto } from '$app/navigation'
+  import { goto, replaceState } from '$app/navigation'
+  import { page } from '$app/state'
   import { enhance, deserialize } from '$app/forms'
   import { fly, slide } from 'svelte/transition'
   import { invalidateAll } from '$app/navigation'
@@ -8,9 +9,85 @@
   import CmsPagination from '$lib/components/cms/CmsPagination.svelte'
   import type { PageData } from './$types'
   import { csToast } from '$lib/utils/toast'
+  import type { SelectedProductDetail } from '$lib/server/products/loadSelectedProductDetail'
 
   interface Props { data: PageData }
   let { data }: Props = $props()
+
+  // PERF-6: 상품 선택/해제(카드 클릭·패널 닫기)는 SvelteKit shallow routing(replaceState)으로
+  // 처리 — goto()로 전체 load()를 재실행하던 기존 방식과 달리 목록/카테고리/집계 쿼리를
+  // 다시 부르지 않고 loadSelectedProductDetail() 결과만 클라이언트에서 새로 받아온다.
+  // 탭 저장·토글·삭제 등 invalidateAll() 기반 흐름은 완전히 그대로 유지됨(ProductDetailPanel
+  // 무변경) — 그 경우 data 자체가 최신값으로 교체되므로 아래 activeDetail이 자동으로 반영한다.
+  const EMPTY_DETAIL: SelectedProductDetail = {
+    selectedProduct: null,
+    selectedPriceRules: [],
+    rootProduct: null,
+    inventoryList: [],
+    rootRentalStatusCounts: null,
+  }
+
+  function extractServerDetail(d: PageData): SelectedProductDetail {
+    return {
+      selectedProduct: d.selectedProduct,
+      selectedPriceRules: d.selectedPriceRules,
+      rootProduct: d.rootProduct,
+      inventoryList: d.inventoryList,
+      rootRentalStatusCounts: d.rootProduct ? (d.rentalStatusCounts?.[d.rootProduct.id] ?? null) : null,
+    }
+  }
+
+  let overrideDetail = $state<SelectedProductDetail | 'loading' | null>(null)
+  let fetchedForId = $state<string | null>(null)
+
+  // page.state에 selectedId 키가 있으면 shallow-routing으로 전환된 선택(클라이언트 소스),
+  // 없으면 마지막 실제 load() 결과(data.selectedId, 최초 진입·새로고침·딥링크·invalidateAll 등)
+  const activeSelectedId = $derived(
+    'selectedId' in page.state ? (page.state.selectedId ?? null) : data.selectedId
+  )
+
+  $effect(() => {
+    const id = activeSelectedId
+    if (id === data.selectedId) {
+      // 서버가 이미 이 선택 기준으로 로드된 상태 — 별도 fetch 불필요(아래 activeDetail이
+      // data를 직접 사용). invalidateAll() 이후에도 이 분기라 저장 직후 최신값이 자동 반영됨
+      overrideDetail = null
+      fetchedForId = null
+      return
+    }
+    if (id === fetchedForId && overrideDetail !== null) return // 이미 조회 완료/진행 중인 id
+    if (id === null) {
+      overrideDetail = null
+      fetchedForId = null
+      return
+    }
+    overrideDetail = 'loading'
+    fetchedForId = id
+    fetch(`/cms/products/${id}/detail`)
+      .then((r) => {
+        if (!r.ok) throw new Error(`상세 조회에 실패했습니다 (status ${r.status})`)
+        return r.json() as Promise<SelectedProductDetail>
+      })
+      .then((json) => {
+        if (fetchedForId === id) overrideDetail = json
+      })
+      .catch((e) => {
+        if (fetchedForId === id) {
+          overrideDetail = null
+          fetchedForId = null
+          csToast.error(e instanceof Error ? e.message : '상세 조회에 실패했습니다.')
+          // 조회 실패 시 URL(?selected=)만 남고 패널은 빈 채로 열린 상태가 되는 불일치를
+          // 방지 — 명시적으로 패널을 닫아 선택 상태와 화면을 다시 맞춘다
+          if (activeSelectedId === id) closePanel()
+        }
+      })
+  })
+
+  const activeDetail = $derived<SelectedProductDetail>(
+    activeSelectedId === data.selectedId
+      ? extractServerDetail(data)
+      : (overrideDetail === 'loading' || overrideDetail === null ? EMPTY_DETAIL : overrideDetail)
+  )
 
   const CATEGORIES = $derived([
     { value: 'all', label: '전체' },
@@ -54,20 +131,25 @@
     goto(`/cms/products?${params.toString()}`)
   }
 
-  const panelOpen = $derived(!!data.rootProduct)
+  const panelOpen = $derived(!!activeDetail.rootProduct)
   let repBodyOpen = $state(true)
 
+  // PERF-6: goto() 대신 shallow routing — URL은 그대로 갱신(공유·새로고침 가능)하되 load()
+  // 전체 재실행 없이 위 $effect가 상세 데이터만 fetch한다.
+  // ⚠️ pushState가 아닌 replaceState 사용 — 원본 코드가 goto(..., {replaceState:true})를 쓴
+  // 이유(카드 클릭마다 브라우저 히스토리 항목이 쌓이면 "뒤로가기" 한 번으로 페이지를 벗어날 수
+  // 없고 클릭한 횟수만큼 눌러야 하는 문제)를 그대로 승계해야 함 — pushState로 바꾸면 카드를
+  // 여러 번 클릭할 때마다 히스토리가 쌓이는 회귀가 생김.
   function selectProduct(id: string) {
-    const params = new URLSearchParams(window.location.search)
-    params.set('selected', id)
-    goto(`/cms/products?${params.toString()}`, { replaceState: true, noScroll: true })
+    const url = new URL(window.location.href)
+    url.searchParams.set('selected', id)
+    replaceState(url, { selectedId: id })
   }
 
   function closePanel() {
-    const params = new URLSearchParams(window.location.search)
-    params.delete('selected')
-    const qs = params.toString()
-    goto(`/cms/products${qs ? '?' + qs : ''}`, { replaceState: true, noScroll: true })
+    const url = new URL(window.location.href)
+    url.searchParams.delete('selected')
+    replaceState(url, { selectedId: null })
   }
 
   function onCategoryClick(value: string) {
@@ -179,7 +261,7 @@
   // 유지되어야 하므로 rootProduct.id 변경 여부로만 판단).
   let lastRootProductId = $state<string | null>(null)
   $effect(() => {
-    const currentRootId = data.rootProduct?.id ?? null
+    const currentRootId = activeDetail.rootProduct?.id ?? null
     if (currentRootId !== lastRootProductId) {
       selectedInvIds = new Set()
       lastRootProductId = currentRootId
@@ -236,7 +318,7 @@
   }
 
   async function printSelectedQR() {
-    const selected = (data.inventoryList ?? []).filter(
+    const selected = (activeDetail.inventoryList ?? []).filter(
       (u: { id: string; product_code: string | null }) => selectedInvIds.has(u.id) && u.product_code
     )
     if (selected.length === 0) {
@@ -396,14 +478,14 @@
             {@const rsc = data.rentalStatusCounts?.[product.id]}
             <div
               class="product-card"
-              class:selected={data.selectedId === product.id}
+              class:selected={activeSelectedId === product.id}
               role="listitem"
             >
               <!-- 카드 클릭 영역 (썸네일 + 정보) -->
               <button
                 class="card-body"
                 onclick={() => selectProduct(product.id)}
-                aria-pressed={data.selectedId === product.id}
+                aria-pressed={activeSelectedId === product.id}
                 aria-label={`${product.name} 상세 보기`}
                 type="button"
               >
@@ -490,10 +572,10 @@
     </div>
 
     <!-- 상세 뷰어 패널 -->
-    {#if panelOpen && data.rootProduct}
-      {@const rp = data.rootProduct}
-      {@const isRootOpen = data.selectedId === rp.id}
-      {@const rpsc = data.rentalStatusCounts?.[rp.id]}
+    {#if panelOpen && activeDetail.rootProduct}
+      {@const rp = activeDetail.rootProduct}
+      {@const isRootOpen = activeSelectedId === rp.id}
+      {@const rpsc = activeDetail.rootRentalStatusCounts}
       {@const baseCode = baseCodeDisplay(rp)}
       <div class="detail-pane" transition:fly={{ x: 24, duration: 200 }}>
 
@@ -564,22 +646,22 @@
             </div>
           </button>
           <!-- 대표 상품 패널 (부모 선택 시) -->
-          {#if isRootOpen && repBodyOpen && data.selectedProduct}
+          {#if isRootOpen && repBodyOpen && activeDetail.selectedProduct}
             <div class="rep-body" transition:slide={{ duration: 220 }}>
-              {#key data.selectedId}
+              {#key activeSelectedId}
                 <ProductDetailPanel
-                  product={data.selectedProduct}
-                  priceRules={data.selectedPriceRules}
+                  product={activeDetail.selectedProduct}
+                  priceRules={activeDetail.selectedPriceRules}
                   categories={data.categories}
-                  categoryLabel={CATEGORY_LABEL[data.selectedProduct.category] ?? data.selectedProduct.category}
+                  categoryLabel={CATEGORY_LABEL[activeDetail.selectedProduct.category] ?? activeDetail.selectedProduct.category}
                   initialTab={data.initialTab}
-                  inventoryList={data.inventoryList}
+                  inventoryList={activeDetail.inventoryList}
                   partnerComboItems={data.partnerComboItems}
                   rentalPeriods={data.rentalPeriods}
                   rentalMethods={data.rentalMethods}
                   pickupPoints={data.pickupPoints}
                   shippingSettings={data.shippingSettings}
-                  rentalStatusCounts={data.rentalStatusCounts?.[rp.id]}
+                  rentalStatusCounts={activeDetail.rootRentalStatusCounts}
                   onclose={closePanel}
                   oninventorycreated={handleInventoryCreated}
                 />
@@ -590,10 +672,10 @@
 
         <!-- 섹션 2: 실 상품코드 반영 목록 -->
         <div class="inv-section">
-          {#if data.inventoryList && data.inventoryList.length > 0}
+          {#if activeDetail.inventoryList && activeDetail.inventoryList.length > 0}
             <div class="inv-accordion">
-              {#each data.inventoryList as unit, idx (unit.id)}
-                {@const isActive = data.selectedId === unit.id}
+              {#each activeDetail.inventoryList as unit, idx (unit.id)}
+                {@const isActive = activeSelectedId === unit.id}
                 <div class="inv-acc-item" class:inv-acc-item--active={isActive}>
                   <!-- 아코디언 헤더 행 -->
                   <div class="inv-acc-header">
@@ -653,16 +735,16 @@
                     {/if}
                   </div>
                   <!-- 아코디언 바디: 자식 상품 선택 시 (이력 탭만 편집 가능 — isChildProduct 자동 적용) -->
-                  {#if isActive && data.selectedProduct}
+                  {#if isActive && activeDetail.selectedProduct}
                     <div class="inv-acc-body" transition:slide={{ duration: 220 }}>
-                      {#key data.selectedId}
+                      {#key activeSelectedId}
                         <ProductDetailPanel
-                          product={data.selectedProduct}
-                          priceRules={data.selectedPriceRules}
+                          product={activeDetail.selectedProduct}
+                          priceRules={activeDetail.selectedPriceRules}
                           categories={data.categories}
-                          categoryLabel={CATEGORY_LABEL[data.selectedProduct.category] ?? data.selectedProduct.category}
+                          categoryLabel={CATEGORY_LABEL[activeDetail.selectedProduct.category] ?? activeDetail.selectedProduct.category}
                           initialTab={data.initialTab}
-                          inventoryList={data.inventoryList}
+                          inventoryList={activeDetail.inventoryList}
                           partnerComboItems={data.partnerComboItems}
                           rentalPeriods={data.rentalPeriods}
                           rentalMethods={data.rentalMethods}

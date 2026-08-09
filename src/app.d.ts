@@ -11,6 +11,10 @@ declare global {
       safeGetSession: () => Promise<{ session: Session | null; user: Session['user'] | null }>
       cmsRole?: string | null
     }
+    // PERF-5: /cms/products 상품 선택 shallow routing(replaceState)용 페이지 상태
+    interface PageState {
+      selectedId?: string | null
+    }
   }
 }
 
