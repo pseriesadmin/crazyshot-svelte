@@ -2,7 +2,6 @@
   import type { Snippet } from 'svelte'
   import { supabase } from '$lib/services/supabase'
   import type { SimilarNameItem, SimilarNameSource } from '$lib/types/cms-similar-name'
-  import { productSearchOrFilter, resolveProductSearchMatchLabel } from '$lib/utils/similarNameSuggest'
 
   export interface SimilarNameFieldControl {
     id: string
@@ -126,29 +125,30 @@
     }
 
     if (source === 'product_search') {
-      let query = supabase
-        .from('products')
-        .select('id, name, brand, category, product_code, description, product_caption')
-        .or(productSearchOrFilter(kw))
-        .is('deleted_at', null)
-        .order('name')
-        .limit(limit)
+      // K-2: /api/cms/products/search-suggestions API 호출 (하이브리드 ilike + MiniSearch)
+      // AbortController signal을 fetch에 전달 — stale-response race 방지 (RTN-2 패턴 유지)
+      const params = new URLSearchParams({ q: kw, limit: String(limit) })
+      if (activeOnly) params.set('activeOnly', 'true')
+      if (excludeId)  params.set('excludeId', excludeId)
 
-      if (activeOnly) query = query.eq('is_active', true)
-      if (excludeId) query = query.neq('id', excludeId)
-      query = query.is('parent_product_id', null)
-
-      const { data, error } = await query
-      if (signal.aborted) return
-      if (error) {
+      let fetched: SimilarNameItem[]
+      try {
+        const res = await fetch(`/api/cms/products/search-suggestions?${params}`, { signal })
+        if (signal.aborted) return
+        if (!res.ok) {
+          suggestions = []
+          suggestOpen = false
+          return
+        }
+        fetched = await res.json() as SimilarNameItem[]
+      } catch {
+        if (signal.aborted) return // AbortError: 후속 요청에 의한 정상 취소 — 무시
         suggestions = []
         suggestOpen = false
         return
       }
-      suggestions = ((data ?? []) as SimilarNameItem[]).map((row) => ({
-        ...row,
-        match_label: resolveProductSearchMatchLabel(row, kw),
-      }))
+
+      suggestions = fetched
       suggestOpen = suggestions.length > 0
       suggestIdx = -1
       return
