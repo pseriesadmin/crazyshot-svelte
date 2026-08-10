@@ -122,7 +122,8 @@ export type MappingItem = {
   taxonomy_code_id: string
   sort_order: number
   date_option: 'none' | 'ym' | 'ymd'
-  max_sequence: number
+  max_sequence: number | null       // 순번2(자식) 상한 — NULL = 미설정(무제한)
+  parent_max_sequence: number | null // 순번1(부모) 상한 — NULL = 2단 미사용
   combo_row_id: string
   combo_name: string | null
   combo_keywords: string[]
@@ -196,7 +197,7 @@ export const load: PageServerLoad = async ({ locals, parent }) => {
       .order('name'),
     admin
       .from('code_mapping_items')
-      .select('id, group_id, taxonomy_code_id, sort_order, date_option, max_sequence, combo_row_id, combo_name, combo_keywords, created_at')
+      .select('id, group_id, taxonomy_code_id, sort_order, date_option, max_sequence, parent_max_sequence, combo_row_id, combo_name, combo_keywords, created_at')
       .order('sort_order'),
   ])
 
@@ -877,7 +878,25 @@ export const actions: Actions = {
     const combo_row_id = ((form.get('combo_row_id') as string) ?? '').trim()
     const group_id     = ((form.get('group_id')     as string) ?? '').trim()
     const date_option  = (form.get('date_option')   as string) ?? 'ym'
-    const max_seq_raw  = parseInt((form.get('max_sequence') as string) ?? '999')
+
+    // max_sequence (순번2/자식 상한): 비어있으면 NULL(미설정), 숫자면 1~9999999 범위 검증
+    const max_seq_str = (form.get('max_sequence') as string | null)?.trim() ?? ''
+    const max_sequence: number | null = max_seq_str === ''
+      ? null
+      : (() => {
+          const v = parseInt(max_seq_str)
+          return (v >= 1 && v <= 9999999) ? v : null
+        })()
+
+    // parent_max_sequence (순번1/부모 상한): 비어있으면 NULL(2단 비활성), 숫자면 1~9999999 범위 검증
+    const parent_seq_str = (form.get('parent_max_sequence') as string | null)?.trim() ?? ''
+    const parent_max_sequence: number | null = parent_seq_str === ''
+      ? null
+      : (() => {
+          const v = parseInt(parent_seq_str)
+          return (v >= 1 && v <= 9999999) ? v : null
+        })()
+
     const combo_name_raw = (form.get('combo_name') as string | null)
     const combo_name = combo_name_raw !== null ? combo_name_raw.trim().slice(0, 30) || null : undefined
     const kw_raw = (form.get('combo_keywords') as string | null)
@@ -889,10 +908,13 @@ export const actions: Actions = {
       return fail(400, { action: 'updateGroupItemSettings', error: 'combo_row_id, group_id가 필요합니다.' })
     if (!['none', 'ym', 'ymd'].includes(date_option))
       return fail(400, { action: 'updateGroupItemSettings', error: '잘못된 date_option 값입니다.' })
-    const max_sequence = (max_seq_raw >= 1 && max_seq_raw <= 9999999) ? max_seq_raw : 999
 
     // 동일 combo_row_id를 가진 모든 아이템에 일괄 적용
-    const updatePayload: Record<string, unknown> = { date_option, max_sequence }
+    const updatePayload: Record<string, unknown> = {
+      date_option,
+      max_sequence,
+      parent_max_sequence,
+    }
     if (combo_name !== undefined) updatePayload.combo_name = combo_name
     if (combo_keywords !== undefined) updatePayload.combo_keywords = combo_keywords
 

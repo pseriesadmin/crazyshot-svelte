@@ -16,7 +16,8 @@ export type MappingItemSimple = {
   taxonomy_code_id: string
   combo_row_id: string
   date_option: 'none' | 'ym' | 'ymd'
-  max_sequence: number
+  max_sequence: number | null        // 순번2(자식) 상한 — NULL = 무제한
+  parent_max_sequence: number | null // 순번1(부모) 상한 — NULL = 2단 미사용
 }
 export type TaxonomyCodeSimple = { id: string; code: string; name: string; product_category: string | null; depth: number }
 export type RentalPeriodSimple = { id: string; name: string; display_order: number }
@@ -37,7 +38,7 @@ export const load: PageServerLoad = async ({ locals }) => {
       .order('sort_order')
       .order('name'),
     admin.from('code_mapping_items')
-      .select('group_id, taxonomy_code_id, combo_row_id, date_option, max_sequence'),
+      .select('group_id, taxonomy_code_id, combo_row_id, date_option, max_sequence, parent_max_sequence'),
     untypedFrom(admin, 'rental_period_options')
       .select('id, name, display_order')
       .eq('is_active', true)
@@ -235,18 +236,20 @@ export const actions: Actions = {
     let comboCodeId: string | null = null
     let comboDateOption: string | null = null
     let comboMaxSequence: number | null = null
+    let comboParentMaxSequence: number | null = null
 
     if (comboRowId) {
-      // 선택된 콤보의 아이템 전체 조회 (code_id + date_option + max_sequence)
+      // 선택된 콤보의 아이템 전체 조회 (code_id + date_option + max_sequence + parent_max_sequence)
       const { data: comboItems } = await admin
         .from('code_mapping_items')
-        .select('taxonomy_code_id, date_option, max_sequence')
+        .select('taxonomy_code_id, date_option, max_sequence, parent_max_sequence')
         .eq('combo_row_id', comboRowId)
 
       if (comboItems && comboItems.length > 0) {
         // 콤보 행 공통 속성 (모든 아이템이 동일한 값을 가짐)
         comboDateOption = (comboItems[0] as { date_option: string }).date_option
-        comboMaxSequence = (comboItems[0] as { max_sequence: number }).max_sequence
+        comboMaxSequence = (comboItems[0] as { max_sequence: number | null }).max_sequence ?? null
+        comboParentMaxSequence = (comboItems[0] as { parent_max_sequence: number | null }).parent_max_sequence ?? null
 
         // 가장 하위(depth 높은) 분류코드 → p_code_id로 전달
         const codeIds = comboItems.map((i: { taxonomy_code_id: string }) => i.taxonomy_code_id)
@@ -260,8 +263,30 @@ export const actions: Actions = {
       }
     }
 
-    if (comboCodeId && comboDateOption !== null && comboMaxSequence !== null) {
-      // 5-param 버전: 콤보 date_option + max_sequence 직접 반영
+    if (comboCodeId && comboDateOption !== null && comboParentMaxSequence !== null) {
+      // 6-param 버전: 2단 계층 채번 (순번1=부모, 순번2=자식) — parent_max_sequence 있을 때
+      const { error: codeErr } = await admin.rpc('generate_product_code', {
+        p_product_id:          product.id,
+        p_category:            category,
+        p_code_id:             comboCodeId,
+        p_date_option:         comboDateOption,
+        p_max_sequence:        comboMaxSequence,   // 순번2(자식) 상한 — null 허용
+        p_parent_max_sequence: comboParentMaxSequence, // 순번1(부모) 상한
+      })
+      if (codeErr) {
+        if (codeErr.message?.includes('parent_max_sequence_exceeded')) {
+          return fail(400, { error: '이 조합코드의 부모 순번 상한에 도달했습니다. 코드설정에서 순번1 상한을 늘려주세요.' })
+        }
+        if (codeErr.message?.includes('max_sequence_exceeded')) {
+          return fail(400, { error: '이 조합코드의 순번 상한에 도달했습니다. 코드설정에서 max_sequence를 늘려주세요.' })
+        }
+        return fail(500, { error: '품번 발행에 실패했습니다.' })
+      }
+    } else if (comboCodeId && comboDateOption !== null) {
+      // 5-param 버전: 콤보 date_option 반영 (순번1 없는 기존 경로) — max_sequence는 NULL(무제한)이어도
+      // 5-param이 그대로 저장하므로 null 여부로 3-param(=date_option 무시)으로 새면 안 됨
+      // ⚠️ 버그 수정(2026-08-10): 이전엔 comboMaxSequence !== null 조건이 있어 "날짜옵션은 설정, 순번2
+      //    상한은 무제한(NULL)"인 정상 콤보가 3-param으로 빠져 date_option이 조용히 무시됐음
       const { error: codeErr } = await admin.rpc('generate_product_code', {
         p_product_id:   product.id,
         p_category:     category,

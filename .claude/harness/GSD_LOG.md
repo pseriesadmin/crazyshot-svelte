@@ -1,6 +1,13 @@
 # GSD_LOG.md — 크레이지샷 실행 이력
 # 형식: [YYYY-MM-DD HH:MM] 타입 | 태스크명 | 파일 | 소요 | 결과
 
+[2026-08-10] ⚡GSD | 조합코드 순번 2단계층 GSD-2/3/4 (plan_source: polymorphic-humming-micali.md)
+  | src/routes/cms/codes/_AutoMappingTab.svelte
+  | GSD-2: comboParentSeqMap/comboShowParentSeq 상태 + +/− 버튼 + 2번째 seq-wrap + hidden input
+  | GSD-3: comboPreviewFmt → parent_max_sequence && max_sequence 시 seq_digits 합산
+  | GSD-4: combo-controls-edit 3구역 컬럼 레이아웃 (cc-del-row / combo-edit-form col / combo-edit-actions)
+  | svelte-check ERROR 0건 (코드/codes 모듈 기준) | GATE C [GREEN] 대기
+
 [2026-08-10] ⚡GSD | 크레이지로그 배너 카드 선택 UI + CMS 콘텐츠 탭 (plan_source: hazy-honking-willow.md)
   | 신규 10개·수정 3개 파일 | GATE B·C 전부 통과 (stage+production DB 적용 완료)
   배경: `/crazylog` 메인 3개 배너 카드(Flash Deals·채널홍보·Release)가 완전 하드코딩(정적 이미지·
