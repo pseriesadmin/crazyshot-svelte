@@ -25,6 +25,93 @@
     return () => window.removeEventListener('scroll', onScroll)
   })
 
+  // 기름 유기체 Canvas 애니메이션
+  let holoCanvas = $state<HTMLCanvasElement | null>(null)
+
+  $effect(() => {
+    if ($authState.loading || !$authState.user || isGuestUser || !holoCanvas) return
+    return runOrganism(holoCanvas)
+  })
+
+  function runOrganism(canvas: HTMLCanvasElement): () => void {
+    const ctx = canvas.getContext('2d')!
+    if (!ctx) return () => {}
+
+    const W = canvas.width, H = canvas.height
+    const CX = W / 2, CY = H / 2, R = W / 2
+    const START = performance.now()
+    const DUR = 3640
+
+    // GLSL cosineInversion 포팅 — 박막 간섭(thin-film) 팔레트
+    function oilColor(t: number): [number, number, number] {
+      const τ = 6.28318
+      return [
+        (0.5 + 0.5 * Math.cos(τ * (t + 0.00))) * 255,
+        (0.5 + 0.5 * Math.cos(τ * (t + 0.33))) * 255,
+        (0.5 + 0.5 * Math.cos(τ * (t + 0.67))) * 255
+      ]
+    }
+
+    // 참조 코드 noise 함수 — 유기체 흐름 왜곡
+    function noise(x: number, y: number, z: number) {
+      return Math.sin(x + Math.sin(y + z)) * Math.cos(y + Math.sin(x - z))
+    }
+
+    // 원형 edge-fade 마스크 사전계산 (프레임당 sqrt 연산 제거)
+    const mask = new Float32Array(W * H)
+    for (let py = 0; py < H; py++) {
+      for (let px2 = 0; px2 < W; px2++) {
+        const d = Math.hypot(px2 - CX, py - CY)
+        const inner = R * 0.65
+        mask[py * W + px2] = d >= R ? -1
+          : d < inner ? 1
+          : 1 - ((d - inner) / (R - inner)) ** 1.2
+      }
+    }
+
+    const img = ctx.createImageData(W, H)
+    const px = img.data
+    let raf = 0
+
+    function frame() {
+      const elapsed = performance.now() - START
+      const t = Math.min(elapsed / DUR, 1)
+      const tick = elapsed / 1000
+
+      // 페이드 엔벨로프
+      const fade = t < 0.12 ? t / 0.12 : t < 0.68 ? 1 : 1 - (t - 0.68) / 0.32
+
+      for (let i = 0; i < W * H; i++) {
+        const m = mask[i]
+        const base = i * 4
+        if (m < 0) { px[base + 3] = 0; continue }
+
+        const ix = i % W
+        const iy = (i / W) | 0
+        const nx = (ix - CX) / R
+        const ny = (iy - CY) / R
+
+        // 2옥타브 유체 흐름 노이즈
+        const n = noise(nx * 2.8 + tick * 0.55, ny * 2.8 + tick * 0.45, tick * 0.28) * 0.65
+                + noise(nx * 4.5 - tick * 0.38, ny * 4.5 + tick * 0.32, tick * 0.5 + 1.7) * 0.35
+
+        // cosine 팔레트로 박막 색상 매핑
+        const [r, g, b] = oilColor(n * 0.5 + 0.5 + tick * 0.14)
+        px[base]     = r
+        px[base + 1] = g
+        px[base + 2] = b
+        px[base + 3] = (fade * m * 255) | 0
+      }
+
+      ctx.putImageData(img, 0, 0)
+      if (t < 1) raf = requestAnimationFrame(frame)
+      else ctx.clearRect(0, 0, W, H)
+    }
+
+    raf = requestAnimationFrame(frame)
+    return () => { if (raf) cancelAnimationFrame(raf) }
+  }
+
   let userInitial = $derived(() => {
     const user = $authState.user
     if (!user) return ''
@@ -79,12 +166,14 @@
           {item.label}
         </a>
       {/each}
-      {#if $authState.user && !isGuestUser}
-        <button class="gnb-avatar-initial" onclick={() => goto('/account')} aria-label="내 계정">
-          {userInitial()}
-        </button>
-      {:else}
-        <a href="/auth/login" class="gnb-signin-btn">Sign In</a>
+      {#if !$authState.loading}
+        {#if $authState.user && !isGuestUser}
+          <button class="gnb-avatar-initial" onclick={() => goto('/account')} aria-label="내 계정">
+            {userInitial()}
+          </button>
+        {:else}
+          <a href="/auth/login" class="gnb-signin-btn">Sign In</a>
+        {/if}
       {/if}
     </div>
   </nav>
@@ -94,20 +183,23 @@
 <div class="gnb-mobile-wrap" class:gnb-hidden={gnbHidden}>
   <nav class="gnb-mobile-nav">
     <a href="/" class="gnb-logo" aria-label="CRAZYSHOT 홈">
-      <img src="/logo-bi2.svg" alt="CRAZYSHOT" class="gnb-logo-img gnb-logo-mobile" width="96" height="59" />
+      <img src="/logo-bi2.svg" alt="CRAZYSHOT" class="gnb-logo-img gnb-logo-mobile" width="117" height="72" />
     </a>
 
-    {#if $authState.user && !isGuestUser}
-      <button class="gnb-avatar-btn gnb-avatar-btn-initial" onclick={() => goto('/account')} aria-label="내 계정">
-        {userInitial()}
-      </button>
-    {:else}
-      <a href="/auth/login" class="gnb-avatar-btn" aria-label="내 계정">
-        <svg xmlns="http://www.w3.org/2000/svg" width="40" height="40" viewBox="0 0 40 40" fill="none" aria-hidden="true">
-          <path d="M0 20C0 5 5 0 20 0C35 0 40 5 40 20C40 35 35 40 20 40C5 40 0 35 0 20Z" fill="#C1BBEC"/>
-          <path d="M19.719 20.3828C22.3245 20.3828 24.514 21.136 26.0706 22.5039C27.6372 23.8808 28.4689 25.802 28.469 27.9229C28.469 28.6132 27.9094 29.1729 27.219 29.1729C26.5286 29.1729 25.969 28.6132 25.969 27.9229C25.9689 26.4832 25.419 25.2597 24.4202 24.3818C23.4109 23.4949 21.8503 22.8828 19.719 22.8828C17.5878 22.8828 16.0271 23.4947 15.0178 24.3818C14.0189 25.2599 13.469 26.484 13.469 27.9238C13.4688 28.614 12.9093 29.1738 12.219 29.1738C11.5287 29.1738 10.9692 28.614 10.969 27.9238C10.969 25.8029 11.8006 23.881 13.3674 22.5039C14.9239 21.1359 17.1134 20.3828 19.719 20.3828ZM19.719 9.67578C22.383 9.67584 24.5217 11.8145 24.5217 14.4785C24.5216 17.1424 22.3829 19.2812 19.719 19.2812C17.0551 19.2812 14.9164 17.1424 14.9163 14.4785C14.9163 11.8145 17.055 9.67585 19.719 9.67578ZM19.719 12.1758C18.4357 12.1758 17.4163 13.1952 17.4163 14.4785C17.4164 15.7617 18.4358 16.7812 19.719 16.7812C21.0022 16.7812 22.0216 15.7617 22.0217 14.4785C22.0217 13.1952 21.0023 12.1758 19.719 12.1758Z" fill="white"/>
-        </svg>
-      </a>
+    {#if !$authState.loading}
+      {#if $authState.user && !isGuestUser}
+        <button class="gnb-avatar-btn gnb-avatar-btn-initial" onclick={() => goto('/account')} aria-label="내 계정">
+          <canvas class="gnb-holo-canvas" width="120" height="120" aria-hidden="true" bind:this={holoCanvas}></canvas>
+          <span class="gnb-avatar-initial-text">{userInitial()}</span>
+        </button>
+      {:else}
+        <a href="/auth/login" class="gnb-avatar-btn" aria-label="내 계정">
+          <svg xmlns="http://www.w3.org/2000/svg" width="40" height="40" viewBox="0 0 40 40" fill="none" aria-hidden="true">
+            <path d="M0 20C0 5 5 0 20 0C35 0 40 5 40 20C40 35 35 40 20 40C5 40 0 35 0 20Z" fill="#C1BBEC"/>
+            <path d="M19.719 20.3828C22.3245 20.3828 24.514 21.136 26.0706 22.5039C27.6372 23.8808 28.4689 25.802 28.469 27.9229C28.469 28.6132 27.9094 29.1729 27.219 29.1729C26.5286 29.1729 25.969 28.6132 25.969 27.9229C25.9689 26.4832 25.419 25.2597 24.4202 24.3818C23.4109 23.4949 21.8503 22.8828 19.719 22.8828C17.5878 22.8828 16.0271 23.4947 15.0178 24.3818C14.0189 25.2599 13.469 26.484 13.469 27.9238C13.4688 28.614 12.9093 29.1738 12.219 29.1738C11.5287 29.1738 10.9692 28.614 10.969 27.9238C10.969 25.8029 11.8006 23.881 13.3674 22.5039C14.9239 21.1359 17.1134 20.3828 19.719 20.3828ZM19.719 9.67578C22.383 9.67584 24.5217 11.8145 24.5217 14.4785C24.5216 17.1424 22.3829 19.2812 19.719 19.2812C17.0551 19.2812 14.9164 17.1424 14.9163 14.4785C14.9163 11.8145 17.055 9.67585 19.719 9.67578ZM19.719 12.1758C18.4357 12.1758 17.4163 13.1952 17.4163 14.4785C17.4164 15.7617 18.4358 16.7812 19.719 16.7812C21.0022 16.7812 22.0216 15.7617 22.0217 14.4785C22.0217 13.1952 21.0023 12.1758 19.719 12.1758Z" fill="white"/>
+          </svg>
+        </a>
+      {/if}
     {/if}
 
   </nav>
@@ -245,7 +337,7 @@
     display: flex;
     width: 100%;
     justify-content: center;
-    padding: 16px 20px 8px;
+    padding: 18px 20px 9px;
     position: fixed;
     top: 0;
     left: 0;
@@ -266,26 +358,29 @@
     align-items: center;
     justify-content: space-between;
     padding: 0 20px;
-    height: 55px;
+    height: 61px;
     width: 100%;
-    border-radius: 20px;
+    border-radius: 22px;
     background: #1d183e;
     overflow: visible;
     pointer-events: all;
   }
 
-  /* 모바일 로고: 59px tall in 55px nav → 2px overflow each (브랜드 아이덴티티) */
+  /* 모바일 로고: 72px tall in 61px nav → ~5.5px overflow 상하 (브랜드 아이덴티티) */
   .gnb-logo-mobile {
-    width: 96px;
-    height: 59px;
+    width: 117px;
+    height: 72px;
+    transform: translateY(-3px);
   }
 
   .gnb-avatar-btn {
     display: flex;
     align-items: center;
     justify-content: center;
-    min-width: 44px;
-    min-height: 44px;
+    width: 40px;
+    height: 40px;
+    min-width: 40px;
+    min-height: 40px;
     text-decoration: none;
     flex-shrink: 0;
     opacity: 0.85;
@@ -294,7 +389,9 @@
   .gnb-avatar-btn:active { opacity: 0.6; }
 
   .gnb-avatar-btn-initial {
-    background: var(--cs-purple-pale);
+    position: relative;
+    overflow: hidden;
+    background: rgba(85, 63, 224, 0.60);
     border: none;
     color: var(--cs-dark);
     font-family: var(--font-en-display);
@@ -305,5 +402,23 @@
     border-radius: 50%;
   }
   .gnb-avatar-btn-initial:disabled { opacity: 0.5; cursor: not-allowed; }
+
+  /* 이니셜 텍스트 — 모든 레이어 위 */
+  .gnb-avatar-initial-text {
+    position: relative;
+    z-index: 3;
+    pointer-events: none;
+    color: #ffffff;
+  }
+
+  /* ── 유기체 Canvas 레이어 ── */
+  .gnb-holo-canvas {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    pointer-events: none;
+    z-index: 1;
+  }
 
 </style>

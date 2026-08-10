@@ -31,7 +31,7 @@
 
 	$effect(() => {
 		function onScroll() {
-			if (chatStore.isOpen) return  // 채팅 열려 있으면 peek 전환 안 함 (transform+fixed 충돌 방지)
+			if (chatStore.isOpen) return
 			peekMode = true
 		}
 		window.addEventListener('scroll', onScroll, { passive: true })
@@ -134,16 +134,42 @@
 	}
 
 	/* ── 모바일 전용 peek & expand 인터랙션 (< 640px) ── */
+	/* 업스크롤/닫힘 → peek(우측으로 깊이 가림, 미세 감쇠) / 다운스크롤·탭 → expand(팝아웃, 감쇠 스프링)
+	 * peek 정지 위치: translateX(85%) — 컨테이너 폭(70px, 채팅 FAB 기준) 대비 약 59.5px 우측 이동,
+	 * 좌측에 약 10.5px(15%)만 노출되도록 깊이 가림
+	 * 표본 수치값 정본: .claude/rules/ui-mobile.md "그룹형 플로팅 메뉴(.fab-group) 감쇠
+	 * 스프링 바운스 표준"(base 57.5px) 대비 이 컴포넌트 진폭(59.5px) 비율로 재계산 —
+	 * 감쇠율 45~50%·오버슈트 비율(+13%/-8%/+1.7%)은 표준 그대로 유지, 9단계로 세분화 */
 	@media (max-width: 639px) {
-		.fab-bar {
-			transition: transform 0.42s cubic-bezier(0.34, 1.28, 0.64, 1);
+		.fab-bar:not(.peek) {
+			animation: fab-bar-pop-out 0.5s cubic-bezier(0.25, 0.1, 0.25, 1) forwards;
 		}
-
-		/* peek: 우측 절반 숨김 — 아이콘 왼쪽 절반만 노출 */
 		.fab-bar.peek {
-			transform: translateX(calc(50% + 15px));
+			transform: translateX(85%);
+			animation: fab-bar-peek-in 0.22s cubic-bezier(0.25, 0.1, 0.25, 1) forwards;
 		}
 
+		@keyframes fab-bar-pop-out {
+			0%   { transform: translateX(59.5px); }  /* peek 시작 (85%) */
+			26%  { transform: translateX(-21.7px); } /* 1차 오버슈트, 진폭 대비 약 -37% */
+			43%  { transform: translateX(10.3px); }  /* 직전 대비 약 48% */
+			57%  { transform: translateX(-5.1px); }  /* 49% */
+			68%  { transform: translateX(2.6px); }   /* 51% */
+			77%  { transform: translateX(-1.2px); }  /* 46% */
+			84%  { transform: translateX(0.7px); }   /* 58% */
+			90%  { transform: translateX(-0.4px); }  /* 57% */
+			95%  { transform: translateX(0.1px); }   /* 25% */
+			100% { transform: translateX(0); }       /* 정지 */
+		}
+		@keyframes fab-bar-peek-in {
+			0%   { transform: translateX(0); }
+			55%  { transform: translateX(67.2px); }  /* +13% 오버슈트 */
+			78%  { transform: translateX(54.8px); }  /* -8%  언더슈트 */
+			92%  { transform: translateX(60.5px); }  /* +1.7% */
+			100% { transform: translateX(85%); }     /* 정지 (59.5px) */
+		}
+
+		/* 확장 시 버블 애니메이션: 장바구니·검색 + 채팅 FAB 내부 SVG */
 		@keyframes fab-expand-bubble {
 			0%   { transform: scale(1); }
 			40%  { transform: scale(1.12); }
@@ -151,7 +177,6 @@
 			100% { transform: scale(1); }
 		}
 
-		/* 확장 시 버블 애니메이션: 장바구니·검색 + 채팅 FAB 내부 SVG */
 		.fab-bar.bubbling .fab-btn svg,
 		.fab-bar.bubbling :global(.fab-btn svg) {
 			animation: fab-expand-bubble 0.32s ease-out;

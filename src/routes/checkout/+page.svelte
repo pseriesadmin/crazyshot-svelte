@@ -1,10 +1,9 @@
 <script lang="ts">
-  import { onMount, untrack } from 'svelte';
+  import { untrack } from 'svelte';
   import { goto, invalidateAll } from '$app/navigation';
   import { slide, fly } from 'svelte/transition';
   import type { PageData } from './$types';
   import SubGnb from '$lib/components/common/SubGnb.svelte';
-  import BottomTabBar from '$lib/components/common/BottomTabBar.svelte';
   import CalendarGrid from '$lib/components/common/CalendarGrid.svelte';
   import { supabase } from '$lib/services/supabase';
   import { csToast } from '$lib/utils/toast';
@@ -315,8 +314,9 @@
 
   // ── Footer + canProceed 5조건 가드
   let agreed = $state(false);
-  let footerVisible = $state(false);
   let isConfirming = $state(false);
+  let footerVisible = $state(false);
+  let footerSentinel = $state<HTMLDivElement | null>(null);
 
   // 조건 1: 결제 확정 대상(체크 해제·삭제되지 않은 상품)이 1개 이상
   const hasItems = $derived(itemsState.some(it => !it.deleted && it.checked))
@@ -343,20 +343,18 @@
   // 완료 버튼 문구 — 회원/비회원(익명 게스트) 구분
   const confirmLabel = $derived((data.isGuest as boolean | undefined) ? '비회원 예약신청완료' : '예약신청완료')
 
-  onMount(() => {
-    let lastY = window.scrollY;
-    function onScroll() {
-      const y = window.scrollY;
-      if (y > lastY) {
-        footerVisible = true;   // 아래로 스크롤 → 팝업
-      } else if (y < lastY) {
-        footerVisible = false;  // 위로 스크롤 → 다운
-      }
-      lastY = y;
-    }
-    window.addEventListener('scroll', onScroll, { passive: true });
-    return () => window.removeEventListener('scroll', onScroll);
-  });
+  // 페이지 최하단(결제 영역) 근접 시에만 CTA 푸터 노출 — 절대 위치 기반(IntersectionObserver)이라
+  // 스크롤 방향 델타 비교 방식과 달리 관성·러버밴드 반동에 의한 반복 토글(떨림)이 구조적으로 발생하지 않음
+  $effect(() => {
+    const sentinel = footerSentinel
+    if (!sentinel) return
+    const observer = new IntersectionObserver(
+      ([entry]) => { footerVisible = entry.isIntersecting },
+      { threshold: 0 }
+    )
+    observer.observe(sentinel)
+    return () => observer.disconnect()
+  })
 
   // ── Helpers
   const DUR_LABELS: Record<DurationType, string> = {
@@ -789,6 +787,8 @@
         </div>
       </section>
 
+      <!-- CTA 푸터 노출 트리거 — 결제 영역(합계·보증금) 근접 시 IntersectionObserver 감지 -->
+      <div bind:this={footerSentinel} class="footer-sentinel" aria-hidden="true"></div>
       <div style="height: 100px;"></div>
     </div>
   </main>
@@ -953,8 +953,6 @@
   </footer>
 
 </div>
-
-<BottomTabBar />
 
 <!-- ═══════════════════════ SNIPPET COMPONENTS ═══════════════════════ -->
 
@@ -2481,6 +2479,9 @@
   }
 
   /* ══ Footer ══ */
+  .footer-sentinel {
+    height: 1px;
+  }
   .cart-footer {
     position: fixed;
     bottom: 0;
