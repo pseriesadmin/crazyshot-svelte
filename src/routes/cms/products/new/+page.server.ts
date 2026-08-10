@@ -16,7 +16,8 @@ export type MappingItemSimple = {
   taxonomy_code_id: string
   combo_row_id: string
   date_option: 'none' | 'ym' | 'ymd'
-  max_sequence: number
+  max_sequence: number | null        // 순번2(자식) 상한 — NULL = 무제한
+  parent_max_sequence: number | null // 순번1(부모) 상한 — NULL = 2단 미사용
 }
 export type TaxonomyCodeSimple = { id: string; code: string; name: string; product_category: string | null; depth: number }
 export type RentalPeriodSimple = { id: string; name: string; display_order: number }
@@ -37,7 +38,7 @@ export const load: PageServerLoad = async ({ locals }) => {
       .order('sort_order')
       .order('name'),
     admin.from('code_mapping_items')
-      .select('group_id, taxonomy_code_id, combo_row_id, date_option, max_sequence'),
+      .select('group_id, taxonomy_code_id, combo_row_id, date_option, max_sequence, parent_max_sequence'),
     untypedFrom(admin, 'rental_period_options')
       .select('id, name, display_order')
       .eq('is_active', true)
@@ -281,8 +282,11 @@ export const actions: Actions = {
         }
         return fail(500, { error: '품번 발행에 실패했습니다.' })
       }
-    } else if (comboCodeId && comboDateOption !== null && comboMaxSequence !== null) {
-      // 5-param 버전: 콤보 date_option + max_sequence 직접 반영 (순번1 없는 기존 경로)
+    } else if (comboCodeId && comboDateOption !== null) {
+      // 5-param 버전: 콤보 date_option 반영 (순번1 없는 기존 경로) — max_sequence는 NULL(무제한)이어도
+      // 5-param이 그대로 저장하므로 null 여부로 3-param(=date_option 무시)으로 새면 안 됨
+      // ⚠️ 버그 수정(2026-08-10): 이전엔 comboMaxSequence !== null 조건이 있어 "날짜옵션은 설정, 순번2
+      //    상한은 무제한(NULL)"인 정상 콤보가 3-param으로 빠져 date_option이 조용히 무시됐음
       const { error: codeErr } = await admin.rpc('generate_product_code', {
         p_product_id:   product.id,
         p_category:     category,

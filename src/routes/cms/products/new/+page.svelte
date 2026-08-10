@@ -10,7 +10,7 @@
   import type { SuggestPickerOption } from '$lib/types/suggest-picker'
   import { productSearchOrFilter } from '$lib/utils/similarNameSuggest'
   import { resizeProductImage } from '$lib/utils/imageResize'
-  import { buildPreview, datePart } from '../../codes/_shared'
+  import { datePart } from '../../codes/_shared'
   import type { CodeFormat } from '../../codes/+page.server'
   import type { PageData, ActionData } from './$types'
   import type { MappingGroupSimple, MappingItemSimple, TaxonomyCodeSimple, RentalPeriodSimple, RentalMethodSimple, PickupPointSimple } from './+page.server'
@@ -154,7 +154,8 @@
     combo_row_id: string
     combo_name: string | null
     date_option: 'none' | 'ym' | 'ymd'
-    max_sequence: number
+    max_sequence: number | null        // 순번2(자식) 상한 — NULL = 무제한
+    parent_max_sequence: number | null // 순번1(부모) 상한 — NULL = 2단 미사용
     codes: TaxonomyCodeSimple[]
   }
 
@@ -242,30 +243,40 @@
     if (combo.date_option === 'none') date_format = 'NONE'
     else if (combo.date_option === 'ym') date_format = codeFormat.date_format ?? 'YYMM'
     else if (combo.date_option === 'ymd') date_format = 'YYYYMMDD'
+    // 2단 모드(순번1+순번2 둘 다 설정)면 두 자릿수를 합산, 아니면 순번2(자식) 자릿수만
+    const seq_digits = (combo.parent_max_sequence && combo.max_sequence)
+      ? String(combo.parent_max_sequence).length + String(combo.max_sequence).length
+      : combo.max_sequence
+      ? String(combo.max_sequence).length
+      : (codeFormat.seq_digits ?? 3)
     return {
       ...codeFormat,
       ...(rootRule?.prefix ? { prefix: rootRule.prefix as string } : {}),
       date_format,
-      seq_digits: combo.max_sequence ? String(combo.max_sequence).length : (codeFormat.seq_digits ?? 3),
+      seq_digits,
     }
   }
 
+  // 이 미리보기는 등록 전 "기준 코드구조"만 보여주는 용도 — 실제 채번은 등록(순번1) 또는
+  // 빠른재고등록(순번2) 시점에만 일어나므로, 아직 정해지지 않은 순번 자리는 항상 0으로 표시한다
+  // (/cms/codes 조합 미리보기와 동일 관례 — 실제로 이미 채번된 것처럼 보이면 안 됨).
   function buildComboPreview(combo: ComboRow): string {
     const catCode = comboCatCodeStr(combo.codes)
     if (!catCode) return '—'
     const fmt = comboPreviewFmt(combo)
+    const prefix = (fmt.prefix ?? 'CS').trim().toUpperCase()
+    const suffix = (fmt.suffix ?? '').trim().toUpperCase()
+    let d = ''
     if (combo.date_option === 'ymd') {
       const now = new Date()
-      const yyyy = String(now.getFullYear())
-      const mm = String(now.getMonth() + 1).padStart(2, '0')
-      const dd = String(now.getDate()).padStart(2, '0')
-      const prefix = (fmt.prefix ?? 'CS').trim().toUpperCase()
-      const seqDigits = fmt.seq_digits ?? 3
-      const suffix = (fmt.suffix ?? '').trim().toUpperCase()
-      const s = '1'.padStart(seqDigits, '0')
-      return `${prefix || 'CS'}${catCode}${yyyy}${mm}${dd}${s}${suffix}`
+      d = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, '0')}${String(now.getDate()).padStart(2, '0')}`
+    } else if (combo.date_option !== 'none') {
+      d = datePart(fmt.date_format === 'YYYYMM' ? 'YYYYMM' : 'YYMM')
     }
-    return buildPreview(catCode, fmt)
+    const seqPlaceholder = (combo.parent_max_sequence && combo.max_sequence)
+      ? '0'.repeat(String(combo.parent_max_sequence).length) + '0'.repeat(String(combo.max_sequence).length)
+      : '0'.repeat(fmt.seq_digits || 3)
+    return `${prefix || 'CS'}${catCode}${d}${seqPlaceholder}${suffix}`
   }
 
   function comboPrefix(combo: ComboRow): string {
@@ -287,9 +298,14 @@
     return datePart(df === 'YYYYMM' ? 'YYYYMM' : 'YYMM')
   }
 
+  // ⚠️ 버그 수정(2026-08-10): max_sequence가 NULLABLE(무제한)이 된 이후 null 가드가 없어
+  // "~null"이 그대로 노출되던 문제 — 무제한 표시 + 2단(순번1) 설정 시 부모 상한도 함께 표시
   function comboSeqMax(combo: ComboRow): string {
-    const digits = String(combo.max_sequence).length || 3
-    return String(combo.max_sequence).padStart(digits, '0')
+    const childLabel = combo.max_sequence != null ? `~${combo.max_sequence}` : '무제한'
+    if (combo.parent_max_sequence != null) {
+      return `부모~${combo.parent_max_sequence} · 자식${childLabel}`
+    }
+    return childLabel
   }
 
   let combosForGroup = $derived<ComboRow[]>(
@@ -309,6 +325,7 @@
               combo_name: comboNameByRowId[rid] ?? null,
               date_option: first.date_option,
               max_sequence: first.max_sequence,
+              parent_max_sequence: first.parent_max_sequence,
               codes,
             }
           })
@@ -696,7 +713,7 @@
                     {/if}
                     <span class="combo-sep">·</span>
                     <span class="combo-meta-chip combo-seq-chip" title="순번 상한">
-                      ~{comboSeqMax(combo)}
+                      {comboSeqMax(combo)}
                     </span>
                   </span>
                 </button>
