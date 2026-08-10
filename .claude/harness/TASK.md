@@ -9496,3 +9496,175 @@ admin-attachment/+server.ts, migration 208(신규, rollback 주석 보완 완료
     사례는 match_keywords가 아니라 MiniSearch 제목/본문 유사도 매칭 경로(boost 가중치·fuzzy
     임계값)에서 발생한 것으로 추정 — 키워드 보강으로 해결 안 되는 별개 튜닝 영역, Stephen에게
     보고만 하고 이번엔 미착수
+
+---
+
+## AUDIT — 고객 대상 '예약·대여' 알림(채팅+FCM푸시) 발송 내역 재검증 (2026-08-09)
+
+[CONTEXT BRIDGE]
+plan_source: Stephen 검증 요청("모든 알림은 채팅 대화를 통해 선택적 자동화 기반 발송" +
+  "채팅 알림은 모바일 웹브라우저 FCM 푸시와 연동해 발송·수신" + 자동발송 대상 4종 명세)
+  + Stephen이 사전에 제시한 발견("반납예정알림은 자동발송 로직·pg_cron 없음, 수동전용")의
+  정확성 재검증
+TDD도메인: 없음 (감사 — 코드 수정 없음, 발견만 BACKLOG 등록)
+절대금지: 발견 즉시 수정 금지 — 전부 BACKLOG로만 등록(요청범위 외 수정 절대 금지 원칙)
+
+---
+### Stephen 제시 발견 재검증 결과: ✅ 정확함
+
+- `return_remind`(반납예정알림)는 `AUTO_NOTIFY`/`rentalQrTransition.ts` 어디에도 매핑되어
+  있지 않고, production `cron.job` 테이블 실측 조회 결과 활성 잡 5개
+  (`auto_pending_inactive_sessions`/`execute_marketing_rules`/`mv_active_products_by_category`
+  갱신/`mv_top_search_terms` 갱신/`batch_update_search_impressions`) 중 예약·반납 관련 잡은
+  전무 — 날짜 기준 자동 트리거가 정말로 없음(pg_cron 신설 필요, Stephen 판단대로 정확)
+- `rental-lifecycle.md`에 이미 "반드시 관리자가 수동 판단해서 보내는 용도, 자동발송 아님"으로
+  명문화되어 있어 문서·코드·DB 3자 일치 확인
+
+### 🔴 추가 발견 — Stephen이 언급하지 않은 별도 갭 4건 (요구사항 ②"채팅=푸시 항상 연동" 위반)
+
+`sendReservationLifecyclePush`(고객 대상 FCM 발신 함수) 실제 호출 지점을 전수 검색한 결과,
+**CMS 관리자가 수동으로 누르는 버튼 3곳**(`reservation/+page.server.ts`의 승인하기·상태변경
+버튼, `rentals/+page.server.ts`의 알림 재발송 버튼)에서만 호출되고 있음. 반면 아래 4개
+**시스템 자동 트리거 지점**은 채팅 메시지(`send_rental_chat_notification`)는 정상 발송되나
+고객 FCM 푸시 호출이 전혀 없음(코드에 import조차 없음, 버그 아니라 미연결):
+
+1. **예약신청접수**(`reservation_hold`) — `api/checkout/notify-hold/+server.ts`(장바구니
+   담기 직후 호출). `push_notification_config`에 등록돼 있고 `push.ts`에 문구까지 준비된
+   상태인데 호출부만 누락됨.
+2. **예약승인**(`reservation_approval`) 실결제 자동승인 경로 — `api/checkout/confirm-mock`,
+   `api/payment/confirm`, `payment/success` 3곳 전부 채팅은 보내지만
+   `sendPaymentCompletedAdminPush`(관리자용)만 호출하고 **고객용
+   `sendReservationLifecyclePush`는 호출하지 않음**. CMS "승인하기" 수동 클릭 경로만 고객
+   푸시가 감. ⚠️ 실결제(카드결제)가 실제 서비스에서 가장 흔한 예약승인 발생 경로인데 정작
+   이 경로에서 고객이 푸시를 못 받음 — 영향도가 가장 큰 갭으로 판단됨.
+3. **대여 반출입 상태전이**(shipment_notify/rental_confirm/return_registration/
+   rental_complete) QR 스캔 자동처리 경로 — `src/lib/server/rentalQrTransition.ts`(
+   `/cms/mobile/qr/[product_id]` 자동착지 화면 + `/api/cms/rental-qr-transition`
+   RentalDetailPanel QR 하이브리드 모드가 공유)에 `push.ts` import 자체가 없음. 관리자가
+   수동으로 "…처리" 버튼(`/cms/reservation?/updateStatus`)을 눌렀을 때만 고객 푸시가 감.
+4. **전자계약 발송** — `api/cms/contracts/[id]/send-chat/+server.ts`(계약서를 고객 채팅으로
+   보내는 API)에 푸시 호출이 전혀 없음. 채팅으로만 감.
+
+- **`결제요청`**: `payment_request`가 타입 정의(`chat.ts`)에는 존재하나 실제로 어디서도 호출
+  되지 않는 죽은 타입 — `push_notification_config`에도 등록 안 돼 있음. AI가 결제의도를
+  감지하면 `PAYMENT_REQUEST_CARD` 액션카드를 채팅에 생성하는 별도 메커니즘(intent
+  classifier)만 있고, 이것도 푸시와는 무관.
+
+### 종합 판정
+
+Stephen이 지시한 "①모든 알림은 채팅 기반 ②채팅은 항상 푸시와 연동" 원칙 중 ①(채팅 자동발송)은
+4개 지점 전부 정상 충족. 그러나 ②(푸시 연동)는 **시스템이 자동으로 트리거하는 이벤트에는 전혀
+연결되지 않고, 관리자가 수동으로 버튼을 누르는 경로에서만 연결된 상태** — 사실상 현재 구조는
+"채팅은 자동, 푸시는 관리자가 수동으로 눌러야만" 나가는 상태에 가까움.
+
+**코드 수정 없음 — 위 5건(return_remind 자동화 + 4개 푸시 미연결 지점) 전부 BACKLOG 등록만
+하고 Stephen 확인 대기.** 착수 여부·우선순위는 Stephen 판단 필요.
+
+## NOW — /cms/mobile/rentals 대여목록카드 UI 다듬기 + QR 아이콘 교체 + 기능 재검증 (2026-08-09) ✅ 완료
+
+[CONTEXT BRIDGE]
+plan_source: Stephen 순차 UI 지시(디자인 픽셀 조정) + 기능 재검증 요청
+핵심제약:
+  - 완료조건: /cms/mobile 두 FAB·목록보기 아이콘·대여목록카드 QR 아이콘·상세패널 QR 아이콘이
+    Stephen 제공 SVG로 전량 교체되고, 대여여정 스텝퍼 좌우 잘림 버그 근본 수정, 카드
+    상단바 배경/카드 간 여백이 지정 토큰·배수로 반영됨. QR 자동처리·수동버튼·알림발송
+    기능이 실제로 정상 연동되는지 코드 추적 기반 재검증.
+  - 금지사항: 요청 없는 로직 변경 금지(예: return_remind 자동화 cron 신설은 이번 범위 아님 —
+    검증 중 발견해 보고만 하고 미착수)
+  - 모킹 범위: 없음 (browser 사용 금지 원칙상 정적 코드 추적으로만 검증)
+TDD도메인: 없음 (GSD 도메인) — UI 토큰/아이콘 교체 + 기존 로직 정적 검증, 신규 RPC/DB 변경 없음
+절대금지:
+  - QR 자동처리 대상 상태(confirmed/return_requested) 판정 로직 임의 확장 금지
+  - RentalDetailPanel 데스크톱 두 화면(/cms/rentals, /cms/reservation) 영향 없는 상태 유지
+실패롤백:
+  - 해당 없음(순수 프레젠테이션 변경, 기능 로직 무변화)
+
+---
+- [x] /cms/mobile FAB 2종 아이콘 SVG 전량 교체 + 배경 원형색 #201857→#3B2F8A 조정 | GSD | 완료: 10분
+  - 파일: src/routes/cms/mobile/+page.svelte
+- [x] 목록보기/썸네일보기 툴바 아이콘 SVG 교체(원형 배지 스타일) | GSD | 완료: 5분
+  - 파일: src/routes/cms/mobile/+page.svelte
+- [x] RentalJourneyStepper 커넥터 아이콘 교체 + 좌우 잘림 버그 근본 수정 | GSD | 완료기준: 콘텐츠 overflow 시 justify-content:center로 인한 초기 스크롤 위치 오류(양끝 잘림) 재현 후 근본원인 특정 및 수정 | 완료: 20분
+  - 파일: src/lib/components/common/RentalJourneyStepper.svelte
+  - 근본원인: `justify-content: center` + `overflow-x: auto` 조합이 콘텐츠 overflow 시
+    좌우 균등하게 넘쳐 초기 scrollLeft가 중앙 근처로 잡히는 CSS 플렉스 버그
+  - 수정: `justify-content: safe center`(들어갈 땐 중앙, 넘칠 땐 자동 flex-start 폴백) +
+    `.step-connector` 높이를 `.step-dot-wrap`과 동일하게 맞추고 `align-items: flex-start`로
+    전환해 margin-bottom 수동보정 방식 대신 정확한 수평 중앙 정렬 구현
+- [x] 대여목록카드 QR 아이콘 + RentalDetailPanel 상품정보 QR 아이콘 SVG 2차 교체 + 크기 조정 + hover 인터랙션 | GSD | 완료: 15분
+  - 파일: src/routes/cms/mobile/rentals/+page.svelte, src/lib/components/cms/RentalDetailPanel.svelte
+  - 카드 QR 버튼: 36px→72px→50px(2배 후 30% 축소), hover 시 배경 퍼플/아이콘 흰색 전환 추가
+  - RentalDetailPanel QR 아이콘은 기존 18px 크기 유지, SVG만 교체
+- [x] 대여목록카드 상단바 배경 토큰 조정: purple 10% → gray 5%(rgba(16,11,50,0.05)) | GSD | 완료: 5분
+- [x] 대여목록카드 간 리스트 gap 12px → 24px(2배) | GSD | 완료: 3분
+- [x] QR 자동처리·수동버튼·알림발송 기능 정적 코드 재검증(Stephen 4개 항목 질의) | GSD | 완료: 15분
+  - ①QR 촬영→반출/반납 자동처리: `processRentalQrTransition()` 경유 정상 확인
+  - ②"방문 출고 처리" 버튼: `.btn-action`은 `nextStatus()` 기반 범용 버튼이라 "방문 반납 처리"도
+    이미 동일 버튼으로 동적 노출됨(추가 UI 불필요) — QR과 별도인 이유는 "QR 스캔 없는 빠른
+    현장 처리" 폴백으로 확인
+  - ③알림 발송 버튼: `shipment_notify` 등 4종은 상태전환 시 자동발송 정상이나, `return_remind`
+    ("반납 예정 알림")는 날짜 기준 자동발송 cron이 전혀 존재하지 않음(전체 마이그레이션 검색
+    결과 확인) — **BACKLOG 등록, 이번 세션 미착수**(위 채팅고도화 조사 항목 3과 동일 결론,
+    타 세션에서도 동일 갭 재확인됨)
+  - ④PC 반응형 동일성: RentalDetailPanel이 데스크톱·모바일 완전 동일 컴포넌트 공유 —
+    action-section/notify-section 로직은 구조적으로 100% 동일 보장
+
+svelte-check: 신규 에러 0건 (전 변경 파일 확인)
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+GATE E — @sp3-qa-agent 검수 결과 (2026-08-09)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+QA 종합: 통과 ✅ (경미 보완 권고 1건 — 차단 사유 아님)
+
+검수 결과:
+- 핸들러/aria 배선 유지: 통과 — 아이콘 SVG는 내부만 교체, onclick/aria-label/title 전부 원본 유지
+- RentalJourneyStepper 정렬 CSS 논리: 통과 — 모바일 35px/PC 42px 양쪽 브레이크포인트에서
+  .step-dot-wrap과 .step-connector 높이 일치 확인, flex-start 기준선에서 수평 중앙 정렬 정합
+- enableQrVerify 데스크톱 격리: 통과 — /cms/rentals, /cms/reservation 양쪽 여전히 prop 미전달 확인
+- 접근성(aria-hidden/aria-label): 통과
+- 기술부채(console.log/any/TODO): 0건, svelte-check 신규 에러 0건
+
+⚠️ 경미 보완 권고(선택, 차단 아님): SVG `fill` 하드코딩 hex(#3B2F8A 등)가 ui-mobile.md CSS 변수
+  원칙과 형식상 배치 — SVG 특성상 `currentColor` 우회가 필요해 즉시 조치 불필요, 추후 아이콘
+  컴포넌트 공통화 시 `style="color:var(--cs-purple)" fill="currentColor"` 패턴으로 통일 권장
+
+GATE E 통과 — 커밋은 Stephen이 직접 실행.
+
+## BACKLOG
+- return_remind(반납 예정 알림) 날짜 기준 자동발송 pg_cron 스케줄러 신설 — 타 세션 조사 결과와
+  중복 확인됨, Stephen 우선순위 판단 대기
+- SVG 아이콘 하드코딩 색상 → currentColor+CSS변수 패턴 통일 (선택, 차단 아님) — sp3-qa-agent 권고
+
+## 참고 — 플로팅 메뉴(.fab-group) 감쇠 스프링 바운스 표본 수치값 (2026-08-09, Stephen 요청 기록)
+
+⚠️ 정본 위치는 `.claude/rules/ui-mobile.md` "그룹형 플로팅 메뉴(.fab-group) 감쇠 스프링 바운스 표준"
+섹션으로 이관됨(Stephen 지시 — 표준 디자인 시스템 문서 우선 기록 원칙). 아래는 최초 작업 시점 기록.
+
+`/cms/mobile`, `/cms/mobile/rentals` 두 화면의 `.fab-group` 다운스크롤 팝아웃 애니메이션(`@keyframes fab-pop-out`)에
+적용된 물리 감쇠(damped spring) 표본값 — 향후 유사 바운스 UI 재사용 시 참고.
+(2026-08-09 후속: peek 방향에도 미세 감쇠 추가 + 양방향 duration 20% 단축 반영, ui-mobile.md 참고)
+
+```
+원리: 매 반동(overshoot)마다 진폭이 직전 대비 45~50%로 줄어들며 부호가 교대(+/-)되는
+      감쇠 진동(damped oscillation) 패턴을 8개 keyframe 스톱으로 근사.
+
+시작 진폭: peek 상태 이동값 = translateX(calc(50% + 20px))
+          = fab-group 너비(75px)의 50%(37.5px) + 20px = 57.5px
+
+keyframe  |  translateX  |  직전 대비 비율
+0%        |  +57.5px     |  (시작/release)
+28%       |  -21px       |  약 -37% (1차 오버슈트)
+46%       |  +10px       |  약 48%
+61%       |  -5px        |   50%
+73%       |  +2.5px      |   50%
+83%       |  -1.2px      |   48%
+91%       |  +0.6px      |   50%
+100%      |  0px         |  정지
+
+duration: 0.62s
+easing:   cubic-bezier(0.25, 0.1, 0.25, 1)  (표준 ease — 각 구간 감속감 유지)
+
+peek(숨김) 방향은 대비를 위해 별도로 오버슈트 없는 transition: transform 0.28s ease-out 사용.
+```
+
+파일: src/routes/cms/mobile/+page.svelte, src/routes/cms/mobile/rentals/+page.svelte

@@ -199,7 +199,7 @@ pickup     : 19:00 마감 표시
 
 ## GNB 모바일 레이아웃 원칙
 
-> 확정 기준: 2026-06-28 피그마 시안 반영
+> 확정 기준: 2026-08-10 구현값 반영 (GNB.svelte 정본)
 
 ```
 모바일 GNB: position: fixed + background: transparent
@@ -207,6 +207,38 @@ pickup     : 19:00 마감 표시
 - 콘텐츠는 top: 0 기준 시작 — GNB 높이만큼 padding 보정 금지
 - 래퍼: pointer-events: none / nav 자체: pointer-events: all
 ```
+
+### 모바일 GNB nav 확정값
+
+| 속성 | 값 | 비고 |
+|---|---|---|
+| height | **61px** | 고정값 |
+| border-radius | **22px** | pill 형태 |
+| background | **#1d183e** | 다크 네이비 |
+| padding | **0 20px** | 좌우 여백 |
+| overflow | **visible** | BI 상하 넘침 허용 |
+
+### 모바일 BI 로고 확정값
+
+| 속성 | 값 | 비고 |
+|---|---|---|
+| width | **117px** | GNB 기준 +10% |
+| height | **72px** | GNB(61px) 상하 ~5.5px 넘침 |
+| transform | **translateY(-3px)** | 5% 상향 배치 |
+
+> BI는 GNB 상하를 의도적으로 벗어남 (브랜드 강조). `overflow: visible` 필수.
+
+### 모바일 아바타 버튼 확정값
+
+| 속성 | 값 | 비고 |
+|---|---|---|
+| width / height | **40px** | 터치타겟 최소값 |
+| border-radius | **50%** | 완전 원형 |
+| background | **rgba(85, 63, 224, 0.60)** | --cs-purple-light 60% 불투명 |
+| 이니셜 컬러 | **#ffffff** | 흰색 고정 |
+| font-size | **18px** | Bold, uppercase |
+
+> 아바타 BG 60% 투명도: GNB 다크 배경이 옅게 비춰 경계면 자연스럽게 혼합.
 
 ```css
 /* ✅ 모바일 GNB 필수 패턴 */
@@ -218,7 +250,26 @@ pickup     : 19:00 마감 표시
   pointer-events: none;
 }
 .gnb-mobile-nav {
+  height: 61px;
+  border-radius: 22px;
+  background: #1d183e;
+  padding: 0 20px;
+  overflow: visible;   /* BI 상하 넘침 허용 */
   pointer-events: all;
+}
+.gnb-logo-mobile {
+  width: 117px;
+  height: 72px;
+  transform: translateY(-3px);  /* 5% 상향 배치 */
+}
+.gnb-avatar-btn {
+  width: 40px; height: 40px;
+  min-width: 40px; min-height: 40px;
+}
+.gnb-avatar-btn-initial {
+  background: rgba(85, 63, 224, 0.60);
+  border-radius: 50%;
+  color: #ffffff;
 }
 
 /* ❌ 절대 금지 */
@@ -374,27 +425,60 @@ SubGnb       : PC SubGnb 래퍼에 동일 패턴 적용 (sticky top 연동)
 
 ## FloatingBar 모바일 인터랙션 원칙
 
-> 확정 기준: 2026-06-28
+> 확정 기준: 2026-08-10 구현값 반영 (FloatingBar.svelte 정본)
 
-### FAB 아이콘 크기 (모바일 기준)
+### FAB 아이콘 크기 확정값
+
+| 버튼 | 모바일 (< 640px) | PC (≥ 640px) | 비고 |
+|---|---|---|---|
+| 장바구니 · 검색 | **55 × 55px** | 40 × 40px | SVG 크기 |
+| 채팅 FAB | **70 × 70px** | 70 × 70px | FloatingButton.svelte 내부 — 변경 금지 |
+
+### 위치 확정값
+
 ```
-장바구니·검색: 55px × 55px
-채팅 FAB:      70px × 70px (FloatingButton.svelte 내부 — 강조 의도, 변경 금지)
+position: fixed
+right:  24px
+bottom: 100px
+z-index: 200
+flex-direction: column
+gap: 10px
 ```
 
-### Peek & Expand 인터랙션
+### Peek & Expand 인터랙션 확정값
+
 ```
-Peek 상태 (기본): transform: translateX(calc(50% + 24px))
+Peek 상태 (기본): transform: translateX(calc(50% + 15px))
   → 진입 조건: 페이지 로드 / 라우트 변경 / 스크롤 발생
 
 Expand 상태: transform: translateX(0)
-  → 진입 조건: 플로팅 바 탭
+  → 진입 조건: FAB 바 탭
 
-트랜지션: 0.42s cubic-bezier(0.34, 1.28, 0.64, 1)  ← 스프링 바운스
-버블 애니메이션: scale 1.12 최대, 0.32s ease-out
+트랜지션: 0.42s cubic-bezier(0.34, 1.28, 0.64, 1)  ← 스프링 바운스 (< 640px 전용)
+```
+
+### 버블 애니메이션 확정값 (Expand 시 아이콘 반응)
+
+```css
+@keyframes fab-expand-bubble {
+  0%   { transform: scale(1); }
+  40%  { transform: scale(1.12); }   /* 최대 오버슈트 */
+  70%  { transform: scale(0.96); }   /* 언더슈트 */
+  100% { transform: scale(1); }
+}
+/* duration: 0.32s ease-out | .fab-bar.bubbling .fab-btn svg 에 적용 */
+```
+
+### 버튼 인터랙션 확정값
+
+```css
+.fab-btn:hover  { transform: scale(1.07); }
+.fab-btn:active { transform: scale(0.95); }
+filter: drop-shadow(0 4px 10px rgba(16, 11, 50, 0.22));
 ```
 
 ### ⚠️ CSS transform + position:fixed 충돌 규칙
+
 ```
 transform이 적용된 조상 내 position:fixed 자식 → 뷰포트 기준 배치 무효화
 → peek 상태(transform 활성) 중 fixed 모달(바텀시트) 열기 금지
@@ -402,6 +486,56 @@ transform이 적용된 조상 내 position:fixed 자식 → 뷰포트 기준 배
 해결: peek 상태에서 FloatingButton wrapper에 pointer-events:none 적용
      확장(transform 해제) 후에만 바텀시트 열기 허용
 ```
+
+---
+
+## 그룹형 플로팅 메뉴(.fab-group) 감쇠 스프링 바운스 표준
+
+> 확정 기준: 2026-08-09 | 적용 화면: `/cms/mobile`, `/cms/mobile/rentals` (다중 FAB을 하나의
+> 세로 그룹으로 묶어 스크롤 방향에 따라 peek/expand 하는 패턴)
+
+### 스크롤 방향 트리거
+```
+업스크롤   → peek(절반 숨김): transform: translateX(calc(50% + 20px))
+다운스크롤 → expand(팝아웃):  transform: translateX(0)
+```
+
+### 표본 수치값(감쇠 스프링 물리) — 재사용 시 이 값을 기준으로 삼을 것
+
+```
+원리: 매 반동(overshoot)마다 진폭이 직전 대비 45~50%로 줄어들며 부호가 교대(+/-)되는
+      감쇠 진동(damped oscillation)을 keyframe 스톱으로 근사.
+
+시작 진폭: peek 이동값 = translateX(calc(50% + 20px))
+          = fab-group 너비(75px)의 50%(37.5px) + 20px = 57.5px
+
+[Expand — 다운스크롤, 팝아웃] @keyframes fab-pop-out
+  0%    +57.5px   (peek 위치에서 시작)
+  28%   -21px     (1차 오버슈트, 진폭 대비 약 -37%)
+  46%   +10px     (직전 대비 약 48%)
+  61%   -5px      (50%)
+  73%   +2.5px    (50%)
+  83%   -1.2px    (48%)
+  91%   +0.6px    (50%)
+  100%  0px       (정지)
+  duration: 0.5s (기준 0.62s에서 20% 단축)
+  easing:   cubic-bezier(0.25, 0.1, 0.25, 1)
+
+[Peek — 업스크롤, 절반 숨김] @keyframes fab-peek-in — 미세 감쇠(팝아웃보다 진폭 작게)
+  0%    0px
+  55%   65px      (목표 57.5px 대비 +13% 오버슈트)
+  78%   53px      (목표 대비 -8% 언더슈트)
+  92%   58.5px    (목표 대비 +1.7%)
+  100%  57.5px = calc(50% + 20px)  (정지)
+  duration: 0.22s (기준 0.28s에서 20% 단축)
+  easing:   cubic-bezier(0.25, 0.1, 0.25, 1)
+
+양방향 모두 animation-fill-mode: forwards 필수(애니메이션 종료 후 되튐 방지).
+```
+
+> 재사용 규칙: 새로운 그룹형 FAB에 동일 패턴을 적용할 때는 이 표의 비율(진폭 감쇠율 45~50%,
+> peek 오버슈트 +13%/-8%/+1.7%)을 그대로 유지하고, 그룹 너비·이동거리(px)만 대상 컴포넌트
+> 크기에 맞게 재계산할 것 — 감쇠율 자체를 임의로 바꾸지 않는다.
 
 ---
 

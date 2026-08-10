@@ -47,7 +47,7 @@
   <div class="mob-topbar-wrap">
     <header class="mob-gnb">
       <a href="/cms/mobile" class="mob-gnb-brand" aria-label="CRAZYSHOT 현장앱 홈">
-        <img src="/logo-bi2.svg" alt="CRAZYSHOT" class="mob-gnb-logo-img" width="100" height="62" />
+        <img src="/logo-bi2.svg" alt="CRAZYSHOT" class="mob-gnb-logo-img" width="117" height="72" />
       </a>
       <button
         type="button"
@@ -112,9 +112,10 @@
     align-items: center;
     justify-content: space-between;
     padding: 0 20px;
-    height: 62px;
-    background: var(--cs-dark);
-    border-radius: var(--radius-xl);
+    height: 61px;
+    background: #1d183e;
+    border-radius: 22px;
+    overflow: visible;
   }
 
   .mob-gnb-brand {
@@ -126,17 +127,20 @@
 
   .mob-gnb-logo-img {
     display: block;
-    width: 100px;
-    height: auto;
+    width: 117px;
+    height: 72px;
+    transform: translateY(-3px);
   }
 
-  /* 아바타 이니셜 배지 — GNB.svelte .gnb-avatar-initial 표준 재사용 */
+  /* 아바타 이니셜 배지 — ui-mobile.md GNB 모바일 레이아웃 원칙 확정값 적용 */
   .mob-gnb-avatar {
-    width: 44px;
-    height: 44px;
-    border-radius: var(--radius-full);
-    background: var(--cs-purple-pale);
-    color: var(--cs-dark);
+    width: 40px;
+    height: 40px;
+    min-width: 40px;
+    min-height: 40px;
+    border-radius: 50%;
+    background: rgba(85, 63, 224, 0.60);
+    color: #ffffff;
     border: none;
     font-family: var(--font-en-display);
     font-size: 18px;
