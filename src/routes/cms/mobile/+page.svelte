@@ -3,6 +3,7 @@
   import { browser } from '$app/environment'
   import { matchesSearch } from '$lib/utils/chosungSearch'
   import { extractProductId } from '$lib/utils/qrProductId'
+  import { scrollPeek } from '$lib/utils/scrollPeek'
   import ChevronIcon from '$lib/components/common/ChevronIcon.svelte'
   import QrScannerOverlay from '$lib/components/common/QrScannerOverlay.svelte'
   import type { PageData } from './$types'
@@ -81,6 +82,9 @@
   // ── QR 스캐너 ──────────────────────────────────────────
   let showQrScanner = $state(false)
 
+  // 플로팅 메뉴 스크롤 인터랙션 — 업스크롤 시 절반 숨김, 다운스크롤 시 튀어나오며 노출
+  let fabPeek = $state(false)
+
   function handleQrDetected(raw: string): boolean {
     const id = extractProductId(raw)
     if (!id) return false
@@ -130,10 +134,10 @@
         title="목록보기"
       >
         <svg xmlns="http://www.w3.org/2000/svg" width="30" height="30" viewBox="0 0 30 30" fill="none" aria-hidden="true">
-          <rect width="30" height="30" rx="15" fill={viewMode === 'list' ? 'rgba(59,47,138,0.08)' : '#F6F6F6'}/>
-          <path d="M9 10h12M9 15h12M9 20h12"
+          <circle cx="15" cy="15" r="15" fill={viewMode === 'list' ? '#C1BBEC' : '#F6F6F6'}/>
+          <path d="M10 12H20.5M10 18.7778H16.5"
             stroke={viewMode === 'list' ? '#3B2F8A' : '#AAAAAA'}
-            stroke-width="2" stroke-linecap="round"/>
+            stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>
         </svg>
       </button>
       <button
@@ -145,15 +149,9 @@
         title="썸네일형 병렬보기"
       >
         <svg xmlns="http://www.w3.org/2000/svg" width="30" height="30" viewBox="0 0 30 30" fill="none" aria-hidden="true">
-          <rect width="30" height="30" rx="15" fill={viewMode === 'grid' ? 'rgba(59,47,138,0.08)' : '#F6F6F6'}/>
-          <rect x="9" y="9" width="5" height="5" rx="1"
-            stroke={viewMode === 'grid' ? '#3B2F8A' : '#AAAAAA'} stroke-width="2"/>
-          <rect x="16" y="9" width="5" height="5" rx="1"
-            stroke={viewMode === 'grid' ? '#3B2F8A' : '#AAAAAA'} stroke-width="2"/>
-          <rect x="9" y="16" width="5" height="5" rx="1"
-            stroke={viewMode === 'grid' ? '#3B2F8A' : '#AAAAAA'} stroke-width="2"/>
-          <rect x="16" y="16" width="5" height="5" rx="1"
-            stroke={viewMode === 'grid' ? '#3B2F8A' : '#AAAAAA'} stroke-width="2"/>
+          <circle cx="15" cy="15" r="15" fill={viewMode === 'grid' ? '#C1BBEC' : '#F6F6F6'}/>
+          <rect x="6" y="11" width="8" height="8" rx="2.5" fill={viewMode === 'grid' ? '#3B2F8A' : '#AAAAAA'}/>
+          <rect x="16" y="11" width="8" height="8" rx="2.5" fill={viewMode === 'grid' ? '#3B2F8A' : '#AAAAAA'}/>
         </svg>
       </button>
     </div>
@@ -229,39 +227,38 @@
   {/if}
 </div>
 
-<!-- 대여목록 FAB (카메라 FAB 위, 하단 우측 고정) -->
-<button
-  type="button"
-  class="rental-list-fab"
-  onclick={() => goto('/cms/mobile/rentals')}
-  aria-label="대여 목록"
-  title="대여 목록"
->
-  <svg width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
-    <rect x="4" y="3" width="16" height="18" rx="2" stroke="currentColor" stroke-width="1.8"/>
-    <path d="M8 8h8M8 12h8M8 16h5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
-  </svg>
-</button>
+<!-- 플로팅 아이콘 메뉴 그룹 (대여목록 + 카메라, 하단 우측 고정) -->
+<div class="fab-group" class:peek={fabPeek} use:scrollPeek={(v) => (fabPeek = v)}>
+  <button
+    type="button"
+    class="rental-list-fab"
+    onclick={() => goto('/cms/mobile/rentals')}
+    aria-label="대여 목록"
+    title="대여 목록"
+  >
+    <svg xmlns="http://www.w3.org/2000/svg" width="75" height="75" viewBox="0 0 50 50" fill="none" aria-hidden="true">
+      <circle cx="25" cy="25" r="25" fill="#3B2F8A"/>
+      <g transform="translate(16.5, 13.5)">
+        <path d="M5.50195 0.552734V0H11.4268V0.552734C11.4269 0.0478777 11.4273 0.00376604 11.4277 0H11.4521C11.4617 0.000207732 11.4733 0.000442309 11.4854 0.000976562C11.5102 0.0020945 11.5413 0.00449327 11.5762 0.0078125C11.6461 0.0144915 11.7373 0.0265941 11.8418 0.0498047C12.0492 0.0959336 12.3309 0.18971 12.6162 0.379883C13.0867 0.693805 13.4563 1.19576 13.6133 1.9043C14.1644 1.95503 14.5826 2.04988 14.9473 2.23047C15.6296 2.56854 16.1845 3.10811 16.5322 3.77148C16.9275 4.52581 16.9277 5.51345 16.9277 7.48828V16.5166C16.9277 18.4914 16.9275 19.4791 16.5322 20.2334C16.1845 20.8969 15.6297 21.4363 14.9473 21.7744C14.1714 22.1587 13.1553 22.1592 11.124 22.1592H5.80371C3.77246 22.1592 2.75635 22.1588 1.98047 21.7744C1.29818 21.4363 0.743199 20.8968 0.395508 20.2334C0.000285467 19.4791 7.97912e-10 18.4913 0 16.5166V7.48828C1.06551e-08 5.51345 0.000185887 4.52581 0.395508 3.77148C0.743212 3.10806 1.29813 2.56857 1.98047 2.23047C2.34492 2.04993 2.7628 1.95507 3.31348 1.9043C3.47046 1.19536 3.8417 0.693827 4.3125 0.379883C4.59801 0.189565 4.87948 0.095915 5.08691 0.0498047C5.19155 0.0265825 5.28265 0.0144769 5.35254 0.0078125C5.38751 0.00448526 5.41847 0.00208781 5.44336 0.000976562C5.45551 0.000442312 5.46699 0.000207629 5.47656 0H5.50098C5.50145 0.00462108 5.50179 0.0532855 5.50195 0.552734ZM4.83594 15.6426C4.14581 15.6428 3.58602 16.2024 3.58594 16.8926C3.58595 17.5828 4.14576 18.1424 4.83594 18.1426H8.46289C9.15324 18.1426 9.71288 17.5829 9.71289 16.8926C9.7128 16.2023 9.15319 15.6426 8.46289 15.6426H4.83594ZM4.83594 10.752C4.14597 10.7522 3.58628 11.312 3.58594 12.002C3.58594 12.6922 4.14575 13.2518 4.83594 13.252H12.0908C12.781 13.2518 13.3408 12.6922 13.3408 12.002C13.3405 11.312 12.7808 10.7521 12.0908 10.752H4.83594ZM4.83594 5.8623C4.14581 5.86251 3.58602 6.42215 3.58594 7.1123C3.58594 7.80254 4.14575 8.3621 4.83594 8.3623H12.0908C12.781 8.36214 13.3408 7.80256 13.3408 7.1123C13.3407 6.42212 12.781 5.86247 12.0908 5.8623H4.83594Z" fill="white"/>
+      </g>
+    </svg>
+  </button>
 
-<!-- 카메라 FAB (하단 우측 고정) -->
-<button
-  type="button"
-  class="qr-fab"
-  onclick={() => (showQrScanner = true)}
-  aria-label="QR 코드 스캔"
-  title="상품 QR 스캔"
->
-  <svg width="28" height="28" viewBox="0 0 28 28" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
-    <!-- 카메라 본체 -->
-    <rect x="2" y="7" width="24" height="17" rx="3" fill="none" stroke="currentColor" stroke-width="2"/>
-    <!-- 렌즈 -->
-    <circle cx="14" cy="15.5" r="5" fill="none" stroke="currentColor" stroke-width="2"/>
-    <!-- 뷰파인더 -->
-    <rect x="10" y="4" width="8" height="3" rx="1.5" fill="currentColor"/>
-    <!-- QR 힌트 점 -->
-    <circle cx="6" cy="11" r="1.2" fill="currentColor"/>
-  </svg>
-</button>
+  <button
+    type="button"
+    class="qr-fab"
+    onclick={() => (showQrScanner = true)}
+    aria-label="QR 코드 스캔"
+    title="상품 QR 스캔"
+  >
+    <svg xmlns="http://www.w3.org/2000/svg" width="75" height="75" viewBox="0 0 50 50" fill="none" aria-hidden="true">
+      <circle cx="25" cy="25" r="25" fill="#3B2F8A"/>
+      <g transform="translate(14.6, 17)">
+        <path d="M16.8008 0C19.0097 0.000212977 20.8008 1.79099 20.8008 4V12C20.8008 14.209 19.0097 15.9998 16.8008 16H4C1.79104 15.9998 0 14.209 0 12V4C0 1.79099 1.79104 0.000211051 4 0H16.8008ZM10.4004 4C8.19137 4 6.40059 5.79103 6.40039 8C6.4006 10.209 8.19138 12 10.4004 12C12.6094 12 14.4002 10.209 14.4004 8C14.4002 5.79103 12.6094 4 10.4004 4ZM16.8008 2.40039C15.9172 2.40039 15.2004 3.11651 15.2002 4C15.2004 4.88348 15.9173 5.60059 16.8008 5.60059C17.6841 5.60038 18.4002 4.88335 18.4004 4C18.4002 3.11664 17.6841 2.4006 16.8008 2.40039Z" fill="white"/>
+      </g>
+    </svg>
+  </button>
+</div>
 
 <QrScannerOverlay
   bind:open={showQrScanner}
@@ -319,7 +316,7 @@
     display: flex;
     align-items: center;
     justify-content: space-between;
-    padding: 14px 21px 0;
+    padding: 28px 21px 0;
   }
 
   .toolbar-btn {
@@ -339,16 +336,16 @@
   .toolbar-view-group {
     display: flex;
     align-items: center;
-    gap: 6px;
+    gap: 12px;
   }
 
   .product-list {
     list-style: none;
-    margin: 22px 0 0;
+    margin: 44px 0 0;
     padding: 0 12px 54px;
     display: flex;
     flex-direction: column;
-    gap: 14px;
+    gap: 28px;
   }
 
   /* 썸네일형 병렬보기 (가로 최대 2개) */
@@ -469,47 +466,59 @@
     flex-shrink: 0;
   }
 
-  /* ── QR FAB ── */
-  .qr-fab {
+  /* ── QR FAB — 아이콘 SVG 자체에 원형 배경(#3B2F8A) 포함, 버튼은 크기·위치만 담당 ── */
+  /* ── 플로팅 아이콘 메뉴 그룹 — 흰 캡슐 배경으로 두 FAB을 하나의 레이아웃으로 묶음 ── */
+  .fab-group {
     position: fixed;
     bottom: 24px;
     right: 20px;
     z-index: 100;
-    width: 56px;
-    height: 56px;
-    border-radius: var(--radius-full);
-    background: var(--cs-purple);
-    color: var(--cs-white);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 16px; /* 기존 8px의 2배 */
+    transform: translateX(0);
+  }
+  /* 업스크롤 → peek(절반 숨김, 미세 감쇠) / 다운스크롤 → expand(팝아웃, 감쇠 스프링)
+   * 표본 수치값 정본: .claude/rules/ui-mobile.md "그룹형 플로팅 메뉴(.fab-group) 감쇠
+   * 스프링 바운스 표준" 참고 — duration은 기준값 대비 20% 단축(0.62s→0.5s, 0.28s→0.22s) */
+  .fab-group:not(.peek) {
+    animation: fab-pop-out 0.5s cubic-bezier(0.25, 0.1, 0.25, 1) forwards;
+  }
+  .fab-group.peek {
+    animation: fab-peek-in 0.22s cubic-bezier(0.25, 0.1, 0.25, 1) forwards;
+  }
+  @keyframes fab-pop-out {
+    0%   { transform: translateX(calc(50% + 20px)); }
+    28%  { transform: translateX(-21px); }
+    46%  { transform: translateX(10px); }
+    61%  { transform: translateX(-5px); }
+    73%  { transform: translateX(2.5px); }
+    83%  { transform: translateX(-1.2px); }
+    91%  { transform: translateX(0.6px); }
+    100% { transform: translateX(0); }
+  }
+  @keyframes fab-peek-in {
+    0%   { transform: translateX(0); }
+    55%  { transform: translateX(65px); }
+    78%  { transform: translateX(53px); }
+    92%  { transform: translateX(58.5px); }
+    100% { transform: translateX(calc(50% + 20px)); }
+  }
+
+  .qr-fab,
+  .rental-list-fab {
+    width: 75px;
+    height: 75px;
+    padding: 0;
+    background: none;
     border: none;
     cursor: pointer;
     display: flex;
     align-items: center;
     justify-content: center;
-    box-shadow: 0 4px 16px rgba(59,47,138,0.35);
-    transition: background 0.15s, transform 0.15s;
+    transition: transform 0.15s;
   }
-  .qr-fab:hover   { background: var(--cs-purple-hover); transform: scale(1.06); }
-  .qr-fab:active  { transform: scale(0.96); }
-
-  /* ── 대여목록 FAB (카메라 FAB보다 가벼운 시각적 무게: 흰 배경 + 퍼플 아웃라인) ── */
-  .rental-list-fab {
-    position: fixed;
-    bottom: 96px; /* 24px(qr-fab bottom) + 56px(qr-fab height) + 16px gap */
-    right: 20px;
-    z-index: 100;
-    width: 56px;
-    height: 56px;
-    border-radius: var(--radius-full);
-    background: var(--cs-white);
-    color: var(--cs-purple);
-    border: 1.5px solid var(--cs-purple);
-    cursor: pointer;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    box-shadow: 0 2px 8px rgba(16,11,50,0.12);
-    transition: background 0.15s, transform 0.15s;
-  }
-  .rental-list-fab:hover  { background: var(--cs-purple-pale); transform: scale(1.06); }
-  .rental-list-fab:active { transform: scale(0.96); }
+  .qr-fab:hover, .rental-list-fab:hover   { transform: scale(1.06); }
+  .qr-fab:active, .rental-list-fab:active { transform: scale(0.96); }
 </style>
