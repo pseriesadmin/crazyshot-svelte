@@ -1012,6 +1012,10 @@ export const actions: Actions = {
           p_parent_product_id: rootProductId,
         })
         if (codeErr) {
+          // 순번 상한(max_sequence_exceeded): 재시도 없이 즉시 실패 반환 — 이 부모의 자식을 더 생성할 수 없음
+          if (codeErr.message?.includes('max_sequence_exceeded')) {
+            return fail(400, { error: `재고 순번 상한에 도달했습니다. 코드설정에서 해당 조합코드의 순번2(자식) 상한을 늘려주세요.` })
+          }
           // products.md §2-3: 모든 재고는 생성과 동시에 품번(QR 콘텐츠)을 반드시 가져야 함 —
           // 일시적 오류(락 경합 등) 대비 1회 재시도 후에도 실패하면 경고로 알림
           ;({ error: codeErr } = await admin.rpc('generate_inventory_product_code', {
@@ -1019,7 +1023,12 @@ export const actions: Actions = {
             p_parent_product_id: rootProductId,
           }))
         }
-        if (codeErr) invWarnings.push(`${i}번째 재고 품번 발행 실패 (수동 확인 필요)`)
+        if (codeErr) {
+          if (codeErr.message?.includes('max_sequence_exceeded')) {
+            return fail(400, { error: `재고 순번 상한에 도달했습니다. 코드설정에서 해당 조합코드의 순번2(자식) 상한을 늘려주세요.` })
+          }
+          invWarnings.push(`${i}번째 재고 품번 발행 실패 (수동 확인 필요)`)
+        }
 
         if (sourcePriceRulesInv && sourcePriceRulesInv.length > 0) {
           const { error: priceErr } = await admin.from('price_rules').insert(

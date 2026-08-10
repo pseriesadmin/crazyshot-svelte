@@ -4,7 +4,7 @@
   import { csToast } from '$lib/utils/toast'
   import type { PageData, ActionData } from './$types'
   import type { MappingGroup, MappingItem, TaxonomyCode, CodeFormat } from './+page.server'
-  import { ROOT_COLORS, buildPreview } from './_shared'
+  import { ROOT_COLORS, datePart } from './_shared'
 
   interface Props { data: PageData; form: ActionData }
   let { data, form }: Props = $props()
@@ -22,6 +22,8 @@
   let deletingComboRowId = $state<string | null>(null)
   let deletingItemId     = $state<string | null>(null)
   let deletingPickerId   = $state<string | null>(null)
+  // 조합 삭제 안전장치: 1차 클릭 = 경고 토스트만, 같은 조합에 2차 클릭해야 실제 삭제(CMS 표준 패턴)
+  let comboDeleteConfirm = $state<string | null>(null)
 
   // 카테고리 키 정규화: 공백→하이픈, 10자 이내, 소문자 영문·숫자·_·- 만 허용
   function sanitizeCategoryKey(raw: string): string {
@@ -147,15 +149,29 @@
       ...data.codeFormat,
       ...(rootRule?.prefix ? { prefix: rootRule.prefix as string } : {}),
       date_format,
-      ...(lead.max_sequence ? { seq_digits: String(lead.max_sequence).length } : {}),
+      ...(lead.parent_max_sequence && lead.max_sequence
+        ? { seq_digits: String(lead.parent_max_sequence).length + String(lead.max_sequence).length }
+        : lead.max_sequence
+        ? { seq_digits: String(lead.max_sequence).length }
+        : {}),
     }
   }
 
+  // 이 미리보기는 상품의 "기준 코드구조"(포맷)만 노출하는 용도 — 실제 채번은 부모 등록(순번1)
+  // 또는 빠른 재고등록(순번2) 시점에만 일어나므로, 여기서 특정 숫자를 미리 채번한 것처럼
+  // 보여줄 이유가 없다. 순번 자리는 전부 0으로 표시한다.
   function buildComboPreview(items: MappingItem[], lead: MappingItem): string {
     const catCode = comboCatCode(items)
     if (!catCode) return '—'
     const fmt = comboPreviewFmt(items, lead)
-    return buildPreview(catCode, fmt)
+    const prefix = (fmt.prefix ?? 'CS').trim().toUpperCase()
+    const dateFormat = fmt.date_format ?? 'YYMM'
+    const suffix = (fmt.suffix ?? '').trim().toUpperCase()
+    const d = dateFormat === 'NONE' ? '' : datePart(dateFormat)
+    const seqPlaceholder = (lead.parent_max_sequence && lead.max_sequence)
+      ? '0'.repeat(String(lead.parent_max_sequence).length) + '0'.repeat(String(lead.max_sequence).length)
+      : '0'.repeat(fmt.seq_digits || 3)
+    return `${prefix || 'CS'}${catCode.trim().toUpperCase()}${d}${seqPlaceholder}${suffix}`
   }
 
   // 조합행 코드명·키워드 임시 state (combo_row_id → 값)
@@ -165,14 +181,18 @@
   // 편집 모드 state
   let comboEditSet     = $state<Record<string, boolean>>({})
   let comboDateOptMap  = $state<Record<string, string>>({})
-  let comboSeqMap      = $state<Record<string, string>>({})
+  let comboSeqMap        = $state<Record<string, string>>({})
+  let comboParentSeqMap  = $state<Record<string, string>>({})
+  let comboShowParentSeq = $state<Record<string, boolean>>({})
 
   // 그룹 변경 시 임시 state 초기화
   $effect(() => {
     if (selectedId) {
       comboKwsMap = {}; comboKwInMap = {}; comboNameMap = {}
       comboEditSet = {}; comboDateOptMap = {}; comboSeqMap = {}
+      comboParentSeqMap = {}; comboShowParentSeq = {}
       activeComboId = null
+      comboDeleteConfirm = null
     }
   })
 
@@ -197,15 +217,20 @@
     comboNameMap    = { ...comboNameMap,    [rowId]: lead.combo_name ?? '' }
     comboKwsMap     = { ...comboKwsMap,     [rowId]: [...(lead.combo_keywords ?? [])] }
     comboDateOptMap = { ...comboDateOptMap, [rowId]: lead.date_option }
-    comboSeqMap     = { ...comboSeqMap,     [rowId]: String(lead.max_sequence ?? '') }
+    comboSeqMap        = { ...comboSeqMap,        [rowId]: String(lead.max_sequence ?? '') }
+    comboParentSeqMap  = { ...comboParentSeqMap,  [rowId]: String(lead.parent_max_sequence ?? '') }
+    comboShowParentSeq = { ...comboShowParentSeq, [rowId]: lead.parent_max_sequence !== null }
   }
   function exitComboEdit(rowId: string) {
     const e = { ...comboEditSet };    delete e[rowId];    comboEditSet    = e
     const n = { ...comboNameMap };    delete n[rowId];    comboNameMap    = n
     const k = { ...comboKwsMap };     delete k[rowId];    comboKwsMap     = k as Record<string, string[]>
     const d = { ...comboDateOptMap }; delete d[rowId];    comboDateOptMap = d
-    const s = { ...comboSeqMap };     delete s[rowId];    comboSeqMap     = s
-    const i = { ...comboKwInMap };    delete i[rowId];    comboKwInMap    = i
+    const s = { ...comboSeqMap };        delete s[rowId]; comboSeqMap        = s
+    const i = { ...comboKwInMap };       delete i[rowId]; comboKwInMap       = i
+    const p = { ...comboParentSeqMap };  delete p[rowId]; comboParentSeqMap  = p
+    const q = { ...comboShowParentSeq }; delete q[rowId]; comboShowParentSeq = q
+    if (comboDeleteConfirm === rowId) comboDeleteConfirm = null
   }
 
   function cancelActiveCombo() {
@@ -551,57 +576,91 @@
             <p class="empty-codes">아래 피커에서 '+ 새 조합' 후 코드를 추가하세요.</p>
           {:else}
             <div class="combo-rows">
+              <!-- 빈 조합 행: activeComboId가 새로 생성되었지만 아직 코드 미추가 — 목록 최상단 배치 -->
+              {#if activeComboId && !combos.some(c => c.combo_row_id === activeComboId)}
+                <div class="combo-row combo-row-active combo-row-pending">
+                  <div class="combo-chips">
+                    <span class="combo-pending-hint">아래 코드분류 목록 중 선택하세요.</span>
+                  </div>
+                  <button
+                    type="button"
+                    class="combo-rm"
+                    onclick={cancelActiveCombo}
+                    aria-label="새 조합 취소"
+                  >×</button>
+                </div>
+              {/if}
+
               {#each combos as combo (combo.combo_row_id)}
                 {@const leadItem = combo.items[0]}
                 {@const isActiveCurrent = activeComboId === combo.combo_row_id}
-                <div class="combo-row" class:combo-row-active={isActiveCurrent}>
+                {@const isEditingCombo = comboEditSet[combo.combo_row_id] || isActiveCurrent}
+                {@const isNewUnsavedCombo = isActiveCurrent && !comboEditSet[combo.combo_row_id]}
+                <div class="combo-row" class:combo-row-active={isActiveCurrent} class:combo-row-editing={isEditingCombo}>
 
-                  <!-- 코드 칩 목록 (대분류→중분류→소분류 순) -->
-                  <div class="combo-chips">
-                    {#if isActiveCurrent}
-                      <span class="combo-building-badge">● 조합 중</span>
-                    {/if}
-                    {#each combo.items as item, i}
-                      {@const tc = (data.codes as TaxonomyCode[]).find(c => c.id === item.taxonomy_code_id)}
-                      {#if tc}
-                        {#if i > 0}<span class="combo-sep">+</span>{/if}
-                        {#if isActiveCurrent}
-                          <form method="POST" action="?/removeComboItem" use:enhance={() => {
-                            deletingItemId = item.id
-                            return async ({ update }) => { await update(); deletingItemId = null }
-                          }} class="chip-rm-form">
-                            <input type="hidden" name="id" value={item.id} />
-                            <button
-                              type="submit"
-                              class="combo-chip combo-chip-rm"
-                              class:combo-chip-deleting={deletingItemId === item.id}
-                              style="background:{rootColor(tc)}20; color:{rootColor(tc)}; border-color:{rootColor(tc)}60"
-                              title="{tc.name} 제거"
-                              disabled={deletingItemId === item.id}
-                            >{#if deletingItemId === item.id}<span class="chip-spinner"></span>{:else}{tc.code} <span class="chip-rm-x">×</span>{/if}</button>
-                          </form>
-                        {:else}
-                          <span
-                            class="combo-chip"
-                            style="background:{rootColor(tc)}20; color:{rootColor(tc)}; border-color:{rootColor(tc)}40"
-                            title="{tc.name} ({tc.code_tier ?? '미분류'})"
-                          >{tc.code}</span>
+                  {#if isEditingCombo}
+                    <!-- 상단 독립 행: 항상 닫기(✕, 저장 없이 편집만 종료 — 비파괴, 새/기존 조합 공통).
+                         실제 삭제는 하단 "삭제" 버튼에서만 별도로 수행(오조작 방지 + 명시적 삭제 동선 확보). -->
+                    <div class="cc-del-row">
+                      <button
+                        type="button"
+                        class="close-btn"
+                        aria-label="편집 닫기"
+                        title="편집 닫기 (저장하지 않음)"
+                        onclick={() => { exitComboEdit(combo.combo_row_id); activeComboId = null }}
+                      >✕</button>
+                    </div>
+                  {/if}
+
+                  <!-- 중간 행: 코드 칩 + 설정 필드를 한 행으로 결합(공간 부족 시에만 자동 줄바꿈) -->
+                  <div class="combo-main-line">
+
+                    <!-- 코드 칩 목록 (대분류→중분류→소분류 순) -->
+                    <div class="combo-chips">
+                      {#if isActiveCurrent}
+                        <span class="combo-building-badge">● 조합 중</span>
+                      {/if}
+                      {#each combo.items as item, i}
+                        {@const tc = (data.codes as TaxonomyCode[]).find(c => c.id === item.taxonomy_code_id)}
+                        {#if tc}
+                          {#if i > 0}<span class="combo-sep">+</span>{/if}
+                          {#if isActiveCurrent}
+                            <form method="POST" action="?/removeComboItem" use:enhance={() => {
+                              deletingItemId = item.id
+                              return async ({ update }) => { await update(); deletingItemId = null }
+                            }} class="chip-rm-form">
+                              <input type="hidden" name="id" value={item.id} />
+                              <button
+                                type="submit"
+                                class="combo-chip combo-chip-rm"
+                                class:combo-chip-deleting={deletingItemId === item.id}
+                                style="background:{rootColor(tc)}20; color:{rootColor(tc)}; border-color:{rootColor(tc)}60"
+                                title="{tc.name} 제거"
+                                disabled={deletingItemId === item.id}
+                              >{#if deletingItemId === item.id}<span class="chip-spinner"></span>{:else}{tc.code} <span class="chip-rm-x">×</span>{/if}</button>
+                            </form>
+                          {:else}
+                            <span
+                              class="combo-chip"
+                              style="background:{rootColor(tc)}20; color:{rootColor(tc)}; border-color:{rootColor(tc)}40"
+                              title="{tc.name} ({tc.code_tier ?? '미분류'})"
+                            >{tc.code}</span>
+                          {/if}
+                        {/if}
+                      {/each}
+                      {#if combo.items.length === 1}
+                        {@const singleTc = (data.codes as TaxonomyCode[]).find(c => c.id === combo.items[0].taxonomy_code_id)}
+                        {#if singleTc}
+                          <span class="combo-name">{singleTc.name}</span>
                         {/if}
                       {/if}
-                    {/each}
-                    {#if combo.items.length === 1}
-                      {@const singleTc = (data.codes as TaxonomyCode[]).find(c => c.id === combo.items[0].taxonomy_code_id)}
-                      {#if singleTc}
-                        <span class="combo-name">{singleTc.name}</span>
-                      {/if}
-                    {/if}
-                  </div>
+                    </div>
 
-                  <!-- 우측 설정 영역 (조합 행 단위) -->
-                  <div class="combo-controls">
+                    <!-- 우측 설정 영역 (조합 행 단위) -->
+                    <div class="combo-controls" class:combo-controls-edit={isEditingCombo}>
 
-                    {#if comboEditSet[combo.combo_row_id] || isActiveCurrent}
-                      <!-- ── 메타 편집 모드 (✎ 버튼 진입) ── -->
+                    {#if isEditingCombo}
+                      <!-- 입력 폼 -->
                       <form
                         id="combo-form-{combo.combo_row_id}"
                         method="POST"
@@ -623,105 +682,148 @@
                           value={comboDateOptMap[combo.combo_row_id] ?? leadItem.date_option} />
                         <input type="hidden" name="combo_keywords"
                           value={getComboKws(combo.combo_row_id, leadItem).join(',')} />
+                        <!-- 순번1(부모): 표시 중이면 입력값, 숨김이면 빈 문자열 (서버에서 null 처리) -->
+                        <input type="hidden" name="parent_max_sequence"
+                          value={comboShowParentSeq[combo.combo_row_id] ? (comboParentSeqMap[combo.combo_row_id] ?? '') : ''} />
 
-                        <!-- 날짜 옵션 토글 -->
-                        <button
-                          type="button"
-                          class="date-toggle date-opt-{comboDateOptMap[combo.combo_row_id] ?? leadItem.date_option}"
-                          onclick={() => {
-                            const opts = ['none', 'ym']
-                            const cur = comboDateOptMap[combo.combo_row_id] ?? leadItem.date_option
-                            comboDateOptMap = { ...comboDateOptMap, [combo.combo_row_id]: opts[(opts.indexOf(cur) + 1) % 2] }
-                          }}
-                          title="클릭하여 변경: 없음 ↔ 년/월"
-                        >년월</button>
+                        <!-- 날짜 옵션 + 순번1(부모, 신설) + 순번2(자식, 기존) 슬롯 —
+                             확장된 상태의 읽기 순서는 항상 순번1(부모) → 순번2(자식).
+                             단, "+" 추가 버튼 자체는 UX상 기본 노출 필드(자식) 우측에 위치—
+                             클릭 시 순번1 입력은 그 앞(자식 필드보다 먼저)에 삽입되고,
+                             "−" 버튼이 원래 "+"가 있던 우측 끝 자리를 이어받는다. -->
+                        <div class="ce-row">
+                          <button
+                            type="button"
+                            class="date-toggle date-opt-{comboDateOptMap[combo.combo_row_id] ?? leadItem.date_option}"
+                            onclick={() => {
+                              const opts = ['none', 'ym']
+                              const cur = comboDateOptMap[combo.combo_row_id] ?? leadItem.date_option
+                              comboDateOptMap = { ...comboDateOptMap, [combo.combo_row_id]: opts[(opts.indexOf(cur) + 1) % 2] }
+                            }}
+                            title="클릭하여 변경: 없음 ↔ 년/월"
+                          >년월</button>
 
-                        <!-- 순번상한 -->
-                        <div class="seq-wrap">
-                          <input
-                            type="number"
-                            name="max_sequence"
-                            class="seq-input"
-                            value={comboSeqMap[combo.combo_row_id] ?? String(leadItem.max_sequence ?? '')}
-                            min="1" max="9999999"
-                            placeholder="순번상한"
-                            oninput={(e) => { comboSeqMap = { ...comboSeqMap, [combo.combo_row_id]: (e.currentTarget as HTMLInputElement).value } }}
-                            onfocus={(e) => (e.currentTarget.nextElementSibling as HTMLElement)?.classList.add('show')}
-                            onblur={(e) => (e.currentTarget.nextElementSibling as HTMLElement)?.classList.remove('show')}
-                          />
-                          <span class="seq-bubble">최대 백만자리 (9,999,999)</span>
-                        </div>
-
-                        <!-- 조합 이름 -->
-                        <input
-                          type="text"
-                          name="combo_name"
-                          class="combo-name-in"
-                          value={getComboName(combo.combo_row_id, leadItem)}
-                          maxlength="30"
-                          placeholder="조합 이름"
-                          aria-label="조합 이름"
-                          oninput={(e) => { comboNameMap = { ...comboNameMap, [combo.combo_row_id]: (e.currentTarget as HTMLInputElement).value } }}
-                        />
-
-                        <!-- 키워드 태그 영역 -->
-                        <div class="combo-kw-wrap">
-                          {#each getComboKws(combo.combo_row_id, leadItem) as kw}
-                            <span class="combo-kw-tag">
-                              {kw}
-                              <button
-                                type="button"
-                                class="combo-kw-del"
-                                onclick={() => removeComboKw(combo.combo_row_id, leadItem, kw)}
-                                aria-label="{kw} 키워드 제거"
-                              >×</button>
-                            </span>
-                          {/each}
-                          {#if getComboKws(combo.combo_row_id, leadItem).length < 10}
-                            <input
-                              class="combo-kw-in"
-                              type="text"
-                              maxlength="10"
-                              placeholder="키워드"
-                              aria-label="키워드 입력 후 Enter"
-                              value={comboKwInMap[combo.combo_row_id] ?? ''}
-                              oninput={(e) => { comboKwInMap = { ...comboKwInMap, [combo.combo_row_id]: (e.currentTarget as HTMLInputElement).value } }}
-                              onkeydown={(e) => {
-                                if (e.isComposing) return
-                                if (e.key === 'Enter' || e.key === ',') {
-                                  e.preventDefault()
-                                  const res = addComboKw(combo.combo_row_id, leadItem, comboKwInMap[combo.combo_row_id] ?? '')
-                                  if (res.cleared) comboKwInMap = { ...comboKwInMap, [combo.combo_row_id]: '' }
-                                }
-                              }}
-                            />
+                          <!-- 순번1(부모) 입력 — "+" 클릭 후에만 노출, 항상 순번2(자식)보다 앞에 위치 -->
+                          {#if comboShowParentSeq[combo.combo_row_id]}
+                            <div class="seq-wrap">
+                              <input
+                                type="number"
+                                class="seq-input seq-input-parent"
+                                value={comboParentSeqMap[combo.combo_row_id] ?? ''}
+                                min="1" max="9999999"
+                                placeholder="순번1(부모)상한"
+                                oninput={(e) => { comboParentSeqMap = { ...comboParentSeqMap, [combo.combo_row_id]: (e.currentTarget as HTMLInputElement).value } }}
+                                onfocus={(e) => (e.currentTarget.nextElementSibling as HTMLElement)?.classList.add('show')}
+                                onblur={(e) => (e.currentTarget.nextElementSibling as HTMLElement)?.classList.remove('show')}
+                              />
+                              <span class="seq-bubble">순번1(부모) 최대값</span>
+                            </div>
                           {/if}
-                        </div>
 
-                        <!-- 저장 / 취소 -->
-                        <button type="submit" class="btn-combo-save" title="변경사항 저장">저장</button>
-                        <button type="button" class="btn-combo-cancel" onclick={() => { exitComboEdit(combo.combo_row_id); activeComboId = null }} title="편집 취소">취소</button>
+                          <!-- 순번2(자식) 상한 — 기존부터 있던 필드(name="max_sequence").
+                               순번1 미표시 상태에선 "자식 순번"으로 정직하게 라벨,
+                               순번1이 나타나면 짝을 이루어 "순번2(자식)"으로 표시 -->
+                          <div class="seq-wrap">
+                            <input
+                              type="number"
+                              name="max_sequence"
+                              class="seq-input"
+                              value={comboSeqMap[combo.combo_row_id] ?? String(leadItem.max_sequence ?? '')}
+                              min="1" max="9999999"
+                              placeholder={comboShowParentSeq[combo.combo_row_id] ? '순번2(자식)상한' : '자식 순번 상한'}
+                              oninput={(e) => { comboSeqMap = { ...comboSeqMap, [combo.combo_row_id]: (e.currentTarget as HTMLInputElement).value } }}
+                              onfocus={(e) => (e.currentTarget.nextElementSibling as HTMLElement)?.classList.add('show')}
+                              onblur={(e) => (e.currentTarget.nextElementSibling as HTMLElement)?.classList.remove('show')}
+                            />
+                            <span class="seq-bubble">{comboShowParentSeq[combo.combo_row_id] ? '순번2(자식) 최대값' : '자식 순번 최대값'}</span>
+                          </div>
+
+                          <!-- "+"/"−" 트리거 — 기본 노출 필드(자식) 우측에 위치 (UX 정합) -->
+                          {#if !comboShowParentSeq[combo.combo_row_id]}
+                            <button
+                              type="button"
+                              class="pm-add-btn"
+                              onclick={() => { comboShowParentSeq = { ...comboShowParentSeq, [combo.combo_row_id]: true } }}
+                              title="순번1(부모) 상한 추가 — 2단 계층 채번 활성화"
+                              aria-label="순번1 상한 추가"
+                            >
+                              <svg viewBox="0 0 16 16" width="12" height="12" stroke="currentColor" stroke-width="2.5" fill="none" aria-hidden="true">
+                                <line x1="8" y1="2" x2="8" y2="14"/><line x1="2" y1="8" x2="14" y2="8"/>
+                              </svg>
+                            </button>
+                          {:else}
+                            <button
+                              type="button"
+                              class="pm-rm-btn"
+                              onclick={() => {
+                                comboShowParentSeq = { ...comboShowParentSeq, [combo.combo_row_id]: false }
+                                comboParentSeqMap  = { ...comboParentSeqMap,  [combo.combo_row_id]: '' }
+                              }}
+                              title="순번1(부모) 상한 제거 — 1단 모드로 복귀"
+                              aria-label="순번1 상한 제거"
+                            >
+                              <svg viewBox="0 0 16 16" width="12" height="12" stroke="currentColor" stroke-width="2.5" fill="none" aria-hidden="true">
+                                <line x1="2" y1="8" x2="14" y2="8"/>
+                              </svg>
+                            </button>
+                          {/if}
+
+                          <!-- 조합 이름 + 키워드 태그 — 한 행에 이어서 배치(공간 부족 시 자동 줄바꿈) -->
+                          <input
+                            type="text"
+                            name="combo_name"
+                            class="combo-name-in"
+                            value={getComboName(combo.combo_row_id, leadItem)}
+                            maxlength="30"
+                            placeholder="조합 이름"
+                            aria-label="조합 이름"
+                            oninput={(e) => { comboNameMap = { ...comboNameMap, [combo.combo_row_id]: (e.currentTarget as HTMLInputElement).value } }}
+                          />
+                          <div class="combo-kw-wrap">
+                            {#each getComboKws(combo.combo_row_id, leadItem) as kw}
+                              <span class="combo-kw-tag">
+                                {kw}
+                                <button
+                                  type="button"
+                                  class="combo-kw-del"
+                                  onclick={() => removeComboKw(combo.combo_row_id, leadItem, kw)}
+                                  aria-label="{kw} 키워드 제거"
+                                >×</button>
+                              </span>
+                            {/each}
+                            {#if getComboKws(combo.combo_row_id, leadItem).length < 10}
+                              <input
+                                class="combo-kw-in"
+                                type="text"
+                                maxlength="10"
+                                placeholder="키워드"
+                                aria-label="키워드 입력 후 Enter"
+                                value={comboKwInMap[combo.combo_row_id] ?? ''}
+                                oninput={(e) => { comboKwInMap = { ...comboKwInMap, [combo.combo_row_id]: (e.currentTarget as HTMLInputElement).value } }}
+                                onkeydown={(e) => {
+                                  if (e.isComposing) return
+                                  if (e.key === 'Enter' || e.key === ',') {
+                                    e.preventDefault()
+                                    const res = addComboKw(combo.combo_row_id, leadItem, comboKwInMap[combo.combo_row_id] ?? '')
+                                    if (res.cleared) comboKwInMap = { ...comboKwInMap, [combo.combo_row_id]: '' }
+                                  }
+                                }}
+                              />
+                            {/if}
+                          </div>
+                        </div>
                       </form>
 
                     {:else}
                       <!-- ── 일반 모드 ── -->
-                      <!-- 날짜 옵션 배지 -->
                       <span class="date-badge date-opt-{leadItem.date_option}">년월</span>
-
-                      <!-- 코드 프리뷰 -->
                       <code class="node-code-preview">{buildComboPreview(combo.items, leadItem)}</code>
-
-                      <!-- 조합 이름 -->
                       {#if leadItem.combo_name}
                         <span class="combo-name-display">{leadItem.combo_name}</span>
                       {/if}
-
-                      <!-- 키워드 (읽기 전용) -->
                       {#each (leadItem.combo_keywords ?? []) as kw}
                         <span class="combo-kw-tag-read">{kw}</span>
                       {/each}
-
-                      <!-- 편집 버튼 (메타 편집 + 피커 동시 활성) -->
                       <button
                         type="button"
                         class="btn-combo-edit"
@@ -729,41 +831,64 @@
                         title="편집 (이름·날짜·순번·키워드·코드 추가)"
                         aria-label="편집"
                       >편집</button>
-                    {/if}
 
-                    <!-- 조합 전체 삭제 -->
-                    <form method="POST" action="?/removeGroupCombo" use:enhance={() => {
-                      deletingComboRowId = combo.combo_row_id
-                      return async ({ update }) => { await update(); deletingComboRowId = null }
-                    }} class="ctrl-form">
-                      <input type="hidden" name="combo_row_id" value={combo.combo_row_id} />
-                      <input type="hidden" name="group_id" value={selectedGroup!.id} />
-                      <button
-                        type="submit"
-                        class="combo-rm"
-                        class:combo-rm-loading={deletingComboRowId === combo.combo_row_id}
-                        aria-label="조합 삭제"
-                        disabled={deletingComboRowId === combo.combo_row_id}
-                      >{#if deletingComboRowId === combo.combo_row_id}<span class="btn-spinner"></span>{:else}×{/if}</button>
-                    </form>
-                  </div> <!-- /combo-controls -->
+                      <!-- 조합 전체 삭제 — 아이콘(×) 대신 명시적 "삭제" 텍스트 버튼(CMS 표준 삭제 버튼).
+                           안전장치: 1차 클릭은 경고 토스트만, 같은 버튼 2차 클릭에서만 실제 삭제. -->
+                      <form method="POST" action="?/removeGroupCombo" use:enhance={({ cancel }) => {
+                        if (comboDeleteConfirm !== combo.combo_row_id) {
+                          comboDeleteConfirm = combo.combo_row_id
+                          csToast.warning('한번 더 선택 시 삭제됩니다.')
+                          cancel()
+                          return
+                        }
+                        comboDeleteConfirm = null
+                        deletingComboRowId = combo.combo_row_id
+                        return async ({ update }) => { await update(); deletingComboRowId = null }
+                      }} class="ctrl-form">
+                        <input type="hidden" name="combo_row_id" value={combo.combo_row_id} />
+                        <input type="hidden" name="group_id" value={selectedGroup!.id} />
+                        <button
+                          type="submit"
+                          class="btn-danger-sm"
+                          class:btn-danger-sm--pending={comboDeleteConfirm === combo.combo_row_id}
+                          aria-label="조합 삭제"
+                          disabled={deletingComboRowId === combo.combo_row_id}
+                        >{deletingComboRowId === combo.combo_row_id ? '삭제 중...' : comboDeleteConfirm === combo.combo_row_id ? '한번 더 누르면 삭제됩니다' : '삭제'}</button>
+                      </form>
+                    {/if}
+                    </div> <!-- /combo-controls -->
+                  </div> <!-- /combo-main-line -->
+
+                  {#if isEditingCombo}
+                    <!-- 하단 독립 행: 저장 + 삭제(명시적 삭제 동선 — 새/기존 조합 공통, CMS 표준 삭제 버튼) -->
+                    <div class="combo-edit-actions">
+                      <button type="submit" form="combo-form-{combo.combo_row_id}" class="btn-combo-save">저장</button>
+                      <!-- 안전장치: 1차 클릭은 경고 토스트만, 같은 버튼 2차 클릭에서만 실제 삭제 -->
+                      <form method="POST" action="?/removeGroupCombo" use:enhance={({ cancel }) => {
+                        if (comboDeleteConfirm !== combo.combo_row_id) {
+                          comboDeleteConfirm = combo.combo_row_id
+                          csToast.warning('한번 더 선택 시 삭제됩니다.')
+                          cancel()
+                          return
+                        }
+                        comboDeleteConfirm = null
+                        deletingComboRowId = combo.combo_row_id
+                        return async ({ update }) => { await update(); deletingComboRowId = null; activeComboId = null }
+                      }} class="ctrl-form">
+                        <input type="hidden" name="combo_row_id" value={combo.combo_row_id} />
+                        <input type="hidden" name="group_id" value={selectedGroup!.id} />
+                        <button
+                          type="submit"
+                          class="btn-danger-sm"
+                          class:btn-danger-sm--pending={comboDeleteConfirm === combo.combo_row_id}
+                          disabled={deletingComboRowId === combo.combo_row_id}
+                          title={isNewUnsavedCombo ? '추가한 코드를 포함해 이 미완성 조합을 삭제합니다' : '이 조합을 삭제합니다'}
+                        >{deletingComboRowId === combo.combo_row_id ? '삭제 중...' : comboDeleteConfirm === combo.combo_row_id ? '한번 더 누르면 삭제됩니다' : '삭제'}</button>
+                      </form>
+                    </div>
+                  {/if}
                 </div>
               {/each}
-
-              <!-- 빈 조합 행: activeComboId가 새로 생성되었지만 아직 코드 미추가 -->
-              {#if activeComboId && !combos.some(c => c.combo_row_id === activeComboId)}
-                <div class="combo-row combo-row-active combo-row-pending">
-                  <div class="combo-chips">
-                    <span class="combo-pending-hint">← 아래 피커에서 코드를 선택하세요</span>
-                  </div>
-                  <button
-                    type="button"
-                    class="combo-rm"
-                    onclick={cancelActiveCombo}
-                    aria-label="새 조합 취소"
-                  >×</button>
-                </div>
-              {/if}
             </div>
           {/if}
         </div>
@@ -1190,11 +1315,11 @@
   margin-left: auto; flex-shrink: 0;
   width: 28px; height: 28px; min-height: 28px;
   display: flex; align-items: center; justify-content: center;
-  background: transparent; border: none; border-radius: var(--radius-sm);
-  color: var(--cs-text-light); font-size: 14px; cursor: pointer;
+  background: var(--cs-surface-gray); border: none; border-radius: var(--radius-sm);
+  color: var(--cs-text-mid); font-size: 14px; cursor: pointer;
   transition: background 0.12s, color 0.12s;
 }
-.close-btn:hover { background: rgba(255,53,53,0.08); color: var(--cs-red-badge); }
+.close-btn:hover { background: var(--cs-border); color: var(--cs-text-dark); }
 
 .btn-product-filter {
   display: inline-flex; align-items: center; gap: 4px;
@@ -1422,19 +1547,24 @@
 }
 .btn-combo-save:hover { background: var(--cs-purple-hover); }
 
-.btn-combo-cancel {
+/* 저장 전 새 조합 삭제 — CMS 표준 삭제 버튼(텍스트형 btn-danger-sm) 색상 토큰 */
+.btn-danger-sm {
   height: 26px;
-  padding: 0 8px;
-  border: 1px solid rgba(59,47,138,0.20);
+  padding: 0 10px;
+  border: none;
   border-radius: var(--radius-sm);
-  background: transparent;
-  color: var(--cs-text-mid);
+  background: var(--cs-error, #E53935);
+  color: var(--cs-white);
   font: var(--text-pc-descript-10);
+  font-weight: 700;
   cursor: pointer;
   flex-shrink: 0;
-  transition: background 0.12s;
+  transition: opacity 0.15s;
 }
-.btn-combo-cancel:hover { background: rgba(59,47,138,0.06); color: var(--cs-text); }
+.btn-danger-sm:hover { opacity: 0.8; }
+.btn-danger-sm:disabled { opacity: 0.5; cursor: not-allowed; }
+/* 삭제 1차 클릭(안전장치 대기) 상태 — CMS 표준 짙은 red 톤 */
+.btn-danger-sm--pending { background: var(--cs-red); }
 
 .combo-rows {
   display: flex;
@@ -1456,6 +1586,24 @@
 }
 .combo-row:hover { background: var(--cs-purple-op10); }
 .combo-row-active { background: var(--cs-purple-op10) !important; }
+
+/* 편집 모드: 상단(삭제)/중간(칩+필드 결합)/하단(저장·취소) 3구역을 세로로 쌓음 */
+.combo-row-editing {
+  flex-direction: column;
+  align-items: stretch;
+  padding-top: 14px;
+  padding-bottom: 14px;
+}
+
+/* 중간 행: 코드 칩 + 우측 설정 영역을 한 행으로 결합 — 공간이 부족할 때만 자동 줄바꿈 */
+.combo-main-line {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  flex: 1 1 auto;
+  min-width: 0;
+}
 
 /* 코드 칩 영역 */
 .combo-chips {
@@ -1609,13 +1757,72 @@
   flex-shrink: 0;
 }
 
-/* 편집 모드 폼 — flex item */
+/* 편집 모드 폼 — 기본: flex item (노말 모드에서 사용 안 하지만 정의는 유지) */
 .combo-edit-form {
   display: flex;
   align-items: center;
   gap: 5px;
   flex: 1;
   min-width: 0;
+}
+
+/* 편집 모드: combo-controls는 이제 입력 폼 하나만 담음(삭제·저장/취소는 combo-row 상/하단으로 이동) */
+.combo-controls-edit {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+/* 삭제 버튼 행 (편집 모드 최상단, combo-row 직속) */
+.cc-del-row {
+  display: flex;
+  justify-content: flex-end;
+}
+
+/* 편집 행 (날짜+순번 행 / 이름+키워드 행) */
+.ce-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+/* 저장/취소 버튼 행 (편집 모드 하단) */
+.combo-edit-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+/* 순번1(부모) 슬롯 +/- 버튼 (GSD-2) */
+.pm-add-btn, .pm-rm-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px; height: 22px;
+  border: 1px solid #ECEBF4;
+  border-radius: var(--radius-sm);
+  background: var(--cs-white);
+  color: var(--cs-text-mid);
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: background 0.12s, color 0.12s, border-color 0.12s;
+  padding: 0;
+}
+.pm-add-btn:hover {
+  background: rgba(59,47,138,0.08);
+  color: var(--cs-purple);
+  border-color: rgba(59,47,138,0.35);
+}
+.pm-rm-btn:hover {
+  background: rgba(255,53,53,0.08);
+  color: var(--cs-red-badge);
+  border-color: var(--cs-red-badge);
+}
+
+/* 순번1(부모) 입력 구분색 */
+.seq-input-parent {
+  border-color: rgba(59,47,138,0.28);
+  background: var(--cs-purple-op10);
 }
 
 /* 일반 모드: 날짜 배지 (읽기 전용) */
@@ -1757,7 +1964,7 @@
   font-style: italic;
 }
 
-/* 제거 버튼 */
+/* 제거 버튼 — 표준 × 버튼 정책: 기본 옅은 gray, 롤오버 시 짙은 gray */
 .combo-rm {
   display: inline-flex;
   align-items: center;
@@ -1765,15 +1972,15 @@
   width: 24px; height: 24px;
   border: none;
   border-radius: 50%;
-  background: none;
-  color: var(--cs-text-light);
+  background: var(--cs-surface-gray);
+  color: var(--cs-text-mid);
   font-size: 15px;
   line-height: 1;
   cursor: pointer;
   transition: background 0.1s, color 0.1s;
   flex-shrink: 0;
 }
-.combo-rm:hover { background: rgba(255,53,53,0.10); color: var(--cs-red-badge); }
+.combo-rm:hover { background: var(--cs-border); color: var(--cs-text-dark); }
 .combo-rm-loading { opacity: 0.5; cursor: not-allowed; }
 .btn-spinner {
   display: inline-block;

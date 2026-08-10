@@ -235,18 +235,20 @@ export const actions: Actions = {
     let comboCodeId: string | null = null
     let comboDateOption: string | null = null
     let comboMaxSequence: number | null = null
+    let comboParentMaxSequence: number | null = null
 
     if (comboRowId) {
-      // 선택된 콤보의 아이템 전체 조회 (code_id + date_option + max_sequence)
+      // 선택된 콤보의 아이템 전체 조회 (code_id + date_option + max_sequence + parent_max_sequence)
       const { data: comboItems } = await admin
         .from('code_mapping_items')
-        .select('taxonomy_code_id, date_option, max_sequence')
+        .select('taxonomy_code_id, date_option, max_sequence, parent_max_sequence')
         .eq('combo_row_id', comboRowId)
 
       if (comboItems && comboItems.length > 0) {
         // 콤보 행 공통 속성 (모든 아이템이 동일한 값을 가짐)
         comboDateOption = (comboItems[0] as { date_option: string }).date_option
-        comboMaxSequence = (comboItems[0] as { max_sequence: number }).max_sequence
+        comboMaxSequence = (comboItems[0] as { max_sequence: number | null }).max_sequence ?? null
+        comboParentMaxSequence = (comboItems[0] as { parent_max_sequence: number | null }).parent_max_sequence ?? null
 
         // 가장 하위(depth 높은) 분류코드 → p_code_id로 전달
         const codeIds = comboItems.map((i: { taxonomy_code_id: string }) => i.taxonomy_code_id)
@@ -260,8 +262,27 @@ export const actions: Actions = {
       }
     }
 
-    if (comboCodeId && comboDateOption !== null && comboMaxSequence !== null) {
-      // 5-param 버전: 콤보 date_option + max_sequence 직접 반영
+    if (comboCodeId && comboDateOption !== null && comboParentMaxSequence !== null) {
+      // 6-param 버전: 2단 계층 채번 (순번1=부모, 순번2=자식) — parent_max_sequence 있을 때
+      const { error: codeErr } = await admin.rpc('generate_product_code', {
+        p_product_id:          product.id,
+        p_category:            category,
+        p_code_id:             comboCodeId,
+        p_date_option:         comboDateOption,
+        p_max_sequence:        comboMaxSequence,   // 순번2(자식) 상한 — null 허용
+        p_parent_max_sequence: comboParentMaxSequence, // 순번1(부모) 상한
+      })
+      if (codeErr) {
+        if (codeErr.message?.includes('parent_max_sequence_exceeded')) {
+          return fail(400, { error: '이 조합코드의 부모 순번 상한에 도달했습니다. 코드설정에서 순번1 상한을 늘려주세요.' })
+        }
+        if (codeErr.message?.includes('max_sequence_exceeded')) {
+          return fail(400, { error: '이 조합코드의 순번 상한에 도달했습니다. 코드설정에서 max_sequence를 늘려주세요.' })
+        }
+        return fail(500, { error: '품번 발행에 실패했습니다.' })
+      }
+    } else if (comboCodeId && comboDateOption !== null && comboMaxSequence !== null) {
+      // 5-param 버전: 콤보 date_option + max_sequence 직접 반영 (순번1 없는 기존 경로)
       const { error: codeErr } = await admin.rpc('generate_product_code', {
         p_product_id:   product.id,
         p_category:     category,

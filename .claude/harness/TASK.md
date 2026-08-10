@@ -28,6 +28,149 @@ auth_baseline: fed4fdb — createBrowserClient 패턴 (절대 싱글톤 createCl
 
 ---
 
+## NOW — 조합코드(품번) 순번 2단 계층 채번 + 순번 슬롯 +/− UX + 콤보 편집 카드 레이아웃 보완 (2026-08-10) — 🚦 GATE B 승인 대기 (CRITICAL)
+
+plan_source: polymorphic-humming-micali.md (Plan Mode 사전 탐색·확정, 미승인 — GATE B에서 Stephen 최종 승인 필요)
+아젠다: `/cms/codes` 자동매핑(조합코드그룹) 조합의 "순번상한"을 순번1(부모, 상품 신규등록 시
+        조합코드 선택 순간 고정채번)·순번2(자식, 그 부모 안에서 "빠른 재고등록" 시마다 채번,
+        부모별로 0부터 리셋) 2단 계층으로 확장. UI는 순번1 우측 "+"/"−" 아이콘 버튼으로 순번2
+        슬롯 추가/제거(미설정/1개/2개 3가지 구조 지원). 콤보 편집 카드(`.combo-row-active`)
+        레이아웃(닫기 상단 독립행 / 저장·취소 하단 독립행 + 패딩 보완)도 함께 재구성.
+
+⛔ CRITICAL — GATE B는 Stephen 승인 필수 (품번 영구고정 정책 products.md §2-2 + frozen 대상인
+마이그레이션·RPC 영역을 직접 변경하는 작업).
+
+[CONTEXT BRIDGE]
+핵심제약:
+  - 품번(product_code) 영구고정 정책(products.md §2-2) 절대 위반 금지 — 신규 카운터도 단조증가만
+    허용, 재사용/재발급 기능 신설 금지
+  - 기존 RPC 시그니처 불변 — generate_product_code 2/3/5-param 오버로드는 그대로 유지하고 신규
+    6-param 오버로드만 추가. generate_inventory_product_code는 시그니처 변경 없이 내부 로직만 분기
+  - DB는 ADD-only 마이그레이션만(GP-10, 기존 마이그레이션 파일 직접 수정 금지) — 최신 파일 212
+    다음 213부터 순번 사용
+  - 마이그레이션 적용 순서 엄수: crazyshot-stage(ezyvffjvuwmtuhpxdjrw) 검증 → crazyshot
+    (vnbpmvxruyciuuaermyh) 실배포는 Stephen 승인 후에만 진행
+  - 기존 1개-순번 모드(오늘까지의 기본 동작)는 100% 무변경 — 전 구간 회귀 테스트 필수
+  - RPC 참고 정본: `20260806000193_193_code_series_column_and_functions.sql`(현재
+    generate_product_code 5-param 정의) / `20260806000194_194_legacy_product_code_series_fallback.sql`
+    (레거시 파싱 폴백) — 신규 오버로드 작성 전 반드시 확인
+  - generate_product_code 호출 시 p_code_id 등 3개 인자 전부 명시(2-param/3-param 오버로드 모호성
+    에러 재발생 방지, products.md §2-3)
+
+⚠️ 구현 전 재확인된 가정 (plan의 "구현 전 재확인이 필요한 가정" 섹션 — GATE B에서 최종 확인,
+반드시 실행 담당 에이전트가 인지할 것):
+  - 순번1(부모)은 **1부터 시작**, 순번2(자식)는 **0부터 시작**(부모 등록 시 자동생성되는 첫
+    자식 = `000`, 이후 빠른재고등록마다 001, 002…) — 기존 1개-순번 모드의 자식 카운터(1부터
+    시작, 변경 없음)와는 다른 규칙이므로 혼동 금지
+  - 순번1/순번2는 **슬롯별 독립 자릿수** 허용(예: 순번1=3자리, 순번2=2자리처럼 다르게 설정 가능)
+    — "기존 순번 UX와 완전히 동일" 요구사항에 따른 해석
+  - 순번1/순번2는 레이어가 다른 두 개의 **독립 카운터** — 각각 별도 상한 적용("더 엄격한 값 우선
+    차단": 부모 상한 도달 = 그 조합으로 신규 상품등록 불가 / 자식 상한 도달 = 그 특정 부모에
+    대해서만 빠른재고등록 불가)
+
+TDD도메인: DB 마이그레이션(신규 테이블 2종 + 컬럼 변경) + `generate_product_code` 6-param
+  오버로드 신설 + `generate_inventory_product_code` 2단 모드 내부 분기 — AGENTS.md TDD 강제
+  키워드("재고"/핵심 RPC 채번 로직) 해당, 동시성(원자적 채번 패턴)·정합성(영구고정 정책) 검증
+  필수. 나머지(UI·폼 연동)는 GSD.
+
+절대금지:
+  - git 자율 실행 / production 마이그레이션을 Stephen 승인 없이 자동 적용
+  - 기존 마이그레이션 파일 직접 수정(GP-10 위반)
+  - `generate_product_code` 기존 2/3/5-param 시그니처 변경, `generate_inventory_product_code`
+    시그니처 변경
+  - 순번 재발급/재사용 기능 신설(products.md §2-2 영구고정 정책 정면 위반)
+  - 요구범위 외 파일 수정 — QR(§2-4)·RLS(§2-8)·코드 이관(§2-5) 등 다른 품번 정책은 이번 변경과
+    무관, 손대지 않음
+
+실패 시 롤백: 신규 마이그레이션(ADD-only) 미적용 상태로 되돌리기 — 기존 데이터·기존 1개-순번
+  조합에는 영향이 없으므로 롤백 시 위험 낮음. UI 변경분은 커밋 단위 git revert(Stephen 실행).
+
+신규/수정 파일 (예정):
+  - `supabase/migrations/20260810000213_213_code_mapping_items_parent_sequence.sql` (신규, TDD)
+  - `supabase/migrations/20260810000214_214_product_parent_child_sequence_tables.sql` (신규, TDD)
+  - `supabase/migrations/20260810000215_215_generate_product_code_6param_overload.sql` (신규, TDD)
+  - `supabase/migrations/20260810000216_216_generate_inventory_product_code_two_tier.sql` (신규, TDD)
+  - `src/routes/cms/codes/+page.server.ts` (수정, GSD)
+  - `src/routes/cms/codes/_AutoMappingTab.svelte` (수정, GSD)
+  - `src/routes/cms/products/new/+page.server.ts` (수정, GSD)
+
+---
+
+### NOW — TDD 경로 (`@sp2-tdd-agents`, RED→GREEN→REFACTOR, 15분 단위)
+
+- [x] TDD-1: 마이그레이션 213 — `code_mapping_items.max_sequence` NOT NULL DEFAULT 999 →
+  NULLABLE 완화 + CHECK 재작성 + `parent_max_sequence` 신규 컬럼 작성 완료 | TDD | ✅ 파일 생성 완료
+  (stage 적용 대기 — Stephen 수동 적용 필요)
+
+- [x] TDD-2: 마이그레이션 214 — `product_parent_sequences` + `product_child_sequences_by_parent`
+  신규 테이블 작성 완료 (1부터 시작, INSERT VALUES(2) 패턴) | TDD | ✅ 파일 생성 완료
+  (stage 적용 대기 — Stephen 수동 적용 필요)
+
+- [x] TDD-3 (RED): 6-param generate_product_code 호출 검증 테스트 작성 완료 | TDD | ✅ RED 확인
+  (AssertionError: p_parent_max_sequence not found)
+
+- [x] TDD-4 (GREEN): 마이그레이션 215(generate_product_code 6-param) 작성 + products/new
+  +page.server.ts 6-param 분기 추가 | TDD | ✅ 3/3 테스트 통과
+  (stage 마이그레이션 적용 대기)
+
+- [x] TDD-5 (RED): generate_inventory_product_code max_sequence_exceeded 에러처리 테스트 작성
+  | TDD | ✅ RED 확인 (success:true → false 기대)
+
+- [x] TDD-6 (GREEN): 마이그레이션 216(generate_inventory_product_code 2단 분기) 작성 +
+  products/+page.server.ts max_sequence_exceeded fail(400) 처리 | TDD | ✅ 4/4 테스트 통과
+  (stage 마이그레이션 적용 대기)
+
+- [x] TDD-7 (REFACTOR): 코드 품질 정리 + TypeScript 컴파일 0 에러 확인 | TDD | ✅ 완료
+
+- [x] TDD-8: 회귀 테스트 — 기존 2/3/5-param + 기존 1개-순번 경로 4/4 통과 확인 | TDD | ✅ 완료
+
+### NEXT — GSD 경로 (`@harness-executor`, UI + 폼 연동, 30분 단위)
+
+- [ ] GSD-1: `/cms/codes` `+page.server.ts` `updateGroupItemSettings` 액션에
+  `parent_max_sequence` 폼 필드 파싱/검증(nullable, 1~9999999) 추가, 기존 `max_sequence` 파싱을
+  nullable 허용으로 조정(`addGroupItem`/`removeGroupCombo`/`removeComboItem`은 변경 없음) | GSD |
+  완료기준: 순번1만 저장 / 순번1+순번2 저장 / 둘 다 미설정 저장 3가지 케이스 정상 동작 | 예상: 30분
+
+- [x] GSD-2: `_AutoMappingTab.svelte` — 순번1(`.seq-wrap`) 우측에 "+" 아이콘 버튼 추가
+  (`_TreeTab.svelte` `.pm-add-btn` 십자형 SVG 스타일 재사용) → 클릭 시 순번1과 동일한
+  `.seq-wrap`/`.seq-input` 마크업(순번2)이 우측에 생성 + 순번2 우측에 "−" 아이콘 버튼(동일
+  스타일에서 가로선 1개만) 노출 → 클릭 시 순번2 블록·값 전체 제거(1개 상태로 복귀) | GSD |
+  ✅ 완료: comboParentSeqMap/comboShowParentSeq 상태 추가, +/− 버튼 + 2번째 seq-wrap 구현,
+  parent_max_sequence hidden input으로 폼 제출, enterComboEdit/exitComboEdit 업데이트
+
+- [x] GSD-3: `_AutoMappingTab.svelte` — `comboPreviewFmt`/`buildComboPreview` 2단 모드 미리보기
+  확장(순번1 고정 예시값 + 순번2 자리를 함께 반영), 조합 코드가 3개 이상이어도 순번 슬롯은
+  최대 2개(순번1+순번2)로 고정 상한 | GSD |
+  ✅ 완료: parent_max_sequence && max_sequence → seq_digits = 두 자릿수 합산
+
+- [x] GSD-4: `_AutoMappingTab.svelte` `.combo-row-active`/`.combo-edit-form` 레이아웃 재구성 —
+  닫기(`.combo-rm`)를 상단 독립 행, 날짜토글·순번1·[+/−]·순번2·조합이름·키워드를 중단 영역,
+  저장(`.btn-combo-save`)/취소(`.btn-combo-cancel`)를 하단 독립 행으로 `flex-direction: column`
+  재편 + 카드 상하 패딩 확대(기존 `.combo-row`/`.combo-controls` 등 색상·보더·타이포 토큰은
+  변경 없이 배치·패딩만 조정) | GSD |
+  ✅ 완료: combo-controls-edit 클래스 + cc-del-row/combo-edit-form(col)/combo-edit-actions 3구역,
+  저장 버튼은 form="combo-form-..." 외부 연결
+
+- [x] GSD-5: `products/new/+page.server.ts` — 콤보 아이템 조회 시 `parent_max_sequence` 함께
+  select, 값이 있으면 신규 6-param RPC 호출 분기(기존 5-param 분기는 그대로 폴백 유지) | GSD |
+  ✅ 완료 (TDD-4 GREEN에서 함께 구현)
+
+## GATE C 확인 항목 (전체 NOW/NEXT 완료 후 필수)
+
+- [ ] `generate_product_code` 기존 2/3/5-param 오버로드 시그니처 무변경?
+- [ ] `generate_inventory_product_code` 시그니처 무변경(내부 로직만 분기)?
+- [ ] 순번2는 0부터 시작 / 순번1은 1부터 시작 규칙 정확히 구현됐는가?
+- [ ] 순번1/순번2 슬롯별 독립 자릿수 지원되는가?
+- [ ] 기존 1개-순번 모드(순번1 미설정) 회귀 없음 — 기존과 100% 동일 동작?
+- [ ] "+"/"−" 클릭 시 순번2 UI 생성/제거 정상 동작, 조합 코드 3개 이상이어도 슬롯 2개 상한 유지?
+- [ ] 콤보 편집 카드 레이아웃 재배치 시 기존 색상·보더·타이포 토큰 변경 없음?
+- [ ] products.md §2-2 영구고정 정책(재사용 불가, 단조증가) 신규 카운터 2종 모두 준수?
+- [ ] stage(ezyvffjvuwmtuhpxdjrw) 마이그레이션 4건 적용·검증 완료? production은 Stephen 승인
+      후 별도 진행(자동 적용 금지)?
+- [ ] `npm run check` / `npx vitest run` 통과?
+
+---
+
 ## NOW — 크레이지로그 배너 카드 선택 UI + CMS 콘텐츠 탭 (2026-08-09) ✅ GATE E 통과
 
 plan_source: hazy-honking-willow.md
