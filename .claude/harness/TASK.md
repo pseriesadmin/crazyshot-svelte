@@ -9790,3 +9790,110 @@ git 커밋은 Stephen 요청 대기.
   부족해서"로 지레짐작하고 파라미터만 계속 조정 — 실제로는 요구사항(스크롤 방향 기반
   vs 최하단 근접 기반)을 잘못 해석한 것이 근본 원인이었음. 반복 수정이 실패하면
   파라미터 튜닝을 반복하기보다 요구사항 자체를 재확인할 것.
+
+## NOW — 카테고리 라벨 하드코딩 전면 제거 + 사용자 화면 RLS 은닉 버그 수정 (2026-08-10) ✅ 완료(코드) / ⏳ DB 백필 대기
+
+[CONTEXT BRIDGE]
+plan_source: 카테고리 필터 탭 라벨 오표시 버그(위 항목) 후속 — Stephen 지시
+  "사용자 상품정보(/All) 화면 내에 하드코딩으로 잡혀있는 카테고리 값이 어디에 있지? ...
+  모든 카테고리 이름 정보는 백오피스, 그리고 사용자 화면 내 관리자 설정에서 설정된 값이
+  반영되어야 해." → "하드코딩 다 제거하고 백오피스 값으로 통일해줘." → "순서대로 안전하게
+  진행해!"
+핵심제약: 사용자 화면(/products, /, /products/[id])의 카테고리 라벨 하드코딩 전체 제거,
+  백오피스(code_mapping_groups·product_category_codes) 조회로 통일. 아이콘 매핑(코드→SVG
+  키)은 이번 범위에서 제외(Stephen 확인) — 라벨·노출목록만 동적화
+TDD도메인: 없음 — GSD (표시 라벨 조회 로직, 상태전이·가격·보안 정책 자체는 무변경)
+절대금지: code_mapping_groups/product_category_codes RLS 정책(is_cms_user()) 자체는
+  변경하지 않음 — service_role 조회로만 우회
+
+---
+
+- [x] 전수 조사(서브에이전트) | GSD | ✅ 완료 — CAT_LABELS류 하드코딩 4곳 발견:
+  `src/routes/products/+page.svelte`(CAT_LABELS, 이전 세션에서 이미 제거),
+  `src/lib/components/products/ProductHero.svelte`(CATEGORY_MAP, 영문·실제 카테고리 코드
+  다수 누락), `src/routes/+page.svelte`(홈 CATEGORY_TABS, `data.categories` 전혀 미사용),
+  `src/lib/components/products/admin/ProductCategoryModal.svelte`(CAT_LABELS, 제3의 키
+  체계로 나머지와도 불일치)
+- [x] 🔴 별도 발견 — RLS로 인해 일반 고객에게 카테고리 데이터 자체가 안 보이던 버그 |
+  ✅ 완료 — `code_mapping_groups`·`product_category_codes` 둘 다 RLS SELECT 정책이
+  `is_cms_user()`뿐이라, `locals.supabase`(anon key)로 조회하던 `/products`·홈·상품상세
+  서버 코드는 **CMS 미로그인 고객에게 카테고리 데이터가 항상 빈 값으로 내려가고 있었음**
+  (Stephen이 항상 CMS 계정으로 테스트해 발견 안 됨 — 하드코딩이 오히려 이 문제를 가리고
+  있었음). 카테고리 라벨은 비민감정보이므로 이 조회들에 한해 service_role 관리자
+  클라이언트로 전환(RLS 정책 자체는 무변경) — `/cms/products`와 동일 패턴
+- [x] `src/routes/products/+page.server.ts` | GSD | ✅ 완료 — service_role 전환 +
+  `categoryLabels[default_category] ?? name` 해석 로직 추가(CMS와 동일 우선순위)
+- [x] `src/routes/products/+page.svelte` | GSD | ✅ 완료 — CAT_LABELS 제거, `cat.name`
+  직접 사용
+- [x] `src/routes/products/[id]/+page.server.ts` + `+page.svelte` | GSD | ✅ 완료 —
+  상품 카테고리 라벨을 service_role로 조회해 `categoryLabel` 반환, `ProductHero`에 prop
+  전달(dev fixture 폴백 경로도 타입 일치하도록 `categoryLabel: null` 포함)
+- [x] `ProductHero.svelte` | GSD | ✅ 완료 — CATEGORY_MAP(영문, 실제코드 다수 누락) 제거,
+  `categoryLabel` prop 우선 사용 + 없으면 원본 코드값 표시(하드코딩 번역 없음)
+- [x] `src/routes/+page.server.ts` + `+page.svelte`(홈) | GSD | ✅ 완료 — 카테고리 목록
+  자체가 정적 배열이었던 것을 `data.categories`(service_role 조회) 기반으로 전환.
+  아이콘은 카테고리 코드→아이콘키 매핑 테이블로 유지(라벨만 동적화, 합의된 범위)
+- [x] `ProductCategoryModal.svelte`(CMS 카테고리 설정 모달) | GSD | ✅ 완료 — 제3의
+  CAT_LABELS 제거, `categories` prop(이미 백오피스 라벨 포함)의 `name` 그대로 사용
+- [x] 🔁 정정(2026-08-10 재검토, Stephen 확정) | GSD | ✅ 완료 — Stephen이 /cms/codes
+  편집화면 캡처로 "그룹명(name)=노출라벨 / 카테고리키(default_category)=절대분류값" 원칙을
+  확정. 직전 구현의 `categoryLabels[default_category] ?? g.name`(product_category_codes
+  우선조회)이 이 원칙과 어긋나 4개 파일(cms/products, products, 홈, products/[id]의
+  +page.server.ts) 전부 product_category_codes 관여 제거, `code_mapping_groups.name`을
+  라벨의 유일한 소스로 단순화. 분류 키 자체가 시스템 전역(CMS 필터·고객 검색·상품상세
+  "같은 카테고리" 쿼리)에서 치환·변형 없이 원본 그대로만 쓰이는지도 재대조 완료.
+- [x] DB 데이터 정정 — 실서비스(vnbpmvxruyciuuaermyh) `code_mapping_groups.name` 8건
+    UPDATE | GSD | ✅ 완료 (2026-08-10, Stephen 승인 "응 진행해") — UPDATE 직전 대상 8행
+    재조회로 예상값과 100% 일치 확인 후 실행, 실행 직후 재조회로 반영 확인:
+    accessorie→악세서리, actcam→액션캠, camera→카메라, dronegim→드론/짐벌,
+    hypepack→추천패키지, lens→렌즈, light→조명, phone→스마트폰. 스테이지는 원래도 정상값이라
+    변경 불필요. 코드(전 5개 화면 백오피스 조회 통일)와 데이터(그룹명 8건) 양쪽 모두 완료 —
+    이 작업으로 카테고리 라벨 오표시 버그 전체가 완결됨.
+
+검증: svelte-check 신규 에러 0건(베이스라인 유지, 관련 타입 불일치 1건은 즉시 발견해
+`+page.svelte`의 수기 `Props` 인터페이스에 `categoryLabel` 필드 추가로 해결). eslint —
+터치 파일 신규 에러 0건(`/products/+page.svelte`의 WheelEvent/TouchEvent, `/products/[id]/
++page.svelte`의 startMin/endMin 미사용 경고는 전부 `git diff HEAD` 대조로 기존 코드
+확인, 이번 세션과 무관). 실브라우저 검증은 Stephen 대기(Claude Browser 사용 금지 원칙) —
+특히 DB 백필 전까지는 화면에 변화가 없을 것이므로 백필 완료 후 확인 권장.
+
+GATE E — @sp3-qa-agent 검수 결과 + 세션 간 중복작업 정리 (2026-08-11)
+
+검수 중 @sp3-qa-agent가 "code_mapping_groups도 RLS로 막혀있었다"는 이번 기록이 실측과
+다르다고 지적 — stage DB로 직접 재검증한 결과였음. 원 진단자(본 세션)가 실서비스·stage
+양쪽에서 `pg_policies`를 다시 직접 재조회해 다음을 확정:
+  - stage(ezyvffjvuwmtuhpxdjrw): `code_mapping_groups`에 `auth_read_active_mapping_groups`
+    (`is_active=true OR is_cms_user()`) 정책 존재 — 익명도 활성 그룹은 읽기 가능
+  - 실서비스(vnbpmvxruyciuuaermyh): 이 permissive 정책이 없고 `is_cms_user()`뿐 — 진짜로
+    막혀있음. **원 진단은 실서비스 기준으로는 정확했고, service_role 전환은 정당함**
+  → QA agent가 지적한 건 사실은 "RLS 자체가 stage↔실서비스 간 어긋나 있다"는 별개의
+    환경 드리프트였음(수정하지 않음, 별도 확인 필요 사항으로만 기록).
+
+추가로, 검수 과정에서 **다른 세션이 동일 버그(카테고리 라벨 오표시)를 병행 작업 중**이었고
+이미 `src/routes/cms/products/+page.server.ts`·`src/routes/products/+page.server.ts`·
+`src/routes/products/[id]/+page.server.ts`·`src/routes/+page.server.ts`(홈) 4개 파일을
+본 세션의 구현(`categoryLabels[default_category] ?? g.name`, product_category_codes 관여)
+위에 덮어써 더 단순한 구조(product_category_codes 완전 배제, `code_mapping_groups.name`을
+라벨의 유일한 정본으로 사용 — Stephen이 /cms/codes 화면 캡처로 "그룹명=노출라벨/카테고리
+키=절대분류값" 원칙을 확정한 결과로 추정)로 대체돼 있음을 발견. 기능적으로는 동일한
+버그(라벨 오표시)를 더 깔끔한 단일 소스 구조로 해결하고 있어 **되돌리지 않고 현재 상태를
+그대로 인정**. `ProductHero.svelte`/`ProductCategoryModal.svelte`는 순수 표시 컴포넌트라
+서버측 조회 전략 변경과 무관하게 그대로 유효.
+
+svelte-check/eslint를 현재 실제 파일 상태 기준으로 재실행 — 신규 에러 0건, 베이스라인과
+동일함을 재확인(security/detect-object-injection 13건은 여전히 이번 작업과 무관한
+기존 라인).
+
+⚠️ 세션 간 중복작업으로 TASK.md 위 항목들의 구현 서술("categoryLabels[default_category]
+?? g.name")은 현재 코드와 다름 — 실제 코드는 `code_mapping_groups.name` 단일 소스 구조.
+과거 기록은 그 시점의 의사결정 히스토리로 남겨두고 정정하지 않음(하네스 로그는 append-only
+원칙).
+
+⚠️ 범위 외 혼재 파일 발견(본 세션 무변경, 다른 세션 것으로 추정) — 커밋 시 Stephen 확인 필요:
+  - `src/routes/+page.svelte`: 홈 모바일 하단탭바 스크롤 인터랙션(`tabBarHidden`) —
+    `git diff HEAD`로 본 세션 변경분이 아님을 확인(카테고리 관련 hunk만 본 세션 작업)
+  - `src/routes/cms/rentals/+page.svelte`, `.claude/rules/rental-lifecycle.md` — 대여
+    라이프사이클 관련 무관 변경
+
+GATE E 통과(코드 품질·타입·린트 전부 이상 없음, RLS 진단도 실서비스 기준 재확인 완료) —
+커밋은 Stephen이 직접 실행. 커밋 전 위 2건(범위 외 혼재 파일 포함 여부)만 확인 필요.
