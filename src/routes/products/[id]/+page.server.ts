@@ -1,6 +1,8 @@
 import { dev } from '$app/environment';
 import { error } from '@sveltejs/kit';
-import type { SupabaseClient } from '@supabase/supabase-js';
+import { env } from '$env/dynamic/private';
+import { getSupabaseUrl } from '$lib/env/supabasePublic';
+import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 import {
 	CANON_EOS_R5_FIXTURE,
 	isLegacyNumericId,
@@ -48,11 +50,12 @@ async function attachPrices(
 	};
 }
 
-function devFallbackForLegacyNine(rawId: string): { product: ProductDetailRow; productId: string } | null {
+function devFallbackForLegacyNine(rawId: string): { product: ProductDetailRow; productId: string; categoryLabel: string | null } | null {
 	if (!dev || rawId !== '9') return null;
 	return {
 		product: CANON_EOS_R5_FIXTURE,
 		productId: '9',
+		categoryLabel: null,
 	};
 }
 
@@ -262,6 +265,24 @@ export const load: PageServerLoad = async ({ params, locals }) => {
 		});
 	}
 
+	// BUG-FIX(2026-08-10): 상품상세 상단(ProductHero)의 카테고리 라벨이 하드코딩 영문 맵
+	// (CATEGORY_MAP)에 의존하고 있었음 — 백오피스(code_mapping_groups) 값으로 통일. RLS가
+	// is_cms_user()라 일반 고객은 anon key로 못 읽으므로 이 조회에 한해 service_role 사용
+	// (RLS 정책 자체는 무변경, /cms/products·`/products` 목록 페이지와 동일 패턴).
+	// Stephen 확정: code_mapping_groups가 유일한 정본 — "그룹명"(name)이 곧 노출 라벨,
+	// product_category_codes는 무관한 별개 코드체계라 관여시키지 않는다.
+	let categoryLabel: string | null = null;
+	if (row.category) {
+		const admin = createClient(getSupabaseUrl(), env.SUPABASE_SERVICE_ROLE_KEY ?? '');
+		const { data: groupRow } = await admin
+			.from('code_mapping_groups')
+			.select('name')
+			.eq('default_category', row.category as string)
+			.eq('is_active', true)
+			.maybeSingle();
+		categoryLabel = (groupRow as { name?: string } | null)?.name ?? null;
+	}
+
 	return {
 		product: enriched,
 		productId: String(row.id),
@@ -274,5 +295,6 @@ export const load: PageServerLoad = async ({ params, locals }) => {
 		shippingPolicy,
 		shotlogs,
 		popularProducts,
+		categoryLabel,
 	};
 };

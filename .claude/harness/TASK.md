@@ -28,7 +28,7 @@ auth_baseline: fed4fdb — createBrowserClient 패턴 (절대 싱글톤 createCl
 
 ---
 
-## NOW — 조합코드(품번) 순번 2단 계층 채번 + 순번 슬롯 +/− UX + 콤보 편집 카드 레이아웃 보완 (2026-08-10) — 🚦 GATE B 승인 대기 (CRITICAL)
+## DONE — 조합코드(품번) 순번 2단 계층 채번 + 순번 슬롯 +/− UX + 콤보 편집 카드 레이아웃 보완 (2026-08-10) — ✅ GATE E 통과, Stage+Production 배포·검증 완료
 
 plan_source: polymorphic-humming-micali.md (Plan Mode 사전 탐색·확정, 미승인 — GATE B에서 Stephen 최종 승인 필요)
 아젠다: `/cms/codes` 자동매핑(조합코드그룹) 조합의 "순번상한"을 순번1(부모, 상품 신규등록 시
@@ -57,16 +57,17 @@ plan_source: polymorphic-humming-micali.md (Plan Mode 사전 탐색·확정, 미
   - generate_product_code 호출 시 p_code_id 등 3개 인자 전부 명시(2-param/3-param 오버로드 모호성
     에러 재발생 방지, products.md §2-3)
 
-⚠️ 구현 전 재확인된 가정 (plan의 "구현 전 재확인이 필요한 가정" 섹션 — GATE B에서 최종 확인,
-반드시 실행 담당 에이전트가 인지할 것):
-  - 순번1(부모)은 **1부터 시작**, 순번2(자식)는 **0부터 시작**(부모 등록 시 자동생성되는 첫
-    자식 = `000`, 이후 빠른재고등록마다 001, 002…) — 기존 1개-순번 모드의 자식 카운터(1부터
-    시작, 변경 없음)와는 다른 규칙이므로 혼동 금지
+⚠️ 최종 확정 규칙 (2026-08-10 Stephen 정정·GATE C 확인 완료 — 실행 담당 에이전트 필독):
+  - 순번1(부모)·순번2(자식) **둘 다 1부터 시작**(0 아님). "000"은 실제 채번되는 자식이 아니라
+    부모 자신을 가리키는 명목상 기준코드(표시용 placeholder)일 뿐 — 최초 초안에서 "순번2는
+    0부터 시작"으로 잘못 이해했던 부분은 Stephen이 직접 정정. 실제 자식은 오직 "빠른
+    재고등록"으로만 생성되며 항상 001부터 채번된다. 기존 1개-순번 모드의 자식 카운터(1부터
+    시작)와 동일 관례이므로 별도 0-기반 예외 로직 불필요(코드도 이 규칙대로 구현·검증됨)
   - 순번1/순번2는 **슬롯별 독립 자릿수** 허용(예: 순번1=3자리, 순번2=2자리처럼 다르게 설정 가능)
     — "기존 순번 UX와 완전히 동일" 요구사항에 따른 해석
-  - 순번1/순번2는 레이어가 다른 두 개의 **독립 카운터** — 각각 별도 상한 적용("더 엄격한 값 우선
-    차단": 부모 상한 도달 = 그 조합으로 신규 상품등록 불가 / 자식 상한 도달 = 그 특정 부모에
-    대해서만 빠른재고등록 불가)
+  - 순번1/순번2는 레이어가 다른 두 개의 **독립 카운터** — 각각 별도 상한 적용(부모 상한 도달 =
+    그 조합으로 신규 상품등록 불가 / 자식 상한 도달 = 그 특정 부모에 대해서만 빠른재고등록
+    불가, 다른 부모는 무관) — Stephen 최종 확인 완료(2026-08-10)
 
 TDD도메인: DB 마이그레이션(신규 테이블 2종 + 컬럼 변경) + `generate_product_code` 6-param
   오버로드 신설 + `generate_inventory_product_code` 2단 모드 내부 분기 — AGENTS.md TDD 강제
@@ -126,10 +127,10 @@ TDD도메인: DB 마이그레이션(신규 테이블 2종 + 컬럼 변경) + `ge
 
 ### NEXT — GSD 경로 (`@harness-executor`, UI + 폼 연동, 30분 단위)
 
-- [ ] GSD-1: `/cms/codes` `+page.server.ts` `updateGroupItemSettings` 액션에
+- [x] GSD-1: `/cms/codes` `+page.server.ts` `updateGroupItemSettings` 액션에
   `parent_max_sequence` 폼 필드 파싱/검증(nullable, 1~9999999) 추가, 기존 `max_sequence` 파싱을
   nullable 허용으로 조정(`addGroupItem`/`removeGroupCombo`/`removeComboItem`은 변경 없음) | GSD |
-  완료기준: 순번1만 저장 / 순번1+순번2 저장 / 둘 다 미설정 저장 3가지 케이스 정상 동작 | 예상: 30분
+  ✅ 완료: 순번1만 저장 / 순번1+순번2 저장 / 둘 다 미설정 저장 3가지 케이스 정상 동작 확인
 
 - [x] GSD-2: `_AutoMappingTab.svelte` — 순번1(`.seq-wrap`) 우측에 "+" 아이콘 버튼 추가
   (`_TreeTab.svelte` `.pm-add-btn` 십자형 SVG 스타일 재사용) → 클릭 시 순번1과 동일한
@@ -155,19 +156,84 @@ TDD도메인: DB 마이그레이션(신규 테이블 2종 + 컬럼 변경) + `ge
   select, 값이 있으면 신규 6-param RPC 호출 분기(기존 5-param 분기는 그대로 폴백 유지) | GSD |
   ✅ 완료 (TDD-4 GREEN에서 함께 구현)
 
-## GATE C 확인 항목 (전체 NOW/NEXT 완료 후 필수)
+## GATE C 확인 항목 (전체 NOW/NEXT 완료 후 필수) — 전체 통과
 
-- [ ] `generate_product_code` 기존 2/3/5-param 오버로드 시그니처 무변경?
-- [ ] `generate_inventory_product_code` 시그니처 무변경(내부 로직만 분기)?
-- [ ] 순번2는 0부터 시작 / 순번1은 1부터 시작 규칙 정확히 구현됐는가?
-- [ ] 순번1/순번2 슬롯별 독립 자릿수 지원되는가?
-- [ ] 기존 1개-순번 모드(순번1 미설정) 회귀 없음 — 기존과 100% 동일 동작?
-- [ ] "+"/"−" 클릭 시 순번2 UI 생성/제거 정상 동작, 조합 코드 3개 이상이어도 슬롯 2개 상한 유지?
-- [ ] 콤보 편집 카드 레이아웃 재배치 시 기존 색상·보더·타이포 토큰 변경 없음?
-- [ ] products.md §2-2 영구고정 정책(재사용 불가, 단조증가) 신규 카운터 2종 모두 준수?
-- [ ] stage(ezyvffjvuwmtuhpxdjrw) 마이그레이션 4건 적용·검증 완료? production은 Stephen 승인
-      후 별도 진행(자동 적용 금지)?
-- [ ] `npm run check` / `npx vitest run` 통과?
+- [x] `generate_product_code` 기존 2/3/5-param 오버로드 시그니처 무변경 — stage+production 양쪽
+      curl/SQL 크로스체크로 4개 오버로드(2/3/5/6-param) 전부 존재 확인
+- [x] `generate_inventory_product_code` 시그니처 무변경(내부 로직만 분기) — 2-param 1종만 존재
+- [x] 순번1·순번2 둘 다 1부터 시작 — Stephen 정정 반영, production 실채번 테스트로 실증
+- [x] 순번1/순번2 슬롯별 독립 자릿수 지원 — `comboPreviewFmt`에서 각 슬롯 자릿수 독립 계산
+- [x] 기존 1개-순번 모드(순번1 미설정) 회귀 없음 — migration 216 "기존 모드" 분기가 migration
+      194와 로직 동일(qa 검수 확인), production 테스트에서도 `CSFSH001` 형태로 회귀 없음 실증
+- [x] "+"/"−" 클릭 시 순번2 UI 생성/제거 정상 동작, 순번 슬롯 최대 2개 상한 유지
+- [x] 콤보 편집 카드 레이아웃 재배치 시 기존 색상·보더·타이포 토큰 변경 없음(배치·패딩만 조정)
+- [x] products.md §2-2 영구고정 정책(재사용 불가, 단조증가) 신규 카운터 2종 모두 준수 — PK
+      기반 INSERT...ON CONFLICT DO UPDATE 원자적 패턴, 동시성 시나리오 정적 분석 완료
+- [x] stage(ezyvffjvuwmtuhpxdjrw) 마이그레이션 4건 적용·검증 완료 → production
+      (vnbpmvxruyciuuaermyh)도 Stephen 승인 후 2026-08-10 적용·검증 완료
+- [x] `npx svelte-check` 통과(수정 대상 파일 신규 에러 0건) / TDD 테스트 4/4 통과
+
+---
+
+## 사후 추가 보완 — Stephen 반복 피드백 라운드 (2026-08-10, GATE C 이후 UI 미세조정)
+
+GSD-2~4 1차 구현 이후, Stephen이 실제 화면을 보며 여러 차례 구체적 UX 피드백을 줘서 harness
+실행 흐름이 아닌 세션 내 직접 대화로 반복 보완했다(전부 CSS/마크업 배치 조정, RPC·DB 로직
+무변경):
+
+- 순번1(부모)/순번2(자식) 라벨·순서 정정: 기존 필드(자식)는 "+"가 나타나기 전까지 정직하게
+  "자식 순번"으로 표시, "+"로 순번1(부모) 슬롯이 나타나면 화면 읽기 순서는 항상 순번1→순번2 —
+  단 "+"/"−" 트리거 버튼 자체는 UX상 기본 노출 필드(자식) 우측에 유지
+- 조합 편집 카드 레이아웃 3구역 확정: 상단 닫기(✕, 항상 비파괴)/중단 코드칩+입력필드 한 행
+  결합(공간 부족 시만 줄바꿈)/하단 저장+삭제(빨간 CMS 표준 버튼)
+- 삭제 UX 전면 정리: 아이콘(×) 삭제 버튼을 전부 텍스트형 "삭제"(`btn-danger-sm`)로 교체,
+  CMS 표준 2클릭 안전장치(`csToast.warning` 1차 클릭 → 2차 클릭에만 실제 삭제) 복원 적용
+  (`CmsDeleteButton`/`ProductDetailPanel` 기존 패턴 재사용)
+- "새 조합" 대기 카드를 목록 최상단으로 재배치 + 안내문구 "아래 코드분류 목록 중
+  선택하세요."로 변경
+- 조합 미리보기(`buildComboPreview`)가 순번 자리를 "1"이 아닌 항상 "0"으로 표시하도록 수정 —
+  이 화면은 실제 채번이 아니라 코드 구조(포맷) 노출 전용이라는 원칙 반영
+- `.close-btn` 색상 토큰을 빨강(삭제 뉘앙스)에서 회색 계열(기본 `--cs-surface-gray`/
+  `--cs-text-mid`, hover `--cs-border`/`--cs-text-dark`)로 통일 — "닫기=비파괴"와 시각적으로
+  일치시킴(단, 이 클래스를 공유하는 패널 전체 닫기 버튼에도 동일 적용되는 부수효과 있음—QA
+  참고사항)
+
+## 사후 재검증 및 버그 수정 (2026-08-10, `4f9aab5` 커밋)
+
+Stephen 요청으로 "상품등록 화면 → 콤보 선택 → 부모 등록 → 빠른재고등록" 전 구간 로직을
+Explore 에이전트로 재검증한 결과, `src/routes/cms/products/new/+page.server.ts`에서 실제
+버그 2건을 발견·수정:
+
+1. 채번 분기 조건 버그: 순번2(자식) 상한이 무제한(NULL)이면서 순번1(부모)도 미사용인 "정상적인"
+   콤보가 `comboMaxSequence !== null` 조건 때문에 5-param 분기를 타지 못하고 3-param으로 새어,
+   관리자가 지정한 `date_option`이 조용히 무시되던 버그 — 조건을 `comboDateOption !== null`
+   기준으로 완화
+2. 상품등록 화면(`+page.svelte`)이 `parent_max_sequence`를 조회하지 않아 2단 계층 콤보를
+   선택해도 실제 품번 구조(순번1 포함)를 미리보기에 반영하지 못하던 문제 — 조회 추가 +
+   `/cms/codes`와 동일하게 미리보기 순번 자리 항상 0 표시 + `~null` 배지 표시 버그 정리
+
+## 배포 기록 (2026-08-10)
+
+- Stage 마이그레이션 213~216 적용·스키마 검증 완료(ezyvffjvuwmtuhpxdjrw)
+- git 커밋 2건, `stage` 브랜치 푸시 → PR #110으로 `main` 병합:
+  - `4715bb0` feat(codes): 조합코드 순번 2단 계층 채번(부모/자식) 기능 추가
+  - `4f9aab5` fix(products): 상품등록 조합코드 채번 분기 버그 + 2단 순번 미리보기 반영
+- Vercel 배포: stage 프리뷰 2건 + production(PR #110 merge) 전부 READY 확인(Vercel API 직접
+  조회, GitHub commit status 아님)
+- Production 마이그레이션 213~216 Stephen 승인 하에 적용·스키마 검증 완료(vnbpmvxruyciuuaermyh)
+- Production 실채번 로직 테스트: `BEGIN...ROLLBACK` 트랜잭션으로 부모A/B 2단 등록 +
+  빠른재고등록 각 케이스(부모별 순번2 독립 리셋 포함) + 1단 회귀 케이스까지 6개 시나리오
+  전부 기대값과 정확히 일치 확인, 롤백 후 흔적 0건(실서비스 데이터 무영향) 확인 완료
+
+## QA 검수 이력
+
+- 1차 QA(`@sp3-qa-agent`, GATE C→E): 9개 확정 사양 전부 충족, TDD 4/4 통과, stage DB 크로스체크
+  완료 → GATE E 통과 판정. 검수 중 QA 에이전트가 `git stash`를 실행해 저장소에 무관한 옛
+  stash와 충돌이 발생했으나(이번 세션 커밋과는 무관), harness 안전장치가 `git reset` 등 되돌리기
+  명령을 자동 차단했고 Stephen이 `git reset --hard HEAD` + `git stash drop`으로 직접 정리 완료 —
+  유실된 작업 없음(git log로 재확인)
+- 2차 QA 대상(예정): `4f9aab5` 버그 수정 커밋은 1차 QA 이후에 이뤄져 아직 QA 검수 전 — 재검수
+  필요
 
 ---
 
@@ -9897,3 +9963,83 @@ svelte-check/eslint를 현재 실제 파일 상태 기준으로 재실행 — �
 
 GATE E 통과(코드 품질·타입·린트 전부 이상 없음, RLS 진단도 실서비스 기준 재확인 완료) —
 커밋은 Stephen이 직접 실행. 커밋 전 위 2건(범위 외 혼재 파일 포함 여부)만 확인 필요.
+
+---
+
+## NOW — 전자계약 개발정보 문서 통합(신규 contract.md 작성) (2026-07-28) ✅ 완료
+
+plan_source: 세션 내 아젠다 (Stephen 직접 요청 — "기존 CMS 전자계약 아키텍처 로직, 연동 구조 등
+개발정보가 지침문서에 있는지 확인" → 부재 확인 → "파편화된 전자계약 개발 정보를 완벽히 정리")
+등급: 🟢 ROUTINE (문서 작업, 코드 변경 없음)
+
+배경: 직전 세션(같은 날)에서 전자계약 시스템 버그 여러 건(document_url 무한로딩, 만료링크 PII
+노출, 관리자 딥링크 오분기, 서명 유효성 판정 임의기준)을 수정한 뒤, Stephen이 "이 도메인에
+payment.md/chat.md/rental.md 같은 전용 참조문서가 있는지" 질의 → `.claude/rules/`,
+`.claude/rules-ref/` 전수 grep 결과 전용 문서 부재 확인, CLAUDE.md 섹션별 참조 로드 표에도
+계약 도메인 행 자체가 없었음 — 이 문서화 공백이 오늘 발견된 버그들이 오래 방치된 원인 중
+하나로 판단됨
+
+신규/수정 파일:
+  - .claude/rules-ref/contract.md (신규) — 전자계약 도메인 전용 레퍼런스 (핵심 원칙 · 시스템
+    아키텍처 · 데이터 모델(contracts/contract_signings 전체 컬럼) · 상태 판정 기준 · API
+    레퍼런스 · 발송/서명 흐름 · 관리자 딥링크 라우팅 · 서명 유효성 판정 정책(이력 포함) ·
+    만료 링크 처리 · 채팅 action_payload 타입 · 변수 치환 시스템 · 고객 화면 UI 확정사항 ·
+    주요 파일 인덱스 · GATE C 체크리스트)
+  - .claude/rules/rental-lifecycle.md (MODIFY) — "전자계약 발송 흐름" 상세 절(발송 API 흐름·
+    편집 제한 정책·변수 치환 표 등 약 110줄)을 contract.md로 이관, 짧은 포인터로 교체 + GATE C
+    체크리스트의 계약 관련 4개 항목도 "contract.md 참조"로 통합(중복 관리 제거)
+  - CLAUDE.md (MODIFY) — "섹션별 참조 로드" 표에 전자계약·서명 행 신규 추가
+    (`@.claude/rules-ref/contract.md`, 트리거: 계약서·전자서명·contract_signings·서명 딥링크 작업 시)
+
+- [x] DOC-CONTRACT-CONSOLIDATE: 흩어진 전자계약 개발정보를 contract.md 단일 문서로 통합 | ROUTINE | ✅ 완료 (2026-07-28)
+  - 이관 출처: rental-lifecycle.md("전자계약 발송 흐름" 절 전체), 오늘 세션에서 실제 조사·수정한
+    내용(document_url 죽은 필드, contracts.status 죽은 필드, 만료 처리 결함·수정, 서명 유효성
+    판정 이력(3획→40px→strokes≥1), 관리자 딥링크 라우팅 로직, RLS·service_role 사용 근거),
+    코드 직접 재확인(contracts/contract_signings 전체 컬럼, API 12개 엔드포인트, 파일 경로 전수)
+  - "상태 판정 — 어디서 무엇을 보는가" 절 신설: contracts.status/document_url/signed_at 3개
+    컬럼이 실제로는 죽은 필드이고 contract_signings.signed_at + contracts.content_blocks가
+    진짜 진실의 원천임을 명시 — 향후 세션이 같은 혼동으로 같은 버그를 반복하지 않도록 방지 목적
+  - 중복 제거: rental-lifecycle.md의 원본 절은 삭제하고 포인터로 대체(두 문서에 같은 내용이
+    남아 다시 드리프트(divergence)되는 것을 방지)
+
+⏳ QA: 문서 전용 작업이라 sp3-qa-agent 미호출 (코드 변경 없음)
+
+---
+
+## NOW — 전자계약 권한 계정별 흐름 전역 감사 (작성→발행→발송→서명→확인) (2026-08-11) ✅ 완료 (연구)
+
+plan_source: 세션 내 아젠다 (Stephen 직접 요청 — "권한 계정 별 흐름(작성/발행/발송/서명/확인)
+로직과 연동된 로직 전역을 검수해 문서에 기술 정보 기록")
+등급: 🔴 CRITICAL (보안·권한 도메인) — 조사만 수행, 코드 변경 없음(정책 결정 필요 사안이라
+Stephen 확인 전 임의 게이트 추가/변경 금지 원칙 준수)
+
+수정 파일:
+  - .claude/rules-ref/contract.md (MODIFY) — "권한 계정별 흐름 전역 감사" 신규 절 추가
+
+- [x] AUDIT-CONTRACT-ROLES: 계약 5단계(작성/발행/발송/서명/확인) 전 구간 권한 게이트 실측 | CRITICAL | ✅ 완료 (2026-08-11)
+  - 조사 파일: /cms/reservation/contracts(+page.server.ts 3개 action), init-contract, contract-data,
+    contracts/[id]/content(GET/PATCH), send-chat, getCmsRoleForAction.ts, cmsPermissions.ts,
+    RentalContractViewer.svelte·ContractEditorModal.svelte(클라이언트 role 분기 유무),
+    contracts/contract_signings/contract_templates RLS 정책 원문(migration 134/140/148), is_cms_admin() 함수 정의
+  - 핵심 발견: 계약 관련 CMS 액션 11개 전부(양식 작성/수정/삭제, 계약 발행, 내용 편집, 채팅 발송)가
+    `getCmsRoleForAction()`(유효 CMS 계정 여부만 확인, 등급 무관)만 사용 — 등급을 실제로 구분하는
+    `hasSettingsAccess()`(manager 이상)가 단 한 곳에도 쓰이지 않음. RLS 레이어(`is_cms_admin()`)도
+    "cms_role IS NOT NULL"만 확인해 동일하게 등급 무차별. get_rental_list RPC 등 어디에도 partner
+    계정을 자신의 담당 범위로 제한하는 데이터 스코핑 로직 없음 — partner도 플랫폼 전체 고객의
+    예약·PII·계약 원문을 조회·발송·편집 가능한 상태
+  - security-auth.md QR-CASE-2(2026-08-XX, `/cms/codes` 19개 액션이 세션체크만 있어 partner도
+    전역설정 변경 가능했던 사례)와 동일 유형의 정책 공백으로 판단 — 계약서 양식도 "전 고객에게
+    발송되는 법적 문서 원본"이라는 점에서 성격이 같음
+  - ⛔ 코드 미수정: 의도된 설계(파트너 업무상 필요)인지 단순 누락인지 코드만으로 판단 불가한
+    정책 결정 사안 — core-rules.md 30초 규칙에 따라 Stephen 확인 없이 임의로 게이트 추가하지 않음.
+    contract.md에 Stephen 확인 필요 사항 3가지(양식 CRUD 등급 제한 여부 / 발행·발송 동일 기준 적용
+    여부 / partner 데이터 스코핑 필요 여부)를 명시적으로 남김
+  - GATE C 체크리스트에 "신규 계약 액션 추가 시 등급 정책을 임의로 정하지 말 것" 항목 추가
+
+✅ Stephen 확인 완료 (2026-08-11, 같은 세션):
+  1. 계약서 양식 작성·수정·삭제 — partner도 가능해야 함 (의도된 설계)
+  2. 계약 발행·발송 — partner도 가능해야 함 (동일)
+  3. partner 데이터 스코핑 — "담당 파트너 소속" 개념·기능 자체가 시스템에 없어 1·2번과 동일 결론
+  → QR-CASE-2와 달리 이 도메인은 role 무차별 허용이 확정 정책. 코드 변경 없음.
+  contract.md v1.2로 갱신(정책 공백 절 → 정책 확인 완료 절로 교체, GATE C 항목도 확정 정책
+  반영 문구로 수정) — "담당 파트너 소속" 개념이 향후 신설되면 재검토 대상이라는 단서만 남김

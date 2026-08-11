@@ -54,31 +54,30 @@ async function loadProductsMetadata(admin: SupabaseClient): Promise<ProductsMeta
     return metadataCache.data
   }
 
-  // 서로 독립적인 7개 쿼리 병렬 실행 (partnerComboItems만 partnerGroupIds에 의존해 아래 별도 처리)
+  // 서로 독립적인 6개 쿼리 병렬 실행 (partnerComboItems만 partnerGroupIds에 의존해 아래 별도 처리)
   const [
-    { data: rawCategories },
-    { data: rawCatCodes },
+    { data: rawCategoryGroups },
     { data: rawPartnerGroups },
     periodsRes,
     methodsRes,
     pickupsRes,
     { data: shippingRaw },
   ] = await Promise.all([
-    // 코드조합그룹 중 상품목록 카테고리 필터에 노출하도록 설정된 목록 (탭 필터용)
+    // BUG-FIX(2026-08-10, Stephen 확정): code_mapping_groups가 카테고리 체계의 유일한
+    // 정본 — "그룹명"(name)이 곧 /cms/products 카테고리 필터 바 UI에 노출돼야 할 표시
+    // 라벨이고, "카테고리 키"(default_category)는 products.category·예약·대여 전역에
+    // 걸친 절대 분류 기준값이다(변형·치환 금지). product_category_codes는 이 목적과
+    // 무관한 별개 코드체계(품번 프리픽스·쿠폰·회원등급 등이 섞인 테이블)이므로 카테고리
+    // 라벨 조회에 관여시키지 않는다. show_in_product_filter 필터 없이 전체를 가져와
+    // categoryLabels(카드 배지 등 전역 라벨 조회용)를 만들고, 탭 목록(categories)만
+    // show_in_product_filter=true로 별도 필터링한다.
     admin
       .from('code_mapping_groups')
-      .select('id, name, sort_order, default_category')
-      .eq('show_in_product_filter', true)
+      .select('id, name, sort_order, default_category, show_in_product_filter')
+      .not('default_category', 'is', null)
       .eq('is_active', true)
       .order('sort_order', { ascending: true })
       .order('name', { ascending: true }),
-    // 카드 배지용 product_category → 레이블 매핑 (depth=0 기준)
-    admin
-      .from('product_category_codes')
-      .select('product_category, name')
-      .eq('depth', 0)
-      .eq('is_active', true)
-      .is('deleted_at', null),
     // 협력사 전용코드 그룹(is_partner_type=true)의 조합코드 목록 (빠른 재고 등록 모달 조합코드 선택용)
     admin
       .from('code_mapping_groups')
@@ -96,18 +95,23 @@ async function loadProductsMetadata(admin: SupabaseClient): Promise<ProductsMeta
       .single(),
   ])
 
-  const categories = (rawCategories ?? []).map((g) => ({
-    value: g.id,
-    label: g.name,
-    // categoryCode: 상세 패널에서 products.category에 저장할 실제 값 (default_category 문자열)
-    categoryCode: (g.default_category ?? null) as string | null,
-  }))
-
+  // 카테고리 키(default_category) → 그룹명(name) 전역 라벨 맵(카드 배지 등에서 사용,
+  // show_in_product_filter 무관 — 필터에서 숨긴 카테고리도 이미 등록된 상품엔 라벨이 필요)
   const categoryLabels: Record<string, string> = Object.fromEntries(
-    (rawCatCodes ?? [])
-      .filter((c) => c.product_category)
-      .map((c) => [c.product_category as string, c.name as string])
+    (rawCategoryGroups ?? [])
+      .filter((g) => g.default_category)
+      .map((g) => [g.default_category as string, g.name as string])
   )
+
+  // 카테고리 필터 탭 목록 — show_in_product_filter=true인 그룹만
+  const categories = (rawCategoryGroups ?? [])
+    .filter((g) => g.show_in_product_filter)
+    .map((g) => ({
+      value: g.id,
+      label: g.name,
+      // categoryCode: 상세 패널에서 products.category에 저장할 실제 값 (default_category 문자열)
+      categoryCode: (g.default_category ?? null) as string | null,
+    }))
 
   const partnerGroupIds = (rawPartnerGroups ?? []).map((g) => g.id)
   const partnerGroupNameById: Record<string, string> = Object.fromEntries(
