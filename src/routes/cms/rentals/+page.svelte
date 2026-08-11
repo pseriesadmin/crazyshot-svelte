@@ -264,6 +264,7 @@
             onclose={closePanel}
             onrefresh={invalidateAll}
             isRentalView={true}
+            stepFilter={['confirmed', 'shipped', 'in_use', 'return_requested', 'returned']}
           />
         {/key}
       </div>
