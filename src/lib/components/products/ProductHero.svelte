@@ -5,10 +5,11 @@
   interface Props {
     imageUrls?: string[];
     category?: string;
+    categoryLabel?: string | null;
     productName?: string;
   }
 
-  let { imageUrls = [], category = 'camera', productName = '' }: Props = $props();
+  let { imageUrls = [], category = 'camera', categoryLabel = null, productName = '' }: Props = $props();
 
   let activeThumb = $state(0);
 
@@ -27,13 +28,9 @@
     return url.startsWith('/') || url.startsWith('blob:');
   }
 
-  const CATEGORY_MAP: Record<string, string> = {
-    camera: 'Camera', lens: 'Lens', drone: 'Drone',
-    phone: 'Phone', video: 'Video', tripod: 'Tripod',
-    audio: 'Audio', lighting: 'Lighting',
-  };
-
-  const categoryLabel = $derived(CATEGORY_MAP[category] ?? category);
+  // BUG-FIX(2026-08-10): 하드코딩 영문 맵(CATEGORY_MAP) 제거 — 백오피스에서 설정된
+  // 라벨(부모가 조회해 categoryLabel prop으로 전달)을 그대로 쓰고, 없으면 원본 코드값 표시
+  const displayCategoryLabel = $derived(categoryLabel ?? category);
 
   function goBack() {
     if (history.length > 1) {
@@ -57,7 +54,7 @@
   </div>
 
   <!-- GNB: Mobile floating pill -->
-  <SubGnb title={categoryLabel} floating />
+  <SubGnb title={displayCategoryLabel} floating />
 
   <!-- GNB: PC — sub-gnb_navi_c (상품상세정보 전용 GNB, sub-gnb_navi_b와 동일 CSS) -->
   <header class="sub-gnb-b">
@@ -69,7 +66,7 @@
           </svg>
           <span class="sub-gnb-b-back">Back</span>
         </div>
-        <span class="sub-gnb-b-title">{categoryLabel}</span>
+        <span class="sub-gnb-b-title">{displayCategoryLabel}</span>
       </button>
 
       <div class="sub-gnb-b-cats">

@@ -1,3 +1,6 @@
+import { env } from '$env/dynamic/private'
+import { getSupabaseUrl } from '$lib/env/supabasePublic'
+import { createClient } from '@supabase/supabase-js'
 import type { PageServerLoad } from './$types'
 
 export const load: PageServerLoad = async ({ locals, url }) => {
@@ -33,8 +36,18 @@ export const load: PageServerLoad = async ({ locals, url }) => {
   const catSettings      = (settings['product_page_categories'] as CatSettings)      ?? { items: [] }
   const keywordsSettings = (settings['product_page_keywords']   as KeywordsSettings) ?? { items: [] }
 
+  // BUG-FIX(2026-08-10): code_mapping_groups RLS가 is_cms_user()로 잠겨있어(보안 정책
+  // 자체는 그대로 유지), 로그인하지 않았거나 CMS 권한이 없는 일반 고객은 locals.supabase
+  // (anon key)로 이 테이블을 전혀 읽을 수 없었다 — 즉 카테고리 탭 자체가 일반 고객
+  // 화면에서는 항상 빈 배열로 내려가던 상태였다(CMS 계정으로만 테스트해 발견되지 않음).
+  // 카테고리 이름은 민감정보가 아니므로 이 조회에 한해서만 service_role 사용(RLS 정책
+  // 자체는 무변경). Stephen 확정: code_mapping_groups가 카테고리 체계의 유일한 정본 —
+  // "그룹명"(name)이 곧 화면에 노출돼야 할 라벨이고, product_category_codes는 무관한
+  // 별개 코드체계라 관여시키지 않는다.
+  const admin = createClient(getSupabaseUrl(), env.SUPABASE_SERVICE_ROLE_KEY ?? '')
+
   // code_mapping_groups.default_category → 플랫폼 전역 카테고리 SSOT (상품필터 노출 설정 그룹만)
-  const { data: groupsRaw } = await locals.supabase
+  const { data: groupsRaw } = await admin
     .from('code_mapping_groups')
     .select('name, default_category, sort_order')
     .not('default_category', 'is', null)

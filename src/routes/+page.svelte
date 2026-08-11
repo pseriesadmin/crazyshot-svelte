@@ -112,16 +112,26 @@
   ]
   const BRAND_SET = [...BRANDS_D, ...BRANDS_D, ...BRANDS_D, ...BRANDS_D]
 
-  const CATEGORY_TABS = [
-    { id: 'hype',        label: 'HypePack',    icon: 'package'    },
-    { id: 'camera',      label: 'Camera',      icon: 'camera'     },
-    { id: 'lens',        label: 'Lens',        icon: 'aperture'   },
-    { id: 'phone',       label: 'Phone',       icon: 'phone'      },
-    { id: 'lighting',    label: 'Lighting',    icon: 'zap'        },
-    { id: 'drone',       label: 'Drone',       icon: 'plane'      },
-    { id: 'actcam',      label: 'ActCam',      icon: 'video'      },
-    { id: 'accessories', label: 'Accessories', icon: 'wrench'     },
-  ]
+  // BUG-FIX(2026-08-10): 하드코딩 id/label 배열 제거 — 백오피스(data.categories)에서
+  // 노출 설정된 카테고리 목록·라벨을 그대로 사용. 아이콘은 시각 자산이라 이번 범위에서는
+  // 카테고리 코드별 아이콘 키 매핑만 유지(라벨/노출목록만 동적화, Stephen 확인된 범위)
+  const CATEGORY_ICON_BY_CODE: Record<string, string> = {
+    hypepack:   'package',
+    camera:     'camera',
+    lens:       'aperture',
+    phone:      'phone',
+    light:      'zap',
+    dronegim:   'plane',
+    actcam:     'video',
+    accessorie: 'wrench',
+  }
+  const CATEGORY_TABS = $derived(
+    data.categories.map((c) => ({
+      id:    c.id,
+      label: c.name,
+      icon:  CATEGORY_ICON_BY_CODE[c.code] ?? 'wrench',
+    }))
+  )
 
   // ── 상태 ──────────────────────────────────────────────────────────
   let activeTab = $state('camera')

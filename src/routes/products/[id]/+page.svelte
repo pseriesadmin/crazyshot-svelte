@@ -57,6 +57,7 @@
       shippingPolicy: { items: { label: string; fee: number }[]; guide: string } | null;
       shotlogs: ShotlogItem[];
       popularProducts: PopularItem[];
+      categoryLabel: string | null;
     };
   }
   let { data }: Props = $props();
@@ -439,7 +440,7 @@
 </script>
 
 <!-- ① Hero (PC sub-GNB는 ProductHero 내부에서 hero overlay 배치) -->
-<ProductHero imageUrls={imageUrls} category={product.category ?? 'camera'} productName={product.name} />
+<ProductHero imageUrls={imageUrls} category={product.category ?? 'camera'} categoryLabel={data.categoryLabel} productName={product.name} />
 
 <!-- ② ProductInfo Section -->
 <section class="info-section">

@@ -18,21 +18,6 @@
 
   // ── 카테고리 아이콘 매핑 (code → SVG 인덱스 0~7) ───────────────────────
 
-
-  // ── 카테고리 한글 라벨 (code_mapping_groups.name 우선, 폴백용) ──────────
-  const CAT_LABELS: Record<string, string> = {
-    camera:     '카메라',
-    lens:       '렌즈',
-    actcam:     '액션캠',
-    dronegim:   '드론/짐벌',
-    light:      '조명',
-    accessorie: '악세서리',
-    hypepack:   '추천패키지',
-    phone:      '스마트폰',
-    partner:    '협력사',
-    'used-item': '중고',
-  }
-
   const KEYWORDS_FALLBACK = ['SONY', 'CANON', 'NIKON', 'Fujitsu', 'Olympus', 'Panasonic']
   let displayKeywords = $derived(
     data.settings.keywords.items.length > 0
@@ -91,7 +76,7 @@
         return [{
           id:         cat.id,
           code:       cat.code,
-          name:       CAT_LABELS[cat.code] ?? cat.name,
+          name:       cat.name,
           sort_order: item.sort_order,
           icon_url:   (item as { icon_url?: string | null }).icon_url ?? null,
         }]

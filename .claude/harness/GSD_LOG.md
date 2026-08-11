@@ -1799,3 +1799,128 @@
     있던 기존 ESLint 위반(security/detect-object-injection, no-useless-escape)이 있어 이
     두 파일 커밋 시 lint-staged가 걸릴 수 있음 — Stephen 처리방침 결정 필요.
   GATE E 통과 — 커밋은 Stephen이 직접 실행.
+
+[2026-08-10] GSD | CMS 상품목록 카테고리 필터 탭 라벨 오표시 버그 수정 | 1개 파일 | GATE E 대기
+  Stephen 리포트(스크린샷): 카테고리 필터 탭에 "Category-ACCESSORIE"/"Category-LIGHTING"
+    같은 값이 노출됨.
+  원인: loadProductsMetadata()의 categories 매핑이 code_mapping_groups.name("조합코드그룹명",
+    /cms/codes에서 "그룹명 *"으로 입력) 그대로 라벨로 씀 — 정식 한글 라벨은 별도
+    categoryLabels 맵(product_category_codes 기반, 카드 배지 등에서는 이미 정상 사용)에
+    있었는데 필터 탭만 이를 참조 안 함. /cms/codes UI 확인 결과 default_category가
+    "카테고리 키"로 명시 라벨링돼 있어 원래 그걸로 조회하도록 설계된 의도였음 확인.
+    ProductDetailPanel.svelte의 카테고리 선택 드롭다운·라벨 조회도 동일 categories.label을
+    공유해 같은 영향을 받고 있어, 탭 템플릿만 고치는 안 대신 서버측(loadProductsMetadata())
+    수정으로 전환해 두 화면 모두 해소.
+  수정: src/routes/cms/products/+page.server.ts — categoryLabels 계산을 categories보다
+    먼저 수행하도록 순서 변경, label을 categoryLabels[g.default_category ?? ''] ?? g.name로
+    수정(매핑 없으면 그룹명 폴백 유지).
+  참고(범위 밖): src/routes/products/+page.server.ts(고객 화면)도 동일 show_in_product_filter
+    플래그를 쓰고 있어 동일 버그 가능성 있음 — Stephen 별도 확인 필요.
+  svelte-check/eslint: 신규 에러·경고 0건(기존 무관 이슈만 잔존).
+
+[2026-08-10] GSD | 카테고리 라벨 하드코딩 전면 제거 + RLS 은닉 버그 수정 | 8개 파일 | GATE E 대기
+  Stephen 지시: 사용자 화면(/products 등)의 카테고리 값도 전부 백오피스 설정이 반영되게
+    통일. 서브에이전트로 전수조사해 하드코딩 4곳(+page.svelte CAT_LABELS(이전 세션 제거),
+    ProductHero.svelte CATEGORY_MAP, 홈 +page.svelte CATEGORY_TABS, ProductCategoryModal.svelte
+    CAT_LABELS) 발견.
+  🔴 별도 발견(더 심각): code_mapping_groups·product_category_codes 둘 다 RLS SELECT가
+    is_cms_user()뿐이라, locals.supabase(anon key)로 조회하던 사용자 화면 서버 코드들은
+    CMS 미로그인 고객에게 카테고리 데이터가 항상 빈 값으로 내려가고 있었음(하드코딩이 이
+    문제를 가리고 있었음). 비민감 라벨 조회이므로 이 조회들만 service_role로 전환(RLS
+    정책 자체는 무변경) — /cms/products와 동일 패턴.
+  수정 파일: src/routes/products/+page.server.ts·+page.svelte, src/routes/products/[id]/
+    +page.server.ts·+page.svelte, src/lib/components/products/ProductHero.svelte,
+    src/routes/+page.server.ts·+page.svelte(홈), src/lib/components/products/admin/
+    ProductCategoryModal.svelte. 아이콘 매핑(코드→SVG 키)은 이번 범위 제외, 라벨·노출목록만
+    동적화(Stephen 확인된 범위).
+  svelte-check: 타입 불일치 1건 즉시 발견·수정(수기 Props 인터페이스에 categoryLabel 누락) →
+    재검증 신규 에러 0건. eslint: 터치 파일 신규 에러 0건(발견된 기존 경고 4건은 git diff
+    HEAD 대조로 전부 무관 확인).
+  ⏳ 미완료: DB 데이터 백필(code_mapping_groups.name 8건 + product_category_codes 백필
+    11건)이 권한 클래시파이어에 막혀 미실행 — Stephen 승인/실행 필요. 코드는 완전히
+    백오피스 기반으로 전환됐으나 백오피스 저장값 자체가 아직 틀려있어, 백필 전까지는
+    화면에 변화 없음.
+
+[2026-08-10] FIX | 카테고리 정본 구조 정정 — Stephen 확정("그룹명=노출라벨 / 카테고리키=절대분류값") | 4개 파일 | GATE E 대기
+  Stephen이 /cms/codes 자동매핑 편집화면 캡처 2장으로 정정: ① "그룹명"(code_mapping_groups.
+    name)이 /cms/products 카테고리 필터 바에 노출돼야 할 라벨 그 자체 ② "카테고리 키"
+    (default_category)는 products.category·예약·대여 전역에 걸친 절대 분류 기준값(치환·
+    변형 금지) ③ 이 원칙대로 전역이 구현됐는지 검수 지시.
+  재검토 결과: 직전 커밋에서 도입한 `categoryLabels[default_category] ?? g.name`
+    (product_category_codes 우선 조회) 로직이 원칙과 어긋남 — product_category_codes는
+    품번 프리픽스·쿠폰·회원등급 등이 뒤섞인 무관한 별개 코드체계(이전 세션 실측으로 이미
+    확인된 사실)였는데 카테고리 라벨 조회에 잘못 관여시키고 있었음.
+  수정: 4개 파일(src/routes/cms/products/+page.server.ts, src/routes/products/
+    +page.server.ts, src/routes/+page.server.ts, src/routes/products/[id]/+page.server.ts)
+    전부 product_category_codes 조회 제거, code_mapping_groups.name을 라벨의 유일한
+    소스로 단순화. /cms/products는 카드 배지 등 전역 라벨 조회(categoryLabels)를 위해
+    show_in_product_filter 필터 없이 전체 조회 후 JS에서 탭 목록만 별도 필터링하도록
+    구조 변경(라벨 맵은 필터에서 숨긴 카테고리도 커버해야 하므로).
+  분류 키(default_category/products.category) 값 자체의 치환·변형 여부 전수 재확인:
+    CMS 카테고리 필터·고객 /products 검색·상품상세 "같은 카테고리 상품" 쿼리 전부 원본
+    문자열을 그대로 필터 키로만 사용, 별도 매핑 없이 통과됨을 코드 재대조로 확인.
+  효과: 이 정정으로 이전에 대기 중이던 DB 백필 "Option B"(product_category_codes 백필,
+    lens 중복행·hypepack 누락행 등 복잡한 판단이 필요했던 작업)가 전면 불필요해짐 —
+    남은 DB 작업은 "Option A"(code_mapping_groups.name 8건 정정)만으로 축소·단순화됨.
+  svelte-check/eslint: 신규 에러·경고 0건(베이스라인 유지, 재확인).
+
+[2026-08-10] GSD | DB 정정 — 실서비스 code_mapping_groups.name 8건 UPDATE (Stephen 승인) | 0개 파일(DB only) | GATE E 대기
+  Stephen 승인("응 진행해") 받아 실행. UPDATE 직전 대상 8행 재조회로 예상값과 100% 일치
+    확인(변경 없었음) → UPDATE 실행 → 직후 재조회로 반영 확인.
+  accessorie→악세서리, actcam→액션캠, camera→카메라, dronegim→드론/짐벌, hypepack→추천패키지,
+    lens→렌즈, light→조명, phone→스마트폰 (실서비스 vnbpmvxruyciuuaermyh만 — 스테이지는 원래
+    정상값이라 변경 불필요).
+  이로써 "카테고리 필터 탭 라벨 오표시" 버그가 코드(백오피스 조회 통일, 전 5개 화면)와
+    데이터(그룹명 8건 정정) 양쪽 모두 완료돼 완결됨. 실브라우저 최종 확인은 Stephen 대기.
+
+[2026-08-11] GATE E | @sp3-qa-agent 검수 — 카테고리 라벨 하드코딩 제거 + RLS 진단 재검증 | 0개 파일(검수·기록만) | GATE E 통과
+  QA agent가 "code_mapping_groups도 RLS로 막혀있다"는 이전 기록이 stage 실측과 다르다고
+    지적 → 실서비스·stage 양쪽 pg_policies 직접 재조회로 확정: stage는
+    auth_read_active_mapping_groups(익명도 활성 그룹 읽기 가능) 정책이 있지만 실서비스는
+    없음(is_cms_user()뿐) — 원 진단은 실서비스 기준 정확, service_role 전환 그대로 유지.
+    QA agent가 잡은 건 stage↔실서비스 RLS 정책 자체의 환경 드리프트였음(별도 기록, 미수정).
+  검수 중 다른 세션이 동일 버그를 병행 작업 중이었고 이미 cms/products·products·
+    products/[id]·홈 4개 +page.server.ts를 본 세션 구현 위에 덮어써 더 단순한 구조
+    (product_category_codes 완전 배제, code_mapping_groups.name 단일 소스)로 대체했음을
+    발견 — 기능적으로 동일 버그를 더 깔끔하게 해결하고 있어 되돌리지 않고 현재 상태 인정.
+  svelte-check/eslint를 현재 실제 파일 상태로 재실행 — 신규 에러 0건, 베이스라인 동일.
+  범위 외 혼재 파일 2건(홈 하단탭바 스크롤, cms/rentals+rental-lifecycle.md) 발견 —
+    git diff로 본 세션 것 아님 확인, 커밋 시 Stephen 확인 필요.
+  GATE E 통과 — 커밋은 Stephen이 직접 실행.
+
+[2026-08-10] ✅DONE | 조합코드(품번) 순번 2단 계층 채번 완결 — GSD-1 + UI 반복보완 + 버그수정 +
+  Stage/Production 배포·실채번 검증 (plan_source: polymorphic-humming-micali.md)
+  | supabase/migrations/20260810000213~216 (신규 4건) · src/routes/cms/codes/+page.server.ts ·
+    src/routes/cms/codes/_AutoMappingTab.svelte · src/routes/cms/products/new/+page.server.ts ·
+    src/routes/cms/products/new/+page.svelte · src/routes/cms/products/+page.server.ts ·
+    src/__tests__/services/productCode{,Inventory}TierTwo.test.ts (신규 2건)
+  | GATE E 통과, Stage+Production 배포·검증 완료 — 상세 기록은 TASK.md 해당 NOW 블록 참조
+
+  GSD-1(updateGroupItemSettings parent_max_sequence nullable 파싱) 완료로 TDD+GSD 8+5개
+    태스크 전체 완료. 이후 Stephen이 실제 화면을 보며 여러 라운드에 걸쳐 UI 세부조정 요청 →
+    순번1/순번2 라벨·순서 정정, 편집카드 3구역 레이아웃(닫기 상단/칩+필드 결합 중단/저장+삭제
+    하단), 삭제 버튼 전체를 텍스트형 CMS 표준(btn-danger-sm) + 2클릭 안전장치로 교체, 새조합
+    대기카드 최상단 재배치, 미리보기 순번자리 항상 0표시, 닫기버튼 컬러 토큰 gray 계열 통일까지
+    직접 대화로 반복 보완(harness 태스크 분해 없이 세션 내 즉시 반영, RPC·DB 로직은 전혀 변경
+    없음).
+
+  1차 QA(@sp3-qa-agent) 검수에서 GATE E 통과 판정(9개 확정사양 전부 충족, TDD 4/4 통과). 검수
+    중 QA agent가 git stash 실행 → 저장소에 남아있던 무관한 옛 stash(lint-staged automatic
+    backup)와 충돌해 40개 파일 conflict 발생(본 세션 커밋과는 무관) → harness 안전장치가
+    되돌리기 명령을 자동 차단 → Stephen이 `git reset --hard HEAD` + `git stash drop`으로 직접
+    정리, git log 재확인으로 유실 없음 확인.
+
+  Stephen 요청으로 "상품등록→콤보선택→부모등록→빠른재고등록" 전 구간을 Explore 에이전트로
+    재검증 → products/new/+page.server.ts에서 실버그 2건 발견: ① 순번2 무제한(NULL)+순번1
+    미사용 조합이 5-param 대신 3-param으로 새어 date_option이 무시되던 분기조건 버그 ②
+    상품등록 화면이 parent_max_sequence를 조회하지 않아 2단 콤보 미리보기가 부정확하던 문제.
+    두 건 모두 수정 → 커밋 `4f9aab5`.
+
+  git 커밋 2건(`4715bb0`, `4f9aab5`) stage 푸시 → PR #110 main 병합. Vercel API 직접 조회로
+    stage 프리뷰+production 배포 전부 READY 확인(GitHub commit status 아닌 Vercel 대시보드
+    기준 SSOT). Stephen 승인 하에 production(vnbpmvxruyciuuaermyh)에도 마이그레이션 4건
+    적용·스키마 검증 완료. production에서 BEGIN...ROLLBACK 트랜잭션으로 부모A/B 2단 등록 +
+    빠른재고등록(부모별 순번2 독립 리셋 포함) + 1단 회귀 케이스 총 6개 시나리오 실제 RPC
+    호출로 검증 — 전부 기대값과 정확히 일치, 롤백 후 실데이터 흔적 0건 확인.
+
+  `4f9aab5` 버그수정 커밋은 1차 QA 이후 작업이라 아직 재검수 전 — 2차 QA 필요(다음 태스크).

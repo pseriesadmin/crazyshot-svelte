@@ -34,18 +34,8 @@
 
   let { categories, initialSettings, initialKeywordsSettings, onclose }: Props = $props()
 
-  const CAT_LABELS: Record<string, string> = {
-    camera:     '카메라',
-    lens:       '렌즈',
-    camcorder:  '캠코더',
-    action_cam: '액션캠',
-    drone:      '드론',
-    lighting:   '조명',
-    audio:      '오디오',
-    accessory:  '보조용품',
-    package:    '패키지',
-  }
-
+  // BUG-FIX(2026-08-10): 하드코딩 CAT_LABELS 제거 — categories prop(data.categories)이
+  // 이미 백오피스에서 정식 라벨로 조회돼 내려오므로 cat.name을 그대로 사용
 
   // 저장된 항목만 초기 선택목록으로 반환
   // 저장값 없음 → 빈 목록 시작 (피커로 카테고리 추가, products/new 피커와 동일 구조)
@@ -61,7 +51,7 @@
         code_id:    cat.id,
         icon_key:   cat.code,
         sort_order: item.sort_order,
-        name:       CAT_LABELS[cat.code] ?? cat.name,
+        name:       cat.name,
         icon_url:   item.icon_url ?? null,
         _preview:   null,
         _file:      null,
@@ -119,7 +109,7 @@
       .filter((c) => !selectedIds.has(c.id))
       .map((c) => ({
         id:    c.id,
-        label: CAT_LABELS[c.code] ?? c.name,
+        label: c.name,
         meta:  [c.name, c.code].filter(Boolean),
       }))
   )
@@ -134,7 +124,7 @@
         code_id:    cat.id,
         icon_key:   cat.code,
         sort_order: selected.length,
-        name:       CAT_LABELS[cat.code] ?? cat.name,
+        name:       cat.name,
         icon_url:   null,
         _preview:   null,
         _file:      null,
