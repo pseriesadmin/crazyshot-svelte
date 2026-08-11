@@ -141,6 +141,22 @@
   let mActiveTab = $state('Home')
   let poppingTab = $state<string | null>(null)
   let moreMenuOpen = $state(false)
+
+  // ── 바텀 탭바 스크롤 인터랙션 (ui-mobile.md 강제 정책) ──────────
+  let tabBarHidden = $state(false)
+  let lastScrollY = 0
+  function onTabBarScroll() {
+    const y = window.scrollY
+    if (y > lastScrollY && y > 50) tabBarHidden = true
+    else if (y < lastScrollY)      tabBarHidden = false
+    lastScrollY = y
+  }
+  $effect(() => {
+    lastScrollY = window.scrollY
+    window.addEventListener('scroll', onTabBarScroll, { passive: true })
+    return () => window.removeEventListener('scroll', onTabBarScroll)
+  })
+
   function triggerPop(id: string) {
     poppingTab = id
     setTimeout(() => { poppingTab = null }, 700)
@@ -620,7 +636,7 @@
   </div>
 
   <!-- ⑧ 모바일 하단 탭바 -->
-  <div class="m-tab-bar">
+  <div class="m-tab-bar" class:tab-bar-hidden={tabBarHidden}>
     {#each MOBILE_TABS as tab}
       <button
         class="m-tab-item"
@@ -1417,6 +1433,14 @@
     justify-content: center;
     align-items: center;
     height: 70px;
+    transform: translateY(0);
+    transition: transform 0.3s ease;
+  }
+  .m-tab-bar.tab-bar-hidden {
+    transform: translateY(100%);
+  }
+  @media (min-width: 768px) {
+    .m-tab-bar { display: none; }
   }
   .m-tab-item {
     display: flex;
