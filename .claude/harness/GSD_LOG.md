@@ -1,6 +1,196 @@
 # GSD_LOG.md — 크레이지샷 실행 이력
 # 형식: [YYYY-MM-DD HH:MM] 타입 | 태스크명 | 파일 | 소요 | 결과
 
+[2026-08-13] ⚡GSD | CMS 상담채팅 Phase 2~3 GSD-1~21 전체 구현 완료 (2세션 연속) | GATE C:완료
+  | 완료: GSD-1(reopen API), GSD-2(pending API), GSD-3(상태 세그먼트 컨트롤), GSD-4(고객상세 RPC),
+  |   GSD-5(고객상세 API), GSD-6(CustomerDetailPanel 신설+AdminChatPanel 삽입), GSD-7(manual_mode
+  |   마이그레이션), GSD-8(manual-mode API), GSD-9(메시지파이프라인 manual_mode 분기),
+  |   GSD-10(수동전환 토글 버튼), GSD-11(bookmarks 테이블 마이그레이션), GSD-12(북마크 API),
+  |   GSD-13(MessageBubble 북마크 아이콘), GSD-14(BookmarkListView 신설), GSD-15(@ 제품검색
+  |   드롭다운), GSD-16(product_link 서브타입 admin-reply 통합), GSD-17(ActionCard product_link
+  |   렌더링), GSD-18(canned_responses CTA 마이그레이션), GSD-19(QnA 화면 CTA 입력 UI),
+  |   GSD-20(matchCannedResponse hasCta 분기), GSD-21(중요카드 모아보기 필터)
+  |
+  | 신규 파일:
+  |   src/routes/api/chat/sessions/[id]/reopen/+server.ts
+  |   src/routes/api/chat/sessions/[id]/pending/+server.ts
+  |   src/routes/api/chat/sessions/[id]/bookmarks/+server.ts
+  |   src/routes/api/chat/sessions/[id]/manual-mode/+server.ts
+  |   src/routes/api/chat/customers/[id]/detail/+server.ts
+  |   src/routes/api/chat/messages/[id]/bookmark/+server.ts
+  |   src/lib/components/chat/CustomerDetailPanel.svelte
+  |   src/lib/components/chat/BookmarkListView.svelte
+  |   supabase/migrations/20260812000229_229_chat_customer_detail_rpc.sql
+  |   supabase/migrations/20260812000230_230_chat_sessions_manual_mode.sql
+  |   supabase/migrations/20260812000231_231_chat_message_bookmarks.sql
+  |   supabase/migrations/20260812000232_232_canned_responses_cta.sql
+  |
+  | 수정 파일:
+  |   src/lib/types/chat.ts (product_link/canned_cta ActionCardType, manual_mode, ActionPayload 확장)
+  |   src/lib/server/matchCannedResponse.ts (CannedResponseForMatch에 CTA 필드 추가)
+  |   src/lib/components/chat/AdminChatPanel.svelte (GSD-3/6/10/13/14/21 통합)
+  |   src/lib/components/chat/MessageBubble.svelte (GSD-13 북마크 아이콘)
+  |   src/lib/components/chat/MessageList.svelte (onbookmark passthrough)
+  |   src/lib/components/chat/ChatInput.svelte (GSD-15 @ 제품검색)
+  |   src/lib/components/chat/ActionCard.svelte (GSD-17 product_link 렌더링)
+  |   src/lib/components/cms/CannedResponsePanel.svelte (GSD-19 CTA 입력 UI)
+  |   src/routes/api/cms/canned-responses/+server.ts (GSD-19 CTA 필드 GET/POST)
+  |   src/routes/api/cms/canned-responses/[id]/+server.ts (GSD-19 CTA 필드 PATCH)
+  |   src/routes/cms/chat/qna/+page.server.ts (GSD-19 타입·쿼리 확장)
+  |   src/routes/api/chat/message/+server.ts (GSD-9 manual_mode 분기 + GSD-20 hasCta 분기)
+  |   src/routes/api/chat/admin-reply/+server.ts (GSD-16 action_payload 수신)
+  |
+  | npm run check: 1 ERROR(pre-existing — products/search noCatIcons, 이번 작업 무관), 신규 에러 0건
+  |
+  | 주의사항 (Stephen 직접 조치 필요):
+  |   1. 이전 세션에서 잘못 생성된 \[id\] 디렉터리 3개 제거 필요 (svelte-kit sync 차단 원인):
+  |      rm -rf "src/routes/api/chat/sessions/\[id\]"
+  |      rm -rf "src/routes/api/chat/messages/\[id\]"
+  |      rm -rf "src/routes/api/chat/customers/\[id\]"
+  |      → 제거 후 npm run dev (또는 npx svelte-kit sync) 실행 시 $types 자동 생성됨
+  |   2. DB 마이그레이션 4건(migration 229~232) — Stephen이 직접 crazyshot-stage 검증 후 production 적용
+
+[2026-08-13] ⚡GSD  | state_referenced_locally 경고 6곳 자체 수정 — AGENTS.md 황금 원칙 "$state(prop) 초기화 절대 금지" 준수 | 6파일 수정 | GATE C:완료(ROUTINE×6)
+  | 1. ContractDocumentEditor.svelte — untrack()으로 TipTap 초기화 prop 스냅샷, $effect로 readonly 동기화
+  | 2. ContractTemplatePanel.svelte — rawBlocks+초기콘텐츠 감지 로직 $derived.by()로 격리, specs/title/requiresIssuerSignature $state('')+$effect 패턴
+  | 3. ContractCanvasEditor.svelte — pages/fields/title $state([])+$effect 패턴
+  | 4. SealAssetPicker.svelte — const assetTypeFilter 제거, signatureType 참조를 $effect 내부로 이동
+  | 5. contract/[token]/+page.svelte — data prop 파생 const 전체(issuerSignatures~substitutionMap) $derived 연쇄 처리
+  | svelte-check: 대상 6파일 state_referenced_locally 경고 0건(18개 제거), 신규 에러 0건, 기존 pre-existing 에러 무변동
+  | 관련 테스트 71개(contractP6Canvas·docxImport·contractAuthGates·contractP8A·contractP8B4) 전부 통과, 회귀 없음
+
+[2026-08-12] 🔴TDD | docx 임포트 — 표 셀 배경색·테두리색 OOXML 직접 추출 및 HTML 주입 | 신규 2파일 + 기존 1파일 수정 | GATE C:완료(BOUNDARY)
+  | 신규: src/lib/utils/docImport/docxTableFormatting.ts — jszip+DOMParser로 w:shd(배경색)·w:tcBorders(테두리색) 추출 + injectTableFormattingIntoHtml (개수불일치 안전장치 포함)
+  | 신규: src/__tests__/services/docxTableFormatting.test.ts — 16개 테스트 전부 통과 (합성 .docx 버퍼 기반, jsdom 환경)
+  | 수정: src/lib/utils/docImport/docxImport.ts — extractTableFormatting+injectTableFormattingIntoHtml 연동, 기존 15개 테스트 회귀 없음
+  | package.json: jszip ^3.10.1 직접 의존성 추가 (기존 transitively 설치됨)
+  | npm run check: 내 파일 에러 0건 (기존 pre-existing 에러 27건은 이 작업과 무관)
+  | 한계: 병합셀(w:gridSpan/w:vMerge) 포함 표는 XML/HTML 셀수 불일치로 서식 주입 스킵됨 (의도된 안전 동작)
+
+[2026-08-12] ⚡GSD | docx 임포트 서식 손실 버그 수정 | 2파일 수정 + 테스트 1파일 신규 | GATE C:완료(BOUNDARY)
+  | 수정: src/lib/utils/docImport/docxImport.ts — mammoth transformDocument(alignmentTransform) + ALIGNMENT_STYLE_MAP으로 단락 정렬 보존
+  | 수정: src/lib/components/cms/contract-editor/ContractDocumentEditor.svelte — CustomTableCell/CustomTableHeader(backgroundColor·borderColor) + TextAlign types 확장
+  | 신규: src/__tests__/services/docxImport.test.ts — 15개 테스트 전부 통과
+  | npm run check: 0건. 한계: 표 셀 배경색·테두리는 mammoth AST 미캡처 — 임포트 시 여전히 손실
+
+[2026-08-12] ⚡GSD | 전자계약 에디터 Phase 9 — P9-1 모듈 경계 검토 + P9-2 통합 기술문서 | docs/contract-suite-integration.md(신규) | GATE C:승인
+  | P9-1: contract-editor·contract-signature·docImport 전체 파일 검토 — supabase.from/rpc 직접호출 0건 확인, onSave 어댑터 패턴 준수 완료
+  | P9-2: docs/contract-suite-integration.md 신규 작성(806줄) — 6개 테이블 DDL·9개 API·props·환경변수·설치순서·교체필요지점 7항목
+  | npm run check: 기존 에러 1건(products/search noCatIcons prop — Phase 9 이전부터 존재, 범위 외) 외 0건
+[2026-08-12] ⚡GSD | /cms/chat Phase 0 버그검증 + Phase 1 빠른실행 | 3개 항목 | GATE C:자동(BOUNDARY/ROUTINE)
+  | P0-1: 대기 세션 재문의→진행중 전환 미작동 — 해결됨(07-27 정책변경으로 이미 해소, /api/chat/message 코드 추적 확인)
+  | P0-2: 대기/종료 세션 자동응답 미표시 — 해결됨(구독 범위 밖 정상동작, sender_type='admin' 확인, 세션 선택 시 정상 표시)
+  | P1-1: supabase/migrations/20260812000226_226_chat_auto_pending_3hour.sql — 신규(미적용): auto_pending_inactive_sessions 3시간으로 재정의
+  | P1-1: .claude/rules-ref/chat.md §3·§12 — "1시간" → "3시간" 문구 3곳 갱신
+  | P1-2: src/routes/cms/+layout.svelte — QnA 메뉴 라벨 "QnA" → "자동 메시지 설정"
+
+[2026-08-12] 🔴TDD+⚡GSD | Phase 6 전자계약 canvas 모드 P6-1~P6-4 전체 | 테스트:16개 | GATE C:승인
+  | supabase/migrations/20260812000224_224_canvas_authoring_mode.sql — 신규(미적용): contract_authoring_mode ENUM + authoring_mode/canvas_document 컬럼을 contract_templates/contracts 양쪽에 추가
+  | package.json — pdfjs-dist@4.10.38 추가
+  | src/lib/utils/pdfRasterize.ts — 신규: 클라이언트 전용 PDF 래스터화 유틸, EC-1 빈PDF 거부
+  | src/lib/types/contract-document.ts — CanvasFieldType/CanvasPage/CanvasField/CanvasDocument/ContractCanvasPayload + isCanvasDocument/hasSignatureField/validateFieldBounds 추가
+  | src/lib/components/cms/contract-editor/ContractCanvasFieldPalette.svelte — 신규: 3종 필드타입 팔레트 + 속성패널
+  | src/lib/components/cms/contract-editor/ContractCanvasEditor.svelte — 신규: 배경 이미지+PDF 업로드, 좌표기반 필드배치, 드래그, EC-2 경계 클램핑
+  | src/routes/contract/[token]/+page.server.ts — contracts select에 authoring_mode,canvas_document 추가
+  | src/routes/contract/[token]/+page.svelte — canvas 분기 렌더링 추가(배경img + 퍼센트좌표 필드 오버레이 + 인라인 SignatureCanvas)
+  | src/__tests__/server/contractP6Canvas.test.ts — 신규: 16/16 통과, P8A/P8B4/authGates 34/34 회귀 없음
+  | 참고: 마이그레이션 파일 작성됨 / 어느 DB에도 아직 미적용 — Stephen 수동 적용 필요
+
+[2026-08-12] ⚡GSD | 대시보드 Phase 4 — 탭1 예약승인 및 대여 일정 간트 구현 (4a~4e 전체) | GATE C:승인
+  | src/routes/api/cms/dashboard/gantt-window/+server.ts — 신규: GET 엔드포인트, cms_role 게이트, get_rental_list p_per_page:200 14일 청크 반환
+  | src/routes/cms/+page.server.ts — Phase 4 블록 추가: todayOffset() 헬퍼 + ganttFrom/To(오늘-3~+10) + get_rental_list SSR 호출 + ganttWindow 반환
+  | src/lib/components/cms/dashboard/CmsDashboardGantt.svelte — 신규: 4b 정적 그리드+바 / 4c CSS sticky frozen col / 4d RAF throttle 무한스크롤(Map<number,RentalListRow> dedup) / 4e RentalDetailPanel 클릭+refetchCurrentWindow
+  | src/lib/components/cms/dashboard/CmsDashboardTabs.svelte — gantt 탭 placeholder → CmsDashboardGantt 실 컴포넌트 교체, DashboardData.ganttWindow.rows 타입 RentalListRow[] 갱신
+  | svelte-check: Phase 4 신규/수정 파일 기준 0 ERROR · 0 WARNING (기존 pre-existing 2건 layout/subscriptions 비교·products/search noCatIcons — 무관)
+
+[2026-08-12] 🔴TDD | 조합코드 분류코드 합산 채번 버그 수정 (7-param migration #222 + page.server.ts 통일) | 테스트:5개(COMBO-MERGE)+3개(TIER-TWO) | GATE C 대기
+  | src/lib/utils/comboCategoryCode.ts — 신규: TIER_ORDER 정렬+합산 유틸 (buildComboCategoryCode/getRootCode)
+  | supabase/migrations/20260812000222_222_generate_product_code_category_override.sql — 신규 7-param 오버로드 (기존 2/3/5/6-param 무변경)
+  | src/routes/cms/products/new/+page.server.ts — 콤보 채번 3분기→7-param 단일 통일, 전체 코드 조회+합산
+  | src/__tests__/services/productCodeComboMerge.test.ts — 신규: 5개 테스트 (RED→GREEN)
+  | src/__tests__/services/productCodeTierTwo.test.ts — mock 업데이트 + 7-param assertion 반영
+⚡GSD | baseCodeDisplay() 2단 계층 자릿수 버그 수정 | BOUNDARY
+  | src/routes/cms/products/+page.svelte — baseCodeDisplay() parent_seq_digits 없으면 기존 1단 계층, 있으면 순번1+순번2 0-패딩
+
+[2026-08-12] ⚡GSD | 대시보드 Phase 3 — 탭2 상담목록카드 현황 구현 | BOUNDARY
+  | src/routes/cms/+page.server.ts — fetch 파라미터 추가, /api/chat/sessions fetch로 chatSessions 실구현, ChatSession 타입 import
+  | src/lib/components/cms/dashboard/CmsDashboardConsultCards.svelte — 신규, 가로 스크롤 카드 레일, subscribeToSessions $effect 구독+cleanup, goto('/cms/chat?session=') 클릭 이동
+  | src/lib/components/cms/dashboard/CmsDashboardTabs.svelte — consult 탭 placeholder → CmsDashboardConsultCards 실 컴포넌트 교체, $effect stub 정리(ganttWindow만 유지)
+  | svelte-check: Phase 3 신규/수정 파일 기준 0 ERROR (기존 pre-existing 1건 products/search — 무관) | GATE C 승인
+
+[2026-08-12] ⚡GSD | 대시보드 Phase 2 — 탭4 오늘 통계 구현 | BOUNDARY
+  | supabase/migrations/20260812000221_221_dashboard_today_stats_rpc.sql — get_dashboard_today_stats() RPC 신규 (적용 전 파일만 생성)
+  | src/routes/cms/+page.server.ts — Phase 2 스텁 제거, get_dashboard_today_stats + get_coupon_usage_report Promise.all 실호출, 오류 시 null 폴백
+  | src/lib/components/cms/dashboard/CmsDashboardTodayStats.svelte — 신규, CmsKpiGrid 5섹션(13지표+쿠폰), stats=null 안내문구 안전 폴백
+  | src/lib/components/cms/dashboard/CmsDashboardTabs.svelte — today 탭 placeholder → CmsDashboardTodayStats 실 컴포넌트 교체, $effect stub 갱신
+  | svelte-check: Phase 2 신규/수정 파일 기준 0 ERROR | GATE C 대기
+
+[2026-08-12] ⚡GSD | P2-1 + P5-1 + P5-2 (계약서 페이지 레이아웃 재구성 + HWP/HWPX 임포트) | BOUNDARY~ROUTINE
+  | src/routes/cms/reservation/contracts/+page.svelte — showNewEditor 풀스크린 제거, isNewMode 도입, 검색+CmsPagination+3열 레이아웃
+  | src/lib/components/cms/contract-editor/ContractImportModal.svelte — .hwp/.hwpx accept 추가, hwp-notice/hwpx-experimental/hwpx-preview 단계 추가
+  | src/lib/utils/docImport/hwpxImport.ts — 신규, hwp-convert(MIT) 실험 파싱, FEATURE_HWPX_EXPERIMENTAL flag, 폴백 로직
+  | package.json — hwp-convert@^1.13.0 추가 및 설치
+  | svelte-check: 신규/수정 파일 기준 0 ERROR | GATE C 보고 완료
+
+[2026-08-12] ⚡GSD | CMS 대시보드 홈 화면 Phase 0 (라우팅 셸)
+  | src/routes/cms/+layout.svelte — MainMenu href? 타입, dashboard 메뉴 항목, resolveActiveMenuId 1줄, mainMenuHref 수정
+  | src/routes/cms/+page.server.ts — AdminChatPanel 스텁 교체, parent() cmsRole 게이트 추가
+  | src/routes/cms/+page.svelte — CmsDashboardTabs 단일 컴포넌트로 교체
+  | src/lib/components/cms/dashboard/CmsDashboardTabs.svelte — 신규(4탭 셸, placeholder)
+  | svelte-check: 이번 4파일 신규 에러 0건 | GATE C: 승인
+
+[2026-08-12] 🔴TDD+⚡GSD | Phase 7~8 전자계약 보안 게이트 + 서명 모듈 강화
+  | P7-1~P7-5: 5개 서버 파일 getCmsRoleForAction+hasSettingsAccess 게이트 적용(partner 차단)
+  | P7-6: security-auth.md 접근 매트릭스 갱신(11개 액션 manager 이상 확정)
+  | P8A-1: src/lib/contract-signature/contentHash.ts (신규) — Web Crypto SHA-256 바인딩
+           + src/routes/api/contracts/[token]/sign/+server.ts — content_hash 저장
+           + supabase/migrations/20260812000217_217_contract_signings_content_hash.sql (신규)
+  | P8A-2: 서명 직전 재검증 순서 단위테스트 (contractP8A.test.ts — 기서명→만료→정상 체크 순서 고정)
+  | P8A-3: src/lib/contract-signature/auditLog.ts (신규) — append-only 감사로그 헬퍼
+           + supabase/migrations/20260812000218_218_contract_audit_log.sql (신규)
+           + viewed/signed/sent/issuer_signed 이벤트 각 진입점에 통합
+  | P8B-1: supabase/migrations/20260812000219_219_contract_issuer_signatures_and_assets.sql (신규)
+           — cms_signature_assets + contract_issuer_signatures + requires_issuer_signature 플래그
+  | P8B-2: src/routes/cms/set/signature/+page.server.ts + +page.svelte (신규)
+           — manager 이상 게이트 + validateUploadFile 재사용 + 기본값 지정/삭제
+           + src/routes/api/cms/signature-assets/+server.ts (신규)
+  | P8B-3: src/lib/contract-signature/SealAssetPicker.svelte (신규)
+           — 자산 선택 + 직접서명(SignatureCanvas) 양쪽 지원
+           + src/routes/api/cms/contracts/[id]/issuer-sign/+server.ts (신규)
+  | P8B-4: src/lib/contract-signature/issuerSignatureCheck.ts (신규)
+           + send-chat 발송 시 requires_issuer_signature 강제 검증(422 차단)
+           + src/__tests__/server/contractP8B4.test.ts (신규) — 4/4 통과
+  | P8B-5: src/routes/contract/[token]/+page.server.ts + +page.svelte — 발행자 서명 렌더링
+  | 테스트: contractP8A.test.ts 12/12, contractP8B4.test.ts 4/4, contractAuthGates.test.ts 18/18
+  | svelte-check: Phase 8 신규/수정 파일 ERROR 0건 (전체 1 ERROR = products/search pre-existing)
+  | 마이그레이션: 217~219 SQL 파일만 생성 — DB 미적용(Stephen이 별도 진행)
+  | GATE C 대기
+
+[2026-08-11] ⚡GSD | 전자계약 서식 에디터 고도화 Phase 3+4 (plan_source: claude-rules-ref-contract-md-serialized-axolotl.md)
+  | Pre-task: ContractEditorModal + ContractTemplatePanel → ContractDocumentEditor + ContractFieldPanel 교체 (CmsContentEditor/ContractModuleBar 제거)
+  | P3-1: src/lib/components/cms/contract-editor/ContractFieldPanel.svelte (신규)
+          — 계약자정보/상품정보/결제정보/특약 4탭, 커서 위치 MergeFieldNode 삽입, ContractModuleBar "문서 끝 고정 표" 방식 폐기
+  | P3-2: 특약 key-value 관리 UI를 ContractFieldPanel "특약" 탭으로 통합 (ContractEditorModal/ContractTemplatePanel 기존 specs UI 제거)
+  | P3-3: contract-data/+server.ts:78 수량:'1' 하드코딩 확인, ContractFieldPanel에 "수량 (항상 1)" 레이블 — 거짓 다중수량 선택지 없음
+  | P4-1: src/lib/components/cms/contract-editor/ContractImportModal.svelte (신규) — docx/xlsx 전용 accept 목록 로컬 관리
+  | P4-2: src/lib/utils/docImport/docxImport.ts (신규) — mammoth HTML 변환, 손실 안내 배너
+  | P4-3: src/lib/utils/docImport/xlsxImport.ts (신규) — SheetJS 시트선택+범위선택+rowsToTiptapTable(), 최대 100행 제한
+  | 수정: ContractDocumentEditor.svelte — initialHtml prop 추가, setEditorContent/insertEditorContent/getEditorJSON 메서드 노출
+  | 수정: ContractEditorModal.svelte — TipTap 에디터+필드패널 2단 레이아웃, 문서가져오기 버튼 추가
+  | 수정: ContractTemplatePanel.svelte — TipTap 에디터+필드패널 2단 레이아웃, 문서가져오기 버튼 추가
+  | svelte-check 신규/수정 파일 기준 ERROR 0건 (전체 1 ERROR = products/search pre-existing) | GATE C 대기
+
+[2026-08-11] ⚡GSD | 전자계약 서식 에디터 고도화 Phase 0+1 (plan_source: claude-rules-ref-contract-md-serialized-axolotl.md)
+  | P0-1: src/routes/contract/[token]/+page.svelte — 특약(specifications) 렌더링 블록 추가
+  | P0-2: src/lib/utils/contract-apply-template.ts (신규) — init-contract+PATCH 공용 유틸
+         + src/lib/components/cms/ContractTemplatePreviewModal.svelte (send 교체)
+         + src/lib/components/cms/RentalContractViewer.svelte (openEditorForTemplate 교체, string|undefined→null 타입 수정)
+  | P1-1: TipTap 3.29.2 + svelte-tiptap 3.0.1 설치, createEditor+EditorContent 방식 확정
+  | P1-2: src/lib/types/contract-document.ts (신규) — TiptapDocBlock/MergeFieldAttrs/ContractDocumentPayload
+  | P1-3~P1-8: src/lib/components/cms/contract-editor/ContractDocumentEditor.svelte (신규)
+             + src/lib/components/cms/contract-editor/nodes/MergeFieldNode.ts (신규)
+  | svelte-check 신규 파일 기준 ERROR 0건 (전체 1 ERROR = products/search pre-existing) | GATE C 대기
+
 [2026-08-10] ⚡GSD | 조합코드 순번 2단계층 GSD-2/3/4 (plan_source: polymorphic-humming-micali.md)
   | src/routes/cms/codes/_AutoMappingTab.svelte
   | GSD-2: comboParentSeqMap/comboShowParentSeq 상태 + +/− 버튼 + 2번째 seq-wrap + hidden input
@@ -1924,3 +2114,103 @@
     호출로 검증 — 전부 기대값과 정확히 일치, 롤백 후 실데이터 흔적 0건 확인.
 
   `4f9aab5` 버그수정 커밋은 1차 QA 이후 작업이라 아직 재검수 전 — 2차 QA 필요(다음 태스크).
+
+[2026-08-12] ✅DONE | 조합코드(품번) 분류코드 소실 채번 버그 수정 + 기준품번 2단계층 표시
+  자릿수 버그 수정 (plan_source: Explore 정밀분석 → promptor TASK.md 생성)
+  | src/lib/utils/comboCategoryCode.ts(신규) · supabase/migrations/20260812000222_222_...sql(신규)
+    · src/routes/cms/products/new/+page.server.ts · src/routes/cms/products/+page.svelte ·
+    src/__tests__/services/productCodeComboMerge.test.ts(신규) ·
+    src/__tests__/services/productCodeTierTwo.test.ts
+  | GATE C 통과, Stage 배포·실측 검증 완료 — production은 Stephen 최종 확인 대기
+
+  Stephen 신고("코드조합 그룹 코드목록이 상품등록에서 노출 시 분류코드가 뒤섞임")로 Explore
+    에이전트 정밀분석 실행 → 근본원인 확정: `products/new/+page.server.ts`가 콤보 내 여러
+    분류코드 중 depth 내림차순 1개만 골라 채번에 반영(product_category_codes.depth가 실사용
+    데이터에서 거의 전부 0이라 사실상 임의선택, 대분류가 항상 탈락하는 패턴 실관측). 미리보기
+    함수(comboCatCode 등)는 전체 코드를 TIER_ORDER로 합산 표시 — 이 불일치가 원인. 2026-07-09
+    콤보 기능 최초 출시 시점부터 있던 결함으로 이번 세션 회귀 아님(git log로 확인). Production에
+    이미 이 버그로 잘못 채번된 부모 3건+자식 15건 실증 확인 — Stephen이 기존 오염 데이터는
+    품번 영구고정 정책상 그대로 두고 앞으로 등록되는 것부터만 수정하기로 확정.
+
+  Stephen이 "삭제 시 품번 재사용" 기능도 함께 요청했으나, products.md §2-2 영구고정 정책과
+    정면 충돌함을 설명 → Stephen이 요청 철회, "모든 기능의 정합 완료 시" 별도 아젠다로 재논의
+    하기로 확정(이번 범위에서 명시적 제외, BACKLOG 격리).
+
+  promptor로 TASK.md 생성(GATE B) → Stephen 승인 → harness-executor 실행: 신규 7-param
+    generate_product_code 오버로드(p_category_code_override) 추가로 합산 분류코드를 명시
+    전달, 기존 2/3/5/6-param 시그니처 전부 무변경. baseCodeDisplay()는 parent_seq_digits
+    반영해 2단 계층 자릿수 정확히 표시하도록 수정.
+
+  GATE C 검토 중 직접 회귀 발견·수정: 최초 구현은 신규 7-param이 모든 콤보 경로(1단+2단)에서
+    통일 호출되면서, 순번1(부모) 미사용 콤보까지 무조건 product_parent_sequences를 소비하고
+    code_series에 parent_seq* 키를 기록해버리는 문제가 있었음(기존 6-param은 TS 레이어가
+    parent_max_sequence !== null일 때만 호출해 문제 없었으나, 7-param은 통일 호출이라 함수
+    내부에 동일 분기가 없으면 회귀 발생) — "기존 1개-순번 모드 100% 무변경" 원칙 위반. Stage
+    반영 전 SQL에 IF p_parent_max_sequence IS NOT NULL 분기를 직접 추가해 수정, 기존 12개
+    테스트 재통과 확인.
+
+  Stage(ezyvffjvuwmtuhpxdjrw) 마이그레이션 적용 후 BEGIN...ROLLBACK 트랜잭션으로 LEN(대분류)+
+    PTS(중분류) 2코드 조합 실채번 검증 — 2단 부모 2건(parent_seq 1,2 정상 증가, category_code
+    "LENPTS" 코드 소실 없음) + 1단 부모 1건(category_code 동일하게 "LENPTS"이나 parent_seq*
+    키 완전히 없음, 회귀 수정 실증) + 각 부모의 빠른재고등록 자식 2건씩(2단:
+    CSLENPTS00100001/00100002, 1단: CSLENPTS00001/00002) 전부 기대값과 정확히 일치. 검증 후
+    롤백, 실데이터 흔적 0건. baseCodeDisplay()는 Claude Browser 사용 금지 정책상 육안 확인
+    대신 stage 실측 code_series 값으로 함수 로직을 직접 트레이스해 정확성 검증.
+
+  Production 적용은 Stephen 최종 확인 대기 중 — 2차 QA(다음 태스크) 이후 진행 예정.
+
+[2026-08-12] ✅DONE | "상품 복제→신규상품"(파트너코드 모드) 조합코드 소실 채번 버그 수정
+  (plan_source: 직전 DONE 항목 QA 검수 중 Stephen이 동일 버그 클래스 잔존 확인 → 직접 아젠다)
+  | src/routes/cms/products/+page.server.ts(1076-1225행) ·
+    src/__tests__/server/cloneProductPartnerCodeComboMerge.test.ts(신규)
+  | GATE C 통과, Stage 실측 검증 완료 — production은 Stephen 최종 확인 대기, 신규 마이그레이션 없음
+
+  직전 DONE 항목(products/new 조합코드 분류코드 소실 버그) QA 검수 결과 보고 중 "같은 버그
+    클래스가 상품복제→신규상품 파트너코드 경로에도 남아있다"는 참고사항을 Stephen이 즉시
+    수정 지시("냅두면 바로 문제되잖아"). UI(ProductDetailPanel.svelte 2486-2513행) 확인 결과
+    이 파트너코드 콤보 선택도 일반 등록과 동일하게 그룹 전체 대상이라 2단계만 지원하는 의도된
+    설계가 아님을 먼저 검증 후 진행.
+
+  이미 만든 재사용 자산(comboCategoryCode.ts 유틸, migration 222의 7-param RPC)을 신규 작성
+    없이 그대로 호출부만 교체해 해결 — 직전 항목보다 훨씬 작은 범위(TDD 4단계, 신규
+    마이그레이션 0건). BND-PARTNERCODE-1(카테고리 불일치 시 fail(400) 차단) 검증 로직은 그대로
+    유지하되, "검증 판정에 쓰는 subCode 1개"와 "실제 채번에 쓰는 합산 코드 전체"를 분리하는
+    설계로 구현.
+
+  Stage 트랜잭션 실측: LEN(대분류)+PTS(중분류) 조합 → category_code "LENPTS" 코드 소실 없이
+    합산 확인, parent_max_sequence=NULL(1단 모드) 호출 시 parent_seq* 키 없음 — 직전 항목에서
+    고친 회귀 방지 로직이 동일 RPC를 공유하는 이 호출부에도 자동으로 적용됨을 실증. 관련
+    테스트 4개 파일 20개 전부 통과, 검증 후 롤백으로 실데이터 흔적 0건.
+
+[2026-08-12] ✅DONE | cloneProduct new_product(파트너코드) 배치 부분실패 통보 누락 수정 +
+  사전 존재 ESLint 경고 13건 정리 (BND-BATCH-2)
+  (plan_source: 직전 DONE 항목 QA 검수 후 Stephen 직접 지시 — "여러 개 한 번에 복제하다가
+  순번 상한 초과로 중간 실패하면 이미 만들어진 상품은 DB에 남아있는데 화면엔 완전 실패로만
+  보이는 통보 누락 건 해결해")
+  | src/routes/cms/products/+page.server.ts
+  | GATE C 통과, git diff 무관 사전 경고 별도 정리 완료
+
+  `ProductDetailPanel.svelte`의 `handleCloneProduct()`가 이미 성공·실패 양쪽에서
+    `invalidateAll()`을 호출 중임을 먼저 확인(BND-BATCH-1 완료 사항) — 즉 목록 새로고침 자체는
+    문제없고, 실제 갭은 서버 응답의 정보량(토스트 메시지) 부족뿐임을 확인 후 수정 범위를
+    서버 응답 구성으로 한정.
+
+  `new_product`(파트너코드) 모드에서 `parent_max_sequence_exceeded`/`max_sequence_exceeded`
+    RPC 에러 시 기존 `fail(400, ...)` 하드 중단(이미 생성된 항목 정보 유실)을 제거 →
+    `cloneWarnings`에 항목별 구체 경고 push + `sequenceCapReached` 플래그로 현재 항목 처리는
+    정상 완료 후 루프만 종료, 남은 미생성 개수 안내 경고 추가, 최종 응답에 `createdIds` 필드
+    보강(기존 `add_inventory` 모드엔 있었으나 `new_product` 모드엔 누락돼 있었음). `svelte-check`
+    무에러, 관련 테스트 4개 파일 14/14 통과.
+
+  검증 중 파일 전체 `eslint --max-warnings=0` 실행 시 이번 수정과 무관한(git diff 헝크 밖,
+    335-377행) 기존 `security/detect-object-injection` 경고 13건 확인 — `lint-staged`가
+    스테이징된 파일 전체를 스캔하는 설정이라 실제 커밋 시 차단됨을 확인, Stephen에게 범위 밖
+    이슈로 먼저 보고 후 "그냥 고쳐줘" 승인 받아 처리(stockCounts/childFallback12h·24h/
+    rentalStatusCounts 동적 접근부 — DB 조회값 기반, 세션 내 기확립된 `eslint-disable-next-line`
+    + 근거주석 패턴 재사용). 재검증 중 불필요한 disable 주석 1건(미탐지 라인에 선제 추가) 발견·
+    제거. 최종 `eslint --max-warnings=0` 0 warning 확인.
+
+  §5.6 BACKLOG였던 BND-BATCH-2(배치 실패 시 이미 생성분 정보 포함) 항목을 이번 수정으로 완료
+    처리 — 다만 실제 적용 대상은 원래 BACKLOG 항목이 상정한 `add_inventory` 모드가 아니라
+    `new_product`(파트너코드) 모드였음(그 경로에서 실제 문제가 발생·요청됨). `add_inventory`
+    모드는 이번에도 미수정 상태로 남음.

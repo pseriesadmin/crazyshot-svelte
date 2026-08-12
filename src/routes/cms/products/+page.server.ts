@@ -10,6 +10,8 @@ import { invalidateProductSearchCache, getProductSearchIndex } from '$lib/server
 // (nlsearch.md §2, /api/search/products 및 /api/cms/products/search-suggestions와 동일 임계값)
 const WEAK_MATCH_THRESHOLD = 3
 import { loadSelectedProductDetail, type RentalStatusBucket, type SelectedProductDetail } from '$lib/server/products/loadSelectedProductDetail'
+// 버그 수정(2026-08-12): cloneProduct new_product 파트너코드 분기 조합코드 합산 채번
+import { buildComboCategoryCode, getRootCode } from '$lib/utils/comboCategoryCode'
 
 // rental_period_options / rental_method_options 는 database.ts 미등록 — 우회 헬퍼
 function untypedFrom(sb: SupabaseClient, table: string) {
@@ -330,15 +332,22 @@ export const load: PageServerLoad = async ({ locals, url }) => {
     for (const row of (childRows ?? []) as ChildRow[]) {
       const pid = row.parent_product_id
       childIdToParentId[row.id] = pid  // rental_reservations 집계용 매핑
+      // pid는 DB에서 조회한 parent_product_id — 사용자 입력 아님
+      // eslint-disable-next-line security/detect-object-injection
       if (!stockCounts[pid]) stockCounts[pid] = { active: 0, total: 0 }
+      // eslint-disable-next-line security/detect-object-injection
       stockCounts[pid].total += 1
+      // eslint-disable-next-line security/detect-object-injection
       if (row.is_active) stockCounts[pid].active += 1
 
       // 자식 가격 수집 (첫 번째 자식 기준 — 부모 price_rules 없을 때 카드 fallback용)
+      // eslint-disable-next-line security/detect-object-injection
       if (!childFallback12h[pid] || !childFallback24h[pid]) {
         for (const r of row.price_rules ?? []) {
           if (!r.is_active || r.deleted_at) continue
+          // eslint-disable-next-line security/detect-object-injection
           if (r.duration_type === '12h' && !childFallback12h[pid]) childFallback12h[pid] = r.price
+          // eslint-disable-next-line security/detect-object-injection
           if (r.duration_type === '24h' && !childFallback24h[pid]) childFallback24h[pid] = r.price
         }
       }
@@ -367,11 +376,15 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 
       type RentalRowEntry = { product_id: string; status: string | null }
       for (const row of (rentalRows ?? []) as unknown as RentalRowEntry[]) {
+        // parentId는 DB에서 조회한 childIdToParentId 매핑 결과 — 사용자 입력 아님
         const parentId = childIdToParentId[row.product_id]
         if (!parentId || !row.status) continue
+        // eslint-disable-next-line security/detect-object-injection
         if (!rentalStatusCounts[parentId]) {
+          // eslint-disable-next-line security/detect-object-injection
           rentalStatusCounts[parentId] = { holding: 0, outgoing: 0, renting: 0, returning: 0, returned: 0 }
         }
+        // eslint-disable-next-line security/detect-object-injection
         const sc = rentalStatusCounts[parentId]
         const s = row.status
         if (s === 'hold') sc.holding += 1
@@ -1072,19 +1085,31 @@ export const actions: Actions = {
     }
 
     // ── new_product 모드: 기존 복제 로직 ─────────────────────────
-    // 선택된 조합코드(combo_row_id) 기반 파트너 품번 taxonomy_code_id 해석
-    let partnerCodeId: string | null = null
+    // 선택된 조합코드(combo_row_id) 기반 파트너 품번 해석
+    // 버그 수정(2026-08-12): 기존에는 depth=1 subCode 단 하나만 p_code_id로 전달 →
+    //   콤보에 코드가 2개 이상이어도 1개만 채번에 반영. new/+page.server.ts와 동일 패턴으로 수정.
+    let partnerCodeId: string | null = null            // p_code_id (대분류 루트 코드 — code_rule 조회용)
+    let partnerComboCategoryCode: string | null = null // p_category_code_override (TIER_ORDER 합산 분류코드)
+    let partnerDateOption: string | null = null
+    let partnerMaxSequence: number | null = null
+    let partnerParentMaxSequence: number | null = null
+
     if (partnerCode && partnerComboRowId) {
-      // 1. 선택 combo_row의 taxonomy_code_id 목록 수집
+      // 1. 선택 combo_row의 taxonomy_code_id + 공통 속성 수집
       const { data: comboItems } = await admin
         .from('code_mapping_items')
-        .select('taxonomy_code_id')
+        .select('taxonomy_code_id, date_option, max_sequence, parent_max_sequence')
         .eq('combo_row_id', partnerComboRowId)
 
-      const tcIds = (comboItems ?? []).map((i) => i.taxonomy_code_id).filter(Boolean)
+      const tcIds = (comboItems ?? []).map((i: { taxonomy_code_id: string }) => i.taxonomy_code_id).filter(Boolean)
 
       if (tcIds.length > 0) {
-        // 2. source.category 기준 depth=0 코드 조회
+        // 콤보 행 공통 속성 추출 (모든 아이템이 동일한 값을 가짐)
+        partnerDateOption = (comboItems![0] as { date_option: string }).date_option
+        partnerMaxSequence = (comboItems![0] as { max_sequence: number | null }).max_sequence ?? null
+        partnerParentMaxSequence = (comboItems![0] as { parent_max_sequence: number | null }).parent_max_sequence ?? null
+
+        // 2. source.category 기준 depth=0 코드 조회 (BND-PARTNERCODE-1 검증용)
         const { data: mainCode } = await admin
           .from('product_category_codes')
           .select('id')
@@ -1095,7 +1120,7 @@ export const actions: Actions = {
           .maybeSingle()
 
         if (mainCode) {
-          // 3. 해당 카테고리 depth=1 자식 코드 중 이 combo_row에 포함된 것 탐색
+          // 3. 해당 카테고리 depth=1 자식 코드 중 이 combo_row에 포함된 것 탐색 (카테고리 일치성 검증)
           const { data: subCode } = await admin
             .from('product_category_codes')
             .select('id')
@@ -1107,11 +1132,30 @@ export const actions: Actions = {
             .limit(1)
             .maybeSingle()
 
-          partnerCodeId = subCode?.id ?? null
+          // BND-PARTNERCODE-1: 카테고리 불일치 시 조용한 폴백 제거 → 명확 차단
+          if (!subCode) {
+            return fail(400, { error: '선택한 조합코드가 이 상품의 카테고리와 맞지 않습니다. 올바른 조합코드를 선택해주세요.' })
+          }
+
+          // 4. 전체 코드 조회 (depth 무관 — TIER_ORDER 합산 분류코드 빌드용)
+          const { data: allCodes } = await admin
+            .from('product_category_codes')
+            .select('id, code, code_tier, depth')
+            .in('id', tcIds)
+
+          if (allCodes && allCodes.length > 0) {
+            partnerComboCategoryCode = buildComboCategoryCode(
+              allCodes as Array<{ id: string; code: string; code_tier?: string | null; depth?: number }>
+            )
+            const rootCode = getRootCode(
+              allCodes as Array<{ id: string; code: string; code_tier?: string | null; depth?: number }>
+            )
+            partnerCodeId = rootCode?.id ?? null
+          }
         }
 
-        // BND-PARTNERCODE-1: 카테고리 불일치 시 조용한 폴백 제거 → 명확 차단
-        if (!partnerCodeId) {
+        // BND-PARTNERCODE-1: mainCode 미발견 또는 allCodes 조회 실패 시 차단
+        if (!partnerCodeId || !partnerComboCategoryCode) {
           return fail(400, { error: '선택한 조합코드가 이 상품의 카테고리와 맞지 않습니다. 올바른 조합코드를 선택해주세요.' })
         }
       }
@@ -1126,6 +1170,9 @@ export const actions: Actions = {
 
     const createdIds: string[] = []
     const cloneWarnings: string[] = []
+    // BND-BATCH-2: 순번 상한 도달 시 이미 생성된 상품(품번 미발급)은 그대로 인정하고,
+    // 남은 개수는 더 시도해봤자 동일 사유로 실패하므로 즉시 중단(§2-10③ 배치 부분실패 정책과 동일 원리)
+    let sequenceCapReached = false
 
     for (let i = 1; i <= count; i++) {
       let slug = `${source.slug}-copy`
@@ -1165,17 +1212,36 @@ export const actions: Actions = {
       }
 
       if (partnerCode) {
-        if (!partnerCodeId) {
+        if (!partnerCodeId || !partnerComboCategoryCode) {
           return fail(400, {
             error: `이 카테고리에 선택한 조합코드 하위 분류코드가 등록되지 않았습니다. 코드설정에서 먼저 추가해주세요.`,
           })
         }
+        // 버그 수정(2026-08-12): 3-param → 7-param (p_category_code_override = TIER_ORDER 합산 분류코드)
+        // new/+page.server.ts(GATE E 통과)와 동일 호출 패턴
         const { error: codeErr } = await admin.rpc('generate_product_code', {
-          p_product_id: newProduct.id,
-          p_category: source.category,
-          p_code_id: partnerCodeId,
+          p_product_id:              newProduct.id,
+          p_category:               source.category,
+          p_code_id:                partnerCodeId,
+          p_date_option:            partnerDateOption ?? 'ym',
+          p_max_sequence:           partnerMaxSequence,
+          p_parent_max_sequence:    partnerParentMaxSequence,
+          p_category_code_override: partnerComboCategoryCode,
         })
-        if (codeErr) cloneWarnings.push(`${i}번째 복제 품번 발행 실패 (수동 확인 필요)`)
+        if (codeErr) {
+          // BND-BATCH-2: 순번 상한 도달은 하드 실패로 응답하지 않음 — 이미 INSERT된 이 상품(i번째)은
+          // 품번만 미발급된 채로 그대로 인정(§2-10① regWarn='code'와 동일 원리)하고, 남은 개수는
+          // 계속 시도해도 같은 사유로 실패하므로 이번 반복 끝에서 루프를 중단한다.
+          if (codeErr.message?.includes('parent_max_sequence_exceeded')) {
+            cloneWarnings.push(`${i}번째 복제 상품은 생성됐으나 순번1(부모) 상한 도달로 품번이 발급되지 않았습니다 — 코드설정에서 순번1 상한을 늘린 후 상품 상세에서 품번을 재시도해주세요.`)
+            sequenceCapReached = true
+          } else if (codeErr.message?.includes('max_sequence_exceeded')) {
+            cloneWarnings.push(`${i}번째 복제 상품은 생성됐으나 순번2(자식) 상한 도달로 품번이 발급되지 않았습니다 — 코드설정에서 순번2(max_sequence) 상한을 늘린 후 상품 상세에서 품번을 재시도해주세요.`)
+            sequenceCapReached = true
+          } else {
+            cloneWarnings.push(`${i}번째 복제 품번 발행 실패 (수동 확인 필요)`)
+          }
+        }
       } else if (autoCode) {
         // ⚠️ p_code_id를 명시적으로 null 전달 — 생략 시 PostgREST 오버로드 모호성(PGRST203) 발생
         //    (2026-08-06 실제 curl 테스트로 확인된 라이브 버그, new/+page.server.ts와 동일 원인)
@@ -1202,11 +1268,21 @@ export const actions: Actions = {
       }
 
       createdIds.push(newProduct.id)
+
+      // BND-BATCH-2: 순번 상한 도달 시 이번(i번째) 항목까지는 정상 처리했으니, 남은 개수는
+      // 계속 시도해도 동일 사유로 실패하므로 여기서 중단하고 몇 개가 시도되지 못했는지 알린다.
+      if (sequenceCapReached) {
+        if (i < count) {
+          cloneWarnings.push(`나머지 ${count - i}개는 순번 상한으로 인해 생성되지 않았습니다.`)
+        }
+        break
+      }
     }
 
     return {
       success: true,
       cloned: createdIds.length,
+      createdIds,
       partnerCode,
       warnings: cloneWarnings.length > 0 ? cloneWarnings : undefined,
     }

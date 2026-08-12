@@ -192,7 +192,13 @@
       const datePart = yearMonth && yearMonth !== 'nodate' && yearMonth !== 'all' ? yearMonth : ''
       const seqDigits = (cs.seq_digits as number) ?? 3
       const suffix = (cs.suffix as string) || ''
-      return `${prefix}${catCode}${datePart}${'0'.repeat(seqDigits)}${suffix}`
+      // QR-LABEL-2 2단 계층: parent_seq_digits 있으면 순번1+순번2 두 구간 모두 0-패딩
+      // (_AutoMappingTab.svelte buildComboPreview seqPlaceholder 계산과 동일 패턴)
+      const parentSeqDigits = cs.parent_seq_digits as number | undefined
+      const seqPlaceholder = parentSeqDigits
+        ? '0'.repeat(parentSeqDigits) + '0'.repeat(seqDigits)
+        : '0'.repeat(seqDigits)
+      return `${prefix}${catCode}${datePart}${seqPlaceholder}${suffix}`
     }
     if (rp.product_code) {
       const seqDigits = 3
