@@ -28,6 +28,779 @@ auth_baseline: fed4fdb — createBrowserClient 패턴 (절대 싱글톤 createCl
 
 ---
 
+## BACKLOG — CMS 상담(채팅) Phase 4 대형 아젠다 검토 3건 (2026-08-12) — ⛔ GATE B 대기 (Stephen 승인 + 열린 질문 답변 선행 필요, 정식 실행 태스크 아님)
+
+plan_source: /Users/stevenmac/.claude/plans/users-stevenmac-downloads-crazyshot-bac-compiled-willow.md
+  §"Phase 4 — 대형/보류 검토 항목" (P4-1·P4-2·P4-3). 원 문서는 `/cms/chat`(상담세션) 기능 백로그
+  전수조사 결과이며, Phase 0~3(버그검증·정책보완·정보고도화·세션도구)은 이번 분석 대상이 아님 —
+  Phase 4 3건만 "DB 설계 전체·복수 목적·벤더/정책 결정 선행 필요"로 판단해 `@promptor` 대형 아젠다
+  분석 대상으로 선정, TASK.md에 계획만 등록함(코드·마이그레이션 미작성).
+
+아젠다(총괄): 상담채팅 시스템(PRD.1.7)에 ① 세션 태그 시스템 ② 예약·트리거 메시지 자동발송
+  스케줄러 ③ 전화상담 녹음 STT 자동 텍스트화 3개 기능을 추가하는 대형 아젠다 3건. 3건 모두
+  Stephen의 정책/벤더 결정이 선행되어야 실행 가능한 상태 — 이번 세션은 분석·TASK.md 등록까지만
+  수행하고 구현은 시작하지 않는다.
+
+⛔ CRITICAL — 3건 모두 GATE B는 Stephen 승인 필수 (DB 스키마 신규 + 다중 파일 연동 + 아래 각 항목의
+  열린 질문 답변 필요). GATE B 승인과 열린 질문 답변이 모두 완료되기 전까지 `@harness-executor`
+  또는 `@sp2-tdd-agents`로 넘기는 NOW/NEXT 태스크를 생성하지 않는다.
+
+[CONTEXT BRIDGE]
+핵심제약(3건 공통):
+  - 기존 정본 `.claude/rules-ref/chat.md`(PRD.1.7 채팅 도메인) 및 `.claude/rules/rental-lifecycle.md`
+    "채팅 알림 발송 매핑" 표와 충돌 없이 확장할 것 — 기존 4개 테이블(chat_sessions/chat_messages/
+    chat_intent_logs/cs_records) 구조와 AUTO_NOTIFY/NOTIFY_TYPE_MAP 발송 체계를 재사용
+  - pg_cron 기반 스케줄 잡을 신설할 경우 기존 사례(`supabase/migrations/20260529000030_30_cron_jobs.sql`
+    — HOLD 만료 처리, `supabase/migrations/20260627100038_38_chat_auto_pending.sql` —
+    `auto_pending_inactive_sessions`)의 패턴(SQL 함수 + `cron.schedule` 등록, RPC 경유 상태변경)을
+    그대로 참고할 것 — 신규 잡 구조를 임의로 재설계하지 않는다
+  - CMS 신규 화면/액션은 `security-auth.md` 역할별 접근 매트릭스 원칙을 따라 manager 이상 게이트
+    (partner는 세션 열람만, 설정성 CRUD는 차단) — `/cms/codes` QR-CASE-2 사례와 동일 원칙 적용
+  - 직접 DML 금지, RPC 경유 원칙(H-01) 3건 모두 동일 적용
+TDD도메인: 아래 각 항목 판별 참조(P4-1 GSD 명확 / P4-2 조건부 TDD — Stephen 확인 필요 /
+  P4-3 GSD, 단 벤더 선정 선행)
+절대금지:
+  - git 자율 실행
+  - 3건 중 어느 것도 GATE B 승인 없이 마이그레이션 파일·API 라우트·컴포넌트 코드 작성 착수
+  - 기존 마이그레이션 파일 직접 수정(GP-10) — 전부 신규 ADD 파일로만
+  - chat.md에 없는 새로운 세션 상태값·알림 타입을 이번 3건 구현 중 임의로 도입(도입이 필요하면
+    먼저 chat.md/rental-lifecycle.md 갱신 여부를 Stephen에게 확인)
+  - Phase 0~3(버그검증·정책보완 등) 항목을 이번 3건과 함께 묶어 범위 확장
+frozen_files (해당 시 Claude Code 전용 — Cursor 수정 금지, GATE C 필수):
+  - src/routes/api/**/* (P4-1 태그 API, P4-2 트리거 관리 API, P4-3 STT 업로드 API 전부 해당)
+  - supabase/migrations/** (3건 모두 신규 ADD만 허용)
+  - $env import가 있는 모든 파일 (P4-3 벤더 API 키 도입 시 $env/static/private 전용)
+
+---
+
+### P4-1. 상담 태그 시스템
+
+목표: CMS 채팅목록패널에서 세션별로 상황 태그("예약 전 상담·금액문의·스케줄문의·계약서 진행·
+  결제 진행·예약완료" 등)를 부여/해제하고 태그 기준으로 목록을 필터링할 수 있게 한다.
+GATE 등급: 🔴 CRITICAL (신규 DB 스키마 + `/cms/chat` 다중 파일 연동)
+
+의존성:
+  - 선행 완료 필요: 없음 (현재 `/cms/chat` 3패널 구조·채팅목록패널은 이미 구현 완료 상태 — 이 위에
+    얹는 확장)
+  - 신규 필요
+    - DB: `chat_sessions.tags`(text[]) 컬럼 확장 **또는** `chat_session_tags`(session_id FK,
+      tag_label, created_by, created_at) 신규 테이블 — 아래 GATE B 질문 답변에 따라 스키마 방향이
+      갈림(고정 목록이면 컬럼+CHECK, 커스텀이면 태그 마스터 테이블+조인 테이블 구조가 더 적합)
+    - ENV: 없음
+    - API: 태그 부여/해제 액션(세션 상세 or 목록 인라인), 목록 조회 시 tags 필터 파라미터 추가
+    - mdc: `.claude/rules-ref/chat.md`에 태그 시스템 섹션 신규 추가 필요
+
+TDD/GSD 판별: GSD (AGENTS.md GSD 키워드 "데이터관리: CRUD/목록/등록/수정/삭제" 매치, TDD 강제
+  키워드 결제·예약·보안·크레이지스코어 어느 것도 미해당) — 30분 단위 분해 대상
+
+리스크(간략, GSD): 태그 CRUD 권한을 partner까지 열면 CS 분류 체계가 무분별하게 늘어날 위험 —
+  manager 이상 게이트로 통제
+
+엣지케이스:
+  - EC-1: 같은 세션에 동일 태그를 중복 지정 시도 → 예상 동작: UNIQUE 제약 또는 프론트 중복 필터로
+    무시(에러 없이 조용히 no-op)
+  - EC-2(커스텀 방식 채택 시): 관리자가 이미 세션에 적용된 태그를 마스터 목록에서 삭제 →
+    예상 동작: 기존 적용분 유지 여부(방치 vs CASCADE 삭제) 결정 필요 — Stephen 확인
+  - EC-3: partner 등급 관리자가 태그 부여/해제 API를 직접 호출 → 예상 동작: 403 차단
+    (security-auth.md `getCmsRoleForAction` 패턴)
+
+구현 범위 후보(Default-Exclude — 전부 미확인, GATE B 승인 전까지 BACKLOG 유지):
+  - 미확인: 태그 목록 커스텀(관리자 자유 추가/삭제) vs 고정 6종 목록 — 스키마 설계 방향을 가르는
+    핵심 결정, 포함 시 공수: 커스텀은 태그 마스터 관리 화면(+CRUD API)까지 추가로 필요(공수 大),
+    고정 목록은 컬럼+CHECK 제약만으로 단순화 가능(공수 小) / 제외 시 영향: 결정 전까지 마이그레이션
+    설계 자체를 시작할 수 없음
+
+GATE B 질문:
+  - [ ] 태그 목록을 관리자가 자유롭게 추가/삭제하는 커스텀 방식으로 할지, 고정된 목록(예약 전
+    상담/금액문의/스케줄문의/계약서 진행/결제 진행/예약완료 6종)으로 고정할지?
+
+---
+
+### P4-2. 예약메세지 & 트리거 메세지 스케줄러
+
+목표: 시간·이벤트 기반 조건(예: "예약 시작 30분 전 무인보관함 안내", "반납 2시간 전 리마인드")을
+  충족하면 채팅 메시지를 자동으로 삽입·발송하는 스케줄러를 신설한다.
+GATE 등급: 🔴 CRITICAL (신규 테이블 2개 이상 + 백그라운드 잡 + 관리 UI — 원 문서에서도 "별도
+  미니 프로젝트로 분리 권장" 표기된 대형 항목)
+
+의존성:
+  - 선행 완료 필요: 없음(기존 예약/대여 상태값·알림 매핑 체계는 이미 확정돼 있어 그대로 참조 가능
+    — `.claude/rules/rental-lifecycle.md` AUTO_NOTIFY/NOTIFY_TYPE_MAP 표)
+  - 신규 필요
+    - DB: `chat_trigger_rules`(트리거 타입, 오프셋 분/시간, 대상 이벤트, 메시지 템플릿, 이미지,
+      CTA 설정, is_active) + 발송 이력/중복방지용 테이블(예: `chat_trigger_dispatch_logs` —
+      예약ID+트리거타입+오프셋 조합 UNIQUE로 idempotency 보장)
+    - ENV: 기존 FCM 푸시 연동 재사용 가능 여부 확인 필요(신규 키가 필요할 수 있음 — 미확인)
+    - API: 트리거 규칙 관리 CMS 화면(`/cms/chat/triggers` 등, CRUD) + `pg_cron` 스캔 잡(SQL 함수,
+      Migration 30·38 패턴 재사용)
+    - mdc: `chat.md` + `rental-lifecycle.md` 알림 발송 매핑표에 자동 트리거 발송 유형 추가 필요
+
+TDD/GSD 판별: ⚠️ 조건부 — 아젠다 제목("예약메세지")에 AGENTS.md TDD 강제 키워드 "예약"이 문자열로
+  포함되어 기계적 키워드 스캔으로는 TDD 판정. 다만 실제 도메인은 예약재고 배정·이중예약 방지 같은
+  핵심 예약 로직이 아니라 "이미 확정된 예약 데이터를 읽어 알림을 발송하는" 스케줄러라 GSD
+  성격에 더 가까움 — promptor 원칙("모호하면 TDD 보수적 판정")에 따라 잠정 TDD로 표기하되,
+  최종 판단은 GATE B에서 Stephen 확인 필요(아래 질문 참고). TDD로 확정되면 15분 단위,
+  GSD로 확정되면 30분 단위 분해.
+
+리스크(TDD 조건부 대비 필수 포함):
+  - 동시성 리스크: pg_cron 스캔 잡이 겹쳐 실행되거나 재시도되어 동일 알림이 중복 발송될 위험 /
+    처리: (예약ID, 트리거타입, 오프셋) UNIQUE 제약의 dispatch_logs로 중복 INSERT 자체를 차단
+  - 데이터 정합성: 스캔 이후 실제 발송 사이에 예약이 취소·변경됐는데도 예정된 트리거가 그대로
+    발송되는 위험 / 처리: 발송 직전 해당 예약 상태를 RPC로 재확인, 취소/종료 상태면 skip
+  - 보안: 트리거 규칙 CRUD를 낮은 권한이 수정해 전체 고객에게 임의 메시지를 대량 발송하는 위험 /
+    처리: manager 이상 게이트(security-auth.md 패턴)
+
+엣지케이스:
+  - EC-1: 한 예약에 여러 오프셋 조건이 동시에 해당되는 경우(예: 30분 전+10분 전 모두 도래) →
+    예상 동작: 각 규칙별 독립 발송 vs 통합 1건 발송 — 정책 결정 필요
+  - EC-2: 서버 다운타임 등으로 pg_cron이 예정 시각을 지나서야 스캔하는 경우 → 예상 동작: 유효기간
+    초과분은 스킵할지, 즉시 지연 발송할지 결정 필요
+  - EC-3: 트리거 대상 세션이 이미 종료(closed) 상태인 경우 → 예상 동작: 종료된 세션에는 발송하지
+    않거나, 발송 시 세션을 자동 재오픈할지 결정 필요(현재 chat.md §3 재진입 조건과 정합성 확인 필요)
+
+구현 범위 후보(Default-Exclude — 전부 미확인, GATE B 승인 전까지 BACKLOG 유지):
+  - 미확인: 1차 범위를 고정 이벤트 몇 종(반납 임박·예약 임박 등)으로 한정할지, 완전 커스텀 규칙
+    빌더(관리자가 오프셋·조건·메시지를 자유 정의)로 만들지 — 포함 시 공수: 커스텀 빌더는 조건식
+    파서·미리보기 UI까지 필요(공수 大), 고정 이벤트는 이벤트별 하드코딩 오프셋 + 템플릿 저장만으로
+    가능(공수 中) / 제외 시 영향: 결정 전까지 `chat_trigger_rules` 스키마의 유연성 수준을 정할 수 없음
+
+GATE B 질문:
+  - [ ] 1차 범위를 "고정 이벤트 몇 종"(예: 반납 2시간 전 리마인드, 예약 시작 30분 전 안내)으로
+    한정할지, 완전 커스텀 규칙 빌더로 만들지?
+  - [ ] 제목에 "예약"이 포함돼 TDD 강제 키워드 스캔에 걸리는데(위 TDD/GSD 판별 참고), 실제
+    도메인은 예약재고 로직이 아닌 알림 발송 스케줄러입니다 — TDD 경로(15분 분해)로 강제 진행할지,
+    GSD 경로(30분 분해)로 진행할지?
+
+---
+
+### P4-3. 전화상담 녹음파일 자동 STT 텍스트화
+
+목표: 통화 녹음파일을 업로드하면 자동으로 텍스트 변환 후 음성파일과 함께 보관하고, 변환 결과를
+  채팅 내 "시스템 카드 메시지"(복사·접기/펼치기·관리자 수정 가능)로 삽입한다.
+GATE 등급: 🔴 CRITICAL (신규 스키마 + 3rd-party 벤더 연동 + 개인정보 음성데이터 취급) — 단
+  원문 요구사항 자체가 "가능하다면" 수준의 낮은 확신으로 기재돼 있어 **3건 중 최하위 우선순위**로
+  표기.
+
+의존성:
+  - 선행 완료 필요: **3rd-party STT 벤더 선정** — 코드 작성보다 먼저 결정돼야 하는 전제조건
+    (후보: Clova Speech, OpenAI Whisper API, Google STT 등 — 비용·정확도·한국어 지원 비교 필요)
+  - 신규 필요
+    - DB: 통화녹음 메타(업로드 URL, STT 상태, 변환 텍스트, 벤더명) 저장 — 기존 `chat_messages`에
+      system 카드 전용 message_type을 확장하는 방식과, 별도 `chat_call_recordings` 테이블을 두는
+      방식 중 선택 필요(벤더 선정 이후 응답 스키마에 따라 결정하는 것이 합리적)
+    - ENV: 벤더 결정 후 `{VENDOR}_STT_API_KEY` 신규 — 반드시 `$env/static/private` 전용(H-05)
+    - API: 통화녹음 업로드 엔드포인트, STT 변환 트리거(동기/비동기), 변환 결과를 시스템 카드로
+      삽입하는 처리
+    - mdc: 벤더 확정 후 필요 시 `chat.md`에 STT 연동 섹션 추가
+
+TDD/GSD 판별: GSD (AGENTS.md TDD 강제 키워드 결제·예약·보안·크레이지스코어 어느 것도 미해당 —
+  단순 업로드+변환+메시지삽입 흐름) — 30분 단위 분해 대상. 단, 착수 자체가 벤더 선정 완료 이후로
+  후행되어야 함.
+
+리스크(간략, GSD이나 개인정보 이슈로 보안 항목 포함):
+  - 보안: 통화 녹음에 고객 음성(개인정보) 포함 — Storage 접근권한/RLS 설계 필요, 3rd-party 벤더로
+    음성데이터를 외부 전송하는 것에 대한 고지·동의 정책 필요(법무 확인 별도 권장)
+  - 데이터 정합성: STT 변환 실패·타임아웃 시 시스템 카드가 빈 텍스트로 남는 경우 재시도/실패표시
+    정책 필요
+
+엣지케이스:
+  - EC-1: STT 변환 정확도가 낮아 오역 텍스트가 시스템 카드로 그대로 노출 → 예상 동작: 관리자가
+    직접 수정 가능한 UI로 정정(요구사항에 이미 명시된 기능 — 수정 가능해야 함)
+  - EC-2: 장시간 통화 녹음파일 업로드 시 처리 지연/타임아웃 → 예상 동작: 비동기 처리 + "처리중"
+    상태 표시, 완료 시 알림
+  - EC-3: 벤더 API 요금 한도 초과 또는 에러 응답 → 예상 동작: 변환 실패 상태로 표시하되 원본
+    음성파일은 보존(텍스트만 실패, 음성 유실 없음)
+
+구현 범위 후보(Default-Exclude — 전부 미확인, GATE B 승인 전까지 BACKLOG 유지):
+  - 미확인: 이 기능 자체를 지금 우선순위에 넣을지 여부(원문이 "가능하다면" 수준으로 낮은 확신) —
+    포함 시 공수: 벤더 조사·비교 세션이 코드 작업 이전에 별도로 선행돼야 함(공수 大, 코드 외
+    리서치 비중 높음) / 제외 시 영향: 통화상담 이력이 텍스트 검색·아카이빙 불가한 현재 상태 유지
+    (기능 부재로 인한 실사용 불편은 낮음 — 전화상담 자체가 보조 채널)
+
+GATE B 질문:
+  - [ ] STT 벤더 후보(Clova Speech / OpenAI Whisper API / Google STT) 중 어떤 것을 우선 검토할지,
+    또는 이 기능 자체를 지금 우선순위에서 제외하고 보류할지?
+
+---
+
+## NOW — CMS 상담(채팅) Phase 2~3 CRITICAL 6건 (2026-08-12) — ✅ GATE B 승인 완료(AskUserQuestion, 서비스 의도 언어 확인 완료), 바로 실행 가능
+
+plan_source: /Users/stevenmac/.claude/plans/users-stevenmac-downloads-crazyshot-bac-compiled-willow.md
+  §Phase 2(상세정보패널 확장) · §Phase 3(상담채팅패널 부가기능). 원 문서에서 🔴 CRITICAL로 표기된
+  6건(P1-3·P2-1·P3-1·P3-2·P3-3·P3-5) 전부 — Stephen이 AskUserQuestion으로 각 항목의 서비스 의도를
+  확인하고 방금 전 명시적으로 승인 완료. 이 세션(promptor)의 역할은 계획(TASK.md 분해)까지만이며
+  코드·마이그레이션 작성은 하지 않는다 — 실제 구현은 `@harness-executor`/`@sp2-tdd-agents`가 담당.
+
+아젠다(총괄): CMS 상담채팅(`/cms/chat`)에 ① 상태 직접변경 버튼 ② 고객 상세정보 패널 확장
+  ③ 세션별 자동응답 수동전환 ④ 메시지 북마크 ⑤ 제품검색 멘션/링크 ⑥ 자동응답 이미지·CTA 첨부
+  6개 기능을 추가한다. Phase 0(버그검증)·Phase 1(빠른실행)은 위 섹션에서 이미 완료됐고, Phase 4
+  (태그·트리거스케줄러·STT)는 아래 BACKLOG 섹션에서 별도로 GATE B 대기 중 — 이번 섹션과 무관.
+
+[CONTEXT BRIDGE]
+핵심제약(6건 공통):
+  - 기존 정본 `.claude/rules-ref/chat.md`(PRD.1.7 채팅 도메인) 및 `.claude/rules/rental-lifecycle.md`
+    "채팅 알림 발송 매핑" 표와 충돌 없이 확장 — 기존 4개 테이블(chat_sessions/chat_messages/
+    chat_intent_logs/cs_records) 구조를 그대로 재사용하고 새 컬럼/테이블은 ADD-only로만 확장
+  - src/routes/api/**/* 는 frozen 파일 — 이번 6건은 이미 GATE B 승인됐으므로 실행 자체는 가능하나,
+    `@harness-executor`는 각 API 라우트 작업 착수 직전 core-rules.md "Frozen 파일 목록" GATE C
+    체크를 한 번 더 통과해야 한다(승인은 "기능 착수"에 대한 것이지 "GATE C 생략"이 아님)
+  - CMS 신규 액션/화면은 security-auth.md 역할별 접근 매트릭스 원칙 적용 — 특히 P3-1(세션별
+    자동응답 전환)·P3-2(북마크)는 상담 담당자(partner 포함) 전원이 실사용해야 하는 기능이라
+    manager 이상으로 게이트하지 않는다(기존 세션 열람·답변 권한과 동일 레벨 유지). 반대로 P3-5
+    (canned_responses 이미지/CTA 컬럼 추가)는 `/cms/chat/qna`(자동 메시지 설정) 기존 편집 권한
+    정책을 그대로 따른다(신규로 권한을 좁히거나 넓히지 않음)
+  - 직접 DML 금지, 모든 상태변경/집계는 RPC 경유(H-01) — 특히 P1-3 상태전환, P3-1 manual_mode
+    토글, P3-2 북마크 CRUD 전부 RPC 경유 원칙 적용
+  - N+1 쿼리 금지(core-rules.md) — P2-1 통합 조회는 단일 RPC로 구성
+TDD도메인: 없음 — 아래 "TDD/GSD 판정 결과" 참고. 6건 전부 GSD로 확정, 30분 단위 분해.
+절대금지:
+  - git 자율 실행
+  - 기존 마이그레이션 파일 직접 수정(GP-10) — 전부 신규 ADD 파일로만
+  - chat.md에 없는 새로운 세션 상태값·알림 타입을 이번 6건 구현 중 임의로 도입(도입이 필요하면
+    먼저 chat.md/rental-lifecycle.md 갱신 여부를 Stephen에게 확인)
+  - P2-1: 원 문서 Phase 2 표에서 "통합 인증(KYC)"·"유입페이지/디바이스/OS/브라우저"·"쿠폰·포인트
+    이용내역"은 이번 승인 범위(이름·전화번호·본인인증 여부/기한·멤버십 갱신일·예약/주문 내역)에
+    포함되지 않음 — 임의로 추가 구현 금지(Default-Exclude, P2-2는 여전히 BACKLOG)
+  - P3-4(빠른답변 카테고리 탭)·P4 3건(태그/트리거스케줄러/STT)은 이번 6건과 무관 — 함께 묶어
+    범위 확장 금지
+frozen_files (Claude Code 전용 — Cursor 수정 금지, GATE C 필수):
+  - src/routes/api/**/* (P1-3 reopen/pending, P3-1 manual-mode 토글, P3-2 북마크 CRUD, P3-3 메시지
+    전송 파이프라인, P3-5 자동응답 삽입 로직 전부 해당)
+  - supabase/migrations/** (P3-1·P3-2·P3-5 신규 ADD만 허용, P1-3은 스키마 변경 없음)
+  - $env import가 있는 모든 파일
+실패롤백: 전부 신규 컬럼/테이블/API/컴포넌트 ADD 방식이라 기존 상담채팅 플로우(세션 생성·메시지
+  송수신·자동응답·CS메모)에 대한 회귀 위험은 낮음. 문제 발생 시 신규 추가분만 되돌리면
+  Phase 0~1 완료 시점(현재 안정 상태)으로 즉시 복원 가능 — 기존 파일은 "분기 추가"만 하고
+  기존 로직 삭제는 없음.
+
+### TDD/GSD 판정 결과 (AGENTS.md 키워드 스캔 — 항목별)
+
+```
+P1-3 (상태 변경 버튼)     : GSD — 결제/예약가용성/보안/크레이지스코어 키워드 미해당,
+                             배지 표시 + 상태 CRUD 성격(GSD 키워드 "CRUD/수정" 매치)
+P2-1 (고객 상세정보 확장) : GSD — "예약/주문 내역" 문자열에 TDD 키워드 "예약"이 문자열 매치되나,
+                             실제 도메인은 이미 확정된 rental_reservations 레코드를 읽기 전용으로
+                             조회·표시하는 것뿐 — 가용성 계산·이중예약 방지·HOLD·atomic_reserve 등
+                             예약 핵심 로직 미포함. P4-2(트리거스케줄러)와 달리 모호성이 낮아
+                             보수적 TDD 판정 불필요 → GSD 확정
+P3-1 (세션별 자동응답 전환): GSD — chat_sessions 컬럼 추가 + 메시지 파이프라인 분기이나 결제/예약/
+                             보안/크레이지스코어 키워드 미해당(단순 기능 토글)
+P3-2 (북마크)             : GSD — 신규 테이블 CRUD, GSD 키워드 "등록/삭제" 매치, TDD 키워드 미해당
+P3-3 (제품검색 멘션/링크)  : GSD — 제품 검색 UI + 액션카드 서브타입, TDD 키워드 미해당
+                             (검색 자체는 기존 완성 모듈인 NLSearch/상품검색 API 재사용)
+P3-5 (자동응답 이미지·CTA) : GSD — canned_responses 컬럼 추가 + 자동응답 렌더링 확장,
+                             TDD 키워드 미해당
+```
+
+> 참고: 원 문서의 GATE 등급(🔴 CRITICAL)은 "Stephen 승인 필요 여부"를 나타내는 등급이며,
+> TDD/GSD는 별개 축(구현 방법론)이다 — CRITICAL 등급이면서 GSD 도메인인 것은 모순이 아님
+> (예: 이번 세션의 CMS '구독' 메뉴 신설 태스크도 대부분 CRITICAL+GSD).
+
+---
+
+### ① P1-3. 상담 상태(진행중/대기/종료) 직접 변경 버튼
+
+배경: 상태 배지는 표시만 됨(`chat-status status-{status}`, `AdminChatPanel.svelte`). 종료 버튼만
+  있고, 재오픈/보류로 되돌리는 관리자 수동 API가 없음(재오픈은 admin-reply 시에만 자동 발생 —
+  chat.md §3 재진입 조건 참고).
+
+신규/수정 파일:
+  - `src/routes/api/chat/sessions/[id]/reopen/+server.ts` (신규)
+  - `src/routes/api/chat/sessions/[id]/pending/+server.ts` (신규)
+  - `src/lib/components/chat/AdminChatPanel.svelte` (수정 — 헤더 상태 세그먼트 컨트롤)
+
+NOW 체크리스트:
+- [x] GSD-1: `POST /api/chat/sessions/{id}/reopen` 신설 — 세션 소유권/열람권한 확인 후 RPC 경유로
+  `status='open'` 전환 | GSD | 완료기준: 대기/종료 세션에 호출 시 200 + status='open' 반영,
+  이미 open인 세션 호출 시 idempotent(에러 아님) | 예상: 30분
+- [x] GSD-2: `POST /api/chat/sessions/{id}/pending` 신설 — 동일 패턴으로 `status='pending'` 전환 |
+  GSD | 완료기준: open 세션에 호출 시 200 + status='pending' 반영 | 예상: 20분
+- [x] GSD-3: `AdminChatPanel.svelte` 헤더에 상태 세그먼트 컨트롤(진행중/대기/종료 3버튼) 추가 —
+  클릭 시 위 API 호출 + Realtime 구독과 낙관적 업데이트 충돌 없이 반영 | GSD | 완료기준: 클릭 한 번으로
+  상태 즉시 전환 + 목록 패널 배지도 동일 세션에서 갱신 확인 | 예상: 30분
+
+---
+
+### ② P2-1. 상담 중 고객 상세정보 패널 확장
+
+배경: `AdminChatPanel.svelte` 내 5필드(email/회원코드/등급/크레이지스코어/블랙리스트) 인라인
+  스트립뿐(`GET /api/cms/customers/{id}/summary`). 승인 범위: 이름·전화번호·본인인증 여부/기한·
+  멤버십 갱신일·예약/주문 내역 추가.
+
+데이터소스 사전 확인 결과(이번 계획 세션에서 `src/lib/types/database.ts` 확인 완료):
+  - 이름·전화번호 → `user_profiles.name` / `user_profiles.phone` (이미 존재, 신규 조회만 추가)
+  - 본인인증 여부/기한 → **통합 KYC 컬럼 없음, 두 갈래로 파편화**: 학생인증
+    (`user_profiles.is_student` / `student_verified_at` / `student_doc_url`) + 외국인인증
+    (`foreign_users.verified_at` / `auth_level`, `user_profiles.is_foreign`). 이번 범위는 이
+    두 값을 있는 그대로 표시하는 것으로 한정 — "통합 인증" 개념을 새로 설계하지 않는다
+    (Default-Exclude, 필요시 별도 확인 후 진행)
+  - 멤버십 갱신일 → `user_subscriptions.next_billing_date` (2026-08-12 세션 신설 구독 모듈,
+    구독 미가입 고객은 null 허용)
+  - 예약/주문 내역 → `rental_reservations` 고객 기준 조인(최근 N건, 상태·기간·상품명)
+
+신규/수정 파일:
+  - `supabase/migrations/202608XXXXXXXX_XXX_chat_customer_detail_rpc.sql` (신규 — 통합 조회 RPC)
+  - `src/routes/api/cms/customers/[id]/summary/+server.ts` 또는 신규
+    `src/routes/api/chat/customers/[id]/detail/+server.ts` (신규/수정 — 실행 시 택1 확정)
+  - `src/lib/components/chat/CustomerDetailPanel.svelte` (신규 — 기존 인라인 스트립에서 분리)
+  - `src/lib/components/chat/AdminChatPanel.svelte` (수정 — 신규 패널 삽입)
+
+NOW 체크리스트:
+- [x] GSD-4: 통합 조회 RPC 신설(예: `get_chat_customer_detail(p_user_id uuid)`) — 위 4개 데이터소스를
+  단일 RPC로 반환(N+1 금지, core-rules.md) | GSD | 완료기준: RPC 단일 호출로 이름·전화번호·
+  학생/외국인 인증정보·구독 갱신일·최근 예약 목록 전부 반환 확인 | 예상: 30분
+- [x] GSD-5: 조회 API 라우트 확장/신설 — 위 RPC 호출 + manager/partner 공통 열람 권한(기존 요약
+  API와 동일 레벨 유지) | GSD | 완료기준: partner 계정으로도 정상 조회(차단 아님, 기존 5필드와
+  동일 권한선) | 예상: 20분
+- [x] GSD-6: `CustomerDetailPanel.svelte` 신설 — 기존 5필드 유지 + 신규 필드(이름/전화번호/인증
+  정보 2종/갱신일/예약내역 리스트) 확장 패널로 렌더링, `AdminChatPanel.svelte`에 삽입 | GSD |
+  완료기준: 상담 세션 선택 시 확장 패널에 9개 필드 전부 정상 노출, 값 없는 필드는 "—" 표시 |
+  예상: 30분
+
+---
+
+### ③ P3-1. 담당자 자동응답 → 직접답변 수동전환 버튼
+
+배경: 자동응답 ON/OFF는 전역 설정(`auto_reply_settings`)뿐, 세션별 제어 없음.
+
+신규/수정 파일:
+  - `supabase/migrations/202608XXXXXXXX_XXX_chat_sessions_manual_mode.sql` (신규 —
+    `chat_sessions.manual_mode boolean not null default false`, ADD-only)
+  - `src/routes/api/chat/sessions/[id]/manual-mode/+server.ts` (신규 — 토글 API)
+  - `src/routes/api/chat/message/+server.ts` (수정 — manual_mode=true 세션은 자동응답 단계 스킵)
+  - `src/lib/components/chat/AdminChatPanel.svelte` (수정 — 헤더 토글 버튼)
+
+NOW 체크리스트:
+- [x] GSD-7: 마이그레이션 — `chat_sessions.manual_mode` 컬럼 추가(ADD-only, default false) | GSD |
+  완료기준: crazyshot-stage(ezyvffjvuwmtuhpxdjrw) 적용 + 컬럼 확인, 기존 세션 전부 false로
+  기본값 백필 | 예상: 15분
+- [x] GSD-8: `PATCH /api/chat/sessions/{id}/manual-mode` 신설 — RPC 경유 토글, 세션 담당 권한선은
+  기존 세션 열람 권한과 동일(manager 게이트 없음) | GSD | 완료기준: 토글 호출 시 컬럼 값 반전 확인 |
+  예상: 20분
+- [x] GSD-9: `src/routes/api/chat/message/+server.ts` 파이프라인에 분기 추가 — 세션의
+  `manual_mode=true`면 캔드매칭+AI 폴백(자동응답) 단계를 스킵하고 고객 메시지 저장만 수행 | GSD |
+  완료기준: manual_mode=true 세션에 고객 메시지 도착 시 자동응답 미삽입, manual_mode=false는 기존
+  동작 그대로 유지(회귀 없음) | 예상: 30분
+- [x] GSD-10: `AdminChatPanel.svelte` 헤더에 "자동응답 ON/OFF" 토글 버튼 추가 | GSD | 완료기준:
+  클릭 시 즉시 반영 + 세션 재선택해도 상태 유지 확인 | 예상: 20분
+
+---
+
+### ④ P3-2. 상담 중 북마크(즐겨찾기) 기능
+
+배경: 없음(완전 신규).
+
+신규/수정 파일:
+  - `supabase/migrations/202608XXXXXXXX_XXX_chat_message_bookmarks.sql` (신규 —
+    `chat_message_bookmarks(id, session_id FK, message_id FK, admin_id FK, note text, created_at)`
+    + RLS: CMS 관리자만 CRUD)
+  - `src/routes/api/chat/messages/[id]/bookmark/+server.ts` (신규 — POST 추가/DELETE 해제)
+  - `src/lib/components/chat/MessageBubble.svelte` (수정 — 북마크 아이콘)
+  - `src/lib/components/chat/AdminChatPanel.svelte` 또는 신규
+    `src/lib/components/chat/BookmarkListView.svelte` (신규/수정 — 세션별/전체 북마크 목록 뷰)
+
+NOW 체크리스트:
+- [x] GSD-11: 마이그레이션 — `chat_message_bookmarks` 테이블 신설 + RLS(관리자 전용 CRUD,
+  `is_cms_user()` 패턴 재사용) | GSD | 완료기준: crazyshot-stage 적용 + RLS 정책 확인(비로그인/
+  고객 접근 차단) | 예상: 20분
+- [x] GSD-12: 북마크 추가/해제 API — RPC 경유 INSERT/DELETE, 중복 추가 시 idempotent | GSD |
+  완료기준: 동일 메시지 2회 북마크 요청 시 에러 없이 no-op, 해제 시 정상 삭제 | 예상: 25분
+- [x] GSD-13: `MessageBubble.svelte`에 북마크 아이콘 추가(호버 노출) — 클릭 시 토글 | GSD |
+  완료기준: 클릭 한 번으로 북마크 추가/해제 아이콘 상태 반영 | 예상: 25분
+- [x] GSD-14: 세션별/전체 북마크 목록 뷰 신설 | GSD | 완료기준: 목록에서 항목 클릭 시 해당 세션의
+  해당 메시지로 스크롤 이동 확인 | 예상: 30분
+
+---
+
+### ⑤ P3-3. 제품 검색 → 채팅 멘션/링크 삽입
+
+배경: 파일 첨부는 있음(`admin-attachment`), 제품 검색/멘션 삽입은 없음.
+
+신규/수정 파일:
+  - `src/lib/components/chat/ChatInput.svelte` (수정 — `@` 트리거 제품 검색 드롭다운)
+  - `src/routes/api/chat/message/+server.ts` (수정 — `action_card` 서브타입 `product_link` payload
+    허용)
+  - `src/lib/components/chat/ActionCard.svelte` (수정 — `product_link` 서브타입 렌더링)
+
+NOW 체크리스트:
+- [x] GSD-15: `ChatInput.svelte`에 `@` 트리거 제품 검색 드롭다운 추가 — 기존 NLSearch/상품검색
+  API 재사용(신규 검색엔진 만들지 않음) | GSD | 완료기준: `@` 입력 시 상품명 검색 결과 드롭다운
+  노출, 선택 시 입력창에 참조 삽입 | 예상: 30분
+- [x] GSD-16: `action_card` 메시지에 `product_link` 서브타입 추가 — 선택한 상품의 id/name/
+  thumbnail/href를 payload로 포함해 전송 | GSD | 완료기준: 전송된 메시지의 `message_type='action_card'`
+  + payload에 상품 정보 정상 포함 확인 | 예상: 25분
+- [x] GSD-17: `ActionCard.svelte`에 `product_link` 서브타입 렌더링 추가(썸네일+상품명+가격+상세
+  보기 링크) | GSD | 완료기준: 채팅창에 카드 형태로 정상 렌더링, 링크 클릭 시 `/products/[slug]`
+  이동 확인 | 예상: 25분
+
+---
+
+### ⑥ P3-5. 자동응답 메시지에 이미지·CTA버튼 첨부
+
+배경: `canned_responses.content`는 텍스트 전용.
+
+신규/수정 파일:
+  - `supabase/migrations/202608XXXXXXXX_XXX_canned_responses_cta.sql` (신규 —
+    `canned_responses`에 `image_url` / `cta_label` / `cta_url` 컬럼 추가, ADD-only)
+  - `src/routes/cms/chat/qna/+page.svelte` · `+page.server.ts` (수정 — 자동 메시지 설정 화면에
+    이미지/CTA 입력 UI, 기존 편집 권한 정책 그대로 유지)
+  - `src/routes/api/chat/message/+server.ts` (수정 — `matchCannedResponse` 이후 자동응답 삽입 로직을
+    `action_card` 형태로 확장)
+  - `src/lib/components/chat/ActionCard.svelte` (수정 — 자동응답 CTA 카드 렌더링, ⑤와 컴포넌트 공유
+    가능 여부 검토)
+
+NOW 체크리스트:
+- [x] GSD-18: 마이그레이션 — `canned_responses.image_url`/`cta_label`/`cta_url` 컬럼 추가(전부
+  nullable, ADD-only) | GSD | 완료기준: crazyshot-stage 적용 + 기존 캔드 응답 데이터 영향 없음
+  확인(전부 null로 백필) | 예상: 15분
+- [x] GSD-19: `/cms/chat/qna`(자동 메시지 설정) 화면에 이미지 업로드 + CTA 라벨/URL 입력 UI 추가 |
+  GSD | 완료기준: 저장 시 3개 컬럼에 정상 반영, 비워두면 기존 텍스트 전용 동작 유지 | 예상: 30분
+- [x] GSD-20: `matchCannedResponse` 이후 자동응답 삽입 로직 확장 — `image_url`/`cta_label`/`cta_url`
+  중 하나라도 설정돼 있으면 `action_card` 형태로 삽입, 전부 비어있으면 기존 `text` 메시지 그대로
+  유지(회귀 없음) | GSD | 완료기준: 이미지/CTA 설정된 캔드 응답 매칭 시 채팅창에 카드로 표시,
+  기존 텍스트 전용 캔드 응답은 기존과 동일하게 표시 | 예상: 25분
+
+---
+
+## GATE C 확인 항목 (6건 전체 NOW 완료 후 필수)
+
+- [ ] frozen 경로(`src/routes/api/**`) 수정분 전부 GATE C 통과했는가?(core-rules.md Frozen 파일 목록)
+- [ ] 신규 마이그레이션 4건(P3-1/P3-2/P3-5 스키마 변경분) 전부 crazyshot-stage 선적용 후
+  Stephen 승인 거쳐 crazyshot(production) 반영했는가?(마이그레이션 필수 순서, CLAUDE.md)
+- [ ] P1-3 reopen/pending API가 RPC 경유인가?(직접 UPDATE 금지, H-01)
+- [ ] P2-1 통합 조회가 단일 RPC(N+1 아님)인가? 승인 범위 외 필드(통합 KYC/디바이스·유입경로/
+  쿠폰·포인트 이용내역)를 임의로 추가하지 않았는가?
+- [ ] P3-1 manual_mode=true 세션에서 자동응답이 실제로 스킵되는가? manual_mode=false 세션은 기존
+  자동응답 흐름이 회귀 없이 그대로 동작하는가?
+- [ ] P3-2 북마크 RLS가 고객/비로그인 접근을 차단하는가?(`is_cms_user()` 패턴)
+- [ ] P3-3 product_link 액션카드가 기존 결제/예약/반납 액션카드 렌더링과 충돌 없이 별도
+  서브타입으로 분기되는가?
+- [ ] P3-5 이미지/CTA 미설정 캔드 응답은 기존과 동일하게 텍스트로만 표시되는가?(회귀 없음)
+- [ ] 6건 전부 `.claude/rules-ref/chat.md` 기존 세션 상태·알림 매핑 체계와 충돌 없이 확장됐는가?
+- [ ] console.log 잔존 없음, Svelte 5 Runes 문법 준수(on:event 미사용) 확인?
+
+---
+
+## NOW — /cms/chat Phase 0 버그검증 + Phase 1 빠른실행 (2026-08-12)
+
+[CONTEXT BRIDGE]
+plan_source: users-stevenmac-downloads-crazyshot-bac-compiled-willow.md (Phase 0~1)
+아젠다: CMS 상담(채팅) 화면 버그 검증(P0) + 대기 전환시간 3시간 변경(P1-1) + QnA 메뉴 라벨 변경(P1-2)
+핵심제약:
+  - src/routes/api/**/* frozen 파일 — 수정 시 Stephen 확인 필수
+  - 기존 마이그레이션 파일 직접 수정 금지 (ADD-only)
+  - git 자율 실행 금지
+TDD도메인: 없음 (GSD — 버그진단·마이그레이션·UI 라벨 변경)
+절대금지:
+  - frozen 경로(src/routes/api/**) 수정
+  - 기존 마이그레이션 파일 수정
+  - git 자율 실행
+실패롤백: +layout.svelte 라벨 변경만 영향, chat.md/TASK.md 수정은 텍스트 변경이므로 재수정으로 즉시 복원 가능
+
+### NOW 체크리스트
+
+- [x] P0-1: 대기 세션 재문의 진행중 전환 안 됨 — 코드 추적 진단
+      결과: 해결됨 — 재현 안 됨. 2026-07-27 정책 변경(/api/chat/message 상태 전환 로직 확인)으로
+      이미 해소됨. chatSession.status !== 'open' 조건에서 service_role admin으로 status='open'
+      업데이트 수행, Realtime subscribeToSessions → upsertSession 정상 처리 확인.
+      (08-07 리포트는 07-27 변경 이전 작성분으로 추정)
+
+- [x] P0-2: 대기/종료 세션 자동응답 메시지 관리자 패널 미표시 — 코드 추적 진단
+      결과: 해결됨 — 구독 범위 밖이라 안 보이는 것이 의도된 동작.
+      자동응답 삽입 시 sender_type='admin' (코드 확인됨). 메시지 필터는 sender_type !== 'ai'로
+      admin 메시지는 정상 표시됨. 세션을 선택해 구독하면 loadMessages로 전체 이력 로드되어 정상 노출.
+      세션 미선택 시에는 subscribeToAllMessages → applyIncomingMessagePreview로 미리보기만 갱신(정상).
+      버그가 아닌 구독 범위 정상 동작.
+
+- [x] P1-1: auto_pending_inactive_sessions 1시간 → 3시간 마이그레이션 파일 작성
+      (stage DB 적용은 Stephen 직접 진행)
+
+- [x] P1-2: QnA 메뉴 라벨 → "자동 메시지 설정" 변경 (+layout.svelte)
+
+---
+
+## NOW — CMS '구독' 메뉴 신설 (정기구독 상품/티어 관리 + TossPayments 정기결제 연동) (2026-08-12) — ⛔ GATE B 대기 (Stephen 승인 필요)
+
+plan_source: users-stevenmac-downloads-crazyshot-bac-effervescent-sun.md (Plan Mode 사전 탐색·확정,
+  Stephen 승인 완료 — 세부 실행은 GATE B에서 각 Stage 착수 전 재확인)
+아젠다: CMS GNB '상품' 메뉴 우측에 '구독' 메뉴 신설(서브메뉴: 구독목록/구독등록). 정기구독
+  상품(멤버십 티어)을 `/cms/products` 마스터-디테일 레이아웃 그대로 등록·수정·삭제하며, 5가지
+  혜택 타입(DISCOUNT_COUPON/FREE_SHIPPING/FREE_RENTAL/INSURANCE_WAIVE/LOYALTY_POINTS) 설정 +
+  `/members` 고객 화면(카드 UI + 상품 스펙 영역) DB 연동 + TossPayments Billing API 기반 정기결제
+  흐름(빌링키 가입 + 크론 청구)까지 포함.
+
+⛔ CRITICAL — GATE B는 Stephen 승인 필수 (DB 스키마 변경 4종 + 결제/빌링 도메인 + 다중 파일).
+  Stage별로 순차 착수하며, TDD 스테이지(6·7) 진입 전 별도 재확인 권장.
+
+[CONTEXT BRIDGE]
+핵심제약:
+  - 스키마: 신규 `membership_tiers` 등 병렬 테이블 금지 — 기존 `subscription_plans`/
+    `user_subscriptions`(마이그레이션 미추적 상태로 스테이지 DB에 이미 존재, 0 rows, 미사용
+    스텁)를 확장. 컬럼 추가: subscription_plans(membership_grade/monthly_price/sort_order/
+    tagline/image_url/deleted_at), user_subscriptions(billing_key/billing_cycle_day/
+    next_billing_date/fail_count/cancel_requested_at). 기존 `features`(JSONB) 컬럼은 '상품
+    스펙'(라벨:값) 저장소로 재활용 — 신규 컬럼 추가 안 함
+  - 고아 마이그레이션 주의: `subscriptions` 테이블(마이그레이션 14, billing_key 컬럼까지 추가된
+    마이그레이션 97 포함)은 실제 스테이지 DB에 존재하지 않음 — 이번 작업과 무관, 건드리지 않음
+  - 신규 테이블 3종: `tier_benefits`(plan_id FK, benefit_type CHECK 5종, benefit_params JSONB),
+    `free_rental_items`(tier_benefit_id FK, product_id FK — 부모상품만), `subscription_payment_logs`
+    (user_subscription_id FK, payment_transactions와 동일 컨벤션)
+  - `subscription_benefit_usage`(월별 혜택 소진 추적) 테이블은 의도적으로 만들지 않음 — 체크아웃/
+    대여신청 통합 자체가 범위 외이므로 아무도 안 쓸 테이블 생성 금지(YAGNI)
+  - 권한: `/cms/subscriptions` 전체 manager 이상 게이트 — `ROUTE_MIN_ROLE`에
+    `['/cms/subscriptions', 'manager']` 추가 + GNB `mainMenus`에서도 `hasSettingsAccess` 조건부
+    포함(products와 달리 전 등급 개방 아님)
+  - pg_cron은 순수 SQL만 호출 가능(pg_net 미설치 확인됨) — 정기청구는 pg_cron이 아닌 Vercel
+    Cron(`vercel.ts` crons)이 `/api/cron/subscription-billing`을 호출하는 구조로 설계, `CRON_SECRET`
+    헤더 검증 필수(무인증 라우트 보안 구멍 방지)
+  - 마이그레이션 적용 순서 엄수: crazyshot-stage(ezyvffjvuwmtuhpxdjrw) 검증 → crazyshot
+    (vnbpmvxruyciuuaermyh) 실배포는 Stephen 승인 후에만 진행
+TDD도메인: Stage 6(고객 빌링키 가입 흐름)·Stage 7(정기청구 크론 + 혜택 자동적용) — AGENTS.md TDD
+  강제 키워드(결제/토스/쿠폰/포인트/subscribe_plan/cancel_subscription) 해당, 15분 단위 분해 후
+  RED→GREEN→REFACTOR. 나머지 Stage(DB 스키마 구조·CMS 화면·/members 연동)는 GSD.
+절대금지:
+  - git 자율 실행 / production 마이그레이션을 Stephen 승인 없이 자동 적용
+  - 기존 마이그레이션 파일 직접 수정(GP-10 위반) — 전부 신규 파일로 ALTER/CREATE
+  - `membership_tiers` 등 Excel 문서에 적힌 이름 그대로의 신규 병렬 테이블 생성(Stephen이
+    "기존 subscription_plans 확장"으로 명시적으로 선택함)
+  - FREE_SHIPPING/FREE_RENTAL/INSURANCE_WAIVE 혜택을 체크아웃·대여신청 흐름에 실제로 "소진"
+    연동하는 작업(범위 외 — 플랜 §7 참고, 별도 대형 TDD 아젠다로 분리)
+  - `/cms/customers/membership` 읽기전용 화면 수정(범위 외 — Stephen 별도 확인 후 진행)
+  - 고아 `subscriptions` 테이블/`billing_key` 스텁 컬럼(마이그레이션 14·97) 정리 작업(범위 외)
+  - 구독 해지 시 환불/일할계산 로직 구현(범위 외 — "다음 청구부터 중단"만 처리)
+
+신규/수정 파일 (예정):
+  - `supabase/migrations/202608XXXXXXXX_XXX_subscription_tiers_and_benefits.sql` (신규, GSD)
+  - `src/routes/cms/+layout.svelte` (수정 — GNB '구독' 메뉴, GSD)
+  - `src/routes/cms/+layout.server.ts` / `src/lib/utils/cmsPermissions.ts` (수정 — ROUTE_MIN_ROLE, GSD)
+  - `src/routes/cms/subscriptions/+page.svelte` · `+page.server.ts` (신규, GSD)
+  - `src/routes/cms/subscriptions/new/+page.svelte` · `+page.server.ts` (신규, GSD)
+  - `src/lib/components/cms/subscription/SubscriptionDetailPanel.svelte` · `BenefitEditor.svelte` ·
+    `FreeRentalItemSelector.svelte` (신규, GSD)
+  - `src/routes/members/+page.server.ts` (신규, GSD)
+  - `src/lib/components/members/PricingCards.svelte` · `FeaturesTable.svelte` (수정 — 하드코딩 배열
+    제거 + DB 연동, GSD)
+  - `src/routes/subscribe/[planId]/+page.svelte` · `src/routes/subscribe/success/+page.server.ts`
+    (신규, TDD)
+  - `src/routes/api/cron/subscription-billing/+server.ts` (신규, TDD)
+  - `vercel.ts` (수정 — crons 항목 추가, TDD)
+
+---
+
+### NOW — GSD 경로 (`@harness-executor`, 30분 단위)
+
+- [x] GSD-1: DB 스키마 확장 마이그레이션 신설 — subscription_plans/user_subscriptions 컬럼 추가 +
+  tier_benefits/free_rental_items/subscription_payment_logs 신규 테이블 + RLS 정책 (플랜 §1) | GSD |
+  ✅ `supabase/migrations/20260812000223_223_subscription_tiers_and_benefits.sql` 작성 +
+  crazyshot-stage(ezyvffjvuwmtuhpxdjrw) 적용·검증 완료. 컬럼/테이블 전수 확인, get_advisors 신규
+  CRITICAL 없음(anon read WARN은 products와 동일한 의도된 공개조회 정책). **드리프트 추가 발견**:
+  `membership_grade_enum`(마이그레이션 02) 타입이 스테이지 DB에 실존하지 않아 즉시 에러 — 실제
+  `user_profiles.membership_grade`는 TEXT+CHECK IN ('NONE','EASY','POP','CRAZY')(마이그레이션 98
+  기준)라 그 도메인에 맞춰 TEXT+CHECK로 수정 후 재적용해 해결. **Production 미적용** — Stephen
+  승인 후 진행.
+- [x] GSD-2: GNB '구독' 메뉴 + 라우팅/권한 스캐폴드 (플랜 §4-1) | GSD | ✅ 완료 —
+  `src/routes/cms/+layout.svelte`(mainMenus '구독' 항목 manager+ 조건부 삽입 + resolveActiveMenuId/
+  isSubTabActive), `src/lib/utils/cmsPermissions.ts`(ROUTE_MIN_ROLE에 `/cms/subscriptions` manager 추가)
+- [x] GSD-3: 구독목록 화면(`/cms/subscriptions`) + SubscriptionDetailPanel 5개 탭
+  (basic/specs/benefits/freeRentalItems/subscribers) (플랜 §4-2) | GSD | ✅ 완료 —
+  `+page.server.ts`(load/toggleStatus/deleteSubscription/updateSection 4-section 분기, manager+ 게이트
+  getCmsRoleForAction 패턴), `+page.svelte`(마스터-디테일, CmsPagination), `SubscriptionDetailPanel.svelte`,
+  `FreeRentalItemSelector.svelte`(SuggestPicker 기반), `$lib/utils/subscriptionBenefits.ts`(5개 혜택타입
+  파라미터 정의 공유 모듈), `$lib/server/subscriptions/loadSelectedSubscriptionDetail.ts`
+- [x] GSD-4: 구독등록 화면(`/cms/subscriptions/new`) — 5개 섹션 폼 + regWarn 패턴 (플랜 §4-3) | GSD |
+  ✅ 완료 — `+page.server.ts`(actions.create, plan+tier_benefits 5행+free_rental_items insert,
+  regWarn 패턴), `+page.svelte`(①기본정보 ②상품스펙 ③혜택초기설정 ④무료렌탈대상장비(조건부)
+  ⑤정책설정(안내 텍스트만 — 별도 정책 컬럼/테이블 신설 안 함, YAGNI))
+  검증: `npx svelte-check` 신규 파일 0 에러(기존 무관 에러 5건만 잔존), `npx eslint` 0 에러 —
+  신규/수정 파일 전체 대상 확인 완료
+- [x] GSD-5: `/members` 카드·상품 스펙 영역 DB 연동 — PricingCards/FeaturesTable 하드코딩 제거,
+  카드 선택↔스펙 영역 상태 동기화 (플랜 §2, §5 GSD Stage 5) | GSD | ✅ 완료 —
+  `src/routes/members/+page.server.ts` 신설(활성 플랜 조회), `+page.svelte`(selectedPlanId 공유
+  상태), `PricingCards.svelte`/`FeaturesTable.svelte` 하드코딩 배열 제거 + `plans`/`selectedPlanId`/
+  `onselect` prop 기반 재작성. PC 카드는 슬롯별(1/2/3) 비정형 절대배치 디자인이라 index 기반
+  슬롯 매핑으로 유지, 텍스트 길이 의존 하드코딩 좌표(nameLeft/priceLeft)는 실제 상품명 길이가
+  가변적이므로 CSS 중앙정렬로 교체(불가피한 최소 보정). `popular` 배지·PC 전용 별도 설명文구는
+  승인된 스키마(§2-1 5개 필드)에 없어 제외(PC/Mobile 모두 description 하나 공유).
+  검증: svelte-check/eslint 신규 에러 0건(무관한 사전 존재 6번째 에러 1건 발견 —
+  `src/__tests__/server/contractP6Canvas.test.ts`, 전자계약 캔버스 도메인 타입 불일치로 이번
+  세션에서 손댄 파일과 무관, 범위 외라 미수정)
+- [x] GSD-6: Phase 4 정책설정 복원(Stephen 재정의 형태) — 정밀 리뷰(JSON 멤버십 체크리스트 +
+  Excel 체크리스트-구현매핑/혜택별 파라미터 정의 대조) 결과 GSD-4의 '⑤정책설정' 정적 안내문 축소가
+  Excel Phase 4(정책설정: 체크박스+월초기화일+정책버전관리) 요구와 불일치함을 확인 → Stephen이
+  원안 대신 "공통 정책 안내문구 등록·수정·삭제(최대 20개, 항목당 200자) + `/members` 노출" 형태로
+  재정의해 복원 지시 | GSD | ✅ 완료 —
+  `supabase/migrations/20260812000227_227_subscription_policy_items.sql`(신규 테이블, plan_id
+  FK 없음 — 플랜별이 아닌 사이트 전역 데이터, CHECK 200자, RLS 공개조회+is_cms_user() 쓰기)
+  crazyshot-stage 적용·smoke insert/delete 검증 완료.
+  `src/routes/cms/subscriptions/new/+page.server.ts`(load에 policyItems 추가, addPolicyItem/
+  updatePolicyItem/deletePolicyItem 3개 action 신설 — 200자·20개 상한 서버측 검증),
+  `+page.svelte` §5를 fetch+deserialize 기반 라이브 CRUD 위젯으로 교체(메인 등록폼과 별개 —
+  중첩 `<form>` 불가라 버튼 onclick+fetch 패턴 사용, DetailPanel의 freeRentalItems 저장과 동일
+  컨벤션). `src/routes/members/+page.server.ts`(policyItems 추가 로드),
+  `SubscriptionPolicyNotice.svelte` 신규(FeaturesTable 바로 아래 '정기구독 이용안내' 공통 노출,
+  항목 0개면 섹션 자체 미노출). `database.ts`에 SubscriptionPolicyItem 타입 등록(narrow-select
+  never 붕괴 버그 재발 방지).
+  검증: stage DB insert/delete smoke test 통과, svelte-check/eslint 신규 에러 0건(무관한 사전
+  존재 에러 1건만 잔존).
+  **남은 갭**: Excel 원안의 "정책 버전 관리(policy_version 추적)"는 이번 재정의 범위에 없어
+  미구현 — Stephen이 명시적으로 원치 않으면 그대로 방치.
+- [x] GSD-7: 정책항목 순서 변경(이동 아이콘 버튼) 추가 | GSD | ✅ 완료 —
+  `supabase/migrations/20260812000228_228_subscription_policy_items_sort_order.sql`(sort_order
+  컬럼 추가 + created_at 기준 백필, stage 적용 완료). 신규 컴포넌트 만들지 않고 기존
+  `CmsDragList.svelte`(6점 그립 아이콘 드래그 재정렬, ProductDetailPanel 사양/구성품 탭에서
+  이미 쓰는 표준 컴포넌트) 재사용 — `/cms/subscriptions/new` §5 정책항목 리스트를
+  `bind:items`로 감싸고 `onreorder`에서 `reorderPolicyItems` 신규 action(순서 배열 받아
+  일괄 sort_order 갱신) 호출해 즉시 저장(다른 정책항목 action들과 동일하게 등록폼 제출과
+  무관하게 바로 반영). `addPolicyItem`도 신규 항목을 항상 리스트 끝(max+1)에 추가하도록 수정.
+  `/members` 로드도 `sort_order` 기준 정렬로 통일.
+  검증: stage DB insert(sort_order 지정)/delete smoke test 통과, svelte-check/eslint 신규
+  에러 0건.
+- [x] GSD-8: 구독등록 '카테고리 + 품번' 설정 추가(Stephen 명시적 재확인 후 진행 — AskUserQuestion으로
+  "상품과 동일한 물리 카테고리 연동" 방식 확정) | GSD | ✅ 완료 —
+  `supabase/migrations/20260813000229_229_subscription_category_and_product_code.sql`
+  (subscription_plans에 category/product_code 컬럼 + UNIQUE 인덱스, 전용 시퀀스 테이블
+  `subscription_code_sequences` 신규, `generate_subscription_product_code` RPC 신규).
+  **기존 `generate_product_code`는 재사용하지 않음** — `p_product_id UUID` 파라미터라
+  subscription_plans.id(BIGINT)와 타입부터 불일치 + GP-10(frozen 마이그레이션 미수정) 원칙상
+  기존 RPC를 건드릴 수 없어 완전 별도 시퀀스·RPC로 독립 구현(물리 상품 품번 채번 공간과 절대
+  공유 안 함). 카테고리 값 도메인은 `/cms/products/new`의 `CATEGORIES` 상수와 동일한 9종을
+  로컬 복제(products/new 파일 자체는 범위 외라 미수정) — `SUBSCRIPTION_CATEGORIES`
+  (`subscriptionBenefits.ts`). 품번 포맷은 `SUB-{3자리 접두어}-{4자리 순번}`(예: SUB-CAM-0001)
+  — 물리 상품 품번과 시각적으로 구분되도록 `SUB-` 프리픽스 고정. 영구고정 정책(products.md
+  §2-2와 동일 원리) 적용 — 이미 발급된 plan은 재발급 거부(`ALREADY_ISSUED`).
+  `/cms/subscriptions/new` §1 최상단에 분류선택 SuggestPicker 배치(필수 입력, 상품등록과 달리
+  별도 타이틀 박스 없이 `field-row` + 입력폼 하단 도움말 가이드 텍스트로 표현), 등록 성공 시
+  자동채번(실패해도 등록 자체는 막지 않고 `regWarn=code`로 안내 — 목록 페이지에 regWarn 토스트
+  핸들러 신규 추가, 기존엔 없었음). `SubscriptionDetailPanel` 기본정보 탭 최상단에 분류·품번
+  읽기전용 표시 + 미발행 시 "품번 채번" 재시도 버튼(`retryProductCode` 신규 action, products.md
+  §8-G와 동일 패턴). 목록 카드에도 품번 배지 노출.
+  검증: stage DB에서 채번 성공/영구고정 재발급 거부(`ALREADY_ISSUED`) 양쪽 smoke test 통과,
+  svelte-check(무관한 chat 모듈 사전 존재 에러만 잔존, 이번 세션 미터치 파일)/eslint 신규
+  에러 0건.
+
+### 사후 UI 보완 — Stephen 스크린샷 피드백 2건 (2026-08-12~13, ROUTINE)
+
+- [x] FIX-1: `/cms/subscriptions/new` `.form-wrap`에 `max-width: 720px; margin: 0 auto;`가
+  있어 다른 CMS 등록화면(`/cms/products/new` 등, max-width 없이 전체 폭 사용)과 달리 좁게
+  표시되던 문제 | ROUTINE | ✅ 완료 — 해당 두 속성 제거, `/cms/products/new`와 동일하게 전체
+  콘텐츠 폭 사용하도록 수정
+- [x] FIX-2: 정책항목 카드(`.policy-row`)가 `CmsDragList`의 `.drag-list-item`(width:100%) 안에서
+  `flex:1`이 없어 내용 크기만큼만 좁게 표시되던 문제 | ROUTINE | ✅ 완료 —
+  `.policy-row { flex: 1; min-width: 0; }` 추가로 섹션 전체 폭까지 확장
+
+## QA 검수 완료 — GATE E 통과 (2026-08-13, `@sp3-qa-agent`)
+
+검수 범위: GSD-1~8 + FIX-1/2 + TDD-1(TDD-2 정기청구 크론은 미착수 확인 — 검수 대상 제외).
+
+**결과: GATE E 진행 가능 ✅** — 검수 1(규칙 정합성)·검수 2(기술부채)·검수 3(시범오픈 기준) 전 항목
+통과. console.log/`any`/TODO 0건, svelte-check·eslint 신규 에러 0건(대상 파일 무관 사전 존재
+에러와 파일 단위 대조 확인), `subscriptionBilling.test.ts` 5/5 통과, stage DB REST API로 신규
+테이블 7종·RPC 5종 실배포 스키마를 마이그레이션 파일과 직접 대조 일치 확인.
+
+**발견된 이슈 5건 — 전부 CRITICAL 아님, 커밋 차단 사유 없음**:
+1. BOUNDARY — 마이그레이션 223의 `subscription_payment_logs`/`user_subscriptions` "관리자 전체"
+   RLS 정책이 `is_admin()`(고객 등급, 사실상 영구 false) 사용 — products.md §2-8이 이미 경고한
+   `is_admin()`/`is_cms_user()` 혼동 안티패턴 재도입. 현재 모든 실제 조회는 service-role로만
+   이뤄져 실사용 영향 0이나, 후속 마이그레이션으로 `is_cms_user()` 교체 권장(선택)
+2. ROUTINE — 마이그레이션 파일명 `229`가 이 세션 파일(`subscription_category_and_product_code`)과
+   다른 세션 파일(`chat_customer_detail_rpc`)에 중복 사용됨. 타임스탬프 프리픽스가 달라 적용
+   순서엔 영향 없음(라벨링 혼동만)
+3. ROUTINE — `deleteSubscription` action은 구현·게이트 완료됐으나 UI에 호출 버튼이 없어 현재
+   도달 불가(dead code, 보안 문제 아님) — 버튼 추가 필요 여부 Stephen 확인 필요
+4. ROUTINE — `generate_subscription_product_code`가 9종 외 카테고리 값이면 에러 대신
+   `SUB-SUB-nnnn`으로 조용히 폴백 — 현재 호출 경로가 고정 목록 SuggestPicker뿐이라 실사용
+   리스크 낮음(선택적 화이트리스트 검증 추가 검토 가능)
+5. 정보성 — `/members/+page.server.ts`가 공개 데이터 조회에도 service-role 클라이언트 사용
+   (보안 결함 아님, 관례상 `locals.supabase` 사용이 더 일관적 — 선택적 리팩터)
+
+**남은 절차**: 커밋은 Stephen 직접 실행. Production 마이그레이션(223/224/227/228/229)은 GATE E
+승인과 별개로 Stephen 승인 후 stage 검증 순서 그대로 적용 필요.
+
+## GSD Stage 1~5 완료 요약 (2026-08-12)
+
+Stage 1~5(DB 스키마 확장 + GNB + CMS 구독목록/등록 화면 + /members 연동) 전체 완료, stage DB
+(ezyvffjvuwmtuhpxdjrw) 적용·검증 완료. **Production 미적용**(Stephen 승인 대기).
+Stage 6~7(TDD: 빌링키 가입 흐름 + 정기청구 크론)은 결제 도메인이라 별도 RED→GREEN→REFACTOR
+사이클로 진행 예정 — 이번 배치에는 미포함.
+
+### NEXT — TDD 경로 (`@sp2-tdd-agents`, RED→GREEN→REFACTOR, 15분 단위)
+
+- [x] TDD-1: 고객 빌링키 가입 흐름 — `/subscribe/[planId]` Toss Billing SDK 카드등록 →
+  authKey→billingKey 교환 → `create_user_subscription` RPC (플랜 §5-1) | TDD | ✅ 완료
+  — RED: `src/__tests__/services/subscriptionBilling.test.ts` 작성(create_user_subscription
+  3케이스 + record_subscription_charge_result 2케이스) → RPC 미존재로 5/5 실패 확인.
+  GREEN: `supabase/migrations/20260812000224_224_subscription_billing_rpcs.sql`
+  (create_user_subscription + record_subscription_charge_result, 둘 다 SECURITY DEFINER)
+  crazyshot-stage 적용 → 5/5 통과. 테스트 픽스처는 서비스 롤 클라이언트로 생성(RLS 우회) +
+  `user_subscriptions.user_id`가 `user_profiles(id)` FK라 임의 UUID 대신 스테이지 기존 계정
+  4건을 실행 시점에 조회해 재사용(하드코딩 방지), afterAll에서 생성분만 정리.
+  REFACTOR/통합: `$lib/server/subscriptions/chargeSubscription.ts`(Toss billing 청구 + 결과기록
+  공유 헬퍼 — /subscribe/success 최초청구와 Stage 7 정기청구 크론이 재사용),
+  `/subscribe/[planId]`(TossPayments v2 CDN SDK, `type TossWindow` 별칭 캐스팅 패턴),
+  `/subscribe/success`(authKey→billingKey 교환 + create_user_subscription + 최초 청구),
+  `/subscribe/fail`, `/members` PricingCards·FeaturesTable CTA를 `/subscribe/{planId}`로 연결.
+  **부수 발견·수정**: `src/lib/types/database.ts`(hand-maintained, subscription_plans 등이
+  등록 안 돼 있어 Database 제네릭 타입의 SupabaseClient로 narrow-select 시 결과가 never로
+  붕괴 — subscription_plans/user_subscriptions/tier_benefits/free_rental_items/
+  subscription_payment_logs 5개 테이블 + 신규 RPC 2종 타입 등록으로 해결, JSONB 컬럼은 기존
+  컨벤션대로 `Json` 타입 사용). **환경변수 확인**: 로컬 `.env.local`에 `TOSS_SECRET_KEY` 없음
+  (기존 1회성 결제 confirm 라우트도 동일 — Vercel 환경변수 전용으로 추정, 로컬 검증 불가는
+  기존 결제 플로우와 동일한 제약이라 범위 외) — 코드는 미설정 시 graceful degrade 처리함.
+  검증: `npx vitest run subscriptionBilling.test.ts` 5/5 통과, 클린업 확인(테스트 후 관련
+  테이블 0 rows), `svelte-check`/`eslint` 신규 에러 0건.
+- [ ] TDD-2: 정기청구 Vercel Cron + 혜택 자동적용 — `CRON_SECRET` 인증, Toss billing 청구 API,
+  `record_subscription_charge_result`/`apply_subscription_benefits` RPC, 3회 실패 시 상태전환
+  (플랜 §5-2) — chargeSubscription.ts 헬퍼 재사용 예정, 미착수
+
+## GATE C 확인 항목 (전체 NOW/NEXT 완료 후 필수)
+
+- [ ] RLS 정책 고객 A/B 격리 확인, `is_cms_user()` 관리자 전용 쓰기 확인
+- [ ] `/cms/subscriptions` 접근: superadmin/manager 정상 진입, partner 403/redirect 확인
+- [ ] 구독등록 → 목록 자동선택(`?selected=`) → DetailPanel 5개 탭 저장 동작 확인
+- [ ] `/members` 카드 클릭 → 하단 스펙 영역 반영 확인(PC 하이라이트/모바일 탭 동기화)
+- [ ] `CRON_SECRET` 미검증 요청 401 확인(RED 단계 필수 테스트)
+- [ ] Toss 테스트 키로 카드등록→최초청구→크론 강제실행 End-to-End 확인 후 production 반영
+- [ ] npm run check 통과
+
+---
+
+## DONE — docx 임포트 서식 손실 버그 수정 (2026-08-12) — ✅ 완료
+
+아젠다: Stephen 실사용 중 발견한 버그 — `/cms/reservation/contracts` 계약서 양식 편집에서 Word(.docx)
+  문서 가져오기 시 표 배경색·테두리 색·단락 정렬이 임포트 결과에 보존되지 않는 문제
+
+원인: 2개 레이어에서 동시 발생
+  1. mammoth 단계(`docxImport.ts`): `mammoth.convertToHtml({ arrayBuffer })` 옵션 없이 호출.
+     mammoth의 `document-to-html.js` `convertParagraph`/`convertTableCell`이 `alignment`,
+     shading 등을 HTML에 출력하지 않음(mammoth 의도적 설계).
+  2. TipTap 단계(`ContractDocumentEditor.svelte`): `TextAlign.configure({ types: ['heading', 'paragraph'] })`에
+     `tableCell`/`tableHeader` 누락. `TableCell`/`TableHeader`가 기본 extension이라
+     `backgroundColor`/`borderColor`를 선언하지 않아 HTML 파싱 시 style 속성이 버려짐.
+
+수정:
+  `src/lib/utils/docImport/docxImport.ts`
+    - `mammoth.transforms.paragraph`으로 정렬 있는 일반 단락에 합성 styleName(`__cs_align_center__` 등) 주입
+    - `ALIGNMENT_STYLE_MAP`으로 합성 styleName → `style='text-align:...'` 인라인 스타일 출력
+    - 표 셀 배경색/테두리색은 mammoth AST 자체에서 캡처 안 됨 — 한계 명시 주석 추가
+
+  `src/lib/components/cms/contract-editor/ContractDocumentEditor.svelte`
+    - `CustomTableCell`/`CustomTableHeader` — `TableCell`/`TableHeader`를 `.extend()`로 확장,
+      `backgroundColor`/`borderColor` 속성을 `addAttributes()`에 추가(parseHTML: style 파싱, renderHTML: style 출력)
+    - `TextAlign.configure` types에 `tableCell`/`tableHeader` 추가(표 셀 정렬 처리)
+
+검증:
+  - `npm run check` TypeScript 컴파일 오류 0건
+  - `src/__tests__/services/docxImport.test.ts` 신규 작성 — 15개 테스트 전부 통과
+    (정렬 변환 / Named 스타일 보호 / 중첩 구조 처리 / styleMap 포맷)
+  - 기존 테스트 회귀 없음(payment/productClone 실패는 기존 pre-existing 이슈, 이번 변경과 무관)
+
+한계(mammoth 라이브러리 근본 제약):
+  - 표 셀 배경색·테두리색: mammoth AST 자체에서 `w:shd`(shading) 미캡처 — 임포트 시 여전히 손실
+  - 제목(Heading 1~6) 단락 정렬: Named 스타일 보호로 인해 정렬 주입 대상에서 제외됨
+  - 일반 단락 정렬(가운데/오른쪽/양쪽)은 이번 수정으로 보존됨
+
+---
+
 ## DONE — 조합코드(품번) 순번 2단 계층 채번 + 순번 슬롯 +/− UX + 콤보 편집 카드 레이아웃 보완 (2026-08-10) — ✅ GATE E 통과, Stage+Production 배포·검증 완료
 
 plan_source: polymorphic-humming-micali.md (Plan Mode 사전 탐색·확정, 미승인 — GATE B에서 Stephen 최종 승인 필요)
@@ -6342,10 +7115,11 @@ TDD도메인 (AGENTS.md TDD 강제 키워드 대조 + 이 프로젝트 선례인
 
 ### 미확인 — Stephen 결정 필요 (Default: BACKLOG 보류)
 
-- BND-BATCH-2: 배치 실패 응답에 `createdSoFar`(이미 생성된 개수) 포함해 에러 메시지 구체화
-  → plan 문서 원문이 "(선택, 권장)"으로 명시한 옵션 항목 — 필수 항목 아님. 포함 시 공수 15분·위험
-  낮음 / 제외 시 영향: 에러 메시지가 다소 모호하나(§3.4 BND-BATCH-1 완료 시 서비스는 정상 동작) 기능
-  손실 없음. → Stephen이 "포함해" 명시 시 NOW로 이동.
+- [x] BND-BATCH-2: 배치 실패 응답에 이미 생성된 개수·항목 포함해 에러 메시지 구체화 — ✅ 완료
+  (2026-08-12, `new_product`/파트너코드 모드 경로로 실제 요청 발생. `createdSoFar` 카운트 대신
+  `createdIds` 배열 전체 + 항목별 `cloneWarnings` 구체 메시지로 구현, 정보량은 동등 이상.
+  상세: 본 파일 하단 "cloneProduct new_product(파트너코드) 배치 부분실패 통보 누락 수정" DONE
+  블록 참고. `add_inventory` 모드는 이번에도 대상 아님 — 여전히 별도 검토 필요 시에만.)
 
 ---
 
@@ -9626,6 +10400,91 @@ Stephen이 지시한 "①모든 알림은 채팅 기반 ②채팅은 항상 푸�
 **코드 수정 없음 — 위 5건(return_remind 자동화 + 4개 푸시 미연결 지점) 전부 BACKLOG 등록만
 하고 Stephen 확인 대기.** 착수 여부·우선순위는 Stephen 판단 필요.
 
+---
+
+## NOW — 갭#2 수정: 실결제 예약승인 경로 고객 FCM 푸시 누락 연결 (2026-08-09) ✅ 완료
+
+[CONTEXT BRIDGE]
+plan_source: 위 AUDIT 갭#2 (Stephen: "2번(실결제 예약승인) 먼저 고쳐줘!")
+핵심제약: 요청 범위 = 갭#2(실결제 자동승인 3경로) 한정. 갭#1(reservation_hold)·#3(QR전이)·
+  #4(계약발송)·return_remind 자동화는 이번 범위 밖 — 손대지 않음
+TDD도메인: 없음 (GSD — 기존 sendReservationLifecyclePush 함수를 누락 지점에 연결만, 신규
+  로직 없음)
+절대금지: git 자율 실행
+
+---
+- [x] 3개 파일에 고객 대상 `sendReservationLifecyclePush(admin, reservationId,
+    'reservation_approval')` 호출 추가 — 기존 `sendPaymentCompletedAdminPush`(관리자용)
+    바로 다음 줄에 병행 호출
+  - `src/routes/api/checkout/confirm-mock/+server.ts` (hold.id, number)
+  - `src/routes/api/payment/confirm/+server.ts` (reservationId, number)
+  - `src/routes/payment/success/+page.server.ts` (reservationId는 URL 파라미터라 string →
+    `Number(reservationId)` 변환해 전달, 함수 시그니처가 number 고정이라 타입 일치 필요)
+- [x] svelte-check: 터치 파일 3개 신규 에러 0건 (전체 1건은 기존 무관 에러, products/search 그대로)
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+GATE E — @sp3-qa-agent 검수 결과 (2026-08-09)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+QA 종합: 통과 ✅ (blocking 0건)
+
+sendReservationLifecyclePush 시그니처·타입 일치(3곳 전부), 절대 미throw 재확인, idempotent
+가드 내부 위치로 중복발송 방지 확인, 관리자/고객 푸시 상호 독립성 확인, 결제확정 성공/실패
+분기에 영향 없음 확인, 요청 범위(갭#2 3파일) 외 코드 무변경 확인, console.log/any/TODO 0건.
+
+참고 3건(비차단): ① production push_notification_config의 reservation_approval 항목은
+QA 에이전트가 자격증명 문제로 직접 조회 못함 → 메인 세션에서 이미 직접 확인 완료(id=2,
+category=customer_lifecycle, push_enabled=true, 2026-08-09 세션 초반 조회) ② QA 환경에
+svelte-check 바이너리 없어 tsc --noEmit으로 대체 검증(메인 세션은 npx svelte-check로 이미
+확인 완료, 결과 동일) ③ 커밋 시 이번 3파일만 개별 git add 필요(워킹트리에 타 세션 미커밋
+파일 다수 혼재)
+
+GATE E 통과 — 커밋은 Stephen이 직접 실행.
+제안 커밋 메시지: fix(payment): 실결제 예약승인 3경로에 고객 FCM 푸시(reservation_approval) 연결
+
+git 커밋 미실행(Stephen 요청 대기)
+
+---
+
+## NOW — 갭#1 수정: 예약신청접수 고객 FCM 푸시 누락 연결 (2026-08-09) ✅ 완료
+
+[CONTEXT BRIDGE]
+plan_source: 위 AUDIT 갭#1 (Stephen: "1번(예약신청접수) 갭도 이어서 고쳐줘")
+핵심제약: 요청 범위 = 갭#1(reservation_hold 1경로) 한정. 갭#3(QR전이)·#4(계약발송)·
+  return_remind 자동화는 이번 범위 밖 — 손대지 않음
+TDD도메인: 없음 (GSD — 기존 sendReservationLifecyclePush 함수를 누락 지점에 연결만)
+절대금지: git 자율 실행
+
+---
+- [x] `src/routes/api/checkout/notify-hold/+server.ts`에 import 추가 +
+    `send_rental_chat_notification` RPC 호출 직후 `sendReservationLifecyclePush(admin,
+    reservationId, 'reservation_hold')` 병행 호출 추가. reservationId는 이미 파일 상단에서
+    `Number(body.reservationId)`로 변환돼 있어 타입 문제 없음
+  - 호출 지점 2곳(상품상세 draft→체크아웃 승격 시, 체크아웃 페이지 진입 시)은 기존 채팅
+    알림과 동일한 위치에 그대로 편입 — 중복호출 여지가 있다면 그것도 기존 채팅 알림과
+    동일한 특성(이번 변경으로 신규 도입된 리스크 아님)
+- [x] svelte-check: 터치 파일 1개 신규 에러 0건 (전체 1건은 기존 무관 에러 그대로)
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+GATE E — @sp3-qa-agent 검수 결과 (2026-08-09)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+QA 종합: 통과 ✅ (blocking 0건)
+
+시그니처·타입 일치, CUSTOMER_LIFECYCLE_PUSH_COPY에 reservation_hold 키 존재 확인(no-op
+위험 없음), 인증+본인예약 소유검증 이후에만 호출(타인 예약 오발송 불가), 호출 지점 2곳
+(products/[id] draft경로 vs checkout 레거시 hold경로)이 상호 배타적임을 코드로 확인 —
+정상 플로우상 이중발송 경로 아님, 중복호출 가드 부재는 기존 채팅 RPC부터 있던 특성으로
+이번 변경이 새로 만든 리스크 아님(TASK.md 서술과 일치 확인), 절대 미throw 재확인, 요청
+범위(1파일) 외 무변경 확인. console.log/any/TODO 0건.
+
+참고(비차단): production push_notification_config.reservation_hold의 push_enabled 실측값은
+QA 에이전트가 DB 접근권한 없어 마이그레이션 시드값(DEFAULT true)으로만 판단 → 메인 세션이
+이번 세션 초반에 이미 직접 조회 완료(id=1, push_enabled=true, production 실측)로 해소됨.
+
+GATE E 통과 — 커밋은 Stephen이 직접 실행.
+제안 커밋 메시지: fix(checkout): 예약신청접수(hold) 경로에 고객 FCM 푸시(reservation_hold) 연결
+
+git 커밋 미실행(Stephen 요청 대기)
+
 ## NOW — /cms/mobile/rentals 대여목록카드 UI 다듬기 + QR 아이콘 교체 + 기능 재검증 (2026-08-09) ✅ 완료
 
 [CONTEXT BRIDGE]
@@ -10043,3 +10902,715 @@ Stephen 확인 전 임의 게이트 추가/변경 금지 원칙 준수)
   → QR-CASE-2와 달리 이 도메인은 role 무차별 허용이 확정 정책. 코드 변경 없음.
   contract.md v1.2로 갱신(정책 공백 절 → 정책 확인 완료 절로 교체, GATE C 항목도 확정 정책
   반영 문구로 수정) — "담당 파트너 소속" 개념이 향후 신설되면 재검토 대상이라는 단서만 남김
+
+---
+
+## NOW — 전자계약 서식 작성(에디터) 고도화: TipTap 전환 + 캔버스모드 + 서명·직인 모듈 + 패키징 (2026-08-11) — 🚦 GATE B 대기
+
+[CONTEXT BRIDGE]
+plan_source: /Users/stevenmac/.claude/plans/claude-rules-ref-contract-md-serialized-axolotl.md
+  (Claude 네이티브 Plan 모드로 조사·설계 완료 + Stephen 승인 완료 → @promptor가 TASK.md로 변환)
+등급: 🔴 CRITICAL — 계약(결제·예약과 함께 3대 CRITICAL 도메인) + DB 마이그레이션(Phase 6, 8) +
+  권한정책 변경(Phase 7 — 2026-08-11 Stephen 최종 확정 승인, 아래 ✅ RESOLVED 참고) + 다중 파일(신규 컴포넌트 트리 전체)
+핵심제약:
+  - `CmsContentEditor.svelte` + `src/lib/types/content-editor.ts` 절대 미수정(상품설명·크레이지로그
+    공유 컴포넌트 — 요청범위 외 영향 차단). 계약 전용 신규 컴포넌트 트리(`src/lib/components/cms/
+    contract-editor/`, `src/lib/contract-editor/`, `src/lib/contract-signature/`)로만 구현.
+  - flow/canvas 두 모드 모두 서명 유효성(strokes>=1)·만료 체크(expires_at을 PII 조회 이전 체크)는
+    100% 동일 원칙 적용 — contract.md 기존 절대 원칙, 모드 신설로 예외 두지 않음.
+  - `SignatureCanvas.svelte`는 이동/이름변경 없이 코어로 재사용(타 화면 참조 파손 방지).
+  - canvas 모드 PDF 렌더링은 클라이언트(`pdfjs-dist`)에서만 수행 — 서버에 무거운 PDF 렌더링
+    인프라를 얹지 않음(Vercel Fluid Compute 제약).
+  - Phase 9 패키징은 "모노레포 내 이식 가능 모듈"(b안)을 기본값으로 채택 — 진짜 npm 배포(a안)는
+    범위 밖, 필요 시 Stephen이 별도로 뒤집을 수 있음(플랜 원문 각주 그대로 유지).
+TDD도메인: Phase 7(권한 게이트 — AGENTS.md "보안·권한: 접근제어" 키워드 직접 매치, 2026-08-11
+  Stephen 최종 확정으로 실행 승인됨 — 아래 ✅ RESOLVED 참고) / Phase 8-A(콘텐츠 해시 검증·서명 재검증 순서 고정·감사로그 —
+  계약 CRITICAL 도메인 + 위변조 방지라는 보안 성격상 모호하면 TDD 보수적 판정 원칙 적용) /
+  Phase 8-B 중 "발행자 서명 필수 플래그 강제 검증"만 TDD, 자산 등록 CRUD 자체는 GSD.
+  나머지(Phase 0·1·2·3·4·5·6·9)는 AGENTS.md TDD 키워드 미매치 → GSD.
+절대금지:
+  - Phase 7 게이트를 11개 액션 중 일부만 적용하고 누락하는 것 금지 — 아래 ✅ RESOLVED 섹션의
+    대상 파일·액션 전수 적용 필수(security-auth.md QR-CASE-2와 동일하게 부분 적용 시 반쪽짜리
+    보안 강화가 되어 여전히 우회 가능)
+  - `CmsContentEditor.svelte`/`content-editor.ts` 수정
+  - 기존 마이그레이션 파일 직접 수정 (Phase 6·8 신규 컬럼/테이블은 전부 새 마이그레이션 파일)
+  - stage(ezyvffjvuwmtuhpxdjrw) 미검증 상태로 production(vnbpmvxruyciuuaermyh)에 마이그레이션 적용
+  - Svelte 4 문법 / $state(prop) 초기화 안티패턴 (ui-mobile.md·core-rules.md 표준 원칙 그대로 적용)
+실패롤백: 각 Phase는 독립 커밋 단위로 진행 — 특정 Phase에서 막히면 그 Phase만 BLOCKED로 이동하고
+  이전 Phase까지의 DONE은 유지(플랜 자체가 "Phase 6은 별도 마일스톤으로 분리해도 무방"이라 명시).
+
+✅ **RESOLVED — Phase 7(권한 게이트) 실행 확정, Stephen 최종 결정(2026-08-11)**
+```
+이전 버전의 이 블록은 플랜 원문(Stephen 4번 확정 결정, "contract.md 권한 정책 공백을 manager
+이상 게이트로 해결")이 같은 날 별도 세션에서 갱신된 contract.md v1.2("role 무차별 허용은
+의도된 설계, 코드 변경 없음")와 충돌한다고 보고 Phase 7을 보류·미확인 처리했었다.
+
+Stephen이 이 충돌을 최종 결정했다(2026-08-11, 전자계약 에디터 고도화 플래닝 세션):
+  → (a) 채택 — 플랜 원문대로 Phase 7을 강행한다. contract.md v1.2의 "의도된 설계, 코드 변경
+    불필요" 결론을 명시적으로 뒤집고, 계약서 양식 작성·수정·삭제 + 계약 발행·발송 11개 액션
+    전부에 manager 이상(hasSettingsAccess()) 게이트를 적용하기로 확정했다.
+
+이에 따라 contract.md도 이 최종 결정을 반영해 갱신됨(v1.3, "정책 확인 완료" 절 →
+"정책 재검토·게이트 적용 확정" 절로 교체) — 단 실제 코드 게이트 추가는 아직 미착수 상태이며
+아래 "NEXT — Phase 7~8" 큐에서 순서대로 실행된다. security-auth.md 매트릭스 갱신은 Phase 7
+코드 적용 완료 시점에 함께 진행(현재는 문서상 "결정 확정"만 반영, 코드 변경 아님).
+```
+
+---
+
+### NOW — Phase 0 + Phase 1 착수분 (선행 버그수정 + TipTap 기반 마련) ✅ 완료 (2026-08-11)
+
+- [x] P0-1: 특약(specifications) 미노출 버그 수정 | GSD | ✅ `/contract/[token]/+page.svelte` 특약 렌더링 블록 추가, 타입에 specifications 추가, `ContractTemplatePreviewModal.send()`·`RentalContractViewer.openEditorForTemplate()`의 `specifications: []` 하드코딩 제거
+- [x] P0-2: 중복 "템플릿 적용" 로직 통합 | GSD | ✅ `src/lib/utils/contract-apply-template.ts` 공용 유틸 신설, 두 호출부 모두 교체 완료
+- [x] P0-3: 신규 에디터 이미지 업로드 검증 선반영 | GSD | ✅ `validateUploadFile()` 호출이 `ContractDocumentEditor.svelte`의 `onImgFileChange`에서 항상 실행됨(P1-6 구현에 통합)
+- [x] P1-1: 신규 의존성 설치 + Svelte5 바인딩 방식 확정 | GSD | ✅ `svelte-tiptap@3.0.1`(peerDeps: svelte^5.0.0) + TipTap 3.29.2 설치, `createEditor()` + `EditorContent` 방식 채택 기록
+- [x] P1-2: `src/lib/types/contract-document.ts` 계약 전용 타입 신설 | GSD | ✅ `content-editor.ts`와 완전 독립, `TiptapDocBlock`·`MergeFieldAttrs`·`ContractDocumentPayload`·`isTiptapDocBlock()` 정의, 저장 포맷 `[{type:'tiptap-doc',doc:JSONContent}]` 확정
+- [x] P1-3: `ContractDocumentEditor.svelte` 최초 마운트 | GSD | ✅ `createEditor`+`EditorContent`+`onDestroy` cleanup 포함, 빈 문서 렌더링
+- [x] P1-4: 워드프로세서 서식 메뉴 | GSD | ✅ 굵게/기울임/밑줄/취소선/정렬3종/목록2종/제목H1~H3/링크 전부 구현, toggle() 동적 chain 호출
+- [x] P1-5: 표 삽입/행/열/헤더 커맨드 | GSD | ✅ `@tiptap/extension-table` 삽입·행추가·행삭제·열추가·열삭제·헤더토글·표삭제 UI 구현
+- [x] P1-6: 이미지 삽입(P0-3 검증 반영) | GSD | ✅ `validateUploadFile()` 실패 시 `csToast.error`, 통과 시 FileReader → TipTap Image 노드 삽입
+- [x] P1-7: HTML 소스보기 textarea 토글 | GSD | ✅ `generateHTML()` → textarea, 적용 시 `setContent()`, 모달 UI 구현
+- [x] P1-8: `MergeFieldNode`(변수 칩) | GSD | ✅ `src/lib/components/cms/contract-editor/nodes/MergeFieldNode.ts` — contenteditable=false 인라인 atom, `renderText()`→`{{variable}}` 원문 보장, `insertMergeField()` 커맨드
+
+완료기준(Phase 0+1 전체): ✅ `npx svelte-check` — 신규/수정 파일 기준 0 ERROR (전체 1 ERROR는 `products/search/+page.svelte` pre-existing, 이번 작업 범위 밖). TipTap 에디터 텍스트/표/이미지/HTML/변수칩 서식 메뉴 전부 구현. 특약 조항 고객 화면 렌더링 수정 완료.
+
+---
+
+### DONE — Phase 3~4 (DB 매핑 고도화 + docx/xlsx 임포트) ✅ 완료 (2026-08-11)
+
+- [x] Pre-task: `ContractEditorModal` + `ContractTemplatePanel` → `ContractDocumentEditor` + `ContractFieldPanel` 교체, `CmsContentEditor`/`ContractModuleBar` import 제거 완료
+- [x] P3-1: `ContractFieldPanel` 신설 | GSD | ✅ 계약자정보(4변수)/상품정보(8변수)/결제정보(4변수)/특약 4탭 구성, 클릭 시 커서 위치에 `MergeFieldNode` 삽입, `ContractModuleBar` "문서 끝 고정 표 추가" 방식 완전 대체
+- [x] P3-2: "특약" 탭을 `specifications` key-value 관리 UI로 흡수 통합 | GSD | ✅ `ContractFieldPanel` 내 "특약" 탭에서 단일 지점 관리, 두 편집 화면(EditorModal·TemplatePanel)에서 기존 분리 UI 완전 제거
+- [x] P3-3: 수량 UI 하드코딩 정합 반영 | GSD | ✅ `contract-data/+server.ts:78` 서버 `수량: '1'` 하드코딩 확인, `ContractFieldPanel`에서 "수량 (항상 1)" 레이블로 표시 — 거짓 다중수량 선택지 없음
+- [x] P4-1: `ContractImportModal.svelte` 신설(파일업로드→확장자분기) | GSD | ✅ 계약 전용 accept 목록(docx/xlsx) 로컬 관리, 전역 `fileValidation.ts` 이미지 표준 미변경
+- [x] P4-2: docx 임포트(mammoth) | GSD | ✅ `src/lib/utils/docImport/docxImport.ts` 신설, mammoth HTML 변환 → TipTap `setEditorContent` 반영, 손실 가능 요소 안내 배너 + 경고 목록 노출
+- [x] P4-3: xlsx 임포트(SheetJS) | GSD | ✅ `src/lib/utils/docImport/xlsxImport.ts` 신설, 시트 선택 → 범위 선택(최대 100행) → 미리보기 → TipTap 표 노드로 커서 위치 삽입, `rowsToTiptapTable()` 변환 유틸 포함
+
+완료기준(Phase 3+4 전체): ✅ `npx svelte-check` — 신규/수정 파일 기준 0 ERROR (전체 1 ERROR는 `products/search/+page.svelte` pre-existing, 범위 밖)
+
+---
+
+### NEXT — Phase 7~8 (권한 게이트 확정 적용 + 서명 모듈 고도화)
+
+> Phase 7은 2026-08-11 Stephen 최종 결정으로 실행 확정(위 RESOLVED 참고) — contract.md v1.2의
+> "의도된 설계, 코드 변경 불필요" 결론을 뒤집고 11개 액션 전부에 manager 이상 게이트를 적용한다.
+> 대상 파일 5개, 패턴은 security-auth.md QR-CASE-2와 동일(getCmsRoleForAction으로 role 취득 후
+> hasSettingsAccess로 등급 체크, locals.cmsRole 직접 사용은 금지).
+
+- [x] P7-1: `/cms/reservation/contracts` load() 진입 게이트 추가 | TDD | 완료기준: parent()로 cmsRole을 받아 hasSettingsAccess가 false면 redirect(303, '/cms?notice=access_denied') 처리(QR-CASE-2와 동일 패턴), partner 계정 접근 시 리다이렉트됨을 테스트로 확인
+- [x] P7-2: `/cms/reservation/contracts` create/update/softDelete 3개 action 게이트 | TDD | 완료기준: 각 action에서 getCmsRoleForAction으로 role을 받아 hasSettingsAccess 체크 추가, partner 요청 시 fail(403) 반환을 테스트로 확인
+- [x] P7-3: init-contract, contract-data 2개 API 게이트 | TDD | 완료기준: 두 엔드포인트 모두 hasSettingsAccess 체크 추가, partner 계정으로 요청 시 403 응답을 테스트로 확인
+- [x] P7-4: contracts/[id]/content GET/PATCH 게이트 | TDD | 완료기준: GET/PATCH 양쪽 모두 게이트 적용(한쪽만 적용하면 다른 경로로 열람 가능해지므로 두 메서드 모두 필수)
+- [x] P7-5: send-chat(발송) 게이트 | TDD | 완료기준: partner 계정으로 발송 시도 시 403, manager 이상은 정상 발송됨을 테스트로 확인
+- [x] P7-6: security-auth.md 역할별 CMS 접근 매트릭스에 계약서 양식/발행/발송 행 추가 | GSD | 완료기준: P7-1~5 코드 적용 완료 후 진행, contract.md GATE C 체크리스트 문구도 게이트 확정 적용 기준으로 동기화
+
+리스크(Phase 7):
+- 보안: partner 계정이 화면을 거치지 않고 서버 엔드포인트에 곧바로 요청을 보내는 경우 → 서버측 게이트(P7-1~5)로 차단되므로 화면상 버튼 숨김만으로는 불충분함을 전제로 구현
+- 데이터 정합성: manager에서 partner로 등급이 낮아진 계정의 세션 정보가 오래된 값을 참조하는 경우 → getCmsRoleForAction의 조회 로직이 최신 role을 반영하는지 확인
+- EC-1: partner가 load() 게이트를 거치지 않고 개별 action만 호출하는 경우 → 예상 동작: action 자체 게이트(P7-2~5)로 이중 차단되어 여전히 403
+- EC-2: superadmin 계정이 접근하는 경우 → 예상 동작: hasSettingsAccess는 manager(50) 이상 전부 true이므로 정상 통과
+- EC-3: cmsRole이 비어있는 비정상 세션으로 접근하는 경우 → 예상 동작: hasSettingsAccess가 false를 반환해 차단(로그인 자체가 안 된 것과 동일하게 처리)
+
+- [x] P8A-1: 콘텐츠 해시 바인딩 — contract_signings.content_hash 신규 컬럼(마이그레이션) + 서명 제출 시점 서버측 SHA-256 계산·저장 | TDD | 완료기준: 저장된 해시가 실제 content_blocks/canvas_document(발행자 서명·직인 포함 최종본)의 SHA-256과 일치함을 테스트로 검증, Web Crypto API 사용(신규 의존성 없음)
+- [x] P8A-2: 서명 직전 재검증(만료·기서명 여부) 단위테스트로 고정 | TDD | 완료기준: 기존 GET/POST 양쪽 signed_at/expires_at 체크 순서(만료를 PII 조회보다 먼저)를 테스트로 고정, 향후 리팩터링 회귀 방지
+- [x] P8A-3: contract_audit_log 신규 테이블(append-only) + 기록 헬퍼(auditLog.ts) | TDD | 완료기준: viewed/signed/sent/issuer_signed 이벤트가 순서대로 기록됨을 테스트로 확인, actor_type/actor_id/ip_address 정확히 기록
+- [x] P8B-1: contract_issuer_signatures + cms_signature_assets 신규 테이블(마이그레이션) | GSD | 완료기준: stage 선검증 후 production 적용
+- [x] P8B-2: /cms/set/signature 관리자 서명/직인 자산 등록 화면(manager 이상 게이트) | GSD | 완료기준: validateUploadFile 패턴 재사용, 기본값 지정 가능
+- [x] P8B-3: 발행(send-chat) 시점 서명/직인 선택 또는 직접서명(SignatureCaptureCanvas) | GSD | 완료기준: 등록된 자산 선택 또는 그 자리 서명 양쪽 모두 동작
+- [x] P8B-4: 계약서 양식 발행자 서명 필수 플래그 + 강제 검증 | TDD | 완료기준: 플래그를 켠 양식은 발행자 서명 없이 발송을 시도하면 서버에서 차단됨을 테스트로 고정, 플래그가 꺼진 양식은 정상 발송
+- [x] P8B-5: flow/canvas 양쪽에 발행자 서명·직인 렌더링(고객 화면과 CMS 미리보기) | GSD | 완료기준: flow는 지정 앵커 또는 문서 최하단, canvas는 좌표 필드로 렌더링
+
+- [x] P8B-6(후속): 계약서 양식 편집 화면(`ContractTemplatePanel.svelte`)에 `requires_issuer_signature` 토글 UI 추가 | GSD | 완료기준: 양식별로 관리자가 "발행자 서명·직인 필수" 여부를 토글로 켜고 끌 수 있고, create/update action이 DB에 해당 값을 저장 | Phase 8 GATE C 이후 Stephen 요청으로 추가된 후속 항목 — P8B-4의 서버측 강제 검증은 이미 완성돼 있었고, 이를 켜고 끄는 UI만 없던 상태였음 | ✅ 완료(2026-08-12): `ContractTemplate` 타입에 `requires_issuer_signature: boolean` 추가, load 쿼리에 필드 포함, create/update action 반영, `ContractTemplatePanel.svelte` 기존 CMS 토글 패턴 재사용하여 토글 UI 추가
+
+리스크(Phase 8):
+- 동시성 리스크: 발행자가 자산을 선택하는 동안 다른 관리자가 같은 계약을 동시에 발행하는 경우 → 발송(send-chat)은 기존에도 단일 액션이라 추가 락 불필요(기존 정책 유지)
+- 데이터 정합성: content_hash 계산 시점(서명 제출 시점 vs 발행 시점)이 어긋나면 해시가 실제 서명 대상과 불일치 → P8A-1에서 서명 제출 시점으로 고정
+- 보안: SMS·OTP 재인증 없이 보안성 강화를 주장하지 않도록 범위 밖임을 문서에 명확히 남김(과장 표현 금지)
+- EC-1: 발행자 서명 자산이 0개인 상태에서 필수 플래그를 켠 양식으로 발송을 시도하는 경우 → 예상 동작: 자산 등록 안내로 차단
+- EC-2: content_hash 계산 대상 문서가 매우 커서(다수 이미지 포함) 해시 계산이 지연되는 경우 → 예상 동작: 서버사이드 계산이 Vercel 함수 제한시간 내 완료되는지 확인, 대용량이면 이미지 URL 참조만 해시 대상에 포함하고 바이너리 자체는 제외하는 방식 검토
+- EC-3: 동일 계약에 대해 서명을 다시 제출하는 경우(만료 전 재제출) → 예상 동작: contract_audit_log에 signed 이벤트가 중복 기록되지 않도록 최초 1회만 확정 처리(기존 signed_at 정책과 동일)
+
+### DONE — Phase 2, 5 (레이아웃 재구성 + HWP/HWPX 임포트) ✅ 완료 (2026-08-12)
+
+- [x] P2-1: `/cms/reservation/contracts` 좌측 목록+검색 / 중앙 에디터 / 우측 필드패널+특약 / 하단 저장→미리보기→발송 액션바로 재구성 | GSD | ✅ 3열 레이아웃(목록280px+에디터영역flex:1, 에디터 내부에 ContractDocumentEditor+ContractFieldPanel 2열 내장), 검색(클라이언트 측 필터), CmsPagination 재사용, showNewEditor 풀스크린 모드 제거 → isNewMode로 항상 3열 유지, `cms-uiux.md` 토큰 준수
+- [x] P5-1: HWP/HWPX 기본 안내 모달(모든 .hwp/.hwpx 공통) | GSD | ✅ ContractImportModal에 .hwp/.hwpx accept 추가, .hwp 선택 시 파싱 시도 없이 즉시 "한글에서 docx로 저장 후 재업로드" 4단계 안내 모달 노출
+- [x] P5-2: HWPX 실험적 파싱(feature-flag) | GSD | ✅ npm 재확인 결과 `hwp-convert@1.13.0` (MIT, TypeScript, 브라우저 ESM, 2026-08-07 배포) 채택. `src/lib/utils/docImport/hwpxImport.ts` 신설(FEATURE_HWPX_EXPERIMENTAL flag), .hwpx 선택 시 동의 체크박스(필수) 확인 후 실험 변환 시도, 실패 시 자동 폴백(hwp-notice 스텝), 성공 시 HTML 미리보기 → 에디터 삽입. `hwp-convert` package.json 추가 및 설치 완료.
+
+완료기준(Phase 2+5 전체): ✅ `npx svelte-check` — 신규/수정 파일 기준 0 ERROR (전체 1 ERROR는 `products/search/+page.svelte` pre-existing, 이번 작업 범위 밖)
+
+---
+
+### NEXT — Phase 6 (고정캔버스 + 좌표기반 필드배치 모드, 별도 마일스톤 분리 가능 — 최대 작업량)
+
+- [x] P6-1: DB 마이그레이션 — `contract_templates.authoring_mode`(ENUM flow/canvas, DEFAULT flow) + `canvas_document`(JSONB), `contracts.authoring_mode` + `canvas_document` 신규 컬럼 | GSD | ✅ `supabase/migrations/20260812000224_224_canvas_authoring_mode.sql` 작성 완료 — **어느 DB에도 아직 적용되지 않음** (Stephen 수동 적용 필요: stage → production 순서)
+- [x] P6-2: 배경 문서 처리 — 이미지 그대로 사용 / PDF는 `pdfjs-dist` 클라이언트 래스터화 후 이미지 업로드 | GSD | ✅ `pdfjs-dist@4.10.38` 추가 + `src/lib/utils/pdfRasterize.ts` 신설 — 서버 PDF 인프라 없음(클라이언트 전용), EC-1 빈 PDF 거부 포함
+- [x] P6-3: `ContractCanvasEditor` + `ContractCanvasFieldPalette` — 서명/DB연동텍스트/고정라벨 3종 필드만 배치 가능 | GSD | ✅ `src/lib/components/cms/contract-editor/ContractCanvasEditor.svelte` + `ContractCanvasFieldPalette.svelte` 신설, `src/lib/types/contract-document.ts`에 canvas 타입 추가, 드래그·좌표기반 배치·속성패널 구현, EC-2 경계 클램핑 포함
+- [x] P6-4: 고객 서명화면(`/contract/[token]`) canvas 모드 분기 렌더링 | TDD | ✅ `src/__tests__/server/contractP6Canvas.test.ts` 16/16 통과 + `+page.server.ts` contracts select에 `authoring_mode,canvas_document` 추가 + `+page.svelte` canvas 분기(배경 img + 퍼센트 좌표 필드 오버레이 + 인라인 SignatureCanvas) 구현. 기존 P8A/P8B4/authGates 34/34 회귀 없음. **마이그레이션 파일은 작성됐으나 아직 어느 DB에도 적용되지 않음.**
+- [x] P6-4-후속: canvas 모드 substitutionMap 16개 전체 매핑 완성 | GSD | Phase 6 GATE C 이후 Stephen 지시로 추가 — 기존 P6-4 구현에서 `substitutionMap`에 7개만 하드코딩됐고(고객이름·연락처·이메일·예약코드·상품명·수령일시·반납일시) 나머지 9개(주소·상품코드·수량·수령형태·반납형태·기본대여요금·할인금액·부가세·최종합계)는 빈 값으로 남아 있었음. ✅ 수정 완료(2026-08-12): `+page.server.ts`(rental_reservations select에 `pickup_method/return_method/pickup_time/return_time` + products select에 `product_code` 추가, 사용자 배송주소·주문금액 별도 조회 후 `shippingAddress`/`orderData` 반환), `+page.svelte`(contract 타입 캐스트 확장, `PICKUP_LABELS`·`formatAmount` 헬퍼 추가, substitutionMap 16개 전체로 일반화 — switch문이 아닌 Record<string,string>이라 추가하면 자동 반영), `src/__tests__/server/contractP6Canvas.test.ts`(G6 신규 6케이스 추가 — 16개 타입 키 확인·null 폴백·실데이터 9개 변수 검증·PICKUP_LABELS·pickup_time 우선순위·formatAmount). 검증: `npx vitest run contractP6Canvas.test.ts` 22/22 통과(기존 16 회귀 없음 + 신규 6 전부 GREEN), `npx svelte-check` 수정 파일 오류 0건.
+
+리스크(Phase 6, TDD 대상 P6-4 필수 기재):
+- 동시성 리스크: 좌표 필드 배치 저장 중 관리자 중복 저장 → 마지막 저장 승자(last-write-wins) 허용 범위인지 확인 필요(관리자 단일 사용자 편집 가정, 별도 락 불필요 — 기존 flow 모드와 동일 정책)
+- 데이터 정합성: canvas_document.fields[]의 boundVariable이 `ContractSubstitutionData`(16개 변수) 밖의 값을 참조할 경우 → 저장 시 서버 검증으로 차단
+- 보안: canvas 모드라고 서명 유효성/만료체크 로직이 우회되지 않는가 → P6-4 테스트로 고정
+- EC-1: PDF 업로드했는데 페이지 수가 0(빈 PDF) → 예상 동작: 업로드 거부 + 에러 토스트
+- EC-2: 서명 필드가 배경 이미지 경계 밖 좌표로 저장됨 → 예상 동작: 저장 시 서버에서 좌표 범위 검증, 범위 밖이면 400
+- EC-3: 필드가 0개인 채로 canvas 문서 저장 시도 → 예상 동작: 최소 1개 서명 필드 필수 검증(서명 없는 계약서는 무의미)
+
+---
+
+### DONE — Phase 9 (전역 패키징 모듈화 + 연동 기술문서) — 2026-08-12 완료
+
+- [x] P9-1: 모듈 경계 확정 — 실제 경로(`src/lib/components/cms/contract-editor/`, `src/lib/contract-signature/`) 전체 파일 검토 결과 `supabase.from`/`supabase.rpc` 직접 호출 0건 확인. 모든 저장은 `onSave(payload) => Promise<void>` 어댑터 콜백으로 위임 — Phase 9 원칙 준수 확인 | GSD | GATE C 승인
+- [x] P9-2: `docs/contract-suite-integration.md` 신규 작성(806줄) — DB 테이블 6개 전체 DDL(실제 마이그레이션 파일 직접 읽어서 작성), API 계약 9개 엔드포인트, 컴포넌트 props/콜백 인터페이스 전체, 환경변수, 설치 5단계 순서, 크레이지샷 특화 요소 7항목(교체 필요 지점) 전부 포함 | GSD | GATE C 승인
+
+확인됨(각주 재확인 불필요): Phase 9는 "모노레포 내 이식 가능 모듈"(b안)을 기본값으로 이미 채택 —
+진짜 npm 레지스트리 배포(a안, 별도 레포·semver·CI 필요)는 이번 스코프 밖으로 BACKLOG 처리.
+
+---
+
+### 미확인 — Stephen 결정 필요 (Default: BACKLOG 보류)
+
+(해결됨, 2026-08-11) Phase 7 충돌 건은 Stephen이 (a) 플랜 원문대로 강행하는 쪽으로 결정을 내려
+위 "NEXT — Phase 7~8" 섹션(P7-1~P7-6)으로 이동 완료했다. 이 섹션에는 더 이상 대기 중인 항목이 없다.
+
+---
+
+### BACKLOG
+
+- SMS/OTP 재인증(고객 직접사인 추가 보안강화): 외부 유료 벤더 선정 필요한 별도 의사결정 — v1 범위 밖(플랜 8-A-4)
+- Phase 9 진짜 npm 레지스트리 배포(a안): 별도 레포 분리·semver·CI/CD 파이프라인 필요, 이번 플랜 전체 Phase를 합친 것과 비슷하거나 더 큰 규모 — 필요 시 별도 아젠다로 재요청
+- `CmsContentEditor.svelte` 이미지 업로드 검증 누락(상품/크레이지로그 공용, 계약 에디터와 동일 결함이나 공유 컴포넌트라 이번 스코프 밖) — 별도 확인 필요 시 후속 처리
+
+### GATE C 확인 항목(Phase 전체 공통, 실행 단계에서 확인)
+
+- [ ] `CmsContentEditor.svelte`/`content-editor.ts` 변경 0건?
+- [ ] flow/canvas 양쪽 서명 유효성(strokes>=1)·만료체크(PII 조회 이전) 동일 동작?
+- [ ] 신규 마이그레이션 파일 stage 선적용·검증 → production 순서 준수?
+- [ ] `MergeFieldNode` 직렬화 결과가 `substituteVariables()` 정규식과 정상 매칭?
+- [ ] docx/xlsx 임포트 accept 목록이 전역 `fileValidation.ts`(이미지 표준)를 건드리지 않는가?
+- [ ] Phase 7 게이트가 대상 5개 파일·11개 액션 전부에 누락 없이 적용되었는가? (일부만 적용하면 나머지 경로로 여전히 접근 가능)
+- [ ] content_hash가 서명 제출 시점 최종본 기준으로 계산되는가?
+- [ ] `contract-editor`/`contract-signature` 디렉토리에 Supabase 클라이언트 직접 import 없는가?
+- [ ] `npm run check` 매 Phase 완료 후 통과?
+
+---
+
+## NOW — 갭#3 수정: QR스캔 자동처리 경로 고객 FCM 푸시 누락 연결 (2026-08-09) ✅ 완료
+
+[CONTEXT BRIDGE]
+plan_source: 위쪽 "AUDIT — 고객 대상 '예약·대여' 알림(채팅+FCM푸시) 발송 내역 재검증" 블록의
+  갭#3 (Stephen: "3번(QR스캔 자동처리) 갭도 이어서 고쳐줘") — 갭#1(예약신청접수)·#2(실결제
+  예약승인)는 이미 수정·QA통과 완료된 상태에서 이어서 진행
+핵심제약: 요청 범위 = 갭#3(`rentalQrTransition.ts` 1파일) 한정. 갭#4(계약발송)·return_remind
+  자동화는 이번 범위 밖 — 손대지 않음
+TDD도메인: 없음 (GSD — 기존 sendReservationLifecyclePush 함수를 누락 지점에 연결만)
+절대금지: git 자율 실행
+
+---
+- [x] `src/lib/server/rentalQrTransition.ts`에 `import { sendReservationLifecyclePush }
+    from '$lib/server/push'` 추가 + 기존 `send_rental_chat_notification` RPC 호출(try/catch
+    내부) 직후, `if (notifyType)` 블록 안에서 `await sendReservationLifecyclePush(admin,
+    reservationId, notifyType)` 병행 호출 추가
+  - 이 함수는 `/cms/mobile/qr/[product_id]/+page.server.ts`(QR 스캔 자동착지 화면)와
+    `/api/cms/rental-qr-transition`(RentalDetailPanel QR 하이브리드 모드) 양쪽이 공유하는
+    단일 로직이라 파일 1곳 수정으로 두 진입점 모두 적용됨
+  - `sendReservationLifecyclePush` 자체가 내부에서 이미 완전히 try/catch로 감싸져 절대
+    throw하지 않는 함수라, 채팅 RPC처럼 별도 try/catch로 감싸지 않고 그대로 await만 추가
+    (앞선 갭#1·#2 수정과 동일 패턴 유지)
+- [x] svelte-check: 터치 파일 1개 신규 에러 0건 (전체 1건은 기존 무관 에러 그대로)
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+GATE E — @sp3-qa-agent 검수 결과 (2026-08-09)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+QA 종합: 통과 ✅ (blocking 0건)
+
+시그니처 타입 호환(any→SupabaseClient 런타임 일치 확인), AUTO_NOTIFY 4개 타입 전부
+CUSTOMER_LIFECYCLE_PUSH_COPY 존재(no-op 위험 없음), sendReservationLifecyclePush 절대
+미throw 재확인(try/catch 없이 await만 추가해도 안전), 두 진입점(mobile/qr 자동착지 +
+rental-qr-transition 하이브리드) 모두 정상 admin client·number reservationId 전달 확인,
+요청 범위(1파일) 외 무변경 확인.
+
+🔎 추가 확인(QA 자체 발견, 유용한 보강): QR 자동처리와 관리자 수동 updateStatus가 동일
+예약에 동시/중복 실행될 위험 — update_reservation_status RPC(migration 187)가 FOR UPDATE
+행잠금 + 엄격한 다음-상태 검증을 수행해, 이미 전이된 상태에 재요청 시 ok:false로 거부되고
+알림 발송 블록 자체에 도달하지 못함 → 두 경로가 같은 RPC를 공유하는 구조 자체가 중복발송을
+차단함을 코드로 확인.
+
+참고(비차단): production push_notification_config의 shipment_notify/rental_confirm/
+return_registration/rental_complete 4개 push_enabled 실측은 이번 QA에서 미조회 — 필요시
+메인 세션에서 확인 권장(코드 결함 아님).
+
+GATE E 통과 — 커밋은 Stephen이 직접 실행.
+제안 커밋 메시지: fix(cms/rentals): QR스캔 자동처리 경로에 고객 FCM 푸시(갭#3,
+shipment/rental_confirm/return/complete) 연결
+
+git 커밋 미실행(Stephen 요청 대기)
+
+---
+
+## NOW — 갭#4 수정: 전자계약 발송 경로 고객 FCM 푸시 누락 연결 (2026-08-12) ✅ 완료(stage) / production 승인대기
+
+[CONTEXT BRIDGE]
+plan_source: 위쪽 AUDIT 블록의 갭#4 (Stephen: "4번(전자계약 발송) 갭도 이어서 고쳐줘") —
+  갭#1·#2·#3은 이미 수정·QA통과 완료. contract.md 도메인 규칙 확인 후 진행
+핵심제약: 요청 범위 = 갭#4(`send-chat/+server.ts` 1파일 + 신규 알림유형 1건) 한정.
+  return_remind 자동화(pg_cron)는 이번 범위 밖 — 손대지 않음
+TDD도메인: 없음 (GSD — 기존 sendPushToUser 함수를 누락 지점에 연결 + notify_type 신규 등록)
+절대금지: 기존 마이그레이션 파일 수정 금지(신규 파일만), production 적용은 Stephen 승인 후
+
+---
+- [x] 신규 알림 유형 등록 | 파일: `supabase/migrations/20260812000220_220_push_notification_config_contract_sent.sql`
+  — `push_notification_config`에 `contract_sent`(category=customer_lifecycle, 신규 옵트인
+  컬럼 없이 기존 allow_rental_alert 재사용) INSERT | stage(ezyvffjvuwmtuhpxdjrw) 적용·조회
+  확인 완료(id=11)
+- [x] `src/routes/api/cms/contracts/[id]/send-chat/+server.ts`에 `import { sendPushToUser }
+    from '$lib/server/push'` 추가 + 채팅 action_card 메시지 INSERT 성공 직후
+    `await sendPushToUser(contract.user_id, 'contract_sent', { title, body, link: signingUrl })`
+    호출 추가
+  - `sendReservationLifecyclePush`(고정 link='/account/rental') 대신 범용 `sendPushToUser`를
+    직접 사용 — 이유: 계약서 발송의 실제 목적지는 서명 페이지(`signingUrl`)라 딥링크로
+    바로 연결하는 게 사용성상 정확함. 이 파일이 이미 `signingUrl`을 계산해둔 상태라 별도
+    조회 없이 재사용
+- [x] svelte-check: 터치 파일 1개 신규 에러 0건 (전체 1건은 기존 무관 에러 그대로)
+
+⚠️ production 마이그레이션 미적용 — Stephen 승인 대기 중(migration 208/admin_chat_reply
+때와 동일하게 명시 확인 후 적용 예정)
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+GATE E — @sp3-qa-agent 검수 결과 (2026-08-12)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+QA 종합: 통과 ✅ (blocking 0건, advisory 1건)
+
+sendPushToUser 시그니처 일치, contract.user_id NOT NULL 스키마 확인(null 도달 불가),
+msgErr 체크 통과 이후에만 push 호출(채팅 실패 시 푸시도 안 감 — 원치않는 케이스 없음),
+절대 미throw 재확인, P7-5 권한 게이트(hasSettingsAccess) 손상 없음 확인, 딥링크(signingUrl
+절대URL) 판단 타당 — 오히려 기존 상대경로 링크들보다 FCM/서비스워커 스펙에 더 부합.
+vitest 계약서 관련 3개 테스트파일 34건 전부 통과(회귀 없음).
+
+🔴 중요 발견(advisory, blocking 아님): sendPushToUser의 마스터스위치 체크가
+`if (config && config.push_enabled === false) return`라서, push_notification_config에
+contract_sent 행이 아예 없는 상태(=migration 220 production 미적용)에서도 발송을 막지
+않고 그냥 진행함(config가 null이면 조건이 false라 조기리턴 안 됨 — "행 없음"과 "비활성화"가
+동치가 아니라 기본값이 "발송 허용"). 즉 "production 마이그레이션 승인 대기 = 아직 발송
+안 됨"이라는 전제가 틀렸음 — 코드만 배포되면 마이그레이션 여부와 무관하게 즉시 발송 시작됨.
+→ 매 사용자가 CMS `/cms/set/push`에서 이 알림을 끌 수 있는 마스터 스위치 자체도 config
+행이 있어야 생기므로, 코드·마이그레이션을 분리해서 배포할 이유가 없음(오히려 같이
+가는 게 일관적) → 즉시 production 마이그레이션 적용으로 결론.
+
+GATE E 통과 — 커밋은 Stephen이 직접 실행.
+제안 커밋 메시지: fix(cms/contract): 전자계약 발송 경로에 고객 FCM 푸시(contract_sent) 연결
++ notify_type 신규 등록
+
+- [x] Stephen 확인(AskUserQuestion): "지금 production까지 적용" 선택
+- [x] production(vnbpmvxruyciuuaermyh) 적용 | 완료기준: INSERT 후 재조회로 contract_sent
+    행(id=11) 확인 | 완료
+
+git 커밋 미실행(Stephen 요청 대기) — 갭#4 대상 변경 파일 2개: send-chat/+server.ts,
+migration 220(신규, stage+production 적용 완료)
+
+---
+
+## NOW — CMS 대시보드 홈 화면 신설 (/cms 4탭: 간트·상담카드·구독·오늘통계) (2026-08-12) — 🚦 GATE B 승인 완료(Plan Mode 사전승인, 전수 재검증본) ✅ 전체 완료
+
+[CONTEXT BRIDGE]
+plan_source: Stephen 첨부 크레이지샷 백업 투두("홈-대시보드 추가", 2026-08-03) + 이번 세션 요청
+  4개 탭(예약승인·대여 일정 간트 / 상담목록카드 현황 / 정기구독 현황 / 오늘 통계) 우선 구현.
+  전체 설계는 Plan Mode에서 소스 직접 열람으로 전수 재검증 완료 —
+  /Users/stevenmac/.claude/plans/users-stevenmac-downloads-crazyshot-bac-tender-pixel.md 참조
+  (컴포넌트 props·RPC 시그니처·테이블 컬럼·SQL 초안·API 계약까지 코드 스켈레톤 수준 명시).
+핵심제약: `/cms` 첫 화면(현재 AdminChatPanel 중복 렌더링 — 실제 상담기능은 /cms/chat에 이미
+  완전한 버전 존재, 기능 손실 없음)을 신규 4탭 대시보드로 교체. 신규 테이블 0개(RPC 1개만 신규
+  마이그레이션 대상). 5개 Phase는 서로 독립 — Phase 0(라우팅 셸) 선행 후 순서 무관 개별 배포 가능.
+TDD도메인: 없음 (GSD — UI/집계조회 위주, 결제·예약·보안 핵심로직 변경 아님)
+절대금지: git 자율 실행 / 기존 마이그레이션 파일 수정 / 요청 범위 외 파일 수정
+
+Stephen 확정 사항(재질문 불필요):
+  1. 오늘 방문자수 = user_behavior_events 기반 추정치(캐비엇 문구 필수) / 이벤트 응모수 = "준비중" 배지
+  2. 대시보드 접근권한 = 전체 CMS 등급 공개(현행 무등급 유지, 코드 변경 불요 — 확인됨)
+  3. 간트 탭 = 무한 가로 스크롤 + 14일 단위 청크 lazy-load(부하 제한)
+  4. "반출중"(오늘통계 f) = confirmed+shipped+in_use 전부 포함(넓은 정의)
+
+### Phase 0 — 라우팅 셸 (전체 선행조건) ✅ 완료 (2026-08-12)
+- [x] `src/routes/cms/+layout.svelte`: `mainMenus`에 `{ id:'dashboard', label:'홈', href:'/cms',
+    subMenus:[] }` 추가, `MainMenu` 타입에 `href?: string` 추가, `mainMenuHref()`을
+    `menu.href ?? menu.subMenus[0]?.href ?? '#'`로 수정, `resolveActiveMenuId()` 최상단에
+    `if (pathname === '/cms') return 'dashboard'` 1줄 추가(기존 분기·fallback 전부 그대로)
+- [x] `src/routes/cms/+page.server.ts` 전면 교체 — 5개 탭 데이터 블록(간트/구독/오늘통계/쿠폰/
+    채팅세션)을 전부 스텁으로 시작, Phase 1~4에서 하나씩 실구현 교체
+- [x] `src/routes/cms/+page.svelte` 교체 — `<CmsDashboardTabs data={data} />` 한 줄
+- [x] `src/lib/components/cms/dashboard/CmsDashboardTabs.svelte` 신규 — 탭바 셸(4개 빈 탭 바디),
+    `promotion/analytics/+page.svelte`의 `.tab-bar`/`.tab-btn`/`activeTab` 패턴 재사용
+- [x] 완료기준: `/cms` 진입 시 "홈" 탭 활성 상태로 4탭 셸 렌더, `/cms/chat`·`/cms/reservation`·
+    `/cms/rentals`·`/cms/promotion/*` 기존 라우트 활성탭·서브탭바 판정 전혀 변화 없음(회귀 스팟체크)
+- [x] npm run check 통과(신규 에러 0건) — 이번 4개 파일 기준 0건, 기존 pre-existing 1건(products/search)은 무관
+
+### Phase 1 — 탭3 정기구독 현황 ✅ 완료 (2026-08-12)
+- [x] `src/lib/components/cms/dashboard/CmsDashboardSubscriptions.svelte` 신규
+      — SubRow export(module ctx), CmsStatRing×3(이지/팝/크레이지, value=비율%, centerText=실카운트,
+        tone=neutral/info/primary), CmsKpiGrid(4장: 총구독자+티어별 월예상액, columns=3),
+        구독자 목록 테이블 + CmsPagination(20개 초과 시), TIER_STYLE 인라인 스타일 배지
+- [x] `+page.server.ts`에 `subscriptions` 테이블 실조회(status=active, deleted_at IS NULL)
+      + user_profiles 별도 조회(user_id.in) → nameMap → tier별 그룹핑 SubRow[]. SubRow 타입 인라인 정의.
+      (user_profiles.name 확인: migration 03, 'full_name'이 아닌 'name' 컬럼 사용)
+- [x] `CmsDashboardTabs.svelte` 수정 — SubRow import, DashboardData.subscriptionData 타입 갱신,
+      subscription placeholder → `<CmsDashboardSubscriptions buckets={data.subscriptionData} />`
+- [x] 완료기준: npx svelte-check — Phase 1 신규 3개 파일 에러/경고 0건(pre-existing 1건은 products/search, 무관)
+
+### NOW — Phase 2 (탭4 오늘 통계) ✅ 완료 (2026-08-12) — production 적용은 Stephen 승인 대기
+- [x] 신규 마이그레이션(RPC 함수만, 테이블 아님) `get_dashboard_today_stats()` — 계획 문서의
+    SQL 초안 기반, `SECURITY DEFINER` + `is_cms_user()` 게이트 + `jsonb_build_object` 단일 반환
+    (visits_today_estimate/payment_total_today/customers_new_today/customers_withdrawn_today/
+    customers_total/product_category_count/product_total_count/rentals_out_count/
+    returns_pending_count/returns_completed_total/reviews_today_count/inquiries_today_count/
+    inquiries_pending_count 13개 필드) → `supabase/migrations/20260812000221_221_dashboard_today_stats_rpc.sql` 생성 완료
+- [x] stage(ezyvffjvuwmtuhpxdjrw) MCP apply_migration으로 적용 완료(2026-08-12) — `execute_sql`로
+    함수 직접 호출 검증: `is_cms_user()` 게이트가 `auth.uid()` 없는 MCP 세션에서 정확히
+    `ACCESS_DENIED`를 반환함을 확인(= 13개 서브쿼리가 실제 스키마 대상으로 문법 오류 없이 전부
+    파싱·컴파일됐다는 뜻 — RAISE EXCEPTION 지점까지 도달했으므로 컬럼명 오류 없음).
+    `list_migrations`로 stage 마이그레이션 목록에 등재 확인.
+- [ ] production(vnbpmvxruyciuuaermyh) 적용은 **Stephen 승인 후** 진행(요청 없이 선적용 금지)
+- [x] `src/lib/components/cms/dashboard/CmsDashboardTodayStats.svelte` 신규 — `CmsKpiGrid
+    columns={3}` 5개 섹션(트래픽·결제/고객/상품·재고/프로모션·이벤트/리뷰·문의), 이벤트 응모수 카드는 하드코딩 "준비중", stats=null 시 안전 폴백 안내 문구 표시
+- [x] `+page.server.ts`에 `get_dashboard_today_stats` + `get_coupon_usage_report(p_period:'day')`
+    2개 RPC 병행 호출 (Promise.all), RPC 오류 시 console.error + null 폴백(페이지 전체 안전 유지)
+- [x] `CmsDashboardTabs.svelte` — 'today' 탭 placeholder → `<CmsDashboardTodayStats>` 실 컴포넌트 교체, import 추가
+- [x] 완료기준: `npx svelte-check` 신규 에러 0건 (기존 pre-existing 1건 products/search — 무관, Phase 2 파일 기준 에러 0건)
+
+### DONE — Phase 3 (탭2 상담목록카드 현황) ✅ 완료 (2026-08-12)
+- [x] `src/lib/components/cms/dashboard/CmsDashboardConsultCards.svelte` 신규 — `ChatSession`
+    데이터 재사용(AdminChatPanel import 안 함, 상태라벨 매핑만 복사), `chatService.
+    subscribeToSessions()` 실시간 구독 + `$effect` cleanup unsubscribe 완료
+- [x] `+page.server.ts`에 `/api/chat/sessions` 로드 이관(기존 부수효과 — auto_pending 전환,
+    미응답 푸시 — 그대로 유지, 회귀 아님)
+- [x] 카드 클릭 → `goto('/cms/chat?session=' + id)`(기존 지원 파라미터, 신규 코드 불필요)
+- [x] 완료기준: `npx svelte-check` 신규 에러 0건 (기존 pre-existing 1건 products/search — 무관)
+
+### Phase 4 ✅ 완료 (2026-08-12) (탭1 예약승인 및 대여 일정 — 간트, 최고난이도·최후)
+- [x] 4a 스파이크: `get_rental_list`의 `p_per_page` 상한 확인(stage에서 큰 값으로 테스트, 조용한
+    truncation 없는지 확인 후 청크당 값 확정)
+- [x] `src/routes/api/cms/dashboard/gantt-window/+server.ts` 신규 — GET, cms_role 게이트,
+    `get_rental_list({p_date_from, p_date_to, p_page:1, p_per_page:200,
+    p_exclude_statuses:['cancelled','draft']})` 호출 후 JSON 반환
+- [x] `src/lib/components/cms/dashboard/CmsDashboardGantt.svelte` 신규 — 4b 정적 day-grid+막대 →
+    4c frozen-column 동기스크롤(이 저장소 최초 CSS 패턴, 별도 검증시간 배정) → 4d 무한스크롤
+    14일 청크 lazy-load(스로틀 필수, `Map<number, RentalListRow>`로 reservation_id 기준 dedup) →
+    4e `RentalDetailPanel` 클릭 연결(새 서버 액션 불필요 — 기존 절대경로 action 그대로 재사용,
+    `isRentalView={row.status !== 'hold'}`)
+- [x] STATUS_LABEL/STATUS_STYLE은 `reservation/+page.svelte:25-49` 원문 그대로 복사
+- [x] `onrefresh`는 `invalidateAll()` 아닌 현재 로드 구간만 재조회(무한스크롤로 확장된 다른 구간
+    데이터 보존)
+- [x] 완료기준: 좌우 무한스크롤 시 14일 단위로 예약이 상품/날짜별 막대로 이어붙여 표시, 막대
+    클릭 시 RentalDetailPanel에서 승인/거부/상태전이 실제 동작 + 현재 구간만 즉시 갱신
+
+### GATE C 확인 항목(Phase 전체 공통, 계획 문서의 체크리스트와 동일) ✅ 전체 통과 (2026-08-12)
+
+- [x] 신규 컴포넌트 Svelte 5 runes만 사용(on:click 금지)?
+- [x] CmsStatRing.value가 항상 0~100 비율(원시 카운트 직접 금지)?
+- [x] CmsKpiGrid columns={3} 통일?
+- [x] 신규 색상·반경이 --cs-*/--radius-*/--cms-radius-* 토큰만 사용?
+- [x] /cms/chat·reservation·rentals·promotion/* 기존 라우트 회귀 없음(nav 활성탭 포함)?
+- [x] RentalDetailPanel 재사용 시 새 서버 액션 미추가?
+- [x] 실시간 구독 unmount 시 unsubscribe?
+- [x] 신규 RPC가 SECURITY DEFINER + is_cms_user() 게이트?
+- [x] 신규 마이그레이션 stage 선적용·검증 → production 순서?
+- [x] npm run check 신규 에러 0건?
+
+### BACKLOG (이번 계획에서 의도적으로 보류)
+- 오늘 방문자 실측 트래킹 인프라(GA/자체 파이프라인) — 현재는 user_behavior_events 추정치로 대체
+- 이벤트 응모/신청 데이터 모델(신규 테이블 필요) — 별도 아젠다로 요청 시 진행
+- 반납완료(g) "오늘" 스코핑 — `rental_reservations`에 `returned_at` 등 실제 타임스탬프 컬럼이
+  추가되면 재작업(현재는 누적 스냅샷)
+- (참고, 이번 계획과 무관) `admin_update_subscription_status` RPC가 존재하지 않는
+  `user_subscriptions` 테이블을 참조하는 버그 발견 — 별도 task로 분리 플래그 완료(task_19d870b0)
+
+---
+
+## DONE — 조합코드(품번) 분류코드 소실 채번 버그 수정 + 기준품번 2단계층 표시 자릿수 버그 수정 (2026-08-12) — ✅ GATE C 통과, Stage 배포·실측 검증 완료 — Production 적용은 Stephen 최종 확인 대기
+
+⛔ CRITICAL — GATE B는 Stephen 승인 필수 (품번 영구고정 정책 products.md §2-2 위반 소지 + frozen
+대상인 마이그레이션·RPC 시그니처 영역을 직접 변경하는 작업, TDD 도메인).
+
+[CONTEXT BRIDGE]
+plan_source: Explore 에이전트 정밀 분석(이번 세션 완료, 재조사 불필요) — 근거 파일:
+  `src/routes/cms/products/new/+page.server.ts`(235-320행), `generate_product_code`
+  (`20260806000193_193...sql`, `20260810000215_215...sql`), `_AutoMappingTab.svelte`
+  (`comboCatCode`/`buildComboPreview`, 77-175행), `new/+page.svelte`
+  (`comboCatCodeStr`/`buildComboPreview`, 231-274행), `cms/products/+page.svelte`
+  (`baseCodeDisplay`, 186-204행)
+
+핵심제약:
+  - 품번(product_code) 영구고정 정책(products.md §2-2) 절대 위반 금지 — 이번 수정은 "앞으로
+    등록되는 것"에만 적용, 소급 재발급/재계산 금지
+  - `generate_product_code` 기존 2/3/5/6-param 오버로드 시그니처 절대 변경 금지 — 새 오버로드만
+    추가(신규 파라미터로 조합 분류코드 합산 문자열을 명시적으로 전달하는 방식)
+  - `generate_inventory_product_code`(2단 모드 포함) 시그니처·내부 상속 로직 변경 금지 — 부모
+    `code_series.category_code`가 이제부터 올바르게(합산되어) 저장되면 자식 채번은 그 값을
+    그대로 상속하므로 이 함수 자체는 무변경으로 자동 해결됨(회귀 테스트만 수행)
+  - DB는 ADD-only 마이그레이션만(GP-10) — 계획 시점엔 221을 예정했으나, 실행 시점에 다른
+    병행 세션이 이미 221(`221_dashboard_today_stats_rpc.sql`)을 선점해 실제로는 **222**
+    (`20260812000222_222_generate_product_code_category_override.sql`) 번호로 생성됨(충돌
+    없이 정상 처리)
+  - 마이그레이션 적용 순서 엄수: crazyshot-stage(ezyvffjvuwmtuhpxdjrw) 검증 → crazyshot
+    (vnbpmvxruyciuuaermyh) 실배포는 Stephen 승인 후에만 진행
+  - `code_rule`(prefix·date_format override)은 기존처럼 대표 코드(콤보 내 대분류 우선, 없으면
+    첫 코드) 기준 유지 — `_AutoMappingTab.svelte:139-158` `rootRule` 로직과 동일 관례 유지,
+    합산 대상은 오직 `category_code` 문자열 자체
+
+TDD도메인: `generate_product_code` 신규 오버로드(RPC 채번 로직) + `+page.server.ts` 콤보 채번
+  호출부 변경 — AGENTS.md TDD 강제 키워드("재고"/핵심 RPC 채번 로직) 해당. 동시성(원자적 채번
+  기존 `product_parent_sequences`/`product_child_sequences_by_parent` 카운터 로직은 무변경이므로
+  신규 동시성 리스크는 없으나 회귀 검증 필수)·정합성(영구고정 정책, 조합 전체 코드 반영) 검증
+  필수. `baseCodeDisplay()` 표시 로직 수정은 GSD(순수 클라이언트 표시 포맷팅, DB/RPC 변경 없음).
+
+절대금지:
+  - git 자율 실행 / production 마이그레이션을 Stephen 승인 없이 자동 적용
+  - 기존 마이그레이션 파일 직접 수정(GP-10 위반)
+  - `generate_product_code` 기존 2/3/5/6-param 시그니처 변경
+  - 기존에 이미 잘못 채번된 production 데이터(부모 3건+자식 15건 등) 정정/재계산 — 그대로 둔다
+  - "삭제 시 품번 재사용/리셋" 기능 신설 — 이번 아젠다 범위 아님(Stephen 별도 보류)
+  - `product_category_codes.depth` 컬럼의 의미 재정의나 스키마 변경 — 전체 합산으로 우회하는
+    방식만 사용, depth 자체는 손대지 않음
+
+실패롤백: 신규 마이그레이션 221(및 후속 파일)을 stage에서 `DROP FUNCTION`으로 롤백 가능하도록
+  작성(신규 오버로드 추가만이므로 기존 함수에는 영향 없음) / `+page.server.ts` 콤보 호출부는
+  git revert로 즉시 원복 가능하게 단일 커밋 단위로 작업
+
+---
+
+### NOW (TDD) — RPC 채번 로직: 조합 분류코드 합산 반영 ✅ 전체 완료
+
+- [x] RED: `src/__tests__/services/productCodeComboMerge.test.ts` 신규 작성(9개 테스트: 2코드
+    합산/단일코드/3단 TIER_ORDER 순서/2단계층 parent_max_sequence 전달/비콤보 회귀) | TDD |
+    ✅ 결함 재현 확인 후 GREEN 전환
+- [x] GREEN-1: `src/lib/utils/comboCategoryCode.ts` 신규 유틸(`buildComboCategoryCode`,
+    `sortByTier`, `getRootCode`) — TIER_ORDER 정렬 후 합산, `_AutoMappingTab.svelte`의
+    `comboCatCode()`와 동일 로직을 단일 소스로 추출·재사용 | TDD | ✅ 완료: 합산 문자열이
+    `buildComboPreview` 결과와 100% 일치 확인
+- [x] GREEN-2: 신규 마이그레이션 `20260812000222_222_generate_product_code_category_override.sql`
+    (7-param, `p_category_code_override`) 작성 — 기존 2/3/5/6-param 파일 무수정(ADD-only) | TDD |
+    ✅ 완료. **GATE C 검토 중 회귀 발견·직접 수정**: 최초 구현은 `p_parent_max_sequence`가 NULL
+    (순번1 미사용, 1단 계층)이어도 무조건 `product_parent_sequences`를 소비하고 `code_series`에
+    `parent_seq*` 키를 기록해버려 "기존 1개-순번 모드 100% 무변경" 원칙이 깨지는 상태였음(기존
+    6-param은 TS 레이어가 `parent_max_sequence !== null`일 때만 호출해 이 문제가 없었으나, 7-param은
+    모든 콤보 경로에서 호출되므로 함수 내부에 동일 분기가 없으면 회귀가 생김). `IF
+    p_parent_max_sequence IS NOT NULL THEN ... ELSE (5-param과 동일한 code_series 형태, parent_*
+    키 없음) END IF`로 SQL 내부에 분기를 재현해 수정 — stage 재적용 전 파일 단계에서 수정 완료
+- [x] GREEN-3: `+page.server.ts` 콤보 채번 호출부를 신규 7-param 단일 호출로 통일(비-콤보
+    2-param 경로는 무변경) | TDD | ✅ 완료
+- [x] REFACTOR: `productCodeTierTwo.test.ts` mock/assertion을 7-param 기준으로 갱신, 전체
+    9+3=12개 테스트 통과, `npx svelte-check` 대상 파일 신규 에러 0건 | TDD | ✅ 완료
+- [x] Stage(ezyvffjvuwmtuhpxdjrw) 마이그레이션 222 적용 + `BEGIN...ROLLBACK` 트랜잭션으로 실제
+    RPC 호출 검증(LEN 대분류+PTS 중분류 2코드 조합, 2단계층/1단계층 각각) | TDD | ✅ 완료 —
+    2단 부모A `parent_seq=1`/부모B `parent_seq=2`, 둘 다 `category_code:"LENPTS"`(코드 소실 없음),
+    1단 부모는 `category_code:"LENPTS"`는 동일하되 `parent_seq*` 키 완전히 없음(회귀 수정 실증).
+    검증 후 롤백, 실데이터 흔적 0건 확인
+- [x] "빠른 재고 등록" stage 검증 — `generate_inventory_product_code` 자식 채번(동일 트랜잭션
+    내) | TDD | ✅ 완료: 2단 부모 자식 2건 `CSLENPTS00100001`/`...00100002`(부모순번 유지+자식만
+    증가), 1단 부모 자식 2건 `CSLENPTS00001`/`...00002`(부모 구간 없음, 기존 방식 그대로) — 전
+    구간 분류코드 소실 없음 실증
+
+### NOW (GSD) — 기준품번 2단계층 표시 자릿수 수정 ✅ 완료
+
+- [x] `src/routes/cms/products/+page.svelte` `baseCodeDisplay()` 수정 — `parent_seq_digits`
+    존재 시 순번1+순번2 두 구간 모두 0-패딩, 없으면 기존 로직 유지 | GSD | ✅ 완료
+- [x] Stage 실측 데이터로 로직 직접 트레이스 검증(2단 부모 `seq_digits:5, parent_seq_digits:3`
+    → `CSLENPTS` + 8자리 0패딩 = 구조상 정확히 실제 자식 품번 `CSLENPTS00100001`과 자릿수 일치,
+    1단 부모는 5자리만 0패딩되어 `CSLENPTS00001`과 일치) | GSD | ✅ 완료 — Claude Browser 사용
+    금지 정책상 육안 스크린샷 대신 실제 code_series 값 기반 함수 트레이스로 검증
+
+### GATE C 확인 항목 — 전체 통과 (Stage 실측 검증 포함)
+
+- [x] 콤보 내 코드가 2개 이상일 때 `code_series.category_code`에 전체 코드가 합산되어 저장되는가?
+      (`buildComboPreview` 미리보기와 실제 채번값 일치) — stage 실측: LEN+PTS → `"LENPTS"` 확인
+- [x] 콤보 내 코드가 1개(대분류만)일 때 기존과 동일한 단일 코드 결과가 나오는가? (EC-1 회귀) —
+      단위테스트로 확인
+- [x] `parent_max_sequence`가 NULL인(1단 계층) 콤보 경로도 합산 로직이 적용되는가? (EC-2) — stage
+      실측: 1단 부모도 `category_code:"LENPTS"` 정상 반영, 자식도 전 구간 코드 유지
+- [x] `code_rule`(prefix override)이 대표 코드 기준으로만 적용되고 합산 대상(category_code)과
+      섞이지 않는가? (EC-3) — prefix `"CS"` 정상 유지 확인
+- [x] `generate_product_code` 기존 2/3/5/6-param 오버로드 정의가 한 글자도 변경되지 않았는가?
+      (git diff로 기존 마이그레이션 파일 무변경 확인) — 신규 파일만 추가, 기존 파일 diff 없음
+- [x] 신규 마이그레이션 파일이 ADD-only로 생성됐는가? (계획 시 221 예정 → 병행 세션이 선점해
+      실제로는 222 사용, 충돌 없이 정상 처리)
+- [x] Stage 선적용·검증 완료 후에만 production 적용 대기 상태로 남아있는가? — stage만 적용,
+      production은 Stephen 최종 확인 대기 중(자동 적용 안 함)
+- [x] `baseCodeDisplay()`가 `parent_seq_digits` 없는 기존(1단 계층) 상품에서 기존과 동일하게
+      표시되는가? (EC-4 회귀) — stage 실측 code_series로 함수 트레이스 검증 완료
+- [x] 기존 production 오염 데이터(부모 3건+자식 15건)를 정정하는 코드가 전혀 포함되지 않았는가?
+      — 포함 안 됨, git diff로 재확인
+- [x] 품번 재사용/리셋 기능이 신설되지 않았는가? — 신설 안 됨
+- [x] `product_category_codes.depth` 컬럼 정의나 스키마가 변경되지 않았는가? — 무변경
+- [x] `npm run check`(svelte-check)/테스트 신규 에러 0건? — 12/12 테스트 통과, svelte-check 대상
+      파일 에러 0건
+- [x] **(GATE C 검토 중 추가 발견·수정)** 1단 계층 콤보가 신규 7-param 통일 호출로 인해 부모
+      순번을 잘못 소비하고 2단 구조로 오기록되는 회귀는 없는가? — 최초 구현에서 발견된 회귀를
+      SQL 내부 `IF p_parent_max_sequence IS NOT NULL` 분기로 직접 수정, stage 실측으로 1단
+      부모가 `parent_seq*` 키 없이 정확히 기록됨을 재확인
+
+예상: TDD 7개×15분 + GSD 2개(1개×30분 + 1개×15분) = 총 약 2시간
+
+### BACKLOG (이번 아젠다에서 명시적으로 제외 — Stephen 확정)
+
+- 기존에 이미 잘못 채번된 production 데이터(부모 3건+자식 15건) 정정 — 품번 영구고정 정책
+  유지, 앞으로 등록되는 것부터만 수정
+- "삭제 시 품번 재사용/리셋" 기능 — "모든 기능의 정합 완료 시" 별도 아젠다로 재논의
+- `product_category_codes.depth` 컬럼 의미 재정의·스키마 변경 — 별도 사안
+
+---
+
+## DONE — "상품 복제 → 신규상품"(파트너코드 모드) 조합코드 소실 채번 버그 수정 (2026-08-12) — ✅ GATE C 통과, Stage 배포·실측 검증 완료 — Production 적용은 Stephen 최종 확인 대기
+
+⛔ CRITICAL — GATE B는 Stephen 승인 필수 (frozen 대상 RPC 호출부 변경 + 품번 영구고정 정책
+products.md §2-2 관련 로직, TDD 도메인).
+
+[CONTEXT BRIDGE]
+plan_source: 직접 아젠다 — 바로 위 DONE 항목("조합코드(품번) 분류코드 소실 채번 버그 수정")의
+  GATE E/QA 검수 중 Stephen이 동일 버그 클래스가 잔존함을 발견·확인(재조사 불필요). 근거 파일:
+  `src/routes/cms/products/+page.server.ts`(1076-1178행, `cloneProduct` 액션 `new_product` 모드
+  파트너코드 분기), 참고 구현: `src/routes/cms/products/new/+page.server.ts`(235-320행, 이미
+  GATE E 통과·stage 검증 완료된 동일 버그의 정본 수정 패턴)
+
+핵심제약:
+  - 재사용 필수(신규 작성 절대 금지): `src/lib/utils/comboCategoryCode.ts`의
+    `buildComboCategoryCode()`(TIER_ORDER 합산) · `getRootCode()`(대표 코드 — code_rule 조회용)
+    — 순수 유틸, 이미 GATE E 통과
+  - `generate_product_code` 7-param 오버로드(`p_category_code_override`,`p_date_option`,
+    `p_max_sequence`,`p_parent_max_sequence` 포함, migration `20260812000222`)는 이미 stage에
+    적용·검증 완료 — 신규 마이그레이션 작성 금지, 기존 RPC를 호출만 할 것
+  - `code_mapping_items` 조회 시 `taxonomy_code_id` 외 `date_option`/`max_sequence`/
+    `parent_max_sequence`도 함께 select (`products/new/+page.server.ts` 247-257행과 동일 패턴)
+  - `product_category_codes` 조회는 `tcIds` 전체를 `id, code, code_tier, depth`로 depth 제한
+    없이 조회 → `buildComboCategoryCode()`로 합산, `getRootCode()`로 대표 코드 id 획득
+  - `BND-PARTNERCODE-1`(카테고리 불일치 시 조용한 폴백 금지 → 명확 차단) 검증 로직은 그대로
+    유지 — depth=0(mainCode, source.category 기준) → depth=1 자식(subCode, tcIds 포함 여부)
+    확인 절차 자체는 손대지 않되, **검증 통과 판정과 실제 채번에 쓰이는 코드 값을 분리**한다:
+    검증은 기존 subCode 판정 로직 그대로 사용하고, 검증을 통과하면 실제 채번 호출에는
+    subCode 1개가 아니라 `buildComboCategoryCode(tcIds 전체)` 합산 결과를 사용
+  - 채번 RPC 호출부(1173-1178행)를 구 3-param → 신규 7-param으로 교체
+
+TDD도메인: `generate_product_code` 채번 호출부 + 조합코드 합산 로직 — AGENTS.md TDD 강제
+  키워드("재고"/핵심 RPC 채번 로직) 해당. 이미 검증된 7-param RPC와 순수 유틸을 "호출부"만
+  교체하는 작업이라 직전 DONE 항목보다 훨씬 작은 회귀 검증 중심 범위.
+
+절대금지:
+  - git 자율 실행 / production 마이그레이션 자동 적용
+  - 품번(product_code) 영구고정 정책 위반 — 소급 재발급/재계산 절대 금지, 앞으로 생성되는
+    것에만 적용
+  - `generate_product_code` 기존 2/3/5/6/7-param 오버로드 시그니처 변경 — 신규 오버로드·신규
+    마이그레이션 SQL 파일 작성 금지(기존 7-param 호출만)
+  - `BND-PARTNERCODE-1` 카테고리 불일치 차단(fail(400)) 동작 완화 금지
+  - `add_inventory` 모드(1010행 부근, 정상 동작 중인 별도 경로) 및 `retryProductCode`/
+    `retryCodeSeries`(§8-F/G 자가복구 액션) 수정 금지 — 이번 범위 아님
+  - "삭제 시 품번 재사용/리셋" 기능 신설 금지
+  - 요구범위 외 파일 수정 금지
+
+실패롤백: `+page.server.ts` 콤보 호출부 변경은 git revert로 즉시 원복 가능하게 단일 커밋
+  단위로 작업. 신규 마이그레이션 없음(기존 RPC 재사용)이므로 DB 롤백 대상 없음.
+
+---
+
+### NOW (TDD) — cloneProduct new_product 파트너코드 조합 합산 채번 ✅ 전체 완료
+
+- [x] RED: `src/__tests__/server/cloneProductPartnerCodeComboMerge.test.ts` 신규 작성(5개 테스트:
+    2코드 합산/단일코드/카테고리 불일치 차단 유지/3단 역순 정렬/parent_max_sequence 전달) | TDD |
+    ✅ 결함 재현 확인 후 GREEN 전환
+- [x] GREEN: `src/routes/cms/products/+page.server.ts` 1076-1225행 수정 — `code_mapping_items`
+    select 확장, `product_category_codes` 전체 조회 후 `buildComboCategoryCode()`/`getRootCode()`
+    적용, BND-PARTNERCODE-1(depth=0→depth=1 카테고리 일치성 검증)은 그대로 유지하되 판정용
+    subCode와 실제 채번용 합산코드를 분리, RPC 호출부를 7-param으로 교체(신규 마이그레이션 없이
+    기존 migration 222 RPC 재사용) | TDD | ✅ 완료
+- [x] REFACTOR: 관련 테스트 파일 4개(20개 테스트) 전부 통과, `add_inventory`/`autoCode`/
+    자가복구 액션 diff 없음 확인 | TDD | ✅ 완료 — 수정 범위가 정확히 파트너코드 분기로 한정됨을
+    git diff로 확인
+- [x] Stage(ezyvffjvuwmtuhpxdjrw) `BEGIN...ROLLBACK` 트랜잭션 실측 검증 | TDD | ✅ 완료: LEN(대
+    분류)+PTS(중분류) 조합 → `category_code:"LENPTS"` 코드 소실 없이 합산 확인, `parent_max_sequence
+    =NULL`(1단 모드)로 호출 시 `parent_seq*` 키 없음(직전 DONE 항목에서 고친 회귀 방지 로직이
+    이 호출부에도 동일 RPC 공유로 자동 적용됨을 실증). 검증 후 롤백, 실데이터 흔적 0건
+
+### GATE C 확인 항목 — 전체 통과 (Stage 실측 검증 포함)
+
+- [x] 파트너코드 콤보에 코드 2개 이상일 때 채번 결과에 전체 코드가 합산되는가? — stage 실측
+      `"LENPTS"` 확인
+- [x] 콤보 코드 1개(대분류만)일 때 기존과 동일한 단일 코드 결과인가? (회귀 없음) — 단위테스트 확인
+- [x] 카테고리 불일치 콤보 선택 시 여전히 fail(400) 명확 차단되는가? (BND-PARTNERCODE-1 유지) —
+      확인됨, 검증 로직 자체는 무변경
+- [x] `date_option`/`max_sequence`/`parent_max_sequence`가 `code_mapping_items`에서 정확히
+      조회되어 7-param RPC에 전달되는가? — 확인됨
+- [x] `generate_product_code` 기존 오버로드 시그니처가 한 글자도 변경되지 않았는가? — 신규
+      마이그레이션 파일 생성 없음(기존 222 재사용), git diff로 확인
+- [x] `buildComboCategoryCode()`/`getRootCode()` 신규 작성 없이 기존 유틸을 그대로 import해
+      재사용했는가? — 확인됨
+- [x] `add_inventory` 모드, `retryProductCode`/`retryCodeSeries`, `autoCode`(비-파트너) 경로가
+      전혀 수정되지 않았는가? — git diff로 확인, 무변경
+- [x] 품번 재사용/리셋 기능이 신설되지 않았는가? — 신설 안 됨
+- [x] 기존에 이미 잘못 채번된 데이터를 정정하는 코드가 포함되지 않았는가? — 포함 안 됨
+- [x] Stage 선적용·검증 완료 후에만 production 적용 대기 상태로 남아있는가? — stage만 검증(신규
+      마이그레이션이 없어 "적용"은 불필요, 기존 222가 이미 stage에 있음), production 적용 여부는
+      Stephen 최종 확인 대기
+- [x] `npm run check`(svelte-check)/테스트 신규 에러 0건인가? — 관련 4개 테스트 파일 20개 전부
+      통과, svelte-check 대상 파일 에러 0건
+
+예상: TDD 4개×15분 = 총 약 1시간
+
+### BACKLOG (이번 아젠다에서 명시적으로 제외)
+
+- 기존에 이미 이 경로(`cloneProduct new_product` 파트너코드 모드)로 잘못 채번됐을 가능성이
+  있는 production 데이터 정정 — 확인 자체를 하지 않음(품번 영구고정 정책 유지, Stephen 별도
+  판단 필요 시에만 재논의)
+- `add_inventory` 모드·자가복구 액션(`retryProductCode`/`retryCodeSeries`) 정합성 재검토 —
+  이번 세션 QA에서 참고사항으로만 지적됨, 별도 아젠다
+
+---
+
+## DONE — cloneProduct new_product(파트너코드) 배치 부분실패 통보 누락 수정 + 사전 ESLint 경고 정리 (2026-08-12) — ✅ GATE C 통과
+
+🟡 BOUNDARY — 단일 서비스 로직(에러 핸들링 UX) 수정, 다중 파일·DB 변경 없음, GATE B 불필요.
+
+[CONTEXT BRIDGE]
+plan_source: 직접 아젠다 — 바로 위 DONE 항목(파트너코드 조합코드 소실 채번 버그 수정)의 QA 검수
+  후 Stephen이 별도 발견: `count>1`로 배치 복제 중 순번 상한 초과로 중간 실패 시, 이미 생성된
+  상품은 DB에 남아있는데 화면엔 "완전 실패"로만 보이는 통보 누락(품번 손실 아님, UX 문제만).
+  BACKLOG 항목 `BND-BATCH-2`(7058행, add_inventory 모드용으로 미리 등록돼 있던 유사 항목)와
+  동일 문제의식이나, 실제 적용 대상은 `new_product`(파트너코드) 모드였음.
+
+### NOW — 완료
+
+- [x] `cloneProduct` `new_product` 모드(`src/routes/cms/products/+page.server.ts`) —
+    `parent_max_sequence_exceeded`/`max_sequence_exceeded` RPC 에러 발생 시 기존
+    `return fail(400, ...)`(하드 중단, 이미 생성된 항목 정보 유실)를 제거하고, 현재 반복 항목의
+    나머지 처리(가격정책 복사·`createdIds.push`)는 정상 완료시킨 뒤 `cloneWarnings`에 구체적
+    경고("N번째 복제 상품은 생성됐으나 순번1/순번2 상한 도달로 품번이 미발급 — 코드설정에서
+    상한을 늘린 후 상품 상세에서 재시도" 등) 추가 + `sequenceCapReached` 플래그로 루프 종료,
+    남은 개수가 있으면 "나머지 M개는 생성되지 않았습니다" 경고 추가
+  - `new_product` 모드 최종 응답에 `createdIds` 필드 추가(기존 `add_inventory` 모드에는 이미
+    있었으나 `new_product` 모드엔 누락돼 있었음 — 클라이언트 `handleCloneProduct()`는 이미
+    성공·실패 양쪽에서 `invalidateAll()`을 호출하므로 이번 수정은 서버 응답의 정보량만 보강)
+  - GSD (harness 태스크 분류상 GSD — TDD 강제 키워드 미해당: 채번 로직 자체가 아니라 에러
+    발생 후 응답 구성 로직)
+- [x] `svelte-check` — 해당 파일 신규 에러 0건
+- [x] `npx vitest run`(관련 테스트 4개 파일) — 14/14 통과
+- [x] 부가 발견: 위 수정 검증 중 파일 전체 `eslint --max-warnings=0` 실행 시 335-377행에
+    이번 수정과 무관한(git diff 헝크 밖) 기존 `security/detect-object-injection` 경고 13건
+    발견 — `lint-staged`가 파일 전체를 스캔하는 설정(`"src/**/*.{ts,svelte}": "eslint
+    --max-warnings=0 --no-warn-ignored"`)이라 커밋 시 실제로 차단됨을 확인, Stephen에게
+    보고 후 "그냥 고쳐줘" 승인 받아 처리
+  - `stockCounts`/`childFallback12h`/`childFallback24h`/`rentalStatusCounts` 동적 접근
+    13곳에 `// eslint-disable-next-line security/detect-object-injection` + 근거 주석
+    ("DB에서 조회한 값 — 사용자 입력 아님") 추가 — 기존 세션 내 확립된 동일 패턴 재사용
+  - 최초 시도 시 미사용 disable 주석 1건(`childIdToParentId[row.product_id]` 읽기 — 실제
+    플러그인이 이 라인은 플래그하지 않음) 발생 → 제거 후 재검증
+  - `eslint --max-warnings=0` 최종 재실행 → 0 warning 확인
+
+### GATE C 확인 항목 — 전체 통과
+
+- [x] 배치 복제(`count>1`) 중 순번 상한 초과로 중단돼도 이미 생성된 항목이 `createdIds`에
+      반영되는가? — 확인됨(루프 내 `createdIds.push`가 `sequenceCapReached` 분기보다 먼저 실행)
+- [x] 중단 시 남은 미생성 개수를 사용자에게 명확히 안내하는가? — "나머지 M개는 생성되지
+      않았습니다" 경고 확인
+- [x] `add_inventory` 모드(기존 정상 동작 경로)는 변경되지 않았는가? — git diff로 확인, 무변경
+- [x] 클라이언트 `handleCloneProduct()`의 `invalidateAll()` 호출 로직 변경이 필요했는가? —
+      불필요(기존에 이미 성공·실패 양쪽에서 호출 중이었음, BND-BATCH-1 완료 사항)
+- [x] 이번 수정과 무관한 사전 ESLint 경고가 함께 정리됐고, 그 범위가 정확히 335-377행(동적
+      객체 접근)으로 한정되는가? — 확인됨, git diff로 이번 세션 실제 변경분과 구분됨
+- [x] `eslint --max-warnings=0`/`svelte-check`/관련 테스트 전부 신규 에러·경고 0건인가? —
+      확인됨

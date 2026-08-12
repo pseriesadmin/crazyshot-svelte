@@ -112,16 +112,17 @@ function makeTierTwoAdminStub(options: {
     }),
   });
 
-  // 5회차: product_category_codes depth 조회
+  // 5회차: product_category_codes 전체 조회 (수정 후: .select().in() 직접 await — order/limit 없음)
+  // 버그 수정(2026-08-12): 구버전은 depth 역순 limit(1)으로 단일 코드만 반환했으나
+  // 수정 후는 모든 코드를 한 번에 반환해 buildComboCategoryCode()로 합산함
   fromFn.mockReturnValueOnce({
     select: vi.fn().mockReturnValue({
-      in: vi.fn().mockReturnValue({
-        order: vi.fn().mockReturnValue({
-          limit: vi.fn().mockResolvedValue({
-            data: [{ id: 'code-id-2', depth: 2 }],
-            error: null,
-          }),
-        }),
+      in: vi.fn().mockResolvedValue({
+        data: [
+          { id: 'code-id-1', code: 'CAM', code_tier: 'major', depth: 0 },
+          { id: 'code-id-2', code: 'SLR', code_tier: 'minor', depth: 2 },
+        ],
+        error: null,
       }),
     }),
   });
@@ -172,9 +173,10 @@ beforeEach(() => {
   createClientMock.mockReset();
 });
 
-// ── TDD-3 RED 테스트 ──────────────────────────────────────────────────────────
-describe('TDD-3 RED — 2단 모드: 6-param generate_product_code 호출 검증', () => {
-  it('[RED] parent_max_sequence가 설정된 combo 선택 시 p_parent_max_sequence를 포함한 6-param RPC 호출', async () => {
+// ── TDD-3 GREEN 테스트 (2026-08-12 수정: 6-param → 7-param 통일)
+// 버그 수정으로 모든 콤보 경로가 7-param(p_category_code_override 포함)으로 통일됨
+describe('TDD-3 GREEN — 2단 모드: 7-param generate_product_code 호출 검증', () => {
+  it('[GREEN] parent_max_sequence가 설정된 combo → 7-param에 p_parent_max_sequence 및 p_category_code_override 포함', async () => {
     const admin = makeTierTwoAdminStub({ parentMaxSequence: 99, maxSequence: 999 });
     const { redirectLocation } = await callCreate(makeTierTwoRequest(), admin);
 
@@ -186,12 +188,13 @@ describe('TDD-3 RED — 2단 모드: 6-param generate_product_code 호출 검증
     const codeRpcCall = admin._rpcCalls.find(c => c.name === 'generate_product_code');
     expect(codeRpcCall).toBeDefined();
 
-    // [RED] 현재 코드는 parent_max_sequence를 조회하지 않아 p_parent_max_sequence를 전달 못함
-    // GREEN 달성 후 이 assertion이 통과해야 함
+    // 7-param 검증: p_parent_max_sequence + p_category_code_override 모두 포함
     expect(codeRpcCall?.params).toHaveProperty('p_parent_max_sequence', 99);
+    expect(codeRpcCall?.params).toHaveProperty('p_category_code_override', 'CAMSLR');
+    expect(codeRpcCall?.params).toHaveProperty('p_max_sequence', 999);
   });
 
-  it('[RED] parent_max_sequence가 NULL인 combo는 기존 5-param RPC를 그대로 호출해야 함', async () => {
+  it('[GREEN] parent_max_sequence가 NULL인 combo도 7-param 호출 (p_parent_max_sequence = null, p_category_code_override 포함)', async () => {
     const admin = makeTierTwoAdminStub({ parentMaxSequence: null, maxSequence: 999 });
     const { redirectLocation } = await callCreate(makeTierTwoRequest(), admin);
 
@@ -200,8 +203,10 @@ describe('TDD-3 RED — 2단 모드: 6-param generate_product_code 호출 검증
     const codeRpcCall = admin._rpcCalls.find(c => c.name === 'generate_product_code');
     expect(codeRpcCall).toBeDefined();
 
-    // parent_max_sequence가 null인 경우 p_parent_max_sequence 파라미터 없이 호출 (기존 5-param)
-    expect(codeRpcCall?.params).not.toHaveProperty('p_parent_max_sequence');
+    // 수정(2026-08-12): 7-param 통일로 p_parent_max_sequence는 항상 전달 (값은 null)
+    // + p_category_code_override도 반드시 포함 (분류코드 합산)
+    expect(codeRpcCall?.params).toHaveProperty('p_parent_max_sequence', null);
+    expect(codeRpcCall?.params).toHaveProperty('p_category_code_override', 'CAMSLR');
   });
 });
 
