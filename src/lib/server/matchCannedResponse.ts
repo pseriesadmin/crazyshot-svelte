@@ -27,6 +27,10 @@ export interface CannedResponseForMatch {
   /** 관리자가 명시 등록한 고객 매칭 전용 키워드 목록 (단축키와 분리, 다중 등록 가능) */
   match_keywords: string[]
   usage_count: number
+  // GSD-20: 이미지/CTA 있는 canned_cta 액션카드 지원 (마이그레이션 232)
+  image_url?: string | null
+  cta_label?: string | null
+  cta_url?: string | null
 }
 
 // ── match_keywords 전용: Levenshtein + substring ────────────────────────────

@@ -4,6 +4,8 @@
 
   import MessageList from './MessageList.svelte'
   import ChatInput from './ChatInput.svelte'
+  import CustomerDetailPanel from './CustomerDetailPanel.svelte'
+  import BookmarkListView from './BookmarkListView.svelte'
   import ChevronIcon from '$lib/components/common/ChevronIcon.svelte'
   import {
     loadAdminSessions,
@@ -16,7 +18,7 @@
   import { setSessions, upsertSession, pushMessage, applyIncomingMessagePreview } from '$lib/stores/chat.svelte'
   import { chatStore } from '$lib/stores/chat.svelte'
   import { supabase } from '$lib/services/supabase'
-  import type { ChatSession, ChatMessage, ChatSessionStatus, CsRecord } from '$lib/types/chat'
+  import type { ChatSession, ChatMessage, ChatSessionStatus, CsRecord, ActionPayload } from '$lib/types/chat'
 
   // 로컬 타입 정의 (routes 크로스-임포트 금지 원칙) — /api/cms/customers/[userId]/summary 응답 형태
   interface CustomerSummary {
@@ -26,6 +28,39 @@
     membership_grade: string | null
     credit_score: number | null
     blacklisted: boolean
+  }
+
+  // GSD-5: /api/chat/customers/[id]/detail 응답 형태 (CustomerDetailPanel과 동일 구조)
+  interface CustomerDetailData {
+    profile: {
+      name: string | null
+      phone: string | null
+      is_student: boolean | null
+      is_foreign: boolean | null
+      identity_type: string | null
+      identity_verified_at: string | null
+      identity_doc_url: string | null
+      foreign_verified_at: string | null
+      foreign_doc_url: string | null
+    }
+    subscription: { plan_name: string | null } | null
+    reservations: Array<{
+      id: string
+      status: string
+      start_date: string | null
+      end_date: string | null
+      product_name: string | null
+      created_at: string
+    }>
+  }
+
+  // GSD-17: @ 멘션 상품 타입 (ChatInput.ProductItem과 동일)
+  interface ProductItem {
+    id: string
+    name: string
+    image_url: string | null
+    slug: string | null
+    price_24h: number | null
   }
 
   interface Props {
@@ -63,6 +98,27 @@
   let csSummaryDraft = $state('')
   let isSavingCsRecord = $state(false)
   let csSaveResult = $state<'saved' | 'error' | null>(null)
+
+  // GSD-5: 고객 상세정보 패널
+  let customerDetail = $state<CustomerDetailData | null>(null)
+  let customerDetailLoading = $state(false)
+  let customerDetailExpanded = $state(false)
+
+  // GSD-12: 북마크 뷰 토글
+  let showBookmarks = $state(false)
+
+  // GSD-8: 세션별 자동응답 수동전환
+  let sessionManualMode = $state(false)
+
+  // GSD-7: 중요 카드만 보기 필터
+  let showImportantOnly = $state(false)
+
+  // 중요 액션 카드 타입 집합 (rental-lifecycle.md AUTO_NOTIFY 기준)
+  const IMPORTANT_ACTION_TYPES = new Set([
+    'reservation_hold', 'reservation_approval', 'contract_link',
+    'shipment_notify', 'rental_confirm', 'return_remind',
+    'return_registration', 'rental_complete',
+  ])
 
   // 신규 채팅목록 등장·기존 목록 새 대화 수신/발신 시 카드 배경 점멸 표시 (3회 반복 후 자동 종료)
   function flashSession(sessionId: string): void {
@@ -124,18 +180,26 @@
     return () => clearInterval(timer)
   })
 
-  // 선택된 세션 메시지 로드 + Realtime 구독
+  // 선택된 세션 메시지 로드 + Realtime 구독 (GSD-12: 북마크 병합 추가)
   $effect(() => {
     const sid = selectedSessionId
     if (!sid) { messages = []; return }
 
     isLoadingMessages = true
-    loadMessages(sid).then(({ messages: msgs }) => {
-      messages = msgs
+    Promise.all([
+      loadMessages(sid),
+      fetch(`/api/chat/sessions/${sid}/bookmarks`)
+        .then((r) => r.ok ? r.json() : { bookmarks: [] })
+        .catch(() => ({ bookmarks: [] })),
+    ]).then(([{ messages: msgs }, bookmarkData]) => {
+      interface BookmarkEntry { message_id: string }
+      const bookmarkedIds = new Set<string>(
+        ((bookmarkData as { bookmarks?: BookmarkEntry[] }).bookmarks ?? []).map((b) => b.message_id)
+      )
+      messages = msgs.map((m) => ({ ...m, is_bookmarked: bookmarkedIds.has(m.id) }))
       isLoadingMessages = false
-      // 사용자 메시지만 읽음 처리 (관리자가 확인함)
       markMessagesRead(sid, ['user'])
-    })
+    }).catch(() => { isLoadingMessages = false })
 
     const unsub = subscribeToChatMessages(
       sid,
@@ -163,6 +227,19 @@
     chatStore.sessions.find((s) => s.id === selectedSessionId) ?? null
   )
 
+  // GSD-7: 중요 카드만 보기 필터링
+  let filteredMessages = $derived(
+    showImportantOnly
+      ? messages.filter(
+          (m) =>
+            m.message_type === 'action_card' &&
+            IMPORTANT_ACTION_TYPES.has(
+              ((m.action_payload as { type?: string } | null)?.type) ?? ''
+            )
+        )
+      : messages.filter((m) => m.sender_type !== 'ai')
+  )
+
   // 고객 기본정보 요약 (chat-header 노출용) — 선택된 세션의 user_id가 바뀔 때만 재조회
   let customerSummary = $state<CustomerSummary | null>(null)
   $effect(() => {
@@ -173,6 +250,26 @@
       .then((r) => r.ok ? r.json() : null)
       .then((d: CustomerSummary | null) => { customerSummary = d })
       .catch(() => { customerSummary = null })
+  })
+
+  // GSD-5: 고객 상세정보 조회 (CustomerDetailPanel용)
+  $effect(() => {
+    const uid = selectedSession?.user_id
+    if (!uid) { customerDetail = null; customerDetailExpanded = false; return }
+    customerDetail = null
+    customerDetailLoading = true
+    fetch(`/api/chat/customers/${uid}/detail`)
+      .then((r) => r.ok ? r.json() : null)
+      .then((d: { detail: CustomerDetailData | null } | null) => {
+        customerDetail = d?.detail ?? null
+      })
+      .catch(() => { customerDetail = null })
+      .finally(() => { customerDetailLoading = false })
+  })
+
+  // GSD-8: selectedSession의 manual_mode가 바뀌면 로컬 토글 동기화
+  $effect(() => {
+    sessionManualMode = selectedSession?.manual_mode ?? false
   })
 
   const GRADE_LABEL: Record<string, string> = {
@@ -237,6 +334,84 @@
       }
     } finally {
       isSavingCsRecord = false
+    }
+  }
+
+  // GSD-12: 북마크 토글 — API 호출 + 로컬 메시지 배열 is_bookmarked 동기화
+  async function handleBookmark(messageId: string): Promise<void> {
+    if (!selectedSessionId) return
+    const res = await fetch(`/api/chat/messages/${messageId}/bookmark`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ session_id: selectedSessionId }),
+    })
+    if (res.ok) {
+      // 로컬 배열의 is_bookmarked 토글 (MessageBubble 로컬 상태와 별개 — 재마운트 시 정합성 보장)
+      messages = messages.map((m) =>
+        m.id === messageId ? { ...m, is_bookmarked: !(m.is_bookmarked ?? false) } : m
+      )
+    }
+  }
+
+  // GSD-8: 세션 자동응답 수동/자동 전환
+  async function handleToggleManualMode(): Promise<void> {
+    if (!selectedSessionId) return
+    const newVal = !sessionManualMode
+    sessionManualMode = newVal
+    await fetch(`/api/chat/sessions/${selectedSessionId}/manual-mode`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ manual_mode: newVal }),
+    }).catch(() => {})
+    // 로컬 스토어에 manual_mode 즉시 반영
+    const updated = chatStore.sessions.find((s) => s.id === selectedSessionId)
+    if (updated) upsertSession({ ...updated, manual_mode: newVal })
+  }
+
+  // GSD-1/2: 상태 직접변경 (reopen / pending) — close는 기존 handleCloseSession 사용
+  async function handleSessionStatusChange(newStatus: 'open' | 'pending'): Promise<void> {
+    if (!selectedSessionId) return
+    const endpoint = newStatus === 'open' ? 'reopen' : 'pending'
+    const res = await fetch(`/api/chat/sessions/${selectedSessionId}/${endpoint}`, {
+      method: 'POST',
+    })
+    if (res.ok) {
+      const updated = chatStore.sessions.find((s) => s.id === selectedSessionId)
+      if (updated) upsertSession({ ...updated, status: newStatus as ChatSessionStatus })
+    }
+  }
+
+  // GSD-17: @ 멘션 상품 선택 → product_link action_card로 관리자 전송
+  async function handleProductMention(product: ProductItem): Promise<void> {
+    if (!selectedSessionId || isSending) return
+    isSending = true
+    try {
+      const payload: ActionPayload = {
+        type: 'product_link',
+        product_id: product.id,
+        product_name: product.name,
+        ...(product.image_url ? { product_image: product.image_url } : {}),
+        ...(product.slug ? { product_slug: product.slug } : {}),
+        ...(product.price_24h != null ? { product_price: product.price_24h } : {}),
+      }
+      const res = await fetch('/api/chat/admin-reply', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          session_id: selectedSessionId,
+          content: product.name,
+          action_payload: payload,
+        }),
+      })
+      if (res.ok) {
+        const { message } = await res.json()
+        if (message) {
+          const already = messages.some((m) => m.id === message.id)
+          if (!already) messages = [...messages, message]
+        }
+      }
+    } finally {
+      isSending = false
     }
   }
 
@@ -541,16 +716,81 @@
             </div>
           {/if}
         </div>
+
+        <!-- GSD-7/8/12: 헤더 툴바 — 수동전환·중요카드·북마크·상태변경 -->
+        <div class="header-toolbar">
+          <!-- GSD-8: 자동응답 수동전환 토글 -->
+          <button
+            class="toolbar-btn"
+            class:toolbar-btn--active={sessionManualMode}
+            onclick={handleToggleManualMode}
+            title={sessionManualMode ? '수동모드 ON — 자동응답 꺼짐' : '자동모드 — 클릭 시 수동전환'}
+            aria-pressed={sessionManualMode}
+          >{sessionManualMode ? '수동' : '자동'}</button>
+
+          <!-- GSD-7: 중요 카드만 보기 -->
+          <button
+            class="toolbar-btn"
+            class:toolbar-btn--active={showImportantOnly}
+            onclick={() => { showImportantOnly = !showImportantOnly }}
+            title={showImportantOnly ? '전체 메시지 보기' : '중요 카드만 보기'}
+            aria-pressed={showImportantOnly}
+          >중요</button>
+
+          <!-- GSD-12: 북마크 목록 토글 -->
+          <button
+            class="toolbar-btn"
+            class:toolbar-btn--active={showBookmarks}
+            onclick={() => { showBookmarks = !showBookmarks }}
+            title={showBookmarks ? '북마크 닫기' : '북마크 목록'}
+            aria-pressed={showBookmarks}
+          >북마크</button>
+
+          <!-- GSD-1/2: 상태 세그먼트 컨트롤 -->
+          {#if selectedSession?.status !== 'open'}
+            <button
+              class="toolbar-btn toolbar-btn--status"
+              onclick={() => handleSessionStatusChange('open')}
+              title="진행중으로 전환"
+            >진행중 전환</button>
+          {/if}
+          {#if selectedSession?.status === 'open'}
+            <button
+              class="toolbar-btn toolbar-btn--status"
+              onclick={() => handleSessionStatusChange('pending')}
+              title="대기로 전환"
+            >대기 전환</button>
+          {/if}
+        </div>
       </div>
+
+      <!-- GSD-5: 고객 상세정보 패널 (접힘/펼침) -->
+      <CustomerDetailPanel
+        detail={customerDetail}
+        isLoading={customerDetailLoading}
+        expanded={customerDetailExpanded}
+        ontoggle={() => { customerDetailExpanded = !customerDetailExpanded }}
+      />
+
+      <!-- GSD-12: 북마크 목록 -->
+      {#if showBookmarks}
+        <div class="bookmark-pane">
+          <BookmarkListView
+            sessionId={selectedSessionId}
+            onclose={() => { showBookmarks = false }}
+          />
+        </div>
+      {/if}
 
       <div class="chat-messages">
         {#if isLoadingMessages}
           <div class="loading-msgs">메시지 로딩 중...</div>
         {:else}
           <MessageList
-            messages={messages.filter((m) => m.sender_type !== 'ai')}
+            messages={filteredMessages}
             currentUserId="admin"
             isAdmin={true}
+            onbookmark={handleBookmark}
           />
         {/if}
       </div>
@@ -562,6 +802,7 @@
           disabled={isSending || isUploading}
           onsend={handleSend}
           onattach={handleAdminAttach}
+          onproductmention={handleProductMention}
         />
       </div>
 
@@ -1246,4 +1487,62 @@
   .toast-confirm:hover:not(:disabled) { opacity: 0.85; }
   .toast-confirm:disabled { opacity: 0.5; cursor: not-allowed; }
   .toast-cancel:disabled  { opacity: 0.5; cursor: not-allowed; }
+
+  /* ── GSD-7/8/12: 헤더 툴바 ── */
+  .header-toolbar {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-shrink: 0;
+    flex-wrap: wrap;
+  }
+
+  .toolbar-btn {
+    height: 32px;
+    padding: 0 12px;
+    border: 1.5px solid var(--cs-lilac);
+    border-radius: var(--radius-full, 99px);
+    background: var(--cs-white);
+    color: var(--cs-text-mid);
+    font: var(--text-pc-script-12);
+    font-weight: 700;
+    cursor: pointer;
+    white-space: nowrap;
+    transition: background 0.15s, color 0.15s, border-color 0.15s;
+    min-height: 32px;
+  }
+  .toolbar-btn:hover {
+    background: var(--cs-lilac);
+    color: var(--cs-purple);
+    border-color: var(--cs-purple-op10);
+  }
+  .toolbar-btn--active {
+    background: var(--cs-purple);
+    color: var(--cs-white);
+    border-color: var(--cs-purple);
+  }
+  .toolbar-btn--active:hover {
+    background: var(--cs-purple-dark, #2e2470);
+    color: var(--cs-white);
+    border-color: var(--cs-purple-dark, #2e2470);
+  }
+  .toolbar-btn--status {
+    background: var(--cs-surface-gray);
+    border-color: transparent;
+    color: var(--cs-text-mid);
+  }
+  .toolbar-btn--status:hover {
+    background: var(--cs-lilac);
+    color: var(--cs-purple);
+    border-color: transparent;
+  }
+
+  /* ── GSD-12: 북마크 패인 ── */
+  .bookmark-pane {
+    flex-shrink: 0;
+    max-height: 320px;
+    overflow-y: auto;
+    border-bottom: 1px solid rgba(16, 11, 50, 0.06);
+    background: var(--cs-surface-gray);
+  }
 </style>

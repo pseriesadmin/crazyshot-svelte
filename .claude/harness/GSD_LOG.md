@@ -1,6 +1,29 @@
 # GSD_LOG.md — 크레이지샷 실행 이력
 # 형식: [YYYY-MM-DD HH:MM] 타입 | 태스크명 | 파일 | 소요 | 결과
 
+[2026-08-13] 🔴TDD | QA 5차 재검수 결함 수정 — hasExistingContractContent canvas 오판 + clearIssuedContract orphan | GATE C: Stephen 즉시 수정 지시 (데이터 무결성 위험)
+  배경: QA 5차 재검수에서 발견된 데이터 무결성 위험 결함.
+    canvas 계약은 canvas_document에 내용을 저장하고 content_blocks=[] — 기존 판별 함수가
+    canvas 계약을 항상 "발행된 적 없음"으로 오판해 미리보기 모달이 다른 템플릿을 자동 선택 후
+    경고 없이 재발송하는 경로 존재.
+  수정 파일 (5개):
+    src/lib/utils/contract-content-mode.ts
+      - hasExistingContractContent(blocks, canvasDocument?) 시그니처 확장
+      - isCanvasDocument() 재사용으로 canvas 계약 감지 추가
+    src/lib/components/cms/RentalContractViewer.svelte (line 74, 76)
+      - contentData 타입에 canvas_document 추가
+      - hasExistingContractContent(data.content_blocks, data.canvas_document) 호출부 수정
+    src/lib/components/cms/ContractTemplatePreviewModal.svelte (line 44-48, 97-101, showPreview, 미리보기)
+      - existingCanvasDocument $state 추가
+      - contentData 타입 + 호출부 수정
+      - showPreview 조건에 existingCanvasDocument != null 추가
+      - canvas existing 모드 미리보기 안내 추가
+    src/lib/server/clearIssuedContractHelper.ts
+      - 초기화 시 canvas_document: null 추가 (orphan 방지)
+  신규 테스트: contractContentMode.test.ts — canvas 케이스 13개 신규 추가 (S2-canvas 시나리오 포함)
+  검증: 11개 테스트 파일 152개 테스트 전부 통과 | svelte-check 수정 파일 신규 에러 0건
+  QA 6차 재검수 필요.
+
 [2026-08-13] ⚡GSD | cloneProduct 파트너 조합코드 경로 동일 필터 비대칭 버그 수정 (후속) | GATE C: 자동(BOUNDARY, Stephen 명시적 지시)
   배경: 직전 상품등록 콤보 버그 수정 세션에서 "범위 외, 미수정"으로 기록해둔 동일 클래스 버그를
     Stephen이 즉시 수정 지시.
@@ -2859,3 +2882,40 @@
     apply_migration 직후 pg_get_functiondef로 stage·production 양쪽 fix_present:true 확인
     완료된 사실로 대체 확정.)
   GATE E: 통과 — 커밋은 Stephen 직접 실행.
+
+[2026-08-13] 🔧GSD+TDD | 구독 상품 부모/자식 품번 구조 도입 (products.md §2-1~§2-3 응용) — Stage A+B 완료, stage 적용, production 대기
+  배경: Stephen이 "구독은 콤보시스템 안 쓴다"던 이전 결정을 번복 — 구독등록 화면에 products/new와
+    동일한 "코드 조합" 선택 UI를 추가하되, 실제 품번은 등록 시점이 아니라 "개별 구독자가 실제로
+    구독을 완료하는 시점"에 자식(user_subscriptions)에게 발급되도록 요청(부모=구조만/자식=실채번,
+    products.md §2-1 원칙을 구독 도메인에 응용).
+  마이그레이션: supabase/migrations/20260813000241_241_subscription_parent_child_product_code.sql
+    · subscription_plans.code_series JSONB 추가(부모 — {prefix} 구조만 저장, product_code는 영구 NULL)
+    · user_subscriptions.product_code TEXT 추가 + 영구고정 UNIQUE 인덱스(NULL 제외)
+    · generate_subscription_product_code: 2→3-param(p_category_code_override 추가) 재설계 —
+      DROP 후 재생성(PostgREST 오버로드 모호성 방지, products.md §2-3 PGRST203 교훈 적용). 실제
+      품번 발급 대신 code_series만 저장하도록 동작 변경(ALREADY_SET guard로 영구고정).
+    · generate_subscription_inventory_product_code(신설) — products.md §2-3
+      generate_inventory_product_code와 동일 원리, 부모 code_series.prefix를 읽어
+      subscription_code_sequences 순번을 실제로 소모, user_subscriptions.product_code 발급.
+    · create_user_subscription(4-param 시그니처 무변경) — 구독 생성 직후 내부에서 자식 채번 RPC를
+      원자적으로 호출, 실패해도 구독 생성 자체는 성공 유지(code_warning 필드로만 전달, 비차단).
+  TDD(RED→GREEN→REFACTOR): src/__tests__/services/subscriptionBilling.test.ts에 6개 케이스 추가
+    (부모 product_code 영구 NULL 확인, ALREADY_SET guard, 콤보 prefix 저장, 자식 품번 형식/순번
+    고유성, ALREADY_ISSUED guard, NO_CODE_SERIES 비차단 경로) — RED 7건 실패 확인 → 마이그레이션
+    적용 → 픽스처 격리 버그 1건 자체 발견·수정(콤보 테스트와 NO_CODE_SERIES 테스트가 같은 플랜을
+    공유해 오염 — 전용 플랜 픽스처 3번째로 분리) → 최종 12/12 GREEN.
+  CMS 화면 변경(GSD):
+    · /cms/subscriptions/new — products/new와 동일한 분류그룹→코드조합 선택 UI 추가
+      (mappingGroups/mappingItems/taxonomyCodes 로드, combosForGroup/selectCombo, 서버
+      create 액션이 combo_row_id로 서버측에서 직접 합산 분류코드 재계산 — 클라이언트 문자열
+      비신뢰 원칙, products/new와 동일 안전 패턴)
+    · SubscriptionDetailPanel.svelte 기본정보 탭 — "품번" 표시를 실채번값 대신 code_series 기반
+      구조 미리보기(SUB-{prefix}-####)로 변경, "미발행"→"품번 체계 미설정" 문구·재시도 버튼
+      라벨도 동일 취지로 수정
+    · 구독자현황 탭 — KPI 요약 아래 개별 구독자 목록(품번·이메일·상태·가입일) 신설,
+      loadSelectedSubscriptionDetail.ts가 user_subscriptions+user_profiles(email) 조인으로 공급
+    · /cms/subscriptions 목록 카드 — product_code 배지를 code_series 기반 구조 미리보기로 교체
+  검증: npx svelte-check(구독 모듈 신규 에러 0건) + eslint(전체 통과) + vitest 12/12 GREEN.
+  적용 상태: crazyshot-stage(ezyvffjvuwmtuhpxdjrw)만 적용 완료. production(vnbpmvxruyciuuaermyh)은
+    Stephen 명시적 승인 대기(이번 세션 기존 관행과 동일 — DB 마이그레이션은 항상 별도 승인 후 적용).
+  Stage C(잔여): production 마이그레이션 적용 + QA(@sp3-qa-agent) 최종 검수 — 다음 확인 시 진행.

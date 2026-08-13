@@ -965,6 +965,31 @@ created_at/updated_at). `subscription_plans` 등 나머지 5개 구독 테이블
 
 **검증**: `npx svelte-check` — 구독 모듈 관련 에러 0건(재확인). DB 마이그레이션 없음.
 
+### 🔁 2026-08-13 연속 세션 — 구독 상품 부모/자식 품번 구조 도입 (Stephen GATE B 승인, Stage A+B 완료)
+
+Stephen이 위 SuggestPicker 버그 확인 과정에서 "분류 선택 후 코드조합 선택 UI가 안 뜬다"고 재보고 →
+조사 결과 이 세션 앞선 라운드(코드조합 정책 3개 화면 전수 점검)에서 이미 "구독은 콤보시스템
+안 씀 — Stephen 확인: 현재 체계 유지"로 확정됐던 결정과 정면 충돌함을 발견해 명시적으로 재확인
+요청 → **Stephen이 그 결정을 번복**: products/new와 동일한 코드조합 선택 UI를 구독등록에 추가하되,
+실제 품번은 등록 시점이 아니라 "개별 구독자가 실제로 구독 완료하는 시점"에 발급되도록 요청
+(products.md §2-1 부모/자식 원칙 응용: 부모=구조만 저장, 자식=실채번). GATE B 승인 후 진행.
+
+**Stage A (GSD) + Stage B (TDD, 결제/구독 강제 도메인) 완료**:
+- 마이그레이션 `20260813000241_241_subscription_parent_child_product_code.sql`(stage 적용 완료,
+  production 대기) — `subscription_plans.code_series`/`user_subscriptions.product_code` 컬럼 추가,
+  `generate_subscription_product_code`(부모 전용, code_series만 저장하도록 재설계) +
+  `generate_subscription_inventory_product_code`(신설, 자식 실채번) +
+  `create_user_subscription`(구독 생성 직후 내부에서 자식 채번 원자적 호출, 비차단) — 상세는
+  GSD_LOG.md 동일 날짜 항목 참고.
+- `src/__tests__/services/subscriptionBilling.test.ts`에 RED→GREEN 6케이스 추가, 12/12 GREEN.
+- `/cms/subscriptions/new`에 코드조합 선택 UI 추가(products/new 패턴 그대로 재사용, 서버가
+  combo_row_id로 합산 분류코드를 직접 재계산 — 클라이언트 값 비신뢰).
+- `SubscriptionDetailPanel.svelte`/목록 카드 — 실채번값 대신 code_series 기반 구조 미리보기로 전환,
+  구독자현황 탭에 개별 구독자 품번 목록 신설.
+- 검증: svelte-check 신규 에러 0건, eslint 통과, vitest 12/12 GREEN.
+
+**Stage C(잔여)**: production 마이그레이션 적용(Stephen 승인 대기) + QA(@sp3-qa-agent) 최종 검수.
+
 ## GSD Stage 1~5 완료 요약 (2026-08-12)
 
 Stage 1~5(DB 스키마 확장 + GNB + CMS 구독목록/등록 화면 + /members 연동) 전체 완료, stage DB

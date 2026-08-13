@@ -80,7 +80,7 @@
       label: '상담',
       subMenus: [
         { label: '채팅', href: '/cms/chat' },
-        { label: 'QnA', href: '/cms/chat/qna' },
+        { label: '자동 메시지 설정', href: '/cms/chat/qna' },
       ],
     },
     { id: 'reservation', label: '예약', subMenus: [
@@ -103,6 +103,20 @@
         { label: '상품등록', href: '/cms/products/new' },
       ],
     },
+    // 구독 티어(정기구독 상품) 관리 — 혜택이 전사적으로 쿠폰·포인트를 자동발행할 수 있어
+    // manager 이상만 노출(products와 달리 전 등급 개방 아님)
+    ...(hasSettingsAccess(data.cmsRole ?? '')
+      ? [
+          {
+            id: 'subscription',
+            label: '구독',
+            subMenus: [
+              { label: '구독목록', href: '/cms/subscriptions' },
+              { label: '구독등록', href: '/cms/subscriptions/new' },
+            ],
+          },
+        ]
+      : []),
     {
       id: 'customers',
       label: '고객',
@@ -150,6 +164,7 @@
     if (pathname.startsWith('/cms/accounts')) return 'settings'
     if (pathname.startsWith('/cms/reservation')) return 'reservation'
     if (pathname.startsWith('/cms/products')) return 'products'
+    if (pathname.startsWith('/cms/subscriptions')) return 'subscription'
     if (pathname.startsWith('/cms/rental'))   return 'rental'
     if (pathname.startsWith('/cms/customers')) return 'customers'
     if (pathname.startsWith('/cms/chat'))     return 'consulting'
@@ -167,6 +182,8 @@
     if (page.url.pathname === sub.href) return true
     if (sub.href === '/cms/products' && page.url.pathname === '/cms/products') return true
     if (sub.href === '/cms/products/new' && page.url.pathname.startsWith('/cms/products/new')) return true
+    if (sub.href === '/cms/subscriptions' && page.url.pathname === '/cms/subscriptions') return true
+    if (sub.href === '/cms/subscriptions/new' && page.url.pathname.startsWith('/cms/subscriptions/new')) return true
     if (sub.href === '/cms/customers' && page.url.pathname === '/cms/customers') return true
     if (sub.href === '/cms/customers/membership' && page.url.pathname.startsWith('/cms/customers/membership')) return true
     if (sub.href === '/cms/customers/score' && page.url.pathname.startsWith('/cms/customers/score')) return true
