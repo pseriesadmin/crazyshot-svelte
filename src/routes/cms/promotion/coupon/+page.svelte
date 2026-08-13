@@ -72,8 +72,7 @@
     f_code = Array.from({ length: 10 }, () => chars[Math.floor(Math.random() * chars.length)]).join('')
   }
 
-  // 카테고리 토글
-  const ALL_CATS = ['CAM','OPT','LGT','AUD','SPT','MON','PWR','MED','STD','VID','ACC','PKG']
+  // 카테고리 토글 — BND-COUPON-CAT-1: 하드코딩 제거, code_mapping_groups(백오피스) 기준 반영
   function toggleCat(c: string) {
     f_categories = f_categories.includes(c)
       ? f_categories.filter(x => x !== c)
@@ -332,10 +331,10 @@
           {#if f_type === 'category'}
             <div class="fs-title">적용 카테고리</div>
             <div class="cat-picker">
-              {#each ALL_CATS as cat}
+              {#each data.categoryOptions as cat (cat.value)}
                 <button type="button" class="cat-chip"
-                  class:selected={f_categories.includes(cat)}
-                  onclick={() => toggleCat(cat)}>{cat}</button>
+                  class:selected={f_categories.includes(cat.value)}
+                  onclick={() => toggleCat(cat.value)}>{cat.label}</button>
               {/each}
             </div>
             <input type="hidden" name="applicable_categories"
