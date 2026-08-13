@@ -1,0 +1,734 @@
+<script lang="ts">
+  /**
+   * ContractImportModal.svelte — 외부 문서(.docx/.xlsx) 임포트 모달
+   *
+   * - accept 목록은 계약 전용 로컬 관리 (전역 fileValidation.ts 이미지 표준 미변경)
+   * - 파싱은 클라이언트에서 수행 (mammoth / SheetJS)
+   * - onImport 콜백으로 결과를 부모에게 전달 → 부모가 에디터에 반영
+   *
+   * 지원 포맷:
+   *   .docx → mammoth HTML → TipTap setContent
+   *   .xlsx → SheetJS 시트 선택 + 범위 선택 → TipTap table JSON insertContent
+   */
+
+  import { csToast } from '$lib/utils/toast'
+  import { importDocx } from '$lib/utils/docImport/docxImport'
+  import { getSheetNames, parseSheet, rowsToTiptapTable } from '$lib/utils/docImport/xlsxImport'
+  import { FEATURE_HWPX_EXPERIMENTAL, importHwpx } from '$lib/utils/docImport/hwpxImport'
+  import type { JSONContent } from '@tiptap/core'
+
+  // --------------------------------------------------------------------------
+  // Props
+  // --------------------------------------------------------------------------
+  interface Props {
+    onclose: () => void
+    /** docx/hwpx → HTML 문자열, xlsx → TipTap JSONContent */
+    onImport: (result: { type: 'html'; html: string } | { type: 'json'; content: JSONContent }) => void
+  }
+
+  let { onclose, onImport }: Props = $props()
+
+  // --------------------------------------------------------------------------
+  // 계약 전용 accept 목록 (전역 fileValidation.ts 미변경)
+  // --------------------------------------------------------------------------
+  const CONTRACT_IMPORT_ACCEPT = [
+    'application/vnd.openxmlformats-officedocument.wordprocessingml.document', // .docx
+    'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',       // .xlsx
+    'application/vnd.ms-excel',                                                 // .xls (xlsx fallback)
+    '.docx',
+    '.xlsx',
+    '.xls',
+    '.hwp',
+    '.hwpx',
+  ].join(',')
+
+  // --------------------------------------------------------------------------
+  // 상태
+  // --------------------------------------------------------------------------
+  type Step =
+    | 'select'
+    | 'docx-preview'
+    | 'xlsx-sheet'
+    | 'xlsx-range'
+    | 'xlsx-preview'
+    | 'hwp-notice'          // P5-1: .hwp / .hwpx 기본 안내 모달
+    | 'hwpx-experimental'   // P5-2: .hwpx 실험 파싱 동의 + 진행
+    | 'hwpx-preview'        // P5-2: .hwpx 변환 결과 미리보기
+    | 'loading'
+
+  let step        = $state<Step>('select')
+  let fileInput:    HTMLInputElement | null = $state(null)
+  let selectedFile: File | null            = $state(null)
+  let fileType:     'docx' | 'xlsx' | 'hwp' | 'hwpx' | null = $state(null)
+
+  // docx 상태
+  let docxHtml     = $state('')
+  let docxWarnings = $state<string[]>([])
+
+  // xlsx 상태
+  let xlsxSheets   = $state<string[]>([])
+  let xlsxSheet    = $state('')
+  let xlsxRange    = $state('')   // e.g., 'A1:D10' or '' for all
+  let xlsxRows     = $state<string[][]>([])
+
+  // hwpx 실험 파싱 상태
+  let hwpxHtml         = $state('')
+  let hwpxWarnings     = $state<string[]>([])
+  let hwpxConsentGiven = $state(false)    // 사용자 동의 체크박스
+
+  // --------------------------------------------------------------------------
+  // 파일 선택
+  // --------------------------------------------------------------------------
+  function onFileChange(event: Event) {
+    const file = (event.target as HTMLInputElement).files?.[0]
+    if (!file) return
+    selectedFile = file
+
+    const ext = file.name.split('.').pop()?.toLowerCase() ?? ''
+    if (ext === 'docx') {
+      fileType = 'docx'
+      processDocx(file)
+    } else if (ext === 'xlsx' || ext === 'xls') {
+      fileType = 'xlsx'
+      processXlsxSheets(file)
+    } else if (ext === 'hwp') {
+      // P5-1: .hwp 구 바이너리 포맷 — 파싱 시도 없이 즉시 안내 모달
+      fileType = 'hwp'
+      step = 'hwp-notice'
+    } else if (ext === 'hwpx') {
+      // P5-1 + P5-2: .hwpx — feature-flag에 따라 분기
+      fileType = 'hwpx'
+      if (FEATURE_HWPX_EXPERIMENTAL) {
+        hwpxConsentGiven = false
+        step = 'hwpx-experimental'
+      } else {
+        step = 'hwp-notice'
+      }
+    } else {
+      csToast.error('.docx, .xlsx, .hwp, .hwpx 파일만 지원합니다.')
+      selectedFile = null
+    }
+    // 동일 파일 재선택 허용
+    if (fileInput) fileInput.value = ''
+  }
+
+  // --------------------------------------------------------------------------
+  // docx 처리
+  // --------------------------------------------------------------------------
+  async function processDocx(file: File) {
+    step = 'loading'
+    try {
+      const result = await importDocx(file)
+      docxHtml     = result.html
+      docxWarnings = result.warnings
+      step         = 'docx-preview'
+    } catch (err) {
+      csToast.error(err instanceof Error ? err.message : '.docx 변환에 실패했습니다.')
+      step = 'select'
+    }
+  }
+
+  function confirmDocxImport() {
+    if (!docxHtml) return
+    onImport({ type: 'html', html: docxHtml })
+    onclose()
+  }
+
+  // --------------------------------------------------------------------------
+  // xlsx 처리
+  // --------------------------------------------------------------------------
+  async function processXlsxSheets(file: File) {
+    step = 'loading'
+    try {
+      const sheets = await getSheetNames(file)
+      xlsxSheets   = sheets.map((s) => s.name)
+      xlsxSheet    = xlsxSheets[0] ?? ''
+      xlsxRange    = ''
+      step         = 'xlsx-sheet'
+    } catch (err) {
+      csToast.error(err instanceof Error ? err.message : '.xlsx 로드에 실패했습니다.')
+      step = 'select'
+    }
+  }
+
+  async function previewXlsx() {
+    if (!selectedFile || !xlsxSheet) return
+    step = 'loading'
+    try {
+      xlsxRows = await parseSheet(selectedFile, {
+        sheetName: xlsxSheet,
+        range:     xlsxRange.trim() || undefined,
+      })
+      if (xlsxRows.length === 0) {
+        csToast.error('선택한 범위에 데이터가 없습니다.')
+        step = 'xlsx-sheet'
+        return
+      }
+      if (xlsxRows.length > 100) {
+        csToast.error('100행을 초과하는 데이터는 임포트할 수 없습니다. 범위를 줄여주세요.')
+        step = 'xlsx-sheet'
+        return
+      }
+      step = 'xlsx-preview'
+    } catch (err) {
+      csToast.error(err instanceof Error ? err.message : '시트 파싱에 실패했습니다.')
+      step = 'xlsx-sheet'
+    }
+  }
+
+  function confirmXlsxImport() {
+    try {
+      const tableJson = rowsToTiptapTable(xlsxRows)
+      onImport({ type: 'json', content: tableJson })
+      onclose()
+    } catch (err) {
+      csToast.error(err instanceof Error ? err.message : '테이블 변환에 실패했습니다.')
+    }
+  }
+
+  // --------------------------------------------------------------------------
+  // P5-2: HWPX 실험 파싱
+  // --------------------------------------------------------------------------
+  async function startHwpxExperimentalParse() {
+    if (!selectedFile || !hwpxConsentGiven) return
+    step = 'loading'
+    try {
+      const result = await importHwpx(selectedFile)
+      hwpxHtml     = result.html
+      hwpxWarnings = result.warnings
+      step         = 'hwpx-preview'
+    } catch (_err) {
+      // 파싱 실패 → 기본 안내 모달로 폴백 (console 출력 금지, 사용자에게 안내 화면 제공)
+      step = 'hwp-notice'
+    }
+  }
+
+  function confirmHwpxImport() {
+    if (!hwpxHtml) return
+    onImport({ type: 'html', html: hwpxHtml })
+    onclose()
+  }
+
+  // --------------------------------------------------------------------------
+  // 키보드 닫기
+  // --------------------------------------------------------------------------
+  function trapFocus(event: KeyboardEvent) {
+    if (event.key === 'Escape') onclose()
+  }
+</script>
+
+<svelte:window onkeydown={trapFocus} />
+
+<div class="cim-overlay" role="dialog" aria-modal="true" aria-label="문서 가져오기">
+  <div class="cim-modal">
+    <!-- 헤더 -->
+    <div class="cim-header">
+      <span class="cim-title">문서 가져오기</span>
+      <button type="button" class="close-btn" onclick={onclose} aria-label="닫기">✕</button>
+    </div>
+
+    <!-- 본문 -->
+    <div class="cim-body">
+
+      {#if step === 'loading'}
+        <div class="cim-loading">변환 중...</div>
+
+      {:else if step === 'select'}
+        <!-- 파일 선택 -->
+        <div class="cim-section">
+          <p class="cim-desc">
+            .docx 파일은 편집 가능한 문서로 변환됩니다.<br />
+            .xlsx 파일은 시트를 선택해 표로 삽입됩니다.<br />
+            .hwpx 파일은 실험적 변환을 시도하거나 안내 메시지를 제공합니다.<br />
+            .hwp 파일은 직접 변환이 지원되지 않으며 안내 메시지가 표시됩니다.
+          </p>
+          <div class="warn-banner">
+            <strong>손실 가능 요소:</strong> 복잡한 레이아웃(워터마크·다단·도형)은 임포트 시 제외될 수 있습니다.
+          </div>
+          <input
+            type="file"
+            accept={CONTRACT_IMPORT_ACCEPT}
+            style="display:none"
+            bind:this={fileInput}
+            onchange={onFileChange}
+            aria-label="문서 파일 선택"
+          />
+          <button type="button" class="btn-upload" onclick={() => fileInput?.click()}>
+            파일 선택 (.docx / .xlsx / .hwpx / .hwp)
+          </button>
+        </div>
+
+      {:else if step === 'hwp-notice'}
+        <!-- P5-1: HWP / HWPX 기본 안내 모달 -->
+        <div class="cim-section">
+          <div class="hwp-notice-icon" aria-hidden="true">📄</div>
+          <p class="cim-section-title">한글(.hwp/.hwpx) 직접 변환 안내</p>
+          <p class="cim-desc">
+            {#if fileType === 'hwpx'}
+              선택한 <strong>.hwpx</strong> 파일은 현재 실험 변환에 실패했거나 기능이 비활성화되어 있습니다.
+            {:else}
+              선택한 <strong>.hwp</strong> 파일은 구형 바이너리 포맷으로 직접 변환이 지원되지 않습니다.
+            {/if}
+          </p>
+          <div class="hwp-notice-steps">
+            <p class="notice-title">아래 순서로 Word 문서로 변환 후 다시 업로드해주세요:</p>
+            <ol class="notice-list">
+              <li>한글(한컴오피스)에서 해당 파일을 엽니다.</li>
+              <li>메뉴 <strong>파일 → 다른 이름으로 저장</strong>을 선택합니다.</li>
+              <li>파일 형식을 <strong>Word 문서(.docx)</strong>로 선택합니다.</li>
+              <li>저장한 .docx 파일로 다시 업로드합니다.</li>
+            </ol>
+          </div>
+        </div>
+        <div class="cim-footer">
+          <button type="button" class="btn-cancel" onclick={() => { step = 'select'; selectedFile = null }}>
+            다른 파일 선택
+          </button>
+          <button type="button" class="btn-action" onclick={onclose}>확인</button>
+        </div>
+
+      {:else if step === 'hwpx-experimental'}
+        <!-- P5-2: HWPX 실험 파싱 동의 단계 -->
+        <div class="cim-section">
+          <p class="cim-section-title">HWPX 실험 변환</p>
+          <div class="warn-banner warn-banner--yellow">
+            <strong>⚠️ 실험적 기능</strong><br />
+            HWPX 파일을 HTML로 변환하는 기능은 실험 단계입니다.<br />
+            복잡한 서식(표·이미지·특수 글꼴·다단 등)이 손실되거나 깨질 수 있습니다.
+          </div>
+          <p class="cim-desc">
+            파일명: <strong>{selectedFile?.name ?? ''}</strong>
+          </p>
+          <div class="hwpx-notice-alt">
+            <p class="notice-title">더 정확한 변환을 원한다면:</p>
+            <ol class="notice-list">
+              <li>한글(한컴오피스)에서 <strong>파일 → 다른 이름으로 저장</strong>.</li>
+              <li>파일 형식 <strong>Word 문서(.docx)</strong> 선택 후 재업로드.</li>
+            </ol>
+          </div>
+          <label class="hwpx-consent-label">
+            <input
+              type="checkbox"
+              bind:checked={hwpxConsentGiven}
+              aria-label="서식 손실 가능성을 이해했습니다 동의"
+            />
+            서식 손실 가능성을 이해했으며, 실험 변환을 진행합니다.
+          </label>
+        </div>
+        <div class="cim-footer">
+          <button type="button" class="btn-cancel" onclick={() => { step = 'select'; selectedFile = null; hwpxConsentGiven = false }}>
+            다른 파일 선택
+          </button>
+          <button
+            type="button"
+            class="btn-action"
+            onclick={startHwpxExperimentalParse}
+            disabled={!hwpxConsentGiven}
+          >
+            실험 변환 시작
+          </button>
+        </div>
+
+      {:else if step === 'hwpx-preview'}
+        <!-- P5-2: HWPX 변환 결과 미리보기 -->
+        <div class="cim-section">
+          <p class="cim-section-title">HWPX 변환 결과 미리보기</p>
+          {#if hwpxWarnings.length > 0}
+            <div class="warn-banner">
+              <strong>변환 경고:</strong>
+              <ul class="warn-list">
+                {#each hwpxWarnings as w}
+                  <li>{w}</li>
+                {/each}
+              </ul>
+            </div>
+          {/if}
+          <div class="docx-preview" aria-label="HWPX 변환 결과 미리보기">
+            {@html hwpxHtml}
+          </div>
+        </div>
+        <div class="cim-footer">
+          <button type="button" class="btn-cancel" onclick={() => { step = 'hwpx-experimental' }}>다시 선택</button>
+          <button type="button" class="btn-action" onclick={confirmHwpxImport}>
+            이 내용으로 가져오기
+          </button>
+        </div>
+
+      {:else if step === 'docx-preview'}
+        <!-- docx 미리보기 -->
+        <div class="cim-section">
+          <p class="cim-section-title">변환 결과 미리보기</p>
+          {#if docxWarnings.length > 0}
+            <div class="warn-banner">
+              <strong>변환 경고 ({docxWarnings.length}건):</strong>
+              <ul class="warn-list">
+                {#each docxWarnings.slice(0, 5) as w}
+                  <li>{w}</li>
+                {/each}
+                {#if docxWarnings.length > 5}
+                  <li>... 외 {docxWarnings.length - 5}건</li>
+                {/if}
+              </ul>
+            </div>
+          {/if}
+          <div class="docx-preview" aria-label="변환된 문서 미리보기">
+            {@html docxHtml}
+          </div>
+        </div>
+        <div class="cim-footer">
+          <button type="button" class="btn-cancel" onclick={() => { step = 'select' }}>다시 선택</button>
+          <button type="button" class="btn-action" onclick={confirmDocxImport}>
+            이 내용으로 가져오기
+          </button>
+        </div>
+
+      {:else if step === 'xlsx-sheet'}
+        <!-- xlsx 시트 + 범위 선택 -->
+        <div class="cim-section">
+          <p class="cim-section-title">시트 선택</p>
+          <div class="field-row">
+            <label class="f-label" for="xlsx-sheet-select">시트</label>
+            <select id="xlsx-sheet-select" class="f-select" bind:value={xlsxSheet}>
+              {#each xlsxSheets as s}
+                <option value={s}>{s}</option>
+              {/each}
+            </select>
+          </div>
+          <div class="field-row">
+            <label class="f-label" for="xlsx-range-input">범위 (선택)</label>
+            <input
+              id="xlsx-range-input"
+              class="f-input"
+              placeholder="예: A1:D20 (비워두면 전체)"
+              bind:value={xlsxRange}
+            />
+            <p class="f-hint">최대 100행까지 가져올 수 있습니다.</p>
+          </div>
+        </div>
+        <div class="cim-footer">
+          <button type="button" class="btn-cancel" onclick={() => { step = 'select' }}>다시 선택</button>
+          <button type="button" class="btn-action" onclick={previewXlsx} disabled={!xlsxSheet}>
+            미리보기
+          </button>
+        </div>
+
+      {:else if step === 'xlsx-preview'}
+        <!-- xlsx 미리보기 -->
+        <div class="cim-section">
+          <p class="cim-section-title">미리보기 ({xlsxRows.length}행 × {xlsxRows[0]?.length ?? 0}열)</p>
+          <div class="xlsx-preview-wrap">
+            <table class="xlsx-preview-table">
+              <tbody>
+              {#each xlsxRows as row, ri}
+                <tr>
+                  {#each row as cell}
+                    {#if ri === 0}
+                      <th>{cell}</th>
+                    {:else}
+                      <td>{cell}</td>
+                    {/if}
+                  {/each}
+                </tr>
+              {/each}
+              </tbody>
+            </table>
+          </div>
+          <p class="cim-desc">위 표가 에디터의 <strong>현재 커서 위치</strong>에 삽입됩니다.</p>
+        </div>
+        <div class="cim-footer">
+          <button type="button" class="btn-cancel" onclick={() => { step = 'xlsx-sheet' }}>범위 재선택</button>
+          <button type="button" class="btn-action" onclick={confirmXlsxImport}>
+            표로 삽입
+          </button>
+        </div>
+      {/if}
+
+    </div>
+  </div>
+</div>
+
+<style>
+  .cim-overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.45);
+    z-index: 400;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 24px;
+  }
+
+  .cim-modal {
+    background: var(--cs-white, #fff);
+    border-radius: var(--cms-radius-sm, 8px);
+    width: 100%;
+    max-width: 720px;
+    max-height: 88vh;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    box-shadow: 0 8px 40px rgba(0, 0, 0, 0.18);
+  }
+
+  .cim-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 14px 18px;
+    border-bottom: 1px solid var(--cs-lilac, #ECEBF4);
+    flex-shrink: 0;
+  }
+  .cim-title {
+    font: var(--text-pc-title-16, 16px);
+    font-weight: 700;
+    color: var(--cs-text, #100B32);
+  }
+  .close-btn {
+    background: none;
+    border: none;
+    cursor: pointer;
+    font-size: 15px;
+    color: var(--cs-text-mid, #666);
+    padding: 4px 8px;
+    border-radius: var(--radius-sm, 8px);
+    transition: background 0.1s;
+  }
+  .close-btn:hover { background: var(--cs-lilac, #ECEBF4); }
+
+  .cim-body {
+    flex: 1;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+  }
+
+  .cim-loading {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font: var(--text-pc-body-14, 14px);
+    color: var(--cs-text-mid, #666);
+    padding: 48px;
+  }
+
+  .cim-section {
+    flex: 1;
+    padding: 18px 20px;
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+    overflow-y: auto;
+  }
+
+  .cim-section-title {
+    margin: 0;
+    font: var(--text-pc-body-14, 14px);
+    font-weight: 700;
+    color: var(--cs-text, #100B32);
+  }
+
+  .cim-desc {
+    margin: 0;
+    font: var(--text-pc-script-12, 12px);
+    color: var(--cs-text-mid, #666);
+    line-height: 1.6;
+  }
+
+  .warn-banner {
+    padding: 10px 14px;
+    background: rgba(255, 177, 0, 0.1);
+    border: 1px solid rgba(255, 177, 0, 0.4);
+    border-radius: var(--cms-radius-sm, 8px);
+    font: var(--text-pc-script-12, 12px);
+    color: var(--cs-text, #100B32);
+    line-height: 1.5;
+  }
+  .warn-banner--yellow {
+    background: rgba(255, 140, 0, 0.08);
+    border-color: rgba(255, 140, 0, 0.45);
+  }
+  .warn-list {
+    margin: 6px 0 0;
+    padding-left: 18px;
+  }
+  .warn-list li {
+    margin-bottom: 2px;
+    color: var(--cs-text-mid, #666);
+  }
+
+  /* P5-1: HWP 안내 */
+  .hwp-notice-icon {
+    font-size: 32px;
+    text-align: center;
+    line-height: 1;
+  }
+  .hwp-notice-steps,
+  .hwpx-notice-alt {
+    background: var(--cs-surface-gray, #f6f6f6);
+    border-radius: var(--cms-radius-sm, 8px);
+    padding: 12px 14px;
+  }
+  .notice-title {
+    margin: 0 0 8px;
+    font: var(--text-pc-script-12, 12px);
+    font-weight: 700;
+    color: var(--cs-text, #100B32);
+  }
+  .notice-list {
+    margin: 0;
+    padding-left: 18px;
+    font: var(--text-pc-script-12, 12px);
+    color: var(--cs-text, #100B32);
+    line-height: 1.7;
+  }
+  .notice-list li { margin-bottom: 4px; }
+
+  /* P5-2: HWPX 동의 체크박스 */
+  .hwpx-consent-label {
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+    font: var(--text-pc-body-14, 14px);
+    color: var(--cs-text, #100B32);
+    cursor: pointer;
+    line-height: 1.5;
+  }
+  .hwpx-consent-label input[type="checkbox"] {
+    margin-top: 2px;
+    flex-shrink: 0;
+    accent-color: var(--cs-purple, #3B2F8A);
+  }
+
+  .btn-upload {
+    align-self: flex-start;
+    height: 38px;
+    padding: 0 20px;
+    background: var(--cs-purple, #3B2F8A);
+    color: var(--cs-white, #fff);
+    border: none;
+    border-radius: var(--cms-radius-sm, 8px);
+    font: var(--text-pc-body-14, 14px);
+    font-weight: 700;
+    cursor: pointer;
+    transition: background 0.12s;
+  }
+  .btn-upload:hover { background: var(--cs-purple-hover, #2d2470); }
+
+  /* docx 미리보기 */
+  .docx-preview {
+    border: 1px solid var(--cs-lilac, #ECEBF4);
+    border-radius: var(--cms-radius-sm, 8px);
+    padding: 16px;
+    background: var(--cs-surface-gray, #f6f6f6);
+    max-height: 360px;
+    overflow-y: auto;
+    font: var(--text-pc-body-14, 14px);
+    color: var(--cs-text, #100B32);
+    line-height: 1.7;
+  }
+  .docx-preview :global(table) {
+    border-collapse: collapse;
+    width: 100%;
+    margin: 0.5em 0;
+  }
+  .docx-preview :global(td),
+  .docx-preview :global(th) {
+    border: 1px solid #ddd;
+    padding: 5px 8px;
+  }
+
+  /* xlsx 시트 선택 */
+  .field-row {
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+  }
+  .f-label {
+    font: var(--text-pc-script-12, 12px);
+    font-weight: 700;
+    color: var(--cs-text, #100B32);
+  }
+  .f-input,
+  .f-select {
+    height: 34px;
+    padding: 0 10px;
+    border: 1px solid #DDDDDD;
+    border-radius: var(--cms-radius-sm, 8px);
+    font: var(--text-pc-body-14, 14px);
+    color: var(--cs-text, #100B32);
+    outline: none;
+    background: var(--cs-white, #fff);
+    transition: border-color 0.1s;
+  }
+  .f-input:focus,
+  .f-select:focus { border-color: var(--cs-purple, #3B2F8A); }
+  .f-hint {
+    margin: 0;
+    font: var(--text-pc-script-12, 12px);
+    color: var(--cs-text-light, #aaa);
+  }
+
+  /* xlsx 미리보기 표 */
+  .xlsx-preview-wrap {
+    overflow-x: auto;
+    border: 1px solid var(--cs-lilac, #ECEBF4);
+    border-radius: var(--cms-radius-sm, 8px);
+    max-height: 280px;
+    overflow-y: auto;
+  }
+  .xlsx-preview-table {
+    border-collapse: collapse;
+    width: 100%;
+    font: var(--text-pc-script-12, 12px);
+    color: var(--cs-text, #100B32);
+  }
+  .xlsx-preview-table th,
+  .xlsx-preview-table td {
+    border: 1px solid #ddd;
+    padding: 5px 8px;
+    white-space: nowrap;
+  }
+  .xlsx-preview-table th {
+    background: var(--cs-surface-gray, #f6f6f6);
+    font-weight: 700;
+  }
+
+  /* 푸터 */
+  .cim-footer {
+    display: flex;
+    gap: 8px;
+    justify-content: flex-end;
+    padding: 14px 20px;
+    border-top: 1px solid var(--cs-lilac, #ECEBF4);
+    flex-shrink: 0;
+  }
+
+  .btn-action {
+    height: 34px;
+    padding: 0 18px;
+    background: var(--cs-purple, #3B2F8A);
+    color: var(--cs-white, #fff);
+    border: none;
+    border-radius: var(--cms-radius-sm, 8px);
+    font: var(--text-pc-script-12, 12px);
+    font-weight: 700;
+    cursor: pointer;
+    transition: background 0.12s;
+  }
+  .btn-action:hover:not(:disabled) { background: var(--cs-purple-hover, #2d2470); }
+  .btn-action:disabled { background: var(--cs-disabled-button, #ccc); cursor: not-allowed; }
+
+  .btn-cancel {
+    height: 34px;
+    padding: 0 14px;
+    border: 1px solid #DDDDDD;
+    border-radius: var(--cms-radius-sm, 8px);
+    background: var(--cs-white, #fff);
+    font: var(--text-pc-script-12, 12px);
+    cursor: pointer;
+    transition: background 0.12s;
+  }
+  .btn-cancel:hover { background: var(--cs-surface-gray, #f6f6f6); }
+</style>

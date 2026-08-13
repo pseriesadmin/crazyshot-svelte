@@ -1,6 +1,7 @@
 <script lang="ts">
   import { csToast } from '$lib/utils/toast'
   import { browser } from '$app/environment'
+  import { applyContractTemplate } from '$lib/utils/contract-apply-template'
   import ContractEditorModal from '$lib/components/cms/ContractEditorModal.svelte'
   import ContractTemplatePreviewModal from '$lib/components/cms/ContractTemplatePreviewModal.svelte'
 
@@ -8,6 +9,7 @@
     id: string
     title: string
     content_blocks: unknown[]
+    specifications: { key: string; value: string }[]
     created_at: string
   }
 
@@ -100,24 +102,16 @@
     if (!tpl) return
     applyingTemplate = true
     try {
-      let activeId = contractId
-      if (!activeId) {
-        const initRes = await fetch(`/api/cms/reservations/${reservationId}/init-contract`, { method: 'POST' })
-        if (!initRes.ok) { csToast.error('계약서 생성 실패'); return }
-        activeId = ((await initRes.json()) as { contractId: string }).contractId
-      }
-      const patchRes = await fetch(`/api/cms/contracts/${activeId}/content`, {
-        method:  'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body:    JSON.stringify({
-          title:          tpl.title,
-          content_blocks: tpl.content_blocks,
-          specifications: [],
-          template_id:    tpl.id,
-        }),
+      const result = await applyContractTemplate({
+        contractId,
+        reservationId,
+        title:          tpl.title,
+        contentBlocks:  tpl.content_blocks,
+        specifications: tpl.specifications ?? [],
+        templateId:     tpl.id,
       })
-      if (!patchRes.ok) { csToast.error('양식 적용 실패'); return }
-      editorContractId = activeId
+      if (result.error) { csToast.error(result.error); return }
+      editorContractId = result.contractId ?? null
       editorOpen = true
     } catch {
       csToast.error('네트워크 오류가 발생했습니다.')

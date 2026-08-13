@@ -5,12 +5,14 @@ import { redirect, fail } from '@sveltejs/kit'
 import type { Actions, PageServerLoad } from './$types'
 import type { ContractTemplate, ContractTemplateSummary } from '$lib/types/contract-template'
 import { getCmsRoleForAction } from '$lib/server/getCmsRoleForAction'
+import { hasSettingsAccess } from '$lib/utils/cmsPermissions'
 
 export type { ContractTemplate, ContractTemplateSummary }
 
 export const load: PageServerLoad = async ({ parent, url }) => {
   const { cmsRole } = await parent()
-  if (!cmsRole) throw redirect(303, '/cms/login')
+  // P7-1: manager 이상(hasSettingsAccess)만 진입 허용 — QR-CASE-2와 동일 패턴
+  if (!hasSettingsAccess(cmsRole ?? '')) throw redirect(303, '/cms?notice=access_denied')
 
   const admin = createClient(PUBLIC_SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
   const selectedId = url.searchParams.get('selected') ?? null
@@ -25,7 +27,7 @@ export const load: PageServerLoad = async ({ parent, url }) => {
   if (selectedId) {
     const { data } = await admin
       .from('contract_templates')
-      .select('id, title, content_blocks, specifications, status, created_at, updated_at')
+      .select('id, title, content_blocks, specifications, status, requires_issuer_signature, created_at, updated_at')
       .eq('id', selectedId)
       .is('deleted_at', null)
       .maybeSingle()
@@ -44,14 +46,16 @@ export const actions: Actions = {
     const { session } = await locals.safeGetSession()
     if (!session) return fail(401, { error: '인증 필요' })
     const cmsRole = await getCmsRoleForAction(locals)
-    if (!cmsRole) return fail(403, { error: '권한 없음' })
+    // P7-2: manager 이상만 허용
+    if (!cmsRole || !hasSettingsAccess(cmsRole)) return fail(403, { error: '권한 없음' })
 
     const admin = createClient(PUBLIC_SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
     const form  = await request.formData()
 
-    const title          = (form.get('title') as string | null)?.trim() ?? ''
-    const contentBlocks  = form.get('content_blocks') as string | null
-    const specifications = form.get('specifications') as string | null
+    const title                    = (form.get('title') as string | null)?.trim() ?? ''
+    const contentBlocks            = form.get('content_blocks') as string | null
+    const specifications           = form.get('specifications') as string | null
+    const requiresIssuerSignature  = form.get('requires_issuer_signature') === 'true'
 
     if (!title) return fail(400, { error: '계약서 제목을 입력해주세요.' })
 
@@ -66,6 +70,7 @@ export const actions: Actions = {
         title,
         content_blocks: parsedBlocks,
         specifications: parsedSpecs,
+        requires_issuer_signature: requiresIssuerSignature,
         created_by: session.user.id,
       })
       .select('id')
@@ -79,15 +84,17 @@ export const actions: Actions = {
     const { session } = await locals.safeGetSession()
     if (!session) return fail(401, { error: '인증 필요' })
     const cmsRole = await getCmsRoleForAction(locals)
-    if (!cmsRole) return fail(403, { error: '권한 없음' })
+    // P7-2: manager 이상만 허용
+    if (!cmsRole || !hasSettingsAccess(cmsRole)) return fail(403, { error: '권한 없음' })
 
     const admin = createClient(PUBLIC_SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
     const form  = await request.formData()
 
-    const id             = (form.get('id') as string | null) ?? ''
-    const title          = (form.get('title') as string | null)?.trim() ?? ''
-    const contentBlocks  = form.get('content_blocks') as string | null
-    const specifications = form.get('specifications') as string | null
+    const id                       = (form.get('id') as string | null) ?? ''
+    const title                    = (form.get('title') as string | null)?.trim() ?? ''
+    const contentBlocks            = form.get('content_blocks') as string | null
+    const specifications           = form.get('specifications') as string | null
+    const requiresIssuerSignature  = form.get('requires_issuer_signature') === 'true'
 
     if (!id)    return fail(400, { error: 'ID가 없습니다.' })
     if (!title) return fail(400, { error: '계약서 제목을 입력해주세요.' })
@@ -103,6 +110,7 @@ export const actions: Actions = {
         title,
         content_blocks: parsedBlocks,
         specifications: parsedSpecs,
+        requires_issuer_signature: requiresIssuerSignature,
         updated_at: new Date().toISOString(),
       })
       .eq('id', id)
@@ -116,7 +124,8 @@ export const actions: Actions = {
     const { session } = await locals.safeGetSession()
     if (!session) return fail(401, { error: '인증 필요' })
     const cmsRole = await getCmsRoleForAction(locals)
-    if (!cmsRole) return fail(403, { error: '권한 없음' })
+    // P7-2: manager 이상만 허용
+    if (!cmsRole || !hasSettingsAccess(cmsRole)) return fail(403, { error: '권한 없음' })
 
     const admin = createClient(PUBLIC_SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
     const form  = await request.formData()

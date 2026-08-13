@@ -4,11 +4,13 @@ import { PUBLIC_SUPABASE_URL } from '$env/static/public'
 import { json } from '@sveltejs/kit'
 import type { RequestHandler } from './$types'
 import { getCmsRoleForAction } from '$lib/server/getCmsRoleForAction'
+import { hasSettingsAccess } from '$lib/utils/cmsPermissions'
 
 export const GET: RequestHandler = async ({ params, locals }) => {
   const cmsRole = await getCmsRoleForAction(locals)
-  if (!cmsRole) {
-    return json({ error: '권한 없음' }, { status: 401 })
+  // P7-4: manager 이상만 허용 (GET/PATCH 양쪽 모두 — 한쪽만 막으면 다른 경로로 열람 가능)
+  if (!cmsRole || !hasSettingsAccess(cmsRole)) {
+    return json({ error: '권한 없음' }, { status: 403 })
   }
 
   const admin      = createClient(PUBLIC_SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
@@ -28,8 +30,9 @@ export const GET: RequestHandler = async ({ params, locals }) => {
 
 export const PATCH: RequestHandler = async ({ params, locals, request }) => {
   const cmsRole = await getCmsRoleForAction(locals)
-  if (!cmsRole) {
-    return json({ error: '권한 없음' }, { status: 401 })
+  // P7-4: manager 이상만 허용
+  if (!cmsRole || !hasSettingsAccess(cmsRole)) {
+    return json({ error: '권한 없음' }, { status: 403 })
   }
 
   const admin      = createClient(PUBLIC_SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
