@@ -20,7 +20,7 @@ export type MappingItemSimple = {
   max_sequence: number | null        // 순번2(자식) 상한 — NULL = 무제한
   parent_max_sequence: number | null // 순번1(부모) 상한 — NULL = 2단 미사용
 }
-export type TaxonomyCodeSimple = { id: string; code: string; name: string; product_category: string | null; depth: number }
+export type TaxonomyCodeSimple = { id: string; code: string; name: string; product_category: string | null; depth: number; code_tier?: string | null }
 export type RentalPeriodSimple = { id: string; name: string; display_order: number }
 export type RentalMethodSimple = { id: string; name: string; display_order: number }
 export type PickupPointSimple  = { id: string; name: string; address: string }
@@ -62,7 +62,7 @@ export const load: PageServerLoad = async ({ locals }) => {
   if (codeIds.length > 0) {
     const { data: codes } = await admin
       .from('product_category_codes')
-      .select('id, code, name, product_category, depth')
+      .select('id, code, name, product_category, depth, code_tier')
       .in('id', codeIds)
       .eq('is_active', true)
       .is('deleted_at', null)
