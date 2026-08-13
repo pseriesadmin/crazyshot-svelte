@@ -4,11 +4,16 @@ import { PUBLIC_SUPABASE_URL } from '$env/static/public'
 import { json } from '@sveltejs/kit'
 import type { RequestHandler } from './$types'
 import { getCmsRoleForAction } from '$lib/server/getCmsRoleForAction'
+import { hasSettingsAccess } from '$lib/utils/cmsPermissions'
+import { recordAuditLog } from '$lib/contract-signature/auditLog'
+import { checkIssuerSignatureRequired } from '$lib/contract-signature/issuerSignatureCheck'
+import { sendPushToUser } from '$lib/server/push'
 
 export const POST: RequestHandler = async ({ params, locals, url }) => {
   const cmsRole = await getCmsRoleForAction(locals)
-  if (!cmsRole) {
-    return json({ error: '권한 없음' }, { status: 401 })
+  // P7-5: manager 이상만 계약서 발행·발송 허용
+  if (!cmsRole || !hasSettingsAccess(cmsRole)) {
+    return json({ error: '권한 없음' }, { status: 403 })
   }
 
   const admin      = createClient(PUBLIC_SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
@@ -23,6 +28,17 @@ export const POST: RequestHandler = async ({ params, locals, url }) => {
 
   if (contractErr || !contract) {
     return json({ error: '계약서를 찾을 수 없습니다.' }, { status: 404 })
+  }
+
+  // P8B-4: 발행자 서명 필수 플래그 강제 검증
+  // SupabaseClient → unknown → CheckAdminClient 순서로 캐스팅 (제네릭 추론 폭발 방지)
+  type CheckClient = Parameters<typeof checkIssuerSignatureRequired>[0]
+  const sigCheck = await checkIssuerSignatureRequired(
+    admin as unknown as CheckClient,
+    contractId,
+  )
+  if (sigCheck.blocked) {
+    return json({ error: sigCheck.reason ?? '발행자 서명이 필요합니다.' }, { status: 422 })
   }
 
   // contract_signings: 존재하면 재사용, 없으면 신규 생성
@@ -141,6 +157,24 @@ export const POST: RequestHandler = async ({ params, locals, url }) => {
   if (msgErr) {
     return json({ error: '메시지 발송 실패' }, { status: 500 })
   }
+
+  // 고객 FCM 푸시 병행 발송 (채팅과 독립 — 실패해도 위 처리에 영향 없음, 갭#4 수정 2026-08-12)
+  // 딥링크는 서명 URL 자체로 지정 — 클릭 즉시 서명 화면으로 이동
+  await sendPushToUser(contract.user_id, 'contract_sent', {
+    title: '전자계약이 도착했어요',
+    body: '계약서를 확인하고 서명해주세요.',
+    link: signingUrl,
+  })
+
+  // P8A-3: sent 이벤트 감사로그 (silent fail)
+  const { session } = await locals.safeGetSession()
+  await recordAuditLog(admin as Parameters<typeof recordAuditLog>[0], {
+    contractId: contractId as string,
+    eventType:  'sent',
+    actorType:  'admin',
+    actorId:    session?.user?.id ?? null,
+    ipAddress:  null, // POST handler에서 getClientAddress 미사용 (기존 패턴 유지)
+  })
 
   return json({ ok: true, signingUrl })
 }
