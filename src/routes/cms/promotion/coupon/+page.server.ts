@@ -1,8 +1,13 @@
 import { redirect } from '@sveltejs/kit'
+import { env } from '$env/dynamic/private'
+import { getSupabaseUrl } from '$lib/env/supabasePublic'
+import { createClient } from '@supabase/supabase-js'
 import { hasSettingsAccess } from '$lib/utils/cmsPermissions'
 import { getCmsRoleForAction } from '$lib/server/getCmsRoleForAction'
 import type { PageServerLoad, Actions } from './$types'
 import type { Coupon } from '$lib/types/database'
+
+export type CouponCategoryOption = { value: string; label: string }
 
 export type CouponStats = {
   total_issued: number
@@ -49,6 +54,21 @@ export const load: PageServerLoad = async ({ parent, locals, url }) => {
   // migration #48·#49·#51 신설 테이블/RPC — 타입 캐스트
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const admin = locals.supabase as unknown as any
+
+  // BND-COUPON-CAT-1: "적용 카테고리" 선택지는 하드코딩 대신 백오피스(code_mapping_groups)
+  // 기준으로 반영 — products/new·subscriptions/new와 동일한 소스·필터 컨벤션
+  const serviceAdmin = createClient(getSupabaseUrl(), env.SUPABASE_SERVICE_ROLE_KEY ?? '')
+  const { data: categoryRows } = await serviceAdmin
+    .from('code_mapping_groups')
+    .select('default_category, name')
+    .not('default_category', 'is', null)
+    .eq('is_active', true)
+    .eq('show_in_product_filter', true)
+    .order('sort_order', { ascending: true })
+  const categoryOptions: CouponCategoryOption[] = (categoryRows ?? []).map((r) => ({
+    value: r.default_category as string,
+    label: r.name,
+  }))
 
   // 쿠폰 통계 (확장 — migration #51)
   const { data: statsRaw } = await admin.rpc('get_coupon_stats')
@@ -115,6 +135,7 @@ export const load: PageServerLoad = async ({ parent, locals, url }) => {
     expiringSoon: (expiringSoon ?? []) as Coupon[],
     expiredCoupons: (expiredCoupons ?? []) as Coupon[],
     period, from, to,
+    categoryOptions,
   }
 }
 
