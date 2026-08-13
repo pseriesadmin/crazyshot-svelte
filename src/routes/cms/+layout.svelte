@@ -70,10 +70,11 @@
   })
 
   type SubMenu = { label: string; href: string }
-  type MainMenu = { id: string; label: string; subMenus: SubMenu[] }
+  type MainMenu = { id: string; label: string; href?: string; subMenus: SubMenu[] }
 
   // $derived 필수: use:enhance 로그인 후 data.cmsRole 갱신 시 subMenus 재계산
   let mainMenus = $derived<MainMenu[]>([
+    { id: 'dashboard', label: '홈', href: '/cms', subMenus: [] },
     {
       id: 'consulting',
       label: '상담',
@@ -142,6 +143,7 @@
   ])
 
   function resolveActiveMenuId(pathname: string): string {
+    if (pathname === '/cms') return 'dashboard'
     if (pathname.startsWith('/cms/promotion')) return 'promotion'
     if (pathname.startsWith('/cms/set'))       return 'settings'
     if (pathname.startsWith('/cms/codes'))    return 'settings'
@@ -158,7 +160,7 @@
   let activeMenu   = $derived(mainMenus.find((m) => m.id === activeMenuId) ?? mainMenus[0])
 
   function mainMenuHref(menu: MainMenu): string {
-    return menu.subMenus[0]?.href ?? '#'
+    return menu.href ?? menu.subMenus[0]?.href ?? '#'
   }
 
   function isSubTabActive(sub: SubMenu): boolean {

@@ -119,6 +119,9 @@ export default [
         FileList: 'readonly',
         DragEvent: 'readonly',
         MouseEvent: 'readonly',
+        requestAnimationFrame: 'readonly',
+        cancelAnimationFrame: 'readonly',
+        performance: 'readonly',
       },
     },
     plugins: {
