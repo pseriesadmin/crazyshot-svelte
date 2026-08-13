@@ -16,10 +16,14 @@
   // CS-A2: 서버측 재검증 실패 시 에러 메시지 표시
   let serverExpiredError = $state(false)
 
-  // 상품 이미지 URL (Cloudinary)
+  // 상품 이미지 URL — product_image는 Cloudinary public_id 또는 Supabase Storage 전체 URL
+  // 둘 다 올 수 있음(products.image_urls 저장 형식이 실제로 Storage 전체 URL이라 ProductHero.svelte와
+  // 동일하게 방어 분기 필요 — L1 QA 재검수에서 발견된 회귀 수정, chatActionEnrich.ts:113-115 참고)
   let imageUrl = $derived(
     payload.product_image
-      ? `https://res.cloudinary.com/crazyshot/image/upload/w_128,h_128,c_fill,f_auto,q_auto/${payload.product_image}.jpg`
+      ? payload.product_image.startsWith('http')
+        ? payload.product_image
+        : `https://res.cloudinary.com/crazyshot/image/upload/w_128,h_128,c_fill,f_auto,q_auto/${payload.product_image}.jpg`
       : null
   )
 
@@ -46,6 +50,10 @@
       case 'coupon_issued':          return { label: '쿠폰 적용하기', color: 'purple' }
       case 'contract_link':          return { label: '전자계약 보기', color: 'purple' }
       case 'contract_signed':        return { label: '전자계약 확인', color: 'purple' }
+      // GSD-17: 제품 링크 카드 (관리자 @ 멘션으로 삽입)
+      case 'product_link':           return { label: '상품 상세 보기', color: 'purple' }
+      // GSD-20: CTA가 있는 자동응답 카드
+      case 'canned_cta':             return { label: payload.button_label ?? '확인하기', color: 'purple' }
       default:                       return { label: '확인하기', color: 'purple' }
     }
   }
@@ -90,8 +98,58 @@
 </script>
 
 <div class="action-card" class:expired={isExpired || serverExpiredError}>
+  <!-- GSD-17: product_link 전용 렌더링 (썸네일+상품명+가격+상세보기 링크) -->
+  {#if payload.type === 'product_link'}
+    <div class="product-link-card">
+      {#if imageUrl}
+        <img
+          class="product-img"
+          src={imageUrl}
+          alt="{payload.product_name ?? '상품'} 이미지"
+          width="64"
+          height="64"
+          loading="lazy"
+        />
+      {:else}
+        <div class="product-img product-img--placeholder" aria-hidden="true"></div>
+      {/if}
+      <div class="product-meta">
+        <p class="product-link-badge">상품 안내</p>
+        {#if payload.product_name}
+          <p class="product-name">{payload.product_name}</p>
+        {/if}
+        {#if payload.product_price}
+          <p class="product-link-price">{payload.product_price.toLocaleString()}원/일</p>
+        {/if}
+        {#if payload.product_slug}
+          <a
+            class="product-link-btn"
+            href="/products/{payload.product_slug}"
+            target="_blank"
+            rel="noopener noreferrer"
+            aria-label="{payload.product_name ?? '상품'} 상세 보기"
+          >상세 보기 →</a>
+        {:else if payload.product_id}
+          <a
+            class="product-link-btn"
+            href="/products/{payload.product_id}"
+            target="_blank"
+            rel="noopener noreferrer"
+            aria-label="{payload.product_name ?? '상품'} 상세 보기"
+          >상세 보기 →</a>
+        {:else if ctaUrl}
+          <a
+            class="product-link-btn"
+            href={ctaUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+          >{ctaLabel}</a>
+        {/if}
+      </div>
+    </div>
+
   <!-- 상품 정보 행 (이미지 + 메타) -->
-  {#if payload.product_name || imageUrl}
+  {:else if payload.product_name || imageUrl}
     <div class="product-row">
       {#if imageUrl}
         <img
@@ -281,6 +339,44 @@
     border-radius: var(--radius-sm);
     letter-spacing: 1px;
     margin: 0;
+  }
+
+  /* GSD-17: product_link 카드 */
+  .product-link-card {
+    display: flex;
+    gap: 12px;
+    align-items: flex-start;
+    width: 100%;
+  }
+
+  .product-link-badge {
+    font: 700 10px/1 'Noto Sans KR', sans-serif;
+    color: var(--cs-purple);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    margin: 0 0 4px;
+  }
+
+  .product-link-price {
+    font: 400 12px/1.5 'Noto Sans KR', sans-serif;
+    color: var(--cs-text-dark);
+    margin: 0;
+  }
+
+  .product-link-btn {
+    display: inline-block;
+    margin-top: 6px;
+    padding: 5px 12px;
+    background: var(--cs-purple);
+    color: #fff;
+    font: 700 12px/1 'Noto Sans KR', sans-serif;
+    border-radius: 20px;
+    text-decoration: none;
+    transition: filter 0.15s;
+  }
+
+  .product-link-btn:hover {
+    filter: brightness(0.9);
   }
 
   /* 만료 오버레이 */

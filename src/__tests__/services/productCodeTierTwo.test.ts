@@ -112,17 +112,23 @@ function makeTierTwoAdminStub(options: {
     }),
   });
 
-  // 5회차: product_category_codes 전체 조회 (수정 후: .select().in() 직접 await — order/limit 없음)
+  // 5회차: product_category_codes 전체 조회
   // 버그 수정(2026-08-12): 구버전은 depth 역순 limit(1)으로 단일 코드만 반환했으나
   // 수정 후는 모든 코드를 한 번에 반환해 buildComboCategoryCode()로 합산함
+  // 버그 수정(2026-08-13): load()(활성/미삭제 필터)와 미리보기가 어긋나던 비대칭 수정으로
+  // .in() 뒤에 .eq('is_active', true).is('deleted_at', null) 체이닝이 추가됨 — mock도 동일하게 반영
   fromFn.mockReturnValueOnce({
     select: vi.fn().mockReturnValue({
-      in: vi.fn().mockResolvedValue({
-        data: [
-          { id: 'code-id-1', code: 'CAM', code_tier: 'major', depth: 0 },
-          { id: 'code-id-2', code: 'SLR', code_tier: 'minor', depth: 2 },
-        ],
-        error: null,
+      in: vi.fn().mockReturnValue({
+        eq: vi.fn().mockReturnValue({
+          is: vi.fn().mockResolvedValue({
+            data: [
+              { id: 'code-id-1', code: 'CAM', code_tier: 'major', depth: 0 },
+              { id: 'code-id-2', code: 'SLR', code_tier: 'minor', depth: 2 },
+            ],
+            error: null,
+          }),
+        }),
       }),
     }),
   });

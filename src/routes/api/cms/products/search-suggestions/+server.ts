@@ -46,9 +46,10 @@ export const GET: RequestHandler = async ({ url, locals }) => {
   const admin = createClient(PUBLIC_SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
 
   // ── 1차: ilike 4필드 OR 검색 (기존 productSearchOrFilter 로직 그대로) ────────
+  // L1 QA Fix: image_urls(썸네일), slug(상품 링크) 추가
   let ilikeQ = admin
     .from('products')
-    .select('id, name, brand, category, product_code, description, product_caption')
+    .select('id, name, brand, category, product_code, description, product_caption, image_urls, slug')
     .or(productSearchOrFilter(q))
     .is('deleted_at', null)
     .is('parent_product_id', null)
@@ -72,63 +73,94 @@ export const GET: RequestHandler = async ({ url, locals }) => {
     product_code: string | null
     description: string | null
     product_caption: string | null
+    // L1 QA Fix: 이미지·슬러그 추가 (@ 멘션 product_link 썸네일용)
+    image_urls: string[] | null
+    slug: string | null
   }
 
   const ilikeRows = (ilikeData ?? []) as ProductRow[]
 
+  // L1 QA Fix: 확장 아이템 타입 (image_url·slug 포함)
+  type ExtendedItem = SimilarNameItem & { image_url: string | null; slug: string | null }
+
   // ilike 결과를 SimilarNameItem 형태로 변환 (match_label 포함)
-  const ilikeItems: SimilarNameItem[] = ilikeRows.map((row) => ({
+  const ilikeItems: ExtendedItem[] = ilikeRows.map((row) => ({
     id: row.id,
     name: row.name,
     brand: row.brand,
     category: row.category,
     product_code: row.product_code,
     match_label: resolveProductSearchMatchLabel(row, q),
+    // L1: Cloudinary public_id = image_urls[0], slug = URL에 사용될 슬러그
+    image_url: (row.image_urls as string[] | null)?.[0] ?? null,
+    slug: row.slug ?? null,
   }))
 
   // ilike 결과가 충분하면 자연어 폴백 없이 반환
   const shouldFallback = ilikeRows.length <= WEAK_MATCH_THRESHOLD
 
-  if (!shouldFallback) {
-    return json(ilikeItems)
-  }
+  let finalItems: ExtendedItem[] = ilikeItems
 
-  // ── 2차: MiniSearch 자연어 폴백 (ilike 결과 약할 때만 보강) ───────────────────
-  // (getProductSearchIndex는 is_active=true·deleted_at IS NULL·parent_product_id IS NULL 필터 내장)
-  try {
-    const index = await getProductSearchIndex()
-    const naturalResults = index.search(q, {
-      fuzzy: 0.2,
-      prefix: true,
-      limit: limit * 2, // dedupe 여유분 확보
-    })
+  if (shouldFallback) {
+    // ── 2차: MiniSearch 자연어 폴백 (ilike 결과 약할 때만 보강) ─────────────
+    // (getProductSearchIndex는 is_active=true·deleted_at IS NULL·parent_product_id IS NULL 필터 내장)
+    try {
+      const index = await getProductSearchIndex()
+      const naturalResults = index.search(q, {
+        fuzzy: 0.2,
+        prefix: true,
+        limit: limit * 2, // dedupe 여유분 확보
+      })
 
-    if (naturalResults.length === 0) {
-      return json(ilikeItems)
+      if (naturalResults.length > 0) {
+        // ilike 결과 id 집합 (dedupe 기준)
+        const ilikeIdSet = new Set(ilikeRows.map((r) => r.id))
+
+        // ilike 결과에 없는 자연어 결과만 추가 (ilike 우선 원칙)
+        const fallbackItems: ExtendedItem[] = naturalResults
+          .filter((r) => !ilikeIdSet.has(r.document.id))
+          .map((r) => ({
+            id: r.document.id,
+            name: String(r.document['name'] ?? ''),
+            brand: (r.document['brand'] as string | null) || null,
+            category: (r.document['category'] as string | null) || null,
+            product_code: null, // productSearchIndex storeFields에 product_code 없음 → null
+            match_label: '키워드·상세', // NLSearch 폴백 전용 레이블 (keywords/specs/components 매칭)
+            // MiniSearch 인덱스에는 image_urls·slug 미포함 → null
+            image_url: null,
+            slug: null,
+          }))
+
+        // 병합: ilike 결과 먼저, 자연어 폴백 뒤에 추가
+        finalItems = [...ilikeItems, ...fallbackItems].slice(0, limit)
+      }
+    } catch (e) {
+      // 자연어 폴백 실패 시 ilike 결과만 반환 (서비스 중단 방지)
+      console.error('[cms/products/search-suggestions] 자연어 폴백 오류:', e)
     }
-
-    // ilike 결과 id 집합 (dedupe 기준)
-    const ilikeIdSet = new Set(ilikeRows.map((r) => r.id))
-
-    // ilike 결과에 없는 자연어 결과만 추가 (ilike 우선 원칙)
-    const fallbackItems: SimilarNameItem[] = naturalResults
-      .filter((r) => !ilikeIdSet.has(r.document.id))
-      .map((r) => ({
-        id: r.document.id,
-        name: String(r.document['name'] ?? ''),
-        brand: (r.document['brand'] as string | null) || null,
-        category: (r.document['category'] as string | null) || null,
-        product_code: null, // productSearchIndex storeFields에 product_code 없음 → null
-        match_label: '키워드·상세', // NLSearch 폴백 전용 레이블 (keywords/specs/components 매칭)
-      }))
-
-    // 병합: ilike 결과 먼저, 자연어 폴백 뒤에 추가
-    const merged = [...ilikeItems, ...fallbackItems].slice(0, limit)
-
-    return json(merged)
-  } catch (e) {
-    // 자연어 폴백 실패 시 ilike 결과만 반환 (서비스 중단 방지)
-    console.error('[cms/products/search-suggestions] 자연어 폴백 오류:', e)
-    return json(ilikeItems)
   }
+
+  // L1 QA Fix: 24시간 가격 조회 및 병합 (@ 멘션 product_link 가격 표시용)
+  if (finalItems.length > 0) {
+    const finalIds = finalItems.map((r) => r.id)
+    const { data: priceData } = await admin
+      .from('price_rules')
+      .select('product_id, price')
+      .in('product_id', finalIds)
+      .eq('duration_type', '24h')
+      .is('deleted_at', null)
+      .eq('is_active', true)
+
+    type PriceRow = { product_id: string; price: number }
+    const priceMap = new Map<string, number>(
+      (priceData ?? []).map((pr) => [(pr as PriceRow).product_id, (pr as PriceRow).price])
+    )
+
+    return json(finalItems.map((item) => ({
+      ...item,
+      price_24h: priceMap.get(item.id) ?? null,
+    })))
+  }
+
+  return json(finalItems)
 }

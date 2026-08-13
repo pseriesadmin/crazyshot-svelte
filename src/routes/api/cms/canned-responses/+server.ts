@@ -18,6 +18,9 @@ export interface CannedResponse {
   usage_count: number
   created_by: string | null
   created_at: string
+  image_url?: string | null
+  cta_label?: string | null
+  cta_url?: string | null
 }
 
 // GET /api/cms/canned-responses?category=return
@@ -32,7 +35,7 @@ export const GET: RequestHandler = async ({ locals, url }) => {
 
   let query = admin
     .from('canned_responses')
-    .select('id, title, content, category, shortcut, match_keywords, usage_count, created_at')
+    .select('id, title, content, category, shortcut, match_keywords, usage_count, created_at, image_url, cta_label, cta_url')
     .order('usage_count', { ascending: false })
     .order('title', { ascending: true })
 
@@ -62,6 +65,9 @@ export const POST: RequestHandler = async ({ locals, request }) => {
   const category = body.category ?? null
   const shortcut = body.shortcut ? body.shortcut.trim() || null : null
   const matchKeywords = normalizeKeywords(body.match_keywords)
+  const imageUrl  = typeof body.image_url === 'string' ? body.image_url.trim() || null : null
+  const ctaLabel  = typeof body.cta_label === 'string' ? body.cta_label.trim() || null : null
+  const ctaUrl    = typeof body.cta_url === 'string'   ? body.cta_url.trim() || null : null
 
   if (!title)   return json({ error: '제목을 입력해주세요.' }, { status: 400 })
   if (!content) return json({ error: '내용을 입력해주세요.' }, { status: 400 })
@@ -82,8 +88,11 @@ export const POST: RequestHandler = async ({ locals, request }) => {
       shortcut,
       match_keywords: matchKeywords,
       created_by: session.user.id,
+      image_url: imageUrl,
+      cta_label: ctaLabel,
+      cta_url: ctaUrl,
     })
-    .select('id, title, content, category, shortcut, match_keywords, usage_count, created_at')
+    .select('id, title, content, category, shortcut, match_keywords, usage_count, created_at, image_url, cta_label, cta_url')
     .single()
 
   if (error) {

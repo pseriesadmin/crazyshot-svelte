@@ -150,6 +150,9 @@
   let selectedGroupId    = $state<string | null>(null)
   let selectedComboRowId = $state<string | null>(null)
   let comboNameByRowId   = $state<Record<string, string | null>>({})
+  // SuggestPicker가 넘기는 previousId는 검색창 재입력 중 조용히 null이 될 수 있어(핸들러 내부
+  // 직접 대입, onselect 미경유) 신뢰할 수 없다 — 이 화면이 직접 확정된 그룹만 추적해 비교한다.
+  let lastConfirmedGroupId = $state<string | null>(null)
 
   const DEFAULT_CODE_FORMAT: CodeFormat = {
     prefix: 'CS',
@@ -344,13 +347,19 @@
     }))
   )
 
-  function onGroupPickerSelect(opt: SuggestPickerOption, previousId: string | null) {
-    if (opt.id !== previousId) onGroupChange()
+  function onGroupPickerSelect(opt: SuggestPickerOption, _previousId: string | null) {
+    // ⚠️ SuggestPicker의 previousId는 검색창 재입력 도중(정확히 일치하지 않는 입력) 내부적으로
+    // selectedId를 조용히 null로 만들었다가 재선택 시 넘어오므로 신뢰 불가 —
+    // 같은 그룹을 재선택한 것으로 오인해 콤보 선택(selectedComboRowId)을 지워버리는 버그가 있었다.
+    // 이 화면이 직접 확정한 lastConfirmedGroupId와 비교해 진짜 그룹 변경 시에만 리셋한다.
+    if (opt.id !== lastConfirmedGroupId) onGroupChange()
+    lastConfirmedGroupId = opt.id
   }
 
   function onGroupPickerInput(val: string) {
     if (!val.trim() && selectedGroupId) {
       selectedGroupId = null
+      lastConfirmedGroupId = null
       onGroupChange()
     }
   }

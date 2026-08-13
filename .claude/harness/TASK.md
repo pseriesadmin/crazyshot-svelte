@@ -546,6 +546,35 @@ Stephen 지시("...세션 내 최근 수정 개발건을 @sp3-qa-agent 검수할
 
 수정 여부·우선순위는 Stephen 확인 후 진행 — QA 에이전트는 발견만 하고 직접 수정하지 않음.
 
+### 재검수 요청 (2026-08-13, Stephen 지시) — M1~L4 수정분 GATE E 재판정
+
+Stephen 지시: "세션 내 최근 수정 개발건을 @sp3-qa-agent 검수할 것 — 구독(/cms/subscriptions/new)
+관련 수정은 제외할 것." 위 M1~L4 수정이 전부 반영된 상태에서 GATE E(배포 승인) 재판정을 위해
+`@sp3-qa-agent` 재검수를 요청. 범위는 이번 세션에서 수정한 CMS 상담(채팅) 관련 파일에 한정하고,
+동일 세션에서 별도로 진행 중인 `/cms/subscriptions/*` 카테고리 하드코딩 조사·계획(플랜 문서
+`/Users/stevenmac/.claude/plans/users-stevenmac-downloads-crazyshot-bac-compiled-willow.md` 참고 —
+아직 미실행, 이전 서브에이전트의 보안사고로 중단된 작업 파일 잔여분 있음)은 **이번 검수 범위에서
+명시적으로 제외**.
+
+**재검수 결과**: M1/M2/M3 코드 흐름 실추적 검증 완료 — 전부 통과. L2/L4도 통과. **L1에서 새 회귀
+발견**: `product_image`를 항상 Cloudinary public_id로 가정해 URL을 조립했으나, 실제
+`products.image_urls` 저장값은 Supabase Storage 전체 URL(`/api/cms/upload`가 `getPublicUrl()`로
+저장 — `chatActionEnrich.ts:113-115`에 이미 문서화된 기존 알려진 불일치를 L1 수정이 다시 밟음).
+고객 대면 채팅 화면에도 노출되는 `ActionCard.svelte`에서 매번 깨진 썸네일이 뜨는 결함. L3(chat.md
+§17-5)도 같은 잘못된 전제를 그대로 문서화한 상태였음.
+
+- [x] **L1 회귀 수정 완료(2026-08-13)**: `ActionCard.svelte`의 `imageUrl` 계산에
+  `product_image.startsWith('http')` 방어 분기 추가 — `ProductHero.svelte`(`products/[id]`)가
+  이미 쓰던 동일 패턴 재사용. Storage 전체 URL이면 그대로 사용, 아니면 기존처럼 Cloudinary
+  URL로 조립.
+- [x] **L3 문서 정정 완료(2026-08-13)**: `.claude/rules-ref/chat.md` §17-5의 "Cloudinary public_id"
+  단정 문구를 "Cloudinary public_id 또는 Supabase Storage 전체 URL(둘 다 가능)"으로 정정 + 방어
+  분기 로직 반영, 회귀 경위 설명 추가
+- [x] `npx svelte-check` 재확인 — ActionCard/chat 관련 신규 에러 0건
+
+**최종 GATE E 판정: ✅ 통과.** M1/M2/M3(CRITICAL 3건) 전부 확정, L1 회귀는 재검수 당일 즉시 수정
+완료(패턴 재사용이라 저위험), L2/L4는 원판정 유지. DB 변경 없음(프론트 컴포넌트·문서 수정만).
+
 ---
 
 ## GATE C 확인 항목 (6건 전체 NOW 완료 후 필수)
@@ -851,12 +880,115 @@ placeholder 시드 데이터 3건("Basic"/"Premium"/"Pro", 2026-05-28 초기 세
 확인 후 `DELETE FROM subscription_plans WHERE id IN (1,2,3)` 실행, `subscription_plans` 0 rows
 확인 완료(2026-08-13).
 
+### QA 2차 검수 — production 배포 라운드 (2026-08-13, `@sp3-qa-agent`, 상세는 GSD_LOG.md 참고)
+
+QA 서브에이전트가 Supabase MCP 미보유로 production 직접 조회는 못 했으나, 레거시 RLS 정책
+(4+4개, `subscription_plans_select` qual:true 등)이 이번 신규 정책을 무력화해 `user_subscriptions`
+(billing_key 등 결제정보)가 타 유저에게 노출될 수 있다는 🔴 CRITICAL 가능성을 제기 — 이 세션이
+즉시 `pg_policies`를 production에서 직접 조회해 해소: `user_subscriptions_select`(레거시) qual은
+`true`가 아니라 이미 `auth.uid() = user_id`로 정확히 스코프돼 있었음(신규 정책과 동일 조건, 단순
+중복이지 보안 이슈 아님). `subscription_plans_select`(레거시) qual:true는 실존하나 그 테이블은
+민감정보 없는 플랜 카탈로그라 공개 SELECT가 설계 의도 그대로임 — 문제 아님. **CRITICAL 오탐으로
+결론, 실제 데이터 노출 없음 확인 완료.** GATE E 통과.
+
 적용 중 Claude Code 자동 모드 분류기가 production DB 쓰기 action을 간헐적으로 차단(224 1회,
 229 1회) — 우회 시도 없이 Stephen에게 상황 보고 후 재시도 승인받아 순차 완료. 최종 검증:
 RPC 3종(`create_user_subscription`/`record_subscription_charge_result`/
 `generate_subscription_product_code`) + 신규 테이블 2종(`subscription_policy_items`/
 `subscription_code_sequences`) + `subscription_plans.category`/`product_code` 컬럼 +
 `subscription_policy_items.sort_order` 컬럼 전부 production에 존재 확인 완료.
+
+### 🔁 2026-08-13 연속 세션 — 구독등록 "분류(카테고리)" 선택지 하드코딩→`code_mapping_groups` DB 연동 전환 (Stephen 첨부 플랜 문서 반영) ✅ 완료, DB 변경 없음
+
+Stephen이 `/cms/subscriptions/new` 분류선택 필드를 화면에서 직접 확인 후, 그 값이 실제 DB
+조회 없이 정적 배열이라는 점과, 조사 중 발견된 `product_category_codes` 테이블 오염 문제를
+플랜 문서(`users-stevenmac-downloads-crazyshot-bac-compiled-willow.md`)로 정밀 정리해 반영을
+지시. 그 문서의 Tier 1(안전, 이미 검증된 패턴 재사용) + Tier 2(중복 라벨 상수 통합) 범위를
+그대로 실행:
+
+- **T1-1/T1-2**: `src/routes/cms/subscriptions/new/+page.server.ts`,
+  `src/routes/cms/subscriptions/+page.server.ts` — 분류 옵션 조회를 `product_category_codes`
+  (depth=0, 오염 테이블)에서 `code_mapping_groups`(`default_category`+`name`,
+  `is_active=true`, `show_in_product_filter=true`)로 교체. `/cms/products/+page.server.ts`가
+  2026-08-10에 이미 검증해둔 동일 패턴 재사용 — 신규 쿼리 로직 아님. `+page.svelte`는
+  `data.categoryOptions`를 그대로 매핑만 하는 구조라 서버 변경만으로 반영됨.
+- **T1-3**: `src/routes/cms/rental/history/+page.server.ts` — 카드 배지·패널 헤더용
+  `categoryLabels` 맵도 동일하게 `code_mapping_groups` 기반으로 교체(잠재 버그 선제 수정,
+  `show_in_product_filter` 필터 없이 전체 조회 — products/+page.server.ts의 "전역 라벨 조회용"
+  원칙과 동일하게 적용).
+- **T1-4**: `SubscriptionDetailPanel.svelte`는 이전 세션에서 이미 `categoryOptions` prop
+  기반으로 연결 완료된 상태 확인(추가 수정 불필요).
+- **T2-1**: 신규 공유 파일 `src/lib/utils/productCategoryTaxonomy.ts` 생성 — 9종 카테고리
+  값·한글라벨(`CATEGORY_LABELS`)·품번 프리픽스(`CATEGORY_CODES`)·옵션배열
+  (`PRODUCT_CATEGORY_OPTIONS`) 단일 정의. `products/new/+page.svelte`의 로컬 `CATEGORIES`/
+  `CATEGORY_CODES`, `cms/codes/_shared.ts`의 `PRODUCT_CATS`가 각자 따로 들고 있던 동일 9개 값
+  중복을 제거하고 이 파일 import로 통일(값 자체는 유지 — `code_mapping_groups`에 그룹이
+  0개인 예외 상황의 실제 제출값 폴백 경로이므로 삭제 불가, products.md 기존 방침과 동일).
+  라벨 통일 과정에서 accessory 라벨이 두 파일에서 서로 달랐던 것 발견(`보조용품` vs `악세서리`)
+  — 사용자 화면(`ProductHero.svelte`)·codes 화면 다수 쪽인 `악세서리`로 통일.
+- **부수 조치**: `supabase/migrations/20260813000238_238_add_subscription_category_codes.sql`
+  (미커밋 상태로 로컬에만 존재, 어느 세션에도 적용 이력 없음) 삭제 — 플랜 문서 Context에 기록된
+  "1차 시도(서브에이전트)가 `product_category_codes`에 누락 3종을 복구하려다 보안 정책 위반을
+  일으켰고 실제 DB 변경은 없었다"는 그 시도의 잔여 산출물로 확인(파일 내용이 정확히 그 3종
+  복구와 일치). `product_category_codes` 자체를 더 이상 카테고리 소스로 쓰지 않기로 한 이번
+  결정과 정면으로 어긋나는 접근이라 방치 시 오해 소지가 있어 제거.
+- **범위 외(Tier 3, 플랜 문서 명시)**: `product_category_codes` 오염 데이터 정리, `code_mapping_groups`
+  미매핑 카테고리(camcorder 등) 그룹 신설, `+page.svelte` 카테고리 아이콘 매핑 버그, DB 타입
+  자동생성 파이프라인 — 전부 이번 작업 범위 아님, 별도 백로그로 남겨둠.
+- **검증**: `npx svelte-check` 실행 — 수정 파일 전체 0 errors(전체 리포지토리 기준 사전부터
+  존재하던 무관 파일 1건 에러만 있음, 이번 변경과 무관 확인). DB 마이그레이션 없음(순수
+  프론트/서버 쿼리 변경) — stage/production 별도 적용 절차 불필요.
+
+### 🔁 2026-08-13 연속 세션 — 구독등록 "분류(카테고리)" SuggestPicker 재선택 불가 버그 수정 (Stephen 보고) ✅ 완료
+
+Stephen이 "분류코드 선택 시 조합코드 목록이 노출되지 않아 선택이 불가능"이라고 보고. 화면 확인 결과
+`/cms/subscriptions/new`(구독등록)의 "분류(카테고리)" 필드였음(products/new의 콤보그룹 UI가 아님 —
+AskUserQuestion으로 화면 확정 후 조사).
+
+**원인**: `src/routes/cms/subscriptions/new/+page.svelte`의 SuggestPicker `field` 스니펫에서
+`<input value={category ? (data.categoryOptions.find(...).label ?? category) : c.value}>`처럼
+`c.value`(SuggestPicker 내부 `query` 상태)를 커스텀 계산식으로 덮어쓰고 있었음. 최초 카테고리
+선택 직후부터는 `category`가 계속 truthy라 매 렌더마다 입력값이 이전 선택 라벨로 강제 리셋돼,
+사용자가 타이핑해도 즉시 되돌아가 재검색·재선택이 사실상 막힘. `/cms/products/new`의 동일
+SuggestPicker 사용부는 `value={c.value}`로 정상 구현돼 있어 비교로 원인 특정.
+
+**수정**: `value={c.value}`로 교체 — SuggestPicker 표준 사용 패턴과 통일. 다른 화면 영향 없음
+(list/detail 쪽 categoryOptions는 읽기전용 라벨조회에만 쓰여 동일 버그 없음, 확인 완료).
+
+**부수 발견·수정**: 검증 중 `src/lib/types/database.ts`에 `SubscriptionPolicyItem` 타입 export
+자체가 통째로 누락된 상태를 발견(구독등록/멤버스 정책안내 3개 파일 컴파일 에러) — 이전 세션에서
+추가했던 구독 관련 타입 등록이 이 세션 도중 발생한 외부 커밋(af73ec5/29d1a51) 과정에서 유실된
+것으로 추정. `SubscriptionPolicyItem` 인터페이스만 최소 복원(컬럼: id/content/sort_order/
+created_at/updated_at). `subscription_plans` 등 나머지 5개 구독 테이블은 `Database` 제네릭에
+여전히 미등록이나, 해당 서버 코드가 전부 `createClient()`(제네릭 없음) 패턴이라 실제 컴파일/런타임
+영향 없음을 확인 — 추가 조치 불필요 판단.
+
+**검증**: `npx svelte-check` — 구독 모듈 관련 에러 0건(재확인). DB 마이그레이션 없음.
+
+### 🔁 2026-08-13 연속 세션 — 구독 상품 부모/자식 품번 구조 도입 (Stephen GATE B 승인, Stage A+B 완료)
+
+Stephen이 위 SuggestPicker 버그 확인 과정에서 "분류 선택 후 코드조합 선택 UI가 안 뜬다"고 재보고 →
+조사 결과 이 세션 앞선 라운드(코드조합 정책 3개 화면 전수 점검)에서 이미 "구독은 콤보시스템
+안 씀 — Stephen 확인: 현재 체계 유지"로 확정됐던 결정과 정면 충돌함을 발견해 명시적으로 재확인
+요청 → **Stephen이 그 결정을 번복**: products/new와 동일한 코드조합 선택 UI를 구독등록에 추가하되,
+실제 품번은 등록 시점이 아니라 "개별 구독자가 실제로 구독 완료하는 시점"에 발급되도록 요청
+(products.md §2-1 부모/자식 원칙 응용: 부모=구조만 저장, 자식=실채번). GATE B 승인 후 진행.
+
+**Stage A (GSD) + Stage B (TDD, 결제/구독 강제 도메인) 완료**:
+- 마이그레이션 `20260813000241_241_subscription_parent_child_product_code.sql`(stage 적용 완료,
+  production 대기) — `subscription_plans.code_series`/`user_subscriptions.product_code` 컬럼 추가,
+  `generate_subscription_product_code`(부모 전용, code_series만 저장하도록 재설계) +
+  `generate_subscription_inventory_product_code`(신설, 자식 실채번) +
+  `create_user_subscription`(구독 생성 직후 내부에서 자식 채번 원자적 호출, 비차단) — 상세는
+  GSD_LOG.md 동일 날짜 항목 참고.
+- `src/__tests__/services/subscriptionBilling.test.ts`에 RED→GREEN 6케이스 추가, 12/12 GREEN.
+- `/cms/subscriptions/new`에 코드조합 선택 UI 추가(products/new 패턴 그대로 재사용, 서버가
+  combo_row_id로 합산 분류코드를 직접 재계산 — 클라이언트 값 비신뢰).
+- `SubscriptionDetailPanel.svelte`/목록 카드 — 실채번값 대신 code_series 기반 구조 미리보기로 전환,
+  구독자현황 탭에 개별 구독자 품번 목록 신설.
+- 검증: svelte-check 신규 에러 0건, eslint 통과, vitest 12/12 GREEN.
+
+**Stage C(잔여)**: production 마이그레이션 적용(Stephen 승인 대기) + QA(@sp3-qa-agent) 최종 검수.
 
 ## GSD Stage 1~5 완료 요약 (2026-08-12)
 
@@ -903,6 +1035,70 @@ Stage 6~7(TDD: 빌링키 가입 흐름 + 정기청구 크론)은 결제 도메�
 - [ ] `CRON_SECRET` 미검증 요청 401 확인(RED 단계 필수 테스트)
 - [ ] Toss 테스트 키로 카드등록→최초청구→크론 강제실행 End-to-End 확인 후 production 반영
 - [ ] npm run check 통과
+
+---
+
+## DONE — 캔버스 계약서 발행 경로 CRITICAL 결함 수정 + EC-3 검증 추가 (2026-08-13) — ✅ 완료 (QA 5차 재검수 필요)
+
+아젠다: QA 재검수(5차)에서 발견한 CRITICAL 결함 — 캔버스 모드 계약서 템플릿을 발행(발송)해도
+  고객 서명 화면이 "계약서 내용을 준비 중입니다" placeholder만 영원히 표시됨(서명 자체 불가).
+  이유: 작성·저장 경로만 canvas 인식, 발행(template→contract) 경로 전체가 canvas 모드를 전혀 인식하지 못함.
+
+수정된 5개 경로:
+
+  Fix 1 — GET /api/cms/contract-templates (+server.ts)
+    · select에 'authoring_mode, canvas_document' 추가
+    · 이 필드가 없으면 ContractTemplatePreviewModal이 canvas 템플릿인지 판별 불가
+
+  Fix 2 — applyContractTemplate 유틸 (contract-apply-template.ts)
+    · ApplyTemplateOptions에 authoring_mode?, canvasDocument? 추가
+    · PATCH body에 authoring_mode, canvas_document 조건부 포함
+    · 이 경로가 막혀 있어 canvas_document가 contracts 테이블에 끝내 저장되지 않던 핵심 결함
+
+  Fix 3 — ContractTemplatePreviewModal.svelte
+    · TemplateSummary 인터페이스에 authoring_mode?, canvas_document? 추가
+    · send() 내 isCanvas 분기: canvas 모드면 substituteVariables 스킵(변수치환은 서명화면에서)
+    · applyContractTemplate에 authoring_mode/canvasDocument 전달
+    · canvas 템플릿 미리보기 영역에 고정 캔버스 안내 배너 추가
+
+  Fix 4 — GET+PATCH /api/cms/contracts/[id]/content (+server.ts)
+    · GET: select에 'authoring_mode, canvas_document' 추가
+    · PATCH: authoring_mode, canvas_document 저장 로직 추가
+    · EC-3 서버 재검증: isCanvasDocument + hasSignatureField 체크(서명 필드 없으면 400)
+
+  Fix 5 — ContractEditorModal.svelte
+    · onMount에서 authoring_mode/canvas_document 읽어 authoringMode state 결정
+    · canvas 모드: ContractCanvasEditor 분기 렌더링 + handleCanvasSave() 구현
+    · flow 모드: 기존 TipTap 에디터 그대로 유지
+
+EC-3 검증 추가 (hasSignatureField — 서명 필드 최소 1개 필수):
+  · ContractCanvasEditor.svelte — handleSave() 클라이언트 검증 (Fix 6)
+  · ContractTemplatePanel.svelte — handleCanvasSave() 클라이언트 검증 (Fix 7)
+  · contracts/+page.server.ts — create/update 액션 서버 검증 (Fix 8)
+  · contracts/[id]/content/+server.ts — PATCH 서버 검증 (Fix 4 포함)
+
+신규 파일:
+  src/__tests__/services/contractCanvasPublishFix.test.ts (23개 테스트)
+
+수정 파일:
+  src/routes/api/cms/contract-templates/+server.ts
+  src/lib/utils/contract-apply-template.ts
+  src/lib/components/cms/ContractTemplatePreviewModal.svelte
+  src/routes/api/cms/contracts/[id]/content/+server.ts
+  src/lib/components/cms/ContractEditorModal.svelte
+  src/lib/components/cms/contract-editor/ContractCanvasEditor.svelte
+  src/lib/components/cms/ContractTemplatePanel.svelte
+  src/routes/cms/reservation/contracts/+page.server.ts
+
+검증:
+  · contractCanvasPublishFix.test.ts 23/23 통과
+  · clearIssuedContract.test.ts 5/5 통과
+  · contractContentMode.test.ts 10/10 통과
+  · docxImport.test.ts 15/15 통과
+  · docxTableFormatting.test.ts 16/16 통과
+  · npx svelte-check — 신규 에러 0건
+    (pre-existing: products/search/+page.svelte 1 error, 이번 수정과 무관)
+  · contractSign.test.ts 4건 실패 → pre-existing DB 충돌(exclusion constraint) — 이번 수정과 무관
 
 ---
 
@@ -11232,6 +11428,19 @@ Stephen이 이 충돌을 최종 결정했다(2026-08-11, 전자계약 에디터 
 - [x] P6-3: `ContractCanvasEditor` + `ContractCanvasFieldPalette` — 서명/DB연동텍스트/고정라벨 3종 필드만 배치 가능 | GSD | ✅ `src/lib/components/cms/contract-editor/ContractCanvasEditor.svelte` + `ContractCanvasFieldPalette.svelte` 신설, `src/lib/types/contract-document.ts`에 canvas 타입 추가, 드래그·좌표기반 배치·속성패널 구현, EC-2 경계 클램핑 포함
 - [x] P6-4: 고객 서명화면(`/contract/[token]`) canvas 모드 분기 렌더링 | TDD | ✅ `src/__tests__/server/contractP6Canvas.test.ts` 16/16 통과 + `+page.server.ts` contracts select에 `authoring_mode,canvas_document` 추가 + `+page.svelte` canvas 분기(배경 img + 퍼센트 좌표 필드 오버레이 + 인라인 SignatureCanvas) 구현. 기존 P8A/P8B4/authGates 34/34 회귀 없음. **마이그레이션 파일은 작성됐으나 아직 어느 DB에도 적용되지 않음.**
 - [x] P6-4-후속: canvas 모드 substitutionMap 16개 전체 매핑 완성 | GSD | Phase 6 GATE C 이후 Stephen 지시로 추가 — 기존 P6-4 구현에서 `substitutionMap`에 7개만 하드코딩됐고(고객이름·연락처·이메일·예약코드·상품명·수령일시·반납일시) 나머지 9개(주소·상품코드·수량·수령형태·반납형태·기본대여요금·할인금액·부가세·최종합계)는 빈 값으로 남아 있었음. ✅ 수정 완료(2026-08-12): `+page.server.ts`(rental_reservations select에 `pickup_method/return_method/pickup_time/return_time` + products select에 `product_code` 추가, 사용자 배송주소·주문금액 별도 조회 후 `shippingAddress`/`orderData` 반환), `+page.svelte`(contract 타입 캐스트 확장, `PICKUP_LABELS`·`formatAmount` 헬퍼 추가, substitutionMap 16개 전체로 일반화 — switch문이 아닌 Record<string,string>이라 추가하면 자동 반영), `src/__tests__/server/contractP6Canvas.test.ts`(G6 신규 6케이스 추가 — 16개 타입 키 확인·null 폴백·실데이터 9개 변수 검증·PICKUP_LABELS·pickup_time 우선순위·formatAmount). 검증: `npx vitest run contractP6Canvas.test.ts` 22/22 통과(기존 16 회귀 없음 + 신규 6 전부 GREEN), `npx svelte-check` 수정 파일 오류 0건.
+- [x] P6-5: CMS 계약서 양식 편집 패널 canvas 모드 연결 | GSD | ✅ 완료 (2026-08-13) —
+  [1단계] 이전 세션 네트워크 오류로 `src/lib/types/contract-document.ts`가 3-타입 버전으로 롤백된
+  피해 복구: `CanvasFieldType`에 `'issuer-image'` 복원 + `CanvasField`에 `assetId?`/`imageUrl?` 복원.
+  의존 파일 4개(`ContractCanvasEditor.svelte`, `ContractCanvasFieldPalette.svelte`,
+  `/contract/[token]/+page.svelte`, `+page.server.ts`) 전수 역공학으로 정확한 타입 확인 후 수정.
+  `svelte-check` 대상 에러 0건 확인.
+  [2단계] canvas 에디터 CMS 연결 — 수정 파일 5개:
+  * `src/lib/types/contract-template.ts`: `authoring_mode?`/`canvas_document?` 필드 추가
+  * `src/routes/cms/reservation/contracts/+page.server.ts`: `load()` select에 `authoring_mode,canvas_document` 추가; `create`/`update` action에 `authoring_mode` 파싱·저장 추가
+  * `src/routes/api/cms/contract-templates/canvas-bg/+server.ts` 신규: canvas 배경 이미지 업로드 엔드포인트 (product-images bucket, canvas-bg/ prefix, manager+ 게이트)
+  * `src/lib/components/cms/ContractTemplatePanel.svelte`: (a) `deserialize`·`invalidateAll`·`ContractCanvasEditor`·`isCanvasDocument`·`CanvasDocument`·`ContractCanvasPayload` import 추가, (b) `authoringMode $state` + `$effect` 동기화 + `canvasDocInit $derived` 추가, (c) `uploadCanvasBackground()`·`handleCanvasSave()` 함수 추가, (d) `use:enhance`에 canvas 모드 `cancel()` 분기 + flow 모드 `authoring_mode: 'flow'` 주입, (e) 헤더 "문서 가져오기" 버튼 flow 모드 전용 조건부 표시, (f) 에디터 영역 3-way 분기: `authoringMode === null`→모드 선택 UI / `'canvas'`→`ContractCanvasEditor` / `'flow'`→기존 TipTap 2단 레이아웃, (g) 액션 영역 canvas 모드 힌트 텍스트·flow 모드 저장 버튼 분기
+  검증: `npx svelte-check` 계약서 관련 파일 에러 0건; `contractContentMode` 14/14·`contractSign` 5/5·`docxImport` 9/9·`docxTableFormatting` 14/14 통과.
+  ⚠️ 세션 손실 사고 기록: `contract-document.ts` 타입 파일이 이전 세션 네트워크 오류로 롤백됨 — 이후 세션에서 타입 파일 변경 시 반드시 커밋 직후 체크포인트로 확인할 것.
 
 리스크(Phase 6, TDD 대상 P6-4 필수 기재):
 - 동시성 리스크: 좌표 필드 배치 저장 중 관리자 중복 저장 → 마지막 저장 승자(last-write-wins) 허용 범위인지 확인 필요(관리자 단일 사용자 편집 가정, 별도 락 불필요 — 기존 flow 모드와 동일 정책)
@@ -11711,6 +11920,149 @@ Stephen의 커밋을 기계적으로 막는 항목이므로, 나머지는 통과
     반영), `npx eslint --max-warnings=0`을 대시보드 신규/수정 파일 + eslint.config.js 영향
     파일(CmsStatRing/CmsKpiCard) 대상으로 재실행해 전부 0 에러 확인
 
+### 🔁 2026-08-13 연속 세션 — 간트 탭 날짜 헤더 2단(월 그룹 + 일자) 레이아웃 변경 (Stephen 요청) ✅ 완료
+
+Stephen이 `<launch-selected-element>` 2개로 간트 날짜 헤더(`.gantt-day-header`)를 지목 —
+"월 단위를 한 테이블로 묶고, 하위 테이블에 날짜 셀 배치 형태로 수정" 요청.
+
+- [x] `CmsDashboardGantt.svelte`에 `groupDaysByMonth(dayList)` 신규 — `days`(무한스크롤로 계속
+    늘어나는 배열)를 `day.slice(0,7)`('YYYY-MM') 기준 연속 구간으로 그룹핑해 `monthGroups`
+    ($derived, days 변경 시 자동 재계산) 생성. Date 객체 로컬/UTC 혼용 없이 문자열 슬라이싱만
+    사용(이 세션에서 이미 겪은 addDays 타임존 버그와 동일 원칙 — 재발 방지)
+- [x] 헤더 마크업을 `.gantt-header-row`(단일 행) → `.gantt-header-wrap`(sticky top, 2단 세로
+    배치)으로 재구성:
+    1단 `.gantt-month-row` — 월별로 `group.count * COL_W`px 너비의 `.gantt-month-header`
+    셀("2026년 8월" 등)이 그 달의 일자 수만큼 가로로 병합된 것처럼 배치
+    2단 `.gantt-day-row` — 기존 개별 일자 셀(`.gantt-day-header`) 그대로 유지
+    좌측 고정 라벨 컬럼도 2단에 맞춰 분리 — 월 행 쪽은 `.gantt-label-header-spacer`(텍스트 없이
+    정렬만), 일자 행 쪽은 기존 `.gantt-label-header`("상품 / 고객")
+- [x] CSS: `.gantt-label-col`(sticky left, z-index:2) 상속 그대로 유지 + 월/일자 헤더 각각의
+    라벨 셀에 `z-index:4 !important`(가로 스크롤 시 헤더 코너가 데이터 위에 항상 보이도록,
+    기존 `.gantt-label-header` 패턴과 동일하게 `.gantt-label-header-spacer`에도 적용)
+- [x] 완료기준: 좌우 스크롤 시 상단에 월 그룹 행이 항상 보이고, 각 월 그룹 너비가 그 달에 속한
+    일자 셀 수와 정확히 일치(예: 8월이 31일 전부 로드된 상태면 31*100px)하는지 육안 확인 필요
+    (무한스크롤 청크 로딩으로 달 경계를 넘나들 때도 `monthGroups`가 `days` 변경에 따라 자동
+    재계산되므로 별도 로직 불필요)
+- [x] `npx svelte-check`/`npx eslint --max-warnings=0` 둘 다 신규 에러 0건, dev 로그에 런타임
+    에러 없음 확인
+
+### 🔁 2026-08-13 연속 세션 — 간트 탭 라우팅 유실 복구 + 일자헤더 월표시 제거 + 기본 15줄 패딩
+
+Stephen이 "홈 메뉴 선택 시 대시보드가 없어지고 상담 채팅 화면이 뜬다"고 보고 — 조사 결과
+`/cms/+page.svelte`·`+page.server.ts`(둘 다 기존 커밋된 파일이라 제 수정분이 미커밋 상태로만
+존재) 가 원래(대시보드 구현 전) 버전으로 되돌아가 있었음(`git diff HEAD` 완전히 비어있음 —
+동시 작업 중인 다른 세션이 자기 변경분을 되돌리려다 같은 파일의 미커밋 대시보드 작업까지 함께
+날린 것으로 추정, 신규 파일(대시보드 컴포넌트 5개·API 라우트·마이그레이션 3개)은 untracked라
+git checkout/restore 영향 없이 전부 무사).
+
+- [x] **[긴급 복구]** `src/routes/cms/+page.svelte`·`+page.server.ts` 두 파일을 이 대화에
+    남아있던 최종본 그대로 재작성(로직 변경 없음 — Phase 1~4 데이터 오케스트레이션 +
+    2026-08-13 today-stats/coupon/topCanned RPC `locals.supabase` 호출 패턴 +
+    eslint-disable 주석까지 전부 원상 복구). `npx svelte-check`/`eslint` 재확인 — 이 2개 파일
+    기준 에러 0건
+- [x] **재발 방지 권고**: Stephen에게 미커밋 상태의 위험성 안내, 커밋 진행 확인 요청(대화
+    진행 중 — 아직 미커밋)
+- [x] 일자 헤더에서 월 표시 제거 — 월은 이미 상위 `.gantt-month-row`에 표시되므로 `formatDayHeader`
+    를 `${d.getMonth()+1}/${d.getDate()}(요일)` → `${d.getDate()}(요일)`로 축약(예: "8/13(목)"
+    → "13(목)")
+- [x] **간트 영역 기본 15줄 라인 셀 패딩** — 처음엔 "예약 건수에 맞춰 높이를 줄이자"로 잘못
+    이해해 구현했다가(`Math.min(rows,15)`로 축소) Stephen이 "그거 말고, 기본 15개 라인 셀을
+    만들어달라"고 명확히 정정 — 실제 요구는 반대(항상 최소 15줄의 빈 그리드 라인을 baseline으로
+    보여주고, 예약이 있으면 그 줄에 막대가 채워지는 방식). `visibleRowSlots =
+    Math.max(sortedRows.length, 15)`로 수정(15건 넘으면 전부 표시, 자르지 않음),
+    `sortedRows.length`만큼 실제 예약 행 렌더 후 나머지를 막대 없는 빈 그리드 행(`.gantt-row-empty`)
+    으로 패딩. 기존 "이 기간에 예약이 없습니다" 텍스트 안내 블록은 제거(빈 그리드 자체가
+    "표가 있다"는 걸 보여주므로 불필요) — `.gantt-empty-row`/`.gantt-empty-msg` dead CSS도 제거
+  - **버그 발견·수정**: 최초 구현이 `{#each { length: N } as _, i}`(평범한 객체 리터럴)을
+    써서 컴파일은 통과하지만 런타임에 순회 불가능한 코드였음 — `Array.from({length:N},
+    (_,i)=>i)`로 실제 배열을 만드는 `emptyRowIndexes` derived로 교체
+  - `.gantt-outer`의 `flex:1`(부모 남은 공간을 억지로 채워 아래에 흰 여백을 남기던 원인)을
+    `flex:0 0 auto`로 교체해 카드 자체도 내용(헤더+15줄) 높이에 맞춰 고정
+- [x] `npx eslint --max-warnings=0`/`npx svelte-check` 둘 다 이 파일 기준 신규 에러·경고 0건
+    확인(전역 34개 에러는 전부 다른 동시 세션의 계약서/구독/채팅 관련 타입 에러 — 이번 세션
+    무관, 미조치)
+
+### 🔁 2026-08-13 연속 세션 — 라벨셀 기본 배경색 + 간트 반납 연체 시각 표시 (Stephen 요청)
+
+- [x] `.gantt-label-body`(데이터 행 좌측 상품/고객 라벨) 기본 배경을 `var(--cs-surface-gray)`로
+    지정, 기존 `.gantt-row:hover > .gantt-label-col`(`--cs-lilac`) 호버 동작은 그대로 유지(더
+    구체적인 셀렉터라 호버 시 정상 override됨). 빈 패딩 행에 남아있던 `.gantt-row-empty
+    .gantt-label-col { background: white }` override도 제거해 실제/빈 행 라벨셀 톤 통일
+- [x] **반납 연체 로직 조사(Stephen 요청, 코드 변경 없이 조사만 우선 수행)**: 이 프로젝트에
+    반납기한(rental_end) 경과를 자동 감지하는 cron/트리거가 전혀 없음을 확인(
+    `30_cron_jobs.sql` 등록된 job은 hold_expiration_cleanup/monthly_credit_score_boost/
+    subscription_expiry_check 3개뿐 — 대여 반납기한 관련 없음). 연체료(`late_fees` 테이블,
+    `27_late_fees.sql`)도 실시간이 아니라 관리자가 실제 반납처리할 때(`actual_return` 시점)
+    1회성으로만 계산됨. `RentalDetailPanel.svelte`/`/cms/rentals`에도 연체 시각 표시 없음 —
+    프론트·백엔드 어디에도 "지금 이 예약이 연체 중"이라는 판정 자체가 존재하지 않았음
+- [x] **간트 탭에 연체 시각 표시 신규 추가**(Stephen "네, 처리해줘") — 기존 백엔드/자동화는
+    전혀 손대지 않고 순수 화면 표시 로직만 추가(요청 범위 최소화):
+    `isOverdue(row) = row.rental_end < todayStr && status ∈ {confirmed,shipped,in_use}`
+    (rental-lifecycle.md "반출중" 정의와 동일 3개 상태 — return_requested부터는 이미 반납
+    절차 시작이라 연체 표시 제외). 연체 막대에 빨간 테두리(`.gantt-bar-overdue`,
+    `var(--cs-red-badge)`) + 좌측 작은 빨간 점 + 툴팁/aria-label에 "반납 연체" 문구 추가.
+    기존 상태색(채움색)은 그대로 유지 — 테두리만 얹어 "무슨 상태인지"와 "연체인지"를 동시에
+    표현
+- [x] `npx eslint --max-warnings=0`/`npx svelte-check` 둘 다 이 파일 기준 신규 에러 0건
+
+### 🔁 2026-08-13 연속 세션 — 라벨셀 클릭 시 상세 패널 오픈 (Stephen 제안 → AskUserQuestion 확인 후 적용)
+
+Stephen이 "상품/고객 라벨 영역 선택 시 대여정보 노출 구조로 가면 어떤지" 제안 — "열림 방식은
+현재처럼 스크롤 시 열리는 인터랙션 유지"라는 문구가 실제 구현(막대 클릭 시에만 열림, 스크롤과
+무관)과 맞지 않아 AskUserQuestion으로 의도 확인: "라벨 클릭 시 막대와 동일하게 현재 패널이
+그대로 열리면 됨" 확정.
+
+- [x] `.gantt-label-body`(데이터 행 좌측 라벨, `div` → `button type="button"`)에
+    `onclick={() => (selectedRow = row)}` 추가 — 막대 클릭과 완전히 동일한 트리거로
+    `RentalDetailPanel`을 오픈(패널 자체의 오픈 방식/애니메이션은 전혀 변경 없음, 트리거
+    지점만 추가). 빈 패딩 행(`.gantt-row-empty`)의 라벨 셀은 대응하는 예약 데이터가 없어
+    그대로 비인터랙티브 `div` 유지(변경 안 함)
+- [x] `div`→`button` 전환에 따른 브라우저 기본 버튼 스타일 리셋(`border:none; width:100%;
+    text-align:left; cursor:pointer; font:inherit;`) 추가해 기존 외형·호버(`--cs-lilac`)
+    동작 그대로 유지 확인
+- [x] `npx eslint --max-warnings=0`/`npx svelte-check` 둘 다 이 파일 기준 신규 에러 0건
+
+### 🔁 2026-08-13 연속 세션 — [버그] 간트 탭 상세패널이 화면 하단에 얇게 깔리는 문제 수정
+
+Stephen이 "미작동 오류 중"이라고 짧게 보고 → 화면 캡처 요청 후 확인. 패널이 뷰포트 맨 아래에
+한 줄만 걸쳐 보이는 스크린샷 확인, "이게 상세보기 맞냐"고 재질문.
+
+- [x] **근본원인**: `RentalDetailPanel.svelte`(`.panel { height:100% }`)은 자체 포지셔닝이
+    없는 순수 콘텐츠 박스 — 기존 사용처(`/cms/reservation`, `/cms/rentals`)는 전부
+    `.detail-panel-wrap { flex:6 }`인 리스트+디테일 flex 분할 레이아웃 안에 끼워 넣는 전제로만
+    동작해왔음(두 화면 코드 직접 대조 확인). 간트 탭은 그런 리스트-디테일 분할 뷰가 아니라
+    감싸는 컨테이너 없이 그대로 렌더링했더니 `height:100%`가 아무 기준도 없어 문서 흐름
+    맨 아래에 콘텐츠 높이만큼만 얇게 깔리는 버그였음(라벨셀 클릭 기능 자체는 정상 동작 —
+    패널이 뜨긴 떴으나 위치/크기가 깨진 것)
+- [x] `CmsDashboardGantt.svelte`에 `.gantt-detail-overlay`(신규, `position:fixed; top:0;
+    right:0; bottom:0; width:440px; z-index:200;`) 래퍼 추가해 `RentalDetailPanel`을 우측
+    고정 드로어로 감쌈 + `svelte/transition`의 `fly({x:40, duration:220})`로 슬라이드 인
+    (다른 두 화면의 `fly({x:30, duration:220})` 컨벤션과 동일 계열, 오버레이 폭에 맞춰 x값만
+    소폭 조정)
+- [x] `npx eslint --max-warnings=0`/`npx svelte-check` 둘 다 이 파일 기준 신규 에러 0건
+
+### 🔁 2026-08-13 연속 세션 — [UX 재수정] 우측 고정 드로어 → 클릭 지점 앵커 팝오버로 교체
+
+Stephen: "선택한 위치에 노출해! 현재 구현은 잘못된 UIUX야" — 우측 고정 드로어(클릭 위치와 무관
+하게 항상 화면 우측 끝에 뜨는 방식)가 의도와 다르다는 피드백. 클릭한 라벨셀/막대 바로 옆에
+뜨는 방식으로 재구현.
+
+- [x] `openDetail(row, e)` 신규 — 클릭 이벤트의 `e.currentTarget.getBoundingClientRect()`로
+    앵커 좌표(`anchorRect: {top,bottom,left,right}` state) 캡처. 라벨셀·막대 두 클릭 핸들러
+    모두 기존 `onclick={() => (selectedRow = row)}`에서 `onclick={(e) => openDetail(row, e)}`로
+    교체
+- [x] `popoverStyle` `$derived.by(...)` 신규 — 앵커 우측(`anchorRect.right + 12`)에 기본
+    노출, 팝오버 폭(440px)이 화면 우측을 넘으면 좌측(`anchorRect.left - 440 - 12`)으로 뒤집고,
+    상하좌우 전부 뷰포트 안으로 클램프(`Math.max(16, Math.min(...))`). `anchorRect`가
+    `null`(SSR·미클릭 상태)이면 빈 문자열 반환 후 즉시 `window` 접근 없이 종료 — SSR 크래시
+    방지
+- [x] `.gantt-detail-overlay` CSS를 `top:0;right:0;bottom:0;width:440px`(드로어) →
+    `max-height:80vh; overflow-y:auto;`(팝오버, 위치·너비는 인라인 `popoverStyle`이 담당)로
+    교체. 전환 애니메이션도 `fly({x:40})`(옆에서 슬라이드) → `fly({y:8, duration:160})`(그
+    자리에서 살짝 떠오르는 팝오버 느낌)로 변경. `onclose`에서 `selectedRow`와 함께
+    `anchorRect`도 null로 리셋(다음 오픈 시 좌표 재계산 강제)
+- [x] `npx eslint --max-warnings=0`/`npx svelte-check` 둘 다 이 파일 기준 신규 에러 0건
+
 ### 검증 방법 기록
 - `npx svelte-check` 전체 재실행 — 1376 files, 1 ERROR(pre-existing `products/search`, 무관), 대시보드 신규 파일 경고 1건([이슈3])
 - `npx eslint --max-warnings=0`를 대시보드 신규 파일 전체 + 비교 대상(precedent/pre-existing) 파일에 개별 실행해 회귀 여부 특정
@@ -11721,6 +12073,108 @@ Stephen의 커밋을 기계적으로 막는 항목이므로, 나머지는 통과
 ### 남은 절차
 [이슈1] 1줄 수정 후(또는 Stephen이 직접 반영 후) 커밋 진행 권장. [이슈2~5]는 non-blocking —
 Stephen 판단에 따라 이번 커밋에 함께 반영하거나 별도 후속 아젠다로 분리 가능. 커밋은 Stephen 직접 실행.
+
+---
+
+## QA 검수 완료 — GATE E (2차, 2026-08-13, `@sp3-qa-agent`)
+
+검수 범위: 위 "QA 검수 완료 — GATE E 조건부 통과 (2026-08-13)" 리포트 **이후** 같은 아젠다에서 추가로
+발생한 연속 세션 5건만 대상(기존 검수분 재검토 없음):
+1. 라벨셀 기본 배경색 + 간트 반납 연체 시각 표시
+2. 라벨셀 클릭 시 상세 패널 오픈
+3. [버그] 간트 탭 라우팅 유실 복구 + 일자헤더 월표시 제거 + 기본 15줄 라인셀 패딩
+4. [버그] 간트 탭 상세패널 하단 얇게 깔리는 문제 수정(우측 고정 드로어 1차 수정)
+5. [UX 재수정] 우측 고정 드로어 → 클릭 지점 앵커 팝오버 교체
+
+대상 파일: `src/routes/cms/+page.svelte`, `src/routes/cms/+page.server.ts`,
+`src/lib/components/cms/dashboard/CmsDashboardGantt.svelte` (3개 전면 재검토) +
+`eslint.config.js`(1차 QA 기검수분, 참고만·재검수 제외).
+
+### 검수 1 — 규칙 정합성
+
+| 규칙 | 결과 | 상세 |
+|---|---|---|
+| 공통 보안 (서버 키·SQL Injection·입력검증) | ✅ | 신규 서버 액션 없음. `+page.server.ts`는 기존 `sessionDb`(`locals.supabase`) 패턴 그대로 유지, 서버 키(`SUPABASE_SERVICE_ROLE_KEY`)는 `$env/static/private`에서만 import |
+| RLS/H-01(직접 DML 금지) | ✅ | `CmsDashboardGantt.svelte`는 `RentalDetailPanel`의 기존 절대경로 폼 액션(`/cms/reservation?/...`)을 그대로 재사용 — 신규 상태변경 경로 없음 |
+| rental-lifecycle.md(연체 판정) | ✅ | `OVERDUE_STATUSES = {confirmed, shipped, in_use}`가 rental-lifecycle.md "반출중" 정의(§nextStatus 표의 confirmed→shipped→in_use 파이프라인, `return_requested` 이후 반납절차 시작으로 명확히 구분)와 정확히 일치. `return_requested`/`returned`/`completed`/`cancelled`/`damage_claimed`는 `OVERDUE_STATUSES.has()`가 false라 연체 판정에서 확실히 제외됨 |
+| products.md | 해당 없음 | 품번/재고 로직 미변경 |
+
+### 검수 2 — 기술 부채
+
+```
+console.log 잔류        : 0건 (3개 파일 grep 전수 확인)
+any 타입 잔류            : 1건 — src/routes/cms/+page.server.ts:120 (1차 QA [이슈1]에서 지적,
+                           같은 세션에서 즉시 수정 완료된 항목 — 119번 줄에
+                           `// eslint-disable-next-line @typescript-eslint/no-explicit-any`
+                           존재 확인, 재발 아님)
+TODO/FIXME              : 0건
+Svelte 4 문법(on:click 등) : 0건
+writable store           : 0건
+export let               : 0건
+npx eslint --max-warnings=0 (대상 3파일) : 에러 0건
+npx svelte-check         : 대상 3파일 기준 에러·경고 0건 (레포 전역 12 에러는 전부 chat/
+                           ActionCard·MessageList·api/chat/message(다른 동시 세션, 전자계약/
+                           채팅 작업분)·products/search(pre-existing) — 이번 검수 대상과 무관,
+                           git status로 이 3파일이 이번 아젠다 외 별도 수정분임을 확인)
+```
+
+### 중점확인 항목별 결과
+
+| # | 항목 | 결과 |
+|---|---|---|
+| 1 | `+page.server.ts`/`+page.svelte` 복구본 원본과 완전 동일 여부 | ✅ `sessionDb`(119번 줄 eslint-disable 주석 포함) · `todayOffset()` 로컬 date getter 방식 · `topCannedResponses`(`get_top_canned_responses_weekly` RPC) 전부 포함 확인. `+page.svelte`는 `CmsDashboardTabs`에 `data` 그대로 전달하는 최소 래퍼로 정상 |
+| 2 | 팝오버 위치 계산 SSR 안전성 + 클램핑 | ⚠️ SSR 안전성은 확보(`if (!anchorRect) return ''`로 `window` 접근 전 즉시 리턴 — 애초에 `anchorRect` 초기값이 `null`이라 `{#if selectedRow}` 블록 자체가 SSR에서 렌더 안 됨). **단 클램핑은 좌/우만 실질적으로 완전하고, 상/하는 불완전** — 아래 [이슈A] 참조 |
+| 3 | 연체 판정(`isOverdue`) | ✅ 위 검수1 표 참조 |
+| 4 | 15줄 패딩(`visibleRowSlots`/`emptyRowIndexes`) | ✅ `Array.from({length:N}, (_,i)=>i)`로 실제 배열 생성 확인(`{length:N}` 평범한 객체를 `#each`에 직접 넘기던 구버전 버그 재발 없음). `visibleRowSlots = Math.max(sortedRows.length, 15)` — 15건 초과 시 자르지 않고 전부 표시 |
+| 5 | `div`→`button` 전환(라벨셀) 스타일 리셋 | ✅ `.gantt-label-body`에 `border:none; width:100%; text-align:left; cursor:pointer; font:inherit;` 적용 확인, 기존 배경(`--cs-surface-gray`)·hover(`--cs-lilac`) 유지. 빈 패딩 행(`.gantt-row-empty`)의 라벨은 여전히 비인터랙티브 `div`로 남아 혼동 요소 없음 |
+| 6 | 범위 준수 | ✅ `git diff --stat`/`git status`로 이번 세션 변경이 선언된 3개 파일(+ 1차 QA 기검수 eslint.config.js)로 정확히 한정됨을 확인. `RentalDetailPanel.svelte`는 import만(수정 0건), `/cms/reservation`·`/cms/rentals` 관련 수정 파일(`+page.server.ts` 등)이 git status에 있으나 diff 내용 확인 결과 전자계약(`clearIssuedContract`) 관련 별개 동시 세션 작업으로, 이 간트 아젠다와 무관함을 확인(교차 오염 없음) |
+
+### 검수 3 — 시범오픈 기준
+
+| 항목 | 결과 |
+|---|---|
+| 마이그레이션 rollback | 해당 없음(이번 5건 전부 DB 변경 없음, 화면 로직만) |
+| RLS 고객 격리 | ✅ (신규 쿼리·액션 없음) |
+| 결제 추적 | 해당 없음 |
+| 비밀키 안전 | ✅ |
+| B-START 완료조건 충족 | ✅ (Stephen 요청 5건 전부 구현 완료 및 코드 레벨 확인) |
+
+### 종합 판정
+
+**GATE E 조건부 통과 — 신규 CRITICAL/보안 이슈 0건. BOUNDARY 등급 1건([이슈A], 팝오버 세로
+클램핑 불완전) 수정 권장 후 커밋 진행 권장.** 나머지는 정보성으로 커밋을 막지 않음.
+
+### 발견된 이슈
+
+| # | 등급 | 파일 | 문제 | 권장 수정 |
+|---|---|---|---|---|
+| A | 🟡 BOUNDARY | `CmsDashboardGantt.svelte` `popoverStyle`(약 172~181행) | 좌/우는 `Math.max(16, Math.min(left, vw - POPOVER_W - 16))`로 완전히 클램프되나, **상/하는 `top = Math.max(16, Math.min(anchorRect.top, vh - 120))`뿐** — `vh - 120`이라는 고정값은 패널의 실제 높이(`max-height:80vh`, 콘텐츠에 따라 가변)를 전혀 고려하지 않는다. 기본 15줄 baseline이 이번 세션에 막 추가돼 리스트 하단부 행 클릭이 흔해졌는데, 뷰포트 하단 근처 행(예: `anchorRect.top`이 `vh`에 가까운 경우)을 클릭하면 `top`이 `vh-120`으로 클램프되고, 그 지점에서 최대 `80vh` 높이까지 펼쳐지는 패널이 뷰포트 하단을 크게 넘어가 실질적으로 화면 밖으로 잘려 보이거나 조작 불가능해질 수 있음. 커밋 메시지/주석의 "상하좌우 전부 뷰포트 안으로 클램프" 서술과 실제 동작이 불일치 | `top` 계산 시 실측 패널 높이를 반영(예: 패널에 `bind:clientHeight`를 연결해 `Math.min(anchorRect.top, vh - measuredHeight - 16)`) 또는 앵커 하단 기준 위로 펼치는 `bottom` 앵커링(`anchorRect.bottom > vh/2`일 때 `bottom: vh - anchorRect.top + 12`로 전환)으로 보정 |
+| B | ℹ️ 정보성 | `CmsDashboardGantt.svelte` `.gantt-detail-overlay` | 팝오버가 `role="dialog"`/`aria-modal`/포커스 트랩 없이 순수 `div`로 렌더됨(ui-mobile.md 접근성 기준의 "모달" 요건). 다만 이전(우측 고정 드로어) 구현 때도 동일하게 없었던 기존 갭이라 이번 세션이 새로 만든 회귀는 아님 — 별도 후속 과제로만 기록 | 필요 시 `role="dialog" aria-modal="true"` + `Escape` 키 닫기 + 최초 포커스 이동 추가 검토 |
+| C | ℹ️ 정보성 | `CmsDashboardGantt.svelte` `STATUS_STYLE` | 상태별 배경색이 `rgba(...)` 원시값(디자인 토큰 `var(--cs-*)` 미경유) — 단 주석에 명시된 대로 `reservation/+page.svelte` 기존 코드를 원문 그대로 복사한 것으로, 이번 세션이 새로 만든 패턴이 아니며 1차 QA에서도 별도 지적 없었음. 신규 위반 아님, 참고만 |
+
+### 검증 방법 기록
+- `npx eslint --max-warnings=0 src/routes/cms/+page.svelte src/routes/cms/+page.server.ts src/lib/components/cms/dashboard/CmsDashboardGantt.svelte` — 에러 0건
+- `npx svelte-check` 전체 재실행 — 대상 3파일 기준 에러·경고 0건(레포 전역 12 에러는 전부 이번 아젠다와 무관한 동시 세션 파일 — `git status`로 확인)
+- `git status --porcelain`/`git diff --stat`로 변경 범위가 선언된 파일로 한정됨을 확인, `RentalDetailPanel.svelte`/`/cms/reservation`/`/cms/rentals` 자체 로직에는 손대지 않고 오직 `CmsDashboardGantt.svelte`의 래퍼 계층에서만 재사용했음을 diff로 직접 확인
+- 파일 직접 Read로 정적 검토(popoverStyle 클램프 로직, isOverdue 상태 집합, emptyRowIndexes 배열 생성, div→button 리셋 스타일 4가지 중점 확인 항목 전부 소스 대조)
+
+### 남은 절차
+[이슈A] 수정 권장(커밋 차단 사유는 아님 — eslint/tsc 통과, 기능 자체는 동작하되 뷰포트 하단
+근처 클릭 시 UX 저하 가능성). [이슈B/C]는 non-blocking 정보성. 코드 수정 없이 검수만 수행 —
+git 자율 실행 금지 원칙에 따라 커밋은 Stephen 직접 실행.
+
+### 후속 조치 — [이슈A] 즉시 수정 완료 (같은 세션)
+
+- [x] `popoverStyle` `$derived.by`에 QA 권장안 중 "앵커 하단 기준 위로 펼치는 방향 전환"을
+    채택 — `anchorRect.top > vh/2`(클릭 지점이 화면 하단 절반)면 `bottom:{vh -
+    anchorRect.bottom}px`로 앵커 하단에서 위로 펼치고, 아니면 기존처럼 `top`에서 아래로
+    펼침. 양쪽 방향 모두 고정값(`vh-120`) 대신 **그 방향으로 실제 남은 공간**
+    (`anchorRect.bottom - MARGIN` 또는 `vh - top - MARGIN`)을 `max-height`로 명시 계산해
+    인라인 지정 — 어느 방향이든 콘텐츠가 실제 뷰포트를 넘칠 수 없도록 구조적으로 차단(패널
+    실측 높이 측정 없이도 방향 전환만으로 해결, QA가 제시한 2가지 대안 중 `bind:clientHeight`
+    측정 방식보다 간단해 채택)
+- [x] `npx eslint --max-warnings=0`/`npx svelte-check` 재실행 — `CmsDashboardGantt.svelte`
+    기준 신규 에러 0건
 
 ---
 
@@ -12013,3 +12467,442 @@ plan_source: 직접 아젠다 — 바로 위 DONE 항목(파트너코드 조합�
       객체 접근)으로 한정되는가? — 확인됨, git diff로 이번 세션 실제 변경분과 구분됨
 - [x] `eslint --max-warnings=0`/`svelte-check`/관련 테스트 전부 신규 에러·경고 0건인가? —
       확인됨
+
+## NOW — 상품등록 화면(new) 레이아웃 여백 + 재고 품번 미리보기 콤보 연동 버그 수정 (2026-08-14) ✅ 완료
+
+[CONTEXT BRIDGE]
+plan_source: Stephen 화면 캡처 지시 2건 — (1)"선택 영역 레이아웃 간 여백을 넓혀 분리성을
+  확보할 것"(구성품/콘텐츠에디터 블록 간 간격), (2)"선택영역에 부모상품이 선택한 코드
+  구조가 노출되어야 정상이 아닌지 확인할 것 — 맞다면 코드 표시 영역을 2배로 키워 확실하게
+  인지하고 저장하게 할 것"(⑦ 실물 재고 등록 안내 품번 미리보기)
+핵심제약: `src/routes/cms/products/new/+page.svelte` 1개 파일로 한정
+TDD도메인: 없음 — GSD(UI 스타일 + 표시 로직 수정, 상태전이·가격·보안 무관)
+절대금지: 실제 채번 RPC(`generate_product_code`) 로직·시그니처 변경 금지(표시용 미리보기만 수정)
+
+---
+
+- [x] 여백 확보(🟢 ROUTINE) | GSD | ✅ 완료 — "② 상품 설명 & 스펙" 섹션 내 콘텐츠에디터
+    블록과 "구성품" 블록이 동일 16px gap으로 붙어있어 구분이 약했음. `.field-row-separated`
+    수식자 클래스 신설(구성품 field-row에만 적용, 다른 field-row 전역 gap은 무변경) —
+    `margin-top: var(--spacing-8)` + `padding-top: var(--spacing-6)` +
+    `border-top: 1px solid var(--cs-lilac)`(기존 `.section-title` 구분선과 동일 패턴 재사용)
+- [x] 🔴 발견 — 재고 품번 미리보기가 실제 선택한 콤보코드와 무관하게 계산되던 버그 | GSD |
+    ✅ 완료 — `assetCodePreview`가 부모상품이 실제 선택한 콤보(`selectedComboRowId`)와
+    전혀 무관한 별도 하드코딩 맵 `CATEGORY_CODES`(camera→CAM 등 고정 3자 코드)로만
+    계산되고 있어, 콤보를 선택해도 안내 박스엔 항상 `CS-???-2607-001` 같은 일반
+    placeholder만 노출되던 버그 확인(실제 채번 `generate_product_code` 7-param 경로와
+    완전히 분리된 별개 계산식이었음). `selectedCombo` derived 신설 + `assetCodePreview`가
+    콤보 선택 시 `buildComboPreview()`(실제 채번과 동일 구조 함수, 이미 콤보 미리보기
+    배지에서 검증된 로직) 재사용하도록 수정, 콤보 미선택 시에만 기존 카테고리 추정값 폴백.
+    보조 설명 문구(info-subtext)도 동일 기준으로 동기화.
+- [x] 시인성 2배 확대(🟢 ROUTINE) | GSD | ✅ 완료 — `.asset-code-preview` 폰트를
+    `--text-pc-script-12`(12px)→`--text-pc-htitle-25`(25px, 기존 프로젝트 디자인 토큰
+    재사용, 신규 px 하드코딩 없음)로 교체, padding도 비례 확대(2px 8px→4px 16px)
+
+검증: svelte-check/eslint 재실행 — 신규 에러·경고 0건(기존 무관 경고만 잔존, git diff로
+전부 미변경 라인 확인). 실브라우저 검증(콤보 선택 시 미리보기 실제 반영 여부)은 Stephen
+대기(Claude Browser 사용 금지 원칙).
+
+## NOW — 콤보 채번 버그 2건: 자식(순번2) 자릿수 무시(DB) + 대중소 코드 표시순서 뒤바뀜(클라이언트) (2026-08-13) ✅ 완료
+
+[CONTEXT BRIDGE]
+plan_source: Stephen 아젠다 — "상품 등록에서 부모상품이 선택한 코드값이 정상 반영 안 됨,
+  설정된 순번 중 자식순번이 미노출되는 오류 원인 확인" + 후속 "대중소 코드 분류가 설정값과
+  다르게 순서가 뒤바껴 노출되는 오류도 함께 확인해서 진행"
+핵심제약: /cms/products/new 등록화면 + 그 화면이 쓰는 공용 유틸(comboCategoryCode.ts)로 범위
+  한정. DB 마이그레이션은 신규 ADD-only(#239), 기존 함수 시그니처 불변. stage→production
+  순서 준수, production 적용은 Stephen 명시 확인("예, production에도 적용") 후 실행.
+TDD도메인: 없음 — GSD. 결제·예약 상태전이 아닌 품번(product_code) 생성 로직 버그 수정.
+
+### 버그 1: 자식(순번2) 자릿수 무시 (CRITICAL, DB)
+- 원인: `generate_product_code`(7-param, migration #222)에서 순번1(부모) 자릿수는
+  `LENGTH(p_parent_max_sequence::TEXT)`로 정확히 계산되는데, 순번2(자식) 자릿수(`v_seq_digits`)는
+  `p_max_sequence`와 무관하게 항상 전역 `cms_settings.reservation_code_format.seq_digits`만
+  사용 — 콤보 편집화면에서 "순번2(자식) 상한"을 9999로 설정해도 실제 저장 구조는 3자리(전역
+  기본값) 고정되는 비대칭 버그. production 실데이터 직접 조회로 확정
+  (`code_series: {parent_seq_digits:3, seq_digits:3, max_sequence:9999,...}` — seq_digits가
+  4여야 하는데 3).
+- 수정: 신규 마이그레이션 `20260813000239_239_generate_product_code_child_seq_digits_fix.sql`
+  — `p_max_sequence IS NOT NULL`이면 `v_seq_digits := LENGTH(p_max_sequence::TEXT)`로 덮어씀
+  (parent와 동일 원칙). 시그니처·guard(이미 code_series 있으면 재계산 안 함, §2-2 영구고정)·
+  2/3/5/6-param 오버로드 전부 무변경.
+- 적용: stage(ezyvffjvuwmtuhpxdjrw) 적용 → Stephen 확인("예, production에도 적용") → 
+  production(vnbpmvxruyciuuaermyh) 적용. 양쪽 `pg_get_functiondef`로 반영 확인 완료.
+
+### 버그 2: 대중소 코드 표시순서 뒤바뀜 (클라이언트, 단일 화면)
+- 원인: `products/new/+page.svelte`의 `combosForGroup`이 콤보 분류코드를
+  `.sort((a,b)=>a.depth-b.depth)`로만 정렬 — 이 화면의 `product_category_codes` 로드 쿼리가
+  `code_tier`를 select하지 않아, major/minor 코드가 같은 `depth:0`을 공유하는 실데이터(PH=major
+  depth0, SAM=minor depth0)에서 정렬이 무의미해져 DB 반환 순서가 그대로 노출됨("SAM · PH"로
+  뒤집혀 표시). 실제 저장값(서버 등록 액션은 이미 `code_tier` select + `sortByTier()`로 정상
+  "PHSAM" 합산)은 항상 정상이었던 순수 디스플레이 버그.
+- 수정:
+  - `comboCategoryCode.ts`: `sortByTier(codes: ComboCode[])` → 제네릭
+    `sortByTier<T extends ComboCode>(codes: T[])`로 변경(입력 타입 보존, 기존 호출부
+    `buildComboCategoryCode`/`getRootCode` 동작 무변경 — tsc 확인).
+  - `products/new/+page.server.ts`: `TaxonomyCodeSimple`에 `code_tier?: string | null` 추가,
+    `product_category_codes` select에 `code_tier` 컬럼 추가.
+  - `products/new/+page.svelte`: `sortByTier` import, `combosForGroup.codes` 정렬을
+    `sortByTier(...)`로 교체. `comboPreviewFmt()`의 루트코드 탐색도
+    `find(c=>c.depth===0) ?? codes[0]`(같은 depth 공유 시 오탐 가능)에서 `codes[0]`(이미
+    정렬된 배열의 첫 원소)로 단순화.
+- QA(@sp3-qa-agent) 1차: 로직 자체는 정확(guard 보존, 시그니처 무변경, 타입 회귀 없음)하다고
+  확인했으나, git diff 기준 "범위 외 수정"으로 productCategoryTaxonomy.ts(신규)·
+  cms/codes/_shared.ts·+page.svelte 내 라벨/여백/미리보기 CSS 변경을 함께 지적 — 확인 결과
+  전부 **이 턴 이전, 이 세션의 별개 선행 작업**(구독 카테고리 리팩터 GSD_LOG.md:2573-2586,
+  직전 턴 여백+미리보기 fix GSD_LOG.md:2550-2571, 둘 다 이미 자체 GATE E 통과 기록 있음)이며
+  이번 콤보 정렬 버그 수정과 무관 — QA 에이전트가 세션 히스토리 없이 커밋 전 전체 uncommitted
+  diff를 봐서 생긴 오탐으로 판정(GSD_LOG.md 기록으로 교차검증 완료).
+- 검증: svelte-check — 대상 파일(comboCategoryCode.ts/+page.server.ts/+page.svelte) 신규
+  에러 0건. 실브라우저 검증(콤보 선택 시 칩 순서 PH·SAM으로 정상 표시되는지)은 Stephen 대기.
+
+GATE E: 로직 판정 통과(QA 확정), 범위 관련 지적은 오탐으로 교차검증 완료. 커밋은 Stephen 직접 실행.
+
+### 후속 확인 — Stephen "여전히 뒤섞여 나옴" 재보고 (2026-08-13)
+- Stephen이 실브라우저(crazyshot-svelte.vercel.app)에서 여전히 "SAM · PH" 역순 + title
+  "CSSAMPH0000000" 노출을 캡처로 재확인 요청.
+- 진단: 코드 버그 아님 — **미배포 문제**로 확정. `git log -1` 확인 결과 마지막 커밋(f8e70fc)이
+  3시간 전이고 이번 세션 수정분(95개 파일, 이번 콤보 정렬 fix 포함) 전부 미커밋 상태 —
+  Vercel은 git push 기준으로 빌드되므로 로컬 수정이 라이브에 반영될 수 없는 상태였음.
+  `title={buildComboPreview(combo)}`(new/+page.svelte:697)도 동일한 정렬된 `combo.codes`
+  배열을 사용하므로, 칩·title·미리보기 텍스트 3곳 전부 배포 후 동시에 정상화됨을 코드 추적으로
+  재확인. `/cms/codes`(설정) 화면은 애초에 정상이었던 것(별도 쿼리 경로, 이번 수정 대상 아님).
+- 추가 코드 수정 없음 — 배포(커밋→푸시) 필요 여부만 Stephen 확인 대기 중.
+
+## NOW — 코드조합 정책 3개 등록화면(상품·구독상품·쿠폰) 전수 점검 (2026-08-13) ✅ 완료
+
+[CONTEXT BRIDGE]
+plan_source: Stephen 아젠다 — "설정 코드조합의 코드목록 설정값(대중소분류 순서·순번·추가순번)은
+  상품등록·구독상품등록·쿠폰등록에 철저히 활용되는 중요한 코드 정책이다 — 3개 화면 모두 분류선택
+  시 정확히 목록 반영되고, 상품/구독상품은 기준 코드에 따라 자동채번되어야 한다" 재확인 요청
+핵심제약: 각 화면의 실제 아키텍처(상품=콤보+2단 채번, 구독=독립 단일채번, 쿠폰=필터 전용)를
+  먼저 정확히 파악한 후에만 수정 — 임의로 3개 화면을 동일 구조로 통일하지 않음(Stephen 확인
+  거쳐 구독은 현행 체계 유지로 확정).
+TDD도메인: 없음 — GSD.
+
+### 전수조사 결과 (Explore 에이전트 + 직접 코드/DB 검증)
+① `/cms/products/new` — 직전 NOW 블록에서 이미 수정 완료(정렬순서·자식자릿수), 정상.
+② `/cms/subscriptions/new` — 대중소분류+순번1/2 콤보 시스템 자체를 안 씀(재고 개념 없어
+   부모/자식 2단 채번 불필요, 독립 RPC `generate_subscription_product_code` + 전용 시퀀스
+   테이블). 마이그레이션 #229 주석에 명시된 의도적 설계 — Stephen 확인: 현행 체계 유지.
+③ `/cms/promotion/coupon` — 콤보 시스템과 무관(카테고리는 코드생성이 아닌 적용대상 필터 용도).
+
+### 🔴 실데이터로 확인한 진짜 버그 — 구독 채번 접두사 드리프트
+- `generate_subscription_product_code`(#229)의 카테고리→접두사 매핑이 CASE문 하드코딩
+  (camera/lens/camcorder/action_cam/drone/lighting/audio/accessory/package 9종 고정).
+- production `code_mapping_groups.default_category` 실제 값(accessorie/actcam/camera/
+  dronegim/hypepack/lens/light/phone) 중 'camera'/'lens' 2개만 일치 — 나머지 6개는 전부
+  `ELSE 'SUB'`로 떨어져 `SUB-SUB-####` 형태로 발급되고 있었음.
+- 수정: 신규 마이그레이션 `20260813000240_240_generate_subscription_product_code_dynamic_prefix.sql`
+  — CASE문 제거, `generate_product_code`의 최종 폴백과 동일한 `UPPER(LEFT(p_category,3))`로
+  항상 동적 계산. 시그니처·영구고정 guard·시퀀스 테이블 전부 무변경.
+- 진행 전 확인: 사용자 화면(/products) "카테고리 설정" 모달(ProductCategoryModal.svelte)이
+  영향받는지 직접 코드 확인 — `product_page_categories`/`upsert_product_page_setting`만
+  다루는 완전 별개 기능으로 무관함을 확인 후 진행.
+- 적용: stage(ezyvffjvuwmtuhpxdjrw) → production(vnbpmvxruyciuuaermyh) 순서 적용,
+  `pg_get_functiondef`로 양쪽 반영 확인 완료.
+
+### 쿠폰 카테고리 하드코딩 제거 (Stephen 승인)
+- `src/routes/cms/promotion/coupon/+page.svelte`의 `ALL_CATS = ['CAM','OPT',...]` 완전
+  하드코딩 배열 제거.
+- `+page.server.ts`에 products/new·subscriptions/new와 동일 패턴(service_role client로
+  `code_mapping_groups` 조회, `is_active`·`show_in_product_filter=true` 필터)의
+  `categoryOptions` 추가, 칩 렌더링을 `{value,label}` 객체 기반으로 교체(한글명 표시).
+- `applicable_categories`는 현재 어떤 서버 로직도 읽지 않는 write-only 필드임을 확인(저장만
+  되고 소비 코드 없음) — 저장 포맷을 `code_mapping_groups.default_category`로 통일해 향후
+  실제 필터링 기능이 붙을 때도 다른 화면과 동일한 카테고리 도메인을 쓰게 함.
+
+### 검증
+svelte-check — 대상 파일(coupon/+page.server.ts, +page.svelte) 신규 에러 0건.
+
+GATE E: 로직 확인 완료 — 커밋은 Stephen 직접 실행.
+
+## DONE — 흐름형(TipTap) 에디터에 서명·직인 이미지 삽입 기능 추가 (2026-08-13) ✅ 완료
+
+[CONTEXT BRIDGE]
+plan_source: Stephen 아젠다 — 고정캔버스 모드의 "발행자 이미지" 필드처럼 흐름형(TipTap)
+  에디터에도 등록된 서명·직인 이미지를 커서 위치에 삽입하는 기능 추가.
+핵심제약:
+  - 기존 GET /api/cms/signature-assets 재사용 (신규 API 불필요)
+  - 기존 setImage({ src }) TipTap 커맨드 재사용
+  - ContractDocumentEditor.svelte 외 파일 수정 없음
+  - contract-document.ts 절대 건드리지 않음
+TDD도메인: 없음 — GSD (기존 커맨드 재사용, 신규 로직 최소).
+
+수정 파일:
+  - src/lib/components/cms/contract-editor/ContractDocumentEditor.svelte (MODIFY)
+
+구현 내용:
+  1. SigAsset 인터페이스 + showSigPicker/sigAssets/sigLoading/sigPickerEl 상태 추가
+  2. openSigPicker() — 버튼 클릭 시 GET /api/cms/signature-assets 호출 + 팝오버 토글
+  3. insertSigAsset() — 선택된 자산의 image_url로 setImage({ src }) 실행 후 팝오버 닫기
+  4. $effect 클릭아웃사이드 — 팝오버 외부 클릭 시 자동 닫힘
+  5. 툴바에 "서명/직인" 버튼 + 팝오버 UI 추가 (썸네일 48×32 + 이름 + 서명/직인 배지)
+  6. 자산 없을 때 안내 문구 표시 (등록 경로 안내 포함)
+  7. CMS 표준 디자인 시스템 토큰 준수 (--cs-purple, --cs-lilac, --radius-sm 등)
+
+검증 결과:
+  - npx svelte-check: ContractDocumentEditor.svelte 신규 에러 0건 (기존 12건 사전 존재 에러 — 무관)
+  - contractTiptapRender ✓ / contractSsrSafety ✓ / contractContentMode ✓ / contractP6Canvas ✓
+  - docxImport ✓ / docxTableFormatting ✓ / clearIssuedContract ✓ — 회귀 없음
+
+GATE E: 완료 확인 — 커밋은 Stephen 직접 실행.
+
+---
+
+## DONE — 상품등록 콤보(조합)코드 채번 "미확인 코드" 노출 버그 검수·수정 (2026-08-13) — ✅ 2건 수정 완료, 1건 조사 후 보류, 1건 후속조사 필요(BACKLOG)
+
+[CONTEXT BRIDGE]
+plan_source: Stephen 검수 요청 — "설정/조합코드 설정 목록값을 기준해 다음 검수" 4개 항목
+  (①상품등록 분류선택 시 기준 품번코드 목록 노출 정상 여부 ②상품 목록 상세카드 부모상품
+  기준 품번코드정보 정상 노출 여부 ③자식상품 기준 품번코드+자식순번 채번 자동화
+  ④대중소 코드 순서·미확인 코드 노출 오류). 이후 launch-selected-element로 실제 화면
+  캡처(SONY "추천패키지" 카드, 기준 품번 CSHYP2608000)를 제시받아 구체 사례로 좁혀 추적.
+핵심제약:
+  - products.md §2 품번 정책(부모=code_series/자식=실채번/영구고정) 위반 금지
+  - 요청범위 외 수정 금지 — SuggestPicker.svelte(공용 컴포넌트) 미변경, new/+page.server.ts·
+    new/+page.svelte 2개 파일로 국한
+TDD도메인: 없음 (GSD — 필터 조건 추가 + 로컬 상태 비교 로직 수정, 신규 스키마/RPC 없음)
+절대금지: git 자율 실행 / 기존 마이그레이션 파일 수정 / 요청범위 외 파일 수정
+
+---
+
+### 조사 경과 (Explore 서브에이전트 2회 + production DB 직접 조회)
+
+1차 조사(일반 검수): `src/routes/cms/products/new/+page.server.ts` load()(63-68행, 활성/미삭제
+  필터 있음)와 create 액션(260-264행, 필터 없음)이 서로 다른 조건으로 `product_category_codes`를
+  조회한다는 비대칭을 발견 — 미리보기에선 빠지는 비활성/삭제 코드가 실제 저장(`code_series`)에는
+  섞여 들어갈 수 있는 구조적 결함.
+
+2차 조사(사용자 제시 스크린샷 검증): 위 필터 비대칭이 CSHYP2608000(SONY/추천패키지) 사례의
+  원인인지 직접 검증 → **무관으로 판명**. 이 상품은 콤보 경로가 아니라 2-param 카테고리 자동
+  폴백 경로를 탔고, `generate_product_code`(supabase/migrations/20260806000193_193_*.sql:164-196)
+  가 `category_taxonomy_map`/`product_category_codes(product_category=X, depth=0)` 매핑을
+  둘 다 못 찾으면 최종적으로 `UPPER(LEFT(p_category,3))`로 떨어지는 게 원인 — `UPPER(LEFT
+  ('hypepack',3))='HYP'` 정확히 일치.
+
+3차 조사(Stephen "분명히 콤보 선택했다" 반박 → 재추적): production DB 직접 조회로 "추천패키지"
+  그룹(group_id=b92a9ac1-90b9-4239-93d8-d5175f35ed4c)에 PG(대분류)+ACV/ANL/KRT/IDL/TRV(중분류)
+  5개 콤보가 전부 활성 상태로 정상 등록돼 있음을 확인 — hypepack은 "매핑이 없는 카테고리"가
+  아니라 "매핑은 있는데 등록 화면에서 콤보 선택이 유실된 케이스"였음. `products` 테이블에서
+  같은 그룹으로 48초 간격 등록된 테스트 상품 2건 대조:
+    - 06:24:08건 → code_series.category_code="PGACV" (콤보 정상 반영)
+    - 06:24:56건(Stephen이 본 카드) → code_series.category_code="HYP" (콤보 유실 → 폴백)
+  Explore 서브에이전트에 재위임해 SuggestPicker.svelte 내부 상태 흐름을 추적, 아래 버그 2를 특정.
+
+---
+
+### 버그 1 (수정 완료) — 콤보 채번 시 미리보기/실저장 필터 비대칭
+
+파일: `src/routes/cms/products/new/+page.server.ts` (260-264행)
+
+원인: `create` 액션이 콤보 아이템의 `product_category_codes`를 조회할 때 `load()`(63-68행)와
+  달리 `.eq('is_active', true).is('deleted_at', null)` 필터가 없어, 코드설정(`/cms/codes`)에서
+  비활성화·삭제된 분류코드가 콤보에 섞여 있으면 미리보기(축소된 조합)와 실제 저장(전체 합산)이
+  어긋난다. 저장된 `category_code`는 `code_series`(영구고정, products.md §2-2)에 그대로 박혀
+  `baseCodeDisplay()`(`src/routes/cms/products/+page.svelte:186-210`)가 재구성한 "기준 품번"에
+  등록 화면에서 본 적 없는 코드 세그먼트로 노출된다.
+
+수정:
+```ts
+// src/routes/cms/products/new/+page.server.ts 260-264행
+const { data: allCodes } = await admin
+  .from('product_category_codes')
+  .select('id, code, code_tier, depth')
+  .in('id', codeIds)
+  .eq('is_active', true)      // ← 추가
+  .is('deleted_at', null)     // ← 추가
+```
+
+대중소(TIER_ORDER) 정렬 자체는 정상 확인(버그 없음) — `af73ec5`(2026-08-13, 이전 세션)에서
+  `sortByTier()`(`src/lib/utils/comboCategoryCode.ts:38-44`)가 이미 depth 기반 임시정렬에서
+  code_tier 우선 정렬로 수정 완료된 상태.
+
+### 버그 2 (수정 완료) — 분류 검색창 재조작 시 콤보 선택이 조용히 초기화됨
+
+파일: `src/routes/cms/products/new/+page.svelte` (150-153행, 347-365행)
+
+원인: 공용 컴포넌트 `src/lib/components/common/SuggestPicker.svelte`의 `handleNativeInput`
+  (129-136행)이 검색창 입력값이 옵션 라벨과 정확히 일치하지 않는 순간 `selectedId=null`을
+  `onselect` 콜백 없이 직접 대입한다(한글 IME 조합 중간 입력 포함 — 매 keystroke마다 발생 가능).
+  이 상태에서 사용자가 드롭다운의 **같은** 그룹을 마우스로 다시 클릭하면 `selectOption()`이
+  넘기는 `previousId`가 이미 `null`이라, `+page.svelte`의 `onGroupPickerSelect`가 "그룹이
+  바뀌었다"고 오판해 `onGroupChange()`를 실행 — `selectedComboRowId`·`category`를 아무 경고
+  없이 리셋한다. 콤보 카드 클릭은 분명히 유효했지만, 이후 "분류" 검색창을 재확인하려고 한 번
+  더 건드리는 흔한 동작이 선택 내용을 지운다. Stephen의 "분명히 선택했다"는 주장은 코드상
+  근거가 있는 사실로 확인됨.
+
+수정 (SuggestPicker.svelte는 전 CMS 공용 컴포넌트라 미변경 — `new/+page.svelte`에 국소 수정):
+```ts
+// +page.svelte 150-153행 — 신규 state
+let lastConfirmedGroupId = $state<string | null>(null)
+
+// +page.svelte 347-365행 — 픽커의 불안정한 previousId 대신 이 값과 비교
+function onGroupPickerSelect(opt: SuggestPickerOption, _previousId: string | null) {
+  if (opt.id !== lastConfirmedGroupId) onGroupChange()
+  lastConfirmedGroupId = opt.id
+}
+function onGroupPickerInput(val: string) {
+  if (!val.trim() && selectedGroupId) {
+    selectedGroupId = null
+    lastConfirmedGroupId = null
+    onGroupChange()
+  }
+}
+```
+
+### 검증
+
+- `npx svelte-check` — `new/+page.server.ts`, `new/+page.svelte` 신규 타입/컴파일 에러 0건
+  (기존 a11y 경고·미사용 CSS 경고만 존재, 이번 두 수정과 무관 — 상세: aria-expanded on
+  textbox role×4, label 미연결×2, dialog role tabindex×2, autofocus 경고×1, 미사용 CSS
+  선택자 2건, 전부 이번 파일의 다른 부분에서 기존부터 있던 항목).
+
+### GATE B/C — Stephen 확인 이력 (AskUserQuestion, 이번 세션 내)
+
+- [x] hypepack 등 코드 매핑 없는 카테고리 폴백 정책 → "우선 조사만, 결정은 나중에" (미수정,
+  정책 결정 보류 — 재논의 시 이 블록 참조)
+- [x] 버그 1(콤보 필터 비대칭) 수정 여부 → "지금 수정 (권장)" 승인 → 완료
+- [x] 기존 잘못 저장된 상품(버그 1로 비활성/삭제 코드가 섞여 채번된 `code_series`) 데이터 보정
+  → "먼저 영향 범위만 조사 (권장)" 승인 → **조사 완료(아래 "영향범위 조사 결과" 참조) — 확인된
+  피해 상품 0건, 데이터 보정 불필요로 결론**
+- [x] 버그 2(분류 검색창 재조작 시 콤보 유실) 수정 여부 → "지금 수정 (권장)" 승인 → 완료
+
+### QA(@sp3-qa-agent) 1차 검수 — 블로킹 1건 발견 및 수정
+
+1차 검수 결과 버그 1 수정(필터 추가)이 기존 GREEN 테스트 2건을 깨뜨림을 발견:
+`src/__tests__/services/productCodeTierTwo.test.ts:181,199`가 `TypeError:
+admin.from(...).select(...).in(...).eq is not a function`로 실패 — 테스트 mock(118-128행)이
+`.select().in()`까지만 체이닝을 구현해뒀는데 수정된 실제 코드는 `.in().eq().is()`까지 체이닝하기
+때문. `git stash`로 대조해 수정 전 3/3 GREEN → 수정 후 1/3(TypeError 2건)으로 확정.
+
+수정: `productCodeTierTwo.test.ts` 5회차 mock(`product_category_codes` 조회)에
+`.in()` → `.eq()` → `.is()` 체이닝을 추가해 실제 쿼리 형태와 일치시킴. 다른 3개 관련 테스트
+파일(`productCodeComboMerge.test.ts`, `cloneProductPartnerCodeComboMerge.test.ts` — 둘 다
+`makeFlexChain`로 체인 패턴 무관 처리, `productNew.test.ts` — combo_row_id 없어 이 쿼리 자체를
+안 탐)은 영향 없음 확인.
+
+재검증: `npx vitest run --exclude '**/.claude/worktrees/**' src/__tests__/services/productCodeTierTwo.test.ts`
+→ 3 passed (3). (`.claude/worktrees/` 하위 동일 파일명 사본은 tsconfig 미해결로 별도 실패 —
+이번 세션과 무관한 스테일 워크트리 아티팩트, 실제 소스 경로 테스트와 무관.)
+
+### 수정 파일
+
+```
+src/routes/cms/products/new/+page.server.ts               (MODIFY — 버그 1)
+src/routes/cms/products/new/+page.svelte                  (MODIFY — 버그 2)
+src/__tests__/services/productCodeTierTwo.test.ts          (MODIFY — QA 발견 mock 회귀 수정)
+```
+
+### QA(@sp3-qa-agent) 2차 검수 — 통과
+
+mock 체이닝(`.in().eq().is()`)이 실제 코드와 순서·인자 완전 일치 확인, GREEN 테스트 assertion
+완화 없이 원래 검증 의도(7-param `p_parent_max_sequence`/`p_category_code_override` 정확한
+값) 유지 확인. 회귀 대상 3개 파일(`productCodeComboMerge.test.ts`,
+`cloneProductPartnerCodeComboMerge.test.ts`, `productNew.test.ts`) 17개 테스트 전부 통과.
+`npx svelte-check` 전체 12 errors/321 warnings는 전부 이번 세션 3개 파일과 무관한 pre-existing
+항목(마지막으로 이번 세션 이전에 수정된 파일들, diff 없음) 확인. `git status` 스코프도 요청한
+3개 파일로 한정됨을 재확인 — 그 외 M/`??` 파일은 이번 세션 이전부터 있던 무관한 미커밋 변경.
+
+**GATE E: ✅ 통과 — 블로킹 0건. 커밋은 Stephen 직접 실행.**
+
+---
+
+### 영향범위 조사 결과 (2026-08-13, 후속) — 버그 1로 인한 기존 오염 데이터: 확인된 피해 상품 0건
+
+방법: 버그 1이 실제 데이터를 오염시키려면 ①어떤 콤보에 이미 삭제/비활성화된 분류코드가 섞여
+있어야 하고 ②그 콤보로 실제 상품이 등록돼야 한다(등록 시점이 그 코드의 삭제 시점 이후). 두 DB
+(production `vnbpmvxruyciuuaermyh` + stage `ezyvffjvuwmtuhpxdjrw`)의 상품등록 8개 그룹
+(`show_in_product_filter=true`인 카메라·렌즈·스마트폰·악세서리·액션캠·조명·추천패키지·드론짐벌)
+전체 콤보를 대상으로, "삭제된 코드까지 포함한 값"(버그 있었을 때 실제 저장됐을 값 —
+`string_agg` TIER_ORDER 합산, 필터 없음)과 "활성 코드만의 값"(정상값 — 동일 합산에
+`is_active=true and deleted_at is null` 필터)을 SQL로 직접 대조.
+
+결과:
+- production: 문제 있는 콤보 1개(액션캠, `A36ACMAT` vs `A36ACM`) — 그러나 이 카테고리 상품
+  6건 전부 2026-07-21~22 등록된 레거시(code_series 정책 도입 전, `product_code` 직접기재)
+  상품이라 콤보 경로 자체를 타지 않음 → 영향 0건
+- stage: 문제 있는 콤보 2개(렌즈 `LENPTSRE` vs `LENPTS`, 카메라 `CMRCOMRE` vs `CMRCOM`) —
+  두 카테고리 다 콤보 경로로 등록된 상품 자체가 없음 → 영향 0건
+- production `code_series` 보유 상품 26건, stage 3건 전수 대조 결과 위 버그 저장값과 일치하는
+  `category_code`는 없음
+
+**결론: 버그 1로 실제 오염된 상품 데이터는 없다 — 데이터 보정 불필요, 후속조치 종료.**
+(참고: Stephen이 최초 발견한 `CSHYP2608000`은 이 조사와 무관한 별개 버그 2(UI 선택 유실)로
+이미 분류·수정 완료됨 — 위 참조.)
+
+### 신규 발견 — 범위 외, 미수정 (다음 세션 확인 필요)
+
+조사 중 **동일 클래스의 필터 누락 버그**를 다른 파일에서 추가 발견:
+`src/routes/cms/products/+page.server.ts:1140-1144` — "상품 복제 → 신규상품"(파트너 조합코드)
+경로의 4단계 "전체 코드 조회"(`allCodes`, 실채번용)에 `.eq('is_active', true).is('deleted_at',
+null)` 필터가 없음(바로 위 2-3단계 검증 쿼리 1113-1120행/1124-1133행에는 필터가 있는데 이
+4단계 실채번 쿼리에만 없음 — 오늘 수정한 `new/+page.server.ts`와 동일한 비대칭 패턴).
+오늘 승인된 수정 범위(`new/+page.server.ts`)에 포함되지 않은 파일이라 **손대지 않음** — 이
+경로(파트너 콤보 복제 등록)의 실제 오염 영향범위 조사 및 수정 여부는 Stephen 확인 후 별도
+세션에서 진행.
+
+---
+
+## DONE — cloneProduct 파트너 조합코드 경로 동일 필터 비대칭 버그 수정 (2026-08-13, 후속) — ✅ GATE E 통과
+
+[CONTEXT BRIDGE]
+plan_source: Stephen 명시적 지시 — "cloneProduct 파트너 조합코드 경로도 지금 수정해." (직전에
+  기록해둔 "신규 발견 — 범위 외, 미수정" 항목의 즉시 실행 승인)
+핵심제약: products.md §2-2 영구고정 정책 위반 금지, 요청범위(해당 1개 쿼리)만 수정
+TDD도메인: 없음 (GSD — 필터 조건 추가, new/+page.server.ts와 동일 패턴)
+
+파일: `src/routes/cms/products/+page.server.ts` (1140-1148행)
+
+수정: "new_product 모드"(상품 복제 → 신규상품, 파트너 조합코드 선택) 흐름의 4단계 "전체 코드
+조회"(`allCodes`, `buildComboCategoryCode()` 합산 → `code_series.category_code` 영구 저장용)
+쿼리에 `.eq('is_active', true).is('deleted_at', null)` 필터 추가 — 바로 위 2-3단계(`mainCode`/
+`subCode`, BND-PARTNERCODE-1 카테고리 일치성 검증용)와 동일한 필터로 통일. `new/+page.server.ts`
+버그 1과 정확히 동일한 클래스(검증 쿼리는 필터 있음, 실채번 쿼리는 필터 없음)였음.
+
+```ts
+const { data: allCodes } = await admin
+  .from('product_category_codes')
+  .select('id, code, code_tier, depth')
+  .in('id', tcIds)
+  .eq('is_active', true)      // ← 추가
+  .is('deleted_at', null)     // ← 추가
+```
+
+검증:
+- `npx vitest run --exclude '**/.claude/worktrees/**' src/__tests__/server/cloneProductPartnerCodeComboMerge.test.ts`
+  → 5 passed (5), mock 수정 불필요(이 파일은 `makeFlexChain` 헬퍼로 `eq`/`is` 체이닝을 이미
+  포함하고 있어 필터 추가와 무관하게 통과 — `productCodeTierTwo.test.ts`처럼 mock 보강이
+  필요했던 1차 수정과 달리 이번엔 회귀 없음)
+- `npx svelte-check` — 전체 1 error(기존 `products/search/+page.svelte`, 무관)/322 warnings,
+  이번 파일 신규 에러 0건
+
+### 영향범위 조사 (파트너 조합코드 경로 전용)
+
+이 경로는 `is_partner_type=true` 그룹의 콤보만 사용(`+page.server.ts:83-87` 로드 쿼리 — 앞선
+`show_in_product_filter=true` 8개 그룹과는 별개 필터 축, 겹칠 수도 아닐 수도 있음에 주의).
+동일 방법론(삭제코드 포함값 vs 활성코드만값 SQL 대조)으로 재조사:
+- production: `is_partner_type=true` 그룹 1개("partner company", PTN) — 콤보 1개, 삭제/비활성
+  구성요소 없음 → 오염 가능성 자체가 없음
+- stage: `is_partner_type=true` 그룹 3개("렌즈"/"카메라"/"협력사" — stage 전용 테스트 설정으로
+  production과 플래그가 다름) — 렌즈·카메라 콤보는 앞서 버그 1 조사에서 이미 전수 대조 완료된
+  동일 상품 집합(카테고리는 소스 상품에서 상속되므로 경로가 달라도 대상 상품 집합은 동일) —
+  기존 조사에서 확인된 0건 결론 그대로 적용됨. 협력사 그룹 콤보 3개는 삭제/비활성 구성요소 없음
+
+**결론: 이 경로로도 실제 오염된 상품 데이터는 없음 — 데이터 보정 불필요.**
+
+### 수정 파일
+
+```
+src/routes/cms/products/+page.server.ts (MODIFY)
+```
+
+### QA(@sp3-qa-agent) 검수 — 통과
+
+diff가 사전 설명과 완전 일치, 필터링 후 allCodes가 비는 경우도 기존 `if (!partnerCodeId ||
+!partnerComboCategoryCode)` 가드가 정상적으로 fail(400) 처리함을 로직 추적으로 확인(회귀 없음).
+`cloneProductPartnerCodeComboMerge.test.ts` 5/5 GREEN(makeFlexChain이 eq/is 체이닝 이미 포함 —
+mock 보강 불필요). svelte-check 신규 에러 0건(기존 1건은 무관 파일). products.md §2-2 위반 없음
+— 채번 RPC·저장된 code_series는 미변경, 조회 필터만 수정. 범위도 대상 파일 1개로 한정 확인.
+
+**GATE E: ✅ 통과 — 블로킹 0건. 커밋은 Stephen 직접 실행.**

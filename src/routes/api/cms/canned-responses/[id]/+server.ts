@@ -24,6 +24,15 @@ export const PATCH: RequestHandler = async ({ locals, request, params }) => {
     updates.shortcut = s || null
   }
   if ('match_keywords' in body) updates.match_keywords = normalizeKeywords(body.match_keywords)
+  if ('image_url' in body) {
+    updates.image_url = typeof body.image_url === 'string' ? body.image_url.trim() || null : null
+  }
+  if ('cta_label' in body) {
+    updates.cta_label = typeof body.cta_label === 'string' ? body.cta_label.trim() || null : null
+  }
+  if ('cta_url' in body) {
+    updates.cta_url = typeof body.cta_url === 'string' ? body.cta_url.trim() || null : null
+  }
 
   if (Object.keys(updates).length === 0) {
     return json({ error: '변경할 내용이 없습니다.' }, { status: 400 })
@@ -40,7 +49,7 @@ export const PATCH: RequestHandler = async ({ locals, request, params }) => {
     .from('canned_responses')
     .update(updates)
     .eq('id', id)
-    .select('id, title, content, category, shortcut, match_keywords, usage_count, created_at')
+    .select('id, title, content, category, shortcut, match_keywords, usage_count, created_at, image_url, cta_label, cta_url')
     .single()
 
   if (error) {

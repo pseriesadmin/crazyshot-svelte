@@ -30,6 +30,9 @@ export const POST: RequestHandler = async ({ request, locals }) => {
   const sessionId       = (body?.session_id        as string | undefined)?.trim() ?? ''
   const content         = (body?.content            as string | undefined)?.trim() ?? ''
   const cannedResponseId = (body?.canned_response_id as string | undefined)?.trim() || null
+  // GSD-16: product_link 액션카드 페이로드 (선택적)
+  const actionPayload   = (body?.action_payload     as Record<string, unknown> | undefined) ?? null
+  const messageType     = actionPayload ? 'action_card' : 'text'
 
   if (!sessionId || !content) {
     return json({ error: 'session_id와 content는 필수입니다.' }, { status: 400 })
@@ -67,15 +70,16 @@ export const POST: RequestHandler = async ({ request, locals }) => {
       .eq('id', sessionId)
   }
 
-  // 메시지 저장
+  // 메시지 저장 (GSD-16: product_link action_card 포함 지원)
   const { data: message, error: insertErr } = await admin
     .from('chat_messages')
     .insert({
-      session_id:   sessionId,
-      sender_type:  'admin',
+      session_id:    sessionId,
+      sender_type:   'admin',
       content,
-      message_type: 'text',
-      is_read:      false,
+      message_type:  messageType,
+      action_payload: actionPayload,
+      is_read:       false,
     })
     .select()
     .single()
