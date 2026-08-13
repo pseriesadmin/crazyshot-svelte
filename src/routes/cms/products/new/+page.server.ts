@@ -257,11 +257,15 @@ export const actions: Actions = {
         comboParentMaxSequence = (comboItems[0] as { parent_max_sequence: number | null }).parent_max_sequence ?? null
 
         // 모든 분류코드 조회 (code + code_tier + depth — TIER_ORDER 정렬에 필요)
+        // 미리보기(load() 63-68행)와 동일한 활성/미삭제 필터 — 필터 불일치 시 미리보기에
+        // 없던 코드가 code_series에 저장돼 "미확인 코드"로 노출되는 버그 방지
         const codeIds = comboItems.map((i: { taxonomy_code_id: string }) => i.taxonomy_code_id)
         const { data: allCodes } = await admin
           .from('product_category_codes')
           .select('id, code, code_tier, depth')
           .in('id', codeIds)
+          .eq('is_active', true)
+          .is('deleted_at', null)
 
         if (allCodes && allCodes.length > 0) {
           // 합산 분류코드 빌드 (대→중→소 TIER_ORDER 정렬 후 연결)

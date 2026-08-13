@@ -1138,10 +1138,16 @@ export const actions: Actions = {
           }
 
           // 4. 전체 코드 조회 (depth 무관 — TIER_ORDER 합산 분류코드 빌드용)
+          // 버그 수정(2026-08-13): 2-3단계(mainCode/subCode) 검증 쿼리와 동일한 활성/미삭제
+          // 필터가 없어, 콤보에 비활성/삭제 코드가 섞여 있으면 검증은 통과하고 실제 저장되는
+          // category_code에는 그 코드까지 합산돼 들어가던 비대칭 버그(new/+page.server.ts와
+          // 동일 클래스, 2026-08-13 세션에서 발견)
           const { data: allCodes } = await admin
             .from('product_category_codes')
             .select('id, code, code_tier, depth')
             .in('id', tcIds)
+            .eq('is_active', true)
+            .is('deleted_at', null)
 
           if (allCodes && allCodes.length > 0) {
             partnerComboCategoryCode = buildComboCategoryCode(
