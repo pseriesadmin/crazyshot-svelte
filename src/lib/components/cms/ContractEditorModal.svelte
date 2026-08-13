@@ -13,8 +13,9 @@
   import ContractDocumentEditor from '$lib/components/cms/contract-editor/ContractDocumentEditor.svelte'
   import ContractFieldPanel from '$lib/components/cms/contract-editor/ContractFieldPanel.svelte'
   import ContractImportModal from '$lib/components/cms/contract-editor/ContractImportModal.svelte'
-  import { isTiptapDocBlock } from '$lib/types/contract-document'
-  import type { TiptapDocBlock, MergeFieldAttrs } from '$lib/types/contract-document'
+  import ContractCanvasEditor from '$lib/components/cms/contract-editor/ContractCanvasEditor.svelte'
+  import { isTiptapDocBlock, isCanvasDocument } from '$lib/types/contract-document'
+  import type { TiptapDocBlock, MergeFieldAttrs, CanvasDocument, ContractCanvasPayload } from '$lib/types/contract-document'
   import type { JSONContent } from '@tiptap/core'
 
   interface Props {
@@ -37,6 +38,10 @@
   let initialHtml    = $state<string | undefined>(undefined)
   let specs          = $state<{ key: string; value: string }[]>([{ key: '', value: '' }])
 
+  // canvas 모드 상태
+  let authoringMode  = $state<'flow' | 'canvas' | null>(null)
+  let canvasDocInit  = $state<CanvasDocument | null>(null)
+
   // 에디터 컴포넌트 참조 (insertMergeField / setEditorContent / insertEditorContent / getEditorJSON)
   let editorRef: {
     insertMergeField:   (attrs: MergeFieldAttrs) => void
@@ -56,27 +61,35 @@
           title?: string
           content_blocks?: unknown[]
           specifications?: { key: string; value: string }[]
+          authoring_mode?: string
+          canvas_document?: unknown
         }
         title = body.title ?? ''
         specs = (body.specifications?.length ?? 0) > 0
           ? (body.specifications as { key: string; value: string }[])
           : [{ key: '', value: '' }]
 
-        // content_blocks 포맷 감지
-        const blocks = body.content_blocks ?? []
-        if (blocks.length > 0 && isTiptapDocBlock(blocks[0])) {
-          // 신규 TipTap 포맷
-          initialContent = blocks[0] as TiptapDocBlock
-        } else if (blocks.length > 0) {
-          // 레거시 CmsContentEditor ContentBlock 배열 → HTML 추출
-          const legacyHtml = (blocks as Array<{ type?: string; html?: string; content?: string }>)
-            .map((b) => {
-              if (b.type === 'text' && b.html) return b.html
-              if (b.type === 'html' && b.content) return b.content
-              return ''
-            })
-            .join('')
-          initialHtml = legacyHtml || undefined
+        // authoring_mode 감지 — canvas vs flow 분기
+        if (body.authoring_mode === 'canvas' && isCanvasDocument(body.canvas_document)) {
+          authoringMode = 'canvas'
+          canvasDocInit = body.canvas_document as CanvasDocument
+        } else {
+          authoringMode = 'flow'
+          // content_blocks 포맷 감지
+          const blocks = body.content_blocks ?? []
+          if (blocks.length > 0 && isTiptapDocBlock(blocks[0])) {
+            initialContent = blocks[0] as TiptapDocBlock
+          } else if (blocks.length > 0) {
+            // 레거시 CmsContentEditor ContentBlock 배열 → HTML 추출
+            const legacyHtml = (blocks as Array<{ type?: string; html?: string; content?: string }>)
+              .map((b) => {
+                if (b.type === 'text' && b.html) return b.html
+                if (b.type === 'html' && b.content) return b.content
+                return ''
+              })
+              .join('')
+            initialHtml = legacyHtml || undefined
+          }
         }
       }
     } catch {
@@ -87,7 +100,7 @@
   })
 
   // --------------------------------------------------------------------------
-  // 저장
+  // 저장 (flow 모드)
   // --------------------------------------------------------------------------
   async function save() {
     if (!editorRef) return
@@ -103,6 +116,7 @@
           title,
           content_blocks: contentBlocks,
           specifications: specs.filter((s) => s.key.trim()),
+          authoring_mode: 'flow',
         }),
       })
       if (res.ok) {
@@ -117,6 +131,57 @@
     } finally {
       saving = false
     }
+  }
+
+  // --------------------------------------------------------------------------
+  // 저장 (canvas 모드) — ContractCanvasEditor.onSave 콜백
+  // EC-3 클라이언트 검증은 ContractCanvasEditor.handleSave()에서 처리 후 여기로 진입.
+  // 서버에서 재검증(content/+server.ts PATCH)이 이중으로 수행됨.
+  // --------------------------------------------------------------------------
+  async function handleCanvasSave(payload: ContractCanvasPayload): Promise<void> {
+    saving = true
+    try {
+      const res = await fetch(`/api/cms/contracts/${contractId}/content`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          title:           payload.title || title,
+          content_blocks:  [],
+          specifications:  specs.filter((s) => s.key.trim()),
+          authoring_mode:  'canvas',
+          canvas_document: payload.canvasDocument,
+        }),
+      })
+      if (res.ok) {
+        csToast.success('계약서가 저장되었습니다.')
+        onclose()
+      } else {
+        const body = await res.json().catch(() => ({})) as { error?: string }
+        csToast.error(body.error ?? '저장에 실패했습니다.')
+      }
+    } catch {
+      csToast.error('네트워크 오류가 발생했습니다.')
+    } finally {
+      saving = false
+    }
+  }
+
+  // --------------------------------------------------------------------------
+  // 배경 이미지 업로드 (canvas 모드) — 템플릿 패널과 동일 엔드포인트 재사용
+  // --------------------------------------------------------------------------
+  async function uploadCanvasBackground(blob: Blob, fileName: string): Promise<string> {
+    const formData = new FormData()
+    formData.set('file', blob, fileName)
+    const res = await fetch('/api/cms/contract-templates/canvas-bg', {
+      method: 'POST',
+      body:   formData,
+    })
+    if (!res.ok) {
+      const body = await res.json().catch(() => null) as { error?: string } | null
+      throw new Error(body?.error ?? '배경 이미지 업로드에 실패했습니다.')
+    }
+    const data = await res.json() as { url: string }
+    return data.url
   }
 
   // --------------------------------------------------------------------------
@@ -144,20 +209,45 @@
     <div class="modal-header">
       <span class="modal-title">계약서 편집</span>
       <div class="modal-header-actions">
-        <button
-          type="button"
-          class="btn-import"
-          onclick={() => { showImport = true }}
-          title="외부 문서 가져오기"
-          disabled={loading}
-        >문서 가져오기</button>
+        {#if authoringMode === 'flow'}
+          <button
+            type="button"
+            class="btn-import"
+            onclick={() => { showImport = true }}
+            title="외부 문서 가져오기"
+            disabled={loading}
+          >문서 가져오기</button>
+        {/if}
         <button type="button" class="close-btn" onclick={onclose} aria-label="닫기">✕</button>
       </div>
     </div>
 
     {#if loading}
       <div class="modal-loading">데이터를 불러오는 중...</div>
+    {:else if authoringMode === 'canvas'}
+      <!-- canvas 모드: 제목 입력 + ContractCanvasEditor (자체 저장 버튼 포함) -->
+      <div class="modal-title-row">
+        <label class="f-label" for="contract-title-canvas">계약서 제목</label>
+        <input
+          id="contract-title-canvas"
+          class="f-input"
+          bind:value={title}
+          placeholder="계약서 제목"
+        />
+      </div>
+      <div class="canvas-editor-wrap">
+        {#key contractId}
+          <ContractCanvasEditor
+            initialDoc={canvasDocInit}
+            title={title}
+            specifications={specs.filter((s) => s.key.trim())}
+            onUploadPage={uploadCanvasBackground}
+            onSave={handleCanvasSave}
+          />
+        {/key}
+      </div>
     {:else}
+      <!-- flow 모드 (기존 동작) -->
       <!-- 제목 -->
       <div class="modal-title-row">
         <label class="f-label" for="contract-title">계약서 제목</label>
@@ -189,7 +279,7 @@
         </div>
       </div>
 
-      <!-- 푸터 -->
+      <!-- 푸터 (flow 모드 전용) -->
       <div class="modal-footer">
         <button type="button" class="btn-secondary" onclick={onclose}>취소</button>
         <button type="button" class="btn-action" onclick={save} disabled={saving}>
@@ -355,6 +445,19 @@
     flex: 1;
     border: none;
     border-radius: 0;
+  }
+
+  /* canvas 에디터 래퍼 (modal-box flex 내에서 나머지 공간 채움) */
+  .canvas-editor-wrap {
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+  .canvas-editor-wrap :global(.cce-wrap) {
+    flex: 1;
+    min-height: 0;
   }
 
   /* 푸터 */

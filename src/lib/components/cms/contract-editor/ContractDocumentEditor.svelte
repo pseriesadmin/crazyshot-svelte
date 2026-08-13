@@ -91,6 +91,57 @@
   let imgInput: HTMLInputElement | null = $state(null)
 
   // --------------------------------------------------------------------------
+  // 서명/직인 자산 삽입 팝오버 (기존 GET /api/cms/signature-assets 재사용)
+  // --------------------------------------------------------------------------
+  interface SigAsset {
+    id: string
+    asset_type: string
+    image_url: string
+    label: string | null
+    is_default: boolean
+  }
+
+  let showSigPicker  = $state(false)
+  let sigAssets      = $state<SigAsset[]>([])
+  let sigLoading     = $state(false)
+  let sigPickerEl: HTMLDivElement | null = $state(null)
+
+  async function openSigPicker() {
+    if (showSigPicker) {
+      showSigPicker = false
+      return
+    }
+    showSigPicker = true
+    sigLoading = true
+    try {
+      const res = await fetch('/api/cms/signature-assets')
+      sigAssets = res.ok ? (await res.json() as SigAsset[]) : []
+    } catch {
+      sigAssets = []
+    } finally {
+      sigLoading = false
+    }
+  }
+
+  function insertSigAsset(asset: SigAsset) {
+    $editorStore?.chain().focus().setImage({ src: asset.image_url }).run()
+    showSigPicker = false
+  }
+
+  // 팝오버 외부 클릭 시 닫기
+  $effect(() => {
+    if (!showSigPicker) return
+    function onDocClick(e: MouseEvent) {
+      const el = sigPickerEl
+      if (el && !el.contains(e.target as Node)) {
+        showSigPicker = false
+      }
+    }
+    document.addEventListener('click', onDocClick)
+    return () => document.removeEventListener('click', onDocClick)
+  })
+
+  // --------------------------------------------------------------------------
   // 서식 메뉴 핸들러 (P1-4)
   // --------------------------------------------------------------------------
   function toggle(cmd: string, opts?: Record<string, unknown>) {
@@ -432,6 +483,57 @@
 
       <div class="cde-sep"></div>
 
+      <!-- 서명/직인 삽입 (기존 GET /api/cms/signature-assets 재사용) -->
+      <div class="cde-group cde-sig-group" bind:this={sigPickerEl}>
+        <button
+          type="button"
+          class="cde-btn"
+          class:active={showSigPicker}
+          onclick={openSigPicker}
+          title="서명/직인 이미지 삽입"
+          aria-label="서명/직인 이미지 삽입"
+          aria-expanded={showSigPicker}
+          aria-haspopup="listbox"
+        >서명/직인</button>
+
+        {#if showSigPicker}
+          <div class="cde-sig-popover" role="listbox" aria-label="서명/직인 자산 목록">
+            {#if sigLoading}
+              <div class="cde-sig-info">불러오는 중...</div>
+            {:else if sigAssets.length === 0}
+              <div class="cde-sig-info cde-sig-empty">
+                등록된 서명·직인이 없습니다.<br />발행자 서명·직인 필수 토글 아래<br />'서명 &amp; 직인 이미지 등록' 버튼으로 먼저 등록하세요.
+              </div>
+            {:else}
+              <div class="cde-sig-list">
+                {#each sigAssets as asset (asset.id)}
+                  <button
+                    type="button"
+                    class="cde-sig-item"
+                    role="option"
+                    aria-selected={false}
+                    onclick={() => insertSigAsset(asset)}
+                    aria-label="{asset.asset_type === 'signature' ? '서명' : '직인'} 삽입{asset.label ? ': ' + asset.label : ''}"
+                  >
+                    <img
+                      src={asset.image_url}
+                      alt="{asset.asset_type === 'signature' ? '서명' : '직인'} 미리보기"
+                      class="cde-sig-thumb"
+                    />
+                    <div class="cde-sig-meta">
+                      <span class="cde-sig-label">{asset.label ?? (asset.asset_type === 'signature' ? '서명' : '직인')}</span>
+                      <span class="cde-sig-badge cde-sig-badge--{asset.asset_type}">{asset.asset_type === 'signature' ? '서명' : '직인'}</span>
+                    </div>
+                  </button>
+                {/each}
+              </div>
+            {/if}
+          </div>
+        {/if}
+      </div>
+
+      <div class="cde-sep"></div>
+
       <!-- HTML 소스 보기 (P1-7) -->
       <div class="cde-group">
         <button
@@ -741,4 +843,104 @@
     transition: background 0.1s;
   }
   .btn-cancel:hover { background: var(--cs-lilac, #ECEBF4); }
+
+  /* ── 서명/직인 삽입 팝오버 ── */
+  .cde-sig-group {
+    position: relative;
+  }
+
+  .cde-sig-popover {
+    position: absolute;
+    top: calc(100% + 4px);
+    left: 0;
+    z-index: 200;
+    background: var(--cs-white, #fff);
+    border: 1px solid var(--cs-lilac, #ECEBF4);
+    border-radius: var(--cms-radius-sm, 8px);
+    box-shadow: 0 4px 16px rgba(16, 11, 50, 0.12);
+    min-width: 220px;
+    max-width: 320px;
+    overflow: hidden;
+  }
+
+  .cde-sig-info {
+    padding: 14px 16px;
+    font-size: 12px;
+    color: var(--cs-text-mid, #666);
+    line-height: 1.6;
+    text-align: center;
+  }
+
+  .cde-sig-empty {
+    color: var(--cs-text-mid, #666);
+  }
+
+  .cde-sig-list {
+    display: flex;
+    flex-direction: column;
+    max-height: 280px;
+    overflow-y: auto;
+    padding: 4px;
+  }
+
+  .cde-sig-item {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 8px 10px;
+    background: none;
+    border: 1px solid transparent;
+    border-radius: var(--cms-radius-sm, 8px);
+    cursor: pointer;
+    text-align: left;
+    transition: background 0.1s, border-color 0.1s;
+    width: 100%;
+  }
+  .cde-sig-item:hover {
+    background: var(--cs-lilac, #ECEBF4);
+    border-color: var(--cs-lilac, #ECEBF4);
+  }
+
+  .cde-sig-thumb {
+    width: 48px;
+    height: 32px;
+    object-fit: contain;
+    border: 1px solid var(--cs-lilac, #ECEBF4);
+    border-radius: 4px;
+    background: #fafafa;
+    flex-shrink: 0;
+  }
+
+  .cde-sig-meta {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    min-width: 0;
+  }
+
+  .cde-sig-label {
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--cs-text, #100B32);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .cde-sig-badge {
+    display: inline-block;
+    font-size: 10px;
+    font-weight: 700;
+    padding: 1px 6px;
+    border-radius: 99px;
+    line-height: 1.4;
+  }
+  .cde-sig-badge--signature {
+    background: rgba(59, 47, 138, 0.08);
+    color: var(--cs-purple, #3B2F8A);
+  }
+  .cde-sig-badge--seal {
+    background: rgba(16, 11, 50, 0.07);
+    color: var(--cs-text, #100B32);
+  }
 </style>

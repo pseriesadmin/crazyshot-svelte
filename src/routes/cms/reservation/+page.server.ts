@@ -4,7 +4,9 @@ import { PUBLIC_SUPABASE_URL } from '$env/static/public'
 import { redirect, fail } from '@sveltejs/kit'
 import type { Actions, PageServerLoad } from './$types'
 import { getCmsRoleForAction } from '$lib/server/getCmsRoleForAction'
+import { hasSettingsAccess } from '$lib/utils/cmsPermissions'
 import { sendReservationLifecyclePush } from '$lib/server/push'
+import { clearIssuedContractContent } from '$lib/server/clearIssuedContractHelper'
 
 export interface RentalListRow {
   reservation_id:    number
@@ -151,6 +153,22 @@ export const actions: Actions = {
       // 상태 전환 푸시 알림 병행 발송 (채팅과 독립 — 실패해도 위 처리에 영향 없음)
       await sendReservationLifecyclePush(admin, reservationId, notifyType)
     }
+    return { ok: true }
+  },
+
+  clearIssuedContract: async ({ request, locals }) => {
+    const { session } = await locals.safeGetSession()
+    if (!session) return fail(401, { error: '인증 필요' })
+    const cmsRole = await getCmsRoleForAction(locals)
+    if (!cmsRole || !hasSettingsAccess(cmsRole)) return fail(403, { error: '권한 없음' })
+
+    const admin      = createClient(PUBLIC_SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
+    const data       = await request.formData()
+    const contractId = data.get('id') as string
+    if (!contractId) return fail(400, { error: '계약서 ID가 없습니다.' })
+
+    const result = await clearIssuedContractContent(contractId, admin)
+    if (!result.ok) return fail(result.httpStatus, { error: result.error })
     return { ok: true }
   },
 }

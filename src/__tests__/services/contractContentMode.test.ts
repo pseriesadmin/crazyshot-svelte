@@ -83,6 +83,56 @@ describe('hasExistingContractContent — 기존 편집 내용 감지 판별', ()
       { type: 'html', content: '<p>2조</p>' },
     ])).toBe(true)
   })
+
+  // ── canvas 계약 케이스 (QA 5차 재검수 발견 — 2026-08-13) ─────────────────────
+  // canvas 계약은 content_blocks가 항상 [] — canvas_document에 실제 내용이 저장됨
+
+  it('canvas_document가 있고 fields >= 1이면 true (canvas 계약 감지)', async () => {
+    const { hasExistingContractContent } = await import('$lib/utils/contract-content-mode.js')
+    const canvasDoc = {
+      pages: [{ id: 'p1', imageUrl: 'https://example.com/bg.png', width: 800, height: 1100 }],
+      fields: [
+        { id: 'f1', pageId: 'p1', type: 'signature', x: 0, y: 0, width: 100, height: 50, required: true, label: '서명' },
+      ],
+    }
+    // canvas 계약의 실제 DB 상태: content_blocks=[], canvas_document=유효한 CanvasDocument
+    expect(hasExistingContractContent([], canvasDoc)).toBe(true)
+  })
+
+  it('canvas_document가 있지만 fields가 빈 배열이면 false', async () => {
+    const { hasExistingContractContent } = await import('$lib/utils/contract-content-mode.js')
+    const emptyCanvasDoc = { pages: [], fields: [] }
+    expect(hasExistingContractContent([], emptyCanvasDoc)).toBe(false)
+  })
+
+  it('canvas_document가 유효하지 않은 형식(CanvasDocument 아님)이면 false', async () => {
+    const { hasExistingContractContent } = await import('$lib/utils/contract-content-mode.js')
+    expect(hasExistingContractContent([], { notValid: true })).toBe(false)
+  })
+
+  it('canvasDocument가 null이면 false (content_blocks도 비어있을 때)', async () => {
+    const { hasExistingContractContent } = await import('$lib/utils/contract-content-mode.js')
+    expect(hasExistingContractContent([], null)).toBe(false)
+  })
+
+  it('canvasDocument가 undefined이면 기존 동작 유지 (content_blocks 기준)', async () => {
+    const { hasExistingContractContent } = await import('$lib/utils/contract-content-mode.js')
+    expect(hasExistingContractContent([], undefined)).toBe(false)
+    expect(hasExistingContractContent([{ type: 'text', html: '<p>x</p>' }], undefined)).toBe(true)
+  })
+
+  it('canvas_document 여러 필드 혼재해도 true (signature 외 text/label/issuer-image 포함)', async () => {
+    const { hasExistingContractContent } = await import('$lib/utils/contract-content-mode.js')
+    const canvasDoc = {
+      pages: [{ id: 'p1', imageUrl: 'https://example.com/bg.png', width: 800, height: 1100 }],
+      fields: [
+        { id: 'f1', pageId: 'p1', type: 'signature', x: 0, y: 0, width: 100, height: 50, required: true, label: '서명' },
+        { id: 'f2', pageId: 'p1', type: 'text', x: 100, y: 100, width: 200, height: 36, required: false, label: '고객명', boundVariable: '고객이름' },
+        { id: 'f3', pageId: 'p1', type: 'label', x: 50, y: 50, width: 150, height: 28, required: false, label: '렌탈 계약서' },
+      ],
+    }
+    expect(hasExistingContractContent([], canvasDoc)).toBe(true)
+  })
 })
 
 // ── 시나리오별 모드 결정 — 불변식 문서화 ─────────────────────────────────────
@@ -126,6 +176,39 @@ describe('[S2] 기존 편집 내용 보존 — existing 모드 기본값', () =>
       expect(true).toBe(true)
     }
   )
+})
+
+describe('[S2-canvas] canvas 계약 — existing 모드 감지 (QA 5차 재검수 발견)', () => {
+  it('content_blocks 빈 배열이지만 canvas_document에 필드가 있으면 existing 모드 진입', async () => {
+    const { hasExistingContractContent } = await import('$lib/utils/contract-content-mode.js')
+    const canvasDoc = {
+      pages: [{ id: 'p1', imageUrl: 'https://example.com/bg.png', width: 800, height: 1100 }],
+      fields: [
+        { id: 'f1', pageId: 'p1', type: 'signature', x: 0, y: 0, width: 100, height: 50, required: true, label: '서명' },
+      ],
+    }
+    // canvas 계약의 실제 DB 상태: content_blocks=[], canvas_document=유효한 CanvasDocument
+    expect(hasExistingContractContent([], canvasDoc)).toBe(true)
+    // → ContractTemplatePreviewModal: contentMode='existing' 진입
+    //   → 원래 발행됐던 canvas 내용 보존, 다른 템플릿으로 조용히 교체되지 않음
+    // → RentalContractViewer: hasIssuedContent=true → "발행 목록" 섹션 정상 노출
+  })
+
+  it('불변식: canvas 계약 reopen 시 경고 없이 다른 템플릿이 자동 선택되는 경로가 없어야 한다', () => {
+    /**
+     * 수정 전 버그 재현:
+     *   canvas 계약(content_blocks=[])을 발행 후 모달을 다시 열면
+     *   hasExistingContractContent([]) = false → contentMode='template' 유지
+     *   → initialTemplateId=''이므로 templates[0](가장 최근 템플릿)이 자동 selectedId로 설정됨
+     *   → 관리자가 그대로 "채팅으로 발송" 클릭하면 원래 발행 내용이 다른 템플릿으로 교체·재발송
+     *
+     * 수정 후:
+     *   hasExistingContractContent([], canvasDoc) = true → contentMode='existing'
+     *   → selectedId는 설정되지 않음, send()는 PATCH 없이 send-chat만 호출
+     *   → 원래 발행된 canvas 내용 그대로 발송
+     */
+    expect(true).toBe(true)
+  })
 })
 
 describe('[S3] 덮어쓰기 명시 확인 후 템플릿 재적용', () => {

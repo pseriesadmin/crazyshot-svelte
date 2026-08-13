@@ -14,6 +14,10 @@
     content_blocks: AnyContentBlock[]
     specifications: { key: string; value: string }[]
     created_at: string
+    /** canvas 모드 여부 — GET /api/cms/contract-templates로 반환 */
+    authoring_mode?: string
+    /** canvas 모드 문서 — authoring_mode='canvas'일 때 contracts.canvas_document에 저장 */
+    canvas_document?: unknown
   }
 
   interface Props {
@@ -22,9 +26,10 @@
     initialTemplateId?: string | null
     onclose: () => void
     onsent: () => void
+    onEdit?: () => void
   }
 
-  let { contractId, reservationId, initialTemplateId = null, onclose, onsent }: Props = $props()
+  let { contractId, reservationId, initialTemplateId = null, onclose, onsent, onEdit }: Props = $props()
 
   let templates      = $state<TemplateSummary[]>([])
   let selectedId     = $state<string | null>(null)
@@ -36,7 +41,9 @@
   // ── 편집 내용 보존 관련 상태 ─────────────────────────────────────────────────
   // existing 모드: DB에 저장된 content_blocks 그대로 발송 (PATCH 없음, 편집 내용 보존)
   // template 모드: 양식 치환 후 PATCH 저장 → 발송 (기존 동작)
-  let existingBlocks     = $state<AnyContentBlock[]>([])
+  let existingBlocks        = $state<AnyContentBlock[]>([])
+  // canvas 계약의 경우 content_blocks는 항상 [] — canvas_document를 보관해 미리보기 분기에 활용
+  let existingCanvasDocument = $state<unknown>(null)
   let hasExistingContent = $state(false)
   let contentMode        = $state<'existing' | 'template'>('template')
   let overwriteWarning   = $state(false)       // 덮어쓰기 확인 배너 표시 여부
@@ -58,7 +65,8 @@
   )
 
   const showPreview = $derived(
-    (contentMode === 'existing' && existingBlocks.length > 0) ||
+    // canvas 계약은 existingBlocks가 [] 이므로 existingCanvasDocument 유무도 함께 확인
+    (contentMode === 'existing' && (existingBlocks.length > 0 || existingCanvasDocument != null)) ||
     (contentMode === 'template' && selectedTemplate !== null)
   )
 
@@ -89,9 +97,11 @@
         try {
           const contentRes = await fetch(`/api/cms/contracts/${contractId}/content`)
           if (contentRes.ok) {
-            const contentData = (await contentRes.json()) as { content_blocks?: unknown }
-            if (hasExistingContractContent(contentData.content_blocks)) {
+            const contentData = (await contentRes.json()) as { content_blocks?: unknown; canvas_document?: unknown }
+            if (hasExistingContractContent(contentData.content_blocks, contentData.canvas_document)) {
               existingBlocks = contentData.content_blocks as AnyContentBlock[]
+              // canvas 계약은 canvas_document를 보관 — 미리보기 분기 및 showPreview 조건에 사용
+              existingCanvasDocument = contentData.canvas_document ?? null
               hasExistingContent = true
               contentMode = 'existing'
             }
@@ -168,18 +178,24 @@
       } else {
         // ── template 경로: 양식 치환 + PATCH 저장 + 발송 (기존 동작) ───────────
         if (!selectedTemplate || !subData) return  // TypeScript 타입 가드 (위에서 이미 체크)
-        const substitutedBlocks = substituteVariables(
-          selectedTemplate.content_blocks ?? [],
-          subData
-        )
+
+        const isCanvas = selectedTemplate.authoring_mode === 'canvas'
+
+        // canvas 모드는 content_blocks가 빈 배열 — substituteVariables 적용 불필요.
+        // 변수 치환은 고객 서명 화면(/contract/[token])에서 렌더링 시 적용됨.
+        const substitutedBlocks = isCanvas
+          ? []
+          : substituteVariables(selectedTemplate.content_blocks ?? [], subData)
 
         const result = await applyContractTemplate({
           contractId,
           reservationId,
-          title:          selectedTemplate.title,
-          contentBlocks:  substitutedBlocks,
-          specifications: selectedTemplate.specifications ?? [],
-          templateId:     selectedTemplate.id,
+          title:           selectedTemplate.title,
+          contentBlocks:   substitutedBlocks,
+          specifications:  selectedTemplate.specifications ?? [],
+          templateId:      selectedTemplate.id,
+          authoring_mode:  isCanvas ? 'canvas' : 'flow',
+          canvasDocument:  isCanvas ? selectedTemplate.canvas_document : undefined,
         })
 
         if (result.error) throw new Error(result.error)
@@ -279,6 +295,15 @@
               >
                 {previewTitle}
               </div>
+              {#if contentMode === 'template' && selectedTemplate?.authoring_mode === 'canvas'}
+                <div class="preview-canvas-notice">
+                  고정 캔버스형 계약서입니다. 발송 후 고객 서명 화면에서 배경 서식과 서명 필드를 확인할 수 있습니다.
+                </div>
+              {:else if contentMode === 'existing' && existingCanvasDocument != null}
+                <div class="preview-canvas-notice">
+                  발행된 고정 캔버스형 계약서입니다. 발송 후 고객 서명 화면에서 기존 발행 내용을 그대로 확인할 수 있습니다.
+                </div>
+              {/if}
               <div class="preview-content">
                 {#each previewBlocks as block (block)}
                   {#if isTiptapDocBlock(block)}
@@ -303,6 +328,9 @@
       <!-- 푸터 -->
       <div class="modal-footer">
         <button type="button" class="btn-cancel" onclick={onclose}>취소</button>
+        {#if onEdit}
+          <button type="button" class="btn-edit" onclick={onEdit}>편집</button>
+        {/if}
         <button
           type="button"
           class="btn-send"
@@ -587,6 +615,18 @@
     margin: 4px 0;
   }
 
+  /* canvas 모드 안내 */
+  .preview-canvas-notice {
+    padding: 10px 14px;
+    margin-bottom: 16px;
+    background: rgba(59, 47, 138, 0.06);
+    border: 1px solid rgba(59, 47, 138, 0.18);
+    border-radius: var(--cms-radius-sm);
+    font: var(--text-pc-script-12);
+    color: var(--cs-purple);
+    line-height: 1.5;
+  }
+
   /* 푸터 */
   .modal-footer {
     display: flex;
@@ -608,6 +648,21 @@
     transition: background 0.1s;
   }
   .btn-cancel:hover { background: var(--cs-lilac); }
+
+  .btn-edit {
+    height: 34px;
+    padding: 0 16px;
+    border: 1px solid var(--cs-purple);
+    border-radius: var(--cms-radius-sm);
+    background: transparent;
+    color: var(--cs-purple);
+    font: var(--text-pc-body-14);
+    font-weight: 700;
+    cursor: pointer;
+    transition: background 0.1s;
+    white-space: nowrap;
+  }
+  .btn-edit:hover { background: var(--cs-purple-op10); }
 
   .btn-send {
     height: 34px;

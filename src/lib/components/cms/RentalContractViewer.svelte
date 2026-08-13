@@ -1,17 +1,9 @@
 <script lang="ts">
-  import { csToast } from '$lib/utils/toast'
   import { browser } from '$app/environment'
-  import { applyContractTemplate } from '$lib/utils/contract-apply-template'
+  import { hasExistingContractContent } from '$lib/utils/contract-content-mode'
   import ContractEditorModal from '$lib/components/cms/ContractEditorModal.svelte'
   import ContractTemplatePreviewModal from '$lib/components/cms/ContractTemplatePreviewModal.svelte'
-
-  interface TemplateSummary {
-    id: string
-    title: string
-    content_blocks: unknown[]
-    specifications: { key: string; value: string }[]
-    created_at: string
-  }
+  import CmsDeleteButton from '$lib/components/cms/CmsDeleteButton.svelte'
 
   interface Props {
     contractId:       string | null
@@ -62,21 +54,32 @@
     epost:         '택배',
   }
 
-  let editorOpen        = $state(false)
-  let editorContractId  = $state<string | null>(null)
-  let applyingTemplate  = $state(false)
-  let templates         = $state<TemplateSummary[]>([])
-  let loadingTemplates  = $state(false)
-  let previewTemplateId = $state<string | null>(null)
+  let editorOpen            = $state(false)
+  let editorContractId      = $state<string | null>(null)
+  let previewTemplateId     = $state<string | null>(null)
+  let hasIssuedContent      = $state(false)
+  let issuedContractTitle   = $state<string | null>(null)
+  let issuedCheckTick       = $state(0)
 
+  // 발행 목록: contractId 변경 또는 issuedCheckTick 갱신 시 발행 여부 재확인
   $effect(() => {
-    if (!browser) return
-    loadingTemplates = true
-    fetch('/api/cms/contract-templates')
-      .then((r) => r.json())
-      .then((data: unknown) => { templates = data as TemplateSummary[] })
-      .catch(() => {})
-      .finally(() => { loadingTemplates = false })
+    void issuedCheckTick
+    if (!browser || !contractId) { hasIssuedContent = false; issuedContractTitle = null; return }
+    const cid = contractId
+    let alive = true
+    ;(async () => {
+      try {
+        const r = await fetch(`/api/cms/contracts/${cid}/content`)
+        if (!r.ok) { if (alive) { hasIssuedContent = false; issuedContractTitle = null }; return }
+        const data = await r.json() as { content_blocks?: unknown; canvas_document?: unknown; title?: string }
+        if (!alive) return
+        hasIssuedContent    = hasExistingContractContent(data.content_blocks, data.canvas_document)
+        issuedContractTitle = data.title ?? null
+      } catch {
+        if (alive) hasIssuedContent = false
+      }
+    })()
+    return () => { alive = false }
   })
 
   function formatDate(dt: string | null): string {
@@ -95,29 +98,6 @@
   function formatAmount(n: number | null): string {
     if (n == null) return '-'
     return n.toLocaleString('ko-KR') + '원'
-  }
-
-  async function openEditorForTemplate(tplId: string) {
-    const tpl = templates.find(t => t.id === tplId)
-    if (!tpl) return
-    applyingTemplate = true
-    try {
-      const result = await applyContractTemplate({
-        contractId,
-        reservationId,
-        title:          tpl.title,
-        contentBlocks:  tpl.content_blocks,
-        specifications: tpl.specifications ?? [],
-        templateId:     tpl.id,
-      })
-      if (result.error) { csToast.error(result.error); return }
-      editorContractId = result.contractId ?? null
-      editorOpen = true
-    } catch {
-      csToast.error('네트워크 오류가 발생했습니다.')
-    } finally {
-      applyingTemplate = false
-    }
   }
 
   const signingUrl = $derived(
@@ -148,37 +128,53 @@
   <!-- 계약서 양식 목록 (항상 표시) -->
   <div class="tpl-section">
     <div class="tpl-section-head">
-      <span class="tpl-section-title">계약서 양식</span>
+      <span class="tpl-section-title">계약서 양식 선택 편집</span>
+      <button
+        class="btn-issue"
+        onclick={() => { previewTemplateId = '' }}
+      >발행</button>
     </div>
-    {#if loadingTemplates}
-      <p class="tpl-loading">양식 목록 불러오는 중...</p>
-    {:else if templates.length === 0}
-      <p class="tpl-empty">등록된 활성 양식이 없습니다. <a href="/cms/reservation/contracts" class="tpl-link">양식 작성하기 →</a></p>
-    {:else}
-      <div class="tpl-list">
-        {#each templates as tpl (tpl.id)}
-          <div class="tpl-card">
-            <span class="tpl-card-title">{tpl.title}</span>
-            <div class="tpl-card-actions">
-              {#if !signingsentAt && !customerSignedAt}
-                <button
-                  class="btn-tpl-edit"
-                  onclick={() => openEditorForTemplate(tpl.id)}
-                  disabled={applyingTemplate}
-                >편집</button>
-              {/if}
-              <button
-                class="btn-tpl-preview"
-                onclick={() => { previewTemplateId = tpl.id }}
-              >
-                미리보기 &amp; 발송
-              </button>
-            </div>
-          </div>
-        {/each}
-      </div>
-    {/if}
   </div>
+
+  <!-- 발행 목록: 편집된 content_blocks가 있을 때만 표시 -->
+  {#if hasIssuedContent && contractId}
+    <div class="tpl-section">
+      <div class="tpl-section-head">
+        <span class="tpl-section-title">발행 목록</span>
+      </div>
+      <div class="tpl-list">
+        <div class="tpl-card">
+          <span class="tpl-card-title">{issuedContractTitle || '발행된 계약서'}</span>
+          <div class="tpl-card-actions">
+            {#if !signingsentAt && !customerSignedAt}
+              <button
+                class="btn-tpl-edit"
+                onclick={() => { editorOpen = true; editorContractId = contractId }}
+              >
+                편집
+              </button>
+            {/if}
+            <button
+              class="btn-tpl-preview"
+              onclick={() => { previewTemplateId = '' }}
+            >
+              미리보기 &amp; 발송
+            </button>
+            {#if !signingsentAt && !customerSignedAt}
+              <span class="tpl-card-del-gap"></span>
+              <CmsDeleteButton
+                action="?/clearIssuedContract"
+                id={contractId!}
+                warnMessage="한번 더 선택 시 이 계약서 내용이 초기화됩니다."
+                successMessage="계약서 내용이 초기화되었습니다."
+                onsuccess={() => { issuedCheckTick++ }}
+              />
+            {/if}
+          </div>
+        </div>
+      </div>
+    </div>
+  {/if}
 
   <!-- PDF 미리보기·다운로드: 서명 완료 후에만 표시 -->
   {#if contractPdfUrl && customerSignedAt}
@@ -217,7 +213,7 @@
   <ContractEditorModal
     contractId={(editorContractId ?? contractId)!}
     {reservationId}
-    onclose={() => { editorOpen = false; editorContractId = null; onrefresh() }}
+    onclose={() => { editorOpen = false; editorContractId = null; issuedCheckTick++; onrefresh() }}
   />
 {/if}
 
@@ -228,6 +224,9 @@
     initialTemplateId={previewTemplateId}
     onclose={() => { previewTemplateId = null }}
     onsent={() => { previewTemplateId = null; onrefresh() }}
+    onEdit={(!signingsentAt && !customerSignedAt)
+      ? () => { previewTemplateId = null; editorOpen = true; editorContractId = contractId }
+      : undefined}
   />
 {/if}
 
@@ -306,17 +305,22 @@
     font-weight: 700;
     color: var(--cs-text-mid);
   }
-  .tpl-loading, .tpl-empty {
-    padding: 16px 14px;
-    margin: 0;
+  .btn-issue {
+    margin-left: auto;
+    height: 24px;
+    padding: 0 12px;
+    background: var(--cs-purple);
+    color: var(--cs-white);
+    border: none;
+    border-radius: var(--cms-radius-sm);
     font: var(--text-pc-script-12);
-    color: var(--cs-text-light);
+    font-weight: 700;
+    cursor: pointer;
+    transition: background 0.12s;
+    white-space: nowrap;
   }
-  .tpl-link {
-    color: var(--cs-purple);
-    text-decoration: none;
-  }
-  .tpl-link:hover { text-decoration: underline; }
+  .btn-issue:hover    { background: var(--cs-purple-hover); }
+  .btn-issue:disabled { opacity: 0.5; cursor: not-allowed; }
   .tpl-list {
     display: flex;
     flex-direction: column;
@@ -348,10 +352,10 @@
   }
   .btn-tpl-edit {
     height: 28px;
-    padding: 0 10px;
-    background: transparent;
-    color: var(--cs-purple);
-    border: 1px solid var(--cs-purple);
+    padding: 0 12px;
+    background: var(--cs-white);
+    color: var(--cs-purple-dark);
+    border: 1px solid var(--cs-purple-dark);
     border-radius: var(--cms-radius-sm);
     font: var(--text-pc-script-12);
     font-weight: 700;
@@ -359,8 +363,7 @@
     transition: background 0.12s;
     white-space: nowrap;
   }
-  .btn-tpl-edit:hover    { background: var(--cs-purple-op10); }
-  .btn-tpl-edit:disabled { opacity: 0.5; cursor: not-allowed; }
+  .btn-tpl-edit:hover { background: rgba(59,47,138,0.06); }
   .btn-tpl-preview {
     height: 28px;
     padding: 0 12px;
@@ -375,4 +378,8 @@
     white-space: nowrap;
   }
   .btn-tpl-preview:hover { background: var(--cs-purple-hover); }
+  .tpl-card-del-gap {
+    width: 8px;
+    flex-shrink: 0;
+  }
 </style>

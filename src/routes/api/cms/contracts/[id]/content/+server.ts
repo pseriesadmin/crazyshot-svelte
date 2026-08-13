@@ -5,6 +5,7 @@ import { json } from '@sveltejs/kit'
 import type { RequestHandler } from './$types'
 import { getCmsRoleForAction } from '$lib/server/getCmsRoleForAction'
 import { hasSettingsAccess } from '$lib/utils/cmsPermissions'
+import { isCanvasDocument, hasSignatureField } from '$lib/types/contract-document'
 
 export const GET: RequestHandler = async ({ params, locals }) => {
   const cmsRole = await getCmsRoleForAction(locals)
@@ -18,7 +19,7 @@ export const GET: RequestHandler = async ({ params, locals }) => {
 
   const { data, error } = await admin
     .from('contracts')
-    .select('title, content_blocks, specifications')
+    .select('title, content_blocks, specifications, authoring_mode, canvas_document')
     .eq('id', contractId)
     .maybeSingle()
 
@@ -38,7 +39,14 @@ export const PATCH: RequestHandler = async ({ params, locals, request }) => {
   const admin      = createClient(PUBLIC_SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
   const contractId = params.id
 
-  let body: { title?: string; content_blocks?: unknown[]; specifications?: unknown[]; template_id?: string | null }
+  let body: {
+    title?: string
+    content_blocks?: unknown[]
+    specifications?: unknown[]
+    template_id?: string | null
+    authoring_mode?: string
+    canvas_document?: unknown
+  }
   try {
     body = await request.json() as typeof body
   } catch {
@@ -53,6 +61,19 @@ export const PATCH: RequestHandler = async ({ params, locals, request }) => {
   }
   if ('template_id' in body) {
     updatePayload.template_id = body.template_id ?? null
+  }
+  if ('authoring_mode' in body && body.authoring_mode) {
+    updatePayload.authoring_mode = body.authoring_mode
+  }
+  if ('canvas_document' in body && body.canvas_document != null) {
+    if (!isCanvasDocument(body.canvas_document)) {
+      return json({ error: 'canvas_document 형식이 올바르지 않습니다.' }, { status: 400 })
+    }
+    // EC-3: 서명 필드 최소 1개 필수 (서버 재검증 — 클라이언트 우회 방지)
+    if (!hasSignatureField(body.canvas_document)) {
+      return json({ error: '서명 필드가 최소 1개 이상 있어야 합니다. (EC-3)' }, { status: 400 })
+    }
+    updatePayload.canvas_document = body.canvas_document
   }
 
   const { error } = await admin

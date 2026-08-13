@@ -10,6 +10,8 @@
 
   // 신규 작성 모드 (template=null로 패널 표시)
   let isNewMode = $state(false)
+  // 매 "+ 작성" 클릭마다 고유값을 보장하는 카운터 — isNewMode가 이미 true여도 강제 재마운트
+  let newSessionNonce = $state(0)
 
   // 검색
   let searchQuery = $state('')
@@ -51,6 +53,7 @@
     const params = new URLSearchParams($page.url.searchParams)
     params.delete('selected')
     goto(`?${params.toString()}`, { replaceState: true, noScroll: true })
+    newSessionNonce += 1   // 매 클릭마다 증가 — 이미 isNewMode=true여도 ContractTemplatePanel 강제 재마운트
     isNewMode = true
   }
 
@@ -154,7 +157,7 @@
     <div class="editor-area">
       {#if showPanel}
         {#if isNewMode}
-          {#key '__new__'}
+          {#key '__new__:' + newSessionNonce}
             <ContractTemplatePanel
               template={null}
               onclose={closePanel}

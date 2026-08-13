@@ -248,6 +248,16 @@
                 {:else if field.type === 'label'}
                   <!-- 라벨 필드: 고정 텍스트 -->
                   <span class="canvas-label-value">{field.label}</span>
+                {:else if field.type === 'issuer-image'}
+                  <!-- 발행자 서명·직인 이미지 — 읽기 전용, 시각적 배치만 -->
+                  {#if field.imageUrl}
+                    <img
+                      src={field.imageUrl}
+                      alt={field.label || '발행자 서명·직인 이미지'}
+                      class="canvas-issuer-img"
+                      draggable="false"
+                    />
+                  {/if}
                 {/if}
               </div>
             {/each}
@@ -734,5 +744,19 @@
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
+  }
+
+  /* 발행자 서명·직인 이미지 필드 (issuer-image) — 읽기 전용 */
+  .canvas-field-issuer-image {
+    padding: 0;
+    overflow: hidden;
+  }
+  .canvas-issuer-img {
+    width: 100%;
+    height: 100%;
+    object-fit: contain;
+    display: block;
+    pointer-events: none;
+    user-select: none;
   }
 </style>

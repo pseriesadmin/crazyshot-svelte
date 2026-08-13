@@ -9,8 +9,9 @@
    *   4. 필드 선택 → 팔레트 속성 패널에서 편집
    *   5. 변경 즉시 onchange(CanvasDocument) 콜백으로 통보
    *
-   * 제약:
-   *   - v1 필드 타입: signature / text / label 3종 (과설계 금지)
+   * 필드 타입:
+   *   - v1: signature / text / label 3종
+   *   - v2: issuer-image 추가 (발행자 서명·직인 이미지 배치 — ContractCanvasFieldPalette에서 자산 선택)
    *   - EC-1: 빈 PDF 거부 (pdfRasterize 내부에서 처리)
    *   - EC-3: 저장 전 signature 필드 최소 1개 필수 검증은 상위 컴포넌트 책임
    *   - CmsContentEditor.svelte 미수정 (공유 컴포넌트 격리 원칙)
@@ -20,6 +21,7 @@
   import { browser } from '$app/environment'
   import { csToast } from '$lib/utils/toast'
   import ContractCanvasFieldPalette from './ContractCanvasFieldPalette.svelte'
+  import { hasSignatureField } from '$lib/types/contract-document'
   import type {
     CanvasDocument,
     CanvasField,
@@ -196,15 +198,23 @@
 
     // 기본 크기 (필드 타입별)
     const defaults: Record<CanvasFieldType, { w: number; h: number }> = {
-      signature: { w: 200, h: 80 },
-      text:      { w: 200, h: 36 },
-      label:     { w: 150, h: 28 },
+      signature:      { w: 200, h: 80 },
+      text:           { w: 200, h: 36 },
+      label:          { w: 150, h: 28 },
+      'issuer-image': { w: 160, h: 100 },
     }
     const { w, h } = defaults[placingType]
 
     // 페이지 경계 보정 (EC-2)
     const clampedX = Math.max(0, Math.min(x - Math.round(w / 2), page.width  - w))
     const clampedY = Math.max(0, Math.min(y - Math.round(h / 2), page.height - h))
+
+    const LABEL_MAP: Record<CanvasFieldType, string> = {
+      signature:      '서명',
+      text:           '텍스트',
+      label:          '라벨',
+      'issuer-image': '발행자 이미지',
+    }
 
     const newField: CanvasField = {
       id:         crypto.randomUUID(),
@@ -215,7 +225,7 @@
       width:      w,
       height:     h,
       required:   placingType === 'signature',
-      label:      placingType === 'signature' ? '서명' : placingType === 'text' ? '텍스트' : '라벨',
+      label:      LABEL_MAP[placingType],
     }
     fields = [...fields, newField]
     selectedFieldId = newField.id
@@ -302,6 +312,11 @@
   // --------------------------------------------------------------------------
   async function handleSave() {
     if (!onSave) return
+    // EC-3: 서명 필드 최소 1개 필수 — 클라이언트 검증 (서버에서도 재검증됨)
+    if (!hasSignatureField(currentDoc)) {
+      csToast.error('서명 필드가 최소 1개 이상 있어야 저장할 수 있습니다.')
+      return
+    }
     saving = true
     try {
       await onSave({
@@ -423,18 +438,30 @@
                   tabindex="0"
                   aria-label="{field.label} 필드"
                 >
-                  <span class="field-inner">
-                    {#if field.type === 'signature'}
-                      <span class="field-sig-icon">✍</span>
-                      {field.label}
-                    {:else if field.type === 'text'}
-                      <span class="field-var">
-                        {field.boundVariable ? `{{${field.boundVariable}}}` : field.label}
-                      </span>
-                    {:else}
-                      {field.label}
-                    {/if}
-                  </span>
+                  {#if field.type === 'issuer-image' && field.imageUrl}
+                    <img
+                      src={field.imageUrl}
+                      alt={field.label || '발행자 이미지'}
+                      class="field-issuer-img"
+                      draggable="false"
+                    />
+                  {:else}
+                    <span class="field-inner">
+                      {#if field.type === 'signature'}
+                        <span class="field-sig-icon">✍</span>
+                        {field.label}
+                      {:else if field.type === 'text'}
+                        <span class="field-var">
+                          {field.boundVariable ? `{{${field.boundVariable}}}` : field.label}
+                        </span>
+                      {:else if field.type === 'issuer-image'}
+                        <span class="field-issuer-icon">🖋</span>
+                        {field.label}
+                      {:else}
+                        {field.label}
+                      {/if}
+                    </span>
+                  {/if}
                   {#if !readonly}
                     <button
                       class="field-del-btn"
@@ -635,6 +662,11 @@
     border-style: solid;
     background: rgba(0,0,0,0.02);
   }
+  .canvas-field.field-issuer-image {
+    border-color: rgba(0, 120, 80, 0.5);
+    border-style: dashed;
+    background: rgba(0, 120, 80, 0.04);
+  }
 
   .field-inner {
     display: flex;
@@ -651,11 +683,19 @@
     max-width: 100%;
   }
   .field-sig-icon { font-size: 1.2em; }
+  .field-issuer-icon { font-size: 1.2em; }
   .field-var {
     font-size: inherit;
     color: var(--cs-text, #100B32);
     opacity: 0.7;
     font-style: italic;
+  }
+  .field-issuer-img {
+    width: 100%;
+    height: 100%;
+    object-fit: contain;
+    pointer-events: none;
+    display: block;
   }
 
   .field-del-btn {

@@ -3,12 +3,12 @@
    * ContractCanvasFieldPalette.svelte — canvas 모드 필드 팔레트 (Phase 6, P6-3)
    *
    * 역할:
-   *   1. 3종 필드 타입 버튼 (서명 / DB연동텍스트 / 고정라벨)
-   *   2. 선택된 필드 속성 패널 (라벨·필수여부·DB변수 바인딩)
+   *   1. 4종 필드 타입 버튼 (서명 / DB연동텍스트 / 고정라벨 / 발행자 이미지)
+   *   2. 선택된 필드 속성 패널 (라벨·필수여부·DB변수 바인딩·자산 선택)
    *   3. ContractFieldPanel과 동일 ContractSubstitutionData 16개 변수 카탈로그 재사용
    *
    * 설계 원칙:
-   *   - 4종 이상 필드타입으로 과설계 금지 (v1 = 3종)
+   *   - v1 = 3종(signature/text/label), v2 = issuer-image 추가 (발행자 서명·직인 이미지 배치)
    *   - ContractSubstitutionData 변수 목록은 이 컴포넌트 단독 소유 (flow 패널과 중복 없음)
    */
 
@@ -76,10 +76,57 @@
   // 필드 타입 정의
   // --------------------------------------------------------------------------
   const FIELD_TYPES: { type: CanvasFieldType; label: string; desc: string; icon: string }[] = [
-    { type: 'signature', label: '서명',       desc: '고객 전자서명',            icon: '✍' },
-    { type: 'text',      label: 'DB연동 텍스트', desc: '변수값 자동 채움',      icon: 'T' },
-    { type: 'label',     label: '고정 라벨',   desc: '항상 같은 텍스트',        icon: 'L' },
+    { type: 'signature',    label: '서명',         desc: '고객 전자서명',              icon: '✍' },
+    { type: 'text',         label: 'DB연동 텍스트', desc: '변수값 자동 채움',          icon: 'T' },
+    { type: 'label',        label: '고정 라벨',     desc: '항상 같은 텍스트',          icon: 'L' },
+    { type: 'issuer-image', label: '발행자 이미지', desc: '서명·직인 이미지 배치',     icon: '🖋' },
   ]
+
+  // --------------------------------------------------------------------------
+  // 발행자 이미지 자산 목록 (issuer-image 타입 속성 패널용)
+  // --------------------------------------------------------------------------
+  interface SignatureAssetItem {
+    id: string
+    asset_type: 'signature' | 'seal'
+    image_url: string
+    label: string | null
+    is_default: boolean
+  }
+
+  let signatureAssets   = $state<SignatureAssetItem[]>([])
+  let assetsLoading     = $state(false)
+  let loadingInProgress = false  // 비반응형 가드 — 중복 로드 방지
+
+  /**
+   * issuer-image 타입이 선택됐는지 파생 (타입 변경 시만 업데이트).
+   * x/y/width/height 드래그 변경은 type 값이 동일하므로 effect를 재실행하지 않는다.
+   */
+  const isIssuerImageType = $derived(selectedField?.type === 'issuer-image')
+
+  /** 서명·직인 자산 목록 최신 로드 */
+  async function loadSignatureAssets() {
+    if (loadingInProgress) return
+    loadingInProgress = true
+    assetsLoading = true
+    try {
+      const r = await fetch('/api/cms/signature-assets')
+      const data: unknown = r.ok ? await r.json() : []
+      signatureAssets = (data as SignatureAssetItem[]) ?? []
+    } catch {
+      // ignore
+    } finally {
+      loadingInProgress = false
+      assetsLoading = false
+    }
+  }
+
+  $effect(() => {
+    // issuer-image 타입 필드가 선택될 때마다 최신 목록 로드
+    // length === 0 가드 제거 — 등록 직후 목록 미갱신 버그 수정
+    if (isIssuerImageType) {
+      void loadSignatureAssets()
+    }
+  })
 
   // --------------------------------------------------------------------------
   // 속성 변경 헬퍼
@@ -87,6 +134,12 @@
   function update<K extends keyof CanvasField>(key: K, value: CanvasField[K]) {
     if (!selectedField) return
     onUpdateField({ ...selectedField, [key]: value })
+  }
+
+  /** issuer-image 전용: assetId + imageUrl 동시 업데이트 */
+  function selectIssuerAsset(assetId: string, imageUrl: string) {
+    if (!selectedField) return
+    onUpdateField({ ...selectedField, assetId, imageUrl })
   }
 
   function toggleRequired() {
@@ -210,6 +263,62 @@
             {/each}
           </select>
         </div>
+      {/if}
+
+      <!-- 발행자 자산 선택 (issuer-image 타입만) -->
+      {#if selectedField.type === 'issuer-image'}
+        <div class="prop-row prop-row--full">
+          <div class="asset-label-row">
+            <span class="prop-label prop-label--block">자산</span>
+            <button
+              type="button"
+              class="btn-asset-refresh"
+              onclick={() => void loadSignatureAssets()}
+              disabled={assetsLoading}
+              title="목록 새로고침"
+              aria-label="자산 목록 새로고침"
+            >↻</button>
+          </div>
+          {#if assetsLoading}
+            <span class="prop-loading">로딩 중...</span>
+          {:else if signatureAssets.length === 0}
+            <span class="prop-no-asset">
+              등록된 자산 없음 —
+              <a href="/cms/set/signature" target="_blank" class="prop-asset-link">자산 등록</a>
+            </span>
+          {:else}
+            <div class="asset-select-list">
+              {#each signatureAssets as asset (asset.id)}
+                <button
+                  type="button"
+                  class="asset-select-btn"
+                  class:selected={selectedField.assetId === asset.id}
+                  onclick={() => selectIssuerAsset(asset.id, asset.image_url)}
+                  title={asset.label ?? (asset.asset_type === 'signature' ? '서명' : '직인')}
+                >
+                  <img
+                    src={asset.image_url}
+                    alt={asset.label ?? '자산'}
+                    class="asset-thumb"
+                  />
+                  <span class="asset-thumb-label">
+                    {asset.label ?? (asset.asset_type === 'signature' ? '서명' : '직인')}
+                  </span>
+                </button>
+              {/each}
+            </div>
+          {/if}
+        </div>
+        {#if selectedField.assetId && selectedField.imageUrl}
+          <div class="prop-row prop-row--full">
+            <span class="prop-label prop-label--block">미리보기</span>
+            <img
+              src={selectedField.imageUrl}
+              alt="선택된 자산"
+              class="asset-preview"
+            />
+          </div>
+        {/if}
       {/if}
 
       <!-- 좌표·크기 (px) -->
@@ -411,9 +520,10 @@
     border-radius: 99px;
     background: var(--cs-lilac, #ECEBF4);
   }
-  .type-badge.type-signature { background: rgba(59,47,138,0.12); color: var(--cs-purple, #3B2F8A); }
-  .type-badge.type-text      { background: rgba(16,11,50,0.08);  color: var(--cs-text, #100B32); }
-  .type-badge.type-label     { background: rgba(0,0,0,0.06);     color: #555; }
+  .type-badge.type-signature    { background: rgba(59,47,138,0.12);  color: var(--cs-purple, #3B2F8A); }
+  .type-badge.type-text         { background: rgba(16,11,50,0.08);   color: var(--cs-text, #100B32); }
+  .type-badge.type-label        { background: rgba(0,0,0,0.06);      color: #555; }
+  .type-badge.type-issuer-image { background: rgba(0,120,80,0.10);   color: #006644; }
 
   .prop-input,
   .prop-select {
@@ -473,6 +583,95 @@
   .coord-input::-webkit-inner-spin-button,
   .coord-input::-webkit-outer-spin-button { display: none; }
   .coord-input:focus { border-color: var(--cs-purple, #3B2F8A); }
+
+  /* issuer-image 자산 선택 영역 */
+  .prop-row--full {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 4px;
+  }
+  .prop-label--block { width: auto; min-width: auto; padding-top: 0; }
+  .prop-loading { font-size: 11px; color: #888; }
+  .prop-no-asset { font-size: 11px; color: #888; }
+  .prop-asset-link { color: var(--cs-purple, #3B2F8A); text-decoration: underline; }
+
+  /* 자산 레이블 + 새로고침 버튼 행 */
+  .asset-label-row {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    width: 100%;
+  }
+  .btn-asset-refresh {
+    background: none;
+    border: none;
+    padding: 0 2px;
+    font-size: 13px;
+    color: #aaa;
+    cursor: pointer;
+    line-height: 1;
+    min-width: 20px;
+    min-height: 20px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 3px;
+    transition: color 0.12s, background 0.12s;
+  }
+  .btn-asset-refresh:hover:not(:disabled) {
+    color: var(--cs-purple, #3B2F8A);
+    background: rgba(59, 47, 138, 0.08);
+  }
+  .btn-asset-refresh:disabled { opacity: 0.35; cursor: not-allowed; }
+
+  .asset-select-list {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    width: 100%;
+    max-height: 140px;
+    overflow-y: auto;
+  }
+  .asset-select-btn {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 6px;
+    border: 1.5px solid var(--cs-lilac, #ECEBF4);
+    border-radius: var(--radius-sm, 8px);
+    background: #fff;
+    cursor: pointer;
+    text-align: left;
+    width: 100%;
+    transition: border-color 0.12s, background 0.12s;
+  }
+  .asset-select-btn:hover { border-color: var(--cs-purple, #3B2F8A); }
+  .asset-select-btn.selected {
+    border-color: var(--cs-purple, #3B2F8A);
+    background: rgba(59, 47, 138, 0.05);
+  }
+  .asset-thumb {
+    width: 32px;
+    height: 24px;
+    object-fit: contain;
+    flex-shrink: 0;
+    border-radius: 2px;
+  }
+  .asset-thumb-label {
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--cs-text, #100B32);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .asset-preview {
+    max-width: 100%;
+    max-height: 60px;
+    object-fit: contain;
+    border: 1px solid var(--cs-lilac, #ECEBF4);
+    border-radius: 4px;
+  }
 
   /* 선택 없음 */
   .no-selection {

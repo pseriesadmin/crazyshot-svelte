@@ -21,6 +21,17 @@ export interface ApplyTemplateOptions {
   specifications?: { key: string; value: string }[]
   /** 템플릿 ID (이력 추적용, 선택) */
   templateId?: string | null
+  /**
+   * 작성 모드 — 'flow' | 'canvas'.
+   * canvas 템플릿 적용 시 반드시 'canvas'를 전달해야 contracts 테이블에 정확히 기록됨.
+   * 미전달 시 서버 기본값(flow)이 유지되므로 canvas 발행 경로는 반드시 명시할 것.
+   */
+  authoring_mode?: 'flow' | 'canvas'
+  /**
+   * 캔버스 문서 (canvas 모드 전용).
+   * authoring_mode='canvas'일 때 함께 전달하지 않으면 고객 서명 화면에서 배경이 렌더링되지 않음.
+   */
+  canvasDocument?: unknown
 }
 
 export type ApplyTemplateResult =
@@ -59,7 +70,9 @@ export async function applyContractTemplate(
         title:          opts.title,
         content_blocks: opts.contentBlocks,
         specifications: opts.specifications ?? [],
-        ...(opts.templateId != null ? { template_id: opts.templateId } : {}),
+        ...(opts.templateId != null    ? { template_id:     opts.templateId }     : {}),
+        ...(opts.authoring_mode != null ? { authoring_mode: opts.authoring_mode } : {}),
+        ...(opts.canvasDocument != null ? { canvas_document: opts.canvasDocument } : {}),
       }),
     }
   )
