@@ -79,8 +79,12 @@ export interface ContractDocumentPayload {
 // Canvas 모드 — 고정 배경 + 좌표 기반 필드 배치 (Phase 6)
 // --------------------------------------------------------------------------
 
-/** canvas 모드에서 지원하는 필드 타입 (v1 — 3종 제한) */
-export type CanvasFieldType = 'signature' | 'text' | 'label'
+/**
+ * canvas 모드에서 지원하는 필드 타입
+ *   v1: signature / text / label (3종)
+ *   v2: issuer-image 추가 (발행자 서명·직인 이미지 배치 — ContractCanvasFieldPalette에서 자산 선택)
+ */
+export type CanvasFieldType = 'signature' | 'text' | 'label' | 'issuer-image'
 
 /**
  * canvas 모드 배경 페이지.
@@ -103,9 +107,10 @@ export interface CanvasPage {
  * x, y, width, height는 모두 CanvasPage와 동일한 픽셀 좌표 공간.
  *
  * type별 동작:
- *   'signature' : 고객 서명 입력란 (SignatureCanvas 인라인 배치)
- *   'text'      : DB 연동 텍스트 — boundVariable의 ContractSubstitutionData 값 표시
- *   'label'     : 고정 라벨 텍스트 — label 값을 그대로 표시 (DB 연동 없음)
+ *   'signature'    : 고객 서명 입력란 (SignatureCanvas 인라인 배치)
+ *   'text'         : DB 연동 텍스트 — boundVariable의 ContractSubstitutionData 값 표시
+ *   'label'        : 고정 라벨 텍스트 — label 값을 그대로 표시 (DB 연동 없음)
+ *   'issuer-image' : 발행자 서명·직인 이미지 — assetId/imageUrl로 지정된 이미지 표시 (편집 불가)
  *
  * EC-2: x/y/width/height가 CanvasPage 경계 밖이면 서버에서 400으로 차단.
  */
@@ -128,6 +133,16 @@ export interface CanvasField {
    * ContractSubstitutionData의 키 중 하나.
    */
   boundVariable?: keyof ContractSubstitutionData
+  /**
+   * 발행자 이미지 자산 ID — type='issuer-image'일 때만 유효.
+   * cms_signature_assets 테이블의 id 참조.
+   */
+  assetId?: string
+  /**
+   * 발행자 이미지 URL — type='issuer-image'일 때만 유효.
+   * assetId에 해당하는 이미지의 공개 URL (화면 렌더링에 직접 사용).
+   */
+  imageUrl?: string
 }
 
 /**

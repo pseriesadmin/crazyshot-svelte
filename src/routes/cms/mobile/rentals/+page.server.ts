@@ -1,8 +1,11 @@
 import { createClient } from '@supabase/supabase-js'
 import { SUPABASE_SERVICE_ROLE_KEY } from '$env/static/private'
 import { PUBLIC_SUPABASE_URL } from '$env/static/public'
-import { redirect } from '@sveltejs/kit'
-import type { PageServerLoad } from './$types'
+import { redirect, fail } from '@sveltejs/kit'
+import type { Actions, PageServerLoad } from './$types'
+import { getCmsRoleForAction } from '$lib/server/getCmsRoleForAction'
+import { hasSettingsAccess } from '$lib/utils/cmsPermissions'
+import { clearIssuedContractContent } from '$lib/server/clearIssuedContractHelper'
 
 import type { RentalListRow } from '../../reservation/+page.server'
 export type { RentalListRow }
@@ -37,4 +40,22 @@ export const load: PageServerLoad = async ({ parent, url }) => {
   const totalPages = Math.max(1, Math.ceil(totalCount / 30))
 
   return { rentals, totalCount, totalPages, status, search, page, cmsRole }
+}
+
+export const actions: Actions = {
+  clearIssuedContract: async ({ request, locals }) => {
+    const { session } = await locals.safeGetSession()
+    if (!session) return fail(401, { error: '인증 필요' })
+    const cmsRole = await getCmsRoleForAction(locals)
+    if (!cmsRole || !hasSettingsAccess(cmsRole)) return fail(403, { error: '권한 없음' })
+
+    const admin      = createClient(PUBLIC_SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
+    const data       = await request.formData()
+    const contractId = data.get('id') as string
+    if (!contractId) return fail(400, { error: '계약서 ID가 없습니다.' })
+
+    const result = await clearIssuedContractContent(contractId, admin)
+    if (!result.ok) return fail(result.httpStatus, { error: result.error })
+    return { ok: true }
+  },
 }
