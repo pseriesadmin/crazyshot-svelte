@@ -1,6 +1,26 @@
 # GSD_LOG.md — 크레이지샷 실행 이력
 # 형식: [YYYY-MM-DD HH:MM] 타입 | 태스크명 | 파일 | 소요 | 결과
 
+[2026-08-14] ⚡GSD | NOW-1 ROUTINE: /cms/subscriptions/new 코드분류 정렬버그 수정 | new/+page.server.ts | 소요: ~5분 | GATE C: ROUTINE(자동) — code_mapping_groups .order('name') 2차 정렬 추가, description/image_url INSERT 제거
+[2026-08-14] ⚡GSD | NOW-2 BOUNDARY: 구독 카드 /products 표준 그리드 패턴 재구성 | +page.svelte | 소요: ~20분 | GATE C: BOUNDARY(자동) — 썸네일 60×60·cat-badge·price-badge, image_urls→SubscriptionPlanRow 추가
+[2026-08-14] ⚡GSD | NOW-3 CRITICAL(DB): 상품설명 탭 신설 + Migration 248 | Migration 248, subscription.ts, SubscriptionDetailPanel.svelte, loadSelectedSubscriptionDetail.ts, +page.server.ts, new/+page.svelte | 소요: ~40분 | GATE C: CRITICAL — stage 마이그레이션 대기
+[2026-08-14] ⚡GSD | NOW-4 CRITICAL(DB): 이미지 탭 신설 + Migration 249 + 전용 업로드 엔드포인트 | Migration 249, api/cms/subscriptions/upload/+server.ts, SubscriptionDetailPanel.svelte | 소요: ~50분 | GATE C: CRITICAL — stage 마이그레이션 대기
+[2026-08-14] ⚡GSD | NOW-5 BOUNDARY: 가격정책 탭 분리 (monthly_price 이동) | SubscriptionDetailPanel.svelte, +page.server.ts | 소요: ~15분 | GATE C: BOUNDARY(자동) — TabKey 갱신, localPricing 상태 분리
+[2026-08-14] ⚡GSD | QA 재검수 결함 2건 수정 — overlay 기준점 + 드래그 상한 클램프 | ContractTemplatePreviewModal.svelte + ContractDocumentEditor.svelte | GATE C: ROUTINE(자동)
+  결함 1: ContractTemplatePreviewModal.svelte .preview-block-tiptap에 position:relative 누락 →
+  overlay 이미지 absolute 기준점이 .doc-page(제목 포함)로 올라가 에디터/고객화면 대비 ~42px
+  위로 밀려 표시. contract/[token]/+page.svelte .doc-block-tiptap 동일 패턴 적용해 수정.
+  결함 2: ContractDocumentEditor.svelte pointermove 핸들러 X축 상한 클램프 누락 → 이미지를
+  A4 콘텐츠 폭 밖으로 무제한 드래그 가능. imgW=outer.getBoundingClientRect().width 구해
+  Math.max(0,Math.min(rawX, Math.max(0,pmRect.width-imgW))) 적용(ContractCanvasEditor 패턴).
+  Y축은 ProseMirror 무한 확장 특성상 상한 무의미 — 하한만 유지.
+  문서 표기: width/height/align → width/align 속성 추가(height는 style:height:auto 자동 포함)로
+  TASK.md·GSD_LOG.md 동시 정정.
+  svelte-check 신규 에러 0건, 단위 테스트 4파일 76개 통과.
+  QA(@sp3-qa-agent) 최종 재검수: 3화면 positioned 조상 DOM 계층 전수 대조로 좌표 기준점 일치
+  구조적 확인, 드래그 클램프 공식·독립 클로저 스코프 검증, 회귀 없음, 테스트 7파일 113/113
+  통과, svelte-check 신규 에러 0건. GATE E 최종 통과 — 커밋은 Stephen 직접 실행.
+
 [2026-08-13] ⚡GSD | 콤보 존재 그룹 선택 강제 가드 추가 (후속) | GATE C: 자동(BOUNDARY, Stephen AskUserQuestion 승인)
   배경: Stephen 질문("hypepack에 조합코드 있고 분류 선택만 정상이면 문제없는데 뭐가 문제냐")에
     재현조건 재설명 → 콤보 카드를 하나도 안 눌러도 제출이 막히지 않는 구조적 공백임을 확인,
@@ -2972,10 +2992,16 @@
 [2026-08-14] FIX | 예약코드 채번 COUNT 방식 to 시퀀스 테이블 교체 | Migration 247 | 완료
   reservation_code_sequences 테이블 신설, generate_reservation_code 재작성, stage/production 적용 및 검증 완료.
 
+[2026-08-14] FIX | 상품 품번 기본값 설정키를 예약코드 설정키에서 분리 | Migration 248 | 완료
+  product_code_format 신설(prefix/date_format/seq_digits/reset_monthly/suffix), generate_product_code
+  전 오버로드(5개) 및 products/new 클라이언트 미리보기 전환, saveFormat 주석 정정. stage/production
+  적용 및 값 확인 완료(동작값 변화 없음, 설정 저장위치만 분리). 범위: 백엔드만(관리 UI 미포함).
+
 [2026-08-14] GSD | 흐름형(TipTap) 에디터 이미지 크기조절·정렬 기능 추가 | 완료
   Stephen 실사용 발견 — 삽입한 서명·직인 이미지가 원본 크기 그대로 삽입돼 문서 폭을 거의 다
   차지하고 리사이즈 수단이 없던 문제. tiptapExtensions.ts의 CustomImage(Image.extend)에
-  width/height/align 속성 추가(renderHTML 인라인 style로 generateHTML 공유 렌더 경로에 자동
+  width/align 속성 추가(height는 별도 attribute 없이 width 렌더링 시 style에 height:auto로
+  자동 포함되어 원본 비율 유지)(renderHTML 인라인 style로 generateHTML 공유 렌더 경로에 자동
   반영). ContractDocumentEditor.svelte에 커스텀 NodeView로 소/중/대 프리셋+너비 직접입력+
   좌/가운데/우 정렬 툴바 구현, 이미지 삽입 기본값 200px로 변경. svelte-check 신규 에러 0건,
   관련 테스트 7파일 113개 전부 통과(회귀 없음). 저장/재오픈·고객화면 반영 오케스트레이터

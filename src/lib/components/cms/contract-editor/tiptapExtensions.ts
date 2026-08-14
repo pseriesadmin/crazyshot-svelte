@@ -22,6 +22,36 @@ import FontFamily from '@tiptap/extension-font-family'
 import Link from '@tiptap/extension-link'
 import { MergeFieldNode } from './nodes/MergeFieldNode'
 
+// ────────────────────────────────────────────────────────────────────────────
+// CustomImage 전용 파서 헬퍼
+// ────────────────────────────────────────────────────────────────────────────
+
+/**
+ * img element 의 inline style / HTML 속성에서 px 너비를 읽는다.
+ * parseHTML 콜백에서만 호출되므로 generateHTML(Node.js SSR) 시 실행되지 않음.
+ */
+function parseImgWidth(element: HTMLElement): number | null {
+  const sw = element.style.getPropertyValue('width')
+  if (sw && sw.endsWith('px')) {
+    const v = parseInt(sw, 10)
+    return isNaN(v) ? null : v
+  }
+  const aw = element.getAttribute('width')
+  if (aw && /^\d+$/.test(aw)) return parseInt(aw, 10)
+  return null
+}
+
+/**
+ * img element 의 float style 에서 정렬값을 읽는다.
+ * (renderHTML 에서 left → float:left / right → float:right / center → display:block;margin:0 auto 로 기록)
+ */
+function parseImgAlign(element: HTMLElement): 'left' | 'center' | 'right' {
+  const f = element.style.getPropertyValue('float')
+  if (f === 'left') return 'left'
+  if (f === 'right') return 'right'
+  return 'center'
+}
+
 /**
  * HTMLElement.style에서 특정 CSS 속성을 파싱하는 콜백 팩토리.
  * parseHTML에서만 사용되므로 generateHTML 호출 시 실행되지 않음.
@@ -55,6 +85,87 @@ export const CustomTableCell = TableCell.extend({
           attrs['borderColor']
             ? { style: `border-color: ${attrs['borderColor']}` }
             : {},
+      },
+    }
+  },
+})
+
+/**
+ * 이미지 width · align · overlay 속성 보존 확장.
+ *
+ * 기본 @tiptap/extension-image 는 크기·정렬 정보를 보존하지 않아
+ * 삽입 후 조절이 불가능 — 이 확장으로 속성들을 JSON·HTML 양쪽에 보존한다.
+ *
+ * overlay=true 시: position:absolute 로 텍스트 위에 겹치기 배치.
+ *   x/y(px) 로 위치 지정. align 스타일은 overlay 시 적용하지 않음.
+ * overlay=false(기본): 기존 align 기반 float/margin 인라인 배치.
+ *
+ * renderHTML: 각 속성이 { style: '...' }을 반환하며
+ * TipTap 의 mergeAttributes()가 style 문자열을 ';'로 자동 합성한다.
+ *
+ * 에디터용 NodeView 는 ContractDocumentEditor.svelte 에서
+ * CustomImage.extend({ addNodeView() {...} }) 로 별도 추가된다.
+ * generateHTML()/tiptapRender.ts 경로는 NodeView 없이 이 renderHTML 만 사용한다.
+ */
+export const CustomImage = Image.extend({
+  addAttributes() {
+    return {
+      ...this.parent?.(),
+      /** 이미지 너비 (px 숫자). null → CSS 미설정(원본 크기) */
+      width: {
+        default: null,
+        parseHTML: (element: HTMLElement) => parseImgWidth(element),
+        renderHTML: (attrs: Record<string, unknown>) => {
+          const w = attrs['width'] as number | null
+          return w ? { style: `width:${w}px;height:auto` } : {}
+        },
+      },
+      /** 정렬: 'left' | 'center'(기본) | 'right' — overlay=true 시 적용 안 됨 */
+      align: {
+        default: 'center',
+        parseHTML: (element: HTMLElement) => parseImgAlign(element),
+        renderHTML: (attrs: Record<string, unknown>) => {
+          // overlay 모드에서는 align 스타일 무시 (position:absolute가 대신 적용됨)
+          if (attrs['overlay']) return {}
+          const a = (attrs['align'] as string) || 'center'
+          if (a === 'left') return { style: 'float:left;margin-right:8px' }
+          if (a === 'right') return { style: 'float:right;margin-left:8px' }
+          // center
+          return { style: 'display:block;margin:0 auto' }
+        },
+      },
+      /**
+       * 겹치기 모드: true → position:absolute로 텍스트 위에 자유 배치
+       * false(기본) → align 기반 인라인 배치 유지
+       */
+      overlay: {
+        default: false,
+        parseHTML: (element: HTMLElement) =>
+          element.style.getPropertyValue('position') === 'absolute',
+        renderHTML: (attrs: Record<string, unknown>) => {
+          if (!attrs['overlay']) return {}
+          const x = (attrs['x'] as number) || 0
+          const y = (attrs['y'] as number) || 0
+          return { style: `position:absolute;left:${x}px;top:${y}px;z-index:10` }
+        },
+      },
+      /** 겹치기 모드 X 좌표 (px, 에디터 .ProseMirror 기준) */
+      x: {
+        default: 0,
+        parseHTML: (element: HTMLElement) => {
+          const left = element.style.getPropertyValue('left')
+          return left && left.endsWith('px') ? (parseInt(left, 10) || 0) : 0
+        },
+        renderHTML: () => ({}), // overlay renderHTML에서 통합 처리
+      },
+      /** 겹치기 모드 Y 좌표 (px, 에디터 .ProseMirror 기준) */
+      y: {
+        default: 0,
+        parseHTML: (element: HTMLElement) => {
+          const top = element.style.getPropertyValue('top')
+          return top && top.endsWith('px') ? (parseInt(top, 10) || 0) : 0
+        },
+        renderHTML: () => ({}), // overlay renderHTML에서 통합 처리
       },
     }
   },
@@ -105,6 +216,6 @@ export const TIPTAP_CONTRACT_EXTENSIONS = [
   TableRow,
   CustomTableHeader,
   CustomTableCell,
-  Image,
+  CustomImage,          // Image → CustomImage (width·align 속성 추가)
   MergeFieldNode,
 ]
