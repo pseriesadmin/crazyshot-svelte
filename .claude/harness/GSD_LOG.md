@@ -3020,3 +3020,33 @@
   에러 0건, 관련 테스트 5파일 82개 전부 통과(회귀 없음). overlay/x/y 속성, 드래그 패턴 재사용,
   3화면 210mm 적용 전부 오케스트레이터가 grep으로 직접 대조 확인.
   GATE E: 완료 — 커밋은 Stephen 직접 실행.
+
+[2026-08-14] GSD | 체크아웃 다건예약→단일주문(orders/order_items) 그룹핑 신규 구현 | Migration 251 | DB 완료, 앱코드 미커밋
+  Stephen "예약 1건에 상품 여러개 묶이는 규정 없으면 개발플랜 작성" → 조사 중 orders/order_items
+  스키마는 라이브 DB에 이미 존재하나 실제 INSERT 코드가 전무한 미구현 상태(더미 시드 데이터만
+  존재) 확인. Plan Mode 진입 → "실제 구현 개발플랜 수립" 승인 받아 구현.
+  DB: compute_reservation_line_amount 헬퍼 추출(calculate_cart_total 예약1건당 요금계산 로직
+  리팩터링, 동작불변) + create_checkout_order RPC 신설(service_role 전용, orders 1행+order_items
+  N행 INSERT, 멤버십할인 반영) + RLS 정책. stage(ezyvffjvuwmtuhpxdjrw) 적용 중 order_key 컬럼명
+  모호성 런타임 버그(42702) 발견 즉시수정 후 RPC 실호출 검증 완료. production(vnbpmvxruyciuuaermyh)
+  적용 전 사전조사에서 계산_cart_total이 옵션금액 누락된 구버전(migration 178 미반영)임을 발견 —
+  체크아웃 결제예정금액 계산 변경이라 별도 확인질문 후 "교체함(추천)" 승인받아 반영. 기존
+  RLS 8건과 중복 없이 is_cms_user() 관리자 전체 정책만 추가. stage+production 양쪽 함수·정책
+  재조회로 최종 확인.
+  앱코드(로컬 미커밋): confirm-mock/+server.ts에 create_checkout_order 호출 연결, 신규
+  order-siblings API + RentalDetailPanel.svelte "같은 주문의 다른 상품" 섹션 추가.
+  svelte-check 신규 에러 0건(도중 발견한 order-siblings 타입 캐스팅 오류 즉시 수정).
+  범위 제외(기존 갭, 미수정): 쿠폰/포인트 미반영, 실토스결제 미연동, 상품별 개별 대여방식.
+  GATE E: 보류 — DB 완료, 앱코드 커밋·배포 및 Stephen 실화면 확인 대기. @sp3-qa-agent 검수 예정.
+
+[2026-08-15] FIX | create_checkout_order/compute_reservation_line_amount anon 실행권한 노출 긴급차단 | Migration 251b | 완료
+  @sp3-qa-agent가 위 주문그룹핑 구현 검수 중 실제 REST 호출로 발견: Migration 251의
+  REVOKE가 `FROM PUBLIC`만 명시하고 Migration 172 표준패턴(`FROM PUBLIC, anon,
+  authenticated`)을 따르지 않아 두 신규 함수가 비인증 상태로 직접 호출 가능한 상태로
+  Stage+Production 양쪽에 실배포돼 있었음(has_function_privilege로 직접 재확인, anon=true).
+  즉시 REVOKE ALL...FROM PUBLIC,anon,authenticated 재적용 → Stage 먼저 검증 후 Production
+  적용, 양쪽 anon/authenticated=false·service_role=true 확인. calculate_cart_total(원래도
+  anon 실행 가능하도록 설계된 안전한 함수)은 그대로 유지, 내부에서 compute_reservation_
+  line_amount를 호출하지만 두 함수 모두 postgres 소유라 SECURITY DEFINER 중첩호출은
+  영향받지 않음 확인.
+  GATE E: 완료 — 보안결함 양쪽 패치·재검증 완료. 커밋은 Stephen 직접 실행.

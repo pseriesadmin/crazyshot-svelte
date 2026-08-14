@@ -13751,3 +13751,154 @@ TDD도메인: 없음 — GSD.
 
 참고: `append_product_image_url`(products 모듈)의 동일 취약점은 여전히 미조치 상태 — 별도
 백그라운드 작업(task_56b999c2)으로 분리돼 Stephen 확인 대기 중.
+
+## DONE — 예약 다중상품(옵션상품) 규정 확인 + 체크아웃 주문(order) 그룹핑 신규 구현 (2026-08-14) — ✅ DB 완료(stage+production) / 앱코드 커밋·배포 대기
+
+[CONTEXT BRIDGE]
+plan_source: Stephen "예약 단위 별 1개 이상 상품을 하나의 예약에 담아 예약정보가 구성될 수 있음에
+  대해 규정이 없으면 개발플랜 작성" → 조사 결과 옵션상품(reservation_options) 규정·구현은 이전
+  세션에 이미 완료돼 있었음(재검증만). 이어서 "서로 다른 메인상품 여러 개 → order_id로만 연결"
+  서술의 실제 로직을 물어 코드 추적 → orders/order_items 스키마는 라이브 DB에 존재하나 실제
+  INSERT하는 코드가 전혀 없는 미구현 상태(더미 시드 데이터만 존재) 확인 → Plan Mode 진입해
+  "실제 구현 개발플랜 수립" 선택 → 승인 후 구현 → "Production DB에도 적용해줘" 승인 → 도중
+  발견한 calculate_cart_total 옵션금액 누락(프로덕션이 migration 178 미반영 상태)도 별도 확인
+  질문 후 "교체함(추천)" 승인 받아 함께 반영.
+핵심제약: 마이그레이션 stage(ezyvffjvuwmtuhpxdjrw) 선검증 → production(vnbpmvxruyciuuaermyh)
+  순서 준수, apply_migration 실행 전 project_id 매번 재확인. 요청범위 외 수정 금지 원칙에 따라
+  쿠폰/포인트 미반영·실토스결제 미연동 등 별개 기존 갭은 손대지 않고 문서로만 명시. git 커밋/
+  배포는 Stephen 전용이라 자율 실행하지 않음.
+TDD도메인: 없음 — GSD(결제·예약 도메인 CRITICAL 등급이라 DB 반영 전 매 단계 Stephen 확인).
+
+### 1단계 — 규정 확인(재검증, 이번 세션 신규 코드 변경 없음)
+
+`rental-lifecycle.md`의 "예약 1건의 다중 상품 구성" 절(2026-08-14 이전 세션에 이미 신설)과
+`RentalDetailPanel.svelte`의 옵션상품 섹션([394~416행](src/lib/components/cms/RentalDetailPanel.svelte:394)),
+`/api/cms/reservations/[id]/options` API를 재조회해 문서·DB 스키마·코드 3자 정합 재확인 —
+갭 없음 확정.
+
+### 2단계 — "서로 다른 메인상품 → order_id로만 연결" 로직 정밀 추적
+
+- `create_hold_reservation`은 상품별 독립 `rental_reservations` 행 생성, `reservation_code`는
+  행마다 고유 채번(트리거) — 여기까지는 문서와 일치.
+- `orders`/`order_items` 스키마는 Stage/Production 라이브 DB에 이미 존재하고 `get_rental_list`도
+  이미 조인해 `order_id`/`order_key`/`order_amount`를 CMS로 내려주고 있었으나, **두 테이블에
+  INSERT하는 코드가 SQL 마이그레이션·서버 코드 어디에도 없음을 전수 검색으로 확인**(Stage
+  `orders`에 남아있던 5건도 전부 `ORD-DUMMY-00N` 시드 데이터).
+- `confirm-mock`(현재 라이브 체크아웃 확정 경로, 실토스 `/api/payment/confirm`은 S1-M3 BLOCKED로
+  체크아웃 UI에서 호출되지 않는 죽은 코드임을 확인)은 예약을 하나씩 개별 confirmed 전환할 뿐
+  묶는 레코드를 만들지 않음 — Stephen 원 설명(1번 항목)과 실제 구현 간 불일치로 확정.
+
+### 3단계 — 구현 (Plan Mode 승인 → 실행)
+
+**DB — [migration 251](supabase/migrations/20260814070000_251_checkout_order_grouping.sql) 신규**
+1. `compute_reservation_line_amount(p_reservation_id)` 헬퍼 신설 — `calculate_cart_total`의
+   예약 1건당 요금계산(24h/12h + 옵션금액) 로직을 추출(동작 불변 리팩터링).
+2. `calculate_cart_total`을 헬퍼 재사용하도록 `CREATE OR REPLACE`(시그니처 불변).
+3. `create_checkout_order(p_user_id, p_reservation_ids[])` RPC 신설(SECURITY DEFINER,
+   `service_role` 전용 — [migration 172](supabase/migrations/20260727000172_172_lock_server_only_rpcs_to_service_role.sql)와
+   동일 잠금 패턴) — 소유·`hold`상태 재검증 후 `orders` 1행 + `order_items` N행 INSERT,
+   멤버십 등급 할인 반영, `order_key`는 `reservation_code`와 동일 패턴(`ORD-YYYYMMDD-XXXXX`)
+   채번.
+4. `orders`/`order_items` RLS 정책 추가.
+
+**Stage(ezyvffjvuwmtuhpxdjrw) 적용 중 실사용 버그 1건 발견·즉시수정**: `create_checkout_order`
+채번 로직에서 RETURNS TABLE 출력컬럼명 `order_key`와 `orders.order_key` 테이블 컬럼명이
+충돌하는 `42702 컬럼 참조 모호성` 런타임 에러 — `WHERE order_key LIKE ...` → `WHERE
+orders.order_key LIKE ...`로 즉시 수정, 재적용 후 실제 hold 예약으로 RPC 직접 호출해
+`orders`+`order_items` 정상 생성·`final_amount` 정확성 확인(테스트 데이터는 즉시 정리).
+
+**Production(vnbpmvxruyciuuaermyh) 적용 전 스키마 사전조사에서 추가 발견**: production은
+`orders`/`order_items` 스키마는 Stage와 동일하나 **이미 자체적인 RLS 정책 8건**(select 본인조회
++ insert/update/delete 전체차단, 이름만 다르고 로직은 동일)**이 존재**했고 — Stage와 달리
+`rental_reservations.start_date`/`end_date`가 `NOT NULL`(migration 179 미반영으로 draft 예약
+자체가 미지원)이며, **`calculate_cart_total`이 옵션금액을 합산하지 않는 구버전**(migration 178
+미반영)이었음. 옵션금액 누락은 실서비스 체크아웃 결제예정금액 계산에 영향을 주는 CRITICAL
+변경이라 AskUserQuestion으로 별도 확인 → "교체함(추천)" 승인 받은 뒤에만 반영. RLS는 중복
+정책을 새로 만들지 않고 기존 커버 범위(select/write-deny)를 그대로 인정한 채 `is_cms_user()`
+기반 "관리자 전체" ALL 정책 2건만 추가(기존 정책엔 관리자 전체 접근권이 없었음).
+
+**서버/CMS 코드 (로컬 작업트리, 미커밋)**
+- [confirm-mock/+server.ts](src/routes/api/checkout/confirm-mock/+server.ts:41) — hold 조회 직후
+  `create_checkout_order` 호출 추가(실패해도 예약승인 자체는 계속 진행), 응답에 `orderKey` 포함.
+- [order-siblings/+server.ts](src/routes/api/cms/reservations/[id]/order-siblings/+server.ts) 신규
+  — `order_items`로 같은 주문의 다른 예약 조회(N+1 방지 배치 조회), 옵션상품 API와 동일한
+  `getCmsRoleForAction` 인증 패턴.
+- [RentalDetailPanel.svelte](src/lib/components/cms/RentalDetailPanel.svelte) 결제정보 탭 "주문
+  정보" 섹션 하단에 "같은 주문의 다른 상품" lazy-fetch 목록 추가(형제 0건이면 섹션 미노출).
+
+### 검증
+- Stage: RPC 직접 호출로 `orders`(1행)+`order_items`(N행) 생성, `final_amount` 정확성 확인.
+- Production: 함수 3개 시그니처 재조회, RLS 정책 목록 재조회(기존 8건 + 신규 관리자 정책 2건
+  = 10건, 중복/충돌 없음) 확인. production에 현재 `hold` 상태 예약이 없어 실데이터 스모크
+  테스트는 미수행(Stage에서 동일 로직 이미 실측 검증됨으로 대체).
+- `npx svelte-check` — 신규 타입 에러 1건 발견 즉시 수정(`order-siblings/+server.ts`의
+  `products(name)` 조인 타입 캐스팅), 재실행 후 신규 에러 0건(기존 무관 에러 1건만 잔존).
+
+### 의도적 범위 제외 (기존 갭, 별도 확인 없이 미수정)
+- 쿠폰(`user_coupons.used_at`) 실사용처리, 포인트(`user_profiles.points`) 차감 — 결제 확정
+  경로 어디에도 반영되지 않는 기존 갭, 이번 주문 그룹핑과 무관.
+- 실토스 결제 연동(`/api/payment/confirm`) 활성화 — S1-M3 여전히 BLOCKED.
+- 상품별 개별 대여방식 지정 — Stephen이 "추후 고려"로 명시적 확인.
+- `orders.tax_amount`는 0으로 유지 — `payment_transactions`에도 서버측 VAT 저장 컬럼이 없는
+  기존 상태를 그대로 따름.
+
+### 수정 파일
+
+```
+supabase/migrations/20260814070000_251_checkout_order_grouping.sql (신규, stage+production 적용)
+src/routes/api/checkout/confirm-mock/+server.ts (수정, 미커밋)
+src/routes/api/cms/reservations/[id]/order-siblings/+server.ts (신규, 미커밋)
+src/lib/components/cms/RentalDetailPanel.svelte (수정, 미커밋)
+```
+
+**GATE E: ⚠️ 보류 — DB(stage+production) 적용·검증 완료. 앱 코드는 svelte-check 통과했으나
+git 커밋·배포는 Stephen 직접 실행 대기 중(브라우저 검증 금지 규칙에 따라 실제 체크아웃 화면
+동작은 미확인 — Stephen 직접 확인 필요). @sp3-qa-agent 검수 예정.**
+
+## DONE — 🔴 CRITICAL 즉시수정: create_checkout_order RPC anon 실행권한 노출 (2026-08-15, 후속) — ✅ Stage+Production 패치 완료
+
+[CONTEXT BRIDGE]
+plan_source: @sp3-qa-agent가 위 주문그룹핑 구현 검수 중 실제 REST 호출로 재현·확인해 보고.
+핵심제약: 이미 배포된 활성 보안결함이라 즉시 패치(Class D 보안위반 즉시중단 원칙에 따라
+  승인 왕복 없이 같은 세션·같은 승인 범위 내에서 즉시 조치 — 새 기능이 아닌 직전 작업의
+  자체 결함 원복 성격).
+TDD도메인: 없음 — GSD(보안 긴급패치).
+
+### 원인
+Migration 251의 `REVOKE ALL ... FROM PUBLIC`이 Migration 172
+(`20260727000172_172_lock_server_only_rpcs_to_service_role.sql`)의 검증된 표준 패턴
+`FROM PUBLIC, anon, authenticated`를 따르지 않음 — Supabase Postgres가 신규 함수 생성 시
+anon/authenticated에 자동 부여하는 기본 EXECUTE 권한이 `FROM PUBLIC`만으로는 회수되지 않아,
+`create_checkout_order`(타인 `p_user_id` 포함 임의 파라미터 조합 가능)와
+`compute_reservation_line_amount`가 비인증 상태로 직접 호출 가능한 상태로 Stage·Production
+양쪽에 실배포됨.
+
+### 검증
+- 직접 `has_function_privilege('anon', ..., 'EXECUTE')` 조회로 QA 보고 재확인(Stage: true,
+  Production: 별도 접속해 동일하게 true 확인 — QA는 Production MCP 접근이 없어 추정만 했었음).
+- `update_reservation_status`(Migration 172 정상 패턴)는 대조군으로 anon=false 확인.
+
+### 조치 (Stage → Production 순)
+`supabase/migrations/20260814080000_251b_fix_checkout_order_rpc_execute_grants.sql` 신규 —
+두 함수 모두 `REVOKE ALL ... FROM PUBLIC, anon, authenticated` + `GRANT ... TO service_role`만
+재적용. `calculate_cart_total`(원래도 anon/authenticated 실행 가능하도록 설계된 안전한 함수,
+이번 결함과 무관)은 그대로 두되, 내부에서 `compute_reservation_line_amount`를 호출하므로
+이번 REVOKE로 깨지지 않는지 소유자 확인(둘 다 `postgres` 소유 — SECURITY DEFINER 중첩호출은
+소유자 권한으로 실행되어 영향 없음 확인).
+
+### 재검증 (양쪽 project_id 직접 조회)
+```
+Stage(ezyvffjvuwmtuhpxdjrw)      : create_checkout_order anon=false/auth=false/service_role=true
+                                    compute_reservation_line_amount 동일
+                                    calculate_cart_total anon=true/auth=true (기존 유지 확인)
+Production(vnbpmvxruyciuuaermyh) : 위와 동일 결과 확인
+```
+
+### 수정 파일
+```
+supabase/migrations/20260814080000_251b_fix_checkout_order_rpc_execute_grants.sql (신규, stage+production 적용)
+```
+
+**GATE E: ✅ 통과 — 보안결함 Stage·Production 양쪽 패치·재검증 완료. 위 주문그룹핑 구현 본체는
+여전히 앱코드 커밋·배포 대기 상태(별도 GATE E 보류 유지) — QA가 "이 패치 이후 앱코드는 재검수
+없이 바로 커밋 가능"으로 판정함.**
