@@ -6,7 +6,7 @@ import type { SupabaseClient } from '@supabase/supabase-js'
  *
  * Claude API 호출 없이 mock admin client 주입으로 검증한다.
  * PRODUCT_CARD / RESERVATION_STATUS_CARD 최소 2종 타입에 대해:
- *   - 실데이터가 채워지는지 (product_name·daily_rate·reservation_no·action_url 등)
+ *   - 실데이터가 채워지는지 (product_name·product_price·product_image·reservation_no·action_url 등)
  *   - DB 조회 실패 시 기본 페이로드(type + is_expired)로 폴백되는지
  *
  * 참조: TASK.md AC-1~AC-3 완료기준, chatActionEnrich.ts 구현
@@ -71,7 +71,7 @@ const USER_ID = 'user-uuid-5678'
 // PRODUCT_CARD 테스트
 
 describe('enrichActionCard — PRODUCT_CARD', () => {
-  it('context_type=product_inquiry + context_id → product_name·daily_rate·action_url 채움', async () => {
+  it('context_type=product_inquiry + context_id → product_name·product_price·product_image·action_url 채움', async () => {
     const admin = makeAdmin({
       products: [
         // 1차 호출: 상품 조회 (부모 상품 — parent_product_id null)
@@ -95,7 +95,8 @@ describe('enrichActionCard — PRODUCT_CARD', () => {
     expect(result.is_expired).toBe(false)
     expect(result.product_id).toBe('prod-uuid-1234')
     expect(result.product_name).toBe('소니 FX6 풀프레임 카메라')
-    expect(result.daily_rate).toBe(150000)
+    expect(result.product_price).toBe(150000)
+    expect(result.product_image).toBe('https://storage.supabase.co/.../large_abc.webp')
     expect(result.action_url).toBe('/products/sony-fx6')
   })
 
@@ -107,7 +108,7 @@ describe('enrichActionCard — PRODUCT_CARD', () => {
     expect(result.type).toBe('PRODUCT_CARD')
     expect(result.is_expired).toBe(false)
     expect(result.product_name).toBeUndefined()
-    expect(result.daily_rate).toBeUndefined()
+    expect(result.product_price).toBeUndefined()
   })
 
   it('자식 상품(parent_product_id 있음) → 부모 slug로 action_url 구성', async () => {
