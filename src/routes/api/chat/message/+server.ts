@@ -75,7 +75,7 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 
   const { data: chatSession } = await db
     .from('chat_sessions')
-    .select('user_id, status, context_type, context_id')
+    .select('user_id, status, context_type, context_id, manual_mode')
     .eq('id', body.session_id)
     .single()
 
@@ -117,6 +117,21 @@ export const POST: RequestHandler = async ({ request, locals }) => {
       .eq('id', body.session_id)
   }
 
+  // GSD-9: manual_mode=true 세션은 자동응답(캔드매칭+AI폴백) 전부 스킵 — 사용자 메시지 저장만 수행
+  const isManualMode = (chatSession as { manual_mode?: boolean }).manual_mode === true
+  if (isManualMode) {
+    if (admin) {
+      await admin
+        .from('chat_sessions')
+        .update({ updated_at: new Date().toISOString() })
+        .eq('id', body.session_id)
+    }
+    return json(
+      { user_message: userMessage as ChatMessage, ai_message: null, intent_log: null },
+      { status: 201 },
+    )
+  }
+
   // 1-a. 하이브리드 자동답변 1단계 — 키워드 매칭을 AI보다 먼저 시도
   //   Claude 호출·API 키 상태와 완전히 무관하게 동작(장애 시에도 매칭되는 빠른답변은 계속 나감).
   //   매칭 성공 시 Claude를 아예 호출하지 않고 즉시 응답 — 이 메시지는 intent 분류를 거치지
@@ -131,14 +146,27 @@ export const POST: RequestHandler = async ({ request, locals }) => {
       const arEnabled = (arSettings as { enabled: boolean } | null)?.enabled ?? false
 
       if (arEnabled) {
-        const { data: candidates } = await admin
+        // GSD-20: canned_responses에 image_url/cta_label/cta_url 컬럼 추가로 조회 확장
+      const { data: candidates } = await admin
           .from('canned_responses')
-          .select('id, title, content, category, shortcut, match_keywords, usage_count')
+          .select('id, title, content, category, shortcut, match_keywords, usage_count, image_url, cta_label, cta_url')
         // §E SYN-9: 확정된 동의어 그룹을 로드해 키워드 매칭 범위를 확장
         const synonymGroups = await loadSynonymGroups()
         const match = matchCannedResponse(body.content.trim(), (candidates as CannedResponseForMatch[] ?? []), synonymGroups)
 
         if (match) {
+          // GSD-20: 이미지/CTA 있으면 action_card 형태로, 없으면 기존 텍스트 메시지 유지
+          const hasCta = !!(match.image_url || match.cta_label)
+          const cannedActionPayload = hasCta
+            ? {
+                type: 'canned_cta',
+                button_label: match.cta_label ?? '확인하기',
+                action_url: match.cta_url ?? null,
+                product_image: match.image_url ?? null,
+                canned_response_id: match.id,
+              }
+            : { type: 'auto_canned_reply', canned_response_id: match.id }
+
           // sender_type='admin' INSERT는 RLS(participant_insert_message)가 실제 cms_role
           // 보유 계정에게만 허용 — 이 메시지는 관리자가 아니라 시스템 자동응답이므로
           // service_role(admin) 클라이언트로 삽입해야 함. db(고객 세션 클라이언트)로 삽입하면
@@ -149,8 +177,8 @@ export const POST: RequestHandler = async ({ request, locals }) => {
               session_id: body.session_id,
               sender_type: 'admin',
               content: match.content,
-              message_type: 'text',
-              action_payload: { type: 'auto_canned_reply', canned_response_id: match.id },
+              message_type: hasCta ? 'action_card' : 'text',
+              action_payload: cannedActionPayload,
             })
             .select()
             .single()

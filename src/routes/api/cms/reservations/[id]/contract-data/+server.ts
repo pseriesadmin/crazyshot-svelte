@@ -5,6 +5,7 @@ import { json } from '@sveltejs/kit'
 import type { RequestHandler } from './$types'
 import type { ContractSubstitutionData } from '$lib/types/contract-module'
 import { getCmsRoleForAction } from '$lib/server/getCmsRoleForAction'
+import { hasSettingsAccess } from '$lib/utils/cmsPermissions'
 
 const PICKUP_LABELS: Record<string, string> = {
   crazydelivery: '크레이지샷 배송',
@@ -21,8 +22,9 @@ function formatAmount(n: number | null | undefined): string {
 
 export const GET: RequestHandler = async ({ params, locals }) => {
   const cmsRole = await getCmsRoleForAction(locals)
-  if (!cmsRole) {
-    return json({ error: '권한 없음' }, { status: 401 })
+  // P7-3: manager 이상만 허용
+  if (!cmsRole || !hasSettingsAccess(cmsRole)) {
+    return json({ error: '권한 없음' }, { status: 403 })
   }
 
   const reservationId = Number(params.id)

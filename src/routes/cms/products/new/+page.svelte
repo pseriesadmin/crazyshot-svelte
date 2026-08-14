@@ -14,28 +14,16 @@
   import type { CodeFormat } from '../../codes/+page.server'
   import type { PageData, ActionData } from './$types'
   import type { MappingGroupSimple, MappingItemSimple, TaxonomyCodeSimple, RentalPeriodSimple, RentalMethodSimple, PickupPointSimple } from './+page.server'
+  import { PRODUCT_CATEGORY_OPTIONS, CATEGORY_CODES } from '$lib/utils/productCategoryTaxonomy'
+  import { sortByTier } from '$lib/utils/comboCategoryCode'
 
   interface Props { data: PageData; form: ActionData }
   let { data, form }: Props = $props()
 
   type FormResult = { error?: string } | null
 
-  const CATEGORIES = [
-    { value: 'camera',     label: '카메라' },
-    { value: 'lens',       label: '렌즈' },
-    { value: 'camcorder',  label: '캠코더' },
-    { value: 'action_cam', label: '액션캠' },
-    { value: 'drone',      label: '드론' },
-    { value: 'lighting',   label: '조명' },
-    { value: 'audio',      label: '오디오' },
-    { value: 'accessory',  label: '보조용품' },
-    { value: 'package',    label: '패키지' },
-  ]
-
-  const CATEGORY_CODES: Record<string, string> = {
-    camera: 'CAM', lens: 'LNS', camcorder: 'CMC', action_cam: 'ACT',
-    drone: 'DRN', lighting: 'LGT', audio: 'AUD', accessory: 'ACC', package: 'PKG',
-  }
+  // 9종 카테고리 값·라벨·품번 프리픽스 정의는 $lib/utils/productCategoryTaxonomy.ts 단일 소스로 통합됨
+  const CATEGORIES = PRODUCT_CATEGORY_OPTIONS
 
   // ─── 옵션상품 ───────────────────────────────────────────────
   interface OptionSearchResult {
@@ -162,6 +150,9 @@
   let selectedGroupId    = $state<string | null>(null)
   let selectedComboRowId = $state<string | null>(null)
   let comboNameByRowId   = $state<Record<string, string | null>>({})
+  // SuggestPicker가 넘기는 previousId는 검색창 재입력 중 조용히 null이 될 수 있어(핸들러 내부
+  // 직접 대입, onselect 미경유) 신뢰할 수 없다 — 이 화면이 직접 확정된 그룹만 추적해 비교한다.
+  let lastConfirmedGroupId = $state<string | null>(null)
 
   const DEFAULT_CODE_FORMAT: CodeFormat = {
     prefix: 'CS',
@@ -237,7 +228,9 @@
   }
 
   function comboPreviewFmt(combo: ComboRow): CodeFormat {
-    const root = combo.codes.find((c) => c.depth === 0) ?? combo.codes[0]
+    // combo.codes는 sortByTier()로 이미 대→중→소 정렬됨 — 첫 번째가 곧 루트(대분류) 코드.
+    // (과거 depth===0 매칭은 대/소분류가 같은 depth를 공유하는 데이터에서 잘못된 코드를 고를 수 있었음)
+    const root = combo.codes[0]
     const rootRule = root ? codeRuleById[root.id] : null
     let date_format: CodeFormat['date_format'] = codeFormat.date_format ?? 'YYMM'
     if (combo.date_option === 'none') date_format = 'NONE'
@@ -316,10 +309,11 @@
           return rowIds.map(rid => {
             const rowItems = items.filter(i => i.combo_row_id === rid)
             const first = rowItems[0]
-            const codes = rowItems
-              .map(i => (data.taxonomyCodes as TaxonomyCodeSimple[]).find(tc => tc.id === i.taxonomy_code_id))
-              .filter((tc): tc is TaxonomyCodeSimple => tc !== undefined)
-              .sort((a, b) => a.depth - b.depth)
+            const codes = sortByTier(
+              rowItems
+                .map(i => (data.taxonomyCodes as TaxonomyCodeSimple[]).find(tc => tc.id === i.taxonomy_code_id))
+                .filter((tc): tc is TaxonomyCodeSimple => tc !== undefined)
+            )
             return {
               combo_row_id: rid,
               combo_name: comboNameByRowId[rid] ?? null,
@@ -353,13 +347,19 @@
     }))
   )
 
-  function onGroupPickerSelect(opt: SuggestPickerOption, previousId: string | null) {
-    if (opt.id !== previousId) onGroupChange()
+  function onGroupPickerSelect(opt: SuggestPickerOption, _previousId: string | null) {
+    // ⚠️ SuggestPicker의 previousId는 검색창 재입력 도중(정확히 일치하지 않는 입력) 내부적으로
+    // selectedId를 조용히 null로 만들었다가 재선택 시 넘어오므로 신뢰 불가 —
+    // 같은 그룹을 재선택한 것으로 오인해 콤보 선택(selectedComboRowId)을 지워버리는 버그가 있었다.
+    // 이 화면이 직접 확정한 lastConfirmedGroupId와 비교해 진짜 그룹 변경 시에만 리셋한다.
+    if (opt.id !== lastConfirmedGroupId) onGroupChange()
+    lastConfirmedGroupId = opt.id
   }
 
   function onGroupPickerInput(val: string) {
     if (!val.trim() && selectedGroupId) {
       selectedGroupId = null
+      lastConfirmedGroupId = null
       onGroupChange()
     }
   }
@@ -582,10 +582,22 @@
     return `https://res.cloudinary.com/crazyshot/image/upload/w_120,h_90,c_fill,f_auto,q_auto/${url}.jpg`
   }
 
+  // BUG-FIX(2026-08-14): 부모상품이 실제로 선택한 조합코드(콤보) 구조가 이 미리보기에
+  // 전혀 반영되지 않고, CATEGORY_CODES(기본 카테고리 드롭다운 기준 고정 3자 코드)로만
+  // 계산되고 있었음 — 콤보를 선택한 경우 실제 채번 로직(buildComboPreview, generate_product_code
+  // 7-param 경로)과 동일한 코드 구조를 보여주도록 우선순위를 바꿈. 콤보 미선택 시에만
+  // 기존 카테고리 기반 추정값으로 폴백.
+  let selectedCombo = $derived(
+    selectedComboRowId
+      ? combosForGroup.find((c) => c.combo_row_id === selectedComboRowId) ?? null
+      : null
+  )
   let assetCodePreview = $derived(
-    category
-      ? `CS-${CATEGORY_CODES[category] ?? '???'}-${new Date().toISOString().slice(2, 7).replace('-', '')}-001`
-      : 'CS-???-2607-001'
+    selectedCombo
+      ? buildComboPreview(selectedCombo)
+      : category
+        ? `CS-${CATEGORY_CODES[category] ?? '???'}-${new Date().toISOString().slice(2, 7).replace('-', '')}-001`
+        : 'CS-???-2607-001'
   )
 </script>
 
@@ -599,7 +611,15 @@
   <form
     method="POST"
     action="?/create"
-    use:enhance={() => {
+    use:enhance={({ cancel }) => {
+      // 버그 수정(2026-08-13): 선택된 그룹에 조합코드가 있는데 콤보 카드를 하나도 안 고르고
+      // 제출하면 서버가 조용히 카테고리 자동 폴백(코드설정에 없는 임의 품번)으로 빠지던 문제
+      // 방지 — 콤보가 존재하는 그룹은 제출 전에 선택을 강제한다(서버에도 동일 검증 이중 적용).
+      if (selectedGroupId && combosForGroup.length > 0 && !selectedComboRowId) {
+        csToast.error('이 분류에는 선택 가능한 조합코드가 있습니다. 조합코드를 먼저 선택해주세요.')
+        cancel()
+        return
+      }
       isLoading = true
       return async ({ update }) => { await update(); isLoading = false }
     }}
@@ -850,7 +870,7 @@
       </div>
 
       <!-- 구성품 -->
-      <div class="field-row">
+      <div class="field-row field-row-separated">
         <label class="field-label">구성품</label>
         <div class="spec-list">
           {#each components as comp, i (i)}
@@ -1403,7 +1423,7 @@
           품번 자동 생성 형식: <code class="asset-code-preview">{assetCodePreview}</code>
         </p>
         <p class="info-subtext">
-          CS-{category ? CATEGORY_CODES[category] : '???'}-{'{'}YYMM{'}'}-{'{'}SEQ{'}'}  형식으로 생성됩니다.
+          CS-{selectedCombo ? comboCatCodeStr(selectedCombo.codes) : (category ? CATEGORY_CODES[category] : '???')}-{'{'}YYMM{'}'}-{'{'}SEQ{'}'}  형식으로 생성됩니다.
         </p>
       </div>
     </section>
@@ -1479,6 +1499,13 @@
   }
   .field-row-combo {
     gap: 10px;
+  }
+  /* 콘텐츠 에디터(상품 설명) 블록과 구성품 블록이 동일한 16px 간격으로 붙어있어
+     서로 다른 입력 영역이라는 구분이 잘 안 됐음 — 위쪽에 여백을 추가로 확보 */
+  .field-row-separated {
+    margin-top: var(--spacing-8);
+    padding-top: var(--spacing-6);
+    border-top: 1px solid var(--cs-lilac);
   }
   .field-label {
     font: var(--text-pc-body-14);
@@ -1719,13 +1746,15 @@
     color: var(--cs-text-light);
     margin: 0;
   }
+  /* 등록 전 반드시 확인해야 하는 실제 채번 구조라 시인성을 2배로 키움
+     (font: --text-pc-script-12 12px → --text-pc-htitle-25 25px, padding도 비례 확대) */
   .asset-code-preview {
     display: inline-block;
-    padding: 2px 8px;
+    padding: 4px 16px;
     background: var(--cs-dark);
     color: var(--cs-orange);
     border-radius: var(--radius-sm);
-    font: var(--text-pc-script-12);
+    font: var(--text-pc-htitle-25);
     letter-spacing: 0.5px;
   }
 

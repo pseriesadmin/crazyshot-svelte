@@ -12,6 +12,15 @@
     usage_count: number
   }
 
+  // GSD-17: @ 멘션 상품 검색 결과 타입 (search-suggestions API 응답과 일치)
+  interface ProductItem {
+    id: string
+    name: string
+    image_url: string | null
+    slug: string | null
+    price_24h: number | null
+  }
+
   interface Props {
     disabled?: boolean
     placeholder?: string
@@ -25,6 +34,8 @@
     oninputstart?: () => void
     /** 관리자 모드: true 시 / 트리거로 캔드 리스폰스 드롭다운 활성화 */
     isAdmin?: boolean
+    /** GSD-17: @ 멘션으로 상품 선택 시 콜백 — product_link action_card 전송용 */
+    onproductmention?: (product: ProductItem) => void
   }
 
   let {
@@ -34,6 +45,7 @@
     onattach,
     oninputstart,
     isAdmin = false,
+    onproductmention,
   }: Props = $props()
 
   let content = $state('')
@@ -51,6 +63,12 @@
   let dropdownItems = $state<CannedItem[]>([])
   let dropdownIdx = $state(-1)                // 키보드 포커스 인덱스
   let wrapEl = $state<HTMLDivElement | null>(null)
+
+  // GSD-17: @ 멘션 상품 검색 드롭다운 상태
+  let productDropdownItems = $state<ProductItem[]>([])
+  let showProductDropdown = $state(false)
+  let productDropdownIdx = $state(-1)
+  let productSearchTimer = $state<ReturnType<typeof setTimeout> | null>(null)
 
   let canSend = $derived(content.trim().length > 0 && !disabled)
 
@@ -95,17 +113,63 @@
     dropdownIdx = -1
   })
 
+  // GSD-17: @ 멘션 트리거 — 입력 시 300ms 디바운스 후 상품 검색
+  $effect(() => {
+    if (!isAdmin) return
+    const val = content
+    if (!val.startsWith('@')) {
+      // @ 트리거 아니면 상품 드롭다운 닫기
+      showProductDropdown = false
+      productDropdownItems = []
+      productDropdownIdx = -1
+      if (productSearchTimer) { clearTimeout(productSearchTimer); productSearchTimer = null }
+      return
+    }
+    const query = val.slice(1).trim()
+    if (!query) {
+      showProductDropdown = false
+      productDropdownItems = []
+      productDropdownIdx = -1
+      return
+    }
+    // 이전 타이머 초기화 후 새 디바운스
+    if (productSearchTimer) clearTimeout(productSearchTimer)
+    productSearchTimer = setTimeout(() => {
+      productSearchTimer = null
+      fetch(`/api/cms/products/search-suggestions?q=${encodeURIComponent(query)}&limit=6`)
+        .then((r) => r.ok ? r.json() : [])
+        .then((items: ProductItem[]) => {
+          productDropdownItems = Array.isArray(items) ? items : []
+          showProductDropdown = productDropdownItems.length > 0
+          productDropdownIdx = -1
+        })
+        .catch(() => { productDropdownItems = []; showProductDropdown = false })
+    }, 300)
+  })
+
   // 바깥 클릭 시 드롭다운 닫기
   $effect(() => {
     if (!isAdmin) return
     function handleOutside(e: MouseEvent) {
       if (wrapEl && !wrapEl.contains(e.target as Node)) {
         showDropdown = false
+        showProductDropdown = false
       }
     }
     document.addEventListener('mousedown', handleOutside)
     return () => document.removeEventListener('mousedown', handleOutside)
   })
+
+  // GSD-17: 상품 선택 — 입력창에서 @query 제거 + onproductmention 콜백
+  function selectProduct(item: ProductItem): void {
+    content = ''
+    showProductDropdown = false
+    productDropdownItems = []
+    productDropdownIdx = -1
+    onproductmention?.(item)
+    textareaEl?.focus()
+    resizeTextarea()
+  }
 
   function selectCanned(item: CannedItem) {
     content = item.content
@@ -140,7 +204,30 @@
   }
 
   function handleKeydown(e: KeyboardEvent) {
-    // 드롭다운 키보드 탐색
+    // GSD-17: 상품 드롭다운 키보드 탐색
+    if (showProductDropdown && isAdmin) {
+      if (e.key === 'ArrowDown') {
+        e.preventDefault()
+        productDropdownIdx = Math.min(productDropdownIdx + 1, productDropdownItems.length - 1)
+        return
+      }
+      if (e.key === 'ArrowUp') {
+        e.preventDefault()
+        productDropdownIdx = Math.max(productDropdownIdx - 1, 0)
+        return
+      }
+      if (e.key === 'Enter' && productDropdownIdx >= 0) {
+        e.preventDefault()
+        selectProduct(productDropdownItems[productDropdownIdx])
+        return
+      }
+      if (e.key === 'Escape') {
+        showProductDropdown = false
+        productDropdownIdx = -1
+        return
+      }
+    }
+    // 캔드 리스폰스 드롭다운 키보드 탐색
     if (showDropdown && isAdmin) {
       if (e.key === 'ArrowDown') {
         e.preventDefault()
@@ -199,6 +286,37 @@
 </script>
 
 <div class="input-wrap" bind:this={wrapEl}>
+  <!-- GSD-17: @ 멘션 상품 검색 드롭다운 -->
+  {#if isAdmin && showProductDropdown}
+    <div class="product-dropdown" role="listbox" aria-label="상품 검색 결과">
+      {#each productDropdownItems as item, i (item.id)}
+        <button
+          class="product-item"
+          class:selected={i === productDropdownIdx}
+          role="option"
+          aria-selected={i === productDropdownIdx}
+          type="button"
+          onmousedown={(e) => { e.preventDefault(); selectProduct(item) }}
+        >
+          {#if item.image_url}
+            {@const imgSrc = item.image_url.startsWith('http')
+              ? item.image_url
+              : `https://res.cloudinary.com/crazyshot/image/upload/w_40,h_40,c_fill,f_auto,q_auto/${item.image_url}.jpg`}
+            <img class="pi-thumb" src={imgSrc} alt="" width="36" height="36" loading="lazy" aria-hidden="true" />
+          {:else}
+            <div class="pi-thumb pi-thumb--ph" aria-hidden="true"></div>
+          {/if}
+          <div class="pi-info">
+            <span class="pi-name">{item.name}</span>
+            {#if item.price_24h}
+              <span class="pi-price">{item.price_24h.toLocaleString()}원/일</span>
+            {/if}
+          </div>
+        </button>
+      {/each}
+    </div>
+  {/if}
+
   <!-- 캔드 리스폰스 드롭다운 (관리자 모드 + '/' 트리거) -->
   {#if isAdmin && showDropdown}
     <div class="canned-dropdown" role="listbox" aria-label="빠른답변 목록">
@@ -284,6 +402,72 @@
   .input-wrap {
     position: relative;
     width: 100%;
+  }
+
+  /* GSD-17: @ 멘션 상품 드롭다운 — 입력창 위에 표시 */
+  .product-dropdown {
+    position: absolute;
+    bottom: calc(100% + 6px);
+    left: 0;
+    right: 0;
+    background: var(--cs-white, #fff);
+    border: 1px solid var(--cs-lilac, #ECEBF4);
+    border-radius: var(--radius-md, 15px);
+    box-shadow: 0 -4px 20px rgba(16, 11, 50, 0.10);
+    overflow: hidden;
+    z-index: 100;
+    max-height: 280px;
+    overflow-y: auto;
+  }
+
+  .product-item {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    width: 100%;
+    text-align: left;
+    padding: 8px 14px;
+    border: none;
+    background: transparent;
+    cursor: pointer;
+    transition: background 0.12s;
+    border-bottom: 1px solid rgba(16, 11, 50, 0.05);
+    min-height: 44px;
+  }
+  .product-item:last-child { border-bottom: none; }
+  .product-item:hover,
+  .product-item.selected { background: var(--cs-lilac, #ECEBF4); }
+
+  .pi-thumb {
+    width: 36px;
+    height: 36px;
+    border-radius: 6px;
+    object-fit: cover;
+    flex-shrink: 0;
+  }
+  .pi-thumb--ph {
+    background: var(--cs-lilac);
+  }
+
+  .pi-info {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    min-width: 0;
+    flex: 1;
+  }
+
+  .pi-name {
+    font: 600 13px/1.4 'Noto Sans KR', sans-serif;
+    color: var(--cs-text, #100B32);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .pi-price {
+    font: 400 11px/1 'Noto Sans KR', sans-serif;
+    color: var(--cs-text-mid, #666666);
   }
 
   /* 캔드 리스폰스 드롭다운 — 입력창 위에 표시 */

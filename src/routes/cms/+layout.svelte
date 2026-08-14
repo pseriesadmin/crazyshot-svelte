@@ -70,16 +70,17 @@
   })
 
   type SubMenu = { label: string; href: string }
-  type MainMenu = { id: string; label: string; subMenus: SubMenu[] }
+  type MainMenu = { id: string; label: string; href?: string; subMenus: SubMenu[] }
 
   // $derived 필수: use:enhance 로그인 후 data.cmsRole 갱신 시 subMenus 재계산
   let mainMenus = $derived<MainMenu[]>([
+    { id: 'dashboard', label: '홈', href: '/cms', subMenus: [] },
     {
       id: 'consulting',
       label: '상담',
       subMenus: [
         { label: '채팅', href: '/cms/chat' },
-        { label: 'QnA', href: '/cms/chat/qna' },
+        { label: '자동 메시지 설정', href: '/cms/chat/qna' },
       ],
     },
     { id: 'reservation', label: '예약', subMenus: [
@@ -102,6 +103,20 @@
         { label: '상품등록', href: '/cms/products/new' },
       ],
     },
+    // 구독 티어(정기구독 상품) 관리 — 혜택이 전사적으로 쿠폰·포인트를 자동발행할 수 있어
+    // manager 이상만 노출(products와 달리 전 등급 개방 아님)
+    ...(hasSettingsAccess(data.cmsRole ?? '')
+      ? [
+          {
+            id: 'subscription',
+            label: '구독',
+            subMenus: [
+              { label: '구독목록', href: '/cms/subscriptions' },
+              { label: '구독등록', href: '/cms/subscriptions/new' },
+            ],
+          },
+        ]
+      : []),
     {
       id: 'customers',
       label: '고객',
@@ -142,12 +157,14 @@
   ])
 
   function resolveActiveMenuId(pathname: string): string {
+    if (pathname === '/cms') return 'dashboard'
     if (pathname.startsWith('/cms/promotion')) return 'promotion'
     if (pathname.startsWith('/cms/set'))       return 'settings'
     if (pathname.startsWith('/cms/codes'))    return 'settings'
     if (pathname.startsWith('/cms/accounts')) return 'settings'
     if (pathname.startsWith('/cms/reservation')) return 'reservation'
     if (pathname.startsWith('/cms/products')) return 'products'
+    if (pathname.startsWith('/cms/subscriptions')) return 'subscription'
     if (pathname.startsWith('/cms/rental'))   return 'rental'
     if (pathname.startsWith('/cms/customers')) return 'customers'
     if (pathname.startsWith('/cms/chat'))     return 'consulting'
@@ -158,13 +175,15 @@
   let activeMenu   = $derived(mainMenus.find((m) => m.id === activeMenuId) ?? mainMenus[0])
 
   function mainMenuHref(menu: MainMenu): string {
-    return menu.subMenus[0]?.href ?? '#'
+    return menu.href ?? menu.subMenus[0]?.href ?? '#'
   }
 
   function isSubTabActive(sub: SubMenu): boolean {
     if (page.url.pathname === sub.href) return true
     if (sub.href === '/cms/products' && page.url.pathname === '/cms/products') return true
     if (sub.href === '/cms/products/new' && page.url.pathname.startsWith('/cms/products/new')) return true
+    if (sub.href === '/cms/subscriptions' && page.url.pathname === '/cms/subscriptions') return true
+    if (sub.href === '/cms/subscriptions/new' && page.url.pathname.startsWith('/cms/subscriptions/new')) return true
     if (sub.href === '/cms/customers' && page.url.pathname === '/cms/customers') return true
     if (sub.href === '/cms/customers/membership' && page.url.pathname.startsWith('/cms/customers/membership')) return true
     if (sub.href === '/cms/customers/score' && page.url.pathname.startsWith('/cms/customers/score')) return true

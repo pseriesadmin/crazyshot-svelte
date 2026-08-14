@@ -12,9 +12,10 @@
     isAdmin?: boolean
     onaction?: (payload: ActionPayload) => void
     ondelete?: (messageId: string) => void
+    onbookmark?: (messageId: string) => void
   }
 
-  let { messages, currentUserId, isAdmin = false, onaction, ondelete }: Props = $props()
+  let { messages, currentUserId, isAdmin = false, onaction, ondelete, onbookmark }: Props = $props()
 
   let listEl = $state<HTMLDivElement | null>(null)
 
@@ -44,6 +45,7 @@
         {isAdmin}
         {onaction}
         {ondelete}
+        {onbookmark}
       />
     {/each}
   {/if}

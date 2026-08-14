@@ -35,7 +35,7 @@ export type ComboCode = {
  * 콤보 코드 배열을 TIER_ORDER(대분류→중분류→소분류)로 정렬한다.
  * code_tier 가 있으면 우선 사용, 없으면 depth로 폴백.
  */
-export function sortByTier(codes: ComboCode[]): ComboCode[] {
+export function sortByTier<T extends ComboCode>(codes: T[]): T[] {
   return [...codes].sort((a, b) => {
     const tierA = a.code_tier ?? depthToTier(a.depth ?? 0)
     const tierB = b.code_tier ?? depthToTier(b.depth ?? 0)

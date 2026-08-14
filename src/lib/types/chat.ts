@@ -27,6 +27,9 @@ export type ActionCardType =
   | 'contract_signed'  // 전자계약 서명 완료 알림 (관리자 수신)
   // 자동답변 메타데이터 (message_type: 'text', sender_type: 'admin')
   | 'auto_canned_reply'   // 빠른답변 자동매칭 성공 (하이브리드 1단계, AI 호출 전)
+  // GSD-17: 관리자 @ 멘션 상품 카드 / GSD-20: 이미지·CTA 있는 자동응답 카드
+  | 'product_link'
+  | 'canned_cta'
 
 export type ActionCardButtonColor = 'purple' | 'red' | 'green' | 'orange'
 
@@ -53,6 +56,9 @@ export interface ActionPayload {
   // PRODUCT_CARD
   product_id?: string
   daily_rate?: number
+  // product_link 카드 (GSD-17: 관리자 @ 멘션 삽입)
+  product_slug?: string
+  product_price?: number  // 24시간 기준 가격 (원)
   // RETURN_REGISTRATION_CARD
   return_deadline?: string     // ISO 8601
   return_methods?: string[]    // ['택배', '직접 방문']
@@ -79,6 +85,7 @@ export interface ChatSession {
   last_message_content?: string
   last_message_sender?: string
   is_urgent?: boolean  // 마지막 고객 메시지가 CS_ESCALATE로 분류되고 이후 관리자 응답이 없는 경우
+  manual_mode?: boolean  // GSD-8: true면 이 세션의 자동응답(AI+캔드) 스킵 (마이그레이션 230)
 }
 
 export interface ChatMessage {
@@ -90,6 +97,7 @@ export interface ChatMessage {
   action_payload: ActionPayload | null
   is_read: boolean
   created_at: string
+  is_bookmarked?: boolean  // GSD-12: 관리자 북마크 여부 — 클라이언트 집계 시 병합
 }
 
 export interface ChatIntentLog {

@@ -3,6 +3,8 @@ import { SUPABASE_SERVICE_ROLE_KEY } from '$env/static/private'
 import { PUBLIC_SUPABASE_URL } from '$env/static/public'
 import { json } from '@sveltejs/kit'
 import { sendPushToAdmins } from '$lib/server/push'
+import { computeContentHash } from '$lib/contract-signature/contentHash'
+import { recordAuditLog } from '$lib/contract-signature/auditLog'
 import type { RequestHandler } from './$types'
 
 export const POST: RequestHandler = async ({ params, request, getClientAddress }) => {
@@ -58,19 +60,48 @@ export const POST: RequestHandler = async ({ params, request, getClientAddress }
     return json({ error: '서명이 등록되지 않았습니다. 다시 서명해 주세요.' }, { status: 400 })
   }
 
+  // P8A-1: 서명 대상 콘텐츠 해시 계산 — contracts.content_blocks(또는 canvas_document)를 조회해 SHA-256 계산
+  // 서명 시점의 문서 상태를 암호학적으로 고정 (위변조 사후 검증 가능)
+  let contentHash: string | null = null
+  if (signing.contract_id) {
+    const { data: contractContent } = await admin
+      .from('contracts')
+      .select('content_blocks, canvas_document')
+      .eq('id', signing.contract_id)
+      .maybeSingle()
+    if (contractContent) {
+      // canvas_document가 있으면 canvas 모드, 없으면 content_blocks를 해시 대상으로 사용
+      const hashTarget = contractContent.canvas_document ?? contractContent.content_blocks
+      contentHash = await computeContentHash(hashTarget)
+    }
+  }
+
+  const clientIp = getClientAddress()
   const { error: updateErr } = await admin
     .from('contract_signings')
     .update({
       signed_at:      new Date().toISOString(),
-      ip_address:     getClientAddress(),
+      ip_address:     clientIp,
       signature_data: signatureData,
       stroke_count:   strokeCount,
+      content_hash:   contentHash,  // P8A-1: 서명 시점 콘텐츠 해시
     })
     .eq('id', signing.id)
     .is('signed_at', null)
 
   if (updateErr) {
     return json({ error: '서명 처리에 실패했습니다.' }, { status: 500 })
+  }
+
+  // P8A-3: 감사로그 — signed 이벤트 기록 (silent fail — 주 흐름 차단 금지)
+  if (signing.contract_id) {
+    await recordAuditLog(admin as Parameters<typeof recordAuditLog>[0], {
+      contractId: signing.contract_id,
+      eventType:  'signed',
+      actorType:  'customer',
+      actorId:    signing.user_id ?? null,
+      ipAddress:  clientIp,
+    })
   }
 
   if (signing.contract_id) {

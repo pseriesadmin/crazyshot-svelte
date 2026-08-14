@@ -12,9 +12,19 @@
     isAdmin?: boolean
     onaction?: (payload: ActionPayload) => void
     ondelete?: (messageId: string) => void
+    onbookmark?: (messageId: string) => void
   }
 
-  let { message, isOwn = false, isAdmin = false, onaction, ondelete }: Props = $props()
+  let { message, isOwn = false, isAdmin = false, onaction, ondelete, onbookmark }: Props = $props()
+
+  // GSD-12: 북마크 로컬 상태 — {#each messages as message (message.id)} 키로 인스턴스가 1:1 고정되므로
+  // $state(prop) 초기화가 안전함 (재마운트 문제 없음 — MessageList.svelte keyed each 검증 완료)
+  let bookmarked = $state(message.is_bookmarked ?? false)
+
+  function handleBookmark(): void {
+    bookmarked = !bookmarked
+    onbookmark?.(message.id)
+  }
 
   // 자동답변 배지: 관리자 뷰에서만 표시 (고객 뷰 노출 금지)
   let isAutoBadge = $derived(
@@ -232,6 +242,19 @@
           <path d="M1 8.5l2.8 2.8L8 5" stroke={message.is_read ? 'var(--cs-purple)' : 'var(--cs-text-light,#aaa)'} stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
           <path d="M5 8.5l2.8 2.8L13 5" stroke={message.is_read ? 'var(--cs-purple)' : 'var(--cs-text-light,#aaa)'} stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
         </svg>
+        {#if isAdmin}
+          <button
+            class="bookmark-btn"
+            class:bookmarked
+            onclick={handleBookmark}
+            aria-label={bookmarked ? '북마크 해제' : '북마크 추가'}
+            aria-pressed={bookmarked}
+          >
+            <svg width="13" height="13" viewBox="0 0 24 24" fill={bookmarked ? 'var(--cs-purple)' : 'none'} stroke={bookmarked ? 'var(--cs-purple)' : 'var(--cs-text-light,#aaa)'} stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"/>
+            </svg>
+          </button>
+        {/if}
       </div>
     </div>
   </div>
@@ -366,6 +389,24 @@
     transition: color 0.15s;
   }
   .del-btn:hover { color: var(--cs-red-badge, #FF3535); }
+
+  /* GSD-12: 북마크 버튼 */
+  .bookmark-btn {
+    background: none;
+    border: none;
+    cursor: pointer;
+    padding: 2px;
+    min-height: 20px;
+    min-width: 20px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: var(--radius-sm);
+    transition: opacity 0.15s;
+    flex-shrink: 0;
+  }
+  .bookmark-btn:hover { opacity: 0.7; }
+  .bookmark-btn.bookmarked svg { transition: fill 0.15s; }
 
   /* ── 자동답변 배지 ── */
   .auto-badge {

@@ -17,6 +17,9 @@
     match_keywords: string[]
     usage_count: number
     created_at: string
+    image_url: string | null
+    cta_label: string | null
+    cta_url: string | null
   }
 
   const MAX_KEYWORDS = 10
@@ -39,6 +42,9 @@
   let localKeywords = $state<string[]>([])
   let kwInput       = $state('')
   let isSaving      = $state(false)
+  let localImageUrl  = $state('')
+  let localCtaLabel  = $state('')
+  let localCtaUrl    = $state('')
 
   // item 변경 시 로컬 상태 동기화
   $effect(() => {
@@ -48,6 +54,9 @@
     localShortcut = item?.shortcut ?? ''
     localKeywords = item?.match_keywords ? [...item.match_keywords] : []
     kwInput       = ''
+    localImageUrl  = item?.image_url  ?? ''
+    localCtaLabel  = item?.cta_label  ?? ''
+    localCtaUrl    = item?.cta_url    ?? ''
   })
 
   // ── 고객 매칭 키워드 (단축키와 분리 — IME-safe, CmsContentEditor 키워드 패턴 참고) ──
@@ -92,6 +101,9 @@
         category: localCategory || null,
         shortcut: localShortcut.replace(/^\//, '').trim() || null,
         match_keywords: localKeywords,
+        image_url: localImageUrl.trim() || null,
+        cta_label: localCtaLabel.trim() || null,
+        cta_url:   localCtaUrl.trim() || null,
       }
       const res = await fetch(url, {
         method,
@@ -236,6 +248,63 @@
         <div class="preview-bubble">{localContent}</div>
       </div>
     {/if}
+
+    <!-- CTA 카드 (선택) — image_url / cta_label / cta_url -->
+    <div class="field cta-section">
+      <span class="field-label cta-section-label">
+        액션 카드 (CTA) <span class="field-hint">— 선택사항. 채팅창에 버튼/이미지 카드 형태로 노출됩니다.</span>
+      </span>
+      <div class="cta-fields">
+        <div class="cta-field">
+          <label class="cta-field-label" for="cr-image-url">이미지 URL</label>
+          <input
+            id="cr-image-url"
+            type="url"
+            class="field-input"
+            bind:value={localImageUrl}
+            placeholder="https://res.cloudinary.com/..."
+          />
+        </div>
+        <div class="cta-row">
+          <div class="cta-field cta-field--half">
+            <label class="cta-field-label" for="cr-cta-label">버튼 텍스트</label>
+            <input
+              id="cr-cta-label"
+              type="text"
+              class="field-input"
+              bind:value={localCtaLabel}
+              placeholder="예: 자세히 보기"
+              maxlength="30"
+            />
+          </div>
+          <div class="cta-field cta-field--half">
+            <label class="cta-field-label" for="cr-cta-url">버튼 링크 URL</label>
+            <input
+              id="cr-cta-url"
+              type="url"
+              class="field-input"
+              bind:value={localCtaUrl}
+              placeholder="https://..."
+            />
+          </div>
+        </div>
+      </div>
+      {#if localCtaLabel || localCtaUrl || localImageUrl}
+        <div class="cta-preview">
+          <span class="preview-label">CTA 카드 미리보기</span>
+          <div class="cta-preview-card">
+            {#if localImageUrl}
+              <div class="cta-preview-img-wrap">
+                <img src={localImageUrl} alt="CTA 이미지" class="cta-preview-img" onerror={(e) => { (e.currentTarget as HTMLImageElement).style.display = 'none' }} />
+              </div>
+            {/if}
+            {#if localCtaLabel}
+              <div class="cta-preview-btn">{localCtaLabel}</div>
+            {/if}
+          </div>
+        </div>
+      {/if}
+    </div>
   </div>
 
   <div class="panel-foot">
@@ -570,5 +639,80 @@
   .btn-save:disabled {
     opacity: 0.5;
     cursor: not-allowed;
+  }
+
+  /* CTA 섹션 */
+  .cta-section {
+    border-top: 1px dashed var(--cs-lilac);
+    padding-top: 16px;
+  }
+
+  .cta-section-label {
+    flex-direction: column;
+    align-items: flex-start !important;
+    gap: 2px !important;
+  }
+
+  .cta-fields {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+
+  .cta-field {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+
+  .cta-field-label {
+    font: 700 12px/1 'Noto Sans KR', sans-serif;
+    color: var(--cs-text-mid, #666);
+  }
+
+  .cta-row {
+    display: flex;
+    gap: 10px;
+  }
+
+  .cta-field--half {
+    flex: 1;
+    min-width: 0;
+  }
+
+  /* CTA 미리보기 카드 */
+  .cta-preview {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    margin-top: 6px;
+  }
+
+  .cta-preview-card {
+    border: 1.5px solid var(--cs-lilac);
+    border-radius: var(--radius-md, 15px);
+    overflow: hidden;
+    background: var(--cs-white);
+    max-width: 220px;
+  }
+
+  .cta-preview-img-wrap {
+    width: 100%;
+    aspect-ratio: 16/9;
+    overflow: hidden;
+    background: var(--cs-surface-gray, #f6f6f6);
+  }
+
+  .cta-preview-img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+  }
+
+  .cta-preview-btn {
+    padding: 8px 14px;
+    font: 700 13px/1 'Noto Sans KR', sans-serif;
+    color: var(--cs-purple);
+    text-align: center;
   }
 </style>

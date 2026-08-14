@@ -20,7 +20,7 @@ export type MappingItemSimple = {
   max_sequence: number | null        // 순번2(자식) 상한 — NULL = 무제한
   parent_max_sequence: number | null // 순번1(부모) 상한 — NULL = 2단 미사용
 }
-export type TaxonomyCodeSimple = { id: string; code: string; name: string; product_category: string | null; depth: number }
+export type TaxonomyCodeSimple = { id: string; code: string; name: string; product_category: string | null; depth: number; code_tier?: string | null }
 export type RentalPeriodSimple = { id: string; name: string; display_order: number }
 export type RentalMethodSimple = { id: string; name: string; display_order: number }
 export type PickupPointSimple  = { id: string; name: string; address: string }
@@ -62,7 +62,7 @@ export const load: PageServerLoad = async ({ locals }) => {
   if (codeIds.length > 0) {
     const { data: codes } = await admin
       .from('product_category_codes')
-      .select('id, code, name, product_category, depth')
+      .select('id, code, name, product_category, depth, code_tier')
       .in('id', codeIds)
       .eq('is_active', true)
       .is('deleted_at', null)
@@ -88,6 +88,7 @@ export const actions: Actions = {
 
     let category = (form.get('category') as string | null) ?? ''
     const groupId = (form.get('group_id') as string | null) || null
+    const comboRowId = (form.get('combo_row_id') as string | null) || null
     const name = (form.get('name') as string | null) ?? ''
     const slug = (form.get('slug') as string | null) ?? ''
     const brand = (form.get('brand') as string | null) || null
@@ -174,6 +175,20 @@ export const actions: Actions = {
       return fail(400, { error: '이미 사용 중인 슬러그입니다. 다른 슬러그를 사용해주세요.' })
     }
 
+    // 버그 수정(2026-08-13): 선택된 그룹에 조합코드가 1개 이상 등록돼 있는데 콤보를 고르지 않고
+    // 제출하면, 아래 로직이 comboRowId 없음 → 2-param 카테고리 자동 폴백(UPPER(LEFT(category,3)))
+    // 으로 조용히 빠져 코드설정에 없는 임의 품번("HYP" 등)이 발급되던 문제 방지 — 콤보가 존재하는
+    // 그룹은 반드시 콤보 선택을 거치도록 서버에서 재확인(클라이언트 검증 우회 대비)
+    if (groupId && !comboRowId) {
+      const { count: comboCount } = await admin
+        .from('code_mapping_items')
+        .select('combo_row_id', { count: 'exact', head: true })
+        .eq('group_id', groupId)
+      if ((comboCount ?? 0) > 0) {
+        return fail(400, { error: '이 분류에는 선택 가능한 조합코드가 있습니다. 조합코드를 먼저 선택해주세요.' })
+      }
+    }
+
     const salePriceRaw = (form.get('sale_price') as string | null) ?? ''
     const salePrice = parseInt(salePriceRaw, 10) || null
     const saleOnly = form.get('sale_only') === 'true'
@@ -233,7 +248,6 @@ export const actions: Actions = {
     if (qrError) regWarnings.push('qr')
 
     // 품번(product_code) 자동 발행 — generate_product_code RPC (SECURITY DEFINER)
-    const comboRowId = (form.get('combo_row_id') as string | null) || null
     let comboCodeId: string | null = null
     let comboDateOption: string | null = null
     let comboMaxSequence: number | null = null
@@ -257,11 +271,15 @@ export const actions: Actions = {
         comboParentMaxSequence = (comboItems[0] as { parent_max_sequence: number | null }).parent_max_sequence ?? null
 
         // 모든 분류코드 조회 (code + code_tier + depth — TIER_ORDER 정렬에 필요)
+        // 미리보기(load() 63-68행)와 동일한 활성/미삭제 필터 — 필터 불일치 시 미리보기에
+        // 없던 코드가 code_series에 저장돼 "미확인 코드"로 노출되는 버그 방지
         const codeIds = comboItems.map((i: { taxonomy_code_id: string }) => i.taxonomy_code_id)
         const { data: allCodes } = await admin
           .from('product_category_codes')
           .select('id, code, code_tier, depth')
           .in('id', codeIds)
+          .eq('is_active', true)
+          .is('deleted_at', null)
 
         if (allCodes && allCodes.length > 0) {
           // 합산 분류코드 빌드 (대→중→소 TIER_ORDER 정렬 후 연결)

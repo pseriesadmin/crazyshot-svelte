@@ -90,7 +90,7 @@ PRD.1.7 — 대화형 렌탈예약 어시스턴트 시스템 V1.0
   관리자 메시지 (텍스트·첨부) + pending → open
   관리자 메시지 + open                  → open (유지)
 
-  1시간 비활성 (auto_pending_inactive_sessions RPC) → pending  ← pending 재진입 유일 경로
+  3시간 비활성 (auto_pending_inactive_sessions RPC) → pending  ← pending 재진입 유일 경로
   관리자 닫기 버튼                                  → closed
 
 신규 세션 생성 조건 (유일):
@@ -333,7 +333,7 @@ confidence < 0.6 → CS_ESCALATE 강제
 세션 상태 전환 정책 (2026-07-27 설계 변경 — rental-lifecycle.md §채팅세션상태 정본):
   사용자 메시지 도착 → intent 결과와 무관하게 무조건 open 전환
   CS_ESCALATE 분류   → 관리자 패널에 "긴급" 배지(is_urgent)만 표시 — pending 전환 없음
-  pending 재진입     → auto_pending_inactive_sessions RPC(1시간 무응답)만 가능
+  pending 재진입     → auto_pending_inactive_sessions RPC(3시간 무응답)만 가능
 
 ⚠️ 구버전 서술 "CS_ESCALATE → session.status='pending'" 및
    "비-에스컬레이션+pending → session.status='open'"은
@@ -381,7 +381,7 @@ is_expired: false (초기) → 만료 시 true (버튼 비활성화)
 대기탭 자동 이동:
   admin GET /api/chat/sessions 호출마다
   auto_pending_inactive_sessions() RPC 실행
-  → open + updated_at < now() - 1hr → pending
+  → open + updated_at < now() - 3hr → pending
 ```
 
 ---
@@ -494,6 +494,212 @@ AI 학습 연동 시:
 
 ---
 
+## 17. Phase 2~3 CRITICAL 기능 — 운영 정본 (2026-08-13 추가)
+
+### 17-1. 세션 상태 직접변경 API (reopen / pending)
+
+```
+엔드포인트:
+  POST /api/chat/sessions/[id]/reopen   — pending·closed → open 전환
+  POST /api/chat/sessions/[id]/pending  — open → pending 전환
+  POST /api/chat/sessions/[id]/close    — open → closed 전환 (H-01 예외 — 직접 UPDATE 유지)
+
+H-01 준수 (M2 QA Fix, 2026-08-13):
+  reopen/pending 엔드포인트는 직접 UPDATE 금지 →
+  set_chat_session_status(p_session_id uuid, p_status text) RPC 경유 필수
+  Migration 238 (20260813000238_238_set_chat_session_status_rpc.sql)
+
+RPC 동작:
+  - idempotent: 동일 상태면 changed:false 반환, 에러 없음
+  - 세션 미존재 시 RAISE EXCEPTION (→ API 404 반환)
+  - SECURITY DEFINER + service_role 전용 (anon/authenticated 차단)
+  - 반환: { session_id, old_status, new_status, changed }
+
+AdminChatPanel UI 연결:
+  handleReopenSession(sid) → POST /reopen → 로컬 sessions 상태 즉시 갱신
+  handlePendingSession(sid) → POST /pending → 로컬 sessions 상태 즉시 갱신
+  handleCloseSession(sid) → POST /close → 닫힌 세션 선택 해제
+
+GATE C 확인 항목:
+  [ ] reopen/pending 엔드포인트가 RPC 경유 (직접 .update() 금지)?
+  [ ] close 엔드포인트는 범위 밖 (현행 직접 UPDATE 유지)?
+  [ ] set_chat_session_status RPC — SECURITY DEFINER + service_role 전용?
+  [ ] Migration 238이 stage → production 순서로 적용됐는가?
+```
+
+### 17-2. 고객 상세정보 패널 (CustomerDetailPanel)
+
+```
+컴포넌트: src/lib/components/chat/CustomerDetailPanel.svelte
+          (CMS 버전과 별개 — chat 전용 파일)
+
+RPC: get_chat_customer_detail(p_user_id uuid)
+     → { profile: { name, phone, identity_type, identity_verified_at, ... },
+         subscription: { plan_name } | null,
+         reservations: ReservationItem[] }
+
+identity_type 분기 (M3 QA Fix, 2026-08-13):
+  ❌ 금지: {#if detail.profile.is_student}  ← 레거시 boolean 필드, RPC가 반환 안 함
+  ✅ 올바른 패턴: {#if detail.profile.identity_type === 'student'}
+
+is_foreign 분기도 동일 원칙 적용:
+  {#if detail.profile.identity_type === 'foreigner'} (또는 RPC 반환 실제 값 확인 후 적용)
+
+CustomerDetail 인터페이스 (chat 버전):
+  profile.identity_type: string | null  ← RPC 반환값 기준 (is_student·is_foreign boolean 무시)
+
+AdminChatPanel 연결:
+  $effect(() => { fetch(`/api/chat/customers/${uid}/detail`) })
+  customerDetail = d?.detail ?? null
+  <CustomerDetailPanel bind:detail={customerDetail} ... />
+
+GATE C 확인 항목:
+  [ ] 학생인증 분기가 identity_type === 'student' 기준?
+  [ ] is_student boolean 직접 참조 없음?
+  [ ] get_chat_customer_detail RPC 반환값에 identity_type 존재 확인?
+```
+
+### 17-3. 세션별 자동응답 모드 (manual_mode)
+
+```
+컬럼: chat_sessions.manual_mode BOOLEAN DEFAULT FALSE
+Migration: 230 (20260812000230_230_chat_sessions_manual_mode.sql)
+RPC: set_chat_session_manual_mode(p_session_id uuid, p_manual_mode boolean)
+
+동작:
+  manual_mode = false (기본) → AI 자동응답 활성 (기존 동작 유지)
+  manual_mode = true → AI 자동응답 비활성 → 관리자가 직접 모든 답변 작성
+
+API: PATCH /api/chat/sessions/[id]/manual-mode { manual_mode: boolean }
+AdminChatPanel:
+  handleToggleManualMode() → 낙관적 업데이트 → 실패 시 롤백
+  sessionManualMode 상태 = selectedSession?.manual_mode ?? false
+
+message/+server.ts 자동응답 분기:
+  if (session.manual_mode) → AI·캔드리스폰스 자동실행 전부 스킵
+                            → 고객 메시지만 저장 후 응답
+
+GATE C 확인 항목:
+  [ ] manual_mode=true 시 AI 자동응답 스킵?
+  [ ] manual_mode=true 시 캔드리스폰스 자동매칭 스킵?
+  [ ] 세션 변경 시 sessionManualMode 재동기화?
+```
+
+### 17-4. 메시지 북마크 시스템
+
+```
+테이블: chat_message_bookmarks
+Migration: 231 (20260812000231_231_chat_message_bookmarks.sql)
+
+RPC 목록:
+  toggle_message_bookmark(p_message_id, p_session_id, p_admin_id, p_note)
+    → idempotent 북마크 추가/해제 토글
+  get_session_bookmarks(p_admin_id, p_session_id)
+    → 세션 내 모든 북마크 조회
+    → 반환: { bookmark_id, message_id, session_id, note, created_at, message_content, message_type }
+
+API 엔드포인트:
+  POST   /api/chat/messages/[id]/bookmark  { session_id, note? }  → toggle_message_bookmark RPC
+  DELETE /api/chat/messages/[id]/bookmark                         → 명시적 삭제 (L2 QA Fix)
+  GET    /api/chat/sessions/[id]/bookmarks                        → get_session_bookmarks RPC
+
+M1 QA Fix (2026-08-13): 북마크 초기화 상태 버그 수정
+  문제: MessageBubble let bookmarked = $state(false) → 항상 false로 초기화
+  수정: AdminChatPanel.loadMessages 시 bookmarks를 병렬 로드 → is_bookmarked 병합
+        → MessageBubble: let bookmarked = $state(message.is_bookmarked ?? false)
+
+AdminChatPanel 로드 흐름:
+  Promise.all([loadMessages(sid), fetch(`/api/chat/sessions/${sid}/bookmarks`)])
+  → Set<message_id> 구성 → messages.map(m => ({ ...m, is_bookmarked: ids.has(m.id) }))
+
+handleBookmark(messageId):
+  POST /api/chat/messages/${messageId}/bookmark { session_id: selectedSessionId }
+  → messages 로컬 상태 is_bookmarked 토글 동기화
+
+북마크 뷰: BookmarkListView.svelte → GET /api/chat/sessions/[id]/bookmarks
+
+ChatMessage 타입:
+  is_bookmarked?: boolean  ← src/lib/types/chat.ts (M1 QA Fix에서 추가)
+
+GATE C 확인 항목:
+  [ ] ChatMessage 타입에 is_bookmarked?: boolean 존재?
+  [ ] loadMessages 시 bookmarks 병렬 로드 + is_bookmarked 병합?
+  [ ] MessageBubble bookmarked 초기값이 message.is_bookmarked ?? false?
+  [ ] POST /bookmark body에 session_id 포함?
+  [ ] DELETE /bookmark가 toggle이 아닌 명시적 삭제?
+```
+
+### 17-5. 상품 링크 카드 (product_link) — @ 멘션 발송
+
+```
+발동: 관리자가 ChatInput에 '@상품명' 입력 → 검색 드롭다운 → 선택 시 product_link ActionCard 발송
+
+검색 API: GET /api/cms/products/search-suggestions?q=&limit=6&activeOnly=true
+  L1 QA Fix (2026-08-13): image_urls, slug, price_24h 추가 반환
+    ilike 쿼리 select에 image_urls, slug 추가
+    응답에 image_url (= image_urls[0]), price_24h 포함
+    MiniSearch 폴백 결과는 image_url·price_24h null (인덱스에 미포함)
+  ⚠️ L1 QA 재검수(2026-08-13)에서 회귀 발견·수정: image_urls[0]은 Cloudinary public_id가 아니라
+    Supabase Storage 전체 URL(/api/cms/upload가 getPublicUrl()로 저장 — chatActionEnrich.ts:113-115에
+    이미 문서화된 기존 불일치). ActionCard.svelte가 이를 무조건 Cloudinary URL에 이어붙이던 최초
+    수정은 깨진 이미지를 만들었음 — ProductHero.svelte와 동일한 startsWith('http') 방어 분기로 수정.
+
+ChatInput.svelte ProductItem 타입:
+  image_url?: string | null   ← Cloudinary public_id 또는 Supabase Storage 전체 URL(둘 다 가능)
+  slug?: string | null
+  price_24h?: number | null
+
+selectProductItem → onproductmention({ id, name, image_url, slug, price_24h })
+
+AdminChatPanel handleProductMention → action_payload:
+  type: 'product_link'
+  product_id:    product.id
+  product_name:  product.name
+  product_image: product.image_url   ← Cloudinary public_id 또는 Storage 전체 URL(존재 시)
+  product_slug:  product.slug        ← 상세 링크 URL (존재 시)
+  product_price: product.price_24h   ← 24h 가격 (존재 시)
+
+ActionCard.svelte product_link 렌더링:
+  imageUrl = product_image
+    ? product_image.startsWith('http')
+      ? product_image
+      : `https://res.cloudinary.com/crazyshot/image/upload/w_128,h_128,c_fill,f_auto,q_auto/${payload.product_image}.jpg`
+    : null
+  상세보기 → product_slug or product_id 기반 링크
+
+GATE C 확인 항목:
+  [ ] search-suggestions API가 image_urls, slug, price_24h 반환?
+  [ ] ChatInput ProductItem에 image_url, slug, price_24h 타입 정의?
+  [ ] onproductmention callback이 새 필드 전달?
+  [ ] handleProductMention payload에 product_image, product_slug, product_price 포함?
+```
+
+### 17-6. CTA 버튼 자동응답 (canned_cta)
+
+```
+canned_responses.cta_label 필드가 있는 자동응답 → ActionCard type: 'canned_cta' 발행
+Migration: 232 (20260812000232_232_canned_responses_cta.sql)
+
+ActionPayload:
+  type: 'canned_cta'
+  button_label: cta_label   ← canned_responses 설정값
+  action_url:   cta_url     ← canned_responses 설정 URL
+
+렌더링: ActionCard.svelte → canned_cta type → CTA 버튼 표시
+        (button_label·action_url 기반 — ctaDefaults fallback과 동일 구조)
+
+관리자 CannedResponsePanel:
+  cta_label·cta_url 입력 → 저장 → 해당 빠른답변 자동매칭 시 CTA 버튼 포함 발송
+
+GATE C 확인 항목:
+  [ ] canned_responses 테이블에 cta_label, cta_url 컬럼 존재 (Migration 232)?
+  [ ] cta_label이 있는 응답 → action_payload.type = 'canned_cta' 발행?
+  [ ] ActionCard에서 canned_cta 렌더링 (CTA 버튼 표시)?
+```
+
+---
+
 *chat.md | PRD.1.7 채팅 시스템 도메인 정본 | Harness Flow v3.2*
 *참조: CLAUDE.md → 에이전트 호출 규칙 | core-rules.md → 스택 규칙*
 *계획 파일: crazyshot-re_v1.56-plannode-tree.json (PRD.1.7 노드)*
+*2026-08-13 Phase 2~3 CRITICAL 6기능 도메인 정본 추가 (§17, M1-M3/L1-L3 QA Fix)*
