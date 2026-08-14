@@ -46,8 +46,7 @@
         코드조합
       </button>
       <button class="tab-btn" class:tab-active={activeTab==='format'} onclick={() => activeTab='format'}>
-        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><rect x="2" y="4" width="20" height="16" rx="2"/><path d="M8 2v4M16 2v4M2 10h20"/></svg>
-        예약코드 형식
+        예약코드 설정
         {#if fmtDirty}<span class="dirty-dot"></span>{/if}
       </button>
     </div>
@@ -111,11 +110,13 @@
   display: flex;
   flex-direction: column;
   align-items: center;
-  padding: 8px 14px;
+  justify-content: center;
+  width: 72px;
+  height: 72px;
   background: var(--cs-white);
   border-radius: var(--cms-radius-sm);
-  min-width: 60px;
   border: 1px solid #ECEBF4;
+  flex-shrink: 0;
 }
 .stat.green .sv { color: var(--cs-success-light); }
 .stat.dim   .sv { color: var(--cs-text-light); }
