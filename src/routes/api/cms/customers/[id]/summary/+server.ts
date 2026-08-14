@@ -33,7 +33,10 @@ export const GET: RequestHandler = async ({ locals, params }) => {
     .maybeSingle()
 
   if (error) return json({ error: error.message }, { status: 500 })
-  if (!data) return json({ error: '고객 정보를 찾을 수 없습니다.' }, { status: 404 })
+  // user_profiles 행이 없는 것 자체는 에러가 아니라 정상 상태다(예: 아직 회원가입 전인
+  // 익명 게스트 채팅 세션) — 404로 응답하면 콘솔에 실패한 네트워크 요청으로 찍혀 노이즈만
+  // 생기므로, 호출측(AdminChatPanel.svelte)이 이미 처리 가능한 형태인 200 + null로 응답한다.
+  if (!data) return json(null)
 
   const row = data as {
     id: string

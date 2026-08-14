@@ -226,6 +226,10 @@
   let selectedSession = $derived(
     chatStore.sessions.find((s) => s.id === selectedSessionId) ?? null
   )
+  // Realtime 갱신 등으로 chatStore.sessions가 재구성될 때마다 selectedSession은 매번 새
+  // 객체 참조가 되므로(내용이 같아도), user_id 값만 별도로 파생시켜 아래 두 $effect가
+  // 실제 uid가 바뀔 때만 재실행되도록 한다(같은 uid로 반복 재조회되던 문제 수정)
+  let selectedUserId = $derived(selectedSession?.user_id ?? null)
 
   // GSD-7: 중요 카드만 보기 필터링
   let filteredMessages = $derived(
@@ -243,7 +247,7 @@
   // 고객 기본정보 요약 (chat-header 노출용) — 선택된 세션의 user_id가 바뀔 때만 재조회
   let customerSummary = $state<CustomerSummary | null>(null)
   $effect(() => {
-    const uid = selectedSession?.user_id
+    const uid = selectedUserId
     if (!uid) { customerSummary = null; return }
     customerSummary = null
     fetch(`/api/cms/customers/${uid}/summary`)
@@ -254,7 +258,7 @@
 
   // GSD-5: 고객 상세정보 조회 (CustomerDetailPanel용)
   $effect(() => {
-    const uid = selectedSession?.user_id
+    const uid = selectedUserId
     if (!uid) { customerDetail = null; customerDetailExpanded = false; return }
     customerDetail = null
     customerDetailLoading = true
