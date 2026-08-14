@@ -93,6 +93,47 @@ git commit 미실행(자율 실행 금지, Stephen 진행 대기).
 
 ---
 
+## DONE — origin/main 병합 + 상담채팅 후속 버그 3건 수정 (2026-08-14) — GATE E 통과, QA 재검수 완료
+
+배경: cs_posts 복구 이후 이 워크트리(`claude/exciting-ardinghelli-71ff74`)가 `origin/main`보다
+18커밋 뒤처져 있다는 사실을 발견(상담채팅 6종 기능이 이미 origin/main에 병합돼 있었음) — Stephen
+지시로 `git merge origin/main` 수행(충돌 1곳, `.claude/harness/GSD_LOG.md` 최상단 append 위치
+겹침 — 기계적 충돌로 양쪽 블록 모두 보존해 해결). 병합 직후 `npm install` + `svelte-kit sync` +
+`svelte-check`로 신규 에러 없음 확인(95건 전부 `.env.local` 부재발 또는 기존 pre-existing).
+
+병합 이후 Stephen이 실사용 재현 콘솔 로그를 근거로 신규 버그 3건을 순차 지시, 전부 완료:
+
+1. **비회원 회원전환 시 채팅정보 소실** — `handle_new_user()` 트리거가 `auth.users` UPDATE(익명→
+   영구 전환)엔 실행 안 돼 `user_profiles` 누락되던 버그. `src/lib/stores/auth.ts`에
+   `ensure_user_profile()` RPC 호출 추가. 라이브 DB(stage/production) 직접 조회로 마이그레이션
+   파일과 실제 배포된 함수 정의가 어긋나 있던 드리프트도 발견해 `247_capture_ensure_user_profile_
+   live_definition.sql`로 해소. → **GATE E 통과**(`@sp3-qa-agent`, GSD_LOG.md L74 상세)
+2. **채팅카드 상품링크 가격·이미지 미표시** — `chatActionEnrich.ts`가 `daily_rate` 키로 저장하는데
+   `ActionCard.svelte`는 그 키를 안 읽던 필드명 드리프트. `product_price`로 통일 + 이미지 필드
+   채움 + `ActionCard.svelte` 가격 표시줄 신규 추가. (GSD_LOG.md L74와 동일 커밋)
+3. **콘솔 404 노이즈**(AdminChatPanel.svelte:249 반복 404) — `user_profiles` 없는 게스트를 정상
+   상태가 아닌 에러로 취급하던 API 설계 + `selectSession` 재계산마다 중복 재조회되던
+   `$effect` 구조 수정. `src/routes/api/cms/customers/[id]/summary/+server.ts`(404→200+null),
+   `AdminChatPanel.svelte`(`selectedUserId` 파생값 분리). GATE C: BOUNDARY(자동)로 표기했으나
+   이번 세션 QA 재검수에서 정식 확인 예정(아래 참고).
+
+이어서 "이메일 인증 요구사항이 회원전환 실패의 실제 원인인지" 재검증 지시 → Supabase 대시보드
+스크린샷으로 `Confirm email: ON` 확인 + `SignUpModal.svelte` 코드 추적으로 인증 안내 자체가
+전혀 없음을 확정 → Stephen 결정("휴대폰 인증을 진짜 검증채널로 채택, 서버가 email_confirm 우회")
+에 따라 신규 `POST /api/auth/confirm-verified-signup` + `SignUpModal.svelte` 재구성(더미 휴대폰
+인증 → `/account/profile`에 이미 있던 실제 알리고 SMS 연동 재사용) → **GATE E 통과**
+(`@sp3-qa-agent`, 보안 5항목 CONFIRMED 안전, GSD_LOG.md L4 상세).
+
+이어서 "/cms/chat 상품검색 기능 구현 여부" 검증 지시 → `ChatInput.svelte`의 "@" 멘션 방식은
+처음부터 정상 동작 중이었고(지난 turn 수정과는 별개 경로) 필드명 전 구간 일치 확인. 다만 원 백로그의
+"첨부버튼을 통한 상품검색" 방식은 미구현 확정 — Stephen이 구체 UI 스펙 제시, Plan 작성 완료
+(`/Users/stevenmac/.claude/plans/launch-selected-element-element-tag-svg-snazzy-hanrahan.md`,
+`CmsSimilarNameInput` 재사용 설계) — **아직 Plan 승인/구현 전 상태**(BACKLOG로 남김).
+
+git commit 미실행(Stephen 진행 대기, 병합 커밋 포함 전부 로컬에만 존재).
+
+---
+
 ## BACKLOG — CMS 상담(채팅) Phase 4 대형 아젠다 검토 3건 (2026-08-12) — ⛔ GATE B 대기 (Stephen 승인 + 열린 질문 답변 선행 필요, 정식 실행 태스크 아님)
 
 plan_source: /Users/stevenmac/.claude/plans/users-stevenmac-downloads-crazyshot-bac-compiled-willow.md

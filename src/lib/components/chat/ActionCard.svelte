@@ -170,6 +170,9 @@
         {#if payload.product_name}
           <p class="product-name">{payload.product_name}</p>
         {/if}
+        {#if payload.product_price}
+          <p class="product-price">{payload.product_price.toLocaleString()}원/일</p>
+        {/if}
         <!-- 쿠폰 카드 전용 -->
         {#if payload.discount_label}
           <p class="discount-label">{payload.discount_label}</p>
@@ -279,6 +282,7 @@
     -webkit-box-orient: vertical;
   }
 
+  .product-price,
   .discount-label,
   .tracking-info,
   .return-deadline {

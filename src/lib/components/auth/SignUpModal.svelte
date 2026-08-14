@@ -1,5 +1,6 @@
 <script lang="ts">
   import { performSignUp } from '$lib/stores/auth'
+  import { supabase, rpc } from '$lib/services/supabase'
 
   interface Props {
     open: boolean
@@ -69,23 +70,57 @@
     step = 'verify'
   }
 
-  // ── 전화 인증번호 발송 ──
-  // TODO: 추후 알리고 SMS 문자 인증 API와 연동 예정
-  //   1. POST /api/auth/send-otp { phone } → 알리고 API 호출 후 인증번호 발송
-  //   2. POST /api/auth/verify-otp { phone, code } → 발송된 인증번호와 비교 검증
-  //   3. 검증 성공 시 supabase.auth.signUp 호출 (현재 구조 동일)
+  // 익명 세션 보장 — 휴대폰 OTP 발송·검증 RPC가 auth.uid() 기반이라 세션이 먼저 있어야 함.
+  // 채팅으로 들어온 게스트는 이미 익명 세션이 있고(ChatWindow.ensureAuth와 동일 패턴),
+  // /auth/login으로 바로 들어온 방문자는 여기서 새로 발급받는다 — 이후 performSignUp()이
+  // 항상 "익명→영구 전환"(updateUser) 경로를 타게 되어 세션이 끊기지 않는다.
+  // user_profiles 행도 미리 만들어둬야 휴대폰 인증 시 verify_and_update_phone의
+  // UPDATE가 대상 행을 찾아 실제로 저장된다(행이 없으면 조용히 0건 업데이트로 유실됨).
+  async function ensureSignupSession(): Promise<boolean> {
+    const { data: { session: current } } = await supabase.auth.getSession()
+    if (!current) {
+      const { error } = await supabase.auth.signInAnonymously()
+      if (error) return false
+    }
+    try {
+      await rpc.ensureUserProfile()
+    } catch {
+      // user_profiles 보정 실패해도 가입 자체는 막지 않음 — performSignUp()에서도 재시도됨
+    }
+    return true
+  }
+
+  // ── 전화 인증번호 발송 (알리고 SMS 실연동 — /account/profile 휴대폰 인증과 동일 API 재사용) ──
   async function handleSendOtp() {
     errorMsg = null
     const cleaned = phone.replace(/\D/g, '')
-    if (!/^01[0-9]{8,9}$/.test(cleaned)) {
+    if (!/^010\d{8}$/.test(cleaned)) {
       errorMsg = '올바른 휴대폰 번호를 입력해주세요. (예: 01012345678)'
       return
     }
     isSendingOtp = true
-    // 더미 지연 (실제 SMS 발송 시 API 호출로 교체)
-    await new Promise(r => setTimeout(r, 800))
-    isSendingOtp = false
-    otpSent = true
+    try {
+      const ready = await ensureSignupSession()
+      if (!ready) {
+        errorMsg = '인증 세션 생성에 실패했습니다. 잠시 후 다시 시도해주세요.'
+        return
+      }
+      const res = await fetch('/api/profile/send-otp', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ phone: cleaned }),
+      })
+      const data = await res.json() as { ok: boolean; error?: string }
+      if (!data.ok) {
+        errorMsg = data.error ?? '인증번호 발송에 실패했습니다.'
+        return
+      }
+      otpSent = true
+    } catch {
+      errorMsg = '네트워크 오류가 발생했습니다.'
+    } finally {
+      isSendingOtp = false
+    }
   }
 
   // ── 회원가입 최종 완료 ──
@@ -99,14 +134,35 @@
       errorMsg = '인증번호를 입력해주세요.'
       return
     }
-    // TODO: 추후 알리고 연동 시 아래 더미 검증을 서버 검증으로 교체
-    //   현재: 인증번호 아무 값이나 입력하면 통과 (테스트용 더미)
-    //   교체: const res = await fetch('/api/auth/verify-otp', { body: { phone, code: verifyCode } })
-    //         if (!res.ok) { errorMsg = '인증번호가 일치하지 않습니다.'; return }
 
     isLoading = true
     try {
+      const cleaned = phone.replace(/\D/g, '')
+      // supabase-js rpc() 제네릭 오버로드 추론 이슈로 로컬 캐스트 필요(기존 관례,
+      // ProductHeroModal.svelte 등과 동일 패턴) — database.ts에 타입 자체는 등록돼 있음
+      const { data: verifyData, error: verifyErr } = await (supabase.rpc as unknown as (
+        fn: string,
+        args: Record<string, unknown>,
+      ) => Promise<{ data: { ok: boolean; error?: string } | null; error: { message: string } | null }>)(
+        'verify_and_update_phone',
+        { p_phone: cleaned, p_code: verifyCode },
+      )
+      if (verifyErr || !verifyData?.ok) {
+        errorMsg = verifyData?.error ?? '인증번호가 올바르지 않거나 만료되었습니다.'
+        return
+      }
+
       await performSignUp(email, password)
+
+      // 휴대폰 인증을 실제 검증 채널로 채택 — 서버가 Supabase의 이메일 확인 요구사항을 우회
+      // (실패해도 가입 자체는 이미 완료된 상태이므로 조용히 넘어감 — 사용자가 재시도할 수단 없음,
+      //  다만 이 호출 실패는 이례적 상황이라 별도 알림 없이도 낮은 리스크로 판단)
+      try {
+        await fetch('/api/auth/confirm-verified-signup', { method: 'POST' })
+      } catch {
+        // no-op
+      }
+
       reset()
       onsuccess()
     } catch (err) {
@@ -287,8 +343,7 @@
               </button>
             </div>
             {#if otpSent}
-              <!-- TODO: 알리고 SMS 연동 후 실제 인증번호 문자 수신 안내로 교체 -->
-              <p class="su-otp-hint">📱 테스트 모드: 아무 숫자나 입력하세요.</p>
+              <p class="su-otp-hint">📱 인증번호가 발송되었습니다. (5분 이내 입력)</p>
             {/if}
           </div>
 

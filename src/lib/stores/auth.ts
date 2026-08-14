@@ -1,6 +1,6 @@
 import { writable, derived } from 'svelte/store';
 import type { User, Session } from '@supabase/supabase-js';
-import { auth as authService, supabase } from '$lib/services/supabase';
+import { auth as authService, supabase, rpc } from '$lib/services/supabase';
 
 // Store types
 interface AuthState {
@@ -74,6 +74,15 @@ export const performSignUp = async (email: string, password: string) => {
       const { data: { session: refreshedSession } } = await supabase.auth.getSession();
       resultUser = updateData.user;
       resultSession = refreshedSession;
+
+      // user_profiles 행 보정: handle_new_user() 트리거는 auth.users INSERT에만 바인딩돼
+      // 있어 익명→영구 전환(UPDATE)에는 실행되지 않는다 — ensure_user_profile() RPC로 직접
+      // 생성(ON CONFLICT DO NOTHING, 이미 있으면 안전). 실패해도 가입 자체는 막지 않는다.
+      try {
+        await rpc.ensureUserProfile();
+      } catch (profileError) {
+        console.error('[performSignUp] ensureUserProfile failed:', profileError);
+      }
     } else {
       // 완전 신규 회원가입: 기존 signUp() 흐름 그대로 유지
       const data = await authService.signUp(email, password);
