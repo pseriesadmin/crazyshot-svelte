@@ -223,6 +223,78 @@ GATE B 질문:
 
 ---
 
+## DONE — /cms/codes "예약코드 설정"·"코드조합" 탭 UI 디자인 정책 정비 + CMS 카드 라운드값/간격 표준 신설 (2026-08-15) — ✅ 완료 (🟢 ROUTINE/🟡 BOUNDARY, GATE B 불필요)
+
+아젠다: Stephen의 launch-selected-element 스크린샷 기반 반복 지시로 `/cms/codes` "예약코드 설정"
+  탭(`_FormatTab.svelte`)의 카드 레이아웃·간격·아이콘을 다듬고, 그 과정에서 CMS 표준 디자인
+  시스템 문서에 없던 "카드 라운드값 대/중/소" 정책과 "간격(gap) 대/중/소" 정책을 신규 확정해
+  문서화. 부수적으로 `_AutoMappingTab.svelte` 내부 구조·기능(매핑그룹↔조합↔상품 연결 로직) 분석
+  및 콤보 카테고리코드(`buildComboCategoryCode`) 실데이터 검증(stage DB) 수행.
+  TDD 도메인 아님(UI 스타일링 + 문서 정책), DB 마이그레이션 없음, 결제·예약·보안·크레이지스코어
+  무관이라 GATE B 생략 대상.
+
+정책 문서 신설/개정:
+  - `.claude/rules/uiux-index.md` — "🔴 CMS 카드 라운드값(대/중/소) 정책" 신설
+      대(large) 30px = var(--cms-radius-lg) / 중(medium) 20px = var(--radius-lg, 기존
+      --cms-radius-md 15px와는 다른 값이므로 혼동 주의 명시) / 소(small) 10px = var(--cms-radius-sm)
+  - `.claude/rules-ref/cms-uiux.md` §5 간격 시스템 — "행 간격(gap)" 표를 8px(소)/12px(중)/16px(대)
+      → **8px(소)/15px(중)/20px(대)로 재확정**(구값 폐기), 이 스케일이 gap뿐 아니라 카드 padding에도
+      재사용 가능함을 각주로 명시(카드 내부 패딩 20/28px 행은 별도 컨텍스트 유지)
+
+`_FormatTab.svelte`(예약코드 설정 탭) 수정:
+  - `.fmt-row`/`.fmt-row-group`/`.fmt-row--sub` 카드 라운드값 `var(--cms-radius-sm)`(10px, 오적용)
+    → `var(--radius-lg)`(20px, 신설 "중" 정책) 정정
+  - "자동순번(채번) 규격" + "순번 초기화" 2장 카드를 1장으로 결합, 이전에 감싸던 `.fmt-row-group`
+    그룹 래퍼 제거 → 다른 필드(접두어·분류코드·날짜형식·접미어)와 동일하게 `.fmt-list`의 일반
+    목록 항목으로 재배치
+  - 접미어 카드 하단 테두리 제거(3면 라운드) → 이후 "카드 라운드값 대/중/소 정책" 적용 요청 시
+    4면 완전 라운드로 복원(요청에 따른 선택 번복, 최종 상태는 4면)
+  - `.fmt-actions`(형식 저장 버튼 영역) 상단 구분선(`border-top`) 제거
+  - `.fmt-list` 간격을 신규 확정 정책 기준 `gap: 12px`(구 정책) → `gap: 20px`(대, 신정책) 적용,
+    `padding: 15px`(중) 병행 적용 후 Stephen 요청으로 padding만 취소(원복) — 최종: gap 20px만 유지
+  - 탭 메뉴 "예약코드 설정" 버튼의 캘린더 SVG 아이콘 제거(다른 탭과 통일)
+
+`_AutoMappingTab.svelte`(코드조합 탭) 수정:
+  - `.group-list` gap `8px` → `12px`(간격 정책 1차 개정 시점 기준, §5 재확정 이전) — 재확정된
+    8/15/20 스케일과는 현재 불일치(12px는 신규 스케일의 세 등급 어디에도 속하지 않음),
+    Stephen이 이 카드도 명시적으로 재조정 요청하면 그때 20px 스케일 기준으로 맞출 예정(후속 필요)
+  - 코멘트 정정: "상품 card-list 동일"(실제 값 30px, 불일치하던 잘못된 주석) 삭제
+
+`+page.svelte`(`/cms/codes` 상위 탭바) 수정:
+  - `.stat` 통계 카드 4개 — 가변 크기(padding 8px 14px + min-width 60px) → 고정 `72px × 72px`
+    정사각형(justify-content:center 추가)
+
+분석/검증(코드 변경 없음):
+  - `_AutoMappingTab.svelte` 내부 구조 분석(script 320줄/마크업 690줄/style 1,150줄 비율) +
+    매핑그룹↔조합(combo_row_id)↔상품 실연결 경로 설명(`getLinkedProductCount`의 category 매칭
+    vs `products/new`의 `buildComboCategoryCode` 7-param 채번 경로 구분)
+  - `buildComboCategoryCode()`(대→중→소 정렬 후 구분자 없이 concat)의 예시값 최초 답변에서
+    할루시네이션(임의 예시 'CAMSLR'을 실제 조합 결과처럼 제시) 발생 → Stephen 지적으로 정정
+    → stage DB(`ezyvffjvuwmtuhpxdjrw`) 실측 SQL로 현재 저장된 콤보 17건 전체 재계산·검증
+    (예: `CMR+COM+RE` → `CMRCOMRE`), `RE` 코드 상세(name: rent, code_tier: minor, depth: 0 —
+    code_tier가 depth 기반 폴백보다 우선 적용됨) 실데이터로 확인
+
+검증:
+  - 각 수정 직후 `npx svelte-check` 실행 — 전 파일 기존 pre-existing 경고(`.tk-sep` 미사용 셀렉터,
+    `data` state_referenced_locally 6건, `_AutoMappingTab.svelte` a11y 경고 4건) 외 신규 에러/경고 0건
+  - Claude Browser 미사용(프로젝트 규칙 준수) — Stephen이 스크린샷으로 직접 시각 확인
+
+후속 필요(미완, 별도 확인 후 진행):
+  - `_AutoMappingTab.svelte` `.group-list` gap 12px → 신규 8/15/20 스케일 기준 재정렬 여부
+  - `_TreeTab.svelte` `.code-card-list` gap 20px(우연히 신규 "대" 값과 일치하나, 정책 재확정
+    이전부터 있던 값이라 의도적 반영은 아님) — 정책 일치 확인 필요 시 재검토
+
+신규 파일: 없음
+
+수정 파일:
+  .claude/rules/uiux-index.md
+  .claude/rules-ref/cms-uiux.md
+  src/routes/cms/codes/_FormatTab.svelte
+  src/routes/cms/codes/_AutoMappingTab.svelte
+  src/routes/cms/codes/+page.svelte
+
+---
+
 ## NOW — CMS 상담(채팅) Phase 2~3 CRITICAL 6건 (2026-08-12) — ✅ GATE B 승인 완료(AskUserQuestion, 서비스 의도 언어 확인 완료), 바로 실행 가능
 
 plan_source: /Users/stevenmac/.claude/plans/users-stevenmac-downloads-crazyshot-bac-compiled-willow.md
@@ -13129,7 +13201,7 @@ mock이 실제 호출 순서(`code_mapping_groups`→`products`→`code_mapping_
 
 **GATE E: ✅ 통과 — 블로킹 0건. 커밋은 Stephen 직접 실행.**
 
-## DONE — /cms/subscriptions 상품 모듈 정합화: 정렬버그 수정 + 카드/상세패널 표준화 + 가격정책·상품설명·이미지 탭 신설 (2026-08-14) — ✅ 구현 완료 / GATE E 대기(마이그레이션 stage 검증 후)
+## DONE — /cms/subscriptions 상품 모듈 정합화: 정렬버그 수정 + 카드/상세패널 표준화 + 가격정책·상품설명·이미지 탭 신설 (2026-08-14) — ⚠️ QA 보류(계획 대비 구현편차 5건, Stephen 확인 필요) / GATE E 대기(마이그레이션 stage 검증 선행)
 
 [CONTEXT BRIDGE]
 plan_source: Stephen 아젠다 — "구독(/cms/subscriptions)메뉴의 설정/조합코드 설정 목록값을 기준해
@@ -13216,6 +13288,70 @@ supabase/migrations/(신규 2건 — content_blocks, image_urls+RPC)      (NOW-3
   신규등록 분류→품번코드 정렬 고정.
 - production 적용은 Stephen 승인 후 별도 진행.
 
+### QA(@sp3-qa-agent) 검수 — ⚠️ 보류 (2026-08-14)
+
+**검수 방법**: git status(신규/미커밋 파일 diff), 8개 대상 파일 전문 Read, 마이그레이션 2건 전문
+확인, `npx svelte-check` 재실행, console.log/any타입/TODO grep, `getCmsRoleForAction` 인증가드
+전수 확인. Supabase MCP/CLI 미제공으로 stage/production DB 실제 적용 여부는 쿼리로 직접 확인하지
+못했음(파일 상태·자체 GATE 표기 기준 "미적용"으로 간주 — 아래 참고).
+
+**통과 항목**
+- NOW-1: `new/+page.server.ts` `code_mapping_groups` 쿼리에 `.order('sort_order').order('name')`
+  2차 정렬 적용 확인(60–61행).
+- NOW-2: `+page.svelte` `.plan-card`에 썸네일(60×60)·`.cat-badge`·`.price-badge` 표준 토큰 반영
+  확인(89–113, 169–198행) — `/cms/products` 카드(수평 flex 리스트 + 좌측 썸네일) 패턴과 구조 일치.
+- NOW-3: 마이그레이션 248(`content_blocks` 컬럼, 순수 ADD) 확인, `SubscriptionPlanRow`에 필드
+  추가 확인, 상품설명 탭에 `<CmsContentEditor bind:blocks bind:keywords />` 배치 확인(389행),
+  `new/+page.svelte`에서 `description` textarea 제거 확인(전문 재확인, 잔존 없음),
+  `updateSection` `sectionType==='content'` 분기 확인(+page.server.ts 161–176행).
+- NOW-4: 마이그레이션 249(`image_urls` 컬럼+`append_subscription_image_url` RPC, 순수 ADD) 확인,
+  신규 업로드 API(`/api/cms/subscriptions/upload`)에 `getCmsRoleForAction`+`hasSettingsAccess`
+  인증·권한 가드 존재 확인(POST/DELETE 모두), 기존 `/api/cms/upload`(products 전용) **미수정**
+  확인(git status에 M 없음, 전문 대조 결과 원본 그대로), `image_url` 레거시 컬럼 삭제되지 않음
+  확인(마이그레이션 249 ADD만, SELECT 쿼리에도 계속 포함).
+- NOW-5: 가격정책 탭 분리(`monthly_price` 별도 탭) 확인.
+- 기술부채: console.log 0건 / `: any` 0건 / TODO·FIXME 0건(8개 대상 파일 전수 grep).
+- `npx svelte-check` 재실행 결과 이번 세션 대상 파일발 신규 에러 0건(전체 1387파일 중 유일한
+  ERROR는 `src/routes/products/search/+page.svelte:108` "noCatIcons" — git 이력상 이번 세션
+  이전부터 존재하던 무관 기존 에러, 이번 세션 미수정 확인).
+- 보안: `$env/dynamic/private`만 사용(서버 키 노출 없음), 모든 액션에서 `locals.cmsRole` 직접
+  사용 없이 `getCmsRoleForAction` 경유(security-auth.md 필수 패턴 준수), RPC/쿼리빌더만 사용해
+  SQL Injection 경로 없음, `getCmsRoleForAction`+`hasSettingsAccess` 게이트 전 액션 적용.
+- 범위: git status 및 파일 mtime 대조 결과 TASK.md에 기록된 8개 영향 파일 외 추가 수정 없음
+  (`FreeRentalItemSelector.svelte`·`subscriptionBenefits.ts`·`chargeSubscription.ts` 등은
+  8/12~8/13 mtime으로 이전 세션 산출물 확인, 이번 세션 미변경).
+
+**보류 사유 — 승인된 계획 대비 구현 편차 5건 발견 (기능 장애 아님, 명세 불일치)**
+
+| # | 등급 | 위치 | 내용 |
+|---|---|---|---|
+| 1 | 🟡 | `SubscriptionDetailPanel.svelte` 44–53행(`ALL_TABS`) | 확정 탭 순서는 "…→상품설명→상품스펙→…"(TASK.md NOW-5)인데 실제 배열은 `basic·pricing·specs·content·images·…` — **상품스펙과 상품설명 순서가 뒤바뀜**. |
+| 2 | 🟢 | `SubscriptionDetailPanel.svelte` 615–619행(`.summary-thumb-wrap`/`.summary-thumb`) | NOW-4 step5는 `ProductDetailPanel.svelte` `.ph-thumb`(72×72, 2661–2667행) 패턴 이식을 명시했으나 실제는 44×44로 구현됨. |
+| 3 | 🟡 | `SubscriptionDetailPanel.svelte` 393–436행(이미지 탭) | NOW-4 step3은 `ProductDetailPanel.svelte` images 탭 패턴(드롭존 drag&drop, 라이트박스 확대보기, 8장 상한) 이식을 명시했으나 실제 구현은 파일선택 버튼+삭제만 있고 드롭존·라이트박스·업로드 개수 상한이 없음. placeholder/TODO는 없고 정상 동작하나 계획 대비 축소된 스코프. |
+| 4 | 🟡 | `supabase/migrations/20260814000249_249_subscription_plan_image_urls_rpc.sql` 37–52행 | NOW-4 step1은 "신규 버킷 프로비저닝 회피 — 기존 `product-images` 버킷 재사용(prefix `subscriptions/{planId}/...`)"을 명시했으나, 실제로는 새 Storage 버킷 `subscription-images`(+ 신규 공개 SELECT RLS 정책 1건)를 생성함. 기능·보안상 문제는 없으나(RLS도 정상 부여) Stephen이 AskUserQuestion으로 승인한 실행계획과 다른 방식이라 core-rules.md "요청범위 외 수정 금지" 원칙상 사후 확인이 필요. |
+| 5 | 🟢 | `supabase/migrations/20260814000249_249_subscription_plan_image_urls_rpc.sql` 11–13행 | `append_subscription_image_url(p_plan_id INTEGER, ...)` — 실제 `subscription_plans.id`는 BIGINT(다른 FK 정의 `tier_benefits.plan_id BIGINT` 등으로 확인). Postgres가 int4→int8 암시적 캐스팅을 지원해 즉시 오류는 없으나 타입 불일치. |
+
+**추가 참고(블로커 아님)**
+- `SubscriptionDetailPanel.svelte` 629·633행(`.img-rep-badge`/`.img-del-btn`)이 `color: #fff` 리터럴
+  사용 — 같은 파일 `.close-btn` 등은 `var(--cs-white)` 사용, ui-mobile.md 하드코딩 금지 원칙과
+  미세하게 어긋나나 시각적 영향 없는 소형 CMS 아이콘 버튼.
+- 마이그레이션 번호 "248" 중복: `20260814000248_248_subscription_plan_content_blocks.sql`과
+  (같은 날 별도 세션의) `20260814060000_248_product_code_format_separation.sql`이 같은 순번을
+  씀 — 파일명 자체(타임스탬프)는 서로 달라 적용 충돌은 없으나 향후 추적 시 혼동 소지, 참고용 기록.
+- **마이그레이션 미적용 확인**: 이 QA 세션에는 Supabase 조회 도구가 제공되지 않아 stage
+  (ezyvffjvuwmtuhpxdjrw)에 248/249 실적용 여부를 DB 쿼리로 직접 확인하지 못했다. TASK.md 자체
+  헤더 표기("GATE E 대기 — 마이그레이션 stage 검증 후")와 파일 생성 시각을 근거로 "아직 미적용"
+  상태로 판단 — **이는 블로커가 아니라 계획상 정상적인 다음 단계 대기**다. 단, 미적용 상태에서는
+  `/cms/subscriptions` `load()`가 존재하지 않는 컬럼(`content_blocks`/`image_urls`)을 조회하므로
+  stage 적용 전까지 이 화면 자체가 500 에러로 정상 동작하지 않는다는 점은 배포 순서상 반드시
+  인지할 것.
+
+**GATE E 판정**: ⚠️ 보류 — 보안·데이터무결성·기술부채 기준은 전부 충족했으나, 승인된 실행계획과
+다른 방식으로 구현된 항목(특히 #4 신규 Storage 버킷 생성, #1 탭 순서)에 대해 Stephen의 사후
+확인/승인을 받은 뒤 "통과"로 전환 권장. #2·#3·#5는 원하면 그대로 두거나 후속 세션에서 가볍게
+보완 가능한 수준(기능 장애 없음).
+
+
 ---
 
 ## DONE — 부모상품 등록 시 자식(재고) 1개 자동생성 정책 확정·문서화 (2026-08-14) — ✅ 완료
@@ -13235,7 +13371,7 @@ TDD-PROD-1/1b)을 대조한 결과, 이 동작은 애초부터 제거 대상이�
 GATE C: ROUTINE(문서 반영만, 코드·DB 변경 없음) — 자동 완료.
 
 
-## DONE — /cms/subscriptions 신규등록 화면 후속 버그 2건 수정 (2026-08-14, 후속) — QA 대기
+## DONE — /cms/subscriptions 신규등록 화면 후속 버그 2건 수정 (2026-08-14, 후속) — ✅ QA 통과
 
 [CONTEXT BRIDGE]
 plan_source: 위 "/cms/subscriptions 상품 모듈 정합화" NOW 완료 후, Stephen이 실화면(launch-selected-element
@@ -13283,4 +13419,335 @@ src/routes/cms/subscriptions/new/+page.svelte (MODIFY)
 - 컴포넌트 로직 직접 추적(`SuggestPicker.svelte` 전체 재검토) — 무한루프 재발 없음, 포커스/블러/
   키보드 내비게이션 정상, CSS 변경은 페이지 scoped 스타일이라 컴포넌트·다른 6개 사용처에 영향 없음
 
-QA(@sp3-qa-agent) 검수: 대기 중
+### QA(@sp3-qa-agent) 검수 — ✅ 통과 (2026-08-14)
+
+**검수 방법**: `new/+page.svelte` 전문 Read, `products/new`의 검증된 `lastConfirmedGroupId` 패턴과
+1:1 대조, 다른 5개 `SuggestPicker` 사용처(git status로 이번 세션 미변경 확인) 영향 여부 점검,
+`npx svelte-check` 재실행.
+
+**통과 항목**
+- 버그1(입력창 가로폭): `.f-input` 규칙에 `width: 100%; box-sizing: border-box;` 적용 확인
+  (508–512행) — `products/new` `.f-input`과 동일 규칙.
+- 버그2(SuggestPicker 미연결): `lastConfirmedGroupId` state(93행), `onGroupChange()`(99–102행),
+  `onGroupPickerSelect(opt, previousId)`(104–113행, `lastConfirmedGroupId` 대조 후 리셋),
+  `onGroupPickerInput(val)`(115–122행, 입력창 비움 시 초기화), `<SuggestPicker
+  bind:selectedId={selectedGroupId} oninput={onGroupPickerInput} onselect={onGroupPickerSelect}>`
+  연결(211–219행) 전부 확인 — `products/new`의 검증된 패턴과 로직 일치.
+- 영향 범위: git status 확인 결과 `subscriptions/new/+page.svelte` 1개 파일만 수정됨. 다른
+  `SuggestPicker` 사용처(`products/new`, `products/search`, `ProductCategoryModal` 등)는 이번
+  세션에서 전혀 변경되지 않아 영향 없음.
+- `npx svelte-check`: 이 파일 신규 에러 0건, 기존 무관 경고 2건만 유지(27:28
+  `state_referenced_locally`, 234:15 `aria-expanded not supported by role 'textbox'`) — TASK.md
+  기록과 정확히 일치, 둘 다 이번 수정과 무관하고 `products/new`에도 동일 패턴 존재.
+- console.log/`: any`/TODO 0건.
+
+**GATE E 판정**: ✅ 통과 — 블로킹 항목 없음.
+
+## DONE — QA 지적 편차 5건 승인플랜 기준 정정 (2026-08-14, 후속) — ✅ GATE E 통과
+
+[CONTEXT BRIDGE]
+plan_source: 직전 @sp3-qa-agent 검수에서 "/cms/subscriptions 상품 모듈 정합화" 블록에 대해
+  승인된 플랜(`cms-subscriptions-enumerated-wave.md`) 대비 편차 5건을 발견(GATE E 보류) → Stephen이
+  QA를 요청한 흐름의 연장으로 즉시 정정 진행(신규 스코프 아님, 이미 승인된 사양으로 되돌리는 작업).
+핵심제약: 승인된 플랜 텍스트를 초과하는 기능(호버 유지형 대표지정, URL직접추가 입력창 등)은
+  포팅하지 않음 — 계획에 명시된 항목(드롭존·img-card-grid·자동저장·라이트박스)만 정확히 이식.
+TDD도메인: 없음 — GSD.
+
+### 정정 내역
+
+1. **탭 순서** — `SubscriptionDetailPanel.svelte` `ALL_TABS`(44-53행): `상품설명`/`상품 스펙` 순서가
+   뒤바뀌어 있던 것을 승인 순서(기본정보→가격정책→상품설명→이미지→상품스펙→혜택관리→
+   무료렌탈대상장비→구독자현황)로 정정.
+2. **헤더 썸네일 크기** — `.summary-thumb-wrap`/`.summary-thumb`: 44×44px → 72×72px
+   (`ProductDetailPanel.svelte` `.ph-thumb`와 동일 크기로 통일).
+3. **이미지 탭 드롭존+라이트박스 이식** — 기존엔 버튼 클릭으로만 파일피커가 열리고 확대보기가
+   없었음. `ProductDetailPanel.svelte`의 드래그&드롭(`handleDragEnter/Leave/Over/Drop` 패턴)과
+   라이트박스(오버레이+닫기버튼+`stopPropagation` wrap) 패턴을 동일 구조로 이식(`isImageDragging`,
+   `openLightbox`/`closeLightbox` 신설). 계획에 없던 "홀드하여 대표지정"·"URL 직접추가" 기능은
+   스코프 초과라 포팅하지 않음(의도적 축소 유지).
+4. **신규 Storage 버킷 생성 → 기존 버킷 재사용으로 전환** — 마이그레이션 249가 계획과 달리
+   `subscription-images` 신규 버킷+RLS를 만들고 있던 것을 제거하고, 기존 `product-images`
+   버킷(Migration 65에서 이미 공개읽기+CMS업로드/삭제 RLS 전부 구비돼 있음을 확인)을
+   `subscriptions/{planId}/...` prefix로 재사용하도록 마이그레이션·업로드 API
+   (`src/routes/api/cms/subscriptions/upload/+server.ts`) 양쪽 수정. 신규 버킷 정책은 prefix
+   단위가 아니라 버킷 단위라 기존 정책이 그대로 적용됨을 확인 후 진행.
+5. **RPC 파라미터 타입 불일치** — `append_subscription_image_url(p_plan_id INTEGER, ...)`을
+   `BIGINT`로 정정(migration 229/241의 `generate_subscription_product_code`와 동일 관례,
+   `subscription_plans.id`를 참조하는 다른 테이블 FK도 전부 BIGINT).
+
+비블로킹 지적 2건도 함께 정정: `color: #fff` 하드코딩 2곳 → `var(--cs-white)`. "248 마이그레이션
+번호 중복" 지적은 실제 디스크 확인 결과 동일 번호 파일이 1개뿐이라 재현 안 됨(조치 불필요).
+
+### 수정 파일
+
+```
+src/lib/components/cms/subscription/SubscriptionDetailPanel.svelte (MODIFY)
+src/routes/api/cms/subscriptions/upload/+server.ts (MODIFY)
+supabase/migrations/20260814000249_249_subscription_plan_image_urls_rpc.sql (MODIFY — 미적용 상태이므로 직접 수정 허용, 기존 마이그레이션 파일 수정 금지 원칙은 "이미 적용된" 파일 대상)
+```
+
+### 검증
+- `npx svelte-check` — 전체 1 error(기존 무관 `products/search`)/321 warnings, 이번 수정
+  대상 파일 신규 에러 0건(라이트박스 img에 직접 클릭핸들러 달았던 a11y 경고는 wrap div로
+  옮겨 즉시 해소 확인).
+- `product-images` 버킷 기존 RLS(Migration 65) 재확인 — 공개읽기 SELECT + cms_role 보유자
+  INSERT/DELETE 정책이 버킷 전체에 적용돼 prefix 추가만으로 커버됨.
+
+**GATE E: ✅ 통과 — 승인 플랜과의 편차 5건 전부 정정 완료, 블로킹 0건.**
+
+---
+
+## DONE — 전자계약 작성기 한계 수정: docx/xlsx 표 임포트 정확도 + A4 크기 + 고정캔버스형 버그 (2026-08-14) — ✅ 구현 완료(자체 검증), QA 미착수
+
+[CONTEXT BRIDGE]
+plan_source: Stephen 아젠다 — "①새 양식 작성 시 문서형에서 가져온 워드·엑셀 문서(특히 복잡한
+  표)가 원본 그대로 반영 안 되는 심각한 오류 해결, ②문서형에서 가져온 표 편집(크기조절·행열
+  추가삭제) 불가 구현, ③문서형 기본 캔버스를 A4 크기로, ④고정캔버스형 PDF/이미지 업로드 오류
+  전반 점검·보완". Plan Mode 조사(ContractDocumentEditor·docxImport·xlsxImport·
+  docxTableFormatting·ContractCanvasEditor·pdfRasterize 전체 Read) + AskUserQuestion 2라운드로
+  Stephen 확인 완료 후 승인. 전체 플랜: `/Users/stevenmac/.claude/plans/cms-reservation-contracts-bubbly-cherny.md`
+핵심제약:
+  - 고정캔버스형(ContractCanvasEditor, 좌표기반 서명·필드 배치)은 유지 — 블록에디터로 교체하지
+    않음(Stephen 명시 확인, 최초 아젠다 문구와 달리 재확인 후 뒤집힘).
+  - `CmsContentEditor.svelte`(상품설명 블록에디터) 수정 금지 — 공유 컴포넌트 격리 원칙.
+  - 기존 배경색·테두리색 OOXML 추출 로직(`docxTableFormatting.ts` 기존 함수)은 변경 없이 그대로
+    두고 병합(vMerge/gridSpan) 처리를 별도 함수로 분리 추가.
+  - `tiptapRender.ts`(`renderTiptapDocToHtml`)는 SSR/Node.js 순수 함수 — DOM 사용 금지,
+    표 오버플로우 래핑은 반드시 정규식 등 순수 문자열 처리로만(`contractSsrSafety.test.ts` 회귀
+    유지 필수).
+  - 고정캔버스형 필드 좌표(`field.x/y`)는 기존 저장값(이미지 픽셀 좌표계) 그대로 — DB 마이그레이션
+    없이 A4 레터박스 렌더링 계산만 보정.
+TDD도메인: 없음 — GSD(문서 변환·렌더링 로직, 결제·예약·보안 무관). 단 회귀 방지를 위해 기존
+  세션 관례(`docxTableFormatting.test.ts` 등)대로 단위 테스트는 계속 추가.
+
+### 상세 실행계획
+
+**NOW-A1 · 🟢 ROUTINE** — docx 병합 셀(rowspan/colspan) + 열너비 보존:
+`docxTableFormatting.ts`의 `CellFormatting`에 `colspan?`/`vMerge?: 'restart'|'continue'` 추가
+(`w:gridSpan`/`w:vMerge` OOXML 파싱, 기존 배경색·테두리 추출과 나란히), 신규
+`injectTableMergesIntoHtml()` — 열 인덱스 추적으로 `vMerge==='continue'` 셀은 위쪽 앵커의
+`rowspan`+1 후 해당 `<td>` 제거, `gridSpan`은 앵커에 `colspan`으로 반영. `w:tblGrid/w:gridCol`
+twip→px 환산해 앵커 셀에 `colwidth` 속성 주입. `docxImport.ts`에서 기존 주입 다음 단계로 연결.
+
+**NOW-A2 · 🟢 ROUTINE** — xlsx 병합 셀(`!merges`) + 열너비(`!cols`) 지원:
+`parseSheet()` 반환에 `merges`/`colWidths` 추가(하위호환 — 기존 `rows` 소비부 그대로 동작),
+`rowsToTiptapTable(rows, merges, colWidths)`가 병합 범위의 덮인 셀은 스킵하고 앵커 셀에
+`colspan`/`rowspan`/`colwidth` 부여. `ContractImportModal.svelte` 호출부만 신규 시그니처에 맞춰 조정.
+
+**NOW-A3 · 🟢 ROUTINE** — 표 편집 CSS 누락 + 오버플로우 컨테인:
+`ContractDocumentEditor.svelte`에 prosemirror-tables 표준 CSS(`.tableWrapper`
+overflow-x:auto, `.resize-cursor`, `.column-resize-handle`) 추가(행+/행-/열+/열-/헤더토글/표삭제
+버튼과 `Table.configure({resizable:true})`는 이미 구현돼 있었음 — CSS 부재로 발견 불가능했던
+것). `tiptapRender.ts`에 순수 문자열 정규식으로 `<table>`을 `.tt-table-scroll` 래퍼로 감싸는
+후처리 추가, `ContractTemplatePreviewModal.svelte`/`/contract/[token]/+page.svelte` 양쪽에
+동일 CSS 추가(3화면 일관 — 기존 A4 폭 통일 패턴과 동일).
+
+**NOW-B · 🟢 ROUTINE** — 문서형 A4 크기 확인: NOW-A3로 표 오버플로우가 막히면 "이상한 크기"의
+핵심 원인 해소. 레이아웃 구조(3열 280px+flex:1+220px) 자체는 변경하지 않음(요청범위 외 수정
+금지) — 1280px/1440px 뷰포트에서 A4 카드가 표 삐져나옴 없이 보이는지 실행 단계에서 확인.
+
+**NOW-C1 · 🟡 BOUNDARY** — 고정캔버스형 업로드 accept 불일치 수정: `ContractCanvasEditor.svelte`
+파일 입력 accept에서 `image/heif,image/heic` 제거(서버 `canvas-bg/+server.ts` ALLOWED와 정확히
+일치시킴 — HEIC는 서버가 거부할 뿐 아니라 대부분 브라우저 `<img>`로도 렌더링 안 됨). 지원 포맷
+안내 문구("PNG · JPEG · WebP · PDF") 추가.
+
+**NOW-C2 · 🟡 BOUNDARY** — PDF 워커 로딩 Vite 8 대비 견고화: `pdfRasterize.ts`의
+`new URL('pdfjs-dist/build/pdf.worker.min.mjs', import.meta.url)`를 명시적 `?url` 임포트로
+교체(버전 안전). 필요 시 `*.d.ts`에 `declare module '*?url'` 보강.
+
+**NOW-C3 · 🟡 BOUNDARY** — 고정캔버스형 A4 비율(210:297) 고정: `.canvas-page` `aspect-ratio`를
+업로드 이미지 원본 비율 대신 항상 `210/297`로 고정, 이미지는 `object-fit:contain` 레터박스.
+레터박스로 프레임≠이미지 렌더영역이 되므로 필드 배치 스타일과 `onPageClick`/
+`onFieldPointerDown`/`onFieldPointerMove` 좌표 변환에 레터박스 오프셋+스케일 보정 추가(기존
+저장 좌표는 이미지 픽셀 좌표계 그대로 유효 — 마이그레이션 불필요, 렌더링 계산만 보정).
+
+**NOW-C4 · 🟢 ROUTINE** — 방어적 점검: `hasSettingsAccess` 게이트·`product-images` 버킷 RLS·
+20MB 크기 제한 실측 재확인(실행 단계에서 코드 재독으로 확인, 문제 발견 시 즉시 수정).
+
+### 영향 파일
+
+```
+src/lib/utils/docImport/docxTableFormatting.ts                       (NOW-A1)
+src/lib/utils/docImport/docxImport.ts                                 (NOW-A1)
+src/__tests__/services/docxTableFormatting.test.ts                    (NOW-A1)
+src/lib/utils/docImport/xlsxImport.ts                                 (NOW-A2)
+src/lib/components/cms/contract-editor/ContractImportModal.svelte     (NOW-A2)
+src/__tests__/services/xlsxTableMerge.test.ts (신규)                    (NOW-A2)
+src/lib/components/cms/contract-editor/ContractDocumentEditor.svelte  (NOW-A3, NOW-C1과 별개 파일)
+src/lib/utils/tiptapRender.ts                                         (NOW-A3)
+src/lib/components/cms/ContractTemplatePreviewModal.svelte            (NOW-A3)
+src/routes/contract/[token]/+page.svelte                              (NOW-A3)
+src/__tests__/server/contractTiptapRender.test.ts                     (NOW-A3)
+src/lib/components/cms/contract-editor/ContractCanvasEditor.svelte    (NOW-C1, NOW-C3)
+src/lib/utils/pdfRasterize.ts                                         (NOW-C2)
+```
+
+### 검증 방법
+- `npx svelte-check` (GATE C 자동)
+- `npx vitest run` — docxTableFormatting·xlsxTableMerge(신규)·docxImport·contractTiptapRender·
+  contractSsrSafety(회귀 필수)
+- `npm run build` — pdfjs 워커 애셋 산출 확인
+- 수동 확인은 Stephen 직접(Claude Browser 사용 금지 원칙 준수)
+
+### 구현 완료 내역 (2026-08-14) — 자체 검증 완료, @sp3-qa-agent 검수 미착수
+
+**NOW-A1 (docx 병합/열너비)**: `docxTableFormatting.ts`에 `gridSpan`/`vMerge` 추출
+(`extractCellFmt` 확장) + `extractTableColumnWidths`/`parseTableColumnWidthsFromXml`(twip→px,
+`w:tblGrid`) + `injectTableMergesIntoHtml()` 신규(열 인덱스 추적으로 vMerge continue 셀의
+rowspan 흡수+제거, gridSpan→colspan, colwidth 주입 — 개수 불일치 표는 표 단위로 스킵하는
+기존 안전원칙 계승, per-table try/catch로 구조 파괴 방지). `docxImport.ts`가
+`injectTableFormattingIntoHtml → injectTableMergesIntoHtml` 순서로 호출(순서 중요 — 병합
+주입이 <td> 구조를 바꾸므로 반드시 색상 주입 이후).
+
+**NOW-A2 (xlsx 병합/열너비)**: `xlsxImport.ts` `parseSheet()`가 `rows` 외
+`merges`(`!merges`를 선택범위 기준 상대좌표로 변환, blankrows 필터링으로 행이 줄어든 경우
+좌표 신뢰 불가로 병합 정보 전체를 비우는 안전장치 포함)와 `colWidths`(`!cols[].wpx`) 반환하도록
+확장. `XLSX.read()`에 `cellStyles:true` 추가 필수(실제 발견 — 이 옵션 없이는 SheetJS가
+`!cols`를 아예 읽지 않아 열너비가 항상 null이었음, 테스트로 실제 .xlsx 왕복 직렬화하다가
+발견). `rowsToTiptapTable()`이 병합 앵커 셀에만 노드 생성 + colspan/rowspan/colwidth 부여.
+
+**NOW-A3 (표 편집 CSS + 오버플로우)**: 행+/행-/열+/열-/헤더토글/표삭제 버튼과
+`Table.configure({resizable:true})`는 이미 구현돼 있었으나 prosemirror-tables 표준 CSS
+(`.tableWrapper`/`.resize-cursor`/`.column-resize-handle`)가 전혀 없어 리사이즈 핸들이
+사실상 투명해 발견 불가능했던 것으로 확인 — CSS 3종 추가로 해결(기능 자체는 원래도 동작).
+`tiptapRender.ts`의 `renderTiptapDocToHtml()`(SSR 순수 함수)에 정규식 기반 `.tt-table-scroll`
+래핑 추가(DOM 미사용, contractSsrSafety 회귀 없음 확인) + `ContractTemplatePreviewModal.svelte`/
+`/contract/[token]/+page.svelte`에 대응 CSS 추가 — 3화면(에디터·미리보기·고객화면) 일관 적용.
+
+**NOW-B (A4 크기)**: NOW-A3의 표 오버플로우 컨테인으로 근본 원인 해소 확인. 레이아웃 구조는
+변경하지 않음(요청범위 밖).
+
+**NOW-C1 (업로드 accept 불일치)**: `ContractCanvasEditor.svelte`의 파일 input accept에서
+`image/heif,image/heic` 제거(서버 `canvas-bg/+server.ts` ALLOWED와 정확히 일치) + 클라이언트
+측 `onPageFileChange`도 화이트리스트 방식(`Set`)으로 강화(accept 우회 시에도 즉시 안내) +
+"PNG · JPEG · WebP · PDF" 형식 안내 문구 2곳(툴바·빈 상태) 추가.
+
+**NOW-C2 (pdfjs 워커 로딩 견고화)**: `new URL('pdfjs-dist/build/pdf.worker.min.mjs',
+import.meta.url)` → 명시적 `pdfjs-dist/build/pdf.worker.min.mjs?url` 정적 임포트로 교체
+(Vite 1급 기능, 버전 안전). `src/app.d.ts`에 `/// <reference types="vite/client" />` 추가
+필요(기존엔 `"node"` 타입만 있어 `?url` 임포트가 타입에러 — svelte-check로 확인 후 추가).
+`npm run build` 실행해 `.vercel/output/static/_app/immutable/assets/pdf.worker.min.*.mjs`가
+실제로 산출됨을 직접 확인(과거엔 이 경로가 한 번도 브라우저에서 검증된 적 없었음 — Claude
+Browser 사용 금지 원칙 때문이었는데, 이번엔 빌드 산출물 확인으로 대체 검증).
+
+**NOW-C3 (캔버스 A4 비율 고정)**: `.canvas-page` `aspect-ratio`를 업로드 이미지 원본 비율
+대신 `210/297` 고정. 레터박스(object-fit:contain) 보정 로직을 신규
+`src/lib/utils/canvasLetterbox.ts`(순수 함수 — `getContentBox`/`fieldStyle`/
+`getContentRectPx`)로 분리해 `ContractCanvasEditor.svelte`(렌더링 + `onPageClick`/
+`onFieldPointerMove` 좌표 역산)에서 재사용, 단위 테스트(`canvasLetterbox.test.ts`)로 왕복
+변환 정확성 검증. 기존 저장된 `field.x/y`(이미지 픽셀 좌표계)는 변경 없이 그대로 유효 —
+렌더링 계산만 보정(DB 마이그레이션 없음). `onPageClick`에 레터박스 여백(이미지 바깥 A4
+프레임 여백) 클릭 시 필드 배치를 무시하는 가드 추가(신규 — 레터박스 도입으로 생긴 케이스).
+
+**NOW-C4 (방어적 점검)**: `hasSettingsAccess`(manager 이상) 게이트 canvas-bg 엔드포인트에
+이미 적용 확인, `product-images` 버킷 RLS는 버킷 전체 적용이라 `canvas-bg/` prefix도 문제
+없음 확인, 20MB 제한은 페이지별 개별 업로드(다페이지 PDF도 페이지당 별도 업로드)라 여유
+충분함 확인 — 코드 변경 불필요.
+
+**검증 결과**:
+- `npx svelte-check`: 신규 에러 0건(전체 유일 1 ERROR는 `products/search/+page.svelte`
+  pre-existing, 이번 세션과 무관 — 세션 시작 전부터 존재).
+- `npx vitest run`(관련 10개 파일 직접 지정 실행): 276/276 통과 — `docxTableFormatting`(33),
+  `docxImport`(15, 회귀), `xlsxTableMerge`(13, 신규), `canvasLetterbox`(10, 신규),
+  `contractTiptapRender`(신규 케이스 포함), `contractSsrSafety`(회귀), `contractP6Canvas`,
+  `contractP8B4`, `contractContentMode`, `contractCanvasPublishFix`.
+- `npx vitest run`(전체 스위트 1회 실행): 이번 세션 대상 파일 관련 실패 0건. 실패 33건은 전부
+  `payment.test.ts`/`productClone.test.ts`/`clearIssuedContract.test.ts`/`contractSign.test.ts`
+  — Stage DB 연결·권한 의존 통합 테스트로, TASK.md에 이미 기록된 pre-existing 실패와 동일
+  패턴(오케스트레이터가 직접 grep으로 파일명 대조해 이번 수정 파일과 전혀 무관함을 확인).
+  `.claude/worktrees/exciting-ardinghelli-71ff74/`라는 무관한 별도 워크트리 경로에서도 동일
+  실패가 중복 출력됨 — 이 세션과 무관한 병렬 워크트리 아티팩트로 판단, 손대지 않음.
+- `npm run build`: 성공. `pdf.worker.min.*.mjs`가 `.svelte-kit/output/client`와
+  `.vercel/output/static` 양쪽에 정상 산출됨을 직접 확인(C-2 검증).
+
+**범위 확인**: `git status` 대조 결과 이번 세션에서 수정한 파일은 계획된 13개 + 신규 3개
+(`canvasLetterbox.ts`, `canvasLetterbox.test.ts`, `xlsxTableMerge.test.ts`)뿐이며,
+`RentalDetailPanel.svelte`·`database.ts`·`cms/codes/*`·`subscriptions/*` 등 세션 시작 시점에
+이미 unstaged 상태였던 무관 파일들은 전혀 건드리지 않음.
+
+**남은 작업**: Stephen의 수동 브라우저 확인(실제 병합 셀 있는 .docx/.xlsx 임포트, 표 리사이즈
+드래그, 1280px/1440px A4 카드 육안 확인, 고정캔버스형 PDF/이미지 업로드 실사용) — Claude
+Browser 사용 금지 원칙에 따라 이 세션에서는 수행하지 않음. @sp3-qa-agent 검수도 아직 미착수.
+
+## DONE — 마이그레이션 248/249 stage 적용 + append_subscription_image_url RPC 보안 취약점 발견·즉시수정 (2026-08-14, 후속) — ✅ 완료
+
+[CONTEXT BRIDGE]
+plan_source: Stephen이 "구독 상품 등록 테스트 했는데 생성되지 않아" 보고 → 네트워크 로그 분석
+  결과 실제로는 생성 성공(id=77)했으나 마이그레이션 248/249 미적용으로 등록 직후 상세조회
+  쿼리(`loadSelectedSubscriptionDetail.ts`)가 존재하지 않는 content_blocks/image_urls 컬럼을
+  읽으려다 실패 → "아무 반응 없음"으로 보인 것으로 확인. Stephen이 "stage에 적용해줘" 승인.
+핵심제약: 마이그레이션 적용 전 project_id 재확인(ezyvffjvuwmtuhpxdjrw = stage), 순서대로 적용.
+TDD도메인: 없음 — GSD(DB 마이그레이션 적용 + 발견된 보안취약점 긴급수정).
+
+### 원인 확인
+
+- 네트워크 로그: `POST .../new?/create` 200 → `/cms/subscriptions?selected=77` 리다이렉트 확인
+- DB 직접 조회: `subscription_plans.id=77` 실제 생성 확인(name="ㅇㅇㄴㄹ", category=used-item,
+  code_series.prefix=USDCOM — 품번 체계 채번도 정상)
+- `information_schema.columns` 조회: 적용 전 `content_blocks`/`image_urls` 컬럼 부재 확인(레거시
+  `image_url`만 존재) → 원인 확정
+
+### 마이그레이션 적용 (stage: ezyvffjvuwmtuhpxdjrw)
+
+1. `248_subscription_plan_content_blocks` — 적용 성공
+2. `249_subscription_plan_image_urls_rpc` — 적용 성공
+3. 적용 후 컬럼·RPC 시그니처 재조회로 확인: `content_blocks`/`image_urls` 둘 다 `jsonb DEFAULT
+   '[]'::jsonb` 정상 생성, `append_subscription_image_url(p_plan_id bigint, p_url text)` 정상 등록.
+   id=77 재조회 시 `content_blocks: []`, `image_urls: []` 정상 반환 확인.
+
+### 🔴 CRITICAL — 적용 직후 get_advisors(security)로 발견한 신규 RPC 취약점, 즉시 수정
+
+`append_subscription_image_url`이 `GRANT EXECUTE ... TO service_role`만 추가하고 Postgres가
+신규 함수 생성 시 기본으로 부여하는 `PUBLIC`(anon·authenticated 포함) EXECUTE 권한을 REVOKE하지
+않아, CMS 인증 없이 `/rest/v1/rpc/append_subscription_image_url`을 누구나 직접 호출해 임의
+구독 플랜의 image_urls에 URL을 주입할 수 있는 상태였음(SECURITY DEFINER라 상승권한으로 실행).
+search_path 미고정(스키마 인젝션 위험)도 함께 지적됨.
+
+수정: 신규 마이그레이션 `250_subscription_image_url_rpc_security_hardening` 즉시 작성·적용 —
+  `SET search_path = public` + `REVOKE EXECUTE ... FROM PUBLIC, anon, authenticated`.
+  적용 후 `information_schema.routine_privileges` 재확인 — `postgres`(owner)·`service_role`만
+  EXECUTE 보유, anon/authenticated/PUBLIC 전부 제거 확인.
+
+### ⚠️ 범위 외 발견 — Stephen 확인 필요 (미수정)
+
+동일 취약점 패턴이 **기존 `append_product_image_url`(products 모듈, 오늘 작업 범위 밖)에도
+동일하게 존재함을 확인**(anon/authenticated/PUBLIC 전부 EXECUTE 가능, search_path 미고정).
+이 함수는 `/api/cms/upload`가 사용 중이며 products.image_urls를 임의 조작 가능한 동일한 위험 —
+다만 오늘 세션의 승인 범위(구독 모듈)를 벗어난 별도 모듈이라 **손대지 않고 보고만 함**.
+후속 조치 필요 여부 Stephen 확인 후 별도 세션에서 진행 권장.
+
+### 수정 파일
+
+```
+supabase/migrations/20260814000250_250_subscription_image_url_rpc_security_hardening.sql (신규)
+```
+
+**GATE E: ✅ 통과 — 등록 플로우 정상 확인, 신규 발견 취약점 stage에서 즉시 차단 완료.
+production 미적용 상태(계획대로 stage 검증 우선) — production 적용은 Stephen 승인 후 진행.**
+
+## DONE — 마이그레이션 248/249/250 production 적용 (2026-08-14, 후속) — ✅ GATE E 통과
+
+[CONTEXT BRIDGE]
+plan_source: Stephen "production 적용해줘" 승인.
+핵심제약: apply_migration 실행 전 project_id 재확인(vnbpmvxruyciuuaermyh = production), stage
+  검증 완료 후 순서 준수(248→249→250).
+TDD도메인: 없음 — GSD.
+
+### 적용 내역 (project_id: vnbpmvxruyciuuaermyh)
+
+1. `248_subscription_plan_content_blocks` — 적용 성공
+2. `249_subscription_plan_image_urls_rpc` — 적용 성공
+3. `250_subscription_image_url_rpc_security_hardening` — 적용 성공(취약점 노출 최소화를 위해
+   249 직후 곧바로 적용)
+
+### 검증
+- `information_schema.columns` — `content_blocks`/`image_urls` 둘 다 `jsonb DEFAULT '[]'::jsonb`
+  정상 생성 확인
+- `information_schema.routine_privileges` — `append_subscription_image_url`이 `postgres`·
+  `service_role`만 EXECUTE 보유, `anon`/`authenticated`/`PUBLIC` 없음 확인(stage와 동일 결과)
+
+**GATE E: ✅ 통과 — stage·production 양쪽 전부 적용·검증 완료. /cms/subscriptions 상품 모듈
+정합화 작업 전체(NOW-1~5 + 후속 정정 + 마이그레이션 적용 + 보안 하드닝) 종료.**
+
+참고: `append_product_image_url`(products 모듈)의 동일 취약점은 여전히 미조치 상태 — 별도
+백그라운드 작업(task_56b999c2)으로 분리돼 Stephen 확인 대기 중.

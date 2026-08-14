@@ -53,6 +53,25 @@
 
 ---
 
+## 🔴 CMS 카드 라운드값(대/중/소) 정책 ★★★ (2026-08-15 확정)
+
+> **"cms 표준 디자인 시스템 지침 정책 중 라운드값 대 or 중 or 소 적용" 언급 시 → 재도출 없이 아래 표를 즉시 적용.**
+> 대상: CMS 카드·패널·컨테이너류(`ProductDetailPanel`·`RentalDetailPanel`·`_FormatTab.svelte` 등 CMS 카드 149+곳과 동일 계열). USER 화면에는 적용하지 않음(우측 열은 CMS 전용).
+
+| 등급 | 값 | 적용 CSS |
+|---|---|---|
+| **대(large)** | 30px | `var(--cms-radius-lg)` |
+| **중(medium)** | 20px | `var(--radius-lg)` ⚠️ 아래 참고 |
+| **소(small)** | 10px | `var(--cms-radius-sm)` |
+
+> ⚠️ **"중" 값 20px은 기존 `--cms-radius-md`(15px)와 다른 값이다** — 이 정책이 신규 확정된 기준이며
+> `--cms-radius-md`를 "중"으로 임의 매핑하지 말 것. CMS 네임스페이스에 20px 전용 토큰이 없어
+> 제네릭 `--radius-lg`(20px)를 그대로 사용한다. `app.css`의 `--cms-radius-md` 실제 값(15px)은
+> 기존 사용처(149+곳) 보호를 위해 이 정책만으로 변경하지 않는다 — 값 자체를 바꿔야 한다면
+> 별도로 Stephen에게 먼저 확인 후 진행(요청범위 외 수정 절대 금지 원칙).
+
+---
+
 ## 레이아웃 핵심
 
 | 항목 | USER 화면 | CMS 화면 |

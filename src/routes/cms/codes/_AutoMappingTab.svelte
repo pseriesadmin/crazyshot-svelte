@@ -1133,11 +1133,13 @@
 }
 .btn-save-group:hover { background: var(--cs-purple-hover); }
 
-/* 그룹 카드 목록 (상품 card-list 동일) */
+/* 그룹 카드 목록 — cms 표준 디자인 시스템 지침 정책 행 간격(gap) '중(12px)' 적용
+   (cms-uiux.md §5 간격 시스템: 8px 소 / 12px 중 / 16px 대 — 카드형 목록은 _FormatTab.svelte
+   .fmt-list와 동일하게 중(12px) 사용) */
 .group-list {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 12px;
   padding-right: 4px;
 }
 
