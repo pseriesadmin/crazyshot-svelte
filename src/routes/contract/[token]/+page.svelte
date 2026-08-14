@@ -414,10 +414,10 @@
   }
   .logo-orange { color: var(--cs-orange, #FF4500); }
 
-  /* 메인 */
+  /* 메인 — A4 폭 기준 */
   .contract-main {
     flex: 1;
-    max-width: 680px;
+    max-width: 210mm;
     margin: 0 auto;
     width: 100%;
     padding: 24px 20px 48px;
@@ -467,6 +467,7 @@
     display: flex;
     flex-direction: column;
     gap: 12px;
+    position: relative; /* overlay 이미지 absolute 배치 기준점 */
   }
   .doc-title {
     font-size: 16px;
@@ -483,6 +484,10 @@
     font-size: 14px;
     line-height: 1.7;
     color: var(--cs-dark, #100B32);
+  }
+  /* overlay 이미지(position:absolute)가 이 블록을 기준으로 배치됨 */
+  .doc-block-tiptap {
+    position: relative;
   }
   .doc-block :global(table.cs-contract-table) {
     width: 100%;
@@ -758,5 +763,24 @@
     display: block;
     pointer-events: none;
     user-select: none;
+  }
+
+  /* 인쇄 — A4 기준 출력 */
+  @page {
+    size: A4;
+    margin: 20mm;
+  }
+  @media print {
+    :global(body) { background: white !important; }
+    .contract-header { display: none !important; }
+    .contract-main { max-width: none; padding: 0; }
+    .summary-card { display: none !important; }
+    .sign-section { display: none !important; }
+    .doc-section {
+      border-radius: 0;
+      box-shadow: none;
+      padding: 0;
+      break-inside: avoid;
+    }
   }
 </style>

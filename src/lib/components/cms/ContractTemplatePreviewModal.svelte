@@ -562,14 +562,16 @@
     color: var(--cs-text-light);
   }
 
-  /* 종이 문서 카드 */
+  /* 종이 문서 카드 — A4 폭 기준 */
   .doc-page {
     width: 100%;
-    max-width: 620px;
+    max-width: 210mm;
     margin: 0 auto;
     background: var(--cs-white);
     box-shadow: 0 1px 2px rgba(16,11,50,0.06), 0 10px 28px rgba(16,11,50,0.10);
-    padding: 44px 52px 60px;
+    padding: 20mm;
+    box-sizing: border-box;
+    position: relative; /* overlay 이미지 absolute 배치 기준점 */
   }
   .preview-title {
     padding: 0 0 18px;
@@ -590,6 +592,10 @@
     font: var(--text-pc-body-14);
     color: var(--cs-text);
     line-height: 1.9;
+  }
+  /* overlay 이미지(position:absolute)가 이 블록을 기준으로 배치됨 — contract/[token]/+page.svelte .doc-block-tiptap과 동일 패턴 */
+  .preview-block-tiptap {
+    position: relative;
   }
   .preview-block :global(table.cs-contract-table) {
     width: 100%;

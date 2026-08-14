@@ -12667,8 +12667,9 @@ TDD도메인: 없음 — GSD (에디터 UX 기능 추가, 기존 확장 구조 �
 
 구현 내용:
   1. `tiptapExtensions.ts` — `CustomImage = Image.extend({ addAttributes() })`로 `width`/
-     `height`/`align`(left/center/right, 기본 center) 속성 추가. `renderHTML`이 인라인
-     `style`(width/height/float·margin)로 출력하므로 `generateHTML()` 공유 렌더 경로(고객
+     `align`(left/center/right, 기본 center) 속성 추가(height는 별도 attribute 없이 width
+     렌더링 시 style에 height:auto로 자동 포함되어 원본 비율 유지). `renderHTML`이 인라인
+     `style`(width/height:auto/float·margin)로 출력하므로 `generateHTML()` 공유 렌더 경로(고객
      화면·미리보기)에 별도 수정 없이 반영됨. `TIPTAP_CONTRACT_EXTENSIONS`의 `Image` →
      `CustomImage` 교체.
   2. `ContractDocumentEditor.svelte` — `ImageWithNodeView = CustomImage.extend({
@@ -12743,6 +12744,61 @@ TDD도메인: 없음 — GSD (기존 패턴 재사용, UI 확장).
     JSON과 하위호환)
 
 GATE E: 완료 확인 — 커밋은 Stephen 직접 실행.
+
+## DONE — QA 재검수 결함 수정: 미리보기 모달 overlay 기준점 + 드래그 상한 클램프 (2026-08-14) ✅ 완료
+
+[CONTEXT BRIDGE]
+plan_source: QA 재검수 발견 2건 — 원인·위치 정확히 특정 후 즉시 수정
+핵심제약: ContractCanvasEditor.svelte·CmsContentEditor.svelte·contract-document.ts 수정 금지
+TDD도메인: 없음 — GSD (CSS 1줄 추가 + 클램프 로직 보정)
+
+수정 파일:
+  - src/lib/components/cms/ContractTemplatePreviewModal.svelte (MODIFY)
+  - src/lib/components/cms/contract-editor/ContractDocumentEditor.svelte (MODIFY)
+  - .claude/harness/TASK.md (문서 표기 정정)
+  - .claude/harness/GSD_LOG.md (문서 표기 정정)
+
+수정 내용:
+  1. [결함 1 — 미리보기 모달 overlay 기준점 불일치]
+     ContractTemplatePreviewModal.svelte의 `.preview-block-tiptap`에 `position: relative`
+     누락 → overlay 이미지(position:absolute) 기준점이 `.doc-page`(제목 영역 포함)로
+     올라가 에디터/고객화면 대비 약 42px 위로 밀려 보임.
+     수정: `.preview-block-tiptap { position: relative; }` 추가.
+     근거: contract/[token]/+page.svelte의 `.doc-block-tiptap { position: relative }` 동일 패턴.
+
+  2. [결함 2 — 겹치기 드래그 X축 상한 클램프 누락]
+     ContractDocumentEditor.svelte의 pointermove 핸들러가 하한(0)만 있고 상한이 없어
+     이미지를 A4 콘텐츠 영역 밖으로 드래그 가능했음.
+     수정: `const imgW = outer.getBoundingClientRect().width`를 구해
+     `newX = Math.max(0, Math.min(rawX, Math.max(0, pmRect.width - imgW)))` 적용.
+     Y축: ProseMirror는 세로로 무한 확장되는 문서라 상한 의미 없음 — 하한(0)만 유지.
+     근거: ContractCanvasEditor.svelte의 onFieldPointerMove 클램프 패턴.
+
+  3. [문서 표기 정정]
+     "width/height/align 속성 추가" → "width/align 속성 추가(height는 별도 attribute 없이
+     width 렌더링 시 style에 height:auto로 자동 포함)"으로 TASK.md·GSD_LOG.md 동시 정정.
+
+검증 결과:
+  - npx svelte-check: 신규 에러 0건 (기존 pre-existing 1건은 products/search/+page.svelte)
+  - 단위 테스트 4파일 76개 전부 통과(contractContentMode·contractCanvasPublishFix·docxImport·
+    docxTableFormatting). contractSign·clearIssuedContract는 Stage DB exclusion constraint
+    의존 통합 테스트라 이번 변경과 무관한 pre-existing 실패.
+
+### QA(@sp3-qa-agent) 최종 재검수 — 통과 (2026-08-14)
+
+3화면(에디터 `.ProseMirror`/미리보기 `.preview-block-tiptap`/고객화면 `.doc-block-tiptap`)의
+DOM 계층을 전수 대조해 겹치기(overlay) 이미지의 최근접 positioned 조상이 전부 "본문 시작점"
+으로 일치함을 구조적으로 확인(수정 전에는 미리보기만 `.doc-page`가 기준점이라 제목 영역만큼
+어긋났었음). 드래그 클램프는 `outer`가 이미지 노드별 독립 클로저 변수라 다른 이미지 폭을
+잘못 참조할 가능성 없음을 확인, `pmRect.width - imgW` 상한 공식이 정확함을 검증. Y축 미클램프
+판단도 `.cde-editor-area`가 `overflow-y:auto`이고 중간에 `overflow:hidden`이 없어 시각적
+유실이 없다는 근거로 합리적이라고 판정. 정렬·리사이즈·겹치기토글·표서식·변수칩 회귀 없음
+(`position:relative` 단독 추가는 자신의 레이아웃에 영향 없음). 테스트 7파일 113/113 전부
+통과(오케스트레이터 보고와 일치). svelte-check 검수 대상 3개 파일 신규 에러 0건. TASK.md·
+GSD_LOG.md 문서 정정 반영 확인.
+
+**GATE E: ✅ 최종 통과 — 겹치기(overlay)+A4 폭 통일 기능 전체 커밋 가능. 커밋은 Stephen
+직접 실행.**
 
 ---
 
@@ -13072,3 +13128,159 @@ mock이 실제 호출 순서(`code_mapping_groups`→`products`→`code_mapping_
 문구 완전 일치, 표준 `csToast` 재사용. console.log/any/TODO 없음, SQL Injection 위험 없음.
 
 **GATE E: ✅ 통과 — 블로킹 0건. 커밋은 Stephen 직접 실행.**
+
+## DONE — /cms/subscriptions 상품 모듈 정합화: 정렬버그 수정 + 카드/상세패널 표준화 + 가격정책·상품설명·이미지 탭 신설 (2026-08-14) — ✅ 구현 완료 / GATE E 대기(마이그레이션 stage 검증 후)
+
+[CONTEXT BRIDGE]
+plan_source: Stephen 아젠다 — "구독(/cms/subscriptions)메뉴의 설정/조합코드 설정 목록값을 기준해
+  다음 재검수: ①분류→품번코드 목록 노출 정합성(대중소 정렬·누락·순번표기), ②상품카드목록이
+  /cms/products와 동일 UI 구조 반영 여부, ③상세패널(ProductDetailPanel 대응)의 헤더·탭
+  (기본정보·가격정책·상품설명·이미지) 구현 여부, ④구현 누락 시 즉시 구현, ⑤cms 표준 디자인
+  시스템 준수, ⑥개발 필요 시 하네스 시스템 반영 개발단계 구성." Plan Mode에서 3개 Explore
+  조사(구독 모듈 구조/상품 참조 UI/코드체계 정렬+마이그레이션 229·241) 완료 후 사용자 승인.
+핵심제약:
+  - 상품설명 탭=콘텐츠블록 에디터 전환, 이미지 탭=다중 갤러리 전환 — 둘 다 AskUserQuestion으로
+    Stephen이 명시 선택(단순 대안 아님). DB 마이그레이션 수반 CRITICAL — stage(ezyvffjvuwmtuhpxdjrw)
+    먼저 검증 후 production(vnbpmvxruyciuuaermyh) 적용 순서 엄수.
+  - `image_url` 레거시 컬럼 삭제 금지(안전 우선, 레거시 폴백 유지) — `image_urls` 배열 신규 추가만.
+  - `/api/cms/upload`(products 전용 하드코딩) 직접 수정 금지 — 구독 이미지 갤러리는 전용
+    신규 엔드포인트+RPC로 병행 구현(요청범위 외 공유 파일 변경 금지 원칙).
+  - CmsContentEditor의 콘텐츠블록 이미지 업로드는 기존 `/api/cms/upload`를 슬래시 포함
+    prefix로 그대로 재사용 가능 확인됨(신규 API 불필요) — 이 부분은 손대지 않음.
+TDD도메인: 없음 — GSD(CMS 카탈로그 CRUD, 결제·예약 로직 미포함). harness-executor가 AGENTS.md
+  키워드 대조로 착수 시 재확인.
+
+### 상세 실행계획
+
+전체 원본 플랜: `/Users/stevenmac/.claude/plans/cms-subscriptions-enumerated-wave.md`
+
+**✅ NOW-1 · 🟢 ROUTINE** — `src/routes/cms/subscriptions/new/+page.server.ts`의
+`code_mapping_groups` 조회에 `.order('name')` 2차 정렬 추가(`/cms/products/new`와 동일 패턴
+`.order('sort_order').order('name')`) — 현재 `sort_order`만 있어 동률 시 순서 비결정적.
+
+**✅ NOW-2 · 🟡 BOUNDARY** — `src/routes/cms/subscriptions/+page.svelte`의 `.plan-card`(단일
+컬럼 리스트)를 `/cms/products/+page.svelte`의 `.product-card` 그리드 패턴으로 재구성: 썸네일
+(60×60, `--cms-radius-sm`, fallback `#E8E4F8`, `plan.image_urls?.[0]` 기준), `.cat-badge`,
+`.price-badge`(`--cs-purple-op10`) 표준 토큰 적용. rs-chip(대여상태)은 구독 도메인에 없는
+개념이라 이식 안 함.
+
+**✅ NOW-3 · 🔴 CRITICAL(DB)** — 상품설명 탭(콘텐츠블록):
+1. 신규 마이그레이션: `subscription_plans.content_blocks JSONB NOT NULL DEFAULT '[]'::jsonb`
+   — stage 검증 → production.
+2. `src/lib/types/subscription.ts` `SubscriptionPlanRow`에 `content_blocks: ContentBlock[]` 추가.
+3. `SubscriptionDetailPanel.svelte`에 '상품설명' 탭 신설 — `ProductDetailPanel.svelte` content
+   탭(1910–1928행)과 동일하게 `<CmsContentEditor bind:blocks bind:keywords />` 배치(검색색인
+   연동 없으므로 keywords는 UI 비노출, `invalidateProductSearchCache()` 호출 안 함).
+4. `new/+page.svelte` 기본정보의 `description` textarea 제거 → 신규 탭으로 이동.
+5. `subscriptions/+page.server.ts` `updateSection`에 `sectionType==='content'` 분기 추가
+   (`products/+page.server.ts` 769–785행 패턴).
+
+**✅ NOW-4 · 🔴 CRITICAL(DB)** — 이미지 탭(다중 갤러리):
+1. 신규 마이그레이션: `subscription_plans.image_urls JSONB NOT NULL DEFAULT '[]'::jsonb` +
+   기존 `image_url` 백필(`jsonb_build_array`) + 신규 RPC `append_subscription_image_url
+   (p_plan_id uuid, p_url text)`(`append_product_image_url` 구조 미러링) — stage→production.
+2. 신규 `src/routes/api/cms/subscriptions/upload/+server.ts` — `/api/cms/upload`(51–99행)
+   상품이미지 분기 미러링, `plan_id`+`append_subscription_image_url` RPC로 교체, `product-images`
+   버킷 재사용(prefix `subscriptions/{planId}/...`), DELETE 핸들러도 미러링.
+3. `SubscriptionDetailPanel.svelte`에 '이미지' 탭 신설 — `ProductDetailPanel.svelte` images 탭
+   (1930–2037행) 패턴 이식(드롭존, `resizeProductImage` 재사용, `.img-card-grid`, 자동저장,
+   라이트박스), 업로드 호출부만 신규 엔드포인트로 교체.
+4. `subscriptions/+page.server.ts` `updateSection`에 `sectionType==='images'` 분기 추가
+   (`products/+page.server.ts` 713–737행 패턴, 배열 전체 교체).
+5. `SubscriptionDetailPanel.svelte` 헤더에 썸네일(72×72, `plan.image_urls?.[0]`) 추가 —
+   `ProductDetailPanel.svelte` `.ph-thumb` 패턴(QR은 구독 무관이라 이식 안 함).
+6. NOW-2 카드 썸네일도 이 컬럼으로 최종 연결.
+
+**✅ NOW-5 · 🟡 BOUNDARY** — 가격정책 탭 분리: `monthly_price`를 기본정보에서 분리해 '가격정책'
+탭 신설(현재 필드 1개뿐 — 단순 이동, 신규 가격유형 추가는 스코프 아님). 최종 탭 순서 확정:
+기본정보 → 가격정책 → 상품설명 → 이미지 → 상품스펙 → 혜택관리 → 무료렌탈대상장비 → 구독자현황.
+`TabKey`/`ALL_TABS`(41–51행) 갱신.
+
+### 영향 파일
+
+```
+src/routes/cms/subscriptions/new/+page.server.ts                    (NOW-1, NOW-3, NOW-4)
+src/routes/cms/subscriptions/new/+page.svelte                       (NOW-3, NOW-5)
+src/routes/cms/subscriptions/+page.svelte                           (NOW-2)
+src/routes/cms/subscriptions/+page.server.ts                        (NOW-3, NOW-4)
+src/lib/components/cms/subscription/SubscriptionDetailPanel.svelte  (NOW-3, NOW-4, NOW-5)
+src/lib/types/subscription.ts                                       (NOW-3, NOW-4)
+src/routes/api/cms/subscriptions/upload/+server.ts (신규)             (NOW-4)
+supabase/migrations/(신규 2건 — content_blocks, image_urls+RPC)      (NOW-3, NOW-4)
+```
+
+### 검증 방법
+- `npm run check` (GATE C 자동)
+- 각 마이그레이션 stage 적용 후 `/cms/subscriptions` 수동 확인: 카드 그리드 렌더링, 상세패널
+  8개 탭 전환, 상품설명 콘텐츠블록 저장/재조회, 이미지 업로드→갤러리→카드 썸네일 반영,
+  신규등록 분류→품번코드 정렬 고정.
+- production 적용은 Stephen 승인 후 별도 진행.
+
+---
+
+## DONE — 부모상품 등록 시 자식(재고) 1개 자동생성 정책 확정·문서화 (2026-08-14) — ✅ 완료
+
+배경: Stephen이 CMS에서 부모상품 등록 직후 자식(재고) 1개가 자동 생성되는 걸 발견하고, 이게
+"제거하기로 했었는데 아직 반영 안 된 것"인지 확인 요청. 코드(`new/+page.server.ts`의
+`auto_create_inventory_for_product` RPC 호출부)와 하네스 이력(TASK.md 6559-6571행, 2026-08-05
+TDD-PROD-1/1b)을 대조한 결과, 이 동작은 애초부터 제거 대상이었던 적이 없고 products.md §2-3에
+이미 설계 의도로 명시돼 있던 정상 기능임을 확인해 보고. Stephen이 이를 "기본 재고" 개념의
+정상 기능 정책으로 명시 확정.
+
+수정: `.claude/rules/products.md` §2-3에 "✅ Stephen 확정(2026-08-14)" 블록 추가 — 향후 세션이
+이 자동생성 동작을 버그로 오인해 임의로 제거·비활성화하지 않도록 명문화. 버전 v2.5→v2.6,
+하단 변경이력 갱신.
+
+파일: `.claude/rules/products.md` (MODIFY — §2-3 + 하단 버전 이력)
+GATE C: ROUTINE(문서 반영만, 코드·DB 변경 없음) — 자동 완료.
+
+
+## DONE — /cms/subscriptions 신규등록 화면 후속 버그 2건 수정 (2026-08-14, 후속) — QA 대기
+
+[CONTEXT BRIDGE]
+plan_source: 위 "/cms/subscriptions 상품 모듈 정합화" NOW 완료 후, Stephen이 실화면(launch-selected-element
+  스크린샷)으로 `/cms/subscriptions/new`의 분류(카테고리) 입력 UI를 직접 확인하며 2건 추가 지적 →
+  즉시 원인 파악·수정(범위: 신규등록 화면 1개 파일, DB·마이그레이션 변경 없음).
+핵심제약: 요청 파일(`subscriptions/new/+page.svelte`) 외 수정 없음. `/cms/products/new`의 이미
+검증된 동일 패턴을 그대로 이식(임의 신규 설계 금지).
+TDD도메인: 없음 — GSD(UI 상태 동기화 버그 수정).
+
+### 버그 1 — 입력창 가로폭이 `products/new`보다 좁게 렌더링
+
+`subscriptions/new/+page.svelte`의 `.f-input` CSS에 `width: 100%; box-sizing: border-box;`가
+빠져 있어(반면 `products/new`의 `.f-input`엔 있음), 분류·상품명·서브타이틀·월가격·정렬순서 등
+폼 전체 입력창이 브라우저 기본 폭(~20자)으로 좁게 표시되고 있었다.
+
+수정: `.f-input` 규칙에 `width: 100%; box-sizing: border-box;` 추가(487–491행).
+
+### 버그 2 — 분류 입력값을 지워도 "코드 조합" 영역이 초기화되지 않음
+
+`SuggestPicker`에 `bind:selectedId`와 `oninput` 핸들러가 아예 연결돼 있지 않아, 입력창 텍스트를
+지우면 SuggestPicker 컴포넌트 내부 상태(자체 selectedId·드롭다운 목록)는 정상 초기화되지만
+그 상태가 부모 페이지로 전달되지 않아 `selectedGroupId`/`category`/`selectedComboRowId`가
+그대로 남고 "코드 조합" 영역이 계속 표시됨(hidden input도 stale 값 유지 — 제출 시 화면에 안
+보이는 이전 분류가 그대로 딸려갈 위험). `products/new`는 이미 동일 클래스 버그(재검색 중 선택
+유실)를 `lastConfirmedGroupId` 대조 패턴으로 해결해뒀던 상태 — 그 패턴을 그대로 이식.
+
+수정(89–127행 스크립트, SuggestPicker 마크업):
+- `lastConfirmedGroupId` state 추가
+- `onGroupChange()` 헬퍼 신설(`selectedComboRowId`/`category` 리셋)
+- `onGroupPickerSelect(opt, previousId)` — `lastConfirmedGroupId` 대조 후 진짜 그룹 변경일 때만
+  `onGroupChange()` 호출(재검색 중 오탐 리셋 방지)
+- `onGroupPickerInput(val)` 신설 — 입력창이 완전히 비면 `selectedGroupId`/`lastConfirmedGroupId`
+  초기화 + `onGroupChange()` 호출
+- `<SuggestPicker>`에 `bind:selectedId={selectedGroupId}` + `oninput={onGroupPickerInput}` 연결
+
+### 수정 파일
+
+```
+src/routes/cms/subscriptions/new/+page.svelte (MODIFY)
+```
+
+### 검증
+- `npx svelte-check` — 이 파일 신규 에러 0건(기존 무관 경고 2건만 유지: `state_referenced_locally`,
+  `aria-expanded` — 둘 다 이번 수정과 무관, `products/new`에도 동일 패턴 존재)
+- 컴포넌트 로직 직접 추적(`SuggestPicker.svelte` 전체 재검토) — 무한루프 재발 없음, 포커스/블러/
+  키보드 내비게이션 정상, CSS 변경은 페이지 scoped 스타일이라 컴포넌트·다른 6개 사용처에 영향 없음
+
+QA(@sp3-qa-agent) 검수: 대기 중

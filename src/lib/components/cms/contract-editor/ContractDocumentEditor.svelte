@@ -15,7 +15,7 @@
 
   import { csToast } from '$lib/utils/toast'
   import { validateUploadFile } from '$lib/utils/fileValidation'
-  import { TIPTAP_CONTRACT_EXTENSIONS } from './tiptapExtensions'
+  import { CustomImage, TIPTAP_CONTRACT_EXTENSIONS } from './tiptapExtensions'
   import type { TiptapDocBlock, ContractDocumentPayload, MergeFieldAttrs } from '$lib/types/contract-document'
 
   // --------------------------------------------------------------------------
@@ -57,6 +57,319 @@
   // --------------------------------------------------------------------------
 
   // --------------------------------------------------------------------------
+  // 이미지 NodeView — 에디터 전용 (generateHTML/tiptapRender.ts 경로에서는 미사용)
+  //
+  // 선택된 이미지 위에 플로팅 툴바를 표시:
+  //   • 프리셋 버튼 (소 100px / 중 200px / 대 400px)
+  //   • 너비 직접 입력 (px)
+  //   • 정렬 버튼 (← 가운데 →)
+  //
+  // CustomImage.extend()로 width·align 속성 정의는 그대로 상속하고
+  // addNodeView()만 추가. generateHTML() 측은 CustomImage 그대로 사용하므로
+  // 저장된 너비·정렬 스타일이 고객 서명 화면에서도 정확히 렌더링된다.
+  // --------------------------------------------------------------------------
+
+  const ImageWithNodeView = CustomImage.extend({
+    addNodeView() {
+      // `this.editor` : TipTap extension context 의 editor 인스턴스
+      const extEditor = this.editor
+
+      return ({ node: initNode, getPos }: {
+        node: { attrs: Record<string, unknown>; type: { name: string } }
+        getPos: (() => number | undefined) | boolean
+      }) => {
+        let currentAttrs: Record<string, unknown> = { ...initNode.attrs }
+
+        // ── 헬퍼: attr 변경을 ProseMirror tr로 적용 ──
+        function dispatchAttrs(patch: Record<string, unknown>): void {
+          if (typeof getPos !== 'function') return
+          const pos = getPos()
+          if (pos === undefined) return
+          const { state, dispatch } = extEditor.view
+          dispatch(state.tr.setNodeMarkup(pos, undefined, { ...currentAttrs, ...patch }))
+        }
+
+        // ── 외부 래퍼 (정렬/절대위치 담당) ──
+        const outer = document.createElement('div')
+
+        // ── img ──
+        const img = document.createElement('img')
+        img.draggable = false
+
+        // ── 드래그 상태 (ContractCanvasEditor.onFieldPointerDown 패턴 참고) ──
+        let isDragging = false
+        let dragOffsetX = 0
+        let dragOffsetY = 0
+
+        // ── 플로팅 툴바 (선택 시에만 display:flex) ──
+        const bar = document.createElement('div')
+        bar.style.cssText =
+          'display:none;position:absolute;bottom:calc(100% + 4px);left:50%;' +
+          'transform:translateX(-50%);background:#fff;border:1px solid #ECEBF4;' +
+          'border-radius:8px;box-shadow:0 4px 16px rgba(16,11,50,.12);' +
+          'padding:4px 8px;gap:4px;align-items:center;white-space:nowrap;z-index:100'
+
+        // ── 툴바 빌더 헬퍼 ──
+        function mkBtn(text: string, title: string): HTMLButtonElement {
+          const b = document.createElement('button')
+          b.type = 'button'
+          b.textContent = text
+          b.title = title
+          b.style.cssText =
+            'min-height:24px;min-width:24px;padding:2px 7px;background:transparent;' +
+            'border:1px solid transparent;border-radius:6px;font-size:11px;' +
+            'font-weight:600;color:#100B32;cursor:pointer;line-height:1.4;flex-shrink:0'
+          b.addEventListener('mouseenter', () => {
+            if (b.dataset['state'] !== 'active') b.style.background = '#ECEBF4'
+          })
+          b.addEventListener('mouseleave', () => {
+            if (b.dataset['state'] !== 'active') b.style.background = 'transparent'
+          })
+          return b
+        }
+
+        function mkSep(): HTMLSpanElement {
+          const s = document.createElement('span')
+          s.style.cssText = 'width:1px;height:16px;background:#ECEBF4;flex-shrink:0;align-self:center'
+          return s
+        }
+
+        // ── 프리셋 크기 버튼 ──
+        const presets = [
+          { label: '소', px: 100 },
+          { label: '중', px: 200 },
+          { label: '대', px: 400 },
+        ] as const
+
+        presets.forEach(({ label, px }) => {
+          const btn = mkBtn(`${label}(${px})`, `너비 ${px}px`)
+          btn.addEventListener('mousedown', (e) => {
+            e.preventDefault()
+            e.stopPropagation()
+            dispatchAttrs({ width: px })
+          })
+          bar.appendChild(btn)
+        })
+
+        bar.appendChild(mkSep())
+
+        // ── 너비 직접 입력 ──
+        const widthInput = document.createElement('input')
+        widthInput.type = 'number'
+        widthInput.min = '20'
+        widthInput.max = '1200'
+        widthInput.placeholder = 'px'
+        widthInput.style.cssText =
+          'width:56px;height:24px;padding:0 4px;border:1px solid #ECEBF4;' +
+          'border-radius:6px;font-size:11px;color:#100B32;outline:none;box-sizing:border-box;flex-shrink:0'
+
+        widthInput.addEventListener('keydown', (e) => {
+          e.stopPropagation()
+          if (e.key === 'Enter') {
+            const w = parseInt(widthInput.value, 10)
+            if (w > 0) dispatchAttrs({ width: w })
+          }
+        })
+        widthInput.addEventListener('blur', () => {
+          const w = parseInt(widthInput.value, 10)
+          if (w > 0) dispatchAttrs({ width: w })
+        })
+        bar.appendChild(widthInput)
+
+        bar.appendChild(mkSep())
+
+        // ── 정렬 버튼 ──
+        const alignDefs = [
+          { label: '←', value: 'left', title: '왼쪽 정렬' },
+          { label: '가운데', value: 'center', title: '가운데 정렬' },
+          { label: '→', value: 'right', title: '오른쪽 정렬' },
+        ] as const
+
+        const alignBtns: Array<{ btn: HTMLButtonElement; value: string }> = []
+        alignDefs.forEach(({ label, value, title }) => {
+          const btn = mkBtn(label, title)
+          btn.addEventListener('mousedown', (e) => {
+            e.preventDefault()
+            e.stopPropagation()
+            // 너비 입력란에 미확정 값이 있으면 함께 반영
+            const inputW = parseInt(widthInput.value, 10)
+            const patch: Record<string, unknown> = { align: value }
+            if (inputW > 0) patch['width'] = inputW
+            dispatchAttrs(patch)
+          })
+          bar.appendChild(btn)
+          alignBtns.push({ btn, value })
+        })
+
+        bar.appendChild(mkSep())
+
+        // ── 겹치기(overlay) 토글 버튼 ──
+        const overlayBtn = mkBtn('겹치기', '텍스트 위에 겹치기 — 드래그로 위치 조정')
+        overlayBtn.addEventListener('mousedown', (e) => {
+          e.preventDefault()
+          e.stopPropagation()
+          const isOverlay = !!(currentAttrs['overlay'] as boolean)
+          if (isOverlay) {
+            // 겹치기 해제 → 인라인 정렬 복귀
+            dispatchAttrs({ overlay: false })
+          } else {
+            // 겹치기 ON → 현재 위치에서 absolute
+            dispatchAttrs({ overlay: true, x: 0, y: 0 })
+          }
+        })
+        bar.appendChild(overlayBtn)
+
+        outer.appendChild(img)
+        outer.appendChild(bar)
+
+        // ── 겹치기 드래그 (ContractCanvasEditor.onFieldPointerDown 패턴) ──
+        outer.addEventListener('pointerdown', (e: PointerEvent) => {
+          if (!(currentAttrs['overlay'] as boolean)) return
+          if (bar.contains(e.target as Node)) return // 툴바 클릭은 드래그 무시
+          e.preventDefault()
+          e.stopPropagation()
+          outer.setPointerCapture(e.pointerId)
+          isDragging = true
+          const rect = outer.getBoundingClientRect()
+          dragOffsetX = e.clientX - rect.left
+          dragOffsetY = e.clientY - rect.top
+        }, { passive: false })
+
+        outer.addEventListener('pointermove', (e: PointerEvent) => {
+          if (!isDragging) return
+          e.preventDefault()
+          // .ProseMirror 가 position:relative 기준점 (CSS로 보장됨)
+          const pmEl = outer.closest('.ProseMirror') as HTMLElement | null
+          if (!pmEl) return
+          const pmRect = pmEl.getBoundingClientRect()
+          const imgW = outer.getBoundingClientRect().width
+          const newX = Math.max(0, Math.min(Math.round(e.clientX - pmRect.left - dragOffsetX), Math.max(0, pmRect.width - imgW)))
+          const newY = Math.max(0, Math.round(e.clientY - pmRect.top - dragOffsetY))
+          dispatchAttrs({ x: newX, y: newY })
+        }, { passive: false })
+
+        outer.addEventListener('pointerup', () => {
+          isDragging = false
+        })
+
+        outer.addEventListener('pointercancel', () => {
+          isDragging = false
+        })
+
+        // ── attrs → DOM 반영 ──
+        function applyAttrs(): void {
+          const w = currentAttrs['width'] as number | null | undefined
+          const align = (currentAttrs['align'] as string | undefined) || 'center'
+          const overlay = !!(currentAttrs['overlay'] as boolean)
+          const ox = (currentAttrs['x'] as number) || 0
+          const oy = (currentAttrs['y'] as number) || 0
+
+          img.src = (currentAttrs['src'] as string) || ''
+          img.alt = (currentAttrs['alt'] as string) || ''
+
+          // img 인라인 스타일
+          const imgStyles = ['display:block', 'border-radius:4px', 'height:auto', 'max-width:100%']
+          if (w) imgStyles.push(`width:${w}px`)
+          if (!overlay && align === 'center') imgStyles.push('margin:0 auto')
+          img.style.cssText = imgStyles.join(';')
+
+          // outer 배치: overlay 시 absolute, 아니면 align 기반
+          if (overlay) {
+            outer.style.cssText =
+              `position:absolute;left:${ox}px;top:${oy}px;z-index:10;cursor:move`
+          } else if (align === 'left') {
+            outer.style.cssText = 'position:relative;display:inline-block;float:left;margin:4px 8px 4px 0;clear:none'
+          } else if (align === 'right') {
+            outer.style.cssText = 'position:relative;display:inline-block;float:right;margin:4px 0 4px 8px;clear:none'
+          } else {
+            outer.style.cssText = 'position:relative;display:block;clear:both'
+          }
+
+          // 너비 입력 값 동기화
+          widthInput.value = w ? String(w) : ''
+
+          // 정렬 버튼 활성 상태 (overlay 시 비활성화)
+          alignBtns.forEach(({ btn, value }) => {
+            const active = !overlay && align === value
+            btn.dataset['state'] = active ? 'active' : ''
+            btn.style.opacity = overlay ? '0.4' : '1'
+            if (active) {
+              btn.style.background = 'rgba(59,47,138,0.1)'
+              btn.style.borderColor = '#3B2F8A'
+              btn.style.color = '#3B2F8A'
+            } else {
+              btn.style.background = 'transparent'
+              btn.style.borderColor = 'transparent'
+              btn.style.color = '#100B32'
+            }
+          })
+
+          // 겹치기 버튼 활성 상태
+          overlayBtn.dataset['state'] = overlay ? 'active' : ''
+          if (overlay) {
+            overlayBtn.style.background = 'rgba(59,47,138,0.1)'
+            overlayBtn.style.borderColor = '#3B2F8A'
+            overlayBtn.style.color = '#3B2F8A'
+          } else {
+            overlayBtn.style.background = 'transparent'
+            overlayBtn.style.borderColor = 'transparent'
+            overlayBtn.style.color = '#100B32'
+          }
+        }
+
+        applyAttrs()
+
+        return {
+          dom: outer,
+          update(updatedNode: { type: { name: string }; attrs: Record<string, unknown> }) {
+            if (updatedNode.type.name !== 'image') return false
+            currentAttrs = { ...updatedNode.attrs }
+            applyAttrs()
+            return true
+          },
+          selectNode() {
+            img.style.outline = '2px solid #3B2F8A'
+            img.style.outlineOffset = '2px'
+            bar.style.display = 'flex'
+          },
+          deselectNode() {
+            img.style.outline = ''
+            img.style.outlineOffset = ''
+            bar.style.display = 'none'
+          },
+          /**
+           * 툴바 내 이벤트는 ProseMirror 로 전파하지 않음 (input 타이핑 보호).
+           * overlay 모드에서 포인터 이벤트는 드래그 핸들러가 처리 — PM에 전파 차단.
+           */
+          stopEvent(event: Event) {
+            if (bar.contains(event.target as Node)) return true
+            if (
+              currentAttrs['overlay'] &&
+              (event.type === 'pointerdown' ||
+               event.type === 'pointermove' ||
+               event.type === 'pointerup' ||
+               event.type === 'pointercancel')
+            ) return true
+            return false
+          },
+          destroy() { /* 정리 없음 */ },
+        }
+      }
+    },
+  })
+
+  /**
+   * 에디터 전용 확장 목록:
+   *   TIPTAP_CONTRACT_EXTENSIONS 에서 CustomImage 를 제거하고
+   *   NodeView 가 추가된 ImageWithNodeView 로 교체.
+   *   generateHTML()/tiptapRender.ts 는 TIPTAP_CONTRACT_EXTENSIONS 그대로 사용.
+   */
+  const editorExtensions = [
+    ...TIPTAP_CONTRACT_EXTENSIONS.filter((e) => e !== CustomImage),
+    ImageWithNodeView,
+  ]
+
+  // --------------------------------------------------------------------------
   // TipTap 에디터 생성 (svelte-tiptap createEditor → Readable<Editor>)
   //
   // untrack()으로 props를 읽음: 부모가 {#key}로 remount를 보장하므로
@@ -64,7 +377,7 @@
   // readonly 변경 대응은 아래 $effect에서 setEditable()로 별도 처리.
   // --------------------------------------------------------------------------
   const editorStore = createEditor({
-    extensions: TIPTAP_CONTRACT_EXTENSIONS,
+    extensions: editorExtensions,
     content: untrack(() =>
       initialContent?.doc ??
       initialHtml ??
@@ -124,7 +437,11 @@
   }
 
   function insertSigAsset(asset: SigAsset) {
-    $editorStore?.chain().focus().setImage({ src: asset.image_url }).run()
+    // 기본 너비 200px (서명/직인은 원본이 크기 때문에 합리적 기본값)
+    $editorStore?.chain().focus().insertContent({
+      type: 'image',
+      attrs: { src: asset.image_url, width: 200, align: 'center' },
+    }).run()
     showSigPicker = false
   }
 
@@ -204,7 +521,11 @@
     reader.onload = (e) => {
       const src = e.target?.result as string
       if (src) {
-        $editorStore?.chain().focus().setImage({ src }).run()
+        // 기본 너비 200px로 삽입 (원본이 매우 클 수 있어 기본값 지정)
+        $editorStore?.chain().focus().insertContent({
+          type: 'image',
+          attrs: { src, width: 200, align: 'center' },
+        }).run()
       }
     }
     reader.readAsDataURL(file)
@@ -650,25 +971,59 @@
     color: var(--cs-purple, #3B2F8A);
   }
 
-  /* 에디터 영역 */
+  /* 에디터 영역 — A4 용지 배경 */
   .cde-editor-area {
     flex: 1;
     min-height: 360px;
-    padding: 16px;
+    padding: 24px 16px;
     overflow-y: auto;
+    background: var(--cs-surface-gray, #f6f6f6);
   }
-  .cde-editor-area.readonly { background: var(--cs-surface-gray, #f6f6f6); }
+  /* readonly 시 배경 동일 유지 (이미 gray) */
+  .cde-editor-area.readonly { background: #e8e8ee; }
 
-  /* TipTap 에디터 내부 스타일 */
+  /* TipTap 에디터 내부 스타일 — A4 폭 용지 카드 */
   .cde-editor-area :global(.cde-editor-content) {
-    outline: none;
-    min-height: 320px;
+    width: 210mm;
+    max-width: 100%;
+    margin: 0 auto;
+    background: var(--cs-white, #fff);
+    box-shadow: 0 1px 2px rgba(16,11,50,.06), 0 4px 20px rgba(16,11,50,.10);
+    box-sizing: border-box;
   }
   .cde-editor-area :global(.ProseMirror) {
+    position: relative; /* overlay 이미지 absolute 배치 기준점 */
     outline: none;
+    min-height: 320px;
+    padding: 20mm;
     font: var(--text-pc-body-14, 14px);
     color: var(--cs-text, #100B32);
     line-height: 1.8;
+  }
+
+  /* 인쇄 스타일 */
+  @page {
+    size: A4;
+    margin: 20mm;
+  }
+  @media print {
+    .cde-wrap { border: none; box-shadow: none; }
+    .cde-toolbar { display: none !important; }
+    .cde-footer { display: none !important; }
+    .cde-editor-area {
+      padding: 0;
+      background: white;
+      min-height: 0;
+    }
+    .cde-editor-area :global(.cde-editor-content) {
+      box-shadow: none;
+      width: 100%;
+      max-width: none;
+    }
+    .cde-editor-area :global(.ProseMirror) {
+      padding: 0;
+      min-height: 0;
+    }
   }
   .cde-editor-area :global(.ProseMirror p) {
     margin: 0 0 0.5em;
@@ -702,11 +1057,19 @@
     background: rgba(59,47,138,0.08);
   }
 
-  /* 이미지 */
+  /* 이미지 — NodeView 인라인 스타일이 이 스타일보다 우선하므로 폴백 역할만 수행 */
   .cde-editor-area :global(.ProseMirror img) {
     max-width: 100%;
     height: auto;
     border-radius: 4px;
+  }
+
+  /*
+   * NodeView 이미지 선택 시 outline 은 img 인라인 스타일로 처리.
+   * ProseMirror 기본 selectedNode 데코레이션과 중복 방지.
+   */
+  .cde-editor-area :global(.ProseMirror .ProseMirror-selectednode) {
+    outline: none !important;
   }
 
   /* 변수 칩 (MergeFieldNode) */
