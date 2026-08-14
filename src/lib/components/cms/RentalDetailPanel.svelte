@@ -149,6 +149,84 @@
       })
   })
 
+  interface ReservationOption {
+    id:           number
+    option_name:  string
+    qty:          number
+    unit_price:   number
+    product_code: string | null
+  }
+
+  interface OrderSibling {
+    reservationId:   number
+    reservationCode: string | null
+    status:          string
+    productName:     string
+  }
+
+  let orderSiblingsFetchedForId = $state<number | null>(null)
+  let orderSiblings              = $state<OrderSibling[]>([])
+  let orderSiblingsLoading       = $state(false)
+  let orderSiblingsError         = $state<string | null>(null)
+
+  // 같은 주문(orders/order_items, Migration 251)에 묶인 다른 상품 — 결제정보 탭 "주문 정보"
+  // 섹션 하단에 노출(결제정보/옵션상품과 동일한 lazy-fetch 패턴). 단일 상품 예약이면 빈 배열.
+  $effect(() => {
+    if (activeTab !== 'payment') return
+    if (orderSiblingsLoading) return
+    if (orderSiblingsFetchedForId === row.reservation_id) return
+
+    const id = row.reservation_id
+    orderSiblingsFetchedForId = id
+    orderSiblings        = []
+    orderSiblingsError    = null
+    orderSiblingsLoading  = true
+
+    fetch(`/api/cms/reservations/${id}/order-siblings`)
+      .then(r => r.json())
+      .then(d => {
+        if (orderSiblingsFetchedForId === id) {
+          orderSiblings = Array.isArray(d.siblings) ? d.siblings : []
+          orderSiblingsLoading = false
+        }
+      })
+      .catch(() => {
+        if (orderSiblingsFetchedForId === id) { orderSiblingsError = '주문 상품 정보를 불러오지 못했습니다.'; orderSiblingsLoading = false }
+      })
+  })
+
+  let optionsFetchedForId = $state<number | null>(null)
+  let options              = $state<ReservationOption[]>([])
+  let optionsLoading       = $state(false)
+  let optionsError         = $state<string | null>(null)
+
+  // 대여정보 탭의 "상품 정보"에 옵션상품(reservation_options)을 함께 노출 — 대여는 예약 정보를
+  // 그대로 가져와 진행을 관리하는 영역이라(예약상품 정보 = 대여상품 정보), 메인상품 1건뿐 아니라
+  // 예약 시 함께 담긴 옵션상품도 여기서 같이 보여야 함. 결제정보 탭과 동일한 lazy-fetch 패턴.
+  $effect(() => {
+    if (activeTab !== 'rental') return
+    if (optionsLoading) return
+    if (optionsFetchedForId === row.reservation_id) return
+
+    const id = row.reservation_id
+    optionsFetchedForId = id
+    options        = []
+    optionsError    = null
+    optionsLoading  = true
+
+    fetch(`/api/cms/reservations/${id}/options`)
+      .then(r => r.json())
+      .then(d => {
+        if (optionsFetchedForId === id) {
+          options = Array.isArray(d.options) ? d.options : []
+          optionsLoading = false
+        }
+      })
+      .catch(() => {
+        if (optionsFetchedForId === id) { optionsError = '옵션상품 정보를 불러오지 못했습니다.'; optionsLoading = false }
+      })
+  })
+
   const STATUS_LABEL: Record<string, string> = {
     pending: '접수', hold: '신청대기', confirmed: '승인완료',
     shipped: '배송중', in_use: '대여중', return_requested: '반납요청',
@@ -350,6 +428,30 @@
           <span class="info-value">{row.product_category ?? '-'}</span>
         </div>
       </div>
+
+      <!-- 옵션상품 — 메인상품 외 예약에 함께 담긴 상품(reservation_options). 없으면 섹션 자체 미표시 -->
+      {#if optionsLoading}
+        <div class="section-title">옵션상품</div>
+        <div class="loading-box">옵션상품 조회 중...</div>
+      {:else if optionsError}
+        <div class="section-title">옵션상품</div>
+        <div class="error-box">{optionsError}</div>
+      {:else if options.length > 0}
+        <div class="section-title">옵션상품 ({options.length}개)</div>
+        <div class="info-section">
+          {#each options as opt (opt.id)}
+            <div class="info-row">
+              <span class="info-label">{opt.option_name}</span>
+              <span class="info-value">
+                {opt.qty}개
+                {#if opt.product_code}
+                  <code class="mono option-code">{opt.product_code}</code>
+                {/if}
+              </span>
+            </div>
+          {/each}
+        </div>
+      {/if}
 
       <!-- 대여 일정 -->
       <div class="section-title">대여 일정</div>
@@ -576,6 +678,25 @@
           <span class="info-value">{row.payment_status ?? '-'}</span>
         </div>
       </div>
+
+      <!-- 같은 주문의 다른 상품 — 한 번에 결제된 여러 예약이 있을 때만 노출 -->
+      {#if orderSiblingsLoading}
+        <div class="section-title">같은 주문의 다른 상품</div>
+        <div class="loading-box">주문 상품 조회 중...</div>
+      {:else if orderSiblingsError}
+        <div class="section-title">같은 주문의 다른 상품</div>
+        <div class="error-box">{orderSiblingsError}</div>
+      {:else if orderSiblings.length > 0}
+        <div class="section-title">같은 주문의 다른 상품 ({orderSiblings.length}개)</div>
+        <div class="info-section">
+          {#each orderSiblings as sib (sib.reservationId)}
+            <div class="info-row">
+              <span class="info-label">{sib.reservationCode ?? `CZ-${String(sib.reservationId).padStart(5, '0')}`}</span>
+              <span class="info-value">{sib.productName} · {STATUS_LABEL[sib.status] ?? sib.status}</span>
+            </div>
+          {/each}
+        </div>
+      {/if}
 
       <!-- PG 결제 정보 (lazy-fetch) -->
       <div class="section-title">PG 결제 정보</div>
@@ -832,6 +953,15 @@
   .mono    { font-family: monospace; }
   .small   { font-size: 11px; word-break: break-all; }
   .amount-discount { color: var(--cs-error, #ef4444); }
+  .option-code {
+    display: inline-block;
+    margin-left: 8px;
+    font-size: 11px;
+    background: var(--cs-surface-gray);
+    padding: 2px 6px;
+    border-radius: 4px;
+    color: var(--cs-text-mid);
+  }
 
   /* 상품 썸네일 */
   .product-thumb {
