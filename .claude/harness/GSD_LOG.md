@@ -1,6 +1,33 @@
 # GSD_LOG.md — 크레이지샷 실행 이력
 # 형식: [YYYY-MM-DD HH:MM] 타입 | 태스크명 | 파일 | 소요 | 결과
 
+[2026-08-14] 🔴CRITICAL | cs_posts 등 5개 테이블 DB 마이그레이션 누락 발견·복구 (Supabase MCP 직접 조회+적용) | 신규 마이그레이션 5개 | GATE E:통과(@sp3-qa-agent 1차 재검수 완료, ROLLBACK 섹션 누락 1건 수정 후 통과)
+  | 배경: CMS 대시보드 RPC 검증 작업 중 Stephen 제보 — cs_posts가 stage/production 어디에도 없음.
+  |   조사 결과 2026-05-29 S0 초기배치 24~28번 파일(cs_posts/cs_inquiries/public_holidays/
+  |   late_fees/foreign_users)이 두 환경 모두 미적용 상태로 방치됨 확인(형제파일 22·23은 이미
+  |   뒤늦게 복구된 이력 있으나 24~28은 방치). 157_cs_inquiry_rpcs가 이 테이블 참조 RPC 4종을
+  |   이미 만들어둬 호출 시 100% 42P01 에러 구조였음.
+  |
+  | 조사(Supabase MCP): information_schema로 부재 확인, pg_proc으로 RPC 4종 존재 확인,
+  |   list_migrations로 이력 대조, cs_records(무관한 챗봇테이블) 오인 가능성 배제 —
+  |   데이터 유실 없음 확인(등록 실패는 항상 에러 토스트로 노출되는 구조라 조용한 유실 불가능)
+  |
+  | 신규 파일(원본 24~28 파일은 미수정 보존):
+  |   supabase/migrations/20260814034405_242_recover_cs_posts.sql
+  |   supabase/migrations/20260814034406_243_recover_cs_inquiries.sql
+  |   supabase/migrations/20260814034407_244_recover_public_holidays.sql (공휴일 15건 시드)
+  |   supabase/migrations/20260814034408_245_recover_late_fees.sql (원본과 차이: reservation_id
+  |     UUID→BIGINT 보정, rental_reservations.id 실제 타입과 불일치했던 42804 에러 수정)
+  |   supabase/migrations/20260814034409_246_recover_foreign_users.sql
+  |
+  | 적용 순서: stage(ezyvffjvuwmtuhpxdjrw) 5건 적용+검증 → production(vnbpmvxruyciuuaermyh)
+  |   5건 적용+검증(information_schema 재조회, 시드 15건 확인, get_advisors 신규위험 없음 확인)
+  |
+  | 영향 화면(정상화 예상, 미실시): account/inquiry, PcInquiryPanel, cms/customers/inquiry,
+  |   api/cms/customers/[id]/inquiries, CustomerDetailPanel(빠른문의 탭)
+  |
+  | git commit 미실행(Stephen 진행 대기)
+
 [2026-08-13] ⚡GSD | CMS 상담채팅 Phase 2~3 GSD-1~21 전체 구현 완료 (2세션 연속) | GATE C:완료
   | 완료: GSD-1(reopen API), GSD-2(pending API), GSD-3(상태 세그먼트 컨트롤), GSD-4(고객상세 RPC),
   |   GSD-5(고객상세 API), GSD-6(CustomerDetailPanel 신설+AdminChatPanel 삽입), GSD-7(manual_mode

@@ -28,6 +28,71 @@ auth_baseline: fed4fdb — createBrowserClient 패턴 (절대 싱글톤 createCl
 
 ---
 
+## DONE — cs_posts 등 5개 테이블 DB 마이그레이션 누락 발견·복구 (2026-08-14) — GATE C 완료, QA 검수 진행
+
+배경: CMS 대시보드 신규 RPC(`get_dashboard_today_stats`) 프로덕션 배포 전 검증 작업 중 Stephen이
+별도로 "`cs_posts` 테이블이 stage·production 어디에도 없다"는 정황을 제보. 조사 결과 2026-05-29
+S0 초기 배치(파일 `20260529000024`~`028`)가 두 환경 모두에서 적용되지 않았음을 확인 — 형제 파일
+22·23(`notification_tokens`/`notification_logs`)은 2026-08-04/08-07에 이미 누군가 복구했으나,
+24~28(`cs_posts`/`cs_inquiries`/`public_holidays`/`late_fees`/`foreign_users`) 5개는 이 세션까지
+미복구 상태로 방치돼 있었음. `157_cs_inquiry_rpcs` 마이그레이션은 이 테이블들을 참조하는 RPC
+4종을 이미 정상 생성해둔 상태라, 대상 테이블 부재로 호출 시 100% `42P01` 에러가 나는 구조였음
+(CRITICAL 게이트 — DB 변경 + 다중 파일, AskUserQuestion으로 Supabase MCP 연동 승인 및 복구 범위
+확인 완료 후 진행).
+
+조사(Supabase MCP 직접 조회, stage=`ezyvffjvuwmtuhpxdjrw` / production=`vnbpmvxruyciuuaermyh`):
+  - `information_schema.tables`로 두 환경 5개 테이블 전부 부재 확인
+  - `pg_proc`으로 RPC 4종(`get_all_cs_posts`/`submit_cs_post`/`add_cs_reply`/`update_cs_post_status`)은
+    정상 존재 확인 — `CREATE OR REPLACE FUNCTION`이 본문 SQL의 테이블 존재를 생성 시점에 검증하지
+    않기 때문
+  - `list_migrations`로 24~28 이력 부재 + 22·23만 뒤늦게 다른 타임스탬프로 재적용된 흔적 확인
+  - 데이터 유실 우려 조사: `cs_records`라는 유사명 테이블이 존재하나 챗봇 상담시스템 소속(완전
+    무관한 스키마: session_id/category/status/summary/admin_note) — 문의 데이터가 다른 곳에
+    잘못 쌓인 정황 없음. 등록 액션은 실패 시 `fail(500)` 에러 토스트로 노출되는 구조라 "조용히
+    유실"되는 시나리오는 구조적으로 불가능했음(목록 조회만 조용히 빈 화면으로 실패)
+
+복구(Stephen "5개 테이블 전체 복구 범위로 진행해" 승인 후 진행, 원본 24~28 파일은 수정하지 않고
+그대로 보존):
+  - 신규 마이그레이션 5개 작성:
+    - `supabase/migrations/20260814034405_242_recover_cs_posts.sql`
+    - `supabase/migrations/20260814034406_243_recover_cs_inquiries.sql`
+    - `supabase/migrations/20260814034407_244_recover_public_holidays.sql`(2026년 공휴일 15건 시드 포함)
+    - `supabase/migrations/20260814034408_245_recover_late_fees.sql`
+    - `supabase/migrations/20260814034409_246_recover_foreign_users.sql`
+  - stage(`ezyvffjvuwmtuhpxdjrw`) 선적용 → `information_schema` 검증 → production
+    (`vnbpmvxruyciuuaermyh`) 적용 → 재검증 순서 준수(CLAUDE.md 필수 순서)
+  - 원본과 달라진 부분 1건: `late_fees.reservation_id`를 원본은 `UUID`로 정의했으나 실제
+    `rental_reservations.id`가 두 환경 모두 `BIGINT`라 타입 불일치(`42804`)로 stage 1차 적용
+    실패 → `BIGINT`로 보정해 재적용 성공(사유는 파일 상단 주석에 기록)
+  - production `get_advisors(security)` 확인 — 새로 도입된 위험 없음, 뜨는 경고는 원본 설계에
+    이미 내재된 것과 동일 성격(anon 접근 관련 프로젝트 전역 공통 advisory)
+
+영향받는 화면(복구로 정상화 예상, 실제 화면 재현 테스트는 미실시):
+  - `src/routes/account/inquiry`(고객 빠른문의 목록·등록)
+  - `src/lib/components/account/PcInquiryPanel.svelte`(/account PC 문의 패널)
+  - `src/routes/cms/customers/inquiry`(CMS 빠른문의 목록·답변·상태변경)
+  - `src/routes/api/cms/customers/[id]/inquiries`(고객상세패널 문의 이력 API)
+  - `src/lib/components/cms/CustomerDetailPanel.svelte`(고객상세 "빠른문의" 탭)
+
+git commit 미실행(자율 실행 금지, Stephen 진행 대기).
+
+── @sp3-qa-agent 1차 검수 (2026-08-14) → 재검수 필요 판정, 1건 발견·즉시 수정 ──
+  - #1 (BOUNDARY): 신규 마이그레이션 5개 전부 ROLLBACK 섹션 누락(시범오픈 기준 체크리스트
+    항목) — 각 파일 하단에 `-- ROLLBACK:` + 주석처리된 `DROP TABLE IF EXISTS ... CASCADE;`
+    추가(242는 243이 FK로 참조하므로 "243 먼저 롤백" 안내 주석 포함). DB 재적용 불필요(순수
+    주석 추가, CREATE TABLE 본문 무변경)
+  - 그 외 전부 통과: 요청범위 외 파일 변경 없음(git status 확인), 원본 24~28/157 미수정 확인,
+    RLS 정책 원본과 완전 동일(약화 없음), late_fees BIGINT 보정이 최근 3주 코드베이스 관례
+    (migration 140/141/144/147/148/149/159/166/167/176/179/201 전부 reservation_id BIGINT
+    사용)와 일치함을 확인, TASK.md/GSD_LOG.md 기록과 실제 SQL 내용 일치 확인
+
+── @sp3-qa-agent 재검수 (2026-08-14) → GATE E 통과 ✅ ──
+  - ROLLBACK 섹션 5개 파일 전부 정상 추가 확인, FK 의존순서(cs_inquiries → cs_posts) 안내
+    정확함 확인
+  - GATE E 통과 — commit은 Stephen 직접 실행 대기
+
+---
+
 ## BACKLOG — CMS 상담(채팅) Phase 4 대형 아젠다 검토 3건 (2026-08-12) — ⛔ GATE B 대기 (Stephen 승인 + 열린 질문 답변 선행 필요, 정식 실행 태스크 아님)
 
 plan_source: /Users/stevenmac/.claude/plans/users-stevenmac-downloads-crazyshot-bac-compiled-willow.md
