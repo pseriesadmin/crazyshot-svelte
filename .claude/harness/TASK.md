@@ -12650,6 +12650,102 @@ GATE E: 완료 확인 — 커밋은 Stephen 직접 실행.
 
 ---
 
+## DONE — 흐름형(TipTap) 에디터 이미지 크기조절·정렬 기능 추가 (2026-08-14) ✅ 완료
+
+[CONTEXT BRIDGE]
+plan_source: Stephen 실사용 발견 — 흐름형 에디터에 삽입한 서명·직인 이미지가 원본 크기 그대로
+  삽입돼 문서 폭을 거의 다 차지하고, 크기 조절 수단이 전혀 없었음(리사이즈 핸들 없음).
+핵심제약:
+  - 드래그 리사이즈가 안정적으로 안 되면 프리셋+숫자입력으로 대체(과설계 금지, 확실히 동작하는
+    것 우선)
+  - `CmsContentEditor.svelte`/`content-editor.ts`/`contract-document.ts` 절대 미수정
+TDD도메인: 없음 — GSD (에디터 UX 기능 추가, 기존 확장 구조 확장).
+
+수정 파일:
+  - src/lib/components/cms/contract-editor/tiptapExtensions.ts (MODIFY)
+  - src/lib/components/cms/contract-editor/ContractDocumentEditor.svelte (MODIFY)
+
+구현 내용:
+  1. `tiptapExtensions.ts` — `CustomImage = Image.extend({ addAttributes() })`로 `width`/
+     `height`/`align`(left/center/right, 기본 center) 속성 추가. `renderHTML`이 인라인
+     `style`(width/height/float·margin)로 출력하므로 `generateHTML()` 공유 렌더 경로(고객
+     화면·미리보기)에 별도 수정 없이 반영됨. `TIPTAP_CONTRACT_EXTENSIONS`의 `Image` →
+     `CustomImage` 교체.
+  2. `ContractDocumentEditor.svelte` — `ImageWithNodeView = CustomImage.extend({
+     addNodeView() })`로 커스텀 NodeView 구현: 이미지 선택 시 상단에 소(100)/중(200)/대(400)
+     프리셋 버튼 + 너비 직접 입력(px, Enter/블러 시 적용) + 좌/가운데/우 정렬 버튼(활성
+     상태 보라색 표시) 툴바 노출.
+  3. 이미지 삽입 2곳(`insertSigAsset` 서명/직인 삽입, `onImgFileChange` 일반 이미지 업로드)을
+     `setImage({src})` → `insertContent({type:'image', attrs:{src, width:200, align:'center'}})`
+     로 변경 — 기본 200px로 삽입돼 더 이상 문서 폭을 다 차지하지 않음.
+
+검증 결과:
+  - npx svelte-check: 신규 에러 0건
+  - contractTiptapRender ✓ / contractSsrSafety ✓ / contractContentMode ✓ /
+    contractCanvasPublishFix ✓ / contractP6Canvas ✓ / docxImport ✓ / docxTableFormatting ✓
+    — 7파일 113개 전부 통과, 회귀 없음
+  - 저장/재오픈 시 width·align이 TipTap JSON에 영속화되어 유지됨, 고객 서명 화면에도 동일
+    반영됨(오케스트레이터 직접 재확인 완료)
+
+GATE E: 완료 확인 — 커밋은 Stephen 직접 실행.
+
+---
+
+## DONE — 흐름형 에디터 이미지 "텍스트 위 겹치기" 배치 + A4 용지 폭 통일 (2026-08-14) ✅ 완료
+
+[CONTEXT BRIDGE]
+plan_source: Stephen 추가 요청(위 크기조절·정렬 확인 직후) — 직인·서명 이미지가 텍스트 레이아웃
+  위에 겹쳐 배치 가능해야 하고, 문서 폭이 A4 용지 사이즈 기준으로 인쇄 가능해야 함. 오케스트레이터가
+  "흐름형 문서는 자유 2D 배치가 원칙적으로 안 맞고 그건 고정캔버스 모드의 역할"이라고 설명했으나,
+  Stephen이 그럼에도 이 기능을 명시적으로 재확인·요청해 그대로 구현.
+핵심제약:
+  - 드래그 구현은 `ContractCanvasEditor.svelte`의 기존 `onFieldPointerDown`/`onFieldPointerMove`
+    (Pointer Events 기반) 패턴을 그대로 재사용 — 새 라이브러리·새 드래그 로직 설계 금지
+  - `contract-document.ts` 절대 미수정(canvas 모드 타입, 이번 작업과 무관)
+TDD도메인: 없음 — GSD (기존 패턴 재사용, UI 확장).
+
+수정 파일:
+  - src/lib/components/cms/contract-editor/tiptapExtensions.ts (MODIFY)
+  - src/lib/components/cms/contract-editor/ContractDocumentEditor.svelte (MODIFY)
+  - src/lib/components/cms/ContractTemplatePreviewModal.svelte (MODIFY)
+  - src/routes/contract/[token]/+page.svelte (MODIFY)
+
+구현 내용 — 겹치기 배치:
+  1. `CustomImage.addAttributes()`에 `overlay`(boolean)/`x`/`y`(px) 속성 추가. `overlay=true`
+     시 `renderHTML`이 `position:absolute;left:{x}px;top:{y}px;z-index:10` 출력(align 스타일은
+     무시), `overlay=false`(기본값)면 기존 정렬 기반 배치 그대로 유지(하위호환).
+  2. `ImageWithNodeView`에 "겹치기" 토글 버튼 추가 — On 시 `ContractCanvasEditor`의 필드 드래그와
+     동일한 Pointer Events 패턴(`pointerdown`→오프셋 기록·`setPointerCapture`,
+     `pointermove`→`.ProseMirror` 기준 좌표 계산, `pointerup/cancel`→해제)으로 이미지를
+     드래그해 텍스트 위 원하는 위치로 이동 가능. Off 시 정렬 기반 배치로 복귀(정렬 버튼도
+     opacity 0.4로 비활성 표시).
+  3. `.ProseMirror { position: relative }`를 좌표 기준점으로 추가.
+
+구현 내용 — A4 용지 폭 통일(3화면 일관 적용):
+  - `ContractDocumentEditor.svelte`: `.cde-editor-content` → `width:210mm`(종이 카드 형태,
+    box-shadow), `.ProseMirror { padding:20mm }`, `@page { size:A4; margin:20mm }` +
+    `@media print` 규칙 추가
+  - `ContractTemplatePreviewModal.svelte`: `.doc-page`를 `max-width:620px` → `210mm`,
+    `padding` → `20mm`, `position:relative` 추가(관리자 미리보기 모달 — 별도 인쇄 규칙은
+    이 화면 특성상 생략, 폭 통일만 적용)
+  - `src/routes/contract/[token]/+page.svelte`: `.contract-main`을 `max-width:680px` →
+    `210mm`, `.doc-section`/`.doc-block-tiptap`에 `position:relative` 추가(겹치기 좌표
+    기준점), `@page { size:A4; margin:20mm }` + `@media print` 추가
+
+검증 결과:
+  - npx svelte-check: 신규 에러 0건
+  - contractTiptapRender ✓ / contractSsrSafety ✓ / contractContentMode ✓ /
+    contractCanvasPublishFix ✓ / contractP6Canvas ✓ — 5파일 82개 전부 통과, 회귀 없음
+    (오케스트레이터 직접 재실행 확인)
+  - `overlay`/`x`/`y` 속성 존재, `onFieldPointerDown` 패턴 재사용, 3화면 `210mm`+`@page`
+    적용 전부 grep으로 직접 대조 확인
+  - 기존 정렬·리사이즈·표 서식·변수칩 기능 회귀 없음(overlay 기본값 false로 기존 이미지
+    JSON과 하위호환)
+
+GATE E: 완료 확인 — 커밋은 Stephen 직접 실행.
+
+---
+
 ## DONE — 상품등록 콤보(조합)코드 채번 "미확인 코드" 노출 버그 검수·수정 (2026-08-13) — ✅ 2건 수정 완료, 1건 조사 후 보류, 1건 후속조사 필요(BACKLOG)
 
 [CONTEXT BRIDGE]
@@ -12904,5 +13000,75 @@ diff가 사전 설명과 완전 일치, 필터링 후 allCodes가 비는 경우�
 `cloneProductPartnerCodeComboMerge.test.ts` 5/5 GREEN(makeFlexChain이 eq/is 체이닝 이미 포함 —
 mock 보강 불필요). svelte-check 신규 에러 0건(기존 1건은 무관 파일). products.md §2-2 위반 없음
 — 채번 RPC·저장된 code_series는 미변경, 조회 필터만 수정. 범위도 대상 파일 1개로 한정 확인.
+
+**GATE E: ✅ 통과 — 블로킹 0건. 커밋은 Stephen 직접 실행.**
+
+---
+
+## DONE — 콤보 존재 그룹 선택 강제 가드 추가 (2026-08-13, 후속) — ✅ GATE E 통과
+
+[CONTEXT BRIDGE]
+plan_source: Stephen 재검수 질문("hypepack에 조합코드가 이미 있고 분류 선택만 정상적이면 문제
+  없는데 어떤 문제냐") → 정확한 재현 조건 재설명 후 AskUserQuestion으로 수정 승인받음
+핵심제약: /cms/products/new 1개 화면(서버+클라이언트)으로 범위 한정, DB·마이그레이션 변경 없음
+TDD도메인: 없음 (GSD — 등록 검증 로직 추가)
+
+### 배경 재정리
+
+이전에 고친 버그 1(필터 비대칭)·버그 2(SuggestPicker 선택 유실) 둘 다 "콤보를 선택했는데
+저장이 틀어지는" 케이스였다. 이번은 그와 별개로 "애초에 콤보 카드를 하나도 안 누르고 제출해도
+막히지 않는" 구조적 공백 — hypepack처럼 코드설정에 정식 콤보가 있어도, 관리자가 실수로 선택을
+건너뛰면 여전히 2-param 카테고리 자동 폴백(`UPPER(LEFT(category,3))`)으로 조용히 빠져
+코드설정에 없는 임의 품번이 발급된다.
+
+### 수정 파일
+
+```
+src/routes/cms/products/new/+page.server.ts   (MODIFY — 서버 검증)
+src/routes/cms/products/new/+page.svelte      (MODIFY — 클라이언트 선제 차단)
+src/__tests__/services/productComboRequired.test.ts  (NEW — 가드 검증 테스트)
+```
+
+### 서버 (`+page.server.ts`)
+
+- `comboRowId`를 `groupId`와 함께 최상단에서 미리 추출(기존 236행의 중복 선언 제거, 단일 소스화)
+- slug 중복 체크 직후, 상품 INSERT 이전 지점에 추가:
+  ```ts
+  if (groupId && !comboRowId) {
+    const { count: comboCount } = await admin
+      .from('code_mapping_items')
+      .select('combo_row_id', { count: 'exact', head: true })
+      .eq('group_id', groupId)
+    if ((comboCount ?? 0) > 0) {
+      return fail(400, { error: '이 분류에는 선택 가능한 조합코드가 있습니다. 조합코드를 먼저 선택해주세요.' })
+    }
+  }
+  ```
+- INSERT 이전에 차단하므로 orphaned product 생성 없음. 콤보가 0개인 그룹(진짜로 매핑이 없는
+  카테고리)은 그대로 기존 폴백 경로 유지 — 그건 별개로 보류된 정책 사안(hypepack류 매핑부재
+  폴백 정책, 이전 세션 기록 참조)이라 이번 수정 범위에서 제외.
+
+### 클라이언트 (`+page.svelte`)
+
+- `use:enhance` 콜백에서 제출 직전 `selectedGroupId && combosForGroup.length > 0 &&
+  !selectedComboRowId`이면 `cancel()` + `csToast.error(...)`로 요청 자체를 안 보냄(서버 검증과
+  이중 방어, UX상 즉시 피드백)
+
+### 검증
+
+- 신규 테스트: `productComboRequired.test.ts` — 그룹에 콤보 3개 있는데 combo_row_id 없이 제출
+  → `fail(400, {error: '...조합코드를 먼저 선택해주세요.'})` 확인 (1/1 GREEN)
+- 회귀: 기존 `productCodeTierTwo`/`productCodeComboMerge`/`productNew`/
+  `cloneProductPartnerCodeComboMerge` 4개 파일 21개 테스트 전부 통과 — 전부 폼에 `group_id`를
+  안 넣는 구조라 신규 가드 조건(`groupId && !comboRowId`)이 애초에 발동 안 해 영향 없음 확인
+- `npx svelte-check` — 기존 1건(무관 파일) 외 신규 에러 0건
+
+### QA(@sp3-qa-agent) 검수 — 통과
+
+diff 일치, `comboRowId` 단일선언 리팩터링 후 참조 누락 없음, 가드가 INSERT 이전에 위치해
+고아 상품 없음, 정상 케이스 3종(콤보 선택함/그룹 없음/콤보 0개) 미차단 확인. 신규 테스트
+mock이 실제 호출 순서(`code_mapping_groups`→`products`→`code_mapping_items`)와 정확히 일치,
+눈속임 아님. 회귀 대상 5개 파일 전부 GREEN. svelte-check 신규 에러 0건. 클라이언트/서버 에러
+문구 완전 일치, 표준 `csToast` 재사용. console.log/any/TODO 없음, SQL Injection 위험 없음.
 
 **GATE E: ✅ 통과 — 블로킹 0건. 커밋은 Stephen 직접 실행.**

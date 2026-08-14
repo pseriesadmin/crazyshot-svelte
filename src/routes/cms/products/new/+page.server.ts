@@ -88,6 +88,7 @@ export const actions: Actions = {
 
     let category = (form.get('category') as string | null) ?? ''
     const groupId = (form.get('group_id') as string | null) || null
+    const comboRowId = (form.get('combo_row_id') as string | null) || null
     const name = (form.get('name') as string | null) ?? ''
     const slug = (form.get('slug') as string | null) ?? ''
     const brand = (form.get('brand') as string | null) || null
@@ -174,6 +175,20 @@ export const actions: Actions = {
       return fail(400, { error: '이미 사용 중인 슬러그입니다. 다른 슬러그를 사용해주세요.' })
     }
 
+    // 버그 수정(2026-08-13): 선택된 그룹에 조합코드가 1개 이상 등록돼 있는데 콤보를 고르지 않고
+    // 제출하면, 아래 로직이 comboRowId 없음 → 2-param 카테고리 자동 폴백(UPPER(LEFT(category,3)))
+    // 으로 조용히 빠져 코드설정에 없는 임의 품번("HYP" 등)이 발급되던 문제 방지 — 콤보가 존재하는
+    // 그룹은 반드시 콤보 선택을 거치도록 서버에서 재확인(클라이언트 검증 우회 대비)
+    if (groupId && !comboRowId) {
+      const { count: comboCount } = await admin
+        .from('code_mapping_items')
+        .select('combo_row_id', { count: 'exact', head: true })
+        .eq('group_id', groupId)
+      if ((comboCount ?? 0) > 0) {
+        return fail(400, { error: '이 분류에는 선택 가능한 조합코드가 있습니다. 조합코드를 먼저 선택해주세요.' })
+      }
+    }
+
     const salePriceRaw = (form.get('sale_price') as string | null) ?? ''
     const salePrice = parseInt(salePriceRaw, 10) || null
     const saleOnly = form.get('sale_only') === 'true'
@@ -233,7 +248,6 @@ export const actions: Actions = {
     if (qrError) regWarnings.push('qr')
 
     // 품번(product_code) 자동 발행 — generate_product_code RPC (SECURITY DEFINER)
-    const comboRowId = (form.get('combo_row_id') as string | null) || null
     let comboCodeId: string | null = null
     let comboDateOption: string | null = null
     let comboMaxSequence: number | null = null

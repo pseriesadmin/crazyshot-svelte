@@ -611,7 +611,15 @@
   <form
     method="POST"
     action="?/create"
-    use:enhance={() => {
+    use:enhance={({ cancel }) => {
+      // 버그 수정(2026-08-13): 선택된 그룹에 조합코드가 있는데 콤보 카드를 하나도 안 고르고
+      // 제출하면 서버가 조용히 카테고리 자동 폴백(코드설정에 없는 임의 품번)으로 빠지던 문제
+      // 방지 — 콤보가 존재하는 그룹은 제출 전에 선택을 강제한다(서버에도 동일 검증 이중 적용).
+      if (selectedGroupId && combosForGroup.length > 0 && !selectedComboRowId) {
+        csToast.error('이 분류에는 선택 가능한 조합코드가 있습니다. 조합코드를 먼저 선택해주세요.')
+        cancel()
+        return
+      }
       isLoading = true
       return async ({ update }) => { await update(); isLoading = false }
     }}

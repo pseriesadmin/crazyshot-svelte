@@ -1,6 +1,35 @@
 # GSD_LOG.md — 크레이지샷 실행 이력
 # 형식: [YYYY-MM-DD HH:MM] 타입 | 태스크명 | 파일 | 소요 | 결과
 
+[2026-08-13] ⚡GSD | 콤보 존재 그룹 선택 강제 가드 추가 (후속) | GATE C: 자동(BOUNDARY, Stephen AskUserQuestion 승인)
+  배경: Stephen 질문("hypepack에 조합코드 있고 분류 선택만 정상이면 문제없는데 뭐가 문제냐")에
+    재현조건 재설명 → 콤보 카드를 하나도 안 눌러도 제출이 막히지 않는 구조적 공백임을 확인,
+    수정 승인받음.
+  파일:
+    src/routes/cms/products/new/+page.server.ts (MODIFY — comboRowId 단일선언 정리 + 신규 가드)
+    src/routes/cms/products/new/+page.svelte (MODIFY — use:enhance 선제 차단)
+    src/__tests__/services/productComboRequired.test.ts (NEW)
+  수정: group_id는 있는데 combo_row_id가 없을 때, 해당 그룹의 code_mapping_items 개수를 확인해
+    1개 이상이면 fail(400, '조합코드를 먼저 선택해주세요')로 INSERT 전에 차단(orphaned product
+    없음). 클라이언트도 use:enhance에서 동일 조건으로 cancel()+csToast 이중 방어. 콤보가 0개인
+    그룹(진짜 매핑 없는 카테고리, hypepack류 폴백 정책 자체는 별개 보류 사안)은 기존 폴백 경로
+    그대로 유지 — 이번 수정 범위 밖.
+  검증: 신규 테스트 1/1 GREEN(콤보 3개 그룹에서 미선택 제출 → fail 400 확인). 기존 4개 파일
+    21개 테스트 전부 회귀 없음(전부 group_id 미사용 폼이라 신규 가드 조건 자체가 발동 안 함).
+    npx svelte-check 신규 에러 0건(기존 1건 무관 파일).
+  QA(@sp3-qa-agent) 검수: diff 일치, 고아 상품 없음(INSERT 이전 가드), 정상 케이스 3종 미차단,
+    mock 눈속임 없음, 회귀 5개 파일 전부 GREEN, svelte-check 신규 에러 0건 — 블로킹 0건.
+  GATE E: ✅ 통과.
+
+[2026-08-14 13:00] ⚡GSD  | 계약서 이미지 겹치기 드래그 + A4 레이아웃 | tiptapExtensions.ts + ContractDocumentEditor.svelte + ContractTemplatePreviewModal.svelte + contract/[token]/+page.svelte | 완료 | GATE C: ROUTINE(자동)
+  내용: (1) overlay/x/y 속성 추가 → 툴바 "겹치기" 토글 + Pointer Events 드래그(ContractCanvasEditor 패턴 참조)
+        (2) A4 폭(210mm) 에디터·미리보기·고객서명화면 3곳 통일 + @page A4 인쇄 스타일
+  검증: contractTiptapRender/contractSsrSafety/contractContentMode/contractCanvasPublishFix/contractP6Canvas 5파일 82테스트 통과, svelte-check 신규 에러 없음
+
+[2026-08-14 12:03] ⚡GSD  | 계약서 에디터 이미지 크기조절·정렬 | tiptapExtensions.ts + ContractDocumentEditor.svelte | 완료 | GATE C: ROUTINE(자동)
+  내용: CustomImage 확장(width/align attrs + renderHTML) + 에디터 전용 NodeView(프리셋/너비입력/정렬버튼 툴바)
+  검증: contractTiptapRender/contractSsrSafety/contractContentMode/contractCanvasPublishFix/contractP6Canvas/docxImport/docxTableFormatting 7파일 113테스트 통과, svelte-check 신규 에러 없음
+
 [2026-08-13] 🔴TDD | QA 5차 재검수 결함 수정 — hasExistingContractContent canvas 오판 + clearIssuedContract orphan | GATE C: Stephen 즉시 수정 지시 (데이터 무결성 위험)
   배경: QA 5차 재검수에서 발견된 데이터 무결성 위험 결함.
     canvas 계약은 canvas_document에 내용을 저장하고 content_blocks=[] — 기존 판별 함수가
@@ -2919,3 +2948,49 @@
   적용 상태: crazyshot-stage(ezyvffjvuwmtuhpxdjrw)만 적용 완료. production(vnbpmvxruyciuuaermyh)은
     Stephen 명시적 승인 대기(이번 세션 기존 관행과 동일 — DB 마이그레이션은 항상 별도 승인 후 적용).
   Stage C(잔여): production 마이그레이션 적용 + QA(@sp3-qa-agent) 최종 검수 — 다음 확인 시 진행.
+
+[2026-08-13] 🚀DEPLOY | 마이그레이션 #241(구독 부모/자식 품번 구조) production 적용 완료
+  Stephen 승인 후 crazyshot(production, vnbpmvxruyciuuaermyh) 적용.
+  사전 점검: subscription_plans/user_subscriptions 여전히 0 rows, generate_subscription_product_code가
+    적용 전 2-param(#240 상태)이었음을 확인 후 진행.
+  적용 후 검증: subscription_plans.code_series / user_subscriptions.product_code 컬럼 존재 확인,
+    generate_subscription_product_code(3-param, 단일 오버로드) /
+    generate_subscription_inventory_product_code(신설) / create_user_subscription(4-param 무변경)
+    전부 pg_proc 조회로 정상 반영 확인. stage와 동일 시그니처.
+  잔여: QA(@sp3-qa-agent) 최종 검수만 남음.
+
+[2026-08-14] 🔍QA | 구독 부모/자식 품번 구조(#241) — production 배포 후 최종 검수 (@sp3-qa-agent)
+  검수 대상: 마이그레이션 #241, subscriptionBilling.test.ts, /cms/subscriptions/new
+    (+page.server.ts/+page.svelte), SubscriptionDetailPanel.svelte, loadSelectedSubscriptionDetail.ts,
+    /cms/subscriptions/+page.server.ts, comboCategoryCode.ts, types/subscription.ts
+  결과: CRITICAL/보안 위반 0건, 경미 3건(subscription_code_sequences.category 컬럼명-의미 재해석
+    — 기능 문제 없음, rollback 주석 미문서화, subscription_plans.product_code 컬럼 vestigial화 —
+    전부 즉시 조치 불필요 판정). vitest 12/12 GREEN 재확인, svelte-check 신규 에러 0건 재확인,
+    GP-10(기존 마이그레이션 파일 무변경) 준수 확인.
+  GATE E 통과 — 커밋은 Stephen 직접 실행.
+
+[2026-08-14] FIX | 예약코드 채번 COUNT 방식 to 시퀀스 테이블 교체 | Migration 247 | 완료
+  reservation_code_sequences 테이블 신설, generate_reservation_code 재작성, stage/production 적용 및 검증 완료.
+
+[2026-08-14] GSD | 흐름형(TipTap) 에디터 이미지 크기조절·정렬 기능 추가 | 완료
+  Stephen 실사용 발견 — 삽입한 서명·직인 이미지가 원본 크기 그대로 삽입돼 문서 폭을 거의 다
+  차지하고 리사이즈 수단이 없던 문제. tiptapExtensions.ts의 CustomImage(Image.extend)에
+  width/height/align 속성 추가(renderHTML 인라인 style로 generateHTML 공유 렌더 경로에 자동
+  반영). ContractDocumentEditor.svelte에 커스텀 NodeView로 소/중/대 프리셋+너비 직접입력+
+  좌/가운데/우 정렬 툴바 구현, 이미지 삽입 기본값 200px로 변경. svelte-check 신규 에러 0건,
+  관련 테스트 7파일 113개 전부 통과(회귀 없음). 저장/재오픈·고객화면 반영 오케스트레이터
+  직접 재확인.
+  GATE E: 완료 — 커밋은 Stephen 직접 실행.
+
+[2026-08-14] GSD | 흐름형 에디터 이미지 "텍스트 위 겹치기" 배치 + A4 용지 폭 통일 | 완료
+  Stephen 추가 요청 — 직인·서명 이미지가 텍스트 위에 겹쳐 배치 가능해야 하고 문서 폭이 A4
+  기준 인쇄 가능해야 함(오케스트레이터가 "흐름형은 자유배치가 원칙적으로 안 맞다"고 설명했으나
+  Stephen이 명시적으로 재확인해 그대로 구현). CustomImage에 overlay/x/y 속성 추가
+  (overlay=true 시 position:absolute, 기본값 false로 하위호환), ImageWithNodeView에 "겹치기"
+  토글 + ContractCanvasEditor의 기존 onFieldPointerDown/onFieldPointerMove Pointer Events
+  드래그 패턴을 그대로 재사용해 드래그 위치조정 구현. ContractDocumentEditor·
+  ContractTemplatePreviewModal·contract/[token]/+page.svelte 3화면 모두 문서 폭을
+  210mm(A4)로 통일, 에디터/고객화면에는 @page{size:A4} 인쇄 규칙도 추가. svelte-check 신규
+  에러 0건, 관련 테스트 5파일 82개 전부 통과(회귀 없음). overlay/x/y 속성, 드래그 패턴 재사용,
+  3화면 210mm 적용 전부 오케스트레이터가 grep으로 직접 대조 확인.
+  GATE E: 완료 — 커밋은 Stephen 직접 실행.
