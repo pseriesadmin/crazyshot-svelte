@@ -84,6 +84,7 @@
     "firebase": "^12.17.0",
     "firebase-admin": "^14.2.0",
     "hwp-convert": "^1.13.0",
+    "jspreadsheet-ce": "^5.0.4",
     "jszip": "^3.10.1",
     "mammoth": "^1.12.1",
     "minisearch": "^7.2.0",

@@ -105,6 +105,13 @@
    만들고 그 자식에게 실제 품번을 채번한다. 즉 "상품 등록"을 완료하는 순간 카탈로그 항목뿐
    아니라 실제로 대여 가능한 재고 1개가 이미 존재한다 — 재고를 늘리려면 그 다음부터
    "빠른 재고 등록"을 추가로 사용한다.
+
+   ✅ **Stephen 확정(2026-08-14): 이 자동생성 1개를 "기본 재고" 개념의 정상 기능 정책으로
+   확정한다.** 부모상품 등록 완료 시 최초 자식(재고) 1개가 자동으로 함께 생성되는 것은 버그가
+   아니라 의도된 설계다 — 향후 세션에서 "왜 자식이 자동으로 생기냐"는 의문이 들어도 이 동작
+   자체를 제거·비활성화하는 수정을 임의로 시도하지 말 것. 변경이 필요하다고 판단되면 반드시
+   Stephen에게 먼저 확인한다(관련 RPC: `new/+page.server.ts`의 `auto_create_inventory_for_product`
+   호출부, 실패 시 경고 처리는 §2-10① regWarn `inv` 참고).
 ```
 
 ```sql
@@ -117,6 +124,14 @@ await admin.rpc('generate_product_code', {
   p_code_id: null,   // ← 콤보 미선택이어도 반드시 명시
 })
 ```
+
+> ⚠️ **설정 키 분리(Migration #248, 2026-08-14)**: `generate_product_code()`(전 오버로드)가 읽는
+> 전역 기본 포맷(prefix/date_format/seq_digits/reset_monthly/suffix)은 `cms_settings.product_code_format`
+> 전용 키다. 과거에는 예약코드 전용 설정인 `reservation_code_format`을 그대로 공유해서 읽었는데
+> (§2-6 이하 예약코드 로직과 완전히 다른 목적), CMS "예약코드 형식" 탭에서 값을 바꾸면 신규 상품
+> 채번 기본값도 안내 없이 같이 바뀌는 숨은 결합이었음 — 분리로 해소. 단, 이번 분리는 백엔드
+> 전용이라 `product_code_format`을 직접 편집할 수 있는 CMS 화면은 아직 없다(분리 시점 값으로
+> 고정, 필요 시 별도 관리 화면 신설 검토).
 
 ### 2-4. QR 콘텐츠 — URL이 아니라 품번(product_code) 원문
 
@@ -787,11 +802,12 @@ Q5. 선택된 상품(rootId)이 현재 페이지네이션 범위(productIds, 20�
 
 ---
 
-*products.md v2.5 | Harness Flow v3.2 | 2026-08-06 품번(product_code) 정책 전면 재설계 —
+*products.md v2.6 | Harness Flow v3.2 | 2026-08-06 품번(product_code) 정책 전면 재설계 —
 부모=code_series(구조저장)/자식=실채번, 영구고정, QR=product_code 전환, RLS 보안 수정,
 QR 반출입 자동화, sale_only 등록 정책 반영 | 2026-08-XX 부모 QR 노출 폐기(BND-7 폐기),
 자가복구 버튼(품번 채번·품번 체계 설정) 추가, 레거시 프리픽스 불일치 자동 우회,
 JSONB 파라미터 이중직렬화 버그 수정, 빠른 재고 등록 QR 자동노출(QR-AUTO-1),
 대표 카드 페이지네이션 정합성 수정(PAGE-SCOPE-1), QR 스캔 대소문자 불일치 버그 수정
 (QR-CASE-1) + 품번 포맷 설정 권한 강화(QR-CASE-2, manager 이상) + ilike 와일드카드 이스케이프
-(escapeLikePattern) 반영*
+(escapeLikePattern) 반영 | 2026-08-14 §2-3 부모 등록 시 자식(재고) 1개 자동생성을 "기본 재고"
+정상 기능 정책으로 Stephen 확정·명문화(제거 시도 금지)*

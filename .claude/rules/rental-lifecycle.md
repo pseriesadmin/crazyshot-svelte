@@ -52,114 +52,18 @@
 
 ---
 
-## 전자계약 발송 흐름 (2026-07-23 구현 완료)
+## 전자계약 발송·서명 흐름 — 전용 문서로 이관 (2026-07-28)
 
-### 발송 가능 시점
+> ⛔ 이 절의 상세 내용(발송 API 흐름·편집 제한 정책·변수 치환 시스템·서명 유효성 판정·만료 처리·
+> 관리자 딥링크 라우팅·데이터 모델 등)은 `.claude/rules-ref/contract.md`로 전부 이관되었다.
+> 전자계약·서명 관련 작업 시 반드시 `@.claude/rules-ref/contract.md`를 먼저 호출할 것 — 이 문서에는
+> 더 이상 최신 내용을 유지하지 않는다(발송 시점 상태 무관 원칙만 아래에 요약 유지).
 
 ```
 예약 상태 제한 없음 — hold(신청대기) 포함 모든 상태에서 계약서 발송 가능
-contractId null → init-contract API가 즉시 생성 후 발송
-contractId 존재 → 기존 계약서에 내용 덮어쓰기 후 발송
 ```
 
-### 계약서 양식 편집 제한 정책 (2026-07-23 확정)
-
-```
-편집(btn-tpl-edit) 표시 조건:
-  signingsentAt = null  AND  customerSignedAt = null
-  → 계약서가 한 번도 발송되지 않은 경우에만 편집 허용
-
-편집 숨김 조건 (둘 중 하나라도 해당):
-  ① signingsentAt 있음  → 계약서가 발송된 이후 (내용 변경 혼란 방지)
-  ② customerSignedAt 있음 → 고객 서명 완료 이후
-
-미리보기 & 발송 버튼: 모든 상태에서 항상 표시 (재발송 필요 시 사용)
-
-PDF 뷰어 · PDF 다운로드:
-  contractPdfUrl 있음 AND customerSignedAt 있음 → 표시
-  서명 완료 전에는 숨김 (서명된 최종본만 표시)
-
-서명 링크 확인 ↗:
-  signingUrl 있음 AND customerSignedAt = null → 표시 (서명 완료 후 자동 숨김)
-```
-
-구현 파일: `src/lib/components/cms/RentalContractViewer.svelte`
-
-```svelte
-{#if !signingsentAt && !customerSignedAt}
-  <button class="btn-tpl-edit" ...>편집</button>
-{/if}
-<!-- 미리보기 & 발송 버튼은 조건 없이 항상 렌더링 -->
-<button class="btn-tpl-preview" ...>미리보기 &amp; 발송</button>
-
-<!-- PDF 뷰어·다운로드: 서명 완료 후에만 -->
-{#if contractPdfUrl && customerSignedAt}
-  <div class="pdf-wrap">...</div>
-  <a ...>PDF 다운로드</a>
-{/if}
-```
-
-### 전자계약 발송 API 흐름
-
-```
-1. [CMS] "미리보기 & 발송" 버튼 클릭
-   → ContractTemplatePreviewModal 오픈
-   → GET /api/cms/contract-templates       : 활성 양식 목록 로드
-   → GET /api/cms/reservations/[id]/contract-data : 치환 데이터 로드
-   → substituteVariables() : {{변수명}} → 실데이터 치환 후 미리보기 렌더링
-
-2. [CMS] "채팅으로 발송" 버튼 클릭
-   → contractId가 null이면:
-       POST /api/cms/reservations/[id]/init-contract
-         → contracts INSERT (idempotent — 기존 있으면 재사용)
-         → 반환: { contractId: string }
-   → PATCH /api/cms/contracts/[contractId]/content
-         body: { title, content_blocks(원본 미치환), specifications, template_id }
-         → contracts.template_id 업데이트 포함
-   → POST /api/cms/contracts/[contractId]/send-chat
-         → contract_signings에 signing_token 생성
-         → 고객 채팅으로 서명 링크 발송
-         → contracts.signing_sent_at 업데이트
-   → 성공: 배너 "계약서 발송됨 · 서명 대기 중" 전환
-```
-
-### 주요 파일
-
-| 역할 | 파일 |
-|---|---|
-| 미리보기·발송 모달 | `src/lib/components/cms/ContractTemplatePreviewModal.svelte` |
-| 계약서 탭 뷰어 | `src/lib/components/cms/RentalContractViewer.svelte` |
-| 계약서 즉시 생성 | `src/routes/api/cms/reservations/[id]/init-contract/+server.ts` |
-| 치환 데이터 조회 | `src/routes/api/cms/reservations/[id]/contract-data/+server.ts` |
-| 양식 목록 | `src/routes/api/cms/contract-templates/+server.ts` |
-| 내용 저장 | `src/routes/api/cms/contracts/[id]/content/+server.ts` |
-| 채팅 발송 | `src/routes/api/cms/contracts/[id]/send-chat/+server.ts` |
-
-### 변수 치환 시스템
-
-```
-저장: DB에 {{변수명}} 원본 보존
-렌더링: substituteVariables() 호출 시점에 실데이터로 치환
-
-유틸: src/lib/utils/contract-substitution.ts
-타입: src/lib/types/contract-module.ts (CONTRACT_VARIABLES)
-```
-
-| 변수 | 소스 |
-|---|---|
-| `{{고객이름}}` | `user_profiles.full_name` |
-| `{{연락처}}` | `user_profiles.phone` |
-| `{{이메일}}` | `user_profiles.email` |
-| `{{주소}}` | `user_shipping_addresses` (is_default=true) |
-| `{{예약코드}}` | `rental_reservations.reservation_code` |
-| `{{상품명}}` | `products.name` |
-| `{{상품코드}}` | `products.product_code` |
-| `{{수령형태}}` / `{{수령일시}}` | pickup_method(레이블 치환) / pickup_time |
-| `{{반납형태}}` / `{{반납일시}}` | return_method(레이블 치환) / return_time |
-| `{{기본대여요금}}` | `orders.total_amount` |
-| `{{할인금액}}` | `orders.discount_amount` (쿠폰+포인트 통합) |
-| `{{부가세}}` | `orders.tax_amount` (2026-08-07 이전: 코드가 항상 '-' 하드코딩 — 실제 컬럼 미조회 버그, 수정 완료) |
-| `{{최종합계}}` | `orders.final_amount` |
+구현 파일 인덱스·API 상세·GATE C 체크리스트는 contract.md 참조.
 
 ---
 
@@ -236,7 +140,7 @@ CMS 전체: min-width 1280px (PC 전용)
 
 | 순서 | status | 레이블 |
 |---|---|---|
-| 1 | `hold` | 신청 |
+| 1 | `hold` | 예약신청 |
 | 2 | `confirmed` | 승인완료 |
 | 3 | `shipped` | 반출중 |
 | 4 | `in_use` | 대여중 |
@@ -354,13 +258,35 @@ cancelled / damage_claimed → 취소 UI (✕ 아이콘 + 빨간 텍스트)
 | 상태 | notifyType | 버튼 텍스트 |
 |---|---|---|
 | `confirmed` | `shipment_notify` | 반출 알림 발송 💬 |
-| `in_use` | `return_remind` | 반납 예정 알림 💬 — **반납일 임박 시 관리자가 수동으로 보내는 용도**(자동발송 아님) |
+| `in_use` | `return_remind` | 반납 예정 알림 💬 — 반납일 당일 09:00 자동 발송 + 관리자 수동 재발송 가능 |
 | `return_requested` | `return_registration` | 반납 정보 요청 💬 |
 | `returned` | `rental_complete` | 대여 종료 알림 💬 |
 
 > `cancelled`, `damage_claimed` 상태에서는 채팅 알림 버튼 미표시.
-> `in_use` 진입 시 자동으로는 `rental_confirm`(대여확인)만 발송되고, `return_remind`(반납예정)는 절대
-> 자동발송되지 않는다 — 반납일 임박 리마인드는 관리자가 이 표의 수동 버튼으로 직접 판단해서 보낸다.
+> `in_use` 진입 시 자동으로는 `rental_confirm`(대여확인)만 발송되고,
+> `return_remind`(반납예정)는 **반납일 당일 09:00 pg_cron(`auto-return-remind`)이 자동 발송**(Migration 256)
+> 하며, 관리자가 이 표의 수동 버튼으로 언제든 재발송도 가능하다.
+> 자동발송 중복 방지: `action_payload->>'action_url'`이 오늘 날짜에 이미 발송된 세션은 스킵.
+
+### `return_remind` 알림 내 고객 반납이력 등록 CTA (2026-08-15 신규)
+
+`return_remind` 메시지의 액션 카드 "반납 등록하기" 버튼:
+- `action_payload.action_url = '/account/rental/{reservation_id}/history'` (Migration 255)
+- `ActionCard.svelte`에서 `window.open(url, '_blank', 'noopener,noreferrer')` — 새 창(탭)으로 열림
+- 착지 화면: `/account/rental/[id]/history` — 고객이 반납 이력(사진+날짜) 직접 등록
+
+**고객 반납이력 등록 화면 (`/account/rental/[id]/history`)**
+```
+- 기존 로그인 세션 재사용(별도 인증 흐름 없음), window.open(_blank)으로 열림
+- 이력 테이블: `product_history_records` (CMS 관리자 이력과 동일 테이블 공유)
+- 구분 컬럼: `registered_by TEXT CHECK ('admin','customer')` — Migration 257
+- 고객 전용 RPC: get_product_history_for_customer / upsert_product_history_record_customer /
+  delete_product_history_record_customer — 전부 SECURITY DEFINER + auth.uid() 소유권 검증
+- 고객 전용 업로드 API: /api/account/rental/[id]/history/upload — reservation.user_id 검증 필수
+- 고객은 자신의 `registered_by='customer'` 이력만 수정·삭제 가능
+  (CMS 관리자가 등록한 'admin' 이력은 읽기 전용)
+- Storage 경로: product-images/{product_id}/customer_history/thumb_{uuid}.webp
+```
 
 ### 상담채팅 세션 상태(chat_sessions.status) — 대기(pending) 재진입 조건
 
@@ -407,6 +333,38 @@ const RENTAL_STATUSES = new Set([
 
 ---
 
+## 예약 1건의 다중 상품 구성 — 옵션상품(reservation_options) (2026-08-14 신설)
+
+> ⛔ 2026-08-14 이전에는 이 규정이 어디에도 문서화되어 있지 않았다 — CMS 대여/예약 관리
+> 화면(`RentalDetailPanel`, `get_rental_list`)과 고객용 `/account/rental` 전부 옵션상품을
+> 다루지 않았음(체크아웃 카드 노출용으로만 존재, Migration 176). 아래가 최초 규정.
+
+```
+예약(rental_reservations) 1건 = 메인상품 1개(product_id, 실물 재고단위 고정) + 옵션상품 0개 이상
+  → 옵션상품은 reservation_options 테이블(reservation_id FK)에 별도 저장
+  → 컬럼: option_product_id(products FK, nullable) · option_name · qty · unit_price
+  → 실물 재고 단위 배정(FOR UPDATE SKIP LOCKED) 대상이 아님 — 수량(qty)만 기록,
+    시리얼 단위 추적 안 함(예: "메모리카드 2개"는 개별 카드를 구분하지 않음)
+  → option_product_id는 보통 부모 상품을 가리켜 product_code가 정책상 NULL인 경우가 흔함
+    (products.md §2-1 — 부모는 영구히 품번 없음). 코드 없는 옵션은 정상 상태.
+
+⛔ 한 고객이 서로 다른 메인상품을 함께 예약(카메라+렌즈 등)하는 것은 옵션상품과 다른 케이스다.
+   그 경우 create_hold_reservation이 상품별로 각각 호출돼 별도의 rental_reservations 행이
+   생성된다(같은 order_id로만 연결) — CMS 목록에도 별도 행 2개로 표시된다. "한 행에 여러
+   메인상품 코드가 몰리는" 시나리오는 존재하지 않는다.
+```
+
+### CMS 표시 (2026-08-14 구현)
+
+```
+RentalDetailPanel.svelte "대여정보" 탭 → "상품 정보" 섹션 바로 아래에 "옵션상품 (N개)" 섹션
+  → GET /api/cms/reservations/{id}/options 로 lazy-fetch(결제정보 탭과 동일 패턴)
+  → 옵션 0개면 섹션 자체 미표시(레거시 예약은 대부분 옵션 없음)
+  → /cms/rentals·/cms/reservation 두 화면이 이 컴포넌트를 공유하므로 별도 구현 불필요
+```
+
+---
+
 ## 구현 파일 참조
 
 ```
@@ -416,6 +374,16 @@ const RENTAL_STATUSES = new Set([
 대여현황 서버   : src/routes/cms/rentals/+page.server.ts
 예약목록 서버   : src/routes/cms/reservation/+page.server.ts (RentalListRow 타입 정본)
 액션 로그 RPC   : supabase/migrations/20260723000154_154_fix_log_rental_action_visit_pickup.sql
+옵션상품 조회   : src/routes/api/cms/reservations/[id]/options/+server.ts
+
+[2026-08-15 신규]
+return_remind CTA URL 추가   : supabase/migrations/20260815000255_255_return_remind_action_url.sql
+CTA 새 창 열기 수정          : src/lib/components/chat/ActionCard.svelte (window.open _blank)
+반납일 자동 알림 cron        : supabase/migrations/20260815000256_256_auto_return_remind_cron.sql
+고객 이력 DB 확장            : supabase/migrations/20260815000257_257_product_history_customer_support.sql
+고객 반납이력 API            : src/routes/api/account/rental/[id]/history/+server.ts
+고객 반납이력 업로드 API     : src/routes/api/account/rental/[id]/history/upload/+server.ts
+고객 반납이력 화면           : src/routes/account/rental/[id]/history/ (+page.server.ts, +page.svelte)
 ```
 
 ---
@@ -434,15 +402,15 @@ const RENTAL_STATUSES = new Set([
 [ ] 스텝퍼 completed 상태 → returned 스텝에 done 처리?
 [ ] 스텝퍼 cancelled/damage_claimed → 취소 UI 표시?
 [ ] 채팅 알림 버튼 cancelled/damage_claimed에서 숨김?
-[ ] 계약서 편집 버튼: signingsentAt 또는 customerSignedAt 있으면 숨김?
-[ ] 계약서 미리보기 & 발송 버튼: 모든 상태에서 항상 표시?
-[ ] PDF 뷰어·다운로드: customerSignedAt 없으면 숨김 (서명 완료 후에만 표시)?
-[ ] 서명 링크 확인 ↗: customerSignedAt 있으면 숨김?
+[ ] 전자계약(발송/편집/서명/딥링크) 관련 GATE C 항목은 contract.md 참조 — 이 문서에서 중복 관리 안 함
 [ ] in_use 진입 시 자동발송은 rental_confirm(대여확인)만 — return_remind는 수동 버튼 전용 유지?
 [ ] 상담세션이 대기/종료 상태에서 새 메시지 도착 시 AI 판단과 무관하게 진행중으로 전환되는가?
+[ ] 옵션상품(reservation_options) 0개인 예약에서 "옵션상품" 섹션이 표시되지 않는가?
+[ ] 옵션상품 product_code가 없는 항목(부모 상품 참조 등)에서 코드칩 없이 정상 표시되는가?
 [ ] 긴급 배지(is_urgent)가 관리자 응답 후 자동 해제되는가?
 ```
 
 ---
 
-*rental-lifecycle.md v1.3 | Harness Flow v3.2 | 2026-07-27 채팅 알림 자동/수동 매핑 분리 + 대기 재진입 조건 문서화*
+*rental-lifecycle.md v1.4 | Harness Flow v3.2 | 2026-07-27 채팅 알림 자동/수동 매핑 분리 + 대기 재진입 조건 문서화 |
+2026-07-28 전자계약 발송·서명 상세 내용을 contract.md로 이관(중복 제거)*
