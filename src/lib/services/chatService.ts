@@ -87,20 +87,37 @@ export async function closeChatSession(
 }
 
 // ──────────────────────────────────────────────
-// 메시지 조회
+// 메시지 조회 (페이지네이션 — 최근 N개 우선 로드, 위로 스크롤 시 이전 메시지 추가 로드)
+// Stephen 확정(2026-08-15): 최초 로딩 20개 / 이전 대화는 위로 스크롤 시 자동 추가로딩
 // ──────────────────────────────────────────────
 
+const DEFAULT_MESSAGE_PAGE_SIZE = 20
+
 export async function loadMessages(
-  sessionId: string
-): Promise<{ messages: ChatMessage[]; error: string | null }> {
-  const { data, error } = await supabase
+  sessionId: string,
+  opts?: { limit?: number; beforeCreatedAt?: string }
+): Promise<{ messages: ChatMessage[]; error: string | null; hasMore: boolean }> {
+  const limit = opts?.limit ?? DEFAULT_MESSAGE_PAGE_SIZE
+
+  let query = supabase
     .from('chat_messages')
     .select('*')
     .eq('session_id', sessionId)
-    .order('created_at', { ascending: true })
+    .order('created_at', { ascending: false }) // 최신순으로 최근 N개를 먼저 확보
+    .limit(limit + 1) // +1건으로 "더 있음" 여부만 판별(별도 count 쿼리 없이)
 
-  if (error) return { messages: [], error: error.message }
-  return { messages: (data as ChatMessage[]) ?? [], error: null }
+  if (opts?.beforeCreatedAt) {
+    query = query.lt('created_at', opts.beforeCreatedAt)
+  }
+
+  const { data, error } = await query
+  if (error) return { messages: [], error: error.message, hasMore: false }
+
+  const rows = (data as ChatMessage[]) ?? []
+  const hasMore = rows.length > limit
+  const page = hasMore ? rows.slice(0, limit) : rows
+  // 화면 표시는 항상 오래된→최신 순 — DESC로 가져온 페이지를 뒤집어 복원
+  return { messages: page.reverse(), error: null, hasMore }
 }
 
 // ──────────────────────────────────────────────

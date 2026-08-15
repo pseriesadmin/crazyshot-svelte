@@ -265,16 +265,20 @@ describe('enrichActionCard — RESERVATION_STATUS_CARD', () => {
 })
 
 // ---------------------------------------------------------------------------
-// 미지원 타입 — 기본 페이로드 반환
+// PAYMENT_REQUEST_CARD — enrichPaymentRequestCard 기본 동작 (미납 연체 없을 때)
+// 상세 테스트는 src/__tests__/server/lateFeePayment.test.ts 참조
 
-describe('enrichActionCard — 미지원 타입', () => {
-  it('PAYMENT_REQUEST_CARD → type + is_expired:false만 반환', async () => {
+describe('enrichActionCard — PAYMENT_REQUEST_CARD (미납 없음 폴백)', () => {
+  it('미납 연체료 없을 때(rental_reservations가 없는 경우) → is_expired:true 반환', async () => {
+    // makeAdmin({}) → rental_reservations 테이블 응답 없음 → is_expired:true
     const admin = makeAdmin({})
 
     const result = await enrichActionCard('PAYMENT_REQUEST_CARD', USER_ID, GENERAL_CTX, admin)
 
     expect(result.type).toBe('PAYMENT_REQUEST_CARD')
-    expect(result.is_expired).toBe(false)
+    // 미납 연체료 없음 → is_expired:true (연체 없는 고객 폴백)
+    expect(result.is_expired).toBe(true)
+    expect(result.late_fee_id).toBeUndefined()
     expect(result.product_name).toBeUndefined()
   })
 })

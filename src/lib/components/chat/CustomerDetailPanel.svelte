@@ -143,7 +143,9 @@
     align-items: center;
     justify-content: space-between;
     padding: 8px 24px;
-    background: transparent;
+    /* 상단 고객정보 헤더(--cs-purple-op10, 10%)보다 옅은 4% 톤 — cms-uiux.md 허용 예외
+       하드코딩 범위(purple tint 0.04~0.12) 내 최저값, 같은 계열로 위계만 표시 */
+    background: rgba(59, 47, 138, 0.04);
     border: none;
     cursor: pointer;
     font: 700 11px/1 'Noto Sans KR', sans-serif;
@@ -153,7 +155,8 @@
     min-height: 36px;
     transition: background 0.12s;
   }
-  .cdp-toggle:hover { background: var(--cs-surface-gray); }
+  /* 기본(4%)보다 두 단계(4%p씩) 짙은 12% 톤 — 허용 범위 상한과 일치, 클릭 가능 영역임을 명확히 표시 */
+  .cdp-toggle:hover { background: rgba(59, 47, 138, 0.12); }
 
   .cdp-toggle-label { flex: 1; text-align: left; }
 
@@ -169,6 +172,10 @@
     display: flex;
     flex-direction: column;
     gap: 5px;
+    /* 펼침 영역도 토글 기본 배경과 동일한 4% 톤 — 하나의 카드처럼 이어지도록 통일 */
+    background: rgba(59, 47, 138, 0.04);
+    /* uiux-index.md CMS 카드 라운드값 "중" = 20px(var(--radius-lg)) — 하단 좌우 모서리만 */
+    border-radius: 0 0 var(--radius-lg) var(--radius-lg);
   }
 
   .cdp-loading, .cdp-empty {

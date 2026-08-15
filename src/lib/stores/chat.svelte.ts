@@ -10,6 +10,9 @@ class ChatStore {
   isOpen = $state<boolean>(false)
   isSending = $state<boolean>(false)
   initialized = $state<boolean>(false)
+  // 메시지 페이지네이션(2026-08-15 확정: 최초 20개 + 위로 스크롤 시 이전 페이지 추가로딩)
+  hasMoreOlderMessages = $state<boolean>(false)
+  isLoadingOlderMessages = $state<boolean>(false)
 }
 
 export const chatStore = new ChatStore()
@@ -32,6 +35,8 @@ export function toggleChat(): void {
 
 export function setActiveSession(sessionId: string | null): void {
   chatStore.activeSessionId = sessionId
+  chatStore.hasMoreOlderMessages = false
+  chatStore.isLoadingOlderMessages = false
   if (sessionId === null) {
     chatStore.messages = []
   }
@@ -50,6 +55,13 @@ export function pushMessage(message: ChatMessage): void {
 
 export function setMessages(messages: ChatMessage[]): void {
   chatStore.messages = messages
+}
+
+// 위로 스크롤해 불러온 이전 페이지를 현재 목록 앞에 병합(중복 방지)
+export function prependMessages(older: ChatMessage[]): void {
+  const existingIds = new Set(chatStore.messages.map((m) => m.id))
+  const fresh = older.filter((m) => !existingIds.has(m.id))
+  if (fresh.length > 0) chatStore.messages = [...fresh, ...chatStore.messages]
 }
 
 export function setSessions(sessions: ChatSession[]): void {

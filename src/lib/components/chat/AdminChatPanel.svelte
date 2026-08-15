@@ -63,6 +63,16 @@
     price_24h: number | null
   }
 
+  // 2단계 쿠폰선물 — 직접발송 쿠폰 타입 (ChatInput coupon popup용)
+  interface CouponItem {
+    id: string
+    code: string
+    description: string | null
+    discount_type: string
+    discount_value: number
+    valid_until: string
+  }
+
   interface Props {
     initialSessions?: ChatSession[]
     initialSessionId?: string | null
@@ -89,6 +99,9 @@
   let isSending = $state(false)
   let isUploading = $state(false)
   let isLoadingMessages = $state(false)
+  // 메시지 페이지네이션(2026-08-15 Stephen 확정: 최초 20개 + 위로 스크롤 시 이전 페이지 추가로딩)
+  let hasMoreOlderMessages = $state(false)
+  let isLoadingOlderMessages = $state(false)
   let pendingDeleteId = $state<string | null>(null)
   let isDeleting = $state(false)
   let flashingSessionIds = $state<Set<string>>(new Set())
@@ -98,6 +111,8 @@
   let csSummaryDraft = $state('')
   let isSavingCsRecord = $state(false)
   let csSaveResult = $state<'saved' | 'error' | null>(null)
+  let isDeletingCsRecord = $state(false)
+  let csDeleteConfirming = $state(false)
 
   // GSD-5: 고객 상세정보 패널
   let customerDetail = $state<CustomerDetailData | null>(null)
@@ -114,10 +129,17 @@
   let showImportantOnly = $state(false)
 
   // 중요 액션 카드 타입 집합 (rental-lifecycle.md AUTO_NOTIFY 기준)
+  // ⚠️ 이 셋은 notify_type이 아니라 실제 저장되는 action_payload.type 값과 매칭돼야 함 —
+  // send_rental_chat_notification RPC(migration 258)가 return_registration→'RETURN_REGISTRATION_CARD',
+  // rental_complete→'RESERVATION_STATUS_CARD'로 변환해서 저장하는데, 이전엔 notify_type 원문
+  // 문자열을 그대로 넣어놔서 "중요 카드만 보기" 필터에서 두 카드가 영구히 안 걸러졌음(2026-08-15
+  // 상담채팅 액션카드 전수조사 P1, 직접 재현 검증 완료 — 수정).
+  // ※ 'RESERVATION_STATUS_CARD'는 AI 응답 경로(chatActionEnrich.ts)의 예약조회 카드와 타입 문자열이
+  // 겹쳐 그쪽도 함께 필터에 걸리지만, 별개의 더 낮은 우선순위 이슈로 이번 수정 범위 밖.
   const IMPORTANT_ACTION_TYPES = new Set([
     'reservation_hold', 'reservation_approval', 'contract_link',
     'shipment_notify', 'rental_confirm', 'return_remind',
-    'return_registration', 'rental_complete',
+    'RETURN_REGISTRATION_CARD', 'RESERVATION_STATUS_CARD',
   ])
 
   // 신규 채팅목록 등장·기존 목록 새 대화 수신/발신 시 카드 배경 점멸 표시 (3회 반복 후 자동 종료)
@@ -180,23 +202,29 @@
     return () => clearInterval(timer)
   })
 
+  // 세션 전체에 대한 북마크 id 집합 — 최초 로드 시 1회 조회 후 이전 페이지 병합에도 재사용
+  let sessionBookmarkedIds = $state<Set<string>>(new Set())
+
   // 선택된 세션 메시지 로드 + Realtime 구독 (GSD-12: 북마크 병합 추가)
+  // 2026-08-15: 전체 히스토리 무조건 로드 → 최근 20개만 우선 로드로 변경(성능 개선)
   $effect(() => {
     const sid = selectedSessionId
-    if (!sid) { messages = []; return }
+    if (!sid) { messages = []; hasMoreOlderMessages = false; return }
 
     isLoadingMessages = true
+    hasMoreOlderMessages = false
     Promise.all([
       loadMessages(sid),
       fetch(`/api/chat/sessions/${sid}/bookmarks`)
         .then((r) => r.ok ? r.json() : { bookmarks: [] })
         .catch(() => ({ bookmarks: [] })),
-    ]).then(([{ messages: msgs }, bookmarkData]) => {
+    ]).then(([{ messages: msgs, hasMore }, bookmarkData]) => {
       interface BookmarkEntry { message_id: string }
-      const bookmarkedIds = new Set<string>(
+      sessionBookmarkedIds = new Set<string>(
         ((bookmarkData as { bookmarks?: BookmarkEntry[] }).bookmarks ?? []).map((b) => b.message_id)
       )
-      messages = msgs.map((m) => ({ ...m, is_bookmarked: bookmarkedIds.has(m.id) }))
+      messages = msgs.map((m) => ({ ...m, is_bookmarked: sessionBookmarkedIds.has(m.id) }))
+      hasMoreOlderMessages = hasMore
       isLoadingMessages = false
       markMessagesRead(sid, ['user'])
     }).catch(() => { isLoadingMessages = false })
@@ -218,6 +246,24 @@
     )
     return unsub
   })
+
+  // MessageList가 위로 스크롤해 상단 근처에 닿으면 호출 — 현재 가장 오래된 메시지 이전 페이지 조회
+  async function handleLoadMoreOlderMessages(): Promise<void> {
+    const sid = selectedSessionId
+    const oldest = messages[0]
+    if (!sid || !oldest || isLoadingOlderMessages || !hasMoreOlderMessages) return
+
+    isLoadingOlderMessages = true
+    try {
+      const { messages: older, hasMore } = await loadMessages(sid, { beforeCreatedAt: oldest.created_at })
+      // 로딩 중 세션이 바뀌었으면 결과 버림(stale)
+      if (selectedSessionId !== sid) return
+      messages = [...older.map((m) => ({ ...m, is_bookmarked: sessionBookmarkedIds.has(m.id) })), ...messages]
+      hasMoreOlderMessages = hasMore
+    } finally {
+      isLoadingOlderMessages = false
+    }
+  }
 
   let filteredSessions = $derived(
     chatStore.sessions.filter((s) => s.status === filterTab)
@@ -300,11 +346,13 @@
       csRecord = null
       csSummaryDraft = ''
       csSaveResult = null
+      csDeleteConfirming = false
       return
     }
     csRecord = null
     csSummaryDraft = ''
     csSaveResult = null
+    csDeleteConfirming = false
     fetch(`/api/chat/sessions/${sid}/cs-record`)
       .then((r) => r.ok ? r.json() : null)
       .then((d: { record: CsRecord | null } | null) => {
@@ -338,6 +386,30 @@
       }
     } finally {
       isSavingCsRecord = false
+    }
+  }
+
+  // 2단계 확인 삭제(TASK-DELETE-TOAST 패턴과 동일) — 1차 클릭: 확인 상태로 전환 후 4초 뒤 자동 해제
+  // 2차 클릭(확인 상태에서): 실제 삭제 실행
+  async function handleDeleteCsRecord(): Promise<void> {
+    if (!selectedSessionId || isDeletingCsRecord) return
+    if (!csDeleteConfirming) {
+      csDeleteConfirming = true
+      setTimeout(() => { csDeleteConfirming = false }, 4000)
+      return
+    }
+    csDeleteConfirming = false
+    isDeletingCsRecord = true
+    try {
+      const res = await fetch(`/api/chat/sessions/${selectedSessionId}/cs-record`, {
+        method: 'DELETE',
+      })
+      if (res.ok) {
+        csRecord = null
+        csSummaryDraft = ''
+      }
+    } finally {
+      isDeletingCsRecord = false
     }
   }
 
@@ -405,6 +477,62 @@
           session_id: selectedSessionId,
           content: product.name,
           action_payload: payload,
+        }),
+      })
+      if (res.ok) {
+        const { message } = await res.json()
+        if (message) {
+          const already = messages.some((m) => m.id === message.id)
+          if (!already) messages = [...messages, message]
+        }
+      }
+    } finally {
+      isSending = false
+    }
+  }
+
+  // 쿠폰선물 2-A: pending 카드 승인·거절
+  async function handleCouponApprove(msgId: string, reject: boolean): Promise<void> {
+    if (!selectedSessionId) return
+    try {
+      const res = await fetch(`/api/cms/chat/coupon-gift/${msgId}/approve`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ reject }),
+      })
+      if (res.ok) {
+        const result = await res.json()
+        // 메시지 목록에서 해당 메시지의 action_payload를 업데이트
+        messages = messages.map((m): ChatMessage => {
+          if (m.id !== msgId || !m.action_payload) return m
+          const newStatus: 'rejected' | 'approved' = result.rejected ? 'rejected' : 'approved'
+          const updated: ActionPayload = {
+            ...m.action_payload,
+            approval_status: newStatus,
+            ...(result.coupon_code ? {
+              coupon_code: result.coupon_code as string,
+              action_url: '/account/profile?tab=coupon',
+            } : {}),
+          }
+          return { ...m, action_payload: updated }
+        })
+      }
+    } catch {
+      // 실패 시 조용히 무시 — 새로고침으로 서버 상태와 동기화 가능
+    }
+  }
+
+  // 쿠폰선물 2-B: 관리자 직접 발송
+  async function handleCouponGift(coupon: CouponItem): Promise<void> {
+    if (!selectedSessionId || isSending) return
+    isSending = true
+    try {
+      const res = await fetch('/api/cms/chat/coupon-gift/direct-send', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          session_id: selectedSessionId,
+          coupon_id: coupon.id,
         }),
       })
       if (res.ok) {
@@ -709,14 +837,6 @@
               {#if customerSummary.blacklisted}
                 <span class="badge-danger">블랙리스트</span>
               {/if}
-              <a
-                class="cs-detail-link"
-                href="/cms/customers?selected={customerSummary.user_id}"
-                aria-label="고객 정보 화면으로 이동"
-                title="고객 정보 화면으로 이동"
-              >
-                <ChevronIcon size={10} color="currentColor" direction="right" />
-              </a>
             </div>
           {/if}
         </div>
@@ -766,6 +886,19 @@
             >대기 전환</button>
           {/if}
         </div>
+
+        {#if customerSummary}
+          <!-- customer-strip 뱃지 줄바꿈과 무관하게, header-toolbar 뒤 레이아웃 진짜 우측
+               맨 끝에 고정 배치 (이전엔 header-toolbar 앞이었음 — Stephen 요청으로 이동) -->
+          <a
+            class="cs-detail-link"
+            href="/cms/customers?selected={customerSummary.user_id}"
+            aria-label="고객 정보 화면으로 이동"
+            title="고객 정보 화면으로 이동"
+          >
+            <ChevronIcon size={10} color="currentColor" direction="right" />
+          </a>
+        {/if}
       </div>
 
       <!-- GSD-5: 고객 상세정보 패널 (접힘/펼침) -->
@@ -795,6 +928,10 @@
             currentUserId="admin"
             isAdmin={true}
             onbookmark={handleBookmark}
+            hasMoreOlder={hasMoreOlderMessages}
+            isLoadingOlder={isLoadingOlderMessages}
+            onloadmore={handleLoadMoreOlderMessages}
+            oncouponapprove={handleCouponApprove}
           />
         {/if}
       </div>
@@ -807,6 +944,7 @@
           onsend={handleSend}
           onattach={handleAdminAttach}
           onproductmention={handleProductMention}
+          oncoupongift={handleCouponGift}
         />
       </div>
 
@@ -819,22 +957,58 @@
           {/if}
         </div>
         <div class="cs-record-input-row">
-          <textarea
-            class="cs-record-textarea"
-            placeholder="상담 요약 또는 메모를 남기세요…"
-            rows={2}
-            bind:value={csSummaryDraft}
-            disabled={isSavingCsRecord}
-            aria-label="상담 메모 입력"
-          ></textarea>
-          <button
-            class="cs-record-save-btn"
-            onclick={handleSaveCsRecord}
-            disabled={isSavingCsRecord || !csSummaryDraft.trim()}
-            aria-label="상담 메모 저장"
-          >
-            {#if isSavingCsRecord}저장 중{:else if csSaveResult === 'saved'}저장됨 ✓{:else if csSaveResult === 'error'}오류{:else}저장{/if}
-          </button>
+          <div class="cs-record-textarea-wrap">
+            <textarea
+              class="cs-record-textarea"
+              placeholder="상담 요약 또는 메모를 남기세요…"
+              rows={2}
+              bind:value={csSummaryDraft}
+              disabled={isSavingCsRecord}
+              aria-label="상담 메모 입력"
+            ></textarea>
+            <div class="cs-record-actions">
+              <button
+                class="act-btn act-add"
+                onclick={handleSaveCsRecord}
+                disabled={isSavingCsRecord || !csSummaryDraft.trim()}
+                aria-label="상담 메모 저장"
+                title="상담 메모 저장"
+              >
+                {#if isSavingCsRecord}
+                  <span class="act-add-status">저장 중</span>
+                {:else if csSaveResult === 'saved'}
+                  <span class="act-add-status">저장됨 ✓</span>
+                {:else if csSaveResult === 'error'}
+                  <span class="act-add-status act-add-status--error">오류</span>
+                {:else}
+                  <svg width="12" height="12" viewBox="0 0 12 12" fill="none" aria-hidden="true">
+                    <path d="M6 1.5v9M1.5 6h9" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+                  </svg>
+                {/if}
+              </button>
+            </div>
+          </div>
+
+          <!-- 삭제는 저장과 바로 붙어있으면 오클릭 위험이 커서(Stephen 지적) 메모 레이아웃
+               바깥 우측으로 완전히 분리 배치 — 시각적 거리로 실수 방지 -->
+          {#if csRecord}
+            <button
+              class="act-btn act-del cs-record-delete-outer"
+              class:act-del--confirming={csDeleteConfirming}
+              onclick={handleDeleteCsRecord}
+              disabled={isDeletingCsRecord}
+              aria-label={csDeleteConfirming ? '상담 메모 삭제 확인' : '상담 메모 삭제'}
+              title={csDeleteConfirming ? '한 번 더 클릭하면 삭제됩니다' : '상담 메모 삭제'}
+            >
+              {#if csDeleteConfirming}
+                <span class="act-del-confirm-label">확인</span>
+              {:else}
+                <svg width="12" height="12" viewBox="0 0 12 12" fill="none" aria-hidden="true">
+                  <path d="M2 3h8M4.5 3V2a.5.5 0 0 1 .5-.5h2a.5.5 0 0 1 .5.5v1M3 3l.5 7a1 1 0 0 0 1 .9h3a1 1 0 0 0 1-.9L9 3" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/>
+                </svg>
+              {/if}
+            </button>
+          {/if}
         </div>
       </div>
     {/if}
@@ -1174,7 +1348,6 @@
 
   .chat-header {
     padding: 20px 24px 16px;
-    border-bottom: 1px solid rgba(16,11,50,0.06);
     display: flex;
     align-items: center;
     gap: 30px;
@@ -1275,9 +1448,10 @@
     color: var(--cs-red-badge);
   }
 
-  /* 심플 화살표 아이콘 버튼 — .refresh-btn과 동일한 표준 아이콘버튼 컨벤션(투명 배경·원형 hover) */
+  /* 심플 화살표 아이콘 버튼 — .refresh-btn과 동일한 표준 아이콘버튼 컨벤션(투명 배경·원형 hover)
+     .chat-header의 직계 flex 자식(header-toolbar 뒤 마지막 요소)으로 배치 — customer-strip
+     뱃지 줄바꿈과 무관하게 레이아웃 진짜 우측 맨 끝에 고정 */
   .cs-detail-link {
-    margin-left: auto;
     flex-shrink: 0;
     display: flex;
     align-items: center;
@@ -1331,7 +1505,8 @@
   .cs-record-section {
     padding: 10px 24px 16px;
     flex-shrink: 0;
-    border-top: 1px solid rgba(16, 11, 50, 0.06);
+    /* 상단 경계선 대신 하단(불투명 흰색)에서 위로 갈수록 투명해지는 그라데이션으로 자연스럽게 구분 */
+    background: linear-gradient(to top, var(--cs-white), transparent);
   }
 
   .cs-record-header {
@@ -1352,27 +1527,38 @@
     color: var(--cs-text-light);
   }
 
+  /* 저장(add)은 텍스트영역 내부, 삭제(del)는 오클릭 방지를 위해 레이아웃 바깥 우측으로 분리 —
+     ChatInput.svelte의 .input-pill 패턴은 저장 버튼에만 적용 */
   .cs-record-input-row {
     display: flex;
-    gap: 8px;
-    align-items: flex-start;
+    align-items: center;
+    gap: 12px;
+  }
+
+  .cs-record-textarea-wrap {
+    position: relative;
+    flex: 1;
+    min-width: 0;
   }
 
   .cs-record-textarea {
-    flex: 1;
+    width: 100%;
     resize: none;
-    border: 1px solid var(--cs-lilac);
-    border-radius: var(--radius-sm);
-    padding: 8px 10px;
+    border: none;
+    /* uiux-index.md CMS 카드 라운드값 "중" = 20px(var(--radius-lg)) */
+    border-radius: var(--radius-lg);
+    /* 상하좌 16px 통일(좌우 기준값으로 확장) — 우측만 저장 버튼 공간 확보용으로 40px 유지 */
+    padding: 16px 40px 16px 16px;
     font: var(--text-pc-body-14);
     color: var(--cs-text);
-    background: var(--cs-surface-gray);
+    /* 가장 옅은 퍼플 bg 토큰(cms-uiux.md 허용 범위 0.04~0.12 중 최저값) */
+    background: rgba(59, 47, 138, 0.04);
     outline: none;
     line-height: 1.5;
-    transition: border-color 0.15s;
+    transition: background 0.15s;
+    box-sizing: border-box;
   }
   .cs-record-textarea:focus {
-    border-color: var(--cs-purple);
     background: var(--cs-white);
   }
   .cs-record-textarea:disabled {
@@ -1380,23 +1566,57 @@
     cursor: not-allowed;
   }
 
-  .cs-record-save-btn {
+  .cs-record-actions {
+    position: absolute;
+    right: 6px;
+    top: 50%;
+    transform: translateY(-50%);
+    display: flex;
+    gap: 4px;
+  }
+
+  /* 삭제 버튼 — 저장 버튼과 시각적 거리를 벌려 오클릭 방지 */
+  .cs-record-delete-outer {
     flex-shrink: 0;
-    height: 36px;
-    padding: 0 16px;
+  }
+
+  /* CMS 표준 아이콘형 액션 버튼(act-del) 공통 베이스 — project_cms_delete_button_standard 준수 */
+  .act-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    height: 28px;
     border: none;
-    border-radius: var(--radius-md);
-    background: var(--cs-purple);
-    color: var(--cs-white);
+    border-radius: var(--radius-sm);
+    background: transparent;
+    cursor: pointer;
+    transition: background 0.1s, color 0.1s;
     font: var(--text-pc-script-12);
     font-weight: 700;
-    cursor: pointer;
-    white-space: nowrap;
-    transition: opacity 0.15s;
-    align-self: center;
+    padding: 0 8px;
+    color: var(--cs-text-light);
   }
-  .cs-record-save-btn:hover:not(:disabled) { opacity: 0.85; }
-  .cs-record-save-btn:disabled { opacity: 0.45; cursor: not-allowed; }
+  .act-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+
+  /* 저장 = '추가' 아이콘 버튼 (act-add) — act-del과 동일 베이스, 퍼플 계열 hover */
+  .act-add:hover:not(:disabled) {
+    background: rgba(59, 47, 138, 0.08);
+    color: var(--cs-purple);
+  }
+  .act-add-status { white-space: nowrap; }
+  .act-add-status--error { color: var(--cs-red-badge); }
+
+  /* 삭제 아이콘 버튼 (act-del 표준 그대로) */
+  .act-del:hover:not(:disabled) {
+    background: rgba(255, 53, 53, 0.08);
+    color: var(--cs-red-badge);
+  }
+  /* 1차 클릭 후 확인 대기 상태 — hover 없이도 경고색 유지 */
+  .act-del--confirming {
+    background: rgba(255, 53, 53, 0.08);
+    color: var(--cs-red-badge);
+  }
+  .act-del-confirm-label { white-space: nowrap; }
 
   /* ── 삭제 버튼 (close-session-btn과 동일 스타일) ── */
   .delete-session-btn {
