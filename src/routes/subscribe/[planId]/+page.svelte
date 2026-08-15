@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { PUBLIC_TOSS_CLIENT_KEY } from '$env/static/public'
+  import { env as publicEnv } from '$env/dynamic/public'
   import { csToast } from '$lib/utils/toast'
   import type { PageData } from './$types'
   import type { ContentBlock } from '$lib/types/content-editor'
@@ -58,7 +58,7 @@
     isLoading = true
     try {
       await loadTossScript()
-      const tossPayments = (window as unknown as TossWindow).TossPayments?.(PUBLIC_TOSS_CLIENT_KEY)
+      const tossPayments = (window as unknown as TossWindow).TossPayments?.(publicEnv.PUBLIC_TOSS_CLIENT_KEY ?? '')
       if (!tossPayments) throw new Error('TossPayments SDK 초기화 실패')
 
       const payment = tossPayments.payment({ customerKey: data.customerKey })
