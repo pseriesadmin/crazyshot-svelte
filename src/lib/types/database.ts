@@ -751,6 +751,14 @@ export interface UpdateUserAvatarArgs {
   p_avatar_url: string;
 }
 
+export interface SubscriptionPolicyItem {
+  id: string;
+  content: string;
+  sort_order: number;
+  created_at: string;
+  updated_at: string;
+}
+
 // =============================================================================
 // ★ SUPABASE DATABASE TYPE (for createClient<Database>())
 // =============================================================================

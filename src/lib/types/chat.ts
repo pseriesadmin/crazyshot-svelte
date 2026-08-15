@@ -46,6 +46,10 @@ export interface ActionPayload {
   // PAYMENT_REQUEST_CARD
   amount?: number
   expires_at?: string          // ISO 8601
+  // PAYMENT_REQUEST_CARD — 연체료 결제 전용 (late_fees 테이블 기반)
+  late_fee_id?: string         // late_fees.id (UUID)
+  fee_amount?: number          // 연체료 금액 (원)
+  hours_late?: number          // 연체 시간 (정수)
   // SHIPMENT_TRACKING_CARD
   tracking_number?: string
   carrier?: string
@@ -53,6 +57,8 @@ export interface ActionPayload {
   // COUPON_GIFT_CARD
   coupon_code?: string
   discount_label?: string      // "20% 할인" / "5,000원 할인"
+  coupon_id?: string           // 발급 대상 쿠폰 UUID (승인 전 대기 단계에서 사용)
+  approval_status?: 'pending' | 'approved' | 'rejected'  // 관리자 승인 대기 상태
   // PRODUCT_CARD
   product_id?: string
   // product_link 카드 (GSD-17: 관리자 @ 멘션 삽입) — PRODUCT_CARD(AI 추천)도 공유

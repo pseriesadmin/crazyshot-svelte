@@ -16,6 +16,7 @@
 
 import type { JSONContent } from '@tiptap/core'
 import type { ContractSubstitutionData } from '$lib/types/contract-module'
+import type { SheetMergeRange, XlsxCellFormatting } from '$lib/types/sheet-format'
 
 // --------------------------------------------------------------------------
 // DB 저장 포맷 (content_blocks JSONB 컬럼)
@@ -169,6 +170,42 @@ export function isCanvasDocument(value: unknown): value is CanvasDocument {
 /** EC-3: 최소 1개 서명 필드 필수 검증 */
 export function hasSignatureField(doc: CanvasDocument): boolean {
   return doc.fields.some((f) => f.type === 'signature')
+}
+
+// --------------------------------------------------------------------------
+// Spreadsheet 모드 — 엑셀 임포트 → 스프레드시트 그리드 편집 (Phase spreadsheet)
+// --------------------------------------------------------------------------
+
+/**
+ * 단일 스프레드시트 시트.
+ * xlsxImport.ts의 parseSheet() 반환 구조와 1:1 대응 — 서드파티 포맷에 종속되지 않는
+ * 자체 스키마로 저장(jspreadsheet-ce 내부 포맷 직접 저장 금지).
+ */
+export interface SpreadsheetSheet {
+  name: string
+  rows: string[][]
+  merges: SheetMergeRange[]
+  colWidths: (number | null)[]
+  cellFormatting: XlsxCellFormatting[][]
+}
+
+/**
+ * 스프레드시트 문서 전체 구조.
+ * contract_templates.spreadsheet_document 및 contracts.spreadsheet_document JSONB 컬럼에 저장.
+ */
+export interface SpreadsheetDocument {
+  sheets: SpreadsheetSheet[]
+  activeSheetIndex: number
+}
+
+/** SpreadsheetDocument 타입 가드 */
+export function isSpreadsheetDocument(value: unknown): value is SpreadsheetDocument {
+  return (
+    typeof value === 'object' &&
+    value !== null &&
+    Array.isArray((value as Record<string, unknown>)['sheets']) &&
+    typeof (value as Record<string, unknown>)['activeSheetIndex'] === 'number'
+  )
 }
 
 /** EC-2: 좌표 범위 검증 — 필드가 해당 페이지 경계 안에 있는지 확인 */
