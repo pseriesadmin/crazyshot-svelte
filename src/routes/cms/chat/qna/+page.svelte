@@ -38,6 +38,10 @@
   const canManageAR = $derived(hasSettingsAccess(data.cmsRole ?? ''))
   const canManageCandidates = $derived(hasSettingsAccess(data.cmsRole ?? ''))
 
+  // 우측 상세 패널에 표시할 내용(신규등록 폼 또는 선택 항목)이 있는지 — 없으면 detail-pane이
+  // 빈 자리만 차지하므로, 그 경우 list-pane을 넓게 펼치고 detail-pane은 접는다
+  const hasDetailContent = $derived(showNew || !!data.selectedItem)
+
   // 필터·검색·정렬된 목록
   const filteredItems = $derived.by<CannedResponseRow[]>(() => {
     let list = data.items as CannedResponseRow[]
@@ -309,7 +313,7 @@
   <!-- master-detail -->
   <div class="master-detail">
     <!-- 좌측 목록 -->
-    <div class="list-pane">
+    <div class="list-pane" class:list-pane--wide={!hasDetailContent}>
       {#if filteredItems.length === 0}
         <div class="empty-list">
           {#if searchQuery || filterCat}
@@ -348,7 +352,7 @@
     </div>
 
     <!-- 우측 상세 패널 -->
-    <div class="detail-pane">
+    <div class="detail-pane" class:detail-pane--collapsed={!hasDetailContent}>
       {#if showNew}
         <CannedResponsePanel item={null} onclose={closePanel} oncreated={handleCreated} />
       {:else if data.selectedItem}
@@ -507,6 +511,7 @@
     overflow: hidden;
     background: var(--cs-white);
     border-radius: var(--cms-radius-lg, 16px);
+    gap: 30px; /* 툴바 ↔ master-detail 선택영역 간 여백 */
   }
 
   /* ── 툴바 ── */
@@ -516,10 +521,9 @@
     justify-content: space-between;
     flex-wrap: wrap;
     gap: 10px;
-    padding: 16px 24px 12px;
+    padding: 0 24px;
     flex-shrink: 0;
     background: var(--cs-white);
-    border-bottom: 1px solid var(--cs-lilac);
   }
 
   .toolbar-left {
@@ -733,24 +737,42 @@
   }
 
   .list-pane {
-    width: 320px;
+    width: 380px;
     flex-shrink: 0;
     overflow-y: auto;
     border-right: 1px solid var(--cs-lilac);
     display: flex;
     flex-direction: column;
-    gap: 1px;
-    padding: 8px;
+    gap: 20px; /* cms-uiux.md spacing-xl(20px, "대") — 카드 간 간격 표준 */
+    /* 상단만 30px — 툴바 영역과의 레이아웃 분리 확보 */
+    padding: 30px 8px 8px;
     background: var(--cs-surface-gray, #f6f6f6);
+    transition: width 0.28s cubic-bezier(0.4, 0, 0.2, 1);
+  }
+  /* 우측 상세 패널에 표시할 내용이 없을 때(신규등록도 아니고 선택 항목도 없을 때) 목록이
+     전체 폭을 채우도록 펼침 — '신규 등록' 클릭이나 항목 선택 시 다시 좁아지며 detail-pane이
+     펼쳐지는 인터랙션과 쌍을 이룸 */
+  .list-pane--wide {
+    width: 100%;
   }
 
   .detail-pane {
     flex: 1;
+    min-width: 0;
     overflow: hidden;
     display: flex;
     flex-direction: column;
     padding: 8px;
     background: var(--cs-surface-gray, #f6f6f6);
+    transition: flex-basis 0.28s cubic-bezier(0.4, 0, 0.2, 1), opacity 0.2s ease;
+  }
+  .detail-pane--collapsed {
+    flex: 0 0 0;
+    width: 0;
+    padding: 0;
+    opacity: 0;
+    overflow: hidden;
+    pointer-events: none;
   }
 
   /* 목록 빈 상태 */
@@ -880,10 +902,10 @@
   .tab-bar-nav {
     display: flex;
     gap: 0;
-    border-bottom: 2px solid var(--cs-lilac);
     flex-shrink: 0;
     background: var(--cs-white);
-    padding: 0 20px;
+    /* cms-uiux.md spacing-xl(20px, "대") — 상하 여백 */
+    padding: 20px;
   }
 
   .tab-nav-btn {
@@ -940,16 +962,16 @@
     align-items: center;
     justify-content: space-between;
     gap: 10px;
-    padding: 14px 24px;
+    padding: 0 24px;
     flex-shrink: 0;
-    border-bottom: 1px solid var(--cs-lilac);
     background: var(--cs-white);
   }
 
   .cand-body {
     flex: 1;
     overflow: auto;
-    padding: 16px 24px;
+    /* .list-pane과 동일하게 상단만 30px — 툴바 영역과의 레이아웃 분리 확보 */
+    padding: 30px 24px 16px;
     background: var(--cs-surface-gray, #f6f6f6);
   }
 

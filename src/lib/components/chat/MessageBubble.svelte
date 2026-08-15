@@ -13,9 +13,11 @@
     onaction?: (payload: ActionPayload) => void
     ondelete?: (messageId: string) => void
     onbookmark?: (messageId: string) => void
+    /** COUPON_GIFT_CARD 승인·거절 콜백 — AdminChatPanel에서 주입 */
+    oncouponapprove?: (messageId: string, reject: boolean) => void
   }
 
-  let { message, isOwn = false, isAdmin = false, onaction, ondelete, onbookmark }: Props = $props()
+  let { message, isOwn = false, isAdmin = false, onaction, ondelete, onbookmark, oncouponapprove }: Props = $props()
 
   // GSD-12: 북마크 로컬 상태 — {#each messages as message (message.id)} 키로 인스턴스가 1:1 고정되므로
   // $state(prop) 초기화가 안전함 (재마운트 문제 없음 — MessageList.svelte keyed each 검증 완료)
@@ -228,7 +230,7 @@
   <div class="bubble-row" class:bubble-row--own={isOwn}>
     <div class="bubble" class:bubble--own={isOwn} class:bubble--other={!isOwn}>
       {#if isActionCard && message.action_payload}
-        <ActionCard payload={message.action_payload} {onaction} messageId={message.id} />
+        <ActionCard payload={message.action_payload} {onaction} messageId={message.id} {isAdmin} {oncouponapprove} />
       {/if}
       {#if isAutoBadge}
         <span class="auto-badge" aria-label="자동답변">자동답변</span>
@@ -278,6 +280,7 @@
 
   /* ── 버블 본체 ── */
   .bubble {
+    position: relative;
     display: flex;
     flex-direction: column;
     gap: 10px;
@@ -285,8 +288,36 @@
     border-radius: var(--radius-md);
     max-width: 100%;
   }
-  .bubble--own   { background: var(--cs-white); gap: 20px; }
+  .bubble--own   { background: var(--cs-surface-gray); gap: 20px; }
   .bubble--other { background: var(--cs-lilac); }
+
+  /* 상호 소통 느낌의 말풍선 꼬리 — 고객(좌측 정렬) 카드는 하단 우측,
+     관리자(우측 정렬) 카드는 하단 좌측에 배치(Stephen 확정 배치)
+     단순 3점 삼각형(clip-path polygon) 대신 radial-gradient mask로 모서리를 둥글게 깎아
+     낸 곡선형 "hook" 꼬리 — 배경색 매칭이 필요한 트릭이 아니라 실제 알파 투명도를 쓰므로
+     버블이 어떤 배경 위에 있어도(관리자/고객 화면 공용 컴포넌트) 매끄럽게 보임 */
+  .bubble--other::after {
+    content: '';
+    position: absolute;
+    bottom: -1px;
+    right: -7px;
+    width: 15px;
+    height: 15px;
+    background: var(--cs-lilac);
+    -webkit-mask-image: radial-gradient(circle at top left, transparent 72%, black 73%);
+    mask-image: radial-gradient(circle at top left, transparent 72%, black 73%);
+  }
+  .bubble--own::after {
+    content: '';
+    position: absolute;
+    bottom: -1px;
+    left: -7px;
+    width: 15px;
+    height: 15px;
+    background: var(--cs-surface-gray);
+    -webkit-mask-image: radial-gradient(circle at top right, transparent 72%, black 73%);
+    mask-image: radial-gradient(circle at top right, transparent 72%, black 73%);
+  }
 
   /* 첨부 버블: padding 줄임 */
   .bubble--attach { padding: 10px; gap: 6px; }

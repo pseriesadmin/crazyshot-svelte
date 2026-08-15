@@ -9,9 +9,32 @@
     onaction?: (payload: ActionPayload) => void
     /** 서버측 만료 재검증용 메시지 ID (MessageBubble에서 전달, 선택적) */
     messageId?: string
+    /** 관리자 뷰 여부 — true 시 pending 쿠폰카드에 승인/거절 버튼 표시 */
+    isAdmin?: boolean
+    /** COUPON_GIFT_CARD 승인/거절 콜백 — AdminChatPanel에서 주입 */
+    oncouponapprove?: (messageId: string, reject: boolean) => void
   }
 
-  let { payload, onaction, messageId }: Props = $props()
+  let { payload, onaction, messageId, isAdmin = false, oncouponapprove }: Props = $props()
+
+  // COUPON_GIFT_CARD 승인 대기 처리
+  let approvalStatus = $derived(
+    payload.type === 'COUPON_GIFT_CARD' ? (payload.approval_status ?? null) : null
+  )
+  let isCouponPending   = $derived(approvalStatus === 'pending')
+  let isCouponRejected  = $derived(approvalStatus === 'rejected')
+
+  let isApproving = $state(false)
+
+  async function handleCouponApprove(reject: boolean): Promise<void> {
+    if (!messageId || isApproving) return
+    isApproving = true
+    try {
+      oncouponapprove?.(messageId, reject)
+    } finally {
+      isApproving = false
+    }
+  }
 
   // CS-A2: 서버측 재검증 실패 시 에러 메시지 표시
   let serverExpiredError = $state(false)
@@ -58,10 +81,41 @@
     }
   }
 
+  // Stephen 확정(2026-08-15): return_remind CTA는 예약의 "현재" 상태에 따라 동작이 갈림 —
+  // 예정(in_use·return_requested)=등록화면 / 지난(returned·completed)=목록화면(둘 다 같은
+  // /account/rental/[id]/history 라우트, 그 페이지 안에서 status로 모드 분기) / 취소·이상
+  // (cancelled·damage_claimed)=버튼 자체를 비활성화. 발송 시점이 아니라 "지금" 상태를 봐야 하므로
+  // 매 렌더 시 가볍게 조회한다(실패 시 fail-open — 목적지 페이지에도 동일한 서버측 가드가 있음).
+  let returnRemindBlocked = $state(false)
+
+  $effect(() => {
+    if (payload.type !== 'return_remind' || !ctaUrl) { returnRemindBlocked = false; return }
+    const match = ctaUrl.match(/\/account\/rental\/(\d+)\/history/)
+    if (!match) { returnRemindBlocked = false; return }
+    let cancelled = false
+    fetch(`/api/chat/reservation-status/${match[1]}`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((data: { status: string } | null) => {
+        if (cancelled) return
+        returnRemindBlocked = data ? ['cancelled', 'damage_claimed'].includes(data.status) : false
+      })
+      .catch(() => { if (!cancelled) returnRemindBlocked = false })
+    return () => { cancelled = true }
+  })
+
   // CS-A2: 서버측 만료 재검증 후 CTA 실행
   async function handleCta(): Promise<void> {
-    if (isExpired) return
+    if (ctaDisabled) return
     serverExpiredError = false
+
+    // 팝업 차단 방지(products.md QR-AUTO-1과 동일 패턴): await fetch 이후 window.open을
+    // 호출하면 사용자 제스처 유효기간이 끝나 브라우저가 조용히 차단한다 — 클릭 직후(await 이전)
+    // 빈 창을 먼저 열어 제스처를 소비해두고, 검증이 끝나면 그 창의 위치만 바꾼다.
+    // ctaUrl은 항상 자사 내부 경로라 noopener 없이 열어도 탭내빙 위험이 없음.
+    let pendingWindow: Window | null = null
+    if (ctaUrl) {
+      pendingWindow = window.open('', '_blank')
+    }
 
     // messageId가 있으면 서버에 만료 여부 재확인 (클라이언트 시계 신뢰 X)
     if (messageId) {
@@ -72,22 +126,28 @@
         if (res.status === 410) {
           // 서버가 만료 확인 → 로컬 상태 갱신 후 중단
           serverExpiredError = true
+          pendingWindow?.close()
           return
         }
         if (!res.ok) {
           // 네트워크 ��류 등 — 진행 불가로 처리
           serverExpiredError = true
+          pendingWindow?.close()
           return
         }
       } catch {
         // fetch 자체 ���패 — 진행 불가
         serverExpiredError = true
+        pendingWindow?.close()
         return
       }
     }
 
     if (onaction) onaction(payload)
-    if (ctaUrl) window.location.href = ctaUrl
+    if (ctaUrl) {
+      if (pendingWindow) pendingWindow.location.href = ctaUrl
+      else window.open(ctaUrl, '_blank')
+    }
   }
 
   // 만료 여부 (PAYMENT_REQUEST_CARD: expires_at 체크)
@@ -95,6 +155,9 @@
     payload.is_expired === true ||
     (payload.expires_at ? new Date(payload.expires_at) < new Date() : false)
   )
+
+  // pending 상태: 고객 화면에선 CTA 비활성 / 관리자 화면엔 승인·거절 버튼으로 대체
+  let ctaDisabled = $derived(isExpired || serverExpiredError || returnRemindBlocked || isCouponPending || isCouponRejected)
 </script>
 
 <div class="action-card" class:expired={isExpired || serverExpiredError}>
@@ -185,12 +248,16 @@
         {#if payload.return_deadline}
           <p class="return-deadline">반납기한: {payload.return_deadline}</p>
         {/if}
+        <!-- 연체료 카드 전용 (PAYMENT_REQUEST_CARD + late_fee_id) -->
+        {#if payload.fee_amount !== undefined && payload.hours_late !== undefined}
+          <p class="late-fee-info">연체 {payload.hours_late}시간 · {payload.fee_amount.toLocaleString()}원</p>
+        {/if}
 
         <!-- CTA 버튼 — Figma node 2497:8767 -->
         <button
           class="cta-btn cta-btn--{ctaColor}"
           onclick={handleCta}
-          disabled={isExpired || serverExpiredError}
+          disabled={ctaDisabled}
           aria-label={isExpired || serverExpiredError ? '기한 만료된 액션' : ctaLabel}
         >
           {isExpired || serverExpiredError ? '기한 만료' : ctaLabel}
@@ -198,21 +265,63 @@
       </div>
     </div>
   {:else}
-    <!-- 상품 이미지 없는 단순 카드 (쿠폰 코드 등) -->
+    <!-- 상품 이미지 없는 단순 카드 (쿠폰 코드 / 연체료 등) -->
     <div class="simple-content">
-      {#if payload.discount_label}
+      {#if payload.fee_amount !== undefined && payload.hours_late !== undefined}
+        <!-- 연체료 결제 요청 카드 -->
+        <p class="late-fee-title">연체료 결제 요청</p>
+        <p class="late-fee-amount">{payload.fee_amount.toLocaleString()}원</p>
+        <p class="late-fee-sub">연체 {payload.hours_late}시간 기준</p>
+      {:else if payload.discount_label}
         <p class="discount-label-lg">{payload.discount_label}</p>
       {/if}
       {#if payload.coupon_code}
         <p class="coupon-code">{payload.coupon_code}</p>
       {/if}
-      <button
-        class="cta-btn cta-btn--{ctaColor} cta-btn--full"
-        onclick={handleCta}
-        disabled={isExpired || serverExpiredError}
-      >
-        {isExpired || serverExpiredError ? '기한 만료' : ctaLabel}
-      </button>
+
+      {#if isCouponPending && isAdmin}
+        <!-- 관리자 화면: pending 상태 → 승인·거절 버튼 -->
+        <div class="coupon-approve-row">
+          <button
+            class="cta-btn cta-btn--purple coupon-approve-btn"
+            onclick={() => handleCouponApprove(false)}
+            disabled={isApproving}
+            aria-label="쿠폰 승인"
+          >
+            {isApproving ? '처리 중...' : '승인'}
+          </button>
+          <button
+            class="cta-btn cta-btn--reject coupon-reject-btn"
+            onclick={() => handleCouponApprove(true)}
+            disabled={isApproving}
+            aria-label="쿠폰 거절"
+          >
+            거절
+          </button>
+        </div>
+      {:else if isCouponPending && !isAdmin}
+        <!-- 고객 화면: pending 상태 → 비활성 안내 버튼 -->
+        <button
+          class="cta-btn cta-btn--pending cta-btn--full"
+          disabled
+          aria-label="쿠폰 확인 중"
+        >
+          쿠폰 확인 중입니다
+        </button>
+      {:else if isCouponRejected}
+        <!-- 거절된 쿠폰 — 만료 처리 (isExpired와 동일 시각) -->
+        <button class="cta-btn cta-btn--purple cta-btn--full" disabled>
+          발급 취소됨
+        </button>
+      {:else}
+        <button
+          class="cta-btn cta-btn--{ctaColor} cta-btn--full"
+          onclick={handleCta}
+          disabled={ctaDisabled}
+        >
+          {isExpired || serverExpiredError ? '기한 만료' : ctaLabel}
+        </button>
+      {/if}
     </div>
   {/if}
 
@@ -345,6 +454,33 @@
     margin: 0;
   }
 
+  /* 연체료 카드 전용 (PAYMENT_REQUEST_CARD + late_fee_id) */
+  .late-fee-info {
+    font: 400 12px/1.5 'Noto Sans KR', sans-serif;
+    color: var(--cs-orange, #FF4500);
+    margin: 0;
+  }
+
+  .late-fee-title {
+    font: 700 13px/1 'Noto Sans KR', sans-serif;
+    color: var(--cs-text-mid, #777);
+    margin: 0;
+    text-transform: uppercase;
+    letter-spacing: 0.3px;
+  }
+
+  .late-fee-amount {
+    font: 700 22px/1.2 'Noto Sans KR', sans-serif;
+    color: var(--cs-red-badge, #FF3535);
+    margin: 4px 0 0;
+  }
+
+  .late-fee-sub {
+    font: 400 12px/1.5 'Noto Sans KR', sans-serif;
+    color: var(--cs-text-mid, #777);
+    margin: 0;
+  }
+
   /* GSD-17: product_link 카드 */
   .product-link-card {
     display: flex;
@@ -395,5 +531,31 @@
     font: 700 14px/1 'Noto Sans KR', sans-serif;
     color: var(--cs-text-mid, #777777);
     backdrop-filter: blur(2px);
+  }
+
+  /* 쿠폰 승인·거절 버튼 행 (관리자 전용) */
+  .coupon-approve-row {
+    display: flex;
+    gap: 8px;
+    width: 100%;
+  }
+  .coupon-approve-btn,
+  .coupon-reject-btn {
+    flex: 1;
+    min-height: 36px;
+    padding: 5px 8px;
+    font-size: 14px;
+  }
+  .cta-btn--reject {
+    background: var(--cs-text-light, #aaaaaa);
+  }
+  .cta-btn--reject:hover:not(:disabled) {
+    filter: brightness(0.88);
+  }
+
+  /* pending 상태 안내 버튼 (고객용) */
+  .cta-btn--pending {
+    background: var(--cs-text-light, #aaaaaa);
+    cursor: not-allowed;
   }
 </style>

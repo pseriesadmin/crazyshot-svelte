@@ -1,5 +1,6 @@
-// GET  /api/chat/sessions/[id]/cs-record — 세션의 CS 상담기록 조회
-// POST /api/chat/sessions/[id]/cs-record — CS 상담기록 저장(upsert)
+// GET    /api/chat/sessions/[id]/cs-record — 세션의 CS 상담기록 조회
+// POST   /api/chat/sessions/[id]/cs-record — CS 상담기록 저장(upsert)
+// DELETE /api/chat/sessions/[id]/cs-record — 세션의 CS 상담기록 전체 삭제
 // 기존 패턴 참조: /api/chat/sessions/[id]/close/+server.ts (service_role + cms_role 확인)
 
 import { json } from '@sveltejs/kit'
@@ -124,4 +125,32 @@ export const POST: RequestHandler = async ({ params, request, locals }) => {
   registerCrossLingualCandidates(summary).catch(() => {})
 
   return json({ record: result.data })
+}
+
+// ── DELETE: 세션의 CS 기록 전체 삭제 ──────────────────────────────
+export const DELETE: RequestHandler = async ({ params, locals }) => {
+  const { session } = await locals.safeGetSession()
+  if (!session) return json({ error: '로그인이 필요합니다.' }, { status: 401 })
+
+  const admin = getAdminClient()
+  if (!admin) return json({ error: '서버 설정 오류입니다.' }, { status: 500 })
+
+  const { data: profile } = await admin
+    .from('user_profiles')
+    .select('cms_role')
+    .eq('id', session.user.id)
+    .single()
+
+  const p = profile as { cms_role: string | null } | null
+  if (!p?.cms_role) return json({ error: '관리자 권한이 필요합니다.' }, { status: 403 })
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const { error } = await (admin as any)
+    .from('cs_records')
+    .delete()
+    .eq('session_id', params.id)
+
+  if (error) return json({ error: error.message }, { status: 500 })
+
+  return json({ ok: true })
 }

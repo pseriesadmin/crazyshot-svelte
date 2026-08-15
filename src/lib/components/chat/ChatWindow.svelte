@@ -17,7 +17,7 @@
     subscribeToChatMessages,
     markMessagesRead,
   } from '$lib/services/chatService'
-  import { chatStore, pushMessage, setMessages, setActiveSession, removeMessage, markMessageRead } from '$lib/stores/chat.svelte'
+  import { chatStore, pushMessage, setMessages, prependMessages, setActiveSession, removeMessage, markMessageRead } from '$lib/stores/chat.svelte'
   import { supabase } from '$lib/services/supabase'
   import type { ChatSession, ActionPayload } from '$lib/types/chat'
 
@@ -112,9 +112,10 @@
     session = existing
     setActiveSession(existing.id)
 
-    // 기존 메시지 로드
-    const { messages: hist } = await loadMessages(existing.id)
+    // 기존 메시지 로드 (2026-08-15: 전체 히스토리 무조건 로드 → 최근 20개만 우선 로드로 변경)
+    const { messages: hist, hasMore } = await loadMessages(existing.id)
     setMessages(hist)
+    chatStore.hasMoreOlderMessages = hasMore
 
     // 받은 메시지(admin, ai)만 읽음 처리 — 본인 메시지는 상대방이 읽어야 활성화
     await markMessagesRead(existing.id, ['admin', 'ai'])
@@ -145,6 +146,23 @@
 
     return unsubscribe
   })
+
+  // MessageList가 위로 스크롤해 상단 근처에 닿으면 호출 — 현재 가장 오래된 메시지 이전 페이지 조회
+  async function handleLoadMoreOlderMessages(): Promise<void> {
+    const sid = session?.id
+    const oldest = messages[0]
+    if (!sid || !oldest || chatStore.isLoadingOlderMessages || !chatStore.hasMoreOlderMessages) return
+
+    chatStore.isLoadingOlderMessages = true
+    try {
+      const { messages: older, hasMore } = await loadMessages(sid, { beforeCreatedAt: oldest.created_at })
+      if (session?.id !== sid) return // 로딩 중 세션이 바뀌었으면 결과 버림(stale)
+      prependMessages(older)
+      chatStore.hasMoreOlderMessages = hasMore
+    } finally {
+      chatStore.isLoadingOlderMessages = false
+    }
+  }
 
   // ── 메시지 전송 ──
   async function handleSend(content: string) {
@@ -249,7 +267,15 @@
       <button onclick={initSession}>다시 시도</button>
     </div>
   {:else}
-    <MessageList {messages} currentUserId={userId} onaction={handleAction} ondelete={handleDeleteMessage} />
+    <MessageList
+      {messages}
+      currentUserId={userId}
+      onaction={handleAction}
+      ondelete={handleDeleteMessage}
+      hasMoreOlder={chatStore.hasMoreOlderMessages}
+      isLoadingOlder={chatStore.isLoadingOlderMessages}
+      onloadmore={handleLoadMoreOlderMessages}
+    />
   {/if}
 
   <!-- 입력 바 -->

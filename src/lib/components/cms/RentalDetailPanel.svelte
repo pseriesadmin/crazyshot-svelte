@@ -305,6 +305,68 @@
     return map[type] ?? '알림 발송 💬'
   }
 
+  // ── 운송장 정보 (lazy-fetch, rental 탭 오픈 시 조회) ──────────────────────
+  let trackingFetchedForId = $state<number | null>(null)
+  let trackingNumber       = $state('')
+  let trackingCourierCode  = $state('')
+  let trackingLoading      = $state(false)
+  let trackingSaving       = $state(false)
+  let trackingError        = $state<string | null>(null)
+
+  $effect(() => {
+    if (activeTab !== 'rental') return
+    if (trackingLoading) return
+    if (trackingFetchedForId === row.reservation_id) return
+
+    const id = row.reservation_id
+    trackingFetchedForId = id
+    trackingNumber       = ''
+    trackingCourierCode  = ''
+    trackingError        = null
+    trackingLoading      = true
+
+    fetch(`/api/cms/reservations/${id}/tracking`)
+      .then(r => r.json())
+      .then((d: { tracking_number: string | null; courier_code: string | null }) => {
+        if (trackingFetchedForId === id) {
+          trackingNumber      = d.tracking_number ?? ''
+          trackingCourierCode = d.courier_code    ?? ''
+          trackingLoading     = false
+        }
+      })
+      .catch(() => {
+        if (trackingFetchedForId === id) {
+          trackingError   = '운송장 정보를 불러오지 못했습니다.'
+          trackingLoading = false
+        }
+      })
+  })
+
+  async function saveTracking(): Promise<void> {
+    trackingSaving = true
+    trackingError  = null
+    try {
+      const res = await fetch(`/api/cms/reservations/${row.reservation_id}/tracking`, {
+        method:  'PATCH',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          tracking_number: trackingNumber  || null,
+          courier_code:    trackingCourierCode || null,
+        }),
+      })
+      if (!res.ok) {
+        const d = await res.json().catch(() => ({})) as { error?: string }
+        trackingError = d.error ?? '저장에 실패했습니다.'
+      } else {
+        csToast.success('운송장 정보가 저장되었습니다.')
+      }
+    } catch {
+      trackingError = '저장 중 오류가 발생했습니다.'
+    } finally {
+      trackingSaving = false
+    }
+  }
+
   // 중복 발송 가드 — 5분 내 동일 알림 발송 이력 추적 (세션 내 휘발, 새로고침 시 초기화)
   const RECENT_NOTIFY_TTL_MS = 5 * 60 * 1000
   let lastSentMap = $state<Map<string, number>>(new Map())
@@ -486,6 +548,45 @@
           <span class="info-value">{formatDate(row.rental_end)}{row.return_time ? ' ' + row.return_time : ''}</span>
         </div>
       </div>
+
+      <!-- 운송장 정보 — 관리자가 택배사·운송장 번호를 등록하면 배송추적 카드에 반영됨 -->
+      <div class="section-title">운송장 정보</div>
+      {#if trackingLoading}
+        <div class="loading-box">운송장 정보 조회 중...</div>
+      {:else}
+        <div class="info-section">
+          <div class="info-row">
+            <span class="info-label">택배사</span>
+            <input
+              class="tracking-input"
+              type="text"
+              placeholder="예: CJ대한통운, 한진택배"
+              bind:value={trackingCourierCode}
+            />
+          </div>
+          <div class="info-row">
+            <span class="info-label">운송장 번호</span>
+            <input
+              class="tracking-input"
+              type="text"
+              placeholder="운송장 번호 입력"
+              bind:value={trackingNumber}
+            />
+          </div>
+        </div>
+        <div class="tracking-action-row">
+          <button
+            class="btn-tracking-save"
+            onclick={saveTracking}
+            disabled={trackingSaving}
+          >
+            {trackingSaving ? '저장 중...' : '운송장 저장'}
+          </button>
+          {#if trackingError}
+            <span class="tracking-error-msg">{trackingError}</span>
+          {/if}
+        </div>
+      {/if}
 
       <!-- 상태 액션 버튼 -->
       <div class="action-section">
@@ -1099,6 +1200,52 @@
   }
   .btn-cancel:hover    { opacity: 0.85; }
   .btn-cancel:disabled { opacity: 0.5; cursor: not-allowed; }
+
+  /* 운송장 정보 섹션 */
+  .tracking-input {
+    flex: 1;
+    height: 32px;
+    padding: 0 10px;
+    border: 1px solid var(--cs-lilac);
+    border-radius: var(--cms-radius-sm);
+    font: var(--text-pc-body-14);
+    color: var(--cs-text);
+    background: var(--cs-white);
+    outline: none;
+    transition: border-color 0.12s;
+  }
+  .tracking-input:focus {
+    border-color: var(--cs-purple);
+  }
+  .tracking-input::placeholder {
+    color: var(--cs-text-light);
+  }
+  .tracking-action-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-top: 4px;
+  }
+  .btn-tracking-save {
+    display: inline-flex;
+    align-items: center;
+    height: 34px;
+    padding: 0 16px;
+    background: var(--cs-surface-gray);
+    color: var(--cs-purple);
+    border: 1px solid var(--cs-purple);
+    border-radius: var(--cms-radius-sm);
+    font: var(--text-pc-script-12);
+    font-weight: 700;
+    cursor: pointer;
+    transition: background 0.12s;
+  }
+  .btn-tracking-save:hover    { background: rgba(59,47,138,0.08); }
+  .btn-tracking-save:disabled { opacity: 0.5; cursor: not-allowed; }
+  .tracking-error-msg {
+    font: var(--text-pc-script-12);
+    color: var(--cs-error, #ef4444);
+  }
 
   /* 채팅 알림 섹션 */
   .notify-section {
