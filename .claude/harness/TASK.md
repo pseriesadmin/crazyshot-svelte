@@ -28,6 +28,112 @@ auth_baseline: fed4fdb — createBrowserClient 패턴 (절대 싱글톤 createCl
 
 ---
 
+## DONE — cs_posts 등 5개 테이블 DB 마이그레이션 누락 발견·복구 (2026-08-14) — GATE C 완료, QA 검수 진행
+
+배경: CMS 대시보드 신규 RPC(`get_dashboard_today_stats`) 프로덕션 배포 전 검증 작업 중 Stephen이
+별도로 "`cs_posts` 테이블이 stage·production 어디에도 없다"는 정황을 제보. 조사 결과 2026-05-29
+S0 초기 배치(파일 `20260529000024`~`028`)가 두 환경 모두에서 적용되지 않았음을 확인 — 형제 파일
+22·23(`notification_tokens`/`notification_logs`)은 2026-08-04/08-07에 이미 누군가 복구했으나,
+24~28(`cs_posts`/`cs_inquiries`/`public_holidays`/`late_fees`/`foreign_users`) 5개는 이 세션까지
+미복구 상태로 방치돼 있었음. `157_cs_inquiry_rpcs` 마이그레이션은 이 테이블들을 참조하는 RPC
+4종을 이미 정상 생성해둔 상태라, 대상 테이블 부재로 호출 시 100% `42P01` 에러가 나는 구조였음
+(CRITICAL 게이트 — DB 변경 + 다중 파일, AskUserQuestion으로 Supabase MCP 연동 승인 및 복구 범위
+확인 완료 후 진행).
+
+조사(Supabase MCP 직접 조회, stage=`ezyvffjvuwmtuhpxdjrw` / production=`vnbpmvxruyciuuaermyh`):
+  - `information_schema.tables`로 두 환경 5개 테이블 전부 부재 확인
+  - `pg_proc`으로 RPC 4종(`get_all_cs_posts`/`submit_cs_post`/`add_cs_reply`/`update_cs_post_status`)은
+    정상 존재 확인 — `CREATE OR REPLACE FUNCTION`이 본문 SQL의 테이블 존재를 생성 시점에 검증하지
+    않기 때문
+  - `list_migrations`로 24~28 이력 부재 + 22·23만 뒤늦게 다른 타임스탬프로 재적용된 흔적 확인
+  - 데이터 유실 우려 조사: `cs_records`라는 유사명 테이블이 존재하나 챗봇 상담시스템 소속(완전
+    무관한 스키마: session_id/category/status/summary/admin_note) — 문의 데이터가 다른 곳에
+    잘못 쌓인 정황 없음. 등록 액션은 실패 시 `fail(500)` 에러 토스트로 노출되는 구조라 "조용히
+    유실"되는 시나리오는 구조적으로 불가능했음(목록 조회만 조용히 빈 화면으로 실패)
+
+복구(Stephen "5개 테이블 전체 복구 범위로 진행해" 승인 후 진행, 원본 24~28 파일은 수정하지 않고
+그대로 보존):
+  - 신규 마이그레이션 5개 작성:
+    - `supabase/migrations/20260814034405_242_recover_cs_posts.sql`
+    - `supabase/migrations/20260814034406_243_recover_cs_inquiries.sql`
+    - `supabase/migrations/20260814034407_244_recover_public_holidays.sql`(2026년 공휴일 15건 시드 포함)
+    - `supabase/migrations/20260814034408_245_recover_late_fees.sql`
+    - `supabase/migrations/20260814034409_246_recover_foreign_users.sql`
+  - stage(`ezyvffjvuwmtuhpxdjrw`) 선적용 → `information_schema` 검증 → production
+    (`vnbpmvxruyciuuaermyh`) 적용 → 재검증 순서 준수(CLAUDE.md 필수 순서)
+  - 원본과 달라진 부분 1건: `late_fees.reservation_id`를 원본은 `UUID`로 정의했으나 실제
+    `rental_reservations.id`가 두 환경 모두 `BIGINT`라 타입 불일치(`42804`)로 stage 1차 적용
+    실패 → `BIGINT`로 보정해 재적용 성공(사유는 파일 상단 주석에 기록)
+  - production `get_advisors(security)` 확인 — 새로 도입된 위험 없음, 뜨는 경고는 원본 설계에
+    이미 내재된 것과 동일 성격(anon 접근 관련 프로젝트 전역 공통 advisory)
+
+영향받는 화면(복구로 정상화 예상, 실제 화면 재현 테스트는 미실시):
+  - `src/routes/account/inquiry`(고객 빠른문의 목록·등록)
+  - `src/lib/components/account/PcInquiryPanel.svelte`(/account PC 문의 패널)
+  - `src/routes/cms/customers/inquiry`(CMS 빠른문의 목록·답변·상태변경)
+  - `src/routes/api/cms/customers/[id]/inquiries`(고객상세패널 문의 이력 API)
+  - `src/lib/components/cms/CustomerDetailPanel.svelte`(고객상세 "빠른문의" 탭)
+
+git commit 미실행(자율 실행 금지, Stephen 진행 대기).
+
+── @sp3-qa-agent 1차 검수 (2026-08-14) → 재검수 필요 판정, 1건 발견·즉시 수정 ──
+  - #1 (BOUNDARY): 신규 마이그레이션 5개 전부 ROLLBACK 섹션 누락(시범오픈 기준 체크리스트
+    항목) — 각 파일 하단에 `-- ROLLBACK:` + 주석처리된 `DROP TABLE IF EXISTS ... CASCADE;`
+    추가(242는 243이 FK로 참조하므로 "243 먼저 롤백" 안내 주석 포함). DB 재적용 불필요(순수
+    주석 추가, CREATE TABLE 본문 무변경)
+  - 그 외 전부 통과: 요청범위 외 파일 변경 없음(git status 확인), 원본 24~28/157 미수정 확인,
+    RLS 정책 원본과 완전 동일(약화 없음), late_fees BIGINT 보정이 최근 3주 코드베이스 관례
+    (migration 140/141/144/147/148/149/159/166/167/176/179/201 전부 reservation_id BIGINT
+    사용)와 일치함을 확인, TASK.md/GSD_LOG.md 기록과 실제 SQL 내용 일치 확인
+
+── @sp3-qa-agent 재검수 (2026-08-14) → GATE E 통과 ✅ ──
+  - ROLLBACK 섹션 5개 파일 전부 정상 추가 확인, FK 의존순서(cs_inquiries → cs_posts) 안내
+    정확함 확인
+  - GATE E 통과 — commit은 Stephen 직접 실행 대기
+
+---
+
+## DONE — origin/main 병합 + 상담채팅 후속 버그 3건 수정 (2026-08-14) — GATE E 통과, QA 재검수 완료
+
+배경: cs_posts 복구 이후 이 워크트리(`claude/exciting-ardinghelli-71ff74`)가 `origin/main`보다
+18커밋 뒤처져 있다는 사실을 발견(상담채팅 6종 기능이 이미 origin/main에 병합돼 있었음) — Stephen
+지시로 `git merge origin/main` 수행(충돌 1곳, `.claude/harness/GSD_LOG.md` 최상단 append 위치
+겹침 — 기계적 충돌로 양쪽 블록 모두 보존해 해결). 병합 직후 `npm install` + `svelte-kit sync` +
+`svelte-check`로 신규 에러 없음 확인(95건 전부 `.env.local` 부재발 또는 기존 pre-existing).
+
+병합 이후 Stephen이 실사용 재현 콘솔 로그를 근거로 신규 버그 3건을 순차 지시, 전부 완료:
+
+1. **비회원 회원전환 시 채팅정보 소실** — `handle_new_user()` 트리거가 `auth.users` UPDATE(익명→
+   영구 전환)엔 실행 안 돼 `user_profiles` 누락되던 버그. `src/lib/stores/auth.ts`에
+   `ensure_user_profile()` RPC 호출 추가. 라이브 DB(stage/production) 직접 조회로 마이그레이션
+   파일과 실제 배포된 함수 정의가 어긋나 있던 드리프트도 발견해 `247_capture_ensure_user_profile_
+   live_definition.sql`로 해소. → **GATE E 통과**(`@sp3-qa-agent`, GSD_LOG.md L74 상세)
+2. **채팅카드 상품링크 가격·이미지 미표시** — `chatActionEnrich.ts`가 `daily_rate` 키로 저장하는데
+   `ActionCard.svelte`는 그 키를 안 읽던 필드명 드리프트. `product_price`로 통일 + 이미지 필드
+   채움 + `ActionCard.svelte` 가격 표시줄 신규 추가. (GSD_LOG.md L74와 동일 커밋)
+3. **콘솔 404 노이즈**(AdminChatPanel.svelte:249 반복 404) — `user_profiles` 없는 게스트를 정상
+   상태가 아닌 에러로 취급하던 API 설계 + `selectSession` 재계산마다 중복 재조회되던
+   `$effect` 구조 수정. `src/routes/api/cms/customers/[id]/summary/+server.ts`(404→200+null),
+   `AdminChatPanel.svelte`(`selectedUserId` 파생값 분리). GATE C: BOUNDARY(자동)로 표기했으나
+   이번 세션 QA 재검수에서 정식 확인 예정(아래 참고).
+
+이어서 "이메일 인증 요구사항이 회원전환 실패의 실제 원인인지" 재검증 지시 → Supabase 대시보드
+스크린샷으로 `Confirm email: ON` 확인 + `SignUpModal.svelte` 코드 추적으로 인증 안내 자체가
+전혀 없음을 확정 → Stephen 결정("휴대폰 인증을 진짜 검증채널로 채택, 서버가 email_confirm 우회")
+에 따라 신규 `POST /api/auth/confirm-verified-signup` + `SignUpModal.svelte` 재구성(더미 휴대폰
+인증 → `/account/profile`에 이미 있던 실제 알리고 SMS 연동 재사용) → **GATE E 통과**
+(`@sp3-qa-agent`, 보안 5항목 CONFIRMED 안전, GSD_LOG.md L4 상세).
+
+이어서 "/cms/chat 상품검색 기능 구현 여부" 검증 지시 → `ChatInput.svelte`의 "@" 멘션 방식은
+처음부터 정상 동작 중이었고(지난 turn 수정과는 별개 경로) 필드명 전 구간 일치 확인. 다만 원 백로그의
+"첨부버튼을 통한 상품검색" 방식은 미구현 확정 — Stephen이 구체 UI 스펙 제시, Plan 작성 완료
+(`/Users/stevenmac/.claude/plans/launch-selected-element-element-tag-svg-snazzy-hanrahan.md`,
+`CmsSimilarNameInput` 재사용 설계) — **아직 Plan 승인/구현 전 상태**(BACKLOG로 남김).
+
+git commit 미실행(Stephen 진행 대기, 병합 커밋 포함 전부 로컬에만 존재).
+
+---
+
 ## BACKLOG — CMS 상담(채팅) Phase 4 대형 아젠다 검토 3건 (2026-08-12) — ⛔ GATE B 대기 (Stephen 승인 + 열린 질문 답변 선행 필요, 정식 실행 태스크 아님)
 
 plan_source: /Users/stevenmac/.claude/plans/users-stevenmac-downloads-crazyshot-bac-compiled-willow.md

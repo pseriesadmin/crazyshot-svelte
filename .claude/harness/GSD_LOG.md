@@ -32,6 +32,156 @@
 [2026-08-15] ⚡GSD | §G-6: pg_cron 자동 스케줄 + QnA UI 업데이트 | supabase/migrations/20260815000254_254_nlsearch_reformulation_cron.sql + src/routes/cms/chat/qna/+page.svelte | 소요: ~20분 | GATE C: BOUNDARY(자동) — run_search_reformulation_scan() PL/pgSQL + cron.schedule('0 3 * * *'), canonical=lower(), 중복방지 GROUP BY, session_key 저장 없음, 수동 버튼 유지 + "매일 새벽 3시 자동 스캔" 안내 추가. Stage/Production 미적용(파일 작성만) — Stage 적용은 Stephen 직접.
 [2026-08-15] 🔴TDD  | §G-5: find_search_reformulation_pairs 유닛테스트 6케이스 | src/__tests__/services/searchReformulationPairs.test.ts | 소요: ~20분 | GATE C: 자동 — 6/6 통과 (장치 1·2·3·5동일어·6+7·정상케이스)
 
+[2026-08-14] 🔴CRITICAL | 게스트 회원가입 이메일 인증 요구사항 — 휴대폰 SMS OTP 실연동 + 서버측 email_confirm 우회 | 3파일 수정+1신규 | GATE E: 통과(@sp3-qa-agent — 보안항목 5개 CONFIRMED 안전, 참고용 BOUNDARY 3건만)
+  | 배경(선행 재검증): Supabase 대시보드 Auth 설정 스크린샷으로 "Confirm email: ON" 확인 →
+  |   SignUpModal.svelte 가입완료 흐름에 이메일 인증 안내가 전혀 없음을 코드로 확정(onsuccess가
+  |   토스트 없이 곧장 리다이렉트). Stephen 확인: "이메일 링크 인증은 관리자(/cms/accounts) 전용
+  |   기능" — 조사 결과 정확함(admin.createUser email_confirm:true는 스태프 계정 생성 시만 사용,
+  |   일반 고객 가입 경로(authService.signUp())엔 어떤 우회도 없음). stage 27명·production 14명
+  |   익명 게스트 전원이 회원전환 미완료(is_anonymous=true, 프로필 0건)인 이유가 바로 이 이메일
+  |   미인증 방치로 확정됨.
+  |
+  | 결정(Stephen): 휴대폰 인증을 "진짜" 검증 채널로 채택 — 인증 완료 시 서버가 email_confirm을
+  |   admin API로 우회(/cms/accounts와 동일 패턴). SignUpModal의 휴대폰 인증이 지금까지
+  |   "아무 값이나 통과"되는 더미였는데, 조사 중 /account/profile 휴대폰변경 기능에 이미 실제
+  |   알리고(Aligo) SMS 연동이 완성돼 있음을 발견(TODO 주석이 낡은 채로 방치돼 있었음) — 새로
+  |   만들 필요 없이 기존 /api/profile/send-otp + verify_and_update_phone RPC를 그대로 재사용.
+  |
+  | 신규: src/routes/api/auth/confirm-verified-signup/+server.ts — 세션 필요, phone_otps에
+  |   해당 user_id의 최근 30분 내 verified_at 기록이 실제로 있는지 서버가 재확인(클라이언트
+  |   주장 신뢰 안 함) 후에만 service_role admin.updateUserById(uid, {email_confirm:true}) 실행
+  |
+  | 수정: src/lib/components/auth/SignUpModal.svelte
+  |   - ensureSignupSession() 신설: 세션 없으면 signInAnonymously() 선발급(ChatWindow.ensureAuth와
+  |     동일 패턴) + ensureUserProfile() RPC로 user_profiles 행 선생성(휴대폰 인증 RPC가 UPDATE라
+  |     행이 없으면 조용히 유실되는 문제 사전 차단) — 이걸로 "/auth/login 직행" 경로도 항상
+  |     익명→영구 전환(updateUser) 경로를 타게 통일돼 세션이 끊기지 않음
+  |   - handleSendOtp(): 더미 setTimeout → 실제 /api/profile/send-otp 호출(진짜 SMS 발송)
+  |   - handleSignUp(): 더미 통과 로직 제거 → verify_and_update_phone RPC로 실제 인증코드 검증 →
+  |     성공 시 performSignUp() → confirm-verified-signup 호출 순서로 재구성
+  |   - "테스트 모드: 아무 숫자나 입력하세요" 안내문구 제거, 실제 발송 안내로 교체
+  |
+  | 수정: src/lib/stores/auth.ts, src/routes/api/cms/customers/[id]/summary/+server.ts,
+  |   src/lib/components/chat/AdminChatPanel.svelte (직전 턴 콘솔404 수정분, 이미 GATE C 완료)
+  |
+  | 검증: npx svelte-check 대상 신규/수정 파일 신규 에러 0건(전체 에러수 95건 그대로 — 병합
+  |   이전부터 있던 .env.local 부재발 $env 에러가 대부분, 무관). verify_and_update_phone RPC
+  |   타입은 database.ts에 이미 등록돼있으나 supabase-js rpc() 제네릭 추론 이슈로 기존 관례대로
+  |   로컬 캐스트 적용(ProductHeroModal.svelte와 동일 패턴).
+  |
+  | @sp3-qa-agent 검수 → GATE E 통과 ✅ — 보안 검수 5항목(타인계정 지정 가능성/재생공격/
+  |   세션충돌/미인증가입경로/RLS정합) 전부 CONFIRMED 안전. 참고용 BOUNDARY 3건(비익명
+  |   사용자 극단 엣지케이스는 기존 사각지대로 이번 diff 무관/30분 윈도우가 /account/profile
+  |   인증도 인정하는 설계 의도 확인 필요/두 OTP 엔드포인트 레이트리밋 부재는 기존부터)
+  |   — 전부 통과 차단 아님, Stephen 참고용
+  |
+  | git commit 미실행(Stephen 진행 대기)
+
+[2026-08-14] ⚡GSD | 콘솔 404 노이즈 수정 — CMS 고객요약 API 게스트 응답 + AdminChatPanel 중복재조회 | 2파일 수정 | GATE E: 통과(@sp3-qa-agent 재검수 완료)
+  | 증상: Stephen 콘솔 리포트 — AdminChatPanel.svelte:249에서 GET
+  |   /api/cms/customers/{uid}/summary 404가 동일 uid로 3회 반복 발생.
+  | 원인1: 라우트 자체는 정상 — user_profiles에 해당 uid 행이 없을 때 서버가 의도적으로
+  |   404를 반환하던 설계. 라이브 DB(stage) 직접 조회로 해당 uid가 아직 회원가입 전인
+  |   순수 게스트(auth.users.is_anonymous=true, user_profiles 0건)임을 확인 — 정상 상태를
+  |   에러로 취급해 콘솔에 실패한 네트워크 요청으로 노출되던 것.
+  | 원인2: AdminChatPanel.svelte의 두 $effect(고객요약·GSD-5 상세정보)가 selectedSession
+  |   $derived 객체를 직접 읽어 uid 추출 — chatStore.sessions가 Realtime으로 재구성될 때마다
+  |   selectedSession이 매번 새 객체 참조가 되어(uid 값은 동일해도) 두 effect가 불필요하게
+  |   재실행되며 동일 uid로 중복 재조회되던 구조.
+  |
+  | 수정: src/routes/api/cms/customers/[id]/summary/+server.ts — 프로필 없음(!data) 분기를
+  |   404 에러 응답 → 200 + json(null)로 변경(호출측은 이미 r.ok 체크로 정상 처리 중이던 구조라
+  |   클라이언트 로직 변경 불필요)
+  | 수정: src/lib/components/chat/AdminChatPanel.svelte — selectedUserId(uid 값만 파생하는
+  |   $derived) 신설, 두 $effect의 참조를 selectedSession?.user_id → selectedUserId로 교체해
+  |   실제 uid 값이 바뀔 때만 재실행되도록 수정(Svelte 5 derived 값비교 최적화 활용)
+  |
+  | 검증: npx svelte-check 대상 2파일 신규 에러 0건(기존 $env 관련 pre-existing 에러 2건은
+  |   무관, .env.local 부재 환경 이슈). 이 endpoint의 유일한 호출부(AdminChatPanel.svelte)
+  |   외 다른 사용처 없음 확인(grep)
+  |
+  | @sp3-qa-agent 검수 → GATE E 통과 ✅ — json(null) 200 응답 클라이언트 처리 정상, 요청범위
+  |   준수(딱 2곳 uid 재조회만 수정), 범위 외 파일 변경 없음 확인. 참고 메모(수정 불요): GSD-8
+  |   manual_mode 동기화 effect(274-276행)도 selectedSession을 직접 읽어 동일한 이론적 과다
+  |   재실행 가능성이 있으나 이번 요청 범위(uid 재조회 2곳) 밖이라 이번엔 미포함 — 필요 시
+  |   별도 태스크로 처리
+  |
+  | git commit 미실행(Stephen 진행 대기)
+
+[2026-08-14] ⚡GSD | origin/main 병합 + 상담채팅 버그 2건 수정 (게스트 회원전환 프로필 소실 / 상품카드 가격·이미지 미표시) | 6파일 수정 + 마이그레이션 1개 | GATE E: 통과(@sp3-qa-agent 조건부 승인 → 라이브 DB 재확인+드리프트 해소 마이그레이션 적용 후 완전 통과)
+  | 병합: claude/exciting-ardinghelli-71ff74 ← origin/main(18커밋, PR #118~#125) — 공통조상
+  |   6819250 이후 분기. 충돌 1곳(.claude/harness/GSD_LOG.md, 양쪽 다 파일 최상단 append 관례로
+  |   인한 기계적 충돌 — 두 블록 다 보존해 해결), TASK.md는 자동 병합. 병합 후 npm install +
+  |   npx svelte-check 확인 — 신규 에러 없음(95건 전부 기존 이슈: 90건은 이 워크트리에
+  |   .env.local 부재로 인한 $env 타입에러, 나머지는 origin/main에 이미 있던 pre-existing
+  |   noCatIcons/checkout undefined/subscriptions 라우트 비교 등, 병합 자체가 만든 문제 아님)
+  |
+  | 버그1 — 비회원(게스트) 채팅 후 회원전환 시 user_profiles 미생성:
+  |   조사 결과 chat_sessions.user_id 자체는 익명→영구 전환(updateUser) 시 동일 UID로 보존돼
+  |   RLS·세션조회 모두 정상 유지됨(GC-1, 커밋 7f4e17f 이미 적용) — 단 handle_new_user() 트리거가
+  |   auth.users INSERT에만 바인딩돼 있어 UPDATE(익명전환)에는 실행 안 되고, user_profiles 행이
+  |   생성되지 않는 확정 결함을 발견. 라이브 DB(stage/production) 직접 조회로 ensure_user_profile()
+  |   RPC(SECURITY DEFINER, RETURNS uuid, ON CONFLICT DO NOTHING — 마이그레이션 파일의 구버전
+  |   TRIGGER 정의와 달리 실제로는 이미 독립 호출 가능한 함수로 재정의돼 있음을 확인) 존재 확인.
+  |   src/lib/stores/auth.ts performSignUp() 익명전환 분기에 rpc.ensureUserProfile() 호출 추가
+  |   (실패해도 가입 자체는 막지 않도록 try/catch) — DB 마이그레이션 불필요(기존 RPC 재사용)
+  |
+  | 버그2 — 채팅 AI 추천 상품카드(PRODUCT_CARD) 가격·이미지 미표시:
+  |   src/lib/server/chatActionEnrich.ts가 가격을 daily_rate 키로 저장하는데 ActionCard.svelte는
+  |   그 키를 전혀 읽지 않음(product_price만 읽음, 그마저 product_link 분기 전용) — 필드명 드리프트
+  |   확정. 이미지도 "Cloudinary/Storage 포맷 불일치로 미설정"이라는 주석이 있었으나 ActionCard.svelte는
+  |   이미 양쪽 포맷 방어분기(L1 QA재검수, §17-5)를 갖추고 있어 전제가 이미 해소된 상태였음.
+  |   수정: daily_rate → product_price로 통일(타입에서 daily_rate 필드 제거), product_image에
+  |   product.image_urls[0] 채움, ActionCard.svelte product-row 분기(PRODUCT_CARD 렌더링 경로)에
+  |   가격 표시 줄 신규 추가(기존엔 이 분기에 가격 표시 자체가 없었음). 계약서 링크 카드는
+  |   조사 결과 값 자체는 정상 전달됨 확인(버그 아님, UI가 밋밋해 보일 뿐)
+  |
+  | 수정 파일: src/lib/server/chatActionEnrich.ts, src/lib/types/chat.ts,
+  |   src/lib/components/chat/ActionCard.svelte, src/__tests__/server/chatActionEnrich.test.ts,
+  |   src/lib/stores/auth.ts
+  |
+  | 검증: npx vitest run chatActionEnrich.test.ts 9/9 통과(product_price·product_image 신규
+  |   검증 포함), npx svelte-check 대상 5파일 신규 에러 0건
+  |
+  | @sp3-qa-agent 1차 검수 → CRITICAL 1건 조건부: "ensure_user_profile() 라이브 정의를 이
+  |   세션이 재확인 못함(QA 서브에이전트는 Supabase MCP 접근 불가)" — 메인 세션은 이미 이전에
+  |   Supabase MCP로 stage+production 양쪽 직접 pg_get_functiondef 조회 완료해뒀던 사실 확인.
+  |   추가로 user_profiles PK가 id(전체 9행 id=user_id 일치, mismatch 0)이고 RLS 정책도
+  |   "id = auth.uid()" 기준임을 재확인해 안전성 최종 검증. 이 드리프트(마이그레이션 파일은
+  |   구버전 TRIGGER 정의, 라이브는 이미 다른 시점에 독립 RPC로 재정의된 상태)를 해소하는
+  |   신규 마이그레이션 247_capture_ensure_user_profile_live_definition.sql 추가 —
+  |   stage(ezyvffjvuwmtuhpxdjrw)·production(vnbpmvxruyciuuaermyh) 양쪽 적용+재확인 완료
+  |   (CREATE OR REPLACE로 라이브와 동일 내용 재적용, 동작 변경 없음 — IaC 정합 목적)
+  |
+  | git commit 미실행(Stephen 진행 대기)
+
+[2026-08-14] 🔴CRITICAL | cs_posts 등 5개 테이블 DB 마이그레이션 누락 발견·복구 (Supabase MCP 직접 조회+적용) | 신규 마이그레이션 5개 | GATE E:통과(@sp3-qa-agent 1차 재검수 완료, ROLLBACK 섹션 누락 1건 수정 후 통과)
+  | 배경: CMS 대시보드 RPC 검증 작업 중 Stephen 제보 — cs_posts가 stage/production 어디에도 없음.
+  |   조사 결과 2026-05-29 S0 초기배치 24~28번 파일(cs_posts/cs_inquiries/public_holidays/
+  |   late_fees/foreign_users)이 두 환경 모두 미적용 상태로 방치됨 확인(형제파일 22·23은 이미
+  |   뒤늦게 복구된 이력 있으나 24~28은 방치). 157_cs_inquiry_rpcs가 이 테이블 참조 RPC 4종을
+  |   이미 만들어둬 호출 시 100% 42P01 에러 구조였음.
+  |
+  | 조사(Supabase MCP): information_schema로 부재 확인, pg_proc으로 RPC 4종 존재 확인,
+  |   list_migrations로 이력 대조, cs_records(무관한 챗봇테이블) 오인 가능성 배제 —
+  |   데이터 유실 없음 확인(등록 실패는 항상 에러 토스트로 노출되는 구조라 조용한 유실 불가능)
+  |
+  | 신규 파일(원본 24~28 파일은 미수정 보존):
+  |   supabase/migrations/20260814034405_242_recover_cs_posts.sql
+  |   supabase/migrations/20260814034406_243_recover_cs_inquiries.sql
+  |   supabase/migrations/20260814034407_244_recover_public_holidays.sql (공휴일 15건 시드)
+  |   supabase/migrations/20260814034408_245_recover_late_fees.sql (원본과 차이: reservation_id
+  |     UUID→BIGINT 보정, rental_reservations.id 실제 타입과 불일치했던 42804 에러 수정)
+  |   supabase/migrations/20260814034409_246_recover_foreign_users.sql
+  |
+  | 적용 순서: stage(ezyvffjvuwmtuhpxdjrw) 5건 적용+검증 → production(vnbpmvxruyciuuaermyh)
+  |   5건 적용+검증(information_schema 재조회, 시드 15건 확인, get_advisors 신규위험 없음 확인)
+  |
+  | 영향 화면(정상화 예상, 미실시): account/inquiry, PcInquiryPanel, cms/customers/inquiry,
+  |   api/cms/customers/[id]/inquiries, CustomerDetailPanel(빠른문의 탭)
+  |
+  | git commit 미실행(Stephen 진행 대기)
+
 [2026-08-14] ⚡GSD | NOW-1 ROUTINE: /cms/subscriptions/new 코드분류 정렬버그 수정 | new/+page.server.ts | 소요: ~5분 | GATE C: ROUTINE(자동) — code_mapping_groups .order('name') 2차 정렬 추가, description/image_url INSERT 제거
 [2026-08-14] ⚡GSD | NOW-2 BOUNDARY: 구독 카드 /products 표준 그리드 패턴 재구성 | +page.svelte | 소요: ~20분 | GATE C: BOUNDARY(자동) — 썸네일 60×60·cat-badge·price-badge, image_urls→SubscriptionPlanRow 추가
 [2026-08-14] ⚡GSD | NOW-3 CRITICAL(DB): 상품설명 탭 신설 + Migration 248 | Migration 248, subscription.ts, SubscriptionDetailPanel.svelte, loadSelectedSubscriptionDetail.ts, +page.server.ts, new/+page.svelte | 소요: ~40분 | GATE C: CRITICAL — stage 마이그레이션 대기

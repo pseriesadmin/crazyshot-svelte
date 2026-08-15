@@ -2,7 +2,7 @@
 // AC-1: intent/action_card.type별 실데이터 조회 후처리 (AI 파이프라인 전용)
 //
 // AI(Claude)는 action_card.type(의도 분류 결과)만 결정한다.
-// 서버가 type별로 DB를 조회해 ActionPayload의 세부 필드(product_name·daily_rate·
+// 서버가 type별로 DB를 조회해 ActionPayload의 세부 필드(product_name·product_price·
 // reservation_no·action_url 등)를 채우는 후처리 단계.
 //
 // 조회 실패 / 데이터 없음 → type + is_expired:false만 있는 기본 페이로드로 폴백 (크래시 없음).
@@ -104,15 +104,15 @@ async function enrichProductCard(
     ? ((priceRaw as Record<string, unknown>).price as number)
     : undefined
 
+  const imageUrls = product.image_urls as string[] | null
+
   return {
     ...base,
     product_id: productId,
     product_name: product.name as string,
-    daily_rate: dailyRate,
+    product_price: dailyRate,
+    product_image: imageUrls?.[0],
     action_url: `/products/${productSlug}`,
-    // product_image: DB의 image_urls는 Supabase Storage 전체 URL로 저장되나
-    // ActionCard.svelte는 Cloudinary public_id를 기대하는 구조 불일치가 있어 미설정.
-    // 카드는 product_name + CTA로 렌더링되며 이미지는 placeholder로 표시됨.
   }
 }
 

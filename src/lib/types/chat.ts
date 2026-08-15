@@ -55,8 +55,7 @@ export interface ActionPayload {
   discount_label?: string      // "20% 할인" / "5,000원 할인"
   // PRODUCT_CARD
   product_id?: string
-  daily_rate?: number
-  // product_link 카드 (GSD-17: 관리자 @ 멘션 삽입)
+  // product_link 카드 (GSD-17: 관리자 @ 멘션 삽입) — PRODUCT_CARD(AI 추천)도 공유
   product_slug?: string
   product_price?: number  // 24시간 기준 가격 (원)
   // RETURN_REGISTRATION_CARD
