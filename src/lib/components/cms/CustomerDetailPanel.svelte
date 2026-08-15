@@ -44,6 +44,13 @@
     created_at: string
   }
 
+  interface SubscriptionPaymentLog {
+    id: string
+    amount: number
+    status: string
+    billed_at: string
+  }
+
   interface AuditEntry {
     id: string
     old_score: number
@@ -53,11 +60,19 @@
     created_at: string
   }
 
+  type CustomerTabKey = 'info' | 'score' | 'subscription' | 'rental' | 'blacklist' | 'inquiry'
+
   interface Props {
     row: CustomerRow
     onclose: () => void
+    initialTab?: string | null
   }
-  let { row, onclose }: Props = $props()
+  let { row, onclose, initialTab = null }: Props = $props()
+
+  const VALID_TABS: CustomerTabKey[] = ['info', 'score', 'subscription', 'rental', 'blacklist', 'inquiry']
+  function resolveInitialTab(tab: string | null): CustomerTabKey {
+    return VALID_TABS.includes(tab as CustomerTabKey) ? (tab as CustomerTabKey) : 'info'
+  }
 
   interface CsInquiryReply {
     id: string
@@ -100,7 +115,7 @@
     closed_at: string | null
   }
 
-  let activeTab = $state<'info' | 'score' | 'subscription' | 'rental' | 'blacklist' | 'inquiry'>('info')
+  let activeTab = $state<CustomerTabKey>(resolveInitialTab(initialTab))
   let subscriptions = $state<Subscription[]>([])
   let auditLog = $state<AuditEntry[]>([])
   let inquiryPosts = $state<CsPost[]>([])
@@ -114,6 +129,9 @@
   let chatSessions = $state<CustomerChatSession[]>([])
   let loadingChatSessions = $state(false)
   let chatSessionsLoaded = $state(false)
+  let subscriptionsLoaded = $state(false)
+  let auditLoaded = $state(false)
+  let rentalsLoaded = $state(false)
 
   // 스코어 탭 폼 상태
   let adjustDelta = $state(0)
@@ -132,14 +150,19 @@
   let cancelTargetId = $state<string | null>(null)
   let cancelReason = $state('')
 
+  // 구독이력 탭 — 결제내역 펼침 상태(구독별 지연조회, 대여 결제정보 탭과 동일한 탭당-1회 fetch 패턴)
+  let expandedPaymentSubId = $state<string | null>(null)
+  let paymentsBySubId = $state<Record<string, SubscriptionPaymentLog[]>>({})
+  let loadingPaymentsSubId = $state<string | null>(null)
+
   $effect(() => {
-    if (activeTab === 'subscription' && subscriptions.length === 0 && !loadingSubscriptions) {
+    if (activeTab === 'subscription' && !subscriptionsLoaded && !loadingSubscriptions) {
       loadSubscriptions()
     }
-    if (activeTab === 'score' && auditLog.length === 0 && !loadingAudit) {
+    if (activeTab === 'score' && !auditLoaded && !loadingAudit) {
       loadAuditLog()
     }
-    if (activeTab === 'rental' && rentals.length === 0 && !loadingRentals) {
+    if (activeTab === 'rental' && !rentalsLoaded && !loadingRentals) {
       loadRentals()
     }
     if (activeTab === 'inquiry' && !inquiryPostsLoaded && !loadingInquiries) {
@@ -168,7 +191,36 @@
         }))
       }
     } finally {
+      subscriptionsLoaded = true
       loadingSubscriptions = false
+    }
+  }
+
+  async function togglePaymentHistory(subscriptionId: string) {
+    if (expandedPaymentSubId === subscriptionId) {
+      expandedPaymentSubId = null
+      return
+    }
+    expandedPaymentSubId = subscriptionId
+    if (paymentsBySubId[subscriptionId]) return
+    loadingPaymentsSubId = subscriptionId
+    try {
+      const res = await fetch(`/cms/customers/subscription-payments?userSubscriptionId=${encodeURIComponent(subscriptionId)}`)
+      if (res.ok) {
+        const data = await res.json() as Array<Record<string, unknown>>
+        paymentsBySubId[subscriptionId] = data.map(r => ({
+          id: String(r.id),
+          amount: r.amount as number,
+          status: r.status as string,
+          billed_at: r.billed_at as string,
+        }))
+      } else {
+        csToast.error(`결제내역 조회 실패 (${res.status})`)
+      }
+    } catch {
+      csToast.error('결제내역 조회 중 오류가 발생했습니다.')
+    } finally {
+      loadingPaymentsSubId = null
     }
   }
 
@@ -180,6 +232,7 @@
         auditLog = await res.json() as AuditEntry[]
       }
     } finally {
+      auditLoaded = true
       loadingAudit = false
     }
   }
@@ -209,6 +262,7 @@
         rentals = await res.json() as RentalRow[]
       }
     } finally {
+      rentalsLoaded = true
       loadingRentals = false
     }
   }
@@ -1262,10 +1316,38 @@
                 <span class="sub-tier grade-badge grade-{sub.plan_name.toLowerCase()}">{tierLabel(sub.plan_name)}</span>
               {/if}
               <span class="sub-status status-{sub.status}">{statusLabel(sub.status)}</span>
+              {#if sub.plan_id}
+                <a
+                  class="sub-plan-link"
+                  href="/cms/subscriptions?selected={sub.plan_id}"
+                  target="_blank"
+                  rel="noopener"
+                >구독상품 상세 →</a>
+              {/if}
             </div>
             <div class="sub-meta">
               <span>{formatDate(sub.started_at)} ~ {formatDate(sub.expires_at)}</span>
             </div>
+            <button class="sub-payment-toggle" onclick={() => togglePaymentHistory(sub.id)}>
+              결제내역 {expandedPaymentSubId === sub.id ? '숨기기' : '보기'}
+            </button>
+            {#if expandedPaymentSubId === sub.id}
+              <div class="sub-payment-list">
+                {#if loadingPaymentsSubId === sub.id}
+                  <div class="loading-text">결제내역 불러오는 중...</div>
+                {:else if (paymentsBySubId[sub.id] ?? []).length === 0}
+                  <div class="no-data">결제 이력이 없습니다.</div>
+                {:else}
+                  {#each paymentsBySubId[sub.id] as p (p.id)}
+                    <div class="sub-payment-row">
+                      <span class="sub-payment-date">{formatDate(p.billed_at)}</span>
+                      <span class="sub-payment-amount">{p.amount.toLocaleString()}원</span>
+                      <span class="sub-payment-status sub-payment-{p.status}">{p.status === 'succeeded' ? '성공' : p.status === 'failed' ? '실패' : p.status}</span>
+                    </div>
+                  {/each}
+                {/if}
+              </div>
+            {/if}
             {#if sub.status === 'active'}
               <div class="sub-actions">
                 <button
@@ -1757,6 +1839,10 @@
   .sub-card.sub-active { border-color: var(--cs-purple); }
   .sub-row { display: flex; align-items: center; gap: 8px; }
   .sub-tier { }
+  .sub-plan-link {
+    margin-left: auto; font: var(--text-pc-script-12); color: var(--cs-purple);
+    text-decoration: underline; white-space: nowrap;
+  }
   .sub-status { font: var(--text-pc-script-12); font-weight: 700; }
   .status-active   { color: var(--cs-success-light); }
   .status-cancelled{ color: var(--cs-red-badge); }
@@ -1766,6 +1852,24 @@
   .sub-meta { font: var(--text-pc-script-12); color: var(--cs-text-mid); display: flex; gap: 12px; }
   .sub-reason { font: var(--text-pc-descript-10); color: var(--cs-text-mid); background: #F3F4F6; padding: 6px 10px; border-radius: 4px; }
   .sub-actions { display: flex; gap: 8px; }
+
+  .sub-payment-toggle {
+    align-self: flex-start; border: none; background: none; padding: 0;
+    font: var(--text-pc-script-12); color: var(--cs-purple); cursor: pointer;
+    text-decoration: underline;
+  }
+  .sub-payment-list {
+    display: flex; flex-direction: column; gap: 4px;
+    background: #F3F4F6; border-radius: 4px; padding: 8px 10px;
+  }
+  .sub-payment-row {
+    display: flex; align-items: center; gap: 10px; font: var(--text-pc-script-12);
+  }
+  .sub-payment-date   { color: var(--cs-text-mid); flex-shrink: 0; }
+  .sub-payment-amount { color: var(--cs-text); font-weight: 700; }
+  .sub-payment-status { font-weight: 700; }
+  .sub-payment-succeeded { color: var(--cs-success-light); }
+  .sub-payment-failed    { color: var(--cs-red-badge); }
 
   /* 버튼들 */
   .btn-primary {

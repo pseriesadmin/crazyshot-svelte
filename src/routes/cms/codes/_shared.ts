@@ -1,4 +1,5 @@
 import type { CodeFormat } from './+page.server'
+import { PRODUCT_CATEGORY_OPTIONS } from '$lib/utils/productCategoryTaxonomy'
 
 export const ROOT_COLORS: Record<string, string> = {
   CAM: '#FF4500', OPT: '#3B2F8A', LGT: '#F59E0B', AUD: '#0EA5E9',
@@ -6,17 +7,8 @@ export const ROOT_COLORS: Record<string, string> = {
   STD: '#14B8A6', VID: '#F97316', ACC: '#84CC16', PKG: '#06B6D4',
 }
 
-export const PRODUCT_CATS = [
-  { value: 'camera',     label: '카메라' },
-  { value: 'lens',       label: '렌즈' },
-  { value: 'camcorder',  label: '캠코더' },
-  { value: 'action_cam', label: '액션캠' },
-  { value: 'drone',      label: '드론' },
-  { value: 'lighting',   label: '조명' },
-  { value: 'audio',      label: '오디오' },
-  { value: 'accessory',  label: '악세서리' },
-  { value: 'package',    label: '패키지' },
-]
+// 9종 카테고리 값·라벨 정의는 $lib/utils/productCategoryTaxonomy.ts 단일 소스로 통합됨
+export const PRODUCT_CATS = PRODUCT_CATEGORY_OPTIONS
 
 export function datePart(fmt: string): string {
   const now = new Date()

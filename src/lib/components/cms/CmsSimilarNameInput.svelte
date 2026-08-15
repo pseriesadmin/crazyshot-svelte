@@ -1,5 +1,6 @@
 <script lang="ts">
   import type { Snippet } from 'svelte'
+  import { untrack } from 'svelte'
   import { supabase } from '$lib/services/supabase'
   import type { SimilarNameItem, SimilarNameSource } from '$lib/types/cms-similar-name'
 
@@ -47,7 +48,7 @@
     required = false,
     minChars = 2,
     debounceMs = 280,
-    limit = 8,
+    limit = $bindable(8),
     excludeId = null,
     source = 'product_name',
     activeOnly = false,
@@ -119,7 +120,8 @@
         return
       }
       suggestions = dedupeBrandRows((data ?? []) as { id: string; brand: string | null; category: string | null }[])
-      suggestOpen = suggestions.length > 0
+      // 검색은 실행됐으므로(minChars 통과) 0건이어도 레이어를 열어 "검색 결과가 없습니다" 노출
+      suggestOpen = true
       suggestIdx = -1
       return
     }
@@ -149,7 +151,8 @@
       }
 
       suggestions = fetched
-      suggestOpen = suggestions.length > 0
+      // 검색은 실행됐으므로(minChars 통과) 0건이어도 레이어를 열어 "검색 결과가 없습니다" 노출
+      suggestOpen = true
       suggestIdx = -1
       return
     }
@@ -174,7 +177,8 @@
       return
     }
     suggestions = (data ?? []) as SimilarNameItem[]
-    suggestOpen = suggestions.length > 0
+    // 검색은 실행됐으므로(minChars 통과) 0건이어도 레이어를 열어 "검색 결과가 없습니다" 노출
+    suggestOpen = true
     suggestIdx = -1
   }
 
@@ -206,6 +210,16 @@
       })
     }, debounceMs)
   }
+
+  // 호출부가 bind:limit으로 limit을 늘려 "더 많은 결과 보기"를 트리거할 때만 재검색
+  // (마운트 시 최초 1회는 currentLimit === prevLimit이라 자연히 스킵됨 — 별도 플래그 불필요)
+  let prevLimit = limit
+  $effect(() => {
+    const currentLimit = limit
+    if (currentLimit === prevLimit) return
+    prevLimit = currentLimit
+    if (untrack(() => value.trim().length >= minChars)) scheduleSuggest()
+  })
 
   function closeSuggest(): void {
     suggestOpen = false
@@ -256,7 +270,8 @@
     oninput: handleNativeInput,
     onkeydown: handleKeydown,
     onfocus: () => {
-      if (suggestions.length > 0 && value.trim().length >= minChars) suggestOpen = true
+      // 결과 0건이어도 재포커스 시 "검색 결과가 없습니다" 상태를 다시 보여줌
+      if (value.trim().length >= minChars) suggestOpen = true
     },
     onblur: () => {
       setTimeout(closeSuggest, 150)
@@ -279,6 +294,8 @@
     >
       {#if suggestLoading && suggestions.length === 0}
         <p class="cms-similar-name-status">검색 중...</p>
+      {:else if suggestions.length === 0}
+        <p class="cms-similar-name-status">검색 결과가 없습니다</p>
       {:else}
         {#each suggestions as item, i (item.id)}
           <button

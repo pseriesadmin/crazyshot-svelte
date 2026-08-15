@@ -29,8 +29,10 @@
   ]
 
   let searchInput = $state(data.search ?? '')
-  let selectedUserId = $state<string | null>(null)
-  let selectedRow = $state<CustomerRow | null>(null)
+  // /cms/subscriptions 구독자현황 탭 등에서 ?selected=<user_id>(+?tab=)로 딥링크 진입 시
+  // 서버 load()가 이미 조회해둔 값으로 초기 상태를 채운다(페이지네이션·필터와 무관한 단건 조회).
+  let selectedUserId = $state<string | null>(data.selected ?? null)
+  let selectedRow = $state<CustomerRow | null>(data.selectedCustomer ?? null)
 
   // invalidateAll() 후 data.customers가 갱신되면 selectedRow도 최신 데이터로 동기화
   $effect(() => {
@@ -85,6 +87,7 @@
     selectedRow = row  // 즉시 패널 표시; $effect가 data 갱신 후 최신값으로 덮어씀
     const params = new URLSearchParams(window.location.search)
     params.set('selected', row.user_id)
+    params.delete('tab') // 목록에서 직접 클릭한 경우 이전 딥링크의 tab이 남아있지 않도록 초기화
     goto(`/cms/customers?${params.toString()}`, { replaceState: true, noScroll: true })
   }
 
@@ -93,6 +96,7 @@
     selectedRow = null
     const params = new URLSearchParams(window.location.search)
     params.delete('selected')
+    params.delete('tab')
     goto(`/cms/customers?${params.toString()}`, { replaceState: true, noScroll: true })
   }
 
@@ -269,6 +273,7 @@
           <CustomerDetailPanel
             row={selectedRow}
             onclose={closePanel}
+            initialTab={data.selected === selectedUserId ? data.tab : null}
           />
         {/key}
       </div>

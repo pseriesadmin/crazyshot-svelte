@@ -21,13 +21,14 @@ function todayOffset(n: number): string {
 }
 
 // CmsDashboardSubscriptions.svelte 의 SubRow와 구조 동일 (서버 → 컴포넌트 경계)
+// 2026-08-15: 레거시 subscriptions 테이블 → subscription_plans+user_subscriptions로 데이터 소스 교체
 interface SubRow {
   id: string
   user_id: string
-  tier: string
-  price_per_month: number
-  billing_cycle_start: string
-  billing_cycle_end: string
+  tier: string           // lowercase: 'easy' | 'pop' | 'crazy'
+  monthly_price: number  // subscription_plans.monthly_price
+  started_at: string     // user_subscriptions.started_at
+  expires_at: string     // user_subscriptions.expires_at
   created_at: string
   customer_name: string
 }
@@ -38,49 +39,37 @@ export const load: PageServerLoad = async ({ parent, fetch, locals }) => {
 
   const admin = createClient(PUBLIC_SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
 
-  // Phase 1 — subscriptions 테이블 실제 조회 (status=active, deleted_at IS NULL)
-  const { data: subs } = await admin
-    .from('subscriptions')
-    .select('id, user_id, tier, price_per_month, billing_cycle_start, billing_cycle_end, created_at')
+  // Phase 1 — subscription_plans(active) + user_subscriptions(active) 병렬 조회
+  // 2026-08-15: 레거시 subscriptions 테이블(PGRST205 오류) → 살아있는 테이블로 교체
+  // membership_grade(EASY/POP/CRAZY) 기준 buckets 재구성, user_profiles 내장 select로 단일 쿼리 처리
+  const { data: subsData } = await admin
+    .from('user_subscriptions')
+    .select(`
+      id, user_id, started_at, expires_at, created_at,
+      subscription_plans!plan_id(monthly_price, membership_grade),
+      user_profiles!user_id(full_name)
+    `)
     .eq('status', 'active')
-    .is('deleted_at', null)
 
-  const activeSubs = subs ?? []
-
-  // 구독자 이름 별도 조회
-  // subscriptions.user_id → auth.users(id) ← user_profiles.user_id
-  // PostgREST FK 직접 join 불가 → user_ids 수집 후 user_profiles 개별 조회
-  const userIds = [...new Set(activeSubs.map(s => s.user_id))]
-  const nameMap: Record<string, string> = {}
-
-  if (userIds.length > 0) {
-    const { data: profiles } = await admin
-      .from('user_profiles')
-      .select('user_id, name')
-      .in('user_id', userIds)
-    for (const p of profiles ?? []) {
-      nameMap[p.user_id] = p.name ?? ''
-    }
-  }
-
-  // tier별 그룹핑
   const subscriptionData: { easy: SubRow[]; pop: SubRow[]; crazy: SubRow[] } = {
     easy: [], pop: [], crazy: [],
   }
-  for (const s of activeSubs) {
-    const row: SubRow = {
-      id: s.id,
-      user_id: s.user_id,
-      tier: s.tier,
-      price_per_month: Number(s.price_per_month),
-      billing_cycle_start: s.billing_cycle_start,
-      billing_cycle_end: s.billing_cycle_end,
-      created_at: s.created_at,
-      customer_name: nameMap[s.user_id] ?? '',
-    }
-    if (s.tier === 'easy') subscriptionData.easy.push(row)
-    else if (s.tier === 'pop') subscriptionData.pop.push(row)
-    else if (s.tier === 'crazy') subscriptionData.crazy.push(row)
+  for (const s of (subsData ?? []) as Record<string, unknown>[]) {
+    const plan    = s.subscription_plans as Record<string, unknown> | null
+    const profile = s.user_profiles      as Record<string, unknown> | null
+    const grade   = String(plan?.membership_grade ?? '').toUpperCase()
+    const tierKey = grade === 'EASY' ? 'easy' : grade === 'POP' ? 'pop' : grade === 'CRAZY' ? 'crazy' : null
+    if (!tierKey) continue // NONE 등급이나 알 수 없는 grade는 집계 제외
+    subscriptionData[tierKey].push({
+      id:            String(s.id),
+      user_id:       s.user_id as string,
+      tier:          tierKey,
+      monthly_price: Number(plan?.monthly_price ?? 0),
+      started_at:    String(s.started_at ?? ''),
+      expires_at:    String(s.expires_at ?? ''),
+      created_at:    s.created_at as string,
+      customer_name: String(profile?.full_name ?? ''),
+    })
   }
 
   // Phase 4 — 간트 초기 14일 창 (오늘 -3 ~ 오늘 +10)

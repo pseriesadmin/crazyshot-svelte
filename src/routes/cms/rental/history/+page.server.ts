@@ -16,18 +16,19 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 
   const admin = createClient(getSupabaseUrl(), env.SUPABASE_SERVICE_ROLE_KEY ?? '')
 
-  // 카테고리 레이블 맵 (카드 배지·패널 헤더 표시용, depth=0 기준)
-  const { data: rawCatCodes } = await admin
-    .from('product_category_codes')
-    .select('product_category, name')
-    .eq('depth', 0)
+  // 카테고리 레이블 맵 (카드 배지·패널 헤더 표시용) — code_mapping_groups가 카테고리 체계의
+  // 유일한 정본(products/+page.server.ts와 동일 원칙, 2026-08-10 확정). product_category_codes는
+  // 품번 프리픽스·쿠폰·회원등급 등이 뒤섞인 별개 코드체계라 카테고리 라벨 조회에 관여시키지 않는다.
+  const { data: rawCatGroups } = await admin
+    .from('code_mapping_groups')
+    .select('default_category, name')
+    .not('default_category', 'is', null)
     .eq('is_active', true)
-    .is('deleted_at', null)
 
   const categoryLabels: Record<string, string> = Object.fromEntries(
-    (rawCatCodes ?? [])
-      .filter((c) => c.product_category)
-      .map((c) => [c.product_category as string, c.name as string])
+    (rawCatGroups ?? [])
+      .filter((c) => c.default_category)
+      .map((c) => [c.default_category as string, c.name as string])
   )
 
   // 상품 목록 — 대표(부모) 상품만 노출 (products.md: 부모+자식 혼합 조회 금지)

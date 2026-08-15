@@ -80,7 +80,7 @@
       label: '상담',
       subMenus: [
         { label: '채팅', href: '/cms/chat' },
-        { label: '자동 메시지 설정', href: '/cms/chat/qna' },
+        { label: '빠른답변목록', href: '/cms/chat/qna' },
       ],
     },
     { id: 'reservation', label: '예약', subMenus: [
