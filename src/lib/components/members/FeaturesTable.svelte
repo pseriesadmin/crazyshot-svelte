@@ -1,23 +1,34 @@
 <script lang="ts">
-  const ROWS = [
-    { label: '월 사용료',        easy: '9,900 원',              pop: '19,000 원',                   crazy: '29,000 원' },
-    { label: '이상적인 대상',    easy: '신규 제작자 및\nK-브이로거', pop: '성장하는 제작자 및\nK-Pop 팬덤', crazy: '전업 유튜버 및\n제작사' },
-    { label: '무료 배송',        easy: '50% 할인 (월 2회)',      pop: '월 2회',                      crazy: '무제한' },
-    { label: '신규 장비 조기 접근', easy: '—',                  pop: '무제한',                      crazy: '무제한' },
-    { label: '보증금',           easy: '신용카드 보증금',         pop: '신용카드 보증금',               crazy: '면제' },
-    { label: '할인',             easy: '—',                     pop: '추가 10% 할인',               crazy: '모든 대여 10% 할인' },
-    { label: '보호',             easy: '손상 보호',              pop: '손상 보호',                   crazy: '손상 보호' },
-    { label: '프로 지원',        easy: '—',                     pop: '—',                           crazy: '1:1 프로 상담' },
-  ]
+  import type { SubscriptionPlanRow } from '$lib/types/subscription'
 
-  type TabIdx = 0 | 1 | 2
-  let activeTab = $state<TabIdx>(0)
+  interface Props {
+    plans: SubscriptionPlanRow[]
+    selectedPlanId: number | null
+    onselect: (id: number) => void
+  }
 
-  const COLS = [
-    { label: 'Easy pack',  headerBg: '#C1BBEC', rowBgs: ['#E1DEF3', 'transparent'] as const },
-    { label: 'Pop pack',   headerBg: '#FFB3B3', rowBgs: ['#FFCFCF', '#FFB3B3']    as const, popular: true },
-    { label: 'Crazy pack', headerBg: '#C1BBEC', rowBgs: ['#E1DEF3', 'transparent'] as const },
-  ]
+  let { plans, selectedPlanId, onselect }: Props = $props()
+
+  // 모든 플랜의 스펙 라벨 합집합(첫 등장 순서 유지) — 플랜별 값은 없으면 '—'
+  const rows = $derived.by(() => {
+    const labels: string[] = []
+    for (const plan of plans) {
+      for (const f of plan.features) {
+        if (!labels.includes(f.label)) labels.push(f.label)
+      }
+    }
+    return labels.map((label) => ({
+      label,
+      values: plans.map((plan) => plan.features.find((f) => f.label === label)?.value ?? '—'),
+    }))
+  })
+
+  // 2번째 슬롯(index 1)을 인기 플랜으로 강조하는 기존 시각 언어 유지(3-슬롯 디자인 계승)
+  function isPopularSlot(index: number): boolean {
+    return index === 1 && plans.length >= 2
+  }
+
+  const activeIndex = $derived(Math.max(0, plans.findIndex((p) => p.id === selectedPlanId)))
 </script>
 
 <!-- ── PC 피처 테이블 (≥1024px) ──────────────────────────────── -->
@@ -28,46 +39,34 @@
     <!-- 라벨 열 -->
     <div class="col-label">
       <div class="label-header">혜택 항목</div>
-      {#each ROWS as row, i}
+      {#each rows as row, i (row.label)}
         <div class="label-row" class:label-row-alt={i % 2 !== 0}>
           {row.label}
         </div>
       {/each}
     </div>
 
-    <!-- Easy pack 열 -->
-    <div class="col-plan col-easy">
-      <div class="plan-header-cell">
-        <span class="ph-name">Easy pack</span>
-        <span class="ph-price">9,900<small>원/월</small></span>
-      </div>
-      {#each ROWS as row, i}
-        <div class="plan-row" class:plan-row-alt={i % 2 !== 0}>{row.easy}</div>
-      {/each}
-    </div>
-
-    <!-- Pop pack 열 -->
-    <div class="col-plan col-pop">
-      <div class="plan-header-cell pop-header" data-name="title-bar">
-        <span class="ph-name">Pop pack</span>
-        <span class="popular-pill">인기</span>
-        <span class="ph-price">19,000<small>원/월</small></span>
-      </div>
-      {#each ROWS as row, i}
-        <div class="plan-row pop-row" class:pop-row-alt={i % 2 !== 0}>{row.pop}</div>
-      {/each}
-    </div>
-
-    <!-- Crazy pack 열 -->
-    <div class="col-plan col-crazy">
-      <div class="plan-header-cell crazy-header">
-        <span class="ph-name">Crazy pack</span>
-        <span class="ph-price">29,000<small>원/월</small></span>
-      </div>
-      {#each ROWS as row, i}
-        <div class="plan-row" class:plan-row-alt={i % 2 !== 0}>{row.crazy}</div>
-      {/each}
-    </div>
+    <!-- 플랜 열 -->
+    {#each plans as plan, colIdx (plan.id)}
+      <button
+        type="button"
+        class="col-plan"
+        class:col-pop={isPopularSlot(colIdx)}
+        class:col-selected={selectedPlanId === plan.id}
+        onclick={() => onselect(plan.id)}
+      >
+        <div class="plan-header-cell" class:pop-header={isPopularSlot(colIdx)} data-name="title-bar">
+          <span class="ph-name">{plan.name}</span>
+          {#if isPopularSlot(colIdx)}<span class="popular-pill">인기</span>{/if}
+          <span class="ph-price">{plan.monthly_price.toLocaleString()}<small>원/월</small></span>
+        </div>
+        {#each rows as row, i (row.label)}
+          <div class="plan-row" class:pop-row={isPopularSlot(colIdx)} class:plan-row-alt={i % 2 !== 0}>
+            {row.values[colIdx]}
+          </div>
+        {/each}
+      </button>
+    {/each}
   </div>
 </section>
 
@@ -75,18 +74,18 @@
 <section class="table-mobile" aria-label="멤버십 혜택 비교">
   <!-- 탭 바 -->
   <div class="tab-bar" role="tablist">
-    {#each COLS as col, i}
+    {#each plans as plan, i (plan.id)}
       <button
         class="tab-btn"
-        class:tab-active={activeTab === i}
+        class:tab-active={activeIndex === i}
         role="tab"
-        aria-selected={activeTab === i}
-        onclick={() => { activeTab = i as TabIdx }}
+        aria-selected={activeIndex === i}
+        onclick={() => onselect(plan.id)}
       >
-        {col.label}
-        {#if col.popular && activeTab === i}
+        {plan.name}
+        {#if isPopularSlot(i) && activeIndex === i}
           <span class="tab-popular-active">인기</span>
-        {:else if col.popular}
+        {:else if isPopularSlot(i)}
           <span class="tab-popular">인기</span>
         {/if}
       </button>
@@ -98,7 +97,7 @@
     <!-- 라벨 열 (고정) -->
     <div class="tab-labels">
       <div class="tab-header-spacer">혜택 항목</div>
-      {#each ROWS as row, i}
+      {#each rows as row, i (row.label)}
         <div class="tab-label-row" class:tab-label-alt={i % 2 !== 0}>
           {row.label}
         </div>
@@ -107,29 +106,25 @@
 
     <!-- 슬라이딩 데이터 열 -->
     <div class="tab-data-wrap">
-      {#each COLS as col, colIdx}
+      {#each plans as plan, colIdx (plan.id)}
         <div
           class="tab-col"
           style="
-            opacity: {activeTab === colIdx ? 1 : 0};
-            transform: translateX({(colIdx - activeTab) * 18}px);
-            pointer-events: {activeTab === colIdx ? 'auto' : 'none'};
+            opacity: {activeIndex === colIdx ? 1 : 0};
+            transform: translateX({(colIdx - activeIndex) * 18}px);
+            pointer-events: {activeIndex === colIdx ? 'auto' : 'none'};
           "
-          aria-hidden={activeTab !== colIdx}
+          aria-hidden={activeIndex !== colIdx}
         >
           <!-- 헤더 -->
-          <div class="tab-col-header" style="background: {col.headerBg}">
-            <span class="tch-name">{col.label}</span>
-            {#if col.popular}<span class="tch-popular">인기</span>{/if}
+          <div class="tab-col-header" class:pop-bg={isPopularSlot(colIdx)}>
+            <span class="tch-name">{plan.name}</span>
+            {#if isPopularSlot(colIdx)}<span class="tch-popular">인기</span>{/if}
           </div>
           <!-- 행 -->
-          {#each ROWS as row, ri}
-            {@const data = colIdx === 0 ? row.easy : colIdx === 1 ? row.pop : row.crazy}
-            <div
-              class="tab-data-row"
-              style="background: {ri % 2 === 0 ? col.rowBgs[0] : col.rowBgs[1]}"
-            >
-              {data}
+          {#each rows as row, ri (row.label)}
+            <div class="tab-data-row" class:pop-bg-alt={isPopularSlot(colIdx) && ri % 2 !== 0}>
+              {row.values[colIdx]}
             </div>
           {/each}
         </div>
@@ -138,7 +133,9 @@
   </div>
 
   <!-- 가입하기 버튼 -->
-  <a href="#pricing" class="tab-cta">가입하기</a>
+  {#if plans[activeIndex]}
+    <a href="/subscribe/{plans[activeIndex].id}" class="tab-cta">가입하기</a>
+  {/if}
 </section>
 
 <style>
@@ -168,8 +165,8 @@
     gap: 0;
   }
 
-  /* PC hover 인터랙션 (App.tsx 정밀 이식) */
-  :global([data-name="items-kr"]) > div:nth-child(n+2) {
+  /* PC hover 인터랙션 */
+  :global([data-name="items-kr"]) > *:not(.col-label) {
     transition: transform 0.3s cubic-bezier(0.34, 1.56, 0.64, 1),
                 opacity 0.3s ease,
                 box-shadow 0.3s ease;
@@ -178,18 +175,20 @@
     overflow: hidden;
   }
 
-  :global([data-name="items-kr"]):has(> div:nth-child(n+2):hover) > div:nth-child(n+2) {
+  :global([data-name="items-kr"]):has(> .col-plan:hover) > .col-plan:not(:hover) {
     opacity: 0.4;
   }
 
-  :global([data-name="items-kr"]) > div:nth-child(n+2):hover {
+  .col-plan:hover,
+  .col-plan.col-selected {
     opacity: 1 !important;
     transform: translateY(-8px) scale(1.03);
     box-shadow: 0 24px 48px rgba(16, 11, 50, 0.22),
                 0 6px 16px rgba(255, 53, 53, 0.14);
   }
 
-  :global([data-name="items-kr"]) > div:nth-child(n+2):hover :global([data-name="title-bar"]) {
+  .col-plan:hover :global([data-name="title-bar"]),
+  .col-plan.col-selected :global([data-name="title-bar"]) {
     transition: letter-spacing 0.25s ease;
     letter-spacing: 0.02em;
   }
@@ -241,6 +240,10 @@
     flex-direction: column;
     flex: 1;
     overflow: hidden;
+    border: none;
+    padding: 0;
+    background: transparent;
+    text-align: left;
   }
 
   .plan-header-cell {
@@ -252,6 +255,7 @@
     gap: 4px;
     padding: 0 16px;
     position: relative;
+    background: transparent;
   }
 
   .ph-name {
@@ -284,27 +288,6 @@
     padding: 2px 8px;
   }
 
-  /* Easy */
-  .col-easy .plan-header-cell { background: transparent; }
-  .col-easy .plan-row         { background: var(--cs-white); }
-  .col-easy .plan-row-alt     { background: transparent; }
-
-  /* Pop */
-  .col-pop { border-radius: 30px 30px 0 0; }
-  .pop-header {
-    background: var(--cs-red-light);
-    border-radius: 30px 30px 0 0;
-  }
-  .pop-row     { background: var(--cs-chat-in-bg); }
-  .pop-row-alt { background: var(--cs-red-light); }
-
-  /* Crazy */
-  .col-crazy .plan-header-cell { background: transparent; }
-  .col-crazy .plan-row         { background: transparent; }
-  .col-crazy .plan-row-alt     { background: var(--cs-purple-op10); }
-  .crazy-header { border-radius: 30px; }
-
-  /* 행 공통 */
   .plan-row {
     height: 100px;
     display: flex;
@@ -317,7 +300,18 @@
     font-weight: 700;
     color: var(--cs-dark);
     white-space: pre-line;
+    background: var(--cs-white);
   }
+  .plan-row-alt { background: transparent; }
+
+  /* Pop 슬롯(2번째) 강조 */
+  .col-pop { border-radius: 30px 30px 0 0; }
+  .pop-header {
+    background: var(--cs-red-light);
+    border-radius: 30px 30px 0 0;
+  }
+  .pop-row     { background: var(--cs-chat-in-bg); }
+  .col-pop .plan-row-alt { background: var(--cs-red-light); }
 
   /* ── Mobile ── */
   .table-mobile {
@@ -454,7 +448,9 @@
     justify-content: center;
     gap: 4px;
     flex-shrink: 0;
+    background: var(--cs-purple-op10);
   }
+  .tab-col-header.pop-bg { background: var(--cs-red-light); }
 
   .tch-name {
     font-family: var(--font-kr);
@@ -485,7 +481,9 @@
     color: var(--cs-dark);
     white-space: pre-line;
     flex-shrink: 0;
+    background: var(--cs-white);
   }
+  .tab-data-row.pop-bg-alt { background: var(--cs-red-light); }
 
   /* 가입하기 */
   .tab-cta {

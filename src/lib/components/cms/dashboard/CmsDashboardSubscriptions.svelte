@@ -1,12 +1,13 @@
 <script lang="ts" module>
   // SubRow 타입 — CmsDashboardTabs.svelte에서 import type { SubRow }로 재사용
+  // 2026-08-15: 데이터 소스를 레거시 subscriptions → subscription_plans+user_subscriptions로 교체
   export interface SubRow {
     id: string
     user_id: string
-    tier: string
-    price_per_month: number
-    billing_cycle_start: string
-    billing_cycle_end: string
+    tier: string           // lowercase: 'easy' | 'pop' | 'crazy' (membership_grade 소문자 변환)
+    monthly_price: number  // was: price_per_month (subscription_plans.monthly_price로 교체)
+    started_at: string     // was: billing_cycle_start (user_subscriptions.started_at으로 교체)
+    expires_at: string     // was: billing_cycle_end (user_subscriptions.expires_at으로 교체)
     created_at: string
     customer_name: string
   }
@@ -49,9 +50,9 @@
   }
 
   // 티어별 월 예상액 합계
-  const easyTotal  = $derived(buckets.easy.reduce((s, r) => s + r.price_per_month, 0))
-  const popTotal   = $derived(buckets.pop.reduce((s, r) => s + r.price_per_month, 0))
-  const crazyTotal = $derived(buckets.crazy.reduce((s, r) => s + r.price_per_month, 0))
+  const easyTotal  = $derived(buckets.easy.reduce((s, r) => s + r.monthly_price, 0))
+  const popTotal   = $derived(buckets.pop.reduce((s, r) => s + r.monthly_price, 0))
+  const crazyTotal = $derived(buckets.crazy.reduce((s, r) => s + r.monthly_price, 0))
 
   // KPI 카드 (총 구독자 1 + 티어별 월예상액 3 = 4장, columns=3 → 2행)
   const kpiCards: KpiCardProps[] = $derived([
@@ -177,9 +178,9 @@
                     {TIER_LABEL[row.tier] ?? row.tier}
                   </span>
                 </td>
-                <td class="td-amount">{row.price_per_month.toLocaleString()}원</td>
-                <td>{formatDate(row.billing_cycle_start)}</td>
-                <td>{formatDate(row.billing_cycle_end)}</td>
+                <td class="td-amount">{row.monthly_price.toLocaleString()}원</td>
+                <td>{formatDate(row.started_at)}</td>
+                <td>{formatDate(row.expires_at)}</td>
               </tr>
             {/each}
           </tbody>

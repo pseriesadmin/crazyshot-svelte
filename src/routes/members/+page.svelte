@@ -2,8 +2,25 @@
   import MembersHero from '$lib/components/members/MembersHero.svelte'
   import PricingCards from '$lib/components/members/PricingCards.svelte'
   import FeaturesTable from '$lib/components/members/FeaturesTable.svelte'
+  import SubscriptionPolicyNotice from '$lib/components/members/SubscriptionPolicyNotice.svelte'
   import CommonBenefits from '$lib/components/members/CommonBenefits.svelte'
   import BottomTabBar from '$lib/components/common/BottomTabBar.svelte'
+  import type { PageData } from './$types'
+
+  interface Props { data: PageData }
+  let { data }: Props = $props()
+
+  let selectedPlanId = $state<number | null>(data.plans[0]?.id ?? null)
+
+  $effect(() => {
+    if (!data.plans.some((p) => p.id === selectedPlanId)) {
+      selectedPlanId = data.plans[0]?.id ?? null
+    }
+  })
+
+  function handleSelectPlan(id: number): void {
+    selectedPlanId = id
+  }
 </script>
 
 <svelte:head>
@@ -16,11 +33,15 @@
 
   <div class="pc-content-wrap">
     <section class="pc-section" id="pricing" aria-label="멤버십 플랜">
-      <PricingCards />
+      <PricingCards plans={data.plans} {selectedPlanId} onselect={handleSelectPlan} />
     </section>
 
     <section class="pc-section" aria-label="플랜 혜택 비교">
-      <FeaturesTable />
+      <FeaturesTable plans={data.plans} {selectedPlanId} onselect={handleSelectPlan} />
+    </section>
+
+    <section class="pc-section" aria-label="정기구독 이용안내">
+      <SubscriptionPolicyNotice items={data.policyItems} />
     </section>
 
     <section class="pc-section" aria-label="K-트레일 혜택">

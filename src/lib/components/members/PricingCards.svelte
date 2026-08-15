@@ -1,47 +1,22 @@
 <script lang="ts">
-  const PLANS = [
-    {
-      id: 'plan1',
-      name: 'Easy pack',
-      price: '9,900',
-      tagline: '완벽한 입문자의 선택',
-      taglineW: null as number | null,
-      nameLeft: 118,
-      priceLeft: 106,
-      pcDesc: '장비 고민 없이 가볍게 시작하고 싶다면?\n EASY PACK으로 매월 제공되는 쿠폰과 \n그동안 망설였던 창작의 문턱을 낮추세요.',
-      desc: '콘텐츠 제작에 막 입문했나요? 부담 없이 시작할 수 있는 입장권입니다. 필수 장비만으로도 충분히 창작의 세계를 경험할 수 있습니다.',
-      img: '/members/plan-easy.png',
-      popular: false,
-    },
-    {
-      id: 'plan2',
-      name: 'Pop pack',
-      price: '19,000',
-      tagline: '열정 크리에이터의 선택',
-      taglineW: null as number | null,
-      nameLeft: 124,
-      priceLeft: 91,
-      pcDesc: '본격적 촬영을 고민해결 플랜! \n매월 제공되는 쿠폰과 혜택으로\n크리에이터가 원하는 콘텐츠를 자유롭게 \n제작할 수 있습니다.',
-      desc: '많은 고객이 가장 사랑하는 인기 플랜! 팬영상, 여행 브이로그 등 원하는 콘텐츠를 자유롭게 제작할 수 있습니다.',
-      img: '/members/plan-pop.png',
-      popular: true,
-    },
-    {
-      id: 'plan3',
-      name: 'Crazy pack',
-      price: '29,000',
-      tagline: '전문가 위한 프리미엄 선택',
-      taglineW: 278 as number | null,
-      nameLeft: 110,
-      priceLeft: 86,
-      pcDesc: '장비 대여부터 배송, 안심렌탈케어까지 \n무제한 왕복 크레이지 배송으로\n 오직 창작에만 집중!',
-      desc: '콘텐츠 제작이 일상인 전문가라면 이 플랜을 추천합니다. 무제한 장비 옵션과 전담 지원 서비스로 창작에만 집중하세요.',
-      img: '/members/plan-crazy.png',
-      popular: false,
-    },
-  ] as const
+  import type { SubscriptionPlanRow } from '$lib/types/subscription'
 
-  let pressedId = $state<string | null>(null)
+  interface Props {
+    plans: SubscriptionPlanRow[]
+    selectedPlanId: number | null
+    onselect: (id: number) => void
+  }
+
+  let { plans, selectedPlanId, onselect }: Props = $props()
+
+  // PC 카드는 슬롯별(1/2/3) 이미지 배치·크롭이 각기 다른 비정형 레이아웃 — index 순서로 슬롯 매핑
+  function slotClass(index: number): 'slot-1' | 'slot-2' | 'slot-3' {
+    if (index === 0) return 'slot-1'
+    if (index === 1) return 'slot-2'
+    return 'slot-3'
+  }
+
+  let pressedId = $state<number | null>(null)
 </script>
 
 <!-- ── PC 플랜 카드 (≥1024px) ──────────────────────────────────── -->
@@ -56,56 +31,64 @@
   </div>
   <!-- Cards -->
   <div class="pricing-pc-inner">
-    {#each PLANS as plan}
-      <div class="plan-card-pc" data-name={plan.id}>
+    {#each plans as plan, i (plan.id)}
+      <button
+        type="button"
+        class="plan-card-pc {slotClass(i)}"
+        class:selected={selectedPlanId === plan.id}
+        data-name="plan{i + 1}"
+        onclick={() => onselect(plan.id)}
+      >
         <!-- 순수 배경 div — 자식 없음 -->
         <div class="plan-title-block" data-name="title"></div>
-        <!-- 이미지: 카드별 클래스 -->
-        {#if plan.id === 'plan1'}
-          <img src={plan.img} alt="" class="plan-img-1" />
-        {:else if plan.id === 'plan2'}
-          <div class="plan-img-2-wrap"><img src={plan.img} alt="" class="plan-img-2" /></div>
-        {:else}
-          <div class="plan-img-3-outer"><img src={plan.img} alt="" class="plan-img-3" /></div>
+        {#if (plan.image_url ?? plan.image_urls?.[0])}
+          <div class="plan-img-wrap">
+            <img src={(plan.image_url ?? plan.image_urls?.[0])} alt="" class="plan-img" />
+          </div>
         {/if}
-        <!-- 태그라인: absolute top:212px -->
-        <div class="plan-tagline" style={plan.taglineW ? `width:${plan.taglineW}px` : ''}>{plan.tagline}</div>
-        <!-- 플랜명: 카드별 left -->
-        <div class="plan-name-pc" style="left:{plan.nameLeft}px">{plan.name}</div>
-        <!-- 가격: 카드별 left -->
-        <div class="plan-price-pc" style="left:{plan.priceLeft}px">{plan.price}</div>
-        <!-- per user / month -->
+        {#if plan.tagline}
+          <div class="plan-tagline">{plan.tagline}</div>
+        {/if}
+        <div class="plan-name-pc">{plan.name}</div>
+        <div class="plan-price-pc">{plan.monthly_price.toLocaleString()}</div>
         <div class="plan-unit-sub">per user / month</div>
-        <!-- PC 설명: absolute top:327px -->
-        <div class="plan-pc-desc">{plan.pcDesc}</div>
-      </div>
+        {#if plan.description}
+          <div class="plan-pc-desc">{plan.description}</div>
+        {/if}
+      </button>
     {/each}
   </div>
+
+  {#if selectedPlanId !== null}
+    <div class="pc-cta-wrap">
+      <a href="/subscribe/{selectedPlanId}" class="pc-cta">구독하기</a>
+    </div>
+  {/if}
 </section>
 
 <!-- ── Mobile 플랜 카드 (<1024px) ────────────────────────────── -->
 <section class="pricing-mobile" aria-label="멤버십 플랜">
   <div class="pricing-m-inner">
-    {#each PLANS as plan}
+    {#each plans as plan (plan.id)}
       <div
         class="plan-card-m"
         class:pressed={pressedId === plan.id}
+        class:selected={selectedPlanId === plan.id}
         onpointerdown={() => { pressedId = plan.id }}
         onpointerup={() => { pressedId = null }}
         onpointerleave={() => { pressedId = null }}
+        onclick={() => onselect(plan.id)}
         role="button"
         tabindex="0"
+        onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onselect(plan.id) } }}
       >
         <!-- 타이틀 영역 -->
-        <div class="plan-m-title" class:active={pressedId === plan.id}>
+        <div class="plan-m-title" class:active={pressedId === plan.id || selectedPlanId === plan.id}>
           <div class="plan-m-name-row">
             <span class="plan-m-name">{plan.name}</span>
-            {#if plan.popular}
-              <span class="plan-m-popular">인기</span>
-            {/if}
           </div>
           <div class="plan-m-price-row">
-            <span class="plan-m-price">{plan.price}</span>
+            <span class="plan-m-price">{plan.monthly_price.toLocaleString()}</span>
             <span class="plan-m-won">원</span>
           </div>
           <span class="plan-m-sub">1인 계정 / 월</span>
@@ -113,9 +96,15 @@
 
         <!-- 본문 영역 -->
         <div class="plan-m-body">
-          <img src={plan.img} alt="{plan.name} 카메라 장비" class="plan-m-img" />
-          <span class="plan-m-tagline">{plan.tagline}</span>
-          <p class="plan-m-desc">{plan.desc}</p>
+          {#if (plan.image_url ?? plan.image_urls?.[0])}
+            <img src={(plan.image_url ?? plan.image_urls?.[0])} alt="{plan.name} 카메라 장비" class="plan-m-img" />
+          {/if}
+          {#if plan.tagline}
+            <span class="plan-m-tagline">{plan.tagline}</span>
+          {/if}
+          {#if plan.description}
+            <p class="plan-m-desc">{plan.description}</p>
+          {/if}
         </div>
       </div>
     {/each}
@@ -178,27 +167,36 @@
     justify-content: space-between;
   }
 
-  /* ─ Card hover ─ */
-  :global([data-name="plan1"]),
-  :global([data-name="plan2"]),
-  :global([data-name="plan3"]) {
+  .pc-cta-wrap { display: flex; justify-content: center; margin-top: 40px; }
+  .pc-cta {
+    padding: 16px 48px; border-radius: var(--radius-xl); background: var(--cs-red-badge); color: var(--cs-white);
+    font-family: var(--font-kr); font-size: 18px; font-weight: 700; text-decoration: none;
+    transition: background 0.2s, transform 0.2s, box-shadow 0.2s;
+  }
+  .pc-cta:hover {
+    background: #E02020; transform: scale(1.03); box-shadow: 0 6px 20px rgba(255, 53, 53, 0.45);
+  }
+
+  /* ─ Card hover/selected ─ */
+  .plan-card-pc {
     transition: transform 0.35s cubic-bezier(0.34, 1.56, 0.64, 1),
                 box-shadow 0.35s ease;
     cursor: pointer;
     will-change: transform;
+    border: none;
+    padding: 0;
+    text-align: left;
   }
 
-  :global([data-name="plan1"]:hover),
-  :global([data-name="plan2"]:hover),
-  :global([data-name="plan3"]:hover) {
+  .plan-card-pc:hover,
+  .plan-card-pc.selected {
     transform: translateY(-16px) scale(1.025);
     box-shadow: 0 32px 64px rgba(16, 11, 50, 0.28),
                 0 8px 24px rgba(255, 53, 53, 0.18);
   }
 
-  :global([data-name="plan1"]:hover [data-name="title"]),
-  :global([data-name="plan2"]:hover [data-name="title"]),
-  :global([data-name="plan3"]:hover [data-name="title"]) {
+  .plan-card-pc:hover :global([data-name="title"]),
+  .plan-card-pc.selected :global([data-name="title"]) {
     transition: width 0.35s cubic-bezier(0.34, 1.56, 0.64, 1);
     width: 100% !important;
   }
@@ -224,11 +222,12 @@
     background: var(--cs-purple);
   }
 
-  /* ─ Plan name ─ */
+  /* ─ Plan name — 텍스트 길이에 무관하게 중앙정렬 ─ */
   .plan-name-pc {
     position: absolute;
     top: 56.5px;
-    transform: translateY(-50%);
+    left: 50%;
+    transform: translate(-50%, -50%);
     font-family: var(--font-en-display);
     font-size: 35px;
     font-weight: 400;
@@ -241,7 +240,8 @@
   .plan-price-pc {
     position: absolute;
     top: 118px;
-    transform: translateY(-50%);
+    left: 50%;
+    transform: translate(-50%, -50%);
     font-family: var(--font-en-display);
     font-size: 70px;
     font-weight: 400;
@@ -254,7 +254,7 @@
   /* ─ per user / month ─ */
   .plan-unit-sub {
     position: absolute;
-    left: 199px;
+    left: 50%;
     top: 174px;
     transform: translate(-50%, -50%);
     font-family: var(--font-kr);
@@ -266,51 +266,14 @@
     z-index: 1;
   }
 
-  /* ─ Image: plan1 ─ */
-  .plan-img-1 {
-    position: absolute;
-    left: -45px;
-    top: 85px;
-    width: 210px;
-    height: 248px;
-    object-fit: cover;
-  }
+  /* ─ Image (슬롯별 배치/크롭) ─ */
+  .plan-img-wrap { position: absolute; inset: 0; overflow: hidden; }
+  .plan-img { width: 100%; height: 100%; object-fit: cover; }
 
-  /* ─ Image: plan2 ─ */
-  .plan-img-2-wrap {
-    position: absolute;
-    top: 24.75%;
-    right: 57.75%;
-    bottom: 27%;
-    left: -11.75%;
-    overflow: hidden;
-  }
-
-  .plan-img-2 {
-    width: 100%;
-    height: 100%;
-    object-fit: cover;
-  }
-
-  /* ─ Image: plan3 ─ */
-  .plan-img-3-outer {
-    position: absolute;
-    left: 152px;
-    top: 114px;
-    width: 363px;
-    height: 189px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-  }
-
-  .plan-img-3 {
-    width: 363px;
-    height: 189px;
-    object-fit: cover;
-    flex-shrink: 0;
-    transform: scaleY(-1) rotate(180deg);
-  }
+  .slot-1 .plan-img-wrap { left: -45px; top: 85px; width: 210px; height: 248px; right: auto; bottom: auto; }
+  .slot-2 .plan-img-wrap { top: 24.75%; right: 57.75%; bottom: 27%; left: -11.75%; }
+  .slot-3 .plan-img-wrap { left: 152px; top: 114px; width: 363px; height: 189px; right: auto; bottom: auto; display: flex; align-items: center; justify-content: center; }
+  .slot-3 .plan-img { transform: scaleY(-1) rotate(180deg); }
 
   /* ─ Tagline ─ */
   .plan-tagline {
@@ -382,6 +345,10 @@
     box-shadow: 0 8px 24px rgba(16, 11, 50, 0.45);
   }
 
+  .plan-card-m.selected {
+    box-shadow: 0 0 0 3px var(--cs-red-badge), 0 8px 24px rgba(16, 11, 50, 0.45);
+  }
+
   .plan-m-title {
     background: var(--cs-purple);
     padding: 30px;
@@ -406,17 +373,6 @@
     font-size: 24px;
     font-weight: 900;
     color: var(--cs-white);
-  }
-
-  .plan-m-popular {
-    background: var(--cs-red);
-    color: var(--cs-white);
-    font-family: var(--font-kr);
-    font-size: 12px;
-    font-weight: 700;
-    border-radius: 8px;
-    padding: 2px 8px;
-    white-space: nowrap;
   }
 
   .plan-m-price-row {
