@@ -1,6 +1,7 @@
 import { redirect, fail } from '@sveltejs/kit'
 import type { PageServerLoad, Actions } from './$types'
 import { callTypedRpc } from '$lib/utils/rpc'
+import { loadUserCoupons } from '$lib/server/account/loadUserCoupons'
 
 interface AccountProfile {
   id: string
@@ -34,7 +35,7 @@ export const load: PageServerLoad = async ({ locals, depends }) => {
   const { session } = await locals.safeGetSession()
   if (!session) throw redirect(303, '/auth/login')
 
-  const [profileRes, addressRes, statsRes, recentRentalRes, rentalsRes, cancelsRes, inquiriesRes, wishlistRes] = await Promise.all([
+  const [profileRes, addressRes, statsRes, recentRentalRes, rentalsRes, cancelsRes, inquiriesRes, wishlistRes, coupons] = await Promise.all([
     locals.supabase
       .from('user_profiles')
       .select('id, email, full_name, avatar_url, phone, birth_date, address, member_code, member_type, membership_grade, credit_score, rental_count, points, allow_rental_alert, allow_benefit_alert, allow_privacy_consent, allow_third_party_consent, identity_type, identity_doc_url, identity_verified_at, is_foreign, foreign_doc_url, foreign_verified_at, created_at')
@@ -81,6 +82,7 @@ export const load: PageServerLoad = async ({ locals, depends }) => {
     (locals.supabase.rpc as unknown as (fn: string, params: Record<string, string>) => Promise<{ data: unknown; error: unknown }>)(
       'get_user_wishlists', { p_user_id: session.user.id }
     ),
+    loadUserCoupons(locals.supabase, session.user.id),
   ])
 
   const stats = (statsRes.data as Array<{
@@ -138,6 +140,7 @@ export const load: PageServerLoad = async ({ locals, depends }) => {
     }>,
     // TODO(DB): notifications 테이블 미열람 건수 또는 events 집계로 교체
     benefitCount: 3,
+    coupons,
   }
 }
 

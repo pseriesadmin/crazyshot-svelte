@@ -1,6 +1,276 @@
 # GSD_LOG.md — 크레이지샷 실행 이력
 # 형식: [YYYY-MM-DD HH:MM] 타입 | 태스크명 | 파일 | 소요 | 결과
 
+[2026-08-16] BOUNDARY | 내정보 "쿠폰" 메뉴·탭 신규 추가 (실 CMS 배포 쿠폰 연동) |
+  src/lib/server/account/loadUserCoupons.ts(신규), src/lib/components/members/profile/
+  CouponTabContent.svelte(신규), src/routes/account/+page.server.ts,
+  src/routes/account/profile/+page.server.ts, src/routes/account/+page.svelte,
+  src/routes/account/profile/+page.svelte | ✅ DONE
+  배경: Stephen이 launch-selected-element로 "내정보" 메뉴 카드와 "로그" 탭 상세 화면을 함께
+  선택, "로그 위에 쿠폰 메뉴 추가 + 로그와 동일 카드 레이아웃 + 관리자가 CMS로 배포한 실제
+  쿠폰 목록 반영" 지시.
+  구현: loadUserCoupons.ts 신규 — 기존 checkout/+page.server.ts가 이미 쓰던
+  user_coupons↔coupons 조인 쿼리·라벨 포맷팅(discount_type fixed/percentage) 패턴을 재사용해
+  공용 서버 헬퍼로 분리, account 모바일/PC 두 load()가 공유. CouponTabContent.svelte는
+  LogTabContent.svelte와 동일 마크업/클래스를 그대로 재사용(요청한 "동일 레이아웃" 반영),
+  단 LogTabContent와 달리 실데이터(coupons prop)를 받아 렌더링.
+  구현 중 RLS 제약 발견: "coupons: 유효 쿠폰 조회" 정책(Migration #15)이 is_active=true AND
+  valid_until>=NOW()인 쿠폰만 일반 세션에 노출 — 만료/비활성 쿠폰은 조인 시 null이 되어 "기간
+  만료" 배지를 안정적으로 구현할 방법이 없음(서비스 롤 우회는 범위 밖이라 미적용). Stephen에게
+  고지 후 상태를 사용가능/사용완료 2종으로 축소 확정(체크아웃 페이지의 기존 쿠폰 노출 원칙과 동일).
+  '쿠폰' 메뉴 위치: 모바일 홈 MenuSection·PC 인라인 메뉴·프로필 탭바 3곳 모두 '로그' 바로 위에
+  일관 배치.
+  검증: svelte-check 신규 에러 0건(기존 1건 기준 변동 없음), coupons/user_coupons 기존 RLS(본인
+  행만 조회) 그대로 사용 — 신규 정책·서비스 롤 사용 없음.
+
+[2026-08-16] BOUNDARY | /account "대여 정보"·"내정보" 카드 헤더 카운트+화살표 배지 제거 |
+  src/lib/components/account/MenuSection.svelte, src/routes/account/+page.svelte | ✅ DONE
+  배경: Stephen이 launch-selected-element로 /account 모바일 카드 헤더의 숫자 배지 2건을 선택,
+  기능 설명 요청 → 조사 결과 "대여 정보" 배지는 실시간 대여중+배송중 합계였고 "내정보" 배지는
+  계산 로직 없이 하드코딩된 고정값 2로 확인(myInfoMenuItems 실제 5개 항목과도 무관) — 하나는
+  실데이터·하나는 죽은 값이라 사용자가 "중복되고 헷갈리는 불필요한 UI"로 판단, 삭제 지시.
+  동일 패턴이 모바일(MenuSection.svelte 공용 컴포넌트, 2곳)뿐 아니라 PC 인라인 마크업에도
+  완전 복제(2곳)돼 총 4곳 존재함을 확인 → UI 삭제 오인 방지 지침에 따라 범위 열거 후
+  AskUserQuestion으로 확인, Stephen이 "모바일+PC 4곳 모두" 선택.
+  수정: MenuSection.svelte에서 count prop 및 count 텍스트+chevron 화살표 클러스터 제거,
+  +page.svelte PC "내정보"/"대여 정보" 카드 인라인 동일 클러스터 2곳 제거, 사용처 없어진
+  rentalCount/myInfoCount derived 변수 삭제. data.rentalStats(active/shipping/completed/
+  cancelled)는 상단 RentalStatRow 배지에서 별도로 계속 사용 중이라 무영향 확인.
+  검증: svelte-check 신규 에러 0건(기존 1건 기준 변동 없음)
+
+[2026-08-16] FIX | 스프레드시트 모드 전환 — 독립 @sp3-qa-agent 4차 검수에서 CRITICAL 결함(양식 저장경로 데이터유실) 발견·직접수정 | src/routes/cms/reservation/contracts/+page.server.ts, src/lib/types/contract-template.ts | 완료
+  TASK.md에 "이 세션'만'의 확정 변경파일 목록"(22개 파일)을 먼저 고정 기록한 뒤 그 범위로
+  @sp3-qa-agent 4차(최종) 독립검수 실행(Stephen 지시: "현재 세션'만'의 하네스 플로 해당 task
+  단계에 수정 내역을 기록하고 세션 내 최근 수정 개발건을 sp3-qa-agent 검수할 것"). 이전
+  3라운드에서 수정한 4건(migration 264 ENUM, T12 발행후가드, 변수치환 연결, 문서가져오기 버튼
+  조건)은 전부 정상 반영 재확인됐으나, 완전히 새로운 CRITICAL 결함 1건을 추가 발견:
+  `/cms/reservation/contracts`(계약서 "양식" 관리 화면)의 `+page.server.ts` create/update
+  액션이 `spreadsheet_document` form 필드를 전혀 읽지 않고 `load()`의 select 컬럼에도 없어서,
+  스프레드시트형 양식을 등록·수정 저장해도 성공 토스트와 달리 DB에는 항상 NULL로 저장되는
+  데이터유실 버그였음(계약서 "인스턴스" 저장경로 `/api/cms/contracts/[id]/content`는 3라운드에서
+  이미 정상 확인된 것과 대비 — 양식 관리 화면에만 한정된 결함). 원인은 이 2개 파일이 이전
+  22개 파일 목록 밖에 있었던 것 — canvas_document 처리와 정확히 동일한 패턴(JSON.parse +
+  isSpreadsheetDocument 타입가드 + insert/updatePayload 조건부 반영)으로 직접 수정.
+  `contract-template.ts`의 `ContractTemplate.authoring_mode`에도 `'spreadsheet'`가 빠져있어
+  같이 추가.
+  검증: svelte-check 신규 에러 0건(무관 기존 1건 유지), 관련 테스트 19개 파일 330/330 재통과,
+  npm run build 성공. TASK.md 세션 파일목록에 신규 2개 파일 추가 + QA 이력을 4라운드로 갱신,
+  헤더를 최종 GATE E 통과로 갱신.
+
+[2026-08-15] GSD | 구독 고객화면 반영 + CMS 대시보드 죽은 구독위젯 복구 | members/+page.server.ts, PricingCards.svelte, subscribe/[planId]/+page.server.ts+svelte, cms/+page.server.ts, CmsDashboardSubscriptions.svelte | 6개 파일 | GATE C 승인(GSD/BOUNDARY)
+  Part A: members select에 image_urls 추가 + PricingCards 폴백(image_url??image_urls[0]) + subscribe 갤러리+콘텐츠블록 렌더러 이식(products/[id] 검증 패턴). Part B: cms 대시보드 위젯 레거시 subscriptions 쿼리→user_subscriptions+subscription_plans 교체. svelte-check 신규 에러 0건. stage DB REST API 직접 검증 완료(테스트 데이터 주입·확인·원상복구).
+
+[2026-08-15] QA | /cms/customers/membership 세션 전체 작업 @sp3-qa-agent 최종검수 | migration 259~262 + membership/CustomerDetailPanel/customers 딥링크/cron 라우트/vercel.json/테스트 3종 | GATE E 통과
+  TASK.md에 이 세션'만'의 확정 변경파일 목록을 먼저 기록한 뒤 그 범위로 sp3-qa-agent 독립검수
+  실행. svelte-check/eslint/vitest 전부 agent가 직접 재실행해 24/24 통과 재확인, migration
+  260/262 REVOKE/GRANT 로직 SQL 직접 판독으로 안전성 확인. 발견 이슈 2건 전부 비차단(1건은
+  기존 migration 172발 무관 실패 추적 확인, 1건은 $state(prop) 경미 패턴 — 현재 딥링크가
+  전부 target=_blank라 미발현). GATE E 통과, 커밋은 Stephen 판단.
+
+[2026-08-15] FIX | 스프레드시트 모드 전환 — 독립 @sp3-qa-agent 재검수에서 결함 2건 추가발견·직접수정 | ContractTemplatePreviewModal.svelte, ContractEditorModal.svelte, ContractTemplatePanel.svelte | 완료
+  harness-executor 자체 "QA PASS" 주장 + 메인세션 1차 재검증(migration 264/T12 가드 수정) 이후,
+  독립 @sp3-qa-agent 2차 호출에서 양쪽 모두 놓친 결함 2건을 추가로 발견:
+  ① `substituteSpreadsheetDocument()`가 정의만 되고 실제 호출부 0건(죽은 코드) —
+     `ContractTemplatePreviewModal.svelte` `applySelectedTemplate()`이 canvas와 spreadsheet를
+     같은 분기로 묶어 원본 `spreadsheet_document`를 치환 없이 그대로 저장, 결과적으로 고객
+     서명화면에 `{{고객이름}}` 등 변수가 치환되지 않은 원문 그대로 노출되는 상태였음. spreadsheet
+     전용 분기를 분리해 `isSpreadsheetDocument()` 가드 통과 시 `substituteSpreadsheetDocument()`로
+     apply-time 치환 후 저장하도록 수정(플랜의 "flow와 동일 적용시점 치환" 원칙 준수).
+  ② "문서 가져오기" 버튼이 `authoringMode === 'flow' || authoringMode === 'spreadsheet'`로
+     열려 있어, 플랜이 "이번 구현 범위 밖(명시적 제외)"으로 명시한 두 시나리오가 실제로 동작함:
+     spreadsheet 모드에서 재임포트해 경고 없이 기존 작업물 통째 교체, 및 docx/hwpx 재임포트 시
+     `authoringMode='flow'`로 강제 역전환(단방향 전환만 허용하는 canvas 철학 위반). CONTEXT
+     BRIDGE가 "문서 가져오기 버튼은 flow일 때만 노출된다"는 전제로 별도 차단 로직을 생략하도록
+     설계했는데 실제 조건이 그 전제를 깨고 있었음 — `ContractEditorModal.svelte`/
+     `ContractTemplatePanel.svelte` 양쪽 버튼 조건을 `authoringMode === 'flow'` 단독으로 원복.
+  검증: svelte-check 신규 에러 0건(무관 기존 1건 유지), 관련 테스트 19개 파일 330/330 통과,
+  npm run build 성공. handleImport() 내부의 spreadsheet 역전환 분기는 버튼이 막혀 도달 불가능한
+  방어 코드로 남겨둠(제거 여부는 Stephen 판단 — 요청범위 최소화 원칙).
+
+[2026-08-15] ⚡GSD | CustomerDetailPanel 구독이력·크레이지스코어·상품대여이력 탭 무한 재요청 루프 수정 | src/lib/components/cms/CustomerDetailPanel.svelte | GATE E 통과
+  다른 세션이 TASK.md에 남긴 진단·제안(정확한 diff 포함)을 그대로 적용. 원인: `$effect`가
+  "아직 로딩 안 함"을 `x.length===0`으로 판단해 이력이 실제로 0건인 고객에서 fetch→빈배열→
+  length 여전히 0→재fetch가 무한 반복(화면은 로딩중처럼 보임). 이미 존재하는
+  `inquiryPostsLoaded`/`chatSessionsLoaded` 패턴을 `subscriptionsLoaded`/`auditLoaded`/
+  `rentalsLoaded` 3개로 그대로 복제 — `$effect` 트리거 조건 3곳을 `.length===0` → `!xLoaded`로
+  교체, 각 `loadX()` 함수의 `finally` 블록에 플래그 세팅 한 줄씩 추가. 빈 상태 표시 템플릿
+  (`{:else if x.length===0}`)은 계획대로 무변경.
+  검증: svelte-check/eslint 신규 에러 0건. 실사용 네트워크탭 검증은 Claude Browser 미사용
+  원칙상 Stephen 직접 확인 필요.
+
+[2026-08-15] FIX | 스프레드시트 모드 전환 — harness-executor 산출물 재검증 중 결함 2건 발견·직접수정 | migration 264, content/+server.ts | 완료
+  메인세션이 harness-executor 완료 보고를 그대로 신뢰하지 않고 실측 재검증(테스트 재실행,
+  git diff 직접 확인, build 산출물 확인)하는 과정에서 결함 2건 발견:
+  ① migration 264가 존재하지 않는 ENUM 타입명 `authoring_mode_enum`을 체크하는 방어 분기라
+     실제로는 `'spreadsheet'` 값이 추가되지 않는 조용한 no-op이었음(실제 타입명은 225번
+     마이그레이션에서 확인한 `contract_authoring_mode`). `ALTER TYPE contract_authoring_mode
+     ADD VALUE IF NOT EXISTS 'spreadsheet'` 단일 top-level 문으로 재작성(DO 블록 제거 —
+     PostgreSQL이 함수/DO블록 내부 ALTER TYPE ADD VALUE를 거부하는 사례도 함께 예방).
+  ② 플랜의 "핵심제약"에 명시된 "발행 후 authoring_mode 전환 차단 가드"가 T12에서 실제로는
+     누락(select 확장만 되고 가드 로직 없음). `contracts` 테이블에 plan이 가정한
+     `signingsent_at`/`customer_signed_at` 컬럼은 없고, 실제로는 `contract_signings`
+     (contract_id FK, sent_at, signed_at) 별도 테이블로 추적됨을 마이그레이션 원본으로 확인 후
+     `content/+server.ts` PATCH에 authoring_mode 변경 시 해당 계약의 최신 contract_signings
+     행에 sent_at/signed_at이 있으면 400 차단하는 로직 직접 추가.
+  검증: svelte-check 신규 에러 0건(전체 1건은 무관 기존 결함), 관련 테스트 13개 파일 204/204
+  재통과, npm run build 성공 + jspreadsheet-ce가 SSR 서버 청크에 실코드로 포함되지 않고 클라이언트
+  전용 동적 청크로만 로드됨을 빌드 산출물에서 직접 확인(주석 문자열 10건 외 실제 import 없음).
+  TASK.md 해당 NOW 블록 헤더/체크리스트 갱신, DB 미적용 상태 유지(Stephen 승인 대기).
+
+[2026-08-15] ⚡GSD | [T9~T15] 전자계약 xlsx 임포트 → 스프레드시트 모드 전환 신규 구현 | 9개 파일 신규/수정, SQL 2개 작성 | GATE E:통과
+  T9  (이전 세션): src/lib/components/cms/contract-editor/ContractSpreadsheetEditor.svelte 신규 생성
+       — jspreadsheet-ce 동적 import(onMount), SpreadsheetDocument 자체 스키마 편집기
+  T10: src/lib/components/cms/ContractTemplatePanel.svelte 수정
+       — 3-way 모드 전환(flow/canvas/spreadsheet), handleImportSpreadsheet, _importedSpreadsheetDoc
+         브리지 패턴, handleSpreadsheetSave(fetch POST), spreadsheetMountKey {#key} 리마운트
+  T11: src/lib/components/cms/ContractTemplatePreviewModal.svelte + src/lib/utils/contract-apply-template.ts
+       — 스프레드시트 모드 미리보기·적용·알림, authoring_mode union 'spreadsheet' 추가
+  T12: src/routes/api/cms/contracts/[id]/content/+server.ts +
+       src/routes/api/cms/contract-templates/+server.ts
+       — GET select/PATCH body에 spreadsheet_document 필드 추가, isSpreadsheetDocument 유효성 검사
+  T13: src/routes/contract/[token]/+page.server.ts + src/routes/contract/[token]/+page.svelte
+       — 고객 서명 화면 스프레드시트 HTML 렌더링(renderSpreadsheetToHtml), 인쇄 CSS 포함
+  T14: supabase/migrations/20260815000264_264_spreadsheet_authoring_mode_enum.sql +
+       supabase/migrations/20260815000265_265_spreadsheet_document_column.sql
+       — ENUM/CHECK 방어 SQL 작성, DB 적용은 Stephen 대기(미적용)
+  T15: 회귀검사 — npx svelte-check 신규 에러 0건(기존 products/search 1건만), vitest 107 스프레드시트
+       테스트 전통과, npm run build 성공(ContractSpreadsheetEditor.js 53KB 서버번들, jspreadsheet-ce
+       클라이언트 동적 임포트 확인)
+  구현 이슈 기록:
+    - TypeScript: ContractTemplate→Record<string,unknown> 직접 캐스팅 불가 → unknown 중간 캐스팅으로 해결
+    - SpreadsheetSheet vs SpreadsheetDocument 타입 불일치 → renderSpreadsheetToHtml에 전체 문서 전달
+    - Migration 번호 충돌(260/261 기사용) → 264/265로 조정
+
+[2026-08-15] 🔴CRITICAL(보안) | 전체 DB 함수 anon 익명접근 전수점검·차단 (Stephen 지시) | migration 262(Stage+Production) | 완료
+  배경: 같은 세션에서 2회 발견한 "SECURITY DEFINER 함수가 anon 키로 직접 호출 가능" 패턴이
+  프로젝트 전역에 얼마나 더 있는지 Stephen이 전수 점검 지시.
+  조사: public 스키마 SECURITY DEFINER 함수 172개 중 142개가 anon 실행 가능 확인. 코드베이스
+  전체 `.rpc(` 호출부 129곳을 전수 대조해 3그룹으로 분류 — ①RLS 정책 predicate(is_admin 등,
+  회수 시 RLS 자체 붕괴) ②실제 비로그인 방문자가 쓰는 화면(상품검색·리뷰·예약생성·위시리스트·
+  프로필 등 약 50개, 명확히 의도된 접근) ③admin/service-role 클라이언트로만 호출되거나 호출부가
+  아예 없는 함수(내부 함수간 호출 또는 죽은 코드 추정) 약 79개 — 여기에 고객삭제·블랙리스트·
+  포인트지급·쿠폰·구독관리·상품코드발급·결제 관련 다수 포함, 이번 마이그레이션의 실제 차단 대상.
+  구현 이슈 1: 최초 시도(REVOKE FROM anon만)는 대부분 무효 — 오래된 함수들은 anon 개별 권한이
+  아니라 PUBLIC(=X) 기본권한으로 노출돼 있어 anon만 회수하면 조용히 no-op. PUBLIC까지 회수하도록
+  수정(has_function_privilege로 직접 검증하며 원인 특정).
+  구현 이슈 2: PUBLIC 회수 시 79개 중 9개는 authenticated도 별도 GRANT 항목 없이 PUBLIC에만
+  의존하고 있어 함께 사라질 뻔함 — 이번 조치는 "완전 비로그인 anon만 차단, authenticated는
+  불변" 원칙이라 매 함수마다 GRANT TO authenticated를 재부여해 기존 접근 수준을 항상 보존.
+  범위를 anon 한정으로 좁힌 이유: `/cms/set/rental` 등 일부 CMS 화면이 admin이 아니라
+  locals.supabase(authenticated)로 RPC를 직접 호출하는 걸 확인 — authenticated까지 건드리면
+  실제 화면이 깨짐(내부 권한검증 로직을 개별 확인 안 하고는 안전 여부 판단 불가) → 별도 후속
+  검토로 분리, 이번엔 손대지 않음.
+  검증: Stage 적용 후 전체 vitest(1092개) 재실행 → subscriptionBilling.test.ts 등 3개 파일이
+  테스트 코드 자체가 anon 클라이언트로 이제-service_role-전용인 RPC를 직접 호출하던 구조라
+  회귀 노출(create_user_subscription·generate_subscription_product_code·
+  generate_subscription_inventory_product_code) → adminClient 호출로 수정, 24/24 재통과.
+  그 외 신규 회귀 0건(잔여 실패 34건 전부 이번 세션 이전부터 있던 무관 이슈 —
+  confirm_payment_and_update_reservation/cancel_payment_and_release_hold 권한 문제 등,
+  `.claude/worktrees/` 미변경 사본에도 동일하게 재현돼 사전 확인). Production도 동일 적용,
+  anon_exposed 142→49(모두 의도된 공개 접근만 잔존) 확인.
+  **남은 과제(별도 확인 필요)**: authenticated 레벨 접근이 진짜 안전한지는 이번에 검증 안 함 —
+  특히 `/cms/set/rental`류처럼 locals.supabase(로그인만 하면 되는 일반 authenticated) 로
+  CMS 전용 기능을 호출하는 패턴이 내부적으로 is_cms_user() 등 자체 검증을 하는지 함수 본문
+  단위로 확인 필요.
+
+[2026-08-15] 🔴CRITICAL(보안) | authenticated 레벨 관리자 전용 RPC 접근 점검·차단 (migration 262 후속, Stephen 지시) | migration 263(Stage+Production) | 완료
+  배경: migration 262가 남긴 "남은 과제" — authenticated(로그인만 한 일반 고객)로 관리자 전용
+  RPC를 직접 호출 가능한지 전수 점검.
+  조사: 262에서 anon 차단된 함수 중 함수 내부에 자체 권한체크(is_cms_user/is_admin)가 없는
+  80개를 코드베이스 전체 `.rpc(` 호출부와 대조. 먼저 `/cms/set/rental`류(18개 RPC, locals.supabase
+  직접 호출)를 실제 SQL로 열어 전부 `IF NOT is_cms_user()` 가드가 있음을 확인(안전, 미변경).
+  80개 후보는 반대로 locals.supabase/브라우저 클라이언트 호출이 0건 — 전부 admin(service_role)
+  클라이언트 또는 pg_cron(release_reservation_hold·auto_pending_inactive_sessions·
+  execute_marketing_rules·batch_update_search_impressions·auto_send_return_remind·
+  run_search_reformulation_scan) 전용으로만 호출됨을 실증. 즉 authenticated 권한 자체가
+  애초에 불필요 — 함수 로직을 전혀 건드리지 않고 authenticated만 회수하는 것으로 결정
+  (is_cms_user() 삽입 방식은 cron 실행 시 auth.uid() NULL → 항상 실패해 cron이 깨질 위험이 있어
+  기각). cms_update_admin_role(로그인 고객이 자신을 CMS manager로 승격 가능한 권한상승 결함),
+  soft_delete_customer/toggle_blacklist/adjust_credit_score(임의 고객 삭제·블랙리스트·신용점수
+  조작), cms_create_invite_token(관리자 초대링크 임의 발급) 등 포함.
+  검증: Stage 적용 후 대상 69개(DB 실존 기준, 목록 중 3개는 이미 다른 이름으로 대체됐거나
+  DB에서 삭제된 상태 — release_reservation_hold·update_credit_score·generate_child_product_code,
+  후자는 products.md에 이미 기록된 죽은 함수) 전량 authenticated=false·service_role=true·
+  anon=false 확인. 전체 vitest(652개, 별도 stale worktree `.claude/worktrees/` 제외) 재실행 —
+  14개 실패는 전부 productClone.test.ts/payment.test.ts의 mock 체이닝 버그(admin.from(...).select
+  is not a function)로 이번 세션 미변경 파일에서 사전에 존재하던 무관 이슈, 신규 회귀 0건.
+  Production도 동일 적용·검증 완료(대상 72개 매칭, authenticated 실행가능 0·service_role 손상 0).
+  BACKLOG: release_reservation_hold/update_credit_score가 마이그레이션 파일엔 있으나 DB에
+  없는 드리프트 — 오늘 작업과 무관, 별도 세션에서 원인 확인 필요.
+
+[2026-08-15] GSD | /cms/subscriptions 구독자현황 ↔ /cms/customers 구독이력 상호 딥링크 추가 + 2차 보안수정 | migration 261(Stage+Production) + CustomerDetailPanel/SubscriptionDetailPanel/customers +page.server.ts·+page.svelte | 완료
+  선행 조사: "구독상품 관리설정" 세션 산출물(SubscriptionDetailPanel·loadSelectedSubscriptionDetail.ts)과
+  이번 세션 산출물(membership·CustomerDetailPanel) 직접 대조 — 코드 중복·충돌 없음 확인(플랜
+  중심 뷰 vs 고객 중심 뷰로 상호보완 관계). 이후 Stephen이 두 화면 간 딥링크 신규 추가 요청.
+  구현: SubscriptionDetailPanel "구독자현황" 행 → `/cms/customers?selected={user_id}&tab=subscription`
+  새창 이동(RentalDetailPanel 카드 링크 패턴 재사용) / CustomerDetailPanel "구독이력" 카드 →
+  `/cms/subscriptions?selected={plan_id}` 새창 이동. `/cms/customers`가 `?selected=`를 전혀
+  처리 못 하던 것을 발견해 +page.server.ts/+page.svelte에 딥링크 단건 조회 추가, CustomerDetailPanel에
+  initialTab prop 신설({#key selectedUserId} 리마운트 패턴 위에서 안전).
+  migration 261: get_customer_list RPC에 p_user_id 파라미터 추가(페이지네이션/필터 무관 단건
+  조회, DROP 후 재생성 — 파라미터 개수 변경 시 PGRST203 방지 컨벤션 준수).
+  🔴 2차 보안수정(1차와 별개, DROP 과정에서 발견): get_customer_list가 이미 anon/authenticated
+  키로 직접 호출 가능한 상태(REVOKE 이력 전무, migration 98/110/139/165 전부 미설정)였음 —
+  전체 고객 이메일·전화번호·신분증 URL·블랙리스트 사유까지 anon 노출되는 심각한 개인정보
+  유출. 같은 함수를 DROP+재생성하는 김에 service_role 전용으로 즉시 잠금, Stage·Production
+  양쪽 has_function_privilege()로 재확인 완료.
+  검증: svelte-kit sync 후 svelte-check 신규 에러 0건(1건 pre-existing 무관), eslint 신규
+  에러 0건(CustomerDetailPanel 2건·+page.svelte enhance 미사용 1건 전부 pre-existing 확인).
+  RPC 기존 페이지네이션 호출 경로 stage/production 양쪽 smoke test 정상.
+
+[2026-08-15] 🔴CRITICAL(보안) | Migration 259 Production 적용 직후 anon/authenticated RPC 실행권한 노출 발견·즉시수정 | migration 260 (Stage+Production 적용 완료) | 완료
+  마이그레이션 259를 Production(vnbpmvxruyciuuaermyh)에 적용 후 get_advisors(security) 실행 →
+  claim_subscriptions_due_for_billing/record_subscription_charge_result 둘 다 anon·authenticated가
+  `/rest/v1/rpc/...`로 직접 호출 가능한 상태로 배포됐음을 발견. 원인: 이 프로젝트 public 스키마에
+  `ALTER DEFAULT PRIVILEGES ... GRANT EXECUTE ON FUNCTIONS TO anon, authenticated`가 이미 걸려있어
+  (pg_default_acl 확인) 신규 함수는 생성 즉시 anon/authenticated에 자동 부여됨 — 마이그레이션 259의
+  `REVOKE ALL ... FROM PUBLIC`은 PUBLIC 슈도롤에서만 회수해 이 default-privilege 부여분을 못 지움.
+  claim RPC는 billing_key(토스 빌링키)를 응답에 포함 + 실제 구독을 선점(쓰기)하고, record RPC는
+  임의 user_subscription_id의 결제 성공/실패를 조작 가능 — 익명 접근 시 심각한 결제위변조·정보유출.
+  `has_function_privilege()` 직접 조회로 실제 anon 실행 가능 상태(true) 확인 후, migration 260으로
+  두 함수에 `REVOKE ALL ... FROM PUBLIC, anon, authenticated` 명시 적용 → Stage·Production 양쪽
+  재확인 결과 anon/authenticated=false, service_role=true로 정정 확인. 부수 발견: 동일 세션이
+  아닌 기존 세션 산출물인 create_user_subscription(224)·generate_subscription_product_code/
+  generate_subscription_inventory_product_code(241)도 REVOKE 전무 또는 동일 패턴으로 anon 노출
+  가능성 있음(같은 프로젝트 전역 default-privilege 원인 추정, 이번 세션 검증 안 함) — **Stephen
+  별도 확인·조치 필요, 이번 마이그레이션 범위 밖이라 손대지 않음**.
+  회귀: subscriptionBilling.test.ts가 anon 클라이언트로 record_subscription_charge_result를
+  직접 호출하던 구조라 REVOKE 직후 2건 실패 → adminClient(service role) 호출로 수정, 24/24 재통과.
+
+[2026-08-15] 🔴CRITICAL | /cms/customers/membership 구독정보·구독결제고객 정보 반영 개발보완(Plan Mode 승인) | GATE C 통과 / Production DB·CRON_SECRET Stephen 확인 대기
+  Part A(GSD): membership KPI 카드 하드코딩 제거 — plan_name 문자열 매칭 → membership_grade
+  기반 동적 플랜 카드로 교체(+page.server.ts/+page.svelte). 활성 플랜 0건 안내문구 처리.
+  Part B(GSD): 결제이력 노출 — SubscriptionPaymentLogRow 타입 신설, 멤버십 테이블 '최근 결제'
+  컬럼, 신규 /cms/customers/subscription-payments(hasSettingsAccess 게이트), CustomerDetailPanel
+  구독이력 탭에 결제내역 지연조회 펼침 UI(RentalDetailPanel 패턴 재사용).
+  Part C(TDD): 정기 재청구 크론 신설 — migration 259(billing_claimed_at 컬럼 +
+  claim_subscriptions_due_for_billing 원자적 선점 RPC + record_subscription_charge_result
+  확장) Stage 적용 완료. /api/cron/subscription-billing(CRON_SECRET fail-closed) + vercel.json
+  crons(0 0 * * * UTC=KST09시) 신규. chargeSubscription.ts 원본 무변경 재사용.
+  검증: subscriptionBilling.test.ts(12) + subscriptionBillingClaim.test.ts(6) +
+  subscriptionBillingCron.test.ts(6) = 24/24 통과, svelte-check/eslint 신규 에러 0건(전체
+  1건 pre-existing 무관 에러만 잔존). 동일 세션 중 harness 자동분석(@promptor 추정)이 독립적으로
+  같은 파일 경로·설계를 도출해 결과 교차검증(불일치 없음).
+  남은 것: Production(vnbpmvxruyciuuaermyh) 마이그레이션 적용 Stephen 승인 대기,
+  CRON_SECRET Vercel 환경변수 Stephen 직접 등록 필요(AI 설정 불가), git commit 미실행.
+
+[2026-08-15] 🔍AUDIT | /cms/customers/membership 구독정보·구독결제고객 반영 4차 재검증(감사 전용) | TASK.md 15845행 하위 추가 | 완료(수정 없음)
+  코드 재독 + Supabase Stage(ezyvffjvuwmtuhpxdjrw)/Production(vnbpmvxruyciuuaermyh) 실스키마·
+  실데이터 직접 조회로 검증. 신규 결함 확정: membership 상단 KPI 3장(EASY/POP/CRAZY)이
+  plan_name 문자열을 'easy'/'pop'/'crazy'와 직접 비교(membership_grade 미참조) + 가격
+  9,900/19,900/29,900원 정적 하드코딩 — stage 실제 플랜 4건 전부 매칭 실패로 항상 0명 표시
+  확인(하단 구독이력 테이블은 정상 DB연동, KPI 3장에만 한정된 결함). "구독결제고객 카드 오류"는
+  코드 결함이 아니라 두 DB 모두 user_subscriptions/subscription_plans 실사용 데이터 0건(정기
+  재청구 크론 미구현 + subscription_payment_logs CMS 조회화면 전무 — 기존 3차 감사 §③④와 동일
+  원인, 오늘 재확인)인 것으로 판정. 코드/DB 변경 없음 — GATE B는 Stephen 확인 후 별도 진행.
+
+[2026-08-15] CRITICAL | 상담채팅 반납등록 CTA 버그수정 + 자동알림 + 고객이력화면 | migrations 255/256/257 + ActionCard.svelte + /account/rental/[id]/history/* + /api/account/rental/[id]/history/* + rental-lifecycle.md | GATE C 완료 / stage 마이그레이션 Stephen 적용 대기
+  §D: send_rental_chat_notification에 action_url 추가(migration 255) + ActionCard window.open _blank 수정
+  §A: auto_return_remind cron 매일 09:00 자동발송(migration 256, 중복방지 내장)
+  §C: product_history_records.registered_by 컬럼 추가 + 고객전용 RPC 3종 + API 신규 2개(migration 257)
+  §B: /account/rental/[id]/history 고객 반납이력 화면 신설(+page.server.ts, +page.svelte)
+  §E: rental-lifecycle.md 문서 갱신(return_remind 자동+수동 겸용 정정 + 구현파일 인덱스 추가)
+  TypeScript: npx svelte-check 0 new errors(기존 products/search 1건은 pre-existing)
 [2026-08-15] FIX | sp3-qa-agent 2차 검수 발견 3건 정리 | migration 252 + products/new/+page.server.ts + nlsearch.md | 완료
   QA 2차 검수(MEDIUM 1건·LOW 2건) 즉시 반영. ① migration 252에 253/254와 동일한 ROLLBACK
   주석 섹션 추가(SQL 주석만 추가, 이미 Stage+Production 적용된 DDL 자체는 무변경이라 재적용
