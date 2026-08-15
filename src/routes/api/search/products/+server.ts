@@ -26,6 +26,8 @@ import { PUBLIC_SUPABASE_URL } from '$env/static/public'
 import { SUPABASE_SERVICE_ROLE_KEY } from '$env/static/private'
 import { supabase } from '$lib/services/supabase'
 import { getProductSearchIndex } from '$lib/server/searchEngine/adapters/productSearchIndex'
+import { loadSynonymGroups } from '$lib/server/synonymLearning'
+import { expandQueryWithConfirmedSynonyms } from '$lib/server/searchEngine/core/synonymExpander'
 import type { RequestHandler } from './$types'
 
 // RPC 결과 "약한 매칭" 기준 — 이 건수 이하면 자연어 폴백 보강 실행
@@ -98,46 +100,75 @@ export const GET: RequestHandler = async ({ url, locals }) => {
     return json({ results: rpcResults, query: q, page, limit, search_log_id: searchLogId })
   }
 
-  // ── 2차: MiniSearch 자연어 폴백 (RPC 결과 약할 때만) ──────────────────────
+  // ── 2차: 동의어 확장 RPC 재조회 + 3차 MiniSearch 폴백 (약한 매칭 보강 — §E-2) ──
+  // synonymGroups가 없거나 빈 배열이면 확장어 없이 기존 동작과 100% 동일합니다.
+  const seenIds = new Set(
+    rpcResults.map((r) => String(r['product_id'] ?? r['id'] ?? ''))
+  )
+  let mergedResults = [...rpcResults]
+
+  // 동의어 그룹 1회 로드 — 확장 RPC 재조회 + MiniSearch 폴백 두 곳에서 재사용
+  let expandedTerms: string[] = []
+  try {
+    const synonymGroups = await loadSynonymGroups()
+    expandedTerms = expandQueryWithConfirmedSynonyms(q, synonymGroups)
+
+    // 각 확장어로 search_products RPC 재조회 (세션 개인화 학습 제외)
+    for (const expandedQ of expandedTerms) {
+      if (mergedResults.length >= limit) break
+
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const { data: expData } = await (supabase.rpc as any)('search_products', {
+        p_query:      expandedQ,
+        p_category:   category,
+        p_page:       1,
+        p_limit:      limit,
+        p_session_id: null,
+        p_user_id:    null,
+      })
+      const expResults: Record<string, unknown>[] = expData ?? []
+      for (const row of expResults) {
+        const id = String(row['product_id'] ?? row['id'] ?? '')
+        if (!seenIds.has(id)) {
+          seenIds.add(id)
+          mergedResults.push({ ...row, _source: 'synonym_expansion', _expanded_from: expandedQ })
+        }
+      }
+    }
+  } catch {
+    // 동의어 확장 실패 시 기존 결과 유지 — 서비스 중단 없음
+  }
+
+  // ── 3차: MiniSearch 자연어 폴백 (여전히 부족하면) ─────────────────────────
   try {
     const index = await getProductSearchIndex()
-    const naturalResults = index.search(q, {
-      fuzzy: 0.2,
-      prefix: true,
-      limit: limit * 2, // dedupe 여유분 확보
-    })
 
-    if (naturalResults.length === 0) {
-      return json({ results: rpcResults, query: q, page, limit, search_log_id: searchLogId })
+    // 원래 쿼리 + 확장어 전부 MiniSearch에서 검색 (순서 유지)
+    for (const qItem of [q, ...expandedTerms]) {
+      if (mergedResults.length >= limit) break
+      const results = index.search(qItem, {
+        fuzzy: 0.2,
+        prefix: true,
+        limit: limit * 2,
+      })
+      for (const r of results) {
+        if (!seenIds.has(r.document.id)) {
+          seenIds.add(r.document.id)
+          mergedResults.push({
+            product_id: r.document.id,
+            id: r.document.id,
+            name: r.document['name'],
+            brand: r.document['brand'],
+            category: r.document['category'],
+            slug: r.document['slug'],
+            _source: 'natural_fallback',
+          })
+        }
+      }
     }
-
-    // RPC 결과 id 집합
-    const rpcIdSet = new Set(
-      rpcResults.map((r) => String(r['product_id'] ?? r['id'] ?? ''))
-    )
-
-    // RPC 결과에 없는 자연어 결과만 추가 (RPC 우선 원칙)
-    const fallbackResults: Record<string, unknown>[] = naturalResults
-      .filter((r) => !rpcIdSet.has(r.document.id))
-      .map((r) => ({
-        // RPC 응답 shape에 맞춰 필드 매핑
-        product_id: r.document.id,
-        id: r.document.id,
-        name: r.document['name'],
-        brand: r.document['brand'],
-        category: r.document['category'],
-        slug: r.document['slug'],
-        // 자연어 폴백 결과임을 표시 (클라이언트에서 무시 가능)
-        _source: 'natural_fallback',
-      }))
-
-    // 병합: RPC 결과 먼저, 자연어 폴백 결과를 뒤에 추가
-    const merged = [...rpcResults, ...fallbackResults].slice(0, limit)
-
-    return json({ results: merged, query: q, page, limit, search_log_id: searchLogId })
-  } catch (e) {
-    // 자연어 폴백 실패 시 RPC 결과만 반환 (서비스 중단 방지)
-    console.error('[search/products] 자연어 폴백 오류:', e)
-    return json({ results: rpcResults, query: q, page, limit, search_log_id: searchLogId })
+  } catch {
+    // 자연어 폴백 실패 시 현재까지 병합된 결과만 반환 (서비스 중단 방지)
   }
+
+  return json({ results: mergedResults.slice(0, limit), query: q, page, limit, search_log_id: searchLogId })
 }

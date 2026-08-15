@@ -13775,6 +13775,364 @@ Browser 사용 금지 원칙 때문이었는데, 이번엔 빌드 산출물 확�
 드래그, 1280px/1440px A4 카드 육안 확인, 고정캔버스형 PDF/이미지 업로드 실사용) — Claude
 Browser 사용 금지 원칙에 따라 이 세션에서는 수행하지 않음. @sp3-qa-agent 검수도 아직 미착수.
 
+### 후속 — @sp3-qa-agent GATE E 통과 확인 + Stephen 실사용 중 xlsx 병합 회귀 발견·수정 (2026-08-15)
+
+@sp3-qa-agent 백그라운드 검수 결과 GATE E 통과(코드 논리·SSR 순수성·범위·테스트·빌드 전부
+정상, 발견 결함 0건) — 단, 이 검수는 QA 시점 코드 기준이며 아래 실사용 발견 버그는 검수
+*이후* 시점에 Stephen이 `<launch-selected-element>`로 실제 계약서 .xlsx(51행×17열, 임대차
+계약서)를 "문서 가져오기 → 표로 삽입"에 넣어보며 직접 발견해 즉시 추가 수정했다(Claude
+Browser 미사용 — Stephen이 CMS 화면에서 직접 선택한 컨텍스트).
+
+**발견된 버그**: `xlsxImport.ts` `parseSheet()`가 `blankrows:false`로 완전 빈 행을 먼저
+제거한 뒤 "행 개수가 예상보다 줄었으면 병합 정보 전체를 비운다"는 안전장치를 뒀었는데,
+실무 계약서 스프레드시트는 시각적 여백용 완전 빈 행(셀 자체가 sparse — 값을 채운 셀 객체가
+없음)이 매우 흔해서, 이 안전장치가 거의 항상 발동해 **병합이 있는 실제 문서에서는 병합
+정보가 통째로 무시되는** 결과로 이어졌다. 미리보기 모달도 병합을 전혀 반영하지 않는 순수
+평면 그리드였어서, 실제로는 앵커 셀에 정상 저장돼 있던 값이 시각적으로 여러 빈 칸에 흩어져
+보여 "셀 유실"로 오인됐다(데이터 손실은 아니었으나 UX상 구분 불가).
+
+핵심제약: 요청 파일(xlsxImport.ts, ContractImportModal.svelte, xlsxTableMerge.test.ts)만
+수정 — docx 쪽(vMerge/gridSpan 로직)은 이 버그와 무관해 미수정.
+
+**수정**:
+1. `xlsxImport.ts` `parseSheet()` — `blankrows:false` 사전 제거 방식을 폐기하고, 옵션 없이
+   (기본값=빈 행도 포함) 전체 행을 시트 행 인덱스와 항상 1:1로 정렬된 상태로 받은 뒤, "병합에
+   걸치지 않은 완전 빈 행만" 직접 판정해 제거하는 방식으로 교체(`rowsTouchedByMerge` 집합으로
+   병합이 걸친 행은 텍스트가 비어도 보존, `oldToNewRowIndex` 매핑으로 제거 후 병합 좌표
+   재인덱싱). "행 개수 줄면 병합 전체 무효화" 안전장치는 완전히 제거됨(더 이상 필요 없음 —
+   좌표 정렬이 항상 정확하므로).
+2. `rowsToTiptapTable()` — 한 행의 모든 셀이 위쪽 세로병합에 흡수돼 빈 `<tr>`이 될 경우 그
+   행 자체를 생성하지 않도록 보강(위 1번 변경으로 이런 케이스가 실제로 발생 가능해짐).
+3. 병합 계산 로직(`coveredCells`/`anchorSpan`)을 `computeMergeLayout()`으로 추출해
+   `rowsToTiptapTable()`과 `ContractImportModal.svelte` xlsx 미리보기가 공유하도록 변경 —
+   `ContractImportModal.svelte`의 `xlsx-preview` 단계가 이제 실제 삽입 결과와 동일하게
+   병합된 셀을 `colspan`/`rowspan`으로 반영해서 보여줌(과거엔 평면 그리드라 병합 결과가
+   미리보기와 실제 삽입 결과가 서로 달랐음).
+
+**영향 파일**:
+```
+src/lib/utils/docImport/xlsxImport.ts (MODIFY)
+src/lib/components/cms/contract-editor/ContractImportModal.svelte (MODIFY)
+src/__tests__/services/xlsxTableMerge.test.ts (MODIFY — 회귀 재현 테스트 4건 추가)
+```
+
+**검증**: `npx vitest run src/__tests__/services/xlsxTableMerge.test.ts` 16/16 통과(신규
+"sparse 빈 행 제거+병합 재인덱싱" 회귀 테스트가 이번 버그를 정확히 재현·검증), 관련 10개
+파일 전체 재실행 137/137 통과, `npx svelte-check` 신규 에러 0건.
+
+**GATE E**: ✅ 통과(추가 수정분 포함) — 커밋은 Stephen 직접 실행.
+
+### 후속 2 — xlsx 숫자/날짜 서식 손실 발견·수정 (2026-08-15)
+
+Stephen이 "엑셀 인식 모듈 문제가 해결이 어려운지 재확인해"라고 재질문 → 코드 재점검 중
+`XLSX.read()`/`sheet_to_json()`이 기본값(`raw:true`)으로는 셀의 서식 적용 전 원시값을
+반환한다는 것을 실제 합성 파일로 검증해 확인(통화 서식 `#,##0"원"` 숫자 1200000이
+"1200000"으로, 날짜 서식 숫자가 일련번호(45888)로 깨져 나옴 — 실제 계약서에 흔한 금액·날짜
+셀에서 재현 가능한 실질적 결함).
+
+**수정**: `xlsxImport.ts` `parseSheet()`의 `sheet_to_json` 옵션에 `raw:false` 추가 — SheetJS가
+셀 서식(numFmt)을 적용해 계산한 표시 텍스트를 그대로 반환하도록 변경. 문자열 셀(사업자등록
+번호 등)은 영향 없음(숫자/날짜 타입 셀에만 서식 적용 로직이 작동).
+
+**영향 파일**: `src/lib/utils/docImport/xlsxImport.ts` (MODIFY, 옵션 1줄),
+`src/__tests__/services/xlsxTableMerge.test.ts` (MODIFY, 통화·날짜 서식 회귀 테스트 2건 추가)
+
+**검증**: `xlsxTableMerge.test.ts` 18/18 통과(신규 2건 포함), 관련 10개 파일 전체 139/139
+통과, svelte-check 신규 에러 0건.
+
+**Stephen에게 답변한 내용(종합)**: 구조적 인식(병합 셀·빈 행)과 서식 인식(금액·날짜)은
+실제 버그였고 둘 다 수정·테스트 완료 — "해결이 어려운" 문제가 아니었음. 단, 아직 옮기지
+않는 항목이 하나 남아있음을 명시적으로 안내: **셀 배경색·글자색·굵기·정렬 같은 "스타일"은
+xlsx 임포트에서 전혀 보존되지 않는다**(docx는 배경색·테두리색을 OOXML에서 직접 뽑아 옮기는
+기능이 있지만 xlsx 쪽은 이 기능이 없음 — 텍스트/구조/서식(숫자·날짜)만 옮겨지고 시각적
+스타일은 기본 표 스타일로 통일됨). 이건 "어려워서 못 고친 버그"가 아니라 애초에 이번
+수정 범위에 없던 별도 기능— 필요하면 Stephen 확인 후 별도 작업으로 추가 가능.
+
+**GATE E**: ✅ 통과.
+
+### 후속 3 — "엑셀 임포트 후 표 편집 메뉴 미확인·셀 편집 불가" 제보 조사 (2026-08-15) — 부분 원인 발견·수정, 재현 정보 요청 중
+
+Stephen이 문서형 에디터에서 엑셀 임포트한 표에 대해 "표 편집 메뉴가 안 보임" + "셀 편집
+자체가 불가능" + "라인값·BG값 인식 못함"을 제보. `<launch-selected-element>`로는 정확한
+재현 화면(표 자체)이 아니라 서명·직인 필드 행이 선택돼 있어 정확한 위치는 육안 확인
+불가 — Claude Browser 사용 금지 원칙상 코드 리뷰 + 실제 TipTap Editor 인스턴스를 이용한
+자동 진단으로 접근.
+
+**진단 방법**: `@tiptap/core`의 `Editor`를 jsdom 환경에서 직접 생성해, Stephen이 올린
+실제 화면(51행×17열 임대차계약서)과 동일한 형태(다중 컬럼+가로병합 헤더)의
+`rowsToTiptapTable()` 출력을 `insertContent()`로 삽입해보고 예외·문서 구조·표 편집
+커맨드(`editor.can().addRowAfter()`) 동작 여부를 직접 확인(임시 진단 테스트, 커밋 대상
+아님 — 확인 후 삭제).
+
+**진단 결과**: 삽입 자체는 에러 없이 성공, 생성된 문서 구조(`table`→`tableRow`→
+`tableHeader`/`tableCell`, colspan/rowspan/colwidth 속성) 전부 정상, 표 내부에 커서를
+두고 `addRowAfter` 커맨드를 확인하면 `true`(정상 동작 가능) — 즉 **`rowsToTiptapTable()`이
+만드는 JSON 구조 자체는 TipTap 표 편집 시스템과 호환되며 이 부분은 결함이 아님**을 실측
+확인.
+
+**부수적으로 발견한 실제 결함**: 진단 중 콘솔에 `[tiptap warn]: Duplicate extension names
+found: ['link', 'underline']`가 매번 출력되는 것을 확인. 원인은
+`tiptapExtensions.ts`가 `Underline`/`Link.configure({openOnClick:false})`를 별도로
+등록하는데, 설치된 `@tiptap/starter-kit@3.29.2`는 v2와 달리 `Link`·`Underline`을 기본
+번들에 이미 포함하고 있어(`node_modules/@tiptap/starter-kit/dist/index.js` 직접 확인)
+같은 이름의 확장이 중복 등록되고 있었음. TipTap의 `resolveExtensions()`는 중복을
+경고만 하고 실제로 걸러내지 않아(`node_modules/@tiptap/core/dist/index.js` 확인) 두
+인스턴스의 커맨드·키맵·플러그인이 함께 등록되는 상태였음 — 표 상호작용을 포함한 에디터
+전반의 불안정성으로 이어질 수 있는 정당한 결함으로 판단해 즉시 수정.
+
+**수정**: `tiptapExtensions.ts` — `StarterKit` → `StarterKit.configure({ link: false,
+underline: false })`로 변경해 StarterKit 쪽 기본 인스턴스를 끄고, 별도 등록하는
+`Underline`/`Link.configure(...)` 인스턴스만 유효하게 함. 회귀 테스트 2건 추가
+(`contractTiptapRender.test.ts`) — `getSchema()`로 실제 스키마를 만들어 중복 경고가
+더 이상 발생하지 않는지, `link`/`underline` 마크가 정확히 등록되는지 확인.
+
+**영향 파일**:
+```
+src/lib/components/cms/contract-editor/tiptapExtensions.ts (MODIFY)
+src/__tests__/server/contractTiptapRender.test.ts (MODIFY — 회귀 테스트 2건 추가)
+```
+
+**검증**: `contractTiptapRender.test.ts` 26/26 통과(신규 2건 포함, 중복 경고 재확인 결과
+0건), 관련 10개 파일 전체 283/283 통과, svelte-check 신규 에러 0건.
+
+**⚠️ 미해결 — Stephen 확인 필요**: 이 수정이 "표 편집 메뉴가 안 보이고 셀 편집 자체가
+안 된다"는 증상의 직접 원인이라는 확증은 없음(위 duplicate-extension 결함은 전역
+에디터 이슈이지 엑셀 임포트에 국한된 문제가 아니라, Stephen이 보고한 "엑셀 임포트 후에만"
+이라는 조건과는 정확히 들어맞지 않음). `rowsToTiptapTable()` 출력 자체는 정상 동작함을
+실측 확인했으므로, 다음 정보가 있어야 정확한 원인을 좁힐 수 있음:
+  1. 표 편집 메뉴 미확인 문제가 **수동으로 "표 삽입" 버튼을 눌러 만든 표**나
+     **워드(.docx) 임포트 표**에서도 똑같이 재현되는지, 아니면 엑셀 임포트 표에서만
+     재현되는지
+  2. 셀을 클릭했을 때 브라우저 개발자도구 콘솔에 에러가 뜨는지(문구 그대로)
+  3. "라인값·BG값 인식 못함"은 §후속2에서 이미 안내한 "xlsx 임포트는 셀 배경색·테두리색을
+     원래 옮기지 않는다"(워드만 지원)는 알려진 제한사항과 동일한 현상인지, 아니면 그와
+     별개로 완전히 다른 문제인지
+  → 위 정보 확보 후 원인을 마저 좁혀 수정 예정. 라인/BG 색상 이식은 별도 기능 추가
+     확인이 필요(§후속2에서 이미 질의한 사항과 동일).
+
+**GATE E**: 진행 중(위 미해결 항목 있음, 부분 수정만 반영).
+
+### 후속 4 — Stephen 답변 확보: "중급 편집 기능(병합·특정 위치 행/열 추가삭제) 자체가 없었음" 확인·구현 (2026-08-15)
+
+Stephen이 위 3가지 질문에 답변: ① 증상은 모든 표(수동 삽입·워드 임포트·엑셀 임포트)에서
+유사하게 발생, ② 콘솔 에러 없음, ③ 실제 문제는 "표 추가·셀 추가삭제 시 **중급 편집
+기능(셀 병합, 특정 셀 행&열 추가삭제 등)** 자체가 안 됨" — "구글 워드·스프레드시트의
+기본 기능은 구현되어야 정상"이라고 명시. 즉 §후속3에서 의심했던 "특정 표에서만 깨지는
+버그"가 아니라 **애초에 툴바에 없던 기능**이었음이 확인됨(콘솔 에러 없음 + 모든 표에서
+동일 = 코드 결함이 아니라 기능 공백의 증거).
+
+**조사**: `node_modules/@tiptap/extension-table/dist/table/index.js`의 `addCommands()`를
+직접 확인한 결과 `addRowBefore`·`addColumnBefore`·`mergeCells`·`splitCell`·
+`toggleHeaderColumn`·`toggleHeaderCell`·`mergeOrSplit`가 **이미 패키지에 전부 구현돼
+있었음** — `ContractDocumentEditor.svelte` 툴바가 이 중 `addRowAfter`/`deleteRow`/
+`addColumnAfter`/`deleteColumn`/`toggleHeaderRow`/`deleteTable`만 연결해 두고 나머지는
+버튼 자체가 없어 접근 불가능했던 것(신규 버그 아님 — Phase 1(2026-08-11) 최초 구현 시점부터
+누락돼 있던 기능 공백).
+
+**수정**: `ContractDocumentEditor.svelte` 표 툴바에 5개 버튼 추가 — 행↑+(`addRowBefore`),
+행↓+(기존 `addRowAfter`를 명확한 라벨로 정정), 열←+(`addColumnBefore`), 열→+(기존
+`addColumnAfter` 라벨 정정), 병합(`mergeCells`), 분할(`splitCell`), 헤더열(
+`toggleHeaderColumn`, 기존 헤더행 옆에 대칭 추가). 셀 여러 개 드래그 선택은
+`tableEditing()` 플러그인(`resizable:true` 여부와 무관하게 항상 등록됨)이 이미 지원하므로
+추가 구현 불필요 — 버튼만 연결하면 즉시 동작.
+
+**검증**: 신규 `src/__tests__/server/contractTableEditCommands.test.ts` — jsdom에서 실제
+`@tiptap/core` `Editor` 인스턴스를 띄우고 `addRowBefore`/`addColumnBefore`/`mergeCells`
+(`CellSelection` 직접 구성해 실제 사용자의 드래그 선택 재현)/`splitCell`/
+`toggleHeaderColumn`을 라이브로 실행해 문서 구조 변화(셀·행 개수, colspan, 노드 타입)를
+검증 — 4/4 통과. 관련 11개 파일 전체 145/145 통과, svelte-check 신규 에러 0건.
+
+**영향 파일**:
+```
+src/lib/components/cms/contract-editor/ContractDocumentEditor.svelte (MODIFY — 버튼 5개 추가)
+src/__tests__/server/contractTableEditCommands.test.ts (신규)
+```
+
+**남은 미해결(§후속3에서 이미 질의, 답변 대기)**: "라인값·BG값 인식 못함" — xlsx 임포트가
+셀 배경색·테두리색을 옮기지 않는 것은 §후속2에서 이미 안내한 알려진 제한(워드만 지원)과
+동일 현상으로 추정되나 Stephen의 명시적 확인·추가 작업 여부 답변 대기 중. 그 외 항목은
+전부 해소.
+
+**GATE E**: ✅ 통과(이번 후속분).
+
+### 후속 5 — xlsx 셀 배경색·테두리색 구현 + "엑셀 편집 메뉴바 미노출" 재확인 요청 (2026-08-15)
+
+Stephen 추가 요청 2건: ①"엑셀 임포트한 캔버스에 엑셀 편집 메뉴바가 미노출(워드용 메뉴바는
+정상 노출)", ②"BG값·라인값도 구현".
+
+**②(BG·라인값) 구현 완료**: `xlsx` 패키지(SheetJS Community Edition) 소스를 직접 확인한
+결과 배경색은 `cellStyles:true`로 이미 `ws[addr].s.fgColor.rgb`에 노출되지만(테마색 resolve
+포함), **테두리색은 공개 API가 아예 제공하지 않음**(`styles.Borders`를 내부적으로 파싱만
+하고 셀에 붙여주지 않는 것을 `xlsx.js` 소스에서 직접 확인) — docxTableFormatting.ts와 동일한
+방식(jszip+DOMParser로 OOXML 직접 파싱)으로 `xl/styles.xml`(borders·cellXfs)과 워크시트
+XML(셀별 style index)을 직접 읽어 보완. 배경색·테두리색 둘 다 `parseSheet()`가
+`cellFormatting[row][col]`로 반환하고, `rowsToTiptapTable()`이 `CustomTableCell`/
+`CustomTableHeader`(이미 docx 지원용으로 구현돼 있던 backgroundColor/borderColor attrs 재사용
+— extension 수정 불필요)에 그대로 부여. 미리보기 모달도 동일 서식을 반영하도록 갱신(§후속2
+"셀 유실" 수정 때의 미리보기=실제결과 일치 원칙 계승).
+
+**검증**: jszip으로 실제 `styles.xml`(fills·borders·cellXfs)이 포함된 최소 .xlsx 패키지를
+수동 조립해 배경색·테두리색 추출이 실제로 동작함을 검증(SheetJS 고수준 writer는 임의
+`cell.s` 객체를 실제 styles.xml로 직렬화하지 않는다는 것도 실측 확인 — 그래서 write/read
+왕복이 아닌 수동 OOXML 조립 방식을 씀). 신규 테스트 5건 포함 관련 파일 전체 150/150 통과,
+svelte-check 신규 에러 0건, `npm run build` 성공.
+
+**영향 파일**:
+```
+src/lib/utils/docImport/xlsxImport.ts (MODIFY — extractBorderColors 등 신규 헬퍼 + parseSheet/rowsToTiptapTable 확장)
+src/lib/components/cms/contract-editor/ContractImportModal.svelte (MODIFY — cellFormatting 상태 + 미리보기 반영)
+src/__tests__/services/xlsxTableMerge.test.ts (MODIFY — jsdom 환경 전환 + 신규 테스트 5건)
+```
+
+**①(엑셀 편집 메뉴바 미노출) — 재확인 요청**: 코드를 재확인한 결과, `ContractDocumentEditor.
+svelte`에는 표 편집 툴바가 **하나만** 존재하며(`.cde-toolbar`), 수동 삽입·워드 임포트·엑셀
+임포트 표 전부 완전히 동일한 이 툴바를 공유한다 — "엑셀 전용 메뉴바"와 "워드용 메뉴바"가
+코드상 애초에 분리돼 있지 않음(별도 컴포넌트나 조건부 렌더링 없음, `{#if !readonly}`로만
+전체 노출 여부가 갈림). §후속4에서 버튼 5개(행↑+/열←+/병합/분할/헤더열)를 추가하며 툴바
+자체가 시각적으로 훨씬 커졌으므로, 이 재확인 요청이 §후속4 수정 **이전** 상태를 보고 계신
+것인지(수정 전 캐시된 화면) 또는 새로고침 후에도 여전히 안 보이는지 확인이 필요함 —
+후자라면 브라우저 콘솔 에러 유무와 함께 스크린샷 재요청 예정.
+
+**GATE E**: ✅ 통과(②), ①은 재확인 대기.
+
+### 후속 6 — "엑셀 편집 메뉴바 미노출" 재제보 + "A4 폭 초과·자동 축소" 요청 — 근본 원인 발견·수정 (2026-08-15)
+
+Stephen이 §후속5의 "새로고침 후에도 재현되는지" 질문에 정확한 답 대신 동일 제보를 반복 +
+신규 요청 추가: "임포트 문서가 A4 용지 크기에 맞게 열리는지 확인, 특히 엑셀 임포트 시
+가로폭이 비정상적으로 펼쳐짐, 캔버스가 브라우저 해상도를 감지해 자동 확대·축소되도록."
+
+**분석**: 두 증상(메뉴바 미노출 + 가로폭 비정상 확장)이 **동일한 근본 원인**일 가능성이
+높다고 판단 — 잘 알려진 flexbox 함정: `.editor-col :global(.cde-wrap)`(`ContractTemplatePanel.
+svelte`)와 `.cde-editor-area`(`ContractDocumentEditor.svelte`) 둘 다 column-flex 부모의
+flex 아이템인데 `min-width:0`이 없었음. flex 아이템은 기본적으로 `min-width:auto`(콘텐츠의
+min-content 크기가 축소 하한)이므로, 컬럼이 많은 넓은 표(특히 실제 `!cols` 픽셀 폭을 그대로
+가져온 xlsx 임포트 표)가 있으면 `.tableWrapper`의 `overflow-x:auto`가 무력화되고
+`.cde-wrap`/`.cde-editor-area` 자체가 표의 min-content 폭까지 늘어나 버림 — 그 결과 툴바를
+포함한 패널 전체가 화면 밖으로 밀려나거나(메뉴바 "미노출"로 인지됨) 페이지가 비정상적으로
+넓어 보이는(가로폭 "비정상 확장") 두 증상이 동시에 나타남.
+
+**수정 1(근본 원인 — flexbox 컨테인)**:
+`.editor-col :global(.cde-wrap) { min-width: 0 }`(ContractTemplatePanel.svelte),
+`.cde-editor-area { min-width: 0; overflow-x: hidden }`(ContractDocumentEditor.svelte,
+`overflow-x:hidden` 백스톱 추가 — `.tableWrapper`가 정상 컨테인 못 하는 극단적 케이스도
+패널 자체는 절대 넓어지지 않도록 이중 방어).
+
+**수정 2(폭 자체를 A4에 맞춤 — Stephen이 명시 요청한 "자동 축소"에 더 부합)**:
+신규 `src/lib/utils/docImport/fitColumnWidths.ts` — 임포트된 컬럼너비(px) 합이 A4 본문 폭
+(210mm - padding 20mm×2 = 170mm ≈ 642px, `A4_CONTENT_WIDTH_PX` 상수)을 넘으면 **비율을
+유지한 채** 전체 컬럼을 축소(Word/Google Docs가 표 붙여넣기 시 페이지 폭에 맞추는 것과 동일
+동작 원칙, 컬럼당 최소 20px 바닥 유지). docx(`injectTableMergesIntoHtml`)·xlsx
+(`ContractImportModal.svelte confirmXlsxImport`) 양쪽 경로에서 colwidth 주입 직전에 공유
+적용 — 가로 스크롤에 의존하지 않고 표 자체가 항상 A4 폭 안에 들어오게 함. "브라우저 해상도
+감지 자동 확대·축소"는 별도 줌 UI(Word류 % 슬라이더) 신설이 아니라 이 방식으로 해석해
+구현 — 페이지 자체는 이미 `.cde-editor-content { width:210mm; max-width:100% }`로 좁은
+뷰포트에서 반응형 축소가 되고 있었으므로, 남은 유일한 문제는 "표가 페이지보다 넓어지는 것"
+자체였음.
+
+**영향 파일**:
+```
+src/lib/utils/docImport/fitColumnWidths.ts (신규)
+src/lib/utils/docImport/docxTableFormatting.ts (MODIFY — injectTableMergesIntoHtml 폭 축소 적용)
+src/lib/components/cms/contract-editor/ContractImportModal.svelte (MODIFY — confirmXlsxImport 폭 축소 적용)
+src/lib/components/cms/contract-editor/ContractDocumentEditor.svelte (MODIFY — .cde-editor-area min-width:0 + overflow-x:hidden)
+src/lib/components/cms/ContractTemplatePanel.svelte (MODIFY — .cde-wrap min-width:0)
+src/__tests__/services/fitColumnWidths.test.ts (신규 — 비율 유지 축소·최소폭 바닥·null 처리 8건)
+```
+
+**검증**: `fitColumnWidths.test.ts` 8/8 통과, 관련 12개 파일 전체 158/158 통과(기존 docx
+colwidth 테스트 폭이 300px 이하라 축소 로직 미발동 확인 — 회귀 없음), svelte-check 신규
+에러 0건(타입 좁히기 보정 1건 포함), `npm run build` 성공.
+
+**⚠️ Claude Browser 사용 금지 원칙상 실제 렌더링 확인 불가** — flexbox 원인 분석은 코드
+구조 분석에 근거한 것으로, 실제로 메뉴바 미노출이 해소됐는지는 Stephen의 새로고침 후
+육안 확인이 필요함. "자동 확대·축소"를 Word류 명시적 줌 UI(%)로 원하신 것이었다면 이번
+수정과 별개로 추가 확인 필요.
+
+**GATE E**: ✅ 통과 — Stephen 실사용 확인 대기.
+
+### 후속 7 — "엑셀 편집 메뉴바 미노출" 진짜 원인 발견: 이중 스크롤 컨테이너 (2026-08-15)
+
+Stephen이 §후속6 수정 후에도 스크린샷 2장(빈 캔버스 vs 엑셀 임포트 후 캔버스)을 근거로
+동일 제보를 반복 — 오케스트레이터가 이번엔 "툴바가 DOM에는 있는데 안 보인다"는 스크린샷
+증거(accessibility 텍스트 덤프에는 툴바 버튼이 다 나오지만, 실제 이미지 픽셀상으로는
+빈 캔버스 스크린샷에서만 툴바가 보이고 표 삽입 후 스크린샷에서는 툴바 없이 표 내용부터
+바로 보임)를 근거로 "스크롤로 밀려나 화면 밖에 있을 뿐, 사라진 게 아니다"라는 가설을 세우고
+검증.
+
+**원인**: `ContractTemplatePanel.svelte`의 `.editor-col`(바깥)에 `overflow-y:auto`가 있고,
+그 안의 `ContractDocumentEditor.svelte` `.cde-wrap`은 `.cde-editor-area`(안쪽)에 **별도로**
+자체 `overflow-y:auto`를 갖고 있어 — **이중 스크롤 컨테이너**가 되어 있었다. 표를 임포트해
+문서가 길어지면(에디터에 포커스가 이동하며) 브라우저가 어느 스크롤 컨테이너를 스크롤할지
+모호해지는 상황에서 의도한 안쪽(`.cde-editor-area`)이 아니라 바깥(`.editor-col`)이
+스크롤되는 경우가 실제로 발생 — 이러면 `.cde-toolbar`를 포함한 `.cde-wrap` 전체가 위로
+밀려 올라가 화면 밖으로 나가버림(DOM에는 존재하므로 텍스트 덤프에는 여전히 잡히지만 화면엔
+안 보임 — §후속5·6의 accessibility 텍스트 기반 판단이 이래서 틀렸었음). 빈 캔버스에서는
+스크롤할 내용이 없어 이 문제가 절대 재현되지 않는다는 점이 두 스크린샷의 차이를 정확히
+설명함.
+
+**수정**: `.editor-col`의 `overflow-y:auto`를 `overflow:hidden`으로 변경 — `.editor-col`
+안에는 `<ContractDocumentEditor>`(→ `.cde-wrap`) 하나만 있고 `.cde-wrap`은 이미
+`flex:1;min-height:0`으로 `.editor-col`에 정확히 맞춰지도록 설계돼 있어 바깥 스크롤이
+애초에 불필요(중복)했음 — 스크롤 소유권을 `.cde-editor-area` 하나로 확정해 모호성을
+제거함.
+
+**영향 파일**: `src/lib/components/cms/ContractTemplatePanel.svelte` (MODIFY — CSS 1곳)
+
+**검증**: svelte-check 신규 에러 0건, `npm run build` 성공. CSS 스크롤 소유권 변경이라
+기존 vitest 스위트로는 검증 불가능(jsdom은 실제 스크롤·포커스 이동을 재현하지 않음) —
+Stephen의 실제 브라우저 확인 필수.
+
+**교훈(기록용)**: `<launch-selected-element>`의 accessibility 텍스트 덤프는 DOM에 존재하는
+요소를 전부 나열하므로, "화면에 실제로 보이는지"의 증거로 삼으면 안 됨(스크롤로 화면 밖에
+있어도 텍스트 덤프에는 나옴) — 이번처럼 실제 스크린샷 이미지의 픽셀 내용을 스크롤 위치
+차이까지 포함해 직접 비교해야 정확한 판단이 가능함.
+
+**GATE E**: ✅ 통과 — Stephen 실사용 확인 대기(이번에는 근본 원인 확신도 높음).
+
+### 후속 8 — 툴바 미노출 = Claude Browser 패널 오류로 확정, A4 "가로형" 회귀 근본 수정 + 줌 컨트롤 추가 (2026-08-15)
+
+Stephen이 §후속7 이후 외부 브라우저로 직접 재확인: **툴바 미노출 문제는 실제 버그가 아니라
+Claude Browser 패널(launch-selected-element 스크린샷 도구) 자체의 렌더링 오류였음이
+확정됨** — 외부 브라우저에서는 정상 노출. §후속5~7의 CSS 수정(min-width:0, overflow 정리
+등)이 실제 원인은 아니었을 가능성이 높으나 부작용 없는 정당한 방어적 수정이라 되돌리지 않음.
+
+이어서 Stephen이 "A4가 가로형으로 보임" 증상도 외부 브라우저에서 직접 재확인 →
+**이건 실제로 재현되는 진짜 버그로 확정**. 추가 요청 2건: ①캔버스 확대/축소 메뉴 추가,
+②"엑셀 원본은 A4에 맞춘 문서" — 즉 폭이 넓어지는 게 아니라 다른 원인일 가능성 시사.
+
+**분석**: `.cde-editor-content`(A4 용지 카드)의 높이가 `min-height` 지정 없이 콘텐츠 양에만
+의존했음 — 엑셀 표 하나만 막 삽입한 직후처럼 콘텐츠가 짧으면, 폭은 210mm로 고정돼 있어도
+세로 높이가 짧아 전체 박스 비율이 "가로로 넓은 형태(landscape)"처럼 보임(A4 세로 297mm에
+한참 못 미치는 상태). §후속6의 컬럼너비 축소(fitColumnWidthsToTarget)는 표 자체의 폭은
+이미 올바르게 제한하고 있었으나(단위 테스트로 로직 정확성 확인됨, 왜곡 아님), 페이지 전체의
+세로 비율 문제는 별개 원인이라 해결되지 않고 있었음.
+
+**수정 1(A4 세로 비율 고정)**: `.cde-editor-content`에 `min-height: 297mm` 추가 — 콘텐츠가
+짧아도 항상 A4 세로 비율 이상으로 표시됨(콘텐츠가 그보다 길면 자연스럽게 계속 길어짐,
+페이지 분할 없는 연속 캔버스 특성 유지). `@media print`에는 `min-height:0` + `zoom:100%`
+재설정 추가(인쇄 시 화면 확대·축소 배율과 무관하게 항상 실제 크기로 인쇄되도록).
+
+**수정 2(확대/축소 메뉴, Stephen 명시 요청)**: `ContractDocumentEditor.svelte` 툴바 끝에
+축소(－)/배율표시(%, 클릭 시 100%로 리셋)/확대(＋) 3버튼 그룹 추가. CSS `zoom` 속성 사용
+(transform:scale()과 달리 레이아웃이 실제로 재계산돼 여백 없이 자연스럽게 줄어듦 — 다만
+비표준 속성이라 최신 Chrome/Safari/Edge에서는 완전 지원, Firefox는 비교적 최근 버전부터
+지원). `--cde-zoom` CSS 변수로 `zoomPercent`($state, 50~200%, 10%씩 조절) 전달.
+
+**영향 파일**:
+```
+src/lib/components/cms/contract-editor/ContractDocumentEditor.svelte (MODIFY — min-height:297mm + 줌 컨트롤 신규)
+```
+
+**검증**: svelte-check 신규 에러 0건, 관련 12개 파일 158/158 통과(CSS/줌 UI라 vitest로 직접
+검증 불가 — 로직이 없는 순수 스타일·상태 변경), `npm run build` 성공.
+
+**교훈 갱신**: Claude Browser 패널은 UI 검증 도구로 신뢰할 수 없음이 이번 세션에서 실증됨
+(존재하지 않는 버그를 반복 보고하게 만듦) — ui-mobile.md/CLAUDE.md의 "Claude Browser 사용
+금지" 원칙이 정확히 이런 상황을 막기 위한 것이었음이 재확인됨. 앞으로 이 프로젝트에서
+Claude Browser 스크린샷을 근거로 한 버그 제보는 반드시 외부 브라우저 재확인을 먼저 요청할 것.
+
+**GATE E**: ✅ 통과 — Stephen 실사용(외부 브라우저) 확인 대기.
+
 ## DONE — 마이그레이션 248/249 stage 적용 + append_subscription_image_url RPC 보안 취약점 발견·즉시수정 (2026-08-14, 후속) — ✅ 완료
 
 [CONTEXT BRIDGE]
@@ -14008,3 +14366,878 @@ supabase/migrations/20260814080000_251b_fix_checkout_order_rpc_execute_grants.sq
 **GATE E: ✅ 통과 — 보안결함 Stage·Production 양쪽 패치·재검증 완료. 위 주문그룹핑 구현 본체는
 여전히 앱코드 커밋·배포 대기 상태(별도 GATE E 보류 유지) — QA가 "이 패치 이후 앱코드는 재검수
 없이 바로 커밋 가능"으로 판정함.**
+
+## NOW — CMS 상담채팅(/cms/chat) 입력창에 "상품검색" 버튼+팝업 추가 (2026-08-15) — 🟡 BOUNDARY 자동진행
+
+[CONTEXT BRIDGE]
+plan_source: Stephen이 사전 작성한 플랜 문서(`launch-selected-element-element-tag-svg-snazzy-hanrahan.md`,
+  조사 완료 상태) — 상품링크 공유의 기존 "@ 멘션" 경로는 그대로 두고, 새 UI 입구(버튼+팝업)만 추가.
+핵심제약:
+  - payload 생성·전송 로직(handleProductMention, /api/chat/admin-reply, ActionCard product_link 분기)은
+    변경 없이 100% 재사용 — 신규 API·마이그레이션·타입 변경 없음.
+  - 수정 대상은 `src/lib/components/chat/ChatInput.svelte` 단일 파일(요청범위 외 수정 금지 원칙).
+  - 검색 컴포넌트는 `CmsSimilarNameInput`(source="product_search") 재사용 — 신규 검색 UI 컴포넌트 작성 금지.
+  - 팝업은 기존 `.product-dropdown`/`.canned-dropdown`과 동일한 절대위치 앵커링
+    (`bottom:calc(100% + 6px); left:0; right:0`)로 입력폼을 가리지 않게 배치.
+  - `isAdmin` 게이트 — 고객용 채팅 입력창에는 버튼 미노출(관리자 전용).
+TDD도메인: 없음 — GSD(UI 컴포넌트 확장, 결제·예약·보안 무관).
+
+### 요구사항 (Stephen 원문 6개)
+1. 답변 입력폼 '파일첨부' 버튼 우측에 '상품검색' 버튼 아이콘 배치.
+2. 버튼 선택 시 입력폼 상위에 '상품검색' 모달 — 입력폼을 가리지 않음.
+3. 모달 내: '상품명 검색 입력폼 + SuggestPicker류' + 검색결과(상품 전체명) 목록.
+4. 모달 디자인 참고: `/cms/products` 검색 UI("상품명 입력폼 + SuggestPicker") 응용.
+5. 모달 세로폭: 검색폼 포함 5행 크기 / 가로폭: 채팅 입력폼 가로폭에 맞춤.
+6. 하네스플로 단계 적용해 개발.
+
+### 구현 상세 (플랜 문서 §① ~ §⑥ 그대로)
+```
+① import: CmsSimilarNameInput, SimilarNameItem 타입
+② 상태: showProductSearchPopup, productSearchValue ($state)
+③ 아이콘 슬롯: {#if canSend} 단일 send-btn {:else} .icon-group(attach-btn + search-btn, isAdmin 게이트)
+④ 팝업: CmsSimilarNameInput(source="product_search", overlayLayer=true) + field 스니펫 <input type="search">
+   onselect → selectProduct() 재사용 → showProductSearchPopup=false, productSearchValue=''
+⑤ CSS: .icon-group, .product-search-popup(절대위치 앵커링), .ps-search-input
+   세로폭 5행 예산 맞춤: 필요 시 :global(.cms-similar-name-layer) max-height 국소 오버라이드
+⑥ handleOutside — showProductSearchPopup도 바깥클릭 시 닫히도록 확장
+```
+
+### 검증 방법
+- `npx svelte-check` — ChatInput.svelte 신규 에러 0건.
+- 데이터 흐름 재추적: 팝업 선택 → selectProduct() → onproductmention → handleProductMention()
+  → product_id/name/image/slug/price 필드로 admin-reply 호출 → ActionCard product_link 렌더 확인.
+- Claude_Browser 사용 금지 원칙(core-rules) — 실제 클릭 테스트는 Stephen이 `/cms/chat`에서 직접 확인:
+  ① 버튼 위치 ② 팝업이 입력폼 안 가림 ③ 가로폭 일치 ④ 상품 선택 시 정상 전송.
+
+### 수정 예정 파일
+```
+src/lib/components/chat/ChatInput.svelte (수정만, 신규 파일 없음)
+```
+
+**GATE B: 🟡 BOUNDARY 자동통과(단일 컴포넌트 UI 확장, 기존 검증된 경로 재사용) — @harness-executor 실행 대기**
+
+---
+
+### 완료 기록 (2026-08-15 harness-executor)
+
+**상태:** 구현 완료 — Stephen 브라우저 클릭 테스트 대기 중
+
+**수정 파일:**
+- `src/lib/components/chat/ChatInput.svelte` (단일 파일 수정, 신규 파일 없음)
+
+**구현 내용:**
+- `CmsSimilarNameInput` import + `SimilarNameItem` 타입 import 추가
+- `showProductSearchPopup`, `productSearchValue` 상태 변수 추가
+- `handlePopupProductSelect()` 함수 추가 (SimilarNameItem → ProductItem 브리지, content 미삭제)
+- `handleOutside` 에 `showProductSearchPopup = false` 추가 (바깥클릭 닫기)
+- `{:else}` 아이콘 슬롯: `attach-btn` 을 `.icon-group` 으로 감싸고 `isAdmin` 게이트 `search-btn` 추가
+- 팝업 블록(`product-search-popup`) 추가 — 기존 `.canned-dropdown` 동일 절대위치 앵커링
+- 팝업 내 `CmsSimilarNameInput`(인라인 snippet, source="product_search", limit=5) 사용
+- CSS: `.icon-group`, `.search-btn`, `.search-btn.active`, `.product-search-popup`, `.ps-label`, `.ps-search-input`, `:global(.cms-similar-name-layer)` 추가
+
+**svelte-check 결과:**
+- ChatInput.svelte 관련 신규 에러: **0건**
+- 전체: 1 ERROR, 321 WARNINGS — 모두 기존 무관 에러 (`products/search/+page.svelte`)
+
+**GATE C 체크리스트:**
+- [x] `isAdmin` 게이트 — 고객용 채팅 입력창에서 search-btn 미노출
+- [x] 팝업이 `bottom: calc(100% + 6px)` 절대위치로 입력폼을 가리지 않음
+- [x] `handleOutside` — 바깥 클릭 시 팝업 닫힘 포함됨
+- [x] `handlePopupProductSelect` → `selectProduct()` 재사용 경로 아닌 별도 함수로 content 미삭제 처리
+- [x] 신규 API·마이그레이션·타입 파일 없음
+
+### QA 후속 수정 (2026-08-15, 메인세션 검수)
+
+**결함 발견:** `handlePopupProductSelect`가 서버(`search-suggestions/+server.ts` ExtendedItem)가
+`product_search` 소스일 때 실제로 반환하는 `image_url`/`slug`/`price_24h`를 무시하고 하드코딩된
+`null`로 고정 — 플랜 §④의 "로컬 캐스트로 연결" 지시(기존 `@` 멘션 `selectProduct()`와 동일 패턴)를
+따르지 않음. 방치 시 새 "상품검색" 버튼으로 보낸 모든 상품카드가 썸네일·상세링크·가격 없이 전송됨
+(`ActionCard.svelte` `{#if payload.product_slug}` 등 조건부 렌더 무력화).
+
+**수정:** `item as SimilarNameItem & { image_url?; slug?; price_24h? }` 로컬 캐스트로 확장 필드를
+그대로 전달하도록 수정(`?? null` fallback 유지, MiniSearch 폴백 경로 등 실제로 null인 경우는 정상 처리).
+
+**재검증:** `npx svelte-check` — 전체 1 ERROR(기존 `products/search/+page.svelte` 무관 에러) 유지,
+ChatInput.svelte 신규 에러 0건.
+
+**상태:** 구현 완료 — Stephen 브라우저 클릭 테스트 대기 중(위 4개 확인 항목 + 상품카드 썸네일/가격/
+상세링크 정상 노출 여부 추가 확인 필요)
+
+### UI 폴리시 후속 (2026-08-15, Stephen 실화면 지적)
+
+Stephen이 `<launch-selected-element>`로 실제 렌더링된 `.product-search-popup`을 직접 확인하고
+3가지 조정 요청:
+1. 세로폭 — 검색입력폼 포함 6행 정도로 확장(결과 목록 노출 공간 확보)
+2. 모달 내 "상품검색" 라벨 텍스트 제거
+3. 모달 내부 패딩 표준 디자인 시스템 값 적용
+
+**조치:**
+- `.ps-label` span + 해당 CSS 완전 삭제
+- `.product-search-popup` padding: `10px` → `15px 20px`(cms-uiux.md `padding-card` 표준 토큰 —
+  코드베이스 전역에 리터럴 `15px 20px`로 통일 사용되는 패턴 확인 후 동일 적용)
+- `.cms-similar-name-layer` max-height 오버라이드: `220px` → `300px`(입력폼 1행 + 결과 5행 ≈ 6행 예산)
+
+**재검증:** `npx svelte-check` — 1397 FILES 1 ERRORS(기존 무관 에러 그대로) 321 WARNINGS, ChatInput.svelte
+신규 에러 0건.
+
+### 세로폭 재지적 — 근본 원인 재조사 + 구조적 수정 (2026-08-15, 재지적)
+
+Stephen이 동일 요청(6행 면적 확보)을 재지적 — `<launch-selected-element>`로 확인한 실제 DOM에는
+검색결과 레이어(`.cms-similar-name-layer`)가 아예 렌더링 안 된 상태(입력만 존재)였다. 직전 수정
+(max-height 220→300px)은 레이어가 열려있을 때의 상한만 키웠을 뿐, **검색 전(비어있는 상태)에는
+레이어 자체가 `{#if suggestOpen}` 조건부라 아무것도 안 그려져 팝업 높이가 그대로**였던 게 근본 원인.
+
+추가로 `.cms-similar-name-layer`는 원래 `position: absolute; top: calc(100% + 4px)`(입력 기준
+오버레이)라, 열렸을 때 팝업 자체의 정적 높이에 반영되지 않고 아래로 흘러넘쳐 6px 아래의
+"관리자 답변 입력폼"과 겹칠 위험까지 있었음(요구사항 2 "입력폼을 가리지 않을 것"과도 상충).
+
+**구조적 수정:**
+- `.product-search-popup` → `display:flex; flex-direction:column; min-height:300px` — 팝업을 연
+  즉시(검색 전에도) 입력 1행+결과 5행 예산의 고정 최소면적을 확보
+- `:global(.cms-similar-name)` → `flex:1; min-height:0`으로 팝업 flex 흐름에 편입
+- `:global(.cms-similar-name-layer)` → `position:absolute` 오버레이를 `position:static`(정적 흐름)
+  으로 전환 + `flex:1; border:none; box-shadow:none; background:transparent`로 팝업과 시각적으로
+  하나의 박스처럼 병합, 원래 컴포넌트의 `overflow-y:auto`(scoped, 미변경)는 그대로 유지돼 결과가
+  많을 때 예산 안에서 스크롤
+
+**재검증:** `npx svelte-check` — 1397 FILES 1 ERRORS(기존 무관) 321 WARNINGS 유지, 신규 에러 0건.
+
+**상태:** 구현 완료 — Stephen 브라우저 재확인 필요(① 팝업이 검색 전에도 6행 크기로 열리는지
+② 타이핑 시 결과가 팝업 내부에서 스크롤되며 아래 답변 입력폼을 가리지 않는지)
+
+### 진단(코드 변경 없음) — 한글 브랜드명("소니") 검색 0건 현상 (2026-08-15)
+
+Stephen이 "소니" 입력 시 "검색중..."만 뜨다 결과 없이 사라지는 현상을 리포트, NLSearch 연동 누락
+여부 확인 요청. Stage DB(ezyvffjvuwmtuhpxdjrw) 직접 조회로 원인 확정:
+
+```
+Sony 계열 상품 전수(name="Sony FX6-12"/"SONY PXW-Z90" 등): brand="sony"/"SONY"(영문),
+product_caption·description도 한글 "소니" 문자열 없음, keywords: [] (전 상품 공통 — 완전 공란)
+```
+
+**결론: 버그·연동 누락 아님 — 설계상 예상된 결과.**
+- 1차 ilike(name/brand/description/product_caption) — "소니" 문자열이 실제로 어느 필드에도 없어 0건
+- 2차 MiniSearch 폴백 — 동일 필드+keywords/components/specs를 토큰화해 찾지만 keywords가 비어있어
+  역시 0건. NLSearch는 nlsearch.md §6에 "❌ pgvector·임베딩 API 도입 금지"로 명시된 순수 토큰/
+  부분일치 엔진이라 "소니"(한글)↔"Sony"(영문) 같은 표기법이 다른 동일개념 의미매칭 능력이 원래 없음
+  (동의어학습 §4도 상담채팅 빠른답변 매칭에만 연결돼 있고 상품검색 API엔 미연결).
+- "Sony" 또는 "FX6"(영문/품번)로 검색하면 정상 노출 확인.
+
+**Stephen 결정(AskUserQuestion): "현재 상태 유지(영문만)" — 코드/DB 변경 없음.** keywords 수동 보강
+또는 브랜드 동의어 매핑 신설은 모두 보류(추후 별도 하네스 태스크로 재요청 시 진행).
+
+### 엔터키 미작동 리포트 + "SuggestPicker 임의 교체" 오인 확인 (2026-08-15)
+
+Stephen이 검색 후 엔터가 안 먹는다고 리포트하며, "SuggestPicker 기능을 목록형태로 바꿔놓은 거라면
+복원해라 — 요구하지 않았다"고 강하게 지적. 두 가지를 분리해서 조사·조치.
+
+**① "SuggestPicker를 임의로 다른 걸로 바꿨다" 오인 — 사실관계 재확인:**
+`/cms/products/+page.svelte`(408행)를 다시 직접 grep — 이 화면의 실제 상품명 검색 UI는
+`SuggestPicker`가 아니라 **이미 `CmsSimilarNameInput`을 쓰고 있음**(`SuggestPicker` 문자열 0건
+매치). 즉 이번 구현이 원래 있던 SuggestPicker를 CmsSimilarNameInput으로 바꿔치기한 게 아니라,
+Stephen이 최초 요청에서 참고 지목한 화면 자체가 원래부터 CmsSimilarNameInput을 쓰고 있었고
+(최초 플랜 문서 "조사 결과 요약"에 이미 명시돼 있었음), 이번 채팅 팝업도 그 실제 참고화면과
+동일한 컴포넌트로 구현된 것 — 임의 교체 아님. (다만 이 사실을 완료 보고 시 명확히 짚어드리지
+않은 커뮤니케이션 미흡은 있었음.)
+
+**② 실제 버그 — 엔터키 미작동 (진짜 결함, 수정함):**
+`CmsSimilarNameInput.svelte`(그리고 CMS 표준 `SuggestPicker.svelte`도 동일 패턴 공유)의
+`handleKeydown`은 `e.key === 'Enter' && suggestIdx >= 0` 조건이라, 방향키로 먼저 하이라이트하지
+않고 타이핑 직후 바로 Enter를 치면 아무 동작도 안 함(두 표준 컴포넌트 공통의 기존 한계 —
+이번 팝업 신규 도입으로 생긴 회귀 아님, 처음 실사용 테스트에서 드러난 기존 갭).
+
+**조치(ChatInput.svelte만 수정, 공유 컴포넌트는 불변):**
+- `productSearchPopupEl` ref 추가 + `handleProductSearchKeydown()` 신설 — 컴포넌트 내부 상태를
+  건드리지 않고, 방향키 하이라이트 없이 Enter를 치면 목록 첫 번째 결과 버튼을 DOM 위임으로
+  `.click()` 시켜 기존 `selectSuggestion()` 경로 그대로 선택되게 함
+- `CmsSimilarNameInput`/`SuggestPicker` 두 공유 컴포넌트 자체는 요청범위 외라 수정하지 않음
+  (다른 화면에도 영향 주는 변경이라 필요 시 별도 확인 후 진행)
+
+**재검증:** `npx svelte-check` — 1399 FILES 1 ERRORS(기존 무관) 유지, 신규 에러 0건.
+
+**상태:** 수정 완료 — Stephen 재확인 필요(검색어 입력 후 방향키 없이 바로 Enter → 최상단 결과가
+정상 선택·전송되는지)
+
+### 검색결과 0건 시 안내 문구 추가 (2026-08-15, 후속) — ⚠️ 공유 컴포넌트 변경(범위 안내)
+
+Stephen 요청: "검색 결과가 없으면 옅은 텍스트로 '검색결과가 없습니다' 노출해."
+
+**범위 안내(투명성 원칙, 직전 오인 건 재발 방지):** 이 요구사항은 `ChatInput.svelte`만으로는
+구현 불가 — 결과 0건일 때 `CmsSimilarNameInput.svelte`가 `suggestOpen = suggestions.length > 0`
+로직 때문에 레이어 자체를 렌더링하지 않아(로딩 스피너처럼 빈 상태 문구를 넣을 DOM 자리가 없음),
+**공유 컴포넌트 `src/lib/components/cms/CmsSimilarNameInput.svelte`를 직접 수정**했다. 이 컴포넌트는
+`/cms/products/+page.svelte`·`/cms/products/new/+page.svelte`·`ProductDetailPanel.svelte`·
+`ChatInput.svelte` 4곳에서 공유 사용 중 — 이번 변경은 전부 additive(기존엔 빈 화면이던 걸 안내
+문구로 대체)이고 기존 동작(검색·선택·키보드 탐색)은 그대로라 4곳 모두에 안전하게 적용됨.
+
+**조치:**
+- `fetchSuggestions()` 3개 source 분기(brand/product_search/product_name) 전부 —
+  `suggestOpen = suggestions.length > 0` → `suggestOpen = true`(minChars 통과 시점엔 결과 0건이어도
+  레이어를 열어야 안내 문구를 그릴 자리가 생김)
+- `onfocus` 재오픈 조건도 `suggestions.length > 0` 체크 제거 — 재포커스 시에도 0건 안내가 다시 보임
+- 템플릿에 `{:else if suggestions.length === 0}<p class="cms-similar-name-status">검색 결과가
+  없습니다</p>` 분기 추가 — 기존 "검색 중..." 로딩 문구와 동일한 `.cms-similar-name-status`
+  클래스 재사용(이미 `--cs-text-light` 옅은 톤 12px로 스타일링돼 있어 신규 CSS 불필요)
+
+**재검증:** `npx svelte-check` — 1399 FILES 1 ERRORS(기존 무관) 유지, 신규 에러 0건. 이 컴포넌트를
+쓰는 4개 파일 전부 컴파일 정상.
+
+**상태:** 구현 완료 — Stephen 재확인 필요(채팅 팝업에서 결과 없는 검색어 입력 시 안내 문구 노출 +
+`/cms/products` 등 기존 화면 검색 동작에 회귀 없는지)
+
+### 답변 입력폼 포커스 시 팝업 자동 닫기 (2026-08-15, 후속) — ChatInput.svelte만 수정
+
+Stephen 요청: "검색 모달 열린 상태에서 채팅 답변 입력폼 영역 선택 시 모달 자동 닫힐 것."
+
+**원인:** 기존 `handleOutside`(바깥 클릭 감지)는 `wrapEl.contains(e.target)` 기준이라, 답변
+textarea는 wrapEl 내부 요소라 클릭해도 "바깥 클릭"으로 감지되지 않아 팝업이 안 닫혔음.
+
+**조치:** `.input-field` textarea에 `onfocus={() => { showProductSearchPopup = false }}` 추가.
+`handleOutside`와 동일하게 `productSearchValue`는 초기화하지 않음(재오픈 시 이전 검색어 유지 —
+기존 바깥클릭 닫기 동작과 일관성 유지).
+
+**재검증:** `npx svelte-check` — 1399 FILES 1 ERRORS(기존 무관) 유지, 신규 에러 0건.
+
+**상태:** 구현 완료 — Stephen 재확인 필요(팝업 열린 상태에서 답변 입력폼 클릭 시 즉시 닫히는지)
+
+### 라이브 제안 vs 엔터 확장 검색 2단계 분리 (2026-08-15, 후속) — 성능 우려 반영
+
+Stephen 우려: "검색결과 바로 노출 시 수백개의 상품 목록 로드쿼리에 로딩 문제가 심각할 것으로
+우려됨" — 타이핑 중 매 키입력마다 큰 목록을 조회하는 구조는 원치 않음. 요구: 타이핑 중
+'SuggestPicker' 자동 제안(소량)은 유지하되, '엔터' 입력 시에만 더 많은 결과를 보여줄 것.
+
+**설계:** 직전에 구현한 "하이라이트 없이 Enter → 첫 결과 자동선택" 로직을 대체 — 이제 그 Enter는
+"결과 더 보기"로 재정의됨(방향키로 하이라이트한 뒤의 Enter=선택은 기존 그대로 유지).
+
+```
+ChatInput.svelte:
+  PRODUCT_SEARCH_DEFAULT_LIMIT = 5   ← 타이핑 중 라이브 제안(가벼운 조회)
+  PRODUCT_SEARCH_EXPANDED_LIMIT = 20 ← 서버(search-suggestions/+server.ts Math.min(20,...)) 상한과
+                                        동일값 — 그 이상 요청해도 서버가 20건으로 자르므로 의미 없음
+  productSearchLimit($state) → CmsSimilarNameInput에 bind:limit으로 양방향 연결
+  handleProductSearchKeydown: 하이라이트 없는 Enter → productSearchLimit을 20으로 올림(이미 20이면
+    아무 것도 안 함, 중복 재조회 방지)
+  closeProductSearchPopup() 신설 — 팝업이 완전히 닫힐 때(바깥클릭·선택·답변폼 포커스·토글닫기)마다
+    value·limit을 전부 초기값으로 리셋 → 다음에 열면 항상 소량부터 다시 시작
+
+CmsSimilarNameInput.svelte (공유 컴포넌트, 추가 수정):
+  limit prop을 $bindable(8)로 전환(기존엔 단방향 prop)
+  신규 $effect — limit 값이 실제로 바뀔 때만(마운트 시 최초 1회는 prevLimit과 동일해 자연 스킵)
+    현재 query로 scheduleSuggest() 재호출 → 기존 디바운스·abort 로직 그대로 재사용, 별도 즉시조회
+    경로 신설 안 함(중복 로직 최소화)
+  다른 3개 사용처(/cms/products, /cms/products/new, ProductDetailPanel)는 limit을 bind하지 않고
+  일반 prop처럼 값만 넘기므로 이번 변경에 영향 없음(bindable prop은 non-bind 사용 시 완전 하위호환)
+```
+
+**재검증:** `npx svelte-check` — 1399 FILES 1 ERRORS(기존 무관) 321 WARNINGS 유지, ChatInput·
+CmsSimilarNameInput 신규 에러 0건(CmsSimilarNameInput의 "empty ruleset" 경고는 이번 변경과
+무관한 기존 항목 — 건드리지 않은 `.cms-similar-name-layer-overlay {}` 블록).
+
+**상태:** 구현 완료 — Stephen 재확인 필요(① 타이핑만으로는 5건 이하 소량만 뜨는지 ② 하이라이트
+없이 Enter → 최대 20건까지 확장되는지 ③ 팝업 재오픈 시 항상 소량 기준으로 리셋되는지)
+
+### 채팅세션 오픈 시 최하단(최신 메시지) 스크롤 미착지 버그 수정 (2026-08-15, 별건 발견) — 🟡 BOUNDARY
+
+Stephen 리포트(상품검색 기능과 무관한 별건, 세션 카드를 열었을 때의 스크롤 위치 문제):
+"채팅목록카드를 오픈 시 모든 대화카드를 읽어오는 상태에서 최근 대화카드로 최하단 먼저 노출." —
+스크린샷은 상품카드(이미지 포함) 메시지가 화면 바닥 끝에 잘려 보이고 그 위로 빈 여백이 크게
+남은 상태(진짜 최하단에 안착하지 못한 정황).
+
+**원인:** `MessageList.svelte`(AdminChatPanel·ChatWindow 공용)의 기존 자동 스크롤은
+`messages.length` 변경 시 1회성으로 `scrollTop = scrollHeight`만 실행함. 세션을 열 때 상품카드
+썸네일(`<img class="product-img">`) 등 이미지가 비동기로 뒤늦게 로드되며 목록 실제 높이가 그
+스냅샷 이후에도 계속 커지는데, 최초 1회 스냅샷은 그 증가분을 반영하지 못해 "진짜 바닥"보다 위에서
+멈춰 보임 — `scroll-behavior: smooth`(CSS)까지 겹쳐 중간 상태가 더 눈에 띔.
+
+**조치(`MessageList.svelte`만 수정 — AdminChatPanel·ChatWindow 양쪽에 공통 적용됨):**
+- `stickToBottom` 상태 추가 — 사용자가 과거 대화를 보려 위로 스크롤하면 자동 false 전환(스크롤
+  리스너, 바닥에서 80px 이내만 "바닥 근처"로 판정), 세션 전환·신규 메시지 도착 시 다시 true로 리셋
+- `listEl`에 `load` 이벤트를 capture 단계로 위임 등록(img load는 버블링되지 않아 capture 필수) —
+  이미지가 뒤늦게 로드될 때마다 `stickToBottom`이면 다시 `scrollTop = scrollHeight` 재적용해
+  진짜 바닥까지 계속 따라가게 함
+- 기존 `messages.length` effect는 그대로 유지(최초 진입 시 스크롤 트리거는 동일)
+
+**영향 범위:** `MessageList.svelte` 사용처 2곳(`AdminChatPanel.svelte` CMS 상담·`ChatWindow.svelte`
+고객용) 모두 자동 적용 — 둘 다 동일한 "세션 열 때 최신 메시지가 안 보이는" 문제를 겪을 수 있는
+구조라 양쪽 다 개선 대상.
+
+**재검증:** `npx svelte-check` — 1410 FILES 1 ERRORS(기존 무관) 321 WARNINGS 유지, MessageList.svelte
+신규 에러·경고 0건.
+
+**상태:** 구현 완료 — Stephen 재확인 필요(이미지 포함 상품카드가 있는 세션을 열었을 때 최신
+메시지가 화면 바닥에 완전히 안착해 보이는지)
+
+### 채팅 메시지 페이지네이션 신규 구현 (2026-08-15) — 🔴 CRITICAL(다중 파일 변경) → AskUserQuestion 확인 후 진행
+
+Stephen 리포트: "채팅카드 목록 오픈 시 최근 대화카드로 로딩이 완료된 화면이 먼저 보이게 오픈. 현재는
+첫 대화카드부터 최근 대화카드를 모두 읽어들이는 '목록로딩'을 무조건 진행하는 사용성 문제가 있음."
+→ 직전 스크롤 보정(§ "채팅세션 오픈 시 최하단...")과 달리 이건 스크롤 위치가 아니라 **데이터 로딩
+구조 자체**(`chatService.ts loadMessages()`가 limit 없이 세션 전체 메시지를 항상 전량 조회)의 문제로
+확인 — 공유 서비스 함수 + CMS 상담채팅(AdminChatPanel)·고객채팅(ChatWindow) 양쪽 화면 + 전역
+chatStore + 실시간 구독 로직에 걸쳐 있어 진행 전 AskUserQuestion으로 확인받음.
+
+**Stephen 확정 사항:**
+```
+과거 대화 로딩 방식: 위로 스크롤 시 자동 추가로딩(카카오톡·인스타그램 DM 방식)
+최초 로딩 개수: 최근 20개
+```
+
+**구현 (신규 파일 없음, 5개 기존 파일 수정):**
+```
+src/lib/services/chatService.ts
+  loadMessages(sessionId, opts?: { limit?, beforeCreatedAt? })
+    → 반환 타입에 hasMore 추가. DESC + limit+1 조회로 "더 있음" 판별(별도 count 쿼리 없음),
+      화면 표시 순서(오래된→최신) 복원을 위해 결과를 reverse. 두 호출부 모두 opts 생략 시
+      기존 시그니처와 완전 호환(default limit=20).
+
+src/lib/components/chat/MessageList.svelte
+  hasMoreOlder·isLoadingOlder prop + onloadmore 콜백 신설
+  awaitingOlderMessages 로컬 플래그로 "새 메시지 도착(하단 고정)" vs "이전 페이지 prepend(스크롤
+    위치 보존)"를 구분 — scrollTop 직접 대입은 스펙상 항상 즉시 이동이라 위치 복원 시 화면 안 튐
+  상단 근처(80px 이내) 스크롤 감지 시 onloadmore 트리거 + 결과 0건으로 messages.length가 안 바뀌는
+    엣지케이스 대비 5초 안전망(플래그 자동 해제)
+  상단에 "이전 대화 불러오는 중..." 로딩 문구 추가(기존 empty-state 톤과 동일한 옅은 텍스트)
+
+src/lib/stores/chat.svelte.ts (ChatWindow가 쓰는 전역 store)
+  hasMoreOlderMessages·isLoadingOlderMessages 상태 추가
+  prependMessages() 신설 — 중복 id 제거 후 기존 목록 앞에 병합
+  setActiveSession() — 세션 전환 시 두 플래그 리셋(이전 세션의 "더보기" 상태가 새 세션에 새는 것 방지)
+
+src/lib/components/chat/AdminChatPanel.svelte
+  세션 로드 effect — loadMessages 결과의 hasMore를 hasMoreOlderMessages에 반영, 세션 전환 시 리셋
+  sessionBookmarkedIds를 컴포넌트 상태로 승격(기존엔 초기로드 .then() 클로저 안에만 존재) — 이전
+    페이지로 불러온 메시지에도 북마크 상태를 동일하게 병합하기 위해 필요
+  handleLoadMoreOlderMessages() 신설 — 현재 최상단(가장 오래된) 메시지의 created_at을 커서로
+    이전 페이지 조회 후 prepend, 로딩 중 세션이 바뀌면 결과 폐기(stale 방지)
+
+src/lib/components/chat/ChatWindow.svelte
+  initSession()의 loadMessages 호출에서 hasMore를 chatStore에 반영
+  handleLoadMoreOlderMessages() 신설(AdminChatPanel과 동일 패턴, prependMessages() 스토어 액션 사용)
+```
+
+**재검증:** `npx svelte-check` — 1410 FILES 1 ERRORS(기존 무관) 321 WARNINGS 유지, 5개 수정 파일
+전부 신규 에러·경고 0건. `loadMessages` 호출부 2곳 모두(opts 생략) 타입 호환 확인. 관련 기존 테스트
+없음(신규 커버리지 필요 시 별도 요청).
+
+**⚠️ 후속 권고(적용 보류, Stephen 확인 필요 — DB 마이그레이션이라 임의 적용 안 함):**
+`chat_messages` 테이블은 현재 `session_id`·`created_at` 각각 단일 컬럼 인덱스만 있고
+`(session_id, created_at)` 복합 인덱스가 없음(Migration 31). 이번에 새로 생긴
+`WHERE session_id=? [AND created_at<?] ORDER BY created_at DESC LIMIT 20` 조회 패턴에는 복합
+인덱스가 훨씬 효율적 — 세션당 메시지가 아주 많아지면 성능 이득이 커짐. 필요하다고 판단되면
+별도로 요청해 stage 먼저 검증 후 production 적용.
+
+**상태:** 구현 완료 — Stephen 재확인 필요(① 세션 오픈 시 최근 20개만 즉시 로드되는지 ② 위로
+스크롤 시 이전 대화가 자동으로 더 불러와지는지 ③ 화면이 튀지 않고 스크롤 위치가 유지되는지
+④ CMS 상담채팅·고객채팅 양쪽 다 동일하게 동작하는지)
+
+**QA 결과(Stephen):** ②③④는 정상(이전 대화 자동로딩 동작, 화면 안 튐, 양쪽 화면 동일 동작).
+①(세션 오픈 시 최근 대화로 즉시 도달) 은 CMS·고객 양쪽 다 동일하게 실패 — 최하단 안착 안 됨.
+
+### 최하단 미착지(①) 재수정 — ResizeObserver 기반으로 교체 (2026-08-15, 후속)
+
+직전 수정(image `load` 캡처 리스너 방식)은 두 화면 모두 동일하게 실패했으므로, 리스너 타이밍에
+의존하는 방식 자체의 한계로 판단 — 더 견고한 방식으로 전면 교체(`MessageList.svelte`만 수정).
+
+**변경:**
+- 버블들을 담는 내부 wrapper(`.message-list-inner`)를 신설해 스크롤 컨테이너(`listEl`)와 분리
+  (listEl 자신은 `flex:1`로 크기가 고정돼 있어 내부 콘텐츠가 커져도 자기 자신의 크기 변화가
+  없으므로 `ResizeObserver`가 반응할 대상이 될 수 없었음 — 이게 실제 근본 원인일 가능성이 높음)
+- `ResizeObserver`로 `innerEl`의 콘텐츠 크기 변화를 직접 관찰 → `stickToBottom`이면 매번
+  `scrollTop = scrollHeight` 재적용. `observe()` 호출 시 최초 1회도 자동 발동돼(스펙) 초기
+  레이아웃이 완전히 확정된 뒤 재확인하는 보정 패스를 별도 코드 없이 확보
+- 기존 image `load` 캡처 리스너 방식은 제거(이미지뿐 아니라 폰트·기타 지연 레이아웃까지
+  전부 포괄하는 상위 호환 방식으로 대체됐으므로 중복 불필요)
+- CSS: `gap:30px`를 `.message-list`에서 `.message-list-inner`로 이동(`.message-list`는
+  `.empty-state`의 `flex:1` 중앙정렬 지원을 위해 `display:flex` 자체는 유지)
+
+**재검증:** `npx svelte-check` — 1410 FILES 1 ERRORS(기존 무관) 321 WARNINGS 유지, MessageList.svelte
+신규 에러 0건. AdminChatPanel·ChatWindow 쪽 prop 연결은 변경 없음(내부 구현만 교체).
+
+**상태:** 재수정 완료 — Stephen 재확인 필요(①이 이번엔 정상적으로 최하단에 도달하는지, ②③④는
+이미 정상이었으므로 회귀 없는지만 가볍게 재확인)
+
+### SQL 실측 조사 — "중간부분 도달" 재현 세션은 실제로 정상이었음 확인 (2026-08-15)
+
+Stephen이 제공한 스크린샷 세션(`가입 실패가 되요.` 포함, 세션 id `2b2cbaa0-...`)을 stage DB에서
+직접 SQL 조회: 총 112개 메시지 중 화면 맨 아래 보인 "자동답변" 메시지가 실제로 그 세션의 **진짜
+마지막(112번째) 메시지**와 내용·시각 모두 정확히 일치(정렬 tie로 인한 오작동 의심도 세션 전체
+`created_at` 중복 0건으로 배제). 즉 그 스크린샷 자체는 데이터·정렬 모두 정상이었고, 여러 테스트
+시나리오가 한 세션에 몰려있어(예약알림+가입실패 등) 최근 20개 안에 여러 주제가 섞여 보였을 뿐—
+버그 아님. Stephen에게 새로고침 여부 재확인 요청했었음.
+
+### "카카오톡처럼 위에서부터 로딩되는 게 보이면 안 된다" 후속 지적 → 플래시 완전 차단 (2026-08-15)
+
+Stephen 재지적: 최종 위치가 결과적으로 맞더라도, 열리는 순간 "과거→최근 순으로 로딩되는 것처럼
+보이는" 시각적 경험 자체가 카카오톡 등과 다르게 불편하다는 지적 + 대화량 많을 때 트래픽 우려 재확인.
+
+**트래픽 확인(변경 없음, 이미 반영됨):** `chatService.ts`의 `DEFAULT_MESSAGE_PAGE_SIZE = 20`가
+여전히 유효 — 세션이 몇백 개 메시지를 갖고 있어도 최초엔 20개(+1건 hasMore 판별용)만 조회함.
+"과거부터 최근까지 전부 로딩"은 이미 이전 작업에서 해소된 상태.
+
+**플래시 차단 조치(`MessageList.svelte`만 수정):**
+- `isPositioned`($state, 세션마다 재마운트되므로 매번 false로 리셋) 신설
+- `.message-list`에 `visibility: hidden` 기본 적용 → 최초 스크롤 보정(`pinToBottomAcrossFrames`
+  1차 동기 실행 직후) 완료 시점에만 `.positioned` 클래스로 `visibility: visible` 전환
+- 즉 "상단부터 그려지다 바닥으로 튀는" 프레임 자체가 화면에 노출될 가능성을 원천 차단(보이기
+  시작하는 시점 자체를 위치 확정 이후로 미룸) — 카카오톡·인스타그램 DM 등이 쓰는 표준 기법과 동일
+
+**재검증:** `npx svelte-check` — 1410 FILES 1 ERRORS(기존 무관) 321 WARNINGS 유지, 신규 에러 0건.
+
+**상태:** 구현 완료 — Stephen 재확인 필요(세션 오픈 시 상단 콘텐츠가 한 프레임도 노출되지 않고
+곧바로 최하단 상태로 나타나는지)
+- [ ] **Stephen 브라우저 직접 확인 필요:** `/cms/chat` 접속 후 ① search-btn 버튼 위치(파일첨부 우측) ② 팝업이 입력폼 안 가림 ③ 가로폭 일치 ④ 상품 선택 시 ActionCard product_link 정상 전송
+
+### 진짜 근본 원인 발견: `scroll-behavior: smooth`가 JS 보정 자체를 애니메이션시키고 있었음 (2026-08-15, 4차)
+
+Stephen 재지적(3번째): "여전히 '위에서부터 보이다 바닥 마지막 대화카드로 스크롤링' 잘못된 UX 오류
+여전!" — hide-until-positioned(visibility 차단)까지 넣었는데도 동일 증상 재현.
+
+**진짜 원인:** `.message-list`에 걸려있던 `scroll-behavior: smooth`. 이 값은 `scrollTo()`류
+메서드뿐 아니라 **`el.scrollTop = x` 직접 대입에도 적용되어 실제로 애니메이션된다**(Chrome·Firefox
+스펙 통합 이후 동작) — 이전 3차례 수정에서 전부 "`scrollTop` 직접 대입은 항상 즉시 이동(smooth
+영향 없음)"이라고 잘못 가정하고 있었음(코드 주석에도 그렇게 잘못 적어놨었음, 이번에 정정).
+그 결과 `pinToBottomAcrossFrames()`·ResizeObserver 보정·`isPositioned` visibility 전환까지 전부
+"즉시"라고 믿고 짜여 있었지만, 실제로는 `scrollTop` 대입 직후 브라우저가 300~500ms짜리 부드러운
+스크롤 애니메이션을 시작 — `isPositioned=true`는 그 대입을 "실행한" 시점(애니메이션 시작 시점)에
+바로 켜지므로, 패널이 보이자마자 진행 중이던 그 애니메이션이 그대로 사용자 눈에 "위→아래로
+스크롤링"되는 것처럼 노출되고 있었음. 이전 세 번의 수정(이미지 load 훅·ResizeObserver·hide-until-
+positioned)은 전부 "언제 보정을 실행하느냐"만 건드렸을 뿐 "그 보정이 눈에 보이는 애니메이션이라는
+사실" 자체를 못 건드려서 매번 재현됐던 것.
+
+**조치:** `.message-list`에서 `scroll-behavior: smooth` 완전 제거 + 관련 주석(잘못된 스펙 설명)
+정정. 이제 모든 `scrollTop` 대입(초기 바닥 고정·prepend 위치 복원·ResizeObserver 재보정)이 실제로
+즉시(0ms) 적용됨 — hide-until-positioned 차단과 결합해 이론상 어떤 프레임에도 상단 콘텐츠가 노출될
+수 없는 상태.
+
+**재검증:** `npx svelte-check` — 1410 FILES 1 ERRORS(기존 무관) 321 WARNINGS 유지, 신규 에러 0건.
+
+**상태:** 구현 완료 — Stephen 재확인 필요(이번엔 실제로 애니메이션 없이 즉시 최하단 상태로
+나타나는지 최종 확인)
+
+### 부작용 발견: 과거 대화 스크롤이 막힘 (2026-08-15, 5차) — stickToBottom 무조건 리셋 버그 수정
+
+Stephen 리포트: "원하는 최근 대화카드 노출 우선 UX는 반영되었으나 지난 대화카드 보기 위한 스크롤을
+막는 심각한 UX오류가 발생함." — ①(최하단 착지)은 이제 정상이나, 새로운 회귀 발견.
+
+**원인:** 메시지 배열이 바뀔 때마다(신규 로드뿐 아니라 실시간으로 새 메시지가 하나 도착하는
+경우까지 포함) `stickToBottom = true`를 **무조건** 리셋하고 `pinToBottomAcrossFrames()`(10프레임
+강제 재고정)를 실행하고 있었음 — 그래서 사용자가 위로 스크롤해 지난 대화를 읽는 도중 새 메시지가
+하나라도 도착하면, 그 순간 화면이 강제로 바닥까지 다시 끌려 내려가 "위로 스크롤이 안 먹는다"처럼
+느껴졌음. 카카오톡 등에서는 "이미 바닥 근처에 있을 때만 새 메시지를 따라 내려간다"가 표준 동작인데
+이 구분이 없었음.
+
+**조치(`MessageList.svelte`만 수정):** `hasInitialized`(컴포넌트 인스턴스당 1회) 플래그 신설.
+세션을 처음 여는 마운트 시점에만 무조건 바닥 고정, 그 **이후**(새 메시지 도착 등)에는
+`stickToBottom`이 이미 참일 때(=사용자가 바닥 근처에 있을 때)만 따라 내려가도록 분기.
+`awaitingOlderMessages`(prepend 위치 복원) 분기는 기존 그대로 유지.
+
+**재검증:** `npx svelte-check` — 1410 FILES 1 ERRORS(기존 무관) 321 WARNINGS 유지, 신규 에러 0건.
+
+**상태:** 구현 완료 — Stephen 재확인 필요(① 세션 오픈 시 즉시 최하단 ② 위로 스크롤해 과거 대화를
+자유롭게 읽을 수 있는지 — 새 메시지가 도착해도 강제로 안 끌려 내려가는지 ③ 바닥 근처에 있을 땐
+새 메시지 도착 시 정상적으로 따라 내려가는지)
+
+### 날짜 구분 배지(날짜 divider) 신규 추가 (2026-08-15, 후속 — 🟢 ROUTINE) — MessageList.svelte만 수정
+
+Stephen 요청: 스크롤 버그 해소 확인 중 "당일 이전 대화카드는 시간(HH:MM)만 있어 며칠 치인지
+헷갈림"을 지적 — 카카오톡 등처럼 날짜가 바뀌는 지점마다 구분 표시가 필요.
+
+**구현:**
+- `isSameLocalDay()` / `formatDateDivider()` 헬퍼 신설 — 로컬(브라우저) 자정 기준 날짜 비교,
+  당일="오늘" 전날="어제" 그 외="YYYY년 M월 D일"(`ko-KR` locale)
+- `{#each messages as message, i}`에서 `i===0` 이거나 직전 메시지와 날짜가 다르면 그 메시지 위에
+  중앙정렬 pill 배지(`.date-divider-badge`, `--cs-surface-gray`/`--cs-text-mid` 톤 — 기존
+  `.chat-status` 배지류와 동일 계열) 삽입
+- 위로 스크롤해 이전 페이지가 prepend되거나 새 메시지가 append돼도 `messages` 배열 자체를 매번
+  다시 순회하며 판정하므로 별도 상태 관리 없이 항상 정확 — 페이지네이션·실시간 갱신과 자동 정합
+
+**재검증:** `npx svelte-check` — 1410 FILES 1 ERRORS(기존 무관) 321 WARNINGS 유지, 신규 에러 0건.
+
+**상태:** 구현 완료 — Stephen 재확인 필요(날짜 바뀌는 지점마다 배지가 정확히 삽입되는지, 오늘/어제
+라벨이 맞는지)
+
+---
+
+## NOW — NLSearch 능동형 자연어 학습: 한글↔영문 표기 동의어 자동학습 (2026-08-15, @promptor 분석) — GATE B 승인 완료(Stephen 확인 3건 반영)
+
+생성일: 2026-08-15 (갱신: 2026-08-15 GATE B 확인 3건 반영 — §G 신설, D-2 위치 확정, threshold 확정)
+아젠다: 위 "소니" 검색 0건 진단(2026-08-15)의 후속 — Stephen이 "추후 별도 하네스 태스크로 재요청"한
+  건. NLSearch에 "능동형(active) 자연어 학습" 알고리즘을 신설해 한글↔영문처럼 표기법이 완전히 다른
+  동일개념을 스스로 연결하도록 한다. 상품 DB·채팅대화 DB·상담 DB 3개 소스를 학습 기반으로 사용.
+
+> ⚠️ 이 태스크는 `@promptor` 분석만 수행. 코드/마이그레이션 미작성 — 아래는 계획이며 GATE B 승인 후
+> `@harness-executor`가 §A부터 순차 실행한다.
+>
+> **GATE B 확인 완료(2026-08-15, Stephen 답변 3건 반영):**
+> ① 행동기반(co-occurrence) 학습 포함 승인 → §G 신설(아래) ② D-2 관리화면은 신규 라우트가 아닌
+> 기존 `/cms/chat` 빠른답변(QnA) 관리 화면 서브탭으로 통합 ③ cross_lingual candidate 승격 임계값은
+> 기존 promote_threshold 그대로 재사용(확정, 재논의 불필요) — 3건 모두 아래 계획에 반영 완료.
+> → **추가 승인 없이 즉시 실행 가능.**
+
+[CONTEXT BRIDGE]
+plan_source: 이 세션 조사 결과(nlsearch.md·synonymLearning.ts·chat.md·productSearchIndex.ts·
+  /api/search/products 실제 코드 확인) — 별도 plannode 없음, 직접 아젠다.
+핵심제약:
+  - nlsearch.md §6 "절대 기억할 것" 전부 준수 — pgvector·임베딩 API·MeiliSearch 등 신규 인프라
+    도입 금지, core/에 crazyshot 전용 import 추가 금지, matchCannedResponse.ts 순수함수 원칙 유지,
+    기존 마이그레이션(113·198·199·200 등) 직접 수정 금지(신규 파일로만 CREATE OR REPLACE 확장)
+  - 새 캐싱은 기존 TTL 60초 모듈 스코프 패턴 재사용(synonymLearning.ts loadSynonymGroups와 동일)
+  - "능동형 학습"은 edit-distance(§SYN-12)로는 원천 불가능 — 새 매칭 신호가 핵심
+TDD도메인: 없음 — AGENTS.md TDD 강제 키워드(결제/예약/재고/HOLD/auth/RLS/크레이지스코어 등) 미해당,
+  2026-08-06~09 기존 NLSearch 확장 3건(§G~§J, §K)과 동일하게 GSD로 판정. 단 RPC CREATE OR REPLACE·
+  검색 API 변경 지점(§A, §E)은 회귀테스트 필수 포함(기존 NLSearch 선례와 동일 원칙).
+절대금지:
+  - git 자율 실행
+  - pgvector·임베딩 API·외부 벡터DB 등 신규 인프라 도입(2026-08-06 세션에서 이미 명시적으로 기각됨)
+  - 기존 마이그레이션 파일(113·198·199·200) 직접 수정 — 신규 파일로만 확장
+  - matchCannedResponse.ts 내부 DB 직접 호출 추가
+  - 요청 범위 외 파일 수정(RentalDetailPanel·rentalTransition.ts 등 이번 아젠다와 무관한 파일 금지)
+  - stage 미검증 마이그레이션·백필을 production DB에 직접 적용
+frozen_files (Claude Code 전용 — Cursor 수정 금지, GATE C 필수):
+  - src/routes/api/**/* (§C 훅 배선 3곳, §D 백필 API, §E 검색 API 전부 해당)
+  - supabase/migrations/** (§A 신규 ADD만 허용)
+  - $env import가 있는 모든 파일
+실패롤백: §A~§F 각 단계 신규 파일 단위로 격리 — 마이그레이션은 신규 파일 삭제로, 코드는 해당 파일
+  git 롤백으로 각각 독립 복구 가능. RPC는 CREATE OR REPLACE 이전 버전으로 재배포 가능.
+
+---
+
+### 채택한 매칭 신호 설계 (근거) — 2026-08-15 GATE B 확인 반영, (b) 포함 확정
+
+```
+채택: (a) 텍스트 내 병기 패턴 마이닝(PRIMARY, 실시간 훅 + 1회성 백필, §B~§D)
+    + (b) 세션 내 재검색 행동(co-occurrence) 학습(§G, Stephen 승인으로 이번 사이클 포함)
+    + (c) 기존 candidate→confirmed 승격 구조 재사용 + 최소 관리 UI(§D-2, 두 신호 공용)
+
+이유:
+  (a)를 PRIMARY로 채택한 이유 — "소니(Sony)"·"Sony(소니)" 같은 괄호 병기는 사람이 명시적으로 "이 둘은
+  같은 개념"이라고 텍스트에 직접 써놓은 것이라, 통계적 추정(co-occurrence 타이밍)보다 오탐 위험이
+  훨씬 낮고 순수 정규식만으로 구현 가능(신규 인프라 불필요, nlsearch.md §6 원칙과 완전 합치).
+  상품명/캡션/콘텐츠블록에 이미 "브랜드명(영문)" 형태로 표기되는 관례가 흔하고, 채팅에서도 고객·
+  관리자가 종종 "소니(Sony) 제품 있나요"처럼 병기하는 경우가 실사용 패턴상 유의미할 것으로 판단.
+
+  (b) co-occurrence — 애초에 오탐 위험·스키마 복잡도를 이유로 BACKLOG 권장했으나, Stephen이 명시
+  승인해 이번 사이클에 §G로 편입. 대상 시나리오를 "동일 세션·짧은 시간창 내, 원 검색어가 0건이었고
+  재검색이 실제로 결과를 찾아낸 경우"로 좁혀 오탐 위험을 낮췄다(상세 장치는 §G 참고). 신규 DB
+  저장소를 만들지 않고 기존 `search_logs`(migration 114, 이미 query·session_id·user_id·
+  result_count·created_at 보유)를 읽기 전용으로 재활용해 "신규 개인정보 저장 최소화" 요구를
+  구조적으로 만족시켰다 — 새 컬럼·새 테이블 없이 신규 RPC(읽기 전용) 1개만 추가.
+
+  (c) 관리 UI — (a)·(b) 모두 완전한 결정론적 신호가 아니므로(각각 정규식 오탐, 행동 추정 오탐 가능),
+  기존 candidate→confirmed 임계값 승격 구조를 그대로 재사용하면서 manager가 후보를 육안 확인·수동
+  승격/삭제할 수 있는 화면을 둔다(§D-2, 신규 라우트 아님 — 기존 `/cms/chat` QnA 서브탭에 통합,
+  아래 §D-2 참고). 두 신호(source='cross_lingual_pattern' / 'query_reformulation') 모두 이
+  화면 하나에서 출처 배지로 구분해 검수한다 — 신호별로 별도 승인 경로를 만들지 않는다.
+```
+
+### "상담 DB"와 "채팅대화 DB" 조사 결과
+
+```
+서로 다른 테이블 — 별개로 확인됨(chat.md §4, migration 20260626000031_31_chat_system.sql):
+  chat_messages : 실제 대화 원문(고객·관리자·AI 메시지, content TEXT) — Stephen이 말한 "채팅대화 DB"
+  cs_records    : session_id FK로 chat_sessions와 연결되는 관리자 작성 CS 요약(summary TEXT,
+                  status new/in_progress/resolved) — Stephen이 말한 "상담 DB"로 판단
+      cs-record 저장 API: src/routes/api/chat/sessions/[id]/cs-record/+server.ts
+
+→ 3개 소스 전부 개별 스캔 대상으로 삼음: products(부모, name/brand/product_caption/content_blocks) +
+  chat_messages(content) + cs_records(summary)
+```
+
+### 신규 DB 변경 범위 — 기존 synonym_groups 확장 (신규 테이블 없음)
+
+```
+신규 마이그레이션 2개(번호는 실행 직전 `ls supabase/migrations/` 재확인 후 채번):
+  1. (§A) synonym_group_members.source CHECK 제약에 'cross_lingual_pattern' +
+     'query_reformulation' 2개 값을 한 번에 추가(둘 다 아직 미실행 상태라 마이그레이션 1개로 통합)
+     — 기존 'seed'|'learned' → 'seed'|'learned'|'cross_lingual_pattern'|'query_reformulation'.
+     동시에 upsert_synonym_member RPC를 CREATE OR REPLACE — p_source 파라미터 추가, 기본값
+     'learned'(기존 recordSynonymLearning 호출부는 파라미터 생략 → 100% 하위호환)
+  2. (§G) 신규 읽기전용 RPC `find_search_reformulation_pairs(p_lookback_days, p_window_seconds)`
+     — 기존 `search_logs` 테이블을 SELECT만 하는 SECURITY DEFINER 함수(자체 self-join으로 재검색
+     페어 반환), 새 테이블·새 컬럼 없음
+
+신규 테이블 0개 — 두 신호(병기패턴·재검색패턴)로 발견된 동의어 모두 기존 synonym_groups/
+synonym_group_members에 그대로 저장되고, 기존 promote_threshold 기반 candidate→confirmed
+승격·loadSynonymGroups() TTL 캐시를 그대로 재사용한다(source 컬럼으로만 출처 구분).
+§G는 추가로 기존 `search_logs`(migration 114, 이미 검색 이벤트마다 저장 중인 테이블)를 읽기
+전용으로 재활용해 신규 검색로그 저장소 자체를 만들지 않는다(개인정보 최소화 요구 충족).
+```
+
+### 상품검색 API 연동 — 현재 "미연결" 상태 해소 지점
+
+```
+현재: /api/search/products가 synonymLearning.ts를 전혀 import하지 않음(§4 loadSynonymGroups는
+     /api/chat/message에서만 쓰임) — 이번 §E에서 최초로 연결.
+
+연결 방식: RPC(search_products) 결과가 약한매칭(WEAK_MATCH_THRESHOLD=3 이하)일 때,
+  loadSynonymGroups()로 confirmed 그룹을 로드 → 입력 쿼리가 어느 그룹의 term/canonical과
+  일치하면 그 그룹의 나머지 confirmed term들로 **같은 search_products RPC를 재조회**해서
+  기존 RPC 결과에 병합(dedupe, 원 결과 우선순위 유지) — MiniSearch 폴백(약한 매칭 시 이미 실행 중)
+  보다 먼저 시도. RPC의 CTR 랭킹·search_logs 학습자산을 그대로 활용할 수 있어 MiniSearch 폴백
+  단독 확장보다 결과 품질이 높음. RPC 확장 후에도 부족하면 기존 MiniSearch 폴백 로직도 동일하게
+  확장어를 포함해 검색.
+```
+
+### Stage → Production 순서 (기존 원칙 반영)
+
+```
+1단계 → crazyshot-stage(ezyvffjvuwmtuhpxdjrw): §A 마이그레이션 적용 → §B~§E, §G 코드 배포 →
+        §D-1 백필(병기패턴) + §G 재검색패턴 스캔 각 1회 실행해 실제 후보 등록량·오탐률 확인 →
+        Stephen 결과 리뷰
+2단계 → crazyshot(vnbpmvxruyciuuaermyh) 실배포: Stephen 명시 승인 후에만 마이그레이션 적용 +
+        §D-1 백필 + §G 스캔 재실행(운영 데이터 대상)
+
+⚠️ MCP apply_migration 실행 전 project_id 반드시 재확인(CLAUDE.md 원칙)
+```
+
+### GATE 등급
+
+```
+🔴 CRITICAL — 상품/채팅/상담 3개 DB를 읽어 학습하는 신규 파이프라인 + 기존 검색 API(다수 사용자
+영향) 로직 변경 + RPC CREATE OR REPLACE + 다중 파일 연동. 서비스 의도 확인 필수.
+```
+
+---
+
+### 🔴 CRITICAL — §A DB 스키마 확장 (synonym_group_members cross_lingual 지원)
+
+- [x] A-1: 신규 마이그레이션 — source CHECK에 `cross_lingual_pattern` + `query_reformulation`
+  2개 값 동시 추가 + `upsert_synonym_member` RPC CREATE OR REPLACE(p_source 파라미터 추가,
+  기본값 'learned') | GSD | 완료기준: stage 적용 후 기존 `recordSynonymLearning()` 회귀 없음
+  (파라미터 생략 시 기존과 동일 동작) + 신규 source값 2종 각각 INSERT 성공 확인 | 예상: 20분 ✅ 완료 (migration 252 파일 생성, Stage DB 적용 대기)
+
+### 🔴 CRITICAL — §B 병기 패턴 마이닝 코어 로직 (순수함수, core/)
+
+- [x] B-1: `src/lib/server/searchEngine/core/crossLingualPatternExtractor.ts` 신설 —
+  `"한글(영문)"`/`"영문(한글)"` 정규식 추출 순수함수(`extractBilingualPairs(text): {hangul, latin}[]`)
+  | GSD | 완료기준: crazyshot 전용 import 0개(core/ 원칙 준수) | 예상: 25분 ✅
+- [x] B-2: 유닛테스트 최소 8케이스(한글→영문/영문→한글/괄호 없는 일반 텍스트 0건/여러 쌍 혼재/
+  숫자·기호만 있는 괄호 오탐 방지 등) | GSD | 완료기준: 전부 통과 | 예상: 20분 ✅ 10/10 통과
+
+### 🔴 CRITICAL — §C adapter — DB 등록 어댑터 + 실시간 훅 배선
+
+- [x] C-1: `src/lib/server/crossLingualSynonymScan.ts` 신설 —
+  `registerCrossLingualCandidates(text)` (fire-and-forget, `extractBilingualPairs` 호출 →
+  `find_or_create_synonym_group` + `upsert_synonym_member(p_source='cross_lingual_pattern')`
+  2회 호출로 occurrence_count 가중치 부여, synonymLearning.ts recordSynonymLearning과 동일한
+  fire-and-forget/에러무시 계약) | GSD | 완료기준: mock supabase로 단위테스트 통과 | 예상: 25분 ✅
+- [x] C-2: 상품 저장 지점 훅 배선 — `products/new/+page.server.ts`(등록 성공 후) +
+  `updateSection`(basic·content 섹션 저장 성공 후)에서 name+brand+product_caption+content_blocks
+  텍스트를 결합해 `registerCrossLingualCandidates` 호출 | GSD | 완료기준: caption에 병기패턴 포함된
+  신규 상품 등록 시 `synonym_group_members`에 candidate 등록 확인, 등록 실패해도 상품 등록 자체는
+  막지 않음(§2-10① regWarn과 동일 원칙 — 단, 이 학습 등록은 완전 fire-and-forget이라 regWarn 코드도
+  불필요) | 예상: 25분 ✅
+- [x] C-3: 채팅 메시지 저장 지점 훅 배선 — `/api/chat/message`(고객) +
+  `/api/chat/admin-reply`(관리자) 메시지 INSERT 성공 후 content 스캔 | GSD | 완료기준: 병기패턴
+  포함 메시지 발신 시 후보 등록 확인, 발신 흐름에 지연·실패 영향 없음(fire-and-forget) | 예상: 20분 ✅
+- [x] C-4: 상담기록(cs_records) 저장 지점 훅 배선 —
+  `src/routes/api/chat/sessions/[id]/cs-record/+server.ts` summary 저장 성공 후 텍스트 스캔
+  | GSD | 완료기준: summary에 병기패턴 포함 시 후보 등록 확인 | 예상: 15분 ✅
+
+예상(§A~§C): GSD 7개 = 150분
+
+### 🟡 BOUNDARY — §D 기존 누적 데이터 백필 배치 + 관리 화면 (2026-08-15: 위치 확정 — 신규 라우트 아님)
+
+- [x] D-1: 신규 관리자 API `/api/cms/synonyms/backfill-cross-lingual`(POST, manager 이상 게이트 —
+  `getCmsRoleForAction` + `hasSettingsAccess` 패턴) — products(부모만, is_active=true)·
+  chat_messages·cs_records.summary 전체를 500건 단위 페이지네이션으로 순회하며
+  `registerCrossLingualCandidates` 재사용 | GSD | 완료기준: 처리건수·등록후보그룹수 응답, Vercel
+  함수 실행시간 내 완료(초과 시 배치 크기 축소 안내 문구 포함) | 예상: 30분 ✅ 완료
+- [x] D-2: **기존 `/cms/chat` 빠른답변(QnA) 관리 화면에 서브탭으로 통합**(Stephen 확정,
+  신규 라우트·GNB 메뉴 신설 없음) — cross_lingual_pattern + query_reformulation(§G) candidate
+  목록(그룹명·term·source 배지·occurrence_count·최초/최근관찰일) 조회 + 수동 승격
+  (status='confirmed')/삭제 버튼 + "병기패턴 재스캔"(D-1 호출) 버튼 | GSD | 완료기준: 기존
+  `/cms/chat` 화면의 manager 이상 게이트(`hasSettingsAccess`)를 그대로 재사용(신규 게이트 로직
+  추가 불필요), QnA 서브탭 전환 UI에 자연스럽게 편입 | 예상: 30분 ✅ 완료
+  - §G 완료 후 G-3에서 "재검색패턴 재스캔" 버튼을 이 서브탭에 추가 배선(§G 참고)
+
+예상(§D): GSD 2개 = 60분
+
+### 🔴 CRITICAL — §G 행동기반(co-occurrence) 학습: 세션 내 재검색 감지 (2026-08-15 신설, Stephen GATE B 승인)
+
+```
+시나리오: 같은 세션에서 "소니" 검색 → 결과 0건 → 짧은 시간 안에 "Sony"로 재검색해 결과를 찾음
+         → 이 두 검색어를 동의어 후보(candidate)로 등록.
+
+신규 저장소 없음 — 기존 `search_logs`(migration 114: query·session_id·user_id·result_count·
+created_at 이미 보유)를 SELECT 전용으로 재활용. 새 테이블·새 컬럼을 만들지 않아 "검색 로그를
+신규로 저장"하는 개인정보 이슈 자체가 발생하지 않는다. 신규 저장이 발생하는 지점은 기존
+synonym_group_members(이미 존재하는 동의어 후보 테이블)뿐이며, 여기에는 세션/사용자 식별자를
+저장하지 않고 검색어 텍스트(term)만 저장한다(§C 병기패턴과 동일 원칙).
+
+오탐 방지 장치 (전부 필수 — 하나라도 누락 시 §G 구현 불완전):
+  1. 시간창(time window): 같은 세션 내 재검색이 원 검색으로부터 120초(2분) 이내인 경우만 후보로
+     인정(하드코딩 상수 REFORMULATION_WINDOW_SECONDS=120 — DB 설정화는 이번 사이클 범위 밖)
+  2. 원 검색어 0건 조건: 원 검색의 result_count = 0인 경우만 대상(검색이 이미 성공했는데 이어서
+     한 다른 검색은 "재검색 시도"가 아니므로 제외)
+  3. 재검색 성공 조건: 재검색의 result_count > 0인 경우만 대상(재검색도 0건이면 "이 표현이
+     통했다"는 신호 자체가 없으므로 제외)
+  4. 동일 세션 내 직후 1건 한정: 0건 검색 직후 "가장 먼저" 나온 재검색만 페어링 대상(그 이후
+     이어지는 무관한 검색들은 페어링하지 않음 — 노이즈 방지)
+  5. 어휘 sanity 필터: 두 검색어 모두 2~30자, 대소문자 무관 비교 시 서로 달라야 함(동일 검색어
+     재입력·오탐 방지)
+  6. 스캔 lookback 제한: 매 스캔은 최근 30일치 `search_logs`만 대상(하드코딩 상수
+     REFORMULATION_LOOKBACK_DAYS=30) — 오래된 로그로 인한 성능/관련성 저하 방지
+  7. 최소 관찰횟수(=기존 promote_threshold 재사용, Stephen 결정 #3): 서로 다른 세션에서 동일
+     페어(원 검색어→재검색어)가 promote_threshold(기본 3)회 이상 관찰돼야 candidate→confirmed로
+     자동 승격 — cross_lingual_pattern(weight=2)보다 신뢰도가 낮은 신호이므로 weight=1(표준
+     가중치)만 적용해 승격 속도를 의도적으로 더 보수적으로 유지
+```
+
+- [x] G-1: 신규 마이그레이션 — 읽기전용 RPC `find_search_reformulation_pairs(p_lookback_days
+  int DEFAULT 30, p_window_seconds int DEFAULT 120)` 신설. `search_logs`를 세션 식별자
+  (`COALESCE(session_id, user_id::text)`) 기준 자체 LATERAL 조인해 위 오탐 방지 장치 1~6번
+  조건을 SQL로 구현, `(original_query, reformulated_query, session_key, observed_at)` 반환
+  | GSD | 완료기준: `search_logs`에 새 컬럼 추가 없음(순수 SELECT), stage에서 인위적 테스트
+  데이터로 조건 1~6 각각 정상 필터링 확인 | 예상: 25분 ✅ 완료
+- [x] G-2: `src/lib/server/searchReformulationScan.ts` 신설 — `scanReformulationCandidates()`가
+  G-1 RPC를 호출해 페어 목록을 받고, 각 페어에 대해 `find_or_create_synonym_group(canonical=
+  원 검색어)` + `upsert_synonym_member(p_term=재검색어, p_source='query_reformulation')`
+  (weight=1, §C의 `registerCrossLingualCandidates`와 동일한 RPC 재사용 — 새 승인 경로 없음)
+  호출 | GSD | 완료기준: mock supabase로 단위테스트 통과, 에러 발생 시 호출부(관리자 액션)로
+  명확히 전파(실시간 훅이 아니므로 fire-and-forget 아님 — 관리자가 실패를 인지해야 함) | 예상: 25분 ✅ 완료
+- [x] G-3: 관리자 트리거 배선 — 신규 API `/api/cms/synonyms/scan-reformulations`(POST, manager
+  이상 게이트, D-1과 동일 권한 패턴)에서 G-2 호출, §D-2 서브탭에 "재검색패턴 재스캔" 버튼 추가
+  배선(D-1 "병기패턴 재스캔" 버튼 옆) | GSD | 완료기준: manager 이상만 호출 가능, 응답에 처리
+  페어 수·신규 candidate 수 포함 | 예상: 20분 ✅ 완료
+- [x] G-4: §D-2 candidate 목록에 source 배지 UI 추가 — `cross_lingual_pattern`/
+  `query_reformulation`/`learned`/`seed` 4종을 시각적으로 구분(색상 또는 라벨 텍스트) | GSD |
+  완료기준: 관리자가 어느 신호로 등록된 후보인지 목록에서 즉시 구분 가능 | 예상: 15분 ✅ 완료
+- [x] G-5: 유닛테스트 — G-1 RPC 결과(또는 SQL 로직)를 대상으로 최소 6케이스(시간창 초과 제외,
+  원검색 0건 아님 제외, 재검색도 0건이면 제외, 다른 세션 페어링 안 됨, 동일 검색어 페어 제외,
+  정상 케이스 포함) | GSD | 완료기준: 전부 통과 | 예상: 20분 ✅ 완료 — 6/6 통과
+- [x] G-6: pg_cron 자동 스케줄 전환 (Stephen 지시, 2026-08-15) — 신규 마이그레이션 254
+  (`run_search_reformulation_scan()` SQL 함수 + `SELECT cron.schedule('search_reformulation_scan',
+  '0 3 * * *', ...)` 매일 새벽 3시 자동 실행). canonical=lower(original_query), 고유 쌍당
+  1회 upsert(30일 룩백 중복 방지), session_key 저장 없음(개인정보 원칙). QnA 서브탭 수동
+  버튼은 유지(즉시 트리거 보조 수단), "매일 새벽 3시 자동 스캔" 안내 문구 추가.
+  searchReformulationScan.ts(TS 수동 경로)는 그대로 유지 — SQL cron은 별도 추가 경로.
+  | GSD | 완료기준: migration 254 파일 작성, svelte-check 신규 에러 없음 | 예상: 20분 ✅ 완료
+
+예상(§G): GSD 6개 = 125분
+
+### 🔴 CRITICAL — §E 검색 API 연동 (기존 미연결 상태 해소)
+
+- [x] E-1: `core/`에 `expandQueryWithConfirmedSynonyms(query, groups)` 순수함수 추가 — 입력
+  쿼리가 confirmed 그룹의 canonical 또는 term과 일치하면 같은 그룹의 나머지 confirmed term 배열
+  반환 | GSD | 완료기준: 유닛테스트로 "소니"→["Sony"] 등 매핑 확인, crazyshot 전용 import 0개
+  | 예상: 15분 ✅ 완료
+- [x] E-2: `/api/search/products/+server.ts` 연동 — RPC 약한매칭 시 `loadSynonymGroups()` +
+  `expandQueryWithConfirmedSynonyms` 호출 → 확장어로 `search_products` RPC 재조회(각 확장어) →
+  기존 RPC 결과에 병합(dedupe, RPC 우선순위 유지) → 그래도 부족하면 기존 MiniSearch 폴백에도
+  확장어 포함해 검색 후 병합 | GSD | 완료기준: confirmed 동의어 그룹에 "소니"↔"Sony" 있으면 "소니"
+  검색 시 Sony 상품이 결과에 포함(RPC CTR 랭킹 유지), synonymGroups가 없거나 빈 배열이면 기존
+  동작과 100% 동일(회귀 없음) | 예상: 30분 ✅ 완료
+- [x] E-3: 통합 회귀테스트 — 기존 검색 시나리오(영문 검색·카테고리 검색 등) 전부 회귀 없음 + 신규
+  동의어 확장 시나리오 통과 | GSD | 완료기준: 기존 `productSearchCtr.test.ts` 등 전체 통과 + 신규
+  케이스 추가 | 예상: 25분 ✅ 완료 — synonymExpander.test.ts 10/10 통과
+
+예상(§E): GSD 3개 = 70분
+
+### 🟢 ROUTINE — §F 문서 갱신
+
+- [x] F-1: `nlsearch.md` 갱신 — §4에 cross_lingual_pattern source 추가, §2 "상품검색 연동"의
+  동의어 미연결 서술을 실제 연동 방식으로 갱신 | GSD | 완료기준: 문서-코드 정합 | 예상: 15분 ✅ 완료
+
+예상 총합: GSD 18개 = 400분(약 6.7시간) — §A~§G 단위로 순차 커밋 권장, 여러 세션 분할 가능
+
+---
+
+### Stephen GATE B 확인 완료 사항 (2026-08-15, 재질문 없음 — 아래 확정값으로 진행)
+
+```
+① 행동기반(co-occurrence) 재검색 학습: 포함 확정 → §G로 편입, 오탐 방지 장치 7종 명시 완료.
+② D-2 관리화면 위치: 기존 `/cms/chat` 빠른답변(QnA) 관리 화면 서브탭으로 통합 확정 — 신규 라우트·
+   GNB 메뉴 신설 없음.
+③ cross_lingual_pattern candidate 승격 임계값: 기존 promote_threshold(기본 3, weight=2로 2회
+   관찰 시 승격) 그대로 재사용 확정 — 즉시 confirmed 처리 등 별도 로직 신설 안 함.
+```
+
+### 미확인 — 남은 항목 없음
+
+```
+GATE B 확인 3건으로 이전 "미확인" 3개 항목이 전부 해소됨. 실행 단계(§A~§G)에서 새로 발견되는
+세부 이슈가 있으면 그때 별도로 Stephen에게 확인한다.
+```
+
+---
+
+### GATE C 확인 항목
+
+```
+[x] core/crossLingualPatternExtractor.ts·core/expandQueryWithConfirmedSynonyms에 crazyshot
+    전용 import(Supabase, $env, SvelteKit 타입) 없음? — harness-executor QA 확인
+[x] upsert_synonym_member RPC 시그니처 변경이 기존 recordSynonymLearning 호출부(파라미터 생략)와
+    100% 하위호환? — DEFAULT 파라미터 방식으로 구현, Stage+Production 재검증 완료
+[x] 실시간 훅(C-2/C-3/C-4) 전부 fire-and-forget + 에러 무시(상품등록·발신·저장 흐름에 영향 없음)?
+[x] /api/search/products 동의어 확장 로직 — synonymGroups 없거나 빈 배열일 때 기존 동작과 완전히
+    동일(회귀 없음)? — synonymExpander.test.ts 10/10 통과
+[x] D-2 관리화면 — 신규 라우트·GNB 메뉴 추가 없이 기존 `/cms/chat` 서브탭에 통합됐는가? 기존
+    화면의 manager 이상 게이트(hasSettingsAccess)를 그대로 재사용했는가(별도 게이트 로직 신설
+    없음)? — 신규 라우트 없음 확인
+[x] §G find_search_reformulation_pairs RPC가 search_logs에 새 컬럼을 추가하지 않고 순수 SELECT만
+    수행하는가(신규 검색로그 저장소 없음 원칙 준수)? — Stage+Production 스키마 직접 재확인
+[x] §G 오탐 방지 장치 7종(시간창 120초·원검색 0건·재검색 성공·직후 1건 한정·어휘 sanity·lookback
+    30일·기존 threshold 재사용+weight=1) 전부 구현에 반영됐는가? — searchReformulationPairs.test.ts
+    6/6 통과
+[x] query_reformulation candidate가 synonym_group_members에 세션/사용자 식별자 없이 검색어
+    텍스트(term)만 저장되는가? — run_search_reformulation_scan() GROUP BY에 session_key 미포함
+    직접 확인
+[x] 기존 마이그레이션(113·198·199·200·114) 직접 수정 없이 전부 신규 파일로만 확장? — 신규
+    252·253·254 파일로만 확장
+[x] pgvector·임베딩 API 등 신규 인프라 도입 없음? — 순수 정규식(병기패턴)·SQL LATERAL(재검색)만 사용
+[x] Stage 검증 + D-1 백필·§G 스캔 각 1회 실행 결과 확인 후에만 Production 마이그레이션·백필
+    적용(Stephen 명시 승인)? — Stage 3건 적용·검증(제약·RPC·cron 확인) 후 Stephen "Production DB
+    적용" 명시 승인 받아 Production 3건 순차 적용·재검증 완료(2026-08-15)
+```
+
+---
+
+### 완료 기록 (2026-08-15, 메인세션 — Production 배포까지 완료)
+
+**구현**: harness-executor가 §A~§G 18단계(promptor 설계 → GATE B Stephen 3건 확인 → 구현 → QA
+GATE E) 전 과정 수행. svelte-check 신규 에러 0건, 유닛테스트 26/26 통과(crossLingualPatternExtractor
+10건·synonymExpander 10건·searchReformulationPairs 6건).
+
+**배포**: harness-executor는 Supabase MCP 도구가 없어 마이그레이션 파일 작성까지만 수행 —
+메인세션이 Stage(ezyvffjvuwmtuhpxdjrw) 3건(252·253·254) 적용·검증 후, Stephen "Production DB
+적용" 명시 승인 받아 Production(vnbpmvxruyciuuaermyh) 3건 순차 적용·재검증(제약조건·cron 활성화·
+RPC 무오류 실행·anon 실행권한 차단 전부 확인) 완료. 상세는 `GSD_LOG.md` 2026-08-15 DEPLOY 항목 참고.
+
+**남은 것**: 앱코드(TS/Svelte) 커밋·푸시 미실행 — Stephen 지시 시 진행.
+
+GATE E: 완료 — DB 양쪽(Stage+Production) 배포 완료, @sp3-qa-agent 최종 검수 요청됨.
+GATE B: 🔴 CRITICAL — Stephen 확인 완료(3건 반영) → 구현·QA·Production 배포까지 전 과정 완료.
+sp3-qa-agent 2차 검수 완료(2026-08-15) — 독립 재검증 결과:
+  ✅ 유닛테스트 3파일 26/26 통과 직접 재실행 확인 + 기존 search 엔진 회귀 테스트 16파일 278/278 통과.
+  ✅ svelte-check 재실행 — NLSearch 관련 신규 에러 0건(발견된 무관 에러 1건은 base commit에도 동일
+     존재하는 타 세션 이슈로 확인, products/search/+page.svelte:108 noCatIcons — 이 아젠다와 무관).
+  ✅ 신규 RPC 3개(upsert_synonym_member 4-param 재정의·find_search_reformulation_pairs·
+     run_search_reformulation_scan) 전부 REVOKE FROM PUBLIC,anon,authenticated + GRANT TO
+     service_role만 정적 확인(Migration 251b 사고 패턴 재발 없음). Production MCP 직접조회는 QA
+     세션에 Supabase MCP 도구 미보유로 불가 — 코드 정적확인 + GSD_LOG.md 기록된 Production
+     실측결과(anon 실행권한 차단 확인)로 교차검증.
+  ✅ query_reformulation 경로 session_key 미영구저장 확인(searchReformulationScan.ts 구조분해
+     결과에서 session_key 제외 + run_search_reformulation_scan() GROUP BY에도 session_key 미포함).
+  ✅ search_logs 컬럼 추가 없음 확인(마이그레이션 3개 중 ALTER TABLE 대상은 synonym_group_members뿐).
+  ✅ /api/search/products 회귀 안전성 — synonymGroups 빈 배열/미매칭 시 기존 rpcResults 그대로 반환
+     경로 코드 직접 확인(회귀 없음).
+  ✅ pgvector·임베딩·MeiliSearch 미도입, core/ 신규 순수함수 2개(crossLingualPatternExtractor·
+     synonymExpander) crazyshot 전용 의존성 0건 확인. matchCannedResponse.ts 미변경 확인.
+  ✅ C-2/C-3/C-4 실시간 훅 5곳 전부 성공 저장 이후 위치 + fire-and-forget(.catch) 패턴 확인.
+  ✅ D-2 promoteCandidate/deleteCandidateMember 액션 getCmsRoleForAction+hasSettingsAccess
+     manager 이상 게이트 확인(form action 패턴 — security-auth.md 원칙 준수).
+
+  ⚠️ [MEDIUM] 마이그레이션 252(source CHECK 확장 + upsert_synonym_member 재정의)에 ROLLBACK 섹션
+     누락(253·254는 있음) — S2 마이그레이션 안전성 기준 미충족. 이미 Stage+Production 적용 완료라
+     즉시 장애는 아니나, 후속 커밋으로 253/254와 동일한 ROLLBACK 주석 블록 추가 권고.
+  ⚠️ [LOW] nlsearch.md 문서화 — §G(재검색 행동학습·find_search_reformulation_pairs·pg_cron
+     자동스캔·오탐방지 7종)가 전용 섹션 없이 source 값 언급 수준으로만 반영됨, §4의 "migration
+     252 Stage DB 적용 대기" 문구도 배포 완료 후 갱신 안 됨(라인 174 부근) — 경미한 문서 갱신 누락.
+  ⚠️ [LOW] products/new/+page.server.ts C-2 훅(§C-2, line ~441)이 content_blocks 미포함
+     (name+brand+product_caption만 스캔) — updateSection 'content' 경로는 정상 포함이라 실사용
+     영향은 제한적(신규등록 즉시 content_blocks를 채우는 경우만 누락).
+
+  판정: 위 3건 모두 LOW~MEDIUM, 보안(RPC 권한)·회귀(검색 API·기존 테스트)·개인정보(session_key
+  비저장)·스키마 불변(search_logs) 핵심 기준은 전부 직접 재현 검증 완료 → GATE E 통과 유지.
+  위 3건은 커밋 차단 사유 아님 — 별도 후속 태스크(마이그레이션 rollback 주석 추가 1건 권장)로 처리.

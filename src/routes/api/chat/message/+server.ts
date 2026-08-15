@@ -14,6 +14,7 @@ import type { CannedResponseForMatch } from '$lib/server/matchCannedResponse'
 import { loadSynonymGroups } from '$lib/server/synonymLearning'
 import { enrichActionCard } from '$lib/server/chatActionEnrich'
 import type { EnrichContext } from '$lib/server/chatActionEnrich'
+import { registerCrossLingualCandidates } from '$lib/server/crossLingualSynonymScan'
 
 const anthropic = new Anthropic({ apiKey: ANTHROPIC_API_KEY })
 
@@ -108,6 +109,9 @@ export const POST: RequestHandler = async ({ request, locals }) => {
   if (insertError || !userMessage) {
     return json({ error: insertError?.message ?? '메시지 저장 실패' }, { status: 500 })
   }
+
+  // §C-3: 고객 메시지 이중언어 병기 패턴 학습 훅 (fire-and-forget)
+  registerCrossLingualCandidates(body.content.trim()).catch(() => {})
 
   // 세션 상태 전환(어느 경로든 공통) — 새 메시지 도착 자체로 무조건 진행중 복귀
   if (chatSession.status !== 'open' && admin) {

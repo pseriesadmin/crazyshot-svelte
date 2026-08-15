@@ -6,6 +6,7 @@ import { createClient } from '@supabase/supabase-js'
 import type { RequestHandler } from './$types'
 import { recordSynonymLearning } from '$lib/server/synonymLearning'
 import { sendPushToUser } from '$lib/server/push'
+import { registerCrossLingualCandidates } from '$lib/server/crossLingualSynonymScan'
 
 export const POST: RequestHandler = async ({ request, locals }) => {
   const { session } = await locals.safeGetSession()
@@ -90,6 +91,9 @@ export const POST: RequestHandler = async ({ request, locals }) => {
   if (cannedResponseId) {
     recordSynonymLearning(cannedResponseId, sessionId).catch(() => {})
   }
+
+  // §C-3: 관리자 메시지 이중언어 병기 패턴 학습 훅 (fire-and-forget)
+  registerCrossLingualCandidates(content).catch(() => {})
 
   // updated_at 갱신 + CS-A3: 관리자가 답장하면 미응답 알림 상태 초기화 (다음 미응답 알림 허용)
   await admin
