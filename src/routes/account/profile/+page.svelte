@@ -3,6 +3,7 @@
   import { goto } from '$app/navigation'
   import { browser } from '$app/environment'
   import SubGnb from '$lib/components/common/SubGnb.svelte'
+  import CouponTabContent from '$lib/components/members/profile/CouponTabContent.svelte'
   import LogTabContent from '$lib/components/members/profile/LogTabContent.svelte'
   import ReviewTabContent from '$lib/components/members/profile/ReviewTabContent.svelte'
   import ProfileTabContent from '$lib/components/members/profile/ProfileTabContent.svelte'
@@ -13,11 +14,12 @@
   interface Props { data: PageData }
   let { data }: Props = $props()
 
-  type Tab = 'log' | 'review' | 'profile' | 'address' | 'notification'
+  type Tab = 'coupon' | 'log' | 'review' | 'profile' | 'address' | 'notification'
 
-  const VALID_TABS: Tab[] = ['log', 'review', 'profile', 'address', 'notification']
+  const VALID_TABS: Tab[] = ['coupon', 'log', 'review', 'profile', 'address', 'notification']
 
   const TAB_LABELS: { id: Tab; label: string; count?: number }[] = [
+    { id: 'coupon',        label: '쿠폰' },
     { id: 'log',          label: '로그',      count: data.profile?.rental_count ?? 0 },
     { id: 'review',       label: '후기·댓글' },
     { id: 'profile',      label: '개인정보' },
@@ -73,7 +75,9 @@
 
     <!-- 탭 콘텐츠 -->
     <div class="tab-content">
-      {#if activeTab === 'log'}
+      {#if activeTab === 'coupon'}
+        <CouponTabContent coupons={data.coupons} />
+      {:else if activeTab === 'log'}
         <LogTabContent />
       {:else if activeTab === 'review'}
         <ReviewTabContent />

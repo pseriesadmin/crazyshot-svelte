@@ -10,6 +10,7 @@
   import RentalStatRow from '$lib/components/account/RentalStatRow.svelte'
   import WishlistScroll from '$lib/components/account/WishlistScroll.svelte'
   import MenuSection from '$lib/components/account/MenuSection.svelte'
+  import CouponTabContent from '$lib/components/members/profile/CouponTabContent.svelte'
   import LogTabContent from '$lib/components/members/profile/LogTabContent.svelte'
   import ReviewTabContent from '$lib/components/members/profile/ReviewTabContent.svelte'
   import ProfileTabContent from '$lib/components/members/profile/ProfileTabContent.svelte'
@@ -51,15 +52,13 @@
   ]
 
   const myInfoMenuItems = [
+    { label: '쿠폰',         href: '/account/profile?tab=coupon',      panel: 'coupon' },
     { label: '로그',         href: '/account/profile?tab=log',         panel: 'log' },
     { label: '후기·댓글',   href: '/account/profile?tab=review',       panel: 'review' },
     { label: '개인정보',    href: '/account/profile?tab=profile',      panel: 'profile' },
     { label: '기본 배송지', href: '/account/profile?tab=address',      panel: 'address' },
     { label: '알림설정',    href: '/account/profile?tab=notification',  panel: 'notification' },
   ]
-
-  const rentalCount  = $derived(data.rentalStats.active + data.rentalStats.shipping)
-  const myInfoCount  = 2
 
   /* PC 우측 패널 전환 — 'home': 기본 대시보드, 그 외: 내정보 서브섹션 */
   let activePcSection = $state('home')
@@ -118,8 +117,8 @@
         <!-- 대여 정보 + 내정보 메뉴 -->
         <div class="flex flex-col items-start pt-[50px] relative shrink-0 w-full">
           <div class="bg-[#f6f6f6] flex flex-col gap-[10px] items-start overflow-clip relative rounded-tr-[50px] shrink-0 w-full">
-            <MenuSection title="대여 정보" count={rentalCount} items={rentalMenuItems} variant="rental" />
-            <MenuSection title="내정보"    count={myInfoCount}  items={myInfoMenuItems} variant="myinfo" />
+            <MenuSection title="대여 정보" items={rentalMenuItems} variant="rental" />
+            <MenuSection title="내정보"    items={myInfoMenuItems} variant="myinfo" />
           </div>
         </div>
 
@@ -164,22 +163,6 @@
         <div class="bg-[#ffffff] rounded-[30px] px-[24px] py-[24px]">
           <div class="flex items-center justify-between mb-[24px]">
             <span class="font-['Noto_Sans_KR',sans-serif] font-medium text-[#444] text-[18px] tracking-[-0.3px]">내정보</span>
-            <div class="flex gap-[20px] items-center">
-              <span class="font-['Noto_Sans_KR',sans-serif] font-medium text-[#444] text-[16px] tracking-[-0.5px]">{myInfoCount}</span>
-              <div class="h-[6px] relative shrink-0 w-[12px]">
-                <div class="absolute flex inset-0 items-center justify-center" style="container-type:size">
-                  <div class="flex-none h-[100cqw] rotate-90 w-[100cqh]">
-                    <div class="relative size-full">
-                      <div class="absolute inset-[-8.33%_-16.67%]">
-                        <svg class="block size-full" fill="none" preserveAspectRatio="none" viewBox="0 0 8 14">
-                          <path d="M1 1L7 7L1 13" stroke="#aaaaaa" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" />
-                        </svg>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              </div>
-            </div>
           </div>
           <div class="flex flex-col gap-[20px]">
             {#each myInfoMenuItems as item}
@@ -265,22 +248,6 @@
           <div class="bg-[#ffffff] rounded-[30px] px-[24px] py-[24px]">
             <div class="flex items-center justify-between mb-[24px]">
               <span class="font-['Noto_Sans_KR',sans-serif] font-medium text-[#444] text-[18px] tracking-[-0.3px]">대여 정보</span>
-              <div class="flex gap-[20px] items-center">
-                <span class="font-['Noto_Sans_KR',sans-serif] font-medium text-[#444] text-[16px] tracking-[-0.5px]">{rentalCount}</span>
-                <div class="h-[6px] relative shrink-0 w-[12px]">
-                  <div class="absolute flex inset-0 items-center justify-center" style="container-type:size">
-                    <div class="flex-none h-[100cqw] rotate-90 w-[100cqh]">
-                      <div class="relative size-full">
-                        <div class="absolute inset-[-8.33%_-16.67%]">
-                          <svg class="block size-full" fill="none" preserveAspectRatio="none" viewBox="0 0 8 14">
-                            <path d="M1 1L7 7L1 13" stroke="#aaaaaa" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" />
-                          </svg>
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              </div>
             </div>
             <div class="flex flex-col gap-[20px]">
               {#each rentalMenuItems as item}
@@ -316,6 +283,8 @@
               <PcCancelPanel cancels={data.cancels} onback={() => activePcSection = 'home'} />
             {:else if activePcSection === 'inquiry'}
               <PcInquiryPanel inquiries={data.inquiries} onback={() => activePcSection = 'home'} />
+            {:else if activePcSection === 'coupon'}
+              <CouponTabContent coupons={data.coupons} />
             {:else if activePcSection === 'log'}
               <LogTabContent />
             {:else if activePcSection === 'review'}
