@@ -3,6 +3,8 @@
 // /api/cms/rental-qr-transition(대여목록카드/RentalDetailPanel 자동 QR 기록)이 동일 로직을 공유한다.
 // H-01: 직접 DML 금지 — RPC 경유만 허용.
 
+import { sendReservationLifecyclePush } from '$lib/server/push'
+
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type AnyClient = any
 
@@ -44,6 +46,8 @@ export async function processRentalQrTransition(
         p_notify_type: notifyType,
       })
     } catch { /* 알림 실패는 무시 */ }
+    // 고객 FCM 푸시 병행 발송 (채팅과 독립 — 실패해도 메인 처리에 영향 없음, 갭#3 수정 2026-08-09)
+    await sendReservationLifecyclePush(admin, reservationId, notifyType)
   }
 
   // QR-3: 상품 이력 자동 기록 — 실패해도 메인 처리에 영향 없음
