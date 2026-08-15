@@ -18,6 +18,7 @@ export const POST: RequestHandler = async ({ locals, request }) => {
   const requestedIds = Array.isArray(body.reservationIds)
     ? (body.reservationIds as unknown[]).map(Number).filter((n) => Number.isFinite(n))
     : null
+  const userCouponId = typeof body.userCouponId === 'string' ? body.userCouponId : null
 
   if (requestedIds === null) {
     return json({ success: false, error: 'reservationIds가 필요합니다' }, { status: 400 })
@@ -72,10 +73,29 @@ export const POST: RequestHandler = async ({ locals, request }) => {
     }
   }
 
+  // 선택된 쿠폰 소진 처리 — 예약이 1건 이상 확정된 경우에만 적용
+  // (기존 갭: 쿠폰 선택 시 화면상 할인만 표시되고 user_coupons.used_at이 전혀 갱신되지 않아
+  //  동일 쿠폰을 무제한 재사용할 수 있었음 — 2026-08-15 세션에서 발견·플래그된 결함 수정)
+  let couponUsed = false
+  if (userCouponId && confirmedReservations.length > 0) {
+    const { data: useResult, error: useErr } = await admin.rpc('use_coupon', {
+      p_user_id: session.user.id,
+      p_user_coupon_id: userCouponId,
+    })
+    if (useErr) {
+      console.error('[checkout/confirm-mock] use_coupon 실패:', useErr)
+    } else {
+      const result = useResult as { ok: boolean; error?: string } | null
+      couponUsed = result?.ok === true
+      if (!couponUsed) console.error('[checkout/confirm-mock] use_coupon 거부:', result?.error)
+    }
+  }
+
   return json({
     success: confirmedReservations.length > 0,
     confirmedCount: confirmedReservations.length,
     confirmedReservations,
     orderKey,
+    couponUsed,
   })
 }
