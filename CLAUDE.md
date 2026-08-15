@@ -166,6 +166,7 @@ Class D (보안 위반) → 즉시 중단
 |---|---|---|
 | 예약·가용성 (M2) | `@.claude/rules-ref/rental.md` | 예약 흐름·HOLD·가용성 쿼리 작업 시 |
 | 대여 라이프사이클 버튼·스텝퍼 | `@.claude/rules/rental-lifecycle.md` | RentalDetailPanel·RentalJourneyStepper 작업 시 |
+| 전자계약·서명 (CMS 발송 + 고객 서명) | `@.claude/rules-ref/contract.md` | 계약서·전자서명·contract_signings·서명 딥링크 작업 시 |
 | 결제·웹훅 (M3) | `@.claude/rules-ref/payment.md` | 결제 승인·환불·웹훅 작업 시 |
 | 채팅 시스템 (PRD.1.7) | `@.claude/rules-ref/chat.md` | 채팅·세션·Realtime 작업 시 |
 | 자연어검색엔진 (NLSearch) | `@.claude/rules-ref/nlsearch.md` | NLSearch·자연어검색·상품검색 매칭·상담매칭·동의어학습 작업 시 |

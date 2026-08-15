@@ -1,6 +1,171 @@
 # GSD_LOG.md — 크레이지샷 실행 이력
 # 형식: [YYYY-MM-DD HH:MM] 타입 | 태스크명 | 파일 | 소요 | 결과
 
+[2026-08-16] GSD | 이미지 레이어 선택·드래그이동·삭제 신규개발 + 다른 세션 부분커밋 발견 | sheet-format.ts, ContractSpreadsheetEditor.svelte, spreadsheetRender.ts, spreadsheetRender.test.ts | 완료
+  Stephen 요청: "이미지 선택해 이동 가능하게, 선택 시 우측 상단에 삭제버튼." 기존
+  `pointer-events:none`이던 이미지를 자체 이벤트를 받는 `<div class="cse-cell-image-wrap">`
+  로 감싸 클릭 가능한 레이어로 전환. 클릭 시 우측 상단 삭제버튼 노출(원형, close-red 톤),
+  pointerdown+move+up으로 셀 중앙 기준 오프셋 드래그 이동. 마커 형식을
+  `{width}:{url}`→`{width}:{offsetX}:{offsetY}:{url}`로 확장(하위호환 파싱 유지). 드래그/
+  삭제 커밋은 render 콜백이 직접 받는 instance/x/y를 사용(그리드 셀 선택과 별개 개념).
+  재렌더링 후에도 선택 상태 유지되도록 activeOverlayCellKey로 추적. 고객 서명화면
+  렌더러(spreadsheetRender.ts)도 오프셋을 transform에 반영해 CMS에서 옮긴 최종 위치가
+  그대로 보이도록 동기화.
+  ⚠️ 작업 중 발견: sheet-format.ts를 포함한 5개 파일이 다른 세션의 대규모 통합 커밋에
+  함께 실려 origin/stage까지 이미 푸시됨(같은 워킹디렉토리 공유 중 타이밍 겹침) — 전수
+  검증 결과 전부 완전한 최종본이고 아직 아무도 참조 안 해 빌드 영향 없음 확인, TASK.md에
+  상세 기록. 나머지 20개 파일은 여전히 미커밋.
+  검증: svelte-check 신규 에러 0건, 관련 vitest 3개 파일 73/73 통과, build 성공.
+
+[2026-08-16] GSD | 문서형(흐름형) 이미지 삭제 버튼 신규개발 | ContractDocumentEditor.svelte | 완료
+  Stephen 제보로 확인해보니 flow 모드 ImageWithNodeView 플로팅 툴바에는 애초부터 삭제
+  버튼이 없었음(직전 15라운드는 스프레드시트 모드에만 추가했었음). 툴바에 ✕ 버튼 추가 —
+  getPos()+state.doc.nodeAt(pos)로 실제 노드 재조회 후 tr.delete()로 제거.
+  ⚠️ 이 파일은 세션 25개 파일 목록 밖(다른 세션의 "전자계약 작성기 한계 수정" 플랜이
+  이미 이 파일에 미커밋 변경을 쌓아둔 상태) — 통합 커밋 시 포함 대상. svelte-check/build
+  통과, vanilla ProseMirror 코드라 기존 관례상 단위테스트 대상 아님.
+
+[2026-08-16] GSD | 서명/직인 이미지 삭제 기능 신규개발 | ContractSpreadsheetEditor.svelte | 완료
+  Stephen 요청: "이미지 선택 시 삭제버튼 노출, 실행 삭제 방식." removeOverlayAtSelection()
+  신설 — 선택 셀에서 오버레이 마커만 제거, 원본 텍스트는 유지. 기존 크기설정 바
+  노출조건(selectedHasOverlay)을 그대로 재사용해 같은 자리에 "✕ 삭제" 버튼 추가. DB
+  삭제가 아닌 셀 값 편집 + jspreadsheet 자체 undo로 복구 가능해 2단계 확인 없이 단일
+  클릭 실행. svelte-check/vitest(72/72)/build 통과.
+
+[2026-08-16] FIX | 이미지가 셀 경계에 클리핑되던 jspreadsheet-ce 기본 CSS 2건 확정·수정 | ContractSpreadsheetEditor.svelte | 완료
+  13라운드에서 %기반 크기캡을 없앴는데도 여전히 셀 안에 갇혀 보이던 원인을
+  jspreadsheet-ce 소스 직접 대조로 확정: ① textOverflow 옵션 미설정 시 자동으로 붙는
+  jss_overflow 클래스가 `.jss_overflow > tbody > tr > td { overflow:hidden }`으로 모든
+  셀을 클리핑, ② `.jss_worksheet > tbody > tr > td > img { max-width:100px }` 전역
+  규칙이 별도로 이미지를 100px로 재차 압박. 워크시트 전역 옵션 토글은 다른 셀 부작용이
+  커서 배제하고, renderCellValue()에서 오버레이 있는 셀에만 overflow:visible +
+  img maxWidth:none을 인라인으로 부여해 국소 무력화. jspreadsheet.css 전체를 대조해
+  table/tr/wrapper 레벨에는 추가 클리핑 지점이 없음도 확인. svelte-check/vitest(72/72)/
+  build 통과.
+
+[2026-08-16] FIX | 이미지 크기조절 시각적 미반영 + 너비입력창 빈값 결함 수정 | ContractSpreadsheetEditor.svelte, contract/[token]/+page.svelte | 완료
+  Stephen 스크린샷의 실제 DOM(style="width:400px") 확인 결과 값 자체는 정상 반영되고
+  있었음 — 진짜 원인은 CSS: .cse-cell-image/.ss-cell-image의 max-width:80%/max-height:70%
+  (셀 크기 기준 %)가 이미지를 강제로 눌러서 100/200/400 어느 프리셋을 눌러도 작은 셀
+  안에서는 비슷하게 보였음. 실제 도장처럼 셀보다 커도 되도록 %캡 제거, 안전 상한만
+  600px로 재설정 + z-index로 인접 셀 위에 겹치도록 보강. 크기설정 바 너비 입력창도
+  선언적 value={} 바인딩이 number input에서 신뢰성 있게 갱신 안 되는 사례로 판단해
+  bind:this+$effect로 imperatively 동기화하는 방식(ContractDocumentEditor.svelte
+  widthInput 패턴과 동일)으로 교체. svelte-check/vitest(72/72, 회귀 없음)/build 통과.
+
+[2026-08-16] GSD | 문서형과 동일한 이미지 크기설정 바를 스프레드시트 모드에 추가 | sheet-format.ts, spreadsheetRender.ts, ContractSpreadsheetEditor.svelte, spreadsheetRender.test.ts | 완료
+  Stephen 지시로 ContractDocumentEditor.svelte의 이미지 크기조절 바(프리셋 소100/중200/대400
+  + 너비 직접입력, 기본 200px)와 동일한 UI를 스프레드시트 모드에 적용. jspreadsheet-ce는
+  TipTap의 "이미지 노드 선택" 개념이 없어 "선택된 셀에 오버레이가 있는가"를 대체 판단
+  기준으로 씀. sheet-format.ts 마커 형식에 너비 인코딩 추가(cs-image://{width}:{url}),
+  선택 변경 시(onselection) 크기바 표시상태 동기화, updateOverlayWidthAtSelection()으로
+  너비만 교체. 렌더링 양쪽(CMS 에디터/고객화면) 모두 width를 img 인라인 style로 반영,
+  고객화면은 문서형과 동일 범위(20~1200px)로 clamp. 테스트 2건 추가 총 41개, svelte-check/
+  vitest(72/72)/build 전부 통과.
+
+[2026-08-16] FIX | 서명·직인 이미지 삽입 방식 재설계 — 셀 교체 → 텍스트 위 오버레이 | sheet-format.ts, spreadsheetRender.ts, ContractSpreadsheetEditor.svelte, contract/[token]/+page.svelte, spreadsheetRender.test.ts | 완료
+  Stephen 피드백("이미지가 텍스트 위 레이어로 올라가지 않음")으로 10라운드의 "셀 값 전체를
+  이미지 마커로 교체" 방식을 폐기하고 "기존 텍스트 뒤에 마커를 이어붙여 렌더링 시 텍스트는
+  그대로 두고 이미지를 절대위치로 겹쳐 그리는" 오버레이 방식으로 재설계. sheet-format.ts
+  마커 API 전면 교체(hasImageOverlay/splitCellImageOverlay/toImageOverlayMarker),
+  insertImageAtSelection()도 append 패턴으로 변경(재삽입 시 마커 중첩 방지 로직 포함).
+  spreadsheetRender.ts는 배경색 서식 style과 position:relative를 하나의 style 속성으로
+  병합해야 하는 이슈까지 함께 처리(안 하면 style= 중복으로 배경색이 조용히 사라짐).
+  기존 이미지 셀 테스트 5건 오버레이 시나리오로 재작성 + 신규 2건(텍스트 보존, style 병합)
+  추가, 39개 전부 통과. svelte-check/vitest(70/70)/build 통과.
+
+[2026-08-16] GSD | 서명·직인 이미지를 스프레드시트 그리드 셀에 삽입하는 기능 V3 신규개발 | sheet-format.ts, spreadsheetRender.ts, ContractSpreadsheetEditor.svelte, contract/[token]/+page.svelte, spreadsheetRender.test.ts | 완료
+  Stephen 명시 지시로 v1/v2 계획에 없던 신규기능 개발. jspreadsheet-ce 내장 image 컬럼타입은
+  base64 전용이라(압축 소스 직접 확인) 우리 서명/직인 자산(Storage URL)에 안 맞음 —
+  BaseColumn.render 커스텀 훅 + `cs-image://<url>` 마커 문자열 규약으로 CMS 에디터·고객
+  서명화면 양쪽에서 동일하게 이미지 렌더링. flow 모드 기존 "서명/직인 삽입" 팝오버와 동일
+  UX·동일 API 재사용. 9라운드에서 만든 선택셀 확정 로직을 텍스트/이미지 삽입 공용으로
+  리팩터링. XSS 방지(http(s) URL만 허용 + src 이스케이프) 테스트 5건 포함 svelte-check/
+  vitest(68/68)/build 전부 통과. 신규 파일 0개 — 기존 25개 세션 파일 목록 안에서만 작업.
+
+[2026-08-16] FIX | 변수 삽입 미반영 근본원인 확정·수정 — onselection 배치 오류 | ContractSpreadsheetEditor.svelte | 완료
+  7라운드 수정 후에도 삽입이 안 되던 진짜 원인 확정: jspreadsheet-ce 타입정의를 인터페이스
+  경계까지 정확히 대조한 결과 `onselection`은 최상위 SpreadsheetOptions 전용이고
+  WorksheetOptions(개별 시트 설정)에는 없음 — 7라운드에서 각 시트 설정 안에 넣은 콜백이
+  라이브러리에 아예 인식되지 않는 죽은 코드였음. `jspreadsheet(el, {...})` 최상위 호출로
+  이동, 캐시 구조도 인덱스 Map→인스턴스 참조 쌍으로 단순화. svelte-check/vitest(63/63)/build
+  통과. 병행 확인: A4 인쇄 CSS(이미 정상), 서명/직인 삽입은 spreadsheet 모드에 애초에
+  미구현(범위 밖) — Stephen 확인 필요 항목으로 별도 보고.
+
+[2026-08-16] FIX | jsuites.css 동적 import Vite 로딩실패 수정 | ContractSpreadsheetEditor.svelte | 완료
+  Stephen 스크린샷 제보: 변수칩 패널 연동 후 스프레드시트 에디터가 "Failed to fetch dynamically
+  imported module: .../jsuites/dist/jsuites.css" 오류로 아예 안 열림. side-effect 스타일
+  `await import('jsuites/dist/jsuites.css')`가 Vite 개발서버에서 불안정한 것으로 판단해
+  `pdfRasterize.ts`의 검증된 `?url` 패턴으로 교체 — `ensureSpreadsheetCss()`가 정적 리졸브된
+  에셋 URL을 받아 `<link rel="stylesheet">`로 직접 주입. Material Icons 폰트 주입도 동일
+  `injectStylesheet()` 헬퍼로 통합. svelte-check/vitest(63/63)/build 통과, 빌드 산출물에
+  해시된 CSS 에셋 정상 생성 확인.
+
+[2026-08-16] FIX | 변수칩 16개 전수감사 + 스프레드시트 삽입 결함 발견·수정 | ContractSpreadsheetEditor.svelte | 완료
+  Stephen 제보("일부 변수 미작동 의심")로 변수칩 정의·데이터스키마·DB조회 3단계를 스크립트로
+  바이트 단위 대조(16/16 일치, 문제없음). 삽입 메커니즘 검증 중 방금 추가한
+  insertTextAtSelection()에서 실결함 발견: jspreadsheet-ce가 셀 미선택 상태에서
+  selectedCell=undefined/null일 수 있는데 좌표 유효성 검증 없이 그대로 사용 → 잘못된 좌표에
+  조용히 쓰거나 실패하며 성공(true) 반환하던 버그. x1/y1 number·>=0 검증 추가.
+  추가로 칩 버튼(그리드 바깥 DOM) 클릭 시 blur로 선택이 풀릴 가능성까지 방어하기 위해
+  onselection 이벤트로 시트별 마지막 선택좌표를 Map에 캐시해두고 getSelection() 무효 시
+  폴백하는 이중 방어 구현. svelte-check/vitest(63/63)/build 전부 통과.
+
+[2026-08-16] GSD | 스프레드시트 모드에 변수칩(ContractFieldPanel) 연동 V2 신규개발 | spreadsheetWidgetAdapter.ts, ContractSpreadsheetEditor.svelte, ContractTemplatePanel.svelte, ContractEditorModal.svelte | 완료
+  Stephen이 v1 플랜에서 명시적으로 제외했던 기능("셀 직접 타이핑"으로 대체)을 실사용 중 발견하고
+  v2로 연결 요청. jspreadsheet-ce 타입정의에서 getSelection/getValueFromCoords/
+  setValueFromCoords API를 조사해 "현재 선택된 셀 뒤에 텍스트 이어붙이기" 방식으로 구현
+  (TipTap과 달리 셀 내부 커서 위치 개념 자체가 API에 없음). ContractSpreadsheetEditor.svelte에
+  insertTextAtSelection() export 추가, 두 부모 컴포넌트(양식 패널·계약서 모달) spreadsheet
+  분기에 ContractFieldPanel을 flow와 동일한 2단 레이아웃으로 연결. 테스트 목업 타입 보강 후
+  svelte-check/vitest(63/63)/build 전부 통과.
+
+[2026-08-16] GSD | P2-② 배송추적 스텁 구현 (GATE E 보류 — 실 API 키 확보 후 라이브 전환) | Migration 268 + 4파일 신규 + 2파일 수정 | 완료
+  신규: supabase/migrations/20260816000268_268_rental_tracking.sql (rental_reservations에
+    tracking_number·courier_code 컬럼 추가 + update_reservation_tracking SECURITY DEFINER RPC
+    + REVOKE ALL FROM PUBLIC,anon,authenticated / GRANT TO authenticated 권한 설정)
+  신규: src/lib/server/courierTracking.ts (TrackingStatus 인터페이스 + getTrackingStatus 스텁
+    — 실 API 키 확보 후 함수 본문만 교체, 인터페이스·시그니처 불변)
+  신규: src/routes/api/chat/shipment-tracking/[id]/+server.ts (고객/관리자 이중 인증 —
+    is_owner OR getCmsRoleForAction, service_role DB 읽기, getTrackingStatus 호출)
+  신규: src/routes/api/cms/reservations/[id]/tracking/+server.ts (GET: 관리자 조회,
+    PATCH: locals.supabase로 RPC 호출 — is_cms_user() 내부 auth.uid() 의존)
+  수정: src/lib/server/chatActionEnrich.ts (SHIPMENT_TRACKING_CARD 케이스 추가,
+    enrichShipmentTrackingCard 함수 추가)
+  수정: src/lib/components/cms/RentalDetailPanel.svelte (rental 탭에 운송장 정보 lazy-fetch
+    섹션 추가 — trackingNumber·trackingCourierCode 상태 + saveTracking())
+  Migration 미적용: stage DB(ezyvffjvuwmtuhpxdjrw) — Stephen이 Supabase 대시보드 SQL 에디터에서
+    수동 적용 필요. svelte-check: 신규 에러 0건(기존 무관 에러 1건 그대로)
+
+[2026-08-16] FIX | 스프레드시트 모드 전환 — Stephen 실사용 스크린샷 제보 2건 직접수정(5라운드) | ContractTemplatePanel.svelte, ContractSpreadsheetEditor.svelte | 완료
+  4라운드 QA까지 통과했지만 Stephen이 로컬 화면을 직접 열어보고 스크린샷 2장으로 실사용
+  버그 2건 제보:
+  ① 신규 양식 모드선택 화면에 플랜이 명시적으로 제외했던 "스프레드시트형(빈 문서로 시작)"
+     3번째 버튼이 존재 — 클릭하면 임포트 없이 빈 spreadsheet 모드로 진입하는데, 3라운드에서
+     "문서 가져오기" 버튼을 flow 전용으로 막아놔서 이 경로로 들어가면 xlsx를 불러올 방법이
+     아예 없는 데드엔드였음. `ContractTemplatePanel.svelte`에서 3번째 버튼 제거, 플랜 원안
+     2버튼 구성 복원.
+  ② jspreadsheet-ce 툴바 아이콘이 Material Icons 웹폰트 미로드로 텍스트가 겹쳐 깨져 보임.
+     전역 app.html 대신 `ContractSpreadsheetEditor.svelte`에 `ensureMaterialIconsFont()`
+     신설해 onMount 시점에만 동적으로 `<link>` 주입(고객 페이지 번들 영향 없음).
+  검증: svelte-check 신규 에러 0건, 관련 vitest 63/63 통과, build 성공. 실제 렌더링 육안 확인은
+  Claude Browser 금지 원칙상 Stephen 재확인 필요.
+
+[2026-08-16] ⚡GSD | 액션카드 P2 2단계 — ③ 쿠폰선물 (2-A 관리자승인제 + 2-B 직접발송) |
+  supabase/migrations/20260816000266_266_coupon_gift_chat.sql(신규),
+  src/lib/types/chat.ts(수정 — ActionPayload coupon_id/approval_status 추가),
+  src/lib/server/chatActionEnrich.ts(수정 — COUPON_GIFT_CARD enrichCouponGiftCard 추가),
+  src/routes/api/cms/coupons/available/+server.ts(신규),
+  src/routes/api/cms/chat/coupon-gift/[messageId]/approve/+server.ts(신규),
+  src/routes/api/cms/chat/coupon-gift/direct-send/+server.ts(신규),
+  src/lib/components/chat/ActionCard.svelte(수정 — pending/rejected/approve UI),
+  src/lib/components/chat/MessageBubble.svelte(수정 — oncouponapprove prop 통과),
+  src/lib/components/chat/MessageList.svelte(수정 — oncouponapprove prop 통과),
+  src/lib/components/chat/AdminChatPanel.svelte(수정 — handleCouponApprove/handleCouponGift),
+  src/lib/components/chat/ChatInput.svelte(수정 — 쿠폰 버튼 + 팝업) | GATE C 대기
+  검증: npx svelte-check — 신규 에러 0건(기존 pre-existing 1건 무관)
+  비고: migration 266 적용 대기(Stephen이 Supabase 대시보드 SQL 에디터에서 수동 적용 필요 — stage: ezyvffjvuwmtuhpxdjrw, production 보류)
+
 [2026-08-16] BOUNDARY | 내정보 "쿠폰" 메뉴·탭 신규 추가 (실 CMS 배포 쿠폰 연동) |
   src/lib/server/account/loadUserCoupons.ts(신규), src/lib/components/members/profile/
   CouponTabContent.svelte(신규), src/routes/account/+page.server.ts,
