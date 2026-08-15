@@ -690,9 +690,10 @@
                     days: daysLeft,
                     checked: otSelectedCouponIds.has(uc.id),
                     onToggle: () => {
-                      const s = new Set(otSelectedCouponIds)
-                      if (s.has(uc.id)) s.delete(uc.id); else s.add(uc.id)
-                      otSelectedCouponIds = s
+                      // 중복 쿠폰 적용 불가(안내 문구와 일치) — 단일 선택만 허용
+                      otSelectedCouponIds = otSelectedCouponIds.has(uc.id)
+                        ? new Set()
+                        : new Set([uc.id])
                     },
                   })}
                 {/if}
@@ -894,10 +895,11 @@
               }
             }
             // 모든 draft 승격 완료 후 confirm-mock 호출 (confirm-mock은 status='hold' 행만 처리)
+            const selectedCouponId = otSelectedCouponIds.size > 0 ? [...otSelectedCouponIds][0] : null
             const res = await fetch('/api/checkout/confirm-mock', {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ reservationIds: checkedIds }),
+              body: JSON.stringify({ reservationIds: checkedIds, userCouponId: selectedCouponId }),
             })
             const result = await res.json()
             if (res.ok && result.success) {
