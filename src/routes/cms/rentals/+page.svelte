@@ -187,6 +187,7 @@
               <th class="col-hide">예약번호</th>
               <th>고객명</th>
               <th>상품명</th>
+              <th class="col-hide">상품코드</th>
               <th>대여기간</th>
               <th class="col-hide">수령방식</th>
               <th class="col-hide">반납방식</th>
@@ -222,6 +223,13 @@
                     {/if}
                   </div>
                 </td>
+                <td class="col-hide">
+                  {#if row.product_code}
+                    <code class="product-code">{row.product_code}</code>
+                  {:else}
+                    <span class="text-light">-</span>
+                  {/if}
+                </td>
                 <td>
                   <span class="date-range">
                     {formatDate(row.rental_start)} ~ {formatDate(row.rental_end)}
@@ -239,7 +247,7 @@
               </tr>
             {:else}
               <tr>
-                <td colspan="7" class="no-data">조건에 맞는 대여 내역이 없습니다.</td>
+                <td colspan="8" class="no-data">조건에 맞는 대여 내역이 없습니다.</td>
               </tr>
             {/each}
           </tbody>
@@ -458,6 +466,15 @@
   .product-cell  { display: flex; flex-direction: column; gap: 2px; }
   .product-name  { font-weight: 600; }
   .product-cat   { font: var(--text-pc-script-12); color: var(--cs-text-light); }
+  .product-code  {
+    font: var(--text-pc-script-12);
+    font-family: monospace;
+    background: var(--cs-surface-gray);
+    padding: 2px 6px;
+    border-radius: 4px;
+    color: var(--cs-text);
+  }
+  .text-light    { color: var(--cs-text-light); font: var(--text-pc-script-12); }
   .date-range    { font: var(--text-pc-script-12); color: var(--cs-text-mid); }
   .rental-days   { color: var(--cs-text-light); }
   .method-value  { font: var(--text-pc-script-12); color: var(--cs-text-mid); }

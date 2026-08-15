@@ -40,32 +40,49 @@ export const load: PageServerLoad = async ({ parent, url }) => {
   if (!hasSettingsAccess(cmsRole ?? '')) throw redirect(303, '/cms?notice=access_denied')
 
   const serviceRoleKey = env.SUPABASE_SERVICE_ROLE_KEY
-  if (!serviceRoleKey) return { customers: [] as CustomerRow[], totalCount: 0, search: '', grade: '', bl: null, page: 1 }
+  if (!serviceRoleKey) {
+    return {
+      customers: [] as CustomerRow[], totalCount: 0, search: '', grade: '', bl: null, page: 1,
+      selected: null as string | null, selectedCustomer: null as CustomerRow | null, tab: null as string | null,
+    }
+  }
 
-  const search = url.searchParams.get('search') ?? ''
-  const grade  = url.searchParams.get('grade')  ?? ''
-  const bl     = url.searchParams.get('bl')         // 'true' | 'false' | null
-  const page   = Math.max(1, Number(url.searchParams.get('page') ?? '1'))
+  const search   = url.searchParams.get('search') ?? ''
+  const grade    = url.searchParams.get('grade')  ?? ''
+  const bl       = url.searchParams.get('bl')         // 'true' | 'false' | null
+  const page     = Math.max(1, Number(url.searchParams.get('page') ?? '1'))
+  const selected = url.searchParams.get('selected')   // 딥링크 대상 user_id — /cms/subscriptions 구독자현황 탭에서 연결
+  const tab      = url.searchParams.get('tab')        // 딥링크 시 열어둘 탭(예: 'subscription')
 
   const admin = createClient(getSupabaseUrl(), serviceRoleKey)
 
-  const { data, error } = await admin.rpc('get_customer_list', {
-    p_search:           search || null,
-    p_membership_grade: grade  || null,
-    p_blacklisted:      bl === 'true' ? true : bl === 'false' ? false : null,
-    p_page:             page,
-    p_limit:            30,
-  })
+  const [{ data, error }, selectedResult] = await Promise.all([
+    admin.rpc('get_customer_list', {
+      p_search:           search || null,
+      p_membership_grade: grade  || null,
+      p_blacklisted:      bl === 'true' ? true : bl === 'false' ? false : null,
+      p_page:             page,
+      p_limit:            30,
+    }),
+    // 딥링크 대상이 현재 페이지/필터 밖에 있을 수 있으므로 검색·페이지네이션과 무관하게 별도 조회
+    selected
+      ? admin.rpc('get_customer_list', { p_page: 1, p_limit: 1, p_user_id: selected })
+      : Promise.resolve({ data: null, error: null }),
+  ])
 
   if (error) {
     console.error('[customers/load] get_customer_list error:', error)
-    return { customers: [] as CustomerRow[], totalCount: 0, search, grade, bl, page }
+    return {
+      customers: [] as CustomerRow[], totalCount: 0, search, grade, bl, page,
+      selected, selectedCustomer: null as CustomerRow | null, tab,
+    }
   }
 
   const rows = (data ?? []) as CustomerRow[]
   const totalCount = rows[0]?.total_count ?? 0
+  const selectedCustomer = ((selectedResult.data as CustomerRow[] | null)?.[0]) ?? null
 
-  return { customers: rows, totalCount, search, grade, bl, page }
+  return { customers: rows, totalCount, search, grade, bl, page, selected, selectedCustomer, tab }
 }
 
 export const actions: Actions = {

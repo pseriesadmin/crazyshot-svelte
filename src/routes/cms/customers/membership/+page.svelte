@@ -34,6 +34,18 @@
     const m: Record<string, string> = { active: '활성', cancelled: '취소', paused: '일시정지', expired: '만료' }
     return m[s] ?? s
   }
+
+  function gradeColorVar(grade: string | null): string {
+    const key = (grade ?? '').toUpperCase()
+    if (key === 'EASY')  return 'var(--cs-info)'
+    if (key === 'POP')   return 'var(--cs-purple)'
+    if (key === 'CRAZY') return 'var(--cs-orange)'
+    return 'var(--cs-text-light)'
+  }
+
+  function paymentStatusLabel(s: string): string {
+    return s === 'succeeded' ? '성공' : s === 'failed' ? '실패' : s
+  }
 </script>
 
 <div class="page-wrap">
@@ -42,23 +54,17 @@
     <p class="page-sub">구독 중인 회원과 멤버십 이력을 관리합니다.</p>
   </div>
 
-  <!-- KPI 카드 -->
+  <!-- KPI 카드 — 등록된 활성 구독 상품 기준 동적 렌더 -->
   <div class="kpi-row">
-    <div class="kpi-card kpi-easy">
-      <span class="kpi-label">EASY 구독자</span>
-      <span class="kpi-value">{data.stats.easy}명</span>
-      <span class="kpi-price">9,900원/월</span>
-    </div>
-    <div class="kpi-card kpi-pop">
-      <span class="kpi-label">POP 구독자</span>
-      <span class="kpi-value">{data.stats.pop}명</span>
-      <span class="kpi-price">19,900원/월</span>
-    </div>
-    <div class="kpi-card kpi-crazy">
-      <span class="kpi-label">CRAZY 구독자</span>
-      <span class="kpi-value">{data.stats.crazy}명</span>
-      <span class="kpi-price">29,900원/월</span>
-    </div>
+    {#each data.planKpis as plan (plan.plan_id)}
+      <div class="kpi-card" style="border-top-color: {gradeColorVar(plan.membership_grade)}">
+        <span class="kpi-label">{plan.name} 구독자</span>
+        <span class="kpi-value">{plan.activeCount}명</span>
+        <span class="kpi-price">{plan.monthly_price.toLocaleString()}원/월</span>
+      </div>
+    {:else}
+      <div class="kpi-empty">등록된 활성 구독 상품이 없습니다.</div>
+    {/each}
   </div>
 
   <!-- 안내 배너 -->
@@ -98,6 +104,7 @@
             <th>플랜</th>
             <th>구독 기간</th>
             <th>상태</th>
+            <th>최근 결제</th>
             <th>등록일</th>
           </tr>
         </thead>
@@ -122,11 +129,22 @@
               <td>
                 <span class="status-badge status-{sub.status}">{statusLabel(sub.status)}</span>
               </td>
+              <td>
+                {#if sub.last_payment}
+                  <div class="payment-cell">
+                    <span class="payment-amount">{sub.last_payment.amount.toLocaleString()}원</span>
+                    <span class="payment-badge payment-{sub.last_payment.status}">{paymentStatusLabel(sub.last_payment.status)}</span>
+                    <span class="payment-date">{formatDate(sub.last_payment.billed_at)}</span>
+                  </div>
+                {:else}
+                  <span class="payment-none">결제 이력 없음</span>
+                {/if}
+              </td>
               <td>{formatDate(sub.created_at)}</td>
             </tr>
           {:else}
             <tr>
-              <td colspan="5" class="no-data">조건에 맞는 구독 이력이 없습니다.</td>
+              <td colspan="6" class="no-data">조건에 맞는 구독 이력이 없습니다.</td>
             </tr>
           {/each}
         </tbody>
@@ -146,19 +164,21 @@
   .page-sub   { font: var(--text-pc-script-12); color: var(--cs-text-mid); margin: 0; }
 
   /* KPI */
-  .kpi-row { display: flex; gap: 12px; }
+  .kpi-row { display: flex; gap: 12px; flex-wrap: wrap; }
   .kpi-card {
-    flex: 1; background: var(--cs-white); border-radius: var(--cms-radius-sm);
+    flex: 1; min-width: 160px; background: var(--cs-white); border-radius: var(--cms-radius-sm);
     padding: 16px; display: flex; flex-direction: column; gap: 4px;
     box-shadow: 0px 1px 4px rgba(0,0,0,0.06);
     border-top: 3px solid transparent;
   }
-  .kpi-easy  { border-top-color: var(--cs-info); }
-  .kpi-pop   { border-top-color: var(--cs-purple); }
-  .kpi-crazy { border-top-color: var(--cs-orange); }
   .kpi-label { font: var(--text-pc-script-12); color: var(--cs-text-mid); }
   .kpi-value { font: var(--text-pc-title-18); font-weight: 700; color: var(--cs-text); }
   .kpi-price { font: var(--text-pc-descript-10); color: var(--cs-text-light); }
+  .kpi-empty {
+    flex: 1; padding: 16px; text-align: center;
+    color: var(--cs-text-light); font: var(--text-pc-script-12);
+    background: var(--cs-white); border-radius: var(--cms-radius-sm);
+  }
 
   /* 정보 패널 */
   .info-panel {
@@ -218,6 +238,17 @@
   .status-cancelled { background: rgba(255,53,53,0.10);  color: var(--cs-red-badge); }
   .status-paused    { background: rgba(245,158,11,0.12); color: var(--cs-warning); }
   .status-expired   { background: var(--cs-surface-gray); color: var(--cs-text-light); }
+
+  .payment-cell { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+  .payment-amount { font-weight: 700; }
+  .payment-date { font: var(--text-pc-script-12); color: var(--cs-text-mid); }
+  .payment-badge {
+    display: inline-flex; align-items: center; padding: 2px 8px;
+    border-radius: var(--radius-sm); font: var(--text-pc-script-12); font-weight: 700;
+  }
+  .payment-succeeded { background: rgba(16,185,129,0.12); color: var(--cs-success-light); }
+  .payment-failed    { background: rgba(255,53,53,0.10);  color: var(--cs-red-badge); }
+  .payment-none      { color: var(--cs-text-light); font: var(--text-pc-script-12); }
 
   .no-data { text-align: center; padding: 40px 20px; color: var(--cs-text-light); font: var(--text-pc-body-14); }
 </style>

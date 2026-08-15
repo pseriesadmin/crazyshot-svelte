@@ -480,8 +480,10 @@ export const actions: Actions = {
     return { action: 'toggleActive', success: true }
   },
 
-  // ── 상품 품번 포맷 저장 (reservation_code_format 키 공용 — M3 예약코드 구현 시 분리 예정) ──
-  // QR-CASE-2: 전 카테고리·전 상품의 향후 채번 방식을 좌우하는 전역 설정이라 manager 이상만
+  // ── 예약코드 형식 저장 (reservation_code_format 키 전용) ──
+  // Migration #248(2026-08-14)부터 상품 품번 기본값은 별도 키 product_code_format으로
+  // 분리됨 — 이 액션은 예약코드(rental_reservations.reservation_code) 채번에만 영향을 준다.
+  // QR-CASE-2: 예약코드 전역 채번 방식을 좌우하는 설정이라 manager 이상만
   // 변경 가능해야 함(2026-08-XX 확정) — form action에서는 locals.cmsRole 대신
   // getCmsRoleForAction() 사용(security-auth.md 필수 패턴, load 시점과 달리 액션 실행 시점엔
   // locals.cmsRole이 항상 undefined이기 때문)

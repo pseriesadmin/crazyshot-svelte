@@ -171,7 +171,7 @@
         type CodeRuleRow = { id: string; code_rule: Record<string, unknown> | null }
         type SettingRow = { value: unknown } | null
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const fmtPromise = (supabase as any).from('cms_settings').select('value').eq('key', 'reservation_code_format').maybeSingle() as Promise<{ data: SettingRow; error: unknown }>
+        const fmtPromise = (supabase as any).from('cms_settings').select('value').eq('key', 'product_code_format').maybeSingle() as Promise<{ data: SettingRow; error: unknown }>
         const codesPromise: Promise<{ data: CodeRuleRow[] | null; error: unknown }> = codeIds.length > 0
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
           ? (supabase as any).from('product_category_codes').select('id, code_rule').in('id', codeIds)
