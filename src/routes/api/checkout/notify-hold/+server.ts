@@ -2,6 +2,7 @@ import { json } from '@sveltejs/kit'
 import { createClient } from '@supabase/supabase-js'
 import { env } from '$env/dynamic/private'
 import { getSupabaseUrl } from '$lib/env/supabasePublic'
+import { sendReservationLifecyclePush } from '$lib/server/push'
 import type { RequestHandler } from './$types'
 
 // 예약신청(hold) 채팅 알림 발송 — 장바구니 담기 직후 호출
@@ -29,6 +30,8 @@ export const POST: RequestHandler = async ({ locals, request }) => {
     p_reservation_id: reservationId,
     p_notify_type: 'reservation_hold',
   })
+  // 예약신청접수 고객 푸시 병행 발송 (채팅과 독립 — 실패해도 위 처리에 영향 없음, 갭#1 수정 2026-08-09)
+  await sendReservationLifecyclePush(admin, reservationId, 'reservation_hold')
 
   return json({ ok: true })
 }

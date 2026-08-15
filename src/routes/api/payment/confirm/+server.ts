@@ -9,7 +9,7 @@ import { json } from '@sveltejs/kit'
 import { env } from '$env/dynamic/private'
 import { createClient } from '@supabase/supabase-js'
 import { getSupabaseUrl } from '$lib/env/supabasePublic'
-import { sendPaymentCompletedAdminPush } from '$lib/server/push'
+import { sendPaymentCompletedAdminPush, sendReservationLifecyclePush } from '$lib/server/push'
 import type { RequestHandler } from './$types'
 
 const TOSS_CONFIRM_URL = 'https://api.tosspayments.com/v1/payments/confirm'
@@ -152,6 +152,9 @@ export const POST: RequestHandler = async ({ request, locals }) => {
     })
     // 결제완료 관리자 푸시 병행 발송 (채팅과 독립 — 실패해도 위 처리에 영향 없음)
     await sendPaymentCompletedAdminPush(admin, reservationId, session.user.id, amount)
+    // 예약승인 고객 푸시 병행 발송 (기존엔 관리자 푸시만 있었음 — 실결제 자동승인 경로에
+    // 고객 FCM 푸시가 누락돼 있던 갭 수정, 2026-08-09)
+    await sendReservationLifecyclePush(admin, reservationId, 'reservation_approval')
   }
 
   return json({
