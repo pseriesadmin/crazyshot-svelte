@@ -5,6 +5,8 @@ import { createClient, type SupabaseClient } from '@supabase/supabase-js'
 import type { PageServerLoad, Actions } from './$types'
 import { invalidateProductSearchCache } from '$lib/server/searchEngine/adapters/productSearchIndex'
 import { buildComboCategoryCode, getRootCode } from '$lib/utils/comboCategoryCode'
+import { registerCrossLingualCandidatesFromParts } from '$lib/server/crossLingualSynonymScan'
+import { extractContentBlocksText } from '$lib/server/searchEngine/adapters/productSearchIndex'
 
 // rental_period_options / rental_method_options 는 database.ts 미등록 — 우회 헬퍼
 function untypedFrom(sb: SupabaseClient, table: string) {
@@ -436,6 +438,15 @@ export const actions: Actions = {
         await admin.from('products').update({ image_urls: movedUrls }).eq('id', product.id)
       }
     }
+
+    // §C-2: 이중언어 병기 패턴 학습 훅 (fire-and-forget — 등록 흐름 블록 금지)
+    // content_blocks(상품설명)도 포함 — updateSection('content') 경로와 스캔 범위 일치
+    registerCrossLingualCandidatesFromParts([
+      name,
+      brand,
+      product_caption,
+      extractContentBlocksText(content_blocks),
+    ]).catch(() => {})
 
     // 등록 완료 후 해당 상품 패널 자동 오픈
     // regWarn 파라미터가 있으면 products 페이지에서 경고 토스트 표시 (qr: QR생성 실패, inv: 재고생성 실패)

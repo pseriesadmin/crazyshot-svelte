@@ -8,6 +8,7 @@ import { getSupabaseUrl } from '$lib/env/supabasePublic'
 import { createClient } from '@supabase/supabase-js'
 import type { RequestHandler } from './$types'
 import type { CsRecordStatus } from '$lib/types/chat'
+import { registerCrossLingualCandidates } from '$lib/server/crossLingualSynonymScan'
 
 function getAdminClient() {
   const serviceRoleKey = env.SUPABASE_SERVICE_ROLE_KEY
@@ -118,6 +119,9 @@ export const POST: RequestHandler = async ({ params, request, locals }) => {
 
   const err = result.error as { message?: string } | null
   if (err) return json({ error: err.message }, { status: 500 })
+
+  // §C-4: CS 상담 요약 이중언어 병기 패턴 학습 훅 (fire-and-forget)
+  registerCrossLingualCandidates(summary).catch(() => {})
 
   return json({ record: result.data })
 }

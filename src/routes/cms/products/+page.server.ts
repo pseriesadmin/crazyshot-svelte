@@ -5,6 +5,7 @@ import { createClient, type SupabaseClient } from '@supabase/supabase-js'
 import type { PageServerLoad, Actions } from './$types'
 import { productSearchOrFilter } from '$lib/utils/similarNameSuggest'
 import { invalidateProductSearchCache, getProductSearchIndex } from '$lib/server/searchEngine/adapters/productSearchIndex'
+import { registerCrossLingualCandidatesFromParts } from '$lib/server/crossLingualSynonymScan'
 
 // 하이브리드 검색: ilike 결과 "약한 매칭" 기준 — 이 건수 이하면 NLSearch 자연어 폴백 실행
 // (nlsearch.md §2, /api/search/products 및 /api/cms/products/search-suggestions와 동일 임계값)
@@ -612,6 +613,9 @@ export const actions: Actions = {
         .eq('id', productId)
 
       if (updateError) return fail(500, { error: '수정에 실패했습니다.' })
+
+      // §C-2: 기본정보 저장 시 이중언어 병기 패턴 학습 훅 (fire-and-forget)
+      registerCrossLingualCandidatesFromParts([name, brand, caption]).catch(() => {})
     }
 
     if (sectionType === 'slug') {
@@ -782,6 +786,10 @@ export const actions: Actions = {
         .eq('id', productId)
 
       if (updateError) return fail(500, { error: '상품설명 수정에 실패했습니다.' })
+
+      // §C-2: 상품설명 저장 시 이중언어 병기 패턴 학습 훅 (fire-and-forget)
+      // blocksStr는 Tiptap JSON 원문 — 문자열에 포함된 "한글(영문)" 패턴도 추출 대상
+      registerCrossLingualCandidatesFromParts([keywords.join(' '), blocksStr]).catch(() => {})
     }
 
     if (sectionType === 'options') {

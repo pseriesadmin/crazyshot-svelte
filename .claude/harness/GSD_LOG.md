@@ -1,6 +1,37 @@
 # GSD_LOG.md — 크레이지샷 실행 이력
 # 형식: [YYYY-MM-DD HH:MM] 타입 | 태스크명 | 파일 | 소요 | 결과
 
+[2026-08-15] FIX | sp3-qa-agent 2차 검수 발견 3건 정리 | migration 252 + products/new/+page.server.ts + nlsearch.md | 완료
+  QA 2차 검수(MEDIUM 1건·LOW 2건) 즉시 반영. ① migration 252에 253/254와 동일한 ROLLBACK
+  주석 섹션 추가(SQL 주석만 추가, 이미 Stage+Production 적용된 DDL 자체는 무변경이라 재적용
+  불필요). ② products/new/+page.server.ts C-2 훅에 content_blocks(상품설명) 스캔 누락 수정 —
+  extractContentBlocksText() import 추가해 registerCrossLingualCandidatesFromParts 인자에 포함,
+  updateSection('content') 경로와 스캔 범위 일치시킴. ③ nlsearch.md §4-2 신설(재검색 행동학습
+  §G 요약) + "Stage DB 적용 대기" 등 배포완료 후에도 미갱신이던 문구 정정.
+  검증: svelte-check 신규 에러 0건(기존 무관 에러 1건 유지), 관련 유닛테스트 26/26 재통과.
+  GATE C: 자동 — 사소한 정합성 수정, 서비스 의도 변경 없음.
+
+[2026-08-15] DEPLOY | NLSearch 능동형 자연어 학습 — Migration 252·253·254 Stage+Production 양쪽 적용 완료 | supabase/migrations/20260815000252~254 | 완료
+  §A~§G 전체 구현(harness-executor, 아래 §G-1~§G-6 등 세부 로그 참고) 완료 후 GATE E 통과.
+  Stephen이 "Production DB 적용" 명시 승인 → 메인세션이 직접 Supabase MCP로 적용
+  (harness-executor는 Supabase MCP 도구 미보유라 파일 작성까지만 수행).
+  적용 순서: Stage(ezyvffjvuwmtuhpxdjrw) 3건 적용·검증(제약조건·RPC 호출·cron 등록 확인) →
+  Production(vnbpmvxruyciuuaermyh) 사전 의존성 확인(synonym_group_members·search_logs·
+  find_or_create_synonym_group·upsert_synonym_member·pg_cron 전부 기존 존재 확인) → 3건 순차 적용.
+  Production 검증: sgm_source_check 제약 4값 확인, search_reformulation_scan cron job
+  active=true 확인, run_search_reformulation_scan() 무오류 실행 확인, anon 실행권한 차단·
+  service_role만 허용 확인(Migration 251b 사례 재발 방지 차원에서 명시 재확인).
+  남은 것: 앱코드(TS/Svelte) 커밋·푸시는 Stephen 미지시 상태로 아직 미실행 — git status에
+  타 세션 미커밋 파일(구독·계약서 에디터) 혼재하므로 커밋 시 NLSearch 관련 파일만 선별 필요.
+  GATE E: 완료 — DB 양쪽 배포 완료. 커밋은 Stephen 직접 실행.
+
+[2026-08-15] ⚡GSD | §G-1: find_search_reformulation_pairs RPC 마이그레이션 253 | supabase/migrations/20260815000253_253_nlsearch_query_reformulation_rpc.sql | 소요: ~25분 | GATE C: BOUNDARY(자동) — LATERAL 자체 조인 오탐방지 7종 내장, 순수 SELECT
+[2026-08-15] ⚡GSD | §G-2: searchReformulationScan.ts 신설 | src/lib/server/searchReformulationScan.ts | 소요: ~25분 | GATE C: BOUNDARY(자동) — scanReformulationCandidates(), weight=1 query_reformulation, 에러 전파
+[2026-08-15] ⚡GSD | §G-3: scan-reformulations API + QnA 서브탭 버튼 배선 | src/routes/api/cms/synonyms/scan-reformulations/+server.ts + qna/+page.svelte | 소요: ~20분 | GATE C: BOUNDARY(자동) — manager+ 게이트, "재검색패턴 재스캔" 버튼 추가
+[2026-08-15] ⚡GSD | §G-4: source 배지 UI 4종 완성 | src/routes/cms/chat/qna/+page.svelte | 소요: ~15분 | GATE C: ROUTINE(자동) — cross_lingual_pattern·query_reformulation·learned·seed 4종 배지 색상 분리
+[2026-08-15] ⚡GSD | §G-6: pg_cron 자동 스케줄 + QnA UI 업데이트 | supabase/migrations/20260815000254_254_nlsearch_reformulation_cron.sql + src/routes/cms/chat/qna/+page.svelte | 소요: ~20분 | GATE C: BOUNDARY(자동) — run_search_reformulation_scan() PL/pgSQL + cron.schedule('0 3 * * *'), canonical=lower(), 중복방지 GROUP BY, session_key 저장 없음, 수동 버튼 유지 + "매일 새벽 3시 자동 스캔" 안내 추가. Stage/Production 미적용(파일 작성만) — Stage 적용은 Stephen 직접.
+[2026-08-15] 🔴TDD  | §G-5: find_search_reformulation_pairs 유닛테스트 6케이스 | src/__tests__/services/searchReformulationPairs.test.ts | 소요: ~20분 | GATE C: 자동 — 6/6 통과 (장치 1·2·3·5동일어·6+7·정상케이스)
+
 [2026-08-14] ⚡GSD | NOW-1 ROUTINE: /cms/subscriptions/new 코드분류 정렬버그 수정 | new/+page.server.ts | 소요: ~5분 | GATE C: ROUTINE(자동) — code_mapping_groups .order('name') 2차 정렬 추가, description/image_url INSERT 제거
 [2026-08-14] ⚡GSD | NOW-2 BOUNDARY: 구독 카드 /products 표준 그리드 패턴 재구성 | +page.svelte | 소요: ~20분 | GATE C: BOUNDARY(자동) — 썸네일 60×60·cat-badge·price-badge, image_urls→SubscriptionPlanRow 추가
 [2026-08-14] ⚡GSD | NOW-3 CRITICAL(DB): 상품설명 탭 신설 + Migration 248 | Migration 248, subscription.ts, SubscriptionDetailPanel.svelte, loadSelectedSubscriptionDetail.ts, +page.server.ts, new/+page.svelte | 소요: ~40분 | GATE C: CRITICAL — stage 마이그레이션 대기

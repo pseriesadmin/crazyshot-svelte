@@ -24,6 +24,10 @@ src/lib/server/searchEngine/
     koreanTokenizer.ts        한국어 조사 제거 + 초성 변환 순수 함수
     miniSearchProvider.ts     MiniSearch를 NaturalSearchProvider로 감싼 구현체 (현재 유일한 구현체)
     createIndex.ts            제네릭 인덱스 팩토리
+    crossLingualPatternExtractor.ts  이중언어 괄호패턴 추출 순수함수 (§B-1, 2026-08-15)
+                                      extractBilingualPairs(text) → {hangul, latin}[]
+    synonymExpander.ts        동의어 확장 순수함수 (§E-1, 2026-08-15)
+                                      expandQueryWithConfirmedSynonyms(query, groups) → string[]
     index.ts                  공개 export barrel — 이 폴더 전체가 이식/패키징 단위
 
   adapters/                 ← crazyshot DB 스키마를 core가 이해하는 문서 포맷으로 변환하는 접착 코드
@@ -55,10 +59,16 @@ import를 절대 포함하지 않는다 — 다른 협력 프로젝트로 폴더
 
 서버: src/routes/api/search/products/+server.ts
   1. search_products RPC(FTS+trgm+CTR 랭킹, 기존 자산)를 항상 1차 실행
-  2. RPC 결과가 WEAK_MATCH_THRESHOLD(3건) 이하일 때만 adapters/productSearchIndex.ts 자연어 폴백 실행
+  2. RPC 결과가 WEAK_MATCH_THRESHOLD(3건) 이하일 때 동의어 확장 + 자연어 폴백 실행:
+     2a. loadSynonymGroups() + expandQueryWithConfirmedSynonyms(q, groups) → 확장어 목록 추출
+     2b. 각 확장어로 search_products RPC 재조회 (세션/CTR 학습 제외, 결과 dedupe 병합)
+     2c. 여전히 부족하면 원래 쿼리 + 확장어 전부 MiniSearch 자연어 폴백 (adapters/productSearchIndex.ts)
+     2d. confirmed 동의어 그룹이 없거나 빈 배열이면 기존 동작과 100% 동일 (회귀 없음)
   3. product id 기준 dedupe, RPC 결과 항상 우선 — RPC를 대체하지 않고 보강만 함
   4. event.locals.safeGetSession()으로 로그인 세션 인식 → 로그인 고객 클릭이력이 CTR 개인화에 반영됨
      (FIX-2, 2026-08-06 — $lib/services/supabase anon 클라이언트로 세션 조회하던 과거 버그 수정됨)
+  §E-2 (2026-08-15): 동의어 확장 검색 연동 완료 — "소니" 검색 시 confirmed 그룹에 "Sony"가 있으면
+     Sony 상품이 RPC 재조회로 결과에 포함됨
 
 DB: supabase/migrations/20260806000198_198_products_search_vector_extend.sql
   search_vector 트리거가 name > brand·slug·product_caption > keywords·content_blocks > category
@@ -128,16 +138,27 @@ DB: supabase/migrations/20260806000198_198_products_search_vector_extend.sql
 
 ---
 
-## 4. 동의어 자동학습 (SYN 시리즈)
+## 4. 동의어 자동학습 (SYN 시리즈 + 2026-08-15 NLSearch 능동형 자연어 학습)
 
 ```
 파일: src/lib/server/synonymLearning.ts
 
-학습 트리거: 관리자가 빠른답변으로 "실제 발신"한 메시지의 직전 고객 메시지 토큰을 학습 후보로 기록
+학습 트리거 1 (기존): 관리자가 빠른답변으로 "실제 발신"한 메시지의 직전 고객 메시지 토큰을 학습 후보로 기록
   (선택만 하고 취소하면 학습 안 됨 — §3 참고)
 
+학습 트리거 2 (§C, 2026-08-15): 이중언어 병기 패턴 자동감지 (cross_lingual_pattern)
+  - 상품 등록/수정 시 name·brand·caption·keywords 텍스트에서 "소니(Sony)" 패턴 자동 추출
+  - 고객/관리자 채팅 메시지, CS 상담기록 저장 시 동일 패턴 감지
+  - 파일: src/lib/server/crossLingualSynonymScan.ts
+    registerCrossLingualCandidates(text)          — 단일 텍스트 처리, fire-and-forget
+    registerCrossLingualCandidatesFromParts(parts) — 여러 텍스트 조각 합산 처리
+  - weight=2 (upsert 2회): promote_threshold(기본 3) 대비 2번의 텍스트에서 관찰 시 자동 승격
+  - 배선 위치: products/new/+page.server.ts, products/+page.server.ts,
+               /api/chat/message, /api/chat/admin-reply, /api/chat/sessions/[id]/cs-record
+  - 모두 fire-and-forget (.catch(() => {})) — 기존 저장/발신 흐름 절대 블록 안 함
+
 핵심 함수:
-  recordSynonymLearning()   학습 기록 진입점 — 발신 성공 후 호출
+  recordSynonymLearning()   학습 기록 진입점(기존 트리거 1) — 발신 성공 후 호출
   loadSynonymGroups()       confirmed 동의어 그룹 로드 (TTL 60초 캐시, FIX-3)
   isSimilarTerm()           유사 후보 판정 — 길이비례 편집거리 공식(SYN-12):
                              maxAllowedDistance = floor((min(a.length,b.length)-1) / DIVISOR)
@@ -146,17 +167,61 @@ DB: supabase/migrations/20260806000198_198_products_search_vector_extend.sql
   getOccurrenceWeight()     usage_count 구간별 학습 가중치(SYN-11) — 사용 많은 빠른답변일수록 빨리 승격
   loadSynonymSettings()     아래 튜닝 테이블에서 파라미터 로드 (TTL 60초 캐시, fallback 하드코딩값)
 
-DB 테이블(전부 stage+production 적용 완료, 2026-08-06):
+DB 테이블(전부 stage+production 적용 완료):
   synonym_groups            (id, canonical_term, created_at) — migration 199
-  synonym_group_members     (id, group_id, term, source['seed'|'learned'], status['candidate'|'confirmed'],
-                              occurrence_count, first_observed_at, last_observed_at) — migration 199
+  synonym_group_members     (id, group_id, term, source, status, occurrence_count,
+                              first_observed_at, last_observed_at) — migration 199
+    source CHECK: 'seed' | 'learned' | 'cross_lingual_pattern' | 'query_reformulation'
+                  (migration 252에서 2개 추가 — Stage+Production 적용 완료, 2026-08-15)
+    status CHECK: 'candidate' | 'confirmed'
   synonym_learning_settings (싱글턴 1행, promote_threshold=3, similarity_edit_distance_divisor=3,
                               usage_weight_tiers jsonb) — migration 200, RLS service_role 전용,
                               Supabase 대시보드에서 직접 값 수정 → 코드 배포 없이 즉시(최대 60초) 반영
 
-RPC: find_or_create_synonym_group(p_canonical_term), upsert_synonym_member(p_group_id, p_term, p_threshold)
+RPC:
+  find_or_create_synonym_group(p_canonical_term text) → uuid
+  upsert_synonym_member(p_group_id uuid, p_term text, p_threshold int, p_source text DEFAULT 'learned')
+    (migration 252에서 p_source 파라미터 추가 — 3-param 오버로드 제거, 4-param DEFAULT 'learned'로 하위호환)
+
+관리 API (§D, 2026-08-15):
+  POST /api/cms/synonyms/backfill-cross-lingual (§D-1)
+    — products·chat_messages·cs_records 전체 순회, 500건 배치, 250초 타임아웃 가드
+    — manager 이상 게이트, 처리/등록 통계 응답
+  /cms/chat QnA 서브탭 "동의어 후보" (§D-2)
+    — source IN ('cross_lingual_pattern', 'query_reformulation') 후보 목록
+    — 수동 승격(→confirmed)/삭제 버튼, "병기패턴 재스캔" 버튼(D-1 호출)
+    — hasSettingsAccess(manager 이상) 게이트, 기존 QnA 서브탭에 통합(신규 라우트 없음)
 
 시드 데이터: '파손' 그룹 = {깨짐, 떨어짐, 파손, 부딪힘, 흠집, 균열} (전부 confirmed)
+```
+
+---
+
+## 4-2. 재검색 행동 학습 (§G, 2026-08-15 신설)
+
+```
+목적: 고객이 "소니"로 검색해 0건이 나오고 곧바로 "Sony"로 재검색해 결과를 찾는 행동을
+  동의어 후보 신호로 학습(cross_lingual_pattern과 달리 텍스트에 병기 표현이 없어도 학습 가능).
+
+DB: supabase/migrations/20260815000253_253_nlsearch_query_reformulation_rpc.sql
+  find_search_reformulation_pairs(p_lookback_days=30, p_window_seconds=120) — search_logs를
+  세션 단위 LATERAL 자체조인, 순수 SELECT(새 테이블·컬럼 없음)
+  오탐 방지 장치 7종: ①120초 시간창 ②원검색 result_count=0 ③재검색 result_count>0
+  ④직후 1건 한정 ⑤어휘 sanity(2~30자, 서로 다른 문자열) ⑥lookback 30일 ⑦세션 키 존재
+
+supabase/migrations/20260815000254_254_nlsearch_reformulation_cron.sql
+  run_search_reformulation_scan() — find_search_reformulation_pairs 결과를 GROUP BY로
+  집계해 find_or_create_synonym_group + upsert_synonym_member(source='query_reformulation',
+  weight=1, 기존 promote_threshold 재사용)로 등록하는 순수 SQL 오케스트레이션 함수.
+  pg_cron으로 매일 새벽 3시 자동 실행('search_reformulation_scan' job, migration 30/226과
+  동일 cron.schedule() 컨벤션) — Stage+Production 적용 완료, 2026-08-15.
+
+개인정보 원칙: session_key(세션/사용자 식별자)는 집계에도 최종 저장에도 사용하지 않음 —
+  synonym_group_members에는 검색어 텍스트(term)만 저장됨.
+
+관리자 수동 트리거(보조): src/lib/server/searchReformulationScan.ts (TS 경로, admin client) +
+  POST /api/cms/synonyms/scan-reformulations — /cms/chat QnA 서브탭 "재검색패턴 재스캔" 버튼.
+  자동(pg_cron 매일 새벽 3시)과 독립적으로 공존 — 관리자가 즉시 확인하고 싶을 때 사용.
 ```
 
 ---
@@ -187,6 +252,15 @@ RPC: find_or_create_synonym_group(p_canonical_term), upsert_synonym_member(p_gro
 
 ---
 
-*nlsearch.md v1.1 | Harness Flow v3.2 | 2026-08-06 신설(§A~§F) | 2026-08-07 갱신(§G~§J) —
+*nlsearch.md v1.3 | Harness Flow v3.2 | 2026-08-06 신설(§A~§F) | 2026-08-07 갱신(§G~§J) —
 H-1: components·specs 색인 추가 / J-2: 학습 기반 키워드 승격 / §I: 크레이지로그 검색엔진 신설
-(crazylogSearchIndex.ts + /api/search/crazylog + /crazylog/list 검색 UI + 17개 테스트 완료)*
+(crazylogSearchIndex.ts + /api/search/crazylog + /crazylog/list 검색 UI + 17개 테스트 완료) |
+2026-08-15 NLSearch 능동형 자연어 학습 §A~§G 완료, Stage+Production 배포 완료 —
+§A-1(migration 252): source CHECK 4값 + upsert_synonym_member 4-param,
+§B(crossLingualPatternExtractor.ts + 10개 테스트),
+§C(crossLingualSynonymScan.ts + 5개 훅 배선, content_blocks 포함),
+§D(backfill API + QnA 서브탭 통합),
+§E(synonymExpander.ts 순수함수 + 검색 API 동의어 확장 연동 + 10개 테스트),
+§F(nlsearch.md §1·§2·§4 갱신),
+§G(재검색 행동학습 — migration 253+254, pg_cron 매일 새벽 3시 자동 스캔 + 관리자 수동 재스캔
+버튼 병행, 오탐방지 7종, 유닛테스트 6건) — §4-2 신설*

@@ -2,16 +2,21 @@
   // /cms/chat/qna — 빠른답변(QnA) 관리 화면
   // master-detail 구조: /cms/reservation/contracts 패턴 참고
   import { goto, invalidateAll } from '$app/navigation'
+  import { enhance } from '$app/forms'
   import { page } from '$app/state'
   import CannedResponsePanel from '$lib/components/cms/CannedResponsePanel.svelte'
   import { csToast } from '$lib/utils/toast'
   import { CANNED_RESPONSE_CATEGORIES, getCategoryLabel } from '$lib/constants/cannedResponseCategories'
   import { hasSettingsAccess } from '$lib/utils/cmsPermissions'
   import type { PageData } from './$types'
-  import type { CannedResponseRow } from './+page.server'
+  import type { CannedResponseRow, SynonymCandidateRow } from './+page.server'
 
   interface Props { data: PageData }
   let { data }: Props = $props()
+
+  // 탭 상태 — 빠른답변(qna) | 동의어 후보(candidates)
+  type ActiveTab = 'qna' | 'candidates'
+  let activeTab = $state<ActiveTab>('qna')
 
   // 로컬 UI 상태
   let showNew      = $state(false)
@@ -22,10 +27,16 @@
   let autoReply    = $state(data.autoReplyEnabled)
   let isTogglingAR = $state(false)
 
+  // §D-2: 병기패턴 재스캔 상태
+  let isRescanning = $state(false)
+  // §G-3: 재검색패턴 재스캔 상태
+  let isReformulationScanning = $state(false)
+
   // autoReply를 data 갱신과 동기화
   $effect(() => { autoReply = data.autoReplyEnabled })
 
   const canManageAR = $derived(hasSettingsAccess(data.cmsRole ?? ''))
+  const canManageCandidates = $derived(hasSettingsAccess(data.cmsRole ?? ''))
 
   // 필터·검색·정렬된 목록
   const filteredItems = $derived.by<CannedResponseRow[]>(() => {
@@ -105,12 +116,110 @@
   function formatDate(iso: string): string {
     return iso.slice(0, 10)
   }
+
+  // §D-2: 병기패턴 재스캔 — backfill API 호출
+  async function rescanCrossLingual(): Promise<void> {
+    if (isRescanning) return
+    isRescanning = true
+    try {
+      const res = await fetch('/api/cms/synonyms/backfill-cross-lingual', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({}),
+      })
+      const d = await res.json().catch(() => ({})) as {
+        pairsRegistered?: number
+        timed_out?: boolean
+        message?: string
+        error?: string
+      }
+      if (!res.ok) {
+        csToast.error(d.error ?? '재스캔 실패')
+        return
+      }
+      const pairs = d.pairsRegistered ?? 0
+      const note = d.timed_out ? ' (시간 초과 — 부분 완료)' : ''
+      csToast.success(`병기패턴 재스캔 완료: ${pairs}건 등록${note}`)
+      await invalidateAll()
+    } catch {
+      csToast.error('네트워크 오류')
+    } finally {
+      isRescanning = false
+    }
+  }
+
+  // §G-3: 재검색패턴 재스캔 — scan-reformulations API 호출
+  async function rescanReformulation(): Promise<void> {
+    if (isReformulationScanning) return
+    isReformulationScanning = true
+    try {
+      const res = await fetch('/api/cms/synonyms/scan-reformulations', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({}),
+      })
+      const d = await res.json().catch(() => ({})) as {
+        totalPairs?: number
+        registeredPairs?: number
+        elapsed_s?: number
+        message?: string
+        error?: string
+      }
+      if (!res.ok) {
+        csToast.error(d.error ?? '재스캔 실패')
+        return
+      }
+      const registered = d.registeredPairs ?? 0
+      csToast.success(`재검색패턴 재스캔 완료: ${registered}건 등록`)
+      await invalidateAll()
+    } catch {
+      csToast.error('네트워크 오류')
+    } finally {
+      isReformulationScanning = false
+    }
+  }
+
+  // §G-4: 출처 배지 라벨 — 4종 전부 표시
+  function sourceLabel(source: string): string {
+    if (source === 'cross_lingual_pattern') return '병기패턴'
+    if (source === 'query_reformulation') return '재검색패턴'
+    if (source === 'learned') return '학습'
+    if (source === 'seed') return '시드'
+    return source
+  }
+
+  function statusLabel(status: string): string {
+    if (status === 'pending') return '대기'
+    if (status === 'confirmed') return '확정'
+    if (status === 'rejected') return '거부'
+    return status
+  }
 </script>
 
 <svelte:head><title>QnA — CrazyShot CMS</title></svelte:head>
 
 <div class="qna-page">
   <div class="qna-card">
+
+  <!-- §D-2: 탭 스위처 — 빠른답변 | 동의어 후보 -->
+  <div class="tab-bar-nav" role="tablist" aria-label="QnA 탭">
+    <button
+      class="tab-nav-btn"
+      class:tab-active={activeTab === 'qna'}
+      role="tab"
+      aria-selected={activeTab === 'qna'}
+      onclick={() => { activeTab = 'qna'; showNew = false }}
+    >빠른답변 <span class="tab-count">{data.items.length}</span></button>
+    <button
+      class="tab-nav-btn"
+      class:tab-active={activeTab === 'candidates'}
+      role="tab"
+      aria-selected={activeTab === 'candidates'}
+      onclick={() => { activeTab = 'candidates'; showNew = false }}
+    >동의어 후보 <span class="tab-count">{data.synonymCandidates.length}</span></button>
+  </div>
+
+  {#if activeTab === 'qna'}
   <!-- 툴바 -->
   <div class="toolbar">
       <div class="toolbar-left">
@@ -257,6 +366,124 @@
       {/if}
     </div>
   </div>
+  {/if}
+
+  {#if activeTab === 'candidates'}
+  <!-- §D-2: 동의어 후보 관리 탭 -->
+  <div class="cand-toolbar">
+    <div class="toolbar-left">
+      <h2 class="page-title">동의어 후보</h2>
+      <span class="count-badge">{data.synonymCandidates.length}건</span>
+    </div>
+    <div class="toolbar-right">
+      <!-- §G-6: 재검색패턴 재스캔 — 매일 새벽 3시 자동 실행, 수동 즉시 트리거 가능 -->
+      <div class="scan-group">
+        <span class="scan-auto-label">매일 새벽 3시 자동 스캔</span>
+        <button
+          class="cta-btn cta-secondary"
+          onclick={rescanReformulation}
+          disabled={isReformulationScanning || isRescanning}
+          title="search_logs에서 '원 검색 0건→재검색 성공' 쌍을 추출합니다 (자동: 매일 새벽 3시)"
+        >{isReformulationScanning ? '스캔 중…' : '지금 바로 재검색패턴 재스캔'}</button>
+      </div>
+      <!-- 병기패턴 재스캔 -->
+      <button
+        class="cta-btn"
+        onclick={rescanCrossLingual}
+        disabled={isRescanning || isReformulationScanning}
+        title="상품·채팅·CS 기록에서 이중언어 병기패턴을 다시 스캔합니다"
+      >{isRescanning ? '스캔 중…' : '병기패턴 재스캔'}</button>
+    </div>
+  </div>
+
+  <div class="cand-body">
+    {#if data.synonymCandidates.length === 0}
+      <div class="cand-empty">
+        <p>아직 등록된 동의어 후보가 없습니다.</p>
+        <p class="cand-empty-sub">"병기패턴 재스캔" 또는 "재검색패턴 재스캔" 버튼을 누르거나, 상품 등록·채팅 발송 후 자동으로 수집됩니다.</p>
+      </div>
+    {:else}
+      <div class="cand-table-wrap">
+        <table class="cand-table">
+          <thead>
+            <tr>
+              <th>동의어 그룹</th>
+              <th>후보어</th>
+              <th>출처</th>
+              <th>발생</th>
+              <th>상태</th>
+              <th>등록일</th>
+              {#if canManageCandidates}<th>액션</th>{/if}
+            </tr>
+          </thead>
+          <tbody>
+            {#each data.synonymCandidates as row (row.id)}
+              <tr class="cand-row" class:cand-confirmed={row.status === 'confirmed'}>
+                <td class="cand-group">{row.canonical_term}</td>
+                <td class="cand-term">{row.term}</td>
+                <td>
+                  <span class="src-badge src-{row.source}">
+                    {sourceLabel(row.source)}
+                  </span>
+                </td>
+                <td class="cand-count">{row.occurrence_count}</td>
+                <td>
+                  <span class="status-badge status-{row.status}">
+                    {statusLabel(row.status)}
+                  </span>
+                </td>
+                <td class="cand-date">{formatDate(row.created_at)}</td>
+                {#if canManageCandidates}
+                  <td class="cand-actions">
+                    {#if row.status !== 'confirmed'}
+                      <form
+                        method="POST"
+                        action="?/promoteCandidate"
+                        use:enhance={() => {
+                          return async ({ result, update }) => {
+                            if (result.type === 'success') {
+                              csToast.success(`"${row.term}" 확정 완료`)
+                              await invalidateAll()
+                            } else {
+                              csToast.error('승급 실패')
+                            }
+                            await update()
+                          }
+                        }}
+                      >
+                        <input type="hidden" name="id" value={row.id} />
+                        <button type="submit" class="act-confirm-btn" title="confirmed로 승급">확정</button>
+                      </form>
+                    {/if}
+                    <form
+                      method="POST"
+                      action="?/deleteCandidateMember"
+                      use:enhance={() => {
+                        return async ({ result, update }) => {
+                          if (result.type === 'success') {
+                            csToast.success(`"${row.term}" 삭제`)
+                            await invalidateAll()
+                          } else {
+                            csToast.error('삭제 실패')
+                          }
+                          await update()
+                        }
+                      }}
+                    >
+                      <input type="hidden" name="id" value={row.id} />
+                      <button type="submit" class="act-del" title="후보 삭제" aria-label="삭제">✕</button>
+                    </form>
+                  </td>
+                {/if}
+              </tr>
+            {/each}
+          </tbody>
+        </table>
+      </div>
+    {/if}
+  </div>
+  {/if}
+
   </div>
 </div>
 
@@ -476,6 +703,14 @@
     flex-shrink: 0;
   }
   .cta-btn:hover { background: var(--cs-purple-hover, #2e2468); }
+  /* 보조 CTA: 테두리형 */
+  .cta-btn.cta-secondary {
+    background: var(--cs-white);
+    border: 1.5px solid var(--cs-purple);
+    color: var(--cs-purple);
+  }
+  .cta-btn.cta-secondary:hover { background: rgba(59,47,138,0.06); }
+  .cta-btn:disabled { opacity: 0.5; cursor: not-allowed; }
 
   .cancel-btn {
     height: 36px;
@@ -639,5 +874,248 @@
     font: 400 14px/1.7 'Noto Sans KR', sans-serif;
     color: var(--cs-text-light, #aaa);
     margin: 0;
+  }
+
+  /* ── §D-2: 탭 스위처 ── */
+  .tab-bar-nav {
+    display: flex;
+    gap: 0;
+    border-bottom: 2px solid var(--cs-lilac);
+    flex-shrink: 0;
+    background: var(--cs-white);
+    padding: 0 20px;
+  }
+
+  .tab-nav-btn {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    height: 46px;
+    padding: 0 18px;
+    border: none;
+    border-bottom: 2px solid transparent;
+    margin-bottom: -2px;
+    background: transparent;
+    font: 700 14px/1 'Noto Sans KR', sans-serif;
+    color: var(--cs-text-mid, #666);
+    cursor: pointer;
+    transition: color 0.15s, border-color 0.15s;
+  }
+  .tab-nav-btn:hover { color: var(--cs-purple); }
+  .tab-nav-btn.tab-active {
+    color: var(--cs-purple);
+    border-bottom-color: var(--cs-purple);
+  }
+
+  .tab-count {
+    height: 18px;
+    padding: 0 6px;
+    background: var(--cs-lilac);
+    border-radius: var(--radius-full, 99px);
+    font: 700 10px/18px 'Noto Sans KR', sans-serif;
+    color: var(--cs-text-mid, #666);
+  }
+  .tab-nav-btn.tab-active .tab-count {
+    background: rgba(59,47,138,0.12);
+    color: var(--cs-purple);
+  }
+
+  /* §G-6: 재검색패턴 자동 스캔 안내 그룹 */
+  .scan-group {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 3px;
+  }
+
+  .scan-auto-label {
+    font: 400 11px/1 'Noto Sans KR', sans-serif;
+    color: var(--cs-text-light, #aaa);
+    white-space: nowrap;
+  }
+
+  /* ── §D-2: 동의어 후보 탭 ── */
+  .cand-toolbar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    padding: 14px 24px;
+    flex-shrink: 0;
+    border-bottom: 1px solid var(--cs-lilac);
+    background: var(--cs-white);
+  }
+
+  .cand-body {
+    flex: 1;
+    overflow: auto;
+    padding: 16px 24px;
+    background: var(--cs-surface-gray, #f6f6f6);
+  }
+
+  .cand-empty {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: 60px 20px;
+    text-align: center;
+  }
+  .cand-empty p {
+    font: 700 14px/1.5 'Noto Sans KR', sans-serif;
+    color: var(--cs-text-mid, #666);
+    margin: 0;
+  }
+  .cand-empty-sub {
+    font: 400 13px/1.6 'Noto Sans KR', sans-serif !important;
+    color: var(--cs-text-light, #aaa) !important;
+    margin-top: 6px !important;
+  }
+
+  .cand-table-wrap {
+    background: var(--cs-white);
+    border-radius: var(--radius-sm);
+    border: 1px solid var(--cs-lilac);
+    overflow: auto;
+  }
+
+  .cand-table {
+    width: 100%;
+    border-collapse: collapse;
+    font: 400 13px/1.4 'Noto Sans KR', sans-serif;
+    color: var(--cs-text);
+  }
+
+  .cand-table th {
+    padding: 10px 14px;
+    background: var(--cs-surface-gray, #f6f6f6);
+    font: 700 12px/1 'Noto Sans KR', sans-serif;
+    color: var(--cs-text-mid, #666);
+    text-align: left;
+    border-bottom: 1px solid var(--cs-lilac);
+    white-space: nowrap;
+  }
+
+  .cand-table td {
+    padding: 10px 14px;
+    border-bottom: 1px solid var(--cs-lilac);
+    vertical-align: middle;
+  }
+
+  .cand-row:last-child td { border-bottom: none; }
+  .cand-row:hover td { background: rgba(59,47,138,0.02); }
+  .cand-confirmed td { opacity: 0.6; }
+
+  .cand-group {
+    font: 700 13px/1.4 'Noto Sans KR', sans-serif;
+    color: var(--cs-dark);
+  }
+
+  .cand-term {
+    font: 400 13px/1.4 'Noto Sans KR', sans-serif;
+    color: var(--cs-text);
+  }
+
+  .cand-count {
+    text-align: center;
+    font: 700 13px/1 'Noto Sans KR', sans-serif;
+    color: var(--cs-purple);
+  }
+
+  .cand-date {
+    font: 400 12px/1 'Noto Sans KR', sans-serif;
+    color: var(--cs-text-light, #aaa);
+    white-space: nowrap;
+  }
+
+  /* 출처 배지 */
+  .src-badge {
+    display: inline-block;
+    height: 20px;
+    padding: 0 8px;
+    border-radius: var(--radius-full, 99px);
+    font: 700 11px/20px 'Noto Sans KR', sans-serif;
+    white-space: nowrap;
+  }
+  .src-cross_lingual_pattern {
+    background: rgba(59,47,138,0.10);
+    color: var(--cs-purple);
+  }
+  .src-query_reformulation {
+    background: rgba(255,69,0,0.10);
+    color: var(--cs-orange, #FF4500);
+  }
+  /* §G-4: learned·seed 출처 배지 */
+  .src-learned {
+    background: rgba(40,167,69,0.10);
+    color: #228b3b;
+  }
+  .src-seed {
+    background: rgba(100,100,100,0.10);
+    color: var(--cs-text-mid, #666);
+  }
+
+  /* 상태 배지 */
+  .status-badge {
+    display: inline-block;
+    height: 20px;
+    padding: 0 8px;
+    border-radius: var(--radius-full, 99px);
+    font: 700 11px/20px 'Noto Sans KR', sans-serif;
+    white-space: nowrap;
+  }
+  .status-pending {
+    background: rgba(220,220,220,0.5);
+    color: var(--cs-text-mid, #666);
+  }
+  .status-confirmed {
+    background: rgba(40,167,69,0.12);
+    color: #228b3b;
+  }
+  .status-rejected {
+    background: rgba(220,53,69,0.10);
+    color: #c0392b;
+  }
+
+  /* 액션 버튼 */
+  .cand-actions {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+
+  .act-confirm-btn {
+    height: 26px;
+    padding: 0 10px;
+    background: var(--cs-purple);
+    border: none;
+    border-radius: var(--radius-sm);
+    font: 700 11px/1 'Noto Sans KR', sans-serif;
+    color: var(--cs-white);
+    cursor: pointer;
+    transition: background 0.15s;
+  }
+  .act-confirm-btn:hover { background: var(--cs-purple-hover, #2e2468); }
+
+  /* CMS 표준 삭제 아이콘 버튼 (act-del) */
+  .act-del {
+    width: 26px;
+    height: 26px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: transparent;
+    border: none;
+    border-radius: var(--radius-sm);
+    font: 700 12px/1 'Noto Sans KR', sans-serif;
+    color: var(--cs-text-mid, #666);
+    cursor: pointer;
+    transition: background 0.15s, color 0.15s;
+    min-width: 26px;
+    min-height: 26px;
+  }
+  .act-del:hover {
+    background: rgba(220,53,69,0.10);
+    color: var(--cs-red-badge, #FF3535);
   }
 </style>
