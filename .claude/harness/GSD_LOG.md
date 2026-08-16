@@ -1,6 +1,22 @@
 # GSD_LOG.md — 크레이지샷 실행 이력
 # 형식: [YYYY-MM-DD HH:MM] 타입 | 태스크명 | 파일 | 소요 | 결과
 
+[2026-08-16] GSD | 셀병합 아이콘 재라벨링 + A4폭맞춤·A4출력·확대축소 신규개발 | ContractSpreadsheetEditor.svelte, spreadsheetWidgetAdapter.ts, spreadsheetWidgetAdapter.test.ts | 완료
+  Stephen 제보: "셀 병합 기능이 없으며 일부 기능도 누락 의심 — 원본 오픈소스와 비교 확인
+  후 추가. A4 출력·A4 용지맞춤·확대축소 메뉴도 추가." jspreadsheet-ce 압축 번들 소스를
+  직접 grep해 기본 툴바 전체를 확인 — 병합 기능은 이미 있었고(setMerge/removeMerge 호출)
+  기본 아이콘이 "web"(지구본)이라 못 알아본 것뿐(다른 누락 기능 없음, 배열 끝까지 확인).
+  toolbar 옵션을 함수형으로 바꿔 그 항목만 아이콘/툴팁 교체(로직 재구현 없음). A4 폭맞춤은
+  기존 fitColumnWidthsToTarget() 재사용해 ws.setWidth()로 재적용하는 버튼 신설. A4 출력은
+  고객화면과 동일한 renderSpreadsheetToHtml() 재사용해 새 창에 띄우고 인쇄(이미지 로드 대기
+  포함). 확대축소는 ContractDocumentEditor.svelte의 기존 CSS zoom 패턴을 그대로 이식.
+  ⚠️ 구현 중 함정: document.write()로 style 태그 문자열을 조립했더니 Svelte 컴파일러가
+  script 안의 그 리터럴 텍스트를 실제 최상위 스타일 블록으로 오인해 CSS 파싱 에러 —
+  DOM API(createElement+textContent)로 교체해 해결.
+  JssWorksheetInstance에 setWidth 추가(기존 테스트 목업도 갱신). toolbar 콜백은 unknown
+  경유 캐스팅으로 처리(any 미사용, H-06 준수).
+  검증: svelte-check 신규 에러 0건, vitest 3개 파일 73/73 통과, build 성공.
+
 [2026-08-16] GSD | 이미지 레이어 선택·드래그이동·삭제 신규개발 + 다른 세션 부분커밋 발견 | sheet-format.ts, ContractSpreadsheetEditor.svelte, spreadsheetRender.ts, spreadsheetRender.test.ts | 완료
   Stephen 요청: "이미지 선택해 이동 가능하게, 선택 시 우측 상단에 삭제버튼." 기존
   `pointer-events:none`이던 이미지를 자체 이벤트를 받는 `<div class="cse-cell-image-wrap">`
@@ -337,6 +353,50 @@
   특히 `/cms/set/rental`류처럼 locals.supabase(로그인만 하면 되는 일반 authenticated) 로
   CMS 전용 기능을 호출하는 패턴이 내부적으로 is_cms_user() 등 자체 검증을 하는지 함수 본문
   단위로 확인 필요.
+
+[2026-08-15] 🔴CRITICAL(장애복구) | migration 263 회귀 2건 실서비스 500 오류 즉시 복구 | migration 270·271(Stage+Production) | 완료
+  배경: Stephen이 실서버(https://crazyshot-svelte.vercel.app/cms/rental/history) 콘솔에서
+  `GET /api/cms/product-history?product_ids=... 500` 오류를 직접 제보.
+  원인 재확인: migration 263 감사 당시 "admin.rpc(" / "locals.supabase.rpc(" 리터럴 문자열
+  grep만 사용 — src/routes/api/cms/product-history/+server.ts가 `const sb: AnyClient =
+  locals.supabase; ... sb.rpc(...)` 처럼 변수에 먼저 담아 재사용하는 간접참조 패턴이라
+  감사에서 누락됨. get_product_history/get_product_history_multi/
+  upsert_product_history_record/delete_product_history_record 4개가 CMS 로그인 세션으로
+  직접 호출되고 있었는데 263이 authenticated 권한을 잘못 회수해 즉시 장애로 이어짐.
+  즉시 조치: Stage→Production 순 GRANT 복구(4개 함수) 후 has_function_privilege로 검증.
+  재발방지 재감사: "locals.supabase"가 어떤 변수명으로든 할당되는 패턴을 코드베이스 전체에서
+  정규식으로 재탐색(변수 별칭 포함) + 나머지 65개 함수의 모든 `.rpc(` 호출부를 리시버 변수명과
+  함께 전수 나열해 하나하나 service_role 여부 재확인. 추가로 get_promotion_analytics
+  (src/routes/cms/promotion/analytics/+page.server.ts, `const db = locals.supabase`)도 동일
+  패턴으로 발견 — 배포 전 선제 복구(migration 271). 나머지는 전부 `admin()`/`db()` 팩토리
+  함수(SUPABASE_SERVICE_ROLE_KEY 사용 확인됨) 또는 명시적 admin 변수로 정상 확인.
+  부수 확인: 동시에 제보된 `/api/cms/reservations/16/tracking 404`는 별건 — 해당 라우트
+  커밋(c27552b)이 현재 Production에 배포된 커밋(40630ab, svelte-sonner 빌드실패로 재배포
+  두 차례 무산)보다 이후 커밋이라 아직 한 번도 배포된 적 없어 발생. 이번 세션 svelte-sonner
+  수정 배포 시 자동 해소 예상.
+  마이그레이션 번호 재조정: 264/265로 처음 생성했으나 이미 다른 세션(spreadsheet/coupon/
+  rental_tracking)이 선점 — 실제 저장소 전체 최댓값(269) 확인 후 270/271로 재배치.
+  **번호 충돌 반복 확인됨(2회) — 여러 세션이 병행 작업 중이라 마이그레이션 번호 선점 경합이
+  상시 발생하는 상태. 신규 마이그레이션 작성 전 `ls supabase/migrations/ | grep -oP
+  '(?<=_)\d{3}(?=_)' | sort -n | tail -1`로 최댓값 확인 후 번호 부여 필수.**
+
+[2026-08-16] 🔴CRITICAL(장애복구) | migration 263 회귀 3번째 사례 — @sp3-qa-agent 재검수로 발견·복구 | migration 272(Stage+Production) | 완료
+  배경: 270/271 복구 후 "나머지 65개 함수는 admin/db 리시버 변수명 기준 전수 확인해 전부
+  정상"이라는 결론을 @sp3-qa-agent에게 독립 재검증 요청 — 그 전제 자체가 틀렸음을 발견.
+  원인: `src/routes/cms/promotion/segment/+page.server.ts`,
+  `src/routes/api/cms/segment/refresh/+server.ts` 둘 다 `const admin = locals.supabase`처럼
+  변수명은 admin이지만 실제로는 authenticated 세션 — 리시버 변수명이 admin/db이면
+  service_role일 것이라 가정한 재감사 방법론 자체의 허점(이름이 아니라 할당 우변을 추적해야
+  정확함을 QA가 지적).
+  영향: get_segment_stats/get_segment_users/refresh_user_segments 3개 authenticated 회수
+  상태로 남아 `/cms/promotion/segment` 화면·세그먼트 새로고침 API 장애 — 둘 다 서버측
+  cms_role 체크 존재 확인(segment/refresh 명시적 체크, segment 페이지는 /cms/+layout.server.ts
+  게이트) → authenticated 복구가 보안 회귀 아님, 순수 가용성 회귀. Stage→Production 즉시
+  적용·has_function_privilege 검증 완료.
+  브라우저 클라이언트($lib/services/supabase) 직접 .rpc() 호출 사각지대는 QA가 별도 확인해
+  0건 — 이 방향은 안전.
+  **재발방지 원칙 확정**: 이후 authenticated 재점검 시 리시버 변수명이 아니라 할당 우변
+  (locals.supabase 원본 여부)을 반드시 추적할 것 — 변수명 기반 판단은 신뢰 불가로 결론.
 
 [2026-08-15] 🔴CRITICAL(보안) | authenticated 레벨 관리자 전용 RPC 접근 점검·차단 (migration 262 후속, Stephen 지시) | migration 263(Stage+Production) | 완료
   배경: migration 262가 남긴 "남은 과제" — authenticated(로그인만 한 일반 고객)로 관리자 전용
