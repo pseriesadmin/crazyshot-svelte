@@ -13,6 +13,7 @@ import ts from 'typescript-eslint';
 import security from 'eslint-plugin-security';
 import svelteParser from 'svelte-eslint-parser';
 import sveltePlugin from 'eslint-plugin-svelte';
+import globals from 'globals';
 
 const commonRules = {
   // H-03: any 타입 금지
@@ -41,6 +42,10 @@ const commonRules = {
   'security/detect-eval-with-expression': 'error',
   'security/detect-non-literal-regexp': 'warn',
   'security/detect-object-injection': 'warn',
+  // 2026-08-17: no-undef은 타입 전용 전역(예: ImageBitmapSource 등 lib.dom.d.ts 타입 별칭)까지
+  // "정의되지 않음"으로 오탐하고, 실제 미정의 참조는 이미 TypeScript 컴파일러(tsc/svelte-check)가
+  // 잡아낸다 — typescript-eslint 공식 권장대로 비활성화.
+  'no-undef': 'off',
 };
 
 export default [
@@ -49,9 +54,15 @@ export default [
     ignores: [
       'node_modules/',
       '.svelte-kit/',
+      '.vercel/',
       'build/',
       'dist/',
       '*.config.js',
+      // 2026-08-17: 저장소 안에 남는 git worktree(.claude/worktrees/**)·로컬 Vercel 빌드 산출물
+      // (.vercel/output, 번들된 서버 청크)·벤더 번들이 `npm run lint`(eslint .) 실행 시 함께
+      // 스캔돼 수만 건의 가짜 문제를 만들어냄
+      '.claude/worktrees/**',
+      '**/*.min.js',
       // S1-M? 채팅 모듈 — RPC 마이그레이션 완료 후 별도 커밋 시 ignore 제거
       'src/lib/components/chat/**',
       'src/routes/api/chat/**',
@@ -89,39 +100,10 @@ export default [
       parserOptions: {
         parser: ts.parser,
       },
+      // 2026-08-17: 수동으로 나열하던 DOM 전역 목록(FocusEvent/HTMLImageElement/ClipboardEvent/
+      // AbortController 등 누락)을 globals 패키지의 표준 browser 세트로 교체 — no-undef 오탐 66건 해소
       globals: {
-        window: 'readonly',
-        document: 'readonly',
-        console: 'readonly',
-        alert: 'readonly',
-        confirm: 'readonly',
-        history: 'readonly',
-        sessionStorage: 'readonly',
-        localStorage: 'readonly',
-        setTimeout: 'readonly',
-        clearTimeout: 'readonly',
-        URLSearchParams: 'readonly',
-        Event: 'readonly',
-        HTMLSelectElement: 'readonly',
-        HTMLFormElement: 'readonly',
-        HTMLInputElement: 'readonly',
-        HTMLButtonElement: 'readonly',
-        HTMLElement: 'readonly',
-        KeyboardEvent: 'readonly',
-        URL: 'readonly',
-        fetch: 'readonly',
-        Response: 'readonly',
-        Request: 'readonly',
-        HTMLCanvasElement: 'readonly',
-        HTMLDivElement: 'readonly',
-        FormData: 'readonly',
-        File: 'readonly',
-        FileList: 'readonly',
-        DragEvent: 'readonly',
-        MouseEvent: 'readonly',
-        requestAnimationFrame: 'readonly',
-        cancelAnimationFrame: 'readonly',
-        performance: 'readonly',
+        ...globals.browser,
       },
     },
     plugins: {
