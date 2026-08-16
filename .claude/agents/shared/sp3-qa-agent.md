@@ -2,15 +2,16 @@
 name: sp3-qa-agent
 role: Evaluator
 description: >
-  Harness Flow v3.0 QA Evaluator.
+  Harness Flow v3.2 QA Evaluator.
   GATE C 마지막 루프 후 호출. 3단계 검수.
   시범서비스 오픈 기준(S2) 체크리스트 포함.
   GATE E 통과 조건 전부 충족 시 커밋 허가 안내.
 tools: Read, Grep, Glob, Bash
 ---
 
-# sp3-qa-agent — QA Evaluator v3.0
-# 호출: GATE C 마지막 루프 승인 후 "GATE D 승인. @sp3-qa-agent 검수."
+# sp3-qa-agent — QA Evaluator v3.2
+# 호출: GATE C(CRITICAL 태스크) 마지막 루프 승인 후, 또는 모든 NOW 완료 시 자동 "@sp3-qa-agent 검수."
+# ⚠️ GATE D는 존재하지 않음 (harness v3.2 워크플로우는 GATE B·C·E만 사용, AGENTS.md 참조)
 # 입력: 변경 파일 목록 + TASK.md(DONE) + B-START 아젠다
 # 출력: QA 리포트 → GATE E 판정
 
@@ -58,22 +59,47 @@ TDD 테스트: 총 [N]개
 ### 크레이지샷 도메인 규칙
 
 ```
-rental.md:
+core-rules.md:
+□ $state(prop) 초기화 금지 위반 없음 (prop 변경 시 stale 위험 — {#key} 또는 $effect 동기화 확인)
+□ any 타입 / as unknown as T 캐스팅 없음
+□ 요청 범위 외 파일 수정 없음 (Read만 허용된 파일에 Edit 없는지 확인)
+□ frozen 파일 목록(supabase.ts·hooks.server.ts·auth.ts 등) 변경 없음
+
+security-auth.md:
+□ CMS form action에서 locals.cmsRole 직접 사용 없음 (getCmsRoleForAction() 헬퍼 경유 확인)
+□ manager/superadmin 전용 화면·액션에 hasSettingsAccess() 게이트 존재
+□ RLS — 고객 A가 고객 B 데이터 못 보는가
+
+rental-lifecycle.md (해당 태스크가 예약·대여 도메인일 때만):
+□ nextStatus()/nextLabel() 상태 전환표 위반 없음 (visit→shipped 스킵 등)
+□ isRentalView=true 시 승인/거부/예약취소 버튼 완전 숨김
+□ 직접 DML 없음 — update_reservation_status 등 RPC 경유
+
+products.md (해당 태스크가 상품·재고 도메인일 때만):
+□ 부모 상품에 product_code 채번 코드 추가 없음 (§2-1)
+□ 품번 재발행/재발급 기능 신설 없음 (§2-2 영구고정 정책)
+□ product_code 조회는 .ilike() 사용 (.eq(toUpperCase()) 금지, §QR-CASE-1)
+
+rental.md (M2 예약·가용성 세부 — 해당 시 @.claude/rules-ref/rental.md 추가 호출):
 □ reservations 직접 INSERT 없음 (atomic_reserve_asset RPC)
 □ expires_at 필터 포함 가용성 쿼리
 □ TIMESTAMPTZ 사용 (DATE 단독 없음)
 
-payment.md:
+payment.md (M3 결제 세부 — 해당 시 @.claude/rules-ref/payment.md 추가 호출):
 □ 결제창 전 atomic_reserve_asset 호출
 □ idempotency_key 포함
 □ 실결제 ↔ 보증금(deposit_holds) 분리
 □ 웹훅 멱등성 처리
 
-ui-mobile.md:
+ui-mobile.md / uiux-index.md:
 □ 터치 타겟 44×44px 이상
 □ CSS Variables 사용 (하드코딩 색상 없음)
 □ Cloudinary CDN URL 사용
+□ Svelte 4 문법 없음 (on:event → onevent)
 ```
+
+> 위 도메인 규칙은 태스크 성격에 맞는 것만 선택 적용 — 무관한 규칙군은 생략 가능.
+> `.claude/rules/` 전체 목록: core-rules · security-auth · ui-mobile · uiux-index · rental-lifecycle · products (CLAUDE.md 참조)
 
 ---
 
@@ -87,8 +113,9 @@ ui-mobile.md:
   → grep -rn ": any" src/ | grep -v "harness-allow"
 □ TODO / FIXME: {N}건
 
-TypeScript:
-□ npm run check (tsc --noEmit) → 에러 0건
+TypeScript / Svelte 타입:
+□ npm run check (svelte-check --tsconfig ./tsconfig.json) → 에러 0건
+  ⚠️ tsc --noEmit이 아님 — .svelte 템플릿·Props 타입 불일치까지 검사 (더 넓은 범위)
 
 SvelteKit 5 패턴 (신규 — v3.1):
 □ Svelte 4 이벤트 문법 없음
@@ -209,4 +236,4 @@ QA 종합: {통과 ✅ / 재검수 필요 ⚠️}
 
 ---
 
-*sp3-qa-agent.md v3.1 | Harness Flow v3.1 | QA Evaluator + SvelteKit 5 체크*
+*sp3-qa-agent.md v3.2 | Harness Flow v3.2 | QA Evaluator + SvelteKit 5 체크 + 도메인 규칙 6종 반영 + GATE D 죽은 참조 제거*
