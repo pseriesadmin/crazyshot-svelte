@@ -82,6 +82,18 @@
     active:   '활성',
     archived: '보관',
   }
+
+  // 2026-08-16 편집 메뉴 UI 통일(Stephen 요청) — 양식목록 카드에 작성모드 배지 추가.
+  // authoring_mode가 null/undefined인 레거시 템플릿은 'flow'와 동일하게 문서형 처리
+  // (contract-template.ts ContractTemplate.authoring_mode 주석 규칙과 동일).
+  const MODE_LABEL: Record<string, string> = {
+    flow:        '문서형',
+    canvas:      '캔버스형',
+    spreadsheet: '스프레드시트형',
+  }
+  function modeLabel(mode: string | null | undefined): string {
+    return MODE_LABEL[mode ?? 'flow'] ?? MODE_LABEL.flow
+  }
 </script>
 
 <div class="contracts-page">
@@ -132,6 +144,9 @@
               <div class="tpl-meta">
                 <span class="status-badge" class:archived={tpl.status === 'archived'}>
                   {STATUS_LABEL[tpl.status] ?? tpl.status}
+                </span>
+                <span class="mode-badge" class:spreadsheet={(tpl.authoring_mode ?? 'flow') === 'spreadsheet'} class:canvas={tpl.authoring_mode === 'canvas'}>
+                  {modeLabel(tpl.authoring_mode)}
                 </span>
                 <span class="tpl-date">{formatDate(tpl.created_at)}</span>
               </div>
@@ -324,6 +339,26 @@
   .status-badge.archived {
     background: var(--cs-surface-gray);
     color: var(--cs-text-mid);
+  }
+  /* 2026-08-16 편집 메뉴 UI 통일(Stephen 요청) — 클릭해 열어보기 전에도 작성모드를
+     알 수 있도록 양식목록 카드에 배지 추가. 기본(문서형)은 .status-badge.archived와
+     동일한 중립 톤, 캔버스형/스프레드시트형만 구분되는 톤을 준다. */
+  .mode-badge {
+    display: inline-block;
+    padding: 1px 7px;
+    border-radius: var(--radius-full);
+    background: var(--cs-surface-gray);
+    color: var(--cs-text-mid);
+    font: var(--text-pc-script-12);
+    font-weight: 700;
+  }
+  .mode-badge.canvas {
+    background: rgba(16, 11, 50, 0.07);
+    color: var(--cs-text);
+  }
+  .mode-badge.spreadsheet {
+    background: rgba(59, 47, 138, 0.1);
+    color: var(--cs-purple);
   }
   .tpl-date {
     font: var(--text-pc-script-12);

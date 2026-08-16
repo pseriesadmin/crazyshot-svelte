@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 // generateHTML(@tiptap/core)이 내부적으로 DOMSerializer(document/window)를 사용하므로
 // jsdom 환경 필요 — Node.js 기본 환경(window 미정의)에서는 DOM 직렬화 불가.
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
 import type { JSONContent } from '@tiptap/core'
 import type { ContractSubstitutionData } from '$lib/types/contract-module.js'
 import type { TiptapDocBlock } from '$lib/types/contract-document.js'
@@ -19,6 +19,41 @@ import type { TiptapDocBlock } from '$lib/types/contract-document.js'
  *   3. substituteVariables()  — tiptap-doc 블록을 만나면 substituteTiptapDoc 적용
  *   4. 통합 흐름: 저장 → 치환 → renderTiptapDocToHtml → HTML에 실제 값 포함
  */
+
+// ── TIPTAP_CONTRACT_EXTENSIONS — 확장 중복 등록 회귀 방지 ──────────────────────
+// StarterKit(@tiptap/starter-kit v3)이 Link·Underline을 기본 번들에 포함하게 되면서
+// 이 목록이 별도로 등록하는 Link/Underline과 이름이 중복돼 "[tiptap warn]: Duplicate
+// extension names found" 경고가 발생했었다(2026-08-15 실사용 중 발견 — 표 편집 상호작용
+// 이상 증상의 근본 원인 후보). StarterKit.configure({ link:false, underline:false })로
+// 해소했으며, 이 테스트가 재발을 막는다.
+
+describe('TIPTAP_CONTRACT_EXTENSIONS — 확장 중복 등록 없음', () => {
+  it('스키마 빌드 시 중복 확장 이름 경고가 발생하지 않는다', async () => {
+    const { getSchema } = await import('@tiptap/core')
+    const { TIPTAP_CONTRACT_EXTENSIONS } = await import(
+      '$lib/components/cms/contract-editor/tiptapExtensions.js'
+    )
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    getSchema(TIPTAP_CONTRACT_EXTENSIONS)
+    const duplicateWarnCalls = warnSpy.mock.calls.filter((args) =>
+      String(args[0]).includes('Duplicate extension names'),
+    )
+    expect(duplicateWarnCalls).toHaveLength(0)
+    warnSpy.mockRestore()
+  })
+
+  it('확장 이름 목록에 link·underline이 정확히 1개씩만 존재한다', async () => {
+    const { TIPTAP_CONTRACT_EXTENSIONS } = await import(
+      '$lib/components/cms/contract-editor/tiptapExtensions.js'
+    )
+    // StarterKit은 addExtensions()로 자식 확장을 만들기 때문에 이름은 빌드 후에만 알 수 있음 —
+    // getSchema로 실제 스키마를 만들어 마크 이름 집합에 중복이 없는지 확인
+    const { getSchema } = await import('@tiptap/core')
+    const schema = getSchema(TIPTAP_CONTRACT_EXTENSIONS)
+    expect(schema.marks['link']).toBeDefined()
+    expect(schema.marks['underline']).toBeDefined()
+  })
+})
 
 // ── renderTiptapDocToHtml ─────────────────────────────────────────────────────
 
@@ -112,6 +147,47 @@ describe('renderTiptapDocToHtml — tiptap-doc → HTML 변환', () => {
     expect(html).toContain('<table')
     expect(html).toContain('<td')
     expect(html).toContain('셀 내용')
+  })
+
+  it('표는 .tt-table-scroll로 감싸져 렌더링된다 — A4 페이지 폭 오버플로우 방지', async () => {
+    const { renderTiptapDocToHtml } = await import('$lib/utils/tiptapRender.js')
+
+    const doc: JSONContent = {
+      type: 'doc',
+      content: [
+        {
+          type: 'table',
+          content: [
+            {
+              type: 'tableRow',
+              content: [
+                {
+                  type: 'tableCell',
+                  attrs: {},
+                  content: [{ type: 'paragraph', content: [{ type: 'text', text: 'A' }] }],
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    }
+
+    const html = renderTiptapDocToHtml(doc)
+    expect(html).toContain('<div class="tt-table-scroll"><table')
+    expect(html).toContain('</table></div>')
+  })
+
+  it('표가 없는 문서는 .tt-table-scroll 래퍼가 생기지 않는다(회귀)', async () => {
+    const { renderTiptapDocToHtml } = await import('$lib/utils/tiptapRender.js')
+
+    const doc: JSONContent = {
+      type: 'doc',
+      content: [{ type: 'paragraph', content: [{ type: 'text', text: '표 없음' }] }],
+    }
+
+    const html = renderTiptapDocToHtml(doc)
+    expect(html).not.toContain('tt-table-scroll')
   })
 })
 

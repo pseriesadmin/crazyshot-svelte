@@ -15,6 +15,11 @@
  */
 
 import { browser } from '$app/environment'
+// Vite 전용 명시적 애셋 URL 임포트 — pdfjs 공식 권장 `new URL(literal, import.meta.url)`
+// 패턴 대신 사용(더 견고함). 이 프로젝트의 vite@^8 처럼 매우 최신 메이저 버전에서는
+// 번들러의 정적 애셋 추론 휴리스틱이 예상과 다르게 동작할 위험이 있는데, `?url` 접미사
+// 임포트는 Vite 1급 기능이라 버전에 안전하다(C-2, 2026-08-14).
+import pdfWorkerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url'
 
 export interface RasterizedPage {
   blob: Blob
@@ -42,14 +47,10 @@ export async function rasterizePdf(
   // 동적 import — 서버 번들에 포함되지 않도록 (클라이언트 전용 보장)
   const pdfjsLib = await import('pdfjs-dist')
 
-  // Worker 소스 설정 (pdfjs-dist v4 — import.meta.url 기반 Vite 번들 경로)
+  // Worker 소스 설정 — 파일 상단의 `?url` 정적 임포트(pdfWorkerUrl) 사용.
   // GlobalWorkerOptions.workerSrc가 아직 설정되지 않은 경우에만 초기화
   if (!pdfjsLib.GlobalWorkerOptions.workerSrc) {
-    // Vite가 번들 시 pdfjs-dist worker 파일을 asset으로 처리하도록 new URL() 사용
-    pdfjsLib.GlobalWorkerOptions.workerSrc = new URL(
-      'pdfjs-dist/build/pdf.worker.min.mjs',
-      import.meta.url,
-    ).href
+    pdfjsLib.GlobalWorkerOptions.workerSrc = pdfWorkerUrl
   }
 
   const arrayBuffer = await file.arrayBuffer()

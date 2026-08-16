@@ -15,7 +15,7 @@ export const GET: RequestHandler = async ({ locals }) => {
 
   const { data, error } = await admin
     .from('contract_templates')
-    .select('id, title, content_blocks, specifications, authoring_mode, canvas_document, created_at')
+    .select('id, title, content_blocks, specifications, authoring_mode, canvas_document, spreadsheet_document, created_at')
     .eq('status', 'active')
     .is('deleted_at', null)
     .order('created_at', { ascending: false })

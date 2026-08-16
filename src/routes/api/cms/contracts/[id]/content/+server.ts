@@ -5,7 +5,7 @@ import { json } from '@sveltejs/kit'
 import type { RequestHandler } from './$types'
 import { getCmsRoleForAction } from '$lib/server/getCmsRoleForAction'
 import { hasSettingsAccess } from '$lib/utils/cmsPermissions'
-import { isCanvasDocument, hasSignatureField } from '$lib/types/contract-document'
+import { isCanvasDocument, hasSignatureField, isSpreadsheetDocument } from '$lib/types/contract-document'
 
 export const GET: RequestHandler = async ({ params, locals }) => {
   const cmsRole = await getCmsRoleForAction(locals)
@@ -19,7 +19,7 @@ export const GET: RequestHandler = async ({ params, locals }) => {
 
   const { data, error } = await admin
     .from('contracts')
-    .select('title, content_blocks, specifications, authoring_mode, canvas_document')
+    .select('title, content_blocks, specifications, authoring_mode, canvas_document, spreadsheet_document')
     .eq('id', contractId)
     .maybeSingle()
 
@@ -46,6 +46,7 @@ export const PATCH: RequestHandler = async ({ params, locals, request }) => {
     template_id?: string | null
     authoring_mode?: string
     canvas_document?: unknown
+    spreadsheet_document?: unknown
   }
   try {
     body = await request.json() as typeof body
@@ -63,6 +64,32 @@ export const PATCH: RequestHandler = async ({ params, locals, request }) => {
     updatePayload.template_id = body.template_id ?? null
   }
   if ('authoring_mode' in body && body.authoring_mode) {
+    const { data: current } = await admin
+      .from('contracts')
+      .select('authoring_mode')
+      .eq('id', contractId)
+      .maybeSingle()
+
+    if (current && current.authoring_mode !== body.authoring_mode) {
+      // 발행 후 불변 원칙: 이미 고객에게 발송됐거나 서명 완료된 계약서는 작성 방식(모드) 자체를
+      // 바꿀 수 없다 — spreadsheet 전환처럼 콘텐츠가 통째로 갈아끼워지는 변경이 열람/서명 중인
+      // 고객 화면 아래에서 조용히 일어나는 사고를 서버에서 원천 차단한다.
+      const { data: signing } = await admin
+        .from('contract_signings')
+        .select('sent_at, signed_at')
+        .eq('contract_id', contractId)
+        .order('created_at', { ascending: false })
+        .limit(1)
+        .maybeSingle()
+
+      if (signing?.sent_at || signing?.signed_at) {
+        return json(
+          { error: '이미 고객에게 발송되었거나 서명 완료된 계약서는 작성 방식을 변경할 수 없습니다.' },
+          { status: 400 }
+        )
+      }
+    }
+
     updatePayload.authoring_mode = body.authoring_mode
   }
   if ('canvas_document' in body && body.canvas_document != null) {
@@ -74,6 +101,12 @@ export const PATCH: RequestHandler = async ({ params, locals, request }) => {
       return json({ error: '서명 필드가 최소 1개 이상 있어야 합니다. (EC-3)' }, { status: 400 })
     }
     updatePayload.canvas_document = body.canvas_document
+  }
+  if ('spreadsheet_document' in body && body.spreadsheet_document != null) {
+    if (!isSpreadsheetDocument(body.spreadsheet_document)) {
+      return json({ error: 'spreadsheet_document 형식이 올바르지 않습니다.' }, { status: 400 })
+    }
+    updatePayload.spreadsheet_document = body.spreadsheet_document
   }
 
   const { error } = await admin

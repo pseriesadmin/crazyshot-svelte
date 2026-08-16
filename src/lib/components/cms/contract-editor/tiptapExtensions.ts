@@ -202,9 +202,16 @@ export const CustomTableHeader = TableHeader.extend({
  * 계약서 TipTap 에디터·렌더링에 사용하는 확장 목록.
  * ContractDocumentEditor.svelte와 tiptapRender.ts가 동일한 리스트를 공유해
  * 에디터 렌더링 결과와 정적 HTML 생성 결과가 일치함을 보장한다.
+ *
+ * ⚠️ StarterKit(@tiptap/starter-kit v3)은 Link·Underline을 기본 번들에 포함한다
+ * (v2에서는 없었음). 이 목록은 아래에서 Link/Underline을 별도 설정(openOnClick:false 등)으로
+ * 다시 등록하므로, StarterKit 쪽 기본 인스턴스를 반드시 꺼야 한다 — 안 그러면 동일 이름
+ * 확장이 중복 등록돼 "[tiptap warn]: Duplicate extension names found" 경고가 뜨고,
+ * 두 인스턴스의 커맨드·키맵·플러그인이 함께 등록되어 예측 불가능한 동작(2026-08-15 실사용
+ * 중 발견 — 표 편집 상호작용 이상 증상과 함께 확인된 근본 원인 후보)으로 이어질 수 있다.
  */
 export const TIPTAP_CONTRACT_EXTENSIONS = [
-  StarterKit,
+  StarterKit.configure({ link: false, underline: false }),
   Underline,
   // tableCell / tableHeader 정렬도 TextAlign이 파싱·렌더링하도록 명시
   TextAlign.configure({ types: ['heading', 'paragraph', 'tableCell', 'tableHeader'] }),
