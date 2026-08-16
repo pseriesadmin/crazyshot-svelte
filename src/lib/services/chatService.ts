@@ -46,7 +46,8 @@ export async function loadSession(
 
 export async function loadUserSession(
   contextType?: string,
-  contextId?: string
+  contextId?: string,
+  contextReservationId?: number
 ): Promise<{ session: ChatSession | null; error: string | null }> {
   // 관리자 RLS bypass(admin_select_all_sessions) 방어:
   // user_id를 명시적으로 필터링해야 타 사용자 세션이 반환되지 않음
@@ -65,6 +66,7 @@ export async function loadUserSession(
   const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
   if (contextType) query = query.eq('context_type', contextType)
   if (contextId && UUID_RE.test(contextId)) query = query.eq('context_id', contextId)
+  if (Number.isInteger(contextReservationId)) query = query.eq('context_reservation_id', contextReservationId as number)
 
   const { data, error } = await query.maybeSingle()
   if (error) return { session: null, error: error.message }
@@ -270,6 +272,11 @@ export function subscribeToAllMessages(
 
 // 관리자: 전체 세션 목록 Realtime 구독
 // DELETE 이벤트는 payload.new가 빈 객체 → INSERT/UPDATE만 처리
+// 채널명 충돌 방지: CmsDashboardConsultCards·AdminChatPanel 등 여러 화면이 동시에 호출하므로
+// subscribeToChatMessages/subscribeToAllMessages와 동일하게 매 호출마다 고유 ID 부여 필수 —
+// 고정 채널명이면 두 번째 구독의 .on() 콜백이 조용히 붙지 않아(또는 에러) 실시간 갱신이 끊김
+let _sessionsChannelSeq = 0
+
 export function subscribeToSessions(
   onUpdate: (session: ChatSession) => void
 ): () => void {
@@ -278,8 +285,9 @@ export function subscribeToSessions(
     if (s?.id) onUpdate(s)
   }
 
+  const uid = ++_sessionsChannelSeq
   const channel = supabase
-    .channel('chat:sessions')
+    .channel(`chat:sessions:${uid}`)
     .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'chat_sessions' }, handlePayload)
     .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'chat_sessions' }, handlePayload)
     .subscribe()

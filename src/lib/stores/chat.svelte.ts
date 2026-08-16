@@ -2,6 +2,14 @@
 
 import type { ChatSession, ChatMessage } from '$lib/types/chat'
 
+// 공통 플로팅 채팅 모달을 다른 화면(예: /account/rental 카드별 문의 버튼)에서
+// 특정 컨텍스트로 호출할 때 사용 — ChatWindow가 props보다 이 값을 우선 사용한다.
+export interface ChatContextOverride {
+  context_type?: string
+  context_id?: string
+  context_reservation_id?: number
+}
+
 class ChatStore {
   activeSessionId = $state<string | null>(null)
   messages = $state<ChatMessage[]>([])
@@ -13,6 +21,7 @@ class ChatStore {
   // 메시지 페이지네이션(2026-08-15 확정: 최초 20개 + 위로 스크롤 시 이전 페이지 추가로딩)
   hasMoreOlderMessages = $state<boolean>(false)
   isLoadingOlderMessages = $state<boolean>(false)
+  contextOverride = $state<ChatContextOverride | null>(null)
 }
 
 export const chatStore = new ChatStore()
@@ -27,10 +36,21 @@ export function openChat(): void {
 
 export function closeChat(): void {
   chatStore.isOpen = false
+  // 컨텍스트 지정으로 열렸던 상담을 닫으면 다음 번 전역 FAB 클릭은 기본(일반) 상담으로 복귀
+  chatStore.contextOverride = null
 }
 
 export function toggleChat(): void {
   chatStore.isOpen = !chatStore.isOpen
+  if (!chatStore.isOpen) chatStore.contextOverride = null
+}
+
+// 다른 화면에서 공통 플로팅 채팅 모달을 특정 컨텍스트(예: 대여 건)로 열 때 사용
+export function openChatWithContext(ctx: ChatContextOverride): void {
+  chatStore.contextOverride = ctx
+  chatStore.activeSessionId = null
+  chatStore.messages = []
+  chatStore.isOpen = true
 }
 
 export function setActiveSession(sessionId: string | null): void {

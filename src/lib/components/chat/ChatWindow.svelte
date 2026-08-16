@@ -29,6 +29,8 @@
     /** 상품·예약 컨텍스트 딥링크 */
     contextType?: string
     contextId?: string
+    /** context_type='reservation' 전용 — rental_reservations.id(bigint), context_id(uuid)와 별개 */
+    contextReservationId?: number
     onclose?: () => void
   }
 
@@ -38,6 +40,7 @@
     userHandle = '',
     contextType,
     contextId,
+    contextReservationId,
     onclose,
   }: Props = $props()
 
@@ -46,6 +49,12 @@
   let errorMsg = $state<string | null>(null)
   let isSending = $state(false)
   let isUploading = $state(false)
+
+  // 공통 플로팅 채팅 모달을 다른 화면에서 특정 컨텍스트(예: 대여 건)로 열었을 때
+  // (openChatWithContext) props보다 chatStore.contextOverride를 우선 사용
+  let effectiveContextType = $derived(chatStore.contextOverride?.context_type ?? contextType)
+  let effectiveContextId = $derived(chatStore.contextOverride?.context_id ?? contextId)
+  let effectiveContextReservationId = $derived(chatStore.contextOverride?.context_reservation_id ?? contextReservationId)
 
   // 게스트 헤더 모드: 입력 시작 또는 '비회원' 선택 시 'info'로 전환
   let guestMode = $state<'prompt' | 'info'>('prompt')
@@ -72,6 +81,12 @@
 
   // ── 세션 초기화 ──
   async function initSession() {
+    // effective* 값은 반드시 첫 await 이전(동기 구간)에 읽어야 $effect가 override 변경을
+    // 추적해 재실행함 — ensureAuth() 뒤로 옮기면 추적이 끊긴다
+    const ctxType = effectiveContextType
+    const ctxId = effectiveContextId
+    const ctxResId = effectiveContextReservationId
+
     isLoading = true
     errorMsg = null
 
@@ -84,7 +99,7 @@
     }
 
     // 기존 열린 세션 조회 → 없으면 생성
-    let { session: existing, error } = await loadUserSession(contextType, contextId)
+    let { session: existing, error } = await loadUserSession(ctxType, ctxId, ctxResId)
     if (error) {
       errorMsg = '채팅을 불러오는 데 실패했습니다.'
       isLoading = false
@@ -100,7 +115,7 @@
 
     if (!existing || existing.status === 'closed') {
       // 세션 없거나 종료됨 → 서버에서 closed 재활성화 또는 신규 생성
-      const created = await createChatSession({ context_type: contextType as never, context_id: contextId })
+      const created = await createChatSession({ context_type: ctxType as never, context_id: ctxId, context_reservation_id: ctxResId })
       if (created.error || !created.session) {
         errorMsg = created.error ?? '세션 생성 실패'
         isLoading = false
@@ -111,6 +126,14 @@
 
     session = existing
     setActiveSession(existing.id)
+
+    // 예약 컨텍스트 세션이면 "예약코드·대표 상품명·대여기간" 요약 대화카드가 기본으로 있도록
+    // 보장 — 새로 만든 세션·기존에 열려 있던 세션 둘 다 이 경로를 통과하므로 항상 호출한다
+    // (이미 카드가 있으면 서버에서 idempotent하게 아무 것도 안 함). 메시지 로드 전에 await해
+    // 첫 렌더부터 카드가 보이게 한다.
+    if (existing.context_type === 'reservation' && existing.context_reservation_id) {
+      await fetch(`/api/chat/sessions/${existing.id}/reservation-card`, { method: 'POST' }).catch(() => {})
+    }
 
     // 기존 메시지 로드 (2026-08-15: 전체 히스토리 무조건 로드 → 최근 20개만 우선 로드로 변경)
     const { messages: hist, hasMore } = await loadMessages(existing.id)

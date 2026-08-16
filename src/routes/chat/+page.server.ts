@@ -8,7 +8,16 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 
   // 딥링크 파라미터 파싱
   const contextType = url.searchParams.get('context') ?? undefined
-  const contextId = url.searchParams.get('id') ?? undefined
+  const rawId = url.searchParams.get('id') ?? undefined
+
+  // context=reservation일 때는 id가 rental_reservations.id(bigint) — context_id(uuid)와
+  // 별개 필드(context_reservation_id)로 전달. 소유권 검증은 /api/chat/session에서 수행.
+  const contextId = contextType === 'reservation' ? undefined : rawId
+  const parsedReservationId = rawId ? Number(rawId) : NaN
+  const contextReservationId =
+    contextType === 'reservation' && Number.isInteger(parsedReservationId) && parsedReservationId > 0
+      ? parsedReservationId
+      : undefined
 
   // 비로그인 시 테스트 폴백 (로그인 라우트 구축 후 redirect로 전환)
   return {
@@ -23,5 +32,6 @@ export const load: PageServerLoad = async ({ locals, url }) => {
       'test',
     contextType,
     contextId,
+    contextReservationId,
   }
 }

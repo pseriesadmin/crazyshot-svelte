@@ -227,11 +227,27 @@
         <div class="product-img product-img--placeholder" aria-hidden="true"></div>
       {/if}
       <div class="product-meta">
-        {#if payload.reservation_no}
-          <p class="reservation-no">예약번호: {payload.reservation_no}</p>
-        {/if}
-        {#if payload.product_name}
-          <p class="product-name">{payload.product_name}</p>
+        <!-- 통합 예약승인 카드(Migration 275) — 체크아웃 배치로 2건 이상 동시 승인된 경우
+             상품별 개별 카드 대신 하나의 카드 안에 항목 목록으로 표시 -->
+        {#if payload.items && payload.items.length > 1}
+          <ul class="items-list">
+            {#each payload.items as it (it.reservation_no)}
+              <li class="items-list-row">
+                <span class="items-list-name">{it.product_name}</span>
+                <span class="items-list-no">{it.reservation_no}</span>
+              </li>
+            {/each}
+          </ul>
+        {:else}
+          {#if payload.reservation_no}
+            <p class="reservation-no">예약번호: {payload.reservation_no}</p>
+          {/if}
+          {#if payload.product_name}
+            <p class="product-name">{payload.product_name}</p>
+          {/if}
+          {#if payload.rental_period}
+            <p class="rental-period">{payload.rental_period}</p>
+          {/if}
         {/if}
         {#if payload.product_price}
           <p class="product-price">{payload.product_price.toLocaleString()}원/일</p>
@@ -379,6 +395,12 @@
     margin: 0;
   }
 
+  .rental-period {
+    font: 400 12px/1.6 'Noto Sans KR', sans-serif;
+    color: var(--cs-text-mid, #777);
+    margin: 0;
+  }
+
   /* Noto Sans KR Bold 14px — Figma node 2497:8707 */
   .product-name {
     font: 700 14px/1 'Noto Sans KR', sans-serif;
@@ -389,6 +411,35 @@
     display: -webkit-box;
     -webkit-line-clamp: 2;
     -webkit-box-orient: vertical;
+  }
+
+  /* 통합 예약승인 카드(Migration 275) — 항목 목록 */
+  .items-list {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    margin: 0 0 2px;
+    padding: 0;
+    list-style: none;
+  }
+  .items-list-row {
+    display: flex;
+    align-items: baseline;
+    gap: 6px;
+  }
+  .items-list-name {
+    font: 700 14px/1.4 'Noto Sans KR', sans-serif;
+    color: var(--cs-text);
+    letter-spacing: -0.5px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    min-width: 0;
+  }
+  .items-list-no {
+    font: 400 11px/1.4 'Noto Sans KR', sans-serif;
+    color: var(--cs-text-light, #aaaaaa);
+    flex-shrink: 0;
   }
 
   .product-price,

@@ -20195,3 +20195,117 @@ service_role 전용으로 제한됨, 트리거가 다른 테이블만 갱신해 
 1건은 기록만 남기고 이번 범위에서는 수정하지 않음(현재 호출 패턴이 세션당 1회라 리스크 낮음).
 
 **GATE E: ✅ 통과 — 블로킹 0건. 커밋은 Stephen 직접 실행.**
+
+## NOW — /cms/chat/qna 빠른답변 매칭 정확도 저하 원인분석 + 수정 (2026-08-17, 이 세션 단독 — 병렬세션 작업 제외)
+
+생성일: 2026-08-17
+아젠다: Stephen 신규 요청 — "빠른답변목록(/cms/chat/qna) 부분 업그레이드 이후 사용자 응답 정확도가
+현저히 떨어짐 체감. 매칭 키워드로 입력했어도 다른 대답을 하거나 '담당자에게 연결...' 기본
+대화카드만 발송 수신. 검색엔진 매칭 알고리즘 재점검." — GATE 등급: 🟡 BOUNDARY(단일 서비스
+로직 — chat.md §하이브리드 1단계 자동답변 매칭 함수 한정, DB/다중 도메인 변경 없음).
+
+[CONTEXT BRIDGE]
+plan_source: 코드 읽기(matchCannedResponse.ts·cannedResponseSearchIndex.ts·koreanTokenizer.ts) +
+vitest 임시 진단 테스트로 실제 실패 재현 + Supabase MCP로 stage(ezyvffjvuwmtuhpxdjrw)
+canned_responses 실 데이터 23건 조회해 실사용 문구로 수정 전/후 대조 검증(git stash 활용)
+핵심제약: 요청 범위 외 파일 미접촉. koreanTokenizer.ts는 product/crazylog 검색과 공유되는 core
+파일이라 "제거 후 남는 어간이 늘 안전한 방향으로만 완화"되는 순수 버그수정만 적용(신규 로직 추가
+없음) — 다른 검색엔진 소비처에 부작용 없음을 기존 관련 테스트 전체 GREEN으로 확인.
+TDD도메인: 아니오 (버그 원인분석 후 순수함수 수정 + 기존 vitest 스위트로 검증, 신규 키워드
+트리거 없음)
+
+---
+
+### 원인분석 — 2건의 실제 버그 확인 (2026-08-06 하이브리드 전환 시 유입)
+
+**① 조사 제거 로직이 "문의"·"동의" 같은 CS 도메인 2음절 단어를 1글자로 훼손**
+`koreanTokenizer.ts`의 `stripTrailingParticle()`이 "1글자 조사 제거 후 남는 어간 길이" 제한 없이
+동작 — "문의"(2자)에서 1글자 조사 "의"를 제거해 "문"(1자)만 남김. 이 1글자 토큰이 색인 전체에서
+과도하게 넓게 매칭돼 무관한 빠른답변과 충돌하는 원인이 됨(실사용 문구 "배송 문의 드립니다" 재현
+확인). match_keywords 필드(서브스트링 방식이라 이 문제 없음)와 달리 title/content는 전부
+MiniSearch 토큰화를 거치므로 전면적으로 영향받음.
+
+**② 최소 채택 문턱이 사실상 없음(`score > 0`)**
+파일 상단 주석·테스트명에는 "score >= 3 미만은 미매칭"이라는 설계 의도가 명시돼 있었으나 실제
+구현 코드는 `score > 0`만 확인 — 문서화된 의도가 구현에서 누락된 상태였음. content 필드(boost
+최하위)의 흔한 상투어("안내" 등, 실 DB 23건 중 16건 이상 title에 공통 포함) 하나만 겹쳐도 확인
+절차 없이 즉시 고객에게 발송되는 오탐 경로가 열려 있었음(재현: "안내 좀 해주세요" → 무관한
+빠른답변에 걸림, 수정 후 → NULL, Claude 2단계로 정상 폴백).
+
+**③ (부수 발견, 별도 버그는 아니나 개선) MiniSearch prefix 매칭 방향성 한계**
+MiniSearch의 prefix 매칭은 "질의어가 색인어보다 짧을 때"만 성립 — 한국어는 어미가 뒤에 붙는
+언어라 "결제해주세요"처럼 title/shortcut의 짧은 단어("결제")에 어미가 그대로 붙은 실사용 문구는
+질의어가 더 길어져 어느 방향으로도 매칭되지 않음(실 DB 재현: 수정 전 NULL → 담당자연결 폴백,
+수정 후 "결제 방법 안내" 정상 매칭).
+
+### 수정 내역
+
+- `src/lib/server/searchEngine/core/koreanTokenizer.ts` — `stripTrailingParticle()`: 1글자 조사
+  제거는 "제거 후 남는 어간이 2자 이상"일 때만 적용하도록 가드 추가(2글자 이상 조사는 기존
+  "어간 1자 이상만 남으면 제거" 규칙 그대로 유지 — "집으로부터"→"집" 등 기존 테스트 케이스 보존
+  확인).
+- `src/lib/server/matchCannedResponse.ts`:
+  - 신규 보정 단계 추가 — 다른 빠른답변 title과 겹치지 않는(=이 후보에게만 고유한) title 단어(+3)·
+    shortcut(+4)를 대상으로 기존 match_keywords와 동일한 서브스트링+편집거리 체크 적용. 흔한
+    상투어(여러 후보 title에 공통으로 들어간 단어)는 빈도 계산으로 자동 제외해 무관한 후보가
+    걸리는 역효과를 원천 차단.
+  - 최소 채택 문턱을 문서화된 원래 의도대로 `score >= 3`으로 복원.
+
+### 검증
+
+- 기존 vitest 스위트 전체 GREEN: `matchCannedResponse.test.ts`(19건) + `koreanTokenizer.test.ts`
+  (19건) — 회귀 0건.
+- `npx tsc --noEmit` — 두 수정 파일 관련 신규 에러 0건.
+- 프로젝트 전체 vitest 실행 결과 실패 12건은 전부 결제(payment.test.ts)·계약서명
+  (contractSign.test.ts)·회원코드(memberCodeCombo.test.ts) 등 라이브 DB 연동 테스트로, 수정
+  파일과 무관한 기존 환경 이슈(권한 거부·클라이언트 함수 미존재 등)임을 실패 로그로 확인 —
+  이 세션 변경과 무관.
+- Supabase MCP로 stage `canned_responses` 실 데이터 23건 직접 조회 → 실사용 문구 20종으로
+  수정 전/후 대조(git stash 활용): "결제해주세요"(NULL→정상 매칭)·"문의드립니다"·"안내 좀
+  해주세요" 계열 오탐 제거 확인, 기존 정상 매칭 18건은 전부 동일하게 유지(회귀 없음).
+
+### 수정 파일 (커밋 대기 — 아직 커밋되지 않음)
+
+```
+src/lib/server/matchCannedResponse.ts                       (MODIFY)
+src/lib/server/searchEngine/core/koreanTokenizer.ts          (MODIFY)
+```
+
+### QA(@sp3-qa-agent) 검수 결과 — 통과 (블로킹 0건)
+
+`git diff -- src/lib/server/matchCannedResponse.ts src/lib/server/searchEngine/core/koreanTokenizer.ts`
+로 실제 diff를 직접 대조해 3건의 원인분석 주장 전부 코드와 일치함을 확인.
+
+- **① stripTrailingParticle 비대칭 가드**: 1글자 조사는 `minStemLength=2`, 2글자 이상 조사는
+  기존 규칙(`>=1`, 구 코드 `token.length > p.length`와 수학적으로 동일) 그대로 유지 —
+  케이스별 검증 결과 "더 적게 제거"하는 방향으로만 완화되고 과다제거로 회귀하는 경로 없음.
+  공유 소비처(product/crazylog 검색, `miniSearchProvider.ts` 경유) 테스트 8개 파일 122건 +
+  `synonymLearning.test.ts` 96건 전체 GREEN — core 파일 부작용 없음 실증.
+- **② 최소 채택 문턱 `score > 0` → `score >= 3` 복원**: diff로 직접 확인. MiniSearch boost
+  실값(match_keywords_text:5 > shortcut:3 > title:2 > content:1)과 대조 시 "content 단독 컷,
+  키워드/shortcut 단독 통과" 설계 의도와 정확히 부합, 경계 케이스 테스트로 커버됨.
+- **③ title/shortcut 고유 단어 보정**: `titleWordFreq`가 candidates 전체를 순회해 빈도 계산 —
+  주장대로 구현됨. 고유성 판별에 쓰이는 정규화(stripTrailingParticle 재사용)는 ①에서 이미
+  안전성 확인된 동일 함수라 별도 버그 없음.
+
+**검증 결과**
+- `npx vitest run matchCannedResponse.test.ts koreanTokenizer.test.ts` — 38건(19+19) 전체
+  GREEN, 회귀 0건(TASK.md 주장과 일치). 참고: 동일명 테스트가 병렬세션 worktree
+  `.claude/worktrees/exciting-ardinghelli-71ff74/`에도 존재해 파일명 매칭 시 76건으로 잡히나,
+  이 세션 대상 `src/__tests__/...` 경로 기준으로는 정확히 38건이며 병렬세션 산출물은 검수
+  대상에서 제외함.
+- `npx tsc --noEmit -p tsconfig.json` — exit 0, 신규 에러 0건.
+- `npx eslint` 두 파일 — 경고 6건은 전부 diff와 무관한 기존 `levenshtein()` 함수(unchanged
+  라인)의 preexisting 경고, 신규 경고 0건. console.log·any 타입·TODO/FIXME 0건.
+- `git diff --stat`로 이 2개 파일 외 변경 없음 확인 — 요청범위 외 수정 없음(Claude AI
+  분류기·세션 상태머신·액션카드 시스템 등 미접촉). 서버 키(SERVICE_ROLE_KEY/TOSS_SECRET_KEY)
+  참조 없음, 두 파일 모두 외부 의존성 없는 순수함수.
+
+**비블로킹 발견 2건**
+- [PERF] title 고유성 계산이 60초 TTL 캐시 없이 매 호출마다 candidates 전체 재순회 — 현재
+  규모(stage 23건)에서는 무시 가능, 후보군이 수백 건대로 늘어나면 캐싱 검토 권장.
+- [INFO] JSDoc의 boost 값(5/3/2/1)은 MiniSearch raw score가 아니라 boost 반영 후 BM25 계열
+  점수라 "score=3"이 항상 "shortcut 매칭 1건"을 의미하진 않음 — 문서 표현 단순화, 실동작에는
+  영향 없음(테스트로 검증됨).
+
+**GATE E: ✅ 통과 — 블로킹 0건. 커밋은 Stephen 직접 실행.**

@@ -4,6 +4,7 @@
   // 아이콘: 커스텀 SVG (35×35 viewBox, 52px 표시)
 
   import ChatBottomSheet from './ChatBottomSheet.svelte'
+  import ChatIcon from '$lib/components/common/ChatIcon.svelte'
   import { chatStore, toggleChat, resetUnreadCount, pushMessage, setActiveSession } from '$lib/stores/chat.svelte'
   import { subscribeToChatMessages, loadUserSession } from '$lib/services/chatService'
   import { supabase } from '$lib/services/supabase'
@@ -14,6 +15,9 @@
     userHandle?: string
     contextType?: string
     contextId?: string
+    /** true면 원형 FAB 버튼은 숨기고 ChatBottomSheet(공통 모달)만 마운트 —
+        다른 화면(예: /account/rental)의 자체 버튼이 openChatWithContext()로만 열 때 사용 */
+    hideFab?: boolean
   }
 
   let {
@@ -22,6 +26,7 @@
     userHandle = '',
     contextType,
     contextId,
+    hideFab = false,
   }: Props = $props()
 
   let isOpen = $derived(chatStore.isOpen)
@@ -77,40 +82,35 @@
   })
 </script>
 
-<!-- fab-btn — dev/cart 패턴 동일 (배경 없음, drop-shadow, scale hover) -->
-<div class="chat-fab-wrap">
-  <!-- 전파 확산 링: 미읽음 메시지 도착 시 표시 -->
-  {#if unreadCount > 0 && !isOpen}
-    <span class="ripple ripple-1" aria-hidden="true"></span>
-    <span class="ripple ripple-2" aria-hidden="true"></span>
-  {/if}
-
-  <button
-    class="fab-btn"
-    class:has-unread={unreadCount > 0 && !isOpen}
-    onclick={handleToggle}
-    aria-label={isOpen
-      ? '채팅 닫기'
-      : `채팅 열기${unreadCount > 0 ? ` (새 메시지 ${unreadCount}개)` : ''}`}
-    aria-expanded={isOpen}
-    aria-haspopup="dialog"
-  >
-    <!-- 커스텀 채팅 SVG 아이콘 (Stephen 확정 디자인) -->
-    <svg xmlns="http://www.w3.org/2000/svg" width="70" height="70" viewBox="0 0 70 70" fill="none" aria-hidden="true">
-      <circle cx="35" cy="35" r="35" fill="#3B2F8A"/>
-      <path d="M13.9998 37.3657C13.9998 44.5372 23.1602 53.0534 29.7379 53.0534C33.566 53.0534 25.1999 49.5676 29.3125 48.123C31.7471 47.2679 37.8196 44.5372 37.8196 37.3657C37.8196 30.1941 32.29 25.2637 25.9097 25.2637C19.5294 25.2637 13.9998 30.1941 13.9998 37.3657Z" fill="#C494FE"/>
-      <path d="M56.6772 29.9012C56.6772 38.6326 44.9668 49.0011 36.558 49.0011C31.6642 49.0011 42.3593 44.7571 37.1018 42.9983C33.9895 41.9571 26.2266 38.6326 26.2266 29.9012C26.2266 21.1698 33.2955 15.167 41.4519 15.167C49.6083 15.167 56.6772 21.1698 56.6772 29.9012Z" fill="white"/>
-      <path d="M70 35C70 54.33 54.33 70 35 70C15.67 70 0 54.33 0 35C0 15.67 15.67 0 35 0C54.33 0 70 15.67 70 35Z" fill="#3B2F8A"/>
-      <path d="M13.9998 38.532C13.9998 45.7036 23.1602 54.2198 29.7378 54.2198C33.566 54.2198 25.1998 50.7339 29.3125 49.2893C31.7471 48.4342 37.8196 45.7036 37.8196 38.532C37.8196 31.3604 32.29 26.43 25.9097 26.43C19.5294 26.43 13.9998 31.3604 13.9998 38.532Z" fill="#C494FE"/>
-      <path d="M56.6772 31.0672C56.6772 39.7986 44.9667 50.1671 36.558 50.1671C31.6641 50.1671 42.3592 45.9231 37.1017 44.1643C33.9894 43.1231 26.2265 39.7986 26.2265 31.0672C26.2265 22.3358 33.2954 16.333 41.4518 16.333C49.6083 16.333 56.6772 22.3358 56.6772 31.0672Z" fill="white"/>
-    </svg>
-
-    <!-- 레드 원점 — 미읽음 메시지 도착 시 우측 상단 -->
+{#if !hideFab}
+  <!-- fab-btn — dev/cart 패턴 동일 (배경 없음, drop-shadow, scale hover) -->
+  <div class="chat-fab-wrap">
+    <!-- 전파 확산 링: 미읽음 메시지 도착 시 표시 -->
     {#if unreadCount > 0 && !isOpen}
-      <span class="red-dot" aria-hidden="true"></span>
+      <span class="ripple ripple-1" aria-hidden="true"></span>
+      <span class="ripple ripple-2" aria-hidden="true"></span>
     {/if}
-  </button>
-</div>
+
+    <button
+      class="fab-btn"
+      class:has-unread={unreadCount > 0 && !isOpen}
+      onclick={handleToggle}
+      aria-label={isOpen
+        ? '채팅 닫기'
+        : `채팅 열기${unreadCount > 0 ? ` (새 메시지 ${unreadCount}개)` : ''}`}
+      aria-expanded={isOpen}
+      aria-haspopup="dialog"
+    >
+      <!-- 커스텀 채팅 아이콘 (Stephen 확정 디자인) — 공통 컴포넌트(common/ChatIcon.svelte) 사용 -->
+      <ChatIcon size={70} />
+
+      <!-- 레드 원점 — 미읽음 메시지 도착 시 우측 상단 -->
+      {#if unreadCount > 0 && !isOpen}
+        <span class="red-dot" aria-hidden="true"></span>
+      {/if}
+    </button>
+  </div>
+{/if}
 
 <!-- 채팅 바텀시트 — 글로벌 오버레이 -->
 <ChatBottomSheet
@@ -151,9 +151,9 @@
   .fab-btn:hover  { transform: scale(1.07); }
   .fab-btn:active { transform: scale(0.95); }
 
-  /* PC 반응형: 아이콘 40px */
+  /* PC 반응형: 아이콘 40px — ChatIcon은 자식 컴포넌트라 :global()로 스코프 경계를 넘어야 함 */
   @media (min-width: 640px) {
-    .fab-btn svg { width: 40px; height: 40px; }
+    .fab-btn :global(svg) { width: 40px; height: 40px; }
   }
 
   /* ── 레드 원점 — 우측 상단 ── */
