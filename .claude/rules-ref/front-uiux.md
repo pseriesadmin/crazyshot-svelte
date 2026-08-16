@@ -168,7 +168,7 @@ CMS 화면     → cms-uiux.md 참조
 | `products/search` | 1600px | PC-MAX |
 | `account` | 1600px | PC-MAX |
 | `crazylog/[slug]` | 1600px | PC-MAX (일부) |
-| GNB, layout, products/[id], checkout 등 | 1240px | `var(--layout-pc-max)` 참조 |
+| GNB, layout, products/[id], cart 등 | 1240px | `var(--layout-pc-max)` 참조 |
 | products, hype-pack, help, payment 등 | 1240px | 하드코딩 |
 
 ### 스페이싱 토큰 (JSON scale → 기존 --spacing-* 매핑)
@@ -1165,7 +1165,7 @@ hover/선택: background var(--cs-purple-op10)
 | **위치** | `position: sticky; top: 0; z-index: 50` — GNB 바로 아래 |
 | **배경** | `transparent` · `border-bottom: none` |
 | **레이아웃** | Back+타이틀 Pill 단독 (카테고리 아이콘 없음) |
-| **소스 정본** | `src/routes/checkout/+page.svelte` `.sub-gnb-b` |
+| **소스 정본** | `src/routes/cart/+page.svelte` `.sub-gnb-b` |
 
 #### 구조 개요
 
@@ -2060,7 +2060,7 @@ export const actions = {
 
 | 항목 | 값 |
 |---|---|
-| **소스 정본** | `src/routes/checkout/+page.svelte` `.delivery-combo / .combo-btn` |
+| **소스 정본** | `src/routes/cart/+page.svelte` `.delivery-combo / .combo-btn` |
 | **용도** | 단일 선택 옵션 그룹 (수령 방법·날짜 유형 등) |
 | **레이아웃** | 수평 flex, 가로 스크롤 (`overflow-x: auto`) — PC·모바일 공통 |
 | **반응형 기준** | **PC 기본값** → `@media (max-width: 640px)` 모바일 오버라이드 |

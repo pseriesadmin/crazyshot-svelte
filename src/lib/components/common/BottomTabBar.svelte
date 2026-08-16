@@ -13,7 +13,7 @@
   const tabFromUrl: Record<string, string> = {
     '/':         'Home',
     '/products': 'All',
-    '/checkout': 'Cart',
+    '/cart': 'Cart',
     '/account':  'My',
   }
   let currentTab = $derived(
@@ -53,7 +53,7 @@
     setTimeout(() => { poppingTab = null }, 700)
     if      (id === 'Home') goto('/')
     else if (id === 'All')  goto('/products')
-    else if (id === 'Cart') goto('/checkout')
+    else if (id === 'Cart') goto('/cart')
     else if (id === 'My')   goto('/account')
     else if (id === 'More') moreMenuOpen = true
   }

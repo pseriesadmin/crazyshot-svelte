@@ -52,7 +52,7 @@
 <PushNotificationInit />
 
 <div class="min-h-screen flex flex-col">
-	{#if !page.url.pathname.startsWith('/cms') && !page.url.pathname.startsWith('/products/') && !page.url.pathname.startsWith('/checkout') && !page.url.pathname.startsWith('/account') && !page.url.pathname.startsWith('/contract')}
+	{#if !page.url.pathname.startsWith('/cms') && !page.url.pathname.startsWith('/products/') && !page.url.pathname.startsWith('/cart') && !page.url.pathname.startsWith('/account') && !page.url.pathname.startsWith('/contract')}
 		<GNB pathname={page.url.pathname} />
 	{/if}
 
@@ -60,8 +60,8 @@
 		<slot />
 	</main>
 
-	<!-- 공통 플로팅 바: /cms · /checkout · /account · /contract 제외 전체 사용자 화면 -->
-	{#if !page.url.pathname.startsWith('/cms') && !page.url.pathname.startsWith('/checkout') && !page.url.pathname.startsWith('/account') && !page.url.pathname.startsWith('/contract')}
+	<!-- 공통 플로팅 바: /cms · /cart · /account · /contract 제외 전체 사용자 화면 -->
+	{#if !page.url.pathname.startsWith('/cms') && !page.url.pathname.startsWith('/cart') && !page.url.pathname.startsWith('/account') && !page.url.pathname.startsWith('/contract')}
 		<FloatingBar
 			userId={chatUserId}
 			userName={chatUserName}
