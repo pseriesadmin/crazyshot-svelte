@@ -22,10 +22,20 @@ export const TRAILING_PARTICLES: readonly string[] = [
 /**
  * 토큰 끝에 붙은 흔한 조사를 제거해 어간에 가깝게 정규화합니다.
  * 원본 조사 목록에서 정규화한 것으로, matchCannedResponse의 로직과 동일합니다.
+ *
+ * 2026-08-17 수정: "1글자 조사"(와·과·도·만·는·은·이·가·을·를·의·로·나)는 제거 후 남는 어간이
+ * 최소 2자 이상일 때만 제거한다(기존엔 무조건 제거 — "문의"(2자) 끝의 "의"를 조사로 오인해
+ * "문"(1자)만 남기는 오류가 있었음). "문의"·"동의"·"주의"처럼 1글자 조사 목록의 글자로 끝나는
+ * 2음절 고유 단어가 CS 도메인에 흔한데, 1자로 뭉개지면 그 1자가 색인 전체에서 과도하게
+ * 광범위하게 매칭돼 무관한 빠른답변과 충돌하는 원인이 됐다(빠른답변 매칭 정확도 저하 재현·수정).
+ * "으로부터"·"까지"·"부터" 등 2글자 이상 조사는 문법적으로 훨씬 명확해 원래 규칙(어간 1자
+ * 이상만 남으면 제거, 예: "집으로부터" → "집")을 그대로 유지한다.
  */
 export function stripTrailingParticle(token: string): string {
   for (const p of TRAILING_PARTICLES) {
-    if (token.length > p.length && token.endsWith(p)) return token.slice(0, -p.length)
+    if (!token.endsWith(p)) continue
+    const minStemLength = p.length === 1 ? 2 : 1
+    if (token.length - p.length >= minStemLength) return token.slice(0, -p.length)
   }
   return token
 }

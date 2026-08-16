@@ -63,13 +63,20 @@ function keywordMatchesMessage(msgLower: string, msgTokens: string[], keyword: s
 /**
  * 고객 메시지와 가장 잘 맞는 빠른답변을 반환합니다.
  *
- * 채점 방식 (2026-08-06 하이브리드):
+ * 채점 방식 (2026-08-06 하이브리드, 2026-08-17 정확도 저하 수정):
  *   match_keywords: 서브스트링 + 편집거리 1 완화 (건당 +5, 조사결합어 대응)
  *     + 동의어 확장(synonymGroups 제공 시): canonical 키워드 → 그룹 전체 confirmed 멤버로 확장
  *   shortcut / title / content / match_keywords_text: MiniSearch 역색인 fuzzy(0.2) + prefix(true)
  *     → boost: match_keywords_text(5) > shortcut(3) > title(2) > content(1)
+ *   title/shortcut 고유 단어 서브스트링 보정(신규): 다른 후보와 겹치지 않는 title 단어(+3)·
+ *     shortcut(+4) — MiniSearch의 prefix 매칭은 "질의어가 색인어의 접두사"일 때만 성립해서
+ *     "환불해주세요"처럼 짧은 title/shortcut 단어에 어미가 그대로 붙은 질의는 어느 쪽으로도
+ *     매칭되지 않던 문제를 보정한다. 흔한 상투어(여러 후보 title에 공통으로 들어간 단어,
+ *     예: "안내")는 보정 대상에서 제외 — 안 그러면 그 단어 하나로 무관한 후보까지 걸린다.
  *
- * 최소 채택 기준: 통합 score > 0 (최소 1개 필드에서 매칭 성공 시 채택)
+ * 최소 채택 기준: 통합 score >= 3 (2026-08-17 복원 — score > 0은 문턱이 너무 낮아
+ * content 필드의 흔한 단어 하나만 겹쳐도 무관한 빠른답변이 고객에게 자동 발송되는
+ * 오탐이 실사용 중 확인됨. 확인 없이 즉시 발송되는 기능이라 재현율보다 정밀도 우선.)
  * 동점 정렬: score 내림차순 → usage_count 내림차순 → title 오름차순
  *
  * @param message      고객 메시지 원문
@@ -118,14 +125,49 @@ export function matchCannedResponse(
     if (bonus > 0) kwBonusMap.set(item.id, bonus)
   }
 
+  // ── 2.5단계: title/shortcut 고유 단어 서브스트링 보정 (id→bonusScore 맵) ──
+  // MiniSearch의 prefix 매칭은 "질의어가 색인어의 접두사"일 때만 성립 — 한국어는 어미가
+  // 뒤에 붙으므로 "환불해주세요"처럼 짧은 title/shortcut 단어("환불")에 어미가 그대로
+  // 붙은 질의는 질의어가 색인어보다 길어져 prefix로도 fuzzy로도 매칭되지 않는다.
+  // title 단어는 다른 후보와 겹치지 않는(=이 후보에게만 고유한) 단어만 대상으로 삼는다 —
+  // "안내"처럼 여러 후보 title에 공통으로 들어간 상투어까지 포함하면 그 단어 하나로
+  // 무관한 후보가 걸리는 역효과가 생긴다.
+  const titleWordFreq = new Map<string, number>()
+  const candidateTitleWords = new Map<string, string[]>()
+  for (const item of candidates) {
+    const words = item.title
+      .toLowerCase()
+      .split(/[\s,.!?~·/]+/)
+      .map(stripTrailingParticle)
+      .filter((w) => w.length >= 2)
+    candidateTitleWords.set(item.id, words)
+    for (const w of words) titleWordFreq.set(w, (titleWordFreq.get(w) ?? 0) + 1)
+  }
+
+  const titleShortcutBonusMap = new Map<string, number>()
+  for (const item of candidates) {
+    let bonus = 0
+    for (const w of candidateTitleWords.get(item.id) ?? []) {
+      if (titleWordFreq.get(w) === 1 && keywordMatchesMessage(msgLower, msgTokens, w)) {
+        bonus += 3
+      }
+    }
+    const shortcutWord = item.shortcut ? item.shortcut.replace(/^\//, '').toLowerCase() : ''
+    if (shortcutWord.length >= 2 && keywordMatchesMessage(msgLower, msgTokens, shortcutWord)) {
+      bonus += 4
+    }
+    if (bonus > 0) titleShortcutBonusMap.set(item.id, bonus)
+  }
+
   // ── 3단계: 통합 스코어 계산 + 정렬 ───────────────────────────────────────
   const scored: { item: CannedResponseForMatch; score: number }[] = []
 
   for (const item of candidates) {
     const miniScore = miniScoreMap.get(item.id) ?? 0
     const kwBonus = kwBonusMap.get(item.id) ?? 0
-    const totalScore = miniScore + kwBonus
-    if (totalScore > 0) {
+    const titleShortcutBonus = titleShortcutBonusMap.get(item.id) ?? 0
+    const totalScore = miniScore + kwBonus + titleShortcutBonus
+    if (totalScore >= 3) {
       scored.push({ item, score: totalScore })
     }
   }
