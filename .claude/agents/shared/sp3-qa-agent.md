@@ -51,6 +51,11 @@ TDD 테스트: 총 [N]개
 ```
 □ 서버 키 클라이언트 노출 없음
   grep: TOSS_SECRET_KEY|SERVICE_ROLE_KEY → public import 경로 없음
+  ⛔ 위 grep은 반드시 src/ 등 "코드"만 대상으로 한다 — .env* 파일을 grep/cat/head로 직접
+     열람 금지(존재 여부·형식 확인이 목적이면 `sed 's/=.*/=<redacted>/'`로 마스킹 후 출력).
+     값 자체(비밀키·토큰 등)는 어떤 이유로도 도구 출력·트랜스크립트에 인쇄하지 말 것
+     (2026-08-17 실사고 — QA 서브에이전트가 .env.local을 직접 grep해 SERVICE_ROLE_KEY 앞
+     40자를 출력에 노출시킨 사고 재발 방지).
 □ SQL Injection 없음 (파라미터화 RPC 사용)
 □ 사용자 입력 검증 코드 존재
 □ RLS 정책 우회 코드 없음
