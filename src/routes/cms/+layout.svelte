@@ -83,16 +83,13 @@
         { label: '빠른답변목록', href: '/cms/chat/qna' },
       ],
     },
-    { id: 'reservation', label: '예약', subMenus: [
-      { label: '예약목록', href: '/cms/reservation' },
-      { label: '계약서양식', href: '/cms/reservation/contracts' },
-    ] },
     {
       id: 'rental',
       label: '대여',
       subMenus: [
-        { label: '대여현황', href: '/cms/rentals' },
+        { label: '예약대여현황', href: '/cms/reservation' },
         { label: '이력관리', href: '/cms/rental/history' },
+        { label: '계약서양식', href: '/cms/reservation/contracts' },
       ],
     },
     {
@@ -163,9 +160,9 @@
     if (pathname.startsWith('/cms/set'))       return 'settings'
     if (pathname.startsWith('/cms/codes'))    return 'settings'
     if (pathname.startsWith('/cms/accounts')) return 'settings'
-    if (pathname.startsWith('/cms/reservation')) return 'reservation'
     if (pathname.startsWith('/cms/products')) return 'products'
     if (pathname.startsWith('/cms/subscriptions')) return 'subscription'
+    if (pathname.startsWith('/cms/reservation')) return 'rental'
     if (pathname.startsWith('/cms/rental'))   return 'rental'
     if (pathname.startsWith('/cms/customers')) return 'customers'
     if (pathname.startsWith('/cms/chat'))     return 'consulting'
@@ -194,6 +191,12 @@
     if (sub.href === '/cms/set/rental' && page.url.pathname.startsWith('/cms/set/rental')) return true
     if (sub.href === '/cms/set/admin' && page.url.pathname.startsWith('/cms/accounts')) return true
     if (sub.href === '/cms/reservation/contracts' && page.url.pathname.startsWith('/cms/reservation/contracts')) return true
+    // 예약대여현황: 예약목록(/cms/reservation, 계약서양식 제외) + 대여현황(/cms/rentals) 탭 둘 다 커버
+    if (
+      sub.href === '/cms/reservation' &&
+      ((page.url.pathname.startsWith('/cms/reservation') && !page.url.pathname.startsWith('/cms/reservation/contracts')) ||
+        page.url.pathname.startsWith('/cms/rentals'))
+    ) return true
     return false
   }
 </script>

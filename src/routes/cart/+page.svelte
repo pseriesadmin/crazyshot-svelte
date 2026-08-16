@@ -894,6 +894,14 @@
                 }).catch(() => {})
               }
             }
+            // 신청(hold) 시점 주문(orders/order_items) 연결 — CMS "대여정보" 탭 통합 표시 기반
+            // 마련(TASK.md 2026-08-17). 이번 제출에 포함된 전체 id(방금 승격된 것 + 이미 hold였던
+            // 체크 항목) 기준. 표시 편의 기능이라 실패해도 예약/체크아웃 흐름을 막지 않는다.
+            await fetch('/api/reservations/create-order', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ reservationIds: checkedIds }),
+            }).catch((e) => console.error('[cart] create-order 실패:', e))
             // 모든 draft 승격 완료 후 confirm-mock 호출 (confirm-mock은 status='hold' 행만 처리)
             const selectedCouponId = otSelectedCouponIds.size > 0 ? [...otSelectedCouponIds][0] : null
             const res = await fetch('/api/checkout/confirm-mock', {
