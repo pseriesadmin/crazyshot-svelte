@@ -192,11 +192,18 @@
       const datePart = yearMonth && yearMonth !== 'nodate' && yearMonth !== 'all' ? yearMonth : ''
       const seqDigits = (cs.seq_digits as number) ?? 3
       const suffix = (cs.suffix as string) || ''
-      // QR-LABEL-2 2단 계층: parent_seq_digits 있으면 순번1+순번2 두 구간 모두 0-패딩
-      // (_AutoMappingTab.svelte buildComboPreview seqPlaceholder 계산과 동일 패턴)
+      // 버그 수정(2026-08-16, Stephen 확정): 2단 계층(parent_seq_digits 존재)일 때 기본순번
+      // (순번1)은 부모 등록 시 이미 확정·불변으로 채번된 실제값(products.md §2-2 영구고정
+      // 정책)이라 마스킹할 이유가 없다 — 동일 카테고리 부모상품끼리 전부 "0000000"로 똑같이
+      // 보여 구분이 안 되던 문제 해소. 자식순번(순번2)은 재고 등록마다 새로 채번되는 값이라
+      // QR-LABEL-2 취지대로 계속 0-패딩 마스킹 유지.
       const parentSeqDigits = cs.parent_seq_digits as number | undefined
+      const parentSeq = cs.parent_seq as number | undefined
+      const parentPart = parentSeqDigits
+        ? String(parentSeq ?? 0).padStart(parentSeqDigits, '0')
+        : ''
       const seqPlaceholder = parentSeqDigits
-        ? '0'.repeat(parentSeqDigits) + '0'.repeat(seqDigits)
+        ? parentPart + '0'.repeat(seqDigits)
         : '0'.repeat(seqDigits)
       return `${prefix}${catCode}${datePart}${seqPlaceholder}${suffix}`
     }

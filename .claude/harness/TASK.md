@@ -28,6 +28,203 @@ auth_baseline: fed4fdb — createBrowserClient 패턴 (절대 싱글톤 createCl
 
 ---
 
+## NOW — 예약 신청 시점 주문 연결 + 대여정보 탭 통합 표시 (2026-08-17) — ✅ TDD 5건 + GSD 2건 전부
+완료, crazyshot-stage(ezyvffjvuwmtuhpxdjrw) 적용·검증 완료 — Stephen 실사용 확인 후 Production
+(vnbpmvxruyciuuaermyh) 마이그레이션 적용 승인 대기
+
+plan_source: /Users/stevenmac/.claude/plans/encapsulated-bubbling-lightning.md (Plan Mode
+  사전 탐색·확정 — 코드 전수조사 3건(DB RPC/스키마, RentalDetailPanel 탭 구조, 클라이언트
+  호출부·체크아웃) + Stage DB(ezyvffjvuwmtuhpxdjrw) information_schema/pg_indexes/
+  role_routine_grants 직접 조회 + Plan 에이전트 설계 검증 1회 거쳐 확정)
+
+아젠다: 장바구니에 상품을 2개 이상 담아 예약해도 `RentalDetailPanel.svelte`(예약현황/대여현황
+  공유) "대여정보" 탭에는 지금 선택된 상품 1개 정보만 보이는 문제 해소. 신청(hold) 시점부터
+  `orders`/`order_items` 연결을 만들고, "대여정보" 탭에 같은 신청 묶음의 상품 전부를 기존
+  레이아웃 그대로 반복 표시. 목록 테이블 자체(1행=1상품)·예약코드 채번(상품별 개별)은 변경 없음.
+
+⛔ CRITICAL — 예약·결제 도메인 DB 함수 변경 + 다중 파일 연동. AGENTS.md TDD 강제 키워드
+  "예약/HOLD/결제" 해당 구간과, UI 표시 전용 GSD 구간이 섞여 있어 아래 Stage를 도메인별로
+  분리했다.
+
+[CONTEXT BRIDGE]
+
+핵심제약:
+  - **주문 연결 생성 지점은 장바구니 제출(체크아웃 버튼) 시점 단 한 곳으로 제한한다.** 최초 설계는
+    상품 상세페이지 즉시예약(`create_hold_reservation`) 직후에도 주문을 만드는 안이었으나, 코드
+    확인 결과 이 페이지의 "예약하기"는 성공 시 draft/hold 두 경로 모두 항상 `/cart`로
+    리다이렉트되고(`src/routes/products/[id]/+page.svelte:324,398`) 실제 제출은 언제나 장바구니
+    페이지 체크아웃 버튼에서 일어난다. 두 지점에서 각각 주문을 만들면 같은 순간 함께 결제되는
+    상품이 서로 다른 주문으로 쪼개지는 구조적 결함이 재현됨을 Plan 에이전트 검토로 확인 — 반드시
+    `src/routes/cart/+page.svelte`의 draft→hold 승격 루프(826-896행) 종료 직후,
+    `confirm-mock` 호출(897행) 이전 **한 곳에서만** 주문 연결을 생성한다.
+  - 신규 RPC `create_reservation_order(p_user_id, p_reservation_ids)`는 멱등이어야 한다 — 주어진
+    id 중 일부가 이미 다른 `order_items`에 연결돼 있으면 그 기존 order를 재사용(재생성 금지).
+    기존 `create_checkout_order`(Migration 251)는 이 신규 함수에 위임하도록 리팩터링해 시그니처·
+    반환값을 그대로 유지 — `confirm-mock`(`src/routes/api/checkout/confirm-mock/+server.ts`)은
+    코드 변경 없음.
+  - `order_key` 채번은 기존 `create_checkout_order`가 쓰는 `SELECT COUNT(*)+1 ... LIKE` 패턴을
+    그대로 재사용하지 말 것 — 이 저장소가 `reservation_code`에서 동일 COUNT 패턴 때문에 동시성
+    충돌을 겪어 Migration 247(`reservation_code_sequences`, `ON CONFLICT DO UPDATE SET
+    next_seq = next_seq + 1` 원자적 증가)로 교체한 전례가 있음. 신규 함수는 처음부터
+    `order_key_sequences` 시퀀스 테이블(동일 원자적 패턴)로 구현한다.
+  - 신규 RPC는 `create_checkout_order`와 동일하게 **`service_role` 전용 GRANT**(anon/authenticated
+    없음) — Stage DB에서 `role_routine_grants` 직접 조회로 확인된 기존 보안 수준과 동일하게 유지.
+    클라이언트에서 직접 `supabase.rpc()` 호출 금지, 반드시 신규 서버 API
+    (`src/routes/api/reservations/create-order/+server.ts`, service_role client)를 경유한다
+    (H-01 원칙 + CMS 브라우저 auth 패턴과 동일).
+  - `order_items.reservation_id`에 유니크 제약이 전혀 없음을 Stage DB에서 직접 확인함(정상 —
+    지금까지 이 컬럼을 다루는 코드가 `create_checkout_order` 하나뿐이라 문제된 적 없었음). 이번
+    변경으로 호출 빈도가 늘어나므로 부분 유니크 인덱스(`WHERE reservation_id IS NOT NULL`)를
+    안전장치로 추가한다.
+  - "대여정보" 탭 형제 상품 표시용 API는 기존 "결제정보" 탭 전용 `order-siblings/+server.ts`를
+    확장하지 않고 신규 분리(`rental-siblings/+server.ts`) — 두 탭의 필드 요구량·재조회 조건이
+    달라 합치면 유지보수가 꼬임(Plan 에이전트 권고 반영).
+  - 취소(cancelled)된 형제 상품은 "대여정보" 탭에서 숨기지 않고 상태 배지와 함께 그대로 노출한다
+    (기존 "결제정보" 탭의 형제 표시가 이미 무필터+상태라벨 방식이라 동일하게 맞춤 — Stephen이
+    다른 판단을 원하면 GATE C에서 조정 가능).
+  - 마이그레이션 적용 순서 엄수: crazyshot-stage(ezyvffjvuwmtuhpxdjrw) 검증 → Stephen 승인 →
+    crazyshot production(vnbpmvxruyciuuaermyh)
+
+TDD도메인: **Stage 1~3(DB RPC + 신규 서버 API + cart 호출부 연결)은 TDD 강제** — AGENTS.md TDD
+  강제 키워드 "예약/HOLD"(`rental_reservations` status='hold' 조작, `create_hold_reservation`/
+  `promote_draft_reservation` 흐름과 직결) 및 "결제·정산"(`create_checkout_order`/`orders`/
+  `order_items` 변경) 양쪽에 해당 — 15분 단위 분해, RED→GREEN→REFACTOR 강제.
+  **Stage 4(RentalDetailPanel 대여정보 탭 반복 렌더링 UI)는 GSD** — AGENTS.md GSD 키워드
+  "UI·컴포넌트·화면" 매치, DB/RPC 변경 없이 기존 필드 표시 확장뿐.
+
+절대금지:
+  - git 자율 실행 / production 마이그레이션을 Stephen 승인 없이 자동 적용
+  - `src/routes/products/[id]/+page.svelte`(상품 상세 즉시예약)에서 별도로 주문 생성 호출 추가
+    (핵심제약 1번째 항목 참고 — 주문 파편화 재발 원인)
+  - 목록 테이블(`/cms/reservation`·`/cms/rentals` 행) 구조 변경 — 계속 1행=1상품
+  - `reservation_code` 채번 로직 변경 또는 여러 상품이 코드를 공유하도록 만드는 시도
+  - 기존 마이그레이션 파일 직접 수정(GP-10) — 전부 신규 ADD 파일로만
+  - `create_checkout_order`의 기존 GRANT 수준(service_role 전용)을 anon/authenticated로
+    넓히는 실수 재발(Migration 251→251b가 이미 한 번 겪은 실수)
+
+frozen_files (해당 시 Claude Code 전용 — Cursor 수정 금지, GATE C 필수):
+  - src/routes/api/**/* (신규 `reservations/create-order`, `cms/reservations/[id]/
+    rental-siblings` 2곳 전부 해당)
+  - supabase/migrations/** (신규 ADD 1개 파일만 허용)
+
+실패롤백: 신규 마이그레이션 파일 삭제(additive-only라 기존 스키마 영향 없음) / 수정 대상 파일
+  (`cart/+page.svelte`, `RentalDetailPanel.svelte`) git checkout
+
+신규/수정 파일 (예정):
+  - `supabase/migrations/20260817000278_278_reservation_order_at_hold.sql` (신규, TDD)
+    — `order_key_sequences` 테이블 + `create_reservation_order` RPC + `create_checkout_order`
+    위임 리팩터링 + `order_items.reservation_id` 부분 유니크 인덱스
+  - `src/routes/api/reservations/create-order/+server.ts` (신규, TDD)
+  - `src/routes/cart/+page.svelte` (수정 — 승격 루프 종료 후 신규 API 1회 호출, TDD)
+  - `src/routes/api/cms/reservations/[id]/rental-siblings/+server.ts` (신규, GSD)
+  - `src/lib/components/cms/RentalDetailPanel.svelte` (수정 — 대여정보 탭 lazy-fetch + "상품
+    정보" 섹션 반복 렌더링, GSD)
+
+---
+
+### NOW — TDD 경로 (`@sp2-tdd-agents`, 15분 단위)
+
+- [x] TDD-1: `order_key_sequences` 테이블 + `create_reservation_order` RPC(멱등 가드 3분기: 0개
+  기존연결/1개 기존연결 재사용/2개 이상 충돌 시 최초 order 재사용) 신설. ✅
+  `supabase/migrations/20260817060000_280_reservation_order_at_hold.sql` — crazyshot-stage
+  (ezyvffjvuwmtuhpxdjrw) 적용 완료(번호 278 선점돼 있어 280으로 조정, 이미 존재하던
+  278/279는 다른 세션의 채팅 자동종료 기능이라 무관). RED(함수 부재 확인) → GREEN(적용 +
+  테스트 예약 3건으로 3분기 전부 execute_sql 직접 검증: A=신규생성 order_id 8 생성,
+  B=동일 id 재호출 시 order_items 중복 없이 동일 order 반환, C=일부만 겹치는 id로 재호출 시
+  기존 order에 신규 id만 추가 연결·전액 재계산) → 테스트 데이터 정리 완료.
+- [x] TDD-2: `create_checkout_order`를 `create_reservation_order`에 위임하도록 리팩터링. ✅
+  같은 마이그레이션에 포함. Stage에서 위임 호출 결과가 기존 order_id 8을 그대로 반환함을
+  직접 확인(신규 order 생성 안 됨). 회귀 확인: `npx vitest run confirmMock.test.ts` 11/11 pass.
+- [x] TDD-3: `order_items.reservation_id` 부분 유니크 인덱스 추가. ✅ 같은 마이그레이션에 포함,
+  Stage `pg_indexes` 직접 조회로 생성 확인.
+- [x] TDD-4: `src/routes/api/reservations/create-order/+server.ts` 신규 — 세션 검증 + service_role
+  RPC 호출, 실패 시 500(핵심 흐름 비차단 원칙). ✅ confirm-mock/+server.ts와 동일한
+  세션체크/admin client 패턴 재사용. svelte-check 신규 에러 0건.
+- [x] TDD-5: `src/routes/cart/+page.svelte` 승격 루프 이후 신규 API 호출 연결(이번 제출에 포함된
+  전체 reservation id — 방금 승격된 것 + 이미 hold였던 체크 항목). ✅ draft 승격 루프 종료 직후·
+  confirm-mock 호출 이전에 `checkedIds` 기준 1회 호출 추가, `.catch()`로 실패해도 계속 진행.
+  svelte-check 신규 에러 0건(기존 무관 경고만 잔존).
+
+### NOW — GSD 경로 (`@harness-executor`, 30분 단위)
+
+- [x] GSD-1: `src/routes/api/cms/reservations/[id]/rental-siblings/+server.ts` 신규 — order_id
+  조회 → 형제 reservation_id 조회 → productCode/productCategory/productImageUrl/rentalStart/
+  rentalEnd/pickupMethod/returnMethod 포함 확장 응답. ✅ Stage DB에서 실제 컬럼명(category,
+  image_urls, product_code / start_date, end_date, pickup_method, return_method) 직접 확인 후
+  작성. svelte-check 신규 에러 0건.
+- [x] GSD-2: `RentalDetailPanel.svelte` — rental 탭 활성화 시 GSD-1 API lazy-fetch(옵션상품
+  `optionsFetchedForId` 캐시 패턴 재사용) + `productInfoItems` derived로 `row`+`rentalSiblings`를
+  정규화해 "상품 정보" 섹션을 `{#each}` 반복 렌더링으로 전환(기존 info-row 마크업 그대로 재사용).
+  형제 항목에만 `.sibling-status-badge`(옵션상품의 `.option-code`와 동일 스타일)로 상태 표시.
+  "대여 일정"/"대여 방법" 섹션은 변경 없음. ✅ svelte-check 신규 에러 0건.
+
+---
+
+### 검증 결과 (2026-08-17, 이 세션)
+
+- Stage DB(ezyvffjvuwmtuhpxdjrw) 스모크테스트: 테스트 예약 3건(1175/1176/1177)으로
+  `create_reservation_order` 3개 분기 전부 execute_sql 직접 검증 — A(0개 기존연결→order_id 8
+  신규생성, order_items 2건, final_amount 50000) / B(동일 id 재호출→order_id 8 그대로, 중복
+  order_items 없음, count=2 유지) / C(1176+1177 부분겹침 재호출→기존 order_id 8 재사용, 1177만
+  신규 연결, final_amount 73000으로 재계산, distinct_orders=1 확인) 전부 통과. `create_checkout_order`
+  위임 호출도 동일 order_id 8 반환 확인(체크아웃 시점 재확인 시나리오 검증). 테스트 데이터 전부 삭제 완료.
+- `npx vitest run confirmMock.test.ts` — 11/11 pass(회귀 없음)
+- `npx vitest run`(전체) — 1108 pass / 30 fail, 실패 전부 계약서명·결제(payment.test.ts RED
+  상태·회원코드 등) 도메인의 사전 존재 실패 + `.claude/worktrees/exciting-ardinghelli-71ff74`
+  스테일 워크트리 — 이번 세션 변경 파일(cart/+page.svelte, RentalDetailPanel.svelte,
+  create-order/rental-siblings 신규 API, confirmMock)과 전부 무관함을 실패 목록 grep으로 직접 확인.
+- `npx svelte-check`(전체) — 0 ERRORS 326 WARNINGS(전부 사전 존재, 이번 세션 신규 파일 4개
+  전부 경고 0건)
+
+### 실제 브라우저 클릭 검증 (2026-08-17, 이 세션 — Stephen 명시 요청으로 Claude Browser 사용,
+조건부 허용 ② 적용. Stephen이 채팅에 남긴 CMS 계정 비밀번호는 정책상 직접 입력하지 않음 —
+로컬 dev 서버(Stage DB 연결) 브라우저 패널에 이미 유지되던 로그인 세션으로 확인)
+
+- Stage DB에 테스트 예약 2건(CS2608194/CS2608195, 같은 상품 Canon RF 24-70mm F2.8L, 서로 다른
+  상품코드 CSLENCOM2607008/2607005) 생성 후 `create_reservation_order`로 주문 연결(order_id 9)
+  → `/cms/reservation?selected=1232`(예약현황) 접속해 실제 클릭으로 확인:
+  **"대여정보" 탭에 "상품 정보(2개)"로 두 상품이 각각 독립된 이미지·상품명·코드·카테고리 블록으로
+  표시되고, 형제 상품에는 "신청대기" 상태 배지가 정상 노출됨을 스크린샷+접근성 트리로 직접 확인.**
+- CS2608194만 "승인하기" 버튼 실제 클릭 → `/cms/rentals?selected=1232`(대여현황) 접속해 확인:
+  **상태가 "승인완료"로 바뀐 뒤에도 "대여정보" 탭의 "상품 정보(2개)"가 그대로 유지되고, 아직
+  미승인인 형제(CS2608195)는 "신청대기" 배지로 개별 상태가 정확히 구분 표시됨을 확인** — 요청
+  2번(예약승인 시 대여현황에도 그대로 반영)이 실제 화면에서 검증됨. 관리자 "승인하기"(체크아웃
+  미경유) 경로에서도 문제없이 동작.
+- 단일 상품 예약(대여현황 목록의 다른 기존 행들, 예: SONY PXW-Z90 CSREV260700052 등)은 전부
+  기존과 동일하게 형제 없이 단일 블록만 표시되는 것을 목록 화면에서 확인(회귀 없음).
+- 테스트 데이터(order_items/orders/rental_reservations 1232·1233) 전부 삭제, 로컬 dev 서버 종료
+  완료.
+
+다음 단계: 3개 시나리오 전부 Stage에서 실사용 검증 완료 — Production(vnbpmvxruyciuuaermyh)
+마이그레이션 적용 승인 필요(Stephen 확인 후 진행). 적용 후 git commit은 Stephen 직접 실행.
+
+---
+
+## DONE — CMS 정밀 재검증 발견분 3건 수정 (2026-08-17) [BOUNDARY]
+
+아젠다: AUDIT v2 재조사에서 발견된 실제 결함 3건 수정 — Stephen 승인 완료
+
+[CONTEXT BRIDGE]
+plan_source: 직접 아젠다 (AUDIT v2 재조사 결과)
+핵심제약:
+  - 대상 파일 3개(ProductDetailPanel/CouponDetailPanel/productClone.test) 외 수정 금지
+  - 수정 후 svelte-check + vitest 재확인 필수
+TDD도메인: 없음 (GSD 도메인)
+절대금지: git 자율 실행 / 범위 외 파일 수정
+실패롤백: git checkout 대상 3파일
+
+완료 태스크:
+- [x] FIX-1: ProductDetailPanel.svelte $effect 블록에 누락된 7개 필드 재동기화 추가
+      (localBasic.name/brand/caption/category, shipRoundTrip/shipDelivery/shipReturn)
+- [x] FIX-2: CouponDetailPanel.svelte 신규 $effect 블록으로 8개 편집 필드 재동기화 추가
+      (u_discount_type/value/max_discount/usage_limit/user_grade/validity_type/valid_from/valid_until)
+- [x] FIX-3: productClone.test.ts makeAddInventoryAdmin mock에 slug 중복확인 call 추가
+      (RTN-3 로직 추가로 from() 3→4 calls, 회귀방지 테스트 GREEN 복원)
+
+검증: vitest productClone 5/5, 전체 669건 중 646 pass (16 pre-existing RED/미구현, 나의 변경과 무관)
+
+---
+
 ## DONE — /account 내정보 UX 정비 세션 일괄 (계정RPC타입·미등록안내·아바타업로드·중복배지제거·쿠폰메뉴) (2026-08-16) — GATE E 통과 (T1·T2 세션 내 기검수, T4·T5 sp3-qa-agent 검수 완료 — 수정 필요 항목 0건)
 
 아젠다: 단일 세션 내 Stephen의 launch-selected-element 기반 순차 지시 5건을 처리한 /account
@@ -16714,7 +16911,416 @@ TDD도메인: 해당 — AGENTS.md TDD 강제 키워드 대조 결과 "결제·�
 존재/동작함은 허위 함수명 호출 시 PGRST202가 발생하는 것과 대조해 확인했으므로 "이미 GREEN"이
 로컬 목/오탐이 아님을 검증함.
 
-## DONE — 전자계약 "문서 가져오기" 엑셀 임포트 → 스프레드시트 모드 전환 신규 구현 (2026-08-15) — ✅ GATE E 통과(4라운드 QA) + Stephen 실사용 테스트 발견 2건 수정(5라운드) + 변수칩 패널 연동 V2 신규개발(6라운드) + 변수칩 16개 전수감사·삽입로직 결함 1건 수정(7라운드) + CSS 동적임포트 Vite 로딩실패 수정(8라운드) + 삽입 여전히 미반영 근본원인(onselection 배치 오류) 확정·수정(9라운드) + 서명·직인 이미지 셀 삽입 V3 신규개발(10라운드) + 이미지 삽입 방식을 "셀 교체"→"텍스트 위 오버레이"로 재설계(11라운드) + 문서형과 동일한 이미지 크기설정 바 추가(12라운드) + 크기조절 시각적 미반영 + 너비입력창 빈값 표시 결함 수정(13라운드) + 이미지가 여전히 셀 안에 클리핑되던 jspreadsheet-ce 기본 CSS 2건 확정·수정(14라운드) + 서명/직인 이미지 삭제 기능 신규개발 — 스프레드시트 모드(15라운드) + 문서형(흐름형) 모드(16라운드) + 이미지 레이어 선택·드래그이동·삭제 신규개발(17라운드) + 셀 병합 아이콘 재라벨링 + A4 폭 맞춤·A4 출력·확대축소 신규개발(18라운드), migration 264·265 Stage+Production 양쪽 적용·검증 완료 / ⚠️ 5개 파일이 다른 세션의 커밋에 의해 이미 origin/stage에 푸시됨(아래 참고) — 나머지 파일은 여전히 다른 세션의 통합 커밋 대기 중, 이 세션에서 추가 커밋 실행 안 함(Stephen 명시 지시, 2026-08-16)
+## DONE — 전자계약 "문서 가져오기" 엑셀 임포트 → 스프레드시트 모드 전환 신규 구현 (2026-08-15) — ✅ GATE E 통과(4라운드 QA) + Stephen 실사용 테스트 발견 2건 수정(5라운드) + 변수칩 패널 연동 V2 신규개발(6라운드) + 변수칩 16개 전수감사·삽입로직 결함 1건 수정(7라운드) + CSS 동적임포트 Vite 로딩실패 수정(8라운드) + 삽입 여전히 미반영 근본원인(onselection 배치 오류) 확정·수정(9라운드) + 서명·직인 이미지 셀 삽입 V3 신규개발(10라운드) + 이미지 삽입 방식을 "셀 교체"→"텍스트 위 오버레이"로 재설계(11라운드) + 문서형과 동일한 이미지 크기설정 바 추가(12라운드) + 크기조절 시각적 미반영 + 너비입력창 빈값 표시 결함 수정(13라운드) + 이미지가 여전히 셀 안에 클리핑되던 jspreadsheet-ce 기본 CSS 2건 확정·수정(14라운드) + 서명/직인 이미지 삭제 기능 신규개발 — 스프레드시트 모드(15라운드) + 문서형(흐름형) 모드(16라운드) + 이미지 레이어 선택·드래그이동·삭제 신규개발(17라운드) + 셀 병합 아이콘 재라벨링 + A4 폭 맞춤·A4 출력·확대축소 신규개발(18라운드) + 확대/축소 기능이 셀 리사이즈를 깨뜨리는 회귀를 발견해 긴급 제거(19라운드) + toolbar 콜백 인자를 배열로 오판해 에디터 초기화 자체가 100% 크래시하던 치명적 결함 긴급 수정(20라운드) + 이미지 선택 시 크기조절 UI가 아예 없던 문제를 문서형(흐름형)과 동일한 플로팅 툴바 셋트로 재설계(21라운드) + 편집메뉴 스크롤 회귀(클래스명 불일치)·문서형 대비 이질적이던 네이티브 툴바 디자인 통일 시도(22라운드, ⚠️ Stephen 실사용 재현 결과 미해결로 판정됨 — 아래 참고) + 기존 양식을 다른 작성모드로 뒤엎어써 원본 콘텐츠가 영구 소실되는 CRITICAL 데이터 손상 결함 발견·클라이언트+서버 이중 방어 수정(23라운드), migration 264·265 Stage+Production 양쪽 적용·검증 완료 / ✅ @sp3-qa-agent 독립검수(18~23라운드 집중, 2026-08-16) 완료 — 18·19·20·21·23라운드 PASS, 22라운드만 부분 미해결(아래 QA 결과 블록 참고) / ⚠️ 5개 파일이 다른 세션의 커밋에 의해 이미 origin/stage에 푸시됨(아래 참고) — 나머지 파일은 여전히 다른 세션의 통합 커밋 대기 중, 이 세션에서 추가 커밋 실행 안 함(Stephen 명시 지시, 2026-08-16) + 22라운드 QA 액션아이템(.jss_toolbar에 position:sticky) 실행 + 워드모드 툴바 라벨화 + 양식목록 작성모드 배지 신규개발, 이후 Stephen "전면 재구성" 승인으로 jspreadsheet 네이티브 툴바를 커스텀 라벨버튼 툴바로 전면 교체 시도했으나 실사용 재현 결과 가로 오버플로우 회귀 발견 → 전량 원복(24라운드) + 방향 전환 — jspreadsheet 네이티브 툴바를 표준으로 삼아 워드모드 툴바를 아이콘 기반(Material Icons)으로 재구성, 실행취소·다시실행·글꼴·글자색 신규기능 추가(기존 설치돼 있었으나 미사용이던 TextStyle/Color/FontFamily 익스텐션 재활용, 신규 npm 의존성 없음)(25라운드) / ✅ @sp3-qa-agent 독립검수(24~25라운드, 2026-08-17) 완료 — 둘 다 PASS, 결함 0건, Stephen 명시 요청으로 별도 에이전트 2차 재검수까지 완료(1차 결과와 전부 일치 + 1차가 넘어갔던 Material Icons 글리프 유효성까지 구글 공식 데이터로 추가 검증, 신규 결함 0건 — 아래 QA 결과 블록 2건 참고). GATE E: 5개 파일 커밋 진행 가능(스테이징 대상을 해당 5개 파일로 명시 한정 권장)
+
+[@sp3-qa-agent 재검수 결과(2차 독립검증) — 24~25라운드, 2026-08-17]
+  Stephen "[재검수]" 명시 요청 — 1차 QA 결과를 신뢰하지 않고 별도 에이전트 인스턴스가
+  처음부터 재검증(개발 변경 없음, git status로 세션 5개 파일 동일 상태 확인 후 재검증만
+  진행). 1차 QA와 판정 결론은 동일(PASS)이나, 1차가 "정적분석으로 판정 불가"라며 넘어갔던
+  지점 하나를 실제로 검증해 메꿈:
+    - **Material Icons 글리프 유효성** — 1차 QA는 아이콘 렌더링을 "시각적 동작이라 판정
+      불가"로 넘겼으나, 2차는 사용된 20개 글리프명(undo/redo/format_bold/format_italic/
+      format_underlined/strikethrough_s/format_align_left·center·right/
+      format_list_bulleted·numbered/font_download/format_color_text/link/grid_on/
+      merge_type/call_split/delete/image/code) 전부를 구글 공식 데이터 2종(Google Fonts
+      아이콘 메타데이터 API + MaterialIcons-Regular.codepoints 리거처 테이블)과 직접
+      대조 — 전부 클래식 Material Icons 세트에 실존하는 유효한 글리프 확인. 특히 혼동
+      위험이 있는 두 쌍(`format_underlined` vs `format_underline`, `strikethrough_s` vs
+      `format_strikethrough` — 클래식/Material Symbols 세트 간 이름 차이)도 코드에 쓰인
+      값이 정확히 클래식 세트 유효값임을 확인.
+    - 네이티브 툴바 원복 완전성 — grep 패턴을 1차보다 확장(setFontSize/getFontSize/
+      setBorder/cse-native/customToolbar 등 추가)해 재검색, 여전히 잔재 0건.
+    - 아이콘 버튼 속성 보존 — 스크립트로 툴바 내 전체 `<button>` 태그를 파싱(36개, 전부
+      onclick 보유·아이콘버튼 20개 전부 title+aria-label 보유, 예외 2건은 팝오버 리스트
+      항목으로 가시 텍스트 자체가 접근성 이름 역할해 문제 아님).
+    - 팝오버 레이스 컨디션 — `toggle*Picker()`가 `next` 값을 `closeAllPickers()` 호출 전에
+      먼저 캡처해 stale-read 없음, outside-click 리스너가 `.cde-pick-group`(토글버튼+
+      팝오버 공통 부모) 내부로 스코프돼 "열자마자 즉시 닫힘" 버그 없음을 직접 로직
+      트레이스로 확인.
+    - `spreadsheetWidgetAdapter.ts` 등 3개 파일 전부 git 커밋 이력 자체가 없어(`??`
+      untracked) "원본과 diff"가 원천적으로 불가능하다는 점을 명시하고, 대신 현재 내용이
+      서사와 일치하는지(8-메서드 인터페이스만 존재, 확장분 없음)로 판단 근거를 대체.
+
+  정량 재실행: svelte-check 프로젝트 전체 0 ERRORS(대상 파일 귀속 경고도 0), vitest
+  103/103 통과(worktree 중복 테스트파일 1개가 추가로 매칭됐으나 세션 파일과 무관한 환경
+  아티팩트). console.log/TODO/`: any`/Svelte4 문법/서버키노출 0건 재확인.
+
+  1차 QA와의 불일치: 없음(사실관계 전부 일치, 신규 결함 0건). GATE E: 통과 재확인 —
+  5개 파일 커밋 가능. 브라우저 실측 클릭 동작 확인만 Stephen 몫으로 남음.
+
+[@sp3-qa-agent 독립검수 결과 — 24~25라운드 집중, 2026-08-17]
+  범위: 이 세션'만'의 확정 변경파일 5개(loadMaterialIconsFont.ts 신규,
+  ContractSpreadsheetEditor.svelte, ContractDocumentEditor.svelte,
+  spreadsheetWidgetAdapter.ts, spreadsheetWidgetAdapter.test.ts) 기준.
+  검수 방법론: Claude Browser 조건부 허용 2가지(①<launch-selected-element> 세션 진행 중,
+  ②Stephen 명시적 "Claude Browser 실행" 요구) 어디에도 해당하지 않아 정적분석(grep 대조·
+  svelte-check·vitest)만으로 한정 — 이 판단 자체를 결과에 명시.
+
+  판정 요약:
+    24라운드(스크롤 sticky, 유지분) — PASS. `.jss_toolbar { position:sticky; top:0;
+      z-index:2 }` 존재 확인.
+    25라운드(워드모드 툴바 아이콘화 + Material Icons 공용 유틸 + 네이티브 툴바 원복
+      완전성) — PASS.
+      - "네이티브 툴바 전면 교체 시도 → 원복"이 정말 완전한지가 이번 검수의 핵심
+        우려사항이었음 — grep 전수 검색으로 2차 시도 잔재(setStyle/setMerge/fullscreen
+        직접호출 등) **없음** 확인. `toolbar` 옵션(merge 아이콘 relabel 로직 포함)과
+        `onselection(instance, x1, y1)` 3-인자 시그니처 모두 원형 그대로.
+      - 실행취소/다시실행 — 기존 제네릭 `toggle(cmd, opts?)` 헬퍼와 타입·런타임 호환
+        확인(옵션 없이 호출 시 `fn.call(anyChain).run()` 분기 정상 진입).
+      - 글꼴/글자색 — `tiptapExtensions.ts`에 TextStyle/Color/FontFamily 실제 포함+
+        package.json에 3개 패키지 기설치(^3.29.2) 재확인, 세션 주장("이미 설치돼 있었다")
+        사실과 일치. StarterKit history 옵션 미비활성으로 undo/redo 기본 동작 확인.
+      - 팝오버 3종(글꼴·글자색·서명/직인) 상호배타 처리(`closeAllPickers()`) 간섭 없음.
+      - 아이콘 전환 20개 버튼 `onclick`/`class:active`/`title`/`aria-label` 전수 보존
+        확인, 텍스트 유지 항목(행/열 개별 추가삭제·헤더토글·H1~3·서명직인·확대축소)의
+        핸들러도 손상 없음. 신규 CSS 클래스 전부 마크업에서 실사용(죽은 CSS 없음).
+      - spreadsheetWidgetAdapter.ts/테스트 — 8-메서드 인터페이스만 존재, 확장 오버로드
+        잔재 없음(순변경분 0 재검증 완료).
+
+  정량 검증: svelte-check 대상 5개 파일 에러·경고 0건(무관 기존 오류 1건 제외),
+  vitest 지정 6개 파일 103/103 통과, console.log/TODO/FIXME/`: any`/Svelte4 문법/
+  서버키노출 전부 0건.
+
+  GATE E 판정: 통과 — 위 5개 파일은 커밋 진행 가능. 단 함께 스테이징된 다른 미커밋
+  파일(23라운드 이전 변경분 등)은 이번 검수 범위 밖이므로 `git add -A`/`git add .`
+  대신 파일명을 명시해 스테이징 대상을 한정할 것을 권고.
+
+  ⚠️ 검수 범위 밖(결함 아님, 방법론 한계): 아이콘 글리프 실제 렌더링·팝오버 열림
+  위치·클릭 반응성 등 시각적 동작은 정적분석으로 판정 불가 — Stephen 로컬 확인 또는
+  조건부 허용 사유 발생 시(<launch-selected-element> 또는 명시적 요청) 재확인 권장.
+
+[@sp3-qa-agent 독립검수 결과 — 18~23라운드 집중, 2026-08-16]
+  범위: "[이 세션'만'의 확정 변경파일 목록]"(22개 파일) 기준, 1~17라운드는 기존 4차 QA로
+  이미 검수됐다고 판단해 재검수 생략, 18~23라운드만 집중 검수.
+
+  판정 요약:
+    18라운드(병합 아이콘 재라벨링+A4 도구) — PASS. jspreadsheet-ce 압축 소스에서
+      `content:"web", tooltip:"Merge the selected cells"` 직접 재확인, 세션 주장과 일치.
+    19라운드(확대/축소 제거) — PASS. `zoomPercent`/`cse-zoom` 잔재 0건, 완전 제거 확인.
+    20라운드(toolbar 콜백 크래시 수정) — PASS. 라이브러리 소스에서 toolbar 함수형일 때
+      실제로 `{items:[...]}` 객체를 넘긴다는 사실 재확인, 방어 코드가 정확히 대응.
+    21라운드(이미지 플로팅 툴바) — PASS(코드 검증 한정, 시각 미검증 — 프로젝트 규칙상
+      Claude Browser 사용 불가).
+    22라운드(스크롤+디자인 통일) — 부분 PASS: 페이지 전체 스크롤 문제(.cms-main까지
+      포함한 전체 flex 높이체인)는 구조적으로 정상 해소됨을 재확인. 단, **새로운 미해결
+      원인**을 발견 — jspreadsheet-ce가 네이티브 툴바(.jss_toolbar)를 라이브러리 자체가
+      `containerEl`(=.spreadsheet-container, 우리 CSS의 유일한 overflow:auto 영역) **내부
+      자식**으로 삽입하는데, 라이브러리 기본 CSS에도 22라운드가 추가한 오버라이드에도
+      `.jss_toolbar`에 position:sticky가 없어 그리드를 스크롤하면 네이티브 툴바(undo/
+      redo/폰트/정렬/병합/테두리 등)가 함께 스크롤돼 사라진다 — Stephen이 재현한 증상과
+      정확히 일치하는 설명. 커스텀 `.cse-toolbar`(서명/직인 삽입, A4 도구)는
+      .spreadsheet-container 밖 형제라 이미 고정돼 있음. 디자인 통일(CSS 오버라이드)
+      자체는 특이성 계산상 정상 적용될 것으로 보임 — 단 이 가설은 정적분석 근거이며
+      브라우저 실측 미완료, 확정 아님. **다음 세션 액션 아이템**: `.spreadsheet-container
+      :global(.jss_toolbar)`에 `position:sticky; top:0; z-index:N` 추가를 시도해볼 것
+      (단 재도입 전 반드시 실사용 리사이즈/스크롤 테스트로 회귀 없는지 확인 — 19라운드
+      zoom 회귀 전례 참고).
+    23라운드(CRITICAL 데이터손상 방지) — PASS, 로직 결함 없음:
+      (a) 클라이언트 가드는 "기존양식+모드변경시도"만 차단, 신규작성/동일모드 재임포트는
+          정상 허용 확인.
+      (b) 서버 가드는 service_role(admin) 클라이언트라 RLS 무관, 컬럼/테이블명 정확.
+      (c) 3개 저장경로(flow/canvas/spreadsheet) 전부 현재 모드와 동일한 authoring_mode를
+          하드코딩 전송하므로 정상 저장 흐름에 오탐(false positive) 없음 확인.
+      (d) create 액션은 가드 코드 영향 밖 확인.
+      ⚠️ 범위 밖 부가발견(FAIL 처리 안 함, 후속 검토만 권고): 계약서 "인스턴스"(템플릿이
+      아닌 개별 발송 계약, ContractEditorModal.svelte)에는 동일 가드가 없고, 서버
+      (/api/cms/contracts/[id]/content/+server.ts)도 이미 발송·서명된 계약만 차단할 뿐
+      **미발송 초안 상태의 계약 인스턴스**는 여전히 동일한 사고(실수로 xlsx 선택)로 콘텐츠
+      소실 가능 — 별도 세션에서 검토 권고.
+
+  GATE E 판정: 코드품질 게이트(vitest 73/73, svelte-check 대상파일 신규에러 0건, build
+  성공)는 전부 통과. 단 "Stephen 보고사항 전부 해결" 게이트는 22라운드가 남아 미충족.
+  데이터 무결성·코드 안전성 관점(23라운드 CRITICAL 포함)에서는 커밋해도 위험 없음 —
+  22라운드는 별도 세션(실브라우저 확인 필요)으로 미루고 지금 커밋을 진행해도 기능적
+  위험은 없다는 것이 QA 결론. 커밋 여부는 Stephen 판단.
+
+[⚠️ 22라운드 미해결 판정 + 작업 중단 — 2026-08-16, Stephen 직접 지시]
+  22라운드에서 "스크롤 고정" + "네이티브 툴바 디자인 통일"을 코드 근거(CSS 특이성 계산,
+  컴파일된 번들 CSS 직접 확인, flex 높이체인 전수 추적)로 수정 완료 보고했으나, Stephen이
+  동일 화면을 실사용 재현한 결과 두 증상 모두 그대로 재현됨을 재확인 — "선택 영역의
+  편집메뉴 UI 디자인이 통일성있게 바뀌지 않았는데 뭘 수정했다는 소리지? 스프레드시트
+  편집메뉴 UI 스크롤 고정도 반영되지 않았어."
+  메인세션이 재조사 중 `.cms-main { overflow-y:auto }`(src/routes/cms/+layout.svelte,
+  CMS 전역 셸의 최상위 스크롤 컨테이너)까지 추적해 ".contracts-page 자체의 flex 높이체인은
+  전부 올바르나, 그 바깥의 .cms-main이 실제로 flex:1을 온전히 받고 있는지"를 마저
+  검증하려던 시점에 Stephen이 개입: "현재 세션이 매우 멍청해지고 할루시네이션이 심해지고
+  있으니 더이상 수정 작업 중지 할 것. 토큰만 소비하고 더이상 요구사항을 수행하지 못함."
+  → 지시에 따라 즉시 코드 수정 중단. 22라운드의 스크롤·디자인 통일 관련 코드(.cse-wrap
+  클래스명 통일, jspreadsheet 네이티브 툴바 CSS 오버라이드)는 롤백하지 않고 그대로
+  남아있으나(무해한 CSS 추가라 되돌릴 이유 없음), **실제 문제 해결로 간주하지 말 것** —
+  다음 세션은 이 부분을 "미해결" 상태로 취급하고, 코드 정적분석만으로 재시도하기보다
+  Claude Browser 등 실제 컴퓨티드 스타일 확인이 가능한 방법(또는 Stephen 직접 검증)을
+  거쳐야 함. 23라운드(CRITICAL 데이터손상 방지)는 22라운드와 무관한 별도 결함이라 이
+  판정과 무관하게 유효함.
+
+[세션 부가 기록 — 코드 외 정책 변경, 2026-08-17]
+  25라운드 작업 직후 Stephen이 "Claude Browser 사용 금지 이유"를 질문 → CLAUDE.md 118~140행
+  "절대 기억할 것" 규칙 근거(2026-07-28 확정: 이미지 토큰 과소비+실행시간 과다) 그대로 설명.
+  이어서 그 금지규칙을 조건부로 완화하도록 명시적 지시 → CLAUDE.md 138~144행 수정:
+  기본값(금지)은 유지하되 예외 2건 추가 — ① <launch-selected-element>로 요소가 선택돼
+  브라우저 세션이 진행 중인 동안 해당 세션에 한해 허용, ② 세션 채팅에서 "Claude Browser
+  실행"을 명시적으로 요구한 경우 그 요청에 한해 허용. 두 조건 모두 아닐 때(Claude 자체
+  판단으로 선제적 실행)는 여전히 금지, 허용된 사용 종료 후 자동으로 기본값 복귀 명시.
+  ⚠️ 이건 앱 코드 변경이 아니라 세션 운영정책 변경이라 아래 QA 검수 대상(24~25라운드)에
+  포함하지 않음 — 별도 기록만.
+
+[25라운드 — 방향 전환: jspreadsheet 네이티브 툴바를 표준 디자인으로 삼아 워드모드 툴바 아이콘 기반 재구성, 2026-08-17]
+  Stephen 재지시(24라운드 원복 직후, <launch-selected-element> 스크린샷 2장 첨부 — 스프레드시트
+  네이티브 툴바 vs 워드모드 라벨 툴바): "jspreadsheet 네이티브 툴바(13개 아이콘)을 표준
+  디자인 UI로 기준하고... 워드 작성모드의 툴바 UI가 엉성해 시각적 불일치의 진짜 원인임.
+  1. 스프레드시트 툴바 UI 스타일을 표준으로 참고해 워드 작성모드 툴바의 모든 라벨 버튼
+  스타일을 새로 만들어 반영할 것. 2. 개발범위가 커도 완성도 높은 통일감 우선, 단 회귀
+  위험도 최대한 낮출 것." → 24라운드와 정반대 방향: 네이티브 툴바는 더 이상 손대지 않고
+  (24라운드 후속 원복 상태 그대로 유지), ContractDocumentEditor.svelte(워드모드)만
+  아이콘 기반으로 재설계.
+
+  사전조사(Explore 서브에이전트): tiptapExtensions.ts에 TextStyle/Color/FontFamily
+  익스텐션이 이미 설치·구성돼 있으나(설치 시점 미상) 툴바 UI가 없어 실사용 불가 상태였음을
+  확인 — "글꼴/글자색" 기능은 신규 npm 설치 없이 UI만 만들면 되는 상태. StarterKit도
+  history(undo/redo) 익스텐션을 기본 포함(옵션으로 끄지 않는 한 활성) — 이 역시 신규
+  익스텐션 없이 UI만 연결하면 됨. 반대로 배경색(Highlight)·글자크기는 대응 익스텐션이
+  설치돼 있지 않아 새 npm 패키지 또는 커스텀 마크 확장이 필요 — "회귀 위험 최대한 낮출 것"
+  지시에 따라 이번 라운드 범위에서 의도적으로 제외(신규 의존성·문서 스키마 영향은 "툴바
+  UI 재구성"과 다른 리스크 등급으로 판단, 필요시 별도 라운드로 분리 권고).
+
+  구현:
+    ① src/lib/utils/loadMaterialIconsFont.ts 신규 — ContractSpreadsheetEditor.svelte에
+       중복 존재하던 Material Icons 웹폰트 로더를 공용 추출, 두 컴포넌트 모두 이걸 쓰도록
+       교체(스프레드시트 쪽은 import만 교체, 동작 변경 없음).
+    ② ContractDocumentEditor.svelte 툴바 전면 아이콘화(Material Icons, 총 20개 글리프) —
+       실행취소·다시실행(신규), 굵게/기울임/밑줄/취소선, 정렬 3종(format_align_left/
+       center/right — 완전히 다른 글리프라 22라운드 이전의 "≡ 3개 동일" 문제와 24라운드의
+       "한글 라벨" 임시조치를 모두 대체), 목록 2종, 링크, 표 삽입/삭제·병합/분할(병합
+       아이콘은 네이티브 툴바가 쓰는 것과 동일한 "merge_type" 재사용), 이미지, HTML소스.
+       글꼴/글자색 피커 신규 추가(네이티브 툴바와 동일한 선택지: 글꼴 기본값/Verdana/
+       Arial/Courier New, 글자색은 8색 팔레트) — setFontFamily/unsetFontFamily,
+       setColor/unsetColor 체인 커맨드로 기존 익스텐션에 연결.
+    ③ 아이콘화하지 않고 유지: 행/열 개별 추가·삭제·헤더토글(대응 아이콘 모호), 제목
+       H1/H2/H3, 서명/직인(앱 고유 용어), 확대/축소(이미 보편적 관례) — 불명확한 아이콘을
+       억지로 고르는 오독 위험보다 명확한 텍스트가 낫다고 판단.
+
+  검증: svelte-check 신규 에러 0건(대상 파일 warning도 0건), vitest 관련 테스트 전부 통과
+  (spreadsheetWidgetAdapter/spreadsheetRender/xlsxToSpreadsheetDocument 73개,
+  contractTiptapRender/contractTableEditCommands 30개). ContractSpreadsheetEditor.svelte
+  (네이티브 툴바)는 이번 라운드에서 재수정하지 않음 — 24라운드 원복 상태 그대로.
+  ⚠️ 아이콘 렌더링·팝오버 동작·실제 클릭 결과는 Claude Browser 사용 금지 원칙상 코드
+  근거로만 판단 — Stephen 로컬 재확인 필요(다음 <launch-selected-element> 또는 실사용
+  피드백 대기).
+
+[24라운드 — 22라운드 QA 액션아이템 실행(스크롤 sticky) + 워드모드 툴바 라벨화 + 작성모드 배지, 이후 "네이티브 툴바 교체" 시도·원복, 2026-08-17]
+  세션 시작 시 TASK.md 사전 확인 없이 독자적으로 재조사했으나 22라운드 QA가 이미 남긴
+  "다음 세션 액션 아이템"(.jss_toolbar에 position:sticky 추가)과 동일한 결론에 도달 —
+  우연히 같은 근본원인을 재확인한 것으로, 조사 자체는 중복이었으나 결과는 일치.
+
+  Stephen 최초 요청(Plan Mode): "1. 스프레드시트 작성모드 스크롤 시 편집메뉴가 함께
+  올라가 사라지는 문제 수정. 2. 두 작성모드 편집메뉴 UI 디자인 차이에 설득력 있는 이유
+  설명, 없다면 통일성있게 리디자인. 3. 통일 시 스프레드시트 UI가 가독성 높으니 그쪽
+  기준으로. 4. 기존 양식 작성모드 실수 전환 방지(23라운드에서 이미 처리 완료 확인)."
+  AskUserQuestion 3건으로 세부 승인 받음: sticky 처리 포함(권장), 전면 재구성(라벨
+  버튼화), 양식목록 모드배지 포함(권장).
+
+  1차 구현(계획대로):
+    - ContractSpreadsheetEditor.svelte `.jss_toolbar`에 position:sticky/top:0/z-index:2
+      추가 — 22라운드 QA가 예측한 그대로 시트 내부 스크롤 시에도 네이티브 툴바 고정.
+    - ContractDocumentEditor.svelte 툴바 라벨 재구성 — 정렬 3버튼("≡" 동일글리프 실제
+      버그) → "왼쪽/가운데/오른쪽" 한글 라벨, 목록·링크·HTML소스도 한글 라벨화, 그룹간
+      여백 확대.
+    - contract-template.ts/+page.server.ts/+page.svelte — 양식목록 카드에 authoring_mode
+      배지(문서형/캔버스형/스프레드시트형) 신규 표시.
+    검증: svelte-check 신규 에러 0건, vitest 73/73 통과.
+
+  Stephen이 <launch-selected-element> 2장(스프레드시트 네이티브 툴바 vs 워드모드 라벨
+  툴바)으로 재검증 — 여전히 "완전히 다른 디자인"으로 보인다며 재작업 지시. 원인: 라벨화는
+  우리가 만든 `.cse-toolbar`/`.cde-toolbar`끼리는 통일됐으나, jspreadsheet가 자체 생성하는
+  네이티브 툴바(undo/redo/폰트/정렬/병합/테두리 등 13개 Material 아이콘)는 서드파티 DOM이라
+  라벨화 대상에서 애초에 제외돼 있었음 — 이질감의 실제 근원.
+
+  2차 구현("전면 재구성" 승인 반영, 이후 원복됨):
+    - jspreadsheet 네이티브 툴바를 `toolbar:false`로 완전히 끄고, 동일 기능(실행취소·
+      다시실행·굵게·정렬·세로정렬·글꼴·글자크기·글자색·배경색·테두리·병합·전체화면,
+      약 15개 컨트롤)을 라이브러리 공개 API(setStyle/setMerge/undo/redo/fullscreen 등)만
+      사용해 `.cse-toolbar`에 커스텀 라벨버튼으로 신규 구현. spreadsheetWidgetAdapter.ts의
+      JssWorksheetInstance 타입에 대응 메서드·오버로드 추가, 테스트 목업도 함께 확장.
+    - Stephen이 <launch-selected-element>로 재현: 새 커스텀 툴바가 좁은 패널 폭에서 가로
+      오버플로우("테두리" 버튼이 잘려 화면 밖으로 나감) — 명시적 "해당 수정 전으로
+      복구할것" 지시.
+    - 즉시 전량 원복: ContractSpreadsheetEditor.svelte(네이티브 툴바 toolbar 옵션·
+      onselection 시그니처·마크업·CSS 전부 되돌림, 단 sticky 수정은 1차 구현분이라 유지),
+      spreadsheetWidgetAdapter.ts·테스트 목업도 원본으로 복귀(순변경분 0). 원복 후
+      svelte-check·vitest 재검증 — 신규 에러 0건, 73/73 통과 재확인.
+
+  ⚠️ 이 라운드가 남긴 상태: 스크롤 sticky 문제는 해결(22라운드 QA 예측 실행), 양식목록
+  배지는 정상 반영. 툴바 "디자인 통일"은 2차 시도가 회귀로 원복돼 미해결로 남았다가,
+  Stephen이 방향을 뒤집어 25라운드로 이어짐(위 참고) — 22라운드와 마찬가지로 실제
+  브라우저 시각 확인은 Stephen 몫.
+
+[23라운드 — 🔴 CRITICAL 데이터 손상 결함 발견·수정: 기존 양식을 다른 작성모드로 뒤엎어써 원본 콘텐츠 영구 소실, 2026-08-16]
+  Stephen 제보(22라운드와 동일 스크린샷 재첨부 + 신규 4번 항목): "기존 만들어진 양식(좌측
+  양식목록) 중 워드 작성모드를 스프레드시트 작성모드로 뒤엎어넣는 엄청난 실수를 방지할 것."
+  ⚠️ 1~3번(스크롤·디자인 통일)은 22라운드에서 이미 수정 완료 확인(코드에 그대로 남아있음,
+  재작업 불필요) — 이번 라운드는 신규 4번 항목만 처리.
+
+  코드 추적으로 실제 데이터손상 경로 확정(추측 아님):
+    1. "문서 가져오기" 버튼은 `authoringMode === 'flow'`일 때만 노출되지만, 그 모달
+       (ContractImportModal.svelte)은 .docx와 .xlsx를 **같은 파일선택창**에서 받는다
+       (accept 속성에 둘 다 포함, 안내문구도 "파일 선택 (.docx / .xlsx / .hwpx / .hwp)"
+       한 줄로 뭉뚱그려짐).
+    2. 기존 문서형(flow) 계약서를 편집 중 실수로 .xlsx를 선택하면 `handleImportSpreadsheet()`
+       가 조건 없이 `authoringMode = 'spreadsheet'`로 전환한다.
+    3. 그대로 저장하면 `handleSpreadsheetSave()`가 `content_blocks`를 하드코딩된 `'[]'`로
+       비운 채 **동일한 template.id**로 update 액션에 POST한다.
+    4. `+page.server.ts` update 액션은 폼에서 온 `authoring_mode`를 어떤 검증도 없이
+       그대로 반영·저장한다 — 원본 문서형 콘텐츠(content_blocks)가 영구 소실되고 그
+       양식은 스프레드시트 양식으로 완전히 뒤바뀐다.
+  ⚠️ ContractTemplatePanel.svelte 자신의 authoringMode 선언부 주석에 "template!=null:
+  이후 변경 불가"라고 이미 명시돼 있었다 — 즉 이건 새 요구사항이 아니라 컴포넌트가 스스로
+  선언한 불변조건을 실제 구현(두 임포트 콜백)이 지키지 않고 있던 기존 결함이었다.
+
+  수정(이중 방어, H-01 방어적 서버 검증 원칙에 따라 클라이언트만으로 끝내지 않음):
+    ① 클라이언트(ContractTemplatePanel.svelte) — `handleImportSpreadsheet()`/
+       `handleImport()` 각각에 가드 추가: `template`(기존 양식)이 존재하고 임포트가 실제로
+       authoringMode를 바꾸려는 시도라면 즉시 차단 + "기존 계약서 양식은 작성 모드를 변경할
+       수 없습니다. 형식을 바꾸려면 새 양식을 작성해주세요." 토스트, authoringMode/
+       _importedSpreadsheetDoc 등 어떤 상태도 변경하지 않고 return. 신규 작성(template=null)
+       에서는 기존 "임포트로 모드를 고른다" 흐름 그대로 유지(막지 않음).
+    ② 서버(+page.server.ts update 액션) — id/title 검증 직후, 저장된 기존
+       authoring_mode를 별도 SELECT로 조회해 이번 제출값과 다르면 fail(400)으로 즉시 거부.
+       클라이언트 코드를 신뢰하지 않는 독립 재검증 — 향후 다른 어떤 경로(버그·직접 API
+       호출 등)로 동일 시도가 들어와도 서버 단에서 최종 차단됨.
+  검증: svelte-check 신규 에러 0건, vitest 3개 파일 73/73 통과, build 성공. 이 액션을
+  직접 커버하는 전용 테스트 파일은 기존에도 없었음(create/update 액션 전체가 vitest 대상
+  아님, 기존 세션 관례).
+  ⚠️ 실제로 .xlsx를 잘못 선택했을 때 토스트가 뜨고 저장이 차단되는지는 Claude Browser
+  사용 금지 원칙상 코드로만 확인 — Stephen 로컬 재확인 필요.
+
+[22라운드 — 편집메뉴 UI 스크롤 회귀(클래스명 불일치) 수정 + 문서형 대비 이질적이던 스프레드시트 네이티브 툴바 디자인 통일, 2026-08-16]
+  Stephen 제보(스크린샷 2장 — 문서형/스프레드시트형 툴바 비교):
+  "1. 스프레드시트 작성모드 시 문서 레이아웃 영역만 스크롤되고 편집 메뉴UI는 고정되어야
+  정상임: 워드 작성모드에서는 정상 고정됨. 2. 두 작성모드의 편집 메뉴 UI가 완전히 다르게
+  디자인된 설득력 있는 이유 설명: 타당성이 없다면 최대한 적정 배치되야할 기능들을
+  통일성있게 리디자인 필요. 3. 리디자인 시 스프레드시트 UI가 훨씬 사용성과 가독성이
+  높으니 맞춰 구성할 것."
+
+  ① 스크롤 회귀 — 근본원인 확정(코드 근거, 추측 아님): ContractTemplatePanel.svelte에는
+  이미 `.spreadsheet-editor-wrap :global(.cse-wrap) { flex:1; min-height:0 }` 규칙이
+  존재했다 — 문서형의 `.editor-col :global(.cde-wrap)`(2026-08-15에 "이중 스크롤 컨테이너"
+  버그로 이미 한 번 발견·수정된 바로 그 높이경계 지정 패턴)과 동일한 의도로 작성된 규칙.
+  그런데 ContractSpreadsheetEditor.svelte의 실제 루트 div 클래스명이 `.cse-wrap`이 아니라
+  `.spreadsheet-editor-wrap`(패널 레벨 래퍼와 우연히 동일한 이름)으로 돼 있어 이 셀렉터가
+  단 한 번도 매칭되지 않았음 — 높이 제약이 전혀 걸리지 않아 컴포넌트가 내용만큼 계속
+  늘어났고, `.spreadsheet-container`(overflow:auto) 내부가 아니라 페이지 전체가 스크롤
+  되며 위쪽 툴바 2단(.cse-toolbar + jspreadsheet 네이티브 툴바)까지 함께 밀려 올라가
+  사라졌다. 수정: 루트 div 클래스를 파일 전체의 `cse-` 접두사 규약에 맞춰 `.cse-wrap`으로
+  개명(ContractTemplatePanel.svelte는 원래 셀렉터가 옳았으므로 무수정) — CSS 추가 없이
+  클래스명 일치만으로 해결.
+
+  ② 디자인 차이의 "설득력 있는 이유": 스프레드시트 모드의 툴바는 2단 구조다 — 위쪽
+  `.cse-toolbar`(서명/직인 삽입, A4 도구)는 우리가 직접 만든 100% 커스텀 마크업(문서형
+  `.cde-toolbar`와 동일 성격)인 반면, 아래쪽은 jspreadsheet-ce가 마운트 시점에 자체
+  생성하는 서드파티 네이티브 툴바(undo/redo/폰트/정렬/병합/테두리 등)라 .svelte
+  마크업으로 직접 재구현할 수 없다 — 이게 두 모드가 "완전히 다르게" 보이는 근본 원인.
+  타당성 판단: 기능 재구현(라이브러리가 이미 제공하는 undo/redo/폰트/정렬/색상피커/병합/
+  테두리 로직을 처음부터 다시 만드는 것)은 이번 요청 범위를 크게 넘는 과잉조치로 판단해
+  하지 않음 — 대신 CSS로 디자인 토큰만 통일.
+
+  ③ 리디자인 — 문서형 .cde-toolbar/.cde-btn이 이미 쓰고 있는 CMS 디자인 토큰
+  (--cs-surface-gray 배경/--cs-lilac 호버·구분선/--cs-purple 활성)을 기준으로 스프레드시트
+  쪽 두 툴바 모두를 맞춤:
+    - `.cse-toolbar`: 배경 없음(투명) → `--cs-surface-gray` 추가(문서형과 동일 톤)
+    - jspreadsheet 네이티브 툴바(`.jss_toolbar`): 기본값이 `#f3f3f3` 배경 + `#ccc` 테두리
+      + 비대칭 margin(`0 2px 4px 1px`)으로 우리 토큰과 완전히 무관했음 → 배경
+      `--cs-surface-gray`, border 제거 후 `border-bottom: 1px solid --cs-lilac`(위
+      `.cse-toolbar`와 동일한 flat strip 스타일로 통일), margin 0, padding
+      `.cse-toolbar`와 동일하게 맞춤
+    - `.jtoolbar-item:hover` → `--cs-lilac`, 활성(`.jtoolbar-active`/
+      `.jtoolbar-arrow-selected`) → `--cs-purple-op10` 배경 + `--cs-purple` 아이콘,
+      구분선(`.jtoolbar-divisor`) → `--cs-lilac`, 아이콘 기본색 → `--cs-text`
+    → 결과적으로 문서형 `.cde-toolbar` / 스프레드시트 `.cse-toolbar` / jspreadsheet
+      네이티브 툴바 3곳 전부 동일한 배경·호버·활성 톤을 공유해 "완전히 다른 디자인"이던
+      이질감을 해소.
+
+  검증: svelte-check 신규 에러 0건, vitest 3개 파일 73/73 통과, build 성공.
+  ⚠️ 실제 스크롤 시 툴바가 고정되는지, 색상 톤이 시각적으로 자연스럽게 어우러지는지는
+  Claude Browser 사용 금지 원칙상 코드 근거로만 판단 — Stephen 로컬 재확인 필요.
+
+[21라운드 — 이미지 선택 시 크기조절 UI 부재 문제를 문서형(흐름형)과 동일한 플로팅 툴바로 재설계, 2026-08-16]
+  Stephen 제보(스크린샷 — 셀에 삽입된 직인 이미지, 이동·삭제는 되나 크기조절 불가):
+  "최초 등록 시 이동삭제 가능하나 크기 조절 불가능. 워드 모드와 같이 크기 조절바 UI가
+  직인(서명) UI와 셋트로 생성 움직이는 UI 구현할 것."
+  근본원인: 17라운드에서 "이미지 레이어 선택"을 그리드 셀선택과 완전히 분리된 별개
+  개념으로 설계했다(이미지 pointerdown에서 preventDefault+stopPropagation으로 그리드
+  네이티브 선택을 의도적으로 차단). 그런데 상단 고정 툴바의 크기조절 UI(소/중/대 프리셋
+  +너비입력, 12라운드)는 오직 "셀이 선택됐을 때"(onselection 이벤트)만 노출되도록
+  구현돼 있었다 — 이미지를 직접 클릭(가장 자연스러운 사용자 동작)하면 onselection이
+  아예 발생하지 않아 크기조절 UI가 절대 안 뜨는 구조적 공백이었음. 코너의 삭제 버튼만
+  이미지 선택 시 별도로 떴던 것과 대조적.
+  수정: ContractDocumentEditor.svelte의 ImageWithNodeView 플로팅 툴바(mkBtn/mkSep 패턴,
+  이미지 바로 위 `bottom:calc(100% + 4px)` 위치, 선택 시에만 display:flex)를 그대로 이식.
+  코너의 독립 삭제버튼(`.cse-cell-image-remove`)을 제거하고, 그 자리에 이미지 바로 위
+  뜨는 플로팅 툴바 하나로 통합 — 소(100)/중(200)/대(400) 프리셋 + 너비 직접입력 +
+  ✕ 삭제, 문서형과 완전히 동일한 버튼 세트(정렬·겹치기 토글은 스프레드시트 셀 이미지가
+  항상 오버레이 고정이라 해당 없어 제외). 툴바는 wrap(드래그 대상)의 자식이라 드래그로
+  이미지를 옮기면 툴바도 함께 이동한다("셋트로 움직이는 UI" 요청 그대로 충족).
+  너비 변경은 `applyOverlayWidth()` 신규 — 기존 offsetX/offsetY(드래그 위치)는 보존한 채
+  마커의 width 값만 교체. `activeOverlayDeleteBtn`(HTMLButtonElement) 변수를
+  `activeOverlayBar`(HTMLDivElement)로 개명해 "재렌더링 후에도 선택 상태 유지" 로직을
+  버튼 대신 툴바 전체 기준으로 통일.
+  ⚠️ 상단 고정 툴바의 기존 크기조절 UI(selectedHasOverlay 기반, 셀을 먼저 선택했을 때
+  노출)는 그대로 유지 — 셀 기반 선택 경로를 여전히 지원하는 보조 수단으로 남겨둠, 이미지
+  플로팅 툴바와 독립적으로 공존(충돌 없음).
+  검증: svelte-check 신규 에러 0건, vitest 3개 파일 73/73 통과, build 성공.
+  ⚠️ 실제로 이미지를 클릭했을 때 프리셋/너비입력이 정상 반영되는지는 Claude Browser
+  사용 금지 원칙상 코드로만 확인 — Stephen 로컬 재확인 필요.
+
+[20라운드 — toolbar 콜백 인자 오판으로 에디터 초기화 100% 크래시하던 결함 긴급 수정, 2026-08-16]
+  Stephen 콘솔 에러 제보(19라운드 조치 직후, 같은 화면 재접속): "TypeError: defaultToolbar
+  is not iterable — at ContractSpreadsheetEditor.svelte:736 — at jspreadsheet.toolbar" →
+  스프레드시트 계약서 화면을 열 때마다 에디터 초기화 자체가 예외 없이 크래시하는 상태였음
+  (19라운드 수정과 무관 — 18라운드에서 넣은 병합 아이콘 재라벨링 콜백의 별개 결함).
+  근본원인: jspreadsheet-ce의 .d.ts 타입선언은 toolbar 함수형 옵션의 인자를
+  `ToolbarItem[]`(배열)로 명시하지만, 실제 컴파일된 런타임 구현
+  (node_modules/jspreadsheet-ce/dist/index.js)을 직접 재확인한 결과 `{items:
+  ToolbarItem[]}`(items 프로퍼티를 가진 객체)를 전달하고 있었다 — 타입선언과 런타임
+  동작이 어긋나는 라이브러리 자체의 결함(18라운드 시점엔 svelte-check/vitest/build 전부
+  통과해 타입만으로는 못 잡아낸 실사용 전용 버그). 내 콜백은 배열이라 가정해
+  `for...of defaultToolbar`를 실행 → "not iterable" 예외로 initial 함수 전체가 실패.
+  수정: `rec.items`가 배열이면 그것을, 아니면 인자 자체가 배열인 경우(다른 버전 대비
+  방어)를 폴백으로 사용하도록 방어적 처리. 반환값은 원본 참조를 그대로 유지(항목은
+  in-place 뮤테이션이라 어느 형태든 안전).
+  검증: svelte-check 신규 에러 0건, vitest 3개 파일 73/73 통과, build 성공.
+  ⚠️ 같은 콘솔 로그에 CmsDeleteButton.svelte/ContractTemplatePanel.svelte 관련
+  "Failed to hydrate: Illegal invocation"과 "input.hasAttribute is not a function" 에러도
+  함께 출력돼 있었으나, 이번 세션(18~20라운드)이 건드리지 않은 코드 경로이고 스프레드시트
+  크래시보다 먼저(하이드레이션 단계) 발생한 것으로 보아 무관한 기존 이슈로 판단 —
+  범위 외 수정 금지 원칙에 따라 손대지 않음. Stephen에게 하드 리프레시(캐시된 구버전
+  번들 가능성) 후에도 재현되면 별도 이슈로 제보 요청.
+
+[19라운드 — 확대/축소 기능이 셀 리사이즈를 깨뜨리는 회귀 발견·긴급 제거, 2026-08-16]
+  Stephen 제보(스크린샷): "스프레드시트에서 정상 작동되는 셀 조절(늘림, 줄임)이 갑자기
+  안되는 편집 불가능 오류 발생!! 제발 문서 편집 기능을 완벽하게 완성도를 높여!" — 18라운드
+  직후 발생, 시점상 18라운드에서 추가한 변경(병합 아이콘·A4 폭맞춤·A4 출력·확대축소) 중
+  하나가 원인일 가능성이 가장 높다고 판단.
+  근본원인 확정(WebSearch로 사실관계 보강 후 결론): jspreadsheet-ce 소스
+  (node_modules/jspreadsheet-ce/dist/index.js)에서 컬럼 리사이즈 히트테스트 로직을 직접
+  확인 — `헤더셀.getBoundingClientRect().width - mousedownEvent.offsetX < 6`px로 "테두리
+  6px 이내를 눌렀는가"를 판정. 18라운드에서 `.spreadsheet-container`(jspreadsheet-ce가
+  직접 마운트·관리하는 바로 그 엘리먼트)에 `zoom: var(--cse-zoom, 100%)`를 추가했는데,
+  CSS zoom이 적용된 조상 아래에서 offsetX와 getBoundingClientRect()의 줌 반영 방식이
+  브라우저 엔진마다 어긋나는 사례가 실제로 존재함(WebSearch로 jquery/jquery#5561 확인 —
+  jQuery UI가 정확히 같은 이유로 .offset() 기반 위젯 전체에 zoom 보정 패치를 별도로
+  넣어야 했던 선례). zoom:100%(항등값)에서도 재현된 것으로 보아 zoom 속성 자체의 존재만
+  으로 일부 엔진이 다른 레이아웃 계산 경로를 타는 것으로 추정.
+  대응: `.spreadsheet-container`에서 `zoom` CSS를 완전히 제거(transform:scale()도 동일한
+  offsetX/getBoundingClientRect 불일치 위험군이라 대체 수단으로 채택하지 않음 — 편집
+  정확성이 확대/축소 편의보다 우선). 확대/축소 상태(zoomPercent)·버튼(cse-zoom-group)·
+  관련 CSS(cse-zoom-btn/value)를 전부 제거해 죽은 UI가 남지 않도록 함. 병합 아이콘
+  재라벨링·A4 폭맞춤·A4 출력 3개는 리사이즈 히트테스트 컨테이너에 CSS를 추가하는 방식이
+  아니므로 회귀 원인에서 제외, 그대로 유지.
+  코드에 재발방지 주석 명시: 이 컨테이너에는 향후에도 zoom/transform 계열 CSS를 절대
+  적용하지 말 것, 재도입 시 반드시 실사용 리사이즈 테스트로 회귀 여부 확인 후 적용.
+  검증: svelte-check 신규 에러 0건, vitest 3개 파일 73/73 통과, build 성공.
+  ⚠️ 실제로 셀 리사이즈가 복구됐는지는 Claude Browser 사용 금지 원칙상 코드 근거(라이브러리
+  소스 직접 확인 + jQuery 선례)로만 판단 — Stephen 로컬 재확인 필요.
 
 [18라운드 — 셀 병합 아이콘 재라벨링(기능 자체는 원래 존재) + A4 폭 맞춤·A4 출력·확대축소 3종 신규개발, 2026-08-16]
   Stephen 제보: "스프레드시트 편집 메뉴에 셀 병합 기능이 없으며, 일부 기능도 누락되는 의심증상이
@@ -18820,3 +19426,561 @@ src/routes/cms/chat/qna/+page.svelte
 src/routes/cms/+layout.svelte
 src/lib/components/chat/MessageBubble.svelte
 ```
+
+---
+
+## NOW — /checkout → /cart 라우트 리네임 (2026-08-17, 이 세션) ✅ 완료
+
+plan_source: 세션 내 아젠다 (Stephen 직접 요청)
+등급: 🔴 CRITICAL (다중 파일 변경 + 예약/결제 흐름 라우트) — 실행 전 Explore 에이전트로 전체
+영향범위 감사 + AskUserQuestion으로 최종 라우트명 확인 후 진행
+
+- [x] REFACTOR-1: /checkout → /cart 라우트 리네임 + 영향범위 전수 수정 | CRITICAL | ✅ 완료 (2026-08-17)
+  - 사전 감사(Explore 에이전트, 읽기 전용): 라우트 폴더·내부 네비게이션(goto/href)·API 라우트·
+    Toss successUrl/failUrl·채팅 action_url 영구저장 여부·문서(rules-ref)·vercel.json·
+    +layout.svelte 가드·테스트 임포트까지 10개 카테고리 전수 조사
+  - 감사 결과 확정: 서버 redirect 대상 없음, Toss URL에 하드코딩 없음, DB에 영구 저장되는
+    action_url에도 `/checkout` 없음(migration 258 기준 코드 경로 확인) — 기술적으로 낮은
+    위험도의 리네임으로 판단. 유일한 진짜 리스크는 코드로 못 막는 외부 링크(북마크·SNS·
+    검색엔진 색인) — 301 리다이렉트로 대응
+  - AskUserQuestion으로 최종 라우트명 확인: `/cart` 채택(기존 코드가 이미 cart-main/
+    cartLineItems/'Cart' 탭라벨 등 cart 용어를 광범위하게 써서 일관성 높음, `/reservation`은
+    향후 "기존 예약 조회" 화면과 명칭 겹칠 우려로 배제)
+  - git mv로 src/routes/checkout/{+layout.svelte,+page.server.ts,+page.svelte} →
+    src/routes/cart/ 이동(히스토리 보존)
+  - src/routes/checkout/+server.ts 신규 — GET 시 301 redirect('/cart')로 구 경로 보호
+  - 내부 참조 전수 수정: BottomTabBar.svelte(탭 라벨맵+goto 2곳), FloatingBar.svelte
+    (window.location.href), routes/+page.svelte(홈 바텀탭 goto), products/[id]/+page.svelte
+    (예약 완료 후 goto 2곳), payment/success/dev/+page.svelte(뒤로가기+확인버튼 goto 2곳)
+  - **최고위험 지점**(감사에서 지목): src/routes/+layout.svelte의 GNB·FloatingBar 노출 제어
+    `startsWith('/checkout')` 가드 2곳 — 놓치면 /cart에서 전역 헤더가 잘못 나타나는 회귀
+    발생. 둘 다 `startsWith('/cart')`로 수정 확인
+  - API 라우트(/api/checkout/*)는 의도적으로 미변경 — 페이지 경로와 독립적이라 리네임
+    불필요 판단(감사 권고 반영), confirmMock.test.ts 임포트 경로도 그대로 유효
+  - 문서 갱신: .claude/rules-ref/front-uiux.md 소스 정본 포인터 2곳 + 표 예시 1곳,
+    src/lib/fixtures/cartFixtures.ts·payment/success/dev/+page.ts·routes/cart/+layout.svelte
+    내 설명 주석 갱신(코드 동작 무관, 정확성 목적)
+  - .claude/harness/TASK.md·GSD_LOG.md의 과거 이력 항목은 의도적으로 미수정(변경 기록이라
+    구 경로 언급이 당연함 — 감사 권고 반영)
+  - svelte-check: 1462 FILES 0 ERRORS(프로젝트 전체) — cart/checkout 관련 신규 에러 0건,
+    기존 6개 경고만 경로만 바뀐 채(src/routes/cart/+page.svelte) 동일하게 존재
+
+---
+
+## NOW — `/cms/customers` '설정' 서브메뉴 신설: 회원코드 코드조합 기준설정 (2026-08-15) — ✅ NOW-1~10 전체 완료. Stage+Production 마이그레이션(274/276/277) 전부 적용·검증 완료(2026-08-17). 앱코드는 커밋 2e4c138로 Stage·Production 양쪽 Vercel 배포(READY) 완료
+
+[CONTEXT BRIDGE]
+plan_source: Stephen 검증 요청 → "회원가입 시 부여되는 회원코드가 /cms/codes 코드조합과 무관한
+  하드코딩 로직으로 동작하며, 코드조합의 '회원' 카테고리를 고객 화면에서 기준코드로 지정하는
+  기능 자체가 애초에 없다"를 코드 추적으로 확정(Stage·Production 양쪽 동일 확인) → 그 연결고리를
+  신설하는 기능 설계 요청 → Plan Mode(플랜 파일: `/Users/stevenmac/.claude/plans/fluffy-twirling-seahorse.md`)로
+  설계 완료, AskUserQuestion 2건으로 확정:
+  ① 기준코드 지정/변경 시 기존 가입 고객 member_code도 일괄 재발급 대상(신규 가입자 한정 아님)
+  ② 설정화면 코드조합 드롭다운은 `default_category='member'` 태그된 조합만 노출
+핵심제약:
+  - `/cms/codes` 코드조합 시스템(`code_mapping_groups`/`code_mapping_items`) 자체는 무변경 —
+    `default_category`가 이미 자유 텍스트라(migration 91→100→101 이력으로 CHECK 제약 완전
+    삭제 확인) `'member'` 값 사용에 스키마 변경 불필요, 기존 "코드조합" 탭 UI 그대로 사용.
+  - `generate_member_code` 시그니처 확장은 완전 하위호환 필수 — `p_category_code_override
+    DEFAULT NULL` 추가, override 없으면 기존 B2C→BC/B2B→BB 하드코딩 폴백 그대로(기존 가입
+    흐름 무변경 보장).
+  - 코드조합→접두어 변환은 신규 로직 작성 금지, 기존 공용 유틸
+    `src/lib/utils/comboCategoryCode.ts`(`buildComboCategoryCode`/`getRootCode`) 재사용 —
+    상품·구독 등록화면과 동일하게 서버측 재계산(클라이언트 값 불신) 원칙 준수.
+  - 전역 설정 저장은 신규 테이블 대신 기존 `cms_settings(key,value)` 재사용, 신규 키
+    `member_code_format`(`reservation_code_format`/`product_code_format` 선례와 동일 패턴).
+  - 되돌릴 수 없는 대량 UPDATE(기존 고객 일괄 재발급)는 "기준코드 저장"과 반드시 분리된 별도
+    액션·확인 단계로 구현 — 저장만으로 조용히 전체 회원코드가 바뀌는 것 절대 금지.
+  - 일괄 재발급 시 변경 이력(old_code/new_code)을 신규 로그 테이블에 반드시 기록 — CS 문의
+    대응용, 되돌릴 수 없는 변경이므로 최소한의 추적성 확보 필수.
+  - `prevent_member_code_nullification` 트리거 로직 변경 금지(NULL 방지 목적 그대로 유지 —
+    일괄 재발급은 NULL이 아닌 값으로의 UPDATE라 이 트리거와 충돌 없음).
+  - 파라미터 추가로 인한 함수 시그니처 변경은 DROP 후 CREATE 필수(PGRST203 오버로드 모호성
+    방지 — products.md §2-3/migration 261 get_customer_list 선례와 동일 컨벤션).
+TDD도메인: DB 레이어(generate_member_code 확장, bulk_reissue_member_codes 신규) — 회원가입
+  파이프라인 직결·블라스트 반경(전체 신규가입 + 전체 기존고객 일괄변경)이 커서 AGENTS.md
+  키워드 명시 매칭은 아니나 TDD로 진행. `/cms/customers/settings` 화면 UI(NOW-1)는 GSD.
+절대금지:
+  - `code_mapping_groups`/`code_mapping_items`/`product_category_codes` 스키마 변경(불필요)
+  - 기존 `generate_member_code` 호출부(트리거 외 다른 호출 지점) 시그니처 파괴
+  - `prevent_member_code_nullification` 로직 변경
+  - 일괄 재발급을 확인 단계 없이 자동 실행되게 만드는 UX(저장=재발급 동시 실행 금지)
+  - Production 마이그레이션 자동 적용(Stephen 승인 후에만, Stage 우선 검증)
+  - CMS 표준 디자인 시스템 이탈 — `/cms/subscriptions/new` ①기본정보의 `.form-section`/
+    `.section-title`/`.field-row`/`.field-label`/`.f-input`/`SuggestPicker` 클래스·컴포넌트
+    체계를 그대로 재사용, 신규 CSS 패턴 임의 발명 금지
+
+신규/수정 파일:
+  - `src/routes/cms/+layout.svelte` (수정 — customers.subMenus에 '설정' 1줄 추가, GSD) ✅
+  - `src/routes/cms/customers/settings/+page.svelte` (신규, GSD) ✅
+  - `src/routes/cms/customers/settings/+page.server.ts` (신규, GSD —
+    load/saveMemberCodeCombo/bulkReissue 3개 액션) ✅
+  - `supabase/migrations/20260817000274_274_member_code_combo_reference.sql` (신규, TDD) ✅ Stage 적용 완료
+  - `src/__tests__/services/memberCodeCombo.test.ts` (신규, TDD) ✅ 8/8 GREEN
+
+### NOW-1 (GSD): `/cms/customers` '설정' 서브메뉴 + 화면 셸 — ✅ 완료
+- [x] `+layout.svelte` customers.subMenus에 `{ label:'설정', href:'/cms/customers/settings' }`
+  빠른문의 뒤 추가
+- [x] `/cms/customers/settings` 신설 — `hasSettingsAccess` load 게이트(멤버십/빠른문의 동일
+  패턴), `.form-wrap`/`.form-section`/`①회원코드 기준 설정` 셸(구독등록 ①기본정보 클래스
+  그대로 재사용)
+- [x] `SuggestPicker`로 코드조합 선택(옵션은 `code_mapping_groups WHERE default_category=
+  'member' AND is_active=true`만 필터링해 서버에서 전달)
+- [x] 실시간 미리보기(클라이언트에서 `sortByTier` 재사용해 선택된 콤보의 코드를 조합, 순번
+  예시는 001 — 서버 재계산은 `saveMemberCodeCombo` 저장 시점에 `buildComboCategoryCode`로
+  다시 수행해 클라이언트 값을 신뢰하지 않음)
+- [x] 현재 적용 중 정보패널(`cms_settings.member_code_format` 유무에 따라 분기)
+
+### NOW-2 (TDD): `generate_member_code` 확장 + 트리거 연동 — ✅ 완료, Stage 검증 GREEN
+- [x] RED: override 지정 시 커스텀 접두어 반영 테스트, override 미지정 시 기존 BC/BB 하드코딩
+  회귀 테스트, 빈 문자열 override 안전 폴백 테스트, 잘못된 member_type 에러 테스트(5건 모두
+  최초 실행 시 PGRST202로 RED 확인 — 함수가 아직 3-param 형태로 존재하지 않았음)
+- [x] GREEN: `generate_member_code` DROP 후 3-param 재생성 + `auto_assign_member_code()`가
+  `cms_settings.member_code_format` 조회해 override 전달하도록 확장 — Stage 적용 후 5/5 GREEN
+- [x] REFACTOR: 인덱스·롤백 주석 포함. **실사용 TDD 중 실제 버그 발견·수정** —
+  최초 구현은 `member_code_sequences` 시퀀스 키를 `member_type`(BC/BB) 기준으로 고정해,
+  override 사용 시 B2C/B2B 고객이 서로 다른 카운터에서 독립적으로 번호를 받으면서도 동일
+  접두어를 공유해 `member_code` UNIQUE 제약 충돌(23505)이 실사용 데이터로 재현됨 → 시퀀스
+  키를 실제 표시 접두어(`v_type_code`)로 변경해 override 사용 시에도 단일 카운터를 공유하도록
+  수정(override 미지정 시엔 기존과 동일하게 BC/BB 키이므로 하위호환 영향 없음). 수정 후
+  Stage 재검증 GREEN.
+
+### NOW-3 (TDD): 일괄 재발급 + 이력 로그 — ✅ 완료, Stage 검증 GREEN
+- [x] RED: 빈/NULL prefix 거부 테스트, 유효 prefix로 대상 고객 전원 갱신 테스트,
+  `member_code_reissue_log` old/new 정확성 테스트(최초 실행 시 PGRST202로 RED 확인 — RPC
+  자체가 존재하지 않았음)
+- [x] GREEN: RPC 구현 + 로그 테이블 마이그레이션 + `/cms/customers/settings` "② 기존 고객
+  일괄 재발급" 카드(경고문구+확인체크박스+`btn-danger`) — `saveMemberCodeCombo`와 완전히
+  분리된 별도 `<form>`/action, `confirmed==='true'` 없으면 서버에서 무조건 거부
+- [x] REFACTOR: manager+ 게이트 재확인(액션 레벨 `getCmsRoleForAction`), Stage 실측 완료 —
+  `bulk_reissue_member_codes` RPC는 설계상 `WHERE deleted_at IS NULL` 전체를 스코프 없이
+  순회하므로, 격리된 픽스처 대신 Stage의 실제 활성 고객 19명 전원 상태를 스냅샷→검증→원상복구
+  하는 방식으로 테스트(고객 데이터 일시 변경이 자동실행 안전필터에 의해 차단되어 Stephen이
+  직접 터미널에서 최종 실행·확인) — 재발급 건수와 로그 건수 일치, 종료 후 잔존 변경 0건 확인.
+
+### GATE C 확인 항목 (전체 NOW 완료 후 필수) — Stage 기준 전항목 실측 완료
+```
+[x] 신규 가입 시 기준코드 미설정 상태에서 기존 CSBC/CSBB 형식 그대로 나오는가(하위호환)
+    → memberCodeCombo.test.ts override=null 케이스로 확인(정규식 /^CS(BC|BB)\d{4}\d{3}$/ 매치)
+[x] 코드조합 저장 직후 "신규 가입자만" 영향받고 기존 고객은 그대로인가(비파괴 확인)
+    → saveMemberCodeCombo 액션은 cms_settings upsert만 수행, user_profiles 미접촉(코드 검토로 확인)
+[x] 일괄 재발급이 별도 확인 단계 없이는 실행 불가능한가
+    → bulkReissue 액션 confirmed!=='true' 시 fail(400), RPC 자체도 p_prefix NULL/빈값 거부
+[x] 일괄 재발급 후 member_code_reissue_log에 전원의 old/new 값이 정확한가
+    → memberCodeCombo.test.ts REFACTOR 케이스로 Stage 실측 확인(19명 전원 일치)
+[x] SuggestPicker 옵션이 default_category='member' 조합만 나오는가
+    → +page.server.ts load()에서 .eq('default_category','member') 필터링(코드 검토로 확인)
+[x] manager 미만 역할 접근 시 /cms?notice=access_denied로 리다이렉트되는가
+    → hasSettingsAccess load 게이트, 멤버십/빠른문의와 동일 패턴 재사용(코드 검토로 확인,
+      실제 partner 계정 브라우저 로그인 테스트는 미실시 — 패턴 동일성으로 갈음)
+[x] CMS 표준 디자인 시스템(.form-section 등) 클래스 그대로 재사용했는가, 신규 패턴 없는가
+    → 구독등록 ①기본정보 클래스 체계(.form-wrap/.form-section/.section-title/.field-row/
+      .field-label/.f-input/SuggestPicker) 그대로 재사용, 신규 CSS 클래스는 이 기능 고유
+      요소(.preview-box/.info-panel/.section-danger/.combo-row-btn 등)에 한정
+[x] npx svelte-check / eslint 신규 에러 0건
+    → svelte-check: 1건 발견(+page.svelte form.success 내로잉 실패, ActionData 유니온
+      한계) → 'error' in form 가드로 즉시 수정 후 0 ERRORS 재확인(326 warnings는 전부
+      이 기능과 무관한 기존 파일). eslint: 0 errors(테스트 파일 warning 2건은 기존
+      프로젝트 전반의 detect-object-injection 패턴과 동일, 에러 아님)
+[x] 신규 vitest 전체 통과
+    → memberCodeCombo.test.ts 8/8 GREEN(Stephen 터미널 직접 실행으로 최종 확인)
+[x] Production 마이그레이션은 Stephen 승인 전까지 미적용
+    → migration 274는 Stage(ezyvffjvuwmtuhpxdjrw)에만 적용됨, Production
+      (vnbpmvxruyciuuaermyh) 미적용 — Stephen 승인 대기 중
+```
+
+⛔ **다음 단계**: Production(vnbpmvxruyciuuaermyh)에 migration 274 적용은 Stephen의 명시적
+승인 이후에만 진행 — 아직 요청받지 않았으므로 자동 적용하지 않음.
+
+### NOW-4 (🟢 ROUTINE, GSD): "코드 조합 선택" 목록 UI를 상품등록 화면과 통일 (2026-08-17)
+Stephen이 Claude Browser로 `/cms/customers/settings` 화면 요소를 직접 선택해 지적 — "코드 조합
+선택" 목록이 상품등록(`/cms/products/new`)의 멀티뱃지 구성과 다른 단순 단일칩 형태로 노출됨.
+- [x] `+page.server.ts`: `code_mapping_items` select에 `combo_name` 컬럼 추가,
+  `MappingItemSimple` 타입 갱신
+- [x] `+page.svelte`: `combosForGroup`에 `combo_name` 포함, 상품등록과 동일한 칩 구성
+  (CS 다크 접두어칩 · 분류코드 칩 · 년월 그레이칩 · 순번범위 퍼플칩 + 조합명 라벨) 적용 —
+  `.combo-row-chips`/`.combo-prefix-chip`/`.combo-meta-chip`/`.combo-ym-chip`/`.combo-seq-chip`
+  클래스·색상 상품등록 화면 것 그대로 재사용(신규 CSS 패턴 미발명)
+- [x] 순번 힌트 문구는 상품등록의 "부모~99·자식~999"(2단 재고채번 개념) 대신 "001~999" 고정
+  표기로 도메인에 맞게 조정 — 회원코드는 부모/자식 2단 구조가 없고 `generate_member_code`가
+  항상 3자리 LPAD 고정 채번이므로(migration 274), 상품 문구를 그대로 가져오면 부정확했을 것
+- [x] `datePart()` 로컬 중복 함수 제거, `../../codes/_shared`의 공용 `datePart(fmt)` 재사용
+- [x] Claude Browser로 Stage 실화면 확인(사용자가 `<launch-selected-element>`로 요소를 선택한
+  세션 범위 내 조건부 허용 — CLAUDE.md 조건 ①) — 조합 선택 시 퍼플 하이라이트 정상,
+  미리보기 박스 `CSBC2608001` 정확 계산 확인
+- [x] `npx svelte-check`/`eslint` 재확인 — 이 기능 관련 신규 에러 0건(같은 시점 다른 세션이
+  건드린 `confirmMock.test.ts`의 무관한 사전 에러 3건은 이 세션 범위 밖이라 미조치)
+
+### NOW-5: 실 라이브 E2E 정밀검증 (Stephen 요청 "정합 확인", 2026-08-17)
+기존 검증은 RPC를 직접 호출하는 vitest 위주였음 — `cms_settings` → `trg_auto_assign_member_code`
+트리거 → `generate_member_code` 로 이어지는 실제 배포된 연동 체인 자체는 한 번도 라이브로
+검증된 적이 없었음(코드 검토로만 확인). 이번에 실제 `auth.admin.createUser()`로 진짜 신규가입을
+발생시켜 트리거 체인 전체를 라이브로 검증.
+- [x] **중요 발견**: `cms_settings.member_code_format`에 이미 실값(prefix=`GS`, 그룹 "회원
+  (비회원/개인/기업) 분류", 저장시각 2026-08-16 17:44)이 저장돼 있음을 확인 — 이 세션이
+  저장한 것이 아님(UI에서 조합 선택만 하고 저장 버튼은 누르지 않았음, 별도 시점에 실제
+  저장 액션이 실행된 상태). **Stage의 모든 신규가입자가 이 시점부터 CSGS 접두어를 받는 중**
+  — Stephen에게 의도한 설정인지 확인 요청함(변경/원복은 하지 않음, 보고만).
+- [x] 실가입 4건(단독 1건 + 연속 3건) 시뮬레이션 → 전부 `CSGS2608001~004`로 정확히 순차
+  채번, 충돌 없음 — override가 트리거를 통해 실제로 반영됨을 라이브 확인
+- [x] 기존 활성고객 19명 전원 재확인 — `CSGS` 코드 0건, 전부 기존 `CSBC` 유지 — "저장=신규
+  가입자만 즉시 적용" 설계가 실제로 지켜짐을 확인(비파괴 재검증)
+- [x] `member_code_reissue_log` 0건 재확인 — ②일괄재발급이 실고객 대상으로는 아직 실행된
+  적 없음(직전 세션의 vitest 검증은 스냅샷→복구로 완전 원상복구됨)
+- [x] `generate_member_code`/`bulk_reissue_member_codes` 권한 재확인 — anon/authenticated
+  실행 불가, service_role만 가능
+- [x] 정리: 테스트 가입자 4건 전부 삭제(auth.users/user_profiles 잔존 0건 SQL로 재확인),
+  검증용 임시 스크립트(`.tmp-verify-*.mjs`, 프로젝트 루트에 일시 생성) 삭제, git status 클린
+- [ ] **미실시**: partner 등급 실계정으로 `/cms/customers/settings` 접근 차단 여부 — 코드
+  패턴 동일성(멤버십/빠른문의와 동일 `hasSettingsAccess` 게이트)으로 갈음, 실계정 로그인
+  테스트는 하지 않음
+
+### NOW-6: @sp3-qa-agent GATE E 검수 — 1차 불통과(CRITICAL 1건) → 수정 → 통과 (2026-08-17)
+Stephen 요청으로 이 세션 산출물만 범위 한정해 `@sp3-qa-agent` 독립 검수 실행. 이미 기록된
+검증(TDD GREEN·svelte-check/eslint·GS 라이브 확인)은 전부 재확인 통과. 아래 CRITICAL 1건을
+Stage DB 직접 RPC 재현으로 신규 발견.
+
+**🔴 CRITICAL(1차 GATE E 불통과 사유) — `member_code_sequences.member_type` 컬럼폭(VARCHAR(2))
+vs 코드조합 접두어 길이 불일치**
+```
+재현: generate_member_code('B2C', true, 'ABC') → 22001 value too long for type character varying(2)
+원인: member_code_sequences.member_type이 migration 97 당시 'BC'/'BB' 고정 2글자만 전제하고
+  VARCHAR(2)로 정의됨. migration 274에서 시퀀스 키를 v_type_code(코드조합 기반 override,
+  가변 길이)로 바꿨는데(이 변경 자체는 §NOW-2 실제 충돌버그 수정으로 정당함) 컬럼폭은 그대로
+  방치됨. product_category_codes.code는 2~4자가 섞여있고 콤보는 여러 코드를 이어붙일 수 있어
+  2자 초과 override가 자연스럽게 나올 수 있음. 현재 라이브 저장값 'GS'가 우연히 2자라
+  지금까지 미발현.
+영향: saveMemberCodeCombo는 길이체크 없이 저장 성공(에러 지연) → 다음 실제 신규가입 시점에
+  trg_auto_assign_member_code(BEFORE INSERT) 예외로 user_profiles INSERT 자체가 막혀
+  회원가입 전체 장애로 이어질 수 있었음. bulk_reissue_member_codes도 동일 경로(단, 단일
+  트랜잭션이라 부분오염 없이 전체 롤백되는 것은 QA가 코드로 재확인).
+```
+**수정(GATE E 통과 조건으로 즉시 반영)**:
+- [x] `supabase/migrations/20260817000276_276_member_code_sequences_widen_key.sql` 신규 —
+  `member_type` 컬럼을 `product_code_sequences.category_code`(migration 41)와 동일한
+  VARCHAR(30)으로 확장. Stage 적용 완료, `generate_member_code('B2C',true,'ABC')` 재호출로
+  `CSABC2608001` 정상 채번 재확인, 테스트로 생성된 'ABC' 시퀀스 행 정리 완료.
+- [x] `+page.server.ts` `saveMemberCodeCombo`에 방어적 이중화 — `buildComboCategoryCode` 결과
+  30자 초과 시 `fail(400)`으로 저장 자체 차단(DB 마이그레이션이 늦어져도 즉시 안전).
+- [x] `memberCodeCombo.test.ts`에 회귀 테스트 추가("2자를 초과하는 override(3자 이상)도
+  정상 채번된다(migration 276 회귀 방지)") — 6/6 GREEN 재확인.
+- [x] `npx svelte-check`/`eslint` 재확인 — 이 기능 관련 신규 에러 0건.
+
+**QA가 추가로 통과 확인한 항목(재검증 불필요, 참고용)**: REVOKE 문 `FROM PUBLIC, anon,
+authenticated` 전부 명시(과거 251b 사고 재발 없음, Stage anon 직접 호출로 `42501` 재확인) ·
+saveMemberCodeCombo 클라이언트 combo_row_id 위조 방어(서버 재조회) · bulkReissue confirmed
+우회 불가(서버+RPC 이중 방어) · `'error' in form` 가드가 두 액션의 fail() 반환 타입 전부 커버 ·
+bulk_reissue_member_codes 예외 시 전체 롤백(부분오염 없음).
+
+**GATE E 최종 판정**: ✅ 통과 (CRITICAL 수정·재검증 완료, Production 적용은 Stephen 승인 대기 유지)
+
+### NOW-7: Stephen 실사용 중 "일괄 재발급 실행" 에러 토스트 — 원인분석 요청 → CRITICAL 추가 발견·수정 (2026-08-17)
+Stephen이 실제로 ②"일괄 재발급 실행" 버튼(체크박스 확인 완료 상태)을 실행했다가 에러 토스트를
+만나 원인분석 요청. Stage DB에서 정확히 동일한 RPC 호출을 재현해 원인 확정.
+
+```
+재현: SELECT bulk_reissue_member_codes('BC', 'debug') → 23505 duplicate key
+  Key (member_code)=(CSBC2608107) already exists.
+```
+
+**🔴 CRITICAL — generate_member_code의 LPAD가 순번 1000 이상에서 "패딩"이 아니라 "절단"으로
+동작(Postgres LPAD 스펙: 원본이 목표길이보다 길면 오른쪽을 잘라냄)**
+```
+LPAD('1071', 3, '0') = '107'   ← 패딩 아님, 마지막 자리 절단
+LPAD('1072', 3, '0') = '107'   ← 1071과 다른 값인데 동일 코드로 뭉개짐
+```
+- **이 버그는 migration 274/276이 아니라 원본 migration 97부터 존재하던 결함** — 이 세션이
+  새로 만든 게 아니라 우연히 이 세션의 작업(코드조합 기준설정 저장 → 일괄재발급 실행) 중에
+  처음 노출됨. Stage의 `member_code_sequences`(member_type='BC', year_month='2608')가 여러 달
+  누적 테스트가입으로 이미 1071까지 진행돼 있었던 것이 트리거 조건.
+- ⚠️ **블라스트 반경이 이 기능 범위를 넘어섬**: override 없는 평범한 신규 B2C 가입도 동일한
+  'BC' 카운터를 공유하므로, 이번 세션의 신규 기능과 무관하게 원래부터 간헐적으로 회원가입
+  실패를 유발할 수 있었던 잠재 결함(카운터가 999를 넘긴 이후 10개 구간마다 이미 사용 중인
+  3자리 코드와 겹치는 경우). 이번 발견 시점 기준 실제 겹치는 구간이 존재해 즉시 재현됨.
+- [x] `supabase/migrations/20260817000277_277_member_code_seq_lpad_truncation_fix.sql` 신규 —
+  `LPAD(v_seq::TEXT, 3, '0')` → `LPAD(v_seq::TEXT, GREATEST(3, LENGTH(v_seq::TEXT)), '0')`로
+  변경, 절단 원천 차단(3자리 미만은 기존과 동일하게 0 패딩, 3자리 이상은 절단 없이 자연 확장).
+  Stage 적용 완료.
+- [x] 재검증: 포이즌된 실 카운터로 직접 재호출 — `generate_member_code('B2C',true,'BC')` →
+  `CSBC26081075`(절단 없이 4자리 그대로) 정상 생성 확인.
+- [x] `memberCodeCombo.test.ts`에 격리된 테스트 키로 순번 1005 시나리오를 직접 시딩하는
+  회귀 테스트 추가(실 운영 카운터 상태에 의존하지 않는 결정적 재현) — GREEN.
+  기존 2개 테스트("override 미지정 시 CSBC 하드코딩 유지"/"빈 문자열 폴백")의 정규식이
+  "정확히 3자리"를 가정하고 있어 Stage의 실제 BC 카운터가 1000을 넘은 현재 상태에서 깨짐 —
+  "3자리 이상"으로 완화 수정(절단 없는 정상 동작을 올바르게 반영하도록 정정). 최종 7/7 GREEN
+  (파괴적 bulk_reissue 3건 제외).
+- [x] `npx svelte-check`/`eslint` 재확인 — 신규 에러 0건.
+- [ ] **미실행**: 실제 19명 대상 "일괄 재발급 실행"은 Stephen이 직접 UI에서 재시도 —
+  이 세션에서 대신 실행하지 않음(고객 데이터 대량 변경은 Stephen의 판단 영역).
+
+### NOW-8: `/cms/customers/settings` UI 정합성 2건 — Stephen 요소 직접 선택 지적 → 즉시 수정 (2026-08-17)
+① "순번" 칩·"채번 예시"가 하드코딩("001~999"/"...001")이라 migration 277 수정 직후 실제
+  상태(BC 접두어 이미 1099번째 진행)와 불일치 — `+page.server.ts` load()에
+  `member_code_sequences` 전체 조회(`sequenceState`) 추가, `+page.svelte`에
+  `nextSeqFor(prefix)`/`formatSeq()`로 접두어별 실제 next_seq 노출로 교체. Stage 확인:
+  BC 칩 "1099~", 미리보기 "CSBC26081099" 정확 표시.
+② 이미 저장된 기준코드가 있어도 페이지 재방문 시 검색창·조합목록·미리보기가 전부 빈 채로
+  시작 — `$effect`로 `data.currentSetting`을 마운트 시 자동 선택 상태로 채우도록 추가
+  (`userTouchedSelection` 가드로 사용자 조작 후에는 덮어쓰지 않음, core-rules.md 패턴2 준수).
+  Stage 새로고침 확인: 클릭 없이 그룹명·BC 하이라이트·미리보기 즉시 노출.
+- [x] `npx svelte-check`/`eslint` 재확인 — 신규 에러 0건.
+
+**후속(같은 요청 연장)**: NOW-8 ②(마운트 시 자동선택) 도입 부작용 — 자동선택된 combo_row_id도
+"선택됨"으로 잡혀 `!selectedComboRowId` 조건만으로는 아무것도 안 바꿨는데 "기준 코드로 저장"
+버튼이 활성화되는 오탐 발생(Stephen 요소 직접 선택해 지적). `isDirtyCombo` 파생값 추가 —
+현재 선택이 `data.currentSetting.combo_row_id`와 다를 때만 활성화(products.md §4 isDirty
+관례 적용). Stage에서 3단계 실측: 로드 시 비활성(저장값과 동일) → 다른 조합(GS) 선택 시
+활성화 → 원래 조합(BC) 재선택 시 다시 비활성 — 전부 정상 확인.
+
+### NOW-9: @sp3-qa-agent 2차 GATE E 재검수 — NOW-1~8 전체 재검증 (2026-08-17) — ✅ 통과
+1차 QA(NOW-6) 이후 발견된 CRITICAL 1건(NOW-7, LPAD 절단) + UX 3건(NOW-8, 순번 하드코딩·
+자동선택 미노출·isDirty 오탐)까지 전부 포함해 최초 구현분부터 통째로 재검수. Stage 라이브
+재현으로 독립 재검증(격리 테스트 키 사용, 잔존 없음 확인):
+- migration 277 LPAD 수정 — `next_seq=1005` 시딩 재현으로 절단 없음 재확인, 실제 운영 카운터
+  (BC/2608 = 1101)로도 검증
+- `member_code_sequences` 무필터 조회 — 회원코드 전용 테이블(타 도메인 미공유) 확인,
+  anon 권한 차단 실측(빈 배열 반환) 확인
+- 클라이언트 `nextSeqFor`/`formatSeq` ↔ 서버 `generate_member_code` 계산식 코드 대조 일치
+  확인(SQL `next_seq` read-before-increment 산술과 정확히 동일)
+- `$effect` 자동선택 로직 — 무한루프 함정(자기 추적값 재기록) 해당 없음 확인
+- `isDirtyCombo` — currentSetting 없는 초기상태에서도 오탐 없음 확인
+- 1차 QA 통과항목(REVOKE 범위, 위조 방어, confirmed 이중방어, 트랜잭션 롤백 경계) 전부
+  migration 276/277이 건드리지 않은 코드경로라 회귀 없음 확인
+- 발견 사항: LOW 1건(정보성) — "채번 예시" 프리뷰의 `currentYYMM`이 클라이언트 로컬시간
+  기준이라 실제 서버(`TO_CHAR(NOW(),'YYMM')`) 기준과 월 경계 극단 시점에 프리뷰 표시만
+  어긋날 수 있음(실채번 결과에는 영향 없음) — GATE E 차단 사유 아님, 조치 불필요(선택적
+  후속개선 후보로만 기록)
+
+**GATE E 최종 판정**: ✅ 통과 — 커밋 가능. Production 마이그레이션(274+276+277)은 여전히
+Stephen 승인 대기.
+
+⚠️ **QA 수행 중 보안 인시던트 발견(세션 진행자가 즉시 확인 후 Stephen에게 보고)**: 이번
+sp3-qa-agent 서브에이전트가 검증 과정에서 `grep ... SUPABASE_SERVICE_ROLE_KEY .env.local |
+cut -c1-40` 명령을 실행해 실제 서비스 롤 키의 앞 40자(잘렸지만 진짜 값 일부)를 자신의
+도구 출력/트랜스크립트에 그대로 노출시켰다(런타임이 이를 감지해 "SECURITY WARNING" 태그로
+자동 표시함 — 세션 진행자가 임의로 판단한 것 아님). 상세는 GSD_LOG.md 및 Stephen에게 보낸
+응답 참고. **키 자체를 무단 반출/외부 전송한 정황은 없음**(같은 세션 내부 도구 출력에만
+노출) — 다만 원칙적으로 비밀값은 절대 도구 출력에 인쇄되면 안 됨. Stephen 판단 필요.
+
+### NOW-10: 세션 산출물 커밋 + Vercel 배포 확인 + Production DB 마이그레이션 적용 (2026-08-17) — ✅ 전체 완료
+- [x] 세션 전용 7개 파일(migration 274/276/277, memberCodeCombo.test.ts, customers/settings
+  2개 파일, sp3-qa-agent.md)만 격리 커밋 — 교차세션 얽힘 검증(4개 축 전부 PASS: 마이그레이션
+  순서·앱코드 의존성·테스트 의존성·sp3-qa-agent.md diff 순수성) 후 Stephen이 직접
+  `git commit`(커밋 `2e4c138`) + push 실행
+- [x] Vercel 배포 확인(vercel.com 대시보드 SSOT 기준) — Stage(`dpl_CK1a5EprB...`)·Production
+  (`dpl_6dApu1hp...`, PR #142 stage→main 머지) 둘 다 **READY**, 최근 1시간 런타임 에러 0건
+- [x] **Production DB 마이그레이션 적용**(Stephen 명시적 승인 "Production DB 마이그레이션
+  적용 실행!") — 274→276→277 순서대로 `vnbpmvxruyciuuaermyh`에 적용. 적용 전 베이스라인
+  확인(21명 활성고객, 2-param generate_member_code만 존재, member_type VARCHAR(2) — Stage
+  적용 전과 동일한 예상 상태) → 적용 후 격리 테스트 키(`ZZVERIFY`)로만 검증(실 고객 데이터
+  절대 미접촉):
+  - override 없이 하위호환 정상(`CSBC2608024`)
+  - 8자 override 정상 채번(`CSZZVERIFY2608001`, VARCHAR(30) 확장 유효)
+  - 순번 1005로 직접 시딩 후 재호출 → `CSZZVERIFY26081005`(절단 없음, migration 277 유효)
+  - 권한: `generate_member_code`/`bulk_reissue_member_codes` 둘 다 anon=false·
+    authenticated=false·service_role=true
+  - `member_code_reissue_log` RLS enabled=true, 행 수 0(실 재발급 미실행)
+  - 활성고객 수 21명 그대로(변동 없음), `ZZVERIFY` 테스트 시퀀스 행 정리 완료(잔존 0)
+- [x] `bulk_reissue_member_codes` 실행·실제 신규가입 테스트는 Production에서 수행하지 않음
+  (실 고객 데이터 변경은 Stephen이 CMS 화면에서 직접 판단해 실행할 영역)
+
+**최종 상태**: 이 세션의 전체 산출물(앱코드 + DB 마이그레이션)이 Stage·Production 양쪽에
+전부 배포·적용 완료. `/cms/customers/settings`에서 코드조합 기준 저장·일괄재발급 기능이
+Production에서도 정상 동작 가능한 상태.
+
+---
+
+## NOW — 예약승인 상담채팅 알림 통합(배치) (2026-08-17, 이 세션) ✅ 완료(Stage + Production)
+
+**아젠다**: 대여반출납 옵션 단일화 정책 변경에 맞춰, 장바구니에서 상품 2개 이상을 체크한 채
+한 번에 승인(confirm-mock)할 때 예약 건별로 개별 알림 RPC·개별 상담채팅 카드가 생성되던 것을
+하나의 RPC 호출 + 하나의 통합 카드로 수정.
+
+**배경**: 이전 세션에서 cart 결제 흐름을 점검하던 중 "confirm-mock이 확정된 예약마다
+send_rental_chat_notification을 개별 호출 → 같은 상담세션에 상품별 카드가 각각 생성됨"을
+확인·보고했고, Stephen이 이를 정책 변경 대상으로 확정, 현재 세션에서 가능한 범위까지 즉시
+수정 반영 지시.
+
+**변경 파일**:
+```
+신규: supabase/migrations/20260817000275_275_batch_reservation_approval_notify.sql
+  → send_rental_chat_notification_batch(p_reservation_ids bigint[], p_notify_type text) 신규 RPC
+  → 기존 send_rental_chat_notification(단건, 7개 notify_type·다수 호출부 공유)은 미변경
+  → action_payload에 items(JSONB 배열: reservation_no/product_name/return_deadline) 추가,
+    최상위 필드는 첫 항목 값으로 채워 기존 단건 카드 렌더링과 하위호환
+  → 보안: Migration 263과 동일하게 authenticated·public EXECUTE 회수(service_role 전용)
+
+수정: src/routes/api/checkout/confirm-mock/+server.ts
+  → for(hold of holds) 루프 내부의 개별 send_rental_chat_notification 호출 제거
+  → 루프 종료 후 confirmedReservations 전체를 배열로 묶어
+    send_rental_chat_notification_batch 1회만 호출
+
+수정: src/lib/types/chat.ts
+  → ActionPayload.items?: Array<{reservation_no, product_name, return_deadline?}> 추가
+
+수정: src/lib/components/chat/ActionCard.svelte
+  → payload.items.length > 1일 때 단일 product_name/reservation_no 대신
+    .items-list(상품명+예약번호 행 목록) 렌더링, CTA 버튼은 카드당 1개 그대로 유지
+
+수정: src/__tests__/services/confirmMock.test.ts
+  → 기존 단건 승인 테스트의 RPC 호출 검증 대상을 send_rental_chat_notification_batch로 갱신
+  → 신규: "2건 이상 동시 승인 → 통합 알림 1회" happy-path 테스트 추가(개별 RPC 미호출 확인 포함)
+```
+
+**검증 완료**:
+```
+[x] Stage(ezyvffjvuwmtuhpxdjrw)에 migration 275 적용 — CREATE FUNCTION 성공
+[x] authenticated EXECUTE 회수 확인 (auth_can_exec=false, service_can_exec=true)
+[x] 실제 2건 예약(동일 유저)으로 함수 직접 호출 스모크테스트 → 통합 content
+    ("Canon RF 24-70mm F2.8L 외 1건 예약이 승인되었습니다") + items 배열 2건 정상 확인
+[x] 테스트로 생성된 chat_messages/chat_sessions 행은 검증 직후 삭제(DB 정리 완료)
+[x] 스모크테스트 중 발견: context_id(uuid) 컬럼에 예약id::TEXT를 넣던 원래 설계를
+    NULL로 수정(예약id는 bigint라 uuid 캐스팅 불가 — 배치는 여러 예약을 다루므로
+    단일 reservation_id로 표현 자체가 불가능해 NULL이 맞음)
+[x] npx vitest run confirmMock.test.ts — 11/11 통과(신규 2건 포함)
+```
+
+**@sp3-qa-agent 1차 검수(2026-08-17) — GATE E 보류 발견 + 즉시 수정**:
+```
+⚠️ 최초 기록한 "npx svelte-check — 0 errors"는 세션 로그 기재 오류였음 — 실제로는
+   `--tsconfig ./tsconfig.json` 명시 실행 시 confirmMock.test.ts 167/192/202행에서
+   3건 ERROR 발생(([name]: [string]) => ... 구조분해 타입 주석이 vitest mock.calls의
+   실제 타입 any[][]와 불일치, "No overload matches this call") — QA 에이전트가 재현해
+   지적, 직접 재현 확인 후 즉시 수정:
+   ([name]: [string]) => name === '...'  →  (call: unknown[]) => call[0] === '...'
+   (3곳 동일 패턴 적용)
+[x] 수정 후 npx svelte-check --tsconfig ./tsconfig.json 재실행 — 0 ERRORS, 326 WARNINGS 확인
+[x] npx vitest run confirmMock.test.ts 재실행 — 11/11 통과 유지 확인
+```
+
+**Production 적용 완료 (2026-08-17, Stephen 명시 지시)**:
+```
+[x] Production(vnbpmvxruyciuuaermyh)에 migration 275 적용 — CREATE FUNCTION 성공
+[x] authenticated EXECUTE 회수 확인 (auth_can_exec=false, service_can_exec=true) — Stage와 동일
+[x] Production에서는 실사용자 데이터 보호를 위해 함수 직접 호출 스모크테스트 생략
+    (Stage에서 이미 실데이터 기반 검증 완료 — 동일 SQL을 그대로 적용했으므로 안전)
+```
+
+**미완료 — 후속 세션 필요**:
+```
+[ ] "예약을 하나로 통합"의 더 근본적인 해석(rental_reservations 테이블 자체를 상품별 개별
+    행이 아닌 장바구니 단위 단일 행으로 재설계)은 이번에 진행하지 않음 — CMS 대여관리·
+    옵션상품(reservation_options)·라이프사이클 상태머신 전체에 영향을 주는 별도의 대형
+    스키마 변경 아젠다이며, products.md/rental-lifecycle.md에 이미 "상품별 개별
+    rental_reservations 행"이 명시적 설계로 문서화돼 있어 별도 세션에서 전용 계획 필요
+    → Stephen 확인: 이 아젠다(CMS 대여관리 영역)는 별도 세션에서 이미 진행 중 —
+      이 세션에서 작성한 초안 플랜(/Users/stevenmac/.claude/plans/2-crystalline-sky.md)은
+      참고용으로만 남기고 이 세션에서는 더 이상 이어가지 않음
+```
+
+**@sp3-qa-agent 2차 검수(GATE E 재검수, 2026-08-17)**:
+```
+대상 수정: src/__tests__/services/confirmMock.test.ts 167/191~193/201~203행
+  ([name]: [string]) => name === '...'  →  (call: unknown[]) => call[0] === '...' (3곳)
+  — 1차 검수가 지적한 svelte-check 타입 에러(No overload matches this call) 해소용 수정.
+  나머지 4개 파일(migration 275, confirm-mock/+server.ts, chat.ts, ActionCard.svelte)은
+  1차 검수 이후 무변경 — diff 직접 재확인으로 검증.
+
+[x] npx svelte-check --tsconfig ./tsconfig.json 재현 실행 — 1468 FILES, 0 ERRORS, 326 WARNINGS
+    (1차 검수가 지적한 confirmMock.test.ts 3건 에러 해소 확인, 신규 에러 없음. 1차 검수가
+    적발한 "인자 없이 실행하면 다른 결과" 함정을 피해 동일하게 --tsconfig 명시 실행)
+[x] npx vitest run confirmMock.test.ts — 2 files, 11/11 통과(회귀 없음)
+[x] 수정된 필터 로직 런타임 동작 검증: admin.rpc.mock.calls는 vitest MockContext의
+    호출인자 배열(any[][])이므로 call[0]은 rpc()의 첫 인자(RPC 함수명 문자열)와 동일 —
+    구조분해([name])를 인덱스 접근(call[0])으로 바꾼 것은 타입 우회가 아니라 완전히 동등한
+    런타임 동작이며, 배치 RPC 호출 여부·횟수·개별 RPC 미호출 검증 의도가 그대로 보존됨을 확인
+[x] grep console.log / any 타입 — 변경 5개 파일 전부 0건
+[x] npx eslint (대상 4개 소스파일) — 0 errors
+[x] migration 275 재검토 — SECURITY DEFINER + search_path 고정 + authenticated/public REVOKE +
+    다중 사용자 예약 혼입 차단(v_user_id IS DISTINCT FROM 가드) + ROLLBACK 섹션 존재, 1차 검수
+    통과 판정과 diff 동일(무변경) 확인
+[x] npx vitest run(전체) — 8개 파일 31건 실패는 전부 이번 아젠다 범위 밖(payment.test.ts·
+    contractSign.test.ts·clearIssuedContract.test.ts·productClone.test.ts·
+    memberCodeCombo.test.ts — 결제 통합(BLOCKED 상태)·계약서명·상품복제·회원코드 도메인,
+    confirmMock.test.ts와 무관한 사전 존재 실패. 변경 파일 5개 어디에도 해당 테스트가
+    의존하지 않음을 확인 — 이번 수정으로 인한 회귀 아님)
+```
+
+## GATE E — 판정: ✅ 통과 (재검수 완료)
+```
+검수 1(규칙 정합성) : ✅ 1차 검수에서 이미 통과(보안·H-01 RPC 경유·다중사용자 격리 등),
+                      2차 검수에서 재확인된 diff 무변경 확인
+검수 2(기술 부채)   : ✅ console.log 0건 / any 타입 0건 / TODO·FIXME 신규 0건 /
+                      svelte-check(--tsconfig ./tsconfig.json 명시) 0 ERRORS
+검수 3(시범오픈 기준): ✅ 마이그레이션 ROLLBACK 섹션 존재 / RLS·고객격리 무관(알림 RPC,
+                      service_role 전용) / 비밀키 노출 없음 / Stage+Production 양쪽 적용 완료
+B-START 완료조건    : ✅ 배치 승인 시 통합 RPC 1회 + 통합 카드 1개로 동작 확인(vitest happy-path)
+```
+
+→ Stephen, 아래 순서로 진행해주세요.
+커밋 메시지 제안해줘.
+
+---
+
+## DONE — QR-LABEL-2 수정: 2단 계층 기본순번(순번1) 마스킹 해제 (2026-08-16) — ✅ 완료
+
+[CONTEXT BRIDGE]
+plan_source: Stephen이 launch-selected-element로 SONY FX3/EEEE 두 대표카드를 제시 — 둘 다
+  "기준 품번"이 `CSCRDSL0000000`으로 동일하게 표시됨을 지적. DB 확인 결과 실제로는
+  parent_seq=1(SONY FX3)/parent_seq=2(EEEE)로 서로 다르게 정상 채번돼 있었음(생산 데이터
+  전수조사로 AX 1→2→3, CRDSL 1→2, PHSAM 1→2 순서대로 정상 증가하는 것도 함께 확인) — 즉
+  "기본순번 자동채번" 자체는 정상 동작 중이었고, 문제는 오직 "화면 표시 로직"이 실제 채번된
+  값을 반영하지 않고 항상 0으로 마스킹하던 것.
+핵심제약: products.md §2-2 영구고정 정책 위반 금지(표시만 변경, 채번 로직·DB 무변경)
+TDD도메인: 없음 (GSD — 클라이언트 표시 함수 수정)
+
+### 원인
+
+`baseCodeDisplay()`(`src/routes/cms/products/+page.svelte`)가 QR-LABEL-2 설계(2026-08-XX,
+"실제 발급값과 혼동 방지 위해 전부 0 마스킹")를 2단 계층 부모에도 그대로 적용 — 기본순번(순번1)
+까지 자식순번(순번2)과 똑같이 마스킹해서, 서로 다른 부모상품이 전부 동일한 "0000000" 코드로
+보여 구분이 안 됐음. 그러나 순번1은 부모 등록 시점에 `product_parent_sequences`에서 이미
+원자적으로 확정·불변 채번된 값(`generate_product_code`, migration 222)이라 순번2(재고 등록마다
+새로 채번)와 달리 마스킹할 이유가 원래 없었음.
+
+### 수정
+
+파일: `src/routes/cms/products/+page.svelte` (186-210행 `baseCodeDisplay()`)
+
+```ts
+const parentSeqDigits = cs.parent_seq_digits as number | undefined
+const parentSeq = cs.parent_seq as number | undefined
+const parentPart = parentSeqDigits
+  ? String(parentSeq ?? 0).padStart(parentSeqDigits, '0')
+  : ''
+const seqPlaceholder = parentSeqDigits
+  ? parentPart + '0'.repeat(seqDigits)   // 순번1=실값, 순번2=계속 0 마스킹
+  : '0'.repeat(seqDigits)                 // 2단 계층 아니면 기존 동작 그대로
+```
+
+결과: SONY FX3(`parent_seq=1`) → `CSCRDSL0010000`, EEEE(`parent_seq=2`) → `CSCRDSL0020000`로
+서로 구분 노출. 2단 계층이 아닌 상품(기본순번 개념 없음)은 기존 전부-0 마스킹 그대로 유지.
+
+문서: `.claude/rules/products.md` QR-LABEL-2 섹션에 "QR-LABEL-2 수정(2026-08-16, Stephen 확정)"
+블록 추가, 버전 v2.6→v2.7(하단 이력 갱신).
+
+### 검증
+
+- `npx svelte-check` — 신규 에러 0건(전체 0 errors/326 warnings, 대상 파일과 무관한 기존 경고만)
+- 관련 vitest 단위테스트 없음(`baseCodeDisplay`는 순수 클라이언트 표시 함수, 서버 액션 아님) —
+  코드 추적 + production 실데이터 대조로 검증
+
+### 수정 파일
+
+```
+src/routes/cms/products/+page.svelte   (MODIFY)
+.claude/rules/products.md              (MODIFY — QR-LABEL-2 정책 갱신)
+```
+
+### QA(@sp3-qa-agent) 검수 — 통과
+
+diff 정합성 확인. Node 직접 실행으로 4가지 케이스 전수 검증: `parent_seq=1/2`일 때 각각
+`0010000`/`0020000` 정확히 출력, 1단 계층(대다수 상품) 회귀 없음, `parent_seq` undefined 방어
+폴백(런타임 에러 없이 기존과 동일한 전부-0) 정상. 순번1 노출이 실제 자식 완전품번과 혼동될
+여지 없음(순번2 여전히 마스킹, QR은 §2-4에 따라 이 화면표시와 무관하게 product_code 기준).
+svelte-check 0 errors/326 warnings, 대상 파일 기존 경고 3건과 무관한 신규 발생 없음. 테스트
+부재는 순수 표시 함수·단순 분기라 리스크 수용 가능 판단. 문서(TASK.md/GSD_LOG.md) 기록 실제
+diff·검증 결과와 정확히 일치. 범위도 코드 1개+문서 3개로 정확히 한정 확인(그 외 병렬세션
+산출물은 범위 밖으로 배제).
+
+**GATE E: ✅ 통과 — 블로킹 0건. 커밋은 Stephen 직접 실행.**
