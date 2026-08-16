@@ -321,7 +321,7 @@
           }
         }
         // notify-hold는 draft 생성 시 발송하지 않음 — 체크아웃 승격(FE-4) 성공 시점에 발송
-        goto('/checkout');
+        goto('/cart');
       } else {
         // ── hold 경로 (기존 로직 그대로 — 하위호환)
         type ReserveRpcFn = (name: string, args: Record<string, unknown>) => Promise<{
@@ -395,7 +395,7 @@
             body: JSON.stringify({ reservationId: row.reservation_id }),
           }).catch(() => {})
         }
-        goto('/checkout');
+        goto('/cart');
       }
     } catch {
       showToast('예약 중 오류가 발생했습니다.');
