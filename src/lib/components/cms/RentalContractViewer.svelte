@@ -225,7 +225,16 @@
     onclose={() => { previewTemplateId = null }}
     onsent={() => { previewTemplateId = null; onrefresh() }}
     onEdit={(!signingsentAt && !customerSignedAt)
-      ? () => { previewTemplateId = null; editorOpen = true; editorContractId = contractId }
+      ? (editedContractId) => {
+          previewTemplateId = null
+          editorOpen        = true
+          // 미리보기 모달이 template 모드였다면 방금 적용·저장한 contractId를 전달해준다 —
+          // 그 값을 쓰지 않고 예전 contractId(비어있을 수 있음)로 열면 "정보 소실"처럼
+          // 보이는 버그가 재현된다(2026-08-15 실사용 중 발견, ContractTemplatePreviewModal
+          // handleEditClick() 참고). existing 모드였다면 어차피 동일한 contractId가 온다.
+          editorContractId  = editedContractId ?? contractId
+          issuedCheckTick++ // 방금 새로 발행됐을 수 있으므로 "발행 목록" 표시 상태 재확인
+        }
       : undefined}
   />
 {/if}

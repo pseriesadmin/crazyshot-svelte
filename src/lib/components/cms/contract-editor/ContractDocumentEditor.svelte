@@ -17,6 +17,7 @@
   import { validateUploadFile } from '$lib/utils/fileValidation'
   import { CustomImage, TIPTAP_CONTRACT_EXTENSIONS } from './tiptapExtensions'
   import type { TiptapDocBlock, ContractDocumentPayload, MergeFieldAttrs } from '$lib/types/contract-document'
+  import { ensureMaterialIconsFont } from '$lib/utils/loadMaterialIconsFont'
 
   // --------------------------------------------------------------------------
   // Props
@@ -219,6 +220,28 @@
         })
         bar.appendChild(overlayBtn)
 
+        bar.appendChild(mkSep())
+
+        // ── 삭제 버튼 (2026-08-16 — 기존엔 이미지 선택 시 삭제 수단이 전혀 없어
+        //    "선택 후 Delete/Backspace 키" 외 발견 불가능했음. jspreadsheet-ce 스프레드시트
+        //    모드 오버레이 삭제 버튼과 동일한 발견성으로 통일) ──
+        const deleteBtn = mkBtn('✕', '이미지 삭제')
+        deleteBtn.style.color = '#FF3535'
+        deleteBtn.addEventListener('mousedown', (e) => {
+          e.preventDefault()
+          e.stopPropagation()
+          if (typeof getPos !== 'function') return
+          const pos = getPos()
+          if (pos === undefined) return
+          const { state, dispatch } = extEditor.view
+          // nodeSize를 이미지 atom 노드 크기(항상 1)로 가정하지 않고 실제 문서에서 다시
+          // 조회 — NodeView 클로저의 initNode는 최초 마운트 시점 스냅샷이라 신뢰하지 않는다.
+          const docNode = state.doc.nodeAt(pos)
+          if (!docNode) return
+          dispatch(state.tr.delete(pos, pos + docNode.nodeSize))
+        })
+        bar.appendChild(deleteBtn)
+
         outer.appendChild(img)
         outer.appendChild(bar)
 
@@ -395,6 +418,14 @@
     $editorStore?.setEditable(!readonly)
   })
 
+  // 2026-08-17 편집 메뉴 UI 통일(Stephen "jspreadsheet 네이티브 툴바를 표준 디자인 UI로
+  // 기준" 요청) — 툴바 아이콘이 스프레드시트 모드(ContractSpreadsheetEditor.svelte)와
+  // 동일한 Google Material Icons 웹폰트에 의존한다. $effect는 마운트 이후에만
+  // 실행되므로(SSR 미실행) onMount와 동일하게 안전 — 의존값이 없어 1회만 실행된다.
+  $effect(() => {
+    ensureMaterialIconsFont()
+  })
+
   // --------------------------------------------------------------------------
   // UI 상태
   // --------------------------------------------------------------------------
@@ -402,6 +433,20 @@
   let showHtmlModal = $state(false)
   let htmlSource    = $state('')
   let imgInput: HTMLInputElement | null = $state(null)
+
+  // --------------------------------------------------------------------------
+  // 캔버스 확대/축소 (2026-08-15 실사용 요청 — Word/Sheets류 줌 컨트롤)
+  // CSS zoom(비표준이나 Chrome/Safari/Edge 폭넓게 지원, Firefox도 최신 버전 지원)을 사용 —
+  // transform:scale()과 달리 레이아웃 자체가 재계산돼 빈 여백 없이 실제 크기가 줄어든다.
+  // --------------------------------------------------------------------------
+  const ZOOM_MIN = 50
+  const ZOOM_MAX = 200
+  const ZOOM_STEP = 10
+  let zoomPercent = $state(100)
+
+  function zoomOut() { zoomPercent = Math.max(ZOOM_MIN, zoomPercent - ZOOM_STEP) }
+  function zoomIn()  { zoomPercent = Math.min(ZOOM_MAX, zoomPercent + ZOOM_STEP) }
+  function zoomReset() { zoomPercent = 100 }
 
   // --------------------------------------------------------------------------
   // 서명/직인 자산 삽입 팝오버 (기존 GET /api/cms/signature-assets 재사용)
@@ -424,6 +469,7 @@
       showSigPicker = false
       return
     }
+    closeAllPickers()
     showSigPicker = true
     sigLoading = true
     try {
@@ -453,6 +499,82 @@
       if (el && !el.contains(e.target as Node)) {
         showSigPicker = false
       }
+    }
+    document.addEventListener('click', onDocClick)
+    return () => document.removeEventListener('click', onDocClick)
+  })
+
+  // --------------------------------------------------------------------------
+  // 글꼴/글자색 피커 (2026-08-17 편집 메뉴 UI 통일 — Stephen "jspreadsheet 네이티브
+  // 툴바를 표준 디자인 UI로 기준" 요청. 네이티브 툴바의 폰트·글자색 피커와 동일한
+  // 선택지를 제공한다. TextStyle/Color/FontFamily 익스텐션은 tiptapExtensions.ts에
+  // 이미 구성돼 있었으나(생성일 미상 — 향후 확장을 대비해 미리 추가돼 있던 것으로 보임)
+  // 툴바 UI가 없어 실제로 쓸 방법이 없었다 — 새 npm 의존성 추가 없이 UI만 신규 구현.
+  // --------------------------------------------------------------------------
+  let showFontPicker  = $state(false)
+  let showColorPicker = $state(false)
+  let fontPickerEl: HTMLDivElement | null = $state(null)
+  let colorPickerEl: HTMLDivElement | null = $state(null)
+
+  /** 서명/직인·글꼴·글자색 팝오버는 동시에 하나만 열리도록 상호배타 처리 */
+  function closeAllPickers(): void {
+    showSigPicker = false
+    showFontPicker = false
+    showColorPicker = false
+  }
+
+  function toggleFontPicker(): void {
+    const next = !showFontPicker
+    closeAllPickers()
+    showFontPicker = next
+  }
+  function toggleColorPicker(): void {
+    const next = !showColorPicker
+    closeAllPickers()
+    showColorPicker = next
+  }
+
+  /** jspreadsheet 네이티브 폰트 피커와 동일한 4개 선택지(기본값/Verdana/Arial/Courier New) */
+  const FONT_OPTIONS: { label: string; value: string }[] = [
+    { label: '기본값',      value: '' },
+    { label: 'Verdana',     value: 'Verdana' },
+    { label: 'Arial',       value: 'Arial' },
+    { label: 'Courier New', value: 'Courier New' },
+  ]
+  /** 글자색 팔레트 — CMS 브랜드 톤 일부 + 문서에서 흔히 쓰는 기본색 */
+  const COLOR_SWATCHES: { label: string; value: string }[] = [
+    { label: '제거', value: '' },
+    { label: '검정', value: '#100B32' },
+    { label: '회색', value: '#666666' },
+    { label: '빨강', value: '#CF0000' },
+    { label: '파랑', value: '#1D4ED8' },
+    { label: '초록', value: '#16A34A' },
+    { label: '보라', value: '#3B2F8A' },
+    { label: '주황', value: '#FF4500' },
+  ]
+
+  function setDocFontFamily(value: string): void {
+    const e = $editorStore
+    if (!e) return
+    if (value) e.chain().focus().setFontFamily(value).run()
+    else e.chain().focus().unsetFontFamily().run()
+    showFontPicker = false
+  }
+  function setDocColor(value: string): void {
+    const e = $editorStore
+    if (!e) return
+    if (value) e.chain().focus().setColor(value).run()
+    else e.chain().focus().unsetColor().run()
+    showColorPicker = false
+  }
+
+  // 팝오버 외부 클릭 시 닫기 (글꼴·글자색 공용)
+  $effect(() => {
+    if (!showFontPicker && !showColorPicker) return
+    function onDocClick(e: MouseEvent) {
+      const target = e.target as Node
+      if (showFontPicker && fontPickerEl && !fontPickerEl.contains(target)) showFontPicker = false
+      if (showColorPicker && colorPickerEl && !colorPickerEl.contains(target)) showColorPicker = false
     }
     document.addEventListener('click', onDocClick)
     return () => document.removeEventListener('click', onDocClick)
@@ -616,70 +738,97 @@
   <!-- 서식 메뉴바 (P1-4, P1-5) -->
   {#if !readonly}
     <div class="cde-toolbar" role="toolbar" aria-label="서식 도구">
-      <!-- 텍스트 서식 -->
+      <!-- 실행취소/다시실행 (2026-08-17 편집 메뉴 UI 통일 — jspreadsheet 네이티브 툴바를
+           표준 디자인 UI로 기준. StarterKit이 기본 제공하는 history 익스텐션에 이미
+           연결돼 있던 명령이라 신규 익스텐션·npm 설치 없이 UI만 새로 노출. -->
       <div class="cde-group">
         <button
           type="button"
-          class="cde-btn"
-          class:active={isActive('bold')}
-          onclick={() => toggle('toggleBold')}
-          title="굵게 (Ctrl+B)"
-          aria-label="굵게"
-        ><strong>B</strong></button>
+          class="cde-btn cde-icon-btn"
+          onclick={() => toggle('undo')}
+          disabled={!($editorStore?.can().undo() ?? false)}
+          title="실행취소"
+          aria-label="실행취소"
+        ><i class="material-icons cde-icon" aria-hidden="true">undo</i></button>
         <button
           type="button"
-          class="cde-btn"
-          class:active={isActive('italic')}
-          onclick={() => toggle('toggleItalic')}
-          title="기울임 (Ctrl+I)"
-          aria-label="기울임"
-        ><em>I</em></button>
-        <button
-          type="button"
-          class="cde-btn"
-          class:active={isActive('underline')}
-          onclick={() => toggle('toggleUnderline')}
-          title="밑줄 (Ctrl+U)"
-          aria-label="밑줄"
-        ><u>U</u></button>
-        <button
-          type="button"
-          class="cde-btn"
-          class:active={isActive('strike')}
-          onclick={() => toggle('toggleStrike')}
-          title="취소선"
-          aria-label="취소선"
-        ><s>S</s></button>
+          class="cde-btn cde-icon-btn"
+          onclick={() => toggle('redo')}
+          disabled={!($editorStore?.can().redo() ?? false)}
+          title="다시실행"
+          aria-label="다시실행"
+        ><i class="material-icons cde-icon" aria-hidden="true">redo</i></button>
       </div>
 
       <div class="cde-sep"></div>
 
-      <!-- 정렬 -->
+      <!-- 텍스트 서식 (2026-08-17 아이콘 기반으로 재구성 — jspreadsheet 네이티브 툴바와
+           동일한 Material Icons 글리프, format_bold 등은 네이티브 툴바 아이콘명과 동일) -->
       <div class="cde-group">
         <button
           type="button"
-          class="cde-btn"
+          class="cde-btn cde-icon-btn"
+          class:active={isActive('bold')}
+          onclick={() => toggle('toggleBold')}
+          title="굵게 (Ctrl+B)"
+          aria-label="굵게"
+        ><i class="material-icons cde-icon" aria-hidden="true">format_bold</i></button>
+        <button
+          type="button"
+          class="cde-btn cde-icon-btn"
+          class:active={isActive('italic')}
+          onclick={() => toggle('toggleItalic')}
+          title="기울임 (Ctrl+I)"
+          aria-label="기울임"
+        ><i class="material-icons cde-icon" aria-hidden="true">format_italic</i></button>
+        <button
+          type="button"
+          class="cde-btn cde-icon-btn"
+          class:active={isActive('underline')}
+          onclick={() => toggle('toggleUnderline')}
+          title="밑줄 (Ctrl+U)"
+          aria-label="밑줄"
+        ><i class="material-icons cde-icon" aria-hidden="true">format_underlined</i></button>
+        <button
+          type="button"
+          class="cde-btn cde-icon-btn"
+          class:active={isActive('strike')}
+          onclick={() => toggle('toggleStrike')}
+          title="취소선"
+          aria-label="취소선"
+        ><i class="material-icons cde-icon" aria-hidden="true">strikethrough_s</i></button>
+      </div>
+
+      <div class="cde-sep"></div>
+
+      <!-- 정렬 — format_align_left/center/right 아이콘으로 완전히 구분되는 서로 다른
+           글리프 사용(2026-08-16에는 "≡" 3개가 동일해 보이던 문제를 한글 라벨로 임시
+           수정했었으나, 2026-08-17 네이티브 툴바 기준 아이콘 방식으로 재작업) -->
+      <div class="cde-group">
+        <button
+          type="button"
+          class="cde-btn cde-icon-btn"
           class:active={isActive('textAlign', { textAlign: 'left' })}
           onclick={() => toggle('setTextAlign', { textAlign: 'left' })}
           title="왼쪽 정렬"
           aria-label="왼쪽 정렬"
-        >≡</button>
+        ><i class="material-icons cde-icon" aria-hidden="true">format_align_left</i></button>
         <button
           type="button"
-          class="cde-btn"
+          class="cde-btn cde-icon-btn"
           class:active={isActive('textAlign', { textAlign: 'center' })}
           onclick={() => toggle('setTextAlign', { textAlign: 'center' })}
           title="가운데 정렬"
           aria-label="가운데 정렬"
-        >≡</button>
+        ><i class="material-icons cde-icon" aria-hidden="true">format_align_center</i></button>
         <button
           type="button"
-          class="cde-btn"
+          class="cde-btn cde-icon-btn"
           class:active={isActive('textAlign', { textAlign: 'right' })}
           onclick={() => toggle('setTextAlign', { textAlign: 'right' })}
           title="오른쪽 정렬"
           aria-label="오른쪽 정렬"
-        >≡</button>
+        ><i class="material-icons cde-icon" aria-hidden="true">format_align_right</i></button>
       </div>
 
       <div class="cde-sep"></div>
@@ -688,20 +837,20 @@
       <div class="cde-group">
         <button
           type="button"
-          class="cde-btn"
+          class="cde-btn cde-icon-btn"
           class:active={isActive('bulletList')}
           onclick={() => toggle('toggleBulletList')}
           title="글머리기호 목록"
           aria-label="글머리기호 목록"
-        >•≡</button>
+        ><i class="material-icons cde-icon" aria-hidden="true">format_list_bulleted</i></button>
         <button
           type="button"
-          class="cde-btn"
+          class="cde-btn cde-icon-btn"
           class:active={isActive('orderedList')}
           onclick={() => toggle('toggleOrderedList')}
           title="번호 목록"
           aria-label="번호 목록"
-        >1≡</button>
+        ><i class="material-icons cde-icon" aria-hidden="true">format_list_numbered</i></button>
       </div>
 
       <div class="cde-sep"></div>
@@ -722,36 +871,111 @@
 
       <div class="cde-sep"></div>
 
-      <!-- 링크 -->
-      <div class="cde-group">
+      <!-- 글꼴/글자색 (2026-08-17 신규 — jspreadsheet 네이티브 툴바의 폰트·글자색 피커와
+           동일한 선택지. TextStyle/Color/FontFamily 익스텐션은 이미 구성돼 있었음. -->
+      <div class="cde-pick-group" bind:this={fontPickerEl}>
         <button
           type="button"
-          class="cde-btn"
-          class:active={isActive('link')}
-          onclick={setLink}
-          title="링크 설정"
-          aria-label="링크 설정"
-        >🔗</button>
+          class="cde-btn cde-icon-btn"
+          class:active={showFontPicker}
+          onclick={toggleFontPicker}
+          title="글꼴"
+          aria-label="글꼴"
+          aria-expanded={showFontPicker}
+          aria-haspopup="listbox"
+        ><i class="material-icons cde-icon" aria-hidden="true">font_download</i></button>
+        {#if showFontPicker}
+          <div class="cde-opt-popover" role="listbox" aria-label="글꼴 선택">
+            <div class="cde-opt-list">
+              {#each FONT_OPTIONS as opt (opt.value)}
+                <button
+                  type="button"
+                  class="cde-opt-item"
+                  role="option"
+                  aria-selected={isActive('textStyle', { fontFamily: opt.value })}
+                  class:active={isActive('textStyle', { fontFamily: opt.value })}
+                  onclick={() => setDocFontFamily(opt.value)}
+                >{opt.label}</button>
+              {/each}
+            </div>
+          </div>
+        {/if}
+      </div>
+
+      <div class="cde-pick-group" bind:this={colorPickerEl}>
+        <button
+          type="button"
+          class="cde-btn cde-icon-btn"
+          class:active={showColorPicker}
+          onclick={toggleColorPicker}
+          title="글자색"
+          aria-label="글자색"
+          aria-expanded={showColorPicker}
+          aria-haspopup="listbox"
+        ><i class="material-icons cde-icon" aria-hidden="true">format_color_text</i></button>
+        {#if showColorPicker}
+          <div class="cde-opt-popover" role="listbox" aria-label="글자색 선택">
+            <div class="cde-color-grid">
+              {#each COLOR_SWATCHES as sw (sw.value || 'none')}
+                <button
+                  type="button"
+                  class="cde-color-swatch"
+                  class:cde-color-swatch--none={!sw.value}
+                  style={sw.value ? `background:${sw.value}` : undefined}
+                  title={sw.label}
+                  aria-label={sw.label}
+                  onclick={() => setDocColor(sw.value)}
+                ></button>
+              {/each}
+            </div>
+          </div>
+        {/if}
       </div>
 
       <div class="cde-sep"></div>
 
-      <!-- 표 (P1-5) -->
+      <!-- 링크 -->
       <div class="cde-group">
         <button
           type="button"
-          class="cde-btn"
+          class="cde-btn cde-icon-btn"
+          class:active={isActive('link')}
+          onclick={setLink}
+          title="링크 설정"
+          aria-label="링크 설정"
+        ><i class="material-icons cde-icon" aria-hidden="true">link</i></button>
+      </div>
+
+      <div class="cde-sep"></div>
+
+      <!-- 표 (P1-5, 2026-08-15 중급 편집 기능 보강: 행/열 앞에 추가·셀 병합/분할·열 헤더 —
+           @tiptap/extension-table가 이미 지원하는 커맨드인데 버튼이 없어 UI로 접근할 방법이
+           없었음(실사용 중 "구글 워드·스프레드시트 기본 기능" 미달 제보로 발견). 표 삽입/삭제·
+           병합/분할은 jspreadsheet 네이티브 툴바에 대응 아이콘이 있어 2026-08-17에 아이콘화 —
+           행/열 개별 추가·삭제·헤더 토글은 대응하는 단일 아이콘이 없어 텍스트 버튼 유지
+           (모호한 아이콘을 억지로 고르는 것보다 명확한 한글 약어가 오독 위험이 낮다는 판단). -->
+      <div class="cde-group">
+        <button
+          type="button"
+          class="cde-btn cde-icon-btn"
           onclick={insertTable}
           title="표 삽입"
           aria-label="표 삽입"
-        >표+</button>
+        ><i class="material-icons cde-icon" aria-hidden="true">grid_on</i></button>
+        <button
+          type="button"
+          class="cde-btn"
+          onclick={() => $editorStore?.chain().focus().addRowBefore().run()}
+          title="행 위에 추가"
+          aria-label="행 위에 추가"
+        >행↑+</button>
         <button
           type="button"
           class="cde-btn"
           onclick={() => $editorStore?.chain().focus().addRowAfter().run()}
-          title="행 추가"
-          aria-label="행 추가"
-        >행+</button>
+          title="행 아래에 추가"
+          aria-label="행 아래에 추가"
+        >행↓+</button>
         <button
           type="button"
           class="cde-btn"
@@ -762,10 +986,17 @@
         <button
           type="button"
           class="cde-btn"
+          onclick={() => $editorStore?.chain().focus().addColumnBefore().run()}
+          title="열 왼쪽에 추가"
+          aria-label="열 왼쪽에 추가"
+        >열←+</button>
+        <button
+          type="button"
+          class="cde-btn"
           onclick={() => $editorStore?.chain().focus().addColumnAfter().run()}
-          title="열 추가"
-          aria-label="열 추가"
-        >열+</button>
+          title="열 오른쪽에 추가"
+          aria-label="열 오른쪽에 추가"
+        >열→+</button>
         <button
           type="button"
           class="cde-btn"
@@ -775,18 +1006,39 @@
         >열-</button>
         <button
           type="button"
+          class="cde-btn cde-icon-btn"
+          onclick={() => $editorStore?.chain().focus().mergeCells().run()}
+          title="선택한 셀 병합 (셀 여러 개를 드래그로 선택한 뒤 클릭)"
+          aria-label="셀 병합"
+        ><i class="material-icons cde-icon" aria-hidden="true">merge_type</i></button>
+        <button
+          type="button"
+          class="cde-btn cde-icon-btn"
+          onclick={() => $editorStore?.chain().focus().splitCell().run()}
+          title="병합된 셀 분할"
+          aria-label="셀 분할"
+        ><i class="material-icons cde-icon" aria-hidden="true">call_split</i></button>
+        <button
+          type="button"
           class="cde-btn"
           onclick={() => $editorStore?.chain().focus().toggleHeaderRow().run()}
           title="헤더행 토글"
           aria-label="헤더행 토글"
-        >헤더</button>
+        >헤더행</button>
         <button
           type="button"
           class="cde-btn"
+          onclick={() => $editorStore?.chain().focus().toggleHeaderColumn().run()}
+          title="헤더열 토글"
+          aria-label="헤더열 토글"
+        >헤더열</button>
+        <button
+          type="button"
+          class="cde-btn cde-icon-btn"
           onclick={() => $editorStore?.chain().focus().deleteTable().run()}
           title="표 삭제"
           aria-label="표 삭제"
-        >표-</button>
+        ><i class="material-icons cde-icon" aria-hidden="true">delete</i></button>
       </div>
 
       <div class="cde-sep"></div>
@@ -795,11 +1047,11 @@
       <div class="cde-group">
         <button
           type="button"
-          class="cde-btn"
+          class="cde-btn cde-icon-btn"
           onclick={triggerImgUpload}
           title="이미지 삽입"
           aria-label="이미지 삽입"
-        >이미지</button>
+        ><i class="material-icons cde-icon" aria-hidden="true">image</i></button>
       </div>
 
       <div class="cde-sep"></div>
@@ -859,17 +1111,46 @@
       <div class="cde-group">
         <button
           type="button"
-          class="cde-btn"
+          class="cde-btn cde-icon-btn"
           onclick={openHtmlModal}
           title="HTML 소스 편집"
           aria-label="HTML 소스 편집"
-        >&lt;/&gt;</button>
+        ><i class="material-icons cde-icon" aria-hidden="true">code</i></button>
+      </div>
+
+      <div class="cde-sep"></div>
+
+      <!-- 캔버스 확대/축소 (2026-08-15 실사용 요청) -->
+      <div class="cde-group cde-zoom-group">
+        <button
+          type="button"
+          class="cde-btn"
+          onclick={zoomOut}
+          disabled={zoomPercent <= ZOOM_MIN}
+          title="축소"
+          aria-label="캔버스 축소"
+        >－</button>
+        <button
+          type="button"
+          class="cde-btn cde-zoom-value"
+          onclick={zoomReset}
+          title="100%로 초기화"
+          aria-label="확대·축소 배율 초기화 (현재 {zoomPercent}%)"
+        >{zoomPercent}%</button>
+        <button
+          type="button"
+          class="cde-btn"
+          onclick={zoomIn}
+          disabled={zoomPercent >= ZOOM_MAX}
+          title="확대"
+          aria-label="캔버스 확대"
+        >＋</button>
       </div>
     </div>
   {/if}
 
-  <!-- TipTap 에디터 영역 (P1-3) -->
-  <div class="cde-editor-area" class:readonly>
+  <!-- TipTap 에디터 영역 (P1-3) — --cde-zoom CSS 변수로 확대/축소 전달(zoomPercent) -->
+  <div class="cde-editor-area" class:readonly style="--cde-zoom: {zoomPercent}%">
     <EditorContent editor={$editorStore} class="cde-editor-content" />
   </div>
 
@@ -926,13 +1207,15 @@
     background: var(--cs-white, #fff);
   }
 
-  /* 서식 메뉴바 */
+  /* 서식 메뉴바 — 2026-08-16 편집 메뉴 UI 통일(Stephen 요청): 그룹 간 여백을
+     .cse-toolbar(스프레드시트 모드)와 동일한 밀도로 넓혀 촘촘하게 붙어 보이던
+     문제를 완화 */
   .cde-toolbar {
     display: flex;
     flex-wrap: wrap;
     align-items: center;
-    gap: 2px;
-    padding: 6px 10px;
+    gap: 4px;
+    padding: 8px 10px;
     background: var(--cs-surface-gray, #f6f6f6);
     border-bottom: 1px solid var(--cs-lilac, #ECEBF4);
   }
@@ -947,10 +1230,13 @@
     width: 1px;
     height: 18px;
     background: var(--cs-lilac, #ECEBF4);
-    margin: 0 4px;
+    margin: 0 6px;
   }
 
   .cde-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
     min-height: 28px;
     min-width: 28px;
     padding: 2px 6px;
@@ -970,26 +1256,61 @@
     border-color: var(--cs-purple, #3B2F8A);
     color: var(--cs-purple, #3B2F8A);
   }
+  .cde-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+
+  /* 2026-08-17 편집 메뉴 UI 통일 — jspreadsheet 네이티브 툴바를 표준 디자인 UI로 기준해
+     아이콘 버튼 도입(Stephen 요청). 아이콘은 스프레드시트 모드가 이미 쓰는 동일한 Google
+     Material Icons 웹폰트 글리프를 재사용($lib/utils/loadMaterialIconsFont.ts 공용화). */
+  .cde-icon-btn {
+    padding: 2px;
+  }
+  .cde-icon {
+    font-size: 18px;
+    line-height: 1;
+  }
+
+  /* 확대/축소 컨트롤 */
+  .cde-zoom-group { gap: 0; }
+  .cde-zoom-value {
+    min-width: 44px;
+    cursor: pointer;
+  }
 
   /* 에디터 영역 — A4 용지 배경 */
   .cde-editor-area {
     flex: 1;
     min-height: 360px;
+    /* min-width:0 필수 — .cde-wrap(column-flex)의 아이템이라 없으면 넓은 임포트 표의
+       min-content 폭이 이 박스 자체를 늘려버려 .tableWrapper의 overflow-x:auto가
+       무력화된다(2026-08-15 실사용 중 발견). */
+    min-width: 0;
     padding: 24px 16px;
     overflow-y: auto;
+    overflow-x: hidden;
     background: var(--cs-surface-gray, #f6f6f6);
   }
   /* readonly 시 배경 동일 유지 (이미 gray) */
   .cde-editor-area.readonly { background: #e8e8ee; }
 
-  /* TipTap 에디터 내부 스타일 — A4 폭 용지 카드 */
+  /*
+   * TipTap 에디터 내부 스타일 — A4 폭 용지 카드.
+   * min-height:297mm — 콘텐츠가 짧으면(예: 표 하나만 임포트 직후) 용지 박스 자체가
+   * 세로로 짧아져 가로가 넓은 "가로형(landscape)"처럼 보이는 문제가 있었다(2026-08-15
+   * 실사용 중 발견 — 외부 브라우저에서도 재현 확인됨). A4 세로 높이(297mm)를 최소값으로
+   * 고정해 콘텐츠 양과 무관하게 항상 올바른 세로형 비율로 보이게 한다(콘텐츠가 그보다
+   * 길면 자연스럽게 더 길어짐 — 문서형 에디터는 페이지 분할 없이 이어지는 캔버스이므로
+   * 최댓값 제한은 없음).
+   * zoom:var(--cde-zoom) — 확대/축소 컨트롤(zoomPercent, ContractDocumentEditor 툴바)
+   */
   .cde-editor-area :global(.cde-editor-content) {
     width: 210mm;
     max-width: 100%;
+    min-height: 297mm;
     margin: 0 auto;
     background: var(--cs-white, #fff);
     box-shadow: 0 1px 2px rgba(16,11,50,.06), 0 4px 20px rgba(16,11,50,.10);
     box-sizing: border-box;
+    zoom: var(--cde-zoom, 100%);
   }
   .cde-editor-area :global(.ProseMirror) {
     position: relative; /* overlay 이미지 absolute 배치 기준점 */
@@ -1019,6 +1340,8 @@
       box-shadow: none;
       width: 100%;
       max-width: none;
+      min-height: 0;
+      zoom: 100%; /* 화면 확대/축소 설정과 무관하게 인쇄는 항상 실제 크기 */
     }
     .cde-editor-area :global(.ProseMirror) {
       padding: 0;
@@ -1037,6 +1360,35 @@
     margin: 0.4em 0;
   }
 
+  /*
+   * 표 컨테이너 — resizable:true인 TipTap Table은 편집 모드에서 <table>을
+   * <div class="tableWrapper">로 자동 감싼다(@tiptap/extension-table NodeView).
+   * 이 래퍼에 overflow-x를 주지 않으면 넓은 표(특히 임포트된 표)가 A4 페이지 폭을
+   * 그대로 뚫고 나가 페이지 자체가 깨져 보인다 — 표만 가로 스크롤되게 컨테인한다.
+   */
+  .cde-editor-area :global(.tableWrapper) {
+    overflow-x: auto;
+    max-width: 100%;
+  }
+  /* 컬럼 리사이즈 드래그 중 커서 (prosemirror-tables columnResizing 표준 클래스) */
+  .cde-editor-area :global(.resize-cursor) {
+    cursor: col-resize;
+  }
+  /*
+   * 컬럼 경계 드래그 핸들 (prosemirror-tables columnResizing 표준 클래스) —
+   * 기본은 스타일이 전혀 없어 거의 투명한 4px 영역이라 발견 불가능했음(기능은 이미 동작).
+   */
+  .cde-editor-area :global(.column-resize-handle) {
+    position: absolute;
+    right: -2px;
+    top: 0;
+    bottom: -2px;
+    width: 4px;
+    z-index: 20;
+    background-color: var(--cs-purple, #3B2F8A);
+    pointer-events: none;
+  }
+
   /* 표 스타일 */
   .cde-editor-area :global(.ProseMirror table) {
     border-collapse: collapse;
@@ -1046,8 +1398,17 @@
   .cde-editor-area :global(.ProseMirror table th),
   .cde-editor-area :global(.ProseMirror table td) {
     border: 1px solid #ddd;
-    padding: 6px 10px;
-    min-width: 40px;
+    padding: 4px 6px;
+    /*
+     * min-width:40px(과거)는 fitColumnWidthsToTarget()의 컬럼당 최소 20px 하한과
+     * 충돌했다 — 컬럼이 많은 표(예: 17열)는 17*40px=680px로 A4 본문 폭(642px)을
+     * CSS 레벨에서 이미 초과해버려, JS 축소 계산이 아무리 정확해도 브라우저가 실제로는
+     * 더 넓게 렌더링하는 결과로 이어졌다(2026-08-15 실사용 중 발견 — 축소 로직 자체는
+     * 정상이었으나 이 CSS 하한이 그 효과를 무력화하고 있었음). JS 쪽 하한(20px)과
+     * 일치시켜 충돌을 제거.
+     */
+    min-width: 20px;
+    overflow-wrap: anywhere; /* 긴 미분리 토큰(전화번호·등록번호 등)이 컬럼폭을 강제로 넓히지 않도록 */
   }
   .cde-editor-area :global(.ProseMirror table th) {
     background: var(--cs-surface-gray, #f6f6f6);
@@ -1206,6 +1567,77 @@
     transition: background 0.1s;
   }
   .btn-cancel:hover { background: var(--cs-lilac, #ECEBF4); }
+
+  /* ── 글꼴/글자색 팝오버 (2026-08-17 신규) — 서명/직인 팝오버와 동일 크롬 ── */
+  .cde-pick-group {
+    position: relative;
+  }
+  .cde-opt-popover {
+    position: absolute;
+    top: calc(100% + 4px);
+    left: 0;
+    z-index: 200;
+    background: var(--cs-white, #fff);
+    border: 1px solid var(--cs-lilac, #ECEBF4);
+    border-radius: var(--cms-radius-sm, 8px);
+    box-shadow: 0 4px 16px rgba(16, 11, 50, 0.12);
+    min-width: 140px;
+    overflow: hidden;
+  }
+  .cde-opt-list {
+    display: flex;
+    flex-direction: column;
+    max-height: 240px;
+    overflow-y: auto;
+    padding: 4px;
+  }
+  .cde-opt-item {
+    padding: 8px 10px;
+    background: none;
+    border: 1px solid transparent;
+    border-radius: var(--cms-radius-sm, 8px);
+    font-size: 12px;
+    color: var(--cs-text, #100B32);
+    cursor: pointer;
+    text-align: left;
+    white-space: nowrap;
+    transition: background 0.1s, border-color 0.1s;
+  }
+  .cde-opt-item:hover {
+    background: var(--cs-lilac, #ECEBF4);
+    border-color: var(--cs-lilac, #ECEBF4);
+  }
+  .cde-opt-item.active {
+    background: var(--cs-purple-op10, rgba(59,47,138,0.1));
+    border-color: var(--cs-purple, #3B2F8A);
+    color: var(--cs-purple, #3B2F8A);
+  }
+  .cde-color-grid {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    padding: 10px;
+    width: 160px;
+  }
+  .cde-color-swatch {
+    width: 24px;
+    height: 24px;
+    border-radius: 6px;
+    border: 1px solid rgba(16, 11, 50, 0.15);
+    cursor: pointer;
+    padding: 0;
+    transition: transform 0.1s, border-color 0.1s;
+  }
+  .cde-color-swatch:hover {
+    transform: scale(1.1);
+    border-color: var(--cs-purple, #3B2F8A);
+  }
+  /* "제거" 스와치 — 대각선으로 표시 */
+  .cde-color-swatch--none {
+    background:
+      linear-gradient(to top left, transparent calc(50% - 1px), var(--cs-red-badge, #FF3535) calc(50% - 1px), var(--cs-red-badge, #FF3535) calc(50% + 1px), transparent calc(50% + 1px)),
+      var(--cs-surface-gray, #f6f6f6);
+  }
 
   /* ── 서명/직인 삽입 팝오버 ── */
   .cde-sig-group {

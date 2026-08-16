@@ -4,29 +4,37 @@
    *
    * - accept 목록은 계약 전용 로컬 관리 (전역 fileValidation.ts 이미지 표준 미변경)
    * - 파싱은 클라이언트에서 수행 (mammoth / SheetJS)
-   * - onImport 콜백으로 결과를 부모에게 전달 → 부모가 에디터에 반영
+   * - onImport(docx/hwpx HTML)과 onImportSpreadsheet(xlsx SpreadsheetDocument)
+   *   두 콜백으로 결과를 부모에게 전달
    *
    * 지원 포맷:
-   *   .docx → mammoth HTML → TipTap setContent
-   *   .xlsx → SheetJS 시트 선택 + 범위 선택 → TipTap table JSON insertContent
+   *   .docx  → mammoth HTML → TipTap setContent
+   *   .xlsx  → 모든 시트 → SpreadsheetDocument → 스프레드시트 에디터 모드
+   *   .hwpx  → 실험 변환 → TipTap setContent
+   *   .hwp   → 안내 메시지
    */
 
   import { csToast } from '$lib/utils/toast'
   import { importDocx } from '$lib/utils/docImport/docxImport'
-  import { getSheetNames, parseSheet, rowsToTiptapTable } from '$lib/utils/docImport/xlsxImport'
+  import {
+    importWorkbookAsSpreadsheetDocument,
+    countTotalRows,
+  } from '$lib/utils/docImport/xlsxToSpreadsheetDocument'
   import { FEATURE_HWPX_EXPERIMENTAL, importHwpx } from '$lib/utils/docImport/hwpxImport'
-  import type { JSONContent } from '@tiptap/core'
+  import type { SpreadsheetDocument } from '$lib/types/contract-document'
 
   // --------------------------------------------------------------------------
   // Props
   // --------------------------------------------------------------------------
   interface Props {
     onclose: () => void
-    /** docx/hwpx → HTML 문자열, xlsx → TipTap JSONContent */
-    onImport: (result: { type: 'html'; html: string } | { type: 'json'; content: JSONContent }) => void
+    /** docx/hwpx → HTML 문자열 */
+    onImport: (result: { type: 'html'; html: string }) => void
+    /** xlsx → SpreadsheetDocument (스프레드시트 에디터 모드 전환) */
+    onImportSpreadsheet?: (doc: SpreadsheetDocument) => void
   }
 
-  let { onclose, onImport }: Props = $props()
+  let { onclose, onImport, onImportSpreadsheet }: Props = $props()
 
   // --------------------------------------------------------------------------
   // 계약 전용 accept 목록 (전역 fileValidation.ts 미변경)
@@ -48,12 +56,10 @@
   type Step =
     | 'select'
     | 'docx-preview'
-    | 'xlsx-sheet'
-    | 'xlsx-range'
-    | 'xlsx-preview'
-    | 'hwp-notice'          // P5-1: .hwp / .hwpx 기본 안내 모달
-    | 'hwpx-experimental'   // P5-2: .hwpx 실험 파싱 동의 + 진행
-    | 'hwpx-preview'        // P5-2: .hwpx 변환 결과 미리보기
+    | 'xlsx-spreadsheet-preview'    // xlsx → 모든 시트 → 스프레드시트 에디터 모드
+    | 'hwp-notice'                  // P5-1: .hwp / .hwpx 기본 안내 모달
+    | 'hwpx-experimental'           // P5-2: .hwpx 실험 파싱 동의 + 진행
+    | 'hwpx-preview'                // P5-2: .hwpx 변환 결과 미리보기
     | 'loading'
 
   let step        = $state<Step>('select')
@@ -65,11 +71,9 @@
   let docxHtml     = $state('')
   let docxWarnings = $state<string[]>([])
 
-  // xlsx 상태
-  let xlsxSheets   = $state<string[]>([])
-  let xlsxSheet    = $state('')
-  let xlsxRange    = $state('')   // e.g., 'A1:D10' or '' for all
-  let xlsxRows     = $state<string[][]>([])
+  // xlsx 스프레드시트 상태
+  let xlsxSpreadsheetDoc = $state<SpreadsheetDocument | null>(null)
+  let xlsxTotalRows      = $state(0)
 
   // hwpx 실험 파싱 상태
   let hwpxHtml         = $state('')
@@ -90,7 +94,7 @@
       processDocx(file)
     } else if (ext === 'xlsx' || ext === 'xls') {
       fileType = 'xlsx'
-      processXlsxSheets(file)
+      processXlsxAsSpreadsheet(file)
     } else if (ext === 'hwp') {
       // P5-1: .hwp 구 바이너리 포맷 — 파싱 시도 없이 즉시 안내 모달
       fileType = 'hwp'
@@ -135,55 +139,31 @@
   }
 
   // --------------------------------------------------------------------------
-  // xlsx 처리
+  // xlsx 처리 — 스프레드시트 모드 (전체 시트 임포트)
   // --------------------------------------------------------------------------
-  async function processXlsxSheets(file: File) {
+  async function processXlsxAsSpreadsheet(file: File) {
     step = 'loading'
     try {
-      const sheets = await getSheetNames(file)
-      xlsxSheets   = sheets.map((s) => s.name)
-      xlsxSheet    = xlsxSheets[0] ?? ''
-      xlsxRange    = ''
-      step         = 'xlsx-sheet'
+      const doc   = await importWorkbookAsSpreadsheetDocument(file)
+      const total = countTotalRows(doc)
+      xlsxSpreadsheetDoc = doc
+      xlsxTotalRows      = total
+      if (total > 5000) {
+        csToast.warning(
+          `총 ${total.toLocaleString()}행이 감지됐습니다. 5,000행을 초과하면 에디터 성능이 저하될 수 있습니다.`,
+        )
+      }
+      step = 'xlsx-spreadsheet-preview'
     } catch (err) {
       csToast.error(err instanceof Error ? err.message : '.xlsx 로드에 실패했습니다.')
       step = 'select'
     }
   }
 
-  async function previewXlsx() {
-    if (!selectedFile || !xlsxSheet) return
-    step = 'loading'
-    try {
-      xlsxRows = await parseSheet(selectedFile, {
-        sheetName: xlsxSheet,
-        range:     xlsxRange.trim() || undefined,
-      })
-      if (xlsxRows.length === 0) {
-        csToast.error('선택한 범위에 데이터가 없습니다.')
-        step = 'xlsx-sheet'
-        return
-      }
-      if (xlsxRows.length > 100) {
-        csToast.error('100행을 초과하는 데이터는 임포트할 수 없습니다. 범위를 줄여주세요.')
-        step = 'xlsx-sheet'
-        return
-      }
-      step = 'xlsx-preview'
-    } catch (err) {
-      csToast.error(err instanceof Error ? err.message : '시트 파싱에 실패했습니다.')
-      step = 'xlsx-sheet'
-    }
-  }
-
-  function confirmXlsxImport() {
-    try {
-      const tableJson = rowsToTiptapTable(xlsxRows)
-      onImport({ type: 'json', content: tableJson })
-      onclose()
-    } catch (err) {
-      csToast.error(err instanceof Error ? err.message : '테이블 변환에 실패했습니다.')
-    }
+  function confirmXlsxSpreadsheetImport() {
+    if (!xlsxSpreadsheetDoc) return
+    onImportSpreadsheet?.(xlsxSpreadsheetDoc)
+    onclose()
   }
 
   // --------------------------------------------------------------------------
@@ -238,7 +218,7 @@
         <div class="cim-section">
           <p class="cim-desc">
             .docx 파일은 편집 가능한 문서로 변환됩니다.<br />
-            .xlsx 파일은 시트를 선택해 표로 삽입됩니다.<br />
+            .xlsx 파일은 모든 시트를 스프레드시트 에디터로 가져옵니다.<br />
             .hwpx 파일은 실험적 변환을 시도하거나 안내 메시지를 제공합니다.<br />
             .hwp 파일은 직접 변환이 지원되지 않으며 안내 메시지가 표시됩니다.
           </p>
@@ -382,63 +362,48 @@
           </button>
         </div>
 
-      {:else if step === 'xlsx-sheet'}
-        <!-- xlsx 시트 + 범위 선택 -->
+      {:else if step === 'xlsx-spreadsheet-preview'}
+        <!-- xlsx: 모든 시트를 스프레드시트 에디터로 가져오기 확인 -->
         <div class="cim-section">
-          <p class="cim-section-title">시트 선택</p>
-          <div class="field-row">
-            <label class="f-label" for="xlsx-sheet-select">시트</label>
-            <select id="xlsx-sheet-select" class="f-select" bind:value={xlsxSheet}>
-              {#each xlsxSheets as s}
-                <option value={s}>{s}</option>
-              {/each}
-            </select>
-          </div>
-          <div class="field-row">
-            <label class="f-label" for="xlsx-range-input">범위 (선택)</label>
-            <input
-              id="xlsx-range-input"
-              class="f-input"
-              placeholder="예: A1:D20 (비워두면 전체)"
-              bind:value={xlsxRange}
-            />
-            <p class="f-hint">최대 100행까지 가져올 수 있습니다.</p>
-          </div>
+          <p class="cim-section-title">스프레드시트 가져오기</p>
+          {#if xlsxTotalRows > 5000}
+            <div class="warn-banner warn-banner--yellow">
+              <strong>⚠️ 대용량 경고</strong><br />
+              총 {xlsxTotalRows.toLocaleString()}행이 감지됐습니다.
+              5,000행을 초과하면 에디터 성능이 저하될 수 있습니다.
+            </div>
+          {/if}
+          {#if xlsxSpreadsheetDoc}
+            <div class="xlsx-ss-info">
+              <div class="xlsx-ss-info-row">
+                <span class="xlsx-ss-label">시트 수</span>
+                <span class="xlsx-ss-value">{xlsxSpreadsheetDoc.sheets.length}개</span>
+              </div>
+              <div class="xlsx-ss-info-row">
+                <span class="xlsx-ss-label">총 행 수</span>
+                <span class="xlsx-ss-value">{xlsxTotalRows.toLocaleString()}행</span>
+              </div>
+              <div class="xlsx-ss-sheets">
+                {#each xlsxSpreadsheetDoc.sheets as sheet}
+                  <div class="xlsx-ss-sheet-chip">
+                    {sheet.name}
+                    <span class="xlsx-ss-sheet-rows">{sheet.rows.length}행</span>
+                  </div>
+                {/each}
+              </div>
+            </div>
+          {/if}
+          <p class="cim-desc">
+            모든 시트가 <strong>스프레드시트 에디터</strong>로 로드됩니다.
+            편집 후 저장하면 계약서에 반영됩니다.
+          </p>
         </div>
         <div class="cim-footer">
-          <button type="button" class="btn-cancel" onclick={() => { step = 'select' }}>다시 선택</button>
-          <button type="button" class="btn-action" onclick={previewXlsx} disabled={!xlsxSheet}>
-            미리보기
+          <button type="button" class="btn-cancel" onclick={() => { step = 'select'; xlsxSpreadsheetDoc = null }}>
+            다시 선택
           </button>
-        </div>
-
-      {:else if step === 'xlsx-preview'}
-        <!-- xlsx 미리보기 -->
-        <div class="cim-section">
-          <p class="cim-section-title">미리보기 ({xlsxRows.length}행 × {xlsxRows[0]?.length ?? 0}열)</p>
-          <div class="xlsx-preview-wrap">
-            <table class="xlsx-preview-table">
-              <tbody>
-              {#each xlsxRows as row, ri}
-                <tr>
-                  {#each row as cell}
-                    {#if ri === 0}
-                      <th>{cell}</th>
-                    {:else}
-                      <td>{cell}</td>
-                    {/if}
-                  {/each}
-                </tr>
-              {/each}
-              </tbody>
-            </table>
-          </div>
-          <p class="cim-desc">위 표가 에디터의 <strong>현재 커서 위치</strong>에 삽입됩니다.</p>
-        </div>
-        <div class="cim-footer">
-          <button type="button" class="btn-cancel" onclick={() => { step = 'xlsx-sheet' }}>범위 재선택</button>
-          <button type="button" class="btn-action" onclick={confirmXlsxImport}>
-            표로 삽입
+          <button type="button" class="btn-action" onclick={confirmXlsxSpreadsheetImport}>
+            스프레드시트로 가져오기
           </button>
         </div>
       {/if}
@@ -639,60 +604,50 @@
     padding: 5px 8px;
   }
 
-  /* xlsx 시트 선택 */
-  .field-row {
+  /* xlsx 스프레드시트 정보 박스 */
+  .xlsx-ss-info {
+    background: var(--cs-surface-gray, #f6f6f6);
+    border-radius: var(--cms-radius-sm, 8px);
+    padding: 12px 14px;
     display: flex;
     flex-direction: column;
-    gap: 5px;
+    gap: 8px;
   }
-  .f-label {
+  .xlsx-ss-info-row {
+    display: flex;
+    gap: 12px;
+    align-items: center;
+  }
+  .xlsx-ss-label {
     font: var(--text-pc-script-12, 12px);
     font-weight: 700;
+    color: var(--cs-text-mid, #666);
+    min-width: 60px;
+  }
+  .xlsx-ss-value {
+    font: var(--text-pc-script-12, 12px);
     color: var(--cs-text, #100B32);
   }
-  .f-input,
-  .f-select {
-    height: 34px;
-    padding: 0 10px;
-    border: 1px solid #DDDDDD;
-    border-radius: var(--cms-radius-sm, 8px);
-    font: var(--text-pc-body-14, 14px);
-    color: var(--cs-text, #100B32);
-    outline: none;
+  .xlsx-ss-sheets {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-top: 2px;
+  }
+  .xlsx-ss-sheet-chip {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    padding: 3px 10px;
     background: var(--cs-white, #fff);
-    transition: border-color 0.1s;
-  }
-  .f-input:focus,
-  .f-select:focus { border-color: var(--cs-purple, #3B2F8A); }
-  .f-hint {
-    margin: 0;
-    font: var(--text-pc-script-12, 12px);
-    color: var(--cs-text-light, #aaa);
-  }
-
-  /* xlsx 미리보기 표 */
-  .xlsx-preview-wrap {
-    overflow-x: auto;
     border: 1px solid var(--cs-lilac, #ECEBF4);
-    border-radius: var(--cms-radius-sm, 8px);
-    max-height: 280px;
-    overflow-y: auto;
-  }
-  .xlsx-preview-table {
-    border-collapse: collapse;
-    width: 100%;
+    border-radius: var(--radius-full, 99px);
     font: var(--text-pc-script-12, 12px);
     color: var(--cs-text, #100B32);
   }
-  .xlsx-preview-table th,
-  .xlsx-preview-table td {
-    border: 1px solid #ddd;
-    padding: 5px 8px;
-    white-space: nowrap;
-  }
-  .xlsx-preview-table th {
-    background: var(--cs-surface-gray, #f6f6f6);
-    font-weight: 700;
+  .xlsx-ss-sheet-rows {
+    color: var(--cs-text-light, #aaa);
+    font-size: 11px;
   }
 
   /* 푸터 */

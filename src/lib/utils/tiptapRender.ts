@@ -20,9 +20,21 @@ import { TIPTAP_CONTRACT_EXTENSIONS } from '$lib/components/cms/contract-editor/
  *
  * 에디터와 동일한 TIPTAP_CONTRACT_EXTENSIONS를 사용하므로
  * 에디터에서 보이는 것과 동일한 HTML이 생성된다.
+ *
+ * 표는 `.tt-table-scroll`로 감싸 넓은 표가 A4 페이지 폭 밖으로 넘치지 않도록 한다.
+ * 에디터(ContractDocumentEditor)는 resizable:true인 TipTap Table의 NodeView가 자동으로
+ * <table>을 <div class="tableWrapper">로 감싸주지만, generateHTML()은 NodeView를 거치지
+ * 않는 순수 렌더링이라 이 래퍼가 생기지 않는다 — 여기서 문자열 치환으로 동일 효과를 낸다.
+ * generateHTML()은 Node.js/SSR에서도 실행되는 순수 함수라 DOM을 쓸 수 없으므로(SSR 안전성
+ * — contractSsrSafety.test.ts 참고) 정규식 기반 순수 문자열 치환만 사용한다.
+ * <table>/</table>는 우리 스키마상 중첩되지 않으므로(표 안에 표 없음) 개수가 항상 1:1이라
+ * 순서대로 짝지어 감싸는 이 방식이 안전하다.
  */
 export function renderTiptapDocToHtml(doc: JSONContent): string {
-  return generateHTML(doc, TIPTAP_CONTRACT_EXTENSIONS)
+  const html = generateHTML(doc, TIPTAP_CONTRACT_EXTENSIONS)
+  return html
+    .replace(/<table(\s|>)/g, '<div class="tt-table-scroll"><table$1')
+    .replace(/<\/table>/g, '</table></div>')
 }
 
 /**

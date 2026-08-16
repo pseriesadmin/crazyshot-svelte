@@ -8,12 +8,17 @@
  *   단락 정렬(center/right/justify)  → 일반 단락(Named 스타일 없음)만 보존
  *   표 셀 배경색 / 테두리 색         → jszip + DOMParser로 OOXML 직접 추출 후 주입
  *                                       (mammoth AST 우회 방식)
+ *   표 병합 셀(rowspan/colspan)      → mammoth가 이해 못 하는 w:vMerge/w:gridSpan을
+ *                                       OOXML에서 직접 추출해 mammoth HTML을 사후 재구성
+ *   표 컬럼 너비                     → w:tblGrid에서 추출해 colwidth 속성으로 주입
  */
 
 import mammoth from 'mammoth'
 import {
   extractTableFormatting,
+  extractTableColumnWidths,
   injectTableFormattingIntoHtml,
+  injectTableMergesIntoHtml,
 } from './docxTableFormatting'
 
 // --------------------------------------------------------------------------
@@ -125,8 +130,8 @@ export interface DocxImportResult {
 export async function importDocx(file: File): Promise<DocxImportResult> {
   const arrayBuffer = await file.arrayBuffer()
 
-  // mammoth 변환과 OOXML 표 서식 추출을 병렬 실행 (동일 buffer, 독립 처리)
-  const [mammothResult, tableFormatting] = await Promise.all([
+  // mammoth 변환과 OOXML 표 서식·구조 추출을 병렬 실행 (동일 buffer, 독립 처리)
+  const [mammothResult, tableFormatting, tableGridWidths] = await Promise.all([
     mammoth.convertToHtml(
       { arrayBuffer },
       {
@@ -135,17 +140,21 @@ export async function importDocx(file: File): Promise<DocxImportResult> {
       },
     ),
     extractTableFormatting(arrayBuffer),
+    extractTableColumnWidths(arrayBuffer),
   ])
 
   const warnings = mammothResult.messages
     .filter((m) => m.type === 'warning')
     .map((m) => m.message)
 
-  // 표 셀 서식(배경색·테두리색)을 mammoth HTML에 주입
-  const html =
-    tableFormatting.length > 0
-      ? injectTableFormattingIntoHtml(mammothResult.value, tableFormatting)
-      : mammothResult.value
+  // 표 서식·구조를 mammoth HTML에 순서대로 주입:
+  //   1) 배경색·테두리색 (1:1 셀 정렬 상태에서만 안전하게 주입)
+  //   2) 병합(rowspan/colspan) + 컬럼너비 — <td> 구조 자체를 바꾸므로 반드시 1) 이후 실행
+  let html = mammothResult.value
+  if (tableFormatting.length > 0) {
+    html = injectTableFormattingIntoHtml(html, tableFormatting)
+    html = injectTableMergesIntoHtml(html, tableFormatting, tableGridWidths)
+  }
 
   return { html, warnings }
 }

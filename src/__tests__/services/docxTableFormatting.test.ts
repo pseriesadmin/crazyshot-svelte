@@ -11,8 +11,11 @@ import { describe, it, expect } from 'vitest'
 import JSZip from 'jszip'
 import {
   extractTableFormatting,
+  extractTableColumnWidths,
   injectTableFormattingIntoHtml,
+  injectTableMergesIntoHtml,
   parseTableFormattingFromXml,
+  parseTableColumnWidthsFromXml,
   type CellFormatting,
 } from '$lib/utils/docImport/docxTableFormatting'
 
@@ -239,5 +242,224 @@ describe('통합 — 정렬 서식과 표 색상 동시 반영', () => {
     // 두 번째 셀은 서식 없음
     const secondTd = result.match(/<td[^>]*>일반<\/td>/)?.[0] ?? ''
     expect(secondTd).not.toContain('background-color')
+  })
+})
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 병합 셀(rowspan/colspan) + 열너비 — 테스트 헬퍼
+// ─────────────────────────────────────────────────────────────────────────────
+
+interface MergeCellSpec {
+  gridSpan?: number
+  vMerge?: 'restart' | 'continue'
+  fill?: string
+}
+
+/** gridSpan/vMerge/tblGrid를 포함하는 표 OOXML 생성 */
+function makeMergeTableXml(rows: MergeCellSpec[][], gridColsTwip?: number[]): string {
+  const gridXml = gridColsTwip
+    ? `<w:tblGrid>${gridColsTwip.map((w) => `<w:gridCol w:w="${w}"/>`).join('')}</w:tblGrid>`
+    : ''
+  const rowsXml = rows
+    .map((row) => {
+      const cellsXml = row
+        .map((cell) => {
+          let tcPrContent = ''
+          if (cell.gridSpan) tcPrContent += `<w:gridSpan w:val="${cell.gridSpan}"/>`
+          if (cell.vMerge === 'restart') tcPrContent += `<w:vMerge w:val="restart"/>`
+          else if (cell.vMerge === 'continue') tcPrContent += `<w:vMerge/>`
+          if (cell.fill !== undefined) tcPrContent += `<w:shd w:val="clear" w:fill="${cell.fill}"/>`
+          const tcPr = tcPrContent ? `<w:tcPr>${tcPrContent}</w:tcPr>` : ''
+          return `<w:tc>${tcPr}<w:p/></w:tc>`
+        })
+        .join('')
+      return `<w:tr>${cellsXml}</w:tr>`
+    })
+    .join('')
+  return `<w:tbl>${gridXml}${rowsXml}</w:tbl>`
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// extractTableFormatting — gridSpan / vMerge 추출
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('extractTableFormatting — gridSpan/vMerge 추출', () => {
+  it('gridSpan=2 정확히 추출', async () => {
+    const buf = await makeSyntheticDocx(makeMergeTableXml([[{ gridSpan: 2 }, {}]]))
+    const result = await extractTableFormatting(buf)
+    expect(result[0][0][0].gridSpan).toBe(2)
+  })
+
+  it('gridSpan=1(명시 없음)은 undefined', async () => {
+    const buf = await makeSyntheticDocx(makeMergeTableXml([[{}]]))
+    const result = await extractTableFormatting(buf)
+    expect(result[0][0][0].gridSpan).toBeUndefined()
+  })
+
+  it('vMerge restart/continue 정확히 추출', async () => {
+    const buf = await makeSyntheticDocx(
+      makeMergeTableXml([[{ vMerge: 'restart' }], [{ vMerge: 'continue' }]]),
+    )
+    const result = await extractTableFormatting(buf)
+    expect(result[0][0][0].vMerge).toBe('restart')
+    expect(result[0][1][0].vMerge).toBe('continue')
+  })
+
+  it('w:vMerge에 w:val 생략 시 continue로 처리 (OOXML 스펙)', () => {
+    const xml = makeWordXml(
+      `<w:tbl><w:tr><w:tc><w:tcPr><w:vMerge/></w:tcPr><w:p/></w:tc></w:tr></w:tbl>`,
+    )
+    const result = parseTableFormattingFromXml(xml)
+    expect(result[0][0][0].vMerge).toBe('continue')
+  })
+})
+
+// ─────────────────────────────────────────────────────────────────────────────
+// extractTableColumnWidths — 열너비 추출
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('extractTableColumnWidths — 열너비(twip→px) 추출', () => {
+  it('1440 twip(1인치) → 96px 정확히 환산', async () => {
+    const buf = await makeSyntheticDocx(makeMergeTableXml([[{}]], [1440]))
+    const result = await extractTableColumnWidths(buf)
+    expect(result[0]).toEqual([96])
+  })
+
+  it('컬럼 2개(720twip, 2880twip) → [48, 192]', () => {
+    const xml = makeWordXml(makeMergeTableXml([[{}, {}]], [720, 2880]))
+    const result = parseTableColumnWidthsFromXml(xml)
+    expect(result[0]).toEqual([48, 192])
+  })
+
+  it('tblGrid 없는 표 → 빈 배열', async () => {
+    const buf = await makeSyntheticDocx(makeMergeTableXml([[{}]]))
+    const result = await extractTableColumnWidths(buf)
+    expect(result[0]).toEqual([])
+  })
+})
+
+// ─────────────────────────────────────────────────────────────────────────────
+// injectTableMergesIntoHtml — 세로 병합(rowspan) 재구성
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('injectTableMergesIntoHtml — 세로 병합(vMerge) 재구성', () => {
+  it('2행 세로병합 → 앵커 셀에 rowspan=2, continue 셀 제거', () => {
+    // mammoth는 vMerge를 몰라 매 행 독립 <td>로 출력 — 이 상태를 그대로 입력으로 가정
+    const html = '<table><tr><td>병합됨</td></tr><tr><td>중복(제거대상)</td></tr></table>'
+    const fmt: CellFormatting[][][] = [
+      [[{ vMerge: 'restart' }], [{ vMerge: 'continue' }]],
+    ]
+    const result = injectTableMergesIntoHtml(html, fmt)
+    expect(result).toContain('rowspan="2"')
+    expect(result).not.toContain('중복(제거대상)')
+    expect(result).toContain('병합됨')
+    // <td>가 1개만 남아야 함(연속 셀 제거됨)
+    expect((result.match(/<td/g) ?? []).length).toBe(1)
+  })
+
+  it('3행 세로병합 → rowspan=3, continue 셀 2개 모두 제거', () => {
+    const html =
+      '<table>' +
+      '<tr><td>A</td></tr>' +
+      '<tr><td>B</td></tr>' +
+      '<tr><td>C</td></tr>' +
+      '</table>'
+    const fmt: CellFormatting[][][] = [
+      [[{ vMerge: 'restart' }], [{ vMerge: 'continue' }], [{ vMerge: 'continue' }]],
+    ]
+    const result = injectTableMergesIntoHtml(html, fmt)
+    expect(result).toContain('rowspan="3"')
+    expect((result.match(/<td/g) ?? []).length).toBe(1)
+    expect(result).toContain('>A<')
+  })
+
+  it('세로병합 없는 일반 표는 변경 없음(회귀)', () => {
+    const html = '<table><tr><td>A</td></tr><tr><td>B</td></tr></table>'
+    const fmt: CellFormatting[][][] = [[[{}], [{}]]]
+    const result = injectTableMergesIntoHtml(html, fmt)
+    expect(result).not.toContain('rowspan')
+    expect((result.match(/<td/g) ?? []).length).toBe(2)
+  })
+})
+
+// ─────────────────────────────────────────────────────────────────────────────
+// injectTableMergesIntoHtml — 가로 병합(colspan)
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('injectTableMergesIntoHtml — 가로 병합(gridSpan → colspan)', () => {
+  it('gridSpan=2 셀에 colspan="2" 부여', () => {
+    const html = '<table><tr><td>넓은셀</td><td>일반</td></tr></table>'
+    const fmt: CellFormatting[][][] = [[[{ gridSpan: 2 }, {}]]]
+    const result = injectTableMergesIntoHtml(html, fmt)
+    const firstTd = result.match(/<td[^>]*>넓은셀<\/td>/)?.[0] ?? ''
+    expect(firstTd).toContain('colspan="2"')
+  })
+})
+
+// ─────────────────────────────────────────────────────────────────────────────
+// injectTableMergesIntoHtml — colwidth 주입
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('injectTableMergesIntoHtml — colwidth 주입', () => {
+  it('gridWidths가 있으면 각 셀에 colwidth 부여', () => {
+    const html = '<table><tr><td>A</td><td>B</td></tr></table>'
+    const fmt: CellFormatting[][][] = [[[{}, {}]]]
+    const result = injectTableMergesIntoHtml(html, fmt, [[100, 200]])
+    const firstTd = result.match(/<td[^>]*>A<\/td>/)?.[0] ?? ''
+    const secondTd = result.match(/<td[^>]*>B<\/td>/)?.[0] ?? ''
+    expect(firstTd).toContain('colwidth="100"')
+    expect(secondTd).toContain('colwidth="200"')
+  })
+
+  it('gridWidths 미지정 시 colwidth 주입 안 함', () => {
+    const html = '<table><tr><td>A</td></tr></table>'
+    const fmt: CellFormatting[][][] = [[[{}]]]
+    const result = injectTableMergesIntoHtml(html, fmt)
+    expect(result).not.toContain('colwidth')
+  })
+
+  it('colspan=2 셀은 두 컬럼 너비를 합쳐 colwidth="100,200"으로 부여', () => {
+    const html = '<table><tr><td>병합셀</td></tr></table>'
+    const fmt: CellFormatting[][][] = [[[{ gridSpan: 2 }]]]
+    const result = injectTableMergesIntoHtml(html, fmt, [[100, 200]])
+    expect(result).toContain('colwidth="100,200"')
+  })
+})
+
+// ─────────────────────────────────────────────────────────────────────────────
+// injectTableMergesIntoHtml — 안전장치: 개수 불일치 시 스킵
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('injectTableMergesIntoHtml — 안전장치', () => {
+  it('XML 셀 개수와 HTML 셀 개수가 다르면 해당 표는 변경 없음', () => {
+    const html = '<table><tr><td>내용</td></tr></table>'
+    const fmt: CellFormatting[][][] = [[[{ vMerge: 'restart' }, {}]]]
+    const result = injectTableMergesIntoHtml(html, fmt)
+    // DOM 왕복 직렬화로 <tbody>가 자동 삽입될 수 있으나(jsdom 표준 동작) 병합 관련 속성은
+    // 전혀 주입되지 않아야 함(구조 불일치 → 스킵)
+    expect(result).not.toContain('rowspan')
+    expect(result).not.toContain('colspan')
+    expect(result).toContain('내용')
+    expect((result.match(/<td/g) ?? []).length).toBe(1)
+  })
+
+  it('formatting이 빈 배열이면 HTML 그대로 반환', () => {
+    const html = '<table><tr><td>내용</td></tr></table>'
+    const result = injectTableMergesIntoHtml(html, [])
+    expect(result).toBe(html)
+  })
+
+  it('복수 표 중 하나만 구조 불일치 → 그 표만 스킵, 나머지는 정상 처리', () => {
+    const html =
+      '<table><tr><td>정상표</td></tr><tr><td>연속</td></tr></table>' +
+      '<table><tr><td>불일치표</td></tr></table>'
+    const fmt: CellFormatting[][][] = [
+      [[{ vMerge: 'restart' }], [{ vMerge: 'continue' }]], // 정상 — 2행 1셀씩, HTML과 일치
+      [[{ vMerge: 'restart' }, {}]],                        // 불일치 — XML 2셀 vs HTML 1셀
+    ]
+    const result = injectTableMergesIntoHtml(html, fmt)
+    expect(result).toContain('rowspan="2"')
+    expect(result).not.toContain('연속')
+    expect(result).toContain('불일치표')
   })
 })

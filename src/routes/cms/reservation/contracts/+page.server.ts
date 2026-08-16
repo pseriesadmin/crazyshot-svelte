@@ -6,8 +6,8 @@ import type { Actions, PageServerLoad } from './$types'
 import type { ContractTemplate, ContractTemplateSummary } from '$lib/types/contract-template'
 import { getCmsRoleForAction } from '$lib/server/getCmsRoleForAction'
 import { hasSettingsAccess } from '$lib/utils/cmsPermissions'
-import { isCanvasDocument, hasSignatureField } from '$lib/types/contract-document'
-import type { CanvasDocument, CanvasField } from '$lib/types/contract-document'
+import { isCanvasDocument, hasSignatureField, isSpreadsheetDocument } from '$lib/types/contract-document'
+import type { CanvasDocument, CanvasField, SpreadsheetDocument } from '$lib/types/contract-document'
 
 // --------------------------------------------------------------------------
 // canvas_document assetId 검증 헬퍼
@@ -66,7 +66,7 @@ export const load: PageServerLoad = async ({ parent, url }) => {
 
   const { data: templates } = await admin
     .from('contract_templates')
-    .select('id, title, status, created_at')
+    .select('id, title, status, created_at, authoring_mode')
     .is('deleted_at', null)
     .order('created_at', { ascending: false })
 
@@ -74,7 +74,7 @@ export const load: PageServerLoad = async ({ parent, url }) => {
   if (selectedId) {
     const { data } = await admin
       .from('contract_templates')
-      .select('id, title, content_blocks, specifications, status, requires_issuer_signature, authoring_mode, canvas_document, created_at, updated_at')
+      .select('id, title, content_blocks, specifications, status, requires_issuer_signature, authoring_mode, canvas_document, spreadsheet_document, created_at, updated_at')
       .eq('id', selectedId)
       .is('deleted_at', null)
       .maybeSingle()
@@ -102,6 +102,7 @@ export const actions: Actions = {
     const title                    = (form.get('title') as string | null)?.trim() ?? ''
     const contentBlocks            = form.get('content_blocks') as string | null
     const canvasDocumentRaw        = form.get('canvas_document') as string | null
+    const spreadsheetDocumentRaw   = form.get('spreadsheet_document') as string | null
     const specifications           = form.get('specifications') as string | null
     const requiresIssuerSignature  = form.get('requires_issuer_signature') === 'true'
     const authoringMode            = (form.get('authoring_mode') as string | null)?.trim() || 'flow'
@@ -111,6 +112,7 @@ export const actions: Actions = {
     let parsedBlocks: unknown[] = []
     let parsedSpecs:  unknown[] = []
     let parsedCanvas: CanvasDocument | null = null
+    let parsedSpreadsheet: SpreadsheetDocument | null = null
     try { parsedBlocks = JSON.parse(contentBlocks ?? '[]') } catch { /* empty */ }
     try { parsedSpecs  = JSON.parse(specifications ?? '[]') } catch { /* empty */ }
     if (canvasDocumentRaw) {
@@ -120,6 +122,15 @@ export const actions: Actions = {
         else return fail(400, { error: 'canvas_document 형식이 올바르지 않습니다.' })
       } catch {
         return fail(400, { error: 'canvas_document JSON 파싱 실패.' })
+      }
+    }
+    if (spreadsheetDocumentRaw) {
+      try {
+        const candidate = JSON.parse(spreadsheetDocumentRaw)
+        if (isSpreadsheetDocument(candidate)) parsedSpreadsheet = candidate
+        else return fail(400, { error: 'spreadsheet_document 형식이 올바르지 않습니다.' })
+      } catch {
+        return fail(400, { error: 'spreadsheet_document JSON 파싱 실패.' })
       }
     }
 
@@ -141,6 +152,7 @@ export const actions: Actions = {
       created_by: session.user.id,
     }
     if (parsedCanvas !== null) insertPayload.canvas_document = parsedCanvas
+    if (parsedSpreadsheet !== null) insertPayload.spreadsheet_document = parsedSpreadsheet
 
     const { data, error } = await admin
       .from('contract_templates')
@@ -166,6 +178,7 @@ export const actions: Actions = {
     const title                    = (form.get('title') as string | null)?.trim() ?? ''
     const contentBlocks            = form.get('content_blocks') as string | null
     const canvasDocumentRaw        = form.get('canvas_document') as string | null
+    const spreadsheetDocumentRaw   = form.get('spreadsheet_document') as string | null
     const specifications           = form.get('specifications') as string | null
     const requiresIssuerSignature  = form.get('requires_issuer_signature') === 'true'
     const authoringMode            = (form.get('authoring_mode') as string | null)?.trim() || 'flow'
@@ -173,9 +186,31 @@ export const actions: Actions = {
     if (!id)    return fail(400, { error: 'ID가 없습니다.' })
     if (!title) return fail(400, { error: '계약서 제목을 입력해주세요.' })
 
+    // ⛔ 2026-08-16 데이터 손상 방지 가드(Stephen "기존 양식을 다른 작성모드로 뒤엎어넣는
+    // 실수 방지" 요청) — ContractTemplatePanel.svelte 쪽에서도 동일 원칙의 클라이언트 가드를
+    // 추가했지만(임포트 모달에서 기존 양식의 모드를 바꾸는 것 자체를 차단), 서버는 클라이언트
+    // 코드를 신뢰하지 않고 독립적으로 재검증해야 한다(H-01/방어적 서버 검증 원칙) — 이 액션이
+    // authoring_mode를 무조건 폼값 그대로 반영하던 것이 근본 결함이었다. 기존 양식의 저장된
+    // authoring_mode와 이번 제출값이 다르면, 그 요청은 곧 content_blocks/canvas_document/
+    // spreadsheet_document 중 하나만 채워지고 나머지는 비워진 상태로 같은 id에 덮어쓰는
+    // 요청이라는 뜻 — 원본 콘텐츠가 영구 소실된다. 무조건 거부한다(모드 전환 자체를 지원할
+    //계획이 없음 — 형식을 바꾸려면 새 양식 작성).
+    const { data: existingTemplate, error: existingErr } = await admin
+      .from('contract_templates')
+      .select('authoring_mode')
+      .eq('id', id)
+      .is('deleted_at', null)
+      .maybeSingle()
+    if (existingErr) return fail(500, { error: existingErr.message })
+    if (!existingTemplate) return fail(404, { error: '양식을 찾을 수 없습니다.' })
+    if (existingTemplate.authoring_mode !== authoringMode) {
+      return fail(400, { error: '기존 계약서 양식은 작성 모드를 변경할 수 없습니다. 형식을 바꾸려면 새 양식을 작성해주세요.' })
+    }
+
     let parsedBlocks: unknown[] = []
     let parsedSpecs:  unknown[] = []
     let parsedCanvas: CanvasDocument | null = null
+    let parsedSpreadsheet: SpreadsheetDocument | null = null
     try { parsedBlocks = JSON.parse(contentBlocks ?? '[]') } catch { /* empty */ }
     try { parsedSpecs  = JSON.parse(specifications ?? '[]') } catch { /* empty */ }
     if (canvasDocumentRaw) {
@@ -185,6 +220,15 @@ export const actions: Actions = {
         else return fail(400, { error: 'canvas_document 형식이 올바르지 않습니다.' })
       } catch {
         return fail(400, { error: 'canvas_document JSON 파싱 실패.' })
+      }
+    }
+    if (spreadsheetDocumentRaw) {
+      try {
+        const candidate = JSON.parse(spreadsheetDocumentRaw)
+        if (isSpreadsheetDocument(candidate)) parsedSpreadsheet = candidate
+        else return fail(400, { error: 'spreadsheet_document 형식이 올바르지 않습니다.' })
+      } catch {
+        return fail(400, { error: 'spreadsheet_document JSON 파싱 실패.' })
       }
     }
 
@@ -206,6 +250,7 @@ export const actions: Actions = {
       updated_at: new Date().toISOString(),
     }
     if (parsedCanvas !== null) updatePayload.canvas_document = parsedCanvas
+    if (parsedSpreadsheet !== null) updatePayload.spreadsheet_document = parsedSpreadsheet
 
     const { error } = await admin
       .from('contract_templates')

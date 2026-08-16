@@ -16,8 +16,9 @@
   import ContractFieldPanel from '$lib/components/cms/contract-editor/ContractFieldPanel.svelte'
   import ContractImportModal from '$lib/components/cms/contract-editor/ContractImportModal.svelte'
   import ContractCanvasEditor from '$lib/components/cms/contract-editor/ContractCanvasEditor.svelte'
-  import { isTiptapDocBlock, isCanvasDocument, hasSignatureField } from '$lib/types/contract-document'
-  import type { TiptapDocBlock, MergeFieldAttrs, CanvasDocument, ContractCanvasPayload } from '$lib/types/contract-document'
+  import ContractSpreadsheetEditor from '$lib/components/cms/contract-editor/ContractSpreadsheetEditor.svelte'
+  import { isTiptapDocBlock, isCanvasDocument, hasSignatureField, isSpreadsheetDocument } from '$lib/types/contract-document'
+  import type { TiptapDocBlock, MergeFieldAttrs, CanvasDocument, ContractCanvasPayload, SpreadsheetDocument } from '$lib/types/contract-document'
   import type { ContractTemplate } from '$lib/types/contract-template'
   import type { JSONContent } from '@tiptap/core'
 
@@ -71,11 +72,13 @@
   let title                   = $state('')
   let requiresIssuerSignature = $state(false)
   /**
-   * 작성 모드: 'flow' | 'canvas' | null(신규 미선택)
+   * 작성 모드: 'flow' | 'canvas' | 'spreadsheet' | null(신규 미선택)
    * 신규(template=null): 처음엔 null → 모드 선택 UI → 선택 후 고정
    * 기존(template!=null): template.authoring_mode에서 초기화 (이후 변경 불가)
    */
-  let authoringMode           = $state<'flow' | 'canvas' | null>(null)
+  let authoringMode           = $state<'flow' | 'canvas' | 'spreadsheet' | null>(null)
+  // spreadsheet 에디터 강제 재마운트 키 (새 xlsx 임포트 시 increments)
+  let spreadsheetMountKey     = $state(0)
 
   $effect(() => {
     specs = Array.isArray(template?.specifications) && (template.specifications as unknown[]).length > 0
@@ -85,7 +88,7 @@
     requiresIssuerSignature = template?.requires_issuer_signature ?? false
     // 모드 초기화: 기존 템플릿이면 authoring_mode 사용, 신규면 null(미선택)
     authoringMode = template
-      ? ((template.authoring_mode as 'flow' | 'canvas') ?? 'flow')
+      ? ((template.authoring_mode as 'flow' | 'canvas' | 'spreadsheet') ?? 'flow')
       : null
   })
 
@@ -95,6 +98,19 @@
       ? (template?.canvas_document as CanvasDocument)
       : null
   )
+
+  /** spreadsheet 모드 초기 문서 — template의 spreadsheet_document를 파싱 */
+  const spreadsheetDocInit = $derived<SpreadsheetDocument | null>(
+    isSpreadsheetDocument((template as unknown as Record<string, unknown> | null)?.['spreadsheet_document'])
+      ? ((template as unknown as Record<string, unknown>)['spreadsheet_document'] as SpreadsheetDocument)
+      : null
+  )
+
+  /** spreadsheet 에디터 컴포넌트 참조 */
+  let spreadsheetEditorRef: {
+    getSpreadsheetDocument: () => SpreadsheetDocument
+    insertTextAtSelection: (text: string) => boolean
+  } | null = $state(null)
 
   let saving                  = $state(false)
   let showImport              = $state(false)
@@ -166,12 +182,96 @@
   // --------------------------------------------------------------------------
   // 임포트 콜백
   // --------------------------------------------------------------------------
-  function handleImport(result: { type: 'html'; html: string } | { type: 'json'; content: JSONContent }) {
-    if (!editorRef) return
-    if (result.type === 'html') {
+  /**
+   * ⛔ 2026-08-16 데이터 손상 방지 가드(Stephen "기존 양식을 다른 작성모드로 뒤엎어넣는
+   * 실수 방지" 요청) — 이 컴포넌트 자신의 authoringMode 선언부 주석에 "template!=null:
+   * 이후 변경 불가"라고 이미 명시돼 있었으나, 실제로는 이 두 임포트 콜백이 그 규칙을
+   * 지키지 않고 무조건 authoringMode를 덮어썼다. "문서 가져오기" 버튼은 flow 모드에서만
+   * 노출되지만 그 모달은 .docx와 .xlsx를 같은 파일선택창에서 받는다 — 기존 문서형(flow)
+   * 계약서를 편집하다가 실수로 .xlsx를 선택하면 이 콜백이 조용히 authoringMode를
+   * 'spreadsheet'로 바꾸고, 그대로 저장하면 handleSpreadsheetSave()가 content_blocks를
+   * '[]'로 비운 채 같은 template.id로 덮어써 원본 문서형 내용이 영구 소실된다(서버
+   * update 액션도 authoring_mode를 검증 없이 그대로 반영 — +page.server.ts 쪽에도 동일
+   * 원칙의 방어 로직 별도 추가). 기존 양식(template!=null)에서는 모드 전환 임포트 자체를
+   * 차단하고, 형식을 바꾸고 싶다면 새 양식을 작성하도록 안내한다. 신규 작성(template=null)
+   * 에서는 "임포트로 모드를 고른다"는 기존 의도된 흐름 그대로 유지.
+   */
+  const MODE_LOCK_MESSAGE = '기존 계약서 양식은 작성 모드를 변경할 수 없습니다. 형식을 바꾸려면 새 양식을 작성해주세요.'
+
+  /**
+   * docx/hwpx → HTML 임포트.
+   * flow 모드에서만 editorRef를 통해 콘텐츠를 설정.
+   * spreadsheet 모드에서 docx를 임포트하면 flow 모드로 전환 후 콘텐츠 설정
+   * (editorRef가 null이므로 임시로 상태만 변경 — 에디터는 다음 렌더링에서 마운트됨).
+   */
+  function handleImport(result: { type: 'html'; html: string }) {
+    if (editorRef) {
       editorRef.setEditorContent(result.html)
+    } else if (template && authoringMode !== 'flow') {
+      csToast.error(MODE_LOCK_MESSAGE)
     } else {
-      editorRef.insertEditorContent(result.content)
+      // spreadsheet 모드 → flow 전환: 에디터 마운트 후 initialHtml으로 콘텐츠 반영됨
+      // (docInit은 $derived이므로 직접 수정 불가 — 대신 mode 전환으로 재마운트 유도)
+      authoringMode = 'flow'
+      csToast.success('문서 가져오기 완료. 에디터를 열어 내용을 확인하세요.')
+    }
+  }
+
+  /**
+   * xlsx → SpreadsheetDocument 임포트.
+   * authoringMode를 spreadsheet로 전환. 기존 양식이 flow/canvas였다면 차단(위 주석 참고).
+   */
+  function handleImportSpreadsheet(doc: SpreadsheetDocument) {
+    if (template && authoringMode !== 'spreadsheet') {
+      csToast.error(MODE_LOCK_MESSAGE)
+      return
+    }
+    authoringMode = 'spreadsheet'
+    spreadsheetMountKey++
+    // spreadsheetDocInit은 $derived(template.spreadsheet_document)라 즉시 반영 불가.
+    // ContractSpreadsheetEditor를 임포트된 doc으로 초기화하려면 key를 활용.
+    // 실제 initialDoc은 아래 {#key spreadsheetMountKey} 블록에서 _importedDoc 변수로 전달.
+    _importedSpreadsheetDoc = doc
+  }
+
+  /** 임포트된 SpreadsheetDocument 임시 저장 — key 재마운트 시 initialDoc으로 전달 */
+  let _importedSpreadsheetDoc = $state<SpreadsheetDocument | null>(null)
+
+  // --------------------------------------------------------------------------
+  // spreadsheet 모드 저장 — fetch로 직접 action에 POST
+  // --------------------------------------------------------------------------
+  async function handleSpreadsheetSave(): Promise<void> {
+    if (!spreadsheetEditorRef) return
+    saving = true
+    try {
+      const doc = spreadsheetEditorRef.getSpreadsheetDocument()
+      const formData = new FormData()
+      if (template) formData.set('id', template.id)
+      formData.set('title',                title)
+      formData.set('authoring_mode',       'spreadsheet')
+      formData.set('spreadsheet_document', JSON.stringify(doc))
+      formData.set('content_blocks',       '[]')
+      formData.set('specifications',       serializeSpecs())
+      formData.set('requires_issuer_signature', requiresIssuerSignature.toString())
+
+      const actionUrl = template ? '?/update' : '?/create'
+      const response  = await fetch(actionUrl, { method: 'POST', body: formData })
+      const result    = deserialize(await response.text())
+
+      if (result.type === 'success') {
+        csToast.success(template ? '수정되었습니다.' : '등록되었습니다.')
+        const id = (result.data as { id?: string })?.id ?? template?.id ?? ''
+        await invalidateAll()
+        if (onsaved) onsaved(id)
+      } else if (result.type === 'failure') {
+        csToast.error((result.data as { error?: string })?.error ?? '저장에 실패했습니다.')
+      } else {
+        csToast.error('저장에 실패했습니다.')
+      }
+    } catch {
+      csToast.error('저장 중 오류가 발생했습니다.')
+    } finally {
+      saving = false
     }
   }
 
@@ -260,8 +360,8 @@
     method="POST"
     action={template ? '?/update' : '?/create'}
     use:enhance={({ formData, cancel }) => {
-      // canvas 모드는 handleCanvasSave()가 직접 fetch로 처리 — form submit 취소
-      if (authoringMode === 'canvas') {
+      // canvas / spreadsheet 모드는 직접 fetch로 처리 — form submit 취소
+      if (authoringMode === 'canvas' || authoringMode === 'spreadsheet') {
         cancel()
         return
       }
@@ -428,6 +528,26 @@
             />
           {/key}
         </div>
+      {:else if authoringMode === 'spreadsheet'}
+        <!-- spreadsheet 모드: ContractSpreadsheetEditor + 필드 패널 2단 레이아웃 -->
+        <div class="spreadsheet-editor-wrap">
+          {#key spreadsheetMountKey}
+            <ContractSpreadsheetEditor
+              bind:this={spreadsheetEditorRef}
+              initialDoc={_importedSpreadsheetDoc ?? spreadsheetDocInit}
+            />
+          {/key}
+        </div>
+        <div class="panel-col">
+          <ContractFieldPanel
+            onInsertField={(attrs: MergeFieldAttrs) => {
+              const ok = spreadsheetEditorRef?.insertTextAtSelection(`{{${attrs.variable}}}`)
+              if (!ok) csToast.error('삽입할 셀을 먼저 선택해주세요.')
+            }}
+            specifications={specs}
+            onSpecsChange={(s: { key: string; value: string }[]) => { specs = s }}
+          />
+        </div>
       {:else}
         <!-- flow 모드: TipTap 에디터 + 필드 패널 2단 레이아웃 -->
         <div class="editor-col">
@@ -463,6 +583,16 @@
       {#if authoringMode === 'canvas'}
         <!-- canvas 모드: 에디터 내 저장 버튼 사용 — 외부 저장 버튼 숨김 -->
         <span class="canvas-save-hint">저장은 캔버스 에디터 내 저장 버튼을 사용하세요.</span>
+      {:else if authoringMode === 'spreadsheet'}
+        <!-- spreadsheet 모드: fetch 기반 저장 -->
+        <button
+          type="button"
+          class="btn-action"
+          disabled={saving}
+          onclick={handleSpreadsheetSave}
+        >
+          {saving ? '저장 중...' : template ? '수정 저장' : '양식 등록'}
+        </button>
       {:else if authoringMode !== null}
         <!-- flow 모드: 일반 저장 버튼 -->
         <button type="submit" class="btn-action" disabled={saving}>
@@ -478,6 +608,7 @@
   <ContractImportModal
     onclose={() => { showImport = false }}
     onImport={handleImport}
+    onImportSpreadsheet={handleImportSpreadsheet}
   />
 {/if}
 
@@ -634,7 +765,17 @@
   .editor-col {
     flex: 1;
     min-width: 0;
-    overflow-y: auto;
+    /*
+     * overflow-y:auto(과거)를 overflow:hidden으로 변경 — .cde-wrap이 이미 flex:1 +
+     * min-height:0으로 이 컨테이너에 정확히 맞춰지고, 내부 스크롤은 .cde-editor-area가
+     * 전담한다. 바깥(.editor-col)에도 overflow-y:auto가 남아있으면 "이중 스크롤 컨테이너"가
+     * 되어, 표 삽입 후 포커스 이동 시 브라우저가 안쪽(.cde-editor-area)이 아니라 바깥
+     * (.editor-col)을 스크롤해버리는 경우가 생긴다 — 이러면 .cde-toolbar까지 통째로
+     * 화면 위로 밀려 올라가 "메뉴바가 안 보인다"는 증상으로 나타난다(2026-08-15 실사용 중
+     * 발견 — 빈 캔버스에서는 스크롤이 필요 없어 재현되지 않다가, 표를 삽입해 내용이 길어지면
+     * 재현되는 패턴과 정확히 일치).
+     */
+    overflow: hidden;
     padding: 14px;
     display: flex;
     flex-direction: column;
@@ -643,6 +784,11 @@
   .editor-col :global(.cde-wrap) {
     flex: 1;
     min-height: 0;
+    /* min-width:0 필수 — 없으면 flex 아이템이 콘텐츠(넓은 임포트 표)의 min-content 폭까지
+       자기 자신을 늘려버려 overflow-x:auto(.tableWrapper)가 무력화되고 툴바까지 화면
+       밖으로 밀려나는 전형적인 flexbox 버그가 재현된다(2026-08-15 실사용 중 발견 —
+       "엑셀 편집 메뉴바 미노출" + "가로폭이 비정상적으로 펼쳐짐" 두 증상의 공통 원인). */
+    min-width: 0;
   }
 
   .panel-col {
@@ -843,5 +989,18 @@
     margin-left: auto;
     font: var(--text-pc-script-12);
     color: var(--cs-text-mid);
+  }
+
+  /* spreadsheet 에디터 래퍼 */
+  .spreadsheet-editor-wrap {
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+  .spreadsheet-editor-wrap :global(.cse-wrap) {
+    flex: 1;
+    min-height: 0;
   }
 </style>

@@ -3,9 +3,10 @@
   import SignatureCanvas from '$lib/components/common/SignatureCanvas.svelte'
   import type { SignatureData } from '$lib/components/common/SignatureCanvas.svelte'
   import type { ContentBlock } from '$lib/types/content-editor'
-  import { isCanvasDocument, isTiptapDocBlock } from '$lib/types/contract-document'
-  import type { CanvasDocument, TiptapDocBlock } from '$lib/types/contract-document'
+  import { isCanvasDocument, isSpreadsheetDocument, isTiptapDocBlock } from '$lib/types/contract-document'
+  import type { CanvasDocument, SpreadsheetDocument, TiptapDocBlock } from '$lib/types/contract-document'
   import { renderTiptapDocToHtml } from '$lib/utils/tiptapRender'
+  import { renderSpreadsheetToHtml } from '$lib/utils/spreadsheetRender'
   import { browser } from '$app/environment'
 
   interface Props { data: PageData }
@@ -32,6 +33,7 @@
     document_url: string | null
     authoring_mode: string | null
     canvas_document: unknown
+    spreadsheet_document: unknown
     rental_reservations: {
       id: number
       start_date: string
@@ -55,6 +57,14 @@
   const canvasDoc = $derived<CanvasDocument | null>(
     isCanvasDocument(contract?.canvas_document)
       ? (contract?.canvas_document as CanvasDocument)
+      : null
+  )
+
+  // spreadsheet 모드 분기
+  const isSpreadsheetMode = $derived(contract?.authoring_mode === 'spreadsheet')
+  const spreadsheetDoc = $derived<SpreadsheetDocument | null>(
+    isSpreadsheetDocument(contract?.spreadsheet_document)
+      ? (contract?.spreadsheet_document as SpreadsheetDocument)
       : null
   )
 
@@ -197,7 +207,7 @@
       {/if}
     </div>
 
-    <!-- 계약서 본문 — canvas 모드 / flow 모드 분기 -->
+    <!-- 계약서 본문 — canvas / spreadsheet / flow 모드 분기 -->
     {#if isCanvasMode && canvasDoc}
       <!-- canvas 모드: 배경 이미지 + 좌표 기반 필드 오버레이 -->
       <div class="doc-section canvas-doc-section">
@@ -263,6 +273,16 @@
             {/each}
           </div>
         {/each}
+      </div>
+    {:else if isSpreadsheetMode && spreadsheetDoc}
+      <!-- spreadsheet 모드: 시트를 HTML 표로 렌더링 (읽기 전용, SSR 안전) -->
+      <div class="doc-section">
+        {#if contract?.title}
+          <h2 class="doc-title">{contract.title}</h2>
+        {/if}
+        <div class="spreadsheet-doc-content">
+          {@html renderSpreadsheetToHtml(spreadsheetDoc)}
+        </div>
       </div>
     {:else if contentBlocks.length > 0}
       <!-- flow 모드: TipTap contentBlocks 렌더링 -->
@@ -488,6 +508,35 @@
   /* overlay 이미지(position:absolute)가 이 블록을 기준으로 배치됨 */
   .doc-block-tiptap {
     position: relative;
+  }
+  /*
+   * renderTiptapDocToHtml()이 표를 감싸는 래퍼 — 넓은 표가 A4 페이지(.contract-main) 폭
+   * 밖으로 넘치지 않도록 표만 가로 스크롤(tiptapRender.ts 참고).
+   */
+  .doc-block-tiptap :global(.tt-table-scroll) {
+    overflow-x: auto;
+    max-width: 100%;
+  }
+  /*
+   * TipTap 표(tiptap-doc content_blocks에서 생성) 기본 스타일 — 아래 cs-contract-table은
+   * 레거시 ContentBlock 표용이라 TipTap이 생성한 <table>에는 적용되지 않아 고객 서명
+   * 화면에서 표 서식이 소실된 것처럼 보였다(2026-08-15 실사용 중 발견,
+   * ContractTemplatePreviewModal.svelte와 동일 수정).
+   */
+  .doc-block-tiptap :global(table) {
+    border-collapse: collapse;
+    width: 100%;
+    margin: 0.5em 0;
+  }
+  .doc-block-tiptap :global(table th),
+  .doc-block-tiptap :global(table td) {
+    border: 1px solid #ddd;
+    padding: 4px 6px;
+    overflow-wrap: anywhere;
+  }
+  .doc-block-tiptap :global(table th) {
+    background: #f6f6f6;
+    font-weight: 700;
   }
   .doc-block :global(table.cs-contract-table) {
     width: 100%;
@@ -763,6 +812,56 @@
     display: block;
     pointer-events: none;
     user-select: none;
+  }
+
+  /* ── spreadsheet 모드 ──────────────────────────────── */
+  .spreadsheet-doc-content {
+    overflow-x: auto;
+  }
+  /* renderSpreadsheetToHtml()이 생성하는 .ss-sheet-page / .ss-sheet-name / .ss-table 기본 스타일 */
+  .spreadsheet-doc-content :global(.ss-sheet-page) {
+    margin-bottom: 24px;
+  }
+  .spreadsheet-doc-content :global(.ss-sheet-name) {
+    font-size: 13px;
+    font-weight: 700;
+    color: var(--cs-dark, #100B32);
+    margin: 0 0 8px;
+  }
+  .spreadsheet-doc-content :global(.ss-table) {
+    border-collapse: collapse;
+    font-size: 12px;
+    color: var(--cs-dark, #100B32);
+    min-width: 100%;
+  }
+  .spreadsheet-doc-content :global(.ss-table td) {
+    border: 1px solid #ccc;
+    padding: 4px 6px;
+    white-space: pre-wrap;
+    vertical-align: top;
+    word-break: break-all;
+  }
+  /* 서명/직인 이미지 오버레이 (renderSpreadsheetToHtml()의 .ss-cell-image) — 셀의 원본
+     텍스트 위에 절대위치로 겹쳐 그린다(도장 개념). 부모 <td>는 오버레이가 있을 때만
+     renderSpreadsheetToHtml()이 인라인 style="position:relative"를 부여한다.
+     ⚠️ max-width:80%/max-height:70%(셀 크기 기준 %)였던 기존 값은 폐기 — 실제 도장처럼
+     셀보다 커도 되는데 셀 크기에 강제로 눌려 크기설정 프리셋(100/200/400)이 시각적으로
+     거의 차이 없어 보이던 원인(2026-08-16, CMS 에디터 .cse-cell-image와 동일 수정).
+     width는 renderSpreadsheetToHtml()이 인라인 style로 직접 지정(20~1200px clamp
+     완료)하므로 여기서는 극단값 방지용 안전 상한만 둔다. */
+  .spreadsheet-doc-content :global(.ss-cell-image) {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    max-width: 600px;
+    height: auto;
+    z-index: 5;
+    pointer-events: none;
+  }
+  @media print {
+    .spreadsheet-doc-content { overflow: visible; }
+    .spreadsheet-doc-content :global(.ss-table) { page-break-inside: auto; }
   }
 
   /* 인쇄 — A4 기준 출력 */

@@ -1,9 +1,9 @@
 <script lang="ts">
   import { csToast } from '$lib/utils/toast'
-  import { substituteVariables, type AnyContentBlock } from '$lib/utils/contract-substitution'
+  import { substituteVariables, substituteSpreadsheetDocument, type AnyContentBlock } from '$lib/utils/contract-substitution'
   import { applyContractTemplate } from '$lib/utils/contract-apply-template'
   import { hasExistingContractContent } from '$lib/utils/contract-content-mode'
-  import { isTiptapDocBlock } from '$lib/types/contract-document'
+  import { isTiptapDocBlock, isSpreadsheetDocument } from '$lib/types/contract-document'
   import { renderTiptapDocToHtml } from '$lib/utils/tiptapRender'
   import type { TiptapDocBlock } from '$lib/types/contract-document'
   import type { ContractSubstitutionData } from '$lib/types/contract-module'
@@ -14,10 +14,12 @@
     content_blocks: AnyContentBlock[]
     specifications: { key: string; value: string }[]
     created_at: string
-    /** canvas 모드 여부 — GET /api/cms/contract-templates로 반환 */
+    /** 작성 모드 — GET /api/cms/contract-templates로 반환 */
     authoring_mode?: string
     /** canvas 모드 문서 — authoring_mode='canvas'일 때 contracts.canvas_document에 저장 */
     canvas_document?: unknown
+    /** spreadsheet 모드 문서 — authoring_mode='spreadsheet'일 때 contracts.spreadsheet_document에 저장 */
+    spreadsheet_document?: unknown
   }
 
   interface Props {
@@ -26,7 +28,15 @@
     initialTemplateId?: string | null
     onclose: () => void
     onsent: () => void
-    onEdit?: () => void
+    /**
+     * "편집" 클릭 시 실제로 편집해야 할 contractId를 전달한다.
+     * existing 모드(이미 저장된 내용 있음)면 기존 contractId 그대로.
+     * template 모드(아직 아무 것도 적용 안 됨)면 handleEditClick()이 먼저 그 양식을
+     * contractId에 적용(치환+저장)한 뒤 그 결과 id를 전달 — 그렇지 않으면 호출부가
+     * "미리보기 중인 양식"과 무관한 예전 contractId(비어있을 수 있음)로 편집 화면을 열어
+     * "정보가 사라졌다"는 오인을 유발한다(2026-08-15 실사용 중 발견한 실제 버그).
+     */
+    onEdit?: (editedContractId?: string) => void
   }
 
   let { contractId, reservationId, initialTemplateId = null, onclose, onsent, onEdit }: Props = $props()
@@ -36,6 +46,7 @@
   let subData        = $state<ContractSubstitutionData | null>(null)
   let loading        = $state(true)
   let sending        = $state(false)
+  let applyingForEdit = $state(false)
   let error          = $state<string | null>(null)
 
   // ── 편집 내용 보존 관련 상태 ─────────────────────────────────────────────────
@@ -43,7 +54,9 @@
   // template 모드: 양식 치환 후 PATCH 저장 → 발송 (기존 동작)
   let existingBlocks        = $state<AnyContentBlock[]>([])
   // canvas 계약의 경우 content_blocks는 항상 [] — canvas_document를 보관해 미리보기 분기에 활용
-  let existingCanvasDocument = $state<unknown>(null)
+  let existingCanvasDocument       = $state<unknown>(null)
+  // spreadsheet 계약의 경우 content_blocks는 항상 [] — spreadsheet_document를 보관해 미리보기 분기에 활용
+  let existingSpreadsheetDocument  = $state<unknown>(null)
   let hasExistingContent = $state(false)
   let contentMode        = $state<'existing' | 'template'>('template')
   let overwriteWarning   = $state(false)       // 덮어쓰기 확인 배너 표시 여부
@@ -65,8 +78,12 @@
   )
 
   const showPreview = $derived(
-    // canvas 계약은 existingBlocks가 [] 이므로 existingCanvasDocument 유무도 함께 확인
-    (contentMode === 'existing' && (existingBlocks.length > 0 || existingCanvasDocument != null)) ||
+    // canvas / spreadsheet 계약은 existingBlocks가 [] 이므로 각 document 유무도 함께 확인
+    (contentMode === 'existing' && (
+      existingBlocks.length > 0 ||
+      existingCanvasDocument != null ||
+      existingSpreadsheetDocument != null
+    )) ||
     (contentMode === 'template' && selectedTemplate !== null)
   )
 
@@ -97,11 +114,24 @@
         try {
           const contentRes = await fetch(`/api/cms/contracts/${contractId}/content`)
           if (contentRes.ok) {
-            const contentData = (await contentRes.json()) as { content_blocks?: unknown; canvas_document?: unknown }
+            const contentData = (await contentRes.json()) as {
+              content_blocks?: unknown
+              canvas_document?: unknown
+              spreadsheet_document?: unknown
+              authoring_mode?: string
+            }
             if (hasExistingContractContent(contentData.content_blocks, contentData.canvas_document)) {
               existingBlocks = contentData.content_blocks as AnyContentBlock[]
               // canvas 계약은 canvas_document를 보관 — 미리보기 분기 및 showPreview 조건에 사용
               existingCanvasDocument = contentData.canvas_document ?? null
+              hasExistingContent = true
+              contentMode = 'existing'
+            } else if (
+              contentData.authoring_mode === 'spreadsheet' &&
+              contentData.spreadsheet_document != null
+            ) {
+              // spreadsheet 계약은 content_blocks가 항상 [] — spreadsheet_document로 판별
+              existingSpreadsheetDocument = contentData.spreadsheet_document
               hasExistingContent = true
               contentMode = 'existing'
             }
@@ -153,6 +183,47 @@
     overwriteWarning = false
   }
 
+  /**
+   * 현재 선택된 템플릿을 치환해 contractId에 적용(init-contract + PATCH)한다.
+   * send()의 template 분기와 handleEditClick()이 동일 로직을 공유 — 발송 전 "편집"
+   * 진입 시에도 미리보기에서 본 내용이 실제로 저장돼 있어야 하기 때문(§ handleEditClick 참고).
+   * 실패 시 throw — 호출부에서 각자의 컨텍스트에 맞는 메시지로 처리.
+   */
+  async function applySelectedTemplate(): Promise<string> {
+    if (!selectedTemplate || !subData) throw new Error('양식을 선택해 주세요.')
+
+    const isCanvas      = selectedTemplate.authoring_mode === 'canvas'
+    const isSpreadsheet = selectedTemplate.authoring_mode === 'spreadsheet'
+    // canvas / spreadsheet 모드는 content_blocks가 빈 배열 — substituteVariables 적용 불필요.
+    // canvas는 렌더 시점(/contract/[token])에 필드 바인딩으로 치환되지만, spreadsheet는
+    // 셀 텍스트가 flow의 텍스트 노드와 동일한 성격(불투명 문자열 어디든 {{변수}} 등장 가능)
+    // 이라 flow와 동일하게 여기서 적용시점(apply-time) 치환을 수행해 저장한다.
+    const substitutedBlocks = (isCanvas || isSpreadsheet)
+      ? []
+      : substituteVariables(selectedTemplate.content_blocks ?? [], subData)
+
+    const substitutedSpreadsheetDocument =
+      isSpreadsheet && isSpreadsheetDocument(selectedTemplate.spreadsheet_document)
+        ? substituteSpreadsheetDocument(selectedTemplate.spreadsheet_document, subData)
+        : undefined
+
+    const result = await applyContractTemplate({
+      contractId,
+      reservationId,
+      title:               selectedTemplate.title,
+      contentBlocks:       substitutedBlocks,
+      specifications:      selectedTemplate.specifications ?? [],
+      templateId:          selectedTemplate.id,
+      authoring_mode:      isSpreadsheet ? 'spreadsheet' : isCanvas ? 'canvas' : 'flow',
+      canvasDocument:      isCanvas      ? selectedTemplate.canvas_document      : undefined,
+      spreadsheetDocument: substitutedSpreadsheetDocument,
+    })
+
+    if (result.error) throw new Error(result.error)
+    if (!result.contractId) throw new Error('계약서 생성에 실패했습니다.')
+    return result.contractId
+  }
+
   async function send() {
     // 사전 가드
     if (contentMode === 'template' && (!selectedTemplate || !subData)) return
@@ -163,51 +234,24 @@
 
     sending = true
     try {
+      let targetContractId = contractId
+
       if (contentMode === 'existing') {
         // ── existing 경로: 편집 내용 보존 ──────────────────────────────────────
-        // applyContractTemplate() 호출 없음 → PATCH 없음 → 편집 내용 안전
-        // 단순히 send-chat만 호출해 현재 저장된 content_blocks 그대로 발송
-        const sendRes = await fetch(`/api/cms/contracts/${contractId}/send-chat`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-        })
-        if (!sendRes.ok) {
-          const body = await sendRes.json().catch(() => ({}))
-          throw new Error((body as { error?: string }).error ?? '발송 실패')
-        }
+        // applySelectedTemplate() 호출 없음 → PATCH 없음 → 편집 내용 안전
+        // targetContractId는 위에서 이미 contractId로 설정됨(existing 진입 시점에 항상 non-null)
       } else {
         // ── template 경로: 양식 치환 + PATCH 저장 + 발송 (기존 동작) ───────────
-        if (!selectedTemplate || !subData) return  // TypeScript 타입 가드 (위에서 이미 체크)
+        targetContractId = await applySelectedTemplate()
+      }
 
-        const isCanvas = selectedTemplate.authoring_mode === 'canvas'
-
-        // canvas 모드는 content_blocks가 빈 배열 — substituteVariables 적용 불필요.
-        // 변수 치환은 고객 서명 화면(/contract/[token])에서 렌더링 시 적용됨.
-        const substitutedBlocks = isCanvas
-          ? []
-          : substituteVariables(selectedTemplate.content_blocks ?? [], subData)
-
-        const result = await applyContractTemplate({
-          contractId,
-          reservationId,
-          title:           selectedTemplate.title,
-          contentBlocks:   substitutedBlocks,
-          specifications:  selectedTemplate.specifications ?? [],
-          templateId:      selectedTemplate.id,
-          authoring_mode:  isCanvas ? 'canvas' : 'flow',
-          canvasDocument:  isCanvas ? selectedTemplate.canvas_document : undefined,
-        })
-
-        if (result.error) throw new Error(result.error)
-
-        const sendRes = await fetch(`/api/cms/contracts/${result.contractId}/send-chat`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-        })
-        if (!sendRes.ok) {
-          const body = await sendRes.json().catch(() => ({}))
-          throw new Error((body as { error?: string }).error ?? '발송 실패')
-        }
+      const sendRes = await fetch(`/api/cms/contracts/${targetContractId}/send-chat`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+      })
+      if (!sendRes.ok) {
+        const body = await sendRes.json().catch(() => ({}))
+        throw new Error((body as { error?: string }).error ?? '발송 실패')
       }
 
       csToast.success('계약서가 채팅으로 발송되었습니다.')
@@ -216,6 +260,44 @@
       csToast.error(e instanceof Error ? e.message : '발송에 실패했습니다.')
     } finally {
       sending = false
+    }
+  }
+
+  /**
+   * "편집" 클릭 핸들러.
+   *
+   * existing 모드(이미 저장된 내용 있음) — 곧바로 onEdit(contractId) 호출, 편집 내용 그대로 유지.
+   *
+   * template 모드(아직 아무 것도 저장 안 됨, 미리보기만 하는 중) — 과거엔 onEdit()을 인자 없이
+   * 그대로 호출해 호출부(RentalContractViewer)가 "예전 contractId"(비어있거나 이 미리보기와
+   * 무관한 레코드)로 편집 화면을 열어버렸다. 사용자 입장에서는 방금 미리보기에서 본 양식
+   * 내용이 편집 화면에서 통째로 사라진 것처럼 보였다(2026-08-15 실사용 중 발견한 실제 버그
+   * — reservation=67로 재현 확인: content_blocks가 진짜로 빈 배열인 오래된 contract row를
+   * 가리키고 있었음). 이제는 "편집"을 누르면 먼저 지금 미리보고 있는 양식을 실제로
+   * 적용(치환+저장)한 뒤, 그 결과 contractId로 편집 화면을 연다 — 미리보기=편집 시작점이
+   * 항상 일치하도록 보장.
+   */
+  async function handleEditClick() {
+    if (!onEdit) return
+
+    if (contentMode === 'existing') {
+      onEdit(contractId ?? undefined)
+      return
+    }
+
+    if (!selectedTemplate || !subData) {
+      csToast.error('양식을 선택해 주세요.')
+      return
+    }
+
+    applyingForEdit = true
+    try {
+      const appliedContractId = await applySelectedTemplate()
+      onEdit(appliedContractId)
+    } catch (e) {
+      csToast.error(e instanceof Error ? e.message : '편집 화면으로 이동하지 못했습니다.')
+    } finally {
+      applyingForEdit = false
     }
   }
 
@@ -299,9 +381,17 @@
                 <div class="preview-canvas-notice">
                   고정 캔버스형 계약서입니다. 발송 후 고객 서명 화면에서 배경 서식과 서명 필드를 확인할 수 있습니다.
                 </div>
+              {:else if contentMode === 'template' && selectedTemplate?.authoring_mode === 'spreadsheet'}
+                <div class="preview-canvas-notice">
+                  스프레드시트형 계약서입니다. 발송 후 고객 서명 화면에서 시트 내용을 확인할 수 있습니다.
+                </div>
               {:else if contentMode === 'existing' && existingCanvasDocument != null}
                 <div class="preview-canvas-notice">
                   발행된 고정 캔버스형 계약서입니다. 발송 후 고객 서명 화면에서 기존 발행 내용을 그대로 확인할 수 있습니다.
+                </div>
+              {:else if contentMode === 'existing' && existingSpreadsheetDocument != null}
+                <div class="preview-canvas-notice">
+                  발행된 스프레드시트형 계약서입니다. 발송 후 고객 서명 화면에서 기존 발행 내용을 그대로 확인할 수 있습니다.
                 </div>
               {/if}
               <div class="preview-content">
@@ -329,7 +419,12 @@
       <div class="modal-footer">
         <button type="button" class="btn-cancel" onclick={onclose}>취소</button>
         {#if onEdit}
-          <button type="button" class="btn-edit" onclick={onEdit}>편집</button>
+          <button
+            type="button"
+            class="btn-edit"
+            onclick={handleEditClick}
+            disabled={applyingForEdit || (contentMode === 'template' && !selectedTemplate)}
+          >{applyingForEdit ? '적용 중...' : '편집'}</button>
         {/if}
         <button
           type="button"
@@ -597,6 +692,37 @@
   .preview-block-tiptap {
     position: relative;
   }
+  /*
+   * renderTiptapDocToHtml()이 표를 감싸는 래퍼 — 넓은 표가 A4 페이지(.doc-page) 폭 밖으로
+   * 넘치지 않도록 표만 가로 스크롤(tiptapRender.ts 참고, ContractDocumentEditor.svelte의
+   * .tableWrapper와 동일 목적).
+   */
+  .preview-block-tiptap :global(.tt-table-scroll) {
+    overflow-x: auto;
+    max-width: 100%;
+  }
+  /*
+   * TipTap 표(tiptap-doc content_blocks에서 생성) 기본 스타일 — 아래 cs-contract-table은
+   * 레거시 ContentBlock 표(text/html 블록의 수기 HTML)용이라 TipTap이 생성한 <table>에는
+   * 적용되지 않았음. 테두리·패딩이 전혀 없어 표가 "서식 소실"된 것처럼 보였다
+   * (2026-08-15 실사용 중 발견 — ContractDocumentEditor.svelte .ProseMirror table 스타일과
+   * 동일하게 맞춤, backgroundColor/borderColor 인라인 스타일도 이 기본 테두리 위에 표시됨).
+   */
+  .preview-block-tiptap :global(table) {
+    border-collapse: collapse;
+    width: 100%;
+    margin: 0.5em 0;
+  }
+  .preview-block-tiptap :global(table th),
+  .preview-block-tiptap :global(table td) {
+    border: 1px solid #ddd;
+    padding: 4px 6px;
+    overflow-wrap: anywhere;
+  }
+  .preview-block-tiptap :global(table th) {
+    background: var(--cs-surface-gray);
+    font-weight: 700;
+  }
   .preview-block :global(table.cs-contract-table) {
     width: 100%;
     border-collapse: collapse;
@@ -668,6 +794,7 @@
     transition: background 0.1s;
     white-space: nowrap;
   }
+  .btn-edit:disabled { opacity: 0.5; cursor: not-allowed; }
   .btn-edit:hover { background: var(--cs-purple-op10); }
 
   .btn-send {

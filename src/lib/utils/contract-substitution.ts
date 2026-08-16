@@ -1,5 +1,5 @@
 import type { ContentBlock } from '$lib/types/content-editor'
-import type { TiptapDocBlock } from '$lib/types/contract-document'
+import type { TiptapDocBlock, SpreadsheetDocument } from '$lib/types/contract-document'
 import type { ContractSubstitutionData } from '$lib/types/contract-module'
 import { substituteTiptapDoc } from '$lib/utils/tiptapRender'
 
@@ -12,6 +12,25 @@ function applySubstitution(text: string, data: ContractSubstitutionData): string
 
 /** content_blocks 배열에 포함될 수 있는 블록 타입 (레거시 + TipTap) */
 export type AnyContentBlock = ContentBlock | TiptapDocBlock
+
+/**
+ * SpreadsheetDocument의 모든 셀 텍스트에서 {{변수명}} 패턴을 ContractSubstitutionData
+ * 의 실제 값으로 치환한다. 치환하지 못한 변수는 {{변수명}} 원문을 그대로 유지.
+ *
+ * 원본 문서를 변경하지 않고 새 SpreadsheetDocument를 반환한다(immutable 처리).
+ */
+export function substituteSpreadsheetDocument(
+  doc: SpreadsheetDocument,
+  data: ContractSubstitutionData,
+): SpreadsheetDocument {
+  return {
+    ...doc,
+    sheets: doc.sheets.map((sheet) => ({
+      ...sheet,
+      rows: sheet.rows.map((row) => row.map((cell) => applySubstitution(cell, data))),
+    })),
+  }
+}
 
 /**
  * content_blocks 배열의 변수 치환.

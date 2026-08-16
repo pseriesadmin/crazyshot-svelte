@@ -22,6 +22,7 @@
   import { csToast } from '$lib/utils/toast'
   import ContractCanvasFieldPalette from './ContractCanvasFieldPalette.svelte'
   import { hasSignatureField } from '$lib/types/contract-document'
+  import { fieldStyle, getContentRectPx } from '$lib/utils/canvasLetterbox'
   import type {
     CanvasDocument,
     CanvasField,
@@ -118,10 +119,14 @@
     input.value = ''  // 동일 파일 재선택 허용
 
     const isPdf = file.type === 'application/pdf' || file.name.toLowerCase().endsWith('.pdf')
-    const isImg = file.type.startsWith('image/')
+    // accept 속성은 드래그앤드롭·OS 파일선택기의 "모든 파일" 옵션으로 우회될 수 있으므로,
+    // 서버(canvas-bg/+server.ts ALLOWED)와 동일한 허용 목록으로 여기서도 명시 검증한다
+    // (HEIC/HEIF 등은 서버가 어차피 거부 — 여기서 먼저 걸러 왕복 없이 즉시 안내)
+    const ALLOWED_IMAGE_TYPES = new Set(['image/png', 'image/jpeg', 'image/webp'])
+    const isImg = ALLOWED_IMAGE_TYPES.has(file.type)
 
     if (!isPdf && !isImg) {
-      csToast.error('이미지(PNG/JPEG/WebP) 또는 PDF 파일만 배경으로 사용할 수 있습니다.')
+      csToast.error('PNG, JPEG, WebP 이미지 또는 PDF 파일만 배경으로 사용할 수 있습니다.')
       return
     }
 
@@ -191,10 +196,20 @@
     // 이미 드래그 중이면 배치 무시
     if (dragging) return
 
-    const rect  = (event.currentTarget as HTMLElement).getBoundingClientRect()
-    const scale = rect.width / page.width
-    const x     = Math.round((event.clientX - rect.left) / scale)
-    const y     = Math.round((event.clientY - rect.top)  / scale)
+    const frameRect = (event.currentTarget as HTMLElement).getBoundingClientRect()
+    const content    = getContentRectPx(page, frameRect)
+
+    // 레터박스 여백(실제 이미지 바깥의 A4 프레임 여백) 클릭은 무시 —
+    // 스캔된 문서 바깥에는 필드를 배치할 수 없음
+    if (
+      event.clientX < content.left || event.clientX > content.left + content.width ||
+      event.clientY < content.top  || event.clientY > content.top  + content.height
+    ) {
+      return
+    }
+
+    const x = Math.round((event.clientX - content.left) / content.scale)
+    const y = Math.round((event.clientY - content.top)  / content.scale)
 
     // 기본 크기 (필드 타입별)
     const defaults: Record<CanvasFieldType, { w: number; h: number }> = {
@@ -279,11 +294,11 @@
     const page = pages.find((p) => p.id === dragging!.pageId)
     if (!page) return
 
-    const pageRect = dragging.pageEl.getBoundingClientRect()
-    const scale    = pageRect.width / page.width
+    const frameRect = dragging.pageEl.getBoundingClientRect()
+    const content    = getContentRectPx(page, frameRect)
 
-    const rawX = (event.clientX - pageRect.left - dragging.pointerOffsetX) / scale
-    const rawY = (event.clientY - pageRect.top  - dragging.pointerOffsetY) / scale
+    const rawX = (event.clientX - content.left - dragging.pointerOffsetX) / content.scale
+    const rawY = (event.clientY - content.top  - dragging.pointerOffsetY) / content.scale
 
     const field  = fields.find((f) => f.id === dragging!.fieldId)
     if (!field) return
@@ -333,11 +348,16 @@
   }
 </script>
 
-<!-- 숨겨진 파일 입력 (이미지/PDF) -->
+<!--
+  숨겨진 파일 입력 (이미지/PDF) — accept는 서버(canvas-bg/+server.ts ALLOWED)와 정확히 일치시킬 것.
+  HEIF/HEIC는 의도적으로 제외: ① 서버가 거부하고(png/jpeg/webp만 허용) ② 설령 허용해도
+  대부분 브라우저(Safari 제외)가 <img src>로 HEIC를 직접 렌더링하지 못해 배경이 깨져 보임.
+  전역 표준 업로드 포맷(uiux-index.md, PNG/JPEG/WebP/HEIF/PDF)의 예외 케이스임.
+-->
 <input
   bind:this={pageFileInput}
   type="file"
-  accept="image/png,image/jpeg,image/webp,image/heif,image/heic,application/pdf"
+  accept="image/png,image/jpeg,image/webp,application/pdf"
   style="display:none"
   onchange={onPageFileChange}
 />
@@ -363,6 +383,7 @@
       >
         {uploading ? '업로드 중...' : '+ 배경 추가'}
       </button>
+      <span class="format-hint">PNG · JPEG · WebP · PDF</span>
       {#if pages.length > 0}
         <span class="page-count">{pages.length}페이지</span>
         <span class="field-count">{fields.length}개 필드</span>
@@ -395,6 +416,7 @@
         <div class="empty-state">
           <p class="empty-title">배경 페이지가 없습니다</p>
           <p class="empty-sub">상단 "+ 배경 추가" 버튼으로 이미지 또는 PDF를 업로드하세요.</p>
+          <p class="empty-format-hint">지원 형식: PNG · JPEG · WebP · PDF</p>
           <button class="btn-add-page-lg" onclick={triggerPageUpload} disabled={readonly}>
             + 배경 추가
           </button>
@@ -409,9 +431,8 @@
               class="canvas-page"
               class:placing={!!placingType}
               onclick={(e) => onPageClick(e, page)}
-              style="aspect-ratio: {page.width} / {page.height};"
             >
-              <!-- 배경 이미지 -->
+              <!-- 배경 이미지 — object-fit:contain으로 A4 프레임 안에 레터박스 표시 -->
               <img
                 src={page.imageUrl}
                 alt="계약서 배경 페이지 {pi + 1}"
@@ -419,19 +440,14 @@
                 draggable="false"
               />
 
-              <!-- 필드 오버레이 -->
+              <!-- 필드 오버레이 (fieldStyle: 레터박스 보정된 프레임 기준 % 좌표, C-3) -->
               {#each fields.filter((f) => f.pageId === page.id) as field (field.id)}
                 <!-- svelte-ignore a11y_click_events_have_key_events -->
                 <!-- svelte-ignore a11y_no_static_element_interactions -->
                 <div
                   class="canvas-field field-{field.type}"
                   class:selected={selectedFieldId === field.id}
-                  style="
-                    left:   {(field.x / page.width)  * 100}%;
-                    top:    {(field.y / page.height) * 100}%;
-                    width:  {(field.width  / page.width)  * 100}%;
-                    height: {(field.height / page.height) * 100}%;
-                  "
+                  style={fieldStyle(field, page)}
                   onclick={(e) => selectField(field.id, e)}
                   onpointerdown={(e) => onFieldPointerDown(e, field)}
                   role="button"
@@ -531,6 +547,11 @@
     border-radius: 99px;
   }
 
+  .format-hint {
+    font-size: 11px;
+    color: #999;
+  }
+
   .placing-hint {
     font-size: 11px;
     color: var(--cs-purple, #3B2F8A);
@@ -584,6 +605,7 @@
   }
   .empty-title { font-size: 16px; font-weight: 700; color: #444; margin: 0; }
   .empty-sub   { font-size: 13px; color: #888; margin: 0; }
+  .empty-format-hint { font-size: 12px; color: #aaa; margin: 0; }
   .btn-add-page-lg {
     padding: 10px 20px;
     background: var(--cs-purple, #3B2F8A);
@@ -613,6 +635,10 @@
   .canvas-page {
     position: relative;
     width: 100%;
+    /* A4 비율(210:297) 고정 — 업로드 이미지 원본 비율과 무관(C-3, Stephen 확정).
+       이미지는 .page-bg의 object-fit:contain으로 이 프레임 안에 레터박스 표시되고,
+       필드 좌표는 fieldStyle()/getContentRectPx()가 레터박스 여백을 보정해 계산한다. */
+    aspect-ratio: 210 / 297;
     background: #fff;
     box-shadow: 0 2px 12px rgba(0,0,0,0.15);
     border-radius: 4px;
