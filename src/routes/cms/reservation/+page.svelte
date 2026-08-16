@@ -3,6 +3,7 @@
   import { fly } from 'svelte/transition'
   import RentalDetailPanel from '$lib/components/cms/RentalDetailPanel.svelte'
   import CmsPagination from '$lib/components/cms/CmsPagination.svelte'
+  import ReservationRentalTabBar from '$lib/components/cms/ReservationRentalTabBar.svelte'
   import { csToast } from '$lib/utils/toast'
   import type { PageData } from './$types'
   import type { RentalListRow } from './+page.server'
@@ -123,10 +124,9 @@
 </script>
 
 <div class="page-wrap">
-  <div class="page-header">
-    <h1 class="page-title">예약목록</h1>
-    <p class="page-sub">신청 → 계약 → 승인 파이프라인을 관리합니다.</p>
-  </div>
+  <ReservationRentalTabBar />
+
+  <p class="page-sub">신청 → 계약 → 승인 파이프라인을 관리합니다.</p>
 
   <!-- 툴바 -->
   <div class="toolbar">
@@ -295,9 +295,7 @@
     gap: 16px;
   }
 
-  .page-header { margin-bottom: 4px; }
-  .page-title  { font: var(--text-pc-title-18); color: var(--cs-text); margin: 0 0 4px; }
-  .page-sub    { font: var(--text-pc-script-12); color: var(--cs-text-mid); margin: 0; }
+  .page-sub { font: var(--text-pc-body-14); color: var(--cs-text-mid); margin: 0; }
 
   /* 툴바 */
   .toolbar {

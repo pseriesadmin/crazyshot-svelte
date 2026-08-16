@@ -227,6 +227,77 @@
       })
   })
 
+  interface RentalSibling {
+    reservationId:   number
+    reservationCode: string | null
+    status:          string
+    rentalStart:     string | null
+    rentalEnd:       string | null
+    pickupMethod:    string | null
+    returnMethod:    string | null
+    productName:     string
+    productCode:     string | null
+    productCategory: string | null
+    productImageUrl: string | null
+  }
+
+  let rentalSiblingsFetchedForId = $state<number | null>(null)
+  let rentalSiblings              = $state<RentalSibling[]>([])
+  let rentalSiblingsLoading       = $state(false)
+  let rentalSiblingsError         = $state<string | null>(null)
+
+  // 같은 주문(orders/order_items, Migration 280)에 묶인 다른 상품 — 대여정보 탭 "상품 정보"
+  // 섹션에 장바구니에 함께 담긴 상품 전부를 반복 표시하기 위함(옵션상품/결제정보 탭과 동일한
+  // lazy-fetch 패턴). 단일 상품 예약이면 빈 배열.
+  $effect(() => {
+    if (activeTab !== 'rental') return
+    if (rentalSiblingsLoading) return
+    if (rentalSiblingsFetchedForId === row.reservation_id) return
+
+    const id = row.reservation_id
+    rentalSiblingsFetchedForId = id
+    rentalSiblings        = []
+    rentalSiblingsError    = null
+    rentalSiblingsLoading  = true
+
+    fetch(`/api/cms/reservations/${id}/rental-siblings`)
+      .then(r => r.json())
+      .then(d => {
+        if (rentalSiblingsFetchedForId === id) {
+          rentalSiblings = Array.isArray(d.siblings) ? d.siblings : []
+          rentalSiblingsLoading = false
+        }
+      })
+      .catch(() => {
+        if (rentalSiblingsFetchedForId === id) { rentalSiblingsError = '함께 담긴 상품 정보를 불러오지 못했습니다.'; rentalSiblingsLoading = false }
+      })
+  })
+
+  interface ProductInfoItem {
+    key:      string
+    isSibling: boolean
+    imageUrl: string | null
+    name:     string
+    code:     string | null
+    category: string | null
+    status?:  string
+  }
+
+  // "상품 정보" 섹션 반복 렌더링용 — 현재 선택된 상품(row) + 같은 주문의 형제 상품(rentalSiblings)을
+  // 하나의 배열로 정규화. 1개든 N개든 동일한 info-row 마크업을 그대로 재사용해 반복 표시한다.
+  let productInfoItems = $derived<ProductInfoItem[]>([
+    {
+      key: `main-${row.reservation_id}`, isSibling: false,
+      imageUrl: row.product_image_url, name: row.product_name,
+      code: row.product_code, category: row.product_category,
+    },
+    ...rentalSiblings.map(s => ({
+      key: `sib-${s.reservationId}`, isSibling: true,
+      imageUrl: s.productImageUrl, name: s.productName,
+      code: s.productCode, category: s.productCategory, status: s.status,
+    })),
+  ])
+
   const STATUS_LABEL: Record<string, string> = {
     pending: '접수', hold: '신청대기', confirmed: '승인완료',
     shipped: '배송중', in_use: '대여중', return_requested: '반납요청',
@@ -443,7 +514,7 @@
 
       <!-- 상품 정보 -->
       <div class="section-title-row">
-        <span class="section-title">상품 정보</span>
+        <span class="section-title">상품 정보{#if productInfoItems.length > 1} ({productInfoItems.length}개){/if}</span>
         {#if enableQrVerify}
           <button
             type="button"
@@ -462,34 +533,46 @@
           </button>
         {/if}
       </div>
-      <div class="info-section">
-        {#if row.product_image_url}
-          <div class="info-row">
-            <span class="info-label">상품 이미지</span>
-            <div class="info-value">
-              <img
-                src={row.product_image_url}
-                alt={row.product_name}
-                class="product-thumb"
-                width="60"
-                height="60"
-              />
+      {#each productInfoItems as item (item.key)}
+        <div class="info-section">
+          {#if item.imageUrl}
+            <div class="info-row">
+              <span class="info-label">상품 이미지</span>
+              <div class="info-value">
+                <img
+                  src={item.imageUrl}
+                  alt={item.name}
+                  class="product-thumb"
+                  width="60"
+                  height="60"
+                />
+              </div>
             </div>
+          {/if}
+          <div class="info-row">
+            <span class="info-label">상품명</span>
+            <span class="info-value fw-bold">
+              {item.name}
+              {#if item.isSibling}
+                <span class="sibling-status-badge">{STATUS_LABEL[item.status ?? ''] ?? item.status}</span>
+              {/if}
+            </span>
           </div>
-        {/if}
-        <div class="info-row">
-          <span class="info-label">상품명</span>
-          <span class="info-value fw-bold">{row.product_name}</span>
+          <div class="info-row">
+            <span class="info-label">상품 코드</span>
+            <span class="info-value mono">{item.code ?? '-'}</span>
+          </div>
+          <div class="info-row">
+            <span class="info-label">카테고리</span>
+            <span class="info-value">{item.category ?? '-'}</span>
+          </div>
         </div>
-        <div class="info-row">
-          <span class="info-label">상품 코드</span>
-          <span class="info-value mono">{row.product_code ?? '-'}</span>
-        </div>
-        <div class="info-row">
-          <span class="info-label">카테고리</span>
-          <span class="info-value">{row.product_category ?? '-'}</span>
-        </div>
-      </div>
+      {/each}
+      {#if rentalSiblingsLoading}
+        <div class="loading-box">함께 담긴 상품 조회 중...</div>
+      {:else if rentalSiblingsError}
+        <div class="error-box">{rentalSiblingsError}</div>
+      {/if}
 
       <!-- 옵션상품 — 메인상품 외 예약에 함께 담긴 상품(reservation_options). 없으면 섹션 자체 미표시 -->
       {#if optionsLoading}
@@ -1058,6 +1141,16 @@
     display: inline-block;
     margin-left: 8px;
     font-size: 11px;
+    background: var(--cs-surface-gray);
+    padding: 2px 6px;
+    border-radius: 4px;
+    color: var(--cs-text-mid);
+  }
+  .sibling-status-badge {
+    display: inline-block;
+    margin-left: 8px;
+    font-size: 11px;
+    font-weight: 400;
     background: var(--cs-surface-gray);
     padding: 2px 6px;
     border-radius: 4px;

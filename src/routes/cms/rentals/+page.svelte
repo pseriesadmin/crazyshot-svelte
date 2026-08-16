@@ -5,6 +5,7 @@
   import { fly } from 'svelte/transition'
   import RentalDetailPanel from '$lib/components/cms/RentalDetailPanel.svelte'
   import CmsPagination from '$lib/components/cms/CmsPagination.svelte'
+  import ReservationRentalTabBar from '$lib/components/cms/ReservationRentalTabBar.svelte'
   import type { PageData } from './$types'
   import type { RentalListRow } from './+page.server'
 
@@ -130,14 +131,9 @@
 </script>
 
 <div class="page-wrap">
-  <!-- 헤더 -->
-  <div class="page-header">
-    <div class="header-left">
-      <h1 class="page-title">대여현황</h1>
-      <p class="page-sub">승인완료 이후 대여 라이프사이클을 관리합니다.</p>
-    </div>
-    <a href="/cms/reservation" class="btn-to-reservation">예약목록 →</a>
-  </div>
+  <ReservationRentalTabBar />
+
+  <p class="page-sub">승인완료 이후 대여 라이프사이클을 관리합니다.</p>
 
   <!-- 툴바 -->
   <div class="toolbar">
@@ -291,33 +287,7 @@
     gap: 16px;
   }
 
-  /* 헤더 */
-  .page-header {
-    display: flex;
-    align-items: flex-start;
-    justify-content: space-between;
-    gap: 12px;
-  }
-  .header-left { display: flex; flex-direction: column; gap: 2px; }
-  .page-title  { font: var(--text-pc-title-18); color: var(--cs-text); margin: 0 0 4px; }
-  .page-sub    { font: var(--text-pc-script-12); color: var(--cs-text-mid); margin: 0; }
-
-  .btn-to-reservation {
-    display: inline-flex;
-    align-items: center;
-    height: 34px;
-    padding: 0 16px;
-    border-radius: var(--cms-radius-sm);
-    background: var(--cs-white);
-    border: 1px solid var(--cs-lilac);
-    font: var(--text-pc-script-12);
-    color: var(--cs-text-mid);
-    text-decoration: none;
-    white-space: nowrap;
-    flex-shrink: 0;
-    transition: background 0.12s, color 0.12s;
-  }
-  .btn-to-reservation:hover { background: rgba(59,47,138,0.06); color: var(--cs-purple); }
+  .page-sub { font: var(--text-pc-body-14); color: var(--cs-text-mid); margin: 0; }
 
   /* 툴바 */
   .toolbar {

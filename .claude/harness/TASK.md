@@ -107,8 +107,12 @@ frozen_files (해당 시 Claude Code 전용 — Cursor 수정 금지, GATE C 필
     rental-siblings` 2곳 전부 해당)
   - supabase/migrations/** (신규 ADD 1개 파일만 허용)
 
-실패롤백: 신규 마이그레이션 파일 삭제(additive-only라 기존 스키마 영향 없음) / 수정 대상 파일
-  (`cart/+page.svelte`, `RentalDetailPanel.svelte`) git checkout
+실패롤백: [정정, sp3-qa-agent 검수 지적 반영] 이 마이그레이션은 `create_checkout_order`를
+  `CREATE OR REPLACE`로 완전히 대체하므로 **파일 삭제만으로는 이미 적용된 Stage/Production DB의
+  함수 정의가 되돌아가지 않는다** — 실제 롤백은 마이그레이션 파일 하단의 `-- ROLLBACK` 주석
+  블록(DROP INDEX → create_checkout_order를 Migration 251b 시점 정의로 CREATE OR REPLACE 복원 →
+  DROP FUNCTION create_reservation_order → order_key_sequences 정책·테이블 DROP)을 수동 실행해야
+  함. 수정 대상 파일(`cart/+page.svelte`, `RentalDetailPanel.svelte`, GNB 관련 4개)은 git checkout으로 복원 가능.
 
 신규/수정 파일 (예정):
   - `supabase/migrations/20260817000278_278_reservation_order_at_hold.sql` (신규, TDD)
@@ -197,6 +201,79 @@ frozen_files (해당 시 Claude Code 전용 — Cursor 수정 금지, GATE C 필
 
 다음 단계: 3개 시나리오 전부 Stage에서 실사용 검증 완료 — Production(vnbpmvxruyciuuaermyh)
 마이그레이션 적용 승인 필요(Stephen 확인 후 진행). 적용 후 git commit은 Stephen 직접 실행.
+
+### Production 적용 완료 (2026-08-17, 이 세션, Stephen 명시 지시)
+
+- `20260817060000_280_reservation_order_at_hold.sql`을 crazyshot production(vnbpmvxruyciuuaermyh)에
+  Stage와 동일 내용으로 적용(`apply_migration`, 사전 project_id 재확인 완료 — 적용 전 함수·테이블
+  부재 확인).
+- 적용 후 읽기전용 검증(실제 고객 데이터는 건드리지 않음):
+  - `create_reservation_order`/`create_checkout_order` GRANT가 `service_role`(+`postgres` 소유자)
+    전용으로 정확히 적용됨(anon/authenticated 없음) — `role_routine_grants` 직접 조회 확인.
+  - `order_items_reservation_id_uq` 부분 유니크 인덱스 생성 확인.
+  - `get_advisors(security)` — `order_key_sequences` 관련 WARN 1건("정책이 anon 롤에도 기술적으로
+    걸려있다"는 Supabase 어드바이저의 일반 패턴, `auth.role()='service_role'` USING절로 실제 제한됨,
+    기존 `order_items`도 동일 WARN 보유 — 신규 CRITICAL/ERROR 없음).
+- GSD-1/GSD-2(rental-siblings API, RentalDetailPanel UI)는 DB 마이그레이션이 아니라 이미 코드
+  배포(Vercel) 대상이므로 별도 DB 적용 불필요 — Stephen이 git commit 후 배포하면 Production에도
+  자동 반영됨.
+
+**미완료(Stephen 직접 실행 필요)**: git commit(수정 파일: 신규 마이그레이션 1개,
+`src/routes/api/reservations/create-order/+server.ts`(신규),
+`src/routes/api/cms/reservations/[id]/rental-siblings/+server.ts`(신규),
+`src/routes/cart/+page.svelte`(수정), `src/lib/components/cms/RentalDetailPanel.svelte`(수정)) →
+Vercel 배포 확인.
+
+### GATE E 검수 (2026-08-17, 이 세션 — @sp3-qa-agent, 이 세션 실제 변경 9개 파일로 범위 고정)
+
+`git diff -- <9개 파일 경로>`로 범위를 명시적으로 고정해 검수(공유 워킹트리에 다른 세션 변경분이
+섞여 있어 반드시 필요했던 조치). 결과:
+
+- ✅ 보안(service_role GRANT 정확성, `create_checkout_order` anon 노출 사고 Migration 251→251b
+  재발 여부), 멱등성 3분기 로직, 주문 생성 지점 단일화(카트 제출 1곳뿐, 상품 상세페이지에는
+  미추가 확인), `confirm-mock` 무변경, 부분 유니크 인덱스, `rental-siblings` 인증 게이트,
+  단일 상품 회귀 없음 — 전부 통과. `npx svelte-check`(0 ERRORS)·`vitest confirmMock.test.ts`
+  (11/11) 재확인.
+- ❌→✅ **1건 지적 후 즉시 수정**: 마이그레이션 파일에 `-- ROLLBACK` 주석 블록이 없었고, 이
+  NOW 엔트리의 기존 "실패롤백" 문구("파일 삭제")가 `CREATE OR REPLACE`로 기존 함수를 대체한
+  뒤 Production까지 적용된 상황과 맞지 않는 부정확한 서술이었음(S2 체크리스트 위반) — 마이그레이션
+  파일 하단에 실행 가능한 롤백 SQL 주석 추가 + 위 "실패롤백" 항목 정정 완료.
+- 참고(비차단): `src/routes/cms/+layout.svelte`의 현재 uncommitted diff에 이번 세션 범위 밖인
+  고객관리 '설정' 서브메뉴 링크 1줄이 섞여 있음(다른 세션 작업 잔재로 추정) — 기능 문제 없음,
+  커밋 시 포함 여부만 Stephen 판단 필요.
+
+**GATE E 판정: 통과(재검수 없이 커밋 가능)** — 위 1건은 세션 내에서 즉시 보강 완료.
+
+---
+
+## DONE — CMS 예약/대여 메뉴 통합 + 예약대여현황 공용 탭바 신설 (2026-08-17, 이 세션) — ✅ 완료
+[🟡 BOUNDARY/🟢 ROUTINE, GATE B 불필요 — 위 CRITICAL 항목("예약 신청 시점 주문 연결...") 착수
+전, 같은 세션에서 먼저 처리된 별개 아젠다. Stephen이 순차적으로 GNB 메뉴 재배치 → 로컬 탭바
+디자인 조정을 여러 차례 지시, 매 지시 완료 시 결과만 보고하고 진행(BOUNDARY/ROUTINE 자동 진행
+원칙)]
+
+아젠다: GNB '예약' 메뉴를 제거하고 '대여' 메뉴 하위로 '예약목록'·'계약서양식' 서브메뉴를
+흡수 → 이후 '예약목록'·'대여현황' 두 서브메뉴를 다시 '예약대여현황' 1개로 통합하고, 그 안에서
+두 목록 화면을 로컬 탭바로 전환하는 화면 UI 재구성. 라우트·RPC·데이터 로직은 전혀 변경하지
+않은 순수 내비게이션/레이아웃 작업.
+
+수정 내역:
+- `src/routes/cms/+layout.svelte` — GNB '예약' 메뉴 제거, 서브메뉴를 '대여' 메뉴로 흡수 후 최종
+  '예약대여현황' 1개 항목(href `/cms/reservation`)으로 통합. `resolveActiveMenuId`/
+  `isSubTabActive`를 `/cms/reservation`·`/cms/rentals` 양쪽 경로에서 정확히 활성 표시되도록 보정.
+- `src/lib/components/cms/ReservationRentalTabBar.svelte`(신규) — '예약목록'(→예약현황)·
+  '대여현황' 2개 탭을 렌더링하는 공용 컴포넌트. 현재 경로 기준 활성 탭 표시. 이후 Stephen 지시로
+  탭 라벨 '예약목록'→'예약현황' 변경, 폰트 토큰 2단계 상향(`--text-pc-body-14`→`--text-pc-title-18`),
+  가로 패딩 20%→20% 추가 확장(16px→19.2px→23.04px), 하단 구분선 제거.
+- `src/routes/cms/reservation/+page.svelte` — 위 탭바 삽입, 페이지 제목(h1) 중복 레이아웃 제거,
+  설명 문구를 탭바 아래로 재배치.
+- `src/routes/cms/rentals/+page.svelte` — 동일 패턴 적용 + 기존 임시 "예약목록 →" 링크 및 관련
+  CSS를 탭바로 대체(제거).
+
+검증: 매 단계 `npx svelte-check` 신규 에러 0건 확인(회귀 없음). 데이터/로직 변경이 없는 순수
+UI 작업이라 별도 DB 검증 불필요.
+
+**미커밋** — 아래 CRITICAL 항목과 함께 Stephen이 git commit 예정.
 
 ---
 
@@ -19982,5 +20059,139 @@ svelte-check 0 errors/326 warnings, 대상 파일 기존 경고 3건과 무관�
 부재는 순수 표시 함수·단순 분기라 리스크 수용 가능 판단. 문서(TASK.md/GSD_LOG.md) 기록 실제
 diff·검증 결과와 정확히 일치. 범위도 코드 1개+문서 3개로 정확히 한정 확인(그 외 병렬세션
 산출물은 범위 밖으로 배제).
+
+**GATE E: ✅ 통과 — 블로킹 0건. 커밋은 Stephen 직접 실행.**
+
+## NOW — 채팅 고도화 후속 세션 기록 (2026-08-17, 이 세션 단독 — 병렬세션 작업 제외)
+
+생성일: 2026-08-17
+아젠다: `## NOW — 채팅 고도화 항목 (2026-08-09)`(line 11045)의 직접 후속. 같은 세션 내에서
+Stephen이 순차로 요청한 6건: ① 게스트 CMS 진행탭 미노출 버그 원인분석+수정, ② 대기→종료 자동전환
++ 대여완료→종료 자동전환 신규 구현, ③ /account/rental 카드별 채팅 아이콘 버튼, ④ 그 버튼이
+공통 플로팅 채팅 모달을 호출하도록 수정, ⑤ 모달에 예약 정보 대화카드 노출, ⑥ CMS 관리자 뷰에서
+그 카드가 안 보이던 필터 버그 수정.
+
+[CONTEXT BRIDGE]
+plan_source: 이 세션의 실제 코드 변경 + Supabase MCP로 stage(ezyvffjvuwmtuhpxdjrw) 직접 조회/적용
+핵심제약: ANTHROPIC_API_KEY 관련 코드 미접촉(계속 보류), 기존 마이그레이션 파일 직접 수정 없음(전부 신규 파일)
+TDD도메인: 없음 (GSD)
+
+---
+
+### ① CMS 상담 대시보드 '진행중' 목록 실시간 미노출 — 원인분석 + 수정
+
+**원인**: `chatService.ts`의 `subscribeToSessions()`가 Realtime 채널명을 고정 문자열 `'chat:sessions'`로
+사용. `CmsDashboardConsultCards.svelte`(대시보드 카드)와 `AdminChatPanel.svelte`(`/cms/chat`) 두
+화면이 동시에 이 이름으로 구독을 시도해 두 번째 구독의 `.on()` 콜백이 붙지 않는(Supabase JS
+"동일 채널명 재구독" 실패 패턴 — 같은 파일의 `subscribeToChatMessages`/`subscribeToAllMessages`는
+이미 고유ID 접미사로 이 문제를 회피하고 있었으나 `subscribeToSessions`만 누락) 충돌.
+**수정**: 매 호출마다 `_sessionsChannelSeq` 증분 고유ID를 채널명에 부여(`chat:sessions:${uid}`).
+
+### ② 대기→종료 자동전환(3일) + 대여완료→종료 자동전환 — 신규 구현
+
+Stephen 확정 3규칙 재검증 결과: 규칙1(진행중 노출·정렬·신규감지)·규칙2(진행중→대기, 3시간
+pg_cron)는 이미 정상 동작 확인(①의 채널버그가 유일한 결함이었음). 규칙3(→종료)만 미구현이었음.
+
+- Migration 278(`chat_auto_close_stale_pending_sessions`): `pending` 상태가 **3일**(Stephen 확정,
+  대안 24시간/7일 중 선택) 초과 시 `closed` 자동 전환. pg_cron 1시간 주기.
+- Migration 279: `chat_sessions.context_reservation_id`(bigint, `rental_reservations.id` FK) 신규
+  컬럼 — 기존 `context_id`(uuid)는 예약(bigint)을 애초에 담을 수 없던 타입 불일치였음(레거시 3건은
+  전부 무효 참조였음을 DB 직접 조회로 확인). `rental_reservations.status`가 `completed`로 바뀌는
+  트리거(`trg_auto_close_chat_on_rental_completed`)로 연결된 상담을 자동 `closed` 전환.
+  — Stephen 결정: "상담 생성 시 연결값을 제대로 저장하도록 먼저 수정" 후 자동종료 연결(옵션3 채택).
+
+두 마이그레이션 모두 **stage(ezyvffjvuwmtuhpxdjrw)에만 적용 완료**, production 미적용
+(Stephen 요청 시 별도 적용).
+
+### ③④⑤ /account/rental 카드별 채팅 버튼 → 공통 플로팅 모달 → 예약 정보 대화카드
+
+1차 구현(③④)은 `<a href="/chat?context=...">` 개별 페이지 이동 방식으로 시작했으나 Stephen이
+"공통 플로팅 그룹 채팅 모달을 호출할 것"으로 정정 요청해 재설계:
+
+- `chat.svelte.ts`: `openChatWithContext()` 액션 신설 — `chatStore.contextOverride`에 컨텍스트를
+  담고 `isOpen=true`. 모달을 닫으면(`closeChat`/`toggleChat`) `contextOverride`를 초기화해 다음
+  전역 FAB 클릭은 일반 상담으로 복귀.
+- `ChatWindow.svelte`: `effectiveContextType/Id/ReservationId` — props보다 `chatStore.contextOverride`
+  우선. `$effect` 반응성 확보를 위해 이 값들을 `initSession()`의 **첫 await 이전**(동기 구간)에서
+  읽도록 배치(Svelte 5 이펙트 의존성 추적은 첫 await 이전 동기 읽기만 캡처됨 — 원래 코드는 이
+  구간에 아무 읽기도 없어 mount 시 1회만 실행되던 구조였음, 이번에 명시적으로 고침).
+- `/account`는 루트 `+layout.svelte`에서 FloatingBar가 제외돼 있어(cart/search 아이콘 무관),
+  `FloatingButton.svelte`에 `hideFab` prop 신설(원형 FAB는 숨기고 `ChatBottomSheet` 모달만 마운트)
+  → `/account/rental/+page.svelte`에 직접 마운트.
+- `ChatIcon.svelte`(공통 컴포넌트) 신설 — 플로팅 FAB의 SVG를 그대로 분리, `FloatingButton.svelte`도
+  이걸 재사용하도록 리팩터링(아이콘 중복 제거). PC 반응형 40px 축소는 자식 컴포넌트 경계를 넘어야
+  해서 `:global(svg)`로 수정.
+- 예약 정보 대화카드(⑤): 다른 액션카드와 동일한 `RESERVATION_STATUS_CARD` 타입 재사용 — 배너
+  UI로 먼저 구현했다가 Stephen이 "대화카드 UI로"로 정정해 재설계. `chatReservationCard.ts`
+  (`ensureReservationCard`, idempotent — 이미 카드 있으면 재삽입 안 함) + 신규 엔드포인트
+  `POST /api/chat/sessions/[id]/reservation-card` — `ChatWindow`가 세션 확정 직후(신규 생성이든
+  기존 open 세션 재사용이든 둘 다) 항상 호출해 카드 유무를 보장. `ActionPayload`에 `rental_period`
+  필드 신규 추가(기존엔 대여기간을 표시할 필드가 없었음), `ActionCard.svelte`에 렌더링 추가.
+  CTA "예약 상세 보기" → `/account/rental` 랜딩.
+
+### ⑥ CMS 관리자 뷰 예약 정보 카드 미노출 — 원인분석 + 수정
+
+**원인**: `AdminChatPanel.svelte`의 기본 메시지 필터가 `sender_type='ai'`를 전부 숨김(AI 챗봇의
+자유응답 텍스트가 관리자 뷰를 어지럽히는 걸 막으려던 기존 의도). 신규 예약 카드도 시스템이
+`sender_type:'ai'`로 삽입해 같은 필터에 함께 걸림. `sender_type:'admin'`으로 바꾸는 대안은
+검토 후 기각(`MessageList.svelte`가 `admin` 발신 메시지를 "관리자 본인이 보낸 것"으로 간주해
+우측정렬 own 버블로 잘못 표시하게 됨).
+**수정**: 필터 조건 자체를 `sender_type !== 'ai' || message_type === 'action_card'`로 변경 —
+AI의 자유텍스트만 숨기고, 발신자와 무관하게 액션카드(구조화 정보)는 항상 노출.
+
+---
+
+### 검증
+
+- `npx svelte-check` — 0 errors / 326 warnings (세션 시작 시점과 동일 baseline, 신규 경고 0건)
+- DB 직접 조회로 실증: 예약69(`CSREV260700052`, SONY PXW-Z90, 2026-08-14~08-15) 세션의
+  `context_reservation_id` 정상 저장 확인, migration 278/279 함수·트리거·cron job 등록 확인
+- 브라우저 자동 조작 없이 Stephen이 제공한 스크린샷(선택 요소) 기반으로 반복 확인·수정
+
+### 수정 파일 (이 세션에서 아직 커밋되지 않은 부분만 — 나머지는 이미 이전 커밋에 반영됨)
+
+```
+src/lib/components/chat/ActionCard.svelte                          (MODIFY)
+src/lib/components/chat/AdminChatPanel.svelte                      (MODIFY)
+src/lib/components/chat/ChatWindow.svelte                          (MODIFY)
+src/lib/components/chat/FloatingButton.svelte                      (MODIFY)
+src/lib/components/common/ChatIcon.svelte                          (NEW)
+src/lib/server/chatReservationCard.ts                               (NEW)
+src/lib/services/chatService.ts                                    (MODIFY)
+src/lib/stores/chat.svelte.ts                                      (MODIFY)
+src/lib/types/chat.ts                                               (MODIFY)
+src/routes/account/rental/+page.svelte                             (MODIFY)
+src/routes/api/chat/reservation-status/[id]/+server.ts             (MODIFY)
+src/routes/api/chat/session/+server.ts                             (MODIFY)
+src/routes/api/chat/sessions/[id]/reservation-card/+server.ts      (NEW)
+src/routes/chat/+page.server.ts                                    (MODIFY)
+src/routes/chat/+page.svelte                                       (MODIFY)
+supabase/migrations/20260817050000_278_chat_auto_close_stale_pending.sql       (NEW, stage 적용완료)
+supabase/migrations/20260817050100_279_chat_reservation_link_and_auto_close.sql (NEW, stage 적용완료)
+```
+
+
+### QA(@sp3-qa-agent) 검수 — 통과 (블로킹 0건)
+
+8개 핵심 포인트(채널충돌 수정·Svelte 5 이펙트 반응성·예약연결 소유권검증·대화카드 멱등성·
+관리자뷰 필터·마이그레이션 278/279 안전성·`/account/rental` 버튼·타입체크) 전부 실제 diff와
+대조해 확인 — TASK.md 서술과 코드 일치. `npx svelte-check` 재실행 결과도 0 errors/326 warnings로
+동일. 소유권 검증은 `/api/chat/session`(생성 시)과 `/api/chat/sessions/[id]/reservation-card`
+(카드 삽입 시) 이중으로 확인됨. Svelte 5 `$effect` 의존성 추적(첫 await 이전 동기 읽기만 캡처)
+원리와 실제 코드 배치가 정확히 일치함을 라인 단위로 검증. 마이그레이션 REVOKE/GRANT가
+service_role 전용으로 제한됨, 트리거가 다른 테이블만 갱신해 재귀 위험 없음 확인.
+
+추가 발견 2건(비블로킹):
+- [WARNING] `ActionCard.svelte`/`types/chat.ts`의 실제 diff에 이 세션 범위 밖 기능(통합
+  예약승인 카드 `items` 필드, Migration 275 — 병렬세션 산출물)이 함께 섞여 있어 이 세션
+  기록만으로는 diff 전체를 설명 못 함. 기능 자체는 정상(items.length>1 조건부, 충돌 없음).
+  → 커밋 시 Stephen에게 "이 부분도 함께 커밋할지" 확인 필요(범위 밖이라 이 세션에서 임의
+  분리하지 않음).
+- [MINOR] `reservation-status/[id]/+server.ts`의 응답 필드 확장(product_name 등)이 배너→
+  대화카드로 설계 변경되며 소비처가 사라져 죽은 코드로 남음 → **QA 직후 즉시 원상복구
+  완료**(status만 반환하는 원래 최소 계약으로 되돌림, svelte-check 0 errors 재확인).
+
+경미한 이론적 TOCTOU(동시 요청 시 카드 중복 삽입 가능성, 실사용 패턴상 발생 가능성 낮음)
+1건은 기록만 남기고 이번 범위에서는 수정하지 않음(현재 호출 패턴이 세션당 1회라 리스크 낮음).
 
 **GATE E: ✅ 통과 — 블로킹 0건. 커밋은 Stephen 직접 실행.**
