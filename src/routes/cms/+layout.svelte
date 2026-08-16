@@ -125,6 +125,7 @@
         { label: '멤버십',   href: '/cms/customers/membership' },
         { label: '스코어',   href: '/cms/customers/score' },
         { label: '빠른문의', href: '/cms/customers/inquiry' },
+        { label: '설정',     href: '/cms/customers/settings' },
       ],
     },
     {
