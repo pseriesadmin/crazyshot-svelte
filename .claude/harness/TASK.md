@@ -136,6 +136,36 @@ Stephen 지시로 이어서 완료. (2) 별도로 보고된 Vercel Production �
 수정 파일: `supabase/migrations/20260815000263_263_authenticated_rpc_lockdown.sql`(신규),
 `package.json`(1줄). git commit 미실행(Stephen 진행 대기).
 
+**⚠️ 후속 장애 발생·복구 (같은 날 즉시)**: migration 263 배포 직후 Stephen이 실서버
+`/cms/rental/history` 500 오류를 콘솔에서 직접 제보 — 263 감사 방법론의 사각지대(변수
+간접참조로 locals.supabase를 재사용하는 호출부를 리터럴 grep이 놓침)로 인한 회귀 2건
+확인·즉시 복구:
+  - `get_product_history`/`get_product_history_multi`/`upsert_product_history_record`/
+    `delete_product_history_record` (src/routes/api/cms/product-history/+server.ts,
+    `sb = locals.supabase` 패턴)
+  - `get_promotion_analytics` (src/routes/cms/promotion/analytics/+page.server.ts,
+    `db = locals.supabase` 패턴) — 재감사 중 선제 발견, 배포 전 조치
+  → `supabase/migrations/20260816000270_270_hotfix_restore_product_history_authenticated.sql`,
+    `20260816000271_271_hotfix_restore_promotion_analytics_authenticated.sql` 신규(Stage+
+    Production 적용·검증 완료). 나머지 65개는 리시버 변수 전수 재확인 결과 전부 정상(admin()/
+    db() 팩토리 함수가 SUPABASE_SERVICE_ROLE_KEY 사용함을 직접 확인).
+  → 동시 제보된 `/api/cms/reservations/16/tracking 404`는 별건(미배포 커밋 차이, 이번
+    svelte-sonner 수정 배포 시 자동 해소 예상) — 조치 불필요, 확인만.
+  → 마이그레이션 번호 264/265 최초 배정 시 타 세션과 충돌 발견 → 270/271로 재배치.
+    **BACKLOG**: 여러 세션 병행으로 마이그레이션 번호 경합이 반복 발생 — 신규 마이그레이션
+    작성 전 저장소 전체 최댓값 확인 절차를 harness 규칙에 명문화 필요.
+
+**⚠️ 3번째 회귀 발견·복구 (@sp3-qa-agent 재검수로 발견)**: 270/271 적용 후 "나머지 65개
+함수는 admin/db 리시버 변수명 기준 전수 확인해 전부 정상"이라는 자체 결론을
+@sp3-qa-agent에게 독립 재검증 요청 → 그 전제 자체가 틀렸음이 드러남. `promotion/segment/
++page.server.ts`·`api/cms/segment/refresh/+server.ts`가 `const admin = locals.supabase`
+(변수명만 admin, 실제 authenticated)로 `get_segment_stats`/`get_segment_users`/
+`refresh_user_segments`를 호출 중이었는데 미복구 상태로 방치돼 있었음(둘 다 서버측
+cms_role 체크 존재 확인 — 보안 회귀 아닌 가용성 회귀). →
+`supabase/migrations/20260816000272_272_hotfix_restore_segment_authenticated.sql` 신규
+(Stage+Production 적용·검증 완료). **재발방지 원칙 확정**: authenticated 재점검 시
+리시버 변수명이 아니라 할당 우변(locals.supabase 원본 여부)을 반드시 추적할 것.
+
 ---
 
 ## DONE — 전자계약 xlsx 임포트 → 스프레드시트 모드 전환 신규 구현 T9~T15 (2026-08-15) — GATE E 통과
@@ -16684,7 +16714,56 @@ TDD도메인: 해당 — AGENTS.md TDD 강제 키워드 대조 결과 "결제·�
 존재/동작함은 허위 함수명 호출 시 PGRST202가 발생하는 것과 대조해 확인했으므로 "이미 GREEN"이
 로컬 목/오탐이 아님을 검증함.
 
-## DONE — 전자계약 "문서 가져오기" 엑셀 임포트 → 스프레드시트 모드 전환 신규 구현 (2026-08-15) — ✅ GATE E 통과(4라운드 QA) + Stephen 실사용 테스트 발견 2건 수정(5라운드) + 변수칩 패널 연동 V2 신규개발(6라운드) + 변수칩 16개 전수감사·삽입로직 결함 1건 수정(7라운드) + CSS 동적임포트 Vite 로딩실패 수정(8라운드) + 삽입 여전히 미반영 근본원인(onselection 배치 오류) 확정·수정(9라운드) + 서명·직인 이미지 셀 삽입 V3 신규개발(10라운드) + 이미지 삽입 방식을 "셀 교체"→"텍스트 위 오버레이"로 재설계(11라운드) + 문서형과 동일한 이미지 크기설정 바 추가(12라운드) + 크기조절 시각적 미반영 + 너비입력창 빈값 표시 결함 수정(13라운드) + 이미지가 여전히 셀 안에 클리핑되던 jspreadsheet-ce 기본 CSS 2건 확정·수정(14라운드) + 서명/직인 이미지 삭제 기능 신규개발 — 스프레드시트 모드(15라운드) + 문서형(흐름형) 모드(16라운드) + 이미지 레이어 선택·드래그이동·삭제 신규개발(17라운드), migration 264·265 Stage+Production 양쪽 적용·검증 완료 / ⚠️ 5개 파일이 다른 세션의 커밋에 의해 이미 origin/stage에 푸시됨(아래 참고) — 나머지 파일은 여전히 다른 세션의 통합 커밋 대기 중, 이 세션에서 추가 커밋 실행 안 함(Stephen 명시 지시, 2026-08-16)
+## DONE — 전자계약 "문서 가져오기" 엑셀 임포트 → 스프레드시트 모드 전환 신규 구현 (2026-08-15) — ✅ GATE E 통과(4라운드 QA) + Stephen 실사용 테스트 발견 2건 수정(5라운드) + 변수칩 패널 연동 V2 신규개발(6라운드) + 변수칩 16개 전수감사·삽입로직 결함 1건 수정(7라운드) + CSS 동적임포트 Vite 로딩실패 수정(8라운드) + 삽입 여전히 미반영 근본원인(onselection 배치 오류) 확정·수정(9라운드) + 서명·직인 이미지 셀 삽입 V3 신규개발(10라운드) + 이미지 삽입 방식을 "셀 교체"→"텍스트 위 오버레이"로 재설계(11라운드) + 문서형과 동일한 이미지 크기설정 바 추가(12라운드) + 크기조절 시각적 미반영 + 너비입력창 빈값 표시 결함 수정(13라운드) + 이미지가 여전히 셀 안에 클리핑되던 jspreadsheet-ce 기본 CSS 2건 확정·수정(14라운드) + 서명/직인 이미지 삭제 기능 신규개발 — 스프레드시트 모드(15라운드) + 문서형(흐름형) 모드(16라운드) + 이미지 레이어 선택·드래그이동·삭제 신규개발(17라운드) + 셀 병합 아이콘 재라벨링 + A4 폭 맞춤·A4 출력·확대축소 신규개발(18라운드), migration 264·265 Stage+Production 양쪽 적용·검증 완료 / ⚠️ 5개 파일이 다른 세션의 커밋에 의해 이미 origin/stage에 푸시됨(아래 참고) — 나머지 파일은 여전히 다른 세션의 통합 커밋 대기 중, 이 세션에서 추가 커밋 실행 안 함(Stephen 명시 지시, 2026-08-16)
+
+[18라운드 — 셀 병합 아이콘 재라벨링(기능 자체는 원래 존재) + A4 폭 맞춤·A4 출력·확대축소 3종 신규개발, 2026-08-16]
+  Stephen 제보: "스프레드시트 편집 메뉴에 셀 병합 기능이 없으며, 일부 기능도 누락되는 의심증상이
+  있으니 원본 오픈소스 기능과 비교 확인 후 추가할 것. -a4 출력 메뉴도 추가해. -a4 용지 맞춤
+  보조도구 추가해. -문서 확대 축소 메뉴 추가해."
+  ① 셀 병합 — jspreadsheet-ce 압축 번들 소스(node_modules/jspreadsheet-ce/dist/index.js)를
+     직접 grep해 기본 툴바 전체 구성을 확인: undo·redo·save·폰트·정렬·굵게·글자색·배경색·
+     세로정렬·**"web" 아이콘(지구본, setMerge/removeMerge 호출 — 실제로는 병합 버튼)**·
+     테두리·전체화면까지 이미 전부 포함돼 있었음. 즉 "기능 없음"이 아니라 병합 기능의 기본
+     아이콘이 지구본(🌐)이라 병합으로 인식이 안 된 것(오인식) — 다른 누락 기능은 없음(전체
+     배열 끝까지 확인 완료, fullscreen이 마지막 항목).
+     수정: 기능 재구현 없이(라이브러리 로직 그대로 재사용) `toolbar` 옵션을
+     `(defaultToolbar) => {...}` 함수형으로 바꿔 `content === 'web'`인 항목만 찾아
+     `content: 'merge_type'`(병합을 뜻하는 표준 아이콘) + 한국어 툴팁으로 교체.
+  ② A4 폭 맞춤 — `fitColumnsToA4()` 신규. 로드 시점엔 이미 `sheetToWorksheetConfig()`가
+     `fitColumnWidthsToTarget()`(고객화면 렌더러 spreadsheetRender.ts와 동일 함수, 기존
+     존재·재사용)로 컬럼폭을 A4 본문폭(642px) 안에 맞춰주지만, 이후 사용자가 컬럼 경계를
+     드래그해 넓히면 다시 벗어날 수 있어 재적용 버튼을 추가 — 활성 시트의 실제 폭을 다시 읽어
+     동일 함수로 재계산 후 `ws.setWidth()`로 그리드에 즉시 반영.
+  ③ A4 출력 — `printAsA4()` 신규. 그리드 원본(툴바·행렬헤더·선택하이라이트 포함)을 그대로
+     인쇄하면 고객이 보는 화면과 다르므로, 고객 서명화면·발송전 미리보기가 이미 쓰는 동일한
+     `renderSpreadsheetToHtml()`(spreadsheetRender.ts, 42개 테스트로 검증된 순수 함수, 기존
+     존재·재사용)로 현재 편집 상태를 HTML로 변환해 새 창에 띄운 뒤 인쇄 — 인쇄 결과가 곧
+     고객이 보게 될 화면과 100% 동일한 마크업이 되도록 보장. 팝업 차단 시 안내 토스트.
+     이미지(서명/직인) 로딩 완료를 기다린 뒤 인쇄(빈칸 인쇄 방지, `<img>` load/error 이벤트
+     대기 방식).
+     ⚠️ 구현 중 발견한 함정: 최초 버전은 `document.write()`로 `<style>...</style>` 문자열을
+     조립했는데, 그 문자열이 script 블록 내부에 있다 보니 **Svelte 컴파일러의 상위 태그
+     스캐너가 그 리터럴 텍스트를 실제 최상위 style 블록 시작으로 오인**해 CSS 파싱 에러가
+     발생함(svelte-check로 확인). DOM API(`createElement('style')` + `textContent`)로
+     팝업 문서를 직접 구성하는 방식으로 교체해 해결 — 문자열 리터럴에 태그 마크업 자체가
+     아예 존재하지 않게 됨. 코드 주석에서도 같은 이유로 태그 리터럴 표기를 피해 서술.
+  ④ 확대/축소 — `zoomPercent`(50~200%, 10% 단위) 신규, `ContractDocumentEditor.svelte`의
+     기존 줌 컨트롤(CSS `zoom` 속성 기반, transform:scale과 달리 레이아웃이 재계산돼 빈
+     여백이 안 생김)과 동일 패턴을 그대로 이식 — `.spreadsheet-container`에
+     `zoom: var(--cse-zoom)`.
+  타입 안전성: `JssWorksheetInstance`에 `setWidth(column, width)` 추가(런타임 가드
+  `isWorksheetLike()`에도 포함) — 기존 테스트(`spreadsheetWidgetAdapter.test.ts`)의 목업
+  객체가 이 신규 필수 메서드를 안 갖춰 타입에러 발생 → 목업에 `setWidth: () => {}` 추가로 해결.
+  `toolbar` 함수 콜백은 라이브러리 타입(`ToolbarItem` 유니언에 `content` 없는 divisor 타입
+  포함)과의 구조적 불일치를 피하기 위해 매개변수 타입 명시를 생략(콜 사이트 문맥추론에 위임)하고
+  개별 항목은 `unknown` 경유 `Record<string, unknown>` 캐스팅으로 다룸 — 이 파일의 기존
+  duck-type 가드(`isSpreadsheetParent`/`isWorksheetLike`) 관례와 동일, `any` 미사용
+  (H-06 준수).
+  검증: svelte-check 신규 에러 0건(기존 무관 에러 1건 `products/search/+page.svelte`은
+  이번 세션 미수정 파일), 관련 vitest 3개 파일 73/73 통과, `npm run build` 성공.
+  ⚠️ 병합 버튼 클릭 시 실제로 셀이 병합되는지, A4 출력 팝업이 정상 열리는지, 확대/축소가
+  시각적으로 잘 작동하는지는 Claude Browser 사용 금지 원칙상 코드·타입·테스트로만 확인—
+  Stephen 로컬 재확인 필요.
 
 [⚠️ 예상 밖 부분 커밋 발견 — 2026-08-16 07:13, 17라운드 작업 중]
   git status 확인 중 `src/lib/types/sheet-format.ts`가 이미 HEAD(커밋 `6192c91 feat(db):
