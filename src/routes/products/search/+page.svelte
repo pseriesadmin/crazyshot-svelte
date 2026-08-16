@@ -105,7 +105,7 @@
 <div class="page-root">
 
   <!-- ── Sub GNB (표준 front 디자인 시스템 GNB-NaviBar) ── -->
-  <SubGnb title="검색" noCatIcons noGnbOffset />
+  <SubGnb title="검색" noGnbOffset />
 
   <!-- ── 검색 입력 ── -->
   <section class="search-bar-section">

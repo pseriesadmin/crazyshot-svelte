@@ -135,9 +135,16 @@ Class D (보안 위반) → 즉시 중단
 ❌ Claude 네이티브 TaskCreate/TaskUpdate 도구 사용 금지 → .claude/harness/TASK.md 직접 편집
 ❌ 요청 범위 외 파일·코드 수정 금지 — 요청에 명시되지 않은 파일은 읽기만 허용, 수정 절대 금지
    → 범위 외 수정이 필요하다고 판단될 경우 반드시 Stephen에게 먼저 확인 후 진행
-❌ Claude Browser(mcp__Claude_Browser__*) 사용 금지 — 브라우저 기동·스크린샷·DOM 읽기 모든 동작 포함
+❌ Claude Browser(mcp__Claude_Browser__*) 사용 금지(기본값) — 브라우저 기동·스크린샷·DOM 읽기 모든 동작 포함
    → UI 확인은 Stephen이 직접 선택한 <launch-selected-element> 컨텍스트 또는 소스코드 Read로 대체
    → 이유: 이미지 토큰 과소비 + 실행 시간 과다 → 효용성 없음 (2026-07-28 확정)
+   → ✅ 조건부 허용(2026-08-17 추가) — 아래 ①·② 중 하나에 해당할 때만 그 범위 내에서 해제:
+      ① Claude Browser로 요소가 선택되어(<launch-selected-element>) 그 브라우저 세션이
+         진행 중인 동안 — 해당 세션에 한해 능동적 접근·조작 허용
+      ② 세션 채팅에서 Stephen이 "Claude Browser 실행"을 명시적으로 요구한 경우 — 그 요청에
+         한해 접근 허용
+      → ①·② 어디에도 해당하지 않는 상황(Claude가 스스로 판단해 먼저 켜는 것)은 여전히 금지.
+        허용된 사용이 끝나면 다시 기본값(금지)으로 복귀 — 다음 작업에 자동 이월되지 않음.
 ```
 
 ---
