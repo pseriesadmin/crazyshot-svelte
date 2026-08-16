@@ -24,4 +24,4 @@ export interface ContractTemplate {
   spreadsheet_document?:      unknown
 }
 
-export type ContractTemplateSummary = Pick<ContractTemplate, 'id' | 'title' | 'status' | 'created_at'>
+export type ContractTemplateSummary = Pick<ContractTemplate, 'id' | 'title' | 'status' | 'created_at' | 'authoring_mode'>
