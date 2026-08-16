@@ -1,5 +1,5 @@
 // 개발 전용 결제 완료 미리보기 — 실 Toss/DB 호출 없음
-// URL 파라미터로 화면 데이터를 직접 주입해 checkout → 결제완료 UI 흐름 테스트용
+// URL 파라미터로 화면 데이터를 직접 주입해 cart → 결제완료 UI 흐름 테스트용
 
 import type { PageLoad } from './$types'
 

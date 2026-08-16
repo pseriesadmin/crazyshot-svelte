@@ -1,6 +1,6 @@
 /**
  * cartFixtures.ts — 장바구니 UI 개발용 더미 데이터
- * 목적: /checkout 라우트에서 isDevMode=true 시 폴백 데이터 제공
+ * 목적: /cart 라우트에서 isDevMode=true 시 폴백 데이터 제공
  *
  * Stage DB (ezyvffjvuwmtuhpxdjrw) 실제 상품 정보 반영:
  *   Card 1 Main : Sony FX6-12           (98f44cf6-...) 24h 23,000 / 12h 53,000

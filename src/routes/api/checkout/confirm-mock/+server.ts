@@ -61,16 +61,23 @@ export const POST: RequestHandler = async ({ locals, request }) => {
     })
     if (!rpcErr) {
       confirmedReservations.push({ id: hold.id, reservationCode: hold.reservation_code })
-      await admin.rpc('send_rental_chat_notification', {
-        p_reservation_id: hold.id,
-        p_notify_type: 'reservation_approval'
-      })
       // 결제완료 관리자 푸시 병행 발송 (채팅과 독립 — 실패해도 위 처리에 영향 없음)
       await sendPaymentCompletedAdminPush(admin, hold.id, session.user.id, 0)
       // 예약승인 고객 푸시 병행 발송 (기존엔 관리자 푸시만 있었음 — 실결제 자동승인 경로에
       // 고객 FCM 푸시가 누락돼 있던 갭 수정, 2026-08-09)
       await sendReservationLifecyclePush(admin, hold.id, 'reservation_approval')
     }
+  }
+
+  // 상담채팅 승인 알림 — 대여반출납 옵션 단일화 정책(2026-08-17)에 맞춰 이번 체크아웃 배치로
+  // 승인된 예약 전체를 예약 건별 개별 호출이 아닌 단일 RPC 호출로 하나의 통합 카드로 발송
+  // (Migration 275 send_rental_chat_notification_batch — 기존 단건 RPC는 다른 알림 타입에서
+  // 계속 그대로 사용되므로 건드리지 않음)
+  if (confirmedReservations.length > 0) {
+    await admin.rpc('send_rental_chat_notification_batch', {
+      p_reservation_ids: confirmedReservations.map((r) => r.id),
+      p_notify_type: 'reservation_approval'
+    })
   }
 
   // 선택된 쿠폰 소진 처리 — 예약이 1건 이상 확정된 경우에만 적용

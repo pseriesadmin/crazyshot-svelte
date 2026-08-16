@@ -18,7 +18,8 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
  *   add_inventory (count=1, sourcePriceRulesInv=[]):
  *     1. from('products') — source lookup (select.eq.is.single)
  *     2. from('price_rules') — source price rules (select.eq.eq.is → [])
- *     3. from('products') — INSERT (insert.select.single)
+ *     3. from('products') — slug uniqueness check (select.eq.is.maybeSingle → null, RTN-3)
+ *     4. from('products') — INSERT (insert.select.single)
  *
  *   new_product (count=1, sourcePriceRules=[], autoCode=true):
  *     1. from('products') — source lookup (select.eq.is.single)
@@ -115,7 +116,18 @@ function makeAddInventoryAdmin(config: AddInventoryStubConfig = {}) {
     }),
   });
 
-  // Call 3: from('products') — new product INSERT
+  // Call 3: from('products') — slug uniqueness check (RTN-3: add_inventory 모드에도 slug 중복확인 적용)
+  fromFn.mockReturnValueOnce({
+    select: vi.fn().mockReturnValue({
+      eq: vi.fn().mockReturnValue({
+        is: vi.fn().mockReturnValue({
+          maybeSingle: vi.fn().mockResolvedValue({ data: null, error: null }),
+        }),
+      }),
+    }),
+  });
+
+  // Call 4: from('products') — new product INSERT
   fromFn.mockReturnValueOnce({
     insert: insertFn,
   });

@@ -26,6 +26,20 @@
   let u_valid_until     = $state(coupon.valid_until ? coupon.valid_until.substring(0, 10) : '')
   let updateLoading     = $state(false)
 
+  // coupon prop 변경 시(invalidateAll 후) 편집 필드 재동기화 — ProductDetailPanel $effect 패턴 동일
+  $effect(() => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const ccEff = coupon as any
+    u_discount_type  = coupon.discount_type
+    u_discount_value = coupon.discount_value
+    u_max_discount   = ccEff.max_discount_amount ?? 0
+    u_usage_limit    = coupon.usage_limit ?? 0
+    u_user_grade     = ccEff.user_grade_required ?? ''
+    u_validity_type  = ccEff.validity_type ?? 'fixed_period'
+    u_valid_from     = coupon.valid_from  ? coupon.valid_from.substring(0, 10)  : ''
+    u_valid_until    = coupon.valid_until ? coupon.valid_until.substring(0, 10) : ''
+  })
+
   // ─ 배포 대상 ─
   let distTargetT  = $state<'all' | 'grade' | 'specific_user'>('all')
   let distGrade    = $state('')

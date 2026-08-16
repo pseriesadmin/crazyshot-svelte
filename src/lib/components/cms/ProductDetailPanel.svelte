@@ -318,9 +318,16 @@
     localSpecs = Object.entries(product.specifications ?? {}).map(([key, value]) => ({ key, value }))
     localComponents = Object.entries((product as ProductWithComponents).components ?? {}).map(([key, value]) => ({ key, value }))
     localSlug = product.slug
-    // is_active 재동기화: inv-bar-toggle 클릭 후 invalidateAll 시 product.is_active가 변경되나
-    // localBasic.is_active는 마운트 시점 값에 고정 → isDirtyBasic 오탐 방지
+    // localBasic 전체 재동기화: product prop 변경(invalidateAll) 시 기본정보 탭 isDirtyBasic 오탐 방지
+    localBasic.name     = product.name
+    localBasic.brand    = product.brand ?? ''
+    localBasic.caption  = product.product_caption ?? ''
+    localBasic.category = product.category
     localBasic.is_active = product.is_active
+    // 배송 옵션 재동기화: product prop 변경 시 isDirtyShip 오탐 방지
+    shipRoundTrip = product.shipping_round_trip ?? true
+    shipDelivery  = product.shipping_delivery   ?? true
+    shipReturn    = product.shipping_return     ?? true
     // priceRules/product 변경 시(저장 후 invalidateAll) localPricing 동기화 → isDirtyPricing 초기화
     localPricing = {
       price_12h:             fmtPriceStr(priceRules.find(r => r.duration_type === '12h')?.price),

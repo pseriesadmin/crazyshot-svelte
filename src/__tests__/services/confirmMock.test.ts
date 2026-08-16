@@ -157,10 +157,51 @@ describe('POST /api/checkout/confirm-mock — Happy: 지정된 예약만 승인'
       p_reservation_id: 5,
       p_new_status: 'confirmed',
     });
-    expect(admin.rpc).toHaveBeenCalledWith('send_rental_chat_notification', {
-      p_reservation_id: 5,
+    // 상담채팅 승인 알림 — 예약 건별 개별 호출이 아닌, 확정된 건 전체를 배열로 묶어
+    // 단일 RPC(send_rental_chat_notification_batch) 1회만 호출됨(Migration 275, 2026-08-17)
+    expect(admin.rpc).toHaveBeenCalledWith('send_rental_chat_notification_batch', {
+      p_reservation_ids: [5],
       p_notify_type: 'reservation_approval',
     });
+    expect(
+      admin.rpc.mock.calls.filter((call: unknown[]) => call[0] === 'send_rental_chat_notification_batch')
+    ).toHaveLength(1);
+  });
+});
+
+// ── HAPPY — 2건 이상 동시 승인 시 통합 알림 단일 호출 (2026-08-17 정책 변경) ──────
+describe('POST /api/checkout/confirm-mock — Happy: 2건 이상 동시 승인 → 통합 알림 1회', () => {
+  it('reservationIds:[다건] → 알림 RPC가 예약 건별이 아닌 배치로 정확히 1회만 호출됨', async () => {
+    const admin = makeAdminStub([
+      { id: 5, reservation_code: 'RSV-005' },
+      { id: 6, reservation_code: 'RSV-006' },
+    ]);
+    createClientMock.mockReturnValue(admin);
+
+    const res = await POST({
+      locals: makeLocals(),
+      request: makeRequest({ reservationIds: [5, 6] }),
+    } as unknown as Parameters<typeof POST>[0]);
+
+    const json = await res.json();
+
+    expect(res.status).toBe(200);
+    expect(json.confirmedCount).toBe(2);
+
+    const batchCalls = admin.rpc.mock.calls.filter(
+      (call: unknown[]) => call[0] === 'send_rental_chat_notification_batch'
+    );
+    expect(batchCalls).toHaveLength(1);
+    expect(batchCalls[0][1]).toEqual({
+      p_reservation_ids: [5, 6],
+      p_notify_type: 'reservation_approval',
+    });
+
+    // 예약 건별 개별 알림 RPC는 더 이상 호출되지 않아야 함
+    const perItemCalls = admin.rpc.mock.calls.filter(
+      (call: unknown[]) => call[0] === 'send_rental_chat_notification'
+    );
+    expect(perItemCalls).toHaveLength(0);
   });
 });
 
