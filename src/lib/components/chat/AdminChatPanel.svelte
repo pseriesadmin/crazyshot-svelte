@@ -278,6 +278,9 @@
   let selectedUserId = $derived(selectedSession?.user_id ?? null)
 
   // GSD-7: 중요 카드만 보기 필터링
+  // 기본 뷰: sender_type='ai'인 메시지 중 "자유응답 텍스트"만 숨긴다(AI 챗봇 잡담이 관리자 뷰를
+  // 어지럽히던 문제) — action_card는 발신자가 ai여도 구조화된 실데이터(예약정보 등)라 항상 노출.
+  // 그렇지 않으면 예약 컨텍스트 요약 카드(chatReservationCard.ts) 등이 기본 뷰에서 보이지 않음.
   let filteredMessages = $derived(
     showImportantOnly
       ? messages.filter(
@@ -287,7 +290,7 @@
               ((m.action_payload as { type?: string } | null)?.type) ?? ''
             )
         )
-      : messages.filter((m) => m.sender_type !== 'ai')
+      : messages.filter((m) => m.sender_type !== 'ai' || m.message_type === 'action_card')
   )
 
   // 고객 기본정보 요약 (chat-header 노출용) — 선택된 세션의 user_id가 바뀔 때만 재조회

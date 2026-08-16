@@ -2,11 +2,33 @@
   import SubGnb from '$lib/components/common/SubGnb.svelte'
   import BottomTabBar from '$lib/components/common/BottomTabBar.svelte'
   import RentalJourneyStepper from '$lib/components/common/RentalJourneyStepper.svelte'
+  import ChatIcon from '$lib/components/common/ChatIcon.svelte'
+  import FloatingButton from '$lib/components/chat/FloatingButton.svelte'
+  import { openChatWithContext } from '$lib/stores/chat.svelte'
+  import { authState } from '$lib/stores/auth'
   import type { PageData } from './$types'
   import type { MyRental } from './+page.server'
 
   interface Props { data: PageData }
   let { data }: Props = $props()
+
+  // 공통 플로팅 채팅 모달(FloatingButton)이 이 화면(/account)에는 전역 레이아웃에서
+  // 마운트되지 않으므로 이 페이지에서 직접 마운트 — 루트 +layout.svelte와 동일한 파생 패턴
+  let chatUserId = $derived($authState.user?.id ?? 'test-user')
+  let chatUserName = $derived(
+    ($authState.user?.user_metadata?.full_name as string | undefined) ??
+    $authState.user?.email?.split('@')[0] ??
+    '테스트유저'
+  )
+  let chatUserHandle = $derived(
+    ($authState.user?.user_metadata?.username as string | undefined) ??
+    $authState.user?.email?.split('@')[0] ??
+    'test'
+  )
+
+  function openReservationChat(rentalId: string): void {
+    openChatWithContext({ context_type: 'reservation', context_reservation_id: Number(rentalId) })
+  }
 
   const STATUS_LABEL: Record<string, string> = {
     hold:             '신청대기',
@@ -54,9 +76,20 @@
           <div class="rental-card">
             <div class="card-head">
               <span class="code">{rental.reservation_code}</span>
-              <span class="status-chip" style="background:{st.bg};color:{st.color}">
-                {STATUS_LABEL[rental.status] ?? rental.status}
-              </span>
+              <div class="card-head-right">
+                <span class="status-chip" style="background:{st.bg};color:{st.color}">
+                  {STATUS_LABEL[rental.status] ?? rental.status}
+                </span>
+                <button
+                  type="button"
+                  class="chat-btn"
+                  onclick={() => openReservationChat(rental.id)}
+                  aria-label="이 대여 건으로 채팅 문의하기"
+                  title="채팅 문의"
+                >
+                  <ChatIcon size={28} />
+                </button>
+              </div>
             </div>
 
             {#if rental.product_name}
@@ -84,6 +117,10 @@
   </div>
 
   <BottomTabBar />
+
+  <!-- 이 화면(/account)은 루트 레이아웃에서 FloatingBar가 제외되어 있어, 카드별 채팅
+       버튼이 여는 공통 플로팅 채팅 모달(바텀시트)을 이 페이지에서 직접 마운트한다. -->
+  <FloatingButton userId={chatUserId} userName={chatUserName} userHandle={chatUserHandle} hideFab />
 </div>
 
 <style>
@@ -165,6 +202,29 @@
     font-weight: 700;
     white-space: nowrap;
   }
+
+  .card-head-right {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+  }
+
+  /* 대여 건별 채팅 문의 버튼 — 공통 플로팅 채팅 아이콘(ChatIcon) 재사용, 44×44 터치 타겟 */
+  .chat-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 44px;
+    height: 44px;
+    flex-shrink: 0;
+    background: none;
+    border: none;
+    padding: 0;
+    cursor: pointer;
+    transition: transform 0.15s;
+  }
+  .chat-btn:hover  { transform: scale(1.07); }
+  .chat-btn:active { transform: scale(0.95); }
 
   .product-row {
     display: flex;

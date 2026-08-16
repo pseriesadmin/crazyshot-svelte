@@ -39,6 +39,8 @@ export interface ActionPayload {
   reservation_id?: string
   reservation_no?: string
   product_name?: string
+  // RESERVATION_STATUS_CARD — "YYYY-MM-DD ~ YYYY-MM-DD" 형식 대여기간 표시용
+  rental_period?: string
   product_image?: string       // Cloudinary public_id
   button_label?: string
   button_color?: ActionCardButtonColor
@@ -67,6 +69,9 @@ export interface ActionPayload {
   // RETURN_REGISTRATION_CARD
   return_deadline?: string     // ISO 8601
   return_methods?: string[]    // ['택배', '직접 방문']
+  // reservation_approval 통합 카드(Migration 275) — 체크아웃 배치로 2건 이상 동시 승인 시
+  // 상품별 개별 카드 대신 하나의 카드 안에 항목 목록으로 표시(items.length > 1일 때만 사용)
+  items?: Array<{ reservation_no: string; product_name: string; return_deadline?: string }>
   // 만료 처리
   is_expired?: boolean
   // 자동답변 전용
@@ -80,6 +85,9 @@ export interface ChatSession {
   status: ChatSessionStatus
   context_type: ChatContextType
   context_id: string | null
+  // context_type='reservation' 전용 — context_id(uuid)로는 rental_reservations.id(bigint)를
+  // 담을 수 없어 신설된 전용 컬럼(Migration 279)
+  context_reservation_id: number | null
   created_at: string
   updated_at: string
   closed_at: string | null
@@ -146,6 +154,7 @@ export interface ChatIntentResponse {
 export interface CreateSessionRequest {
   context_type?: ChatContextType
   context_id?: string
+  context_reservation_id?: number
 }
 
 export interface SendMessageRequest {

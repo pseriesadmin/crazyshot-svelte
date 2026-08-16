@@ -32,9 +32,22 @@ export const POST: RequestHandler = async ({ request, locals }) => {
     // body 없으면 기본값 사용
   }
 
-  const { context_type = 'general', context_id } = body
+  const { context_type = 'general', context_id, context_reservation_id } = body
   const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
   const validContextId = context_id && UUID_RE.test(context_id) ? context_id : null
+
+  // context_reservation_id는 본인 소유 예약일 때만 신뢰 — 타 사용자 예약에 상담을 연결해
+  // 대여완료 자동종료(Migration 279 트리거) 등을 오염시키지 못하도록 소유권 검증
+  let validReservationId: number | null = null
+  if (context_type === 'reservation' && Number.isInteger(context_reservation_id) && (context_reservation_id as number) > 0) {
+    const { data: ownedReservation } = await admin
+      .from('rental_reservations')
+      .select('id')
+      .eq('id', context_reservation_id as number)
+      .eq('user_id', session.user.id)
+      .maybeSingle()
+    if (ownedReservation) validReservationId = context_reservation_id as number
+  }
 
   // 최근 종료된 세션이 있으면 신규 생성 대신 재활성화
   let query = db
@@ -47,6 +60,7 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 
   if (context_type) query = query.eq('context_type', context_type)
   if (validContextId) query = query.eq('context_id', validContextId)
+  if (validReservationId) query = query.eq('context_reservation_id', validReservationId)
 
   const { data: closedSession } = await query.maybeSingle()
 
@@ -69,6 +83,7 @@ export const POST: RequestHandler = async ({ request, locals }) => {
       user_id: session.user.id,
       context_type,
       context_id: validContextId,
+      context_reservation_id: validReservationId,
       status: 'open',
     })
     .select()
