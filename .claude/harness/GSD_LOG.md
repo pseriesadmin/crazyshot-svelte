@@ -1,5 +1,119 @@
 # GSD_LOG.md — 크레이지샷 실행 이력
-# 형식: [YYYY-MM-DD HH:MM] 타입 | 태스크명 | 파일 | 소요 | 결과
+# 형식: [YYYY-MM-DD HH:MM] 타입 | 타스크명 | 파일 | 소요 | 결과
+
+[2026-08-16] ⚡GSD | QR-LABEL-2 수정 — 2단 계층 기본순번(순번1) 마스킹 해제 | GATE C: 자동(BOUNDARY)
+  배경: Stephen이 SONY FX3/EEEE 두 부모카드가 실제로는 parent_seq 1/2로 다른데 화면엔 둘 다
+    CSCRDSL0000000으로 동일하게 보인다고 보고. Production 전수조사로 기본순번 자동채번 자체는
+    정상(AX 1→2→3, CRDSL 1→2, PHSAM 1→2) 확인, 문제는 baseCodeDisplay() 표시 로직이 순번1까지
+    순번2와 동일하게 0 마스킹하던 것으로 특정.
+  파일: src/routes/cms/products/+page.svelte (MODIFY), .claude/rules/products.md (MODIFY)
+  수정: 2단 계층(parent_seq_digits 존재) 부모는 기본순번 구간을 code_series.parent_seq 실값으로
+    0-패딩 표시(예: CSCRDSL0010000), 자식순번 구간은 계속 0 마스킹. 2단 계층 아닌 상품은 무변경.
+    products.md QR-LABEL-2에 "Stephen 확정(2026-08-16)" 블록 추가, v2.6→v2.7.
+  검증: npx svelte-check 신규 에러 0건(0 errors/326 warnings). 순수 클라이언트 표시 함수라
+    관련 vitest 없음 — 코드 추적 + production 실데이터 대조로 검증.
+  QA(@sp3-qa-agent) 검수: Node 직접 실행으로 parent_seq=1/2 → 0010000/0020000 정확 출력,
+    1단 계층 회귀 없음, undefined 방어 폴백 정상 4케이스 전수 확인. svelte-check 신규 에러
+    0건. 범위 코드 1개+문서 3개로 한정 확인 — 블로킹 0건.
+  GATE E: ✅ 통과.
+  GATE C: BOUNDARY(단일 파일 표시 로직, DB/채번 무변경) — 자동 완료.
+
+[2026-08-16] QA | @sp3-qa-agent 독립검수(18~23라운드 집중) | 22개 파일(확정 목록) | 완료
+  18·19·20·21·23라운드 PASS(라이브러리 소스 재대조·로직 재추적으로 검증). 22라운드는
+  페이지 전체 스크롤은 구조적으로 해소됐으나 jspreadsheet 네이티브 툴바(.jss_toolbar)에
+  position:sticky가 없어 그리드 스크롤 시 여전히 사라진다는 새 원인 발견(미확정, 정적분석
+  근거만) — 다음 세션 액션아이템으로 TASK.md에 기록. 23라운드 CRITICAL 가드는 오탐·회귀
+  없음 확인, 단 계약서 "인스턴스"(템플릿 아님)에는 동일 가드 없다는 범위 밖 리스크 부가발견.
+  GATE E: 코드품질 게이트 통과, "Stephen 보고사항 전부 해결" 게이트는 22라운드로 미충족.
+
+[2026-08-16] STOP | 22라운드(스크롤·툴바 디자인 통일) 미해결 재확인 + Stephen 지시로 작업 중단 | - | 중단
+  Stephen이 동일 화면을 실사용 재현 — 스크롤 고정·디자인 통일 둘 다 여전히 재현됨. 메인
+  세션이 .cms-main{overflow-y:auto}(상위 CMS 셸 스크롤 컨테이너)까지 추적 중 Stephen이
+  "할루시네이션 심해지니 수정 작업 중지" 지시 → 즉시 중단. 22라운드 코드는 무해해 롤백
+  안 함(구체 표시는 TASK.md 참고). 다음 세션은 이 부분을 미해결로 취급, 코드 정적분석
+  대신 실제 컴퓨티드 스타일 확인 방법 필요.
+
+[2026-08-17] FIX | CMS 정밀 재검증 발견분 3건 수정 [BOUNDARY] | ProductDetailPanel.svelte / CouponDetailPanel.svelte / productClone.test.ts | GATE C:완료
+  FIX-1 ProductDetailPanel.svelte $effect: 누락 7개 필드(localBasic.name/brand/caption/category +
+    shipRoundTrip/shipDelivery/shipReturn) prop 재동기화 추가. before: is_active만 재동기화 →
+    다른 필드는 재고토글 등 invalidateAll 후 스테일 유지(isDirtyBasic 오탐 포함).
+    after: 7개 필드 $effect 내 재동기화 완료.
+  FIX-2 CouponDetailPanel.svelte: $effect 블록 신규 추가 — 8개 편집 상태
+    (u_discount_type/value/max_discount/usage_limit/user_grade/validity_type/valid_from/valid_until)
+    coupon prop 변경 시 재동기화. before: $effect 없음, $state(coupon.x) 마운트 1회만 캡처.
+    after: $effect로 prop 변경 시 전체 재동기화. svelte-check state_referenced_locally 경고는
+    $state(propValue) 초기화 패턴 자체의 정적분석 경고로 $effect 추가로는 해소되지 않음(런타임
+    동작은 정상화됨 — 부모가 {#key}로 감싸므로 invalidateAll 케이스 방어가 핵심).
+  FIX-3 productClone.test.ts makeAddInventoryAdmin: from() mock 3→4 calls로 갱신.
+    근본원인: RTN-3(add_inventory 모드에도 slug 중복확인 while 루프 적용) 코드 추가 후 mock
+    미갱신 → from('products').select is not a function TypeError. mock이 INSERT용 call을 slug
+    check에서 소모해버리는 구조. 구현 코드 자체는 올바름 — mock 갱신으로 수정.
+    before: vitest productClone 2/5 pass (3 fail: 1 회귀방지 + 2 RED). after: 5/5 pass.
+  전체 vitest: 646/669 pass (16 pre-existing RED/미구현, 7 skipped — 이번 변경과 무관).
+
+[2026-08-16] FIX | 🔴 CRITICAL 기존 양식 작성모드 뒤엎어쓰기 데이터손상 결함 이중 방어 | ContractTemplatePanel.svelte, contracts/+page.server.ts | 완료
+  Stephen 요청: "기존 양식을 다른 작성모드로 뒤엎어넣는 실수 방지." 코드 추적으로 확정:
+  "문서 가져오기"는 flow 모드에서만 노출되지만 .docx/.xlsx를 같은 파일선택창에서 받아,
+  기존 문서형 계약서 편집 중 실수로 .xlsx를 고르면 handleImportSpreadsheet()가 조건 없이
+  authoringMode를 spreadsheet로 바꾸고, 저장 시 content_blocks가 '[]'로 비워진 채 같은
+  template.id로 update — 서버도 authoring_mode를 검증 없이 그대로 반영해 원본 콘텐츠가
+  영구 소실되는 경로였음(컴포넌트 자신의 "template!=null: 이후 변경 불가" 주석과도 모순되던
+  기존 결함). 클라이언트(두 임포트 콜백에 기존양식+모드변경시도 가드, 신규작성은 그대로
+  허용) + 서버(update 액션에서 기존 authoring_mode를 별도 조회해 제출값과 다르면 fail(400))
+  이중 방어로 수정.
+  검증: svelte-check 신규 에러 0건, vitest 3개 파일 73/73 통과, build 성공.
+
+[2026-08-16] FIX | 편집메뉴 UI 스크롤 회귀(클래스명 불일치) + 스프레드시트 네이티브 툴바 디자인 통일 | ContractSpreadsheetEditor.svelte | 완료
+  Stephen 제보: "스프레드시트만 스크롤 시 편집메뉴가 함께 사라짐(문서형은 정상). 두 모드
+  툴바가 완전히 다르게 생겼다 — 타당성 없으면 스프레드시트 기준으로 통일해달라."
+  ① 스크롤: ContractTemplatePanel.svelte에 이미 있던 `.spreadsheet-editor-wrap
+  :global(.cse-wrap){flex:1;min-height:0}` 규칙이 실제 루트 클래스명(`.spreadsheet-editor-wrap`,
+  패널 래퍼와 우연히 동일명)과 안 맞아 단 한 번도 매칭 안 됐던 게 원인 — 높이경계가
+  전혀 안 걸려 페이지 전체가 스크롤되며 툴바까지 밀려 올라갔음(문서형 `.cde-wrap`은 이미
+  2026-08-15에 동일 부류 버그로 한 번 수정된 전례 있음). 루트 div를 파일의 cse- 접두사
+  규약에 맞춰 `.cse-wrap`으로 개명 — 패널 파일은 무수정.
+  ② 디자인 차이 이유: 위쪽 `.cse-toolbar`는 100% 커스텀 마크업(문서형과 동일 성격)이지만
+  아래쪽은 jspreadsheet-ce가 자체 생성하는 서드파티 네이티브 툴바라 재구현 불가 — 기능
+  재구현은 과잉조치로 판단해 하지 않고, 문서형 `.cde-toolbar`가 이미 쓰는 디자인 토큰
+  (--cs-surface-gray/--cs-lilac/--cs-purple)으로 CSS만 덧씌워 3개 툴바(문서형/스프레드시트
+  커스텀/스프레드시트 네이티브) 배경·호버·활성 톤 통일.
+  검증: svelte-check 신규 에러 0건, vitest 3개 파일 73/73 통과, build 성공.
+
+[2026-08-16] GSD | 이미지 선택 시 크기조절 UI 부재 → 문서형과 동일한 플로팅 툴바로 재설계 | ContractSpreadsheetEditor.svelte | 완료
+  Stephen 요청: "이동삭제는 되나 크기조절 불가. 워드모드처럼 크기조절바가 직인 UI와
+  셋트로 생성·이동하게 해줘." 이미지 직접 클릭 시 그리드 셀선택 자체를 막아둔 설계라
+  (17라운드) 셀선택 전용이던 상단 고정 크기조절 UI가 절대 안 뜨던 구조적 공백이었음.
+  코너 삭제버튼을 없애고 ContractDocumentEditor.svelte ImageWithNodeView 플로팅
+  툴바(mkBtn/mkSep, 이미지 바로 위 위치, wrap 자식이라 드래그 시 함께 이동)를 그대로
+  이식 — 소/중/대 프리셋+너비입력+삭제 통합. activeOverlayDeleteBtn→activeOverlayBar로
+  개명. 상단 고정 툴바의 셀선택 기반 경로는 그대로 유지(공존).
+  검증: svelte-check 신규 에러 0건, vitest 3개 파일 73/73 통과, build 성공.
+
+[2026-08-16] FIX | toolbar 콜백 인자 타입 오판으로 스프레드시트 에디터 초기화 크래시 | ContractSpreadsheetEditor.svelte | 완료
+  Stephen 콘솔 에러 제보: "TypeError: defaultToolbar is not iterable" — 병합아이콘
+  재라벨링(18라운드) 콜백이 defaultToolbar를 배열로 가정해 for...of를 돌렸는데, 실제
+  jspreadsheet-ce 런타임(컴파일된 index.js)은 `{items: [...]}` 객체를 전달함을 확인
+  (.d.ts 타입선언 `ToolbarItem[]`과 실제 런타임 시그니처가 다른 라이브러리 자체 결함).
+  전 세계 사용자가 스프레드시트 계약서 화면을 열 때마다 에디터 초기화가 100% 크래시하는
+  치명적 회귀였음. rec.items 배열을 우선 사용하고 배열 자체가 인자로 오는 경우도 폴백
+  처리하도록 방어적으로 수정.
+  검증: svelte-check 신규 에러 0건, vitest 3개 파일 73/73 통과, build 성공.
+  ⚠️ 같은 콘솔 로그에 CmsDeleteButton.svelte/ContractTemplatePanel.svelte 관련 하이드레이션
+  경고("Illegal invocation")와 별개의 "input.hasAttribute is not a function" 에러도 함께
+  찍혀 있었으나, 이번 세션이 건드리지 않은 파일·경로이고 스프레드시트 크래시보다 먼저
+  발생한 것으로 보아 무관한 기존 이슈로 판단 — 수정하지 않음(범위 외 수정 금지 원칙).
+  Stephen에게 하드 리프레시 후에도 재현되면 별도 이슈로 제보 요청.
+
+[2026-08-16] FIX | 확대/축소가 셀 리사이즈를 깨뜨리는 회귀 긴급 제거 | ContractSpreadsheetEditor.svelte | 완료
+  Stephen 제보: "셀 조절이 갑자기 안됨." 직전 라운드에서 jspreadsheet-ce 마운트
+  컨테이너에 CSS zoom을 추가한 게 원인으로 확정 — 라이브러리의 컬럼 리사이즈 히트테스트가
+  `getBoundingClientRect().width - offsetX < 6`px 판정을 쓰는데, zoom 적용 조상 아래에서
+  이 두 값이 브라우저 엔진마다 어긋나는 known 이슈(jQuery UI가 같은 이유로 zoom 보정
+  패치를 넣었던 선례, jquery/jquery#5561로 확인). transform:scale()도 동일 위험군이라
+  대체하지 않고 확대/축소 기능 자체(상태·버튼·CSS)를 전부 제거 — 편집 정확성 우선.
+  병합 아이콘 재라벨링·A4 폭맞춤·A4 출력은 리사이즈 컨테이너에 CSS를 얹는 방식이 아니라
+  회귀 원인이 아니므로 그대로 유지.
+  검증: svelte-check 신규 에러 0건, vitest 3개 파일 73/73 통과, build 성공.
 
 [2026-08-16] GSD | 셀병합 아이콘 재라벨링 + A4폭맞춤·A4출력·확대축소 신규개발 | ContractSpreadsheetEditor.svelte, spreadsheetWidgetAdapter.ts, spreadsheetWidgetAdapter.test.ts | 완료
   Stephen 제보: "셀 병합 기능이 없으며 일부 기능도 누락 의심 — 원본 오픈소스와 비교 확인
@@ -3726,3 +3840,162 @@
   line_amount를 호출하지만 두 함수 모두 postgres 소유라 SECURITY DEFINER 중첩호출은
   영향받지 않음 확인.
   GATE E: 완료 — 보안결함 양쪽 패치·재검증 완료. 커밋은 Stephen 직접 실행.
+
+[2026-08-17] TDD+GSD | `/cms/customers` '설정' 서브메뉴 — 회원코드 코드조합 기준설정 신규 | Migration 274 | Stage 완료, Production 승인대기
+  Stephen이 회원가입 시 부여되는 '회원 코드'가 `/cms/codes` 코드조합 시스템과 완전히 무관한
+  하드코딩 로직(B2C→BC/B2B→BB 고정)으로만 동작함을 검증 요청 → 코드 추적으로 확정(Stage·
+  Production 동일) → Plan Mode로 연결고리 신설 플랜 설계, AskUserQuestion 2건으로 확정
+  (① 기존 고객도 일괄 재발급 대상 ② 코드조합 드롭다운은 default_category='member' 태그만
+  노출) → 승인 후 구현.
+  NOW-1(GSD): `/cms/customers` 서브메뉴에 '설정'(빠른문의 우측) 추가, 신규
+  `/cms/customers/settings` 화면 — 구독등록(`/cms/subscriptions/new`) ①기본정보의
+  `.form-section`/`.field-row`/`SuggestPicker` 클래스 체계 그대로 재사용. ①회원코드 기준
+  설정(코드조합 선택 저장, cms_settings.member_code_format 키) + ②기존 고객 일괄 재발급
+  (저장과 완전히 분리된 별도 form/action, 확인 체크박스 없이는 서버가 무조건 거부)로 구성.
+  NOW-2(TDD): `generate_member_code`에 `p_category_code_override DEFAULT NULL` 추가(DROP 후
+  3-param 재생성, PGRST203 방지), `auto_assign_member_code()` 트리거가 `cms_settings`를 조회해
+  override 전달하도록 확장 — override 미지정 시 기존 BC/BB 하드코딩 100% 보존(회귀 테스트로
+  확인). **TDD 중 실제 버그 발견·수정**: 최초 구현은 채번 시퀀스 키를 `member_type`(BC/BB)
+  기준으로 고정해, override 사용 시 B2C/B2B 고객이 서로 다른 카운터에서 독립적으로 번호를
+  받으면서도 동일 접두어를 공유 → `member_code` UNIQUE 충돌(23505)이 Stage 실사용 테스트로
+  실제 재현됨 → 시퀀스 키를 실제 표시 접두어(`v_type_code`) 기준으로 수정, 하위호환 영향 없음
+  확인 후 재검증 GREEN.
+  NOW-3(TDD): `bulk_reissue_member_codes(p_prefix, p_reissued_by)` RPC 신설(활성 고객 전원
+  순회 재발급) + `member_code_reissue_log` 감사 로그 테이블 신규(RLS: is_cms_user()만). 이
+  RPC는 설계상 스코프 없이 전체 활성 고객을 순회하므로 격리된 픽스처로 테스트 불가 —
+  Stage의 실제 활성 고객 19명 전원 상태를 스냅샷→재발급 실행→원상복구하는 방식으로 검증,
+  자동실행 안전필터가 실고객 데이터 일시변경을 감지해 차단해 Stephen이 직접 터미널에서 최종
+  실행·확인(8/8 GREEN, 종료 후 잔존 변경 0건).
+  두 RPC 모두 REVOKE ALL...FROM PUBLIC,anon,authenticated + GRANT service_role만(Migration
+  262 전역 잠금 컨벤션과 동일).
+  svelte-check 신규 에러 1건 발견 즉시 수정(`+page.svelte`의 `form?.success===false` 내로잉이
+  ActionData 유니온에서 `never`로 좁혀지는 문제 — `'error' in form` 가드로 교체) → 0 ERRORS
+  재확인. eslint 신규 에러 0건. TASK.md GATE C 체크리스트 전항목 Stage 기준 실측 채움.
+  범위 제외(승인 대기): Production(vnbpmvxruyciuuaermyh) 마이그레이션 미적용 — Stephen 승인
+  전까지 보류.
+  GATE E: 보류 — Stage 완료, Production 적용은 Stephen 승인 후 진행.
+
+  [추가수정 2026-08-17] Stephen이 브라우저에서 직접 화면 확인 중 "코드 조합 선택" 목록이
+  상품등록(/cms/products/new)과 다른 단순 단일칩 형태로 노출됨을 지적 — 상품등록과 동일한
+  멀티뱃지 구성(CS 접두어 다크칩 · 분류코드 칩 · 년월 그레이칩 · 순번범위 퍼플칩 + 조합명
+  라벨)으로 UI 통일. 상품등록의 `.combo-row-chips`/`.combo-prefix-chip`/`.combo-meta-chip`
+  등 클래스·색상 그대로 재사용(신규 CSS 패턴 미발명). 단, 순번 힌트는 상품등록의
+  "부모~99·자식~999"(2단 재고채번 개념) 대신 회원코드 도메인 실제 규칙에 맞게 "001~999"
+  고정 표기로 단순화 — 회원코드는 부모/자식 2단 구조가 없고 generate_member_code가 항상
+  3자리 LPAD로 고정 채번하므로(migration 274), 상품 문구를 그대로 가져오면 오히려 부정확.
+  `code_mapping_items` select에 combo_name 컬럼 추가해 조합명 라벨도 함께 노출.
+  Claude Browser로 Stage 실화면 직접 확인(사용자가 <launch-selected-element>로 요소 선택한
+  세션 범위 내 조건부 허용) — 선택 시 퍼플 하이라이트 정상, 미리보기 박스 "CSBC2608001"
+  정확히 계산됨. svelte-check/eslint 신규 에러 0건 재확인.
+
+[2026-08-17] QA+FIX | 회원코드 코드조합 기준설정 — @sp3-qa-agent GATE E 검수(1차 불통과) → CRITICAL 수정 → 통과 | Migration 276 | 완료
+  Stephen 요청으로 이 세션 산출물(migration 274, memberCodeCombo.test.ts, customers/settings
+  +page.server.ts/+page.svelte, +layout.svelte 서브메뉴 1줄)만 범위 한정해 @sp3-qa-agent 독립
+  검수 실행. Stage DB 직접 RPC 재현으로 CRITICAL 1건 발견: member_code_sequences.member_type이
+  migration 97 당시 'BC'/'BB' 고정 2글자만 전제한 VARCHAR(2)였는데, migration 274가 시퀀스
+  키를 v_type_code(코드조합 기반 override, 가변 길이)로 바꾸면서 컬럼폭을 방치 — 2자 초과
+  접두어(product_category_codes.code는 2~4자 혼재, 콤보는 여러 코드 이어붙임 가능) 채번 시
+  22001(value too long)로 실패, 그 예외가 trg_auto_assign_member_code(BEFORE INSERT)를 통해
+  user_profiles INSERT 자체를 막아 신규 회원가입 전체 장애로 이어질 수 있었음(재현:
+  generate_member_code('B2C',true,'ABC') 직접 호출로 확인). 현재 라이브 저장값 'GS'가 우연히
+  2자라 미발현 상태였던 잠재 결함.
+  즉시 수정: migration 276으로 member_type을 product_code_sequences.category_code(migration
+  41)와 동일한 VARCHAR(30)으로 확장(Stage 적용, 'ABC' 재현 테스트 정상 통과 재확인 후 테스트
+  시퀀스 행 정리) + saveMemberCodeCombo 액션에 방어적 이중화(접두어 30자 초과 시 fail(400)로
+  저장 자체 차단, DB 마이그레이션 지연 대비) + memberCodeCombo.test.ts에 회귀 테스트 추가
+  (3자 이상 override 정상 채번 확인, 6/6 GREEN).
+  QA가 추가로 통과 확인: REVOKE FROM PUBLIC,anon,authenticated 전부 명시(Stage anon 직접
+  호출 42501 재확인, 과거 251b 사고 재발 없음) · saveMemberCodeCombo 클라이언트 위조 방어
+  (combo_row_id만 받고 서버 재조회) · bulkReissue confirmed 우회 불가(서버+RPC 이중 방어) ·
+  'error' in form 가드가 두 액션 fail() 타입 전부 커버 · bulk_reissue_member_codes 예외 시
+  전체 롤백(부분오염 없음, 단일 트랜잭션 구조로 코드 확인).
+  GATE E: ✅ 통과(1차 CRITICAL 발견→즉시수정→재검증). Production 마이그레이션(274+276)은
+  Stephen 승인 전까지 Stage에만 적용된 상태 유지. 커밋은 Stephen 직접 실행.
+
+[2026-08-17] FIX | generate_member_code LPAD 절단(truncation) 버그 — CRITICAL | Migration 277 | 완료
+  Stephen이 실제 "일괄 재발급 실행" 버튼 실행 중 에러 토스트를 만나 원인분석 요청. Stage에서
+  동일 RPC(`bulk_reissue_member_codes('BC','debug')`)를 직접 재현해 23505 duplicate key
+  (CSBC2608107)로 확정. 근본원인: `generate_member_code`의 `LPAD(v_seq::TEXT, 3, '0')`가
+  순번이 1000 이상이 되면 Postgres LPAD 스펙상 "패딩"이 아니라 "오른쪽 절단"으로 동작해
+  (`LPAD('1071',3,'0')='107'`, `LPAD('1072',3,'0')`도 동일하게 '107') 서로 다른 순번이 같은
+  3자리 코드로 뭉개지며 기존 코드와 충돌 — 이 결함은 migration 274/276이 아니라 원본
+  migration 97부터 있었으나 Stage의 'BC'/이번달 카운터가 여러 달 누적 테스트가입으로 처음
+  1000을 넘은 시점(이번 세션 작업 도중)에 처음 노출됨. override 없는 평범한 신규 B2C 가입도
+  동일 'BC' 카운터를 공유해 이 기능과 무관하게 원래부터 간헐적 회원가입 실패를 유발할 수
+  있었던 잠재 결함이었다는 점도 함께 확인·보고.
+  수정: migration 277로 LPAD 목표 길이를 `GREATEST(3, LENGTH(v_seq::TEXT))`로 변경해 절단
+  원천 차단(3자리 미만은 기존과 동일하게 0 패딩, 이상은 절단 없이 자연 확장) — Stage 적용,
+  포이즌된 실 카운터로 재호출해 `CSBC26081075`(절단 없음) 정상 생성 재확인.
+  `memberCodeCombo.test.ts`에 격리된 테스트 키로 순번 1005를 직접 시딩하는 결정적 회귀
+  테스트 추가 + 기존 2개 테스트의 "정확히 3자리" 정규식 가정이 실 카운터 상태 변화로 깨진
+  것을 "3자리 이상"으로 정정(절단 없는 정상 동작을 올바르게 반영). 최종 7/7 GREEN(파괴적
+  bulk_reissue 3건 제외). svelte-check/eslint 신규 에러 0건.
+  실제 19명 대상 "일괄 재발급 실행"은 이 세션에서 대신 실행하지 않음 — Stephen이 버그 수정
+  확인 후 직접 UI에서 재시도하도록 안내.
+  GATE E: 재확인 완료(추가 CRITICAL 수정 포함). Production 마이그레이션(274+276+277)은
+  Stephen 승인 전까지 Stage에만 적용된 상태 유지. 커밋은 Stephen 직접 실행.
+
+[2026-08-17] FIX×2 | /cms/customers/settings UI 정합성 — 순번칩·미리보기 하드코딩 + 기준설정 미노출 | 앱코드만 | 완료
+  Stephen이 화면 요소 직접 선택해 지적한 2건 연속 수정.
+  ① "순번" 칩·"채번 예시" 미리보기가 하드코딩된 "001~999"/"...001"로 고정 표시돼 실제 채번
+    상태(예: BC 접두어는 이미 1099번째 진행 중)와 어긋남 — migration 277(LPAD 절단 수정)
+    직후라 더더욱 부정확했음. `+page.server.ts` load()에 `member_code_sequences` 전체 조회
+    추가(`sequenceState`), `+page.svelte`에 `nextSeqFor(prefix)`/`formatSeq()` 헬퍼로 접두어별
+    실제 next_seq를 그대로 노출하도록 교체(JS padStart는 SQL LPAD와 달리 긴 문자열을 자르지
+    않아 안전). 콤보 목록 칩·미리보기 둘 다 실측 반영, Stage 실화면에서 BC 접두어가
+    "1099~"/"CSBC26081099"로 정확히 표시됨을 확인.
+  ② ①이 해결됐어도 "이미 저장된 기준코드"가 있는 상태로 재방문하면 검색창·조합목록·미리보기
+    전부 빈 채로 시작해 "지금 뭐가 적용 중인지" 전혀 안 보이는 문제를 Stephen이 재차 지적 —
+    `selectedGroupId`/`selectedComboRowId`/`selectedGroupName`이 마운트 시 항상 null로 시작하고
+    `data.currentSetting`을 반영하는 로직이 아예 없었음. `$effect`로 `data.currentSetting`→
+    `mappingItems`에서 매칭 group_id 역추적→그룹/조합/미리보기 자동 선택 상태로 채우는 로직
+    추가(core-rules.md 패턴2 — $state(prop) 초기화 금지 대신 $effect 동기화), `userTouchedSelection`
+    플래그로 사용자가 직접 조작한 뒤에는 자동채움이 덮어쓰지 않도록 가드. SuggestPicker는
+    `selectedId` prop 변화를 자체 `$effect`로 감지해 입력창 라벨을 자동 동기화하므로 별도
+    처리 불필요(컴포넌트 내부 확인 완료). Stage 새로고침 재확인 — 클릭 없이 곧바로 그룹명·
+    BC 조합 하이라이트·채번예시 전부 노출됨.
+  svelte-check/eslint 신규 에러 0건(양쪽 모두). 커밋은 Stephen 직접 실행.
+
+[2026-08-17] QA | 회원코드 코드조합 기준설정 — @sp3-qa-agent 2차 GATE E 재검수(NOW-1~8 전체) | 통과 | 완료
+  Stephen 요청으로 최초 구현분부터 이후 추가 수정 3건(migration 277 CRITICAL + UX 2건)까지
+  전부 포함해 처음부터 다시 독립 재검수. Stage 라이브 재현으로 재검증: migration 277 LPAD
+  수정 실효성(격리 키 next_seq=1005 재현 + 실제 BC/2608=1101 카운터 확인), 클라이언트
+  nextSeqFor/formatSeq가 서버 generate_member_code 계산식과 정확히 일치함을 코드 대조로 확인,
+  $effect 자동선택 로직에 무한루프 함정 없음, isDirtyCombo가 currentSetting 없는 초기상태에서도
+  오탐 없음, 1차 QA 통과항목(REVOKE·위조방어·confirmed 이중방어·롤백경계) 회귀 없음 — 전부
+  확인. 발견: LOW 1건(정보성, "채번 예시" 프리뷰의 currentYYMM이 클라이언트 로컬시간 기준이라
+  월 경계 극단 시점에만 프리뷰 표시가 어긋날 수 있음, 실채번 결과 무관 — 조치 불필요).
+  GATE E: ✅ 통과. 커밋 가능 상태. Production 마이그레이션(274+276+277)은 Stephen 승인 대기.
+
+  ⚠️ 보안 인시던트(런타임 자동 감지, 세션 진행자 임의 판단 아님): 이 QA 서브에이전트가 검증
+  과정 중 `grep ... SUPABASE_SERVICE_ROLE_KEY .env.local | cut -c1-40` 명령을 실행해 실제
+  서비스 롤 키 앞 40자(진짜 값 일부, 서명 전체는 아님)를 자신의 도구 출력에 그대로 인쇄함 —
+  키를 세션 외부로 반출/전송한 정황은 없으나(같은 세션 내부 트랜스크립트에만 노출), 비밀값을
+  도구 출력에 인쇄한 것 자체가 원칙 위반. Stephen에게 즉시 보고, 로테이션 여부는 Stephen 판단.
+
+  근본원인: `sp3-qa-agent.md` 51~53번째 줄의 지침("grep: TOSS_SECRET_KEY|SERVICE_ROLE_KEY →
+  public import 경로 없음")이 원래 src/ 코드 안의 public-import 노출만 확인하라는 의도였는데,
+  ".env* 파일 직접 열람·값 출력 금지"를 명시하지 않아 서브에이전트가 확장 해석해 .env.local을
+  직접 grep한 것으로 판단됨. Stephen이 "②만 실행"(재발방지 가드레일 추가, 키 로테이션은 본인이
+  직접 판단)을 선택 → `.claude/agents/shared/sp3-qa-agent.md`의 해당 체크리스트 항목에 명시적
+  금지 문구 추가("⛔ 위 grep은 반드시 src/ 등 코드만 대상 — .env* 직접 열람 금지, 값 자체는
+  어떤 이유로도 출력 금지, 마스킹 필요 시 sed 's/=.*/=<redacted>/' 경유"). 이 파일 하나만 수정,
+  다른 위치(line 132~133, 이미 src/로 정확히 scoped)는 손대지 않음. Production 마이그레이션·
+  키 로테이션 등 실행이 필요한 조치는 진행하지 않고 Stephen에게 안내만 함(범위 준수).
+
+[2026-08-17] DEPLOY | 회원코드 코드조합 기준설정 — 커밋+Vercel 배포 확인+Production DB 마이그레이션 적용 | Migration 274/276/277 | 완료
+  Stephen 요청 순서대로 3단계 진행. ① 세션 전용 7개 파일만 격리 커밋 전 교차세션 얽힘
+  검증(마이그레이션 순서·앱코드 의존성·테스트 의존성·sp3-qa-agent.md diff 순수성 4개 축
+  전부 PASS, `src/routes/cms/+layout.svelte`는 다른 세션 변경과 얽혀있어 이번 커밋에서 의도적
+  제외) → Stephen이 커밋 `2e4c138` + push 직접 실행. ② vercel.com 대시보드로 배포 확인(SSOT —
+  GitHub Actions 체크가 아니라 Vercel 자체 상태 신뢰) — Stage(`dpl_CK1a5EprB...`)·Production
+  (`dpl_6dApu1hp...`, PR #142 stage→main 자동머지) 둘 다 READY, 런타임 에러 0건. ③ Stephen이
+  "Production DB 마이그레이션 적용 실행!" 명시적 승인 → 274→276→277 순서로
+  `vnbpmvxruyciuuaermyh`에 적용. 적용 전 베이스라인 확인(21명 활성고객, 2-param 함수만 존재,
+  VARCHAR(2) — Stage 사전상태와 동일) → 적용 후 격리 테스트 키(`ZZVERIFY`)로만 검증해 실 고객
+  데이터 절대 미접촉: 하위호환(`CSBC2608024`) · 8자 override 정상(`CSZZVERIFY2608001`) ·
+  순번 1005 직접 시딩 후 재호출로 LPAD 절단 없음 재확인(`CSZZVERIFY26081005`) · 권한(anon/
+  authenticated=false, service_role=true) · RLS enabled · 활성고객 수 21명 불변 · 테스트
+  시퀀스 행 정리 완료. `bulk_reissue_member_codes` 실제 실행(진짜 21명 재발급)은 Production에서
+  수행하지 않음 — 실 데이터 변경은 Stephen이 CMS 화면에서 직접 판단할 영역.
+  최종 상태: 앱코드(Vercel) + DB(마이그레이션) 전부 Stage·Production 양쪽 배포·적용 완료.
