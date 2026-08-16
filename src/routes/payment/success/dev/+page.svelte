@@ -9,7 +9,7 @@
   }
 
   function handleConfirm() {
-    goto('/checkout')
+    goto('/cart')
   }
 </script>
 
@@ -27,7 +27,7 @@
   <!-- GNB pill -->
   <div class="gnb-wrap">
     <div class="gnb-pill">
-      <button class="gnb-back" onclick={() => goto('/checkout')} aria-label="체크아웃으로">
+      <button class="gnb-back" onclick={() => goto('/cart')} aria-label="체크아웃으로">
         <svg width="15" height="10" viewBox="0 0 15 10" fill="none" aria-hidden="true">
           <path d="M14 5H1M1 5L5.5 1M1 5L5.5 9" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
         </svg>
