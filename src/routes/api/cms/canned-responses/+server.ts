@@ -7,12 +7,15 @@ import { json } from '@sveltejs/kit'
 import type { RequestHandler } from './$types'
 import { getCmsRoleForAction } from '$lib/server/getCmsRoleForAction'
 import { normalizeKeywords } from '$lib/server/normalizeKeywords'
+import { VALID_CATEGORIES } from '$lib/constants/cannedResponseCategories'
+import { VALID_HELP_CATEGORIES } from '$lib/constants/helpCategories'
 
 export interface CannedResponse {
   id: string
   title: string
   content: string
   category: string | null
+  help_category: string
   shortcut: string | null
   match_keywords: string[]
   usage_count: number
@@ -35,7 +38,7 @@ export const GET: RequestHandler = async ({ locals, url }) => {
 
   let query = admin
     .from('canned_responses')
-    .select('id, title, content, category, shortcut, match_keywords, usage_count, created_at, image_url, cta_label, cta_url')
+    .select('id, title, content, category, help_category, shortcut, match_keywords, usage_count, created_at, image_url, cta_label, cta_url')
     .order('usage_count', { ascending: false })
     .order('title', { ascending: true })
 
@@ -63,6 +66,7 @@ export const POST: RequestHandler = async ({ locals, request }) => {
   const title   = (body.title ?? '').trim()
   const content = (body.content ?? '').trim()
   const category = body.category ?? null
+  const helpCategory = body.help_category ?? null
   const shortcut = body.shortcut ? body.shortcut.trim() || null : null
   const matchKeywords = normalizeKeywords(body.match_keywords)
   const imageUrl  = typeof body.image_url === 'string' ? body.image_url.trim() || null : null
@@ -72,9 +76,13 @@ export const POST: RequestHandler = async ({ locals, request }) => {
   if (!title)   return json({ error: '제목을 입력해주세요.' }, { status: 400 })
   if (!content) return json({ error: '내용을 입력해주세요.' }, { status: 400 })
 
-  const VALID_CATEGORIES = ['return', 'payment', 'reservation', 'damage', 'general']
   if (category && !VALID_CATEGORIES.includes(category)) {
     return json({ error: '올바르지 않은 카테고리입니다.' }, { status: 400 })
+  }
+
+  if (!helpCategory) return json({ error: '도움말 분류를 선택해주세요.' }, { status: 400 })
+  if (!VALID_HELP_CATEGORIES.includes(helpCategory)) {
+    return json({ error: '올바르지 않은 도움말 분류입니다.' }, { status: 400 })
   }
 
   const admin = createClient(PUBLIC_SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
@@ -85,6 +93,7 @@ export const POST: RequestHandler = async ({ locals, request }) => {
       title,
       content,
       category,
+      help_category: helpCategory,
       shortcut,
       match_keywords: matchKeywords,
       created_by: session.user.id,
@@ -92,7 +101,7 @@ export const POST: RequestHandler = async ({ locals, request }) => {
       cta_label: ctaLabel,
       cta_url: ctaUrl,
     })
-    .select('id, title, content, category, shortcut, match_keywords, usage_count, created_at, image_url, cta_label, cta_url')
+    .select('id, title, content, category, help_category, shortcut, match_keywords, usage_count, created_at, image_url, cta_label, cta_url')
     .single()
 
   if (error) {

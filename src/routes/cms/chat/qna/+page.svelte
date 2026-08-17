@@ -23,7 +23,18 @@
   let searchQuery  = $state('')
   let filterCat    = $state<string | null>(null)
   type SortKey = 'usage' | 'title' | 'newest'
+  // cms-uiux.md §7-13 순환식 정렬 버튼 — sortKey $state 선언은 반드시 filteredItems $derived보다 앞
+  const SORT_CYCLE: SortKey[] = ['usage', 'title', 'newest']
+  const SORT_LABELS: Record<SortKey, string> = {
+    usage:  '사용순',
+    title:  '제목순',
+    newest: '최신순',
+  }
   let sortKey      = $state<SortKey>('usage')
+  function nextSort(): void {
+    const idx = SORT_CYCLE.indexOf(sortKey)
+    sortKey = SORT_CYCLE[(idx + 1) % SORT_CYCLE.length]
+  }
   let autoReply    = $state(data.autoReplyEnabled)
   let isTogglingAR = $state(false)
 
@@ -262,27 +273,16 @@
           {/each}
         </div>
 
-        <!-- 정렬 -->
-        <div class="sort-wrap">
-          <button
-            class="sort-btn"
-            class:active={sortKey === 'usage'}
-            onclick={() => sortKey = 'usage'}
-            title="사용횟수 높은 순"
-          >사용순</button>
-          <button
-            class="sort-btn"
-            class:active={sortKey === 'title'}
-            onclick={() => sortKey = 'title'}
-            title="제목 가나다순"
-          >제목순</button>
-          <button
-            class="sort-btn"
-            class:active={sortKey === 'newest'}
-            onclick={() => sortKey = 'newest'}
-            title="최신 등록순"
-          >최신순</button>
-        </div>
+        <!-- 정렬 — cms-uiux.md §7-13 순환식 단일 버튼 -->
+        <button class="sort-btn" onclick={nextSort} aria-label="정렬: {SORT_LABELS[sortKey]}" title={SORT_LABELS[sortKey]}>
+          <svg xmlns="http://www.w3.org/2000/svg" width="30" height="30" viewBox="0 0 30 30" fill="none">
+            <rect width="30" height="30" rx="15" fill={sortKey !== 'usage' ? 'rgba(59,47,138,0.08)' : '#F6F6F6'}/>
+            <path d="M12.999 12V21L9 16.7651M17 18V9L21 13.2349"
+              stroke={sortKey !== 'usage' ? '#3B2F8A' : '#AAAAAA'}
+              stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+          <span class="sort-label" class:sort-label-active={sortKey !== 'usage'}>{SORT_LABELS[sortKey]}</span>
+        </button>
 
         <!-- 자동답변 ON/OFF 토글 -->
         <div class="ar-toggle-wrap">
@@ -293,11 +293,11 @@
             onclick={toggleAutoReply}
             disabled={!canManageAR || isTogglingAR}
             title={canManageAR ? (autoReply ? 'OFF로 끄기' : 'ON으로 켜기') : '매니저 이상만 변경 가능'}
-            aria-pressed={autoReply}
+            role="switch"
+            aria-checked={autoReply}
             aria-label="자동답변 {autoReply ? 'ON' : 'OFF'}"
           >
             <span class="ar-thumb"></span>
-            <span class="ar-text">{autoReply ? 'ON' : 'OFF'}</span>
           </button>
         </div>
 
@@ -555,15 +555,15 @@
     font: 700 11px/22px 'Noto Sans KR', sans-serif;
   }
 
-  /* 검색 */
+  /* 검색 — cms-uiux.md §7-7 searchInput 표준 (white / border-default 1px / base 8px / 10px 20px / 14px 700 gray-600) */
   .search-wrap {
     display: flex;
     align-items: center;
     gap: 6px;
-    background: var(--cs-surface-gray, #f6f6f6);
+    background: var(--cs-white);
     border-radius: var(--radius-sm);
-    padding: 0 10px;
-    border: 1.5px solid var(--cs-lilac);
+    padding: 10px 20px;
+    border: 1px solid var(--cs-lilac);
     transition: border-color 0.15s;
     min-width: 180px;
   }
@@ -575,9 +575,9 @@
     flex: 1;
     border: none;
     background: transparent;
-    padding: 8px 0;
-    font: 400 13px/1.4 'Noto Sans KR', sans-serif;
-    color: var(--cs-dark);
+    padding: 0;
+    font: var(--text-pc-body-14, 700 14px/1.4 'Noto Sans KR', sans-serif);
+    color: var(--cs-text-mid, #666);
     min-width: 120px;
   }
   .search-input:focus { outline: none; }
@@ -595,7 +595,7 @@
   }
   .search-clear:hover { color: var(--cs-dark); }
 
-  /* 카테고리 필터 */
+  /* 카테고리 필터 — 콤보버튼 UI 표준(cms-uiux.md §7-12-A) */
   .filter-pills {
     display: flex;
     gap: 4px;
@@ -603,48 +603,44 @@
 
   .filter-pill {
     height: 30px;
-    padding: 0 12px;
+    padding: 0 16px;   /* 콤보버튼 UI 표준(§7-12-A) — 좌우 패딩 12px → 16px(+30%) */
     border-radius: var(--radius-xl, 30px);
-    border: 1.5px solid #DCDCDC;
-    background: var(--cs-white);
+    border: none;      /* 콤보버튼 UI 표준(§7-12-A, 2026-08-18) — 아웃라인 제거 */
+    background: var(--cs-lilac);   /* 콤보버튼 UI 표준(§7-12-A, 2026-08-18) — 제일 옅은 퍼플 톤(purple-5%) */
     font: 700 12px/1 'Noto Sans KR', sans-serif;
     color: var(--cs-text);
     cursor: pointer;
-    transition: all 0.15s;
+    transition: background 0.15s, color 0.15s;
   }
   .filter-pill.active {
     background: var(--cs-purple);
-    border-color: var(--cs-purple);
     color: var(--cs-white);
   }
-  .filter-pill:hover:not(.active) { border-color: var(--cs-purple); color: var(--cs-purple); }
+  .filter-pill:hover:not(.active) { color: var(--cs-purple); }
 
-  /* 정렬 */
-  .sort-wrap {
-    display: flex;
-    gap: 2px;
-    background: var(--cs-surface-gray, #f6f6f6);
-    border-radius: var(--radius-sm);
-    padding: 3px;
-    border: 1px solid var(--cs-lilac);
-  }
-
+  /* 정렬 — cms-uiux.md §7-13 순환식 단일 버튼 표준 */
   .sort-btn {
-    height: 26px;
-    padding: 0 10px;
-    border-radius: 6px;
+    display: inline-flex;
+    flex-direction: row;
+    align-items: center;
+    gap: 10px;
+    background: none;
     border: none;
-    background: transparent;
-    font: 700 12px/1 'Noto Sans KR', sans-serif;
-    color: var(--cs-text-mid, #666);
     cursor: pointer;
-    transition: all 0.15s;
+    padding: 0;
+    min-height: 44px;
+    justify-content: center;
+    opacity: 1;
+    transition: opacity 0.12s;
   }
-  .sort-btn.active {
-    background: var(--cs-white);
-    color: var(--cs-purple);
-    box-shadow: 0 1px 3px rgba(0,0,0,0.08);
+  .sort-btn:hover { opacity: 0.75; }
+  .sort-label {
+    font: var(--text-pc-script-12);
+    color: var(--cs-text-light, #aaa);
+    white-space: nowrap;
+    line-height: 1;
   }
+  .sort-label-active { color: var(--cs-purple); }
 
   /* 자동답변 토글 */
   .ar-toggle-wrap {
@@ -663,44 +659,44 @@
     user-select: none;
   }
 
+  /* cms-uiux.md §7-8 표준 슬라이딩 토글 (36×20px / cms-radius-sm 10px) */
   .ar-toggle {
-    display: flex;
-    align-items: center;
-    gap: 5px;
-    height: 26px;
-    padding: 0 10px;
-    border-radius: 13px;
-    border: none;
-    background: #DCDCDC;
-    cursor: pointer;
-    transition: background 0.2s;
     position: relative;
+    width: 36px;
+    height: 20px;
+    border-radius: var(--cms-radius-sm, 10px);
+    border: none;
+    background: var(--cs-disabled-toggle, #d0d0d8);
+    cursor: pointer;
+    padding: 2px;
+    transition: background 0.2s;
+    flex-shrink: 0;
   }
   .ar-toggle.ar-on { background: var(--cs-purple); }
   .ar-toggle:disabled { opacity: 0.5; cursor: not-allowed; }
 
   .ar-thumb {
-    width: 14px;
-    height: 14px;
+    position: absolute;
+    top: 2px;
+    left: 2px;
+    width: 16px;
+    height: 16px;
     border-radius: 50%;
     background: var(--cs-white);
-    flex-shrink: 0;
+    transition: transform 0.2s;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.2);
   }
+  .ar-toggle.ar-on .ar-thumb { transform: translateX(16px); }
 
-  .ar-text {
-    font: 700 11px/1 'Noto Sans KR', sans-serif;
-    color: var(--cs-white);
-  }
-  .ar-toggle:not(.ar-on) .ar-text { color: var(--cs-text-mid, #666); }
-
-  /* CTA 버튼 */
+  /* CTA 버튼 — cms-uiux.md §7-3 ctaPrimary 표준 (44px / 0 30px / 14px 700) */
   .cta-btn {
-    height: 36px;
-    padding: 0 18px;
+    height: 44px;
+    padding: 0 30px;
     background: var(--cs-purple);
     border: none;
     border-radius: var(--radius-md, 15px);
-    font: 700 13px/1 'Noto Sans KR', sans-serif;
+    font: var(--text-pc-body-14, 700 14px/1.4 'Noto Sans KR', sans-serif);
+    letter-spacing: -0.5px;
     color: var(--cs-white);
     cursor: pointer;
     transition: background 0.15s;

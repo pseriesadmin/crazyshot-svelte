@@ -6,6 +6,8 @@ import { json } from '@sveltejs/kit'
 import type { RequestHandler } from './$types'
 import { getCmsRoleForAction } from '$lib/server/getCmsRoleForAction'
 import { normalizeKeywords } from '$lib/server/normalizeKeywords'
+import { VALID_CATEGORIES } from '$lib/constants/cannedResponseCategories'
+import { VALID_HELP_CATEGORIES } from '$lib/constants/helpCategories'
 
 // PATCH /api/cms/canned-responses/[id] — 수정
 export const PATCH: RequestHandler = async ({ locals, request, params }) => {
@@ -19,6 +21,7 @@ export const PATCH: RequestHandler = async ({ locals, request, params }) => {
   if (typeof body.title === 'string')    updates.title    = body.title.trim()
   if (typeof body.content === 'string')  updates.content  = body.content.trim()
   if ('category' in body)               updates.category  = body.category ?? null
+  if ('help_category' in body)          updates.help_category = body.help_category ?? null
   if ('shortcut' in body) {
     const s = typeof body.shortcut === 'string' ? body.shortcut.trim() : null
     updates.shortcut = s || null
@@ -38,9 +41,15 @@ export const PATCH: RequestHandler = async ({ locals, request, params }) => {
     return json({ error: '변경할 내용이 없습니다.' }, { status: 400 })
   }
 
-  const VALID_CATEGORIES = ['return', 'payment', 'reservation', 'damage', 'general']
   if (updates.category && !VALID_CATEGORIES.includes(updates.category as string)) {
     return json({ error: '올바르지 않은 카테고리입니다.' }, { status: 400 })
+  }
+
+  if ('help_category' in updates) {
+    if (!updates.help_category) return json({ error: '도움말 분류를 선택해주세요.' }, { status: 400 })
+    if (!VALID_HELP_CATEGORIES.includes(updates.help_category as string)) {
+      return json({ error: '올바르지 않은 도움말 분류입니다.' }, { status: 400 })
+    }
   }
 
   const admin = createClient(PUBLIC_SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
@@ -49,7 +58,7 @@ export const PATCH: RequestHandler = async ({ locals, request, params }) => {
     .from('canned_responses')
     .update(updates)
     .eq('id', id)
-    .select('id, title, content, category, shortcut, match_keywords, usage_count, created_at, image_url, cta_label, cta_url')
+    .select('id, title, content, category, help_category, shortcut, match_keywords, usage_count, created_at, image_url, cta_label, cta_url')
     .single()
 
   if (error) {

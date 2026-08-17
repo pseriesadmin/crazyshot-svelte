@@ -4,6 +4,7 @@
   // 배경: --cs-points (#C1BBEC), 높이 93px, 첨부 + 입력 + 전송
   import CmsSimilarNameInput from '$lib/components/cms/CmsSimilarNameInput.svelte'
   import type { SimilarNameItem } from '$lib/types/cms-similar-name'
+  import { getCategoryLabel } from '$lib/constants/cannedResponseCategories'
 
   // 상품검색 팝업 — 타이핑 중 라이브 제안(SuggestPicker류)은 가벼운 소량만 조회하고,
   // 엔터(하이라이트 없을 때)로 명시적 "더 보기"를 눌러야만 더 큰 목록을 조회한다.
@@ -378,13 +379,6 @@
     input.value = ''
   }
 
-  const CATEGORY_LABEL: Record<string, string> = {
-    return: '반납',
-    payment: '결제',
-    reservation: '예약',
-    damage: '파손',
-    general: '일반',
-  }
 </script>
 
 <div class="input-wrap" bind:this={wrapEl}>
@@ -433,7 +427,7 @@
         >
           <span class="ci-title">{item.title}</span>
           {#if item.category}
-            <span class="ci-cat">{CATEGORY_LABEL[item.category] ?? item.category}</span>
+            <span class="ci-cat">{getCategoryLabel(item.category)}</span>
           {/if}
           {#if item.shortcut}
             <span class="ci-shortcut">{item.shortcut}</span>

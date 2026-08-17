@@ -1233,6 +1233,96 @@ autocomplete  : off (브라우저 자동완성과 충돌 방지)
 </style>
 ```
 
+### 7-12-A. 콤보버튼 UI (분류·카테고리 필터) — `cat-pill`/`filter-pill` 표준 ★
+
+> **공식 명칭**: 콤보버튼 UI (CMS 분류·카테고리 필터 전용)
+> **트리거**: "콤보버튼 UI 적용해" / "카테고리 필터 콤보버튼 적용해" 언급 시 이 스펙 즉시 적용
+> **확정일**: 2026-08-18 — `CannedResponsePanel.svelte`(상세패널 "카테고리"·"도움말 분류" 필드)와
+> `/cms/chat/qna`(목록 툴바 카테고리 필터)에서 이미 관례적으로 동일 패턴이 쓰이고 있던 것을
+> 공식 표준으로 등록. §7-12(categoryChip, JSON 8px 반경 실측값)와는 별개 컴포넌트로 공존한다 —
+> §7-12는 그 자체로 유효한 정본이나, "분류·카테고리를 콤보 버튼 그룹으로 선택하는" 용도에는
+> 이 §7-12-A(pill 30px)가 실제 채택된 표준이다.
+> **스타일 업데이트(같은 날 후속)**: 최초 등록 시 비활성 상태를 흰 배경 + `#DCDCDC` 1.5px
+> 아웃라인으로 기록했으나, Stephen 지시로 아웃라인을 완전히 제거하고 배경을 옅은 퍼플 톤으로
+> 전환 — 1차로 `--cs-purple-op10`(10%)을 적용했다가, "제일 옅은 퍼플 토큰"으로 재지시받아
+> 최종 `--cs-lilac`(purple-5%, app.css에 정의된 퍼플 계열 중 가장 옅은 값)으로 확정.
+
+**공통 스펙 (2026-08-18 최종)**
+
+| 항목 | 값 |
+|---|---|
+| 형태 | pill (완전 둥근 알약형) |
+| 반경 | `var(--radius-xl, 30px)` |
+| 보더(비활성) | **없음**(`border: none`) |
+| 배경(비활성) | `var(--cs-lilac)` — purple-5%, app.css 퍼플 계열 중 최옅 |
+| 텍스트색(비활성) | `var(--cs-text)` |
+| 배경(활성) | `var(--cs-purple)` |
+| 텍스트색(활성) | `var(--cs-white)` |
+| hover(비활성 시) | 텍스트 `var(--cs-purple)`로 전환(보더 없으므로 보더 색 전환 없음) |
+| 폰트 굵기 | 700 (Bold) |
+| transition | background 0.15s, color 0.15s |
+
+**크기 변형(맥락별) — 2026-08-18 좌우 패딩 +30% 확정**
+
+| 변형 | 적용 위치 | height | 좌우 패딩 | 폰트 크기 |
+|---|---|---|---|---|
+| 상세패널형 | Detail Panel 내부 필드(예: `CannedResponsePanel` "카테고리"·"도움말 분류") | 34px | **18px**(구 14px) | 13px |
+| 툴바형 | 목록 화면 상단 툴바 필터(예: `/cms/chat/qna` 카테고리 필터) | 30px | **16px**(구 12px) | 12px |
+
+**표준 마크업**
+
+```svelte
+<div class="cat-pills">
+  {#each OPTIONS as opt}
+    <button
+      class="cat-pill"
+      class:active={selected === opt.value}
+      onclick={() => selected = opt.value}
+    >{opt.label}</button>
+  {/each}
+</div>
+```
+
+**표준 CSS (상세패널형 기준 — 툴바형은 height/padding/font-size만 위 표대로 교체)**
+
+```css
+.cat-pill {
+  height: 34px;
+  padding: 0 18px;
+  border-radius: var(--radius-xl, 30px);
+  border: none;
+  background: var(--cs-lilac);
+  font: 700 13px/1 'Noto Sans KR', sans-serif;
+  color: var(--cs-text);
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+.cat-pill.active {
+  background: var(--cs-purple);
+  color: var(--cs-white);
+}
+.cat-pill:hover:not(.active) {
+  color: var(--cs-purple);
+}
+```
+
+**적용 화면**
+
+```
+src/lib/components/cms/CannedResponsePanel.svelte  — .cat-pill (카테고리 · 도움말 분류 필드)
+src/routes/cms/chat/qna/+page.svelte                — .filter-pill (목록 툴바 카테고리 필터)
+```
+
+**GATE C 확인 항목**
+
+```
+[ ] 신규 분류·카테고리 콤보버튼 UI 추가 시 이 컴포넌트 재사용(인라인 신규 구현 금지)?
+[ ] 상세패널 내부 → 상세패널형(34px/18px/13px), 목록 툴바 → 툴바형(30px/16px/12px) 구분 적용?
+[ ] 활성 배경 `--cs-purple`(primary-600) 사용? (§7-12 categoryChip의 `--cs-purple-dark` 아님)
+```
+
+---
+
 ### 7-9. 확인 모달 (삭제 등)
 
 ```svelte
