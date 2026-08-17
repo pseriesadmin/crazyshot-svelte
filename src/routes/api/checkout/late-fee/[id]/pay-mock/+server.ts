@@ -48,21 +48,20 @@ export const POST: RequestHandler = async ({ params, locals }) => {
     return json({ success: false, error: result?.error ?? '결제 실패' }, { status })
   }
 
-  // 결제 완료 채팅 안내 메시지 직접 INSERT
-  // (별도 RPC를 만들지 않고 API에서 직접 삽입 — 스펙 지시대로)
-  const { data: sessionData } = await admin
-    .from('chat_sessions')
-    .select('id')
-    .eq('user_id', session.user.id)
-    .in('status', ['open', 'pending'])
-    .order('updated_at', { ascending: false })
-    .limit(1)
-    .maybeSingle()
+  // 결제 완료 채팅 안내 메시지 삽입 — 세션 조회는 find_or_create_general_chat_session RPC
+  // 경유(결함A/B-2·coupon-gift와 동일 유형의 세션단절 버그 방지: context_type='general' 필터 +
+  // pending/closed→open 자동 승격 + 세션 자체가 없으면 신규 생성까지 전부 이 RPC가 보장하므로
+  // 메시지가 유실되지 않음, reservation-rental-execution.md §0-3)
+  const { data: chatSessionId, error: sessionErr } = await admin.rpc('find_or_create_general_chat_session', {
+    p_user_id:         session.user.id,
+    p_reservation_id:  validation.lateFee.reservation_id,
+  })
 
-  if (sessionData) {
-    const chatSession = sessionData as { id: string }
+  if (sessionErr) {
+    console.error('[late-fee/pay-mock] find_or_create_general_chat_session 실패:', sessionErr)
+  } else if (chatSessionId) {
     await admin.from('chat_messages').insert({
-      session_id:   chatSession.id,
+      session_id:   chatSessionId,
       sender_type:  'admin',
       content:      `연체료 결제가 완료됐습니다. (${(validation.lateFee.fee_amount).toLocaleString()}원)`,
       message_type: 'text',

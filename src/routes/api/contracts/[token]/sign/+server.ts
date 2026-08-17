@@ -5,6 +5,7 @@ import { json } from '@sveltejs/kit'
 import { sendPushToAdmins } from '$lib/server/push'
 import { computeContentHash } from '$lib/contract-signature/contentHash'
 import { recordAuditLog } from '$lib/contract-signature/auditLog'
+import { resolveApprovalNotifyPlan } from '$lib/server/reservationApprovalNotify'
 import type { RequestHandler } from './$types'
 
 export const POST: RequestHandler = async ({ params, request, getClientAddress }) => {
@@ -112,10 +113,25 @@ export const POST: RequestHandler = async ({ params, request, getClientAddress }
           p_reservation_id: contract.reservation_id,
         })
         if (justConfirmed === true) {
-          await admin.rpc('send_rental_chat_notification', {
-            p_reservation_id: contract.reservation_id,
-            p_notify_type:    'reservation_approval',
-          })
+          // 같은 주문(order_items)으로 묶인 다중상품 예약이면 관리자 수동승인
+          // (approveReservation)과 동일하게 통합 카드로 안내 — service-operations.md §4
+          // 정책을 승인 트리거(관리자 수동 vs 고객 서명완료 자동)와 무관하게 일치시킴
+          // (reservation-rental-execution.md §0-4 #7 — 이전엔 이 경로만 항상 단건 발송이라
+          // 묶음주문도 상품별로 개별 카드가 여러 건 나가던 설계공백이었음)
+          const notifyPlan = await resolveApprovalNotifyPlan(admin, contract.reservation_id)
+          if (notifyPlan.mode === 'batch') {
+            await admin.rpc('send_rental_chat_notification_batch', {
+              p_reservation_ids: notifyPlan.reservationIds,
+              p_notify_type:     'reservation_approval',
+            })
+          } else if (notifyPlan.mode === 'single') {
+            await admin.rpc('send_rental_chat_notification', {
+              p_reservation_id: contract.reservation_id,
+              p_notify_type:    'reservation_approval',
+            })
+          }
+          // notifyPlan.mode === 'hold' → 같은 주문의 다른 상품이 아직 미승인 — 알림 보류
+          // (마지막 상품이 confirmed되는 시점에 위 batch 분기가 통합 카드로 한 번에 발송)
         }
       } else if (currentReservation?.status === 'shipped') {
         await admin.rpc('update_reservation_status', {

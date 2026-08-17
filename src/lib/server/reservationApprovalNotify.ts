@@ -46,9 +46,13 @@ export async function resolveApprovalNotifyPlan(
     .select('id, status')
     .in('id', siblingIds)
 
-  // 취소된 형제 상품은 영구히 confirmed가 될 수 없으므로 제외 — 취소 1건 때문에 나머지
-  // 상품의 통합 알림이 영영 보류되는 것을 방지한다.
-  const relevant = ((rows ?? []) as ReservationStatusRow[]).filter((r) => r.status !== 'cancelled')
+  // 취소·만료된 형제 상품은 영구히 confirmed가 될 수 없으므로 제외 — 그 1건 때문에 나머지
+  // 상품의 통합 알림이 영영 보류되는 것을 방지한다(HOLD 30분 자동만료 도입 후 만료도
+  // 취소와 동일한 영구 종결 상태이므로 같은 예외 처리 필요 — reservation-rental-
+  // execution.md QA 발견, Migration 285와 상호작용해 실사고로 이어질 수 있었음).
+  const relevant = ((rows ?? []) as ReservationStatusRow[]).filter(
+    (r) => r.status !== 'cancelled' && r.status !== 'expired'
+  )
   const allConfirmed = relevant.length > 0 && relevant.every((r) => r.status === 'confirmed')
 
   if (!allConfirmed) return { mode: 'hold' }

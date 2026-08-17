@@ -44,7 +44,16 @@ export const POST: RequestHandler = async ({ request, locals }) => {
     return json({ error: '세션을 찾을 수 없습니다.' }, { status: 404 })
   }
 
-  const userId = (chatSession as { user_id: string }).user_id
+  const cs = chatSession as { user_id: string; status: string }
+  const userId = cs.user_id
+
+  // 관리자 쿠폰 발송 → 대기/종료 세션도 진행중으로 복구 (admin-reply와 동일 정책)
+  if (cs.status === 'closed' || cs.status === 'pending') {
+    await admin
+      .from('chat_sessions')
+      .update({ status: 'open', updated_at: new Date().toISOString() })
+      .eq('id', sessionId)
+  }
 
   // 쿠폰 정보 조회 (service_role)
   const { data: couponRaw, error: couponErr } = await admin
