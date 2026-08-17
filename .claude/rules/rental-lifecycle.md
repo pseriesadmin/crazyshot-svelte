@@ -250,6 +250,12 @@ cancelled / damage_claimed → 취소 UI (✕ 아이콘 + 빨간 텍스트)
 | `in_use` | `rental_confirm` | **대여확인**(수령확인) 알림 — 2026-07-27 신규. 반납예정 알림(`return_remind`)과는 별개 이벤트 |
 | `return_requested` | `return_registration` | 반납 정보 요청 |
 | `returned` | `rental_complete` | 대여 종료 알림 |
+| `cancelled` | `reservation_cancelled` | 예약 취소 알림 — 2026-08-18 추가(검수로 발견된 공백, Migration 288) |
+| `damage_claimed` | `damage_claimed` | 파손 신고 접수 알림 — 2026-08-18 추가(현재 이 상태로 전환하는 CMS 버튼은 없음, `update_reservation_status` 경로가 생기면 자동 발송되도록 미리 매핑만 해둠) |
+
+> HOLD 30분 자동만료(`release_reservation_hold` pg_cron)도 2026-08-18부터 `hold_expired` 알림을
+> 발송한다 — 위 표(app 코드 AUTO_NOTIFY 매핑)와 달리 이건 RPC 내부 루프에서 직접 호출된다
+> (service-operations.md §10 참고).
 
 ### 수동버튼 (NOTIFY_TYPE_MAP) — `cms/rentals` `RentalDetailPanel.svelte`
 

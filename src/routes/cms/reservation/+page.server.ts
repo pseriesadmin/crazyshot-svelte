@@ -160,11 +160,15 @@ export const actions: Actions = {
     const res = result as { ok: boolean; error?: string } | null
     if (!res?.ok) return fail(400, { message: res?.error ?? '처리 실패' })
     // 상태 전환별 채팅 알림 자동 발송
+    // cancelled·damage_claimed 추가(2026-08-18 검수 발견 — 상태만 바뀌고 고객 알림이 전혀
+    // 없던 공백. HOLD 30분 자동만료는 release_reservation_hold RPC 내부에서 별도 발송)
     const AUTO_NOTIFY: Partial<Record<string, string>> = {
       shipped:          'shipment_notify',
       in_use:           'rental_confirm',
       return_requested: 'return_registration',
       returned:         'rental_complete',
+      cancelled:        'reservation_cancelled',
+      damage_claimed:   'damage_claimed',
     }
     const notifyType = AUTO_NOTIFY[newStatus]
     if (notifyType) {
