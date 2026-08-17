@@ -20589,3 +20589,181 @@ src/lib/server/searchEngine/core/koreanTokenizer.ts          (MODIFY)
    확인 후 ignore 해제 여부 결정
 
 **현재 상태**: 조치 없음(코드 미변경). 표본 확인한 promotion 7개 파일의 `as any`는 그대로 유지.
+
+## NOW — 신규 3영역 발견사항 보완 4건: 계약임포트 파일크기제한 + 체크아웃배치알림 로깅 + 회원코드설정 테스트보강 + 예약승인 배치알림 CMS연동 (2026-08-17, 이 세션 단독 — 병렬세션 작업 제외)
+
+생성일: 2026-08-17
+아젠다: 이전 STEP(신규 3영역 조사: 전자계약 에디터·체크아웃 배치알림·회원코드 설정) 종합보고
+이후 Stephen 지정 구체 수정 4건 — "①전자계약 에디터 임포트 파일크기 제한 최대 10mb ②체크아웃
+배치알림 RPC 실패 로깅 유실 수정 ③회원코드설정 테스트 안정장치 보완 ④다중상품 예약승인 시
+배치알림 RPC 연동 — /cms/rentals 자동반영 + 관리자 승인UI 노출 연동". GATE 등급: 🟡 BOUNDARY
+①②③(단일 파일·기존 패턴 재사용) / 🟡 BOUNDARY④(예약 상태전이 자체는 불변, 알림 발송 방식만
+분기 추가 — DB 스키마·RPC 신규 없음, service-operations.md §4에 이미 문서화된 정책의 CMS 경로
+누락분 보완).
+
+[CONTEXT BRIDGE]
+plan_source: 이전 STEP(3영역 조사)에서 이미 코드 리딩 완료된 지점을 그대로 수정 — 신규 탐색
+없음. ④는 실행 전 `/cms/reservation`(approveReservation)·`/cms/rentals`·RentalDetailPanel의
+"orderSiblings"(같은 order_items로 묶인 형제 예약) 기존 구현을 재확인해 이미 결제정보 탭에서
+lazy-fetch되고 있음을 확인 후 rental 탭으로 확장하는 방식으로 설계.
+핵심제약: 요청 4건 명시 파일만 수정. TDD도메인 판정 — ①②③은 아니오(GSD), ④는 "예약승인"이
+AGENTS.md TDD 강제 키워드 "예약"에 해당 → 신규 헬퍼(resolveApprovalNotifyPlan)를 별도 순수
+모듈로 추출해 실 Stage DB 기반 통합테스트 선행 작성.
+
+---
+
+### 수정 내역
+
+**① 전자계약 에디터 임포트 파일크기 제한(10MB)**
+`ContractImportModal.svelte`의 단일 파일선택 진입점 `onFileChange()`에 `MAX_IMPORT_FILE_SIZE
+= 10*1024*1024` 체크 추가 — 초과 시 `csToast.error` + input 리셋 + 파싱 시도 자체를 하지 않고
+조기 반환. docx/xlsx/hwp/hwpx 4개 포맷 전부 이 한 지점을 거치므로 파서별(`docxImport.ts`/
+`xlsxImport.ts`/`hwpxImport.ts`) 개별 수정 불필요.
+
+**② 체크아웃 배치알림 RPC 실패 로깅 유실 수정**
+`/api/checkout/confirm-mock/+server.ts`에서 `send_rental_chat_notification_batch` 호출 결과
+(`error`/`{ok:false}` 양쪽)를 전혀 확인하지 않던 것을, 같은 파일의 `create_checkout_order`/
+`use_coupon` 실패 로깅과 동일한 `console.error` 패턴으로 통일.
+
+**③ 회원코드설정(/cms/customers/settings) 테스트 안정장치 보완**
+이 화면은 RPC 레벨 테스트(`memberCodeCombo.test.ts`)만 있고 화면 액션(`saveMemberCodeCombo`/
+`bulkReissue`) 자체 테스트가 전무했음. 신규 2개 파일:
+- `comboCategoryCode.test.ts` — `saveMemberCodeCombo`가 접두어 계산에 쓰는 순수 유틸
+  (`buildComboCategoryCode`/`sortByTier`/`getRootCode`) 단독 검증 8건.
+- `customersSettingsGuards.test.ts` — `cmsSecurityGuards.test.ts`와 동일한 `vi.mock` 패턴으로
+  액션 함수 직접 호출, 15건. 권한가드(401/403) · 30자초과 접두어 저장 거부(migration 276
+  회귀방지) · code_mapping 조회실패 400 · `confirmed` 체크박스 미체크 시 RPC 미호출 · 기준코드
+  미설정 시 차단 · RPC 실패/거부 전파 · 정상흐름 success 전부 커버.
+
+**④ 다중상품 예약승인 시 배치알림 RPC 연동**
+`service-operations.md §4`가 이미 문서화한 정책("결제완료 시, cms 수동승인 포함, 배치알림으로
+묶인 상품 전체를 통합 안내")이 실제로는 고객 자동승인(confirm-mock) 경로에만 구현돼 있고, CMS
+관리자 `approveReservation` 경로는 여전히 상품별 개별 `send_rental_chat_notification`만
+호출하던 정책-구현 갭을 발견·수정.
+- `$lib/server/reservationApprovalNotify.ts` 신규 — `resolveApprovalNotifyPlan(admin,
+  reservationId)`: 이 예약이 `order_items`로 묶인 다중상품 주문인지 확인 → 묶여있으면 취소된
+  형제를 제외한 나머지 전부가 이번 승인으로 confirmed 됐는지 판정 → `single`(단일상품, 기존
+  그대로 즉시 단건알림) / `batch`(이번이 마지막 승인 — `send_rental_chat_notification_batch`로
+  통합카드 1건) / `hold`(다른 상품 아직 미승인 — 알림 보류, 마지막 승인 시 batch로 일괄발송해
+  상품별 개별카드 스팸 방지) 3분기 반환.
+- `/cms/reservation/+page.server.ts` `approveReservation` 액션에 연동 + batch RPC 실패 시
+  ②와 동일한 `console.error` 로깅.
+- `RentalDetailPanel.svelte`(`/cms/reservation`·`/cms/rentals` 공유 컴포넌트) — 기존
+  `orderSiblings` lazy-fetch(결제정보 탭 전용이었음)를 rental 탭(승인버튼 위치)에서도 함께
+  조회하도록 조건 확장 + "이 예약은 같은 주문의 다른 상품 N건과 함께 진행 중입니다. 모든 상품이
+  승인 완료되면 알림이 한 번에 발송됩니다" 안내문구를 승인버튼 바로 위에 노출(관리자 승인UI
+  노출 요건 충족).
+- `/cms/rentals`는 이 컴포넌트를 그대로 공유하고, 상태전이는 기존 `update_reservation_status`
+  RPC를 그대로 사용하므로 "자동 반영" 요건은 별도 코드 없이 상태값 갱신만으로 충족됨(신규
+  분기·신규 UI가 필요했던 부분은 "관리자 승인UI 노출"뿐).
+
+### 검증
+
+- `npm run check`(svelte-check) — 1482 FILES, 신규 4개 수정 파일·3개 신규 파일 전부 0 에러
+  (vite.config.ts의 무관한 사전 존재 타입에러 1건은 이번 범위 밖 그대로).
+- `npx vitest run`(전체 스위트) — 신규 28건(23+5) 전부 GREEN. 기존 실패 4건
+  (`contractSign.test.ts`, 이전부터 알려진 무관한 픽스처 이슈)만 유지, 회귀 0건. `.claude/
+  worktrees/exciting-ardinghelli-71ff74/`(병렬세션 산출물, 구버전 픽스처라 실패)는 검수/집계
+  대상에서 제외.
+- `npx eslint` 신규·수정 파일 전체 — H-01(`rental_reservations` 직접 INSERT 금지) 1건은
+  `reservationApprovalNotify.test.ts`의 픽스처 헬퍼에서 발생하나 `payment.test.ts`와 동일한
+  기존 테스트 픽스처 관행이라 그대로 유지(신규 관행 아님), `security/detect-object-injection`
+  경고 3건은 코드베이스 전역에 흔한 논블로킹 경고. 신규 로직(운영 코드) 자체의 에러 0건.
+- `reservationApprovalNotify.test.ts` — 실 Stage DB(`ezyvffjvuwmtuhpxdjrw`)에
+  `create_reservation_order` RPC(migration 280)로 실제 `order_items` 연결을 만들어 5가지
+  시나리오(미연결 단일 / 단일상품 주문 / 다중상품 미완료→hold / 다중상품 완료→batch / 취소상품
+  제외 후 batch) 검증, 5건 GREEN. 테스트 중 이전 실패 런에서 남은 orphan 픽스처 1건 발견·수동
+  정리 완료(격리 테스트 유저·예약 각 1건, 실 고객 데이터 미접촉).
+
+### 수정 파일 (커밋 대기 — 아직 커밋되지 않음)
+
+```
+src/lib/components/cms/contract-editor/ContractImportModal.svelte   (MODIFY)
+src/routes/api/checkout/confirm-mock/+server.ts                     (MODIFY)
+src/routes/cms/reservation/+page.server.ts                          (MODIFY)
+src/lib/components/cms/RentalDetailPanel.svelte                     (MODIFY)
+src/lib/server/reservationApprovalNotify.ts                         (NEW)
+src/__tests__/services/comboCategoryCode.test.ts                    (NEW)
+src/__tests__/server/customersSettingsGuards.test.ts                (NEW)
+src/__tests__/services/reservationApprovalNotify.test.ts            (NEW)
+```
+
+
+### QA(@sp3-qa-agent) 검수 결과 — 통과 (블로킹 0건)
+
+`git diff -- <8개 파일>` + 신규 4개 파일 `Read`로 실제 코드를 직접 대조. TASK.md의 4건 서술 전부
+코드와 일치 확인.
+
+- **① ContractImportModal.svelte**: `MAX_IMPORT_FILE_SIZE = 10*1024*1024` 추가, `onFileChange()`
+  진입부에서 `csToast.error` + `fileInput.value=''` 리셋 + `return`(파싱 시도 전 조기 반환) —
+  diff 그대로 확인. 기존 `csToast`/`fileInput` 패턴 재사용, 신규 의존성 없음.
+- **② confirm-mock/+server.ts**: `send_rental_chat_notification_batch` 호출을
+  `{data,error}` 구조분해로 바꿔 `batchErr`(RPC 자체 에러) + `result.ok`(RPC 내부 거부) 양쪽
+  모두 `console.error`로 로깅 — 같은 파일 `use_coupon` 처리(93~103행)와 완전히 동일한 패턴임을
+  라인 대조로 확인.
+- **③ comboCategoryCode.test.ts(8건)/customersSettingsGuards.test.ts(15건)**: 테스트 대상인
+  `src/lib/utils/comboCategoryCode.ts`·`src/routes/cms/customers/settings/+page.server.ts`는
+  이번 세션에서 미수정(git status 확인, 기존 구현 그대로) — "테스트만 신규 추가" 주장과 일치.
+  서버 파일의 실제 가드 순서(getCmsRoleForAction→hasSettingsAccess→400/401/403/30자초과 차단→
+  confirmed 체크→RPC)를 직접 읽어 테스트 케이스와 1:1 대조, 불일치 없음.
+- **④ reservationApprovalNotify.ts + /cms/reservation/+page.server.ts + RentalDetailPanel.svelte**:
+  `resolveApprovalNotifyPlan()` 3분기(single/batch/hold) 로직을 라인 단위로 검증 —
+  `order_items` 미연결·단일항목(`siblingIds.length<=1`)이면 `single`, 그 외 형제 상태를
+  `status!=='cancelled'`로 필터링(취소 제외) 후 `every(status==='confirmed')`로 `batch`/`hold`
+  판정. `approveReservation` 액션은 상태갱신(`update_reservation_status`) 성공 후에만 이 로직을
+  타며, 3분기 모두 `return {ok:true}`로 종료 — 알림 성공 여부와 무관하게 이미 성공한 상태갱신을
+  롤백/실패시키지 않음. `RentalDetailPanel.svelte`는 `activeTab==='rental'`에서도
+  `orderSiblings`를 lazy-fetch하도록 조건만 확장했고, 안내문구는 `order-siblings` API가
+  `.neq('reservation_id', reservationId)`로 자기 자신을 제외한 결과를 쓰므로 "다른 상품 N건"
+  문구가 정확함을 API 코드로 확인.
+
+**판단(요청 2번 항목)**: batch RPC 실패를 로깅만 하고 `fail()`을 반환하지 않는 설계는 안전한
+실패모드로 판단 — 이미 `update_reservation_status`가 성공적으로 커밋된 뒤의 부가 알림 단계이며,
+`sendReservationLifecyclePush`(바로 다음 줄, 기존 코드)도 동일하게 "채팅과 독립 — 실패해도 위
+처리에 영향 없음" 원칙을 이미 쓰고 있어 기존 설계 관행과 일치. 결제/예약 상태 자체가 알림
+실패로 롤백되면 오히려 더 위험(정상 승인된 예약이 사라짐)하므로 이 판단이 맞다.
+
+**검증 재실행 결과 (주장 대조)**
+- `npx vitest run comboCategoryCode.test.ts customersSettingsGuards.test.ts
+  reservationApprovalNotify.test.ts` — 3 files / **28건 전체 GREEN** (TASK.md 주장과 일치).
+- `npm run check`(svelte-check) — 1482 FILES, 1 ERROR(= `vite.config.ts:10` 사전 존재 무관
+  타입에러, 이번 8개 파일과 무관 확인) + 326 WARNINGS(기존 baseline과 동일 수). 8개 대상 파일
+  관련 신규 warning/error **0건**(파일명 grep으로 재확인).
+- `npx eslint` 8개 파일 개별 실행 —
+  - `reservationApprovalNotify.test.ts`: H-01(rental_reservations 직접 INSERT 금지) 1건.
+    `payment.test.ts`의 `createHoldReservation()` 픽스처(74행)를 동일하게 eslint 실행해
+    **동일한 H-01 에러 1건이 기존에도 있음을 직접 확인** — "새로운 위반 아님, 기존 관행을 따름"
+    주장 확정 검증.
+  - `customersSettingsGuards.test.ts`: `security/detect-object-injection` 경고 2건(비블로킹,
+    코드베이스 전역 흔한 경고).
+  - `+page.server.ts`(cms/reservation): 동일 경고 1건(비블로킹).
+  - [비블로킹 신규 발견] `ContractImportModal.svelte` 189행에 `'_err' is defined but never
+    used` 에러 1건 존재 — 단, `git show HEAD:...` 원본 파일을 별도로 eslint 실행해 **이 세션
+    변경 이전부터 있던 pre-existing 에러**임을 확인(diff 범위인 83~100행과 무관, 189행은
+    `startHwpxExperimentalParse()`의 기존 catch 블록). TASK.md 검증 서술이 이 사전 존재
+    에러를 언급하지 않은 점은 누락이나, 신규 에러가 아니므로 GATE E 블로킹 사유 아님.
+- `git status --porcelain` 전체 대조 — 이번 세션 8개 파일(수정4+신규4) 외 추가 변경 없음.
+  `.claude/harness/TASK.md`/`GSD_LOG.md`는 세션 기록 갱신으로 정상. 그 외 모든 변경(`cms/
+  accounts/list`·`cms/codes/_FormatTab`·`cms/promotion/*`·`vite.config.ts`·`ProductDPCard`·
+  `reservationHelper` 등)은 세션 시작 시점 git status에 이미 존재하던 병렬세션 산출물로,
+  이번 검수 범위에서 완전히 제외.
+- 8개 파일 전체에 `$env` import·`SERVICE_ROLE_KEY`/`TOSS_SECRET_KEY` 패턴 grep — 0건(서버 키
+  참조 자체가 없음, `reservationApprovalNotify.ts`는 admin 클라이언트를 파라미터로만 받음).
+- **Stage DB(ezyvffjvuwmtuhpxdjrw) 잔여물 확인**: `SUPABASE_SERVICE_ROLE_KEY`로 `auth.users`
+  중 이메일 패턴 `tdd-approvenotify-%` 직접 조회 — **잔여 0건**. 연쇄 조회한
+  `rental_reservations`/`order_items`도 확인 대상 없음(사용자 자체가 0건이므로 자동 확인).
+  TASK.md가 서술한 "이전 실패 런 orphan 1건 수동 정리 완료" 주장과 현재 상태가 일치 — 이번
+  재실행분 포함해서도 누수 없음 재확인.
+
+**비블로킹 발견 2건**
+- [MINOR] `ContractImportModal.svelte:189` `'_err' is defined but never used` — 세션 변경 전
+  부터 있던 pre-existing eslint 에러(위 항목 참고). 이번 범위 밖이라 수정하지 않았으나, TASK.md
+  검증 서술에서 "8개 파일 전체 eslint 0 error"라는 인상을 줄 수 있어 명확화 차원에서 기록.
+- [MINOR] `resolveApprovalNotifyPlan`의 "형제 3건 중 2건이 취소되어 1건만 남는" 극단 케이스는
+  전용 테스트가 없음(가장 근접한 테스트는 3건 중 1건 취소 사례). 코드 경로상 `siblingIds.length
+  <=1` 얼리리턴은 취소 필터링 이전 원본 형제 수 기준이라, 이 극단 케이스는 `batch` 모드로
+  `reservationIds` 1개짜리 배열을 반환하게 되며 `send_rental_chat_notification_batch`
+  RPC(migration 275)는 1건짜리 배열도 정상 처리하도록 작성돼 있음(SQL 직접 확인, `v_count>1`
+  분기만 문구가 달라짐) — 버그는 아니나 테스트 커버리지 갭으로 기록.
+
+**GATE E: ✅ 통과 — 블로킹 0건. 커밋은 Stephen 직접 실행.**

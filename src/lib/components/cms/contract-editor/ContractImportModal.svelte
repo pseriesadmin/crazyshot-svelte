@@ -83,9 +83,18 @@
   // --------------------------------------------------------------------------
   // 파일 선택
   // --------------------------------------------------------------------------
+  const MAX_IMPORT_FILE_SIZE = 10 * 1024 * 1024 // 10MB
+
   function onFileChange(event: Event) {
     const file = (event.target as HTMLInputElement).files?.[0]
     if (!file) return
+
+    if (file.size > MAX_IMPORT_FILE_SIZE) {
+      csToast.error('파일 크기가 10MB를 초과합니다. 더 작은 파일로 다시 시도해주세요.')
+      if (fileInput) fileInput.value = ''
+      return
+    }
+
     selectedFile = file
 
     const ext = file.name.split('.').pop()?.toLowerCase() ?? ''

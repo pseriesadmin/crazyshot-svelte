@@ -74,10 +74,16 @@ export const POST: RequestHandler = async ({ locals, request }) => {
   // (Migration 275 send_rental_chat_notification_batch — 기존 단건 RPC는 다른 알림 타입에서
   // 계속 그대로 사용되므로 건드리지 않음)
   if (confirmedReservations.length > 0) {
-    await admin.rpc('send_rental_chat_notification_batch', {
+    const { data: batchResult, error: batchErr } = await admin.rpc('send_rental_chat_notification_batch', {
       p_reservation_ids: confirmedReservations.map((r) => r.id),
       p_notify_type: 'reservation_approval'
     })
+    if (batchErr) {
+      console.error('[checkout/confirm-mock] send_rental_chat_notification_batch 실패:', batchErr)
+    } else {
+      const result = batchResult as { ok: boolean; error?: string } | null
+      if (!result?.ok) console.error('[checkout/confirm-mock] send_rental_chat_notification_batch 거부:', result?.error)
+    }
   }
 
   // 선택된 쿠폰 소진 처리 — 예약이 1건 이상 확정된 경우에만 적용

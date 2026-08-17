@@ -4112,3 +4112,56 @@
   시퀀스 행 정리 완료. `bulk_reissue_member_codes` 실제 실행(진짜 21명 재발급)은 Production에서
   수행하지 않음 — 실 데이터 변경은 Stephen이 CMS 화면에서 직접 판단할 영역.
   최종 상태: 앱코드(Vercel) + DB(마이그레이션) 전부 Stage·Production 양쪽 배포·적용 완료.
+
+[2026-08-17] GSD | 신규 3영역 보완 4건 — 계약임포트 파일크기제한 + 체크아웃배치알림 로깅 + 회원코드설정 테스트보강 + 예약승인 배치알림 CMS연동 | 4/4 완료 | GATE C 대기
+  Stephen이 앞서 종합보고한 신규 3영역 발견사항(전자계약 에디터·체크아웃 배치알림·회원코드
+  설정)에 대해 구체적 수정 지시 4건을 내려 순차 진행.
+
+  ① 전자계약 에디터 임포트 파일크기 제한(최대 10MB) — ContractImportModal.svelte의 단일
+    진입점 onFileChange()에 MAX_IMPORT_FILE_SIZE(10*1024*1024) 체크 추가, 초과 시 csToast.error
+    + input 리셋 + 파싱 자체를 시도하지 않고 조기 반환. docx/xlsx/hwp/hwpx 4개 포맷 전부
+    이 단일 지점을 거치므로 파서별 개별 수정 불필요.
+
+  ② 체크아웃 배치알림 RPC 실패 로깅 유실 수정 — /api/checkout/confirm-mock/+server.ts의
+    send_rental_chat_notification_batch 호출이 error를 전혀 확인하지 않던 것을, 같은 파일의
+    create_checkout_order/use_coupon과 동일한 console.error 패턴으로 통일(RPC 자체 에러 +
+    {ok:false} 거부 응답 양쪽 다 로깅).
+
+  ③ 회원코드설정(/cms/customers/settings) 테스트 안정장치 보완 — 이 화면은 RPC 레벨
+    테스트(memberCodeCombo.test.ts)만 있고 화면 액션 자체(saveMemberCodeCombo/bulkReissue)
+    테스트가 전무했음. comboCategoryCode.test.ts(순수 유틸 buildComboCategoryCode/sortByTier/
+    getRootCode 단독 검증, 8건) + customersSettingsGuards.test.ts(cmsSecurityGuards.test.ts와
+    동일한 vi.mock 패턴으로 액션 함수 직접 호출, 15건 — 권한가드 403/401·30자초과 접두어
+    거부(migration 276 회귀방지)·code_mapping 조회실패 400·confirmed 체크박스 미체크 시
+    RPC 미호출·기준코드 미설정 시 차단·RPC 실패/거부 전파·정상흐름 success 전부 커버) 신규
+    작성, 총 23건 전부 GREEN.
+
+  ④ 다중상품 예약승인 시 배치알림 RPC 연동(대여예약 자동반영 + 승인UI 노출) —
+    service-operations.md §4가 이미 문서화했던 "결제완료(수동승인 포함) 시 배치알림으로
+    통합" 정책이 실제로는 confirm-mock(고객 자동승인) 경로에만 구현돼 있고 CMS 관리자
+    approveReservation 경로는 여전히 상품별 개별 send_rental_chat_notification만 호출하던
+    갭을 발견·수정. $lib/server/reservationApprovalNotify.ts 신규(resolveApprovalNotifyPlan) —
+    이 예약이 order_items로 묶인 다중상품 주문인지, 묶였다면 이번 승인이 주문의 마지막
+    승인인지 판단해 single(단일상품, 기존 그대로)/batch(마지막 승인 — 통합카드 1건)/
+    hold(다른 상품 아직 미승인 — 알림 보류, 개별 카드 스팸 방지) 3가지로 분기. 취소된
+    형제상품은 판정에서 제외(취소 1건 때문에 나머지가 영구히 보류되는 것 방지).
+    /cms/reservation/+page.server.ts approveReservation에 연동 + RPC 실패 시 console.error
+    로깅(②와 동일 패턴). RentalDetailPanel.svelte(rentals·reservation 공유 컴포넌트) —
+    orderSiblings lazy-fetch를 payment 탭뿐 아니라 rental 탭(승인버튼 위치)에서도 조회하도록
+    확장 + "이 예약은 같은 주문의 다른 상품 N건과 함께 진행 중입니다" 안내문구를 승인버튼
+    위에 노출(관리자 승인UI 노출 요건). /cms/rentals는 RentalDetailPanel을 그대로 공유하고
+    상태전이 자체는 기존 update_reservation_status RPC를 그대로 타므로 별도 반영 로직
+    불필요("대여예약 자동 반영" 요건은 상태값 갱신만으로 이미 충족).
+    reservationApprovalNotify.test.ts 신규(TDD — "예약" 키워드 강제 도메인) — 실 Stage DB에
+    create_reservation_order RPC(migration 280)로 실제 order_items 연결을 만들어 5가지
+    시나리오(미연결 단일/단일상품 주문/다중상품 미완료→hold/다중상품 완료→batch/취소상품
+    제외 후 batch) 전부 검증, 5건 GREEN.
+
+  검증: svelte-check 1482 FILES 0 ERRORS(신규 파일 전부 — 기존 vite.config.ts의 무관한
+  사전 존재 타입에러 1건은 그대로, 이번 범위 아님). eslint 신규 파일 대상 — H-01
+  no-restricted-syntax(rental_reservations 직접 INSERT) 1건은 payment.test.ts와 동일한
+  기존 테스트 픽스처 관행이라 그대로 유지, security/detect-object-injection 경고 3건은
+  코드베이스 전역에 흔한 논블로킹 경고. vitest 전체 스위트 — 신규 28건(23+5) 전부 GREEN,
+  기존 실패 4건(contractSign.test.ts, 이전부터 알려진 무관한 픽스처 이슈)만 유지, 회귀 0건.
+  테스트 중 orphan 픽스처 1건(이전 실패 런에서 cleanup 누락) 발견·수동 정리 완료.
+  4건 모두 Stephen 리뷰/커밋 대기 — git 명령 자율 실행 없음(core-rules.md 준수).
