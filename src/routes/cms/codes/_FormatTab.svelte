@@ -45,6 +45,16 @@
     csToast.success('예약코드 설정이 저장되었습니다.')
     dirty = false
   })
+
+  // data 갱신 시 재동기화
+  $effect(() => {
+    fmtPrefix = data.codeFormat.prefix       ?? 'CS'
+    fmtCat    = data.codeFormat.cat_code     ?? ''
+    fmtDate   = data.codeFormat.date_format  ?? 'YYMM'
+    fmtSeq    = String(data.codeFormat.seq_digits ?? 3)
+    fmtReset  = data.codeFormat.reset_monthly !== false
+    fmtSuffix = data.codeFormat.suffix       ?? ''
+  })
 </script>
 
 <!-- FormatTab 자체 여백 — .panel(코드목록 탭과 공유하는 상위 컨테이너)은 그대로 두고,

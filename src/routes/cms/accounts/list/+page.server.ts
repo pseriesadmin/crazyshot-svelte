@@ -3,6 +3,7 @@ import { env } from '$env/dynamic/private'
 import { getSupabaseUrl } from '$lib/env/supabasePublic'
 import { createClient } from '@supabase/supabase-js'
 import { hasSettingsAccess } from '$lib/utils/cmsPermissions'
+import { fetchCmsProfileByAuthId } from '$lib/server/cmsProfile'
 import type { Actions, PageServerLoad } from './$types'
 import type { SupabaseClient } from '@supabase/supabase-js'
 
@@ -76,13 +77,8 @@ async function requireSuperadmin(
   const { session } = await locals.safeGetSession()
   if (!session) return '인증이 필요합니다.'
 
-  const { data } = await admin
-    .from('user_profiles')
-    .select('cms_role')
-    .eq('id', session.user.id)
-    .single()
-  const p = data as { cms_role: string | null } | null
-  if (!hasSettingsAccess(p?.cms_role ?? '')) return '권한이 없습니다.'
+  const profile = await fetchCmsProfileByAuthId(admin, session.user.id)
+  if (!hasSettingsAccess(profile?.cms_role ?? '')) return '권한이 없습니다.'
   return null
 }
 
