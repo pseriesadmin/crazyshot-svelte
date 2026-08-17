@@ -4,6 +4,7 @@
   import type { ChatSession } from '$lib/types/chat'
   import { subscribeToSessions } from '$lib/services/chatService'
   import CmsStatRing from '$lib/components/cms/CmsStatRing.svelte'
+  import { getCategoryLabel } from '$lib/constants/cannedResponseCategories'
 
   interface TopCannedResponse {
     canned_response_id: string
@@ -27,15 +28,6 @@
     open: '진행중',
     pending: '대기',
     closed: '종료',
-  }
-
-  // canned_responses.category CHECK 값(185_canned_responses.sql) 한글 라벨
-  const CATEGORY_LABEL: Record<string, string> = {
-    return: '반납',
-    payment: '결제',
-    reservation: '예약',
-    damage: '파손',
-    general: '일반',
   }
 
   function relativeTime(dateStr: string): string {
@@ -141,7 +133,7 @@
             <div class="ranking-row">
               <span class="rank-num" class:rank-top3={i < 3}>{i + 1}</span>
               <span class="rank-title">{item.title}</span>
-              <span class="rank-category">{CATEGORY_LABEL[item.category ?? ''] ?? item.category ?? ''}</span>
+              <span class="rank-category">{getCategoryLabel(item.category)}</span>
               <span class="rank-count">{item.reply_count}회</span>
             </div>
           {/each}

@@ -5,7 +5,8 @@ export const CANNED_RESPONSE_CATEGORIES = [
   { value: 'payment',     label: '결제' },
   { value: 'reservation', label: '예약' },
   { value: 'damage',      label: '파손' },
-  { value: 'general',     label: '일반' },
+  { value: 'general',     label: '기타' },
+  { value: 'cs',          label: 'CS' },
 ] as const
 
 export type CannedResponseCategory = typeof CANNED_RESPONSE_CATEGORIES[number]['value']
@@ -13,6 +14,6 @@ export type CannedResponseCategory = typeof CANNED_RESPONSE_CATEGORIES[number]['
 export const VALID_CATEGORIES: string[] = CANNED_RESPONSE_CATEGORIES.map((c) => c.value)
 
 export function getCategoryLabel(value: string | null | undefined): string {
-  if (!value) return '일반'
-  return CANNED_RESPONSE_CATEGORIES.find((c) => c.value === value)?.label ?? '일반'
+  if (!value) return '기타'
+  return CANNED_RESPONSE_CATEGORIES.find((c) => c.value === value)?.label ?? '기타'
 }

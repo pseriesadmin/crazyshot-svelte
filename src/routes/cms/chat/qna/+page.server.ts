@@ -25,6 +25,7 @@ export interface CannedResponseRow {
   title: string
   content: string
   category: string | null
+  help_category: string | null
   shortcut: string | null
   match_keywords: string[]
   usage_count: number
@@ -61,7 +62,7 @@ export const load: PageServerLoad = async ({ parent, url }) => {
   const [itemsResult, autoReplyResult, candidatesResult] = await Promise.all([
     admin
       .from('canned_responses')
-      .select('id, title, content, category, shortcut, match_keywords, usage_count, created_at, image_url, cta_label, cta_url')
+      .select('id, title, content, category, help_category, shortcut, match_keywords, usage_count, created_at, image_url, cta_label, cta_url')
       .order('usage_count', { ascending: false })
       .order('title', { ascending: true }),
     admin

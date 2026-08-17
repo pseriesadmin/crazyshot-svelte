@@ -7,12 +7,14 @@
   import CmsDeleteButton from '$lib/components/cms/CmsDeleteButton.svelte'
   import { csToast } from '$lib/utils/toast'
   import { CANNED_RESPONSE_CATEGORIES } from '$lib/constants/cannedResponseCategories'
+  import { HELP_CATEGORIES } from '$lib/constants/helpCategories'
   // 로컬 타입 정의 (routes 크로스-임포트 금지 원칙)
   interface CannedResponseRow {
     id: string
     title: string
     content: string
     category: string | null
+    help_category: string | null
     shortcut: string | null
     match_keywords: string[]
     usage_count: number
@@ -38,6 +40,7 @@
   let localTitle    = $state('')
   let localContent  = $state('')
   let localCategory = $state<string | null>(null)
+  let localHelpCategory = $state<string | null>(null)
   let localShortcut = $state('')
   let localKeywords = $state<string[]>([])
   let kwInput       = $state('')
@@ -51,6 +54,7 @@
     localTitle    = item?.title    ?? ''
     localContent  = item?.content  ?? ''
     localCategory = item?.category ?? null
+    localHelpCategory = item?.help_category ?? null
     localShortcut = item?.shortcut ?? ''
     localKeywords = item?.match_keywords ? [...item.match_keywords] : []
     kwInput       = ''
@@ -90,7 +94,7 @@
   )
 
   async function handleSave(): Promise<void> {
-    if (!localTitle.trim() || !localContent.trim() || isSaving) return
+    if (!localTitle.trim() || !localContent.trim() || !localHelpCategory || isSaving) return
     isSaving = true
     try {
       const url    = isNew ? '/api/cms/canned-responses' : `/api/cms/canned-responses/${item!.id}`
@@ -99,6 +103,7 @@
         title:    localTitle.trim(),
         content:  localContent.trim(),
         category: localCategory || null,
+        help_category: localHelpCategory,
         shortcut: localShortcut.replace(/^\//, '').trim() || null,
         match_keywords: localKeywords,
         image_url: localImageUrl.trim() || null,
@@ -134,7 +139,7 @@
 <div class="panel">
   <div class="panel-head">
     <h3 class="panel-title">{isNew ? '새 빠른답변' : '빠른답변 편집'}</h3>
-    <button class="btn-close" onclick={onclose} aria-label="닫기">✕</button>
+    <button class="btn-close" onclick={onclose} aria-label="패널 닫기">✕</button>
   </div>
 
   <div class="panel-body">
@@ -151,9 +156,24 @@
       />
     </div>
 
+    <!-- 도움말 분류 (카테고리 상위 분류, 콤보 버튼 — 필수) -->
+    <div class="field">
+      <span class="field-label">도움말 분류 <span class="req">*</span> <span class="field-hint">(선택 시 /help 고객센터 FAQ에 자동 반영됩니다)</span></span>
+      <div class="cat-pills">
+        {#each HELP_CATEGORIES as cat}
+          <button
+            type="button"
+            class="cat-pill"
+            class:active={localHelpCategory === cat.value}
+            onclick={() => localHelpCategory = cat.value}
+          >{cat.label}</button>
+        {/each}
+      </div>
+    </div>
+
     <!-- 카테고리 (콤보 버튼) -->
     <div class="field">
-      <span class="field-label">카테고리</span>
+      <span class="field-label">빠른답변 분류</span>
       <div class="cat-pills">
         <button
           type="button"
@@ -323,7 +343,7 @@
         type="button"
         class="btn-save"
         onclick={handleSave}
-        disabled={!localTitle.trim() || !localContent.trim() || isSaving}
+        disabled={!localTitle.trim() || !localContent.trim() || !localHelpCategory || isSaving}
       >
         {isSaving ? '저장 중...' : isNew ? '등록' : '저장'}
       </button>
@@ -337,7 +357,8 @@
     flex-direction: column;
     height: 100%;
     background: var(--cs-white);
-    border-radius: var(--cms-radius-lg, 16px);
+    border-radius: var(--cms-radius-md);   /* cms-uiux.md §1/§7-4 — 목록형 카드(패널) 표준 15px, 30px 아니었음 */
+    box-shadow: 0px 1px 4px rgba(0,0,0,0.06);   /* §1 DetailPanel 필수 구조 — 누락돼 있었음 */
     overflow: hidden;
   }
 
@@ -356,26 +377,36 @@
     margin: 0;
   }
 
+  /* close-red 표준(cms-uiux.md §0-10-A) */
   .btn-close {
-    background: none;
+    margin-left: auto;
+    flex-shrink: 0;
+    width: 28px;
+    height: 28px;
+    min-height: 28px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: transparent;
     border: none;
-    font-size: 16px;
-    color: var(--cs-text-mid, #666);
-    cursor: pointer;
-    padding: 4px 8px;
-    min-height: 32px;
     border-radius: var(--radius-sm);
-    transition: color 0.15s;
+    color: var(--cs-text-light);
+    font-size: 14px;
+    cursor: pointer;
+    transition: background 0.12s, color 0.12s;
   }
-  .btn-close:hover { color: var(--cs-dark); }
+  .btn-close:hover { background: rgba(255,53,53,0.08); color: var(--cs-red-badge); }
 
+  /* §1 DetailPanel 필수 구조 — display:block 필수(flex 자식 압축·클립 버그 방지), gap 대신 margin-top */
   .panel-body {
     flex: 1;
+    min-height: 0;
     overflow-y: auto;
-    padding: 24px;
-    display: flex;
-    flex-direction: column;
-    gap: 20px;
+    display: block;
+    padding: 16px 20px 20px;
+  }
+  .panel-body > * + * {
+    margin-top: 10px;
   }
 
   .field {
@@ -385,7 +416,7 @@
   }
 
   .field-label {
-    font: 700 13px/1.4 'Noto Sans KR', sans-serif;
+    font: var(--text-pc-body-14, 700 14px/1.4 'Noto Sans KR', sans-serif);
     color: var(--cs-text-mid, #666);
     display: flex;
     align-items: center;
@@ -399,7 +430,7 @@
     color: var(--cs-text-light, #aaa);
   }
 
-  /* 고객 매칭 키워드 태그 입력 (CmsContentEditor 키워드 패턴 참고) */
+  /* 고객 매칭 키워드 태그 입력 — cms-uiux.md §7-7 .f-input 표준(배경 gray, 테두리 없음) */
   .kw-tag-list {
     display: flex;
     align-items: center;
@@ -407,10 +438,11 @@
     gap: 6px;
     min-height: 38px;
     padding: 8px 10px;
-    border: 1.5px solid var(--cs-lilac);
+    border: none;
     border-radius: var(--radius-sm);
+    background: var(--cs-surface-gray, #f6f6f6);
   }
-  .kw-tag-list:focus-within { border-color: var(--cs-purple); }
+  .kw-tag-list:focus-within { outline: 2px solid var(--cs-purple); outline-offset: -2px; }
 
   .kw-tag {
     display: inline-flex;
@@ -465,23 +497,23 @@
     color: var(--cs-text-light, #aaa);
   }
 
+  /* cms-uiux.md §7-7 .f-input 표준(배경 gray, 테두리 없음) */
   .field-input,
   .field-textarea {
-    border: 1.5px solid var(--cs-lilac);
+    border: none;
     border-radius: var(--radius-sm);
-    padding: 10px 14px;
-    font: 400 14px/1.5 'Noto Sans KR', sans-serif;
-    color: var(--cs-dark);
-    background: var(--cs-white);
-    transition: border-color 0.15s;
+    padding: 10px 16px;
+    font: var(--text-pc-body-14, 700 14px/1.4 'Noto Sans KR', sans-serif);
+    color: var(--cs-text);
+    background: var(--cs-surface-gray, #f6f6f6);
     width: 100%;
     box-sizing: border-box;
     resize: vertical;
   }
   .field-input:focus,
   .field-textarea:focus {
-    outline: none;
-    border-color: var(--cs-purple);
+    outline: 2px solid var(--cs-purple);
+    outline-offset: -2px;
   }
 
   .field-textarea { min-height: 120px; }
@@ -495,36 +527,34 @@
 
   .cat-pill {
     height: 34px;
-    padding: 0 14px;
+    padding: 0 18px;   /* 콤보버튼 UI 표준(cms-uiux.md §7-12-A) — 좌우 패딩 14px → 18px(+30%) */
     border-radius: var(--radius-xl, 30px);
-    border: 1.5px solid #DCDCDC;
-    background: var(--cs-white);
+    border: none;      /* 콤보버튼 UI 표준(§7-12-A, 2026-08-18) — 아웃라인 제거 */
+    background: var(--cs-lilac);   /* 콤보버튼 UI 표준(§7-12-A, 2026-08-18) — 제일 옅은 퍼플 톤(purple-5%) */
     font: 700 13px/1 'Noto Sans KR', sans-serif;
     color: var(--cs-text);
     cursor: pointer;
-    transition: background 0.15s, border-color 0.15s, color 0.15s;
+    transition: background 0.15s, color 0.15s;
   }
   .cat-pill.active {
     background: var(--cs-purple);
-    border-color: var(--cs-purple);
     color: var(--cs-white);
   }
   .cat-pill:hover:not(.active) {
-    border-color: var(--cs-purple);
     color: var(--cs-purple);
   }
 
-  /* 단축키 */
+  /* 단축키 — cms-uiux.md §7-7 .f-input 표준(배경 gray, 테두리 없음) */
   .shortcut-wrap {
     display: flex;
     align-items: center;
     gap: 0;
-    border: 1.5px solid var(--cs-lilac);
+    border: none;
     border-radius: var(--radius-sm);
+    background: var(--cs-surface-gray, #f6f6f6);
     overflow: hidden;
-    transition: border-color 0.15s;
   }
-  .shortcut-wrap:focus-within { border-color: var(--cs-purple); }
+  .shortcut-wrap:focus-within { outline: 2px solid var(--cs-purple); outline-offset: -2px; }
 
   .shortcut-prefix {
     padding: 10px 10px 10px 14px;
@@ -537,9 +567,10 @@
   .field-input--shortcut {
     border: none;
     border-radius: 0;
+    background: transparent;
     flex: 1;
   }
-  .field-input--shortcut:focus { border-color: transparent; }
+  .field-input--shortcut:focus { outline: none; }   /* .shortcut-wrap:focus-within이 대신 표시 — 이중 아웃라인 방지 */
 
   /* 미리보기 공통 */
   .shortcut-preview,
@@ -611,26 +642,36 @@
     margin-left: auto;
   }
 
+  /* cms-uiux.md §7-3 .btn-secondary(CTA 보조) 표준 */
   .btn-cancel {
-    height: 36px;
-    padding: 0 16px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    height: 44px;
+    padding: 0 30px;
     border-radius: var(--radius-md, 15px);
-    border: 1.5px solid var(--cs-lilac);
+    border: 1px solid var(--cs-purple-dark, #201857);
     background: var(--cs-white);
-    font: 700 13px/1 'Noto Sans KR', sans-serif;
-    color: var(--cs-text-mid, #666);
+    font: var(--text-pc-body-14, 700 14px/1.4 'Noto Sans KR', sans-serif);
+    letter-spacing: -0.5px;
+    color: var(--cs-purple-dark, #201857);
     cursor: pointer;
-    transition: border-color 0.15s;
+    transition: background 0.15s;
   }
-  .btn-cancel:hover { border-color: var(--cs-purple); color: var(--cs-purple); }
+  .btn-cancel:hover { background: rgba(59,47,138,0.06); }
 
+  /* cms-uiux.md §7-3 .btn-primary(CTA 기본) 표준 */
   .btn-save {
-    height: 36px;
-    padding: 0 20px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    height: 44px;
+    padding: 0 30px;
     border-radius: var(--radius-md, 15px);
     border: none;
     background: var(--cs-purple);
-    font: 700 13px/1 'Noto Sans KR', sans-serif;
+    font: var(--text-pc-body-14, 700 14px/1.4 'Noto Sans KR', sans-serif);
+    letter-spacing: -0.5px;
     color: var(--cs-white);
     cursor: pointer;
     transition: background 0.15s;

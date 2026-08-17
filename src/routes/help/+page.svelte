@@ -1,67 +1,17 @@
 <script lang="ts">
   import BottomTabBar from '$lib/components/common/BottomTabBar.svelte'
+  import { HELP_CATEGORIES } from '$lib/constants/helpCategories'
+  import type { PageData } from './$types'
 
-  type TabId = 'all' | 'howto' | 'members' | 'etc'
+  let { data }: { data: PageData } = $props()
 
-  interface FaqItem {
-    id: number
-    tab: Exclude<TabId, 'all'>
-    question: string
-    answer: string
-  }
+  type TabId = 'all' | 'basic' | 'members' | 'etc'
 
-  const FAQ_ITEMS: FaqItem[] = [
-    { id: 1, tab: 'howto', question: 'Can I extend my rental?', answer: 'Yes! You can extend your rental through your account dashboard up to 24 hours before the original return date. Simply go to My Orders, select the active rental, and choose \'Extend Rental.\' Additional rental fees will be charged to your registered payment method.' },
-    { id: 2, tab: 'howto', question: 'Why do I pay more total for extending a 7-day rental into a 14-day rental than I would for a single 14-day rental?', answer: 'Our pricing structure rewards longer commitments made upfront. When you book 14 days from the start, the per-day rate is lower. Extensions are processed as a new short-term rental appended to your current one, which is priced at the standard short-term rate. We recommend booking the full duration you need from the beginning to maximize savings.' },
-    { id: 3, tab: 'howto', question: 'What if I am late with my return?', answer: 'Late returns incur a daily late fee equal to 1.5× your daily rental rate. We will automatically charge the registered payment method on file. If you know you\'ll be late, please contact us in advance — in some cases we can accommodate short extensions without a penalty.' },
-    { id: 4, tab: 'howto', question: 'Oh no! I forgot to return an item!', answer: 'Don\'t panic. Contact our customer support team immediately at 1588-0033 or via the in-app chat. We\'ll arrange an emergency pickup or guide you through dropping it off at the nearest partner location. Prolonged unreturned items may result in replacement charges.' },
-    { id: 5, tab: 'howto', question: 'How are late fees calculated?', answer: 'Late fees are calculated at 1.5× the daily rental rate per day overdue, prorated by the hour after the first 24 hours. For example, if your daily rate is ₩10,000, the late fee is ₩15,000 per day. Fees are capped at 30 days, after which the item is considered unreturned and full replacement cost is charged.' },
-    { id: 6, tab: 'howto', question: 'How do I reserve equipment?', answer: 'Browse our catalog, select your desired gear, choose your rental dates, and click Reserve. You\'ll need a verified CrazyShot account and a registered payment method. A confirmation email and SMS will be sent instantly.' },
-    { id: 7, tab: 'howto', question: 'What is included in the rental kit?', answer: 'Each rental kit includes the primary equipment plus standard accessories listed on the product page (batteries, cables, cases). Specialty accessories may be added for an extra fee during checkout.' },
-    { id: 8, tab: 'howto', question: 'Can I cancel my reservation?', answer: 'Cancellations made more than 48 hours before delivery are fully refunded. Cancellations within 48 hours incur a 30% fee. Same-day cancellations are non-refundable.' },
-    { id: 9, tab: 'howto', question: 'What happens if equipment is damaged during my rental?', answer: 'Report damage immediately via the app or by calling 1588-0033. Minor wear is covered under normal use. Accidental damage may be covered by our optional Damage Protection Plan (DPP) purchased at checkout. Intentional or gross negligence damage is billed at full replacement cost.' },
-    { id: 10, tab: 'howto', question: 'How does delivery work?', answer: 'We offer next-day delivery nationwide via our courier partners. Orders placed before 2 PM are dispatched the same business day. You can track your delivery in real time from the My Orders page.' },
-    { id: 11, tab: 'howto', question: 'What are the delivery time windows?', answer: 'Standard delivery windows are 09:00–13:00 (morning) and 14:00–18:00 (afternoon). Premium same-day slots are available in select metropolitan areas for an additional fee.' },
-    { id: 12, tab: 'howto', question: 'Can I pick up the equipment myself?', answer: 'Yes. Our flagship store in Gangseo, Seoul is open Monday–Saturday 10:00–19:00. Select \'Self Pick-Up\' at checkout to waive the delivery fee.' },
-    { id: 13, tab: 'howto', question: 'How do I return equipment?', answer: 'Pack the equipment securely in the original packaging. A prepaid return label is included in every shipment. Drop it off at any CJ Logistics drop-off point or schedule a free home pickup via the app.' },
-    { id: 14, tab: 'howto', question: 'Do I need to clean the equipment before returning?', answer: 'Please return equipment in the same condition as received. Lenses should be free of fingerprints, bodies should be dust-free, and accessories should be bagged and labeled. Excessive cleaning fees may apply.' },
-    { id: 15, tab: 'howto', question: 'What if the equipment is faulty on arrival?', answer: 'Test all equipment within 2 hours of receipt. If you find a defect, report it immediately via the app. We will arrange a free replacement or full refund at your choice.' },
-    { id: 16, tab: 'howto', question: 'Can I rent to a business address?', answer: 'Absolutely. During checkout, enter your business address as the delivery address. A tax invoice (세금계산서) is available on request — contact billing@crazyshot.co.kr.' },
-    { id: 17, tab: 'howto', question: 'Is there a minimum rental period?', answer: 'The minimum rental period is 1 day (24 hours from delivery). Some premium items have a minimum of 3 days; this is noted on the product page.' },
-    { id: 18, tab: 'howto', question: 'Can I rent multiple items at once?', answer: 'Yes. Add as many items as you need to your cart. All items in a single order share the same rental window and are shipped together where possible.' },
-    { id: 19, tab: 'members', question: 'How do I sign up for a CrazyShot account?', answer: 'Click \'Sign In\' in the top navigation and select \'Create Account.\' You\'ll need a mobile number for OTP verification and a valid ID for first-time equipment rental.' },
-    { id: 20, tab: 'members', question: 'What membership tiers are available?', answer: 'We offer three tiers: Basic (free), Pro (₩9,900/mo), and Studio (₩29,900/mo). Higher tiers unlock priority booking, exclusive discounts, and extended rental durations.' },
-    { id: 21, tab: 'members', question: 'How do I upgrade my membership?', answer: 'Go to My Account → Membership and select your desired tier. Upgrades take effect immediately; billing is prorated for the current month.' },
-    { id: 22, tab: 'members', question: 'What payment methods are accepted?', answer: 'We accept all major Korean credit and debit cards, KakaoPay, NaverPay, Toss, and bank transfer (무통장입금). International cards (Visa, Mastercard) are supported for foreign customers.' },
-    { id: 23, tab: 'members', question: 'How do I change my registered payment method?', answer: 'Go to My Account → Payment Methods. You can add, remove, or set a default card at any time. Changes take effect on your next billing cycle.' },
-    { id: 24, tab: 'members', question: 'Is my payment information secure?', answer: 'Yes. We use PCI DSS-compliant payment processing. Card details are tokenized and never stored on our servers. All transactions are secured with TLS 1.3.' },
-    { id: 25, tab: 'members', question: 'How do I cancel my membership?', answer: 'Go to My Account → Membership → Cancel Subscription. Your membership benefits remain active until the end of the current billing period. No further charges will be made.' },
-    { id: 26, tab: 'members', question: 'Can I share my account with others?', answer: 'Accounts are for individual use only. Studio-tier members may add up to 3 sub-accounts at no extra charge for team-based production workflows.' },
-    { id: 27, tab: 'members', question: 'Are there student or nonprofit discounts?', answer: 'Yes. Verified students and registered nonprofits receive 20% off all rental rates. Apply via My Account → Discounts with proof of eligibility.' },
-    { id: 28, tab: 'members', question: 'How do I earn and redeem reward points?', answer: 'Earn 1 point per ₩100 spent. Points can be redeemed at checkout at a rate of 100 points = ₩100. Points expire 1 year after issuance.' },
-    { id: 29, tab: 'members', question: 'I forgot my password. How do I reset it?', answer: 'On the Sign In page, click \'Forgot Password?\' Enter your registered email or mobile number and follow the OTP verification steps to set a new password.' },
-    { id: 30, tab: 'members', question: 'How do I delete my account?', answer: 'Go to My Account → Settings → Delete Account. Deletion is permanent and removes all your data in compliance with Korea\'s Personal Information Protection Act (PIPA). Any outstanding balances must be settled first.' },
-    { id: 31, tab: 'members', question: 'Can I get an invoice for my rental?', answer: 'Receipts are automatically emailed after each transaction. For official tax invoices, contact billing@crazyshot.co.kr with your business registration number.' },
-    { id: 32, tab: 'etc', question: 'What is CrazyShot\'s refund policy?', answer: 'Refunds for cancelled orders are processed within 3–5 business days to the original payment method. For disputes, contact support@crazyshot.co.kr.' },
-    { id: 33, tab: 'etc', question: 'Does CrazyShot offer insurance for rented equipment?', answer: 'We offer an optional Damage Protection Plan (DPP) at checkout, covering accidental damage up to ₩500,000 per incident. DPP does not cover theft or intentional damage.' },
-    { id: 34, tab: 'etc', question: 'How do I report a missing accessory from my kit?', answer: 'Contact support within 2 hours of receiving your order. Provide your order number and a photo of the contents received. We\'ll ship the missing item the next business day.' },
-    { id: 35, tab: 'etc', question: 'Can I suggest equipment for the catalog?', answer: 'Absolutely! Use the \'Request Equipment\' form in the Help Center or email catalog@crazyshot.co.kr. We review all requests monthly.' },
-    { id: 36, tab: 'etc', question: 'Is CrazyShot available outside Korea?', answer: 'Currently, we ship within South Korea only. International service is on our 2025 roadmap — sign up for our newsletter to be notified when it launches.' },
-    { id: 37, tab: 'etc', question: 'How do I contact customer support?', answer: 'Call 1588-0033 (weekdays & holidays 09:00–22:00), use the in-app chat, or email support@crazyshot.co.kr. Response times are under 2 hours during business hours.' },
-    { id: 38, tab: 'etc', question: 'Where can I find CrazyShot on social media?', answer: 'Follow us on YouTube and Instagram @crazyshot.kr for tutorials, new gear announcements, and member-exclusive promotions.' },
-    { id: 39, tab: 'etc', question: 'Does CrazyShot offer a referral program?', answer: 'Yes! Share your unique referral link from My Account → Referrals. Both you and your friend get ₩5,000 credit after their first completed rental.' },
-    { id: 40, tab: 'etc', question: 'How do I report a bug or issue with the website?', answer: 'Use the feedback button (bottom-right corner of any page) or email dev@crazyshot.co.kr. Screenshots and steps to reproduce are very helpful.' },
-    { id: 41, tab: 'etc', question: 'Where is the CrazyShot office?', answer: 'Our flagship studio and fulfillment center is located at 418 Yangcheon-ro, Gangseo-gu, Seoul (floors 1–2). Subway: Balsan Station (Line 5), Exit 4.' },
-    { id: 42, tab: 'etc', question: 'Does CrazyShot have a mobile app?', answer: 'Our Progressive Web App (PWA) works on all devices. Add it to your home screen for an app-like experience. Native iOS and Android apps are in development.' },
-    { id: 43, tab: 'etc', question: 'How do I opt out of marketing emails?', answer: 'Click \'Unsubscribe\' at the bottom of any marketing email, or go to My Account → Notifications and toggle off \'Marketing Communications.\'' },
-    { id: 44, tab: 'etc', question: 'What is CrazyShot\'s privacy policy?', answer: 'Our full Privacy Policy is available at crazyshot.co.kr/privacy. In short, we never sell your data and collect only what is necessary to provide the service.' },
-  ]
+  const faqItems = $derived(data.faqItems)
 
   const TABS: { id: TabId; label: string }[] = [
-    { id: 'all',     label: '전체' },
-    { id: 'howto',   label: 'How to' },
-    { id: 'members', label: 'Members & Payment' },
-    { id: 'etc',     label: 'Etc help' },
+    { id: 'all', label: '전체' },
+    ...HELP_CATEGORIES.map((c) => ({ id: c.value as TabId, label: c.label })),
   ]
 
   const MOBILE_FAQ_ITEMS = [
@@ -73,24 +23,24 @@
   ]
 
   const CATEGORIES = [
-    { img: '/help/cat-rental.png',   label: '렌탈 방법',   tab: 'howto'   as TabId, iconType: 'camera'  },
-    { img: '/help/cat-delivery.png', label: '배송 안내',   tab: 'howto'   as TabId, iconType: 'truck'   },
-    { img: '/help/cat-gear.png',     label: '장비 관리',   tab: 'howto'   as TabId, iconType: 'gear'    },
+    { img: '/help/cat-rental.png',   label: '렌탈 방법',   tab: 'basic'   as TabId, iconType: 'camera'  },
+    { img: '/help/cat-delivery.png', label: '배송 안내',   tab: 'basic'   as TabId, iconType: 'truck'   },
+    { img: '/help/cat-gear.png',     label: '장비 관리',   tab: 'basic'   as TabId, iconType: 'gear'    },
     { img: '/help/cat-members.png',  label: '멤버십 혜택', tab: 'members' as TabId, iconType: 'star'    },
     { img: '/help/cat-return.png',   label: '반납 가이드', tab: 'etc'     as TabId, iconType: 'check'   },
   ]
 
   function tabCount(tab: TabId): number {
-    if (tab === 'all') return FAQ_ITEMS.length
-    return FAQ_ITEMS.filter(f => f.tab === tab).length
+    if (tab === 'all') return faqItems.length
+    return faqItems.filter(f => f.help_category === tab).length
   }
 
   let activeTab = $state<TabId>('all')
-  let openFaqIds = $state<Set<number>>(new Set())
+  let openFaqIds = $state<Set<string>>(new Set())
   let openMobileIds = $state<Set<number>>(new Set())
 
   let filteredFaq = $derived(
-    activeTab === 'all' ? FAQ_ITEMS : FAQ_ITEMS.filter(f => f.tab === activeTab)
+    activeTab === 'all' ? faqItems : faqItems.filter(f => f.help_category === activeTab)
   )
 
   function handleCategoryClick(tab: TabId) {
@@ -98,7 +48,7 @@
     document.getElementById('faq-section')?.scrollIntoView({ behavior: 'smooth' })
   }
 
-  function toggleFaq(id: number) {
+  function toggleFaq(id: string) {
     const next = new Set(openFaqIds)
     if (next.has(id)) next.delete(id)
     else next.add(id)
@@ -261,7 +211,7 @@
               onclick={() => toggleFaq(item.id)}
               aria-expanded={open}
             >
-              <span class="faq-q-text">{item.question}</span>
+              <span class="faq-q-text">{item.title}</span>
               <span class="plus-icon-wrap" style:transform={open ? 'rotate(45deg)' : 'none'} aria-hidden="true">
                 <svg fill="none" viewBox="0 0 14 14" width="12" height="12">
                   <path d="M1 7H13M7 1V13" stroke="#553FE0" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"/>
@@ -270,7 +220,7 @@
             </button>
             {#if open}
               <div class="faq-a">
-                <p class="faq-a-text">{item.answer}</p>
+                <p class="faq-a-text">{item.content}</p>
               </div>
             {/if}
           </div>
