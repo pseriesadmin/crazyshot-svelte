@@ -53,13 +53,17 @@ export const POST: RequestHandler = async ({ locals, request }) => {
   if (orderErr) console.error('[checkout/confirm-mock] create_checkout_order 실패:', orderErr)
   const orderKey = orderRows?.[0]?.order_key ?? null
 
+  // 계약서 서명 완료 게이팅(Migration 284): 결제완료만으로는 confirmed 전환 안 됨 —
+  // payment_confirmed_at을 기록하고, 계약서명까지 완료된 건만 즉시 confirmed로 전환된다.
+  // 계약 미서명 건은 hold 상태 그대로 남고(관리자가 계약서 발송·서명 확인 필요), 배치알림도
+  // 발송되지 않는다(rental-lifecycle.md AUTO_NOTIFY는 confirmed 전이 시에만 발송).
   const confirmedReservations: { id: number; reservationCode: string | null }[] = []
   for (const hold of holds) {
-    const { error: rpcErr } = await admin.rpc('update_reservation_status', {
-      p_reservation_id: hold.id,
-      p_new_status: 'confirmed'
+    const { data: confirmed, error: rpcErr } = await admin.rpc('mark_reservation_payment_confirmed', {
+      p_reservation_id: hold.id
     })
-    if (!rpcErr) {
+    if (rpcErr) console.error('[checkout/confirm-mock] mark_reservation_payment_confirmed 실패:', rpcErr)
+    if (!rpcErr && confirmed === true) {
       confirmedReservations.push({ id: hold.id, reservationCode: hold.reservation_code })
       // 결제완료 관리자 푸시 병행 발송 (채팅과 독립 — 실패해도 위 처리에 영향 없음)
       await sendPaymentCompletedAdminPush(admin, hold.id, session.user.id, 0)

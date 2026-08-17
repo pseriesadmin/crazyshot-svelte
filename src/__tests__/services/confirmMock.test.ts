@@ -45,7 +45,14 @@ interface AdminStub {
   inFn: ReturnType<typeof vi.fn>;
 }
 
-function makeAdminStub(holds: Hold[] | null, fetchError: { message: string } | null = null): AdminStub {
+// confirmResult: mark_reservation_payment_confirmed 응답의 data 값.
+//   true(기본)  → 계약서명 이미 완료된 상태로 간주, 즉시 confirmed 전환
+//   false       → 계약 미서명(Migration 284 게이팅) — hold 유지, 알림 미발송
+function makeAdminStub(
+  holds: Hold[] | null,
+  fetchError: { message: string } | null = null,
+  confirmResult: boolean = true,
+): AdminStub {
   const inFn = vi.fn().mockResolvedValue({ data: holds, error: fetchError });
   const eq2Fn = vi.fn(() => ({ in: inFn }));
   const eq1Fn = vi.fn(() => ({ eq: eq2Fn }));
@@ -54,7 +61,12 @@ function makeAdminStub(holds: Hold[] | null, fetchError: { message: string } | n
     if (table === 'rental_reservations') return { select: selectFn };
     throw new Error(`unexpected table: ${table}`);
   });
-  const rpcFn = vi.fn().mockResolvedValue({ data: null, error: null });
+  const rpcFn = vi.fn((name: string) => {
+    if (name === 'mark_reservation_payment_confirmed') {
+      return Promise.resolve({ data: confirmResult, error: null });
+    }
+    return Promise.resolve({ data: null, error: null });
+  });
   return { from: fromFn, rpc: rpcFn, inFn };
 }
 
@@ -152,10 +164,10 @@ describe('POST /api/checkout/confirm-mock — Happy: 지정된 예약만 승인'
     expect(admin.inFn).toHaveBeenCalledWith('id', [5]);
     expect(admin.inFn).toHaveBeenCalledTimes(1);
 
-    // 승인 RPC가 지정된 건에 대해서만 호출됨
-    expect(admin.rpc).toHaveBeenCalledWith('update_reservation_status', {
+    // 승인 RPC가 지정된 건에 대해서만 호출됨 — Migration 284: 계약서명 게이팅 RPC 경유
+    // (update_reservation_status 직접 호출 아님)
+    expect(admin.rpc).toHaveBeenCalledWith('mark_reservation_payment_confirmed', {
       p_reservation_id: 5,
-      p_new_status: 'confirmed',
     });
     // 상담채팅 승인 알림 — 예약 건별 개별 호출이 아닌, 확정된 건 전체를 배열로 묶어
     // 단일 RPC(send_rental_chat_notification_batch) 1회만 호출됨(Migration 275, 2026-08-17)
@@ -202,6 +214,35 @@ describe('POST /api/checkout/confirm-mock — Happy: 2건 이상 동시 승인 �
       (call: unknown[]) => call[0] === 'send_rental_chat_notification'
     );
     expect(perItemCalls).toHaveLength(0);
+  });
+});
+
+// ── EDGE — 계약서 미서명 게이팅 (Migration 284, 2026-08-17) ──────────────────────
+describe('POST /api/checkout/confirm-mock — Edge: 계약서 미서명(mark_reservation_payment_confirmed=false)', () => {
+  it('계약서명이 안 된 예약은 hold 유지 — confirmedReservations 비어있고 배치알림 RPC 미호출', async () => {
+    const admin = makeAdminStub([{ id: 7, reservation_code: 'RSV-007' }], null, false);
+    createClientMock.mockReturnValue(admin);
+
+    const res = await POST({
+      locals: makeLocals(),
+      request: makeRequest({ reservationIds: [7] }),
+    } as unknown as Parameters<typeof POST>[0]);
+
+    const json = await res.json();
+
+    expect(res.status).toBe(200);
+    expect(json.success).toBe(false);
+    expect(json.confirmedCount).toBe(0);
+    expect(json.confirmedReservations).toEqual([]);
+
+    expect(admin.rpc).toHaveBeenCalledWith('mark_reservation_payment_confirmed', {
+      p_reservation_id: 7,
+    });
+
+    const batchCalls = admin.rpc.mock.calls.filter(
+      (call: unknown[]) => call[0] === 'send_rental_chat_notification_batch'
+    );
+    expect(batchCalls).toHaveLength(0);
   });
 });
 

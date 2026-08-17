@@ -10,24 +10,6 @@ import type { RequestHandler } from './$types'
 export const POST: RequestHandler = async ({ params, request, getClientAddress }) => {
   const admin = createClient(PUBLIC_SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
 
-  // 채팅 세션 재사용 정책 보조 — 지정된 status의 최신 세션 1건 조회 (없으면 null)
-  // admin을 클로저로 참조 — 별도 함수 매개변수 타입 경계를 만들지 않아야
-  // SupabaseClient 제네릭 추론이 어긋나지 않음(REFACTOR 중 svelte-check 에러 유발 확인됨)
-  const findChatSessionByStatus = async (
-    userId: string,
-    status: 'pending' | 'open' | 'closed',
-  ): Promise<string | null> => {
-    const { data } = await admin
-      .from('chat_sessions')
-      .select('id')
-      .eq('user_id', userId)
-      .eq('status', status)
-      .order('updated_at', { ascending: false })
-      .limit(1)
-      .maybeSingle()
-    return data?.id ?? null
-  }
-
   const { data: signing, error: findErr } = await admin
     .from('contract_signings')
     .select('id, signed_at, expires_at, contract_id, user_id')
@@ -121,7 +103,21 @@ export const POST: RequestHandler = async ({ params, request, getClientAddress }
         .eq('id', contract.reservation_id)
         .maybeSingle()
 
-      if (currentReservation?.status === 'shipped') {
+      // 계약서 서명 완료 게이팅(Migration 284): hold 상태 예약은 결제완료(payment_confirmed_at)
+      // 까지 이미 충족돼 있어야만 이 시점에 confirmed로 전환된다(try_confirm_reservation이
+      // AND 조건을 다시 검증) — 결제가 아직이면 hold 그대로 유지되고 관리자가 결제 확인 후
+      // 별도 트리거(mark_reservation_payment_confirmed)로 재시도된다.
+      if (currentReservation?.status === 'hold') {
+        const { data: justConfirmed } = await admin.rpc('try_confirm_reservation', {
+          p_reservation_id: contract.reservation_id,
+        })
+        if (justConfirmed === true) {
+          await admin.rpc('send_rental_chat_notification', {
+            p_reservation_id: contract.reservation_id,
+            p_notify_type:    'reservation_approval',
+          })
+        }
+      } else if (currentReservation?.status === 'shipped') {
         await admin.rpc('update_reservation_status', {
           p_reservation_id: contract.reservation_id,
           p_new_status:     'in_use',
@@ -153,37 +149,17 @@ export const POST: RequestHandler = async ({ params, request, getClientAddress }
       const cmsPath = reservationStatus && RENTAL_STATUSES.has(reservationStatus) ? '/cms/rentals' : '/cms/reservation'
 
       if (signing.user_id) {
-        // 채팅 세션 재사용 정책: pending → open → closed(재활성화) → 신규 생성
-        // (open/pending만 조회하면 세션이 전부 closed이거나 없을 때 알림이 조용히 유실됨)
-        let chatSessionId = await findChatSessionByStatus(signing.user_id, 'pending')
-
-        if (!chatSessionId) {
-          chatSessionId = await findChatSessionByStatus(signing.user_id, 'open')
-        }
-
-        if (!chatSessionId) {
-          const closedSessionId = await findChatSessionByStatus(signing.user_id, 'closed')
-          if (closedSessionId) {
-            await admin
-              .from('chat_sessions')
-              .update({ status: 'open', updated_at: new Date().toISOString() })
-              .eq('id', closedSessionId)
-            chatSessionId = closedSessionId
-          }
-        }
-
-        if (!chatSessionId) {
-          const { data: newSession } = await admin
-            .from('chat_sessions')
-            .insert({
-              user_id:      signing.user_id,
-              status:       'open',
-              context_type: 'reservation',
-            })
-            .select('id')
-            .single()
-          chatSessionId = newSession?.id ?? null
-        }
+        // 채팅 세션 탐색/생성 — 공용 헬퍼로 통합(Migration 282, find_or_create_general_chat_session).
+        // 과거엔 이 파일 자체 pending→open→closed→신규 로직(context_type 필터 없음)이
+        // send_rental_chat_notification 계열이 쓰는 'general' 세션과 무관한 엉뚱한 세션을
+        // 찾아버렸고, pending 세션을 찾아도 open으로 승격하지 않았다 — 그 결과 같은 서명
+        // 이벤트의 reservation_approval(위 RPC 경유, 정상)과 contract_signed(이 블록,
+        // 비정상) 두 알림이 서로 다른 세션으로 쪼개지는 문제가 있었다(2026-08-18 실화면
+        // 검증으로 재현·확인).
+        const { data: chatSessionId } = await admin.rpc('find_or_create_general_chat_session', {
+          p_user_id:        signing.user_id,
+          p_reservation_id: contract.reservation_id,
+        })
 
         if (chatSessionId) {
           const content = fullName

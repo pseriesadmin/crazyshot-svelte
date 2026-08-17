@@ -44,6 +44,7 @@
     signing_sent_at:   string | null
     signing_token:     string | null
     created_at:        string
+    payment_confirmed_at?: string | null
     total_count:       number
   }
 
@@ -466,6 +467,9 @@
       <span class="panel-label">대여</span>
       <span class="panel-id">{reservationCode()}</span>
       <span class="panel-status">{STATUS_LABEL[row.status] ?? row.status}</span>
+      {#if row.status === 'hold' && row.payment_confirmed_at}
+        <span class="payment-contract-badge">결제완료 · 계약대기</span>
+      {/if}
     </div>
     <button class="close-btn" onclick={onclose} aria-label="패널 닫기">✕</button>
   </div>
@@ -1032,6 +1036,16 @@
     font-weight: 700;
     background: rgba(59,47,138,0.10);
     color: var(--cs-purple);
+  }
+  .payment-contract-badge {
+    display: inline-flex;
+    align-items: center;
+    padding: 2px 8px;
+    border-radius: var(--radius-sm);
+    font: var(--text-pc-script-12);
+    font-weight: 700;
+    background: rgba(245,158,11,0.12);
+    color: var(--cs-warning);
   }
   .close-btn {
     width: 28px; height: 28px;
