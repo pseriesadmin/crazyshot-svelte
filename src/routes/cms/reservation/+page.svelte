@@ -215,6 +215,9 @@
                   <span class="status-badge" style="background:{st.bg};color:{st.color}">
                     {STATUS_LABEL[row.status] ?? row.status}
                   </span>
+                  {#if row.status === 'hold' && row.payment_confirmed_at}
+                    <span class="status-badge" style="background:rgba(245,158,11,0.12);color:var(--cs-warning);margin-left:4px;">결제완료</span>
+                  {/if}
                 </td>
                 <td class="col-hide">
                   <code class="rsv-code">{row.reservation_code ?? reservationNo(row.reservation_id)}</code>

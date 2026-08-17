@@ -910,7 +910,10 @@
               body: JSON.stringify({ reservationIds: checkedIds, userCouponId: selectedCouponId }),
             })
             const result = await res.json()
-            if (res.ok && result.success) {
+            // res.ok(200)이면 결제(mock) 자체는 성공한 것 — result.success는 confirmedCount>0일
+            // 때만 true라(계약서 미서명이면 0건도 정상 케이스, Migration 284 게이팅) success 단독
+            // 게이트로 쓰면 "결제완료·계약대기"까지 아래 else의 오류 토스트로 오분류된다.
+            if (res.ok) {
               const firstIndex = itemsState.findIndex(it => !it.deleted && it.checked)
               const first = firstIndex >= 0 ? itemsState[firstIndex] : undefined
               const firstLine = firstIndex >= 0 ? effectiveLineItems[firstIndex] : undefined
@@ -934,6 +937,10 @@
                     options: (line?.options ?? []).map(o => ({ name: o.name, qty: o.qty })),
                   }
                 })
+              const confirmedCount = (result.confirmedReservations as Array<unknown>)?.length ?? 0
+              if (confirmedCount < checkedIds.length) {
+                csToast.info('결제가 완료됐습니다. 계약서 서명 후 예약이 확정됩니다.')
+              }
               const params = new URLSearchParams({
                 items:              JSON.stringify(activeItems),
                 amount:             String(otTotal),

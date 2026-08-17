@@ -47,6 +47,7 @@ export interface RentalListRow {
   signing_sent_at:   string | null
   signing_token:     string | null
   created_at:        string
+  payment_confirmed_at: string | null
   total_count:       number
 }
 

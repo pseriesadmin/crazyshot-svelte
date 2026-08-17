@@ -74,69 +74,19 @@ export const POST: RequestHandler = async ({ params, locals, url }) => {
 
   const signingUrl = `${url.origin}/contract/${token}`
 
-  // 1) pending 세션 우선 (관리자 핸드오프 중인 실제 대화 세션)
-  //    open/pending 혼합 정렬 시 나중에 생성된 open(상품탐색) 세션이 pending(대화 중) 세션보다
-  //    updated_at이 더 최신이 되어 잘못된 세션을 선택하는 문제 방지
-  const { data: pendingSession } = await admin
-    .from('chat_sessions')
-    .select('id')
-    .eq('user_id', contract.user_id)
-    .eq('status', 'pending')
-    .order('updated_at', { ascending: false })
-    .limit(1)
-    .maybeSingle()
+  // 채팅 세션 탐색/생성 — 공용 헬퍼로 통합(Migration 282, find_or_create_general_chat_session).
+  // 과거엔 이 파일이 context_type 필터 없이(= 'general' 세션과 무관한 엉뚱한 세션과 뒤섞임)
+  // 자체 pending→open→closed→신규 로직을 갖고 있었고, pending 세션을 찾아도 open으로
+  // 승격시키지 않아 결함A(세션 상태 단절)와 동일한 유형의 버그를 그대로 갖고 있었다
+  // (2026-08-18 실화면 검증으로 재현·확인). 알림 발송 함수들과 동일한 공용 헬퍼로 교체해
+  // 세션 분산·상태단절 문제를 함께 해소한다.
+  const { data: sessionId, error: sessionRpcErr } = await admin.rpc('find_or_create_general_chat_session', {
+    p_user_id:         contract.user_id,
+    p_reservation_id:  contract.reservation_id ?? null,
+  })
 
-  let sessionId: string
-  if (pendingSession) {
-    sessionId = pendingSession.id
-  } else {
-    // 2) open 세션 조회
-    const { data: openSession } = await admin
-      .from('chat_sessions')
-      .select('id')
-      .eq('user_id', contract.user_id)
-      .eq('status', 'open')
-      .order('updated_at', { ascending: false })
-      .limit(1)
-      .maybeSingle()
-
-    if (openSession) {
-      sessionId = openSession.id
-    } else {
-      // 3) closed 세션 재활성화 시도
-      const { data: closedSession } = await admin
-        .from('chat_sessions')
-        .select('id')
-        .eq('user_id', contract.user_id)
-        .eq('status', 'closed')
-        .order('updated_at', { ascending: false })
-        .limit(1)
-        .maybeSingle()
-
-      if (closedSession) {
-        await admin
-          .from('chat_sessions')
-          .update({ status: 'open', updated_at: new Date().toISOString() })
-          .eq('id', closedSession.id)
-        sessionId = closedSession.id
-      } else {
-        // 4) 세션 없음 → 신규 생성 (context_id는 uuid 컬럼이므로 미설정)
-        const { data: newSession, error: sessionErr } = await admin
-          .from('chat_sessions')
-          .insert({
-            user_id:      contract.user_id,
-            status:       'open',
-            context_type: 'reservation',
-          })
-          .select('id')
-          .single()
-
-        if (sessionErr || !newSession) {
-          return json({ error: '채팅 세션 생성 실패' }, { status: 500 })
-        }
-        sessionId = newSession.id
-      }
-    }
+  if (sessionRpcErr || !sessionId) {
+    return json({ error: '채팅 세션 생성 실패' }, { status: 500 })
   }
 
   // 채팅 메시지 INSERT (admin 발신 action_card)
