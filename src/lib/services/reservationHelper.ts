@@ -239,3 +239,67 @@ export function calculateReservationPrice(
 		finalAmount
 	};
 }
+
+/**
+ * 대여수량(qty) 다중예약 오케스트레이션 (2026-08-17)
+ * 동일 상품 여러 대를 하나의 예약(주문)으로 묶어 예약하는 기능 — 신규 RPC 없이 기존
+ * create_hold_reservation/create_draft_reservation을 qty회 반복 호출하는 방식으로 구현한다.
+ * 호출 자체(RPC 통신)는 주입받은 deps가 담당하므로 이 함수는 순수 오케스트레이션 로직만 갖는다.
+ */
+export const MAX_RESERVATION_QTY = 10;
+
+/** qty 입력값을 1~MAX_RESERVATION_QTY 범위로 보정 (무제한 반복호출 방지) */
+export function clampReservationQty(qty: number): number {
+	if (!Number.isFinite(qty) || qty < 1) return 1;
+	return Math.min(Math.floor(qty), MAX_RESERVATION_QTY);
+}
+
+export interface UnitReservationResult {
+	success: boolean;
+	reservationId: number | null;
+	errorMessage: string | null;
+}
+
+export interface MultiUnitReservationDeps {
+	/** 재고 1대분 예약 생성(create_hold_reservation 또는 create_draft_reservation 1회 호출) */
+	createUnit: () => Promise<UnitReservationResult>;
+	/** 이미 생성된 예약 1건 취소(롤백용) */
+	cancelUnit: (reservationId: number) => Promise<void>;
+}
+
+export interface MultiUnitReservationOutcome {
+	success: boolean;
+	reservationIds: number[];
+	errorMessage: string | null;
+}
+
+/**
+ * qty대를 순차적으로 예약 생성한다. 도중 하나라도 실패하면(재고 부족 등) 이미 생성된 건을
+ * 전부 롤백하고 실패를 반환한다(all-or-nothing) — 부분 성공 상태로 남기지 않는다.
+ */
+export async function createMultiUnitReservation(
+	qty: number,
+	deps: MultiUnitReservationDeps
+): Promise<MultiUnitReservationOutcome> {
+	const targetQty = clampReservationQty(qty);
+	const created: number[] = [];
+
+	for (let i = 0; i < targetQty; i++) {
+		const result = await deps.createUnit();
+
+		if (!result.success || result.reservationId == null) {
+			for (const id of created) {
+				await deps.cancelUnit(id);
+			}
+			const errorMessage =
+				created.length > 0
+					? `요청하신 ${targetQty}대 중 ${created.length}대만 예약 가능해 전체 취소되었습니다. ${result.errorMessage ?? '재고가 부족합니다.'}`
+					: (result.errorMessage ?? '예약 가능한 재고가 없습니다.');
+			return { success: false, reservationIds: [], errorMessage };
+		}
+
+		created.push(result.reservationId);
+	}
+
+	return { success: true, reservationIds: created, errorMessage: null };
+}

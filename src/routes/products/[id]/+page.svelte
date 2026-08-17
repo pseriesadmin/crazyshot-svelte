@@ -5,8 +5,14 @@
   import { trackProductView, trackCartAdd } from '$lib/analytics/behaviorTracker';
   import ProductHero from '$lib/components/products/ProductHero.svelte';
   import CalendarTimePicker from '$lib/components/products/CalendarTimePicker.svelte';
+  import ProductDPCard from '$lib/components/products/ProductDPCard.svelte';
   import type { Tables, ProductOptionLinkRow } from '$lib/types/database';
   import type { ContentBlock } from '$lib/types/content-editor';
+  import {
+    clampReservationQty,
+    createMultiUnitReservation,
+    type UnitReservationResult,
+  } from '$lib/services/reservationHelper';
 
   /** 실서비스 DB products 행 (가격·status 등 런타임 컬럼 포함) */
   type ProductRow = Tables<'products'> & {
@@ -42,6 +48,7 @@
     slug: string | null;
     imageUrl: string | null;
     price24h: number;
+    category: string | null;
   }
 
   interface Props {
@@ -108,16 +115,17 @@
     qaSubmitting = true;
     try {
       type RpcFn = (name: string, args: Record<string, unknown>) => ReturnType<typeof supabase.rpc>;
-      await (supabase.rpc as unknown as RpcFn)('submit_product_inquiry', {
+      const { error } = await (supabase.rpc as unknown as RpcFn)('submit_product_inquiry', {
         p_product_id: data.productId,
         p_content: qaText.trim(),
       });
-    } catch {
-      // RPC 미구현 시 무시 — 토스트는 항상 노출
-    } finally {
+      if (error) throw error;
       qaText = '';
-      qaSubmitting = false;
       showToast('문의가 등록되었습니다.');
+    } catch {
+      showToast('문의 등록에 실패했습니다. 다시 시도해주세요.');
+    } finally {
+      qaSubmitting = false;
     }
   }
 
@@ -133,6 +141,24 @@
 
   // ── Tab
   let activeTab = $state<'spec' | 'info' | 'review' | 'qa'>('info');
+
+  // 상품 상세는 같은 컴포넌트가 SPA 네비게이션으로 재사용됨 — 다른 상품으로 이동 시 이전
+  // 상품에서 선택한 수량/날짜/시간/수령방식/탭/문의입력 등이 남아있지 않도록 재동기화
+  $effect(() => {
+    void data.productId;
+    qty = 1;
+    startDate = '';
+    endDate = '';
+    startHour = 12;
+    startMin = 0;
+    endHour = 13;
+    endMin = 0;
+    selectedMethodId = '';
+    selectedPeriodId = '';
+    activeTab = 'info';
+    qaText = '';
+    toastVisible = false;
+  });
 
   function scrollToSection(key: 'info' | 'review' | 'qa'): void {
     const selector =
@@ -288,65 +314,111 @@
         }
       }
 
+      // 대여수량(qty)만큼 동일 상품을 각각 독립된 예약(1건=재고 1대)으로 생성한다.
+      // 신규 RPC 없이 기존 create_hold_reservation/create_draft_reservation을 반복호출하며,
+      // 매 호출이 실제 가용재고를 원자적으로 재검증한다 — 도중 실패 시 전량 롤백(all-or-nothing).
+      // 여러 건은 장바구니 체크아웃 제출 시점(create_reservation_order)에 자동으로 하나의
+      // 주문으로 묶인다(rules/service-operations.md §4 참고) — 여기서 별도 처리 불필요.
+      const cancelUnit = async (reservationId: number) => {
+        await fetch('/api/reservations/cancel-hold', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ reservationId }),
+        }).catch(() => {});
+      };
+
       if (!e.startDate) {
         // ── draft 경로 (날짜 없는 임시예약 — 체크아웃에서 날짜 입력 후 promote_draft_reservation로 승격)
         type DraftRpcFn = (name: string, args: Record<string, unknown>) => Promise<{
           data: Array<{ success: boolean; reservation_id: number | null; error_message: string | null }> | null;
           error: unknown;
         }>
-        const { data: draftRows } = await (supabase.rpc as unknown as DraftRpcFn)('create_draft_reservation', {
-          p_product_id: product.id,
-        });
-        const draftRow = draftRows?.[0];
-        if (!draftRow?.success) {
-          showToast(draftRow?.error_message ?? '예약을 생성할 수 없습니다.');
+        const createDraftUnit = async (): Promise<UnitReservationResult> => {
+          const { data: draftRows } = await (supabase.rpc as unknown as DraftRpcFn)('create_draft_reservation', {
+            p_product_id: product.id,
+          });
+          const draftRow = draftRows?.[0];
+          return {
+            success: !!draftRow?.success,
+            reservationId: draftRow?.reservation_id ?? null,
+            errorMessage: draftRow?.error_message ?? null,
+          };
+        };
+
+        const outcome = await createMultiUnitReservation(qty, { createUnit: createDraftUnit, cancelUnit });
+        if (!outcome.success) {
+          showToast(outcome.errorMessage ?? '예약을 생성할 수 없습니다.');
           return;
         }
-        if (draftRow.reservation_id != null) {
-          // 옵션상품 + 수량 저장 (draft 상태에서도 가능 — DB-4)
-          // set_reservation_duration / set_reservation_shipment_method는 날짜 없어 의미 없음 — 체크아웃 승격(FE-4) 시점에 호출
-          const selectedOptions = optionItems
-            .filter((o) => o.qty > 0)
-            .map((o) => ({ option_product_id: o.id, option_name: o.label, qty: o.qty, unit_price: o.price }));
-          if (selectedOptions.length > 0) {
-            type OptionsRpcFn = (name: string, args: Record<string, unknown>) => Promise<{ error: unknown }>;
-            const { error: optionsError } = await (supabase.rpc as unknown as OptionsRpcFn)('set_reservation_options', {
-              p_reservation_id: draftRow.reservation_id,
-              p_options:        selectedOptions,
-            });
-            if (optionsError) {
-              console.error('[products/[id]] set_reservation_options (draft) 저장 실패:', optionsError);
-              showToast('선택한 옵션상품 저장에 실패했습니다. 체크아웃에서 다시 확인해 주세요.');
-            }
+
+        // 옵션상품 + 수량 저장 (draft 상태에서도 가능 — DB-4) — 첫 예약에만 귀속(중복과금 방지,
+        // reservation_options.reservation_id는 1건 FK)
+        // set_reservation_duration / set_reservation_shipment_method는 날짜 없어 의미 없음 — 체크아웃 승격(FE-4) 시점에 호출
+        const firstReservationId = outcome.reservationIds[0];
+        const selectedOptions = optionItems
+          .filter((o) => o.qty > 0)
+          .map((o) => ({ option_product_id: o.id, option_name: o.label, qty: o.qty, unit_price: o.price }));
+        if (selectedOptions.length > 0 && firstReservationId != null) {
+          type OptionsRpcFn = (name: string, args: Record<string, unknown>) => Promise<{ error: unknown }>;
+          const { error: optionsError } = await (supabase.rpc as unknown as OptionsRpcFn)('set_reservation_options', {
+            p_reservation_id: firstReservationId,
+            p_options:        selectedOptions,
+          });
+          if (optionsError) {
+            console.error('[products/[id]] set_reservation_options (draft) 저장 실패:', optionsError);
+            showToast('선택한 옵션상품 저장에 실패했습니다. 체크아웃에서 다시 확인해 주세요.');
           }
         }
         // notify-hold는 draft 생성 시 발송하지 않음 — 체크아웃 승격(FE-4) 성공 시점에 발송
         goto('/cart');
       } else {
-        // ── hold 경로 (기존 로직 그대로 — 하위호환)
+        // ── hold 경로
         type ReserveRpcFn = (name: string, args: Record<string, unknown>) => Promise<{
           data: Array<{ success: boolean; reservation_id: number | null; asset_id: number | null; error_message: string | null }> | null;
           error: unknown;
         }>
         // A-2: endDate 미선택(반출일만 선택) 시 startDate로 대체 → 당일 대여
         const endDate = e.endDate || e.startDate;
-        const { data: rows } = await (supabase.rpc as unknown as ReserveRpcFn)('create_hold_reservation', {
-          p_product_id: product.id,
-          p_start_date: e.startDate,
-          p_end_date:   endDate,
-        });
-        const row = rows?.[0];
-        if (!row?.success) {
-          showToast(row?.error_message ?? '예약 가능한 장비가 없습니다.');
+        const createHoldUnit = async (): Promise<UnitReservationResult> => {
+          const { data: rows } = await (supabase.rpc as unknown as ReserveRpcFn)('create_hold_reservation', {
+            p_product_id: product.id,
+            p_start_date: e.startDate,
+            p_end_date:   endDate,
+          });
+          const row = rows?.[0];
+          return {
+            success: !!row?.success,
+            reservationId: row?.reservation_id ?? null,
+            errorMessage: row?.error_message ?? null,
+          };
+        };
+
+        const outcome = await createMultiUnitReservation(qty, { createUnit: createHoldUnit, cancelUnit });
+        if (!outcome.success) {
+          showToast(outcome.errorMessage ?? '예약 가능한 장비가 없습니다.');
           return;
         }
-        // A-2: 반출·반납 시각 저장 (Migration 147 set_reservation_shipment_method)
-        if (row.reservation_id != null) {
-          const padTime = (h: number, m: number) =>
-            String(h).padStart(2, '0') + ':' + String(m).padStart(2, '0');
-          type ShipRpcFn = (name: string, args: Record<string, unknown>) => Promise<{ error: unknown }>;
+
+        const padTime = (h: number, m: number) =>
+          String(h).padStart(2, '0') + ':' + String(m).padStart(2, '0');
+        // 실제 선택한 대여시간 기준 요금구간(12h/24h) 저장 — CalendarTimePicker estimatedFee와 동일 판정 기준
+        // (당일 대여 12시간 이하 → 12h, 그 외(당일 12시간 초과·복수일) → 24h)
+        const isSameDayRental = e.startDate === endDate;
+        const sameDayMinutes = (e.endHour * 60 + e.endMin) - (e.startHour * 60 + e.startMin);
+        const durationType = isSameDayRental && sameDayMinutes > 0 && sameDayMinutes <= 720 ? '12h' : '24h';
+        const selectedOptions = optionItems
+          .filter((o) => o.qty > 0)
+          .map((o) => ({ option_product_id: o.id, option_name: o.label, qty: o.qty, unit_price: o.price }));
+
+        type ShipRpcFn = (name: string, args: Record<string, unknown>) => Promise<{ error: unknown }>;
+        type DurationRpcFn = (name: string, args: Record<string, unknown>) => Promise<{ error: unknown }>;
+        type OptionsRpcFn = (name: string, args: Record<string, unknown>) => Promise<{ error: unknown }>;
+
+        // N건(qty) 각각에 반출·반납 시각/요금구간 적용. 옵션상품은 첫 건에만 귀속(중복과금 방지).
+        for (const [index, reservationId] of outcome.reservationIds.entries()) {
+          // A-2: 반출·반납 시각 저장 (Migration 147 set_reservation_shipment_method)
           const { error: shipError } = await (supabase.rpc as unknown as ShipRpcFn)('set_reservation_shipment_method', {
-            p_reservation_id: row.reservation_id,
+            p_reservation_id: reservationId,
             p_pickup_method:  selectedMethod?.method_key ?? 'visit',
             p_return_method:  selectedMethod?.method_key ?? 'visit',
             p_pickup_time:    padTime(e.startHour, e.startMin),
@@ -357,28 +429,19 @@
             showToast('수령/반납 방식 저장에 실패했습니다. 체크아웃에서 다시 확인해 주세요.');
           }
 
-          // 실제 선택한 대여시간 기준 요금구간(12h/24h) 저장 — CalendarTimePicker estimatedFee와 동일 판정 기준
-          // (당일 대여 12시간 이하 → 12h, 그 외(당일 12시간 초과·복수일) → 24h)
-          const isSameDayRental = e.startDate === endDate;
-          const sameDayMinutes = (e.endHour * 60 + e.endMin) - (e.startHour * 60 + e.startMin);
-          const durationType = isSameDayRental && sameDayMinutes > 0 && sameDayMinutes <= 720 ? '12h' : '24h';
-          type DurationRpcFn = (name: string, args: Record<string, unknown>) => Promise<{ error: unknown }>;
           const { error: durationError } = await (supabase.rpc as unknown as DurationRpcFn)('set_reservation_duration', {
-            p_reservation_id: row.reservation_id,
+            p_reservation_id: reservationId,
             p_duration_type:  durationType,
           });
           if (durationError) {
             console.error('[products/[id]] set_reservation_duration 저장 실패:', durationError);
+            showToast('대여기간 정보 저장에 실패했습니다. 체크아웃에서 다시 확인해 주세요.');
           }
 
-          // 옵션상품 + 수량 저장 (Migration 176 reservation_options)
-          const selectedOptions = optionItems
-            .filter((o) => o.qty > 0)
-            .map((o) => ({ option_product_id: o.id, option_name: o.label, qty: o.qty, unit_price: o.price }));
-          if (selectedOptions.length > 0) {
-            type OptionsRpcFn = (name: string, args: Record<string, unknown>) => Promise<{ error: unknown }>;
+          // 옵션상품 + 수량 저장 (Migration 176 reservation_options) — 첫 예약에만 귀속
+          if (index === 0 && selectedOptions.length > 0) {
             const { error: optionsError } = await (supabase.rpc as unknown as OptionsRpcFn)('set_reservation_options', {
-              p_reservation_id: row.reservation_id,
+              p_reservation_id: reservationId,
               p_options:        selectedOptions,
             });
             if (optionsError) {
@@ -386,13 +449,12 @@
               showToast('선택한 옵션상품 저장에 실패했습니다. 체크아웃에서 다시 확인해 주세요.');
             }
           }
-        }
-        // 예약신청(hold) 채팅 알림 발송 — fire-and-forget
-        if (row.reservation_id != null) {
+
+          // 예약신청(hold) 채팅 알림 발송 — fire-and-forget
           fetch('/api/checkout/notify-hold', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ reservationId: row.reservation_id }),
+            body: JSON.stringify({ reservationId }),
           }).catch(() => {})
         }
         goto('/cart');
@@ -569,7 +631,7 @@
         <div class="qty-row">
           <span class="qty-label">대여수량</span>
           <div class="qty-control">
-            <button onclick={() => qty = Math.max(1, qty - 1)} class="qty-btn" aria-label="수량 감소">
+            <button onclick={() => qty = clampReservationQty(qty - 1)} class="qty-btn" aria-label="수량 감소">
               <svg width="14" height="2" viewBox="0 0 14 2" fill="none">
                 <path d="M1 1H13" stroke="var(--cs-text-dark)" stroke-width="2" stroke-linecap="round"/>
               </svg>
@@ -578,12 +640,14 @@
               <input
                 type="number"
                 bind:value={qty}
+                onchange={() => qty = clampReservationQty(qty)}
                 min="1"
+                max="10"
                 class="qty-input"
                 aria-label="수량"
               />
             </div>
-            <button onclick={() => qty = qty + 1} class="qty-btn" aria-label="수량 증가">
+            <button onclick={() => qty = clampReservationQty(qty + 1)} class="qty-btn" aria-label="수량 증가">
               <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
                 <path d="M1 7H13M7 1V13" stroke="var(--cs-text-dark)" stroke-width="2" stroke-linecap="round"/>
               </svg>
@@ -786,7 +850,7 @@
             <!-- 모바일: 이미지 상단 -->
             <div class="shotlog-img-mobile" aria-hidden="true">
               {#if post.img}
-                <img src={post.img} alt="" class="shotlog-img-tag" />
+                <img src={post.img} alt="" loading="lazy" class="shotlog-img-tag" />
               {/if}
             </div>
             <!-- PC: 좌측 보라 바 -->
@@ -799,7 +863,7 @@
             <!-- PC: 우측 이미지 -->
             <div class="shotlog-img-pc" aria-hidden="true">
               {#if post.img}
-                <img src={post.img} alt="" class="shotlog-img-tag" />
+                <img src={post.img} alt="" loading="lazy" class="shotlog-img-tag" />
               {/if}
             </div>
           </a>
@@ -866,19 +930,14 @@
         <p class="popular-empty">관련 상품이 없습니다.</p>
       {:else}
         {#each popularProducts as item (item.id)}
-          <a href="/products/{item.slug ?? item.id}" class="popular-card" aria-label={item.name}>
-            <div class="popular-card-img" aria-hidden="true">
-              {#if item.imageUrl}
-                <img src={item.imageUrl} alt={item.name} class="popular-card-img-tag" />
-              {:else}
-                <img src="/sample/product-main.png" alt="" class="popular-card-img-tag" />
-              {/if}
-            </div>
-            <div class="popular-card-info">
-              <p class="popular-card-price">Day {fmt(item.price24h)}</p>
-              <p class="popular-card-name">{item.name}</p>
-            </div>
-          </a>
+          <ProductDPCard
+            id={item.id}
+            name={item.name}
+            category={item.category ?? ''}
+            imageUrl={item.imageUrl ?? '/sample/product-main.png'}
+            price24h={item.price24h}
+            href="/products/{item.slug ?? item.id}"
+          />
         {/each}
       {/if}
     </div>
@@ -1645,59 +1704,7 @@
   @media (min-width: 641px) {
     .popular-scroll { padding: 0 var(--layout-pc-pad) 10px; }
   }
-  .popular-card {
-    flex-shrink: 0;
-    width: 200px;
-    height: 280px;
-    border-radius: var(--radius-2xl);
-    overflow: hidden;
-    position: relative;
-    display: flex;
-    flex-direction: column;
-    justify-content: flex-end;
-  }
-  @media (min-width: 641px) {
-    .popular-card { width: 290px; height: 410px; border-radius: var(--radius-2xl); }
-  }
-  .popular-card-img {
-    position: absolute;
-    inset: 0;
-    overflow: hidden;
-  }
-  .popular-card-img-tag {
-    position: absolute;
-    inset: 0;
-    width: 100%;
-    height: 100%;
-    object-fit: cover;
-  }
-  .popular-card-info {
-    position: relative;
-    background: var(--cs-lilac);
-    padding: 10px 20px 15px;
-    display: flex;
-    flex-direction: column;
-    gap: 4px;
-  }
-  @media (min-width: 641px) {
-    .popular-card-info { padding: 15px 30px 25px; }
-  }
-  .popular-card-price {
-    font: var(--text-m-title-21);
-    color: var(--cs-text);
-    margin: 0;
-    font-size: 18px;
-    white-space: nowrap;
-  }
-  @media (min-width: 641px) {
-    .popular-card-price { font-size: 25px; }
-  }
-  .popular-card-name {
-    font: var(--text-m-script-14B);
-    color: var(--cs-text-dark);
-    margin: 0;
-    white-space: nowrap;
-  }
+  /* .popular-card* 인라인 카드 CSS 제거(front-uiux.md §14-4) — ProductDPCard 표준 컴포넌트로 대체 */
 
   /* ── Reviews */
   .review-section {

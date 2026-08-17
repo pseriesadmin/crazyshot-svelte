@@ -1,19 +1,25 @@
-import { describe, it, expect } from 'vitest';
-import { supabase } from '$lib/services/supabase';
+import { describe, it, expect, beforeAll, afterEach } from 'vitest';
+import { createClient } from '@supabase/supabase-js';
+import { SUPABASE_SERVICE_ROLE_KEY } from '$env/static/private';
+import { PUBLIC_SUPABASE_URL } from '$env/static/public';
+
+const admin = createClient(PUBLIC_SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
 
 // database.ts 자동생성 타입이 신규 RPC를 아직 모르므로 타입 헬퍼로 우회
 // (supabase generate types 실행 후 이 헬퍼 제거 예정 — T4 REFACTOR)
 type RpcResult = { data: Record<string, unknown> | null; error: { code: string; message: string } | null };
 const rpcCall = (fn: string, args: Record<string, unknown>): Promise<RpcResult> =>
-  (supabase.rpc as unknown as (f: string, a: Record<string, unknown>) => Promise<RpcResult>)(fn, args);
+  (admin.rpc as unknown as (f: string, a: Record<string, unknown>) => Promise<RpcResult>)(fn, args);
 
 type TableInsertResult = { error: { code: string; message: string } | null };
 const tableInsert = (table: string, row: Record<string, unknown>): Promise<TableInsertResult> =>
-  (supabase.from as unknown as (t: string) => { insert: (r: Record<string, unknown>) => Promise<TableInsertResult> })(table).insert(row);
+  (admin.from as unknown as (t: string) => { insert: (r: Record<string, unknown>) => Promise<TableInsertResult> })(table).insert(row);
 
+// Fix 3: .select('*') 추가 — Supabase JS v2에서 .from()은 PostgrestQueryBuilder를 반환하며
+// .eq() 등 filter 메서드는 .select()/.insert()/.update() 이후에만 사용 가능
 type TableSelectResult = { data: Record<string, unknown>[] | null; error: { code: string; message: string } | null };
-const tableSelect = (table: string): { eq: (col: string, val: unknown) => { limit: (n: number) => Promise<TableSelectResult> } } =>
-  (supabase.from as unknown as (t: string) => { eq: (col: string, val: unknown) => { limit: (n: number) => Promise<TableSelectResult> } })(table);
+const tableSelect = (table: string) =>
+  admin.from(table).select('*') as unknown as { eq: (col: string, val: unknown) => { limit: (n: number) => Promise<TableSelectResult> } };
 
 /**
  * S1-M3 Payment Integration Tests (TDD)
@@ -30,8 +36,60 @@ const tableSelect = (table: string): { eq: (col: string, val: unknown) => { limi
  *   ② 웹훅: raw_webhook_logs 저장 + 200 OK (pg_cron 처리는 다음 사이클)
  */
 
-// ── 테스트 픽스처 ──────────────────────────────────────────────────────────────
-const TEST_USER_ID   = '00000000-0000-0000-0000-000000000099';
+// ── 픽스처 헬퍼 (contractSign.test.ts 패턴 재사용) ────────────────────────────
+let testProductId: string;
+
+type Cleanup = () => Promise<void>;
+const cleanups: Cleanup[] = [];
+
+afterEach(async () => {
+  while (cleanups.length) {
+    const fn = cleanups.pop();
+    if (fn) await fn();
+  }
+});
+
+beforeAll(async () => {
+  const { data, error } = await admin.from('products').select('id').limit(1).single();
+  if (error || !data) throw new Error(`테스트용 product 조회 실패: ${error?.message}`);
+  testProductId = (data as { id: string }).id;
+});
+
+async function createEphemeralUser(): Promise<string> {
+  const email = `tdd-payment-${Date.now()}-${Math.random().toString(36).slice(2, 8)}@example.com`;
+  const { data, error } = await admin.auth.admin.createUser({
+    email,
+    password: 'Test1234!',
+    email_confirm: true,
+  });
+  if (error || !data.user) throw new Error(`ephemeral user 생성 실패: ${error?.message}`);
+  return data.user.id;
+}
+
+async function deleteEphemeralUser(userId: string): Promise<void> {
+  await admin.auth.admin.deleteUser(userId).catch(() => undefined);
+}
+
+async function createHoldReservation(userId: string): Promise<number> {
+  const { data, error } = await admin
+    .from('rental_reservations')
+    .insert({
+      user_id:       userId,
+      product_id:    testProductId,
+      start_date:    '2099-01-01',
+      end_date:      '2099-01-03',
+      status:        'hold',
+      pickup_method: 'visit',
+      return_method: 'visit',
+    })
+    .select('id')
+    .single();
+  if (error || !data) throw new Error(`hold reservation 생성 실패: ${error?.message}`);
+  return (data as { id: number }).id;
+}
+
+// ── 기존 상수 (test 6: cancel은 TEST_RESERVE_ID 유지 — 이미 GREEN) ─────
+const TEST_USER_ID    = '00000000-0000-0000-0000-000000000099';
 const TEST_RESERVE_ID = 1; // rental_reservations.id = BIGINT
 
 const makeOrderId = () => `ORDER-TEST-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
@@ -42,13 +100,23 @@ const makePayKey  = () => `payKey_TEST_${Date.now()}`;
 describe('Payment — Happy Path', () => {
 
   it('RED: confirm_payment_and_update_reservation — 정상 결제 승인 시 payment_id 반환', async () => {
+    const userId = await createEphemeralUser();
+    cleanups.push(() => deleteEphemeralUser(userId));
+
+    const reservationId = await createHoldReservation(userId);
+    cleanups.push(async () => {
+      await admin.from('payment_transactions').delete().eq('reservation_id', reservationId);
+      await admin.from('deposit_holds').delete().eq('reservation_id', reservationId);
+      await admin.from('rental_reservations').delete().eq('id', reservationId);
+    });
+
     const orderId     = makeOrderId();
     const idemKey     = makeIdemKey();
     const paymentKey  = makePayKey();
 
     const { data, error } = await rpcCall('confirm_payment_and_update_reservation', {
-      p_reservation_id:  TEST_RESERVE_ID,
-      p_user_id:         TEST_USER_ID,
+      p_reservation_id:  reservationId,
+      p_user_id:         userId,
       p_payment_key:     paymentKey,
       p_order_id:        orderId,
       p_idempotency_key: idemKey,
@@ -64,14 +132,24 @@ describe('Payment — Happy Path', () => {
   });
 
   it('RED: 동일 idempotency_key 재전송 → idempotent:true, 기존 payment_id 반환 (중복 결제 방지)', async () => {
+    const userId = await createEphemeralUser();
+    cleanups.push(() => deleteEphemeralUser(userId));
+
+    const reservationId = await createHoldReservation(userId);
+    cleanups.push(async () => {
+      await admin.from('payment_transactions').delete().eq('reservation_id', reservationId);
+      await admin.from('deposit_holds').delete().eq('reservation_id', reservationId);
+      await admin.from('rental_reservations').delete().eq('id', reservationId);
+    });
+
     const orderId    = makeOrderId();
     const idemKey    = makeIdemKey();
     const paymentKey = makePayKey();
 
     // 첫 번째 호출
     const { data: first } = await rpcCall('confirm_payment_and_update_reservation', {
-      p_reservation_id:  TEST_RESERVE_ID,
-      p_user_id:         TEST_USER_ID,
+      p_reservation_id:  reservationId,
+      p_user_id:         userId,
       p_payment_key:     paymentKey,
       p_order_id:        orderId,
       p_idempotency_key: idemKey,
@@ -81,8 +159,8 @@ describe('Payment — Happy Path', () => {
 
     // 두 번째 호출 (동일 idemKey)
     const { data: second } = await rpcCall('confirm_payment_and_update_reservation', {
-      p_reservation_id:  TEST_RESERVE_ID,
-      p_user_id:         TEST_USER_ID,
+      p_reservation_id:  reservationId,
+      p_user_id:         userId,
       p_payment_key:     paymentKey,
       p_order_id:        orderId,
       p_idempotency_key: idemKey,
@@ -97,9 +175,19 @@ describe('Payment — Happy Path', () => {
   });
 
   it('RED: 보증금 있는 결제 — deposit_id도 함께 반환', async () => {
+    const userId = await createEphemeralUser();
+    cleanups.push(() => deleteEphemeralUser(userId));
+
+    const reservationId = await createHoldReservation(userId);
+    cleanups.push(async () => {
+      await admin.from('payment_transactions').delete().eq('reservation_id', reservationId);
+      await admin.from('deposit_holds').delete().eq('reservation_id', reservationId);
+      await admin.from('rental_reservations').delete().eq('id', reservationId);
+    });
+
     const { data, error } = await rpcCall('confirm_payment_and_update_reservation', {
-      p_reservation_id:  TEST_RESERVE_ID,
-      p_user_id:         TEST_USER_ID,
+      p_reservation_id:  reservationId,
+      p_user_id:         userId,
       p_payment_key:     makePayKey(),
       p_order_id:        makeOrderId(),
       p_idempotency_key: makeIdemKey(),
@@ -130,11 +218,8 @@ describe('Payment — Happy Path', () => {
       processed:  false,
     });
 
-    // RLS: service_role로 INSERT 가능 (anon은 불가)
-    // 이 테스트는 service_role 환경에서 실행되어야 통과
-    // anon 환경에서는 RLS 거부 → error 발생 확인
-    // 실제 웹훅 라우트는 SUPABASE_SERVICE_ROLE_KEY 사용
-    expect(error?.code).toBe('42501'); // RLS 거부 코드 (anon 환경)
+    // service_role로 INSERT 성공해야 한다 (anon은 RLS 거부)
+    expect(error).toBeNull();
   });
 
 });
@@ -160,12 +245,22 @@ describe('Payment — Edge Cases', () => {
   });
 
   it('RED: 동일 order_id로 다른 idempotency_key 결제 시도 → DB 레벨 UNIQUE 오류', async () => {
+    const userId = await createEphemeralUser();
+    cleanups.push(() => deleteEphemeralUser(userId));
+
+    const reservationId = await createHoldReservation(userId);
+    cleanups.push(async () => {
+      await admin.from('payment_transactions').delete().eq('reservation_id', reservationId);
+      await admin.from('deposit_holds').delete().eq('reservation_id', reservationId);
+      await admin.from('rental_reservations').delete().eq('id', reservationId);
+    });
+
     const orderId = makeOrderId();
 
     // 첫 번째 삽입 성공
     const { data: first } = await rpcCall('confirm_payment_and_update_reservation', {
-      p_reservation_id:  TEST_RESERVE_ID,
-      p_user_id:         TEST_USER_ID,
+      p_reservation_id:  reservationId,
+      p_user_id:         userId,
       p_payment_key:     makePayKey(),
       p_order_id:        orderId,
       p_idempotency_key: makeIdemKey(),
@@ -175,8 +270,8 @@ describe('Payment — Edge Cases', () => {
 
     // 동일 order_id, 다른 idemKey → DB UNIQUE 제약 위반
     const { data: second } = await rpcCall('confirm_payment_and_update_reservation', {
-      p_reservation_id:  TEST_RESERVE_ID,
-      p_user_id:         TEST_USER_ID,
+      p_reservation_id:  reservationId,
+      p_user_id:         userId,
       p_payment_key:     makePayKey(),
       p_order_id:        orderId,      // 동일 order_id
       p_idempotency_key: makeIdemKey(), // 다른 idemKey
@@ -210,18 +305,48 @@ describe('Payment — Edge Cases', () => {
 // ── ERROR SCENARIOS ────────────────────────────────────────────────────────────
 describe('Payment — Error Scenarios', () => {
 
-  it('RED: 결제 실패 → cancel_payment_and_release_hold → reservation cancelled', async () => {
+  it('RED: 결제 실패 → cancel_payment_and_release_hold → hold 상태 예약이 실제로 cancelled로 전환된다', async () => {
+    // 2026-08-17 재작성 사유: 기존 테스트는 존재하지 않는 더미 TEST_RESERVE_ID(=1)로 호출해
+    // UPDATE가 0행에 적용돼도 RPC가 예외 없이 success:true를 반환하는 결함을 가려왔음
+    // (WHERE절이 status IN ('temp','pending','confirmed')만 매치 — 'hold'는 매치 안 됨).
+    // 실제 hold 예약 픽스처로 호출 후 DB 상태를 직접 재조회해 검증한다.
+    const userId = await createEphemeralUser();
+    cleanups.push(() => deleteEphemeralUser(userId));
+
+    const reservationId = await createHoldReservation(userId);
+    cleanups.push(async () => {
+      await admin.from('rental_reservations').delete().eq('id', reservationId);
+    });
+
     const { data, error } = await rpcCall('cancel_payment_and_release_hold', {
-      p_reservation_id: TEST_RESERVE_ID,
-      p_user_id:        TEST_USER_ID,
+      p_reservation_id: reservationId,
+      p_user_id:        userId,
       p_reason:         '테스트: 결제 실패',
     });
 
     expect(error).toBeNull();
     expect(data).toBeDefined();
     expect(data?.success).toBe(true);
-    // reservation 상태가 cancelled로 바뀌었는지 검증
-    // (실제 예약 데이터가 있을 때만 DB 확인 가능)
+
+    const { data: row } = await admin
+      .from('rental_reservations')
+      .select('status')
+      .eq('id', reservationId)
+      .single();
+    expect((row as { status: string } | null)?.status).toBe('cancelled');
+  });
+
+  it('RED: 더미 예약 ID로 호출해도 success:true를 반환하지 않는다(0행 UPDATE는 실패로 취급)', async () => {
+    // TEST_RESERVE_ID=1은 이 테스트 스위트 실행 시점 실제 존재를 보장하지 않는 더미 값 —
+    // 매치되는 행이 없을 때 RPC가 "성공"을 거짓 보고하지 않는지 검증(회귀 방지).
+    const { data, error } = await rpcCall('cancel_payment_and_release_hold', {
+      p_reservation_id: TEST_RESERVE_ID,
+      p_user_id:        TEST_USER_ID,
+      p_reason:         '테스트: 존재하지 않는 예약',
+    });
+
+    expect(error).toBeNull();
+    expect(data?.success).toBe(false);
   });
 
   it('RED: payment_transactions — processed 웹훅 재전송 시 중복 처리 안 됨 (processed=true 확인)', async () => {

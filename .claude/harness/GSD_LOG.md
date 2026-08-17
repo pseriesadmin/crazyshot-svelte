@@ -1,6 +1,119 @@
 # GSD_LOG.md — 크레이지샷 실행 이력
 # 형식: [YYYY-MM-DD HH:MM] 타입 | 타스크명 | 파일 | 소요 | 결과
 
+[2026-08-17] 🔴TDD | cancel_payment_and_release_hold 'hold' 상태 미처리 결함 수정 [CRITICAL] | GATE C:Stage 완료, Production은 Stephen 지시 대기
+  배경: 직전 대여수량 다중예약 작업 중 Stage DB pg_get_functiondef로 이 RPC 실제 정의를 직접
+    확인해 발견 — WHERE절이 status IN ('temp','pending','confirmed')만 매치하고 정작 이 함수의
+    실사용 목적인 'hold' 상태는 목록에 없었음. UPDATE가 0행에 적용돼도 예외 없이 success:true를
+    반환해(ROW_COUNT 미검사) 호출부(api/payment/confirm/+server.ts:134,
+    payment/fail/+page.server.ts:23)는 "결제 실패 시 HOLD 해제"가 실제로는 아무 효과가
+    없었는데도 성공한 줄 착각하고 있었을 가능성. Stephen 확인 후 즉시 수정 진행.
+  TDD-5(RED): payment.test.ts의 "cancel_payment_and_release_hold" 테스트가 존재하지 않는
+    더미 reservation_id(=1)로 호출해 버그를 가리고 있던 것을 실제 hold 예약 픽스처
+    (createHoldReservation 기존 헬퍼 재사용) + DB 재조회 status 검증으로 재작성.
+    `expected 'hold' to be 'cancelled'`로 RED 확인. 더미ID가 success:true를 반환하지 않아야
+    한다는 회귀방지 테스트도 별도 추가.
+  TDD-6(GREEN): `supabase/migrations/20260817070000_281_fix_cancel_payment_release_hold_status.sql`
+    — WHERE절에 'hold' 추가 + GET DIAGNOSTICS로 0행 매치 시 success:false 반환(같은 종류의
+    "조용한 성공 오보고" 재발 방지, update_reservation_status와 동일 패턴). 기존 상태값은
+    하위호환 위해 유지, 시그니처·GRANT 무변경. crazyshot-stage(ezyvffjvuwmtuhpxdjrw) 적용 후
+    시그니처 재확인 + `npx vitest run payment.test.ts` main-tree 9/9 pass(스테일 워크트리 실패는
+    기존 무관 사유 그대로).
+  수정 파일: supabase/migrations/20260817070000_281_*.sql(신규),
+    src/__tests__/services/payment.test.ts(cancel_payment_and_release_hold 테스트 블록만 —
+    같은 파일의 다른 변경분은 별도 세션 작업, GSD_LOG 상단 항목 참고)
+  Production 적용 완료(2026-08-17, Stephen 명시 지시): `apply_migration`(vnbpmvxruyciuuaermyh)
+    적용 후 시그니처(bigint,uuid,text) 불변 + GRANT(anon=false/authenticated=false/
+    service_role=true, Migration 172 보안 수준 유지) `has_function_privilege` 직접 조회로 확인.
+  미완료: git commit은 Stephen 직접 실행 필요.
+
+[2026-08-17] 🔴TDD+FIX | 상품상세 대여수량 다중예약 구현 + 즉시안정화 3건 + UI정책 4건 + 운영정책
+문서 신설 [CRITICAL/BOUNDARY 혼재] | GATE C:완료 (plan_source: splendid-nibbling-piglet.md)
+  배경: 이전 세션 상품상세(/products/[id]) 전역 코드 검수에서 발견한 CRITICAL 2건("대여수량"이
+    화면 견적에만 반영되고 실제 예약엔 미전달 / QA문의 실패해도 거짓성공토스트)과 UI정책 위반
+    다수를 반영한 수정 플랜을 승인받아 실행.
+  A(TDD) 대여수량 다중예약: `clampReservationQty`/`createMultiUnitReservation`을
+    `reservationHelper.ts`에 순수 오케스트레이션 함수로 신설(RPC 호출은 deps 주입 — 로그인
+    세션 없이도 mock으로 완전 단위테스트 가능, RED 10건→GREEN 64/64). `+page.svelte`
+    handleReserve가 이 함수로 create_hold_reservation/create_draft_reservation을 qty회
+    반복호출, 도중 실패 시 전량 롤백(all-or-nothing). 옵션상품은 첫 reservation에만 귀속
+    (중복과금 방지). 신규 RPC/마이그레이션 없음 — 기존 order_id 묶음 인프라(당일 다른 세션에서
+    완성된 create_reservation_order) 재사용.
+    ⚠️ 발견: `cancel_payment_and_release_hold`(Stage DB 직접 조회로 함수 본문 확인)가
+    `status IN ('temp','pending','confirmed')`만 처리 — 'hold' 상태에는 미적용, 예외 없이
+    success:true 반환하는 잠재 결함(payment/confirm/+server.ts의 결제실패 롤백 경로도 영향
+    가능성). 이번 작업은 우회만 하고 원인 수정은 범위 밖 — Stephen 확인 필요, TASK.md에 기록.
+    롤백은 신규 서버 엔드포인트 `api/reservations/cancel-hold`(소유권 자체검증 +
+    update_reservation_status 호출)로 구현.
+  B(GSD) 즉시안정화: QA문의 실패 시 거짓성공토스트 제거, SPA 네비게이션 잔존상태(qty·날짜시간·
+    수령방식·탭·문의입력) data.productId 변경 시 재동기화, set_reservation_duration 실패
+    토스트 추가.
+  C(GSD) UI정책: CTA컬러 하드코딩(#201857)→--cs-red-badge, 버튼높이 50px, 캐러셀 dot
+    터치타겟 20px→44px, "많이 본 상품" 인라인 카드→ProductDPCard 표준 컴포넌트 전환
+    (popularProducts에 category 추가), Shotlog 이미지 loading="lazy"(인기상품은 ProductDPCard
+    전환으로 해결, 부수적으로 ProductDPCard 자체의 loading="lazy" 누락도 발견해 추가 — 전
+    화면 공통 적용).
+  E: `.claude/rules/service-operations.md` 신규(front↔cms 상호운영 원칙 인덱스, 9개 섹션,
+    uiux-index.md와 동일 패턴 — 기존 chat.md/contract.md/payment.md/rental-lifecycle.md/
+    products.md/security-auth.md 원본은 무변경). CLAUDE.md 상시로드 목록에 추가.
+  검증: `npx vitest run reservationHelper.test.ts` 64/64 pass. 전체 vitest 1130 passed/18
+    failed/14 skipped(실패 전부 subscriptionBilling/contractSign 사전존재+스테일 워크트리
+    중복분, 이번 변경과 무관 grep 확인). svelte-check 1 error(vite.config.ts 사전존재)/326
+    warnings(신규 파일 0건). eslint 이번 세션 파일 전수 — 사전존재 4건 제외 신규 0건(git stash로
+    HEAD 대비 확인).
+  수정 파일: src/routes/products/[id]/+page.svelte, +page.server.ts,
+    src/lib/components/products/CalendarTimePicker.svelte, ProductHero.svelte, ProductDPCard.svelte,
+    src/lib/services/reservationHelper.ts, src/__tests__/services/reservationHelper.test.ts,
+    src/routes/api/reservations/cancel-hold/+server.ts(신규), .claude/rules/service-operations.md(신규),
+    CLAUDE.md
+  미완료: git commit(Stephen 직접 실행 필요). 공유 워킹트리에 이 세션과 무관한 다른 세션 변경분
+    (vite.config.ts, cms/promotion/ad·coupon 등)이 섞여 있음 — 위 "수정 파일" 목록만 이번
+    세션 범위.
+
+[2026-08-17] FIX | 테스트 스위트 flaky 원인 확정+수정 — memberCodeCombo.test.ts [ROUTINE] | GATE C:완료
+  원인: bulk_reissue_member_codes는 user_profiles 전체(deleted_at IS NULL)를 대상으로 하는
+    시스템 전역 RPC인데, vitest 기본 설정(fileParallelism 기본값 true)에서 payment.test.ts/
+    contractSign.test.ts 등 다른 통합테스트 파일이 동시에 ephemeral user를 생성/삭제하면서
+    경쟁 상태 발생 — 재실행마다 다른 테스트가 간헐적으로 실패했음.
+  수정: vite.config.ts에 test.fileParallelism=false 추가(테스트 파일을 순차 실행).
+  검증: 전체 스위트 3회 연속 실행 — memberCodeCombo 실패 0회(이전엔 매 실행마다 발생 가능).
+    소요시간 ~5초→~20초로 증가(스위트 규모상 미미한 비용). 다른 회귀 없음(669 passed 유지).
+  수정 파일: vite.config.ts
+
+[2026-08-17] 🔴TDD+FIX | payment.test.ts 클라이언트/픽스처/헬퍼 3종 수정 + BND-03 프로모션 RPC 7개 신설 [BOUNDARY] | GATE C:완료
+  배경: 세션 중 macOS Documents 폴더 TCC 권한이 일시 소실돼(subagent 2건 EPERM으로 중단) 메인
+    세션이 직접 이어받아 완료. 권한 복구 후 재개.
+  FIX-1 payment.test.ts: 스크래치패드에 대기 중이던 완성본(tableSelect .select() 누락 수정,
+    raw_webhook_logs assertion을 service_role 성공 기대로 정정, contractSign.test.ts 패턴
+    재사용한 ephemeral user/hold reservation 픽스처 추가)을 실제 파일에 적용.
+    검증: vitest payment.test.ts 16/16 pass(이전 7건 RED 전부 GREEN 전환 확인).
+  FIX-2 BND-03: banners/coupons 직접DML → RPC 전환.
+    - 마이그레이션 `20260817000262_262_cms_promotion_dml_to_rpc.sql` — 최초 버전은 coupons
+      targeting 컬럼명 4개 오류 + 필드 10개 누락(추측 기반 작성) 발견, 실 스키마
+      (information_schema.columns) + createCoupon 액션 원문 대조로 전면 재작성 후 적용.
+    - 신규 RPC 7개: cms_create_banner(8 params)/cms_toggle_banner(서버측 반전)/
+      cms_delete_banner(소프트삭제, banners.deleted_at 컬럼 신규)/cms_create_coupon(26 params,
+      전체 필드 반영)/cms_update_coupon(9 params)/cms_toggle_coupon(서버측 반전)/
+      cms_delete_coupon(소프트삭제, 기존 로직과 동일). 전부 Pattern B(SECURITY DEFINER +
+      is_cms_user() 내부체크 + JSONB 반환, distribute_coupon/extend_coupon과 동일 스타일).
+    - stage(ezyvffjvuwmtuhpxdjrw) 먼저 적용·함수 시그니처(arg count) 확인 후 production
+      (vnbpmvxruyciuuaermyh) 적용 — 순서 준수.
+    - 라우트 2개 수정: ad/+page.server.ts(load() banners 쿼리에 deleted_at IS NULL 필터 추가,
+      createBanner/toggleBanner/deleteBanner → rpc 호출로 교체), coupon/+page.server.ts
+      (createCoupon/updateCoupon/toggleCoupon/deleteCoupon → rpc 호출로 교체,
+      distributeCoupon/extendCoupon은 기존 RPC라 무변경).
+  검증: svelte-check 0 errors(1476 files, 326 warnings 유지). vitest 전체 669 passed/4 failed
+    (실패 4건 전부 contractSign.test.ts 사전 존재 fixture 이슈, 이번 변경과 무관 — 회귀 없음).
+  수정 파일: src/__tests__/services/payment.test.ts, supabase/migrations/20260817000262_*.sql,
+    src/routes/cms/promotion/ad/+page.server.ts, src/routes/cms/promotion/coupon/+page.server.ts
+  정리: 임시 진단 파일(.test_access, verify_coupon_schema.mjs) 삭제.
+
+[2026-08-17 14:01] ⚡FIX | payment.test.ts — anon key → service_role 클라이언트 교체 | 수정파일 1개 (src/__tests__/services/payment.test.ts) | import 1→3줄 + admin 초기화 + 헬퍼 3개 supabase→admin 참조 교체 | vitest 전체: 662 passed / 11 failed(payment 6 / contractSign 4 / memberCode 1) — 회귀 없음(contractSign·memberCode는 교체 전부터 사전존재 실패) | 교체 전→후 결과: permission denied 해소(error=null), 남은 실패는 fixture 이슈(TEST_RESERVE_ID=1)·assertion 역전(raw_webhook_logs)·tableSelect헬퍼 버그(eq not a function) — 구현 코드 문제 아님 | GATE C: 자동(BOUNDARY)
+
+[2026-08-17 13:55] ⚡FIX | BND-01 requireSuperadmin dual-schema 폴백 + BND-04 analytics 권한체크 | 수정파일 2개 (cms/accounts/list/+page.server.ts, cms/promotion/analytics/+page.server.ts) | svelte-check: 0 errors / vitest: 12 failed 사전존재(회귀 없음), 661 passed | GATE C: 자동(BOUNDARY)
+
+[2026-08-17 12:49] ⚡FIX | STEP D 발견 재동기화 누락 11개 필드 수정 | 수정파일 3개 (codes/_FormatTab.svelte, promotion/coupon/+page.svelte, promotion/point/+page.svelte) | 필드 11개 ($effect 블록 3개 신규 추가) | svelte-check: 0 errors / vitest: before=13 failed, after=13 failed (동일 — 회귀 없음, 660 passed) | GATE C: 자동(BOUNDARY)
+
 [2026-08-16] ⚡GSD | QR-LABEL-2 수정 — 2단 계층 기본순번(순번1) 마스킹 해제 | GATE C: 자동(BOUNDARY)
   배경: Stephen이 SONY FX3/EEEE 두 부모카드가 실제로는 parent_seq 1/2로 다른데 화면엔 둘 다
     CSCRDSL0000000으로 동일하게 보인다고 보고. Production 전수조사로 기본순번 자동채번 자체는

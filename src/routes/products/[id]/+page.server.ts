@@ -221,7 +221,7 @@ export const load: PageServerLoad = async ({ params, locals }) => {
 	}));
 
 	// 많이 본 상품: 같은 카테고리 최신 5개 (현재 상품 제외)
-	type PopularItem = { id: string; name: string; slug: string | null; imageUrl: string | null; price24h: number };
+	type PopularItem = { id: string; name: string; slug: string | null; imageUrl: string | null; price24h: number; category: string | null };
 	let popularProducts: PopularItem[] = [];
 	if (row.category) {
 		const { data: popRaw } = await locals.supabase
@@ -261,6 +261,7 @@ export const load: PageServerLoad = async ({ params, locals }) => {
 				slug:     p.slug,
 				imageUrl: p.image_urls?.[0] ?? null,
 				price24h: legacy > 0 ? legacy : (pop24hMap[p.id] ?? 0),
+				category: row.category as string,
 			};
 		});
 	}

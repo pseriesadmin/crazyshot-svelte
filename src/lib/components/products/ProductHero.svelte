@@ -366,15 +366,15 @@
   @media (min-width: 641px) { .dots-mobile { display: none; } }
 
   .dot {
-    width: 10px;
-    height: 10px;
+    width: 44px;
+    height: 44px;
     border-radius: 50%;
-    background: rgba(255,255,255,0.3);
+    background: transparent;
     border: none;
     cursor: pointer;
     padding: 0;
-    min-width: 20px;
-    min-height: 20px;
+    min-width: 44px;
+    min-height: 44px;
     display: flex;
     align-items: center;
     justify-content: center;

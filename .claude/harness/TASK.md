@@ -28,6 +28,159 @@ auth_baseline: fed4fdb — createBrowserClient 패턴 (절대 싱글톤 createCl
 
 ---
 
+## NOW — 상품상세 대여수량(qty) 다중예약 구현 + 즉시안정화 3건 + UI정책 4건 + 운영정책 문서 신설 (2026-08-17) — ✅ TDD 4건 + GSD 8건 전부 완료, git commit은 Stephen 직접 실행 필요(git 자율 실행 금지)
+
+plan_source: /Users/stevenmac/.claude/plans/splendid-nibbling-piglet.md (Plan Mode 사전 탐색
+  Explore 4회(운영정책 문서 존재여부·예약 RPC 수량 아키텍처·TDD 도메인·order_id 묶음구조) +
+  AskUserQuestion 서비스 의도 확인 3건 완료 후 확정)
+
+아젠다: `/products/[id]` 상품상세 전역 코드 검수(전 세션)에서 발견한 CRITICAL 2건·UI 정책
+  위반 다수를 반영해 (1)대여수량(qty)이 화면 견적에만 반영되고 실제 예약에는 전달되지 않는
+  버그를 "동일 상품 여러 대 동시예약" 정식 기능으로 구현, (2)QA문의 거짓성공토스트·SPA
+  네비게이션 잔존상태 등 기능 안정성 즉시수정, (3)CTA컬러·터치타겟·인기상품카드 표준화 등
+  UI정책 준수. 병행해서 front-cms 상호운영 원칙을 다루는 `.claude/rules/service-operations.md`
+  신설(기존 문서에 흩어진 운영규칙을 모으는 인덱스형).
+
+⛔ CRITICAL — 예약(HOLD) 도메인 로직 변경 포함(A그룹). AGENTS.md TDD 강제 키워드 "HOLD/예약"
+  해당. 서비스 의도(동일상품 여러대 동시예약 필요)는 이번 세션 AskUserQuestion으로 이미 확인
+  완료 — 추가 GATE 없이 진행.
+
+[CONTEXT BRIDGE]
+
+핵심제약:
+  - A그룹(다중예약)은 신규 RPC·마이그레이션 없이 기존 `create_hold_reservation`/
+    `create_draft_reservation`을 프론트에서 qty회 반복호출하는 방식으로 구현한다(각 호출이
+    `FOR UPDATE SKIP LOCKED`로 실제 가용재고를 원자적으로 재검증하므로 신규 스키마 불필요).
+  - 여러 reservation을 하나의 주문으로 묶는 인프라는 바로 아래 NOW 엔트리("예약 신청 시점
+    주문 연결...")에서 이미 완성·Stage+Production 적용 완료된 상태 — 이번 작업은 그 인프라를
+    그대로 재사용하며 절대 새로 만들지 않는다.
+  - qty 다중생성 도중 재고 부족으로 일부만 성공하면 전량 롤백(all-or-nothing) —
+    `cancel_payment_and_release_hold` RPC 재사용, 정확한 현재 시그니처는 구현 시점에 Stage DB
+    직접 재확인 필수(마이그레이션 히스토리상 파라미터 타입 변경 이력 있음).
+  - 옵션상품(reservation_options)은 N건 중 첫 reservation에만 귀속(중복과금 방지) — 이 설계는
+    GATE C에서 Stephen에게 재확인.
+  - qty 입력에 상한(10) 클램프 필수.
+  - "많이 본 상품" 표준카드 전환 시 `+page.server.ts` popularProducts 쿼리에 `category` select
+    추가 필요(현재 미포함) — `ProductDPCard` 재사용, 인라인 카드 신규 작성 금지.
+
+TDD도메인: **A그룹(대여수량 다중예약)만 TDD 강제** — "HOLD" 키워드 해당,
+  `src/__tests__/services/reservation.test.ts`/`reservationHelper.test.ts` 확장, 15분 단위
+  분해, RED→GREEN→REFACTOR 강제.
+  **B그룹(QA토스트·잔존상태)·C그룹(UI정책)·E그룹(문서신설)은 GSD** — UI/문서 변경, DB/RPC
+  변경 없음.
+
+절대금지:
+  - git 자율 실행
+  - A그룹 구현 시 신규 RPC·마이그레이션 작성(기존 RPC 반복호출만 허용)
+  - 옵션상품을 N건 reservation 전부에 중복 귀속
+  - `.claude/rules-ref/chat.md`·`contract.md`·`payment.md`·`rental-lifecycle.md` 기존 내용을
+    `service-operations.md`로 옮기며 원본에서 삭제(이번엔 인덱스+링크 방식만, 원본 무변경)
+
+신규/수정 파일 (예정):
+  - `src/routes/products/[id]/+page.svelte` (수정 — handleReserve 다중예약 루프 + qty클램프
+    + stale state 재동기화 + QA토스트 + 인기상품 마크업, TDD+GSD 혼재)
+  - `src/routes/products/[id]/+page.server.ts` (수정 — popularProducts category select 추가, GSD)
+  - `src/lib/components/products/CalendarTimePicker.svelte` (수정 — CTA컬러/버튼높이, GSD)
+  - `src/lib/components/products/ProductHero.svelte` (수정 — dot 터치타겟, GSD)
+  - `.claude/rules/service-operations.md` (신규, GSD)
+  - `CLAUDE.md` (수정 — 상시로드 목록에 service-operations.md 추가, GSD)
+
+---
+
+### NOW — TDD 경로 (`@sp2-tdd-agents`, 15분 단위) — ✅ 전부 완료
+
+- [x] TDD-1: qty 클램프(1~10) + `handleReserve` 다중예약 루프(hold/draft 양경로). ✅
+  `clampReservationQty`/`createMultiUnitReservation`을 `src/lib/services/reservationHelper.ts`에
+  순수 오케스트레이션 함수로 분리(create_hold_reservation은 로그인 세션 없이는 인증 이후 분기를
+  라이브 DB로 검증 못하는 기존 제약(reservation.test.ts 상단 주석) 때문에 mock 기반 단위테스트로
+  전환 — RPC 호출 자체는 deps로 주입). RED(함수 부재로 10건 실패 확인, `createMultiUnitReservation
+  is not a function`) → GREEN(구현 후 `reservationHelper.test.ts` 64/64 pass).
+- [x] TDD-2: 전량 롤백(all-or-nothing). ✅ Stage DB(ezyvffjvuwmtuhpxdjrw) 직접 조회로
+  `cancel_payment_and_release_hold`가 `status IN ('temp','pending','confirmed')`만 처리해
+  실제 'hold' 상태에는 적용되지 않는 것을 발견(하단 "발견 사항" 참고) — 대신 소유권 검증을 자체
+  수행하는 신규 서버 엔드포인트 `src/routes/api/reservations/cancel-hold/+server.ts`를 만들어
+  `update_reservation_status(id, 'cancelled')`로 롤백(해당 RPC는 hold→cancelled 전이를
+  무조건 허용). RED→GREEN 테스트로 롤백 대상 id·순서(`toHaveBeenNthCalledWith`) 검증.
+- [x] TDD-3: N건 각각에 `set_reservation_shipment_method`/`set_reservation_duration` 적용 +
+  옵션상품은 첫 reservation에만 귀속. ✅ `+page.svelte` handleReserve hold분기 for-loop로 구현.
+- [x] TDD-4: qty=1 회귀 테스트(기존 단일예약 동작 100% 동일). ✅ GREEN, RPC 1회만 호출 확인.
+
+### NOW — GSD 경로 (`@harness-executor`, 30분 단위) — ✅ 전부 완료
+
+- [x] GSD-1: QA문의 실패 시 거짓성공토스트 수정. ✅ (+page.svelte handleQaSubmit — 성공 시에만
+  성공토스트, catch에서 실패토스트로 분리)
+- [x] GSD-2: SPA 네비게이션 잔존상태 재동기화. ✅ qty/날짜시간/수령방식/탭/문의입력/토스트
+  전부 data.productId 변경 시 $effect로 초기값 재설정.
+- [x] GSD-3: set_reservation_duration 실패 시 토스트 노출 추가. ✅ (A그룹 for-loop에 포함)
+- [x] GSD-4: CTA컬러 `#201857`→`var(--cs-red-badge)`, hover `var(--cs-red)`, 버튼높이
+  60px→50px. ✅ (CalendarTimePicker.svelte)
+- [x] GSD-5: 캐러셀 dot 터치타겟 20px→44px(시각적 점 크기는 CSS ::after로 10px 유지). ✅
+  (ProductHero.svelte)
+- [x] GSD-6: "많이 본 상품" `.popular-card` 인라인 마크업·CSS 전부 제거 → `ProductDPCard`
+  재사용 + popularProducts 쿼리에 category 추가(별도 select 없이 이미 필터로 쓰던
+  `row.category` 재사용). ✅ 부수 발견: `ProductDPCard.svelte` 자체에 `loading="lazy"`가
+  누락돼 있어 같이 추가(전 화면 공통 컴포넌트라 이번 한 줄 수정으로 사이트 전역 적용).
+- [x] GSD-7: Shotlog 이미지 2곳 loading="lazy" 추가(인기상품은 GSD-6의 ProductDPCard
+  전환으로 자동 해결). ✅
+- [x] GSD-8: `.claude/rules/service-operations.md` 신설(인덱스형, 9개 섹션) + CLAUDE.md
+  상시로드 목록 갱신. ✅
+
+### 후속 CRITICAL 수정 — `cancel_payment_and_release_hold` 'hold' 상태 미처리 결함 (Stephen 승인 후 진행, ✅ Stage 적용 완료)
+
+Stage DB `pg_get_functiondef`로 직접 확인한 결과, 이 RPC는 `status IN ('temp', 'pending',
+'confirmed')`인 예약만 처리하고 **'hold' 상태는 처리하지 않았다**(WHERE절 불일치 — UPDATE가
+0행에 적용돼도 예외 없이 `{success:true}`를 반환해 호출부는 성공한 줄 착각함). 이 RPC는
+`src/routes/api/payment/confirm/+server.ts:134`·`src/routes/payment/fail/+page.server.ts:23`
+2곳에서 "결제 실패 시 HOLD 해제" 목적으로 호출되는데, 두 시점 모두 예약이 실제로는 항상
+'hold' 상태라 이 함수가 사실상 아무 것도 하지 않고 있었다 — 결제 실패 후에도 hold 예약이
+해제되지 않아 재고를 계속 점유했을 가능성.
+
+**Stephen 승인(2026-08-17) 후 즉시 수정**:
+- [x] TDD-5: `src/__tests__/services/payment.test.ts` "cancel_payment_and_release_hold" 테스트를
+  더미 ID(항상 0행 매치라 버그를 가리던 방식) 대신 실제 hold 예약 픽스처(`createHoldReservation`
+  기존 헬퍼 재사용)로 재작성 + DB 재조회로 `status==='cancelled'` 직접 검증하는 어서션 추가.
+  RED 확인(`expected 'hold' to be 'cancelled'`) — 더미ID 케이스는 "success:true를 반환하지
+  않아야 함" 별도 테스트로 분리(회귀 방지).
+- [x] TDD-6: `supabase/migrations/20260817070000_281_fix_cancel_payment_release_hold_status.sql`
+  신규 — WHERE절에 `'hold'` 추가 + `GET DIAGNOSTICS`로 0행 UPDATE 시 `success:false`
+  반환(update_reservation_status와 동일 패턴, "조용한 성공 오보고" 재발 방지). 기존
+  'temp'/'pending'/'confirmed'는 하위호환 위해 유지. 시그니처·GRANT(service_role 전용)
+  무변경. crazyshot-stage(ezyvffjvuwmtuhpxdjrw) 적용 완료 — `pg_get_function_identity_arguments`로
+  시그니처 불변 확인 → GREEN(`npx vitest run payment.test.ts` main-tree 9/9 pass, stale
+  worktree만 기존 무관 실패 유지).
+- [x] **Production(vnbpmvxruyciuuaermyh) 적용 완료(2026-08-17, Stephen 명시 지시)** —
+  `apply_migration` 적용 후 읽기전용 검증: 시그니처(`bigint, uuid, text`) 불변,
+  GRANT `anon=false / authenticated=false / service_role=true`로 Migration 172 보안 수준
+  그대로 유지 확인(`has_function_privilege` 직접 조회).
+
+백로그(이번 범위 밖, Stephen 별도 승인 시 진행): `+page.server.ts:66` is_active/deleted_at
+  명시필터, `select('*')` 컬럼 최소화, notify-hold 에러 로깅 — plan_source D 참고.
+
+### 검증 결과 (2026-08-17, 이 세션)
+
+- `npx vitest run src/__tests__/services/reservationHelper.test.ts` — 64/64 pass(신규 다중예약
+  오케스트레이션 테스트 10건 포함, RED→GREEN 확인)
+- `npx vitest run`(전체) — 1130 pass / 18 fail / 14 skip. 실패 18건 전부 `subscriptionBilling.
+  test.ts`·`contractSign.test.ts`·(`.claude/worktrees/exciting-ardinghelli-71ff74` 스테일
+  워크트리 내 payment.test.ts/productClone.test.ts 중복분 포함) — 이번 세션 변경 파일과 전부
+  무관함을 실패 목록 grep으로 직접 확인(git stash로 이번 세션 변경분만 제외한 뒤 동일 4개 lint
+  오류가 이미 HEAD에 존재했음도 별도 확인).
+- `npx svelte-check`(전체) — 1 ERROR(사전 존재, `vite.config.ts` — 이번 세션 무관) / 326
+  WARNINGS(신규 파일 `cancel-hold/+server.ts` 포함 이번 세션 신규/수정 파일 전부 경고 0건).
+- `npx eslint`(이번 세션 수정 파일 전원 대상) — 3 errors는 전부 사전 존재(`git stash`로 확인,
+  `CalendarTimePicker.svelte:163 totalRentalMinutes`·`+page.svelte startMin/endMin` unused —
+  이번 세션 코드와 무관한 기존 미사용 변수, 손대지 않음).
+
+**공유 워킹트리 주의**: `git status`에 이번 세션이 건드리지 않은 `vite.config.ts`·
+`cms/promotion/ad,coupon/+page.server.ts` 등이 함께 modified로 보임 — 다른 세션의 동시
+작업분(레포 관례상 흔함, GATE E 검수 시 파일 경로를 명시적으로 고정해 확인할 것).
+
+**GATE C 미완료 항목**: 옵션상품을 N건 중 첫 reservation에만 귀속시키는 설계는 위 TDD-3에서
+구현 완료했으나, Stephen 서비스 의도 재확인이 plan_source에 명시돼 있었음 — 아래 요약 메시지로
+확인 요청.
+
+---
+
 ## NOW — 예약 신청 시점 주문 연결 + 대여정보 탭 통합 표시 (2026-08-17) — ✅ TDD 5건 + GSD 2건 전부
 완료, crazyshot-stage(ezyvffjvuwmtuhpxdjrw) 적용·검증 완료 — Stephen 실사용 확인 후 Production
 (vnbpmvxruyciuuaermyh) 마이그레이션 적용 승인 대기
@@ -243,6 +396,102 @@ Vercel 배포 확인.
   커밋 시 포함 여부만 Stephen 판단 필요.
 
 **GATE E 판정: 통과(재검수 없이 커밋 가능)** — 위 1건은 세션 내에서 즉시 보강 완료.
+
+---
+
+## DONE — payment.test.ts 잘못된 Supabase 클라이언트 교체 (2026-08-17) — ✅ 완료 [🟡 BOUNDARY]
+
+아젠다: `payment.test.ts`의 anon key 클라이언트(`import { supabase } from '$lib/services/supabase'`)를
+service_role 클라이언트(`createClient(PUBLIC_SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)`)로 교체.
+
+수정 파일: `src/__tests__/services/payment.test.ts` 1개 (import 1→3줄 + `const admin` 초기화 추가,
+  헬퍼 3개의 `supabase` 참조 → `admin` 교체)
+
+교체 후 테스트 결과 (전체 스위트: 662 passed / 11 failed / 7 skipped — 회귀 없음):
+
+payment.test.ts 16건:
+  PASS (10건): calc_at 날짜 로직 / total_amount<=0 RPC 거부 / cancel_payment_and_release_hold /
+    deposit_holds status 배열 검증 / TOSS_SECRET_KEY 보안 문서화 / POST /api/payment/confirm 스펙
+    5건 (요청·응답 필드 / 오류코드 / 웹훅 처리순서 / HMAC 서명 검증)
+
+  FAIL (6건):
+  1. `confirm_payment_and_update_reservation — 정상 결제 승인 시 payment_id 반환`
+     → error=null(권한 해소), but data.success=false
+     → 원인: TEST_RESERVE_ID=1이 stage DB에서 결제 승인 가능한 hold 상태가 아님 (fixture 이슈)
+  2. `동일 idempotency_key 재전송 → idempotent:true`
+     → first.success=false (동일 fixture 이슈)
+  3. `보증금 있는 결제 — deposit_id도 함께 반환`
+     → data.success=false (동일 fixture 이슈)
+  4. `raw_webhook_logs — 웹훅 페이로드 저장 확인`
+     → service_role로 INSERT 성공(error=null)하는데 assertion이 `expect(error?.code).toBe('42501')`(anon 거부 기대값)으로 역전됨
+     → 원인: 테스트 assertion 자체가 anon 환경 기준으로 작성됨 (구현 코드와 무관)
+  5. `동일 order_id로 다른 idempotency_key 결제 시도 → DB 레벨 UNIQUE 오류`
+     → first.success=false (fixture 이슈, TEST_RESERVE_ID=1)
+  6. `payment_transactions — processed 웹훅 재전송 시 중복 처리 안 됨`
+     → TypeError: tableSelect(...).eq is not a function
+     → 원인: tableSelect 헬퍼가 from(table) 직후 .select() 없이 .eq()를 호출하는 기존 버그
+       (anon 환경에선 권한 오류로 먼저 막혀 이 버그가 노출되지 않았음)
+
+결론: RPC confirm_payment_and_update_reservation·cancel_payment_and_release_hold 자체는 실행됨
+(permission denied 해소). 남은 실패는 ① 테스트 fixture 이슈(TEST_RESERVE_ID=1 hardcoded) ②
+raw_webhook_logs 어서션 역전 ③ tableSelect 헬퍼 버그 — 모두 구현 코드가 아닌 테스트 코드 문제.
+별도 B-START로 Stephen 확인 후 처리.
+
+---
+
+## DONE — BACKLOG BOUNDARY 1순위 BND-01·BND-04 수정 (2026-08-17) — ✅ 완료 [🟡 BOUNDARY]
+
+아젠다: CMS 백오피스 전역 정밀 검증(AUDIT v2) BACKLOG 4건 중 사용자·관리자 기능 영향 기준
+1순위 2건 수정.
+
+[CONTEXT BRIDGE]
+plan_source: .claude/plans/project-wide-code-health-2026-08-17.md §3
+핵심제약: 대상 파일 2개 외 수정 금지 / 새 헬퍼 발명 금지 / 기존 검증 패턴 재사용
+TDD도메인: 없음 (GSD — 기존 안전 함수 교체·패턴 복사)
+절대금지: git 자율 실행 / 범위 외 파일 수정
+실패롤백: git checkout 대상 2파일
+
+완료 태스크:
+- [x] BND-01: `src/routes/cms/accounts/list/+page.server.ts`
+      `requireSuperadmin()` 내부의 단일 `.eq('id').single()` 쿼리를
+      `fetchCmsProfileByAuthId(admin, session.user.id)` 호출로 교체.
+      재사용 패턴: `src/lib/server/cmsProfile.ts` (id 조회 → user_id 폴백 → 스키마 차이 폴백).
+      import `fetchCmsProfileByAuthId` from `$lib/server/cmsProfile` 추가.
+- [x] BND-04: `src/routes/cms/promotion/analytics/+page.server.ts`
+      `load()` 시작부에 형제 화면(`ad/+page.server.ts`, `coupon/+page.server.ts`) 동일 패턴 적용.
+      `import { redirect }` + `import { hasSettingsAccess }` 추가.
+      `load()` 시그니처에 `parent` 추가,
+      `const { cmsRole } = await parent(); if (!hasSettingsAccess(cmsRole ?? '')) throw redirect(303, '/cms?notice=access_denied')` 삽입.
+
+검증:
+- `npx svelte-check --tsconfig ./tsconfig.json` — 0 ERRORS / 326 WARNINGS (기존 동일, 신규 에러 없음)
+- `npx vitest run` — 661 passed / 12 failed (실패 전부 payment·contractSign·memberCodeCombo
+  도메인 사전 존재 RED 상태 — 이번 수정 파일과 무관, 회귀 없음)
+
+**미커밋** — Stephen이 git commit 예정.
+
+---
+
+## DONE — STEP D 발견 재동기화 누락 11개 필드 수정 (2026-08-17, 이 세션) — ✅ 완료 [🟡 BOUNDARY]
+
+아젠다: 프로젝트 전체 코드 심각도 정량화 작업(STEP D, 2026-08-17)에서 발견된 promotion/codes 영역
+3개 파일의 `$state(data.x)` 초기화 후 `$effect` 재동기화 누락 11개 필드 수정.
+
+수정 내역:
+- `src/routes/cms/codes/_FormatTab.svelte` — 신규 `$effect` 블록 추가: `fmtPrefix`/`fmtCat`/
+  `fmtDate`/`fmtSeq`/`fmtReset`/`fmtSuffix` 6개 필드를 `data.codeFormat` 갱신 시 재동기화.
+  기존 form 결과 처리용 `$effect`와 별도 블록으로 분리.
+- `src/routes/cms/promotion/coupon/+page.svelte` — 신규 `$effect` 블록 추가: `reportFrom`/
+  `reportTo` 2개 필드를 `data.from`/`data.to` 갱신 시 재동기화.
+- `src/routes/cms/promotion/point/+page.svelte` — 신규 `$effect` 블록 추가: `txTypeFilter`/
+  `fromFilter`/`toFilter` 3개 필드를 `data.txType`/`data.from`/`data.to` 갱신 시 재동기화.
+
+검증:
+- `npx svelte-check --tsconfig ./tsconfig.json` — 0 ERRORS / 326 WARNINGS (기존 동일, 신규 에러 없음)
+- `npx vitest run` — 660 passed / 13 failed (실패 전부 payment.test.ts·subscriptionBilling·
+  contractSign·memberCodeCombo 도메인 사전 존재 항목 — 이번 수정 파일과 무관, 회귀 없음)
+
+**미커밋** — Stephen이 git commit 예정.
 
 ---
 
@@ -20309,3 +20558,34 @@ src/lib/server/searchEngine/core/koreanTokenizer.ts          (MODIFY)
   영향 없음(테스트로 검증됨).
 
 **GATE E: ✅ 통과 — 블로킹 0건. 커밋은 Stephen 직접 실행.**
+
+## BACKLOG 추가 — any 타입 41개 파일 + database.ts 근본 구조 문제 [CRITICAL] (2026-08-17, Stephen 지정)
+
+**배경**: 프로젝트 전체 코드 심각도 정량화(STEP E) 중 `any` 타입 41개 파일 정리를 시도하다
+근본 원인이 예상보다 훨씬 큼을 발견 — Stephen 지시로 CRITICAL로 기록만 하고 작업은 보류.
+
+**발견 사실**:
+- `src/lib/types/database.ts`(869줄)는 Supabase 자동생성 파일이 아니라 **손으로 유지보수하는
+  커스텀 타입 파일**(`Coupon`/`UserCoupon` 등 자체 타입 별칭 방식). core-rules.md 파일경로
+  규칙에 "database.ts는 생성 파일"이라 명시돼 있으나 실제로는 수동 관리 상태와 자동생성 기대가
+  불일치.
+- 실제 `generate_typescript_types`(Supabase MCP)로 stage에서 뽑아보면 형식이 완전히 다른
+  약 15만자 규모의 정식 `Database` 인터페이스가 나옴 — 그대로 교체하면 이 타입을 참조하는
+  프로젝트 전체 코드가 깨질 수 있는 대형 마이그레이션 작업.
+- **RPC 함수 타입(`Functions` 맵)이 현재 파일에 전혀 없음** — `.rpc(...)` 호출은 테이블 타입
+  유무와 무관하게 전부 타입 안전성이 없어, 프로젝트 전역에서 `locals.supabase as unknown as any`
+  캐스팅이 반복 발생(그때그때 "타입 생성 전 캐스트"라는 동일 설명 주석과 함께) — 이게 41개
+  파일 any-타입의 실질 근본 원인.
+- 표본 확인한 `cms/promotion` 7개 파일 전부 이 패턴(`as unknown as any`)이었고, `api/chat/**`는
+  ESLint 설정에서 아예 "RPC 마이그레이션 완료 후 제거 예정" 코멘트와 함께 통째로 lint 제외돼
+  있어 currently 검증 자체가 안 되는 상태.
+
+**필요한 작업(범위가 커서 이번 세션에서 미착수 — 별도 B-START 필요)**:
+1. `database.ts`를 수동 관리 방식에서 `supabase gen types typescript` 기반 자동생성 방식으로
+   전환할지, 아니면 현재 수동 방식을 유지하되 최소한 자주 쓰는 RPC들만 `Functions` 타입을
+   보강할지 설계 결정 필요(Stephen 확인 필요)
+2. 전환 시 프로젝트 전역 타입 임포트 방식이 바뀔 가능성 커서 파급범위 사전 조사 필수
+3. `eslint.config.js`의 `api/chat/**` ignore 조건("RPC 마이그레이션 완료")이 실제로 충족됐는지
+   확인 후 ignore 해제 여부 결정
+
+**현재 상태**: 조치 없음(코드 미변경). 표본 확인한 promotion 7개 파일의 `as any`는 그대로 유지.
