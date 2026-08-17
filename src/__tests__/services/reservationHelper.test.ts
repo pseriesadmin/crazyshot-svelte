@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import {
 	isValidDateFormat,
 	isValidDateRange,
@@ -8,7 +8,11 @@ import {
 	isValidStateTransition,
 	getValidNextStates,
 	validateReservationInput,
-	calculateReservationPrice
+	calculateReservationPrice,
+	clampReservationQty,
+	createMultiUnitReservation,
+	MAX_RESERVATION_QTY,
+	type UnitReservationResult
 } from '$lib/services/reservationHelper';
 
 /**
@@ -296,5 +300,115 @@ describe('Price Calculation', () => {
 
 		expect(result.discountAmount).toBe(0);
 		expect(result.finalAmount).toBe(result.subtotal);
+	});
+});
+
+/**
+ * 대여수량(qty) 다중예약 — 2026-08-17
+ * 상품상세 화면 "대여수량"이 화면 견적에만 반영되고 실제 예약(create_hold_reservation)에는
+ * 전달되지 않던 결함을 "동일 상품 여러 대 동시예약" 정식 기능으로 구현. 신규 RPC 없이 기존
+ * create_hold_reservation/create_draft_reservation을 qty회 반복 호출하는 오케스트레이션
+ * 로직을 여기서 순수 함수로 분리해 mock으로 완전히 단위테스트한다(라이브 DB·로그인 세션 불필요).
+ */
+describe('클램프: clampReservationQty', () => {
+	it('GREEN: 1 미만(0, 음수)은 1로 보정', () => {
+		expect(clampReservationQty(0)).toBe(1);
+		expect(clampReservationQty(-3)).toBe(1);
+	});
+
+	it('GREEN: 상한(MAX_RESERVATION_QTY) 초과는 상한으로 보정', () => {
+		expect(MAX_RESERVATION_QTY).toBe(10);
+		expect(clampReservationQty(999)).toBe(MAX_RESERVATION_QTY);
+	});
+
+	it('GREEN: 비정수는 내림 처리', () => {
+		expect(clampReservationQty(3.7)).toBe(3);
+	});
+
+	it('GREEN: NaN/Infinity는 1로 보정', () => {
+		expect(clampReservationQty(NaN)).toBe(1);
+		expect(clampReservationQty(Infinity)).toBe(1);
+	});
+
+	it('GREEN: 정상 범위(1~10)는 그대로 유지', () => {
+		expect(clampReservationQty(3)).toBe(3);
+		expect(clampReservationQty(1)).toBe(1);
+		expect(clampReservationQty(10)).toBe(10);
+	});
+});
+
+describe('다중예약 오케스트레이션: createMultiUnitReservation', () => {
+	function makeSuccessResult(id: number): UnitReservationResult {
+		return { success: true, reservationId: id, errorMessage: null };
+	}
+	function makeFailureResult(msg: string): UnitReservationResult {
+		return { success: false, reservationId: null, errorMessage: msg };
+	}
+
+	it('GREEN: qty=1 — RPC 1회만 호출, 성공 시 reservationIds 1건 반환(기존 단일예약과 100% 동일 회귀 보장)', async () => {
+		const createUnit = vi.fn().mockResolvedValueOnce(makeSuccessResult(101));
+		const cancelUnit = vi.fn().mockResolvedValue(undefined);
+
+		const outcome = await createMultiUnitReservation(1, { createUnit, cancelUnit });
+
+		expect(createUnit).toHaveBeenCalledTimes(1);
+		expect(cancelUnit).not.toHaveBeenCalled();
+		expect(outcome).toEqual({ success: true, reservationIds: [101], errorMessage: null });
+	});
+
+	it('GREEN: qty=3, 전부 가용 — RPC 3회 호출, 3건 reservationIds 반환, 롤백 없음', async () => {
+		const createUnit = vi
+			.fn()
+			.mockResolvedValueOnce(makeSuccessResult(201))
+			.mockResolvedValueOnce(makeSuccessResult(202))
+			.mockResolvedValueOnce(makeSuccessResult(203));
+		const cancelUnit = vi.fn().mockResolvedValue(undefined);
+
+		const outcome = await createMultiUnitReservation(3, { createUnit, cancelUnit });
+
+		expect(createUnit).toHaveBeenCalledTimes(3);
+		expect(cancelUnit).not.toHaveBeenCalled();
+		expect(outcome.success).toBe(true);
+		expect(outcome.reservationIds).toEqual([201, 202, 203]);
+	});
+
+	it('RED→GREEN: qty=3, 3번째만 재고 부족 — 앞선 2건 전부 롤백(cancelUnit 호출) + 실패 반환(all-or-nothing)', async () => {
+		const createUnit = vi
+			.fn()
+			.mockResolvedValueOnce(makeSuccessResult(301))
+			.mockResolvedValueOnce(makeSuccessResult(302))
+			.mockResolvedValueOnce(makeFailureResult('예약 가능한 재고가 없습니다.'));
+		const cancelUnit = vi.fn().mockResolvedValue(undefined);
+
+		const outcome = await createMultiUnitReservation(3, { createUnit, cancelUnit });
+
+		expect(createUnit).toHaveBeenCalledTimes(3);
+		expect(cancelUnit).toHaveBeenCalledTimes(2);
+		expect(cancelUnit).toHaveBeenNthCalledWith(1, 301);
+		expect(cancelUnit).toHaveBeenNthCalledWith(2, 302);
+		expect(outcome.success).toBe(false);
+		expect(outcome.reservationIds).toEqual([]);
+		expect(outcome.errorMessage).toContain('2대만 예약 가능');
+	});
+
+	it('GREEN: qty=2, 1번째부터 실패 — 롤백 대상 없음(cancelUnit 미호출), 원본 에러 메시지 그대로 노출', async () => {
+		const createUnit = vi.fn().mockResolvedValueOnce(makeFailureResult('로그인이 필요합니다.'));
+		const cancelUnit = vi.fn().mockResolvedValue(undefined);
+
+		const outcome = await createMultiUnitReservation(2, { createUnit, cancelUnit });
+
+		expect(createUnit).toHaveBeenCalledTimes(1);
+		expect(cancelUnit).not.toHaveBeenCalled();
+		expect(outcome.success).toBe(false);
+		expect(outcome.errorMessage).toBe('로그인이 필요합니다.');
+	});
+
+	it('GREEN: qty=999 요청해도 내부적으로 MAX_RESERVATION_QTY(10)로 클램프되어 10회만 호출', async () => {
+		const createUnit = vi.fn().mockResolvedValue(makeSuccessResult(1));
+		const cancelUnit = vi.fn().mockResolvedValue(undefined);
+
+		await createMultiUnitReservation(999, { createUnit, cancelUnit });
+
+		expect(createUnit).toHaveBeenCalledTimes(MAX_RESERVATION_QTY);
 	});
 });

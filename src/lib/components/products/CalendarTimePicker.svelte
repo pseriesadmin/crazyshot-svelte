@@ -774,8 +774,8 @@
   }
   .reserve-btn {
     flex: 1;
-    height: 60px;
-    background: #201857;
+    height: 50px;
+    background: var(--cs-red-badge);
     color: var(--cs-white);
     border: none;
     border-radius: var(--radius-xl);
@@ -783,7 +783,7 @@
     cursor: pointer;
     transition: background 0.15s;
   }
-  .reserve-btn:hover { background: #2e2470; }
+  .reserve-btn:hover { background: var(--cs-red); }
   .reserve-btn:disabled { background: var(--cs-text-light); cursor: not-allowed; }
 
   .chat-btn {

@@ -55,7 +55,7 @@
 >
   <!-- 이미지 영역 290×290 -->
   <div class="pc-img-wrap">
-    <img src={imageUrl} alt={name} class="pc-img" />
+    <img src={imageUrl} alt={name} loading="lazy" class="pc-img" />
 
     {#if onWishToggle !== undefined}
       <button

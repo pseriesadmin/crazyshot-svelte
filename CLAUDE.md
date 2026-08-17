@@ -154,12 +154,13 @@ Class D (보안 위반) → 즉시 중단
 ### ✅ 상시 로드 (자동)
 
 ```
-.claude/rules/core-rules.md        ← 개발 실행 원칙 (스택, 파일 경로)
-.claude/rules/security-auth.md     ← 인증·RLS·보안
-.claude/rules/ui-mobile.md         ← SvelteKit 5 UI + 모바일 UX + 터치 타겟
-.claude/rules/uiux-index.md        ← UI/UX 빠른 참조 인덱스 (컬러·버튼·반경 핵심값)
-.claude/rules/rental-lifecycle.md  ← 대여 라이프사이클 상태 머신·버튼·스텝퍼 정책 (확정)
-.claude/rules/products.md          ← 상품 구조·품번(product_code)·QR·재고정책 (부모=무품번/자식=실채번)
+.claude/rules/core-rules.md          ← 개발 실행 원칙 (스택, 파일 경로)
+.claude/rules/security-auth.md       ← 인증·RLS·보안
+.claude/rules/ui-mobile.md           ← SvelteKit 5 UI + 모바일 UX + 터치 타겟
+.claude/rules/uiux-index.md          ← UI/UX 빠른 참조 인덱스 (컬러·버튼·반경 핵심값)
+.claude/rules/rental-lifecycle.md    ← 대여 라이프사이클 상태 머신·버튼·스텝퍼 정책 (확정)
+.claude/rules/products.md            ← 상품 구조·품번(product_code)·QR·재고정책 (부모=무품번/자식=실채번)
+.claude/rules/service-operations.md  ← 통합 서비스 운영 로직 정책 (front↔cms 상호운영 원칙 인덱스)
 ```
 
 > UI 작업 시 uiux-index.md로 핵심값 먼저 확인 → 세부 패턴 필요 시 아래 참조 파일 호출
