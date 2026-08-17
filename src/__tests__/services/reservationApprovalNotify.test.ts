@@ -181,4 +181,50 @@ describe('resolveApprovalNotifyPlan', () => {
       expect(plan.reservationIds).not.toContain(idA);
     }
   });
+
+  it('만료(expired)된 형제 상품도 취소와 동일하게 제외하고, 나머지가 모두 confirmed면 batch를 반환한다 (HOLD 30분 자동만료 상호작용 회귀 방지, QA 발견)', async () => {
+    // 배경: reservation-rental-execution.md QA 발견 — HOLD 30분 자동만료(Migration 285)
+    // 도입 후, 묶음주문 중 한 상품이 만료되면 relevant 필터가 expired를 걸러내지 못해
+    // allConfirmed가 영원히 false가 되고, 이미 confirmed된 다른 상품의 승인알림이 영구히
+    // hold(보류) 상태로 묶여버리는 실제 사고였다.
+    const userId = await createEphemeralUser();
+    cleanups.push(() => deleteEphemeralUser(userId));
+    const idA = await createHoldReservation(userId, 8);
+    const idB = await createHoldReservation(userId, 9);
+    const orderId = await linkToOrder(userId, [idA, idB]);
+    cleanups.push(async () => {
+      await admin.from('order_items').delete().eq('order_id', orderId);
+      await admin.from('orders').delete().eq('id', orderId);
+      await admin.from('rental_reservations').delete().in('id', [idA, idB]);
+    });
+
+    await setStatus(idA, 'expired');
+    await setStatus(idB, 'confirmed');
+
+    const plan = await resolveApprovalNotifyPlan(admin, idB);
+    expect(plan.mode).toBe('batch');
+    if (plan.mode === 'batch') {
+      expect(plan.reservationIds).toEqual([idB]);
+      expect(plan.reservationIds).not.toContain(idA);
+    }
+  });
+
+  it('만료(expired)된 형제만 있고 confirmed가 없으면 hold를 반환한다(잘못된 배치알림 방지)', async () => {
+    const userId = await createEphemeralUser();
+    cleanups.push(() => deleteEphemeralUser(userId));
+    const idA = await createHoldReservation(userId, 10);
+    const idB = await createHoldReservation(userId, 11);
+    const orderId = await linkToOrder(userId, [idA, idB]);
+    cleanups.push(async () => {
+      await admin.from('order_items').delete().eq('order_id', orderId);
+      await admin.from('orders').delete().eq('id', orderId);
+      await admin.from('rental_reservations').delete().in('id', [idA, idB]);
+    });
+
+    await setStatus(idA, 'expired');
+    // idB는 여전히 hold(만료도 확정도 아님)
+
+    const plan = await resolveApprovalNotifyPlan(admin, idA);
+    expect(plan.mode).toBe('hold');
+  });
 });

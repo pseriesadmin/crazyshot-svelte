@@ -127,6 +127,56 @@ async function getReservationStatus(reservationId: number): Promise<string | nul
   return (data?.status as string | undefined) ?? null;
 }
 
+// reservation-rental-execution.md §0-4 #7 — 같은 order로 묶인 다중상품 예약을 만들기 위한 헬퍼.
+// resolveApprovalNotifyPlan은 order_items.order_id로 형제 예약을 찾으므로, 실제 체크아웃과
+// 동일하게 orders + order_items 행을 직접 만든다.
+async function linkReservationsToOrder(userId: string, reservationIds: number[]): Promise<number> {
+  const { data: order, error: orderErr } = await admin
+    .from('orders')
+    .insert({
+      order_key:     `TDD-ORDER-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+      user_id:       userId,
+      total_amount:  1000,
+      final_amount:  1000,
+    })
+    .select('id')
+    .single();
+  if (orderErr || !order) throw new Error(`order 생성 실패: ${orderErr?.message}`);
+
+  for (const reservationId of reservationIds) {
+    const { data: product } = await admin.from('rental_reservations').select('product_id').eq('id', reservationId).single();
+    const { error: itemErr } = await admin.from('order_items').insert({
+      order_id:       order.id,
+      reservation_id: reservationId,
+      product_id:     product?.product_id,
+      unit_price:     500,
+      line_total:     500,
+    });
+    if (itemErr) throw new Error(`order_items 생성 실패: ${itemErr.message}`);
+  }
+  return order.id as number;
+}
+
+async function findGeneralSessionId(userId: string): Promise<string | null> {
+  const { data } = await admin
+    .from('chat_sessions')
+    .select('id')
+    .eq('user_id', userId)
+    .eq('context_type', 'general')
+    .maybeSingle();
+  return (data?.id as string | undefined) ?? null;
+}
+
+async function countApprovalCards(sessionId: string): Promise<number> {
+  const { data } = await admin
+    .from('chat_messages')
+    .select('id, action_payload')
+    .eq('session_id', sessionId);
+  return (data ?? []).filter(
+    (m) => (m.action_payload as { type?: string } | null)?.type === 'reservation_approval'
+  ).length;
+}
+
 beforeAll(async () => {
   const { data, error } = await admin.from('products').select('id').limit(1).single();
   if (error || !data) throw new Error(`테스트용 product 조회 실패: ${error?.message}`);
@@ -241,6 +291,115 @@ describe('계약서명 게이팅: 서명 먼저 → 결제 나중 (정상 동작
     expect(confirmErr).toBeNull();
     expect(confirmed).toBe(true);
     expect(await getReservationStatus(reservationId)).toBe('confirmed');
+  });
+});
+
+describe('reservation-rental-execution.md §0-4 #7 — 묶음주문 서명완료 자동승인도 통합알림 정책과 일치', () => {
+  it('GREEN: 형제 예약이 아직 미승인이면 이번 서명 건은 알림 보류(hold) — 개별 카드 미발송', async () => {
+    const userId = await createEphemeralUser();
+    cleanups.push(() => deleteEphemeralUser(userId));
+
+    const reservationA = await createReservation(userId, 'hold');
+    const reservationB = await createReservation(userId, 'hold');
+    cleanups.push(async () => {
+      await admin.from('order_items').delete().eq('reservation_id', reservationA);
+      await admin.from('order_items').delete().eq('reservation_id', reservationB);
+      await admin.from('rental_reservations').delete().in('id', [reservationA, reservationB]);
+    });
+
+    const orderId = await linkReservationsToOrder(userId, [reservationA, reservationB]);
+    cleanups.push(async () => {
+      await admin.from('orders').delete().eq('id', orderId);
+    });
+
+    // A만 결제+서명 완료 (B는 여전히 hold, 계약 자체도 없음 — 미승인 형제)
+    await admin.rpc('mark_reservation_payment_confirmed', { p_reservation_id: reservationA });
+    const { contractId, signingId, token } = await createContractWithSigning(userId, reservationA);
+    cleanups.push(async () => {
+      await admin.from('contract_signings').delete().eq('id', signingId);
+      await admin.from('contracts').delete().eq('id', contractId);
+    });
+
+    const { status } = await callSign(token);
+    expect(status).toBe(200);
+    expect(await getReservationStatus(reservationA)).toBe('confirmed');
+    expect(await getReservationStatus(reservationB)).toBe('hold');
+
+    // 형제(B)가 아직 미승인이므로 이번 A 승인은 알림 보류 — reservation_approval 카드가
+    // 전혀 발송되지 않아야 함(개별 카드로 새서는 안 됨)
+    const sessionId = await findGeneralSessionId(userId);
+    const cardCount = sessionId ? await countApprovalCards(sessionId) : 0;
+    expect(cardCount).toBe(0);
+  });
+
+  it('GREEN: 마지막 형제까지 서명완료되면 개별 카드가 아닌 통합 카드 1건으로 발송된다', async () => {
+    const userId = await createEphemeralUser();
+    cleanups.push(() => deleteEphemeralUser(userId));
+
+    const reservationA = await createReservation(userId, 'hold');
+    const reservationB = await createReservation(userId, 'hold');
+    cleanups.push(async () => {
+      await admin.from('order_items').delete().eq('reservation_id', reservationA);
+      await admin.from('order_items').delete().eq('reservation_id', reservationB);
+      await admin.from('rental_reservations').delete().in('id', [reservationA, reservationB]);
+    });
+
+    const orderId = await linkReservationsToOrder(userId, [reservationA, reservationB]);
+    cleanups.push(async () => {
+      await admin.from('orders').delete().eq('id', orderId);
+    });
+
+    // A 먼저 결제+서명 완료 (B는 아직) → hold 모드, 알림 없음(위 테스트와 동일 선행 상태)
+    await admin.rpc('mark_reservation_payment_confirmed', { p_reservation_id: reservationA });
+    const signA = await createContractWithSigning(userId, reservationA);
+    cleanups.push(async () => {
+      await admin.from('contract_signings').delete().eq('id', signA.signingId);
+      await admin.from('contracts').delete().eq('id', signA.contractId);
+    });
+    await callSign(signA.token);
+    expect(await getReservationStatus(reservationA)).toBe('confirmed');
+
+    // B도 결제+서명 완료 → 이제 형제 전체가 confirmed → batch 분기로 통합 카드 1건 발송
+    await admin.rpc('mark_reservation_payment_confirmed', { p_reservation_id: reservationB });
+    const signB = await createContractWithSigning(userId, reservationB);
+    cleanups.push(async () => {
+      await admin.from('contract_signings').delete().eq('id', signB.signingId);
+      await admin.from('contracts').delete().eq('id', signB.contractId);
+    });
+    const { status } = await callSign(signB.token);
+    expect(status).toBe(200);
+    expect(await getReservationStatus(reservationB)).toBe('confirmed');
+
+    const sessionId = await findGeneralSessionId(userId);
+    expect(sessionId).not.toBeNull();
+    // 개별 카드 2건이 아니라 통합 카드 정확히 1건이어야 함 — send_rental_chat_notification_batch
+    const cardCount = await countApprovalCards(sessionId as string);
+    expect(cardCount).toBe(1);
+  });
+
+  it('GREEN: 형제 없는 단건 예약은 기존과 동일하게 즉시 단건 카드 발송(회귀 없음)', async () => {
+    const userId = await createEphemeralUser();
+    cleanups.push(() => deleteEphemeralUser(userId));
+
+    const reservationId = await createReservation(userId, 'hold');
+    cleanups.push(async () => {
+      await admin.from('rental_reservations').delete().eq('id', reservationId);
+    });
+
+    await admin.rpc('mark_reservation_payment_confirmed', { p_reservation_id: reservationId });
+    const { contractId, signingId, token } = await createContractWithSigning(userId, reservationId);
+    cleanups.push(async () => {
+      await admin.from('contract_signings').delete().eq('id', signingId);
+      await admin.from('contracts').delete().eq('id', contractId);
+    });
+
+    const { status } = await callSign(token);
+    expect(status).toBe(200);
+    expect(await getReservationStatus(reservationId)).toBe('confirmed');
+
+    const sessionId = await findGeneralSessionId(userId);
+    const cardCount = sessionId ? await countApprovalCards(sessionId) : 0;
+    expect(cardCount).toBe(1);
   });
 });
 
