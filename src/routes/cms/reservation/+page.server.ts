@@ -7,6 +7,7 @@ import { getCmsRoleForAction } from '$lib/server/getCmsRoleForAction'
 import { hasSettingsAccess } from '$lib/utils/cmsPermissions'
 import { sendReservationLifecyclePush } from '$lib/server/push'
 import { clearIssuedContractContent } from '$lib/server/clearIssuedContractHelper'
+import { resolveApprovalNotifyPlan } from '$lib/server/reservationApprovalNotify'
 
 export interface RentalListRow {
   reservation_id:    number
@@ -108,11 +109,31 @@ export const actions: Actions = {
     if (error) return fail(500, { message: error.message })
     const res = result as { ok: boolean; error?: string } | null
     if (!res?.ok) return fail(400, { message: res?.error ?? '처리 실패' })
-    // 예약 승인 채팅 알림 자동 발송
-    await admin.rpc('send_rental_chat_notification', {
-      p_reservation_id: reservationId,
-      p_notify_type: 'reservation_approval',
-    })
+
+    // 예약 승인 채팅 알림 — 같은 주문(order_items)으로 묶인 다중상품 예약이면 상품별 개별
+    // 발송 대신, 주문 전체가 승인 완료된 시점(이번 건이 마지막 승인)에만 통합 카드 1건으로
+    // 발송한다(service-operations.md §4). 단일 상품 예약은 기존과 동일하게 즉시 단건 발송.
+    const notifyPlan = await resolveApprovalNotifyPlan(admin, reservationId)
+    if (notifyPlan.mode === 'batch') {
+      const { data: batchResult, error: batchError } = await admin.rpc('send_rental_chat_notification_batch', {
+        p_reservation_ids: notifyPlan.reservationIds,
+        p_notify_type: 'reservation_approval',
+      })
+      if (batchError) {
+        console.error('[cms/reservation] send_rental_chat_notification_batch error:', batchError.message)
+      } else {
+        const batchRes = batchResult as { ok: boolean; error?: string } | null
+        if (!batchRes?.ok) console.error('[cms/reservation] send_rental_chat_notification_batch rejected:', batchRes?.error)
+      }
+    } else if (notifyPlan.mode === 'single') {
+      await admin.rpc('send_rental_chat_notification', {
+        p_reservation_id: reservationId,
+        p_notify_type: 'reservation_approval',
+      })
+    }
+    // notifyPlan.mode === 'hold' → 같은 주문의 다른 상품이 아직 미승인 — 알림 보류(마지막
+    // 승인 시 위 batch 분기가 통합 카드로 한 번에 발송함)
+
     // 예약 승인 푸시 알림 병행 발송 (채팅과 독립 — 실패해도 위 처리에 영향 없음)
     await sendReservationLifecyclePush(admin, reservationId, 'reservation_approval')
     return { ok: true }

@@ -171,8 +171,10 @@
 
   // 같은 주문(orders/order_items, Migration 251)에 묶인 다른 상품 — 결제정보 탭 "주문 정보"
   // 섹션 하단에 노출(결제정보/옵션상품과 동일한 lazy-fetch 패턴). 단일 상품 예약이면 빈 배열.
+  // rental 탭에서도 함께 조회 — "승인하기" 버튼이 rental 탭에 있어, 다중상품 주문 배치알림
+  // 정책(service-operations.md §4)을 관리자가 미리 인지할 수 있도록 안내 문구에 사용.
   $effect(() => {
-    if (activeTab !== 'payment') return
+    if (activeTab !== 'payment' && activeTab !== 'rental') return
     if (orderSiblingsLoading) return
     if (orderSiblingsFetchedForId === row.reservation_id) return
 
@@ -675,6 +677,12 @@
       <div class="action-section">
         <!-- 예약 단계: 승인하기 / 거부 — reservation 뷰 전용 -->
         {#if row.status === 'hold' && !isRentalView}
+          {#if orderSiblings.length > 0}
+            <p class="order-batch-note">
+              이 예약은 같은 주문의 다른 상품 {orderSiblings.length}건과 함께 진행 중입니다.
+              모든 상품이 승인 완료되면 알림이 한 번에 발송됩니다.
+            </p>
+          {/if}
           <form
             method="POST"
             action="/cms/reservation?/approveReservation"
@@ -1221,6 +1229,16 @@
     gap: 8px;
     flex-wrap: wrap;
     margin-top: 4px;
+  }
+  .order-batch-note {
+    flex-basis: 100%;
+    margin: 0 0 4px;
+    padding: 8px 10px;
+    background: var(--cs-surface-gray);
+    border-radius: var(--cms-radius-sm);
+    font: var(--text-pc-script-12);
+    color: var(--cs-text-mid);
+    line-height: 1.5;
   }
 
   /* 버튼 */
