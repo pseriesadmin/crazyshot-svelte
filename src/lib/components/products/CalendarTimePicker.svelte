@@ -462,9 +462,7 @@
     padding: 0;
   }
 
-  @media (min-width: 641px) {
-    .picker-wrap { border-radius: var(--radius-2xl); }
-  }
+
 
   /* Header */
   .picker-header {
@@ -787,13 +785,13 @@
   .reserve-btn:disabled { background: var(--cs-text-light); cursor: not-allowed; }
 
   .chat-btn {
+    display: none;
     width: 60px;
     height: 60px;
     border-radius: 50%;
     background: none;
     border: none;
     padding: 0;
-    display: flex;
     align-items: center;
     justify-content: center;
     cursor: pointer;
