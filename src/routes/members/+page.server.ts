@@ -5,9 +5,59 @@ import type { PageServerLoad } from './$types'
 import type { SubscriptionPlanRow } from '$lib/types/subscription'
 import type { SubscriptionPolicyItem } from '$lib/types/database'
 
-export const load: PageServerLoad = async () => {
+export interface HeroBannerImageItem {
+  url: string
+  path: string
+}
+
+export const load: PageServerLoad = async ({ locals }) => {
+  const { session } = await locals.safeGetSession()
+  let isCms = false
+  if (session?.user.id) {
+    const { data: profile } = await locals.supabase
+      .from('user_profiles')
+      .select('cms_role')
+      .eq('id', session.user.id)
+      .single()
+    isCms = !!(profile as { cms_role?: string | null } | null)?.cms_role
+  }
+
+  // 히어로 배너 이미지 설정
+  const { data: heroBannerSettingRow } = await locals.supabase
+    .from('cms_settings')
+    .select('value')
+    .eq('key', 'members_hero_banner')
+    .maybeSingle()
+
+  type HeroBannerValue = { images?: HeroBannerImageItem[]; mode?: 'random' | 'fixed'; mainCopy?: string; subCopy?: string }
+  const heroBannerValue = ((heroBannerSettingRow as { value: unknown } | null)?.value ?? {}) as HeroBannerValue
+  const heroBannerImages: HeroBannerImageItem[] = heroBannerValue.images ?? []
+  const heroBannerMode: 'random' | 'fixed' = heroBannerValue.mode ?? 'random'
+  const heroBannerMainCopy: string = heroBannerValue.mainCopy ?? ''
+  const heroBannerSubCopy: string = heroBannerValue.subCopy ?? ''
+
+  let heroBannerUrl = '/members/hero-character.png'
+  if (heroBannerImages.length > 0) {
+    if (heroBannerMode === 'random') {
+      heroBannerUrl = heroBannerImages[Math.floor(Math.random() * heroBannerImages.length)].url
+    } else {
+      heroBannerUrl = heroBannerImages[0].url
+    }
+  }
+
   const serviceRoleKey = env.SUPABASE_SERVICE_ROLE_KEY
-  if (!serviceRoleKey) return { plans: [] as SubscriptionPlanRow[], policyItems: [] as SubscriptionPolicyItem[] }
+  if (!serviceRoleKey) {
+    return {
+      plans: [] as SubscriptionPlanRow[],
+      policyItems: [] as SubscriptionPolicyItem[],
+      isCms,
+      heroBannerImages,
+      heroBannerMode,
+      heroBannerUrl,
+      heroBannerMainCopy,
+      heroBannerSubCopy,
+    }
+  }
 
   const admin = createClient(getSupabaseUrl(), serviceRoleKey)
 
@@ -21,7 +71,16 @@ export const load: PageServerLoad = async () => {
 
   if (error) {
     console.error('[members/load]', error)
-    return { plans: [] as SubscriptionPlanRow[], policyItems: [] as SubscriptionPolicyItem[] }
+    return {
+      plans: [] as SubscriptionPlanRow[],
+      policyItems: [] as SubscriptionPolicyItem[],
+      isCms,
+      heroBannerImages,
+      heroBannerMode,
+      heroBannerUrl,
+      heroBannerMainCopy,
+      heroBannerSubCopy,
+    }
   }
 
   const plans: SubscriptionPlanRow[] = (data ?? []).map((r) => ({
@@ -35,5 +94,14 @@ export const load: PageServerLoad = async () => {
     .order('sort_order', { ascending: true })
     .order('created_at', { ascending: true })
 
-  return { plans, policyItems: (policyItemRows ?? []) as SubscriptionPolicyItem[] }
+  return {
+    plans,
+    policyItems: (policyItemRows ?? []) as SubscriptionPolicyItem[],
+    isCms,
+    heroBannerImages,
+    heroBannerMode,
+    heroBannerUrl,
+    heroBannerMainCopy,
+    heroBannerSubCopy,
+  }
 }
