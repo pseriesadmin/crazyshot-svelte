@@ -60,13 +60,19 @@ vi.mock('$lib/utils/cmsPermissions', () => ({
 
 // ── 어드민 스텁 ───────────────────────────────────────────────────────────────
 
+// content/+server.ts GET(P7-4)는 partner일 때 contract_signings.signed_at 여부를 먼저 조회한다
+// (2026-08-20, 서명완료건은 partner도 열람 허용) — 테스트별로 이 조회 결과를 바꿔치기할 수 있도록
+// 모듈 스코프 변수로 노출. null이면 기존처럼 항상 { data: null } 응답(= 서명 없음/조회 실패).
+let nextMaybeSingleResult: { data: unknown; error: unknown } | null = null;
+
 function makeAdminStub() {
   const chain: Record<string, unknown> = {};
-  const fns = ['select','insert','update','delete','eq','is','order','limit','single','maybeSingle'];
+  const fns = ['select','insert','update','delete','eq','is','not','order','limit','single','maybeSingle'];
   fns.forEach(fn => {
     chain[fn] = vi.fn().mockReturnValue(chain);
   });
-  (chain as Record<string, unknown>).maybeSingle = vi.fn().mockResolvedValue({ data: null, error: null });
+  (chain as Record<string, unknown>).maybeSingle = vi.fn()
+    .mockImplementation(() => Promise.resolve(nextMaybeSingleResult ?? { data: null, error: null }));
   (chain as Record<string, unknown>).single = vi.fn().mockResolvedValue({ data: null, error: null });
   (chain as Record<string, unknown>).order = vi.fn().mockResolvedValue({ data: [], error: null });
   return {
@@ -270,7 +276,7 @@ describe('[P7-3] API — init-contract / contract-data 403 for partner', () => {
 // ── P7-4: contracts/[id]/content GET/PATCH 게이트 ─────────────────────────────
 
 describe('[P7-4] API — contracts/[id]/content GET/PATCH 403 for partner', () => {
-  beforeEach(() => { vi.clearAllMocks(); });
+  beforeEach(() => { vi.clearAllMocks(); nextMaybeSingleResult = null; });
 
   it('RED: partner로 GET 호출 시 403', async () => {
     mockGetCmsRoleForAction.mockResolvedValue('partner');
@@ -303,6 +309,30 @@ describe('[P7-4] API — contracts/[id]/content GET/PATCH 403 for partner', () =
     };
     const res = await (contentGet as (e: unknown) => Promise<unknown>)(event) as { status: number };
     expect(res.status).not.toBe(403);
+  });
+
+  it('GREEN: partner라도 서명완료(contract_signings.signed_at 존재)건 GET → 403 아닌 응답 (2026-08-20)', async () => {
+    mockGetCmsRoleForAction.mockResolvedValue('partner');
+    nextMaybeSingleResult = { data: { signed_at: '2026-08-20T00:00:00Z' }, error: null };
+    const event = {
+      params: { id: 'contract-id-1' },
+      locals: makeLocals('partner'),
+      request: makeRequest(),
+    };
+    const res = await (contentGet as (e: unknown) => Promise<unknown>)(event) as { status: number };
+    expect(res.status).not.toBe(403);
+  });
+
+  it('RED: partner + 서명 미완료(signed_at 없음)건 GET → 여전히 403 (2026-08-20)', async () => {
+    mockGetCmsRoleForAction.mockResolvedValue('partner');
+    nextMaybeSingleResult = { data: null, error: null };
+    const event = {
+      params: { id: 'contract-id-1' },
+      locals: makeLocals('partner'),
+      request: makeRequest(),
+    };
+    const res = await (contentGet as (e: unknown) => Promise<unknown>)(event) as { status: number };
+    expect(res.status).toBe(403);
   });
 
   it('GREEN: manager로 PATCH → 403 아닌 응답', async () => {

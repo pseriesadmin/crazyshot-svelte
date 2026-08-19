@@ -193,7 +193,7 @@ export const POST: RequestHandler = async ({ params, request, getClientAddress }
                 type:         'contract_signed',
                 reservation_no: reservationCode ?? undefined,
                 button_label: '전자계약 확인',
-                action_url:   `${cmsPath}?selected=${contract.reservation_id}`,
+                action_url:   `/account/rental/${contract.reservation_id}/contract`,
               },
             })
 

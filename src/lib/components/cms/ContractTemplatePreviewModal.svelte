@@ -37,9 +37,15 @@
      * "정보가 사라졌다"는 오인을 유발한다(2026-08-15 실사용 중 발견한 실제 버그).
      */
     onEdit?: (editedContractId?: string) => void
+    /**
+     * true = 읽기 전용 열람 모드(대여현황 계약서 탭 전용, 2026-08-20).
+     * 양식 목록·편집·발송 UI 전부 숨기고 이미 발행된 내용만 보여준다 — 발송용 데이터
+     * 조회(contract-data, manager 이상 게이트)를 호출하지 않아 그 게이트와 무관하게 동작한다.
+     */
+    viewOnly?: boolean
   }
 
-  let { contractId, reservationId, initialTemplateId = null, onclose, onsent, onEdit }: Props = $props()
+  let { contractId, reservationId, initialTemplateId = null, onclose, onsent, onEdit, viewOnly = false }: Props = $props()
 
   let templates      = $state<TemplateSummary[]>([])
   let selectedId     = $state<string | null>(null)
@@ -58,7 +64,8 @@
   // spreadsheet 계약의 경우 content_blocks는 항상 [] — spreadsheet_document를 보관해 미리보기 분기에 활용
   let existingSpreadsheetDocument  = $state<unknown>(null)
   let hasExistingContent = $state(false)
-  let contentMode        = $state<'existing' | 'template'>('template')
+  // viewOnly는 항상 existing 취급 — 양식 선택 자체가 UI에서 제거되므로 template 모드로 빠질 일이 없음
+  let contentMode        = $state<'existing' | 'template'>(viewOnly ? 'existing' : 'template')
   let overwriteWarning   = $state(false)       // 덮어쓰기 확인 배너 표시 여부
   let pendingTemplateId  = $state<string | null>(null)  // 덮어쓰기 대기 중인 양식 ID
 
@@ -98,15 +105,19 @@
     loading = true
     error = null
     try {
-      const [tplRes, subRes] = await Promise.all([
-        fetch('/api/cms/contract-templates'),
-        fetch(`/api/cms/reservations/${reservationId}/contract-data`),
-      ])
-      if (!tplRes.ok) throw new Error('계약서 양식 목록을 불러오지 못했습니다.')
-      if (!subRes.ok) throw new Error('예약 데이터를 불러오지 못했습니다.')
+      // viewOnly: 양식 목록·발송용 치환 데이터는 화면에 노출되지 않으므로 조회 자체를 생략한다
+      // (contract-data는 manager 이상 게이트라 partner 열람 시 불필요한 403을 유발하는 문제도 회피)
+      if (!viewOnly) {
+        const [tplRes, subRes] = await Promise.all([
+          fetch('/api/cms/contract-templates'),
+          fetch(`/api/cms/reservations/${reservationId}/contract-data`),
+        ])
+        if (!tplRes.ok) throw new Error('계약서 양식 목록을 불러오지 못했습니다.')
+        if (!subRes.ok) throw new Error('예약 데이터를 불러오지 못했습니다.')
 
-      templates = (await tplRes.json()) as TemplateSummary[]
-      subData   = (await subRes.json()) as ContractSubstitutionData
+        templates = (await tplRes.json()) as TemplateSummary[]
+        subData   = (await subRes.json()) as ContractSubstitutionData
+      }
 
       // 기존 계약서 편집 내용 확인 (편집 보존 목적 — contractId가 있을 때만)
       // 실패해도 template 모드로 graceful fallback (주요 로드에 영향 없음)
@@ -142,7 +153,7 @@
       }
 
       // 템플릿 초기 선택 — template 모드일 때만 (existing 모드에서는 미리보기와 무관)
-      if (contentMode !== 'existing') {
+      if (!viewOnly && contentMode !== 'existing') {
         if (initialTemplateId && templates.some((t) => t.id === initialTemplateId)) {
           selectedId = initialTemplateId
         } else if (templates.length > 0) {
@@ -304,11 +315,11 @@
   loadData()
 </script>
 
-<div class="modal-overlay" role="dialog" aria-modal="true" aria-label="계약서 양식 선택 및 발송">
+<div class="modal-overlay" role="dialog" aria-modal="true" aria-label={viewOnly ? '계약서 보기' : '계약서 양식 선택 및 발송'}>
   <div class="modal-wrap">
     <!-- 헤더 -->
     <div class="modal-header">
-      <span class="modal-title">계약서 양식 적용 & 발송</span>
+      <span class="modal-title">{viewOnly ? '계약서 보기' : '계약서 양식 적용 & 발송'}</span>
       <button type="button" class="close-btn" onclick={onclose} aria-label="닫기">✕</button>
     </div>
 
@@ -321,7 +332,7 @@
         <p class="state-error">{error}</p>
         <button class="btn-retry" onclick={loadData}>다시 시도</button>
       </div>
-    {:else if templates.length === 0}
+    {:else if templates.length === 0 && !viewOnly}
       <div class="state-center">
         <p class="state-text">등록된 활성 계약서 양식이 없습니다.</p>
         <p class="state-sub">/cms/reservation/contracts 에서 양식을 먼저 작성하세요.</p>
@@ -341,30 +352,32 @@
       {/if}
 
       <div class="modal-body">
-        <!-- 좌측: 양식 목록 -->
-        <div class="tpl-list">
-          <p class="list-label">
-            {contentMode === 'existing' ? '다른 양식으로 교체' : '양식 선택'}
-          </p>
-          {#if hasExistingContent && contentMode === 'existing'}
-            <p class="list-existing-hint">양식 클릭 시 편집 내용 대체 확인</p>
-          {/if}
-          {#each templates as tpl (tpl.id)}
-            <button
-              type="button"
-              class="tpl-item"
-              class:selected={contentMode === 'template' && selectedId === tpl.id}
-              class:tpl-item-overwrite-pending={overwriteWarning && pendingTemplateId === tpl.id}
-              onclick={() => onTemplateClick(tpl.id)}
-            >
-              {tpl.title}
-            </button>
-          {/each}
-        </div>
+        <!-- 좌측: 양식 목록 (viewOnly에서는 편집 대상 자체가 없으므로 숨김) -->
+        {#if !viewOnly}
+          <div class="tpl-list">
+            <p class="list-label">
+              {contentMode === 'existing' ? '다른 양식으로 교체' : '양식 선택'}
+            </p>
+            {#if hasExistingContent && contentMode === 'existing'}
+              <p class="list-existing-hint">양식 클릭 시 편집 내용 대체 확인</p>
+            {/if}
+            {#each templates as tpl (tpl.id)}
+              <button
+                type="button"
+                class="tpl-item"
+                class:selected={contentMode === 'template' && selectedId === tpl.id}
+                class:tpl-item-overwrite-pending={overwriteWarning && pendingTemplateId === tpl.id}
+                onclick={() => onTemplateClick(tpl.id)}
+              >
+                {tpl.title}
+              </button>
+            {/each}
+          </div>
+        {/if}
 
         <!-- 우측: 미리보기 (문서 뷰어) -->
         <div class="preview-pane">
-          {#if contentMode === 'existing' && !overwriteWarning}
+          {#if contentMode === 'existing' && !overwriteWarning && !viewOnly}
             <div class="existing-notice">
               편집된 내용이 그대로 발송됩니다. 다른 양식으로 교체하려면 좌측 목록에서 양식을 클릭하세요.
             </div>
@@ -411,29 +424,33 @@
             </div>
           {:else if contentMode === 'template'}
             <div class="preview-empty">양식을 선택하세요.</div>
+          {:else}
+            <div class="preview-empty">표시할 계약 내용이 없습니다.</div>
           {/if}
         </div>
       </div>
 
       <!-- 푸터 -->
       <div class="modal-footer">
-        <button type="button" class="btn-cancel" onclick={onclose}>취소</button>
-        {#if onEdit}
+        <button type="button" class="btn-cancel" onclick={onclose}>{viewOnly ? '닫기' : '취소'}</button>
+        {#if !viewOnly}
+          {#if onEdit}
+            <button
+              type="button"
+              class="btn-edit"
+              onclick={handleEditClick}
+              disabled={applyingForEdit || (contentMode === 'template' && !selectedTemplate)}
+            >{applyingForEdit ? '적용 중...' : '편집'}</button>
+          {/if}
           <button
             type="button"
-            class="btn-edit"
-            onclick={handleEditClick}
-            disabled={applyingForEdit || (contentMode === 'template' && !selectedTemplate)}
-          >{applyingForEdit ? '적용 중...' : '편집'}</button>
+            class="btn-send"
+            onclick={send}
+            disabled={sendDisabled}
+          >
+            {sending ? '발송 중...' : '채팅으로 발송'}
+          </button>
         {/if}
-        <button
-          type="button"
-          class="btn-send"
-          onclick={send}
-          disabled={sendDisabled}
-        >
-          {sending ? '발송 중...' : '채팅으로 발송'}
-        </button>
       </div>
     {/if}
   </div>

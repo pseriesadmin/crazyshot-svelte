@@ -377,12 +377,55 @@ PDF 뷰어·다운로드: contractPdfUrl && customerSignedAt → 표시(현재�
 | type | 발생 시점 | action_url | 발신자 |
 |---|---|---|---|
 | `contract_link` | 관리자 발송(`send-chat`) | `/contract/{token}` (고객용, 실제 서명 화면 딥링크) | admin |
-| `contract_signed` | 고객 서명 완료(`sign`) | `{cmsPath}?selected={reservation_id}` (관리자용, § 딥링크 라우팅) | admin(시스템 대리 발신) |
+| `contract_signed` | 고객 서명 완료(`sign`) | `/account/rental/{reservation_id}/contract` (고객용, 아래 "고객용 서명완료 계약서 열람" 절) | admin(시스템 대리 발신) |
 
 렌더링 컴포넌트: `src/lib/components/chat/ActionCard.svelte` (고객·관리자 채팅 공용, `MessageBubble.svelte` 경유)
 
 > ⚠️ `chat.md`의 전체 파이프라인 다이어그램에는 "계약" 단계가 이름만 언급되어 있고 이 표의
 > 상세 내용은 없다 — 채팅 시스템 관련 작업 시에도 계약 관련 action_payload를 건드린다면 이 문서를 참조할 것.
+
+✅ **`contract_signed` action_url 미정합 — 해결 완료(2026-08-19 발견 → 같은 날 수정)**: 이
+카드는 관리자용이 아니라 **고객 본인의 채팅 세션**(`find_or_create_general_chat_session
+(p_user_id=서명자)`)에 삽입된다 — 위 표의 "관리자용" 서술은 과거 설계 의도만 남은 것이고
+실제로는 고객이 보는 카드였다. 발견 당시 action_url이 `{cmsPath}`(CMS 전용, `cms_role` 없는
+고객은 `/cms/login`으로 튕겨나감) → 그 후 다른 세션이 `/account/rental/{reservation_id}`로
+바꿨으나 그 경로엔 `+page.svelte` 자체가 없어 여전히 404 → 아래 "고객용 서명완료 계약서
+열람" 절에서 신설한 실제 뷰어 라우트(`/account/rental/{id}/contract`)로 최종 정정해
+`src/routes/api/contracts/[token]/sign/+server.ts`의 `action_url`을 맞췄다. 이제 고객이
+채팅카드를 클릭하면 실제로 서명본을 볼 수 있다.
+
+---
+
+## 고객용 서명완료 계약서 열람 (2026-08-19 신규)
+
+```
+Stephen 요청: "/account/rental 목록 카드에 '전자계약 확인' 버튼 배치 → 새창 뷰어로 확인"
+
+라우트: /account/rental/[id]/contract (GET, 새 창으로 오픈)
+  - src/routes/account/rental/[id]/contract/+page.server.ts
+  - src/routes/account/rental/[id]/contract/+page.svelte
+
+/contract/[token](1회성 토큰 서명화면)과 다른 점:
+  - 토큰이 아니라 로그인 세션 기반 — 예약 소유권을 locals.supabase(RLS, auth.uid()=user_id)로
+    먼저 확인한 뒤에만 admin(service_role) 클라이언트로 contracts/contract_signings 조회
+  - 서명 폼(SignatureCanvas·동의 체크박스)이 전혀 없음 — 순수 읽기 전용
+  - 서명 필드(canvas 모드) 또는 별도 "서명 완료" 섹션(flow/spreadsheet 모드)에 서명 당시
+    캡처된 signature_data(base64 PNG)를 <img>로 표시 + 서명 시각
+  - 상단에 "인쇄하기" 버튼(window.print()) — 기존 @page A4 프린트 스타일 재사용
+
+DOM 구조·CSS는 /contract/[token]/+page.svelte와 동일하게 유지(.contract-main > .doc-section
+> .doc-block-tiptap 패딩 체인) — canvas 모드 필드 좌표가 이 패딩 체인을 기준으로 저장되므로
+구조가 달라지면 겹치기(overlay) 이미지 위치가 틀어진다(ui-mobile.md 좌표계 원점 결함 사례 참고).
+기존 서명화면 파일은 건드리지 않고 새 파일에 동일 구조를 복제하는 방식으로 안전하게 재사용.
+
+/account/rental 목록(+page.server.ts)에 has_signed_contract 판정 추가 — contracts를
+contract_signings!inner로 조인해 signed_at IS NOT NULL인 예약 id만 Set으로 모아 카드에
+"전자계약 확인" 버튼(있으면)만 노출. 카드에 계약이 여러 건(재발송 등)이어도 signed 여부만
+확인하고, 뷰어 쪽에서는 가장 최근 서명(signed_at DESC LIMIT 1)만 보여준다.
+```
+
+→ 감사로그: `recordAuditLog(..., eventType:'viewed', actorType:'customer')` — /contract/[token]의
+viewed 기록과 동일 관례로 고객 본인의 재열람도 append-only로 남긴다.
 
 ---
 
@@ -507,3 +550,8 @@ role 무차별 허용을 의도된 설계로 확인했으나(구v1.2), 같은 �
   기존 content_blocks가 있으면 existing 모드(PATCH 없이 send-chat만), 명시적 확인 후에만
   template 모드 전환. 관련 유틸: src/lib/utils/contract-content-mode.ts |
   TDD: src/__tests__/services/contractContentMode.test.ts (14개 케이스)*
+*2026-08-19 고객용 서명완료 계약서 열람 신규(Stephen 요청) — /account/rental/[id]/contract
+라우트 신설(로그인 세션 기반 읽기전용 뷰어, /contract/[token]과 동일 DOM/CSS 구조 재사용) +
+목록 카드 "전자계약 확인" 버튼(새 창) + `contract_signed` action_url이 실제로는 고객 세션에
+꽂히는데도 CMS 전용 경로라 접근 불가했던 미정합 발견·문서화(수정은 다른 세션이 이미
+손대고 있던 파일이라 이번 범위에서 보류).*

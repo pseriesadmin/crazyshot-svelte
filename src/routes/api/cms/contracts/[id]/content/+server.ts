@@ -9,13 +9,30 @@ import { isCanvasDocument, hasSignatureField, isSpreadsheetDocument } from '$lib
 
 export const GET: RequestHandler = async ({ params, locals }) => {
   const cmsRole = await getCmsRoleForAction(locals)
-  // P7-4: manager 이상만 허용 (GET/PATCH 양쪽 모두 — 한쪽만 막으면 다른 경로로 열람 가능)
-  if (!cmsRole || !hasSettingsAccess(cmsRole)) {
+  if (!cmsRole) {
     return json({ error: '권한 없음' }, { status: 403 })
   }
 
   const admin      = createClient(PUBLIC_SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
   const contractId = params.id
+
+  // 2026-08-20: 서명 완료된 계약은 전 cms 계정(partner 포함)이 열람 가능 — 편집·발송 중인
+  // 계약(고객 PII가 아직 확정되지 않았거나 발송 전 초안일 수 있음)은 계속 manager 이상만 허용.
+  // GET/PATCH 둘 다 막던 P7-4 전면 게이트를 "서명완료건 읽기전용 열람"만 완화한다(쓰기 경로인
+  // PATCH·init-contract·send-chat·contract-data는 이 완화와 무관하게 manager 이상 그대로 유지).
+  if (!hasSettingsAccess(cmsRole)) {
+    const { data: signing } = await admin
+      .from('contract_signings')
+      .select('signed_at')
+      .eq('contract_id', contractId)
+      .not('signed_at', 'is', null)
+      .limit(1)
+      .maybeSingle()
+
+    if (!signing) {
+      return json({ error: '권한 없음' }, { status: 403 })
+    }
+  }
 
   const { data, error } = await admin
     .from('contracts')
