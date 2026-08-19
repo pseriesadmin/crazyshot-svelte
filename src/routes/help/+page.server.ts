@@ -7,6 +7,11 @@ export interface FaqItem {
 	help_category: string
 }
 
+export interface HeroImageItem {
+	url: string
+	path: string
+}
+
 export const load: PageServerLoad = async ({ locals }) => {
 	const { session } = await locals.safeGetSession()
 	let isCms = false
@@ -28,5 +33,26 @@ export const load: PageServerLoad = async ({ locals }) => {
 
 	const faqItems = (faqData ?? []) as FaqItem[]
 
-	return { isCms, faqItems }
+	// 도움말 히어로 배경 이미지 설정
+	const { data: heroBgSettingRow } = await locals.supabase
+		.from('cms_settings')
+		.select('value')
+		.eq('key', 'help_hero_bg_images')
+		.maybeSingle()
+
+	type HeroBgValue = { images?: HeroImageItem[]; mode?: 'random' | 'fixed' }
+	const heroBgValue = ((heroBgSettingRow as { value: unknown } | null)?.value ?? {}) as HeroBgValue
+	const heroBgImages: HeroImageItem[] = heroBgValue.images ?? []
+	const heroBgMode: 'random' | 'fixed' = heroBgValue.mode ?? 'random'
+
+	let heroBgUrl = '/help/hero-bg.png'
+	if (heroBgImages.length > 0) {
+		if (heroBgMode === 'random') {
+			heroBgUrl = heroBgImages[Math.floor(Math.random() * heroBgImages.length)].url
+		} else {
+			heroBgUrl = heroBgImages[0].url
+		}
+	}
+
+	return { isCms, faqItems, heroBgImages, heroBgMode, heroBgUrl }
 }

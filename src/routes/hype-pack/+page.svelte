@@ -1,49 +1,32 @@
 <script lang="ts">
   import BottomTabBar from '$lib/components/common/BottomTabBar.svelte'
-  let carouselEl: HTMLElement | null = null
-  let carouselIdx = $state(0)
+  import HypePackBannerModal from '$lib/components/hype-pack/HypePackBannerModal.svelte'
+  import type { PageData } from './$types'
 
-  function onCarouselScroll() {
-    if (!carouselEl) return
-    const idx = Math.round(carouselEl.scrollLeft / 340)
-    carouselIdx = Math.max(0, Math.min(2, idx))
+  interface Props { data: PageData }
+  let { data }: Props = $props()
+
+  let activeModal = $state<'banner' | null>(null)
+
+  const KEYWORDS_FALLBACK = ['CANON 100mm', 'FeiyuTech SCORP Mini 2', 'FDR-AX43', 'Air 3S Drone']
+  // Use CMS-managed keywords when set, else fallback
+  const displayKeywords = $derived(
+    data.banner.keywords.length > 0 ? data.banner.keywords : KEYWORDS_FALLBACK
+  )
+
+  // Compute the banner item to display (random or first)
+  function getDisplayBannerItem() {
+    const items = data.banner.items
+    if (!items.length) return null
+    if (data.banner.mode === 'random') return items[Math.floor(Math.random() * items.length)]
+    return items[0]
   }
+  const bannerItem = getDisplayBannerItem()
+  const bannerHref = bannerItem ? `/products/${bannerItem.slug ?? bannerItem.product_id}` : null
 
-  function scrollToCard(idx: number) {
-    if (!carouselEl) return
-    carouselEl.scrollTo({ left: idx * 340, behavior: 'smooth' })
+  function formatWon(n: number): string {
+    return `${n.toLocaleString('ko-KR')} 원`
   }
-
-  const KEYWORDS = ['CANON 100mm', 'FeiyuTech SCORP Mini 2', 'FDR-AX43', 'Air 3S Drone']
-
-  const CAROUSEL_CARDS = [
-    {
-      category: 'Fandom Ready',
-      title: '소니 CAM FX3 패키지',
-      price: '80,000 원 / 1일',
-      img: '/hype-pack/m-carousel-1.png',
-    },
-    {
-      category: 'Steps to Pro',
-      title: '나는 프로 패키지 시리즈',
-      price: '80,000 원 / 1일',
-      img: '/hype-pack/m-carousel-2.png',
-    },
-    {
-      category: 'Casual log',
-      title: '소니 FX3 패키 시리즈',
-      price: '80,000 원 / 1일',
-      img: '/hype-pack/m-carousel-3.png',
-    },
-  ]
-
-  const HOT_PACK_CARDS = [
-    { title: 'DJI Drone 팩', category: 'Steps to Pro', price: '80,000 원 / 1일', icon: 'mem',  img: '/hype-pack/m-hotpack-a.png' },
-    { title: 'DJI Drone 팩', category: 'Casual log',   price: '80,000 원 / 1일', icon: 'deal', img: '/hype-pack/m-hotpack-b.png' },
-    { title: 'DJI Drone 팩', category: 'Steps to Pro', price: '80,000 원 / 1일', icon: 'mem',  img: '/hype-pack/m-hotpack-a.png' },
-    { title: 'DJI Drone 팩', category: 'Casual log',   price: '80,000 원 / 1일', icon: 'deal', img: '/hype-pack/m-hotpack-b.png' },
-    { title: 'DJI Drone 팩', category: 'Steps to Pro', price: '80,000 원 / 1일', icon: 'mem',  img: '/hype-pack/m-hotpack-a.png' },
-  ]
 
   const PACK_THEMES = [
     { name: 'Idol Pack',     label: '#7d2e55', img: '/hype-pack/d-pack-idol.png' },
@@ -51,39 +34,6 @@
     { name: 'Activity Pack', label: '#00679f', img: '/hype-pack/d-pack-activity.png' },
     { name: 'Analog Pack',   label: '#9f6000', img: '/hype-pack/d-pack-analog.png' },
     { name: 'Traveler Pack', label: '#7b8215', img: '/hype-pack/d-pack-traveler.png' },
-  ]
-
-  const KTLOG_CARDS = [
-    { span: 'full',   height: 620, category: 'With a Pro',   icons: ['mem', 'deal'], title: 'Explore the Hot\nStreets of Hongdae', price: '$ 350 / 1w', img: '/hype-pack/d-ktlog-main.png' },
-    { span: 'normal', height: 620, category: 'With a Pro',   icons: ['mem', 'deal'], title: 'Taste Jongro',                        price: '$ 100 / 1h', img: '/hype-pack/d-ktlog-jongro.png' },
-    { span: 'normal', height: 620, category: 'Creator Pack', icons: ['deal'],        title: 'Walk in Bukchon',                     price: '$ 100 / 1h', img: '/hype-pack/d-ktlog-bukchon.png' },
-    { span: 'normal', height: 620, category: 'With a Pro',   icons: ['mem', 'deal'], title: 'Yangyang Beach Sunset',               price: '$ 100 / 1h', img: '/hype-pack/d-ktlog-yangyang.png' },
-    { span: 'normal', height: 620, category: 'Creator Pack', icons: ['mem'],         title: 'Gyeongbokgung\nHanbok Experience',    price: '$ 150 / 1h', img: '/hype-pack/d-ktlog-gyeongbok.png' },
-    { span: 'wide',   height: 620, category: 'With a Pro',   icons: ['mem', 'deal'], title: 'K-Pop Fan Meet\n& Concert Journey',   price: '$ 100 / 1h', img: '/hype-pack/d-ktlog-kpop-bg.png' },
-  ]
-
-  const SHOTLOG_HEADS = [
-    {
-      title: 'Flash Deals',
-      headerBg: 'var(--cs-purple)',
-      img: '/hype-pack/m-flash-deals.png',
-      cardTitle: '다양한 액셔냄 대잔치',
-      subtitle: 'DJI, 오즈모, 인스타 모두 맛봅시다',
-    },
-    {
-      title: 'Fan Vlog',
-      headerBg: 'var(--cs-red)',
-      img: '/hype-pack/m-fan-vlog.png',
-      cardTitle: '양양의 기억 담기',
-      subtitle: '동해 양양바다의 기억을 담은 브이로그',
-    },
-    {
-      title: 'Release',
-      headerBg: 'var(--cs-purple)',
-      img: '/hype-pack/m-release.png',
-      cardTitle: 'DJI Mini2se Aerial Drone',
-      subtitle: '드론시장에서 품질은 없다.',
-    },
   ]
 
   const SHOTLOG_POSTS = [
@@ -111,106 +61,50 @@
       </button>
     </div>
     <div class="m-chips-wrap">
-      {#each KEYWORDS as kw}
+      {#each displayKeywords as kw}
         <span class="m-chip">{kw}</span>
       {/each}
     </div>
   </div>
 
-  <!-- 추천 HypePack 캐러셀 -->
-  <div class="m-herd">
-    <!-- 카드 슬라이더 -->
-    <div
-      class="m-carousel"
-      bind:this={carouselEl}
-      onscroll={onCarouselScroll}
-      aria-label="추천 HypePack 캐러셀"
-    >
-      {#each CAROUSEL_CARDS as card, i}
-        <article class="m-pack-card" aria-label={card.title}>
-          <!-- 배경 이미지 -->
-          <img src={card.img} alt="" class="m-pack-card-bg" aria-hidden="true" />
-          <!-- 다크 그라데이션 오버레이 -->
-          <div class="m-pack-card-overlay" aria-hidden="true"></div>
-          <!-- 상단 도트 인디케이터 (카드 내부) -->
-          <div class="m-pack-card-dots" aria-hidden="true">
-            {#each CAROUSEL_CARDS as _, j}
-              {#if j === i}
-                <span class="m-pack-dot m-pack-dot-active"></span>
-              {:else}
-                <span class="m-pack-dot"></span>
-              {/if}
-            {/each}
-          </div>
-          <!-- 하단 콘텐츠 -->
-          <div class="m-pack-card-content">
-            <!-- 70px 멤버십 아이콘 -->
-            <div class="m-pack-icon m-pack-icon-mem" aria-hidden="true">
-              <svg xmlns="http://www.w3.org/2000/svg" width="30" height="30" viewBox="0 0 30 30" fill="none">
-                <path d="M15 2l3.09 6.26L25 9.27l-5 4.87 1.18 6.88L15 17.77l-6.18 3.25L10 14.14 5 9.27l6.91-1.01L15 2z" fill="white"/>
-              </svg>
-            </div>
-            <span class="m-category-badge">{card.category}</span>
-            <h3 class="m-pack-card-title">{card.title}</h3>
-            <p class="m-pack-card-price">{card.price}</p>
-          </div>
-        </article>
-      {/each}
-    </div>
-
-    <!-- 외부 도트 인디케이터 (접근성용 컨트롤) -->
-    <div class="m-dots" role="tablist" aria-label="캐러셀 위치">
-      {#each CAROUSEL_CARDS as _, i}
-        <button
-          class="m-dot"
-          class:m-dot-active={carouselIdx === i}
-          onclick={() => scrollToCard(i)}
-          role="tab"
-          aria-selected={carouselIdx === i}
-          aria-label={`${i + 1}번 카드`}
-        ></button>
-      {/each}
-    </div>
-  </div>
-
-  <!-- 최근 광적 관심폭발! (Lists 섹션) -->
-  <div class="m-hot-section">
-    <div class="m-hot-title-wrap">
-      <h2 class="m-hot-title">
-        최근 <span class="m-hot-title-accent">광적</span> 관심폭발!
-      </h2>
-      <div class="m-section-bar" aria-hidden="true"></div>
-      <p class="m-section-sub">평소 대비 제품정보 보기와 예약주문량이 많아요.</p>
-    </div>
-    <div class="m-hot-list">
-      {#each HOT_PACK_CARDS as card}
-        <article class="m-hot-card" aria-label={card.title}>
-          <!-- 배경 이미지 -->
-          <img src={card.img} alt="" class="m-hot-card-bg" aria-hidden="true" />
-          <!-- 다크 오버레이 -->
-          <div class="m-hot-card-overlay" aria-hidden="true"></div>
-          <!-- 하단 콘텐츠 -->
-          <div class="m-hot-card-content">
-            <!-- 70px 아이콘 -->
-            <div class="m-pack-icon {card.icon === 'deal' ? 'm-pack-icon-deal' : 'm-pack-icon-mem'}" aria-hidden="true">
-              {#if card.icon === 'deal'}
-                <svg xmlns="http://www.w3.org/2000/svg" width="28" height="28" viewBox="0 0 28 28" fill="none">
-                  <path d="M4 14h20M14 4v20" stroke="white" stroke-width="2.5" stroke-linecap="round"/>
-                  <circle cx="14" cy="14" r="8" stroke="white" stroke-width="2"/>
-                </svg>
-              {:else}
-                <svg xmlns="http://www.w3.org/2000/svg" width="28" height="28" viewBox="0 0 28 28" fill="none">
-                  <path d="M14 2l2.7 5.46L23 8.6l-4.5 4.38 1.06 6.19L14 16.2l-5.56 2.97 1.06-6.19L5 8.6l6.3-.91L14 2z" fill="white"/>
-                </svg>
-              {/if}
-            </div>
-            <span class="m-hot-badge">{card.category}</span>
-            <h3 class="m-hot-card-title">{card.title}</h3>
-            <p class="m-hot-card-price">{card.price}</p>
-          </div>
-        </article>
-      {/each}
-    </div>
+  <!-- 광고 배너 (AdPack, 모바일) -->
+  <div class="m-ad-banner">
+    {#if bannerHref}
+      <a href={bannerHref} class="m-ad-banner-link" aria-label="{bannerItem?.name} 상품 상세로 이동">
+        <img
+          src={bannerItem?.mobile_image_url ?? '/hype-pack/d-ad-banner.png'}
+          alt=""
+          class="m-ad-banner-img"
+          aria-hidden="true"
+        />
+        <div class="m-ad-banner-overlay" aria-hidden="true"></div>
+        <div class="m-ad-banner-script">
+          <p class="m-ad-banner-category">{bannerItem?.subtitle ?? 'Analog Pack'}</p>
+          <h3 class="m-ad-banner-product">{bannerItem?.name ?? 'Sanyo Xacti CG10'}</h3>
+          <p class="m-ad-banner-price">
+            {bannerItem?.price24h ? `1 day / ${formatWon(bannerItem.price24h)}` : '1 day / 10,000 원'}
+          </p>
+          {#if bannerItem?.price12h}
+            <p class="m-ad-banner-price">12H / {formatWon(bannerItem.price12h)}</p>
+          {/if}
+        </div>
+      </a>
+    {:else}
+      <img src="/hype-pack/d-ad-banner.png" alt="" class="m-ad-banner-img" aria-hidden="true" />
+      <div class="m-ad-banner-overlay" aria-hidden="true"></div>
+      <div class="m-ad-banner-script">
+        <p class="m-ad-banner-category">Analog Pack</p>
+        <h3 class="m-ad-banner-product">Sanyo Xacti CG10</h3>
+        <p class="m-ad-banner-price">1 day / 10,000 원</p>
+      </div>
+    {/if}
+    {#if data.isCms}
+      <button
+        class="admin-edit-btn admin-banner-btn"
+        onclick={() => { activeModal = 'banner' }}
+        aria-label="배너 상품 설정"
+      >⚙ 배너 설정</button>
+    {/if}
   </div>
 
   <!-- Pack 테마목록 (모바일) -->
@@ -238,30 +132,6 @@
       </h2>
       <div class="m-section-bar" aria-hidden="true"></div>
       <p class="m-section-sub">대여 예약전에 참고하면 좋은 콘텐츠를 제안해요.</p>
-    </div>
-
-    <!-- Flash Deals / Fan Vlog / Release 헤드 카드 -->
-    <div class="m-shotlog-heads">
-      {#each SHOTLOG_HEADS as card}
-        <article class="m-shotlog-head-card" aria-label={card.title}>
-          <!-- 컬러 헤더 바 -->
-          <header class="m-shotlog-head-header" style="background: {card.headerBg};">
-            <span class="m-shotlog-head-label">{card.title}</span>
-            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-              <path d="M3 8H13M13 8L8.5 3.5M13 8L8.5 12.5" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
-            </svg>
-          </header>
-          <!-- 이미지 바디 (writing은 상단 오버레이) -->
-          <div class="m-shotlog-head-body">
-            <img src={card.img} alt="" class="m-shotlog-head-img" aria-hidden="true" />
-            <!-- 상단 다크 그라데이션 + 텍스트 (Figma: gradient to bottom) -->
-            <div class="m-shotlog-head-writing">
-              <p class="m-shotlog-head-card-title">{card.cardTitle}</p>
-              <p class="m-shotlog-head-subtitle">{card.subtitle}</p>
-            </div>
-          </div>
-        </article>
-      {/each}
     </div>
 
     <!-- Shotlog 포스트 카드 -->
@@ -292,14 +162,49 @@
       </div>
       <!-- 광고 배너 (AdPack) -->
       <div class="d-ad-banner">
-        <div class="d-ad-banner-bg" aria-hidden="true">
-          <img src="/hype-pack/d-ad-banner.png" alt="" class="d-ad-banner-img" aria-hidden="true" />
-        </div>
-        <div class="d-ad-banner-script">
-          <p class="d-ad-banner-category">Analog Pack</p>
-          <h3 class="d-ad-banner-product">Sanyo Xacti CG10</h3>
-          <p class="d-ad-banner-price">1 day / 10,000 원</p>
-        </div>
+        {#if bannerHref}
+          <a href={bannerHref} class="d-ad-banner-link" aria-label="{bannerItem?.name} 상품 상세로 이동">
+            <div class="d-ad-banner-bg" aria-hidden="true">
+              <img
+                src={bannerItem?.pc_image_url ?? '/hype-pack/d-ad-banner.png'}
+                alt=""
+                class="d-ad-banner-img"
+                aria-hidden="true"
+              />
+            </div>
+            <div class="d-ad-banner-script">
+              <p class="d-ad-banner-category">{bannerItem?.subtitle ?? 'Analog Pack'}</p>
+              <h3 class="d-ad-banner-product">{bannerItem?.name ?? 'Sanyo Xacti CG10'}</h3>
+              <p class="d-ad-banner-price">
+                {bannerItem?.price24h ? `1 day / ${formatWon(bannerItem.price24h)}` : '1 day / 10,000 원'}
+              </p>
+              {#if bannerItem?.price12h}
+                <p class="d-ad-banner-price">12H / {formatWon(bannerItem.price12h)}</p>
+              {/if}
+            </div>
+          </a>
+        {:else}
+          <div class="d-ad-banner-bg" aria-hidden="true">
+            <img
+              src="/hype-pack/d-ad-banner.png"
+              alt=""
+              class="d-ad-banner-img"
+              aria-hidden="true"
+            />
+          </div>
+          <div class="d-ad-banner-script">
+            <p class="d-ad-banner-category">Analog Pack</p>
+            <h3 class="d-ad-banner-product">Sanyo Xacti CG10</h3>
+            <p class="d-ad-banner-price">1 day / 10,000 원</p>
+          </div>
+        {/if}
+        {#if data.isCms}
+          <button
+            class="admin-edit-btn admin-banner-btn"
+            onclick={() => { activeModal = 'banner' }}
+            aria-label="배너 상품 설정"
+          >⚙ 배너 설정</button>
+        {/if}
       </div>
     </div>
   </section>
@@ -323,66 +228,18 @@
     </div>
   </section>
 
-  <!-- K-Trail Log With a Pro 섹션 -->
-  <section class="d-section">
-    <div class="d-section-inner">
-      <div class="d-ktlog-titlebar">
-        <div class="d-ktlog-titlebar-inner">
-          <h2 class="d-ktlog-title">K-Trail Log With a Pro</h2>
-          <div class="d-ktlog-chips">
-            {#each KEYWORDS as kw}
-              <span class="d-chip">{kw}</span>
-            {/each}
-          </div>
-        </div>
-      </div>
-
-      <!-- 경험 카드 그리드 -->
-      <div class="d-ktlog-grid">
-        {#each KTLOG_CARDS as card}
-          <article
-            class="d-ktlog-card"
-            class:d-ktlog-card-full={card.span === 'full'}
-            class:d-ktlog-card-wide={card.span === 'wide'}
-            style="height: {card.height}px;"
-            aria-label={card.title}
-          >
-            <img src={card.img} alt="" class="d-ktlog-card-bg" aria-hidden="true" />
-            <div class="d-ktlog-card-overlay" aria-hidden="true"></div>
-            <div class="d-ktlog-card-content">
-              <div class="d-ktlog-card-badges">
-                {#each card.icons as icon}
-                  <span
-                    class="d-ktlog-badge {icon === 'mem' ? 'd-ktlog-badge-red' : 'd-ktlog-badge-purple'}"
-                    aria-label={icon === 'mem' ? '멤버십 혜택' : '딜'}
-                    aria-hidden="true"
-                  >
-                    {#if icon === 'mem'}
-                      <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 28 28" fill="none" aria-hidden="true">
-                        <path d="M14 2l2.7 5.46L23 8.6l-4.5 4.38 1.06 6.19L14 16.2l-5.56 2.97 1.06-6.19L5 8.6l6.3-.91L14 2z" fill="white"/>
-                      </svg>
-                    {:else}
-                      <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 28 28" fill="none" aria-hidden="true">
-                        <path d="M4 14h20M14 4v20" stroke="white" stroke-width="2.5" stroke-linecap="round"/>
-                        <circle cx="14" cy="14" r="8" stroke="white" stroke-width="2"/>
-                      </svg>
-                    {/if}
-                  </span>
-                {/each}
-              </div>
-              <p class="d-ktlog-card-category">{card.category}</p>
-              <h3 class="d-ktlog-card-title">{card.title}</h3>
-              <p class="d-ktlog-card-price">{card.price}</p>
-            </div>
-          </article>
-        {/each}
-      </div>
-    </div>
-  </section>
 
 </div><!-- /d-body -->
 
 <BottomTabBar />
+
+{#if data.isCms && activeModal === 'banner'}
+  <HypePackBannerModal
+    initialSettings={data.bannerRaw}
+    packageCategoryKey={data.packageCategoryKey}
+    onclose={() => { activeModal = null }}
+  />
+{/if}
 
 <style>
 
@@ -442,158 +299,52 @@
     letter-spacing: -0.5px;
   }
 
-  /* ── 캐러셀 영역 (m-herd) ── */
-  .m-herd {
-    padding: 50px 0 0;
+  /* ── 광고 배너 (m-ad-banner) ── */
+  .m-ad-banner {
     position: relative;
-  }
-  .m-carousel {
-    display: flex;
-    gap: 30px;
-    overflow-x: scroll;
-    scroll-snap-type: x mandatory;
-    -webkit-overflow-scrolling: touch;
-    scrollbar-width: none;
-    padding: 0 25px;
-  }
-  .m-carousel::-webkit-scrollbar { display: none; }
-
-  /* 캐러셀 카드 */
-  .m-pack-card {
-    position: relative;
-    width: 340px;
-    min-width: 340px;
-    height: 600px;
-    border-radius: var(--radius-2xl); /* 50px */
+    width: calc(100% - 50px);
+    height: 460px;
+    margin: 24px auto 0;
+    border-radius: var(--radius-2xl);
     overflow: hidden;
-    flex-shrink: 0;
-    scroll-snap-align: start;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    justify-content: space-between;
+    background: linear-gradient(99.5deg, rgb(213,199,148) 1.5%, rgb(255,254,240) 98%);
   }
-  .m-pack-card-bg {
+  .m-ad-banner-link { display: block; width: 100%; height: 100%; }
+  .m-ad-banner-img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; display: block; pointer-events: none; }
+  .m-ad-banner-overlay {
     position: absolute;
     inset: 0;
-    width: 100%;
-    height: 100%;
-    object-fit: cover;
+    background: linear-gradient(180deg, rgba(16,11,50,0) 40%, rgba(16,11,50,0.55) 100%);
     pointer-events: none;
   }
-  .m-pack-card-overlay {
+  .m-ad-banner-script {
     position: absolute;
-    inset: 0;
-    background: linear-gradient(to top, #100B32 0%, rgba(16,11,50,0.6) 40%, rgba(16,11,50,0) 100%);
-  }
-  /* 카드 내부 상단 도트 */
-  .m-pack-card-dots {
-    position: relative;
-    z-index: 1;
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    padding: 20px 0;
-    flex-shrink: 0;
-  }
-  .m-pack-dot {
-    width: 10px;
-    height: 10px;
-    border-radius: 999px;
-    background: rgba(255,255,255,0.3);
-    transition: width 0.25s ease, background 0.25s ease;
-    flex-shrink: 0;
-  }
-  .m-pack-dot-active {
-    width: 30px;
-    background: rgba(255,255,255,0.7);
-  }
-  /* 카드 하단 콘텐츠 */
-  .m-pack-card-content {
-    position: relative;
-    z-index: 1;
-    width: 100%;
-    padding: 40px 30px;
+    left: 20px;
+    bottom: 18px;
     display: flex;
     flex-direction: column;
-    gap: 8px;
-    flex-shrink: 0;
+    gap: 4px;
   }
-
-  /* 외부 도트 컨트롤 (접근성) */
-  .m-dots {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    gap: 8px;
-    padding: 16px 0 0;
-  }
-  .m-dot {
-    height: 10px;
-    width: 10px;
-    border-radius: 999px;
-    background: rgba(16, 11, 50, 0.15);
-    border: none;
-    cursor: pointer;
-    padding: 0;
-    transition: width 0.25s ease, background 0.25s ease;
-    min-width: 10px;
-    min-height: 44px;
-    display: flex;
-    align-self: center;
-  }
-  .m-dot-active {
-    width: 30px;
-    min-width: 30px;
-    background: var(--cs-dark);
-  }
-
-  /* 70px 아이콘 (mem=빨강, deal=보라) */
-  .m-pack-icon {
-    width: 70px;
-    height: 70px;
-    border-radius: 50%;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    flex-shrink: 0;
-    margin-bottom: 2px;
-  }
-  .m-pack-icon-mem  { background: var(--cs-red-badge); }
-  .m-pack-icon-deal { background: var(--cs-purple-light); }
-
-  .m-category-badge {
-    display: inline-flex;
-    align-items: center;
-    background: var(--cs-purple-light); /* #553FE0 */
-    border-radius: 15px;
-    padding: 5px 20px;
-    font-family: 'Noto Sans KR', sans-serif;
+  .m-ad-banner-category {
+    font-family: 'Tilt Warp', sans-serif;
     font-size: 14px;
-    font-weight: 500;
-    color: var(--cs-white);
-    width: fit-content;
-    letter-spacing: -0.5px;
-    line-height: 1.6;
-  }
-  .m-pack-card-title {
-    font-family: 'Noto Sans KR', sans-serif;
-    font-size: 24px;
-    font-weight: 900;
-    color: var(--cs-white);
-    margin: 2px 0 0;
-    letter-spacing: -0.5px;
-    line-height: 1.6;
-    white-space: pre-line;
-  }
-  .m-pack-card-price {
-    font-family: 'Noto Sans KR', sans-serif;
-    font-size: 18px;
-    font-weight: 700;
-    color: var(--cs-red-badge);
+    color: rgba(255,255,255,0.85);
     margin: 0;
     letter-spacing: -0.3px;
-    line-height: 1.6;
+  }
+  .m-ad-banner-product {
+    font-family: 'Tilt Warp', sans-serif;
+    font-size: 24px;
+    color: var(--cs-white);
+    margin: 0;
+    line-height: 1.3;
+  }
+  .m-ad-banner-price {
+    font-family: 'Tilt Warp', sans-serif;
+    font-size: 18px;
+    color: var(--cs-white);
+    margin: 0;
+    white-space: nowrap;
   }
 
   /* ── 섹션 공통: 그라데이션 바 + 서브타이틀 ── */
@@ -613,101 +364,6 @@
     text-align: center;
     letter-spacing: -0.5px;
     line-height: 2;
-  }
-
-  /* ── 최근 광적 관심폭발! (m-hot-section) ── */
-  .m-hot-section {
-    background: var(--cs-white);
-    border-radius: 0 50px 0 0;
-    padding: 70px 25px 100px;
-    overflow: hidden;
-    margin-top: 20px;
-  }
-  .m-hot-title-wrap {
-    text-align: center;
-    margin-bottom: 50px;
-  }
-  .m-hot-title {
-    font-family: 'Noto Sans KR', sans-serif;
-    font-size: 24px;
-    font-weight: 500; /* Medium — Figma: font-medium */
-    color: var(--cs-text);
-    margin: 0;
-    letter-spacing: -0.5px;
-    line-height: 1.6;
-    display: inline-block;
-  }
-  .m-hot-title-accent {
-    color: var(--cs-red); /* #CF0000 */
-  }
-  .m-hot-list {
-    display: flex;
-    flex-direction: column;
-    gap: 50px;
-  }
-  .m-hot-card {
-    position: relative;
-    width: 100%;
-    max-width: 340px;
-    height: 400px;
-    border-radius: var(--radius-2xl); /* 50px */
-    overflow: hidden;
-    display: flex;
-    flex-direction: column;
-    justify-content: flex-end;
-  }
-  .m-hot-card-bg {
-    position: absolute;
-    inset: 0;
-    width: 100%;
-    height: 100%;
-    object-fit: cover;
-    pointer-events: none;
-  }
-  .m-hot-card-overlay {
-    position: absolute;
-    inset: 0;
-    background: linear-gradient(to top, #100B32 0%, rgba(16,11,50,0.6) 40%, rgba(16,11,50,0) 100%);
-  }
-  .m-hot-card-content {
-    position: relative;
-    z-index: 1;
-    padding: 30px;
-    display: flex;
-    flex-direction: column;
-    gap: 10px;
-  }
-  .m-hot-badge {
-    display: inline-flex;
-    align-items: center;
-    background: var(--cs-purple-light); /* #553FE0 */
-    border-radius: 15px;
-    padding: 5px 20px;
-    font-family: 'Noto Sans KR', sans-serif;
-    font-size: 14px;
-    font-weight: 500;
-    color: var(--cs-white);
-    width: fit-content;
-    letter-spacing: -0.5px;
-    line-height: 1.6;
-  }
-  .m-hot-card-title {
-    font-family: 'Noto Sans KR', sans-serif;
-    font-size: 24px;
-    font-weight: 900;
-    color: var(--cs-white);
-    margin: 0;
-    letter-spacing: -0.5px;
-    line-height: 1.6;
-  }
-  .m-hot-card-price {
-    font-family: 'Noto Sans KR', sans-serif;
-    font-size: 18px;
-    font-weight: 700;
-    color: var(--cs-red-badge); /* #FF3535 */
-    margin: 0;
-    letter-spacing: -0.3px;
-    line-height: 1.6;
   }
 
   /* ── Pack 테마목록 (모바일 전용) ── */
@@ -787,83 +443,6 @@
     color: var(--cs-red); /* #CF0000 — Figma: #cf0000 */
   }
 
-  /* ── Shotlog 헤드 카드 ── */
-  .m-shotlog-heads {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 50px;
-    margin-bottom: 50px;
-  }
-  .m-shotlog-head-card {
-    position: relative;
-    width: 340px;
-    height: 400px;
-    border-radius: var(--radius-xl); /* 30px */
-    overflow: hidden;
-    box-shadow: 4px 4px 0px 0px rgba(39,27,122,0.5);
-    display: flex;
-    flex-direction: column;
-  }
-  .m-shotlog-head-header {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    padding: 20px 30px;
-    flex-shrink: 0;
-    position: relative;
-    z-index: 1;
-  }
-  .m-shotlog-head-label {
-    font-family: 'Tilt Warp', sans-serif;
-    font-size: 24px;
-    color: var(--cs-white);
-    letter-spacing: -0.5px;
-    line-height: 1;
-  }
-  /* 이미지 바디: 이미지가 아래, writing이 상단 오버레이 */
-  .m-shotlog-head-body {
-    position: relative;
-    flex: 1;
-    min-height: 0;
-    overflow: hidden;
-  }
-  .m-shotlog-head-img {
-    position: absolute;
-    inset: 0;
-    width: 100%;
-    height: 100%;
-    object-fit: cover;
-    pointer-events: none;
-  }
-  /* writing: 상단 다크 그라데이션 (Figma: gradient to bottom = top→dark) */
-  .m-shotlog-head-writing {
-    position: relative;
-    z-index: 1;
-    padding: 20px 30px;
-    background: linear-gradient(to bottom, rgba(16,11,50,0.6) 0%, rgba(16,11,50,0) 100%);
-    display: flex;
-    flex-direction: column;
-    gap: 5px;
-  }
-  .m-shotlog-head-card-title {
-    font-family: 'Noto Sans KR', sans-serif;
-    font-size: 24px;
-    font-weight: 900;
-    color: var(--cs-white);
-    margin: 0;
-    letter-spacing: -0.5px;
-    line-height: 1.6;
-  }
-  .m-shotlog-head-subtitle {
-    font-family: 'Noto Sans KR', sans-serif;
-    font-size: 18px;
-    font-weight: 700;
-    color: var(--cs-white);
-    margin: 0;
-    letter-spacing: -0.3px;
-    line-height: 1.6;
-  }
-
   /* ── Shotlog 포스트 카드 ── */
   .m-shotlog-posts {
     display: flex;
@@ -914,15 +493,16 @@
 
   .d-body { display: none; }
   @media (min-width: 768px) {
-    .d-body { display: block; }
+    .d-body {
+      display: flex;
+      flex-direction: column;
+      gap: 80px;
+    }
   }
 
   .d-body {
     padding-top: 170px;
     padding-bottom: 100px;
-    display: flex;
-    flex-direction: column;
-    gap: 80px;
   }
 
   .d-section { width: 100%; }
@@ -959,6 +539,7 @@
     overflow: hidden;
     background: linear-gradient(99.5deg, rgb(213,199,148) 1.5%, rgb(255,254,240) 98%);
   }
+  .d-ad-banner-link { display: block; width: 100%; height: 100%; }
   .d-ad-banner-bg { position: absolute; inset: 0; }
   .d-ad-banner-img { width: 100%; height: 100%; object-fit: cover; display: block; pointer-events: none; }
   .d-ad-banner-script {
@@ -1040,124 +621,39 @@
     line-height: 1.3;
   }
 
-  .d-ktlog-titlebar { width: 100%; }
-  .d-ktlog-titlebar-inner {
-    max-width: 1240px;
-    margin: 0 auto;
-    border-radius: var(--radius-xl);
-    padding: 20px 40px;
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    flex-wrap: wrap;
-    gap: 16px;
-  }
-  .d-ktlog-title {
-    font-family: 'Tilt Warp', sans-serif;
-    font-size: 20px;
-    color: var(--cs-text);
-    margin: 0;
-    line-height: 1.6;
-    white-space: nowrap;
-  }
-  .d-ktlog-chips { display: flex; flex-wrap: wrap; gap: 8px; }
-  .d-chip {
-    display: inline-flex;
-    align-items: center;
-    background: var(--cs-purple-op10);
-    border-radius: 18px;
-    padding: 10px 25px;
-    font-family: 'Noto Sans KR', sans-serif;
-    font-size: 16px;
-    font-weight: 700;
-    color: var(--cs-text);
-    white-space: nowrap;
-    letter-spacing: -0.5px;
-  }
-
-  .d-ktlog-grid {
-    display: grid;
-    grid-template-columns: repeat(3, 1fr);
-    column-gap: 20px;
-    row-gap: 50px;
-  }
-  .d-ktlog-card {
-    position: relative;
-    border-radius: var(--radius-2xl);
-    overflow: hidden;
-    cursor: pointer;
-  }
-  .d-ktlog-card-full { grid-column: 1 / -1; }
-  .d-ktlog-card-wide { grid-column: span 2; }
-  .d-ktlog-card-bg {
-    position: absolute;
-    inset: 0;
-    width: 100%;
-    height: 100%;
-    object-fit: cover;
-    pointer-events: none;
-    transition: transform 0.3s ease;
-  }
-  .d-ktlog-card:hover .d-ktlog-card-bg { transform: scale(1.02); }
-  .d-ktlog-card-overlay {
-    position: absolute;
-    inset: 0;
-    background: linear-gradient(to top, rgba(16,11,50,0.85) 0%, rgba(16,11,50,0.4) 35%, rgba(16,11,50,0) 65%);
-  }
-  .d-ktlog-card-content {
-    position: absolute;
-    bottom: 0; left: 0; right: 0;
-    padding: 30px 40px;
-    display: flex;
-    flex-direction: column;
-    gap: 8px;
-  }
-  .d-ktlog-card-badges { display: flex; gap: 8px; margin-bottom: 4px; }
-  .d-ktlog-badge {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    width: 40px;
-    height: 40px;
-    border-radius: 50%;
-    flex-shrink: 0;
-  }
-  .d-ktlog-badge-red    { background: var(--cs-red-badge); }
-  .d-ktlog-badge-purple { background: var(--cs-purple); }
-  .d-ktlog-card-category {
-    font-family: 'Noto Sans KR', sans-serif;
-    font-size: 16px;
-    font-weight: 700;
-    color: rgba(255,255,255,0.8);
-    margin: 0;
-    letter-spacing: -0.5px;
-    line-height: 1.6;
-  }
-  .d-ktlog-card-title {
-    font-family: 'Tilt Warp', sans-serif;
-    font-size: 35px;
-    color: var(--cs-white);
-    margin: 0;
-    line-height: 1.3;
-    white-space: pre-line;
-  }
-  .d-ktlog-card-price {
-    font-family: 'Tilt Warp', sans-serif;
-    font-size: 35px;
-    color: var(--cs-red-badge);
-    margin: 0;
-    line-height: 1.3;
+  /* 1025~1239px: 3열 카드 폭이 레이블(325px)보다 좁아지는 구간 → 2열로 전환 */
+  @media (min-width: 1025px) and (max-width: 1239px) {
+    .d-pack-grid { grid-template-columns: repeat(2, 1fr); gap: 30px; }
+    .d-pack-card-label { left: 30px; }
   }
 
   /* 태블릿 반응형 */
   @media (min-width: 768px) and (max-width: 1024px) {
     .d-pack-grid { grid-template-columns: repeat(2, 1fr); gap: 30px; }
     .d-pack-card-label { left: 30px; }
-    .d-ktlog-grid { grid-template-columns: repeat(2, 1fr); column-gap: 20px; row-gap: 30px; }
-    .d-ktlog-card-full { grid-column: 1 / -1; }
-    .d-ktlog-card-wide { grid-column: span 2; }
-    .d-ktlog-card-title { font-size: 26px; }
-    .d-ktlog-card-price { font-size: 24px; }
     .d-ad-banner-product, .d-ad-banner-price { font-size: 28px; }
   }
+
+  /* 관리자 배너 편집 버튼 */
+  .admin-edit-btn {
+    position: absolute;
+    z-index: 10;
+    background: rgba(16, 11, 50, 0.75);
+    color: #fff;
+    border: 1px solid rgba(255,255,255,0.3);
+    border-radius: var(--radius-md, 15px);
+    font-size: 13px;
+    font-weight: 700;
+    cursor: pointer;
+    line-height: 1;
+    backdrop-filter: blur(4px);
+    transition: background 0.15s;
+  }
+  .admin-edit-btn:hover { background: rgba(59, 47, 138, 0.9); }
+  .admin-banner-btn {
+    top: 16px;
+    right: 16px;
+    padding: 8px 14px;
+  }
+
 </style>

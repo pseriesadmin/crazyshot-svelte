@@ -1,6 +1,7 @@
 <script lang="ts">
   import BottomTabBar from '$lib/components/common/BottomTabBar.svelte'
   import CrazylogBannerModal from '$lib/components/crazylog/admin/CrazylogBannerModal.svelte'
+  import CrazylogKeywordModal from '$lib/components/crazylog/admin/CrazylogKeywordModal.svelte'
   import type { PageData } from './$types'
   interface Props { data: PageData }
   let { data }: Props = $props()
@@ -37,7 +38,7 @@
     '채널홍보': '채널홍보',
   }
 
-  const M_KEYWORDS = ['양양의 기억 로그', 'Mini2se 리뷰 로그', '신상로그', 'Air 3S Drone', 'Air 3S Drone', 'Air 3S Drone']
+  const M_KEYWORDS = $derived(data.headKeywords)
 
   interface CardItem {
     id: string | null
@@ -79,6 +80,17 @@
     }
   }))
 
+  // K-Trail Log With a Pro 섹션 데이터
+  const KTLOG_KEYWORDS = ['CANON 100mm', 'FeiyuTech SCORP Mini 2', 'FDR-AX43', 'Air 3S Drone']
+  const KTLOG_CARDS = [
+    { span: 'full',   height: 620, category: 'With a Pro',   icons: ['mem', 'deal'], title: 'Explore the Hot\nStreets of Hongdae', price: '$ 350 / 1w', img: '/hype-pack/d-ktlog-main.png' },
+    { span: 'normal', height: 620, category: 'With a Pro',   icons: ['mem', 'deal'], title: 'Taste Jongro',                        price: '$ 100 / 1h', img: '/hype-pack/d-ktlog-jongro.png' },
+    { span: 'normal', height: 620, category: 'Creator Pack', icons: ['deal'],        title: 'Walk in Bukchon',                     price: '$ 100 / 1h', img: '/hype-pack/d-ktlog-bukchon.png' },
+    { span: 'normal', height: 620, category: 'With a Pro',   icons: ['mem', 'deal'], title: 'Yangyang Beach Sunset',               price: '$ 100 / 1h', img: '/hype-pack/d-ktlog-yangyang.png' },
+    { span: 'normal', height: 620, category: 'Creator Pack', icons: ['mem'],         title: 'Gyeongbokgung\nHanbok Experience',    price: '$ 150 / 1h', img: '/hype-pack/d-ktlog-gyeongbok.png' },
+    { span: 'wide',   height: 620, category: 'With a Pro',   icons: ['mem', 'deal'], title: 'K-Pop Fan Meet\n& Concert Journey',   price: '$ 100 / 1h', img: '/hype-pack/d-ktlog-kpop-bg.png' },
+  ]
+
 </script>
 
 <!-- ═══════════════════════════════════════
@@ -98,6 +110,13 @@
         <!-- col-1 row-1: Title1 — 텍스트 타이틀 박스 (lilac bg) -->
         <!-- Figma: col-1 row-1, justify-self-stretch, self-start -->
         <div class="d-title1">
+          {#if data.isCms}
+            <button
+              class="admin-edit-btn admin-banner-btn admin-kw-btn-d"
+              onclick={() => { activeModal = 'head_keywords' }}
+              aria-label="헤드 키워드 설정"
+            >✦ 키워드 설정</button>
+          {/if}
           <div class="d-title1-inner">
             <!-- Figma: CrazylogHeader — flex-col gap-[5px] items-center -->
             <div class="d-header">
@@ -243,6 +262,61 @@
     </div>
   </section>
 
+  <!-- K-Trail Log With a Pro 섹션 — 콘텐츠 목록 아래 배치 -->
+  <section class="d-ktlog-section">
+    <div class="d-ktlog-wrap">
+      <div class="d-ktlog-titlebar">
+        <div class="d-ktlog-titlebar-inner">
+          <h2 class="d-ktlog-title">K-Trail Log With a Pro</h2>
+          <div class="d-ktlog-chips">
+            {#each KTLOG_KEYWORDS as kw}
+              <span class="d-chip">{kw}</span>
+            {/each}
+          </div>
+        </div>
+      </div>
+      <div class="d-ktlog-grid">
+        {#each KTLOG_CARDS as card}
+          <article
+            class="d-ktlog-card"
+            class:d-ktlog-card-full={card.span === 'full'}
+            class:d-ktlog-card-wide={card.span === 'wide'}
+            style="height: {card.height}px;"
+            aria-label={card.title}
+          >
+            <img src={card.img} alt="" class="d-ktlog-card-bg" aria-hidden="true" />
+            <div class="d-ktlog-card-overlay" aria-hidden="true"></div>
+            <div class="d-ktlog-card-content">
+              <div class="d-ktlog-card-badges">
+                {#each card.icons as icon}
+                  <span
+                    class="d-ktlog-badge {icon === 'mem' ? 'd-ktlog-badge-red' : 'd-ktlog-badge-purple'}"
+                    aria-label={icon === 'mem' ? '멤버십 혜택' : '딜'}
+                    aria-hidden="true"
+                  >
+                    {#if icon === 'mem'}
+                      <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 28 28" fill="none" aria-hidden="true">
+                        <path d="M14 2l2.7 5.46L23 8.6l-4.5 4.38 1.06 6.19L14 16.2l-5.56 2.97 1.06-6.19L5 8.6l6.3-.91L14 2z" fill="white"/>
+                      </svg>
+                    {:else}
+                      <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 28 28" fill="none" aria-hidden="true">
+                        <path d="M4 14h20M14 4v20" stroke="white" stroke-width="2.5" stroke-linecap="round"/>
+                        <circle cx="14" cy="14" r="8" stroke="white" stroke-width="2"/>
+                      </svg>
+                    {/if}
+                  </span>
+                {/each}
+              </div>
+              <p class="d-ktlog-card-category">{card.category}</p>
+              <h3 class="d-ktlog-card-title">{card.title}</h3>
+              <p class="d-ktlog-card-price">{card.price}</p>
+            </div>
+          </article>
+        {/each}
+      </div>
+    </div>
+  </section>
+
 </div>
 
 <!-- ═══════════════════════════════════════
@@ -266,15 +340,24 @@
       <!-- Figma: body text — 18px Medium #666 -->
       <p class="m-head-desc">한정특가 이벤트부터 제품 출시정보까지,<br/>언제나 최신 흐름을 따라가세요.</p>
       <!-- Figma: Frame3 — keyword chips + help circle -->
-      <div class="m-chips">
-        {#each M_KEYWORDS as kw}
-          <span class="m-chip">{kw}</span>
-        {/each}
-        <svg class="m-chip-help" width="30" height="30" viewBox="0 0 30 30" fill="none" aria-label="도움말">
-          <circle cx="15" cy="15" r="15" fill="#FF3535"/>
-          <path d="M11 12.5C11 10.567 12.567 9 14.5 9S18 10.567 18 12.5c0 1.5-1 2.5-2 3v1" stroke="white" stroke-width="1.8" stroke-linecap="round"/>
-          <circle cx="15" cy="19.5" r="1" fill="white"/>
-        </svg>
+      <div class="m-chips-wrap">
+        {#if data.isCms}
+          <button
+            class="admin-edit-btn admin-kw-btn"
+            onclick={() => { activeModal = 'head_keywords' }}
+            aria-label="헤드 키워드 설정"
+          >✦ 키워드 설정</button>
+        {/if}
+        <div class="m-chips">
+          {#each M_KEYWORDS as kw}
+            <a class="m-chip" href={kw.href}>{kw.title}</a>
+          {/each}
+          <svg class="m-chip-help" width="30" height="30" viewBox="0 0 30 30" fill="none" aria-label="도움말">
+            <circle cx="15" cy="15" r="15" fill="#FF3535"/>
+            <path d="M11 12.5C11 10.567 12.567 9 14.5 9S18 10.567 18 12.5c0 1.5-1 2.5-2 3v1" stroke="white" stroke-width="1.8" stroke-linecap="round"/>
+            <circle cx="15" cy="19.5" r="1" fill="white"/>
+          </svg>
+        </div>
       </div>
     </div>
   </section>
@@ -331,17 +414,20 @@
   <!-- Component (콘텐츠): gradient bg + article cards -->
   <section class="m-content">
     <div class="m-content-inner">
+      <p class="m-content-section-title">K-Trend Log</p>
       {#each data.posts as post}
-        <a href="/crazylog/view/{post.id}" class="m-article">
+        <a href="/crazylog/view/{post.id}" class="m-article-card" aria-label={post.title}>
           {#if post.img}
-            <div class="m-article-img-wrap">
-              <img src={post.img} alt={post.title} class="m-article-img" />
-            </div>
+            <img src={post.img} alt="" class="m-article-card-bg" aria-hidden="true" />
+          {:else}
+            <div class="m-article-card-bg m-article-card-bg-empty" aria-hidden="true"></div>
           {/if}
-          <div class="m-article-body">
-            <p class="m-article-title">{post.title}</p>
+          <div class="m-article-card-overlay" aria-hidden="true"></div>
+          <div class="m-article-card-content">
+            <span class="m-article-card-date">{relativeTime(post.createdAt)}</span>
+            <p class="m-article-card-title">{post.title}</p>
             {#if post.desc}
-              <p class="m-article-meta">{post.desc}</p>
+              <p class="m-article-card-desc">{post.desc}</p>
             {/if}
           </div>
         </a>
@@ -349,20 +435,29 @@
     </div>
   </section>
 
+
 </div>
 
 <BottomTabBar />
 
 {#if data.isCms && activeModal}
-  {#each data.bannerSlots as slot}
-    {#if activeModal === slot.slotKey}
-      <CrazylogBannerModal
-        slotKey={slot.slotKey}
-        initialSettings={slot.settings}
-        onclose={() => { activeModal = null }}
-      />
-    {/if}
-  {/each}
+  {#if activeModal === 'head_keywords'}
+    <CrazylogKeywordModal
+      initialKeywords={data.headKeywordsRaw.items ?? []}
+      keywordOptions={data.headKeywordOptions}
+      onclose={() => { activeModal = null }}
+    />
+  {:else}
+    {#each data.bannerSlots as slot}
+      {#if activeModal === slot.slotKey}
+        <CrazylogBannerModal
+          slotKey={slot.slotKey}
+          initialSettings={slot.settings}
+          onclose={() => { activeModal = null }}
+        />
+      {/if}
+    {/each}
+  {/if}
 {/if}
 
 <style>
@@ -454,6 +549,14 @@
     justify-content: flex-end;
     overflow: hidden;
     height: 300px;
+    position: relative;
+  }
+  .admin-kw-btn-d {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    z-index: 20;
   }
   /* Figma: content-stretch flex-col gap-[20px] items-start px-[40px] */
   .d-title1-inner {
@@ -889,6 +992,20 @@
     margin: 0;
     line-height: 1.6;
   }
+  .m-chips-wrap {
+    position: relative;
+  }
+  .admin-kw-btn {
+    position: absolute;
+    top: -34px;
+    right: 0;
+    z-index: 20;
+    font-size: 12px;
+    padding: 5px 10px;
+    min-height: unset;
+    height: 28px;
+    white-space: nowrap;
+  }
   /* Figma: Frame3 — flex-wrap gap-[10px] */
   .m-chips {
     display: flex;
@@ -906,6 +1023,7 @@
     font-weight: 500;
     color: #444444;
     white-space: nowrap;
+    text-decoration: none;
   }
   .m-chip-help { width: 30px; height: 30px; flex-shrink: 0; }
 
@@ -1027,12 +1145,9 @@
   }
   /* Figma: 24px Black(900) Noto white leading-[1.6] */
   .m-card-title {
-    font-family: 'Noto Sans KR', sans-serif;
-    font-size: 24px;
-    font-weight: 900;
+    font: var(--text-m-ad-kr-30);
     color: white;
     margin: 0;
-    line-height: 1.6;
     letter-spacing: -0.5px;
   }
   /* Figma: 18px Bold Noto white */
@@ -1067,6 +1182,12 @@
   }
 
   /* ── Component (콘텐츠): gradient bg + article cards ── */
+  .m-content-section-title {
+    font: var(--text-m-ad-kr-20);
+    color: var(--cs-text);
+    margin: 0 0 16px 0;
+    letter-spacing: -0.3px;
+  }
   /* Figma: from-rgba(225,222,243,0.95) via-rgba(225,222,243,0.8) to-rgba(225,222,243,0)
      rounded-bl-[50px] rounded-tr-[50px] pt-[70px] pb-[100px] px-[25px] */
   .m-content-inner {
@@ -1081,23 +1202,17 @@
     flex-direction: column;
     gap: 50px;
   }
-  /* Figma: bg-white rounded-[30px] w-340px overflow-hidden */
-  .m-article {
-    background: white;
+  /* 콘텐츠 목록 카드 — BG 이미지 + 오버레이 + 흰 텍스트 */
+  .m-article-card {
+    position: relative;
+    display: block;
+    width: 100%;
+    height: 264px;
     border-radius: 30px;
     overflow: hidden;
-    display: flex;
-    flex-direction: column;
-    width: 100%;
+    text-decoration: none;
   }
-  /* Figma: h-[150px] min-w-[340px] */
-  .m-article-img-wrap {
-    height: 150px;
-    width: 100%;
-    position: relative;
-    overflow: hidden;
-  }
-  .m-article-img {
+  .m-article-card-bg {
     position: absolute;
     inset: 0;
     width: 100%;
@@ -1105,30 +1220,161 @@
     object-fit: cover;
     pointer-events: none;
   }
-  /* Figma: writing section px-[30px] py-[20px] gap-[10px] */
-  .m-article-body {
-    padding: 20px 30px;
+  .m-article-card-bg-empty {
+    background: var(--cs-dark);
+  }
+  .m-article-card-overlay {
+    position: absolute;
+    inset: 0;
+    background: linear-gradient(
+      to top,
+      rgba(16, 11, 50, 0.82) 0%,
+      rgba(16, 11, 50, 0.30) 60%,
+      rgba(16, 11, 50, 0.05) 100%
+    );
+  }
+  .m-article-card-content {
+    position: absolute;
+    inset: 0;
     display: flex;
     flex-direction: column;
-    gap: 10px;
+    justify-content: flex-end;
+    padding: 18px 22px 28px;
+    gap: 4px;
   }
-  /* Figma: 18px Bold Noto #444 leading-[1.6] */
-  .m-article-title {
-    font-family: 'Noto Sans KR', sans-serif;
-    font-size: 18px;
-    font-weight: 700;
-    color: #444444;
+  .m-article-card-date {
+    font: var(--text-m-script-12);
+    color: rgba(255, 255, 255, 0.65);
+    letter-spacing: 0.2px;
+  }
+  .m-article-card-title {
+    font: var(--text-m-ad-kr-20);
+    color: #ffffff;
     margin: 0;
-    line-height: 1.6;
+    line-height: 1.4;
     letter-spacing: -0.3px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
-  /* Figma: 12px Medium Noto #666 */
-  .m-article-meta {
-    font-family: 'Noto Sans KR', sans-serif;
-    font-size: 12px;
-    font-weight: 500;
-    color: #666666;
+  .m-article-card-desc {
+    font: var(--text-m-script-14B);
+    color: rgba(255, 255, 255, 0.70);
     margin: 0;
-    line-height: 1.6;
+    line-height: 1.5;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
+
+  /* ── K-Trail Log 섹션 (데스크탑) ────────────────────────────────── */
+  .d-ktlog-section { width: 100%; }
+  .d-ktlog-wrap {
+    max-width: 1240px;
+    margin: 0 auto;
+    padding: 0 20px;
+    display: flex;
+    flex-direction: column;
+    gap: 30px;
+  }
+  .d-ktlog-titlebar { width: 100%; }
+  .d-ktlog-titlebar-inner {
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+  }
+  .d-ktlog-title {
+    font-family: 'Tilt Warp', sans-serif;
+    font-size: 32px;
+    color: var(--cs-text);
+    margin: 0;
+    letter-spacing: -0.5px;
+    line-height: 1.2;
+  }
+  .d-ktlog-chips { display: flex; flex-wrap: wrap; gap: 8px; }
+  .d-chip {
+    background: var(--cs-purple);
+    color: #fff;
+    font-size: 13px;
+    font-weight: 700;
+    padding: 6px 14px;
+    border-radius: 99px;
+  }
+  .d-ktlog-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    column-gap: 20px;
+    row-gap: 50px;
+  }
+  .d-ktlog-card {
+    position: relative;
+    border-radius: var(--radius-2xl);
+    overflow: hidden;
+    cursor: pointer;
+  }
+  .d-ktlog-card-full { grid-column: 1 / -1; }
+  .d-ktlog-card-wide { grid-column: span 2; }
+  .d-ktlog-card-bg {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    transition: transform 0.4s ease;
+  }
+  .d-ktlog-card:hover .d-ktlog-card-bg { transform: scale(1.02); }
+  .d-ktlog-card-overlay {
+    position: absolute;
+    inset: 0;
+    background: linear-gradient(to top, rgba(16,11,50,0.75) 0%, transparent 60%);
+  }
+  .d-ktlog-card-content {
+    position: absolute;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    padding: 30px;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+  .d-ktlog-card-badges { display: flex; gap: 8px; margin-bottom: 4px; }
+  .d-ktlog-badge {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 30px;
+    height: 30px;
+    border-radius: 50%;
+  }
+  .d-ktlog-badge-red    { background: var(--cs-red-badge); }
+  .d-ktlog-badge-purple { background: var(--cs-purple); }
+  .d-ktlog-card-category {
+    font-family: 'Tilt Warp', sans-serif;
+    font-size: 16px;
+    color: rgba(255,255,255,0.7);
+    margin: 0;
+  }
+  .d-ktlog-card-title {
+    font-family: 'Tilt Warp', sans-serif;
+    font-size: 30px;
+    color: #fff;
+    margin: 0;
+    white-space: pre-line;
+    line-height: 1.2;
+  }
+  .d-ktlog-card-price {
+    font-family: 'Tilt Warp', sans-serif;
+    font-size: 26px;
+    color: rgba(255,255,255,0.85);
+    margin: 0;
+  }
+  @media (min-width: 768px) and (max-width: 1024px) {
+    .d-ktlog-grid { grid-template-columns: repeat(2, 1fr); column-gap: 20px; row-gap: 30px; }
+    .d-ktlog-card-full { grid-column: 1 / -1; }
+    .d-ktlog-card-wide { grid-column: span 2; }
+    .d-ktlog-card-title { font-size: 26px; }
+    .d-ktlog-card-price { font-size: 24px; }
+  }
+
 </style>
