@@ -3,6 +3,7 @@ import { error } from '@sveltejs/kit';
 import { env } from '$env/dynamic/private';
 import { getSupabaseUrl } from '$lib/env/supabasePublic';
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
+import { getCategoryGroups, joinDisplayCategories, type CatSettingsItem, type DisplayCategory } from '$lib/server/productCategorySettings';
 import {
 	CANON_EOS_R5_FIXTURE,
 	isLegacyNumericId,
@@ -284,6 +285,20 @@ export const load: PageServerLoad = async ({ params, locals }) => {
 		categoryLabel = (groupRow as { name?: string } | null)?.name ?? null;
 	}
 
+	// ProductHero 카테고리 메뉴 — /products "카테고리 설정"과 동일 정본 재사용(공유 헬퍼).
+	// 상품상세 화면 자체는 이 상품의 category와 무관하게 항상 전체 메뉴를 보여준다(전체목록
+	// 이동용 내비게이션이므로 /products의 카테고리 탭과 동일한 목록이어야 함).
+	let categories: DisplayCategory[] = [];
+	{
+		const { data: pageSettingsRaw } = await locals.supabase.rpc('get_product_page_settings');
+		const pageSettings = (pageSettingsRaw as unknown as Record<string, unknown>) ?? {};
+		const catSettings = (pageSettings['product_page_categories'] as { items: CatSettingsItem[] }) ?? { items: [] };
+		if (catSettings.items.length > 0) {
+			const groups = await getCategoryGroups();
+			categories = joinDisplayCategories(catSettings.items, groups);
+		}
+	}
+
 	return {
 		product: enriched,
 		productId: String(row.id),
@@ -297,5 +312,6 @@ export const load: PageServerLoad = async ({ params, locals }) => {
 		shotlogs,
 		popularProducts,
 		categoryLabel,
+		categories,
 	};
 };

@@ -1,16 +1,32 @@
 <script lang="ts">
-  import { performSignUp } from '$lib/stores/auth'
+  import { performSignUp, performSignIn } from '$lib/stores/auth'
   import { supabase, rpc } from '$lib/services/supabase'
+
+  type Mode = 'login' | 'signup'
 
   interface Props {
     open: boolean
     onclose: () => void
     onsuccess: () => void
+    initialMode?: Mode
   }
 
-  let { open, onclose, onsuccess }: Props = $props()
+  let { open, onclose, onsuccess, initialMode = 'signup' }: Props = $props()
 
-  // ── 폼 상태 ──
+  // ── 로그인/가입 전환 상태 ──
+  let mode = $state<Mode>(initialMode)
+  $effect(() => {
+    if (open) mode = initialMode
+  })
+
+  // ── 로그인 폼 상태 ──
+  let loginEmail = $state('')
+  let loginPassword = $state('')
+  let showLoginPassword = $state(false)
+  let isLoggingIn = $state(false)
+  let rememberLogin = $state(false)
+
+  // ── 폼 상태 (회원가입) ──
   let email = $state('')
   let password = $state('')
   let passwordConfirm = $state('')
@@ -31,6 +47,11 @@
 
   // ── 초기화 (모달 닫힐 때) ──
   function reset() {
+    mode = initialMode
+    loginEmail = ''
+    loginPassword = ''
+    showLoginPassword = false
+    isLoggingIn = false
     email = ''
     password = ''
     passwordConfirm = ''
@@ -41,6 +62,25 @@
     otpSent = false
     isLoading = false
     isSendingOtp = false
+  }
+
+  // ── 로그인 제출 ──
+  async function handleLogin() {
+    errorMsg = null
+    if (!loginEmail || !loginPassword) {
+      errorMsg = '이메일과 비밀번호를 입력해주세요.'
+      return
+    }
+    isLoggingIn = true
+    try {
+      await performSignIn(loginEmail, loginPassword)
+      reset()
+      onsuccess()
+    } catch (err) {
+      errorMsg = err instanceof Error ? err.message : '로그인에 실패했습니다.'
+    } finally {
+      isLoggingIn = false
+    }
   }
 
   function handleClose() {
@@ -194,7 +234,7 @@
   class="su-overlay"
   role="dialog"
   aria-modal="true"
-  aria-label="회원가입"
+  aria-label={mode === 'login' ? '로그인' : '회원가입'}
   tabindex="-1"
   onclick={handleOverlayClick}
   onkeydown={handleKeydown}
@@ -202,7 +242,7 @@
   <div class="su-modal">
     <!-- 헤더 -->
     <div class="su-header">
-      <span class="su-title">Sign Up</span>
+      <span class="su-title">{mode === 'login' ? 'Login' : 'Sign Up'}</span>
       <button class="su-close" onclick={handleClose} aria-label="닫기" type="button">
         <svg width="18" height="18" viewBox="0 0 18 18" fill="none">
           <path d="M1 1L17 17M17 1L1 17" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
@@ -213,6 +253,87 @@
     <!-- 바디 -->
     <div class="su-body">
 
+      {#if mode === 'login'}
+        <!-- ── 로그인 그룹 ── -->
+        <div class="su-group">
+          <p class="su-group-label">로그인</p>
+
+          <div class="su-field">
+            <label class="su-field-label" for="su-login-email">이메일 주소</label>
+            <input
+              id="su-login-email"
+              class="su-input"
+              type="email"
+              placeholder="example@email.com"
+              bind:value={loginEmail}
+              autocomplete="email"
+            />
+          </div>
+
+          <div class="su-field">
+            <label class="su-field-label" for="su-login-pw">비밀번호</label>
+            <div class="su-input-wrap">
+              <input
+                id="su-login-pw"
+                class="su-input"
+                type={showLoginPassword ? 'text' : 'password'}
+                placeholder="비밀번호"
+                bind:value={loginPassword}
+                autocomplete="current-password"
+              />
+              <button
+                class="su-eye"
+                type="button"
+                onclick={() => showLoginPassword = !showLoginPassword}
+                aria-label={showLoginPassword ? '비밀번호 숨기기' : '비밀번호 표시'}
+              >
+                {#if showLoginPassword}
+                  <svg width="20" height="20" viewBox="0 0 24 24" fill="none">
+                    <path d="M2.75 12C2.75 12 5.75 6 12 6C18.25 6 21.25 12 21.25 12C21.25 12 18.25 18 12 18C5.75 18 2.75 12 2.75 12Z" stroke="#AAAAAA" stroke-width="1.5"/>
+                    <circle cx="12" cy="12" r="3" stroke="#AAAAAA" stroke-width="1.5"/>
+                  </svg>
+                {:else}
+                  <svg width="20" height="20" viewBox="0 0 24 24" fill="none">
+                    <path d="M21.27 9.18C20.98 8.72 20.67 8.29 20.35 7.89C19.98 7.42 19.28 7.38 18.86 7.8L15.86 10.8C16.08 11.46 16.12 12.22 15.92 13.01C15.57 14.42 14.43 15.56 13.02 15.91C12.23 16.11 11.47 16.07 10.81 15.85L8.35 18.31C7.85 18.81 8.01 19.69 8.68 19.95C9.75 20.36 10.86 20.57 12 20.57C13.78 20.57 15.51 20.05 17.09 19.08C18.7 18.08 20.15 16.61 21.32 14.74C22.27 13.23 22.22 10.69 21.27 9.18Z" fill="#AAAAAA"/>
+                    <path d="M14.02 9.98L9.98 14.02C9.47 13.5 9.14 12.78 9.14 12C9.14 10.43 10.42 9.14 12 9.14C12.78 9.14 13.5 9.47 14.02 9.98Z" fill="#AAAAAA"/>
+                    <path d="M18.25 5.75L14.86 9.14C14.13 8.4 13.12 7.96 12 7.96C9.76 7.96 7.96 9.77 7.96 12C7.96 13.12 8.41 14.13 9.14 14.86L5.76 18.25C4.64 17.35 3.62 16.2 2.75 14.84C1.75 13.27 1.75 10.72 2.75 9.15C3.91 7.33 5.33 5.9 6.91 4.92C8.49 3.96 10.22 3.43 12 3.43C14.23 3.43 16.39 4.25 18.25 5.75Z" fill="#AAAAAA"/>
+                    <path d="M21.77 2.23C21.47 1.93 20.98 1.93 20.68 2.23L2.23 20.69C1.93 20.99 1.93 21.48 2.23 21.78C2.38 21.92 2.57 22 2.77 22C2.97 22 3.16 21.92 3.31 21.77L21.77 3.31C22.08 3.01 22.08 2.53 21.77 2.23Z" fill="#AAAAAA"/>
+                  </svg>
+                {/if}
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <label class="su-remember">
+          <input
+            type="checkbox"
+            class="su-checkbox-input"
+            bind:checked={rememberLogin}
+          />
+          <span class="su-checkbox-box" aria-hidden="true">
+            {#if rememberLogin}
+              <svg width="14" height="10" viewBox="0 0 14 10" fill="none" aria-hidden="true">
+                <path d="M1 5L5 9L13 1" stroke="var(--cs-purple)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+              </svg>
+            {/if}
+          </span>
+          <span class="su-remember-label">로그인 기억하기</span>
+        </label>
+
+        {#if errorMsg}
+          <p class="su-error" role="alert">{errorMsg}</p>
+        {/if}
+
+        <button class="su-cta" type="button" onclick={handleLogin} disabled={isLoggingIn} aria-busy={isLoggingIn}>
+          {isLoggingIn ? '로그인 중...' : '로그인'}
+        </button>
+
+        <button class="su-switch-mode" type="button" onclick={() => { mode = 'signup'; errorMsg = null }}>
+          아직 계정이 없으신가요? <span>5초 회원가입</span>
+        </button>
+
+      {:else}
       {#if step === 'form'}
         <!-- ── 폼 그룹 ── -->
         <div class="su-group">
@@ -310,6 +431,10 @@
           다음 단계 →
         </button>
 
+        <button class="su-switch-mode" type="button" onclick={() => { mode = 'login'; errorMsg = null }}>
+          이미 계정이 있으신가요? <span>로그인</span>
+        </button>
+
       {:else}
         <!-- ── 인증 그룹 ── -->
         <div class="su-group">
@@ -384,6 +509,7 @@
             {isLoading ? '가입 중...' : '가입 완료'}
           </button>
         </div>
+      {/if}
       {/if}
 
     </div>
@@ -583,6 +709,50 @@
   .su-cta:hover:not(:disabled) { background: var(--cs-red); }
   .su-cta:disabled { background: #B0ABCC; cursor: not-allowed; }
   .su-cta-flex { flex: 1; width: auto; }
+
+  /* 로그인 기억하기 — /auth/login .d-remember와 동일 레이아웃(체크박스+라벨) */
+  .su-remember {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    cursor: pointer;
+    user-select: none;
+    min-height: 44px;
+  }
+  .su-checkbox-input { position: absolute; opacity: 0; width: 0; height: 0; }
+  .su-checkbox-box {
+    width: 24px;
+    height: 24px;
+    background: var(--cs-surface-gray);
+    border-radius: 6px;
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .su-remember-label {
+    font-family: var(--font-kr);
+    font-size: 13px;
+    color: var(--cs-text-dark);
+  }
+
+  /* 로그인 ↔ 회원가입 전환 링크 */
+  .su-switch-mode {
+    background: none;
+    border: none;
+    cursor: pointer;
+    font-family: var(--font-kr);
+    font-size: 13px;
+    color: var(--cs-text-dark);
+    text-align: center;
+    min-height: 44px;
+    width: 100%;
+  }
+  .su-switch-mode span {
+    color: var(--cs-purple);
+    font-weight: 700;
+    text-decoration: underline;
+  }
 
   /* 이전 버튼 행 */
   .su-btn-row {
