@@ -13,6 +13,9 @@
     createMultiUnitReservation,
     type UnitReservationResult,
   } from '$lib/services/reservationHelper';
+  import { isRealMemberSession } from '$lib/utils/authGuard';
+  import SignUpModal from '$lib/components/auth/SignUpModal.svelte';
+  import { csToast } from '$lib/utils/toast';
 
   /** 실서비스 DB products 행 (가격·status 등 런타임 컬럼 포함) */
   type ProductRow = Tables<'products'> & {
@@ -51,6 +54,14 @@
     category: string | null;
   }
 
+  interface DisplayCategory {
+    id: string;
+    code: string;
+    name: string;
+    sort_order: number;
+    icon_url: string | null;
+  }
+
   interface Props {
     data: {
       product: ProductRow;
@@ -65,6 +76,7 @@
       shotlogs: ShotlogItem[];
       popularProducts: PopularItem[];
       categoryLabel: string | null;
+      categories: DisplayCategory[];
     };
   }
   let { data }: Props = $props();
@@ -98,13 +110,36 @@
   let hasOptionItems = $derived(optionItems.length > 0);
   let isReserving = $state(false);
 
+  // ── 예약 대상 = 가입 완료 계정 게이트 (2026-08-18) ──
+  // 비회원(세션 없음) 또는 익명세션(anon sign-in)은 예약 실행 불가.
+  // 모달은 페이지 이동 없는 오버레이라 예약 인자(e)를 그대로 보관했다가 로그인/가입
+  // 성공 시 동일 인자로 handleReserve()를 재호출해 이어서 진행한다.
+  let showAuthModal = $state(false);
+  let pendingReserveArgs = $state<Parameters<typeof handleReserve>[0] | null>(null);
+
+  function openAuthGateModal(args: Parameters<typeof handleReserve>[0]) {
+    pendingReserveArgs = args;
+    showAuthModal = true;
+  }
+
+  function handleAuthModalSuccess() {
+    showAuthModal = false;
+    const args = pendingReserveArgs;
+    pendingReserveArgs = null;
+    if (args) void handleReserve(args);
+  }
+
   // ── Toast
   let toastMsg = $state('');
   let toastVisible = $state(false);
-  function showToast(msg: string) {
+  let toastAction = $state<{ label: string; onClick: () => void } | null>(null);
+  let toastTimer: ReturnType<typeof setTimeout> | null = null;
+  function showToast(msg: string, action?: { label: string; onClick: () => void }) {
     toastMsg = msg;
+    toastAction = action ?? null;
     toastVisible = true;
-    setTimeout(() => { toastVisible = false; }, 2800);
+    if (toastTimer) clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => { toastVisible = false; toastAction = null; }, action ? 6000 : 2800);
   }
 
   // ── Quick Inquiry
@@ -112,16 +147,27 @@
   let qaSubmitting = $state(false);
   async function handleQaSubmit() {
     if (!qaText.trim() || qaSubmitting) return;
+    if (!session) {
+      showToast('로그인 후 이용해주세요.');
+      return;
+    }
     qaSubmitting = true;
     try {
+      // 'submit_product_inquiry'는 실재하지 않는 RPC였음(호출부만 있고 정의 없음) — CMS
+      // "빠른문의"(/cms/customers/inquiry)가 실제로 읽는 cs_posts 테이블에 기록되도록
+      // 정식 RPC submit_cs_post로 교체(Migration 157). cs_posts는 상품 참조 컬럼이 없어
+      // 어떤 상품 문의인지 제목/본문에 명시해 관리자가 식별 가능하게 함.
       type RpcFn = (name: string, args: Record<string, unknown>) => ReturnType<typeof supabase.rpc>;
-      const { error } = await (supabase.rpc as unknown as RpcFn)('submit_product_inquiry', {
-        p_product_id: data.productId,
-        p_content: qaText.trim(),
+      const { error } = await (supabase.rpc as unknown as RpcFn)('submit_cs_post', {
+        p_title: `[상품문의] ${product.name}`,
+        p_content: `[문의 상품: ${product.name}]\n${qaText.trim()}`,
+        p_category: 'product',
       });
       if (error) throw error;
       qaText = '';
-      showToast('문의가 등록되었습니다.');
+      // 완료알림은 프론트 표준 토스트 컴포넌트(csToast) 재활용 — 이 페이지 자체 구현
+      // toast-msg(showToast)는 실패/안내 메시지 등 기존 용도로 그대로 유지.
+      csToast.success('문의가 등록되었습니다.');
     } catch {
       showToast('문의 등록에 실패했습니다. 다시 시도해주세요.');
     } finally {
@@ -158,6 +204,7 @@
     activeTab = 'info';
     qaText = '';
     toastVisible = false;
+    toastAction = null;
   });
 
   function scrollToSection(key: 'info' | 'review' | 'qa'): void {
@@ -226,7 +273,9 @@
         ...reviews,
       ];
       reviewText = '';
-      showToast('후기가 등록되었습니다.');
+      // 등록알림은 프론트 표준 토스트 컴포넌트(csToast) 재활용 — 실패/안내 메시지는
+      // 이 페이지 자체 toast-msg(showToast) 그대로 유지.
+      csToast.success('후기가 등록되었습니다.');
     } catch (err) {
       const msg = err instanceof Error ? err.message : '후기 등록에 실패했습니다.';
       showToast(msg);
@@ -300,20 +349,21 @@
       }
     }
 
+    // 예약 대상 = 가입 완료 계정만 허용 (2026-08-18) — 비회원·익명세션은 여기서 차단하고
+    // 로그인/가입 유도 토스트를 노출한다. '확인' 클릭 시 같은 화면 위 모달을 열고, 로그인/
+    // 가입이 끝나면 지금 이 인자(e) 그대로 handleReserve()를 재호출해 예약을 이어서 진행한다.
+    const { data: { session: currentSession } } = await supabase.auth.getSession();
+    if (!isRealMemberSession(currentSession)) {
+      showToast('크레이지샷 로그인 또는 5초 가입만 진행해주세요', {
+        label: '확인',
+        onClick: () => openAuthGateModal(e),
+      });
+      return;
+    }
+
     isReserving = true;
     trackCartAdd(data.productId);
     try {
-      // 비로그인 → 익명 로그인으로 임시 계정(real UUID) 확보 후 그대로 예약 진행
-      // (회원가입/로그인 화면으로 이탈시키지 않음 — 게스트도 기존 회원과 동일하게 예약·체크아웃 가능)
-      const { data: { session: currentSession } } = await supabase.auth.getSession();
-      if (!currentSession) {
-        const { error: anonError } = await supabase.auth.signInAnonymously();
-        if (anonError) {
-          showToast('예약 진행 중 오류가 발생했습니다.');
-          return;
-        }
-      }
-
       // 대여수량(qty)만큼 동일 상품을 각각 독립된 예약(1건=재고 1대)으로 생성한다.
       // 신규 RPC 없이 기존 create_hold_reservation/create_draft_reservation을 반복호출하며,
       // 매 호출이 실제 가용재고를 원자적으로 재검증한다 — 도중 실패 시 전량 롤백(all-or-nothing).
@@ -502,7 +552,7 @@
 </script>
 
 <!-- ① Hero (PC sub-GNB는 ProductHero 내부에서 hero overlay 배치) -->
-<ProductHero imageUrls={imageUrls} category={product.category ?? 'camera'} categoryLabel={data.categoryLabel} productName={product.name} />
+<ProductHero imageUrls={imageUrls} category={product.category ?? 'camera'} categoryLabel={data.categoryLabel} productName={product.name} categories={data.categories} />
 
 <!-- ② ProductInfo Section -->
 <section class="info-section">
@@ -920,10 +970,9 @@
 <section class="popular-section">
   <div class="popular-inner">
     <div class="popular-head">
-      <!-- Popular items in this category -->
-      <p class="popular-title">많이 본 상품</p>
-      <!-- Best selling items that customers love/추후 영문 메뉴명으로 재활용 -->
-      <p class="popular-sub">Best selling items that customers love</p>
+      <!-- Newly added items in this category -->
+      <p class="popular-title">최신 등록 상품</p>
+      <p class="popular-sub">Newly Added Products</p>
     </div>
     <div class="popular-scroll">
       {#if popularProducts.length === 0}
@@ -971,8 +1020,26 @@
 
 <!-- Toast -->
 {#if toastVisible}
-  <div class="toast-msg" role="status" aria-live="polite">{toastMsg}</div>
+  <div class="toast-msg" class:has-action={!!toastAction} role="status" aria-live="polite">
+    <span>{toastMsg}</span>
+    {#if toastAction}
+      <button
+        type="button"
+        class="toast-action-btn"
+        onclick={() => { toastAction?.onClick(); toastVisible = false; toastAction = null; }}
+      >
+        {toastAction.label}
+      </button>
+    {/if}
+  </div>
 {/if}
+
+<SignUpModal
+  open={showAuthModal}
+  initialMode="login"
+  onclose={() => { showAuthModal = false; pendingReserveArgs = null; }}
+  onsuccess={handleAuthModalSuccess}
+/>
 
 <BottomTabBar />
 
@@ -1090,11 +1157,10 @@
     padding: 25px 20px;
     display: flex;
     flex-direction: column;
-    gap: 20px;
+    gap: 40px;
   }
   @media (min-width: 641px) {
     .title-card {
-      border-radius: var(--radius-2xl);
       padding: 40px;
     }
   }
@@ -1127,17 +1193,18 @@
     flex-wrap: wrap;
   }
   .price-unit { display: flex; align-items: baseline; gap: 4px; }
-  .price-period-label { font: var(--text-m-script-12); }
+  .price-period-label { font: var(--text-m-script-14); }
   @media (min-width: 641px) {
     .price-period-label { font: var(--text-pc-ad-kr-22); }
   }
   .price-amount {
-    font-family: var(--font-kr-heading);
-    font-weight: 700;
-    font-size: 24px;
+    font: var(--text-m-ad-kr-24);
+    line-height: 1;
   }
-  @media (min-width: 641px) { .price-amount { font-size: 35px; } }
-  .price-currency { font: var(--text-m-script-12); }
+  @media (min-width: 641px) {
+    .price-amount { font: var(--text-pc-ad-kr-35); line-height: 1; }
+  }
+  .price-currency { font: var(--text-m-script-14); }
   @media (min-width: 641px) { .price-currency { font: var(--text-pc-ad-kr-22); } }
   .price-sep { font: var(--text-m-script-14); color: var(--cs-red-badge); }
 
@@ -1205,7 +1272,7 @@
   }
   .option-item {
     background: var(--cs-surface-gray);
-    border-radius: 20px;
+    border-radius: var(--radius-xl);
     padding: 15px 30px;
     display: flex;
     flex-direction: column;
@@ -1951,4 +2018,26 @@
     white-space: nowrap;
     pointer-events: none;
   }
+  .toast-msg.has-action {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    white-space: normal;
+    pointer-events: auto;
+    max-width: calc(100vw - 40px);
+  }
+  .toast-action-btn {
+    background: rgba(255, 255, 255, 0.16);
+    color: white;
+    border: none;
+    border-radius: 22px;
+    padding: 0 18px;
+    height: 44px;
+    min-height: 44px;
+    font: var(--text-m-script-14B);
+    font-weight: 700;
+    flex-shrink: 0;
+    cursor: pointer;
+  }
+  .toast-action-btn:hover { background: rgba(255, 255, 255, 0.28); }
 </style>
