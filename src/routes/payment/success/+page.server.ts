@@ -85,7 +85,7 @@ export const load: PageServerLoad = async ({ url, locals }) => {
   // ── 3. 예약 + 상품 상세 조회 (SELECT — DML 아님) ─────────────────────────
   const { data: reservation } = await admin
     .from('rental_reservations')
-    .select('id, rental_start_date, rental_end_date, special_requests, product_id')
+    .select('id, rental_start_date, rental_end_date, special_requests, product_id, status')
     .eq('id', reservationId)
     .single()
 
@@ -95,8 +95,15 @@ export const load: PageServerLoad = async ({ url, locals }) => {
     rental_end_date: string | null
     special_requests: string | null
     product_id: string | null
+    status: string | null
   }
   const rv = reservation as ReservationRow | null
+
+  // 2026-08-19(재검수): 결제 RPC(confirm_payment_and_update_reservation)는 내부적으로
+  // try_confirm_reservation을 거치므로 결제만으로는 confirmed가 안 될 수 있음(계약서명
+  // 게이팅, service-operations.md §9) — 이 화면이 항상 동일한 "성공" 문구만 보여주면
+  // 계약서명이 남았다는 사실이 고객에게 전달되지 않는 결함이라 실제 상태를 조회해 반영
+  const pendingContract = rv?.status !== 'confirmed'
 
   // 상품명 조회
   let productName = '촬영 장비'
@@ -126,5 +133,6 @@ export const load: PageServerLoad = async ({ url, locals }) => {
     confirmedAt:   confirmedDate,
     paymentMethod: (tossData.method as string) ?? '카드',
     specialRequests: rv?.special_requests ?? '',
+    pendingContract,
   }
 }

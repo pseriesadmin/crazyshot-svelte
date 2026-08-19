@@ -50,6 +50,12 @@ export const load: PageLoad = ({ url }) => {
     pointsUsed:         Number(url.searchParams.get('pointsUsed')         ?? '0'),
     confirmedAt:        url.searchParams.get('confirmedAt')              ?? defaultAt,
     paymentMethod:      url.searchParams.get('paymentMethod')            ?? '카드(테스트)',
+    // 쿠폰 지연채번(sequenced 모드)으로 이번 결제에서 실제 발급된 코드 — manual 모드/쿠폰
+    // 미사용 시에는 파라미터 자체가 없어 null
+    couponCode:         url.searchParams.get('couponCode'),
+    // 2026-08-19: 계약서명 완료 전까지는 예약이 confirmed가 아님(service-operations.md §9) —
+    // cart 제출 시점에 확정된 건수 < 체크한 건수였으면 true로 전달돼 화면 문구를 조건부 표시
+    pendingContract:    url.searchParams.get('pendingContract') === 'true',
     isDev: true,
   }
 }

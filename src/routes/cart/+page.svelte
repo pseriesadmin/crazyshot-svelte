@@ -38,7 +38,6 @@
     name: string;
     email: string;
     phone: string;
-    authCode: string;
     addr: string;
     addrDetail: string;
     notes: string;
@@ -63,7 +62,7 @@
   }
 
   function defaultForm(): FormState {
-    return { name: '', email: '', phone: '', authCode: '', addr: '', addrDetail: '', notes: '', memberCheck: false, memberCheck2: false };
+    return { name: '', email: '', phone: '', addr: '', addrDetail: '', notes: '', memberCheck: false, memberCheck2: false };
   }
 
   // ── 카트 라인아이템 UI 상태 (무제한 — 카드1/카드2 고정 구조 폐기 2026-07-27)
@@ -129,8 +128,12 @@
 
   // ── 통합 대여예약옵션 상태 (통합 단일 정책 — 2026-08-05)
   let bulkOpen    = $state(false)
-  let bulkDate    = $state('')
-  let bulkTime    = $state('')
+  let bulkDate    = $state('')  // 수령일
+  let bulkTime    = $state('')  // 수령시간
+  // 반납일자는 수령일자와 별도로 선택 가능해야 함(2026-08-17 확정) — 이전엔 bulkDate/bulkTime을
+  // 수령·반납 양쪽이 공유해 반납일을 수령일과 다르게 지정하는 것 자체가 불가능했던 결함 수정
+  let bulkReturnDate = $state('')
+  let bulkReturnTime = $state('')
   // 대여방법/반납방법 아코디언 — RentalForm 재사용
   // 단일 오픈(상호배타)
   let bulkOpenAcc     = $state<AccKey>('rental')
@@ -177,6 +180,10 @@
     return `${String(h).padStart(2, '0')}:00`;
   }
 
+  // 시간선택 노출 범위 — 실제 운영시간(10~20시) 밖은 목록 자체에서 제거(2026-08-17, Stephen 확정)
+  const TIME_AM_HOURS = [10, 11];
+  const TIME_PM_HOURS = [12, 13, 14, 15, 16, 17, 18, 19, 20];
+
   // ── 통합설정용 핸들러 (bulkOpts/bulkRentalForm/bulkReturnForm 대상 — 개별 아이템 편집 UI는
   // 통합 단일 정책 전환(2026-08-05)으로 제거되어 item 단위 핸들러는 더 이상 필요 없음)
   // 2026-07-28: 버튼("전체 적용") 클릭 없이 입력 즉시 전체 상품 카드에 반영 — 각 핸들러 끝에
@@ -207,12 +214,38 @@
     }
     applyBulkToItems()
   }
+  // 수령일 달력 하나에서 대여일+반납일을 이어서 선택하는 2클릭 범위선택(2026-08-17,
+  // Stephen 확정) — 아코디언을 옮겨다닐 필요 없이 이 달력 안에서 전 과정이 끝남
+  //   1클릭(시작 없음, 또는 이미 완성된 범위를 다시 고르는 경우) → 시작일 지정, 달력 유지(열림)
+  //   2클릭(시작만 있고 종료 대기 중) → 시작일 이후 날짜면 종료일로 확정, 달력 닫힘
+  //                                     시작일 이전 날짜면 시작일을 그 날짜로 교체(다시 대기)
   function bulkHandleDate(d: string) {
-    bulkDate = d
-    applyBulkToItems()
+    if (bulkDate && !bulkReturnDate) {
+      if (d >= bulkDate) {
+        bulkReturnDate = d
+        applyBulkToItems()
+        openCalId = null
+      } else {
+        bulkDate = d
+        applyBulkToItems()
+      }
+    } else {
+      bulkDate = d
+      bulkReturnDate = ''
+      applyBulkToItems()
+    }
   }
   function bulkHandleTime(t: string) {
     bulkTime = t
+    applyBulkToItems()
+  }
+  function bulkHandleReturnDate(d: string) {
+    bulkReturnDate = d
+    applyBulkToItems()
+    openCalId = null
+  }
+  function bulkHandleReturnTime(t: string) {
+    bulkReturnTime = t
     applyBulkToItems()
   }
 
@@ -222,7 +255,6 @@
       name: bulkForm.name || itemForm.name,
       email: bulkForm.email || itemForm.email,
       phone: bulkForm.phone || itemForm.phone,
-      authCode: bulkForm.authCode || itemForm.authCode,
       addr: bulkForm.addr || itemForm.addr,
       addrDetail: bulkForm.addrDetail || itemForm.addrDetail,
       notes: bulkForm.notes || itemForm.notes,
@@ -232,14 +264,18 @@
   }
 
   // 통합설정 필드 변경 즉시(버튼 없이) 전체 상품 카드에 반영 — 카드별 기존 설정값은 무시되고
-  // bulkOpts/bulkDate/bulkTime/bulkRentalForm/bulkReturnForm 값으로 전부 덮어씀
+  // bulkOpts/bulkDate·bulkTime(수령)/bulkReturnDate·bulkReturnTime(반납)/bulkRentalForm/
+  // bulkReturnForm 값으로 전부 덮어씀
   function applyBulkToItems() {
     itemsState = itemsState.map(it => ({
       ...it,
       rentalDate: bulkDate || it.rentalDate,
-      returnDate: bulkDate || it.returnDate,
+      // bulkDate를 한 번이라도 만졌다면 returnDate는 bulkReturnDate를 그대로 반영(범위선택
+      // 재시작으로 일시적으로 비어도 옛 반납일이 남아있지 않도록) — 아직 bulkDate 자체를
+      // 안 만진 경우에만 기존 개별 값 유지
+      returnDate: bulkDate ? bulkReturnDate : (bulkReturnDate || it.returnDate),
       rentalTime: bulkTime || it.rentalTime,
-      returnTime: bulkTime || it.returnTime,
+      returnTime: bulkReturnTime || it.returnTime,
       opts: { ...it.opts, rentalMethod: bulkOpts.rentalMethod, returnMethod: bulkOpts.returnMethod },
       rentalForm: mergeFormForBulk(bulkRentalForm, it.rentalForm),
       returnForm: mergeFormForBulk(bulkReturnForm, it.returnForm),
@@ -253,37 +289,11 @@
     return `${y}.${m}.${d}`;
   }
 
-  // ── Guest OTP (비로그인 인증)
-  let guestOtpSent     = $state(false)
-  let guestOtpVerified = $state(false)
-
-  async function requestGuestOtp(email: string) {
-    if (!email) { csToast.error('이메일을 먼저 입력해 주세요.'); return }
-    const { error } = await supabase.auth.signInWithOtp({ email })
-    if (!error) {
-      guestOtpSent = true
-      csToast.success('인증 이메일을 발송했습니다. 메일함을 확인해 주세요.')
-    } else {
-      csToast.error('인증 이메일 발송에 실패했습니다.')
-    }
-  }
-
-  async function verifyGuestOtp(email: string, code: string, form: FormState) {
-    if (!code) { csToast.error('인증번호를 입력해 주세요.'); return }
-    const { error } = await supabase.auth.verifyOtp({ email, token: code, type: 'email' })
-    if (error) { csToast.error('인증번호가 올바르지 않습니다.'); return }
-    const { data: { user } } = await supabase.auth.getUser()
-    if (user) {
-      // @ts-expect-error — sync_checkout_to_profile은 database.ts 미등록 RPC
-      await supabase.rpc('sync_checkout_to_profile', {
-        p_user_id: user.id,
-        p_name:    form.name  || null,
-        p_phone:   form.phone || null,
-        p_address: form.addr  ? `${form.addr} ${form.addrDetail}`.trim() : null,
-      })
-      guestOtpVerified = true
-      csToast.success('인증이 완료되었습니다!')
-    }
+  // 대여일시 통합 요약(요일 포함) — 날짜+시간이 모두 선택되면 한눈에 재확인할 수 있도록 노출
+  const WEEKDAY_KR = ['일', '월', '화', '수', '목', '금', '토'];
+  function weekdayKr(iso: string): string {
+    if (!iso) return '';
+    return WEEKDAY_KR[new Date(`${iso}T00:00:00`).getDay()];
   }
 
   // ── 서버 데이터 추출 (PageData는 +page.ts 기준이므로 server 필드는 캐스트 필요)
@@ -321,27 +331,30 @@
   // 조건 1: 결제 확정 대상(체크 해제·삭제되지 않은 상품)이 1개 이상
   const hasItems = $derived(itemsState.some(it => !it.deleted && it.checked))
 
-  // 조건 2: 결제 확정 대상 상품의 날짜(수령일·반납일) 입력됨 (체크 해제한 상품은 제외)
+  // 조건 2: 결제 확정 대상 상품의 날짜·시간(수령일·수령시간·반납일·반납시간) 모두 입력됨
+  // (체크 해제한 상품은 제외) — 2026-08-19 재검수: 기존엔 날짜만 검증해 시간을 한 번도
+  // 선택하지 않아도(빈 문자열 → 하위 로직에서 '00:00'으로 암묵 대체) 제출이 가능했던 결함 수정
   const datesSet = $derived(
-    itemsState.every(it => it.deleted || !it.checked || (it.rentalDate !== '' && it.returnDate !== ''))
+    itemsState.every(it => it.deleted || !it.checked || (
+      it.rentalDate !== '' && it.rentalTime !== '' && it.returnDate !== '' && it.returnTime !== ''
+    ))
   )
 
   // 조건 3: 배송 마감 미초과 (TASK-D: check_delivery_deadline() 연동 후 대체)
   const deadlineOk = $derived(true)
 
-  // 조건 4: 신원 확인 완료 — 로그인 세션 또는 게스트 OTP 인증
+  // 조건 4: 신원 확인 완료 — 2026-08-18 정책 변경: 장바구니는 가입 완료 계정만 접근
+  // 가능(+page.server.ts에서 비회원·익명세션은 이미 /auth/login으로 리다이렉트됨) —
+  // 게스트 OTP 인증 경로는 삭제, data.userId는 항상 존재하나 방어적으로 그대로 체크
   // data.userId는 +page.server.ts 반환값 (PageData 병합 — dev server 기동 시 $types 자동 재생성)
-  const identityOk = $derived(
-    guestOtpVerified ||
-    (data.userId != null)
-  )
+  const identityOk = $derived(data.userId != null)
 
   // 조건 5: 약관 동의
   // canProceed: 5가지 조건 모두 충족
   const canProceed = $derived(hasItems && datesSet && deadlineOk && identityOk && agreed)
 
-  // 완료 버튼 문구 — 회원/비회원(익명 게스트) 구분
-  const confirmLabel = $derived((data.isGuest as boolean | undefined) ? '비회원 예약신청완료' : '예약신청완료')
+  // 완료 버튼 문구 — 2026-08-18: 장바구니 접근이 회원 전용으로 고정되어 비회원 분기 제거
+  const confirmLabel = '예약신청완료'
 
   // 페이지 최하단(결제 영역) 근접 시에만 CTA 푸터 노출 — 절대 위치 기반(IntersectionObserver)이라
   // 스크롤 방향 델타 비교 방식과 달리 관성·러버밴드 반동에 의한 반복 토글(떨림)이 구조적으로 발생하지 않음
@@ -517,11 +530,42 @@
     itemsState.reduce((sum, it) => sum + ((it.deleted || !it.checked) ? 0 : deliveryFee(it.opts.rentalMethod, otGrade)), 0)
   )
 
+  // 방문대여 지점 — 카트 상품의 allowed_pickup_ids 기준으로 pickup_points 필터링(deliveryTabs와 동일 원칙)
+  interface PickupPointRow { id: string; name: string; address: string; phone: string | null }
+
+  function computeAllowedPickupIds(prods: ProductRow[]): Set<string> | 'all' | 'none' {
+    type P = ProductRow & { allowed_pickup_ids?: string[] | null }
+    const configured = prods.filter(p => Array.isArray((p as P).allowed_pickup_ids))
+    if (configured.length === 0) return 'all'
+    const sets = configured.map(p => (p as P).allowed_pickup_ids as string[])
+    const intersection = sets.reduce((acc, ids) => {
+      const s = new Set(ids)
+      return acc.filter(id => s.has(id))
+    }, [...sets[0]])
+    return intersection.length > 0 ? new Set<string>(intersection) : 'none'
+  }
+
+  const allowedPickupIds = $derived(computeAllowedPickupIds(cartProductRows))
+  const visitPickupPoints = $derived<PickupPointRow[]>(
+    allowedPickupIds === 'none' ? [] :
+    ((data.pickupPoints as PickupPointRow[] | undefined) ?? [])
+      .filter((p: PickupPointRow) => allowedPickupIds === 'all' || allowedPickupIds.has(p.id))
+  )
+
   // 서버 데이터 안전 추출
   const sdCoupons = $derived<UserCouponExt[]>((sd as { userCoupons?: UserCouponExt[] }).userCoupons ?? [])
   const sdUserPoints = $derived<number>((sd as { userPoints?: number }).userPoints ?? 0)
   // "회원정보 반영"(배송지) 체크박스 활성화 조건 — 저장된 배송지 주소가 있을 때만 사용 가능
   const sdHasUserAddress = $derived<boolean>((sd as { hasUserAddress?: boolean }).hasUserAddress ?? false)
+  // "회원정보 반영" 체크박스 자동채움 원본 데이터(+page.server.ts 제공)
+  type UserProfileInfo = { name: string | null; phone: string | null; email: string | null } | null
+  type UserAddressInfo = { road_address: string | null; detail_address: string | null } | null
+  const sdUserProfileInfo = $derived<UserProfileInfo>((sd as { userProfileInfo?: UserProfileInfo }).userProfileInfo ?? null)
+  const sdUserAddressInfo = $derived<UserAddressInfo>((sd as { userAddressInfo?: UserAddressInfo }).userAddressInfo ?? null)
+  // "회원정보 반영"(고객정보) 체크박스 활성화 조건 — 배송지 체크박스(sdHasUserAddress)와 동일
+  // 원칙: 반영할 실 정보값(이름 또는 휴대폰)이 있을 때만 사용 가능. email은 user_profiles에
+  // NOT NULL이라 항상 값이 있어 판단 기준에서 제외(있으나마나 늘 true라 무의미)
+  const sdHasUserProfileInfo = $derived<boolean>(!!(sdUserProfileInfo?.name || sdUserProfileInfo?.phone))
 
   // 쿠폰 할인 합산
   const otCouponDiscount = $derived(
@@ -543,6 +587,15 @@
 
   // 포인트 사용 최대값 (보유 포인트 & 결제 금액 중 작은 값)
   const otMaxPoints = $derived(Math.min(sdUserPoints, Math.max(0, otNetBeforeVat + otVat + otDeliveryFee - otCouponDiscount)))
+
+  // 2026-08-19(정합성 재검수): 포인트 입력 후 쿠폰을 추가/변경하거나 상품·기간을 바꿔
+  // otMaxPoints가 줄어들면(예: 쿠폰 적용으로 결제 잔액이 포인트 입력값보다 작아짐) 기존엔
+  // otPointsUsed가 갱신되지 않고 그대로 남아, 화면엔 0원으로 정상 표시되면서도 제출 시점엔
+  // 실제 필요한 것보다 많은 포인트가 서버로 전송돼(confirm-mock → use_points) 초과 차감될
+  // 수 있었음 — otMaxPoints가 줄어들 때마다 자동으로 재클램프
+  $effect(() => {
+    if (otPointsUsed > otMaxPoints) otPointsUsed = otMaxPoints
+  })
 
   // 합계 (VAT + 배송비 + 쿠폰 할인 - 포인트 사용)
   const otTotal = $derived(Math.max(0, otNetBeforeVat + otVat + otDeliveryFee - otCouponDiscount - otPointsUsed))
@@ -608,7 +661,11 @@
 
           {#if itemsState.length === 0 || itemsState.every(it => it.deleted)}
             <div class="order-card empty-card">
-              <p class="empty-text">장바구니가 비어 있습니다.</p>
+              <svg class="empty-icon" xmlns="http://www.w3.org/2000/svg" width="22" height="20" viewBox="0 0 22 20" fill="none" aria-hidden="true">
+                <path d="M7.99919 20C5.88901 20 4.0824 19.2485 2.75115 17.874C1.52311 16.6061 0.785015 14.8992 0.495286 12.9902L0.443529 12.6055L0.440599 12.584L0.438646 12.5615L0.00602908 7.70508C-0.0675772 6.87997 0.5413 6.15083 1.36638 6.07715C2.19153 6.00354 2.9207 6.61332 2.99431 7.43848L3.42302 12.251L3.46208 12.543C3.67975 13.9768 4.20499 15.0629 4.90642 15.7871C5.63327 16.5374 6.64321 17 7.99919 17L13.1984 17C14.5546 17 15.5653 16.5376 16.2922 15.7871C17.0369 15.0182 17.5833 13.8414 17.7736 12.2734L18.2043 7.43848C18.2779 6.61349 19.0063 6.00382 19.8312 6.07715C20.6564 6.15076 21.2662 6.87993 21.1926 7.70508L20.759 12.5615L20.757 12.584L20.7551 12.6055C20.5096 14.6694 19.7564 16.5215 18.4465 17.874C17.1152 19.2484 15.3085 20 13.1984 20L7.99919 20Z" fill="#201857"/>
+                <path d="M12.5653 7.5V5.08496C12.5653 4.27678 12.2702 3.79435 11.9296 3.49609C11.5533 3.16675 11.0458 3.0001 10.5995 3C10.1532 3 9.64579 3.16678 9.2694 3.49609C8.92865 3.79434 8.63271 4.2766 8.63269 5.08496V7.5C8.63269 8.32843 7.96111 9 7.13269 9C6.30426 9 5.63269 8.32843 5.63269 7.5V5.08496C5.63271 3.4263 6.2903 2.11575 7.29284 1.23828C8.25978 0.39198 9.48643 0 10.5995 0C11.7124 9.12656e-05 12.9383 0.392127 13.9051 1.23828C14.9077 2.11575 15.5653 3.42629 15.5653 5.08496V7.5C15.5653 8.32843 14.8937 9 14.0653 9C13.2887 8.9999 12.6499 8.40969 12.5731 7.65332L12.5653 7.5Z" fill="#CF0000"/>
+              </svg>
+              <p class="empty-text">대여예약 중인 상품이 없습니다.</p>
             </div>
           {/if}
         </div>
@@ -619,7 +676,11 @@
           <div class="list-pane" class:narrow={hasItems}>
             {#if itemsState.length === 0 || itemsState.every(it => it.deleted)}
               <div class="order-card empty-card">
-                <p class="empty-text">장바구니가 비어 있습니다.</p>
+                <svg class="empty-icon" xmlns="http://www.w3.org/2000/svg" width="22" height="20" viewBox="0 0 22 20" fill="none" aria-hidden="true">
+                  <path d="M7.99919 20C5.88901 20 4.0824 19.2485 2.75115 17.874C1.52311 16.6061 0.785015 14.8992 0.495286 12.9902L0.443529 12.6055L0.440599 12.584L0.438646 12.5615L0.00602908 7.70508C-0.0675772 6.87997 0.5413 6.15083 1.36638 6.07715C2.19153 6.00354 2.9207 6.61332 2.99431 7.43848L3.42302 12.251L3.46208 12.543C3.67975 13.9768 4.20499 15.0629 4.90642 15.7871C5.63327 16.5374 6.64321 17 7.99919 17L13.1984 17C14.5546 17 15.5653 16.5376 16.2922 15.7871C17.0369 15.0182 17.5833 13.8414 17.7736 12.2734L18.2043 7.43848C18.2779 6.61349 19.0063 6.00382 19.8312 6.07715C20.6564 6.15076 21.2662 6.87993 21.1926 7.70508L20.759 12.5615L20.757 12.584L20.7551 12.6055C20.5096 14.6694 19.7564 16.5215 18.4465 17.874C17.1152 19.2484 15.3085 20 13.1984 20L7.99919 20Z" fill="#201857"/>
+                  <path d="M12.5653 7.5V5.08496C12.5653 4.27678 12.2702 3.79435 11.9296 3.49609C11.5533 3.16675 11.0458 3.0001 10.5995 3C10.1532 3 9.64579 3.16678 9.2694 3.49609C8.92865 3.79434 8.63271 4.2766 8.63269 5.08496V7.5C8.63269 8.32843 7.96111 9 7.13269 9C6.30426 9 5.63269 8.32843 5.63269 7.5V5.08496C5.63271 3.4263 6.2903 2.11575 7.29284 1.23828C8.25978 0.39198 9.48643 0 10.5995 0C11.7124 9.12656e-05 12.9383 0.392127 13.9051 1.23828C14.9077 2.11575 15.5653 3.42629 15.5653 5.08496V7.5C15.5653 8.32843 14.8937 9 14.0653 9C13.2887 8.9999 12.6499 8.40969 12.5731 7.65332L12.5653 7.5Z" fill="#CF0000"/>
+                </svg>
+                <p class="empty-text">대여예약 중인 상품이 없습니다.</p>
               </div>
             {:else}
               <div class="card-list" role="list">
@@ -647,12 +708,7 @@
         <!-- ── 통합 대여예약옵션 패널 (체크된 상품 1개 이상일 때만 렌더 — 모바일 전용, PC는 detail-pane) -->
         {#if hasItems}
           <div class="bulk-panel">
-            <button class="bulk-head" onclick={() => bulkOpen = !bulkOpen}>
-              <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true" class="bulk-lock">
-                <rect x="2" y="6" width="12" height="9" rx="2" stroke="currentColor" stroke-width="1.5"/>
-                <path d="M5 6V4.5C5 2.84 6.34 1.5 8 1.5C9.66 1.5 11 2.84 11 4.5V6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
-                <circle cx="8" cy="10.5" r="1.5" fill="currentColor"/>
-              </svg>
+            <button class="bulk-head" class:bulk-head-closed={!bulkOpen} onclick={() => bulkOpen = !bulkOpen}>
               <span class="bulk-head-title">대여예약옵션</span>
               <svg width="11" height="7" viewBox="0 0 12 8" fill="none" aria-hidden="true" class="bulk-chevron"
                    style="transform:{bulkOpen ? 'rotate(180deg)' : 'rotate(0deg)'}">
@@ -678,46 +734,60 @@
         <div class="total-details-box">
           <!-- 쿠폰 섹션 (white bg) -->
           <div class="total-white-section">
-            <span class="section-sub-label">사용 가능한 쿠폰</span>
-            <div class="coupon-list">
-              {#each sdCoupons as uc (uc.id)}
-                {#if uc.coupons}
-                  {@const c = uc.coupons}
-                  {@const daysLeft = Math.max(0, Math.ceil((new Date(c.valid_until).getTime() - Date.now()) / 86400000))}
-                  {@const couponLabel = c.description ?? (c.discount_type === 'fixed' ? `${fmtKrw(c.discount_value)}원 할인` : `${c.discount_value}% 할인`)}
-                  {@render CouponRow({
-                    label: couponLabel,
-                    days: daysLeft,
-                    checked: otSelectedCouponIds.has(uc.id),
-                    onToggle: () => {
-                      // 중복 쿠폰 적용 불가(안내 문구와 일치) — 단일 선택만 허용
-                      otSelectedCouponIds = otSelectedCouponIds.has(uc.id)
-                        ? new Set()
-                        : new Set([uc.id])
-                    },
-                  })}
-                {/if}
-              {:else}
-                <p class="hint-text">사용 가능한 쿠폰이 없습니다.</p>
-              {/each}
+            <div class="coupon-section">
+              <span class="section-sub-label">사용 가능한 쿠폰</span>
+              <div class="coupon-list">
+                {#each sdCoupons as uc (uc.id)}
+                  {#if uc.coupons}
+                    {@const c = uc.coupons}
+                    {@const daysLeft = Math.max(0, Math.ceil((new Date(c.valid_until).getTime() - Date.now()) / 86400000))}
+                    {@const couponLabel = c.description ?? (c.discount_type === 'fixed' ? `${fmtKrw(c.discount_value)}원 할인` : `${c.discount_value}% 할인`)}
+                    {@render CouponRow({
+                      label: couponLabel,
+                      days: daysLeft,
+                      checked: otSelectedCouponIds.has(uc.id),
+                      onToggle: () => {
+                        // 중복 쿠폰 적용 불가(안내 문구와 일치) — 단일 선택만 허용
+                        otSelectedCouponIds = otSelectedCouponIds.has(uc.id)
+                          ? new Set()
+                          : new Set([uc.id])
+                      },
+                    })}
+                  {/if}
+                {:else}
+                  <p class="hint-text">사용 가능한 쿠폰이 없습니다.</p>
+                {/each}
+              </div>
+              <p class="hint-text">중복 쿠폰 적용은 불가능합니다.</p>
             </div>
-            <p class="hint-text">중복 쿠폰 적용은 불가능합니다.</p>
 
             <!-- 포인트 사용 -->
-            <span class="section-sub-label" style="margin-top: 16px; display: block;">포인트 사용</span>
-            <div class="points-input-row">
-              <input
-                type="number"
-                class="points-input"
-                min="0"
-                max={otMaxPoints}
-                value={otPointsUsed}
-                oninput={(e) => {
-                  const v = Math.min(otMaxPoints, Math.max(0, parseInt((e.target as HTMLInputElement).value) || 0))
-                  otPointsUsed = v
-                }}
-              />
-              <span class="points-avail">보유 <strong>{fmtKrw(sdUserPoints)}</strong>p</span>
+            <div class="points-section">
+              <span class="section-sub-label" style="margin-top: 16px; display: block;">포인트 사용</span>
+              <div class="points-input-row">
+                <input
+                  type="number"
+                  class="points-input"
+                  min="0"
+                  max={otMaxPoints}
+                  value={otPointsUsed}
+                  oninput={(e) => {
+                    const v = Math.min(otMaxPoints, Math.max(0, parseInt((e.target as HTMLInputElement).value) || 0))
+                    otPointsUsed = v
+                  }}
+                />
+                <button
+                  type="button"
+                  class="points-use-all-btn"
+                  disabled={otMaxPoints === 0}
+                  onclick={() => { otPointsUsed = otMaxPoints }}
+                >모두 사용</button>
+              </div>
+              <span class="points-avail">
+                <span class="points-avail-label">보유</span>
+                <strong class="points-avail-num">{fmtKrw(sdUserPoints)}</strong>
+                <span class="points-avail-unit">p</span>
+              </span>
             </div>
           </div>
 
@@ -907,7 +977,9 @@
             const res = await fetch('/api/checkout/confirm-mock', {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ reservationIds: checkedIds, userCouponId: selectedCouponId }),
+              // 2026-08-19(재검수 수정): pointsUsed 추가 — 기존엔 화면 표시에만 쓰이고 서버에
+              // 전혀 전달되지 않아 포인트가 실제로 차감되지 않던 결함(Migration 303 use_points)
+              body: JSON.stringify({ reservationIds: checkedIds, userCouponId: selectedCouponId, pointsUsed: otPointsUsed }),
             })
             const result = await res.json()
             // res.ok(200)이면 결제(mock) 자체는 성공한 것 — result.success는 confirmedCount>0일
@@ -938,9 +1010,22 @@
                   }
                 })
               const confirmedCount = (result.confirmedReservations as Array<unknown>)?.length ?? 0
-              if (confirmedCount < checkedIds.length) {
+              const pendingContract = confirmedCount < checkedIds.length
+              if (pendingContract) {
                 csToast.info('결제가 완료됐습니다. 계약서 서명 후 예약이 확정됩니다.')
               }
+              // 2026-08-19(QA 권고 반영): confirm-mock이 응답하는 pointsOk===false는 포인트
+              // 사용을 요청했지만 실제로는 차감되지 않은 상태(잔액 부족 등) — 기존엔 콘솔
+              // 로그만 남고 고객에게 전혀 알려지지 않았음. 예약 자체는 정상 진행되므로
+              // 결제 흐름을 막지 않되, 포인트 미반영 사실만 안내
+              if (result.pointsOk === false) {
+                csToast.error('포인트 사용이 반영되지 않았습니다. 마이페이지에서 잔여 포인트를 확인해 주세요.')
+              }
+              // 2026-08-19(재검수): 위 토스트는 이 화면으로 이동하면서 사라지는데, 이동 직후
+              // 도착하는 결제완료 화면은 계약서명 대기 여부와 무관하게 항상 동일한 "성공"
+              // 문구·아이콘을 보여줬음 — 계약서명 전까지는 예약이 아직 confirmed가 아니라는
+              // 사실(service-operations.md §9)이 화면에서 사라져 버리는 결함이라 파라미터로
+              // 전달해 성공화면 쪽에서 조건부 문구를 보여주도록 수정
               const params = new URLSearchParams({
                 items:              JSON.stringify(activeItems),
                 amount:             String(otTotal),
@@ -952,7 +1037,12 @@
                 pointsUsed:         String(otPointsUsed),
                 paymentMethod:      '카드(테스트)',
                 confirmedAt,
+                pendingContract:    String(pendingContract),
               })
+              // sequenced 모드 쿠폰만 값이 있음(manual 모드는 null) — 결제완료 화면에 표시
+              if (result.couponRedeemedCode) {
+                params.set('couponCode', String(result.couponRedeemedCode))
+              }
               await goto(`/payment/success/dev?${params.toString()}`)
             } else {
               csToast.error('예약 처리 중 오류가 발생했습니다.')
@@ -977,8 +1067,7 @@
   {#if !item.deleted}
     {@const rate24 = itemRate24h(line)}
     {@const rate12 = itemRate12h(line, rate24)}
-    {@const cardRateVal = cardRate(rate24, rate12, item.durType)}
-    <div class="order-card">
+    <div class="order-card" class:selected={item.checked}>
       <div class="order-card-inner">
         <!-- Check & Delete -->
         <div class="card-top-row">
@@ -1005,48 +1094,45 @@
           <div class="product-img">
             <img src={line?.product?.image_urls?.[0] ?? 'https://picsum.photos/seed/cam/150/150'} alt={line?.product?.name ?? '상품'} width="150" height="150"/>
           </div>
+          <div class="product-info-group">
           <div class="product-meta">
             <p class="product-name">{line?.product?.name ?? '상품'}</p>
-            <div class="dur-tabs" role="group" aria-label="대여 기간 유형">
+            <!-- 2026-08-18: 비활성 상태로 숨김(삭제 아님) — 개별 상품카드에서 대여기간
+                 변경 시 장바구니 합계·체크아웃 금액(itemCardRate)에 영향을 주는 기능이나,
+                 현재 "대여예약옵션" 통합 편집기가 이 설정을 아직 포괄하지 않아 개별 변경
+                 경로를 임시로 막아둠. 추후 대여예약옵션 쪽에 편입되면 재활성 고려 -->
+            <div class="dur-tabs dur-tabs-disabled" role="group" aria-label="대여 기간 유형" aria-hidden="true">
               {#each DUR_TYPES as d}
                 <button
                   class="dur-tab"
                   class:dur-tab-active={item.durType === d}
-                  onclick={() => updateItem(item.id, { durType: d })}
+                  disabled
                   aria-pressed={item.durType === d}
                 >{DUR_LABELS[d]}</button>
               {/each}
             </div>
-            <p class="product-price">
-              {DUR_LABELS[item.durType]}&nbsp;
-              {item.durType === 'purchase' ? '별도 문의' : `${cardRateVal.toLocaleString()} 원`}
-            </p>
-            <div class="product-badges">
-              <div class="badge-mem">
-                <svg viewBox="0 0 40 40" fill="none" class="badge-svg">
-                  <path d="M20 0L23.9714 3.03625L28.9008 1.98062L31.1277 6.39613L36.0388 7.5302L36.08 12.4504L40 15.5496L37.8475 20L40 24.4504L36.08 27.5496L36.0388 32.4698L31.1277 33.6039L28.9008 38.0194L23.9714 36.9637L20 40L16.0286 36.9637L11.0992 38.0194L8.87228 33.6039L3.96124 32.4698L3.91998 27.5496L0 24.4504L2.15253 20L0 15.5496L3.91998 12.4504L3.96124 7.5302L8.87228 6.39613L11.0992 1.98062L16.0286 3.03625L20 0Z" fill="#FF3535"/>
-                  <path d="M23.0742 19.2136C23.0742 20.9516 21.6979 22.3606 20.0001 22.3606C18.3022 22.3606 16.9259 20.9516 16.9259 19.2136C16.9259 17.4755 18.3022 16.0665 20.0001 16.0665C21.6979 16.0665 23.0742 17.4755 23.0742 19.2136Z" fill="white"/>
-                </svg>
+            <div class="dual-price-row">
+              <div class="price-unit">
+                <span class="price-unit-label">Day</span>
+                <span class="price-amount">{rate24.toLocaleString()}</span>
+                <span class="price-currency">원</span>
               </div>
-              <div class="badge-deal">
-                <svg viewBox="0 0 40 40" fill="none" class="badge-svg">
-                  <path d="M20 0L23.9714 3.03625L28.9008 1.98062L31.1277 6.39613L36.0388 7.5302L36.08 12.4504L40 15.5496L37.8475 20L40 24.4504L36.08 27.5496L36.0388 32.4698L31.1277 33.6039L28.9008 38.0194L23.9714 36.9637L20 40L16.0286 36.9637L11.0992 38.0194L8.87228 33.6039L3.96124 32.4698L3.91998 27.5496L0 24.4504L2.15253 20L0 15.5496L3.91998 12.4504L3.96124 7.5302L8.87228 6.39613L11.0992 1.98062L16.0286 3.03625L20 0Z" fill="#553FE0"/>
-                  <path d="M25 14L22 20L25 26H15L18 20L15 14H25Z" fill="white"/>
-                </svg>
+              <span class="price-sep">/</span>
+              <div class="price-unit">
+                <span class="price-unit-label">12H</span>
+                <span class="price-amount">{rate12.toLocaleString()}</span>
+                <span class="price-currency">원</span>
               </div>
             </div>
           </div>
           <div class="qty-wrap">
             <span class="qty-label">수량</span>
-            <div class="qty-ctrl">
-              <button class="qty-arrow" onclick={() => updateItem(item.id, { qty: Math.max(1, item.qty - 1) })}>
-                <svg width="8" height="14" viewBox="0 0 8 14" fill="none"><path d="M7 1L1 7L7 13" stroke="#444444" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"/></svg>
-              </button>
-              <div class="qty-num">{item.qty}</div>
-              <button class="qty-arrow" onclick={() => updateItem(item.id, { qty: item.qty + 1 })}>
-                <svg width="8" height="14" viewBox="0 0 8 14" fill="none"><path d="M1 1L7 7L1 13" stroke="#444444" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"/></svg>
-              </button>
+            <div class="qty-ctrl qty-ctrl--optstyle">
+              <button class="qty-arrow qty-arrow--optstyle" onclick={() => updateItem(item.id, { qty: Math.max(1, item.qty - 1) })} disabled={item.qty <= 1} aria-label="수량 감소">−</button>
+              <span class="qty-num qty-num--optstyle">{item.qty}</span>
+              <button class="qty-arrow qty-arrow--optstyle" onclick={() => updateItem(item.id, { qty: item.qty + 1 })} aria-label="수량 증가">+</button>
             </div>
+          </div>
           </div>
         </div>
 
@@ -1066,7 +1152,19 @@
                 <div class="option-subcard-info">
                   <p class="option-subcard-name">{opt.name}</p>
                   <div class="option-subcard-bottom">
-                    <p class="option-subcard-price">{fmtKrw(opt.unitPrice * opt.qty)}원</p>
+                    <div class="dual-price-row dual-price-row--opt">
+                      <div class="price-unit">
+                        <span class="price-unit-label">Day</span>
+                        <span class="price-amount">{fmtKrw(opt.unitPrice * opt.qty)}</span>
+                        <span class="price-currency">원</span>
+                      </div>
+                      <span class="price-sep">/</span>
+                      <div class="price-unit">
+                        <span class="price-unit-label">12H</span>
+                        <span class="price-amount">{fmtKrw(opt.unitPrice * opt.qty)}</span>
+                        <span class="price-currency">원</span>
+                      </div>
+                    </div>
                     <div class="opt-qty-ctrl">
                       <button class="opt-qty-arrow" onclick={() => updateOptionQty(item.id, line, opt.optionProductId, opt.qty - 1)} disabled={opt.qty <= 1 || pendingOptionKey === `${item.id}:${opt.optionProductId}`} aria-label="옵션 수량 감소">−</button>
                       <span class="opt-qty-num">{opt.qty}</span>
@@ -1087,8 +1185,25 @@
 {#snippet ItemListCard(item: CartItemUiState, line: CartLineItem | undefined)}
   {@const rate24 = itemRate24h(line)}
   {@const rate12 = itemRate12h(line, rate24)}
-  {@const cardRateVal = cardRate(rate24, rate12, item.durType)}
   <div class="item-card" class:selected={item.checked} role="listitem">
+    <div class="item-card-topbar">
+      <button class="item-card-check" onclick={() => updateItem(item.id, { checked: !item.checked })} aria-label="선택">
+        <svg viewBox="0 0 20 20" fill="none" class="checkbox-svg">
+          {#if item.checked}
+            <rect fill="#3B2F8A" height="18" rx="4" width="18" x="1" y="1"/>
+            <path d="M5 10L8.5 13.5L15 6" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+          {:else}
+            <rect fill="white" height="18" rx="4" width="18" x="1" y="1"/>
+            <rect height="18" rx="4" stroke="#AAAAAA" stroke-width="2" width="18" x="1" y="1"/>
+          {/if}
+        </svg>
+      </button>
+      <button class="delete-btn item-card-delete" onclick={() => removeItem(item)} aria-label="삭제">
+        <svg width="14" height="14" viewBox="0 0 17 17" fill="none">
+          <path d="M15.5 1.5L8.5 8.5M8.5 8.5L1.5 15.5M8.5 8.5L15.5 15.5M8.5 8.5L1.5 1.5" stroke="#AAAAAA" stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5"/>
+        </svg>
+      </button>
+    </div>
     <div
       class="item-card-body"
       role="button"
@@ -1105,8 +1220,19 @@
         <div class="item-info">
           <p class="item-name">{line?.product?.name ?? '상품'}</p>
           <div class="item-info-top">
-            <span class="dur-badge">{DUR_LABELS[item.durType]}</span>
-            <span class="fee-badge">{((cardRateVal + itemOptionsAmount(line)) * item.qty).toLocaleString()}원</span>
+            <div class="dual-price-row">
+              <div class="price-unit">
+                <span class="price-unit-label">Day</span>
+                <span class="price-amount">{rate24.toLocaleString()}</span>
+                <span class="price-currency">원</span>
+              </div>
+              <span class="price-sep">/</span>
+              <div class="price-unit">
+                <span class="price-unit-label">12H</span>
+                <span class="price-amount">{rate12.toLocaleString()}</span>
+                <span class="price-currency">원</span>
+              </div>
+            </div>
           </div>
           <div class="qty-wrap qty-wrap--sm">
             <div class="qty-ctrl" role="group" aria-label="수량">
@@ -1136,7 +1262,19 @@
               <div class="option-subcard-info">
                 <p class="option-subcard-name">{opt.name}</p>
                 <div class="option-subcard-bottom">
-                  <p class="option-subcard-price">{fmtKrw(opt.unitPrice * opt.qty)}원</p>
+                  <div class="dual-price-row dual-price-row--opt">
+                    <div class="price-unit">
+                      <span class="price-unit-label">Day</span>
+                      <span class="price-amount">{fmtKrw(opt.unitPrice * opt.qty)}</span>
+                      <span class="price-currency">원</span>
+                    </div>
+                    <span class="price-sep">/</span>
+                    <div class="price-unit">
+                      <span class="price-unit-label">12H</span>
+                      <span class="price-amount">{fmtKrw(opt.unitPrice * opt.qty)}</span>
+                      <span class="price-currency">원</span>
+                    </div>
+                  </div>
                   <div class="opt-qty-ctrl">
                     <button class="opt-qty-arrow" onclick={(e) => { e.stopPropagation(); updateOptionQty(item.id, line, opt.optionProductId, opt.qty - 1) }} disabled={opt.qty <= 1 || pendingOptionKey === `${item.id}:${opt.optionProductId}`} aria-label="옵션 수량 감소">−</button>
                     <span class="opt-qty-num">{opt.qty}</span>
@@ -1149,11 +1287,6 @@
         </div>
       {/if}
     </div>
-    <button class="delete-btn item-card-delete" onclick={() => removeItem(item)} aria-label="삭제">
-      <svg width="14" height="14" viewBox="0 0 17 17" fill="none">
-        <path d="M15.5 1.5L8.5 8.5M8.5 8.5L1.5 15.5M8.5 8.5L15.5 15.5M8.5 8.5L1.5 1.5" stroke="#AAAAAA" stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5"/>
-      </svg>
-    </button>
   </div>
 {/snippet}
 
@@ -1173,7 +1306,7 @@
       </button>
       {#if bulkOpenAcc === 'rental'}
         <div transition:slide={{ duration: 300 }} class="acc-body">
-          {@render RentalForm({ type: 'rental', calId: 'bulk-rental', selectedDate: bulkDate, onDateChange: bulkHandleDate, timeId: 'bulk-rental-t', selectedTime: bulkTime, onTimeChange: bulkHandleTime, method: bulkOpts.rentalMethod, form: bulkRentalForm, copyToReturn: bulkOpts.copyToReturn, onMethodChange: bulkHandleMethod, onFormChange: bulkHandleRentalForm, onCopyChange: bulkHandleCopy, hasUserAddress: sdHasUserAddress })}
+          {@render RentalForm({ type: 'rental', calId: 'bulk-rental', selectedDate: bulkDate, onDateChange: bulkHandleDate, timeId: 'bulk-rental-t', selectedTime: bulkTime, onTimeChange: bulkHandleTime, method: bulkOpts.rentalMethod, form: bulkRentalForm, copyToReturn: bulkOpts.copyToReturn, onMethodChange: bulkHandleMethod, onFormChange: bulkHandleRentalForm, onCopyChange: bulkHandleCopy, hasUserAddress: sdHasUserAddress, hasUserProfileInfo: sdHasUserProfileInfo, userProfileInfo: sdUserProfileInfo, userAddressInfo: sdUserAddressInfo, pickupPoints: visitPickupPoints, rangeStart: bulkDate, rangeEnd: bulkReturnDate })}
         </div>
       {/if}
     </div>
@@ -1190,7 +1323,7 @@
       </button>
       {#if bulkOpenAcc === 'return_'}
         <div transition:slide={{ duration: 300 }} class="acc-body">
-          {@render RentalForm({ type: 'return', calId: 'bulk-return', selectedDate: bulkDate, onDateChange: bulkHandleDate, timeId: 'bulk-return-t', selectedTime: bulkTime, onTimeChange: bulkHandleTime, method: bulkOpts.returnMethod, form: bulkReturnForm, onMethodChange: bulkHandleReturnMethod, onFormChange: bulkHandleReturnForm })}
+          {@render RentalForm({ type: 'return', calId: 'bulk-return', selectedDate: bulkReturnDate, onDateChange: bulkHandleReturnDate, timeId: 'bulk-return-t', selectedTime: bulkReturnTime, onTimeChange: bulkHandleReturnTime, method: bulkOpts.returnMethod, form: bulkReturnForm, onMethodChange: bulkHandleReturnMethod, onFormChange: bulkHandleReturnForm, hasUserProfileInfo: sdHasUserProfileInfo, userProfileInfo: sdUserProfileInfo, pickupPoints: visitPickupPoints, minDate: bulkDate, rangeStart: bulkDate, rangeEnd: bulkReturnDate })}
         </div>
       {/if}
     </div>
@@ -1212,11 +1345,22 @@
   onFormChange: (f: FormState) => void;
   onCopyChange?: (v: boolean) => void;
   hasUserAddress?: boolean;
+  hasUserProfileInfo?: boolean;
+  userProfileInfo?: UserProfileInfo;
+  userAddressInfo?: UserAddressInfo;
+  pickupPoints?: PickupPointRow[];
+  // 반납일 캘린더 전용 — 수령일 이전 선택 방지(수령일자 값 그대로 전달)
+  minDate?: string;
+  // 대여 기간 범위 시각화 — 수령·반납 달력 양쪽 모두에 전달해 어느 쪽을 열어도 전체
+  // 기간이 하나의 밴드로 보이도록 함(2026-08-17)
+  rangeStart?: string;
+  rangeEnd?: string;
 })}
   {@const sectionLabel = props.type === 'rental' ? '수령 방식' : '반납 방식'}
   {@const dateLabel = props.type === 'rental' ? '수령일' : '반납일'}
   {@const timeLabel = props.type === 'rental' ? '수령시간' : '반납시간'}
-  {@const addrLabel = props.type === 'rental' ? '배송지 정보' : '반납위치 지정정보'}
+  {@const isVisit = props.method === 'visit'}
+  {@const addrLabel = isVisit ? '방문지점 정보' : (props.type === 'rental' ? '배송지 정보' : '반납위치 지정정보')}
   {@const addrNote = props.type === 'rental'
     ? '대여 시작일은 배송일 기준 최소 2일 전까지 선택 가능합니다.'
     : '반납 방식이 수령 방식과 다를 경우 추가 비용이 발생할 수 있습니다.'}
@@ -1272,29 +1416,57 @@
             </button>
           </div>
 
+          <!-- 대여일시 통합 요약 — 날짜+시간 모두 선택 시 요일 포함 한 줄로 재확인 -->
+          {#if props.selectedDate && props.selectedTime}
+            <p class="datetime-summary">
+              {displayDate(props.selectedDate)}({weekdayKr(props.selectedDate)}) {props.selectedTime} {props.type === 'rental' ? '수령' : '반납'}
+            </p>
+          {/if}
+
           <!-- 달력 레이어 -->
           {#if isCalOpen}
             <div class="cal-layer" transition:slide={{ duration: 200 }}>
               <CalendarGrid
                 value={props.selectedDate}
-                onselect={(iso) => { props.onDateChange(iso); openCalId = null; }}
+                minDate={props.minDate}
+                rangeStart={props.rangeStart}
+                rangeEnd={props.rangeEnd}
+                rangeStartLabel="수령일"
+                rangeEndLabel="반납일"
+                onselect={(iso) => props.onDateChange(iso)}
               />
             </div>
           {/if}
 
-          <!-- 시간 선택 레이어 -->
+          <!-- 시간 선택 레이어 — 오전/오후 구획 세로 리스트(2026-08-17 가독성 개선:
+               6열 그리드+12px 텍스트가 터치타겟 44px 미만·가독성 저하 지적돼 교체) -->
           {#if isTimeOpen}
             <div class="time-layer" transition:slide={{ duration: 200 }}>
-              <div class="time-grid">
-                {#each Array.from({length: 24}, (_, i) => i) as h}
-                  {@const t = fmtTime(h)}
-                  {@const isSel = props.selectedTime === t}
-                  <button
-                    class="time-cell"
-                    class:time-cell-sel={isSel}
-                    onclick={() => { props.onTimeChange(t); openTimeId = null; }}
-                  >{t}</button>
-                {/each}
+              <div class="time-list">
+                <div class="time-section">
+                  <span class="time-section-label">오전</span>
+                  {#each TIME_AM_HOURS as h}
+                    {@const t = fmtTime(h)}
+                    {@const isSel = props.selectedTime === t}
+                    <button
+                      class="time-row"
+                      class:time-row-sel={isSel}
+                      onclick={() => { props.onTimeChange(t); openTimeId = null; }}
+                    >{t}</button>
+                  {/each}
+                </div>
+                <div class="time-section">
+                  <span class="time-section-label">오후</span>
+                  {#each TIME_PM_HOURS as h}
+                    {@const t = fmtTime(h)}
+                    {@const isSel = props.selectedTime === t}
+                    <button
+                      class="time-row"
+                      class:time-row-sel={isSel}
+                      onclick={() => { props.onTimeChange(t); openTimeId = null; }}
+                    >{t}</button>
+                  {/each}
+                </div>
               </div>
             </div>
           {/if}
@@ -1307,8 +1479,24 @@
     <div class="form-section">
       <div class="form-section-header">
         <span class="form-section-label">고객 정보</span>
-        <label class="form-check-label">
-          <button class="checkbox-btn small" onclick={() => props.onFormChange({ ...props.form, memberCheck: !props.form.memberCheck })} aria-label="회원정보 반영">
+        <label class="form-check-label" class:form-check-label-disabled={!props.hasUserProfileInfo}>
+          <button
+            class="checkbox-btn small"
+            disabled={!props.hasUserProfileInfo}
+            onclick={() => {
+              const next = !props.form.memberCheck
+              props.onFormChange(next
+                ? {
+                    ...props.form,
+                    memberCheck: true,
+                    name:  props.userProfileInfo?.name  ?? props.form.name,
+                    email: props.userProfileInfo?.email ?? props.form.email,
+                    phone: props.userProfileInfo?.phone ?? props.form.phone,
+                  }
+                : { ...props.form, memberCheck: false })
+            }}
+            aria-label="회원정보 반영"
+          >
             <svg viewBox="0 0 20 20" fill="none" class="checkbox-svg">
               {#if props.form.memberCheck}
                 <rect fill="#3B2F8A" height="18" rx="4" width="18" x="1" y="1"/>
@@ -1325,14 +1513,7 @@
       <div class="form-fields">
         <input class="f-input" placeholder="이름 입력" value={props.form.name} oninput={(e) => props.onFormChange({ ...props.form, name: readInputValue(e) })}/>
         <input class="f-input" placeholder="전자메일주소 입력" value={props.form.email} oninput={(e) => props.onFormChange({ ...props.form, email: readInputValue(e) })}/>
-        <div class="f-row">
-          <input class="f-input f-grow" placeholder="휴대번호를 '-' 없이 입력" value={props.form.phone} oninput={(e) => props.onFormChange({ ...props.form, phone: readInputValue(e) })}/>
-          <button class="f-action-btn" onclick={() => requestGuestOtp(props.form.email)}>인증실행</button>
-        </div>
-        <div class="f-row">
-          <input class="f-input f-grow" placeholder="6자리 인증번호를 입력" value={props.form.authCode} oninput={(e) => props.onFormChange({ ...props.form, authCode: readInputValue(e) })}/>
-          <button class="f-action-btn" onclick={() => verifyGuestOtp(props.form.email, props.form.authCode, props.form)}>인증확인</button>
-        </div>
+        <input class="f-input" placeholder="휴대번호를 '-' 없이 입력" value={props.form.phone} oninput={(e) => props.onFormChange({ ...props.form, phone: readInputValue(e) })}/>
       </div>
     </div>
 
@@ -1340,12 +1521,22 @@
     <div class="form-section">
       <div class="form-section-header">
         <span class="form-section-label">{addrLabel}</span>
-        {#if props.type === 'rental'}
+        {#if props.type === 'rental' && !isVisit}
           <label class="form-check-label" class:form-check-label-disabled={!props.hasUserAddress}>
             <button
               class="checkbox-btn small"
               disabled={!props.hasUserAddress}
-              onclick={() => props.onFormChange({ ...props.form, memberCheck2: !props.form.memberCheck2 })}
+              onclick={() => {
+                const next = !props.form.memberCheck2
+                props.onFormChange(next
+                  ? {
+                      ...props.form,
+                      memberCheck2: true,
+                      addr:       props.userAddressInfo?.road_address  ?? props.form.addr,
+                      addrDetail: props.userAddressInfo?.detail_address ?? props.form.addrDetail,
+                    }
+                  : { ...props.form, memberCheck2: false })
+              }}
               aria-label="회원정보 반영"
             >
               <svg viewBox="0 0 20 20" fill="none" class="checkbox-svg">
@@ -1362,14 +1553,21 @@
           </label>
         {/if}
       </div>
-      <div class="form-fields">
-        <input class="f-input" placeholder="기본주소 입력" value={props.form.addr} oninput={(e) => props.onFormChange({ ...props.form, addr: readInputValue(e) })}/>
-        <input class="f-input" placeholder="상세주소 입력" value={props.form.addrDetail} oninput={(e) => props.onFormChange({ ...props.form, addrDetail: readInputValue(e) })}/>
-      </div>
-      {#if props.method === 'visit'}
+      {#if isVisit}
+        <!-- 방문대여/방문반납 선택 시 배송지 입력 대신 실제 방문 지점 정보로 대체(2026-08-17) -->
         <div class="visit-info">
-          <p>인천공항 제1터미널 도착홀 D, 5번 게이트 대면 수령</p>
-          <p>가양동 사옥 1층 고객센터 방문 수령</p>
+          {#if props.pickupPoints && props.pickupPoints.length > 0}
+            {#each props.pickupPoints as point (point.id)}
+              <p><strong>{point.name}</strong>{point.address ? ` — ${point.address}` : ''}</p>
+            {/each}
+          {:else}
+            <p>등록된 방문 지점이 없습니다. 고객센터로 문의해 주세요.</p>
+          {/if}
+        </div>
+      {:else}
+        <div class="form-fields">
+          <input class="f-input" placeholder="기본주소 입력" value={props.form.addr} oninput={(e) => props.onFormChange({ ...props.form, addr: readInputValue(e) })}/>
+          <input class="f-input" placeholder="상세주소 입력" value={props.form.addrDetail} oninput={(e) => props.onFormChange({ ...props.form, addrDetail: readInputValue(e) })}/>
         </div>
       {/if}
     </div>
@@ -1602,24 +1800,59 @@
     display: flex;
     align-items: stretch;
     background: white;
-    border-radius: var(--radius-lg, 20px);
+    /* app.css --radius-lg는 "배지·날짜 행"용 토큰(20px)이지 카드용이 아님 — 이 카드는
+       같은 화면의 .order-card(흰 카드, --radius-2xl 50px)와 동일한 흰 카드 계열이라
+       --radius-2xl로 통일(2026-08-17, front-uiux.md §4 문서표 대신 app.css 실제
+       토큰 주석 기준 — 지난 .order-card 정정과 동일 원칙) */
+    border-radius: var(--radius-2xl, 50px);
     box-shadow: 0px 1px 2px rgba(0,0,0,0.06);
     border: 1.5px solid transparent;
     transition: background 0.15s, border-color 0.15s;
     flex-shrink: 0;
     overflow: hidden;
-    padding: var(--spacing-5, 20px);   /* 카드 내부 상하좌우 패딩 — front 표준 spacing 토큰(lg=20px) */
+    /* front-uiux.md §카드형 레이아웃 상하 패딩 — PC 30px(2026-08-17 확정). 이 카드는
+       PC 전용(master-detail display:none 이하 641px)이라 모바일 20px 값은 해당 없음.
+       좌우는 기존 spacing 토큰(20px) 그대로 유지 */
+    /* 2026-08-18: 상단 83px로 재확대 — .item-card-topbar(체크박스+삭제)와 .item-card-body
+       콘텐츠 시작선 사이 여백을 실측 기준 30px로 확보. PC 전용 컴포넌트(master-detail
+       display:none 이하 641px)라 이 값은 PC 반응형에만 적용됨 — 별도 모바일 오버라이드
+       불필요. 좌우/하단은 기존 표준값(20px/30px) 그대로 유지 */
+    padding: 83px var(--spacing-5, 20px) 30px;
+  }
+  /* 결제 포함 체크박스 + 삭제 버튼 묶음(2026-08-18) — 기존엔 각자 독립적으로 카드 좌/우
+     상단에 absolute 배치돼 있던 것을 하나의 상단바(.item-card-topbar)로 그룹화. 카드
+     (BG 영역) 최상단에 고정 — 옵션상품이 늘어나 카드가 길어져도 항상 카드 첫 줄 높이에
+     맞춰 고정된다. 12px = 카드 패딩(20px) - 버튼 자체 여백(8px), 콘텐츠 여백과 시각적으로
+     정렬 */
+  .item-card-topbar {
+    position: absolute;
+    /* 2026-08-18: 카드 BG 최상단과의 여백을 12px → 20px로 확대(체크박스 버튼 높이
+       28px 기준 하단 끝이 정확히 콘텐츠 시작선(padding-top 48px)에 닿아 여전히
+       겹치지 않음) */
+    top: 20px;
+    left: 12px;
+    right: 12px;
+    z-index: 1;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    /* 2026-08-18: 좌우 8px 추가 — 기존 left/right:12px(카드 기준 절대 인셋)에 더해
+       버튼 자체를 안쪽으로 8px 밀어 총 20px 여백(top:20px와 동일 수준)으로 정렬 */
+    padding: 0 8px;
+  }
+  /* 결제 포함 체크박스(PC) — 모바일 .card-top-row .checkbox-btn과 동일 위치(카드 좌상단)·
+     동일 아이콘(checkbox-svg 20px, PC 폼 체크박스와 이미 같은 크기 재사용)로 노출
+     (2026-08-18 — 기존엔 PC 카드에 체크박스가 없어 전체 배경색 변화로만 선택을 표현했음,
+     모바일과 시각적으로 통일) */
+  .item-card-check {
+    background: none;
+    border: none;
+    cursor: pointer;
+    padding: 4px;
   }
   .item-card:hover { background: var(--cs-lilac); }
   /* 결제 포함 여부(item.checked) — 이전 세대 체크박스 아이콘 UI 대체, 카드 자체 배경색으로 표현 */
   .item-card.selected { background: var(--cs-purple-op10); }
-  /* 카드(BG 영역) 최상단 우측 고정 — 옵션상품이 늘어나 카드가 길어져도 항상 카드 첫 줄
-     높이에 맞춰 고정. 12px = 카드 패딩(20px) - 버튼 자체 여백(8px), 콘텐츠 여백과 시각적으로 정렬 */
-  .item-card-delete {
-    position: absolute;
-    top: 12px;
-    right: 12px;
-  }
   .item-card-body {
     display: flex;
     flex-direction: column;
@@ -1636,8 +1869,18 @@
   .item-card-top-row {
     display: flex;
     align-items: center;
-    gap: 15px;
+    /* 2026-08-18: 이미지~정보 여백 2배 확대(15px → 30px). 이 카드는 PC 전용 컴포넌트
+       (master-detail display:none 이하 641px)라 모바일 대응 인스턴스가 별도로 없음 —
+       이 값 자체가 PC 반응형 적용값 */
+    gap: 30px;
     width: 100%;
+    /* 2026-08-18: 641px 근처의 좁은 PC창(list-pane+detail-pane 분할로 카드 자체 폭이
+       매우 좁아지는 구간)에서 .item-info(min-width:0)가 계속 짜부라지다가 배지 행
+       (.item-info-top)만 2줄로 줄바꿈돼 정보 열 높이가 108px 썸네일보다 커지고, 그
+       결과 하단 수량 스테퍼가 썸네일 바닥선 아래로 삐져나와 보이던 결함 — flex-wrap
+       추가 + 아래 .item-info min-width 플로어로, 공간이 부족하면 배지만 어색하게
+       줄바꿈되는 대신 정보 블록 전체가 깔끔하게 썸네일 아래 새 줄로 내려가도록 변경 */
+    flex-wrap: wrap;
   }
   .item-thumb-wrap {
     flex-shrink: 0;
@@ -1648,30 +1891,57 @@
     background: #F2F2F8;
   }
   .item-thumb { width: 108px; height: 108px; object-fit: cover; display: block; }
-  .item-info { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 6px; }
+  .item-info { flex: 1; min-width: 180px; display: flex; flex-direction: column; gap: 6px; }
   .item-info-top { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
-  .dur-badge {
-    display: inline-block;
-    padding: 4px 9px;
-    background: var(--cs-lilac);
-    color: var(--cs-purple);
-    border-radius: var(--radius-full, 9999px);
-    font: var(--text-pc-script-12);
-    font-weight: 700;
-    white-space: nowrap;
+  /* 2026-08-18: /products/[id] 상세페이지 .price-row("Day 72,000원 / 12H 52,000원")
+     레이아웃을 그대로 가져와 기존 dur-badge/fee-badge(단일 배지 2개) 표시를 대체 —
+     반응형별(모바일 기본값/PC ≥641px) 폰트·컬러 토큰도 원본 그대로 반영. 이 카드는
+     PC 전용(master-detail, ≥641px)이라 실제로는 PC 분기값만 보이지만, 원본과 동일하게
+     양쪽 다 정의해둠 */
+  /* 2026-08-18(수정): 클래스명이 기존 무관한 .price-row(대여요금/배송요금 라인아이템
+     행, justify-content:space-between 포함)와 충돌해 "/" 구분자가 우측으로 밀려나는
+     등 스타일이 오염되고 있었음 — dual-price-row로 개명해 충돌 해소(같은 이유로
+     .price-period-label도 price-unit-label로 개명 완료) */
+  .dual-price-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    color: var(--cs-red-badge);
+    flex-wrap: wrap;
   }
-  .fee-badge {
-    display: inline-block;
-    padding: 4px 9px;
-    background: #F3F4F6;
-    color: var(--cs-text-dark);
-    border-radius: var(--radius-full, 9999px);
-    font: var(--text-pc-script-12);
+  .price-unit { display: flex; align-items: baseline; gap: 4px; }
+  .price-unit-label { font: var(--text-m-script-12); }
+  @media (min-width: 641px) { .price-unit-label { font: var(--text-pc-ad-kr-22); } }
+  /* 2026-08-18: 카드 폭에 맞춰 축소(모바일 24px→14px, PC 35px→18px) — 참조 페이지의
+     히어로급 가격 크기는 이 컴팩트 카드 행에는 과했음 */
+  .price-amount {
+    font-family: var(--font-kr-heading);
     font-weight: 700;
-    white-space: nowrap;
+    font-size: 14px;
   }
+  @media (min-width: 641px) { .price-amount { font-size: 18px; } }
+  .price-currency { font: var(--text-m-script-12); }
+  @media (min-width: 641px) { .price-currency { font: var(--text-pc-ad-kr-22); } }
+  /* 2026-08-18: 옵션카드(.dual-price-row--opt)와 동일 수준으로 본상품 dual-price-row도
+     한 단계 더 축소 — 위 font: 토큰(라벨/통화) 위에 font-size만 덮어써서 폭 좁힘.
+     PC(≥641px)만 이 축소값 유지 */
+  @media (min-width: 641px) { .price-unit-label { font-size: 11px; } }
+  @media (min-width: 641px) { .price-amount { font-size: 13px; } }
+  @media (min-width: 641px) { .price-currency { font-size: 11px; } }
+  /* 2026-08-18: 모바일 반응형만 한 단계 큰 폰트 토큰값으로 재확대 — price-unit-label/
+     price-currency는 위 10px 오버라이드를 제거해 원래 선언된 토큰(--text-m-script-12,
+     12px)으로 복귀(폰트 타입은 그대로 유지, 크기만 한 단계 큰 기존 토큰값 적용).
+     price-amount는 토큰화된 속성이 아니라 family+weight를 그대로 유지한 채
+     font-size만 12px→14px로 확대
+     2026-08-19(QA 발견·수정): 이 규칙에 미디어쿼리 스코프가 빠져 있어 "모바일만"이라는
+     주석 의도와 달리 PC(≥641px)에서도 항상 이 14px이 위 1922행의 13px을 덮어쓰고
+     있었음 — 원래 의도대로 모바일 전용으로 스코프 추가 */
+  @media (max-width: 640px) { .price-amount { font-size: 14px; } }
+  .price-sep { font: var(--text-m-script-14); color: var(--cs-red-badge); }
   .item-name {
-    font: var(--text-pc-body-14);
+    /* 2026-08-18: --text-m-htitle-24B 스타일(900 Black)을 반영하되, 이 카드 규모에 맞춰
+       18px(중간 크기) 버전인 신설 토큰 --text-m-htitle-18B 적용(app.css 참고) */
+    font: var(--text-m-htitle-18B);
     color: var(--cs-text);
     margin: 0;
     overflow: hidden;
@@ -1688,17 +1958,35 @@
   /* ══ Order Card (DetailPanel 내부 카드) ══ */
   .order-card {
     background: white;
-    border-radius: 50px;
+    /* front-uiux.md §4 "카드(대)" PC값 — 50px(--radius-2xl). Mobile은 30px로 의도적으로
+       다름(@media max-width:640px 오버라이드 참고, 2026-08-17 Stephen 확정) */
+    border-radius: var(--radius-2xl, 50px);
     width: 100%;
     box-sizing: border-box;
   }
+  /* 결제 포함 여부(item.checked) — PC .item-card.selected와 동일 배경색 토큰 적용(2026-08-18,
+     기존엔 모바일만 흰색 고정이라 선택 상태가 카드 배경에 반영되지 않았음) */
+  .order-card.selected { background: var(--cs-purple-op10); }
   .order-card-inner {
     display: flex;
     flex-direction: column;
     gap: 50px;
     padding: 40px;
   }
-  .empty-card { padding: 40px; text-align: center; }
+  /* 2026-08-19: front 표준 디자인 시스템(카드(중) 티어) 기준으로 라운드값 축소
+     (--radius-2xl 50px → --radius-xl 30px, PC·모바일 공용) + 아이콘 추가로 세로폭
+     2배 확대(패딩 40px→60px + 아이콘+간격+텍스트 레이아웃) */
+  .empty-card {
+    border-radius: var(--radius-xl, 30px);
+    padding: 60px 40px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 16px;
+    text-align: center;
+  }
+  .empty-icon { width: 56px; height: auto; flex-shrink: 0; }
   .empty-text { color: #AAAAAA; font-size: 16px; font-weight: 500; }
 
   /* Card top row (모바일 개별 카드 전용) */
@@ -1742,34 +2030,30 @@
     flex-shrink: 0;
   }
   .product-img img { width: 100%; height: 100%; object-fit: cover; }
-  .product-meta {
+  /* 2026-08-18: 기존엔 .product-img/.product-meta/.qty-wrap이 .product-row의 flex 자식
+     3개로 나란히 있어, 좁은 화면에서 수량 스테퍼가 나머지와 무관하게 자기 혼자 다음 줄로
+     떨어져 나가 시각적으로 붕 떠 보이던 결함 — .product-meta+.qty-wrap을 이 래퍼 하나로
+     묶어 "이미지 | 정보그룹(이름·기간탭·가격·배지·수량)" 2열 구조로 재구성 */
+  .product-info-group {
     flex: 1;
     min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
     padding: 0 20px;
   }
   .product-name {
-    font-size: 18px;
-    font-weight: 700;
+    /* 2026-08-18: 한 단계 큰 토큰으로 교체(--text-m-title-18B 18px Bold →
+       --text-m-htitle-24B 24px Black) — font 축약형이 weight/line-height도 함께 지정 */
+    font: var(--text-m-htitle-24B);
     color: #100B32;
-    line-height: 1.6;
     letter-spacing: -0.3px;
     margin: 0 0 5px;
     word-break: break-word;
   }
-  .product-price {
-    font-size: 14px;
-    font-weight: 700;
-    color: #444444;
-    line-height: 2;
-    letter-spacing: -0.5px;
-    margin: 0 0 5px;
-  }
-  .product-badges { display: flex; gap: 15px; align-items: center; }
-  .badge-mem, .badge-deal { width: 40px; height: 40px; flex-shrink: 0; }
-  .badge-svg { width: 40px; height: 40px; }
   /* ══ 옵션상품 하위 카드 — Figma(node 2447:12056) 기준: 본상품과 동일한 크기/폰트를 쓰고
-     연결선(ㄴ)만으로 하위 관계를 표시. 12H/24H 이중가격·회원/특가 배지·수량 스테퍼는
-     옵션상품에 해당 데이터·기능이 없어 제외(이름·수량·합계금액·썸네일만 정직하게 표시) */
+     연결선(ㄴ)만으로 하위 관계를 표시. 12H/24H 이중가격·수량 스테퍼는 옵션상품에 해당
+     데이터·기능이 없어 제외(이름·수량·합계금액·썸네일만 정직하게 표시) */
   .option-subcard-list {
     display: flex;
     flex-direction: column;
@@ -1822,15 +2106,13 @@
     margin: 0;
     word-break: break-word;
   }
-  /* 본상품 .product-price와 동일 스타일 */
-  .option-subcard-price {
-    font-size: 14px;
-    font-weight: 700;
-    color: #444444;
-    line-height: 1.6;
-    letter-spacing: -0.5px;
-    margin: 0;
-  }
+  /* 2026-08-18: 옵션상품도 본상품과 동일한 Day/12H price-row로 통일(옵션은 기간별
+     요금이 실제로 없어 동일 unitPrice*qty 값을 양쪽에 동일 표시 — Stephen 확인).
+     옵션 카드 규모(본상품보다 작음)에 맞춰 price-amount 등 폭 축소 */
+  /* 2026-08-18: 본상품 price-amount/label/currency도 이 옵션 규격과 동일하게
+     맞춰져(위 본상품 규칙 참고) 폰트 크기 오버라이드는 더 이상 필요 없음 — gap만
+     옵션 카드 쪽이 좁게 유지 */
+  .dual-price-row--opt { gap: 6px; }
   /* 옵션상품 수량 조절 — 본상품 .qty-wrap과 동일 인터랙션 패턴(± 버튼) 축소 적용 */
   .option-subcard-bottom {
     display: flex;
@@ -1901,11 +2183,13 @@
     text-overflow: ellipsis;
     white-space: nowrap;
   }
-  .option-subcard--compact .option-subcard-price { font-size: 13px; font-weight: 600; color: var(--cs-text-mid); }
   .option-subcard--compact .opt-qty-arrow { width: 18px; height: 18px; font-size: 12px; }
   .option-subcard--compact .opt-qty-num { font-size: 11px; padding: 1px 8px; min-width: 18px; }
 
   /* ══ Duration Type Tabs ══ */
+  /* 2026-08-18: 비활성 상태로 숨김(삭제 아님, Stephen 확인) — 마크업·로직은 보존해
+     추후 "대여예약옵션" 통합 편집기에 편입 시 이 규칙만 제거하면 즉시 재활성 가능 */
+  .dur-tabs.dur-tabs-disabled { display: none; }
   .dur-tabs {
     display: flex;
     gap: 6px;
@@ -1947,6 +2231,9 @@
     font-weight: 700;
     color: #444444;
     letter-spacing: -0.5px;
+    /* 2026-08-18: qty-wrap이 product-info-group 내부로 이동하며 가용폭이 좁아져
+       "수량" 두 글자가 세로로 쪼개져 보이던 결함 — 줄바꿈 금지로 방지 */
+    white-space: nowrap;
   }
   .qty-ctrl {
     display: flex;
@@ -1977,6 +2264,34 @@
     letter-spacing: -0.5px;
     line-height: 2;
     min-width: 44px;
+    text-align: center;
+  }
+  /* 2026-08-18: 모바일 본상품 수량조절 UI를 옵션상품(.opt-qty-ctrl) 스타일로 교체
+     (SVG 화살표 → 텍스트 −/+ 문자, 최소수량 시 비활성 상태 추가) + 30% 확대 배치.
+     신규 모디파이어 클래스로 분리해 PC ItemListCard(.qty-wrap--sm, 여전히 SVG 사용)에는
+     영향 없음 — opt-qty-arrow(22px/14px)·opt-qty-num(패딩 2px 10px/12px/최소폭22px)
+     기준값에 ×1.3 적용 */
+  .qty-ctrl--optstyle { gap: 10px; }
+  .qty-arrow--optstyle {
+    width: 29px;
+    height: 29px;
+    font-size: 18px;
+    font-weight: 700;
+    line-height: 1;
+    color: var(--cs-text-dark, #444444);
+  }
+  .qty-arrow--optstyle:hover:not(:disabled) { background: rgba(0,0,0,0.06); }
+  .qty-arrow--optstyle:disabled { opacity: 0.35; cursor: not-allowed; }
+  .qty-num--optstyle {
+    background: var(--cs-white, #fff);
+    border-radius: 10px;
+    padding: 3px 13px;
+    font-size: 16px;
+    font-weight: 700;
+    color: var(--cs-text, #100B32);
+    letter-spacing: -0.5px;
+    line-height: 2;
+    min-width: 29px;
     text-align: center;
   }
   /* PC ItemListCard 전용 축소 스케일(30% 작게) — 모바일 OrderCard의 기본 .qty-wrap 크기는 그대로 유지 */
@@ -2010,7 +2325,7 @@
   .acc-label {
     font-size: 18px;
     font-weight: 400;
-    color: var(--cs-text-dark);
+    color: var(--cs-purple-dark);
     letter-spacing: -0.3px;
     line-height: 1.6;
   }
@@ -2021,7 +2336,7 @@
   }
   .acc-value {
     font: var(--text-pc-title-18);
-    color: var(--cs-text-dark);
+    color: var(--cs-purple-dark);
   }
   .acc-body {
     padding-top: 30px;
@@ -2095,6 +2410,9 @@
     margin: 0;
   }
   .visit-info {
+    background: var(--cs-surface-gray);
+    border-radius: var(--radius-md, 15px);
+    padding: 16px 20px;
     font-size: 14px;
     font-weight: 700;
     color: var(--cs-red);
@@ -2108,7 +2426,7 @@
     cursor: pointer;
     font-size: 14px;
     font-weight: 700;
-    color: #444;
+    color: var(--cs-text-dark);
     justify-content: center;
   }
 
@@ -2162,6 +2480,21 @@
     margin: 4px 0 0;
   }
 
+  /* 대여일시 통합 요약 배지 — 날짜+시간 모두 선택 시 확인용 */
+  .datetime-summary {
+    display: block;
+    width: 100%;
+    box-sizing: border-box;
+    text-align: center;
+    font: var(--text-m-script-14B);
+    font-weight: 700;
+    color: var(--cs-purple-dark);
+    background: var(--cs-purple-op10);
+    border-radius: var(--radius-full, 9999px);
+    padding: 10px 16px;
+    margin: 8px 0 0;
+  }
+
   /* Datetime buttons */
   .datetime-btns {
     display: flex;
@@ -2180,8 +2513,8 @@
     transition: filter 0.2s;
   }
   .datetime-btn:hover { filter: brightness(1.1); }
-  .datetime-btn-dark { background: #444; }
-  .datetime-btn-mid { background: #666; }
+  .datetime-btn-dark { background: var(--cs-text-dark); }
+  .datetime-btn-mid { background: var(--cs-text-mid); }
   .datetime-btn-left {
     display: flex;
     align-items: center;
@@ -2201,11 +2534,15 @@
     top: calc(100% + 8px);
     left: 0;
     z-index: 100;
-    background: white;
+    background: var(--cs-white);
     border-radius: 20px;
     padding: 20px;
     box-shadow: 0 8px 30px rgba(16,11,50,0.15);
-    width: 50%;
+    /* 2026-08-18: 기존 50%는 상단 .datetime-btns(수령일+수령시간 2버튼) 중 절반(수령일
+       버튼)폭에만 맞춰져 있어 날짜 그리드 우측 열이 좁게 잘려 보이던 결함 — .datetime-wrap
+       (부모, position:relative) 전체 폭인 100%로 확장해 두 버튼을 합친 가로폭과 정렬.
+       PC·모바일 공용 규칙(미디어쿼리 분기 없음)이라 양쪽 반응형에 동시 적용됨 */
+    width: 100%;
     box-sizing: border-box;
   }
 
@@ -2215,33 +2552,61 @@
     top: calc(100% + 8px);
     right: 0;
     z-index: 100;
-    background: white;
+    background: var(--cs-white);
     border-radius: 20px;
     padding: 16px;
     box-shadow: 0 8px 30px rgba(16,11,50,0.15);
     width: 50%;
     box-sizing: border-box;
   }
-  .time-grid {
-    display: grid;
-    grid-template-columns: repeat(6, 1fr);
-    gap: 4px;
+  /* 시간 선택 — 오전/오후 구획 세로 스크롤 리스트(2026-08-17, B안 채택).
+     기존 6열×4행 그리드(셀당 세로 ~28px)는 ui-mobile.md 44×44px 터치타겟 기준 미달 +
+     "00:00" 전체 표기가 12px로 밀집돼 가독성 저하 지적됨(Stephen) — 세로 목록 + 큰
+     행 높이로 교체. 대안(C안: 네이티브 <input type="time"> 또는 커스텀 휠피커)은
+     각각 "기존 브랜드 디자인 언어(보라색 강조·pill 형태)와 이질적" / "스크롤스냅 등
+     구현·크로스브라우저 리스크 큼" 이유로 기각(Stephen 승인) — SuggestPicker와 동일한
+     max-height+overflow-y:auto 스크롤 컨테이너 패턴 재사용. */
+  .time-list {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    max-height: 280px;
+    overflow-y: auto;
+    padding-right: 4px;
   }
-  .time-cell {
-    background: #f6f6f6;
+  .time-section {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+  .time-section-label {
+    display: block;
+    position: sticky;
+    top: 0;
+    z-index: 1;
+    background: var(--cs-white);
+    font: var(--text-m-script-12);
+    font-weight: 700;
+    color: var(--cs-text-light);
+    padding: 6px 4px;
+  }
+  .time-row {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 100%;
+    min-height: 44px;
+    background: var(--cs-surface-gray);
     border: none;
     border-radius: 10px;
-    padding: 8px 4px;
-    font-family: var(--font-kr);
-    font-size: 12px;
-    font-weight: 500;
-    color: #444;
+    font: var(--text-pc-body-14);
+    font-weight: 600;
+    color: var(--cs-text-dark);
     cursor: pointer;
     transition: background 0.15s;
-    text-align: center;
   }
-  .time-cell:hover { background: #ECEBF4; }
-  .time-cell-sel { background: #3B2F8A !important; color: white !important; font-weight: 700; }
+  .time-row:hover { background: var(--cs-purple-op10); }
+  .time-row-sel { background: var(--cs-purple) !important; color: var(--cs-white) !important; font-weight: 700; }
 
   /* Form inputs */
   .f-input {
@@ -2260,20 +2625,6 @@
   }
   .f-input::placeholder { color: #B6B6B6; }
   .f-input:focus { outline: 2px solid #3B2F8A; outline-offset: -2px; }
-  .f-row { display: flex; gap: 16px; align-items: center; }
-  .f-grow { flex: 1; min-width: 0; width: auto; }
-  .f-action-btn {
-    background: none;
-    border: none;
-    cursor: pointer;
-    font-size: 14px;
-    font-weight: 700;
-    color: #444;
-    white-space: nowrap;
-    padding: 0;
-    transition: color 0.2s;
-  }
-  .f-action-btn:hover { color: #3B2F8A; }
 
   /* ══ Coupon Row ══ */
   .coupon-list { display: flex; flex-direction: column; gap: 15px; }
@@ -2350,7 +2701,9 @@
 
   /* ══ Order Total ══ */
   .total-details-box {
-    border-radius: 30px;
+    /* app.css --radius-xl(30px, "총금액 박스·CTA 버튼" 주석)와 정확히 일치하는 값 —
+       하드코딩만 정리(2026-08-17, 카드 라운드값 정렬 작업 연장) */
+    border-radius: var(--radius-xl, 30px);
     overflow: hidden;
     width: 100%;
   }
@@ -2360,6 +2713,29 @@
     display: flex;
     flex-direction: column;
     gap: 20px;
+  }
+  /* 쿠폰 섹션(제목+목록+안내문구) 묶음 — total-white-section의 flex gap을 그대로 재현해
+     시각적 간격은 유지하면서 구조적으로 하나의 블록으로 분리 */
+  .coupon-section {
+    display: flex;
+    flex-direction: column;
+    gap: 20px;
+  }
+  /* 포인트 사용 섹션(제목+입력행+보유표시) 묶음 — 위 coupon-section과 동일 패턴이되,
+     PC에서는 라벨만 자체 줄을 차지하고(flex-basis:100%로 줄바꿈 강제) 입력행+보유표시는
+     같은 줄에서 좌우로 펼쳐 배치(justify-content:space-between) — 입력행만 폭 180px로
+     좌측에 뭉쳐있고 우측이 텅 비어 보이던 "좌측 쏠림" 현상 해소. 모바일은 기존처럼 세로
+     스택 유지(하단 @media 오버라이드 참고) */
+  .points-section {
+    display: flex;
+    flex-direction: row;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 20px;
+  }
+  .points-section > .section-sub-label {
+    flex-basis: 100%;
   }
   .total-gray-section {
     background: #F6F6F6;
@@ -2380,6 +2756,10 @@
     align-items: center;
     gap: 12px;
     margin-top: 8px;
+    /* 2026-08-19: points-section이 row+space-between로 바뀌면서 이 행 자체가 콘텐츠
+       크기(입력창 180px 상한 + 버튼)만큼만 차지해 좁아 보이던 결함 — flex:1로 points-avail을
+       제외한 나머지 폭을 전부 확보 */
+    flex: 1;
   }
   .points-input {
     flex: 1;
@@ -2392,20 +2772,53 @@
     color: var(--cs-text);
     background: white;
     outline: none;
-    max-width: 180px;
+    /* 2026-08-19: 위 points-input-row가 flex:1로 넓어진 만큼 입력창도 180px 상한 없이
+       실제로 늘어나도록 상한 제거(버튼은 flex-shrink:0로 고정폭 유지) */
+    max-width: 320px;
   }
   .points-input:focus { border-color: var(--cs-purple); }
+  /* '모두 사용' 버튼 — 입력창과 같은 행, 보유 포인트 전액을 입력창에 즉시 반영 */
+  .points-use-all-btn {
+    flex-shrink: 0;
+    height: 44px;
+    padding: 0 16px;
+    border: 1px solid var(--cs-purple);
+    border-radius: var(--radius-sm);
+    background: white;
+    color: var(--cs-purple);
+    font-size: 14px;
+    font-weight: 700;
+    white-space: nowrap;
+    cursor: pointer;
+    transition: background 0.15s, color 0.15s;
+  }
+  .points-use-all-btn:hover:not(:disabled) { background: var(--cs-purple); color: white; }
+  .points-use-all-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+  /* 보유 포인트 — 가독성 강화: 라벨/숫자/단위를 각각 분리해 여백 확보 + 숫자만 한 단계 큰
+     토큰(body-14 → title-16)으로 강조. PC에서는 입력행과 같은 줄에 나란히 놓이므로
+     margin-top 없음(모바일 세로 스택 시에만 하단 오버라이드로 여백 추가) */
   .points-avail {
+    display: inline-flex;
+    align-items: baseline;
+    gap: 6px;
     font-size: 14px;
     color: #888;
     white-space: nowrap;
   }
-  .points-avail strong { color: var(--cs-purple); }
+  .points-avail-num {
+    font: var(--text-pc-title-16);
+    color: var(--cs-purple);
+  }
 
   .total-dark-box {
     background: #100B32;
-    border-radius: 30px;
-    padding: 20px 40px;
+    /* app.css --radius-xl(30px, "총금액 박스·CTA 버튼")와 일치 — PC 30px인데 모바일만
+       20px로 갈라져 있던 파편화도 함께 정리(모바일 오버라이드 제거, 2026-08-17) */
+    border-radius: var(--radius-xl, 30px);
+    /* 좌우 패딩을 프론트 표준 레이아웃 토큰(--layout-pc-pad, 40px)으로 명시 — 기존엔
+       같은 40px를 하드코딩해 값 자체는 표준과 일치했지만 토큰 참조가 아니었음. 모바일
+       오버라이드는 이미 --layout-mob-pad를 쓰고 있어 PC만 정정 */
+    padding: 20px var(--layout-pc-pad, 40px);
     display: flex;
     flex-direction: column;
     gap: 15px;
@@ -2456,7 +2869,10 @@
   .deposit-notice {
     background: var(--cs-white);
     border: 1.5px solid var(--cs-border, #e0e0e0);
-    border-radius: var(--radius-lg);
+    /* 형제 박스(.total-details-box/.total-dark-box)와 동일 계열인데 --radius-lg(20px,
+       "배지·날짜 행"용 토큰)를 잘못 쓰고 있었음 — --radius-xl(30px, "총금액 박스")로
+       통일, PC·모바일 동일값이라 별도 모바일 오버라이드 불필요(2026-08-17) */
+    border-radius: var(--radius-xl, 30px);
     padding: 16px 24px;
     margin-top: 10px;
     display: flex;
@@ -2599,33 +3015,105 @@
     .cart-content { padding: 0 12px; gap: 30px; }
     .sec-header { padding: 16px 20px; }
     .sec-title { font-size: 18px; }
-    .order-card { border-radius: 40px; }
+    /* 2026-08-17(재정정) — front-uiux.md §4 대/중 2단 체계 확정: 카드(대) 반경은
+       PC 50px(--radius-2xl) / Mobile 30px로 의도적으로 다르다(동일값 통일이 아님) —
+       Stephen 확정 지침에 따라 모바일 전용 30px 오버라이드를 다시 명시 */
+    .order-card { border-radius: 30px; }
     .order-card-inner { padding: 20px; gap: 30px; }
-    .product-img { width: 120px; height: 120px; border-radius: 24px; }
-    .product-name { font-size: 14px; }
-    .product-price { font-size: 12px; }
-    .option-subcard-img { width: 120px; height: 120px; border-radius: 24px; }
-    .option-subcard-name { font-size: 14px; }
-    .option-subcard-price { font-size: 12px; }
-    .badge-mem, .badge-deal, .badge-svg { width: 30px; height: 30px; }
+    /* 2026-08-19(재정정): 가로 1열 재배치는 Stephen이 요청한 적 없는 임의 변경이었음 —
+       PC와 동일한 세로중앙정렬 구조(column/center)로 되돌리고, 패딩만 카드 크기에 맞춰
+       축소 유지. 아이콘은 PC 대비 1.5배(56px→84px) 유지, 안내텍스트는 1.5배(24px)가
+       과했다는 후속 지적으로 한 단계 아래 토큰(--text-m-title-21, 21px)으로 하향 조정 */
+    .empty-card { padding: 40px 24px; gap: 20px; }
+    .empty-icon { width: 84px; }
+    .empty-text { font: var(--text-m-title-21); }
+
+    /* 2026-08-19(재정정): 보유수량 텍스트가 points-input-row 밖으로 분리되면서(모두 사용
+       버튼 추가) 이 행엔 입력창+버튼만 남음 — PC와 동일하게 모바일도 한 행(가로배치) 유지,
+       입력창만 남은 폭을 최대한 채우도록 확장 */
+    /* PC용 flex:1(points-section의 가로 row 배분용)이 모바일의 세로 column 배치에서는
+       points-input-row 자체의 높이를 억지로 늘리는 부작용이 있어 flex:none으로 무효화 */
+    .points-input-row { gap: 8px; flex: none; }
+    .points-input { max-width: none; flex: 1; }
+    .points-use-all-btn { padding: 0 12px; font-size: 13px; }
+    /* 2026-08-19(재재정정): PC는 라벨 줄바꿈 후 입력행+보유표시를 한 줄에 좌우로 펼치도록
+       바꿨지만(좌측 쏠림 해소), 모바일은 폭이 좁아 그렇게 하면 다시 답답해지므로 기존처럼
+       라벨/입력행/보유표시 세로 스택 유지 */
+    .points-section { flex-direction: column; align-items: stretch; }
+    .points-avail { margin-top: 8px; }
+
+    /* 2026-08-19: 쿠폰 행 — PC는 좌측(체크박스+쿠폰명)·우측(만료일뱃지)이 한 줄 양끝정렬인데,
+       모바일 좁은 폭에서 쿠폰명이 길면 만료일뱃지와 부딪혀 잘리기 쉬워 세로 2줄 구조로 변경
+       (쿠폰명 줄 → 만료일뱃지 줄, 뱃지는 우측 정렬 유지) */
+    .coupon-row { flex-direction: column; align-items: flex-start; gap: 10px; }
+    .coupon-expiry { align-self: flex-end; }
+    /* 2026-08-18: 20% 축소(120px → 96px) + 상단 정렬 반영 */
+    .product-img { width: 96px; height: 96px; border-radius: 24px; }
+    /* 2026-08-18: 이미지~정보그룹 여백 축소(20px → 12px) + 이미지 상단 정렬(기존
+       align-items:center는 .product-row 기본 규칙 — 이미지 축소 후 정보그룹과 세로
+       중앙정렬되면 어색해 보여 상단 기준으로 변경) */
+    .product-row { gap: 12px; align-items: flex-start; }
+    /* 2026-08-17: min-width:0(PC 기본값)이라 좁은 화면에서 이미지 옆에서 한없이 짜부라져
+       대여기간 배지("12H"/"24H"/"1일"/"구매")·가격 텍스트가 세로로 쪼개져 보이던 결함
+       수정 — 폭이 부족하면 이미지 아래 새 줄로 완전히 내려가도록 최소폭 확보(.product-row는
+       이미 flex-wrap:wrap이라 이 min-width만 주면 자동으로 줄바꿈됨). 2026-08-18:
+       .product-meta+.qty-wrap을 .product-info-group으로 묶으면서 이 오버라이드도
+       래퍼 기준으로 이동, 좌측 패딩(16px)은 불필요 요소로 판단돼 제거 */
+    .product-info-group { min-width: 180px; padding: 0; }
+    /* 2026-08-18: PC .item-name과 동일 계열(htitle, 900 Black)로 통일 — 모바일 카드
+       규모에 맞춰 신설된 --text-m-htitle-20B(20px Black) 적용(기존 --text-m-body-16B
+       16px Bold보다 한 단계 더 굵고 큼) */
+    .product-name { font: var(--text-m-htitle-20B); }
+    /* 2026-08-17: 옵션상품 하위카드도 본상품과 동일한 원인(min-width:0 무한축소)으로 상품명이
+       "SONY PXW-" / "Z90"처럼 쪼개져 보이던 결함 — 동일하게 최소폭 확보 + 줄바꿈 허용 */
+    /* 2026-08-18: 기존 width:100%(기본 규칙)가 margin-left:28px에 더해져 카드 우측이
+       order-card-inner 우측 패딩을 무시하고 그만큼 밀려나가던 결함 — width:auto로 교체해
+       flex 스트레치가 margin을 반영해 폭을 계산하도록 수정(폭을 더 줄이는 방향) */
+    .option-subcard { flex-wrap: wrap; margin-left: 28px; width: auto; padding: 16px 16px; }
+    .option-subcard-connector { left: -28px; }
+    .option-subcard-info { min-width: 140px; }
+    /* 2026-08-18: 20% 축소(120px → 96px) */
+    .option-subcard-img { width: 96px; height: 96px; border-radius: 24px; }
+    /* 2026-08-18: 한 단계 큰 토큰으로 교체(--text-m-script-14B 14px Bold →
+       --text-m-body-16B 16px Bold) */
+    .option-subcard-name { font: var(--text-m-body-16B); }
+    /* 2026-08-18: card-top-row(모바일 OrderCard 체크박스+삭제)가 PC .item-card-topbar와
+       동일한 checkbox-svg(20px)/delete-btn(14px+padding8px) 공유 클래스를 그대로 써서
+       모바일 반응형 비율이 전혀 반영되지 않던 결함 — ui-mobile.md 최소 터치타겟(44×44px)
+       기준으로 이 컨텍스트만 확대(다른 checkbox-svg/delete-btn 사용처는 영향 없음) */
+    .card-top-row .checkbox-svg { width: 24px; height: 24px; }
+    .card-top-row .checkbox-btn { padding: 10px; }
+    .card-top-row .delete-btn { padding: 14px; }
+    .card-top-row .delete-btn svg { width: 16px; height: 16px; }
     .qty-label { font-size: 14px; }
     .qty-ctrl { gap: 16px; }
     .qty-num { padding: 6px 14px; font-size: 13px; }
     .acc-head { padding: 16px 20px; border-radius: 20px; }
     .acc-label { font-size: 15px; }
-    .acc-value { font-size: 14px; }
+    /* 2026-08-19(재조정): 21px가 과했다는 피드백 — 한 단계 작은 토큰(--text-m-title-18B,
+       18px Bold)으로 축소. PC(--text-pc-title-18, 18px Bold)와 완전히 동일한 크기·굵기 */
+    .acc-value { font: var(--text-m-title-18B); }
     .acc-body { padding-top: 20px; }
     .datetime-btn { padding: 12px 16px; }
     .datetime-btn-label { font: var(--text-m-body-16B); letter-spacing: -0.5px; }
+    /* 모바일: 시간선택 리스트는 50%(PC 기준)로는 너무 좁아 전체폭 확보(가독성 개선,
+       2026-08-17) — 날짜/시간 팝업은 한 번에 하나만 열리므로 폭 겹침 없음 */
+    .time-layer { width: 100%; }
+    .time-list { max-height: 240px; }
+    .time-row { font: var(--text-m-script-14B); }
     .total-white-section, .total-gray-section { padding: 20px; }
-    .total-dark-box { padding: 16px 20px; border-radius: 20px; }
+    .total-dark-box { padding: 16px var(--layout-mob-pad); }
     .total-label { font-size: 14px; }
     .total-num { font-size: 18px; }
     .cart-footer { padding-bottom: max(14px, env(safe-area-inset-bottom)); }
     .footer-inner { padding: 16px 16px 14px; gap: 16px; flex-direction: column; align-items: stretch; }
     .footer-terms { flex-shrink: 1; }
-    .footer-terms-text { font-size: 13px; white-space: normal; }
-    .footer-cta { flex: none; width: 100%; height: 56px; font-size: 15px; }
+    /* 2026-08-17: 기존 13px는 모바일 타이포 스케일 어디에도 정확히 대응하지 않는
+       하드코딩값이었음(script-12/14B 사이) — 한 단계 큰 토큰(--text-m-body-16B,
+       16px Bold)으로 교체, PC 기본값(16px)과도 동일해짐 */
+    .footer-terms-text { font: var(--text-m-body-16B); white-space: normal; }
+    /* 2026-08-18: 기존 15px 하드코딩값을 한 단계 큰 토큰(--text-m-title-18B, 18px Bold)으로 교체 */
+    .footer-cta { flex: none; width: 100%; height: 56px; font: var(--text-m-title-18B); }
     .price-detail-list { padding: 0 10px; }
     /* 모바일 letter-spacing (m-body_com_16b: -0.5px, m-titie_com_18b: -0.3px) */
     .product-name { letter-spacing: -0.3px; }
@@ -2635,8 +3123,11 @@
     .coupon-expiry { letter-spacing: -0.5px; }
     .price-row-label { letter-spacing: -0.5px; }
     .price-row-val { letter-spacing: -0.5px; }
-    .combo-btn { padding: 8px 12px; }
-    .combo-label { font-size: 12px; }
+    /* 2026-08-18: 모바일 반응형 — 폰트 한 단계 큰 토큰(하드코딩 12px → --text-m-script-14B
+       14px Bold, 기존 font-weight:700과 동일 weight 유지) + BG 패딩 확대(8px 12px → 12px 20px) */
+    /* 2026-08-18(후속): 상하 패딩만 20% 축소(12px → 9.6px), 좌우 20px는 유지 */
+    .combo-btn { padding: 9.6px 20px; }
+    .combo-label { font: var(--text-m-script-14B); }
     .f-input { letter-spacing: -0.5px; }
     .copy-label { letter-spacing: -0.5px; }
     .acc-label { letter-spacing: -0.3px; }
@@ -2648,7 +3139,10 @@
   /* ── bulk-panel: 화이트 카드 (front-uiux §16 준수) ── */
   .bulk-panel {
     background: #fff;
-    border-radius: var(--radius-2xl, 20px);
+    /* front-uiux.md §4 "카드(대)" Mobile값 — 30px. 이 컴포넌트는 @media(min-width:641px)
+       에서 display:none이라 PC에는 노출되지 않으므로 항상 Mobile값(30px)을 쓴다(2026-08-17
+       Stephen 확정 — .order-card/.item-card와 같은 "카드(대)" 계열, PC값 50px는 여기 해당 없음) */
+    border-radius: 30px;
     margin-bottom: 12px;
     overflow: hidden;
     box-shadow: 0 2px 8px rgba(0,0,0,0.06);
@@ -2668,9 +3162,14 @@
     cursor: pointer;
     min-height: 54px;
   }
-  .bulk-lock { color: var(--cs-purple, #3B2F8A); flex-shrink: 0; }
+  /* 닫힘 상태에선 .bulk-body(border-top로 이어지는 하단 여백 16px)가 없어 pill 전체의
+     하단 여백만 상단(30px)보다 좁아 보이던 문제 — 닫힘 상태에 한해 상하 패딩 대칭(2026-08-17) */
+  .bulk-head-closed { padding-bottom: 30px; }
   .bulk-head-title {
-    font: var(--text-m-script-14B);
+    /* 2026-08-17: 카드 자체는 큰 pill(min-height:54px+상하 넉넉한 패딩)인데 라벨만
+       가장 작은 타이포 토큰(14px)이라 속이 빈 것처럼 어정쩡해 보이던 문제 — 다른
+       섹션 헤더(.sec-title 등)와 동일한 소제목 톤인 18px Bold로 확대 */
+    font: var(--text-m-title-18B);
     color: var(--cs-purple, #3B2F8A);
     flex: 1;
     text-align: left;
