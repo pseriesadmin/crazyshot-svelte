@@ -360,6 +360,26 @@
       });
       return;
     }
+    if (!currentSession) return; // isRealMemberSession 통과 시 항상 존재 — TS 타입 좁히기용
+
+    // 본인증명 또는 외국인증명 파일 등록 여부 확인 (2026-08-19) — 둘 중 하나라도 등록돼
+    // 있으면 통과. is_foreign 플래그는 외국인증명 등록 시에만 자동 true로 바뀌므로(update_
+    // user_doc_url RPC) 플래그 자체로 분기하면 아직 아무것도 등록 안 한 외국인 사용자를
+    // 영구히 막게 됨 — 두 문서 URL 존재 여부로만 판정한다.
+    const { data: verifyRow } = await supabase
+      .from('user_profiles')
+      .select('identity_doc_url, foreign_doc_url')
+      .eq('user_id', currentSession.user.id)
+      .maybeSingle();
+    const hasVerifiedDoc = !!(verifyRow as { identity_doc_url: string | null; foreign_doc_url: string | null } | null)?.identity_doc_url
+      || !!(verifyRow as { identity_doc_url: string | null; foreign_doc_url: string | null } | null)?.foreign_doc_url;
+    if (!hasVerifiedDoc) {
+      showToast('내정보(개인정보)에서 본인증명정보를 등록(확인)해주세요.', {
+        label: '확인',
+        onClick: () => goto('/account/profile?tab=profile'),
+      });
+      return;
+    }
 
     isReserving = true;
     trackCartAdd(data.productId);
