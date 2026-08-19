@@ -50,7 +50,7 @@ export const load: PageServerLoad = async ({ locals, depends }) => {
     ),
     locals.supabase
       .from('rental_reservations')
-      .select('id, status, start_date, end_date')
+      .select('id, status, reservation_code, start_date, end_date, orders(order_items(products(name, category)))')
       .eq('user_id', session.user.id)
       .order('created_at', { ascending: false })
       .limit(1)
@@ -86,7 +86,7 @@ export const load: PageServerLoad = async ({ locals, depends }) => {
   ])
 
   const stats = (statsRes.data as Array<{
-    total_count: number; active_count: number; shipping_count: number; done_count: number
+    total_count: number; active_count: number; shipping_count: number; done_count: number; cancelled_count: number
   }> | null)?.[0]
 
   const profile = (profileRes.data ?? null) as AccountProfile | null
@@ -104,14 +104,25 @@ export const load: PageServerLoad = async ({ locals, depends }) => {
       is_default: boolean; sort_order: number; created_at: string
     }>,
     rentalStats: {
-      active:    stats?.active_count   ?? 0,
-      shipping:  stats?.shipping_count ?? 0,
-      completed: stats?.done_count     ?? 0,
-      cancelled: 0,
+      active:    stats?.active_count    ?? 0,
+      shipping:  stats?.shipping_count  ?? 0,
+      completed: stats?.done_count      ?? 0,
+      cancelled: stats?.cancelled_count ?? 0,
     },
-    recentRental: (recentRentalRes.data ?? null) as {
-      id: number; status: string; start_date: string; end_date: string
-    } | null,
+    recentRental: (() => {
+      const r = recentRentalRes.data as Record<string, unknown> | null
+      if (!r) return null
+      const orders = r.orders as Array<{ order_items: Array<{ products: { name: string; category: string } | null }> }> | null
+      const firstProduct = orders?.[0]?.order_items?.[0]?.products ?? null
+      return {
+        id:               r.id as number,
+        status:           r.status as string,
+        reservation_code: r.reservation_code as string,
+        start_date:       r.start_date as string | null,
+        end_date:         r.end_date as string | null,
+        product_name:     firstProduct?.name ?? null,
+      }
+    })(),
     rentals: ((rentalsRes.data ?? []) as Array<Record<string, unknown>>).map(r => {
       const orders = r.orders as Array<{ order_items: Array<{ products: { name: string; category: string } | null }> }> | null
       const firstProduct = orders?.[0]?.order_items?.[0]?.products ?? null

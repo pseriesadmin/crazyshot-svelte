@@ -105,6 +105,9 @@
             {#if data.recentRental}
               <div class="w-full mt-[12px]">
                 <p class="font-['Noto_Sans_KR',sans-serif] font-medium text-[#444] text-[12px] tracking-[-0.3px] mb-[8px]">최근 예약 진행 상태</p>
+                {#if data.recentRental.product_name}
+                  <p class="font-['Noto_Sans_KR',sans-serif] font-bold text-[#100b32] text-[14px] tracking-[-0.3px] mb-[8px]">{data.recentRental.product_name}</p>
+                {/if}
                 <RentalJourneyStepper status={data.recentRental.status} />
               </div>
             {/if}
@@ -210,6 +213,9 @@
               {#if data.recentRental}
                 <div class="mt-[12px]">
                   <p class="font-['Noto_Sans_KR',sans-serif] font-medium text-[#444] text-[12px] tracking-[-0.3px] mb-[8px]">최근 예약 진행 상태</p>
+                  {#if data.recentRental.product_name}
+                    <p class="font-['Noto_Sans_KR',sans-serif] font-bold text-[#100b32] text-[14px] tracking-[-0.3px] mb-[8px]">{data.recentRental.product_name}</p>
+                  {/if}
                   <RentalJourneyStepper status={data.recentRental.status} />
                 </div>
               {/if}
