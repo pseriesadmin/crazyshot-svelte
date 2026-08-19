@@ -367,7 +367,16 @@ export interface Subscription {
 // ───────────────────────────────────────────────────────────
 export interface Coupon {
   id: string;                          // UUID PK
-  code: string;                        // UNIQUE
+  code: string | null;                 // UNIQUE (sequenced 모드는 NULL — B-1)
+  // B-7 회피조치: 신규 3필드만 추가 (기존 스테일 14개는 별도 CRITICAL 백로그 소관)
+  code_series: {
+    category_code: string;
+    prefix: string;
+    date_option: string;
+    seq_digits: number;
+    max_sequence: number | null;
+  } | null;                            // sequenced 모드 패턴 저장 — B-1
+  code_mode: 'manual' | 'sequenced';  // 기본값 'manual' — B-1
   type: CouponTypeEnum;
   discount_type: 'fixed' | 'percentage';
   discount_value: number;
@@ -391,6 +400,8 @@ export interface UserCoupon {
   coupon_id: string;                   // FK coupons.id
   used_at: string | null;
   used_count: number;
+  redeemed_code: string | null;        // 사용 시점 지연채번 코드 — NULL until use_coupon RPC (B-1)
+  order_id: number | null;             // 사용이 속한 주문(orders.id) — CMS 채번내역 랜딩용 (migration 297)
   created_at: string;
 }
 
@@ -833,6 +844,25 @@ export type Database = {
       toggle_product_wishlist: { Args: ToggleProductWishlistArgs; Returns: ToggleProductWishlistResult };
       update_notification_settings: { Args: UpdateNotificationSettingsArgs; Returns: AccountRpcResult };
       update_user_avatar: { Args: UpdateUserAvatarArgs; Returns: AccountRpcResult };
+      // B-7 회피조치: generate_user_coupon_redeemed_code 신규 RPC 등록 (1건 추가, 기존 무타입 34곳은 별도 백로그)
+      generate_user_coupon_redeemed_code: {
+        Args: { p_user_coupon_id: string };
+        Returns: string | null;
+      };
+      // 채번내역 CMS 조회 RPC 등록 (migration 297, 신규 — 기존 무타입 34곳은 별도 백로그)
+      get_coupon_redemptions: {
+        Args: { p_coupon_id: string };
+        Returns: Array<{
+          user_coupon_id: string;
+          user_id: string;
+          redeemed_code: string | null;   // manual 모드 사용은 NULL (migration 299)
+          used_at: string;
+          user_name: string | null;
+          user_email: string | null;
+          reservation_id: number | null;      // 랜딩 대상(RentalDetailPanel) — migration 301
+          reservation_status: string | null;  // 그 사용자의 최근 예약 상태(경로 분기용)
+        }>;
+      };
     };
     Enums: {
       product_category_enum: ProductCategoryEnum;
