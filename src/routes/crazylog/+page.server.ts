@@ -138,7 +138,7 @@ export const load: PageServerLoad = async ({ locals }) => {
 		isCms = !!(profile as { cms_role?: string | null } | null)?.cms_role
 	}
 
-	const [reviewCount, shareCount, promoCount, { data: rawAny, error }, bannerSlots] = await Promise.all([
+	const [reviewCount, shareCount, promoCount, { data: rawAny, error }, bannerSlots, kwSetting] = await Promise.all([
 		locals.supabase
 			.from('user_posts')
 			.select('id', { count: 'exact', head: true })
@@ -166,6 +166,11 @@ export const load: PageServerLoad = async ({ locals }) => {
 			.order('created_at', { ascending: false })
 			.limit(30),
 		loadBannerSlots(locals.supabase),
+		locals.supabase
+			.from('cms_settings')
+			.select('value')
+			.eq('key', 'crazylog_head_keywords')
+			.maybeSingle(),
 	])
 
 	if (error) console.error('[crazylog] posts query error:', error)
@@ -197,6 +202,15 @@ export const load: PageServerLoad = async ({ locals }) => {
 		rounded:   i % 2 === 0,
 	}))
 
+	// eslint-disable-next-line @typescript-eslint/no-explicit-any
+	const headKeywordsRaw = ((kwSetting as any).data?.value as { items?: Array<{ title: string; href: string }> } | null)
+	const headKeywords    = headKeywordsRaw?.items ?? []
+
+	// 크레이지로그 포스트 제목 목록 — 키워드 선택 피커 옵션으로 사용 (id+title+href)
+	const headKeywordOptions = (rawPosts as PostRow[])
+		.filter((p) => p.title)
+		.map((p) => ({ id: p.id, title: p.title, href: `/crazylog/view/${p.id}` }))
+
 	return {
 		counts: {
 			review: reviewCount.count ?? 0,
@@ -206,5 +220,8 @@ export const load: PageServerLoad = async ({ locals }) => {
 		posts,
 		bannerSlots,
 		isCms,
+		headKeywords,
+		headKeywordsRaw: headKeywordsRaw ?? { items: [] },
+		headKeywordOptions,
 	}
 }

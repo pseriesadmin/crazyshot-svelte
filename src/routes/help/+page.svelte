@@ -1,9 +1,12 @@
 <script lang="ts">
   import BottomTabBar from '$lib/components/common/BottomTabBar.svelte'
+  import HelpHeroBgModal from '$lib/components/help/admin/HelpHeroBgModal.svelte'
   import { HELP_CATEGORIES } from '$lib/constants/helpCategories'
   import type { PageData } from './$types'
 
   let { data }: { data: PageData } = $props()
+
+  let showHeroBgModal = $state(false)
 
   type TabId = 'all' | 'basic' | 'members' | 'etc'
 
@@ -76,7 +79,16 @@
 
     <!-- ── Hero Section ────────────────────────────────────────── -->
     <section class="hero-section">
-      <img src="/help/hero-bg.png" alt="Hero background" class="hero-bg" />
+      <img src={data.heroBgUrl} alt="Hero background" class="hero-bg" />
+      {#if data.isCms}
+        <button class="hero-edit-btn" onclick={() => (showHeroBgModal = true)} aria-label="배경 이미지 관리">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <circle cx="12" cy="12" r="3"/>
+            <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
+          </svg>
+          BG 관리
+        </button>
+      {/if}
       <div class="hero-gradient"></div>
 
       <div class="hero-content">
@@ -234,6 +246,14 @@
 
 <BottomTabBar />
 
+{#if showHeroBgModal}
+  <HelpHeroBgModal
+    initialImages={data.heroBgImages}
+    initialMode={data.heroBgMode}
+    onclose={() => (showHeroBgModal = false)}
+  />
+{/if}
+
 <style>
 /* ── Root ───────────────────────────────────────────────────────── */
 .help-root {
@@ -276,6 +296,32 @@
   position: absolute;
   inset: 0;
   background: linear-gradient(to bottom, transparent 0%, rgba(16,11,50,0.4) 50%, rgba(16,11,50,0.85) 100%);
+}
+
+.hero-edit-btn {
+  position: absolute;
+  top: 16px;
+  right: 16px;
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 14px;
+  background: rgba(16, 11, 50, 0.65);
+  color: rgba(255, 255, 255, 0.9);
+  border: 1px solid rgba(255, 255, 255, 0.25);
+  border-radius: var(--radius-xl);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  backdrop-filter: blur(6px);
+  transition: background 0.15s, color 0.15s;
+  min-height: 44px;
+}
+.hero-edit-btn:hover {
+  background: rgba(59, 47, 138, 0.85);
+  color: #fff;
+  border-color: rgba(255, 255, 255, 0.4);
 }
 
 .hero-content {

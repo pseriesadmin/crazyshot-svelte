@@ -323,15 +323,17 @@
   }
 
   .f-input {
-    width: 100%;
-    min-height: 44px;
-    padding: 0 16px;
-    border: 1.5px solid var(--cs-border);
-    border-radius: var(--radius-md);
+    background: var(--cs-surface-gray);
+    border: none;
+    border-radius: var(--radius-sm);
+    padding: 10px 16px;
     font: var(--text-pc-body-14);
     color: var(--cs-text);
+    width: 100%;
+    box-sizing: border-box;
   }
-  .f-input:focus { outline: none; border-color: var(--cs-purple); }
+  .f-input::placeholder { color: var(--cs-text-light); }
+  .f-input:focus { outline: 2px solid var(--cs-purple); outline-offset: -2px; }
 
   .suggest-name { flex: 1; }
   .suggest-type { color: var(--cs-text-mid); font-size: 12px; }
