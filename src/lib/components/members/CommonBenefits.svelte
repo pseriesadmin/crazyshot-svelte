@@ -1,4 +1,12 @@
 <script lang="ts">
+  import type { SubscriptionPolicyItem } from '$lib/types/database'
+
+  interface Props {
+    policyItems?: SubscriptionPolicyItem[]
+  }
+
+  let { policyItems = [] }: Props = $props()
+
   let openSNS = $state(false)
   let openLegal = $state(false)
 </script>
@@ -32,13 +40,19 @@
     <img src="/members/mobile-cta1.png" alt="K-Trail 크리에이터 촬영" class="m-photo-top" />
   </div>
 
-  <!-- 빨간 텍스트 영역 -->
+  <!-- 이용안내 영역 -->
   <div class="m-red-block">
-    <p class="m-red-head">K-트레일 로그,<br />지금부터 시작하세요</p>
-    <p class="m-rp m-pale">한국 여행은 단순한 관광을 넘어, 사랑하는 K-컬처의 일원이 되는 특별한 경험입니다. CRAZY SHOT은 그 여정의 든든한 파트너입니다.</p>
-    <p class="m-rp m-white">멤버십에 가입하면, 주요 공항과 공연장 근처의 편리한 픽업 및 반납 지점을 통해 엄선된 전문가용 카메라와 장비를 자유롭게 이용할 수 있습니다.</p>
-    <p class="m-rp m-white">글로벌 팬과 크리에이터 모두, 고퀄리티 K-POP 팬캠부터 생동감 넘치는 여행 브이로그까지 모든 순간을 세련되게 기록할 수 있습니다.</p>
-    <p class="m-rp m-pale">지금 CRAZY SHOT과 함께 K-Trail 로그를 시작하고, 당신의 열정을 잊지 못할 콘텐츠로 만들어보세요.</p>
+    <p class="m-red-head">정기구독 이용안내</p>
+    {#if policyItems.length > 0}
+      <ul class="m-policy-list">
+        {#each policyItems as item, i (item.id)}
+          <li class="m-policy-item">
+            <span class="m-policy-num">{i + 1}</span>
+            <span class="m-policy-text">{item.content}</span>
+          </li>
+        {/each}
+      </ul>
+    {/if}
   </div>
 
   <!-- 하단 사진 -->
@@ -236,35 +250,64 @@
     object-fit: cover;
   }
 
-  /* 빨간 텍스트 영역 */
+  /* 이용안내 영역 */
   .m-red-block {
     background: var(--cs-red);
     padding: 50px 25px;
     display: flex;
     flex-direction: column;
-    gap: 20px;
+    gap: 24px;
   }
 
   .m-red-head {
     font-family: 'SB AggroOTF', sans-serif;
-    font-size: 30px;
+    font-size: 24px;
     font-weight: 700;
     color: var(--cs-white);
-    text-shadow: 5px 5px 0px var(--cs-dark);
+    text-shadow: 3px 3px 0px rgba(0, 0, 0, 0.3);
     margin: 0;
     line-height: 1.3;
   }
 
-  .m-rp {
-    font-family: var(--font-kr);
-    font-size: 14px;
-    font-weight: 700;
-    line-height: 1.6;
+  .m-policy-list {
+    list-style: none;
     margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
   }
 
-  .m-white { color: var(--cs-white); }
-  .m-pale  { color: var(--cs-purple-op10); }
+  .m-policy-item {
+    display: flex;
+    align-items: flex-start;
+    gap: 12px;
+  }
+
+  .m-policy-num {
+    flex-shrink: 0;
+    width: 22px;
+    height: 22px;
+    border-radius: 50%;
+    background: rgba(255, 255, 255, 0.25);
+    color: var(--cs-white);
+    font-family: var(--font-kr);
+    font-size: 12px;
+    font-weight: 700;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    margin-top: 1px;
+  }
+
+  .m-policy-text {
+    font-family: var(--font-kr);
+    font-size: 14px;
+    font-weight: 500;
+    color: rgba(255, 255, 255, 0.88);
+    line-height: 1.6;
+    word-break: keep-all;
+  }
 
   /* 하단 사진 */
   .m-photo-bot-wrap {
