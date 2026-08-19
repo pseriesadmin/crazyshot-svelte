@@ -12,6 +12,7 @@
   import { onDestroy, untrack } from 'svelte'
   import { createEditor, EditorContent } from 'svelte-tiptap'
   import { generateHTML, type JSONContent } from '@tiptap/core'
+  import { NodeSelection } from 'prosemirror-state'
 
   import { csToast } from '$lib/utils/toast'
   import { validateUploadFile } from '$lib/utils/fileValidation'
@@ -99,6 +100,8 @@
 
         // ── 드래그 상태 (ContractCanvasEditor.onFieldPointerDown 패턴 참고) ──
         let isDragging = false
+        /** 실제 이동이 있었는지(드래그) 여부 — 없으면(순수 클릭) pointerup에서 노드 선택 처리 */
+        let dragMoved = false
         let dragOffsetX = 0
         let dragOffsetY = 0
 
@@ -248,11 +251,22 @@
         // ── 겹치기 드래그 (ContractCanvasEditor.onFieldPointerDown 패턴) ──
         outer.addEventListener('pointerdown', (e: PointerEvent) => {
           if (!(currentAttrs['overlay'] as boolean)) return
-          if (bar.contains(e.target as Node)) return // 툴바 클릭은 드래그 무시
+          // 툴바 클릭은 드래그 무시 — 여기서 e.preventDefault()를 호출하면 안 된다(2026-08-19,
+          // 실제 신뢰된 클릭으로 직접 검증). 스프레드시트 모드 27라운드와 겉보기엔 같은
+          // "return만 하는 분기"라 얼핏 동일한 결함으로 보였으나 구조가 다르다 — 이 툴바의
+          // 프리셋/정렬/삭제 버튼은 전부 'mousedown' 이벤트로 동작을 실행하는데(자체
+          // btn.addEventListener('mousedown', ...)), 여기서 pointerdown에 preventDefault를
+          // 호출하면 Pointer Events 스펙상 브라우저가 뒤이어 합성하는 호환 mousedown 이벤트
+          // 자체가 통째로 취소된다 — 즉 버튼의 mousedown 리스너가 실제 클릭에서는 영원히
+          // 발화하지 않게 된다(document 캡처단계 디버그 리스너로 직접 확인: pointerdown은
+          // 도달하지만 mousedown은 로그에 전혀 안 찍힘, click은 찍히지만 이 버튼들은 click을
+          // 안 씀). preventDefault를 추가했다가 실사용 검증 중 이 결함을 직접 재현해 원복함.
+          if (bar.contains(e.target as Node)) return
           e.preventDefault()
           e.stopPropagation()
           outer.setPointerCapture(e.pointerId)
           isDragging = true
+          dragMoved = false
           const rect = outer.getBoundingClientRect()
           dragOffsetX = e.clientX - rect.left
           dragOffsetY = e.clientY - rect.top
@@ -260,6 +274,7 @@
 
         outer.addEventListener('pointermove', (e: PointerEvent) => {
           if (!isDragging) return
+          dragMoved = true
           e.preventDefault()
           // .ProseMirror 가 position:relative 기준점 (CSS로 보장됨)
           const pmEl = outer.closest('.ProseMirror') as HTMLElement | null
@@ -272,6 +287,28 @@
         }, { passive: false })
 
         outer.addEventListener('pointerup', () => {
+          // ⛔ 2026-08-19 진짜 근본원인 — "겹치기(overlay) 이미지를 클릭해도 크기조절
+          // 플로팅 툴바가 아예 뜨지 않는" 결함(Stephen "설정바가 작동하지 않는다" 실사용
+          // 재현). 위 pointerdown이 겹치기 이미지 위 클릭마다 무조건 e.preventDefault()를
+          // 호출하는데(드래그 시작을 위해 원래부터 필요한 호출), Pointer Events 스펙상
+          // pointerdown의 preventDefault는 뒤이어 브라우저가 자동 합성하는 호환
+          // mousedown/mouseup/click 이벤트 전부를 억제한다 — 즉 드래그로 실제 이동이
+          // 전혀 없는 "순수 클릭"이어도 ProseMirror 입장에서는 mousedown/click 자체를
+          // 아예 받지 못해, atom 노드를 클릭했을 때 기본 제공되는 NodeSelection 생성이
+          // 절대 일어나지 않는다 → selectNode()가 호출되지 않아 플로팅 툴바가 영원히
+          // display:none으로 남는다. (합성 dispatchEvent로 직접 pointerdown/mousedown/
+          // click을 전부 쏘는 자동화 테스트에서는 이 억제 자체가 재현되지 않아 "정상
+          // 동작"으로 오판했었음 — 실제 신뢰된 마우스 클릭에서만 나타나는 결함.)
+          // 수정: 이동 없이(dragMoved=false) 끝난 포인터업이면 우리가 직접
+          // NodeSelection을 만들어 선택 상태로 전환 — 브라우저가 억제한 기본 선택 동작을
+          // 대신 수행한다.
+          if (isDragging && !dragMoved && typeof getPos === 'function') {
+            const pos = getPos()
+            if (pos !== undefined) {
+              const { state, dispatch } = extEditor.view
+              dispatch(state.tr.setSelection(NodeSelection.create(state.doc, pos)))
+            }
+          }
           isDragging = false
         })
 
