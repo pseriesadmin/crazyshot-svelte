@@ -207,7 +207,7 @@
       <!-- Mobile: keyword pills -->
       <div class="m-keywords">
         {#each displayKeywords as kw}
-          <button class="kw-pill">{kw}</button>
+          <button class="kw-pill" onclick={() => goto(`/products/search?q=${encodeURIComponent(kw)}`)}>{kw}</button>
         {/each}
       </div>
 
@@ -553,7 +553,7 @@
     <ProductCategoryModal
       categories={data.categories}
       initialSettings={data.settings.categories}
-      initialKeywordsSettings={data.settings.keywords}
+      initialKeywordsSettings={data.settings.keywordsRaw}
       onclose={() => { activeModal = null }}
     />
   {/if}

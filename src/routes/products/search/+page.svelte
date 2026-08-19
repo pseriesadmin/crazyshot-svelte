@@ -7,9 +7,13 @@
   import SearchProductGrid from '$lib/components/products/SearchProductGrid.svelte'
   import type { SuggestPickerOption } from '$lib/types/suggest-picker'
   import { recordSearchClick } from '$lib/services/searchService'
+  import { page } from '$app/stores'
+  import type { PageData } from './$types'
+
+  let { data }: { data: PageData } = $props()
 
   // ── 검색 상태 ──────────────────────────────────────────────
-  let searchQuery      = $state('')
+  let searchQuery      = $state($page.url.searchParams.get('q') ?? '')
   let isSearching      = $state(false)
   let pickerSelectedId = $state<string | null>(null)
   let debounceTimer: ReturnType<typeof setTimeout> | null = null
@@ -19,6 +23,12 @@
   interface SearchProduct { id: string; name: string; category: string; price24h: number; price12h: number; img: string; slug?: string }
   let searchResults      = $state<SearchProduct[]>([])
   let recommendedProducts = $state<SearchProduct[]>([])
+
+  // 마운트 시 URL ?q= 파라미터가 있으면 즉시 검색 실행
+  $effect(() => {
+    const initialQ = $page.url.searchParams.get('q')?.trim()
+    if (initialQ) doSearch(initialQ)
+  })
 
   // 마운트 시 추천 상품 로드
   $effect(() => {
@@ -71,13 +81,16 @@
       searchLogId = payload.search_log_id ?? null
       searchResults = (payload.results ?? []).map(r => {
         const p24 = Number(r['price_min'] ?? r['base_price_daily'] ?? 0)
+        const slug = r['slug'] ? String(r['slug']) : null
         return {
           id:       String(r['product_id'] ?? r['id'] ?? ''),
           name:     String(r['name'] ?? ''),
           category: String(r['category'] ?? ''),
+          slug:     slug ?? undefined,
           price24h: p24,
           price12h: Math.round(p24 * 0.7),
           img:      ((r['image_urls'] as string[] | null)?.[0]) ?? (r['image_url'] ? String(r['image_url']) : '/images/products/grid-flat.png'),
+          href:     slug ? `/products/${slug}` : undefined,
         }
       })
     } catch {
@@ -153,7 +166,10 @@
   </section>
 
   <!-- ── 관심집중 키워드 ── -->
-  <SearchKeywordBar />
+  <SearchKeywordBar
+    keywords={data.trendingKeywords.length > 0 ? data.trendingKeywords : undefined}
+    onkeywordclick={(kw) => { searchQuery = kw; doSearch(kw) }}
+  />
 
   <!-- ── 검색 결과 그리드 ── -->
   <SearchProductGrid
