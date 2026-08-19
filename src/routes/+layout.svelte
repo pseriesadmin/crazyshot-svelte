@@ -9,6 +9,8 @@
 	import FloatingBar from '$lib/components/common/FloatingBar.svelte';
 	import GNB from '$lib/components/common/GNB.svelte';
 	import PushNotificationInit from '$lib/components/common/PushNotificationInit.svelte';
+	import IosAddToHomeScreenBanner from '$lib/components/common/IosAddToHomeScreenBanner.svelte';
+	import { Toaster } from 'svelte-sonner';
 
 	let currentLocale = 'ko';
 
@@ -50,6 +52,12 @@
 </script>
 
 <PushNotificationInit />
+
+{#if !page.url.pathname.startsWith('/cms')}
+	<IosAddToHomeScreenBanner />
+	<!-- 표준 토스트(csToast, $lib/utils/toast) 렌더러 — /cms는 자체 Toaster 등록됨(cms/+layout.svelte) -->
+	<Toaster position="bottom-center" richColors closeButton />
+{/if}
 
 <div class="min-h-screen flex flex-col">
 	{#if !page.url.pathname.startsWith('/cms') && !page.url.pathname.startsWith('/products/') && !page.url.pathname.startsWith('/cart') && !page.url.pathname.startsWith('/account') && !page.url.pathname.startsWith('/contract')}
