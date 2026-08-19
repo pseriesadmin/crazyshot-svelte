@@ -541,7 +541,38 @@ describe('renderSpreadsheetToHtml — 이미지 오버레이 셀(서명/직인)'
       }],
     })
     const html = renderSpreadsheetToHtml(doc)
-    expect(html).toContain('style="position:relative"')
+    expect(html).toContain('position:relative')
+  })
+
+  it('오버레이가 있는 셀에는 이미지 높이만큼의 투명 스페이서가 함께 렌더링된다(행이 이미지를 담을 만큼 늘어나 인접 행 침범 방지, 2026-08-19 — <td>의 min-height는 테이블 레이아웃에서 무시되는 브라우저 동작이라 정상흐름 스페이서로 대체)', () => {
+    const doc = makeDoc({
+      sheets: [{
+        name: 'Sheet1',
+        rows: [['텍스트cs-image://https://storage.example.com/sig/a.png']],
+        merges: [],
+        colWidths: [null],
+        cellFormatting: [[{}]],
+      }],
+    })
+    const html = renderSpreadsheetToHtml(doc)
+    // colWidths가 null(축소 없음)이라 safeWidth는 기본값 200 그대로 → 스페이서 높이도 200
+    expect(html).toContain('<span aria-hidden="true" style="display:block;width:1px;height:200px"></span>')
+  })
+
+  it('스페이서 높이도 컬럼 A4 축소 비율만큼 이미지 폭과 동일하게 스케일된다', () => {
+    const doc = makeDoc({
+      sheets: [{
+        name: 'Sheet1',
+        rows: [['텍스트cs-image://400:0:0:https://storage.example.com/sig/a.png', '', '']],
+        merges: [],
+        colWidths: [500, 500, 500], // 합계 1500px — A4 목표폭(642px) 초과 → 비례 축소 발생
+        cellFormatting: [[{}, {}, {}]],
+      }],
+    })
+    const html = renderSpreadsheetToHtml(doc)
+    // 컬럼 500px→214px(scale≈0.428) 이므로 이미지 폭 400px→171px, 스페이서 높이도 동일하게 171px
+    expect(html).toContain('width:171px')
+    expect(html).toContain('<span aria-hidden="true" style="display:block;width:1px;height:171px"></span>')
   })
 
   it('마커에 인코딩된 너비(문서형 크기설정 바 프리셋)가 <img> 인라인 width로 적용된다', () => {

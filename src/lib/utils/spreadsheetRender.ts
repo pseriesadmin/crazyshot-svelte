@@ -77,6 +77,21 @@ function renderSheetToTable(sheet: SpreadsheetSheet): string {
   const fittedWidths = fitColumnWidthsToTarget(colWidths)
   const colCount = rows[0]?.length ?? 0
 
+  // 컬럼별 A4 축소 비율 — fitColumnWidthsToTarget()이 컬럼 폭만 축소하고 셀 내부의
+  // 이미지 오버레이(서명/직인) 폭은 그대로 두면, 컬럼이 좁아질수록 이미지가 셀 경계를
+  // 넘어 인접 셀을 침범해 "계약서 틀이 틀어져 보이는" 결함으로 이어졌다(2026-08-19
+  // Stage 실측: colWidths 500px→렌더 214px인데 오버레이 이미지는 400px 그대로 렌더).
+  // 컬럼별로 실제 적용된 축소 비율(fitted/original)을 구해 오버레이 이미지 폭에도
+  // 동일하게 곱한다 — offsetX/offsetY(셀 중앙 기준 위치)는 의도적으로 스케일하지 않음
+  // (splitCellImageOverlay 주석 — "셀 크기가 나중에 바뀌어도 위치 감각이 유지되도록"
+  // 설계된 값이라 폭 축소와는 별개로 그대로 둔다).
+  const colScales: number[] = colWidths.map((w, i) => {
+    const fitted = fittedWidths[i]
+    return typeof w === 'number' && w > 0 && typeof fitted === 'number' && fitted > 0
+      ? fitted / w
+      : 1
+  })
+
   // <colgroup> — 컬럼 너비 지정
   const colgroupParts: string[] = ['<colgroup>']
   for (let c = 0; c < colCount; c++) {
@@ -110,6 +125,7 @@ function renderSheetToTable(sheet: SpreadsheetSheet): string {
       // (CSS 클래스 .ss-cell-image의 기본 translate(-50%,-50%)를 인라인으로 덮어씀).
       let displayText = cellText
       let overlayHtml = ''
+      let overlaySpacerHtml = ''
       if (hasImageOverlay(cellText)) {
         const { text, imageUrl, width, offsetX, offsetY } = splitCellImageOverlay(cellText)
         displayText = text
@@ -117,9 +133,27 @@ function renderSheetToTable(sheet: SpreadsheetSheet): string {
         // 마커 원문을 그대로 이스케이프해 표시(마커 문자열이 그대로 보여도 안전이 우선).
         if (imageUrl && SAFE_IMAGE_URL.test(imageUrl)) {
           // ContractDocumentEditor.svelte 너비 입력(min 20 / max 1200)과 동일 범위로 clamp
-          const safeWidth = Math.min(1200, Math.max(20, width))
+          // — colScales[colIdx]로 컬럼 축소 비율을 먼저 반영한 뒤 clamp (컬럼이 A4 폭에
+          // 맞춰 축소됐는데 이미지만 원본 크기 그대로면 셀 경계를 넘어 침범하는 결함 방지)
+          const safeWidth = Math.min(1200, Math.max(20, Math.round(width * (colScales[colIdx] ?? 1))))
           const transform = `translate(calc(-50% + ${offsetX}px), calc(-50% + ${offsetY}px))`
           overlayHtml = `<img src="${escapeHtml(imageUrl)}" alt="서명/직인" class="ss-cell-image" style="width:${safeWidth}px;transform:${transform}" />`
+          // 행 높이 보완(2026-08-19) — 컬럼 폭에 맞춰 이미지 폭은 축소했지만(위 safeWidth),
+          // <tr>은 rowHeights 저장값 자체가 없어(SpreadsheetSheet 스키마 참고) 항상 텍스트
+          // 콘텐츠 기준 auto-height다. 오버레이 이미지는 position:absolute라 정상 흐름에서
+          // 빠져 있어 아무리 커도 행 높이를 넓히지 못하고, 그 결과 이미지가 아래·위 행까지
+          // 침범해 보이는 문제가 축소 후에도 남아있었다(Stephen 실사용 재현).
+          // ⚠️ 1차 시도(min-height를 <td> 인라인 스타일에 부여)는 실패 — <td>는
+          // display:table-cell이라 CSS 테이블 레이아웃 알고리즘상 min-height가 행 높이
+          // 계산에 반영되지 않는 잘 알려진 브라우저 동작(Stage 실측: computedMinHeight는
+          // 171px로 정상 파싱되지만 실제 렌더 높이는 34.6px 그대로 — min-height 완전 무시).
+          // 대신 절대위치가 아닌 "정상 흐름(normal flow)"에 참여하는 투명 스페이서 요소를
+          // 셀 안에 함께 넣는다 — 일반 콘텐츠 기반 높이 계산은 테이블 셀에서도 항상
+          // 정상 동작하므로(보이는 <img>가 원래 행을 늘리는 것과 동일 원리), 이 스페이서의
+          // height만큼 행이 확실히 늘어난다. 이미지 자체 종횡비(원본 폭/높이)는 서버에서
+          // 알 수 없어 정확한 높이 값은 아니지만, 서명/직인 자산은 대체로 정사각형에
+          // 가까워 safeWidth를 안전한 근사 상한으로 사용(가로 스케일과 동일 원칙 유지).
+          overlaySpacerHtml = `<span aria-hidden="true" style="display:block;width:1px;height:${safeWidth}px"></span>`
         } else {
           displayText = cellText
         }
@@ -133,7 +167,7 @@ function renderSheetToTable(sheet: SpreadsheetSheet): string {
       if (styleStr) attrs.push(`style="${styleStr}"`)
 
       const attrStr = attrs.length > 0 ? ' ' + attrs.join(' ') : ''
-      const cellHtml = escapeHtml(displayText) + overlayHtml
+      const cellHtml = escapeHtml(displayText) + overlayHtml + overlaySpacerHtml
       tbodyParts.push(`<td${attrStr}>${cellHtml}</td>`)
     })
     tbodyParts.push('</tr>')
