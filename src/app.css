@@ -108,9 +108,17 @@
   --text-m-ad-kr-40:  700 40px/140% var(--font-kr-heading);
   --text-m-ad-en-30:  400 30px/130% var(--font-en-display);
   --text-m-ad-kr-30:  700 30px/130% var(--font-kr-heading);
+  --text-m-ad-kr-24:  700 24px/140% var(--font-kr-heading);   /* 상품상세 가격 숫자용 — pc-ad-kr-35의 mobile 짝 */
+  --text-m-ad-kr-20:  700 20px/160% var(--font-kr-heading);   /* AggroOTF 모바일 소형 헤드라인 */
+  --text-m-ad-kr-18:  700 18px/160% var(--font-kr-heading);   /* AggroOTF 모바일 최소 헤드라인 */
   --text-m-menu-en-24: 400 24px/normal var(--font-en-display);
   --text-m-htitle-24B: 900 24px/160% var(--font-kr);
   --text-m-htitle-24L: 500 24px/160% var(--font-kr);
+  /* 2026-08-18: htitle 계열 중간 크기(18px/20px) 신설 — 기존엔 24px(htitle)/18px(title,
+     700 Bold)만 있어 "htitle 스타일(900 Black)"의 20px·18px 버전이 없었음.
+     htitle-24B와 동일 weight(900) 유지 */
+  --text-m-htitle-20B: 900 20px/160% var(--font-kr);
+  --text-m-htitle-18B: 900 18px/160% var(--font-kr);
   --text-m-title-21:  700 21px/160% var(--font-kr);
   --text-m-title-18B: 700 18px/160% var(--font-kr);
   --text-m-title-18L: 500 18px/160% var(--font-kr);
@@ -193,6 +201,8 @@
 }
 
 html, body { height: 100%; }
+
+a { text-decoration: none; }
 
 body {
   font: var(--text-m-body-16L);

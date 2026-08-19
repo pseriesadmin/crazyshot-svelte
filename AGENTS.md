@@ -19,7 +19,13 @@
 ## 황금 원칙
 
 ```
-GP-1.  git 명령어는 Stephen만 직접 실행 (add / commit / push 전부)
+GP-1.  ⛔⛔⛔ git 쓰기 명령어(add / commit / push / merge / rebase 등)는 Stephen만 직접 실행 —
+         AI는 절대 스스로 실행 금지. Stephen이 "커밋 메시지 제안해줘" "터미널 명령 알려줘"라고
+         요청해도 이는 텍스트 제안 요청이지 실행 승인이 아니다 — 반드시 코드블록으로 제안만
+         하고 실행은 하지 않는다. 병렬 세션 환경에서 승인 없는 커밋은 다른 세션의 작업과
+         충돌·유실을 유발하는 CRITICAL 오류로 간주한다(2026-08-19 실사고 확인).
+         .claude/settings.local.json에 git 쓰기 명령을 자동승인(allow) 패턴으로 추가하는 것도
+         이 원칙 위반이다 — 발견 즉시 제거.
 GP-2.  GATE 등급별 승인 분리:
          CRITICAL → Stephen 명시적 승인 필수 (GATE B·C·E)
          BOUNDARY → 자동 진행, 완료 1줄 보고 (Stephen 응답 불필요)

@@ -434,6 +434,32 @@ is_expired: false (초기) → 만료 시 true (버튼 비활성화)
    ⚠️ 예약 라이프사이클(승인·반출·반납 등) 푸시는 이보다 먼저 별도로 연결·QA 완료된 상태였음
       (rental-lifecycle.md AUTO_NOTIFY 매핑 참고) — 이번 건은 그 인프라를 채팅 답장에도 확장한 것
 
+⚠️ 웹 푸시 커버리지 공백 (2026-08-19 전역감사로 확인, service-operations.md §15 참고):
+   - 채팅카드(chat_messages INSERT)와 브라우저 푸시(FCM)는 완전히 별개 경로 — 새
+     notify_type을 send_rental_chat_notification RPC에 추가해도 push.ts의
+     CUSTOMER_LIFECYCLE_PUSH_COPY에 별도로 추가하지 않으면 푸시는 조용히 no-op된다.
+     reservation_cancelled·damage_claimed·hold_expired 3종이 이 문제로 누락됐다가
+     2026-08-19 문구 추가로 수정(hold_expired는 순수 SQL/pg_cron 트리거라 앱코드 push
+     함수를 호출할 경로 자체가 없어 여전히 구조적 미발송 — 별도 아키텍처 필요).
+   - ✅ AI 자유응답·캔드매칭(canned) 자동응답·쿠폰선물·연체료 안내·고객 서명완료 카드
+     5종 — 애초에 push 호출 자체가 코드에 없었으나 2026-08-19 같은 날 후속으로 전부
+     sendPushToUser 연결 완료(admin-reply와 동일한 발신허브 재사용, 신규 함수 없음).
+
+✅ iOS Safari 웹푸시 — 구조적 한계 진단 → 같은 날 완전 해소 (2026-08-19):
+   iOS 16.4+ Safari는 "홈 화면에 추가"된 독립형(standalone) 웹앱에서만 Web Push를 허용한다
+   — 일반 브라우저 탭에서는 알림 권한 요청 자체가 동작하지 않는 플랫폼 제약(코드로 우회
+   불가). 진단 시점엔 manifest.json·app.html의 iOS 관련 메타태그·아이콘 자산이 전부 없어
+   "홈 화면에 추가" 유도조차 안 되는 상태였다.
+   1단계: `static/manifest.json` 신설 + `app.html`에 매니페스트 링크·apple-touch-icon·
+   `apple-mobile-web-app-capable` 메타태그 추가 + Stephen 제공 로고 SVG를 `@resvg/resvg-js`로
+   래스터화해 16/32/180/192/512·maskable-512 아이콘 세트 생성(`static/app-icons/` — `icons`가
+   아닌 이름 사용 이유는 macOS 기본 `.gitignore`의 `Icon?` 패턴과 대소문자 무시 충돌 회피,
+   service-operations.md §15 참고).
+   2단계: iOS는 안드로이드의 네이티브 설치 유도(`beforeinstallprompt`)가 없어 사용자가
+   공유 메뉴에서 "홈 화면 추가"를 스스로 찾아야 하는 문제 — `IosAddToHomeScreenBanner.svelte`
+   신설(`src/lib/utils/iosPwa.ts` UA/standalone 판별). iOS 기기 + 아직 홈 화면 설치 전일 때만
+   진입 2초 후 노출, 닫으면 `localStorage`에 영구 기록해 재노출 안 함. `/cms/*` 제외.
+
 ⏳ 미구현 (다음 사이클):
    - 카카오 알림톡 fallback 자동 발송
    - cs_records 관리자 CS 기록 저장
@@ -468,6 +494,18 @@ UI
 [ ] sender_type = 'ai' 관리자 패널 미표시?
 [ ] 더블체크 = is_read Realtime UPDATE 실시간 반영?
 [ ] 미읽음 전파 애니메이션 = cs-red-badge 80% 투명도?
+
+자동응답·긴급판정 (2026-08-19 추가 — service-operations.md §13③④ 원본)
+[ ] 신규 캔드응답 카테고리가 CS_ESCALATE급 민감 주제(파손·분실·컴플레인 등)라면
+    src/routes/api/chat/message/+server.ts의 SENSITIVE_CANNED_CATEGORIES에 포함시켜
+    chat_intent_logs에 CS_ESCALATE 로그가 남는가? (누락 시 그 카테고리 자동응답은
+    긴급배지가 절대 뜨지 않음 — 캔드매칭은 AI 의도분류 자체를 건너뛰기 때문)
+[ ] /api/chat/sessions의 긴급판정(needsUrgentCheck)이 마지막 메시지 sender_type='admin'
+    만으로 "이미 응답됨"으로 오판하지 않는가? (admin_id가 NULL인 세션은 캔드매칭
+    자동응답만 있었을 가능성 — 여전히 판정 대상에 포함돼야 함)
+[ ] 새 예약 라이프사이클 알림 타입 추가 시 — 채팅카드(RPC)뿐 아니라 push.ts의
+    CUSTOMER_LIFECYCLE_PUSH_COPY(브라우저 푸시)에도 함께 추가했는가? (service-operations.md
+    §15 — 둘은 완전히 별개 경로, 자동 동기화 없음)
 ```
 
 ---
@@ -703,3 +741,17 @@ GATE C 확인 항목:
 *참조: CLAUDE.md → 에이전트 호출 규칙 | core-rules.md → 스택 규칙*
 *계획 파일: crazyshot-re_v1.56-plannode-tree.json (PRD.1.7 노드)*
 *2026-08-13 Phase 2~3 CRITICAL 6기능 도메인 정본 추가 (§17, M1-M3/L1-L3 QA Fix)*
+*2026-08-19 회원/비회원 소통 로직 전역감사(4개 병렬 에이전트) 반영 — §14에 웹 푸시 커버리지
+공백 3건(신규 라이프사이클 3종 문구 누락→수정, AI/캔드매칭/쿠폰/연체료/서명완료 카드
+푸시 미연결→미착수) 기록 + §15 GATE C에 "자동응답·긴급판정" 섹션 신설(캔드매칭 히트 시
+CS_ESCALATE 인텐트로그·admin_id 기반 응답판정·푸시 이중동기화 체크항목 3건, 상세는
+service-operations.md §13③④·§15가 정본).*
+*2026-08-19(같은 날 후속) §14 — 미연결 5종(AI자유응답·캔드매칭·쿠폰선물·연체료안내·서명완료
+카드) push 연결 완료로 갱신 + iOS Safari 웹푸시 구조적 미작동 진단 신규 추가(manifest.json·
+아이콘 자산 부재로 "홈 화면 추가" 자체가 안 돼 iOS는 푸시 원천 불가, Android Chrome은 정상 —
+해소는 신규 브랜드 자산 필요한 별건, Stephen 승인 대기).*
+*2026-08-19(같은 날 3차 후속) §14 — Stephen 제공 로고 SVG 기반 아이콘 세트 제작(resvg-js) +
+manifest.json·app.html 메타태그 적용으로 iOS "홈 화면에 추가" 최소 요건 충족(1단계 해소) —
+안내 UI 배너(2단계)는 여전히 별건 승인 대기로 갱신.*
+*2026-08-19(같은 날 4차 후속) §14 — IosAddToHomeScreenBanner.svelte 신설로 2단계까지 해소
+완료 반영(iOS Safari 웹푸시 대응 완전 종료).*

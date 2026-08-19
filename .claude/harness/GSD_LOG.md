@@ -1,6 +1,265 @@
 # GSD_LOG.md — 크레이지샷 실행 이력
 # 형식: [YYYY-MM-DD HH:MM] 타입 | 타스크명 | 파일 | 소요 | 결과
 
+[2026-08-19] GSD | 크레이지로그 모바일 콘텐츠 목록 BG카드 레이아웃 재설계 + AggroOTF 토큰 신설 |
+  src/routes/crazylog/+page.svelte, src/app.css | GATE C:QA 실행 중
+  ① app.css: --text-m-ad-kr-20(700 20px), --text-m-ad-kr-18(700 18px) 신설 (SB AggroOTF)
+     --text-m-ad-kr-30은 이전 세션 신설, 이번 세션에서 m-card-title에 적용
+  ② crazylog/+page.svelte .m-content 섹션 전면 재구성:
+     .m-article → .m-article-card(BG이미지+오버레이+흰텍스트), 높이 264px
+     title폰트: --text-m-ad-kr-20 / desc폰트: --text-m-script-14B
+     이미지없는 포스트: .m-article-card-bg-empty(--cs-dark) 폴백
+  ③ .m-card-title(캐러셀 섹션 카드 제목) 폰트: --text-m-ad-kr-30 적용
+  ④ 'K-Trend Log' 타이틀: m-ktlog-section → m-content-inner 최상단으로 재배치
+     (.m-content-section-title, --text-m-ad-kr-20)
+  ⑤ 모바일 .m-ktlog-section 전체 제거
+
+[2026-08-18] GSD | 예약 대상 가입계정 전면수정 후속 3건(같은 세션) — 회원계정 예약↔장바구니
+연동 검증(코드+DB조회, 무수정) / 로그인 기억하기 UI 신설(pill 토글) / 백엔드 연동 보류
+(CRITICAL 확인질문 Stephen dismiss) / UI 2차 수정(pill→체크박스, /auth/login .d-remember
+레이아웃 이식) [🟡 BOUNDARY(UI) + 조사(무수정)] | src/lib/components/auth/SignUpModal.svelte,
+.claude/harness/TASK.md | GATE C:UI 부분 완료, 백엔드 연동은 Stephen 응답 대기로 미착수
+  ① 연동검증: Stage DB `pg_get_functiondef`로 `create_hold_reservation`·
+    `create_draft_reservation`이 `auth.uid()` 기반임을 직접 확인 — 실회원 경로는 이 세션
+    게이트 변경과 무관하게 원래 정상. 다만 신규 "비회원→모달로그인→같은틱 재개" 경로가
+    이 코드베이스 최초로 "goto() 없이 로그인 직후 쿠키기반 fetch" 패턴이라, `notify-hold`
+    (예약신청 채팅알림, `.catch(()=>{})`로 실패 삼킴)가 쿠키동기화 타이밍에 따라 조용히
+    유실될 이론적 가능성 발견 — 코드 수정 없이 설명만 전달(Stephen 지시).
+  ② UI 1차: `SignUpModal.svelte` 로그인뷰에 "로그인 기억하기" pill 토글 추가(off=
+    --cs-purple-op10+--cs-purple, on=--cs-purple+--cs-white), 브라우저로 on/off 확인.
+  ③ 백엔드 연동 조사: `supabase.ts`가 `@supabase/ssr` 기본 쿠키 maxAge(400일 고정, 토글
+    무관 전원 동일)를 그대로 사용 중 — 실제 로그인유지기간 차등 적용은 frozen 파일 2개
+    (`supabase.ts`/`auth.ts`) 변경이 필요한 CRITICAL임을 확인 후 AskUserQuestion 2문항
+    (off 시 정확한 동작 / CRITICAL 진행 승인) 질의 → Stephen 둘 다 dismiss → 미착수 보류.
+  ④ UI 2차(Stephen: "콤보 스타일 UX가 매우 불만족스러움"): pill 토글 제거 →
+    `/auth/login` `.d-remember` 체크박스(체크마크 SVG 포함)와 동일 레이아웃·로직으로
+    교체(`.su-remember`/`.su-checkbox-input`/`.su-checkbox-box`/`.su-remember-label`).
+    체크박스 배경만 모달 맥락(흰 바탕)에 맞춰 `--cs-surface-gray`로 조정. `rememberLogin`
+    상태는 `/auth/login`의 `rememberMe`와 동일하게 여전히 UI 전용(참조 구현도 원래
+    백엔드 미연동 — 이번에 새로 생긴 격차 아님).
+  검증: svelte-check 신규 에러 0건(기존 경고 1건만 잔존, §2-1 패턴과 동일 승인된 경고),
+    브라우저로 체크박스 on/off 직접 확인.
+  상세 기록: `.claude/harness/TASK.md` "후속 작업 (같은 세션 — Stephen 추가 지시 3건)" 참고.
+
+[2026-08-18] QA | sp3-qa-agent GATE E 검수(위 예약게이트+후속3건 대상) → 결함 1건 발견·즉시수정
+[🟡 BOUNDARY] | src/routes/products/[id]/+page.svelte | GATE E:통과(재검수 불필요 — 즉시수정
+완료 확인)
+  검수범위를 이번 세션 수정 6개 파일로 명시 한정(다른 세션 diff는 검수대상에서 제외 확인).
+  기능정합성(게이트 로직·frozen파일 무변경·TDD 6/6 재실행 GREEN·svelte-check/eslint 신규
+  에러 0건)은 자기보고를 독립 재검증해 전부 통과. ui-mobile.md GATE C 44×44px 터치타겟
+  기준을 `.toast-action-btn`(Stage C 신설 게이트토스트 '확인'버튼)이 32px로 위반한 것을
+  발견 → height/min-height 44px로 즉시 수정, border-radius 20→22px 비례조정,
+  svelte-check 재확인 신규에러 0건. 하드코딩 색상 1건은 pre-existing 로컬관례 판단으로
+  비블로킹 유지(미수정).
+
+[2026-08-19] ROUTINE+BOUNDARY | UI 전역 수정 5건 + /help 히어로 BG 이미지 CMS 관리 기능 신설 | src/app.css, src/routes/crazylog/+page.svelte, src/lib/components/crazylog/admin/CrazylogKeywordModal.svelte, src/lib/components/crazylog/admin/CrazylogBannerModal.svelte, src/routes/api/cms/help/hero-bg/+server.ts(신규), src/lib/components/help/admin/HelpHeroBgModal.svelte(신규), src/routes/help/+page.server.ts, src/routes/help/+page.svelte, supabase/migrations/20260819100000_309_upsert_page_setting_add_help_hero_bg.sql(신규) | ✅ Stage+Production Migration 완료
+  수정 1: crazylog `.m-chip` 링크 밑줄 제거(text-decoration:none)
+  수정 2-3: CrazylogKeywordModal·CrazylogBannerModal `.f-input`을 CMS 표준(surface-gray 배경·border:none·radius-sm·focus:purple outline)으로 교체
+  수정 4: src/app.css에 `a { text-decoration: none; }` 전역 리셋 추가 — 사이트 전체 링크 밑줄 일괄 제거
+  수정 5(BOUNDARY): /help 히어로 배경 이미지 CMS 관리 기능 신설
+    · Migration #309 — upsert_product_page_setting whitelist에 help_hero_bg_images 추가
+      Stage(ezyvffjvuwmtuhpxdjrw) + Production(vnbpmvxruyciuuaermyh) 모두 적용 완료
+    · /api/cms/help/hero-bg/+server.ts(신규) — POST 이미지 업로드(product-images 버킷 help/hero-bg/ 경로), DELETE 삭제 (CMS 역할 검증 포함)
+    · HelpHeroBgModal.svelte(신규) — 우측 슬라이드 패널, 랜덤/고정 모드, CmsDragList 드래그 재정렬, 썸네일 미리보기, upsert_product_page_setting RPC 저장
+    · +page.server.ts — help_hero_bg_images 로드 + 서버사이드 랜덤 선택(heroBgUrl) 반환
+    · +page.svelte — heroBgUrl 동적 적용, isCms 게이팅 기어 버튼, 모달 연결
+  검증: svelte-check 신규 에러 0건. git commit Stephen 직접 실행 필요.
+
+[2026-08-19] ROUTINE | /members 모바일 구독하기 버튼 + m-red-block 이용안내 재배치 | src/lib/components/members/FeaturesTable.svelte, src/lib/components/members/CommonBenefits.svelte, src/routes/members/+page.svelte, src/lib/components/members/SubscriptionPolicyNotice.svelte | ✅ 수정 완료(GATE E 검수 대기)
+  배경: FeaturesTable 모바일 탭 CTA "가입하기" 버튼 텍스트·색상·인증로직 3종 수정(구독하기/--cs-purple-dark/미로그인 csToast) +
+  CommonBenefits m-red-block 내 K-트레일 하드코딩 텍스트를 DB policyItems 목록으로 교체(번호배지+정책텍스트 레이아웃) +
+  SubscriptionPolicyNotice 모바일 숨김(CommonBenefits가 모바일 담당하므로 중복 제거).
+  검증: svelte-check 신규 에러 0건.
+  미완료: git commit(Stephen 직접 실행 필요).
+
+[2026-08-19] ROUTINE FIX | 상품상세 PC 카테고리메뉴 아이콘 재조정 + "많이 본 상품" 라벨 정정 | src/lib/components/products/ProductHero.svelte, src/routes/products/[id]/+page.svelte | ✅ 수정 완료(GATE E 검수 대기)
+  ⚠️ 이 항목은 이 세션에서 직접 수정한 2개 파일만 다룬다 — 동일 워킹트리를 쓰는 다른 세션의
+  작업과는 무관.
+  배경 1: Stephen이 <launch-selected-element>로 상품상세 PC 전용 카테고리메뉴(sub-gnb-b-cats)를
+  선택해 아이콘 크기를 반복 조정 지시(원형 버튼 크기 유지 요청 → 오인 발생·즉시 원복 →
+  이후 원형 자체 확대(60→70px)와 아이콘 확대(28→32→48→72px) → 72px가 70px 원형을 넘쳐
+  overflow:hidden으로 clip 처리)로 마무리. 최종: `.sub-gnb-b-cat-btn` 70×70px·radius 35px·
+  overflow:hidden, `.sub-gnb-b-cat-icon` 72×72px.
+  배경 2: "많이 본 상품" 섹션 점검 지시 → popularProducts 쿼리(+page.server.ts)가 조회수·판매량이
+  아니라 단순 "동일 카테고리 최신 등록순"임을 확인(집계 컬럼/RPC 자체가 프로젝트에 없음 — 로직은
+  의도대로 정상 동작, 라벨만 실제와 불일치했던 것). Stephen 확정: 로직 유지, 라벨만
+  "많이 본 상품"/"Best selling items..." → "최신 등록 상품"/"Newly Added Products"로 수정.
+  검증: svelte-check 이 세션 파일 관련 신규 에러 0건(기존 무관 에러 2건만 잔존, payment/success
+  중복 style 에러는 이 세션이 만든 적 없는 파일 — 별개 세션 소관).
+  GATE E(2026-08-19, @sp3-qa-agent): 명시된 2건(아이콘 CSS·라벨 텍스트) 규칙정합성·기술부채·
+  svelte-check 전부 통과 — 통과. QA가 별도로 지적한 caveat(두 파일의 현재 uncommitted diff에
+  이번 요청 범위 밖의 다른 변경 — 카테고리메뉴 동적연동(2026-08-18/19 기존 GSD 항목에 이미
+  기록됨)·회원가입 게이트(다른 세션 작업, 이미 위 항목에서 충돌없음 확인됨)가 git HEAD 대비
+  함께 존재)는 전부 이미 이 로그의 상위 항목들에 기록되어 있던 내용이라 신규 이슈 아님 — QA가
+  이번 요청 히스토리를 모르는 상태에서 git diff만으로 재발견한 것.
+  미완료: git commit(Stephen 직접 실행 필요) — 커밋 시 diff 전체 확인 권장(QA 권고).
+
+[2026-08-19] BOUNDARY FIX | /products 관리 모달 4종 정밀 검증 + 키워드 초기값 버그 수정 | src/routes/products/+page.server.ts, src/routes/products/+page.svelte | ✅ 수정 완료
+  배경: Stephen이 <launch-selected-element>로 /products 관리 버튼 4종(카테고리 설정·헤더 슬라이드·MD 추천 픽·상품 목록 설정)을 선택하며 "모달 내 설정 기능들의 로직이 정상적으로 작동하는지 정밀 검증해 문제점을 확인해" 지시.
+  검증 결과(✅ 정상 5건, 🔴 버그 1건):
+    ✅ upsert_product_page_setting RPC 내부 is_cms_user() 보안 체크 — 정상
+    ✅ ProductGridModal activeCategory = cat.id = enum 문자열(search_products p_category와 일치) — 정상
+    ✅ ProductMdPickModal → ProductHeroModal settingKey 위임 — 정상
+    ✅ ProductHeroModal $effect 초기 복원 — 정상
+    ✅ 설정 키 화이트리스트 5개 전부 RPC 허용 목록과 일치 — 정상
+    🔴 버그: +page.server.ts가 trending 활성 시 data.settings.keywords = { items: trendingKeywords }를
+      ProductCategoryModal의 initialKeywordsSettings으로 그대로 전달 → 관리자가 저장 시
+      product_page_keywords(수동 큐레이션 폴백)가 현재 트렌딩 스냅샷으로 덮어써짐.
+      /products/search 관심집중 키워드는 get_trending_keywords를 독립 호출하는 완전히 별개 시스템이라
+      영향 없음 — /products 페이지 모바일 키워드 pill 폴백 동작에만 영향.
+  수정: +page.server.ts settings에 keywordsRaw: keywordsSettings 필드 추가(trending 영향 없는 원본).
+    +page.svelte ProductCategoryModal의 initialKeywordsSettings를 data.settings.keywordsRaw로 교체.
+  검증: svelte-check 신규 에러 0건. DB 마이그레이션 없음(앱코드 2파일만 수정). git commit은 Stephen 직접 실행 필요.
+
+[2026-08-19] BOUNDARY FIX | /account "취소·반품" 통계 배지 하드코딩 0 수정 | supabase/migrations/
+  20260819050000_304_user_rental_stats_cancelled_count.sql(신규), src/routes/account/
+  +page.server.ts | ✅ Stage+Production 적용 완료
+  배경: Stephen이 launch-selected-element로 /account "최근 예약 진행 상태" 스텝퍼의 "취소됨"
+  표시를 선택하며 "취소된 내역도 볼 수 있게 할 것" 지시. 조사 결과 RentalStatRow의 "취소·반품"
+  배지가 rentalStats.cancelled: 0으로 프론트에 하드코딩돼 있었고, 근본 원인은 get_user_rental_
+  stats RPC(Migration #148) 자체가 애초에 cancelled_count 컬럼을 반환하지 않아 프론트가 채울
+  값이 없었던 것 — 실제 취소 내역은 /account/cancel 페이지에 이미 정상 구현돼 있었으나, 배지가
+  항상 0으로 보여 존재를 인지할 수 없었음.
+  수정: Migration #304 — get_user_rental_stats RPC를 CREATE OR REPLACE 재발행(DROP+CREATE,
+  기존 4개 컬럼 로직 무변경) + cancelled_count 컬럼 추가. account/+page.server.ts에서
+  rentalStats.cancelled를 stats?.cancelled_count로 교체.
+  검증: svelte-check 신규 에러 0건. Stage(ezyvffjvuwmtuhpxdjrw)·Production(vnbpmvxruyciuuaermyh)
+  둘 다 적용 완료 + 양쪽 pg_get_function_result로 반환타입에 cancelled_count 포함 직접 확인.
+  [2026-08-19 후속] Stephen이 배지 수정 배포 후에도 "로컬에서는 취소 대여 정보가 정상 노출돼야
+  한다"며 동일 스텝퍼를 3회 재확인 요청 — 재조사 결과 최초 지시("취소된 내역도 볼 수 있게")의
+  진짜 원인은 집계 배지가 아니라 "최근 예약 진행 상태" 카드 자체였음: recentRental 쿼리가
+  status만 조회해 취소돼도 어떤 상품인지 전혀 알 수 없는 상태(✕ 취소됨만 표시)였음. 근본
+  수정: account/+page.server.ts recentRental 쿼리에 orders→order_items→products 조인 추가
+  (기존 rentals 목록 쿼리와 동일 패턴 재사용) + product_name 필드 반환. account/+page.svelte
+  모바일·PC 양쪽에 스텝퍼 위 상품명 텍스트 라인 추가. 이 시점까지도 두 수정(배지+상품명) 전부
+  **미커밋 상태**였음이 함께 발견됨(DB만 적용, 코드 미배포 — 별도 결함으로 인지·기록).
+  검증: svelte-check 신규 에러 0건, 로컬 dev 서버 3개(5173/5174/5175) 전부 /account 정상 응답
+  (500 없음) 확인.
+
+[2026-08-19] GSD | 상품상세 전역 검수 후속 수정 6건(카테고리메뉴 정본연동·라운드값통일·여백2배·
+폰트토큰2건·이미지크롭시도후원복·QA문의RPC결함) [BOUNDARY] | GATE C:완료, GATE E:통과(sp3-qa-agent, MINOR 1건 비블로킹)
+  Stephen이 화면 요소를 직접 선택(<launch-selected-element>)해가며 순차 검수 요청한 6건에
+  즉시 대응. 상세 내역은 TASK.md 동일 제목 NOW 항목 참고.
+  ⚠️ 공유 워킹트리: `+page.svelte`에 다른 세션의 회원가입 게이트(SignUpModal 연동) 기능이
+    동시에 섞여 들어와 있음 — 이번 세션 범위 아니라 손대지 않았고, 이 세션의 다중예약 루프
+    (2026-08-17 NOW 항목)와 실행 순서상 충돌 없음을 코드로 확인만 함.
+  검증: svelte-check 신규 경고 0건 / eslint 신규 에러 0건(사전존재 3건만 잔존, git stash
+    대조 재확인) / submit_cs_post RPC 시그니처+GRANT Stage DB 직접 조회 확인 / 카테고리
+    설정 데이터 Stage DB 실측 확인(3건 전부 icon_url 보유).
+  수정 파일: src/lib/server/productCategorySettings.ts(신규), src/routes/products/+page.server.ts,
+    src/routes/products/[id]/+page.server.ts, src/lib/components/products/ProductHero.svelte,
+    src/routes/products/[id]/+page.svelte, src/lib/components/products/CalendarTimePicker.svelte,
+    src/app.css
+  GATE E(2026-08-19, @sp3-qa-agent): 6건 전부 정상반영 확인, MINOR 1건(app.css 신설 토큰
+    line-height 형제불일치, line-height:1 오버라이드로 실영향 없음) — 통과.
+  미완료: git commit(Stephen 직접 실행 필요).
+
+[2026-08-18] GSD | 상품상세 카테고리 아이콘행 — /products "카테고리 설정" 정본 연동 [BOUNDARY] | GATE C:완료
+  배경: 직전 세션에서 하드코딩 8개 아이콘 중 6개에 onclick만 부여했으나, Stephen이 "all 메뉴
+  (/products) 카테고리 설정 값을 반영해야 할 것"으로 요구범위 확대 — 정적 아이콘이 아니라
+  /products가 이미 쓰는 동일 정본(CMS "카테고리 설정" 화면에서 관리하는 순서·아이콘이미지)을
+  그대로 반영하도록 재구현.
+  공유 헬퍼 신설: src/lib/server/productCategorySettings.ts
+    - getCategoryGroups(): code_mapping_groups 조회(+products/+page.server.ts의 기존 인라인
+      로직을 이 함수 호출로 대체 — 순수 리팩터, 동일 출력값 유지)
+    - joinDisplayCategories(): cms_settings['product_page_categories'].items + groups 조인
+  상품상세(+page.server.ts): get_product_page_settings RPC + 위 헬퍼로 categories 배열을 만들어
+    +page.svelte → ProductHero.svelte로 prop 전달.
+  ProductHero.svelte: 하드코딩 SVG 버튼(6개) 전부 제거 → {#each categories.filter(icon_url
+    있음)} 동적 렌더링, 각 버튼 onclick={() => goto('/products?category='+id)}(직전 세션과
+    동일 네비게이션 유지). icon_url 없는 카테고리는 아이콘 전용 레이아웃 특성상 미표시(라벨
+    텍스트만 보이는 /products와 다른 지점 — 의도적 차이).
+  Stage DB 실측 확인: product_page_categories.items = 렌즈/카메라/중고품 3건, 전부 code_
+    mapping_groups와 매칭되고 icon_url 보유 확인 — 실제 렌더링 시 3개 아이콘 정상 표시될 것.
+  검증: svelte-check·eslint 신규 에러 0건(ProductHero.svelte·productCategorySettings.ts·양쪽
+    +page.server.ts 전부 깨끗, 사전존재 이슈만 잔존 확인).
+  수정 파일: src/lib/components/products/ProductHero.svelte,
+    src/routes/products/+page.server.ts(리팩터), src/routes/products/[id]/+page.server.ts,
+    src/routes/products/[id]/+page.svelte, src/lib/server/productCategorySettings.ts(신규)
+
+[2026-08-18] GSD | 상품상세 카테고리 아이콘행 하드코딩 검증 + 클릭 연동 [BOUNDARY] | GATE C:완료
+  Stephen이 <launch-selected-element>로 ProductHero.svelte의 카테고리 아이콘 8개
+  (카메라·렌즈·드론·폰·영상·악세서리·항공·기타)를 지목, "① 카테고리 메뉴 설정값 반영
+  ② 선택 시 하위 상품 정렬"이 구현됐는지 검증 요청.
+  검증 결과: 완전 하드코딩(고정 SVG+title) + 클릭 핸들러 자체가 없어 둘 다 미구현 확인.
+  /products 목록 화면은 이미 동일 기능을 정상 구현 중(cms_settings['product_page_categories']
+  + code_mapping_groups.default_category 기반 동적 목록 + onclick goto('/products?category=')) —
+  이 패턴을 재사용하기로 확정.
+  실제 카테고리 9종 taxonomy(src/lib/utils/productCategoryTaxonomy.ts)와 대조한 결과 8개 아이콘
+  라벨 중 4개(카메라/렌즈/드론/악세서리)만 실제 카테고리와 일치, 나머지 4개(폰/영상/항공/기타)는
+  9종 어디에도 없는 라벨이라 임의로 매핑하면 잘못된/빈 결과로 이동시킬 위험 — AskUserQuestion으로
+  Stephen에게 개별 확인:
+    - 폰 → 연동 중지(하드코딩 라벨, 실제 카테고리 없음) → 클릭 핸들러 미부여로 유지
+    - 영상 → 버튼 삭제
+    - 항공 → 클릭 비활성 상태로 유지(드론과 중복 우려) → 클릭 핸들러 미부여로 유지
+    - 기타 → 버튼 삭제
+  최종 반영: 카메라→/products?category=camera, 렌즈→lens, 드론→drone, 악세서리→accessory
+  4개에 onclick={() => goto(...)} 추가. 영상·기타 버튼 마크업 전체 삭제(6개 버튼으로 축소).
+  폰·항공은 그대로 비활성 장식 아이콘 유지.
+  검증: svelte-check 신규 에러 0건(ProductHero.svelte 관련 warning 전부 사전존재 dead CSS),
+  eslint 0건.
+  수정 파일: src/lib/components/products/ProductHero.svelte
+
+[2026-08-18] 🔴TDD+GSD | 상품 대여 예약 대상을 가입 완료 계정으로 전면 수정(게스트 자동
+익명계정 생성 폐기 + 로그인/가입 모달 게이팅) [CRITICAL] | GATE C:완료, git commit은
+Stephen 직접 실행 필요
+  배경: 기존 시스템은 비회원 예약 시도 시 signInAnonymously()로 화면에 안 보이는 임시
+  손님계정을 자동 생성해 그대로 진행시키는 의도적 설계였음(products/[id]/+page.svelte
+  handleReserve 306-315행). Stephen 지시로 이 설계를 반대로 뒤집어 가입 완료 계정만
+  예약 가능하도록 변경 + 비회원 접근 범위(내정보·찜·장바구니는 차단/그 외는 허용) 명확화 +
+  채팅상담·댓글의 익명계정 유지 필요성 판단 지시.
+  TDD(Stage B): `isRealMemberSession()` 신설(src/lib/utils/authGuard.ts) — 세션없음/
+    익명세션 false, 실회원 true. RED(6케이스)→GREEN 확인.
+    → src/lib/utils/authGuard.ts(신규), src/__tests__/services/authGuard.test.ts(신규)
+  GSD(Stage A): SignUpModal.svelte에 로그인 모드 추가(mode/initialMode prop, 기존 2단계
+    가입 OTP 로직 무수정, performSignIn() 재사용) — "기존 모달 활용" Stephen 지시 반영.
+    → src/lib/components/auth/SignUpModal.svelte
+  GSD(Stage C): handleReserve()의 signInAnonymously() 폴백 제거 → isRealMemberSession()
+    게이트로 대체. 로컬 액션토스트로 "크레이지샷 로그인 또는 5초 가입만 진행해주세요"
+    + '확인'→모달 오픈→성공 시 보관된 예약인자로 handleReserve() 재호출(페이지 이동
+    없어 sessionStorage 불필요). ⚠️ 발견: USER 화면 전역에 <Toaster/>(svelte-sonner)가
+    마운트돼 있지 않아 표준 csToast가 USER 화면에서 무효 상태였음(기존 잠재 결함, 범위
+    외라 로컬 토스트 확장으로 우회, Stephen 후속 확인 권장).
+    → src/routes/products/[id]/+page.svelte
+  GSD(Stage C2, Stephen 지시 추가): 조사 결과 /account·찜은 이미 비회원 차단 중(무수정),
+    /cart만 예외적으로 비회원에게 빈 장바구니를 그대로 보여주고 있어 /auth/login?
+    redirect=/cart 리다이렉트 추가(기존 절반만 쓰이던 login 페이지의 redirect
+    쿼리파라미터 처리가 이번에 처음 실사용됨).
+    → src/routes/cart/+page.server.ts
+  판단(Stage F, Stephen 지시): 채팅상담(ChatWindow.svelte)은 익명계정 유지 필수로 판단
+    (RLS auth.uid() 의존 + 회원가입 시 동일 UID 전환으로 대화이력 보존 설계 확인) —
+    무수정. 콘텐츠댓글·상품리뷰는 애초에 익명계정 미의존(이미 실로그인만 허용) — 무수정.
+  검증: svelte-check 신규 에러 0건(vite.config.ts 1건만 기존 무관), eslint 신규
+    에러/경고 0건(git stash 대조로 7건 전부 기존 존재 확인), authGuard 6/6 +
+    reservationHelper 인접회귀 포함 70/70 pass.
+  문서화: .claude/rules-ref/rental.md "예약 대상 = 가입 완료 계정" 섹션 신설 + GATE C
+    체크리스트 1건 추가.
+  미완료: git commit은 Stephen 직접 실행 필요(git 자율 실행 금지).
+
+[2026-08-18] 🔴TDD | 쿠폰 기준코드 지연채번 Part B (B-4~B-9) [CRITICAL] | GATE C:코드 완료/Stage DB 적용 대기
+  실행 순서(B-4 → B-1 → B-2/B-3 → B-5~B-7 → B-8 → B-9) 완료
+  B-4(버그확인·수정): distribute_coupon의 issued_at 컬럼 불일치 소스 분석 확인(user_coupons에 issued_at 없음,
+    Migration 16 created_at만 존재) → Migration 291에 수정 포함.
+  B-1(스키마DDL): coupons.{code_series, code_mode}, code NOT NULL 완화, 부분 UNIQUE 인덱스,
+    CHECK 제약(coupons_code_mode_chk), user_coupons.redeemed_code, coupon_code_sequences 테이블+RLS.
+    → supabase/migrations/20260818040000_291_coupon_lazy_sequencing_schema.sql
+  B-2(채번RPC): generate_user_coupon_redeemed_code — SECURITY DEFINER + service_role 전용,
+    멱등성(FOR UPDATE 비관적잠금), 원자성(INSERT...ON CONFLICT DO UPDATE), max_sequence 상한체크 + 카운터 롤백.
+    → supabase/migrations/20260818050000_292_generate_user_coupon_redeemed_code.sql
+  B-3/B-5/B-6(RPC통합): use_coupon에 PERFORM 1줄 추가, cms_create_coupon p_code/p_code_series/p_code_mode
+    파라미터 확장, approve_pending_coupon_gift code_mode 분기.
+    → supabase/migrations/20260818060000_293_coupon_lazy_rpc_integration.sql
+  B-5(서버액션): createCoupon 액션 — code_mode 분기 검증, CmsCreateCouponPayload 로컬 인터페이스.
+    → src/routes/cms/promotion/coupon/+page.server.ts
+  B-7(타입회피): Coupon.{code_series, code_mode} + UserCoupon.redeemed_code + generate_user_coupon_redeemed_code 함수 등록.
+    → src/lib/types/database.ts
+  B-8(TDD테스트파일): 8개 시나리오 작성(B-4회귀/sequenced해피패스/멱등성/원자성/manual노오퍼/max_sequence/use_coupon통합/manual회귀).
+    → src/__tests__/services/couponLazySequencing.test.ts
+  B-9(문서화): service-operations.md §14 지연채번 정책 신설 + GATE C 체크리스트 3건 추가.
+    → .claude/rules/service-operations.md
+  컴파일 검증: vite.config.ts 기존 1건 WARN 제외 신규 에러 0건(B-0 범위 내).
+  ⚠️ Stage DB 적용 블로커: apply_migration 불가(이 세션 MCP 함수 미노출) — Stephen이 Supabase Dashboard SQL Editor로 291→292→293 순 직접 실행 필요. 적용 후 npm run test 실행 필요.
+
 [2026-08-17] 🔴TDD | cancel_payment_and_release_hold 'hold' 상태 미처리 결함 수정 [CRITICAL] | GATE C:Stage 완료, Production은 Stephen 지시 대기
   배경: 직전 대여수량 다중예약 작업 중 Stage DB pg_get_functiondef로 이 RPC 실제 정의를 직접
     확인해 발견 — WHERE절이 status IN ('temp','pending','confirmed')만 매치하고 정작 이 함수의
@@ -4047,6 +4306,32 @@
   확인 후 직접 UI에서 재시도하도록 안내.
   GATE E: 재확인 완료(추가 CRITICAL 수정 포함). Production 마이그레이션(274+276+277)은
   Stephen 승인 전까지 Stage에만 적용된 상태 유지. 커밋은 Stephen 직접 실행.
+
+[2026-08-18] AUDIT+FIX | 고객 포인트 누적&차감 로직 검수 → CRITICAL 2건 발견·수정 | Migration 289 | Stage+Production 완료
+  Stephen이 CMS 고객상세 "포인트"(0P) 필드를 선택해 누적&차감 로직 검수 요청. 화면 표시
+  로직·적립/차감 RPC 2곳(admin_grant_points/admin_bulk_grant_points) 자체는 정상 설계였으나,
+  검수 과정에서 완전히 별개인 CRITICAL 2건을 Stage/Production 라이브 DB 직접 대조로 발견.
+  ① Production에서 user_profiles UPDATE RLS 정책(auth.uid()=id, 컬럼 제한 없음)
+  + authenticated 테이블레벨 UPDATE 전체권한 + points 하한 CHECK 부재가 겹쳐, 로그인한
+  고객이 브라우저에서 직접 자기 points를 무제한 조작 가능한 상태였음(Stage는 UPDATE 정책
+  자체가 없어 우연히 막혀있었음 — 두 환경 분기). 컬럼단위 REVOKE 시도는 Stage 실측 결과
+  무효(authenticated가 이미 테이블레벨 전체 grant 보유, pg_class.relacl 확인) → 테이블레벨
+  REVOKE UPDATE FROM authenticated,anon,PUBLIC로 전환(H-01 원칙과 일치) + points>=0 CHECK
+  신설. 포인트 관리 RPC 5종의 authenticated EXECUTE는 조사 후 그대로 둠 — 전부 is_cms_user()
+  내부게이트 존재 + locals.supabase(CMS 관리자 세션)로 정상 호출되는 패턴이라 회수 시
+  migration 263 authenticated 회귀 사고와 동일한 유형의 회귀를 재현할 뻔했음(직접 코드 확인
+  으로 회피).
+  ② Production 전용: ensure_user_profile()이 user_id 누락한 채 INSERT해 NOT NULL 위반
+  가능성 — Stage는 trg_sync_user_id 트리거가 우연히 보호 중이었으나 Production엔 그 트리거가
+  없음(직접 조회 확인). handle_new_user()와 동일하게 user_id 명시적 포함하도록 수정.
+  검증: Stage·Production 둘 다 트랜잭션 내 authenticated 세션 시뮬레이션 후 ROLLBACK(실데이터
+  미접촉) — update_user_profile() RPC 정상 성공 + 직접 points UPDATE는 permission denied로
+  차단 재확인, 활성고객 수 불변 확인(Stage 19명대/Production 21명 그대로).
+  절차: 테이블 전체 UPDATE 회수처럼 넓은 조치는 자동실행 안전필터가 1차 차단 →
+  Stephen "위험한거 아냐?" 질문에 위험도 정직하게 설명(낮음+즉시복구가능 vs 방치시 실시간
+  악용가능 취약점) → "Stage에 먼저 적용" 승인 → 검증 후 "Production에도 적용" 추가 승인 →
+  Production 적용·검증 완료.
+  GATE E: 완료(Stage+Production 둘 다 실측검증). 커밋은 Stephen 직접 실행.
 
 [2026-08-17] FIX×2 | /cms/customers/settings UI 정합성 — 순번칩·미리보기 하드코딩 + 기준설정 미노출 | 앱코드만 | 완료
   Stephen이 화면 요소 직접 선택해 지적한 2건 연속 수정.
