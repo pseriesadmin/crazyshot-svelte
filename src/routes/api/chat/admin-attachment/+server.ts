@@ -39,7 +39,7 @@ export const POST: RequestHandler = async ({ request, locals }) => {
   // 세션 확인
   const { data: chatSession, error: sessionErr } = await admin
     .from('chat_sessions')
-    .select('id, user_id, status')
+    .select('id, user_id, status, admin_id')
     .eq('id', sessionId)
     .single()
 
@@ -47,12 +47,20 @@ export const POST: RequestHandler = async ({ request, locals }) => {
     return json({ error: '세션을 찾을 수 없습니다.' }, { status: 404 })
   }
 
-  const cs = chatSession as { id: string; user_id: string; status: string }
-  // 관리자 첨부 → closed/pending 모두 open으로 복구 (admin-reply와 동일 정책)
+  const cs = chatSession as { id: string; user_id: string; status: string; admin_id: string | null }
+  // 관리자 첨부 → closed/pending 모두 open으로 복구 + admin_id 배정 (admin-reply와 동일 정책).
+  // admin_id는 "진짜 관리자가 응대했는가"를 판정하는 유일한 신호(sessions/+server.ts 긴급판정,
+  // service-operations.md §13④) — 이 배정이 빠지면 첨부파일로만 응대한 세션이 계속 긴급으로
+  // 오판될 수 있어(2026-08-19 QA 발견) admin-reply와 동일하게 맞춘다.
   if (cs.status === 'closed' || cs.status === 'pending') {
     await admin
       .from('chat_sessions')
-      .update({ status: 'open', updated_at: new Date().toISOString() })
+      .update({ status: 'open', admin_id: cs.admin_id ?? session.user.id, updated_at: new Date().toISOString() })
+      .eq('id', sessionId)
+  } else if (!cs.admin_id) {
+    await admin
+      .from('chat_sessions')
+      .update({ admin_id: session.user.id })
       .eq('id', sessionId)
   }
 

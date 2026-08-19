@@ -15,8 +15,14 @@ import { loadSynonymGroups } from '$lib/server/synonymLearning'
 import { enrichActionCard } from '$lib/server/chatActionEnrich'
 import type { EnrichContext } from '$lib/server/chatActionEnrich'
 import { registerCrossLingualCandidates } from '$lib/server/crossLingualSynonymScan'
+import { sendPushToUser } from '$lib/server/push'
 
 const anthropic = new Anthropic({ apiKey: ANTHROPIC_API_KEY })
+
+// 캔드매칭이 AI 의도분류를 건너뛰므로 chat_intent_logs가 비어 긴급배지(is_urgent)가 뜨지
+// 않던 결함 보완 — 파손/CS컴플레인 카테고리 캔드응답이 발송되면 그 자동응답과 별개로
+// CS_ESCALATE 인텐트 로그를 남겨, 관리자 확인 없이 방치되지 않도록 한다.
+const SENSITIVE_CANNED_CATEGORIES = new Set(['damage', 'cs'])
 
 const SYSTEM_PROMPT = `당신은 크레이지샷(crazyshot.kr) 촬영장비 렌탈 플랫폼의 AI 어시스턴트입니다.
 고객의 메시지를 분석하여 의도를 분류하고 적절한 응답을 생성하세요.
@@ -194,6 +200,31 @@ export const POST: RequestHandler = async ({ request, locals }) => {
               .update({ updated_at: new Date().toISOString() })
               .eq('id', body.session_id)
 
+            // 민감 카테고리는 자동응답을 보내면서도 긴급판정용 인텐트 로그를 별도로 남김
+            // (sessions/+server.ts의 is_urgent 판정이 이 로그를 근거로 함)
+            if (match.category && SENSITIVE_CANNED_CATEGORIES.has(match.category)) {
+              await admin
+                .from('chat_intent_logs')
+                .insert({
+                  message_id: userMessage.id,
+                  intent: 'CS_ESCALATE',
+                  confidence: 1,
+                  raw_response: {
+                    source: 'canned_match',
+                    canned_response_id: match.id,
+                    category: match.category,
+                  },
+                })
+            }
+
+            // 고객 브라우저 푸시 — 캔드매칭 자동응답도 관리자 수동답장과 동일하게 발송
+            // (2026-08-19 전역감사로 발견된 공백 보완, service-operations.md §15)
+            await sendPushToUser(session.user.id, 'canned_auto_reply', {
+              title: '답변이 도착했어요',
+              body: match.content.length > 60 ? `${match.content.slice(0, 60)}…` : match.content,
+              link: '/',
+            })
+
             return json(
               {
                 user_message: userMessage as ChatMessage,
@@ -342,6 +373,14 @@ export const POST: RequestHandler = async ({ request, locals }) => {
       .update({ updated_at: new Date().toISOString() })
       .eq('id', body.session_id)
   }
+
+  // 고객 브라우저 푸시 — AI 자유응답도 캔드매칭·관리자 수동답장과 동일하게 발송
+  // (2026-08-19 전역감사로 발견된 공백 보완, service-operations.md §15)
+  await sendPushToUser(session.user.id, 'ai_auto_reply', {
+    title: '답변이 도착했어요',
+    body: classified.reply.length > 60 ? `${classified.reply.slice(0, 60)}…` : classified.reply,
+    link: '/',
+  })
 
   return json(
     {

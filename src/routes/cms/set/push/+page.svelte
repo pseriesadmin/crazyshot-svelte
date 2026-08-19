@@ -45,6 +45,7 @@
     { key: 'new_reservation', label: '예약신청', field: 'admin_notify_new_reservation' as const },
     { key: 'contract_signed', label: '전자서명', field: 'admin_notify_contract_signed' as const },
     { key: 'payment_completed', label: '결제완료', field: 'admin_notify_payment_completed' as const },
+    { key: 'new_session', label: '신규상담', field: 'admin_notify_new_session' as const },
   ] as const
 
   let togglingAdminCell = $state<string | null>(null)
@@ -85,6 +86,7 @@
     { value: 'new_reservation', label: '예약신청(관리자)' },
     { value: 'contract_signed', label: '전자서명(관리자)' },
     { value: 'payment_completed', label: '결제완료(관리자)' },
+    { value: 'new_session', label: '신규상담(관리자)' },
   ])
 
   function applyLogFilter(status: string, type: string, page: number): void {

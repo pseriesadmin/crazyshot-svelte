@@ -48,6 +48,23 @@ const CUSTOMER_LIFECYCLE_PUSH_COPY: Record<string, { title: string; body: (produ
     title: '대여가 종료됐어요',
     body: (p) => `${p} 대여가 정상적으로 종료됐어요. 이용해주셔서 감사합니다.`,
   },
+  // 2026-08-19 추가(전역 감사로 발견된 공백 보완) — 채팅카드(Migration 288)는 이미 발송되고
+  // 있었으나 이 매핑에 엔트리가 없어 sendReservationLifecyclePush가 조용히 no-op하던 3종.
+  // hold_expired는 release_reservation_hold()가 순수 SQL(pg_cron) 내부에서만 실행돼 앱코드의
+  // 이 함수를 호출할 경로 자체가 없음 — 문구를 채워도 당장 발송되지는 않으며, 별도 아키텍처
+  // (Edge Function+pg_net 등) 없이는 해소되지 않는 구조적 한계로 남겨둔다(범위 밖).
+  reservation_cancelled: {
+    title: '예약이 취소됐어요',
+    body: (p) => `${p} 예약이 취소됐어요. 자세한 내용은 채팅을 확인해주세요.`,
+  },
+  damage_claimed: {
+    title: '파손 신고가 접수됐어요',
+    body: (p) => `${p} 파손 신고가 접수됐어요. 담당자가 확인 후 안내드릴게요.`,
+  },
+  hold_expired: {
+    title: '예약 신청이 시간 초과됐어요',
+    body: (p) => `${p} 예약 신청이 시간 초과로 취소됐어요. 다시 예약해주세요.`,
+  },
 }
 
 const CHUNK_SIZE = 500
@@ -233,7 +250,7 @@ export async function sendReservationLifecyclePush(
 /**
  * 관리자 그룹에게 푸시 발송 — get_admin_push_recipients RPC로 대상(cms_role 보유 +
  * 해당 이벤트 admin_notify_* = true)을 조회한 뒤 발송. eventKey: 'new_reservation' |
- * 'contract_signed' | 'payment_completed'
+ * 'contract_signed' | 'payment_completed' | 'new_session'
  */
 export async function sendPushToAdmins(eventKey: string, payload: PushPayload): Promise<void> {
   try {
@@ -277,5 +294,33 @@ export async function sendPaymentCompletedAdminPush(
     })
   } catch {
     // 조회 실패 등 — 결제 확정 자체는 이미 성공 처리된 상태이므로 전파하지 않음
+  }
+}
+
+/**
+ * 신규 상담(채팅) 세션 관리자 푸시 — POST /api/chat/session에서 세션 신규생성/재활성화
+ * 직후 호출한다. 고객명을 조회해 메시지에 포함하며, 실패해도 절대 throw하지 않는다
+ * (세션 생성 자체는 이 함수 호출 이전에 이미 성공 처리된 상태).
+ */
+export async function sendNewChatSessionAdminPush(
+  admin: SupabaseClient,
+  userId: string,
+): Promise<void> {
+  try {
+    const { data: profile } = await admin
+      .from('user_profiles')
+      .select('full_name')
+      .eq('id', userId)
+      .maybeSingle()
+
+    const customerName = (profile as { full_name?: string } | null)?.full_name ?? '고객'
+
+    await sendPushToAdmins('new_session', {
+      title: '새 상담이 시작됐어요',
+      body: `${customerName}님이 채팅 상담을 시작했어요.`,
+      link: '/cms/chat',
+    })
+  } catch {
+    // 조회 실패 등 — 세션 생성 자체는 이미 성공 처리된 상태이므로 전파하지 않음
   }
 }

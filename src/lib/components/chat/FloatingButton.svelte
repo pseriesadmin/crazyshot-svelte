@@ -18,6 +18,13 @@
     /** true면 원형 FAB 버튼은 숨기고 ChatBottomSheet(공통 모달)만 마운트 —
         다른 화면(예: /account/rental)의 자체 버튼이 openChatWithContext()로만 열 때 사용 */
     hideFab?: boolean
+    /** true면 이 컴포넌트가 ChatBottomSheet를 직접 렌더링하지 않음 — FloatingBar.svelte처럼
+        모바일 peek/expand transform이 걸린 조상(.fab-bar) 안에 이 컴포넌트가 중첩될 때 사용.
+        position:fixed 모달이 transform 조상의 containing block에 갇혀 화면 전체가 아니라
+        FAB 근처의 좁은 박스 안에 찌그러져 렌더링되는 버그 방지(core-rules.md "CSS transform +
+        position:fixed 충돌" 참고, 2026-08-19 발견·수정) — 이 경우 호출부가 ChatBottomSheet를
+        transform 영향이 없는 위치에 별도로 렌더링해야 함 */
+    hideSheet?: boolean
   }
 
   let {
@@ -27,6 +34,7 @@
     contextType,
     contextId,
     hideFab = false,
+    hideSheet = false,
   }: Props = $props()
 
   let isOpen = $derived(chatStore.isOpen)
@@ -112,16 +120,18 @@
   </div>
 {/if}
 
-<!-- 채팅 바텀시트 — 글로벌 오버레이 -->
-<ChatBottomSheet
-  {isOpen}
-  {userId}
-  {userName}
-  {userHandle}
-  {contextType}
-  {contextId}
-  onclose={handleClose}
-/>
+{#if !hideSheet}
+  <!-- 채팅 바텀시트 — 글로벌 오버레이 -->
+  <ChatBottomSheet
+    {isOpen}
+    {userId}
+    {userName}
+    {userHandle}
+    {contextType}
+    {contextId}
+    onclose={handleClose}
+  />
+{/if}
 
 <style>
   /* fab-btn 래퍼 — 원점·링 위치 기준점 */

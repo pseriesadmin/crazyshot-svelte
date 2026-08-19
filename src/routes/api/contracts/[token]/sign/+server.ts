@@ -2,7 +2,7 @@ import { createClient } from '@supabase/supabase-js'
 import { SUPABASE_SERVICE_ROLE_KEY } from '$env/static/private'
 import { PUBLIC_SUPABASE_URL } from '$env/static/public'
 import { json } from '@sveltejs/kit'
-import { sendPushToAdmins } from '$lib/server/push'
+import { sendPushToAdmins, sendPushToUser } from '$lib/server/push'
 import { computeContentHash } from '$lib/contract-signature/contentHash'
 import { recordAuditLog } from '$lib/contract-signature/auditLog'
 import { resolveApprovalNotifyPlan } from '$lib/server/reservationApprovalNotify'
@@ -196,6 +196,14 @@ export const POST: RequestHandler = async ({ params, request, getClientAddress }
                 action_url:   `${cmsPath}?selected=${contract.reservation_id}`,
               },
             })
+
+          // 고객 브라우저 푸시 (2026-08-19 전역감사로 발견된 공백 보완, service-operations.md §15)
+          // — 관리자용 sendPushToAdmins('contract_signed', ...)와는 별개로 고객 본인에게도 발송
+          await sendPushToUser(signing.user_id, 'contract_signed_customer', {
+            title: '전자계약 서명이 완료됐어요',
+            body: reservationCode ? `${reservationCode} 예약의 서명이 정상 접수됐어요.` : '서명이 정상적으로 접수됐어요.',
+            link: '/account/rental',
+          })
         }
       }
 
