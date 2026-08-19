@@ -1,3 +1,5 @@
+import { redirect } from '@sveltejs/kit'
+import { isRealMemberSession } from '$lib/utils/authGuard'
 import type { PageServerLoad } from './$types'
 
 export const load: PageServerLoad = async ({ locals }) => {
@@ -12,30 +14,24 @@ export const load: PageServerLoad = async ({ locals }) => {
     .order('display_order', { ascending: true })
   const deliveryOptions = (deliveryOptionsData ?? []) as DeliveryOptionRow[]
 
+  // 방문대여 지점 — 세션 불필요, 모든 사용자에게 제공(deliveryOptions와 동일 패턴).
+  // 상품별 허용 지점(allowed_pickup_ids) 교집합 필터링은 클라이언트에서 수행(deliveryTabs와 동일 원칙)
+  const { data: pickupPointsData } = await supabase
+    .from('pickup_points')
+    .select('id, name, address, phone')
+    .eq('is_active', true)
+    .is('deleted_at', null)
+    .order('created_at', { ascending: true })
+  const pickupPoints = (pickupPointsData ?? []) as PickupPointRow[]
+
   const { session } = await locals.safeGetSession()
 
-  if (!session) {
-    return {
-      deliveryOptions,
-      userId:          null as string | null,
-      isGuest:         true,
-      reservationIds:  [] as string[],
-      cartProducts:    [] as ProductRow[],
-      cartLineItems:   [] as CartLineItem[],
-      productPriceRules: {} as Record<string, { price12h: number | null; price24h: number | null; deposit: number | null }>,
-      depositTotal:    0,
-      calcTotal:       0,
-      calcDiscount:    0,
-      calcFinal:       0,
-      serverCartItems: [] as ReservationRow[],
-      serverProducts:  [] as ProductRow[],
-      membershipGrade: null as string | null,
-      crazyScore:      null as number | null,
-      userPoints:      0,
-      userCoupons:     [] as UserCouponRow[],
-      isServerLoaded:  false,
-      hasUserAddress:  false,
-    }
+  // 장바구니는 가입 완료 계정만 접근 가능 (2026-08-18) — 비회원·익명세션은 /account와
+  // 동일하게 로그인 화면으로 리다이렉트한다. 예약(hold/draft)이 실제로 존재하려면 이미
+  // 상품상세 예약 게이트를 통과한 실회원이어야 하므로, 여기 도달하는 비회원은 애초에
+  // 담긴 항목이 없는 빈 장바구니를 볼 이유도 없다.
+  if (!session || !isRealMemberSession(session)) {
+    throw redirect(303, '/auth/login?redirect=/cart')
   }
 
   const [cartResult, profileResult, couponResult, addressResult] = await Promise.all([
@@ -48,7 +44,7 @@ export const load: PageServerLoad = async ({ locals }) => {
 
     supabase
       .from('user_profiles')
-      .select('membership_grade, credit_score, points')
+      .select('membership_grade, credit_score, points, full_name, phone, email')
       .eq('id', session.user.id)
       .maybeSingle(),
 
@@ -65,16 +61,20 @@ export const load: PageServerLoad = async ({ locals }) => {
       .eq('user_id', session.user.id)
       .is('used_at', null),
 
-    // "회원정보 반영" 체크박스 활성화 판단용 — 저장된 배송지가 하나라도 있는지만 확인
+    // "회원정보 반영" 체크박스 활성화 판단 + 실제 자동채움용 — 기본 배송지(is_default) 우선,
+    // 없으면 등록순 첫 배송지
     supabase
       .from('user_shipping_addresses')
-      .select('road_address')
+      .select('road_address, detail_address')
       .eq('user_id', session.user.id)
+      .order('is_default', { ascending: false })
+      .order('sort_order', { ascending: true })
       .limit(1),
   ])
 
-  const hasUserAddress = ((addressResult.data ?? []) as Array<{ road_address: string | null }>)
-    .some(row => !!row.road_address)
+  const addressRows = (addressResult.data ?? []) as Array<{ road_address: string | null; detail_address: string | null }>
+  const hasUserAddress = addressRows.some(row => !!row.road_address)
+  const primaryAddress = addressRows.find(row => !!row.road_address) ?? null
 
   // ── 쿠폰 노출 조건 필터 ─────────────────────────────────────────────────────
   const now = new Date().toISOString()
@@ -115,7 +115,7 @@ export const load: PageServerLoad = async ({ locals }) => {
       productIds.length > 0
         ? supabase
             .from('products')
-            .select('id, name, category, brand, slug, image_urls, is_active, created_at, updated_at, deleted_at, allowed_method_ids, parent_product_id')
+            .select('id, name, category, brand, slug, image_urls, is_active, created_at, updated_at, deleted_at, allowed_method_ids, allowed_pickup_ids, parent_product_id')
             .in('id', productIds)
         : Promise.resolve({ data: [] as ProductRow[] }),
       productIds.length > 0
@@ -133,28 +133,35 @@ export const load: PageServerLoad = async ({ locals }) => {
     ])
     serverProducts = (productsResult.data ?? []) as ProductRow[]
 
-    // 대여방식(allowed_method_ids)은 CMS 대여정책 탭이 부모 상품에만 설정되는 필드 — 예약에
-    // 배정된 자식 재고 유닛은 이 값이 항상 빈 배열([])이라, 자식 자신의 값이 비어있으면
-    // 부모 상품의 설정을 대신 조회해 채운다 (products.md §5 대여정책 ↔ 예약 흐름 연결 참고)
+    // 대여방식(allowed_method_ids)·방문지점(allowed_pickup_ids)은 CMS 대여정책 탭이 부모 상품에만
+    // 설정되는 필드 — 예약에 배정된 자식 재고 유닛은 이 값이 항상 빈 배열([])이라, 자식 자신의
+    // 값이 비어있으면 부모 상품의 설정을 대신 조회해 채운다 (products.md §5 참고)
     const parentIdsNeeded = [...new Set(
       serverProducts
-        .filter(p => (!p.allowed_method_ids || p.allowed_method_ids.length === 0) && p.parent_product_id)
+        .filter(p =>
+          ((!p.allowed_method_ids || p.allowed_method_ids.length === 0) ||
+           (!p.allowed_pickup_ids || p.allowed_pickup_ids.length === 0)) && p.parent_product_id
+        )
         .map(p => p.parent_product_id as string)
     )]
     if (parentIdsNeeded.length > 0) {
       const { data: parentRows } = await supabase
         .from('products')
-        .select('id, allowed_method_ids')
+        .select('id, allowed_method_ids, allowed_pickup_ids')
         .in('id', parentIdsNeeded)
-      const parentMethodMap = new Map(
-        ((parentRows ?? []) as Array<{ id: string; allowed_method_ids: string[] | null }>)
-          .map(p => [p.id, p.allowed_method_ids ?? []])
-      )
+      const parentRowsTyped = (parentRows ?? []) as Array<{ id: string; allowed_method_ids: string[] | null; allowed_pickup_ids: string[] | null }>
+      const parentMethodMap = new Map(parentRowsTyped.map(p => [p.id, p.allowed_method_ids ?? []]))
+      const parentPickupMap = new Map(parentRowsTyped.map(p => [p.id, p.allowed_pickup_ids ?? []]))
       serverProducts = serverProducts.map(p => {
-        if ((!p.allowed_method_ids || p.allowed_method_ids.length === 0) && p.parent_product_id) {
-          return { ...p, allowed_method_ids: parentMethodMap.get(p.parent_product_id) ?? p.allowed_method_ids }
+        if (!p.parent_product_id) return p
+        const next = { ...p }
+        if (!p.allowed_method_ids || p.allowed_method_ids.length === 0) {
+          next.allowed_method_ids = parentMethodMap.get(p.parent_product_id) ?? p.allowed_method_ids
         }
-        return p
+        if (!p.allowed_pickup_ids || p.allowed_pickup_ids.length === 0) {
+          next.allowed_pickup_ids = parentPickupMap.get(p.parent_product_id) ?? p.allowed_pickup_ids
+        }
+        return next
       })
     }
 
@@ -243,9 +250,8 @@ export const load: PageServerLoad = async ({ locals }) => {
 
   return {
     deliveryOptions,
+    pickupPoints,
     userId:          session.user.id,
-    // 익명(게스트) 로그인 여부 — 체크아웃 완료 버튼 문구 분기(회원/비회원)에 사용
-    isGuest:         session.user.is_anonymous ?? false,
     reservationIds,
     cartProducts,
     cartLineItems,
@@ -262,6 +268,16 @@ export const load: PageServerLoad = async ({ locals }) => {
     userCoupons:     filteredCoupons as UserCouponRow[],
     isServerLoaded:  rawReservations.length > 0,
     hasUserAddress,
+    // "회원정보 반영" 체크박스 자동채움용 — 체크 시 이 값으로 폼 필드를 덮어씀(BND: front-uiux 검수
+    // 2026-08-17 발견 — 기존엔 체크박스가 토글만 될 뿐 실제 반영 로직이 전혀 없었음)
+    userProfileInfo: {
+      name:  (profileResult.data as ProfileRow | null)?.full_name ?? null,
+      phone: (profileResult.data as ProfileRow | null)?.phone ?? null,
+      email: (profileResult.data as ProfileRow | null)?.email ?? null,
+    },
+    userAddressInfo: primaryAddress
+      ? { road_address: primaryAddress.road_address, detail_address: primaryAddress.detail_address }
+      : null,
   }
 }
 
@@ -292,7 +308,15 @@ interface ProductRow {
   updated_at:          string
   deleted_at:          string | null
   allowed_method_ids?: string[] | null
+  allowed_pickup_ids?: string[] | null
   parent_product_id?:  string | null
+}
+
+interface PickupPointRow {
+  id:      string
+  name:    string
+  address: string
+  phone:   string | null
 }
 
 interface CartLineItemOption {
@@ -325,6 +349,9 @@ interface ProfileRow {
   membership_grade: string | null
   credit_score:     number | null
   points:           number
+  full_name:        string | null
+  phone:            string | null
+  email:            string | null
 }
 
 // 노출 필터링 후 클라이언트로 전달되는 타입
@@ -334,7 +361,7 @@ interface UserCouponRow {
   used_count: number
   coupons: {
     id:                  string
-    code:                string
+    code:                string | null   // sequenced 모드 쿠폰은 NULL — B-0 타입 정합성 보완
     discount_type:       string
     discount_value:      number
     description:         string | null
@@ -348,7 +375,7 @@ interface UserCouponRow {
 // 쿠폰 조회 raw 타입 (필터링 전)
 interface RawCouponFields {
   id:                   string
-  code:                 string
+  code:                 string | null   // sequenced 모드 쿠폰은 NULL — B-0 타입 정합성 보완
   discount_type:        string
   discount_value:       number
   description:          string | null

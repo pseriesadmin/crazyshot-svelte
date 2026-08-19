@@ -1,6 +1,9 @@
 <script lang="ts">
   import { goto } from '$app/navigation'
   import type { PageData } from './$types'
+  import MobileMoreMenu from '$lib/components/common/MobileMoreMenu.svelte'
+
+  let moreMenuOpen = $state(false)
 
   let { data }: { data: PageData } = $props()
 
@@ -28,20 +31,29 @@
         </svg>
       </button>
       <span class="gnb-title">결제완료</span>
-      <div class="gnb-ham" aria-hidden="true">
-        <span></span><span></span><span></span>
-      </div>
+      <button class="gnb-ham" aria-label="더보기 메뉴" onclick={() => moreMenuOpen = true}>
+        <svg width="20" height="17" viewBox="0 0 20 17" fill="none" aria-hidden="true">
+          <path d="M18.5 6.75C19.3284 6.75 20 7.42157 20 8.25C20 9.07843 19.3284 9.75 18.5 9.75H1.5C0.671573 9.75 0 9.07843 0 8.25C0 7.42157 0.671573 6.75 1.5 6.75H18.5Z" fill="#CF0000"/>
+          <path d="M18.5 14C19.1904 14 19.75 14.5596 19.75 15.25C19.75 15.9404 19.1904 16.5 18.5 16.5H1.5C0.809644 16.5 0.25 15.9404 0.25 15.25C0.25 14.5596 0.809644 14 1.5 14H18.5ZM18.5 0C19.1904 0 19.75 0.559644 19.75 1.25C19.75 1.94036 19.1904 2.5 18.5 2.5H1.5C0.809644 2.5 0.25 1.94036 0.25 1.25C0.25 0.559644 0.809644 0 1.5 0H18.5Z" fill="#201857"/>
+        </svg>
+      </button>
     </div>
   </div>
 
   <!-- 타이틀 영역 -->
+  <!-- 2026-08-19: 계약서명 대기 중(pendingContract)이면 확정으로 오해할 수 있는 단정적
+       성공 문구 대신, 결제는 완료됐으나 계약서명이 남았음을 명시 -->
   <div class="title-bar">
     <div class="icon-box icon-box--success" aria-hidden="true">
       <svg width="20" height="14" viewBox="0 0 20 14" fill="none">
         <path d="M1 7L7 13L19 1" stroke="white" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
       </svg>
     </div>
-    <p class="title-text">대여 결제 성공적!</p>
+    {#if data.pendingContract}
+      <p class="title-text">결제 완료! 계약서 서명 후 예약이 확정돼요.</p>
+    {:else}
+      <p class="title-text">대여 결제 성공적!</p>
+    {/if}
   </div>
 
   <!-- 주문 상세 카드 -->
@@ -150,20 +162,16 @@
   }
   .gnb-ham {
     display: flex;
-    flex-direction: column;
-    gap: 4px;
-    width: 20px;
-    padding: 8px 0;
+    align-items: center;
+    justify-content: center;
+    min-width: 44px;
+    min-height: 44px;
+    background: none;
+    border: none;
+    cursor: pointer;
+    padding: 0;
+    margin-right: -8px;
   }
-  .gnb-ham span {
-    display: block;
-    height: 2px;
-    background: var(--cs-orange);
-    border-radius: 2px;
-  }
-  .gnb-ham span:nth-child(1) { width: 100%; }
-  .gnb-ham span:nth-child(2) { width: 70%; }
-  .gnb-ham span:nth-child(3) { width: 100%; }
 
   /* 타이틀 */
   .title-bar {
@@ -333,3 +341,5 @@
     .confirm-btn { max-width: 480px; margin-left: auto; margin-right: auto; }
   }
 </style>
+
+<MobileMoreMenu open={moreMenuOpen} onclose={() => moreMenuOpen = false} />

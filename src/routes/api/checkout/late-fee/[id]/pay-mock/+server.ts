@@ -3,6 +3,7 @@ import { createClient } from '@supabase/supabase-js'
 import { env } from '$env/dynamic/private'
 import { getSupabaseUrl } from '$lib/env/supabasePublic'
 import { validateLateFeeAccess } from '$lib/server/lateFeeUtils'
+import { sendPushToUser } from '$lib/server/push'
 import type { RequestHandler } from './$types'
 
 // 연체료 결제 (임시 자동승인)
@@ -66,6 +67,13 @@ export const POST: RequestHandler = async ({ params, locals }) => {
       content:      `연체료 결제가 완료됐습니다. (${(validation.lateFee.fee_amount).toLocaleString()}원)`,
       message_type: 'text',
       is_read:      false,
+    })
+
+    // 고객 브라우저 푸시 (2026-08-19 전역감사로 발견된 공백 보완, service-operations.md §15)
+    await sendPushToUser(session.user.id, 'late_fee_paid', {
+      title: '연체료 결제가 완료됐어요',
+      body: `연체료 ${validation.lateFee.fee_amount.toLocaleString()}원 결제가 정상 처리됐어요.`,
+      link: '/',
     })
   }
 

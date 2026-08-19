@@ -43,13 +43,19 @@
   </div>
 
   <!-- 타이틀 영역 -->
+  <!-- 2026-08-19: 계약서명 대기 중(pendingContract)이면 "예약 확정"으로 오해할 수 있는
+       단정적 성공 문구 대신, 결제는 완료됐으나 계약서명이 남았음을 명시 -->
   <div class="title-bar">
     <div class="icon-box icon-box--success" aria-hidden="true">
       <svg width="20" height="14" viewBox="0 0 20 14" fill="none">
         <path d="M1 7L7 13L19 1" stroke="white" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
       </svg>
     </div>
-    <p class="title-text">대여 결제 성공적!</p>
+    {#if data.pendingContract}
+      <p class="title-text">결제 완료! 계약서 서명 후 예약이 확정돼요.</p>
+    {:else}
+      <p class="title-text">대여 결제 성공적!</p>
+    {/if}
   </div>
 
   <div class="body">
@@ -136,6 +142,13 @@
           <div class="detail-row">
             <span class="detail-label">쿠폰 할인</span>
             <span class="detail-value detail-value--discount">−{fmt(data.couponDiscount)} 원</span>
+          </div>
+        {/if}
+
+        {#if data.couponCode}
+          <div class="detail-row">
+            <span class="detail-label">발급된 쿠폰 코드</span>
+            <span class="detail-value">{data.couponCode}</span>
           </div>
         {/if}
 
