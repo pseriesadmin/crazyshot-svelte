@@ -5,12 +5,14 @@
   import SubscriptionPolicyNotice from '$lib/components/members/SubscriptionPolicyNotice.svelte'
   import CommonBenefits from '$lib/components/members/CommonBenefits.svelte'
   import BottomTabBar from '$lib/components/common/BottomTabBar.svelte'
+  import MembersHeroBannerModal from '$lib/components/members/admin/MembersHeroBannerModal.svelte'
   import type { PageData } from './$types'
 
   interface Props { data: PageData }
   let { data }: Props = $props()
 
   let selectedPlanId = $state<number | null>(data.plans[0]?.id ?? null)
+  let showHeroBannerModal = $state(false)
 
   $effect(() => {
     if (!data.plans.some((p) => p.id === selectedPlanId)) {
@@ -29,7 +31,11 @@
 </svelte:head>
 
 <div class="members-page">
-  <MembersHero />
+  <MembersHero
+    imageUrl={data.heroBannerUrl}
+    isCms={data.isCms}
+    onEditBanner={() => (showHeroBannerModal = true)}
+  />
 
   <div class="pc-content-wrap">
     <section class="pc-section" id="pricing" aria-label="멤버십 플랜">
@@ -49,6 +55,16 @@
     </section>
   </div>
 </div>
+
+{#if showHeroBannerModal}
+  <MembersHeroBannerModal
+    initialImages={data.heroBannerImages}
+    initialMode={data.heroBannerMode}
+    initialMainCopy={data.heroBannerMainCopy}
+    initialSubCopy={data.heroBannerSubCopy}
+    onclose={() => (showHeroBannerModal = false)}
+  />
+{/if}
 
 <BottomTabBar />
 

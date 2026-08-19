@@ -1,4 +1,11 @@
 <script lang="ts">
+  interface Props {
+    imageUrl?: string
+    isCms?: boolean
+    onEditBanner?: () => void
+  }
+
+  let { imageUrl = '/members/hero-character.png', isCms = false, onEditBanner }: Props = $props()
 </script>
 
 <!-- ── PC Hero (≥1024px) ─────────────────────────────────────────── -->
@@ -6,10 +13,19 @@
   <div class="hero-pc-inner">
     <!-- Layer 1: 캐릭터 이미지 (전폭 커버) -->
     <img
-      src="/members/hero-character.png"
+      src={imageUrl}
       alt="CrazyShot 멤버십 캐릭터"
       class="hero-char-img"
     />
+    {#if isCms}
+      <button class="hero-edit-btn" onclick={onEditBanner} aria-label="배너 이미지 관리">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <circle cx="12" cy="12" r="3"/>
+          <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
+        </svg>
+        배너 관리
+      </button>
+    {/if}
     <!-- Layer 2: Red 오버레이 (가운데 밴드, 혼합 반경) -->
     <div class="hero-overlay red"></div>
     <!-- Layer 3: Purple 오버레이 (하단 밴드) -->
@@ -30,14 +46,14 @@
   <div class="hero-mobile-inner">
     <!-- 배경 이미지 레이어 1 (상단) -->
     <img
-      src="/members/hero-character.png"
+      src={imageUrl}
       alt=""
       class="hero-m-char-1"
       aria-hidden="true"
     />
     <!-- 배경 이미지 레이어 2 (하단) -->
     <img
-      src="/members/hero-character.png"
+      src={imageUrl}
       alt=""
       class="hero-m-char-2"
       aria-hidden="true"
@@ -79,6 +95,28 @@
     border-radius: var(--radius-2xl);
     overflow: hidden;
   }
+
+  .hero-edit-btn {
+    position: absolute;
+    top: 20px;
+    right: 20px;
+    z-index: 3;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    height: 36px;
+    padding: 0 16px;
+    background: rgba(16, 11, 50, 0.55);
+    color: var(--cs-white);
+    border: none;
+    border-radius: var(--radius-md);
+    font-family: var(--font-kr);
+    font-size: 13px;
+    font-weight: 700;
+    cursor: pointer;
+    backdrop-filter: blur(4px);
+  }
+  .hero-edit-btn:hover { background: rgba(16, 11, 50, 0.8); }
 
   /* Layer 1: 전폭 이미지 (원본: w-1244px h-774px left-[-4px] top-[-37px]) */
   .hero-char-img {
