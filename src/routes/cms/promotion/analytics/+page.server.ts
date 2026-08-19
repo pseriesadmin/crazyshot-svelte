@@ -1,3 +1,5 @@
+import { redirect } from '@sveltejs/kit'
+import { hasSettingsAccess } from '$lib/utils/cmsPermissions'
 import type { PageServerLoad } from './$types'
 
 export type AnalyticsData = {
@@ -20,7 +22,12 @@ export type AnalyticsData = {
 
 export type BannerStats = Record<string, { clicks: number }>
 
-export const load: PageServerLoad = async ({ locals }) => {
+export const load: PageServerLoad = async ({ parent, locals }) => {
+  const { cmsRole } = await parent()
+  if (!hasSettingsAccess(cmsRole ?? '')) {
+    throw redirect(303, '/cms?notice=access_denied')
+  }
+
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const db = locals.supabase as unknown as any
 

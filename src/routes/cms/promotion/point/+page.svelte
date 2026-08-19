@@ -97,6 +97,13 @@
     }
   })
 
+  // data 갱신 시 재동기화
+  $effect(() => {
+    txTypeFilter = data.txType
+    fromFilter   = data.from.substring(0, 10)
+    toFilter     = data.to.substring(0, 10)
+  })
+
   // ─ 유틸 ─
   function formatDate(d: string): string {
     return new Date(d).toLocaleDateString('ko-KR', { year: '2-digit', month: '2-digit', day: '2-digit' })

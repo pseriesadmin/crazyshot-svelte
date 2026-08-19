@@ -34,6 +34,7 @@ export const load: PageServerLoad = async ({ parent, locals, url }) => {
   const { data: banners } = await db
     .from('banners')
     .select('*')
+    .is('deleted_at', null)
     .order('slot_key')
     .order('sort_order')
 
@@ -60,19 +61,20 @@ export const actions: Actions = {
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const db = locals.supabase as unknown as any
-    const { error } = await db.from('banners').insert({
-      slot_key,
-      title,
-      image_url,
-      link_url,
-      device_type,
-      sort_order,
-      valid_from,
-      valid_until,
-      is_active: true,
+    const { data, error } = await db.rpc('cms_create_banner', {
+      p_slot_key: slot_key,
+      p_title: title,
+      p_image_url: image_url,
+      p_link_url: link_url,
+      p_device_type: device_type,
+      p_sort_order: sort_order,
+      p_valid_from: valid_from,
+      p_valid_until: valid_until,
     })
 
     if (error) return { ok: false, error: error.message }
+    const result = data as { ok: boolean; error?: string } | null
+    if (!result?.ok) return { ok: false, error: result?.error ?? '생성 실패' }
     return { ok: true }
   },
 
@@ -83,16 +85,14 @@ export const actions: Actions = {
     if (!hasSettingsAccess(cmsRole2 ?? '')) return { ok: false, error: '권한 없음' }
     const form = await request.formData()
     const id = String(form.get('id'))
-    const is_active = form.get('is_active') === 'true'
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const db = locals.supabase as unknown as any
-    const { error } = await db
-      .from('banners')
-      .update({ is_active: !is_active })
-      .eq('id', id)
+    const { data, error } = await db.rpc('cms_toggle_banner', { p_id: id })
 
     if (error) return { ok: false, error: error.message }
+    const result = data as { ok: boolean; error?: string } | null
+    if (!result?.ok) return { ok: false, error: result?.error ?? '처리 실패' }
     return { ok: true }
   },
 
@@ -106,12 +106,11 @@ export const actions: Actions = {
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const db = locals.supabase as unknown as any
-    const { error } = await db
-      .from('banners')
-      .delete()
-      .eq('id', id)
+    const { data, error } = await db.rpc('cms_delete_banner', { p_id: id })
 
     if (error) return { ok: false, error: error.message }
+    const result = data as { ok: boolean; error?: string } | null
+    if (!result?.ok) return { ok: false, error: result?.error ?? '삭제 실패' }
     return { ok: true }
   },
 }
