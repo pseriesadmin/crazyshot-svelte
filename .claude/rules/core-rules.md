@@ -57,6 +57,12 @@ Supabase — DB 환경 분리 (절대 혼용 금지)
 - RPC 호출: supabase.rpc('function_name', { params })
 - 직접 DML(INSERT/UPDATE/DELETE) 금지 — RPC 경유만 허용 (H-01)
 
+git 쓰기 명령어 (GP-1, 2026-08-19 사고로 재확인·강화)
+- add/commit/push/merge/rebase 전부 Stephen만 직접 실행 — AI 자율 실행 절대 금지
+- "커밋 메시지 제안해줘" 요청 = 텍스트 제안만, 실행 승인 아님(재확인 없이 실행 금지)
+- .claude/settings.local.json에 git 쓰기 명령을 allow 패턴으로 등록 금지 —
+  등록돼 있으면 병렬 세션에서 승인 절차 없이 커밋이 실행돼 다른 세션 작업과 충돌 위험
+
 환경변수
 - 클라이언트 공개: $env/static/public (PUBLIC_ 접두사만)
 - 서버 전용: $env/static/private (절대 클라이언트 노출 금지 — H-05)
@@ -87,6 +93,38 @@ TODO/FIXME   : TASK.md BACKLOG 등록 후 코드에서 제거
 에러 핸들링  : catch 블록 전부 명시적 처리 (빈 catch 금지)
 N+1 쿼리     : 금지 — 단일 RPC 또는 .select('*, related(*)')로 조인
 Realtime     : onDestroy 또는 $effect cleanup에서 .unsubscribe() 필수
+```
+
+---
+
+## IME-SAFE-INPUT — 한글/다국어 입력 이중등록 방지 패턴 (2026-08-19 등록)
+
+> 키워드·태그·칩 등 텍스트를 Enter로 추가하는 입력 기능을 구현할 때 반드시 이 패턴을 적용한다.
+> "IME-SAFE-INPUT 적용할 것" 지시 시 아래 3가지를 세트로 구현한다.
+
+```svelte
+<!-- ① onkeydown: e.isComposing 체크 필수 — 한글 IME 조합 중 Enter 이중발동 차단 -->
+function onkeydown(e: KeyboardEvent) {
+  if (e.key === 'Enter' && !e.isComposing) { e.preventDefault(); add() }
+}
+
+<!-- ② add(): 호출 경로(Enter·버튼클릭·폼submit)와 무관하게 항상 내부에서 방어 -->
+function add() {
+  const value = inputValue.trim()
+  if (!value || items.includes(value) || items.length >= MAX) return  // 빈값·중복·최대치
+  items = [...items, value]
+  inputValue = ''
+}
+```
+
+```
+이중등록 원인 3가지:
+  A. IME isComposing 미체크  → 한글 조합 중 Enter가 add() 2회 발동
+  B. 호출 경로 중복           → Enter + 버튼 클릭이 동시에 add() 호출
+  C. add() 내부 방어 부재     → 같은 값이 다른 경로로 재삽입됨
+
+→ ①(isComposing 체크)은 경로 A만 차단 — 단독으로는 불완전
+→ ②(includes 중복체크)가 최후 방어선 — 두 가지 모두 필수
 ```
 
 ---

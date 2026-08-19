@@ -125,7 +125,10 @@ Class D (보안 위반) → 즉시 중단
 > 확인 없이 선수정 후 보고 금지. 위반 시 "치명적인 오류"로 간주한다.
 
 ```
-❌ git 명령어 자율 실행 금지 (Stephen만)
+❌❌❌ git 쓰기 명령어(add/commit/push/merge/rebase 등) 자율 실행 절대 금지 — Stephen만 직접 실행
+   → "커밋 메시지 제안해줘"/"커밋 명령 알려줘" 요청 = 텍스트 제안만 허용, 실행 승인 아님
+   → .claude/settings.local.json에 git 쓰기 명령 자동승인(allow) 패턴 추가 금지 —
+     병렬 세션에서 승인 없는 커밋이 다른 세션 작업과 충돌·유실을 유발한 실사고 있음(2026-08-19)
 ❌ CRITICAL GATE 없이 다음 태스크 진행 금지 (BOUNDARY·ROUTINE은 자동)
 ❌ TDD 도메인에서 테스트 없이 구현 코드 작성 금지
 ❌ $env/static/public에 서버 키 import 금지

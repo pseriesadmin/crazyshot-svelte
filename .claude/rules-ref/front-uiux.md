@@ -193,17 +193,42 @@ CMS 화면     → cms-uiux.md 참조
 
 ## 4. 반경 (Border Radius) — 사용자 화면 기준
 
+> ⚠️ **2026-08-17 지침 정정**: 이전 표(`card PC 20px/--radius-2xl` · `card Mobile
+> 15px/--radius-lg`)는 실제 `app.css` 토큰 정의와 불일치하는 문서 오류였다(`app.css`
+> 실제로는 `--radius-2xl=50px`/`--radius-lg=20px`). Stephen 확정으로 아래 카드 반경
+> **대/중 2단 체계**로 전면 교체 — 이 표가 유일한 기준이다.
+
 | JSON 키 | 값 | CSS 변수 | 사용자 화면 적용 대상 |
 |---|---|---|---|
 | `button` | **30px** | `--radius-xl` | **CTA 버튼 (PC & Mobile 동일)** |
-| `card` PC | **20px** | `--radius-2xl` | 흰 카드, 주요 컨테이너 |
-| `card` Mobile | **15px** | `--radius-lg` | 모바일 카드 |
+| `card` 대 PC | **50px** | `--radius-2xl` | 흰 카드(최상위 컨테이너) — PC |
+| `card` 대 Mobile | **30px** | (하드코딩) | 흰 카드(최상위 컨테이너) — Mobile |
+| `card` 중 PC | **30px** | `--radius-xl` | 중간 카드(총금액 박스 등) — PC |
+| `card` 중 Mobile | **20px** | (하드코딩) | 중간 카드(총금액 박스 등) — Mobile |
 | `badge` | **99px** | `--radius-full` | 배지, 태그, 원형 요소 |
 | `input` | **8px** | `--radius-sm` | 폼 입력 필드 |
 | `image` | **10px** | `--cms-radius-sm` (10px) | 상품 이미지 |
 | `avatar` | **50px** | — | 프로필 아바타 |
 
 > 사용자 화면 버튼 반경 = **30px (`--radius-xl`)** — CMS(8px)와 다르다.
+>
+> **대(large) vs 중(medium) 판단 기준**: 화면의 최상위 컨테이너 역할(장바구니 카드,
+> 대여옵션 패널 등 — `.order-card`/`.item-card`/`.bulk-panel`)이면 대, 그 안에
+> 종속되거나 병렬로 존재하는 요약/부속 박스(총금액 박스 등 — `.total-dark-box`/
+> `.total-details-box`)면 중. PC·Mobile 값이 서로 다르므로 각 컴포넌트는 반드시
+> `@media (max-width: 640px)` 오버라이드로 대응 Mobile 값을 명시할 것 — 오버라이드
+> 누락 시 PC 값이 그대로 상속되어 파편화(값 불일치)가 재발한다.
+
+### 4-1. 카드형 레이아웃 상하 패딩 (2026-08-17 확정)
+
+| 대상 | PC | Mobile |
+|---|---|---|
+| 카드형 레이아웃 내부 상하(top/bottom) 패딩 | **30px** | **20px** |
+
+> 좌우(left/right) 패딩은 이 표의 대상이 아니다 — 기존 spacing 토큰(보통 20px,
+> `--spacing-5`)을 그대로 유지하고 상하만 이 값을 따른다. PC 전용 컴포넌트
+> (`.item-card` 등 `@media (min-width: 641px)`에서만 노출)는 Mobile 값이 적용될
+> 일이 없으므로 PC 값만 지정하면 된다.
 
 ---
 
@@ -490,15 +515,93 @@ CMS 화면     → cms-uiux.md 참조
 {/if}
 ```
 
+### 9-2-B. 슬롯 기반 배너 설정 패턴 (다중 슬롯 — crazylog 방식)
+
+여러 독립 슬롯(섹션)을 하나의 `activeModal` 상태로 제어한다.
+
+**서버(+page.server.ts) 데이터 공급 구조:**
+```typescript
+// load 함수에서:
+//  1. session → user_profiles.cms_role 조회 → isCms: boolean
+//  2. get_crazylog_banner_settings RPC → 슬롯별 BannerSlotConfig 조회
+//  3. BANNER_SLOTS.map() → BannerSlotResult[] 반환
+//     (slotKey, badgeLabel, items, settings 포함)
+return { isCms, bannerSlots, /* ...기타 데이터 */ }
+```
+
+**페이지 스크립트 패턴:**
+```svelte
+<script lang="ts">
+  let { data } = $props()
+  let activeModal = $state<string | null>(null)
+</script>
+```
+
+**버튼 배치 패턴 (슬롯마다 반복):**
+```svelte
+<!-- 각 섹션 컨테이너에 position: relative 필수 -->
+<div class="section-wrap" style="position:relative">
+  {#if data.isCms}
+    <button
+      class="admin-edit-btn admin-banner-btn"
+      onclick={() => { activeModal = 'crazylog_banner_slot2' }}
+      aria-label="채널홍보 배너 설정"
+    >✦ 목록 선택</button>
+  {/if}
+  <!-- 섹션 콘텐츠 -->
+</div>
+```
+
+**모달 렌더링 패턴 (파일 최하단):**
+```svelte
+{#if data.isCms && activeModal}
+  {#each data.bannerSlots as slot}
+    {#if activeModal === slot.slotKey}
+      <CrazylogBannerModal
+        slotKey={slot.slotKey}
+        initialSettings={slot.settings}
+        onclose={() => { activeModal = null }}
+      />
+    {/if}
+  {/each}
+{/if}
+```
+
+**모달 컴포넌트 (`CrazylogBannerModal.svelte`) 핵심 스펙:**
+- `position:fixed right:0 top:0 height:100dvh width:420px` 우측 슬라이드 패널
+- Props: `slotKey`, `initialSettings: { posts: { id, order }[], mode: 'random'|'fixed' }`, `onclose`
+- 초기 로드: `get_crazylog_posts_by_ids` RPC (280ms 디바운스 검색: `search_crazylog_posts`)
+- 저장: `save_crazylog_banner_slot` RPC → `invalidateAll()`
+- 최대 8개 항목, `CmsDragList`로 순서 조정, `SuggestPicker`로 검색
+
+**CSS 추가 변형 (배너 전용):**
+```css
+.admin-banner-btn {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  z-index: 20;
+}
+```
+
+**재활용 체크리스트 (다른 화면에 적용 시):**
+1. `+page.server.ts` — `isCms` boolean + 슬롯 데이터 배열 반환
+2. 페이지 스크립트 — `let activeModal = $state<string | null>(null)`
+3. 각 섹션 버튼 — `{#if data.isCms}` 감싸기 + 고유 `slotKey` 지정
+4. 파일 최하단 — `{#if data.isCms && activeModal}` 모달 블록 배치
+5. 저장 성공 시 `invalidateAll()` 호출로 서버 데이터 갱신
+
 ### 9-3. GATE C 확인 항목 (관리자 설정 UI)
 
 ```
 [ ] .admin-edit-btn 렌더를 {#if data.isCms}로 감쌌는가?
-[ ] .admin-float-btn position: absolute 부모에 position: relative 있는가?
+[ ] .admin-float-btn / .admin-banner-btn position: absolute 부모에 position: relative 있는가?
 [ ] 관리자 버튼 min-height: 32px (터치 타겟 보조)?
 [ ] .admin-md-empty-btn — dashed 보더 + var(--cs-purple) 배경?
 [ ] 카테고리 오버레이(.admin-cat-btn) — 기본 opacity:0 + hover 1?
-[ ] activeModal $state 타입: 4개 키 + null 유니온?
+[ ] activeModal $state 타입: string | null?
+[ ] 슬롯 배너 모달 — activeModal과 slot.slotKey가 정확히 매칭되는가?
+[ ] 저장 후 invalidateAll() 호출로 서버 데이터가 갱신되는가?
 ```
 
 ---

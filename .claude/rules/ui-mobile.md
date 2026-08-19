@@ -477,14 +477,35 @@ Expand 상태: transform: translateX(0)
 filter: drop-shadow(0 4px 10px rgba(16, 11, 50, 0.22));
 ```
 
-### ⚠️ CSS transform + position:fixed 충돌 규칙
+### ⚠️ CSS transform + position:fixed 충돌 규칙 (2026-08-19 실제 결함 사례로 갱신)
 
 ```
 transform이 적용된 조상 내 position:fixed 자식 → 뷰포트 기준 배치 무효화
-→ peek 상태(transform 활성) 중 fixed 모달(바텀시트) 열기 금지
 
-해결: peek 상태에서 FloatingButton wrapper에 pointer-events:none 적용
-     확장(transform 해제) 후에만 바텀시트 열기 허용
+❌ 과거 서술(불완전 — 실제로 모바일 채팅 모달 전면 깨짐 결함으로 이어짐, 2026-08-19 발견):
+   "peek 상태에서 FloatingButton wrapper에 pointer-events:none 적용, 확장(transform 해제)
+   후에만 바텀시트 열기 허용" — 이 mitigation은 pointer-events만 막을 뿐 실제 containing
+   block 문제를 해결하지 않는다. `.fab-bar`의 펼침(pop-out) 애니메이션은
+   `animation-fill-mode: forwards`로 끝나는데, 종료 keyframe 값이 `translateX(0)`이지
+   `transform: none`이 아니다 — CSS 스펙상 translateX(0)도 여전히 transform 값이므로
+   "transform 해제"는 실제로 일어나지 않았고, peek 상태(translateX(85%))에서도 항상
+   transform이 걸려 있어 애초에 "확장 후"라는 조건 자체가 성립하지 않았다. 그 결과
+   ChatBottomSheet(position:fixed 모달)가 FloatingButton을 거쳐 `.fab-bar` 안에 중첩돼
+   있는 한, 모바일에서 채팅 모달이 뷰포트 전체가 아니라 `.fab-bar`의 좁은 박스(우하단
+   FAB 근처) 기준으로 찌그러져 렌더링되는 결함이 실사용 중 발견됨(모바일 전용 — PC는
+   이 peek/expand transform 자체가 `@media (max-width:639px)` 스코프라 미발현).
+
+✅ 올바른 해결(구조적 분리 — pointer-events 가드로는 근본 해결 불가):
+   position:fixed 모달(바텀시트·다이얼로그 등)은 transform이 걸리는 조상 서브트리 안에
+   아예 렌더링하지 않는다. `FloatingButton.svelte`에 `hideSheet` prop을 추가해 ChatBottomSheet
+   자체 렌더링을 끄고, 모달은 `FloatingBar.svelte`가 `.fab-bar` div의 형제(sibling)로 별도
+   렌더링하도록 재구성(`src/lib/components/common/FloatingBar.svelte`,
+   `src/lib/components/chat/FloatingButton.svelte`). 동일 컴포넌트를 transform 없는 위치에
+   단독 마운트하는 기존 케이스(`/account/rental`의 `hideFab` 전용 사용)는 `hideSheet` 기본값
+   false 그대로 유지해 회귀 없음.
+   → 새로운 fixed 모달을 transform 애니메이션이 걸린 컴포넌트 내부에 추가할 때는 항상 이
+   패턴(모달을 별도 위치에서 렌더링 + prop으로 내부 렌더링 억제)을 우선 고려할 것 —
+   pointer-events:none류의 부분적 가드로 "해결됐다"고 간주하지 말 것.
 ```
 
 ---
@@ -558,4 +579,7 @@ transform이 적용된 조상 내 position:fixed 자식 → 뷰포트 기준 배
 
 ---
 
-*ui-mobile.md v3.2 | Harness Flow v3.2 | 모바일 퍼스트 UI*
+*ui-mobile.md v3.3 | Harness Flow v3.2 | 모바일 퍼스트 UI | 2026-08-19 "CSS transform +
+position:fixed 충돌" 섹션을 실제 결함 사례(모바일 채팅 모달 전면 깨짐 — FloatingButton의
+ChatBottomSheet가 `.fab-bar` transform 조상 안에 중첩돼 있던 구조적 결함)로 갱신, pointer-events
+가드만으로는 근본 해결이 안 됨을 명문화 + 구조적 분리(hideSheet prop) 해결 패턴 추가.*

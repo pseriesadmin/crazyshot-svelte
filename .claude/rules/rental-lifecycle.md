@@ -256,6 +256,13 @@ cancelled / damage_claimed → 취소 UI (✕ 아이콘 + 빨간 텍스트)
 > HOLD 30분 자동만료(`release_reservation_hold` pg_cron)도 2026-08-18부터 `hold_expired` 알림을
 > 발송한다 — 위 표(app 코드 AUTO_NOTIFY 매핑)와 달리 이건 RPC 내부 루프에서 직접 호출된다
 > (service-operations.md §10 참고).
+>
+> ⚠️ **채팅카드(위 표) ≠ 브라우저 푸시(FCM) — 2026-08-19 명문화**: 위 표는 `send_rental_chat_
+> notification` RPC의 채팅카드 발송만 다룬다. 브라우저 푸시는 `src/lib/server/push.ts`의
+> `CUSTOMER_LIFECYCLE_PUSH_COPY`에 별도로 문구를 등록해야만 발송되며, 이 표에 타입을
+> 추가한다고 자동으로 따라오지 않는다(`reservation_cancelled`·`damage_claimed`·`hold_expired`
+> 3종이 이 문제로 채팅카드만 가고 푸시는 누락됐다가 2026-08-19 수정 — 상세는
+> service-operations.md §15 정본).
 
 ### 수동버튼 (NOTIFY_TYPE_MAP) — `cms/rentals` `RentalDetailPanel.svelte`
 
@@ -414,9 +421,14 @@ CTA 새 창 열기 수정          : src/lib/components/chat/ActionCard.svelte (
 [ ] 옵션상품(reservation_options) 0개인 예약에서 "옵션상품" 섹션이 표시되지 않는가?
 [ ] 옵션상품 product_code가 없는 항목(부모 상품 참조 등)에서 코드칩 없이 정상 표시되는가?
 [ ] 긴급 배지(is_urgent)가 관리자 응답 후 자동 해제되는가?
+[ ] AUTO_NOTIFY 표에 새 notify_type을 추가했다면 push.ts CUSTOMER_LIFECYCLE_PUSH_COPY에도
+    동일 타입을 함께 추가했는가? (채팅카드와 브라우저 푸시는 별개 경로 — 위 표 하단 각주,
+    service-operations.md §15 참고)
 ```
 
 ---
 
-*rental-lifecycle.md v1.4 | Harness Flow v3.2 | 2026-07-27 채팅 알림 자동/수동 매핑 분리 + 대기 재진입 조건 문서화 |
-2026-07-28 전자계약 발송·서명 상세 내용을 contract.md로 이관(중복 제거)*
+*rental-lifecycle.md v1.5 | Harness Flow v3.2 | 2026-07-27 채팅 알림 자동/수동 매핑 분리 + 대기 재진입 조건 문서화 |
+2026-07-28 전자계약 발송·서명 상세 내용을 contract.md로 이관(중복 제거) | 2026-08-19 AUTO_NOTIFY
+표에 "채팅카드≠브라우저푸시" 각주 추가(신규 알림타입 추가 시 push.ts 동기화 필요, 상세는
+service-operations.md §15 정본) + GATE C 체크리스트 1건 추가*

@@ -237,15 +237,148 @@ front 고객이 보낸 메시지가 AI 의도분류에서 CS_ESCALATE(상담원 
      세션조회를 공유 RPC(`find_or_create_general_chat_session`) 없이 자체 구현하면
      메시지가 엉뚱한 컨텍스트 세션이나 좌초(orphaned) 세션에 묻혀 긴급 배지 자체가
      뜨지 않는 세션이 생길 수 있다(§11).
+  ③ 그 메시지가 실제로 `chat_intent_logs`에 `intent='CS_ESCALATE'`로 기록돼야 한다 —
+     빠른답변(canned response) 키워드 매칭이 성공하면 Claude 의도분류 자체를 건너뛰므로
+     이 로그가 원천적으로 생성되지 않는다(chat.md §6 "하이브리드 1단계"). 파손·분실 등
+     실제로 심각한 문의가 캔드매칭에 먼저 걸리면 자동응답만 나가고 긴급 배지는 절대
+     뜨지 않는 결함이 실사용 중 발견됐다(2026-08-19) — `damage`·`cs` 카테고리 캔드응답이
+     발송될 때는 그 자동응답과 별개로 `CS_ESCALATE` 인텐트 로그를 명시적으로 남기도록
+     수정 완료(`src/routes/api/chat/message/+server.ts`). 새로운 캔드응답 카테고리를
+     추가할 때 이 카테고리가 CS_ESCALATE급 민감 주제라면 반드시 같은 목록에 포함시킬 것.
+  ④ 긴급판정의 "관리자 응답 완료" 판단은 마지막 메시지의 `sender_type='admin'` 하나만
+     보면 안 된다 — 캔드매칭 자동응답도 `sender_type='admin'`으로 저장되므로, 실제 사람이
+     한 번도 배정된 적 없는 세션(`chat_sessions.admin_id IS NULL`)은 마지막 메시지가
+     admin이어도 여전히 긴급판정 대상에 포함해야 한다(`/api/chat/sessions` 수정 완료,
+     2026-08-19). `admin_id`는 `admin-reply`/`admin-attachment`에서 진짜 관리자가 응답할
+     때만 채워지는, 자동응답과 인간응답을 구분하는 유일한 신뢰 가능 신호다.
 
-즉 "긴급 배지"는 그 자체로 완결된 기능이 아니라, §7(세션 상태 전환)·§11(RPC 경유 세션조회)의
-운영 보장이 함께 지켜질 때만 신뢰할 수 있는 정책이다. 셋 중 하나만 점검하고 나머지를 놓치면
-"배지는 정상 표시되는데 관리자가 못 본다" 또는 "배지 자체가 안 뜬다" 유형의 결함이 재발할
-수 있다.
+즉 "긴급 배지"는 그 자체로 완결된 기능이 아니라, §7(세션 상태 전환)·§11(RPC 경유 세션조회)·
+③(캔드매칭 인텐트로그)·④(admin_id 기반 응답판정)의 운영 보장이 전부 함께 지켜질 때만
+신뢰할 수 있는 정책이다. 넷 중 하나만 점검하고 나머지를 놓치면 "배지는 정상 표시되는데
+관리자가 못 본다" 또는 "배지 자체가 안 뜬다" 유형의 결함이 재발할 수 있다.
 ```
 → 상세: `rental-lifecycle.md` "상담채팅 세션 상태(chat_sessions.status) — 대기(pending) 재진입
-조건"(긴급 배지 원 정의) · `chat.md` §2-§3(세션 관리 정책·AI 의도분류 CS_ESCALATE) ·
-`src/lib/components/cms/AdminChatPanel.svelte` · `/api/chat/sessions`(`is_urgent` 필드 산출)
+조건"(긴급 배지 원 정의) · `chat.md` §2-§3·§6(세션 관리 정책·AI 의도분류 CS_ESCALATE·하이브리드
+자동답변) · §15 GATE C(캔드매칭 인텐트로그·admin_id 판정 체크항목) ·
+`src/lib/components/cms/AdminChatPanel.svelte` · `/api/chat/sessions`(`is_urgent` 필드 산출) ·
+`src/routes/api/chat/message/+server.ts`(SENSITIVE_CANNED_CATEGORIES)
+
+---
+
+## 15. 채팅카드(RPC) 발송 ≠ 브라우저 푸시(FCM) 발송 — 별개 시스템, 수동 동기화 필요 (2026-08-19 명문화)
+
+```
+고객이 받는 "대화카드" 알림에는 서로 완전히 독립된 두 개의 전달 경로가 있다:
+  ① 채팅카드(chat_messages INSERT) — send_rental_chat_notification RPC의 CASE 분기
+     (10개 notify_type)에 새 타입을 추가하면 즉시 발송된다.
+  ② 브라우저 푸시(FCM) — 앱코드 sendReservationLifecyclePush()가 push.ts의
+     CUSTOMER_LIFECYCLE_PUSH_COPY 매핑에서 문구를 찾아 별도로 발송한다.
+
+①에 새 notify_type을 추가해도 ②는 자동으로 따라오지 않는다 — 둘 사이에 어떤 자동 동기화
+장치도 없다(DB→외부HTTP 경로 자체가 프로젝트 전체에 없어, chat_messages INSERT 트리거가
+push를 대신 쏴주는 구조도 아니다). reservation_cancelled·damage_claimed·hold_expired
+3개 신규 타입이 Migration 288로 ①만 구현되고 ②의 문구 매핑을 빠뜨려, 채팅카드는 정상
+도착하는데 푸시만 조용히 no-op되는 결함이 실사용 중 발견됐다(2026-08-19, push.ts에
+문구 3종 추가로 수정 — `hold_expired`는 release_reservation_hold()가 순수 SQL(pg_cron)
+내부에서만 실행돼 앱코드의 push 함수를 호출할 경로 자체가 없어 구조적으로 여전히 미발송,
+별도 아키텍처 없이는 해소 안 됨).
+
+즉 새 예약 라이프사이클 알림 타입을 추가할 때는 항상 두 곳을 세트로 확인한다:
+  1. send_rental_chat_notification RPC CASE 분기(채팅카드)
+  2. push.ts CUSTOMER_LIFECYCLE_PUSH_COPY(브라우저 푸시)
+그리고 그 알림이 순수 SQL(pg_cron 등) 트리거에서만 발생하는지도 확인한다 — 그 경우 앱코드
+경유 푸시 함수를 호출할 경로 자체가 없어 문구를 채워도 발송되지 않는다.
+
+추가로, 관리자 CMS 답장·전자계약 발송을 제외한 나머지 대화카드 유형(AI 자유응답, 캔드매칭
+자동응답, 쿠폰선물, 연체료 안내, 고객 서명완료 카드)은 애초에 push 호출 자체가 코드에 없었다
+(2026-08-19 전역감사로 발견 → 같은 날 5종 전부 sendPushToUser 연결 완료, admin-reply와
+동일하게 기존 발신허브 재사용).
+
+⚠️ **iOS Safari 구조적 한계(2026-08-19 진단 → 같은 날 부분 해소)**: iOS 16.4+ Safari는 Web
+Push를 "홈 화면에 추가"된 독립형(standalone) 웹앱에서만 허용하며, 일반 브라우저 탭에서는
+`Notification.requestPermission()` 자체가 동작하지 않는 플랫폼 제약이다(코드로 우회 불가).
+진단 시점엔 `manifest.json`·아이콘 자산·iOS 메타태그가 전부 없어 "홈 화면에 추가" 자체가
+정상 유도되지 않는 상태였다.
+
+✅ **1단계 해소 완료**: `static/manifest.json` 신설(name/icons/theme_color/display:standalone) +
+`src/app.html`에 매니페스트 링크·apple-touch-icon·`apple-mobile-web-app-capable` 등 메타태그
+추가 + Stephen 제공 로고 SVG(`static/app-icons/logo-source.svg`)를 `@resvg/resvg-js`로
+래스터화해 16/32/180/192/512px + maskable-512 아이콘 세트 생성(`static/app-icons/`). 이제
+iOS Safari에서 "공유 → 홈 화면에 추가"가 정상적인 아이콘·앱 이름으로 동작하고, 홈 화면에서
+실행하면(standalone 모드) 웹푸시 등록이 가능한 최소 요건은 충족됐다.
+
+✅ **2단계 해소 완료(같은 날 후속)**: iOS는 안드로이드의 `beforeinstallprompt` 같은 네이티브
+설치 유도가 없어 사용자가 "공유 메뉴에서 홈 화면 추가"를 스스로 찾아야 한다 — 이를 안내하는
+`IosAddToHomeScreenBanner.svelte` 신설(`src/lib/utils/iosPwa.ts`의 UA/standalone 판별 헬퍼
+사용). iOS 기기 + 비-standalone(아직 홈 화면 설치 전)일 때만 진입 2초 후 노출, 앱 아이콘·
+2단계 안내("공유 아이콘 → 홈 화면에 추가")를 표시하고 닫으면 `localStorage`(
+`cs-ios-a2hs-dismissed`)에 영구 기록해 재노출하지 않는다. `/cms/*`는 제외(PC 전용 화면).
+
+`static/app-icons/` 디렉토리명은 macOS 기본 `.gitignore`의 `Icon?` 패턴(대소문자 무시로
+"icons"와 충돌)을 피하기 위해 의도적으로 `icons`가 아닌 `app-icons`로 명명했다 — 향후 관련
+파일 추가 시 이 규칙을 그대로 따를 것.
+```
+→ 상세: `chat.md` §14(웹 푸시 알림 FCM 구현 현황) · `src/lib/server/push.ts`
+(`CUSTOMER_LIFECYCLE_PUSH_COPY`) · `src/lib/server/sendReservationLifecyclePush` 호출부
+(`cms/reservation/+page.server.ts` 등)
+
+---
+
+## 14. 쿠폰 기준코드 지연채번(Lazy Sequencing) — 생성 시 패턴만 저장, 실사용 시점에 채번 (2026-08-18 구현, Stage 마이그레이션 대기)
+
+```
+cms에서 쿠폰을 등록(cms_create_coupon)하거나 배포(distribute_coupon)해도 고객별
+실제 쿠폰 코드 번호는 발행되지 않는다. 오직 어떤 번호 체계를 쓸지 패턴(code_series JSONB)만
+저장한다. 고객이 장바구니에서 그 쿠폰을 선택해 결제를 확정(use_coupon RPC 호출)하는 순간
+비로소 순번이 원자적으로 채번되어 user_coupons.redeemed_code에 기록된다.
+
+이 설계는 products.md §2-1~§2-3 "부모=code_series 저장 / 자식=실채번" 정책과 동일한 원리다:
+  coupons.code_series JSONB  ←→  products.code_series JSONB   (패턴 저장)
+  user_coupons.redeemed_code ←→  products.product_code       (실채번 결과)
+  coupon_code_sequences      ←→  product_code_sequences       (원자 카운터)
+
+채번은 추적·표시용 일련번호일 뿐 — 실제 결제 자격 판정은 user_coupons.id 기준으로
+별도 처리된다(코드 문자열 직접 입력 방식이 아님). 결제 로직 자체는 건드리지 않는다.
+
+code_mode 원칙:
+  'manual'    (기본값) — 기존 직접 코드입력 쿠폰. 모든 기존 쿠폰이 manual로 유지됨(완전 하위호환).
+  'sequenced' — 지연채번 쿠폰. cms_create_coupon 호출 시 code=NULL, code_series에 패턴 저장.
+
+영구고정(products.md §2-2와 동일):
+  한 번 user_coupons에 채번된 redeemed_code는 재사용 불가 — coupon_code_sequences.next_seq는
+  단조증가(INSERT...ON CONFLICT DO UPDATE SET next_seq = next_seq + 1)하며 절대 되돌아가지 않는다.
+  user_coupons.redeemed_code UNIQUE 제약(부분 인덱스 — redeemed_code IS NOT NULL)으로 구조적 보장.
+
+max_sequence 상한 체크:
+  code_series.max_sequence가 있으면 그 값 초과 시 'COUPON_SEQ_EXCEEDED:...' EXCEPTION 발생.
+  초과 시 카운터를 1 되돌리고 예외를 던져 트랜잭션 롤백 — 카운터 누수 없음.
+
+멱등성:
+  user_coupons.redeemed_code가 이미 있으면 generate_user_coupon_redeemed_code()는 재채번 없이
+  기존 값을 그대로 반환한다. use_coupon을 두 번 호출해도 첫 번째 코드가 유지된다.
+
+approve_pending_coupon_gift(선물 채팅 카드) 분기:
+  sequenced 쿠폰은 배포 시점에 code=NULL이므로 채팅 카드 문구를
+  "쿠폰이 발급되었습니다. 결제 시 자동으로 적용됩니다."로 표시한다(코드 직접 노출 금지).
+  manual 쿠폰은 기존 COALESCE(code,'') 그대로.
+```
+
+구현 파일:
+  - 스키마(stage 마이그레이션 대기): `supabase/migrations/20260818040000_291_coupon_lazy_sequencing_schema.sql`
+    (B-4 distribute_coupon issued_at 버그 수정 포함)
+  - 채번 RPC: `supabase/migrations/20260818050000_292_generate_user_coupon_redeemed_code.sql`
+  - use_coupon/cms_create_coupon/approve_pending_coupon_gift 통합: `supabase/migrations/20260818060000_293_coupon_lazy_rpc_integration.sql`
+  - 서버 액션: `src/routes/cms/promotion/coupon/+page.server.ts` (createCoupon — CmsCreateCouponPayload 로컬 인터페이스)
+  - 타입: `src/lib/types/database.ts` (Coupon.code_series / code_mode / UserCoupon.redeemed_code / generate_user_coupon_redeemed_code 함수)
+  - TDD 검증: `src/__tests__/services/couponLazySequencing.test.ts` (13개 시나리오 — Stage DB 연동 라이브 테스트)
+
+✅ **현재 상태(2026-08-18 최종)**: 마이그레이션 291~301(11건) 전부 Stage(ezyvffjvuwmtuhpxdjrw)
+  → Production(vnbpmvxruyciuuaermyh) 순서로 적용 완료. TDD 13/13 GREEN. 실사용 검증 중
+  발견된 결함 4건(구버전 RPC 오버로드 잔존, 잘못된 인증 체크, 쿠폰 생성 폼의 hidden input
+  배선 누락, `get_promotion_analytics` 키 불일치)도 같은 과정에서 함께 수정 완료. "채번내역"
+  UX는 Stephen 피드백에 따라 랜딩 대상을 최종적으로 "그 사용자의 최근 예약"(RentalDetailPanel)
+  기준으로 확정(migration 301). 상세 경위는 `.claude/harness/TASK.md`의 "쿠폰 기준코드
+  지연채번(Lazy Sequencing) 아키텍처 [Part B]" 블록 "세션 종합 요약" 참고.
 
 ---
 
@@ -268,13 +401,23 @@ front 고객이 보낸 메시지가 AI 의도분류에서 CS_ESCALATE(상담원 
     같은 마이그레이션이 Production DB(vnbpmvxruyciuuaermyh)에도 실제 적용됐는지 직접 SQL
     조회로 별도 확인했는가? (§9 배포 순서 사고 참고 — 코드 배포 ≠ DB 마이그레이션 적용)
 [ ] 상담 채팅 세션 상태·알림 관련 변경 시(§13) — 긴급 배지(is_urgent) 로직만 단독으로
-    점검하지 않고, 그 전제가 되는 §7(open 승격 규칙)과 §11(공유 RPC 경유 세션조회)이
-    함께 유지되는지도 같이 확인했는가?
+    점검하지 않고, 그 전제가 되는 §7(open 승격 규칙)·§11(공유 RPC 경유 세션조회)·
+    ③(캔드매칭 히트 시 CS_ESCALATE 인텐트로그)·④(admin_id 기반 응답판정)이 함께
+    유지되는지도 같이 확인했는가?
+[ ] 새 예약 라이프사이클 알림 타입(notify_type)을 추가했다면(§15) — send_rental_chat_
+    notification RPC(채팅카드)뿐 아니라 push.ts의 CUSTOMER_LIFECYCLE_PUSH_COPY(브라우저
+    푸시)에도 함께 추가했는가? 그 알림이 순수 SQL(pg_cron 등)에서만 트리거된다면 앱코드
+    경유 푸시 함수를 호출할 경로가 아예 없다는 점도 함께 확인했는가?
+[ ] 쿠폰 지연채번(§14) 관련 변경 시 — sequenced 모드 쿠폰의 redeemed_code 채번이
+    use_coupon RPC 내부에서만 일어나는가? (distribute_coupon·cms_create_coupon 단계에서
+    선채번하는 코드를 추가하지 않았는가?)
+[ ] sequenced 모드 쿠폰 등록 시 code 필드가 NULL이고 code_series가 채워지는가? (반대는 금지)
+[ ] approve_pending_coupon_gift가 sequenced 쿠폰에 code를 직접 노출하지 않는가? (§14)
 ```
 
 ---
 
-*service-operations.md v1.4 | Harness Flow v3.2 | 2026-08-17 신설 — chat.md·contract.md·
+*service-operations.md v1.5 | Harness Flow v3.2 | 2026-08-17 신설 — chat.md·contract.md·
 payment.md·rental-lifecycle.md·products.md·security-auth.md에 흩어진 front-cms 상호운영
 원칙을 인덱스로 통합. 세부 내용은 각 원본 문서가 정본, 이 문서는 포인터만 유지. | 2026-08-17
 §9 추가 — 예약승인(confirmed) 게이팅 설계 확정(구현 대기) 반영. | 2026-08-18 §9를 "구현·
@@ -287,4 +430,25 @@ Stage 검증 완료"로 갱신(plans/ 경로 참조 제거, TASK.md·Migration 2
 재후속) §10 — Migration 285 Production 적용 완료로 갱신(적용 직후 cron 첫 실행으로 방치된
 hold 29건 expired 전환 확인). | 2026-08-18(같은 날 3차 후속) §13 신설 — 상담 채팅 세션
 "긴급 배지"(고객 대화 카드 필수 알림)와 그 전제조건인 §7(open 승격)·§11(공유 RPC 세션조회)
-운영 보장을 하나의 정책으로 명문화 + GATE C 체크리스트 1건 추가.*
+운영 보장을 하나의 정책으로 명문화 + GATE C 체크리스트 1건 추가. | 2026-08-18(같은 날 4차
+후속) §14 신설 — 쿠폰 기준코드 지연채번(Lazy Sequencing) 정책(code_series 패턴 저장 /
+use_coupon 시점 실채번 / products.md §2 동일 원리) + GATE C 체크리스트 3건 추가. 마이그레이션
+291/292/293 작성 완료, Stage 적용 대기 상태. | 2026-08-18(같은 날 5차 후속, 세션 종료 시점)
+§14 "현재 상태" 최종 갱신 — 마이그레이션 291~301(11건, 배포 전·중 자체 검증으로 발견한
+결함 4건 수정분 포함)까지 전부 Stage+Production 적용 완료, TDD 8개→13개로 확장 후 전부
+GREEN. 랜딩 UX(채번내역 목록 클릭 시 이동 대상)는 Stephen 피드백 3회 반영 끝에 "그
+사용자의 최근 예약"(RentalDetailPanel) 기준으로 최종 확정. 상세는 TASK.md "세션 종합
+요약" 참고. | 2026-08-19 사용자 채팅 회원/비회원 소통 로직
+전역감사(4개 병렬 에이전트 실측) 결과 반영 — §13에 ③캔드매칭 히트 시 CS_ESCALATE 인텐트로그
+누락·④admin_id 기반 응답판정 2개 신규 전제조건 추가(둘 다 발견 즉시 수정 완료) + §15 신설
+(채팅카드 RPC 발송과 브라우저 푸시 FCM 발송은 별개 시스템, 신규 알림타입 추가 시 양쪽 다
+동기화 필요 — reservation_cancelled·damage_claimed·hold_expired 3종 누락 발견·문구 추가로
+수정, hold_expired는 구조적 한계로 미해소) + GATE C 체크리스트 2건 추가. | 2026-08-19(같은 날
+후속) §15에 나머지 대화카드 5종(AI자유응답·캔드매칭·쿠폰선물·연체료안내·서명완료) 푸시 연결
+완료 반영 + iOS Safari 구조적 한계 진단 추가(manifest.json·아이콘 자산 부재로 iOS는 "홈 화면
+추가" 없이는 웹푸시 자체가 원천적으로 도달 불가, Android Chrome은 정상 — 해소는 별건 승인
+대기). | 2026-08-19(같은 날 3차 후속) §15 — Stephen 제공 로고 SVG 기반 아이콘 세트 제작
+(`@resvg/resvg-js`) + `manifest.json`·`app.html` 메타태그 적용으로 iOS "홈 화면에 추가" 최소
+요건 충족(1단계 해소 완료) — iOS 홈 화면 추가 안내 UI 배너(2단계)는 여전히 별건 승인 대기.
+| 2026-08-19(같은 날 4차 후속) §15 — `IosAddToHomeScreenBanner.svelte` 신설로 2단계까지 해소
+완료(iOS+비-standalone 한정 노출, localStorage 영구 dismiss, /cms 제외) 반영.*
