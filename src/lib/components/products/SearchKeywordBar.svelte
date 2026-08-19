@@ -3,6 +3,7 @@
 
   interface Props {
     keywords?: string[]
+    onkeywordclick?: (kw: string) => void
   }
 
   let {
@@ -14,6 +15,7 @@
       'Air 3S Drone',
       'Air 3S Drone',
     ],
+    onkeywordclick,
   }: Props = $props()
 </script>
 
@@ -32,7 +34,7 @@
 
     <div class="chip-bar">
       {#each keywords as kw, i (i)}
-        <button class="chip">{kw}</button>
+        <button class="chip" onclick={() => onkeywordclick?.(kw)}>{kw}</button>
       {/each}
       <span class="fire-badge" aria-hidden="true">
         <svg width="30" height="30" viewBox="0 0 29.9999 29.9999" fill="none">

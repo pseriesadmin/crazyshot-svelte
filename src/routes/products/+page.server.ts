@@ -1,6 +1,4 @@
-import { env } from '$env/dynamic/private'
-import { getSupabaseUrl } from '$lib/env/supabasePublic'
-import { createClient } from '@supabase/supabase-js'
+import { getCategoryGroups } from '$lib/server/productCategorySettings'
 import type { PageServerLoad } from './$types'
 
 export const load: PageServerLoad = async ({ locals, url }) => {
@@ -36,32 +34,17 @@ export const load: PageServerLoad = async ({ locals, url }) => {
   const catSettings      = (settings['product_page_categories'] as CatSettings)      ?? { items: [] }
   const keywordsSettings = (settings['product_page_keywords']   as KeywordsSettings) ?? { items: [] }
 
-  // BUG-FIX(2026-08-10): code_mapping_groups RLS가 is_cms_user()로 잠겨있어(보안 정책
-  // 자체는 그대로 유지), 로그인하지 않았거나 CMS 권한이 없는 일반 고객은 locals.supabase
-  // (anon key)로 이 테이블을 전혀 읽을 수 없었다 — 즉 카테고리 탭 자체가 일반 고객
-  // 화면에서는 항상 빈 배열로 내려가던 상태였다(CMS 계정으로만 테스트해 발견되지 않음).
-  // 카테고리 이름은 민감정보가 아니므로 이 조회에 한해서만 service_role 사용(RLS 정책
-  // 자체는 무변경). Stephen 확정: code_mapping_groups가 카테고리 체계의 유일한 정본 —
-  // "그룹명"(name)이 곧 화면에 노출돼야 할 라벨이고, product_category_codes는 무관한
-  // 별개 코드체계라 관여시키지 않는다.
-  const admin = createClient(getSupabaseUrl(), env.SUPABASE_SERVICE_ROLE_KEY ?? '')
+  // 관심집중 키워드 — 동적 랭킹(검색 조회수 + 상품 상세 접근수 합산, 최근 7일)
+  // 결과가 없으면 CMS 수동 설정 → +page.svelte KEYWORDS_FALLBACK 순으로 폴백
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const { data: trendingRaw } = await (locals.supabase.rpc as any)('get_trending_keywords', { p_limit: 6, p_days: 7 })
+  const trendingKeywords: string[] = Array.isArray(trendingRaw)
+    ? (trendingRaw as string[]).filter(Boolean)
+    : []
 
-  // code_mapping_groups.default_category → 플랫폼 전역 카테고리 SSOT (상품필터 노출 설정 그룹만)
-  const { data: groupsRaw } = await admin
-    .from('code_mapping_groups')
-    .select('name, default_category, sort_order')
-    .not('default_category', 'is', null)
-    .eq('is_active', true)
-    .eq('show_in_product_filter', true)
-    .order('sort_order')
-
-  type GroupRow = { name: string; default_category: string; sort_order: number }
-  const CMS_CATEGORIES = ((groupsRaw ?? []) as GroupRow[]).map((g) => ({
-    id:         g.default_category,
-    code:       g.default_category,
-    name:       g.name,
-    sort_order: g.sort_order,
-  }))
+  // code_mapping_groups.default_category → 플랫폼 전역 카테고리 SSOT (상품필터 노출 설정 그룹만).
+  // 상품상세(ProductHero)와 공유하는 헬퍼로 이관됨 — src/lib/server/productCategorySettings.ts
+  const CMS_CATEGORIES = await getCategoryGroups()
 
   const heroIds = heroSettings.products.map((p) => p.id)
   const mdIds   = mdSettings.products.map((p) => p.id)
@@ -150,7 +133,10 @@ export const load: PageServerLoad = async ({ locals, url }) => {
       grid:       gridSettings,
       mdPicks:    mdSettings,
       categories: catSettings,
-      keywords:   keywordsSettings,
+      keywords:   trendingKeywords.length > 0
+                    ? { items: trendingKeywords }
+                    : keywordsSettings,
+      keywordsRaw: keywordsSettings,
     },
     categories:   CMS_CATEGORIES,
     heroProducts: mergePrice(heroProducts),
