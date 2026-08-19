@@ -28,6 +28,77 @@ auth_baseline: fed4fdb — createBrowserClient 패턴 (절대 싱글톤 createCl
 
 ---
 
+## DONE — 🔴 CRITICAL: CMS 계약서 탭 예약현황/대여현황 노출 정책 분리 + partner 열람권한 완화 + CMS 크래시(중복계약서) 긴급수정 (2026-08-20) — ✅ 완료
+
+배경: Stephen이 "/cms/reservation 예약현황·/cms/rentals 대여현황 RentalDetailPanel 계약서탭의
+계약발행 목록이 제대로 노출되고 볼 수 있는지 검증" 요청. 검증 결과 두 화면이 계약서 탭을
+완전히 동일한 컴포넌트(RentalContractViewer)로 렌더링해 대여현황에서도 발행·발송·편집이
+그대로 노출되는 설계 갭 발견 → Stephen 확인 후 제한 구현 승인. 진행 중 두 가지 후속 이슈를
+추가로 발견·해소:
+  ① partner 등급 CMS 계정은 계약 내용 조회 API(manager 이상 게이트)에 막혀 서명완료 계약도
+     전혀 못 보는 문제 — Stephen 확인 후 "서명완료건에 한해 전 계정 열람 허용"으로 정책 완화.
+  ② /cms/rentals·/cms/reservation 둘 다 화면 자체가 안 열리고 GNB까지 사라지는 크래시 —
+     원인 추적 결과 Stage DB에 남아있던 QA 테스트 계약서 중복(예약 1건에 2건)이
+     get_rental_list의 "예약당 계약서 최대 1건" 전제를 깨뜨려 Svelte each_key_duplicate로
+     루트 레이아웃 전체가 죽은 것으로 확인 — 이번 세션 작업과 무관한 leftover 테스트 데이터가
+     원인이었음. Stephen 승인 후 데이터 정리 + RPC 방어처리 동시 진행.
+
+수정 내용:
+
+[1] 대여현황(isRentalView) 계약서 탭 = 서명완료 목록 + 읽기전용 "보기"만 허용
+  - src/lib/components/cms/RentalDetailPanel.svelte: RentalContractViewer에 isRentalView prop 전달
+  - src/lib/components/cms/RentalContractViewer.svelte: isRentalView 시 "계약서 양식 선택 편집"
+    (발행) 섹션 전체 숨김, "발행 목록"은 서명완료(customerSignedAt)건만 "서명완료 목록"으로
+    표시, 카드 내 편집·삭제 버튼 숨김, "미리보기 & 발송" → "보기"로 전환, "서명 링크 확인" 링크 숨김
+  - src/lib/components/cms/ContractTemplatePreviewModal.svelte: 신규 viewOnly prop —
+    양식 목록·편집·발송 버튼 숨기고 발행된 내용만 표시하는 순수 열람 모드. 발송용 데이터
+    조회(contract-data, manager 이상 게이트) 자체를 생략해 그 권한 게이트와 무관하게 동작.
+  - 예약현황(isRentalView=false, 기본값)은 기존 발송·발행·편집 동작 그대로 유지.
+
+[2] partner 등급도 "서명완료" 계약은 열람 가능하도록 API 게이트 완화
+  - src/routes/api/cms/contracts/[id]/content/+server.ts GET: manager 이상 전면 게이트를
+    "서명완료건은 전 cms 계정 허용, 미서명/편집중 계약은 기존대로 manager 이상만" 으로 변경
+    (contract_signings.signed_at 존재 여부로 분기). PATCH·init-contract·send-chat·contract-data
+    등 쓰기 경로는 전부 manager 이상 그대로 유지 — 2026-08-11 Stephen 확정 PII 보호 경계는
+    "서명완료건 읽기"에 한해서만 완화.
+
+[3] CMS 목록 크래시(each_key_duplicate) 긴급 수정
+  - Stage DB(ezyvffjvuwmtuhpxdjrw): reservation_id=2150에 QA 테스트 계약서 2건 중 오래된
+    "샘플 계약서 (QA 검증용 사본)"(06050ab3) 삭제, "스프레드시트형 계약서 (QA 검증용)"
+    (db4c697f) 유지 — contract_signings는 ON DELETE CASCADE로 함께 정리됨.
+  - supabase/migrations/20260820020000_313_get_rental_list_dedupe_contracts.sql:
+    get_rental_list RPC의 `LEFT JOIN contracts` → `LEFT JOIN LATERAL(예약당 최신 1건만)`로
+    교체 — 향후 동일 유형 데이터 이상이 재발해도 목록 쿼리가 중복 행을 반환하지 않도록 방어.
+    RETURNS TABLE 시그니처 변경 없음(CREATE OR REPLACE), WHERE/정렬/페이지네이션 등 나머지
+    로직은 Migration 284 기준 100% 동일 유지.
+
+DB 마이그레이션: Migration 313 — stage(ezyvffjvuwmtuhpxdjrw) 적용·검증(reservation_id 중복
+0건 확인) → production(vnbpmvxruyciuuaermyh) 적용 완료(production은 원래 중복 데이터가
+없었음, 순수 방어코드 배포). 데이터 정리(계약서 1건 삭제)는 stage 전용(production엔 해당
+데이터 자체가 없음).
+
+검증: svelte-check 신규 ERROR 0건, vite build 전체 성공. get_rental_list(stage·production
+둘 다) reservation_id 중복 0건 재확인. reservation_id=453(대여현황 유일한 서명완료건)은
+계약 내용 자체가 비어있는 레거시 데이터라 "서명완료 목록" 미노출 — 로직은 설계대로 정상
+동작(내용 없으면 숨김), 실물 뷰어 동작(내용 있는 서명완료건)은 stage에 마땅한 테스트
+데이터가 없어 미실측 — 필요 시 후속 세션에서 신규 발행→서명 테스트로 확인 필요.
+
+Stephen 승인 이력: ①대여현황 제한 구현 승인 ②partner 열람권한 완화 승인("파트너도 매니저도
+계정으로 볼 수 있어야 한다고 했어") ③중복 데이터 삭제 승인("스프레드시트형 계약서만 남기고
+삭제") ④RPC 방어처리 승인("RPC도 방어처리해줘").
+
+🔴 QA(@sp3-qa-agent) 1차 검수 발견 — 기존 TDD 회귀 테스트 1건 파손: [2]의 content/+server.ts
+GET에 `.not()` 체이닝 호출을 신규 추가했는데, `src/__tests__/server/contractAuthGates.test.ts`의
+admin mock(`makeAdminStub`)이 `.not()`을 지원하지 않아 P7-4 partner GET 테스트가 TypeError로
+죽어있었음(세션 자체 검증은 svelte-check·vite build만 돌리고 vitest를 안 돌려서 못 잡음).
+즉시 수정: `fns` 배열에 `'not'` 추가 + "partner라도 서명완료건은 GET 통과"/"partner+미서명은
+여전히 403" GREEN/RED 케이스 2건 신규 추가(기존엔 partner 403 케이스만 있고 신규 완화 동작
+자체의 커버리지가 없었음). `npx vitest run contractAuthGates.test.ts` 38/38 GREEN 재확인.
+
+git commit: Stephen 직접 실행 필요.
+
+---
+
 ## DONE — 🟢 ROUTINE: 크레이지로그 모바일 콘텐츠 목록 카드 레이아웃 재설계 + AggroOTF 토큰 신설 (2026-08-19) — ✅ 완료
 
 아젠다:
@@ -210,6 +281,107 @@ GATE C:
   [ ] svelte-check 신규 에러 0건 확인 ✅
   [ ] Migration #309 Stage ✅ / Production ✅ 적용 완료
   [ ] GATE E(@sp3-qa-agent) 검수 대기
+
+---
+
+## DONE — 🟡 BOUNDARY: /members 히어로 배너 CMS 관리 기능 신설 (2026-08-20) — ✅ 완료
+
+Stephen이 <launch-selected-element>로 /members PC 히어로의 `hero-char-img`(캐릭터 배너 이미지)를
+선택해 배너 관리 CMS 기능 신설 요청. 요청 6항목: ①관리자 전용 버튼 게이팅 ②우측 슬라이드 패널
+모달 ③SuggestPicker 연동(요청됐으나 이 기능은 이미지 목록형이라 SuggestPicker 대상 데이터 없음,
+아래 참고) ④CmsDragList 드래그 재정렬 ⑤Storage 이미지 업로드 ⑥노출 옵션(랜덤/고정).
+
+기존 패턴 재사용: `help_hero_bg_images`(HelpHeroBgModal.svelte, cms_settings 키-값 저장 +
+CmsDragList + 이미지 업로드 API + 랜덤/고정 모드)가 요청 스펙과 완전히 일치하는 기 구현 패턴이라
+이를 그대로 복제·적용(memory: cms-admin-modal-patterns.md §1~9 참고). SuggestPicker는 원 패턴에도
+없음 — 이미지 목록 관리는 업로드/드래그/삭제만으로 완결되고 "검색해서 선택"할 기존 목록 데이터가
+없어 대상이 아님(Stephen 요청 항목 중 이 기능 유형에 해당 없는 항목으로 판단, 별도 확인 없이
+진행 — 필요 시 피드백 요청).
+
+신규/수정 파일:
+  - supabase/migrations/20260820000311_311_upsert_page_setting_add_members_hero_banner.sql
+    (upsert_product_page_setting 허용 키에 'members_hero_banner' 추가, stage→production 순서 적용)
+  - src/routes/api/cms/members/hero-banner/+server.ts (신규, POST 업로드/DELETE 삭제,
+    product-images 버킷 members/hero-banner/ 경로, is_cms_role 세션 검증)
+  - src/lib/components/members/admin/MembersHeroBannerModal.svelte (신규, HelpHeroBgModal 복제)
+  - src/routes/members/+page.server.ts: session 기반 isCms 판정 + cms_settings members_hero_banner
+    조회(SSR 시점 랜덤/고정 결정) 추가 — 기존 admin client(서비스롤) 플랜 조회 로직은 그대로 유지
+  - src/routes/members/+page.svelte: MembersHeroBannerModal wiring
+  - src/lib/components/members/MembersHero.svelte: imageUrl/isCms/onEditBanner prop 신설,
+    PC 배너 + 모바일 2개 레이어(hero-m-char-1/2) 전부 동일 imageUrl로 교체, 관리자 전용
+    "배너 관리" 버튼(.hero-edit-btn) PC 히어로에 추가
+
+DB 마이그레이션: stage(ezyvffjvuwmtuhpxdjrw) 적용·검증 → production(vnbpmvxruyciuuaermyh) 적용
+완료(양쪽 pg_get_functiondef로 키 존재 확인).
+
+검증: svelte-check 신규 ERROR 0건(기존 무관 에러 2건만 잔존). 신규 파일 WARNING은
+HelpHeroBgModal.svelte 원본과 동일한 기존 패턴(state_referenced_locally, dialog role) —
+이번 세션에서 새로 만든 이슈 아님.
+
+🔴 QA(@sp3-qa-agent) 발견 — 구조적 결함(4개 페이지 공통, 신규 아님): `cms_settings` RLS가
+`is_cms_user()` 전용 단일 정책뿐이라 anon SELECT 정책이 없었음. `+page.server.ts`가
+`locals.supabase`(세션 컨텍스트)로 조회하므로 일반 고객은 RLS에 막혀 항상 기본 이미지로
+폴백 — 관리자가 배너를 업로드해도 실사용자에게는 반영되지 않는 상태였음. 동일 결함이
+`/help`(help_hero_bg_images)·`/hype-pack`(hype_pack_banner)·`/crazylog`(banner_slot1~3)
+3개 페이지에도 기존부터 존재.
+Stephen 확인 후 "지금 함께 수정" 승인 → migration #312로 해소(아래).
+
+git commit: Stephen 직접 실행 필요.
+
+---
+
+## DONE — 🟢 ROUTINE: /members 히어로 배너 모달 — 카피 입력폼 레이아웃 신설 (2026-08-20) — ✅ 완료
+
+Stephen이 <launch-selected-element>로 히어로 배너 관리 모달(`MembersHeroBannerModal.svelte`)의
+`.modal-body`를 선택해 카피 입력폼 영역 신설 요청. 스펙: ①메인카피 20자 이내
+--text-m-ad-kr-30/--text-pc-ad-kr-50 토큰 + 화이트컬러 ②서브카피 40자 이내 화이트컬러 +
+반응형 적정 폰트토큰 ③cms-field·cms-input-standard 골격.
+
+토큰 확인 결과 `--text-pc-ad-kr-50`은 app.css에 존재하지 않음(60/35/22 3종만 존재) — Stephen에게
+AskUserQuestion으로 확인, "--text-pc-ad-kr-60 사용"으로 확정.
+
+구현:
+  - `.copy-preview-box`(dark bg) 안에 메인카피 input(maxlength 20) + 서브카피 textarea
+    (maxlength 40) + 글자수 카운터(초과 시 --cs-red-badge) 신설. cms-field 골격(패딩·반경·
+    포커스링)은 유지하되, 화이트텍스트 가독성을 위해 배경만 반투명 화이트(rgba(255,255,255,0.06))
+    on dark(--cs-dark) 미리보기 박스로 조정(cms-field 기본 밝은 회색 배경 위 화이트텍스트는
+    비가시 상태가 되므로 불가피한 조정).
+  - 메인카피 폰트: 모바일 --text-m-ad-kr-30 / PC(≥1024px) --text-pc-ad-kr-60
+  - 서브카피 폰트: 모바일 --text-m-body-16B / PC(≥1024px) --text-pc-title-18(선정 재량)
+  - mainCopy/subCopy를 `members_hero_banner` cms_settings 값에 images/mode와 함께 저장
+    (round-trip 완결 — +page.server.ts 초기값 로드 + +page.svelte prop 전달까지 연결).
+    단, MembersHero.svelte 실제 히어로 텍스트(hero-head1/2 등) 표시 로직은 이번 요청 범위(모달
+    입력폼 레이아웃)가 아니므로 손대지 않음 — 저장된 값이 실제 화면에 반영되려면 별도 요청 필요.
+
+파일: src/lib/components/members/admin/MembersHeroBannerModal.svelte,
+src/routes/members/+page.server.ts, src/routes/members/+page.svelte
+
+검증: svelte-check 신규 ERROR 0건(기존 무관 에러 2건만 잔존). 신규 WARNING은 기존
+state_referenced_locally/dialog role 패턴과 동일 유형.
+DB 마이그레이션 없음(기존 members_hero_banner 키 JSONB 구조 확장이라 스키마 변경 불필요).
+git commit: Stephen 직접 실행 필요.
+
+---
+
+## DONE — 🔴 CRITICAL 후속수정: cms_settings RLS anon 읽기 누락 — 4개 페이지 배너 미노출 구조적 결함 해소 (2026-08-20) — ✅ 완료
+
+배경: 위 /members 히어로 배너 QA 검수 중 발견된 구조적 결함 해소. `cms_settings` 테이블이
+관리자 전용 RLS(`FOR ALL USING is_cms_user()`) 단일 정책만 갖고 있어, `product_page_*`·
+`crazylog_banner_slot1~3`·`help_hero_bg_images`·`hype_pack_banner`·`members_hero_banner`
+등 "페이지 표시용" 설정을 일반 고객(anon)이 조회할 수 없었음 — SSR load가 세션 컨텍스트로
+조회하는 4개 페이지(/products, /help, /hype-pack, /crazylog) + 신규 /members 전부 영향.
+
+수정 내용: `cms_settings`에 SELECT 전용 정책 신규 추가. 전체 공개가 아닌
+`upsert_product_page_setting` RPC 쓰기 화이트리스트와 동일한 12개 "표시용" 키만 명시적
+IN 목록으로 한정 — `product_code_format`·`member_code_format`·`reservation_code_format` 등
+채번규칙 내부설정(같은 테이블 공유)은 여전히 비공개 유지.
+
+파일: `supabase/migrations/20260820010000_312_cms_settings_public_read_display_keys.sql`
+DB: stage(ezyvffjvuwmtuhpxdjrw) 적용·검증 → production(vnbpmvxruyciuuaermyh) 적용 완료
+(양쪽 pg_policy 조회로 정책 2건 존재 확인).
+
+Stephen 승인: "지금 함께 수정해줘." (2026-08-20)
+git commit: Stephen 직접 실행 필요.
 
 ---
 
@@ -1518,7 +1690,7 @@ TDD도메인: 없음 (GSD 도메인)
 
 ---
 
-## DONE — /account 내정보 UX 정비 세션 일괄 (계정RPC타입·미등록안내·아바타업로드·중복배지제거·쿠폰메뉴·취소내역노출) (2026-08-16~19) — T1~T6 전부 GATE E 통과 (T6만 Stephen 커밋 대기)
+## DONE — /account 내정보 UX 정비 세션 일괄 (계정RPC타입·미등록안내·아바타업로드·중복배지제거·쿠폰메뉴·취소내역노출·PC대여목록복구·PC카드배경·products RLS) (2026-08-16~20) — T1~T6 커밋·배포 완료, T7 QA 조건부통과(참고1건), T8(RLS) Stage+Production 적용 완료
 
 아젠다: 단일 세션 내 Stephen의 launch-selected-element 기반 순차 지시 5건을 처리한 /account
 (내정보) 화면 UX 정비 묶음. B-START 정식 편입 없이 진행된 ad-hoc 세션이라 사후 하네스 등록.
@@ -1583,6 +1755,36 @@ TDD도메인: 없음 (GSD 도메인)
     동일 패턴 재사용) + product_name 반환, account/+page.svelte 모바일·PC 양쪽 스텝퍼
     위에 상품명 텍스트 라인 추가. 이 조사 과정에서 1단계 수정(배지)과 2단계 수정(상품명)
     둘 다 DB만 적용되고 코드가 한 번도 커밋·배포된 적이 없었다는 별도 결함도 함께 발견.
+    [2026-08-19 후속] Stephen이 이후 별도 배치 커밋(2d5b44f, #291~310 마이그레이션 일괄)으로
+    Migration #304 포함 커밋 완료 — 더 이상 미커밋 아님.
+  - T7: /account/rental 목록 카드 UI 정비 3건 + PC "대여" 메뉴 진입 시 "대여내역 없음" 오탐
+    노출 라우팅(실제로는 조인) 결함 신규 발견·수정.
+    (a) 카드 라운드값: front-uiux.md §4(2026-08-17 확정 대/중 2단 체계) 기준 `.rental-card`는
+    화면 최상위 컨테이너("대" 등급) — PC 50px/`--radius-2xl` 그대로, Mobile 30px(전용 변수
+    없어 하드코딩)가 표준인데 미디어쿼리 오버라이드가 없어 모바일에서도 PC용 50px이 그대로
+    상속되고 있던 것을 `@media (max-width:640px)` 추가로 수정.
+    (b) 카드 간 여백: Stephen 요청대로 2회에 걸쳐 50%씩 증가(12px→18px→27px).
+    (c) PC "대여" 메뉴 클릭 시 실제 예약이 있는데도 "대여내역 없음"으로 노출되는 결함을
+    Stephen이 재차 지목("라우팅 문제 확인할 것") — DB 외래키를 직접 조회해 근본원인 특정:
+    `rental_reservations → orders` 방향 외래키가 DB에 아예 존재하지 않음(실제 관계는 역방향
+    `order_items.reservation_id → rental_reservations.id`). account/+page.server.ts의 PC
+    전용 두 쿼리("대여 목록"·"최근 예약")가 존재하지 않는 `orders(order_items(products(...)))`
+    조인 경로를 쓰고 있어 PostgREST가 관계를 못 찾아 쿼리가 에러나는데 `.error`를 확인하지
+    않아 조용히 빈 배열로 폴백 → PC 패널만 항상 비어보였던 것(모바일 `/account/rental`은
+    처음부터 존재하는 `rental_reservations.product_id → products` 직결 조인을 써서 정상
+    동작 중이었음). 두 쿼리 전부 모바일과 동일한 직결 조인으로 교체.
+    (d) (c) 수정 직후 Stephen이 "PC에서 카드가 BG카드 형태로 안 보인다"고 재지적 —
+    `PcRentalPanel`의 개별 `.rental-card`가 자체 흰 배경을 갖는데, 이를 감싸는 공용 래퍼
+    `.pc-panel-wrap`도 흰 배경이라 흰색 위 흰색으로 카드 구분이 안 되던 것이 원인(로그·
+    후기·개인정보 등 다른 PC 패널은 자체 내부에 이미 bg-white가 있어 래퍼 배경이 원래
+    중복이었을 뿐 문제가 없었음). `activePcSection` 조건부 클래스(`pc-panel-wrap-plain`)로
+    래퍼 배경을 투명 처리 + 라운드값도 함께 제거(Stephen 후속 지시). Stephen이 "PcCancelPanel·
+    PcInquiryPanel도 같이 확인해달라" 요청 → 동일 구조(개별 카드 자체 흰 배경, 래퍼 의존)
+    확인 후 조건부 클래스를 rental/cancel/inquiry 3개 섹션 전체로 확장.
+    ⚠️ 파일 혼재 주의: src/routes/account/rental/+page.svelte는 이번 세션 수정분(카드
+    라운드값·여백)과 **다른 세션이 진행 중인 전자계약 확인 기능(openContractViewer,
+    has_signed_contract, .contract-btn) 커밋이 같은 파일에 섞여 있음** — git diff 확인 시
+    반드시 이 두 종류를 구분할 것, 이번 세션 커밋 시 파일 전체가 아니라 해당분만 분리 필요.
 
 검증: svelte-check 매 태스크 후 재실행 — 신규 에러 0건 유지(사전존재 에러는 매번 다른 세션의
 작업 상태에 따라 변동되나 이번 세션 파일이 원인인 사례는 0건). T1·T2는 sp3-qa-agent GATE E
@@ -1597,11 +1799,30 @@ svelte-check 신규 에러 0건 전부 통과. 수정 필요 항목 0건 — GAT
 [2026-08-19 후속] T6 sp3-qa-agent 검수 완료 — RLS(recentRentalRes user_id 필터 유지·
 마이그레이션 접근가드 유지 확인)·null 방어(recentRental IIFE + orders 옵셔널체이닝 안전성
 확인)·마이그레이션 rollback 용이성(순수 추가형, DROP 후 즉시 원복 가능)·svelte-check 이
-3개 파일 귀속 신규에러 0건 전부 통과. 수정 필요 항목 0건 — GATE E 진행 가능 판정.
+3개 파일 귀속 신규에러 0건 전부 통과. 수정 필요 항목 0건 — GATE E 진행 가능 판정 →
+Stephen 배치 커밋(2d5b44f) 완료.
+[2026-08-19] T7 구현 완료, svelte-check 신규 에러 0건(대상 파일 기준) — sp3-qa-agent 검수 대기.
+[2026-08-19 후속] T7 sp3-qa-agent 검수 완료 — ⚠️조건부 통과: 핵심 목표(PC 대여목록 공백
+해소)·RLS user_id 필터 유지·pc-panel-wrap-plain 3섹션 한정 적용·svelte-check 신규에러 0건
+전부 확인됐으나, 검수 중 별도 잠재결함 1건 발견 — products RLS(Migration #196
+"products_public_read")가 parent_product_id IS NULL(부모)만 authenticated에 노출하는데
+rental_reservations.product_id는 항상 자식(재고단위)이라, 일반 고객 세션은 본인 예약이라도
+배정 상품을 조회 못해 상품명이 비어 보일 수 있다는 지적(목록 자체가 뜨는지와는 무관, 이번
+세션이 만든 회귀 아님 — 모바일 페이지도 동일 패턴이라 원래부터 있던 잠재 결함).
+  - T8: 위 발견사항을 Stephen에게 보고 후 "확인됐으면 바로 수정" 지시 → RLS 정책 실측
+    조회로 실재 확인(pg_policies 직접 조회, products_public_read/products_admin_all 외
+    본인 예약 상품 허용 정책 없음 확인) 후 즉시 수정. Migration #314 신규 —
+    products_own_reservation_read 정책 추가(본인 rental_reservations.user_id=auth.uid()에
+    배정된 product_id 행만 SELECT 허용, EXISTS 서브쿼리로 타 사용자 데이터 노출 없음, 기존
+    2개 정책 무변경·순수 추가이므로 기존 부모공개조회/CMS전체조회 범위 그대로 유지).
+    Stage 적용 후 실제 24건 예약 보유 테스트 유저로 예약↔자식상품 조인 데이터 존재 확인 →
+    Production 동일 적용 + 양쪽 pg_policies 3개 정책 정상 등록 확인.
 
-다음 단계: Stephen 커밋(T1~T5는 이미 커밋·배포 완료, T6만 신규 커밋 대상 — src/routes/
-account/+page.server.ts, src/routes/account/+page.svelte, supabase/migrations/
-20260819050000_304_user_rental_stats_cancelled_count.sql(신규)).
+다음 단계: Stephen 커밋. 대상 — src/routes/account/+page.server.ts,
+src/routes/account/+page.svelte(전체 이번 세션분), supabase/migrations/20260820030000_314_
+products_own_reservation_read.sql(신규). **단 src/routes/account/rental/+page.svelte는
+다른 세션의 전자계약 기능 변경분과 섞여 있어 파일 전체 add 금지 — 이번 세션분(카드 라운드값
+미디어쿼리, .list-wrap gap 27px)만 별도 확인 후 반영 필요.**
 
 ---
 
@@ -18416,6 +18637,204 @@ TDD도메인: 해당 — AGENTS.md TDD 강제 키워드 대조 결과 "결제·�
   재적용하지 못했을 가능성) 브라우저 탭의 스테일 상태에서 관찰된 현상 — 하드 리프레시로
   해소됨.** 코드 변경 없음(31라운드는 검증 전용, 결함 미발견 + Stephen 확인으로 판정 확정).
 
+[32라운드 — 고객 채팅 대화카드 계약서 열람 화면 "틀 틀어짐" 원인 분석 + 좌표계 원점 불일치 수정, 2026-08-19]
+  Stephen 신규 제보: "사용자 채팅으로 발송된 계약 대화카드를 고객이 링크 선택 오픈 시
+  계약서 틀이 틀어져있고 바탕색이나 기존 계약서 양식이 잘 반영되지 않는 오류의 원인 분석."
+  — CMS 편집기 자체가 아니라 고객이 채팅 액션카드로 받는 열람 화면(`/contract/[token]`)의
+  버그라 이전 26~31라운드와는 다른 파일 영역.
+
+  Explore 에이전트로 렌더링 경로 3곳(CMS 에디터 실시간 뷰 / CMS 발송 전 미리보기 모달
+  `ContractTemplatePreviewModal.svelte` / 고객 열람 화면 `routes/contract/[token]/
+  +page.svelte`)을 조사시킨 뒤 핵심 주장(파일:라인)을 전부 직접 재확인:
+    - 세 곳 모두 동일한 `tiptapRender.ts`의 `renderTiptapDocToHtml()`과 동일한 TipTap
+      확장(`tiptapExtensions.ts`)을 공유 — HTML 문자열 자체는 동일함을 확인.
+    - 겹치기(overlay) 서명/직인 이미지는 `tiptapExtensions.ts:149`에서
+      `position:absolute;left:${x}px;top:${y}px`로 렌더링되는데, 이 x/y는 CMS
+      `.ProseMirror{padding:20mm}`(`ContractDocumentEditor.svelte:1352-1356`) 안쪽 여백을
+      원점으로 저장된 좌표. 미리보기 모달의 `.doc-page{padding:20mm}`
+      (`ContractTemplatePreviewModal.svelte:661-669`)는 이 원점을 정확히 재현하지만,
+      고객 화면의 실제 최근접 `position:relative` 조상 `.doc-block-tiptap`
+      (`routes/contract/[token]/+page.svelte:509`, 수정 전 패딩 0)은 상위
+      `.contract-main{padding:24px 20px 48px}`(L438-443) + `.doc-section{padding:24px}`
+      (L483-491) 합산 44px만 안쪽에 있어, CMS 대비 원점이 20mm(≈75.6px)가 아니라 44px
+      만큼만 들어가 있었음 — 약 31.6px 오차로 서명·직인 이미지가 어긋나 보이는 게 "틀이
+      틀어져있다"는 증상의 핵심 원인으로 확정.
+    - 부차 원인 2건도 함께 식별(이번 라운드에서는 수정 대상 아님, Stephen이 "1번 방향"만
+      승인): 본문 캔버스 폭 차이(CMS ~642px vs 고객화면 ~706px, 약 10%)로 인한 줄바꿈·표
+      레이아웃 차이 / 배경·카드 스타일이 CMS의 흰 A4 용지 대신 라일락 배경+둥근 카드로
+      재구현돼 있음(의도된 앱 UI일 가능성 있어 별도 확인 필요 판단, 이번엔 미변경).
+
+  Stephen이 "1번 방향(좌표계 원점 불일치)으로 수정해줘" 확정 → `.doc-block-tiptap`에
+  `padding: calc(20mm - 44px)` 추가(전역 `* { box-sizing: border-box }` 리셋 적용 확인 —
+  카드 바깥 폭에 영향 없이 안쪽 여백만 조정됨). 상위 44px 패딩 + 이 블록 자신의
+  `calc(20mm - 44px)` 패딩을 합산하면 총 안쪽 여백이 정확히 20mm가 되어 CMS `.ProseMirror`
+  / 미리보기 `.doc-page`와 원점이 일치하게 된다. 배경·카드 스타일(`.doc-section`의
+  `border-radius:20px`, 라일락 바깥 배경 등)은 이번 수정 범위(1번)에 해당하지 않아 그대로
+  유지 — 좌표 원점만 정합.
+
+  `svelte-check` 재실행 — 이 파일 기준 신규 에러 0건(프로젝트 전체 1건은 `vite.config.ts`
+  무관한 사전 존재 이슈).
+
+  ⚠️ 실사용 Claude Browser 검증 미실시 — 이번 세션 이 시점에는 `<launch-selected-element>`
+  진행 중 세션도, Stephen의 명시적 "Claude Browser 실행" 요청도 없어 CLAUDE.md 조건부 허용
+  요건(①·②) 어디에도 해당하지 않아 브라우저 실사용 검증을 하지 않음(정책 준수) — CSS
+  계산(px/mm 단위 혼용 calc(), box-sizing:border-box 확인)과 svelte-check로만 검증. 실사용
+  확인은 Stephen 몫으로 남겨둠.
+  ⚠️ 미배포: `routes/contract/[token]/+page.svelte` 아직 git 커밋 전 — git 명령은 Stephen
+  전용.
+
+[33라운드 — 32라운드 수정을 실제 대화카드 링크로 실사용 검증(Stephen "Claude Browser 실행" 명시 요청), 2026-08-19]
+  Stephen "실제 대화카드 링크로 열어서 확인해 볼 수 있게 테스트 시연해" — CLAUDE.md 조건부
+  허용 요건 ②(명시적 Claude Browser 실행 요청) 충족, Stage에 실제 대화카드와 동일한 형태의
+  테스트 `contracts`+`contract_signings` 레코드를 만들어 검증(템플릿 "샘플 계약서"
+  content_blocks 그대로 복사, 겹치기 이미지 x:264,y:1091,width:100 포함).
+
+  DOM 레벨 검증(스크롤 중 브라우저 패널이 타임아웃·빈 화면을 반복하는 이 세션 고유의 도구
+  불안정 이슈로 스크롤 스크린샷은 실패 — 코드와 무관한 환경 문제로 판단, 최상단 스크린샷은
+  정상 렌더링 확인됨): `.doc-block-tiptap` computed padding = `31.5906px`
+  (`calc(20mm - 44px)`와 정확히 일치) + 이미지 인라인 스타일 `left:264px;top:1091px` 원본
+  좌표 그대로 유지 — 32라운드 CSS 수정이 실제로 정확히 적용됨을 확인.
+
+  테스트 중 브라우저 스크롤 조작이 실수로 서명 캔버스에 걸려 1획 서명이 잘못 제출된 사고
+  발생(`signed_at` 채워짐) → 즉시 SQL로 초기화. Stephen 지시로 이 테스트 레코드는 삭제하지
+  않고 유지(토큰: `e093724f91b0d2e5bf1fb66a3162894a04c2ef9808670795`).
+
+[34라운드 — 스프레드시트형 계약서 오버레이 이미지 "행 높이" 침범 수정(컬럼 폭 스케일은 별도 세션이 이미 처리), 2026-08-19]
+  배경: Stephen이 33라운드 검증 완료 직후 "스프레드시트형 계약서도 실제 대화카드 링크로
+  테스트 시연해" 요청 → 같은 방식으로 테스트 레코드 생성(3열×500px, 상호명 셀에 400px
+  도장 이미지) → 실링크로 확인한 결과, **컬럼 폭 축소는 이미 정상 동작**함을 확인(렌더
+  컬럼폭 214px, 이미지 폭 171px = 400×0.428 — 이건 이 세션이 아니라 병행 진행 중인 다른
+  세션이 같은 날 먼저 처리한 부분, TASK.md "후속 수정 — 스프레드시트 계약서 이미지 오버레이
+  폭 A4 축소비율 반영" 블록 참고). 다만 이미지가 세로로는 여전히 위·아래 행을 침범해 보임을
+  Stephen에게 그대로 보고했고, Stephen이 "행 높이도 스케일해서 수정해줘. 결국 엑셀타입
+  계약서 레이아웃은 계속 깨지는 불완전성을 가지고 있다는 소리네."로 이어서 지시.
+
+  **1차 시도 실패**: `<td>`에 `min-height:${safeWidth}px` 인라인 스타일 추가(오버레이 이미지
+  폭과 동일한 값을 행 높이의 안전한 근사 상한으로 사용) → 코드는 깔끔하게 반영됐으나
+  Stage 실측 결과 완전히 무효: `getComputedStyle(td).minHeight`는 `"171px"`로 정상 파싱
+  되는데 실제 렌더 높이(`getBoundingClientRect().height`)는 `34.6px` 그대로 — **`<td>`
+  (`display:table-cell`)는 CSS 테이블 레이아웃 알고리즘상 `min-height`가 행 높이 계산에
+  반영되지 않는 잘 알려진 브라우저 동작**이었다(표준 명세상 테이블 셀의 "used height"는
+  콘텐츠 기반 알고리즘을 따로 타서, 일반 블록 요소의 min-height와 다르게 취급됨).
+
+  **최종 수정**: `min-height` 대신, 절대위치가 아닌 **정상 흐름(normal flow)에 참여하는
+  투명 스페이서**(`<span aria-hidden="true" style="display:block;width:1px;
+  height:${safeWidth}px"></span>`)를 이미지와 같은 `<td>` 안에 함께 렌더링 — 일반 콘텐츠
+  기반 높이 계산은 테이블 셀에서도 항상 정상 동작하므로(보이는 `<img>`가 원래 행을 늘리는
+  것과 동일 원리), 이 스페이서의 높이만큼 행이 확실히 늘어난다. 컬럼 스케일과 동일하게
+  `safeWidth`(이미 colScale 반영된 값)를 근사 높이로 재사용 — 서명/직인 자산이 대체로
+  정사각형에 가까운 것에 기댄 근사치이며, 서버에는 이미지의 진짜 종횡비 정보가 없어 완벽한
+  값은 아님을 주석에 명시.
+
+  `src/lib/utils/spreadsheetRender.ts` 수정. 단위테스트 갱신: 기존 "min-height 부여"
+  테스트를 스페이서 마크업 검증으로 교체 + 컬럼 축소 비율에 따른 스페이서 높이 스케일 신규
+  테스트 1건 추가 — `spreadsheetRender.test.ts` 44/44 GREEN. `svelte-check` 신규 에러 0건.
+
+  **실사용 재검증(같은 테스트 링크)**: 수정 전 스크린샷은 도장이 "사업자등록번호"·
+  "사업장 소재지" 행까지 침범해 보였으나, 수정 후에는 "상호명" 행 자체가 206px로 늘어나
+  도장 이미지(171px)를 완전히 담고, 위·아래 행과 경계가 깔끔하게 분리됨을 스크린샷+DOM
+  좌표로 확인(`containedWithinRow: true` — 이미지 top/bottom이 행의 top/bottom 범위 안에
+  완전히 포함).
+
+  테스트 링크(Stage, 유지): `http://localhost:5175/contract/aed557081c8a97bbcc333bbdeb2dac8be130534d7766135c`
+  (토큰: `aed557081c8a97bbcc333bbdeb2dac8be130534d7766135c`)
+
+[35라운드 — @sp3-qa-agent가 32라운드 자체를 FAIL 판정, 진짜 근본원인 재규명 + 수정 + 남은 문제(폭 불일치) 재확인, 2026-08-19]
+  Stephen "[QA 검수] 세션 내 최근 수정 개발건을 @sp3-qa-agent.md 검수할 것" 요청으로 32·34
+  라운드를 검수 → **32라운드가 FAIL 판정**됨. QA 근거: `position:absolute` 자식의 배치
+  기준점은 가장 가까운 `position:relative` 조상의 "border box" 모서리이고, **그 조상
+  자신의 padding은 이 기준점에 전혀 영향을 주지 않는다**(padding은 조상의 콘텐츠만
+  안쪽으로 밀 뿐, 조상 자신의 테두리 위치를 옮기지 않음) — 즉 32라운드가 `.doc-block-
+  tiptap`에 준 `padding: calc(20mm - 44px)`는 CSS 스펙상 오버레이 이미지 위치에 아무
+  영향을 줄 수 없는 수정이었다는 지적.
+
+  **이 QA 판정을 액면 그대로 믿지 않고 직접 실측으로 재검증**(이 세션에서 이미 min-height/
+  table-cell 사례로 "이론상 맞아 보이는 주장도 실제 브라우저로 검증해야 한다"는 교훈을
+  얻은 뒤라 신뢰·검증 원칙 그대로 적용) — Stage에 x=0,y=0 겹치기 이미지 단독 테스트
+  계약서를 만들어 `getBoundingClientRect()`로 직접 측정한 결과 **QA 판정이 정확했음을
+  확인**: `.doc-block-tiptap`의 32라운드 패딩이 적용된 상태에서도 이미지는 정확히
+  `.doc-block-tiptap`의 border box 모서리 + (0,0) 그대로 렌더링됨(오프셋 0,0) — 패딩은
+  전혀 반영 안 됨. 추가로 **같은 방법으로 CMS 에디터도 실측**해 더 근본적인 사실을 발견:
+  CMS `.ProseMirror`도 자기 자신의 20mm 패딩과 무관하게 이미지가 `.ProseMirror`의 border
+  box 기준으로 렌더링되고 있었다(`.ProseMirror`가 `.cde-editor-content` 바로 안에 패딩
+  없이 앉아있어 두 border box가 거의 같은 지점이라 우연히 "20mm 안쪽이 원점"처럼 보였을
+  뿐) — 즉 **"20mm 안쪽 여백이 좌표 원점"이라는 32라운드의 최초 진단 전제 자체가 틀렸다**.
+  실제 변수는 padding이 아니라 "anchor 요소(`.ProseMirror`/`.doc-block-tiptap`)의 border
+  box 자체가 자신의 페이지 컨테이너로부터 얼마나 떨어져 있는가"였다 — CMS는 오프셋 0(패딩
+  없는 직속 자식), 고객 화면은 `.contract-main`(20px)+`.doc-section`(24px) 누적 44px(좌)/
+  48px(상) 떨어져 있었음.
+
+  **진짜 수정**: `.doc-block-tiptap`에 그 누적 패딩만큼 음수 `margin`(`-48px -44px -72px
+  -44px`)을 줘서 이 블록의 border box 자체를 `.contract-main`(페이지) 모서리까지 끌어낸
+  뒤(=CMS와 동일하게 오프셋 0 확보), 텍스트 콘텐츠의 기존 시각적 여백이 사라지지 않도록
+  동일한 값을 `padding`(`48px 44px 72px 44px`)으로 되돌려 부여 — margin은 border box
+  위치를 옮기고 padding은 옮기지 않는다는 위 원리를 반대로 이용(margin -N + padding +N →
+  일반 흐름 콘텐츠의 화면 위치는 그대로, overlay 이미지의 기준점만 실제로 이동).
+
+  **재검증**: x=0,y=0 테스트로 `.doc-block-tiptap`의 border box가 `.contract-main`
+  기준 좌측 오프셋 0(수정 전에는 44px)이 됐음을 직접 측정 확인 — 수정이 실제로 효과가
+  있음을 이번엔 인라인 스타일 문자열이 아니라 렌더된 픽셀 좌표로 확인. `svelte-check`
+  신규 에러 0건.
+
+  ⚠️ **그러나 이 수정만으로는 Stephen이 원래 보고한 "틀 틀어짐" 체감이 해소되지 않을
+  가능성이 높음을 함께 발견** — "샘플 계약서" 템플릿의 실제 케이스(x:264,y:1091)로 재검증한
+  결과, 수정 후에도 이미지가 CMS에서 보이는 위치("이용사업자"/"고객이름" 문단 부근)가 아니라
+  고객 화면에서는 훨씬 앞쪽인 "제12조(계약의 해석)" 문단 부근에 나타남 — 좌표 원점은 이제
+  CMS와 일치하지만, **32라운드 조사 당시 "미변경 대상"으로 명시적으로 남겨뒀던 폭 불일치
+  (CMS 본문 ~642px vs 고객화면 ~706px, 약 10%)가 텍스트 줄바꿈 자체를 다르게 만들어, 같은
+  y=1091px가 두 화면에서 서로 다른 문단에 도달**하기 때문. 즉 이번 세션이 원인 진단
+  단계에서 이미 식별했던 부차 원인 2번(폭 불일치)이 실제로는 Stephen이 체감하는 "틀
+  틀어짐"의 더 지배적인 원인일 가능성이 높다 — 원점 정합(1번)만으로는 눈에 띄는 개선이
+  제한적일 수 있음을 Stephen에게 투명하게 보고 필요(아래 참고).
+
+  ⚠️ 미배포: `+page.svelte` 추가 수정분 아직 git 커밋 전.
+
+  ⚠️ 미배포: `spreadsheetRender.ts` + `spreadsheetRender.test.ts` 아직 git 커밋 전.
+
+[36라운드 — "2번(본문 폭 불일치)"도 수정 — 폭+줄간격+글자굵기+문단여백 4가지 전부 CMS와 정합, 2026-08-19]
+  Stephen: "'미변경'으로 남겨뒀던 2번(폭 불일치)일 가능성이 높다면 2번도 같이 고쳐줘."
+
+  CMS `.ProseMirror`와 고객 화면 `.doc-block-tiptap`을 항목별로 직접 비교 실측한 결과, 폭
+  하나만이 아니라 텍스트 줄바꿈에 영향을 주는 4가지 속성이 전부 달랐다:
+  - 콘텐츠 폭: CMS 170mm(210mm−20mm×2) vs 고객화면 ~706px(35라운드 margin/padding 상쇄
+    후에도 컨테이너 폭 그대로)
+  - line-height: CMS 1.8 vs 고객화면 1.7
+  - font-weight: CMS는 `--text-pc-body-14` 토큰이 `700 14px/200% ...`로 Bold 지정 vs
+    고객화면은 미지정(기본 400)
+  - 문단 하단 여백: CMS `.ProseMirror p{margin:0 0 0.5em}`(14px 기준 7px) vs 고객화면
+    `margin:0`(전역 `*{margin:0}` 리셋 그대로 남아있었음)
+
+  **수정**: `.doc-block-tiptap`에 `max-width: calc(170mm + 88px)`(border-box 폭 상한 —
+  기존 좌우 패딩 88px를 더해 콘텐츠 폭이 정확히 170mm가 되도록 역산, 35라운드의 origin
+  정합용 margin/padding 값은 변경 없이 유지) + `line-height:1.8` + `font-weight:700` 추가,
+  `.doc-block-tiptap :global(p) { margin: 0 0 7px }`로 문단 여백도 CMS와 동일한 절대 px
+  값으로 맞춤(em이 아니라 px로 고정 — 다른 em 기준값과 혼선 방지). max-width라 좁은
+  화면에서는 자연스럽게 그보다 좁게 줄어들 뿐 넘치지 않음.
+
+  **검증(실측)**: `wrapContentWidth:643` = 브라우저가 직접 계산한 `170mm→px` 값과 정확히
+  일치(`mm170_px:643`), `lineHeight:"25.2px"`(14×1.8), `fontWeight:"700"`,
+  `pMargin:"0px 0px 7px"` — 4가지 속성 전부 CMS와 동일하게 렌더링됨을 확인. 35라운드의
+  좌표 원점 정합(`wrapOffsetFromMain_x:0`)도 이번 수정으로 깨지지 않고 유지됨을 재확인.
+
+  **문단 착지 위치 재검증** — 같은 x:264,y:1091 좌표를 CMS에서 직접 실측한 결과 실제
+  기준 위치는 "이용사업자" 근처가 아니라 **"제8조(솔루션의 권리범위)"** 근처였음(이전
+  보고에서 다른 화면 스크린샷을 착각했던 것으로 정정). 수정 전 고객화면은 "제12조"
+  근처(4개 조항 어긋남) → 폭·줄간격·굵기만 맞춘 중간 단계에서 "제10조"(2개 조항 어긋남,
+  방향은 맞았으나 문단여백 누락분이 남아있었음) → 문단여백까지 맞춘 최종 수정 후
+  **"제8조 3항"**(distPx: 2 — CMS와 사실상 동일한 조항, 소항목 하나 차이 이내)로 수렴
+  확인. 4가지 속성을 전부 맞추고 나서야 완전히 수렴한 것으로 보아, 애초에 "폭"
+  하나만으로는 부분적 개선만 가능했고 문단여백 등 나머지가 함께 틀어져 있었음이
+  확인됨.
+
+  `svelte-check` 재실행 — 신규 에러 0건.
+
+  ⚠️ 잔여 한계(이전에도 명시): 이 화면은 모바일에서도 열람되는데, `max-width:170mm`는
+  좁은 화면에서는 자연스럽게 그보다 좁아지므로 데스크톱 폭 기준의 CMS 줄바꿈과 완전히
+  동일해지는 건 데스크톱/넓은 뷰포트에서만 보장된다 — 좌표가 고정 px값으로 저장되는
+  설계 자체의 한계라 이번 수정으로도 모바일에서까지 문단 단위 일치를 보장하지는 못함.
+
+  ⚠️ 미배포: `routes/contract/[token]/+page.svelte` 추가 수정분 아직 git 커밋 전.
+
 [26라운드 — 크기설정 플로팅 툴바가 셀 경계에서 클리핑돼 조작 불가능하던 결함 확정·수정, 2026-08-19]
   Stephen <launch-selected-element> 재현 보고: "스프레드시트 편집 모드에서 직인 등록 불러와지는
   것 까지는 되는데 크기 설정 창을 조작이 안되고, 설정창 클릭하면서 없어지는 문제점 확인해. -원래
@@ -26602,6 +27021,55 @@ justify-content:space-between`)으로 전환 — `.points-section > .section-sub
 
 ---
 
+## GSD — 2026-08-19(19차) 예약신청 시 본인증명/외국인증명 미등록 경고 토스트 추가 (이 세션)
+
+**요청**: "계정 고객이 상품 대여 '예약 신청' 버튼 실행 시 '본인 증명 or 외국인 여부' 인증 파일 등록
+미확인 감지될 경우, 경고 토스트 호출할 것. 1. 토스트 컴포넌트 재활용: '내정보(개인정보)에서
+본인증명정보를 등록(확인)해주세요. 확인' 2. 확인 선택 시 '개인정보' 메뉴(/account/profile?tab=profile)로
+이동."
+
+**조사**: `user_profiles` 테이블에 `identity_doc_url`(본인증명)·`foreign_doc_url`(외국인증명) 두
+컬럼이 독립적으로 존재(Migration 137). `update_user_doc_url` RPC 확인 결과 `is_foreign` 플래그는
+외국인증명을 실제로 등록한 시점에만 자동으로 true가 됨 — 즉 아직 아무 문서도 등록하지 않은
+외국인 사용자는 `is_foreign=false` 상태다. 따라서 `is_foreign` 플래그 기준으로 "외국인이면
+foreign_doc_url만, 아니면 identity_doc_url만" 요구하도록 분기하면, 최초 진입한 외국인 사용자가
+영원히 두 문서 중 아무것도 등록할 길이 막히는 순환 문제가 생김 — **두 문서 URL 중 하나라도 등록
+돼 있으면 통과**로 판정(요청 문구의 "본인 증명 or 외국인 여부 인증 파일"을 그대로 반영).
+
+**구현** (`src/routes/products/[id]/+page.svelte` `handleReserve`, 기존 로그인게이트 체크
+바로 다음 지점):
+```ts
+const { data: verifyRow } = await supabase
+  .from('user_profiles')
+  .select('identity_doc_url, foreign_doc_url')
+  .eq('user_id', currentSession.user.id)
+  .maybeSingle();
+const hasVerifiedDoc = !!verifyRow?.identity_doc_url || !!verifyRow?.foreign_doc_url;
+if (!hasVerifiedDoc) {
+  showToast('내정보(개인정보)에서 본인증명정보를 등록(확인)해주세요.', {
+    label: '확인',
+    onClick: () => goto('/account/profile?tab=profile'),
+  });
+  return;
+}
+```
+- "토스트 컴포넌트 재활용" 지시는 이 페이지에 이미 존재하던 로컬 액션형 토스트(`showToast(msg,
+  {label, onClick})` — 바로 위 로그인 게이트가 쓰는 것과 동일한 메커니즘, `.toast-msg.has-action`
+  / `.toast-action-btn` CSS 재사용)로 해석해 적용. 신규 UI 컴포넌트 없음.
+- 인증정보는 서버 load 시점 캐시가 아니라 예약 버튼 클릭 시점에 실시간 조회(RLS `user_profiles:
+  본인 조회` 정책 — `user_id = auth.uid()`) — 다른 탭에서 방금 등록을 마쳐도 즉시 반영됨.
+- 타입에러 부수 수정 1건: `isRealMemberSession()`이 boolean 반환(타입가드 아님)이라 그 다음
+  `currentSession.user.id` 참조 시 TS가 null 가능성을 못 좁혀 에러 발생 → 바로 아래에
+  `if (!currentSession) return;` 좁히기 전용 가드 1줄 추가(동작 변화 없음, TS 전용).
+
+**검증**: `npx svelte-check` — 신규 타입에러 0건(추가 직후 발생했던 `currentSession possibly null`
+1건도 위 가드로 해소 확인), 기존 무관 에러(`vite.config.ts:10:2`) 1건만 잔존.
+
+**GATE 등급**: 🟡 BOUNDARY — 예약 진입 흐름에 영향을 주는 단일 서비스 로직(신규 컴포넌트 없음,
+DB/RPC 변경 없음, 기존 RLS 정책 그대로 활용).
+
+---
+
 ## DONE — "포인트 미차감" 결함 후속조치 독립 재검증 (2026-08-19, 이 세션, 코드 수정 없음)
 
 Stephen 요청: "포인트 미차감 결함 자세히 확인해줘." → 이 세션이 직전에 TASK.md 전체 정합성
@@ -26773,3 +27241,270 @@ Production 2개 항목은 QA 도구 제약으로 미확인(오케스트레이터
 
 **검증**: `npx svelte-check` cart/confirm-mock 관련 신규 에러 0건(전체 1 error 기존
 무관/346 warnings — 병렬 세션 포함 전체 카운트, cart 파일 자체는 회귀 없음).
+
+---
+
+## 라이브 테스트 시뮬레이션 — 계약발송→서명→자동승인→자동알림 UX 흐름 검증 (2026-08-19)
+
+**Stephen 지시**: "예약신청한 고객계정에게 관리계정이 계약서를 발송하고, 고객 사용자 채팅
+대화카드로 수신된 '전자계약 확인'을 실행해 계약서 화면에 진입 및 서명 후, 전자계약
+서명등록을 감지한 시스템이 해당 예약목록을 자동으로 대여목록으로 이동 배치시키고, 고객
+채팅에 '예약승인' 알림 대화카드를 발송 UX 흐름이 제대로 구현되는지 테스트 시뮬레이션 실행."
+
+**검증 방법**: Stage(ezyvffjvuwmtuhpxdjrw) DB에서 실제 코드 경로를 최대한 그대로 실행.
+- 예약 생성·결제확인: 실제 RPC 직접 호출(`create_hold_reservation`(JWT 클레임으로 고객 세션
+  시뮬레이션), `mark_reservation_payment_confirmed`)
+- 계약 발송(관리자 액션): `contracts`/`contract_signings` INSERT + `find_or_create_general_
+  chat_session` RPC — `/api/cms/contracts/[id]/send-chat`의 실제 로직을 그대로 재현(관리자
+  인증 세션은 curl로 흉내낼 수 없어 SQL로 동일 로직 재현)
+- **서명(고객 액션)**: 실제 운영 중인 dev 서버(`localhost:5173`)의 **실제 API 엔드포인트**
+  `POST /api/contracts/[token]/sign`을 curl로 직접 호출 — 이 요청은 무인증(토큰 기반)이라
+  코드 변경·모킹 없이 배포된 로직 그대로 실행 가능했음. **auto-confirm·auto-notify 체인
+  전체가 이 한 번의 실제 API 호출로 검증됨.**
+- 코드 수정 없음(순수 검증) — 테스트 데이터는 Stage에 신규 생성 후 즉시 전량 정리(cleanup)
+
+**결과: ✅ 전 구간 설계대로 정상 동작 확인**
+1. 계약 발송 → 고객 채팅(`context_type='general'`, `status='open'`)에 `contract_link`
+   액션카드("전자계약 보기") 정상 삽입.
+2. `POST /api/contracts/{token}/sign` 호출(서명 데이터 포함) → `200 {"ok":true}`.
+3. `rental_reservations.status`: `hold` → **`confirmed`** 자동 전환 확인(`try_confirm_
+   reservation` RPC — payment_confirmed_at + signed_at AND 게이팅 정상 작동, §9).
+4. 같은 고객 채팅 세션에 **`reservation_approval`**("Canon RF 24-70mm F2.8L 예약이
+   승인되었습니다") 카드가 자동 발송됨 — `contract_signed` 카드보다 먼저 도착(코드 순서와
+   일치).
+5. "대여목록 자동 이동"은 실제로 데이터를 옮기는 동작이 아니라 **`/cms/rentals`가 쓰는
+   `get_rental_list` RPC의 `RENTAL_STATUSES` 필터(confirmed 포함)에 상태값이 걸리는
+   것만으로 자동 반영**되는 순수 필터링 효과임을 실제 RPC 호출로 재확인(`status='confirmed'`
+   가 되자마자 `get_rental_list`가 즉시 해당 예약을 반환).
+6. `contract_signings.signed_at`/`content_hash` 정상 기록, 감사로그(`recordAuditLog`)
+   경로도 함께 실행됨(에러 없음).
+
+**참고(버그 아님, 기존 동작 확인 차원의 관찰)**: `contract_signed` 카드의 `action_url`이
+`/cms/rentals?selected={id}` — CMS 내부 경로다. 이 카드는 고객 채팅 세션에 발송되는데,
+고객 계정은 `/cms/*` 접근 권한이 없어 클릭해도 이동할 수 없는 구조로 보인다(기존 프로덕션
+코드의 기존 동작 — 이번 세션에서 건드리지 않았고 Stephen 요청 범위 밖이라 별도 수정하지
+않음, 참고용으로만 기록).
+
+**정리**: 시뮬레이션용으로 생성한 `rental_reservations`(id 2253) · `contracts` ·
+`contract_signings` · `chat_messages`(3건) 전부 삭제 완료, 삭제 후 count=0 확인. 재사용한
+테스트 고객 계정(`d5a7f7c5-...`, 기존 tdd-signgate 픽스처)의 이전 데이터·세션 자체는
+건드리지 않음.
+
+**GATE**: 해당 없음(코드 변경 없는 순수 시뮬레이션 검증). 결론 — Stephen이 요청한 UX 흐름은
+현재 배포된 코드 기준으로 **정상 구현되어 있음**.
+
+---
+
+## 후속 수정 — contract_signed 카드 action_url을 고객용 경로로 정정 (2026-08-19)
+
+**Stephen 지시**: "contract_signed 카드 action_url을 고객용 경로로 수정해줘."
+
+**원인**: 위 시뮬레이션 검증 중 발견 — `src/routes/api/contracts/[token]/sign/+server.ts`가
+서명완료 후 **고객** 채팅 세션에 보내는 `contract_signed` 카드의 `action_url`이
+`cmsPath`(`/cms/rentals?selected=...` 또는 `/cms/reservation?selected=...`) 변수를 그대로
+재사용하고 있었음 — 고객 계정은 `/cms/*` 접근 권한이 없어 클릭해도 이동 불가능한 링크였음
+(관리자용 `sendPushToAdmins` 쪽은 `cmsPath` 그대로 유지 — 그쪽은 정상).
+
+**수정**: 해당 한 줄만 `action_url: \`/account/rental/${contract.reservation_id}\`` (고객용
+예약상세 화면, `src/routes/account/rental/[id]`)로 교체. `cmsPath` 변수 자체는 관리자 푸시용으로
+계속 사용되므로 그대로 유지.
+
+**검증**: `npx svelte-check` 해당 파일 신규 에러 0건.
+
+---
+
+## 라이브 재검증 + 스프레드시트형 계약서 레이아웃 결함 점검 (Stage, 2026-08-19)
+
+**Stephen 지시**: "Stage에도 동일하게 라이브 테스트 시뮬레이션 재검증해줘, 단 스프레드시트
+버전 계약서가 틀이 틀어져 보이는 버그 여부를 체크해."
+
+**1) 계약발송→서명→자동승인→자동알림 흐름 재검증**: 위와 동일한 방법론(Stage DB, 실제
+`/api/contracts/[token]/sign` curl 호출)으로 재실행 — 위 action_url 수정 반영된 코드 기준으로
+전 구간 정상 재확인(hold→confirmed 전환, reservation_approval 카드 자동발송, get_rental_list
+RPC 정상 반영). 테스트 데이터(예약 2254 등) 전량 정리 완료.
+
+**2) 스프레드시트형 계약서 "틀 틀어짐" 버그 — ✅ 실제 결함 확인(코드 미수정, 보고만)**
+
+**재현 방법**: Stage에 `authoring_mode='spreadsheet'` 계약서를 직접 구성(3열, `colWidths:
+[500,500,500]`(합계 1500px, A4 목표폭 642px 초과) + 첫 셀에 이미지 오버레이 마커
+`width=400px`) → 실제 고객 서명화면(`/contract/[token]`)을 curl로 직접 GET해 렌더된 HTML
+원문을 확인.
+
+**결과(실측)**:
+- 렌더된 `<colgroup>` 실제 셀 폭: **214px** (`fitColumnWidthsToTarget()`이 A4 폭 642px에
+  맞춰 500px→214px로 비례축소, scale≈0.428)
+- 같은 셀의 이미지 오버레이(`.ss-cell-image`) 폭: **400px** — 저장된 값 그대로, **셀 축소
+  비율이 전혀 반영되지 않음**
+
+**근본 원인**: `src/lib/utils/spreadsheetRender.ts` `renderSheetToTable()` — 컬럼 폭은
+`fitColumnWidthsToTarget()`으로 A4 폭에 비례 축소하면서, 같은 셀의 서명/직인 오버레이
+이미지 폭(`safeWidth = Math.min(1200, Math.max(20, width))`)은 이 축소 비율과 완전히
+무관하게 저장된 원본 px 값을 그대로 사용한다. `<td>`에 `overflow:hidden`도 없어, 컬럼이
+축소될수록(또는 이미지가 클수록) 이미지가 셀 경계를 넘어 인접 셀 텍스트 위까지 침범하는
+"틀이 틀어져 보이는" 현상으로 나타남.
+
+**발생 조건**: `ContractSpreadsheetEditor.svelte`는 최초 로드 시에만 자동으로
+`fitColumnWidthsToTarget()`을 적용하고, 이후 관리자가 컬럼 경계를 직접 드래그해 넓히면
+다시 A4 폭(642px)을 넘을 수 있다(코드 자체 주석에 명시된 기존 한계) — 이때 "A4 용지 맞춤"
+버튼을 수동으로 누르지 않고 그대로 발송하면 저장되는 `colWidths` 합계가 642px를 초과한
+채로 남고, 고객 서명화면 렌더 시점에만 비로소 축소가 적용돼 관리자가 CMS에서 본 배치와
+고객이 실제로 보는 배치가 달라진다.
+
+**처리**: Stephen 지시가 "버그 여부 체크"까지였고 수정 지시는 없었으므로 **코드 수정하지
+않음** — 위 원인·재현조건을 보고만 하고 수정 여부는 Stephen 확인 대기.
+
+**정리**: 테스트용 계약서(`fb93ef7c-...`)·서명링크·예약(2254) 전부 삭제 완료(count=0 확인),
+임시 HTML 스냅샷(`/tmp/contract_test.html`)도 삭제.
+
+**GATE**: 해당 없음(1번 항목은 순수 재검증, 2번 항목은 결함 발견·보고만 — 수정 대기).
+
+---
+
+## 후속 수정 — 스프레드시트 계약서 이미지 오버레이 폭 A4 축소비율 반영 (2026-08-19)
+
+**Stephen 지시**: "진행해줘, 이미지 폭을 컬럼 축소 비율만큼 스케일해서 수정해."
+
+**수정**: `src/lib/utils/spreadsheetRender.ts` `renderSheetToTable()` —
+1. `fittedWidths`(A4 폭 642px 기준 축소 결과) 계산 직후, 컬럼별 실제 적용 축소비율
+   `colScales[i] = fitted/original`(둘 다 유효한 숫자일 때만, 아니면 1) 배열 추가.
+2. 오버레이 이미지 폭 계산부(`safeWidth`)에 `width * (colScales[colIdx] ?? 1)`을 먼저 곱한
+   뒤 기존 20~1200px clamp 적용 — 컬럼이 축소된 만큼 이미지도 같은 비율로 축소.
+3. `offsetX`/`offsetY`(셀 중앙 기준 위치)는 의도적으로 스케일하지 않음 —
+   `splitCellImageOverlay` 설계 주석("셀 크기가 나중에 바뀌어도 위치 감각이 유지되도록")과
+   Stephen 지시 범위(폭만 스케일) 양쪽에 맞춤.
+
+**검증**:
+- 단위테스트: `spreadsheetRender.test.ts` 42/42 GREEN(회귀 없음, 기존 케이스는 컬럼폭이
+  642px 이내라 scale=1로 동작 동일).
+- **라이브 재검증(Stage)**: 위 결함 재현 시 썼던 것과 동일한 케이스(colWidths 500×3,
+  이미지 400px)로 신규 계약서를 다시 생성해 `/contract/[token]` 실제 렌더 HTML을 curl로
+  재확인 — 렌더된 셀 폭 214px은 그대로, 이미지 폭이 **400px → 171px**(214/500≈0.428
+  비율 반영)로 정상 축소돼 셀 안에 들어옴 확인. `npx svelte-check` 해당 파일 신규 에러 0건.
+- 테스트 데이터(계약서 `1c9ffdd4-...`·서명링크·예약 2254/2255) 전부 삭제 완료(count=0),
+  임시 HTML 스냅샷 삭제.
+
+**GATE**: BOUNDARY(단일 유틸 함수 내 계산 로직 수정, 신규 컴포넌트 아님) — 자동 진행 +
+완료 보고.
+
+---
+
+## QA(@sp3-qa-agent) 검수 결과 — 이번 세션 수정 2건 한정 (2026-08-19/20)
+
+**검수 범위**: 이번 세션이 만든 아래 2건만 — 같은 파일에 다른 병렬 세션이 남긴 수정
+(spreadsheetRender.ts의 `overlaySpacerHtml` 행높이 보완, sign/+server.ts의 action_url
+`/contract` 서브경로 세부화)은 검수 범위에서 명시적으로 제외하도록 QA 프롬프트에 지시.
+
+1. **`spreadsheetRender.ts` colScales 이미지폭 스케일링**: ✅ 정상.
+   - `colScales[i]=fitted/w` 가드(0/음수/null 폴백=1) 안전 확인, `fitColumnWidthsToTarget()`
+     실제 반환값과 대조 완료.
+   - 642px 이내(축소 불필요) 기존 케이스 — scale=1로 이전과 100% 동일 동작(회귀 없음) 확인.
+   - `colIdx` 정합성(병합 셀 스킵 로직과 배열 인덱스 일치) 확인.
+   - 스케일→반올림→clamp 순서가 의도와 일치.
+   - `ContractSpreadsheetEditor.svelte`/`ContractDocumentEditor.svelte`는 `git diff --stat`으로
+     무변경 확인(CMS 에디터 스코프 밖 — 정상).
+   - 단위테스트 44/44 GREEN(이 세션 관련분 전부 통과 — 44개 중 일부는 병렬 세션이 추가한
+     스페이서 관련 신규 케이스로 추정, colScales 케이스는 전부 통과).
+   - minor 관찰(블로킹 아님): colspan 병합 셀은 앵커 컬럼 하나의 colScales만 사용 — 서명/직인
+     오버레이 실사용 패턴(단일 셀 또는 유사폭 병합) 고려 시 결함 아님.
+2. **`sign/+server.ts` contract_signed action_url**: ✅ 정상.
+   - 최종값이 여전히 `/cms/`가 아닌 고객 경로(`/account/rental/[id]/contract`, 다른 세션이
+     서브경로로 구체화)를 가리킴 확인 — 이 세션이 의도한 "고객 접근 가능 경로로 전환" 목적
+     유지.
+   - 해당 라우트 파일 실존 확인. 관리자 푸시(`sendPushToAdmins`, `cmsPath` 사용)는 무변경
+     회귀 없음.
+
+**GATE E: 통과 ✅** — 블로킹 결함 0건. 검수 대상 2건 외 병렬 세션 작업은 언급하지 않음(범위
+준수 확인).
+
+---
+
+## NOW — 고객용 서명완료 전자계약서 열람 UX 신규 구현 (2026-08-19, 이 세션)
+
+생성일: 2026-08-19
+아젠다: Stephen 지시("사용자가 채팅 대화카드를 통해 서명한 전자계약 서명본을 어떻게 확인할 수
+있는지 UX 찾을 것") → 조사 결과 "고객이 서명본을 다시 볼 방법이 없음"(gap) 확인 →
+AskUserQuestion으로 방향 확인 → "사용자 내정보/대여(/account/rental) 목록 카드 내 '전자계약
+확인' 버튼 배치 + 새창 뷰어" 승인 받아 구현.
+TDD도메인: 없음 (GSD — 신규 고객 화면)
+
+### 조사 결과 (Explore 에이전트 실측, 구현 전 확인)
+
+- 채팅 `contract_signed` 액션카드(`sign/+server.ts`)의 "전자계약 확인" 버튼이 **CMS 전용
+  경로**(`{cmsPath}` = `/cms/rentals` 또는 `/cms/reservation`)로 연결돼 있어, `cms_role` 없는
+  일반 고객은 클릭 시 `/cms/login`으로 튕겨나감 — 사실상 접근 불가였음.
+- `/contract/[token]` 재방문(서명 후) → `/contract/signed`(정적 안내문만, 열람 UI 없음).
+- `contract_pdf_url` PDF 뷰어(`RentalContractViewer.svelte`)는 CMS 전용 컴포넌트고 실제
+  `document_url`도 항상 NULL(기존 알려진 한계, contract.md에 이미 명시).
+- `/account/rental` 목록·상세 어디에도 계약서 링크·배지 없음.
+- **결론**: 고객이 서명 완료된 계약서를 다시 확인할 수 있는 화면이 애초에 존재하지 않았음.
+
+### 구현 — /account/rental/[id]/contract 신규 라우트 + 목록 버튼
+
+- `src/routes/account/rental/+page.server.ts`: `contracts!inner(contract_signings(signed_at))`
+  조인으로 서명 완료 예약 id Set 계산 → `MyRental.has_signed_contract` 추가.
+- `src/routes/account/rental/+page.svelte`: `has_signed_contract`인 카드에만 "전자계약 확인"
+  버튼(보조 액션 스타일, `--cs-purple` 외곽선) 노출 — 클릭 시
+  `window.open('/account/rental/{id}/contract', '_blank', 'noopener,noreferrer')`.
+- `src/routes/account/rental/[id]/contract/+page.server.ts`(신규): 로그인 세션 기반(1회성
+  토큰 아님) — `locals.supabase`(RLS)로 예약 소유권 먼저 확인 → 이후 `admin`(service_role)으로
+  `contract_signings`(가장 최근 서명 1건, `signed_at DESC LIMIT 1`) + `contracts` + 발행자
+  서명 + 배송지 + 주문금액 조회. `recordAuditLog(eventType:'viewed', actorType:'customer')`로
+  고객 본인 재열람도 감사로그에 남김.
+- `src/routes/account/rental/[id]/contract/+page.svelte`(신규): `/contract/[token]` 서명화면과
+  **동일한 DOM 구조·CSS**(canvas/spreadsheet/flow 3모드 분기, `.contract-main > .doc-section >
+  .doc-block-tiptap` 패딩 체인)를 그대로 복제 — canvas 모드 필드 좌표가 이 패딩 체인 기준으로
+  저장돼 있어 구조가 달라지면 겹치기 이미지 위치가 틀어지기 때문(ui-mobile.md 좌표계 결함
+  사례와 동일 원인 회피). 서명 폼 대신 서명 당시 캡처된 `signature_data`(base64 PNG)를
+  이미지로 표시 + "서명 완료" 배지 + 인쇄 버튼(`window.print()`, 기존 A4 프린트 CSS 재사용).
+  기존 `/contract/[token]/+page.svelte`(서명 중인 CRITICAL 화면)는 전혀 건드리지 않음 —
+  새 파일에 구조만 재사용.
+
+### 검증
+
+- `npx svelte-check` — 최초 3건 타입에러(Supabase `products(...)`/`contracts!inner(...)` 조인
+  select가 생성 타입 추론에서 `never`로 잡힘, 이 코드베이스 기존 관례인 명시적 캐스팅으로
+  즉시 수정) → 신규 파일 신규 에러 0건 확인(기존 vite.config.ts 1건만 유지, 무관).
+
+### 발견(수정 안 함) — 다른 세션 소관 파일이라 범위 제외
+
+`src/routes/api/contracts/[token]/sign/+server.ts`의 `contract_signed` 카드 `action_url`이
+현재 작업트리에서 `/account/rental/${id}`(목록 페이지)로 미커밋 수정돼 있는데, 그 정확한
+경로엔 `+page.svelte`가 없어 여전히 404다(이번에 신설한 라우트는 `/account/rental/{id}
+/contract`로 한 단계 더 들어감). 이 파일은 이번 세션 이전부터 다른 세션이 이미 수정 중이던
+상태라 손대지 않음 — contract.md에 미정합 사실만 기록. **후속 조치가 필요하다면**: 그
+action_url을 `/account/rental/${id}/contract`로 맞추기만 하면 채팅카드 버튼도 정상 동작하게
+됨(Stephen 확인 후 진행 권장).
+
+### 수정 파일
+
+```
+src/routes/account/rental/+page.server.ts                    (MODIFY)
+src/routes/account/rental/+page.svelte                       (MODIFY)
+src/routes/account/rental/[id]/contract/+page.server.ts      (NEW)
+src/routes/account/rental/[id]/contract/+page.svelte         (NEW)
+.claude/rules-ref/contract.md                                 (MODIFY)
+```
+
+**GATE E: 자체판정 ✅ (신규 고객 화면, DB 마이그레이션 없음·기존 서명 CRITICAL 화면 미변경) —
+실사용(실제 서명 데이터로 canvas/flow 양쪽 렌더링) 확인은 Stephen 몫**
+
+### 후속 — 채팅카드 action_url도 새 뷰어로 정정 (2026-08-19, 같은 세션, Stephen 승인)
+
+Stephen 명시 지시("action_url도 /account/rental/{id}/contract로 맞춰서 고쳐줘") — 위 "발견(수정
+안 함)" 항목을 즉시 해소.
+
+`src/routes/api/contracts/[token]/sign/+server.ts`의 `contract_signed` action_payload
+`action_url`을 `/account/rental/${contract.reservation_id}`(404 나던 미커밋 상태)에서
+`/account/rental/${contract.reservation_id}/contract`(이번 세션에서 신설한 실제 뷰어 라우트)로
+수정. `ActionCard.svelte`의 `handleCta()`가 `window.open(ctaUrl, '_blank')`로 그대로 여는
+구조라 별도 렌더링 분기 수정 불필요, 링크값 1줄만 정정.
+
+**검증**: `npx svelte-check` 신규 에러 0건(기존 1건만 유지). `contract.md` "채팅 연동" 표와
+미정합 각주를 "해결 완료"로 갱신.
+
+### 수정 파일 (추가)
+
+```
+src/routes/api/contracts/[token]/sign/+server.ts  (MODIFY)
+.claude/rules-ref/contract.md                      (MODIFY)
+```
