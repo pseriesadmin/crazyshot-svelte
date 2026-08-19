@@ -12,6 +12,11 @@
   import CmsStatRing from '$lib/components/cms/CmsStatRing.svelte'
   import CmsStatBars from '$lib/components/cms/CmsStatBars.svelte'
   import CouponDetailPanel from '$lib/components/cms/CouponDetailPanel.svelte'
+  import SuggestPicker from '$lib/components/common/SuggestPicker.svelte'
+  import type { SuggestPickerOption } from '$lib/types/suggest-picker'
+  import { sortByTier, buildComboCategoryCode } from '$lib/utils/comboCategoryCode'
+  import { datePart } from '../../codes/_shared'
+  import type { MappingGroupSimple, MappingItemSimple, TaxonomyCodeSimple } from './+page.server'
 
   let { data, form }: { data: PageData; form: ActionData } = $props()
 
@@ -66,18 +71,170 @@
   let f_categories     = $state<string[]>([])
   let f_description    = $state('')
 
-  // 코드 자동 생성
-  function generateCode() {
-    const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'
-    f_code = Array.from({ length: 10 }, () => chars[Math.floor(Math.random() * chars.length)]).join('')
-  }
-
   // 카테고리 토글 — BND-COUPON-CAT-1: 하드코딩 제거, code_mapping_groups(백오피스) 기준 반영
   function toggleCat(c: string) {
     f_categories = f_categories.includes(c)
       ? f_categories.filter(x => x !== c)
       : [...f_categories, c]
   }
+
+  // ── 조합그룹 / 콤보 선택 (A-2: products/new 패턴 이식) ───────────────────────────────
+  interface ComboRow {
+    combo_row_id: string
+    combo_name: string | null
+    date_option: 'none' | 'ym' | 'ymd'
+    max_sequence: number | null
+    parent_max_sequence: number | null
+    codes: TaxonomyCodeSimple[]
+  }
+
+  const DEFAULT_CODE_FORMAT = { prefix: 'CS', date_format: 'YYMM', seq_digits: 3 }
+
+  let codeMode            = $state<'manual' | 'sequenced'>('manual')
+  let selectedGroupId     = $state<string | null>(null)
+  let selectedComboRowId  = $state<string | null>(null)
+  let lastConfirmedGroupId = $state<string | null>(null)
+
+  let combosForGroup = $derived<ComboRow[]>(
+    selectedGroupId
+      ? (() => {
+          const items = (data.mappingItems as MappingItemSimple[]).filter(i => i.group_id === selectedGroupId)
+          const rowIds = [...new Set(items.map(i => i.combo_row_id))]
+          return rowIds.map(rid => {
+            const rowItems = items.filter(i => i.combo_row_id === rid)
+            const first = rowItems[0]
+            const codes = sortByTier(
+              rowItems
+                .map(i => (data.taxonomyCodes as TaxonomyCodeSimple[]).find(tc => tc.id === i.taxonomy_code_id))
+                .filter((tc): tc is TaxonomyCodeSimple => tc !== undefined)
+            )
+            return {
+              combo_row_id: rid,
+              combo_name: first.combo_name ?? null,
+              date_option: first.date_option as ComboRow['date_option'],
+              max_sequence: first.max_sequence,
+              parent_max_sequence: first.parent_max_sequence,
+              codes,
+            }
+          })
+        })()
+      : []
+  )
+
+  let groupPickerOptions = $derived<SuggestPickerOption[]>(
+    (data.mappingGroups as MappingGroupSimple[]).map(mg => ({
+      id: mg.id,
+      label: mg.name,
+      meta: [mg.description].filter((v): v is string => Boolean(v)),
+    }))
+  )
+
+  function comboDatePart(combo: ComboRow): string | null {
+    if (combo.date_option === 'none') return null
+    if (combo.date_option === 'ymd') {
+      const now = new Date()
+      return `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, '0')}${String(now.getDate()).padStart(2, '0')}`
+    }
+    return datePart('YYMM')
+  }
+
+  function buildComboPreview(combo: ComboRow): string {
+    const catCode = buildComboCategoryCode(combo.codes)
+    if (!catCode) return '—'
+    const prefix = DEFAULT_CODE_FORMAT.prefix
+    const d = comboDatePart(combo) ?? ''
+    const seqPlaceholder = (combo.parent_max_sequence != null && combo.max_sequence != null)
+      ? '0'.repeat(String(combo.parent_max_sequence).length) + '0'.repeat(String(combo.max_sequence).length)
+      : '0'.repeat(combo.max_sequence != null ? String(combo.max_sequence).length : DEFAULT_CODE_FORMAT.seq_digits)
+    return `${prefix}${catCode}${d}${seqPlaceholder}`
+  }
+
+  function comboSeqMax(combo: ComboRow): string {
+    const childLabel = combo.max_sequence != null ? `~${combo.max_sequence}` : '무제한'
+    return combo.parent_max_sequence != null
+      ? `부모~${combo.parent_max_sequence} · 자식${childLabel}`
+      : childLabel
+  }
+
+  function onGroupChange() {
+    selectedComboRowId = null
+    codeMode = 'manual'
+  }
+
+  function onGroupPickerSelect(opt: SuggestPickerOption, _previousId: string | null) {
+    if (opt.id !== lastConfirmedGroupId) onGroupChange()
+    lastConfirmedGroupId = opt.id
+  }
+
+  function onGroupPickerInput(val: string) {
+    if (!val.trim() && selectedGroupId) {
+      selectedGroupId = null
+      lastConfirmedGroupId = null
+      onGroupChange()
+    }
+  }
+
+  function selectCombo(combo: ComboRow) {
+    selectedComboRowId = combo.combo_row_id
+    const preview = buildComboPreview(combo)
+    if (preview && preview !== '—') f_code = preview
+    codeMode = 'sequenced'
+  }
+
+  // ⛔ 결함 수정(2026-08-18): 콤보 선택 시 codeMode/f_code는 상태로 잡히지만, 실제 서버
+  // 제출(FormData)에 실릴 code_series는 hidden input이 없어 전송된 적이 없었음 —
+  // createCoupon 액션(+page.server.ts:283)이 매번 code_mode를 못 받아 'manual'로 조용히
+  // 폴백해, 지금까지 이 화면으로 sequenced 모드 쿠폰이 한 번도 생성된 적이 없었다.
+  // generate_user_coupon_redeemed_code(migration 292)가 파싱하는 정확한 키 이름
+  // (category_code/prefix/date_option/seq_digits/max_sequence)에 맞춰 구성.
+  const selectedCombo = $derived<ComboRow | null>(
+    selectedComboRowId ? combosForGroup.find(c => c.combo_row_id === selectedComboRowId) ?? null : null
+  )
+  const codeSeriesPayload = $derived(
+    selectedCombo
+      ? {
+          category_code: buildComboCategoryCode(selectedCombo.codes),
+          prefix: DEFAULT_CODE_FORMAT.prefix,
+          // RPC는 'yyyymm'만 인식(그 외는 전부 무날짜) — code_mapping_items의 'ymd'(일 단위)는
+          // 쿠폰 채번에서 지원 범위 밖이라 'yyyymm'으로 근사 처리(완전 무날짜보다는 근접)
+          date_option: selectedCombo.date_option === 'none' ? 'none' : 'yyyymm',
+          seq_digits: DEFAULT_CODE_FORMAT.seq_digits,
+          max_sequence: selectedCombo.max_sequence,
+        }
+      : null
+  )
+  // ───────────────────────────────────────────────────────────────────────────────────────
+
+  // A-4: SuggestPicker 정적 옵션 (select 대체)
+  const DISCOUNT_TYPE_OPTIONS: SuggestPickerOption[] = [
+    { id: 'fixed',         label: '정액 (원)' },
+    { id: 'percent',       label: '정률 (%)' },
+    { id: 'free_shipping', label: '무료배송' },
+  ]
+  const TYPE_OPTIONS: SuggestPickerOption[] = [
+    { id: 'fixed',         label: '정액 할인' },
+    { id: 'percent',       label: '정률 할인 (%)' },
+    { id: 'free_delivery', label: '무료 배송' },
+    { id: 'first_rental',  label: '첫 렌탈 전용' },
+    { id: 'category',      label: '카테고리 한정' },
+    { id: 'bundle',        label: '번들 렌탈' },
+    { id: 'subscription',  label: '정기구독 전용' },
+    { id: 'student',       label: '학생 신학기' },
+    { id: 'walk_in',       label: '방문 픽업' },
+    { id: 'reactivation',  label: '휴면 복귀' },
+    { id: 'referral',      label: '추천인' },
+    { id: 'event',         label: '이벤트' },
+  ]
+  const USER_GRADE_OPTIONS: SuggestPickerOption[] = [
+    { id: '__all__', label: '전체 회원' },
+    { id: 'BASIC',   label: 'BASIC' },
+    { id: 'PRO',     label: 'PRO' },
+    { id: 'CRAZY',   label: 'CRAZY' },
+  ]
+  // SuggestPicker bind용 nullable state — 초기값은 폼 상태 기본값과 동일한 리터럴로 지정
+  let _sel_dtype = $state<string | null>('fixed')    // f_discount_type 초기값과 동일
+  let _sel_type  = $state<string | null>('fixed')    // f_type 초기값과 동일
+  let _sel_grade = $state<string | null>('__all__')  // f_user_grade='' → '__all__' 매핑
 
   let autoScheduleJson = $derived(
     f_auto_sched_type === 'monthly'
@@ -113,6 +270,14 @@
     goto(u.toString(), { replaceState: true, noScroll: true })
   }
 
+  // 사용량 리포트 탭 — 행은 coupon_id만 갖고 있어 data.coupons(전체 목록, tab 무관하게
+  // 항상 로드됨)에서 매칭되는 쿠폰을 찾아 발행관리 탭과 동일한 selectCoupon()으로 위임.
+  // 과거 리포트 기간에 등장했지만 이후 삭제된 쿠폰처럼 못 찾는 경우는 조용히 무시(패널 안 열림).
+  function selectCouponById(couponId: string) {
+    const c = data.coupons.find(c => c.id === couponId)
+    if (c) selectCoupon(c)
+  }
+
   // ─ 만료 연장 상태 ─
   let reportFrom = $state(data.from.substring(0, 10))
   let reportTo   = $state(data.to.substring(0, 10))
@@ -128,7 +293,7 @@
 
   function confirmDelete(c: Coupon) {
     deleteId   = c.id
-    deleteCode = c.code
+    deleteCode = c.code ?? ''
     showDeleteModal = true
   }
 
@@ -146,7 +311,26 @@
     }
   })
 
+  // data 갱신 시 재동기화
+  $effect(() => {
+    reportFrom = data.from.substring(0, 10)
+    reportTo   = data.to.substring(0, 10)
+  })
+
   // ─ 유틸 ─
+  // sequenced 모드 쿠폰은 code가 NULL(실제 코드는 고객이 결제로 "사용"하는 순간에만
+  // user_coupons.redeemed_code로 개별 채번됨) — 목록·만료 테이블에서 빈 값 대신
+  // code_series 패턴 프리뷰(예: "Z쿠폰코드*")를 보여준다. manual 모드는 code 그대로.
+  function codeDisplay(c: { code: string | null; code_mode?: string; code_series?: { prefix?: string; category_code?: string } | null }): string {
+    if (c.code) return c.code
+    if (c.code_mode === 'sequenced' && c.code_series) {
+      const prefix = c.code_series.prefix ?? 'CS'
+      const cat = c.code_series.category_code ?? ''
+      return `${prefix}${cat}*`
+    }
+    return '—'
+  }
+
   function discountLabel(c: Coupon): string {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const cc = c as unknown as any
@@ -222,7 +406,7 @@
         <div class="expire-section-title">⚠ 만료 임박 쿠폰 (7일 이내)</div>
         <div class="expire-grid">
           {#each data.expiringSoon.slice(0, 5) as c}
-            <CmsKpiCard label={c.code} value={formatDate(c.valid_until)} tone="warn" size="sm" />
+            <CmsKpiCard label={c.code ?? ''} value={formatDate(c.valid_until)} tone="warn" size="sm" />
           {/each}
         </div>
       </div>
@@ -251,35 +435,130 @@
           <div class="form-grid">
             <div class="form-field">
               <label for="fc-code">쿠폰 코드</label>
-              <div class="row-gap">
-                <input id="fc-code" name="code" class="f-input" bind:value={f_code} required />
-                <button type="button" class="btn-ghost" onclick={generateCode}>자동 생성</button>
-              </div>
+              <p class="field-hint">분류 선택 및 검색</p>
+              {#if (data.mappingGroups as MappingGroupSimple[]).length > 0}
+                <SuggestPicker
+                  id="fc-code-group"
+                  bind:selectedId={selectedGroupId}
+                  options={groupPickerOptions}
+                  placeholder="분류 검색 또는 선택..."
+                  listLabel="조합그룹"
+                  variant="generic"
+                  minChars={0}
+                  oninput={onGroupPickerInput}
+                  onselect={onGroupPickerSelect}
+                >
+                  {#snippet field(c)}
+                    <input
+                      type="text"
+                      class="f-input"
+                      id={c.id}
+                      placeholder={c.placeholder}
+                      value={c.value}
+                      oninput={c.oninput}
+                      onkeydown={c.onkeydown}
+                      onfocus={c.onfocus}
+                      onblur={c.onblur}
+                      aria-autocomplete={c.ariaAutocomplete}
+                      aria-expanded={c.ariaExpanded}
+                      aria-controls={c.ariaControls}
+                      autocomplete="off"
+                    />
+                  {/snippet}
+                </SuggestPicker>
+                {#if selectedGroupId}
+                  <div class="combo-rows-wrap">
+                    {#if combosForGroup.length > 0}
+                      <div class="combo-rows">
+                        {#each combosForGroup as combo (combo.combo_row_id)}
+                          <button
+                            type="button"
+                            class="combo-row-btn"
+                            class:combo-row-selected={selectedComboRowId === combo.combo_row_id}
+                            onclick={() => selectCombo(combo)}
+                            title={buildComboPreview(combo)}
+                          >
+                            {#if combo.combo_name}
+                              <span class="combo-name-label">{combo.combo_name}</span>
+                            {/if}
+                            <span class="combo-row-chips">
+                              <span class="combo-prefix-chip">{DEFAULT_CODE_FORMAT.prefix}</span>
+                              <span class="combo-sep">·</span>
+                              <span class="combo-chips">
+                                {#each combo.codes as tc, i}
+                                  {#if i > 0}<span class="combo-sep">·</span>{/if}
+                                  <span class="combo-chip">{tc.code}</span>
+                                {/each}
+                              </span>
+                              {#if comboDatePart(combo)}
+                                <span class="combo-sep">·</span>
+                                <span class="combo-meta-chip combo-ym-chip">{comboDatePart(combo)}</span>
+                              {/if}
+                              <span class="combo-sep">·</span>
+                              <span class="combo-meta-chip combo-seq-chip">{comboSeqMax(combo)}</span>
+                            </span>
+                          </button>
+                        {/each}
+                      </div>
+                    {:else}
+                      <p class="combo-empty">이 그룹에 등록된 조합이 없습니다.</p>
+                    {/if}
+                  </div>
+                {/if}
+              {:else}
+                <p class="combo-empty">등록된 분류 그룹이 없습니다. /cms/codes에서 'coupon' 키로
+                  분류 그룹을 먼저 등록하면 여기서 검색·선택할 수 있습니다. 등록 전까지는
+                  아래 칸에 쿠폰 코드를 직접 입력하세요.</p>
+              {/if}
+              <input id="fc-code" name="code" class="f-input" bind:value={f_code} required />
+              <!-- 결함 수정: code_mode/code_series를 실제로 폼 제출에 실어 보내는 hidden input
+                   (이전엔 이게 없어 콤보를 선택해도 항상 manual로 저장됐음) -->
+              <input type="hidden" name="code_mode" value={codeMode} />
+              <input type="hidden" name="code_series" value={codeSeriesPayload ? JSON.stringify(codeSeriesPayload) : ''} />
             </div>
             <div class="form-field">
               <label for="fc-type">쿠폰 유형</label>
-              <select id="fc-type" name="type" class="f-input" bind:value={f_type}>
-                <option value="fixed">정액 할인</option>
-                <option value="percent">정률 할인 (%)</option>
-                <option value="free_delivery">무료 배송</option>
-                <option value="first_rental">첫 렌탈 전용</option>
-                <option value="category">카테고리 한정</option>
-                <option value="bundle">번들 렌탈</option>
-                <option value="subscription">정기구독 전용</option>
-                <option value="student">학생 신학기</option>
-                <option value="walk_in">방문 픽업</option>
-                <option value="reactivation">휴면 복귀</option>
-                <option value="referral">추천인</option>
-                <option value="event">이벤트</option>
-              </select>
+              <SuggestPicker
+                id="fc-type"
+                bind:selectedId={_sel_type}
+                options={TYPE_OPTIONS}
+                placeholder="쿠폰 유형 선택"
+                listLabel="쿠폰 유형"
+                variant="generic"
+                minChars={0}
+                onselect={(opt) => { f_type = opt.id }}
+              >
+                {#snippet field(c)}
+                  <input type="text" class="f-input" id={c.id} placeholder={c.placeholder}
+                    value={c.value} oninput={c.oninput} onkeydown={c.onkeydown}
+                    onfocus={c.onfocus} onblur={c.onblur}
+                    aria-autocomplete={c.ariaAutocomplete} aria-expanded={c.ariaExpanded}
+                    aria-controls={c.ariaControls} autocomplete="off" />
+                {/snippet}
+              </SuggestPicker>
+              <input type="hidden" name="type" value={f_type} />
             </div>
             <div class="form-field">
               <label for="fc-dtype">할인 방식</label>
-              <select id="fc-dtype" name="discount_type" class="f-input" bind:value={f_discount_type}>
-                <option value="fixed">정액 (원)</option>
-                <option value="percent">정률 (%)</option>
-                <option value="free_shipping">무료배송</option>
-              </select>
+              <SuggestPicker
+                id="fc-dtype"
+                bind:selectedId={_sel_dtype}
+                options={DISCOUNT_TYPE_OPTIONS}
+                placeholder="할인 방식 선택"
+                listLabel="할인 방식"
+                variant="generic"
+                minChars={0}
+                onselect={(opt) => { f_discount_type = opt.id }}
+              >
+                {#snippet field(c)}
+                  <input type="text" class="f-input" id={c.id} placeholder={c.placeholder}
+                    value={c.value} oninput={c.oninput} onkeydown={c.onkeydown}
+                    onfocus={c.onfocus} onblur={c.onblur}
+                    aria-autocomplete={c.ariaAutocomplete} aria-expanded={c.ariaExpanded}
+                    aria-controls={c.ariaControls} autocomplete="off" />
+                {/snippet}
+              </SuggestPicker>
+              <input type="hidden" name="discount_type" value={f_discount_type} />
             </div>
             <div class="form-field">
               <label for="fc-dval">할인값</label>
@@ -319,12 +598,25 @@
             </div>
             <div class="form-field">
               <label for="fc-grade">필수 회원 등급 (선택)</label>
-              <select id="fc-grade" name="user_grade_required" class="f-input" bind:value={f_user_grade}>
-                <option value="">전체 회원</option>
-                <option value="BASIC">BASIC</option>
-                <option value="PRO">PRO</option>
-                <option value="CRAZY">CRAZY</option>
-              </select>
+              <SuggestPicker
+                id="fc-grade"
+                bind:selectedId={_sel_grade}
+                options={USER_GRADE_OPTIONS}
+                placeholder="회원 등급 선택"
+                listLabel="회원 등급"
+                variant="generic"
+                minChars={0}
+                onselect={(opt) => { f_user_grade = opt.id === '__all__' ? '' : opt.id }}
+              >
+                {#snippet field(c)}
+                  <input type="text" class="f-input" id={c.id} placeholder={c.placeholder}
+                    value={c.value} oninput={c.oninput} onkeydown={c.onkeydown}
+                    onfocus={c.onfocus} onblur={c.onblur}
+                    aria-autocomplete={c.ariaAutocomplete} aria-expanded={c.ariaExpanded}
+                    aria-controls={c.ariaControls} autocomplete="off" />
+                {/snippet}
+              </SuggestPicker>
+              <input type="hidden" name="user_grade_required" value={f_user_grade} />
             </div>
           </div>
 
@@ -531,9 +823,9 @@
                 role="button"
                 tabindex="0"
                 onkeydown={(e) => e.key === 'Enter' && selectCoupon(c)}
-                aria-label="{c.code} 쿠폰 상세 보기"
+                aria-label="{codeDisplay(c)} 쿠폰 상세 보기"
               >
-                <td class="td-code">{c.code}</td>
+                <td class="td-code">{codeDisplay(c)}</td>
                 <td><span class="badge badge-info">{typeLabel(c.type)}</span></td>
                 <td class="td-date col-hide">
                   {#if cc.validity_type === 'unlimited'}
@@ -581,7 +873,7 @@
                 {#each data.distributions as d}
                   <tr>
                     <td class="td-date">{formatDate(d.created_at)}</td>
-                    <td class="td-code">{d.coupons?.code ?? '—'}</td>
+                    <td class="td-code">{d.coupons ? codeDisplay(d.coupons) : '—'}</td>
                     <td>{d.target_type}</td>
                     <td>{d.issued_count.toLocaleString()}명</td>
                   </tr>
@@ -598,7 +890,7 @@
       {#if selectedCouponId != null && selectedCoupon}
         <div class="detail-panel-wrap" transition:fly={{ x: 30, duration: 220 }}>
           {#key selectedCouponId}
-            <CouponDetailPanel coupon={selectedCoupon} onclose={closePanel} />
+            <CouponDetailPanel coupon={selectedCoupon} onclose={closePanel} context="manage" />
           {/key}
         </div>
       {/if}
@@ -622,29 +914,50 @@
         <button type="submit" class="btn-primary">조회</button>
       </form>
     </div>
-    <div class="table-card">
-      <table>
-        <thead>
-          <tr>
-            <th>기간</th><th>쿠폰 코드</th><th>유형</th>
-            <th>발급 수</th><th>사용 수</th><th>전환율</th>
-          </tr>
-        </thead>
-        <tbody>
-          {#each data.usageReport as r}
+    <div class="content-area" class:panel-open={selectedCouponId != null}>
+      <div class="table-card">
+        <div class="table-wrap">
+        <table>
+          <thead>
             <tr>
-              <td>{r.period}</td>
-              <td class="td-code">{r.coupon_code}</td>
-              <td><span class="badge badge-info">{typeLabel(r.coupon_type)}</span></td>
-              <td>{r.issued_count.toLocaleString()}</td>
-              <td>{r.used_count.toLocaleString()}</td>
-              <td>{r.conversion_pct}%</td>
+              <th>기간</th><th>쿠폰 코드</th><th>유형</th>
+              <th>발급 수</th><th>사용 수</th><th>전환율</th>
             </tr>
-          {:else}
-            <tr><td colspan="6" class="no-data">리포트 데이터가 없습니다.</td></tr>
-          {/each}
-        </tbody>
-      </table>
+          </thead>
+          <tbody>
+            {#each data.usageReport as r}
+              <tr
+                class:selected={selectedCouponId === r.coupon_id}
+                onclick={() => selectCouponById(r.coupon_id)}
+                role="button"
+                tabindex="0"
+                onkeydown={(e) => e.key === 'Enter' && selectCouponById(r.coupon_id)}
+                aria-label="{r.coupon_code} 쿠폰 상세 보기"
+              >
+                <td>{r.period}</td>
+                <td class="td-code">{r.coupon_code}</td>
+                <td><span class="badge badge-info">{typeLabel(r.coupon_type)}</span></td>
+                <td>{r.issued_count.toLocaleString()}</td>
+                <td>{r.used_count.toLocaleString()}</td>
+                <td>{r.conversion_pct}%</td>
+              </tr>
+            {:else}
+              <tr><td colspan="6" class="no-data">리포트 데이터가 없습니다.</td></tr>
+            {/each}
+          </tbody>
+        </table>
+        </div>
+      </div>
+
+      <!-- 상세 패널 (발행 관리 탭과 동일 컴포넌트·패턴 재사용 — 단 '배포' 탭은 '사용 채번
+           목록'으로 대체되도록 context="report" 전달, Stephen 확정 2026-08-18) -->
+      {#if selectedCouponId != null && selectedCoupon}
+        <div class="detail-panel-wrap" transition:fly={{ x: 30, duration: 220 }}>
+          {#key selectedCouponId}
+            <CouponDetailPanel coupon={selectedCoupon} onclose={closePanel} context="report" />
+          {/key}
+        </div>
+      {/if}
     </div>
 
   <!-- ────────────────────────────────────────────
@@ -663,7 +976,7 @@
         <tbody>
           {#each data.expiringSoon as c}
             <tr>
-              <td class="td-code">{c.code}</td>
+              <td class="td-code">{codeDisplay(c)}</td>
               <td><span class="badge badge-info">{typeLabel(c.type)}</span></td>
               <td>{c.usage_count} / {c.usage_limit ?? '∞'}</td>
               <td class="td-date">{formatDate(c.valid_until)}</td>
@@ -690,7 +1003,7 @@
         <tbody>
           {#each data.expiredCoupons as c}
             <tr>
-              <td class="td-code">{c.code}</td>
+              <td class="td-code">{codeDisplay(c)}</td>
               <td><span class="badge badge-inactive">{typeLabel(c.type)}</span></td>
               <td>{c.usage_count}</td>
               <td class="td-date">{formatDate(c.valid_until)}</td>
@@ -841,8 +1154,47 @@
 .form-field { display: flex; flex-direction: column; gap: 6px; }
 .form-field label { font: var(--text-pc-script-12); color: var(--cs-text-mid); }
 
-.row-gap { display: flex; gap: 8px; align-items: stretch; }
-.row-gap .f-input { flex: 1; }
+/* ─ A-1: 쿠폰 코드 가이드 텍스트 ─ */
+.field-hint { font: var(--text-pc-script-12); color: var(--cs-text-light); margin: 0 0 6px; }
+
+/* ─ A-2: 조합코드 섹션 (products/new 동일 패턴) ─ */
+.combo-rows-wrap { margin-top: 4px; margin-bottom: 4px; }
+.combo-rows { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 4px; }
+.combo-row-btn {
+  display: inline-flex; flex-direction: column; align-items: flex-start;
+  gap: 4px; padding: 8px 14px;
+  border: 1.5px solid #ECEBF4; border-radius: var(--radius-sm);
+  background: var(--cs-white); cursor: pointer;
+  transition: border-color 0.12s, background 0.12s; min-height: 44px;
+}
+.combo-row-btn:hover { border-color: rgba(59,47,138,0.35); background: rgba(59,47,138,0.04); }
+.combo-row-selected { border-color: var(--cs-purple) !important; background: var(--cs-purple-op10) !important; }
+.combo-name-label {
+  font: var(--text-pc-descript-10); color: var(--cs-text-light);
+  line-height: 1.2; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.combo-row-chips { display: inline-flex; align-items: center; flex-wrap: wrap; gap: 4px 6px; }
+.combo-prefix-chip {
+  padding: 2px 7px; background: var(--cs-dark); color: var(--cs-white);
+  border-radius: 4px; font: var(--text-pc-body-14); font-weight: 700; font-family: 'Courier New', monospace;
+}
+.combo-row-selected .combo-prefix-chip { background: var(--cs-purple-dark); }
+.combo-chips { display: flex; align-items: center; gap: 4px; }
+.combo-chip {
+  padding: 2px 7px; background: var(--cs-lilac); color: var(--cs-purple-dark);
+  border-radius: 4px; font: var(--text-pc-body-14); font-weight: 700;
+}
+.combo-row-selected .combo-chip { background: var(--cs-purple); color: var(--cs-white); }
+.combo-sep { color: var(--cs-text-light); font-size: 11px; }
+.combo-meta-chip {
+  padding: 2px 7px; border-radius: 4px; font: var(--text-pc-script-12);
+  font-weight: 600; font-family: 'Courier New', monospace;
+}
+.combo-ym-chip { color: var(--cs-text-dark); background: var(--cs-surface-gray); }
+.combo-seq-chip { color: var(--cs-purple-dark); background: rgba(59, 47, 138, 0.08); }
+.combo-row-selected .combo-ym-chip { color: var(--cs-purple-dark); background: rgba(59, 47, 138, 0.12); }
+.combo-row-selected .combo-seq-chip { color: var(--cs-white); background: var(--cs-purple); }
+.combo-empty { font: var(--text-pc-script-12); color: var(--cs-text-light); margin: 4px 0 0; }
 
 /* ─ 카테고리 피커 ─ */
 .cat-picker { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 12px; }

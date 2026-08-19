@@ -11,6 +11,7 @@ import { createClient } from '@supabase/supabase-js'
 import type { RequestHandler } from './$types'
 import { getCmsRoleForAction } from '$lib/server/getCmsRoleForAction'
 import { hasSettingsAccess } from '$lib/utils/cmsPermissions'
+import { sendPushToUser } from '$lib/server/push'
 
 export const POST: RequestHandler = async ({ request, locals }) => {
   const { session } = await locals.safeGetSession()
@@ -126,6 +127,13 @@ export const POST: RequestHandler = async ({ request, locals }) => {
     .from('chat_sessions')
     .update({ updated_at: new Date().toISOString() })
     .eq('id', sessionId)
+
+  // 고객 브라우저 푸시 (2026-08-19 전역감사로 발견된 공백 보완, service-operations.md §15)
+  await sendPushToUser(userId, 'coupon_gift', {
+    title: '쿠폰이 도착했어요 🎁',
+    body: `${discountLabel} 쿠폰을 받으셨어요! 지금 확인해보세요.`,
+    link: '/account/profile?tab=coupon',
+  })
 
   return json({ ok: true, message: messageRaw })
 }

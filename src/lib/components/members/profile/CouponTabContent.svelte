@@ -41,6 +41,11 @@
                 {coupon.minPurchaseAmount.toLocaleString('ko-KR')}원 이상 구매 시
               </p>
             {/if}
+            {#if coupon.redeemedCode}
+              <p class="font-['Noto_Sans_KR',sans-serif] font-medium text-[12px] text-[#444] tracking-[-0.5px] leading-[1.6]">
+                발급된 코드: {coupon.redeemedCode}
+              </p>
+            {/if}
           </div>
           <span class="font-['Noto_Sans_KR',sans-serif] font-medium text-[12px] text-[#444] bg-white rounded-[20px] px-[12px] py-[6px] tracking-[-0.5px] shrink-0">
             {coupon.statusLabel}

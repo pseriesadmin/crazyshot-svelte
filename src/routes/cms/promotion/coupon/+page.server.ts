@@ -7,6 +7,39 @@ import { getCmsRoleForAction } from '$lib/server/getCmsRoleForAction'
 import type { PageServerLoad, Actions } from './$types'
 import type { Coupon } from '$lib/types/database'
 
+// B-5 로컬 인터페이스: cms_create_coupon RPC payload 명시 (B-0 회피설계 — 전역 타입 계약 복구 아님)
+// 이 인터페이스만으로 "무엇을 보내는지" 컴파일러가 필드명 오타·누락을 잡아줌
+interface CmsCreateCouponPayload {
+  p_code: string | null
+  p_code_series: Coupon['code_series']
+  p_code_mode: 'manual' | 'sequenced'
+  p_type: string
+  p_discount_type: string
+  p_discount_value: number
+  p_usage_limit: number | null
+  p_min_purchase_amount: number
+  p_valid_from: string | null
+  p_valid_until: string | null
+  p_description: string | null
+  p_min_rental_amount: number
+  p_min_rental_days: number
+  p_max_discount_amount: number | null
+  p_applicable_categories: unknown | null
+  p_user_grade_required: string | null
+  p_is_first_rental_only: boolean
+  p_per_user_limit: number
+  p_total_usage_limit: number | null
+  p_is_student_only: boolean
+  p_is_walk_in_only: boolean
+  p_is_subscription_only: boolean
+  p_auto_issue_enabled: boolean
+  p_auto_issue_schedule: unknown | null
+  p_distribution_target: unknown
+  p_validity_type: string
+  p_allow_with_points: boolean
+  p_allow_stacking: boolean
+}
+
 export type CouponCategoryOption = { value: string; label: string }
 
 export type CouponStats = {
@@ -36,8 +69,25 @@ export type DistributionRow = {
   target_meta: Record<string, unknown> | null
   issued_count: number
   created_at: string
-  coupons?: { code: string } | null
+  coupons?: {
+    code: string | null
+    code_mode?: string
+    code_series?: { prefix?: string; category_code?: string } | null
+  } | null
 }
+
+// A-2: products/new 이식 타입 (쿠폰 코드 조합그룹 선택 UI)
+export type MappingGroupSimple = { id: string; name: string; description: string | null; default_category: string | null }
+export type MappingItemSimple = {
+  group_id: string
+  taxonomy_code_id: string
+  combo_row_id: string
+  combo_name: string | null
+  date_option: 'none' | 'ym' | 'ymd'
+  max_sequence: number | null
+  parent_max_sequence: number | null
+}
+export type TaxonomyCodeSimple = { id: string; code: string; name: string; product_category: string | null; depth: number; code_tier?: string | null }
 
 export const load: PageServerLoad = async ({ parent, locals, url }) => {
   const { cmsRole } = await parent()
@@ -70,6 +120,43 @@ export const load: PageServerLoad = async ({ parent, locals, url }) => {
     label: r.name,
   }))
 
+  // A-2: 쿠폰 코드 조합그룹·아이템·분류코드 (coupon 전용 분류, products/new 이식)
+  // ⚠️ show_in_product_filter는 의도적으로 필터 조건에서 제외했다 — 이 플래그는 이름 그대로
+  // "상품등록 화면 노출 여부"를 뜻하는 product 전용 설정이라, 쿠폰 분류 그룹에는 개념적으로
+  // 맞지 않는다(products/new 쿼리를 그대로 복붙하면서 이 조건까지 같이 딸려온 게 원인이었음
+  // — 실사용 중 "coupon 키로 태깅했는데도 안 보인다" 결함으로 발견, 2026-08-18 Stephen 확인
+  // 후 제거 확정). coupon 분류는 is_active만으로 노출 여부를 판단한다.
+  const { data: rawGroups } = await serviceAdmin
+    .from('code_mapping_groups')
+    .select('id, name, description, default_category')
+    .eq('default_category', 'coupon')
+    .eq('is_active', true)
+    .order('sort_order')
+    .order('name')
+  const mappingGroups = (rawGroups ?? []) as MappingGroupSimple[]
+
+  let mappingItems: MappingItemSimple[] = []
+  let taxonomyCodes: TaxonomyCodeSimple[] = []
+  if (mappingGroups.length > 0) {
+    const groupIds = mappingGroups.map((g) => g.id)
+    const { data: rawItems } = await serviceAdmin
+      .from('code_mapping_items')
+      .select('group_id, taxonomy_code_id, combo_row_id, combo_name, date_option, max_sequence, parent_max_sequence')
+      .in('group_id', groupIds)
+    mappingItems = (rawItems ?? []) as MappingItemSimple[]
+
+    const codeIds = [...new Set(mappingItems.map((i) => i.taxonomy_code_id))]
+    if (codeIds.length > 0) {
+      const { data: codes } = await serviceAdmin
+        .from('product_category_codes')
+        .select('id, code, name, product_category, depth, code_tier')
+        .in('id', codeIds)
+        .eq('is_active', true)
+        .is('deleted_at', null)
+      taxonomyCodes = (codes ?? []) as TaxonomyCodeSimple[]
+    }
+  }
+
   // 쿠폰 통계 (확장 — migration #51)
   const { data: statsRaw } = await admin.rpc('get_coupon_stats')
   const stats: CouponStats = statsRaw ?? {
@@ -100,7 +187,7 @@ export const load: PageServerLoad = async ({ parent, locals, url }) => {
   if (tab === 'manage') {
     const { data: dist } = await admin
       .from('coupon_distributions')
-      .select('*, coupons(code)')
+      .select('*, coupons(code, code_mode, code_series)')
       .order('created_at', { ascending: false })
       .limit(100)
     distributions = (dist ?? []) as DistributionRow[]
@@ -136,6 +223,9 @@ export const load: PageServerLoad = async ({ parent, locals, url }) => {
     expiredCoupons: (expiredCoupons ?? []) as Coupon[],
     period, from, to,
     categoryOptions,
+    mappingGroups,
+    mappingItems,
+    taxonomyCodes,
   }
 }
 
@@ -189,33 +279,61 @@ export const actions: Actions = {
       ? JSON.parse(String(distTargetRaw))
       : { type: 'all' }
 
-    if (!code) return { ok: false, error: '쿠폰 코드는 필수입니다.' }
+    // B-5: code_mode / code_series 읽기 (Part A UI에서 hidden input으로 전달)
+    const codeMode = (String(form.get('code_mode') ?? 'manual') as 'manual' | 'sequenced')
+    const codeSeriesRaw = form.get('code_series')
+    const code_series: Coupon['code_series'] = codeSeriesRaw
+      ? JSON.parse(String(codeSeriesRaw))
+      : null
 
+    // B-5: 클라이언트사이드 검증 — code_mode별 분기
+    if (codeMode === 'manual' && !code) {
+      return { ok: false, error: '쿠폰 코드는 필수입니다.' }
+    }
+    if (codeMode === 'sequenced' && !code_series) {
+      return { ok: false, error: '지연채번 모드에서는 코드 분류 선택이 필수입니다.' }
+    }
+
+    // B-0 회피설계: payload 객체를 로컬 인터페이스로 명시 (전역 타입 계약 복구는 범위 밖)
+    const payload: CmsCreateCouponPayload = {
+      p_code:                   codeMode === 'manual' ? (code || null) : null,
+      p_code_series:            codeMode === 'sequenced' ? code_series : null,
+      p_code_mode:              codeMode,
+      p_type:                   type,
+      p_discount_type:          discount_type,
+      p_discount_value:         discount_value,
+      p_usage_limit:            usage_limit,
+      p_min_purchase_amount:    min_purchase_amount,
+      p_valid_from:             valid_from,
+      p_valid_until:            valid_until,
+      p_description:            description,
+      p_min_rental_amount:      min_rental_amount,
+      p_min_rental_days:        min_rental_days,
+      p_max_discount_amount:    max_discount_amount,
+      p_applicable_categories:  applicable_categories,
+      p_user_grade_required:    user_grade_required,
+      p_is_first_rental_only:   is_first_rental_only,
+      p_per_user_limit:         per_user_limit,
+      p_total_usage_limit:      total_usage_limit,
+      p_is_student_only:        is_student_only,
+      p_is_walk_in_only:        is_walk_in_only,
+      p_is_subscription_only:   is_subscription_only,
+      p_auto_issue_enabled:     auto_issue_enabled,
+      p_auto_issue_schedule:    auto_issue_schedule,
+      p_distribution_target:    distribution_target,
+      p_validity_type:          validity_type,
+      p_allow_with_points:      allow_with_points,
+      p_allow_stacking:         allow_stacking,
+    }
+
+    // 클라이언트 캐스팅은 기존 관례 유지 (전역 타입 계약 복구는 B-0 범위 밖)
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const db = locals.supabase as unknown as any
-    const { error } = await db.from('coupons').insert({
-      code, type,
-      discount_type, discount_value,
-      usage_limit,
-      min_purchase_amount,
-      valid_from: validity_type === 'unlimited' ? null : valid_from,
-      valid_until: validity_type === 'unlimited' ? null : valid_until,
-      description,
-      is_active: true,
-      usage_count: 0,
-      // 확장 필드
-      min_rental_amount, min_rental_days, max_discount_amount,
-      applicable_categories,
-      user_grade_required,
-      is_first_rental_only,
-      per_user_limit, total_usage_limit,
-      is_student_only, is_walk_in_only, is_subscription_only,
-      auto_issue_enabled, auto_issue_schedule,
-      distribution_target,
-      validity_type, allow_with_points, allow_stacking,
-    })
+    const { data, error } = await db.rpc('cms_create_coupon', payload)
 
     if (error) return { ok: false, error: error.message }
+    const result = data as { ok: boolean; error?: string } | null
+    if (!result?.ok) return { ok: false, error: result?.error ?? '생성 실패' }
     return { ok: true }
   },
 
@@ -240,14 +358,21 @@ export const actions: Actions = {
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const db = locals.supabase as unknown as any
-    const { error } = await db.from('coupons').update({
-      discount_type, discount_value, max_discount_amount,
-      usage_limit, user_grade_required, validity_type,
-      valid_from:  validity_type === 'unlimited' ? null : valid_from,
-      valid_until: validity_type === 'unlimited' ? null : valid_until,
-    }).eq('id', id)
+    const { data, error } = await db.rpc('cms_update_coupon', {
+      p_id: id,
+      p_discount_type: discount_type,
+      p_discount_value: discount_value,
+      p_max_discount_amount: max_discount_amount,
+      p_usage_limit: usage_limit,
+      p_user_grade_required: user_grade_required,
+      p_validity_type: validity_type,
+      p_valid_from: valid_from,
+      p_valid_until: valid_until,
+    })
 
     if (error) return { ok: false, error: error.message }
+    const result = data as { ok: boolean; error?: string } | null
+    if (!result?.ok) return { ok: false, error: result?.error ?? '수정 실패' }
     return { ok: true }
   },
 
@@ -258,16 +383,14 @@ export const actions: Actions = {
     if (!hasSettingsAccess(cmsRole2 ?? '')) return { ok: false, error: '권한 없음' }
     const form = await request.formData()
     const id = String(form.get('id'))
-    const is_active = form.get('is_active') === 'true'
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const db = locals.supabase as unknown as any
-    const { error } = await db
-      .from('coupons')
-      .update({ is_active: !is_active })
-      .eq('id', id)
+    const { data, error } = await db.rpc('cms_toggle_coupon', { p_id: id })
 
     if (error) return { ok: false, error: error.message }
+    const result = data as { ok: boolean; error?: string } | null
+    if (!result?.ok) return { ok: false, error: result?.error ?? '처리 실패' }
     return { ok: true }
   },
 
@@ -281,12 +404,11 @@ export const actions: Actions = {
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const db = locals.supabase as unknown as any
-    const { error } = await db
-      .from('coupons')
-      .update({ deleted_at: new Date().toISOString(), is_active: false })
-      .eq('id', id)
+    const { data, error } = await db.rpc('cms_delete_coupon', { p_id: id })
 
     if (error) return { ok: false, error: error.message }
+    const result = data as { ok: boolean; error?: string } | null
+    if (!result?.ok) return { ok: false, error: result?.error ?? '삭제 실패' }
     return { ok: true }
   },
 

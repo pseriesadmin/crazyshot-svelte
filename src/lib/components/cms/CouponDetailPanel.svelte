@@ -7,13 +7,70 @@
   interface Props {
     coupon:  Coupon
     onclose: () => void
+    // 어느 목록 탭에서 이 패널을 열었는지 — Stephen 확정(2026-08-18): 발행관리(manage)와
+    // 사용량리포트(report)에서 동일한 '배포' 탭을 중복 노출하는 게 불필요하다고 판단,
+    // manage에서는 기존 배포 실행 폼을 그대로 유지하고, report에서는 그 자리를
+    // '사용 채번 목록'으로 완전히 대체한다(조건부 3번째 탭 추가 방식은 반려됨).
+    context: 'manage' | 'report'
   }
-  let { coupon, onclose }: Props = $props()
+  let { coupon, onclose, context }: Props = $props()
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const cc = coupon as any
 
-  let activeTab = $state<'info' | 'distribute'>('info')
+  // report 컨텍스트는 '정보'도 발행관리 탭 패널과 중복이라 판단(Stephen 확정,
+  // 2026-08-18) — 탭 자체를 없애고 '사용 채번 목록' 단독 뷰만 보여준다.
+  let activeTab = $state<'info' | 'distribute' | 'redemptions'>(context === 'report' ? 'redemptions' : 'info')
+
+  // ─ 사용 채번 목록 (report 컨텍스트 전용, 지연 로드) ─
+  // 랜딩 대상은 RentalDetailPanel(/cms/reservation 또는 /cms/rentals, migration 301) —
+  // "이 쿠폰이 결제된 정확한 예약"이 아니라 그 사용자의 가장 최근 예약(대여 정보 확인
+  // 목적). 서버가 user_id 기준으로 조회하므로 같은 사용자가 쿠폰을 중복 사용해도 항상
+  // 정확히 그 사용자로 연결된다. 예약이 하나도 없으면 cmsPath/reservationId가 null.
+  interface RedemptionRow {
+    userCouponId:  string
+    userId:        string
+    redeemedCode:  string | null
+    usedAt:        string
+    userName:      string | null
+    userEmail:     string | null
+    reservationId: number | null
+    cmsPath:       string | null
+  }
+  let redemptions        = $state<RedemptionRow[]>([])
+  let redemptionsLoaded  = $state(false)
+  let redemptionsLoading = $state(false)
+
+  async function loadRedemptions() {
+    if (redemptionsLoaded || redemptionsLoading) return
+    redemptionsLoading = true
+    try {
+      const res = await fetch(`/api/cms/coupons/${coupon.id}/redemptions`)
+      if (res.ok) {
+        const body = await res.json()
+        redemptions = (body.redemptions ?? []) as RedemptionRow[]
+      }
+    } finally {
+      redemptionsLoading = false
+      redemptionsLoaded = true
+    }
+  }
+
+  function selectTab(tab: typeof activeTab) {
+    activeTab = tab
+    if (tab === 'redemptions') loadRedemptions()
+  }
+
+  // report 컨텍스트는 탭 버튼(클릭)이 없으므로 마운트 시 바로 로드
+  $effect(() => {
+    if (context === 'report') loadRedemptions()
+  })
+
+  function formatDateTime(iso: string): string {
+    const d = new Date(iso)
+    const pad = (n: number) => String(n).padStart(2, '0')
+    return `${d.getFullYear()}.${pad(d.getMonth() + 1)}.${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`
+  }
 
   // ─ 핵심 정보 수정 ─
   let u_discount_type   = $state<string>(coupon.discount_type)
@@ -63,6 +120,18 @@
     }
     return MAP[type] ?? type
   }
+
+  // +page.svelte codeDisplay()와 동일 규칙 — sequenced 모드는 code가 NULL이므로
+  // code_series 패턴 프리뷰로 대체 표시(목록·헤더 표기 일관성)
+  function codeDisplay(c: { code: string | null; code_mode?: string; code_series?: { prefix?: string; category_code?: string } | null }): string {
+    if (c.code) return c.code
+    if (c.code_mode === 'sequenced' && c.code_series) {
+      const prefix = c.code_series.prefix ?? 'CS'
+      const cat = c.code_series.category_code ?? ''
+      return `${prefix}${cat}*`
+    }
+    return '—'
+  }
 </script>
 
 <div class="panel">
@@ -70,27 +139,28 @@
   <div class="panel-header">
     <div class="panel-title-wrap">
       <span class="panel-label">쿠폰</span>
-      <span class="panel-id">{coupon.code}</span>
+      <span class="panel-id">{codeDisplay(coupon)}</span>
       <span class="panel-status">{typeLabel(coupon.type)}</span>
     </div>
     <button class="close-btn" onclick={onclose} aria-label="패널 닫기">✕</button>
   </div>
 
-  <!-- 탭 -->
-  <div class="panel-tabs" role="tablist">
-    {#each [
-      { id: 'info',       label: '정보' },
-      { id: 'distribute', label: '배포' },
-    ] as tab}
-      <button
-        class="tab"
-        class:tab-active={activeTab === tab.id}
-        role="tab"
-        aria-selected={activeTab === tab.id}
-        onclick={() => activeTab = tab.id as typeof activeTab}
-      >{tab.label}</button>
-    {/each}
-  </div>
+  <!-- 탭 — manage 컨텍스트에서만 노출(정보+배포, 기존 그대로). report 컨텍스트는 '정보'도
+       발행관리 패널과 중복이라 판단해 탭 자체를 없애고 '사용 채번 목록' 단독 뷰만 표시
+       (Stephen 확정, 2026-08-18). -->
+  {#if context === 'manage'}
+    <div class="panel-tabs" role="tablist">
+      {#each [{ id: 'info', label: '정보' }, { id: 'distribute', label: '배포' }] as tab}
+        <button
+          class="tab"
+          class:tab-active={activeTab === tab.id}
+          role="tab"
+          aria-selected={activeTab === tab.id}
+          onclick={() => selectTab(tab.id as typeof activeTab)}
+        >{tab.label}</button>
+      {/each}
+    </div>
+  {/if}
 
   <!-- 탭 바디 -->
   <div class="panel-body">
@@ -240,6 +310,45 @@
           </button>
         </div>
       </form>
+
+    <!-- ─── 탭3: 채번내역 (sequenced 모드 전용) ─── -->
+    {:else if activeTab === 'redemptions'}
+      <div class="section-title">사용 채번 목록</div>
+      {#if redemptionsLoading}
+        <p class="hint">불러오는 중...</p>
+      {:else if redemptions.length === 0}
+        <p class="hint">아직 사용된 내역이 없습니다.</p>
+      {:else}
+        <div class="redemption-list">
+          {#each redemptions as r (r.userCouponId)}
+            <!-- sequenced 모드는 개별 채번된 redeemedCode, manual 모드는 redeemedCode가
+                 없으므로(사용자별로 다른 코드가 생기지 않음) 쿠폰 고유 code로 대체 표시.
+                 랜딩은 RentalDetailPanel — "이 쿠폰이 결제된 정확한 예약"이 아니라 그
+                 사용자의 가장 최근 예약(대여 정보 확인 목적, migration 301). 서버가
+                 user_id 기준으로 대표 예약을 고르므로 중복 쿠폰 사용에도 항상 정확히
+                 그 사용자로 연결됨 — 단, 그 사용자에게 예약이 하나도 없으면 비활성. -->
+            {#if r.cmsPath && r.reservationId}
+              <a
+                class="redemption-row redemption-row--linked"
+                href="{r.cmsPath}?selected={r.reservationId}"
+                target="_blank"
+                rel="noopener"
+                title="대여 정보 열기"
+              >
+                <span class="redemption-code">{r.redeemedCode ?? coupon.code ?? '—'}</span>
+                <span class="redemption-meta">{formatDateTime(r.usedAt)}</span>
+                <span class="redemption-user">{r.userName ?? '이름 미등록'} ({r.userEmail ?? '이메일 없음'})</span>
+              </a>
+            {:else}
+              <div class="redemption-row" title="이 사용자의 대여 정보를 찾을 수 없습니다">
+                <span class="redemption-code">{r.redeemedCode ?? coupon.code ?? '—'}</span>
+                <span class="redemption-meta">{formatDateTime(r.usedAt)}</span>
+                <span class="redemption-user">{r.userName ?? '이름 미등록'} ({r.userEmail ?? '이메일 없음'})</span>
+              </div>
+            {/if}
+          {/each}
+        </div>
+      {/if}
     {/if}
 
   </div>
@@ -346,6 +455,32 @@
   .f-input.ta { resize: vertical; height: auto; }
 
   .panel-actions { display: flex; justify-content: flex-end; }
+
+  /* 채번내역 탭 */
+  .redemption-list { display: flex; flex-direction: column; gap: 8px; }
+  .redemption-row {
+    display: flex; flex-direction: row; align-items: center; gap: 12px;
+    padding: 10px 14px;
+    border: 1px solid var(--cs-lilac); border-radius: var(--cms-radius-sm);
+    text-decoration: none;
+  }
+  .redemption-row--linked { cursor: pointer; transition: border-color 0.12s, background 0.12s; }
+  .redemption-row--linked:hover { border-color: var(--cs-purple); background: var(--cs-purple-op10); }
+  .redemption-code {
+    font: var(--text-pc-body-14); font-weight: 700; color: var(--cs-text);
+    letter-spacing: .04em;
+    flex: 0 0 auto;
+  }
+  .redemption-meta {
+    font: var(--text-pc-script-12); color: var(--cs-text-mid);
+    flex: 0 0 auto; white-space: nowrap;
+  }
+  .redemption-user {
+    font: var(--text-pc-script-12); color: var(--cs-text-light);
+    flex: 1 1 auto; min-width: 0;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    text-align: right;
+  }
 
   .btn-primary {
     background: var(--cs-purple); color: var(--cs-white); border: none;
