@@ -137,49 +137,6 @@
   }
 
   // ─────────────────────────────────────────────────────────────────────────────
-  // 이미지 크기설정 바 상태 (2026-08-16 — ContractDocumentEditor.svelte의 이미지 크기조절
-  // 플로팅 바와 동일 프리셋 소100/중200/대400 + 너비 직접입력을 그대로 적용)
-  // 선택된 셀에 이미지 오버레이가 있을 때만 이 바를 노출한다. TipTap은 "이미지 노드 선택"
-  // 상태가 있지만 jspreadsheet-ce는 "셀 선택"만 있으므로 "선택된 셀에 오버레이가 있는가"로
-  // 대체 판단.
-  // ─────────────────────────────────────────────────────────────────────────────
-
-  let selectedHasOverlay  = $state(false)
-  let selectedOverlayWidth = $state(DEFAULT_IMAGE_OVERLAY_WIDTH)
-  /** 너비 직접입력 <input> 참조 — 값 동기화를 아래 $effect에서 imperatively 처리 */
-  let sizeInputEl: HTMLInputElement | undefined = $state(undefined)
-
-  /**
-   * selectedOverlayWidth가 바뀔 때마다 입력창의 실제 표시값을 명시적으로 맞춘다.
-   * `value={selectedOverlayWidth}` 선언적 바인딩만으로는 number input에서 갱신이
-   * 반영되지 않는 사례가 실사용 중 확인돼(2026-08-16 — 프리셋 클릭 후 입력창이 계속
-   * 빈 값으로 보이던 제보) ContractDocumentEditor.svelte의 widthInput.value 직접
-   * 대입 패턴과 동일하게 imperatively 동기화한다.
-   */
-  $effect(() => {
-    if (selectedHasOverlay && sizeInputEl) {
-      sizeInputEl.value = String(selectedOverlayWidth)
-    }
-  })
-
-  /** 현재 선택된 셀의 값을 다시 읽어 크기설정 바 표시 상태를 동기화한다. */
-  function refreshSelectedOverlayState(): void {
-    const target = resolveActiveCell()
-    if (!target) {
-      selectedHasOverlay = false
-      return
-    }
-    const raw = target.ws.getValueFromCoords(target.x, target.y)
-    const text = raw == null ? '' : String(raw)
-    if (hasImageOverlay(text)) {
-      selectedHasOverlay = true
-      selectedOverlayWidth = splitCellImageOverlay(text).width
-    } else {
-      selectedHasOverlay = false
-    }
-  }
-
-  // ─────────────────────────────────────────────────────────────────────────────
   // 서명/직인 자산 삽입 팝오버 (2026-08-16 — ContractDocumentEditor.svelte의 동일 기능과
   // 같은 GET /api/cms/signature-assets 재사용, UI 패턴도 동일하게 맞춤)
   // ─────────────────────────────────────────────────────────────────────────────
@@ -217,44 +174,6 @@
     const ok = insertImageAtSelection(asset.image_url, DEFAULT_IMAGE_OVERLAY_WIDTH)
     showSigPicker = false
     if (!ok) csToast.error('삽입할 셀을 먼저 선택해주세요.')
-    else refreshSelectedOverlayState()
-  }
-
-  /**
-   * 크기설정 바(프리셋/직접입력)에서 호출 — 현재 선택된 셀의 오버레이 이미지 너비만 갱신.
-   * 드래그로 옮겨둔 위치(offsetX/offsetY)는 그대로 보존(너비만 바꾸는데 위치가 중앙으로
-   * 리셋되면 안 됨).
-   */
-  function updateOverlayWidthAtSelection(width: number): void {
-    const target = resolveActiveCell()
-    if (!target) return
-    const raw = target.ws.getValueFromCoords(target.x, target.y)
-    const text = raw == null ? '' : String(raw)
-    const { text: baseText, imageUrl, offsetX, offsetY } = splitCellImageOverlay(text)
-    if (!imageUrl) return
-    target.ws.setValueFromCoords(
-      target.x, target.y,
-      baseText + toImageOverlayMarker(imageUrl, width, offsetX, offsetY),
-    )
-    selectedOverlayWidth = width
-  }
-
-  /**
-   * 크기설정 바의 "삭제" 버튼에서 호출 — 현재 선택된 셀에서 이미지 오버레이 마커만 제거하고
-   * 원본 텍스트(예: 서식에 인쇄된 "(인)")는 그대로 유지한다. jspreadsheet-ce 자체 undo
-   * 버튼으로도 되돌릴 수 있는 가역적 편집이라 별도 확인 모달 없이 즉시 실행한다(DB 삭제가
-   * 아니라 셀 값 편집이므로 CmsDeleteButton류 2단계 확인 패턴 불필요 — 2026-08-16).
-   */
-  function removeOverlayAtSelection(): void {
-    const target = resolveActiveCell()
-    if (!target) return
-    const raw = target.ws.getValueFromCoords(target.x, target.y)
-    const text = raw == null ? '' : String(raw)
-    const { text: baseText, imageUrl } = splitCellImageOverlay(text)
-    if (!imageUrl) return
-    target.ws.setValueFromCoords(target.x, target.y, baseText)
-    refreshSelectedOverlayState()
-    csToast.success('서명/직인 이미지를 삭제했습니다.')
   }
 
   // ─────────────────────────────────────────────────────────────────────────────
@@ -605,7 +524,6 @@
       if (!stillThere) return
       ws.setValueFromCoords(x, y, baseText)
       deselectOverlayImage()
-      refreshSelectedOverlayState()
       csToast.success('서명/직인 이미지를 삭제했습니다.')
     })
     bar.appendChild(deleteBtn)
@@ -628,7 +546,19 @@
     if (activeOverlayCellKey === cellKey) selectThisOverlay()
 
     wrap.addEventListener('pointerdown', (e: PointerEvent) => {
-      if (bar.contains(e.target as Node)) return // 툴바 클릭은 드래그 무시(문서형과 동일 원칙)
+      if (bar.contains(e.target as Node)) {
+        // 툴바 클릭은 드래그 무시(문서형과 동일 원칙) — 단, 여기서도 preventDefault/
+        // stopPropagation을 반드시 호출해야 한다. 이전에는 이 분기가 조용히 return만 해서
+        // pointerdown이 그대로(그리고 브라우저가 자동 합성하는 호환 mousedown까지) 버블링을
+        // 계속했고, jspreadsheet 자체의 그리드 셀선택/드래그 리스너가 이를 그대로 받아
+        // 클릭이 버튼의 click 이벤트로 이어지기 전에 그리드가 셀을 재선택·드래그로 가로채는
+        // 결함이 있었다("직인이 이동만 되고 사이즈설정바가 작동하지 않아" 실사용 재현,
+        // 2026-08-19). 아래 분기에서도 동일하게 억제해 툴바 클릭이 그리드로 새어나가지
+        // 않게 한다.
+        e.preventDefault()
+        e.stopPropagation()
+        return
+      }
       // preventDefault로 jspreadsheet의 호환 mousedown 이벤트 발생 자체를 억제하고
       // stopPropagation으로 버블링도 막아 그리드 자체 셀선택/드래그와 완전히 분리한다.
       e.preventDefault()
@@ -842,12 +772,20 @@
           if (isWorksheetLike(instance)) {
             lastSelectedWs = instance
             lastSelectedCoords = [x1, y1]
-            refreshSelectedOverlayState()
             // 이미지 레이어 클릭은 pointerdown에서 preventDefault+stopPropagation으로
             // 이 onselection 자체가 발생하지 않도록 막아뒀다 — 따라서 여기 도달했다는 건
-            // "이미지가 아닌 다른 곳(다른 셀 등)을 선택했다"는 뜻이므로 이전에 선택돼 있던
-            // 이미지 레이어의 삭제버튼을 닫는다(2026-08-16 이미지 선택/이동/삭제 신규개발).
-            deselectOverlayImage()
+            // 보통 "이미지가 아닌 다른 곳(다른 셀 등)을 선택했다"는 뜻이므로 이전에 선택돼
+            // 있던 이미지 레이어의 플로팅 툴바를 닫는다(2026-08-16 이미지 선택/이동/삭제
+            // 신규개발). ⚠️ 2026-08-19 긴급수정 — 크기 프리셋 버튼으로 너비를 바꾸면
+            // ws.setValueFromCoords()가 셀 값을 갱신하면서 jspreadsheet-ce가 내부적으로
+            // "같은 셀"에 대해 이 onselection을 한 번 더 스스로 재발화한다(사용자가 실제로
+            // 다른 셀을 클릭한 게 아님). 이때 무조건 deselectOverlayImage()를 호출하면
+            // renderCellValue()가 재렌더링 직후 `activeOverlayCellKey === cellKey` 조건으로
+            // 다시 열어둔 툴바를 바로 뒤이어 닫아버려 "크기 조절 버튼을 누르면 즉시
+            // 사라진다"로 보였다(Stephen 실사용 재현). 새로 선택된 셀 좌표가 현재 오버레이
+            // 선택 중인 셀과 동일하면(자기 자신의 값 변경으로 인한 재발화) 닫지 않는다.
+            const key = `${x1},${y1}`
+            if (key !== activeOverlayCellKey) deselectOverlayImage()
           }
         },
       })
@@ -950,48 +888,6 @@
         {/if}
       </div>
 
-      {#if selectedHasOverlay}
-        <!-- 이미지 크기설정 바 — ContractDocumentEditor.svelte 프리셋(소100/중200/대400)과 동일 -->
-        <div class="cse-size-group" role="group" aria-label="서명/직인 이미지 크기 설정">
-          <span class="cse-sep"></span>
-          {#each [{ label: '소', px: 100 }, { label: '중', px: 200 }, { label: '대', px: 400 }] as preset (preset.px)}
-            <button
-              type="button"
-              class="cse-size-btn"
-              class:active={selectedOverlayWidth === preset.px}
-              onclick={() => updateOverlayWidthAtSelection(preset.px)}
-              title="너비 {preset.px}px"
-            >{preset.label}({preset.px})</button>
-          {/each}
-          <input
-            bind:this={sizeInputEl}
-            type="number"
-            class="cse-size-input"
-            min="20"
-            max="1200"
-            placeholder="px"
-            onkeydown={(e) => {
-              if (e.key !== 'Enter') return
-              const w = parseInt((e.currentTarget as HTMLInputElement).value, 10)
-              if (w > 0) updateOverlayWidthAtSelection(w)
-            }}
-            onblur={(e) => {
-              const w = parseInt((e.currentTarget as HTMLInputElement).value, 10)
-              if (w > 0) updateOverlayWidthAtSelection(w)
-            }}
-            aria-label="이미지 너비 직접 입력(px)"
-          />
-          <span class="cse-sep"></span>
-          <button
-            type="button"
-            class="cse-remove-btn"
-            onclick={removeOverlayAtSelection}
-            title="선택한 셀의 서명/직인 이미지 삭제"
-            aria-label="선택한 셀의 서명/직인 이미지 삭제"
-          >✕ 삭제</button>
-        </div>
-      {/if}
-
       <span class="cse-sep"></span>
 
       <!-- A4 용지 맞춤 · A4 출력 (2026-08-16) -->
@@ -1010,10 +906,14 @@
         >A4 출력</button>
       </div>
 
+      <!-- 2026-08-19: 크기조절 UI 중복 제거(Stephen 요청) — 이전에는 이 상단 툴바에도
+           "선택한 셀" 기준 크기설정 바(소/중/대+너비입력+삭제)가 있어 이미지를 직접 클릭했을
+           때 뜨는 플로팅 툴바(renderCellValue()의 bar)와 완전히 같은 기능이 두 군데 중복
+           존재했다. 이제 크기 조절·삭제는 이미지를 클릭해 뜨는 플로팅 툴바 하나로 통일 —
+           updateOverlayWidthAtSelection/removeOverlayAtSelection/selectedHasOverlay 등
+           이 상단 툴바 전용이던 상태·함수는 전부 제거. -->
       <p class="cse-sig-hint">
-        {selectedHasOverlay
-          ? '선택한 셀의 서명/직인 이미지 크기를 조절하거나 삭제할 수 있습니다.'
-          : '셀을 먼저 선택한 뒤 눌러주세요. 선택한 셀 텍스트 위에 이미지가 겹쳐 표시됩니다.'}
+        {'셀을 먼저 선택한 뒤 눌러주세요. 삽입된 이미지를 클릭하면 크기 조절·삭제 도구가 나타납니다.'}
       </p>
     </div>
   {/if}
@@ -1168,71 +1068,13 @@
     color: var(--cs-purple, #3B2F8A);
   }
 
-  /* 이미지 크기설정 바 — ContractDocumentEditor.svelte .cde-btn/.cde-sep와 동일 스펙 */
+  /* 이미지 크기설정 바(소/중/대+너비입력+삭제)는 2026-08-19부터 renderCellValue()가 이미지
+     클릭 시 띄우는 플로팅 툴바 하나로 통일됐다 — 이 상단 툴바 전용이던 .cse-size-group/
+     .cse-size-btn/.cse-size-input/.cse-remove-btn CSS는 중복이라 제거(마크업도 함께 제거). */
   .cse-sep {
     width: 1px;
     height: 18px;
     background: var(--cs-lilac, #ECEBF4);
-  }
-
-  .cse-size-group {
-    display: flex;
-    align-items: center;
-    gap: 4px;
-  }
-
-  .cse-size-btn {
-    min-height: 24px;
-    min-width: 24px;
-    padding: 2px 7px;
-    background: transparent;
-    border: 1px solid transparent;
-    border-radius: 6px;
-    font-size: 11px;
-    font-weight: 600;
-    color: var(--cs-text, #100B32);
-    cursor: pointer;
-    line-height: 1.4;
-    white-space: nowrap;
-    transition: background 0.1s, border-color 0.1s;
-  }
-  .cse-size-btn:hover { background: var(--cs-lilac, #ECEBF4); }
-  .cse-size-btn.active {
-    background: var(--cs-purple-op10, rgba(59,47,138,0.1));
-    border-color: var(--cs-purple, #3B2F8A);
-    color: var(--cs-purple, #3B2F8A);
-  }
-
-  .cse-size-input {
-    width: 56px;
-    height: 24px;
-    padding: 0 4px;
-    border: 1px solid var(--cs-lilac, #ECEBF4);
-    border-radius: 6px;
-    font-size: 11px;
-    color: var(--cs-text, #100B32);
-    outline: none;
-    box-sizing: border-box;
-  }
-  .cse-size-input:focus { border-color: var(--cs-purple, #3B2F8A); }
-
-  /* 이미지 삭제 버튼 — CMS 표준 아이콘형 삭제 버튼(close-red) 톤과 통일 */
-  .cse-remove-btn {
-    min-height: 24px;
-    padding: 2px 8px;
-    background: transparent;
-    border: 1px solid transparent;
-    border-radius: 6px;
-    font-size: 11px;
-    font-weight: 600;
-    color: var(--cs-text-mid, #666);
-    cursor: pointer;
-    white-space: nowrap;
-    transition: background 0.1s, color 0.1s;
-  }
-  .cse-remove-btn:hover {
-    background: rgba(255, 53, 53, 0.08);
-    color: var(--cs-red-badge, #FF3535);
   }
 
   .cse-sig-hint {
@@ -1382,6 +1224,26 @@
   }
   .spreadsheet-container :global(.cse-cell-image-wrap:active) {
     cursor: grabbing;
+  }
+
+  /*
+   * ⛔ 2026-08-17 긴급수정 — "크기 설정 창을 조작할 수 없고 클릭하면 사라짐" (Stephen 제보,
+   * <launch-selected-element> 실측). renderCellValue()가 `cell.style.overflow = 'visible'`을
+   * 인라인으로 지정하지만, jspreadsheet-ce가 셀 선택·재렌더링 시 그 td의 style을 자체적으로
+   * 다시 써 이 인라인 오버라이드를 지워버린다(실측: 선택된 이미지 셀의 computedOverflow가
+   * "hidden"으로 되돌아가 있고 inline style에 overflow 자체가 아예 없었음 — jspreadsheet.css
+   * 179행 `.jss_overflow > tbody > tr > td { overflow: hidden }` 규칙이 다시 이김). 크기설정
+   * 플로팅 툴바는 셀 위쪽으로 튀어나오게 배치되는데(bottom: calc(100% + 4px)), 이 td
+   * overflow:hidden 때문에 툴바가 시각적으로도 클리핑되고 클릭도 통과하지 못해 그 자리의
+   * td가 대신 클릭을 받는다 — 그 클릭이 그리드 셀 재선택으로 처리되며 onselection이
+   * deselectOverlayImage()를 호출해 "클릭하면 사라짐"으로 보인다. JS 인라인 스타일은
+   * jspreadsheet가 계속 되돌리므로 신뢰할 수 없다 — 대신 CSS 규칙으로 우리 이미지 레이어를
+   * 가진 셀만 특정해 overflow:visible을 강제한다(다른 일반 텍스트 셀의 overflow:hidden은
+   * 그대로 유지 — 긴 텍스트가 옆 셀로 넘치는 것을 막는 jspreadsheet 자체 의도이므로 전역
+   * 해제하지 않음).
+   */
+  .spreadsheet-container :global(.jss_overflow > tbody > tr > td:has(.cse-cell-image-wrap)) {
+    overflow: visible !important;
   }
 
   /* 이미지 자체 — 위치는 부모 wrap이 담당, 여기서는 크기만.
