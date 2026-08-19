@@ -24,6 +24,13 @@
     returnMethod:     string | null
     returnTime:       string | null
     onrefresh:        () => void
+    /**
+     * true = /cms/rentals(대여현황) 컨텍스트. 계약서 탭을 "서명완료 목록 + 보기"만
+     * 가능한 읽기 전용으로 제한한다 — 양식 발행·발송·편집·삭제는 예약현황(/cms/reservation)
+     * 전용으로 유지(2026-08-20 확정, service-operations.md §4 원칙과 동일하게 front/cms
+     * 화면별 책임을 분리).
+     */
+    isRentalView?:    boolean
   }
   let {
     contractId,
@@ -44,6 +51,7 @@
     returnMethod = null,
     returnTime   = null,
     onrefresh,
+    isRentalView = false,
   }: Props = $props()
 
   const PICKUP_LABELS: Record<string, string> = {
@@ -125,28 +133,31 @@
     </div>
   {/if}
 
-  <!-- 계약서 양식 목록 (항상 표시) -->
-  <div class="tpl-section">
-    <div class="tpl-section-head">
-      <span class="tpl-section-title">계약서 양식 선택 편집</span>
-      <button
-        class="btn-issue"
-        onclick={() => { previewTemplateId = '' }}
-      >발행</button>
-    </div>
-  </div>
-
-  <!-- 발행 목록: 편집된 content_blocks가 있을 때만 표시 -->
-  {#if hasIssuedContent && contractId}
+  <!-- 계약서 양식 목록 (예약현황 전용 — 대여현황에서는 발행 자체를 숨김) -->
+  {#if !isRentalView}
     <div class="tpl-section">
       <div class="tpl-section-head">
-        <span class="tpl-section-title">발행 목록</span>
+        <span class="tpl-section-title">계약서 양식 선택 편집</span>
+        <button
+          class="btn-issue"
+          onclick={() => { previewTemplateId = '' }}
+        >발행</button>
+      </div>
+    </div>
+  {/if}
+
+  <!-- 발행 목록: 편집된 content_blocks가 있을 때만 표시.
+       대여현황(isRentalView)에서는 서명완료된 계약만 "서명완료 목록"으로 노출하고 보기만 허용 -->
+  {#if hasIssuedContent && contractId && (!isRentalView || customerSignedAt)}
+    <div class="tpl-section">
+      <div class="tpl-section-head">
+        <span class="tpl-section-title">{isRentalView ? '서명완료 목록' : '발행 목록'}</span>
       </div>
       <div class="tpl-list">
         <div class="tpl-card">
           <span class="tpl-card-title">{issuedContractTitle || '발행된 계약서'}</span>
           <div class="tpl-card-actions">
-            {#if !signingsentAt && !customerSignedAt}
+            {#if !isRentalView && !signingsentAt && !customerSignedAt}
               <button
                 class="btn-tpl-edit"
                 onclick={() => { editorOpen = true; editorContractId = contractId }}
@@ -158,9 +169,9 @@
               class="btn-tpl-preview"
               onclick={() => { previewTemplateId = '' }}
             >
-              미리보기 &amp; 발송
+              {isRentalView ? '보기' : '미리보기 & 발송'}
             </button>
-            {#if !signingsentAt && !customerSignedAt}
+            {#if !isRentalView && !signingsentAt && !customerSignedAt}
               <span class="tpl-card-del-gap"></span>
               <CmsDeleteButton
                 action="?/clearIssuedContract"
@@ -198,7 +209,7 @@
       >PDF 다운로드</a>
     {/if}
 
-    {#if signingUrl && !customerSignedAt}
+    {#if !isRentalView && signingUrl && !customerSignedAt}
       <a
         href={signingUrl}
         target="_blank"
@@ -222,9 +233,10 @@
     {contractId}
     {reservationId}
     initialTemplateId={previewTemplateId}
+    viewOnly={isRentalView}
     onclose={() => { previewTemplateId = null }}
     onsent={() => { previewTemplateId = null; onrefresh() }}
-    onEdit={(!signingsentAt && !customerSignedAt)
+    onEdit={(!isRentalView && !signingsentAt && !customerSignedAt)
       ? (editedContractId) => {
           previewTemplateId = null
           editorOpen        = true

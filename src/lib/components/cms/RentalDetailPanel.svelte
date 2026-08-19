@@ -977,6 +977,7 @@
         pickupTime={row.pickup_time}
         returnMethod={row.return_method}
         returnTime={row.return_time}
+        {isRentalView}
         onrefresh={onrefresh}
       />
     {/if}
