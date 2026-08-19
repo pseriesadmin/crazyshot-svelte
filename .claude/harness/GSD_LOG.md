@@ -1,6 +1,51 @@
 # GSD_LOG.md — 크레이지샷 실행 이력
 # 형식: [YYYY-MM-DD HH:MM] 타입 | 타스크명 | 파일 | 소요 | 결과
 
+[2026-08-20] CRITICAL FIX | products RLS — 본인 예약 배정 자식(재고단위) 상품 조회 허용 |
+  supabase/migrations/20260820030000_314_products_own_reservation_read.sql(신규) |
+  ✅ Stage+Production 적용 완료
+  배경: 직전 T7(/account/rental UI 정비) sp3-qa-agent 검수 중 발견된 잠재 결함 — products RLS
+  (Migration #196 "products_public_read")가 parent_product_id IS NULL(부모)만 authenticated에
+  노출하는데, rental_reservations.product_id는 항상 자식(재고단위)을 가리켜(products.md §5)
+  일반 고객 세션은 본인 예약이라도 배정된 상품 행을 조회할 수 없던 상태 — /account 대여목록·
+  최근예약 카드의 상품명이 일반 고객에게는 항상 비어 보였을 가능성. Stephen 확인 결과 "테스트
+  계정이 CMS 관리자 권한이라 안 보였을 뿐" 가설과 일치, 즉시 수정 지시("잠재문제가 확인되었다면
+  일단 수정해야 하는거 아냐?").
+  수정: Migration #314 신규 — products에 "본인 예약(rental_reservations.user_id=auth.uid())에
+  배정된 product_id 행만" 추가로 SELECT 허용하는 정책 신설(순수 추가, 기존 products_public_read
+  /products_admin_all 무변경 — RLS 정책은 OR 합산이라 기존 부모공개조회·CMS전체조회 범위 그대로
+  유지). EXISTS 서브쿼리가 auth.uid() 소유 예약으로만 한정돼 타 사용자 예약·무관 상품 노출 없음.
+  검증: Stage 적용 후 실제 테스트 유저(24건 예약 보유)의 예약↔상품 조인으로 자식 상품(DJI RS4
+  Pro 등, parent_product_id NOT NULL) 데이터 존재 직접 확인 → Production 동일 적용 + 정책
+  목록(pg_policies) 3개 정책 전부 정상 등록 확인.
+
+[2026-08-19] BOUNDARY FIX | /account/rental 카드 UI 정비 + PC "대여" 메뉴 목록없음 오탐 근본수정
+  + PC 카드 배경 중첩 수정 | src/routes/account/rental/+page.svelte(카드 라운드값·여백분만),
+  src/routes/account/+page.server.ts, src/routes/account/+page.svelte | ✅ 구현 완료(QA 대기)
+  배경: Stephen이 launch-selected-element로 /account/rental 목록카드 UI 정비 3건 요청(라운드값
+  모바일 표준 적용·카드간 여백 확보·PC 전환 시 목록없음 원인분석) 후, 순차 피드백으로 확장됨.
+  (a) 라운드값: front-uiux.md §4(대/중 2단 체계) 기준 .rental-card는 "대" 등급 — PC 50px 유지,
+  Mobile 30px(하드코딩) 미디어쿼리 추가.
+  (b) 여백: Stephen 요청대로 2회 연속 50%씩 증가(12px→18px→27px).
+  (c) PC "대여" 메뉴 클릭 시 실제 예약 24건이 있는 테스트 유저인데도 "대여내역 없음" 노출 —
+  Stephen이 "라우팅 문제 확인할 것" 재지시. DB 외래키 직접 조회로 근본원인 특정:
+  rental_reservations→orders 방향 FK가 DB에 존재하지 않음(실제는 역방향 order_items.
+  reservation_id→rental_reservations.id). account/+page.server.ts PC 전용 쿼리 2개가 존재하지
+  않는 orders(order_items(products(...))) 조인을 써서 PostgREST 에러 → .error 미확인으로 조용히
+  빈 배열 폴백되던 것. 모바일과 동일한 product_id·products 직결 조인으로 교체(주문그룹핑 테이블
+  거칠 필요 자체가 없었음).
+  (d) (c) 수정 직후 "PC에서 카드가 BG카드 형태로 안 보인다" 재지적 — PcRentalPanel 개별 카드
+  자체 흰배경 + 공용 래퍼 .pc-panel-wrap도 흰배경이라 흰색 위 흰색으로 카드 구분 안 됨(다른 PC
+  패널은 자체에 이미 bg-white 있어 래퍼 배경이 원래 무해한 중복이었을 뿐). activePcSection
+  조건부 클래스(pc-panel-wrap-plain)로 래퍼 배경 투명화 + 라운드값 제거(후속 지시). Stephen이
+  PcCancelPanel·PcInquiryPanel도 확인 요청 → 동일 구조 확인 후 3개 섹션(rental/cancel/inquiry)
+  전체로 조건 확장.
+  ⚠️ 파일 혼재: src/routes/account/rental/+page.svelte에 다른 세션의 전자계약 확인 기능
+  (openContractViewer 등) 변경분이 섞여 있음 — 커밋 시 이번 세션분(라운드값 미디어쿼리·gap
+  27px)만 분리 필요, 파일 전체 add 금지.
+  검증: svelte-check 대상 파일 기준 신규 에러 0건. DB 외래키·RLS 정책 Supabase MCP로 직접
+  조회 검증(execute_sql), 실제 활성예약 24건 보유 테스트 유저로 재현 데이터 확인.
+
 [2026-08-19] GSD | 크레이지로그 모바일 콘텐츠 목록 BG카드 레이아웃 재설계 + AggroOTF 토큰 신설 |
   src/routes/crazylog/+page.svelte, src/app.css | GATE C:QA 실행 중
   ① app.css: --text-m-ad-kr-20(700 20px), --text-m-ad-kr-18(700 18px) 신설 (SB AggroOTF)
@@ -65,11 +110,63 @@
     · +page.svelte — heroBgUrl 동적 적용, isCms 게이팅 기어 버튼, 모달 연결
   검증: svelte-check 신규 에러 0건. git commit Stephen 직접 실행 필요.
 
+[2026-08-20] ROUTINE | /members 히어로 배너 모달 카피 입력폼 레이아웃 신설 | src/lib/components/members/admin/MembersHeroBannerModal.svelte, src/routes/members/+page.server.ts, src/routes/members/+page.svelte | ✅ 수정 완료(GATE E 검수 대기)
+  배경: 배너 관리 모달 .modal-body 선택 → 메인카피(20자, ad-kr 토큰+화이트)/서브카피(40자,
+  화이트+반응형토큰) 입력폼 신설 요청. --text-pc-ad-kr-50 미존재 확인 후 AskUserQuestion으로
+  --text-pc-ad-kr-60 확정. cms-field 골격 위 다크 미리보기 박스(화이트텍스트 가시성 확보)로
+  구현, members_hero_banner 설정값에 mainCopy/subCopy 저장 round-trip 완결. 실제 MembersHero
+  표시 로직 연결은 요청 범위 밖이라 미착수(모달 입력폼 레이아웃만 요청됨).
+  검증: svelte-check 신규 ERROR 0건.
+  미완료: git commit(Stephen 직접 실행 필요).
+
+[2026-08-20] CRITICAL FIX | cms_settings RLS anon 읽기 누락 — 4개 페이지(products/help/hype-pack/crazylog)+신규 members 배너 미노출 구조적 결함 해소 | supabase/migrations/20260820010000_312_cms_settings_public_read_display_keys.sql | ✅ 수정 완료(GATE E 검수 대기)
+  배경: /members 히어로 배너 QA 검수 중 sp3-qa-agent가 cms_settings RLS(is_cms_user() 전용 단일
+  정책)로 인해 일반 고객이 페이지 표시용 배너 설정을 못 읽어 항상 기본 이미지로 폴백되는 구조적
+  결함 발견 — 신규(/members)뿐 아니라 기존 /help·/hype-pack·/crazylog 3개 페이지에도 이미 존재.
+  Stephen "지금 함께 수정해줘" 승인 후 SELECT 전용 정책 추가 — 전체공개 아닌
+  upsert_product_page_setting RPC 쓰기 화이트리스트와 동일한 12개 표시용 키만 명시적 허용(채번
+  규칙 등 내부설정 키는 비공개 유지).
+  DB: migration #312 stage(ezyvffjvuwmtuhpxdjrw) 적용·검증 → production(vnbpmvxruyciuuaermyh)
+  적용 완료(pg_policy 조회로 정책 2건 확인).
+  미완료: git commit(Stephen 직접 실행 필요).
+
+[2026-08-20] BOUNDARY | /members 히어로 배너 CMS 관리 기능 신설 | supabase/migrations/20260820000311_311_upsert_page_setting_add_members_hero_banner.sql, src/routes/api/cms/members/hero-banner/+server.ts, src/lib/components/members/admin/MembersHeroBannerModal.svelte, src/routes/members/+page.server.ts, src/routes/members/+page.svelte, src/lib/components/members/MembersHero.svelte | ✅ 수정 완료(GATE E 검수 대기)
+  배경: PC 히어로 hero-char-img 선택 → 관리자 전용 배너 이미지 관리 기능 신설 요청(게이팅·우측
+  슬라이드 모달·드래그 재정렬·Storage 업로드·랜덤/고정 노출). 기존 help_hero_bg_images 패턴
+  (HelpHeroBgModal.svelte)이 요청 스펙과 완전 일치해 그대로 복제 적용 — cms_settings 키-값 저장
+  방식, upsert_product_page_setting RPC 허용키에 'members_hero_banner' 추가.
+  DB: 마이그레이션 #311 stage(ezyvffjvuwmtuhpxdjrw) 적용·검증 → production(vnbpmvxruyciuuaermyh)
+  적용 완료(양쪽 함수 정의 재조회로 키 존재 확인).
+  SuggestPicker는 이 기능 유형(이미지 업로드/드래그 목록)에 대상 데이터가 없어 미적용 — Stephen
+  요청 6항목 중 이 항목만 원 패턴에도 없는 개념이라 구조적으로 해당 없음 판단.
+  검증: svelte-check 신규 ERROR 0건. 신규 컴포넌트 WARNING은 HelpHeroBgModal 원본과 동일한
+  기존 패턴 재사용분(신규 이슈 아님).
+  미완료: git commit(Stephen 직접 실행 필요).
+
 [2026-08-19] ROUTINE | /members 모바일 구독하기 버튼 + m-red-block 이용안내 재배치 | src/lib/components/members/FeaturesTable.svelte, src/lib/components/members/CommonBenefits.svelte, src/routes/members/+page.svelte, src/lib/components/members/SubscriptionPolicyNotice.svelte | ✅ 수정 완료(GATE E 검수 대기)
   배경: FeaturesTable 모바일 탭 CTA "가입하기" 버튼 텍스트·색상·인증로직 3종 수정(구독하기/--cs-purple-dark/미로그인 csToast) +
   CommonBenefits m-red-block 내 K-트레일 하드코딩 텍스트를 DB policyItems 목록으로 교체(번호배지+정책텍스트 레이아웃) +
   SubscriptionPolicyNotice 모바일 숨김(CommonBenefits가 모바일 담당하므로 중복 제거).
   검증: svelte-check 신규 에러 0건.
+  미완료: git commit(Stephen 직접 실행 필요).
+
+[2026-08-19] BOUNDARY FIX | 예약신청 시 본인/외국인증명 미등록 경고 토스트 추가 | src/routes/products/[id]/+page.svelte | ✅ 수정 완료(GATE E 검수 대기)
+  Stephen 지시: 예약신청 버튼 실행 시 본인증명(identity_doc_url) 또는 외국인증명
+  (foreign_doc_url) 둘 다 미등록이면 경고 토스트("내정보(개인정보)에서 본인증명정보를
+  등록(확인)해주세요.") 노출, '확인' 클릭 시 /account/profile?tab=profile로 이동.
+  조사: is_foreign 플래그는 외국인증명을 실제 등록해야만 true가 되는 구조(update_user_doc_url
+  RPC, Migration 137)라 플래그 기준 분기 시 신규 외국인 사용자가 영구 차단되는 순환 문제
+  발생 — 두 문서 URL 중 하나라도 있으면 통과로 판정.
+  구현: 기존 로그인게이트(isRealMemberSession) 직후 지점에 user_profiles 실시간 조회(RLS
+  본인조회 정책 그대로 활용) + 이 페이지에 이미 있던 로컬 액션형 toast(showToast, 로그인
+  게이트와 동일 메커니즘) 재활용 — 신규 컴포넌트 없음.
+  부수 수정: isRealMemberSession이 타입가드가 아니라 boolean만 반환해 그 다음
+  currentSession.user.id 참조 시 TS null 가능성 에러 발생 → `if (!currentSession) return;`
+  좁히기 가드 1줄 추가(동작 변화 없음).
+  검증: svelte-check 신규 에러 0건(기존 무관 에러 1건만 잔존).
+  GATE E(2026-08-20, @sp3-qa-agent): RLS 본인조회 정책 확인·삽입위치(예약RPC 호출 전)
+  확인·타입좁히기 가드 안전성 확인·토스트 재사용 확인·착지라우트(/account/profile?tab=profile)
+  실존 확인 — 전부 통과, 수정 필요 항목 0건.
   미완료: git commit(Stephen 직접 실행 필요).
 
 [2026-08-19] ROUTINE FIX | 상품상세 PC 카테고리메뉴 아이콘 재조정 + "많이 본 상품" 라벨 정정 | src/lib/components/products/ProductHero.svelte, src/routes/products/[id]/+page.svelte | ✅ 수정 완료(GATE E 검수 대기)
