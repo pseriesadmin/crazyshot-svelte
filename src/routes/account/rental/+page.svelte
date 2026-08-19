@@ -30,6 +30,12 @@
     openChatWithContext({ context_type: 'reservation', context_reservation_id: Number(rentalId) })
   }
 
+  // 서명 완료된 전자계약서를 새 창(탭)으로 열람 — ActionCard.svelte의 팝업차단 우회
+  // 패턴(사용자 클릭 이벤트 핸들러 내부에서 동기적으로 window.open 호출)과 동일
+  function openContractViewer(rentalId: string): void {
+    window.open(`/account/rental/${rentalId}/contract`, '_blank', 'noopener,noreferrer')
+  }
+
   const STATUS_LABEL: Record<string, string> = {
     hold:             '신청대기',
     confirmed:        '승인완료',
@@ -109,6 +115,16 @@
             <div class="stepper-wrap">
               <RentalJourneyStepper status={rental.status} />
             </div>
+
+            {#if rental.has_signed_contract}
+              <button
+                type="button"
+                class="contract-btn"
+                onclick={() => openContractViewer(rental.id)}
+              >
+                전자계약 확인
+              </button>
+            {/if}
           </div>
         {/each}
       </div>
@@ -169,15 +185,20 @@
   }
 
   /* 카드 */
-  .list-wrap { display: flex; flex-direction: column; gap: 12px; }
+  .list-wrap { display: flex; flex-direction: column; gap: 27px; }
 
   .rental-card {
     background: var(--cs-white);
-    border-radius: var(--radius-2xl);
+    border-radius: var(--radius-2xl);   /* PC: 50px */
     padding: 20px;
     display: flex;
     flex-direction: column;
     gap: 12px;
+  }
+
+  /* front-uiux.md §4 카드 반경 대/중 2단 체계 — 대(large) Mobile 30px(하드코딩, 전용 변수 없음) */
+  @media (max-width: 640px) {
+    .rental-card { border-radius: 30px; }
   }
 
   .card-head {
@@ -262,6 +283,26 @@
   }
 
   .stepper-wrap { margin-top: 4px; }
+
+  /* 전자계약 확인 버튼 — 보조 액션(외곽선 스타일), 서명 완료된 예약에만 노출 */
+  .contract-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    height: 44px;
+    min-height: 44px;
+    border-radius: var(--radius-xl);
+    background: var(--cs-white);
+    border: 1.5px solid var(--cs-purple);
+    color: var(--cs-purple);
+    font-family: 'Noto Sans KR', sans-serif;
+    font-size: 14px;
+    font-weight: 700;
+    cursor: pointer;
+    transition: background 0.15s;
+  }
+  .contract-btn:hover  { background: var(--cs-lilac); }
+  .contract-btn:active { background: var(--cs-purple-pale); }
 
   @media (min-width: 768px) {
     .content {

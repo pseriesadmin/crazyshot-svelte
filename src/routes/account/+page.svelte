@@ -282,7 +282,7 @@
 
         {:else}
           <!-- 서브섹션 패널 -->
-          <div class="pc-panel-wrap">
+          <div class="pc-panel-wrap" class:pc-panel-wrap-plain={['rental', 'cancel', 'inquiry'].includes(activePcSection)}>
             {#if activePcSection === 'rental'}
               <PcRentalPanel rentals={data.rentals} onback={() => activePcSection = 'home'} />
             {:else if activePcSection === 'cancel'}
@@ -411,6 +411,16 @@
       border-radius: 30px;
       overflow: hidden;
       background: #ffffff;
+    }
+
+    /* 대여·취소반품·빠른문의(PcRentalPanel/PcCancelPanel/PcInquiryPanel) 전용 — 셋 다 카드
+       목록 자체가 개별 흰 배경(.rental-card/.cancel-card/.post-card)을 갖고 있어 래퍼까지
+       흰 배경이면 카드끼리 구분이 안 됨(흰색 위 흰색). 래퍼 배경만 제거해 페이지 라일락
+       배경이 비치도록 하고, 카드 자체 흰 배경으로 개별 카드가 도드라지게 함.
+       배경이 사라져 더 이상 "흰 카드 프레임" 역할이 없으므로 라운드값도 함께 제거. */
+    .pc-panel-wrap-plain {
+      background: transparent;
+      border-radius: 0;
     }
 
     /* PC 로그아웃 버튼 */
