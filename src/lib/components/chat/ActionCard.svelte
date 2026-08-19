@@ -73,6 +73,7 @@
       case 'coupon_issued':          return { label: '쿠폰 적용하기', color: 'purple' }
       case 'contract_link':          return { label: '전자계약 보기', color: 'purple' }
       case 'contract_signed':        return { label: '전자계약 확인', color: 'purple' }
+      case 'INQUIRY_REPLY_CARD':     return { label: '답변 확인하기', color: 'purple' }
       // GSD-17: 제품 링크 카드 (관리자 @ 멘션으로 삽입)
       case 'product_link':           return { label: '상품 상세 보기', color: 'purple' }
       // GSD-20: CTA가 있는 자동응답 카드

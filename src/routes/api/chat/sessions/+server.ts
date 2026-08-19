@@ -92,8 +92,20 @@ export const GET: RequestHandler = async ({ url, locals }) => {
 
   // 긴급 배지 판정 — 관리자 응답이 아직 없는 상태에서 마지막 고객 메시지가
   // CS_ESCALATE로 분류된 세션만 긴급으로 표시 (관리자가 이미 답변했으면 해제)
+  //
+  // 마지막 메시지 sender_type='admin'만으로 "이미 답변됨"을 판정하면 안 됨 — 캔드매칭
+  // 자동응답도 sender_type='admin'으로 저장되므로(message/+server.ts), 실제 사람이 한 번도
+  // 배정된 적 없는(admin_id NULL) 세션은 마지막 메시지가 admin이어도 여전히 긴급판정 대상에
+  // 포함시킨다. admin_id는 실제 관리자가 응답할 때(admin-reply/admin-attachment)만 채워짐.
+  const adminIdBySession: Record<string, string | null> = {}
+  for (const s of rows) adminIdBySession[s.id as string] = (s.admin_id as string | null) ?? null
+
   const urgentIds = new Set<string>()
-  const needsUrgentCheck = sessionIds.filter((id) => lastMsgMap[id]?.sender_type !== 'admin')
+  const needsUrgentCheck = sessionIds.filter((id) => {
+    const last = lastMsgMap[id]
+    if (!last || last.sender_type !== 'admin') return true
+    return !adminIdBySession[id]
+  })
 
   if (needsUrgentCheck.length > 0) {
     const lastUserMsgResults = await Promise.all(

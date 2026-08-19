@@ -5,6 +5,7 @@ import { json } from '@sveltejs/kit'
 import { env } from '$env/dynamic/private'
 import { createClient } from '@supabase/supabase-js'
 import { getSupabaseUrl } from '$lib/env/supabasePublic'
+import { sendNewChatSessionAdminPush } from '$lib/server/push'
 import type { RequestHandler } from './$types'
 import type { CreateSessionRequest, ChatSession } from '$lib/types/chat'
 
@@ -73,6 +74,7 @@ export const POST: RequestHandler = async ({ request, locals }) => {
       .single()
 
     if (!reopenErr && reopened) {
+      await sendNewChatSessionAdminPush(admin, session.user.id)
       return json({ session: reopened as ChatSession }, { status: 200 })
     }
   }
@@ -93,5 +95,6 @@ export const POST: RequestHandler = async ({ request, locals }) => {
     return json({ error: error.message }, { status: 500 })
   }
 
+  await sendNewChatSessionAdminPush(admin, session.user.id)
   return json({ session: data as ChatSession }, { status: 201 })
 }

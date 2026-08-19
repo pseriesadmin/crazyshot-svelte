@@ -1,6 +1,7 @@
 <script lang="ts">
 	import FloatingButton from '$lib/components/chat/FloatingButton.svelte'
-	import { chatStore } from '$lib/stores/chat.svelte'
+	import ChatBottomSheet from '$lib/components/chat/ChatBottomSheet.svelte'
+	import { chatStore, toggleChat } from '$lib/stores/chat.svelte'
 	import { page } from '$app/state'
 
 	interface Props {
@@ -27,6 +28,10 @@
 		peekMode = false
 		bubbling = true
 		setTimeout(() => { bubbling = false }, 700)
+	}
+
+	function handleChatClose() {
+		if (chatStore.isOpen) toggleChat()
 	}
 
 	$effect(() => {
@@ -88,9 +93,25 @@
 			{userHandle}
 			{contextType}
 			{contextId}
+			hideSheet
 		/>
 	</div>
 </div>
+
+<!-- 채팅 바텀시트(모달)는 반드시 .fab-bar 바깥에서 렌더링 — .fab-bar는 모바일에서 peek/expand
+     transform이 항상 걸려 있어(peek: translateX(85%), expand 후에도 애니메이션 종료값이
+     forwards로 유지됨), 그 안에 중첩되면 position:fixed 모달이 뷰포트가 아니라 .fab-bar의
+     작은 박스를 containing block으로 삼아 화면 전체가 아닌 FAB 근처에 찌그러져 렌더링되는
+     버그가 있었다(core-rules.md "CSS transform + position:fixed 충돌", 2026-08-19 발견·수정) -->
+<ChatBottomSheet
+	isOpen={chatStore.isOpen}
+	{userId}
+	{userName}
+	{userHandle}
+	{contextType}
+	{contextId}
+	onclose={handleChatClose}
+/>
 
 <style>
 	.fab-bar {
