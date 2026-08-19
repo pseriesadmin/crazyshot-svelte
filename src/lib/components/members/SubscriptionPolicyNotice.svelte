@@ -24,15 +24,17 @@
 
 <style>
   .policy-notice {
-    width: 100%;
-    max-width: 1240px;
-    display: flex;
-    flex-direction: column;
-    gap: 16px;
-    padding: 0 20px;
+    display: none;
   }
   @media (min-width: 1024px) {
-    .policy-notice { padding: 0; }
+    .policy-notice {
+      display: flex;
+      width: 100%;
+      max-width: 1240px;
+      flex-direction: column;
+      gap: 16px;
+      padding: 0;
+    }
   }
 
   .policy-notice-title {

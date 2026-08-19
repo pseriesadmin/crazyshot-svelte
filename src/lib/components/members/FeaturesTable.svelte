@@ -1,5 +1,8 @@
 <script lang="ts">
   import type { SubscriptionPlanRow } from '$lib/types/subscription'
+  import { isAuthenticated } from '$lib/stores/auth'
+  import { csToast } from '$lib/utils/toast'
+  import { goto } from '$app/navigation'
 
   interface Props {
     plans: SubscriptionPlanRow[]
@@ -29,6 +32,17 @@
   }
 
   const activeIndex = $derived(Math.max(0, plans.findIndex((p) => p.id === selectedPlanId)))
+
+  function handleSubscribe(planId: number) {
+    if (!$isAuthenticated) {
+      csToast.info('로그인 후 구독하기를 이용하실 수 있습니다.', {
+        actionLabel: '확인',
+        onClick: () => goto(`/login?returnTo=/subscribe/${planId}`),
+      })
+      return
+    }
+    goto(`/subscribe/${planId}`)
+  }
 </script>
 
 <!-- ── PC 피처 테이블 (≥1024px) ──────────────────────────────── -->
@@ -132,9 +146,9 @@
     </div>
   </div>
 
-  <!-- 가입하기 버튼 -->
+  <!-- 구독하기 버튼 -->
   {#if plans[activeIndex]}
-    <a href="/subscribe/{plans[activeIndex].id}" class="tab-cta">가입하기</a>
+    <button type="button" class="tab-cta" onclick={() => handleSubscribe(plans[activeIndex].id)}>구독하기</button>
   {/if}
 </section>
 
@@ -485,31 +499,32 @@
   }
   .tab-data-row.pop-bg-alt { background: var(--cs-red-light); }
 
-  /* 가입하기 */
+  /* 구독하기 */
   .tab-cta {
     display: flex;
     align-items: center;
     justify-content: center;
     width: 100%;
+    border: none;
     border-radius: var(--radius-xl);
-    background: var(--cs-red-badge);
+    background: var(--cs-purple-dark);
     color: var(--cs-white);
     font-family: var(--font-kr);
     font-size: 16px;
     font-weight: 700;
     padding: 13px 0;
-    text-decoration: none;
+    cursor: pointer;
     transition: background 0.2s cubic-bezier(0.34, 1.56, 0.64, 1),
                 transform 0.2s cubic-bezier(0.34, 1.56, 0.64, 1),
                 box-shadow 0.2s cubic-bezier(0.34, 1.56, 0.64, 1);
   }
   .tab-cta:hover {
-    background: #E02020;
+    background: var(--cs-purple);
     transform: scale(1.03);
-    box-shadow: 0 6px 20px rgba(255, 53, 53, 0.45);
+    box-shadow: 0 6px 20px rgba(59, 47, 138, 0.45);
   }
   .tab-cta:active {
-    background: var(--cs-red);
+    background: var(--cs-dark);
     transform: scale(0.96);
   }
 </style>
