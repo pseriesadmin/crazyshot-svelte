@@ -41,11 +41,35 @@ function escapeHtml(text: string): string {
 // CSS 색상 검증
 // ─────────────────────────────────────────────────────────────────────────────
 
-/** #RRGGBB 형식의 CSS 색상만 허용 (인라인 스타일 삽입 전 XSS 방지) */
+/**
+ * 인라인 스타일 삽입 전 CSS 색상 형식 검증(XSS/CSS 인젝션 방지).
+ *
+ * ⚠️ 2026-08-20: 기존엔 '#RRGGBB' 헥스만 허용했다 — .xlsx 임포트 경로(xlsxImport.ts
+ * toHexColor)는 항상 헥스를 생성하지만, jspreadsheet-ce 네이티브 툴바로 지정한 색상은
+ * getStyle()이 'rgb(r, g, b)' 형식 그대로 돌려준다(Production DB 직접 조회로 확인 —
+ * cellFormatting에 backgroundColor:"rgb(38, 48, 64)"가 정상 저장돼 있음에도 이 정규식이
+ * 헥스가 아니라는 이유로 매번 렌더링을 통째로 버리고 있었다). 셀 배경색이 고객 화면에서
+ * 감쪽같이 사라지는 현상의 실제 원인 — rgb()/rgba() 형식도 함께 허용하도록 확장.
+ */
 const CSS_HEX_COLOR = /^#[0-9A-Fa-f]{6}$/
+const CSS_RGB_COLOR = /^rgba?\(\s*\d{1,3}\s*,\s*\d{1,3}\s*,\s*\d{1,3}\s*(,\s*(0|1|0?\.\d+)\s*)?\)$/
 
 function isValidCssColor(color: string): boolean {
-  return CSS_HEX_COLOR.test(color)
+  return CSS_HEX_COLOR.test(color) || CSS_RGB_COLOR.test(color)
+}
+
+/** CSS font-weight 허용값만 통과 (숫자 100단위 또는 표준 키워드) */
+const CSS_FONT_WEIGHT = /^(normal|bold|bolder|lighter|[1-9]00)$/i
+
+function isValidFontWeight(value: string): boolean {
+  return CSS_FONT_WEIGHT.test(value.trim())
+}
+
+/** jspreadsheet 툴바 키워드 크기 또는 단위 있는 숫자 크기만 통과 */
+const CSS_FONT_SIZE = /^(xx-small|x-small|small|medium|large|x-large|xx-large|\d+(\.\d+)?(px|pt|em|rem))$/i
+
+function isValidFontSize(value: string): boolean {
+  return CSS_FONT_SIZE.test(value.trim())
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -60,6 +84,15 @@ function cellFormattingToStyle(fmt: XlsxCellFormatting): string {
   }
   if (fmt.borderColor && isValidCssColor(fmt.borderColor)) {
     parts.push(`border:1px solid ${fmt.borderColor}`)
+  }
+  if (fmt.color && isValidCssColor(fmt.color)) {
+    parts.push(`color:${fmt.color}`)
+  }
+  if (fmt.fontWeight && isValidFontWeight(fmt.fontWeight)) {
+    parts.push(`font-weight:${fmt.fontWeight}`)
+  }
+  if (fmt.fontSize && isValidFontSize(fmt.fontSize)) {
+    parts.push(`font-size:${fmt.fontSize}`)
   }
   return parts.join(';')
 }
