@@ -96,21 +96,46 @@ export function jssMergesToSheet(
 // XlsxCellFormatting ↔ CSS 문자열 (jspreadsheet-ce style 레코드 형식)
 // ─────────────────────────────────────────────────────────────────────────────
 
-/** XlsxCellFormatting → CSS 문자열 (비어 있으면 '' 반환) */
+/**
+ * XlsxCellFormatting → CSS 문자열 (비어 있으면 '' 반환)
+ *
+ * 2026-08-20: color/fontWeight/fontSize 3개 필드 추가 — jspreadsheet-ce 네이티브 툴바의
+ * 글자색(k:"color")·굵게(font-weight:bold)·글자크기(font-size) 버튼이 실제로 적용하는
+ * CSS 프로퍼티와 동일한 이름이다(node_modules/jspreadsheet-ce/dist/index.js 툴바 정의
+ * 직접 확인). 이 필드들이 없던 이전에는 getStyle()로 읽은 CSS에 이 프로퍼티가 포함돼
+ * 있어도 cssToFormatting()이 통째로 버려 — 저장 후 재로드하면 배경색만 남고 글자색·
+ * 굵기·크기는 매번 소실됐다(실사용 계약서에서 어두운 배경 위 글자색이 기본값으로
+ * 되돌아가 판독 불가 상태가 되는 것으로 확인).
+ */
 function formattingToCss(fmt: XlsxCellFormatting): string {
   const parts: string[] = []
   if (fmt.backgroundColor) parts.push(`background-color: ${fmt.backgroundColor}`)
   if (fmt.borderColor) parts.push(`border: 1px solid ${fmt.borderColor}`)
+  if (fmt.color) parts.push(`color: ${fmt.color}`)
+  if (fmt.fontWeight) parts.push(`font-weight: ${fmt.fontWeight}`)
+  if (fmt.fontSize) parts.push(`font-size: ${fmt.fontSize}`)
   return parts.join('; ')
 }
 
-/** CSS 문자열 → XlsxCellFormatting */
+/**
+ * CSS 문자열 → XlsxCellFormatting
+ *
+ * ⚠️ "color:" 정규식은 "background-color:"의 부분 문자열이기도 하므로, 문자열 시작 또는
+ * 세미콜론 직후에 오는 "color:"만 매칭하도록 (?:^|;)\s* 앵커를 둔다 — 앵커 없이 매칭하면
+ * background-color 값이 fmt.color로도 잘못 이중 추출된다.
+ */
 function cssToFormatting(css: string): XlsxCellFormatting {
   const fmt: XlsxCellFormatting = {}
   const bgMatch = css.match(/background-color:\s*([^;]+)/i)
   if (bgMatch) fmt.backgroundColor = bgMatch[1].trim()
   const borderMatch = css.match(/border:[^;]*\bsolid\s+([^;]+)/i)
   if (borderMatch) fmt.borderColor = borderMatch[1].trim()
+  const colorMatch = css.match(/(?:^|;)\s*color:\s*([^;]+)/i)
+  if (colorMatch) fmt.color = colorMatch[1].trim()
+  const weightMatch = css.match(/font-weight:\s*([^;]+)/i)
+  if (weightMatch) fmt.fontWeight = weightMatch[1].trim()
+  const sizeMatch = css.match(/font-size:\s*([^;]+)/i)
+  if (sizeMatch) fmt.fontSize = sizeMatch[1].trim()
   return fmt
 }
 

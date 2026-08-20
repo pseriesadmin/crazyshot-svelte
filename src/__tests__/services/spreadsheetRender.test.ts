@@ -394,6 +394,88 @@ describe('renderSpreadsheetToHtml — CSS 색상 검증', () => {
     const html = renderSpreadsheetToHtml(doc)
     expect(html).not.toContain('background-color')
   })
+
+  // 2026-08-20: jspreadsheet-ce 네이티브 툴바로 지정한 배경색은 getStyle()이 'rgb(r, g, b)'
+  // 형식으로 돌려준다(Production DB 직접 조회로 확인) — 이전엔 헥스만 허용해 이 형식이
+  // 통째로 드롭되며 배경색이 고객 화면에서 감쪽같이 사라졌다.
+  it('rgb(r, g, b) 형식 배경색을 허용한다', () => {
+    const doc: SpreadsheetDocument = {
+      sheets: [{
+        name: 'Sheet1',
+        rows: [['rgb 배경']],
+        merges: [],
+        colWidths: [null],
+        cellFormatting: [[{ backgroundColor: 'rgb(38, 48, 64)' }]],
+      }],
+      activeSheetIndex: 0,
+    }
+    const html = renderSpreadsheetToHtml(doc)
+    expect(html).toContain('background-color:rgb(38, 48, 64)')
+  })
+
+  it('rgba(r, g, b, a) 형식 색상을 허용한다', () => {
+    const doc: SpreadsheetDocument = {
+      sheets: [{
+        name: 'Sheet1',
+        rows: [['rgba 배경']],
+        merges: [],
+        colWidths: [null],
+        cellFormatting: [[{ backgroundColor: 'rgba(38, 48, 64, 0.5)' }]],
+      }],
+      activeSheetIndex: 0,
+    }
+    const html = renderSpreadsheetToHtml(doc)
+    expect(html).toContain('background-color:rgba(38, 48, 64, 0.5)')
+  })
+
+  it('악의적 rgb() 유사 값은 허용하지 않는다', () => {
+    const doc: SpreadsheetDocument = {
+      sheets: [{
+        name: 'Sheet1',
+        rows: [['악의적 rgb']],
+        merges: [],
+        colWidths: [null],
+        cellFormatting: [[{ backgroundColor: 'rgb(0,0,0); background:url(javascript:alert(1))' }]],
+      }],
+      activeSheetIndex: 0,
+    }
+    const html = renderSpreadsheetToHtml(doc)
+    expect(html).not.toContain('javascript')
+    expect(html).not.toContain('style=')
+  })
+
+  it('폰트색·굵기·크기가 인라인 style로 출력된다', () => {
+    const doc: SpreadsheetDocument = {
+      sheets: [{
+        name: 'Sheet1',
+        rows: [['폰트 서식']],
+        merges: [],
+        colWidths: [null],
+        cellFormatting: [[{ color: 'rgb(255, 255, 255)', fontWeight: 'bold', fontSize: 'large' }]],
+      }],
+      activeSheetIndex: 0,
+    }
+    const html = renderSpreadsheetToHtml(doc)
+    expect(html).toContain('color:rgb(255, 255, 255)')
+    expect(html).toContain('font-weight:bold')
+    expect(html).toContain('font-size:large')
+  })
+
+  it('허용되지 않는 font-weight/font-size 값은 무시한다', () => {
+    const doc: SpreadsheetDocument = {
+      sheets: [{
+        name: 'Sheet1',
+        rows: [['악의적 폰트값']],
+        merges: [],
+        colWidths: [null],
+        cellFormatting: [[{ fontWeight: 'expression(alert(1))', fontSize: '10px; background:url(x)' }]],
+      }],
+      activeSheetIndex: 0,
+    }
+    const html = renderSpreadsheetToHtml(doc)
+    expect(html).not.toContain('expression')
+    expect(html).not.toContain('style=')
+  })
 })
 
 // ─────────────────────────────────────────────────────────────────────────────

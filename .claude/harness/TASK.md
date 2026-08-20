@@ -18835,6 +18835,95 @@ TDD도메인: 해당 — AGENTS.md TDD 강제 키워드 대조 결과 "결제·�
 
   ⚠️ 미배포: `routes/contract/[token]/+page.svelte` 추가 수정분 아직 git 커밋 전.
 
+[37라운드 — 고객 서명화면 헤더 로고를 텍스트에서 SVG 브랜드마크로 교체, 2026-08-19]
+  Stephen이 `/contract/[token]` 헤더의 "CRAZYSHOT" 텍스트 로고를 `<launch-selected-element>`로
+  직접 선택해 "선택영역의 로고 텍스트 대신 SVG 로고를 배치" 지시 + 완성된 SVG 마크업 전체를
+  그대로 제공.
+
+  수정: `routes/contract/[token]/+page.svelte` 헤더의
+  `<span class="logo-text">CRAZY<span class="logo-orange">SHOT</span></span>`를 Stephen이
+  제공한 인라인 `<svg class="logo-svg" width="71" height="40" viewBox="0 0 117 66" ...>`
+  (레드/화이트 브랜드마크, drop-shadow 필터 포함)로 그대로 교체. 기존 `.logo-text`/
+  `.logo-orange` CSS 규칙은 더 이상 쓰이지 않아 `.logo-svg { display: block; }`로 대체.
+
+  검증: `svelte-check` 신규 에러 0건. 별도 로직 변경 없는 정적 마크업 교체라 추가 실측
+  없이 완료 처리.
+
+  ⚠️ 미배포: git 커밋 전.
+
+[38라운드 — 스프레드시트형 계약서 셀 서식(배경색·폰트색·굵기) 편집 후 저장 시 소실되던 CRITICAL 결함 확정·수정, 2026-08-20]
+  Stephen 제보: "여전히(!) 엑셀형 계약서를 예약(/cms/rentals?selected=453) 계약서탭에서 편집
+  후 고객 발송 시 문서 셀 레이아웃 변형 심각. 1. 편집 시 계약서 양식 원본
+  (/cms/reservation/contracts?selected=a0935d28-e42b-423f-a62b-87954a9e95f4)도 함께 셀
+  레이아웃 구성 틀어짐: 셀 bg값, 폰트 컬러 & 크기 굵기, 셀 가로 세로 넓이 등이 불특정하게
+  변형. 2. 채팅 대화카드 발송된 '전자계약 확인' 서명 뷰에서 동일 증상." — 이후 실제 운영
+  Vercel 배포(crazyshot-svelte.vercel.app)의 `/cms/reservation/contracts?selected=
+  7e635b02-ab80-4125-99a4-3784c8911d0e`를 `<launch-selected-element>`로 직접 지정하며
+  "직접 확인할 것" 재요청(Claude Browser 조건② 명시 요청 충족).
+
+  조사(코드 경로 추적 + Production DB 직접 조회로 실물 데이터 대조):
+  - `PATCH /api/cms/contracts/[id]/content/+server.ts`를 전체 재확인한 결과 이 엔드포인트는
+    `contracts` 테이블만 갱신하고 `contract_templates`는 절대 건드리지 않음 — "인스턴스
+    편집이 원본 양식까지 오염시킨다"는 최초 가설(교차쓰기 버그)은 기각. 대신 인스턴스
+    편집기(`ContractEditorModal`)와 양식 편집기(`ContractTemplatePanel`)가 동일한
+    `ContractSpreadsheetEditor.svelte`를 공유하므로, "같은 유형의 결함이 두 곳에서 각자
+    독립적으로 재현"되는 것으로 재확정 — Stephen이 "원본도 함께"로 체감한 것은 실제
+    교차오염이 아니라 두 화면이 같은 근본원인을 공유한 결과.
+  - `mcp__f4e6f0bb...__execute_sql`로 Production(vnbpmvxruyciuuaermyh) `contract_templates.
+    spreadsheet_document.sheets[0].cellFormatting`을 직접 조회한 결과, `backgroundColor`는
+    `"rgb(38, 48, 64)"` 형식으로 정상 저장돼 있었으나(라이브러리 툴바 산출값 — .xlsx
+    임포트가 만드는 `#RRGGBB` 헥스와 다른 형식) `color`(폰트색) 키 자체가 어디에도 없었음.
+  - Claude Browser로 실제 운영 편집기 DOM을 직접 측정("임대인" 셀): `{bg:"rgb(38, 48, 64)",
+    color:"rgb(16, 11, 50)", inlineStyle:"text-align: center; background-color: rgb(38, 48,
+    64);"}` — 어두운 배경 위에 앱 기본 어두운 글자색이 그대로 적용돼 판독 불가 상태를 실물로
+    확인. jspreadsheet-ce 소스(`node_modules/jspreadsheet-ce/dist/index.js`) 직접 확인 결과
+    네이티브 툴바가 `color`(글자색, `k:"color"`)·`background-color`(배경색)·
+    `font-weight:bold`(굵게)·`font-size:<keyword>`(x-small~x-large) 4개 CSS 프로퍼티를
+    셀 인라인 스타일에 직접 적용함을 확인.
+
+  근본원인 2건(서로 다른 파일, 서로 다른 증상):
+    ① `XlsxCellFormatting` 타입(`sheet-format.ts`)에 애초에 `backgroundColor`/`borderColor`
+       2개 필드만 있고 `color`/`fontWeight`/`fontSize` 필드가 없었음 → 저장 왕복
+       (`spreadsheetWidgetAdapter.ts` `cssToFormatting`/`formattingToCss`)이 셀 CSS
+       문자열에서 글자색·굵기·크기를 애초에 추출 대상으로 보지 않아 매번 통째로 버려짐
+       — 편집기 재로드마다(또는 발송마다) 관리자가 지정한 글자색이 소실.
+    ② 고객 화면 렌더러(`spreadsheetRender.ts`)의 `isValidCssColor()`가 `'#RRGGBB'` 헥스만
+       허용하는 정규식이었음 — jspreadsheet 툴바가 실제로 산출하는 `'rgb(r, g, b)'` 형식은
+       (.xlsx 임포트 경로가 아니라 CMS에서 직접 색을 지정한 셀이라면 전부) 이 검증을
+       통과하지 못해 **배경색 자체가 고객 화면에서 조용히 사라지는** 별개의 결함이었음
+       (①과 달리 DB엔 정상 저장돼 있었는데 렌더링 단계에서만 드롭됨).
+
+  수정 (4개 파일, 타입 스키마 확장 + 3개 소비처 동시 확장):
+    - `src/lib/types/sheet-format.ts`: `XlsxCellFormatting`에 `color`/`fontWeight`/`fontSize`
+      3개 optional 필드 추가.
+    - `src/lib/components/cms/contract-editor/spreadsheetWidgetAdapter.ts`:
+      `formattingToCss()`/`cssToFormatting()`에 3개 필드 왕복 추가. `cssToFormatting()`의
+      `color:` 정규식은 `(?:^|;)\s*color:` 앵커를 둬 `"background-color:"`의 부분 문자열로
+      오매칭되지 않도록 함(앵커 없이 매칭하면 배경색 값이 폰트색으로도 잘못 이중 추출됨).
+    - `src/lib/utils/spreadsheetRender.ts`: `isValidCssColor()`에 `rgb()`/`rgba()` 형식
+      허용 추가(헥스 3자리(`#RGB`)는 기존 테스트가 명시적으로 비허용을 검증하고 있어 확장
+      대상에서 제외, 6자리 헥스 규칙은 그대로 유지). `isValidFontWeight()`/`isValidFontSize()`
+      신규(각각 표준 키워드/숫자+단위 화이트리스트, CSS 인젝션 방지) + `cellFormattingToStyle()`
+      에 폰트색·굵기·크기 3개 출력 추가.
+    - `src/lib/utils/docImport/xlsxImport.ts`: `parseSheet()`에 `ws[addr]?.s?.font`
+      (color.rgb/bold/sz) best-effort 추출 추가 — SheetJS 무료판(cellStyles:true)이 폰트
+      정보를 채워주지 않는 파일에서도 옵셔널 체이닝으로 조용히 undefined 처리돼 임포트
+      자체가 깨지지 않음(신규 .xlsx 임포트 시점부터 폰트 정보 보존 시도, 기존 배경색/
+      테두리색 추출 로직은 변경 없음).
+
+  테스트: `spreadsheetWidgetAdapter.test.ts`에 왕복 테스트 3건(폰트 서식 CSS 반영·getStyle
+  파싱·"color:" 앵커가 "background-color:"를 오매칭하지 않음 확인) 신규 추가.
+  `spreadsheetRender.test.ts`에 6건 신규 추가(rgb()/rgba() 배경색 허용, 악의적 rgb() 유사값
+  차단, 폰트 서식 출력, 악의적 font-weight/font-size 값 차단). `npx vitest run
+  spreadsheetRender.test.ts spreadsheetWidgetAdapter.test.ts` 78/78 GREEN(기존 44+34건
+  전부 회귀 없음 + 신규 9건 전부 통과). `npx svelte-check` 신규 에러 0건(기존 `vite.config.ts`
+  타입 에러 1건은 이번 수정과 무관한 프로젝트 기존 이슈). 전체 `npx vitest run` 결과 이번
+  수정 파일과 무관한 11개 테스트 파일(payment/holdExpiration/contractSigningGate 등 —
+  Stage DB 라이브 연동 통합테스트로 이 세션 환경에서 DB 접근 불가로 실패, 스프레드시트 관련
+  테스트는 전부 GREEN)만 실패 — 이번 변경의 회귀 없음.
+
+  ⚠️ 미배포: git 커밋 전.
+
 [26라운드 — 크기설정 플로팅 툴바가 셀 경계에서 클리핑돼 조작 불가능하던 결함 확정·수정, 2026-08-19]
   Stephen <launch-selected-element> 재현 보고: "스프레드시트 편집 모드에서 직인 등록 불러와지는
   것 까지는 되는데 크기 설정 창을 조작이 안되고, 설정창 클릭하면서 없어지는 문제점 확인해. -원래

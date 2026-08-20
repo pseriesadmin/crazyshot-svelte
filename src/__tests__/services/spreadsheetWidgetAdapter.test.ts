@@ -172,6 +172,20 @@ describe('sheetToWorksheetConfig', () => {
     expect(config.style['A2']).toBeUndefined()
   })
 
+  it('폰트색·굵기·크기가 CSS style 레코드에 포함된다 (2026-08-20)', () => {
+    const sheetWithFont: SpreadsheetSheet = {
+      ...baseSheet,
+      cellFormatting: [
+        [{ color: 'rgb(255, 255, 255)', fontWeight: 'bold', fontSize: 'large' }, {}, {}],
+        [{}, {}, {}],
+      ],
+    }
+    const config = sheetToWorksheetConfig(sheetWithFont)
+    expect(config.style['A1']).toContain('color: rgb(255, 255, 255)')
+    expect(config.style['A1']).toContain('font-weight: bold')
+    expect(config.style['A1']).toContain('font-size: large')
+  })
+
   it('합계 colWidths > 642px 이면 columns 너비 합이 642 이하로 축소된다', () => {
     const wideSheet: SpreadsheetSheet = {
       ...baseSheet,
@@ -256,6 +270,32 @@ describe('worksheetConfigToSheet', () => {
     const ws = makeWs({ data: [['A']], widths: [100], styles: {} })
     const sheet = worksheetConfigToSheet('시트1', ws)
     expect(sheet.cellFormatting[0][0]).toEqual({})
+  })
+
+  it('getStyle CSS에서 폰트색·굵기·크기가 파싱된다 (2026-08-20 — jspreadsheet 네이티브 툴바 저장값)', () => {
+    const ws = makeWs({
+      data: [['A']],
+      widths: [100],
+      styles: { A1: 'background-color: rgb(38, 48, 64); color: rgb(255, 255, 255); font-weight: bold; font-size: large' },
+    })
+    const sheet = worksheetConfigToSheet('시트1', ws)
+    expect(sheet.cellFormatting[0][0]).toEqual({
+      backgroundColor: 'rgb(38, 48, 64)',
+      color: 'rgb(255, 255, 255)',
+      fontWeight: 'bold',
+      fontSize: 'large',
+    })
+  })
+
+  it('"color:" 파싱이 "background-color:" 값을 오매칭하지 않는다', () => {
+    const ws = makeWs({
+      data: [['A']],
+      widths: [100],
+      styles: { A1: 'background-color: rgb(38, 48, 64)' },
+    })
+    const sheet = worksheetConfigToSheet('시트1', ws)
+    expect(sheet.cellFormatting[0][0].color).toBeUndefined()
+    expect(sheet.cellFormatting[0][0].backgroundColor).toBe('rgb(38, 48, 64)')
   })
 
   it('name이 SpreadsheetSheet.name으로 그대로 전달된다', () => {

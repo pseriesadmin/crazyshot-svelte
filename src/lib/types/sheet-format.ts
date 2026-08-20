@@ -15,10 +15,17 @@ export interface SheetMergeRange {
 
 /** 단일 셀의 서식 정보 */
 export interface XlsxCellFormatting {
-  /** CSS 배경색 '#RRGGBB' */
+  /** CSS 배경색 — '#RRGGBB'(.xlsx 임포트) 또는 'rgb(r, g, b)'(jspreadsheet-ce 툴바 저장값) */
   backgroundColor?: string
   /** CSS 테두리 색 '#RRGGBB' */
   borderColor?: string
+  /** CSS 폰트색 — '#RRGGBB' 또는 'rgb(r, g, b)' (2026-08-20 추가 —
+   *  기존엔 이 필드가 아예 없어 jspreadsheet 툴바로 지정한 폰트색이 저장 시 통째로 유실됐다) */
+  color?: string
+  /** CSS font-weight — 'bold' 등 (jspreadsheet 굵게 토글이 남기는 값 그대로) */
+  fontWeight?: string
+  /** CSS font-size — jspreadsheet 툴바는 키워드값(x-small~x-large) 사용, .xlsx 임포트는 'Npt' */
+  fontSize?: string
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

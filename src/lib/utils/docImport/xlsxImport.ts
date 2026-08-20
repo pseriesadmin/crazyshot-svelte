@@ -310,6 +310,14 @@ export async function parseSheet(
       if (typeof bg === 'string' && bg) fmt.backgroundColor = toHexColor(bg)
       const border = borderColors.get(addr)
       if (border) fmt.borderColor = border
+      // 폰트 서식(2026-08-20 추가) — SheetJS CE의 cellStyles:true가 폰트 정보까지 채워주는
+      // 파일에서는 그대로 활용하고, 채워주지 않는 파일에서는 옵셔널 체이닝으로 조용히 undefined
+      // 처리된다(가져오기 자체가 깨지지 않음 — best-effort).
+      const font = ws[addr]?.s?.font as { color?: { rgb?: string }; bold?: boolean; sz?: number } | undefined
+      const fontColor = font?.color?.rgb
+      if (typeof fontColor === 'string' && fontColor) fmt.color = toHexColor(fontColor)
+      if (font?.bold === true) fmt.fontWeight = 'bold'
+      if (typeof font?.sz === 'number' && font.sz > 0) fmt.fontSize = `${font.sz}pt`
       return fmt
     })
   })
