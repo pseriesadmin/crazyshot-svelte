@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { page } from '$app/stores'
   import { invalidate, goto } from '$app/navigation'
   import { supabase } from '$lib/services/supabase'
   import { unregisterCurrentPushToken } from '$lib/utils/push'
@@ -61,7 +62,15 @@
   ]
 
   /* PC 우측 패널 전환 — 'home': 기본 대시보드, 그 외: 내정보 서브섹션 */
-  let activePcSection = $state('home')
+  // /account/profile?tab=X (모바일 전용 라우트)는 PC(≥1024px) 진입 시 /account로 리다이렉트
+  // 되는데(account/profile/+page.svelte), 그 리다이렉트가 ?tab= 값을 그대로 들고 오므로
+  // 여기서도 초기값을 URL의 tab 파라미터로 맞춰야 PC에서도 같은 탭으로 랜딩한다.
+  const PC_TAB_PANELS = new Set(['coupon', 'log', 'review', 'profile', 'address', 'notification'])
+  function getInitialPcSection(): string {
+    const tab = $page.url.searchParams.get('tab')
+    return tab && PC_TAB_PANELS.has(tab) ? tab : 'home'
+  }
+  let activePcSection = $state(getInitialPcSection())
 
   async function handleLogout() {
     await unregisterCurrentPushToken()

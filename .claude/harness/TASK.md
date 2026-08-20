@@ -27597,3 +27597,145 @@ Stephen 명시 지시("action_url도 /account/rental/{id}/contract로 맞춰서 
 src/routes/api/contracts/[token]/sign/+server.ts  (MODIFY)
 .claude/rules-ref/contract.md                      (MODIFY)
 ```
+
+---
+
+## DONE — 🔴 CRITICAL: Production 날짜미정 임시예약(draft) 스키마 누락 복구 (2026-08-20, 이 세션, Stephen 승인)
+
+> ⚠️ 이 항목은 이 세션이 처리한 것만 기록한다. 동일 워킹트리에서 동시 진행 중인 다른 세션들의
+> 작업과 무관.
+
+**증상 신고**: Stephen이 상품상세 화면 실제 에러 스크린샷 제시 — 캘린더로 날짜를 고르지 않고
+바로 "예약신청"을 누르면(수량+옵션만으로 만드는 날짜미정 임시예약, draft 경로) 예약 대신 아래
+에러가 노출됨:
+```
+null value in column "start_date" of relation "rental_reservations" violates not-null constraint
+```
+
+**원인 조사**: `Migration 179`(20260731000179, "날짜 미정 임시예약(draft) 상태 신설")가 실서비스
+(vnbpmvxruyciuuaermyh)에 **부분적으로만** 적용돼 있었음. Stage(ezyvffjvuwmtuhpxdjrw)·Production
+양쪽을 `execute_sql`로 직접 조회해 비교:
+
+| 항목 | Stage | Production(수정 전) |
+|---|---|---|
+| `status` CHECK에 `'draft'`/`'expired'` 포함 | ✅ | ✅ (반영됨) |
+| `start_date`/`end_date` NOT NULL 해제(179 STEP 1) | ✅ | ❌ (`is_nullable='NO'`) |
+| EXCLUDE 겹침방지 제약에서 `'draft'` 제외(179 STEP 3) | ✅ | ❌ (WHERE절에 draft 없음) |
+
+두 가지(STEP 1, STEP 3)를 반드시 함께 적용해야 한다 — STEP 1만 적용하고 STEP 3을 빠뜨리면,
+날짜가 둘 다 NULL인 draft 예약끼리 `daterange(NULL, NULL+1)`이 무한대 범위로 해석돼 같은 상품의
+다른 모든 예약과 항상 "겹침" 오판이 발생하는 새 버그가 생김(Migration 179 원본 주석에 이미 이
+이유가 명시돼 있었음).
+
+**Stephen 확인 절차** (2회, 서비스 의도 언어로 질문·전부 승인):
+1. "테스트 DB부터 적용해도 될까요?" → 승인 → 조회 결과 스테이지는 **이미 정상 반영**(적용해도
+   no-op)이라 실제 변경 없이 확인만 됨.
+2. "실서비스 DB에도 지금 바로 넣을까요?" (production만 누락 상태임을 보고) → 승인.
+
+**수정**: 기존 `Migration 179` 파일은 직접 수정하지 않고(core-rules.md — 기존 마이그레이션
+파일 직접 수정 금지) 179의 STEP 1·STEP 3만 동일하게 재적용하는 신규 마이그레이션 작성:
+`supabase/migrations/20260820040000_315_production_draft_reservation_schema_sync.sql`
+
+```sql
+ALTER TABLE rental_reservations ALTER COLUMN start_date DROP NOT NULL;
+ALTER TABLE rental_reservations ALTER COLUMN end_date   DROP NOT NULL;
+
+ALTER TABLE rental_reservations DROP CONSTRAINT IF EXISTS rental_reservations_product_dates_excl;
+ALTER TABLE rental_reservations
+  ADD CONSTRAINT rental_reservations_product_dates_excl
+  EXCLUDE USING gist (
+    product_id WITH =,
+    daterange(start_date, end_date + 1, '[)') WITH &&
+  )
+  WHERE (status <> ALL (ARRAY['cancelled', 'returned', 'completed', 'expired', 'draft']::text[]));
+```
+
+**적용 순서**: Stage 적용(no-op 확인) → Production 적용 → Production에서 직접 재조회로
+`start_date`/`end_date` `is_nullable='YES'`, EXCLUDE 제약 WHERE절에 `'draft'` 포함 확인 완료.
+
+**GATE 등급**: 🔴 CRITICAL — 예약 핵심 흐름 + Production DB 스키마 변경.
+
+### 수정 파일
+
+```
+supabase/migrations/20260820040000_315_production_draft_reservation_schema_sync.sql  (신규)
+```
+
+---
+
+## GSD — 2026-08-20(후속) /account/profile?tab= PC 리다이렉트 시 탭 유실 결함 수정 (이 세션)
+
+**증상 신고**: "상품 예약 시 본인증명 정보 확인 토스트를 통한 '개인정보' 랜딩 시 PC, mobile
+반응형 구분을 못해 리다이렉트(/account) 발생. 원인 찾고 해결!" — 직전 세션에서 만든 예약신청
+본인증명 안내 토스트("확인" 클릭 시 `/account/profile?tab=profile` 이동)가 PC에서는 "개인정보"
+탭이 아니라 `/account` 기본 홈으로 떨어지는 현상.
+
+**원인**: `/account/profile`은 모바일 전용 라우트로 설계돼 있어 PC(≥1024px) 진입 시
+`$effect`가 즉시 `goto('/account')`로 리다이렉트한다(`account/profile/+page.svelte`) — 이때
+쿼리스트링(`?tab=profile`)을 그대로 버리고 순수 `/account`로만 이동했다. 게다가 착지지점인
+`/account` 자신도 PC 우측 패널 상태(`activePcSection`)를 항상 `'home'`으로 초기화할 뿐 URL의
+`tab` 파라미터를 전혀 읽지 않는 구조였다 — 두 결함이 겹쳐 PC에서는 어떤 `?tab=` 값을 붙여
+링크해도 항상 홈으로 떨어진다. 신규 토스트만의 문제가 아니라 기존부터 있던 구조적 결함(예:
+`/account`의 `myInfoMenuItems`가 만드는 `href="/account/profile?tab=..."` 링크들도 PC에서
+직접 열면 동일하게 깨졌을 것).
+
+**수정**:
+1. `src/routes/account/profile/+page.svelte` — PC 리다이렉트 두 지점(초기 `mq.matches` 분기 +
+   `change` 이벤트 리스너) 모두 `goto('/account' + $page.url.search)`로 쿼리스트링 보존.
+2. `src/routes/account/+page.svelte` — `$page` 스토어 import 추가, `activePcSection` 초기값을
+   `getInitialPcSection()`으로 교체: URL의 `tab` 파라미터가 `PC_TAB_PANELS`(coupon/log/review/
+   profile/address/notification) 화이트리스트에 속하면 그 값으로 시작, 아니면 기존과 동일하게
+   `'home'`.
+
+**검증**: `npx svelte-check` — 신규 에러 0건(기존 무관 에러 1건만 잔존). 새로 관측된 경고 2건도
+각각 무관 파일의 사전 존재 이슈로 확인.
+
+**GATE 등급**: 🟡 BOUNDARY — 회원 마이페이지 화면 진입 로직 단일 수정, DB/RPC 변경 없음.
+
+---
+
+## DONE — 🔴 CRITICAL: 예약코드 채번 LPAD 자릿수 잘림으로 인한 중복키 결함 수정 (2026-08-20, 이 세션, Stephen 승인)
+
+> ⚠️ 이 항목은 이 세션이 처리한 것만 기록한다. 동일 워킹트리에서 동시 진행 중인 다른 세션들의
+> 작업과 무관.
+
+**증상 신고**: Stephen이 상품상세 "예약신청" 클릭 시 뜨는 실제 에러 토스트 스크린샷 제시:
+```
+duplicate key value violates unique constraint "rental_reservations_reservation_code_key"
+```
+
+**원인 조사(직접 재현)**: `generate_reservation_code()`의 원자적 순번 채번(`reservation_code_
+sequences`, Migration 247)은 정상이었으나, 문자열을 완성하는 마지막 줄
+`LPAD(v_seq::TEXT, GREATEST(v_seq_digits, 2), '0')`이 문제였다 — Postgres `lpad()`는 입력
+문자열이 목표 길이보다 길면 패딩이 아니라 **절단**한다. 설정 자릿수(기본 3자리)를 넘는 순번
+(1000 이상)이 되는 순간, `1005`/`1006`/`1007`처럼 서로 다른 순번이 전부 `100`으로 잘려 서로
+다른 예약이 동일한 `reservation_code`를 받는다. 같은 SQL 문에서 `generate_reservation_code()`를
+3연속 호출해 셋 다 `'CS2608100'`으로 동일하게 나오는 것으로 직접 재현·확정(당시 Stage
+`reservation_code_sequences.next_seq`가 이미 1005였음 — 스테이지 테스트 데이터 누적으로
+먼저 임계치를 넘어 발현).
+
+**Stephen 확인 절차**: "예약코드 설정(`seq_digits`)을 늘리기만 해도 되지 않냐"는 반문에 검증부터
+진행 — `/cms/codes` "예약코드 형식"의 `seq_digits`는 서버에서 2~6자리로 클램프됨(`cms/codes/
++page.server.ts:500`). 설정을 6자리로 올리면 그 범위(최대 999,999/월) 안에서는 회피되지만,
+LPAD 절단이라는 구조적 결함 자체는 그대로 남는다는 점을 공유 → "함수 자체를 고침(권장)"으로
+확정. 이후 Stage 적용 승인 → 검증(4연속 호출 전부 고유값: `CS26081008~1011`) → Production
+적용 승인 → 검증(2연속 호출 고유값: `CS2608038/039`, 3자리 이하 숫자는 기존처럼 0-패딩 유지
+확인) 순서로 진행.
+
+**수정**: 테이블/데이터는 전혀 건드리지 않고 함수 로직만 교체.
+`supabase/migrations/20260820050000_316_fix_generate_reservation_code_lpad_truncation.sql`
+```sql
+-- 수정 전
+RETURN v_base || LPAD(v_seq::TEXT, GREATEST(v_seq_digits, 2), '0') || v_suffix;
+-- 수정 후 — 설정 자릿수와 실제 순번 자릿수 중 큰 쪽 사용, 절대 절단되지 않음
+RETURN v_base || LPAD(v_seq::TEXT, GREATEST(v_seq_digits, LENGTH(v_seq::TEXT)), '0') || v_suffix;
+```
+
+**GATE 등급**: 🔴 CRITICAL — 예약 핵심 흐름(신규 예약 생성 자체가 막히는 결함) + Production DB
+함수 변경.
+
+### 수정 파일
+
+```
+supabase/migrations/20260820050000_316_fix_generate_reservation_code_lpad_truncation.sql  (신규)
+```
