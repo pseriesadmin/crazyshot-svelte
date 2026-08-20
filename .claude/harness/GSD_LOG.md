@@ -1,6 +1,81 @@
 # GSD_LOG.md — 크레이지샷 실행 이력
 # 형식: [YYYY-MM-DD HH:MM] 타입 | 타스크명 | 파일 | 소요 | 결과
 
+[2026-08-20] 🔴 CRITICAL FIX | 예약코드 채번 LPAD 자릿수 잘림으로 인한 중복키 결함 수정 | supabase/migrations/20260820050000_316_fix_generate_reservation_code_lpad_truncation.sql(신규) | ✅ Stage+Production 적용 완료
+  증상 신고: 상품상세 "예약신청" 클릭 시 duplicate key value violates unique constraint
+  "rental_reservations_reservation_code_key" 에러로 예약 생성 실패.
+  원인(직접 재현): generate_reservation_code()의 원자적 순번 채번(reservation_code_sequences,
+  Migration 247)은 정상이었으나, 마지막 문자열 조합의 LPAD(v_seq::TEXT, GREATEST(v_seq_digits,
+  2), '0')가 문제 — Postgres lpad()는 입력이 목표길이보다 길면 "패딩"이 아니라 "절단"한다.
+  설정 자릿수(기본 3)를 넘는 순번(1000 이상)이 되는 순간 1005/1006/1007이 전부 "100"으로
+  잘려 서로 다른 예약이 동일 reservation_code를 받음 — 같은 SQL에서 함수를 3연속 호출해
+  셋 다 'CS2608100'으로 동일하게 나오는 것으로 직접 재현·확인.
+  Stephen 확인질문: "예약코드 설정(seq_digits)을 늘리기만 해도 되지 않냐"는 반문에 검증
+  결과 공유 — 설정을 최대 6자리로 올리면 그 범위 안에서는 회피되지만 구조적 결함 자체는
+  남는다는 점을 확인시키고 "함수 자체를 고침(권장)"으로 확정. 이후 스테이지 적용 승인 →
+  검증(4연속 호출 전부 고유값 확인) → production 적용 승인 → 검증(2연속 호출 고유값 +
+  3자리 이하 숫자는 기존처럼 0-패딩 유지 확인) 순서로 진행.
+  수정: 테이블/데이터 무변경, 함수 로직만 교체 — LPAD 목표 길이를
+  GREATEST(v_seq_digits, LENGTH(v_seq::TEXT))로 변경(설정 자릿수와 실제 순번 자릿수 중
+  큰 쪽 사용, 절대 절단되지 않음).
+  GATE E(2026-08-20, @sp3-qa-agent): LPAD 절단 방지 로직 표 검증(seq=1000/1005~1007/12345
+  등 전부 절단 없이 고유값) / Migration 247 원본과 diff 비교 결과 RETURN문 한 줄 외 100%
+  동일(회귀 없음) / 함수 시그니처·트리거 호출부 호환 유지 / 테이블 스키마 변경 없음 /
+  TASK.md·GSD_LOG.md 기록이 실제 SQL과 일치 — 전부 통과. QA 서브에이전트에는 Supabase MCP가
+  없어 Production 실제 함수정의 재조회는 권고사항으로 남김 → 원 세션이 Production을 직접
+  재조회해 LPAD(...,GREATEST(v_seq_digits, LENGTH(v_seq::TEXT)),...) 반영 확인, 최종 통과.
+  미완료: git commit(Stephen 직접 실행 필요).
+
+[2026-08-20] BOUNDARY FIX | /account/profile?tab= PC 리다이렉트 시 탭 유실 결함 수정 | src/routes/account/+page.svelte, src/routes/account/profile/+page.svelte | ✅ 수정 완료(GATE E 검수 대기)
+  증상 신고: 상품상세 예약신청 시 본인증명 미등록 안내 토스트에서 "확인" 클릭 시
+  /account/profile?tab=profile로 이동하는데, PC에서는 "개인정보" 탭이 아니라 그냥
+  /account 기본 화면(대시보드)으로 떨어짐 — "PC, mobile 반응형 구분을 못해 리다이렉트".
+  원인: /account/profile은 모바일 전용 라우트 — PC(≥1024px) 진입 시 $effect가
+  goto('/account')로 즉시 리다이렉트하도록 이미 설계돼 있었는데(account/profile/+page.svelte),
+  이때 쿼리스트링(?tab=profile)을 버리고 순수 '/account'로만 이동했음. 게다가 착지지점인
+  /account 자신도 PC 우측 패널 상태(activePcSection)를 항상 'home'으로 초기화할 뿐 URL의
+  tab 파라미터를 전혀 읽지 않았음 — 두 결함이 겹쳐 PC에서는 어떤 ?tab= 값을 붙여 링크해도
+  항상 홈으로 떨어지는 구조였음(이번 신규 토스트만의 문제가 아니라 기존에도 있던 구조적
+  결함 — myInfoMenuItems의 href="/account/profile?tab=..."들도 PC에서 직접 새로고침하면
+  동일하게 깨졌을 것).
+  수정: ① account/profile/+page.svelte — PC 리다이렉트 두 지점(mq.matches 즉시분기 +
+  change 이벤트 리스너) 모두 goto('/account' + $page.url.search)로 쿼리스트링 보존.
+  ② account/+page.svelte — $page 스토어 import 추가, activePcSection 초기값을
+  getInitialPcSection()으로 변경(URL의 tab 파라미터가 PC_TAB_PANELS 화이트리스트에
+  속하면 그 값으로, 아니면 기존과 동일하게 'home'으로 시작).
+  검증: svelte-check 신규 에러 0건(기존 무관 에러 1건만 잔존, 새로 뜬 경고 2건도 각각
+  다른 파일의 사전 존재 이슈로 확인).
+  GATE E(2026-08-20, @sp3-qa-agent): RCA 일치 확인 / $page.url.search 조합 결과 정확
+  ("/account?tab=profile") / PC_TAB_PANELS 화이트리스트가 VALID_TABS·myInfoMenuItems와
+  완전 일치 / $state(getInitialPcSection()) 초기화가 core-rules.md "$state(prop) 금지"
+  규칙 위반 아님(prop이 아니라 $page 스토어, 라우트 전환 시 항상 재마운트됨 확인) /
+  activePcSection 변경 지점 4곳 회귀 없음 — 전부 통과, 수정 필요 0건.
+  미완료: git commit(Stephen 직접 실행 필요).
+
+[2026-08-20] 🔴 CRITICAL FIX | Production 날짜미정 임시예약(draft) 스키마 누락 복구 | supabase/migrations/20260820040000_315_production_draft_reservation_schema_sync.sql(신규) | ✅ Stage+Production 적용 완료
+  ⚠️ 이 항목은 이 세션이 처리한 것만 기록 — 바로 아래 314번 항목은 다른 세션 작업.
+  배경: Stephen이 상품상세에서 캘린더로 날짜 선택 없이 "예약신청" 클릭 시 뜨는 실제 화면
+  에러 스크린샷("null value in column start_date ... violates not-null constraint")을
+  제시하며 확인 요청.
+  조사: Migration 179(20260731000179, 날짜미정 draft예약 도입)가 실서비스(vnbpmvxruyciuuaermyh)
+  에 부분적으로만 적용돼 있었음 — status CHECK에 'draft' 포함은 반영됐으나, ① start_date/
+  end_date NOT NULL 해제(STEP 1), ② EXCLUDE 겹침방지 제약에서 draft 상태 제외(STEP 3) 두
+  가지가 누락. ①만 없어도 이번 에러가 발생하고, ①만 고치고 ②를 빠뜨리면 날짜 NULL인
+  draft끼리 daterange가 무한대로 해석돼 서로 "겹침" 오판하는 새 버그가 생기므로 반드시
+  같이 적용해야 함(마이그레이션 179 원본 주석에 이미 명시돼 있던 이유). 스테이지
+  (ezyvffjvuwmtuhpxdjrw)는 직접 조회로 이미 정상 반영 확인됨(적용 시 no-op).
+  Stephen 확인질문 2회(스테이지 우선 적용 여부 → production 반영 여부) 전부 승인 받고 진행.
+  수정: 신규 마이그레이션 315 — 기존 179 파일은 수정하지 않고(core-rules.md 기존 마이그레이션
+  직접수정 금지) 179의 STEP1·STEP3만 동일하게 재적용하는 신규 파일 작성. Stage 적용(no-op
+  확인) → Production 적용 → Production에서 start_date/end_date is_nullable=YES, EXCLUDE
+  제약에 'draft' 포함 직접 재조회로 확인 완료.
+  GATE E(2026-08-20, @sp3-qa-agent): 신규 SQL이 원본 179 STEP1·STEP3와 완전히 동일(값·순서
+  누락 없음, 'expired' 포함 확인) / 179 원본 파일 미변경 확인 / 마이그레이션 번호 충돌 없음
+  / 앱코드(.svelte/.ts) 변경 전무 확인 — 전부 통과. QA 서브에이전트에는 Supabase MCP가 없어
+  DB 실반영 자체는 재현검증 못 함(파일 정합성만 확인) → 원 세션이 Production을 다시 직접
+  재조회(is_nullable=YES 유지 확인)해 보완, 최종 통과.
+  미완료: git commit(Stephen 직접 실행 필요).
+
 [2026-08-20] CRITICAL FIX | products RLS — 본인 예약 배정 자식(재고단위) 상품 조회 허용 |
   supabase/migrations/20260820030000_314_products_own_reservation_read.sql(신규) |
   ✅ Stage+Production 적용 완료

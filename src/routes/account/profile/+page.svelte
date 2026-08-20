@@ -34,14 +34,17 @@
 
   let activeTab = $state<Tab>(getInitialTab())
 
-  /* PC(≥1024px) 진입 시 /account로 리다이렉트 — PC 전용 내정보 화면 사용 */
+  /* PC(≥1024px) 진입 시 /account로 리다이렉트 — PC 전용 내정보 화면 사용
+     ?tab= 값을 그대로 들고 가야 /account가 같은 탭으로 랜딩한다(안 그러면 항상 기본
+     대시보드로 떨어짐 — 예: 예약신청 화면의 본인증명 안내 토스트가 /account/profile?tab=
+     profile로 보내도 PC에서는 개인정보 탭이 아니라 홈으로 리다이렉트되는 결함이었음) */
   $effect(() => {
     if (!browser) return
     const mq = window.matchMedia('(min-width: 1024px)')
     const redirect = (e: MediaQueryListEvent | MediaQueryList) => {
-      if (e.matches) goto('/account')
+      if (e.matches) goto('/account' + $page.url.search)
     }
-    if (mq.matches) { goto('/account'); return }
+    if (mq.matches) { goto('/account' + $page.url.search); return }
     mq.addEventListener('change', redirect)
     return () => mq.removeEventListener('change', redirect)
   })
