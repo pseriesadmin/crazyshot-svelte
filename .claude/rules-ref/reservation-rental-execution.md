@@ -6,7 +6,7 @@
 ## 이 문서의 성격
 
 ```
-"고객 예약신청 → 결제 → 계약발송 → 서명 → 승인완료 → 반출 → 대여중 → 반납요청 → 반납완료"
+"고객 예약신청 → 결제 → 계약발송 → 서명 → 계약완료 → 반출 → 대여중 → 반납요청 → 반납완료"
 전 구간에서 각 단계가 실제로 어떤 파일·RPC를 트리거하고, CMS 3개 화면(/cms/chat,
 /cms/reservation, /cms/rentals)에 정확히 어떤 배지·카드·버튼 상태로 나타나야 하는지를
 "코드 조사 + Claude Browser 실화면 대조"로 검증해 확정한 문서다.
@@ -335,7 +335,7 @@ Migration 285도 이미 Production에 적용돼 실제로 hold 29건을 expired�
 | ① 예약신청 | 고객 체크아웃(hold 생성) | `POST /api/checkout/notify-hold` → `send_rental_chat_notification(id,'reservation_hold')` | 신청대기 | `reservation_hold` — "예약 신청 확인" |
 | ② 결제 등록 | 고객 결제(dev: confirm-mock) | `mark_reservation_payment_confirmed(id)` RPC(hold 유지, `payment_confirmed_at`만 기록 — 계약서명 전까지는 confirmed 전환 안 됨, Migration 284) | 신청대기 + **결제완료**(추가 배지) | (알림 없음 — payment_confirmed_at만 기록) |
 | ③ 계약발송 | 관리자 "계약서 양식 선택·편집→발행" | `POST /api/cms/reservations/[id]/init-contract` → `POST /api/cms/contracts/[id]/send-chat` (RPC 미경유, `chat_messages` 직접 INSERT) | 신청대기(변화 없음). 상세패널 헤더: **"결제완료 · 계약대기"**, 계약서 탭: **"계약서 발송됨 · 서명 대기 중"** | `contract_link` — "전자계약 보기" |
-| ④ 서명 완료 | 고객 `/contract/[token]`에서 서명 | `POST /api/contracts/[token]/sign` → `try_confirm_reservation(id)`(hold+결제완료 조건 재검증 후 confirmed 전환) + `send_rental_chat_notification(id,'reservation_approval')` **+** 자체 인라인 로직으로 `contract_signed` 메시지 INSERT(RPC 미경유) | **승인완료**로 전환, 목록이 `/cms/reservation`→`/cms/rentals`로 즉시 이동 | `reservation_approval`("예약 승인 확인") **+** `contract_signed`("전자계약 확인") — 별도 발송(⚠️ §2-4 결함 참고, 서로 다른 세션에 갈 수 있음) |
+| ④ 서명 완료 | 고객 `/contract/[token]`에서 서명 | `POST /api/contracts/[token]/sign` → `try_confirm_reservation(id)`(hold+결제완료 조건 재검증 후 confirmed 전환) + `send_rental_chat_notification(id,'reservation_approval')` **+** 자체 인라인 로직으로 `contract_signed` 메시지 INSERT(RPC 미경유) | **계약완료**로 전환, 목록이 `/cms/reservation`→`/cms/rentals`로 즉시 이동 | `reservation_approval`("예약 승인 확인") **+** `contract_signed`("전자계약 확인") — 별도 발송(⚠️ §2-4 결함 참고, 서로 다른 세션에 갈 수 있음) |
 | ⑤ 반출 처리 | 관리자 "택배 출고 처리"/"방문 출고 처리" | `update_reservation_status(id,'shipped')` (updateStatus 액션, AUTO_NOTIFY) | 반출중(rentals) / 배송중(reservation) | `shipment_notify` — "반출 안내" |
 | ⑥ 수령 확인 | 관리자 "택배수령 확인"/"방문수령 확인" | `update_reservation_status(id,'in_use')` | 대여중 | `rental_confirm` — "수령 확인" |
 | ⑦ 반납예정 알림(수동) | 관리자 "반납 예정 알림 💬" 버튼 | `send_rental_chat_notification(id,'return_remind')`(NOTIFY_TYPE_MAP 수동 발송, 상태 전환 없음) | 대여중(변화 없음) | `return_remind` — "반납 등록하기" |
@@ -369,7 +369,7 @@ Migration 285도 이미 Production에 적용돼 실제로 hold 29건을 expired�
     find_or_create_general_chat_session 사용 — 정상)
   → contract_signed 알림은 위 별도 pending 세션에 도착, 여전히 "대기" 탭 — 두 알림이
     서로 다른 채팅창으로 쪼개짐을 /cms/chat 실화면으로 확인
-  → /cms/rentals로 카드 즉시 이동, "승인완료" 초록 배지 실화면 확인
+  → /cms/rentals로 카드 즉시 이동, "계약완료" 초록 배지 실화면 확인
 
 ⑤~⑨ RentalDetailPanel 실제 버튼(운송장 저장 / 택배 출고 처리 / 택배수령 확인 / 반납
   예정 알림 💬 / 반납 접수 / 반납 처리)을 전부 실클릭으로 순서대로 실행
@@ -386,7 +386,7 @@ Migration 285도 이미 Production에 적용돼 실제로 hold 29건을 expired�
   "진행중" 탭에 신규 세션으로 노출(실화면 확인) — 상담 이력이 없으면 send-chat도
   신규 세션을 만들어 open으로 생성하므로 문제 없음(§2-4 결함B-2는 "기존 pending
   세션이 있을 때만" 발현되는 조건부 결함임을 대조 확인)
-④ sign API 호출 → confirmed 전환, /cms/rentals에 "승인완료"(고객명 "-" — 이름정보
+④ sign API 호출 → confirmed 전환, /cms/rentals에 "계약완료"(고객명 "-" — 이름정보
   없는 신규가입자라 정상 표시) 즉시 노출 실화면 확인
   → reservation_approval + contract_signed 두 알림이 이번엔 우연히 같은 general
   세션에 모임(§2-4 결함B-2 참고 — 신규 고객이라 결과적으로 문제가 드러나지 않았을 뿐,

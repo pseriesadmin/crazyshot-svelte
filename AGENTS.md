@@ -79,6 +79,92 @@ UI·화면     : UI / 컴포넌트 / 화면 / 레이아웃 / 스타일
 
 ---
 
+## 구현 전 자가점검 프로토콜 (GATE 0 — v3.2 신규)
+
+> 목적: 요구사항 오해·규칙 미확인으로 인한 반복 수정(재작업 라운드)과 그로 인한 토큰 낭비,
+> 그리고 규칙 위반으로 인한 심각한 결함(CRITICAL 오류)을 코드를 쓰기 **전에** 차단한다.
+> CRITICAL/BOUNDARY/ROUTINE 등급과 무관하게 전 태스크에 적용 — 등급은 "Stephen 승인이
+> 필요한가"만 가르고, "규칙을 먼저 확인했는가"는 항상 필수다. Edit/Write 호출 전 아래
+> 4단계를 통과한다.
+
+### 1단계 — 요구사항 명확성 확인 (추측 구현 금지)
+
+```
+아래 중 하나라도 해당하면 구현을 시작하지 말고 Stephen에게 먼저 확인한다(Error Taxonomy Class C):
+□ 수정 범위가 "이 파일만"인지 "관련 파일도 포함"인지 요청문에서 특정되지 않음
+□ 상태값·버튼 텍스트·전환 조건·수치 등 구체적 스펙이 요청에 없어 임의로 채워야 함
+□ 기존 확정 정책(.claude/rules/*.md, rules-ref/*.md)과 충돌하는 것처럼 보임
+□ "함께 고치면 좋을 것 같은" 범위 외 파일이 눈에 띔 (core-rules.md 최우선 원칙 — Read만 허용)
+
+추측으로 구현 후 나중에 틀렸다고 보고받는 것보다, 구현 전에 1회 질문하는 것이 항상 더 저렴하다.
+```
+
+### 2단계 — 관련 도메인 규칙 선(先) 로드 (키워드 → 파일 자동 매핑)
+
+```
+요청 키워드                       → 확인/로드해야 할 파일
+─────────────────────────────────────────────────────────────
+예약·가용성·HOLD                  → @.claude/rules-ref/rental.md
+대여상태·버튼·스텝퍼              → .claude/rules/rental-lifecycle.md (상시로드 — 재확인)
+전자계약·서명                     → @.claude/rules-ref/contract.md
+결제·웹훅·환불·정산               → @.claude/rules-ref/payment.md
+채팅·세션·Realtime                → @.claude/rules-ref/chat.md
+자연어검색·NLSearch·상품매칭       → @.claude/rules-ref/nlsearch.md
+CMS 화면 UI                       → @.claude/rules-ref/cms-uiux.md
+USER 화면 UI                      → @.claude/rules-ref/front-uiux.md
+디자인 토큰(컬러·반경·타이포)       → .claude/rules/uiux-index.md 먼저 → 필요 시 @.claude/rules-ref/uiux.md
+Figma → 코드 변환                 → @.claude/rules-ref/figma-publishing.md
+plannode JSON 수정                → @.claude/rules-ref/plannode-update.md
+상품·품번(product_code)·QR·재고    → .claude/rules/products.md (상시로드 — 재확인)
+front↔cms 상호운영 로직            → .claude/rules/service-operations.md (상시로드 — 재확인)
+인증·RLS·CMS 역할게이트            → .claude/rules/security-auth.md (상시로드 — 재확인)
+git 명령 실행 요청                 → AGENTS.md GP-1 (텍스트 제안만, 실행 금지)
+
+→ @ 표시 파일은 이번 세션에서 아직 Read하지 않았다면 코드를 쓰기 전에 반드시 먼저 Read한다.
+→ 두 개 이상 도메인이 겹치면(예: 예약 상태 변경 + 채팅 알림 자동발송) 해당 파일 전부 로드한다.
+→ 상시로드 파일(core-rules·security-auth·ui-mobile·uiux-index·rental-lifecycle·products·
+  service-operations)은 이미 컨텍스트에 있어도 "읽었으니 안다"로 넘기지 말고, 이번 요청과
+  직접 관련된 절(section)을 다시 짚어 확인한다 — 특히 GATE C 체크리스트.
+```
+
+### 3단계 — 구현 직전 내부 자문 (출력 불필요, 스스로 확인만)
+
+```
+□ 이번 변경이 2단계에서 로드한 규칙 파일의 GATE C 체크리스트 항목과 충돌하지 않는가?
+□ $state(prop) 초기화 금지·Svelte 4 문법(on:event) 금지 등 core-rules.md 금지 패턴 위반 없는가?
+□ 요청 범위 밖 파일을 수정하려는 게 아닌가? (Read는 허용, Edit/Write는 범위 내만)
+□ git 쓰기 명령(add/commit/push 등)을 스스로 실행하려는 게 아닌가? (GP-1)
+□ CMS 역할게이트·품번 영구고정·대여상태머신 등 CRITICAL 규칙과 충돌하지 않는가?
+□ 과거 이 프로젝트에서 반복됐던 실패 패턴(아래)에 해당하지 않는가?
+```
+
+### 반복 발생한 실패 패턴 — 구현 전 마지막으로 대조 (학습된 사고 이력)
+
+```
+□ prop 값으로 $state 초기화 → 재마운트 없이 stale 데이터 표시 (core-rules.md)
+□ product_code를 부모에 채번하거나 재발급 기능 신설 (products.md §2-1·§2-2)
+□ product_code 조회에 .eq(toUpperCase()) 사용 — .ilike() 아니면 소문자 채번과 매칭 실패 (products.md QR-CASE-1)
+□ form action에서 locals.cmsRole 직접 사용 — 항상 undefined라 전원 차단됨 (security-auth.md)
+□ 새 알림 타입 추가 시 채팅카드(RPC)만 넣고 브라우저 푸시(push.ts) 동기화 누락 (service-operations.md §15)
+□ 주문 연결(order_id) 생성 지점을 장바구니 체크아웃 제출 외 다른 곳에 추가 (service-operations.md §4)
+□ 관리자 발신 채팅 알림에서 공유 RPC(find_or_create_general_chat_session) 대신 자체 세션조회 재구현 (service-operations.md §11)
+□ transform 적용된 조상 내부에 position:fixed 모달을 그대로 중첩 (core-rules.md CSS 충돌 규칙)
+□ npm run check가 svelte-check임을 모르고 tsc 기준으로만 판단 — .svelte Props 타입 불일치 누락
+□ git 쓰기 명령을 "제안 요청"을 "실행 승인"으로 오인 (GP-1)
+```
+
+### 4단계 — 구현 후 즉시 재대조 (재작업 예방)
+
+```
+Edit/Write 완료 직후:
+1. 방금 로드한 규칙 파일의 "GATE C 확인 항목"을 다시 훑어 위반이 있으면 그 자리에서 즉시 수정한다
+   — Stephen이 지적하기 전에 스스로 잡는 것이 재작업 라운드를 없애는 유일한 방법이다.
+2. npm run check(svelte-check) 결과 에러 0건을 확인하지 않고는 "완료"로 보고하지 않는다.
+3. 수정한 파일 목록이 요청 범위와 정확히 일치하는지 최종 확인한다(범위 외 파일 混入 금지).
+```
+
+---
+
 ## 에이전트 호출 순서 (v3.2: 5계층 아키텍처 + 자동화 최적화)
 
 > ⚠️ 에이전트 호출 원칙:
