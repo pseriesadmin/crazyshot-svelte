@@ -188,6 +188,7 @@
     gap: var(--spacing-3);
     padding: var(--spacing-3) 0 0;
     width: 100%;
+    min-width: 0;
   }
 
   /* Mobile 타이포 토큰 (한 단계 업) */
@@ -233,6 +234,10 @@
     letter-spacing: -0.5px;
     line-height: 1;
     margin: 0;
+    width: 100%;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
 
   /* ━━━ PC (290px = Figma 정본) ━━━ */

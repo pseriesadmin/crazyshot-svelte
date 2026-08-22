@@ -45,7 +45,7 @@ export const load: PageServerLoad = async ({ params, locals }) => {
   const { data: signingRow } = await admin
     .from('contract_signings')
     .select(`
-      id, signed_at, ip_address, signature_data, stroke_count,
+      id, signed_at, ip_address, signature_data, stroke_count, signed_content_snapshot,
       contracts!inner (
         id, title, content_blocks, specifications, authoring_mode,
         canvas_document, spreadsheet_document, reservation_id
@@ -63,7 +63,7 @@ export const load: PageServerLoad = async ({ params, locals }) => {
     return { reservation: res, contract: null, mySignature: null, customer: null, issuerSignatures: [], shippingAddress: null, orderData: null }
   }
 
-  const contract = signingRow.contracts as unknown as {
+  const liveContract = signingRow.contracts as unknown as {
     id: string
     title: string | null
     content_blocks: unknown[]
@@ -71,6 +71,29 @@ export const load: PageServerLoad = async ({ params, locals }) => {
     authoring_mode: string | null
     canvas_document: unknown
     spreadsheet_document: unknown
+  }
+
+  // 2026-08-21: 서명 시점 스냅샷이 있으면 그걸 우선 사용 — 서명 이후 관리자가 계약 원본을
+  // 고쳐도 고객은 "그때 서명한 그 모습"을 그대로 본다(형태 보존). 스냅샷이 없으면(이 컬럼
+  // 도입 이전 서명 건) 기존처럼 라이브 contracts 컬럼으로 폴백 — id/reservation_id처럼
+  // 콘텐츠가 아닌 필드는 항상 라이브 값을 그대로 쓴다.
+  const snapshot = signingRow.signed_content_snapshot as {
+    title: string | null
+    content_blocks: unknown[]
+    specifications: { key: string; value: string }[]
+    authoring_mode: string | null
+    canvas_document: unknown
+    spreadsheet_document: unknown
+  } | null
+
+  const contract = {
+    id: liveContract.id,
+    title: (snapshot ?? liveContract).title,
+    content_blocks: (snapshot ?? liveContract).content_blocks,
+    specifications: (snapshot ?? liveContract).specifications,
+    authoring_mode: (snapshot ?? liveContract).authoring_mode,
+    canvas_document: (snapshot ?? liveContract).canvas_document,
+    spreadsheet_document: (snapshot ?? liveContract).spreadsheet_document,
   }
 
   // P8A-3와 동일한 감사로그 관례 — 고객 본인의 열람도 append-only로 기록

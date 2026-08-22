@@ -299,10 +299,26 @@
                 />
               </div>
               <div class="d-feat-info">
-                <p class="d-feat-price">{heroMobilePrice(prod)}</p>
-                <div>
-                  <p class="d-feat-name">{prod.name}</p>
-                  <p class="d-feat-desc">{prod.product_caption ?? ''}</p>
+                <p class="d-feat-name">{prod.name}</p>
+                {#if prod.product_caption}
+                  <p class="d-feat-desc">{prod.product_caption}</p>
+                {/if}
+                <div class="d-feat-price-row">
+                  {#if (prod.price_24h ?? prod.base_price_daily) > 0}
+                    <div class="d-feat-price-unit">
+                      <span class="d-feat-plabel">Day</span>
+                      <span class="d-feat-pnum">{formatPrice(prod.price_24h ?? prod.base_price_daily)}</span>
+                      <span class="d-feat-pcur">원</span>
+                    </div>
+                  {/if}
+                  {#if prod.price_12h}
+                    <span class="d-feat-psep">/</span>
+                    <div class="d-feat-price-unit">
+                      <span class="d-feat-plabel">12H</span>
+                      <span class="d-feat-pnum">{formatPrice(prod.price_12h)}</span>
+                      <span class="d-feat-pcur">원</span>
+                    </div>
+                  {/if}
                 </div>
               </div>
             </a>
@@ -922,43 +938,60 @@
     border-radius: 50px;
   }
   .d-feat-info {
-    background: linear-gradient(to bottom, rgba(225,222,243,0) 0%, rgba(225,222,243,0.85) 30%, rgba(225,222,243,0.95) 100%);
+    background: linear-gradient(to bottom, rgba(225,222,243,0) 0%, rgba(225,222,243,0.88) 30%, rgba(225,222,243,0.97) 100%);
     position: relative;
     z-index: 2;
     width: 100%;
+    min-width: 0;
     display: flex;
     flex-direction: column;
-    gap: 10px;
-    padding: 40px 35px 25px;
-  }
-  .d-feat-price {
-    font-family: 'Noto Sans KR', sans-serif;
-    font-weight: 900;
-    font-size: 25px;
-    color: #1d183e;
-    line-height: 2;
-    white-space: nowrap;
-    margin: 0;
+    gap: 5px;
+    padding: 48px 30px 28px;
   }
   .d-feat-name {
     font-family: 'Noto Sans KR', sans-serif;
-    font-weight: 700;
-    font-size: 16px;
-    color: #444;
-    line-height: 2;
+    font-weight: 800;
+    font-size: 17px;
+    color: var(--cs-dark, #1d183e);
+    line-height: 1.3;
     letter-spacing: -0.5px;
-    white-space: nowrap;
     margin: 0;
+    width: 100%;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
   .d-feat-desc {
     font-family: 'Noto Sans KR', sans-serif;
-    font-weight: 700;
-    font-size: 14px;
-    color: #444;
-    line-height: 1;
-    letter-spacing: -0.5px;
+    font-weight: 500;
+    font-size: 13px;
+    color: var(--cs-text-dark, #444);
+    line-height: 1.3;
+    letter-spacing: -0.3px;
     margin: 0;
+    width: 100%;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
+  .d-feat-price-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin: 8px 0 0;
+    flex-wrap: nowrap;
+    color: var(--cs-red-badge, #FF3535);
+  }
+  .d-feat-price-unit { display: flex; align-items: baseline; gap: 4px; }
+  .d-feat-plabel { font: var(--text-pc-title-16); }
+  .d-feat-pnum {
+    font: var(--text-pc-htitle-25);
+    font-weight: 900;
+    line-height: 1;
+    font-variant-numeric: tabular-nums;
+  }
+  .d-feat-pcur { font: var(--text-pc-title-16); }
+  .d-feat-psep { font: var(--text-pc-title-16); }
 
   .d-slider-dots {
     display: flex;

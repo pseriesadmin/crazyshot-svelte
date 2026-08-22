@@ -14,7 +14,7 @@
 </script>
 
 <svelte:head>
-  <title>[DEV] 결제완료 미리보기 — 크레이지샷</title>
+  <title>[DEV] 예약신청완료 미리보기 — 크레이지샷</title>
 </svelte:head>
 
 <!-- 개발 전용 배너 -->
@@ -32,7 +32,7 @@
           <path d="M14 5H1M1 5L5.5 1M1 5L5.5 9" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
         </svg>
       </button>
-      <span class="gnb-title">결제완료</span>
+      <span class="gnb-title">신청완료</span>
       <button class="gnb-ham" aria-label="더보기 메뉴" onclick={() => {}}>
         <svg width="20" height="17" viewBox="0 0 20 17" fill="none" aria-hidden="true">
           <path d="M18.5 6.75C19.3284 6.75 20 7.42157 20 8.25C20 9.07843 19.3284 9.75 18.5 9.75H1.5C0.671573 9.75 0 9.07843 0 8.25C0 7.42157 0.671573 6.75 1.5 6.75H18.5Z" fill="#CF0000"/>
@@ -43,19 +43,18 @@
   </div>
 
   <!-- 타이틀 영역 -->
-  <!-- 2026-08-19: 계약서명 대기 중(pendingContract)이면 "예약 확정"으로 오해할 수 있는
-       단정적 성공 문구 대신, 결제는 완료됐으나 계약서명이 남았음을 명시 -->
+  <!-- 2026-08-21(TASK.md "예약 결제·계약서명 순서 재설계" Phase B): 결제(mock) 트리거가
+       cart 체크아웃(1단계)에서 계약서명 완료 시점(3단계)으로 이동하면서, 이 화면은 더 이상
+       "결제완료"가 아니라 "예약신청 완료"만 안내한다 — 결제·계약서명 둘 다 아직 이 시점엔
+       발생하지 않은 상태다(항상 hold, payment_confirmed_at NULL). 과거의 pendingContract
+       조건분기(결제완료·서명대기)는 이 시점에 더는 성립하지 않아 제거 — 단일 문구로 통일. -->
   <div class="title-bar">
     <div class="icon-box icon-box--success" aria-hidden="true">
       <svg width="20" height="14" viewBox="0 0 20 14" fill="none">
         <path d="M1 7L7 13L19 1" stroke="white" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
       </svg>
     </div>
-    {#if data.pendingContract}
-      <p class="title-text">결제 완료! 계약서 서명 후 예약이 확정돼요.</p>
-    {:else}
-      <p class="title-text">대여 결제 성공적!</p>
-    {/if}
+    <p class="title-text">예약 신청이 완료됐어요! 계약서 서명·결제까지 마치면 예약이 확정돼요.</p>
   </div>
 
   <div class="body">
@@ -117,10 +116,12 @@
       </div>
     {/each}
 
-    <!-- ── 결제 요금 분해 카드 ── -->
+    <!-- ── 예약 요금 분해 카드 ── -->
+    <!-- 2026-08-21(Phase B): "결제 내역"→"예약 내역"으로 개명 — 이 시점엔 아직 결제가
+         발생하지 않았다(쿠폰/포인트 선택·소진도 3단계로 이동해 여기선 항상 미적용). -->
     <div class="order-card">
       <div class="order-product">
-        <p class="product-name">결제 내역</p>
+        <p class="product-name">예약 내역</p>
       </div>
       <div class="order-detail">
 
@@ -135,20 +136,6 @@
           <div class="detail-row">
             <span class="detail-label">멤버십 할인</span>
             <span class="detail-value detail-value--discount">−{fmt(data.membershipDiscount)} 원</span>
-          </div>
-        {/if}
-
-        {#if data.couponDiscount > 0}
-          <div class="detail-row">
-            <span class="detail-label">쿠폰 할인</span>
-            <span class="detail-value detail-value--discount">−{fmt(data.couponDiscount)} 원</span>
-          </div>
-        {/if}
-
-        {#if data.couponCode}
-          <div class="detail-row">
-            <span class="detail-label">발급된 쿠폰 코드</span>
-            <span class="detail-value">{data.couponCode}</span>
           </div>
         {/if}
 
@@ -171,28 +158,16 @@
           </div>
         {/if}
 
-        {#if data.pointsUsed > 0}
-          <div class="detail-row">
-            <span class="detail-label">포인트 사용</span>
-            <span class="detail-value detail-value--discount">−{fmt(data.pointsUsed)} 원</span>
-          </div>
-        {/if}
-
         <div class="price-divider"></div>
 
         <div class="detail-row detail-row--total">
-          <span class="detail-label detail-label--total">합계요금</span>
+          <span class="detail-label detail-label--total">결제 예정 금액</span>
           <span class="detail-value detail-value--total">{fmt(data.amount)} 원</span>
         </div>
 
         <div class="detail-row">
-          <span class="detail-label">결제일시</span>
+          <span class="detail-label">신청일시</span>
           <span class="detail-value">{data.confirmedAt}</span>
-        </div>
-
-        <div class="detail-row">
-          <span class="detail-label">결제수단</span>
-          <span class="detail-value">{data.paymentMethod}</span>
         </div>
 
       </div>
