@@ -16,7 +16,10 @@ export const load: PageServerLoad = async ({ parent, url }) => {
   if (!cmsRole) throw redirect(303, '/cms/login')
 
   const admin  = createClient(PUBLIC_SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
-  const status = url.searchParams.get('status') ?? ''
+  // 화면 최초진입(URL에 ?status= 자체가 없음) 기본값 = '계약완료'(confirmed) — 2026-08-20.
+  // '전체' 칩 클릭 시에는 +page.svelte가 status=''를 명시적으로 params에 채워 보내므로
+  // url.searchParams.has('status')가 true가 되어 이 기본값으로 되돌아가지 않는다.
+  const status = url.searchParams.has('status') ? (url.searchParams.get('status') ?? '') : 'confirmed'
   const search = url.searchParams.get('search') ?? ''
   const page   = parseInt(url.searchParams.get('page') ?? '1', 10)
   const selectedParam = url.searchParams.get('selected')

@@ -8,7 +8,7 @@
 
   const ALL_STEPS = [
     { status: 'hold',             label: '예약신청' },
-    { status: 'confirmed',        label: '승인완료' },
+    { status: 'confirmed',        label: '계약완료' },
     { status: 'shipped',          label: '반출중' },
     { status: 'in_use',           label: '대여중' },
     { status: 'return_requested', label: '반납중' },

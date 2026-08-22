@@ -57,13 +57,19 @@ export const load: PageServerLoad = async ({ parent, url }) => {
 
   const admin = createClient(PUBLIC_SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
 
-  const status   = url.searchParams.get('status')    ?? ''
+  // 화면 최초진입(URL에 ?status= 자체가 없음) 기본값 = '신청대기'(hold) — 요구사항 1(2026-08-20).
+  // '전체' 칩 클릭 시에는 +page.svelte가 status=''를 명시적으로 params에 채워 보내므로
+  // url.searchParams.has('status')가 true가 되어 이 기본값으로 되돌아가지 않는다.
+  const status   = url.searchParams.has('status') ? (url.searchParams.get('status') ?? '') : 'hold'
   const search   = url.searchParams.get('search')    ?? ''
   const dateFrom = url.searchParams.get('date_from') ?? ''
   const dateTo   = url.searchParams.get('date_to')   ?? ''
   const page     = parseInt(url.searchParams.get('page') ?? '1', 10)
   const selectedParam = url.searchParams.get('selected')
   const selectedId    = selectedParam ? parseInt(selectedParam, 10) : null
+  // '계약대기' 필터칩(2026-08-20) — status='hold' 중 전자계약이 발송됐지만 아직 서명되지
+  // 않은 건만 골라내는 별도 차원의 조건. status와 독립적인 파라미터라 URL도 별도로 관리.
+  const contractPending = url.searchParams.get('contract_pending') === '1'
 
   // confirmed 이후 상태는 /cms/rentals에서 관리 → 예약 목록에서 제외
   // draft(날짜 미정 임시예약)도 제외 — 고객이 체크아웃에서 날짜를 입력해 hold로 승격해야 관리자에게 노출됨(Default-Exclude)
@@ -73,13 +79,14 @@ export const load: PageServerLoad = async ({ parent, url }) => {
   const RENTAL_VIEW_STATUSES = ['confirmed', 'shipped', 'in_use', 'return_requested', 'returned', 'completed', 'damage_claimed', 'draft']
 
   const { data: rows, error } = await admin.rpc('get_rental_list', {
-    p_status:           status   || null,
-    p_search:           search   || null,
-    p_date_from:        dateFrom || null,
-    p_date_to:          dateTo   || null,
-    p_page:             page,
-    p_per_page:         30,
-    p_exclude_statuses: RENTAL_VIEW_STATUSES,
+    p_status:                          status   || null,
+    p_search:                          search   || null,
+    p_date_from:                       dateFrom || null,
+    p_date_to:                         dateTo   || null,
+    p_page:                            page,
+    p_per_page:                        30,
+    p_exclude_statuses:                RENTAL_VIEW_STATUSES,
+    p_require_contract_sent_unsigned:  contractPending || null,
   })
 
   if (error) console.error('[cms/reservation] get_rental_list error:', error.message)
@@ -88,7 +95,7 @@ export const load: PageServerLoad = async ({ parent, url }) => {
   const totalCount = rentals[0]?.total_count ?? 0
   const totalPages = Math.max(1, Math.ceil(totalCount / 30))
 
-  return { rentals, totalCount, totalPages, status, search, dateFrom, dateTo, page, selectedId, cmsRole }
+  return { rentals, totalCount, totalPages, status, search, dateFrom, dateTo, page, selectedId, cmsRole, contractPending }
 }
 
 export const actions: Actions = {

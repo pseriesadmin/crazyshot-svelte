@@ -15,7 +15,7 @@
 
   // 대여 라이프사이클 전용 — 데스크톱 /cms/rentals/+page.svelte와 동일 라벨/색상 (pending/hold 미포함)
   const STATUS_LABEL: Record<string, string> = {
-    confirmed:        '승인완료',
+    confirmed:        '계약완료',
     shipped:          '반출중',
     in_use:           '대여중',
     return_requested: '반납중',
@@ -51,7 +51,7 @@
     qrOverlayOpen = true
   }
 
-  // QR 일치 시: '승인완료' 카드는 반출로, '반납중' 카드는 반납으로 확인 탭 없이 즉시 자동 기록.
+  // QR 일치 시: '계약완료' 카드는 반출로, '반납중' 카드는 반납으로 확인 탭 없이 즉시 자동 기록.
   // 그 외 상태는 기존처럼 /cms/mobile/qr/[id] 수동 처리 화면으로 이동(RentalDetailPanel 수동 버튼과 하이브리드 유지).
   const AUTO_STATUSES = new Set(['confirmed', 'return_requested'])
 

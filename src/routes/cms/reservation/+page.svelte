@@ -4,6 +4,7 @@
   import RentalDetailPanel from '$lib/components/cms/RentalDetailPanel.svelte'
   import CmsPagination from '$lib/components/cms/CmsPagination.svelte'
   import ReservationRentalTabBar from '$lib/components/cms/ReservationRentalTabBar.svelte'
+  import ChevronIcon from '$lib/components/common/ChevronIcon.svelte'
   import { csToast } from '$lib/utils/toast'
   import type { PageData } from './$types'
   import type { RentalListRow } from './+page.server'
@@ -11,22 +12,23 @@
   interface Props { data: PageData }
   let { data }: Props = $props()
 
-  const STATUS_FILTERS = [
-    { label: '전체',     value: '' },
+  // 예약현황(/cms/reservation) 전용 필터 — 계약완료 이후 상태(대여 라이프사이클)는 이 화면
+  // 쿼리에서 애초에 제외되므로(RENTAL_VIEW_STATUSES, +page.server.ts) 해당 정렬버튼은 제거.
+  // '전체'는 '취소' 우측(맨 끝)에 배치 — 화면 오픈 시 기본 활성 필터는 '신청대기'(+page.server.ts).
+  // '계약대기'(2026-08-20)는 실제 rr.status는 '신청대기'와 동일하게 hold이지만, 전자계약이
+  // 발송됐으나 아직 서명되지 않은 건만 골라내는 별도 차원의 조건(contractPending)이라
+  // value는 같고 contractPending만 다르게 구분한다 — selectFilter()/chip-active 판정 참고.
+  const STATUS_FILTERS: { label: string; value: string; contractPending?: boolean }[] = [
     { label: '신청대기', value: 'hold' },
-    { label: '승인완료', value: 'confirmed' },
-    { label: '배송중',   value: 'shipped' },
-    { label: '대여중',   value: 'in_use' },
-    { label: '반납요청', value: 'return_requested' },
-    { label: '반납완료', value: 'returned' },
-    { label: '완료',     value: 'completed' },
+    { label: '계약대기', value: 'hold', contractPending: true },
     { label: '취소',     value: 'cancelled' },
+    { label: '전체',     value: '' },
   ]
 
   const STATUS_LABEL: Record<string, string> = {
     pending:          '접수',
     hold:             '신청대기',
-    confirmed:        '승인완료',
+    confirmed:        '계약완료',
     shipped:          '배송중',
     in_use:           '대여중',
     return_requested: '반납요청',
@@ -69,7 +71,12 @@
 
   function applyFilters() {
     const params = new URLSearchParams()
-    if (data.status)     params.set('status', data.status)
+    // status는 빈 값('전체')이어도 명시적으로 채운다 — 파라미터 자체가 없으면 서버가
+    // 최초진입 기본값('신청대기')으로 되돌리므로, '전체' 선택 상태가 유지되게 하려면
+    // 빈 문자열이라도 항상 params에 실어 보내야 한다(요구사항 1, +page.server.ts 참고).
+    params.set('status', data.status ?? '')
+    // '계약대기' 선택 상태도 검색·날짜 필터 적용 시 함께 유지
+    if (data.contractPending) params.set('contract_pending', '1')
     if (searchInput.trim()) params.set('search', searchInput.trim())
     if (dateFrom)        params.set('date_from', dateFrom)
     if (dateTo)          params.set('date_to', dateTo)
@@ -77,9 +84,12 @@
     goto(`/cms/reservation?${params.toString()}`, { replaceState: true })
   }
 
-  function setStatus(val: string) {
+  function setStatus(val: string, contractPending = false) {
     const params = new URLSearchParams(window.location.search)
-    if (val) params.set('status', val); else params.delete('status')
+    // '전체'(val === '')도 명시적으로 채운다 — 위 applyFilters와 동일한 이유
+    params.set('status', val)
+    if (contractPending) params.set('contract_pending', '1')
+    else                 params.delete('contract_pending')
     params.delete('page')
     goto(`/cms/reservation?${params.toString()}`, { replaceState: true })
   }
@@ -126,11 +136,9 @@
 <div class="page-wrap">
   <ReservationRentalTabBar />
 
-  <p class="page-sub">신청 → 계약 → 승인 파이프라인을 관리합니다.</p>
-
-  <!-- 툴바 -->
+  <!-- 툴바 — 검색 UI와 필터 UI를 별도 행으로 분리(2026-08-20, /cms/rentals과 동일 레이아웃) -->
   <div class="toolbar">
-    <div class="toolbar-left">
+    <div class="toolbar-top">
       <div class="search-wrap">
         <input
           class="search-in"
@@ -154,22 +162,31 @@
           onchange={applyFilters}
           aria-label="대여 종료일 필터"
         />
-        <button class="btn-secondary" onclick={applyFilters}>검색</button>
       </div>
 
-      <div class="filter-chips">
-        {#each STATUS_FILTERS as f}
-          <button
-            class="chip"
-            class:chip-active={(data.status ?? '') === f.value}
-            onclick={() => setStatus(f.value)}
-          >{f.label}</button>
-        {/each}
-      </div>
+      <span class="count-badge">총 {data.totalCount ?? 0}건</span>
     </div>
 
-    <div class="toolbar-right">
-      <span class="count-badge">총 {data.totalCount ?? 0}건</span>
+    <!-- 대여현황(/cms/rentals)과 동일한 내비게이터형 필터 디자인 적용(2026-08-20) —
+         '신청대기'는 다음 단계(승인)로 이어지는 진행 상태라 내부 화살표 부여, '취소'는
+         파이프라인의 분기/종결 상태라 화살표 없음, '전체'는 구분선으로 분리한 리셋 액션 -->
+    <div class="filter-nav" role="group" aria-label="예약 상태 필터">
+      {#each STATUS_FILTERS as f}
+        {#if f.value === ''}
+          <span class="filter-divider" aria-hidden="true"></span>
+        {/if}
+        <button
+          class="chip"
+          class:chip-all={f.value === ''}
+          class:chip-active={(data.status ?? '') === f.value && !!data.contractPending === !!f.contractPending}
+          onclick={() => setStatus(f.value, f.contractPending)}
+        >
+          <span>{f.label}</span>
+          {#if f.value === 'hold'}
+            <ChevronIcon direction="right" size={6} color="currentColor" />
+          {/if}
+        </button>
+      {/each}
     </div>
   </div>
 
@@ -218,9 +235,15 @@
                   {#if row.status === 'hold' && row.payment_confirmed_at}
                     <span class="status-badge" style="background:rgba(245,158,11,0.12);color:var(--cs-warning);margin-left:4px;">결제완료</span>
                   {/if}
+                  {#if row.status === 'hold' && row.signing_sent_at}
+                    <span class="status-badge" style="background:rgba(14,165,233,0.12);color:var(--cs-info);margin-left:4px;">계약발송</span>
+                  {/if}
                 </td>
                 <td class="col-hide">
                   <code class="rsv-code">{row.reservation_code ?? reservationNo(row.reservation_id)}</code>
+                  {#if row.order_key}
+                    <div class="order-key-tag" title="같은 주문으로 묶인 예약">주문 {row.order_key}</div>
+                  {/if}
                 </td>
                 <td><span class="customer-name">{row.customer_name ?? '-'}</span></td>
                 <td>
@@ -280,6 +303,7 @@
             onclose={closePanel}
             onrefresh={invalidateAll}
             stepFilter={['hold', 'confirmed']}
+            cmsRole={data.cmsRole}
           />
         {/key}
       </div>
@@ -298,20 +322,17 @@
     gap: 16px;
   }
 
-  .page-sub { font: var(--text-pc-body-14); color: var(--cs-text-mid); margin: 0; }
-
-  /* 툴바 */
+  /* 툴바 — 검색 행(toolbar-top)과 필터 행(filter-nav)을 세로로 분리(2026-08-20) */
   .toolbar {
+    display: flex;
+    flex-direction: column;
+    gap: 24px;                          /* 검색행↔필터행 여백 2배(기존 12px) */
+  }
+  .toolbar-top {
     display: flex;
     align-items: center;
     justify-content: space-between;
     gap: 12px;
-    flex-wrap: wrap;
-  }
-  .toolbar-left {
-    display: flex;
-    align-items: center;
-    gap: 10px;
     flex-wrap: wrap;
   }
   .search-wrap { display: flex; align-items: center; gap: 6px; }
@@ -322,7 +343,7 @@
     padding: 10px 16px;
     font: var(--text-pc-body-14);
     color: var(--cs-text);
-    width: 220px;
+    width: 440px;                        /* 기존 220px → 2배 확장, 검색버튼 제거로 엔터 입력만 사용 */
   }
   .search-in:focus {
     outline: 2px solid var(--cs-purple);
@@ -341,24 +362,35 @@
   .date-in:focus { outline: 2px solid var(--cs-purple); outline-offset: -2px; border-color: var(--cs-purple); }
   .date-sep { font: var(--text-pc-script-12); color: var(--cs-text-mid); }
 
-  .filter-chips { display: flex; gap: 4px; flex-wrap: wrap; }
+  /* 대여현황(/cms/rentals)과 동일한 내비게이터형 필터 디자인(2026-08-20) — CMS 콤보버튼
+     표준 §7-12-A pill 기반 + 미선택 BG purple-10 + 버튼 내부 화살표 + 확장 패딩,
+     '전체'만 미선택 시 배경 제거 */
+  .filter-nav { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+  .filter-divider {
+    width: 1px;
+    height: 18px;
+    background: var(--cs-lilac);
+    margin: 0 2px;
+    flex-shrink: 0;
+  }
   .chip {
     display: inline-flex;
     align-items: center;
-    height: 30px;
-    border-radius: var(--radius-sm);
-    padding: 5px 10px;
+    gap: 8px;
+    border-radius: var(--radius-xl);
+    padding: 5px 26px;
     font: var(--text-pc-script-12);
-    font-weight: 400;
+    font-weight: 700;
     white-space: nowrap;
     cursor: pointer;
-    border: 1px solid #ECEBF4;
-    background: var(--cs-white);
+    border: none;
+    background: var(--cs-purple-op10);
     color: var(--cs-text);
-    transition: background 0.12s, color 0.12s;
+    transition: background 0.15s, color 0.15s;
   }
-  .chip:hover  { background: rgba(59,47,138,0.06); }
-  .chip-active { background: var(--cs-purple-dark); color: var(--cs-white); border-color: var(--cs-purple-dark); }
+  .chip:hover:not(.chip-active) { color: var(--cs-purple); }
+  .chip-active { background: var(--cs-purple); color: var(--cs-white); }
+  .chip-all:not(.chip-active) { background: transparent; }
 
   .count-badge {
     font: var(--text-pc-script-12);
@@ -367,22 +399,6 @@
     padding: 4px 10px;
     border-radius: var(--radius-sm);
   }
-
-  .btn-secondary {
-    display: inline-flex;
-    align-items: center;
-    height: 44px;
-    padding: 0 20px;
-    background: var(--cs-white);
-    color: var(--cs-purple-dark);
-    border: 1px solid #201857;
-    border-radius: var(--radius-md);
-    font: var(--text-pc-body-14);
-    white-space: nowrap;
-    cursor: pointer;
-    transition: background 0.12s;
-  }
-  .btn-secondary:hover { background: rgba(59,47,138,0.06); }
 
   /* 콘텐츠 레이아웃 */
   .content-area {
@@ -455,6 +471,13 @@
     padding: 2px 6px;
     border-radius: 4px;
     color: var(--cs-text);
+  }
+  .order-key-tag {
+    font: var(--text-pc-script-12);
+    font-size: 10px;
+    color: var(--cs-text-light);
+    margin-top: 2px;
+    white-space: nowrap;
   }
   .customer-name { font-weight: 700; color: var(--cs-text); }
   .product-name  { font-weight: 600; color: var(--cs-text); }

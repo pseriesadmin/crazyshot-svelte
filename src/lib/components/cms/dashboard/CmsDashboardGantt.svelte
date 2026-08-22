@@ -131,7 +131,7 @@
   // ── 상태 라벨 / 색상 ─────────────────────────────────────────────────────
   // reservation/+page.svelte:25-49 원문 그대로 복사
   const STATUS_LABEL: Record<string, string> = {
-    pending: '접수', hold: '신청대기', confirmed: '승인완료', shipped: '배송중',
+    pending: '접수', hold: '신청대기', confirmed: '계약완료', shipped: '배송중',
     in_use: '대여중', return_requested: '반납요청', returned: '반납완료',
     completed: '완료', cancelled: '취소', damage_claimed: '파손신고',
   }
