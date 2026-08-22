@@ -6,25 +6,27 @@
   import RentalDetailPanel from '$lib/components/cms/RentalDetailPanel.svelte'
   import CmsPagination from '$lib/components/cms/CmsPagination.svelte'
   import ReservationRentalTabBar from '$lib/components/cms/ReservationRentalTabBar.svelte'
+  import ChevronIcon from '$lib/components/common/ChevronIcon.svelte'
   import type { PageData } from './$types'
   import type { RentalListRow } from './+page.server'
 
   interface Props { data: PageData }
   let { data }: Props = $props()
 
+  // '전체'는 '완료' 우측(맨 끝)에 배치 — 화면 오픈 시 기본 활성 필터는 '계약완료'(+page.server.ts).
   const STATUS_FILTERS = [
-    { label: '전체',     value: '' },
-    { label: '승인완료', value: 'confirmed' },
+    { label: '계약완료', value: 'confirmed' },
     { label: '배송중',   value: 'shipped' },
     { label: '대여중',   value: 'in_use' },
     { label: '반납요청', value: 'return_requested' },
     { label: '반납완료', value: 'returned' },
     { label: '완료',     value: 'completed' },
+    { label: '전체',     value: '' },
   ]
 
   // 대여 라이프사이클 전용 — pending/hold (예약 단계) 의도적으로 미포함
   const STATUS_LABEL: Record<string, string> = {
-    confirmed:        '승인완료',
+    confirmed:        '계약완료',
     shipped:          '반출중',
     in_use:           '대여중',
     return_requested: '반납중',
@@ -85,14 +87,18 @@
 
   function applyFilters() {
     const params = new URLSearchParams()
-    if (data.status)        params.set('status', data.status)
+    // status는 빈 값('전체')이어도 명시적으로 채운다 — 파라미터 자체가 없으면 서버가
+    // 최초진입 기본값('계약완료')으로 되돌리므로, '전체' 선택 상태가 유지되게 하려면
+    // 빈 문자열이라도 항상 params에 실어 보내야 한다(+page.server.ts 참고).
+    params.set('status', data.status ?? '')
     if (searchInput.trim()) params.set('search', searchInput.trim())
     goto(`/cms/rentals?${params.toString()}`, { replaceState: true })
   }
 
   function setStatus(val: string) {
     const params = new URLSearchParams(window.location.search)
-    if (val) params.set('status', val); else params.delete('status')
+    // '전체'(val === '')도 명시적으로 채운다 — 위 applyFilters와 동일한 이유
+    params.set('status', val)
     params.delete('page')
     goto(`/cms/rentals?${params.toString()}`, { replaceState: true })
   }
@@ -133,11 +139,9 @@
 <div class="page-wrap">
   <ReservationRentalTabBar />
 
-  <p class="page-sub">승인완료 이후 대여 라이프사이클을 관리합니다.</p>
-
-  <!-- 툴바 -->
+  <!-- 툴바 — 검색 UI와 필터 UI를 별도 행으로 분리(2026-08-20) -->
   <div class="toolbar">
-    <div class="toolbar-left">
+    <div class="toolbar-top">
       <div class="search-wrap">
         <input
           class="search-in"
@@ -146,21 +150,32 @@
           bind:value={searchInput}
           onkeydown={(e) => e.key === 'Enter' && applyFilters()}
         />
-        <button class="btn-secondary" onclick={applyFilters}>검색</button>
       </div>
 
-      <div class="filter-chips">
-        {#each STATUS_FILTERS as f}
-          <button
-            class="chip"
-            class:chip-active={(data.status ?? '') === f.value}
-            onclick={() => setStatus(f.value)}
-          >{f.label}</button>
-        {/each}
-      </div>
+      <span class="count-badge">총 {data.totalCount ?? 0}건</span>
     </div>
 
-    <span class="count-badge">총 {data.totalCount ?? 0}건</span>
+    <!-- 대여 라이프사이클 진행 순서를 겸하는 내비게이터형 필터 — 계약완료→...→완료는
+         버튼 내부 화살표로 "단계"임을 드러내고, '전체'는 구분선으로 분리해 파이프라인
+         밖의 리셋 액션임을 시각적으로 구분(CMS 콤보버튼 표준 §7-12-A pill 적용) -->
+    <div class="filter-nav" role="group" aria-label="대여 진행 상태 필터">
+      {#each STATUS_FILTERS as f}
+        {#if f.value === ''}
+          <span class="filter-divider" aria-hidden="true"></span>
+        {/if}
+        <button
+          class="chip"
+          class:chip-all={f.value === ''}
+          class:chip-active={(data.status ?? '') === f.value}
+          onclick={() => setStatus(f.value)}
+        >
+          <span>{f.label}</span>
+          {#if f.value !== '' && f.value !== 'completed'}
+            <ChevronIcon direction="right" size={6} color="currentColor" />
+          {/if}
+        </button>
+      {/each}
+    </div>
   </div>
 
   <!-- 콘텐츠 영역 -->
@@ -207,6 +222,9 @@
                 </td>
                 <td class="col-hide">
                   <code class="rsv-code">{row.reservation_code ?? `CZ-${String(row.reservation_id).padStart(5,'0')}`}</code>
+                  {#if row.order_key}
+                    <div class="order-key-tag" title="같은 주문으로 묶인 예약">주문 {row.order_key}</div>
+                  {/if}
                 </td>
                 <td>
                   <span class="customer-name">{row.customer_name ?? '-'}</span>
@@ -269,6 +287,7 @@
             onrefresh={invalidateAll}
             isRentalView={true}
             stepFilter={['confirmed', 'shipped', 'in_use', 'return_requested', 'returned']}
+            cmsRole={data.cmsRole}
           />
         {/key}
       </div>
@@ -287,20 +306,17 @@
     gap: 16px;
   }
 
-  .page-sub { font: var(--text-pc-body-14); color: var(--cs-text-mid); margin: 0; }
-
-  /* 툴바 */
+  /* 툴바 — 검색 행(toolbar-top)과 필터 행(filter-nav)을 세로로 분리(2026-08-20) */
   .toolbar {
+    display: flex;
+    flex-direction: column;
+    gap: 24px;                          /* 검색행↔필터행 여백 2배(기존 12px) */
+  }
+  .toolbar-top {
     display: flex;
     align-items: center;
     justify-content: space-between;
     gap: 12px;
-    flex-wrap: wrap;
-  }
-  .toolbar-left {
-    display: flex;
-    align-items: center;
-    gap: 10px;
     flex-wrap: wrap;
   }
   .search-wrap { display: flex; align-items: center; gap: 6px; }
@@ -311,47 +327,47 @@
     padding: 10px 16px;
     font: var(--text-pc-body-14);
     color: var(--cs-text);
-    width: 220px;
+    width: 440px;                        /* 기존 220px → 2배 확장, 검색버튼 제거로 엔터 입력만 사용 */
   }
   .search-in:focus {
     outline: 2px solid var(--cs-purple);
     outline-offset: -2px;
     border-color: var(--cs-purple);
   }
-  .btn-secondary {
-    display: inline-flex;
-    align-items: center;
-    height: 44px;
-    padding: 0 20px;
-    background: var(--cs-white);
-    color: var(--cs-purple-dark);
-    border: 1px solid #201857;
-    border-radius: var(--radius-md);
-    font: var(--text-pc-body-14);
-    white-space: nowrap;
-    cursor: pointer;
-    transition: background 0.12s;
-  }
-  .btn-secondary:hover { background: rgba(59,47,138,0.06); }
 
-  .filter-chips { display: flex; gap: 4px; flex-wrap: wrap; }
+  /* 대여 라이프사이클 내비게이터형 필터 — CMS 콤보버튼 표준 §7-12-A(cat-pill/filter-pill
+     툴바형: pill 30px, purple↔purple-20)을 베이스로, 미선택 상태도 버튼 UI가 뚜렷이 보이도록
+     BG를 --cs-purple-op10(purple-10%, app.css 기존 등록 토큰)로 강화 + 화살표를 버튼 내부로
+     이동 + 가로폭 확장(2026-08-20 Stephen 지시 반영) */
+  .filter-nav { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+  .filter-divider {
+    width: 1px;
+    height: 18px;
+    background: var(--cs-lilac);
+    margin: 0 2px;
+    flex-shrink: 0;
+  }
   .chip {
     display: inline-flex;
     align-items: center;
-    height: 30px;
-    border-radius: var(--radius-sm);
-    padding: 5px 10px;
+    gap: 8px;
+    border-radius: var(--radius-xl);
+    padding: 5px 26px;                  /* 상하 5px 추가(기존 0) + 가로폭 확장(기존 16px) */
     font: var(--text-pc-script-12);
-    font-weight: 400;
+    font-weight: 700;
     white-space: nowrap;
     cursor: pointer;
-    border: 1px solid #ECEBF4;
-    background: var(--cs-white);
+    border: none;
+    background: var(--cs-purple-op10);  /* purple-10% — 미선택 상태도 버튼 UI로 뚜렷이 노출 */
     color: var(--cs-text);
-    transition: background 0.12s, color 0.12s;
+    transition: background 0.15s, color 0.15s;
   }
-  .chip:hover  { background: rgba(59,47,138,0.06); }
-  .chip-active { background: var(--cs-purple-dark); color: var(--cs-white); border-color: var(--cs-purple-dark); }
+  /* 호버 컬러토큰값 유지(기존 var(--cs-purple) 그대로) — 화살표는 currentColor라 함께 전환됨 */
+  .chip:hover:not(.chip-active) { color: var(--cs-purple); }
+  .chip-active { background: var(--cs-purple); color: var(--cs-white); }
+  /* '전체'는 파이프라인 밖의 리셋 액션 — 미선택 시 기본 BG토큰(purple-10) 제거해 다른
+     순차 상태 버튼들과 시각적으로 구분(선택되면 다른 칩과 동일하게 chip-active 배경 적용) */
+  .chip-all:not(.chip-active) { background: transparent; }
 
   .count-badge {
     font: var(--text-pc-script-12);
@@ -431,6 +447,13 @@
     padding: 2px 6px;
     border-radius: 4px;
     color: var(--cs-text);
+  }
+  .order-key-tag {
+    font: var(--text-pc-script-12);
+    font-size: 10px;
+    color: var(--cs-text-light);
+    margin-top: 2px;
+    white-space: nowrap;
   }
   .customer-name { font-weight: 700; }
   .product-cell  { display: flex; flex-direction: column; gap: 2px; }
