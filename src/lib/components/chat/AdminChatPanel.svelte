@@ -2,11 +2,17 @@
   // CMS 관리자 채팅 패널
   // 좌측: 세션 목록 / 우측: 선택된 세션 대화창
 
+  import { goto } from '$app/navigation'
   import MessageList from './MessageList.svelte'
   import ChatInput from './ChatInput.svelte'
   import CustomerDetailPanel from './CustomerDetailPanel.svelte'
   import BookmarkListView from './BookmarkListView.svelte'
-  import ChevronIcon from '$lib/components/common/ChevronIcon.svelte'
+  import RentalDetailPanel from '$lib/components/cms/RentalDetailPanel.svelte'
+  import ContractTemplatePreviewModal from '$lib/components/cms/ContractTemplatePreviewModal.svelte'
+  import PcInquiryPanel from '$lib/components/account/PcInquiryPanel.svelte'
+  import InquiryReplyForm from '$lib/components/cms/InquiryReplyForm.svelte'
+  import CouponTabContent from '$lib/components/members/profile/CouponTabContent.svelte'
+  import type { UserCouponCard } from '$lib/server/account/loadUserCoupons'
   import {
     loadAdminSessions,
     subscribeToSessions,
@@ -18,7 +24,7 @@
   import { setSessions, upsertSession, pushMessage, applyIncomingMessagePreview } from '$lib/stores/chat.svelte'
   import { chatStore } from '$lib/stores/chat.svelte'
   import { supabase } from '$lib/services/supabase'
-  import type { ChatSession, ChatMessage, ChatSessionStatus, CsRecord, ActionPayload } from '$lib/types/chat'
+  import type { ChatSession, ChatMessage, ChatSessionStatus, CsRecord, ActionPayload, CtaModalRequest } from '$lib/types/chat'
 
   // 로컬 타입 정의 (routes 크로스-임포트 금지 원칙) — /api/cms/customers/[userId]/summary 응답 형태
   interface CustomerSummary {
@@ -50,6 +56,65 @@
       start_date: string | null
       end_date: string | null
       product_name: string | null
+      created_at: string
+    }>
+  }
+
+  // 로컬 타입 정의 (routes 크로스-임포트 금지 원칙) — /api/cms/reservations/[id]/detail 응답
+  // 형태(get_rental_list RPC 반환 shape, RentalDetailPanel.svelte의 row prop과 구조 호환)
+  interface CtaModalRentalRow {
+    reservation_id: number
+    reservation_code: string | null
+    status: string
+    rental_start: string
+    rental_end: string
+    rental_days: number | null
+    pickup_method: string | null
+    return_method: string | null
+    pickup_time: string | null
+    return_time: string | null
+    user_id: string
+    customer_name: string
+    customer_email: string
+    customer_phone: string
+    membership_grade: string
+    credit_score: number
+    product_id: string
+    product_name: string
+    product_code: string | null
+    product_category: string
+    product_image_url: string | null
+    order_id: number | null
+    order_key: string | null
+    order_amount: number | null
+    discount_amount: number | null
+    tax_amount: number | null
+    payment_status: string | null
+    contract_id: string | null
+    contract_status: string | null
+    contract_pdf_url: string | null
+    auto_signed_at: string | null
+    customer_signed_at: string | null
+    signing_sent_at: string | null
+    signing_token: string | null
+    created_at: string
+    payment_confirmed_at?: string | null
+    total_count: number
+  }
+
+  // 로컬 타입 정의 (routes 크로스-임포트 금지 원칙) — /api/cms/customers/[id]/inquiries 응답
+  // 형태(PcInquiryPanel.svelte의 inquiries prop과 구조 호환)
+  interface CtaModalInquiryItem {
+    id: string
+    title: string
+    content: string
+    category: string
+    status: string
+    created_at: string
+    cs_inquiries: Array<{
+      id: string
+      response: string
+      is_resolution: boolean
       created_at: string
     }>
   }
@@ -117,10 +182,172 @@
   // GSD-5: 고객 상세정보 패널
   let customerDetail = $state<CustomerDetailData | null>(null)
   let customerDetailLoading = $state(false)
-  let customerDetailExpanded = $state(false)
 
   // GSD-12: 북마크 뷰 토글
   let showBookmarks = $state(false)
+
+  // 대화카드 CTA 레이어 모달 — 최상위(.admin-panel 형제)에서 렌더링해야 position:fixed가
+  // 메시지 트리 조상에 갇히지 않는다(ui-mobile.md "CSS transform + position:fixed 충돌" 참고).
+  // ActionCard.svelte → MessageBubble → MessageList → 여기까지 onctamodal 콜백으로 위임됨.
+  //
+  // 카드 타입별로 서로 다른 컴포넌트를 직접 마운트한다(iframe·CMS 페이지 전체 embed 아님 —
+  // Stephen 요청: "필요한 요소 레이아웃만"):
+  //   'reservation'       → RentalDetailPanel (대여정보/계약서 탭), 데이터는
+  //                         /api/cms/reservations/[id]/detail(Migration 327) lazy 로드
+  //   'contract-preview'  → ContractTemplatePreviewModal(viewOnly) — 고객이 보는 계약서 미리보기
+  //   'inquiry'           → PcInquiryPanel — 고객의 빠른문의 답변 목록
+  //   'empty'             → CMS에서 보여줄 화면이 없음 안내
+  let ctaModalOpen = $state(false)
+  let ctaModalTitle = $state('')
+  let ctaModalKind = $state<CtaModalRequest['kind'] | null>(null)
+  let ctaModalMenuUrl = $state<string | null>(null)
+  let ctaModalLoading = $state(false)
+
+  // 'reservation' 전용
+  let ctaModalReservationId = $state<number | null>(null)
+  let ctaModalRow = $state<CtaModalRentalRow | null>(null)
+  let ctaModalInitialTab = $state<'rental' | 'contract' | undefined>(undefined)
+
+  // 'contract-preview' 전용
+  let ctaModalContractId = $state<string | null>(null)
+  let ctaModalContractReservationId = $state<number | null>(null)
+
+  // 'inquiry' 전용
+  let ctaModalInquiries = $state<CtaModalInquiryItem[]>([])
+
+  // 'inquiry-reply-form' 전용
+  let ctaModalPostId = $state<string | null>(null)
+  let ctaModalPost = $state<CtaModalInquiryItem | null>(null)
+
+  // 'coupon' 전용
+  let ctaModalCoupons = $state<UserCouponCard[]>([])
+
+  async function loadCtaModalRow(reservationId: number): Promise<void> {
+    ctaModalLoading = true
+    ctaModalRow = null
+    try {
+      const res = await fetch(`/api/cms/reservations/${reservationId}/detail`)
+      const data = res.ok ? await res.json() : null
+      ctaModalRow = (data?.row as CtaModalRentalRow | undefined) ?? null
+    } catch {
+      ctaModalRow = null
+    } finally {
+      ctaModalLoading = false
+    }
+  }
+
+  async function loadCtaModalInquiries(): Promise<void> {
+    if (!selectedUserId) { ctaModalInquiries = []; return }
+    ctaModalLoading = true
+    ctaModalInquiries = []
+    try {
+      const res = await fetch(`/api/cms/customers/${selectedUserId}/inquiries`)
+      const data = res.ok ? await res.json() : null
+      ctaModalInquiries = Array.isArray(data) ? (data as CtaModalInquiryItem[]) : []
+    } catch {
+      ctaModalInquiries = []
+    } finally {
+      ctaModalLoading = false
+    }
+  }
+
+  async function loadCtaModalPost(postId: string): Promise<void> {
+    if (!selectedUserId) { ctaModalPost = null; return }
+    ctaModalLoading = true
+    ctaModalPost = null
+    try {
+      const res = await fetch(`/api/cms/customers/${selectedUserId}/inquiries`)
+      const data = res.ok ? await res.json() : null
+      const list = Array.isArray(data) ? (data as CtaModalInquiryItem[]) : []
+      ctaModalPost = list.find((p) => p.id === postId) ?? null
+    } catch {
+      ctaModalPost = null
+    } finally {
+      ctaModalLoading = false
+    }
+  }
+
+  async function loadCtaModalCoupons(): Promise<void> {
+    if (!selectedUserId) { ctaModalCoupons = []; return }
+    ctaModalLoading = true
+    ctaModalCoupons = []
+    try {
+      const res = await fetch(`/api/cms/customers/${selectedUserId}/coupons`)
+      const data = res.ok ? await res.json() : null
+      ctaModalCoupons = Array.isArray(data) ? (data as UserCouponCard[]) : []
+    } catch {
+      ctaModalCoupons = []
+    } finally {
+      ctaModalLoading = false
+    }
+  }
+
+  function handleCtaModal(info: CtaModalRequest): void {
+    ctaModalTitle = info.title
+    ctaModalKind = info.kind
+    ctaModalMenuUrl = null
+    ctaModalReservationId = null
+    ctaModalRow = null
+    ctaModalInitialTab = undefined
+    ctaModalContractId = null
+    ctaModalContractReservationId = null
+    ctaModalInquiries = []
+    ctaModalPostId = null
+    ctaModalPost = null
+    ctaModalCoupons = []
+    ctaModalOpen = true
+
+    if (info.kind === 'reservation') {
+      ctaModalReservationId = info.reservationId
+      ctaModalMenuUrl = info.menuUrl
+      ctaModalInitialTab = info.initialTab
+      void loadCtaModalRow(info.reservationId)
+    } else if (info.kind === 'contract-preview') {
+      ctaModalContractId = info.contractId
+      ctaModalContractReservationId = info.reservationId
+    } else if (info.kind === 'inquiry') {
+      ctaModalMenuUrl = '/cms/customers/inquiry'
+      void loadCtaModalInquiries()
+    } else if (info.kind === 'inquiry-reply-form') {
+      ctaModalMenuUrl = '/cms/customers/inquiry'
+      ctaModalPostId = info.postId
+      void loadCtaModalPost(info.postId)
+    } else if (info.kind === 'coupon') {
+      ctaModalMenuUrl = '/cms/promotion/coupon'
+      void loadCtaModalCoupons()
+    }
+  }
+
+  function closeCtaModal(): void {
+    ctaModalOpen = false
+    ctaModalKind = null
+    ctaModalMenuUrl = null
+    ctaModalReservationId = null
+    ctaModalRow = null
+    ctaModalInitialTab = undefined
+    ctaModalContractId = null
+    ctaModalContractReservationId = null
+    ctaModalInquiries = []
+    ctaModalPostId = null
+    ctaModalPost = null
+    ctaModalCoupons = []
+    ctaModalLoading = false
+  }
+
+  function refetchCtaModalPost(): void {
+    if (ctaModalPostId != null) void loadCtaModalPost(ctaModalPostId)
+  }
+
+  function refetchCtaModalRow(): void {
+    if (ctaModalReservationId != null) void loadCtaModalRow(ctaModalReservationId)
+  }
+
+  function goToCtaMenu(): void {
+    if (!ctaModalMenuUrl) return
+    const url = ctaModalMenuUrl
+    closeCtaModal()
+    goto(url)
+  }
 
   // GSD-8: 세션별 자동응답 수동전환
   let sessionManualMode = $state(false)
@@ -308,7 +535,7 @@
   // GSD-5: 고객 상세정보 조회 (CustomerDetailPanel용)
   $effect(() => {
     const uid = selectedUserId
-    if (!uid) { customerDetail = null; customerDetailExpanded = false; return }
+    if (!uid) { customerDetail = null; return }
     customerDetail = null
     customerDetailLoading = true
     fetch(`/api/chat/customers/${uid}/detail`)
@@ -324,17 +551,6 @@
   $effect(() => {
     sessionManualMode = selectedSession?.manual_mode ?? false
   })
-
-  const GRADE_LABEL: Record<string, string> = {
-    none: 'NONE', easy: 'EASY', pop: 'POP', crazy: 'CRAZY', admin: 'ADMIN',
-  }
-
-  function scoreClass(score: number): string {
-    if (score >= 85) return 'score-high'
-    if (score >= 70) return 'score-mid'
-    if (score >= 50) return 'score-low'
-    return 'score-critical'
-  }
 
   async function handleSelectSession(sid: string): Promise<void> {
     selectedSessionId = sid
@@ -818,7 +1034,8 @@
             <span class="chat-status status-{selectedSession.status}">{STATUS_LABEL[selectedSession.status as FilterTab]}</span>
           </div>
 
-          <!-- 고객 기본정보 요약 -->
+          <!-- 고객 아이디·회원코드 — 나머지 요약(등급·크레이지스코어·블랙리스트·상세정보)은
+               우측 고객정보 컬럼(customer-pane)으로 이동, 헤더에는 식별용 최소 정보만 유지 -->
           {#if customerSummary}
             <div class="customer-strip">
               {#if customerSummary.email}
@@ -826,19 +1043,6 @@
               {/if}
               {#if customerSummary.member_code}
                 <span class="cs-item cs-code">{customerSummary.member_code}</span>
-              {/if}
-              {#if customerSummary.membership_grade}
-                <span class="grade-badge grade-{customerSummary.membership_grade}">
-                  {GRADE_LABEL[customerSummary.membership_grade] ?? customerSummary.membership_grade.toUpperCase()}
-                </span>
-              {/if}
-              {#if customerSummary.credit_score !== null}
-                <span class="cs-score {scoreClass(customerSummary.credit_score)}">
-                  크레이지스코어 {customerSummary.credit_score}점
-                </span>
-              {/if}
-              {#if customerSummary.blacklisted}
-                <span class="badge-danger">블랙리스트</span>
               {/if}
             </div>
           {/if}
@@ -890,27 +1094,7 @@
           {/if}
         </div>
 
-        {#if customerSummary}
-          <!-- customer-strip 뱃지 줄바꿈과 무관하게, header-toolbar 뒤 레이아웃 진짜 우측
-               맨 끝에 고정 배치 (이전엔 header-toolbar 앞이었음 — Stephen 요청으로 이동) -->
-          <a
-            class="cs-detail-link"
-            href="/cms/customers?selected={customerSummary.user_id}"
-            aria-label="고객 정보 화면으로 이동"
-            title="고객 정보 화면으로 이동"
-          >
-            <ChevronIcon size={10} color="currentColor" direction="right" />
-          </a>
-        {/if}
       </div>
-
-      <!-- GSD-5: 고객 상세정보 패널 (접힘/펼침) -->
-      <CustomerDetailPanel
-        detail={customerDetail}
-        isLoading={customerDetailLoading}
-        expanded={customerDetailExpanded}
-        ontoggle={() => { customerDetailExpanded = !customerDetailExpanded }}
-      />
 
       <!-- GSD-12: 북마크 목록 -->
       {#if showBookmarks}
@@ -935,8 +1119,19 @@
             isLoadingOlder={isLoadingOlderMessages}
             onloadmore={handleLoadMoreOlderMessages}
             oncouponapprove={handleCouponApprove}
+            onctamodal={handleCtaModal}
           />
         {/if}
+
+        <!-- 우측 플로팅: 고객 정보(읽기전용) — 별도 3분할 컬럼이 아니라 대화 목록 영역
+             내부 우측에 겹쳐 노출, 세션 선택 시 함께 노출됨 -->
+        <div class="customer-info-float">
+          <CustomerDetailPanel
+            detail={customerDetail}
+            summary={customerSummary}
+            isLoading={customerDetailLoading}
+          />
+        </div>
       </div>
 
       <div class="chat-input-wrap">
@@ -1047,6 +1242,76 @@
   </div>
 {/if}
 
+<!-- 대화카드 CTA 레이어 모달 — .admin-panel과 형제 위치(최상위)에서 렌더링해야
+     position:fixed가 메시지 트리 조상에 갇히지 않는다(ui-mobile.md CSS transform +
+     position:fixed 충돌 문서화된 패턴 준수) -->
+{#if ctaModalKind === 'contract-preview' && ctaModalContractId}
+  <!-- ContractTemplatePreviewModal 자체가 독립적인 전체화면 모달(자체 backdrop)이라 우리
+       .cta-modal 틀 안에 얹지 않고 그대로 최상위에서 렌더링한다 -->
+  <ContractTemplatePreviewModal
+    contractId={ctaModalContractId}
+    reservationId={ctaModalContractReservationId ?? 0}
+    viewOnly={true}
+    onclose={closeCtaModal}
+    onsent={() => {}}
+  />
+{:else if ctaModalOpen}
+  <div class="cta-modal-backdrop" role="presentation" onclick={closeCtaModal}>
+    <div
+      class="cta-modal"
+      role="dialog"
+      aria-modal="true"
+      aria-label={ctaModalTitle}
+      tabindex="-1"
+      onclick={(e) => e.stopPropagation()}
+      onkeydown={(e) => { if (e.key === 'Escape') closeCtaModal() }}
+    >
+      <!-- 관리자 모달은 고객용 프론트 화면(GNB·푸터가 있는 전체 페이지)이나 CMS 목록 페이지
+           전체(목록·필터·GNB)를 절대 보여주지 않는다 — 카드 타입별로 필요한 컴포넌트만 직접
+           마운트한다. RentalDetailPanel/PcInquiryPanel은 자체 헤더/닫기 UI가 있어 로딩/빈
+           상태가 아닌 한 별도 타이틀바를 덧씌우지 않는다. -->
+      {#if ctaModalLoading}
+        <div class="cta-modal-titlebar">
+          <span class="cta-modal-title">{ctaModalTitle}</span>
+          <button class="close-btn" type="button" aria-label="닫기" onclick={closeCtaModal}>✕</button>
+        </div>
+        <div class="cta-modal-empty">불러오는 중...</div>
+      {:else if ctaModalKind === 'reservation' && ctaModalRow}
+        <div class="cta-modal-panel-wrap">
+          <RentalDetailPanel
+            row={ctaModalRow}
+            onclose={closeCtaModal}
+            onrefresh={refetchCtaModalRow}
+            isRentalView={ctaModalRow.status !== 'hold'}
+            initialTab={ctaModalInitialTab}
+          />
+        </div>
+      {:else if ctaModalKind === 'inquiry'}
+        <div class="cta-modal-inquiry-wrap">
+          <PcInquiryPanel inquiries={ctaModalInquiries} onback={closeCtaModal} />
+        </div>
+      {:else if ctaModalKind === 'inquiry-reply-form'}
+        <div class="cta-modal-panel-wrap">
+          <InquiryReplyForm post={ctaModalPost} onSubmitted={refetchCtaModalPost} />
+        </div>
+      {:else if ctaModalKind === 'coupon'}
+        <div class="cta-modal-inquiry-wrap">
+          <CouponTabContent coupons={ctaModalCoupons} />
+        </div>
+      {:else}
+        <div class="cta-modal-titlebar">
+          <span class="cta-modal-title">{ctaModalTitle}</span>
+          <button class="close-btn" type="button" aria-label="닫기" onclick={closeCtaModal}>✕</button>
+        </div>
+        <div class="cta-modal-empty">이 카드는 CMS에서 바로 볼 수 있는 관리 화면이 없습니다.</div>
+      {/if}
+      <div class="cta-modal-footer">
+        <button class="cta-modal-menu-btn" type="button" disabled={!ctaModalMenuUrl} onclick={goToCtaMenu}>메뉴 가기</button>
+      </div>
+    </div>
+  </div>
+{/if}
+
 <style>
   .admin-panel {
     display: flex;
@@ -1057,7 +1322,7 @@
 
   /* ── 세션 목록 사이드 ── */
   .sessions-pane {
-    width: 450px;
+    width: 405px;
     flex-shrink: 0;
     background: var(--cs-white);
     border-radius: var(--cms-radius-lg);
@@ -1418,59 +1683,6 @@
     padding: 2px 6px;
   }
 
-  .cs-score {
-    font: var(--text-pc-script-12);
-    font-weight: 700;
-  }
-  .cs-score.score-high     { color: var(--cs-success-light); }
-  .cs-score.score-mid      { color: var(--cs-text-mid); }
-  .cs-score.score-low      { color: var(--cs-warning); }
-  .cs-score.score-critical { color: var(--cs-red-badge); }
-
-  .grade-badge {
-    display: inline-flex;
-    align-items: center;
-    padding: 2px 8px;
-    border-radius: var(--radius-sm);
-    font: var(--text-pc-script-12);
-    font-weight: 700;
-  }
-  .grade-none  { background: var(--cs-surface-gray); color: var(--cs-text-mid); }
-  .grade-easy  { background: rgba(14,165,233,0.12);  color: var(--cs-info); }
-  .grade-pop   { background: rgba(59,47,138,0.10);   color: var(--cs-purple); }
-  .grade-crazy { background: rgba(255,69,0,0.12);    color: var(--cs-orange); }
-  .grade-admin { background: var(--cs-lilac);        color: var(--cs-purple-dark); }
-
-  .badge-danger {
-    display: inline-flex;
-    align-items: center;
-    padding: 2px 8px;
-    border-radius: var(--radius-sm);
-    font: var(--text-pc-script-12);
-    background: rgba(255,53,53,0.10);
-    color: var(--cs-red-badge);
-  }
-
-  /* 심플 화살표 아이콘 버튼 — .refresh-btn과 동일한 표준 아이콘버튼 컨벤션(투명 배경·원형 hover)
-     .chat-header의 직계 flex 자식(header-toolbar 뒤 마지막 요소)으로 배치 — customer-strip
-     뱃지 줄바꿈과 무관하게 레이아웃 진짜 우측 맨 끝에 고정 */
-  .cs-detail-link {
-    flex-shrink: 0;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    width: 28px;
-    height: 28px;
-    border-radius: var(--radius-sm);
-    color: var(--cs-text-mid);
-    background: transparent;
-    transition: color 0.15s, background 0.15s;
-  }
-  .cs-detail-link:hover {
-    color: var(--cs-purple);
-    background: var(--cs-purple-op10);
-  }
-
   .chat-status {
     font: var(--text-m-script-12);
     padding: 3px 10px;
@@ -1483,11 +1695,32 @@
   .chat-status.status-closed  { background: var(--cs-surface-gray); color: var(--cs-text-light); }
 
   .chat-messages {
+    position: relative;
     flex: 1;
     overflow: hidden;
     display: flex;
     flex-direction: column;
     min-height: 0;
+    /* 우측에 겹쳐지는 customer-info-float(300px)에 메시지 말풍선이 가려지지 않도록
+       메시지 영역 자체의 가용 폭을 그만큼 미리 줄여둠 */
+    padding-right: 300px;
+  }
+
+  /* 우측 플로팅 고객 정보(읽기전용) — 별도 3분할 컬럼이 아니라 대화 목록 영역 내부
+     우측에 겹쳐 노출되는 오버레이 카드. chat-messages 밖(입력창·상담메모 영역)까지는
+     넘어가지 않도록 chat-messages 안에서만 absolute 배치 */
+  .customer-info-float {
+    position: absolute;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    width: 300px;
+    max-width: 40%;
+    overflow-y: auto;
+    background: var(--cs-white);
+    border-left: 1px solid rgba(16, 11, 50, 0.08);
+    box-shadow: -4px 0 16px rgba(16, 11, 50, 0.06);
+    z-index: 5;
   }
 
   .loading-msgs {
@@ -1771,5 +2004,128 @@
     overflow-y: auto;
     border-bottom: 1px solid rgba(16, 11, 50, 0.06);
     background: var(--cs-surface-gray);
+  }
+
+  /* ── 대화카드 CTA 레이어 모달 — CMS 표준 디자인 토큰 준수 ── */
+  .cta-modal-backdrop {
+    position: fixed;
+    inset: 0;
+    z-index: 300;
+    background: rgba(16,11,50,0.45);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  /* 크기 1024×768 고정, 화면 중앙 배치, "대(large)" 라운드값 30px(--cms-radius-lg).
+     RentalDetailPanel을 컴포넌트로 직접 마운트하므로(iframe 아님) 세로 flex 스택으로 구성 —
+     RentalDetailPanel 자신이 이미 헤더(예약코드·상태 배지)+닫기 버튼을 갖고 있어 별도 타이틀바를
+     덧씌우지 않는다(로딩/빈 상태일 때만 안내용 타이틀바 표시). */
+  .cta-modal {
+    display: flex;
+    flex-direction: column;
+    width: 1024px;
+    height: 768px;
+    max-width: 96vw;
+    max-height: 90vh;
+    background: var(--cs-white);
+    border-radius: var(--cms-radius-lg);
+    overflow: hidden;
+    box-shadow: 0px 1px 4px rgba(0,0,0,0.06);
+  }
+
+  /* RentalDetailPanel이 없는 로딩/빈 상태 전용 타이틀바 — BG 화이트 70% 불투명도 */
+  .cta-modal-titlebar {
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 16px 20px;
+    background: rgba(255,255,255,0.7);
+    border-bottom: 1px solid var(--cs-lilac);
+  }
+
+  .cta-modal-title {
+    font: var(--text-pc-title-16);
+    font-weight: 700;
+    color: var(--cs-text);
+  }
+
+  /* close-red 표준(cms-uiux.md §0-10-A) */
+  .close-btn {
+    margin-left: auto;
+    flex-shrink: 0;
+    width: 28px;
+    height: 28px;
+    min-height: 28px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: transparent;
+    border: none;
+    border-radius: var(--radius-sm);
+    color: var(--cs-text-light);
+    font-size: 14px;
+    cursor: pointer;
+    transition: background 0.12s, color 0.12s;
+  }
+  .close-btn:hover { background: rgba(255,53,53,0.08); color: var(--cs-red-badge); }
+
+  /* RentalDetailPanel 마운트 래퍼 — flex:1로 남은 공간을 채워야 RentalDetailPanel 자신의
+     height:100%가 정상 해석됨(퍼센트 높이는 조상에 확정된 높이가 있어야 함) */
+  .cta-modal-panel-wrap {
+    flex: 1;
+    min-height: 0;
+  }
+
+  /* PcInquiryPanel 마운트 래퍼 — RentalDetailPanel과 달리 자체 height:100%/내부 스크롤이
+     없는 컴포넌트라 여기서 여백·스크롤을 직접 부여 */
+  .cta-modal-inquiry-wrap {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    padding: 24px;
+  }
+
+  /* 하단 — 우측 "메뉴 가기" 버튼, BG 화이트 70% 불투명도 */
+  .cta-modal-footer {
+    flex-shrink: 0;
+    display: flex;
+    justify-content: flex-end;
+    padding: 12px 20px;
+    background: rgba(255,255,255,0.7);
+    border-top: 1px solid var(--cs-lilac);
+  }
+
+  /* CMS 표준 CTA 버튼(.btn-primary/.cta-btn) 스펙 반영: height 44px, radius-md 15px */
+  .cta-modal-menu-btn {
+    display: inline-flex;
+    align-items: center;
+    height: 44px;
+    padding: 0 30px;
+    background: var(--cs-purple);
+    color: var(--cs-white);
+    border: none;
+    border-radius: var(--radius-md);
+    font: var(--text-pc-body-14);
+    font-weight: 700;
+    letter-spacing: -0.5px;
+    cursor: pointer;
+    transition: background 0.12s;
+  }
+  .cta-modal-menu-btn:hover:not(:disabled) { background: var(--cs-purple-hover); }
+  .cta-modal-menu-btn:disabled { background: var(--cs-disabled-button, var(--cs-text-light)); cursor: not-allowed; }
+
+  /* 로딩 중 / CMS 화면을 만들 수 없을 때(예약 컨텍스트 없는 카드 등) 안내 문구 */
+  .cta-modal-empty {
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 40px;
+    text-align: center;
+    font: var(--text-pc-body-14);
+    color: var(--cs-text-mid);
   }
 </style>

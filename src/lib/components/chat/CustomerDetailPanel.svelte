@@ -1,6 +1,14 @@
 <script lang="ts">
   // GSD-6: P2-1 고객 상세정보 패널 — get_chat_customer_detail RPC 응답 렌더링
   // 기존 5필드(이메일·회원코드·등급·크레이지스코어·블랙리스트) + 신규 필드(이름·전화·인증·구독·예약)
+  //
+  // 채팅 대화 영역 우측에 겹쳐 노출되는 상시 카드로 전환 — 이전에는 chat-header 하단의
+  // 접기/펼치기 스트립이었으나, 이제 대화 목록 영역(chat-messages) 내부 우측에 플로팅으로
+  // 노출된다. 헤더 customer-strip에 있던 등급·크레이지스코어·블랙리스트 배지도 여기로 이동해
+  // 함께 렌더링 — 읽기전용 표시 전용(수정·삭제 폼 없음).
+  //
+  // 스타일은 RentalDetailPanel.svelte(대여상세패널)의 패널헤더·섹션타이틀·info-section/info-row
+  // 패턴을 그대로 반영해 CMS 디테일 패널 공통 톤앤매너로 통일한다.
 
   interface ReservationItem {
     id: string
@@ -29,18 +37,37 @@
     reservations: ReservationItem[]
   }
 
-  interface Props {
-    detail: CustomerDetail | null
-    isLoading?: boolean
-    expanded?: boolean
-    ontoggle?: () => void
+  interface CustomerSummary {
+    user_id: string
+    email: string | null
+    member_code: string | null
+    membership_grade: string | null
+    credit_score: number | null
+    blacklisted: boolean
   }
 
-  let { detail, isLoading = false, expanded = false, ontoggle }: Props = $props()
+  interface Props {
+    detail: CustomerDetail | null
+    summary?: CustomerSummary | null
+    isLoading?: boolean
+  }
+
+  let { detail, summary = null, isLoading = false }: Props = $props()
 
   const STATUS_KO: Record<string, string> = {
-    hold: '신청대기', confirmed: '승인완료', shipped: '반출중', in_use: '대여중',
+    hold: '신청대기', confirmed: '계약완료', shipped: '반출중', in_use: '대여중',
     return_requested: '반납중', returned: '반납완료', completed: '완료', cancelled: '취소', expired: '만료',
+  }
+
+  const GRADE_LABEL: Record<string, string> = {
+    none: 'NONE', easy: 'EASY', pop: 'POP', crazy: 'CRAZY', admin: 'ADMIN',
+  }
+
+  function scoreClass(score: number): string {
+    if (score >= 85) return 'score-high'
+    if (score >= 70) return 'score-mid'
+    if (score >= 50) return 'score-low'
+    return 'score-critical'
   }
 
   function fmtDate(iso: string | null): string {
@@ -49,133 +76,169 @@
   }
 </script>
 
-<div class="cdp" class:cdp--expanded={expanded}>
-  <button class="cdp-toggle" onclick={ontoggle} aria-expanded={expanded} aria-label="고객 상세정보 {expanded ? '접기' : '펼치기'}">
-    <span class="cdp-toggle-label">고객 상세정보</span>
-    <svg class="cdp-chevron" class:rotated={expanded} width="12" height="12" viewBox="0 0 12 12" fill="none" aria-hidden="true">
-      <path d="M2 4l4 4 4-4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
-    </svg>
-  </button>
-
-  {#if expanded}
-    <div class="cdp-body">
-      {#if isLoading}
-        <div class="cdp-loading">불러오는 중...</div>
-      {:else if !detail}
-        <div class="cdp-empty">정보를 불러올 수 없습니다.</div>
-      {:else}
-        <!-- 이름·전화번호 -->
-        <div class="cdp-row">
-          <span class="cdp-key">이름</span>
-          <span class="cdp-val">{detail.profile.name ?? '—'}</span>
+<div class="cdp">
+  <div class="panel-body">
+    {#if isLoading}
+      <div class="cdp-loading">불러오는 중...</div>
+    {:else if !detail && !summary}
+      <div class="cdp-empty">정보를 불러올 수 없습니다.</div>
+    {:else}
+      <!-- 기본정보 -->
+      <div class="section-title">기본정보</div>
+      <div class="info-section">
+        <div class="info-row">
+          <span class="info-label">이름</span>
+          <span class="info-value fw-bold">{detail?.profile.name ?? '—'}</span>
         </div>
-        <div class="cdp-row">
-          <span class="cdp-key">전화번호</span>
-          <span class="cdp-val">{detail.profile.phone ?? '—'}</span>
+        <div class="info-row">
+          <span class="info-label">아이디</span>
+          <span class="info-value">{summary?.email ?? '—'}</span>
         </div>
-
-        <!-- 학생 인증 -->
-        {#if detail.profile.identity_type === 'student'}
-          <div class="cdp-row">
-            <span class="cdp-key">학생인증</span>
-            <span class="cdp-val">
-              {detail.profile.identity_verified_at ? `완료 (${fmtDate(detail.profile.identity_verified_at)})` : '미완료'}
+        <div class="info-row">
+          <span class="info-label">전화번호</span>
+          <span class="info-value">{detail?.profile.phone ?? '—'}</span>
+        </div>
+        <div class="info-row">
+          <span class="info-label">회원코드</span>
+          <span class="info-value mono">{summary?.member_code ?? '—'}</span>
+        </div>
+        {#if summary?.membership_grade || summary?.blacklisted}
+          <div class="info-row">
+            <span class="info-label">등급</span>
+            <span class="info-value">
+              {#if summary?.membership_grade}
+                <span class="panel-status grade-{summary.membership_grade}">
+                  {GRADE_LABEL[summary.membership_grade] ?? summary.membership_grade.toUpperCase()}
+                </span>
+              {/if}
+              {#if summary?.blacklisted}
+                <span class="badge-danger">블랙리스트</span>
+              {/if}
             </span>
           </div>
         {/if}
+        <div class="info-row">
+          <span class="info-label">크레이지스코어</span>
+          <span class="info-value">
+            {#if summary?.credit_score !== null && summary?.credit_score !== undefined}
+              <span class="cs-score {scoreClass(summary.credit_score)}">{summary.credit_score}점</span>
+            {:else}
+              —
+            {/if}
+          </span>
+        </div>
+      </div>
 
-        <!-- 외국인 인증 -->
-        {#if detail.profile.is_foreign}
-          <div class="cdp-row">
-            <span class="cdp-key">외국인인증</span>
-            <span class="cdp-val">
-              {detail.profile.foreign_verified_at ? `완료 (${fmtDate(detail.profile.foreign_verified_at)})` : '미완료'}
-            </span>
-          </div>
-        {/if}
+      <!-- 본인 인증 (학생·외국인 중 하나라도 해당될 때만) -->
+      {#if detail?.profile.identity_type === 'student' || detail?.profile.is_foreign}
+        <div class="section-title">본인 인증</div>
+        <div class="info-section">
+          {#if detail?.profile.identity_type === 'student'}
+            <div class="info-row">
+              <span class="info-label">학생인증</span>
+              <span class="info-value">
+                {detail.profile.identity_verified_at ? `완료 (${fmtDate(detail.profile.identity_verified_at)})` : '미완료'}
+              </span>
+            </div>
+          {/if}
+          {#if detail?.profile.is_foreign}
+            <div class="info-row">
+              <span class="info-label">외국인인증</span>
+              <span class="info-value">
+                {detail.profile.foreign_verified_at ? `완료 (${fmtDate(detail.profile.foreign_verified_at)})` : '미완료'}
+              </span>
+            </div>
+          {/if}
+        </div>
+      {/if}
 
-        <!-- 멤버십 갱신일 -->
-        <div class="cdp-row">
-          <span class="cdp-key">멤버십</span>
-          <span class="cdp-val">
-            {#if detail.subscription}
+      <!-- 멤버십 -->
+      <div class="section-title">멤버십</div>
+      <div class="info-section">
+        <div class="info-row">
+          <span class="info-label">구독 상태</span>
+          <span class="info-value">
+            {#if detail?.subscription}
               {detail.subscription.plan_name ?? '구독중'}
             {:else}
               미가입
             {/if}
           </span>
         </div>
+      </div>
 
-        <!-- 최근 예약 목록 -->
-        {#if detail.reservations.length > 0}
-          <div class="cdp-section-label">최근 예약</div>
-          <ul class="cdp-reserve-list">
-            {#each detail.reservations as r (r.id)}
-              <li class="cdp-reserve-item">
-                <span class="cdp-reserve-status status-{r.status}">{STATUS_KO[r.status] ?? r.status}</span>
-                <span class="cdp-reserve-product">{r.product_name ?? '상품 정보 없음'}</span>
-                <span class="cdp-reserve-period">
-                  {fmtDate(r.start_date)} ~ {fmtDate(r.end_date)}
-                </span>
-              </li>
-            {/each}
-          </ul>
-        {:else}
-          <div class="cdp-row">
-            <span class="cdp-key">예약 내역</span>
-            <span class="cdp-val">없음</span>
+      <!-- 최근 예약 -->
+      <div class="section-title">최근 예약</div>
+      {#if detail && detail.reservations.length > 0}
+        <ul class="cdp-reserve-list">
+          {#each detail.reservations as r (r.id)}
+            <li class="cdp-reserve-item">
+              <span class="cdp-reserve-status status-{r.status}">{STATUS_KO[r.status] ?? r.status}</span>
+              <span class="cdp-reserve-product">{r.product_name ?? '상품 정보 없음'}</span>
+              <span class="cdp-reserve-period">
+                {fmtDate(r.start_date)} ~ {fmtDate(r.end_date)}
+              </span>
+            </li>
+          {/each}
+        </ul>
+      {:else}
+        <div class="info-section">
+          <div class="info-row">
+            <span class="info-label">예약 내역</span>
+            <span class="info-value">없음</span>
           </div>
-        {/if}
+        </div>
       {/if}
-    </div>
-  {/if}
+    {/if}
+  </div>
 </div>
 
 <style>
   .cdp {
-    border-top: 1px solid rgba(16, 11, 50, 0.06);
-    flex-shrink: 0;
-  }
-
-  .cdp-toggle {
-    width: 100%;
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    padding: 8px 24px;
-    /* 상단 고객정보 헤더(--cs-purple-op10, 10%)보다 옅은 4% 톤 — cms-uiux.md 허용 예외
-       하드코딩 범위(purple tint 0.04~0.12) 내 최저값, 같은 계열로 위계만 표시 */
-    background: rgba(59, 47, 138, 0.04);
-    border: none;
-    cursor: pointer;
-    font: 700 11px/1 'Noto Sans KR', sans-serif;
-    color: var(--cs-text-mid);
-    letter-spacing: 0.2px;
-    text-transform: uppercase;
-    min-height: 36px;
-    transition: background 0.12s;
-  }
-  /* 기본(4%)보다 두 단계(4%p씩) 짙은 12% 톤 — 허용 범위 상한과 일치, 클릭 가능 영역임을 명확히 표시 */
-  .cdp-toggle:hover { background: rgba(59, 47, 138, 0.12); }
-
-  .cdp-toggle-label { flex: 1; text-align: left; }
-
-  .cdp-chevron {
-    flex-shrink: 0;
-    color: var(--cs-text-light);
-    transition: transform 0.2s;
-  }
-  .cdp-chevron.rotated { transform: rotate(180deg); }
-
-  .cdp-body {
-    padding: 8px 24px 14px;
+    height: 100%;
     display: flex;
     flex-direction: column;
-    gap: 5px;
-    /* 펼침 영역도 토글 기본 배경과 동일한 4% 톤 — 하나의 카드처럼 이어지도록 통일 */
-    background: rgba(59, 47, 138, 0.04);
-    /* uiux-index.md CMS 카드 라운드값 "중" = 20px(var(--radius-lg)) — 하단 좌우 모서리만 */
-    border-radius: 0 0 var(--radius-lg) var(--radius-lg);
+    overflow: hidden;
+  }
+
+  /* 등급 배지 — RentalDetailPanel.svelte .panel-status 반영 (기본정보 섹션 내 값으로 사용) */
+  .panel-status {
+    display: inline-flex;
+    align-items: center;
+    padding: 2px 8px;
+    border-radius: var(--radius-sm);
+    font: var(--text-pc-script-12);
+    font-weight: 700;
+    background: rgba(59,47,138,0.10);
+    color: var(--cs-purple);
+  }
+  .panel-status.grade-none  { background: var(--cs-surface-gray); color: var(--cs-text-mid); }
+  .panel-status.grade-easy  { background: rgba(14,165,233,0.12);  color: var(--cs-info); }
+  .panel-status.grade-pop   { background: rgba(59,47,138,0.10);   color: var(--cs-purple); }
+  .panel-status.grade-crazy { background: rgba(255,69,0,0.12);    color: var(--cs-orange); }
+  .panel-status.grade-admin { background: var(--cs-lilac);        color: var(--cs-purple-dark); }
+
+  .badge-danger {
+    display: inline-flex;
+    align-items: center;
+    padding: 2px 8px;
+    border-radius: var(--radius-sm);
+    font: var(--text-pc-script-12);
+    font-weight: 700;
+    background: rgba(255,53,53,0.10);
+    color: var(--cs-red-badge);
+  }
+
+  /* 패널 바디 — RentalDetailPanel.svelte .panel-body 반영 */
+  .panel-body {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    padding: 16px 20px 20px;
+    display: block;
+  }
+  .panel-body > * + * {
+    margin-top: 10px;
   }
 
   .cdp-loading, .cdp-empty {
@@ -184,32 +247,55 @@
     padding: 4px 0;
   }
 
-  .cdp-row {
-    display: flex;
-    gap: 8px;
-    align-items: baseline;
-  }
-
-  .cdp-key {
-    font: 700 11px/1.5 'Noto Sans KR', sans-serif;
+  /* 섹션 타이틀 — RentalDetailPanel.svelte .section-title 반영 */
+  .section-title {
+    font: var(--text-pc-script-12);
+    font-weight: 700;
     color: var(--cs-text-mid);
-    min-width: 64px;
-    flex-shrink: 0;
+    padding: 4px 0 2px;
   }
 
-  .cdp-val {
-    font: 400 12px/1.5 'Noto Sans KR', sans-serif;
+  /* 정보 섹션 — RentalDetailPanel.svelte .info-section/.info-row 반영 */
+  .info-section {
+    display: flex;
+    flex-direction: column;
+    gap: 0;
+    border: 1px solid var(--cs-lilac);
+    border-radius: var(--cms-radius-sm);
+    overflow: hidden;
+  }
+  .info-row {
+    display: flex;
+    align-items: center;
+    padding: 10px 14px;
+    border-bottom: 1px solid var(--cs-lilac);
+    gap: 12px;
+  }
+  .info-row:last-child { border-bottom: none; }
+
+  .info-label {
+    flex: 0 0 96px;
+    font: var(--text-pc-script-12);
+    color: var(--cs-text-mid);
+    font-weight: 700;
+  }
+  .info-value {
+    flex: 1;
+    font: var(--text-pc-body-14);
     color: var(--cs-text);
     word-break: break-all;
   }
+  .mono    { font-family: monospace; }
+  .fw-bold { font-weight: 700; }
 
-  .cdp-section-label {
-    font: 700 10px/1 'Noto Sans KR', sans-serif;
-    color: var(--cs-text-light);
-    text-transform: uppercase;
-    letter-spacing: 0.3px;
-    margin-top: 6px;
+  .cs-score {
+    font: var(--text-pc-script-12);
+    font-weight: 700;
   }
+  .cs-score.score-high     { color: var(--cs-success-light); }
+  .cs-score.score-mid      { color: var(--cs-text-mid); }
+  .cs-score.score-low      { color: var(--cs-warning); }
+  .cs-score.score-critical { color: var(--cs-red-badge); }
 
   .cdp-reserve-list {
     list-style: none;

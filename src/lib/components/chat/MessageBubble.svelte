@@ -4,7 +4,7 @@
 
   import ActionCard from './ActionCard.svelte'
   import { supabase } from '$lib/services/supabase'
-  import type { ChatMessage, ActionPayload } from '$lib/types/chat'
+  import type { ChatMessage, ActionPayload, CtaModalRequest } from '$lib/types/chat'
 
   interface Props {
     message: ChatMessage
@@ -15,9 +15,11 @@
     onbookmark?: (messageId: string) => void
     /** COUPON_GIFT_CARD 승인·거절 콜백 — AdminChatPanel에서 주입 */
     oncouponapprove?: (messageId: string, reject: boolean) => void
+    /** 관리자 CTA 레이어 모달 오픈 요청 — AdminChatPanel 최상위에서 렌더링하기 위해 위로 전달 */
+    onctamodal?: (info: CtaModalRequest) => void
   }
 
-  let { message, isOwn = false, isAdmin = false, onaction, ondelete, onbookmark, oncouponapprove }: Props = $props()
+  let { message, isOwn = false, isAdmin = false, onaction, ondelete, onbookmark, oncouponapprove, onctamodal }: Props = $props()
 
   // GSD-12: 북마크 로컬 상태 — {#each messages as message (message.id)} 키로 인스턴스가 1:1 고정되므로
   // $state(prop) 초기화가 안전함 (재마운트 문제 없음 — MessageList.svelte keyed each 검증 완료)
@@ -230,7 +232,7 @@
   <div class="bubble-row" class:bubble-row--own={isOwn}>
     <div class="bubble" class:bubble--own={isOwn} class:bubble--other={!isOwn}>
       {#if isActionCard && message.action_payload}
-        <ActionCard payload={message.action_payload} {onaction} messageId={message.id} {isAdmin} {oncouponapprove} />
+        <ActionCard payload={message.action_payload} {onaction} messageId={message.id} {isAdmin} {oncouponapprove} {onctamodal} />
       {/if}
       {#if isAutoBadge}
         <span class="auto-badge" aria-label="자동답변">자동답변</span>
