@@ -21,7 +21,7 @@
 
   const STATUS_LABEL: Record<string, string> = {
     hold:             '신청대기',
-    confirmed:        '승인완료',
+    confirmed:        '계약완료',
     shipped:          '반출중',
     in_use:           '대여중',
     return_requested: '반납중',
