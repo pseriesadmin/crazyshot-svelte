@@ -5,7 +5,7 @@ import { createClient } from '@supabase/supabase-js'
 import { fetchCmsProfileByAuthId } from '$lib/server/cmsProfile'
 import type { Actions, PageServerLoad } from './$types'
 
-export const load: PageServerLoad = async ({ locals, url }) => {
+export const load: PageServerLoad = async ({ locals, url, getClientAddress }) => {
   const { session } = await locals.safeGetSession()
   if (session) {
     const profile = await fetchCmsProfileByAuthId(locals.supabase, session.user.id)
@@ -17,8 +17,11 @@ export const load: PageServerLoad = async ({ locals, url }) => {
   // /cms/mobile 진입 후 로그인 시 원래 경로로 복귀
   const returnTo = url.searchParams.get('returnTo') ?? null
 
+  let clientIp = 'unknown'
+  try { clientIp = getClientAddress() } catch { /* dev 환경에서 무시 */ }
+
   const inviteToken = url.searchParams.get('invite')
-  if (!inviteToken) return { logoutType, logoutTime, returnTo }
+  if (!inviteToken) return { logoutType, logoutTime, returnTo, clientIp }
 
   const serviceRoleKey = env.SUPABASE_SERVICE_ROLE_KEY
   if (!serviceRoleKey) return { inviteExpired: true }
@@ -44,14 +47,16 @@ export const load: PageServerLoad = async ({ locals, url }) => {
     logoutType,
     logoutTime,
     returnTo,
+    clientIp,
   }
 }
 
 export const actions: Actions = {
-  login: async ({ request, locals }) => {
+  login: async ({ request, locals, cookies, getClientAddress }) => {
     const form = await request.formData()
-    const email    = (form.get('email')    as string | null)?.trim() ?? ''
-    const password = (form.get('password') as string | null) ?? ''
+    const email      = (form.get('email')      as string | null)?.trim() ?? ''
+    const password   = (form.get('password')   as string | null) ?? ''
+    const rememberMe = form.get('rememberMe') === 'on'
 
     if (!email || !password) {
       return fail(400, { error: '이메일과 비밀번호를 입력해주세요.' })
@@ -68,6 +73,36 @@ export const actions: Actions = {
       await locals.supabase.auth.signOut()
       return fail(403, { error: 'CMS 접근 권한이 없습니다.' })
     }
+
+    // 로그인 로그 저장 (보안 강화 — 실패해도 로그인 차단 안 함)
+    try {
+      const serviceRoleKey = env.SUPABASE_SERVICE_ROLE_KEY
+      if (serviceRoleKey) {
+        const admin = createClient(PUBLIC_SUPABASE_URL, serviceRoleKey)
+        let ip = 'unknown'
+        try { ip = getClientAddress() } catch { /* dev 환경 */ }
+        await admin.from('cms_login_logs').insert({
+          user_id:      data.session.user.id,
+          email:        data.session.user.email ?? email,
+          cms_role:     p.cms_role,
+          ip_address:   request.headers.get('x-forwarded-for') ?? ip,
+          user_agent:   request.headers.get('user-agent') ?? 'unknown',
+          logged_in_at: new Date().toISOString(),
+        })
+      }
+    } catch { /* 로그 저장 실패는 무시 */ }
+
+    // 로그인 상태 유지 쿠키 설정
+    // rememberMe=true  → maxAge 30일 (브라우저 종료 후에도 유지)
+    // rememberMe=false → 세션 쿠키 (브라우저 종료 시 삭제)
+    const cookieOpts = {
+      path: '/',
+      httpOnly: true,
+      sameSite: 'lax' as const,
+      secure: true,
+      ...(rememberMe ? { maxAge: 60 * 60 * 24 * 30 } : {}),
+    }
+    cookies.set('cms-remember', '1', cookieOpts)
 
     // 로그인 후 원래 경로(/cms/mobile/*)로 복귀 — 그 외 경로는 /cms로
     const redirectTo = (form.get('redirectTo') as string | null)?.trim() ?? ''

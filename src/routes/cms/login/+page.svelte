@@ -1,5 +1,6 @@
 <script lang="ts">
   import { enhance } from '$app/forms'
+  import { browser } from '$app/environment'
   import { csToast } from '$lib/utils/toast'
   import type { ActionData, PageData } from './$types'
 
@@ -7,7 +8,31 @@
   let { form, data }: Props = $props()
 
   let isLoading = $state(false)
+  let rememberMe = $state(false)
   let toastShown = false
+
+  // 실시간 시각
+  let now = $state(new Date())
+  $effect(() => {
+    const t = setInterval(() => { now = new Date() }, 1000)
+    return () => clearInterval(t)
+  })
+
+  function padZ(n: number) { return String(n).padStart(2, '0') }
+  function formatNow(d: Date) {
+    return `${d.getFullYear()}.${padZ(d.getMonth()+1)}.${padZ(d.getDate())} ${padZ(d.getHours())}:${padZ(d.getMinutes())}:${padZ(d.getSeconds())}`
+  }
+
+  // 브라우저 정보 (클라이언트 전용)
+  function getBrowserName(): string {
+    if (!browser) return ''
+    const ua = navigator.userAgent
+    if (ua.includes('Edg/'))     return 'Edge'
+    if (ua.includes('Chrome/'))  return 'Chrome'
+    if (ua.includes('Firefox/')) return 'Firefox'
+    if (ua.includes('Safari/'))  return 'Safari'
+    return 'Unknown'
+  }
 
   type FormResult = { error?: string } | null
   let result = $derived(form as FormResult)
@@ -121,34 +146,68 @@
         {#if data.returnTo}
           <input type="hidden" name="redirectTo" value={data.returnTo} />
         {/if}
-        <label class="field-label" for="email">이메일</label>
-        <input
-          id="email"
-          name="email"
-          type="email"
-          class="f-input"
-          placeholder="admin@crazyshot.kr"
-          autocomplete="email"
-          required
-        />
+        <div class="fields-group">
+          <div class="field-group">
+            <label class="field-label" for="email">이메일</label>
+            <input
+              id="email"
+              name="email"
+              type="email"
+              class="f-input"
+              placeholder="admin@crazyshot.kr"
+              autocomplete="email"
+              required
+            />
+          </div>
 
-        <label class="field-label" for="password">비밀번호</label>
-        <input
-          id="password"
-          name="password"
-          type="password"
-          class="f-input"
-          placeholder="비밀번호 입력"
-          autocomplete="current-password"
-          required
-        />
+          <div class="field-group">
+            <label class="field-label" for="password">비밀번호</label>
+            <input
+              id="password"
+              name="password"
+              type="password"
+              class="f-input"
+              placeholder="비밀번호 입력"
+              autocomplete="current-password"
+              required
+            />
+          </div>
+        </div>
+
+        <div class="remember-row">
+          <label class="remember-label">
+            <input
+              type="checkbox"
+              name="rememberMe"
+              class="remember-checkbox-input"
+              bind:checked={rememberMe}
+            />
+            <span class="remember-checkbox-box" aria-hidden="true">
+              {#if rememberMe}
+                <svg width="12" height="9" viewBox="0 0 14 10" fill="none" aria-hidden="true">
+                  <path d="M1 5L5 9L13 1" stroke="var(--cs-purple)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                </svg>
+              {/if}
+            </span>
+            <span class="remember-text">로그인 상태 유지</span>
+          </label>
+        </div>
 
         <button class="cta-btn" type="submit" disabled={isLoading}>
           {isLoading ? '로그인 중...' : '로그인'}
         </button>
       </form>
+
+      <div class="login-meta">
+        <span>{formatNow(now)}</span>
+        <span class="meta-sep">·</span>
+        <span>{data.clientIp ?? 'unknown'}</span>
+        <span class="meta-sep">·</span>
+        <span>{getBrowserName()}</span>
+      </div>
     {/if}
   </div>
+  <p class="login-copyright">Copyright&copy; crazymedia 2025. All right reserved.</p>
 </div>
 
 <style>
@@ -156,15 +215,17 @@
     min-height: 100vh;
     background: var(--cs-lilac);
     display: flex;
+    flex-direction: column;
     align-items: center;
     justify-content: center;
-    padding: 20px;
+    padding: 20px 20px 40px;
+    gap: 20px;
   }
 
   .login-card {
     background: var(--cs-white);
     border-radius: var(--cms-radius-lg);
-    padding: 48px 40px;
+    padding: 48px 40px 56px;
     width: 100%;
     max-width: 400px;
     display: flex;
@@ -189,11 +250,21 @@
     gap: 12px;
   }
 
+  .fields-group {
+    display: flex;
+    flex-direction: column;
+    gap: 20px;
+  }
+  .field-group {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+
   .field-label {
     font: var(--text-pc-body-14);
     color: var(--cs-text);
     display: block;
-    margin-bottom: -4px;
   }
 
   .f-input {
@@ -209,6 +280,45 @@
   .f-input::placeholder { color: var(--cs-text-placeholder); }
   .f-input:focus { outline: 2px solid var(--cs-purple); outline-offset: -2px; }
 
+  .remember-row {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    margin-top: 2px;
+  }
+  .remember-label {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    cursor: pointer;
+    user-select: none;
+  }
+  .remember-checkbox-input {
+    position: absolute;
+    opacity: 0;
+    width: 0;
+    height: 0;
+  }
+  .remember-checkbox-box {
+    width: 20px;
+    height: 20px;
+    background: var(--cs-surface-gray);
+    border-radius: 5px;
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border: 1.5px solid var(--cs-lilac);
+    transition: border-color 0.15s;
+  }
+  .remember-label:hover .remember-checkbox-box {
+    border-color: var(--cs-purple);
+  }
+  .remember-text {
+    font: var(--text-pc-body-14);
+    color: var(--cs-text-mid);
+  }
+
   .cta-btn {
     background: var(--cs-purple);
     color: var(--cs-white);
@@ -223,6 +333,25 @@
   }
   .cta-btn:hover    { background: var(--cs-purple-hover); }
   .cta-btn:disabled { background: var(--cs-disabled-button); cursor: not-allowed; }
+
+  .login-meta {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    flex-wrap: wrap;
+    font: var(--text-pc-body-14);
+    color: var(--cs-text-mid);
+    margin-top: -4px;
+  }
+  .meta-sep { opacity: 0.4; }
+  .login-copyright {
+    text-align: center;
+    font: var(--text-pc-script-12);
+    color: var(--cs-text-placeholder);
+    margin: 0;
+    opacity: 0.6;
+  }
 
   .error-msg {
     background: var(--cs-bg-error);

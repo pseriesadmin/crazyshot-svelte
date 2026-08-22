@@ -28,6 +28,14 @@ export const load: LayoutServerLoad = async ({ locals, url, cookies }) => {
     throw redirect(303, loginUrl)
   }
 
+  // 로그인 상태 유지 미체크 시: 브라우저 종료 후 재진입하면 cms-remember 세션쿠키가 없음 → 로그아웃
+  const rememberOk = cookies.get('cms-remember')
+  if (!rememberOk) {
+    await locals.supabase.auth.signOut()
+    const t = encodeURIComponent(new Date().toISOString())
+    throw redirect(303, `/cms/login?logout=expired&t=${t}`)
+  }
+
   const profile = await fetchCmsProfileByAuthId(locals.supabase, session.user.id)
   if (!profile?.cms_role) throw redirect(303, '/cms/login')
 
