@@ -24,6 +24,22 @@
     final_amount: number | null
   } | null)
 
+  // 2026-08-21(TASK.md "예약 결제·계약서명 순서 재설계" Phase C, GATE B Q1): 쿠폰/포인트
+  // 선택 UI — cart 체크아웃(1단계)에서 여기(3단계, 서명 완료 직후 결제mock 트리거 전)로 이동.
+  type UserCouponRow = {
+    id: string
+    coupon_id: string | null
+    coupons: {
+      id: string
+      discount_type: string
+      discount_value: number
+      description: string | null
+    } | null
+  }
+  const userCoupons = $derived((data.userCoupons ?? []) as UserCouponRow[])
+  const userPointsAvail = $derived((data.userPoints as number | undefined) ?? 0)
+  const finalAmount = $derived(orderData?.final_amount ?? 0)
+
   // signing이 $derived이므로 이하 파생 const도 $derived로 연쇄 처리 (cascading $derived)
   const contract = $derived(signing.contracts as unknown as {
     id: string
@@ -113,7 +129,33 @@
   let sigData   = $state<SignatureData | null>(null)
   let signing_  = $state(false)
   let signError = $state('')
-  let done      = $state(false)
+  // EC-1 방어(+page.server.ts 참고) — 서명은 이미 됐지만 결제(mock) 전인 채로 재진입한
+  // 경우, load()가 넘겨준 alreadySigned로 곧바로 결제 단계를 보여준다. 이 페이지는 token
+  // 라우트 파라미터가 곧 네비게이션 단위라 재방문·새로고침 시 항상 새로 마운트되므로
+  // $state(prop) 초기화 금지 규칙의 예외 케이스(최초 마운트 1회 반영이 곧 올바른 동작)다.
+  let done      = $state(data.alreadySigned ?? false)
+
+  // Phase C — 서명 완료 후 결제(mock) 단계 상태
+  let selectedCouponId = $state<string | null>(null)
+  let pointsUsed        = $state(0)
+  let paying             = $state(false)
+  let payError            = $state('')
+
+  const couponDiscount = $derived.by(() => {
+    const uc = userCoupons.find((u) => u.id === selectedCouponId)
+    if (!uc?.coupons) return 0
+    const c = uc.coupons
+    return c.discount_type === 'fixed'
+      ? c.discount_value
+      : Math.round(finalAmount * c.discount_value / 100)
+  })
+  const maxPoints = $derived(Math.min(userPointsAvail, Math.max(0, finalAmount - couponDiscount)))
+  // 쿠폰 변경으로 maxPoints가 줄어들면 이미 입력된 포인트를 자동 재클램프
+  // (cart/+page.svelte의 동일 정합성 보정 패턴 — 2026-08-19 발견 결함 재발 방지)
+  $effect(() => {
+    if (pointsUsed > maxPoints) pointsUsed = maxPoints
+  })
+  const payTotal = $derived(Math.max(0, finalAmount - couponDiscount - pointsUsed))
 
   function handleSigChange(valid: boolean, data: SignatureData | null) {
     sigValid = valid
@@ -139,8 +181,10 @@
         }),
       })
       if (res.ok) {
+        // 2026-08-21(Phase C): 서명 완료 즉시 /contract/complete로 리다이렉트하던 흐름을
+        // "서명 완료 → 결제(mock) 단계 노출 → 결제 완료 → /contract/complete"로 변경
+        // (GATE B Q3 — confirm-mock과 동일한 즉시승인 mock 유지, 실PG 연동은 별도 스코프)
         done = true
-        setTimeout(() => { window.location.href = '/contract/complete' }, 1200)
       } else {
         const body = await res.json().catch(() => ({}))
         signError = body.error ?? '서명 처리 중 오류가 발생했습니다.'
@@ -149,6 +193,28 @@
       signError = '네트워크 오류가 발생했습니다. 다시 시도해 주세요.'
     } finally {
       signing_ = false
+    }
+  }
+
+  async function submitPay() {
+    payError = ''
+    paying   = true
+    try {
+      const res = await fetch(`/api/contracts/${signing.token}/pay-mock`, {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({ userCouponId: selectedCouponId, pointsUsed }),
+      })
+      if (res.ok) {
+        window.location.href = '/contract/complete'
+      } else {
+        const body = await res.json().catch(() => ({}))
+        payError = body.error ?? '결제 처리 중 오류가 발생했습니다.'
+      }
+    } catch {
+      payError = '네트워크 오류가 발생했습니다. 다시 시도해 주세요.'
+    } finally {
+      paying = false
     }
   }
 </script>
@@ -423,9 +489,109 @@
         </button>
       </div>
     {:else}
+      <!-- 2026-08-21(Phase C): 서명 완료 → 결제(mock) 단계 — GATE B Q1(쿠폰/포인트 선택 UI를
+           여기로 이동) + Q3(confirm-mock과 동일한 즉시승인 mock 유지) 반영 -->
       <div class="sign-done">
         <span class="done-icon">✅</span>
-        <p>서명이 완료되었습니다. 잠시 후 이동합니다...</p>
+        <p>서명이 완료되었습니다. 결제를 진행해 주세요.</p>
+      </div>
+
+      <div class="sign-section pay-section">
+        {#if userCoupons.length > 0}
+          <div class="pay-sub-block">
+            <span class="pay-sub-label">사용 가능한 쿠폰</span>
+            <div class="pay-coupon-list">
+              {#each userCoupons as uc (uc.id)}
+                {#if uc.coupons}
+                  {@const c = uc.coupons}
+                  {@const couponLabel = c.description ?? (c.discount_type === 'fixed' ? `${c.discount_value.toLocaleString('ko-KR')}원 할인` : `${c.discount_value}% 할인`)}
+                  <label class="pay-coupon-row">
+                    <input
+                      type="checkbox"
+                      checked={selectedCouponId === uc.id}
+                      onchange={() => {
+                        // 중복 쿠폰 적용 불가 — 단일 선택만 허용(cart 정책과 동일)
+                        selectedCouponId = selectedCouponId === uc.id ? null : uc.id
+                      }}
+                    />
+                    <span>{couponLabel}</span>
+                  </label>
+                {/if}
+              {/each}
+            </div>
+          </div>
+        {/if}
+
+        <div class="pay-sub-block">
+          <span class="pay-sub-label">포인트 사용 (보유 {userPointsAvail.toLocaleString('ko-KR')}p)</span>
+          <div class="pay-points-row">
+            <input
+              type="number"
+              class="pay-points-input"
+              min="0"
+              max={maxPoints}
+              value={pointsUsed}
+              oninput={(e) => {
+                const v = Math.min(maxPoints, Math.max(0, parseInt((e.target as HTMLInputElement).value) || 0))
+                pointsUsed = v
+              }}
+            />
+            <button
+              type="button"
+              class="pay-points-all-btn"
+              disabled={maxPoints === 0}
+              onclick={() => { pointsUsed = maxPoints }}
+            >모두 사용</button>
+          </div>
+        </div>
+
+        <!-- 2026-08-21: 장바구니(cart/+page.svelte)와 동일하게 최종 결제금액 이전에 상세
+             금액 내역을 항목별로 나열 — "결제 금액 0원"만 덩그러니 보이던 것을 보완 -->
+        <div class="pay-detail-list">
+          <div class="pay-detail-row">
+            <span>기본대여요금</span>
+            <span>{formatAmount(orderData?.total_amount)}</span>
+          </div>
+          {#if (orderData?.discount_amount ?? 0) > 0}
+            <div class="pay-detail-row pay-detail-row-discount">
+              <span>할인금액</span>
+              <span>-{formatAmount(orderData?.discount_amount)}</span>
+            </div>
+          {/if}
+          <div class="pay-detail-row">
+            <span>부가세</span>
+            <span>{formatAmount(orderData?.tax_amount)}</span>
+          </div>
+          {#if couponDiscount > 0}
+            <div class="pay-detail-row pay-detail-row-discount">
+              <span>쿠폰 할인</span>
+              <span>-{formatAmount(couponDiscount)}</span>
+            </div>
+          {/if}
+          {#if pointsUsed > 0}
+            <div class="pay-detail-row pay-detail-row-discount">
+              <span>포인트 사용</span>
+              <span>-{formatAmount(pointsUsed)}</span>
+            </div>
+          {/if}
+        </div>
+
+        <div class="pay-amount-row">
+          <span>결제 금액</span>
+          <strong>{payTotal.toLocaleString('ko-KR')}원</strong>
+        </div>
+
+        {#if payError}
+          <p class="sign-error" role="alert">{payError}</p>
+        {/if}
+
+        <button
+          class="btn-sign"
+          onclick={submitPay}
+          disabled={paying}
+        >
+          {paying ? '결제 처리 중...' : `${payTotal.toLocaleString('ko-KR')}원 결제하기`}
+        </button>
       </div>
     {/if}
   </main>
@@ -799,6 +965,73 @@
     text-align: center;
   }
   .done-icon { font-size: 40px; }
+
+  /* Phase C — 서명 완료 후 결제(mock) 단계 */
+  .pay-section { margin-top: 16px; }
+  .pay-sub-block { display: flex; flex-direction: column; gap: 8px; }
+  .pay-sub-label { font-size: 13px; font-weight: 700; color: var(--cs-dark, #100B32); }
+  .pay-coupon-list { display: flex; flex-direction: column; gap: 8px; }
+  .pay-coupon-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    font-size: 14px;
+    color: var(--cs-dark, #100B32);
+    cursor: pointer;
+  }
+  .pay-coupon-row input[type='checkbox'] {
+    width: 18px;
+    height: 18px;
+    accent-color: var(--cs-purple, #3B2F8A);
+    cursor: pointer;
+  }
+  .pay-points-row { display: flex; gap: 8px; align-items: center; }
+  .pay-points-input {
+    flex: 1;
+    height: 44px;
+    border: 1px solid #ddd;
+    border-radius: 12px;
+    padding: 0 14px;
+    font-size: 14px;
+  }
+  .pay-points-all-btn {
+    height: 44px;
+    padding: 0 14px;
+    border: 1px solid var(--cs-purple, #3B2F8A);
+    border-radius: 12px;
+    background: #fff;
+    color: var(--cs-purple, #3B2F8A);
+    font-size: 13px;
+    font-weight: 700;
+    cursor: pointer;
+    min-width: 44px;
+  }
+  .pay-points-all-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+  .pay-detail-list {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    padding-top: 8px;
+    border-top: 1px solid #eee;
+  }
+  .pay-detail-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    font-size: 13px;
+    color: var(--cs-text-mid, #666);
+  }
+  .pay-detail-row-discount { color: var(--cs-purple, #3B2F8A); }
+  .pay-amount-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding-top: 8px;
+    border-top: 1px solid #eee;
+    font-size: 15px;
+    font-weight: 700;
+    color: var(--cs-dark, #100B32);
+  }
   .sign-done p { font-size: 15px; color: var(--cs-dark, #100B32); font-weight: 600; margin: 0; }
 
   /* ── canvas 모드 ──────────────────────────────────── */

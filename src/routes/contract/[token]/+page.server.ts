@@ -29,6 +29,7 @@ export const load: PageServerLoad = async ({ params }) => {
         spreadsheet_document,
         rental_reservations (
           id,
+          status,
           start_date,
           end_date,
           reservation_code,
@@ -48,11 +49,24 @@ export const load: PageServerLoad = async ({ params }) => {
     throw error(404, '유효하지 않은 계약서 링크입니다.')
   }
 
-  if (signing.signed_at) {
-    throw redirect(302, '/contract/signed')
-  }
+  // 2026-08-21(TASK.md "예약 결제·계약서명 순서 재설계" Phase C, EC-1 방어): 서명은 이미
+  // 끝났지만 결제(mock)를 아직 안 한 예약(status='hold' 유지 중)은 '/contract/signed'
+  // 안내 페이지로 보내지 않는다 — 그 페이지엔 결제 UI가 없어 재접속 시 결제로 이어갈 방법이
+  // 영구히 사라진다(고객이 서명 후 페이지를 닫거나 새로고침하면 예약이 hold에 갇히는
+  // CRITICAL 회귀, sp3-qa-agent 발견). 서명+결제가 모두 끝나 confirmed로 전환된 경우에만
+  // 기존처럼 안내 페이지로 보낸다. 이미 서명된 링크는 만료(expires_at) 여부와 무관하게
+  // 결제 재개를 허용한다 — 서명이라는 목적은 이미 달성됐으므로 만료 체크의 원 취지(미서명
+  // 상태로 방치된 링크 차단)가 적용되지 않는다.
+  const signedReservationStatus = (signing.contracts as unknown as {
+    rental_reservations: { status?: string | null } | null
+  } | null)?.rental_reservations?.status ?? null
 
-  if (signing.expires_at && new Date(signing.expires_at) < new Date()) {
+  if (signing.signed_at) {
+    if (signedReservationStatus !== 'hold') {
+      throw redirect(302, '/contract/signed')
+    }
+    // else: 서명완료 + 결제대기(hold) — 아래로 계속 진행해 결제 단계를 그대로 보여준다
+  } else if (signing.expires_at && new Date(signing.expires_at) < new Date()) {
     throw redirect(302, '/contract/expired')
   }
 
@@ -153,5 +167,81 @@ export const load: PageServerLoad = async ({ params }) => {
     }
   }
 
-  return { signing, customer, issuerSignatures, shippingAddress, orderData }
+  // 2026-08-21(TASK.md "예약 결제·계약서명 순서 재설계" Phase C, GATE B Q1): 쿠폰/포인트
+  // 선택 UI가 cart 체크아웃(1단계)에서 이 계약서명 페이지(3단계, 결제mock 트리거 직전)로
+  // 이동했다 — cart/+page.server.ts의 조회·필터 로직과 동일 원칙(등급·기간·소진한도 검증)을
+  // 그대로 적용한다. 이 페이지는 비로그인 토큰 기반 화면이라 세션이 아닌 reservation.user_id
+  // 기준으로 조회한다.
+  type RawUserCouponRow = {
+    id: string
+    coupon_id: string | null
+    used_count: number
+    coupons: {
+      id: string
+      code: string | null
+      discount_type: string
+      discount_value: number
+      description: string | null
+      is_active: boolean
+      deleted_at: string | null
+      valid_from: string | null
+      valid_until: string | null
+      user_grade_required: string | null
+      usage_limit: number
+      usage_count: number
+      total_usage_limit: number | null
+    } | null
+  }
+  let userCoupons: RawUserCouponRow[] = []
+  let userPoints = 0
+
+  if (reservation?.user_id) {
+    const [profileResult, couponResult] = await Promise.all([
+      admin
+        .from('user_profiles')
+        .select('membership_grade, points')
+        .eq('id', reservation.user_id)
+        .maybeSingle(),
+      admin
+        .from('user_coupons')
+        .select(`id, coupon_id, used_count,
+          coupons(
+            id, code, discount_type, discount_value, description,
+            is_active, deleted_at, valid_from, valid_until,
+            user_grade_required, usage_limit, usage_count, total_usage_limit
+          )`)
+        .eq('user_id', reservation.user_id)
+        .is('used_at', null),
+    ])
+
+    const memberGrade = (profileResult.data as { membership_grade?: string | null } | null)?.membership_grade ?? null
+    userPoints = (profileResult.data as { points?: number } | null)?.points ?? 0
+
+    const now = new Date().toISOString()
+    userCoupons = ((couponResult.data ?? []) as unknown as RawUserCouponRow[]).filter((uc) => {
+      const c = uc.coupons
+      if (!c) return false
+      if (!c.is_active) return false
+      if (c.deleted_at) return false
+      if (c.valid_from && c.valid_from > now) return false
+      if (c.valid_until && c.valid_until < now) return false
+      if (c.user_grade_required && c.user_grade_required !== memberGrade) return false
+      if (c.total_usage_limit !== null && c.usage_count >= c.total_usage_limit) return false
+      if (c.usage_limit > 0 && c.usage_count >= c.usage_limit) return false
+      return true
+    })
+  }
+
+  return {
+    signing,
+    customer,
+    issuerSignatures,
+    shippingAddress,
+    orderData,
+    userCoupons,
+    userPoints,
+    // EC-1 방어(위 참고) — 이미 서명된 상태(결제만 남음)로 재진입했음을 +page.svelte에 알려
+    // 서명 UI 대신 결제 단계를 바로 렌더링하게 한다.
+    alreadySigned: !!signing.signed_at,
+  }
 }

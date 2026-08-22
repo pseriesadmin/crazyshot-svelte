@@ -5,6 +5,7 @@ import { json } from '@sveltejs/kit'
 import type { RequestHandler } from './$types'
 import { getCmsRoleForAction } from '$lib/server/getCmsRoleForAction'
 import { hasSettingsAccess } from '$lib/utils/cmsPermissions'
+import { isContractIssueBlocked } from '$lib/utils/contractIssueGuard'
 
 export const POST: RequestHandler = async ({ params, locals }) => {
   const cmsRole = await getCmsRoleForAction(locals)
@@ -18,6 +19,19 @@ export const POST: RequestHandler = async ({ params, locals }) => {
 
   const admin = createClient(PUBLIC_SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
 
+  // 예약에서 user_id + status 조회
+  const { data: res, error: resErr } = await admin
+    .from('rental_reservations')
+    .select('user_id, status')
+    .eq('id', reservationId)
+    .maybeSingle()
+
+  if (resErr || !res) return json({ error: '예약 정보를 찾을 수 없습니다.' }, { status: 404 })
+
+  if (isContractIssueBlocked(res.status)) {
+    return json({ error: '취소되었거나 만료된 예약은 계약서를 발행할 수 없습니다.' }, { status: 422 })
+  }
+
   // 이미 존재하면 재사용 (idempotent)
   const { data: existing } = await admin
     .from('contracts')
@@ -27,15 +41,6 @@ export const POST: RequestHandler = async ({ params, locals }) => {
     .maybeSingle()
 
   if (existing) return json({ contractId: existing.id })
-
-  // 예약에서 user_id 조회
-  const { data: res, error: resErr } = await admin
-    .from('rental_reservations')
-    .select('user_id')
-    .eq('id', reservationId)
-    .maybeSingle()
-
-  if (resErr || !res) return json({ error: '예약 정보를 찾을 수 없습니다.' }, { status: 404 })
 
   const { data: contract, error: insertErr } = await admin
     .from('contracts')

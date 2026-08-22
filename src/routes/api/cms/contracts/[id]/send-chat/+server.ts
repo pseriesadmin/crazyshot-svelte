@@ -8,6 +8,7 @@ import { hasSettingsAccess } from '$lib/utils/cmsPermissions'
 import { recordAuditLog } from '$lib/contract-signature/auditLog'
 import { checkIssuerSignatureRequired } from '$lib/contract-signature/issuerSignatureCheck'
 import { sendPushToUser } from '$lib/server/push'
+import { isContractIssueBlocked } from '$lib/utils/contractIssueGuard'
 
 export const POST: RequestHandler = async ({ params, locals, url }) => {
   const cmsRole = await getCmsRoleForAction(locals)
@@ -28,6 +29,19 @@ export const POST: RequestHandler = async ({ params, locals, url }) => {
 
   if (contractErr || !contract) {
     return json({ error: '계약서를 찾을 수 없습니다.' }, { status: 404 })
+  }
+
+  // 취소·만료된 예약은 발송 차단
+  if (contract.reservation_id != null) {
+    const { data: reservation } = await admin
+      .from('rental_reservations')
+      .select('status')
+      .eq('id', contract.reservation_id)
+      .maybeSingle()
+
+    if (isContractIssueBlocked(reservation?.status)) {
+      return json({ error: '취소되었거나 만료된 예약은 계약서를 발송할 수 없습니다.' }, { status: 422 })
+    }
   }
 
   // P8B-4: 발행자 서명 필수 플래그 강제 검증
@@ -99,8 +113,12 @@ export const POST: RequestHandler = async ({ params, locals, url }) => {
       content:      '전자계약을 확인 후 서명을 등록해주세요.',
       action_payload: {
         type:         'contract_link',
+        // 관리자 CMS 대화카드 모달이 ContractTemplatePreviewModal(viewOnly)로 고객이 보는
+        // 계약서를 미리보기할 수 있도록 contract_id 포함(ActionCard.svelte 참고)
+        contract_id:  contract.id,
+        reservation_id: contract.reservation_id != null ? String(contract.reservation_id) : undefined,
         action_url:   signingUrl,
-        button_label: '전자계약 보기',
+        button_label: '전자계약서명',
       },
     })
 
