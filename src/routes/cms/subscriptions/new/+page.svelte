@@ -150,6 +150,7 @@
   let monthlyPrice = $state(0)
   let membershipGrade = $state('')
   let sortOrder = $state(0)
+  let isPopular = $state(false)
 
   let specs = $state<{ label: string; value: string }[]>([])
 
@@ -301,6 +302,16 @@
       <div class="field-row">
         <label class="field-label" for="sort_order">정렬순서</label>
         <input id="sort_order" class="f-input" type="number" name="sort_order" bind:value={sortOrder} />
+      </div>
+      <div class="field-row">
+        <span class="field-label">인기 배지</span>
+        <div class="toggle-row">
+          <label class="switch" title="켜면 /members 비교표에서 이 플랜에 '인기' 배지가 표시됩니다">
+            <input type="checkbox" name="is_popular" value="true" bind:checked={isPopular} />
+            <span class="switch-track"></span>
+          </label>
+          <span class="field-hint">/members 비교표 '인기' 배지 표시 (여러 플랜 동시 허용)</span>
+        </div>
       </div>
     </section>
 
@@ -521,6 +532,18 @@
   .f-input--sm { width: 120px; flex: 0 0 auto; }
 
   .toggle-group { display: flex; gap: 6px; flex-wrap: wrap; }
+  .toggle-row { display: flex; align-items: center; gap: 10px; }
+  .field-hint { font: var(--text-pc-descript-10); color: var(--cs-text-light); }
+
+  .switch { position: relative; display: inline-block; width: 40px; height: 22px; flex-shrink: 0; }
+  .switch input { opacity: 0; width: 0; height: 0; }
+  .switch-track { position: absolute; inset: 0; background: var(--cs-lilac); border-radius: 999px; cursor: pointer; transition: background 0.15s; }
+  .switch-track::before {
+    content: ''; position: absolute; width: 16px; height: 16px; left: 3px; top: 3px; background: var(--cs-white);
+    border-radius: 50%; transition: transform 0.15s;
+  }
+  .switch input:checked + .switch-track { background: var(--cs-purple); }
+  .switch input:checked + .switch-track::before { transform: translateX(18px); }
   .radio-label {
     display: flex; align-items: center; gap: 5px; padding: 8px 14px; border: 1.5px solid var(--cs-lilac);
     border-radius: var(--radius-xl); font: var(--text-pc-script-12); color: var(--cs-text); cursor: pointer;

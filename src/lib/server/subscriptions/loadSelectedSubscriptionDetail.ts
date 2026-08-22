@@ -19,6 +19,7 @@ interface PlanRawRow {
   monthly_price: number
   membership_grade: string | null
   sort_order: number
+  is_popular: boolean
   category: string | null
   product_code: string | null
   code_series: { prefix?: string } | null
@@ -42,7 +43,7 @@ export async function loadSelectedSubscriptionDetail(
 ): Promise<SelectedSubscriptionDetail | null> {
   const { data: planRow, error: planError } = await admin
     .from('subscription_plans')
-    .select('id, name, description, tagline, image_url, image_urls, content_blocks, monthly_price, membership_grade, sort_order, category, product_code, code_series, status, features, deleted_at, created_at')
+    .select('id, name, description, tagline, image_url, image_urls, content_blocks, monthly_price, membership_grade, sort_order, is_popular, category, product_code, code_series, status, features, deleted_at, created_at')
     .eq('id', planId)
     .maybeSingle<PlanRawRow>()
 

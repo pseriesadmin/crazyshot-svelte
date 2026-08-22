@@ -63,7 +63,7 @@ export const load: PageServerLoad = async ({ locals }) => {
 
   const { data, error } = await admin
     .from('subscription_plans')
-    .select('id, name, description, tagline, image_url, image_urls, monthly_price, membership_grade, sort_order, status, features, deleted_at, created_at')
+    .select('id, name, description, tagline, image_url, image_urls, monthly_price, membership_grade, sort_order, is_popular, status, features, deleted_at, created_at')
     .eq('status', 'active')
     .is('deleted_at', null)
     .order('sort_order', { ascending: true })
