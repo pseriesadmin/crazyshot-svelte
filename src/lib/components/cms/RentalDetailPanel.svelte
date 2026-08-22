@@ -7,6 +7,8 @@
   import QrScannerOverlay from '$lib/components/common/QrScannerOverlay.svelte'
   import { nextStatus, nextLabel } from '$lib/utils/rentalTransition'
   import { extractProductId, isProductMatch } from '$lib/utils/qrProductId'
+  import { hasSettingsAccess } from '$lib/utils/cmsPermissions'
+  import { isLockerHour } from '$lib/utils/lockerTimeRange'
 
   interface RentalListRow {
     reservation_id:    number
@@ -67,12 +69,24 @@
     stepFilter?:  string[]
     isRentalView?: boolean   // true = /cms/rentals 컨텍스트 (예약 단계 UI 숨김)
     enableQrVerify?: boolean // true일 때만 "상품 정보"에 QR 확인 아이콘 노출 (모바일 대여목록 전용)
+    cmsRole?:     string | null // 무인보관함 비밀번호 입력 UI manager 이상 게이팅용(2026-08-20)
+    /** 최초 마운트 시 활성화할 탭 — 미지정 시 기존과 동일하게 'rental'(대여정보).
+        컴포넌트가 마운트된 이후 row가 갱신(onrefresh)돼도 재적용되지 않음(마운트 시 1회만) —
+        관리자가 이미 다른 탭으로 전환한 상태를 되돌리지 않기 위함 */
+    initialTab?:  'rental' | 'customer' | 'payment' | 'contract'
   }
-  let { row, onclose, onrefresh, stepFilter, isRentalView = false, enableQrVerify = false }: Props = $props()
+  let { row, onclose, onrefresh, stepFilter, isRentalView = false, enableQrVerify = false, cmsRole = null, initialTab }: Props = $props()
+
+  let canManageLockerPassword = $derived(hasSettingsAccess(cmsRole ?? ''))
+  let showLockerPasswordField = $derived(
+    canManageLockerPassword &&
+    ((row.pickup_method === 'visit' && isLockerHour(row.pickup_time)) ||
+     (row.return_method === 'visit' && isLockerHour(row.return_time)))
+  )
 
   let qrOverlayOpen = $state(false)
 
-  // QR 일치 시: '승인완료'는 반출로, '반납중'은 반납으로 확인 탭 없이 즉시 자동 기록.
+  // QR 일치 시: '계약완료'는 반출로, '반납중'은 반납으로 확인 탭 없이 즉시 자동 기록.
   // 그 외 상태는 기존처럼 /cms/mobile/qr/[id] 수동 처리 화면으로 이동 —
   // 이 패널의 상태전이 버튼(대여 탭 하단)은 그대로 유지되는 하이브리드 관리.
   const QR_AUTO_STATUSES = new Set(['confirmed', 'return_requested'])
@@ -114,7 +128,7 @@
     }
   }
 
-  let activeTab   = $state<'rental' | 'customer' | 'payment' | 'contract'>('rental')
+  let activeTab   = $state<'rental' | 'customer' | 'payment' | 'contract'>(initialTab ?? 'rental')
   let isSubmitting = $state(false)
 
   let fetchedForId    = $state<number | null>(null)
@@ -302,7 +316,7 @@
   ])
 
   const STATUS_LABEL: Record<string, string> = {
-    pending: '접수', hold: '신청대기', confirmed: '승인완료',
+    pending: '접수', hold: '신청대기', confirmed: '계약완료',
     shipped: '배송중', in_use: '대여중', return_requested: '반납요청',
     returned: '반납완료', completed: '완료', cancelled: '취소', damage_claimed: '파손신고',
   }
@@ -441,6 +455,63 @@
     }
   }
 
+  // ── 무인보관함 비밀번호 (lazy-fetch, rental 탭 오픈 시 조회, manager 이상만) ──────────
+  let lockerPwFetchedForId = $state<number | null>(null)
+  let lockerPassword       = $state('')
+  let lockerPwLoading      = $state(false)
+  let lockerPwSaving       = $state(false)
+  let lockerPwError        = $state<string | null>(null)
+
+  $effect(() => {
+    if (activeTab !== 'rental') return
+    if (!showLockerPasswordField) return
+    if (lockerPwLoading) return
+    if (lockerPwFetchedForId === row.reservation_id) return
+
+    const id = row.reservation_id
+    lockerPwFetchedForId = id
+    lockerPassword       = ''
+    lockerPwError        = null
+    lockerPwLoading      = true
+
+    fetch(`/api/cms/reservations/${id}/locker-password`)
+      .then(r => r.json())
+      .then((d: { locker_password: string | null }) => {
+        if (lockerPwFetchedForId === id) {
+          lockerPassword  = d.locker_password ?? ''
+          lockerPwLoading = false
+        }
+      })
+      .catch(() => {
+        if (lockerPwFetchedForId === id) {
+          lockerPwError   = '비밀번호 정보를 불러오지 못했습니다.'
+          lockerPwLoading = false
+        }
+      })
+  })
+
+  async function saveLockerPassword(): Promise<void> {
+    lockerPwSaving = true
+    lockerPwError  = null
+    try {
+      const res = await fetch(`/api/cms/reservations/${row.reservation_id}/locker-password`, {
+        method:  'PATCH',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ locker_password: lockerPassword || null }),
+      })
+      if (!res.ok) {
+        const d = await res.json().catch(() => ({})) as { error?: string }
+        lockerPwError = d.error ?? '저장에 실패했습니다.'
+      } else {
+        csToast.success('무인보관함 비밀번호가 저장되었습니다.')
+      }
+    } catch {
+      lockerPwError = '저장 중 오류가 발생했습니다.'
+    } finally {
+      lockerPwSaving = false
+    }
+  }
+
   // 중복 발송 가드 — 5분 내 동일 알림 발송 이력 추적 (세션 내 휘발, 새로고침 시 초기화)
   const RECENT_NOTIFY_TTL_MS = 5 * 60 * 1000
   let lastSentMap = $state<Map<string, number>>(new Map())
@@ -461,6 +532,7 @@
 </script>
 
 <div class="panel">
+ <div class="panel-content">
   <!-- 패널 헤더 -->
   <div class="panel-header">
     <div class="panel-title-wrap">
@@ -637,6 +709,39 @@
           <span class="info-value">{formatDate(row.rental_end)}{row.return_time ? ' ' + row.return_time : ''}</span>
         </div>
       </div>
+
+      <!-- 무인보관함 비밀번호 — 방문대여(visit)+영업외시간(23:00~08:59) 조합일 때만, manager 이상 전용
+           (rental-lifecycle.md·service-operations.md 정책 참고 — 2026-08-20 신설) -->
+      {#if showLockerPasswordField}
+        <div class="section-title">무인보관함 비밀번호</div>
+        {#if lockerPwLoading}
+          <div class="loading-box">비밀번호 정보 조회 중...</div>
+        {:else}
+          <div class="info-section">
+            <div class="info-row">
+              <span class="info-label">비밀번호</span>
+              <input
+                class="tracking-input"
+                type="text"
+                placeholder="무인보관함 비밀번호 입력"
+                bind:value={lockerPassword}
+              />
+            </div>
+          </div>
+          <div class="tracking-action-row">
+            <button
+              class="btn-tracking-save"
+              onclick={saveLockerPassword}
+              disabled={lockerPwSaving}
+            >
+              {lockerPwSaving ? '저장 중...' : '비밀번호 저장'}
+            </button>
+            {#if lockerPwError}
+              <span class="tracking-error-msg">{lockerPwError}</span>
+            {/if}
+          </div>
+        {/if}
+      {/if}
 
       <!-- 운송장 정보 — 관리자가 택배사·운송장 번호를 등록하면 배송추적 카드에 반영됨 -->
       <div class="section-title">운송장 정보</div>
@@ -967,6 +1072,7 @@
         signingToken={row.signing_token}
         signingsentAt={row.signing_sent_at}
         reservationId={row.reservation_id}
+        reservationStatus={row.status}
         productName={row.product_name}
         productCode={row.product_code}
         productCategory={row.product_category}
@@ -983,6 +1089,7 @@
     {/if}
 
   </div>
+ </div>
 </div>
 
 {#if enableQrVerify}
@@ -1001,6 +1108,16 @@
     display: flex;
     flex-direction: column;
     height: 100%;
+    overflow: hidden;
+  }
+
+  /* 헤더·탭·본문 3영역을 하나로 묶는 래퍼 — .panel의 flex column 흐름을 그대로 이어받아
+     기존 레이아웃(헤더·탭 고정 높이, 본문만 스크롤)과 시각적으로 동일하게 동작 */
+  .panel-content {
+    display: flex;
+    flex-direction: column;
+    flex: 1;
+    min-height: 0;
     overflow: hidden;
   }
 

@@ -1,42 +1,9 @@
 import { json } from '@sveltejs/kit'
 import type { RequestHandler } from './$types'
 import { SUPABASE_SERVICE_ROLE_KEY } from '$env/static/private'
-import { env } from '$env/dynamic/private'
 import { PUBLIC_SUPABASE_URL } from '$env/static/public'
 import { createClient } from '@supabase/supabase-js'
-
-// SMS 발송: Aligo REST API (multipart/form-data)
-// env 미설정 시 SMS 미전송 (graceful skip)
-async function sendSms(to: string, code: string): Promise<void> {
-  const apiKey      = env.ALIGO_API_KEY
-  const userId      = env.ALIGO_USER_ID
-  const senderPhone = env.SMS_SENDER_PHONE
-
-  if (!apiKey || !userId || !senderPhone) {
-    return
-  }
-
-  const form = new FormData()
-  form.append('key',      apiKey)
-  form.append('user_id',  userId)
-  form.append('sender',   senderPhone)
-  form.append('receiver', to)
-  form.append('msg',      `[크레이지샷] 휴대폰 인증번호: ${code} (5분 내 입력)`)
-
-  const res = await fetch('https://apis.aligo.in/send/', {
-    method: 'POST',
-    body: form,
-  })
-
-  if (!res.ok) {
-    throw new Error(`Aligo HTTP 오류: ${res.status}`)
-  }
-
-  const data = await res.json() as { result_code: number; message: string }
-  if (data.result_code !== 1) {
-    throw new Error(`SMS 발송 실패: ${data.message} (code ${data.result_code})`)
-  }
-}
+import { sendSms } from '$lib/server/sms'
 
 export const POST: RequestHandler = async ({ request, locals }) => {
   const { session } = await locals.safeGetSession()
@@ -81,7 +48,7 @@ export const POST: RequestHandler = async ({ request, locals }) => {
   }
 
   try {
-    await sendSms(phone, code)
+    await sendSms(phone, `[크레이지샷] 휴대폰 인증번호: ${code} (5분 내 입력)`)
   } catch (err) {
     console.error('[send-otp] sms error:', err)
     return json({ ok: false, error: 'SMS 발송에 실패했습니다. 잠시 후 다시 시도해 주세요.' }, { status: 500 })
