@@ -49,18 +49,21 @@ export const POST: RequestHandler = async ({ params, locals, request, getClientA
     return json({ error: '자산 선택(asset_id) 또는 직접 서명(signature_data) 중 하나는 필수' }, { status: 400 })
   }
 
-  // 계약서 콘텐츠 조회 → content_hash 계산
+  // 계약서 콘텐츠 조회 → content_hash 계산 + signed_content_snapshot 저장(2026-08-21).
+  // 스냅샷 객체 전체를 해시 대상으로 삼는다 — 예전에는 canvas_document ?? content_blocks만
+  // 해시해 스프레드시트 모드(content_blocks가 항상 []로 저장됨)의 해시가 실제 내용과
+  // 무관하게 고정되던 결함이 있었음.
   const { data: contract } = await admin
     .from('contracts')
-    .select('content_blocks, canvas_document')
+    .select('title, authoring_mode, content_blocks, specifications, canvas_document, spreadsheet_document')
     .eq('id', contractId)
     .maybeSingle()
 
   let contentHash: string | null = null
+  let signedContentSnapshot: Record<string, unknown> | null = null
   if (contract) {
-    const hashTarget = (contract as Record<string, unknown>).canvas_document
-      ?? (contract as Record<string, unknown>).content_blocks
-    contentHash = await computeContentHash(hashTarget)
+    signedContentSnapshot = contract
+    contentHash = await computeContentHash(contract)
   }
 
   // 자산 선택 시 image_url 조회
@@ -93,9 +96,10 @@ export const POST: RequestHandler = async ({ params, locals, request, getClientA
     signature_image_url:  imageUrl ?? null,
     signature_data:       signature_data ?? null,
     asset_id:             asset_id ?? null,
-    content_hash:         contentHash,
-    signed_at:            new Date().toISOString(),
-    ip_address:           getClientAddress(),
+    content_hash:            contentHash,
+    signed_content_snapshot: signedContentSnapshot,
+    signed_at:               new Date().toISOString(),
+    ip_address:              getClientAddress(),
   })
 
   if (insertErr) {

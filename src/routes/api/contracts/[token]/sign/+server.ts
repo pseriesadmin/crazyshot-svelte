@@ -43,19 +43,21 @@ export const POST: RequestHandler = async ({ params, request, getClientAddress }
     return json({ error: '서명이 등록되지 않았습니다. 다시 서명해 주세요.' }, { status: 400 })
   }
 
-  // P8A-1: 서명 대상 콘텐츠 해시 계산 — contracts.content_blocks(또는 canvas_document)를 조회해 SHA-256 계산
-  // 서명 시점의 문서 상태를 암호학적으로 고정 (위변조 사후 검증 가능)
+  // P8A-1 + 2026-08-21 스냅샷 도입: 서명 시점 콘텐츠를 통째로 얼려 signed_content_snapshot에
+  // 저장하고, 그 스냅샷 객체 전체를 해시 대상으로 삼는다. 예전에는 canvas_document ??
+  // content_blocks만 해시해 스프레드시트 모드(content_blocks가 항상 []로 저장됨)의 해시가
+  // 실제 내용과 무관하게 고정되던 결함이 있었음 — 스냅샷 도입으로 함께 해소.
   let contentHash: string | null = null
+  let signedContentSnapshot: Record<string, unknown> | null = null
   if (signing.contract_id) {
     const { data: contractContent } = await admin
       .from('contracts')
-      .select('content_blocks, canvas_document')
+      .select('title, authoring_mode, content_blocks, specifications, canvas_document, spreadsheet_document')
       .eq('id', signing.contract_id)
       .maybeSingle()
     if (contractContent) {
-      // canvas_document가 있으면 canvas 모드, 없으면 content_blocks를 해시 대상으로 사용
-      const hashTarget = contractContent.canvas_document ?? contractContent.content_blocks
-      contentHash = await computeContentHash(hashTarget)
+      signedContentSnapshot = contractContent
+      contentHash = await computeContentHash(contractContent)
     }
   }
 
@@ -63,11 +65,12 @@ export const POST: RequestHandler = async ({ params, request, getClientAddress }
   const { error: updateErr } = await admin
     .from('contract_signings')
     .update({
-      signed_at:      new Date().toISOString(),
-      ip_address:     clientIp,
-      signature_data: signatureData,
-      stroke_count:   strokeCount,
-      content_hash:   contentHash,  // P8A-1: 서명 시점 콘텐츠 해시
+      signed_at:               new Date().toISOString(),
+      ip_address:              clientIp,
+      signature_data:          signatureData,
+      stroke_count:            strokeCount,
+      content_hash:            contentHash,             // P8A-1: 서명 시점 콘텐츠 해시
+      signed_content_snapshot: signedContentSnapshot,    // 서명 시점 콘텐츠 스냅샷(형태 보존)
     })
     .eq('id', signing.id)
     .is('signed_at', null)
@@ -191,8 +194,9 @@ export const POST: RequestHandler = async ({ params, request, getClientAddress }
               content,
               action_payload: {
                 type:         'contract_signed',
+                reservation_id: contract.reservation_id != null ? String(contract.reservation_id) : undefined,
                 reservation_no: reservationCode ?? undefined,
-                button_label: '전자계약 확인',
+                button_label: '전자계약완료',
                 action_url:   `/account/rental/${contract.reservation_id}/contract`,
               },
             })

@@ -5,6 +5,7 @@
   import { hasExistingContractContent } from '$lib/utils/contract-content-mode'
   import { isTiptapDocBlock, isSpreadsheetDocument } from '$lib/types/contract-document'
   import { renderTiptapDocToHtml } from '$lib/utils/tiptapRender'
+  import { renderSpreadsheetToHtml } from '$lib/utils/spreadsheetRender'
   import type { TiptapDocBlock } from '$lib/types/contract-document'
   import type { ContractSubstitutionData } from '$lib/types/contract-module'
 
@@ -84,6 +85,23 @@
     contentMode === 'existing' ? '현재 편집된 내용 미리보기' : (selectedTemplate?.title ?? '')
   )
 
+  /**
+   * 스프레드시트형 미리보기 문서 — 2026-08-21 신규.
+   * existing 모드: 이미 발송 시점에 치환·저장된 값이 그대로 들어있으므로 재치환 없이 사용.
+   * template 모드: 아직 발송 전 원본 양식이므로 flow 모드 previewBlocks와 동일하게
+   *   subData가 있으면 실시간으로 치환해서 보여준다(applySelectedTemplate()의 실제 발송
+   *   로직과 동일한 치환 함수 재사용 — 발송 전/후 미리보기 값이 어긋나지 않도록).
+   */
+  const previewSpreadsheetDocument = $derived(
+    contentMode === 'existing'
+      ? (isSpreadsheetDocument(existingSpreadsheetDocument) ? existingSpreadsheetDocument : null)
+      : (selectedTemplate && isSpreadsheetDocument(selectedTemplate.spreadsheet_document)
+          ? (subData
+              ? substituteSpreadsheetDocument(selectedTemplate.spreadsheet_document, subData)
+              : selectedTemplate.spreadsheet_document)
+          : null)
+  )
+
   const showPreview = $derived(
     // canvas / spreadsheet 계약은 existingBlocks가 [] 이므로 각 document 유무도 함께 확인
     (contentMode === 'existing' && (
@@ -123,7 +141,11 @@
       // 실패해도 template 모드로 graceful fallback (주요 로드에 영향 없음)
       if (contractId) {
         try {
-          const contentRes = await fetch(`/api/cms/contracts/${contractId}/content`)
+          // viewOnly(순수 "보기")일 때만 서명 시점 스냅샷을 우선 요청 — 편집/재발송 흐름은
+          // 항상 라이브 콘텐츠를 그대로 불러와야 그 사이의 실제 변경사항을 잃지 않는다.
+          const contentRes = await fetch(
+            `/api/cms/contracts/${contractId}/content${viewOnly ? '?preferSignedSnapshot=1' : ''}`,
+          )
           if (contentRes.ok) {
             const contentData = (await contentRes.json()) as {
               content_blocks?: unknown
@@ -394,17 +416,9 @@
                 <div class="preview-canvas-notice">
                   고정 캔버스형 계약서입니다. 발송 후 고객 서명 화면에서 배경 서식과 서명 필드를 확인할 수 있습니다.
                 </div>
-              {:else if contentMode === 'template' && selectedTemplate?.authoring_mode === 'spreadsheet'}
-                <div class="preview-canvas-notice">
-                  스프레드시트형 계약서입니다. 발송 후 고객 서명 화면에서 시트 내용을 확인할 수 있습니다.
-                </div>
               {:else if contentMode === 'existing' && existingCanvasDocument != null}
                 <div class="preview-canvas-notice">
                   발행된 고정 캔버스형 계약서입니다. 발송 후 고객 서명 화면에서 기존 발행 내용을 그대로 확인할 수 있습니다.
-                </div>
-              {:else if contentMode === 'existing' && existingSpreadsheetDocument != null}
-                <div class="preview-canvas-notice">
-                  발행된 스프레드시트형 계약서입니다. 발송 후 고객 서명 화면에서 기존 발행 내용을 그대로 확인할 수 있습니다.
                 </div>
               {/if}
               <div class="preview-content">
@@ -420,6 +434,14 @@
                     <hr class="preview-divider" />
                   {/if}
                 {/each}
+                {#if previewSpreadsheetDocument}
+                  <!-- 스프레드시트형: /contract/[token] 고객 화면과 동일한 렌더러로 실제 셀
+                       내용을 그대로 펼쳐 보여준다(2026-08-21 — 이전엔 안내 문구만 표시하고
+                       실제 내용은 발송 후에만 확인 가능했던 공백을 해소). -->
+                  <div class="preview-block spreadsheet-doc-content">
+                    {@html renderSpreadsheetToHtml(previewSpreadsheetDocument)}
+                  </div>
+                {/if}
               </div>
             </div>
           {:else if contentMode === 'template'}
@@ -762,6 +784,44 @@
     border: none;
     border-top: 1px solid var(--cs-lilac);
     margin: 4px 0;
+  }
+
+  /* 스프레드시트형 미리보기 — /contract/[token]/+page.svelte .spreadsheet-doc-content와
+     동일한 renderSpreadsheetToHtml() 출력 클래스 스타일(2026-08-21 신규, 3화면 일관 적용) */
+  .spreadsheet-doc-content {
+    overflow-x: auto;
+  }
+  .spreadsheet-doc-content :global(.ss-sheet-page) {
+    margin-bottom: 24px;
+  }
+  .spreadsheet-doc-content :global(.ss-sheet-name) {
+    font-size: 13px;
+    font-weight: 700;
+    color: var(--cs-text);
+    margin: 0 0 8px;
+  }
+  .spreadsheet-doc-content :global(.ss-table) {
+    border-collapse: collapse;
+    font-size: 12px;
+    color: var(--cs-text);
+    min-width: 100%;
+  }
+  .spreadsheet-doc-content :global(.ss-table td) {
+    border: 1px solid #ccc;
+    padding: 4px 6px;
+    white-space: pre-wrap;
+    vertical-align: top;
+    word-break: break-all;
+  }
+  .spreadsheet-doc-content :global(.ss-cell-image) {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    max-width: 600px;
+    height: auto;
+    z-index: 5;
+    pointer-events: none;
   }
 
   /* canvas 모드 안내 */

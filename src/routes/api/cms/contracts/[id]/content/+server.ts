@@ -7,7 +7,7 @@ import { getCmsRoleForAction } from '$lib/server/getCmsRoleForAction'
 import { hasSettingsAccess } from '$lib/utils/cmsPermissions'
 import { isCanvasDocument, hasSignatureField, isSpreadsheetDocument } from '$lib/types/contract-document'
 
-export const GET: RequestHandler = async ({ params, locals }) => {
+export const GET: RequestHandler = async ({ params, locals, url }) => {
   const cmsRole = await getCmsRoleForAction(locals)
   if (!cmsRole) {
     return json({ error: '권한 없음' }, { status: 403 })
@@ -20,18 +20,18 @@ export const GET: RequestHandler = async ({ params, locals }) => {
   // 계약(고객 PII가 아직 확정되지 않았거나 발송 전 초안일 수 있음)은 계속 manager 이상만 허용.
   // GET/PATCH 둘 다 막던 P7-4 전면 게이트를 "서명완료건 읽기전용 열람"만 완화한다(쓰기 경로인
   // PATCH·init-contract·send-chat·contract-data는 이 완화와 무관하게 manager 이상 그대로 유지).
-  if (!hasSettingsAccess(cmsRole)) {
-    const { data: signing } = await admin
-      .from('contract_signings')
-      .select('signed_at')
-      .eq('contract_id', contractId)
-      .not('signed_at', 'is', null)
-      .limit(1)
-      .maybeSingle()
+  //
+  const { data: signing } = await admin
+    .from('contract_signings')
+    .select('signed_at, signed_content_snapshot')
+    .eq('contract_id', contractId)
+    .not('signed_at', 'is', null)
+    .order('signed_at', { ascending: false })
+    .limit(1)
+    .maybeSingle()
 
-    if (!signing) {
-      return json({ error: '권한 없음' }, { status: 403 })
-    }
+  if (!hasSettingsAccess(cmsRole) && !signing) {
+    return json({ error: '권한 없음' }, { status: 403 })
   }
 
   const { data, error } = await admin
@@ -42,6 +42,17 @@ export const GET: RequestHandler = async ({ params, locals }) => {
 
   if (error) return json({ error: error.message }, { status: 500 })
   if (!data) return json({ error: '계약서를 찾을 수 없습니다.' }, { status: 404 })
+
+  // 2026-08-21: ?preferSignedSnapshot=1 요청에 한해서만 서명 시점 스냅샷을 우선 반환한다.
+  // 순수 "보기"(RentalContractViewer의 isRentalView 서명완료 목록) 경로 전용 — 이 파라미터
+  // 없이는 항상 라이브 콘텐츠를 반환해 기존 편집(ContractEditorModal)·재발송(existing 모드
+  // ContractTemplatePreviewModal) 흐름을 그대로 유지한다. 이 두 흐름까지 스냅샷을 기본
+  // 반환하면, 서명 후 편집이 그 프리필된 "과거" 내용을 다시 저장하며 그 사이의 실제
+  // 변경사항을 조용히 덮어쓸 위험이 있어 의도적으로 옵트인으로 분리했다.
+  if (url.searchParams.get('preferSignedSnapshot') === '1') {
+    const snapshot = signing?.signed_content_snapshot as typeof data | null | undefined
+    if (snapshot) return json(snapshot)
+  }
 
   return json(data)
 }

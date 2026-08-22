@@ -1,6 +1,7 @@
 <script lang="ts">
   import { browser } from '$app/environment'
   import { hasExistingContractContent } from '$lib/utils/contract-content-mode'
+  import { isContractIssueBlocked } from '$lib/utils/contractIssueGuard'
   import ContractEditorModal from '$lib/components/cms/ContractEditorModal.svelte'
   import ContractTemplatePreviewModal from '$lib/components/cms/ContractTemplatePreviewModal.svelte'
   import CmsDeleteButton from '$lib/components/cms/CmsDeleteButton.svelte'
@@ -13,6 +14,8 @@
     signingToken:     string | null
     signingsentAt:    string | null
     reservationId:    number
+    /** 취소(cancelled)·만료(expired) 예약은 발행·발송 버튼을 비활성화한다 */
+    reservationStatus: string
     productName:      string
     productCode:      string | null
     productCategory:  string
@@ -40,6 +43,7 @@
     signingToken,
     signingsentAt,
     reservationId,
+    reservationStatus,
     productName,
     productCode,
     productCategory,
@@ -79,9 +83,18 @@
       try {
         const r = await fetch(`/api/cms/contracts/${cid}/content`)
         if (!r.ok) { if (alive) { hasIssuedContent = false; issuedContractTitle = null }; return }
-        const data = await r.json() as { content_blocks?: unknown; canvas_document?: unknown; title?: string }
+        const data = await r.json() as {
+          content_blocks?: unknown
+          canvas_document?: unknown
+          spreadsheet_document?: unknown
+          title?: string
+        }
         if (!alive) return
-        hasIssuedContent    = hasExistingContractContent(data.content_blocks, data.canvas_document)
+        // spreadsheet 모드 계약(authoring_mode='spreadsheet')은 content_blocks가 항상 []라
+        // spreadsheet_document도 함께 넘겨야 "발행된 내용 있음"으로 정확히 판별된다(2026-08-21
+        // 발견 — 이 인자가 빠져있어 서명 완료된 spreadsheet 계약도 "서명완료 목록" 섹션 자체가
+        // 렌더링되지 않는 결함이 있었다. contract-content-mode.ts 참고).
+        hasIssuedContent    = hasExistingContractContent(data.content_blocks, data.canvas_document, data.spreadsheet_document)
         issuedContractTitle = data.title ?? null
       } catch {
         if (alive) hasIssuedContent = false
@@ -111,10 +124,23 @@
   const signingUrl = $derived(
     signingToken ? `/contract/${signingToken}` : null
   )
+
+  // 취소·만료 예약은 발행/발송 액션 자체를 막는다(대여현황의 "보기"·PDF·서명링크 열람은 무관)
+  const issueBlocked = $derived(isContractIssueBlocked(reservationStatus))
+  const issueBlockedLabel = $derived(
+    reservationStatus === 'expired'        ? '만료된'
+    : reservationStatus === 'damage_claimed' ? '파손 신고된'
+    : '취소된'
+  )
 </script>
 
 <div class="contract-viewer">
   <!-- 상태 배너 -->
+  {#if issueBlocked}
+    <div class="banner banner-blocked">
+      {issueBlockedLabel} 예약입니다 — 계약서 발행·발송이 비활성화되었습니다
+    </div>
+  {/if}
   {#if customerSignedAt}
     <div class="banner banner-signed">
       고객 서명 완료 · {formatDateTime(customerSignedAt)}
@@ -140,6 +166,8 @@
         <span class="tpl-section-title">계약서 양식 선택 편집</span>
         <button
           class="btn-issue"
+          disabled={issueBlocked}
+          title={issueBlocked ? `${issueBlockedLabel} 예약은 계약서를 발행할 수 없습니다.` : undefined}
           onclick={() => { previewTemplateId = '' }}
         >발행</button>
       </div>
@@ -167,6 +195,8 @@
             {/if}
             <button
               class="btn-tpl-preview"
+              disabled={!isRentalView && issueBlocked}
+              title={(!isRentalView && issueBlocked) ? `${issueBlockedLabel} 예약은 계약서를 발송할 수 없습니다.` : undefined}
               onclick={() => { previewTemplateId = '' }}
             >
               {isRentalView ? '보기' : '미리보기 & 발송'}
@@ -269,6 +299,7 @@
   .banner-sent     { background: rgba(14,165,233,0.12); color: var(--cs-info); }
   .banner-unsigned { background: rgba(245,158,11,0.12); color: var(--cs-warning); }
   .banner-none     { background: var(--cs-surface-gray); color: var(--cs-text-light); }
+  .banner-blocked  { background: rgba(239,68,68,0.12); color: var(--cs-error); }
 
   /* PDF */
   .pdf-wrap {
@@ -399,6 +430,7 @@
     white-space: nowrap;
   }
   .btn-tpl-preview:hover { background: var(--cs-purple-hover); }
+  .btn-tpl-preview:disabled { opacity: 0.5; cursor: not-allowed; }
   .tpl-card-del-gap {
     width: 8px;
     flex-shrink: 0;
