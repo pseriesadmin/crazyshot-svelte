@@ -1,14 +1,66 @@
 <script lang="ts">
   import { goto } from '$app/navigation'
   import MobileMoreMenu from '$lib/components/common/MobileMoreMenu.svelte'
+  import HomeBannerModal from '$lib/components/home/admin/HomeBannerModal.svelte'
+  import HomeThemeGroupModal from '$lib/components/home/admin/HomeThemeGroupModal.svelte'
+  import ProductCategoryModal from '$lib/components/products/admin/ProductCategoryModal.svelte'
+  import HomeCategoryProductsModal from '$lib/components/home/admin/HomeCategoryProductsModal.svelte'
   import type { PageData } from './$types'
 
   interface Props { data: PageData }
   let { data }: Props = $props()
 
-  // DB 배너 (마이그레이션 #45 적용 후 활성화)
+  // DB 배너 (마이그레이션 #45 적용 후 활성화) — 표시용 (is_active + 날짜 필터)
   const heroPC     = $derived(data.bannerMap?.['hero_pc']     ?? [])
   const heroMobile = $derived(data.bannerMap?.['hero_mobile'] ?? [])
+
+  // ── 캐러셀 상태 ───────────────────────────────────────────────────
+  let pcIdx    = $state(0)
+  let mobileIdx = $state(0)
+  let pcCarousel    = $state<typeof heroPC>([])
+  let mobileCarousel = $state<typeof heroMobile>([])
+
+  // 캐러셀 배열 초기화 (랜덤/고정 모드 반영)
+  $effect(() => {
+    const list = data.bannerMap?.['hero_pc'] ?? []
+    pcCarousel = data.heroBannerSettings?.pc_mode === 'random'
+      ? [...list].sort(() => Math.random() - 0.5)
+      : [...list]
+    pcIdx = 0
+  })
+
+  $effect(() => {
+    const list = data.bannerMap?.['hero_mobile'] ?? []
+    mobileCarousel = data.heroBannerSettings?.mobile_mode === 'random'
+      ? [...list].sort(() => Math.random() - 0.5)
+      : [...list]
+    mobileIdx = 0
+  })
+
+  // 자동 슬라이드 (4초 인터벌)
+  $effect(() => {
+    if (pcCarousel.length <= 1) return
+    const id = setInterval(() => {
+      pcIdx = (pcIdx + 1) % pcCarousel.length
+    }, 4000)
+    return () => clearInterval(id)
+  })
+
+  $effect(() => {
+    if (mobileCarousel.length <= 1) return
+    const id = setInterval(() => {
+      mobileIdx = (mobileIdx + 1) % mobileCarousel.length
+    }, 4000)
+    return () => clearInterval(id)
+  })
+
+  // ── CMS 배너 관리 모달 ──────────────────────────────────────────────
+  let showBannerModal         = $state(false)
+  let showThemeGroupModal     = $state(false)
+  let showCategoryModal       = $state(false)
+  let showCatProductsModal    = $state(false)
+  let catProductsTabId        = $state('')
+  let catProductsTabName      = $state('')
   // ── 로컬 컬러 (app.css 토큰에 없는 값) ──────────────────────────
   const navy     = '#100b32'
   const navyDeep = '#201857'
@@ -19,34 +71,10 @@
   const redDeep  = '#cf0000'
   const muted    = '#c1bbec'
 
-  // ── 더미 데이터 ──────────────────────────────────────────────────
-  const PICKS_DESKTOP = [
-    { img: '/home/desktop/571a11c577774467d3b4cfa10fb7ea6ba6f178ba.png', label: 'Idol',     sub: '팬미팅 & 콘서트' },
-    { img: '/home/desktop/70f4f86db3e4f9fc6e56a1ae8e18d2ab59ec9752.png', label: 'Traveler', sub: '특별한 일상 기록' },
-    { img: '/home/desktop/973fb7223b8765990a797bef0c638107d6c5af2b.png', label: 'Creator',  sub: '내 안에 전문가'  },
-  ]
-  const PICKS_MOBILE = [
-    { img: '/home/mobile/f6fd3c3a5044c145e3ea5b2a0f647359481adf26.png', label: 'Casual log',   sub: '특별한 일상 기록' },
-    { img: '/home/mobile/dc04a7c7ecc9c9603875f1d7c09725329e848510.png', label: 'Fandom Ready', sub: '팬미팅 & 콘서트'  },
-    { img: '/home/mobile/e97fe344dc2504d05a6105603aea8216682b5b82.png', label: 'Steps to Pro', sub: '내 안에 전문가'   },
-  ]
+  // ── 더미 데이터 (PICKS_DESKTOP/PICKS_MOBILE 제거 — DB 테마그룹으로 대체) ──
+  // HL_CARDS(하이라이트 카드) 제거 — 테마그룹과 무관한 순수 하드코딩이었음 (Stephen 확인 후 제거)
 
-  const HL_CARDS = [
-    { img: '/home/desktop/7df82cd938ac023873613b838e2eca6c9c1701b1.png', name: 'SONY CAM 34B', price: '$ 350 / 1w' },
-    { img: '/home/desktop/7df82cd938ac023873613b838e2eca6c9c1701b1.png', name: 'SONY CAM 34B', price: '$ 350 / 1w' },
-    { img: '/home/desktop/455e92ba5b2dcda7fa62337bc295967c20058311.png', name: 'GOPROHERO11',  price: '$ 350 / 1w' },
-    { img: '/home/desktop/455e92ba5b2dcda7fa62337bc295967c20058311.png', name: 'GOPROHERO11',  price: '$ 350 / 1w' },
-  ]
-
-  const PRODUCTS = [
-    { id:1, name:'GOPRO HERO11',            desc:'Ultra Compact Design Weighs Only', price:'$ 180 / 1w', img:'/home/desktop/0e5cfa4b24ea4086c4f8a27ab299ce413ce61789.png' },
-    { id:2, name:'SONY FE 24-105 F4 G OSS', desc:'Ultra Compact Design Weighs Only', price:'$ 320 / 1w', img:'/home/desktop/ea4bb2f23aca10bc9f5708513bf4da8b17b2e37e.png' },
-    { id:3, name:'SONY A7S3',               desc:'Ultra Compact Design Weighs Only', price:'$ 350 / 1w', img:'/home/desktop/c81408dc30d1490b2dce2d4082bac0cee137885b.png' },
-    { id:4, name:'SONY FE 24-105 F4 G OSS', desc:'Ultra Compact Design Weighs Only', price:'$ 230 / 1w', img:'/home/desktop/66971e04a11bcacd44babb8f2fe82711f8d8d130.png' },
-    { id:5, name:'SONY FE 24-105 F4 G OSS', desc:'Ultra Compact Design Weighs Only', price:'$ 320 / 1w', img:'/home/desktop/7f5fc984fb8e13feda5291bb4dce91a2024cb9b0.png' },
-    { id:6, name:'SONY A7S3',               desc:'Ultra Compact Design Weighs Only', price:'$ 350 / 1w', img:'/home/desktop/c81408dc30d1490b2dce2d4082bac0cee137885b.png' },
-    { id:7, name:'SONY FE 24-105 F4 G OSS', desc:'Ultra Compact Design Weighs Only', price:'$ 230 / 1w', img:'/home/desktop/ea4bb2f23aca10bc9f5708513bf4da8b17b2e37e.png' },
-  ]
+  // PRODUCTS 하드코딩 제거 — Phase 4에서 data.categoryProducts[activeTab](DB)으로 교체됨
 
   const PACKAGES = [
     { img:'/home/mobile/8c932c01a63712857026f826beb90a3293b5f28f.png', cat:'Casual log',  name:'소니 FX3 완전체 패키지',       price:'80,000원 / 1일' },
@@ -55,21 +83,9 @@
     { img:'/home/mobile/8a3ac2d8f7bcace345136452001ed2288550d883.png', cat:'Starter kit', name:'Sony FDR-AX43A 4K',             price:'$ 350 / 1w'     },
   ]
 
-  const M_PRODUCTS = [
-    { img:'/home/desktop/0e5cfa4b24ea4086c4f8a27ab299ce413ce61789.png', name:'코프로 히어로 11', price:'120,000원 / 1일', desc:'초소형 디자인으로 무게감이 훨씬' },
-    { img:'/home/desktop/ea4bb2f23aca10bc9f5708513bf4da8b17b2e37e.png', name:'캐논 300DF',       price:'120,000원 / 1일', desc:'초소형 디자인으로 무게감이 훨씬' },
-    { img:'/home/desktop/c81408dc30d1490b2dce2d4082bac0cee137885b.png', name:'코프로 히어로 11', price:'120,000원 / 1일', desc:'초소형 디자인으로 무게감이 훨씬' },
-    { img:'/home/desktop/66971e04a11bcacd44babb8f2fe82711f8d8d130.png', name:'소니 캠프로 30D',  price:'120,000원 / 1일', desc:'초소형 디자인으로 무게감이 훨씬' },
-    { img:'/home/desktop/7f5fc984fb8e13feda5291bb4dce91a2024cb9b0.png', name:'칼자이츠 50F',     price:'120,000원 / 1일', desc:'초소형 디자인으로 무게감이 훨씬' },
-  ]
+  // M_PRODUCTS 하드코딩 제거 — Phase 4에서 activeCatProds(DB)으로 교체됨
 
-  const BLOG_M = [
-    { img:'/home/mobile/88b12b3c2f6cf0d2849cf3a03d88be683d812f33.png', cat:'Flash Deals', catBg:'#201857', title:'다양한 액션캠 대잔치',     desc:'DJI, 오즈모, 인스타 모두 맛봅시다'     },
-    { img:'/home/mobile/aa24939721466faff1ac52f258380ff639572a3b.png', cat:'Fan vlog',    catBg:'#cf0000', title:'양양의 기억 담기',          desc:'동해 양양바다의 기억을 담은 브이로그'   },
-    { img:'/home/mobile/8943a5c1d6afa794370c42f5424655c311691996.png', cat:'Release',     catBg:'#3b2f8a', title:'DJI Mini2se Aerial Drone',  desc:'드론시장에서 품질은 없다.'               },
-    { img:'/home/mobile/e5aeea4d6cf3c1e552f04ceca949e5f81b687c06.png', cat:'Fan Picks',   catBg:'#ff3535', title:'Sony ZV-E10 Mirrorless',    desc:'올어라운드 렌즈의 끝판왕'               },
-    { img:'/home/mobile/42b09caf08dc841710ab819baf914713f43e3d7d.png', cat:'Release',     catBg:'#ff3535', title:'DJI Mini2se Aerial Drone',  desc:''                                        },
-  ]
+  // BLOG_M 제거 — data.crazylogPosts(DB 동기화)로 교체됨 (Phase 1-A)
 
   const ARTICLES = [
     { img:'/home/mobile/a041a1560d8516c08629c076091801ef2ef3fe34.png', title:'[사용기] SONY FE 24-105  가볍게 고퀄 영상을 바로 만들어주다',        time:'1시간 전', by:'홍기동' },
@@ -79,30 +95,7 @@
     { img:'/home/mobile/a0b11155daf1d451a0b118540da1168c113db2b8.png', title:'K-트레일로그를 남기는 멋진 일은 우리들에게 즐거움의 폭증이다!!',      time:'2시간 전', by:'유말자' },
   ]
 
-  const FAQ_DESKTOP = [
-    { id:'d1', q:'Can I extend my rental?',
-      a:'렌탈 기간을 연장하시려면 반납 예정일 기준 24시간 전에 고객센터나 앱에서 연장 신청을 해주시면 됩니다. 재고 상황에 따라 불가능할 수 있습니다.' },
-    { id:'d2', q:'Why do I pay more total for extending a 7-day rental into a 14-day rental than I would for a single 14-day rental?',
-      a:'7일 렌탈을 연장하는 경우 처음부터 14일로 예약하는 것보다 총 비용이 높을 수 있습니다. 처음부터 필요한 기간을 정확히 예약하시는 것을 권장합니다.' },
-    { id:'d3', q:'What if I am late with my return?',
-      a:'반납이 지연되는 경우 추가 렌탈 요금이 일할 계산되어 부과됩니다. 최대한 빠르게 고객센터에 연락해 주시기 바랍니다.' },
-    { id:'d4', q:'Oh no! I forgot to return an item!',
-      a:'반납을 잊으신 경우 즉시 고객센터(1588-0033)에 연락해 주세요. 상황에 따라 적절한 조치를 안내해 드리겠습니다.' },
-    { id:'d5', q:'How are late fees calculated?',
-      a:'연체료는 반납 예정일 다음 날부터 실제 반납일까지 일수에 일일 렌탈 요금을 곱하여 계산됩니다.' },
-  ]
-  const FAQ_MOBILE = [
-    { id:'m1', q:'호텔이나 에어비앤비로도 배송 받을 수 있나요?',
-      a:'네, 가능합니다. 배송지 주소를 정확히 입력해 주시면 숙박시설로도 배송 가능합니다. 프론트 데스크에 미리 알려두시는 것을 권장합니다.' },
-    { id:'m2', q:'렌탈 기간을 연장하고 싶어요.',
-      a:'앱 또는 고객센터를 통해 연장 신청이 가능합니다. 반납 예정일 24시간 전에 신청해 주세요.' },
-    { id:'m3', q:'장비가 파손되었을 때 어떻게 해야 하나요?',
-      a:'파손 발생 시 즉시 촬영 후 고객센터에 신고해 주세요. 파손 정도에 따라 수리비가 청구될 수 있습니다.' },
-    { id:'m4', q:'반납은 어떻게 하나요?',
-      a:'지정된 반납 방법(택배/방문)을 선택하시고, 안전하게 포장하여 반납해 주세요.' },
-    { id:'m5', q:'결제는 어떤 방법으로 할 수 있나요?',
-      a:'신용카드, 체크카드, 계좌이체, 간편결제(카카오페이, 네이버페이 등)가 가능합니다.' },
-  ]
+  // FAQ_DESKTOP / FAQ_MOBILE 제거 — data.topFaqs(DB 동기화, canned_responses 상위5)로 교체됨 (Phase 1-B)
 
   const BRANDS_D = [
     { src: '/home/desktop/afdabe0224a76bddaf34a6ba1df6f2fb289d8214.png', alt: 'Canon' },
@@ -112,9 +105,6 @@
   ]
   const BRAND_SET = [...BRANDS_D, ...BRANDS_D, ...BRANDS_D, ...BRANDS_D]
 
-  // BUG-FIX(2026-08-10): 하드코딩 id/label 배열 제거 — 백오피스(data.categories)에서
-  // 노출 설정된 카테고리 목록·라벨을 그대로 사용. 아이콘은 시각 자산이라 이번 범위에서는
-  // 카테고리 코드별 아이콘 키 매핑만 유지(라벨/노출목록만 동적화, Stephen 확인된 범위)
   const CATEGORY_ICON_BY_CODE: Record<string, string> = {
     hypepack:   'package',
     camera:     'camera',
@@ -125,16 +115,40 @@
     actcam:     'video',
     accessorie: 'wrench',
   }
-  const CATEGORY_TABS = $derived(
-    data.categories.map((c) => ({
-      id:    c.id,
-      label: c.name,
-      icon:  CATEGORY_ICON_BY_CODE[c.code] ?? 'wrench',
-    }))
-  )
+  // /products의 카테고리 설정(product_page_categories)을 완전 공유 — displayCats 패턴 그대로
+  // (src/routes/products/+page.svelte 정본): 저장된 항목만, sort_order 순, 커스텀 icon_url 반영.
+  // 저장값이 없으면 /products와 동일하게 빈 배열(전체 code_mapping_groups를 임의 노출하지 않음).
+  const CATEGORY_TABS = $derived((() => {
+    const savedItems = data.categoryPageSettings?.items ?? []
+    if (savedItems.length === 0) return []
+    return [...savedItems]
+      .sort((a, b) => a.sort_order - b.sort_order)
+      .flatMap((item) => {
+        const cat = data.categories.find((c) => c.id === item.code_id)
+        if (!cat) return []
+        return [{
+          id:       cat.id,
+          label:    cat.name,
+          icon:     CATEGORY_ICON_BY_CODE[cat.code] ?? 'wrench',
+          icon_url: (item as { icon_url?: string | null }).icon_url ?? null,
+        }]
+      })
+  })())
 
   // ── 상태 ──────────────────────────────────────────────────────────
   let activeTab = $state('camera')
+
+  // 취향직격 테마 원형 탭(PC, Figma node 2072:5988 구조) — 원형 선택 시 그 테마의
+  // 상품 하이라이트 슬라이드 1개만 아래에 표시(테마마다 개별 슬라이드 반복 아님)
+  let activeThemeId = $state<string | null>(null)
+  const activeThemeProducts = $derived(
+    (data.themeGroups ?? []).find((g) => g.id === (activeThemeId ?? data.themeGroups?.[0]?.id))?.products ?? []
+  )
+
+  // Phase 4: 현재 탭의 큐레이션 상품 (categoryProducts[activeTab])
+  const activeCatProds = $derived(
+    (data.categoryProducts ?? {})[activeTab] ?? []
+  )
   let openFaqId = $state<string | null>(null)
   let pkgIdx = $state(0)
   let mpickIdx = $state(0)
@@ -167,6 +181,12 @@
     sliderEl?.scrollBy({ left: dir === 'right' ? 330 : -330, behavior: 'smooth' })
   }
 
+  // 취향직격 테마 원형탭(PC) — 최대 3개만 노출, 나머지는 슬라이드로 이동
+  let themeTabsEl: { scrollBy: (opts: { left: number; behavior: 'smooth' | 'instant' | 'auto' }) => void } | undefined
+  function scrollThemeTabs(dir: 'left' | 'right') {
+    themeTabsEl?.scrollBy({ left: dir === 'right' ? 210 : -210, behavior: 'smooth' })
+  }
+
   let pkgSliderEl: { scrollLeft: number } | undefined
   function onPkgScroll() {
     if (!pkgSliderEl) return
@@ -195,8 +215,12 @@
 
   <!-- ① Hero -->
   <div class="d-hero">
-    {#if heroPC.length > 0}
-      {#each heroPC as b (b.id)}
+    {#if data.isCms}
+      <button class="hero-cms-btn" onclick={() => (showBannerModal = true)}>⚙ 배너 관리</button>
+    {/if}
+    {#if pcCarousel.length > 0}
+      {@const b = pcCarousel[pcIdx]}
+      {#if b}
         {#if b.link_url}
           <a href={b.link_url} class="d-hero-banner-link">
             <img src={b.image_url} alt={b.title ?? ''} class="d-hero-banner-img" />
@@ -204,7 +228,10 @@
         {:else}
           <img src={b.image_url} alt={b.title ?? ''} class="d-hero-banner-img" />
         {/if}
-      {/each}
+        {#if b.sub_copy}
+          <div class="d-hero-sub-copy">{b.sub_copy}</div>
+        {/if}
+      {/if}
     {:else}
       <img src="/home/desktop/1fbafe64eb226e679021660588c1e5d840401f59.png" alt="" class="d-hero-left" aria-hidden="true"/>
       <img src="/home/desktop/1bbde5f74b1d99829b62da01db4cd68c18c25510.png" alt="" class="d-hero-right" aria-hidden="true"/>
@@ -221,54 +248,141 @@
     </div>
   </div>
 
-  <!-- ② 취향직격 PICK -->
-  <div class="d-section d-pick-section">
-    <div class="section-head">
-      <svg width="34" height="16" viewBox="0 0 34 16" fill="none" aria-hidden="true">
-        <path d="M2 8 Q8.5 2 17 8 Q25.5 14 32 8" stroke="#ff3535" stroke-width="3.5" stroke-linecap="round" fill="none"/>
-      </svg>
-      <span class="section-title" style="color:{redDeep}">취·향·직·격 PICK!</span>
-    </div>
-    <p class="section-sub">취향에 따라 상황에 맞춘 고민 따위 필요없이<br/>찰떡궁합 촬영 패키지 추천 받으세요.</p>
-    <div class="pick-circles">
-      {#each PICKS_DESKTOP as p}
-        <button class="pick-item">
-          <div class="pick-img-wrap pick-img-wrap--lg">
-            <img src={p.img} alt={p.label} class="pick-img"/>
+  <!-- ② 취향직격 PICK (PC) — Figma node 2072:5988 구조 그대로:
+       [제목·부제(좌) + 원형 테마 탭(우)] 헤더 1줄 → 선택된 테마의 상품 하이라이트 슬라이드 1개.
+       테마마다 개별 슬라이드를 반복하지 않고, 원형 탭 클릭 시 슬라이드 내용만 전환된다. -->
+  <div class="d-section d-theme-section">
+    <div class="theme-pick-row">
+      <div class="theme-pick-head">
+        <div class="theme-pick-title-wrap">
+          <svg width="38" height="21" viewBox="0 0 38 21" fill="none" aria-hidden="true">
+            <path d="M17.8899 0.218353C18.6016 -0.0728023 19.3988 -0.072768 20.1106 0.218353L20.262 0.28476L20.387 0.349213C20.995 0.681504 21.3406 1.19289 21.5178 1.47714C21.7224 1.80539 21.9327 2.22721 22.1321 2.62265L24.2747 6.87363L28.9592 5.30624C29.4012 5.15823 29.8653 5.00075 30.2551 4.90878C30.6075 4.8257 31.3078 4.68499 32.052 4.96542C32.9 5.28515 33.5462 5.97536 33.8196 6.82675C34.058 7.57012 33.8969 8.25404 33.801 8.60507C33.6952 8.99225 33.5215 9.45227 33.3567 9.89511L31.8293 13.9967L36.8264 16.2633C37.8322 16.7196 38.2776 17.9049 37.8215 18.9107C37.3651 19.9163 36.1798 20.3621 35.1741 19.9059L29.7776 17.4586C29.5783 17.3682 29.3209 17.2523 29.1028 17.1314C28.8626 16.9983 28.5301 16.7857 28.2366 16.4303C27.8561 15.9694 27.6248 15.4047 27.5706 14.8131C27.5289 14.3582 27.6129 13.9752 27.6877 13.7125C27.756 13.4731 27.8555 13.2084 27.9329 13.0006L29.2639 9.42148L25.134 10.8053C24.9449 10.8686 24.6962 10.9535 24.47 11.0103C24.2191 11.0734 23.8562 11.1416 23.427 11.0953C22.8646 11.0345 22.3332 10.8121 21.8958 10.4586C21.5626 10.1893 21.3547 9.88693 21.2219 9.6666C21.1019 9.46734 20.9848 9.23285 20.8938 9.05234L18.9993 5.2955L17.1067 9.05136V9.05234C17.0157 9.23282 16.8986 9.46742 16.7786 9.6666C16.6458 9.8869 16.4377 10.1894 16.1047 10.4586C15.6673 10.8119 15.1358 11.0346 14.5735 11.0953C14.1442 11.1415 13.7813 11.0734 13.5305 11.0103C13.3042 10.9534 13.0556 10.8686 12.8665 10.8053L8.7356 9.42148L10.0676 13.0006C10.145 13.2085 10.2445 13.4731 10.3127 13.7125C10.3876 13.9752 10.4716 14.3581 10.4299 14.8131C10.3757 15.4046 10.1444 15.9694 9.76392 16.4303C9.47044 16.7855 9.13786 16.9983 8.89771 17.1314C8.67964 17.2522 8.42204 17.3683 8.2229 17.4586L2.82642 19.9059C1.82066 20.3619 0.635292 19.9164 0.178955 18.9107C-0.277049 17.905 0.168563 16.7197 1.17407 16.2633L6.17017 13.9967L4.6438 9.89511C4.479 9.45221 4.30527 8.99228 4.19946 8.60507C4.10357 8.25406 3.94252 7.57005 4.18091 6.82675L4.23657 6.66953C4.53582 5.89099 5.15351 5.26527 5.94849 4.96542L6.08716 4.91757C6.77856 4.70212 7.41493 4.83087 7.74536 4.90878C8.13518 5.00072 8.59918 5.1582 9.04126 5.30624L13.7249 6.87363L15.8684 2.62265C16.0677 2.22732 16.2781 1.80535 16.4827 1.47714C16.6716 1.17402 17.0524 0.611777 17.7385 0.28476L17.8899 0.218353Z" fill="#FF3535"/>
+          </svg>
+          <span class="section-title" style="color:{redDeep}">취·향·직·격 PICK!</span>
+        </div>
+        <p class="theme-pick-desc">취향에 따라 상황에 맞춘 고민 따위 필요없이<br/>찰떡궁합 촬영 패키지 추천 받으세요.</p>
+        {#if data.isCms}
+          <button class="theme-cms-btn" onclick={() => (showThemeGroupModal = true)}>⚙ 테마그룹 관리</button>
+        {/if}
+      </div>
+
+      {#if data.themeGroups && data.themeGroups.length > 0}
+        <div class="theme-circle-tabs-wrap">
+          {#if data.themeGroups.length > 3}
+            <button class="theme-tabs-arrow left" onclick={() => scrollThemeTabs('left')} aria-label="이전 테마">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                <path d="M15 18l-6-6 6-6" stroke={navy} stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+              </svg>
+            </button>
+          {/if}
+          <div class="theme-circle-tabs" class:theme-circle-tabs--capped={data.themeGroups.length > 3} bind:this={themeTabsEl}>
+            {#each data.themeGroups as tg, i}
+              {@const isActive = (activeThemeId ?? data.themeGroups[0].id) === tg.id}
+              <button class="theme-circle-tab" onclick={() => (activeThemeId = tg.id)} type="button" aria-pressed={isActive}>
+                <div class="theme-hl-card theme-hl-card--circle" class:is-active={isActive}>
+                  {#if tg.image_url}
+                    <img src={tg.image_url} alt={tg.title} class="theme-hl-card-img"/>
+                  {:else}
+                    <div class="theme-group-img-ph" aria-hidden="true"></div>
+                  {/if}
+                </div>
+                <div class="theme-circle-info">
+                  <span class="theme-circle-name">{tg.title}</span>
+                  {#if tg.sub_copy}
+                    <span class="theme-circle-sub">{tg.sub_copy}</span>
+                  {/if}
+                </div>
+                <!-- Figma node 2072:5959 Polygon6 실벡터 그대로 반영(채워진 삼각형, ChevronIcon과 다른 형태) -->
+                <svg class="theme-tab-polygon" width="21" height="19" viewBox="0 0 21.1583 18.5113" fill="none" aria-hidden="true">
+                  <path d="M8.8573 0.982543C9.63142 -0.327512 11.5269 -0.327516 12.301 0.982539L20.8727 15.4885C21.812 17.0781 20.2796 18.9829 18.5257 18.4057L11.2043 15.9966C10.7982 15.8629 10.3601 15.8629 9.95401 15.9966L2.63259 18.4057C0.878729 18.9829 -0.653715 17.0781 0.285591 15.4885L8.8573 0.982543Z" fill={isActive ? '#3b2f8a' : '#c1bbec'}/>
+                </svg>
+              </button>
+            {/each}
           </div>
-          <div class="pick-label-wrap">
-            <span class="pick-label">{p.label}</span>
-            <span class="pick-sub">{p.sub}</span>
-            <svg width="20" height="12" viewBox="0 0 20 12" fill="none" style="margin-top:4px" aria-hidden="true">
-              <path d="M2 2 L10 10 L18 2" stroke="{purple}" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+          {#if data.themeGroups.length > 3}
+            <button class="theme-tabs-arrow right" onclick={() => scrollThemeTabs('right')} aria-label="다음 테마">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                <path d="M9 18l6-6-6-6" stroke={navy} stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+              </svg>
+            </button>
+          {/if}
+        </div>
+      {:else}
+        <!-- 테마그룹 0개 — 레이아웃 자리 유지용 샘플 원형탭(모든 방문자에게 노출, 신규 등록 시 가려짐) -->
+        <div class="theme-circle-tabs theme-circle-tabs--sample">
+          <div class="theme-circle-tab">
+            <div class="theme-hl-card theme-hl-card--circle">
+              <img src="/home/desktop/571a11c577774467d3b4cfa10fb7ea6ba6f178ba.png" alt="샘플 테마 배너" class="theme-hl-card-img"/>
+            </div>
+            <div class="theme-circle-info">
+              <span class="theme-circle-name">Sample Theme</span>
+              <span class="theme-circle-sub">테마그룹 등록 시 실제 콘텐츠가 표시됩니다</span>
+            </div>
+            <svg class="theme-tab-polygon" width="21" height="19" viewBox="0 0 21.1583 18.5113" fill="none" aria-hidden="true">
+              <path d="M8.8573 0.982543C9.63142 -0.327512 11.5269 -0.327516 12.301 0.982539L20.8727 15.4885C21.812 17.0781 20.2796 18.9829 18.5257 18.4057L11.2043 15.9966C10.7982 15.8629 10.3601 15.8629 9.95401 15.9966L2.63259 18.4057C0.878729 18.9829 -0.653715 17.0781 0.285591 15.4885L8.8573 0.982543Z" fill="#3b2f8a"/>
             </svg>
           </div>
-        </button>
-      {/each}
+        </div>
+      {/if}
     </div>
-  </div>
 
-  <!-- ③ 하이라이트 카드 4개 -->
-  <div class="d-hl-cards">
-    {#each HL_CARDS as card}
-      <div class="hl-card">
-        <img src={card.img} alt={card.name} class="hl-card-img"/>
-        <div class="hl-card-overlay" aria-hidden="true"></div>
-        <div class="hl-card-info">
-          <div class="hl-card-badges">
-            <div class="hl-badge" style="background:{red}">
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true"><circle cx="12" cy="8" r="4" stroke="white" stroke-width="2"/><path d="M4 20c0-4 3.6-7 8-7s8 3 8 7" stroke="white" stroke-width="2" stroke-linecap="round"/></svg>
+    {#if data.themeGroups && data.themeGroups.length > 0}
+      {#if activeThemeProducts.length > 0}
+        <!-- 표준 상품슬라이드 디자인(prod-card, "미칠 PICK"과 동일 규격) 재사용 -->
+        <div class="prod-slider theme-prod-slider">
+          {#each activeThemeProducts as prod}
+            <div
+              class="prod-card"
+              onclick={() => goto('/products/' + (prod.slug || prod.id))}
+              role="button"
+              tabindex={0}
+              onkeydown={(e) => e.key === 'Enter' && goto('/products/' + (prod.slug || prod.id))}
+            >
+              <img src={prod.image_urls?.[0] ?? '/favicon.png'} alt={prod.name} class="prod-card-img" loading="lazy"/>
+              <div class="prod-card-info">
+                <div class="prod-card-headline">
+                  <span class="prod-card-name">{prod.name}</span>
+                </div>
+                <div class="prod-card-price">
+                  {#if prod.price_24h}<span class="price-label">Day</span><span class="price-num">{prod.price_24h.toLocaleString('ko-KR')}</span>{/if}
+                  {#if prod.price_24h && prod.price_12h}<span class="price-sep">/</span>{/if}
+                  {#if prod.price_12h}<span class="price-label">12H</span><span class="price-num">{prod.price_12h.toLocaleString('ko-KR')}</span>{/if}
+                </div>
+              </div>
             </div>
-            <div class="hl-badge" style="background:{purpleLight}">
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true"><rect x="2" y="7" width="20" height="14" rx="2" stroke="white" stroke-width="2"/><path d="M16 7V5a2 2 0 00-8 0v2" stroke="white" stroke-width="2"/></svg>
+          {/each}
+        </div>
+      {/if}
+    {:else}
+      <!-- 상품 슬라이드 샘플 더미 — 표준 상품슬라이드 디자인(prod-card)과 동일하게 구현,
+           테마그룹 등록 시 이 자리에 실제 상품이 동일한 모습으로 노출됨 -->
+      <div class="prod-slider theme-prod-slider">
+        {#each [
+          { img: '/home/desktop/0e5cfa4b24ea4086c4f8a27ab299ce413ce61789.png', cat: 'Starter kit', name: 'GOPRO HERO11', day: '35,000', h12: '25,000', desc: 'Ultra Compact Design Weighs Only' },
+          { img: '/home/desktop/0f6bb06ce53ce5862f01e33b020560170e675963.png', cat: 'Starter kit', name: 'SONY ZV-E10', day: '42,000', h12: '28,000', desc: 'All-round Vlogging Camera' },
+          { img: '/home/desktop/1bbde5f74b1d99829b62da01db4cd68c18c25510.png', cat: 'Starter kit', name: 'DJI OSMO POCKET', day: '28,000', h12: '19,000', desc: 'Pocket-size Stabilized Gimbal' },
+        ] as sample}
+          <div class="prod-card prod-card--sample">
+            <img src={sample.img} alt={sample.name} class="prod-card-img"/>
+            <div class="prod-card-info">
+              <div class="prod-card-headline">
+                <span class="prod-card-cat">{sample.cat}</span>
+                <span class="prod-card-name">{sample.name}</span>
+              </div>
+              <div class="prod-card-price">
+                <span class="price-label">Day</span><span class="price-num">{sample.day}</span>
+                <span class="price-sep">/</span>
+                <span class="price-label">12H</span><span class="price-num">{sample.h12}</span>
+              </div>
+              <div class="prod-card-desc">{sample.desc}</div>
             </div>
           </div>
-          <span class="hl-cat">Starter kit</span>
-          <div class="hl-name">{card.name}</div>
-          <div class="hl-price" style="color:{red}">{card.price}</div>
-        </div>
+        {/each}
       </div>
-    {/each}
+      {#if data.isCms}
+        <p class="theme-empty-notice">테마그룹을 추가해 취향직격 섹션을 구성하세요.</p>
+      {/if}
+    {/if}
   </div>
 
   <!-- ④ 카테고리 탭 + 슬라이더 -->
@@ -288,7 +402,9 @@
       {#each CATEGORY_TABS as tab}
         <button class="cat-tab" class:active={activeTab === tab.id} onclick={() => activeTab = tab.id}>
           <div class="cat-tab-icon" style="background:{activeTab === tab.id ? purple : purplePale}">
-            {#if tab.icon === 'package'}
+            {#if tab.icon_url}
+              <img src={tab.icon_url} alt={tab.label} class="cat-tab-custom-icon" />
+            {:else if tab.icon === 'package'}
               <svg width="40" height="40" viewBox="0 0 24 24" fill="none" aria-hidden="true"><rect x="2" y="7" width="20" height="14" rx="2" stroke={activeTab === tab.id ? red : purple} stroke-width="1.8"/><path d="M16 7V5a2 2 0 00-8 0v2" stroke={activeTab === tab.id ? red : purple} stroke-width="1.8"/></svg>
             {:else if tab.icon === 'camera'}
               <svg width="40" height="40" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M23 19a2 2 0 01-2 2H3a2 2 0 01-2-2V8a2 2 0 012-2h4l2-3h6l2 3h4a2 2 0 012 2z" stroke={activeTab === tab.id ? red : purple} stroke-width="1.8"/><circle cx="12" cy="13" r="4" stroke={activeTab === tab.id ? red : purple} stroke-width="1.8"/></svg>
@@ -316,34 +432,59 @@
       <h2 class="michil-title"><span style="color:{redDeep}">미·칠</span> PICK!</h2>
     </div>
 
-    <!-- 상품 슬라이더 -->
-    <div class="prod-slider-wrap">
-      <button class="slider-arrow left" onclick={() => scrollSlider('left')} aria-label="이전">
-        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-          <path d="M15 18l-6-6 6-6" stroke="{navy}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
-        </svg>
-      </button>
-
-      <div bind:this={sliderEl} class="prod-slider">
-        {#each PRODUCTS as p}
-          <div class="prod-card">
-            <img src={p.img} alt={p.name} class="prod-card-img"/>
-            <div class="prod-card-fade" aria-hidden="true"></div>
-            <div class="prod-card-info">
-              <div class="prod-card-price">{p.price}</div>
-              <div class="prod-card-name">{p.name}</div>
-              <div class="prod-card-desc">{p.desc}</div>
-            </div>
-          </div>
-        {/each}
+    {#if data.isCms}
+      <div class="cat-cms-btns">
+        <button class="cat-cms-btn" onclick={() => (showCategoryModal = true)}>⚙ 카테고리 설정</button>
+        <button class="cat-cms-btn" onclick={() => { catProductsTabId = activeTab; catProductsTabName = CATEGORY_TABS.find((t) => t.id === activeTab)?.label ?? activeTab; showCatProductsModal = true }}>
+          ⚙ {CATEGORY_TABS.find((t) => t.id === activeTab)?.label ?? ''} 상품 큐레이션
+        </button>
       </div>
+    {/if}
 
-      <button class="slider-arrow right" onclick={() => scrollSlider('right')} aria-label="다음">
-        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-          <path d="M9 18l6-6-6-6" stroke="{navy}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
-        </svg>
-      </button>
-    </div>
+    <!-- 상품 슬라이더 (Phase 4: DB 큐레이션 데이터) -->
+    {#if activeCatProds.length > 0}
+      <div class="prod-slider-wrap">
+        <button class="slider-arrow left" onclick={() => scrollSlider('left')} aria-label="이전">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+            <path d="M15 18l-6-6 6-6" stroke="{navy}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+        </button>
+
+        <div bind:this={sliderEl} class="prod-slider">
+          {#each activeCatProds as p}
+            <div
+              class="prod-card"
+              onclick={() => goto('/products/' + (p.slug || p.id))}
+              role="button"
+              tabindex={0}
+              onkeydown={(e) => e.key === 'Enter' && goto('/products/' + (p.slug || p.id))}
+            >
+              <img src={p.image_urls?.[0] ?? '/favicon.png'} alt={p.name} class="prod-card-img" loading="lazy"/>
+              <div class="prod-card-info">
+                <div class="prod-card-headline">
+                  {#if p.category}<span class="prod-card-cat">{p.category}</span>{/if}
+                  <span class="prod-card-name">{p.name}</span>
+                </div>
+                <div class="prod-card-price">
+                  {#if p.price_24h}<span class="price-label">Day</span><span class="price-num">{p.price_24h.toLocaleString('ko-KR')}</span>{/if}
+                  {#if p.price_24h && p.price_12h}<span class="price-sep">/</span>{/if}
+                  {#if p.price_12h}<span class="price-label">12H</span><span class="price-num">{p.price_12h.toLocaleString('ko-KR')}</span>{/if}
+                </div>
+                {#if p.product_caption}<div class="prod-card-desc">{p.product_caption}</div>{/if}
+              </div>
+            </div>
+          {/each}
+        </div>
+
+        <button class="slider-arrow right" onclick={() => scrollSlider('right')} aria-label="다음">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+            <path d="M9 18l6-6-6-6" stroke="{navy}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+        </button>
+      </div>
+    {:else if data.isCms}
+      <p class="cat-empty-notice">⚙ 상품 큐레이션에서 이 카테고리의 상품을 추가하세요.</p>
+    {/if}
   </div>
 
   <!-- ⑤ 크레이지로그 -->
@@ -356,33 +497,49 @@
     </div>
     <p class="section-sub" style="color:{navyDeep}">신상 리뷰도, 내 유튜브채널 홍보도 크레이지로그로!</p>
 
-    <div class="blog-grid">
-      <div class="blog-main-card">
-        <img src="/home/desktop/936c7f6a59d66e8e0e622b285038411a7c6b2519.png" alt="크레이지로그 메인" class="blog-img"/>
-        <div class="blog-main-header" style="background:{navyDeep}">
-          <span class="blog-cat-label">Flash Deals</span>
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M9 18l6-6-6-6" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+    {#if data.isCms}
+      <a href="/crazylog" class="cms-section-link" aria-label="크레이지로그 설정 페이지로 이동">✦ 크레이지로그 설정</a>
+    {/if}
+
+    {#if data.crazylogPosts.length >= 1}
+      <div class="blog-grid">
+        <div class="blog-main-card">
+          {#if data.crazylogPosts[0].img}
+            <img src={data.crazylogPosts[0].img} alt={data.crazylogPosts[0].title} class="blog-img"/>
+          {/if}
+          <div class="blog-main-header" style="background:{data.crazylogPosts[0].catBg}">
+            <span class="blog-cat-label">{data.crazylogPosts[0].cat}</span>
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M9 18l6-6-6-6" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          </div>
+          <div class="blog-main-footer">
+            <p class="blog-main-caption">{data.crazylogPosts[0].title}</p>
+          </div>
         </div>
-        <div class="blog-main-footer">
-          <p class="blog-main-caption">From Portraits to Panoramas-One Lens to Rule Them All</p>
-        </div>
+        {#if data.crazylogPosts.length >= 2}
+          <div class="blog-sub-card top">
+            {#if data.crazylogPosts[1].img}
+              <img src={data.crazylogPosts[1].img} alt={data.crazylogPosts[1].title} class="blog-img"/>
+            {/if}
+          </div>
+        {/if}
+        {#if data.crazylogPosts.length >= 3}
+          <div class="blog-sub-card bottom">
+            {#if data.crazylogPosts[2].img}
+              <img src={data.crazylogPosts[2].img} alt={data.crazylogPosts[2].title} class="blog-img"/>
+            {/if}
+            <div class="blog-sub-header" style="background:{data.crazylogPosts[2].catBg}">
+              <span class="blog-cat-label">{data.crazylogPosts[2].cat}</span>
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M9 18l6-6-6-6" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            </div>
+          </div>
+        {/if}
       </div>
-      <div class="blog-sub-card top">
-        <img src="/home/desktop/0f6bb06ce53ce5862f01e33b020560170e675963.png" alt="크레이지로그 서브" class="blog-img"/>
-      </div>
-      <div class="blog-sub-card bottom">
-        <img src="/home/desktop/3f31095d0b23ea6fa5b0d1bd332db11c12071e05.png" alt="크레이지로그" class="blog-img"/>
-        <div class="blog-sub-header" style="background:{purple}">
-          <span class="blog-cat-label">요즘 크레이지·로그</span>
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M9 18l6-6-6-6" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
-        </div>
-      </div>
-    </div>
+    {/if}
   </div>
 
   <!-- ⑥ FAQ -->
   <div class="d-section d-faq-section">
-    <div class="faq-brand-box" style="background:{purplePale}">
+    <div class="faq-brand-box" style="{data.faqHeroBgUrl ? `background-image:url('${data.faqHeroBgUrl}');background-size:cover;background-position:center` : `background:${purplePale}`}">
       <div class="faq-logo">
         <span class="logo-crazy-lg">CRAZY</span>
         <span class="logo-shot-lg">SHOT</span>
@@ -390,23 +547,26 @@
       <div class="faq-brand-text" style="color:{navy}">다양한 영상장비 쉽고 빠른<br/>렌탈 마법 가이드</div>
     </div>
     <div class="faq-col">
+      {#if data.isCms}
+        <a href="/help" class="cms-section-link" aria-label="헬프 설정 페이지로 이동">✦ 헬프 설정</a>
+      {/if}
       <p class="faq-intro">크레이샷만의 빠른 예약, 장비 수령, 반납까지 자주 묻는 질문을 바로 확인하세요.</p>
       <div class="faq-list">
-        {#each FAQ_DESKTOP as item}
+        {#each data.topFaqs as item}
           <div class="faq-item">
             <button
               class="faq-q"
               onclick={() => openFaqId = openFaqId === item.id ? null : item.id}
               aria-expanded={openFaqId === item.id}
             >
-              <span class="faq-q-text">{item.q}</span>
+              <span class="faq-q-text">{item.title}</span>
               <svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden="true"
                 style="transform:{openFaqId === item.id ? 'rotate(180deg)' : 'rotate(0deg)'};transition:transform 0.22s;flex-shrink:0">
                 <path d="M6 9l6 6 6-6" stroke="{muted}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
               </svg>
             </button>
             {#if openFaqId === item.id}
-              <div class="faq-a"><p>{item.a}</p></div>
+              <div class="faq-a"><p>{item.content}</p></div>
             {/if}
           </div>
         {/each}
@@ -434,12 +594,14 @@
 <div class="mobile-wrap">
 
   <!-- ① 모바일 히어로 -->
+  <!-- 관리자 전용 버튼 게이팅은 PC 반응형 전용 노출 기능 — 모바일에는 노출하지 않음 -->
   <div class="m-hero">
     <div class="m-hero-watermark" aria-hidden="true">
       Get Your CRAZYSHOT!<br/>Get Your CRAZYSHOT!<br/>Get Your CRAZYSHOT!
     </div>
-    {#if heroMobile.length > 0}
-      {#each heroMobile as b (b.id)}
+    {#if mobileCarousel.length > 0}
+      {@const b = mobileCarousel[mobileIdx]}
+      {#if b}
         {#if b.link_url}
           <a href={b.link_url} class="m-hero-banner-link">
             <img src={b.image_url} alt={b.title ?? ''} class="m-hero-bg" />
@@ -447,7 +609,10 @@
         {:else}
           <img src={b.image_url} alt={b.title ?? ''} class="m-hero-bg" />
         {/if}
-      {/each}
+        {#if b.sub_copy}
+          <div class="m-hero-sub-copy">{b.sub_copy}</div>
+        {/if}
+      {/if}
     {:else}
       <img src="/home/mobile/ac4438597a6842bccc5d44da173a03a9f3614d50.png" alt="" class="m-hero-bg" aria-hidden="true"/>
     {/if}
@@ -465,83 +630,150 @@
     </div>
   </div>
 
-  <!-- ② 취향직격 PICK + 패키지 슬라이더 -->
-  <div class="m-section m-pick-section">
+  <!-- ② 취향직격 테마그룹 (Mobile) -->
+  <div class="m-section m-theme-section">
     <div class="section-head">
       <svg width="34" height="16" viewBox="0 0 34 16" fill="none" aria-hidden="true">
         <path d="M2 8 Q8.5 2 17 8 Q25.5 14 32 8" stroke="#ff3535" stroke-width="3.5" stroke-linecap="round" fill="none"/>
       </svg>
       <span class="section-title" style="color:{redDeep}">취·향·직·격 PICK!</span>
+      <!-- 관리자 전용 버튼 게이팅은 PC 반응형 전용 노출 기능 — 모바일에는 노출하지 않음 -->
     </div>
-    <p class="section-sub">취향에 따라 상황에 맞춘 고민 따위 필요없이<br/>찰떡궁합 촬영 패키지 추천 받으세요.</p>
-    <div class="pick-circles">
-      {#each PICKS_MOBILE as p}
-        <button class="pick-item">
-          <div class="pick-img-wrap pick-img-wrap--sm">
-            <img src={p.img} alt={p.label} class="pick-img"/>
-          </div>
-          <div class="pick-label-wrap">
-            <span class="pick-label">{p.label}</span>
-            <span class="pick-sub">{p.sub}</span>
-            <svg width="20" height="12" viewBox="0 0 20 12" fill="none" style="margin-top:4px" aria-hidden="true">
-              <path d="M2 2 L10 10 L18 2" stroke="{purple}" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
-            </svg>
-          </div>
-        </button>
-      {/each}
-    </div>
-
-    <div bind:this={pkgSliderEl} onscroll={onPkgScroll} class="m-snap-slider">
-      {#each PACKAGES as pkg}
-        <div class="m-pkg-card">
-          <img src={pkg.img} alt={pkg.name} class="m-pkg-img"/>
-          <div class="m-pkg-overlay" aria-hidden="true"></div>
-          <div class="m-pkg-info">
-            <div class="m-pkg-badges">
-              <div class="hl-badge" style="background:{purpleLight}">
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true"><rect x="2" y="7" width="20" height="14" rx="2" stroke="white" stroke-width="2"/><path d="M16 7V5a2 2 0 00-8 0v2" stroke="white" stroke-width="2"/></svg>
+    {#if data.themeGroups && data.themeGroups.length > 0}
+      <div class="m-theme-groups">
+        {#each data.themeGroups as tg}
+          <div class="m-theme-row">
+            <div class="m-theme-header">
+              <!-- 테마 대표이미지: 원형 아바타 스타일(관리모달 등록 형태와 통일) -->
+              <div class="theme-hl-card theme-hl-card--m theme-hl-card--circle">
+                {#if tg.image_url}
+                  <img src={tg.image_url} alt={tg.title} class="theme-hl-card-img"/>
+                {:else}
+                  <div class="m-theme-img-ph" aria-hidden="true"></div>
+                {/if}
               </div>
-              <div class="hl-badge" style="background:{red}">
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true"><circle cx="12" cy="8" r="4" stroke="white" stroke-width="2"/><path d="M4 20c0-4 3.6-7 8-7s8 3 8 7" stroke="white" stroke-width="2" stroke-linecap="round"/></svg>
+              <div class="theme-circle-info">
+                <span class="theme-circle-name">{tg.title}</span>
+                {#if tg.sub_copy}
+                  <span class="theme-circle-sub">{tg.sub_copy}</span>
+                {/if}
               </div>
             </div>
-            <div class="m-pkg-cat-badge" style="background:{purpleLight}">{pkg.cat}</div>
-            <div class="m-pkg-name">{pkg.name}</div>
-            <div class="m-pkg-price" style="color:{red}">{pkg.price}</div>
+            {#if tg.products && tg.products.length > 0}
+              <!-- 표준 상품슬라이드 디자인(m-prod-card, "미칠 PICK"과 동일 규격) 재사용 -->
+              <div class="m-snap-slider theme-m-prod-slider">
+                {#each tg.products as prod}
+                  <div
+                    class="m-prod-card"
+                    onclick={() => goto('/products/' + (prod.slug || prod.id))}
+                    role="button"
+                    tabindex={0}
+                    onkeydown={(e) => e.key === 'Enter' && goto('/products/' + (prod.slug || prod.id))}
+                  >
+                    <img src={prod.image_urls?.[0] ?? '/favicon.png'} alt={prod.name} class="m-prod-img" loading="lazy"/>
+                    <div class="m-prod-info">
+                      <div class="m-prod-headline">
+                        <span class="m-prod-name">{prod.name}</span>
+                      </div>
+                      <div class="m-prod-price">
+                        {#if prod.price_24h}<span class="price-label">Day</span><span class="price-num">{prod.price_24h.toLocaleString('ko-KR')}</span>{/if}
+                        {#if prod.price_24h && prod.price_12h}<span class="price-sep">/</span>{/if}
+                        {#if prod.price_12h}<span class="price-label">12H</span><span class="price-num">{prod.price_12h.toLocaleString('ko-KR')}</span>{/if}
+                      </div>
+                    </div>
+                  </div>
+                {/each}
+              </div>
+            {/if}
+          </div>
+        {/each}
+      </div>
+    {:else}
+      <!-- 테마그룹 0개 — 레이아웃 자리 유지용 샘플 배너(모든 방문자에게 노출, 신규 상품슬라이드
+           등록 시 위 {#if} 분기로 자동 전환되어 샘플은 가려짐) -->
+      <div class="m-theme-groups m-theme-groups--sample">
+        <div class="m-theme-row">
+          <div class="m-theme-header">
+            <div class="theme-hl-card theme-hl-card--m theme-hl-card--circle">
+              <img src="/home/desktop/571a11c577774467d3b4cfa10fb7ea6ba6f178ba.png" alt="샘플 테마 배너" class="theme-hl-card-img"/>
+            </div>
+            <div class="theme-circle-info">
+              <span class="theme-circle-name">Sample Theme</span>
+              <span class="theme-circle-sub">테마그룹 등록 시 실제 콘텐츠가 표시됩니다</span>
+            </div>
+          </div>
+          <!-- 상품 슬라이드 샘플 더미 — 표준 상품슬라이드 디자인(m-prod-card)과 동일하게 구현 -->
+          <div class="m-snap-slider theme-m-prod-slider">
+            {#each [
+              { img: '/home/desktop/0e5cfa4b24ea4086c4f8a27ab299ce413ce61789.png', cat: 'Starter kit', name: 'GOPRO HERO11', day: '35,000', h12: '25,000', desc: 'Ultra Compact Design Weighs Only' },
+              { img: '/home/desktop/0f6bb06ce53ce5862f01e33b020560170e675963.png', cat: 'Starter kit', name: 'SONY ZV-E10', day: '42,000', h12: '28,000', desc: 'All-round Vlogging Camera' },
+              { img: '/home/desktop/1bbde5f74b1d99829b62da01db4cd68c18c25510.png', cat: 'Starter kit', name: 'DJI OSMO POCKET', day: '28,000', h12: '19,000', desc: 'Pocket-size Stabilized Gimbal' },
+            ] as sample}
+              <div class="m-prod-card m-prod-card--sample">
+                <img src={sample.img} alt={sample.name} class="m-prod-img"/>
+                <div class="m-prod-info">
+                  <div class="m-prod-headline">
+                    <span class="m-prod-cat">{sample.cat}</span>
+                    <span class="m-prod-name">{sample.name}</span>
+                  </div>
+                  <div class="m-prod-price">
+                    <span class="price-label">Day</span><span class="price-num">{sample.day}</span>
+                    <span class="price-sep">/</span>
+                    <span class="price-label">12H</span><span class="price-num">{sample.h12}</span>
+                  </div>
+                  <div class="m-prod-desc">{sample.desc}</div>
+                </div>
+              </div>
+            {/each}
           </div>
         </div>
-      {/each}
-    </div>
-    <div class="dot-indicators">
-      {#each PACKAGES as _, i}
-        <div class="dot" class:active={i === pkgIdx}></div>
-      {/each}
-    </div>
+      </div>
+      {#if data.isCms}
+        <p class="theme-empty-notice">테마그룹을 추가해 취향직격 섹션을 구성하세요.</p>
+      {/if}
+    {/if}
   </div>
 
-  <!-- ③ 미칠 PICK 슬라이더 -->
+  <!-- ③ 미칠 PICK 슬라이더 (Phase 4: DB 큐레이션 데이터) -->
   <div class="m-section m-michil-section">
     <div class="m-michil-head">
       <h2 class="michil-title"><span style="color:{redDeep}">미·칠</span> PICK!</h2>
+      <!-- 관리자 전용 버튼 게이팅은 PC 반응형 전용 노출 기능 — 모바일에는 노출하지 않음 -->
     </div>
-    <div bind:this={mpickSliderEl} onscroll={onMpickScroll} class="m-snap-slider">
-      {#each M_PRODUCTS as p, _i}
-        <div class="m-prod-card">
-          <img src={p.img} alt={p.name} class="m-prod-img"/>
-          <div class="m-prod-dots" aria-hidden="true">
-            {#each M_PRODUCTS as _, j}
-              <div class="dot" class:active={j === mpickIdx} style="background:white"></div>
-            {/each}
+    {#if activeCatProds.length > 0}
+      <div bind:this={mpickSliderEl} onscroll={onMpickScroll} class="m-snap-slider">
+        {#each activeCatProds as p, _i}
+          <div
+            class="m-prod-card"
+            onclick={() => goto('/products/' + (p.slug || p.id))}
+            role="button"
+            tabindex={0}
+            onkeydown={(e) => e.key === 'Enter' && goto('/products/' + (p.slug || p.id))}
+          >
+            <img src={p.image_urls?.[0] ?? '/favicon.png'} alt={p.name} class="m-prod-img" loading="lazy"/>
+            <div class="m-prod-dots" aria-hidden="true">
+              {#each activeCatProds as _, j}
+                <div class="dot" class:active={j === mpickIdx} style="background:white"></div>
+              {/each}
+            </div>
+            <div class="m-prod-info">
+              <div class="m-prod-headline">
+                {#if p.category}<span class="m-prod-cat">{p.category}</span>{/if}
+                <span class="m-prod-name">{p.name}</span>
+              </div>
+              <div class="m-prod-price">
+                {#if p.price_24h}<span class="price-label">Day</span><span class="price-num">{p.price_24h.toLocaleString('ko-KR')}</span>{/if}
+                {#if p.price_24h && p.price_12h}<span class="price-sep">/</span>{/if}
+                {#if p.price_12h}<span class="price-label">12H</span><span class="price-num">{p.price_12h.toLocaleString('ko-KR')}</span>{/if}
+              </div>
+              {#if p.product_caption}<div class="m-prod-desc">{p.product_caption}</div>{/if}
+            </div>
           </div>
-          <div class="m-prod-fade" aria-hidden="true"></div>
-          <div class="m-prod-info">
-            <div class="m-prod-name">{p.name}</div>
-            <div class="m-prod-price" style="color:{purple}">{p.price}</div>
-            <div class="m-prod-desc">{p.desc}</div>
-          </div>
-        </div>
-      {/each}
-    </div>
+        {/each}
+      </div>
+    {:else if data.isCms}
+      <p class="cat-empty-notice cat-empty-notice--mobile">⚙ 큐레이션 버튼으로 상품을 추가하세요.</p>
+    {/if}
   </div>
 
   <!-- ④ 요즘 크레이지로그 -->
@@ -553,10 +785,15 @@
       <span class="section-title" style="color:white">요즘 크레이지로그!</span>
     </div>
     <p class="section-sub" style="color:white">신상 리뷰도, 내 유튜브채널 홍보도 크레이지로그로!</p>
+    {#if data.isCms}
+      <a href="/crazylog" class="cms-section-link cms-section-link--light" aria-label="크레이지로그 설정 페이지로 이동">✦ 크레이지로그 설정</a>
+    {/if}
     <div class="m-blog-cards">
-      {#each BLOG_M as post}
+      {#each data.crazylogPosts as post}
         <div class="m-blog-card">
-          <img src={post.img} alt={post.title} class="m-blog-img"/>
+          {#if post.img}
+            <img src={post.img} alt={post.title} class="m-blog-img"/>
+          {/if}
           <div class="m-blog-header" style="background:{post.catBg}">
             <span class="blog-cat-label">{post.cat}</span>
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M9 18l6-6-6-6" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
@@ -595,29 +832,32 @@
 
   <!-- ⑥ FAQ -->
   <div class="m-section m-faq-section">
-    <div class="m-faq-brand" style="background:{purplePale}">
+    <div class="m-faq-brand" style="{data.faqHeroBgUrl ? `background-image:url('${data.faqHeroBgUrl}');background-size:cover;background-position:center` : `background:${purplePale}`}">
       <div class="faq-logo"><span class="logo-crazy-lg">CRAZY</span><span class="logo-shot-lg">SHOT</span></div>
     </div>
     <div class="m-faq-intro-wrap">
+      {#if data.isCms}
+        <a href="/help" class="cms-section-link" aria-label="헬프 설정 페이지로 이동">✦ 헬프 설정</a>
+      {/if}
       <div class="faq-brand-text" style="color:{navy}">다양한 영상장비 쉽고 빠른 렌탈 마법 가이드</div>
       <p class="faq-intro" style="color:{purple}">크레이샷만의 빠른 예약, 장비 수령, 반납까지 자주 묻는 질문을 바로 확인하세요.</p>
     </div>
     <div class="faq-list">
-      {#each FAQ_MOBILE as item}
+      {#each data.topFaqs as item}
         <div class="faq-item">
           <button
             class="faq-q"
             onclick={() => openFaqId = openFaqId === item.id ? null : item.id}
             aria-expanded={openFaqId === item.id}
           >
-            <span class="faq-q-text">{item.q}</span>
+            <span class="faq-q-text">{item.title}</span>
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden="true"
               style="transform:{openFaqId === item.id ? 'rotate(180deg)' : 'rotate(0deg)'};transition:transform 0.22s;flex-shrink:0">
               <path d="M6 9l6 6 6-6" stroke="{muted}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
             </svg>
           </button>
           {#if openFaqId === item.id}
-            <div class="faq-a"><p>{item.a}</p></div>
+            <div class="faq-a"><p>{item.content}</p></div>
           {/if}
         </div>
       {/each}
@@ -678,7 +918,129 @@
   <MobileMoreMenu open={moreMenuOpen} onclose={() => { moreMenuOpen = false; mActiveTab = 'Home' }} />
 </div><!-- /mobile-wrap -->
 
+{#if data.isCms && showBannerModal}
+  <HomeBannerModal
+    pcBanners={data.heroBannerRowsRaw?.hero_pc ?? []}
+    mobileBanners={data.heroBannerRowsRaw?.hero_mobile ?? []}
+    pcMode={data.heroBannerSettings?.pc_mode ?? 'fixed'}
+    mobileMode={data.heroBannerSettings?.mobile_mode ?? 'fixed'}
+    onclose={() => (showBannerModal = false)}
+  />
+{/if}
+
+{#if data.isCms && showThemeGroupModal}
+  <HomeThemeGroupModal
+    groups={data.themeGroups ?? []}
+    onclose={() => (showThemeGroupModal = false)}
+  />
+{/if}
+
+{#if data.isCms && showCategoryModal}
+  <ProductCategoryModal
+    categories={data.categories}
+    initialSettings={data.categoryPageSettings}
+    initialKeywordsSettings={data.keywordsPageSettings}
+    onclose={() => (showCategoryModal = false)}
+  />
+{/if}
+
+{#if data.isCms && showCatProductsModal}
+  {#key catProductsTabId}
+    <HomeCategoryProductsModal
+      categoryId={catProductsTabId}
+      categoryName={catProductsTabName}
+      allSettings={data.homeCategoryProductsRaw}
+      onclose={() => (showCatProductsModal = false)}
+    />
+  {/key}
+{/if}
+
 <style>
+  /* ── CMS 배너 관리 버튼 ───────────────────────────── */
+  /* /products의 admin-edit-btn + admin-float-btn 위치·스타일 규칙과 통일 */
+  .hero-cms-btn {
+    position: absolute;
+    /* GNB(position:fixed, --layout-header-h)에 가려지지 않도록 헤더 높이 아래로 배치 */
+    top: calc(var(--layout-header-h) + 10px);
+    right: 10px;
+    z-index: 20;
+    padding: 6px 12px;
+    background: rgba(16, 11, 50, 0.75);
+    border: none;
+    border-radius: var(--radius-sm);
+    color: var(--cs-white);
+    font-size: 12px;
+    font-weight: 700;
+    cursor: pointer;
+    white-space: nowrap;
+    transition: background 0.12s;
+  }
+  .hero-cms-btn:hover { background: rgba(16, 11, 50, 0.92); }
+
+  /* /products의 admin-edit-btn + admin-float-btn 위치·스타일 규칙과 통일 */
+  .cat-cms-btns {
+    position: absolute;
+    top: 10px;
+    right: 10px;
+    z-index: 20;
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 6px;
+  }
+  .cat-cms-btn {
+    padding: 6px 12px;
+    background: rgba(16, 11, 50, 0.75);
+    border: none;
+    border-radius: var(--radius-sm);
+    color: var(--cs-white, #fff);
+    font-size: 12px;
+    font-weight: 700;
+    cursor: pointer;
+    white-space: nowrap;
+    transition: background 0.12s;
+  }
+  .cat-cms-btn:hover { background: rgba(16, 11, 50, 0.92); }
+  .cat-empty-notice {
+    font-size: 12px;
+    color: var(--cs-text-light);
+    text-align: center;
+    padding: 24px 0;
+    margin: 0;
+  }
+  .cat-empty-notice--mobile { padding: 16px 0; }
+  .m-michil-head {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-wrap: wrap;
+  }
+
+  /* ── 히어로 배너 서브카피 ─────────────────────────── */
+  .d-hero-sub-copy {
+    position: absolute;
+    bottom: 80px;
+    left: 50%;
+    transform: translateX(-50%);
+    max-width: 600px;
+    text-align: center;
+    color: rgba(255, 255, 255, 0.85);
+    font: var(--text-pc-body-14);
+    text-shadow: 0 1px 4px rgba(0, 0, 0, 0.5);
+    pointer-events: none;
+  }
+  .m-hero-sub-copy {
+    position: absolute;
+    bottom: 100px;
+    left: 20px;
+    right: 20px;
+    text-align: center;
+    color: rgba(255, 255, 255, 0.85);
+    font: var(--text-m-script-14B);
+    text-shadow: 0 1px 4px rgba(0, 0, 0, 0.5);
+    pointer-events: none;
+  }
+
   /* ── 반응형 래퍼 ── */
   .desktop-wrap { display: none; background: var(--cs-lilac); overflow-x: hidden; }
   .mobile-wrap  { display: block; background: var(--cs-lilac); padding-bottom: 80px; overflow-x: hidden; }
@@ -815,91 +1177,184 @@
     text-shadow: 4px 4px 0 rgba(146,2,79,0.6);
   }
 
-  /* ── PICK CIRCLES ── */
-  .d-pick-section { align-items: center; }
-  .m-pick-section { align-items: center; }
-  .pick-circles {
-    display: flex;
-    gap: 28px;
-    align-items: flex-start;
-    justify-content: center;
-    flex-wrap: wrap;
+  /* ── THEME GROUPS (취향직격 테마그룹) — PC ── */
+  /* 다른 섹션과 동일하게 기본 중앙정렬(.section-head align-items:center) 유지 —
+     이전 flex-start 오버라이드는 제목행이 좌측으로 쏠리는 원인이었음(그리드 자체는
+     .theme-groups가 이미 width:100%라 정렬값과 무관하게 정상 렌더링됨) */
+  .d-theme-section { position: relative; }
+  /* /products의 admin-edit-btn + admin-float-btn 위치·스타일 규칙과 통일 */
+  .theme-cms-btn {
+    position: absolute;
+    top: 10px;
+    right: 10px;
+    z-index: 20;
+    padding: 6px 12px;
+    background: rgba(16, 11, 50, 0.75);
+    border: none;
+    border-radius: var(--radius-sm);
+    color: var(--cs-white, #fff);
+    font-size: 12px;
+    font-weight: 700;
+    cursor: pointer;
+    white-space: nowrap;
+    transition: background 0.12s;
   }
-  .pick-item {
+  .theme-cms-btn:hover { background: rgba(16, 11, 50, 0.92); }
+
+  /* ── 취향직격 PICK 헤더행 (Figma node 2072:5988) — 제목/부제(좌) + 원형 테마탭(우) ── */
+  .theme-pick-row {
+    display: flex;
+    gap: 40px;
+    align-items: center;
+    justify-content: center;
+    width: 100%;
+  }
+  /* 헤드 영역을 남은 공간에 억지로 늘리지 않고(flex:1 0 0 제거) 콘텐츠 크기만큼만 차지 —
+     원형탭과 더 붙어 보이도록 함 */
+  .theme-pick-head {
     display: flex;
     flex-direction: column;
     align-items: center;
-    gap: 12px;
-    background: none;
-    border: none;
-    cursor: pointer;
-    transition: transform 0.2s;
-  }
-  .pick-item:hover { transform: scale(1.06); }
-  .pick-item:active { transform: scale(0.95); }
-  .pick-img-wrap {
-    border-radius: 50%;
-    overflow: hidden;
-    border: 3px solid #e1def3;
-    box-shadow: 0 4px 16px rgba(59,47,138,0.18);
-    flex-shrink: 0;
-  }
-  .pick-img-wrap--lg { width: 180px; height: 180px; }
-  .pick-img-wrap--sm { width: 130px; height: 130px; }
-  .pick-img { width: 100%; height: 100%; object-fit: cover; }
-  .pick-label-wrap { display: flex; flex-direction: column; align-items: center; gap: 4px; }
-  .pick-label { font-family: var(--font-kr); font-size: 15px; font-weight: 700; color: #201857; }
-  .pick-sub   { font-family: var(--font-kr); font-size: 13px; font-weight: 500; color: #201857; }
-
-  /* ── HIGHLIGHT CARDS ── */
-  .d-hl-cards {
-    display: flex;
-    gap: 12px;
     justify-content: center;
-    padding: 24px 40px;
-    max-width: var(--layout-pc-max);
-    margin: 0 auto;
-    width: 100%;
-    box-sizing: border-box;
+    gap: 20px;
+    flex: 0 1 auto;
   }
-  .hl-card {
-    position: relative;
-    flex-shrink: 0;
-    overflow: hidden;
-    cursor: pointer;
-    width: 300px;
-    height: 300px;
-    border-radius: 50px;
-    transition: transform 0.2s, box-shadow 0.2s;
-  }
-  .hl-card:hover { transform: translateY(-6px) scale(1.02); }
-  .hl-card-img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
-  .hl-card-overlay {
-    position: absolute;
-    inset: 0;
-    background: linear-gradient(to top, #100b32 0%, rgba(16,11,50,0.6) 40%, transparent 100%);
-  }
-  .hl-card-info {
-    position: absolute;
-    bottom: 0; left: 0; right: 0;
-    padding: 28px;
+  .theme-pick-title-wrap {
     display: flex;
     flex-direction: column;
-    gap: 8px;
+    align-items: center;
+    gap: 5px;
   }
-  .hl-card-badges { display: flex; gap: 8px; }
-  .hl-badge {
-    border-radius: 9999px;
+  .theme-pick-desc {
+    font-family: var(--font-kr);
+    font-size: 16px;
+    font-weight: 700;
+    color: #444;
+    text-align: center;
+    line-height: 1.6;
+  }
+  /* 원형탭 슬라이드 — 3개 초과 시 슬라이드 화살표로 이동(.theme-circle-tabs--capped) */
+  .theme-circle-tabs-wrap { position: relative; }
+  .theme-tabs-arrow {
+    position: absolute;
+    top: 90px; /* 180px 원형 이미지의 세로 중앙 */
+    transform: translateY(-50%);
+    z-index: 10;
     width: 40px; height: 40px;
-    display: flex; align-items: center; justify-content: center;
+    min-width: 44px; min-height: 44px;
+    border-radius: 9999px;
+    background: white;
+    border: none;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    box-shadow: 0 4px 16px rgba(0,0,0,0.15);
+    transition: transform 0.15s;
+  }
+  .theme-tabs-arrow:hover { transform: translateY(-50%) scale(1.1); }
+  .theme-tabs-arrow.left  { left: -22px; }
+  .theme-tabs-arrow.right { right: -22px; }
+  .theme-circle-tabs {
+    display: flex;
+    gap: 30px;
+    align-items: center;
+    overflow-x: auto;
+    padding-bottom: 4px;
+  }
+  .theme-circle-tabs::-webkit-scrollbar { display: none; }
+  /* 테마 3개 초과 시 한 화면에 3개만 노출(180px 원형×3 + gap 30px×2) */
+  .theme-circle-tabs--capped { max-width: 600px; scroll-snap-type: x proximity; }
+  .theme-circle-tabs--capped .theme-circle-tab { scroll-snap-align: start; }
+  .theme-circle-tab {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 15px;
+    flex-shrink: 0;
+    background: none;
+    border: none;
+    padding: 0;
+    cursor: pointer;
+    font: inherit;
+  }
+  /* ── hl-card(하이라이트 카드) 스타일·인터랙션 그대로 차용 — 원형은 Figma node 2072:5953 기준 180x180 ── */
+  /* 카드 자체는 고정 — hover 시 내부 이미지만 부드럽게 확대(잘림 없는 줌 효과) */
+  .theme-hl-card {
+    position: relative;
+    overflow: hidden;
+    cursor: pointer;
+    width: 180px;
+    height: 180px;
+    border-radius: 40px;
     flex-shrink: 0;
   }
-  .hl-cat  { font-family: var(--font-kr); font-size: 15px; font-weight: 700; color: white; }
-  .hl-name { font-family: var(--font-en-display); font-size: 26px; color: white; line-height: 1.3; }
-  .hl-price { font-family: var(--font-en-display); font-size: 26px; line-height: 1.3; }
+  .theme-hl-card-img {
+    position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover;
+    transition: transform 0.4s ease;
+  }
+  .theme-hl-card:hover .theme-hl-card-img { transform: scale(1.25); }
+  .theme-group-img-ph { width: 100%; height: 100%; background: #ebe9f5; }
+  /* 테마 대표이미지 원형 아바타 변형(관리모달 등록 형태와 통일) — 텍스트는 카드 밖 아래에 별도 표시 */
+  .theme-hl-card--circle { border-radius: 50%; }
+  .theme-hl-card--circle.is-active { box-shadow: 0 0 0 3px var(--cs-purple, #3b2f8a); }
+  .theme-circle-info {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 5px;
+    text-align: center;
+    line-height: 1.6;
+  }
+  .theme-circle-name { font-family: var(--font-kr); font-size: 16px; font-weight: 700; color: #201857; letter-spacing: -0.5px; }
+  .theme-circle-sub  { font-family: var(--font-kr); font-size: 14px; font-weight: 500; color: #201857; letter-spacing: -0.5px; }
+  /* Figma가 원본 Polygon6 경로에 적용한 rotate-180과 동일 — 경로 자체는 원본 그대로 유지 */
+  .theme-tab-polygon { flex-shrink: 0; transform: rotate(180deg); }
+  /* 상품슬라이드는 "미칠 PICK"과 동일한 표준 prod-card를 재사용(.prod-slider/.prod-card) —
+     그룹별로 독립적인 가로 스크롤 슬라이드 */
+  .theme-prod-slider { padding-left: 0; }
+  /* 샘플 더미 상품 — 실제 상품과 구분되도록 살짝 흐리게 표시(클릭 불가) */
+  .prod-card--sample { opacity: 0.6; cursor: default; }
+
+  .theme-empty-notice {
+    font-size: 13px;
+    color: #9b99bb;
+    padding: 12px 0;
+    text-align: center;
+  }
+
+  /* ── THEME GROUPS — Mobile ── */
+  .m-theme-groups {
+    display: flex;
+    flex-direction: column;
+    gap: 28px;
+    width: 100%;
+  }
+  .m-theme-row {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    width: 100%;
+  }
+  .m-theme-header {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 10px;
+  }
+  /* ── hl-card 스타일을 모바일 크기로 축소 적용 ── */
+  .theme-hl-card--m {
+    width: 140px;
+    height: 140px;
+    border-radius: 28px;
+  }
+  .m-theme-img-ph { width: 100%; height: 100%; background: #ebe9f5; }
+  /* 상품슬라이드는 "미칠 PICK"과 동일한 표준 m-prod-card를 재사용(.m-snap-slider/.m-prod-card) */
+  .theme-m-prod-slider { padding-left: 0; }
+  .m-prod-card--sample { opacity: 0.6; cursor: default; }
 
   /* ── CATEGORY + SLIDER ── */
-  .d-cat-section { gap: 32px; }
+  .d-cat-section { position: relative; gap: 32px; }
   .pkg-bar {
     display: flex;
     align-items: center;
@@ -939,6 +1394,7 @@
     border-radius: 30px;
     transition: background 0.18s;
   }
+  .cat-tab-custom-icon { width: 40px; height: 40px; object-fit: contain; }
   .cat-tab-label {
     font-family: var(--font-kr);
     font-size: 15px;
@@ -984,32 +1440,45 @@
     scrollbar-width: none;
   }
   .prod-slider::-webkit-scrollbar { display: none; }
+  /* 표준 상품슬라이드 카드 — Figma node 600:862 스펙 그대로 반영 (정사각 300x300, radius 50px) */
+  /* 카드 자체는 고정 — hover 시 내부 이미지만 부드럽게 확대(잘림 없는 줌 효과) */
   .prod-card {
     position: relative;
     flex-shrink: 0;
     overflow: hidden;
     cursor: pointer;
-    width: 300px; height: 580px;
-    background: #e1def3;
-    border-radius: 50px 50px 50px 20px;
-    transition: transform 0.2s;
+    width: 300px; height: 300px;
+    border-radius: 50px;
+    display: flex;
+    flex-direction: column;
+    justify-content: flex-end;
   }
-  .prod-card:hover { transform: translateY(-8px); }
-  .prod-card-img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
-  .prod-card-fade {
-    position: absolute;
-    bottom: 0; left: 0; right: 0;
-    height: 180px;
-    background: linear-gradient(to top, rgba(225,222,243,0.95) 0%, rgba(225,222,243,0.8) 30%, transparent 100%);
+  .prod-card-img {
+    position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover;
+    transition: transform 0.4s ease;
   }
+  .prod-card:hover .prod-card-img { transform: scale(1.25); }
   .prod-card-info {
-    position: absolute;
-    bottom: 0; left: 0; right: 0;
-    padding: 24px 32px;
+    position: relative;
+    width: 100%;
+    box-sizing: border-box;
+    padding: 30px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    background: linear-gradient(to bottom, rgba(16,11,50,0) 0%, rgba(16,11,50,0.6) 40.385%, #100b32 100%);
   }
-  .prod-card-price { font-family: var(--font-kr); font-size: 22px; font-weight: 900; color: var(--cs-dark); line-height: 2; }
-  .prod-card-name  { font-family: var(--font-kr); font-size: 15px; font-weight: 700; color: #444; }
-  .prod-card-desc  { font-family: var(--font-kr); font-size: 12px; font-weight: 400; color: #444; }
+  .prod-card-headline { display: flex; flex-direction: column; gap: 5px; }
+  .prod-card-cat  { font-family: var(--font-kr); font-size: 12px; font-weight: 700; color: #fff; }
+  .prod-card-name { font-family: var(--font-kr); font-size: 18px; font-weight: 700; color: #fff; line-height: 1.7; }
+  .prod-card-price {
+    display: flex; align-items: center; gap: 5px;
+    color: #ff3535; letter-spacing: -0.5px;
+  }
+  .prod-card-price .price-label { font-family: var(--font-kr); font-size: 14px; font-weight: 700; }
+  .prod-card-price .price-num   { font-family: var(--font-kr); font-size: 25px; font-weight: 900; }
+  .prod-card-price .price-sep   { font-family: var(--font-kr); font-size: 14px; font-weight: 700; }
+  .prod-card-desc { font-family: var(--font-kr); font-size: 12px; font-weight: 700; color: #fff; }
 
   /* ── BLOG GRID ── */
   .d-blog-section { align-items: center; gap: 32px; }
@@ -1305,14 +1774,17 @@
   /* MOBILE MICHIL */
   .m-michil-section { padding-top: 40px; }
   .m-michil-head { padding: 0; }
+  /* 표준 상품슬라이드 카드 — Figma node 600:862 스펙(정사각) 모바일 축소 적용 */
   .m-prod-card {
     position: relative;
     flex-shrink: 0;
     overflow: hidden;
     cursor: pointer;
-    width: 260px; height: 450px;
-    background: #e1def3;
-    border-radius: 50px 50px 50px 20px;
+    width: 260px; height: 260px;
+    border-radius: 44px;
+    display: flex;
+    flex-direction: column;
+    justify-content: flex-end;
     scroll-snap-align: center;
     transition: transform 0.15s;
   }
@@ -1327,15 +1799,27 @@
     gap: 8px;
     z-index: 10;
   }
-  .m-prod-fade {
-    position: absolute; bottom: 0; left: 0; right: 0;
-    height: 190px;
-    background: linear-gradient(to top, rgba(225,222,243,0.95) 0%, rgba(225,222,243,0.85) 30%, transparent 100%);
+  .m-prod-info {
+    position: relative;
+    width: 100%;
+    box-sizing: border-box;
+    padding: 24px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    background: linear-gradient(to bottom, rgba(16,11,50,0) 0%, rgba(16,11,50,0.6) 40.385%, #100b32 100%);
   }
-  .m-prod-info { position: absolute; bottom: 0; left: 0; right: 0; padding: 0 28px 28px; }
-  .m-prod-name  { font-family: var(--font-kr); font-size: 17px; font-weight: 700; color: var(--cs-dark); }
-  .m-prod-price { font-family: var(--font-kr); font-size: 15px; font-weight: 700; }
-  .m-prod-desc  { font-family: var(--font-kr); font-size: 13px; font-weight: 500; color: #666; }
+  .m-prod-headline { display: flex; flex-direction: column; gap: 4px; }
+  .m-prod-cat  { font-family: var(--font-kr); font-size: 11px; font-weight: 700; color: #fff; }
+  .m-prod-name { font-family: var(--font-kr); font-size: 16px; font-weight: 700; color: #fff; line-height: 1.5; }
+  .m-prod-price {
+    display: flex; align-items: center; gap: 4px;
+    color: #ff3535; letter-spacing: -0.5px;
+  }
+  .m-prod-price .price-label { font-family: var(--font-kr); font-size: 12px; font-weight: 700; }
+  .m-prod-price .price-num   { font-family: var(--font-kr); font-size: 21px; font-weight: 900; }
+  .m-prod-price .price-sep   { font-family: var(--font-kr); font-size: 12px; font-weight: 700; }
+  .m-prod-desc { font-family: var(--font-kr); font-size: 11px; font-weight: 700; color: #fff; }
 
   /* ── MOBILE BLOG ── */
   .m-blog-section {
@@ -1467,5 +1951,38 @@
   }
   .tab-popping svg {
     animation: tab-bubble 0.65s cubic-bezier(0.36, 0.07, 0.19, 0.97) forwards;
+  }
+
+  /* ── CMS 편집 링크 버튼 (isCms=true 시 섹션 상단 노출) ── */
+  .cms-section-link {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 7px 18px;
+    background: rgba(59, 47, 138, 0.10);
+    color: var(--cs-purple);
+    border: 1.5px solid var(--cs-purple);
+    border-radius: var(--radius-xl);
+    font-family: var(--font-kr);
+    font-size: 13px;
+    font-weight: 700;
+    text-decoration: none;
+    width: fit-content;
+    margin: 0 auto;
+    transition: background 0.18s, color 0.18s;
+  }
+  .cms-section-link:hover {
+    background: var(--cs-purple);
+    color: #fff;
+  }
+  /* 어두운 배경 섹션(모바일 크레이지로그) 위에서 쓸 때 */
+  .cms-section-link--light {
+    background: rgba(255, 255, 255, 0.18);
+    color: #fff;
+    border-color: rgba(255, 255, 255, 0.6);
+  }
+  .cms-section-link--light:hover {
+    background: rgba(255, 255, 255, 0.35);
+    color: #fff;
   }
 </style>
