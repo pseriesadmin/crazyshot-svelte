@@ -4,7 +4,7 @@
   // Realtime INSERT → pushMessage → 자동 하단 스크롤
 
   import MessageBubble from './MessageBubble.svelte'
-  import type { ChatMessage, ActionPayload } from '$lib/types/chat'
+  import type { ChatMessage, ActionPayload, CtaModalRequest } from '$lib/types/chat'
 
   // 당일 이전 대화카드는 시간(HH:MM)만 있어 며칠 치인지 헷갈림 — 날짜가 바뀌는 지점마다
   // 구분 배지를 끼워 넣는다(카카오톡 등과 동일한 관례). 오늘/어제는 상대 표현, 그 외는 절대 날짜.
@@ -38,6 +38,8 @@
     onbookmark?: (messageId: string) => void
     /** COUPON_GIFT_CARD 승인·거절 콜백 */
     oncouponapprove?: (messageId: string, reject: boolean) => void
+    /** 관리자 CTA 레이어 모달 오픈 요청 — AdminChatPanel 최상위에서 렌더링하기 위해 위로 전달 */
+    onctamodal?: (info: CtaModalRequest) => void
   }
 
   let {
@@ -51,6 +53,7 @@
     ondelete,
     onbookmark,
     oncouponapprove,
+    onctamodal,
   }: Props = $props()
 
   let listEl = $state<HTMLDivElement | null>(null)
@@ -187,6 +190,7 @@
           {ondelete}
           {onbookmark}
           {oncouponapprove}
+          {onctamodal}
         />
       {/each}
     </div>

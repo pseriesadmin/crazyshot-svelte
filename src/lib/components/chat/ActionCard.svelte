@@ -2,20 +2,31 @@
   // PRD.1.7.5 — ActionCard: 6종 액션 카드 렌더링
   // Figma node: 2497:8761 (product card with CTA), 2497:8702
 
-  import type { ActionPayload } from '$lib/types/chat'
+  import type { ActionPayload, CtaModalRequest } from '$lib/types/chat'
 
   interface Props {
     payload: ActionPayload
     onaction?: (payload: ActionPayload) => void
     /** 서버측 만료 재검증용 메시지 ID (MessageBubble에서 전달, 선택적) */
     messageId?: string
-    /** 관리자 뷰 여부 — true 시 pending 쿠폰카드에 승인/거절 버튼 표시 */
+    /** 관리자 뷰 여부 — true 시 pending 쿠폰카드에 승인/거절 버튼 표시 + CTA를 새창 대신 레이어 모달로 전환 */
     isAdmin?: boolean
     /** COUPON_GIFT_CARD 승인/거절 콜백 — AdminChatPanel에서 주입 */
     oncouponapprove?: (messageId: string, reject: boolean) => void
+    /** 관리자 CTA 레이어 모달 오픈 요청 — AdminChatPanel 최상위에서 렌더링(transform 조상 없는
+        위치)해야 하므로 이 컴포넌트는 상태를 들고 있지 않고 요청만 위임한다.
+        (ui-mobile.md "CSS transform + position:fixed 충돌" 문서화된 패턴 — 메시지 트리 깊숙이
+        중첩된 컴포넌트 안에 position:fixed 모달을 직접 렌더링하지 않는다)
+        kind별로 AdminChatPanel이 서로 다른 컴포넌트를 모달에 마운트한다 — 전부 컴포넌트
+        직접 마운트이며 iframe·CMS 페이지 전체 embed 아님(Stephen 요청: "필요한 요소 레이아웃만"):
+          'reservation'       → RentalDetailPanel (대여정보/계약서 탭)
+          'contract-preview'  → ContractTemplatePreviewModal(viewOnly) — 고객이 보는 계약서 미리보기
+          'inquiry'           → PcInquiryPanel — 고객의 빠른문의 답변 목록
+          'empty'             → CMS에서 보여줄 화면이 없음 안내 */
+    onctamodal?: (info: CtaModalRequest) => void
   }
 
-  let { payload, onaction, messageId, isAdmin = false, oncouponapprove }: Props = $props()
+  let { payload, onaction, messageId, isAdmin = false, oncouponapprove, onctamodal }: Props = $props()
 
   // COUPON_GIFT_CARD 승인 대기 처리
   let approvalStatus = $derived(
@@ -55,13 +66,22 @@
   let ctaColor = $derived(payload.button_color ?? ctaDefaults(payload.type).color)
   let ctaUrl = $derived(payload.action_url ?? null)
 
+  // SHIPMENT_TRACKING_CARD — 운송장 미등록 상태(chatActionEnrich.ts enrichShipmentTrackingCard)는
+  // action_url이 없어 CTA 버튼이 눌러도 반응 없는 죽은 버튼이 된다 — 대신 등록 안내 문구로 폴백.
+  let isShipmentPending = $derived(payload.type === 'SHIPMENT_TRACKING_CARD' && !ctaUrl)
+
   function ctaDefaults(type: string): { label: string; color: 'purple' | 'red' | 'green' | 'orange' } {
     switch (type) {
       case 'PAYMENT_REQUEST_CARD':   return { label: '대여 계약 결제하기', color: 'purple' }
+      // ⚠️ RESERVATION_STATUS_CARD는 여러 서로 다른 시나리오(일반 예약조회·대여완료·예약취소·
+      // 파손신고·hold만료·무인보관함안내)가 공유하는 타입이라 여기서 하나의 라벨로 고정하면 안
+      // 된다 — 시나리오별 정확한 라벨은 각 발신 지점(send_rental_chat_notification RPC 등)이
+      // button_label을 명시적으로 실어 보내고, 여기 기본값은 그 필드가 없는 경우(일반 예약조회,
+      // AI 세션시작 카드)에만 쓰이는 범용 폴백이다.
       case 'RESERVATION_STATUS_CARD': return { label: '예약 상세 보기', color: 'purple' }
       case 'RETURN_REGISTRATION_CARD': return { label: '반납 방법 선택', color: 'orange' }
       case 'SHIPMENT_TRACKING_CARD': return { label: '배송 추적', color: 'green' }
-      case 'COUPON_GIFT_CARD':       return { label: '쿠폰 적용하기', color: 'purple' }
+      case 'COUPON_GIFT_CARD':       return { label: '쿠폰 확인하기', color: 'purple' }
       case 'PRODUCT_CARD':           return { label: '바로 예약하기', color: 'purple' }
       // 관리자 발행 액션 타입
       case 'payment_request':        return { label: '대여 계약 결제하기', color: 'purple' }
@@ -70,10 +90,11 @@
       case 'shipment_notify':        return { label: '배송 추적', color: 'green' }
       case 'rental_confirm':         return { label: '대여 정보 확인', color: 'purple' }
       case 'return_remind':          return { label: '반납 등록하기', color: 'orange' }
-      case 'coupon_issued':          return { label: '쿠폰 적용하기', color: 'purple' }
-      case 'contract_link':          return { label: '전자계약 보기', color: 'purple' }
-      case 'contract_signed':        return { label: '전자계약 확인', color: 'purple' }
+      case 'coupon_issued':          return { label: '쿠폰 확인하기', color: 'purple' }
+      case 'contract_link':          return { label: '전자계약서명', color: 'purple' }
+      case 'contract_signed':        return { label: '전자계약완료', color: 'purple' }
       case 'INQUIRY_REPLY_CARD':     return { label: '답변 확인하기', color: 'purple' }
+      case 'INQUIRY_NEW_CARD':       return { label: '빠른문의 답변등록', color: 'purple' }
       // GSD-17: 제품 링크 카드 (관리자 @ 멘션으로 삽입)
       case 'product_link':           return { label: '상품 상세 보기', color: 'purple' }
       // GSD-20: CTA가 있는 자동응답 카드
@@ -104,17 +125,55 @@
     return () => { cancelled = true }
   })
 
+  // 대여 라이프사이클(확정 이후) 상태 — /cms/rentals 소관. 그 외(hold/pending/cancelled 등)는
+  // /cms/reservation 소관(rental-lifecycle.md — 두 화면은 상태 도메인이 배타적으로 분리됨)
+  const RENTAL_LIFECYCLE_STATUSES = new Set([
+    'confirmed', 'shipped', 'in_use', 'return_requested', 'returned', 'completed', 'damage_claimed',
+  ])
+
+  // 관리자 CTA 모달 컨텍스트 결정 — 예약 컨텍스트(reservation_id/reservation_no/late_fee_id)가
+  // 있는 카드는 고객 화면(/account/...)이 아니라 RentalDetailPanel을 모달에 직접 마운트해
+  // 보여준다(iframe 아님 — CMS 목록 페이지 전체가 아니라 패널 레이아웃만 노출하기 위함,
+  // AdminChatPanel.svelte 참고). late_fee_id 카드(연체료 결제 요청)는 예약 식별자를 직접
+  // 갖지 않고 late_fees.reservation_id로만 연결되므로 서버(resolve 엔드포인트)에서 한 단계
+  // 더 조회한다. menuUrl은 하단 "메뉴 가기" 버튼이 이동할 실제 CMS 목록 화면(status=''로
+  // 두 화면의 기본 상태 필터에 걸려 안 보이는 일이 없게 함).
+  //
+  // ⛔ 예약 컨텍스트를 못 찾으면(비-예약 카드, 조회 실패 등) reservationId를 null로 반환한다 —
+  // 절대 ctaUrl(고객용 /account/·/contract/·/pay/ 등 전체 페이지)로 폴백하지 않는다.
+  async function resolveAdminReservationContext(): Promise<{ reservationId: number | null; menuUrl: string | null }> {
+    if (!payload.reservation_id && !payload.reservation_no && !payload.late_fee_id) {
+      return { reservationId: null, menuUrl: null }
+    }
+    try {
+      const qs = payload.reservation_id
+        ? `id=${encodeURIComponent(payload.reservation_id)}`
+        : payload.reservation_no
+        ? `code=${encodeURIComponent(payload.reservation_no)}`
+        : `late_fee_id=${encodeURIComponent(payload.late_fee_id as string)}`
+      const res = await fetch(`/api/cms/reservations/resolve?${qs}`)
+      if (!res.ok) return { reservationId: null, menuUrl: null }
+      const info = (await res.json()) as { id: number; status: string }
+      const targetPage = RENTAL_LIFECYCLE_STATUSES.has(info.status) ? '/cms/rentals' : '/cms/reservation'
+      return { reservationId: info.id, menuUrl: `${targetPage}?status=&selected=${info.id}` }
+    } catch {
+      return { reservationId: null, menuUrl: null }
+    }
+  }
+
   // CS-A2: 서버측 만료 재검증 후 CTA 실행
   async function handleCta(): Promise<void> {
     if (ctaDisabled) return
     serverExpiredError = false
 
-    // 팝업 차단 방지(products.md QR-AUTO-1과 동일 패턴): await fetch 이후 window.open을
-    // 호출하면 사용자 제스처 유효기간이 끝나 브라우저가 조용히 차단한다 — 클릭 직후(await 이전)
-    // 빈 창을 먼저 열어 제스처를 소비해두고, 검증이 끝나면 그 창의 위치만 바꾼다.
-    // ctaUrl은 항상 자사 내부 경로라 noopener 없이 열어도 탭내빙 위험이 없음.
+    // 관리자(CMS) 화면은 새 창을 열지 않고 레이어 모달로 미리보기 — 팝업 제스처 소비 트릭 불필요.
+    // 고객 화면은 기존 새 창 동작 그대로 유지.
     let pendingWindow: Window | null = null
-    if (ctaUrl) {
+    if (ctaUrl && !isAdmin) {
+      // 팝업 차단 방지(products.md QR-AUTO-1과 동일 패턴): await fetch 이후 window.open을
+      // 호출하면 사용자 제스처 유효기간이 끝나 브라우저가 조용히 차단한다 — 클릭 직후(await 이전)
+      // 빈 창을 먼저 열어 제스처를 소비해두고, 검증이 끝나면 그 창의 위치만 바꾼다.
+      // ctaUrl은 항상 자사 내부 경로라 noopener 없이 열어도 탭내빙 위험이 없음.
       pendingWindow = window.open('', '_blank')
     }
 
@@ -146,8 +205,43 @@
 
     if (onaction) onaction(payload)
     if (ctaUrl) {
-      if (pendingWindow) pendingWindow.location.href = ctaUrl
-      else window.open(ctaUrl, '_blank')
+      if (isAdmin) {
+        // 카드 타입별로 모달에 마운트할 컴포넌트가 다르다 — 전부 null이어도 모달은 연다
+        // ("관리 화면 정보 없음" 상태를 보여주기 위함, 고객 페이지로 조용히 폴백하지 않음).
+        if (payload.type === 'INQUIRY_REPLY_CARD') {
+          onctamodal?.({ kind: 'inquiry', title: ctaLabel })
+        } else if (payload.type === 'COUPON_GIFT_CARD' || payload.type === 'coupon_issued') {
+          onctamodal?.({ kind: 'coupon', title: ctaLabel })
+        } else if (payload.type === 'INQUIRY_NEW_CARD' && payload.post_id) {
+          onctamodal?.({ kind: 'inquiry-reply-form', title: ctaLabel, postId: payload.post_id })
+        } else if (payload.type === 'contract_link' && payload.contract_id && payload.reservation_id) {
+          onctamodal?.({
+            kind: 'contract-preview',
+            title: ctaLabel,
+            contractId: payload.contract_id,
+            reservationId: Number(payload.reservation_id),
+          })
+        } else {
+          const ctx = await resolveAdminReservationContext()
+          if (ctx.reservationId != null) {
+            onctamodal?.({
+              kind: 'reservation',
+              title: ctaLabel,
+              reservationId: ctx.reservationId,
+              menuUrl: ctx.menuUrl,
+              // 전자계약완료 카드는 "대여정보"가 아니라 "계약서" 탭이 곧바로 보여야
+              // "관리자 확인용 전자계약서명 정보 화면"이라는 요구 취지에 맞음
+              initialTab: payload.type === 'contract_signed' ? 'contract' : undefined,
+            })
+          } else {
+            onctamodal?.({ kind: 'empty', title: ctaLabel })
+          }
+        }
+      } else if (pendingWindow) {
+        pendingWindow.location.href = ctaUrl
+      } else {
+        window.open(ctaUrl, '_blank')
+      }
     }
   }
 
@@ -271,14 +365,18 @@
         {/if}
 
         <!-- CTA 버튼 — Figma node 2497:8767 -->
-        <button
-          class="cta-btn cta-btn--{ctaColor}"
-          onclick={handleCta}
-          disabled={ctaDisabled}
-          aria-label={isExpired || serverExpiredError ? '기한 만료된 액션' : ctaLabel}
-        >
-          {isExpired || serverExpiredError ? '기한 만료' : ctaLabel}
-        </button>
+        {#if isShipmentPending}
+          <p class="shipment-pending-note">아직 배송 정보가 등록되지 않았습니다. 등록되면 알려드릴게요.</p>
+        {:else}
+          <button
+            class="cta-btn cta-btn--{ctaColor}"
+            onclick={handleCta}
+            disabled={ctaDisabled}
+            aria-label={isExpired || serverExpiredError ? '기한 만료된 액션' : ctaLabel}
+          >
+            {isExpired || serverExpiredError ? '기한 만료' : ctaLabel}
+          </button>
+        {/if}
       </div>
     </div>
   {:else}
@@ -610,4 +708,15 @@
     background: var(--cs-text-light, #aaaaaa);
     cursor: not-allowed;
   }
+
+  /* SHIPMENT_TRACKING_CARD — 운송장 미등록 안내 문구 (죽은 CTA 버튼 대체) */
+  .shipment-pending-note {
+    font: 400 12px/1.5 'Noto Sans KR', sans-serif;
+    color: var(--cs-text-mid, #777);
+    background: var(--cs-surface-gray);
+    border-radius: var(--radius-sm);
+    padding: 10px 12px;
+    margin: 5px 0 0;
+  }
+
 </style>

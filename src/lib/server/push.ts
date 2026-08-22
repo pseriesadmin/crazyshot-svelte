@@ -65,6 +65,12 @@ const CUSTOMER_LIFECYCLE_PUSH_COPY: Record<string, { title: string; body: (produ
     title: '예약 신청이 시간 초과됐어요',
     body: (p) => `${p} 예약 신청이 시간 초과로 취소됐어요. 다시 예약해주세요.`,
   },
+  // 2026-08-20 추가 — 무인보관함(영업외시간) 1시간 전 안내. Vercel Cron(/api/cron/locker-guide)
+  // 앱코드 경유로 발송되므로 hold_expired와 달리 구조적 한계 없이 정상 발송 가능.
+  locker_guide: {
+    title: '무인보관함 이용 안내',
+    body: (p) => `${p} 이용 시간이 영업외시간이라 무인보관함으로 인계돼요. 비밀번호는 채팅에서 확인해주세요.`,
+  },
 }
 
 const CHUNK_SIZE = 500
