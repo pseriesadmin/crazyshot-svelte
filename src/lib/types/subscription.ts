@@ -14,6 +14,7 @@ export interface SubscriptionPlanRow {
   monthly_price: number
   membership_grade: string | null
   sort_order: number
+  is_popular: boolean
   category: string | null
   product_code: string | null
   code_series: { prefix?: string } | null

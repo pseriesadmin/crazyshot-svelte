@@ -30,8 +30,29 @@ export type ActionCardType =
   // GSD-17: 관리자 @ 멘션 상품 카드 / GSD-20: 이미지·CTA 있는 자동응답 카드
   | 'product_link'
   | 'canned_cta'
+  // 빠른문의 답변 완료 알림 (고객 수신) — add_cs_reply RPC(Migration 302)
+  | 'INQUIRY_REPLY_CARD'
+  // 빠른문의 신규 등록 알림 (관리자 수신) — submit_cs_post RPC(Migration 328)
+  | 'INQUIRY_NEW_CARD'
 
 export type ActionCardButtonColor = 'purple' | 'red' | 'green' | 'orange'
+
+// 관리자 CTA 레이어 모달(ActionCard.svelte → AdminChatPanel.svelte)이 카드 타입별로 서로 다른
+// 컴포넌트를 마운트하기 위한 요청 shape. 전부 컴포넌트 직접 마운트이며 iframe·CMS 페이지 전체
+// embed 아님(Stephen 요청: "필요한 요소 레이아웃만"):
+//   'reservation'         → RentalDetailPanel (대여정보/계약서 탭)
+//   'contract-preview'    → ContractTemplatePreviewModal(viewOnly) — 고객이 보는 계약서 미리보기
+//   'inquiry'             → PcInquiryPanel — 고객의 빠른문의 답변 목록
+//   'inquiry-reply-form'  → InquiryReplyForm — 관리자용 빠른문의 답변 등록 화면
+//   'coupon'              → CouponTabContent — 고객 확인용 쿠폰함 화면
+//   'empty'               → CMS에서 보여줄 화면이 없음 안내
+export type CtaModalRequest =
+  | { kind: 'reservation'; title: string; reservationId: number; menuUrl: string | null; initialTab?: 'rental' | 'contract' }
+  | { kind: 'contract-preview'; title: string; contractId: string; reservationId: number }
+  | { kind: 'inquiry'; title: string }
+  | { kind: 'inquiry-reply-form'; title: string; postId: string }
+  | { kind: 'coupon'; title: string }
+  | { kind: 'empty'; title: string }
 
 export interface ActionPayload {
   type: ActionCardType
@@ -76,6 +97,13 @@ export interface ActionPayload {
   is_expired?: boolean
   // 자동답변 전용
   canned_response_id?: string
+  // contract_link(전자계약서명) — 관리자 CTA 모달에서 ContractTemplatePreviewModal(viewOnly)로
+  // 고객이 보는 계약서를 미리보기하기 위한 contracts.id
+  contract_id?: string
+  // INQUIRY_REPLY_CARD(답변 확인하기) — 관련 cs_posts.id (현재는 관리자 CTA 모달에서 미사용,
+  // 세션의 customer 전체 빠른문의 목록을 보여주므로 특정 게시글 단위 식별은 불필요하지만
+  // 향후 단건 하이라이트 등에 대비해 payload에는 유지)
+  post_id?: string
 }
 
 export interface ChatSession {
