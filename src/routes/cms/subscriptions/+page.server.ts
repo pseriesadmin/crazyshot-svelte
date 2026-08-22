@@ -30,7 +30,7 @@ export const load: PageServerLoad = async ({ parent, url }) => {
 
   const { data: rows, count } = await db
     .from('subscription_plans')
-    .select('id, name, description, tagline, image_url, image_urls, monthly_price, membership_grade, sort_order, category, product_code, code_series, status, features, deleted_at, created_at', { count: 'exact' })
+    .select('id, name, description, tagline, image_url, image_urls, monthly_price, membership_grade, sort_order, is_popular, category, product_code, code_series, status, features, deleted_at, created_at', { count: 'exact' })
     .is('deleted_at', null)
     .order('sort_order', { ascending: true })
     .order('id', { ascending: true })
@@ -140,6 +140,7 @@ export const actions: Actions = {
           tagline: String(formData.get('tagline') ?? '') || null,
           membership_grade: String(formData.get('membership_grade') ?? '') || null,
           sort_order: Number(formData.get('sort_order') ?? 0),
+          is_popular: formData.get('is_popular') === 'true',
         })
         .eq('id', planId)
       if (error) return fail(500, { error: error.message })
