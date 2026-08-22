@@ -69,13 +69,15 @@
     tagline: plan.tagline ?? '',
     membership_grade: plan.membership_grade ?? '',
     sort_order: plan.sort_order,
+    is_popular: plan.is_popular,
   })
 
   const isDirtyBasic = $derived(
     localBasic.name !== plan.name ||
     localBasic.tagline !== (plan.tagline ?? '') ||
     localBasic.membership_grade !== (plan.membership_grade ?? '') ||
-    localBasic.sort_order !== plan.sort_order
+    localBasic.sort_order !== plan.sort_order ||
+    localBasic.is_popular !== plan.is_popular
   )
 
   // ── 가격정책 ──────────────────────────────────────────────
@@ -155,6 +157,7 @@
       tagline: plan.tagline ?? '',
       membership_grade: plan.membership_grade ?? '',
       sort_order: plan.sort_order,
+      is_popular: plan.is_popular,
     }
     localPricing = { monthly_price: plan.monthly_price }
     localContentBlocks = (plan.content_blocks ?? []).map((b) => ({ ...b }))
@@ -370,6 +373,14 @@
             <div class="inline-row">
               <label class="vr-label" for="sb-order">정렬순서</label>
               <input id="sb-order" class="il-input il-input--sm" type="number" name="sort_order" bind:value={localBasic.sort_order} />
+            </div>
+            <div class="inline-row">
+              <span class="vr-label">인기 배지</span>
+              <label class="switch" title="켜면 /members 비교표에서 이 플랜에 '인기' 배지가 표시됩니다">
+                <input type="checkbox" name="is_popular" value="true" checked={localBasic.is_popular} onchange={(e) => { localBasic.is_popular = (e.currentTarget as HTMLInputElement).checked }} />
+                <span class="switch-track"></span>
+              </label>
+              <span class="vr-hint">/members 비교표 '인기' 배지 표시 (여러 플랜 동시 허용)</span>
             </div>
           </form>
         </div>
@@ -788,6 +799,7 @@
   .inline-row-top { align-items: flex-start; padding-top: 10px; }
 
   .vr-label { flex: 0 0 110px; font: var(--text-pc-script-12); color: var(--cs-text-light); padding-top: 1px; }
+  .vr-hint { font: var(--text-pc-descript-10); color: var(--cs-text-light); align-self: center; }
 
   .code-display { flex: 1; display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
   .code-category {

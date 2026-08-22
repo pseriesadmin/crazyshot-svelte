@@ -26,11 +26,6 @@
     }))
   })
 
-  // 2번째 슬롯(index 1)을 인기 플랜으로 강조하는 기존 시각 언어 유지(3-슬롯 디자인 계승)
-  function isPopularSlot(index: number): boolean {
-    return index === 1 && plans.length >= 2
-  }
-
   const activeIndex = $derived(Math.max(0, plans.findIndex((p) => p.id === selectedPlanId)))
 
   function handleSubscribe(planId: number) {
@@ -65,17 +60,17 @@
       <button
         type="button"
         class="col-plan"
-        class:col-pop={isPopularSlot(colIdx)}
+        class:col-pop={plan.is_popular}
         class:col-selected={selectedPlanId === plan.id}
         onclick={() => onselect(plan.id)}
       >
-        <div class="plan-header-cell" class:pop-header={isPopularSlot(colIdx)} data-name="title-bar">
+        <div class="plan-header-cell" class:pop-header={plan.is_popular} data-name="title-bar">
           <span class="ph-name">{plan.name}</span>
-          {#if isPopularSlot(colIdx)}<span class="popular-pill">인기</span>{/if}
+          {#if plan.is_popular}<span class="popular-pill">인기</span>{/if}
           <span class="ph-price">{plan.monthly_price.toLocaleString()}<small>원/월</small></span>
         </div>
         {#each rows as row, i (row.label)}
-          <div class="plan-row" class:pop-row={isPopularSlot(colIdx)} class:plan-row-alt={i % 2 !== 0}>
+          <div class="plan-row" class:pop-row={plan.is_popular} class:plan-row-alt={i % 2 !== 0}>
             {row.values[colIdx]}
           </div>
         {/each}
@@ -97,9 +92,9 @@
         onclick={() => onselect(plan.id)}
       >
         {plan.name}
-        {#if isPopularSlot(i) && activeIndex === i}
+        {#if plan.is_popular && activeIndex === i}
           <span class="tab-popular-active">인기</span>
-        {:else if isPopularSlot(i)}
+        {:else if plan.is_popular}
           <span class="tab-popular">인기</span>
         {/if}
       </button>
@@ -131,13 +126,13 @@
           aria-hidden={activeIndex !== colIdx}
         >
           <!-- 헤더 -->
-          <div class="tab-col-header" class:pop-bg={isPopularSlot(colIdx)}>
+          <div class="tab-col-header" class:pop-bg={plan.is_popular}>
             <span class="tch-name">{plan.name}</span>
-            {#if isPopularSlot(colIdx)}<span class="tch-popular">인기</span>{/if}
+            {#if plan.is_popular}<span class="tch-popular">인기</span>{/if}
           </div>
           <!-- 행 -->
           {#each rows as row, ri (row.label)}
-            <div class="tab-data-row" class:pop-bg-alt={isPopularSlot(colIdx) && ri % 2 !== 0}>
+            <div class="tab-data-row" class:pop-bg-alt={plan.is_popular && ri % 2 !== 0}>
               {row.values[colIdx]}
             </div>
           {/each}

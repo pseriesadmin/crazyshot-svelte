@@ -21,13 +21,19 @@
     <!-- Writing 블록 -->
     <div class="writing-block">
       <div class="writing-left">
-        <p class="writing-head">K-트레일 로그,<br />지금부터 시작하세요</p>
+        <p class="writing-head">정기구독<br />이용안내</p>
       </div>
       <div class="writing-right">
-        <p class="wr-p wr-pale">한국 여행은 단순한 관광을 넘어, 사랑하는 K-컬처의 일원이 되는 특별한 경험입니다. CRAZY SHOT은 그 여정의 든든한 파트너입니다.</p>
-        <p class="wr-p wr-white">멤버십에 가입하면, 주요 공항과 공연장 근처의 편리한 픽업 및 반납 지점을 통해 엄선된 전문가용 카메라와 장비를 자유롭게 이용할 수 있습니다.</p>
-        <p class="wr-p wr-white">글로벌 팬과 크리에이터 모두, 고퀄리티 K-POP 팬캠부터 생동감 넘치는 여행 브이로그까지 모든 순간을 세련되게 기록할 수 있습니다.</p>
-        <p class="wr-p wr-pale">지금 CRAZY SHOT과 함께 K-Trail 로그를 시작하고, 당신의 열정을 잊지 못할 콘텐츠로 만들어보세요.</p>
+        {#if policyItems.length > 0}
+          <ul class="wr-policy-list">
+            {#each policyItems as item, i (item.id)}
+              <li class="wr-policy-item">
+                <span class="wr-policy-num">{i + 1}</span>
+                <span class="wr-policy-text">{item.content}</span>
+              </li>
+            {/each}
+          </ul>
+        {/if}
       </div>
     </div>
   </div>
@@ -211,16 +217,44 @@
     justify-content: center;
   }
 
-  .wr-p {
+  .wr-policy-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 20px;
+  }
+
+  .wr-policy-item {
+    display: flex;
+    align-items: flex-start;
+    gap: 14px;
+  }
+
+  .wr-policy-num {
+    flex-shrink: 0;
+    width: 26px;
+    height: 26px;
+    border-radius: 50%;
+    background: rgba(255, 255, 255, 0.25);
+    color: var(--cs-white);
+    font-family: var(--font-kr);
+    font-size: 14px;
+    font-weight: 700;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    margin-top: 1px;
+  }
+
+  .wr-policy-text {
     font-family: var(--font-kr);
     font-size: 16px;
     font-weight: 700;
+    color: var(--cs-white);
     line-height: 1.6;
-    margin: 0;
   }
-
-  .wr-white { color: var(--cs-white); }
-  .wr-pale  { color: var(--cs-purple-op10); }
 
   /* ── Mobile ── */
   .benefits-mobile {

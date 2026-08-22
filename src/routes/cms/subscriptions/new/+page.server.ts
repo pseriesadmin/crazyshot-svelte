@@ -124,6 +124,7 @@ export const actions: Actions = {
         monthly_price: monthlyPrice,
         membership_grade: String(formData.get('membership_grade') ?? '') || null,
         sort_order: Number(formData.get('sort_order') ?? 0),
+        is_popular: formData.get('is_popular') === 'true',
         features,
         status: 'active',
       })
