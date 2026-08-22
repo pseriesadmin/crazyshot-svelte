@@ -3,6 +3,10 @@
     {
       "path": "/api/cron/subscription-billing",
       "schedule": "0 0 * * *"
+    },
+    {
+      "path": "/api/cron/locker-guide",
+      "schedule": "*/10 * * * *"
     }
   ]
 }
