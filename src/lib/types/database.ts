@@ -9,7 +9,7 @@
  * Modules:
  *   M1 - Products (products, assets, price_rules, product_options, pickup_points, cart_items)
  *   M2 - Reservations (rental_reservations)
- *   M3 - Orders & Payments (orders, order_reservations, payment_transactions)
+ *   M3 - Orders & Payments (orders, order_items, payment_transactions)
  *   M4 - Membership (user_profiles, subscriptions, coupons, user_coupons, deposit_holds, credit_score_audit)
  *   M5 - Shipment & Inspection (shipments, asset_inspections, contracts)
  *   Support (notification_tokens, notification_logs, cs_posts, cs_inquiries, public_holidays, late_fees, foreign_users)
@@ -249,6 +249,13 @@ export interface RentalReservation {
   pickup_time: string | null;
   return_time: string | null;
   notes: string | null;
+  courier_code: string | null;
+  tracking_number: string | null;
+  locker_password: string | null;
+  locker_guide_sent_pickup_at: string | null;
+  locker_guide_sent_return_at: string | null;
+  payment_confirmed_at: string | null; // 결제 확인 시각 — confirmed 전환 게이팅(계약서명과 AND)에 사용,
+                                        // release_reservation_hold() 30분 만료 크론은 이 값을 확인하지 않음(2026-08-21 발견)
   created_at: string;
   updated_at: string;
 }
@@ -260,55 +267,77 @@ export type RentalReservationUpdate = Partial<RentalReservationInsert>;
 
 // =============================================================================
 // ★ M3: ORDER & PAYMENT MODULE
+// 2026-08-21 실제 배포 스키마 기준 전면 수정 — 기존 정의(Order.id UUID·order_number·
+// order_reservations N:N 정션테이블·PaymentTransaction.provider_response 등)는 이 모듈이
+// 처음 설계될 때의 구상이었을 뿐 실제로 구현되지 않았다. 실제로는 orders.id가 BIGINT,
+// order_key(TEXT)가 식별자, order_items(1:N, 상품/수량/단가 라인아이템)가 주문↔예약을
+// 연결한다 — order_reservations 테이블 자체가 DB에 존재하지 않음(생성된 적 없음).
+// 이 섹션의 이전 정의는 앱 코드 어디에서도 import된 적이 없어(grep 확인) 교체로 인한
+// 하위호환 영향 없음.
 // =============================================================================
 
 export interface Order {
-  id: string;                          // UUID PK
+  id: number;                          // BIGINT PK
   user_id: string;                     // FK auth.users.id
-  order_number: string;                // UNIQUE
+  order_key: string;                   // 표시용 주문코드 (예: ORD-20260820-00001)
   total_amount: number;
-  discount_amount: number;
+  discount_amount: number | null;
+  tax_amount: number | null;
   final_amount: number;
-  payment_status: PaymentStatusEnum;
-  order_status: 'pending' | 'processing' | 'completed' | 'cancelled';
-  notes: string | null;
-  created_at: string;
-  updated_at: string;
-  deleted_at: string | null;
+  status: string | null;
+  created_at: string | null;
+  updated_at: string | null;
 }
 
 export type OrderInsert = Omit<Order, 'id' | 'created_at' | 'updated_at'> & {
-  id?: string; created_at?: string; updated_at?: string;
+  id?: number; created_at?: string | null; updated_at?: string | null;
 };
 export type OrderUpdate = Partial<OrderInsert>;
 
 // ───────────────────────────────────────────────────────────
-// Junction table: 1NF normalization (order ↔ reservation = N:N)
-export interface OrderReservation {
-  id: string;                          // UUID PK
-  order_id: string;                    // FK orders.id
-  reservation_id: string;              // FK rental_reservations.id
-  created_at: string;
+// order_items — 주문 1건 : 예약(상품 라인아이템) N건 (1:N, order_reservations 아님)
+export interface OrderItem {
+  id: number;                          // BIGINT PK
+  order_id: number;                    // FK orders.id
+  product_id: string;                  // FK products.id
+  reservation_id: number | null;       // FK rental_reservations.id
+  quantity: number | null;
+  unit_price: number;
+  line_total: number;
+  created_at: string | null;
 }
+
+export type OrderItemInsert = Omit<OrderItem, 'id' | 'created_at'> & {
+  id?: number; created_at?: string | null;
+};
+export type OrderItemUpdate = Partial<OrderItemInsert>;
 
 // ───────────────────────────────────────────────────────────
 export interface PaymentTransaction {
   id: string;                          // UUID PK
-  order_id: string;                    // FK orders.id
+  order_id: string;                    // FK — 실컬럼 타입 그대로 유지(orders.id는 BIGINT지만
+                                        // 이 컬럼 자체는 TEXT로 배포돼 있음, 임의 정정하지 않음)
+  reservation_id: number;              // FK rental_reservations.id
+  user_id: string;
   payment_key: string;
   idempotency_key: string;             // UNIQUE — TossPayments v2 중복방지
-  amount: number;
-  status: PaymentStatusEnum;
-  payment_method: 'card' | 'bank_transfer' | 'virtual_account';
-  is_deposit: boolean;                 // 선수금(보증금) 여부
-  deposit_hold_id: string | null;      // FK deposit_holds.id
-  provider_response: Json | null;      // JSONB
-  created_at: string;
-  updated_at: string;
+  payment_method: string | null;
+  status: string;
+  total_amount: number;
+  paid_amount: number;
+  point_amount: number;
+  coupon_discount: number;
+  delivery_fee: number | null;
+  toss_response: Json | null;          // JSONB — 구 provider_response 필드명 아님
+  confirmed_at: string | null;
+  cancelled_at: string | null;
+  calc_at: string | null;              // 9단계 금액 계산 완료 시각(payment.md 참고)
+  created_at: string | null;
+  updated_at: string | null;
 }
 
 export type PaymentTransactionInsert = Omit<PaymentTransaction, 'id' | 'created_at' | 'updated_at'> & {
-  id?: string; created_at?: string; updated_at?: string;
+  id?: string; created_at?: string | null; updated_at?: string | null;
 };
 export type PaymentTransactionUpdate = Partial<PaymentTransactionInsert>;
 
@@ -785,7 +814,7 @@ export type Database = {
       cart_items: { Row: CartItem; Insert: CartItemInsert; Update: CartItemUpdate };
       rental_reservations: { Row: RentalReservation; Insert: RentalReservationInsert; Update: RentalReservationUpdate };
       orders: { Row: Order; Insert: OrderInsert; Update: OrderUpdate };
-      order_reservations: { Row: OrderReservation; Insert: Omit<OrderReservation, 'id' | 'created_at'>; Update: never };
+      order_items: { Row: OrderItem; Insert: OrderItemInsert; Update: OrderItemUpdate };
       payment_transactions: { Row: PaymentTransaction; Insert: PaymentTransactionInsert; Update: PaymentTransactionUpdate };
       user_profiles: { Row: UserProfile; Insert: UserProfileInsert; Update: UserProfileUpdate };
       subscriptions: { Row: Subscription; Insert: Omit<Subscription, 'id' | 'created_at' | 'updated_at'>; Update: Partial<Subscription> };
