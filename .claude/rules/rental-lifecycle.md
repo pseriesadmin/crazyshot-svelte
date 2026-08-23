@@ -141,7 +141,7 @@ CMS 전체: min-width 1280px (PC 전용)
 | 순서 | status | 레이블 |
 |---|---|---|
 | 1 | `hold` | 예약신청 |
-| 2 | `confirmed` | 승인완료 |
+| 2 | `confirmed` | 계약완료 |
 | 3 | `shipped` | 반출중 |
 | 4 | `in_use` | 대여중 |
 | 5 | `return_requested` | 반납중 |
@@ -256,6 +256,14 @@ cancelled / damage_claimed → 취소 UI (✕ 아이콘 + 빨간 텍스트)
 > HOLD 30분 자동만료(`release_reservation_hold` pg_cron)도 2026-08-18부터 `hold_expired` 알림을
 > 발송한다 — 위 표(app 코드 AUTO_NOTIFY 매핑)와 달리 이건 RPC 내부 루프에서 직접 호출된다
 > (service-operations.md §10 참고).
+>
+> `locker_guide`(무인보관함 1시간 전 안내, 2026-08-20 신설)도 위 표와 마찬가지로 상태 전이가
+> 아니라 **Vercel Cron**(`/api/cron/locker-guide`, 10분 간격)이 `claim_reservations_due_for_
+> locker_guide` RPC로 방문대여/방문반납 + 영업외시간(23:00~08:59) + 1시간 이내 임박 조건을
+> 만족하는 예약을 직접 선점해 발송한다 — `hold_expired`와 달리 순수 SQL(pg_cron)이 아니라
+> 앱코드 경유 Vercel Cron이라 채팅카드(`send_rental_chat_notification`)·브라우저 푸시
+> (`sendReservationLifecyclePush`)·알리고 SMS(`sendSms`) 세 경로 전부 구조적 제약 없이
+> 정상 발송된다.
 >
 > ⚠️ **채팅카드(위 표) ≠ 브라우저 푸시(FCM) — 2026-08-19 명문화**: 위 표는 `send_rental_chat_
 > notification` RPC의 채팅카드 발송만 다룬다. 브라우저 푸시는 `src/lib/server/push.ts`의

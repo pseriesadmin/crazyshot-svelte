@@ -40,6 +40,7 @@ CMS 화면     → cms-uiux.md 참조
 | `red-100` | `#CF0000` | `--cs-red` | CTA hover, 에러 강조 |
 | `red-30` | `#FFB3B3` | `--cs-red-light` | 연한 레드, 포인트 |
 | `red-10` | `#FFCFCF` | `--cs-chat-in-bg` | 배경 틴트 |
+| `red-5` | `#FFEAEA` | — | 아주 연한 레드, 배경 틴트 |
 | `grey-90` | `#444444` | `--cs-text-dark` | 본문 텍스트 |
 | `grey-70` | `#666666` | `--cs-text-mid` | 보조 텍스트, 캡션 |
 | `grey-30` | `#AAAAAA` | `--cs-text-light` | 플레이스홀더, 비활성 |
@@ -54,6 +55,8 @@ CMS 화면     → cms-uiux.md 참조
 | **주 액션 (CTA)** | `--cs-red-badge` | `#FF3535` | 사용자 화면 메인 버튼 — 예약·결제·신청 |
 | **주 액션 hover** | `--cs-red` | `#CF0000` | CTA hover 상태 |
 | **보조 액션** | `--cs-purple` | `#3B2F8A` | 보조 버튼, 선택 강조 |
+| **힌트/비활성** | `--cs-text-light` | `#AAAAAA` | 플레이스홀더, 비활성 텍스트 |
+| **보더 (구분선)** | `--cs-lilac` | `#ECEBF4` | 연한 구분선 |
 | **페이지 배경** | `--cs-lilac` | `#ECEBF4` | 섹션 배경 |
 | **다크 배경** | `--cs-dark` | `#100B32` | 헤더, 총액 박스 |
 | **기본 텍스트** | `--cs-text` | `#100B32` | 본문 |
@@ -179,9 +182,12 @@ CMS 화면     → cms-uiux.md 참조
 | `2xs` | 5px | 인라인 요소 |
 | `xs` | 8px | 칩 내부 |
 | `sm` | 10px | 아이템 간격 |
+| `md-sm` | 12px | 작은 컴포넌트 내부 |
 | `md` | 15px | 컴포넌트 내부 |
 | `lg` | 20px | 카드 내부 |
+| `xl-sm` | 24px | 중간 컨테이너 패딩 |
 | `xl` | 25px | 컨테이너 패딩 |
+| `2xl-sm` | 28px | 카드 간격 (좁음) |
 | `2xl` | 30px | 카드 간격 |
 | `3xl` | 40px | 섹션 내 그룹 |
 | `4xl` | 50px | 섹션 간격 (`--layout-section-gap`) |
@@ -340,14 +346,69 @@ CMS 화면     → cms-uiux.md 참조
 .cs-input:focus { outline: 2px solid var(--cs-purple); outline-offset: -2px; }
 ```
 
-### 그라데이션 (사용 가능 3종)
+### 그라데이션 (7종)
+
 ```css
+/* ── 브랜드 그라데이션 4종 ── */
 /* 프로모 배너 */
-.gradient-promo    { background: linear-gradient(to right, #FF3535 0%, #C1BBEC 41%); }
-/* 이미지 오버레이 */
-.gradient-overlay  { background: linear-gradient(to bottom, transparent 0%, rgba(16,11,50,0.6) 40%, #100B32 100%); }
+.gradient-promo   { background: linear-gradient(to right, #FF3535 0%, #C1BBEC 100%); }
 /* 강한 프로모 */
-.gradient-strong   { background: linear-gradient(to right, #FF3535 0%, #3B2F8A 41%); }
+.gradient-strong  { background: linear-gradient(to right, #FF3535 0%, #3B2F8A 100%); }
+/* 이미지 오버레이 (텍스트 가독성) */
+.gradient-overlay { background: linear-gradient(to bottom, transparent 0%, rgba(16,11,50,0.6) 40%, #100B32 100%); }
+/* 다크 섹션 배경 */
+.gradient-dark    { background: linear-gradient(135deg, #100B32 0%, #3B2F8A 100%); }
+
+/* ── 배경 그라데이션 3종 ── */
+/* 라일락 섹션 배경 */
+.bg-gradient-lilac { background: linear-gradient(to right, #ECEBF4 0%, #E1DEF3 100%); }
+/* 흰 카드 → 라일락 */
+.bg-gradient-white { background: linear-gradient(to bottom, #ffffff 0%, #ECEBF4 100%); }
+/* 레드·퍼플 틴트 (섹션 강조) */
+.bg-gradient-tint  { background: linear-gradient(to bottom, rgba(255,53,53,0.05) 0%, rgba(193,187,236,0.1) 100%); }
+```
+
+### 이펙트 그림자 (6종)
+
+```css
+/* ── 드롭 섀도우 5종 (outsh) ── */
+/* 강한 다크 오프셋 — 히어로 텍스트·CTR 강조 */
+.outsh1 { box-shadow: 10px 10px 0 rgba(5, 0, 38, 1); }
+/* 보라 반투명 오프셋 — 보조 카드 강조 */
+.outsh2 { box-shadow: 4px 4px 0 rgba(39, 27, 122, 0.5); }
+/* #100B32 단색 오프셋 — 버튼·배지 강조 */
+.outsh3 { box-shadow: 5px 5px 0 rgba(16, 11, 50, 1); }
+/* 흰 글로우 — 다크 배경 위 강조 요소 */
+.outsh4 { box-shadow: 0 0 15px rgba(255, 255, 255, 0.5); }
+/* 검은 그림자 — 범용 오프셋 */
+.outsh5 { box-shadow: 4px 5px 0 rgba(0, 0, 0, 0.5); }
+
+/* ── 이너 섀도우 1종 (is) ── */
+/* 이미지 오버레이 — 이미지 카드 안쪽 어둡게 */
+.is01   { box-shadow: inset 0 0 60px rgba(0, 0, 0, 0.6); }
+```
+
+> ⚠️ **사용자 화면 일반 카드(`.cs-card`)에는 box-shadow 금지** — 위 outsh 클래스는 히어로·이벤트 섹션의 특수 강조 요소에만 사용한다.
+
+### 블러 이펙트 (2종)
+
+```css
+/* 강한 블러 — 모달 백드롭·히어로 오버레이 */
+.lb01 { backdrop-filter: blur(30px); -webkit-backdrop-filter: blur(30px); }
+/* 약한 블러 — GNB·SubGnb·카드 오버레이 */
+.lb02 { backdrop-filter: blur(8px);  -webkit-backdrop-filter: blur(8px); }
+```
+
+### 스트로크 (7종)
+
+```
+구분선 — 연한 (1px solid #ECEBF4)      : 카드 내 섹션 구분
+구분선 — 중간 (1px solid #C1BBEC)      : 리스트 항목 구분
+구분선 — 강조 (1px solid #3B2F8A)      : 선택된 항목 보더
+CTA 강조  (2px solid #FF3535)          : CTA 버튼 포커스·활성 아웃라인
+선택 강조 (2px solid #3B2F8A)          : 선택 입력·선택 카드
+보조 강조 (2px solid #C1BBEC)          : 보조 선택 보더
+강한 보더 (4px solid #100B32)          : 히어로·이벤트 박스 외곽
 ```
 
 ---

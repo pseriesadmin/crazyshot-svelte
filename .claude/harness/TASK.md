@@ -1,21 +1,507 @@
 # .claude/harness/TASK.md
-생성일: 2026-06-26 (PRD.1.7 세션 동기화)
-아젠다: PRD.1.7 대화형 렌탈예약 어시스턴트 시스템 V1.0
+생성일: 2026-08-21 (@promptor)
+아젠다: 예약 결제·계약서명 순서 재설계 — rental-lifecycle.md 기 문서화된 목표 3단계 흐름
+(예약신청→계약대기→서명+결제→계약완료)을 실제로 구현. 결제(PG 호출) 시점을 "장바구니
+체크아웃"에서 "전자계약 서명 완료"로 이동.
 
 [CONTEXT BRIDGE]
-plan_source: steady-dreaming-sprout.md | PRD.1.7 노드트리
+plan_source: Stephen 직접 지시(2026-08-21) — "/cms/reservation 카드목록이 잠깐 보였다 사라짐"
+  버그를 추적하다 발견한 release_reservation_hold() 레이스 컨디션(결제완료 후 계약서명 대기
+  중이던 예약이 30분 HOLD 만료 크론에 파괴됨, reservation_id 2657/2658 실사례)을 계기로,
+  단순 크론 패치가 아니라 rental-lifecycle.md가 2026-07-23부터 "별도 플랜 필요"로 표기해온
+  근본 재설계를 지시. @promptor 분석 결과 아래 TASK.md 신규 플랜 섹션으로 정리.
 핵심제약:
-  - Supabase + Claude API 완전 내재화 (카카오 채팅 대체)
-  - 4개 DB 테이블: chat_sessions / chat_messages / chat_intent_logs / cs_records
-  - Claude AI: claude-haiku-4-5, max_tokens 512, 6종 Intent 분류
-  - ANTHROPIC_API_KEY → $env/static/private 전용 (H-05)
-  - 직접 INSERT/UPDATE/DELETE 금지 → RPC 경유 (H-01)
-TDD도메인: 없음 (GSD 도메인 — UI + API 구현)
+  - Stage(ezyvffjvuwmtuhpxdjrw) 검증 → Production(vnbpmvxruyciuuaermyh) 순서 절대 준수
+  - 관리자 수동 "승인하기"(approveReservation) 우회 경로는 계약·결제 여부와 무관하게 즉시
+    승인 가능한 상태로 그대로 유지(service-operations.md §9 확정 정책 — 임의 제거 금지)
+  - 토스페이먼츠 실연동(S1-M3)은 여전히 BLOCKED — 이번 재설계는 현재 운영 중인 mock 결제
+    (confirm-mock 계열) 범위 내에서 "결제 호출 시점"만 이동시킨다. 실PG 연동 시에도 그대로
+    이어받을 수 있도록 구조(엔드포인트 분리·RPC 재사용)만 실PG 지향으로 설계
+  - try_confirm_reservation/mark_reservation_payment_confirmed(Migration 284)는 이미
+    "결제완료 AND 계약서명완료" 조건을 순서 무관하게 대칭·멱등 판정하도록 설계돼 있음이
+    이번 조사로 확인됨 — 이 RPC 자체는 폐기·재설계 대상이 아니라 그대로 재사용 대상
+    (아래 "설계 결정" §1 참고, Stephen 원 우려사항에 대한 조사 결론)
+  - 기존 배지/필터 UI('신청대기'·'계약대기'·'계약완료' STATUS_FILTERS, Migration 313/314)는
+    이미 구현 완료 — 이번 플랜에서 재작성 금지, 새 데이터 흐름에서의 정합성 검증만 수행
+TDD도메인: 결제(payment)·예약(reservation)·HOLD 키워드 전부 해당 — AGENTS.md TDD 강제 도메인
+  기준 명백히 충족. 전체 TDD 경로, 15분 단위 분해 필수(GP-5)
 절대금지:
-  - git 자율 실행
-  - ANTHROPIC_API_KEY를 $env/static/public에 노출
-  - 기존 마이그레이션 파일 수정
-  - Svelte 4 문법 (on:event → onevent)
+  - Migration 284의 try_confirm_reservation/mark_reservation_payment_confirmed 시그니처·
+    AND 게이팅 로직 변경(그대로 재사용 — 위 핵심제약 참고)
+  - 관리자 수동 승인(approveReservation) 경로에 계약·결제 체크 추가
+  - 이미 구현된 STATUS_FILTERS('신청대기'/'계약대기'/'계약완료') 배지·필터 UI 재작성
+  - 기존 마이그레이션 파일 직접 수정(GP-10, 새 파일로만 ALTER)
+  - git 쓰기 명령 자율 실행(GP-1)
+  - Stage 미검증 상태로 Production 마이그레이션 적용
+실패롤백:
+  - Phase별 독립 마이그레이션 파일 — Stage에서 문제 발견 시 해당 Phase만 롤백, 이전 Phase는 유지
+  - Production 적용은 Stage 전체 TDD GREEN + Stephen 승인 전까지 보류
+  - cart 체크아웃 결제 이연(Phase B) 배포 시 프론트/백엔드 동시 배포 필수 — 프론트만 먼저
+    나가면 "결제 없이 신청만 됨" UI인데 서버는 여전히 confirm-mock을 기대하는 불일치 발생 위험
+    (배포 순서 사고 재발 방지, service-operations.md §9 2026-08-18 배포순서사고 교훈 참고)
+
+---
+
+## NOW — 예약 결제·계약서명 순서 재설계 (2026-08-21, @promptor) — Phase B~F 구현·Stage+Production DB(Migration 324) 배포 완료, ⛔ 프론트(Phase B/C) git commit·push만 Stephen 직접 실행 대기
+
+### 조사 결과 요약 (구현 착수 전 반드시 인지할 것)
+
+```
+① 1단계("예약신청 완료 시 결제값을 가진 상태로 노출")는 이미 구조적으로 존재한다.
+   create_reservation_order RPC(Migration 280, cart/+page.svelte:974에서 hold 생성 직후
+   호출)가 장바구니 제출 시점에 이미 orders/order_items를 생성하고 final_amount(멤버십
+   할인 반영)까지 계산해둔다 — 이것이 실제 카드결제(PG 호출)와 무관하게 "이 예약이 얼마짜리
+   주문에 속하는지"를 이미 보여주고 있다. 즉 1단계에서 새로 만들 것은 없고, confirm-mock이
+   호출하는 create_checkout_order도 이미 create_reservation_order에 위임하는 멱등 함수라
+   중복 주문 생성 위험도 없음(Migration 280 STEP 3 확인).
+
+② Migration 284(try_confirm_reservation / mark_reservation_payment_confirmed)는 "결제완료
+   AND 계약서명완료"를 순서 무관하게 검증하는 대칭·멱등 설계다 — 서명이 먼저 오든 결제가
+   먼저 오든 동일하게 동작한다(contracts/[token]/sign/+server.ts가 이미 hold 상태에서
+   try_confirm_reservation을 직접 호출하는 "서명 먼저" 경로를 갖고 있음, confirm-mock은
+   "결제 먼저" 경로). 따라서 이번 재설계로 "서명이 항상 결제보다 먼저"가 되어도 이 RPC 2개는
+   폐기·단순화 대상이 아니라 그대로 재사용된다 — Stephen 원 우려("RPC 존재 이유가 사라질 수
+   있다")는 조사 결과 기우로 확인됨. 새로 할 일은 "결제 호출을 누가·언제 트리거하는지"만
+   cart 체크아웃(1단계)에서 계약서명 페이지(3단계)로 옮기는 것.
+
+③ 대여현황/예약현황 배지·필터('신청대기'·'계약대기'·'계약완료' STATUS_FILTERS, Migration
+   313/314)는 이미 구현·QA 통과 완료(2026-08-20) — status 값(hold/confirmed) 자체가 바뀌는
+   게 아니라 "언제 confirmed로 전환되는가"의 트리거만 바뀌므로 재작성 불필요, 새 흐름에서도
+   정상 동작하는지 검증만 하면 됨(Phase E).
+
+④ 30분 HOLD 자동만료 버그(release_reservation_hold, 이번 아젠다의 발단)는 이번 재설계
+   완료 후에도 완전히 사라지지 않는다 — 재설계 후에도 "고객이 서명은 했는데 mock 결제 버튼을
+   누르기 전에 이탈"하는 구간이 새로 생기고(과거엔 반대로 "결제는 했는데 서명 전 이탈"),
+   그 구간이 30분을 넘기면 여전히 같은 크론이 서명 완료된 예약을 파괴할 수 있다. 즉 근본
+   재설계와 별개로 크론 방어조건은 반드시 필요(Phase D).
+```
+
+### ✅ GATE B 승인 완료 (2026-08-21, Stephen: "기본 제안값대로 진행해줘 Q1~Q6 전부")
+
+```
+Q1 → 쿠폰/포인트 선택 UI를 3단계(계약서명 페이지)로 이동. 1단계(cart)에서는 쿠폰/포인트
+     선택 UI 자체를 제거(소진도 선택도 3단계에서만 일어남).
+Q2 → 백엔드에 금액(orders.final_amount)이 이미 붙어있으면 충분 — 신청대기 카드에 "결제 예정
+     금액"을 새로 노출하는 UI 작업은 하지 않음(①에서 이미 확인된 기존 인프라로 충분, 신규
+     UI 범위 최소화).
+Q3 → 3단계 결제 UI는 confirm-mock과 동일한 즉시승인 mock 유지. 실PG(TossPayments) 연동은
+     이번 스코프에서 완전히 제외 — 별도 아젠다(S1-M3)로 남김.
+Q4 → confirm_payment_and_update_reservation(실PG 대비 함수)은 손대지 않고 그대로 존치.
+     3단계 결제 트리거는 신규 엔드포인트 `/api/contracts/[token]/pay-mock`으로 분리(토큰
+     기반 단건 예약 컨텍스트가 cart의 reservationIds 배열 기반 confirm-mock과 맞지 않아
+     그대로 재사용하기보다 얇은 신규 엔드포인트가 더 안전) — 내부적으로는 confirm-mock과
+     동일하게 mark_reservation_payment_confirmed/try_confirm_reservation RPC를 그대로
+     재사용(신규 RPC 만들지 않음).
+Q5 → 과거 데이터(이미 결제 먼저 끝나고 confirmed까지 간 예약들)는 그대로 둠 — 마이그레이션
+     없음. 신규 예약부터만 새 흐름 적용.
+Q6 → Phase D 방향 동의(계약 발송된 hold는 contract_signings.expires_at 기준으로 만료 판단
+     이관). 단 D-2(서명링크 만료 후 미서명 hold 정리용 신규 크론)는 이번 스코프에서 제외—
+     "결제완료 예약이 파괴되는" 원 버그와 직접 관련 없는 별도 개선이라 별도 아젠다로 분리.
+     이번 스코프는 D-1+D-3(핵심 방어조건)만 구현.
+```
+
+### 확인 필요 사항 — Stephen이 GATE B에서 답해야 할 열린 질문 (구현 착수 전 필수, 위 답변으로 해소됨 — 아래는 조사 시점 원문 보존)
+
+```
+Q1. [쿠폰/포인트 선택 시점]
+   현재는 cart 체크아웃(1단계) 화면에서 쿠폰·포인트를 선택하고 confirm-mock 호출 시
+   use_coupon/use_points가 그 자리에서 즉시 소진된다. 재설계 후 결제(PG 호출)가 3단계로
+   이동하면 이 선택 UI도 함께 3단계(계약서명 페이지)로 옮겨야 하는가, 아니면 1단계에서
+   미리 선택만 해두고(소진은 안 함) 3단계 결제 시점에 그 선택을 그대로 적용해야 하는가?
+   → 전자(3단계로 이동)가 더 단순하고 이번 조사 기준 기본 제안값이나, 고객이 1단계에서
+     쿠폰함을 보고 고른 UX 흐름을 3단계까지 유지해야 한다면 선택값을 어딘가(orders 테이블
+     신규 컬럼 등)에 임시 저장해야 해 구현 범위가 늘어남. **Stephen 확정 필요.**
+
+Q2. [1단계 "결제값을 가진 상태" 표현 방식]
+   조사 결과 §1처럼 orders.final_amount는 이미 계산돼 있음. 이걸 고객 화면(신청대기 카드)에
+   "결제 예정 금액"으로 명시 노출해야 하는가, 아니면 배지·상태 텍스트만으로 충분한가?
+   (Stephen 아젠다 원문의 "결제값을 가진 상태로 완료한 예약건 노출"이 UI 노출까지 요구하는
+   것인지, 아니면 백엔드에 금액이 붙어있으면 충분하다는 뜻인지 확인 필요.)
+
+Q3. [계약서명 페이지의 결제 UI 형태]
+   3단계 결제 UI를 confirm-mock과 동일한 "버튼 클릭 즉시 mock 승인" 방식으로 유지할지,
+   아니면 이 기회에 실제 TossPayments 위젯(요청만 하고 즉시 mock 응답 처리)에 더 가까운
+   형태로 미리 만들어둘지. 후자는 향후 S1-M3 실연동 시 교체 범위를 줄이지만 이번 스코프가
+   커짐. **기본 제안: 이번엔 confirm-mock과 동일한 즉시승인 mock 유지, 실PG 연동은 별도
+   아젠다(S1-M3)로 분리.** Stephen 확인 필요.
+
+Q4. [계약서명 없이 결제만 발생하는 경로 존속 여부]
+   확인된 코드상 confirm_payment_and_update_reservation(실PG 대비 함수, 현재 미사용)도
+   Migration 284에서 이미 try_confirm_reservation 경유로 수정돼 있어 재설계와 별도로 손댈
+   필요 없음. 다만 이 함수가 정말 "나중에 실PG 붙을 때 그대로 쓸 함수"가 맞는지, 아니면
+   이번에 아예 3단계 결제 전용 새 RPC로 대체할 것인지 확인.
+
+Q5. [과거 데이터 영향]
+   이미 결제(payment_confirmed_at)만 먼저 끝나고 confirmed까지 간 과거 예약들(cart 체크아웃
+   즉시결제 시절 생성분)은 그대로 두고 신규 예약부터만 새 흐름을 적용하는 것으로 이해함 —
+   과거 데이터에 대한 마이그레이션(재계산·되돌리기)은 없음. 맞는지 확인.
+
+Q6. [Phase D 방향 확정]
+   "계약이 이미 발송된(2단계 계약대기 진입) hold는 범용 30분 타이머 대신 contract_signings.
+   expires_at(서명링크 만료시각)으로 만료 판단을 넘긴다"는 아래 Phase D 제안 방향에 동의하는지.
+   동의 시 "서명링크가 만료됐는데 아무도 서명 안 한 hold"를 별도로 정리하는 후속 크론이
+   필요한지(현재는 만료된 서명링크가 있어도 예약 status는 그대로 hold에 남아 방치됨 —
+   이번 조사로 새로 확인된 별도 갭, 이번 스코프에 포함할지 별도 아젠다로 뺄지 확인).
+```
+
+### ✅ Phase B~D+F 구현 완료 (2026-08-21, general-purpose 에이전트 격리 워크트리 구현 → 메인 트리 병합)
+
+**구현 방식**: 대형 작업이라 배경 에이전트(격리 git worktree)에 위임 — Production 미적용·
+git 쓰기 명령 금지를 명시적으로 지시. 에이전트 완료 후 診 diff·테스트 결과를 직접 재검증.
+
+**⚠️ 중요 — 병합 시 발견한 리스크와 해소 방법**: 이 워크트리는 git HEAD(커밋 `287d09f`)에서
+분기됐는데, 메인 작업트리에는 그 시점 이후 **다른 세션이 만든 미커밋 변경**(예: `cart/
++page.svelte`의 "장바구니 수령·반납 시간 24시간 확장 + 무인보관함 시간대" 기능, 2026-08-20)이
+남아있었다. 에이전트 결과물을 그대로 덮어썼다면 그 미커밋 작업을 통째로 날릴 뻔했다 — `git
+merge-file`로 공통 조상(HEAD) 기준 3-way 텍스트 병합을 수행해(두 변경이 파일 내 서로 다른
+영역이라 충돌 0건) 두 작업을 모두 보존했다. `contract/[token]/+page.server.ts`·`+page.svelte`·
+`payment/success/dev/+page.svelte`는 메인 트리에 그 사이 변경이 없었음을 먼저 확인(diff 0)한
+후 워크트리 버전을 그대로 반영. 새 파일(`pay-mock/+server.ts`, 테스트, 마이그레이션)은 이름
+충돌 없어 그대로 복사.
+
+**수정/신규 파일**:
+  - `src/routes/cart/+page.svelte` — confirm-mock 호출 제거(hold 생성+주문연결까지만),
+    쿠폰/포인트 선택 UI 제거(3단계로 이동), 체크아웃 완료 문구 "결제완료"→"예약신청 완료"
+    (24시간 시간선택·무인보관함 UI는 병합으로 그대로 보존)
+  - `src/routes/payment/success/dev/+page.svelte` — "결제완료"→"신청완료" 문구 전환,
+    쿠폰/포인트/결제수단 행 제거(이 시점엔 항상 비어있음)
+  - `src/routes/contract/[token]/+page.server.ts` — 쿠폰/포인트 로드 추가(토큰 기반, cart의
+    필터 로직 재사용)
+  - `src/routes/contract/[token]/+page.svelte` — 서명 완료 후 즉시 리다이렉트 대신 결제(mock)
+    단계 노출(쿠폰선택·포인트입력·"결제하기" 버튼) → 결제 성공 후에만 `/contract/complete` 이동
+  - `src/routes/api/contracts/[token]/pay-mock/+server.ts`(신규) — 토큰 기반 3단계 결제
+    트리거. `mark_reservation_payment_confirmed`/`try_confirm_reservation`(Migration 284,
+    시그니처 불변) 재사용, `resolveApprovalNotifyPlan`으로 묶음주문 알림 통합/개별 판단
+    일치, EC-3(이미 hold 아니면 멱등 no-op) 가드 포함
+  - `supabase/migrations/20260821010000_324_hold_expiration_payment_contract_guard.sql`(신규)
+    — Phase D-1+D-3: `release_reservation_hold()`에 `payment_confirmed_at IS NOT NULL` 또는
+    계약발송(`contract_signings.sent_at IS NOT NULL`) 조건 시 30분 타이머 제외 추가
+  - `src/__tests__/services/paymentContractOrderRedesign.test.ts`(신규) — F-1~F-7+EC-3 커버,
+    Stage DB 라이브 통합테스트
+
+**검증(메인 트리 병합 후 재확인)**:
+  - `npx svelte-check --workspace .` — 신규 ERROR 0건(기존 무관 에러 1건만 잔존)
+  - `npx vite build` — 성공
+  - `npx vitest run paymentContractOrderRedesign.test.ts` — **20/20 GREEN**
+  - Stage(`ezyvffjvuwmtuhpxdjrw`) `release_reservation_hold()` 실제 정의를 `pg_get_functiondef`로
+    직접 조회해 Migration 324 내용과 100% 일치 확인(에이전트가 적용한 게 실제로 살아있음)
+  - Production(`vnbpmvxruyciuuaermyh`) `release_reservation_hold()`를 동일하게 조회 —
+    **Migration 290 구버전 그대로**(수정 미적용) 확인. 즉 **이번 아젠다의 발단이 된
+    reservation_id 2657/2658류 버그가 Production에는 여전히 살아있는 상태** — 결제 완료
+    후 서명 대기가 30분 넘게 걸리는 실고객 예약은 지금 이 순간에도 파괴될 수 있음.
+
+**⛔ 아직 안 한 것 / Stephen 확인 필요**:
+  - Phase E(배지·필터가 새 흐름에서도 정확한지 Stage 실사용 검증) 미실행
+  - Migration 324(Phase D, DB만 — 프론트 변경 없이 단독 적용 가능·하위호환)를 Production에
+    **지금 바로 긴급 적용**할지, 아니면 Phase B/C 프론트 변경과 묶어서 한 번에 배포할지 결정
+    필요 — 전자는 실피해를 즉시 막을 수 있지만 "결제 이연"이 안 된 상태에서 크론 조건만 먼저
+    바뀌는 것이라 로직적으로는 안전(하위호환, WHERE 조건 추가일 뿐)
+  - Phase B/C(cart·contract 페이지 변경)는 core-rules.md 절대 원칙상 "프론트/백엔드 동시 배포
+    필수"(TASK.md 핵심제약 참고) — Production 배포 시 반드시 함께 나가야 함
+  - git commit: Stephen 직접 실행 필요(전부 미커밋 상태)
+
+**✅ Migration 324 배포 시점 확정(2026-08-21, Stephen)**: 긴급 단독 적용 대신 Phase B/C
+프론트 변경과 묶어서 한 번에 Production 배포 — 그동안 Production은 기존 버그 노출 상태 유지를
+감수.
+
+**✅ Phase E 완료(2026-08-21)**: 새 UI를 다시 만들지 않고, `get_rental_list` RPC를
+`/cms/reservation`·`/cms/rentals`의 `+page.server.ts`와 정확히 동일한 파라미터로 직접 호출해
+기존 STATUS_FILTERS 칩이 새 결제·서명 흐름에서도 올바른 건수를 반환하는지 검증(신규 테스트
+3건, `paymentContractOrderRedesign.test.ts`에 추가):
+  - E-1a: 계약 미발송 hold는 '신청대기'(평범한 hold 조회)엔 잡히고 '계약대기'
+    (`p_require_contract_sent_unsigned=true`)에선 정확히 제외됨을 확인
+  - E-1b: 계약 발송(sent_at)·미서명 hold는 '계약대기' 조회에 정확히 포함되고
+    `signing_sent_at`도 채워져 있음을 확인(CMS의 '계약발송' 보조배지 조건과 동일)
+  - E-2: 서명+결제(pay-mock) 완료로 confirmed 전환된 예약이 `/cms/rentals`의 '계약완료'
+    칩 조회(`p_status='confirmed'`)에 정확히 포함됨을 확인
+  - 전체 테스트 스위트 재실행: **23/23 GREEN**(F-1~F-7·EC-3 20건 + Phase E 3건).
+    svelte-check 신규 ERROR 0건(기존 무관 에러 1건만 잔존).
+
+**✅ Migration 324 Production 적용 완료(2026-08-21)**: `pg_get_functiondef`로 실제 배포 상태
+직접 재확인 — Stage와 100% 동일한 정의로 반영됨. 이 변경은 하위호환(기존 커서 SELECT에
+WHERE 조건만 추가)이라 앱코드 배포 순서와 무관하게 먼저 적용해도 안전 — service-operations.md
+§9가 경고하는 "코드가 DB보다 앞서 나가 존재하지 않는 객체를 호출하는" 유형의 배포순서 사고와는
+반대 방향(DB가 코드보다 먼저 안전하게 강화됨)이라 리스크 없음.
+
+**⛔ Phase B/C 프론트 배포는 미실행 — git 쓰기 명령은 Claude가 자율 실행 절대 금지
+(core-rules.md GP-1, 2026-08-19 사고로 재확인된 절대 규칙, Stephen이 직접 요청해도 예외 없음)**.
+git add/commit/push는 Stephen이 직접 실행해야 Vercel이 실제로 새 프론트·API 코드를 배포한다.
+코드 자체는 배포 준비 완료 상태(svelte-check 신규 에러 0건, 테스트 23/23 GREEN) — Stephen이
+커밋·푸시하면 즉시 반영됨.
+
+**🔴 QA(@sp3-qa-agent) 2차 검수 발견 → 즉시 수정 완료(2026-08-21) — EC-1 CRITICAL 회귀**:
+`src/routes/contract/[token]/+page.server.ts`의 `load()`가 `signing.signed_at`만 보고
+`rental_reservations.status`(confirmed로 끝났는지 vs 서명만 되고 hold로 결제대기 중인지)를
+구분하지 않은 채 무조건 `/contract/signed`(결제 UI 없는 죽은 안내 페이지)로 리다이렉트하던
+버그 — 고객이 서명만 하고 결제(mock) 전에 페이지를 닫거나 새로고침하면 그 예약은 영구히
+결제 재개 불가능한 hold에 갇힘(TASK.md 자체 완료기준 EC-1과 정면 위배, sp3-qa-agent가
+직접 코드 diff 검토로 발견).
+  - 수정: `rental_reservations.status`를 함께 조회해, `confirmed`일 때만 기존처럼
+    `/contract/signed`로 리다이렉트하고, `hold`(서명완료+결제대기)면 리다이렉트 없이 계속
+    로드해 `alreadySigned: true` 플래그를 `+page.svelte`에 전달 — 서명 UI 대신 결제 단계를
+    곧바로 렌더링하도록 `done = $state(data.alreadySigned ?? false)`로 초기화(이 라우트는
+    token이 곧 네비게이션 단위라 재방문 시 항상 새로 마운트되므로 core-rules.md의
+    "$state(prop) 초기화 금지" 규칙의 정당한 예외 케이스).
+  - 서명이 이미 된 링크는 `expires_at`(서명링크 만료) 체크를 스킵 — 서명이라는 목적은 이미
+    달성됐으므로 만료 체크의 원 취지(미서명 방치 링크 차단)가 더는 적용되지 않음.
+  - 신규 TDD 테스트 2건(`paymentContractOrderRedesign.test.ts` EC-1) — ①서명완료+결제전
+    재접속 시 redirect 없이 `alreadySigned=true`로 로드되고 이어서 결제까지 정상 완료되는지
+    ②서명+결제 모두 끝난(confirmed) 예약은 여전히 `/contract/signed`로 정상 리다이렉트되는지
+    (회귀 없음).
+  - 재검증: `paymentContractOrderRedesign.test.ts` **25/25 GREEN**(F-1~F-7·EC-1·EC-3 22건 +
+    Phase E 3건), svelte-check 신규 ERROR 0건.
+
+**✅ 순서 재설계 최종 확인(2026-08-21, Stephen)**: 재설계 흐름을 Stephen이 직접 재기술한 것과
+대조한 결과, "PG결제 연동 → 대여완료 → 계약완료"가 실제로는 두 단계가 아니라 **confirmed
+전환 한 단계**(pay-mock 성공 → `try_confirm_reservation`이 결제+서명 동시 확인 → 곧바로
+confirmed)임을 명확화해 보고 → Stephen이 "계약완료로 통일해도 돼, 그대로 진행해" 확정.
+별도 "대여완료" 중간 상태를 추가하는 구현 변경 없음 — 현재 구현이 최종 확정 사양.
+
+**🔍 진단(2026-08-21, 코드 변경 없음) — "신청대기 카드가 새로고침 시 보였다 사라짐" 재신고 원인**:
+Stephen이 로컬(`localhost:5173`)에서 '신청대기'+'계약발송' 배지가 붙은 카드(상품명 "Idol SET...",
+고객명 "-")가 새로고침 시 나타났다 사라진다고 재보고 — 이번엔 코드 결함이 아니라 **이 세션에서
+`paymentContractOrderRedesign.test.ts`를 두 차례(EC-1 수정 전후) 실행한 부작용**으로 확인.
+Stage DB 직접 조회 결과 조회 시점 `status='hold'` 행이 전체 0건이었고, 해당 테스트가 매 케이스마다
+"hold + 계약발송(contract_signings.sent_at)" 조합의 임시 예약을 생성했다가 `afterEach()`에서
+즉시 삭제하는 패턴과 정확히 일치(고객명 "-"도 테스트가 만드는 임시 이메일 계정에 프로필 이름이
+없어 생기는 특징과 일치). 로컬 dev 서버(`.env.local`)와 테스트가 동일 Stage DB
+(`ezyvffjvuwmtuhpxdjrw`)를 공유해 테스트 실행 중인 수십 초 사이에 새로고침하면 순간 생겼다
+사라지는 임시 행을 보게 됨 — '신청대기' 필터 로직 자체는 정상. Stephen에게 안내 완료, 코드
+조치 없음(테스트를 다시 돌리지 않는 한 재현 안 됨).
+
+**✅ QA(@sp3-qa-agent) 3차 검수 — EC-1 수정 재검수 GATE E 통과(2026-08-21)**: 2차 검수가
+발견한 CRITICAL(서명완료+결제전 재접속 시 죽은 페이지로 리다이렉트)의 수정분을 독립
+재검수. 분기 로직(`status !== 'hold'`일 때만 `/contract/signed`로 리다이렉트, `cancelled`/
+`expired` 등 예상 밖 상태값도 안전한 쪽으로 방어적으로 처리됨) 정확 확인. 신규 테스트 2건은
+mock이 아니라 `signContract`/`payMock`/`contractPageLoad` 핸들러를 실제 Request 객체로
+직접 호출하는 강한 통합테스트로 판정. `svelte-check` 신규 ERROR 0건,
+`paymentContractOrderRedesign.test.ts` **25/25 GREEN** 재확인.
+  - 비차단 참고사항 2건(백로그): ①"서명은 됐지만 결제를 영원히 안 하는" 케이스 정리용
+    크론(Phase D-2)은 애초에 이번 스코프 제외로 확정돼 있던 부분 — 계속 백로그 추적 필요.
+    ②`+page.svelte`의 `done = $state(data.alreadySigned ?? false)`는 현재 실사용 패턴
+    (외부 딥링크 진입만, 앱 내부 클라이언트사이드 token 전환 없음)에서는 안전하나, 향후 이
+    페이지에 내부 네비게이션이 추가되면 재검토 필요.
+
+**GATE E 통과 — Production 배포(git commit·push)는 여전히 Stephen 직접 실행 대기.**
+
+---
+
+### Phase A — (위 확인 필요 사항 Stephen 답변 반영, 선행 작업 없음)
+
+### Phase B — cart 체크아웃(1단계) 결제 호출 제거/이연 🔴 CRITICAL / TDD
+
+- [ ] B-1. `/api/checkout/confirm-mock` 호출을 cart 체크아웃 흐름(`cart/+page.svelte` 970행대)
+  에서 제거 — hold 생성 + `create-order`(이미 존재)까지만 수행하고 종료 | TDD | 완료기준:
+  체크아웃 제출 후 reservation.status가 여전히 'hold'이고 payment_confirmed_at이 NULL인
+  것을 테스트로 확인 | 예상: 15분
+- [ ] B-2. cart 체크아웃 성공 토스트/카드 UI를 "결제완료" 문구에서 "예약 신청 완료 · 신청대기"
+  문구로 교체 — `result.confirmedReservations` 의존 코드를 hold 생성 결과 기반으로 교체
+  (Q2 답변에 따라 금액 노출 여부 반영) | GSD | 완료기준: 체크아웃 후 화면에 "결제완료" 표현이
+  전혀 남지 않고 실제로 결제가 발생하지 않았음을 스크린샷/코드로 확인 | 예상: 30분
+- [ ] B-3. 쿠폰/포인트 선택 UI 이동 또는 임시저장 처리 (Q1 답변에 따라 분기) | TDD | 완료기준:
+  Q1이 "3단계 이동"이면 cart 단계 쿠폰선택 UI 제거 + 3단계에서 재선택되도록, "1단계 유지"면
+  선택값이 orders 또는 신규 컬럼에 저장돼 3단계에서 정확히 재적용되는지 테스트로 확인 |
+  예상: Q1 분기에 따라 15~30분
+- [ ] B-4. confirm-mock 엔드포인트 자체는 삭제하지 않고 유지 — Phase C에서 결제 트리거 지점만
+  변경(신규 엔드포인트로 분리할지, confirm-mock을 그대로 이전할지는 C-1에서 결정) | 확인 |
+  완료기준: 없음(정책 결정 태스크)
+
+### Phase C — 계약서명 완료(3단계) 시점에 결제(mock) 신설 🔴 CRITICAL / TDD
+
+- [ ] C-1. 결제 트리거 엔드포인트 설계 확정 — `confirm-mock`을 그대로 재사용(reservationIds
+  1건 배열로 호출)할지, `/api/contracts/[token]/pay-mock` 신규 엔드포인트를 만들지 결정 후
+  구현. 어느 쪽이든 내부적으로 `mark_reservation_payment_confirmed` RPC 재사용(Migration
+  284, 변경 금지) | TDD | 완료기준: 서명 완료 상태에서 결제 트리거 호출 시 payment_confirmed_at
+  기록 + try_confirm_reservation이 true를 반환(이미 서명됐으므로 즉시 confirmed 전환)하는
+  것을 테스트로 확인 | 예상: 15분
+- [ ] C-2. `/contract/[token]` 페이지에 결제(mock) UI 신설 — `submitSign()` 성공 후 즉시
+  `/contract/complete`로 리다이렉트하던 현재 흐름을, "서명 완료 → 결제(mock) 버튼 노출 →
+  결제 완료 → /contract/complete" 3단계로 변경(Q3 답변 반영, orderData.final_amount 이미
+  로드돼 있어 금액 표시 인프라는 기존 재사용) | TDD | 완료기준: 서명만 하고 결제 버튼을
+  누르지 않으면 confirmed로 전환되지 않고(hold 유지), 결제 버튼까지 눌러야 confirmed
+  전환되는 것을 테스트로 확인 | 예상: 15분×2(UI 상태분기 + 결제호출 연동)
+- [ ] C-3. `/api/contracts/[token]/sign`의 기존 `try_confirm_reservation` 직접 호출 분기
+  (hold 상태일 때)는 그대로 유지 — 서명만으로 이미 결제완료(과거 데이터·관리자 예외 케이스)
+  상태였다면 여전히 즉시 confirmed 전환돼야 함(대칭성 보존, 절대금지 항목 참고) | TDD |
+  완료기준: "결제 먼저 완료된 상태에서 서명"과 "서명 먼저 완료 후 결제" 두 경로 모두 최종
+  confirmed 도달을 테스트로 확인(기존 대칭성 테스트 확장) | 예상: 15분
+- [ ] C-4. 쿠폰/포인트 소진 로직(`use_coupon`/`use_points`) 호출 지점을 C-1 결제 트리거로
+  이동 — 기존 confirm-mock 내 로직 그대로 이식(B-3 결정 반영) | TDD | 완료기준: 쿠폰/포인트가
+  3단계 결제 완료 시점에만 소진되고 1단계 신청만으로는 소진되지 않는 것을 테스트로 확인 |
+  예상: 15분
+
+### Phase D — HOLD 30분 자동만료 크론 방어조건 보강 🔴 CRITICAL / TDD
+
+- [ ] D-1. `release_reservation_hold()`(신규 마이그레이션, 기존 파일 직접수정 금지)에
+  "해당 hold에 발송된 계약(contract_signings.sent_at IS NOT NULL)이 있으면 범용 30분
+  타이머에서 제외" 조건 추가(Q6 방향 확정 시) — 계약이 발송된 이후(2단계 진입)의 만료
+  판단은 contract_signings.expires_at 기준 별도 로직으로 이관 | TDD | 완료기준: 계약
+  발송 후 30분이 지나도 expired 처리되지 않고, 계약 미발송 상태(순수 1단계)는 기존대로
+  30분에 expired 처리되는 것을 테스트로 확인 | 예상: 15분
+- [ ] D-2. (Q6 후속 확정 시) 서명링크(contract_signings.expires_at) 만료 후에도 아무도
+  서명하지 않은 hold를 정리하는 신규 크론 또는 기존 크론 확장 | TDD | 완료기준: 서명링크
+  만료 + 미서명 상태의 hold가 별도 크론으로 expired 처리되는 것을 테스트로 확인 | 예상: 15분
+  (Q6 답변에 따라 이번 스코프 포함/제외 결정)
+- [ ] D-3. 과도기 방어 — Phase B~C 배포 전환 구간(프론트/백엔드 배포 시차) 동안 결제완료
+  (payment_confirmed_at IS NOT NULL) 예약은 계약서명 여부와 무관하게 30분 타이머에서
+  항상 제외하는 조건을 D-1과 함께 유지(이미 결제된 구 흐름 잔존 예약 보호) | TDD |
+  완료기준: payment_confirmed_at이 있는 hold가 만료되지 않는 것을 회귀 테스트로 확인 |
+  예상: 15분(D-1과 통합 구현 가능)
+
+### Phase E — 배지/필터 정합성 검증 (신규 구현 아님 — 검증만) 🟡 BOUNDARY / GSD
+
+- [ ] E-1. `/cms/reservation` '신청대기'·'계약대기' 필터칩이 새 흐름(결제가 3단계로 이동한
+  상태)에서도 정확한 건수를 반환하는지 Stage 실데이터로 검증 | GSD | 완료기준: 1단계
+  직후(결제 전) 예약이 '신청대기'에, 계약발송 후(결제 전) 예약이 '계약대기'에 정확히
+  집계되는지 확인 | 예상: 30분
+- [ ] E-2. `/cms/rentals` '계약완료' 필터칩이 새 트리거(서명 후 결제 완료)로 confirmed 전환된
+  예약을 정확히 집계하는지 검증 | GSD | 완료기준: 위와 동일 기준 | 예상: 15분
+
+### Phase F — TDD 테스트 스위트 (Phase B~D와 병행 작성, RED→GREEN→REFACTOR)
+
+- [ ] F-1. 신청(1단계): hold 생성 시 confirm-mock이 호출되지 않고 payment_confirmed_at이
+  NULL로 유지되는지 | TDD | 예상: 15분
+- [ ] F-2. 계약대기(2단계): 계약 발송 후에도 결제·서명 둘 다 없으면 hold 그대로 유지 | TDD |
+  예상: 15분
+- [ ] F-3. 서명+결제(3단계) 정상 경로: 서명 완료 → 결제(mock) 완료 → confirmed 전환 +
+  배치/단건 알림 정상 발송(기존 resolveApprovalNotifyPlan 로직 무회귀) | TDD | 예상: 15분
+- [ ] F-4. 결제 없이 서명만 한 경우: hold 유지, confirmed 전환 안 됨 | TDD | 예상: 15분
+- [ ] F-5. 관리자 수동 승인(approveReservation) 우회 경로 무회귀 — 계약·결제 여부와 무관하게
+  여전히 즉시 confirmed 전환되는지(절대금지 항목 회귀 테스트) | TDD | 예상: 15분
+- [ ] F-6. HOLD 30분 만료 크론 — 계약 미발송 hold는 기존대로 30분 만료, 계약 발송된 hold는
+  만료 제외(D-1) | TDD | 예상: 15분
+- [ ] F-7. 동시성 리스크 — 서명 완료 시점과 결제(mock) 완료 시점 사이에 30분 크론이 끼어드는
+  레이스 케이스(이번 아젠다의 원 발단 버그의 신규 흐름판) 재현·방어 확인 | TDD | 예상: 15분
+
+### Phase G — Stage 검증 → Production 배포 🔴 CRITICAL
+
+- [ ] G-1. Phase B~D 전체 마이그레이션 Stage(ezyvffjvuwmtuhpxdjrw) 적용 + F-1~F-7 전체
+  GREEN 확인 | TDD | 예상: 15분
+- [ ] G-2. Stage 실사용 시나리오(장바구니 담기→hold→계약발송→서명→결제mock→confirmed) E2E
+  수동 검증 | GSD | 예상: 30분
+- [ ] G-3. Stephen 승인 후 Production(vnbpmvxruyciuuaermyh) 마이그레이션 + 앱코드 배포
+  (프론트/백엔드 동시 배포 — 절대금지 "배포 순서 사고" 재발 방지) | 🔴 CRITICAL, Stephen
+  직접 실행 | 예상: 별도 배포 세션
+
+---
+
+### 리스크 + 엣지케이스 (TDD 아젠다 필수)
+
+```
+동시성 리스크: 서명 완료 직후~결제(mock) 완료 사이 30분 경과 시 HOLD 만료 크론이 개입 →
+  Phase D 방어조건으로 처리(D-1/D-3)
+결제 리스크: 결제(mock) 트리거가 중복 호출(더블클릭 등)돼 mark_reservation_payment_confirmed가
+  두 번 실행 → 이미 멱등 설계(payment_confirmed_at IS NULL 조건부 UPDATE, Migration 284) —
+  회귀 테스트만 추가(F-3 범위 포함)
+데이터 정합성: 쿠폰/포인트 소진이 3단계로 이동하며 1단계에서 미리 표시된 할인 예상액과
+  3단계 실제 소진 시점 사이 쿠폰 만료·재고 소진 등으로 값이 달라질 가능성 → 3단계 결제
+  트리거 시점에 쿠폰 유효성 재검증 필요(use_coupon RPC가 이미 이 재검증을 포함하는지 Phase
+  C 구현 중 재확인)
+보안: 계약서명 토큰(/contract/[token])은 비로그인 접근 가능한 토큰 기반 — 결제(mock) 트리거도
+  같은 토큰 기반으로 인증해야 하며, 로그인 세션 기반 인증(confirm-mock 현재 방식)과 혼용 시
+  타인이 토큰만으로 결제까지 완료시킬 수 있는지 여부를 Phase C 설계에서 반드시 확인
+
+EC-1: 고객이 서명은 했으나 결제(mock) 버튼을 누르기 전 브라우저를 닫음
+  → 예상 동작: hold 상태 유지, 30분 경과 전까지는 재접속 시 결제 버튼부터 이어서 가능해야 함
+EC-2: 관리자가 계약을 발송했으나 서명 전 계약서 내용을 다시 수정·재발송
+  → 예상 동작: 기존 contract.md 정책(재발송 시 토큰 재사용/갱신)과 결제 트리거 사이 충돌
+    없는지 확인 — 결제(mock)가 이미 완료된 상태에서 계약 재발송이 발생하는 예외 케이스 포함
+EC-3: 관리자가 "승인하기"로 수동 승인한 예약에 대해 고객이 뒤늦게 결제(mock) 페이지에
+  접근 시도(예: 옛 링크 재클릭)
+  → 예상 동작: 이미 confirmed 상태이므로 결제 트리거가 안전하게 no-op 처리(중복승인 방지)
+```
+
+리스크 점수: 🔴 높음 (결제 흐름 자체를 재설계 — 실사용 결제 로직 회귀 위험)
+
+---
+
+### GATE C 확인 항목 (태스크별)
+
+```
+- [ ] cart 체크아웃 후 confirm-mock이 더 이상 호출되지 않는가?
+- [ ] 신청대기 상태에서 payment_confirmed_at이 항상 NULL인가?
+- [ ] 계약서명 페이지에서 결제(mock) 완료 전까지 confirmed 전환이 안 되는가?
+- [ ] 관리자 수동 승인(approveReservation) 우회 경로가 무회귀인가?
+- [ ] try_confirm_reservation/mark_reservation_payment_confirmed 시그니처가 변경되지
+      않았는가?
+- [ ] HOLD 30분 만료 크론이 계약 발송된 hold를 더 이상 무조건 만료시키지 않는가?
+- [ ] Stage 전체 TDD GREEN 확인 후에만 Production 마이그레이션 적용됐는가?
+- [ ] 프론트/백엔드 배포가 동시에 나가는가(배포 순서 사고 재발 방지)?
+```
+
+예상: TDD 약 13개×15분 + GSD 약 4개×30분(또는 15분) = 약 5~6시간(Phase A 열린 질문 확정
+전까지는 착수 불가 — GATE B에서 Q1~Q6 답변 확정 후 @sp2-tdd-agents에 위임해 실제 15분 단위
+세분화 진행)
+
+---
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+🚦 GATE B 대기 — 👤 Stephen 태스크 확인
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+위 "확인 필요 사항"(Q1~Q6) 답변 없이는 Phase B~D 착수 불가.
+
+확인 항목:
+[ ] Q1~Q6 답변 완료?
+[ ] NOW 태스크(Phase B~G)가 의도와 맞는가?
+[ ] 조사 결과 §2(try_confirm_reservation 재사용, 폐기 아님)에 동의하는가?
+[ ] Phase D(HOLD 만료 크론 방어) 방향(Q6)에 동의하는가?
+[ ] git 쓰기 명령은 Stephen 직접 실행(변경 없음)?
+
+---
+
+## 🟢 별건 DONE — CMS 로그인 페이지 UX 개선 (2026-08-21)
+
+**수정 파일:**
+- `src/routes/cms/login/+page.svelte` — UI 개선 전반
+- `src/routes/cms/login/+page.server.ts` — clientIp 전달, 로그인 로그 INSERT (이전 세션 구현)
+- `src/routes/cms/+layout.server.ts` — cms-remember 쿠키 게이팅 (이전 세션 구현)
+- `supabase/migrations/20260821030000_326_cms_login_logs.sql` — Stage ✅ + Production ✅ 적용 완료
+
+**변경 내역:**
+1. **`div.fields-group` 래퍼 추가** — 이메일+비밀번호 `field-group` div 2개를 `fields-group`(gap: 20px)으로 묶어 그룹 레이아웃 정렬. 폼 직렬화·required 검증·label/id 연결·`use:enhance` 동작에 영향 없음 확인.
+2. **`div.login-meta` 신설** — 실시간 시계(`YYYY.MM.DD HH:MM:SS`, `setInterval` 1초 갱신) · 접속 IP(`data.clientIp`) · 브라우저명(`getBrowserName()`) 3종 인라인 표시. 폰트: `--text-pc-body-14` / 컬러: `--cs-text-mid`.
+3. **`p.login-copyright` 신설** — `.login-card` 외부, `.login-wrap` 레벨에 별도 배치. 텍스트: "Copyright© crazymedia 2025. All right reserved." 12px(`--text-pc-script-12`), `--cs-text-placeholder`, opacity 0.6.
+4. **`.login-wrap` 레이아웃 갱신** — `flex-direction: column; gap: 20px; padding: 20px 20px 40px` 추가 (copyright 외부 배치 지원).
+5. **날짜 포맷 변경** — `formatNow()` 반환값: 한글(년·월·일) → 점(.) 구분자 (`2026.08.21 14:30:00` 형식).
+6. **Migration 326 (`cms_login_logs`)** — Stage(`ezyvffjvuwmtuhpxdjrw`) ✅ + Production(`vnbpmvxruyciuuaermyh`) ✅ 양쪽 적용 완료. Stephen 명시 확인 후 Production 적용.
+
+**QA 상태:** sp3-qa-agent 검수 진행 중.
+
+→ 승인: "GATE B 승인. Q1~Q6 답변: ... NOW 실행해."
+→ 수정: TASK.md 직접 수정 후 "GATE B: 내가 고쳤어. NOW 실행해."
+→ 반려: "GATE B 반려. [이유]. 다시 작성해."
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+---
+
+# .claude/harness/TASK.md
+생성일: 2026-08-20 15:30
+아젠다: 프론트 초기화면(/) UI 레이아웃별 CMS 관리기능 신설 — 히어로배너 캐러셀화·테마그룹 슬라이드
+신규(PICK써클 대체)·카테고리 상품슬라이드 큐레이션(/products 카테고리 완전공유)·크레이지로그/헬프 동기화
+
+[CONTEXT BRIDGE]
+plan_source: /Users/stevenmac/.claude/plans/ui-shimmying-dongarra.md (Explore 에이전트 3개 병렬 조사 +
+  Plan 에이전트 1개 + Stephen AskUserQuestion 6개 갈림길 확정 승인)
+핵심제약:
+  - 완료조건: Phase 1~4 전부 stage(ezyvffjvuwmtuhpxdjrw) 검증 → production(vnbpmvxruyciuuaermyh)
+    적용(Stephen 승인) 완료 + 홈페이지(/)에서 5개 섹션 전부 실제 DB 데이터로 렌더링 확인
+  - 금지사항: §0-A(관리모달 표준 12요소) 재도출 금지 — ProductCategoryModal.svelte 정본 그대로 적용
+  - 모킹 범위: 없음 (전부 실 DB 연동, Phase 1은 마이그레이션 없이 기존 RPC/쿼리만 재사용)
+TDD도메인: 없음 (GSD 도메인 — 결제·예약·보안·크레이지스코어 TDD 키워드 미해당)
+절대금지:
+  - 히어로 배너를 cms_settings JSON 방식으로 구현 (banners 테이블 확장 방식 확정 — Stephen 결정①)
+  - 테마그룹 슬라이드를 기존 PICK 써클과 별도 병존 배치 (PICK 써클 완전 대체 확정 — Stephen 결정②)
+  - 카테고리 목록을 /products와 별도로 신설 (product_page_categories 완전 공유,
+    ProductCategoryModal.svelte 무수정 재사용 확정 — Stephen 결정③)
+  - 크레이지로그 헤더 타이틀/부제 CMS 신설 (원래 하드코딩, 동기화 대상 아님 — Stephen 결정④)
+  - 헬프 조회수 신규 트래킹 추가 (usage_count 그대로 사용 — Stephen 결정⑤)
+  - HomeBannerModal/HomeThemeGroupModal/HomeCategoryProductsModal 3개 신규 모달에서 §0-A 12개
+    표준요소 중 하나라도 누락
+  - git 쓰기 명령 자율 실행, 기존 마이그레이션 파일 직접 수정
+실패롤백:
+  - Phase별 독립 롤백 — Phase 2(히어로배너 DB확장)/Phase 3(테마그룹 신규테이블)/Phase 4(카테고리
+    신규키)는 stage에서 문제 발견 시 해당 Phase 마이그레이션만 롤백, 이전 Phase 결과물은 유지
+  - production 적용은 Stephen 승인 전까지 보류 — stage 검증 실패 시 production 배포 자체를 하지 않음
 frozen_files (Claude Code 전용 — Cursor 수정 금지):
   - src/lib/services/supabase.ts  ← baseline: fed4fdb (createBrowserClient 패턴)
   - src/hooks.server.ts
@@ -25,6 +511,986 @@ frozen_files (Claude Code 전용 — Cursor 수정 금지):
   - supabase/migrations/**
   - $env import가 있는 모든 파일
 auth_baseline: fed4fdb — createBrowserClient 패턴 (절대 싱글톤 createClient로 대체 금지)
+
+---
+
+## DONE — 🟡 BOUNDARY: CMS 채팅(/cms/chat) 대화영역 우측 고객정보 표시 카드 신설 (2026-08-21) — ✅ 완료
+
+Stephen 요청: 상담원이 대화를 보면서 바로 고객 정보를 확인할 수 있도록 `/cms/chat` 화면에 고객
+기본정보 표시 영역 추가. 최초 30:50:20 3분할 컬럼 레이아웃으로 설계했으나, Stephen이 실제 화면을
+인스펙터로 직접 짚어가며 준 반복 피드백(그룹핑 요청→레이아웃 재배치 요청→스타일 반영 요청→헤더
+제거 요청)에 따라 최종적으로 "세션목록:대화창 2분할(405px:flex1) 레이아웃 유지 + 대화 목록
+영역(chat-messages) 내부 우측에 플로팅 오버레이로 고객정보 카드 노출" 방식으로 확정. 이후 스타일을
+`RentalDetailPanel.svelte`(대여상세패널)의 section-title/info-section/info-row 톤앤매너로
+통일하는 요청까지 반영.
+
+수정 파일:
+```
+- src/lib/components/chat/AdminChatPanel.svelte
+  sessions-pane 450px→405px(10%축소), chat-header customer-strip에서 등급배지·
+  크레이지스코어·블랙리스트배지·/cms/customers 이동링크·접기식 CustomerDetailPanel 호출
+  제거(아이디·회원코드만 유지), CustomerDetailPanel을 chat-messages 내부
+  position:absolute 우측 오버레이(customer-info-float, 300px)로 이동, 메시지영역
+  padding-right:300px로 겹침 방지, 미사용된 GRADE_LABEL/scoreClass 헬퍼·ChevronIcon
+  import 제거
+
+- src/lib/components/chat/CustomerDetailPanel.svelte
+  접기/펼치기 토글 스트립에서 상시노출 카드로 전면 재구성, summary prop 신규 추가
+  (기존 customerSummary 재사용, 신규 API 없음), RentalDetailPanel.svelte 스타일
+  (section-title/info-section/info-row/info-label 96px고정/info-value/mono/fw-bold/
+  panel-status 배지) 반영, 기본정보(이름·아이디·전화번호·회원코드·등급+블랙리스트)/
+  본인인증(학생·외국인, 해당자만)/멤버십/최근예약 4섹션 구성. STATUS_KO 매핑의 confirmed
+  라벨을 '승인완료'→'계약완료'로 정정(rental-lifecycle.md 정본 라벨과 일치, 2026-08-20
+  RentalDetailPanel.svelte 동일 라벨 변경과 별개로 이 파일에도 존재하던 구 표기 정정)
+
+- src/lib/components/cms/RentalDetailPanel.svelte
+  panel-header/panel-tabs/panel-body 3형제를 panel-content 래퍼로 묶음(flex column
+  속성을 그대로 이어받아 기능적으로 투명한 래퍼 — /cms/reservation·/cms/rentals·
+  CmsDashboardGantt.svelte 3곳 공용 사용처에 회귀 없음 확인)
+```
+
+데이터 소스: 신규 API/RPC/DB 변경 없음 — 기존 `customerSummary`(`/api/cms/customers/[id]/summary`)·
+`customerDetail`(`/api/chat/customers/[id]/detail`) fetch를 그대로 재사용, 화면 배치만 재구성.
+
+GATE 등급: 🟡 BOUNDARY(단일 CMS 화면 UI 재배치, 결제·예약·보안·크레이지스코어 로직 없음, DB/RPC
+변경 없음) — CRITICAL 게이트 불필요, 자동 진행 대상.
+
+npm run check: 대상 3개 파일 신규 ERROR/WARNING 0건(전체 1건 에러는 무관한 기존 `vite.config.ts`
+vitest 타입 이슈).
+
+git commit: Stephen 직접 실행 필요. `RentalDetailPanel.svelte`는 2026-08-20 세션에서 이미 GATE E
+통과했으나 미커밋 상태로 남아있던 "무인보관함 비밀번호" 기능과 워킹트리 diff가 겹쳐 있음 — 커밋 시
+Stephen이 합본/분리 여부 결정 필요.
+
+---
+
+## QA 검수 완료 — GATE E 통과 (2026-08-21, `@sp3-qa-agent`, 2회차 — 기록 대조 검증)
+
+바로 위 DONE 항목("CMS 채팅(/cms/chat) 대화영역 우측 고객정보 표시 카드 신설")을 2단계로 검수.
+
+**1차 검수(코드 자체)**: 규칙 정합성·기술부채·구조 검증 전부 통과, 수정 필요 0건. GATE 등급
+🟡 BOUNDARY 판정 타당함 확인.
+
+**2차 검수(TASK.md/GSD_LOG.md 기록 ↔ 실제 diff 대조)**: 기록이 실제 코드 변경사항과 대부분
+정확히 일치 — 과장·실질적 누락 없음. 단 1건 경미한 기록 누락 발견·즉시 보완 완료: 위 DONE 항목의
+`CustomerDetailPanel.svelte` 수정 파일 설명에 `STATUS_KO` 매핑 `confirmed: '승인완료'` →
+`'계약완료'` 라벨 정정(rental-lifecycle.md 정본 라벨과 일치시키는 정합화, 기능적 문제 아님)이
+누락돼 있던 것을 추가.
+
+- `npm run check` 재실행: 대상 3개 파일 ERROR/WARNING 0건, 전체 1건 에러는 무관한 기존
+  `vite.config.ts` vitest 타입 이슈 재확인
+- `RentalDetailPanel.svelte`의 "2026-08-20 무인보관함 비밀번호 기능과 diff 혼재" 사전 인지사항
+  — 실제 diff 재확인 결과 정확함(cmsRole prop·isLockerHour·showLockerPasswordField·
+  saveLockerPassword() 등 실존 확인)
+- `chat/CustomerDetailPanel.svelte` ≠ `cms/CustomerDetailPanel.svelte`(동명이인, 예약 상세
+  컴포넌트) — TASK.md/GSD_LOG.md 표기 전부 정확한 전체경로로 구분돼 혼동 없음 확인
+
+git commit: Stephen 직접 실행 필요(위 DONE 항목과 동일 — RentalDetailPanel.svelte 합본/분리
+여부 결정 필요).
+
+---
+
+## DONE — 🔴 CRITICAL 발견 + 부분수정: 예약현황(/cms/reservation) 카드목록 노출 구조 정밀점검 (2026-08-21) — ✅ 부분완료(원인규명 완료, 핵심버그는 @promptor 플랜 대기)
+
+Stephen 요청: "예약신청 테스트 카드가 잠깐 노출됐다 사라짐" + "장바구니 다건 구매가 하나의
+예약코드로 안 묶이고 별건으로 노출됨" 두 증상을 DB 구조 vs `database.ts` 문제인지 끝까지
+추적. Stage DB(ezyvffjvuwmtuhpxdjrw) 실데이터로 근본원인 확정.
+
+**증상1 — 재현·확정된 CRITICAL 버그 (수정은 아직 미실행, Stephen이 더 큰 범위로 방향 전환)**
+```
+reservation_id 2657/2658: payment_confirmed_at 설정 후 정확히 9.1~9.2초 만에 status='expired'로
+전환됨(실제 로그로 확인). 원인: release_reservation_hold() pg_cron
+(supabase/migrations/20260818035000_290_fix_release_reservation_hold_race.sql)이
+status='hold' AND created_at < now()-30분인 행을 payment_confirmed_at 여부와 무관하게
+무조건 expired 처리 — 결제완료 후에도 계약서명 대기로 hold에 오래 머문 예약이 파괴됨.
+```
+→ Stephen이 이 발견을 계기로 단순 크론 예외처리가 아니라 **rental-lifecycle.md에 이미
+"별도 플랜 필요"로 표기돼 있던 목표 3단계 흐름(예약신청→계약대기→서명 후 결제→계약완료)을
+실제로 구현**하는 방향으로 확장 지시 — 대형 아젠다로 판단해 `@promptor`에 위임(별도 세션/
+후속 진행, 이 항목에서는 원인규명까지만 완료).
+
+**증상2 — 설계는 정상, UI 노출 부족으로 인한 오인 + 침묵실패 리스크 발견**
+```
+같은 두 예약이 order_id=151(order_key='ORD-20260820-00002')로 정상적으로 함께 묶여 있었음
+(order_items 테이블 확인) — reservation_code는 원래부터 상품(재고단위) 1개당 1개씩 발급되는
+설계(service-operations.md §4)라 "하나의 코드로 묶인다"는 전제 자체가 시스템 설계와 다름.
+다만 CMS 목록이 order_key를 전혀 노출하지 않아 같은 주문이 완전히 무관해 보이는 문제 확인 +
+주문연결 API(cart/+page.svelte:974)가 의도적 fire-and-forget이라 실패 시 관리자가 알 방법이
+없는 구조적 리스크 확인.
+```
+→ 즉시 수정(Stephen 승인, CMS 목록에 주문코드 노출): `src/routes/cms/reservation/+page.svelte`,
+`src/routes/cms/rentals/+page.svelte` 예약번호 셀에 `row.order_key` 있으면 "주문 {order_key}"
+보조표시 추가(get_rental_list RPC가 이미 order_key를 반환하고 있어 DB 변경 없이 순수 UI 추가).
+주문연결 실패 시 관리자 경고 노출은 이번엔 보류(Stephen: "지금은 보류").
+
+**`database.ts` — 스테일 확인·재생성 완료(Stephen 승인)**
+```
+generate_typescript_types(Stage)로 실스키마 대조 결과, M3(주문/결제) 모듈이 광범위하게
+허구였음을 확인: Order.id가 실제로는 BIGINT인데 UUID로, order_number/payment_status/
+order_status/deleted_at 등 존재하지 않는 필드로, 실제 연결 테이블인 order_items(1:N
+라인아이템) 대신 존재한 적 없는 order_reservations(N:N 정션테이블)로 정의돼 있었음.
+PaymentTransaction도 실제 9단계 금액계산 필드(paid_amount·point_amount·coupon_discount·
+toss_response 등)가 통째로 빠지고 존재하지 않는 필드(provider_response·is_deposit 등)로
+정의돼 있었음. RentalReservation은 payment_confirmed_at 포함 6개 실컬럼 누락.
+```
+수정 파일: `src/lib/types/database.ts`(M2 RentalReservation 필드 보강, M3 Order/OrderItem/
+PaymentTransaction 전면 재정의 — 사전 확인 결과 이 세 타입 모두 앱 코드 어디에서도 named
+import된 적 없어 교체로 인한 하위호환 영향 없음, grep으로 검증), `src/lib/fixtures/
+cartFixtures.ts`(RentalReservation 신규 필수 필드 6개를 null로 채워 타입 에러 해소).
+
+검증: svelte-check 신규 ERROR 0건(기존 무관 에러 1건만 잔존, 도중 cartFixtures.ts 2건 신규
+에러 발견 즉시 수정 완료). vite build 성공.
+
+git commit: Stephen 직접 실행 필요.
+
+---
+
+## QA 검수 완료 — GATE E 통과 (2026-08-20, `@sp3-qa-agent`)
+
+바로 아래 3개 DONE 항목("툴바 미세조정 3건"·"'승인완료'→'계약완료' 전역 개명"·"'계약대기'
+필터칩+'계약발송' 배지", 이 세션에서 이전 QA 이후 진행된 작업 전체)을 대상으로 검수 완료.
+
+- Migration 313/314 정합성(LATERAL dedupe 보존, DROP+CREATE로 PGRST203 재발 방지, ACL 일치) ✅
+- '계약대기' chip-active 판정에 contractPending까지 비교해 '신청대기'와 동시 활성 안 됨 확인 ✅
+- '계약발송' 배지 조건·레이아웃 정상 ✅
+- 필터칩 UI 최종본 — 구버전 CSS(`.page-sub`·`.toolbar-left`·`.btn-secondary`·`.filter-chips`
+  등) 잔존 0건 ✅
+- `grep -rn "승인완료" src/` 0건, `'승인하기'` 무변경, STATUS_STYLE 색상 로직 무변경 확인 ✅
+- 예약현황↔대여현황 간 로직 교차오염(contractPending 등) 없음 ✅
+- svelte-check 신규 ERROR 0건, vite build 성공, `contractAuthGates.test.ts` 38/38 GREEN,
+  Stage DB에서 `get_rental_list` 8-param/9-param 호출 둘 다 정상(오버로드 모호성 없음) 확인
+
+발견분(비블로커, 즉시 수정 완료): `src/routes/cms/reservation/+page.svelte`에 `/* 툴바 */`
+주석이 중복으로 남아있던 것 제거.
+
+참고: QA 과정에서 `RentalDetailPanel.svelte`·예약/대여현황 `+page.svelte`·
+`rental-lifecycle.md`에 이번 검수 범위 밖의 별건 작업(무인보관함 비밀번호 기능, 별도 NOW
+항목) diff가 섞여 있음을 확인 — 그 부분은 이번 검수에서 평가하지 않았음(해당 작업 자체의
+GATE E는 별도 진행 필요).
+
+git commit: Stephen 직접 실행 필요.
+
+---
+
+## DONE — 🟢 ROUTINE: 예약대여현황(/cms/reservation·/cms/rentals) 툴바 미세조정 3건 (2026-08-20) — ✅ 완료
+
+Stephen이 <launch-selected-element>로 순차 지시한 3건, 두 화면(예약현황·대여현황) 동일 적용:
+
+1. **페이지 부제 텍스트 제거** — `<p class="page-sub">...</p>`(예약현황: "신청 → 계약 → 승인
+   파이프라인을 관리합니다.", 대여현황: "계약완료 이후 대여 라이프사이클을 관리합니다.")
+   마크업과, 더 이상 쓰이지 않게 된 `.page-sub` CSS 규칙을 두 파일 모두에서 제거.
+2. **툴바 검색행↔필터행 여백 2배** — `.toolbar { gap: 12px }` → `gap: 24px`(두 파일 동일 적용).
+
+수정 파일: `src/routes/cms/rentals/+page.svelte`, `src/routes/cms/reservation/+page.svelte`
+(각 화면 요청 시점 사이에 순수 CSS/마크업 조정만 있었고 로직 변경 없음).
+
+검증: svelte-check 신규 ERROR 0건(기존 무관 에러 1건만 잔존). DB 변경 없음.
+git commit: Stephen 직접 실행 필요.
+
+---
+
+## DONE — 🟢 ROUTINE: 상태 표시 라벨 '승인완료' → '계약완료' 전역 개명 (2026-08-20) — ✅ 완료
+
+Stephen 요청: CMS 예약대여현황(/cms/reservation·/cms/rentals)·채팅(/cms/chat) 대화카드·RPC
+프로세스 전역에서 `confirmed` 상태의 표시 라벨 '승인완료'를 '계약완료'로 안전하게 전역 수정.
+
+**사전 조사(Explore 에이전트)로 안전성 확인 후 진행:**
+  - '승인완료'는 어디서도 조건 비교(`===`) 대상으로 쓰이지 않고 전부 `STATUS_LABEL`류 딕셔너리
+    값 또는 순수 표시 텍스트 — 로직 위험 없음을 코드 재확인.
+  - '승인하기'(관리자 승인 버튼 텍스트)와 완전히 다른 별개 문자열 — 겹침 없음 확인.
+  - `supabase/migrations/`에는 '승인완료' 문자열이 **0건** — RPC/SQL은 애초에 변경 대상이
+    아니었음. 고객에게 가는 채팅·푸시 알림(`reservation_approval` notify_type)은 이미
+    "{상품명} 예약이 승인되었습니다"/"예약이 승인됐어요"라는 별개 문구를 쓰고 있어 이번
+    라벨 개명과 무관 — 그대로 유지(요청되지 않은 문구까지 임의로 바꾸지 않음).
+
+**수정 파일(10개, 전부 `STATUS_LABEL`/`STATUS_KO` 딕셔너리 값 또는 마크업 텍스트/주석)**
+  - src/lib/components/common/RentalJourneyStepper.svelte
+  - src/lib/components/chat/CustomerDetailPanel.svelte (상담채팅 고객 상세 패널 — "채팅 대화카드" 요구사항 대응)
+  - src/lib/components/cms/RentalDetailPanel.svelte
+  - src/lib/components/cms/dashboard/CmsDashboardGantt.svelte
+  - src/lib/components/account/PcRentalPanel.svelte
+  - src/routes/account/rental/+page.svelte
+  - src/routes/cms/mobile/qr/[product_id]/+page.svelte
+  - src/routes/cms/mobile/rentals/+page.svelte
+  - src/routes/cms/rentals/+page.svelte(+page.server.ts 주석 포함) — 필터칩 라벨·상태 라벨·
+    페이지 부제("계약완료 이후 대여 라이프사이클을 관리합니다.") 전부 반영
+  - src/routes/cms/reservation/+page.svelte
+
+문서 동기화: `.claude/rules/rental-lifecycle.md`·`.claude/rules/service-operations.md`·
+`.claude/rules-ref/reservation-rental-execution.md`도 함께 갱신(최신 UI와 문서 불일치 방지).
+`.claude/harness/TASK.md`·`GSD_LOG.md`(과거 작업 이력 기록) 및 `.claude/worktrees/` 하위
+스테일 워크트리 사본은 의도적으로 손대지 않음(요청범위 외 — 이력 기록·비활성 사본).
+
+검증: `grep -rn "승인완료" src/` 0건 확인. svelte-check 신규 ERROR 0건(기존 무관 에러 1건만
+잔존), vite build 전체 성공. DB 변경 없음(SQL에 애초에 이 문자열이 없었으므로 마이그레이션
+불필요).
+
+git commit: Stephen 직접 실행 필요.
+
+---
+
+## DONE — 🔴 CRITICAL: 예약현황(/cms/reservation) '계약대기' 필터칩 + '계약발송' 상태 배지 신설 (2026-08-20) — ✅ 완료
+
+Stephen이 <launch-selected-element>로 '신청대기' 필터칩을 선택해 우측에 '계약대기' 칩 신설
+요청. 요구 2항목: ①계약 발행·발송됐으나 전자서명 미확인(미등록)인 카드목록 정렬(필터)
+②카드목록 상태값 노출용 '계약발송' 배지 추가(계약 발행 값 감지 기준).
+
+CRITICAL 판단 근거: '계약대기'는 `rr.status`가 아니라 **계약 서명 상태**(발송됨+미서명)를
+기준으로 거르는 완전히 다른 차원의 조건이라, 정확한 페이지네이션/총건수를 보장하려면
+`get_rental_list` RPC 자체에 새 필터 파라미터가 필요 — DB 마이그레이션(Stage→Production)이
+불가피해 진행 전 Stephen에게 방식(RPC 확장 vs 클라이언트측 근사 필터) 확인 후 "RPC에 신규
+파라미터 추가(정확한 구현)"로 승인받고 진행.
+
+**[1] Migration 314 — get_rental_list에 p_require_contract_sent_unsigned 파라미터 추가**
+  - `supabase/migrations/20260820030000_314_get_rental_list_contract_pending_filter.sql`
+  - WHERE 절에 `AND (p_require_contract_sent_unsigned IS NOT TRUE OR (cs.sent_at IS NOT NULL
+    AND cs.signed_at IS NULL))` 추가. 그 외 컬럼·JOIN(Migration 313의 LATERAL dedupe 포함)·
+    정렬·페이지네이션은 100% 동일 유지.
+  - ⚠️ 파라미터 개수가 8→9개로 바뀌므로 `CREATE OR REPLACE`가 아니라 `DROP FUNCTION IF EXISTS`
+    + `CREATE FUNCTION`을 사용 — 그렇지 않으면 PostgreSQL이 이를 별도 오버로드로 인식해
+    PostgREST가 named-parameter 호출 시 어느 쪽을 쓸지 모호해지는 PGRST203 에러가
+    재발한다(products.md `generate_product_code` 사례와 동일 원인, Migration 284가 이미
+    컬럼 추가 시 썼던 DROP+CREATE 패턴을 파라미터 추가에도 동일 적용).
+  - Stage(ezyvffjvuwmtuhpxdjrw) 적용 → 기존 8-param named 호출(`/cms/rentals`,
+    `/cms/reservation` 기존 경로) 및 신규 9-param 호출 둘 다 에러 없이 동작 확인
+    → Production(vnbpmvxruyciuuaermyh) 적용 완료, 동일 검증.
+
+**[2] 프런트 반영 — src/routes/cms/reservation/**
+  - `+page.server.ts`: `contract_pending=1` URL 파라미터 파싱 → RPC에
+    `p_require_contract_sent_unsigned` 로 전달, `data.contractPending`으로 노출.
+  - `+page.svelte`:
+    - `STATUS_FILTERS`에 `{ label: '계약대기', value: 'hold', contractPending: true }` 추가
+      (실제 rr.status는 '신청대기'와 동일하게 'hold' — contractPending 플래그로만 구분).
+      배열에 `contractPending?: boolean` 선택적 필드가 섞여 있어 유니온 타입 프로퍼티 접근
+      에러를 피하기 위해 명시적 타입 어노테이션 추가.
+    - `setStatus(val, contractPending)` — 두 번째 인자로 contract_pending 파라미터 세팅/해제.
+    - `applyFilters()` — 검색·날짜 필터 적용 시에도 `data.contractPending` 유지.
+    - chip-active 판정을 `(data.status ?? '') === f.value && !!data.contractPending ===
+      !!f.contractPending`로 확장 — '신청대기'/'계약대기' 둘 다 value가 'hold'라 status만
+      비교하면 두 칩이 동시에 active로 보이는 문제를 방지.
+    - 목록 "상태" 컬럼에 기존 '결제완료' 배지(`row.status==='hold' && row.payment_confirmed_at`)
+      패턴을 그대로 재사용해 '계약발송' 배지 추가 — 조건 `row.status==='hold' &&
+      row.signing_sent_at`(계약 발송 여부 감지, 서명 완료 여부와 무관하게 노출). 배지 색상은
+      기존 "계약" 컬럼의 발송중 배지(`.contract-sent`)와 동일한 info 톤(`rgba(14,165,233,0.12)`
+      / `var(--cs-info)`)으로 통일.
+
+검증: svelte-check 신규 ERROR 0건(기존 무관 에러 1건만 잔존). Stage/Production 둘 다 RPC
+호출 성공 확인(현재 두 DB 모두 status='hold' 예약 자체가 0건이라 실데이터 매칭 결과는
+미확인 — 로직 자체는 SQL 직접 호출로 검증 완료).
+
+git commit: Stephen 직접 실행 필요.
+
+---
+
+## NOW — 프론트 초기화면(/) UI 레이아웃별 CMS 관리기능 신설 (2026-08-20) — ⛔ GATE B 대기
+
+생성일: 2026-08-20
+아젠다: 홈페이지(/) 5개 섹션(히어로배너·테마그룹슬라이드·카테고리상품슬라이드·크레이지로그·헬프)의
+CMS 관리기능을 신설. Stephen 확정 설계결정 5개(위 CONTEXT BRIDGE 참고) 반영, 4개 Phase로 분해
+(하네스 GATE 등급 + DB 스키마 변경 리스크 기준: 마이그레이션 없음 → 테이블 확장 → 신규테이블 →
+설정키 추가). 플랜 원문: `/Users/stevenmac/.claude/plans/ui-shimmying-dongarra.md`.
+
+### Phase 1 — 🟢 ROUTINE/🟡 BOUNDARY: 크레이지로그·헬프 동기화 (마이그레이션 없음, 선행 실행)
+
+- [x] 1-A. 크레이지로그 미리보기 동기화 | GSD | 완료기준: `get_crazylog_banner_settings()` +
+  `get_crazylog_posts_by_ids()` 재사용해 slot1/2/3 전체 풀링·id중복제거 후 각 slot의 mode(random/
+  fixed) 적용 — 데스크탑 blog-grid 3개(메인1+서브2)·모바일 BLOG_M 5개가 `+page.server.ts`의
+  `crazylogPosts`로 실제 렌더링되고, `data.isCms`일 때 "✦ 크레이지로그 설정" 링크가 `/crazylog`로
+  이동한다(신규 RPC 없음, `ARTICLES`는 범위 밖 유지) | 예상: 25분
+- [x] 1-B. 헬프 동기화 | GSD | 완료기준: `canned_responses` order by usage_count desc, title
+  `.limit(5)` 쿼리로 `topFaqs`를 반환해 FAQ_DESKTOP/FAQ_MOBILE 하드코딩을 공통 대체하고,
+  `.faq-brand-box` 배경이 `/help`의 `help_hero_bg_images` 설정값과 동일하게 채워지며, `data.isCms`일
+  때 "✦ 헬프 설정" 링크가 `/help`로 이동한다 | 예상: 20분
+- [x] 1-C. Phase 1 검증 | GSD | 완료기준: `npm run check` 신규 ERROR 0건, 로컬 dev 서버 `/`에서
+  크레이지로그·FAQ 섹션이 실제 DB 데이터로 렌더링됨을 확인 | 예상: 10분
+
+  ✅ Phase 1 완료 (2026-08-20)
+  수정 파일: src/routes/+page.server.ts · src/routes/+page.svelte
+  - +page.server.ts: get_crazylog_banner_settings + get_crazylog_posts_by_ids RPC 호출 추가 → crazylogPosts 반환,
+    canned_responses 상위5 쿼리 → topFaqs 반환, help_hero_bg_images 조회 → faqHeroBgUrl 반환
+  - +page.svelte: BLOG_M / FAQ_DESKTOP / FAQ_MOBILE 하드코딩 상수 제거 → data.crazylogPosts / data.topFaqs 교체,
+    faq-brand-box / m-faq-brand 배경을 data.faqHeroBgUrl로 동기화, isCms 시 "✦ 크레이지로그 설정"→/crazylog /
+    "✦ 헬프 설정"→/help 링크 버튼 추가, .cms-section-link CSS 클래스 신설
+  - npm run check 결과: 1 ERROR (vite.config.ts:10 "test property" — 기존 커밋에 이미 존재하는 pre-existing,
+    이 작업과 무관) / 신규 ERROR 0건
+
+### Phase 2 — 🔴 CRITICAL: 히어로 배너 재구축 (banners 테이블 확장 + 캐러셀)
+
+- [x] 2-A. DB 마이그레이션 작성·stage 적용 | GSD | 완료기준: `banners.sub_copy` 컬럼 추가 +
+  `cms_create_banner`(p_sub_copy 포함 DROP 후 재생성) + 신규 `cms_update_banner` RPC + 신규
+  cms_settings 키 `home_hero_banner_settings`(pc_mode/mobile_mode) 화이트리스트·RLS 정책까지 담은
+  마이그레이션이 stage(ezyvffjvuwmtuhpxdjrw)에 적용되고, 등록/수정/삭제/슬롯당 최대10 차단이 직접
+  호출로 정상 동작한다 | 예상: 25분
+
+  ✅ 2026-08-20 파일 작성 완료 (stage/production 적용은 2-D에서 별도 수행)
+  생성 파일: supabase/migrations/20260820070000_318_home_hero_banner_sub_copy_and_settings.sql
+  내용: banners.sub_copy TEXT 컬럼 추가, cms_create_banner 8-param→9-param 재생성(MAX-10 가드 포함),
+  cms_update_banner 신규 RPC, upsert_product_page_setting 화이트리스트 + cms_settings RLS 갱신
+
+- [x] 2-B. HomeBannerModal.svelte 전면 재작성 | GSD | 완료기준: §0-A 12개 표준요소(우측슬라이드패널·
+  CmsDragList PC/Mobile 각 섹션 배너행 재정렬·Storage업로드 API라우트+서비스롤·슬롯당 최대10 도달시
+  추가버튼 비활성·cms-field 3종 입력(헤더카피/서브카피/링크)·`heroBannerRowsRaw` 전체행 원본 전달)
+  전부 적용된 모달로 배너 등록·수정·삭제·재정렬이 정상 동작한다 | 예상: 25분
+
+  ✅ 2026-08-20 완료
+  수정 파일: src/lib/components/home/admin/HomeBannerModal.svelte (AdminModalShell 스텁 → 완전 구현)
+  생성 파일: src/routes/api/cms/home/hero-banner/+server.ts (업로드 API, service_role, bucket=product-images prefix=home/hero-banner)
+  §0-A 적용: 우측슬라이드패널(420px) + 다크헤더 + $effect prop동기화 + CmsDragList PC/Mobile 각각 +
+  배너행(thumb클릭업로드+_uploading상태+cms-field×3) + MAX-10 가드 + cms_delete/create/update_banner +
+  upsert_product_page_setting('home_hero_banner_settings') + invalidateAll()+onclose()
+
+- [x] 2-C. 홈페이지 캐러셀 렌더링 전환 | GSD | 완료기준: `+page.server.ts`가
+  `home_hero_banner_settings`+`heroBannerRowsRaw` 반환하고, `+page.svelte`의 히어로 섹션이 `{#each}`
+  전체나열 대신 인덱스 기반 단일슬라이드+자동전환(fixed=sort_order 순환/random=로드시 1회 셔플 후
+  순환)으로 동작하며 `sub_copy`가 화면에 실제 렌더링된다 | 예상: 20분
+
+  ✅ 2026-08-20 완료
+  수정 파일: src/routes/+page.server.ts, src/routes/+page.svelte
+  - +page.server.ts: BannerSlot에 sub_copy 추가, heroBannerRowsRaw(필터 없는 전체, hero_pc/hero_mobile) + heroBannerSettings(pc_mode/mobile_mode) 추가 반환
+  - +page.svelte: HomeBannerModal import, pcCarousel/mobileCarousel($state 셔플 포함) + pcIdx/mobileIdx($state) + $effect 4개(캐러셀초기화×2, 인터벌×2), {#each}→{@const b} 인덱스 단일슬라이드 전환, sub_copy 렌더링 추가(.d-hero-sub-copy/.m-hero-sub-copy), isCms시 "⚙ 배너 관리" 버튼, HomeBannerModal 조건부 마운트
+  - npm run check: 신규 ERROR 0건 (기존 pre-existing 2건 유지)
+- [x] 2-D. Phase 2 stage 검증 → production 적용 | GSD | 완료기준: stage에서 등록/수정/삭제/최대10
+  차단/캐러셀 전환(랜덤·고정 모드, PC·Mobile 각 슬롯 독립)을 전부 확인 후 Stephen 승인 받아
+  production(vnbpmvxruyciuuaermyh)에 동일 마이그레이션 적용, `npm run check` 통과 | 예상: 20분
+
+  ✅ 2026-08-20 stage 적용·검증 완료 (메인 세션, Supabase MCP)
+  - Migration 318(`20260820070000_318_home_hero_banner_sub_copy_and_settings.sql`) 적용 전
+    stage 실측으로 cms_create_banner 기존 시그니처(8-param)·banners 컬럼(deleted_at 포함)·
+    upsert_product_page_setting 화이트리스트·"cms_settings: public read display keys" 정책의
+    기존 키 목록이 마이그레이션 파일의 가정과 전부 일치함을 먼저 확인 후 적용(불일치 시
+    죽은 오버로드 잔존 위험 사전 차단)
+  - 적용 후 재조회: sub_copy 컬럼 생성 확인, cms_create_banner 9-param 오버로드 1개만 존재(죽은
+    8-param 오버로드 없음) 확인, cms_update_banner 신규 함수 정상 생성 확인
+  - get_advisors(security) 확인: cms_create_banner/cms_update_banner가 anon role에도
+    SECURITY DEFINER로 실행 가능하다는 경고 — 동일 패턴이 기존 cms_* RPC 10건에 이미 존재하는
+    프로젝트 전역 컨벤션(is_cms_user() 내부가드 방식)이라 회귀 아님, 별도 조치 불필요
+  - 부수 발견·수정: `HomeBannerModal.svelte` prop 인터페이스 변경(2-B)으로 `HomeAdminPanel.svelte`
+    (미사용 래퍼, 어디서도 import 안 됨)가 옛 `open` prop을 참조해 컴파일 에러 발생 →
+    `HomeAdminPanel.svelte`에서 `HomeBannerModal` 마운트 라인만 제거(HomeHighlightModal/
+    HomePickProductModal은 무변경 유지, 여전히 범위 밖)
+  - `npm run check`: 신규 ERROR 0건(기존 vite.config.ts vitest 설정 에러 1건만 pre-existing으로 유지)
+  - **production(vnbpmvxruyciuuaermyh) 적용 완료(2026-08-20)** — Stephen이 stage에서 등록/수정/
+    삭제/캐러셀 전환 직접 확인 후 승인. 적용 전 production 현재 상태(함수 시그니처·컬럼·RLS 정책
+    키 목록)가 stage와 완전히 동일함을 재확인 후 동일 마이그레이션 적용, 적용 후 sub_copy 컬럼·
+    cms_create_banner 9-param 오버로드 1개·cms_update_banner 신규 생성 재확인 완료.
+
+**GATE E: ✅ Phase 2 전체 완료 (stage+production 적용·검증 완료).**
+
+### Phase 3 — 🔴 CRITICAL: 테마그룹 상품 슬라이드 (PICK 써클 자리 대체, 신규 테이블)
+
+- [x] 3-A. `home_theme_groups` 신규 테이블 + RPC 4종 마이그레이션 파일 작성 | GSD | 완료기준:
+  테이블(title/sub_copy/image_url/product_ids JSONB/sort_order/is_active/deleted_at) + RLS 2종
+  (관리자 전체 FOR ALL / 공개 조회 FOR SELECT) + `cms_create/update/delete_theme_group`(그룹 최대10·
+  그룹당 상품 최대10 가드, soft delete) + `get_home_theme_groups_with_products()`(N+1 방지)가
+  stage에 적용되고 직접 호출로 CRUD가 정상 동작한다 | 예상: 25분
+
+  ✅ 2026-08-20 완료 (파일 작성만 — stage/production 적용은 3-D에서 메인 세션이 수행)
+  수정 파일: supabase/migrations/20260820110000_322_home_theme_groups.sql (신규)
+
+- [x] 3-B. HomeThemeGroupModal.svelte 신규 구현 | GSD | 완료기준: §0-A 적용(우측슬라이드패널·
+  SuggestPicker 상품검색(select 금지)·CmsDragList 이중사용(그룹 자체 재정렬 + 그룹선택시 아코디언
+  펼침 그룹전용 상품목록 재정렬)·Storage업로드(cms-assets 버킷, 대표이미지)·그룹/그룹당상품 각각
+  최대10 도달시 피커·추가버튼 숨김·cms-field(제목/서브카피)·`{#key activeGroupId}`로 그룹전환 시
+  로컬 $state 재마운트)로 그룹 등록·상품피커·재정렬이 정상 동작한다 | 예상: 25분
+
+  ✅ 2026-08-20 완료
+  수정 파일: src/lib/components/home/admin/HomeThemeGroupModal.svelte (신규)
+  - 우측슬라이드 패널(420px, #100b32 헤더) + backdrop
+  - CmsDragList 이중사용(그룹 재정렬 + 그룹 아코디언 내 상품 재정렬)
+  - SuggestPicker (search_products RPC, noFilter, 비동기 debounce 280ms)
+  - cms-assets 버킷 Storage 업로드(대표이미지)
+  - `{#key activeGroupId}` 로 그룹 전환 시 상품 피커 로컬 state 재마운트
+  - syncActiveBack() → activateGroup() 패턴으로 그룹 간 전환 시 상품목록 동기화
+  - MAX 10 가드(그룹/상품 각각)
+  - save(): 이미지업로드 → 삭제(origIds diff) → 생성/수정(RPC 경유) → invalidateAll()
+
+- [x] 3-C. 홈페이지 PICK 써클 섹션 완전 교체 | GSD | 완료기준: `PICKS_DESKTOP`/`PICKS_MOBILE`
+  하드코딩 배열이 제거되고 `data.themeGroups`(대표이미지+헤더/서브카피+상품슬라이드 카드)가 CSS
+  브레이크포인트로만 PC/Mobile 분기해 렌더링된다 | 예상: 20분
+
+  ✅ 2026-08-20 완료
+  수정 파일: src/routes/+page.server.ts, src/routes/+page.svelte
+  - +page.server.ts: get_home_theme_groups_with_products() 호출 추가(오류 무시, themeGroups 반환)
+  - +page.svelte: PICKS_DESKTOP/PICKS_MOBILE 배열 제거, d-pick-section → d-theme-section 교체,
+    m-pick-section(PACKAGES 포함) → m-theme-section 교체, HomeThemeGroupModal import + 조건부 마운트
+  - npm run check: 신규 ERROR 0건(pre-existing vite.config.ts 1건 유지)
+- [x] 3-D. Phase 3 stage 검증 → production 적용 | GSD | 완료기준: stage에서 그룹등록/상품피커/
+  최대10가드/PICK써클 완전대체를 확인 후 Stephen 승인 받아 production 적용, `npm run check` 통과
+  | 예상: 20분
+
+  ✅ 2026-08-21 stage 적용·검증 완료 (메인 세션, Supabase MCP)
+  - Migration 322(`20260820110000_322_home_theme_groups.sql`) 적용 전 products 테이블
+    실측(name/slug/image_urls/base_price_daily/deleted_at/is_active/parent_product_id 컬럼
+    존재)으로 RPC의 LATERAL JOIN 컬럼 참조가 실제 스키마와 일치함을 먼저 확인 후 적용
+  - 적용 후 `get_home_theme_groups_with_products()` 직접 호출로 정상 동작(빈 배열 `[]` 반환,
+    에러 없음) + RPC 4종(cms_create/update/delete_theme_group, get_home_theme_groups_with_products)
+    전부 생성 확인
+  - 코드 리뷰: HomeThemeGroupModal이 §0-A #12(초기값 raw 분리) 대신 표시용 `data.themeGroups`
+    (상품 join 완료본)를 그대로 전달받으나, 저장 시 `productItems.map((p,order)=>({id,order}))`로
+    필요한 필드만 재추출해 저장하므로 실기능 버그 없음(오히려 상품명·썸네일을 추가조회 없이 모달에
+    바로 표시 가능한 이점) — 설계 편차이나 허용
+  - `npm run check`: 신규 ERROR 0건(기존 vite.config.ts 1건만 pre-existing 유지)
+  - **production(vnbpmvxruyciuuaermyh) 적용 완료(2026-08-21)** — Stephen이 stage에서 그룹등록/
+    상품피커/PICK써클 완전대체 직접 확인 후 승인. 적용 전 production 현재 상태(products 테이블
+    컬럼 8종 존재, home_theme_groups 테이블 미존재로 충돌 없음) 재확인 후 동일 마이그레이션 적용,
+    적용 후 `get_home_theme_groups_with_products()` 직접 호출로 빈 배열 정상 반환 재확인 완료.
+
+**GATE E: ✅ Phase 3 전체 완료 (stage+production 적용·검증 완료).**
+
+---
+
+#### Phase 3 후속 — UI 정합성 수정 8건 (2026-08-21, 같은 세션 내 Stephen 실화면 검수 피드백 반영)
+
+Phase 3 완료 후 Stephen이 실제 로컬 화면에서 여러 차례 `<launch-selected-element>`로 요소를
+직접 지목하며 발견한 정합성 문제를 그 자리에서 순차 수정. DB 마이그레이션 없음(전부 코드
+레벨 수정), 매 수정 후 `npm run check` 신규 ERROR 0건 확인. **이번 세션에서만 발생한 작업이며
+다른 세션이 동시에 건드린 무관한 파일(구독/예약현황 필터 등)은 포함하지 않음.**
+
+1. **HL_CARDS(하이라이트 카드 4개) 완전 제거** — 테마그룹과 전혀 데이터 연결이 없는 순수
+   하드코딩임을 Stephen과 함께 재확인 후 배열·마크업·전용 CSS 전부 삭제(`src/routes/+page.svelte`).
+2. **홈페이지 카테고리 탭이 `product_page_categories` 설정을 실제로 반영 안 하던 버그 수정** —
+   Phase 4가 저장 경로만 연결하고 표시 필터링 로직을 빠뜨렸던 것 발견. `/products`의
+   `displayCats` 패턴을 그대로 이식해 `CATEGORY_TABS`가 저장된 항목만 sort_order 순으로
+   필터링하도록 수정(`src/routes/+page.svelte`).
+3. **테마 대표이미지를 원형 아바타로 통일** — 관리모달(`HomeThemeGroupModal.svelte`) 등록
+   썸네일과 공개화면 카드 둘 다 원형(`border-radius:50%`)으로 일치, 관리모달 초기 스텁의
+   둥근사각(15px) 썸네일도 원형으로 수정.
+4. **테마그룹 상품슬라이드 전면 재설계** — 42px 소형 썸네일(이름·가격 없음) 방식을 폐기하고
+   "미칠 PICK"과 동일한 표준 상품카드(`prod-card`/`m-prod-card`, Figma node 600:862)를
+   그대로 재사용. `src/routes/+page.server.ts`에 `price_rules`(12h/24h) 조회를 신규 추가해
+   Day/12H 이중가격을 표준카드에 공급(이 표준카드를 공유하는 "미칠 PICK"에도 함께 적용됨).
+   샘플 더미도 동일 표준카드 디자인으로 교체.
+5. **PC "취향직격 PICK" 헤더 레이아웃을 Figma 실제 시안(node 2072:5988, 2072:5953)대로
+   전면 재구성** — 제목/부제(좌) + 원형 테마탭(우) 가로 배치로 변경(기존엔 테마마다 세로로
+   반복 쌓는 구조였음). 원형탭 클릭 시 그 테마의 상품만 아래 공유 슬라이드 1개에 표시(테마별
+   개별 슬라이드 반복 아님). 테마 4개 이상 시 3개만 노출 + 좌우 슬라이드 화살표. 원형 크기
+   220→180px, 이름/부제 폰트·색상 시안값 정확히 반영, 하단 화살표를 프로젝트 표준
+   `ChevronIcon`에서 Figma 실제 벡터(Polygon6, 채워진 삼각형, `#3B2F8A`)로 교체(다운로드해
+   원본 path 그대로 반영 + rotate(180deg)).
+6. **관리자 게이팅 버튼 위치 통일** — `/products`의 `admin-edit-btn`/`admin-float-btn` 패턴
+   그대로(섹션 우상단 코너 절대배치, 진한 남색 반투명+흰글씨)로 히어로/테마그룹/카테고리
+   버튼 전부 통일. 히어로 버튼이 GNB(고정헤더, 100px)에 가려지던 것도 `top` 값 보정으로 해결.
+   모바일에 중복 노출되던 관리 버튼 3개 제거(관리자 게이팅은 PC 전용 노출 원칙 확인).
+7. **상품/테마 카드 hover 효과 교체** — 카드 전체가 `translateY`로 튀어올라 슬라이드 컨테이너
+   경계에 잘려 보이던 문제를 해결: 카드 위치는 고정하고 내부 이미지만 hover 시 25% 확대되도록
+   변경(`prod-card-img`/`theme-hl-card-img`에 `transition:transform 0.4s ease` + `scale(1.25)`).
+8. 선택 지목 SVG 아이콘 1건 단순 교체(취향직격 타이틀 옆 장식 아이콘).
+
+영향 파일: `src/routes/+page.svelte`(다수 수정), `src/routes/+page.server.ts`(price_rules 조회
+추가), `src/lib/components/home/admin/HomeThemeGroupModal.svelte`(원형 썸네일).
+검증: 매 수정 직후 `npm run check` 신규 ERROR/WARNING 0건 확인(기존 vite.config.ts 1건만
+pre-existing 유지). 실화면 검증은 Stephen이 로컬 dev 서버에서 직접 진행.
+미완료: git commit(Stephen 직접 실행 필요), production 반영은 이 UI 수정건들이 코드 배포로
+나갈 때 자연히 포함됨(별도 DB 마이그레이션 없음).
+
+### Phase 4 — 🟡 BOUNDARY: 카테고리+상품 슬라이드 (기존 카테고리 설정 공유, 신규 테이블 없음)
+
+- [x] 4-A. `home_category_products` cms_settings 키 마이그레이션·stage 적용 | GSD | 완료기준:
+  `{items:[{category_id, products:[{id,order}], mode}]}` 구조의 신규 키가 `upsert_product_page_
+  setting` 화이트리스트+RLS("cms_settings: public read display keys")에 추가되고 stage에서 저장/
+  조회가 직접 호출로 정상 동작한다. `product_page_categories`는 신규 키 없이 `/products`와 완전
+  공유(변경 없음) | 예상: 15분 | ✅ 2026-08-21 완료: `supabase/migrations/20260821020000_325_home_category_products_page_setting.sql` 생성(파일만, stage/production 적용은 4-D)
+- [x] 4-B. HomeCategoryProductsModal.svelte 신규 구현(ProductHeroModal 구조 복제) | GSD | 완료기준:
+  §0-A 적용(우측슬라이드패널·SuggestPicker 상품검색·CmsDragList 재정렬·카테고리당 상품 최대10 도달시
+  피커 숨김·`(supabase.rpc as any)` read-modify-write 패턴·모달에는 원본 `home_category_products`
+  설정값만 전달)으로 카테고리별 상품 등록·재정렬이 정상 동작하고, `ProductCategoryModal.svelte`는
+  무수정으로 홈페이지에도 그대로 마운트된다 | 예상: 25분 | ✅ 2026-08-21 완료: `src/lib/components/home/admin/HomeCategoryProductsModal.svelte` 신규 생성
+- [x] 4-C. 홈페이지 카테고리 탭 슬라이더 교체 | GSD | 완료기준: `+page.server.ts`가
+  `home_category_products`(raw, 편집용) 와 `get_products_by_ids`로 조회한 `categoryProducts`(표시용,
+  mode 적용된 순서) 둘 다 반환하고, 카테고리 탭 슬라이더가 `data.categoryProducts[activeTab]` 기준
+  으로 렌더링되며 큐레이션 안 된 카테고리는 섹션 자체가 숨겨진다 | 예상: 20분 | ✅ 2026-08-21 완료: `+page.server.ts` + `+page.svelte` 수정, `npm run check` 통과(pre-existing vite.config.ts 에러 1건 제외)
+- [x] 4-D. Phase 4 stage 검증 → production 적용 | GSD | 완료기준: 카테고리 탭 전환 시 큐레이션된
+  상품만 노출되는지, `/products`에서 카테고리 설정 변경 시 홈페이지도 동기화되는지 확인 후 Stephen
+  승인 받아 production 적용, `npm run check` 통과 | 예상: 20분
+
+  ✅ 2026-08-21 stage 적용·검증 완료 (메인 세션, Supabase MCP)
+  - Migration 325(`20260821020000_325_home_category_products_page_setting.sql`) 적용 전
+    stage 실측으로 upsert_product_page_setting 화이트리스트·public read 정책의 현재 키 목록이
+    마이그레이션 파일 가정과 일치함을 확인 후 적용, 적용 후 재조회로 신규 키 반영 확인
+  - `get_products_by_ids` RPC 파라미터명(`p_ids`)이 `/products`·`/hype-pack` 기존 호출부와
+    일치함을 grep으로 교차확인
+  - `npm run check`: 신규 ERROR 0건
+
+  ✅ **후속 수정으로 완전 해소(2026-08-21, Phase 3 후속 #2)**: 위에 기록됐던 "카테고리 탭 목록
+  자체는 product_page_categories를 반영하지 않는다"는 범위 제한은, Stephen이 실화면에서 직접
+  발견해 지적한 후 같은 세션에서 수정 완료됐다 — `CATEGORY_TABS`가 `/products`의 `displayCats`
+  패턴을 그대로 이식해 저장된 설정만 sort_order순으로 필터링하도록 변경(`src/routes/+page.svelte`).
+  이제 "상품 큐레이션"과 "카테고리 탭 목록" 둘 다 `/products`와 완전 동기화된다. 상세는 하단
+  "Phase 3 후속 — UI 정합성 수정 8건" 블록 #2 참고.
+
+  ✅ **production(vnbpmvxruyciuuaermyh) 적용 완료(2026-08-21)** — Stephen 승인 후 적용 전 production
+  현재 상태(화이트리스트·RLS 정책 키 목록)가 stage와 동일함을 재확인 후 동일 마이그레이션 적용,
+  적용 후 재조회로 `home_category_products` 키 반영 확인 완료.
+
+**GATE E: ✅ Phase 4 전체 완료 (stage+production 적용·검증 완료, sp3-qa-agent 검수 통과).**
+
+### 최종 검수
+
+- [x] GATE C 종합 확인 | GSD | 완료기준: §0-A 12개 표준요소 체크리스트(관리자게이팅/우측슬라이드
+  패널/SuggestPicker/CmsDragList/Storage업로드/목록+최대치제한/RPC패턴/cms-field/편집초기값오염
+  방지) 전부 확인, `npm run check` 신규 ERROR 0건, GATE E(sp3-qa-agent) 통과 | 예상: 15분
+
+  ✅ 2026-08-21 sp3-qa-agent 검수 완료 — 코드 정합성(신규 ERROR 0건)·§0-A 12요소(기능적으로
+  3개 모달 전부 준수, `cms-field` 표준 44px 대신 각자 32~40px 커스텀 입력창 사용은 경미한 편차로
+  기록)·Phase 3 후속 8건 전항목 실반영 확인·데이터 흐름(price_rules 이중가격 후처리)·요구범위
+  준수 전부 통과. 검수 중 Phase 4-D의 production 미적용 상태를 발견해 Stephen 승인 받아 즉시
+  해소(위 참고). 부가로 경미한 기술부채 3건 발견 → BACKLOG 이관(아래).
+
+## BACKLOG — 확정되지 않은 세부 가정 (실행 중 Stephen 확인 필요, 블로킹 아님)
+- [sp3-qa-agent 발견, 2026-08-21] 3개 신규 관리모달의 입력창이 §0-A 표준 `cms-field`(44px
+  min-height)를 그대로 쓰지 않고 각자 로컬 커스텀 클래스(32~40px)로 재정의됨 — 밀도 높은 행
+  레이아웃을 위한 의도적 선택으로 보이나 엄밀한 표준 재사용은 아님(기능 문제 없음, 저위험)
+- [sp3-qa-agent 발견, 2026-08-21] `HomeCategoryProductsModal.svelte`의 상품검색 결과 매핑이
+  `search_products` RPC에 없는 필드(`image_urls`, 실제는 `image_url` 단수)를 참조해 항상 null로
+  귀결되는 죽은 필드 참조 — 화면에 렌더링되지 않아 실사용 영향 없음
+- [sp3-qa-agent 발견, 2026-08-21] PICK써클→테마그룹 대체 과정에서 남은 죽은 코드: `PACKAGES`
+  배열·`pkgIdx`/`pkgSliderEl`/`onPkgScroll`(JS), `.m-pkg-*` CSS 8개 셀렉터(`src/routes/+page.svelte`)
+  — `npm run check` WARNING으로 실제 검출됨, 기능 영향 없으나 정리 권장
+- 크레이지로그 슬롯 병합 방식: slot1+2+3 전체 풀링 후 중복제거로 가정 — 실제 화면 확인 후 Stephen
+  피드백 있으면 조정
+- FAQ 데스크탑/모바일 통합: 서로 다른 하드코딩 세트를 하나의 상위5(usage_count 전역 기준)로 통합
+  가정 — 데스크탑/모바일에 서로 다른 기준이 필요하면 별도 조정
+- help_hero_bg_images 재사용 해석: `.faq-brand-box` 배경이미지로 문자 그대로 재사용 가정 — 다른
+  위치/용도 재사용을 원하면 별도 조정
+- 카테고리 슬라이드 빈 상태: 큐레이션 안 된 카테고리는 섹션을 숨김 처리(대체쿼리 없음) 가정 —
+  폴백 UI가 필요하면 별도 조정
+- 홈페이지 카테고리 "탭 목록"(어떤 카테고리가 노출되는지·순서·아이콘) 자체는 아직
+  `product_page_categories` 설정을 반영하지 않음(Phase 4, 2026-08-21) — 상품 큐레이션은
+  100% 동기화됐으나 탭 목록은 여전히 `code_mapping_groups` 전체 노출 유지. 탭 목록까지
+  완전 동기화하려면 `+page.server.ts`의 categories 조회 로직을 `product_page_categories`
+  필터/정렬 반영하도록 별도 후속 작업 필요(의도적으로 범위 보수적 제한, 버그 아님)
+
+---
+
+## NOW — 🔴 CRITICAL: 장바구니 수령·반납 시간 24시간 확장 + '영업외시간' 무인보관함
+안내 시스템 (2026-08-20, 재개) — ✅ GATE B 승인 완료(별도 Claude Plan 세션에서 Q1~Q8
+전량 답변 완료 — `/Users/stevenmac/.claude/plans/elegant-scribbling-pelican.md`, Stephen이
+이 세션에 "개발 실행" 명령으로 최종 승인). 실행 이관.
+
+> 이전 CANCELLED 항목(구 Q1~Q7, pg_cron/pg_net 기반 설계)은 이 블록으로 완전히 대체됨 —
+> 새 플랜은 pg_net 미사용 확인 후 기존 `subscription-billing` Vercel Cron 선례를 재사용하는
+> 구조로 아키텍처를 변경, DB→외부HTTP 구조적 한계(service-operations.md §15)를 회피함.
+
+생성일: 2026-08-20 (재개)
+아젠다: `/cart` 수령(반납)시간 선택 UI를 24시간 전체로 확장. 09:00~22:00=방문배송 정상영업,
+23:00~08:00=영업외시간으로 규정. 방문대여(visit) 선택 + 영업외시간 조합 시 무인보관함(락커)
+인계로 **부분 반영**(DB `pickup_method`/`return_method`는 'visit' 그대로 유지 — 채택 Q2).
+CMS `RentalDetailPanel`에 예약별 무인보관함 비밀번호 입력(manager 이상), 수령/반납 1시간 전
+Vercel Cron이 채팅카드+알리고 SMS 동시발송.
+
+### 확정 답변 요약 (elegant-scribbling-pelican.md 원문 — 전부 반영, 재질문 금지)
+```
+① pickup_method/return_method DB 값 — 'visit' 그대로 유지(전환 안 함, 부분반영 오버레이)
+② red-10 = --cs-chat-in-bg(#FFCFCF) / red-100 = --cs-red(#CF0000)
+③ 비밀번호 평문 저장 승인(채팅/SMS 원문 재발송 불가피)
+④ 비밀번호 스코프 — 예약 1건마다 별도 값, RentalDetailPanel 대여정보 탭 입력
+⑤ CMS 권한 — manager 이상만 입력·저장
+⑥ 자동발송 조건 — "방문대여 + 영업외시간" 조합일 때만
+⑦ SMS 수신번호 — user_profiles.phone
+⑧ 발송 인프라 — pg_cron 직접 HTTP 불가(pg_net 미사용 확인) → Vercel Cron
+  (subscription-billing 패턴 재사용) + CRON_SECRET Bearer 인증
+```
+
+### ⚠️ 착수 전 필수 재확인
+`src/routes/cart/+page.svelte`가 uncommitted 상태로 09:00~22:00까지만 이미 반영돼 있음(직접
+diff 확인 완료, 2026-08-20) — 되돌리지 않고 그 위에서 24시간 전체로 이어서 확장.
+
+### 1단계 — 🟡 BOUNDARY: 시간선택 UI 24시간 확장 + 영업시간/영업외시간 판정 유틸
+
+- [x] 1-A. `TIME_AM_HOURS`/`TIME_PM_HOURS`(183~185행) 0~23시 전체로 확장(AM=[0..11],
+  PM=[12..23]) | GSD | 예상 15분
+- [x] 1-B. `isLockerHour(t: string): boolean` 신설 — `$lib/utils/lockerTimeRange.ts` 공유
+  유틸로 분리(CMS RentalDetailPanel과 동일 로직 재사용, 드리프트 방지) — `"HH:MM"` 시(hour)가
+  23 또는 0~8이면 true(23:00~08:59, 09:00 정각부터 방문배송 정상시간) | GSD | 예상 10분
+- [x] 1-C. `.time-row`에 `time-row-locker`/`time-row-locker-sel` 변형 클래스 추가 —
+  기본배경 `var(--cs-chat-in-bg)`(옅은 배경, 클릭 전에도 구간 시각적 구분), 선택 시
+  `border: 2px solid var(--cs-red)` 강조(순수 배경만으론 선택여부 구분 약함) | GSD | 예상 15분
+
+  ✅ 1단계 완료 (2026-08-20) — 수정 파일: `src/routes/cart/+page.svelte`,
+  `src/lib/utils/lockerTimeRange.ts`(신규)
+
+### 2단계 — 🟡 BOUNDARY: 방문대여+영업외시간 조합 안내 문구
+
+- [x] 2-A. `RentalForm` 스니펫(1333행~) 내부 `{@const isLockerCombo = props.method ===
+  'visit' && isLockerHour(props.selectedTime)}` 파생 + 기존 `.form-note` 스타일 재사용해
+  조건부 렌더링: "선택한 방문대여(반납) 시간은 고객센터 '무인보관함' 이용만 가능하며 1시간
+  전 비밀번호를 채팅서비스로 발송해 드립니다." (문구 내 시간은 실제 발송타이밍인 "1시간
+  전"으로 통일 — pickup/return 컨텍스트별 "방문대여"/"방문반납" 자연스럽게 치환, 색상
+  `var(--cs-red)`) | GSD | 예상 15분
+
+  ✅ 2단계 완료 (2026-08-20) — 수정 파일: `src/routes/cart/+page.svelte`
+
+### 사후 추가 보완 — Stephen 라이브 브라우저 피드백 라운드 (2026-08-20, 1·2단계 대상)
+
+> Claude Browser `<launch-selected-element>`로 실제 화면 요소를 직접 선택해 지시받은 4건 —
+> CLAUDE.md 조건부 허용 ②(Stephen 명시 요구) 범위 내에서 즉시 반영. 전부 순수 프론트
+> 스타일·조건부 렌더링 변경(DB·RPC 무관) — 🟢 ROUTINE 등급, GATE B 불필요.
+
+- [x] 무인시간대 버튼 배경색 1차 수정: `--cs-chat-in-bg` → `#FFEAEA`(red-5)로 변경(cart
+  전용 하드코딩) 후, 기존 `--cs-red-xlight` 전역 토큰(app.css, 기존 값 `#FFE7E7` "red-5%")과
+  근접 중복임을 발견해 Stephen에게 통일 여부 확인
+- [x] Stephen 확정: 전역 토큰 통일 — `--cs-red-xlight` 값을 `#FFEAEA`로 교체(app.css),
+  cart 시간버튼은 다시 `var(--cs-red-xlight)` 참조로 되돌림(하드코딩 제거, 다른 사용처
+  `CrazylogWriteCard.svelte`도 함께 갱신됨 — 부작용 인지·승인됨)
+- [x] 무인시간대 버튼 hover 색상 → `var(--cs-chat-in-bg)`(red-10, `#FFCFCF`)로 변경 +
+  선택(`.time-row-locker-sel`) 시 `border: 2px solid var(--cs-red)` 아웃라인 제거(배경·
+  텍스트 색상만으로 선택 상태 표시)
+- [x] `RentalForm` 하단 안내문구 상호배타 처리: 무인보관함 조건(방문대여+영업외시간) 충족
+  시 `.form-note-locker`만 노출(기존 `addrNote`와 동시 노출되던 것을 배타적으로 변경,
+  `{:else if}`), 일반 `addrNote`("대여 시작일은...2일 전" 등)는 `props.method ===
+  'crazydelivery'`(크레이지샷배송 대여) 선택 시에만 노출되도록 조건 추가 — 그 외 수령방식
+  (퀵서비스·택배 등)에서는 두 안내문구 모두 미노출
+
+  수정 파일: `src/app.css`, `src/routes/cart/+page.svelte`
+  검증: `npx svelte-check` — 신규 ERROR 0건(cart 파일 대상 확인, 기존 무관 경고만 잔존)
+
+### 3단계 — 🔴 CRITICAL: DB 마이그레이션 — 비밀번호 + 발송이력 컬럼 + RPC 2종
+
+> CRITICAL 근거: `supabase/migrations/**` Frozen — 신규 ADD만 허용, GATE C 필수. stage
+> (ezyvffjvuwmtuhpxdjrw) 먼저 검증 → production(vnbpmvxruyciuuaermyh) 순서 엄수.
+
+- [x] 3-A. 신규 마이그레이션 파일 — `rental_reservations`에 컬럼 3개: `locker_password TEXT
+  NULL`(평문, Stephen 승인) / `locker_guide_sent_pickup_at TIMESTAMPTZ NULL` /
+  `locker_guide_sent_return_at TIMESTAMPTZ NULL` | GSD | 예상 15분
+- [x] 3-B. RPC `update_reservation_locker_password(p_reservation_id BIGINT, p_password TEXT)`
+  — 계획 당시 "service_role 전용"으로 명시했으나, 실제 구현 시 기존 `update_reservation_
+  tracking`(Migration 268, CMS 물리보안류 쓰기의 확립된 선례)과 동일 패턴으로 조정:
+  `RETURNS void`, SECURITY DEFINER + `is_cms_user()` 내부검증, `GRANT EXECUTE TO
+  authenticated`만(REVOKE FROM PUBLIC/anon/authenticated 후 재부여) — `locals.supabase`
+  (관리자 실세션)으로 호출해야 통과, manager 이상 게이팅은 앱 레이어(API 라우트)에서 별도
+  수행. 기존 코드베이스 확립 패턴과의 일관성을 우선한 판단 | GSD | 예상 15분
+- [x] 3-C. RPC `claim_reservations_due_for_locker_guide(p_limit INT DEFAULT 50) RETURNS
+  TABLE(reservation_id BIGINT, leg TEXT, phone TEXT, password TEXT, product_name TEXT)` —
+  `claim_subscriptions_due_for_billing`과 동일한 원자적 선점 패턴이되, pickup/return leg를
+  단일 WITH절 내 동시 UPDATE 대신(동일 테이블 다중 DML의 "unspecified 동시성" 문서 경고
+  회피) `RETURN QUERY UPDATE...RETURNING`을 순차 2회 실행하는 방식으로 구현. 경계값(09:00
+  정각→false/08:59→true/23:00→true/22:59→false)과 "1시간 이내 임박" 윈도우 산술을 stage에서
+  VALUES 픽스처로 직접 검증 완료(전부 기대값 일치) — service_role 전용.
+  ⚠️ 구현 중 실제 버그 발견·수정: `user_profiles up ON up.user_id = rr.user_id`로 최초
+  작성했으나, 코드베이스 전수 확인 결과 `rental_reservations.user_id`는
+  `user_profiles.id`(NOT `user_profiles.user_id`)를 참조하는 게 이 프로젝트의 확립된 FK
+  관계(`get_rental_list` 등 전 RPC가 `up.id = rr.user_id` 사용) — `up.id = rr.user_id`로
+  즉시 수정, stage 재적용 완료.
+  ⚠️ 시간대 처리: `pickup_time`/`return_time`은 KST 벽시계값(TEXT)인데 DB 세션 기본
+  timezone은 UTC로 확인(`SHOW timezone`) — `(date + time) AT TIME ZONE 'Asia/Seoul'`로
+  KST→UTC 명시 변환 후 `now()`와 비교(누락 시 9시간 오차 발생 위험, 계획 원문엔 이 처리가
+  없었음 — 구현 중 발견해 추가) | GSD | 예상 25분
+- [x] 3-D. stage 적용·직접 SQL 호출 검증(경계값 09:00/23:00, 중복클레임 없음) → Stephen
+  승인 후 production 적용 | GSD | 예상 20분
+
+  ✅ 3단계 완료 — Stage(ezyvffjvuwmtuhpxdjrw)·Production(vnbpmvxruyciuuaermyh) 둘 다
+  적용·검증 완료(2026-08-20, Production은 Stephen 승인 후 적용 + 직접 재조회 검증).
+  신규 파일: `supabase/migrations/20260820090000_320_locker_guide_schema.sql`(원래 318번,
+  병렬 세션의 다른 마이그레이션과 파일명 충돌 발견 → 320으로 리네임, 2026-08-20 QA 지적
+  반영 — Stage DB 이력에는 여전히 "318_locker_guide_schema"로 기록돼 있음, 무관)
+
+### 4단계 — 🔴 CRITICAL: CMS `RentalDetailPanel` 비밀번호 입력·저장 UI (manager 이상)
+
+- [x] 4-A. 두 호출부(`cms/reservation/+page.svelte`, `cms/rentals/+page.svelte`)에
+  `cmsRole` prop 전달 배선(양쪽 `+page.server.ts`는 이미 `parent()`로 보유 — load 반환값에
+  포함만 하면 됨) | GSD | 예상 10분
+- [x] 4-B. "대여 방법" 섹션 바로 아래 신규 조건부 섹션(`showLockerPasswordField`: manager
+  이상 + 방문(visit)+영업외시간 조합일 때만 노출) — 라벨 "무인보관함 비밀번호" + input +
+  저장버튼, 기존 "운송장 정보" 패턴 그대로 미러링(로컬 $state + fetch 로드 + 저장 onclick)
+  | GSD | 예상 20분
+- [x] 4-C. 신규 `src/routes/api/cms/reservations/[id]/locker-password/+server.ts` —
+  `getCmsRoleForAction()` → `hasSettingsAccess()` 체크 필수(운송장 API에 이 체크가 빠져
+  있던 전례 재발 금지, security-auth.md 원칙) → `locals.supabase.rpc('update_reservation_
+  locker_password', ...)`(3-B 조정과 동일 이유로 tracking API와 동일한 locals.supabase
+  경유 패턴) | GSD | 예상 15분
+
+  ✅ 4단계 완료 (2026-08-20) — 수정 파일: `src/lib/components/cms/RentalDetailPanel.svelte`,
+  `src/routes/cms/reservation/+page.svelte`, `src/routes/cms/rentals/+page.svelte`. 신규
+  파일: `src/routes/api/cms/reservations/[id]/locker-password/+server.ts`
+
+### 5단계 — 🔴 CRITICAL: 채팅 RPC `locker_guide` 알림 타입 신설
+
+> CRITICAL 근거: `send_rental_chat_notification`(Frozen) 수정 + rental-lifecycle.md
+> AUTO_NOTIFY 매핑표·service-operations.md §11/§15 원칙 준수 필수.
+
+- [x] 5-A. `send_rental_chat_notification` CREATE OR REPLACE(Migration 288 패턴) — `v_content`
+  CASE에 `WHEN 'locker_guide' THEN v_product || ' 무인보관함 이용 비밀번호는 ''' ||
+  COALESCE(v_locker_password,'') || '''입니다.'` 추가(함수 상단 SELECT에 `v_locker_password`
+  포함), `v_card_type` CASE 대응 분기 추가. 세션조회는 기존 내장 로직 그대로(자체 재구현
+  금지, §11) | GSD | 예상 20분
+- [x] 5-B. rental-lifecycle.md AUTO_NOTIFY 절 + `push.ts` `CUSTOMER_LIFECYCLE_PUSH_COPY`
+  동시 갱신(§15 — 채팅카드≠브라우저푸시, 신규타입 추가 시 필수 동기화). `locker_guide`는
+  상태 전이가 아니라 Vercel Cron 트리거라 표의 행이 아니라 `hold_expired`와 같은 형식의
+  별도 각주로 추가 | GSD | 예상 15분
+- [x] 5-C. stage 적용·직접 호출 검증(카드발송+비밀번호 보간+세션 open 승격) — 실제
+  reservation 1건에 임시 locker_password 설정 → RPC 직접 호출 → 생성된 chat_messages 내용
+  확인("{상품명} 무인보관함 이용 비밀번호는 '{값}'입니다." 정확히 보간됨) → 테스트 데이터
+  정리(chat_messages 삭제, locker_password NULL 복원) 완료 | GSD | 예상 10분
+
+  ✅ 5단계 완료 — Stage(ezyvffjvuwmtuhpxdjrw)·Production(vnbpmvxruyciuuaermyh) 둘 다
+  적용·검증 완료(2026-08-20).
+  신규 파일: `supabase/migrations/20260820100000_321_chat_notify_locker_guide.sql`(원래
+  319번, 320과 동일 사유로 321로 리네임 — Stage DB 이력에는 "319_chat_notify_locker_guide"로
+  기록돼 있음, 무관)
+  수정 파일: `src/lib/server/push.ts`, `.claude/rules/rental-lifecycle.md`
+
+### 6단계 — 🔴 CRITICAL: 알리고 SMS 발송 함수 공용화
+
+> CRITICAL 근거: `src/routes/api/**/*`(Frozen) 수정 대상(`send-otp` 인라인 함수 이동).
+
+- [x] 6-A. `src/lib/server/sms.ts` 신설 — `api/profile/send-otp/+server.ts`의 `sendSms()`를
+  로직 변경 없이 이동, 시그니처 범용화(`sendSms(to: string, message: string)`), 원 호출부는
+  새 모듈 import로 교체(기존 OTP 동작 무변경) | GSD | 예상 20분
+
+  ✅ 6단계 완료 (2026-08-20) — 신규 파일: `src/lib/server/sms.ts`. 수정 파일:
+  `src/routes/api/profile/send-otp/+server.ts`(로직 이동, 동작 무변경)
+
+### 7단계 — 🔴 CRITICAL: Vercel Cron `/api/cron/locker-guide`
+
+> CRITICAL 근거: 외부 SMS 실비용·오발송 리스크 + `vercel.json` 배포 설정 변경.
+
+- [x] 7-A. `vercel.json` crons 배열에 `/api/cron/locker-guide` 10분 간격(`*/10 * * * *`)
+  추가 | GSD | 예상 10분
+- [x] 7-B. 신규 `src/routes/api/cron/locker-guide/+server.ts` — `subscription-billing/
+  +server.ts` 템플릿 그대로: `CRON_SECRET` Bearer 인증(fail-closed) → service_role 클라이언트
+  → `claim_reservations_due_for_locker_guide` RPC 배치선점 → 각 건 `send_rental_chat_
+  notification(p_reservation_id, 'locker_guide')` + `sendReservationLifecyclePush` +
+  `sendSms(phone, 메시지)` 순차 호출 → 결과 집계 반환 | GSD | 예상 25분
+- [ ] 7-C. stage에서 curl로 `CRON_SECRET` 헤더 직접 호출 검증(채팅카드+SMS 또는 env
+  미설정 시 graceful skip 로그 확인) → Stephen 승인 후 production 적용 | GSD | 예상 20분
+  — ⛔ **미완료**: 이 엔드포인트는 SvelteKit 라우트라 로컬 dev 서버 또는 실배포 환경에서만
+  curl 호출 가능(Supabase MCP로는 실행 불가) — git 커밋·Vercel 배포(Stephen 직접 실행
+  필요) 이후 실제 검증 가능. 로직 자체는 3·5단계에서 검증한 RPC 2종을 그대로 호출하는
+  얇은 오케스트레이션이라 구조적 위험은 낮음(`npm run check` 통과 확인 완료).
+
+### 최종 검수
+
+- [x] GATE C 종합 확인 | GSD | 완료기준: 아래 체크리스트 전부 통과, `npm run check` 신규
+  ERROR 0건, rental-lifecycle.md·security-auth.md·service-operations.md 관련 매핑 갱신
+  완료, GATE E(`@sp3-qa-agent`) 통과 | 예상 15분
+  — `npm run check`: 신규 ERROR 0건 확인 완료(2026-08-20, 기존 vite.config.ts 무관 에러
+  1건만 잔존). GATE E(`@sp3-qa-agent`, 2026-08-20): 조건부 통과 → 유일한 차단 사유(마이그
+  레이션 318번 파일명이 병렬 세션 산출물과 충돌)를 320/321로 리네임해 해소, 재검수 불필요
+  판정. 실배포 후 7-C curl 검증만 미완료(git 배포는 Stephen 소관이라 이 세션에서 착수 불가).
+
+  **세션 재검증(2026-08-20, Stephen 요청 — 플랜 전항목 재확인)**: `elegant-scribbling-
+  pelican.md` 원본 플랜과 실제 구현을 항목별로 재대조. 특히 지시받은 2개 지점을 코드 추적
+  +Stage 라이브 실증으로 정밀 확인 — ① CMS 채팅 대화카드: `ActionCard.svelte`는
+  `RESERVATION_STATUS_CARD`에 전용 문구가 없으나 `MessageBubble.svelte`(238~240행)가 카드
+  타입 무관하게 `message.content`를 항상 렌더링함을 확인 — locker_guide 비밀번호는
+  `content` 컬럼에 담기므로 관리자·고객 채팅 화면 모두 정상 노출(마스킹 없음, 의도된 설계
+  그대로 동작). ② 예약목록 연동: `get_rental_list`(최신 Migration 313) →
+  `/cms/reservation`·`/cms/rentals` `+page.server.ts`(필드 손실 없는 passthrough) →
+  `RentalDetailPanel.showLockerPasswordField`까지 pickup_time/return_time/method 필드
+  전달 경로 추적 확인. 검증 시점 KST가 마침 영업외시간(01:24)이라 합성 데이터 아닌 Stage
+  기존 예약(id 2658)을 실제 조건으로 임시 조정해 `claim_reservations_due_for_locker_guide`
+  →`send_rental_chat_notification` 전체 체인을 진짜로 트리거해 정상 동작(원자적 마킹·중복
+  방지 포함) 확인, 테스트 데이터 전부 원복. 이 재검증 직후 Stephen이 Production DB 적용을
+  명시 승인 — 적용 전 Production 의존 스키마·함수 사전 존재 확인 후 마이그레이션 320·321
+  적용, 직접 재조회로 컬럼 3개·권한·locker_guide 분기 전부 확인 완료(아래 Production 반영
+  안내문 참고).
+
+```
+[x] TIME_AM_HOURS/TIME_PM_HOURS 24시간 전체 커버, 09~22/23~08 경계 정확
+[x] isLockerHour()가 23,0,1..8 정확히 판정(9시 정각은 false) — stage SQL 픽스처로 직접 검증
+[x] time-row-locker 배경 --cs-chat-in-bg, 선택 시 --cs-red 강조 반영
+[x] 방문대여+영업외시간 조합 안내문구 --cs-red, pickup/return 컨텍스트별 문구 자연스러움,
+    "1시간 전" 문구·실제 발송타이밍 일치
+[x] rental_reservations 3개 컬럼 — Stage·Production 둘 다 적용 완료(2026-08-20, 직접 재조회 검증)
+[x] update_reservation_locker_password RPC — authenticated 전용(is_cms_user() 내부검증,
+    3-B 참고 — 계획상 "service_role 전용"에서 tracking RPC 확립패턴으로 조정),
+    PUBLIC/anon/authenticated REVOKE 후 authenticated만 재부여
+[x] locker-password API 라우트 — getCmsRoleForAction()+hasSettingsAccess() manager 게이팅
+    포함(운송장 API 누락 재발 금지)
+[x] RentalDetailPanel에 cmsRole prop 정상 전달 + manager 미만 계정에 입력 UI 자체가 숨겨짐
+    (hasSettingsAccess(cmsRole) 파생값 기준)
+[x] send_rental_chat_notification CASE에 locker_guide 추가 + push.ts
+    CUSTOMER_LIFECYCLE_PUSH_COPY 동기화 누락 없음
+[x] claim_reservations_due_for_locker_guide — 동일 건 중복 클레임/중복발송 없음(원자적
+    UPDATE...RETURNING 확인, FOR UPDATE SKIP LOCKED)
+[x] vercel.json crons에 locker-guide 항목 추가 — ⛔ CRON_SECRET fail-closed 동작은 코드
+    리뷰로 확인(subscription-billing과 동일 가드), 실배포 후 curl 재확인 필요(7-C)
+[x] sendSms 공용화 후 기존 OTP 발송 경로 회귀 없음 — 로직 이동만(문자열 그대로), npm run
+    check 통과. 실사용 curl/실기 SMS 테스트는 실배포 후 필요
+[x] pickup_method/return_method DB값이 절대 'visit' 이외로 변경되지 않았는가(①) — 모든
+    쿼리·RPC가 method='visit' 조건으로 필터만 하고 UPDATE 대상에 포함하지 않음, 확인 완료
+```
+
+> ✅ **Production 마이그레이션 적용 완료(2026-08-20, Stephen 승인)** — 마이그레이션 320·321
+> (로컬 파일명, Stage/Production DB 이력상 명칭은 318·319)을 crazyshot production
+> (vnbpmvxruyciuuaermyh)에 적용 후 직접 재조회로 검증: `rental_reservations` 컬럼 3개 존재,
+> `update_reservation_locker_password`(authenticated 전용)·`claim_reservations_due_for_
+> locker_guide`(service_role 전용) 권한 정확, `send_rental_chat_notification`에
+> `locker_guide` 분기 반영 확인. 적용 전 Production의 의존 스키마·함수(`is_cms_user()`,
+> `find_or_create_general_chat_session`, `send_rental_chat_notification`,
+> `user_profiles.id=user_id` 관계)도 사전 존재 확인 후 진행.
+>
+> ⛔ **여전히 미완료(Stephen 직접 실행 필요)**: git 커밋/푸시, Vercel 배포, 배포 후
+> `/api/cron/locker-guide` 실배포 curl 검증(7-C). 코드 구현·타입체크·Stage/Production DB
+> 검증·GATE E(sp3-qa-agent, 조건부통과→마이그레이션 리네임으로 해소)는 전부 완료.
+
+예상 총 소요: GSD 18개 항목 × 평균 17분 ≈ 5시간(단계별 stage→production 대기시간 별도)
+
+---
+
+## DONE — 🟢 ROUTINE: 대여현황(/cms/rentals) 정렬 상태 버튼 그룹 UI 리디자인 (2026-08-20) — ✅ 완료
+
+Stephen이 <launch-selected-element>로 대여현황(/cms/rentals) 필터칩 그룹(`.filter-chips`)을
+선택해 "세련되게 디자인" 요청 — ①대여 라이프사이클 진행과정을 표현하는 내비게이터 성격을
+겸함 ②CMS 표준 디자인 시스템 지침 준수하며 응용력 발현.
+
+CMS 표준 준수: cms-uiux.md §7-12-A "콤보버튼 UI(분류·카테고리 필터) — cat-pill/filter-pill
+표준"(목록 툴바 필터 전용, 2026-08-18 확정)을 신규 발명 없이 그대로 채택 — 툴바형 스펙(pill
+30px 반경, height 30px, 좌우패딩 16px, 12px/700 Bold, 비활성 var(--cs-lilac) bg, 활성
+var(--cs-purple) bg, hover 시 텍스트만 var(--cs-purple) 전환, 보더 없음)을 기존 8px 반경·
+1px 보더·weight 400 스타일에서 이 표준으로 교체.
+
+응용(내비게이터 성격 표현) — 신규 CSS 변수·하드코딩 색상 없이 기존 공통 컴포넌트·토큰만 사용:
+  - 승인완료→배송중→대여중→반납요청→반납완료→완료 6개 순차 상태 칩 사이에
+    `ChevronIcon`(공용 컴포넌트, direction="right", size=6, color=var(--cs-text-light))을
+    연결선으로 삽입 — "진행 단계"라는 의미를 시각적으로 전달(신규 SVG 작성 없이 기존 표준
+    아이콘 재사용, uiux-index.md ChevronIcon 표준 준수).
+  - '전체'는 파이프라인 밖의 리셋 액션이므로 1px 세로 구분선(`var(--cs-lilac)`, cms-uiux.md
+    §0-7 border-default = "구분선(주력)" 토큰)으로 분리해 '완료' 우측에 배치(전 세션에서
+    이미 위치 이동은 완료 — 이번엔 시각적 분리만 추가).
+
+수정 파일: src/routes/cms/rentals/+page.svelte
+  - `.filter-chips` → `.filter-nav`로 마크업/클래스 재구성(순서 있는 상태값 그룹이라는 의미
+    반영), ChevronIcon import 추가, STATUS_FILTERS $each 루프에 divider·chevron 삽입 로직 추가
+  - `.chip`/`.chip-active` CSS를 §7-12-A 스펙으로 전면 교체
+
+요구범위 준수: 예약현황(/cms/reservation) 필터칩·상태 필터링 로직(setStatus/applyFilters/
+서버 기본값)은 이번 리디자인과 무관하게 무변경(diff 없음) — 순수 시각 변경만 적용.
+
+검증: svelte-check 신규 ERROR 0건(기존 무관 에러 1건만 잔존). DB 변경 없음.
+
+**후속 정밀조정(같은 날, Stephen 피드백 4항목 반영):**
+  1. 미선택(비활성) 상태도 "버튼처럼" 뚜렷이 보이도록 BG를 `--cs-lilac`(purple-5%)에서
+     `--cs-purple-pale`(#C1BBEC, "purple-20%")로 강화 → **곧이어 재조정**: purple-20이
+     너무 진해 `--cs-purple-op10`(#E1DEF3, app.css에 "purple-op-10%"로 이미 등록돼 있던
+     기존 토큰 — 둘 다 신규 변수 생성 없이 기존 토큰 재사용)으로 최종 확정.
+  2. 화살표(ChevronIcon)를 버튼 사이 독립 커넥터에서 각 버튼 **내부**(라벨 우측)로 재배치 —
+     `<button><span>{label}</span><ChevronIcon .../></button>` 구조로 변경.
+  3. 화살표 색상을 `color="currentColor"`로 전환 — 버튼의 `color`(라벨 텍스트색)를 그대로
+     상속하도록 해 활성/비활성/hover 상태마다 색을 별도로 관리할 필요 없이 항상 라벨과
+     동일한 색으로 자동 일치.
+  4. 버튼 가로폭 확장: 좌우 패딩 16px → 26px.
+  5. hover 컬러 토큰(`var(--cs-purple)`, 텍스트 전환)은 요청대로 무변경 — currentColor 덕분에
+     화살표도 hover 시 자동으로 함께 전환되지만, 이는 기존 규칙의 자연스러운 연장이지 별도
+     hover 로직을 새로 추가한 것은 아님.
+  6. '전체' 버튼만 미선택 시 기본 BG토큰(purple-10) 제거 — `class:chip-all={f.value === ''}`
+     + `.chip-all:not(.chip-active) { background: transparent; }` 추가. 선택되면(chip-active)
+     다른 순차 상태 칩과 동일하게 `--cs-purple` 배경 적용(구분 없음) — 파이프라인 밖의
+     리셋 액션이라는 성격을 미선택 상태에서만 배경 유무로 한 번 더 구분.
+  7. 상하 패딩 5px 추가 — 고정 `height: 30px`를 제거하고 `padding: 0 26px` → `padding: 5px 26px`로
+     변경(패딩이 실제로 버튼 높이에 반영되도록 고정 height와의 충돌 제거, 폰트 라인하이트 기준
+     자연 높이로 전환).
+
+검증(후속): svelte-check 신규 ERROR 0건. app.css 변경 없음(기존 토큰 재사용).
+
+**동일 리디자인을 예약현황(/cms/reservation)에도 확장 적용(같은 날, Stephen 요청):**
+`src/routes/cms/reservation/+page.svelte` — 대여현황과 동일한 최종 스펙(CMS §7-12-A pill,
+미선택 BG `--cs-purple-op10`, 버튼 내부 화살표+currentColor, 좌우 26px/상하 5px 패딩,
+'전체'만 미선택 시 배경 제거)을 그대로 이식. 대여현황과의 차이점(예약현황은 순차 상태가
+'신청대기' 1개뿐이라 6단계 체인이 아님)에 맞춰 화살표 삽입 조건만 도메인에 맞게 조정 —
+'신청대기'(다음 단계로 이어지는 진행 상태)만 화살표 부여, '취소'(분기/종결 상태)는 화살표
+없음. `.filter-chips`→`.filter-nav` 클래스 리네이밍·ChevronIcon import도 동일하게 적용.
+svelte-check 신규 ERROR 0건.
+
+**대여현황(/cms/rentals) 툴바 레이아웃 분리(같은 날 후속, Stephen 요청 — 예약현황엔 미적용,
+대여현황 전용 스코프):**
+  1. 검색 UI(`search-wrap`+`count-badge`)와 필터 UI(`filter-nav`)를 같은 행(`toolbar-left`
+     flex-row)에서 분리 — `.toolbar`를 `flex-direction: column`으로 바꾸고, 검색 행을
+     `.toolbar-top`(justify-content: space-between, search-wrap ↔ count-badge)으로 감싼 뒤
+     필터 행(`.filter-nav`)을 그 아래 별도 행으로 재배치.
+  2. '검색' 버튼(`.btn-secondary`) 제거 — 검색창 Enter 키(`onkeydown` 핸들러, 기존부터 있던
+     로직)만으로 검색 실행. 버튼 삭제로 인해 완전히 미사용 상태가 된 `.toolbar-left`·
+     `.btn-secondary`/`.btn-secondary:hover` CSS 선택자도 함께 제거(unused-selector 경고 방지).
+  3. 검색 입력창 가로폭 2배 확장: `width: 220px` → `440px`.
+
+검증(후속): svelte-check 신규 ERROR/신규 WARNING 0건(unused-selector 포함). DB 변경 없음.
+
+**동일 툴바 레이아웃을 예약현황(/cms/reservation)에도 확장 적용(같은 날 후속, Stephen 요청):**
+`src/routes/cms/reservation/+page.svelte` — 대여현황과 동일하게 `.toolbar`를
+`flex-direction: column`으로 바꿔 검색 행(`.toolbar-top`)과 필터 행(`.filter-nav`)을 분리,
+'검색' 버튼(`.btn-secondary`) 제거(Enter 키만 사용, 기존 onkeydown 로직 그대로), 검색 입력창
+`220px → 440px` 확장. 예약현황 전용으로 남아있던 `.toolbar-right`(count-badge 래퍼, 원래도
+자체 CSS 규칙 없이 `.toolbar`의 justify-content만 의존하던 빈 래퍼)도 `.toolbar-top` 구조로
+흡수하며 함께 제거. 날짜 범위 입력(`.date-in` ×2, 예약현황 전용 — 대여현황엔 없음)은 이번
+요청 범위 밖이라 폭 등 변경 없이 search-wrap 안에 그대로 유지.
+
+검증(후속): svelte-check 신규 ERROR/신규 WARNING 0건(unused-selector 포함). DB 변경 없음.
+git commit: Stephen 직접 실행 필요.
+
+---
+
+## DONE — 🟢 ROUTINE: 대여현황(/cms/rentals) 정렬 상태 버튼 그룹 정비 (2026-08-20) — ✅ 완료
+
+Stephen이 <launch-selected-element>로 대여현황(/cms/rentals) 필터칩 그룹의 '전체' 버튼을
+선택해 UI 재배치 요청 — 바로 위 예약현황(/cms/reservation) 정비 작업과 같은 패턴을
+대여현황에도 적용(요구범위 외 중요 로직 수정 금지 명시).
+
+요구 2항목:
+  1. 화면 오픈 시 '승인완료' 버튼 활성 + '승인완료' 카드목록 우선 정렬
+  2. 단순 UI 이동/제거 + 정렬 옵션 수정 — 그 외 로직 변경 금지
+  (예약현황 건과 달리 버튼 제거 요청은 없음 — 승인완료·배송중·대여중·반납요청·반납완료·완료
+   6개 버튼은 전부 이 화면의 실제 필터로 정상 동작하므로 그대로 유지, '전체' 위치 이동만 적용)
+
+수정 파일:
+  - src/routes/cms/rentals/+page.svelte
+    · STATUS_FILTERS 배열에서 '전체'를 맨 앞 → 맨 끝('완료' 우측)으로 재배치(항목 수 불변, 7개)
+    · setStatus()/applyFilters() — '전체'(value='') 선택 시에도 status 파라미터를 명시적으로
+      URL에 채우도록 수정(기존엔 빈 값이면 파라미터를 delete했음) — 서버 기본값 로직과의
+      충돌 방지용(아래), 예약현황 건과 동일 패턴
+  - src/routes/cms/rentals/+page.server.ts
+    · status 파라미터 파싱을 `url.searchParams.get('status') ?? ''`에서
+      `url.searchParams.has('status') ? (...) : 'confirmed'`로 변경 — URL에 ?status= 자체가
+      없는 최초진입 시에만 'confirmed'를 기본값으로 채택. '전체' 클릭 시 위 수정으로
+      status=''가 URL에 명시되므로 has('status')가 true가 되어 기본값으로 되돌아가지 않음.
+      p_status='confirmed'는 기존 p_include_statuses(RENTAL_STATUSES)에 이미 포함된 값이라
+      WHERE 절 충돌 없이 정상 필터링됨(예약현황 건과 달리 exclude 리스트가 아닌 include
+      리스트라 애초에 모순 발생 여지가 없었음).
+
+검증: svelte-check 신규 ERROR 0건(기존 무관 에러 1건만 잔존, 신규 경고는 같은 파일 기존
+searchInput 등과 동일한 `state_referenced_locally` 패턴 — 이번 수정으로 새로 생긴 경고 아님).
+DB 변경 없음.
+
+git commit: Stephen 직접 실행 필요.
+
+---
+
+## DONE — 🟢 ROUTINE: 예약현황(/cms/reservation) 정렬 상태 버튼 그룹 정비 (2026-08-20) — ✅ 완료
+
+Stephen이 <launch-selected-element>로 예약현황(/cms/reservation) 필터칩 그룹의 '전체' 버튼을
+선택해 UI 재배치·불필요 정렬버튼 제거 요청(요구범위 외 중요 로직 수정 금지 명시).
+
+요구 4항목:
+  1. 화면 오픈 시 '신청대기' 버튼 활성 + 신청대기 카드목록 우선 정렬
+  2. 예약현황 단계에서 불필요 정렬버튼 제거: 승인완료·배송중·대여중·반납요청·반납완료·완료
+     (대여현황 전용 상태 — 확인 결과 이 화면 쿼리는 애초에 RENTAL_VIEW_STATUSES로 이 상태들을
+     전부 exclude하고 있어 해당 버튼들은 클릭해도 "조건에 맞는 예약이 없습니다"만 뜨는 죽은
+     버튼이었음, 제거로 인한 기능 손실 없음)
+  3. 대여현황(/cms/rentals) 정렬 버튼 그룹은 무변경 — 실제로 그 파일들은 건드리지 않음(diff 없음)
+  4. 단순 UI 이동/제거 + 정렬 옵션 수정 — 그 외 로직 변경 금지
+
+수정 파일:
+  - src/routes/cms/reservation/+page.svelte
+    · STATUS_FILTERS 배열을 [신청대기, 취소, 전체] 3개로 축소(기존 9개) — '전체'를 '취소'
+      우측(배열 맨 끝)으로 재배치해 요구사항 1 UI 위치 반영
+    · setStatus()/applyFilters() — '전체'(value='') 선택 시에도 status 파라미터를 명시적으로
+      URL에 채우도록 수정(기존엔 빈 값이면 파라미터를 delete했음) — 서버 기본값 로직과의
+      충돌 방지용(아래)
+  - src/routes/cms/reservation/+page.server.ts
+    · status 파라미터 파싱을 `url.searchParams.get('status') ?? ''`에서
+      `url.searchParams.has('status') ? (...) : 'hold'`로 변경 — URL에 ?status= 자체가 없는
+      최초진입 시에만 'hold'를 기본값으로 채택. '전체' 클릭 시 위 수정으로 status=''가 URL에
+      명시되므로 has('status')가 true가 되어 기본값으로 되돌아가지 않음(전체 선택 유지 보장).
+      p_status에 'hold'가 그대로 전달되므로 목록 자체도 최초진입 시 신청대기만 필터링됨.
+
+STATUS_LABEL/STATUS_STYLE 딕셔너리, RPC 시그니처, RENTAL_VIEW_STATUSES exclude 로직은 요구사항
+4에 따라 손대지 않음(제거된 상태값 항목은 이미 죽은 코드지만 범위 외라 그대로 유지).
+
+검증: svelte-check 신규 ERROR 0건(기존 무관 에러 1건만 잔존, 신규 경고는 같은 파일 기존
+searchInput/dateFrom 등과 동일한 `state_referenced_locally` 패턴 — 이번 수정으로 새로 생긴
+경고 아님). /cms/rentals/+page.svelte·+page.server.ts는 diff 없음(요구사항 3 확인).
+DB 변경 없음.
+
+git commit: Stephen 직접 실행 필요.
 
 ---
 
@@ -326,6 +1792,25 @@ HelpHeroBgModal.svelte 원본과 동일한 기존 패턴(state_referenced_locall
 3개 페이지에도 기존부터 존재.
 Stephen 확인 후 "지금 함께 수정" 승인 → migration #312로 해소(아래).
 
+git commit: Stephen 직접 실행 필요.
+
+---
+
+## DONE — 🟢 ROUTINE 버그수정: CommonBenefits PC 반응형 이용안내 미반영 (2026-08-20) — ✅ 완료
+
+Stephen 제보(<launch-selected-element> 2건): 이전 세션에서 `m-red-block`(모바일) K-트레일
+텍스트를 정기구독 이용안내 목록으로 교체했으나, PC 전용 `.benefits-pc .writing-block`
+(동일 컴포넌트 내 별도 마크업)은 손대지 않아 PC에서는 여전히 옛 K-트레일 하드코딩 카피가
+노출되는 반응형 불일치 확인.
+
+수정: `writing-block` 우측(`writing-right`)의 4개 하드코딩 `<p class="wr-p">` 문단을
+`policyItems` 기반 번호목록(`.wr-policy-list`)으로 교체 — 모바일 `m-policy-list`와 동일한
+구조(번호 원형배지+텍스트)를 PC 톤에 맞게 재구성. `writing-head` 타이틀도 모바일과 동일하게
+"정기구독 이용안내"로 통일. 불필요해진 `.wr-p`/`.wr-white`/`.wr-pale` 제거, `.wr-policy-*` 신규
+추가.
+
+파일: src/lib/components/members/CommonBenefits.svelte
+검증: svelte-check 신규 ERROR 0건, CommonBenefits 관련 WARNING도 0건.
 git commit: Stephen 직접 실행 필요.
 
 ---
@@ -18924,6 +20409,367 @@ TDD도메인: 해당 — AGENTS.md TDD 강제 키워드 대조 결과 "결제·�
 
   ⚠️ 미배포: git 커밋 전.
 
+## DONE — 🟢 ROUTINE: 채팅 발송 스프레드시트형 계약서 고객 서명화면 실사용 검증(코드 변경 없음), 2026-08-21
+
+> ⚠️ 이 항목은 이 세션이 처리한 것만 기록한다. 코드 수정 없음 — 순수 검증(조사+실브라우저
+> 확인)만 수행. `src/routes/contract/[token]/+page.svelte`·`+page.server.ts`가 git상 M으로
+> 뜨는 건 동시 진행 중인 다른 세션(Phase C 결제순서 재설계)의 변경분 — 이 항목과 무관.
+
+배경: Stephen이 "채팅 대화카드로 발송한 엑셀형 전자계약 서명을 고객이 실행 시 워드형과
+동일하게 화면이 열리고 최하단에 전자서명 등록 레이아웃이 정상 노출·작동되는지 검증"
+요청("문제가 있어보여 매우 불안해!!").
+
+1차 검증(코드 정독): `/contract/[token]/+page.svelte`에서 본문은 `isSpreadsheetMode` 분기로
+`renderSpreadsheetToHtml()` 정상 렌더링, 하단 서명 캔버스는 `{#if !isCanvasMode}` 조건이라
+캔버스형만 제외하고 워드형·스프레드시트형 둘 다 통과, `submitSign()`은 `authoring_mode`를
+전혀 참조하지 않는 완전 모드 무관 로직 — 구조상 문제 없음을 확인. 단, line 466 주석이
+"flow 모드 전용"이라고만 적혀있어 실제 코드 조건(`!isCanvasMode`)과 어긋남(주석만 부정확,
+코드는 정상) — 사소한 발견, 미수정.
+
+Stephen이 실브라우저 확인 요청(Claude Browser 조건② 명시 요청 충족) → 진행.
+
+⚠️ **1차 실브라우저 검증 오류 — Stephen이 직접 지적해 정정**: 처음 선택한 테스트 계약서
+(`db4c697f...`, "스프레드시트형 계약서 (QA 검증용)")가 DB상 `authoring_mode='spreadsheet'`는
+맞았으나 실제로는 서식 지정 셀 0개·병합 0개·3열×5행짜리 최소 placeholder였음 — 그래서 화면이
+"워드모드에 표 하나 붙인 것"처럼 보였고, Stephen이 이를 정확히 지적("이건 스프레드시트 임포트
+편집 문서가 아니야"). 테스트 데이터 선정이 부실했던 것이지 코드 결함은 아니었으나, 검증
+방법론 자체의 실수였음을 인정하고 재검증.
+
+2차 실브라우저 검증(정정): DB 직접 조회로 진짜 서식이 풍부한 계약서(`76dfba87...`, 55행×17열,
+병합 113개, 서식지정 셀 790개 — 오늘 세션 초반 폰트색 버그를 고쳤던 것과 동일 계열의 실제
+임대차계약서 그리드) 특정 후 동일 토큰으로 재확인:
+  - 실제 렌더링된 `<td>` 151개 중 94개가 `rgba(0,0,0,0)`이 아닌 실제 배경색으로 렌더링됨
+    (`getComputedStyle` 직접 측정) — 서식·병합이 실제로 살아서 반영됨 확인.
+  - `.sig-section`(캔버스 1개)·동의 체크박스·"서명하기" 버튼 — 무거운 실제 문서에서도 최하단에
+    동일하게 정상 존재(`getBoundingClientRect`/DOM 쿼리로 확인).
+  - 체크박스 실제 클릭 → `checked:true` 정상 반영, 버튼은 서명 미완료라 여전히 `disabled:true`
+    (`disabled={signing_ || !agreed || !sigValid}` 조건이 실제로 정확히 동작함을 인터랙션으로
+    확인).
+  - 스크린샷 캡처는 두 시도 모두 실패(이 세션 내내 있었던 Claude Browser 스크롤 후 화면 정지
+    버그) — `scrollY`가 지정값과 다르게 튀고 화면은 빈 배경만 캡처됐으나, 그 시점에
+    `document.elementFromPoint()`로 뷰포트 중앙을 직접 찍어보면 실제로는 `<table class=
+    "ss-table">` 내부였음을 확인해 "화면이 실제로 비었다"가 아니라 "캡처 도구 자체가
+    깨졌다"로 판정(DOM 측정값은 스크롤 전후 계속 일관됐음).
+  - 콘솔 에러 "An unknown error occurred when fetching the script" 1건이 두 계약서·별도
+    탭에서 동일하게 재현됐으나 체크박스 클릭 등 실제 동작에는 영향 없어 로컬 Vite 개발서버
+    HMR 관련 노이즈로 잠정 판단(100% 확신은 아님, 참고용 기록).
+
+결론: 서명 미제출까지 확인(토큰 소모 방지 위해 실제 제출은 하지 않음) — 화면 오픈·서식
+렌더링·최하단 서명 레이아웃·버튼 활성화 로직 전부 정상. 실제 코드 결함은 발견되지 않음,
+line 466 주석 부정확 1건만 참고사항으로 남김(미수정, 필요 시 후속 요청).
+
+🔴 QA(@sp3-qa-agent) 사실관계 재검증 완료(2026-08-21) — 이번 항목의 3가지 핵심 주장(코드
+구조·DB 수치·브라우저 DOM 수치) 전부 오차 없이 정확함을 Stage DB 직접 재조회 + 렌더링
+로직 정적 재현으로 확인. **다만 검수 중 이 세션 요청 범위 밖의 중요한 신규 발견 2건**:
+  ① 실브라우저 검증에 썼던 토큰(`0d9b4ac...`)이 QA 시점에 이미 `/contract/signed`로
+     소모돼 있었고, 그 `signature_data`를 디코딩하면 실제 픽셀 크기가 1×1(68바이트)이었음
+     — `SignatureCanvas.svelte`가 `width=600 height=160` 캔버스에서 `toDataURL()`을
+     호출하는 구조상 진짜 마우스/터치 드로잉 결과가 1×1일 수는 없음. 즉 이 서명은 이
+     세션이 UI로 완료한 게 아니라(이 세션은 "서명하기" 버튼을 누르지 않았음) 누군가/무언가가
+     `/api/contracts/[token]/sign`을 최소 더미 이미지로 직접 호출(API 우회)해 완료시킨
+     것으로 추정됨 — 이후 QA 세션 자체의 curl 테스트 과정에서 발생했을 가능성이 유력.
+  ② 더 중요한 구조적 발견: `sign/+server.ts`(32-44행)는 `stroke_count >= 1`만 검사할 뿐
+     `signature_data`(base64 PNG)의 실제 이미지 크기·내용을 서버에서 전혀 검증하지 않음
+     — 토큰만 있으면 누구든 1×1 더미 이미지 + `stroke_count:1`로 "정상 서명"을 위조 제출
+     가능한 구조. 이건 오늘 세션이 만든 결함이 아니라 원래부터 있던 서버 검증 공백이며,
+     Stephen이 원 질문에서 확인하려던 "서명 등록이 정상 작동하는지"의 더 깊은 층위(진짜
+     그려서 제출해야만 성공하는가)는 **이 토큰으로는 실증되지 못한 채 소모됨** — 완전한
+     end-to-end(실제 캔버스 드로잉 → 클릭 → 성공) 검증은 아직 미완료 상태.
+
+⚠️ 미해결(범위 외 발견, 이번 요청과 별개 후속 검토 필요):
+  - `sign/+server.ts`의 `signature_data` 이미지 크기/내용 서버측 미검증(위 ②) — 여전히 미조치.
+
+✅ **후속 — 새 토큰으로 완전한 e2e 검증 완료(같은 날, Stephen 요청)**: 신규 `contract_signings`
+행(토큰 `efbc2aa6...`, 동일 계약 76dfba87 — 55행×17열·병합113·서식790 그리드)을 직접
+INSERT로 발급 후 Claude Browser로 실제 진행:
+  1. 캔버스에 `left_click_drag`로 실제 스트로크 그림 → 그린 직후 `canvas.toDataURL()` 직접
+     추출해 5222자(≈3800바이트) 실제 이미지임을 제출 전에 먼저 확인(1차 검증 때 발견한
+     "1×1 더미"류 우회가 아님을 사전에 배제).
+  2. "서명하기" 버튼 클릭 → `read_network_requests`로 실제 POST 요청이 200 OK로 완료됨을
+     확인, 화면도 `.sign-done`("✅ 서명이 완료되었습니다. 결제를 진행해 주세요.")으로
+     정상 전환.
+  3. DB 재조회로 최종 확인: `stroke_count=1`, `signature_data` 길이 5222(1번에서 클라이언트
+     측에서 미리 잰 값과 정확히 일치 — 실제 그린 그 이미지가 그대로 저장됨), `content_hash`
+     정상 생성, **오늘 세션 초반 구현한 서명 스냅샷 기능도 이 경로에서 정상 작동**
+     (`signed_content_snapshot.authoring_mode='spreadsheet'`, `spreadsheet_document.
+     sheets[0].rows` 55개 — 원본 그리드 전체가 스냅샷에 그대로 캡처됨).
+
+→ Stephen이 원래 요청한 "워드형과 동일하게 화면이 열리고 최하단 전자서명 등록 레이아웃이
+정상 노출 및 등록 작동되는지"는 이제 **실제 드로잉→클릭→DB 반영까지 전 구간 실증 완료**.
+1차 라운드에서 발견된 "API 우회로 보이는 소모된 토큰" 건과는 무관한, 진짜 UI 인터랙션
+기준 성공 사례.
+
+git commit 대상 없음(코드 변경 없음, 순수 검증만 수행 — DB에 테스트 서명 레코드 1건 신규
+생성됨, 삭제하지 않고 검증 이력으로 유지).
+
+## DONE — 🟢 ROUTINE: 고객 서명화면 결제(mock) 단계에 장바구니 방식 상세 금액 내역 추가, 2026-08-21
+
+> ⚠️ 이 항목은 이 세션이 처리한 것만 기록한다. 이 화면(서명 완료 후 결제 단계, "Phase C")
+> 자체는 동시 진행 중인 다른 세션이 오늘 신설한 미커밋 기능이며, 이번 수정은 그 위에
+> Stephen이 `<launch-selected-element>`로 지적한 "결제 금액 0원"만 덩그러니 보이던 영역만
+> 다룬다.
+
+배경: Stephen이 `<launch-selected-element>`로 `.pay-amount-row`("결제 금액 / 0원")를 직접
+선택해 "해당 영역에 장바구니와 같이 상세 금액 목록이 나열되어야해"로 지시.
+
+조사: `cart/+page.svelte`의 결제 요약 영역(`{@render PriceRow(...)}` 반복 — 대여요금 → 멤버십
+할인 → 쿠폰 할인 → 배송요금 → 부가세 → 포인트 사용 → 구분선 → 합계요금 순)을 참고 패턴으로
+확인. `/contract/[token]/+page.svelte`에는 이미 `orderData`(`total_amount`/`discount_amount`/
+`tax_amount`/`final_amount`)와 클라이언트 계산값(`couponDiscount`/`pointsUsed`/`payTotal`)이
+전부 존재했으나, 화면에는 최종 `payTotal`만 노출되고 그 산출 근거(항목별 금액)는 어디에도
+안 보이는 상태였음.
+
+수정 (`src/routes/contract/[token]/+page.svelte` 1개 파일):
+  - `.pay-amount-row`(최종 결제금액) 바로 위에 `.pay-detail-list` 신설 — 기본대여요금·
+    할인금액(주문 자체 할인, 0원이면 숨김)·부가세를 항상/조건부 표시, 이어서 쿠폰 할인·
+    포인트 사용(각각 선택·입력된 경우에만 표시)을 실시간 반영(cart와 동일하게 0원인
+    항목은 숨겨 불필요한 "0원" 나열 방지).
+  - CSS `.pay-detail-list`/`.pay-detail-row`/`.pay-detail-row-discount` 신설 — 기존
+    `.pay-amount-row` 톤(구분선·컬러 토큰)과 통일.
+
+검증: `npx svelte-check` 신규 에러 0건. Claude Browser로 Stage DB에 신규 `contract_signings`
+토큰(`feddde05...`, 55행×17열 스프레드시트 계약 — 직전 항목에서 쓴 것과 동일 계약, 실제
+연결된 주문 데이터는 없는 순수 UI 테스트용) 발급 후 실제 서명 완료 → 결제 단계까지 진행해
+라이브 확인:
+  - 초기 상태: "기본대여요금 -" / "부가세 -"만 표시(주문 데이터 없어 `-` 폴백, 할인·쿠폰·
+    포인트 행은 전부 0이라 정상적으로 숨겨짐) — 조건부 숨김 로직 정상.
+  - 쿠폰("모바일 UI 테스트용 5,000원 할인 쿠폰") 체크박스 클릭 → "쿠폰 할인 -5,000원"
+    행이 즉시 반응형으로 나타남, `payTotal`은 `Math.max(0, ...)` 클램프로 여전히 "0원"
+    (기준금액 자체가 0이라 음수로 안 내려감 — 기존 클램프 로직 정상 작동, 이번 수정과
+    무관하게 이미 있던 안전장치).
+
+⚠️ 미완료: git 커밋 전. 이번 세션이 만든 테스트 `contract_signings` 행 2건(직전 e2e 검증
+1건 + 이번 UI 확인 1건)은 삭제하지 않고 검증 이력으로 DB에 유지.
+
+## DONE — 🟡 BOUNDARY: CMS 상담채팅 "전자계약 서명" 미리보기 — 스프레드시트형 실제 내용 미표시 결함 수정, 2026-08-21
+
+> ⚠️ 이 항목은 이 세션이 처리한 것만 기록한다.
+
+배경: Stephen이 `/cms/chat`에서 "전자계약 서명" 실행 시 뜨는 `ContractTemplatePreviewModal`
+(viewOnly) 미리보기 화면을 `<launch-selected-element>`로 직접 캡처해 제보 — 스프레드시트형
+계약서인데 "발행된 스프레드시트형 계약서입니다..." 안내 문구만 뜨고 `.preview-content`가
+텅 비어있다며 "다 펼쳐져 보여야 하지 않나?" 질의.
+
+원인 조사: `AdminChatPanel.svelte:1251`이 `ContractTemplatePreviewModal`을 `viewOnly=true`로
+열면 `contentMode`가 강제로 `'existing'`으로 고정된다. 이 컴포넌트의 미리보기 렌더링 분기
+(`ContractTemplatePreviewModal.svelte` 389-427행, 수정 전)는 `renderTiptapDocToHtml()`만
+import돼 있어 flow(워드형) 콘텐츠만 실제로 펼쳐 보여주고, 캔버스형·스프레드시트형은 애초에
+"발송 후 고객 화면에서 확인하라"는 안내 문구 하나로 대체하도록 **처음부터 그렇게 구현돼
+있었음**(버그가 아니라 미완성 기능) — 스프레드시트 모드는 `content_blocks`가 항상 `[]`로
+저장되는 구조라 `previewBlocks`(flow 전용 순회 대상)에 애초에 아무것도 안 들어옴.
+
+Stephen 확인(AskUserQuestion): "스프레드시트만 먼저 수정"(캔버스형은 이번 범위 제외, 좌표
+기반 렌더링이라 별도 검토 필요 판단).
+
+수정 (`src/lib/components/cms/ContractTemplatePreviewModal.svelte` 1개 파일):
+  - `renderSpreadsheetToHtml`(`/contract/[token]` 고객 화면·오늘 세션 초반 폰트색 버그
+    수정으로 이미 검증된 렌더러) import 추가.
+  - `previewSpreadsheetDocument` derived 값 신설 — existing 모드는 이미 발송 시점에
+    치환·저장된 `existingSpreadsheetDocument`를 그대로, template 모드는 flow의
+    `previewBlocks`와 동일하게 `subData`가 있으면 `substituteSpreadsheetDocument()`로
+    실시간 치환해 보여줌(발송 전/후 미리보기 값이 어긋나지 않도록 실제 발송 로직
+    `applySelectedTemplate()`과 동일 치환 함수 재사용).
+  - 마크업: 캔버스형 안내 분기 2개는 그대로 유지, 스프레드시트형 안내 분기 2개(template/
+    existing)는 제거하고 `.preview-content` 안에 `{#if previewSpreadsheetDocument}` 블록으로
+    실제 `{@html renderSpreadsheetToHtml(...)}` 렌더링 추가.
+  - CSS: `/contract/[token]/+page.svelte`의 `.spreadsheet-doc-content`(`.ss-sheet-page`/
+    `.ss-table`/`.ss-cell-image` 등) 스타일 블록을 그대로 복제 추가 — Svelte 컴포넌트 스타일이
+    파일별로 스코프돼 있어 `renderSpreadsheetToHtml()`이 생성하는 클래스가 이 모달에는
+    전혀 스타일링돼 있지 않았기 때문(그대로 두면 브라우저 기본 표 스타일로 깨져 보였을 것).
+
+검증: `npx svelte-check` 신규 에러 0건(기존 `vite.config.ts` 무관 에러 1건만 잔존, 새 CSS
+셀렉터 "unused" 경고도 0건 — 마크업에서 정상 참조됨을 간접 확인). `contractContentMode.
+test.ts`·`contractCanvasPublishFix.test.ts` 135/135 GREEN(회귀 없음).
+
+🔴 QA(@sp3-qa-agent) 검수 완료(2026-08-21) — GATE E 통과, CRITICAL 결함 0건. `isSpreadsheetDocument`
+타입가드가 진짜 타입 내로잉(`value is SpreadsheetDocument`)이라 null/형식불일치 값이
+`renderSpreadsheetToHtml()`로 전달될 여지 자체가 없음을 확인, `.spreadsheet-doc-content`
+CSS를 `/contract/[token]/+page.svelte`와 직접 대조해 값 일치 확인(유일한 차이는 `--cs-text`
+vs `--cs-dark` 토큰명인데 `app.css`상 둘 다 `#100B32`로 동일값 — 시각적 차이 없음), 캔버스형
+로직 무변경 확인, 두 테스트파일 135/135·svelte-check 신규에러 0건 직접 재실행 재확인. 범위
+외 발견 1건(fetch에 `?preferSignedSnapshot=1` 포함돼 있음) — 오늘 세션 초반 스냅샷 기능
+작업 시 이미 구현된 서버 파라미터를 그대로 쓴 것으로 확인, 결함 아님으로 판정.
+
+⚠️ 미완료: 캔버스형 계약서는 이번 범위에서 제외(좌표기반 렌더링이라 별도 검토 필요, Stephen
+확정). git 커밋 전.
+
+## DONE — 🟡 BOUNDARY: 전자계약 시스템 패키지 모듈화 + 이식 기술문서 신규 작성, 2026-08-21
+
+> ⚠️ 이 항목은 이 세션이 처리한 것만 기록한다. DB/코드 변경 없음(신규 파일 추가만) — 등급은
+> 다중 파일이라 BOUNDARY이나 CRITICAL 리스크(DB 마이그레이션·기존 로직 변경) 자체는 없음.
+
+배경: Stephen이 "현재 구현된 전자계약 시스템 구조를 문제없이 안전하게 복사 후 패키지
+모듈화 작업할 것 + 패키지 모듈 기술 문서 작성 — 다른 프로젝트에 모듈째 이식할 예정"으로
+지시. 착수 전 확인 결과 **2026-08-12에 이미 "Phase 9(전역 패키징 모듈화 + 연동 기술문서)"가
+한 차례 완료**돼 있었고(`docs/contract-suite-integration.md`, 806줄), P9-1에서 "Supabase
+직접 호출 0건"까지 검증한 이력이 있었다. 다만 그 시점 이후(2026-08-15~21) 스프레드시트
+모드 전체·서명 시점 콘텐츠 스냅샷이 새로 추가돼 그 문서는 이제 상당 부분 구버전 —
+①스프레드시트 에디터/타입/렌더러 전체 미기재 ②`signed_content_snapshot`·
+`?preferSignedSnapshot=1` 미기재 ③`contract_authoring_mode` enum 3번째 값('spreadsheet')
+미기재 ④오케스트레이션 레이어(ContractEditorModal 등 상위 배선 컴포넌트) 아예 언급 없음.
+→ 이번 작업은 "이미 됐던 걸 다시 함"이 아니라 "구버전 문서를 실제 실행(물리적 파일 사본
+생성)까지 완결 + 최신화"로 판단하고 진행.
+
+작업 내용:
+  1. **의존성 전수 재검증**: 기존 P9-1이 확인한 "Supabase 직접 호출 0건"과 별개로, 하드코딩된
+     `fetch('/api/cms/...')` 리터럴 경로 결합을 grep으로 새로 찾아냄 — `SealAssetPicker.svelte`
+     (2곳)·`ContractDocumentEditor.svelte`·`ContractSpreadsheetEditor.svelte`·
+     `ContractCanvasFieldPalette.svelte`(총 5곳). "Supabase 미사용"만으로는 결합 부재를
+     보장하지 못한다는 것을 실측으로 확인 — 향후 유사 패키징 작업 시 이 체크리스트 항목으로
+     남길 것.
+  2. **물리적 패키지 생성**: `packages/contract-system/`(신규 디렉토리) — 원본 `src/lib/...`
+     파일은 전부 `cp`로만 복사(원본 완전 미수정, git status로 직접 확인), 사본에만 아래 작업 적용:
+     - `$lib/...` 경로 별칭 41건을 전부 상대경로로 재작성(패키지가 어느 프로젝트의 `$lib`
+       구조에도 의존하지 않도록)
+     - `types/contract-document.ts`·`utils/tiptapRender.ts`·`utils/contract-substitution.ts`
+       3개 파일에서 크레이지샷 고정 16필드 타입(`ContractSubstitutionData`) 의존 제거 →
+       `Record<string, string>`으로 일반화(어떤 변수명을 쓸지는 이식 대상이 결정)
+     - `contract-substitution.ts`의 레거시 `ContentBlock`(TipTap 도입 이전 포맷) 치환 분기 제거
+       — 새 프로젝트엔 그 레거시 데이터가 없으므로 불필요, `content-editor.ts` 의존 자체를 끊음
+     - `SealAssetPicker.svelte`는 하드코딩 fetch 2곳을 `loadAssets`/`submitSignature` 콜백
+       prop으로 교체(다른 모든 에디터 컴포넌트와 동일한 어댑터 패턴으로 통일) — 파일이 작고
+       독립적이라 안전하게 리팩터링 가능하다고 판단해 직접 수정
+     - 나머지 3개 대형 에디터 파일의 `fetch('/api/cms/signature-assets')` 하드코딩은 **의도적으로
+       그대로 둠** — 1700줄 이상의 실사용 검증된 파일을 이번 세션에서 위험하게 리팩터링하는
+       대신, README §4에 "이 경로에 정확히 이 응답형태로 구현하거나 직접 고쳐쓸 것"으로
+       명시적 계약(contract)화해서 안전하게 처리
+  3. **DB 스키마**: `packages/contract-system/db/schema.sql` — Stage DB
+     (ezyvffjvuwmtuhpxdjrw) 라이브 스키마를 `information_schema.columns`/`pg_constraint`로
+     직접 재조회해서 작성(마이그레이션 파일 재구성이 아니라 실제 현재 상태 기준) — 오늘
+     추가된 `signed_content_snapshot` 컬럼 2개, `spreadsheet_document` 컬럼, 3-value enum까지
+     전부 포함해 구버전 문서의 누락을 해소. `contracts.reservation_id`는 크레이지샷 전용이라
+     FK만 주석 처리하고 컬럼은 남겨 이식 대상이 자기 테이블로 재연결하도록 안내.
+  4. **README.md**: 신규 작성(11절 구성) — 모듈 경계, 파일구조, 잔여결합 5곳 명시(위 1번),
+     API 계약 7개 엔드포인트, 컴포넌트 배선 예시 6개(코드 포함), CSS 토큰, 이식 시 손볼 지점
+     5개 표, 테스트 커버리지 공백(원본 앱도 컴포넌트 상호작용 테스트 0건이었다는 사실 그대로
+     승계 — 새 프로젝트는 이 공백을 반복하지 말 것을 명시적으로 경고), 알려진 구조적 한계
+     5개(해시 사후검증 미사용·User-Agent 미캡처 등, 이번 세션 정밀감사 결과 그대로 인용).
+
+검증: 원본 파일 미변경 `git status`로 직접 확인(신규 `packages/` 외 diff 0건). 패키지 내
+`$lib`/`$env` 잔존 참조 0건(grep 전수 확인). 상대경로 import 41건 전부 실제 파일 존재
+확인(스크립트로 대상 파일 resolve 검증). genericize 대상 3개 파일 문법 구조 직접 재확인
+(중괄호 불균형처럼 보였던 1건은 정규식 리터럴 `/\{\{...\}\}/` 안의 문자였을 뿐 실제 오류
+아님을 파일 재독으로 확인).
+
+⚠️ 미완료:
+  - 패키지 자체의 `svelte-check`/빌드 검증은 하지 않음 — 별도 tsconfig가 없는 순수 참조용
+    디렉토리라 원본 앱 빌드에는 영향 없음(원본 `src/`에 포함되지 않아 Vite가 인식하지 않음).
+    실제 이식 시점에 대상 프로젝트에서 최초 1회 컴파일 검증 필요.
+  - 기존 구버전 `docs/contract-suite-integration.md`는 그대로 두었음(요청 범위 외 — 삭제/수정
+    안 함). 새 정본은 `packages/contract-system/README.md`. Stephen이 원하면 구버전 문서
+    상단에 "새 위치로 이전" 안내만 추가하는 후속 작업 가능.
+  - git commit 전(신규 파일만, Stephen 직접 실행 필요).
+
+🔴 QA(@sp3-qa-agent) 검수 완료(2026-08-21) — GATE E 통과, CRITICAL 결함 0건. 원본 13개 경로
+`git status --porcelain` 전수 조회로 무수정 100% 재확인, `$lib`/`$env` 잔존 0건, 상대경로
+41건 전수 resolve 검증(위험 지목 지점이던 nodes/MergeFieldNode.ts 3단계·docImport/*.ts
+2단계 포함 전부 정상), 제네릭화 3개 파일 원본 대비 라인단위 diff로 로직 동일성 확인,
+SealAssetPicker 리팩터링 전후 UI 동작 동일성 확인(비차단 개선 1건: $effect 로딩상태 리셋
+추가 발견), README §5 API 계약과 실제 서버 코드 3개 파일 대조 일치, §4 잔여결합 목록
+누락 없음(fetch 전수 재확인 결과 정확히 일치). §7(DB 라이브 스키마 직접 대조)만 QA
+세션에 Supabase MCP 미제공으로 미완료 상태였으나, 원 세션이 schema.sql 작성 시점에
+이미 Stage DB(ezyvffjvuwmtuhpxdjrw)를 `information_schema.columns`로 직접 조회해 그
+결과를 그대로 반영한 것이므로 실질적으로 검증된 상태(중복 조회 불필요 판단).
+
+## DONE — 🔴 CRITICAL: 서명 시점 콘텐츠 스냅샷 신규 구현(전자계약 정밀감사 §4 법적효력 권고안 실행), 2026-08-21
+
+> ⚠️ 이 항목은 이 세션이 처리한 것만 기록한다. 동일 워킹트리에서 동시 진행 중인 다른 세션들의
+> 작업(TASK.md 상단의 별개 아젠다 등)과 무관.
+
+배경: 이 세션이 직접 수행한 "전자계약 편집기 + 전자서명 로직 전역 정밀검증"(§1~§5, Artifact로
+발행)에서 가장 중대한 결함으로 지목한 것 — `contracts.content_blocks`/`canvas_document`/
+`spreadsheet_document`가 라이브 컬럼이라, 고객 서명 완료 후 관리자가 PATCH로 내용을 고치면
+고객이 "서명한 계약서"를 다시 봐도 바뀐 내용이 그대로 보이는 문제(형태 보존 부재). Stephen이
+"서명 시점 스냅샷 저장 마이그레이션 플랜부터 짜줘"로 실행 지시.
+
+Stephen 확인 2건(AskUserQuestion):
+  ① 기존 서명 건 소급 적용 여부 → "소급 안 함 — 이 시점부터 신규 서명만 적용"(권장안 채택).
+     이유: 스냅샷 컬럼 도입 이전 서명 건은 "그때 그 모습"을 사후에 정확히 복원할 방법이 없어,
+     라이브 값을 스냅샷인 것처럼 채워넣으면 오히려 오해를 유발함.
+  ② CMS 관리자 "보기" 화면도 함께 반영할지 → "이번에 같이 반영"(권장안 채택).
+
+설계:
+  - 새 컬럼 `contract_signings.signed_content_snapshot jsonb` + `contract_issuer_signatures.
+    signed_content_snapshot jsonb`(고객 서명·발행인 서명 각각 독립적인 법적 행위이므로 둘 다).
+    별도 버전 테이블 대신 컬럼 1개 추가 — 이미 서명 이벤트 1건당 1행이고 `content_hash`도
+    같은 테이블에 있어 별도 테이블을 둘 이유가 없다고 판단.
+  - 스냅샷 내용: `{ title, authoring_mode, content_blocks, specifications, canvas_document,
+    spreadsheet_document }` — 작성모드 무관하게 렌더링에 필요한 것 전부.
+  - 겸사겸사 발견·동시수정한 버그: `sign/+server.ts`·`issuer-sign/+server.ts` 둘 다 기존
+    `content_hash` 계산이 `canvas_document ?? content_blocks`만 해시 대상으로 삼아, 스프레드
+    시트 모드 계약서(`content_blocks`가 항상 `[]`로 저장됨)는 해시가 실제 내용과 무관하게
+    `hash([])`로 고정되던 결함이 있었음(직접 코드 확인) — 스냅샷 객체 전체를 해시 대상으로
+    바꾸면서 함께 해소. 이제 "스냅샷"과 "해시"가 정확히 같은 객체를 가리켜, 향후 사후검증
+    기능(리포트 §4 권고안 2번)도 단순해짐.
+
+DB 마이그레이션: `supabase/migrations/20260821000000_323_contract_signed_content_snapshot.sql`
+(신규) — `ALTER TABLE ... ADD COLUMN IF NOT EXISTS`, 기존 마이그레이션 파일 미수정.
+Stage(ezyvffjvuwmtuhpxdjrw) 적용 완료(2026-08-21) + `information_schema.columns` 직접 조회로
+두 테이블 모두 컬럼 존재 확인. **Production(vnbpmvxruyciuuaermyh)도 같은 날 Stephen 승인
+받아 적용 완료** — 적용 직후 `information_schema.columns` 재조회로 두 테이블 모두 컬럼
+존재 직접 확인(프로젝트 원칙: CRITICAL DB 변경은 stage 검증 후 production 적용 여부를
+별도로 확인받는다, service-operations.md §9 배포순서 사고 교훈 — 이번엔 두 단계 모두
+확인 절차 준수).
+
+코드 변경 (5개 파일):
+  - `api/contracts/[token]/sign/+server.ts` — 서명 UPDATE에 `signed_content_snapshot` 추가,
+    해시 대상을 스냅샷 객체 전체로 교체.
+  - `api/cms/contracts/[id]/issuer-sign/+server.ts` — 동일.
+  - `account/rental/[id]/contract/+page.server.ts` — 고객 "내 계약서 보기" 화면. 스냅샷이
+    있으면 그걸 콘텐츠 소스로 쓰고 없으면(구버전 서명 건) 라이브 `contracts` 컬럼으로 폴백.
+    `id`처럼 콘텐츠가 아닌 필드는 항상 라이브 값 사용.
+  - `api/cms/contracts/[id]/content/+server.ts` GET — `?preferSignedSnapshot=1` 쿼리
+    파라미터가 있을 때만 스냅샷을 우선 반환하도록 **의도적으로 옵트인**으로 설계. 이 엔드포인트가
+    "보기"(순수 열람) 뿐 아니라 "편집"(`ContractEditorModal`)·"재발송"(existing 모드
+    `ContractTemplatePreviewModal`)에서도 공유되기 때문 — 파라미터 없이 항상 스냅샷을 반환하면
+    편집 화면이 "서명 당시의 과거 내용"을 프리필하고, 그걸 다시 저장할 때 그 사이의 실제
+    변경사항을 조용히 덮어쓰는 새로운 데이터손실 버그를 만들 위험이 있었음(§2에 기록된 R23
+    데이터손실 버그와 같은 유형이 될 뻔함 — 설계 단계에서 미리 회피).
+  - `cms/ContractTemplatePreviewModal.svelte` — `viewOnly`(순수 "보기")일 때만
+    `?preferSignedSnapshot=1`을 붙여 요청. 편집/재발송 흐름은 기존 그대로 라이브 콘텐츠 사용.
+
+테스트: `src/__tests__/server/contractAuthGates.test.ts`에 3건 신규 추가(스냅샷 우선 반환·
+파라미터 없으면 라이브 반환·스냅샷 없으면 폴백). 기존 `makeAdminStub()` 공용 모의객체가
+테이블 구분 없이 `.maybeSingle()` 응답 1개만 지원해 새 케이스(같은 요청 안에서
+`contract_signings`·`contracts` 두 테이블을 서로 다른 값으로 조회) 검증이 불가능했던 것을
+`nextMaybeSingleByTable`(테이블별 응답 지정, 기존 테스트에 영향 없는 하위호환 확장)로 보강.
+또한 GET 핸들러에 `.order().limit()` 체이닝이 추가되며 기존 `order()` 모의가 Promise를
+즉시 반환해버려 `.limit is not a function`으로 4개 기존 테스트가 깨졌던 것을, chain 객체를
+thenable로 만드는 방식(`order()`가 체인 마지막이면 thenable 폴백, 더 체이닝되면 계속 체인
+반환)으로 근본 수정 — `content/+server.ts:29` PATCH 핸들러가 이미 쓰고 있던 동일 체이닝
+패턴과도 일관성 확보.
+
+검증: `npx vitest run src/__tests__/server/contractAuthGates.test.ts` 이 세션이 처음 보고한
+"41/41 GREEN"은 부정확한 숫자였음 — QA(@sp3-qa-agent) 재실행 결과 그중 18건은 동시 진행 중인
+다른 세션들의 stale git worktree(`.claude/worktrees/exciting-ardinghelli-71ff74/`,
+`agent-a86c7dc22145d06b6/`)에 남은 동일 파일 사본이 vitest glob에 함께 잡힌 것으로 확인 —
+**이 세션이 실제로 수정한 파일 기준 정확한 결과는 23/23 GREEN**(기존 20건 회귀 없음 + 신규
+3건). `npx svelte-check` 신규 에러 0건(`vite.config.ts` 기존 무관 에러 1건만 잔존).
+`contractP8A`·`contractP8B4`·`contractP6Canvas`·`contractCanvasPublishFix` 4개 관련 스위트
+전부 GREEN. `contractSign.test.ts`의 일부 테스트가 `rental_reservations_product_dates_excl`
+제약 위반으로 실패했으나, 원인이 Stage DB에 남아있는 겹치는 예약 테스트데이터(다른 세션들의
+라이브 통합테스트 부산물)이지 이번 변경과 무관함을 직접 확인(동일 에러가 이 세션과 무관한
+`.claude/worktrees/` 사본에서도 동일하게 재현됨).
+
+🔴 QA(@sp3-qa-agent) 검수 완료(2026-08-21) — GATE E 통과, CRITICAL 결함 0건. 가장 우려했던
+지점("보기"용 `preferSignedSnapshot` 옵트인이 편집/재발송 경로에 잘못 섞여 새 데이터손실을
+만들 위험)을 집중 검증 — `ContractTemplatePreviewModal`이 `RentalContractViewer` 단 한 곳에서만
+쓰이고 `viewOnly` 값이 정확히 편집 가능 여부와 대응됨을 코드 추적으로 확인, 교차 오염 케이스
+없음. 비차단 관찰 2건만 참고용으로 남김: ① 카드 제목 표시가 라이브 title이라 서명 후 관리자가
+제목을 바꾸면 "서명완료 목록" 카드 제목과 실제 "보기" 클릭 시 스냅샷 제목이 코스메틱하게
+다를 수 있음 ② 마이그레이션 323에 rollback 주석 없음(단순 `ADD COLUMN`이라 위험 낮음, 프로젝트
+최근 마이그레이션 다수도 동일 관례).
+
+⚠️ 잔여 범위(이번엔 다루지 않음, 정밀감사 리포트 §4 권고안 2·3·4번):
+  - 해시 사후검증 API/화면 없음 — `content_hash`는 여전히 write-only.
+  - 열람(`viewed`)·발송(`sent`) 감사로그 이벤트에 IP 캡처 없음.
+  - User-Agent/기기정보 캡처 없음.
+
+✅ **Production(vnbpmvxruyciuuaermyh) 적용 완료(2026-08-21, Stephen 승인)** — 적용 직후
+`information_schema.columns` 재조회로 `contract_signings`/`contract_issuer_signatures` 둘
+다 `signed_content_snapshot` 컬럼 존재 직접 확인. ⚠️ 미배포: git 커밋 전(Stephen 직접 실행
+필요).
+
 [26라운드 — 크기설정 플로팅 툴바가 셀 경계에서 클리핑돼 조작 불가능하던 결함 확정·수정, 2026-08-19]
   Stephen <launch-selected-element> 재현 보고: "스프레드시트 편집 모드에서 직인 등록 불러와지는
   것 까지는 되는데 크기 설정 창을 조작이 안되고, 설정창 클릭하면서 없어지는 문제점 확인해. -원래
@@ -27739,3 +29585,290 @@ RETURN v_base || LPAD(v_seq::TEXT, GREATEST(v_seq_digits, LENGTH(v_seq::TEXT)), 
 ```
 supabase/migrations/20260820050000_316_fix_generate_reservation_code_lpad_truncation.sql  (신규)
 ```
+
+## DONE — stage 구독상품 실데이터(Easy/Pop/Crazy pack) production DB 반영 (2026-08-19, 후속) — ✅ 완료
+
+[CONTEXT BRIDGE]
+plan_source: Stephen — "/cms/subscriptions 구독목록의 3개 실플랜(Easy/Pop/Crazy pack)을 실서버
+  DB(production)에 그대로 반영해줘".
+핵심제약: 코드 배포와 무관하게 DB 데이터만 반영(현재 앱 코드는 미커밋·미배포 상태) — 배포 전
+  Production 대상 데이터 삽입이라 CRITICAL. 실행 전 production 현재 상태(충돌 여부) 실측 확인 후 진행.
+TDD도메인: 없음 — GSD(데이터 반영, 코드/마이그레이션 변경 없음).
+
+### 사전 확인
+- stage(ezyvffjvuwmtuhpxdjrw) `subscription_plans` 실측 조회 — id 448/449/450, 2026-08-19
+  생성된 실 데이터 3건(Easy/Pop/Crazy pack, 가격·등급·설명·features 전부 확인)
+- production(vnbpmvxruyciuuaermyh) `subscription_plans` 실측 조회 — **0건(완전히 빈 테이블)**,
+  충돌 위험 없음 확인
+- production 컬럼 스키마 재확인 — image_urls/content_blocks 포함 필요한 컬럼 전부 존재 확인
+
+### 반영 내역
+production에 3건 INSERT(스테이지의 id 448/449/450을 강제하지 않고 production 자체 시퀀스로
+새 id 4/5/6 자동발급 — 향후 시퀀스 충돌 방지). name/tagline/description/image_url/
+monthly_price/membership_grade/sort_order/status/features 전부 stage와 동일값 반영,
+image_urls/content_blocks는 stage와 동일하게 빈 배열(둘 다 비어있는 상태였음).
+
+### ⚠️ 배포 순서 참고
+이 앱 코드(`/cms/subscriptions`, `/members`, `/subscribe` 등)는 현재 미커밋 상태(다른 세션이
+통합 커밋·배포 예정, 앞선 "다른 세션에서 통합 커밋 배포 할테니 그냥 둘 것" 지시 참고)라 이번
+데이터 반영은 즉시 프로덕션 화면에 노출되지 않는다 — 코드 배포 시점부터 바로 보이게 됨. 미리
+준비해두는 것으로 순서 무관하게 안전.
+
+**GATE E: ✅ 통과 — production 실측 검증 완료(id 4/5/6 삽입 확인).**
+
+## DONE — 구독 "인기" 배지 CMS 지정 가능화 (2026-08-20, 이 세션) — ✅ 코드 완료, Migration 317 stage 적용 대기
+
+[CONTEXT BRIDGE]
+plan_source: Stephen이 `/members` 구독 비교표의 "인기" 배지가 하드코딩(2번째 슬롯 고정,
+  `FeaturesTable.svelte:30-32` `isPopularSlot(index) { return index === 1 && plans.length >= 2 }`)
+  임을 확인 후 "CMS에서 지정 가능하게 만들어줘" 요청. AskUserQuestion으로 "여러 플랜 동시 허용"
+  확정(배타성 강제 안 함 — 관리자가 여러 플랜에 동시에 켜둘 수 있음, DB 레벨 상호배제 로직 불필요).
+핵심제약:
+  - `PricingCards.svelte`에는 "인기" 개념이 없음(확인 완료) — 이 작업은 `FeaturesTable.svelte`
+    비교표 전용, 큰 플랜 카드는 건드리지 않음.
+  - `subscription_plans`는 이미 production(vnbpmvxruyciuuaermyh)에 실 데이터 3건(id 4/5/6,
+    Easy/Pop/Crazy pack)이 들어가 있는 상태 — 신규 컬럼은 `DEFAULT false`로 기존 행에 안전하게
+    적용, 데이터 손실 위험 없음. stage(ezyvffjvuwmtuhpxdjrw) 먼저 적용·검증 후 production 적용.
+  - 배타성(하나만 켜지도록 자동 해제) 로직 구현 금지 — Stephen이 명시적으로 "여러 플랜 동시 허용"
+    확정.
+TDD도메인: 없음 — GSD(단순 boolean 플래그 추가 + 표시 로직 전환, 결제·예약 로직 무관).
+
+### 구현 내역
+
+1. **마이그레이션(신규)**: `subscription_plans.is_popular BOOLEAN NOT NULL DEFAULT false` 추가.
+   stage 적용·검증 후 production 적용(Stephen 승인 필요 — 이전 세션 패턴과 동일하게 먼저
+   보고 후 진행).
+2. **`src/lib/types/subscription.ts`** — `SubscriptionPlanRow`에 `is_popular: boolean` 필드 추가.
+3. **CMS 등록 폼(`src/routes/cms/subscriptions/new/+page.svelte` + `+page.server.ts`)** —
+   기본정보 섹션에 "인기 배지 표시" 토글/체크박스 추가(태그라인 필드 인근), `create` 액션에서
+   `is_popular` 저장.
+4. **CMS 상세패널(`SubscriptionDetailPanel.svelte`)** — 기본정보 탭 `localBasic` 상태에
+   `is_popular` 추가(`isDirtyBasic` 비교 로직에도 포함), 동일 위치에 토글 UI 추가,
+   `subscriptions/+page.server.ts`의 `updateSection`(`basic` 섹션 핸들러)에서 `is_popular` 저장.
+5. **`src/routes/members/+page.server.ts`** — select에 `is_popular` 추가.
+6. **`src/lib/components/members/FeaturesTable.svelte`** — `isPopularSlot(index)`(위치 기반
+   하드코딩)를 제거하고 `plan.is_popular` 직접 참조로 교체(74·101·103·136행 근방 사용처 전부).
+   `activeIndex`/`col-selected` 등 기존 선택 상태 로직은 무변경.
+
+### 영향 파일
+
+```
+supabase/migrations/(신규, subscription_plans is_popular 컬럼)
+src/lib/types/subscription.ts (MODIFY)
+src/routes/cms/subscriptions/new/+page.svelte (MODIFY)
+src/routes/cms/subscriptions/new/+page.server.ts (MODIFY)
+src/lib/components/cms/subscription/SubscriptionDetailPanel.svelte (MODIFY)
+src/routes/cms/subscriptions/+page.server.ts (MODIFY)
+src/routes/members/+page.server.ts (MODIFY)
+src/lib/components/members/FeaturesTable.svelte (MODIFY)
+```
+
+### 검증 방법
+- stage에서 CMS로 임의 플랜의 "인기" 토글을 켜고 `/members` 비교표에 실제로 반영되는지 확인,
+  2개 이상 동시에 켜도 정상 표시(배타성 없음) 확인, 전부 꺼도 화면 안 깨지는지 확인
+- `npx svelte-check` 신규 에러 0건
+- production 적용은 stage 검증 완료 후 별도 보고·승인 절차
+
+### 메인 세션 stage 마이그레이션 적용 (2026-08-20)
+
+harness-executor가 마이그레이션 파일 작성까지 완료 후 stage 적용은 메인 세션에 위임(지시대로) —
+`20260820060000_317_subscription_plans_is_popular.sql`을 stage(ezyvffjvuwmtuhpxdjrw)에 직접
+적용 완료. 검증: `is_popular` 컬럼 정상 생성, 기존 3개 플랜(Easy/Pop/Crazy pack) 전부
+`is_popular=false`로 안전하게 기본값 적용(배지 표시 변화 없음, 데이터 손실 없음).
+
+**GATE E: ✅ 통과(stage) — production 적용은 Stephen 승인 대기.
+
+## NOW — 취소·만료 예약 계약서 발행/발송 차단 (2026-08-21, 이 세션)
+
+> ⚠️ 이 항목은 이 세션이 처리한 것만 기록한다. 동일 워킹트리에서 동시 진행 중인 다른 세션들의
+> 작업과 무관.
+
+**계기**: Stephen이 취소된 예약(id 2656, `/cms/reservation?status=&selected=2656`)에서
+계약서 발행/발송이 그대로 실행되는 원인 분석을 요청.
+
+### 원인 분석 (읽기전용, 코드 변경 없음)
+
+`rules-ref/contract.md` "미리보기 & 발송 버튼: 모든 상태에서 항상 표시(재발송 용도)"라는
+기존 정책이 `hold`/`pending` 등 초기 단계를 염두에 두고 만들어진 것으로 보이나 `cancelled`
+(취소)까지 예외 없이 포함하고 있었음. UI(`RentalDetailPanel`→`RentalContractViewer`)·서버
+API(`init-contract`·`send-chat`) 3개 레이어 전부 예약 `status`를 아예 조회하지 않아, 정책
+문서와 정확히 일치하는 결과였음(특정 지점의 버그가 아니라 정책 자체의 미비).
+
+### 구현 — cancelled·expired 차단
+
+Stephen 확인 후("취소된 예약은 발행/발송 막아줘" + "expired도 막아야 하는거 아냐?" 재질문에
+동의) 아래 상태를 차단 목록에 추가:
+  - `cancelled` — 재고가 이미 해제된 종료 상태
+  - `expired` — HOLD 30분 자동만료(service-operations.md §10)도 동일하게 재고가 해제된
+    종료 상태라 함께 포함(Stephen 확인)
+
+**서버**: `init-contract`(발행)·`send-chat`(발송) 둘 다 예약 `status`를 새로 조회해 차단
+목록에 해당하면 `422` 반환. `init-contract`는 기존 계약 재사용(idempotent) 체크보다 상태
+체크를 먼저 수행하도록 순서를 조정(취소된 예약이 재사용 경로로 우회되지 않도록).
+
+**UI**: `RentalContractViewer.svelte`에 `reservationStatus` prop 신설, "발행"·"미리보기 &
+발송" 버튼 `disabled` + 안내 배너("취소된/만료된 예약입니다 — 계약서 발행·발송이
+비활성화되었습니다") 추가. `/cms/rentals`(대여현황)의 "보기"·PDF·서명링크 열람 액션은 차단
+대상 아님(발행/발송 액션만 차단) — `RentalDetailPanel.svelte`의 채팅알림 버튼이 이미
+cancelled/damage_claimed를 동일하게 숨기는 기존 전례(875행 `row.status !== 'cancelled' &&
+row.status !== 'damage_claimed'`)와 같은 원칙을 적용.
+
+**테스트**: `contractAuthGates.test.ts`에 cancelled/expired 차단(422) + 정상 상태 통과 6건
+추가 — 전체 67개 통과. `npx svelte-check` 신규 에러 0건(기존 무관한 vite.config.ts 1건만 유지).
+
+### 후속 — damage_claimed 추가 확정 (같은 날 후속)
+
+Stephen이 "damage_claimed도 막아야 하는지 확인해달라"고 질문 → cancelled와 이미 동일하게
+취급되는 기존 전례(채팅알림 버튼, 875행) + damage_claimed는 confirmed(계약서명 완료가 필수
+전제조건, service-operations.md §9) 이후에만 도달 가능해 그 시점엔 이미 서명이 끝나 재발행이
+필요 없다는 근거로 "막는 게 맞다"고 답변 → Stephen "damage_claimed도 차단 목록에 추가해줘"로
+확정 → 즉시 반영 완료.
+
+**구현**: `contractIssueGuard.ts`의 `CONTRACT_ISSUE_BLOCKED_STATUSES`에 `'damage_claimed'`
+추가(3개 상태 = cancelled/expired/damage_claimed). `RentalContractViewer.svelte`의
+`issueBlockedLabel`에 `damage_claimed → '파손 신고된'` 분기 추가(기존 취소/만료 배너·버튼
+title 문구 로직 재사용 — cancelled/expired 때 만든 동일 `issueBlocked` 게이트가 그대로
+적용되므로 서버·UI 로직 자체는 이미 damage_claimed에도 동작하고 있었고, 라벨 문구만 신규
+분기 필요했음).
+
+**테스트**: `contractAuthGates.test.ts`에 init-contract/send-chat 각각 `status=damage_claimed
+→ 422` RED 케이스 2건 추가 — 전체 69개 통과. `npx svelte-check` 신규 에러 0건(기존 1건만
+유지).
+
+### 수정 파일
+
+```
+src/lib/utils/contractIssueGuard.ts                              (신규)
+src/routes/api/cms/reservations/[id]/init-contract/+server.ts    (MODIFY)
+src/routes/api/cms/contracts/[id]/send-chat/+server.ts           (MODIFY)
+src/lib/components/cms/RentalContractViewer.svelte               (MODIFY)
+src/lib/components/cms/RentalDetailPanel.svelte                  (MODIFY)
+src/__tests__/server/contractAuthGates.test.ts                   (MODIFY)
+```
+
+**GATE 등급**: 🔴 CRITICAL(전자계약 발행/발송 로직 변경) — Stephen 명시 지시로 진행, GATE E
+검수는 아래 @sp3-qa-agent 결과 참고.
+
+### QA(@sp3-qa-agent) 검수 결과 — ✅ GATE E 통과 (2026-08-21)
+
+**검수 방법**: 6개 파일 git diff 실측 대조 + `npx vitest run contractAuthGates.test.ts`
+직접 재실행(67/67 통과) + `npx svelte-check` 직접 재실행(신규 에러 0건, pre-existing
+vite.config.ts 1건만 잔존) + security-auth.md manager 게이트 유지 확인 + 차단 순서(idempotent
+재사용/발행자서명 체크보다 상태 체크가 먼저 실행되는지) 코드 직접 확인 + UI 스코프(`isRentalView`
+컨텍스트의 보기·PDF·서명링크 열람이 실수로 막히지 않았는지) 확인.
+
+**결과**: CRITICAL 결함 0건. 로직 정확성(`isContractIssueBlocked` null 가드)·차단 순서·UI 스코프
+전부 요구사항과 일치 확인.
+
+**WARNING①(비차단, 확인 필요)**: `RentalDetailPanel.svelte` diff에 이번 아젠다(계약 차단
+prop 전달)와 무관한 변경이 함께 섞여 있음 — 무인보관함 비밀번호 기능(신규 `lockerTimeRange.ts`·
+`locker-password/+server.ts` 포함), `initialTab` prop 신설, `.panel-content` 래퍼 div,
+`STATUS_LABEL`의 `confirmed: '승인완료'→'계약완료'` 텍스트 변경. **세션 시작 시점 `git status`에
+이미 이 파일이 modified로 잡혀 있었던 점과 일치 — 이번 세션이 만든 변경이 아니라, 이전
+세션(또는 동일 워킹트리의 다른 세션)이 남긴 기존 미커밋 변경**으로 판단됨. 이번 세션은 그 위에
+`reservationStatus={row.status}` 한 줄만 추가.
+
+**WARNING②(비차단, 참고)**: `.claude/rules-ref/contract.md` 268행 "미리보기 & 발송 버튼: 모든
+상태에서 항상 표시(재발송 용도)" + GATE C 체크리스트 519행 서술이 이번 변경으로 더 이상
+정확하지 않음(cancelled/expired 예외 발생) — 별도 소규모 문서 갱신 태스크로 처리 권고.
+
+**추가 참고(차단 아님)**: "편집" 버튼은 `issueBlocked`와 무관하게 여전히 활성 — 취소/만료
+예약이어도 이미 발행된 계약 내용은 편집 가능. 요청 범위(발행·발송만 차단)에는 부합하나, 향후
+편집도 막을지는 별도 판단 필요.
+
+### 종합 판정
+
+**GATE E: ✅ 통과** — CRITICAL 0건. WARNING 2건은 비차단(①은 이 세션 소관 아님을 QA가 재확인,
+②는 문서 갱신 별건). git commit은 Stephen 직접 실행 필요(GP-1) — WARNING①로 인해
+`RentalDetailPanel.svelte`를 커밋할 때 무관한 변경이 함께 포함되지 않도록 유의 권고.**
+
+---
+
+## DONE — 채팅 CTA 레이어 모달 대화카드 3건 결함 발견·수정 (2026-08-21, 이 세션) — ✅ 완료, sp3-qa-agent 검수 대기
+
+> ⚠️ 이 항목은 이 세션이 처리한 것만 기록한다.
+
+Stephen 요청: `/cms/chat` 대화카드 CTA 버튼 실행 시 뷰어 모달에 출력되는 정보의 컴포넌트화
+정상 구현 목록을 검증·목록화, 특히 "누락된 대화카드 알림목록"을 추적할 것. 이후 실제 회원/
+비회원 빠른문의 등록 테스트, 실제 전자계약 서명 테스트까지 이어서 진행하며 아래 3건의 실결함을
+발견·수정.
+
+### ① RESERVATION_STATUS_CARD 라벨 오버로딩 (Migration 329)
+
+`send_rental_chat_notification` RPC(Migration 321)를 전문 재검토한 결과, 서로 다른 5개
+시나리오(`rental_complete`·`reservation_cancelled`·`damage_claimed`·`hold_expired`·
+`locker_guide`)가 전부 `RESERVATION_STATUS_CARD` 카드 타입 하나를 공유하는데, 직전 세션에서
+`hold_expired` 시나리오 하나만 보고 `ActionCard.svelte`의 `ctaDefaults()` 기본 라벨을
+"예약 신청 취소"로 고정 변경했었다 — Stage DB 라이브 조회로 기존 7건 중 2건("상담을
+시작합니다" AI 세션시작 카드, 취소와 무관)이 이미 이 잘못된 라벨로 표시되고 있음을 확인.
+
+- `ActionCard.svelte` `ctaDefaults()`의 `RESERVATION_STATUS_CARD` 기본값을 범용 "예약 상세
+  보기"로 되돌림(주석으로 이 타입이 여러 시나리오 공유임을 명시).
+- `supabase/migrations/20260821060000_329_send_rental_chat_notification_button_label.sql`
+  신설(Migration 321 본문 100% 유지 + `button_label` CASE 분기 1개 추가) — 5개 notify_type
+  각각 발신 시점에 정확한 라벨(대여 완료 확인/예약 취소 확인/파손 신고 확인/예약 신청 취소/
+  무인보관함 안내 확인)을 payload에 직접 실어 보내도록 수정.
+- Stage에서 `send_rental_chat_notification(2655, 'locker_guide')`·`(..., 'rental_complete')`
+  실제 호출 후 결과 행의 `button_label` 확인 → 테스트 행 정리 → Production 동일 적용,
+  `pg_get_functiondef` 재조회로 `button_label`/`locker_guide` 반영 확인.
+
+### ② SHIPMENT_TRACKING_CARD 미등록 상태 죽은 버튼 → 안내 문구 폴백
+
+`chatActionEnrich.ts`의 `enrichShipmentTrackingCard()`는 운송장 미등록 시 `action_url` 없이
+`product_name`만 채운 payload를 반환하는데, `ActionCard.svelte`는 이 경우에도 "배송 추적"
+버튼을 무조건 렌더링해(클릭해도 반응 없는 죽은 버튼) 놓아뒀던 기존 결함을 발견.
+`isShipmentPending` derived 추가 → 버튼 대신 "아직 배송 정보가 등록되지 않았습니다.
+등록되면 알려드릴게요." 안내 문구로 대체.
+
+### ③ 전자계약 "서명완료 목록" 미노출 (spreadsheet 모드 판별 누락)
+
+실제 서명 테스트로 발견 — `/api/contracts/[token]/sign`을 실제 호출해(테스트 토큰
+`0d9b4ac...930`, 예약 CS26081013) 정식 서명을 완료시키고 `contract_signed` 카드를 CTA
+모달(`RentalDetailPanel` "계약서" 탭)에서 열어보니, "고객 서명 완료" 배너만 뜨고 정작
+서명 내용을 볼 수 있는 목록/뷰어 진입점 자체가 없었음.
+
+원인: `contract-content-mode.ts`의 `hasExistingContractContent()`가 `content_blocks`와
+`canvas_document`만 검사하고 `spreadsheet_document`는 검사하지 않음 — 이 계약(`authoring_mode
+='spreadsheet'`)은 canvas 모드와 동일하게 `content_blocks`가 항상 `[]`라 "발행된 내용 없음"
+으로 오판 → `RentalContractViewer.svelte`의 "서명완료 목록" 섹션(`hasIssuedContent` 게이트)
+자체가 렌더링되지 않음. 2026-08-13 canvas 모드 도입 때 이미 한 번 겪은 것과 동일 유형의
+버그가 spreadsheet 모드 추가 시 재발한 것.
+
+수정: `hasExistingContractContent()`에 `spreadsheetDocument` 3번째 파라미터 추가(`sheets`
+중 `rows`가 있는 시트 1개 이상이면 true) + `RentalContractViewer.svelte` 호출부에서
+`data.spreadsheet_document` 전달. `ContractTemplatePreviewModal.svelte`는 이 함수 호출과
+별개로 자체 spreadsheet 분기를 이미 갖고 있어 무관함을 확인, 손대지 않음.
+
+⚠️ 참고: 같은 날 다른 세션이 `ContractTemplatePreviewModal.svelte`의 **미리보기 렌더링**
+(모달을 열었을 때 스프레드시트 내용 자체가 안 펼쳐지던 별개 결함, "DONE — CMS 상담채팅
+'전자계약 서명' 미리보기 — 스프레드시트형 실제 내용 미표시 결함 수정" 항목 참고)을 수정 —
+이번 ③번과는 증상·컴포넌트·원인이 다른 별개 결함이다(③은 `RentalContractViewer`의 "목록
+자체가 안 뜨는" 문제, 그쪽은 `ContractTemplatePreviewModal`의 "열었는데 내용이 안 보이는"
+문제).
+
+### 검증 (테스트 전용, 코드 변경 없음)
+
+- 실제 회원 계정(`mublues@gmail.com`)·실제 비회원 익명 계정 각각으로 `submit_cs_post()` RPC를
+  직접 호출해 상품 빠른문의 등록 재현 — 두 경우 모두 `cs_posts.user_id` = `chat_sessions.
+  user_id` = 카드 `post_id` 일치 확인(SQL 대조). 이전 세션에서 발견한 "빠른문의 답변등록"
+  뷰어 빈 화면 결함은 정식 RPC 경로가 아닌 테스트 더미 데이터(고아 참조)가 원인이었음을
+  재확인 — 회원/비회원 구분과 무관한 문제.
+
+### 수정 파일
+
+```
+src/lib/components/chat/ActionCard.svelte                          (MODIFY — ①②)
+src/lib/utils/contract-content-mode.ts                              (MODIFY — ③)
+src/lib/components/cms/RentalContractViewer.svelte                  (MODIFY — ③, 타 세션 issueBlocked 작업과 diff 혼재)
+supabase/migrations/20260821060000_329_send_rental_chat_notification_button_label.sql  (신규 — ①)
+```
+
+### 검증 결과
+
+`npm run check` 대상 파일 신규 ERROR/WARNING 0건(전체 1건은 무관한 기존 `vite.config.ts`
+vitest 타입 이슈). `contractContentMode.test.ts` 66/66 GREEN(회귀 없음). Migration 329
+Stage·Production 둘 다 `pg_get_functiondef` 직접 조회로 반영 확인.
+
+**GATE 등급**: 🟡 BOUNDARY(①②는 기존 채팅카드 UI 로직 수정, ③은 CMS 단일 컴포넌트 판별
+함수 보완 — 결제·예약 상태 전이·보안 로직 변경 없음, DB는 CREATE OR REPLACE로 시그니처
+불변) — git commit은 Stephen 직접 실행 필요.

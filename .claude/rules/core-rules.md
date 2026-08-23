@@ -199,7 +199,11 @@ Claude Code도 위 파일 변경 시 → GATE C 필수
 > 4. frozen 파일 목록에 있는 파일인가?
 >
 > 하나라도 "예" → 멈추고 Stephen 확인
+>
+> ⚠️ 이 4문항은 최소 체크일 뿐이다 — 전체 4단계 프로토콜(요구사항 명확성 확인 → 관련 도메인
+> 규칙 선(先) 로드 → 구현 직전 내부 자문 → 구현 후 재대조)은 AGENTS.md "구현 전 자가점검
+> 프로토콜(GATE 0)"이 정본이다. 매 태스크마다 그쪽을 따를 것 — 여기 4문항은 요약 회상용.
 
 ---
 
-*core-rules.md v3.2 | Harness Flow v3.2 | 2026-06-28 frozen boundary 추가*
+*core-rules.md v3.3 | Harness Flow v3.2 | 2026-06-28 frozen boundary 추가 | 2026-08-19 30초 규칙을 AGENTS.md GATE 0(구현 전 자가점검 프로토콜)에 연결*

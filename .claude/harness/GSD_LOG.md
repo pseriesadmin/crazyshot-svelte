@@ -1,6 +1,124 @@
 # GSD_LOG.md — 크레이지샷 실행 이력
 # 형식: [YYYY-MM-DD HH:MM] 타입 | 타스크명 | 파일 | 소요 | 결과
 
+[2026-08-21 오늘] 🟡BOUNDARY | 채팅 CTA 레이어 모달 대화카드 3건 결함 발견·수정(①RESERVATION_STATUS_CARD 라벨 오버로딩 Migration 329 ②SHIPMENT_TRACKING_CARD 죽은버튼→안내문구 ③전자계약 spreadsheet 모드 "서명완료 목록" 미노출) | src/lib/components/chat/ActionCard.svelte(①②) · src/lib/utils/contract-content-mode.ts(③) · src/lib/components/cms/RentalContractViewer.svelte(③) · supabase/migrations/20260821060000_329_send_rental_chat_notification_button_label.sql(신규, ①) | npm run check 대상 파일 0 ERROR/WARNING(전체 1건은 무관한 기존 vite.config.ts 이슈), contractContentMode.test.ts 66/66 GREEN | GATE C: BOUNDARY 자동 완료, Migration 329 Stage+Production 둘 다 pg_get_functiondef로 반영 확인, sp3-qa-agent 검수 대기, git commit은 Stephen 직접 실행 필요
+
+[2026-08-21 오늘] 🟡BOUNDARY | CMS 채팅(/cms/chat) 대화영역 우측 고객정보 표시 카드 신설 | src/lib/components/chat/AdminChatPanel.svelte(2분할 405px:flex1 유지+customer-info-float 오버레이 배선) · src/lib/components/chat/CustomerDetailPanel.svelte(전면 재구성, summary prop 신규+RentalDetailPanel 스타일 반영) · src/lib/components/cms/RentalDetailPanel.svelte(panel-content 래퍼 추가) | npm run check 대상 3파일 0 ERROR/WARNING(전체 1건은 무관한 기존 vite.config.ts 이슈) | GATE C: BOUNDARY 자동 완료, GATE E(sp3-qa-agent 2회 검수 — 코드 자체 + TASK.md 기록 대조) 둘 다 통과(기록 누락 1건 발견 즉시 보완), git commit은 Stephen 직접 실행 필요
+
+[2026-08-21 오늘] ⚡GSD | Phase 4 (4-A/4-B/4-C) 홈 카테고리 상품 CMS 관리 | supabase/migrations/20260821020000_325_home_category_products_page_setting.sql(신규) · src/lib/components/home/admin/HomeCategoryProductsModal.svelte(신규) · src/routes/+page.server.ts(Phase4 쿼리+반환) · src/routes/+page.svelte(PRODUCTS/M_PRODUCTS 교체+모달마운트+CSS) | npm run check 1 ERROR(pre-existing vite.config.ts) | GATE C: BOUNDARY 자동 완료
+
+[2026-08-20] 🔴 CRITICAL | 무인보관함 안내 시스템 — 플랜 전항목 재검증 + Production DB
+마이그레이션 적용 | rental_reservations(3컬럼)·update_reservation_locker_password·
+claim_reservations_due_for_locker_guide·send_rental_chat_notification | ✅ Stage+Production
+둘 다 적용·검증 완료
+  Stephen 요청으로 elegant-scribbling-pelican.md 플랜 전체를 재검증. 핵심 확인 2가지:
+  ① CMS 채팅 대화카드 — `ActionCard.svelte`는 `RESERVATION_STATUS_CARD`에 전용 문구가
+  없지만 `MessageBubble.svelte`(238~240행)가 카드 렌더링과 별개로 `message.content`를
+  카드 타입 무관하게 항상 노출함을 코드로 확인 — locker_guide의 비밀번호는 `content`
+  컬럼에 담기므로 관리자·고객 채팅 화면 모두 정상 노출(마스킹 로직 없음, 의도된 설계).
+  ② 예약목록 연동 — `get_rental_list`(최신 Migration 313) → `/cms/reservation`·
+  `/cms/rentals` `+page.server.ts`(필드 손실 없는 passthrough) → `RentalDetailPanel`의
+  `showLockerPasswordField`까지 pickup_time/return_time/method 필드가 끊김없이 전달됨을
+  추적 확인. 마침 검증 시점 KST 시각(01:24)이 실제 영업외시간대라, 합성 데이터가 아닌
+  Stage 기존 예약(id 2658)을 임시로 실제 조건에 맞춰 `claim_reservations_due_for_locker_
+  guide`→`send_rental_chat_notification` 전체 체인을 진짜로 트리거해 정상 동작 확인(원자적
+  마킹·중복방지 포함), 테스트 데이터 전부 원복.
+  이어서 Stephen이 Production DB 마이그레이션 적용을 명시 승인 — 적용 전 Production의
+  의존 스키마·함수(`is_cms_user()`·`find_or_create_general_chat_session`·
+  `send_rental_chat_notification`·`user_profiles.id=user_id` 관계) 사전 존재 확인 후
+  마이그레이션 320·321(DB 이력상 명칭 318·319)을 crazyshot production
+  (vnbpmvxruyciuuaermyh)에 적용, 직접 재조회로 컬럼 3개·권한(authenticated/service_role
+  전용)·locker_guide 분기 반영 전부 확인.
+  미완료(Stephen 직접 실행 필요): git commit/push, Vercel 배포, 배포 후
+  /api/cron/locker-guide 실배포 curl 검증(7-C).
+
+[2026-08-20] GATE E | 무인보관함 안내 시스템 — @sp3-qa-agent 검수 + 마이그레이션 파일명
+충돌 해소 | supabase/migrations/2026082009~100000_320·321_*.sql, .claude/harness/TASK.md,
+.claude/harness/GSD_LOG.md | ✅ 조건부 통과 → 리네임으로 해소
+  이번 세션 범위(장바구니 24시간 시간선택+영업외시간 무인보관함 안내, 신규·수정 파일 목록은
+  TASK.md NOW 블록 참고)만 한정해 @sp3-qa-agent 검수 실행. 결과: 보안·RPC 권한 패턴·§11/§15
+  원칙 준수·KST↔UTC 시간대 산술·프론트 로직 전부 통과(요청 지점 9개 항목 전부 ✅). 유일한
+  차단 사유: `supabase/migrations/20260820070000_318_locker_guide_schema.sql`이 이 세션
+  착수 전 이미 사용자에게 보고했던 대로, 같은 날 병렬로 진행 중이던 다른 세션의
+  `20260820070000_318_home_hero_banner_sub_copy_and_settings.sql`과 파일명(타임스탬프+
+  번호) 완전 충돌.
+  조치: 이번 세션 소관 파일 2개만 리네임(다른 세션 파일은 손대지 않음) —
+  `20260820070000_318_locker_guide_schema.sql` → `20260820090000_320_locker_guide_schema.sql`,
+  `20260820080000_319_chat_notify_locker_guide.sql` → `20260820100000_321_chat_notify_
+  locker_guide.sql`. 파일 내 주석 헤더의 "Migration 318/319" 표기도 320/321로 정정 + 리네임
+  경위 주석 추가. Stage DB(ezyvffjvuwmtuhpxdjrw)에는 이미 "318_locker_guide_schema"·
+  "319_chat_notify_locker_guide"라는 이름으로 마이그레이션 이력이 기록·적용 완료돼 있으며,
+  이 이력 자체는 되돌리거나 재적용하지 않음(로컬 파일명·주석만 정정, DB 실행 이력은 무관하게
+  그대로 유효). TASK.md·GSD_LOG.md의 파일 경로 참조도 함께 갱신.
+  부가 지적(비차단, QA): rental-lifecycle.md에 이번 세션과 무관해 보이는 스텝퍼 레이블
+  수정(`승인완료`→`계약완료`)이 같은 diff에 섞여 있음 — 코드(RentalJourneyStepper.svelte)와는
+  이미 일치해 해롭지 않으나 다른 세션 산출물일 가능성, Stephen 커밋 전 확인 필요.
+  다음 단계: Stephen 확인 후 "커밋 메시지 제안해줘" 요청 시 git 커밋 준비.
+
+[2026-08-20] 🟢 ROUTINE | 무인보관함 안내 시스템 — 라이브 브라우저 피드백 UI 정제 4건 |
+src/app.css · src/routes/cart/+page.svelte | ✅ 완료
+  앞선 무인보관함 안내 시스템 GSD 완료 후, Stephen이 Claude Browser로 실제 화면을 직접
+  선택해 지시한 후속 UI 조정 4건: ① 무인시간대 버튼 배경 red-5 적용 중 기존 --cs-red-xlight
+  전역 토큰(red-5%, #FFE7E7)과 근접 중복 발견 → Stephen 확인 후 #FFEAEA로 전역 통일(다른
+  사용처 CrazylogWriteCard.svelte도 함께 갱신, 승인됨) ② hover 색상 red-10(#FFCFCF)로 조정
+  ③ 선택 시 아웃라인(border) 강조 제거 ④ 무인보관함 안내문구와 기존 addrNote를 상호배타로
+  변경 + addrNote는 '크레이지샷배송 대여' 선택 시에만 노출되도록 조건 추가. 전부 DB·RPC
+  무관한 순수 프론트 스타일/조건부 렌더링 변경 — GATE B 불필요. npm run check(svelte-check)
+  cart 파일 기준 신규 ERROR 0건 확인.
+
+[2026-08-20 세션후반] ⚡GSD | 홈 히어로 배너 CMS 관리 2-A·2-B·2-C | 마이그레이션#318+API라우트+Modal+page.server.ts+page.svelte | 완료 | BOUNDARY 자동완료
+  2-A: supabase/migrations/20260820070000_318_home_hero_banner_sub_copy_and_settings.sql (파일 작성만, stage/production 적용은 2-D에서 별도)
+  2-B: src/lib/components/home/admin/HomeBannerModal.svelte (전면 재작성) + src/routes/api/cms/home/hero-banner/+server.ts (신규)
+  2-C: src/routes/+page.server.ts (sub_copy·heroBannerRowsRaw·heroBannerSettings 추가) + src/routes/+page.svelte ({#each}→인덱스 캐러셀 전환, HomeBannerModal 연결)
+  npm run check: 신규 ERROR 0건 (기존 pre-existing 2건 유지)
+
+[2026-08-20] 🔴 CRITICAL GSD | 장바구니 수령·반납 시간 24시간 확장 + 영업외시간 무인보관함
+안내 시스템 (재개) | 다수(아래 참고) | ✅ 코드 구현·Stage 검증 완료, ⛔ Production 미적용
+  배경: 같은 날 앞서 GATE B 대기 중 취소됐던 아젠다(바로 아래 CANCELLED 항목)를, 별도 Claude
+  Plan 세션(elegant-scribbling-pelican.md)에서 Q1~Q8 전량 답변 완료 후 이 세션에 "개발 실행"
+  명령으로 재개. 구 계획의 pg_cron+pg_net 아키텍처를 이 프로젝트엔 pg_net이 없다는 사실 확인
+  후 기존 subscription-billing Vercel Cron 선례 재사용 구조로 교체.
+  구현 범위: ① /cart 시간선택 UI 24시간 확장(09~22=방문배송/23~08=영업외시간) +
+  isLockerHour() 공유유틸($lib/utils/lockerTimeRange.ts) ② 방문+영업외시간 조합 안내문구
+  ③ rental_reservations locker_password·locker_guide_sent_pickup_at·return_at 컬럼 +
+  update_reservation_locker_password·claim_reservations_due_for_locker_guide RPC 2종
+  (Stage에 "Migration 318"로 적용) ④ CMS RentalDetailPanel 무인보관함 비밀번호 입력
+  UI(manager 이상, cmsRole prop 신규 배선) + locker-password API 라우트 ⑤
+  send_rental_chat_notification에 locker_guide 알림타입 추가(Stage에 "Migration 319"로
+  적용) + push.ts CUSTOMER_LIFECYCLE_PUSH_COPY 동기화 +
+  rental-lifecycle.md 문서 갱신 ⑥ sendSms를 src/lib/server/sms.ts로 공용화(send-otp 무변경
+  리팩터) ⑦ Vercel Cron /api/cron/locker-guide 신설(vercel.json 10분 간격 crons 추가).
+  구현 중 발견·수정한 설계 편차 2건: (a) update_reservation_locker_password를 계획상
+  "service_role 전용"에서 기존 update_reservation_tracking(Migration 268)과 동일한
+  is_cms_user()+authenticated 패턴으로 조정(코드베이스 일관성 우선) (b)
+  claim_reservations_due_for_locker_guide 최초 작성 시 `user_profiles.user_id = rr.user_id`로
+  잘못 조인했다가, 전 RPC 확립 패턴(`up.id = rr.user_id`)과 다름을 발견해 즉시 수정·재적용 —
+  실서비스 배포 전 stage 검증 단계에서 발견해 프로덕션 영향 없음. 시간대 처리(KST↔UTC)도
+  AT TIME ZONE 'Asia/Seoul' 명시 변환 필요성을 구현 중 발견해 반영(계획 원문엔 없던 처리).
+  검증: Stage(ezyvffjvuwmtuhpxdjrw)에서 경계값(09:00/08:59/23:00/22:59)·1시간 임박 윈도우
+  산술 SQL 픽스처 전수 검증 + send_rental_chat_notification 실제 호출로 비밀번호 보간 문구
+  확인(테스트 데이터 정리 완료). update_reservation_locker_password는 is_cms_user() 가드가
+  세션 없는 호출을 정상 거부함을 직접 확인. npm run check: 신규 ERROR 0건(기존
+  vite.config.ts 무관 에러 1건만 잔존).
+  미완료(Stephen 승인·직접 실행 필요): 로컬 파일 `supabase/migrations/20260820090000_320_
+  locker_guide_schema.sql`·`20260820100000_321_chat_notify_locker_guide.sql`(Stage DB
+  이력상 명칭은 여전히 318·319 — 2026-08-20 QA에서 병렬 세션의 다른 마이그레이션과 파일명
+  충돌 발견돼 로컬 파일만 320·321로 리네임, DB 이력은 무변경)의 Production
+  (vnbpmvxruyciuuaermyh) 적용, git commit/push, Vercel 배포 후 /api/cron/locker-guide
+  실배포 curl 검증(7-C),
+  GATE E(sp3-qa-agent). 참고: cms/reservation·cms/rentals +page.svelte 두 파일은 이 세션
+  작업 중 병렬로 다른 세션이 동시 편집 중이었음(Realtime 구독·필터UI 변경 등, 본 세션과
+  무관한 변경) — cmsRole prop 배선은 그 변경들과 충돌 없이 유지됨을 확인.
+
+[2026-08-20] CANCELLED | 장바구니 수령·반납 시간 24시간확장+무인함 규정+CMS비밀번호+채팅/SMS 자동안내 | .claude/harness/TASK.md | GATE B 대기 중 취소
+  @promptor로 라우팅해 TASK.md에 7단계 계획 + Q1~Q7 확인질문까지 작성 완료했으나, GATE B
+  승인(질문 답변) 이전에 Stephen이 "개발 취소해. 다른 세션에서 진행할거야"로 중단 지시.
+  코드/DB 변경 전혀 없음(순수 계획 문서 작성 단계에서 중단) — TASK.md 해당 섹션 헤더를
+  NOW→CANCELLED로 변경해 다른 세션이 미결 상태로 오인하지 않도록 표시, 계획 본문은 후속
+  세션 재개 시 참고용으로 보존.
+
+[2026-08-20] ⚡GSD | Phase 1 — 크레이지로그·헬프 동기화 (1-A·1-B·1-C) | src/routes/+page.server.ts · src/routes/+page.svelte | GATE C: 자동통과(ROUTINE/BOUNDARY)
+
 [2026-08-20] 🔴 CRITICAL FIX | 예약코드 채번 LPAD 자릿수 잘림으로 인한 중복키 결함 수정 | supabase/migrations/20260820050000_316_fix_generate_reservation_code_lpad_truncation.sql(신규) | ✅ Stage+Production 적용 완료
   증상 신고: 상품상세 "예약신청" 클릭 시 duplicate key value violates unique constraint
   "rental_reservations_reservation_code_key" 에러로 예약 생성 실패.
@@ -184,6 +302,14 @@
     · +page.server.ts — help_hero_bg_images 로드 + 서버사이드 랜덤 선택(heroBgUrl) 반환
     · +page.svelte — heroBgUrl 동적 적용, isCms 게이팅 기어 버튼, 모달 연결
   검증: svelte-check 신규 에러 0건. git commit Stephen 직접 실행 필요.
+
+[2026-08-20] ROUTINE FIX | CommonBenefits PC 반응형 이용안내 미반영 버그수정 | src/lib/components/members/CommonBenefits.svelte | ✅ 수정 완료(GATE E 검수 대기)
+  배경: 직전 세션에서 모바일 m-red-block만 policyItems 목록으로 교체하고 PC 전용
+  .benefits-pc .writing-block은 누락 — Stephen이 PC에서 옛 K-트레일 하드코딩 카피가 여전히
+  보이는 반응형 불일치 제보. writing-right 4개 <p> 문단을 policyItems 기반 번호목록
+  (.wr-policy-list)으로 교체, writing-head도 모바일과 동일하게 "정기구독 이용안내"로 통일.
+  검증: svelte-check 신규 ERROR/WARNING 0건.
+  미완료: git commit(Stephen 직접 실행 필요).
 
 [2026-08-20] ROUTINE | /members 히어로 배너 모달 카피 입력폼 레이아웃 신설 | src/lib/components/members/admin/MembersHeroBannerModal.svelte, src/routes/members/+page.server.ts, src/routes/members/+page.svelte | ✅ 수정 완료(GATE E 검수 대기)
   배경: 배너 관리 모달 .modal-body 선택 → 메인카피(20자, ad-kr 토큰+화이트)/서브카피(40자,
@@ -4622,3 +4748,16 @@ Stephen 직접 실행 필요
   기존 실패 4건(contractSign.test.ts, 이전부터 알려진 무관한 픽스처 이슈)만 유지, 회귀 0건.
   테스트 중 orphan 픽스처 1건(이전 실패 런에서 cleanup 누락) 발견·수동 정리 완료.
   4건 모두 Stephen 리뷰/커밋 대기 — git 명령 자율 실행 없음(core-rules.md 준수).
+
+[2026-08-20 세션] GSD | 구독 "인기" 배지 CMS 지정 가능화 | 8개 파일 수정 + Migration 317 생성 | npm run check 에러 0건(기존 vitest 설정 에러 제외) | GATE C: 코드 완료·stage DB 마이그레이션 대기
+  영향 파일:
+    supabase/migrations/20260820060000_317_subscription_plans_is_popular.sql (신규)
+    src/lib/types/subscription.ts — SubscriptionPlanRow.is_popular: boolean 추가
+    src/lib/components/members/FeaturesTable.svelte — isPopularSlot() 제거, plan.is_popular 직접 참조(9곳)
+    src/lib/components/cms/subscription/SubscriptionDetailPanel.svelte — localBasic/isDirtyBasic/$effect/토글UI
+    src/routes/cms/subscriptions/+page.server.ts — select + updateSection basic
+    src/routes/cms/subscriptions/new/+page.svelte — isPopular 상태 + 토글 UI
+    src/routes/cms/subscriptions/new/+page.server.ts — insert is_popular
+    src/routes/members/+page.server.ts — select is_popular
+    src/lib/server/subscriptions/loadSelectedSubscriptionDetail.ts — PlanRawRow + select 에러 수정
+  미완: Stage(ezyvffjvuwmtuhpxdjrw) Migration 317 적용 → Stephen이 MCP 메인 세션에서 직접 적용 필요
