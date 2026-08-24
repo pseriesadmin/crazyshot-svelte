@@ -1,6 +1,41 @@
 # GSD_LOG.md — 크레이지샷 실행 이력
 # 형식: [YYYY-MM-DD HH:MM] 타입 | 타스크명 | 파일 | 소요 | 결과
 
+[2026-08-24] 🟡 BOUNDARY | 장바구니 동의문구 '이용안내' 링크화 + 이용안내 모달 신설 |
+cart/+page.server.ts, cart/+page.svelte | ✅ 완료
+  Stephen이 launch-selected-element로 footer-terms-text를 직접 선택해 지시. "이용안내"
+  부분만 밑줄+#100B32(기존 --cs-text 토큰과 일치) 링크로 전환, 클릭 시 /cms/set/rental
+  "공통 대여 안내문"(rental_guide_settings.guide_text, RLS 공개조회 확인)을 모달로 노출.
+  모달은 상단 타이틀바+닫기, PC 중앙카드/모바일 하단시트 반응형. footer(transform 적용)
+  내부가 아니라 형제로 배치해 기존 문서화된 "transform+position:fixed 충돌" 재발 방지.
+  front에 재사용 가능한 범용 모달이 없어 이 기능 전용으로 자체 구현(SignUpModal.svelte
+  구조를 가장 가까운 참고로 삼음). npm run check 전체 신규 ERROR 0건.
+
+[2026-08-24] 🔴 CRITICAL | 장바구니 쿠폰 할인·포인트 사용 UI 복원 + 계약서명 페이지 선택값
+이어가기 | Migration 340, cart/+page.svelte, contract/[token]/+page.server.ts·+page.svelte,
+api/reservations/create-order | ✅ Stage 검증 완료, ⛔ Production 미적용(승인 대기)
+  배경: 2026-08-21 "예약 결제·계약서명 순서 재설계"가 쿠폰/포인트 선택 UI를 장바구니→
+  계약서명 페이지로 완전 이동시켰던 것을, Stephen이 "장바구니에서 모든 설정과 대여 금액
+  정보까지 먼저 보여주는 UX가 정합"이라며 장바구니 UI 복원 재지시. GATE B 질문(선택값을
+  계약서명 페이지까지 이어갈지 vs 장바구니는 미리보기 전용일지)에 "이어감" 확정 답변받고
+  진행 — orders 테이블에 selected_coupon_id/selected_points 사전선택 캐시 컬럼 신설,
+  create_reservation_order RPC 확장, 장바구니 CouponRow 스니펫(정의만 있고 미사용이던 것)
+  재연결 + 포인트 입력 UI 신설, 계약서명 페이지가 이 사전선택값을 유효성 재검증 후 초기값
+  으로 반영하도록 구현. 실제 쿠폰 소진/포인트 차감은 여전히 결제 확정(pay-mock) 시점에만
+  발생 — 사전선택은 순수 캐시일 뿐 소진 기록 아님.
+  구현 중 발견·즉시 수정한 결함 2건: ① create_reservation_order를 CREATE OR REPLACE로
+  파라미터 추가했더니 기존 2-param 버전이 대체되지 않고 별도 오버로드로 남아 Postgres
+  함수 해석 자체가 모호해지는 함정 발생(products.md §2-3 PGRST203 전례와 동일 유형) —
+  DROP FUNCTION으로 구버전 제거해 해소, RPC 직접 호출로 재확인 ② contract/[token]/
+  +page.server.ts의 `o as typeof orderData`(자기참조 타입캐스트) 패턴이 이 파일에서
+  orderData 필드에 처음 접근하는 순간(이번에 추가한 코드) TS가 타입을 never로 오추론하던
+  잠복 버그 — named type alias로 교체해 해소(내 변경과 무관한 pre-existing 버그, 우연히
+  이번에 처음 property access를 추가하면서 표면화됨).
+  검증: npm run check 전체 신규 ERROR 0건. Stage(ezyvffjvuwmtuhpxdjrw)에서 RPC 오버로드
+  해석·소유권 검증 로직 직접 SQL 호출로 확인. Claude Browser 미사용(기본 금지 원칙 유지).
+  미완료: Production(vnbpmvxruyciuuaermyh) 마이그레이션 340 적용 승인, 실화면 확인,
+  git 커밋/배포(Stephen 직접 실행).
+
 [2026-08-21 오늘] 🟡BOUNDARY | 채팅 CTA 레이어 모달 대화카드 3건 결함 발견·수정(①RESERVATION_STATUS_CARD 라벨 오버로딩 Migration 329 ②SHIPMENT_TRACKING_CARD 죽은버튼→안내문구 ③전자계약 spreadsheet 모드 "서명완료 목록" 미노출) | src/lib/components/chat/ActionCard.svelte(①②) · src/lib/utils/contract-content-mode.ts(③) · src/lib/components/cms/RentalContractViewer.svelte(③) · supabase/migrations/20260821060000_329_send_rental_chat_notification_button_label.sql(신규, ①) | npm run check 대상 파일 0 ERROR/WARNING(전체 1건은 무관한 기존 vite.config.ts 이슈), contractContentMode.test.ts 66/66 GREEN | GATE C: BOUNDARY 자동 완료, Migration 329 Stage+Production 둘 다 pg_get_functiondef로 반영 확인, sp3-qa-agent 검수 대기, git commit은 Stephen 직접 실행 필요
 
 [2026-08-21 오늘] 🟡BOUNDARY | CMS 채팅(/cms/chat) 대화영역 우측 고객정보 표시 카드 신설 | src/lib/components/chat/AdminChatPanel.svelte(2분할 405px:flex1 유지+customer-info-float 오버레이 배선) · src/lib/components/chat/CustomerDetailPanel.svelte(전면 재구성, summary prop 신규+RentalDetailPanel 스타일 반영) · src/lib/components/cms/RentalDetailPanel.svelte(panel-content 래퍼 추가) | npm run check 대상 3파일 0 ERROR/WARNING(전체 1건은 무관한 기존 vite.config.ts 이슈) | GATE C: BOUNDARY 자동 완료, GATE E(sp3-qa-agent 2회 검수 — 코드 자체 + TASK.md 기록 대조) 둘 다 통과(기록 누락 1건 발견 즉시 보완), git commit은 Stephen 직접 실행 필요
@@ -4761,3 +4796,68 @@ Stephen 직접 실행 필요
     src/routes/members/+page.server.ts — select is_popular
     src/lib/server/subscriptions/loadSelectedSubscriptionDetail.ts — PlanRawRow + select 에러 수정
   미완: Stage(ezyvffjvuwmtuhpxdjrw) Migration 317 적용 → Stephen이 MCP 메인 세션에서 직접 적용 필요
+
+[2026-08-24] AUDIT | CMS 백오피스 전역 정밀 검증 v3 — 처음부터 재실행(35개 화면, STAGE 0~8) | CRITICAL 0건 | 완료
+  Stephen 지시: "CMS 수정량이 많으니 CMS 전역을 절대 대충하지말고 정밀 검증. 처음부터 진행."
+  v2(11개 화면 기준) 이후 40개 커밋이 쌓여 실제 화면 인벤토리가 35개(+page.svelte 실측)로
+  3배 증가한 것을 확인 → plan 파일(`cms-abundant-heron.md`) v3로 전면 재작성 → @promptor로
+  TASK.md "CMS 전역 정밀검증 v3" 섹션 신규 등록(GATE B 즉시 통과, Stephen 포괄승인) →
+  GNB 메뉴 그룹 기준 STAGE 1~7을 harness-executor 7개로 병렬 실행(각 화면당 코드리딩+
+  svelte-check/eslint/vitest 실행+CRITICAL 의심시 실DB 대조 3단계 원칙 적용) → STAGE 8(Track B
+  실DB advisor 전수 + 종합보고)은 세션 진행자가 직접 수행.
+
+  결과: 35개 화면 전체에서 신규 CRITICAL 결함 0건. 이전 세션들이 병렬로 발견·수정한 CRITICAL
+  5건(synonym RLS·member_code LPAD·user_profiles포인트조작·HOLD레이스컨디션·예약신청결함)은
+  전부 회귀 없이 유지 확인. 이번 감사로 신규 발견된 것은 BOUNDARY 15건(대부분 H-01 직접DML
+  관행, BND-02 고객PII API 권한체크 누락 1건 포함)과 ROUTINE 5건뿐 — 전부 TASK.md BACKLOG로
+  등록, Stephen 확인 후 처리 여부 결정 대기.
+
+  STAGE 7은 컴퓨터 절전모드로 1회 중단됐다가 SendMessage로 동일 에이전트를 재개해 완주(작업
+  손실 없음). TASK.md는 7개 병렬 에이전트가 각자 자기 STAGE 섹션에만 append하도록 사전에
+  분리 지시해 동시쓰기 충돌 없이 완료(git diff로 497줄 순수 추가, 삭제 0줄 확인).
+
+  GATE E: ✅ 검증 완료 — CRITICAL 블로킹 0건. 커밋은 Stephen 직접 실행(TASK.md 문서 갱신만,
+  코드 변경 없음 — 이번 아젠다는 검증뿐, BOUNDARY 15건 수정은 별도 승인 후 진행).
+
+[2026-08-24] GSD | CMS 전역 정밀검증 v3 BOUNDARY 14건 후속 처리(BND-02 제외 나머지 전부) | GATE E 통과 | 완료(production 마이그레이션만 대기)
+  Stephen 지시: "나머지 14건도 이어서 진행할 것." H-01 위반 6건(qna 3 + promotion/rules 3)을
+  migration 331로 RPC 전환(Pattern B, is_cms_user() 게이트) — qna delete는 promoteCandidate/
+  deleteCandidateMember와 동일하게 manager+ 게이트도 함께 추가. cms_signature_assets setDefault
+  비원자적 UPDATE는 migration 332로 단일 RPC화(에러 처리 누락도 함께 해소). ESLint/미사용
+  import 3건 정리. security-auth.md 2건 갱신(subscriptions 행 추가, signature 스테일 주석
+  제거). subscriptions 화면 테스트 커버리지 공백은 신규 6건 guard 테스트로 해소.
+
+  가장 중요한 발견: contractSign.test.ts 4건 FAIL을 STAGE 2가 "Stage DB stale 데이터, 코드
+  회귀 아님"으로 뭉뚱그렸던 것을 재조사해 정확한 근본원인 2가지를 특정 — ①테스트 픽스처가
+  근미래 고정 날짜(2026-09-01~03)를 써서 그 날짜에 실제로 in_use 상태인 라이브 예약(id 453)과
+  충돌 ②픽스처가 chat_sessions를 context_type='reservation'으로 만들었는데
+  find_or_create_general_chat_session RPC(migration 282)는 'general'만 찾아, "closed 세션
+  재활성화" 검증이 실제로는 별도로 새로 만들어진 세션을 보고 있어 항상 실패하던 것. 둘 다
+  픽스처 버그였고 프로덕션 코드는 처음부터 정상이었음 — 5/5 GREEN 복원. "코드 회귀 아님"이라는
+  1차 진단은 결과적으로 맞았으나 원인 자체는 부정확했던 사례.
+
+  vite.config.ts에 `test.exclude`로 `.claude/worktrees/**` 제외 추가 — 이번 세션 내내 반복
+  관찰된 "동일 테스트가 워크트리 사본에서 중복 실행돼 노이즈 발생" 문제를 근본 해결(테스트
+  파일 수 92+→63으로 감소 확인).
+
+  Production 마이그레이션(331·332) 적용은 권한 분류기가 자동 실행을 차단 — 우회 시도하지
+  않고 중단, Stephen 직접 승인 대기 중. auth_leaked_password_protection(STAGE8 발견)은 코드로
+  처리 불가능한 Supabase Auth 대시보드 설정이라 Stephen에게 안내만 하고 조치하지 않음.
+
+  검증: 신규 테스트 18건(customersDetailApiGuards 12 + subscriptionsGuards 6) 전부 GREEN,
+  contractSign.test.ts 5/5 GREEN 복원, svelte-check/eslint 신규 에러 0건, 전체 스위트(워크트리
+  제외) 805 passed/2 failed(memberCodeCombo.test.ts 카운터 자연성장 — 무관한 기존 이슈)/7
+  skipped.
+
+  GATE E: ✅ 통과 — 블로킹 0건. 커밋은 Stephen 직접 실행. Production DB 마이그레이션 331·332는
+  Stephen 승인 후 별도 적용 필요.
+
+[2026-08-24] DEPLOY | migration 331·332 production 적용 | 완료
+  Stephen 승인 지시: "Production 마이그레이션 331·332 적용을 진행할 것. 다만 최근 해당 DB파일의
+  이름 충돌 문제가 없었는지 재확인 후 적용 진행할 것." 적용 전 이중 확인 — ① production
+  `list_migrations` 전체 이력 조회로 331·332 번호 미존재 확인 ② `pg_proc`로 신규 함수 7개
+  이름 미존재 확인. 둘 다 충돌 0건. 적용 후 `pg_proc` 재조회로 7개 함수(cms_delete_canned_
+  response·cms_promote_synonym_candidate·cms_delete_synonym_candidate·cms_create_marketing_
+  rule·cms_toggle_marketing_rule·cms_delete_marketing_rule·cms_set_default_signature_asset)
+  전부 정상 생성 확인. Stage(2026-08-23 적용)·Production(2026-08-24 적용) 양쪽 완료.
+  GATE E: ✅ 통과. 앱코드 git 커밋은 Stephen 직접 실행 대기.

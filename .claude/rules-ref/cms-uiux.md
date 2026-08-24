@@ -149,9 +149,9 @@
 
 | 키 | 레이블 | height | BG | 반경 | 패딩 | 폰트 토큰 | 폰트 색 |
 |---|---|---|---|---|---|---|---|
-| `ctaPrimary` | CTA 기본 (상품등록) | **44px** | primary-600 `#3B2F8A` | **15px** (`--radius-md`) | 0 30px | label-lg 14px/700 | white |
+| `ctaPrimary` | CTA 기본 — 저장·등록·반영·발송 | **44px** | `--crazy-shot-purple-100` `#100B32` / hover `--crazy-shot-purple-80` `#3B2F8A` | **15px** (`--radius-md`) | 0 30px | label-lg 14px/700 | white |
 | `ctaSecondary` | CTA 보조 (검색) | **44px** | white | **15px** (`--radius-md`) | 0 30px | label-lg 14px/700 | primary-800 `#201857` |
-| `actionSave` | 액션 소형 (빠른 등록) | **34px** | primary-600 `#3B2F8A` | lg **10px** | 10px 20px | label-sm 12px/700 | white |
+| `actionSave` | 액션 소형 — 저장·등록·반영·발송 | **34px** | `--crazy-shot-purple-100` `#100B32` / hover `--crazy-shot-purple-80` `#3B2F8A` | lg **10px** | 10px 20px | label-sm 12px/700 | white |
 | `danger` | 위험 (삭제) | **40px** | danger-50 `#FFCFCF` | base **8px** | 0 20px | label-lg 14px/700 | danger-500 `#FF3535` |
 | `categoryChipActive` | 카테고리 칩 활성 | **30px** | primary-800 `#201857` | base **8px** | 8px 14px | body-xs 12px/400 | white |
 | `categoryChipDefault` | 카테고리 칩 기본 | **30px** | white | base **8px** | 8px 14px | body-xs 12px/400 | primary-900 `#100B32` |
@@ -838,9 +838,9 @@ STD: #14B8A6   VID: #F97316   ACC: #84CC16   PKG: #06B6D4
 
 | 클래스 | 용도 | height | BG | 텍스트 색 | 반경 |
 |---|---|---|---|---|---|
-| `.btn-primary` / `.cta-btn` | 주요 액션 (등록·저장) | 44px | `--cs-purple` | white | **15px** |
+| `.btn-primary` / `.cta-btn` | 저장·등록·반영·발송 주요 액션 | 44px | `--crazy-shot-purple-100` `#100B32` / hover `--crazy-shot-purple-80` `#3B2F8A` | white | **15px** |
 | `.btn-secondary` | 보조 (검색·취소) | 44px | white | `--cs-purple-dark` | **15px** |
-| `.btn-action` | 소형 인라인 액션 | 34px | `--cs-purple` | white | 10px |
+| `.btn-action` | 저장·등록·반영·발송 소형 인라인 | 34px | `--crazy-shot-purple-100` `#100B32` / hover `--crazy-shot-purple-80` `#3B2F8A` | white | 10px |
 | `.btn-danger` | 삭제·위험 | 40px | `--cs-chat-in-bg`(연분홍) | `--cs-red-badge` | 8px |
 
 > `<a>` 태그(`href`)와 `<button>` 태그 모두 적용 가능
@@ -1319,6 +1319,98 @@ src/routes/cms/chat/qna/+page.svelte                — .filter-pill (목록 툴
 [ ] 신규 분류·카테고리 콤보버튼 UI 추가 시 이 컴포넌트 재사용(인라인 신규 구현 금지)?
 [ ] 상세패널 내부 → 상세패널형(34px/18px/13px), 목록 툴바 → 툴바형(30px/16px/12px) 구분 적용?
 [ ] 활성 배경 `--cs-purple`(primary-600) 사용? (§7-12 categoryChip의 `--cs-purple-dark` 아님)
+```
+
+---
+
+### 7-12-B. 콤보버튼 UI (옵션 선택/토글) — `mk-chip` 표준 ★
+
+> **공식 명칭**: 콤보버튼 UI (CMS 옵션 선택·ON/OFF 토글 그룹 전용 — §7-12-A "분류·카테고리
+> 필터"와는 용도가 다른 별개 컴포넌트로 공존)
+> **트리거**: "콤보버튼 UI 스타일 통일해" / "옵션 선택 콤보버튼 적용해" 언급 시 이 스펙 즉시 적용
+> **확정일**: 2026-08-24 — `/cms/set/rental` "대여 방식 옵션 > 방식 유형"(`.mk-chip`)에서 이미
+> 쓰이던 스타일을 Stephen 지시로 CMS 표준으로 확정, 같은 화면의 `.s-chip`(택배 적용 옵션 ·
+> 배송대여 수령/반납 일괄 지정 · 휴무일 제어 옵션 3곳)에 동일하게 통일 적용.
+
+**공통 스펙**
+
+| 항목 | 값 |
+|---|---|
+| 형태 | pill (완전 둥근 알약형) |
+| 높이 | 32px |
+| 좌우 패딩 | 14px |
+| 반경 | `var(--cms-radius-xl, 30px)` |
+| 보더(비활성) | `1.5px solid var(--cs-lilac)` |
+| 배경(비활성) | `var(--cs-white)` |
+| 텍스트색(비활성) | `var(--cs-text-mid)` |
+| 배경(활성) | `var(--cs-purple)` |
+| 텍스트색(활성) | `var(--cs-white)` |
+| 보더(활성) | `var(--cs-purple)` |
+| hover(비활성 시) | 보더·텍스트 모두 `var(--cs-purple)`로 전환(배경 틴트 없음) |
+| 폰트 | `var(--text-pc-script-12)`(12px) |
+| 폰트 굵기 | 600 |
+| transition | background 0.15s, color 0.15s, border-color 0.15s |
+
+> §7-12-A(cat-pill)와의 차이: cat-pill은 보더 없이 배경(`--cs-lilac`)만으로 비활성 상태를
+> 표현하는 반면, 이 컴포넌트(mk-chip)는 흰 배경 + lilac 보더로 표현한다 — 서로 다른 확정
+> 스타일이므로 혼용하지 않는다. "분류·카테고리 필터"에는 §7-12-A, "옵션 선택·토글 그룹"에는
+> 이 §7-12-B를 적용.
+
+**표준 마크업**
+
+```svelte
+<div class="mk-chips">
+  {#each OPTIONS as opt}
+    <button
+      type="button"
+      class="mk-chip"
+      class:mk-chip--on={selected === opt.value}
+      onclick={() => selected = opt.value}
+    >{opt.label}</button>
+  {/each}
+</div>
+```
+
+**표준 CSS**
+
+```css
+.mk-chip {
+  height: 32px;
+  padding: 0 14px;
+  border: 1.5px solid var(--cs-lilac);
+  border-radius: var(--cms-radius-xl, 30px);
+  background: var(--cs-white);
+  color: var(--cs-text-mid);
+  font: var(--text-pc-script-12);
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s, border-color 0.15s;
+}
+.mk-chip--on {
+  background: var(--cs-purple);
+  color: var(--cs-white);
+  border-color: var(--cs-purple);
+}
+.mk-chip:not(.mk-chip--on):hover {
+  border-color: var(--cs-purple);
+  color: var(--cs-purple);
+}
+```
+
+**적용 화면**
+
+```
+src/routes/cms/set/rental/+page.svelte — .mk-chip(방식 유형 선택) · .s-chip(택배 적용 옵션 ·
+  배송대여 수령/반납 일괄 지정 · 휴무일 제어 옵션) — 클래스명은 화면마다 다를 수 있으나
+  스타일 토큰은 이 표를 그대로 따를 것
+```
+
+**GATE C 확인 항목**
+
+```
+[ ] CMS 내 "옵션 선택·ON/OFF 토글" 성격의 콤보버튼을 새로 추가할 때 이 스펙 재사용?
+[ ] "분류·카테고리 필터" 용도(§7-12-A)와 혼동해 cat-pill 스타일(보더 없음)을 잘못 적용하지 않았는가?
+[ ] hover 시 배경 틴트 없이 보더·텍스트 색상만 전환되는가?
 ```
 
 ---

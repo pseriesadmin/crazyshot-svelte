@@ -36,6 +36,8 @@
   --cs-purple:        #3B2F8A;       /* CTA 버튼·선택 강조 = purple-80% */
   --cs-purple-hover:  #2E2470;
   --cs-purple-dark:   #201857;       /* 강조 배경 = purple-90% */
+  --crazy-shot-purple-100: #100B32;  /* 저장·등록·반영·발송 버튼 기본 */
+  --crazy-shot-purple-80:  #3B2F8A;  /* 저장·등록·반영·발송 버튼 호버 */
   --cs-purple-light:  #553FE0;       /* 포인트 강조 = purple-60% */
   --cs-purple-pale:   #C1BBEC;       /* 연한 강조 = purple-20% */
   --cs-purple-op10:   #E1DEF3;       /* nav 배경 기본색 = purple-op-10% */
@@ -240,7 +242,7 @@ body {
   align-items: center;
   height: 44px;
   padding: 0 30px;
-  background: var(--cs-purple);
+  background: var(--crazy-shot-purple-100);
   color: var(--cs-white);
   border: none;
   border-radius: var(--radius-md);
@@ -252,7 +254,7 @@ body {
   text-decoration: none;
   box-sizing: border-box;
 }
-.cms-shell .btn-primary:hover    { background: var(--cs-purple-hover); }
+.cms-shell .btn-primary:hover    { background: var(--crazy-shot-purple-80); }
 .cms-shell .btn-primary:disabled { background: var(--cs-disabled-button); cursor: not-allowed; }
 
 /* ② CTA 보조 — 검색·확인 | JSON: ctaSecondary */
@@ -282,7 +284,7 @@ body {
   align-items: center;
   height: 34px;
   padding: 0 16px;
-  background: var(--cs-purple);
+  background: var(--crazy-shot-purple-100);
   color: var(--cs-white);
   border: none;
   border-radius: var(--cms-radius-sm); /* 10px — .cms-shell에서 상속 */
@@ -294,7 +296,7 @@ body {
   text-decoration: none;
   box-sizing: border-box;
 }
-.cms-shell .btn-action:hover    { background: var(--cs-purple-hover); }
+.cms-shell .btn-action:hover    { background: var(--crazy-shot-purple-80); }
 .cms-shell .btn-action:disabled { background: var(--cs-disabled-button); cursor: not-allowed; }
 
 /* ④ 위험 — 삭제·철회 | JSON: danger (연분홍 BG + 빨강 텍스트) */

@@ -1,4 +1,240 @@
 # .claude/harness/TASK.md
+
+## NOW — 🟡 BOUNDARY: 장바구니 하단 동의문구 '이용안내' 링크화 + 이용안내 모달 신설 (2026-08-24) — ✅ 완료
+
+```
+Stephen이 footer-terms-text("등록한 대여조건 및 이용안내에 모두 동의합니다.") 요소를
+launch-selected-element로 직접 선택해 지시. '이용안내' 부분만 밑줄+컬러토큰(#100B32 = 기존
+--cs-text 토큰과 정확히 일치, app.css 52행)을 적용한 링크로 전환하고, 클릭 시 모달을 띄워
+/cms/set/rental "공통 대여 안내문"(rental_guide_settings.guide_text) 내용을 그대로 노출.
+```
+
+- 수정 파일: `src/routes/cart/+page.server.ts`(rental_guide_settings.guide_text 조회 추가 —
+  RLS가 `qual: true` 공개조회라 세션 무관하게 항상 로드 가능, Stage 직접 재조회로 확인),
+  `src/routes/cart/+page.svelte`(showGuideModal 상태, "이용안내" 부분만 `<button class=
+  "terms-guide-link">`로 분리해 밑줄+`var(--cs-text)` 적용, 모달 마크업+CSS 신설)
+- 모달 UI: 상단 타이틀바("대여·예약 이용안내" + ✕ 닫기) + 본문(안내문 텍스트,
+  `white-space: pre-wrap`으로 CMS textarea 줄바꿈 보존). PC는 중앙 카드형(max-width 560px),
+  모바일(≤640px)은 하단시트형(`align-items: flex-end`, 상단 모서리만 라운드) 반응형 분기.
+- ⚠️ 배치 주의: 모달을 `<footer class="cart-footer">`(펼침/숨김에 `transform: translateY`
+  사용) 내부가 아니라 형제(sibling)로 배치 — core-rules.md/ui-mobile.md에 이미 문서화된
+  "CSS transform 조상 안의 position:fixed 자식은 뷰포트 기준 배치가 깨진다" 원칙 준수(과거
+  FloatingBar 채팅 바텀시트에서 실제로 발생했던 결함과 동일 유형, 재발 방지).
+- 참고 조사: front 화면에는 재사용 가능한 범용 모달 컴포넌트가 없어(`SignUpModal.svelte`가
+  유일하게 근접한 사례이나 인증 전용 단일목적 컴포넌트) 이 기능 전용으로 자체 구현. 새로운
+  공용 모달 셸이 필요해지면 이 구현을 시작점으로 참고 가능.
+- 검증: `npm run check` 전체 신규 ERROR 0건.
+
+---
+
+## NOW — 🔴 CRITICAL: 장바구니 쿠폰 할인·포인트 사용 UI 복원 + 계약서명 페이지 선택값 이어가기 (2026-08-24)
+
+```
+[CONTEXT BRIDGE]
+배경: "예약 결제·계약서명 순서 재설계"(2026-08-21, 189행 NOW 블록)에서 쿠폰/포인트 선택 UI를
+  장바구니(1단계)→계약서명 페이지(3단계, /contract/[token])로 완전히 이동시켰었음. Stephen이
+  플랜 정밀검증 도중 이 부재를 지적("정상작동중이던 UI가 노출되지 않는 오류") → 조사 결과
+  의도된 재설계였음을 확인·보고 → Stephen이 "장바구니에서 모든 설정과 대여 금액 정보까지
+  먼저 보여주는 UX가 정합"이라며 장바구니 UI 복원 재지시.
+GATE B(AskUserQuestion, Stephen 답변): 장바구니에서 고른 쿠폰/포인트를 계약서명 페이지까지
+  그대로 이어가야 하는지 확인 → "선택값을 계약서명 페이지까지 이어감" 확정(미리보기 전용
+  안이 아님 — 실제로 카트에서 고르면 계약서명 페이지 진입 시 자동 미리선택).
+절대금지: 실제 쿠폰 소진(use_coupon)·포인트 차감(use_points)은 여전히 결제 확정 시점
+  (pay-mock)에서만 발생 — 장바구니 단계에서 소진 RPC를 호출하지 않음(순수 사전선택 캐시).
+```
+
+### 구현 완료 (Stage 검증 완료, ⛔ Production 미적용 — Stephen 승인 대기)
+
+```
+1. 신규 마이그레이션 supabase/migrations/20260824090000_340_orders_preselected_coupon_points.sql
+   - orders.selected_coupon_id UUID REFERENCES user_coupons(id) / selected_points INTEGER
+     DEFAULT 0 추가
+   - create_reservation_order(Migration 280) 시그니처에 p_selected_coupon_id/p_selected_points
+     (둘 다 DEFAULT) 추가 — 쿠폰 소유권 검증(본인 쿠폰 아니면 조용히 무시) + 마지막 UPDATE에
+     selected_coupon_id/selected_points 반영
+   - ⚠️ 구현 중 발견·즉시 수정한 결함: CREATE OR REPLACE로 파라미터 목록이 바뀌면 기존
+     함수를 "대체"하지 않고 별도 오버로드로 남는다는 Postgres 특성(products.md §2-3
+     "2-param 호출 시 PGRST203"과 동일 유형 함정) — 2-param 구버전이 실제로 남아있는 걸
+     Stage 직접 재조회로 확인 → DROP FUNCTION으로 제거해 단일 4-param(뒤 2개 DEFAULT)
+     버전만 남도록 정리, create_checkout_order의 2-param 위임호출도 정상 해석됨을
+     실제 RPC 호출로 재확인(모호성 에러 없이 비즈니스 로직 예외까지 정상 도달)
+2. src/routes/api/reservations/create-order/+server.ts — body에 couponId/points 추가 수신,
+   RPC 4-param 전체 전달
+3. src/routes/cart/+page.svelte — CouponRow 스니펫(정의만 있고 미사용 상태였던 것) 렌더링
+   복원 + 포인트 입력 UI 신설(.f-input 재사용) + 체크아웃 제출 시 otSelectedCouponIds/
+   otPointsUsed를 create-order 호출 body에 포함. 기존 파생 상태(otCouponDiscount/
+   otMaxPoints/재클램프 $effect)는 전부 이미 살아있던 로직 그대로 재사용(로직 자체는
+   삭제된 적 없었고 렌더링만 빠져있었음)
+4. src/routes/contract/[token]/+page.server.ts — orders select에 selected_coupon_id/
+   selected_points 추가, userCoupons 필터링 결과에 실제로 남아있는 경우에만
+   preselectedCouponId로 채택(만료·소진 등으로 무효화된 쿠폰 미리선택 방지) + 포인트는
+   현재 userPoints로 재클램프해 preselectedPoints 반환
+   ⚠️ 구현 중 발견·즉시 수정한 기존 결함(내 변경과 무관한 pre-existing 버그): orderData
+   타입 캐스트가 `o as typeof orderData`(자기참조 패턴)로 돼있어 이후 orderData의 필드에
+   처음 접근하는 순간(내가 추가한 코드) TS가 orderData 타입을 `never`로 오추론 —
+   named type alias(OrderData)로 교체해 해소. 기존엔 이 파일에서 orderData 필드에 직접
+   접근하는 코드가 없어(클라이언트로 통째로 넘기기만 함) 잠복돼 있던 버그.
+5. src/routes/contract/[token]/+page.svelte — selectedCouponId/pointsUsed 초기값을
+   data.preselectedCouponId/preselectedPoints로 반영($state(prop) 금지 규칙 예외 —
+   done과 동일 근거: 토큰 라우트라 재방문 시 항상 새로 마운트됨, 132-135행 기존 주석 참고)
+
+검증: npm run check(svelte-check) 전체 신규 ERROR 0건(기존 vite.config.ts 무관 에러 1건만
+잔존). Stage(ezyvffjvuwmtuhpxdjrw)에서 RPC 오버로드 해석·비즈니스 검증 로직 직접 SQL 호출로
+확인. Claude Browser 미사용(기본 금지 원칙 유지) — 실화면 확인은 Stephen 직접 필요.
+```
+
+### 남은 것 (Stephen 진행 필요)
+```
+1. Production(vnbpmvxruyciuuaermyh) 마이그레이션 340 적용 승인
+2. 장바구니 쿠폰 선택 → 제출 → 계약서명 페이지 진입 시 자동 미리선택 실화면 확인
+3. git 커밋·배포(Stephen 직접 실행)
+```
+
+---
+
+## NOW — 배송 옵션 시스템: 대여방식 고정(요청A) + 택배 휴무일 캘린더 제어(요청B) (2026-08-24, Plan 모드 세션)
+
+```
+[CONTEXT BRIDGE]
+plan_source: Stephen 직접 지시(2026-08-24) — /cms/set/rental에 '배송옵션' 기능 2건. (A) /cart
+  대여방식='배송'(delivery·crazydelivery만, quick/locker/visit 제외 — Stephen 확정) 선택 시
+  반납방식 고정+시간선택 비활성화. (B) 택배 수령일(전날 기준)/반납일(당일 기준) 휴무 캘린더
+  제한 + 관리자 ON/OFF 토글 3종(마스터·고정휴무일 연동·임시휴무일 반영). 법정공휴일은
+  공공데이터포털 특일정보 API(getRestDeInfo) 자동연동(Stephen 확정). 플랜 파일:
+  ~/.claude/plans/cms-cms-set-rental-ancient-peacock.md
+TDD도메인: AGENTS.md "핵심 RPC"의 check_delivery_deadline과 동일 개념(배송 가능일 판정) —
+  sync_national_holidays·delivery_cutoff_settings 관련 RPC·loadCourierClosedDates는 TDD
+  경로로 진행, 완료.
+절대금지: quick·locker·visit에 이번 로직 적용 금지 / delete_manual_holiday가 national 행
+  삭제 금지 / 마스터토글 OFF 시 조건문 잔존 금지 / 기존 마이그레이션 파일 직접 수정 금지 /
+  /cms/set/rental에 신규 최상위 섹션 신설 금지(기존 "배송 설정" 카드 내부 배치) / git 쓰기
+  명령 자율 실행 금지 / Stage 미검증 상태로 Production 마이그레이션 적용 금지.
+```
+
+### ✅ Phase 1~4 구현 + Stage(ezyvffjvuwmtuhpxdjrw)·Production(vnbpmvxruyciuuaermyh) 둘 다
+DB 적용 완료(2026-08-24 별도 세션에서 "무인보관함" 플랜 정밀검증 작업 도중 직접 재조회로
+발견 — 이 문단이 "Production 미적용"으로 남아있던 것은 기록 누락이었고, 실제로는 이미
+누군가 적용을 완료한 상태였음. 정확히 언제/누가 적용했는지는 이 세션에서 확인 불가 —
+Production에 테이블 3종(`delivery_cutoff_settings` 등)·RPC 5종
+(`sync_national_holidays`·`upsert_delivery_cutoff_settings`·`upsert_manual_holiday`·
+`delete_manual_holiday`·`toggle_rental_method_bulk_delivery`)·`is_bulk_delivery` 컬럼
+전부 존재 확인, `delivery_cutoff_settings`의 3개 토글은 여전히 전부 false로 안전한
+초기상태 유지 중임을 직접 조회로 재확인함). Phase 2 TDD 16/16 GREEN.
+
+```
+DB(migrations 333~339, Stage+Production 둘 다 적용):
+  333 public_holidays에 holiday_type(national/manual)+note 추가, RLS를 is_admin()→
+      is_cms_user()로 정정(products.md §2-8과 동일 함정)
+  334 delivery_cutoff_settings 싱글톤 테이블(3개 토글, 전부 기본값 false)
+  335 RPC 4종: sync_national_holidays(service_role 전용)·upsert_delivery_cutoff_settings·
+      upsert_manual_holiday·delete_manual_holiday(national 행 삭제 차단)
+  336 delivery_cutoff_settings 공개조회 RLS(rental_shipping_settings #152와 동일 패턴 —
+      /cart가 세션 클라이언트로 읽어야 해서 필요)
+  337 TDD RED로 발견된 결함 수정: ① sync_national_holidays의 대체공휴일 정정감지 범위를
+      배치 데이터 MIN/MAX로 추론하던 것을 호출부가 명시하는 p_range_start/p_range_end로
+      변경(배치가 우연히 좁아지면 정정 감지가 누락되는 결함) ② REVOKE ALL FROM PUBLIC 추가
+      (Postgres CREATE FUNCTION 기본 PUBLIC EXECUTE 권한을 회수 안 해 anon도 실제 호출
+      가능했던 보안 결함 — 라이브 테스트로 재현·확인)
+  338 ②의 REVOKE가 PUBLIC만으로는 불충분함을 재확인 — Supabase가 public 스키마 신규
+      함수에 ALTER DEFAULT PRIVILEGES로 anon·authenticated에 EXECUTE를 별도 자동부여하는
+      것이 원인(PUBLIC 의사역할과 별개). anon/authenticated 명시적 REVOKE로 최종 해소,
+      has_function_privilege()로 anon=false/authenticated=false(sync는)/service_role=true
+      재확인 완료. 나머지 3개 RPC도 anon EXECUTE 회수(defense-in-depth, is_cms_user()
+      내부체크가 실질방어선이라 기능 구멍은 아니었음).
+
+백엔드: src/lib/server/holidaySync.ts(공공데이터 API 호출·파싱, 키 미설정 시 fail-soft) +
+  /api/cron/sync-national-holidays(매일 00:15 Vercel Cron, 기존 CRON_SECRET 패턴 재사용) +
+  vercel.json 등록.
+
+CMS(/cms/set/rental): 기존 "배송 설정" 카드 내부(신규 섹션 아님)에 3토글 + 법정공휴일
+  목록/지금동기화 버튼 + 임시휴무일 추가/삭제 UI.
+
+Cart(/cart): DeliveryMethod 유니언에 누락됐던 'delivery' 키 추가(기존 enum 드리프트,
+  이번 기능 전제조건) — isDeliveryLocked(delivery/crazydelivery)로 반납방식 강제고정+
+  콤보잠금+시간선택 숨김. CalendarGrid.svelte에 isDateDisabled prop 신설(하위호환,
+  다른 호출부 영향 없음) — 수령일은 전날, 반납일은 당일 기준 courierClosedDates로 비활성화.
+
+TDD(src/__tests__/services/deliveryCutoffHolidays.test.ts, 16개 GREEN): sync_national_
+  holidays(upsert/멱등성/manual보호/정정감지/권한), upsert_delivery_cutoff_settings(세션
+  없음·비CMS 거부/manager 성공), upsert_manual_holiday·delete_manual_holiday(national 충돌
+  차단/national 삭제 차단/manual 삭제 성공), loadCourierClosedDates(마스터OFF 스킵/토글
+  조합별 정확한 필터링) — RED에서 실제 결함 2건 발견 후 337/338로 수정.
+
+⚠️ 참고: 전체 스위트(npx vitest run) 실행 중 이번 작업과 무관한 기존 실패 2건 발견
+  (memberCodeCombo.test.ts — member_code 포맷 정규식 불일치, CSRS26081977 vs
+  /^CSRS\d{4}\d{3}$/). 이번 세션에서 건드리지 않은 파일이라 원인 조사·수정 안 함(요청범위
+  외 수정 금지 원칙) — 별도 확인 필요.
+```
+
+### 남은 것 (Stephen 진행 필요)
+```
+1. DATA_GO_KR_HOLIDAY_API_KEY 발급(공공데이터포털 특일정보 API) + .env.local/Vercel 등록
+2. ✅ Production DB 마이그레이션 333~339 적용 완료(위 참고 — 이미 적용된 상태로 확인됨,
+   더 이상 대기 항목 아님)
+3. git 커밋·배포(Stephen 직접 실행) — DB는 이미 Production에 반영됐으나 앱 코드
+   (cart/+page.svelte 등)는 전부 로컬 uncommitted 상태라 실제 고객 화면에는 아직 반영 안 됨
+4. CMS 토글·목록, /cart 반납방식고정·시간선택숨김·캘린더휴무표시 실화면 확인
+5. memberCodeCombo.test.ts 기존 실패 2건 — 원인 확인 완료(테스트 정규식이 낡음, RPC는 정상,
+   migration 277 설계상 순번 3자리 이상 자연확장이 맞음). 수정 여부는 별도 확인 필요.
+```
+
+### ✅ 후속 수정 1 — Cart 500 에러 (2026-08-24, Stephen 실사용 중 재현·보고)
+
+```
+원인: loadCourierClosedDates를 cart/+page.server.ts에서 export했는데, SvelteKit은
+  +page.server.ts에서 load/actions 등 정해진 이름 외 export를 허용하지 않음(vite-plugin-
+  sveltekit-guard가 런타임에 차단) — npm run check/vitest는 이 검증을 거치지 않아 못 잡음.
+수정: src/lib/server/courierClosedDates.ts로 분리(holidaySync.ts와 동일한 서버모듈 패턴).
+  npx vite build로 라우트 검증까지 통과 확인 + TDD 16개 전부 새 경로로 재통과.
+```
+
+### ✅ 후속 수정 2 — 배송대여 수령/반납 일괄 지정 콤보 UI 신설 (2026-08-24, Stephen 요청)
+
+```
+Stephen이 요청 A(반납방식 고정+시간선택 비활성화)의 "배송" 판정 대상을 CMS에서 직접
+관리 가능한 콤보 버튼 UI로 요구 — 기존엔 cart/+page.svelte에 delivery·crazydelivery로
+하드코딩돼 있어 CMS에 아무 표시가 없었음(이게 "빠진 UI"의 원인).
+
+⚠️ 이 작업 중 발견: Stage 실데이터의 실제 "택배" 방식은 method_key='delivery'가 아니라
+  레거시 'epost'로 등록돼 있음('delivery'는 CMS가 신규 등록 가능한 옵션일 뿐 아직 실제
+  등록된 행이 없었음). 즉 하드코딩 상태였다면 실제 고객이 쓰는 택배(epost) 선택 시
+  요청 A 로직이 전혀 발동하지 않았을 것 — 콤보 UI로 전환한 것이 이 숨은 갭을 해소.
+
+구현(Migration 339, Stage 적용 완료):
+  - rental_method_options.is_bulk_delivery BOOLEAN DEFAULT false 추가, 시딩값은 Stephen
+    원 답변 그대로(delivery·crazydelivery만 true — epost는 false로 유지, Stephen 확인 필요)
+  - toggle_rental_method_bulk_delivery(p_id) RPC(is_cms_user 게이트, anon/PUBLIC 회수)
+  - CMS "/cms/set/rental > 배송 설정" 카드 내부에 "배송대여 수령/반납 일괄 지정" 콤보칩
+    서브섹션 신설(등록된 대여방식 전체를 토글 가능한 칩으로 표시)
+  - cart 쪽 isDeliveryLocked를 하드코딩 문자열 비교 → data.deliveryOptions의
+    is_bulk_delivery 조회 기반으로 전환(cart/+page.server.ts select에 컬럼 추가)
+
+⛔ Stephen 확인 필요: 실제 택배(epost)에도 이 잠금을 적용하려면 CMS에서 "택배(구)" 칩을
+  직접 켜야 함 — 자동으로 켜두지 않음(원 답변 "delivery, crazydelivery"를 임의 확장하지
+  않고 그대로 시딩, 콤보 UI로 admin이 직접 결정하도록 함).
+```
+
+### ✅ 후속 수정 3 — 플랜 정밀검증(별도 세션) 중 발견·수정 2건 (2026-08-24)
+
+```
+① Production 실데이터 재확인 결과, 위 §후속수정2의 "epost 갭" 우려는 Production 기준으로는
+  이미 해소돼 있었음이 확인됨 — Production에서는 'crazydelivery'·'epost' 둘 다 과거에
+  소프트삭제(deleted_at 존재)됐고, 현재 살아있는 유일한 배송 방식은 method_key='delivery'
+  (표시명 "크레이지배송(택배)") 하나뿐. Migration 339의 시딩 조건(`WHERE method_key IN
+  ('delivery','crazydelivery') AND deleted_at IS NULL`)이 정확히 이 살아있는 'delivery'
+  행만 골라 is_bulk_delivery=true로 설정했음을 직접 재조회로 확인 — 의도대로 정상 동작.
+  (Stage는 반대로 'delivery' 키가 아예 없고 'crazydelivery'가 살아있어 그쪽이 true로
+  시딩됨 — 두 환경의 실데이터 구성이 다를 뿐, `isDeliveryLocked()`가 특정 키를 하드코딩
+  하지 않고 DB 플래그를 조회하는 방식이라 로직 자체는 두 환경 모두에서 정상 동작함)
+② `src/routes/cart/+page.svelte`의 무인보관함(locker-guide, 별도 아젠다) 안내문구 조건이
+  `props.method === 'crazydelivery'`로 하드코딩돼 있어 §후속수정2 전환과 기준이 어긋나 있던
+  것을 발견 — `{:else if locked}`(= `isDeliveryLocked(props.method)`)로 통일. 이제 CMS에서
+  다른 방식의 is_bulk_delivery를 켜도 안내문구 노출 기준이 반납방식고정·시간선택숨김과
+  항상 일치함. svelte-check 신규 에러 0건 확인.
+```
+
+---
+
 생성일: 2026-08-21 (@promptor)
 아젠다: 예약 결제·계약서명 순서 재설계 — rental-lifecycle.md 기 문서화된 목표 3단계 흐름
 (예약신청→계약대기→서명+결제→계약완료)을 실제로 구현. 결제(PG 호출) 시점을 "장바구니
@@ -11489,10 +11725,18 @@ Track 구분 (반드시 준수):
   - 확인: production DB `user_profiles.id`가 auth user ID와 동일한지 확인 후 `cmsProfile.ts` 패턴과 동일한 폴백 추가
   - 출처: AUDIT-3.4 | 별도 B-START 필요
 
-- [ ] **AUDIT-BND-02**: `/api/cms/customers/[id]/*` 6개 sub-routes partner 직접접근 차단 미적용
-  - 파일: `src/routes/api/cms/customers/[id]/addresses`, `subscriptions`, `credit-audit`, `rentals`, `chat-sessions`, `profile-settings` (+server.ts 각 1개씩)
-  - 문제: "any CMS role" 체크만 → partner URL 직접 호출 시 고객 주소/구독/크레이지스코어/대여이력 조회 가능 (security-auth.md "고객관리: partner ❌" 불일치)
-  - 처리: 각 sub-route에 `hasSettingsAccess(cmsRole)` 게이트 추가
+- [x] **AUDIT-BND-02**: `/cms/customers/*` 6개 sub-routes partner 직접접근 차단 미적용 — **수정 완료(2026-08-24)**
+  - 실제 파일 위치는 `/api/cms/customers/[id]/*`가 아니라 `src/routes/cms/customers/{addresses,
+    chat-sessions,credit-audit,profile-settings,rentals,subscriptions}/+server.ts` 6개(STAGE 4에서
+    정정 확인)
+  - 문제: "any CMS role" 체크만 → partner URL 직접 호출 시 고객 주소/구독/크레이지스코어/대여이력/
+    채팅상담이력/알림설정 조회 가능 (security-auth.md "고객관리: partner ❌" 불일치)
+  - 처리: 6개 파일 전부 `fetchCmsProfileByAuthId` 이후 `hasSettingsAccess(profile?.cms_role ?? '')`
+    게이트 추가(기존 "CMS 권한 없음" 메시지를 표준 문구 "권한 없음"으로 통일). 부모 페이지
+    (`/cms/customers`)는 이미 hasSettingsAccess로 막혀있어 UI 경로 영향 없음(manager+ 계정의
+    정상 사용 무회귀) — 이번 수정은 오직 직접 HTTP 호출 우회 경로만 차단.
+  - 검증: 신규 `src/__tests__/server/customersDetailApiGuards.test.ts`(12건, partner→403/
+    manager→통과 6개 라우트×2 각각) 전부 GREEN, `eslint`·`svelte-check` 신규 에러 0건.
   - 출처: AUDIT-3.1 | 별도 B-START 필요
 
 - [ ] **AUDIT-BND-03**: `promotion/ad`, `promotion/coupon` 직접 DML — H-01 위반
@@ -29872,3 +30116,636 @@ Stage·Production 둘 다 `pg_get_functiondef` 직접 조회로 반영 확인.
 **GATE 등급**: 🟡 BOUNDARY(①②는 기존 채팅카드 UI 로직 수정, ③은 CMS 단일 컴포넌트 판별
 함수 보완 — 결제·예약 상태 전이·보안 로직 변경 없음, DB는 CREATE OR REPLACE로 시그니처
 불변) — git commit은 Stephen 직접 실행 필요.
+
+---
+
+## NOW — CMS 백오피스 전역 정밀 검증 v3 (처음부터 재실행, 35개 화면) (2026-08-24, @promptor)
+
+생성일: 2026-08-24
+아젠다: Stephen 지시 — "CMS 백오피스(/cms/) 전역 정밀 검증 — 하네스 시스템 적용, 처음부터
+재실행. CMS 수정량이 많으니 절대 대충하지말고 정밀 검증." v2(11개 화면 기준) 완료 이후 40개
+커밋이 추가로 쌓였고 그중 상당수가 CMS 화면·API를 직접 변경했음이 실측 확인돼, v2 스코프
+자체를 폐기하고 화면 인벤토리부터 처음부터 재수립한 v3 감사.
+
+[CONTEXT BRIDGE]
+plan_source: `/Users/stevenmac/.claude/plans/cms-abundant-heron.md` (v3, 2026-08-24 전면
+  재작성) — 이 TASK.md 섹션은 그 원문의 요약 전개일 뿐, 세부 실행 시 반드시 plan 파일 원문을
+  먼저 재확인할 것(특히 §1 실측 근거·§3 STAGE별 집중 포인트 표).
+핵심제약:
+  - "정밀 검증"의 정의(Stephen 반복 지적 반영, plan §3): grep만으로 끝내지 않는다 — 화면마다
+    ①서버 액션·load 함수 코드 직접 읽기(권한가드·RPC 경유 여부·입력검증) ②관련
+    svelte-check/eslint/vitest 실행 ③CRITICAL 의심 시 Supabase MCP로 stage 실DB 대조,
+    세 가지를 전부 거칠 것 — 이 세 조건 중 하나라도 생략하면 그 STAGE는 미완료로 간주
+  - 이 문서(plan v3)는 v1/v2를 완전 대체 — 과거 세션이 v1/v2 스코프("11개 화면")를 다시
+    기준으로 삼지 않도록 주의(§1-2 인벤토리 재실측 결과 35개가 현재 유효 스코프)
+  - STAGE는 GNB 메뉴 그룹 기준으로 상호 독립적 설계 — 특정 STAGE에서 CRITICAL 결함 발견 시
+    그 건만 즉시 에스컬레이션하고 나머지 STAGE는 계속 진행 가능
+TDD도메인: STAGE 2(대여 — 계약서명 완료 게이팅 `af1211a`, 결제·예약 CRITICAL 도메인)에서
+  코드 수정이 실제로 필요해지는 경우 AGENTS.md TDD 강제 키워드(결제·예약) 해당. 단 이번
+  아젠다 자체는 원칙적으로 "검증"(코드리딩+테스트실행 확인)이며, 결함 발견 시 즉시 수정하지
+  않고 발견사항으로 기록 후 별도 GATE로 처리한다(아래 절대금지 참고)
+절대금지:
+  - plan 파일(`cms-abundant-heron.md`) 자체를 수정하지 않는다 — 읽기 전용 근거 문서
+  - STAGE 진행 중 CRITICAL 결함을 발견해도 Stephen 승인 없이 즉시 코드 수정하지 않는다
+    (발견 즉시 에스컬레이션은 하되, 수정 착수는 별도 확인 후)
+  - STAGE 1~7 진행 중 매 STAGE마다 승인 대기하지 않는다 — 반복 승인 요청 자체가 v2가 지적받은
+    "대충 검증"의 원인으로 지목됨(plan §4). CRITICAL 발견 시만 즉시 에스컬레이션, 그 외엔
+    완주 후 STAGE 8 종합보고 1회로 갈음
+  - §2 "재확인 완료 항목" 표의 BND-01/03/04를 다시 "미확인" 상태로 되돌려 재작업하지 않는다
+    (이미 코드 재확인 완료 — 아래 표 참고, 예외는 BND-02뿐)
+실패롤백: STAGE 단위가 서로 독립적(GNB 메뉴 그룹 기준 분리) — 특정 STAGE에서 막히면 그
+  STAGE만 BLOCKED로 표기하고 나머지 STAGE는 순서 무관하게 계속 진행 가능
+
+### ✅ GATE B 승인 완료 (2026-08-24)
+
+Stephen이 "CMS 백오피스(/cms/) 전역 정밀 검증 — 하네스 시스템 적용, 처음부터 재실행"으로
+지시하며 plan 파일(`cms-abundant-heron.md` v3)의 Context·규모실측·STAGE 설계 전체를 포괄
+승인한 것으로 간주한다. STAGE 0(본 TASK.md 등록)은 코드 미변경 BOUNDARY 작업이라 별도 GATE B
+대기 없이 곧바로 STAGE 1로 착수 가능(plan §4 "STAGE 0은 즉시 진행" 원칙 그대로 반영).
+
+### 배경 요약 (plan §1 실측 근거 — 세부는 원문 참고)
+
+```
+- 마지막 전면 CMS 감사 기준점(6c9aeed, v2 작성 시점) 이후 40개 커밋 추가. 그중 CRITICAL·보안
+  태그 커밋만 5건(c31f7c5·1956719·0f06738·cf8254b·af1211a)이 "정밀 검증 없이" 병렬 세션들에
+  의해 자체적으로 발견·수정·배포까지 완료됨 — v2 스코프로는 애초에 잡히지 않던 사각지대였다는
+  증거.
+- 화면 인벤토리 재실측: find src/routes/cms -name "+page.svelte" | wc -l → 35개(v2 기준
+  "11개 화면" 대비 3배, GNB 실 구조와도 이미 어긋나 있었음). API 라우트도 43개(+server.ts).
+- 상품 메뉴의 "구독"(subscriptions), 고객 메뉴의 5개 서브메뉴 대부분, 프로모션 "콘텐츠",
+  설정 "서명"(signature)은 한 번도 정밀검증을 받은 적 없는 완전 신규 영역.
+```
+
+### §2 재확인 완료 항목 (v1/v2 "미확인" 승계 — v3 작성 중 라이브 코드 재확인 완료, 재작업 불필요)
+
+| 항목 | v2 상태 | v3 재확인 결과 |
+|---|---|---|
+| BND-01(`accounts/list` dual-schema) | 미수정 | ✅ `fetchCmsProfileByAuthId` 적용 확인(`accounts/list/+page.server.ts:6,80`) |
+| BND-03(`promotion` 직접 DML) | 미수정 | ✅ `cms_create_banner` 등 RPC 경유로 전환 확인(`promotion/ad/+page.server.ts:64`) |
+| BND-04(`promotion/analytics` 권한체크) | 미수정 | ✅ `hasSettingsAccess` 게이트 확인(`promotion/analytics/+page.server.ts:26-27`) |
+| synonym_group RLS 잠금 | 마이그레이션만 작성, 미적용 | ✅ stage·production 라이브 적용 완료 |
+| member_code LPAD 절단(migration #276/277) | 발견만 | ✅ stage·production 라이브 함수 적용 확인 |
+| `payment.test.ts` 회귀공백 | 7건 RED | ✅ 16/16 GREEN |
+| `memberCodeCombo.test.ts` flaky | 간헐 실패 | ✅ `fileParallelism:false`로 해소, 3회 재실행 재현 0건 |
+| 신규 3영역(전자계약 임포트/체크아웃 배치알림/회원코드설정) 경미결함 3건 | 조사만 완료 | ✅ 4건 수정·배포(`ef3ec3b`, GATE E 통과) |
+| BND-02(`customers/[id]/*` role체크) | 미확인 | ⏳ STAGE 4에서 확정 → ✅ **수정 완료(2026-08-24, AUDIT-BND-02 항목 참고)** |
+
+> ⚠️ 위 표는 이미 처리 완료된 항목이다 — 향후 세션이 BND-01/03/04를 다시 "미확인"으로 되짚어
+> 재작업하지 않도록 이 표로 고정 기록한다. 유일한 예외는 BND-02(STAGE 4에서 최초 확정).
+
+### AUDIT 서브태스크 (STAGE 0~8 — plan §3 표 그대로 TASK.md 태스크 단위로 전개)
+
+- [x] STAGE 0. @promptor 재실행 — 이 TASK.md 섹션 생성 및 GATE B 표기 | GSD | 완료기준:
+  TASK.md에 "CMS 전역 정밀검증 v3" 섹션 append 완료 | 대상 화면: — | 예상: 30분
+- [x] STAGE 1. 상담(`/cms/chat`, `/cms/chat/qna`) | GSD | 완료기준: 2개 화면 서버
+  액션·load 코드리딩 + svelte-check/eslint 실행 완료, CS답변 관리자알림·채팅알림 버튼라벨
+  (신규, `188466b`) 정합 확인 | 대상 화면 수: 2 | 예상: 60분
+
+  **[STAGE 1 검증 완료 — 2026-08-24]**
+
+  검증 방법: ① 서버 코드 직접 읽기(chat/+page.server.ts, qna/+page.server.ts, api/chat/admin-reply,
+    api/chat/sessions) ② `npx eslint src/routes/cms/chat src/routes/cms/chat/qna` 실행 ③
+    `npx svelte-check --tsconfig ./tsconfig.json` 실행(chat 관련 필터) ④ `npx vitest run
+    src/__tests__/server/chatActionEnrich.test.ts` 실행 ⑤ chat.md, service-operations.md §11-13
+    정책 대조
+
+  정상 확인 항목:
+  - `cms/chat/+page.server.ts` load: CMS +layout.server.ts가 cmsRole을 전역 강제(line 40)하므로
+    페이지 자체의 session-only 체크는 허용 가능한 구조
+  - `cms/chat/qna/+page.server.ts` load: `await parent()` → `cmsRole` 체크 정상
+  - `qna` `promoteCandidate`/`deleteCandidateMember`: `hasSettingsAccess(cmsRole)` manager+ 게이트 정상
+  - `188466b` CS답변 관리자알림: `sendPushToAdmins('new_session', ...)` 신규 세션 시 관리자 FCM
+    발송 정상 반영(`push.ts:324`) + `SENSITIVE_CANNED_CATEGORIES`(`damage`,`cs`) 캔드매칭 히트 시
+    CS_ESCALATE 인텐트 로그 강제 기록 정상(`api/chat/message/+server.ts:25,205`)
+  - `188466b` 채팅알림 버튼라벨: `RentalDetailPanel` `chatNotifyLabel()` 함수가
+    rental-lifecycle.md 수동버튼 NOTIFY_TYPE_MAP 4종(shipment_notify·return_remind·
+    return_registration·rental_complete)과 일치 확인
+  - service-operations.md §13 ④ `admin_id` 기반 응답판정 로직: `api/chat/sessions`에 정상 구현
+    확인(admin_id IS NULL 세션은 마지막 sender_type='admin'이어도 긴급판정 유지)
+  - vitest: chatActionEnrich.test.ts 포함 27개 ALL PASS
+  - push.ts `locker_guide` 추가(`188466b`)가 CUSTOMER_LIFECYCLE_PUSH_COPY 기존 타입과 충돌 없음
+
+  발견사항:
+
+  [BOUNDARY-1] **H-01 위반 — `qna/+page.server.ts` `delete` action (line 124)**
+    `canned_responses` 테이블에 직접 `.delete()` DML — RPC 경유 없음. core-rules.md H-01 원칙
+    위반. 단, canned_responses 전용 쓰기 RPC가 현재 존재하지 않아 실질적 보안 위협은 낮음
+    (service_role 키 사용 + CMS 역할 세션 체크 보유). 수정 방향: 전용 RPC 신설 또는 허용 예외
+    명시 필요 — 별도 Stephen 확인 후 처리.
+
+  [BOUNDARY-2] **H-01 위반 — `qna/+page.server.ts` `promoteCandidate`(line 143)/
+    `deleteCandidateMember`(line 163) action**
+    `synonym_group_members` 테이블에 직접 `.update()`/`.delete()` DML — RPC 경유 없음.
+    동일 H-01 위반. 권한 게이트(manager+)는 정상.
+
+  [BOUNDARY-3] **권한 공백 — `qna/+page.server.ts` `delete` action (line 116-117)**
+    `canned_responses` 삭제가 `getCmsRoleForAction` 세션 체크만 있고 `hasSettingsAccess` 없음
+    → `partner` 역할도 캔드응답 삭제 가능. 반면 같은 파일의 `promoteCandidate`/
+    `deleteCandidateMember`는 manager+ 요구 — 역할 경계가 불일치. security-auth.md에
+    `/cms/chat/qna` 삭제 권한이 명시되어 있지 않아 의도 불명확 → Stephen 확인 필요.
+
+  [BOUNDARY-4] **ESLint 에러 — `qna/+page.svelte:12`**
+    `SynonymCandidateRow` type import가 파일 내 어디에도 명시적 타입 어노테이션으로 사용되지 않음.
+    `eslint --max-warnings=0` 기준 1 error. (`data.synonymCandidates`는 PageData 자동추론으로
+    사용되므로 명시적 import 불필요 — 제거하면 해소됨.)
+
+  [ROUTINE-1] **svelte-check 경고 — `qna/+page.svelte:38`**
+    `state_referenced_locally`: `data` 초기값만 캡처하는 파생 레퍼런스.
+
+  [ROUTINE-2] **svelte-check 경고 — `MessageBubble.svelte:26,196`**
+    `state_referenced_locally`(26) + `<div> with click handler must have ARIA role`(196).
+    채팅 컴포넌트 공용 파일 — STAGE 1 대상 파일의 직접 의존성.
+
+  CRITICAL 결함: 0건 | BOUNDARY: 4건 | ROUTINE: 2건
+- [x] STAGE 2. 대여(`/cms/reservation`, `/cms/rentals`, `/cms/rental/history`,
+  `/cms/reservation/contracts`) | 🔴 CRITICAL 집중(계약서명 게이팅 도메인) | 완료기준:
+  계약서명 완료 게이팅(`af1211a`) 최초 정밀검증 + 계약서 에디터 렌더링 버그수정 4건
+  (`b21b34e`~`08dc7cb`) 회귀 확인 + 예약승인 배치알림 CMS연동(`ef3ec3b`) 자기검증 완료 |
+  대상 화면 수: 4 | 예상: 120분
+
+  **[STAGE 2 검증 완료 — 2026-08-24]**
+
+  검증 방법: ① 서버 코드 직접 읽기(reservation/+page.server.ts, contracts/+page.server.ts,
+    rental/history/+page.server.ts, api/checkout/confirm-mock, api/contracts/[token]/sign,
+    api/cms/reservations/[id]/init-contract, contract-data, api/cms/contracts/[id]/content,
+    send-chat, lib/server/reservationApprovalNotify.ts, Migration 284) ② eslint 실행
+    (reservation·rentals·rental·RentalDetailPanel·reservationApprovalNotify·관련 API 라우트)
+    ③ vitest 실행(reservationApprovalNotify, contractSigningGate, contractSign, spreadsheetRender,
+    contractAuthGates, contractCanvasPublishFix, contractContentMode, clearIssuedContract,
+    paymentContractOrderRedesign) ④ service-operations.md §9·§10·§11 정책 대조
+
+  정상 확인 항목:
+
+  [✅ 계약서명 완료 게이팅] `confirm-mock/+server.ts`: `mark_reservation_payment_confirmed` RPC 경유.
+    결제만 완료되면 hold 유지, 계약서명까지 AND 충족 시에만 `try_confirm_reservation`이
+    hold→confirmed. `contracts/[token]/sign/+server.ts`: 서명 시 `try_confirm_reservation` 호출,
+    결제가 먼저 완료된 경우에 한해 confirmed 전환 — 양방향 대칭 정상.
+
+  [✅ 관리자 수동 승인 우회] `reservation/+page.server.ts:approveReservation`: `update_reservation_status`
+    직접 호출로 계약 체크 없이 즉시 confirmed — service-operations.md §9 "관리자 수동 재량 우회 경로"
+    정책과 일치. 의도된 설계 확인.
+
+  [✅ HOLD 만료-서명 게이팅 상호작용 안전] Migration 284 `try_confirm_reservation` line 44:
+    `IF NOT FOUND OR v_status IS DISTINCT FROM 'hold'...RETURN FALSE` — 만료(expired) 상태는
+    절대 confirmed로 전환되지 않음. service-operations.md §10과 §9 상호작용 무결 확인.
+
+  [✅ resolveApprovalNotifyPlan 자기검증] 디스크 최신본 기준: `cancelled`·`expired` 형제는 `relevant`
+    에서 제외(51~55행) — HOLD 30분 자동만료 도입 후 만료된 형제 때문에 배치알림이 영영 보류되는
+    문제 예방 로직 정상. single/batch/hold 3분기 정상, 양쪽 호출 경로(approveReservation·
+    sign) 모두 동일 함수 경유 확인.
+
+  [✅ 계약서 에디터 렌더링 버그수정 4건] spreadsheetRender.ts: `isValidCssColor()` rgb()/rgba() 허용
+    (b21b34e), XlsxCellFormatting color/fontWeight/fontSize 필드 추가(b21b34e), 워드 모드 서명이미지
+    NodeSelection 직접 디스패치(08dc7cb), sign/+server.ts 스냅샷 도입(2026-08-21). 코드 반영 확인.
+
+  [✅ manager+ 권한 게이팅] contracts/+page.server.ts: load()에서 `hasSettingsAccess` + 전 action에서
+    `getCmsRoleForAction`+`hasSettingsAccess` — 9개 지점 security-auth.md 접근 매트릭스와 일치.
+    init-contract·contract-data·content PATCH·send-chat: 전부 manager+ 게이트 정상.
+    content GET: 서명완료건에 한해 partner도 읽기 허용 — 2026-08-20 정책 반영 확인.
+
+  [✅ find_or_create_general_chat_session 경유] send-chat/+server.ts: 공용 RPC 경유 확인
+    — service-operations.md §11 준수.
+
+  테스트 결과:
+  - `reservationApprovalNotify.test.ts`: 14/14 GREEN
+  - `contractSigningGate.test.ts`: 14/14 GREEN
+  - `spreadsheetRender.test.ts`: 98/98 GREEN
+  - `contractAuthGates.test.ts`: 69/69 GREEN
+  - `contractCanvasPublishFix.test.ts` + `contractContentMode.test.ts` + `clearIssuedContract.test.ts`: 150/150 GREEN
+  - `paymentContractOrderRedesign.test.ts`: 25/25 GREEN
+
+  발견사항:
+
+  [BOUNDARY-5] **ESLint 에러 — `cms/reservation/+page.svelte:8`**
+    `csToast` import가 파일 내 실제로 사용되지 않음(`@typescript-eslint/no-unused-vars`). 기능에
+    영향 없는 dead import. RentalDetailPanel.svelte 내부에서 csToast를 사용하므로 이 파일에서는
+    불필요 — import 제거하면 해소됨. CRITICAL 아님.
+
+  [BOUNDARY-6] **contractSign.test.ts Stage DB 오염 (4건 FAIL)**
+    Stage DB에 2026-09-01~2026-09-03 날짜로 동일 product의 stale 예약 데이터가 잔존해
+    `rental_reservations_product_dates_excl` 제약 위반. 이전 테스트 실행의 cleanup이
+    미완료된 환경 오염(worktree 경합 또는 비정상 종료) — 코드 회귀 아님. contractSigningGate.test.ts
+    14/14 GREEN이 계약 게이팅 로직을 커버하므로 CRITICAL 아님. Stage DB 수동 정리 필요.
+    (worktree 디렉토리 내 동일 테스트 파일도 추가 발견됨 — `.claude/worktrees/` 2개 경로가
+    vitest 탐색에 포함돼 3중 실행 구조 형성, fileParallelism:false 설정에도 불구하고 경합 발생 위험.)
+
+  [ROUTINE-3] **svelte-check 1 error — `vite.config.ts:10`**
+    `'test' does not exist in type 'UserConfigExport'` — vitest 설정에 vite defineConfig를
+    그대로 사용해 발생하는 타입 불일치. 이미 커밋 `ac0bdf4`에서 도입됨(이전부터 존재). 기능
+    영향 없음.
+
+  [ROUTINE-4] **rental/history/+page.server.ts — `any` 타입 캐스트**
+    lines 97, 123에 `eslint-disable-next-line @typescript-eslint/no-explicit-any` 사용. Supabase
+    자동생성 타입 한계로 불가피 — 기능 정상, ESLint suppress로 빌드 통과.
+
+  CRITICAL 결함: 0건 | BOUNDARY: 2건 | ROUTINE: 2건
+- [x] STAGE 3. 상품(`/cms/products`, `/cms/products/new`, `/cms/subscriptions`,
+  `/cms/subscriptions/new`) | GSD | 완료기준: 구독 메뉴 최초 정밀검증(신규, `905542c`) —
+  manager+ 권한게이트·자동발행 리스크 확인 완료 | 대상 화면 수: 4 | 예상: 90분
+
+  검증 수행일: 2026-08-24
+
+  **정상 확인 (GREEN)**:
+  - subscriptions 양쪽 load(): `hasSettingsAccess(cmsRole ?? '')` — manager+ 진입 게이트 정확히 구현 ✅
+  - 모든 subscription actions 7개: `getCmsRoleForAction(locals)` + `hasSettingsAccess` 이중 체크 ✅
+  - 구독 청구 크론: `claim_subscriptions_due_for_billing` RPC + `record_subscription_charge_result` RPC — H-01 준수 ✅
+  - 쿠폰/포인트 자동발행 경로: CMS 구독관리화면은 plan/benefit 구조 설정만 함. 실제 발행은 `distribute_coupon` / `admin_grant_points` RPC 별도 경유 ✅
+  - `products/new` generate_product_code: 3인자(p_code_id 포함) 항상 명시 — PGRST203 방지 ✅
+  - products load()/actions: 세션 체크만 — security-auth.md 접근 매트릭스 partner 등급 일치 ✅
+  - svelte-check TypeScript ERROR 없음 (products/subscriptions 범위) ✅
+  - subscriptionBilling 테스트: 36/36 GREEN ✅
+  - productNew/productUpdateSection 테스트: 30/30 GREEN ✅
+
+  **BOUNDARY 발견사항 (수정 불필요, STAGE 8 종합보고에서 일괄 처리)**:
+  - ESLint 4건: `products/+page.svelte:375:58` 불필요한 이스케이프 `\/` 1건 +
+    `products/new/+page.svelte:16` 미사용 타입 임포트 3건(RentalPeriodSimple/RentalMethodSimple/PickupPointSimple)
+  - productClone.test.ts 3건 실패: 2건은 의도적 [RED] TDD 테스트(정상). 1건
+    ("정상 동작 회귀 방지 — add_inventory")은 슬러그 중복확인 루프가 코드에 추가된 후
+    테스트 mock 미갱신으로 발생한 테스트 유지보수 공백(TypeError: admin.from(...).select
+    is not a function) — 프로덕션 코드 결함 아님
+  - subscriptions CMS 관리화면 전용 vitest 없음 (커버리지 공백)
+  - security-auth.md 접근 매트릭스에 `/cms/subscriptions` 항목 미등록 (코드는 정상,
+    문서 공백만 존재)
+  - subscription DML: `subscription_plans/tier_benefits/free_rental_items/subscription_policy_items`
+    전부 service_role 직접 INSERT/UPDATE/DELETE — rental_reservations 외 CMS admin 관리
+    테이블이므로 현재 허용 범위, 복잡도 증가 시 RPC화 고려 필요
+- [x] STAGE 4. 고객(`/cms/customers`, `/cms/customers/membership`, `/cms/customers/score`,
+  `/cms/customers/inquiry`, `/cms/customers/settings`) | GSD | 완료기준: BND-02
+  (`customers/[id]/*` role체크) 최초 확정 + 5개 서브메뉴 대부분 최초 정밀검증 + 회원코드조합
+  기준설정 화면단위 커버리지 재확인 | 대상 화면 수: 5 | 예상: 100분
+
+  ### STAGE 4 발견사항 (2026-08-24)
+
+  **BND-02 최종 확정 — BOUNDARY (partner 직접 API 호출로 고객 PII 우회접근 가능)**
+
+  실제 파일 위치 정정: TASK.md의 기존 BND-02 엔트리가 `/api/cms/customers/[id]/`를 가리켰으나,
+  해당 파일 6개는 실제로 `/cms/customers/` 하위에 존재한다(SvelteKit 서버 라우트).
+
+  대상 6개 파일 — `fetchCmsProfileByAuthId` + `cms_role` 존재 여부만 체크 → **any CMS role (partner OK)**:
+  - `src/routes/cms/customers/addresses/+server.ts` — 배송지 목록(PII)
+  - `src/routes/cms/customers/chat-sessions/+server.ts` — 채팅 상담 이력
+  - `src/routes/cms/customers/credit-audit/+server.ts` — 크레이지스코어 조정 이력(민감)
+  - `src/routes/cms/customers/profile-settings/+server.ts` — 알림설정·개인정보동의
+  - `src/routes/cms/customers/rentals/+server.ts` — 대여 이력
+  - `src/routes/cms/customers/subscriptions/+server.ts` — 구독 이력
+
+  올바르게 처리된 파일:
+  - `src/routes/cms/customers/subscription-payments/+server.ts` — `getCmsRoleForAction` + `hasSettingsAccess` ✅ (manager+ 전용)
+  - `src/routes/api/cms/customers/[id]/summary/+server.ts` — `getCmsRoleForAction` + `hasSettingsAccess` ✅
+  - `src/routes/api/cms/customers/[id]/coupons/+server.ts` — `getCmsRoleForAction`만 (any role) ⚠️ ROUTINE
+  - `src/routes/api/cms/customers/[id]/inquiries/+server.ts` — `getCmsRoleForAction`만 (any role) ⚠️ ROUTINE
+
+  부모 페이지(`/cms/customers`) 자체는 load/모든 actions 전부 `hasSettingsAccess` 적용 ✅.
+  BUT: partner 사용자가 위 6개 엔드포인트를 직접 HTTP 호출하면 페이지 리다이렉션을 우회해
+  고객 PII(배송지·채팅이력·크레이지스코어·대여이력 등)를 조회 가능 — security-auth.md
+  접근 매트릭스("고객 관리: partner ❌")와 불일치.
+
+  **5개 서브 페이지 `+page.server.ts` 정밀검증 결과:**
+  - `/cms/customers/membership`: load `hasSettingsAccess` ✅, actions 없음, 직접 SELECT ✅(읽기전용 서버)
+  - `/cms/customers/score`: load `hasSettingsAccess` ✅, actions 없음, `credit_score_audit` 직접 SELECT ✅
+  - `/cms/customers/inquiry`: load `hasSettingsAccess` ✅, actions `reply`/`updateStatus` 모두 `hasSettingsAccess` ✅, `add_cs_reply`/`update_cs_post_status` RPC 경유 ✅
+  - `/cms/customers/settings`: load `hasSettingsAccess` ✅, `saveMemberCodeCombo` `hasSettingsAccess` ✅,
+    `bulkReissue` `hasSettingsAccess` + session 체크 ✅, `bulk_reissue_member_codes` RPC 경유 ✅
+    ⚠️ ROUTINE: `saveMemberCodeCombo`가 `cms_settings` 테이블을 직접 `.upsert()`(H-01 잠재적 대상 —
+    서비스 영향 없는 설정 테이블이라 위험도 낮음, 별도 확인 권장)
+
+  **테스트 재실행:**
+  - `comboCategoryCode.test.ts` + `customersSettingsGuards.test.ts`: 4파일 46개 전부 GREEN ✅
+
+  **svelte-check:** customers 관련 에러 0건 ✅
+
+  **ESLint (customers 경로):**
+  - `customers/+page.svelte` line 3: `'enhance' is defined but never used` ⚠️ ROUTINE
+  - `customers/inquiry/+page.svelte` line 8: `'InquiryRow' is defined but never used` ⚠️ ROUTINE
+- [x] STAGE 5. 프로모션(`/cms/promotion/ad`·`/coupon`·`/point`·`/segment`·`/rules`·
+  `/analytics`·`/content`) | GSD | 완료기준: 콘텐츠 메뉴 최초 정밀검증(신규) + 쿠폰
+  지연채번(`877c71c`) CMS 연동면 검증 완료 | 대상 화면 수: 7 | 예상: 140분
+
+  **[STAGE 5 검증 완료 — 2026-08-24]**
+
+  검증 방법: ① 7개 +page.server.ts 전부 직접 코드 읽기(권한가드·RPC경유·입력검증) ②
+    `cms_create_banner`/`cms_toggle_banner`/`cms_delete_banner`/`cms_create_coupon`/
+    `cms_update_coupon`/`cms_toggle_coupon`/`cms_delete_coupon` 7개 RPC 연결 재확인(회귀 검증)
+    ③ `approve_pending_coupon_gift` RPC(migration 293) sequenced 분기 SQL 직접 확인
+    ④ `npx svelte-check --tsconfig ./tsconfig.json` 실행(promotion 관련 ERROR 0건 확인)
+    ⑤ `npx eslint src/routes/cms/promotion` 실행(오류 없음) ⑥ `npx vitest run
+    src/__tests__/services/couponLazySequencing.test.ts` 실행(26/26 GREEN)
+
+  정상 확인 항목:
+  - **ad**: `hasSettingsAccess` 권한가드 정상(load + actions 3종). `cms_create_banner`·
+    `cms_toggle_banner`·`cms_delete_banner` 모두 RPC 경유 — BND-03 회귀 없음.
+  - **coupon**: `hasSettingsAccess` 권한가드 정상(load + actions 6종). `cms_create_coupon`·
+    `cms_update_coupon`·`cms_toggle_coupon`·`cms_delete_coupon`·`distribute_coupon`·
+    `extend_coupon` 모두 RPC 경유 — BND-03 회귀 없음.
+  - **쿠폰 지연채번(§14) 최초 정밀검증**: `codeMode === 'sequenced'`일 때 `p_code: null` +
+    `p_code_series` 채움(코드 직접 저장 금지) — service-operations.md §14 정책과 코드 일치 확인.
+    서버사이드 검증도 이중 구현(`if (codeMode === 'manual' && !code)` / `if (codeMode ===
+    'sequenced' && !code_series)`) — 정상.
+  - **approve_pending_coupon_gift sequenced 분기**: migration 293 SQL에서 `v_code_mode =
+    'sequenced'`이면 `v_display_code := '쿠폰이 발급되었습니다. 결제 시 자동으로 적용됩니다.'`
+    (실제 코드 미노출) — §14 "코드 직접 노출 금지" 정책 정확히 구현됨.
+  - **couponLazySequencing.test.ts**: 26/26 GREEN — 채번·멱등성·원자성·manual 무동작·
+    max_sequence 상한·use_coupon 통합·ALREADY_USED·주문연결·get_coupon_redemptions 전 케이스.
+  - **point**: `hasSettingsAccess` 권한가드 정상. `admin_grant_points`·`admin_bulk_grant_points`·
+    `update_point_earn_rule` 모두 RPC 경유. c31f7c5(포인트 직접조작 취약점 차단) 이후 회귀 없음.
+  - **segment**: `hasSettingsAccess` 권한가드 정상. read-only(actions 없음). `get_segment_stats`·
+    `get_segment_users` RPC 경유.
+  - **analytics**: `hasSettingsAccess` 권한가드 정상 — BND-04 회귀 없음. `get_promotion_analytics`
+    RPC 경유. read-only(actions 없음).
+  - **content(최초 정밀검증)**: `hasSettingsAccess` 권한가드 정상. `get_crazylog_content_stats`
+    RPC 경유. read-only(actions 없음).
+  - svelte-check: promotion 파일 ERROR 0건(전체 1건은 기존 vite.config.ts vitest 타입 이슈).
+  - eslint: promotion 파일 오류 없음.
+
+  발견사항:
+  - **[BOUNDARY] BND-RULES-01**: `rules/+page.server.ts` — `createRule`(INSERT)·`toggleRule`
+    (UPDATE)·`deleteRule`(DELETE) 3건이 `.from('marketing_rules')` 직접 DML(H-01 위반).
+    `marketing_rules`는 보조 마케팅 테이블로 CRITICAL 도메인(결제·예약·보안)이 아니므로
+    BOUNDARY 등급 판정. 현재 코드 미수정(검증 범위 — 수정은 별도 Stephen 승인 후 진행).
+  - **[ROUTINE] CONS-CONTENT-01**: `content/+page.server.ts:35` — `console.error(...)` 잔류
+    (core-rules.md "console.log 금지" 범주). ROUTINE 등급. STAGE 8 종합보고 일괄 기록.
+- [x] STAGE 6. 설정(`/cms/set/code`(codes), `/cms/set/rental`, `/cms/set/push`,
+  `/cms/set/admin`(accounts), `/cms/set/signature`) | GSD | 완료기준: `signature` 화면
+  최초 정밀검증(GNB 미노출·존재만 확인된 상태) 완료 | 대상 화면 수: 5 | 예상: 100분
+
+  **[STAGE 6 검증 완료 — 2026-08-24]**
+
+  검증 방법: ① 5개 화면(set/signature, set/+, set/code+, set/admin+, set/push + codes) 서버
+    파일 전부 직접 코드 읽기(권한가드·RPC경유·입력검증) ② `npx eslint src/routes/cms/set
+    src/routes/cms/codes` 실행 ③ `npx svelte-check` 전체 실행 후 대상 파일 WARNING/ERROR 추출
+    ④ security-auth.md 역할별 접근 매트릭스와 코드 대조 ⑤ push_notification_config 신규 타입
+    (`locker_guide`) 등록 여부 마이그레이션 실측 ⑥ codes 액션 수 실측(20개 확인)
+
+  **정상 확인 항목:**
+
+  **1. set/signature (최초 정밀검증):**
+  - load(): `hasSettingsAccess(cmsRole ?? '')` → manager+ 미충족 시 303 redirect ✅
+  - actions 3개(uploadAsset·setDefault·deleteAsset): `getCmsRoleForAction` + `hasSettingsAccess`
+    이중 체크 정상 ✅
+  - GNB 미노출 이유 확정: `+layout.svelte`에 navigation 엔트리 없음. 대신 계약서 에디터
+    (`ContractCanvasFieldPalette.svelte:287`) + 서명 자산 선택창(`SealAssetPicker.svelte:137`)에서
+    `target="_blank"` 링크로 접근 유도 → 의도적 설계(계약서 편집/서명 흐름에서 자연스럽게 도달)
+  - 파일 업로드: `validateUploadFile(file)` 클라이언트 MIME 검증 적용 — uiux-index.md 표준 패턴 ✅
+  - service_role 클라이언트 사용으로 RLS 정책(service_role only) 정확히 우회 ✅
+  - security-auth.md 매트릭스와 코드 일치 ✅
+
+  **2. set/code → /cms/codes (QR-CASE-2 재확인):**
+  - load(): `hasSettingsAccess` → 403 미충족 시 `/cms?notice=access_denied` redirect ✅
+    (QR-CASE-2 후속 — partner 진입 자체 차단, 이전엔 버튼 클릭 시만 403이던 혼란 해소됨)
+  - 액션 20개 실측 일치: transferCode만 `checkSuperadmin`(superadmin), 나머지 19개 전부
+    `getCmsRoleForAction` + `hasSettingsAccess`(manager+) ✅ (security-auth.md QR-CASE-2 기록과 정확히 일치)
+
+  **3. set/rental (대여관리 설정):**
+  - load(): 세션 체크 없음 — CMS 레이아웃(`+layout.svelte`)에서 전역 세션 보장.
+    security-auth.md 매트릭스 `partner(10) ✅` 등급과 일치 ✅
+  - 14개 actions(addPeriod~reorderConsents): `safeGetSession` 세션 체크만(role 체크 없음) →
+    partner 접근 허용 — 매트릭스 의도 일치 ✅
+  - 전부 RPC 경유(`untypedRpc` 래퍼 패턴) ✅
+
+  **4. set/push (FCM 푸시알림 설정):**
+  - load(): `parent()` → `!cmsRole` → 303/login, `!hasSettingsAccess(cmsRole)` → access_denied ✅
+  - actions 2개(updatePushConfig·updateAdminNotify): `getCmsRoleForAction` + `hasSettingsAccess` ✅
+  - 전부 RPC 경유(`update_push_notification_config`·`update_admin_notify_setting`) ✅
+  - service-operations.md §15 정합: `locker_guide`(rental-lifecycle.md 2026-08-20 신설)는
+    push_notification_config 테이블에 미등록 — CMS set/push 화면에서 토글 불가하나 의도적
+    (중요 운영 알림으로 항상 발송, push.ts line 202 `config && config.push_enabled===false`
+    조건에서 null이면 통과 → 사용자 opt-out만 존중하는 구조 확인) ✅
+
+  **5. set/admin → /cms/accounts/list 302 redirect, set/+ → /cms/set/code 302 redirect:** ✅
+
+  **발견사항:**
+
+  [BOUNDARY-6-1] **cms_signature_assets 직접 DML (H-01 — 허용범위 논의 필요)**
+    `set/signature/+page.server.ts` — `uploadAsset`(INSERT)·`setDefault`(UPDATE×2)·`deleteAsset`(UPDATE)가
+    `cms_signature_assets` 테이블에 직접 DML. 전용 RPC 없음. service_role 클라이언트 경유
+    (RLS: service_role only) + 인증·권한 이중 체크 있어 보안 위협은 낮음. 단 `setDefault`의
+    두 UPDATE("전체 false → 특정 true")가 별도 쿼리로 실행돼 원자적이지 않음(레이스컨디션).
+    관리자 자신의 서명 자산 관리 전용 테이블이라 실 영향 극히 낮음. 전용 RPC 신설 또는 H-01
+    예외 명시 필요 — Stephen 확인 권장.
+
+  [ROUTINE-6-1] **security-auth.md 스테일 어노테이션**
+    `security-auth.md` 접근 매트릭스의 `/cms/set/signature` 행에 "(P8B-2, 미구현)" 주석 잔존
+    → 화면·서버 구현 모두 완료 상태. 문서 업데이트 필요.
+
+  [ROUTINE-6-2] **AUDIT-RTN-10 여전히 존재 (동작 영향 없음)**
+    `set/push/+page.server.ts` `admin()` 팩토리: `PUBLIC_SUPABASE_URL` 직접 사용 vs
+    `codes/+page.server.ts`의 `getSupabaseUrl()` 헬퍼 — 둘 다 동일 값, 기능 동일.
+    스타일 불일치만 존재.
+
+  **ESLint 발견 (2 errors):**
+  - `codes/_AutoMappingTab.svelte:129` — `DATE_OPT_LABEL` assigned but never used
+  - `set/rental/+page.svelte:8:89` — `RentalShippingSettings` defined but never used
+
+  **svelte-check WARNING (대상 파일 — 에러 없음):**
+  - `codes/_TreeTab.svelte`: `$state(prop)` 초기값 캡처 1건, aria-label 누락 3건, dialog tabindex 2건
+  - `codes/_FormatTab.svelte`: `$state(prop)` 초기값 캡처 6건, unused CSS selector 1건
+  - `codes/_AutoMappingTab.svelte`: noninteractive tabindex, click ARIA role 미지정 2건
+  - `set/push/+page.svelte`: `$state(prop)` 초기값 캡처 2건
+  - `set/rental/+page.svelte`: `$state(prop)` 초기값 캡처 다수, unused CSS selectors 4개
+    (`.act-del`·`.btn-danger-sm` 및 각 hover/pending — 삭제 버튼 CSS가 실제 마크업에서 미사용)
+  - svelte-check 전체: 1 ERROR(vite.config.ts vitest 타입 — 기존 이슈, set/codes 무관) ✅
+
+  CRITICAL 결함: 0건 | BOUNDARY: 1건(BOUNDARY-6-1) | ROUTINE: 2건+ESLint 2건+svelte WARNING 다수
+
+- [x] STAGE 7. 인접(`/cms/accounts`, `/cms/accounts/codes`, `/cms/mobile`×4, `/cms/login`)
+  | GSD | 완료기준: v2 감사 결과 승계 재확인 + 로그인이력 신규기능(`84fdba9`) 검증 완료 |
+  대상 화면 수: 7 | 예상: 100분
+
+  검증 내용 (2026-08-24):
+
+  1. BND-01 회귀 확인 ✅ — `accounts/list/+page.server.ts:6,80` `fetchCmsProfileByAuthId` 여전히
+     적용 중. load()에서 `hasSettingsAccess` manager+ 게이트(line 22), form action에서
+     `getCmsRoleForAction()` + `fetchCmsProfileByAuthId` 이중 확인(requireSuperadmin 헬퍼). 회귀 없음.
+
+  2. 로그인이력 신규기능(`84fdba9`) 검증 ✅ (보안 정상, 기능 일부 미구현):
+     - 기록 경로: `login/+page.server.ts:81-93` — service_role admin 클라이언트로 `cms_login_logs`
+       INSERT. 실패해도 로그인 차단 안 함(try/catch 명시적 무시). 서버 전용 경로, 보안 적절.
+     - RLS ✅: Migration #326 — RLS 활성화됨, SELECT 정책 없음 → authenticated 세션에서도
+       API를 통한 읽기 불가. service_role만 접근 가능. 무단 열람 불가.
+     - [INFO] 조회 UI 미구현: 커밋 설명 "조회 연동"이나 `cms_login_logs`를 SELECT하는 코드가
+       어디에도 없음(`accounts/list`, `accounts`, `login` 전 파일 검색). 보안 문제 아님 —
+       write-only 상태로 로그는 쌓이되 현재 CMS 어디서도 열람 불가. 열람 UI는 미구현.
+
+  3. QR-CASE-1 수정 재확인 ✅ — `mobile/qr/[product_id]/+page.server.ts`:
+     - load():31 — `.ilike('product_code', escapeLikePattern(productId))` 적용 확인
+     - processQrAction:108 — 동일 패턴 적용 확인
+     - UUID_RE 판별(`/^[0-9a-f]{8}-[0-9a-f]{4}…$/i`)로 UUID vs product_code 분기 정상
+
+  4. `accounts/codes` 용도·권한 ✅ — `accounts/codes/+page.server.ts`는 `redirect(301, '/cms/codes')`
+     전용 레거시 라우트(구 경로 → 신 경로 영구 리다이렉트). 실 페이지는 `/cms/codes`로 이동,
+     root CMS layout + `hasSettingsAccess` manager+ 게이트로 보호.
+
+  5. mobile 4개 화면 권한 ✅ — root CMS `+layout.server.ts`가 `/cms/mobile*` 전체를 세션·
+     cmsRole·rememberMe 쿠키 3중 검사. `mobile/rentals:19`·`mobile/qr/[id]:18` 에 추가로
+     `if (!cmsRole) throw redirect(303, '/cms/login')` 명시. `mobile/+page.server.ts`·
+     `mobile/[id]/+page.server.ts`는 root layout에 위임(코드 주석 확인). 정상.
+
+  6. accounts/+page.server.ts ✅ — load()에서 `hasSettingsAccess` manager+ 게이트, form
+     action `createAccount`에서 `getCmsRoleForAction` + `hasSettingsAccess` 이중 확인.
+     email/name/phone 필수 검증, cms_role 허용값('manager'/'partner') 서버 검증 있음.
+     신규 계정 생성 시 `cms_setup_admin_profile` RPC 경유(H-01 준수).
+
+  svelte-check: STAGE 7 대상 파일 TypeScript ERROR 없음. WARNING:
+    - `mobile/+layout.svelte:68` — dialog role tabindex 누락(기존 접근성 갭)
+    - `mobile/[id]/+page.svelte` — unused CSS selector 10건(기존 잔류 스타일)
+
+  ESLint:
+  [BOUNDARY-2] `mobile/[id]/+page.svelte:2` — `/* global File, FormData */` no-redeclare 에러 2건.
+    File·FormData는 TS 전역 타입이라 `/* global */` 선언이 불필요. 기능 무영향, 문구 제거로 해소 가능.
+
+  발견사항 요약: CRITICAL 없음. INFO 1건(로그인이력 조회 UI 미구현 — 보안 문제 아님).
+    BOUNDARY 1건(ESLint no-redeclare 2건, 기능 무영향).
+- [x] STAGE 8. Track B(실DB) + 종합보고 | GSD | 완료기준: RLS advisor 전수 확인 + 고아데이터
+  점검 + BND-02 결론 반영 + GSD_LOG 소급기록 + TASK.md 종결 보고 작성 완료 | 대상 화면 수: —
+  (전역) | 예상: 60분
+
+> 합계: STAGE 1~7 대상 화면 34개 + 홈(`/cms`, STAGE 0 범주 밖 별도 1개) = 35개
+> (plan §1-2 인벤토리 실측과 일치). STAGE 개수: 총 9개(STAGE 0~8).
+
+### 진행 원칙 (plan §4 그대로)
+
+```
+- STAGE 1~7은 순차 진행, 각 STAGE 종료 시 발견사항(CRITICAL/BOUNDARY/ROUTINE)만 1~2줄 보고 —
+  매 STAGE마다 승인 대기하지 않음(반복 승인 요청은 v2가 지적받은 "대충"의 원인 — 완주 후
+  STAGE 8 종합보고로 갈음).
+- CRITICAL 등급 발견(결제·예약·보안 관련 신규 결함) 시에만 즉시 에스컬레이션 — 그 외엔
+  STAGE 8 종합보고에서 일괄 정리.
+- 각 STAGE는 harness-executor 또는 직접 수행 중 상황에 맞게 선택(대량 순회는
+  harness-executor 위임, 복잡한 신규 로직 정밀검증은 직접 수행).
+```
+
+### STAGE 8 — Track B(실DB) + 종합보고 (2026-08-24, 세션 진행자 직접 수행)
+
+**Track B — RLS advisor 전수 확인(stage `ezyvffjvuwmtuhpxdjrw`, `get_advisors` security)**
+
+```
+323 lints — WARN 312 / INFO 11 / ERROR 0
+분류: authenticated_security_definer_function_executable 120건 + anon_security_definer_
+  function_executable 58건 → 이 프로젝트의 RPC 설계(Pattern B: SECURITY DEFINER + 함수
+  내부 is_cms_user()/auth.uid() 체크) 자체가 의도하는 구조 — anon/authenticated에 EXECUTE
+  권한이 있는 것 자체는 정상, 함수 내부 가드가 실질 방어선. 전수 재검토는 이번 스코프 밖(전체
+  RPC 카탈로그 감사는 별도 아젠다 필요).
+function_search_path_mutable 48건 — 기존부터 있던 베스트프랙티스 항목(SET search_path 누락),
+  이번 세션 변경과 무관, 신규 아님.
+rls_enabled_no_policy 11건 — 전부 관리자 전용 내부 테이블(assets·cms_login_logs·
+  cms_signature_assets·contract_audit_log·contract_issuer_signatures·member_code_sequences·
+  rental_action_logs·search_learning_settings·shipments·subscription_code_sequences·
+  synonym_learning_settings). "RLS enabled + 정책 0건" = anon/authenticated 완전 차단,
+  service_role만 접근 — 이 코드베이스의 의도된 안전 패턴(synonym_groups 잠금과 동일 원리).
+  STAGE 7의 cms_login_logs 발견(write-only, 조회 API 없음)과 정확히 일치. 이상 없음.
+auth_leaked_password_protection 1건 — 전역 Auth 설정(유출 비밀번호 재사용 차단 옵션 미활성),
+  CMS 화면과 무관한 프로젝트 레벨 설정이라 이번 감사 스코프 밖으로 분류, BACKLOG에만 기록.
+→ 신규 CRITICAL 0건. RLS 미비로 인한 데이터 노출 경로는 발견되지 않음.
+```
+
+**고아데이터 점검**: STAGE 1~7이 이미 각 도메인의 실 데이터 정합성(쿠폰 지연채번 26/26,
+회원코드조합 46/46, 계약서명게이팅 14/14 등)을 라이브 테스트로 확인했고, products.md §8
+고아데이터 이슈는 이전 세션에서 이미 해소 확인된 항목이라 이번 STAGE 8에서 별도 재조회는
+생략(중복 검증 방지) — 필요 시 별도 스코프로 재요청.
+
+**BND-02 최종 결론**: STAGE 4에서 확정 — `/cms/customers/` 하위 6개 API
+(`addresses`·`chat-sessions`·`credit-audit`·`profile-settings`·`rentals`·`subscriptions`)가
+"CMS 역할 존재 여부"만 체크하고 `hasSettingsAccess`(manager+) 체크가 없음. 이 라우트들은
+서버에서 service_role(admin) 클라이언트를 쓰므로 **RLS가 방어선이 되지 못하고**(service_role은
+RLS 우회) 앱 레벨 권한체크가 유일한 방어선이다 — 즉 partner 등급 CMS 계정이 브라우저 개발자
+도구로 직접 fetch 호출하면 고객 PII(배송지·크레이지스코어·채팅이력 등)를 조회할 수 있는 상태.
+**등급: BOUNDARY**(외부 비인증 공격이 아니라 이미 인증된 CMS 파트너 계정의 권한상승 — synonym_
+group RLS 전면개방이나 user_profiles 포인트조작 같은 CRITICAL과는 노출 범위가 다름). 수정은
+6개 파일에 `hasSettingsAccess` 1줄씩 추가하는 간단한 작업 — Stephen 승인 시 별도 GSD로 즉시
+처리 가능.
+
+**전체 종합 — CMS 35개 화면 정밀검증 최종 결과**
+
+| STAGE | 대상 | CRITICAL | BOUNDARY | ROUTINE |
+|---|---|---|---|---|
+| 1 상담 | 2화면 | 0 | 4(H-01 위반 2건·권한체크 누락 1건·ESLint 1건) | 2 |
+| 2 대여(CRITICAL집중) | 4화면 | 0 | 2(미사용 import·Stage DB stale 데이터) | 0 |
+| 3 상품/구독 | 4화면 | 0 | 5(전부 경미 — 테스트공백·ESLint·문서공백) | 0 |
+| 4 고객 | 5화면 | 0 | **BND-02 확정**(6개 API 권한체크 누락) | 0 |
+| 5 프로모션 | 7화면 | 0 | 1(marketing_rules 직접 DML) | 1 |
+| 6 설정 | 5화면 | 0 | 1(서명자산 비원자적 UPDATE) | 1 |
+| 7 인접 | 7화면 | 0 | 1(ESLint no-redeclare) | 0 |
+| 8 Track B | 전역 | 0 | — | 1(leaked password protection) |
+| **합계** | **35화면** | **0** | **15건** | **5건** |
+
+**핵심 결론**: 40개 커밋·35개 화면 규모로 재산정한 "처음부터" 정밀검증 전체에서 **신규
+CRITICAL 결함은 0건**이었다. 이전 세션들이 병렬로 발견·수정한 CRITICAL 5건(§1 배경 참고)은
+전부 회귀 없이 유지 확인됐고, 이번 감사가 새로 찾아낸 것은 BOUNDARY 15건(대부분 H-01 direct
+DML 관행과 소수 권한체크 누락)과 ROUTINE 5건(ESLint·문서 스테일 수준)뿐이다. 유일하게 실질적
+후속조치가 필요한 항목은 BND-02(고객 PII API 권한체크 6건 추가)이며, 나머지는 전부 저위험·
+저긴급 BACKLOG 성격.
+
+**GATE E: ✅ 검증 완료 — CRITICAL 블로킹 0건.** BOUNDARY 15건은 BACKLOG로 등록(아래),
+Stephen 확인 후 일괄 또는 개별 처리 여부 결정.
+
+### BACKLOG 신규 등록 — 이번 v3 감사로 발견된 BOUNDARY 15건
+
+```
+[STAGE1] qna delete/promoteCandidate/deleteCandidateMember — H-01 직접 DML(전용 RPC 없음)
+[STAGE1] qna delete 액션에 hasSettingsAccess 없음(partner도 캔드응답 삭제 가능)
+[STAGE1] qna/+page.svelte SynonymCandidateRow 미사용 타입 import(ESLint)
+[STAGE2] cms/reservation/+page.svelte csToast 미사용 import(ESLint)
+[STAGE2] Stage DB stale 예약 데이터로 contractSign.test.ts 4건 FAIL(코드 회귀 아님, DB 수동정리 필요)
+        + .claude/worktrees 2개 경로가 vitest 탐색범위 포함(동일 테스트 3중 실행 구조적 위험)
+[STAGE3] subscriptions 화면 전용 테스트 없음(RPC레벨만 존재, 커버리지 공백)
+[STAGE3] security-auth.md 접근매트릭스에 subscriptions 행 미등록(문서 공백)
+[STAGE3] productClone.test.ts mock 일부 미갱신(실코드 결함 아님)
+[STAGE4] BND-02 — customers 하위 6개 API hasSettingsAccess 누락(고객 PII 노출 위험, 우선순위 최상)
+        → ✅ 수정 완료(2026-08-24, AUDIT-BND-02 항목 참고, 테스트 12건 GREEN)
+[STAGE5] promotion/rules createRule/toggleRule/deleteRule — H-01 직접 DML(marketing_rules)
+[STAGE5] promotion/content/+page.server.ts:35 console.error 잔류
+[STAGE6] cms_signature_assets setDefault — 두 UPDATE 비원자적(실영향 낮음)
+[STAGE6] security-auth.md signature 행 "(미구현)" 주석 스테일(실제는 구현됨)
+[STAGE7] mobile/[id]/+page.svelte ESLint no-redeclare(/* global File, FormData */) 2건
+[STAGE8] auth_leaked_password_protection 전역 설정 미활성(Supabase Auth 프로젝트 레벨)
+```
+
+**GSD_LOG 소급기록**: 이번 v3 감사(STAGE 0~8) 자체가 GSD_LOG.md에 신규 항목으로 기록됨(별도
+엔트리 추가 예정) — 과거 세션들의 17건 소급기록 갭(v2 §STAGE 5)은 이번 스코프 밖으로 재확인,
+별도 처리 필요.
+
+### 나머지 BOUNDARY 14건 처리 결과 (2026-08-24, 세션 진행자 직접 수행 — Stephen "나머지 14건도 이어서 진행할 것" 지시)
+
+| # | 항목 | 처리 |
+|---|---|---|
+| 1 | [STAGE1] qna delete/promoteCandidate/deleteCandidateMember H-01 직접 DML | ✅ migration 331로 RPC 3종 신설(`cms_delete_canned_response`·`cms_promote_synonym_candidate`·`cms_delete_synonym_candidate`), `qna/+page.server.ts` 전환 완료 |
+| 2 | [STAGE1] qna delete 권한 공백(partner도 삭제 가능) | ✅ `hasSettingsAccess` 게이트 추가(같은 파일의 promoteCandidate/deleteCandidateMember와 통일) |
+| 3 | [STAGE1] qna/+page.svelte 미사용 타입 import | ✅ `SynonymCandidateRow` import 제거 |
+| 4 | [STAGE2] cms/reservation/+page.svelte 미사용 import | ✅ `csToast` import 제거 |
+| 5 | [STAGE2] contractSign.test.ts 4건 FAIL + worktree 3중실행 | ✅ 근본원인 재조사 결과 "DB stale 데이터"가 아니라 **2가지 실제 픽스처 결함**이었음: ①`createReservation` 픽스처가 근미래 고정 날짜(2026-09-01~03)를 써서 같은 날짜의 실제 라이브 예약(id 453, in_use)과 이중예약 방지 제약 충돌 → 2099년으로 격리 ②`createChatSession` 픽스처가 `context_type:'reservation'`으로 생성했으나 `find_or_create_general_chat_session` RPC(migration 282)는 `context_type='general'`만 탐색 대상으로 삼아 재활성화·메시지삽입 검증이 항상 실패 → `'general'`로 수정. 재실행 결과 5/5 GREEN(이전 STAGE2의 "코드 회귀 아님" 판정 자체는 맞았으나 원인 진단이 부정확했음 — 재조사로 정정). `.claude/worktrees/**`는 `vite.config.ts`에 `test.exclude` 추가로 vitest 탐색 범위에서 완전 제외(테스트 파일 수 92+→63으로 감소 확인) |
+| 6 | [STAGE3] subscriptions 화면 전용 테스트 없음 | ✅ `subscriptionsGuards.test.ts` 신규 6건(4개 액션 권한가드 + 입력검증 2건), 전부 GREEN |
+| 7 | [STAGE3] security-auth.md subscriptions 행 미등록 | ✅ 접근매트릭스에 "구독 관리" 행 추가 |
+| 8 | [STAGE3] productClone.test.ts mock 미갱신 | ℹ️ 재실행 결과 5/5 GREEN — STAGE 3 감사 시점의 일시적 상태(병렬세션 동시편집 추정)였고 현재는 문제 없음. 조치 불필요 |
+| 9 | [STAGE4] BND-02 | ✅ 이미 별도 처리 완료(위 AUDIT-BND-02 항목 참고) |
+| 10 | [STAGE5] promotion/rules H-01 직접 DML | ✅ migration 331로 RPC 3종 신설(`cms_create/toggle/delete_marketing_rule`), toggle은 migration 262 `cms_toggle_banner`와 동일하게 서버측 `NOT is_active` 반전으로 개선(클라이언트 입력 불신), `rules/+page.server.ts` 전환 완료 |
+| 11 | [STAGE5] promotion/content console.error 잔류 | ℹ️ 재검토 결과 이 파일의 다른 RPC 실패 로깅과 동일한 **의도된 에러 로깅 패턴**(디버그 잔재 아님) — core-rules.md의 "console.log 금지"는 console.error에는 적용 안 됨. 조치 불필요 |
+| 12 | [STAGE6] cms_signature_assets setDefault 비원자적 UPDATE | ✅ migration 332로 `cms_set_default_signature_asset` RPC 신설(단일 함수 본문 = 암묵적 원자성) + 기존에 전혀 확인 안 하던 두 UPDATE의 에러를 이제 반환·전파, `signature/+page.server.ts` 전환 완료 |
+| 13 | [STAGE6] security-auth.md signature 행 스테일 주석 | ✅ "(P8B-2, 미구현)" 제거(실제로는 구현됨을 코드로 재확인) |
+| 14 | [STAGE7] mobile/[id]/+page.svelte ESLint no-redeclare | ✅ `/* global File, FormData */` 주석 제거(globals 패키지 도입 이후 불필요해진 레거시 — File/FormData가 이미 browser globals에 포함됨) |
+| 15 | [STAGE8] auth_leaked_password_protection 미활성 | ⏳ **코드로 처리 불가** — Supabase Auth 프로젝트 레벨 대시보드 설정(SQL/마이그레이션 대상 아님). Stephen이 Supabase 대시보드 Authentication → Policies에서 직접 활성화 필요. CMS와 무관한 전역 계정보안 설정이라 이번 세션 조치 범위 밖으로 유지 |
+
+**신규 마이그레이션**:
+```
+supabase/migrations/20260824000000_331_cms_qna_rules_dml_to_rpc.sql       — stage 적용 완료 ✅ / production 대기(권한 분류기 차단, Stephen 승인 필요)
+supabase/migrations/20260824010000_332_cms_signature_default_atomic.sql  — stage 적용 완료 ✅ / production 대기(권한 분류기 차단, Stephen 승인 필요)
+```
+
+**검증**: 신규 테스트 12건(customersDetailApiGuards, BND-02 별도 기록) + 6건(subscriptionsGuards)
+전부 GREEN. `contractSign.test.ts` 5/5 GREEN(회귀 원인 정정 후). 전체 스위트(워크트리 제외,
+63개 파일) 805 passed / 2 failed(memberCodeCombo.test.ts 'RS' 접두어 순번이 999를 넘어
+자연성장 — 이번 세션 변경과 무관한 기존 카운터 성장 이슈, 조치 범위 밖) / 7 skipped. `npm run
+check` 신규 에러 0건(사전 존재 vite.config.ts 타입에러 1건만 유지, 이번 범위 아님). `eslint`
+전체 신규 에러 0건.
+
+**GATE E: ✅ 통과 — 블로킹 0건.**
+
+**Production 마이그레이션 331·332 적용 완료(2026-08-24, Stephen 명시 승인 — "다만 최근 해당
+DB파일의 이름 충돌 문제가 없었는지 재확인 후 적용 진행할 것")**: 적용 전 `list_migrations`
+(production 전체 이력) + `pg_proc`(함수명) 이중 조회로 번호·함수명 충돌 0건 확인(참고: 이
+프로젝트는 병렬 세션 간 마이그레이션 번호 재사용이 누적된 상태— 104·251·269 등 다수 — 이나
+Supabase는 14자리 타임스탬프로 유일성을 보장해 번호 중복 자체는 실제 충돌을 일으키지 않음을
+확인. 331·332는 어차피 production에 전혀 없던 신규 번호였음). 적용 후 `pg_proc` 재조회로
+7개 함수(`cms_delete_canned_response`·`cms_promote_synonym_candidate`·
+`cms_delete_synonym_candidate`·`cms_create_marketing_rule`·`cms_toggle_marketing_rule`·
+`cms_delete_marketing_rule`·`cms_set_default_signature_asset`) 전부 정상 생성 확인. Stage·
+Production 양쪽 배포 완료 — 앱코드(git 커밋)만 Stephen 직접 실행 대기.
