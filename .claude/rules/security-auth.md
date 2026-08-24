@@ -93,9 +93,10 @@ hasSettingsAccess(role) → getRoleLevel(role) >= 50
 | 예약 목록 | `/cms/reservation` | ✅ 세션만 | ✅ | ✅ |
 | 대여 현황 | `/cms/rentals` | ✅ 세션만 | ✅ | ✅ |
 | 계약서 양식·발행·발송 | `/cms/reservation/contracts` (load/create/update/softDelete=4곳), `/api/cms/reservations/[id]/init-contract`(1), `/api/cms/reservations/[id]/contract-data`(1), `/api/cms/contracts/[id]/content` GET+PATCH(2), `/api/cms/contracts/[id]/send-chat`(1) — 5개 파일·9곳 게이트 | ❌ | ✅ | ✅ |
-| 관리자 서명·직인 자산 관리 | `/cms/set/signature` (P8B-2, 미구현) | ❌ | ✅ | ✅ |
+| 관리자 서명·직인 자산 관리 | `/cms/set/signature` | ❌ | ✅ | ✅ |
 | 대여 설정 | `/cms/set/rental` | ✅ 세션만 | ✅ | ✅ |
 | 고객 관리 | `/cms/customers` | ❌ | ✅ | ✅ |
+| 구독 관리 | `/cms/subscriptions`, `/cms/subscriptions/new` | ❌ | ✅ | ✅ |
 | 프로모션 배너 | `/cms/promotion/ad` | ❌ | ✅ | ✅ |
 | 프로모션 쿠폰 | `/cms/promotion/coupon` | ❌ | ✅ | ✅ |
 | 프로모션 포인트 | `/cms/promotion/point` | ❌ | ✅ | ✅ |
@@ -231,4 +232,4 @@ function verifyTossSignature(body: unknown, signature: string | null): boolean {
 
 ---
 
-*security-auth.md v3.7 | Harness Flow v3.2 | 보안·인증·RLS·CMS 역할 | 2026-08-XX /cms/codes 20개 액션 전부 manager 이상(19개) + superadmin(transferCode) 게이트로 통일(QR-CASE-2), load() 페이지 진입 게이트 추가로 partner UI 노출 갭 해소 | 2026-08-11 Phase 7 — 전자계약 양식·발행·발송 5개 파일·9곳 manager 이상 게이트 확정 적용(P7-1~5), 접근 매트릭스 갱신(11개→5파일9곳으로 정정) | 2026-08-13 tiptap-doc 렌더링 회귀 수정(CRITICAL)*
+*security-auth.md v3.8 | Harness Flow v3.2 | 보안·인증·RLS·CMS 역할 | 2026-08-XX /cms/codes 20개 액션 전부 manager 이상(19개) + superadmin(transferCode) 게이트로 통일(QR-CASE-2), load() 페이지 진입 게이트 추가로 partner UI 노출 갭 해소 | 2026-08-11 Phase 7 — 전자계약 양식·발행·발송 5개 파일·9곳 manager 이상 게이트 확정 적용(P7-1~5), 접근 매트릭스 갱신(11개→5파일9곳으로 정정) | 2026-08-13 tiptap-doc 렌더링 회귀 수정(CRITICAL) | 2026-08-24 CMS 전역 정밀검증 v3 STAGE 6·3 반영 — 서명·직인 자산 관리 행의 스테일 "(P8B-2, 미구현)" 주석 제거(실제로는 구현·매트릭스 그대로 유효함을 코드 재확인), 구독 관리(`/cms/subscriptions`) 행 신규 추가(그동안 매트릭스에 아예 없던 신규 메뉴 문서 공백 해소)*
