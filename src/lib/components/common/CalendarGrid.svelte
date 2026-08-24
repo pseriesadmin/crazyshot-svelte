@@ -16,6 +16,9 @@
     // 등) 라벨을 주입받음 — 기본값은 범용 시작일/종료일
     rangeStartLabel?: string
     rangeEndLabel?: string
+    // 휴무일 등 임의 날짜 비활성화(2026-08-24) — past/minDate 조건에 추가로 결합되는 판정
+    // 함수. 미전달 시(기존 모든 호출부) 동작 100% 동일 — 하위호환 유지
+    isDateDisabled?: (iso: string) => boolean
   }
 
   let {
@@ -27,6 +30,7 @@
     rangeEnd = '',
     rangeStartLabel = '시작일',
     rangeEndLabel = '종료일',
+    isDateDisabled,
   }: Props = $props()
 
   // 종료일 대기 중(rangeStart는 있고 rangeEnd는 아직 없음) hover한 날짜를 임시 종료일처럼
@@ -132,6 +136,7 @@
       {:else}
         {@const iso = fmtDate(viewYear, viewMonth, day)}
         {@const past = isPastDay(iso)}
+        {@const holidayDisabled = !past && (isDateDisabled?.(iso) ?? false)}
         {@const sel = value === iso}
         {@const dow = new Date(iso).getDay()}
         {@const previewEnd = rangeEnd || (rangeStart && hoverIso && hoverIso >= rangeStart ? hoverIso : '')}
@@ -142,12 +147,14 @@
           class="cal-day"
           class:cal-day-sel={sel}
           class:cal-day-past={past}
+          class:cal-day-holiday={holidayDisabled}
           class:cal-day-sun={dow === 0}
           class:cal-day-sat={dow === 6}
           class:cal-day-range-start={isRangeStart}
           class:cal-day-range-end={isRangeEnd}
           class:cal-day-in-range={isInRange}
-          disabled={past}
+          disabled={past || holidayDisabled}
+          title={holidayDisabled ? '택배 휴무일' : undefined}
           onclick={() => onselect(iso)}
           onmouseenter={() => { hoverIso = iso }}
           onmouseleave={() => { hoverIso = null }}
@@ -280,6 +287,8 @@
   .cal-day:hover:not(:disabled) { background: var(--cs-lilac); }
   .cal-day-sel { background: var(--cs-purple) !important; color: var(--cs-white) !important; font-weight: 700; }
   .cal-day-past { color: var(--cs-text-placeholder); cursor: not-allowed; }
+  /* 택배 휴무일 비활성(2026-08-24) — 과거 날짜와 같은 톤이되 취소선으로 구분 */
+  .cal-day-holiday { color: var(--cs-text-placeholder); cursor: not-allowed; text-decoration: line-through; }
   .cal-day-sun:not(.cal-day-past) { color: var(--cs-red-badge); }
   .cal-day-sat:not(.cal-day-past) { color: var(--cs-purple); }
 
