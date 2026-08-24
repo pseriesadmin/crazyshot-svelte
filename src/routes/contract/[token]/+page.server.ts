@@ -125,12 +125,15 @@ export const load: PageServerLoad = async ({ params }) => {
 
   // canvas 모드 substitutionMap 16개 전체 채움 — 주소·주문금액 추가 조회
   let shippingAddress: string | null = null
-  let orderData: {
+  type OrderData = {
     total_amount: number | null
     discount_amount: number | null
     tax_amount: number | null
     final_amount: number | null
-  } | null = null
+    selected_coupon_id: string | null
+    selected_points: number | null
+  }
+  let orderData: OrderData | null = null
 
   if (reservation?.user_id) {
     const { data: addrData } = await admin
@@ -160,10 +163,10 @@ export const load: PageServerLoad = async ({ params }) => {
       const orderId = (orderItemData as { order_id: string }).order_id
       const { data: o } = await admin
         .from('orders')
-        .select('total_amount, discount_amount, tax_amount, final_amount')
+        .select('total_amount, discount_amount, tax_amount, final_amount, selected_coupon_id, selected_points')
         .eq('id', orderId)
         .maybeSingle()
-      orderData = o as typeof orderData
+      orderData = o as OrderData | null
     }
   }
 
@@ -232,6 +235,16 @@ export const load: PageServerLoad = async ({ params }) => {
     })
   }
 
+  // 2026-08-24: 장바구니(1단계)에서 고른 쿠폰/포인트(orders.selected_coupon_id/selected_points,
+  // Migration 340)를 이 페이지의 초기 선택값으로 반영 — 카트 제출 이후 쿠폰이 만료/소진되는
+  // 등 더 이상 유효하지 않을 수 있어, 위에서 이미 검증·필터링된 userCoupons 목록에 실제로
+  // 남아있는 경우에만 그대로 사용하고, 그렇지 않으면 미선택으로 되돌린다(무효 쿠폰 미리선택
+  // 방지). 포인트도 그사이 잔액이 줄었을 수 있어 현재 userPoints로 재클램프.
+  const preselectedCouponId = (orderData?.selected_coupon_id && userCoupons.some((uc) => uc.id === orderData?.selected_coupon_id))
+    ? orderData.selected_coupon_id
+    : null
+  const preselectedPoints = Math.max(0, Math.min(orderData?.selected_points ?? 0, userPoints))
+
   return {
     signing,
     customer,
@@ -240,6 +253,8 @@ export const load: PageServerLoad = async ({ params }) => {
     orderData,
     userCoupons,
     userPoints,
+    preselectedCouponId,
+    preselectedPoints,
     // EC-1 방어(위 참고) — 이미 서명된 상태(결제만 남음)로 재진입했음을 +page.svelte에 알려
     // 서명 UI 대신 결제 단계를 바로 렌더링하게 한다.
     alreadySigned: !!signing.signed_at,

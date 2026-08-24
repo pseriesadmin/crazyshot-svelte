@@ -136,8 +136,13 @@
   let done      = $state(data.alreadySigned ?? false)
 
   // Phase C — 서명 완료 후 결제(mock) 단계 상태
-  let selectedCouponId = $state<string | null>(null)
-  let pointsUsed        = $state(0)
+  // 2026-08-24: 장바구니(1단계)에서 고른 쿠폰/포인트를 초기값으로 반영(Migration 340,
+  // +page.server.ts가 이미 여전히 유효한 경우에만 preselectedCouponId/preselectedPoints로
+  // 검증해 내려줌). done과 동일한 이유로 $state(prop) 금지 규칙의 예외(토큰 라우트라
+  // 재방문·새로고침 시 항상 새로 마운트됨, L132-135 참고) — 최초 마운트 1회 반영이 곧
+  // 올바른 동작.
+  let selectedCouponId = $state<string | null>(data.preselectedCouponId ?? null)
+  let pointsUsed        = $state(data.preselectedPoints ?? 0)
   let paying             = $state(false)
   let payError            = $state('')
 

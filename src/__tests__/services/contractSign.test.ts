@@ -46,8 +46,13 @@ async function createReservation(userId: string, status: string): Promise<number
     .insert({
       user_id:       userId,
       product_id:    testProductId,
-      start_date:    '2026-09-01',
-      end_date:      '2026-09-03',
+      // 근미래 고정 날짜는 같은 기간의 실제(또는 다른 세션의) Stage 데이터와 겹쳐 이중예약
+      // 방지 제약(rental_reservations_product_dates_excl)에 걸릴 수 있음이 실사용 중 확인됨
+      // (2026-08-24, CMS 전역 정밀검증 v3 STAGE 2 — testProductId가 실제 운영 중인 상품과
+      // 겹칠 수 있어 근접 날짜는 항상 충돌 위험이 있음). payment.test.ts 등 다른 통합테스트와
+      // 동일하게 먼 미래 날짜로 격리.
+      start_date:    '2099-09-01',
+      end_date:      '2099-09-03',
       status,
       pickup_method: 'visit',
       return_method: 'visit',
@@ -85,9 +90,15 @@ async function createContractWithSigning(
 }
 
 async function createChatSession(userId: string, status: 'open' | 'pending' | 'closed'): Promise<string> {
+  // find_or_create_general_chat_session RPC(migration 282, service-operations.md §11)는
+  // context_type='general' 세션만 탐색 대상으로 삼는다 — 이 픽스처가 과거 'reservation'으로
+  // 생성하던 것은 RPC가 이 세션을 찾지 못해 항상 새 general 세션을 만들게 해, "closed 세션
+  // 재활성화"·"기존 세션에 메시지 삽입" 검증이 실제로는 다른(새로) 생성된 세션을 보고 있어
+  // 통과하지 못하던 결함이었다(코드 회귀 아님 — RPC가 이후 context_type 필터로 하드닝됐는데
+  // 이 픽스처가 갱신되지 않았던 것, CMS 전역 정밀검증 v3 STAGE 2에서 발견).
   const { data, error } = await admin
     .from('chat_sessions')
-    .insert({ user_id: userId, status, context_type: 'reservation' })
+    .insert({ user_id: userId, status, context_type: 'general' })
     .select('id')
     .single();
   if (error || !data) throw new Error(`chat_session 생성 실패: ${error?.message}`);
