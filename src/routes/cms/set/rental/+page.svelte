@@ -1,11 +1,12 @@
 <script lang="ts">
+  import { tick } from 'svelte'
   import { enhance } from '$app/forms'
   import { invalidateAll } from '$app/navigation'
   import { csToast } from '$lib/utils/toast'
   import CmsDragList from '$lib/components/cms/CmsDragList.svelte'
   import CmsDeleteButton from '$lib/components/cms/CmsDeleteButton.svelte'
   import type { PageData, ActionData } from './$types'
-  import type { RentalPeriodOption, RentalMethodOption, PickupPoint, RentalConsentItem, RentalShippingSettings } from './+page.server'
+  import type { RentalPeriodOption, RentalMethodOption, PickupPoint, RentalConsentItem, RentalShippingSettings, PublicHolidayRow } from './+page.server'
 
   interface Props {
     data: PageData
@@ -87,6 +88,7 @@
   let returnFee        = $state<number | ''>(data.shippingSettings?.return_fee       ?? '')
   let shippingGuide    = $state(data.shippingSettings?.shipping_guide      ?? '')
   let shippingLoading  = $state(false)
+  let shippingFormEl = $state<HTMLFormElement | undefined>(undefined)
   let shippingGuideCount = $derived(shippingGuide.length)
 
   $effect(() => {
@@ -97,6 +99,26 @@
     enableReturn    = data.shippingSettings?.enable_return       ?? false
     returnFee       = data.shippingSettings?.return_fee          ?? ''
     shippingGuide   = data.shippingSettings?.shipping_guide      ?? ''
+  })
+
+  // ─── 택배 휴무일 캘린더 제어 ───
+  let enablePrevDayCheck  = $state(data.cutoffSettings?.enable_prev_day_check  ?? false)
+  let enableFixedHolidays = $state(data.cutoffSettings?.enable_fixed_holidays  ?? false)
+  let enableManualHolidays = $state(data.cutoffSettings?.enable_manual_holidays ?? false)
+  let cutoffLoading = $state(false)
+  let cutoffFormEl = $state<HTMLFormElement | undefined>(undefined)
+  let syncLoading = $state(false)
+  let manualHolidayDate = $state('')
+  let manualHolidayNote = $state('')
+  let manualHolidayLoading = $state(false)
+
+  let nationalHolidays = $derived<PublicHolidayRow[]>(data.holidays.filter((h) => h.holiday_type === 'national'))
+  let manualHolidays = $derived<PublicHolidayRow[]>(data.holidays.filter((h) => h.holiday_type === 'manual'))
+
+  $effect(() => {
+    enablePrevDayCheck   = data.cutoffSettings?.enable_prev_day_check   ?? false
+    enableFixedHolidays  = data.cutoffSettings?.enable_fixed_holidays   ?? false
+    enableManualHolidays = data.cutoffSettings?.enable_manual_holidays  ?? false
   })
 
   // ─── 이용안내 ───
@@ -154,7 +176,6 @@
         <h2 class="section-title">대여 기간 제한 옵션</h2>
         <span class="section-badge">{periods.length} / 10</span>
       </div>
-      <p class="section-desc">상품상세정보에 최대 대여 기간을 표시하고 설정을 반영합니다.</p>
 
       <form
         method="POST"
@@ -221,7 +242,6 @@
         <h2 class="section-title">대여 방식 옵션</h2>
         <span class="section-badge">{methods.length} / 10</span>
       </div>
-      <p class="section-desc">상품 예약등록 화면에 선택 가능한 대여방식 목록을 등록합니다.</p>
 
       <form
         method="POST"
@@ -312,12 +332,12 @@
       <div class="section-head">
         <h2 class="section-title">배송 설정</h2>
       </div>
-      <p class="section-desc">택배 유형별 요금을 설정하고 고객에게 표시할 배송 안내문을 입력하세요.</p>
 
       <form
         method="POST"
         action="?/saveShipping"
         class="shipping-form"
+        bind:this={shippingFormEl}
         use:enhance={() => {
           shippingLoading = true
           return async ({ result, update }) => {
@@ -331,27 +351,30 @@
           }
         }}
       >
-        <!-- 택배 적용 옵션 콤보버튼 -->
+        <!-- 배송적용옵션 콤보버튼 — 클릭 즉시 자동 저장(다른 콤보버튼 그룹과 통일, 2026-08-24) -->
         <div class="sf-row">
-          <span class="sf-label">택배 적용 옵션</span>
+          <span class="sf-label">배송적용옵션</span>
           <div class="shipping-chips">
             <button
               type="button"
               class="s-chip"
               class:s-chip--on={enableRoundTrip}
-              onclick={() => { enableRoundTrip = !enableRoundTrip }}
+              disabled={shippingLoading}
+              onclick={async () => { enableRoundTrip = !enableRoundTrip; await tick(); shippingFormEl?.requestSubmit() }}
             >왕복 요금</button>
             <button
               type="button"
               class="s-chip"
               class:s-chip--on={enableDelivery}
-              onclick={() => { enableDelivery = !enableDelivery }}
+              disabled={shippingLoading}
+              onclick={async () => { enableDelivery = !enableDelivery; await tick(); shippingFormEl?.requestSubmit() }}
             >배송요금</button>
             <button
               type="button"
               class="s-chip"
               class:s-chip--on={enableReturn}
-              onclick={() => { enableReturn = !enableReturn }}
+              disabled={shippingLoading}
+              onclick={async () => { enableReturn = !enableReturn; await tick(); shippingFormEl?.requestSubmit() }}
             >반송요금</button>
           </div>
         </div>
@@ -366,16 +389,19 @@
           <div class="fee-row" class:fee-row--disabled={!enableRoundTrip}>
             <span class="fee-label">왕복 요금</span>
             <div class="fee-input-wrap">
+              <input type="hidden" name="round_trip_fee" value={roundTripFee} />
               <input
-                type="number"
-                name="round_trip_fee"
+                type="text"
+                inputmode="numeric"
                 class="add-input fee-input"
-                bind:value={roundTripFee}
+                value={roundTripFee === '' ? '' : roundTripFee.toLocaleString('ko-KR')}
                 disabled={!enableRoundTrip}
-                min="0"
-                step="100"
                 placeholder="0"
                 aria-label="왕복 요금"
+                oninput={(e) => {
+                  const digits = e.currentTarget.value.replace(/[^0-9]/g, '')
+                  roundTripFee = digits ? parseInt(digits, 10) : ''
+                }}
               />
               <span class="fee-unit">원</span>
             </div>
@@ -383,16 +409,19 @@
           <div class="fee-row" class:fee-row--disabled={!enableDelivery}>
             <span class="fee-label">배송요금</span>
             <div class="fee-input-wrap">
+              <input type="hidden" name="delivery_fee" value={deliveryFee} />
               <input
-                type="number"
-                name="delivery_fee"
+                type="text"
+                inputmode="numeric"
                 class="add-input fee-input"
-                bind:value={deliveryFee}
+                value={deliveryFee === '' ? '' : deliveryFee.toLocaleString('ko-KR')}
                 disabled={!enableDelivery}
-                min="0"
-                step="100"
                 placeholder="0"
                 aria-label="배송요금"
+                oninput={(e) => {
+                  const digits = e.currentTarget.value.replace(/[^0-9]/g, '')
+                  deliveryFee = digits ? parseInt(digits, 10) : ''
+                }}
               />
               <span class="fee-unit">원</span>
             </div>
@@ -400,16 +429,19 @@
           <div class="fee-row" class:fee-row--disabled={!enableReturn}>
             <span class="fee-label">반송요금</span>
             <div class="fee-input-wrap">
+              <input type="hidden" name="return_fee" value={returnFee} />
               <input
-                type="number"
-                name="return_fee"
+                type="text"
+                inputmode="numeric"
                 class="add-input fee-input"
-                bind:value={returnFee}
+                value={returnFee === '' ? '' : returnFee.toLocaleString('ko-KR')}
                 disabled={!enableReturn}
-                min="0"
-                step="100"
                 placeholder="0"
                 aria-label="반송요금"
+                oninput={(e) => {
+                  const digits = e.currentTarget.value.replace(/[^0-9]/g, '')
+                  returnFee = digits ? parseInt(digits, 10) : ''
+                }}
               />
               <span class="fee-unit">원</span>
             </div>
@@ -443,6 +475,200 @@
           </button>
         </div>
       </form>
+
+      <!-- 배송대여 수령/반납 일괄 지정 — /cart에서 선택 시 반납방식 강제고정+시간선택 비활성화(요청 A) -->
+      <div class="subsection bulk-delivery-section">
+        <div class="sf-row">
+          <span class="sf-label">대여옵션(수령/반납) 일괄적용</span>
+          <div class="shipping-chips">
+            {#each methods as m (m.id)}
+              <form
+                method="POST"
+                action="?/toggleBulkDelivery"
+                class="chip-form"
+                use:enhance={() => {
+                  return async ({ result, update }) => {
+                    if (result.type === 'success') {
+                      await update()
+                    } else if (result.type === 'failure') {
+                      csToast.error((result.data as { error?: string })?.error ?? '변경에 실패했습니다.')
+                    }
+                  }
+                }}
+              >
+                <input type="hidden" name="id" value={m.id} />
+                <button type="submit" class="s-chip" class:s-chip--on={m.is_bulk_delivery}>
+                  {m.name}
+                </button>
+              </form>
+            {/each}
+          </div>
+        </div>
+        {#if methods.length === 0}
+          <p class="empty-hint">등록된 대여 방식이 없습니다. "대여 방식 옵션" 섹션에서 먼저 등록해주세요.</p>
+        {/if}
+      </div>
+
+      <!-- 택배 휴무일 캘린더 제어 — /cart 수령·반납 캘린더의 휴무 기반 선택 제한 -->
+      <div class="subsection">
+        <form
+          method="POST"
+          action="?/saveCutoffSettings"
+          bind:this={cutoffFormEl}
+          use:enhance={() => {
+            cutoffLoading = true
+            return async ({ result, update }) => {
+              cutoffLoading = false
+              if (result.type === 'success') {
+                await update()
+              } else if (result.type === 'failure') {
+                csToast.error((result.data as { error?: string })?.error ?? '저장에 실패했습니다.')
+              }
+            }
+          }}
+        >
+          <div class="sf-row">
+            <span class="sf-label">휴무일 제어 옵션</span>
+            <div class="shipping-chips">
+              <button
+                type="button"
+                class="s-chip"
+                class:s-chip--on={enablePrevDayCheck}
+                disabled={cutoffLoading}
+                onclick={async () => { enablePrevDayCheck = !enablePrevDayCheck; await tick(); cutoffFormEl?.requestSubmit() }}
+              >전날/당일 휴무 체크</button>
+              <button
+                type="button"
+                class="s-chip"
+                class:s-chip--on={enableFixedHolidays}
+                disabled={cutoffLoading}
+                onclick={async () => { enableFixedHolidays = !enableFixedHolidays; await tick(); cutoffFormEl?.requestSubmit() }}
+              >고정 휴무일 연동(일·법정공휴일)</button>
+              <button
+                type="button"
+                class="s-chip"
+                class:s-chip--on={enableManualHolidays}
+                disabled={cutoffLoading}
+                onclick={async () => { enableManualHolidays = !enableManualHolidays; await tick(); cutoffFormEl?.requestSubmit() }}
+              >임시 휴무일 반영</button>
+            </div>
+          </div>
+
+          <input type="hidden" name="enable_prev_day_check" value={enablePrevDayCheck ? 'true' : 'false'} />
+          <input type="hidden" name="enable_fixed_holidays" value={enableFixedHolidays ? 'true' : 'false'} />
+          <input type="hidden" name="enable_manual_holidays" value={enableManualHolidays ? 'true' : 'false'} />
+        </form>
+
+        <!-- 법정공휴일 목록(읽기전용, API 자동 동기화) -->
+        <div class="holiday-block">
+          <div class="subsection-head subsection-head--between">
+            <h4 class="subsection-title">법정공휴일 (자동 동기화)</h4>
+            <form
+              method="POST"
+              action="?/syncHolidaysNow"
+              use:enhance={() => {
+                syncLoading = true
+                return async ({ result, update }) => {
+                  syncLoading = false
+                  if (result.type === 'success') {
+                    const d = result.data as { upserted?: number } | undefined
+                    csToast.success(`동기화 완료(${d?.upserted ?? 0}건 반영)`)
+                    await update()
+                  } else if (result.type === 'failure') {
+                    csToast.error((result.data as { error?: string })?.error ?? '동기화에 실패했습니다.')
+                  }
+                }
+              }}
+            >
+              <button type="submit" class="btn-add btn-sync" disabled={syncLoading}>
+                <svg class="btn-sync-icon" width="14" height="14" viewBox="0 0 33 33" fill="none" aria-hidden="true">
+                  <path d="M2.30298 12.874C3.40107 12.9931 4.19442 13.98 4.07544 15.0781C3.67277 18.7921 4.87692 22.6365 7.67114 25.4697C10.0357 27.8672 13.7943 29.1514 17.5168 28.9863C19.5746 28.8951 21.5067 28.3688 23.1165 27.4336H22.6819C21.5775 27.4334 20.6819 26.538 20.6819 25.4336C20.6819 24.3292 21.5775 23.4338 22.6819 23.4336H27.9817L28.1848 23.4434C29.1866 23.5446 29.9717 24.3858 29.9817 25.4141L30.0325 30.7529C30.043 31.8573 29.1563 32.7617 28.052 32.7725C26.9477 32.7829 26.0432 31.8963 26.0325 30.792L26.0276 30.3232C23.5835 32.0041 20.6224 32.8525 17.6936 32.9824C13.0533 33.1881 8.12127 31.622 4.82349 28.2783C1.14351 24.5471 -0.42663 19.4953 0.098877 14.6475C0.217924 13.5495 1.20502 12.7552 2.30298 12.874ZM15.3176 0.0214844C19.953 -0.201191 24.8738 1.32964 28.177 4.67871C31.8565 8.40943 33.4264 13.4604 32.9016 18.3076C32.7826 19.4056 31.7956 20.199 30.6975 20.0801C29.5998 19.9609 28.8063 18.9748 28.925 17.877C29.3271 14.1636 28.1232 10.32 25.3293 7.4873C22.97 5.09521 19.2339 3.83776 15.51 4.0166C13.492 4.11358 11.5847 4.62527 9.97485 5.52344H10.3167C11.4212 5.52344 12.3166 6.41895 12.3167 7.52344C12.3167 8.62801 11.4212 9.52344 10.3167 9.52344H4.96606C3.86172 9.52317 2.96606 8.62784 2.96606 7.52344V2.18457C2.96606 1.08016 3.86172 0.184833 4.96606 0.18457C6.07063 0.18457 6.96606 1.08 6.96606 2.18457V2.68066C9.42478 1.01539 12.3866 0.162368 15.3176 0.0214844Z" fill="currentColor"/>
+                </svg>
+                {syncLoading ? '동기화 중...' : '지금 동기화'}
+              </button>
+            </form>
+          </div>
+          {#if nationalHolidays.length > 0}
+            <div class="drag-list-wrap">
+              {#each nationalHolidays as h (h.id)}
+                <div class="list-row">
+                  <span class="mk-badge">{h.date}</span>
+                  <span class="list-row-name">{h.name}</span>
+                </div>
+              {/each}
+            </div>
+          {:else}
+            <p class="empty-hint">동기화된 법정공휴일이 없습니다. "지금 동기화"를 눌러 최신 데이터를 가져오세요.</p>
+          {/if}
+        </div>
+
+        <!-- 임시 휴무일 관리(관리자 직접 등록) -->
+        <div class="holiday-block">
+          <div class="subsection-head">
+            <h4 class="subsection-title">임시 휴무일 관리</h4>
+          </div>
+          <form
+            method="POST"
+            action="?/addManualHoliday"
+            class="add-form"
+            use:enhance={() => {
+              manualHolidayLoading = true
+              return async ({ result, update }) => {
+                manualHolidayLoading = false
+                if (result.type === 'success') {
+                  csToast.success('임시 휴무일이 추가되었습니다.')
+                  manualHolidayDate = ''
+                  manualHolidayNote = ''
+                  await update()
+                } else if (result.type === 'failure') {
+                  csToast.error((result.data as { error?: string })?.error ?? '추가에 실패했습니다.')
+                }
+              }
+            }}
+          >
+            <input
+              type="date"
+              name="date"
+              class="add-input"
+              bind:value={manualHolidayDate}
+              disabled={manualHolidayLoading}
+              aria-label="임시휴무일 날짜"
+              required
+            />
+            <input
+              type="text"
+              name="note"
+              class="add-input"
+              placeholder="사유 입력 (예: 명절 연휴)"
+              maxlength="100"
+              bind:value={manualHolidayNote}
+              disabled={manualHolidayLoading}
+              aria-label="임시휴무일 사유"
+            />
+            <button
+              type="submit"
+              class="btn-add"
+              disabled={manualHolidayLoading || !manualHolidayDate}
+            >
+              {manualHolidayLoading ? '추가 중...' : '추가'}
+            </button>
+          </form>
+
+          {#if manualHolidays.length > 0}
+            <div class="drag-list-wrap">
+              {#each manualHolidays as h (h.id)}
+                <div class="list-row">
+                  <span class="mk-badge">{h.date}</span>
+                  <span class="list-row-name">{h.note || h.name}</span>
+                  <CmsDeleteButton action="?/deleteManualHoliday" id={h.id} />
+                </div>
+              {/each}
+            </div>
+          {:else}
+            <p class="empty-hint">등록된 임시 휴무일이 없습니다.</p>
+          {/if}
+        </div>
+      </div>
     </section>
 
     <!-- ══════════════════════════════════════════
@@ -453,7 +679,6 @@
         <h2 class="section-title">지점 정보 등록</h2>
         <span class="section-badge">{branches.length} / 20</span>
       </div>
-      <p class="section-desc">픽업·반납 가능한 지점 목록을 등록하고 상세 정보를 관리합니다.</p>
 
       <form
         method="POST"
@@ -613,7 +838,6 @@
       <div class="section-head">
         <h2 class="section-title">대여·예약 이용안내</h2>
       </div>
-      <p class="section-desc">결제 화면에 표시될 공통 안내문과 필수 동의문을 관리합니다.</p>
 
       <!-- 공통 안내문 -->
       <div class="subsection">
@@ -760,7 +984,9 @@
     display: flex;
     align-items: center;
     gap: 10px;
-    margin-bottom: 6px;
+    /* section-desc 문구 제거(2026-08-24)로 사라진 여백을 보정 — 타이틀과 바로 아래
+       입력폼/서브섹션 사이 30px 확보(전 섹션 공통 적용) */
+    margin-bottom: 30px;
   }
 
   .section-title {
@@ -777,12 +1003,6 @@
     padding: 2px 10px;
     border-radius: var(--radius-full);
     white-space: nowrap;
-  }
-
-  .section-desc {
-    font: var(--text-pc-body-14);
-    color: var(--cs-text-mid);
-    margin: 0 0 40px;
   }
 
   /* ─── 추가 폼 ─── */
@@ -885,26 +1105,51 @@
     color: var(--cs-text-placeholder);
   }
 
+  /* ProductDetailPanel.svelte .btn-save-inline 스타일 토큰 반영(2026-08-24, Stephen 지시) —
+     활성 상태를 .btn-save-inline.dirty에, 비활성(disabled)을 .btn-save-inline 기본상태에 매핑 */
   .btn-add {
-    height: 44px;
-    padding: 0 22px;
+    padding: 5px 14px;
+    border: 1.5px solid var(--cs-purple);
+    border-radius: var(--radius-sm);
     background: var(--cs-purple);
     color: var(--cs-white);
-    border: none;
-    border-radius: var(--cms-radius-md);
-    font: var(--text-pc-title-16);
+    font: var(--text-pc-script-12);
     white-space: nowrap;
     cursor: pointer;
-    transition: opacity 0.15s;
+    min-height: 32px;
+    transition: background 0.15s, color 0.15s, border-color 0.15s;
   }
 
   .btn-add:disabled {
-    opacity: 0.4;
+    border-color: var(--cs-border);
+    background: transparent;
+    color: var(--cs-text-light);
     cursor: not-allowed;
   }
 
   .btn-add:not(:disabled):hover {
-    opacity: 0.85;
+    background: var(--cs-purple-hover);
+    border-color: var(--cs-purple-hover);
+  }
+
+  /* "지금 동기화" 버튼 — 동기화 아이콘 + 텍스트 */
+  .btn-sync {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+  }
+  /* 배경 grey5%(--cs-surface-gray) 전용 오버라이드 — 텍스트/아이콘(currentColor)도 밝은
+     배경에서 보이도록 함께 어두운 톤으로 조정(흰 텍스트 유지 시 대비 실패) */
+  .btn-sync:not(:disabled) {
+    background: var(--cs-surface-gray);
+    border: none;
+    color: var(--cs-text);
+  }
+  .btn-sync:not(:disabled):hover {
+    background: var(--cs-lilac);
+  }
+  .btn-sync-icon {
+    flex-shrink: 0;
   }
 
   /* ─── 드래그 리스트 아이템 ─── */
@@ -1138,6 +1383,11 @@
     margin-bottom: 0;
   }
 
+  /* "배송 설정 저장" 폼과 "대여옵션(수령/반납) 일괄적용" 사이 여백 */
+  .bulk-delivery-section {
+    margin-top: 30px;
+  }
+
   .subsection-head {
     display: flex;
     align-items: center;
@@ -1146,14 +1396,30 @@
   }
 
   .subsection-title {
-    font: var(--text-pc-title-18);
-    color: var(--cs-dark);
+    font: var(--text-pc-body-14);
+    color: var(--cs-text-mid);
     margin: 0;
   }
 
   .guide-actions {
     display: flex;
     justify-content: flex-end;
+  }
+
+  /* ─── 택배 휴무일 캘린더 제어 서브섹션 ─── */
+  .subsection-head--between {
+    justify-content: space-between;
+  }
+
+  .holiday-block {
+    margin-top: 24px;
+  }
+
+  .holiday-block .drag-list-wrap {
+    max-height: 220px;
+    overflow-y: auto;
+    /* 기본 6px(:global(.drag-list-wrap))의 2배 — 법정공휴일·임시휴무일 목록 전용 */
+    gap: 12px;
   }
 
   .textarea-wrap {
@@ -1233,10 +1499,11 @@
   }
 
   .sf-label {
-    flex: 0 0 100px;
+    /* "대여옵션(수령/반납) 일괄적용" 라벨(가장 긴 값) 기준 — 3개 sf-row(배송적용옵션 ·
+       대여옵션 일괄적용 · 휴무일 제어 옵션) 전부 동일 폭 공유해 좌측 정렬 통일 */
+    flex: 0 0 210px;
     font: var(--text-pc-body-14);
-    font-weight: 700;
-    color: var(--cs-text);
+    color: var(--cs-text-mid);
     white-space: nowrap;
   }
 
@@ -1245,15 +1512,22 @@
     gap: 8px;
     flex-wrap: wrap;
   }
+  /* 배송대여 수령/반납 일괄 지정 콤보 — 칩마다 개별 form으로 감싸되 레이아웃엔 영향 없게 */
+  .chip-form {
+    display: inline-flex;
+  }
 
+  /* cms-uiux.md §7-12-B "콤보버튼 UI(옵션 선택/토글) — mk-chip 표준" 값 그대로 적용
+     (이 페이지의 .mk-chip과 완전히 동일한 스타일 토큰 — 2026-08-24 Stephen 지시로 통일) */
   .s-chip {
-    height: 36px;
-    padding: 0 18px;
-    border: 1px solid var(--cs-lilac);
-    border-radius: var(--cms-radius-md);
+    height: 32px;
+    padding: 0 14px;
+    border: 1.5px solid var(--cs-lilac);
+    border-radius: var(--cms-radius-xl, 30px);
     background: var(--cs-white);
     color: var(--cs-text-mid);
-    font: var(--text-pc-body-14);
+    font: var(--text-pc-script-12);
+    font-weight: 600;
     cursor: pointer;
     transition: background 0.15s, color 0.15s, border-color 0.15s;
   }
@@ -1265,8 +1539,8 @@
   }
 
   .s-chip:not(.s-chip--on):hover {
-    border-color: rgba(59, 47, 138, 0.4);
-    background: rgba(59, 47, 138, 0.04);
+    border-color: var(--cs-purple);
+    color: var(--cs-purple);
   }
 
   .fee-grid {
@@ -1291,7 +1565,7 @@
   .fee-label {
     flex: 0 0 100px;
     font: var(--text-pc-body-14);
-    color: var(--cs-text);
+    color: var(--cs-text-mid);
     white-space: nowrap;
   }
 

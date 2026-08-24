@@ -1,6 +1,11 @@
 import { fail } from '@sveltejs/kit'
+import { env } from '$env/dynamic/private'
+import { getSupabaseUrl } from '$lib/env/supabasePublic'
+import { createClient, type SupabaseClient } from '@supabase/supabase-js'
+import { getCmsRoleForAction } from '$lib/server/getCmsRoleForAction'
+import { hasSettingsAccess } from '$lib/utils/cmsPermissions'
+import { syncNationalHolidays } from '$lib/server/holidaySync'
 import type { Actions, PageServerLoad } from './$types'
-import type { SupabaseClient } from '@supabase/supabase-js'
 
 // database.ts에 신규 테이블/RPC 미등록 상태 — generate_typescript_types 이후 제거
 function untypedFrom(sb: SupabaseClient, table: string) {
@@ -23,6 +28,7 @@ export interface RentalMethodOption {
   method_key: string | null
   display_order: number
   is_active: boolean
+  is_bulk_delivery: boolean
 }
 
 export interface PickupPoint {
@@ -51,17 +57,34 @@ export interface RentalShippingSettings {
   shipping_guide: string
 }
 
+export interface DeliveryCutoffSettings {
+  enable_prev_day_check: boolean
+  enable_fixed_holidays: boolean
+  enable_manual_holidays: boolean
+  updated_at: string
+}
+
+export interface PublicHolidayRow {
+  id: string
+  date: string
+  name: string
+  holiday_type: 'national' | 'manual'
+  note: string | null
+  is_active: boolean
+}
+
 export const load: PageServerLoad = async ({ locals }) => {
   const supabase = locals.supabase
+  const todayIso = new Date().toISOString().slice(0, 10)
 
-  const [periods, methods, branches, guide, consents, shippingRow] = await Promise.all([
+  const [periods, methods, branches, guide, consents, shippingRow, cutoffRow, holidays] = await Promise.all([
     untypedFrom(supabase, 'rental_period_options')
       .select('id, name, display_order, is_active')
       .is('deleted_at', null)
       .order('display_order'),
 
     untypedFrom(supabase, 'rental_method_options')
-      .select('id, name, method_key, display_order, is_active')
+      .select('id, name, method_key, display_order, is_active, is_bulk_delivery')
       .is('deleted_at', null)
       .order('display_order'),
 
@@ -85,6 +108,16 @@ export const load: PageServerLoad = async ({ locals }) => {
       .select('enable_round_trip, round_trip_fee, enable_delivery, delivery_fee, enable_return, return_fee, shipping_guide')
       .limit(1)
       .single(),
+
+    untypedFrom(supabase, 'delivery_cutoff_settings')
+      .select('enable_prev_day_check, enable_fixed_holidays, enable_manual_holidays, updated_at')
+      .limit(1)
+      .single(),
+
+    untypedFrom(supabase, 'public_holidays')
+      .select('id, date, name, holiday_type, note, is_active')
+      .gte('date', todayIso)
+      .order('date'),
   ])
 
   type GuideRow = { guide_text: string | null }
@@ -96,6 +129,8 @@ export const load: PageServerLoad = async ({ locals }) => {
     guideText: ((guide as { data: GuideRow | null }).data?.guide_text ?? ''),
     consents: ((consents as { data: RentalConsentItem[] | null }).data ?? []),
     shippingSettings: ((shippingRow as { data: RentalShippingSettings | null }).data ?? null),
+    cutoffSettings: ((cutoffRow as { data: DeliveryCutoffSettings | null }).data ?? null),
+    holidays: ((holidays as { data: PublicHolidayRow[] | null }).data ?? []),
   }
 }
 
@@ -190,6 +225,17 @@ export const actions: Actions = {
     return { success: true }
   },
 
+  // 배송대여 수령/반납 일괄 지정 — /cart 반납방식 강제고정+시간선택 비활성화 대상 토글
+  toggleBulkDelivery: async ({ request, locals }) => {
+    const { session } = await locals.safeGetSession()
+    if (!session) return fail(401, { error: '인증 필요' })
+    const data = await request.formData()
+    const id = data.get('id') as string
+    const { error } = await untypedRpc(locals.supabase, 'toggle_rental_method_bulk_delivery', { p_id: id })
+    if (error) return fail(400, { error: error.message })
+    return { success: true }
+  },
+
   // ─── 지점 정보 ────────────────────────────────
   addBranch: async ({ request, locals }) => {
     const { session } = await locals.safeGetSession()
@@ -281,6 +327,73 @@ export const actions: Actions = {
     })
     if (error) return fail(500, { error: error.message })
     return { success: true }
+  },
+
+  // ─── 택배 휴무일 캘린더 제어 ───────────────────
+  saveCutoffSettings: async ({ request, locals }) => {
+    const { session } = await locals.safeGetSession()
+    if (!session) return fail(401, { error: '인증 필요' })
+    const data = await request.formData()
+
+    const enablePrevDayCheck = data.get('enable_prev_day_check') === 'true'
+    const enableFixedHolidays = data.get('enable_fixed_holidays') === 'true'
+    const enableManualHolidays = data.get('enable_manual_holidays') === 'true'
+
+    const { error } = await untypedRpc(locals.supabase, 'upsert_delivery_cutoff_settings', {
+      p_enable_prev_day_check: enablePrevDayCheck,
+      p_enable_fixed_holidays: enableFixedHolidays,
+      p_enable_manual_holidays: enableManualHolidays,
+    })
+    if (error) return fail(500, { error: error.message })
+    return { success: true }
+  },
+
+  addManualHoliday: async ({ request, locals }) => {
+    const { session } = await locals.safeGetSession()
+    if (!session) return fail(401, { error: '인증 필요' })
+    const data = await request.formData()
+    const date = (data.get('date') as string | null) ?? ''
+    const note = (data.get('note') as string | null)?.trim() ?? ''
+
+    if (!date) return fail(400, { error: '날짜를 선택해주세요.' })
+    if (note.length > 100) return fail(400, { error: '사유는 최대 100자까지 입력 가능합니다.' })
+
+    const { error } = await untypedRpc(locals.supabase, 'upsert_manual_holiday', {
+      p_id: null,
+      p_date: date,
+      p_note: note,
+    })
+    if (error) return fail(400, { error: error.message })
+    return { success: true }
+  },
+
+  deleteManualHoliday: async ({ request, locals }) => {
+    const { session } = await locals.safeGetSession()
+    if (!session) return fail(401, { error: '인증 필요' })
+    const data = await request.formData()
+    const id = data.get('id') as string
+    const { error } = await untypedRpc(locals.supabase, 'delete_manual_holiday', { p_id: id })
+    if (error) return fail(400, { error: error.message })
+    return { success: true }
+  },
+
+  syncHolidaysNow: async ({ locals }) => {
+    const { session } = await locals.safeGetSession()
+    if (!session) return fail(401, { error: '인증 필요' })
+    const cmsRole = await getCmsRoleForAction(locals)
+    if (!hasSettingsAccess(cmsRole ?? '')) return fail(403, { error: '권한 없음' })
+
+    const serviceRoleKey = env.SUPABASE_SERVICE_ROLE_KEY
+    if (!serviceRoleKey) return fail(500, { error: '서버 설정 오류' })
+    const admin = createClient(getSupabaseUrl(), serviceRoleKey)
+
+    try {
+      const result = await syncNationalHolidays(admin, env.DATA_GO_KR_HOLIDAY_API_KEY)
+      return { success: true, ...result }
+    } catch (err) {
+      const message = err instanceof Error ? err.message : '동기화에 실패했습니다.'
+      return fail(500, { error: message })
+    }
   },
 
   // ─── 이용안내 ─────────────────────────────────

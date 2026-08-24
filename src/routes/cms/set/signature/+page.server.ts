@@ -114,27 +114,19 @@ export const actions: Actions = {
     const assetType = form.get('asset_type') as string | null
     if (!assetId || !assetType) return fail(400, { error: '필수 파라미터 누락' })
 
-    const admin = createClient(PUBLIC_SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
-
-    // 동일 유형의 기존 기본값 해제 후 신규 지정
-    type AdminFrom = {
-      from: (t: string) => {
-        update: (row: Record<string, unknown>) => {
-          eq: (k: string, v: string) => {
-            neq: (k: string, v: string) => Promise<{ error: { message: string } | null }>
-            eq: (k: string, v: string) => Promise<{ error: { message: string } | null }>
-          }
-        }
-      }
-    }
-    const adminTyped = admin as unknown as AdminFrom
-
-    await adminTyped.from('cms_signature_assets').update({ is_default: false })
-      .eq('admin_id', session.user.id)
-      .eq('asset_type', assetType)
-    await adminTyped.from('cms_signature_assets').update({ is_default: true })
-      .eq('admin_id', session.user.id)
-      .eq('id', assetId)
+    // 원자적 처리(migration 332 cms_set_default_signature_asset) — 기존 기본값 해제 + 신규
+    // 지정 2개 UPDATE를 단일 RPC로 묶어 중간 실패 시 기본값이 아예 없는 상태로 남는 것을 방지.
+    // is_cms_user()가 auth.uid()에 의존하므로 세션 클라이언트(locals.supabase)로 호출.
+    // database.ts에 신규 RPC 타입이 없어 캐스트 필요(promotion/ad 등과 동일 관행).
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const db = locals.supabase as unknown as any
+    const { data: result, error } = await db.rpc('cms_set_default_signature_asset', {
+      p_asset_id: assetId,
+      p_asset_type: assetType,
+    })
+    if (error) return fail(500, { error: error.message })
+    const res = result as { ok: boolean; error?: string } | null
+    if (!res?.ok) return fail(400, { error: res?.error ?? '기본값 지정 실패' })
 
     return { success: true }
   },
