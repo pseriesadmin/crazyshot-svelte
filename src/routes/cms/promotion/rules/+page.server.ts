@@ -56,7 +56,6 @@ export const actions: Actions = {
     if (!hasSettingsAccess(cmsRole)) return fail(403, { error: '권한 없음' })
 
     const data = await request.formData()
-    const client = db(locals.supabase)
 
     let triggerMeta = null
     let actionMeta = null
@@ -73,18 +72,23 @@ export const actions: Actions = {
       return fail(400, { error: 'action_meta JSON 형식이 올바르지 않습니다.' })
     }
 
-    const { error } = await client.from('marketing_rules').insert({
-      name:         data.get('name'),
-      trigger_type: data.get('trigger_type'),
-      trigger_meta: triggerMeta,
-      action_type:  data.get('action_type'),
-      action_meta:  actionMeta,
-      is_active:    true
+    // H-01: RPC 경유(migration 331 cms_create_marketing_rule) — db()는 파일 상단 헬퍼(load()와
+    // 동일하게 database.ts에 없는 테이블/RPC 타입을 우회하는 기존 관행)
+    const { data: result, error } = await db(locals.supabase).rpc('cms_create_marketing_rule', {
+      p_name:         data.get('name'),
+      p_trigger_type: data.get('trigger_type'),
+      p_trigger_meta: triggerMeta,
+      p_action_type:  data.get('action_type'),
+      p_action_meta:  actionMeta,
     })
     if (error) return fail(400, { error: error.message })
+    const res = result as { ok: boolean; error?: string } | null
+    if (!res?.ok) return fail(400, { error: res?.error ?? '생성 실패' })
     return { success: true }
   },
 
+  // 서버측 NOT 반전(migration 331 cms_toggle_marketing_rule) — 클라이언트가 보낸 is_active를
+  // 신뢰하지 않음(migration 262 cms_toggle_banner와 동일 원칙)
   toggleRule: async ({ request, locals }) => {
     const { session } = await locals.safeGetSession()
     if (!session) return fail(401, { error: '인증 필요' })
@@ -92,12 +96,12 @@ export const actions: Actions = {
     if (!cmsRole) return fail(403, { error: '권한 없음' })
     if (!hasSettingsAccess(cmsRole)) return fail(403, { error: '권한 없음' })
 
-    const data      = await request.formData()
-    const id        = data.get('id') as string
-    const is_active = data.get('is_active') === 'true'
-    const client    = db(locals.supabase)
-    const { error } = await client.from('marketing_rules').update({ is_active: !is_active }).eq('id', id)
+    const data = await request.formData()
+    const id   = data.get('id') as string
+    const { data: result, error } = await db(locals.supabase).rpc('cms_toggle_marketing_rule', { p_id: id })
     if (error) return fail(400, { error: error.message })
+    const res = result as { ok: boolean; error?: string } | null
+    if (!res?.ok) return fail(400, { error: res?.error ?? '토글 실패' })
     return { success: true }
   },
 
@@ -108,10 +112,13 @@ export const actions: Actions = {
     if (!cmsRole) return fail(403, { error: '권한 없음' })
     if (!hasSettingsAccess(cmsRole)) return fail(403, { error: '권한 없음' })
 
-    const data   = await request.formData()
-    const client = db(locals.supabase)
-    const { error } = await client.from('marketing_rules').delete().eq('id', data.get('id') as string)
+    const data = await request.formData()
+    const { data: result, error } = await db(locals.supabase).rpc('cms_delete_marketing_rule', {
+      p_id: data.get('id') as string,
+    })
     if (error) return fail(400, { error: error.message })
+    const res = result as { ok: boolean; error?: string } | null
+    if (!res?.ok) return fail(400, { error: res?.error ?? '삭제 실패' })
     return { success: true }
   }
 }

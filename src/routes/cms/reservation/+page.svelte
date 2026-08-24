@@ -5,7 +5,6 @@
   import CmsPagination from '$lib/components/cms/CmsPagination.svelte'
   import ReservationRentalTabBar from '$lib/components/cms/ReservationRentalTabBar.svelte'
   import ChevronIcon from '$lib/components/common/ChevronIcon.svelte'
-  import { csToast } from '$lib/utils/toast'
   import type { PageData } from './$types'
   import type { RentalListRow } from './+page.server'
 

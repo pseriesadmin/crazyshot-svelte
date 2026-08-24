@@ -1,5 +1,4 @@
 <script lang="ts">
-  /* global File, FormData */
   import { goto } from '$app/navigation'
   import { resizeProductImage } from '$lib/utils/imageResize'
   import OcrScanner from '$lib/components/common/OcrScanner.svelte'
