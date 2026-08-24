@@ -1,6 +1,14 @@
 import { redirect } from '@sveltejs/kit'
 import { isRealMemberSession } from '$lib/utils/authGuard'
+import { loadCourierClosedDates } from '$lib/server/courierClosedDates'
 import type { PageServerLoad } from './$types'
+import type { SupabaseClient } from '@supabase/supabase-js'
+
+// database.ts에 rental_guide_settings 미등록 상태 — cms/set/rental/+page.server.ts와 동일 패턴
+// (generate_typescript_types 이후 제거)
+function untypedFrom(sb: SupabaseClient, table: string) {
+  return (sb as unknown as { from: (t: string) => ReturnType<SupabaseClient['from']> }).from(table)
+}
 
 export const load: PageServerLoad = async ({ locals }) => {
   const supabase = locals.supabase
@@ -8,7 +16,7 @@ export const load: PageServerLoad = async ({ locals }) => {
   // 배송 방식 옵션 — 세션 불필요, 모든 사용자에게 제공
   const { data: deliveryOptionsData } = await supabase
     .from('rental_method_options')
-    .select('id, method_key, name, fee_amount, fee_description, deadline_time, display_order')
+    .select('id, method_key, name, fee_amount, fee_description, deadline_time, display_order, is_bulk_delivery')
     .eq('is_active', true)
     .is('deleted_at', null)
     .order('display_order', { ascending: true })
@@ -23,6 +31,18 @@ export const load: PageServerLoad = async ({ locals }) => {
     .is('deleted_at', null)
     .order('created_at', { ascending: true })
   const pickupPoints = (pickupPointsData ?? []) as PickupPointRow[]
+
+  // 택배 휴무일 캘린더 제어(2026-08-24) — 마스터 토글 OFF면 완전히 스킵(빈 배열),
+  // ON이면 활성 토글에 해당하는 휴무일자만 모아 courierClosedDates로 전달.
+  // isDeliveryLocked(delivery/crazydelivery) 방식일 때만 클라이언트에서 실제로 적용됨.
+  const courierClosedDates = await loadCourierClosedDates(supabase)
+
+  // 공통 대여 안내문(/cms/set/rental "공통 대여 안내문") — 이용안내 모달 내용, 세션 불필요
+  const { data: guideData } = await untypedFrom(supabase, 'rental_guide_settings')
+    .select('guide_text')
+    .limit(1)
+    .single()
+  const rentalGuideText = (guideData as { guide_text?: string } | null)?.guide_text ?? ''
 
   const { session } = await locals.safeGetSession()
 
@@ -251,6 +271,8 @@ export const load: PageServerLoad = async ({ locals }) => {
   return {
     deliveryOptions,
     pickupPoints,
+    courierClosedDates,
+    rentalGuideText,
     userId:          session.user.id,
     reservationIds,
     cartProducts,
@@ -403,11 +425,14 @@ interface RawUserCouponRow {
 }
 
 interface DeliveryOptionRow {
-  id:              string
-  method_key:      string
-  name:            string
-  fee_amount:      number
-  fee_description: string | null
-  deadline_time:   string | null
-  display_order:   number
+  id:               string
+  method_key:       string
+  name:             string
+  fee_amount:       number
+  fee_description:  string | null
+  deadline_time:    string | null
+  display_order:    number
+  // 배송대여 수령/반납 일괄 지정(2026-08-24) — true인 방식은 /cart에서 반납방식 강제고정+
+  // 시간선택 비활성화 대상(cms/set/rental "배송대여 수령/반납 일괄 지정" 콤보로 관리자 토글)
+  is_bulk_delivery: boolean
 }

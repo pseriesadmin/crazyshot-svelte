@@ -21,15 +21,31 @@ export const POST: RequestHandler = async ({ locals, request }) => {
     return json({ error: 'reservationIds가 필요합니다' }, { status: 400 })
   }
 
+  // 장바구니에서 고른 쿠폰/포인트 — 계약서명 페이지(/contract/[token])가 다시 읽어 미리
+  // 선택된 상태로 보여주기 위한 사전선택 캐시(Migration 340). 실제 소진은 여전히 결제
+  // 확정 시점(pay-mock)에서만 일어난다.
+  const selectedCouponId = typeof body.couponId === 'string' && body.couponId ? body.couponId : null
+  const selectedPoints = Number.isFinite(body.points) && body.points > 0 ? Math.floor(body.points) : 0
+
   const admin = createClient(getSupabaseUrl(), env.SUPABASE_SERVICE_ROLE_KEY)
 
   type CreateReservationOrderRpcFn = (
     name: 'create_reservation_order',
-    args: { p_user_id: string; p_reservation_ids: number[] }
+    args: {
+      p_user_id: string
+      p_reservation_ids: number[]
+      p_selected_coupon_id: string | null
+      p_selected_points: number
+    }
   ) => Promise<{ data: { order_id: number; order_key: string; final_amount: number }[] | null; error: unknown }>
   const { data, error } = await (admin.rpc as unknown as CreateReservationOrderRpcFn)(
     'create_reservation_order',
-    { p_user_id: session.user.id, p_reservation_ids: reservationIds }
+    {
+      p_user_id: session.user.id,
+      p_reservation_ids: reservationIds,
+      p_selected_coupon_id: selectedCouponId,
+      p_selected_points: selectedPoints,
+    }
   )
 
   if (error) {
