@@ -7,6 +7,10 @@
     {
       "path": "/api/cron/locker-guide",
       "schedule": "*/10 * * * *"
+    },
+    {
+      "path": "/api/cron/sync-national-holidays",
+      "schedule": "15 0 * * *"
     }
   ]
 }
