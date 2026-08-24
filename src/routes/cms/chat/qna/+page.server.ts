@@ -112,18 +112,27 @@ export const load: PageServerLoad = async ({ parent, url }) => {
 }
 
 export const actions: Actions = {
+  // manager 이상만 삭제 가능 — 같은 파일의 promoteCandidate/deleteCandidateMember와 역할
+  // 경계 통일(CMS 전역 정밀검증 v3 STAGE 1 BOUNDARY-3, migration 331)
   delete: async ({ locals, request }) => {
     const cmsRole = await getCmsRoleForAction(locals)
     if (!cmsRole) return fail(401, { error: '인증 필요' })
+    if (!hasSettingsAccess(cmsRole)) return fail(403, { error: '권한 없음 (manager 이상 필요)' })
 
     const formData = await request.formData()
     const id = formData.get('id') as string | null
     if (!id) return fail(400, { error: 'id 필요' })
 
-    const admin = createClient(PUBLIC_SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
-    const { error } = await admin.from('canned_responses').delete().eq('id', id)
-
+    // H-01: RPC 경유(migration 331 cms_delete_canned_response) — is_cms_user()가 auth.uid()에
+    // 의존하므로 세션 클라이언트(locals.supabase)로 호출해야 함(admin/service_role 클라이언트
+    // 호출 시 auth.uid()가 NULL이라 항상 거부됨). database.ts에 신규 RPC 타입이 없어 캐스트
+    // 필요(promotion/ad·coupon과 동일 관행, database.ts 재생성 전까지 유지).
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const db = locals.supabase as unknown as any
+    const { data, error } = await db.rpc('cms_delete_canned_response', { p_id: id })
     if (error) return fail(500, { error: error.message })
+    const result = data as { ok: boolean; error?: string } | null
+    if (!result?.ok) return fail(400, { error: result?.error ?? '삭제 실패' })
     return { success: true }
   },
 
@@ -137,13 +146,12 @@ export const actions: Actions = {
     const id = formData.get('id') as string | null
     if (!id) return fail(400, { error: 'id 필요' })
 
-    const admin = createClient(PUBLIC_SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
-    const { error } = await admin
-      .from('synonym_group_members')
-      .update({ status: 'confirmed' })
-      .eq('id', id)
-
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const db = locals.supabase as unknown as any
+    const { data, error } = await db.rpc('cms_promote_synonym_candidate', { p_id: id })
     if (error) return fail(500, { error: error.message })
+    const result = data as { ok: boolean; error?: string } | null
+    if (!result?.ok) return fail(400, { error: result?.error ?? '승급 실패' })
     return { success: true }
   },
 
@@ -157,13 +165,12 @@ export const actions: Actions = {
     const id = formData.get('id') as string | null
     if (!id) return fail(400, { error: 'id 필요' })
 
-    const admin = createClient(PUBLIC_SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
-    const { error } = await admin
-      .from('synonym_group_members')
-      .delete()
-      .eq('id', id)
-
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const db = locals.supabase as unknown as any
+    const { data, error } = await db.rpc('cms_delete_synonym_candidate', { p_id: id })
     if (error) return fail(500, { error: error.message })
+    const result = data as { ok: boolean; error?: string } | null
+    if (!result?.ok) return fail(400, { error: result?.error ?? '삭제 실패' })
     return { success: true }
   },
 }

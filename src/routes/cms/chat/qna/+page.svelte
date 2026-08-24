@@ -9,7 +9,7 @@
   import { CANNED_RESPONSE_CATEGORIES, getCategoryLabel } from '$lib/constants/cannedResponseCategories'
   import { hasSettingsAccess } from '$lib/utils/cmsPermissions'
   import type { PageData } from './$types'
-  import type { CannedResponseRow, SynonymCandidateRow } from './+page.server'
+  import type { CannedResponseRow } from './+page.server'
 
   interface Props { data: PageData }
   let { data }: Props = $props()
