@@ -22,8 +22,8 @@ export interface UserProfile {
   allow_privacy_consent: boolean
   allow_third_party_consent: boolean
   // 본인증명·외국인증명
-  identity_type: string | null
-  identity_doc_url: string | null
+  identity_type: string[] | null
+  identity_doc_url: string[] | null
   identity_verified_at: string | null
   is_foreign: boolean
   foreign_doc_url: string | null

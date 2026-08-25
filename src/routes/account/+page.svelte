@@ -102,7 +102,7 @@
           <div class="flex flex-col items-start pt-[20px] px-[25px] relative size-full">
             <div class="flex flex-col gap-[10px] items-start max-w-[1240px] min-w-[340px] py-[30px] relative rounded-[30px] shrink-0 w-full">
               <div class="flex h-[29px] items-center relative shrink-0 w-full">
-                <p class="font-['Noto_Sans_KR',sans-serif] font-medium leading-[1.6] relative shrink-0 text-[#444] text-[18px] text-center tracking-[-0.3px] whitespace-nowrap">대여 경험</p>
+                <p class="relative shrink-0 text-[#444] text-center tracking-[-0.3px] whitespace-nowrap" style="font: var(--text-m-title-21);">대여 경험</p>
               </div>
               <div class="flex items-center relative shrink-0 w-full">
                 <div class="flex flex-col font-['Noto_Sans_KR',sans-serif] font-medium justify-center leading-[0] relative shrink-0 text-[#666] text-[14px] tracking-[-0.5px] whitespace-nowrap">
@@ -174,7 +174,7 @@
         <!-- 내정보 메뉴 카드 -->
         <div class="bg-[#ffffff] rounded-[30px] px-[24px] py-[24px]">
           <div class="flex items-center justify-between mb-[24px]">
-            <span class="font-['Noto_Sans_KR',sans-serif] font-medium text-[#444] text-[18px] tracking-[-0.3px]">내정보</span>
+            <span class="text-[#444] tracking-[-0.3px]" style="font: var(--text-pc-title-18);">내정보</span>
           </div>
           <div class="flex flex-col gap-[20px]">
             {#each myInfoMenuItems as item}
@@ -214,8 +214,8 @@
           <!-- 대여 경험 -->
           <div class="bg-[#ecebf4] rounded-[30px] overflow-hidden">
             <div class="px-[24px] py-[24px]">
-              <div class="mb-[16px]">
-                <p class="font-['Noto_Sans_KR',sans-serif] font-medium text-[#444] text-[18px] tracking-[-0.3px] mb-[4px]">대여 경험</p>
+              <div class="mb-[24px]">
+                <p class="text-[#444] tracking-[-0.3px] mb-[28px]" style="font: var(--text-pc-title-18);">대여 경험</p>
                 <p class="font-['Noto_Sans_KR',sans-serif] font-medium text-[#666] text-[14px] tracking-[-0.5px]">최근 3개월 동안 0건의 대여정보가 있어요.</p>
               </div>
               <RentalStatRow stats={rentalStats} />
@@ -234,10 +234,10 @@
           <!-- 관심가져봄 -->
           <div class="bg-[#ffffff] rounded-[30px] overflow-hidden">
             <div class="px-[24px] py-[24px]">
-              <div class="flex items-center justify-between mb-[16px]">
-                <p class="font-['Noto_Sans_KR',sans-serif] font-medium text-[#444] text-[18px] tracking-[-0.3px]">관심가져봄</p>
+              <div class="flex items-center justify-between mb-[24px]">
+                <p class="text-[#444] tracking-[-0.3px]" style="font: var(--text-pc-title-18);">관심가져봄</p>
                 <div class="flex gap-[20px] items-center">
-                  <span class="font-['Noto_Sans_KR',sans-serif] font-medium text-[#444] text-[16px] tracking-[-0.5px]">6</span>
+                  <span class="font-['Noto_Sans_KR',sans-serif] font-medium text-[#444] text-[16px] tracking-[-0.5px]">{data.wishlists.length}</span>
                   <div class="h-[6px] relative shrink-0 w-[12px]">
                     <div class="absolute flex inset-0 items-center justify-center" style="container-type:size">
                       <div class="flex-none h-[100cqw] rotate-90 w-[100cqh]">
@@ -254,7 +254,7 @@
                 </div>
               </div>
               <div class="overflow-x-auto">
-                <WishlistScroll items={data.wishlists} totalCount={data.wishlists.length} />
+                <WishlistScroll items={data.wishlists} totalCount={data.wishlists.length} hideTitle />
               </div>
             </div>
           </div>
@@ -262,7 +262,7 @@
           <!-- 대여 정보 메뉴 -->
           <div class="bg-[#ffffff] rounded-[30px] px-[24px] py-[24px]">
             <div class="flex items-center justify-between mb-[24px]">
-              <span class="font-['Noto_Sans_KR',sans-serif] font-medium text-[#444] text-[18px] tracking-[-0.3px]">대여 정보</span>
+              <span class="text-[#444] tracking-[-0.3px]" style="font: var(--text-pc-title-18);">대여 정보</span>
             </div>
             <div class="flex flex-col gap-[20px]">
               {#each rentalMenuItems as item}
@@ -432,12 +432,11 @@
       border-radius: 0;
     }
 
-    /* PC 로그아웃 버튼 */
+    /* PC 로그아웃 버튼 — 메뉴 목록과의 여백 2배(Stephen 확정, 2026-08-26) */
     .pc-logout-wrap {
       width: 100%;
-      padding: 24px 0 0;
-      margin-top: 16px;
-      border-top: 1px solid var(--cs-lilac);
+      padding: 48px 0 0;
+      margin-top: 32px;
     }
     .pc-btn-logout {
       display: inline-flex;

@@ -16,9 +16,10 @@
   interface Props {
     items?: WishItem[]
     totalCount?: number
+    hideTitle?: boolean
   }
 
-  let { items = [], totalCount = 0 }: Props = $props()
+  let { items = [], totalCount = 0, hideTitle = false }: Props = $props()
 
   let localItems = $state([...items])
   let localCount = $state(totalCount)
@@ -49,18 +50,20 @@
 <div class="relative shrink-0 w-full">
   <div class="flex flex-col items-start pt-[20px] px-[25px] relative size-full">
 
-    <!-- 섹션 타이틀 -->
-    <div class="section-header">
-      <p class="section-title">관심가져봄</p>
-      <div class="section-right">
-        <p class="section-count">{localCount}</p>
-        <div class="chevron-wrap">
-          <svg width="8" height="14" viewBox="0 0 8 14" fill="none">
-            <path d="M1 1L7 7L1 13" stroke="#444444" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"/>
-          </svg>
+    <!-- 섹션 타이틀 — PC 호출부는 자체 헤더를 별도로 두므로 hideTitle로 중복 렌더 방지 -->
+    {#if !hideTitle}
+      <div class="section-header">
+        <p class="section-title">관심가져봄</p>
+        <div class="section-right">
+          <p class="section-count">{localCount}</p>
+          <div class="chevron-wrap">
+            <svg width="8" height="14" viewBox="0 0 8 14" fill="none">
+              <path d="M1 1L7 7L1 13" stroke="#444444" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"/>
+            </svg>
+          </div>
         </div>
       </div>
-    </div>
+    {/if}
 
     <!-- 가로 스크롤 카드 목록 -->
     {#if localItems.length === 0}
@@ -100,12 +103,9 @@
     padding: 30px 0;
   }
   .section-title {
-    font-family: var(--font-kr);
-    font-size: 18px;
-    font-weight: 500;
+    font: var(--text-m-title-21);
     letter-spacing: -0.3px;
     color: var(--cs-text-dark);
-    line-height: 1.6;
   }
   .section-right {
     display: flex;
