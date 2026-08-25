@@ -4,6 +4,7 @@
   import type { ActionResult } from '@sveltejs/kit'
   import { resizeProductImage } from '$lib/utils/imageResize'
   import { csToast } from '$lib/utils/toast'
+  import { baseCodeDisplay } from '$lib/utils/baseCodeDisplay'
   import { supabase } from '$lib/services/supabase'
   import CmsContentEditor from '$lib/components/cms/CmsContentEditor.svelte'
   import type { ContentBlock } from '$lib/types/content-editor'
@@ -64,6 +65,17 @@
     shipping_round_trip?: boolean
     shipping_delivery?: boolean
     shipping_return?: boolean
+    // 2026-08-25: "코드 재반영" 재설계(products.md §2-11) — 이 부모가 자신보다 먼저 생성된
+    // 다른 활성 부모와 완전히 동일한 1단 계층 code_series를 공유하는 후발 중복일 때만 true.
+    hasOlderDuplicateCode?: boolean
+    categoryComboItems?: Array<{
+      combo_row_id: string
+      combo_name: string | null
+      combo_keywords: string[]
+      group_id: string
+      group_name: string
+      code_preview: string
+    }>
   }
 
   interface InventoryUnit {
@@ -105,6 +117,7 @@
       combo_keywords: string[]
       group_id: string
       group_name: string
+      code_preview: string
     }>
     rentalPeriods?: RentalOption[]
     rentalMethods?: RentalOption[]
@@ -114,7 +127,7 @@
     tabs?: TabKey[]  // 미지정 시 전체 탭 노출. 지정 시 해당 탭만 탭바에 표시(이력관리 전용 화면 등)
     onclose: () => void
     // '빠른 재고 등록' 성공 시 생성된 자식 상품 id 목록 — 부모(+page.svelte)가 QR 노출 영역에 자동 반영
-    oninventorycreated?: (ids: string[]) => void
+    oninventorycreated?: (ids: string[], sourceProductId: string) => void
   }
 
   let { product, priceRules, categories, categoryLabel, initialTab = null, inventoryList = [], partnerComboItems = [], rentalPeriods = [], rentalMethods = [], pickupPoints = [], shippingSettings = null, rentalStatusCounts = null, tabs: tabsFilter, onclose, oninventorycreated }: Props = $props()
@@ -940,7 +953,7 @@
       const fd = new FormData()
       fd.append('product_id', product.id)
       const res = await fetch('?/retryCodeSeries', { method: 'POST', body: fd })
-      const result = deserialize(await res.text()) as { type: string; data?: { error?: string } }
+      const result = deserialize(await res.text()) as { type: string; data?: { error?: string; alreadySet?: boolean } }
       if (result.type !== 'success') {
         throw new Error(result.data?.error ?? `설정 요청이 실패했습니다 (status ${res.status})`)
       }
@@ -1208,6 +1221,11 @@
 
   function handleCloneProduct() {
     isCloning = true
+    // REFRESH-STALE-1(2026-08-25): 아래 invalidateAll() 도중 부모(+page.svelte)의 shallow-
+    // routing 선택 상태가 흔들려, 제출 시점 이후에 rp.id/unit.id를 다시 읽으면(reactive
+    // closure) 이미 다른 상품으로 바뀌어 있을 수 있다 — 반드시 제출 "시작 시점"의 product.id를
+    // 지금 이 지역 변수로 고정해 콜백에 넘긴다.
+    const sourceProductId = product.id
     return async ({ result }: { result: ActionResult }) => {
       isCloning = false
       if (result.type === 'success') {
@@ -1224,13 +1242,48 @@
         // QR-AUTO-1: '빠른 재고 등록'으로 생성된 재고는 품번+QR이 즉시 발행되므로,
         // 부모 화면의 QR 노출 영역(일괄 인쇄 선택)에 자동 반영해 바로 노출되게 한다
         if (data?.mode === 'add_inventory' && data.createdIds && data.createdIds.length > 0) {
-          oninventorycreated?.(data.createdIds)
+          oninventorycreated?.(data.createdIds, sourceProductId)
         }
       } else if (result.type === 'failure') {
         // BND-BATCH-1: 실패 시에도 모달 닫고 실제 생성분 목록 반영 (재시도는 관리자 직접 판단)
         const msg = (result.data as { error?: string } | undefined)?.error ?? '재고 등록 중 오류가 발생했습니다.'
         showCloneModal = false
         await invalidateAll()
+        csToast.error(msg)
+      } else {
+        await applyAction(result)
+      }
+    }
+  }
+
+  // ─── 코드 재반영 (2026-08-25 재설계) ──────────────────────────
+  // "새 상품으로 복제 + 품번(분류코드) 자동 생성"으로 생긴, 원본과 1단 계층 code_series가
+  // 완전히 동일한 후발 중복 부모(product.hasOlderDuplicateCode)에서만 노출·동작한다.
+  // 기존 retryCodeSeries(고아 부모 자가복구, no-op 안전장치)와는 별개 경로 —
+  // 이 모달은 실제로 code_series를 새 조합코드로 재할당한다(reassignCodeSeries 액션).
+  let showReassignModal = $state(false)
+  let reassignComboRowId = $state('')
+  let isReassigning = $state(false)
+
+  function openReassignModal() {
+    reassignComboRowId = ''
+    showReassignModal = true
+  }
+
+  function closeReassignModal() {
+    if (!isReassigning) showReassignModal = false
+  }
+
+  function handleReassignCodeSeries() {
+    isReassigning = true
+    return async ({ result }: { result: ActionResult }) => {
+      isReassigning = false
+      if (result.type === 'success') {
+        showReassignModal = false
+        await invalidateAll()
+        csToast.success('기준 품번이 재할당됐습니다.')
+      } else if (result.type === 'failure') {
+        const msg = (result.data as { error?: string } | undefined)?.error ?? '코드 재반영에 실패했습니다.'
         csToast.error(msg)
       } else {
         await applyAction(result)
@@ -1325,6 +1378,22 @@
       {isRetryingSeries ? '설정 중...' : '품번 체계 설정'}
     </button>
   </div>
+  {:else if product.code_series}
+  <!-- 코드 재반영(2026-08-25 재설계, Stephen 요청): "새 상품으로 복제 + 품번(분류코드)
+       자동 생성"으로 원본과 완전히 동일한 1단 계층 code_series를 물려받은 "후발 중복" 부모
+       (product.hasOlderDuplicateCode)에서만 버튼을 노출한다 — 복제 대상(원본) 쪽에는 표시되지
+       않아 어느 쪽을 눌러야 하는지 헷갈리지 않는다. 클릭 시 카테고리 조합코드 그룹 목록에서
+       새 코드품번을 선택하는 모달을 열고, 선택한 코드에 부모순번(2단 계층) 개념이 있으면
+       reassignCodeSeries 액션이 즉시 원자적으로 채번해 실제로 다른 값으로 재할당한다. -->
+  <div class="ph-code-row">
+    <span class="ph-code-label">기준 품번</span>
+    <span class="ph-code-val">{baseCodeDisplay(product)}</span>
+    {#if product.hasOlderDuplicateCode}
+      <button type="button" class="ph-code-retry-btn ph-code-retry-btn--reapply" onclick={openReassignModal}>
+        코드 재반영
+      </button>
+    {/if}
+  </div>
   {/if}
   {/if}
 
@@ -1354,7 +1423,7 @@
       {/if}
     </div>
     {#if !isChildProduct && !tabsFilter}
-    <button type="button" class="status-cta-btn" onclick={() => openCloneModal('add_inventory')}>빠른 재고 등록</button>
+    <button type="button" class="status-cta-btn" onclick={() => openCloneModal('add_inventory')}>상품 복제/재고 등록</button>
     {/if}
   </div>
 
@@ -2486,7 +2555,7 @@
             disabled={isCloning}
             aria-pressed={clonePartnerCode}
           >
-            제휴상품 품번 자동 생성
+            협력사 품번코드 선택 생성
           </button>
         </div>
         {/if}
@@ -2514,6 +2583,7 @@
                       {/each}
                     </span>
                   {/if}
+                  <span class="ccr-code">{item.code_preview}</span>
                 </button>
               {/each}
             </div>
@@ -2533,7 +2603,7 @@
             class="cta-btn cta-btn--wide"
             disabled={isCloning || cloneCount < 1 || (clonePartnerCode && !clonePartnerComboRowId)}
           >
-            {isCloning ? '등록 중...' : '재고 등록 실행'}
+            {isCloning ? '등록 중...' : cloneMode === 'new_product' ? '복제 등록 실행' : '재고 등록 실행'}
           </button>
         </form>
         <button type="button" class="clone-cancel-link" onclick={closeCloneModal} disabled={isCloning}>취소</button>
@@ -2542,6 +2612,72 @@
   </div>
 {/if}
 
+<!-- 코드 재반영 모달(2026-08-25) — 후발 중복 부모상품에서만 열림(product.hasOlderDuplicateCode) -->
+{#if showReassignModal}
+  <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
+  <div class="clone-modal-backdrop" onclick={closeReassignModal} role="presentation">
+    <div
+      class="clone-modal"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="reassign-modal-title"
+      onclick={(e) => e.stopPropagation()}
+    >
+      <div class="clone-modal-header">
+        <h3 id="reassign-modal-title" class="clone-modal-title">기준 품번 재할당</h3>
+        <button type="button" class="clone-modal-close" onclick={closeReassignModal} aria-label="닫기" disabled={isReassigning}>✕</button>
+      </div>
+      <div class="clone-modal-body">
+        <p class="clone-modal-desc">
+          "새 상품으로 복제"로 생성돼 원본과 기준 품번이 동일한 상품입니다.<br />
+          아래 조합코드 중 하나를 선택하면 이 상품의 기준 품번만 재할당됩니다(원본은 변경되지 않음).
+        </p>
+        {#if !product.categoryComboItems || product.categoryComboItems.length === 0}
+          <p class="clone-combo-empty">이 카테고리에 설정된 조합코드그룹이 없습니다.<br/>코드설정 &gt; 코드조합에서 그룹을 설정해주세요.</p>
+        {:else}
+          <div class="clone-combo-list" role="listbox" aria-label="재할당할 조합코드 선택">
+            {#each product.categoryComboItems as item (item.combo_row_id)}
+              <button
+                type="button"
+                class="clone-combo-row"
+                class:clone-combo-row--on={reassignComboRowId === item.combo_row_id}
+                onclick={() => (reassignComboRowId = item.combo_row_id)}
+                disabled={isReassigning}
+                role="option"
+                aria-selected={reassignComboRowId === item.combo_row_id}
+              >
+                <span class="ccr-group">{item.group_name}</span>
+                <span class="ccr-name">{item.combo_name ?? '(이름 없음)'}</span>
+                {#if item.combo_keywords && item.combo_keywords.length > 0}
+                  <span class="ccr-tags">
+                    {#each item.combo_keywords as kw}
+                      <span class="ccr-tag">{kw}</span>
+                    {/each}
+                  </span>
+                {/if}
+                <span class="ccr-code">{item.code_preview}</span>
+              </button>
+            {/each}
+          </div>
+        {/if}
+      </div>
+      <div class="clone-modal-actions clone-modal-actions--col">
+        <form method="POST" action="?/reassignCodeSeries" use:enhance={handleReassignCodeSeries} style="width:100%">
+          <input type="hidden" name="product_id" value={product.id} />
+          <input type="hidden" name="combo_row_id" value={reassignComboRowId} />
+          <button
+            type="submit"
+            class="cta-btn cta-btn--wide"
+            disabled={isReassigning || !reassignComboRowId}
+          >
+            {isReassigning ? '재할당 중...' : '선택한 코드로 재할당'}
+          </button>
+        </form>
+        <button type="button" class="clone-cancel-link" onclick={closeReassignModal} disabled={isReassigning}>취소</button>
+      </div>
+    </div>
+  </div>
+{/if}
 
 <!-- 이력 삭제 확인 모달 -->
 {#if historyConfirmDeleteId}
@@ -2652,6 +2788,8 @@
   }
   .ph-code-retry-btn:hover:not(:disabled) { background: var(--cs-purple); color: #fff; }
   .ph-code-retry-btn:disabled { opacity: 0.5; cursor: default; }
+  /* 코드 재반영(2026-08-17) — 기준 품번 값 우측 끝에 고정 배치 */
+  .ph-code-retry-btn--reapply { margin-left: auto; }
 
   /* ph-body: 썸네일 + 상품명·카피 + QR */
   .ph-body {
@@ -3724,6 +3862,19 @@
     border-radius: 4px;
     font: var(--text-pc-script-12);
     font-weight: 700;
+    white-space: nowrap;
+  }
+  /* 기준 코드품번 구조 미리보기 — /cms/codes .node-code-preview와 동일 스타일, 행 우측 끝 고정 */
+  .ccr-code {
+    flex-shrink: 0;
+    font: var(--text-pc-script-12);
+    font-weight: 700;
+    letter-spacing: 0.07em;
+    font-family: monospace;
+    color: var(--cs-text-dark);
+    background: var(--cs-surface-gray);
+    padding: 2px 8px;
+    border-radius: var(--radius-sm);
     white-space: nowrap;
   }
   .clone-options-row {

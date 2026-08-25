@@ -10,6 +10,7 @@
   import type { PageData } from './$types'
   import { csToast } from '$lib/utils/toast'
   import type { SelectedProductDetail } from '$lib/server/products/loadSelectedProductDetail'
+  import { baseCodeDisplay } from '$lib/utils/baseCodeDisplay'
 
   interface Props { data: PageData }
   let { data }: Props = $props()
@@ -181,40 +182,6 @@
     return price.toLocaleString('ko-KR') + '원'
   }
 
-  // QR-LABEL-2: '기준 품번'은 실제 채번된(재고로 카운트되는) 자식 품번과 혼동되면 안 되므로,
-  // 실제 저장값을 그대로 노출하지 않고 코드 구조 + 순번 '0'(자리수만큼 0 패딩)으로 재구성해 표시한다.
-  function baseCodeDisplay(rp: { product_code: string | null; code_series?: Record<string, unknown> | null }): string | null {
-    const cs = rp.code_series
-    if (cs) {
-      const prefix = (cs.prefix as string) || 'CS'
-      const catCode = (cs.category_code as string) || ''
-      const yearMonth = cs.year_month as string | undefined
-      const datePart = yearMonth && yearMonth !== 'nodate' && yearMonth !== 'all' ? yearMonth : ''
-      const seqDigits = (cs.seq_digits as number) ?? 3
-      const suffix = (cs.suffix as string) || ''
-      // 버그 수정(2026-08-16, Stephen 확정): 2단 계층(parent_seq_digits 존재)일 때 기본순번
-      // (순번1)은 부모 등록 시 이미 확정·불변으로 채번된 실제값(products.md §2-2 영구고정
-      // 정책)이라 마스킹할 이유가 없다 — 동일 카테고리 부모상품끼리 전부 "0000000"로 똑같이
-      // 보여 구분이 안 되던 문제 해소. 자식순번(순번2)은 재고 등록마다 새로 채번되는 값이라
-      // QR-LABEL-2 취지대로 계속 0-패딩 마스킹 유지.
-      const parentSeqDigits = cs.parent_seq_digits as number | undefined
-      const parentSeq = cs.parent_seq as number | undefined
-      const parentPart = parentSeqDigits
-        ? String(parentSeq ?? 0).padStart(parentSeqDigits, '0')
-        : ''
-      const seqPlaceholder = parentSeqDigits
-        ? parentPart + '0'.repeat(seqDigits)
-        : '0'.repeat(seqDigits)
-      return `${prefix}${catCode}${datePart}${seqPlaceholder}${suffix}`
-    }
-    if (rp.product_code) {
-      const seqDigits = 3
-      return rp.product_code.length > seqDigits
-        ? rp.product_code.slice(0, -seqDigits) + '0'.repeat(seqDigits)
-        : '0'.repeat(seqDigits)
-    }
-    return null
-  }
 
   function thumbUrl(imageUrls: string[]): string {
     const first = imageUrls[0]
@@ -326,8 +293,18 @@
   // 차단한다(등록은 성공했는데 매번 에러 토스트가 뜨는 원인이었음). 체크박스만 선택해두고, 실제
   // 인쇄창 열기는 이미 노출된 "선택 N개 QR 인쇄" 버튼의 직접 클릭에 맡긴다(그 클릭은 진짜 사용자
   // 제스처라 절대 차단되지 않음).
-  function handleInventoryCreated(ids: string[]) {
+  // REFRESH-STALE-1(2026-08-25): 다른 상품을 먼저 shallow-routing으로 조회한 뒤(카드 클릭,
+  // overrideDetail 경로) 그 화면에서 "빠른 재고 등록"을 실행하면, invalidateAll()이 진행되는
+  // 동안 activeSelectedId가 원래 load() 기준 상품(data.selectedId, 이 경우와 무관한 다른
+  // 상품에 멈춰 있을 수 있음)으로 잠시 되돌아가는 순간이 생긴다(콘솔 계측으로 직접 재현·확인).
+  // 그 결과 방금 재고를 등록한 상품이 아니라 엉뚱한 상품의 패널이 뜨고, 정작 등록한 상품의
+  // 재고 목록은 갱신되지 않는다(하단 선택 수량 배지만 정상 — selectedInvIds는 별도 상태라
+  // 영향 없음). expectedProductId(ProductDetailPanel이 폼 제출 "시작 시점"에 고정해 넘겨주는
+  // 값 — invalidateAll() 도중 재평가되는 reactive 참조가 아님)로 selectProduct()를 재호출해
+  // 선택 상태를 명시적으로 복구한다(이미 정확히 그 상품이 선택된 상태면 멱등이라 안전).
+  function handleInventoryCreated(ids: string[], expectedProductId: string) {
     selectedInvIds = new Set(ids)
+    selectProduct(expectedProductId)
   }
 
   async function printSelectedQR() {
@@ -466,13 +443,16 @@
   </div>
 
   <!-- 페이지네이션 상단 (검색 레이아웃과 카드목록 사이) -->
-  <CmsPagination
-    page={data.page}
-    totalPages={data.totalPages}
-    onpage={goToPage}
-    variant="top"
-    ariaLabel="상품 목록 페이지 탐색"
-  />
+  <div class="pagination-row">
+    <CmsPagination
+      page={data.page}
+      totalPages={data.totalPages}
+      onpage={goToPage}
+      variant="top"
+      ariaLabel="상품 목록 페이지 탐색"
+    />
+    <span class="count-badge">총 {data.totalCount ?? 0}건</span>
+  </div>
 
   <!-- 마스터-디테일 레이아웃 -->
   <div class="master-detail">
@@ -909,6 +889,28 @@
     transition: background 0.12s;
   }
   .cta-btn:hover { background: var(--cs-purple-hover); }
+
+  /* 페이지네이션 상단 행 — CmsPagination은 그대로 중앙정렬 유지, 총 수량 배지만 우측 끝에 배치 */
+  .pagination-row {
+    position: relative;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 44px;
+  }
+  .pagination-row .count-badge {
+    position: absolute;
+    right: 0;
+  }
+  /* CMS 표준 총 수량 배지 — /cms/reservation, /cms/rentals, /cms/customers/inquiry 등과 동일 패턴 */
+  .count-badge {
+    font: var(--text-pc-script-12);
+    color: var(--cs-text-mid);
+    background: var(--cs-surface-gray);
+    padding: 4px 10px;
+    border-radius: var(--radius-sm);
+    white-space: nowrap;
+  }
 
   /* 마스터-디테일 */
   .master-detail {

@@ -1,6 +1,168 @@
 # GSD_LOG.md — 크레이지샷 실행 이력
 # 형식: [YYYY-MM-DD HH:MM] 타입 | 타스크명 | 파일 | 소요 | 결과
 
+[2026-08-25] ⚡GSD | "빠른 재고 등록" 후 상세패널 다른상품으로 튀는 버그 — 최소수정 | GATE C: BOUNDARY
+  배경: "코드 재반영" 적용 부모상품에 "빠른 재고 등록" 실행 시, 하단 선택수량 배지는 정상인데
+    재고 목록이 "미등록"으로 뜨는 현상 보고. Claude Browser로 직접 재현(launch-selected-
+    element 세션 조건부 허용) → 실제로는 다른 상품 B의 패널로 튀는 게 진짜 증상이었음.
+  원인: PERF-6 shallow-routing(replaceState) 중 invalidateAll()이 진행되는 동안 page.state가
+    일시적으로 비워져 activeSelectedId가 원래 load() 기준 상품(B)으로 되돌아감 — 콘솔 계측으로
+    직접 확인.
+  실패 시도 2건(learnings 기록): data 참조 비교, afterNavigate tick 카운터 — 둘 다
+    effect_update_depth_exceeded 무한루프로 즉시 크래시, 원복.
+  파일: src/lib/components/cms/ProductDetailPanel.svelte (MODIFY — sourceProductId를
+    invalidateAll 이전 시점에 캡처), src/routes/cms/products/+page.svelte (MODIFY —
+    selectProduct 재호출로 선택 복구), .claude/harness/learnings/shallow_routing_
+    invalidateall_stale_2026-08-25.md (NEW)
+  검증: Claude Browser 새 탭에서 정확한 재현 시나리오로 재테스트 — 수정 후 정상 상품(8(on)/8,
+    재고 8건 전부)로 표시됨 확인. svelte-check 신규 에러 0건. vitest 관련 스위트 30/30 +
+    전체 823/826(무관 실패 3건 별도).
+
+[2026-08-25] 🔴CRITICAL | "코드 재반영" 기능 재설계 — 실제 재할당 RPC + 후발중복 조건 + 모달 UI | GATE C: CRITICAL
+  배경: 2026-08-17에 만든 "코드 재반영" 버튼이 실사용 중 두 가지 결함으로 드러남 —
+    ① generate_product_code RPC의 "이미 code_series 있으면 NULL 반환" 가드로 인해
+    code_series가 있는 상품엔 구조적으로 항상 no-op(§2-2 영구고정 정책의 부작용).
+    ② 버튼이 원본/복제본 양쪽 모두에 노출돼 어느 쪽을 눌러야 하는지 혼란. Stage DB
+    직접 조회로 두 스크린샷이 실제로 서로 다른 두 부모상품(1단 계층 code_series 완전
+    동일)임을 확인 — "동일 코드 표시" 자체는 §2-3 확정 정책대로 정상 동작이었음.
+  GATE B: "재고 0개 부모상품만 재할당 허용"으로 Stephen 확인(AskUserQuestion) — RPC
+    guard 및 서버 액션 전체 설계 기준.
+  파일: supabase/migrations/20260825000341_341_reassign_product_code_series.sql (NEW),
+    src/lib/server/products/loadSelectedProductDetail.ts (MODIFY),
+    src/routes/cms/products/+page.server.ts (MODIFY),
+    src/lib/components/cms/ProductDetailPanel.svelte (MODIFY),
+    .claude/rules/products.md (MODIFY — §2-11 신설)
+  구현: 신규 RPC reassign_product_code_series — generate_product_code(7-param,#222)의
+    로직 재사용하되 기존-존재 가드 없이 항상 덮어쓰고, 활성 자식 1개라도 있으면
+    has_existing_inventory로 차단(기존 함수는 무수정, 완전 분리). 선택된 상품이 부모+
+    1단계층이고 자신보다 먼저 생성된 동일 구조 부모가 있을 때만 hasOlderDuplicateCode
+    계산(JSONB ->> PostgREST 필터는 미검증 패턴이라 회피, JS 비교로 안전하게 처리).
+    reassignCodeSeries 액션은 manager 이상 게이트(QR-CASE-2 선례) + combo_row_id →
+    buildComboCategoryCode/getRootCode(기존 cloneProduct partnerCode 분기 패턴 재사용)
+    → RPC 호출. UI는 hasOlderDuplicateCode일 때만 버튼 노출, 클릭 시 카테고리 조합코드
+    모달(.clone-combo-list 재사용) 오픈 → 선택 시 2단 계층이면 즉시 원자 채번.
+  검증: Stage DB 트랜잭션 4종 테스트(자식있음 차단/자식자체 차단/1단 성공/2단 원자채번)
+    전부 PASS 후 ROLLBACK. Migration #341 Stage+Production 양쪽 적용 확인. svelte-check
+    대상 4파일 신규 에러 0건. vitest 회귀 7파일 30/30 GREEN.
+
+[2026-08-17] ⚡GSD | 복제된 부모상품 "기준 품번" 우측 "코드 재반영" 버튼 노출 (고아 부모상품 재사용, 2026-08-25 재설계로 대체됨) | GATE C: BOUNDARY
+  배경: Stephen이 "새 상품으로 복제+품번(분류코드) 자동 생성"으로 생성된 부모상품 패널 상단
+    "기준 품번" 코드 우측에 "코드 재반영" 버튼을 노출해달라고 요청 — 기존에 "고아 부모상품"
+    (§8-F, code_series 없는 부모) 문제 해소를 위해 이미 만들어둔 자가복구 장치를 그대로
+    재사용해, 관리자가 클릭 한 번으로 "이 부모의 기준 품번이 이미 정상 설정돼 동일 복제
+    상품과 코드 충돌이 없음"을 확인할 수 있게 하는 것이 목적(신규 로직 없음, 노출만 추가).
+  파일: src/lib/utils/baseCodeDisplay.ts (NEW — +page.svelte 로컬 함수를 공유 유틸로 추출),
+    src/routes/cms/products/+page.svelte (MODIFY — 로컬 baseCodeDisplay 제거, 공유 유틸 import),
+    src/lib/components/cms/ProductDetailPanel.svelte (MODIFY)
+  구현: product.code_series가 있는 부모(정상 설정된 케이스)에 한해 "기준 품번" 값(공유
+    baseCodeDisplay() 재사용) + "코드 재반영" 버튼을 새 {:else if} 분기로 노출. 버튼은
+    기존 retryCodeSeries() 클라이언트 함수 + +page.server.ts의 retryCodeSeries 서버 액션을
+    그대로 재사용(수정 없음) — 그 액션은 이미 `if (parent.code_series) return { success:
+    true, alreadySet: true }` 가드가 있어 기존 code_series를 절대 덮어쓰지 않는다
+    (products.md §2-2 영구고정 정책과 충돌 없음, 순수 확인용 no-op). 클라이언트만
+    `alreadySet` 플래그를 분기해 "이미 정상적으로 설정된 기준 품번입니다 — 중복·충돌
+    없음을 확인했습니다." 토스트를 추가로 표시하도록 개선. CSS는 기존
+    .ph-code-row/.ph-code-label/.ph-code-val/.ph-code-retry-btn 재사용 +
+    우측정렬용 .ph-code-retry-btn--reapply(margin-left:auto) 1개만 신규 추가.
+  검증: npx svelte-check — 이 변경으로 인한 신규 에러 0건(baseCodeDisplay 파라미터 타입을
+    ProductDetail.product_code?: string|null과 정합되도록 optional로 조정해 1건 해소,
+    잔존 1건은 vite.config.ts 사전 존재 무관 에러). vitest 회귀 스위트 7파일 30/30 GREEN
+    (productClone/cloneProductPartnerCodeComboMerge/productCodeTierTwo/productCodeComboMerge/
+    productNew/productComboRequired/productCodeInventoryTierTwo).
+  범위: 서버 액션(+page.server.ts) 변경 없음 — 기존 retryCodeSeries 그대로 재사용.
+
+[2026-08-17] ⚡GSD | "협력사" 조합코드 목록에 기준 코드품번 미리보기 노출 (후속) | GATE C: BOUNDARY
+  배경: Stephen이 "새 상품으로 복제" 협력사 조합코드 목록(개인상품·단순상품·구성상품코드·
+    부속품코드) 카드에 기준 코드품번(품번 구조 정보)을 우측 끝에 노출해달라고 요청.
+  파일: src/routes/cms/products/+page.server.ts (MODIFY),
+    src/lib/components/cms/ProductDetailPanel.svelte (MODIFY)
+  구현: loadProductsMetadata()에서 code_mapping_items를 taxonomy_code_id/date_option/
+    max_sequence/parent_max_sequence까지 확장 조회, product_category_codes 배치조회 +
+    cms_settings.product_code_format 전역기본값으로 buildPartnerCodePreview() 신규 함수 —
+    기존 buildComboCategoryCode()/getRootCode() 재사용해 /cms/codes의 buildComboPreview와
+    동일 규칙(같은 설정 키, 동일 0-패딩 자릿수)으로 미리보기 문자열 계산. partnerComboItems에
+    code_preview 필드 추가, 클라이언트는 .clone-combo-row 우측 끝에 .ccr-code span으로 표시
+    (스타일은 /cms/codes .node-code-preview와 동일 톤 재사용, 신규 패턴 없음).
+  검증: svelte-check 도중 getRootCode() 반환타입에 code_rule 없어 발생한 타입에러 1건 즉시
+    발견·수정, 최종 신규 에러 0건(1 error/382 warnings 동일). 관련 vitest 없음(신규 함수가
+    cloneProduct 액션과 분리돼 회귀 대상 자체 없음) — 상품코드 회귀 스위트 30/30 재확인.
+  QA(@sp3-qa-agent) 검수: 캐시범위·N+1 없음·타입패턴 정상 확인, §2-2 위반 없음, 13/13 GREEN
+    — 블로킹 0건. 비블로킹 참고 2건(ymd 도달불가 코드, 설정키 서술 정정)만 후속 권고.
+  GATE C: BOUNDARY — 완료.
+
+[2026-08-17] ⚡GSD | 복제 모달 "협력사" 토글 명칭 개선 (후속) | GATE C: ROUTINE
+  배경: Stephen이 "제휴상품 품번 자동 생성" 토글 라벨을 코드설정/코드조합의 "협력사
+    전용코드" 목록을 선택하는 실제 동작에 맞게 정합해달라고 요청.
+  파일: src/lib/components/cms/ProductDetailPanel.svelte (MODIFY — 2489행 버튼 라벨만)
+  수정: "제휴상품 품번 자동 생성" → "협력사 품번코드 선택 생성". 로직·콤보 목록 소스
+    무변경, 라벨만 교체.
+  검증: 다른 참조 0건, npx svelte-check 신규 에러 0건(1 error/382 warnings 동일).
+  GATE C: ROUTINE — 자동 완료.
+
+[2026-08-17] ⚡GSD | 복제 모달 진입 버튼 명칭 개선 (후속) | GATE C: ROUTINE
+  배경: "빠른 재고 등록" 단일 진입 버튼이 실제로는 "새 상품으로 복제"(신규 부모상품+새 품번
+    계열)까지 전환 가능한 모달을 여는데, 명칭이 재고추가로만 오인되게 돼 있어 이번 세션에서
+    Stephen·AI 둘 다 혼동 발생. Stephen이 원인 확인 후 라벨 수정 지시.
+  파일: src/lib/components/cms/ProductDetailPanel.svelte (MODIFY — 1357행 버튼 라벨만)
+  수정: "빠른 재고 등록" → "상품 복제/재고 등록"(두 기능 모두 포괄). 기본 진입 모드(add_
+    inventory)는 그대로 유지.
+  검증: npx svelte-check 신규 에러 0건(1 error/382 warnings, 직전과 동일). 관련 테스트는
+    문자열을 assert하지 않아 회귀 없음.
+  GATE C: ROUTINE — 자동 완료.
+
+[2026-08-17] ⚡GSD | "협력사 전용코드" 복제 100% 실패 CRITICAL 버그 수정 (후속) | GATE C: BOUNDARY
+  배경: Stephen이 "협력사" 조합코드(개인상품·단순상품·구성상품코드·부속품코드) 선택 후 복제
+    등록 실행 시 매번 "선택한 조합코드가 이 상품의 카테고리와 맞지 않습니다" 경고만 뜨고
+    생성이 안 된다고 보고. DB 직접 조회로 확인 — 활성 product_category_codes 25건 전부
+    product_category=null이라 BND-PARTNERCODE-1 검증(source.category의 depth=1 자식인지
+    확인)이 구조적으로 100% 항상 실패하는 상태였음(어떤 협력사코드를 골라도 fail(400)).
+  파일: src/routes/cms/products/+page.server.ts (MODIFY),
+    src/__tests__/server/cloneProductPartnerCodeComboMerge.test.ts (MODIFY)
+  수정: mainCode/subCode 카테고리 일치성 검증 2단계를 완전 제거, new/+page.server.ts(이미
+    GATE E 통과)와 동일하게 선택된 콤보의 allCodes를 그대로 신뢰해 합산 채번하도록 단순화.
+    남은 차단 조건은 "콤보 코드 전부 비활성/삭제"뿐 — 에러 문구도 실제 원인에 맞게 교체.
+  검증: 관련 테스트 EC-2 재정의(유효코드없음 케이스 + "카테고리 무관 코드도 이제 정상 채번"
+    회귀 테스트 신규) 포함 7개 파일 30/30 GREEN. svelte-check 신규 에러 0건(1 error는 무관).
+  QA(@sp3-qa-agent) 검수: stage DB 재조회로 전제 사실 재확인(25건 전부 product_category=null),
+    new/+page.server.ts와 동일 패턴 확인, 30/30 GREEN, svelte-check 신규 0건 — 블로킹 0건.
+  GATE C: BOUNDARY — 완료.
+
+[2026-08-17] ⚡GSD | "새 상품으로 복제" 절대기준 재검증 + 버튼 라벨 오표기 수정 (후속) | GATE C: ROUTINE
+  배경: Stephen이 직전 복제 채번 수정을 절대기준으로 재확인 요청(①품번자동생성 ②협력사
+    전용코드 두 토글 모두 부모순번 유무에 따른 채번 활성/비활성 검증) + 버튼 라벨
+    "재고 등록 실행"→"복제 등록 실행" 전환 요청.
+  재확인 결과: ①(autoCode 분기)은 직전 수정으로 이미 충족(재수정 불필요). ②(partnerCode
+    분기)는 이번 세션 이전부터 이미 올바르게 구현돼 있었고 기존 EC-4 테스트가 이미 커버 중
+    임을 확인(신규 수정·테스트 불필요) — 단, ②의 "부모순번"은 원본이 아니라 선택한 협력사
+    콤보 자체의 2단 설정을 따르는 게 의도된 설계임을 명문화.
+  파일: src/lib/components/cms/ProductDetailPanel.svelte (MODIFY — 2536행 버튼 라벨만)
+  수정: cloneMode==='new_product'일 때만 "복제 등록 실행", 그 외(add_inventory)는 기존대로
+    "재고 등록 실행" 표시하도록 조건분기 추가.
+  검증: npx svelte-check 신규 에러 0건(1 error/382 warnings, 직전 세션과 동일). 이 컴포넌트
+    대상 vitest 없음 — 순수 UI 텍스트라 회귀 대상 자체 없음.
+  GATE C: ROUTINE — 자동 완료.
+
+[2026-08-17] ⚡GSD | "새 상품으로 복제" 원본 code_series 계승 버그 수정 | GATE C: BOUNDARY
+  배경: Stephen이 "부모순번 있는 상품 복제 시 부모순번도 다음 순번으로 채번돼야 한다"(원본
+    CSPHSAM0040000 → 복제본 CSPHSAM0050000) 요청. 원인: cloneProduct new_product 모드의
+    "협력사 전용코드 미선택" 기본(autoCode) 경로가 원본 code_series를 전혀 참조 안 하고
+    매번 단순 2-param 카테고리 자동 폴백만 호출 — 원본이 콤보 기반 category_code(예:
+    "PHSAM")·2단 계층이어도 복제본은 이를 계승 못 하고 다른/미확인 코드로 채번됨.
+  파일: src/routes/cms/products/+page.server.ts (MODIFY), productClone.test.ts (MODIFY)
+  수정: 원본 code_series 존재 시 파트너 분기와 동일한 7-param 호출로 전환 —
+    p_category_code_override=원본 category_code, p_parent_max_sequence=원본 값(2단 계층이면
+    product_parent_sequences가 자동으로 다음 순번 채번), p_max_sequence/p_date_option도 원본
+    파생. 원본에 code_series 없는 레거시는 기존 3-param 폴백 유지(회귀 없음).
+  검증: 신규 테스트 2건(7-param 정확 호출 검증 + 레거시 회귀) 포함 관련 7개 파일 29/29 GREEN.
+    svelte-check 신규 에러 0건(1 error는 무관 vite.config.ts).
+  재검증(요청 3번): generate_product_code(순번1, product_parent_sequences 원자증가)·
+    generate_inventory_product_code(순번2, 부모 parent_seq 재사용) 로직 자체는 마이그레이션
+    코드 재대조로 정상 재확인 — 이번 버그는 "복제 시 그 정상 로직을 아예 안 타던" 별개
+    호출누락이었음.
+  QA(@sp3-qa-agent) 검수: §2-2/§2-3 위반 없음, 파트너분기·add_inventory 완전 격리 확인,
+    mock 조작 없음, 관련 7개 파일 29/29 GREEN, svelte-check 신규 0건 — 블로킹 0건, GATE E 통과.
+  GATE C: BOUNDARY — 완료.
+
 [2026-08-24] 🟡 BOUNDARY | 장바구니 동의문구 '이용안내' 링크화 + 이용안내 모달 신설 |
 cart/+page.server.ts, cart/+page.svelte | ✅ 완료
   Stephen이 launch-selected-element로 footer-terms-text를 직접 선택해 지시. "이용안내"
