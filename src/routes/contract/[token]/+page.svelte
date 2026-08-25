@@ -8,6 +8,7 @@
   import { renderTiptapDocToHtml } from '$lib/utils/tiptapRender'
   import { renderSpreadsheetToHtml } from '$lib/utils/spreadsheetRender'
   import { browser } from '$app/environment'
+  import { csToast } from '$lib/utils/toast'
 
   interface Props { data: PageData }
   let { data }: Props = $props()
@@ -211,9 +212,24 @@
         body:    JSON.stringify({ userCouponId: selectedCouponId, pointsUsed }),
       })
       if (res.ok) {
+        const body = await res.json().catch(() => ({})) as { couponError?: string | null }
+        if (body.couponError) {
+          const couponErrMsg: Record<string, string> = {
+            MIN_AMOUNT_NOT_MET:   '주문 금액이 쿠폰 최소 사용 금액에 미달해 쿠폰이 적용되지 않았습니다.',
+            MIN_DAYS_NOT_MET:     '최소 대여 기간 조건을 충족하지 않아 쿠폰이 적용되지 않았습니다.',
+            WALK_IN_ONLY:         '방문 수령 전용 쿠폰입니다. 쿠폰이 적용되지 않았습니다.',
+            FIRST_RENTAL_ONLY:    '첫 대여 전용 쿠폰입니다. 쿠폰이 적용되지 않았습니다.',
+            STUDENT_ONLY:         '학생 전용 쿠폰입니다. 쿠폰이 적용되지 않았습니다.',
+            SUBSCRIPTION_ONLY:    '구독자 전용 쿠폰입니다. 쿠폰이 적용되지 않았습니다.',
+            ORDER_CONTEXT_REQUIRED: '쿠폰을 적용할 수 없는 상태입니다. 고객센터에 문의해 주세요.',
+            ALREADY_USED:         '이미 사용된 쿠폰입니다.',
+            COUPON_EXPIRED:       '쿠폰 유효기간이 만료되었습니다.',
+          }
+          csToast.warning(couponErrMsg[body.couponError] ?? '쿠폰이 적용되지 않았습니다.')
+        }
         window.location.href = '/contract/complete'
       } else {
-        const body = await res.json().catch(() => ({}))
+        const body = await res.json().catch(() => ({})) as { error?: string }
         payError = body.error ?? '결제 처리 중 오류가 발생했습니다.'
       }
     } catch {

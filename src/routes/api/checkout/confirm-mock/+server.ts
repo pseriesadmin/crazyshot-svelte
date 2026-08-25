@@ -99,6 +99,7 @@ export const POST: RequestHandler = async ({ locals, request }) => {
   //  동일 쿠폰을 무제한 재사용할 수 있었음 — 2026-08-15 세션에서 발견·플래그된 결함 수정)
   let couponUsed = false
   let couponRedeemedCode: string | null = null
+  let couponError: string | null = null
   if (userCouponId && confirmedReservations.length > 0) {
     const { data: useResult, error: useErr } = await admin.rpc('use_coupon', {
       p_user_id: session.user.id,
@@ -115,7 +116,10 @@ export const POST: RequestHandler = async ({ locals, request }) => {
       couponUsed = result?.ok === true
       // sequenced 모드 쿠폰만 값이 있음(migration 296) — manual 모드는 null, 기존 동작과 동일
       couponRedeemedCode = result?.redeemed_code ?? null
-      if (!couponUsed) console.error('[checkout/confirm-mock] use_coupon 거부:', result?.error)
+      if (!couponUsed) {
+        couponError = result?.error ?? null
+        console.error('[checkout/confirm-mock] use_coupon 거부:', couponError)
+      }
     }
   }
 
@@ -156,5 +160,6 @@ export const POST: RequestHandler = async ({ locals, request }) => {
     pointsOk,
     couponUsed,
     couponRedeemedCode,
+    couponError,
   })
 }

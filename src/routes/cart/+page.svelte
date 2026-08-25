@@ -5,9 +5,11 @@
   import type { PageData } from './$types';
   import SubGnb from '$lib/components/common/SubGnb.svelte';
   import CalendarGrid from '$lib/components/common/CalendarGrid.svelte';
+  import PostcodeSearchButton from '$lib/components/common/PostcodeSearchButton.svelte';
   import { supabase } from '$lib/services/supabase';
   import { csToast } from '$lib/utils/toast';
   import { isLockerHour } from '$lib/utils/lockerTimeRange';
+  import { calcRoundTripFee, calcReturnFee, type ShippingFeeItem } from '$lib/utils/cartShippingFee';
 
   function readInputValue(event: { currentTarget: { value: string } }): string {
     return event.currentTarget.value;
@@ -43,6 +45,7 @@
     phone: string;
     addr: string;
     addrDetail: string;
+    postalCode: string;
     notes: string;
     memberCheck: boolean;
     memberCheck2: boolean;
@@ -79,7 +82,7 @@
   }
 
   function defaultForm(): FormState {
-    return { name: '', email: '', phone: '', addr: '', addrDetail: '', notes: '', memberCheck: false, memberCheck2: false };
+    return { name: '', email: '', phone: '', addr: '', addrDetail: '', postalCode: '', notes: '', memberCheck: false, memberCheck2: false };
   }
 
   // ── 카트 라인아이템 UI 상태 (무제한 — 카드1/카드2 고정 구조 폐기 2026-07-27)
@@ -289,6 +292,7 @@
       phone: bulkForm.phone || itemForm.phone,
       addr: bulkForm.addr || itemForm.addr,
       addrDetail: bulkForm.addrDetail || itemForm.addrDetail,
+      postalCode: bulkForm.postalCode || itemForm.postalCode,
       notes: bulkForm.notes || itemForm.notes,
       memberCheck: bulkForm.memberCheck || itemForm.memberCheck,
       memberCheck2: bulkForm.memberCheck2 || itemForm.memberCheck2,
@@ -330,7 +334,7 @@
 
   // ── 서버 데이터 추출 (PageData는 +page.ts 기준이므로 server 필드는 캐스트 필요)
   // datesSet 등 canProceed 조건이 라인아이템 목록을 참조하므로 Footer 섹션보다 앞에 선언
-  type ProductRow = { id: string; name: string; category: string; brand: string | null; slug: string; image_urls: string[]; is_active: boolean }
+  type ProductRow = { id: string; name: string; category: string; brand: string | null; slug: string; image_urls: string[]; is_active: boolean; shipping_round_trip?: boolean | null; shipping_delivery?: boolean | null; shipping_return?: boolean | null }
   type UserCouponExt = { id: string; coupon_id: string; coupons: { id: string; code: string; discount_type: string; discount_value: number; description: string | null; valid_until: string } | null }
   type PriceRuleExt = { price12h: number | null; price24h: number | null; deposit: number | null }
   type CartLineItemOption = { optionProductId: string | null; name: string; qty: number; unitPrice: number; imageUrl: string | null }
@@ -396,6 +400,24 @@
     if (!sentinel) return
     const observer = new IntersectionObserver(
       ([entry]) => { footerVisible = entry.isIntersecting },
+      { threshold: 0 }
+    )
+    observer.observe(sentinel)
+    return () => observer.disconnect()
+  })
+
+  // 금액(약정 요금) 레이아웃 진입 감지 — 대여설정(수령·반납 날짜·시간)이 미완성인 채로
+  // 금액 영역까지 스크롤하면 경고 토스트로 안내(footerSentinel과 동일 IntersectionObserver 패턴)
+  let priceSectionSentinel = $state<HTMLDivElement | null>(null)
+  $effect(() => {
+    const sentinel = priceSectionSentinel
+    if (!sentinel) return
+    const observer = new IntersectionObserver(
+      ([entry]) => {
+        if (entry.isIntersecting && hasItems && !datesSet) {
+          csToast.warning('대여예약정보를 모두 확인해 주세요.')
+        }
+      },
       { threshold: 0 }
     )
     observer.observe(sentinel)
@@ -470,9 +492,10 @@
   // 멤버십 할인 — 등급 할인율을 체크된 소계에 적용
   const otMembershipDiscount = $derived(Math.round(otSubtotal * otDiscountRate / 100))
 
-  // 배송비: DB rental_method_options.fee_amount 우선, 없으면 하드코딩 폴백
   // @ts-expect-error — deliveryOptions: +page.server.ts 제공
   const sdDeliveryOpts = $derived((data.deliveryOptions as Array<{ method_key: string; name: string; fee_amount: number; is_free_for_top_grade: boolean; is_bulk_delivery: boolean }> | undefined) ?? [])
+
+  // 배송비: DB rental_method_options.fee_amount 우선, 없으면 하드코딩 폴백
   function deliveryFee(method: DeliveryMethod, grade: string): number {
     if (sdDeliveryOpts.length) {
       const opt = sdDeliveryOpts.find(o => o.method_key === method)
@@ -480,6 +503,31 @@
     }
     return method === 'crazydelivery' && grade !== 'CRAZY' ? 3500 : 0
   }
+
+  // 왕복요금/반납요금: CMS "/cms/set/rental > 배송 설정"(rental_shipping_settings) —
+  // 위 방식별 fee_amount와는 별개 항목이라 가산한다(대체 금지, 핵심제약). Q5 확정(2026-08-25):
+  // 상품(예약)마다 반복 부과하지 않고 체크된 카트 전체 기준으로 각각 최대 1회만 부과 —
+  // 순수 함수(calcRoundTripFee/calcReturnFee, $lib/utils/cartShippingFee)에 위임.
+  const sdShippingSettings = $derived((data.shippingSettings as {
+    enable_round_trip: boolean; round_trip_fee: number | null
+    enable_delivery: boolean;   delivery_fee: number | null
+    enable_return: boolean;     return_fee: number | null
+    shipping_guide: string | null
+  } | null | undefined) ?? null)
+
+  const checkedShippingItems = $derived<ShippingFeeItem[]>(
+    itemsState
+      .map((it, i) => ({ it, product: effectiveLineItems[i]?.product }))
+      .filter(({ it }) => !it.deleted && it.checked)
+      .map(({ it, product }) => ({
+        pickupIsDelivery: isDeliveryLocked(it.opts.rentalMethod),
+        returnIsDelivery: isDeliveryLocked(it.opts.returnMethod),
+        shipping_round_trip: (product as ProductRow & { shipping_round_trip?: boolean | null } | undefined)?.shipping_round_trip ?? true,
+        shipping_return: (product as ProductRow & { shipping_return?: boolean | null } | undefined)?.shipping_return ?? true,
+      }))
+  )
+  const otRoundTripFee = $derived(calcRoundTripFee(sdShippingSettings, checkedShippingItems))
+  const otReturnFee = $derived(calcReturnFee(sdShippingSettings, checkedShippingItems))
 
   // 수령·반납 방식 DB 저장 (hold 예약에만)
   type RpcFn = (name: string, args: Record<string, unknown>) => Promise<unknown>
@@ -562,10 +610,14 @@
   );
   const otDeliveryFee = $derived(
     itemsState.reduce((sum, it) => sum + ((it.deleted || !it.checked) ? 0 : deliveryFee(it.opts.rentalMethod, otGrade)), 0)
+    + otRoundTripFee + otReturnFee
   )
 
   // 택배 휴무일 캘린더 제어(2026-08-24) — 마스터 토글 OFF면 서버가 이미 빈 배열을 내려줌
-  const courierClosedSet = $derived(new Set<string>((data.courierClosedDates as string[] | undefined) ?? []))
+  // date → reason(사유) 매핑(2026-08-25) — 경고 토스트에 CMS 등록 사유를 그대로 노출하기 위함
+  const courierClosedMap = $derived(new Map<string, string>(
+    ((data.courierClosedDates as { date: string; reason: string }[] | undefined) ?? []).map((h) => [h.date, h.reason])
+  ))
 
   // 방문대여 지점 — 카트 상품의 allowed_pickup_ids 기준으로 pickup_points 필터링(deliveryTabs와 동일 원칙)
   interface PickupPointRow { id: string; name: string; address: string; phone: string | null }
@@ -604,6 +656,25 @@
   // NOT NULL이라 항상 값이 있어 판단 기준에서 제외(있으나마나 늘 true라 무의미)
   const sdHasUserProfileInfo = $derived<boolean>(!!(sdUserProfileInfo?.name || sdUserProfileInfo?.phone))
 
+  // 배송가능 주소 사전검증 (비차단 — fail-soft, 경고 toast만)
+  async function validateDeliveryAddress(address: string, postalCode: string, methodKey: string): Promise<void> {
+    if (!address || !postalCode) return
+    try {
+      const res = await fetch('/api/cart/validate-delivery-address', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ address, postalCode, methodKey }),
+      })
+      if (!res.ok) return
+      const data: { valid?: boolean } = await res.json()
+      if (data.valid === false) {
+        csToast.warning('현재 배송이 어려운 지역입니다. 배송 가능 여부를 미리 확인해 주세요.')
+      }
+    } catch {
+      // 네트워크 실패 → 무시 (비차단)
+    }
+  }
+
   // 쿠폰 할인 합산
   const otCouponDiscount = $derived(
     sdCoupons
@@ -616,14 +687,16 @@
       }, 0)
   )
 
-  // 할인 후 금액 (VAT 부과 기준)
+  // 할인 후 금액 (부가세 포함가 — 상품 단가 자체에 이미 VAT가 포함돼 있음)
   const otNetBeforeVat = $derived(otSubtotal - otMembershipDiscount)
 
-  // VAT 10%
-  const otVat = $derived(Math.round(otNetBeforeVat * 0.1))
+  // 2026-08-25: 상품 가격이 부가세 포함가라 별도로 10%를 더해서는 안 됨(이중과세) —
+  // 포함가에서 역산해 "얼마가 부가세였는지"만 안내용으로 표시(합계 계산에는 더하지 않음)
+  const otVat = $derived(Math.round(otNetBeforeVat - otNetBeforeVat / 1.1))
 
-  // 포인트 사용 최대값 (보유 포인트 & 결제 금액 중 작은 값)
-  const otMaxPoints = $derived(Math.min(sdUserPoints, Math.max(0, otNetBeforeVat + otVat + otDeliveryFee - otCouponDiscount)))
+  // 포인트 사용 최대값 (보유 포인트 & 결제 금액 중 작은 값) — otVat은 포함가 내역 표시용일
+  // 뿐 별도 가산 항목이 아니므로 더하지 않음
+  const otMaxPoints = $derived(Math.min(sdUserPoints, Math.max(0, otNetBeforeVat + otDeliveryFee - otCouponDiscount)))
 
   // 2026-08-19(정합성 재검수): 포인트 입력 후 쿠폰을 추가/변경하거나 상품·기간을 바꿔
   // otMaxPoints가 줄어들면(예: 쿠폰 적용으로 결제 잔액이 포인트 입력값보다 작아짐) 기존엔
@@ -634,8 +707,8 @@
     if (otPointsUsed > otMaxPoints) otPointsUsed = otMaxPoints
   })
 
-  // 합계 (VAT + 배송비 + 쿠폰 할인 - 포인트 사용)
-  const otTotal = $derived(Math.max(0, otNetBeforeVat + otVat + otDeliveryFee - otCouponDiscount - otPointsUsed))
+  // 합계 (배송비 + 쿠폰 할인 - 포인트 사용) — otNetBeforeVat 자체가 이미 부가세 포함가라 otVat을 더하지 않음
+  const otTotal = $derived(Math.max(0, otNetBeforeVat + otDeliveryFee - otCouponDiscount - otPointsUsed))
 
   // 보증금 (PRD.1.2.2.1.11) — 체크된(선택된) 상품만 합산
   const otDeposit = $derived(
@@ -664,6 +737,9 @@
   const otTotalDays = $derived(
     itemsState.reduce((sum, it) => sum + ((it.deleted || !it.checked) ? 0 : rentalDays(it.rentalDate, it.returnDate)), 0)
   )
+  // 대여기간(수령/반납일)이 아직 확정되지 않은 상태에서 확정 금액인 것처럼 노출되던 결함 수정
+  // — "총 대여기간" 행의 미선택 판정 기준(otTotalDays)과 동일 조건으로 금액 표시도 함께 게이팅
+  const pricingReady = $derived(otTotalDays > 0)
 
   function fmtKrw(n: number): string {
     return n === 0 ? '0' : n.toLocaleString('ko-KR')
@@ -791,7 +867,9 @@
                   label: couponLabel,
                   days: daysUntilExpiry(c.valid_until),
                   checked: otSelectedCouponIds.has(uc.id),
+                  disabled: !pricingReady,
                   onToggle: () => {
+                    if (!pricingReady) return
                     // 중복 쿠폰 적용 불가 — 단일 선택만 허용(계약서명 페이지와 동일 정책)
                     otSelectedCouponIds = otSelectedCouponIds.has(uc.id) ? new Set() : new Set([uc.id])
                   },
@@ -809,6 +887,7 @@
                 min="0"
                 max={otMaxPoints}
                 value={otPointsUsed}
+                disabled={!pricingReady}
                 oninput={(e) => {
                   const v = Math.min(otMaxPoints, Math.max(0, parseInt((e.target as HTMLInputElement).value) || 0))
                   otPointsUsed = v
@@ -817,11 +896,14 @@
               <button
                 type="button"
                 class="points-all-btn"
-                disabled={otMaxPoints === 0}
+                disabled={!pricingReady || otMaxPoints === 0}
                 onclick={() => { otPointsUsed = otMaxPoints }}
               >모두 사용</button>
             </div>
           </div>
+
+          <!-- 대여설정 미완성 상태에서 금액 영역 진입 감지용 센티널 -->
+          <div bind:this={priceSectionSentinel} class="price-section-sentinel" aria-hidden="true"></div>
 
           <!-- 약정요금 섹션 (gray bg) -->
           <div class="total-gray-section">
@@ -837,23 +919,25 @@
                   {/if}
                 </div>
               </div>
-              {@render PriceRow({ label: '대여요금', value: fmtKrw(otSubtotal) })}
-              {#if otMembershipDiscount > 0}
+              {@render PriceRow({ label: '대여요금', value: fmtKrw(pricingReady ? otSubtotal : 0) })}
+              {#if pricingReady && otMembershipDiscount > 0}
                 {@render PriceRow({ label: `멤버십 할인 (${otDiscountRate}%)`, value: `-${fmtKrw(otMembershipDiscount)}` })}
               {/if}
-              {#if otCouponDiscount > 0}
+              {#if pricingReady && otCouponDiscount > 0}
                 {@render PriceRow({ label: '쿠폰 할인', value: `-${fmtKrw(otCouponDiscount)}` })}
               {/if}
-              {@render PriceRow({ label: '배송요금', value: otDeliveryFee > 0 ? fmtKrw(otDeliveryFee) : '무료' })}
-              {@render PriceRow({ label: '부가세 (10%)', value: fmtKrw(otVat) })}
-              {#if otPointsUsed > 0}
+              {@render PriceRow({ label: '배송요금', value: pricingReady && otDeliveryFee > 0 ? fmtKrw(otDeliveryFee) : (pricingReady ? '무료' : fmtKrw(0)) })}
+              {@render PriceRow({ label: '부가세 (10%, 포함)', value: `(${fmtKrw(pricingReady ? otVat : 0)}원)`, raw: true })}
+              {#if pricingReady && otPointsUsed > 0}
                 {@render PriceRow({ label: '포인트 사용', value: `-${fmtKrw(otPointsUsed)}` })}
               {/if}
               <div class="price-divider"></div>
-              {@render PriceRow({ label: '합계요금', value: fmtKrw(otTotal), large: true })}
+              {@render PriceRow({ label: '합계요금', value: fmtKrw(pricingReady ? otTotal : 0), large: true })}
               <div class="points-row">
                 <span class="points-label">적립 예정 포인트</span>
-                <div class="points-value"><span class="points-num">{fmtKrw(otEarnPoints)}</span><span class="points-unit">p</span></div>
+                <div class="points-value">
+                  <span class="points-num">{fmtKrw(pricingReady ? otEarnPoints : 0)}</span><span class="points-unit">p</span>
+                </div>
               </div>
             </div>
           </div>
@@ -876,14 +960,14 @@
           <div class="total-dark-row">
             <span class="total-label">총 약정요금</span>
             <div class="total-amount">
-              <span class="total-num">{fmtKrw(otTotal)}</span>
+              <span class="total-num">{fmtKrw(pricingReady ? otTotal : 0)}</span>
               <span class="total-unit">원</span>
             </div>
           </div>
           <div class="total-dark-row total-points-row">
             <span class="total-points-label">적립 예정 포인트</span>
             <div class="total-points-val">
-              <span>{fmtKrw(otEarnPoints)}</span>
+              <span>{fmtKrw(pricingReady ? otEarnPoints : 0)}</span>
               <span>p</span>
             </div>
           </div>
@@ -900,9 +984,9 @@
   <footer class="cart-footer" class:footer-visible={footerVisible}>
     <div class="footer-inner">
       <label class="footer-terms">
-        <button class="checkbox-btn checkbox-btn-terms" onclick={() => agreed = !agreed} aria-label="동의">
-          <svg width="18" height="12" viewBox="0 0 18 12" fill="none" class="checkbox-terms-icon">
-            <path d="M14.788 0.40847C15.5937 -0.206503 16.7506 -0.123176 17.4589 0.632103C18.2144 1.4379 18.1729 2.70376 17.3671 3.45925L17.3622 3.46413C17.3585 3.46759 17.3528 3.47297 17.3456 3.47976C17.3311 3.49333 17.3101 3.51407 17.2821 3.54031C17.2261 3.59279 17.1437 3.66974 17.039 3.76784C16.8294 3.96413 16.5289 4.24474 16.1669 4.58327C15.4428 5.26035 14.4707 6.169 13.4774 7.09304C12.4848 8.01654 11.4689 8.95836 10.6591 9.70144C9.90326 10.3949 9.21125 11.0229 8.954 11.219C8.38484 11.6526 7.64783 12.0001 6.7831 12.0003C5.89707 12.0003 5.14509 11.6357 4.57217 11.138C4.258 10.865 3.25694 9.9462 2.37197 9.13015C1.92122 8.71451 1.48885 8.31388 1.16885 8.01785C1.0088 7.86979 0.875998 7.74749 0.78408 7.66238C0.738281 7.61997 0.702073 7.58638 0.677634 7.56374C0.665704 7.55269 0.656551 7.54415 0.650291 7.53835C0.647126 7.53542 0.644094 7.53301 0.642478 7.53152L0.641502 7.52956H0.640525C-0.169647 6.77877 -0.217693 5.51259 0.533103 4.70242C1.28393 3.89251 2.55017 3.84526 3.36025 4.59597L3.36123 4.59792C3.3628 4.59938 3.36592 4.60089 3.36904 4.60378C3.37524 4.60953 3.38439 4.61807 3.39638 4.62917C3.42067 4.65167 3.45618 4.68551 3.50185 4.72781C3.59333 4.81251 3.72524 4.93384 3.88467 5.08132C4.2037 5.37646 4.63512 5.77493 5.08388 6.18874C5.73477 6.78894 6.40077 7.39812 6.82217 7.78054C6.86093 7.74604 6.90358 7.70918 6.94814 7.66921C7.21008 7.43424 7.55408 7.12113 7.954 6.75417C8.7536 6.02049 9.76226 5.0859 10.7528 4.16433C11.7428 3.24336 12.7128 2.33711 13.4354 1.6614C13.7965 1.32374 14.0957 1.04357 14.3046 0.847923C14.409 0.750147 14.491 0.67359 14.5468 0.621361C14.5745 0.595342 14.5959 0.575239 14.6103 0.56179C14.6174 0.555065 14.6232 0.549566 14.6269 0.546165L14.6317 0.541282L14.788 0.40847Z" fill={agreed ? 'var(--cs-purple)' : 'var(--cs-purple-op10)'}/>
+        <button class="checkbox-btn checkbox-btn-terms" class:checked={agreed} onclick={() => agreed = !agreed} aria-label="동의">
+          <svg width="22" height="15" viewBox="0 0 18 12" fill="none" aria-hidden="true">
+            <path d="M14.788 0.40847C15.5937 -0.206503 16.7506 -0.123176 17.4589 0.632103C18.2144 1.4379 18.1729 2.70376 17.3671 3.45925L17.3622 3.46413C17.3585 3.46759 17.3528 3.47297 17.3456 3.47976C17.3311 3.49333 17.3101 3.51407 17.2821 3.54031C17.2261 3.59279 17.1437 3.66974 17.039 3.76784C16.8294 3.96413 16.5289 4.24474 16.1669 4.58327C15.4428 5.26035 14.4707 6.169 13.4774 7.09304C12.4848 8.01654 11.4689 8.95836 10.6591 9.70144C9.90326 10.3949 9.21125 11.0229 8.954 11.219C8.38484 11.6526 7.64783 12.0001 6.7831 12.0003C5.89707 12.0003 5.14509 11.6357 4.57217 11.138C4.258 10.865 3.25694 9.9462 2.37197 9.13015C1.92122 8.71451 1.48885 8.31388 1.16885 8.01785C1.0088 7.86979 0.875998 7.74749 0.78408 7.66238C0.738281 7.61997 0.702073 7.58638 0.677634 7.56374C0.665704 7.55269 0.656551 7.54415 0.650291 7.53835C0.647126 7.53542 0.644094 7.53301 0.642478 7.53152L0.641502 7.52956H0.640525C-0.169647 6.77877 -0.217693 5.51259 0.533103 4.70242C1.28393 3.89251 2.55017 3.84526 3.36025 4.59597L3.36123 4.59792C3.3628 4.59938 3.36592 4.60089 3.36904 4.60378C3.37524 4.60953 3.38439 4.61807 3.39638 4.62917C3.42067 4.65167 3.45618 4.68551 3.50185 4.72781C3.59333 4.81251 3.72524 4.93384 3.88467 5.08132C4.2037 5.37646 4.63512 5.77493 5.08388 6.18874C5.73477 6.78894 6.40077 7.39812 6.82217 7.78054C6.86093 7.74604 6.90358 7.70918 6.94814 7.66921C7.21008 7.43424 7.55408 7.12113 7.954 6.75417C8.7536 6.02049 9.76226 5.0859 10.7528 4.16433C11.7428 3.24336 12.7128 2.33711 13.4354 1.6614C13.7965 1.32374 14.0957 1.04357 14.3046 0.847923C14.409 0.750147 14.491 0.67359 14.5468 0.621361C14.5745 0.595342 14.5959 0.575239 14.6103 0.56179C14.6174 0.555065 14.6232 0.549566 14.6269 0.546165L14.6317 0.541282L14.788 0.40847Z" fill="currentColor" />
           </svg>
         </button>
         <span class="footer-terms-text" style:color={agreed ? 'var(--cs-purple)' : 'var(--cs-purple-op10)'}>등록한 대여조건 및 <button type="button" class="terms-guide-link" onclick={() => (showGuideModal = true)}>이용안내</button>에 모두 동의합니다.</span>
@@ -1131,13 +1215,13 @@
             <div class="dual-price-row">
               <div class="price-unit">
                 <span class="price-unit-label">Day</span>
-                <span class="price-amount">{rate24.toLocaleString()}</span>
+                <span class="price-amount">{fmtKrw(rate24 * item.qty)}</span>
                 <span class="price-currency">원</span>
               </div>
               <span class="price-sep">/</span>
               <div class="price-unit">
                 <span class="price-unit-label">12H</span>
-                <span class="price-amount">{rate12.toLocaleString()}</span>
+                <span class="price-amount">{fmtKrw(rate12 * item.qty)}</span>
                 <span class="price-currency">원</span>
               </div>
             </div>
@@ -1157,7 +1241,7 @@
           <div class="option-subcard-list">
             {#each line.options as opt}
               <div class="option-subcard">
-                <svg class="option-subcard-connector" aria-hidden="true" width="25" height="25" viewBox="0 0 25 25" fill="none" xmlns="http://www.w3.org/2000/svg">
+                <svg class="option-subcard-connector" aria-hidden="true" width="17.5" height="17.5" viewBox="0 0 25 25" fill="none" xmlns="http://www.w3.org/2000/svg">
                   <path d="M1.50404 1.5C1.50404 1.5 1.49303 5.60062 1.50738 12.8098C1.52173 20.0189 7 23.5 11.5 23.5C16 23.5 23.5 23.5 23.5 23.5" stroke="var(--cs-text-light)" stroke-width="3" stroke-linecap="round"/>
                 </svg>
                 <div class="option-subcard-img">
@@ -1203,15 +1287,9 @@
   {@const rate12 = itemRate12h(line, rate24)}
   <div class="item-card" class:selected={item.checked} role="listitem">
     <div class="item-card-topbar">
-      <button class="item-card-check" onclick={() => updateItem(item.id, { checked: !item.checked })} aria-label="선택">
-        <svg viewBox="0 0 20 20" fill="none" class="checkbox-svg">
-          {#if item.checked}
-            <rect fill="#3B2F8A" height="18" rx="4" width="18" x="1" y="1"/>
-            <path d="M5 10L8.5 13.5L15 6" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
-          {:else}
-            <rect fill="white" height="18" rx="4" width="18" x="1" y="1"/>
-            <rect height="18" rx="4" stroke="#AAAAAA" stroke-width="2" width="18" x="1" y="1"/>
-          {/if}
+      <button class="item-card-check checkbox-btn-terms" class:checked={item.checked} onclick={() => updateItem(item.id, { checked: !item.checked })} aria-label="선택">
+        <svg viewBox="0 0 18 12" fill="none" aria-hidden="true">
+          <path d="M14.788 0.40847C15.5937 -0.206503 16.7506 -0.123176 17.4589 0.632103C18.2144 1.4379 18.1729 2.70376 17.3671 3.45925L17.3622 3.46413C17.3585 3.46759 17.3528 3.47297 17.3456 3.47976C17.3311 3.49333 17.3101 3.51407 17.2821 3.54031C17.2261 3.59279 17.1437 3.66974 17.039 3.76784C16.8294 3.96413 16.5289 4.24474 16.1669 4.58327C15.4428 5.26035 14.4707 6.169 13.4774 7.09304C12.4848 8.01654 11.4689 8.95836 10.6591 9.70144C9.90326 10.3949 9.21125 11.0229 8.954 11.219C8.38484 11.6526 7.64783 12.0001 6.7831 12.0003C5.89707 12.0003 5.14509 11.6357 4.57217 11.138C4.258 10.865 3.25694 9.9462 2.37197 9.13015C1.92122 8.71451 1.48885 8.31388 1.16885 8.01785C1.0088 7.86979 0.875998 7.74749 0.78408 7.66238C0.738281 7.61997 0.702073 7.58638 0.677634 7.56374C0.665704 7.55269 0.656551 7.54415 0.650291 7.53835C0.647126 7.53542 0.644094 7.53301 0.642478 7.53152L0.641502 7.52956H0.640525C-0.169647 6.77877 -0.217693 5.51259 0.533103 4.70242C1.28393 3.89251 2.55017 3.84526 3.36025 4.59597L3.36123 4.59792C3.3628 4.59938 3.36592 4.60089 3.36904 4.60378C3.37524 4.60953 3.38439 4.61807 3.39638 4.62917C3.42067 4.65167 3.45618 4.68551 3.50185 4.72781C3.59333 4.81251 3.72524 4.93384 3.88467 5.08132C4.2037 5.37646 4.63512 5.77493 5.08388 6.18874C5.73477 6.78894 6.40077 7.39812 6.82217 7.78054C6.86093 7.74604 6.90358 7.70918 6.94814 7.66921C7.21008 7.43424 7.55408 7.12113 7.954 6.75417C8.7536 6.02049 9.76226 5.0859 10.7528 4.16433C11.7428 3.24336 12.7128 2.33711 13.4354 1.6614C13.7965 1.32374 14.0957 1.04357 14.3046 0.847923C14.409 0.750147 14.491 0.67359 14.5468 0.621361C14.5745 0.595342 14.5959 0.575239 14.6103 0.56179C14.6174 0.555065 14.6232 0.549566 14.6269 0.546165L14.6317 0.541282L14.788 0.40847Z" fill="currentColor" />
         </svg>
       </button>
       <button class="delete-btn item-card-delete" onclick={() => removeItem(item)} aria-label="삭제">
@@ -1239,13 +1317,13 @@
             <div class="dual-price-row">
               <div class="price-unit">
                 <span class="price-unit-label">Day</span>
-                <span class="price-amount">{rate24.toLocaleString()}</span>
+                <span class="price-amount">{fmtKrw(rate24 * item.qty)}</span>
                 <span class="price-currency">원</span>
               </div>
               <span class="price-sep">/</span>
               <div class="price-unit">
                 <span class="price-unit-label">12H</span>
-                <span class="price-amount">{rate12.toLocaleString()}</span>
+                <span class="price-amount">{fmtKrw(rate12 * item.qty)}</span>
                 <span class="price-currency">원</span>
               </div>
             </div>
@@ -1335,7 +1413,7 @@
       </button>
       {#if bulkOpenAcc === 'return_'}
         <div transition:slide={{ duration: 300 }} class="acc-body">
-          {@render RentalForm({ type: 'return', calId: 'bulk-return', selectedDate: bulkReturnDate, onDateChange: bulkHandleReturnDate, timeId: 'bulk-return-t', selectedTime: bulkReturnTime, onTimeChange: bulkHandleReturnTime, method: bulkOpts.returnMethod, form: bulkReturnForm, onMethodChange: bulkHandleReturnMethod, onFormChange: bulkHandleReturnForm, hasUserProfileInfo: sdHasUserProfileInfo, userProfileInfo: sdUserProfileInfo, pickupPoints: visitPickupPoints, minDate: bulkDate, rangeStart: bulkDate, rangeEnd: bulkReturnDate })}
+          {@render RentalForm({ type: 'return', calId: 'bulk-return', selectedDate: bulkReturnDate, onDateChange: bulkHandleReturnDate, timeId: 'bulk-return-t', selectedTime: bulkReturnTime, onTimeChange: bulkHandleReturnTime, method: bulkOpts.returnMethod, form: bulkReturnForm, onMethodChange: bulkHandleReturnMethod, onFormChange: bulkHandleReturnForm, hasUserAddress: sdHasUserAddress, hasUserProfileInfo: sdHasUserProfileInfo, userProfileInfo: sdUserProfileInfo, userAddressInfo: sdUserAddressInfo, pickupPoints: visitPickupPoints, minDate: bulkDate, rangeStart: bulkDate, rangeEnd: bulkReturnDate })}
         </div>
       {/if}
     </div>
@@ -1373,9 +1451,6 @@
   {@const timeLabel = '시간'}
   {@const isVisit = props.method === 'visit'}
   {@const addrLabel = isVisit ? '방문지점 정보' : (props.type === 'rental' ? '배송지 정보' : '반납위치 지정정보')}
-  {@const addrNote = props.type === 'rental'
-    ? '대여 시작일은 배송일 기준 최소 2일 전까지 선택 가능합니다.'
-    : '반납 방식이 수령 방식과 다를 경우 추가 비용이 발생할 수 있습니다.'}
   {@const isCalOpen = openCalId === props.calId}
   {@const isTimeOpen = openTimeId === props.timeId}
   <!-- 배송(delivery/crazydelivery) 잠금 상태(요청 A) — 시간선택 숨김 + 반납leg 콤보 잠금 기준 -->
@@ -1455,8 +1530,13 @@
                 rangeEndLabel="반납일"
                 onselect={(iso) => props.onDateChange(iso)}
                 isDateDisabled={!locked ? undefined : (props.type === 'rental'
-                  ? (iso: string) => courierClosedSet.has(addDays(iso, -1))
-                  : (iso: string) => courierClosedSet.has(iso))}
+                  ? (iso: string) => courierClosedMap.has(addDays(iso, -1))
+                  : (iso: string) => courierClosedMap.has(iso))}
+                onDisabledClick={(iso) => {
+                  const closedKey = props.type === 'rental' ? addDays(iso, -1) : iso
+                  const reason = courierClosedMap.get(closedKey)
+                  csToast.error(reason ? `${reason} — 택배 휴무일이라 선택할 수 없습니다.` : '택배 휴무일이라 선택할 수 없습니다.')
+                }}
               />
             </div>
           {/if}
@@ -1505,8 +1585,8 @@
             선택한 {props.type === 'rental' ? '방문대여' : '방문반납'} 시간은 고객센터
             '무인보관함' 이용만 가능하며 1시간 전 비밀번호를 채팅서비스로 발송해 드립니다.
           </p>
-        {:else if locked}
-          <p class="form-note">{addrNote}</p>
+        {:else if locked && sdShippingSettings?.shipping_guide}
+          <p class="form-note">{sdShippingSettings.shipping_guide}</p>
         {/if}
       </div>
     </div>
@@ -1517,7 +1597,8 @@
         <span class="form-section-label">고객 정보</span>
         <label class="form-check-label" class:form-check-label-disabled={!props.hasUserProfileInfo}>
           <button
-            class="checkbox-btn small"
+            class="checkbox-btn checkbox-btn-terms"
+            class:checked={props.form.memberCheck}
             disabled={!props.hasUserProfileInfo}
             onclick={() => {
               const next = !props.form.memberCheck
@@ -1533,14 +1614,8 @@
             }}
             aria-label="회원정보 반영"
           >
-            <svg viewBox="0 0 20 20" fill="none" class="checkbox-svg">
-              {#if props.form.memberCheck}
-                <rect fill="#3B2F8A" height="18" rx="4" width="18" x="1" y="1"/>
-                <path d="M5 10L8.5 13.5L15 6" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
-              {:else}
-                <rect fill="white" height="18" rx="4" width="18" x="1" y="1"/>
-                <rect height="18" rx="4" stroke="#AAAAAA" stroke-width="2" width="18" x="1" y="1"/>
-              {/if}
+            <svg viewBox="0 0 18 12" fill="none" aria-hidden="true">
+              <path d="M14.788 0.40847C15.5937 -0.206503 16.7506 -0.123176 17.4589 0.632103C18.2144 1.4379 18.1729 2.70376 17.3671 3.45925L17.3622 3.46413C17.3585 3.46759 17.3528 3.47297 17.3456 3.47976C17.3311 3.49333 17.3101 3.51407 17.2821 3.54031C17.2261 3.59279 17.1437 3.66974 17.039 3.76784C16.8294 3.96413 16.5289 4.24474 16.1669 4.58327C15.4428 5.26035 14.4707 6.169 13.4774 7.09304C12.4848 8.01654 11.4689 8.95836 10.6591 9.70144C9.90326 10.3949 9.21125 11.0229 8.954 11.219C8.38484 11.6526 7.64783 12.0001 6.7831 12.0003C5.89707 12.0003 5.14509 11.6357 4.57217 11.138C4.258 10.865 3.25694 9.9462 2.37197 9.13015C1.92122 8.71451 1.48885 8.31388 1.16885 8.01785C1.0088 7.86979 0.875998 7.74749 0.78408 7.66238C0.738281 7.61997 0.702073 7.58638 0.677634 7.56374C0.665704 7.55269 0.656551 7.54415 0.650291 7.53835C0.647126 7.53542 0.644094 7.53301 0.642478 7.53152L0.641502 7.52956H0.640525C-0.169647 6.77877 -0.217693 5.51259 0.533103 4.70242C1.28393 3.89251 2.55017 3.84526 3.36025 4.59597L3.36123 4.59792C3.3628 4.59938 3.36592 4.60089 3.36904 4.60378C3.37524 4.60953 3.38439 4.61807 3.39638 4.62917C3.42067 4.65167 3.45618 4.68551 3.50185 4.72781C3.59333 4.81251 3.72524 4.93384 3.88467 5.08132C4.2037 5.37646 4.63512 5.77493 5.08388 6.18874C5.73477 6.78894 6.40077 7.39812 6.82217 7.78054C6.86093 7.74604 6.90358 7.70918 6.94814 7.66921C7.21008 7.43424 7.55408 7.12113 7.954 6.75417C8.7536 6.02049 9.76226 5.0859 10.7528 4.16433C11.7428 3.24336 12.7128 2.33711 13.4354 1.6614C13.7965 1.32374 14.0957 1.04357 14.3046 0.847923C14.409 0.750147 14.491 0.67359 14.5468 0.621361C14.5745 0.595342 14.5959 0.575239 14.6103 0.56179C14.6174 0.555065 14.6232 0.549566 14.6269 0.546165L14.6317 0.541282L14.788 0.40847Z" fill="currentColor" />
             </svg>
           </button>
           <span>회원정보 반영</span>
@@ -1557,10 +1632,11 @@
     <div class="form-section">
       <div class="form-section-header">
         <span class="form-section-label">{addrLabel}</span>
-        {#if props.type === 'rental' && !isVisit}
+        {#if !isVisit}
           <label class="form-check-label" class:form-check-label-disabled={!props.hasUserAddress}>
             <button
-              class="checkbox-btn small"
+              class="checkbox-btn checkbox-btn-terms"
+              class:checked={props.form.memberCheck2}
               disabled={!props.hasUserAddress}
               onclick={() => {
                 const next = !props.form.memberCheck2
@@ -1575,14 +1651,8 @@
               }}
               aria-label="회원정보 반영"
             >
-              <svg viewBox="0 0 20 20" fill="none" class="checkbox-svg">
-                {#if props.form.memberCheck2}
-                  <rect fill="#3B2F8A" height="18" rx="4" width="18" x="1" y="1"/>
-                  <path d="M5 10L8.5 13.5L15 6" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
-                {:else}
-                  <rect fill="white" height="18" rx="4" width="18" x="1" y="1"/>
-                  <rect height="18" rx="4" stroke="#AAAAAA" stroke-width="2" width="18" x="1" y="1"/>
-                {/if}
+              <svg viewBox="0 0 18 12" fill="none" aria-hidden="true">
+                <path d="M14.788 0.40847C15.5937 -0.206503 16.7506 -0.123176 17.4589 0.632103C18.2144 1.4379 18.1729 2.70376 17.3671 3.45925L17.3622 3.46413C17.3585 3.46759 17.3528 3.47297 17.3456 3.47976C17.3311 3.49333 17.3101 3.51407 17.2821 3.54031C17.2261 3.59279 17.1437 3.66974 17.039 3.76784C16.8294 3.96413 16.5289 4.24474 16.1669 4.58327C15.4428 5.26035 14.4707 6.169 13.4774 7.09304C12.4848 8.01654 11.4689 8.95836 10.6591 9.70144C9.90326 10.3949 9.21125 11.0229 8.954 11.219C8.38484 11.6526 7.64783 12.0001 6.7831 12.0003C5.89707 12.0003 5.14509 11.6357 4.57217 11.138C4.258 10.865 3.25694 9.9462 2.37197 9.13015C1.92122 8.71451 1.48885 8.31388 1.16885 8.01785C1.0088 7.86979 0.875998 7.74749 0.78408 7.66238C0.738281 7.61997 0.702073 7.58638 0.677634 7.56374C0.665704 7.55269 0.656551 7.54415 0.650291 7.53835C0.647126 7.53542 0.644094 7.53301 0.642478 7.53152L0.641502 7.52956H0.640525C-0.169647 6.77877 -0.217693 5.51259 0.533103 4.70242C1.28393 3.89251 2.55017 3.84526 3.36025 4.59597L3.36123 4.59792C3.3628 4.59938 3.36592 4.60089 3.36904 4.60378C3.37524 4.60953 3.38439 4.61807 3.39638 4.62917C3.42067 4.65167 3.45618 4.68551 3.50185 4.72781C3.59333 4.81251 3.72524 4.93384 3.88467 5.08132C4.2037 5.37646 4.63512 5.77493 5.08388 6.18874C5.73477 6.78894 6.40077 7.39812 6.82217 7.78054C6.86093 7.74604 6.90358 7.70918 6.94814 7.66921C7.21008 7.43424 7.55408 7.12113 7.954 6.75417C8.7536 6.02049 9.76226 5.0859 10.7528 4.16433C11.7428 3.24336 12.7128 2.33711 13.4354 1.6614C13.7965 1.32374 14.0957 1.04357 14.3046 0.847923C14.409 0.750147 14.491 0.67359 14.5468 0.621361C14.5745 0.595342 14.5959 0.575239 14.6103 0.56179C14.6174 0.555065 14.6232 0.549566 14.6269 0.546165L14.6317 0.541282L14.788 0.40847Z" fill="currentColor" />
               </svg>
             </button>
             <span>회원정보 반영</span>
@@ -1602,7 +1672,17 @@
         </div>
       {:else}
         <div class="form-fields">
-          <input class="f-input" placeholder="기본주소 입력" value={props.form.addr} oninput={(e) => props.onFormChange({ ...props.form, addr: readInputValue(e) })}/>
+          <PostcodeSearchButton
+            value={props.form.addr}
+            placeholder="기본주소 입력 (클릭하여 검색)"
+            onselect={(road, postal) => {
+              props.onFormChange({ ...props.form, addr: road, postalCode: postal })
+              validateDeliveryAddress(road, postal, props.method)
+            }}
+          />
+          {#if props.form.postalCode}
+            <p class="cart-postal-hint">[{props.form.postalCode}]</p>
+          {/if}
           <input class="f-input" placeholder="상세주소 입력" value={props.form.addrDetail} oninput={(e) => props.onFormChange({ ...props.form, addrDetail: readInputValue(e) })}/>
         </div>
       {/if}
@@ -1619,19 +1699,14 @@
     {#if props.type === 'rental' && props.onCopyChange}
       <label class="copy-label" class:copy-label-locked={locked}>
         <button
-          class="checkbox-btn small"
+          class="checkbox-btn checkbox-btn-terms"
+          class:checked={props.copyToReturn || locked}
           disabled={locked}
           onclick={() => props.onCopyChange?.(!props.copyToReturn)}
           aria-label="반납에 동일 적용"
         >
-          <svg viewBox="0 0 20 20" fill="none" class="checkbox-svg">
-            {#if props.copyToReturn || locked}
-              <rect fill="#3B2F8A" height="18" rx="4" width="18" x="1" y="1"/>
-              <path d="M5 10L8.5 13.5L15 6" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
-            {:else}
-              <rect fill="white" height="18" rx="4" width="18" x="1" y="1"/>
-              <rect height="18" rx="4" stroke="#AAAAAA" stroke-width="2" width="18" x="1" y="1"/>
-            {/if}
+          <svg viewBox="0 0 18 12" fill="none" aria-hidden="true">
+            <path d="M14.788 0.40847C15.5937 -0.206503 16.7506 -0.123176 17.4589 0.632103C18.2144 1.4379 18.1729 2.70376 17.3671 3.45925L17.3622 3.46413C17.3585 3.46759 17.3528 3.47297 17.3456 3.47976C17.3311 3.49333 17.3101 3.51407 17.2821 3.54031C17.2261 3.59279 17.1437 3.66974 17.039 3.76784C16.8294 3.96413 16.5289 4.24474 16.1669 4.58327C15.4428 5.26035 14.4707 6.169 13.4774 7.09304C12.4848 8.01654 11.4689 8.95836 10.6591 9.70144C9.90326 10.3949 9.21125 11.0229 8.954 11.219C8.38484 11.6526 7.64783 12.0001 6.7831 12.0003C5.89707 12.0003 5.14509 11.6357 4.57217 11.138C4.258 10.865 3.25694 9.9462 2.37197 9.13015C1.92122 8.71451 1.48885 8.31388 1.16885 8.01785C1.0088 7.86979 0.875998 7.74749 0.78408 7.66238C0.738281 7.61997 0.702073 7.58638 0.677634 7.56374C0.665704 7.55269 0.656551 7.54415 0.650291 7.53835C0.647126 7.53542 0.644094 7.53301 0.642478 7.53152L0.641502 7.52956H0.640525C-0.169647 6.77877 -0.217693 5.51259 0.533103 4.70242C1.28393 3.89251 2.55017 3.84526 3.36025 4.59597L3.36123 4.59792C3.3628 4.59938 3.36592 4.60089 3.36904 4.60378C3.37524 4.60953 3.38439 4.61807 3.39638 4.62917C3.42067 4.65167 3.45618 4.68551 3.50185 4.72781C3.59333 4.81251 3.72524 4.93384 3.88467 5.08132C4.2037 5.37646 4.63512 5.77493 5.08388 6.18874C5.73477 6.78894 6.40077 7.39812 6.82217 7.78054C6.86093 7.74604 6.90358 7.70918 6.94814 7.66921C7.21008 7.43424 7.55408 7.12113 7.954 6.75417C8.7536 6.02049 9.76226 5.0859 10.7528 4.16433C11.7428 3.24336 12.7128 2.33711 13.4354 1.6614C13.7965 1.32374 14.0957 1.04357 14.3046 0.847923C14.409 0.750147 14.491 0.67359 14.5468 0.621361C14.5745 0.595342 14.5959 0.575239 14.6103 0.56179C14.6174 0.555065 14.6232 0.549566 14.6269 0.546165L14.6317 0.541282L14.788 0.40847Z" fill="currentColor" />
           </svg>
         </button>
         <span>{locked ? '배송 선택 시 반납방식이 자동으로 동일하게 고정됩니다.' : '설정옵션을 반납방법에 적용합니다.'}</span>
@@ -1640,18 +1715,12 @@
   </div>
 {/snippet}
 
-{#snippet CouponRow(props: { label: string; days: number; checked: boolean; onToggle: () => void })}
-  <div class="coupon-row">
+{#snippet CouponRow(props: { label: string; days: number; checked: boolean; onToggle: () => void; disabled?: boolean })}
+  <div class="coupon-row" class:coupon-row-disabled={props.disabled}>
     <label class="coupon-row-left">
-      <button class="checkbox-btn small" onclick={props.onToggle} aria-label={props.label}>
-        <svg viewBox="0 0 20 20" fill="none" class="checkbox-svg">
-          {#if props.checked}
-            <rect fill="#3B2F8A" height="18" rx="4" width="18" x="1" y="1"/>
-            <path d="M5 10L8.5 13.5L15 6" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
-          {:else}
-            <rect fill="white" height="18" rx="4" width="18" x="1" y="1"/>
-            <rect height="18" rx="4" stroke="#AAAAAA" stroke-width="2" width="18" x="1" y="1"/>
-          {/if}
+      <button class="checkbox-btn checkbox-btn-terms" class:checked={props.checked} onclick={props.onToggle} disabled={props.disabled} aria-label={props.label}>
+        <svg viewBox="0 0 18 12" fill="none" aria-hidden="true">
+          <path d="M14.788 0.40847C15.5937 -0.206503 16.7506 -0.123176 17.4589 0.632103C18.2144 1.4379 18.1729 2.70376 17.3671 3.45925L17.3622 3.46413C17.3585 3.46759 17.3528 3.47297 17.3456 3.47976C17.3311 3.49333 17.3101 3.51407 17.2821 3.54031C17.2261 3.59279 17.1437 3.66974 17.039 3.76784C16.8294 3.96413 16.5289 4.24474 16.1669 4.58327C15.4428 5.26035 14.4707 6.169 13.4774 7.09304C12.4848 8.01654 11.4689 8.95836 10.6591 9.70144C9.90326 10.3949 9.21125 11.0229 8.954 11.219C8.38484 11.6526 7.64783 12.0001 6.7831 12.0003C5.89707 12.0003 5.14509 11.6357 4.57217 11.138C4.258 10.865 3.25694 9.9462 2.37197 9.13015C1.92122 8.71451 1.48885 8.31388 1.16885 8.01785C1.0088 7.86979 0.875998 7.74749 0.78408 7.66238C0.738281 7.61997 0.702073 7.58638 0.677634 7.56374C0.665704 7.55269 0.656551 7.54415 0.650291 7.53835C0.647126 7.53542 0.644094 7.53301 0.642478 7.53152L0.641502 7.52956H0.640525C-0.169647 6.77877 -0.217693 5.51259 0.533103 4.70242C1.28393 3.89251 2.55017 3.84526 3.36025 4.59597L3.36123 4.59792C3.3628 4.59938 3.36592 4.60089 3.36904 4.60378C3.37524 4.60953 3.38439 4.61807 3.39638 4.62917C3.42067 4.65167 3.45618 4.68551 3.50185 4.72781C3.59333 4.81251 3.72524 4.93384 3.88467 5.08132C4.2037 5.37646 4.63512 5.77493 5.08388 6.18874C5.73477 6.78894 6.40077 7.39812 6.82217 7.78054C6.86093 7.74604 6.90358 7.70918 6.94814 7.66921C7.21008 7.43424 7.55408 7.12113 7.954 6.75417C8.7536 6.02049 9.76226 5.0859 10.7528 4.16433C11.7428 3.24336 12.7128 2.33711 13.4354 1.6614C13.7965 1.32374 14.0957 1.04357 14.3046 0.847923C14.409 0.750147 14.491 0.67359 14.5468 0.621361C14.5745 0.595342 14.5959 0.575239 14.6103 0.56179C14.6174 0.555065 14.6232 0.549566 14.6269 0.546165L14.6317 0.541282L14.788 0.40847Z" fill="currentColor" />
         </svg>
       </button>
       <span class="coupon-label">{props.label}</span>
@@ -1663,12 +1732,12 @@
   </div>
 {/snippet}
 
-{#snippet PriceRow(props: { label: string; value: string; large?: boolean })}
+{#snippet PriceRow(props: { label: string; value: string; large?: boolean; raw?: boolean })}
   <div class="price-row">
     <span class="price-row-label" class:price-row-large={props.large}>{props.label}</span>
     <div class="price-row-right">
       <span class="price-row-val" class:price-row-val-large={props.large}>{props.value}</span>
-      <span class="price-row-unit">원</span>
+      {#if !props.raw}<span class="price-row-unit">원</span>{/if}
     </div>
   </div>
 {/snippet}
@@ -1832,7 +1901,7 @@
   .card-list {
     display: flex;
     flex-direction: column;
-    gap: 10px;
+    gap: 40px;
   }
 
   /* 상품 리스트 카드 */
@@ -1898,7 +1967,10 @@
     display: flex;
     flex-direction: column;
     align-items: stretch;
-    gap: 14px;
+    /* 2026-08-25: 본상품↔옵션카드 사이 여백 30% 축소(14px → 9.8px, 모바일 30px→21px과
+       동일 비율) — 이 컨테이너는 자식이 top-row+옵션리스트 둘뿐이라 gap 자체가 곧
+       그 사이 여백이라 직접 축소해도 다른 간격에 영향 없음 */
+    gap: 9.8px;
     flex: 1;
     min-width: 0;
     padding: 0 34px 0 12px;
@@ -2043,7 +2115,10 @@
     padding: 0;
     flex-shrink: 0;
   }
-  .checkbox-btn.small { }
+  .checkbox-btn-terms { color: var(--cs-purple-op10); display: flex; align-items: center; justify-content: center; }
+  .checkbox-btn-terms.checked { color: var(--cs-purple); }
+  .checkbox-btn-terms svg { width: 22px; height: 15px; }
+  @media (min-width: 768px) { .checkbox-btn-terms svg { width: 18px; height: 12px; } }
   .checkbox-svg { width: 20px; height: 20px; display: block; }
   .delete-btn {
     background: none;
@@ -2158,6 +2233,16 @@
      가격 블록은 항상 한 줄로 유지하고, 대신 바깥 option-subcard-bottom(flex-wrap:wrap)이
      가격 블록 전체 vs 수량 컨트롤 단위로 줄바꿈하도록 역할 분리 */
   .dual-price-row--opt { gap: 6px; flex-wrap: nowrap; }
+  /* 2026-08-25: 위 전역 .price-amount(모바일 14px)/.price-unit-label·.price-currency(12px)가
+     옵션카드의 좁은 컬럼 폭(~190px)엔 너무 커서, nowrap인 이 가격 행이 카드 우측 밖으로
+     밀려나가던 결함(실측: 컬럼 191px인데 행 자체 폭 212.6px) — 옵션카드 전용으로만 한 단계
+     축소해 컬럼 폭 안에 들어오도록 수정. 본상품 dual-price-row(옵션 없는 클래스)는 영향 없음 */
+  @media (max-width: 640px) {
+    .dual-price-row--opt .price-amount { font-size: 12px; }
+    .dual-price-row--opt .price-unit-label,
+    .dual-price-row--opt .price-currency { font-size: 10px; }
+    .dual-price-row--opt .price-unit { gap: 2px; }
+  }
   /* 옵션상품 수량 조절 — 본상품 .qty-wrap과 동일 인터랙션 패턴(± 버튼) 축소 적용 */
   .option-subcard-bottom {
     display: flex;
@@ -2462,6 +2547,12 @@
     line-height: 1.6;
     margin: 0;
   }
+  .cart-postal-hint {
+    font-size: 12px;
+    color: #888;
+    margin: -8px 0 0;
+    letter-spacing: -0.3px;
+  }
   .visit-info {
     background: var(--cs-surface-gray);
     border-radius: var(--radius-md, 15px);
@@ -2504,20 +2595,23 @@
     gap: 6px;
     padding: 9px 16px;
     border-radius: var(--radius-xl, 30px);
-    border: 1.5px solid #DCDCDC;
-    background: #fff;
+    border: none;
+    background: var(--cs-lilac, #ECEBF4);
     cursor: pointer;
     transition: all 0.18s;
     flex-shrink: 0;
     white-space: nowrap;
   }
   .combo-btn:hover {
-    border-color: var(--cs-purple, #3B2F8A);
     background: #F5F4FA;
   }
   .combo-btn-active {
-    border-color: var(--cs-purple, #3B2F8A);
+    border: none;
     background: var(--cs-purple, #3B2F8A);
+  }
+  .combo-btn-active:hover {
+    border: none;
+    background: var(--cs-purple-light, #553FE0);
   }
   /* 배송 선택 시 반납방식 콤보 잠금(요청 A) — 선택되지 않은 나머지 방식 비활성 */
   .combo-btn-locked {
@@ -2525,7 +2619,6 @@
     cursor: not-allowed;
   }
   .combo-btn-locked:hover {
-    border-color: #DCDCDC;
     background: #fff;
   }
   .combo-label {
@@ -2534,6 +2627,12 @@
     color: var(--cs-text, #100B32);
   }
   .combo-btn-active .combo-label { color: #fff; }
+  /* 2026-08-25: PC반응형 전용 — 대여방법 콤보가 중요 선택영역인데 작아 보인다는 피드백으로
+     폰트 한 단계 확대(13px → --text-pc-body-14) + 패딩 30% 확대(9px 16px → 11.7px 20.8px) */
+  @media (min-width: 641px) {
+    .combo-btn { padding: 11.7px 20.8px; }
+    .combo-label { font: var(--text-pc-body-14); }
+  }
   .delivery-deadline {
     display: block;
     width: 100%;
@@ -2705,6 +2804,7 @@
   }
   .f-input::placeholder { color: #B6B6B6; }
   .f-input:focus { outline: 2px solid #3B2F8A; outline-offset: -2px; }
+  .f-input:disabled { opacity: 0.5; cursor: not-allowed; }
 
   /* ══ Coupon Row ══ (CouponRow 스니펫 — 2026-08-24 장바구니 체크아웃에 다시 노출) */
   .coupon-row {
@@ -2716,9 +2816,23 @@
     padding: 15px 20px;
     min-height: 52px;
   }
-  .coupon-row-left { display: flex; align-items: center; gap: 20px; cursor: pointer; }
-  .coupon-label { font-size: 14px; font-weight: 700; color: #444; }
-  .coupon-expiry { font-size: 14px; font-weight: 700; color: #444; display: flex; align-items: center; gap: 10px; }
+  /* 대여기간(수령/반납일) 미확정 상태 — 쿠폰/포인트 선택 비활성화(2026-08-25) */
+  .coupon-row-disabled { opacity: 0.5; }
+  .coupon-row-disabled .checkbox-btn { cursor: not-allowed; }
+  /* 2026-08-24: min-width:0 필수 — 이게 없으면 flex 자식(.coupon-label)이 콘텐츠 크기만큼
+     넓어져 ellipsis가 절대 발동하지 않음(flex item 기본 min-width:auto 함정) */
+  .coupon-row-left { display: flex; align-items: center; gap: 20px; cursor: pointer; min-width: 0; flex: 1; }
+  .coupon-label {
+    flex: 1;
+    font-size: 14px;
+    font-weight: 700;
+    color: #444;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    min-width: 0;
+  }
+  .coupon-expiry { font-size: 14px; font-weight: 700; color: #444; display: flex; align-items: center; gap: 10px; flex-shrink: 0; }
   .coupon-days { color: var(--cs-red-badge); }
   .coupon-section { display: flex; flex-direction: column; gap: 15px; padding: 20px; }
   .coupon-section .section-sub-label { padding: 0 0 5px; }
@@ -2924,6 +3038,9 @@
   .footer-sentinel {
     height: 1px;
   }
+  .price-section-sentinel {
+    height: 1px;
+  }
   .cart-footer {
     position: fixed;
     bottom: 0;
@@ -2961,14 +3078,16 @@
     line-height: 2;
     white-space: nowrap;
   }
-  .checkbox-terms-icon { display: block; flex-shrink: 0; }
   .terms-guide-link {
     background: none;
     border: none;
     padding: 0;
     font: inherit;
     font-weight: inherit;
-    color: var(--cs-text);
+    /* 2026-08-24: 고정 색상(--cs-text)이 부모 .footer-terms-text의 agreed 상태별 색상을
+       가리던 버그 — 체크박스·본문 텍스트·이 링크가 하나의 그룹으로 함께 활성/비활성
+       전환되도록 부모 색상을 그대로 상속(밑줄만 이 요소 고유 스타일로 유지) */
+    color: inherit;
     text-decoration: underline;
     cursor: pointer;
   }
@@ -3030,7 +3149,9 @@
     .guide-modal {
       max-width: 100%;
       max-height: 75vh;
-      border-radius: var(--radius-2xl) var(--radius-2xl) 0 0;
+      /* front-uiux.md §4 "card 중 Mobile"(20px, 하드코딩) — 이 모달은 최상위 컨테이너가
+         아니라 카트 페이지 안에 종속된 중간 레벨 팝업이라 대(30px 모바일)가 아닌 중 적용 */
+      border-radius: 20px 20px 0 0;
     }
     .guide-modal-header { padding: 20px; }
     .guide-modal-body { padding: 20px 20px 30px; }
@@ -3040,9 +3161,8 @@
     height: 60px;
     border: none;
     border-radius: 30px;
-    font-size: 16px;
-    font-weight: 700;
-    font-family: var(--font-kr);
+    /* 2026-08-24: PC 반응형 폰트 한 단계 확대(--text-pc-title-16 16px → --text-pc-title-18 18px) */
+    font: var(--text-pc-title-18);
     cursor: pointer;
     transition: all 0.3s;
     color: white;
@@ -3102,6 +3222,10 @@
        Stephen 확정 지침에 따라 모바일 전용 30px 오버라이드를 다시 명시 */
     .order-card { border-radius: 30px; }
     .order-card-inner { padding: 20px; gap: 30px; }
+    /* 2026-08-25: 본상품(.product-row)↔옵션카드(.option-subcard-list) 사이 여백만 30%
+       축소(30px → 21px) — order-card-inner의 gap은 체크박스행 등 다른 형제 간격에도
+       공유되므로 건드리지 않고, 이 한 지점만 margin-top으로 상쇄(-9px) */
+    .option-subcard-list { margin-top: -9px; }
     /* 2026-08-19(재정정): 가로 1열 재배치는 Stephen이 요청한 적 없는 임의 변경이었음 —
        PC와 동일한 세로중앙정렬 구조(column/center)로 되돌리고, 패딩만 카드 크기에 맞춰
        축소 유지. 아이콘은 PC 대비 1.5배(56px→84px) 유지, 안내텍스트는 1.5배(24px)가
@@ -3110,11 +3234,8 @@
     .empty-icon { width: 84px; }
     .empty-text { font: var(--text-m-title-21); }
 
-    /* 2026-08-19: 쿠폰 행 — PC는 좌측(체크박스+쿠폰명)·우측(만료일뱃지)이 한 줄 양끝정렬인데,
-       모바일 좁은 폭에서 쿠폰명이 길면 만료일뱃지와 부딪혀 잘리기 쉬워 세로 2줄 구조로 변경
-       (쿠폰명 줄 → 만료일뱃지 줄, 뱃지는 우측 정렬 유지) */
-    .coupon-row { flex-direction: column; align-items: flex-start; gap: 10px; }
-    .coupon-expiry { align-self: flex-end; }
+    /* 2026-08-24(재변경): 세로 2줄 구조 대신, 쿠폰명 말줄임(ellipsis)으로 항상 한 줄 유지 —
+       아래 .coupon-label 말줄임 처리와 세트(PC·모바일 공통 로직으로 이동, 이 오버라이드 제거) */
     /* 2026-08-18: 20% 축소(120px → 96px) + 상단 정렬 반영 */
     .product-img { width: 96px; height: 96px; border-radius: 24px; }
     /* 2026-08-18: 이미지~정보그룹 여백 축소(20px → 12px) + 이미지 상단 정렬(기존
@@ -3140,8 +3261,9 @@
     .option-subcard { flex-wrap: wrap; margin-left: 28px; width: auto; padding: 16px 16px; }
     .option-subcard-connector { left: -28px; }
     .option-subcard-info { min-width: 140px; }
-    /* 2026-08-18: 20% 축소(120px → 96px) */
-    .option-subcard-img { width: 96px; height: 96px; border-radius: 24px; }
+    /* 2026-08-18: 20% 축소(120px → 96px)
+       2026-08-25: 썸네일 이미지 10% 추가 축소(96px → 86.4px, radius 24px → 21.6px) */
+    .option-subcard-img { width: 86.4px; height: 86.4px; border-radius: 21.6px; }
     /* 2026-08-18: 한 단계 큰 토큰으로 교체(--text-m-script-14B 14px Bold →
        --text-m-body-16B 16px Bold) */
     .option-subcard-name { font: var(--text-m-body-16B); }
@@ -3174,7 +3296,7 @@
     .total-num { font-size: 18px; }
     .cart-footer { padding-bottom: max(14px, env(safe-area-inset-bottom)); }
     .footer-inner { padding: 16px 16px 14px; gap: 16px; flex-direction: column; align-items: stretch; }
-    .footer-terms { flex-shrink: 1; }
+    .footer-terms { flex-shrink: 1; justify-content: center; }
     /* 2026-08-17: 기존 13px는 모바일 타이포 스케일 어디에도 정확히 대응하지 않는
        하드코딩값이었음(script-12/14B 사이) — 한 단계 큰 토큰(--text-m-body-16B,
        16px Bold)으로 교체, PC 기본값(16px)과도 동일해짐 */

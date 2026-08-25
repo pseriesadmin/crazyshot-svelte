@@ -1,6 +1,7 @@
 import { redirect } from '@sveltejs/kit'
 import { isRealMemberSession } from '$lib/utils/authGuard'
 import { loadCourierClosedDates } from '$lib/server/courierClosedDates'
+import { isCouponEligible } from '$lib/server/coupons/couponEligibility'
 import type { PageServerLoad } from './$types'
 import type { SupabaseClient } from '@supabase/supabase-js'
 
@@ -44,6 +45,25 @@ export const load: PageServerLoad = async ({ locals }) => {
     .single()
   const rentalGuideText = (guideData as { guide_text?: string } | null)?.guide_text ?? ''
 
+  // 배송비(왕복/배송/반납요금) — CMS "/cms/set/rental > 배송적용옵션"에서 설정한 전역 요금.
+  // 상품상세(products/[id])의 "예상 배송비" 안내와 동일 테이블·동일 select — 실제 가격 계산은
+  // 상품별 shipping_round_trip/delivery/return 플래그(products 테이블) × 수령·반납 방식이
+  // 실제 배송(is_bulk_delivery)인지를 클라이언트에서 조합해 판정한다(2026-08-25 — 그동안
+  // rental_method_options.fee_amount(전부 0)만 보고 있어 "무료"로 잘못 표시되던 결함 수정).
+  const { data: shippingSettingsData } = await untypedFrom(supabase, 'rental_shipping_settings')
+    .select('enable_round_trip, round_trip_fee, enable_delivery, delivery_fee, enable_return, return_fee, shipping_guide')
+    .limit(1)
+    .single()
+  const shippingSettings = shippingSettingsData as {
+    enable_round_trip: boolean
+    round_trip_fee: number | null
+    enable_delivery: boolean
+    delivery_fee: number | null
+    enable_return: boolean
+    return_fee: number | null
+    shipping_guide: string | null
+  } | null
+
   const { session } = await locals.safeGetSession()
 
   // 장바구니는 가입 완료 계정만 접근 가능 (2026-08-18) — 비회원·익명세션은 /account와
@@ -54,7 +74,9 @@ export const load: PageServerLoad = async ({ locals }) => {
     throw redirect(303, '/auth/login?redirect=/cart')
   }
 
-  const [cartResult, profileResult, couponResult, addressResult] = await Promise.all([
+  const FIRST_RENTAL_EXCLUDE = ['hold', 'draft', 'cancelled', 'expired'] as const
+
+  const [cartResult, profileResult, couponResult, addressResult, firstRentalResult, studentResult, subscriptionResult] = await Promise.all([
     supabase
       .from('rental_reservations')
       .select('id, product_id, start_date, end_date, status, pickup_method, return_method, pickup_time, return_time, duration_type')
@@ -90,17 +112,45 @@ export const load: PageServerLoad = async ({ locals }) => {
       .order('is_default', { ascending: false })
       .order('sort_order', { ascending: true })
       .limit(1),
+
+    // 쿠폰 7개 자격조건 中 사용자의존 조건 — Q2/학생/구독 (order-context 불필요)
+    // Q2: rental_reservations 직접 조회, rental_count 컬럼 사용 금지 (products.md §2 동일 원칙)
+    // ⚠️ rental_reservations에는 deleted_at 컬럼이 없음(Migration 348 적용 전 재검증으로 발견,
+    // use_coupon RPC와 동일한 실수 — 여기서도 함께 수정) — 조건에서 제외
+    supabase
+      .from('rental_reservations')
+      .select('id')
+      .eq('user_id', session.user.id)
+      .not('status', 'in', `(${FIRST_RENTAL_EXCLUDE.map(s => `"${s}"`).join(',')})`)
+      .limit(1),
+
+    supabase
+      .from('user_profiles')
+      .select('is_student')
+      .eq('id', session.user.id)
+      .maybeSingle(),
+
+    // 실제 구독 테이블명은 subscriptions가 아니라 user_subscriptions이고, 이 테이블에도
+    // deleted_at 컬럼이 없음(status CHECK 제약이 'active'/'cancelled'/'expired'만 허용) —
+    // use_coupon RPC(Migration 348)와 동일하게 교정
+    supabase
+      .from('user_subscriptions')
+      .select('id')
+      .eq('user_id', session.user.id)
+      .eq('status', 'active')
+      .limit(1),
   ])
 
   const addressRows = (addressResult.data ?? []) as Array<{ road_address: string | null; detail_address: string | null }>
   const hasUserAddress = addressRows.some(row => !!row.road_address)
   const primaryAddress = addressRows.find(row => !!row.road_address) ?? null
 
-  // ── 쿠폰 노출 조건 필터 ─────────────────────────────────────────────────────
+  // ── 쿠폰 1차 필터 (기본 조건 — 날짜·등급·소진한도) ──────────────────────────
+  // 7개 자격조건(order-dependent/user-dependent) 2차 필터는 calcTotal 확정 후 적용
   const now = new Date().toISOString()
   const memberGrade = (profileResult.data as ProfileRow | null)?.membership_grade ?? null
 
-  const filteredCoupons = ((couponResult.data ?? []) as RawUserCouponRow[]).filter(uc => {
+  const basicFilteredCoupons = ((couponResult.data ?? []) as RawUserCouponRow[]).filter(uc => {
     const c = uc.coupons
     if (!c) return false
     if (!c.is_active) return false
@@ -135,7 +185,7 @@ export const load: PageServerLoad = async ({ locals }) => {
       productIds.length > 0
         ? supabase
             .from('products')
-            .select('id, name, category, brand, slug, image_urls, is_active, created_at, updated_at, deleted_at, allowed_method_ids, allowed_pickup_ids, parent_product_id')
+            .select('id, name, category, brand, slug, image_urls, is_active, created_at, updated_at, deleted_at, allowed_method_ids, allowed_pickup_ids, parent_product_id, shipping_round_trip, shipping_delivery, shipping_return')
             .in('id', productIds)
         : Promise.resolve({ data: [] as ProductRow[] }),
       productIds.length > 0
@@ -153,25 +203,32 @@ export const load: PageServerLoad = async ({ locals }) => {
     ])
     serverProducts = (productsResult.data ?? []) as ProductRow[]
 
-    // 대여방식(allowed_method_ids)·방문지점(allowed_pickup_ids)은 CMS 대여정책 탭이 부모 상품에만
-    // 설정되는 필드 — 예약에 배정된 자식 재고 유닛은 이 값이 항상 빈 배열([])이라, 자식 자신의
-    // 값이 비어있으면 부모 상품의 설정을 대신 조회해 채운다 (products.md §5 참고)
+    // 대여방식(allowed_method_ids)·방문지점(allowed_pickup_ids)·배송옵션(shipping_round_trip/
+    // delivery/return)은 CMS 대여정책 탭이 부모 상품에만 설정되는 필드(products.md §4-1 —
+    // "rental" 탭은 부모 전용) — 예약에 배정된 자식 재고 유닛은 이 값들이 항상 비어있거나(배열)
+    // null(배송옵션)이므로, parent_product_id가 있는 자식은 항상 부모 상품의 설정을 대신
+    // 조회해 채운다.
     const parentIdsNeeded = [...new Set(
       serverProducts
-        .filter(p =>
-          ((!p.allowed_method_ids || p.allowed_method_ids.length === 0) ||
-           (!p.allowed_pickup_ids || p.allowed_pickup_ids.length === 0)) && p.parent_product_id
-        )
+        .filter(p => p.parent_product_id)
         .map(p => p.parent_product_id as string)
     )]
     if (parentIdsNeeded.length > 0) {
       const { data: parentRows } = await supabase
         .from('products')
-        .select('id, allowed_method_ids, allowed_pickup_ids')
+        .select('id, allowed_method_ids, allowed_pickup_ids, shipping_round_trip, shipping_delivery, shipping_return')
         .in('id', parentIdsNeeded)
-      const parentRowsTyped = (parentRows ?? []) as Array<{ id: string; allowed_method_ids: string[] | null; allowed_pickup_ids: string[] | null }>
+      const parentRowsTyped = (parentRows ?? []) as Array<{
+        id: string
+        allowed_method_ids: string[] | null
+        allowed_pickup_ids: string[] | null
+        shipping_round_trip: boolean | null
+        shipping_delivery: boolean | null
+        shipping_return: boolean | null
+      }>
       const parentMethodMap = new Map(parentRowsTyped.map(p => [p.id, p.allowed_method_ids ?? []]))
       const parentPickupMap = new Map(parentRowsTyped.map(p => [p.id, p.allowed_pickup_ids ?? []]))
+      const parentShippingMap = new Map(parentRowsTyped.map(p => [p.id, p]))
       serverProducts = serverProducts.map(p => {
         if (!p.parent_product_id) return p
         const next = { ...p }
@@ -180,6 +237,12 @@ export const load: PageServerLoad = async ({ locals }) => {
         }
         if (!p.allowed_pickup_ids || p.allowed_pickup_ids.length === 0) {
           next.allowed_pickup_ids = parentPickupMap.get(p.parent_product_id) ?? p.allowed_pickup_ids
+        }
+        const parentShipping = parentShippingMap.get(p.parent_product_id)
+        if (parentShipping) {
+          next.shipping_round_trip = parentShipping.shipping_round_trip
+          next.shipping_delivery   = parentShipping.shipping_delivery
+          next.shipping_return     = parentShipping.shipping_return
         }
         return next
       })
@@ -268,11 +331,54 @@ export const load: PageServerLoad = async ({ locals }) => {
     }
   }
 
+  // ── 쿠폰 2차 필터: 7개 자격조건 (Migration 348 서버사이드 방어, isCouponEligible 순수함수) ──
+  // 사용자 컨텍스트 — 위 Promise.all에서 확보한 쿼리 결과 사용(추가 DB 쿼리 없음)
+  const isFirstRental         = (firstRentalResult.data?.length   ?? 0) === 0
+  const isStudent             = (studentResult.data as { is_student?: boolean | null } | null)?.is_student === true
+  const hasActiveSubscription = (subscriptionResult.data?.length  ?? 0) > 0
+
+  // 주문 컨텍스트 — cart는 orders가 아직 없어 calcTotal을 대리값으로 사용
+  // Q1 전체AND: rawReservations의 최소 대여일수, 모든 예약 방문 여부
+  const cartRsvs = rawReservations.filter(r => r.status === 'hold' || r.status === 'draft')
+  const minRentalDaysInCart = cartRsvs.length > 0
+    ? Math.min(...cartRsvs.map(r => {
+        const s = new Date(r.start_date), e = new Date(r.end_date)
+        return Math.round((e.getTime() - s.getTime()) / 86400000) + 1
+      }))
+    : null
+  const allWalkIn = cartRsvs.length > 0 ? cartRsvs.every(r => r.pickup_method === 'visit') : null
+
+  const filteredCoupons = basicFilteredCoupons.filter(uc => {
+    const c = uc.coupons
+    if (!c) return false
+    const result = isCouponEligible(
+      {
+        min_purchase_amount:  c.min_purchase_amount,
+        min_rental_amount:    c.min_rental_amount,
+        min_rental_days:      c.min_rental_days,
+        is_first_rental_only: c.is_first_rental_only,
+        is_student_only:      c.is_student_only,
+        is_subscription_only: c.is_subscription_only,
+        is_walk_in_only:      c.is_walk_in_only,
+      },
+      {
+        orderAmount:           calcTotal > 0 ? calcTotal : null,
+        minRentalDaysInOrder:  minRentalDaysInCart,
+        allWalkIn,
+        isFirstRental,
+        isStudent,
+        hasActiveSubscription,
+      },
+    )
+    return result.ok
+  })
+
   return {
     deliveryOptions,
     pickupPoints,
     courierClosedDates,
     rentalGuideText,
+    shippingSettings,
     userId:          session.user.id,
     reservationIds,
     cartProducts,
@@ -332,6 +438,9 @@ interface ProductRow {
   allowed_method_ids?: string[] | null
   allowed_pickup_ids?: string[] | null
   parent_product_id?:  string | null
+  shipping_round_trip?: boolean | null
+  shipping_delivery?:   boolean | null
+  shipping_return?:     boolean | null
 }
 
 interface PickupPointRow {
