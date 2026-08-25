@@ -4,6 +4,8 @@ import { getSupabaseUrl } from '$lib/env/supabasePublic'
 import { createClient } from '@supabase/supabase-js'
 import { hasSettingsAccess } from '$lib/utils/cmsPermissions'
 import { getCmsRoleForAction } from '$lib/server/getCmsRoleForAction'
+import { requireTrueSuperadmin } from '$lib/server/requireTrueSuperadmin'
+import { insertCmsAdminAuditLog } from '$lib/server/cmsAdminAuditLog'
 import type { Actions, PageServerLoad } from './$types'
 
 export const load: PageServerLoad = async ({ parent }) => {
@@ -31,7 +33,7 @@ export const actions: Actions = {
     if (!name || !email || !phone) {
       return fail(400, { error: '이름, 이메일, 휴대번호는 필수입니다.' })
     }
-    if (!['manager', 'partner'].includes(newAccountRole)) {
+    if (!['manager', 'partner', 'superadmin'].includes(newAccountRole)) {
       return fail(400, { error: '유효하지 않은 권한입니다.' })
     }
 
@@ -39,6 +41,12 @@ export const actions: Actions = {
     if (!serviceRoleKey) return fail(500, { error: '서버 설정 오류입니다.' })
 
     const serviceClient = createClient(getSupabaseUrl(), serviceRoleKey)
+
+    // superadmin 생성은 호출자가 실제 superadmin(level===100)이어야만 허용 (EC-4)
+    if (newAccountRole === 'superadmin') {
+      const superErr = await requireTrueSuperadmin(locals, serviceClient)
+      if (superErr) return fail(403, { error: superErr })
+    }
 
     let { data: authData, error: createErr } = await serviceClient.auth.admin.createUser({
       email,
@@ -86,6 +94,16 @@ export const actions: Actions = {
     })
 
     const inviteLink = token ? `/cms/login?invite=${token}` : null
+
+    // 마스터(superadmin) 계정 생성만 감사로그 기록(Q8 확정 — manager/partner 생성은 스코프 외)
+    if (newAccountRole === 'superadmin') {
+      await insertCmsAdminAuditLog(serviceClient, {
+        actorId: session.user.id,
+        actionType: 'create',
+        targetUserId: userId,
+        afterValue: { cms_role: 'superadmin', email },
+      })
+    }
 
     return { success: true, inviteLink, email }
   },
