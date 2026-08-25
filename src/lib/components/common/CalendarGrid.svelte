@@ -19,6 +19,9 @@
     // 휴무일 등 임의 날짜 비활성화(2026-08-24) — past/minDate 조건에 추가로 결합되는 판정
     // 함수. 미전달 시(기존 모든 호출부) 동작 100% 동일 — 하위호환 유지
     isDateDisabled?: (iso: string) => boolean
+    // isDateDisabled로 막힌 날짜를 클릭 시도했을 때 호출(2026-08-25) — past 날짜 클릭은
+    // 대상 아님(기존 그대로 완전 비활성). 미전달 시 막힌 날짜는 기존처럼 순수 disabled만 유지
+    onDisabledClick?: (iso: string) => void
   }
 
   let {
@@ -31,6 +34,7 @@
     rangeStartLabel = '시작일',
     rangeEndLabel = '종료일',
     isDateDisabled,
+    onDisabledClick,
   }: Props = $props()
 
   // 종료일 대기 중(rangeStart는 있고 rangeEnd는 아직 없음) hover한 날짜를 임시 종료일처럼
@@ -153,9 +157,10 @@
           class:cal-day-range-start={isRangeStart}
           class:cal-day-range-end={isRangeEnd}
           class:cal-day-in-range={isInRange}
-          disabled={past || holidayDisabled}
+          disabled={past}
+          aria-disabled={holidayDisabled}
           title={holidayDisabled ? '택배 휴무일' : undefined}
-          onclick={() => onselect(iso)}
+          onclick={() => holidayDisabled ? onDisabledClick?.(iso) : onselect(iso)}
           onmouseenter={() => { hoverIso = iso }}
           onmouseleave={() => { hoverIso = null }}
         >{day}</button>
@@ -284,7 +289,7 @@
     justify-content: center;
     min-height: 32px;
   }
-  .cal-day:hover:not(:disabled) { background: var(--cs-lilac); }
+  .cal-day:hover:not(:disabled):not(.cal-day-holiday) { background: var(--cs-lilac); }
   .cal-day-sel { background: var(--cs-purple) !important; color: var(--cs-white) !important; font-weight: 700; }
   .cal-day-past { color: var(--cs-text-placeholder); cursor: not-allowed; }
   /* 택배 휴무일 비활성(2026-08-24) — 과거 날짜와 같은 톤이되 취소선으로 구분 */

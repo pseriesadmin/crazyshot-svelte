@@ -1,12 +1,13 @@
 <script lang="ts">
   import BottomTabBar from '$lib/components/common/BottomTabBar.svelte'
   import HypePackBannerModal from '$lib/components/hype-pack/HypePackBannerModal.svelte'
+  import HypePackThemeGroupModal from '$lib/components/hype-pack/HypePackThemeGroupModal.svelte'
   import type { PageData } from './$types'
 
   interface Props { data: PageData }
   let { data }: Props = $props()
 
-  let activeModal = $state<'banner' | null>(null)
+  let activeModal = $state<'banner' | 'themeGroups' | null>(null)
 
   const KEYWORDS_FALLBACK = ['CANON 100mm', 'FeiyuTech SCORP Mini 2', 'FDR-AX43', 'Air 3S Drone']
   // Use CMS-managed keywords when set, else fallback
@@ -28,13 +29,32 @@
     return `${n.toLocaleString('ko-KR')} 원`
   }
 
-  const PACK_THEMES = [
-    { name: 'Idol Pack',     label: '#7d2e55', img: '/hype-pack/d-pack-idol.png' },
-    { name: 'Creator Pack',  label: '#fa373a', img: '/hype-pack/d-pack-creator-1.png' },
-    { name: 'Activity Pack', label: '#00679f', img: '/hype-pack/d-pack-activity.png' },
-    { name: 'Analog Pack',   label: '#9f6000', img: '/hype-pack/d-pack-analog.png' },
-    { name: 'Traveler Pack', label: '#7b8215', img: '/hype-pack/d-pack-traveler.png' },
+  interface DisplayTheme {
+    id: string | null
+    name: string
+    img: string
+    label: string
+  }
+
+  const PACK_THEMES_FALLBACK: DisplayTheme[] = [
+    { id: null, name: 'Idol Pack',     label: '#7d2e55', img: '/hype-pack/d-pack-idol.png' },
+    { id: null, name: 'Creator Pack',  label: '#fa373a', img: '/hype-pack/d-pack-creator-1.png' },
+    { id: null, name: 'Activity Pack', label: '#00679f', img: '/hype-pack/d-pack-activity.png' },
+    { id: null, name: 'Analog Pack',   label: '#9f6000', img: '/hype-pack/d-pack-analog.png' },
+    { id: null, name: 'Traveler Pack', label: '#7b8215', img: '/hype-pack/d-pack-traveler.png' },
   ]
+
+  // CMS 관리 테마그룹이 있으면 우선 사용, 비어있으면 기존 하드코딩 샘플로 폴백
+  const displayThemeGroups = $derived<DisplayTheme[]>(
+    data.themeGroups && data.themeGroups.length > 0
+      ? data.themeGroups.map((g) => ({
+          id:    g.id,
+          name:  g.title,
+          img:   g.image_url || '/hype-pack/d-pack-idol.png',
+          label: '#100B32',
+        }))
+      : PACK_THEMES_FALLBACK
+  )
 
   const SHOTLOG_POSTS = [
     { title: '휴대용 디자인으로 이동 중에도 미디어 카드에 쉽게 접근 가능',                  time: '2시간 전·by 유말자', img: '/hype-pack/m-post-1.png' },
@@ -109,17 +129,33 @@
 
   <!-- Pack 테마목록 (모바일) -->
   <div class="m-pack-themes">
-    <h2 class="m-pack-themes-title">Pack 테마목록</h2>
+    <div class="theme-pick-head">
+      <h2 class="m-pack-themes-title">Pack 테마목록</h2>
+      {#if data.isCms}
+        <button class="theme-cms-btn" onclick={() => { activeModal = 'themeGroups' }}>⚙ 테마그룹 관리</button>
+      {/if}
+    </div>
     <div class="m-pack-themes-list">
-      {#each PACK_THEMES as pack}
-        <article class="m-pack-theme-card" aria-label="{pack.name} 팩">
-          <img src={pack.img} alt={pack.name} class="m-pack-theme-img" />
-          <div class="m-pack-theme-badge-wrap">
-            <div class="m-pack-theme-badge" style="background-color: {pack.label}; opacity: 0.88;">
-              <span class="m-pack-theme-name">{pack.name}</span>
+      {#each displayThemeGroups as pack}
+        {#if pack.id}
+          <a href="/hype-pack/theme/{pack.id}" class="m-pack-theme-card" aria-label="{pack.name} 팩">
+            <img src={pack.img} alt={pack.name} class="m-pack-theme-img" />
+            <div class="m-pack-theme-badge-wrap">
+              <div class="m-pack-theme-badge" style="background-color: {pack.label}; opacity: 0.88;">
+                <span class="m-pack-theme-name">{pack.name}</span>
+              </div>
             </div>
-          </div>
-        </article>
+          </a>
+        {:else}
+          <article class="m-pack-theme-card" aria-label="{pack.name} 팩">
+            <img src={pack.img} alt={pack.name} class="m-pack-theme-img" />
+            <div class="m-pack-theme-badge-wrap">
+              <div class="m-pack-theme-badge" style="background-color: {pack.label}; opacity: 0.88;">
+                <span class="m-pack-theme-name">{pack.name}</span>
+              </div>
+            </div>
+          </article>
+        {/if}
       {/each}
     </div>
   </div>
@@ -212,17 +248,29 @@
   <!-- Pack 테마목록 섹션 -->
   <section class="d-section">
     <div class="d-section-inner">
-      <div class="d-title-bar">
+      <div class="d-title-bar theme-pick-head">
         <h2 class="d-section-title">Pack 테마목록</h2>
+        {#if data.isCms}
+          <button class="theme-cms-btn" onclick={() => { activeModal = 'themeGroups' }}>⚙ 테마그룹 관리</button>
+        {/if}
       </div>
       <div class="d-pack-grid">
-        {#each PACK_THEMES as pack}
-          <article class="d-pack-card" aria-label="{pack.name} 팩">
-            <img src={pack.img} alt="" class="d-pack-card-bg" aria-hidden="true" />
-            <div class="d-pack-card-label" style="background: {pack.label};">
-              <span class="d-pack-card-label-text">{pack.name}</span>
-            </div>
-          </article>
+        {#each displayThemeGroups as pack}
+          {#if pack.id}
+            <a href="/hype-pack/theme/{pack.id}" class="d-pack-card" aria-label="{pack.name} 팩">
+              <img src={pack.img} alt="" class="d-pack-card-bg" aria-hidden="true" />
+              <div class="d-pack-card-label" style="background: {pack.label};">
+                <span class="d-pack-card-label-text">{pack.name}</span>
+              </div>
+            </a>
+          {:else}
+            <article class="d-pack-card" aria-label="{pack.name} 팩">
+              <img src={pack.img} alt="" class="d-pack-card-bg" aria-hidden="true" />
+              <div class="d-pack-card-label" style="background: {pack.label};">
+                <span class="d-pack-card-label-text">{pack.name}</span>
+              </div>
+            </article>
+          {/if}
         {/each}
       </div>
     </div>
@@ -236,6 +284,12 @@
 {#if data.isCms && activeModal === 'banner'}
   <HypePackBannerModal
     initialSettings={data.bannerRaw}
+    packageCategoryKey={data.packageCategoryKey}
+    onclose={() => { activeModal = null }}
+  />
+{:else if data.isCms && activeModal === 'themeGroups'}
+  <HypePackThemeGroupModal
+    groups={data.themeGroups}
     packageCategoryKey={data.packageCategoryKey}
     onclose={() => { activeModal = null }}
   />
@@ -371,6 +425,14 @@
     background: var(--cs-lilac);
     padding: 50px 25px 60px;
   }
+  .m-pack-themes .theme-pick-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    margin: 0 0 25px;
+  }
+  .m-pack-themes .theme-pick-head .m-pack-themes-title { margin: 0; }
   .m-pack-themes-title {
     font-family: 'Noto Sans KR', sans-serif;
     font-size: 21px;
@@ -386,12 +448,14 @@
     gap: 15px;
   }
   .m-pack-theme-card {
+    display: block;
     position: relative;
     width: 100%;
     aspect-ratio: 1 / 1;
     border-radius: 20px; /* --radius-lg */
     overflow: hidden;
     cursor: pointer;
+    text-decoration: none;
   }
   .m-pack-theme-img {
     display: block;
@@ -520,6 +584,18 @@
     max-width: 1240px;
     border-radius: var(--radius-xl);
   }
+  .d-title-bar.theme-pick-head {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    position: relative;
+  }
+  .d-title-bar.theme-pick-head .theme-cms-btn {
+    position: absolute;
+    right: 40px;
+    top: 50%;
+    transform: translateY(-50%);
+  }
   .d-section-title {
     font-family: 'Noto Sans KR', sans-serif;
     font-size: 25px;
@@ -584,11 +660,13 @@
     gap: 50px;
   }
   .d-pack-card {
+    display: block;
     position: relative;
     height: 520px;
     border-radius: var(--radius-2xl);
     overflow: hidden;
     cursor: pointer;
+    text-decoration: none;
   }
   .d-pack-card-bg {
     position: absolute;
@@ -655,5 +733,24 @@
     right: 16px;
     padding: 8px 14px;
   }
+
+  /* 관리자 테마그룹 관리 버튼 — admin-edit-btn과 동일 톤(비-absolute, 인라인 배치) */
+  .theme-cms-btn {
+    z-index: 10;
+    background: rgba(16, 11, 50, 0.75);
+    color: #fff;
+    border: 1px solid rgba(255,255,255,0.3);
+    border-radius: var(--radius-md, 15px);
+    font-size: 13px;
+    font-weight: 700;
+    cursor: pointer;
+    line-height: 1;
+    padding: 8px 14px;
+    backdrop-filter: blur(4px);
+    transition: background 0.15s;
+    white-space: nowrap;
+    flex-shrink: 0;
+  }
+  .theme-cms-btn:hover { background: rgba(59, 47, 138, 0.9); }
 
 </style>

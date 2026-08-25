@@ -28,6 +28,23 @@ export interface EnrichedBannerItem {
   price12h: number | null
 }
 
+interface ThemeGroupProduct {
+  id: string
+  name: string
+  slug: string | null
+  image_urls: string[] | null
+  base_price_daily: number
+}
+
+export interface ThemeGroupWithProducts {
+  id: string
+  title: string
+  sub_copy: string | null
+  image_url: string
+  sort_order: number
+  products: ThemeGroupProduct[]
+}
+
 export const load: PageServerLoad = async ({ locals }) => {
   const { session } = await locals.safeGetSession()
   let isCms = false
@@ -41,7 +58,7 @@ export const load: PageServerLoad = async ({ locals }) => {
   }
 
   // 배너 상품 검색을 "패키지" 카테고리로 잠그기 위한 정본 카테고리 키(code_mapping_groups)
-  const packageCategoryKey = await getCategoryKeyByGroupName('패키지')
+  const packageCategoryKey = await getCategoryKeyByGroupName('추천패키지')
 
   // Load banner settings from cms_settings
   const { data: settingRow } = await locals.supabase
@@ -56,12 +73,38 @@ export const load: PageServerLoad = async ({ locals }) => {
     keywords: [],
   }
 
-  // Enrich with product data
+  // Pack 테마그룹 로드 (hype-pack 전용 — home_theme_groups와 완전히 독립된 테이블/RPC, Migration #342)
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const { data: themeGroupsRaw } = await (locals.supabase.rpc as any)('get_hype_pack_theme_groups_with_products')
+  const themeGroups: ThemeGroupWithProducts[] = (themeGroupsRaw as ThemeGroupWithProducts[] | null) ?? []
+
+  // 12H·24H 실가격 배치 조회 (products.md §대여 기준가격 패턴과 동일)
+  // 배너 상품 ID + 테마그룹 상품 ID를 하나로 합쳐 단일 쿼리로 처리(중복 쿼리 방지)
+  const bannerIds = raw.items.map((i) => i.product_id)
+  const themeProductIds = themeGroups.flatMap((g) => g.products.map((p) => p.id))
+  const allPriceIds = Array.from(new Set([...bannerIds, ...themeProductIds]))
+
+  const price12hMap: Record<string, number> = {}
+  const price24hMap: Record<string, number> = {}
+  if (allPriceIds.length > 0) {
+    const { data: priceRules } = await locals.supabase
+      .from('price_rules')
+      .select('product_id, duration_type, price')
+      .in('product_id', allPriceIds)
+      .in('duration_type', ['12h', '24h'])
+      .eq('is_active', true)
+      .is('deleted_at', null)
+    for (const r of (priceRules ?? []) as { product_id: string; duration_type: string; price: number }[]) {
+      if (r.duration_type === '12h') price12hMap[r.product_id] = Number(r.price)
+      if (r.duration_type === '24h') price24hMap[r.product_id] = Number(r.price)
+    }
+  }
+
+  // Enrich banner with product data
   let enrichedItems: EnrichedBannerItem[] = []
   if (raw.items.length > 0) {
-    const ids = raw.items.map((i) => i.product_id)
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const { data: products } = await (locals.supabase.rpc as any)('get_products_by_ids', { p_ids: ids })
+    const { data: products } = await (locals.supabase.rpc as any)('get_products_by_ids', { p_ids: bannerIds })
     const prodMap = new Map<string, { name: string; slug: string | null; image_urls: string[] | null; base_price_daily: number }>()
     for (const p of (products ?? []) as Record<string, unknown>[]) {
       const id = String(p['id'] ?? '')
@@ -71,21 +114,6 @@ export const load: PageServerLoad = async ({ locals }) => {
         image_urls:       (p['image_urls'] as string[] | null) ?? null,
         base_price_daily: Number(p['base_price_daily'] ?? 0),
       })
-    }
-
-    // 12H·24H 실가격 배치 조회 (products.md §대여 기준가격 패턴과 동일)
-    const price12hMap: Record<string, number> = {}
-    const price24hMap: Record<string, number> = {}
-    const { data: priceRules } = await locals.supabase
-      .from('price_rules')
-      .select('product_id, duration_type, price')
-      .in('product_id', ids)
-      .in('duration_type', ['12h', '24h'])
-      .eq('is_active', true)
-      .is('deleted_at', null)
-    for (const r of (priceRules ?? []) as { product_id: string; duration_type: string; price: number }[]) {
-      if (r.duration_type === '12h') price12hMap[r.product_id] = Number(r.price)
-      if (r.duration_type === '24h') price24hMap[r.product_id] = Number(r.price)
     }
 
     enrichedItems = raw.items
@@ -111,6 +139,15 @@ export const load: PageServerLoad = async ({ locals }) => {
       .filter((i) => i.name)
   }
 
+  // 테마그룹 상품에도 동일하게 12h/24h 가격 부착(구독형 legacy base_price_daily 우선)
+  const enrichedThemeGroups: ThemeGroupWithProducts[] = themeGroups.map((g) => ({
+    ...g,
+    products: g.products.map((p) => ({
+      ...p,
+      base_price_daily: p.base_price_daily > 0 ? p.base_price_daily : (price24hMap[p.id] ?? 0),
+    })),
+  }))
+
   return {
     isCms,
     packageCategoryKey,
@@ -131,5 +168,6 @@ export const load: PageServerLoad = async ({ locals }) => {
         mobile_image_url: item.mobile_image_url ?? null,
       })),
     },
+    themeGroups: enrichedThemeGroups,
   }
 }
