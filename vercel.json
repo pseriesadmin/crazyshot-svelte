@@ -11,6 +11,10 @@
     {
       "path": "/api/cron/sync-national-holidays",
       "schedule": "15 0 * * *"
+    },
+    {
+      "path": "/api/cron/dhero-sync",
+      "schedule": "*/10 * * * *"
     }
   ]
 }
