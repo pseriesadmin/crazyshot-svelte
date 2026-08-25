@@ -100,6 +100,12 @@ Mobile: --text-m-htitle-24B  (24px Black)  제목
         --text-m-script-12   (12px)        캡션
 ```
 
+> ⚠️ **예외(2026-08-26 확정)** — `/account` 마이페이지 "섹션 타이틀"(대여 경험·관심가져봄·대여
+> 정보·내정보)은 위 표의 일반 "소제목" 행(PC `--text-pc-title-18` / Mobile `--text-m-title-18B`)과
+> 짝을 다르게 쓴다: **PC `--text-pc-title-18` ↔ Mobile `--text-m-title-21`**(18px이 아니라
+> 21px). Stephen이 명시적으로 선택한 페어링이니 이 컨텍스트에서 `--text-m-title-18B`로 되돌리지
+> 말 것. 세부 적용 위치·근거 → `@.claude/rules-ref/front-uiux.md §18`.
+
 ---
 
 ## 모바일 전용 공통 컴포넌트 (USER 화면 — ≤767px)
@@ -133,6 +139,7 @@ Mobile: --text-m-htitle-24B  (24px Black)  제목
 |---|---|---|---|
 | **SuggestPicker** | `$lib/components/common/SuggestPicker.svelte` | `category` / `brand` / `generic` | cms §12 · front §12 |
 | 타입 | `$lib/types/suggest-picker.ts` | — | `SuggestPickerOption`, `SuggestPickerVariant` |
+| **체크아이콘(CheckIcon) 버튼** | 인라인 SVG + CSS `currentColor` (컴포넌트 파일 없음) | — | 약관 동의·선택 체크 표준. 비선택: `.checkbox-btn-terms { color: --cs-purple-op10 }` / 선택: `.checked { color: --cs-purple }`. `<input type="checkbox">` 신규 작성 금지. path 데이터 + 패턴 → `front-uiux.md §17` |
 | **ChevronIcon**(`arrow01`) | `$lib/components/common/ChevronIcon.svelte` | `direction`: `right`(기본)/`left`/`up`/`down` | props: `size`(기본 8) · `color`(기본 `#aaaaaa`) — 흰 카드 위 리스트 이동 화살표 표준 |
 | **Arrow02Icon**(`arrow02`) | `$lib/components/common/Arrow02Icon.svelte` | 방향 고정(우측, 직선+화살촉형) | props: `size`(기본 16) · `color`(기본 `currentColor`) — 랜딩·상세이동 버튼용 심플 화살표 표준(2026-08-07, `AdminChatPanel.svelte` `.cs-detail-link` 최초 적용) |
 | **close-red**(강조닫기버튼) | 클래스 `.close-btn`/`.rep-close-btn` (CMS 전용, 컴포넌트 파일 없음) | 배치: `flex`(margin-left:auto) 또는 `absolute`(카드 코너) | cms-uiux.md §0-10-A · 28×28px · `✕` 문자(SVG 금지) · hover 시 `--cs-red-badge` 강조 |

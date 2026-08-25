@@ -2368,6 +2368,141 @@ export const actions = {
 
 ---
 
+## §17 체크 확인 버튼 — front 단독 표준 (2026-08-25 등록)
+
+> **"체크아이콘(CheckIcon) 버튼" 언급 시 → 이 섹션 스펙 즉시 적용.**
+> ⛔ `<input type="checkbox">` 신규 작성 절대 금지 — 인라인 SVG + `.checkbox-btn` 패턴 단독 표준
+> ⛔ 전용 Svelte 컴포넌트 신규 생성 금지 — SVG 인라인 + CSS `currentColor` 로 충분
+
+### 반응형 크기 (viewBox 비율 3:2 고정)
+
+| 구분 | width | height | 용도 |
+|---|---|---|---|
+| **Mobile** (< 768px) | **22px** | **15px** | 기본 — 약관 동의·선택 체크 |
+| **PC** (≥ 768px) | **18px** | **12px** | 자동 축소 (CSS media query) |
+
+```css
+/* 반응형 크기 — CSS로 자동 적용 */
+.checkbox-btn-terms svg { width: 22px; height: 15px; }
+@media (min-width: 768px) {
+  .checkbox-btn-terms svg { width: 18px; height: 12px; }
+}
+```
+
+> viewBox `0 0 18 12` 고정 + CSS width/height 제어로 비율 자동 유지.
+
+### 체크인(ON) / 아웃(OFF) 상태값
+
+| 상태 | 클래스 | CSS color 토큰 | 색상 |
+|---|---|---|---|
+| **체크인(ON)** — 선택됨 | `.checked` 추가 | `var(--cs-purple)` | `#3B2F8A` 보라 |
+| **아웃(OFF)** — 미선택 | 기본 | `var(--cs-purple-op10)` | 연보라 반투명 |
+
+### SVG 스펙 (path 데이터 정본)
+
+```
+viewBox : 0 0 18 12   (비율 3:2 고정 — 크기는 CSS로 제어)
+fill    : currentColor  ← 부모 CSS color 토큰으로 제어
+형태    : 자유형(freehand) 체크마크
+
+path d="M14.788 0.40847C15.5937 -0.206503 16.7506 -0.123176 17.4589 0.632103C18.2144 1.4379 18.1729 2.70376 17.3671 3.45925L17.3622 3.46413C17.3585 3.46759 17.3528 3.47297 17.3456 3.47976C17.3311 3.49333 17.3101 3.51407 17.2821 3.54031C17.2261 3.59279 17.1437 3.66974 17.039 3.76784C16.8294 3.96413 16.5289 4.24474 16.1669 4.58327C15.4428 5.26035 14.4707 6.169 13.4774 7.09304C12.4848 8.01654 11.4689 8.95836 10.6591 9.70144C9.90326 10.3949 9.21125 11.0229 8.954 11.219C8.38484 11.6526 7.64783 12.0001 6.7831 12.0003C5.89707 12.0003 5.14509 11.6357 4.57217 11.138C4.258 10.865 3.25694 9.9462 2.37197 9.13015C1.92122 8.71451 1.48885 8.31388 1.16885 8.01785C1.0088 7.86979 0.875998 7.74749 0.78408 7.66238C0.738281 7.61997 0.702073 7.58638 0.677634 7.56374C0.665704 7.55269 0.656551 7.54415 0.650291 7.53835C0.647126 7.53542 0.644094 7.53301 0.642478 7.53152L0.641502 7.52956H0.640525C-0.169647 6.77877 -0.217693 5.51259 0.533103 4.70242C1.28393 3.89251 2.55017 3.84526 3.36025 4.59597L3.36123 4.59792C3.3628 4.59938 3.36592 4.60089 3.36904 4.60378C3.37524 4.60953 3.38439 4.61807 3.39638 4.62917C3.42067 4.65167 3.45618 4.68551 3.50185 4.72781C3.59333 4.81251 3.72524 4.93384 3.88467 5.08132C4.2037 5.37646 4.63512 5.77493 5.08388 6.18874C5.73477 6.78894 6.40077 7.39812 6.82217 7.78054C6.86093 7.74604 6.90358 7.70918 6.94814 7.66921C7.21008 7.43424 7.55408 7.12113 7.954 6.75417C8.7536 6.02049 9.76226 5.0859 10.7528 4.16433C11.7428 3.24336 12.7128 2.33711 13.4354 1.6614C13.7965 1.32374 14.0957 1.04357 14.3046 0.847923C14.409 0.750147 14.491 0.67359 14.5468 0.621361C14.5745 0.595342 14.5959 0.575239 14.6103 0.56179C14.6174 0.555065 14.6232 0.549566 14.6269 0.546165L14.6317 0.541282L14.788 0.40847Z"
+```
+
+### 표준 사용 패턴
+
+```svelte
+<!-- 약관 동의 — class:checked로 체크인(ON)/아웃(OFF) 전환 -->
+<button class="checkbox-btn checkbox-btn-terms" class:checked={agreed}
+        onclick={() => agreed = !agreed} aria-label="동의">
+  <svg width="18" height="12" viewBox="0 0 18 12" fill="none" aria-hidden="true">
+    <path d="M14.788 0.40847...Z" fill="currentColor" />
+  </svg>
+</button>
+```
+
+```css
+/* 기본 버튼 */
+.checkbox-btn { background: none; border: none; padding: 0; cursor: pointer; flex-shrink: 0; }
+
+/* 체크아웃(OFF) — 미선택 */
+.checkbox-btn-terms { color: var(--cs-purple-op10); }
+
+/* 체크인(ON) — 선택됨 */
+.checkbox-btn-terms.checked { color: var(--cs-purple); }
+
+/* 반응형 크기 — 비율 3:2 자동 유지 */
+.checkbox-btn-terms svg { width: 18px; height: 12px; }
+@media (min-width: 768px) {
+  .checkbox-btn-terms svg { width: 22px; height: 15px; }
+}
+```
+
+### GATE C 확인 항목
+
+```
+[ ] SVG fill="currentColor" 사용 (하드코딩 색상 금지)?
+[ ] 체크인(ON) .checked → color: var(--cs-purple)?
+[ ] 아웃(OFF) 기본 → color: var(--cs-purple-op10)?
+[ ] Mobile 22×15px / PC(≥768px) 18×12px CSS 반응형 적용?
+[ ] <input type="checkbox"> 사용 없음?
+[ ] aria-label이 버튼에 명시돼 있음?
+```
+
+---
+
+## 18. `/account` 마이페이지 섹션 타이틀 — PC·모바일 폰트 토큰 페어링 ★★★ (2026-08-26 확정)
+
+> **"섹션 타이틀 폰트 토큰 반영해", "마이페이지 타이틀 표준 적용해" 언급 시 → 재도출 없이 아래
+> 페어링을 즉시 적용.** `uiux-index.md` "타이포 빠른 참조" 표의 일반 소제목 페어링(PC 18px ↔
+> Mobile 18px Bold)과 다른, 이 컨텍스트 전용 예외 조합이다 — 혼동해서 되돌리지 말 것.
+
+### 18-1. 토큰 페어링
+
+| 화면 | 토큰 | 값 |
+|---|---|---|
+| **PC** | `--text-pc-title-18` | `700 18px/170% var(--font-kr)` |
+| **Mobile** | `--text-m-title-21` | `700 21px/160% var(--font-kr)` |
+
+```css
+/* 적용 패턴 — color·letter-spacing은 토큰에 없는 값이라 별도 지정 유지 */
+style="font: var(--text-pc-title-18);"   /* PC */
+style="font: var(--text-m-title-21);"    /* Mobile */
+```
+
+> ⚠️ `--text-m-title-18B`(700 18px, 일반 소제목 짝)나 `--text-m-ad-kr-20`(700 20px이지만
+> `var(--font-kr-heading)` AggroOTF 폰트 — 광고/헤드라인 전용, 이 컨텍스트와 폰트 패밀리 불일치)로
+> 대체하지 말 것 — 둘 다 검토 후 기각된 후보다.
+
+### 18-2. 적용 대상 (`/account` "내정보" 마이페이지 섹션 타이틀 4종)
+
+```
+대여 경험 · 관심가져봄 · 대여 정보 · 내정보
+```
+
+| 화면 | 파일 |
+|---|---|
+| PC | `src/routes/account/+page.svelte` `.pc-layout` 블록 내 4개 타이틀 |
+| Mobile — 대여 경험 | `src/routes/account/+page.svelte` 모바일 플로우(`.page-inner`) |
+| Mobile — 관심가져봄 | `src/lib/components/account/WishlistScroll.svelte` `.section-title` |
+| Mobile — 대여 정보·내정보 | `src/lib/components/account/MenuSection.svelte` 공유 타이틀(`{title}`) |
+
+> 이 4곳 외의 새 "섹션 타이틀"을 `/account` 계열 화면에 추가할 때도 이 페어링을 기본값으로
+> 적용할 것 — 다른 값이 필요하면 먼저 Stephen에게 확인.
+
+### GATE C 확인 항목
+
+```
+[ ] PC 섹션 타이틀 — font: var(--text-pc-title-18) 사용?
+[ ] Mobile 섹션 타이틀 — font: var(--text-m-title-21) 사용? (--text-m-title-18B 아님)
+[ ] color·letter-spacing은 토큰과 별도로 기존 값(#444/-0.3px 등) 유지?
+[ ] WishlistScroll.svelte·MenuSection.svelte처럼 공유 컴포넌트라면 한 곳 수정으로
+    모든 사용처(PC 중첩 렌더 포함)에 일괄 반영되는지 확인?
+```
+
+---
+
 *front-uiux.md | 사용자(USER) 화면 표준 디자인 시스템 | Harness Flow v3.2*
 *소스: crazyshot-Front_design-system.json (2026-07-10)*
+*2026-08-26 §18 추가 — `/account` 마이페이지 섹션 타이틀 PC(`--text-pc-title-18`)/모바일
+(`--text-m-title-21`) 폰트 토큰 페어링 확정 반영(Stephen 확정)*
 *대응 CMS 문서: cms-uiux.md (절대 혼용 금지)*
