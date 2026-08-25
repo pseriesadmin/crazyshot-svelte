@@ -219,6 +219,9 @@
                   <span class="status-badge" style="background:{st.bg};color:{st.color}">
                     {STATUS_LABEL[row.status] ?? row.status}
                   </span>
+                  {#if row.dhero_status}
+                    <span class="dhero-mini-badge">{row.dhero_status}</span>
+                  {/if}
                 </td>
                 <td class="col-hide">
                   <code class="rsv-code">{row.reservation_code ?? `CZ-${String(row.reservation_id).padStart(5,'0')}`}</code>
@@ -439,6 +442,19 @@
     border-radius: var(--radius-sm);
     font: var(--text-pc-script-12);
     font-weight: 700;
+  }
+  /* 두발히어로 배송 상태 미니 배지 (status 칸에 서브로 표시) */
+  .dhero-mini-badge {
+    display: block;
+    margin-top: 3px;
+    padding: 1px 7px;
+    border-radius: var(--radius-full, 99px);
+    font-size: 10px;
+    font-weight: 600;
+    background: #ede9fe;
+    color: #5b21b6;
+    white-space: nowrap;
+    width: fit-content;
   }
   .rsv-code {
     font-family: monospace;

@@ -9,6 +9,7 @@
   import { extractProductId, isProductMatch } from '$lib/utils/qrProductId'
   import { hasSettingsAccess } from '$lib/utils/cmsPermissions'
   import { isLockerHour } from '$lib/utils/lockerTimeRange'
+  import { DHERO_STATUS_LABEL } from '$lib/utils/dheroLabels'
 
   interface RentalListRow {
     reservation_id:    number
@@ -48,6 +49,12 @@
     created_at:        string
     payment_confirmed_at?: string | null
     total_count:       number
+    // Migration 344: 두발히어로 배송 상태 (nullable)
+    dhero_status?:         string | null
+    dhero_status_code?:    number | null
+    dhero_return_book_id?: string | null
+    dhero_synced_at?:      string | null
+    tracking_number?:      string | null
   }
 
   interface PaymentDetail {
@@ -455,6 +462,149 @@
     }
   }
 
+  // ── 두발히어로 배송 자동화 상태 (rental 탭 오픈 시 lazy-fetch) ──────────────────
+  // DHERO_STATUS_LABEL은 $lib/utils/dheroLabels에서 import (단일 정의 — MEDIUM-2 수정 2026-08-25)
+  // 클라이언트 측 중복 정의(PDF 스펙과 다른 잘못된 매핑값 포함)는 제거됨.
+
+  interface DheroInfo {
+    bookId:                  string
+    status:                  number
+    statusText?:             string | null
+    deliveryRiderName?:      string | null
+    deliveryRiderMobile?:    string | null
+    placePageUrl?:           string | null
+    sentBackReason?:         string | null
+    lostReason?:             string | null
+    delayedDeliveries?:      Array<{ reason: string; delayedDate?: string; [key: string]: unknown }> | null
+    pickupScheduledAt?:      string | null
+    deliveryCompletedAt?:    string | null
+    [key: string]: unknown
+  }
+
+  let dheroFetchedForId  = $state<number | null>(null)
+  let dheroLoading       = $state(false)
+  let isBulkMethod       = $state(false)
+  let dheroData          = $state<DheroInfo | null>(null)
+  let dheroError         = $state<string | null>(null)
+  let dheroBookLoading   = $state(false)  // 배송접수 POST 진행 중
+  let dheroBookError     = $state<string | null>(null)
+  let dheroCancelLoading = $state(false)
+  let dheroCancelError   = $state<string | null>(null)
+  let dheroReturnLoading = $state(false)
+  let dheroReturnError   = $state<string | null>(null)
+
+  $effect(() => {
+    if (activeTab !== 'rental') return
+    if (dheroLoading) return
+    if (dheroFetchedForId === row.reservation_id) return
+
+    const id = row.reservation_id
+    dheroFetchedForId = id
+    dheroData         = null
+    dheroError        = null
+    isBulkMethod      = false
+    dheroLoading      = true
+
+    fetch(`/api/cms/reservations/${id}/dhero`)
+      .then(r => r.json())
+      .then((d: { dhero: DheroInfo | null; is_bulk_delivery?: boolean; dhero_error?: { message: string } }) => {
+        if (dheroFetchedForId === id) {
+          isBulkMethod  = d.is_bulk_delivery ?? false
+          dheroData     = d.dhero ?? null
+          dheroError    = d.dhero_error?.message ?? null
+          dheroLoading  = false
+        }
+      })
+      .catch(() => {
+        if (dheroFetchedForId === id) {
+          dheroLoading = false
+        }
+      })
+  })
+
+  async function refreshDheroStatus(): Promise<void> {
+    dheroFetchedForId = null  // 재-fetch 강제
+    // 다음 $effect 실행을 위해 상태 초기화
+    dheroData  = null
+    dheroError = null
+  }
+
+  async function registerDheroDelivery(): Promise<void> {
+    dheroBookLoading = true
+    dheroBookError   = null
+    try {
+      const res = await fetch(`/api/cms/reservations/${row.reservation_id}/dhero`, {
+        method:  'POST',
+        headers: { 'content-type': 'application/json' },
+      })
+      const d = await res.json() as { ok?: boolean; bookId?: string; dhero_error?: { message: string }; error?: string }
+      if (res.ok && d.ok) {
+        csToast.success('두발히어로 배송이 접수되었습니다.')
+        dheroFetchedForId = null  // 재-fetch 강제
+        onrefresh()
+      } else {
+        dheroBookError = d.dhero_error?.message ?? d.error ?? '배송접수에 실패했습니다.'
+      }
+    } catch {
+      dheroBookError = '배송접수 중 오류가 발생했습니다.'
+    } finally {
+      dheroBookLoading = false
+    }
+  }
+
+  async function cancelDheroDelivery(): Promise<void> {
+    if (!confirm('두발히어로 배송을 취소하시겠습니까?')) return
+    dheroCancelLoading = true
+    dheroCancelError   = null
+    try {
+      const res = await fetch(`/api/cms/reservations/${row.reservation_id}/dhero/cancel`, {
+        method: 'PUT',
+      })
+      const d = await res.json() as { ok?: boolean; dhero_cancel_failed?: boolean; error?: string; dhero_error?: { message: string } }
+      if (d.dhero_cancel_failed) {
+        dheroCancelError = '두발히어로에서 이미 배차된 건은 취소할 수 없습니다.'
+      } else if (!res.ok) {
+        dheroCancelError = d.error ?? d.dhero_error?.message ?? '취소에 실패했습니다.'
+      } else {
+        csToast.success('배송이 취소되었습니다.')
+        dheroFetchedForId = null
+        onrefresh()
+      }
+    } catch {
+      dheroCancelError = '취소 중 오류가 발생했습니다.'
+    } finally {
+      dheroCancelLoading = false
+    }
+  }
+
+  async function registerDheroReturn(): Promise<void> {
+    const bookId = row.tracking_number
+    if (!bookId) {
+      csToast.error('접수된 배송이 없어 반송 등록을 할 수 없습니다.')
+      return
+    }
+    dheroReturnLoading = true
+    dheroReturnError   = null
+    try {
+      const res = await fetch(`/api/cms/reservations/${row.reservation_id}/dhero/return`, {
+        method:  'POST',
+        headers: { 'content-type': 'application/json' },
+      })
+      const d = await res.json() as { ok?: boolean; returnBookId?: string; error?: string; dhero_error?: { message: string } }
+      if (res.ok && d.ok) {
+        csToast.success('반송 등록이 완료되었습니다.')
+        dheroFetchedForId = null
+        onrefresh()
+      } else {
+        dheroReturnError = d.error ?? d.dhero_error?.message ?? '반송 등록에 실패했습니다.'
+      }
+    } catch {
+      dheroReturnError = '반송 등록 중 오류가 발생했습니다.'
+    } finally {
+      dheroReturnLoading = false
+    }
+  }
+
   // ── 무인보관함 비밀번호 (lazy-fetch, rental 탭 오픈 시 조회, manager 이상만) ──────────
   let lockerPwFetchedForId = $state<number | null>(null)
   let lockerPassword       = $state('')
@@ -743,43 +893,159 @@
         {/if}
       {/if}
 
-      <!-- 운송장 정보 — 관리자가 택배사·운송장 번호를 등록하면 배송추적 카드에 반영됨 -->
-      <div class="section-title">운송장 정보</div>
-      {#if trackingLoading}
-        <div class="loading-box">운송장 정보 조회 중...</div>
-      {:else}
-        <div class="info-section">
-          <div class="info-row">
-            <span class="info-label">택배사</span>
-            <input
-              class="tracking-input"
-              type="text"
-              placeholder="예: CJ대한통운, 한진택배"
-              bind:value={trackingCourierCode}
-            />
+      <!-- 운송장/배송 정보 + 상태 액션 + 알림 발송 — 하나의 그룹으로 묶음 (2026-08-25 Stephen 요청) -->
+      <div class="rental-shipping-group">
+      <!-- 운송장 정보 / 두발히어로 배송 자동화 — pickup_method is_bulk_delivery 기준 분기 -->
+      {#if isBulkMethod}
+        <!-- ── 두발히어로 자동화 뷰 ──────────────────────────────────────── -->
+        <div class="section-title">두발히어로 배송</div>
+        {#if dheroLoading}
+          <div class="loading-box">배송 정보 조회 중...</div>
+        {:else if row.tracking_number}
+          <!-- 배송 접수된 상태: 상태·bookId·라이더·동기화 시각 표시 -->
+          <div class="info-section">
+            <div class="info-row">
+              <span class="info-label">배송상태</span>
+              <span class="dhero-status-badge dhero-code-{row.dhero_status_code ?? ''}">
+                {row.dhero_status ?? (DHERO_STATUS_LABEL[row.dhero_status_code ?? -1] ?? '접수됨')}
+              </span>
+            </div>
+            <div class="info-row">
+              <span class="info-label">접수번호(bookId)</span>
+              <span class="info-value mono">{row.tracking_number}</span>
+            </div>
+            {#if row.dhero_return_book_id}
+              <div class="info-row">
+                <span class="info-label">반송접수번호</span>
+                <span class="info-value mono">{row.dhero_return_book_id}</span>
+              </div>
+            {/if}
+            {#if dheroData?.deliveryRiderName}
+              <div class="info-row">
+                <span class="info-label">라이더</span>
+                <span class="info-value">{dheroData.deliveryRiderName}{dheroData.deliveryRiderMobile ? ` · ${dheroData.deliveryRiderMobile}` : ''}</span>
+              </div>
+            {/if}
+            {#if dheroData?.delayedDeliveries?.length}
+              <div class="info-row">
+                <span class="info-label">배송 지연</span>
+                <span class="info-value">
+                  {#each dheroData.delayedDeliveries as d}
+                    <span class="dhero-reason-item">{d.reason}{d.delayedDate ? ` (${d.delayedDate})` : ''}</span>
+                  {/each}
+                </span>
+              </div>
+            {/if}
+            {#if dheroData?.sentBackReason}
+              <div class="info-row">
+                <span class="info-label">반송 사유</span>
+                <span class="info-value dhero-reason-text">{dheroData.sentBackReason}</span>
+              </div>
+            {/if}
+            {#if dheroData?.lostReason}
+              <div class="info-row">
+                <span class="info-label">분실 사유</span>
+                <span class="info-value dhero-reason-text">{dheroData.lostReason}</span>
+              </div>
+            {/if}
+            {#if row.dhero_synced_at}
+              <div class="info-row">
+                <span class="info-label">마지막 동기화</span>
+                <span class="info-value dhero-sync-time">{new Date(row.dhero_synced_at).toLocaleString('ko-KR')}</span>
+              </div>
+            {/if}
           </div>
-          <div class="info-row">
-            <span class="info-label">운송장 번호</span>
-            <input
-              class="tracking-input"
-              type="text"
-              placeholder="운송장 번호 입력"
-              bind:value={trackingNumber}
-            />
-          </div>
-        </div>
-        <div class="tracking-action-row">
-          <button
-            class="btn-tracking-save"
-            onclick={saveTracking}
-            disabled={trackingSaving}
-          >
-            {trackingSaving ? '저장 중...' : '운송장 저장'}
-          </button>
-          {#if trackingError}
-            <span class="tracking-error-msg">{trackingError}</span>
+          {#if dheroError}
+            <div class="tracking-error-msg">상태 조회 실패: {dheroError}</div>
           {/if}
-        </div>
+          <div class="tracking-action-row dhero-action-row">
+            <button
+              class="btn-dhero-refresh"
+              onclick={refreshDheroStatus}
+              disabled={dheroLoading}
+            >
+              상태 새로고침
+            </button>
+            {#if !row.dhero_return_book_id}
+              <button
+                class="btn-dhero-return"
+                onclick={registerDheroReturn}
+                disabled={dheroReturnLoading}
+              >
+                {dheroReturnLoading ? '처리 중...' : '반송 등록'}
+              </button>
+            {/if}
+            <button
+              class="btn-dhero-cancel"
+              onclick={cancelDheroDelivery}
+              disabled={dheroCancelLoading}
+            >
+              {dheroCancelLoading ? '처리 중...' : '배송 취소'}
+            </button>
+          </div>
+          {#if dheroCancelError}
+            <div class="tracking-error-msg">{dheroCancelError}</div>
+          {/if}
+          {#if dheroReturnError}
+            <div class="tracking-error-msg">{dheroReturnError}</div>
+          {/if}
+        {:else}
+          <!-- 배송 미접수: 배송접수 버튼 -->
+          <div class="info-section">
+            <p class="dhero-pending-note">두발히어로 배송이 아직 접수되지 않았습니다.</p>
+          </div>
+          {#if dheroBookError}
+            <div class="tracking-error-msg">{dheroBookError}</div>
+          {/if}
+          <div class="tracking-action-row">
+            <button
+              class="btn-dhero-book"
+              onclick={registerDheroDelivery}
+              disabled={dheroBookLoading}
+            >
+              {dheroBookLoading ? '접수 중...' : '두발히어로 배송접수'}
+            </button>
+          </div>
+        {/if}
+      {:else}
+        <!-- ── 일반 수동 운송장 입력 뷰 (quick/epost/locker/visit 등) ────── -->
+        <div class="section-title">운송장 정보</div>
+        {#if trackingLoading}
+          <div class="loading-box">운송장 정보 조회 중...</div>
+        {:else}
+          <div class="info-section">
+            <div class="info-row">
+              <span class="info-label">택배사</span>
+              <input
+                class="tracking-input"
+                type="text"
+                placeholder="예: CJ대한통운, 한진택배"
+                bind:value={trackingCourierCode}
+              />
+            </div>
+            <div class="info-row">
+              <span class="info-label">운송장 번호</span>
+              <input
+                class="tracking-input"
+                type="text"
+                placeholder="운송장 번호 입력"
+                bind:value={trackingNumber}
+              />
+            </div>
+          </div>
+          <div class="tracking-action-row">
+            <button
+              class="btn-tracking-save"
+              onclick={saveTracking}
+              disabled={trackingSaving}
+            >
+              {trackingSaving ? '저장 중...' : '운송장 저장'}
+            </button>
+            {#if trackingError}
+              <span class="tracking-error-msg">{trackingError}</span>
+            {/if}
+          </div>
+        {/if}
       {/if}
 
       <!-- 상태 액션 버튼 -->
@@ -858,8 +1124,17 @@
               isSubmitting = true
               return async ({ result, update }) => {
                 isSubmitting = false
-                if (result.type === 'success') { csToast.success('예약이 취소되었습니다.'); onrefresh() }
-                else csToast.error('처리 중 오류가 발생했습니다.')
+                if (result.type === 'success') {
+                  csToast.success('예약이 취소되었습니다.')
+                  // MEDIUM-1 수정 (2026-08-25): dhero_cancel_failed 플래그 읽어 경고 노출
+                  // 수동 "배송 취소" 버튼(cancelDheroDelivery)과 동일 문구 사용
+                  if ((result.data as Record<string, unknown> | undefined)?.dhero_cancel_failed) {
+                    csToast.warning('배송사 측 취소에 실패했습니다. 실물 배송을 별도로 확인하세요.')
+                  }
+                  onrefresh()
+                } else {
+                  csToast.error('처리 중 오류가 발생했습니다.')
+                }
                 await update()
               }
             }}
@@ -910,6 +1185,7 @@
           </form>
         </div>
       {/if}
+      </div>
     {/if}
 
     <!-- ─── Tab 2: 고객정보 ─── -->
@@ -1489,6 +1765,95 @@
     font: var(--text-pc-script-12);
     color: var(--cs-error, #ef4444);
   }
+
+  /* ── 두발히어로 배송 자동화 UI ──────────────────────────────────────────────── */
+  .dhero-status-badge {
+    display: inline-block;
+    padding: 2px 10px;
+    border-radius: var(--radius-full, 99px);
+    font: var(--text-pc-script-12);
+    font-weight: 700;
+    background: var(--cs-surface-gray);
+    color: var(--cs-text);
+    border: 1px solid var(--cs-lilac);
+  }
+  /* 배송완료(5) 강조 */
+  .dhero-status-badge.dhero-code-5 { background: #d1fae5; color: #065f46; border-color: #6ee7b7; }
+  /* 반송/분실/취소(6~9) 경고 */
+  .dhero-status-badge.dhero-code-6,
+  .dhero-status-badge.dhero-code-7,
+  .dhero-status-badge.dhero-code-8,
+  .dhero-status-badge.dhero-code-9  { background: #fee2e2; color: #991b1b; border-color: #fca5a5; }
+  /* 배송중(3,4) 활성 */
+  .dhero-status-badge.dhero-code-3,
+  .dhero-status-badge.dhero-code-4  { background: #ede9fe; color: #5b21b6; border-color: #c4b5fd; }
+  .dhero-sync-time {
+    font-size: 11px;
+    color: var(--cs-text-mid);
+  }
+  .dhero-reason-item {
+    display: block;
+    font-size: 12px;
+    color: var(--cs-text-mid);
+    line-height: 1.5;
+  }
+  .dhero-reason-text {
+    font-size: 12px;
+    color: var(--cs-text-mid);
+  }
+  .dhero-action-row {
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+  .dhero-pending-note {
+    font: var(--text-pc-script-12);
+    color: var(--cs-text-mid);
+    margin: 0;
+  }
+  .btn-dhero-refresh,
+  .btn-dhero-book,
+  .btn-dhero-cancel,
+  .btn-dhero-return {
+    display: inline-flex;
+    align-items: center;
+    height: 32px;
+    padding: 0 14px;
+    border-radius: var(--cms-radius-sm);
+    font: var(--text-pc-script-12);
+    font-weight: 700;
+    cursor: pointer;
+    transition: background 0.12s, opacity 0.12s;
+    border: 1px solid;
+  }
+  .btn-dhero-book {
+    background: var(--cs-purple);
+    color: #fff;
+    border-color: var(--cs-purple);
+  }
+  .btn-dhero-book:hover    { opacity: 0.85; }
+  .btn-dhero-book:disabled { opacity: 0.5; cursor: not-allowed; }
+  .btn-dhero-refresh {
+    background: var(--cs-surface-gray);
+    color: var(--cs-purple);
+    border-color: var(--cs-purple);
+  }
+  .btn-dhero-refresh:hover    { background: rgba(59,47,138,0.08); }
+  .btn-dhero-refresh:disabled { opacity: 0.5; cursor: not-allowed; }
+  .btn-dhero-return {
+    background: var(--cs-surface-gray);
+    color: var(--cs-text);
+    border-color: var(--cs-lilac);
+  }
+  .btn-dhero-return:hover    { background: rgba(0,0,0,0.04); }
+  .btn-dhero-return:disabled { opacity: 0.5; cursor: not-allowed; }
+  .btn-dhero-cancel {
+    background: var(--cs-surface-gray);
+    color: var(--cs-error, #ef4444);
+    border-color: var(--cs-error, #ef4444);
+  }
+  .btn-dhero-cancel:hover    { background: rgba(239,68,68,0.06); }
+  .btn-dhero-cancel:disabled { opacity: 0.5; cursor: not-allowed; }
+  .mono { font-family: 'Courier New', monospace; font-size: 12px; letter-spacing: 0.02em; }
 
   /* 채팅 알림 섹션 */
   .notify-section {

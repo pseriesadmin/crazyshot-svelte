@@ -71,6 +71,14 @@ const CUSTOMER_LIFECYCLE_PUSH_COPY: Record<string, { title: string; body: (produ
     title: '무인보관함 이용 안내',
     body: (p) => `${p} 이용 시간이 영업외시간이라 무인보관함으로 인계돼요. 비밀번호는 채팅에서 확인해주세요.`,
   },
+  // 2026-08-25 추가(Migration 347, NOW-FIX-2 §15 동기화): 두발히어로 수령위치 등록 안내.
+  // 채팅카드(send_rental_chat_notification 'dhero_place_guide')와 쌍을 이루는 브라우저 푸시.
+  // placePageUrl은 외부 URL이라 푸시 알림에서 직접 링크 클릭을 유도할 수 없음 —
+  // 채팅으로 이동하도록 안내하는 문구로 대체.
+  dhero_place_guide: {
+    title: '수령 위치를 등록해 주세요',
+    body: (p) => `${p} 두발히어로 배송이 접수됐어요. 채팅에서 수령 위치를 등록해 주세요.`,
+  },
 }
 
 const CHUNK_SIZE = 500
