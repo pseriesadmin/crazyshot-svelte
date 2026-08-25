@@ -768,8 +768,12 @@ export interface VerifyAndUpdatePhoneArgs {
 
 export interface UpdateUserDocUrlArgs {
   p_type: string;
-  p_doc_url: string;
-  p_identity_type: string | null;
+  p_doc_url: string[];
+  p_identity_type: string[] | null;
+}
+
+export interface DeleteUserDocArgs {
+  p_type: string;
 }
 
 export interface ToggleProductWishlistArgs {
@@ -870,6 +874,7 @@ export type Database = {
       update_user_profile: { Args: UpdateUserProfileArgs; Returns: AccountRpcResult };
       verify_and_update_phone: { Args: VerifyAndUpdatePhoneArgs; Returns: AccountRpcResult };
       update_user_doc_url: { Args: UpdateUserDocUrlArgs; Returns: AccountRpcResult };
+      delete_user_doc: { Args: DeleteUserDocArgs; Returns: AccountRpcResult };
       toggle_product_wishlist: { Args: ToggleProductWishlistArgs; Returns: ToggleProductWishlistResult };
       update_notification_settings: { Args: UpdateNotificationSettingsArgs; Returns: AccountRpcResult };
       update_user_avatar: { Args: UpdateUserAvatarArgs; Returns: AccountRpcResult };
