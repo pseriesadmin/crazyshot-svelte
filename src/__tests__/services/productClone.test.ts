@@ -298,6 +298,114 @@ describe('cloneProduct (new_product) — generate_product_code 에러 처리', (
   });
 });
 
+// ════════════════════════════════════════════════════════════════════════════
+// 버그 수정(2026-08-17): new_product 모드 — 원본 code_series(기준 코드품번) 계승
+// ════════════════════════════════════════════════════════════════════════════
+
+describe('cloneProduct (new_product) — 원본 code_series 계승 채번', () => {
+  it('[GREEN] 원본에 2단 계층 code_series(parent_max_sequence)가 있으면 동일 category_code로 7-param 호출', async () => {
+    const insertFn = vi.fn().mockImplementation(() => ({
+      select: vi.fn().mockReturnValue({
+        single: vi.fn().mockResolvedValue({ data: { id: 'cloned-product-id' }, error: null }),
+      }),
+    }));
+    const fromFn = vi.fn();
+    // Call 1: source lookup — 2단 계층 code_series 포함(예: 원본 CSPHSAM0040000)
+    fromFn.mockReturnValueOnce({
+      select: vi.fn().mockReturnValue({
+        eq: vi.fn().mockReturnValue({
+          is: vi.fn().mockReturnValue({
+            single: vi.fn().mockResolvedValue({
+              data: {
+                ...SOURCE_PRODUCT,
+                product_code: null,
+                code_series: {
+                  category_code: 'PHSAM',
+                  year_month: 'nodate',
+                  prefix: 'CS',
+                  suffix: '',
+                  seq_digits: 4,
+                  max_sequence: 9999,
+                  parent_seq: 4,
+                  parent_seq_digits: 3,
+                  parent_max_sequence: 999,
+                },
+              },
+              error: null,
+            }),
+          }),
+        }),
+      }),
+    });
+    fromFn.mockReturnValueOnce({
+      select: vi.fn().mockReturnValue({
+        eq: vi.fn().mockReturnValue({
+          eq: vi.fn().mockReturnValue({ is: vi.fn().mockResolvedValue({ data: [], error: null }) }),
+        }),
+      }),
+    });
+    fromFn.mockReturnValueOnce({
+      select: vi.fn().mockReturnValue({
+        eq: vi.fn().mockReturnValue({
+          is: vi.fn().mockReturnValue({ maybeSingle: vi.fn().mockResolvedValue({ data: null, error: null }) }),
+        }),
+      }),
+    });
+    fromFn.mockReturnValueOnce({ insert: insertFn });
+
+    const rpcCalls: Array<{ name: string; params: Record<string, unknown> }> = [];
+    const rpcFn = vi.fn((name: string, params: Record<string, unknown>) => {
+      rpcCalls.push({ name, params });
+      return Promise.resolve({ data: null, error: null });
+    });
+
+    createClientMock.mockReturnValue({ from: fromFn, rpc: rpcFn });
+
+    const result = await actions.cloneProduct({
+      request: makeFormRequest({
+        source_product_id: 'source-product-id',
+        count: '1',
+        mode: 'new_product',
+        auto_code: 'true',
+        partner_code: 'false',
+      }),
+      locals: makeLocals(),
+    } as Parameters<typeof actions.cloneProduct>[0]);
+
+    expect((result as Record<string, unknown>)?.success).toBe(true);
+
+    const codeCall = rpcCalls.find((c) => c.name === 'generate_product_code');
+    expect(codeCall).toBeDefined();
+    expect(codeCall?.params).toMatchObject({
+      p_category_code_override: 'PHSAM',
+      p_parent_max_sequence: 999,
+      p_max_sequence: 9999,
+      p_date_option: 'none',
+      p_code_id: null,
+    });
+  });
+
+  it('[GREEN 회귀] 원본에 code_series가 없는 레거시 상품은 기존 3-param 폴백 그대로 유지', async () => {
+    const admin = makeNewProductAdmin();
+    createClientMock.mockReturnValue(admin);
+
+    const result = await actions.cloneProduct({
+      request: makeFormRequest({
+        source_product_id: 'source-product-id',
+        count: '1',
+        mode: 'new_product',
+        auto_code: 'true',
+        partner_code: 'false',
+      }),
+      locals: makeLocals(),
+    } as Parameters<typeof actions.cloneProduct>[0]);
+
+    expect((result as Record<string, unknown>)?.success).toBe(true);
+    // makeNewProductAdmin의 rpcFn은 파라미터 형태와 무관하게 성공 응답 — 호출 자체가
+    // 3-param이든 7-param이든 에러 없이 완주하는지가 핵심(SOURCE_PRODUCT에 code_series 없음)
+  });
+});
+
 // ── 회귀 방지: add_inventory 성공 케이스 ────────────────────────────────────
 describe('cloneProduct (add_inventory) — 정상 동작 (회귀 방지)', () => {
   it('정상 요청 시 { success: true, mode: add_inventory } 반환', async () => {

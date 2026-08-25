@@ -5,6 +5,7 @@
   import SuggestPicker from '$lib/components/common/SuggestPicker.svelte'
   import type { SuggestPickerOption } from '$lib/types/suggest-picker'
   import { validateUploadFile, getMimeExtension } from '$lib/utils/fileValidation'
+  import { matchesSearch } from '$lib/utils/chosungSearch'
 
   interface BannerItem {
     product_id: string
@@ -42,13 +43,13 @@
   interface Props {
     initialSettings: InitialSettings
     /** code_mapping_groups(조합코드그룹) SSOT에서 조회한 "패키지" 카테고리 키 — 상품 검색을
-     * 이 카테고리로 잠그는 데 사용. 조회 실패 시 'package' 리터럴로 폴백 */
+     * 이 카테고리로 잠그는 데 사용. 조회 실패 시 'hypepack' 리터럴로 폴백 */
     packageCategoryKey?: string | null
     onclose: () => void
   }
 
   let { initialSettings, packageCategoryKey = null, onclose }: Props = $props()
-  const searchCategory = packageCategoryKey ?? 'package'
+  const searchCategory = packageCategoryKey ?? 'hypepack'
 
   let mode             = $state<'random' | 'fixed'>(initialSettings.mode ?? 'fixed')
   let selected         = $state<SelectedItem[]>([])
@@ -137,6 +138,33 @@
     )
   })
 
+  // 카테고리가 잠겨있어 후보군이 소수라, 카테고리 전체를 1회만 가져와 캐시한 뒤
+  // 매 입력마다 클라이언트에서 matchesSearch(부분일치+초성)로 필터링한다 — Postgres
+  // FTS/trigram은 초성만 입력된 검색어("ㅇㄷ" 등)를 매칭하지 못하기 때문
+  // (HypePackThemeGroupModal.svelte와 동일 패턴)
+  let productCandidates = $state<ProductItem[]>([])
+  let candidatesLoaded  = false
+
+  async function loadProductCandidates() {
+    if (candidatesLoaded) return
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const { data } = await (supabase.rpc as any)('search_products', {
+      p_query: '',
+      p_category: searchCategory,
+      p_page: 1,
+      p_limit: 100,
+      p_session_id: null,
+      p_user_id: null,
+    })
+    productCandidates = ((data ?? []) as Record<string, unknown>[]).map((r) => ({
+      id:               String(r['product_id'] ?? r['id'] ?? ''),
+      name:             String(r['name'] ?? ''),
+      image_urls:       (r['image_urls'] as string[] | null) ?? null,
+      base_price_daily: Number(r['price_min'] ?? r['base_price_daily'] ?? 0),
+    }))
+    candidatesLoaded = true
+  }
+
   function onPickerInput(val: string) {
     if (debounceTimer) clearTimeout(debounceTimer)
     if (!val.trim()) { searchResults = []; return }
@@ -151,21 +179,8 @@
 
   async function doSearch(q: string) {
     isSearching = true
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const { data } = await (supabase.rpc as any)('search_products', {
-      p_query: q,
-      p_category: searchCategory,
-      p_page: 1,
-      p_limit: 10,
-      p_session_id: null,
-      p_user_id: null,
-    })
-    searchResults = ((data ?? []) as Record<string, unknown>[]).map((r) => ({
-      id:               String(r['product_id'] ?? r['id'] ?? ''),
-      name:             String(r['name'] ?? ''),
-      image_urls:       (r['image_urls'] as string[] | null) ?? null,
-      base_price_daily: Number(r['price_min'] ?? r['base_price_daily'] ?? 0),
-    }))
+    await loadProductCandidates()
+    searchResults = productCandidates.filter((p) => matchesSearch({ name: p.name, product_code: null }, q))
     isSearching = false
   }
 
@@ -242,19 +257,12 @@
   }
 
   async function doKwSearch(q: string) {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const { data } = await (supabase.rpc as any)('search_products', {
-      p_query: q,
-      p_category: searchCategory,
-      p_page: 1,
-      p_limit: 8,
-      p_session_id: null,
-      p_user_id: null,
-    })
-    const names = ((data ?? []) as Record<string, unknown>[])
-      .map((r) => String(r['name'] ?? ''))
+    await loadProductCandidates()
+    const names = productCandidates
+      .filter((p) => matchesSearch({ name: p.name, product_code: null }, q))
+      .map((p) => p.name)
       .filter(Boolean)
-    kwSearchResults = Array.from(new Set(names))
+    kwSearchResults = Array.from(new Set(names)).slice(0, 8)
   }
 
   function onKwSelect(opt: SuggestPickerOption) {

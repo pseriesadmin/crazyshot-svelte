@@ -1,4 +1,4 @@
-import { describe, it, expect, afterEach } from 'vitest';
+import { describe, it, expect, afterEach, beforeAll, afterAll } from 'vitest';
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 import { SUPABASE_SERVICE_ROLE_KEY } from '$env/static/private';
 import { PUBLIC_SUPABASE_URL, PUBLIC_SUPABASE_ANON_KEY } from '$env/static/public';
@@ -43,12 +43,43 @@ const rpcCall = <T = Record<string, unknown>>(
 type Cleanup = () => Promise<void>;
 const cleanups: Cleanup[] = [];
 
+// delivery_cutoff_settings는 CMS 관리자가 실시간으로 조작하는 실제 싱글톤 행을 라이브
+// Stage DB에서 그대로 공유한다(격리된 테스트 전용 행이 아님) — 테스트 간 격리를 위해
+// afterEach에서 매번 false/false/false로 되돌리는 것 자체는 필요하지만, 그 상태가 스위트
+// 종료 후에도 영구히 남으면 관리자가 CMS에서 직접 켜둔 실제 설정을 조용히 덮어써버린다
+// (실사고 발생 — /cart 배송 휴무일 캘린더가 통째로 꺼진 것처럼 보였던 원인, 2026-08-25).
+// beforeAll에서 원래 값을 스냅샷해두고 afterAll에서 그대로 복원해 스위트 실행 전/후로
+// 라이브 설정이 항상 동일하게 유지되도록 보장한다.
+let originalCutoffSettings: {
+  enable_prev_day_check: boolean;
+  enable_fixed_holidays: boolean;
+  enable_manual_holidays: boolean;
+} | null = null;
+
+beforeAll(async () => {
+  const { data } = await admin
+    .from('delivery_cutoff_settings')
+    .select('enable_prev_day_check, enable_fixed_holidays, enable_manual_holidays')
+    .limit(1)
+    .single();
+  originalCutoffSettings = data as typeof originalCutoffSettings;
+});
+
 afterEach(async () => {
   while (cleanups.length) {
     const fn = cleanups.pop();
     if (fn) await fn();
   }
   await resetCutoffSettings();
+});
+
+afterAll(async () => {
+  if (!originalCutoffSettings) return;
+  await setCutoffSettings(
+    originalCutoffSettings.enable_prev_day_check,
+    originalCutoffSettings.enable_fixed_holidays,
+    originalCutoffSettings.enable_manual_holidays
+  );
 });
 
 // ── 픽스처 헬퍼 ────────────────────────────────────────────────────────────────
@@ -75,12 +106,19 @@ function upcomingSunday(): string {
   throw new Error('upcomingSunday 계산 실패');
 }
 
-// sync_national_holidays 테스트용 고정 동기화 범위 — 이 파일이 쓰는 오프셋(최대 246일)을
-// 넉넉히 덮음(Migration 337 — 배치 데이터가 아닌 명시적 범위 파라미터로 정정 감지)
-function testSyncRangeArgs(): { p_range_start: string; p_range_end: string } {
+// sync_national_holidays RPC 자체를 호출하는 테스트 전용 격리 범위(2026-08-25 신설) —
+// 과거엔 "오늘~+400일" 범위를 그대로 썼는데, 이는 실제 syncNationalHolidays()가 동기화하는
+// 진짜 법정공휴일(최대 약 493일 이내, holidaySync.ts의 "올해+내년" 범위)과 겹친다.
+// sync_national_holidays RPC는 호출될 때마다 그 범위 내에서 "이번 배치에 없는 national 행"을
+// 전부 비활성화하므로, 이 describe 블록이 작은 테스트 payload로 그 범위에서 RPC를 반복
+// 호출하면 실제 동기화된 추석·개천절 등 진짜 국경일이 부작용으로 대량 비활성화된다(실사고
+// 발생·복구 완료 — 재발 방지 목적으로 이 describe 블록의 범위를 실제 동기화 커버리지 밖
+// (오늘+1000~1100일)으로 완전히 격리).
+function syncTestRangeArgs(): { p_range_start: string; p_range_end: string } {
   const start = new Date();
+  start.setDate(start.getDate() + 1000);
   const end = new Date();
-  end.setDate(end.getDate() + 400);
+  end.setDate(end.getDate() + 1100);
   return {
     p_range_start: start.toISOString().slice(0, 10),
     p_range_end: end.toISOString().slice(0, 10),
@@ -194,14 +232,14 @@ async function createEphemeralSession(cmsRole: string | null): Promise<{
 
 describe('[TDD] sync_national_holidays — 법정공휴일 API 동기화 RPC', () => {
   it('신규 법정공휴일을 upsert하고 upserted 카운트를 반환한다', async () => {
-    const date = nonSundayDaysFromNow(210);
+    const date = nonSundayDaysFromNow(1010);
     cleanups.push(async () => {
       await admin.from('public_holidays').delete().eq('date', date);
     });
 
     const { data, error } = await rpcCall<{ upserted: number }>(admin, 'sync_national_holidays', {
       p_holidays: [{ date, name: '테스트공휴일A' }],
-      ...testSyncRangeArgs(),
+      ...syncTestRangeArgs(),
     });
 
     expect(error).toBeNull();
@@ -216,13 +254,13 @@ describe('[TDD] sync_national_holidays — 법정공휴일 API 동기화 RPC', (
   });
 
   it('재실행 시 멱등적으로 갱신되고 중복 행을 만들지 않는다(대체공휴일 명칭 정정 등)', async () => {
-    const date = nonSundayDaysFromNow(211);
+    const date = nonSundayDaysFromNow(1011);
     cleanups.push(async () => {
       await admin.from('public_holidays').delete().eq('date', date);
     });
 
-    await rpcCall(admin, 'sync_national_holidays', { p_holidays: [{ date, name: '1차명칭' }], ...testSyncRangeArgs() });
-    await rpcCall(admin, 'sync_national_holidays', { p_holidays: [{ date, name: '2차정정명칭' }], ...testSyncRangeArgs() });
+    await rpcCall(admin, 'sync_national_holidays', { p_holidays: [{ date, name: '1차명칭' }], ...syncTestRangeArgs() });
+    await rpcCall(admin, 'sync_national_holidays', { p_holidays: [{ date, name: '2차정정명칭' }], ...syncTestRangeArgs() });
 
     const { data: rows } = await admin.from('public_holidays').select('id, name').eq('date', date);
     expect((rows ?? []).length).toBe(1);
@@ -230,12 +268,12 @@ describe('[TDD] sync_national_holidays — 법정공휴일 API 동기화 RPC', (
   });
 
   it('동일 날짜에 이미 manual 행이 있으면 national으로 덮어쓰지 않는다', async () => {
-    const date = nonSundayDaysFromNow(212);
+    const date = nonSundayDaysFromNow(1012);
     await insertHoliday(date, '관리자 임시휴무', 'manual', '명절 연휴');
 
     const { data } = await rpcCall<{ upserted: number }>(admin, 'sync_national_holidays', {
       p_holidays: [{ date, name: 'API가 보낸 국경일명' }],
-      ...testSyncRangeArgs(),
+      ...syncTestRangeArgs(),
     });
     expect(data?.upserted).toBe(0);
 
@@ -248,8 +286,10 @@ describe('[TDD] sync_national_holidays — 법정공휴일 API 동기화 RPC', (
   });
 
   it('API 응답에 더 이상 없는 national 행은 입력 범위 내에서 비활성화된다', async () => {
-    const dateA = nonSundayDaysFromNow(220);
-    const dateB = nonSundayDaysFromNow(221);
+    // 오프셋을 충분히 벌려 nonSundayDaysFromNow의 일요일 +1일 보정이 두 날짜를 같은 값으로
+    // 만드는 우연한 충돌을 방지(과거 243/244 오프셋 쌍에서 실제로 발생했던 것과 동일 패턴)
+    const dateA = nonSundayDaysFromNow(1020);
+    const dateB = nonSundayDaysFromNow(1050);
     cleanups.push(async () => {
       await admin.from('public_holidays').delete().in('date', [dateA, dateB]);
     });
@@ -259,15 +299,15 @@ describe('[TDD] sync_national_holidays — 법정공휴일 API 동기화 RPC', (
         { date: dateA, name: 'A공휴일' },
         { date: dateB, name: 'B공휴일' },
       ],
-      ...testSyncRangeArgs(),
+      ...syncTestRangeArgs(),
     });
 
     // 재동기화 — B가 더 이상 응답에 없음(대체공휴일 정정 등으로 제외된 상황을 재현).
-    // 동일한 명시적 범위(testSyncRangeArgs)를 그대로 전달해야 배치가 좁아져도 B가
+    // 동일한 명시적 범위(syncTestRangeArgs)를 그대로 전달해야 배치가 좁아져도 B가
     // 정정감지 대상에 남는다(Migration 337 핵심 — 배치 데이터가 아닌 범위 파라미터 기준).
     await rpcCall(admin, 'sync_national_holidays', {
       p_holidays: [{ date: dateA, name: 'A공휴일' }],
-      ...testSyncRangeArgs(),
+      ...syncTestRangeArgs(),
     });
 
     const { data: rows } = await admin
@@ -284,8 +324,8 @@ describe('[TDD] sync_national_holidays — 법정공휴일 API 동기화 RPC', (
     cleanups.push(cleanup);
 
     const { error } = await rpcCall(client, 'sync_national_holidays', {
-      p_holidays: [{ date: nonSundayDaysFromNow(213), name: '권한없음테스트' }],
-      ...testSyncRangeArgs(),
+      p_holidays: [{ date: nonSundayDaysFromNow(1013), name: '권한없음테스트' }],
+      ...syncTestRangeArgs(),
     });
     expect(error).not.toBeNull();
   });
@@ -463,22 +503,27 @@ describe('[TDD] loadCourierClosedDates — 마스터 토글·고정/임시 휴�
     await setCutoffSettings(true, true, false);
 
     const closed = await loadCourierClosedDates(admin);
-    expect(closed).toContain(nationalDate);
-    expect(closed).toContain(upcomingSunday());
-    expect(closed).not.toContain(manualDate);
+    const dates = closed.map((c) => c.date);
+    expect(dates).toContain(nationalDate);
+    expect(dates).toContain(upcomingSunday());
+    expect(dates).not.toContain(manualDate);
   });
 
   it('마스터+임시휴무일 ON, 고정휴무일 OFF면 manual만 포함하고 national·일요일은 제외한다', async () => {
+    // 오프셋을 크게 벌려 두 가지 우연한 충돌을 모두 방지:
+    // ① nonSundayDaysFromNow의 일요일 +1일 보정이 두 날짜를 같은 값으로 만드는 충돌
+    // ② sync_national_holidays로 이미 동기화된 실제 법정공휴일(최대 대략 490일 이내)과의 충돌
     const nationalDate = nonSundayDaysFromNow(243);
-    const manualDate = nonSundayDaysFromNow(244);
+    const manualDate = nonSundayDaysFromNow(500);
     await insertHoliday(nationalDate, '국경일', 'national');
     await insertHoliday(manualDate, '임시휴무', 'manual');
     await setCutoffSettings(true, false, true);
 
     const closed = await loadCourierClosedDates(admin);
-    expect(closed).toContain(manualDate);
-    expect(closed).not.toContain(nationalDate);
-    expect(closed).not.toContain(upcomingSunday());
+    const dates = closed.map((c) => c.date);
+    expect(dates).toContain(manualDate);
+    expect(dates).not.toContain(nationalDate);
+    expect(dates).not.toContain(upcomingSunday());
   });
 
   it('마스터+고정+임시휴무일 전부 ON이면 national·manual·일요일 전부 포함된다', async () => {
@@ -489,8 +534,31 @@ describe('[TDD] loadCourierClosedDates — 마스터 토글·고정/임시 휴�
     await setCutoffSettings(true, true, true);
 
     const closed = await loadCourierClosedDates(admin);
-    expect(closed).toContain(nationalDate);
-    expect(closed).toContain(manualDate);
-    expect(closed).toContain(upcomingSunday());
+    const dates = closed.map((c) => c.date);
+    expect(dates).toContain(nationalDate);
+    expect(dates).toContain(manualDate);
+    expect(dates).toContain(upcomingSunday());
+  });
+
+  // 2026-08-25 — CMS에서 등록한 사유(name)가 courierClosedDates에 실려 클라이언트 경고
+  // 토스트까지 전달되어야 하는데, 서버 select에서 name 컬럼이 빠져 유실되던 결함 재발 방지
+  it('국경일·임시휴무 각각 CMS에 등록한 사유(name)가 reason 필드에 그대로 실린다', async () => {
+    const nationalDate = nonSundayDaysFromNow(247);
+    const manualDate = nonSundayDaysFromNow(248);
+    await insertHoliday(nationalDate, '추석 연휴', 'national');
+    await insertHoliday(manualDate, '창립기념일', 'manual');
+    await setCutoffSettings(true, true, true);
+
+    const closed = await loadCourierClosedDates(admin);
+    expect(closed.find((c) => c.date === nationalDate)?.reason).toBe('추석 연휴');
+    expect(closed.find((c) => c.date === manualDate)?.reason).toBe('창립기념일');
+  });
+
+  it('일요일(등록된 사유 없음)은 reason이 "일요일 휴무"로 기본 채워진다', async () => {
+    await setCutoffSettings(true, true, false);
+
+    const closed = await loadCourierClosedDates(admin);
+    const sunday = closed.find((c) => c.date === upcomingSunday());
+    expect(sunday?.reason).toBe('일요일 휴무');
   });
 });
