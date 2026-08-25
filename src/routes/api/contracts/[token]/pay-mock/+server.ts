@@ -112,6 +112,7 @@ export const POST: RequestHandler = async ({ params, request }) => {
   // 적용한다(결제만 되고 서명 미완료라 아직 hold인 상태에서는 소진하지 않음).
   let couponUsed = false
   let couponRedeemedCode: string | null = null
+  let couponError: string | null = null
   let pointsDeducted = 0
   let pointsOk = true
 
@@ -127,7 +128,10 @@ export const POST: RequestHandler = async ({ params, request }) => {
       const result = useResult as { ok: boolean; error?: string; redeemed_code?: string | null } | null
       couponUsed = result?.ok === true
       couponRedeemedCode = result?.redeemed_code ?? null
-      if (!couponUsed) console.error('[contracts/pay-mock] use_coupon 거부:', result?.error)
+      if (!couponUsed) {
+        couponError = result?.error ?? null
+        console.error('[contracts/pay-mock] use_coupon 거부:', couponError)
+      }
     }
   }
 
@@ -157,6 +161,7 @@ export const POST: RequestHandler = async ({ params, request }) => {
     reservationCode:  reservation.reservation_code,
     couponUsed,
     couponRedeemedCode,
+    couponError,
     pointsDeducted,
     pointsOk,
   })

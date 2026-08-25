@@ -3,6 +3,7 @@ import { SUPABASE_SERVICE_ROLE_KEY } from '$env/static/private'
 import { PUBLIC_SUPABASE_URL } from '$env/static/public'
 import { error, redirect } from '@sveltejs/kit'
 import { recordAuditLog } from '$lib/contract-signature/auditLog'
+import { isCouponEligible } from '$lib/server/coupons/couponEligibility'
 import type { PageServerLoad } from './$types'
 
 export const load: PageServerLoad = async ({ params }) => {
@@ -193,6 +194,14 @@ export const load: PageServerLoad = async ({ params }) => {
       usage_limit: number
       usage_count: number
       total_usage_limit: number | null
+      // 7개 자격조건 (Migration 348)
+      min_purchase_amount:  number
+      min_rental_amount:    number
+      min_rental_days:      number
+      is_first_rental_only: boolean
+      is_student_only:      boolean
+      is_subscription_only: boolean
+      is_walk_in_only:      boolean
     } | null
   }
   let userCoupons: RawUserCouponRow[] = []
@@ -211,7 +220,9 @@ export const load: PageServerLoad = async ({ params }) => {
           coupons(
             id, code, discount_type, discount_value, description,
             is_active, deleted_at, valid_from, valid_until,
-            user_grade_required, usage_limit, usage_count, total_usage_limit
+            user_grade_required, usage_limit, usage_count, total_usage_limit,
+            min_purchase_amount, min_rental_amount, min_rental_days,
+            is_first_rental_only, is_student_only, is_subscription_only, is_walk_in_only
           )`)
         .eq('user_id', reservation.user_id)
         .is('used_at', null),
@@ -221,7 +232,8 @@ export const load: PageServerLoad = async ({ params }) => {
     userPoints = (profileResult.data as { points?: number } | null)?.points ?? 0
 
     const now = new Date().toISOString()
-    userCoupons = ((couponResult.data ?? []) as unknown as RawUserCouponRow[]).filter((uc) => {
+    // 1차 필터: 기본 날짜·등급·소진한도
+    const basicFiltered = ((couponResult.data ?? []) as unknown as RawUserCouponRow[]).filter((uc) => {
       const c = uc.coupons
       if (!c) return false
       if (!c.is_active) return false
@@ -232,6 +244,66 @@ export const load: PageServerLoad = async ({ params }) => {
       if (c.total_usage_limit !== null && c.usage_count >= c.total_usage_limit) return false
       if (c.usage_limit > 0 && c.usage_count >= c.usage_limit) return false
       return true
+    })
+
+    // 2차 필터: 7개 자격조건 (Migration 348 서버사이드 방어)
+    // 계약서 화면에서는 orders.total_amount를 orderAmount로, 예약 1건의 방문여부를 allWalkIn으로 사용
+    const contractOrderAmount = (orderData?.total_amount ?? 0) > 0 ? (orderData?.total_amount ?? null) : null
+    const contractPickup = (signing.contracts as unknown as {
+      rental_reservations: { pickup_method?: string | null } | null
+    } | null)?.rental_reservations?.pickup_method ?? null
+    const contractRsvStart = (signing.contracts as unknown as {
+      rental_reservations: { start_date?: string | null; end_date?: string | null } | null
+    } | null)?.rental_reservations
+    const contractDays = (contractRsvStart?.start_date && contractRsvStart?.end_date)
+      ? Math.round((new Date(contractRsvStart.end_date).getTime() - new Date(contractRsvStart.start_date).getTime()) / 86400000) + 1
+      : null
+
+    // 첫 대여 / 학생 / 구독자 컨텍스트는 reservation.user_id 기준으로 별도 조회
+    let contractIsFirstRental   = false
+    let contractIsStudent       = false
+    let contractHasSubscription = false
+    if (reservation?.user_id) {
+      // ⚠️ rental_reservations에는 deleted_at 컬럼이 없고, 구독 테이블명은 subscriptions가
+      // 아니라 user_subscriptions(이 테이블도 deleted_at 없음) — use_coupon RPC(Migration 348)
+      // 재검증 때 발견한 것과 동일한 실수라 여기서도 함께 교정(cart/+page.server.ts와 통일)
+      const [firstRentalRes, studentRes, subRes] = await Promise.all([
+        admin.from('rental_reservations').select('id')
+          .eq('user_id', reservation.user_id)
+          .not('status', 'in', '("hold","draft","cancelled","expired")')
+          .limit(1),
+        admin.from('user_profiles').select('is_student')
+          .eq('id', reservation.user_id).maybeSingle(),
+        admin.from('user_subscriptions').select('id')
+          .eq('user_id', reservation.user_id).eq('status', 'active').limit(1),
+      ])
+      contractIsFirstRental   = (firstRentalRes.data?.length ?? 0) === 0
+      contractIsStudent       = (studentRes.data as { is_student?: boolean | null } | null)?.is_student === true
+      contractHasSubscription = (subRes.data?.length ?? 0) > 0
+    }
+
+    userCoupons = basicFiltered.filter((uc) => {
+      const c = uc.coupons
+      if (!c) return false
+      return isCouponEligible(
+        {
+          min_purchase_amount:  c.min_purchase_amount,
+          min_rental_amount:    c.min_rental_amount,
+          min_rental_days:      c.min_rental_days,
+          is_first_rental_only: c.is_first_rental_only,
+          is_student_only:      c.is_student_only,
+          is_subscription_only: c.is_subscription_only,
+          is_walk_in_only:      c.is_walk_in_only,
+        },
+        {
+          orderAmount:          contractOrderAmount,
+          minRentalDaysInOrder: contractDays,
+          allWalkIn:            contractPickup !== null ? contractPickup === 'visit' : null,
+          isFirstRental:        contractIsFirstRental,
+          isStudent:            contractIsStudent,
+          hasActiveSubscription: contractHasSubscription,
+        },
+      ).ok
     })
   }
 
