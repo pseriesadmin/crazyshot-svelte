@@ -6,6 +6,7 @@
   import { csToast } from '$lib/utils/toast'
   import { hasSettingsAccess } from '$lib/utils/cmsPermissions'
   import { unregisterCurrentPushToken } from '$lib/utils/push'
+  import { CMS_MENUS } from '$lib/constants/cmsMenus'
   import type { LayoutData } from './$types'
 
   interface Props {
@@ -72,87 +73,24 @@
   type SubMenu = { label: string; href: string }
   type MainMenu = { id: string; label: string; href?: string; subMenus: SubMenu[] }
 
+  // 메뉴 목록 출처는 $lib/constants/cmsMenus.ts CMS_MENUS(SSOT)로 통일됨 — 신규 "메뉴별
+  // 세부 접근권한" UI(cms_menu_permissions)도 동일 상수를 재사용한다(2026-08-25 이관,
+  // .claude/harness/TASK.md Stage 1). 각 메뉴의 requiresSettingsAccess 플래그로 기존과
+  // 동일한 hasSettingsAccess(manager+) 노출 조건을 그대로 재현 — 내용·순서 변경 없음.
+  //
   // $derived 필수: use:enhance 로그인 후 data.cmsRole 갱신 시 subMenus 재계산
-  let mainMenus = $derived<MainMenu[]>([
-    { id: 'dashboard', label: '홈', href: '/cms', subMenus: [] },
-    {
-      id: 'consulting',
-      label: '상담',
-      subMenus: [
-        { label: '채팅', href: '/cms/chat' },
-        { label: '빠른답변목록', href: '/cms/chat/qna' },
-      ],
-    },
-    {
-      id: 'rental',
-      label: '대여',
-      subMenus: [
-        { label: '예약대여현황', href: '/cms/reservation' },
-        { label: '이력관리', href: '/cms/rental/history' },
-        { label: '계약서양식', href: '/cms/reservation/contracts' },
-      ],
-    },
-    {
-      id: 'products',
-      label: '상품',
-      subMenus: [
-        { label: '상품목록', href: '/cms/products' },
-        { label: '상품등록', href: '/cms/products/new' },
-      ],
-    },
-    // 구독 티어(정기구독 상품) 관리 — 혜택이 전사적으로 쿠폰·포인트를 자동발행할 수 있어
-    // manager 이상만 노출(products와 달리 전 등급 개방 아님)
-    ...(hasSettingsAccess(data.cmsRole ?? '')
-      ? [
-          {
-            id: 'subscription',
-            label: '구독',
-            subMenus: [
-              { label: '구독목록', href: '/cms/subscriptions' },
-              { label: '구독등록', href: '/cms/subscriptions/new' },
-            ],
-          },
-        ]
-      : []),
-    {
-      id: 'customers',
-      label: '고객',
-      subMenus: [
-        { label: '고객목록', href: '/cms/customers' },
-        { label: '멤버십',   href: '/cms/customers/membership' },
-        { label: '스코어',   href: '/cms/customers/score' },
-        { label: '빠른문의', href: '/cms/customers/inquiry' },
-        { label: '설정',     href: '/cms/customers/settings' },
-      ],
-    },
-    {
-      id: 'promotion',
-      label: '프로모션',
-      subMenus: [
-        { label: '홍보', href: '/cms/promotion/ad' },
-        { label: '쿠폰', href: '/cms/promotion/coupon' },
-        { label: '포인트', href: '/cms/promotion/point' },
-        { label: '세그먼트', href: '/cms/promotion/segment' },
-        { label: '룰엔진', href: '/cms/promotion/rules' },
-        { label: '분석', href: '/cms/promotion/analytics' },
-        { label: '콘텐츠', href: '/cms/promotion/content' },
-      ],
-    },
-    {
-      id: 'settings',
-      label: '설정',
-      subMenus: [
-        { label: '코드설정', href: '/cms/set/code' },
-        { label: '대여관리', href: '/cms/set/rental' },
-        ...(hasSettingsAccess(data.cmsRole ?? '')
-          ? [
-              { label: '푸시알림', href: '/cms/set/push' },
-              { label: '관리정보', href: '/cms/set/admin' },
-            ]
-          : []),
-      ],
-    },
-  ])
+  let mainMenus = $derived<MainMenu[]>(
+    CMS_MENUS.filter((main) => !main.requiresSettingsAccess || hasSettingsAccess(data.cmsRole ?? '')).map(
+      (main) => ({
+        id: main.id,
+        label: main.label,
+        href: main.href,
+        subMenus: main.subMenus
+          .filter((sub) => !sub.requiresSettingsAccess || hasSettingsAccess(data.cmsRole ?? ''))
+          .map((sub) => ({ label: sub.label, href: sub.href })),
+      }),
+    ),
+  )
 
   function resolveActiveMenuId(pathname: string): string {
     if (pathname === '/cms') return 'dashboard'
