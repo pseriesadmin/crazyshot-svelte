@@ -4,6 +4,16 @@
 // src/routes/cms/products/[id]/detail/+server.ts(선택 전환 전용 client fetch 경로) 양쪽에서
 // 동일하게 재사용한다. 로직 변경 없음, 순수 이동.
 import type { SupabaseClient } from '@supabase/supabase-js'
+import { buildComboCategoryCode, getRootCode } from '$lib/utils/comboCategoryCode'
+
+export type CategoryComboItem = {
+  combo_row_id: string
+  combo_name: string | null
+  combo_keywords: string[]
+  group_id: string
+  group_name: string
+  code_preview: string
+}
 
 export type RentalStatusBucket = {
   holding: number    // 예약중: hold
@@ -48,6 +58,14 @@ export type SelectedProduct = {
   allowed_period_ids: string[]
   allowed_method_ids: string[]
   allowed_pickup_ids: string[]
+  // 2026-08-25: "코드 재반영" 재설계 — 이 부모가 자신보다 먼저 생성된 다른 활성 부모와
+  // 완전히 동일한 1단 계층(순번1 없음) code_series를 공유하는 "복제로 생긴 후발 중복"인지
+  // 여부. true일 때만 ProductDetailPanel이 재할당 버튼을 노출한다(원본 쪽에는 노출 안 함).
+  hasOlderDuplicateCode: boolean
+  // hasOlderDuplicateCode가 true일 때만 채워지는 재할당용 조합코드 목록 — 이 상품의
+  // category와 매칭되는 코드설정/코드조합 그룹 전체(협력사 전용 여부 무관, partnerComboItems와
+  // 달리 필터 없음).
+  categoryComboItems: CategoryComboItem[]
 }
 
 export type InventoryUnit = {
@@ -161,6 +179,9 @@ export async function loadSelectedProductDetail(
       components:          src.components,
       specifications:      (src.specifications as Record<string, string> | null) ?? null,
       image_urls:          (src.image_urls as string[] | null) ?? (sp as Record<string, unknown>).image_urls as string[] ?? [],
+      // 아래 duplicate-detection 블록에서 selectedProduct 자신이 부모일 때만 실제로 채움
+      hasOlderDuplicateCode: false,
+      categoryComboItems:    [],
     } as SelectedProduct
 
     selectedPriceRules = priceRules ?? []
@@ -180,6 +201,140 @@ export async function loadSelectedProductDetail(
 
     // selectedProduct is non-null here (inside `if (sp)` block)
     selectedProduct!.assets = (assetDetails ?? []) as AssetDetail[]
+
+    // 2026-08-25: "코드 재반영" 재설계 — 이 상품이 부모(자식 아님) + code_series가 1단
+    // 계층(순번1 없음)일 때만 후발 중복 여부를 확인한다. 2단 계층은 parent_seq가 행마다
+    // 원자적으로 유일하게 증가해 애초에 동일 code_series를 가질 수 없으므로 검사 대상이 아님.
+    if (!spParentId) {
+      const cs = (sp as Record<string, unknown>).code_series as Record<string, unknown> | null
+      if (cs && !cs.parent_seq_digits) {
+        // JSONB ->> 연산자를 PostgREST 필터 컬럼명으로 직접 넘기는 방식은 이 코드베이스에
+        // 검증된 선례가 없어(신규 패턴 위험 회피), 같은 category의 부모 후보만 넓게 가져와
+        // JS에서 code_series 필드를 직접 비교한다 — 후보 수가 적어(카테고리당 부모 상품
+        // 수준) 성능 영향 없음.
+        const { data: sameCatParents } = await admin
+          .from('products')
+          .select('id, code_series, created_at')
+          .is('parent_product_id', null)
+          .is('deleted_at', null)
+          .eq('category', selectedProduct!.category)
+          .neq('id', selectedId)
+          .not('code_series', 'is', null)
+
+        const selfCreatedAt = new Date((sp as Record<string, unknown>).created_at as string).getTime()
+        const olderDup = (sameCatParents ?? []).find((row) => {
+          const rcs = row.code_series as Record<string, unknown> | null
+          if (!rcs || rcs.parent_seq_digits) return false
+          if (new Date(row.created_at as string).getTime() >= selfCreatedAt) return false
+          return (
+            (rcs.category_code ?? '') === (cs.category_code ?? '') &&
+            (rcs.year_month ?? '') === (cs.year_month ?? '') &&
+            (rcs.prefix ?? '') === (cs.prefix ?? '') &&
+            (rcs.suffix ?? '') === (cs.suffix ?? '') &&
+            Number(rcs.seq_digits ?? 3) === Number(cs.seq_digits ?? 3)
+          )
+        })
+
+        if (olderDup) {
+          selectedProduct!.hasOlderDuplicateCode = true
+
+          // 이 상품의 category와 매칭되는 코드설정/코드조합 그룹 전체(협력사 전용 여부 무관)
+          const { data: matchGroups } = await admin
+            .from('code_mapping_groups')
+            .select('id, name')
+            .eq('default_category', selectedProduct!.category)
+          const groupIds = (matchGroups ?? []).map((g) => g.id as string)
+          const groupNameById = new Map((matchGroups ?? []).map((g) => [g.id as string, g.name as string]))
+
+          if (groupIds.length > 0) {
+            type ComboItemRow = {
+              group_id: string
+              combo_row_id: string
+              combo_name: string | null
+              combo_keywords: string[]
+              taxonomy_code_id: string
+              date_option: string
+              max_sequence: number | null
+              parent_max_sequence: number | null
+            }
+            const { data: rawItems } = await admin
+              .from('code_mapping_items')
+              .select('group_id, combo_row_id, combo_name, combo_keywords, taxonomy_code_id, date_option, max_sequence, parent_max_sequence')
+              .in('group_id', groupIds)
+              .order('sort_order', { ascending: true }) as { data: ComboItemRow[] | null }
+
+            const comboRowItemsMap = new Map<string, ComboItemRow[]>()
+            for (const item of rawItems ?? []) {
+              const list = comboRowItemsMap.get(item.combo_row_id) ?? []
+              list.push(item)
+              comboRowItemsMap.set(item.combo_row_id, list)
+            }
+
+            const taxonomyIds = [...new Set((rawItems ?? []).map((i) => i.taxonomy_code_id))]
+            const { data: taxonomyCodes } = taxonomyIds.length > 0
+              ? await admin
+                  .from('product_category_codes')
+                  .select('id, code, code_tier, depth, code_rule')
+                  .in('id', taxonomyIds)
+              : { data: [] as Array<{ id: string; code: string; code_tier: string | null; depth: number; code_rule: Record<string, unknown> | null }> }
+            const taxonomyById = new Map((taxonomyCodes ?? []).map((c) => [c.id as string, c]))
+
+            const { data: globalFmtRow } = await admin
+              .from('cms_settings')
+              .select('value')
+              .eq('key', 'product_code_format')
+              .maybeSingle()
+            const globalFmt = {
+              prefix: 'CS', date_format: 'YYMM', seq_digits: 3,
+              ...(globalFmtRow?.value && typeof globalFmtRow.value === 'object' ? globalFmtRow.value as Record<string, unknown> : {}),
+            } as { prefix?: string; date_format?: string; seq_digits?: number }
+
+            const seenRows = new Set<string>()
+            const items: CategoryComboItem[] = []
+            for (const item of rawItems ?? []) {
+              if (seenRows.has(item.combo_row_id)) continue
+              seenRows.add(item.combo_row_id)
+              const comboItems = comboRowItemsMap.get(item.combo_row_id) ?? []
+              const codes = comboItems
+                .map((i) => taxonomyById.get(i.taxonomy_code_id))
+                .filter((c): c is NonNullable<typeof c> => Boolean(c))
+              let preview = '—'
+              if (codes.length > 0) {
+                const catCode = buildComboCategoryCode(codes)
+                const rootCodeId = getRootCode(codes)?.id ?? null
+                const rootRule = (rootCodeId ? taxonomyById.get(rootCodeId)?.code_rule : null) ?? null
+                const prefix = (((rootRule?.prefix as string) || globalFmt.prefix || 'CS') as string).trim().toUpperCase()
+                const lead = comboItems[0]
+                let datePartStr = ''
+                if (lead?.date_option === 'ymd') {
+                  const now = new Date()
+                  datePartStr = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, '0')}${String(now.getDate()).padStart(2, '0')}`
+                } else if (lead?.date_option !== 'none') {
+                  const now = new Date()
+                  const df = globalFmt.date_format ?? 'YYMM'
+                  datePartStr = df === 'YYYYMM'
+                    ? `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, '0')}`
+                    : `${String(now.getFullYear()).slice(2)}${String(now.getMonth() + 1).padStart(2, '0')}`
+                }
+                const seqPlaceholder = (lead?.parent_max_sequence && lead?.max_sequence)
+                  ? '0'.repeat(String(lead.parent_max_sequence).length) + '0'.repeat(String(lead.max_sequence).length)
+                  : '0'.repeat(globalFmt.seq_digits ?? 3)
+                preview = `${prefix}${catCode}${datePartStr}${seqPlaceholder}`
+              }
+              items.push({
+                combo_row_id: item.combo_row_id,
+                combo_name: item.combo_name,
+                combo_keywords: item.combo_keywords ?? [],
+                group_id: item.group_id,
+                group_name: groupNameById.get(item.group_id) ?? '',
+                code_preview: preview,
+              })
+            }
+            selectedProduct!.categoryComboItems = items
+          }
+        }
+      }
+    }
   }
 
   // 선택된 상품의 재고 목록 (자신 + 자식 제품 — 동일 재고 그룹)
