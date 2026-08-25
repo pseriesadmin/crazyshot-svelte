@@ -104,6 +104,7 @@ hasSettingsAccess(role) → getRoleLevel(role) >= 50
 | 계정 목록·수정 | `/cms/accounts/list` | ❌ | ✅ | ✅ |
 | 코드 이관 | `/cms/codes` → `transferCode` | ❌ | ❌ | ✅ |
 | 코드설정 기타 전체(20개 액션 중 19개) | `/cms/codes` → `addCode`·`editCode`·`deleteCode`·`toggleActive`·`saveFormat`·`updateCodeRule`·`saveMapping`·`savePrefixCodes`·`addGroup`·`editGroup`·`deleteGroup`·`toggleGroupActive`·`toggleGroupProductFilter`·`toggleGroupPartnerType`·`addGroupItem`·`updateGroupItemSettings`·`removeGroupCombo`·`removeGroupItem`·`removeComboItem` | ❌ | ✅ | ✅ |
+| 상품 코드 재반영(2026-08-25) | `/cms/products` → `reassignCodeSeries`(재고 0개 부모상품의 기준 품번 재할당, products.md §2-11) | ❌ | ✅ | ✅ |
 
 > ⚠️ **QR-CASE-2(2026-08-XX 확정)**: `/cms/codes`의 액션 20개 중 `transferCode`만 superadmin
 > 게이트가 있었고, `saveFormat`(전 카테고리·전 상품의 향후 채번 방식을 좌우하는 전역 설정) 포함
@@ -232,4 +233,4 @@ function verifyTossSignature(body: unknown, signature: string | null): boolean {
 
 ---
 
-*security-auth.md v3.8 | Harness Flow v3.2 | 보안·인증·RLS·CMS 역할 | 2026-08-XX /cms/codes 20개 액션 전부 manager 이상(19개) + superadmin(transferCode) 게이트로 통일(QR-CASE-2), load() 페이지 진입 게이트 추가로 partner UI 노출 갭 해소 | 2026-08-11 Phase 7 — 전자계약 양식·발행·발송 5개 파일·9곳 manager 이상 게이트 확정 적용(P7-1~5), 접근 매트릭스 갱신(11개→5파일9곳으로 정정) | 2026-08-13 tiptap-doc 렌더링 회귀 수정(CRITICAL) | 2026-08-24 CMS 전역 정밀검증 v3 STAGE 6·3 반영 — 서명·직인 자산 관리 행의 스테일 "(P8B-2, 미구현)" 주석 제거(실제로는 구현·매트릭스 그대로 유효함을 코드 재확인), 구독 관리(`/cms/subscriptions`) 행 신규 추가(그동안 매트릭스에 아예 없던 신규 메뉴 문서 공백 해소)*
+*security-auth.md v3.9 | Harness Flow v3.2 | 보안·인증·RLS·CMS 역할 | 2026-08-XX /cms/codes 20개 액션 전부 manager 이상(19개) + superadmin(transferCode) 게이트로 통일(QR-CASE-2), load() 페이지 진입 게이트 추가로 partner UI 노출 갭 해소 | 2026-08-11 Phase 7 — 전자계약 양식·발행·발송 5개 파일·9곳 manager 이상 게이트 확정 적용(P7-1~5), 접근 매트릭스 갱신(11개→5파일9곳으로 정정) | 2026-08-13 tiptap-doc 렌더링 회귀 수정(CRITICAL) | 2026-08-24 CMS 전역 정밀검증 v3 STAGE 6·3 반영 — 서명·직인 자산 관리 행의 스테일 "(P8B-2, 미구현)" 주석 제거(실제로는 구현·매트릭스 그대로 유효함을 코드 재확인), 구독 관리(`/cms/subscriptions`) 행 신규 추가(그동안 매트릭스에 아예 없던 신규 메뉴 문서 공백 해소) | 2026-08-25 상품 코드 재반영(`reassignCodeSeries`) 행 신규 추가(products.md §2-11, QA 지적으로 매트릭스 누락 해소)*

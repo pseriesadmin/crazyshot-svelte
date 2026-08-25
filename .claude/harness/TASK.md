@@ -1,5 +1,705 @@
 # .claude/harness/TASK.md
 
+생성일: 2026-08-25 (@promptor)
+아젠다: CMS `/cms/rentals` 카드목록 + `RentalDetailPanel`에 두발히어로(dhero) 배송사 API 실연동
+— 배송접수·상태조회·배송이력조회·취소·반품등록·주소유효성검증 6개 엔드포인트를 예약 상태전이
+(shipped/return_requested/cancelled)에 fail-soft로 자동 연결하고, cart 주소입력 시 배송가능
+여부를 사전 경고한다.
+
+[CONTEXT BRIDGE]
+plan_source: Stephen 직접 지시(2026-08-25) — 첨부 PDF("두발히어로 배송 api 안내") 정밀 리뷰 +
+  코드베이스 조사 후 Plan Mode로 제시한 설계를 Stephen이 승인.
+핵심제약:
+  - "배송대여" 판별은 pickup_method/return_method 리터럴(`'crazydelivery'` 등) 하드코딩 비교
+    금지 — 반드시 `rental_method_options.is_bulk_delivery` 플래그 조회로 판단한다(§조사결과 D).
+    관리자가 `/cms/set/rental`에서 이 그룹을 변경해도 코드가 깨지지 않아야 함.
+  - cart 사전검증은 기존 `isDeliveryLocked()`(`cart/+page.svelte`) 판정 로직을 그대로 재사용
+    — 새 판정 로직을 만들지 않는다(§조사결과 E).
+  - 기존 `tracking_number`/`courier_code` 컬럼(Migration 268)을 그대로 재사용 — bookId를
+    `tracking_number`에, `'두발히어로'` 고정값을 `courier_code`에 저장. 신규 별도 컬럼 아님.
+  - 두발히어로 API 연동은 전부 fail-soft — API 실패가 예약 상태전이 자체를 막으면 안 된다
+    (products.md regWarn 패턴과 동일 철학: 실패해도 상태전이는 성공, 경고+재시도 버튼만 노출).
+  - 신규 notify_type을 추가하지 않는다 — 기존 상태전이 흐름(`updateStatus` 액션)의 자동알림
+    매핑을 그대로 따른다(service-operations.md §15 동기화 규칙이 발동하지 않도록).
+  - 배송상태는 수동 새로고침(옵션상품 섹션과 동일 lazy-fetch 패턴) + Vercel Cron 자동 주기
+    갱신을 함께 구현한다(GATE B Q1(c) 답변, 2026-08-25 — 애초 "V1은 수동만" 제안에서 확장).
+    cron은 종료상태(배송완료/반송완료/분실완료/취소) 아닌 예약만 대상으로 주기 조회.
+  - 장바구니(cart)·내정보(account) 주소입력 UI에 우편번호 검색(Daum Postcode) 기능을 신규
+    도입한다(GATE B Q1(b) 답변, 2026-08-25 — 애초 "forceRefine 텍스트만" 제안에서 확장).
+    account의 기존 `AddressTabContent.svelte` Daum 위젯 로직을 공유 컴포넌트로 추출해 cart에서도
+    재사용 — 두 곳에 각각 다른 구현을 새로 만들지 않는다.
+  - 비bulk-delivery 방식(quick/visit/locker/epost)의 기존 수동입력 UI는 그대로 유지(회귀 금지).
+  - 두발히어로 토큰 문자열 자체는 TASK.md·코드·커밋 어디에도 재기재하지 않는다 — `.env.local`
+    (로컬 전용, 커밋 금지)과 Vercel 환경변수(Preview=테스트, Production=운영)에 Stephen이
+    별도 채널로 전달한 값을 개발자가 직접 설정.
+TDD도메인: 신규 RPC `update_reservation_dhero_shipment`(rental_reservations 컬럼 갱신, 예약
+  라이프사이클 데이터) + `updateStatus` 액션 내 상태전이(shipped/return_requested/cancelled)에
+  걸리는 두발히어로 자동호출 트리거 로직 — AGENTS.md TDD 강제 키워드 "예약" 충족(예약 상태
+  데이터를 다루는 RPC + 상태전이 부수효과). 15분 단위 분해 필수. 그 외(dhero.ts API 클라이언트
+  자체, CMS UI 패널, cart 주소검증 엔드포인트, get_rental_list 확장)는 순수 데이터 플러밍·UI로
+  GSD 30분 단위 — 모호하면 TDD 보수적 판정 원칙에 따라 상태전이 트리거 쪽만 TDD로 분리함.
+절대금지:
+  - `shipments` 테이블(Migration 19)을 재사용하거나 건드리지 않는다 — 죽은 테이블, 이번
+    스코프와 무관(§조사결과 B).
+  - `pickup_method`/`return_method` 값 자체를 하드코딩 비교하는 신규 조건문 추가 금지(위 핵심제약).
+  - `nextStatus()`/`nextLabel()`(`src/lib/utils/rentalTransition.ts`) 상태전이 규칙 자체를
+    변경하지 않는다 — 두발히어로 호출은 기존 전이 결과에 "얹는" 부수효과일 뿐, 전이 로직 자체는
+    그대로.
+  - 두발히어로 API 키·토큰을 `$env/static/public` 또는 클라이언트 번들에 노출 금지 —
+    `$env/dynamic/private` 전용(security-auth.md 환경변수 분리 원칙).
+실패롤백:
+  - 신규 마이그레이션은 별도 파일(343)로 분리 — Stage 문제 발견 시 이 파일만 롤백, 기존
+    `rental_reservations`/`tracking_number` 등 기존 컬럼·RPC는 손대지 않아 영향 없음.
+  - Stage(ezyvffjvuwmtuhpxdjrw) TDD 전부 GREEN + 실제 두발히어로 테스트서버 연동 확인 +
+    Stephen 승인 전까지 Production 미적용.
+  - 자동호출 트리거는 항상 fail-soft이므로, 두발히어로 API 자체에 문제가 생겨도 예약 상태전이
+    기능은 이 아젠다 이전 상태로 즉시 되돌릴 필요 없이 계속 정상 동작(트리거 부분만 비활성화
+    가능하도록 try/catch로 완전히 격리).
+
+---
+
+### 조사 결과 요약 (구현 착수 전 반드시 인지할 것 — 추측 없이 코드·PDF 직접 확인 완료)
+
+```
+A. rental_reservations.tracking_number/courier_code(TEXT, Migration 268:
+   supabase/migrations/20260816000268_268_rental_tracking.sql)가 이미 존재 — 주석에 "stage
+   전용, GATE E 스텁 상태, API 키 확보 후 라이브 전환" 명시돼 있음. 같은 마이그레이션의 RPC
+   `update_reservation_tracking(p_reservation_id BIGINT, ...)`에 타입 불일치 버그가 있다 —
+   `rental_reservations.id`는 UUID인데 파라미터가 BIGINT로 선언돼 있음.
+   `/api/cms/reservations/[id]/tracking/+server.ts`(GET/PATCH)가 이 RPC를 호출하는 기존
+   수동입력 UI(택배사명 텍스트input + 운송장번호 텍스트input + 저장버튼)가
+   `RentalDetailPanel.svelte`의 "운송장 정보" 섹션(692~783행 부근, "대여 방법" 섹션 바로
+   다음, "상태 액션 버튼" 섹션 이전)에 이미 구현돼 있음.
+
+B. 별도 shipments 테이블(Migration 19, supabase/migrations/20260529000019_19_shipments.sql)에
+   tracking_number/carrier/status(enum: preparing/shipped/in_transit/delivered/pickup_
+   ready/failed) 컬럼이 존재하나 CMS 코드 어디에서도 이 테이블을 사용하지 않음 — 죽은
+   테이블로 추정, 이번 작업에서 건드리지 않는다(재사용도 안 함, 삭제도 안 함 — 범위 외).
+
+C. pickup_method/return_method는 원래 shipment_method_enum('crazydelivery','quick','locker',
+   'visit','airport')였으나 Production/Stage 드리프트 복구 과정(Migration 144, 169)을 거치며
+   사실상 TEXT 컬럼으로 운영 중. UI 라벨 매핑(RentalDetailPanel.svelte PICKUP_LABELS)에는
+   epost도 추가돼 있으나 DB enum엔 없음(기존부터 존재하던 불일치, 이번 작업과 무관 — 건드리지
+   않음).
+
+D. "배송대여" = 두발히어로(Stephen 확정): "배송대여"는 고정된 pickup_method/return_method
+   리터럴이 아니라, rental_method_options 테이블(Migration 126/175/339, 컬럼: id, name,
+   method_key, display_order, is_bulk_delivery)의 is_bulk_delivery = true로 태그된
+   배송방식들의 그룹 명칭이다. 기본 시딩값은 method_key IN ('delivery','crazydelivery')
+   (Migration 339 20260824080000_339_rental_method_bulk_delivery_flag.sql)이나 관리자가
+   /cms/set/rental 화면(toggle_rental_method_bulk_delivery RPC)에서 자유롭게 변경 가능.
+   두발히어로 연동 대상 판별은 pickup_method/return_method 값을 하드코딩 비교하지 말고, 그
+   method_key에 대응하는 rental_method_options.is_bulk_delivery 플래그를 조회해서 판단해야
+   한다 — 관리자가 그룹을 바꿔도 코드가 깨지지 않도록.
+
+E. cart/+page.svelte의 isDeliveryLocked() 함수(61-67행 부근)가 이미
+   sdDeliveryOpts.some(o => o.method_key === m && o.is_bulk_delivery) 판정 로직을 가지고
+   있음 — 이번 작업(장바구니 배송가능주소 사전검증)에서 이 판정 로직을 그대로 재사용할 것,
+   새로 만들지 말 것.
+
+F. cart 페이지에는 현재 우편번호(postalCode) 입력 필드가 없다 — 주소 입력은 addr(기본주소
+   텍스트)와 addrDetail(상세주소 텍스트) 자유입력뿐(+page.svelte:1605-1606). Daum 우편번호
+   검색 위젯은 src/lib/components/members/profile/AddressTabContent.svelte에만 존재(재사용
+   후보, 이번 스코프 포함 여부는 GATE B 질문으로 남길 것).
+
+G. send_rental_chat_notification RPC(최신본 Migration 329)와 push.ts
+   CUSTOMER_LIFECYCLE_PUSH_COPY에 이미 shipment_notify/rental_confirm/return_remind 등
+   배송 관련 알림 타입이 존재한다 — 이번 작업은 새로운 notify_type을 추가하지 않는다.
+   두발히어로 연동은 상태값을 채워주는 데이터 소스일 뿐이고, 알림 발송은 기존 상태전이
+   (updateStatus 액션) 흐름을 그대로 따른다(신규 notify_type 추가 시 service-operations.md
+   §15 채팅카드/푸시 동기화 규칙이 발동하므로, 추가하지 않으면 이 규칙 자체가 발동하지 않음
+   — 명시적으로 해당사항 없음).
+
+H. nextStatus()/nextLabel()(src/lib/utils/rentalTransition.ts)이 RentalDetailPanel.svelte와
+   cms/mobile/qr 스캔 화면에 공유된다 — 배송접수/반납접수 자동호출 지점은 이 상태전이가 실제
+   발생하는 cms/reservation/+page.server.ts의 updateStatus 액션에 걸어야 두 화면(PC/모바일
+   QR)에 일관 적용된다.
+
+I. 참고 패턴 — 토스페이먼츠 연동(src/routes/api/payment/confirm/+server.ts,
+   api/webhooks/toss/+server.ts): $env/dynamic/private로 시크릿 관리, 네트워크 오류/API
+   오류(4xx statusCode+message)를 구분해 타입있는 에러로 처리, service_role RPC로 원자적
+   반영. 두발히어로 클라이언트도 동일 패턴 적용.
+
+J. get_rental_list RPC 응답/RentalListRow 타입(src/routes/cms/reservation/+page.server.ts:
+   12-52, rentals/+page.server.ts가 재사용)에는 현재 tracking_number/courier_code가
+   노출돼 있지 않다 — 카드 목록에 배송상태 칩을 보여주려면 RPC와 타입 모두 확장 필요.
+
+[두발히어로 API 스펙 요약 — PDF 원문 기준]
+- 인증: 헤더 Authorization: Bearer {TOKEN} + spotCode(출발지 코드) 별도.
+- 테스트서버: https://partner-api.dev.dhero.kr / 운영서버: https://partner-api.prod.dhero.kr
+- 배송접수 POST /deliveries — spotCode, receiverName/Mobile/Address/AddressDetail/
+  AddressPostalCode, productName, orderIdFromCorp(우리측 예약코드), print:'r'(중복접수 시
+  기존 데이터 반환) → 응답 bookId(운송장번호)·dongGroup(지역분류코드)·
+  addressNotSupported(boolean)·정제주소필드. 성공 201.
+- 배송조회 GET /deliveries/{bookId}(또는 /deliveries/order-id-from-corps/{orderIdFromCorp},
+  또는 복수건 쿼리 /deliveries?page&pageSize&dateFrom&dateTo&canceled) → status(0예약/1수거
+  배차/2수거완료/3입고완료/4출고완료/5배송완료/6반송완료/7분실완료/8배송대기/12배송연기),
+  각 단계 타임스탬프, delayedDeliveries(지연사유 배열), sentBackReason/lostReason,
+  deliveryRiderName/Mobile, placePageUrl/reviewUrl/problemUrl/deliveredPageUrl.
+- 배송이력조회(트래킹) GET /deliveries/{bookId}/tracking → deliveryStatus
+  (PICKUP_SCHEDULED/PICKUP_COMPLETED/WAREHOUSED/DELIVERY_STARTED/DELIVERY_COMPLETED/
+  DELIVERY_RETURNED/DELIVERY_LOST/DELIVERY_CANCELED), trackingDetails(단계별 라이더명/
+  연락처/처리시각 배열).
+- 취소 PUT /deliveries/{bookId}/cancel — 취소 가능 상태: 접수/수거지정/수거완료/입고/배송배차
+  까지만(배송출발·배송연기·배송완료류는 취소 불가, 412 응답).
+- 반품등록 POST /deliveries/{bookId}/return — 같은 bookId로 복수 반품 접수 가능(R, 1R, 2R
+  순차 부여). 취소상태/사고상태/분실완료 상태는 반품등록 불가.
+- 배송가능 유효주소 조회 POST /address/validate — {address, postalCode}, 쿼리
+  forceRefine(텍스트검증 제외 여부) → 응답 {valid: boolean, dongGroup}.
+
+[자격증명 안내]
+Stephen이 테스트·운영 자격증명(각 spotCode + JWT token)을 이미 제공했으며, `.env.local`
+(로컬 전용, 커밋 금지)과 Vercel 환경변수(Preview=테스트, Production=운영)에 개발자가 직접
+설정해야 한다 — 실제 토큰 값은 이 문서가 아닌 별도 채널로 전달됨.
+```
+
+---
+
+### 리스크 (TDD 아젠다 필수 항목)
+
+```
+① 가용성 리스크(중간 🟠): 두발히어로 API 장애(타임아웃·5xx) 시 예약 상태전이 흐름에 영향을
+   줄 수 있음 — fail-soft 설계(try/catch 완전 격리 + 상태전이는 항상 먼저 커밋)로 완화.
+   API 실패는 dhero_status를 채우지 못한 채 경고만 남기고, 관리자가 수동 재시도 버튼으로
+   재접수/재조회 가능.
+
+② 데이터 정합성 리스크(중간 🟠): 배송상태는 V1에서 수동 새로고침 기반이라, CMS 화면에 표시된
+   dhero_status가 실제 두발히어로 측 최신 상태보다 지연될 수 있음(자동폴링 없음) — 관리자가
+   "상태 새로고침" 버튼을 누르기 전까지는 배지가 stale할 수 있다는 한계를 UI에 명시(마지막
+   동기화 시각 dhero_synced_at 표시)해 완화.
+
+③ 취소/반품 API 실패 시 정합성 리스크(중간 🟠): 예약이 cancelled로 전환됐는데 두발히어로측
+   cancelDelivery가 412(취소불가 상태)로 실패하면, 우리 DB는 예약취소가 완료됐지만 실제
+   배송은 계속 진행 중인 상태로 남을 수 있음 — best-effort 처리 + 실패 시 관리자에게 명확한
+   경고("배송사 측 취소 실패 — 실물 배송을 별도 확인하세요") 노출로 완화(자동 재시도 없음,
+   수동 확인 유도).
+
+④ 보안 리스크(낮음 🟡): 두발히어로 토큰이 $env/dynamic/private 경유 서버 전용으로만
+   사용되는가 — 클라이언트 번들에 노출되면 제3자가 임의로 배송접수/취소를 실행할 수 있는
+   심각한 위험. security-auth.md 환경변수 분리 원칙 그대로 적용해 원천 차단.
+```
+
+### 엣지케이스 (최소 3개)
+
+```
+EC-1: 배송접수 성공(bookId 발급) 직후 관리자가 실수로 예약을 즉시 cancelled로 전환 → 예상
+      동작: cancelDelivery 자동호출, 두발히어로 측 상태가 아직 취소가능 범위(접수~배송배차)
+      이므로 성공 처리, dhero_status를 취소완료로 갱신.
+EC-2: 이미 배송출발(4출고완료 이상) 상태의 건을 관리자가 CMS에서 취소 시도(예약취소 버튼) →
+      예상 동작: cancelDelivery가 412 반환 → 예약 자체는 정상 cancelled 처리되나 배송취소는
+      실패 경고 배지 노출(§리스크 ③), 실물 회수는 관리자 수동 대응.
+EC-3: is_bulk_delivery 그룹이 관리자에 의해 전부 해제(빈 상태)로 변경된 후 이미 접수된 건이
+      shipped→in_use로 전이 → 예상 동작: 트리거는 전이 시점의 pickup_method 기준으로만
+      is_bulk_delivery를 재조회하므로, 이미 배송접수된 건은 그대로 두발히어로 흐름 유지(회고적
+      영향 없음) — 신규 전이 판단에만 최신 플래그가 적용됨.
+EC-4: 배송접수 요청이 네트워크 타임아웃으로 응답을 못 받았으나 실제로는 두발히어로 서버에
+      접수가 완료된 경우(중복접수 위험) → 예상 동작: 재시도 시 print:'r' 파라미터로 동일
+      orderIdFromCorp 요청 → 두발히어로가 기존 접수 데이터를 그대로 반환(중복 생성 없음,
+      PDF 명세 그대로 활용).
+```
+
+---
+
+### 설계 결정 필요 — GATE B에서 Stephen이 답해야 할 열린 질문 (구현 착수 전 필수)
+
+```
+Q1(a). [update_reservation_tracking 타입버그 동시 수정 여부]
+   기존 RPC update_reservation_tracking(p_reservation_id BIGINT, ...)가 rental_reservations.id
+   (UUID)와 타입 불일치(§조사결과 A)인 버그를 이번 마이그레이션(343)에서 같이 고칠지, 아니면
+   완전히 별개 아젠다로 분리할지 확인 필요 — 범위 인접이나 "요청범위 외 수정 절대 금지"
+   원칙상 명시적 확인 없이는 손대지 않음. → 기본 제안: 같이 고침(같은 파일·같은 섹션 UI를
+   건드리는 작업이라 별도 마이그레이션으로 분리해도 실익이 적음), 단 Stephen 확답 필수.
+
+Q1(b). [cart 우편번호 수집 방식]
+   현재 cart는 주소 자유입력만 있고 우편번호(postalCode) 필드가 없다(§조사결과 F) —
+   /address/validate에 postalCode가 필요한데 어떻게 확보할지: (옵션1) forceRefine=true로
+   호출해 텍스트만으로 검증(우편번호 없이 주소 문자열 기반 정제, 정확도 낮을 수 있음) vs
+   (옵션2) AddressTabContent.svelte의 Daum 우편번호 위젯을 cart에도 신규 도입(정확도 높으나
+   UI 변경 공수 추가). → 기본 제안: V1은 옵션1(신규 UI 도입 없이 forceRefine 검증)로 시작,
+   추후 정확도 이슈 발생 시 옵션2 검토.
+
+Q1(c). [배송상태 자동폴링(cron) 도입 필요 여부]
+   V1 설계는 수동 새로고침만 제안했음(§핵심제약) — 자동 폴링(Vercel Cron) 도입이 필요한지
+   재확인. → 기본 제안: 이번 스코프는 수동 새로고침만(과설계 방지), 자동폴링은 실사용 후
+   필요성이 확인되면 별도 요청으로 BACKLOG 승격.
+
+Q2. [CMS 카드목록 배송상태 칩 노출 범위]
+   get_rental_list/RentalListRow 확장(§조사결과 J)이 필요한데, 카드목록에는 어느 정보까지
+   보여줄지(예: 상태 텍스트만 vs 라이더 정보까지) 확인 필요. → 기본 제안: 카드목록은 상태
+   배지만(간략), 라이더정보·지연사유 등 상세는 RentalDetailPanel에서만 노출.
+
+Q3. [Migration 343 적용 전 두발히어로 테스트서버 실호출 검증 방식]
+   Stage 적용 후 실제 개발환경 자격증명으로 배송접수→조회→취소 흐름을 라이브로 1회 확인할지,
+   아니면 TDD 목(mock) 테스트만으로 GATE C를 통과시킬지 확인 필요(결제 연동 시 라이브 검증을
+   선호했던 과거 관례 참고, service-operations.md §9 "배포 순서 사고" 교훈 — 코드/설정이
+   완료됐다고 실제 동작을 보장하지 않음). → 기본 제안: mock TDD로 1차 GREEN 확인 후, Stage
+   실제 개발환경 자격증명으로 최소 1회 라이브 배송접수→취소 왕복 테스트 병행.
+```
+
+---
+
+### GATE B 답변 확정 (2026-08-25, Stephen)
+
+```
+Q1(a) → 수정 진행: update_reservation_tracking의 BIGINT/UUID 타입불일치 버그를 Migration 343에서
+  함께 수정한다.
+Q1(b) → 옵션2 확정(원안보다 확장): cart·account(내정보) 주소입력 UI 양쪽에 우편번호 검색(Daum
+  Postcode) 기능을 신규 도입한다. account의 기존 AddressTabContent.svelte Daum 위젯 로직을
+  공유 컴포넌트로 추출해 cart에서도 재사용 — 중복 구현 금지.
+Q1(c) → 자동폴링 도입 확정(원안보다 확장): Vercel Cron 기반 배송상태 주기 갱신을 이번 스코프에
+  포함한다. 수동 새로고침 버튼도 함께 유지(즉시성 보장용).
+Q2 → 기본 제안 그대로 확정: 카드목록은 배송상태 배지만, 라이더정보·지연사유 등 상세는
+  RentalDetailPanel 전용 UI에서만 노출.
+Q3 → 기본 제안 그대로 확정: Stage 코드 검증(mock TDD) 후 실제 두발히어로 테스트서버로
+  배송접수→취소 왕복 1회 라이브 확인.
+```
+
+---
+
+### 구현 범위 (GATE B 승인 완료 — 위 확정 답변 기준, 착수 가능)
+
+```
+[NOW]
+- [x] (GSD) `src/lib/server/dhero.ts` 신규 — createDelivery/getDeliveryByBookId/
+      getDeliveryByOrderId/cancelDelivery/registerReturn/validateAddress/getTracking 함수,
+      $env/dynamic/private(DHERO_API_BASE_URL/DHERO_TOKEN/DHERO_SPOT_CODE) 사용, 토스페이먼츠
+      클라이언트 패턴(§조사결과 I) 준용(네트워크 오류/API 4xx 오류 구분 처리) | 완료기준:
+      7개 함수 전부 타입 정의 + 단위 mock 테스트 통과 | 예상 30분×2 ✅완료
+- [x] (GSD) 서버 유틸 `isBulkDeliveryMethod(methodKey)` — rental_method_options 조회로
+      is_bulk_delivery 플래그 판정(핵심제약 — 리터럴 하드코딩 금지) | 완료기준: 그룹 변경
+      시 코드 수정 없이 즉시 반영 확인 | 예상 30분 ✅완료
+- [x] (TDD-RED) Migration 343 대상 신규 RPC `update_reservation_dhero_shipment(
+      p_reservation_id BIGINT — ⚠️수정: TASK.md §조사결과 A의 "UUID" 표기는 플래너 오류.
+      Migration 140·159·279 재조사로 rental_reservations.id = BIGINT 확정, 파라미터 BIGINT로
+      작성)` 테스트 작성 — 정상갱신/존재하지않는 reservation/service_role 외 실행
+      차단 3케이스 | 완료기준: Stage에 RPC 없어 전부 RED 확인 | 예상 15분 ✅완료
+- [x] (TDD-GREEN) 컬럼 추가(dhero_status/dhero_status_code/dhero_return_book_id/
+      dhero_dong_group/dhero_synced_at/dhero_meta) + 위 RPC 구현(p_reservation_id BIGINT),
+      SECURITY DEFINER service_role 전용(Migration 343) | 완료기준: 3케이스 GREEN ✅완료
+- [x] (TDD) Q1(a) update_reservation_tracking 타입버그 — 조사 결과 버그 없음으로 종결
+      (update_reservation_tracking은 이미 BIGINT 파라미터로 정상 구현, Section C 제거).
+      §조사결과 A의 "rental_reservations.id = UUID" 표기가 플래너 오류였음이 실제 마이그레이션
+      파일(140·159·279·187) 전수 조회로 확정됨. Migration 343 Section C 전면 제거. | ✅완료(N/A)
+- [x] (TDD-REFACTOR) anon/authenticated EXECUTE REVOKE, service_role만 허용 권한 검증 —
+      Migration 343 REVOKE/GRANT 블록으로 구현, 테스트 케이스 3번 GREEN ✅완료
+- [x] (TDD) `cms/reservation/+page.server.ts` updateStatus 액션 — 상태가 shipped로 전이 +
+      pickup_method가 is_bulk_delivery 그룹 → createDelivery 자동호출(try/catch 완전 격리,
+      실패해도 상태전이 자체는 항상 성공) | 9/9 테스트 GREEN | ✅완료
+- [x] (TDD) 같은 액션 — in_use→return_requested 전이 + return_method가 bulk-delivery →
+      registerReturn 자동호출(fail-soft 동일 원칙) | 9/9 테스트 GREEN | ✅완료
+- [x] (TDD) 같은 액션 — cancelled 전이 + tracking_number 존재 + 취소가능 상태범위 →
+      cancelDelivery 자동호출(best-effort) | EC-1·EC-2 포함 9/9 GREEN | ✅완료
+- [x] (GSD) `src/routes/api/cms/reservations/[id]/dhero/+server.ts`(GET 상태조회·POST
+      배송접수/재시도) 신설 | GET: 상태조회+RPC갱신, POST: bulk검증+주소조회+배송접수 | ✅완료
+- [x] (GSD) `.../dhero/cancel/+server.ts`(PUT), `.../dhero/return/+server.ts`(POST) 신설 |
+      PUT: 412→dhero_cancel_failed, POST: registerReturn+DB갱신 | ✅완료
+- [ ] (GSD) 공유 컴포넌트 `PostcodeSearchButton`(가칭, 위치 미정 — `src/lib/components/
+      common/`) 신설 — `AddressTabContent.svelte`의 기존 Daum Postcode 위젯 호출 로직을
+      추출해 공용화(GATE B Q1(b) 확정, §조사결과 F) | 완료기준: account 기존 화면이 이
+      공유 컴포넌트로 교체돼도 기존 동작과 동일함을 회귀 확인 | 예상 30분×2
+- [ ] (GSD) `cart/+page.svelte` 주소입력(addr/addrDetail) 영역에 위 `PostcodeSearchButton`
+      신규 도입 — 검색 결과로 우편번호(postalCode) 확보 | 완료기준: cart에서 우편번호 검색 →
+      기본주소 자동입력 → 상세주소만 수동입력하는 흐름 정상 동작 | 예상 30분
+- [ ] (GSD) `src/routes/api/cart/validate-delivery-address/+server.ts`(POST, 로그인 세션
+      필요) — isDeliveryLocked() 재사용해 bulk-delivery 방식일 때만 validateAddress 호출,
+      위에서 확보한 실제 postalCode + address 함께 전달(forceRefine 불필요 — 우편번호 확보로
+      대체) | 완료기준: valid:false 시 응답에 경고 플래그 포함 | 예상 30분
+- [x] (GSD) `src/routes/api/cron/dhero-sync/+server.ts`(Vercel Cron) 신설 — 종료상태
+      아닌(shipped/in_use/return_requested 등) 예약 중 tracking_number 있는 건을 주기
+      조회(getDeliveryByBookId)해 update_reservation_dhero_shipment RPC로 dhero_status 갱신
+      | vercel.json crons 등록(*/10 * * * *), CRON_SECRET fail-closed | ✅완료
+- [ ] (GSD) `RentalDetailPanel.svelte` "운송장 정보" 섹션 조건분기 확장 — bulk-delivery
+      그룹이면 자동화뷰(배송상태 배지·bookId 읽기전용·라이더정보·지연/반송/분실사유·
+      dhero_synced_at 표시·상태새로고침/배송취소/배송재접수 버튼), 그 외 방식은 기존
+      수동입력 UI 그대로 유지(회귀 없음 확인) | 완료기준: quick/visit/locker/epost 예약에서
+      기존 UI 그대로 동작 확인 | 예상 30분×2
+- [ ] (GSD) `get_rental_list` RPC + `RentalListRow` 타입에 dhero_status 노출 추가, `cms/
+      rentals` 카드목록에 배송상태 칩 추가(Q2 기본안 — 상태 배지만) | 완료기준: 카드목록에
+      배송중 건은 상태 배지 노출, 나머지는 미노출 | 예상 30분
+- [ ] (GSD) cart 주소입력 시 validate-delivery-address 호출 → valid:false면
+      csToast.warning('현재 배송이 어려운 지역입니다.')(비차단 경고, 제출 막지 않음) |
+      완료기준: bulk-delivery 방식 선택 + 배송불가 주소 입력 시 경고 노출, 제출 가능 상태
+      유지 확인 | 예상 30분
+- [x] (GSD) 환경변수 스캐폴딩 — DHERO_API_BASE_URL/DHERO_TOKEN/DHERO_SPOT_CODE를
+      $env/dynamic/private로 읽는 설정 확인 + .env.example에 키 이름만 추가(실값 미포함)
+      | .env.example 3개 키 추가 완료, 실값 없음 확인 | ✅완료
+
+[NEXT]
+- [ ] (GSD) Stage에서 개발환경 자격증명으로 배송접수→상태조회→취소 왕복 1회 라이브 검증
+      (Q3 확정) | 완료기준: 실제 두발히어로 테스트서버 응답으로 bookId 발급·취소 확인 |
+      예상 30분
+- [ ] (GSD) Production 적용 — Stage 검증 완료 + Stephen 승인 후 Migration 343 Production
+      배포 + Vercel Production 환경변수(운영 자격증명) 설정 확인 | 완료기준: 코드배포와 DB
+      마이그레이션 적용 둘 다 별도로 확인(service-operations.md §9 교훈 — 코드 배포 ≠ DB
+      마이그레이션 적용) | 예상 30분
+
+[BACKLOG]
+- account(내정보) 주소입력에도 새 `PostcodeSearchButton` 공유 컴포넌트 전환 적용 여부는 NOW의
+  컴포넌트 추출 태스크에서 함께 처리(기존 AddressTabContent 회귀 확인 포함) — 별도 분리 아님.
+- shipments 테이블(Migration 19) 정리(삭제 또는 재사용 결정) — 이번 스코프 밖, 별도 아젠다 필요.
+```
+
+### GATE C 확인 항목 (태스크별)
+
+```
+[ ] 두발히어로 연동 판별이 pickup_method/return_method 리터럴 하드코딩이 아니라
+    rental_method_options.is_bulk_delivery 플래그 조회 기준인가? (핵심제약, §조사결과 D)
+[ ] cart 사전검증이 isDeliveryLocked() 판정 로직을 재사용하는가?(신규 판정 로직 추가 아닌가,
+    §조사결과 E)
+[ ] tracking_number/courier_code 기존 컬럼을 그대로 재사용하는가?(신규 별도 컬럼을 추가하지
+    않았는가, §조사결과 A)
+[ ] 두발히어로 API 호출부가 전부 try/catch로 완전 격리돼 있어, API 실패 시에도 예약
+    상태전이(updateStatus) 자체는 항상 성공하는가?(fail-soft 원칙)
+[ ] 신규 notify_type을 추가하지 않았는가?(service-operations.md §15, 기존 상태전이 자동알림
+    흐름 그대로 따르는가)
+[ ] 두발히어로 토큰이 $env/dynamic/private 경유로만 사용되고 클라이언트 번들에 노출되지
+    않는가?(security-auth.md 환경변수 분리 원칙)
+[ ] update_reservation_dhero_shipment RPC가 service_role 전용으로 REVOKE 처리됐는가?
+[ ] 비bulk-delivery 방식(quick/visit/locker/epost)의 기존 수동입력 UI(§조사결과 A)가 그대로
+    유지되는가?(회귀 없음)
+[ ] nextStatus()/nextLabel() 상태전이 규칙 자체를 변경하지 않았는가?(§절대금지)
+[ ] EC-1~EC-4 전부 통과하는가?
+[ ] 마이그레이션 파일이 343(또는 확인된 최신 다음 번호)로 기존 파일과 충돌 없이 신설됐는가?
+[ ] cart·account 양쪽이 동일한 `PostcodeSearchButton` 공유 컴포넌트를 쓰는가?(중복 구현 아님,
+    GATE B Q1(b))
+[ ] account 기존 주소입력(AddressTabContent.svelte) 동작이 컴포넌트 추출 후에도 회귀 없는가?
+[ ] `/api/cron/dhero-sync`가 종료상태(배송완료/반송완료/분실완료/취소) 예약은 건드리지 않는가?
+[ ] update_reservation_tracking 타입버그 수정 후 기존 수동 운송장입력(비bulk-delivery 방식)이
+    정상 저장되는가?(회귀 확인)
+```
+
+---
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+✅ GATE B 승인 완료 (2026-08-25, Stephen)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Q1(a)~Q3 답변 확정 완료(§"GATE B 답변 확정" 섹션 참고) — Q1(b)·Q1(c)는 원안(수동 새로고침만/
+forceRefine 텍스트만) 대비 범위가 확장돼(우편번호 검색 UI 신규 도입, 자동폴링 cron 추가)
+[NOW] 체크리스트에 반영 완료. NOW 태스크 실행 대기.
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+---
+
+생성일: 2026-08-25 (@promptor)
+아젠다: 장바구니(`/cart`) 본상품·옵션상품 수량(+/−) UI를 실제 재고정보 기준으로 연동 — 현재는
+둘 다(본상품은 완전히, 옵션상품은 상한 없이) 화면 표시용 숫자일 뿐 실제 재고 점유·검증과
+무관하게 동작한다. 본상품은 실제 추가/취소 예약을 생성하도록 전환하고, 옵션상품은 처음으로
+재고 상한 검증을 도입한다.
+
+[CONTEXT BRIDGE]
+plan_source: Stephen 직접 지시(2026-08-25) — `/cart` 두 종류의 수량조절 UI(qty-ctrl) 조사
+  결과 보고 후 Stephen이 AskUserQuestion 2건에 자유서술로 답변한 내용을 그대로 반영.
+핵심제약:
+  - 본상품 추가예약은 `create_hold_reservation` RPC(FOR UPDATE SKIP LOCKED 원자적 배정,
+    Migration 306 최신본)를 그대로 재사용 — 신규 재고배정 로직을 별도로 만들지 않는다.
+  - 옵션상품 재고검증은 신규 RPC가 필요하나, 기존 `products.md §5`(is_active + 겹치는 활성
+    예약 없음)와 완전히 동일한 조건식을 그대로 적용한다 — 별도 기준 새로 만들지 않는다.
+  - `rental-lifecycle.md`의 "옵션상품은 개별 대수(재고)를 추적하지 않는다" 문서화된 원칙은
+    이번 작업 범위에서 "재고 상한 검증(읽기 전용 게이트)"까지만 예외로 갱신한다 — 옵션상품을
+    본상품처럼 원자적으로 자식 유닛에 잠그는 것(실제 hold 생성)까지는 이번 스코프가 아니다
+    (아래 "리스크" §2 동시성 한계 참고 — 명시적으로 BACKLOG로 분리).
+  - 여러 예약을 하나의 주문으로 묶는 시점(`create_reservation_order`)은 여전히 체크아웃
+    제출 시점 1곳으로 유지 — 새 추가예약이 이 시점 이전에 별도 order를 만들지 않는다
+    (service-operations.md §4 원칙 위반 금지).
+TDD도메인: 예약(reservation)·재고(HOLD 배정)·동시성 키워드 전부 해당 — AGENTS.md TDD 강제
+  도메인 명백히 충족. 전체 TDD 경로, 15분 단위 분해 필수.
+절대금지:
+  - 관리자 CMS 대여정보 탭의 기존 "형제상품" 표시 인프라(`rental-siblings` API,
+    `RentalDetailPanel.svelte`)를 중복 재구현하지 않는다 — 아래 조사 결과 이미 요구사항을
+    구조적으로 충족하고 있음을 확인함(§조사결과 F).
+  - `create_hold_reservation`/`create_draft_reservation`/`cancel-hold` RPC·엔드포인트
+    시그니처 변경 금지 — 그대로 재사용.
+  - MAX_RESERVATION_QTY(현재 10, `reservationHelper.ts`) 상수를 이번 작업에서 임의로
+    변경하지 않는다 — cart에도 동일 상한을 적용할지만 결정한다(값 자체는 유지).
+  - 옵션상품을 본상품처럼 원자적 자식 유닛에 잠그는 구조 변경(대규모 재설계) — 이번 스코프 아님.
+실패롤백:
+  - 신규 RPC(옵션 가용대수 조회)는 별도 마이그레이션 파일로 분리 — Stage 문제 발견 시 이
+    파일만 롤백, 기존 create_hold_reservation 등은 손대지 않아 영향 없음.
+  - Stage(ezyvffjvuwmtuhpxdjrw) TDD 전부 GREEN + Stephen 승인 전까지 Production 미적용.
+
+---
+
+### 조사 결과 요약 (구현 착수 전 반드시 인지할 것 — 추측 없이 코드·마이그레이션 직접 확인 완료)
+
+```
+A. 본상품 수량(+/−)은 현재 100% 클라이언트 전용이다.
+   `src/routes/cart/+page.svelte`의 `itemsState[].qty`($state 배열)만 바꾸며, 체크아웃 시
+   서버로 보내는 값은 `reservationIds` 배열뿐이다(`/api/reservations/create-order/+server.ts`
+   — `qty` 파라미터 자체가 없음). qty 스텝퍼는 화면상 예상 결제금액(`otSubtotal` 등)만
+   배수로 부풀릴 뿐 실제 재고를 추가 점유하지 않는다. (qty-ctrl 버튼 위치:
+   `src/routes/cart/+page.svelte:1146-1149`(모바일), `:1254-1257`(PC))
+
+B. "몇 대를 빌릴지"는 이미 상품상세(`/products/[id]`)에서 완전히 다른 방식으로 처리되고
+   있으며, 이 로직이 재사용 가능한 형태로 이미 존재한다.
+   - `src/lib/services/reservationHelper.ts`의 `createMultiUnitReservation(qty, deps)` —
+     `deps.createUnit()`을 qty회(클램프 `clampReservationQty`, `MAX_RESERVATION_QTY = 10`)
+     반복 호출해 각각 독립된 예약을 생성하고, 도중 하나라도 실패하면 이미 만든 것 전부를
+     `deps.cancelUnit()`으로 롤백하는 all-or-nothing 오케스트레이션(순수 함수, RPC 통신은
+     주입받은 deps가 담당).
+   - `src/routes/products/[id]/+page.svelte:452-470`이 이 헬퍼를 실제로 사용하는 예시
+     (`createHoldUnit`이 `create_hold_reservation` RPC 1회 호출을 감쌈, `cancelUnit`은
+     `/api/reservations/cancel-hold` POST 호출).
+   - **cart의 "+" 버튼도 이 정확히 동일한 3개 조각(createMultiUnitReservation·
+     create_hold_reservation·cancel-hold)을 그대로 재사용하면 된다 — 신규 재고배정 로직
+     불필요.**
+
+C. `create_hold_reservation` RPC(최신 정의: `supabase/migrations/20260819070000_306_block_
+   anonymous_reservation_creation.sql:19-104`)는 다음을 원자적으로 수행한다:
+   - `p_product_id`(부모 UUID) 하위 자식 중 `is_active=true` + `deleted_at IS NULL` +
+     요청 기간과 겹치는 활성 예약(cancelled/returned/completed/expired 제외) 없는 것을
+     `FOR UPDATE SKIP LOCKED ORDER BY created_at LIMIT 1`로 배정(products.md §5와 동일 조건).
+   - **`rental_reservations.product_id`에는 배정된 자식(재고 유닛)의 UUID를 예약 생성
+     즉시(hold 시점) 그대로 저장한다** — 즉 "어떤 실물(품번)이 배정됐는지"는 이미 hold
+     생성 순간 구조적으로 확정돼 있다(Stephen 요구사항의 "자식상품 코드품번을 함께 반영"은
+     추가 개발 없이 이미 보장됨). `asset_id` 반환 컬럼은 이것과 별개 개념(물리자산 QR
+     연결, 반출 시점에만 채워짐, 항상 NULL 반환)이라 혼동하지 말 것.
+
+D. `/api/reservations/cancel-hold/+server.ts` — POST `{ reservationId }`, 소유권(`user_id`)
+   확인 후 `update_reservation_status` RPC로 `cancelled` 전환. 그대로 재사용 가능.
+
+E. `/api/reservations/create-order/+server.ts` — POST `{ reservationIds: number[], couponId,
+   points }`, `create_reservation_order` RPC로 임의 개수의 reservationId를 하나의 주문으로
+   묶는다. 같은 상품의 서로 다른 reservationId 여러 개가 섞여도 아무 제약이 없다 — 본상품
+   qty 증가로 생긴 추가 reservation들도 이 배열에 자연스럽게 포함되면 그만이다.
+
+F. ⛔ **Stephen 요구사항 3번("CMS 대여예약목록 상세정보에 재고 수량만큼의 자식상품 품번코드
+   반영")은 이미 100% 구현되어 있다 — 추가 CMS 개발이 필요 없다.**
+   `RentalDetailPanel.svelte`(`/cms/reservation`·`/cms/rentals` 공유)의 "대여정보" 탭
+   "상품 정보" 섹션(`productInfoItems`, 305-316행)은 같은 주문(order_id)에 묶인 형제
+   예약들을 `/api/cms/reservations/[id]/rental-siblings/+server.ts` 경유로 조회해 각각의
+   `product_code`(자식 품번)·이름·카테고리·이미지를 이미 반복 표시한다(order_items 테이블,
+   Migration 280). 본상품 qty 증가로 만들어진 추가 reservation들이 체크아웃 시점에 같은
+   order로 묶이기만 하면(§C·E, 기존 흐름 그대로) 이 화면은 코드 변경 없이 그대로 N개를
+   보여준다. → 검증 태스크만 필요, 신규 구현 불필요.
+
+G. 옵션상품은 현재 재고 개념이 전혀 없다 — cart의 `updateOptionQty()`
+   (`src/routes/cart/+page.svelte:509-534`)와 상품상세 옵션 스테퍼
+   (`src/routes/products/[id]/+page.svelte:628-641`, `opt.qty += 1`) 둘 다 하한(0 또는 1)만
+   있고 상한 검증이 전혀 없다. `get_product_option_links` RPC가 반환하는
+   `ProductOptionLinkRow.stock_quantity`는 `products.stock_quantity`라는 **정적 컬럼**을
+   그대로 반환할 뿐(`supabase/migrations/20260724000161_161_fix_option_links_image_url.sql`
+   등) — products.md §5가 정의하는 "활성 자식 수 − 겹치는 기간 예약 수"의 동적 계산이
+   아니며, 애초에 `buildOptionItems()`(상품상세 104행)에서 이 값 자체를 참조조차 하지
+   않는다. **즉 날짜 구간 기준 실시간 가용대수를 계산하는 RPC/쿼리가 프로젝트에 아직 없다
+   — 신규로 만들어야 한다.**
+
+H. 옵션으로 선택되는 상품(`option_product_id`)은 카탈로그상 **부모 상품**을 가리킨다
+   (`get_product_option_links`가 `option_product_id`로 반환, CMS "옵션상품" 탭에서 다른
+   부모상품을 연결). 따라서 옵션 가용대수 계산도 본상품과 동일하게 "그 option_product_id를
+   `parent_product_id`로 갖는 자식들 중 is_active + 겹치는 활성예약 없음" 카운트로 구현하면
+   된다(products.md §5 조건식 그대로, `create_hold_reservation` 내부 SELECT와 동일 원리,
+   FOR UPDATE SKIP LOCKED 없이 단순 COUNT만 하면 됨 — 읽기전용 게이트이므로).
+
+I. ⚠️ **옵션상품 화면 배치상 제약**: 상품상세(`/products/[id]`)에서 옵션 수량 스테퍼
+   (`optionsSection` snippet, 581-649행)는 대여 날짜 선택 UI(`CalendarTimePicker`,
+   734행·761행)보다 화면상 먼저(위에) 렌더링된다 — 즉 사용자가 옵션 수량을 조정하는
+   시점에 아직 대여 시작·종료일이 확정되지 않았을 수 있다. "가용대수"는 본질적으로 날짜
+   구간에 의존하는 값이라(products.md §5), 날짜 미확정 상태에서 어떤 기준으로 상한을 보여줄
+   지 결정이 필요하다(아래 GATE B 질문 Q5).
+
+J. ⚠️ **옵션상품은 실제 재고를 점유(잠금)하지 않는다 — 순수 표시 정보(qty·unit_price)만
+   `reservation_options` 테이블에 저장될 뿐, 그 옵션에 대응하는 특정 자식 유닛이 예약에
+   배정되지 않는다.** 본상품처럼 `FOR UPDATE SKIP LOCKED`로 원자적으로 잠기는 게 아니라서,
+   "담기 시점에 재고를 확인"해도 그 확인과 실제 저장 사이에 경쟁 상태(race condition)가
+   존재할 수 있다(아래 리스크 §2). 이번 스코프는 "표시 게이트"까지만 — 완전한 동시성 안전
+   보장(원자적 잠금)은 별도 승인 필요한 더 큰 구조 변경이라 BACKLOG로 분리한다.
+```
+
+---
+
+### 리스크 (TDD 아젠다 필수 항목)
+
+```
+① 동시성 리스크(본상품, 낮음 🟡): create_hold_reservation은 이미 FOR UPDATE SKIP LOCKED로
+   검증된 원자적 RPC를 그대로 재사용하므로 신규 동시성 위험 없음. 다만 all-or-nothing
+   롤백(createMultiUnitReservation) 중 cancelUnit이 실패하면(네트워크 등) 고아 hold가
+   남을 수 있음 — 기존 상품상세 경로도 동일한 한계를 이미 가지고 있음(신규 리스크 아님,
+   HOLD 30분 자동만료 pg_cron이 최종 안전망 — service-operations.md §10).
+
+② 동시성 리스크(옵션상품, 중간 🟠 — BACKLOG로 완화): 옵션 가용대수는 "확인 후 저장" 방식의
+   비원자적 게이트라, 동시에 여러 사용자가 같은 실물(예: 'Sony FX6-12')을 옵션으로 동시에
+   담으면 실제 보유 대수를 초과해 등록될 수 있다(TOCTOU race). 이번 스코프는 이 문제를
+   완전히 해결하지 않음(§조사결과 J) — 표시상 오탐지를 크게 줄이는 개선이지 결제 확정
+   단계의 최종 방어선은 아니다. 완전한 해결(옵션도 자식 유닛에 원자적으로 잠금)은 별도
+   승인 필요한 대규모 재설계로 BACKLOG 등록.
+
+③ 데이터 정합성 리스크(낮음 🟡): 본상품 qty 증가로 만든 추가 reservation이 체크아웃 이전에
+   장바구니에서 이탈(브라우저 종료 등)해도, 기존 30분 HOLD 자동만료(service-operations.md
+   §10)가 그대로 적용되어 재고가 무기한 점유되지 않음 — 신규 방어 로직 불필요.
+
+④ 보안 리스크(낮음 🟡): 신규 옵션 가용대수 RPC는 재고 수량(영업정보)만 반환하는 읽기전용
+   함수 — anon 실행은 차단하고 authenticated만 허용(products.md §2-7 QR-CASE-2와 동일하게
+   REVOKE 관례 적용). cancel-hold는 기존 소유권 검증 로직 그대로 재사용.
+```
+
+### 엣지케이스 (최소 3개)
+
+```
+EC-1: cart에서 "+" 클릭 시점에 마지막 남은 재고 1개뿐 → 예상 동작: create_hold_reservation
+      실패(가용 자식 없음) → "재고가 부족합니다" 토스트, qty 증가 취소, 카드 추가 없음.
+EC-2: 본상품 qty 3으로 늘렸다가 "-"를 눌러 2로 줄이는 중 해당 reservation이 이미 다른
+      프로세스(HOLD 30분 자동만료 등)에 의해 cancelled로 전환된 상태 → 예상 동작:
+      cancel-hold가 멱등하게 성공(또는 404류 무시) 처리, 화면은 invalidateAll로 실제 서버
+      상태 재동기화(중복 취소 에러로 사용자에게 노출하지 않음).
+EC-3: 옵션상품의 가용대수가 0인 상태로 상품상세에 진입(부모상품이 이미 완전 소진) →
+      예상 동작: 그 옵션의 수량 UI는 "0" 고정 표시 + "재고없음" 배지, +버튼 비활성화,
+      필수옵션(is_required)인데 재고 0이면 "장바구니 담기" 버튼 자체도 비활성화 + 안내
+      토스트(이 경우는 필수옵션 재고소진으로 상품 자체를 예약할 수 없는 예외 상황이므로
+      GATE B Q6에서 별도 확인).
+```
+
+---
+
+### 설계 결정 필요 — GATE B에서 Stephen이 답해야 할 열린 질문 (구현 착수 전 필수)
+
+```
+Q1. [본상품 "+/−" UI 표현 방식 — 이 아젠다에서 가장 큰 설계 분기점]
+   현재 cart 구조는 "예약(reservation) 1건 = 카드 1개"가 원칙이며, 이미 상품상세에서 qty 2로
+   담으면 카드가 2개로 분리되는 것이 기존에 정상 동작 중인 패턴이다(§조사결과 B).
+
+   [권장안] 옵션 1 — 카드분리 방식(기존 인프라 100% 재사용, 저위험·저공수):
+     "+" 클릭 = 같은 부모상품·같은 날짜·같은 옵션 조건으로 새 reservation 1건을 추가 생성
+     → invalidateAll 후 새 카드가 자동으로 목록에 나타남(현재 상품상세 다중담기와 동일 결과).
+     "−" 클릭 = 그 카드 자체를 삭제(기존 삭제 버튼과 동일 로직, cancel-hold 재사용).
+     qty 숫자 UI는 "카드 개수를 대신 보여주는 표시"로 재해석(예: "이 조건으로 이미 담긴
+     대수: N" 형태의 안내로 대체), 카드 자체를 늘리고 줄이는 것으로 기능이 이동.
+
+   옵션 2 — 그룹화 방식(신규 UX, 고위험·고공수):
+     여러 reservation을 "논리적으로 하나의 카드"로 묶어 그 카드 안에 대수(qty)와 각 대수의
+     품번 목록을 펼쳐보이는 신규 그룹 UI. 서버(`cart/+page.server.ts`)에 그룹핑 로직을
+     새로 만들어야 하고, 옵션·배송방식 등 부가정보를 그룹의 어느 reservation에 귀속시킬지
+     추가 규칙이 필요하며, "−" 클릭 시 "어느 유닛을 취소할지"(가장 최근 생성분 제안) 규칙도
+     새로 정의해야 한다.
+
+   → **Stephen 확정 필요.** 이하 NOW 항목은 옵션 1(권장안) 기준으로 작성함 — 옵션 2를
+     선택하면 이 플랜을 다시 짜야 함.
+
+Q2. [MAX_RESERVATION_QTY 상한을 cart에도 그대로 적용할지]
+   상품상세는 이미 1~10대로 클램프된다(`clampReservationQty`). cart의 "+"도 누적 10대에서
+   막을지, 아니면 cart는 무제한으로 둘지 확인 필요. → 기본 제안: 동일하게 10대 적용(정책
+   일관성).
+
+Q3. [qty 감소(-) 대상 선택 규칙 — 옵션 1 채택 시]
+   그 카드 자체를 지우는 것이므로 "어느 카드를 지울지"는 사용자가 직접 원하는 카드의 "−"를
+   누르는 것으로 자연히 해결됨(문제 없음, 참고용으로만 명시).
+
+Q4. [프론트 카드 화면에도 자식 품번(product_code)을 노출할지]
+   요구사항 원문 2번("부모상품의 자식상품 코드품번을 함께 반영")이 CMS만 지칭하는지, 고객이
+   보는 cart 카드에도 품번을 노출해야 하는지 불명확 — 3번 항목이 "CMS 대여예약목록 상세정보"로
+   명시돼 있어 2번은 백엔드 데이터 정합성(이미 구조적으로 충족, §조사결과 C)을 말하는 것으로
+   해석했으나, cart 카드 UI에도 노출을 원하면 `cart/+page.server.ts`의 products select에
+   `product_code` 컬럼 추가 + 카드 마크업 반영이 추가로 필요(공수 작음, GSD 30분). →
+   **Stephen 확인 필요(기본 제안: 이번 스코프 제외 — 고객 화면에 내부 재고관리용 품번을
+   노출할 실익이 낮음, 필요 시 별도 요청).**
+
+Q5. [옵션 가용대수 판정 시점 — 날짜 미선택 상태 처리]
+   §조사결과 I — 옵션 수량 스테퍼가 날짜선택보다 먼저 렌더링된다. 날짜가 아직 없을 때
+   가용대수를 어떻게 보여줄지: (a) 날짜 없이 "현재 시점 기준 활성 자식 총수"로 우선 표시하고
+   날짜 확정 후 재검증, (b) 날짜 선택 전에는 상한 표시를 보류(배지 없음)하고 날짜 확정
+   직후에만 정확한 값으로 재계산. → **기본 제안: (a)** — 상품상세는 이미 날짜 선택 없이도
+   페이지에 진입하자마자 옵션을 먼저 보여주는 흐름이라, 최소한 "활성 자식 자체가 0"인
+   완전 소진 케이스는 날짜와 무관하게 항상 정확하게 걸러낼 수 있음(부분 소진 케이스만 날짜
+   확정 후 재검증 필요) — Stephen 확인 필요.
+
+Q6. [필수옵션(is_required) 재고 0 상태의 처리]
+   필수옵션인데 가용대수가 0이면 그 상품 자체를 예약할 방법이 없어진다(옵션 없이는 대여
+   불가인데 옵션 재고가 없으므로). "장바구니 담기" 버튼을 완전히 막을지, 아니면 관리자에게
+   알리는 별도 처리(품절 안내 배너 등)가 필요한지 확인 필요. → 기본 제안: 버튼 비활성화 +
+   "현재 예약이 불가한 상품입니다(옵션 재고 소진)" 안내 문구.
+```
+
+---
+
+### 구현 범위 (GATE B 승인 후 착수 — 옵션 1·기본 제안값 기준)
+
+```
+[NOW]
+- [ ] (TDD-RED) 신규 RPC `get_product_available_count(p_product_id UUID, p_start_date DATE,
+      p_end_date DATE)` 테스트 작성 — 자식 0개/전부소진/부분가용/취소예약 제외 4케이스 |
+      완료기준: Stage에 대상 RPC 없어 전부 RED 확인 | 예상 15분
+- [ ] (TDD-GREEN) 위 RPC 구현 — products.md §5 조건식(is_active + deleted_at IS NULL +
+      겹치는 활성예약 없음) COUNT, SECURITY DEFINER, 신규 마이그레이션 파일 | 완료기준:
+      4케이스 전부 GREEN, Stage 적용 | 예상 15분
+- [ ] (TDD-REFACTOR) anon EXECUTE REVOKE, authenticated만 허용 권한 검증
+      (`has_function_privilege()` 직접 조회) | 완료기준: anon=false/authenticated=true 확인 |
+      예상 15분
+- [ ] (TDD) 상품상세 옵션 스테퍼(`opt.qty += 1`, 628-641행) — 가용대수 조회해 상한 클램프 +
+      "재고없음" 배지(0일 때) + `+` 버튼 비활성화 | 완료기준: 재고 미만에서만 증가 허용,
+      0일 때 배지 노출 | 예상 15분×2
+- [ ] (TDD) `handleReserve()`(291행) 제출 시 서버 최종 재검증 — 옵션 중 가용대수 미달 항목
+      있으면 담기 자체 차단 + 토스트(TOCTOU 최종 방어선, §리스크 ②) | 완료기준: 재고부족
+      옵션 포함 시 hold 생성 자체가 시작되지 않음 | 예상 15분×2
+- [ ] (TDD) 필수옵션 재고 0 케이스 — 담기 버튼 비활성화 + 안내문구(Q6 기본안 기준) |
+      완료기준: EC-3 통과 | 예상 15분
+- [ ] (TDD) cart `updateOptionQty()`(509-534행) — 증가 요청 시 동일 RPC로 상한 검증 추가
+      (현재 하한만 존재) | 완료기준: 가용대수 초과 요청 시 RPC 호출 자체를 막고 토스트 |
+      예상 15분×2
+- [ ] (TDD) cart "+" 버튼(1146-1149·1254-1257행) — 로컬 `updateItem qty` 대신
+      `createMultiUnitReservation`(1대분, `parent_product_id` 기준)로 실제 hold 생성 →
+      성공 시 invalidateAll(새 카드 자동 노출 확인), 실패 시 EC-1 토스트 | 완료기준: 재고
+      있을 때만 카드 추가, 소진 시 명확한 경고 | 예상 15분×3
+- [ ] (TDD) cart "−" 버튼 — 옵션 1 기준 해당 카드 자체를 cancel-hold(기존 removeItem 로직
+      재사용/통합)로 취소 | 완료기준: EC-2 통과(이미 취소된 예약 재취소 시도해도 에러 노출
+      없이 화면 정상 동기화) | 예상 15분×2
+- [ ] (GSD) MAX_RESERVATION_QTY(10) cart에도 동일 적용(Q2 기본안) — 같은 조건(부모+날짜+
+      옵션) 카드가 10개 도달 시 "+" 비활성화 | 완료기준: 11번째 시도 시 차단 | 예상 30분
+
+[NEXT]
+- [ ] (GSD) 실통합 검증 — Stage에서 같은 부모상품 2대 이상 cart qty 증가 → 체크아웃 제출 →
+      order로 정상 결합 → CMS `/cms/rentals` 대여정보 탭 "상품 정보" 섹션에 형제 카드별
+      자식 product_code가 정상 노출되는지 직접 확인(§조사결과 F, 신규 구현 없음 — 검증만) |
+      완료기준: 2대 이상 예약 1건에서 서로 다른 품번 2개 확인 | 예상 30분
+- [ ] (GSD) Q4 답변에 따라 필요 시 cart 카드에 product_code 노출 추가 | 완료기준: Stephen
+      답변 반영 | 예상 30분(Q4가 "제외"면 스킵)
+
+[BACKLOG]
+- 옵션상품을 본상품처럼 원자적으로 특정 자식 유닛에 잠그는 구조 변경(완전한 동시성 안전
+  보장) — §리스크 ②, 이번 스코프의 표시 게이트만으로는 해소되지 않는 근본 해결책. 별도
+  승인·별도 아젠다 필요(rental-lifecycle.md "옵션상품 개별 대수 미추적" 원칙의 전면 재설계
+  수준이라 이번 세션 스코프 밖).
+- 옵션 2(그룹화 카드 UI) — Q1에서 Stephen이 옵션 2를 선택하면 이 BACKLOG 항목이 NOW로
+  승격되며 이 플랜 전체가 재작성 필요.
+```
+
+### GATE C 확인 항목 (태스크별)
+
+```
+[ ] get_product_available_count가 products.md §5와 정확히 동일한 조건식을 쓰는가?
+    (is_active=true, deleted_at IS NULL, cancelled/returned/completed/expired 제외)
+[ ] anon 실행 REVOKE 확인 완료?
+[ ] cart "+"가 create_hold_reservation 호출 시 p_product_id로 부모(parent_product_id)를
+    쓰는가? (자식 id를 잘못 넘기지 않는가 — line.product.parent_product_id 사용)
+[ ] cart "+/−"가 여러 예약을 하나의 주문으로 묶는 시점(create_reservation_order)에 영향을
+    주지 않는가? (체크아웃 제출 시점 1곳 원칙 유지, service-operations.md §4)
+[ ] 관리자 CMS 쪽 코드를 이번 작업에서 변경하지 않았는가? (§조사결과 F — 이미 충족, 검증만)
+[ ] MAX_RESERVATION_QTY 상수값 자체를 변경하지 않았는가? (적용 범위만 cart로 확장)
+[ ] 옵션 가용대수 확인이 상품상세 담기(handleReserve) 최종 제출 시점에도 재검증되는가?
+    (화면 표시상 게이트만이 아니라 서버 경로에도 최소 1곳 재확인 필요 — TOCTOU 완화)
+[ ] HOLD 30분 자동만료 pg_cron이 여전히 존재·활성 상태인가? (service-operations.md §10,
+    새로 만든 추가 reservation들도 동일하게 이 안전망의 보호를 받아야 함)
+```
+
+---
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+🚦 GATE B 대기 — 👤 Stephen 태스크 확인
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+TASK.md 신규 플랜 블록 생성 완료(🔴 CRITICAL — 예약·재고 로직 + 다중 파일).
+
+확인 항목:
+[ ] 위 "설계 결정 필요" Q1~Q6에 전부 답변했는가? (특히 Q1 — 카드분리 vs 그룹화, 이 플랜
+    전체의 방향을 결정하는 핵심 분기)
+[ ] NOW 태스크가 의도와 맞는가?
+[ ] 범위 밖 항목(옵션상품 원자적 잠금·그룹화 UI)이 BACKLOG로 올바르게 분리되어 있는가?
+[ ] TDD 태스크가 15분 단위로 쪼개졌는가?
+
+→ 승인: "GATE B 승인. Q1~Q6 답변: ... NOW 실행해."
+→ 수정: TASK.md 직접 수정 후 "GATE B: 내가 고쳤어. NOW 실행해."
+→ 반려: "GATE B 반려. [이유]. 다시 작성해."
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+---
+
 ## NOW — 🟡 BOUNDARY: 장바구니 하단 동의문구 '이용안내' 링크화 + 이용안내 모달 신설 (2026-08-24) — ✅ 완료
 
 ```
@@ -1833,6 +2533,71 @@ git commit: Stephen 직접 실행 필요.
 
 DB 변경: 없음
 Migration: 없음
+
+---
+
+## DONE — 🟡 BOUNDARY: /hype-pack "Pack 테마목록" CMS 테마그룹 관리 기능 신설 (2026-08-25) — ✅ 완료
+
+아젠다: `/hype-pack` "Pack 테마목록" 섹션(PC `d-pack-grid`, 모바일 `m-pack-themes-list`)이
+하드코딩 5개 카드로만 표시되던 것을 관리자가 CMS에서 직접 관리 가능하게 신설. 홈 화면
+("사용자 초기화면")에 이미 배포된 `HomeThemeGroupModal.svelte` + `home_theme_groups` 테이블/RPC
+(Migration #322) 패턴을 그대로 복제 — 새 UX/데이터모델 설계 없이 검증된 구조 재사용.
+
+Stephen 확정사항(계획 단계 AskUserQuestion):
+  - 데이터는 홈 화면과 완전히 독립된 신규 테이블/RPC로 분리(홈 화면 기능 회귀 리스크 0)
+  - 테마그룹 카드 클릭 시 그 그룹의 연관 상품 목록으로 랜딩(신규 서브페이지)
+
+수행 작업:
+  [1] Migration #342 — `hype_pack_theme_groups` 테이블 + RPC 4종 신설
+    · `home_theme_groups`(#322)와 동일 스키마·RLS·가드로직, 이름만 `hype_pack_` 접두사로 분리
+    · `cms_create_hype_pack_theme_group` / `cms_update_hype_pack_theme_group` /
+      `cms_delete_hype_pack_theme_group`(소프트삭제) / `get_hype_pack_theme_groups_with_products`
+      (LATERAL JOIN, anon/authenticated 조회 허용)
+    · MAX 10 그룹 / 그룹당 MAX 10 상품 — 원본과 동일 가드
+    · Stage(ezyvffjvuwmtuhpxdjrw) ✅ 적용 후 SQL 직접 왕복 테스트(그룹 생성→RPC 조회→삭제,
+      실존 상품 연결 LATERAL JOIN 정상 확인) → Production(vnbpmvxruyciuuaermyh) ✅ 적용 완료
+
+  [2] HypePackThemeGroupModal.svelte 신규 — `HomeThemeGroupModal.svelte` 구조 그대로 복제
+    · 그룹 카드 CmsDragList(원형 썸네일 업로드 + 제목/서브카피 입력) + 아코디언으로 펼치는
+      연관상품 CmsDragList + SuggestPicker 검색 추가(MAX_GROUPS=10 / MAX_PRODUCTS=10)
+    · RPC 호출명만 `_hype_pack_` 버전으로 치환, Storage 업로드 경로
+      `hype-pack-theme-groups/{tempId}-{timestamp}.{ext}`(버킷은 동일 `cms-assets`)
+    · 상품 검색을 이번 세션 배너 기능과 동일하게 `packageCategoryKey`(code_mapping_groups
+      SSOT, 실패 시 'package' 폴백)로 "패키지" 카테고리 잠금 — 홈 화면 모달(무필터)과의
+      의도적 차이점
+    · `$state(prop)` 오염 방지 — `$effect` 기반 prop 동기화(core-rules.md 규칙 준수)
+
+  [3] `+page.server.ts` — `get_hype_pack_theme_groups_with_products()` 로드 + enrich
+    · 배너 상품 ID + 테마그룹 상품 ID를 하나로 합쳐 단일 `price_rules` 배치쿼리로 12h/24h
+      가격 조회(중복 쿼리 방지, 기존 배너 기능 로직과 병합)
+
+  [4] `+page.svelte` — 관리자 버튼 + 카드 데이터 전환 + 랜딩 링크
+    · PC(`.d-title-bar.theme-pick-head`)·모바일(`.m-pack-themes .theme-pick-head`) 양쪽에
+      `⚙ 테마그룹 관리` 버튼(`isCms` 게이팅)
+    · `activeModal` 타입 `'banner' | null` → `'banner' | 'themeGroups' | null` 확장
+    · 카드 렌더링: `data.themeGroups` 우선, 비어있을 때만 기존 하드코딩 5종으로 폴백
+      (점진적 열화 원칙, 배너 기능과 동일 패턴)
+    · 카드를 `<a href="/hype-pack/theme/{group.id}">`로 감싸 그룹 전용 서브페이지 랜딩
+      (관리자 편집 버튼은 카드 바깥에 분리 배치, 클릭 충돌 방지)
+
+  [5] 신규 서브페이지 `src/routes/hype-pack/theme/[id]/` — 그룹 상품 목록 랜딩
+    · `+page.server.ts`: 그룹 조회(없으면 404) + 상품 12h/24h 가격 enrich
+    · `+page.svelte`: 전역 표준 `ProductDPCard` 그리드로 렌더링(신규 카드 컴포넌트 미신설)
+
+수정/신규 파일:
+  - supabase/migrations/20260825010000_342_hype_pack_theme_groups.sql (신규)
+  - src/lib/components/hype-pack/HypePackThemeGroupModal.svelte (신규)
+  - src/routes/hype-pack/+page.server.ts
+  - src/routes/hype-pack/+page.svelte
+  - src/routes/hype-pack/theme/[id]/+page.server.ts (신규)
+  - src/routes/hype-pack/theme/[id]/+page.svelte (신규)
+
+DB 마이그레이션: Migration #342 — Stage ✅ / Production ✅ (SQL 왕복 스모크 테스트 완료)
+
+GATE C:
+  [x] svelte-check 신규 에러 0건(HomeThemeGroupModal/ProductHeroModal과 동일 패턴 경고만 존재)
+  [x] Migration #342 Stage ✅ / Production ✅, 왕복 검증 완료
+  [x] GATE E(@sp3-qa-agent) 검수 대기
 
 ---
 
@@ -30749,3 +31514,778 @@ Supabase는 14자리 타임스탬프로 유일성을 보장해 번호 중복 자
 `cms_delete_synonym_candidate`·`cms_create_marketing_rule`·`cms_toggle_marketing_rule`·
 `cms_delete_marketing_rule`·`cms_set_default_signature_asset`) 전부 정상 생성 확인. Stage·
 Production 양쪽 배포 완료 — 앱코드(git 커밋)만 Stephen 직접 실행 대기.
+
+---
+
+## DONE — /cms/products 상단 페이지네이션에 총 등록상품 수량 배지 추가 (2026-08-17) — ✅ 완료
+
+[CONTEXT BRIDGE]
+plan_source: Stephen이 launch-selected-element로 `/cms/products` 상단 `CmsPagination`
+  요소를 지정 — "우측 끝 위치에 총 등록상품 수량 UI 추가, CMS 표준디자인 시스템 반영" 요청.
+핵심제약: `CmsPagination.svelte`(전 CMS 공용 컴포넌트) 자체는 수정 금지 — 다른 화면 영향 방지.
+  신규 컴포넌트/클래스 발명 대신 기존 `.count-badge` 표준 패턴 재사용.
+TDD도메인: 없음 (GSD — 표시 UI 추가, DB 로직 무변경)
+
+### 조사
+
+`/cms/reservation`·`/cms/rentals`·`/cms/customers/inquiry`·`/cms/customers/score` 4개 화면에
+이미 동일한 `.count-badge`(`총 {N}건`, `--text-pc-script-12` + `--cs-surface-gray` 배경 +
+`--radius-sm`) 패턴이 표준으로 쓰이고 있음을 확인 — 이 표준을 그대로 재사용.
+
+### 수정
+
+파일: `src/routes/cms/products/+page.server.ts` (1줄 추가)
+  - `load()` 반환 객체에 이미 계산돼 있던 `totalCount`(기존엔 `totalPages` 산출에만 쓰이고
+    클라이언트로 노출 안 됐음)를 추가.
+
+파일: `src/routes/cms/products/+page.svelte`
+  - 상단 `<CmsPagination>` 호출을 `.pagination-row` wrapper로 감싸고, 그 안에
+    `<span class="count-badge">총 {data.totalCount ?? 0}건</span>` 추가.
+  - `CmsPagination`은 `justify-content:center`로 항상 중앙정렬 — wrapper를
+    `position:relative`로 두고 배지만 `position:absolute; right:0`으로 배치해, 배지 유무·
+    너비와 무관하게 페이지네이션이 계속 정중앙에 고정되도록 함(요청하신 "우측 끝" 위치
+    확보와 기존 페이지네이션 중앙정렬 보존을 동시에 만족).
+  - `CmsPagination.svelte` 컴포넌트 자체는 무수정 — 다른 화면(예약·대여 등)에 영향 없음.
+
+### 검증
+
+- `npx svelte-check` — 전체 1 error(= `vite.config.ts`, 이번 세션과 무관한 병렬세션 설정
+  변경분)/382 warnings, `products/+page.server.ts`·`+page.svelte` 대상 신규 에러 0건.
+
+### 수정 파일
+
+```
+src/routes/cms/products/+page.server.ts  (MODIFY — totalCount 노출)
+src/routes/cms/products/+page.svelte     (MODIFY — 배지 UI 추가)
+```
+
+GATE C: BOUNDARY(단일 화면 표시 UI 추가, 기존 표준 패턴 재사용, DB/공용 컴포넌트 무변경) —
+자동 완료. 커밋은 Stephen 직접 실행.
+
+---
+
+## DONE — "새 상품으로 복제" 원본 code_series(기준 코드품번) 계승 버그 수정 (2026-08-17)
+
+[CONTEXT BRIDGE]
+plan_source: Stephen이 launch-selected-element로 `ProductDetailPanel.svelte`의
+  "새 상품으로 복제" 버튼을 지정 — "부모순번이 있는 상품을 복제하면 부모순번도 다음
+  순번으로 채번돼야 한다"(예: 원본 CSPHSAM0040000 → 복제본 CSPHSAM0050000) 요청 +
+  기존 복제 로직 정상동작 확인 + 부모순번/자식순번 채번 로직 재검증 요청(3건).
+핵심제약: products.md §2-2 영구고정 정책 위반 금지(신규 상품의 신규 채번이므로 해당 없음,
+  단 채번 RPC 시그니처는 절대 불변 — 기존 7-param 그대로 재사용), 파트너 콤보 분기(이미
+  정상 동작 확인된 경로)는 무변경.
+TDD도메인: 없음 (GSD — 기존 검증된 RPC 호출 패턴 재사용, 신규 SQL 없음)
+
+### ① 원인
+
+`cloneProduct` 액션의 `new_product` 모드 중 "협력사 전용코드"를 선택하지 않은 일반 복제
+(`autoCode` 분기, `src/routes/cms/products/+page.server.ts` 옛 1260-1268행)는 원본의
+`code_series`(기준 코드품번 구조 — category_code·2단계층 여부 등)를 전혀 참조하지 않고
+매번 단순 2-param(`p_code_id: null`) 카테고리 자동 폴백만 호출하고 있었다. 그 결과:
+  - 원본이 콤보(예: PH+SAM 조합) 기반 category_code("PHSAM")로 등록됐어도, 복제본은
+    이를 계승하지 못하고 `product_category_codes`/`category_taxonomy_map` 재탐색 또는
+    `UPPER(LEFT(category,3))` 폴백으로 완전히 다른(또는 코드설정에 없는) category_code를
+    받았다.
+  - 2단 계층(순번1=부모순번) 여부 자체도 무시돼, 원본이 2단 계층이어도 복제본은 항상
+    1단 모드로 채번됨 — "부모순번이 다음 순번으로 이어져야 한다"는 요청과 정반대로,
+    애초에 부모순번 개념 자체가 복제본에는 생기지 않았음.
+
+같은 파일의 "협력사 전용코드" 분기(`partnerCode` 분기)는 이미 7-param
+(`p_category_code_override`/`p_parent_max_sequence` 포함) 호출로 정상 동작 중이었음(직전
+세션에서 필터 비대칭 버그만 수정, 채번 방식 자체는 문제 없었음) — 이번 버그는 그 분기가
+아니라 "협력사 전용코드 미선택" 시의 기본(autoCode) 경로에만 있었다.
+
+### ② 수정
+
+파일: `src/routes/cms/products/+page.server.ts` (`autoCode` 분기)
+
+원본 `source.code_series`가 존재하고 `category_code`가 있으면(현행 대다수 상품 해당),
+파트너 분기와 동일한 7-param `generate_product_code` 호출로 전환 — 아래 값을 원본
+`code_series`에서 그대로 파생:
+  - `p_category_code_override`: 원본의 `category_code` 그대로(예: `"PHSAM"`) — 재탐색 없이
+    동일 계열 유지
+  - `p_parent_max_sequence`: 원본의 `parent_max_sequence`(2단 계층이면 값, 1단이면 `null`)
+    — RPC 내부에서 이 값이 NOT NULL이면 `product_parent_sequences`(원자적 카운터, migration
+    222)에서 **자동으로 다음 순번**을 채번(예: 원본 parent_seq=4 → 복제본 parent_seq=5)
+  - `p_max_sequence`: 원본의 `max_sequence`(순번2 상한) 그대로
+  - `p_date_option`: 원본 `year_month` 값으로 역추론(`'nodate'`→`'none'`, 8자리 숫자→`'ymd'`,
+    그 외(4자리 등)→`'ym'`)
+  - `p_code_id`: `null`(override 사용 시 code_rule 조회는 불필요 — 파트너 분기와 동일 원칙)
+
+원본에 `code_series` 자체가 없는 레거시 상품(2026-08-06 정책 이전 등록분)은 기존 3-param
+폴백을 그대로 유지 — 회귀 없음. 순번 상한 도달 시 에러 처리(`parent_max_sequence_exceeded`/
+`max_sequence_exceeded`)도 파트너 분기와 동일한 문구·`sequenceCapReached` 배치중단 로직 재사용.
+
+### ③ 검증
+
+- 신규 테스트 2건 추가(`src/__tests__/services/productClone.test.ts`):
+  1. 원본 code_series(`category_code:'PHSAM', parent_max_sequence:999, max_sequence:9999,
+     year_month:'nodate'`)가 있을 때 `generate_product_code`가 정확히
+     `{p_category_code_override:'PHSAM', p_parent_max_sequence:999, p_max_sequence:9999,
+     p_date_option:'none', p_code_id:null}`로 호출되는지 rpcCalls 캡처로 직접 검증
+  2. 원본에 code_series가 없는 레거시 케이스 — 기존 3-param 경로 그대로 성공 확인(회귀 방지)
+- 관련 전체 회귀: `productClone`(7)·`cloneProductPartnerCodeComboMerge`(5)·
+  `productCodeInventoryTierTwo`·`productCodeTierTwo`(3)·`productCodeComboMerge`·
+  `productNew`·`productComboRequired`(1) — 7개 파일 **29/29 GREEN**
+- `npx svelte-check` — 전체 1 error(`vite.config.ts`, 무관한 병렬세션)/382 warnings, 대상
+  파일 신규 에러 0건(warnings 수치도 직전 세션 기록과 동일 — 회귀 없음 재확인)
+
+### ④ 재검증 — 부모순번/자식순번 채번 로직 정상작동 (요청 3번)
+
+이번 세션에서 이미 두 차례 확인한 내용을 마이그레이션 코드 재대조로 최종 재확인:
+  - `generate_product_code`(migration 222→239로 자식 자릿수 버그만 후속 수정, 7-param
+    시그니처·핵심 흐름 무변경) — 순번1은 `product_parent_sequences`에서
+    `(category_code, year_month)` 키로 원자적 증가(`INSERT...ON CONFLICT DO UPDATE
+    next_seq+1`), 상한 초과 시 `parent_max_sequence_exceeded` 예외.
+  - `generate_inventory_product_code`(migration 216) — 순번2(자식)는 부모 code_series의
+    이미 확정된 `parent_seq`를 그대로 읽어 재사용, 신규 채번 없음(§2-2 영구고정과 일치).
+  - production 실데이터(2026-08-16 세션에서 확인, 재확인 완료): AX 1→2→3, CRDSL 1→2,
+    PHSAM 1→2 — 등록 순서대로 정확히 증가하는 것을 이미 실측 완료, 이번 세션에서 로직
+    변경 없었으므로 그대로 유효.
+  → 결론: 부모순번·자식순번 채번 로직 자체는 정상 — 이번에 고친 건 "복제 시 그 정상
+    로직을 아예 타지 않던" 별개의 호출 누락 버그였다.
+
+### 수정 파일
+
+```
+src/routes/cms/products/+page.server.ts             (MODIFY — autoCode 분기 7-param 전환)
+src/__tests__/services/productClone.test.ts          (MODIFY — 검증 테스트 2건 추가)
+```
+
+### QA(@sp3-qa-agent) 검수 — 통과
+
+diff 정확성·products.md §2-2/§2-3 위반 없음(기존 code_series 존재 시 즉시 RETURN 가드 원본
+유지, 신규 복제 상품 최초 채번 시점에만 개입) 확인. p_date_option 역추론이 migration 222의
+순방향 매핑과 정확히 역대응, 순번상한 에러 처리·sequenceCapReached가 파트너 분기와 1:1 동일,
+레거시(code_series 없음) 회귀 없음, partnerCode 분기·add_inventory 모드 완전 격리·무영향
+확인. 테스트 mock 호출순서 실제 코드와 정확히 일치, 조작 없음. 관련 7개 파일 29/29 GREEN.
+svelte-check 1 error(무관 vite.config.ts)/382 warnings, 세션 기록치와 정확히 일치 —
+대상 파일 신규 항목 0건. 범위도 2개 파일로 정확히 한정 확인.
+
+**GATE E: ✅ 통과 — 블로킹 0건. 커밋은 Stephen 직접 실행.**
+
+---
+
+## DONE — "새 상품으로 복제" 절대기준 재검증 + 버튼 라벨 오표기 수정 (2026-08-17, 후속)
+
+[CONTEXT BRIDGE]
+plan_source: Stephen이 직전 수정을 "절대기준"으로 재확인 요청 — ①"품번(분류코드) 자동 생성"
+  토글 ②"협력사 전용코드(제휴상품 품번 자동 생성)" 토글 두 조합 모두 "부모순번 미확인 시
+  채번로직 미작동 / 확인 시 작동"을 지키는지 예시값과 함께 재검증 + ③버튼 라벨
+  "재고 등록 실행"→"복제 등록 실행" 전환 요청.
+
+### ① "품번(분류코드) 자동 생성" 토글(autoCode 분기) — 재확인, 추가 수정 불필요
+
+직전 항목("새 상품으로 복제" 원본 code_series 계승 버그 수정)에서 이미 구현·QA 통과.
+`p_parent_max_sequence`를 원본 `code_series.parent_max_sequence` 그대로 전달하므로:
+  - 원본이 1단(부모순번 없음) → `null` 전달 → RPC가 2단 로직 자체를 스킵(§"1단 모드" 분기) →
+    채번로직 미작동 ✅
+  - 원본이 2단(부모순번 있음) → 실값 전달 → RPC가 `product_parent_sequences`에서 원자적으로
+    다음 순번 채번 ✅
+  → Stephen 예시(1단: 대상=등록 동일 구조 / 2단: 0003→0004)와 정확히 일치. 추가 수정 없음.
+
+### ② "협력사 전용코드(제휴상품 품번 자동 생성)" 토글(partnerCode 분기) — 재확인, 기존 코드가 이미 올바름
+
+이 분기는 이번 세션 이전부터 존재하던 코드로, 이미 7-param 호출에 `p_parent_max_sequence:
+partnerParentMaxSequence`(선택한 조합코드 자체의 `parent_max_sequence`)를 전달하고 있었다 —
+①과 동일한 RPC(`generate_product_code` migration 222/239)를 타므로 동일한 활성/비활성 분기가
+그대로 적용됨. 기존 테스트 `cloneProductPartnerCodeComboMerge.test.ts`의 **EC-4**
+(`parentMaxSequence=99` 콤보 선택 → `p_parent_max_sequence=99` 정확히 전달 확인)가 이미 이
+요구사항을 커버하고 있음을 재확인 — **신규 수정·신규 테스트 불필요**.
+
+> 참고: 이 분기의 "부모순번"은 원본 상품 자신의 계열이 아니라 **선택한 협력사 콤보 자체의
+> 2단 계층 설정**을 따른다(의도된 설계 — 제휴상품은 원본과 무관한 별도 코드 계열로 분류되는
+> 것이 목적). Stephen 예시의 코드값(LENCOM 계열)은 ①·② 공통 요구사항(활성/비활성 분기 로직)을
+> 설명하기 위한 예시로 해석 — ②가 원본과 "동일한" category_code를 반드시 재현해야 한다는
+> 의미는 아님(그건 애초에 "제휴상품으로 별도 분류"라는 기능 목적과 상충).
+
+### ③ 버튼 라벨 오표기 수정 (신규 발견·수정)
+
+launch-selected-element로 확인된 실제 결함: "새 상품으로 복제" 모드에서도 제출 버튼이
+`cloneMode`와 무관하게 항상 "재고 등록 실행"(add_inventory 모드 전용 문구)으로 하드코딩돼
+있었음.
+
+파일: `src/lib/components/cms/ProductDetailPanel.svelte` (2536행)
+
+```diff
+- {isCloning ? '등록 중...' : '재고 등록 실행'}
++ {isCloning ? '등록 중...' : cloneMode === 'new_product' ? '복제 등록 실행' : '재고 등록 실행'}
+```
+
+### 검증
+
+- `npx svelte-check` — 전체 1 error(무관한 `vite.config.ts`)/382 warnings, 직전 세션 기록치와
+  정확히 동일 — 대상 파일 신규 항목 0건
+- 이 컴포넌트를 대상으로 한 기존 vitest 없음(순수 UI 텍스트 분기, 서버 액션 아님) — 회귀
+  대상 자체가 없음을 확인
+
+### 수정 파일
+
+```
+src/lib/components/cms/ProductDetailPanel.svelte  (MODIFY — 버튼 라벨만)
+```
+
+GATE C: ROUTINE(텍스트 1줄 조건분기, 로직·DB 무변경) — 자동 완료. 커밋은 Stephen 직접 실행.
+
+---
+
+## DONE — "협력사 전용코드" 복제 시 100% 실패하던 CRITICAL 버그 수정 (2026-08-17, 후속)
+
+[CONTEXT BRIDGE]
+plan_source: Stephen이 launch-selected-element로 "협력사" 조합코드 목록(개인상품·단순상품·
+  협력사 구성상품코드·협력사 부속품코드)을 보여주며 "목록 선택 후 복제 등록 실행 시 경고
+  토스트만 뜨고 생성이 안 된다"고 보고 — 토스트 문구: "선택한 조합코드가 이 상품의 카테고리와
+  맞지 않습니다."
+핵심제약: `.claude/rules/products.md` §2-2 영구고정 정책 위반 금지, 파트너 콤보 채번 방식
+  (7-param, TIER_ORDER 합산)은 그대로 유지 — 카테고리 일치성 "검증 절차"만 대상.
+
+### 원인 (production 실사용 100% 재현 확정)
+
+`cloneProduct` `partnerCode` 분기(1121-1147행, BND-PARTNERCODE-1, 2026-08-XX 도입)가
+"선택한 콤보 코드가 `source.category`의 `depth=1` 자식이어야 한다"는 검증을 걸고 있었다.
+그런데 협력사 전용코드(`is_partner_type=true` 그룹)는 설계상 `product_category=null`·
+`depth=0`·`parent_id=null`인 **완전 독립 코드 체계**다(원본 상품 카테고리와 무관하게 별도
+계열로 편입시키는 게 기능 목적). DB 직접 조회로 **활성 `product_category_codes` 25건 전부
+`product_category=null`**임을 확인 — 즉 이 검증의 1단계(`mainCode` 조회)가 어떤 카테고리로도
+매치될 수 없어, **협력사 코드로는 무엇을 선택해도 100% `fail(400)`**이 나는 구조였다. 기능
+자체가 도입 이후 한 번도 정상 동작한 적이 없었던 것으로 판단됨.
+
+### 수정
+
+파일: `src/routes/cms/products/+page.server.ts` (`partnerCode` 분기)
+
+`mainCode`/`subCode` 2단계 카테고리 일치성 검증 쿼리를 완전히 제거하고, 이미 GATE E 통과한
+`new/+page.server.ts`(상품등록 화면)의 콤보 처리 패턴과 동일하게 단순화 — 선택된 콤보의
+`allCodes`(활성/미삭제 필터만 유지)를 그대로 `buildComboCategoryCode()`/`getRootCode()`로
+합산해 채번. "카테고리 불일치" 개념 자체가 이 기능에 적용되지 않음을 명문화. 남은 차단
+조건은 "콤보의 코드가 전부 비활성/삭제라 유효한 코드가 없을 때"뿐 — 에러 문구도
+"선택한 조합코드에 유효한 분류코드가 없습니다. 코드설정에서 확인해주세요."로 실제 원인에
+맞게 교체.
+
+### 검증
+
+- `src/__tests__/server/cloneProductPartnerCodeComboMerge.test.ts` 갱신:
+  - `subCodeData` 옵션·목킹 3단계(`mainCode`/`subCode`/`allCodes`) → 1단계(`allCodes`)로
+    단순화, mock 호출 시퀀스 주석도 6개 from 호출로 갱신
+  - EC-2를 "카테고리 불일치 → fail(400)"에서 **"콤보의 유효한 코드가 없으면 fail(400)"**으로
+    재정의 + **"원본 카테고리와 무관한 코드(WRONG)를 골라도 이제는 정상 채번된다"** 회귀
+    테스트 신규 추가(수정 전이었다면 이 케이스가 바로 fail(400)이었을 시나리오)
+  - 전체 6/6 GREEN(기존 5개 + 신규 1개)
+- 관련 전체 회귀: `cloneProductPartnerCodeComboMerge`(6)·`productClone`(7)·
+  `productCodeInventoryTierTwo`·`productCodeTierTwo`(3)·`productCodeComboMerge`·
+  `productNew`·`productComboRequired`(1) — 7개 파일 **30/30 GREEN**
+- `npx svelte-check` — 전체 1 error(무관한 `vite.config.ts`)/382 warnings, 대상 파일 신규
+  에러 0건(중간에 mock 옵션 정리 누락으로 2건 타입에러 발생했던 것도 즉시 확인·수정 완료)
+
+### 수정 파일
+
+```
+src/routes/cms/products/+page.server.ts                          (MODIFY — 검증 로직 제거)
+src/__tests__/server/cloneProductPartnerCodeComboMerge.test.ts    (MODIFY — mock·EC-2 재작성)
+```
+
+### QA(@sp3-qa-agent) 검수 — 통과
+
+DB 사실관계 재확인(stage 직접 조회) — 활성 product_category_codes 25건 전부
+product_category=null 재검증 완료(전제 사실 그대로 유효). diff가 설명과 100% 일치, new/
++page.server.ts와 동일 패턴 확인. allCodes 빈 배열 시 fail(400) 정상 차단. tcIds 자체가
+빈 경우의 사전 존재 갭은 이번 변경과 무관한 별도 사안으로 참고 보고만(블로커 아님). 지정
+7개 파일 30/30 GREEN, mock이 실제 쿼리 흐름과 정확히 일치(조작 없음). svelte-check 신규
+에러 0건. 범위 2개 파일로 한정 확인. products.md §2-2 위반 없음(채번 RPC 자체는 무변경,
+사전검증 조건만 제거) — "카테고리 불일치" 개념이 협력사 전용코드에 적용 불가능하다는 논리
+타당.
+
+**GATE E: ✅ 통과 — 블로킹 0건. 커밋은 Stephen 직접 실행.**
+
+---
+
+## DONE — 복제 모달 진입 버튼 명칭 개선 (2026-08-17, 후속) — ✅ 완료
+
+[CONTEXT BRIDGE]
+plan_source: 직전 "협력사 전용코드" 버그 확인 과정에서 Stephen과 AI 둘 다 "빠른 재고 등록"
+  이라는 명칭 때문에 혼동을 겪음 — Stephen이 원인을 정확히 짚어 재확인 요청, 이후 버튼 명칭
+  수정 지시.
+
+### 원인
+
+상품 상세패널 summary-bar의 진입 버튼이 단 하나뿐인데 라벨이 "빠른 재고 등록"으로 고정돼
+있었다(`openCloneModal('add_inventory')` 호출, 기본 모드만 add_inventory로 선택). 그런데
+이 버튼이 여는 모달 내부에는 "새 상품으로 복제"(신규 부모상품 생성 + 새 품번계열 부여)로
+전환 가능한 토글이 함께 있어, 진입 버튼 이름만으로는 "재고만 추가하는 가벼운 기능"으로
+오인하기 쉬운 구조였다 — 실제로 이번 세션에서 이 명칭 때문에 혼동이 발생했음을 확인.
+
+### 수정
+
+파일: `src/lib/components/cms/ProductDetailPanel.svelte` (1357행)
+
+```diff
+- <button type="button" class="status-cta-btn" onclick={() => openCloneModal('add_inventory')}>빠른 재고 등록</button>
++ <button type="button" class="status-cta-btn" onclick={() => openCloneModal('add_inventory')}>상품 복제/재고 등록</button>
+```
+
+진입 시 기본 모드(add_inventory)는 그대로 유지 — 라벨만 모달이 담고 있는 두 기능(복제·재고
+등록)을 모두 포괄하도록 변경.
+
+### 검증
+
+- `npx svelte-check` — 전체 1 error(무관한 `vite.config.ts`)/382 warnings, 직전 세션과 동일
+  — 대상 파일 신규 항목 0건
+- 관련 테스트(`productCodeInventoryTierTwo.test.ts`)에 "빠른 재고 등록" 문자열이 있으나
+  테스트명·주석에서 기능을 서술하는 용도일 뿐 실제 버튼 텍스트를 assert하지 않음 — 회귀 없음
+  확인
+
+### 수정 파일
+
+```
+src/lib/components/cms/ProductDetailPanel.svelte  (MODIFY — 버튼 라벨만)
+```
+
+GATE C: ROUTINE(텍스트 1줄, 로직·DB 무변경) — 자동 완료. 커밋은 Stephen 직접 실행.
+
+---
+
+## DONE — 복제 모달 "협력사" 토글 명칭 개선 (2026-08-17, 후속) — ✅ 완료
+
+[CONTEXT BRIDGE]
+plan_source: Stephen이 launch-selected-element로 "제휴상품 품번 자동 생성" 토글 버튼을
+  지정 — "코드설정/코드조합 목록 중 '협력사 전용코드'로 지정된 코드목록이 노출·나열되는
+  구조를 설명하는 명칭으로 정합시켜 달라"는 요청, "협력사 품번코드 선택 생성"으로 변경 지시.
+
+### 수정
+
+파일: `src/lib/components/cms/ProductDetailPanel.svelte` (2489행)
+
+```diff
+- 제휴상품 품번 자동 생성
++ 협력사 품번코드 선택 생성
+```
+
+토글 로직(`clonePartnerCode`)·연결된 콤보 목록(`partnerComboItems`, `is_partner_type=true`
+그룹) 등은 무변경 — 라벨 텍스트만 실제 동작(코드설정에서 "협력사 전용코드"로 지정된 조합
+목록 중에서 선택)을 더 정확히 설명하도록 교체.
+
+### 검증
+
+- `grep -rn "제휴상품 품번 자동 생성" src/` — 다른 참조 0건(이 버튼 1곳에서만 쓰이던 문자열)
+- `npx svelte-check` — 전체 1 error(무관한 `vite.config.ts`)/382 warnings, 직전과 동일 —
+  대상 파일 신규 항목 0건
+
+### 수정 파일
+
+```
+src/lib/components/cms/ProductDetailPanel.svelte  (MODIFY — 버튼 라벨만)
+```
+
+GATE C: ROUTINE(텍스트 1줄, 로직·DB 무변경) — 자동 완료. 커밋은 Stephen 직접 실행.
+
+---
+
+## DONE — "협력사" 조합코드 목록에 기준 코드품번 미리보기 노출 (2026-08-17, 후속)
+
+[CONTEXT BRIDGE]
+plan_source: Stephen이 "새 상품으로 복제" 모달의 협력사 조합코드 목록(개인상품·단순상품·
+  구성상품코드·부속품코드)을 지정 — "기준 코드품번(품번 구조 정보)을 카드 내 키워드/명칭
+  우측 끝에 노출 배치"해달라고 요청.
+핵심제약: DB·채번 RPC 무변경(순수 표시용 미리보기), `/cms/codes`(_AutoMappingTab.svelte
+  `buildComboPreview`)와 동일한 표시 규칙(같은 cms_settings 키 `product_code_format`,
+  동일 0-패딩 순번 자리수 계산) 재사용해 두 화면 간 정합성 유지.
+
+### 구현
+
+파일: `src/routes/cms/products/+page.server.ts` (`loadProductsMetadata()`)
+
+1. `code_mapping_items` 조회에 `taxonomy_code_id, date_option, max_sequence,
+   parent_max_sequence` 추가 select — combo_row_id별로 전체 아이템 묶음(`comboRowItemsMap`)
+2. 관련 `taxonomy_code_id` 전체를 배치 조회(`product_category_codes`, code/code_tier/depth/
+   code_rule) — N+1 방지
+3. `cms_settings.key='product_code_format'`(신규 상품 등록과 동일 키, Migration #248) 전역
+   기본 포맷 조회
+4. `buildPartnerCodePreview()` 신규 함수 — 기존 `buildComboCategoryCode()`/`getRootCode()`
+   (comboCategoryCode.ts, 이미 GATE E 통과)로 분류코드 합산 + prefix(루트 코드 code_rule
+   override 우선) + date_option 기반 날짜부(오늘 날짜로 표시, `/cms/codes` 미리보기와 동일
+   방식) + 순번 자리수 0-패딩(parent_max_sequence/max_sequence 자릿수 기준, 없으면 전역
+   seq_digits) 조합
+5. `partnerComboItems`에 `code_preview: string` 필드 추가(타입 정의 포함)
+
+파일: `src/lib/components/cms/ProductDetailPanel.svelte`
+- `partnerComboItems` prop 타입에 `code_preview` 추가
+- 콤보 카드(`.clone-combo-row`) 우측 끝에 `<span class="ccr-code">{item.code_preview}</span>`
+  추가 — `.ccr-name`이 `flex:1`이라 자연스럽게 우측 정렬됨(기존 `.ccr-tags`와 동일 레이아웃
+  원리)
+- 스타일은 `/cms/codes`의 `.node-code-preview`와 동일 톤(monospace, `--cs-surface-gray`
+  배경, `--cs-text-dark`) — 신규 색상·패턴 발명 없음
+
+### 검증
+
+- `npx svelte-check` — 중간에 `getRootCode()` 반환 타입에 `code_rule` 없어 발생한 타입
+  에러 1건 즉시 발견·수정(rootCode id로 재조회하는 방식으로 교체) → 최종 전체 1 error(무관한
+  `vite.config.ts`)/382 warnings, 대상 2개 파일 신규 에러 0건
+- 관련 테스트(`loadProductsMetadata`/`partnerComboItems` 대상 vitest 없음, 신규 로직은
+  `cloneProduct` 액션과 별개 함수라 회귀 대상 자체 없음) — 관련 상품코드 회귀 스위트 7개
+  파일 30/30 GREEN 재확인(간접 영향 없음 확인 목적)
+
+### 수정 파일
+
+```
+src/routes/cms/products/+page.server.ts           (MODIFY — code_preview 계산·노출)
+src/lib/components/cms/ProductDetailPanel.svelte  (MODIFY — 우측 끝 표시 UI)
+```
+
+GATE C: BOUNDARY(신규 표시 기능, 채번 로직·DB 스키마 무변경) — QA(@sp3-qa-agent) 검수 대기.
+커밋은 Stephen 직접 실행.
+
+### QA(@sp3-qa-agent) 검수 — 통과 (비블로킹 참고 2건)
+
+diff·설명 일치, §2-2 위반 없음(순수 조회/표시). 캐시 범위 정상 포함, N+1 없음(배치조회 1회),
+getRootCode() 우회 타입 패턴 논리적으로 올바름. svelte-check 신규 에러 0건. 관련 테스트
+13/13 GREEN.
+
+비블로킹 참고 2건(즉시 수정 불필요, 후속 정리 권장):
+  1. date_option='ymd' 8자리 분기가 `_AutoMappingTab.svelte`(4/6자리 통일 처리)와 다르게
+     구현됨 — 단 `code_mapping_items.date_option` CHECK 제약(Migration #94)이 'none'/'ym'만
+     허용해 'ymd' 값 자체가 이 테이블에 존재 불가능한 도달불가 코드, 런타임 영향 없음.
+  2. 이 문서 상단 "두 화면 간 정합성 유지" 서술 정정 필요 — 실제로는 `_AutoMappingTab.svelte`가
+     읽는 `'reservation_code_format'`이 아니라 실채번 RPC(generate_product_code, Migration
+     #248)가 읽는 `'product_code_format'`을 사용해, 오히려 `/cms/codes` 화면보다 실제 채번
+     결과와 더 정확히 일치함(기능은 올바름, 문서 표현만 부정확했던 것).
+
+**GATE E: ✅ 통과 — 블로킹 0건. 커밋은 Stephen 직접 실행.**
+
+---
+
+## 복제된 부모상품 "기준 품번" 우측 "코드 재반영" 버튼 노출 (2026-08-17, 고아 부모상품 장치 재사용)
+
+### 요청 원문
+
+"선택영역, '새 상품으로 복제+품번(분류코드 자동 생성)' 선택 시, 복제 대상 상품 기준
+코드품번을 동일 반영하되 복제된 부모상품 ProductDetailPanel 내 상단 '기준 품번' 코드
+우측에 '코드 재반영' 기능 활성화. -기존에 '고아 부모상품' 문제 해소를 위한 장치를
+활성화 노출해 동일 복제 상품과 중복 충돌 방지."
+
+### 배경
+
+products.md §8-F "고아 부모상품"(code_series·product_code 둘 다 없는 부모) 복구용으로
+이미 `retryCodeSeries` 액션 + `retryCodeSeries()` 클라이언트 함수가 존재했으나, UI
+노출 조건이 `!product.code_series && !product.product_code`(완전 누락 케이스)로만
+한정돼 있었다 — code_series가 정상 존재하는 부모(복제로 생성된 부모 포함)는 이 장치를
+볼 수 없었다. Stephen은 이 기존 장치를 "정상 케이스에도 노출"해, 관리자가 클릭 한 번으로
+"이 복제 상품의 기준 품번이 원본과 충돌 없이 올바르게 이어졌는지" 확인할 수 있게
+해달라고 요청 — 신규 로직이 아니라 기존 안전장치의 노출 범위 확장.
+
+### 구현
+
+1. `src/lib/utils/baseCodeDisplay.ts`(신규) — `+page.svelte`에 로컬 정의돼 있던
+   `baseCodeDisplay()`를 공유 유틸로 추출(순수 함수, side-effect 없음). QR-LABEL-2 마스킹
+   규칙(순번1 실값 노출/순번2 마스킹, products.md §2-4 2026-08-16 확정) 그대로 유지.
+2. `src/routes/cms/products/+page.svelte` — 로컬 함수 정의 제거, 공유 유틸 import로 교체
+   (표시 로직 변경 없음, 순수 리팩터).
+3. `src/lib/components/cms/ProductDetailPanel.svelte`:
+   - `baseCodeDisplay` 공유 유틸 import 추가
+   - 기존 `{#if !product.code_series && !product.product_code}`(고아 부모 경고) 블록에
+     `{:else if product.code_series}` 분기 신규 추가 — "기준 품번" 레이블 + 값
+     (`baseCodeDisplay(product)`) + "코드 재반영" 버튼을 기존 `.ph-code-row` 계열 CSS
+     클래스 그대로 재사용해 렌더링(신규 시각 패턴 없음). 우측 정렬용
+     `.ph-code-retry-btn--reapply { margin-left: auto; }` 1개만 신규 CSS 추가.
+   - `retryCodeSeries()` 클라이언트 함수 — 서버 응답의 `alreadySet` 플래그를 분기해 토스트
+     문구 차별화: 이미 설정된 경우 "이미 정상적으로 설정된 기준 품번입니다 — 중복·충돌
+     없음을 확인했습니다.", 신규 설정된 경우 기존 문구 유지.
+   - **서버 액션(`+page.server.ts`)은 전혀 수정하지 않음** — 기존 `retryCodeSeries` 액션을
+     그대로 재사용. 그 액션은 이미 `if (parent.code_series) return { success: true,
+     alreadySet: true }` 가드가 있어 기존 code_series를 절대 덮어쓰지 않는 순수 확인용
+     no-op — products.md §2-2(품번 영구고정 정책)와 충돌 없음. 요청에서 "기존 장치를
+     활성화 노출"이라 명시했으므로 새 검증 로직을 만들지 않고 그대로 재사용.
+
+### 검증
+
+- `npx svelte-check` — 신규 코드에서 `baseCodeDisplay()` 파라미터 타입
+  (`product_code: string | null`)이 `ProductDetail.product_code`(옵셔널
+  `string | null | undefined`)와 불일치해 타입 에러 1건 발생 → `product_code?: string | null`
+  로 시그니처 수정해 해소. 최종 전체 1 error(무관한 `vite.config.ts` 사전 존재
+  overload 에러)/382 warnings, 대상 3개 파일(+page.svelte·ProductDetailPanel.svelte·
+  baseCodeDisplay.ts) 신규 에러 0건.
+- vitest 관련 회귀 스위트 7개 파일 30/30 GREEN(productClone/
+  cloneProductPartnerCodeComboMerge/productCodeTierTwo/productCodeComboMerge/productNew/
+  productComboRequired/productCodeInventoryTierTwo) — `baseCodeDisplay`/`retryCodeSeries`/
+  `.ph-code-series-warn` 참조 기존 테스트 없음(신규 테스트 필요 없는 순수 UI 노출 변경).
+
+### 수정 파일
+
+```
+src/lib/utils/baseCodeDisplay.ts                  (NEW — +page.svelte 로컬 함수 추출)
+src/routes/cms/products/+page.svelte              (MODIFY — 공유 유틸 import로 교체)
+src/lib/components/cms/ProductDetailPanel.svelte  (MODIFY — "코드 재반영" UI 노출 확장)
+```
+
+GATE C: BOUNDARY(기존 자가복구 장치의 노출 범위 확장, 신규 검증 로직·DB 변경 없음) —
+QA(@sp3-qa-agent) 검수 완료.
+
+⚠️ **2026-08-25 후속 재설계로 대체됨** — 아래 "'코드 재반영' 기능 재설계" 항목 참고.
+Stephen이 실사용 중 이 기능의 근본 한계(§2-2 가드로 인한 구조적 no-op + 원본/복제본
+양쪽 모두 버튼 노출)를 발견해 전면 재설계를 요청했다.
+
+### QA(@sp3-qa-agent) 검수 — 통과 (블로킹 0건)
+
+diff 범위 정합성 확인(같은 날 선행 DONE 태스크 4건이 같은 작업트리에 uncommitted로 누적돼
+있으나 각각 별도 GATE E 통과 이력 확인, 이번 diff는 그 위에 얹힌 3파일 최신분과 정확히
+일치). products.md §2-2(영구고정) 위반 없음 — `retryCodeSeries` 서버 액션의
+`alreadySet` no-op 가드(`+page.server.ts:608`) 재확인. §2-1(부모/자식 분리) 위반 없음 —
+신규 블록이 `{#if isChildProduct}...{:else}...{/if}`의 `{:else}` 브랜치 안에 위치해
+자식 선택 시 렌더링되지 않음을 코드로 직접 확인. HTML 유효성(버튼 중첩 없음) 확인.
+svelte-check(대상 3파일 신규 에러 0건)·vitest 30/30 재실행으로 재확인.
+
+**GATE E: ✅ 통과 — 블로킹 0건. 커밋은 Stephen 직접 실행.**
+
+> 참고(QA 보고): 현재 작업트리에는 이 태스크 외에도 같은 날(2026-08-17) 개별 GATE E를
+> 통과한 선행 DONE 태스크 4건(협력사 콤보 카테고리 검증 버그수정, 버튼 라벨 개선 2건,
+> code_preview 미리보기 노출)과 8/17 이전 "총 등록상품 수량 배지" 태스크, 그리고
+> 2026-08-25 신규 생성된 GATE B 대기 중인 cart 수량 연동 플랜(문서 최상단, 아직 미승인)이
+> 함께 uncommitted 상태로 쌓여 있음 — 커밋 시 어떤 범위까지 함께 묶을지는 Stephen 판단 필요.
+
+---
+
+## "코드 재반영" 기능 재설계 (2026-08-25, CRITICAL — 다중 파일 + DB 마이그레이션)
+
+### 요청 원문
+
+"한 부모 상품에서 복제된 동일한 상품의 동일한 코드를 '코드 재반영' 실행했으나 '이미
+반영되었음...' 토스트 노출 후 여전히 변경없는 오류 발견.
+1. '코드 재반영' 버튼은 복제할 대상이 아닌 복제된 동일 코드 대상 부모상품이어야 할 것:
+   두 부모상품 모두에 해당 버튼이 노출되어 헷갈리게 함.
+2. '코드 재반영' 버튼 실행시 카테고리 상품 조합코드 그룹 별 '코드품번' 목록 중 선택할 수
+   있는 모달 UI를 구성 호출할 수 있게 할 것.
+3. 선택된 '코드품번' 중 '부모순번' 존재 경우 생성 즉시 '부모순번'에 채번 작동 반영.
+4. 하네스 플로에 단계 구성 및 기록할 것."
+
+### 진단(root cause) — Stage DB(ezyvffjvuwmtuhpxdjrw) 직접 조회로 확인
+
+Stephen이 첨부한 두 스크린샷은 실제로 서로 다른 두 부모상품(SONY PXW-Z90, id
+`2af56415...` 08-25 04:53 생성 / `3ce5e307...` 08-25 05:56 생성)이며, 둘 다
+`code_series`가 완전히 동일한 1단 계층(순번1 없음, `parent_seq_digits` 키 자체가 없음)
+구조였다: `{"prefix":"CS","category_code":"BBBC","year_month":"2608","seq_digits":3,
+"max_sequence":999,"suffix":""}`.
+
+이 "동일 코드" 자체는 §2-3에서 이미 확정된 정책대로 정확히 동작한 결과라 버그가
+아니다("부모순번 없음 → 복제 대상/복제 등록 모두 동일 코드 표시"). 실제 문제 2가지:
+
+1. `generate_product_code` RPC(Migration #222)에 `IF v_existing_series IS NOT NULL
+   THEN RETURN NULL; END IF;` 가드가 있어, code_series가 이미 있는 상품엔 구조적으로
+   아무 것도 재반영할 수 없음 — 직전 세션(2026-08-17)에 만든 "코드 재반영" 버튼은 이
+   케이스에서 태생적으로 no-op이었다.
+2. 그 버튼이 code_series 존재 여부만으로 노출돼(원본/복제본 무관), 어느 쪽을 눌러야
+   하는지 관리자가 구분할 수 없었다.
+
+### GATE B — CRITICAL 확인 (AskUserQuestion, Stephen 응답 완료)
+
+질문: "'코드 재반영'으로 새 코드품번을 재할당하는 기능을, 이미 재고(자식상품)가 1개 이상
+등록된 부모상품에도 허용할까요?"
+→ **Stephen 응답: "재고 0개인 부모상품만 허용 (권장)"**
+
+이 결정이 RPC 가드(has_existing_inventory)와 서버 액션 전체 설계의 기준이 됨.
+
+### 설계 및 구현 (5단계, 전부 완료)
+
+**1단계 — DB 마이그레이션(신규 RPC)**: `supabase/migrations/20260825000341_341_
+reassign_product_code_series.sql` — `generate_product_code`(7-param, #222)의 본문
+로직을 그대로 재사용하되 (a) 기존-존재 가드 없이 항상 덮어씀(이 RPC의 존재 목적),
+(b) 활성 자식 1개라도 있으면 `has_existing_inventory` 예외로 차단(GATE B 결정 반영),
+(c) 자식(재고) 상품 자체에는 `child_product_not_allowed`로 차단. 기존
+`generate_product_code`는 절대 수정하지 않음(다른 모든 등록 경로의 안전장치이므로) —
+완전히 새 함수로 분리. Stage(ezyvffjvuwmtuhpxdjrw) 먼저 적용 → 트랜잭션 4종 테스트
+(자식있는부모 차단/자식상품자체 차단/1단모드 성공/2단모드 원자채번 성공) 전부 PASS
+확인 후 ROLLBACK(실데이터 무변경) → Production(vnbpmvxruyciuuaermyh) 동일 적용,
+함수 등록 확인.
+
+**2단계 — 후발 중복 탐지 + 조합코드 목록**: `src/lib/server/products/
+loadSelectedProductDetail.ts` — 선택된 상품이 부모(자식 아님) + code_series가 1단
+계층일 때만, 자신보다 먼저 생성된 동일 구조의 다른 활성 부모가 있는지 확인
+(`hasOlderDuplicateCode`). JSONB `->>'키'` 를 PostgREST 필터 컬럼명으로 직접 넘기는
+패턴은 이 코드베이스에 검증된 선례가 없어(신규 패턴 리스크 회피), 같은 category의
+부모 후보를 넓게 가져와 JS에서 code_series 필드를 직접 비교하는 안전한 방식을 택함.
+중복 확인 시에만 그 상품의 category와 매칭되는 코드설정/코드조합 그룹 전체(협력사
+전용 여부 무관, 기존 partnerComboItems와 달리 필터 없음)를 조회해
+`categoryComboItems`로 채움 — code_preview 계산은 `+page.server.ts`의
+`buildPartnerCodePreview()`와 동일 로직(중복이지만 캐시된 전역 함수를 건드리지 않기
+위해 이 파일 안에 self-contained로 작성).
+
+**3단계 — 서버 액션**: `src/routes/cms/products/+page.server.ts`의
+`reassignCodeSeries` 액션 신규 추가 — manager 이상 권한 게이트(`getCmsRoleForAction`
++ `hasSettingsAccess`, security-auth.md QR-CASE-2 선례와 동일). `combo_row_id`로
+`code_mapping_items`를 조회해 `buildComboCategoryCode`/`getRootCode`로 분류코드를
+합산(기존 `cloneProduct` partnerCode 분기와 동일 패턴 재사용) → 새 RPC
+`reassign_product_code_series` 호출.
+
+**4단계 — UI**: `src/lib/components/cms/ProductDetailPanel.svelte` — "기준 품번" 행의
+"코드 재반영" 버튼을 `product.hasOlderDuplicateCode`일 때만 노출하도록 축소(요청 #1).
+클릭 시 기존 `retryCodeSeries`(고아 부모 no-op 안전장치, 별개 경로로 그대로 유지) 대신
+신규 모달(`showReassignModal`)을 열어 `product.categoryComboItems` 목록에서 선택(요청
+#2, 기존 협력사 콤보 리스트와 동일 `.clone-combo-list`/`.clone-combo-row` 스타일
+재사용) → 제출 시 `reassignCodeSeries` 액션 호출. 선택된 코드에 부모순번(2단 계층)이
+있으면 RPC 내부에서 `product_parent_sequences` 원자 카운터로 즉시 채번(요청 #3).
+
+**5단계 — 문서화**: `products.md` §2-11 신설(정책 SSOT), 이 TASK.md 항목(하네스 플로
+단계 기록, 요청 #4), GSD_LOG.md 항목 추가.
+
+### 검증
+
+- 신규 RPC — Stage DB에서 트랜잭션 래핑 4종 시나리오 직접 실행 후 ROLLBACK: 자식 있는
+  부모 차단(has_existing_inventory) PASS / 자식 상품 자체 호출 차단
+  (child_product_not_allowed) PASS / 1단 모드 재할당 성공 PASS / 2단 모드 재할당 시
+  `product_parent_sequences` 원자 채번(parent_seq=1, parent_seq_digits=2) 확인 PASS.
+- `npx svelte-check` — 대상 4개 파일(migration 제외) 신규 에러 0건, 전체 1 error(무관한
+  `vite.config.ts` 사전 존재 overload 에러)/기존 수준 warnings.
+- vitest 관련 회귀 스위트 7개 파일 30/30 GREEN(productClone/
+  cloneProductPartnerCodeComboMerge/productCodeTierTwo/productCodeComboMerge/productNew/
+  productComboRequired/productCodeInventoryTierTwo) — 재실행으로 무회귀 확인.
+- `loadSelectedProductDetail`을 직접 참조하는 기존 vitest 스위트 없음(신규 로직 커버
+  테스트는 이번에 추가하지 않음 — TDD 강제 도메인 아님, RPC 자체는 위 트랜잭션 테스트로,
+  UI/서버 액션은 QA 검수로 검증).
+
+### 수정 파일
+
+```
+supabase/migrations/20260825000341_341_reassign_product_code_series.sql  (NEW, Stage+Prod 적용완료)
+src/lib/server/products/loadSelectedProductDetail.ts                     (MODIFY)
+src/routes/cms/products/+page.server.ts                                  (MODIFY — reassignCodeSeries 액션 신규)
+src/lib/components/cms/ProductDetailPanel.svelte                         (MODIFY — 버튼 조건·모달 신규)
+.claude/rules/products.md                                                (MODIFY — §2-11 신설)
+```
+
+GATE C: CRITICAL(품번 채번 로직·DB 마이그레이션·다중 파일 변경, GATE B 서비스 의도 확인
+완료) — QA(@sp3-qa-agent) 검수 완료(1차 블로킹 2건 발견 → 즉시 수정 → 재적용).
+
+### QA(@sp3-qa-agent) 1차 검수 — CRITICAL 블로킹 2건 발견
+
+신규 RPC `reassign_product_code_series`를 최초 작성할 때 Migration #222 시점의
+`generate_product_code` 본문을 그대로 복사해, 이후 두 차례 버그수정이 누락된 상태였다:
+
+1. **seq_digits 자릿수 보정 누락(Migration #239 유실)** — `p_max_sequence`가 명시돼도
+   `v_seq_digits`가 전역 기본값(3)에 고정돼, 관리자가 선택한 조합코드의 순번2 자릿수와
+   실제 저장되는 `code_series.seq_digits`가 어긋나는 결함.
+2. **cms_settings 키 오참조(Migration #248 "설정 키 분리" 재붕괴)** — `product_code_
+   format`(상품 전용, #248로 분리된 정본) 대신 구키 `reservation_code_format`(예약코드
+   전용)을 읽어, "예약코드 형식" 설정을 바꾸면 이 재할당 RPC의 기본 prefix/seq_digits가
+   안내 없이 같이 바뀌는, #248이 이미 해소했던 결함이 재발.
+
+두 결함 모두 아직 git 미커밋 상태(untracked)라 GP-10 ADD-only 제약과 무관하게 파일을
+직접 수정 → Stage(ezyvffjvuwmtuhpxdjrw) `CREATE OR REPLACE` 재적용 → 트랜잭션 테스트로
+재검증(1단 모드에서 `product_code_format.seq_digits=5`가 정확히 읽히는지 / `p_max_
+sequence=9999` 지정 시 `seq_digits=4`로 정확히 보정되는지 둘 다 확인) → Production
+(vnbpmvxruyciuuaermyh) 동일 재적용 완료. 마이그레이션 파일 헤더에 이 경위와 "향후
+generate_product_code 본문이 또 바뀌면 수동 대조·동기화 필요"라는 주의사항 추가.
+
+QA는 나머지 전 항목(§2-2/§2-1 위반 없음, 2단 계층은 hasOlderDuplicateCode 절대 true 안
+됨, 자식 상품에 UI 미노출, manager 이상 권한 게이트 정상, 모달 동시열림 문제 없음,
+svelte-check/vitest 결과 일치)은 전부 통과 확인. 비블로킹 참고 1건: security-auth.md
+역할별 CMS 접근 매트릭스에 `reassignCodeSeries` 액션이 아직 미등재(기능 자체는 정상,
+문서 갱신 권장 — 별도 처리).
+
+### QA 2차 재검수 — 정적 대조 통과, 실배포 확인은 harness-executor가 직접 보완
+
+QA sub-agent는 Supabase MCP 도구가 없어 소스 파일 대 라이브 7-param
+`generate_product_code`(#248) 라인 단위 대조로만 검증(두 지점 완전 일치 확인, ✅) —
+"실배포 DB 직접 조회"(pg_proc.prosrc) 항목만 도구 부재로 수행 못 함을 명시하며 보고.
+→ Supabase MCP 접근 가능한 harness-executor가 직접 보완 조회:
+```sql
+SELECT prosrc LIKE '%product_code_format%' AS has_correct_key,
+       prosrc LIKE '%reservation_code_format%' AS has_wrong_key,
+       prosrc LIKE '%LENGTH(p_max_sequence::TEXT)%' AS has_seqdigits_fix
+FROM pg_proc WHERE proname = 'reassign_product_code_series';
+```
+Stage(ezyvffjvuwmtuhpxdjrw)·Production(vnbpmvxruyciuuaermyh) 양쪽 결과 동일:
+`has_correct_key=true, has_wrong_key=false, has_seqdigits_fix=true` — 파일과 실배포본
+완전 일치 확인.
+
+**GATE E: ✅ 통과 — 블로킹 0건(1차 발견 2건 수정·재검증 완료). 커밋은 Stephen 직접 실행.**
+
+---
+
+## "빠른 재고 등록" 후 재고 목록 미노출 버그 — 원인분석 + 최소수정 (2026-08-25)
+
+### 요청 원문
+
+"선택영역, '코드 재발행' 적용한 부모상품으로 '빠른 재고 등록' 실행해 생성한 재고 상품목록에
+노출 오류의 원인 분석. -재고 상품 목록 하단 수량값은 정상 반영되나 목록에 미노출." →
+원인 확인 후 "최소 수정으로 진행해줘."
+
+### 진단(root cause) — Claude Browser 실측(launch-selected-element 세션 진행 중 조건부 허용)
+
+DB 직접 조회로 재고 2건(`CSBBBC2608001`/`002`)이 부모상품(`2af56415`)에 정상 연결돼 있음을
+확인 — 데이터 유실이 아님. 브라우저에서 직접 재현한 결과: 상품 A(`2af56415`)를 카드 클릭으로
+shallow-select(PERF-6, `replaceState`)한 뒤 그 화면에서 "빠른 재고 등록" 실행 → 서버는 정상
+처리(메인 카드 목록 수량 정확히 증가)하는데, `invalidateAll()`이 진행되는 동안
+`page.state`(SvelteKit shallow-routing 상태)가 일시적으로 비워져
+`activeSelectedId`(`+page.svelte`)가 원래 `load()` 기준 상품(다른 상품 B, replaceState로는
+안 바뀌는 내부 URL에 멈춰 있음)으로 되돌아간다 — 그 결과 상세 패널이 엉뚱한 상품 B로 튀고,
+정작 A의 재고 목록은 갱신되지 않는다(콘솔 계측 `console.log`로 정확한 값 추적해 확정).
+
+### 실패한 시도 2건 (`.claude/harness/learnings/shallow_routing_invalidateall_stale_2026-08-25.md`
+상세 기록 — 향후 재시도 방지용)
+
+1. `overrideDetail` 캐시 무효화 신호로 `data` 객체 참조 비교 → Svelte
+   `state_proxy_equality_mismatch` + `effect_update_depth_exceeded`(무한루프) 즉시 크래시.
+2. `afterNavigate()` tick 카운터를 캐시 키에 포함 → 동일하게 `effect_update_depth_exceeded`
+   크래시. 두 시도 모두 즉시 원상복구(effect는 원본 그대로 유지).
+
+### 최종 수정 (검증 완료)
+
+`$effect`(overrideDetail 캐시 관리 로직)는 전혀 건드리지 않음 — 대신 "재고 등록이 실제로
+일어난 상품 id"를 `invalidateAll()` 실행 **이전**(폼 제출 시작 시점)에 plain JS 변수로 고정해
+콜백으로 전달하고, 그 고정값으로 기존 `selectProduct()`를 재호출해 선택 상태를 명시적으로
+복구한다.
+```
+src/lib/components/cms/ProductDetailPanel.svelte
+  handleCloneProduct() 상단에서 const sourceProductId = product.id 캡처(await 이전) →
+  oninventorycreated?.(data.createdIds, sourceProductId)
+src/routes/cms/products/+page.svelte
+  oninventorycreated prop 타입에 sourceProductId 추가
+  handleInventoryCreated(ids, expectedProductId) → selectedInvIds 설정 후 selectProduct(expectedProductId) 재호출
+  두 호출부(rep-section·accordion) 전부 handleInventoryCreated 직접 참조로 단순화
+    (기존엔 (ids) => handleInventoryCreated(ids, rp.id) 형태로 reactive 참조를 콜백 안에서
+    다시 읽었는데, 그게 바로 실패 원인이었음 — invalidateAll() 도중 rp.id가 이미 바뀐 뒤라
+    잘못된 id가 넘어갔다. 반드시 mutation 시작 시점에 캡처한 plain 값이어야 함)
+```
+
+### 검증
+
+- `npx svelte-check` — 대상 2개 파일 신규 에러 0건.
+- Claude Browser로 정확히 재현한 시나리오(상품 B 표시 중 → 상품 A 클릭 → "빠른 재고 등록"
+  실행)를 새 탭에서 재테스트: 등록 직후 패널이 정확히 A(`CSBBBC2608000`, 8(on)/8)로 표시되고
+  재고 목록에 8건 전부 정상 노출됨(수정 전엔 B(`CSLENPTSRE260800`, 0(on)/0)로 튀며 "재고
+  미등록" 표시). 콘솔에 `effect_update_depth_exceeded` 등 에러 없음.
+- vitest 관련 회귀 스위트 7파일 30/30 GREEN(재실행). 전체 스위트(`npx vitest run`) 823/826
+  통과 — 실패 3건은 `memberCodeCombo.test.ts`(회원코드 재발급, 이번 변경과 완전 무관, git
+  diff에 해당 파일 없음 — 라이브 스테이지 DB 상태 드리프트로 추정되는 기존 실패)로 범위 밖.
+
+### 범위 한계 (명시적으로 남김)
+
+이번 수정은 "빠른 재고 등록"(`oninventorycreated`) 경로에만 적용된 최소 수정이다. 저장·토글·
+삭제·코드재반영 등 `invalidateAll()`을 부르는 다른 액션들도 이론상 같은 계열 문제를 가질 수
+있으나, 이번 세션에서 실측 재현·수정한 것은 이 경로 하나뿐 — 다른 경로에서 유사 증상이
+보고되면 learnings 문서의 동일 패턴을 재적용할 것.
+
+### 수정 파일
+
+```
+src/lib/components/cms/ProductDetailPanel.svelte  (MODIFY)
+src/routes/cms/products/+page.svelte              (MODIFY)
+.claude/harness/learnings/shallow_routing_invalidateall_stale_2026-08-25.md  (NEW)
+```
+
+GATE C: BOUNDARY(단일 기능 경로 국소 수정, DB·스키마 무변경, 실측 재현으로 검증) — QA
+(@sp3-qa-agent) 검수 완료.
+
+### QA(@sp3-qa-agent) 검수 — 통과 (블로킹 0건)
+
+`sourceProductId` 캡처 위치(handleCloneProduct 최상단, invalidateAll() 이전 동기 구간)와
+`oninventorycreated?.(data.createdIds, sourceProductId)` 호출이 invalidateAll() 완료 후
+실행되는 타임라인을 코드 추적으로 재확인 — page.state 일시 소실 구간이 지난 뒤
+selectProduct()로 재보정하는 구조가 타당함을 확인. +page.svelte 두 호출부 모두
+`oninventorycreated={handleInventoryCreated}` 직접 참조로 확인(closure 패턴 잔존 없음).
+`selectProduct()`가 신규 로직이 아니라 기존 replaceState 기반 함수 재사용임을 확인.
+memberCodeCombo.test.ts 실패가 이번 변경과 무관함을 git diff로 재확인(재실행 시 2~3건으로
+변동 — 라이브 스테이지 DB 드리프트 성격, 범위 밖). svelte-check 대상 2파일 신규 에러 0건,
+관련 회귀 스위트 13/13 GREEN 재확인. 비블로킹 참고 1건: TASK.md/GSD_LOG.md 서술 중 "기존엔
+closure 패턴이었다"는 부분이 git 커밋 이력과 정확히 대응하지 않음(같은 세션 내 미커밋
+시행착오 과정을 서술한 것으로 추정, 현재 코드 상태에는 영향 없어 블로킹 아님).
+
+**GATE E: ✅ 통과 — 블로킹 0건. 커밋은 Stephen 직접 실행.**

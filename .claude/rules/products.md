@@ -348,6 +348,52 @@ products.description 컬럼은 등록/수정 화면 어디에도 입력 UI가 �
 버그 아님, 향후 UI를 새로 만들 계획도 없음.
 ```
 
+### 2-11. "코드 재반영" — 재고 0개 부모상품의 code_series 재할당 (2026-08-25 신설)
+
+```
+"새 상품으로 복제 + 품번(분류코드) 자동 생성"으로 1단 계층(순번1 없음) 카테고리를 복제하면,
+두 부모상품이 동일한 code_series(구조)를 공유하는 것 자체는 §2-3에서 이미 확정된 정책이라
+버그가 아니다("부모순번 없음 → 복제 대상/복제 등록 모두 동일 코드 표시"). 다만 관리자가
+이 화면상의 "동일 표시"를 실제로 구분하고 싶을 때를 위해 reassign_product_code_series
+RPC(Migration #341)를 제공한다.
+
+⛔ 이 RPC는 §2-2(품번 영구고정) 예외가 아니라 그 정책이 애초에 적용되지 않는 범위에서만
+   동작한다 — §2-2는 "이미 실제로 발급된 자식(재고) product_code"만 보호하는 정책이므로,
+   자식이 0개(재고 미등록)인 부모의 code_series는 실물에 아직 연결되지 않은 구조 템플릿일
+   뿐이다. reassign_product_code_series는 대상 부모에 활성 자식이 1개라도 있으면
+   has_existing_inventory 예외로 무조건 차단한다(Stephen 2026-08-25 확정) — 재고가 이미
+   등록된 부모는 재할당 대상에서 원천 제외.
+⛔ 기존 generate_product_code(7-param, Migration #222)는 절대 수정하지 않는다 — 그 함수의
+   "이미 있으면 NULL 반환" 가드는 다른 모든 정상 등록 경로가 의존하는 안전장치이므로, 재할당
+   요구는 새 함수(reassign_product_code_series)로 완전히 분리했다.
+⛔ 부모/자식 분리(§2-1) — parent_product_id가 있는 자식(재고) 상품에는 이 RPC를 호출할 수
+   없다(자식은 code_series 개념 자체가 없음). RPC 자체가 child_product_not_allowed로 이중
+   방어한다.
+
+UI 노출 조건: ProductDetailPanel의 "코드 재반영" 버튼은 이 부모가 "자신보다 먼저 생성된
+다른 활성 부모와 완전히 동일한 1단 계층 code_series를 공유하는 후발 중복"일 때만
+노출된다(hasOlderDuplicateCode, loadSelectedProductDetail.ts에서 계산) — 복제 대상(원본)
+쪽에는 표시되지 않아 관리자가 어느 부모를 눌러야 하는지 헷갈리지 않는다. 클릭 시 그
+상품의 category와 매칭되는 코드설정/코드조합 그룹 전체(협력사 전용 여부 무관, §2-3
+partnerComboItems와 달리 필터 없음)를 모달로 노출하고, 선택한 코드에 부모순번(2단 계층)
+개념이 있으면 product_parent_sequences 원자 카운터로 즉시 채번해 실제로 다른 값이 되도록
+재할당한다.
+
+권한: /cms/codes와 동일하게 manager 이상만 실행 가능(security-auth.md QR-CASE-2 선례) —
+품번 체계 자체를 바꾸는 액션이라 세션만 있으면 되는 §8-F "품번 체계 설정"(고아 부모
+복구, no-op 안전장치)보다 엄격한 게이트를 적용한다.
+```
+
+구현 파일:
+```
+RPC                : supabase/migrations/20260825000341_341_reassign_product_code_series.sql
+중복탐지+콤보목록  : src/lib/server/products/loadSelectedProductDetail.ts
+                      (hasOlderDuplicateCode / categoryComboItems)
+서버 액션          : src/routes/cms/products/+page.server.ts (reassignCodeSeries)
+UI                 : src/lib/components/cms/ProductDetailPanel.svelte
+                      (showReassignModal / openReassignModal / handleReassignCodeSeries)
+```
+
 ---
 
 ## 3. is_active 토글 — 재고 가용성 연동
@@ -813,7 +859,7 @@ Q5. 선택된 상품(rootId)이 현재 페이지네이션 범위(productIds, 20�
 
 ---
 
-*products.md v2.6 | Harness Flow v3.2 | 2026-08-06 품번(product_code) 정책 전면 재설계 —
+*products.md v2.7 | Harness Flow v3.2 | 2026-08-06 품번(product_code) 정책 전면 재설계 —
 부모=code_series(구조저장)/자식=실채번, 영구고정, QR=product_code 전환, RLS 보안 수정,
 QR 반출입 자동화, sale_only 등록 정책 반영 | 2026-08-XX 부모 QR 노출 폐기(BND-7 폐기),
 자가복구 버튼(품번 채번·품번 체계 설정) 추가, 레거시 프리픽스 불일치 자동 우회,
@@ -822,4 +868,8 @@ JSONB 파라미터 이중직렬화 버그 수정, 빠른 재고 등록 QR 자동
 (QR-CASE-1) + 품번 포맷 설정 권한 강화(QR-CASE-2, manager 이상) + ilike 와일드카드 이스케이프
 (escapeLikePattern) 반영 | 2026-08-14 §2-3 부모 등록 시 자식(재고) 1개 자동생성을 "기본 재고"
 정상 기능 정책으로 Stephen 확정·명문화(제거 시도 금지) | 2026-08-16 QR-LABEL-2 수정 — 2단 계층
-기본순번(순번1) 구간 마스킹 해제, 실값 노출로 전환(자식순번은 마스킹 유지)*
+기본순번(순번1) 구간 마스킹 해제, 실값 노출로 전환(자식순번은 마스킹 유지) | 2026-08-25 §2-11
+신설 — reassign_product_code_series RPC(Migration #341)로 재고 0개 부모상품의 code_series
+재할당 기능 추가(§2-2 영구고정 정책은 위반 아님 — 실발급 자식 코드만 보호 대상), "코드
+재반영" 버튼을 hasOlderDuplicateCode(후발 중복) 조건으로 재설계해 원본/복제본 양쪽 모두
+노출되던 이전 설계를 대체*
