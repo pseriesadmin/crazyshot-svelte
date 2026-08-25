@@ -21,8 +21,8 @@ interface AccountProfile {
   allow_benefit_alert: boolean
   allow_privacy_consent: boolean
   allow_third_party_consent: boolean
-  identity_type: string | null
-  identity_doc_url: string | null
+  identity_type: string[] | null
+  identity_doc_url: string[] | null
   identity_verified_at: string | null
   is_foreign: boolean
   foreign_doc_url: string | null

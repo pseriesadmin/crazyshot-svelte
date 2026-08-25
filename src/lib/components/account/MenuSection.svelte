@@ -29,7 +29,7 @@
       <!-- 섹션 타이틀 바 -->
       <div class="flex flex-col gap-[10px] items-start max-w-[1240px] min-w-[340px] py-[30px] relative rounded-[30px] shrink-0 w-full">
         <div class="flex h-[29px] items-center relative shrink-0 w-full">
-          <p class="font-['Noto_Sans_KR',sans-serif] font-medium leading-[1.6] relative shrink-0 text-[#444] text-[18px] text-center tracking-[-0.3px] whitespace-nowrap">{title}</p>
+          <p class="relative shrink-0 text-[#444] text-center tracking-[-0.3px] whitespace-nowrap" style="font: var(--text-m-title-21);">{title}</p>
         </div>
       </div>
       <!-- 메뉴 아이템 목록 -->
@@ -76,12 +76,11 @@
   button:focus { outline: none; }
   button:focus-visible { outline: 2px solid var(--cs-purple); outline-offset: 2px; border-radius: 4px; }
 
-  /* 로그아웃 */
+  /* 로그아웃 — 메뉴 목록과의 여백 2배(PC .pc-logout-wrap과 동일 비율, Stephen 확정 2026-08-26) */
   .logout-wrap {
     width: 100%;
-    padding: 24px 0 0;
-    margin-top: 16px;
-    border-top: 1px solid var(--cs-lilac);
+    padding: 48px 0 0;
+    margin-top: 32px;
   }
   .btn-logout {
     display: inline-flex;

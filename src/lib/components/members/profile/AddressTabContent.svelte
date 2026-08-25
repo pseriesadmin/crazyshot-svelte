@@ -1,8 +1,8 @@
 <script lang="ts">
-  import { tick } from 'svelte'
   import { enhance } from '$app/forms'
   import { invalidateAll } from '$app/navigation'
   import { csToast } from '$lib/utils/toast'
+  import PostcodeSearchButton from '$lib/components/common/PostcodeSearchButton.svelte'
 
   interface ShippingAddress {
     id: string
@@ -17,14 +17,6 @@
     created_at: string
   }
 
-  interface KakaoAddressData {
-    roadAddress: string
-    jibunAddress: string
-    zonecode: string
-  }
-
-  type KakaoPostcodeCtor = new (opts: { oncomplete: (data: KakaoAddressData) => void; width?: string; height?: string }) => { open(): void; embed(el: HTMLElement, opts?: { autoClose?: boolean }): void }
-  interface KakaoWindow extends Window { daum?: { Postcode: KakaoPostcodeCtor } }
 
   interface Props {
     addresses: ShippingAddress[]
@@ -47,43 +39,11 @@
   let settingDefaultId = $state<string | null>(null)
   let detailInput      = $state<HTMLInputElement | null>(null)
 
-  // 카카오 주소 모달
-  let showKakaoModal  = $state(false)
-  let kakaoContainer  = $state<HTMLDivElement | null>(null)
-
-  function loadKakaoScript(): Promise<void> {
-    const w = window as KakaoWindow
-    return new Promise((resolve, reject) => {
-      if (w.daum?.Postcode) { resolve(); return }
-      const s = document.createElement('script')
-      s.src = 'https://t1.daumcdn.net/mapjsapi/bundle/postcode/prod/postcode.v2.js'
-      s.onload  = () => resolve()
-      s.onerror = () => reject(new Error('load_fail'))
-      document.head.appendChild(s)
-    })
-  }
-
-  async function openKakaoModal() {
-    if (typeof window === 'undefined') return
-    showKakaoModal = true
-    try { await loadKakaoScript() } catch {
-      csToast.error('주소 검색 서비스를 불러올 수 없습니다.')
-      showKakaoModal = false
-      return
-    }
-    await tick()
-    const w = window as KakaoWindow
-    if (!w.daum?.Postcode || !kakaoContainer) { showKakaoModal = false; return }
-    new w.daum.Postcode({
-      oncomplete: (data: KakaoAddressData) => {
-        newRoadAddress  = data.roadAddress || data.jibunAddress
-        newPostalCode   = data.zonecode
-        showKakaoModal  = false
-        setTimeout(() => detailInput?.focus(), 80)
-      },
-      width:  '100%',
-      height: '100%'
-    }).embed(kakaoContainer, { autoClose: false })
+  // PostcodeSearchButton 콜백 — 주소 선택 완료 시
+  function handleAddressSelect(roadAddress: string, postalCode: string) {
+    newRoadAddress = roadAddress
+    newPostalCode  = postalCode
+    setTimeout(() => detailInput?.focus(), 80)
   }
 
   function resetForm() {
@@ -237,19 +197,12 @@
             <label class="form-label" for="addr-road-btn">기본주소 <span class="required">*</span></label>
             <input type="hidden" name="road_address" value={newRoadAddress} />
             <input type="hidden" name="postal_code"  value={newPostalCode}  />
-            <button
+            <PostcodeSearchButton
               id="addr-road-btn"
-              type="button"
-              class="form-input addr-search-btn"
-              onclick={openKakaoModal}
-            >
-              {#if newRoadAddress}
-                <span class="addr-value">{newRoadAddress}</span>
-              {:else}
-                <span class="addr-placeholder">도로명 주소 입력 (탭하여 검색)</span>
-              {/if}
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
-            </button>
+              value={newRoadAddress}
+              placeholder="도로명 주소 입력 (탭하여 검색)"
+              onselect={handleAddressSelect}
+            />
             {#if newPostalCode}
               <p class="addr-postal-hint">[{newPostalCode}]</p>
             {/if}
@@ -341,18 +294,6 @@
   </div>
 </div>
 
-<!-- 카카오 주소 검색 모달 -->
-{#if showKakaoModal}
-  <div class="kakao-overlay" role="dialog" aria-modal="true" aria-label="주소 검색">
-    <div class="kakao-modal">
-      <div class="kakao-modal-header">
-        <span>주소 검색</span>
-        <button class="kakao-close" onclick={() => (showKakaoModal = false)} aria-label="닫기">✕</button>
-      </div>
-      <div class="kakao-container" bind:this={kakaoContainer}></div>
-    </div>
-  </div>
-{/if}
 
 <style>
   .address-wrap {
@@ -683,67 +624,11 @@
     padding: 8px 0;
   }
 
-  /* 카카오 주소 검색 버튼 */
-  .addr-search-btn {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    cursor: pointer;
-    text-align: left;
-  }
-  .addr-value      { color: #100b32; }
-  .addr-placeholder { color: #bbb; }
+  /* 우편번호 힌트 */
   .addr-postal-hint {
     font-size: 12px;
     color: #888;
     margin: 4px 0 0;
     letter-spacing: -0.3px;
-  }
-
-  /* 카카오 모달 오버레이 */
-  .kakao-overlay {
-    position: fixed;
-    inset: 0;
-    background: rgba(0, 0, 0, 0.5);
-    z-index: 200;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    padding: 20px;
-  }
-  .kakao-modal {
-    background: white;
-    border-radius: 20px;
-    width: 100%;
-    max-width: 460px;
-    height: 500px;
-    display: flex;
-    flex-direction: column;
-    overflow: hidden;
-  }
-  .kakao-modal-header {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    padding: 16px 20px;
-    border-bottom: 1px solid #eee;
-    font-family: 'Noto Sans KR', sans-serif;
-    font-weight: 700;
-    font-size: 15px;
-    color: #100b32;
-    flex-shrink: 0;
-  }
-  .kakao-close {
-    background: none;
-    border: none;
-    font-size: 18px;
-    color: #888;
-    cursor: pointer;
-    padding: 4px 8px;
-    line-height: 1;
-  }
-  .kakao-container {
-    flex: 1;
-    width: 100%;
   }
 </style>
