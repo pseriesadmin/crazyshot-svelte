@@ -8,6 +8,9 @@ import { hasSettingsAccess } from '$lib/utils/cmsPermissions'
 import { sendReservationLifecyclePush } from '$lib/server/push'
 import { clearIssuedContractContent } from '$lib/server/clearIssuedContractHelper'
 import { resolveApprovalNotifyPlan } from '$lib/server/reservationApprovalNotify'
+import { createDelivery, cancelDelivery, registerReturn, DheroApiError, DHERO_STATUS_LABEL } from '$lib/server/dhero'
+import { isBulkDeliveryMethod } from '$lib/server/isBulkDeliveryMethod'
+import { getReservationForDhero } from '$lib/server/getReservationForDhero'
 
 export interface RentalListRow {
   reservation_id:    number
@@ -49,6 +52,12 @@ export interface RentalListRow {
   created_at:        string
   payment_confirmed_at: string | null
   total_count:       number
+  // Migration 344: 두발히어로 배송 상태 (nullable — 이전 예약은 NULL)
+  dhero_status:         string | null
+  dhero_status_code:    number | null
+  dhero_return_book_id: string | null
+  dhero_synced_at:      string | null
+  tracking_number:      string | null
 }
 
 export const load: PageServerLoad = async ({ parent, url }) => {
@@ -186,7 +195,108 @@ export const actions: Actions = {
       // 상태 전환 푸시 알림 병행 발송 (채팅과 독립 — 실패해도 위 처리에 영향 없음)
       await sendReservationLifecyclePush(admin, reservationId, notifyType)
     }
-    return { ok: true }
+
+    // ── 두발히어로 fail-soft 트리거 ─────────────────────────────────────────
+    // shipped·return_requested·cancelled 전이 시 두발히어로 API 자동 호출.
+    // API 실패는 예약 상태전이(이미 위에서 성공)에 영향을 주지 않는다 — 완전 격리.
+    //
+    // CRITICAL-1 수정 (2026-08-25): 기존 rental_reservations 단일 select에서
+    // 존재하지 않는 컬럼(customer_name/addr 등) 조회로 42703 오류 → resRow=null →
+    // 트리거 전체 스킵되던 버그를 getReservationForDhero() 공유 함수로 교체하여 수정.
+    let dheroCancelFailed = false
+    if (newStatus === 'shipped' || newStatus === 'return_requested' || newStatus === 'cancelled') {
+      try {
+        // 예약 정보 JOIN 조회 — user_profiles/user_shipping_addresses/products 포함
+        // (rental_reservations에 고객명·주소·상품명이 직접 없음, 공유 모듈 사용)
+        const res = await getReservationForDhero(admin, reservationId)
+
+        if (res) {
+          if (newStatus === 'shipped') {
+            const isBulk = await isBulkDeliveryMethod(admin, res.pickupMethod)
+            if (isBulk) {
+              try {
+                const deliveryRes = await createDelivery({
+                  receiverName:              res.customerName,
+                  receiverMobile:            res.customerPhone,
+                  receiverAddress:           res.address,
+                  receiverAddressDetail:     res.addressDetail,
+                  receiverAddressPostalCode: res.postalCode,
+                  productName:               res.productName,
+                  orderIdFromCorp:           res.reservationCode ?? String(reservationId),
+                  memoFromCustomer:          res.notes ?? undefined,
+                })
+                await admin.rpc('update_reservation_dhero_shipment', {
+                  p_reservation_id:  reservationId,
+                  p_tracking_number: deliveryRes.bookId,
+                  p_courier_code:    '두발히어로',
+                  p_status:          DHERO_STATUS_LABEL[0] ?? '배송접수',
+                  p_status_code:     0,
+                  p_dong_group:      deliveryRes.dongGroup ?? null,
+                  p_meta:            deliveryRes as Record<string, unknown>,
+                  p_return_book_id:  null,
+                })
+                // placePageUrl이 있으면 고객 채팅으로 수령위치 등록 안내 전달 (fail-soft)
+                // service-operations.md §11: find_or_create_general_chat_session 경유는 RPC 내부에서 처리
+                // service-operations.md §15: push.ts CUSTOMER_LIFECYCLE_PUSH_COPY에 dhero_place_guide 등록 완료
+                if (deliveryRes.placePageUrl) {
+                  try {
+                    await admin.rpc('send_rental_chat_notification', {
+                      p_reservation_id: reservationId,
+                      p_notify_type:    'dhero_place_guide',
+                      p_action_url:     deliveryRes.placePageUrl,
+                    })
+                    await sendReservationLifecyclePush(admin, reservationId, 'dhero_place_guide')
+                  } catch (notifyErr) {
+                    console.error('[dhero/place_guide notify] fail-soft:', notifyErr instanceof Error ? notifyErr.message : notifyErr)
+                  }
+                }
+              } catch (e) {
+                console.error('[dhero/shipped] fail-soft:', e instanceof Error ? e.message : e)
+              }
+            }
+          } else if (newStatus === 'return_requested') {
+            const isBulk = await isBulkDeliveryMethod(admin, res.returnMethod)
+            const trackingNumber = res.trackingNumber
+            if (isBulk && trackingNumber) {
+              try {
+                const returnRes = await registerReturn(trackingNumber)
+                await admin.rpc('update_reservation_dhero_shipment', {
+                  p_reservation_id:  reservationId,
+                  p_tracking_number: trackingNumber,
+                  p_courier_code:    '두발히어로',
+                  p_status:          DHERO_STATUS_LABEL[0] ?? '반품접수',
+                  p_status_code:     0,
+                  p_dong_group:      returnRes.dongGroup ?? null,
+                  p_meta:            returnRes as Record<string, unknown>,
+                  p_return_book_id:  returnRes.bookId,
+                })
+              } catch (e) {
+                console.error('[dhero/return_requested] fail-soft:', e instanceof Error ? e.message : e)
+              }
+            }
+          } else if (newStatus === 'cancelled') {
+            const trackingNumber = res.trackingNumber
+            if (trackingNumber) {
+              try {
+                await cancelDelivery(trackingNumber)
+              } catch (e) {
+                if (e instanceof DheroApiError && e.statusCode === 412) {
+                  dheroCancelFailed = true
+                } else {
+                  console.error('[dhero/cancelled] fail-soft:', e instanceof Error ? e.message : e)
+                }
+              }
+            }
+          }
+        }
+      } catch (e) {
+        // 예약 조회 자체 실패도 fail-soft — 상태전이는 이미 성공
+        console.error('[dhero] reservation lookup fail-soft:', e instanceof Error ? e.message : e)
+      }
+    }
+    // ── dhero 트리거 끝 ────────────────────────────────────────────────────
+
+    return { ok: true, ...(dheroCancelFailed ? { dhero_cancel_failed: true } : {}) }
   },
 
   clearIssuedContract: async ({ request, locals }) => {

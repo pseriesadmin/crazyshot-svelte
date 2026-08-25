@@ -90,6 +90,21 @@
   let shippingLoading  = $state(false)
   let shippingFormEl = $state<HTMLFormElement | undefined>(undefined)
   let shippingGuideCount = $derived(shippingGuide.length)
+  // "안내문 저장" 버튼 — 요금 토글/입력은 전부 자동저장돼 이 버튼은 배송 안내문 전용이므로,
+  // 안내문 텍스트가 서버값과 달라졌을 때만 활성화(guideIsDirty와 동일 패턴)
+  let shippingGuideIsDirty = $derived.by(() => shippingGuide !== (data.shippingSettings?.shipping_guide ?? ''))
+
+  // 배송(is_bulk_delivery) 방식 행에 배송 설정 요약 표시 — 신규 쿼리 없이 이미 로드된
+  // shippingSettings 상태만 재사용(TASK.md "배송 설정 ↔ 대여 방식 옵션 CMS 연동" Part A)
+  const shippingBadgeLabel = $derived.by(() => {
+    const rt = enableRoundTrip && roundTripFee !== '' ? Number(roundTripFee) : null
+    const rf = enableReturn && returnFee !== '' ? Number(returnFee) : null
+    if (rt === null && rf === null) return '미설정'
+    const parts: string[] = []
+    if (rt !== null) parts.push(`왕복 ${rt.toLocaleString()}원`)
+    if (rf !== null) parts.push(`반납 ${rf.toLocaleString()}원`)
+    return parts.join(' / ')
+  })
 
   $effect(() => {
     enableRoundTrip = data.shippingSettings?.enable_round_trip  ?? false
@@ -316,6 +331,9 @@
               {#if item.method_key}
                 <span class="mk-badge">{METHOD_KEY_LABELS[item.method_key] ?? item.method_key}</span>
               {/if}
+              {#if item.is_bulk_delivery}
+                <span class="mk-badge mk-badge--shipping">{shippingBadgeLabel}</span>
+              {/if}
               <CmsDeleteButton action="?/deleteMethod" id={item.id} />
             </div>
           {/snippet}
@@ -351,34 +369,6 @@
           }
         }}
       >
-        <!-- 배송적용옵션 콤보버튼 — 클릭 즉시 자동 저장(다른 콤보버튼 그룹과 통일, 2026-08-24) -->
-        <div class="sf-row">
-          <span class="sf-label">배송적용옵션</span>
-          <div class="shipping-chips">
-            <button
-              type="button"
-              class="s-chip"
-              class:s-chip--on={enableRoundTrip}
-              disabled={shippingLoading}
-              onclick={async () => { enableRoundTrip = !enableRoundTrip; await tick(); shippingFormEl?.requestSubmit() }}
-            >왕복 요금</button>
-            <button
-              type="button"
-              class="s-chip"
-              class:s-chip--on={enableDelivery}
-              disabled={shippingLoading}
-              onclick={async () => { enableDelivery = !enableDelivery; await tick(); shippingFormEl?.requestSubmit() }}
-            >배송요금</button>
-            <button
-              type="button"
-              class="s-chip"
-              class:s-chip--on={enableReturn}
-              disabled={shippingLoading}
-              onclick={async () => { enableReturn = !enableReturn; await tick(); shippingFormEl?.requestSubmit() }}
-            >반송요금</button>
-          </div>
-        </div>
-
         <!-- boolean 플래그 hidden inputs -->
         <input type="hidden" name="enable_round_trip" value={enableRoundTrip ? 'true' : 'false'} />
         <input type="hidden" name="enable_delivery"   value={enableDelivery   ? 'true' : 'false'} />
@@ -387,7 +377,7 @@
         <!-- 요금 입력 (활성/비활성) -->
         <div class="fee-grid">
           <div class="fee-row" class:fee-row--disabled={!enableRoundTrip}>
-            <span class="fee-label">왕복 요금</span>
+            <span class="fee-label">왕복요금</span>
             <div class="fee-input-wrap">
               <input type="hidden" name="round_trip_fee" value={roundTripFee} />
               <input
@@ -397,14 +387,22 @@
                 value={roundTripFee === '' ? '' : roundTripFee.toLocaleString('ko-KR')}
                 disabled={!enableRoundTrip}
                 placeholder="0"
-                aria-label="왕복 요금"
+                aria-label="왕복요금"
                 oninput={(e) => {
                   const digits = e.currentTarget.value.replace(/[^0-9]/g, '')
                   roundTripFee = digits ? parseInt(digits, 10) : ''
                 }}
+                onblur={async () => { await tick(); shippingFormEl?.requestSubmit() }}
               />
               <span class="fee-unit">원</span>
             </div>
+            <button
+              type="button"
+              class="s-chip fee-chip"
+              class:s-chip--on={enableRoundTrip}
+              disabled={shippingLoading}
+              onclick={async () => { enableRoundTrip = !enableRoundTrip; await tick(); shippingFormEl?.requestSubmit() }}
+            >왕복요금</button>
           </div>
           <div class="fee-row" class:fee-row--disabled={!enableDelivery}>
             <span class="fee-label">배송요금</span>
@@ -422,12 +420,20 @@
                   const digits = e.currentTarget.value.replace(/[^0-9]/g, '')
                   deliveryFee = digits ? parseInt(digits, 10) : ''
                 }}
+                onblur={async () => { await tick(); shippingFormEl?.requestSubmit() }}
               />
               <span class="fee-unit">원</span>
             </div>
+            <button
+              type="button"
+              class="s-chip fee-chip"
+              class:s-chip--on={enableDelivery}
+              disabled={shippingLoading}
+              onclick={async () => { enableDelivery = !enableDelivery; await tick(); shippingFormEl?.requestSubmit() }}
+            >배송요금</button>
           </div>
           <div class="fee-row" class:fee-row--disabled={!enableReturn}>
-            <span class="fee-label">반송요금</span>
+            <span class="fee-label">반납요금</span>
             <div class="fee-input-wrap">
               <input type="hidden" name="return_fee" value={returnFee} />
               <input
@@ -437,14 +443,22 @@
                 value={returnFee === '' ? '' : returnFee.toLocaleString('ko-KR')}
                 disabled={!enableReturn}
                 placeholder="0"
-                aria-label="반송요금"
+                aria-label="반납요금"
                 oninput={(e) => {
                   const digits = e.currentTarget.value.replace(/[^0-9]/g, '')
                   returnFee = digits ? parseInt(digits, 10) : ''
                 }}
+                onblur={async () => { await tick(); shippingFormEl?.requestSubmit() }}
               />
               <span class="fee-unit">원</span>
             </div>
+            <button
+              type="button"
+              class="s-chip fee-chip"
+              class:s-chip--on={enableReturn}
+              disabled={shippingLoading}
+              onclick={async () => { enableReturn = !enableReturn; await tick(); shippingFormEl?.requestSubmit() }}
+            >반납요금</button>
           </div>
         </div>
 
@@ -470,8 +484,8 @@
         </div>
 
         <div class="guide-actions">
-          <button type="submit" class="btn-save" disabled={shippingLoading}>
-            {shippingLoading ? '저장 중...' : '배송 설정 저장'}
+          <button type="submit" class="btn-save" disabled={shippingLoading || !shippingGuideIsDirty}>
+            {shippingLoading ? '저장 중...' : '안내문 저장'}
           </button>
         </div>
       </form>
@@ -536,19 +550,19 @@
                 class:s-chip--on={enablePrevDayCheck}
                 disabled={cutoffLoading}
                 onclick={async () => { enablePrevDayCheck = !enablePrevDayCheck; await tick(); cutoffFormEl?.requestSubmit() }}
-              >전날/당일 휴무 체크</button>
+              >전날/당일 휴무 체크 (필수, 마스터)</button>
               <button
                 type="button"
                 class="s-chip"
                 class:s-chip--on={enableFixedHolidays}
-                disabled={cutoffLoading}
+                disabled={cutoffLoading || !enablePrevDayCheck}
                 onclick={async () => { enableFixedHolidays = !enableFixedHolidays; await tick(); cutoffFormEl?.requestSubmit() }}
               >고정 휴무일 연동(일·법정공휴일)</button>
               <button
                 type="button"
                 class="s-chip"
                 class:s-chip--on={enableManualHolidays}
-                disabled={cutoffLoading}
+                disabled={cutoffLoading || !enablePrevDayCheck}
                 onclick={async () => { enableManualHolidays = !enableManualHolidays; await tick(); cutoffFormEl?.requestSubmit() }}
               >임시 휴무일 반영</button>
             </div>
@@ -591,9 +605,12 @@
           {#if nationalHolidays.length > 0}
             <div class="drag-list-wrap">
               {#each nationalHolidays as h (h.id)}
-                <div class="list-row">
+                <div class="list-row" class:list-row-inactive={!h.is_active}>
                   <span class="mk-badge">{h.date}</span>
                   <span class="list-row-name">{h.name}</span>
+                  {#if !h.is_active}
+                    <span class="inactive-badge" title="동기화 정정으로 비활성화됨 — /cart 휴무일 판정에서 제외됩니다">비활성</span>
+                  {/if}
                 </div>
               {/each}
             </div>
@@ -1083,6 +1100,11 @@
     align-items: center;
   }
 
+  .mk-badge--shipping {
+    background: var(--cs-surface-gray);
+    color: var(--cs-text-mid);
+  }
+
   .add-input {
     flex: 1;
     height: 44px;
@@ -1179,6 +1201,20 @@
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+  }
+
+  /* is_active=false 국경일 행 — /cart 휴무일 판정에서 제외되고 있음을 관리자가 즉시
+     알아챌 수 있도록 시각적으로 구분(2026-08-25, 동기화 정정으로 실제 발생 가능한 상태) */
+  .list-row-inactive { opacity: 0.5; }
+  .list-row-inactive .list-row-name { text-decoration: line-through; }
+  .inactive-badge {
+    flex-shrink: 0;
+    font: var(--text-pc-script-12);
+    font-weight: 700;
+    color: var(--cs-error, #d92d20);
+    background: rgba(217, 45, 32, 0.1);
+    border-radius: var(--radius-full, 99px);
+    padding: 2px 10px;
   }
 
   .consent-text {
@@ -1543,6 +1579,13 @@
     color: var(--cs-purple);
   }
 
+  .s-chip:disabled {
+    background: transparent;
+    color: var(--cs-text-light);
+    border-color: var(--cs-border);
+    cursor: not-allowed;
+  }
+
   .fee-grid {
     display: flex;
     flex-direction: column;
@@ -1560,6 +1603,13 @@
   .fee-row--disabled {
     opacity: 0.35;
     pointer-events: none;
+  }
+
+  /* 콤보칩(.fee-chip)은 그 행을 켜고 끄는 토글 자신이므로, 행이 꺼진(--disabled) 상태에서도
+     항상 클릭 가능해야 한다 — 부모 규칙(opacity/pointer-events)을 이 칩에서만 되돌림 */
+  .fee-row--disabled .fee-chip {
+    opacity: 1;
+    pointer-events: auto;
   }
 
   .fee-label {
@@ -1584,6 +1634,12 @@
   .fee-unit {
     font: var(--text-pc-body-14);
     color: var(--cs-text-mid);
+  }
+
+  /* 요금 입력란 우측에 배치된 켜기/끄기 콤보칩 — 입력란과 적정 여백을 두어 시각적으로 분리 */
+  .fee-chip {
+    margin-left: 24px;
+    flex-shrink: 0;
   }
 
   .shipping-guide-sub {
