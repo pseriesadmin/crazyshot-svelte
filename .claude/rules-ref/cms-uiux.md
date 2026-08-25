@@ -2274,6 +2274,174 @@ blur 딜레이:
 
 ---
 
+## 14. 콤보 버튼 (combo-btn) — ON/OFF 단일 선택 토글 UI ★★★
+
+> **"combo-btn 적용해" / "ON/OFF 토글 버튼" 언급 시 → 아래 스펙 즉시 적용.**
+> 적용 화면: `AccountDetailPanel.svelte` (중복로그인·세션제한·역할·메뉴권한)
+
+### 클래스 구조
+
+| 클래스 | 역할 |
+|---|---|
+| `.combo-btn` | 기본 버튼 (비활성 상태) |
+| `.combo-btn.combo-active` | 선택/활성 상태 (보라 채움) |
+| `.combo-btn.combo-sm` | 소형 변형 — 메뉴 권한 그리드 등 밀집 배치 시 사용 |
+
+### CSS 스펙 (실측, `AccountDetailPanel.svelte` 정본)
+
+```css
+.combo-btn {
+  height: 32px;
+  padding: 0 14px;
+  border-radius: var(--cms-radius-md);          /* 15px */
+  border: 1px solid rgba(16, 11, 50, 0.15);
+  background: var(--cs-surface-gray);           /* #F6F6F6 */
+  color: var(--cs-text-mid);
+  font: var(--text-pc-script-12);
+  font-weight: 700;
+  cursor: pointer;
+  transition: background 0.12s, border-color 0.12s, color 0.12s;
+  white-space: nowrap;
+}
+.combo-btn:hover:not(:disabled) {
+  border-color: rgba(59, 47, 138, 0.35);
+  color: var(--cs-text);
+}
+.combo-btn.combo-active {
+  background: var(--cs-purple);                 /* #3B2F8A */
+  border-color: var(--cs-purple);
+  color: #fff;
+}
+/* 선택된 버튼은 disabled여도 선택 상태 색상 유지 */
+.combo-btn.combo-active:disabled { opacity: 1; cursor: default; }
+/* 비선택 disabled */
+.combo-btn:disabled:not(.combo-active) { opacity: 0.38; cursor: not-allowed; }
+
+/* 소형 변형 (메뉴 권한 그리드 등 밀집 배치) */
+.combo-btn.combo-sm {
+  height: 26px;
+  padding: 0 10px;
+  font-size: 11px;
+  border-radius: var(--cms-radius-sm);          /* 8px */
+}
+```
+
+### .toggle-group 래퍼 패턴 (label + button 행 배치)
+
+```css
+.toggle-group {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 0;
+}
+.toggle-info { display: flex; flex-direction: column; gap: 2px; }
+.toggle-label { font: var(--text-pc-body-14); font-weight: 600; color: var(--cs-text); }
+.toggle-desc  { font: var(--text-pc-script-12); color: var(--cs-text-mid); }
+```
+
+### 접근성 필수 속성
+
+```svelte
+<button
+  type="submit"
+  class="combo-btn"
+  class:combo-active={isOn}
+  disabled={isProcessing}
+  aria-pressed={isOn}
+  aria-label={isOn ? '허용 중' : '차단 중'}
+>{isOn ? 'ON' : 'OFF'}</button>
+```
+
+> ⛔ `aria-pressed` 누락 금지 — 스크린리더가 ON/OFF 텍스트만으로는 상태를 전달할 수 없음.
+> ⛔ `<input type="checkbox">` / `<select>` 신규 작성 금지 — `combo-btn` 단독 표준.
+> ⛔ `.combo-btn.combo-active:disabled`에 opacity 적용 금지 — 선택 색상 항상 유지.
+
+### 다중 선택 그룹 (역할 선택 등)
+
+동일한 `.combo-btn` / `.combo-active` 클래스를 그룹으로 나열하면 자동으로 라디오 그룹처럼 동작한다.
+
+```svelte
+<!-- 역할 선택 — 3개 중 1개만 combo-active -->
+<div class="role-btns">
+  <button class="combo-btn" class:combo-active={role === 'superadmin'}>마스터</button>
+  <button class="combo-btn" class:combo-active={role === 'manager'}>매니저</button>
+  <button class="combo-btn" class:combo-active={role === 'partner'}>파트너</button>
+</div>
+```
+
+```css
+.role-btns { display: flex; gap: 6px; flex-wrap: wrap; }
+```
+
+### toggle-btn — 슬라이딩 토글 스위치 (계정 활성/비활성 전용)
+
+> **"toggle-btn 적용해" / "슬라이딩 토글" 언급 시 → 아래 스펙 즉시 적용.**
+> 적용 화면: `AccountDetailPanel.svelte` "계정 활성화" 행 — 단독 사용 (combo-btn과 혼용 금지)
+
+```
+toggle-btn  : 36×20px 필 트랙 (border-radius: --cms-radius-sm)
+toggle-thumb: 16×16px 흰 원형 핀 (left:2px → ON 시 translateX(16px))
+상태 클래스 : .on → background: --cs-purple (활성, 핀 오른쪽)
+             .danger → background: --cs-disabled-button (중지/위험, 핀 왼쪽)
+             기본(neither) → background: --cs-disabled-toggle (비활성, 핀 왼쪽)
+```
+
+```css
+.toggle-btn {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  width: 36px;
+  height: 20px;
+  border-radius: var(--cms-radius-sm);        /* 8px */
+  background: var(--cs-disabled-toggle);
+  border: none;
+  cursor: pointer;
+  padding: 0;
+  flex-shrink: 0;
+  transition: background 0.18s;
+}
+.toggle-btn.on     { background: var(--cs-purple); }
+.toggle-btn.danger { background: var(--cs-disabled-button); }
+.toggle-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+.toggle-thumb {
+  position: absolute;
+  left: 2px;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: var(--cs-white);
+  box-shadow: 0 1px 3px rgba(0,0,0,0.2);
+  transition: transform 0.18s;
+}
+.toggle-btn.on .toggle-thumb { transform: translateX(16px); }
+```
+
+```svelte
+<!-- 사용 패턴 — 계정 중지/복원 -->
+<button
+  type="submit"
+  class="toggle-btn"
+  class:on={!row.is_suspended}
+  class:danger={row.is_suspended}
+  disabled={isProcessing}
+  aria-label={row.is_suspended ? '계정 중지 중' : '계정 사용 중'}
+>
+  <span class="toggle-thumb"></span>
+</button>
+```
+
+> ⛔ `combo-btn`과 `toggle-btn`은 다른 UI다 — 혼용 금지.
+> - `combo-btn` : ON/OFF 텍스트 버튼 (수평 나열, 다중 선택 가능)
+> - `toggle-btn` : 슬라이딩 핀 스위치 (단독, 이진 on/off 전용)
+> ⛔ `<input type="checkbox">` 신규 작성 금지 — `toggle-btn` 단독 표준.
+> ⛔ `.toggle-thumb` 없이 `.toggle-btn` 단독 사용 금지.
+
+---
+
 ## 13. 절대 금지 사항
 
 ```

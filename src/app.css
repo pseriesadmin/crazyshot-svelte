@@ -357,12 +357,14 @@ body {
   box-shadow: none !important;
 }
 
-/* 닫기 버튼: 원형 테두리·배경 제거, 우측 끝 수직 중앙 배치 */
+/* 닫기 버튼: 원형 테두리·배경 제거, 우측 끝 수직 중앙 배치(uiux.md §12 원 스펙 그대로 —
+   아이콘 시각크기·히트영역 모두 원본 유지. 이전 44×44 확대 시도는 액션 버튼과 겹침을
+   유발해 되돌림) */
 [data-sonner-toast] [data-close-button] {
   position: absolute !important;
   top: 50% !important;
   left: auto !important;
-  right: 20px !important;
+  right: 12px !important;
   transform: translateY(-50%) !important;
   background: transparent !important;
   border: none !important;
@@ -376,4 +378,50 @@ body {
 }
 [data-sonner-toast] [data-close-button]:hover {
   color: #ffffff !important;
+}
+
+/* 액션 버튼(csToast onClick 옵션의 "확인"/"보기" 등) — svelte-sonner 라이브러리 기본값
+   (24px 높이·4px 반경·검정 필 버튼)이 그대로 노출되어 디자인 토큰을 전혀 반영하지 않던
+   문제 수정. uiux.md §12에는 액션 버튼 스펙 자체가 없어, 문서에 유일하게 명시된 닫기(X)
+   버튼 규칙("원형 테두리·배경 없음 — 심플 아이콘만")을 텍스트 버전으로 그대로 확장
+   적용(Stephen 확정, 2026-08-25) — 박스·배경 없는 단순 밑줄 텍스트.
+   margin-right로 우측 닫기(X) 아이콘 존(right:20px 기준 약 32px 폭)과 겹치지 않도록 여유 확보. */
+[data-sonner-toast] [data-button] {
+  background: transparent !important;
+  color: #ffffff !important;
+  border: none !important;
+  box-shadow: none !important;
+  border-radius: 0 !important;
+  height: auto !important;
+  padding: 6px 0 !important;
+  margin-left: auto !important;
+  margin-right: 26px !important;
+  font-family: 'Noto Sans KR', sans-serif !important;
+  font-size: 13px !important;
+  font-weight: 700 !important;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  cursor: pointer;
+  transition: opacity 0.15s;
+  flex-shrink: 0;
+}
+[data-sonner-toast] [data-button]:hover {
+  opacity: 0.8;
+}
+[data-sonner-toast] [data-button]:focus-visible {
+  outline: 1px solid rgba(255, 255, 255, 0.6) !important;
+  outline-offset: 2px;
+}
+/* 모바일 반응형 — 넓은 패딩 + 충분한 최소 높이 (PC보다 여유 있음) */
+@media (max-width: 767px) {
+  [data-sonner-toast] {
+    padding: 15px 30px !important;
+    min-height: 60px !important;
+  }
+  [data-sonner-toast] [data-close-button] {
+    right: 20px !important;
+  }
+  [data-sonner-toast] [data-button] {
+    margin-right: 34px !important;
+  }
 }

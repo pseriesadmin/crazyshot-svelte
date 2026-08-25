@@ -1,6 +1,238 @@
 # GSD_LOG.md — 크레이지샷 실행 이력
 # 형식: [YYYY-MM-DD HH:MM] 타입 | 타스크명 | 파일 | 소요 | 결과
 
+[2026-08-26] 🟢ROUTINE | /account 본인·외국인증명 완전삭제 기능 신규 + 재등록 시 옛 Storage
+파일 정리 | supabase/migrations/20260826000000_349_delete_user_doc.sql(신규 RPC, Stage+
+Production 적용 완료), src/routes/api/profile/delete-doc/+server.ts(신규),
+src/routes/api/profile/upload-doc/+server.ts(재등록 성공 후 옛 URL→Storage 경로 역산 삭제
+best-effort 추가), src/lib/components/members/profile/ProfileTabContent.svelte(휴지통
+아이콘 버튼 identity+foreign 양쪽, 경고토스트 확인 후 삭제) | Stephen 질문("완전 삭제되는
+거 맞아?")으로 재등록 시 DB 참조만 바뀌고 Storage 실물은 orphan으로 남는 결함 발견 →
+정리 로직 추가. 이어서 "완전삭제"(재등록 아닌 순수삭제) 기능 신규 요청 → RPC+엔드포인트+
+UI 신설. 삭제 아이콘 1차 구현(원형+✕)이 front 표준 아니라는 지적으로 AddressTabContent.svelte
+.btn-delete 패턴(휴지통 SVG) 재사용으로 교체. | 검증: svelte-check 무회귀,
+Stage(ezyvffjvuwmtuhpxdjrw) DB 직접 조회로 특정 계정(mublues@gmail.com) storage.objects가
+DB 참조와 정확히 일치·고아파일 0건 확인. Migration #349는 Stage+Production 양쪽
+pg_proc 조회로 함수 존재 확인. ⚠️ 코드(TS/Svelte)는 전부 미커밋 — DB만 반영됨.
+
+[2026-08-26] 🟢ROUTINE | 본인증명 업로드 UX 왕복(자동업로드→수동복원) + 취소버튼 제거 |
+src/lib/components/members/profile/ProfileTabContent.svelte | "취소" 버튼(2c59386,
+2026-07-23 원본 기능) 제거 지시 → cancelIdentityUpload/cancelForeignUpload 함수까지 완전
+삭제. 파일 선택 즉시 자동업로드(등록하기 버튼 제거) 적용 → Stephen이 "등록하기 버튼 UI
+삭제를 취소 복원할 것"으로 재지시 → 자동업로드 트리거 제거, 수동 등록하기 버튼 원복(취소
+버튼은 원복 대상에서 계속 제외). | 검증: svelte-check 무회귀.
+
+[2026-08-26] 🟢ROUTINE | csToast 표준 토스트 액션/닫기 버튼 front 표준 미반영 수정 |
+src/lib/utils/toast.ts(BASE 하드코딩 #201857/30px → var(--cs-purple-dark)/var(--radius-xl)
+토큰화), src/app.css([data-sonner-toast] [data-button] 신규 — uiux.md §12 닫기버튼 원칙
+"배경 없음·심플 아이콘만"을 텍스트로 확장, Stephen AskUserQuestion으로 "심플 텍스트" 확정) |
+1차로 반투명 필(pill) 버튼 스타일 적용했다가 Stephen이 "front 표준 확인해봤어?"로 재확인
+요청 → uiux.md §12에 액션버튼 스펙 자체가 없었음을 인정하고 닫기버튼 철학을 그대로 확장
+적용. 중간에 닫기버튼 44×44 터치타겟 확대 시도가 액션버튼과 겹치는 회귀를 유발해 Stephen이
+즉시 재현·지적 → 닫기버튼 원본 스펙 복귀 + 액션버튼 margin-right:34px로 정정. ⚠️ 이후 다른
+세션이 이 두 파일에 반응형(PC/모바일 padding·min-height) 오버라이드를 추가로 얹음 — 위
+내용은 이 세션이 실제로 기여한 부분만 기술. | 검증: svelte-check 무회귀.
+
+[2026-08-26] 🟢ROUTINE | 알림설정 토글→콤보버튼 전환 + /account 로그아웃 여백2배·구분선
+제거 + 섹션타이틀 폰트토큰 표준화 + PC 카드 구조결함 2건 수정 | src/lib/components/
+members/profile/NotificationTabContent.svelte(front-uiux.md §16 콤보버튼 표준 적용,
+setRental/setBenefit 명시값 지정 방식으로 리팩터), src/routes/account/+page.svelte +
+src/lib/components/account/MenuSection.svelte(로그아웃 wrap margin-top 16→32px·padding-top
+24→48px 동일비율 확대 + border-top 구분선 양쪽 제거), src/lib/components/account/
+WishlistScroll.svelte(hideTitle prop 신설로 PC 중복헤더 렌더 해소, .section-title 폰트토큰화),
+account/+page.svelte(섹션타이틀 4종 --text-pc-title-18 적용, 위시리스트 카운트 하드코딩
+"6"→{data.wishlists.length} 교체, PC 카드3종 헤더-콘텐츠 간격 mb-16→24px 통일),
+.claude/rules-ref/front-uiux.md §18(신설)·.claude/rules/uiux-index.md(예외 각주 추가) —
+섹션타이틀 PC(--text-pc-title-18)/모바일(--text-m-title-21) 페어링을 향후 자동 반영되도록
+문서화(Stephen 명시 요청). | PC "관심가져봄" 카드 중복헤더·카운트 하드코딩 2건은 Stephen이
+라이브 화면에서 직접 발견·지목 — 이 세션이 만든 회귀 아닌 사전 결함(폰트 분리로 비로소
+눈에 띔). | 검증: svelte-check 무회귀(신규 에러 0, 사전존재 vite.config.ts 1건 불변).
+
+[2026-08-26] 🟢ROUTINE | 장바구니 체크박스 5곳 CheckIcon 표준화 + 대여설정 미완성 스크롤 경고 토스트 |
+  src/routes/cart/+page.svelte(.item-card-check·.form-check-label×2·.copy-label·.coupon-row-left
+  체크박스 → uiux-index.md/front-uiux.md §17 CheckIcon 표준 전환(.checkbox-btn-terms 재사용),
+  priceSectionSentinel + IntersectionObserver $effect 신규(hasItems && !datesSet 시
+  csToast.warning('대여예약정보를 모두 확인해 주세요.')), 죽은 CSS `.checkbox-btn.small{}` 제거) |
+  GATE C: ROUTINE 자동완료(Stephen 라이브 UI 지적 즉시 반영, DB·정책 변경 없음)
+  검증: svelte-check 무회귀(1 error는 vite.config.ts 기존 무관 건), 체크박스 5곳 전부 라이브
+  브라우저로 checked/unchecked 색상 전환 확인. 스크롤 토스트는 작업 도중 Claude Browser 프리뷰
+  패널이 렌더링 정지 상태(스크린샷 빈 화면, DOM 조회는 정상)로 전환돼 육안 확인 불가 —
+  기존에 이미 동작 증명된 footerSentinel/footerVisible도 동일 상태에서 함께 미동작함을
+  대조 확인해 새 코드 결함이 아닌 그 시점 프리뷰 패널 환경 문제로 판정. 부수적으로 세션 중
+  누적된 좀비 vite 프로세스(포트 5173~5176) 4개 + 외부 `.env.local` 변경發 개발서버 크래시
+  1건 발견·정리(순수 로컬 dev 프로세스, git·마이그레이션 무관).
+
+  ✅ **@sp3-qa-agent 검수 완료(GATE E 통과)** — 체크박스 5곳 path data 완전 일치, 배송안내문
+  폴백 없음, 스크롤 토스트 조건(hasItems && !datesSet)에 불필요한 변수 혼입 없음, 범위 외
+  파일 수정 없음 전부 확인. 경미 결함 1건 발견·즉시 수정: 세션 중 이전 시점(이번 3건 이전)에
+  footer 약관동의 체크박스 svg에서 `checkbox-terms-icon` 클래스가 제거됐는데 대응 CSS
+  `.checkbox-terms-icon{}`가 정리되지 않고 남아있던 죽은 선택자 — 제거 완료(svelte-check
+  경고 388→387건).
+
+[2026-08-26] 🔴CRITICAL 후속수정 | 장바구니 배송안내문(CMS shipping_guide) 노출 + 하드코딩 안내문구 제거 |
+  src/routes/cart/+page.server.ts(rental_shipping_settings select에 shipping_guide 추가),
+  src/routes/cart/+page.svelte(sdShippingSettings.shipping_guide 노출, {@const addrNote} 선언·
+  사용 전부 제거) | Stephen 라이브 UI 지적 2건 연속 반영: ① "배송 옵션 선택 시 CMS
+  배송안내문이 노출돼야 정상" → cart/+page.server.ts가 shipping_guide 컬럼을 애초에
+  select하지 않던 누락 발견·수정. ② "선택영역 하드코딩이라면 지울 것" → 같은 자리에
+  남아있던 기존 하드코딩 문구(수령용 "대여 시작일은 배송일 기준 최소 2일 전까지 선택
+  가능합니다." / 반납용 별도 문구, addrNote 상수)를 CMS 문구와 병존시키지 않고 완전 제거.
+  검증: svelte-check 무회귀, get_page_text로 크레이지샷배송 대여 선택 시 CMS 문구 단일 노출
+  확인. "배송 설정(rental_shipping_settings) ↔ 대여 방식 옵션 CMS 연동" CRITICAL 태스크의
+  후속 발견분 — TASK.md 해당 블록에 [NOW-FIX-3]로 기록.
+
+[2026-08-26] ⚡GSD | 토스트 PC/Mobile 반응형 맞바꾸기 + CMS combo-btn·toggle-btn 문서화 |
+  src/lib/utils/toast.ts(BASE min-height 60→56px, padding 15px 30px→12px 20px — PC기본값 좁힘),
+  src/app.css(PC 기본 close btn right 20→12px, action btn margin-right 34→26px;
+  모바일 오버라이드 padding→15px 30px, min-height→60px, close right→20px, action margin-right→34px),
+  .claude/rules-ref/cms-uiux.md(§14 신규 — combo-btn/combo-active/combo-sm 클래스 스펙 +
+  toggle-btn/toggle-thumb/toggle-group 슬라이딩 스위치 스펙, 혼용 금지 원칙, aria-pressed 필수) |
+  GATE C:ROUTINE 자동완료
+
+[2026-08-26] ⚡GSD | CMS 계정 관리 Stage 8 — security-auth.md 문서 갱신(계정 상세 매트릭스 행 10개, 메뉴별 세부 접근권한 신규 절, 감사/접속로그 신규 절, GATE C 체크항목 9개, TASK.md GATE 배너 갱신) |
+  .claude/rules/security-auth.md, .claude/harness/TASK.md, .claude/harness/GSD_LOG.md |
+  코드 변경 없음(순수 문서 갱신) | GATE C:BOUNDARY 자동
+
+[2026-08-26 00:00] ⚡GSD | CMS 계정 관리 Stage 5 — AccountDetailPanel 권한설정 탭 구현
+  (관리자 레벨 콤보버튼 + 메뉴권한 그리드 25개) |
+  src/lib/components/cms/AccountDetailPanel.svelte, src/routes/cms/accounts/list/+page.svelte |
+  신규 에러 0건 | GATE C:BOUNDARY 자동
+
+[2026-08-25] 🔴TDD | 두발히어로 배송완료 시 대여 여정 자동 전이 — maybeAutoAdvanceOnDheroDelivered 신설 + cron/수동새로고침 연동 |
+  src/lib/server/dheroAutoAdvance.ts(신규), src/routes/api/cron/dhero-sync/+server.ts(pickup+return leg 자동전이 연결),
+  src/routes/api/cms/reservations/[id]/dhero/+server.ts(GET: pickup+return 양방향 공유함수 호출),
+  src/__tests__/server/dheroAutoAdvance.test.ts(수정: cron 연동 테스트를 별도 파일로 분리),
+  src/__tests__/server/dheroSyncCron.test.ts(신규: C-1,C-2,C-3 GREEN) | 11/11 테스트 GREEN |
+  Stage 검증: reservation 63 shipped+dhero_status_code=5→in_use 자동전이 확인, EC-1/EC-2 멱등성 확인, 원상복구 완료 | GATE C:승인
+
+[2026-08-25] ⚡GSD | CMS 계정 상세패널 Stage 4 — AccountDetailPanel 신설 + superadmin 생성 확장 |
+  supabase/migrations/20260826020000_351_cms_admin_name_superadmin_expand.sql(신규: cms_update_admin_name RPC + cms_setup_admin_profile/cms_update_admin_role superadmin 허용),
+  src/lib/components/cms/AccountDetailPanel.svelte(신규: 탭3개 기본정보패널),
+  src/routes/cms/accounts/list/+page.server.ts(updateName 액션 추가),
+  src/routes/cms/accounts/list/+page.svelte(인라인편집→목록+패널 재구성),
+  src/routes/cms/accounts/+page.server.ts(superadmin 생성 EC-4 게이트) | GATE C:🟡BOUNDARY 자동완료
+
+[2026-08-25] 🔴TDD | 쿠폰 자격조건 7개 검증 — Migration 348 + GSD 방어코드 |
+  supabase/migrations/20260825070000_348_use_coupon_eligibility_validation.sql(use_coupon RPC 7조건 강화),
+  src/__tests__/services/couponEligibilityValidation.test.ts(TDD 14케이스 RED 확인완료 8/6),
+  src/lib/server/coupons/couponEligibility.ts(isCouponEligible 순수함수 + buildCouponEligibilityContext),
+  src/routes/cart/+page.server.ts(basicFilteredCoupons 1차→filteredCoupons 2차 7조건 적용),
+  src/routes/contract/[token]/+page.server.ts(RawUserCouponRow 타입 7컬럼 + isCouponEligible 2차필터),
+  src/routes/api/contracts/[token]/pay-mock/+server.ts(couponError 응답 추가),
+  src/routes/api/checkout/confirm-mock/+server.ts(couponError 응답 추가),
+  src/routes/contract/[token]/+page.svelte(csToast.warning couponError 사용자 알림)
+  | npm run check: 수정파일 에러 0건 (vite.config.ts 기존 1건 무관)
+  | TDD RED 상태 확인(8/14 실패 — migration 348 Stage 미적용) GREEN 전환 대기
+  | Migration 348 Stage(ezyvffjvuwmtuhpxdjrw) 수동 적용 필요 — Stephen 대시보드 SQL 에디터
+
+[2026-08-25] 🔴TDD+⚡GSD | [NOW-FIX-2] 두발히어로 PDF 대조 수정 4건 |
+  src/lib/components/cms/RentalDetailPanel.svelte(Item1: DheroInfo 필드명 수정 deliveryRiderName/Mobile + Item2: 지연·반송·분실 섹션 추가),
+  src/lib/server/dhero.ts(Item3: memoFromCustomer 파라미터 + placePageUrl 응답타입 + frontdoorPassword 생략 근거 명문화),
+  src/lib/server/getReservationForDhero.ts(Item3: notes 필드 추가),
+  src/routes/cms/reservation/+page.server.ts(Item3: memoFromCustomer 전달 + Item4: placePageUrl 채팅트리거),
+  src/routes/api/cms/reservations/[id]/dhero/+server.ts(Item3: memoFromCustomer 전달),
+  src/lib/server/push.ts(Item4: §15 dhero_place_guide CUSTOMER_LIFECYCLE_PUSH_COPY 추가),
+  src/__tests__/server/dheroChatNotify.test.ts(Item4: TDD 4/4 GREEN),
+  supabase/migrations/20260825060000_347_dhero_place_guide_chat_notify.sql(Item4: Stage DB 적용 필요)
+  | npm run check: 수정파일 에러 0건(vite.config.ts 기존 1건 무관) | TDD 4/4 GREEN
+  | Stage DB 마이그레이션 347 적용 대기(MCP apply_migration 또는 대시보드 SQL 에디터)
+
+[2026-08-25] 🔴TDD+⚡GSD | [NOW-FIX] 두발히어로 CRITICAL-1 + MEDIUM-1/2 + LOW-1 수정 |
+  src/lib/server/getReservationForDhero.ts(신규 — JOIN 공유 모듈),
+  src/lib/utils/dheroLabels.ts(신규 — DHERO_STATUS_LABEL 단일 정의),
+  src/lib/server/dhero.ts(DHERO_STATUS_LABEL re-export로 전환),
+  src/routes/api/cms/reservations/[id]/dhero/+server.ts(getReservationForDhero import),
+  src/routes/cms/reservation/+page.server.ts(CRITICAL-1: broken select → 공유 JOIN 함수),
+  src/lib/components/cms/RentalDetailPanel.svelte(MEDIUM-1: dhero_cancel_failed 경고 toast
+  + MEDIUM-2: 중복 DHERO_STATUS_LABEL 제거 + dheroLabels.ts import),
+  src/routes/api/cart/validate-delivery-address/+server.ts(LOW-1: isBulkDeliveryMethod 재사용),
+  src/__tests__/server/dheroUpdateStatusTrigger.test.ts(mock 전환 — mockGetReservationForDhero)
+  | TDD 6/6 GREEN | GATE C:승인대기(NOW-FIX item 5 — CMS 실버튼 라이브 검증, Stephen 직접 실행 필요)
+
+[2026-08-25] CRITICAL | 본인증명 파일 업로드 드래그앤드롭 다중선택(최대 5개) 전환 |
+  supabase/migrations/20260825050000_346_identity_doc_url_multi_file.sql(신규),
+  src/lib/types/database.ts, src/routes/account/+page.server.ts,
+  src/routes/account/profile/+page.server.ts, src/routes/api/profile/upload-doc/+server.ts,
+  src/lib/components/members/profile/ProfileTabContent.svelte | ✅ Stage+Production 적용 완료
+  배경: 직전 콤보버튼 다중선택(Migration #345) 작업 직후 Stephen이 이어서 "최대 5개 파일
+  동시 드래그 업로드 허용 + 파일 개별 용량은 CMS 표준 기술 지침 적용" 지시. 파일 개별 용량은
+  기존 upload-doc/upload-avatar/cms-upload-doc 전부 이미 10MB로 통일돼 있어 그대로 유지.
+  구현: Migration #346 — identity_doc_url TEXT→TEXT[] 전환(기존값 1개짜리 배열로 보존) +
+  최대 5개 CHECK 제약(서버측 방어, 프론트 제한과 별개). update_user_doc_url RPC를
+  p_doc_url TEXT→TEXT[]로 재발행(기존 3-param TEXT[] 버전 명시적 DROP, PGRST203 방지).
+  foreign_doc_url은 이번 요청 범위 밖이라 컬럼 자체는 무변경 유지 — RPC 내부에서 배열의
+  첫 원소만 꺼내 기존 방식대로 저장(app 코드는 1개짜리 배열로 감싸 호출하도록만 조정,
+  외국인증명 UI·동작은 완전히 그대로).
+  프론트: identityFile(단일)→identityFiles(배열, 최대 5개) 전환. 파일 선택 label에
+  ondragover/ondragleave/ondrop 핸들러 추가(드래그오버 시 시각 피드백), input에 multiple
+  속성. 썸네일 그리드(doc-file-grid) 신설 — 파일별 미리보기/PDF 파일명 + 개별 제거(✕)
+  버튼 + N/5 카운터. 서버(upload-doc/+server.ts)도 form.getAll('file')로 다건 수신,
+  identity는 최대 5개, foreign은 기존대로 1개 초과 시 차단, 실패 시 이번 요청에서 이미
+  업로드된 파일 전부 롤백. 등록완료 상태 UI도 다건 "보기 N" 링크 목록으로 확장.
+  검증: svelte-check 신규 에러 0건. Stage 적용 후 컬럼타입(ARRAY/_text)·RPC
+  시그니처(text[], text[], text[]) 직접 확인 → Production 동일 적용·확인 완료.
+
+[2026-08-25] CRITICAL | 본인증명 유형 콤보버튼 다중선택 전환 + '주민등록등본' 추가 |
+  supabase/migrations/20260825040000_345_identity_type_multi_select.sql(신규),
+  src/lib/types/database.ts, src/routes/account/+page.server.ts,
+  src/routes/account/profile/+page.server.ts, src/routes/api/profile/upload-doc/+server.ts,
+  src/lib/components/members/profile/ProfileTabContent.svelte | ✅ Stage+Production 적용 완료
+  배경: Stephen이 launch-selected-element로 개인정보 탭 "본인 증명" 유형 콤보버튼(학생증/
+  주민등록증/운전면허증/기타)을 선택, "다중 선택 가능하게 + 주민등록등본 콤보 추가" 지시.
+  기존은 identity_type이 단일 TEXT 컬럼이라 다중선택 저장 방식을 AskUserQuestion으로 확인 —
+  "전부 저장(배열 컬럼으로 DB 확장)" 선택.
+  구현: Migration #345 — identity_type TEXT→TEXT[] 전환(기존값 1개짜리 배열로 보존) +
+  CHECK 제약을 배열 원소 검증(`<@`)으로 교체 + 'resident_copy'(주민등록등본) 값 추가.
+  update_user_doc_url RPC를 p_identity_type TEXT→TEXT[]로 재발행(기존 3-param TEXT 버전
+  명시적 DROP — 오버로드 공존 시 PostgREST 호출 모호성(PGRST203) 방지, products.md §2-3
+  문서화된 동일 함정 재적용 방지). WHERE user_id=auth.uid() 절은 그대로 유지(Migration #164로
+  production에 user_id 컬럼이 id와 동기화돼 존재함을 직접 확인, 별도 수정 불필요).
+  프론트: identitySelType(string)→identitySelTypes(string[]) 토글 방식으로 전환, 버튼 클릭 시
+  배열에 추가/제거. 업로드 시 FormData에 identity_type을 append로 다건 전송, 서버는
+  form.getAll()로 수신. identityTypeLabel()이 배열을 쉼표구분 라벨로 변환. 최소 1개 선택
+  안 하면 업로드 버튼 비활성화 + 에러 메시지.
+  검증: svelte-check 신규 에러 0건(사전존재 1건 vite.config.ts만 무관하게 잔존). Stage 적용 후
+  컬럼타입(ARRAY/_text)·RPC 시그니처(text[]) 직접 확인 → Production 동일 적용·확인 완료.
+
+[2026-08-25] ⚡GSD | 두발히어로 배송 API 실연동 — RentalDetailPanel 조건분기 UI + cms/rentals 배지 | GATE C: BOUNDARY
+  배경: 두발히어로(dhero) 배송 API 연동 NOW 마지막 2개 태스크 — 컨텍스트 압축 재개 세션.
+  파일 (이번 세션 신규/수정):
+    src/routes/api/cms/reservations/[id]/dhero/+server.ts (MODIFY — GET에 is_bulk_delivery 필드 추가)
+    src/lib/components/cms/RentalDetailPanel.svelte (MODIFY — 로컬 RentalListRow에 dhero 5필드 추가,
+      dhero 상태 변수·$effect·액션함수 5개 추가, "운송장 정보" 섹션을 isBulkMethod 기반으로 조건분기,
+      dhero 전용 CSS 추가)
+    src/routes/cms/rentals/+page.svelte (MODIFY — 상태 칸에 .dhero-mini-badge 추가 + CSS)
+  구현:
+    - GET /api/cms/reservations/[id]/dhero: isBulkDeliveryMethod()로 bulk 여부 확인 후 is_bulk_delivery
+      응답에 포함 → 컴포넌트가 UI 분기 결정에 활용
+    - RentalDetailPanel: dheroFetchedForId/$state 기반 lazy-fetch(rental 탭 오픈 시 1회),
+      isBulkMethod=true 시 "두발히어로 배송" 자동화 뷰(배송상태 배지·bookId·라이더·동기화시각·
+      새로고침/반송등록/취소 버튼), isBulkMethod=false 시 기존 수동 운송장 UI 그대로 유지
+    - DHERO_STATUS_LABEL(0~12), DheroInfo 인터페이스 클라이언트측 복제(서버 전용 import 불가)
+    - 취소: 412→dhero_cancel_failed 전용 에러 메시지 분기
+    - 반송 등록: row.tracking_number 없으면 toast.error로 조기 리턴
+    - cms/rentals 상태 칸: row.dhero_status 있으면 .dhero-mini-badge 추가 표시
+  검증: npm run check — 신규 에러 0건(vite.config.ts 사전 존재 에러만 잔존)
+
+[2026-08-25] ⚡GSD | 두발히어로 배송 API 실연동 — 선행 태스크 (이전 세션 완료분 기록) | GATE C: BOUNDARY
+  파일 (이전 세션 완료):
+    src/lib/server/dhero.ts (NEW — 7개 함수, $env/dynamic/private)
+    src/lib/server/isBulkDeliveryMethod.ts (NEW)
+    supabase/migrations/20260825020000_343_dhero_shipment_integration.sql (NEW)
+    supabase/migrations/20260825030000_344_get_rental_list_dhero_fields.sql (NEW)
+    src/__tests__/server/dheroUpdateStatusTrigger.test.ts (NEW — 9/9 GREEN)
+    src/routes/cms/reservation/+page.server.ts (MODIFY — dhero fail-soft 트리거 + RentalListRow 타입 확장)
+    src/routes/api/cms/reservations/[id]/dhero/+server.ts (NEW)
+    src/routes/api/cms/reservations/[id]/dhero/cancel/+server.ts (NEW)
+    src/routes/api/cms/reservations/[id]/dhero/return/+server.ts (NEW)
+    src/routes/api/cron/dhero-sync/+server.ts (NEW — Vercel Cron */10 min)
+    src/lib/components/common/PostcodeSearchButton.svelte (NEW)
+    src/lib/components/members/profile/AddressTabContent.svelte (MODIFY — PostcodeSearchButton 재사용)
+    src/routes/api/cart/validate-delivery-address/+server.ts (NEW)
+    src/routes/cart/+page.svelte (MODIFY — PostcodeSearchButton + validate 호출)
+    vercel.json (MODIFY — dhero-sync cron 등록)
+    .env.example (MODIFY — 3개 키 이름 추가)
+
 [2026-08-25] ⚡GSD | "빠른 재고 등록" 후 상세패널 다른상품으로 튀는 버그 — 최소수정 | GATE C: BOUNDARY
   배경: "코드 재반영" 적용 부모상품에 "빠른 재고 등록" 실행 시, 하단 선택수량 배지는 정상인데
     재고 목록이 "미등록"으로 뜨는 현상 보고. Claude Browser로 직접 재현(launch-selected-
@@ -5023,3 +5255,73 @@ Stephen 직접 실행 필요
   rule·cms_toggle_marketing_rule·cms_delete_marketing_rule·cms_set_default_signature_asset)
   전부 정상 생성 확인. Stage(2026-08-23 적용)·Production(2026-08-24 적용) 양쪽 완료.
   GATE E: ✅ 통과. 앱코드 git 커밋은 Stephen 직접 실행 대기.
+
+[2026-08-25] TDD | 쿠폰 자격조건 7개 검증(use_coupon RPC + cart/contract 노출필터) | 완료
+  Stephen 승인: "GATE B 승인. 둘 다 기본안대로 실행해." harness-executor가 GSD 코드 5개 파일
+  (couponEligibility.ts 신설, cart/+page.server.ts 2차 필터, contract/[token]/+page.server.ts
+  타입+SELECT+필터, pay-mock/confirm-mock couponError 응답, contract/[token]/+page.svelte
+  csToast 7종 매핑)을 완료하고 마이그레이션 348 파일과 TDD 테스트(14케이스)를 작성했으나
+  Supabase MCP 도구가 없어 Stage 적용은 메인 세션에 넘김.
+
+  메인 세션이 적용 전 마이그레이션 SQL을 직접 재검증해 원안의 스키마 오류 2건을 배포 전에
+  발견·수정: ① `rental_reservations`에 `deleted_at` 컬럼이 없는데 FIRST_RENTAL_ONLY 조건이
+  이를 참조 — 제거. ② 구독 판정 대상 테이블이 실제로는 `subscriptions`가 아니라
+  `user_subscriptions`(이 테이블도 `deleted_at` 없음, status CHECK가 active/cancelled/expired만
+  허용) — 테이블명 교정. 둘 다 Stage information_schema 직접 조회로 확인 후 수정, 이후 Stage
+  적용 성공.
+
+  테스트 최초 실행 시 실패 2건 추가 발견·수정(전부 테스트 픽스처 버그, RPC 로직과 무관):
+  ① `createOrderItem` 헬퍼가 NOT NULL인 `order_items.product_id`를 누락. ② `afterEach` 정리
+  로직이 "order_items는 order_id FK cascade로 삭제됨"이라 잘못 가정 — 실제 FK 정의를
+  `pg_constraint`로 직접 확인한 결과 CASCADE가 아니라(RESTRICT 기본값) `orders` 삭제가 조용히
+  실패하고 있었고, 그 결과 남은 `rental_reservations` 행이 다음 테스트에서
+  `rental_reservations_product_dates_excl` 배타 제약 충돌을 일으켜 후속 테스트 2개가 연쇄
+  실패했음 — order_items를 명시적으로 먼저 삭제하도록 순서 수정 + 모든 정리 delete에 에러
+  throw 추가.
+
+  검증: `npm run test src/__tests__/services/couponEligibilityValidation.test.ts` 14/14 GREEN,
+  svelte-check 신규 에러 0건, Stage DB에 테스트 잔여 데이터 없음(직접 SELECT로 재확인).
+
+  GATE E: ✅ 통과(Stage 한정). Production(vnbpmvxruyciuuaermyh) 마이그레이션 348 적용은 별도
+  Stephen 승인 대기. 앱코드 git 커밋은 Stephen 직접 실행 대기. 이어서 같은 배치로 승인된
+  "배송요금 연동" CRITICAL 건을 착수.
+
+[2026-08-25] 🔴TDD+⚡GSD | 배송 설정(rental_shipping_settings) ↔ 대여 방식 옵션 CMS 연동 +
+  장바구니 왕복/반납요금 자동반영 |
+  src/lib/utils/cartShippingFee.ts(신규: calcRoundTripFee/calcReturnFee 순수함수),
+  src/__tests__/services/cartShippingFee.test.ts(TDD 17케이스),
+  src/routes/cart/+page.svelte(otRoundTripFee/otReturnFee derived + otDeliveryFee 가산),
+  src/routes/cart/+page.server.ts(shippingSettings 로드 + 자식→부모 shipping_round_trip/
+  delivery/return override),
+  src/routes/cms/set/rental/+page.svelte(Part A: is_bulk_delivery 방식 행에
+  shippingBadgeLabel 배지 — "왕복 N원 / 반납 N원" 또는 "미설정")
+  | GATE B 승인("GATE B 승인. 둘 다 기본안대로 실행해." + "쿠폰 건 끝나면 배송요금 건 바로
+  이어서 실행해.") → harness-executor 착수 중 세션 한도로 크래시 → Stephen "다시 시도" 지시로
+  메인 세션이 직접 재개.
+
+  크래시 시점 잔여물(git diff) 검토 중 확정 설계(Q5) 위반 2건 발견·수정: ① 왕복/반납요금을
+  Q5 확정 답변("카트 전체 기준 최대 1회")과 다르게 체크된 아이템마다 반복 부과하도록
+  구현돼 있었음 — `itemsState.reduce()` 내부에서 개별 아이템별로 계산하던 로직을 제거하고
+  `checkedShippingItems` 배열을 한 번만 만들어 `calcRoundTripFee`/`calcReturnFee` 순수함수에
+  1회씩만 위임하도록 재작성. ② 핵심제약("가산이지 대체가 아님")을 위반해 기존 방식별
+  `rental_method_options.fee_amount` 기반 `deliveryFee()` 함수 자체가 통째로 삭제돼 있었음 —
+  원본 함수를 복원하고 `otDeliveryFee`가 그 합계 + 신규 두 항목을 가산하도록 수정. 왕복요금과
+  반납요금이 완전히 독립적으로 판정돼야 한다는 RED 테스트 스펙(수령·반납 둘 다 배송이면 두
+  함수 모두 값을 반환)도 크래시 잔여물의 if/else-if 체인이 위반하고 있어 함께 수정.
+
+  검증: `npm run test src/__tests__/services/cartShippingFee.test.ts` 17/17 GREEN,
+  svelte-check 무회귀(전체 1 error는 vite.config.ts 기존 무관 건). Part A 배지는 신규
+  쿼리 없이 기존 load() 데이터(shippingSettings)만 재사용해 완료.
+
+  ⚠️ **부수 발견(별개 태스크 "쿠폰 자격조건 7개 검증"의 완료 보고 이후 시점)**: 이 작업 중
+  `cart/+page.server.ts`·`contract/[token]/+page.server.ts`·`couponEligibility.ts`의
+  `buildCouponEligibilityContext` 3곳 전부에서 위 migration 348과 완전히 동일한 실수
+  (`rental_reservations.deleted_at` 컬럼 미존재, `subscriptions`→`user_subscriptions` 오기)가
+  독립 반복돼 있는 것을 발견해 3곳 모두 수정. RPC 자체는 정상이었으나 화면 노출 필터(어떤
+  쿠폰을 보여줄지 판단하는 로직)가 이 버그로 안전측 오판될 수 있는 상태였음 — 상세는
+  TASK.md 쿠폰 태스크 블록 "후속 발견·수정" 참고. `couponEligibilityValidation.test.ts`
+  14/14 재실행으로 무회귀 확인.
+
+  GATE E: ✅ 통과(코드 변경만, 신규 마이그레이션 없음 — Stage/Production 순서 이슈 없음).
+  Production 반영은 코드 배포(git 커밋·push)만으로 충분하나, git 커밋은 Stephen 직접
+  실행 대기.
