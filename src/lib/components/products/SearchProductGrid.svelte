@@ -9,6 +9,7 @@
     price12h?: number | null
     img: string
     href?: string
+    wished?: boolean
   }
 
   interface Props {
@@ -16,12 +17,15 @@
     products?: Product[]
     /** G-3: 상품 클릭 시 호출 — recordSearchClick 배선용 */
     onProductClick?: (productId: string) => void
+    /** 없으면 하트 미노출(비로그인) */
+    onWishToggle?: (productId: string) => void
   }
 
   let {
     title = '검색 해봄',
     products = [],
     onProductClick,
+    onWishToggle,
   }: Props = $props()
 
   let expanded = $state(true)
@@ -48,6 +52,8 @@
               price24h={p.price24h ?? null}
               price12h={p.price12h ?? null}
               href={p.href ?? `/products/${p.id}`}
+              wished={p.wished ?? false}
+              onWishToggle={onWishToggle ? () => onWishToggle(String(p.id)) : undefined}
             />
           </div>
         {/each}

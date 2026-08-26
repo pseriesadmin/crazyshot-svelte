@@ -7,6 +7,7 @@
   import SearchProductGrid from '$lib/components/products/SearchProductGrid.svelte'
   import type { SuggestPickerOption } from '$lib/types/suggest-picker'
   import { recordSearchClick } from '$lib/services/searchService'
+  import { toggleWish } from '$lib/utils/wishlist'
   import { page } from '$app/stores'
   import type { PageData } from './$types'
 
@@ -20,7 +21,7 @@
   /** G-3: 현재 검색 세션의 log ID — recordSearchClick에 전달 */
   let searchLogId      = $state<string | null>(null)
 
-  interface SearchProduct { id: string; name: string; category: string; price24h: number; price12h: number; img: string; slug?: string }
+  interface SearchProduct { id: string; name: string; category: string; price24h: number; price12h: number; img: string; slug?: string; wished?: boolean }
   let searchResults      = $state<SearchProduct[]>([])
   let recommendedProducts = $state<SearchProduct[]>([])
 
@@ -37,9 +38,9 @@
       .select('id, name, category, image_urls, slug, price_rules(price, duration_type)')
       .eq('is_active', true)
       .limit(6)
-      .then(({ data }) => {
-        if (!data) return
-        recommendedProducts = (data as Record<string, unknown>[]).map(r => {
+      .then(async ({ data: rows }) => {
+        if (!rows) return
+        recommendedProducts = (rows as Record<string, unknown>[]).map(r => {
           const rules = (r['price_rules'] as { price: number; duration_type: string }[] | null) ?? []
           const p24 = rules.find(x => x.duration_type === '24h')?.price ?? 0
           const p12 = rules.find(x => x.duration_type === '12h')?.price ?? Math.round(p24 * 0.7)
@@ -54,6 +55,14 @@
             img:      imgs?.[0] ?? '/images/products/grid-flat.png',
           }
         })
+
+        if (!data.isLoggedIn || recommendedProducts.length === 0) return
+        const { data: wishRows } = await supabase
+          .from('product_wishlists')
+          .select('product_id')
+          .in('product_id', recommendedProducts.map(p => p.id))
+        const wishedSet = new Set(((wishRows ?? []) as { product_id: string }[]).map(w => w.product_id))
+        recommendedProducts = recommendedProducts.map(p => ({ ...p, wished: wishedSet.has(p.id) }))
       })
   })
 
@@ -91,6 +100,7 @@
           price12h: Math.round(p24 * 0.7),
           img:      ((r['image_urls'] as string[] | null)?.[0]) ?? (r['image_url'] ? String(r['image_url']) : '/images/products/grid-flat.png'),
           href:     slug ? `/products/${slug}` : undefined,
+          wished:   Boolean(r['wished']),
         }
       })
     } catch {
@@ -112,6 +122,14 @@
     // 드롭다운 선택 → 검색 결과 그리드 유지, 상세 이동 없음
     // 상세 이동은 ProductDPCard 클릭으로만
     searchQuery = opt.label
+  }
+
+  async function handleWishToggle(productId: string) {
+    const action = await toggleWish(productId)
+    if (!action) return
+    const wished = action === 'added'
+    searchResults = searchResults.map(p => p.id === productId ? { ...p, wished } : p)
+    recommendedProducts = recommendedProducts.map(p => p.id === productId ? { ...p, wished } : p)
   }
 </script>
 
@@ -176,6 +194,7 @@
     title={searchQuery.trim() ? `"${searchQuery}" 검색결과` : '추천 상품'}
     products={searchQuery.trim() ? searchResults : recommendedProducts}
     onProductClick={searchQuery.trim() ? handleProductClick : undefined}
+    onWishToggle={data.isLoggedIn ? handleWishToggle : undefined}
   />
 
 </div>
