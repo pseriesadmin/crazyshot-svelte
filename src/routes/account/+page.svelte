@@ -8,6 +8,7 @@
   import BottomTabBar from '$lib/components/common/BottomTabBar.svelte'
   import RentalJourneyStepper from '$lib/components/common/RentalJourneyStepper.svelte'
   import ProfileCard from '$lib/components/account/ProfileCard.svelte'
+  import MemberQrModal from '$lib/components/account/MemberQrModal.svelte'
   import RentalStatRow from '$lib/components/account/RentalStatRow.svelte'
   import WishlistScroll from '$lib/components/account/WishlistScroll.svelte'
   import MenuSection from '$lib/components/account/MenuSection.svelte'
@@ -24,6 +25,8 @@
   import type { PageData } from './$types'
 
   let { data }: { data: PageData } = $props()
+
+  let showQrModal = $state(false)
 
   $effect(() => {
     const timer = setInterval(() => invalidate('app:rental-status'), 30_000)
@@ -93,7 +96,7 @@
         <!-- 프로필 카드 -->
         <div class="relative shrink-0 w-full">
           <div class="flex flex-col items-start pt-[50px] px-[25px] relative size-full">
-            <ProfileCard userName={data.user.name} benefitCount={data.benefitCount} />
+            <ProfileCard userName={data.user.name} benefitCount={data.benefitCount} onQrClick={() => (showQrModal = true)} />
           </div>
         </div>
 
@@ -137,8 +140,8 @@
       </div>
     </div>
 
-    <!-- ───────────────── PC SubGnb (≥ 641px) ───────────────── -->
-    <SubGnb title="내정보" pcOnly />
+    <!-- ───────────────── PC SubGnb (≥ 768px) ───────────────── -->
+    <SubGnb title="내정보" pcOnly noGnbOffset />
 
     <!-- ───────────────── PC 레이아웃 (≥ 1024px) ───────────────── -->
     <div class="pc-layout">
@@ -154,7 +157,13 @@
                   지금 <span class="font-bold text-[#553fe0]">{data.benefitCount} </span>가지 혜택·이벤트 확인요망
                 </p>
               </div>
-              <div class="bg-[#553fe0] flex flex-col gap-[10px] items-center justify-center rounded-[25px] size-[70px] overflow-hidden">
+              <button
+                type="button"
+                onclick={() => (showQrModal = true)}
+                aria-label="회원 확인 QR 보기"
+                class="bg-[#553fe0] flex flex-col gap-[10px] items-center justify-center rounded-[25px] size-[70px] overflow-hidden"
+                style="border:none; padding:0; cursor:pointer;"
+              >
                 <div class="flex flex-col gap-[5px] items-center justify-center shrink-0">
                   <div class="relative shrink-0 size-[27px]">
                     <svg class="absolute block inset-0 size-full" fill="none" viewBox="0 0 27 27" xmlns="http://www.w3.org/2000/svg">
@@ -168,7 +177,37 @@
                   </div>
                   <p class="font-['Noto_Sans_KR',sans-serif] font-medium leading-[1.6] text-[12px] text-[#ffffff] tracking-[-0.5px] whitespace-nowrap">QR체크</p>
                 </div>
-              </div>
+              </button>
+        </div>
+
+        <!-- 대여 정보 메뉴 카드 -->
+        <div class="bg-[#ffffff] rounded-[30px] px-[24px] py-[24px]">
+          <div class="flex items-center justify-between mb-[24px]">
+            <span class="text-[#444] tracking-[-0.3px]" style="font: var(--text-pc-title-18);">대여 정보</span>
+          </div>
+          <div class="flex flex-col gap-[20px]">
+            {#each rentalMenuItems as item}
+              <button
+                onclick={() => activePcSection = item.panel}
+                class="flex items-center justify-between relative shrink-0 w-full cursor-pointer hover:opacity-70 transition-opacity text-left"
+                style="border:none;background:none;padding:0;"
+              >
+                <span
+                  class="font-['Noto_Sans_KR',sans-serif] text-[16px] tracking-[-0.5px]"
+                  style="color:{activePcSection === item.panel ? 'var(--cs-purple)' : '#444'};font-weight:{activePcSection === item.panel ? '700' : '500'};"
+                >{item.label}</span>
+                <div class="h-[12px] relative shrink-0 w-[6px]">
+                  <div class="absolute inset-[-8.33%_-16.67%]">
+                    <svg class="block size-full" fill="none" preserveAspectRatio="none" viewBox="0 0 8 14">
+                      <path d="M1 1L7 7L1 13"
+                        stroke="{activePcSection === item.panel ? '#553FE0' : '#aaaaaa'}"
+                        stroke-linecap="round" stroke-linejoin="round" stroke-width="2" />
+                    </svg>
+                  </div>
+                </div>
+              </button>
+            {/each}
+          </div>
         </div>
 
         <!-- 내정보 메뉴 카드 -->
@@ -199,6 +238,9 @@
             {/each}
           </div>
           <div class="pc-logout-wrap">
+            {#if data.isCmsAdmin}
+              <button class="pc-btn-login-manage" onclick={() => goto('/auth/login')}>로그인 관리</button>
+            {/if}
             <button class="pc-btn-logout" onclick={handleLogout}>로그아웃</button>
           </div>
         </div>
@@ -232,7 +274,7 @@
           </div>
 
           <!-- 관심가져봄 -->
-          <div class="bg-[#ffffff] rounded-[30px] overflow-hidden">
+          <div class="rounded-[30px] overflow-hidden">
             <div class="px-[24px] py-[24px]">
               <div class="flex items-center justify-between mb-[24px]">
                 <p class="text-[#444] tracking-[-0.3px]" style="font: var(--text-pc-title-18);">관심가져봄</p>
@@ -256,36 +298,6 @@
               <div class="overflow-x-auto">
                 <WishlistScroll items={data.wishlists} totalCount={data.wishlists.length} hideTitle />
               </div>
-            </div>
-          </div>
-
-          <!-- 대여 정보 메뉴 -->
-          <div class="bg-[#ffffff] rounded-[30px] px-[24px] py-[24px]">
-            <div class="flex items-center justify-between mb-[24px]">
-              <span class="text-[#444] tracking-[-0.3px]" style="font: var(--text-pc-title-18);">대여 정보</span>
-            </div>
-            <div class="flex flex-col gap-[20px]">
-              {#each rentalMenuItems as item}
-                <button
-                  onclick={() => activePcSection = item.panel}
-                  class="flex items-center justify-between relative shrink-0 w-full cursor-pointer hover:opacity-70 transition-opacity text-left"
-                  style="border:none;background:none;padding:0;"
-                >
-                  <span
-                    class="font-['Noto_Sans_KR',sans-serif] text-[16px] tracking-[-0.5px]"
-                    style="color:{activePcSection === item.panel ? 'var(--cs-purple)' : '#444'};font-weight:{activePcSection === item.panel ? '700' : '500'};"
-                  >{item.label}</span>
-                  <div class="h-[12px] relative shrink-0 w-[6px]">
-                    <div class="absolute inset-[-8.33%_-16.67%]">
-                      <svg class="block size-full" fill="none" preserveAspectRatio="none" viewBox="0 0 8 14">
-                        <path d="M1 1L7 7L1 13"
-                          stroke="{activePcSection === item.panel ? '#553FE0' : '#aaaaaa'}"
-                          stroke-linecap="round" stroke-linejoin="round" stroke-width="2" />
-                      </svg>
-                    </div>
-                  </div>
-                </button>
-              {/each}
             </div>
           </div>
 
@@ -331,6 +343,13 @@
 
 <BottomTabBar />
 
+<MemberQrModal
+  open={showQrModal}
+  memberCode={data.profile?.member_code ?? null}
+  userName={data.user.name}
+  onclose={() => (showQrModal = false)}
+/>
+
 <style>
   /* ── 페이지 전체 래퍼 ── */
   .page-wrap {
@@ -370,8 +389,8 @@
   .pc-layout button:focus { outline: none; }
   .pc-layout button:focus-visible { outline: 2px solid var(--cs-purple); outline-offset: 2px; border-radius: 4px; }
 
-  /* ── PC 레이아웃 (≥ 1024px) ── */
-  @media (min-width: 1024px) {
+  /* ── PC 레이아웃 (≥ 768px) ── */
+  @media (min-width: 768px) {
     .page-inner {
       max-width: 1240px; /* front-uiux §3 PC반응형 최소 정책 */
       /* GNB가 /account에서 미렌더링 → padding-top 불필요 */
@@ -432,6 +451,29 @@
       border-radius: 0;
     }
 
+    /* PC 로그인 관리 버튼 (CMS 어드민 전용) */
+    .pc-btn-login-manage {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 100%;
+      height: 53px;
+      border: none;
+      border-radius: var(--radius-xl);
+      background: var(--cs-lilac);
+      font-family: 'Noto Sans KR', sans-serif;
+      font-size: var(--text-m-body-16B);
+      font-weight: 500;
+      color: var(--cs-text-light);
+      cursor: pointer;
+      transition: background 0.15s;
+      letter-spacing: -0.3px;
+      margin-bottom: 10px;
+    }
+    .pc-btn-login-manage:hover {
+      background: #dddce8;
+    }
+
     /* PC 로그아웃 버튼 — 메뉴 목록과의 여백 2배(Stephen 확정, 2026-08-26) */
     .pc-logout-wrap {
       width: 100%;
@@ -443,12 +485,12 @@
       align-items: center;
       justify-content: center;
       width: 100%;
-      height: 44px;
+      height: 53px;
       border: none;
       border-radius: var(--radius-xl);
       background: rgba(236, 235, 244, 0.6);
       font-family: 'Noto Sans KR', sans-serif;
-      font-size: var(--text-m-script-14B);
+      font-size: var(--text-m-body-16B);
       font-weight: 500;
       color: var(--cs-text-light);
       cursor: pointer;

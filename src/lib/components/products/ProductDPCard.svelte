@@ -57,20 +57,15 @@
   <div class="pc-img-wrap">
     <img src={imageUrl} alt={name} loading="lazy" class="pc-img" />
 
-    {#if onWishToggle !== undefined}
+    {#if onWishToggle !== undefined && isWished}
       <button
-        class="pc-heart"
-        class:active={isWished}
+        class="pc-clip active"
         onclick={handleWish}
-        aria-label={isWished ? '찜 해제' : '찜하기'}
-        aria-pressed={isWished}
+        aria-label="찜 해제"
+        aria-pressed="true"
       >
-        <svg width="16" height="14" viewBox="0 0 16 14" fill="none" aria-hidden="true">
-          <path
-            d="M8 13S1 8.5 1 4.5C1 2.57 2.57 1 4.5 1c1.05 0 2 .5 2.7 1.29L8 3.5l.8-.21C9.5 1.5 10.45 1 11.5 1 13.43 1 15 2.57 15 4.5 15 8.5 8 13 8 13z"
-            stroke="currentColor"
-            stroke-width="1.6"
-          />
+        <svg width="34" height="34" viewBox="0 0 63 63" fill="none" aria-hidden="true">
+          <path d="M31.3184 17.7266C34.3143 14.7584 39.1662 14.7584 42.1621 17.7266C45.1654 20.7024 45.1656 25.5331 42.1621 28.5088L29.5205 41.0322C27.7302 42.8059 24.8332 42.8059 23.043 41.0322C21.2452 39.2508 21.245 36.3565 23.043 34.5752L34.5674 23.1582C35.1558 22.5752 36.1054 22.5796 36.6885 23.168C37.2715 23.7564 37.2671 24.706 36.6787 25.2891L25.1543 36.707C24.5414 37.3146 24.5413 38.2939 25.1543 38.9014C25.7753 39.5166 26.7882 39.5165 27.4092 38.9014L40.0508 26.377C41.8692 24.575 41.8692 21.6594 40.0508 19.8574C38.2241 18.0477 35.2563 18.0477 33.4297 19.8574L20.7686 32.4014C17.744 35.3979 17.744 40.2506 20.7686 43.2471C23.8008 46.251 28.7227 46.2511 31.7549 43.2471L44.9443 30.1797C45.5328 29.5967 46.4824 29.6011 47.0654 30.1895C47.6484 30.7779 47.644 31.7275 47.0557 32.3105L33.8662 45.3779C29.6647 49.5405 22.8588 49.5405 18.6572 45.3779C14.4479 41.2076 14.448 34.4408 18.6572 30.2705L31.3184 17.7266Z" fill="currentColor"/>
         </svg>
       </button>
     {/if}
@@ -126,7 +121,7 @@
     position: relative;
     width: 174px;
     height: 174px;
-    border-radius: 18px;
+    border-radius: var(--radius-lg) var(--radius-sm) var(--radius-lg) var(--radius-sm);
     overflow: hidden;
     background: var(--cs-lilac);
     flex-shrink: 0;
@@ -143,7 +138,7 @@
     transform: scale(1.04);
   }
 
-  .pc-heart {
+  .pc-clip {
     position: absolute;
     top: 7px;
     right: 7px;
@@ -151,33 +146,31 @@
     height: 22px;
     border-radius: 50%;
     border: none;
-    background: rgba(236, 235, 244, 0.75);
-    backdrop-filter: blur(6px);
+    background: rgba(255, 207, 207, 0.8); /* var(--cs-chat-in-bg) #FFCFCF 80% 투명도 */
     cursor: pointer;
     display: flex;
     align-items: center;
     justify-content: center;
-    color: var(--cs-purple);
+    color: white;
     transition: background 0.18s, transform 0.18s, color 0.18s;
     padding: 0;
   }
-  .pc-heart svg {
-    width: 10px;
-    height: 9px;
+  .pc-clip svg {
+    width: 14px;
+    height: 14px;
   }
-  .pc-heart:hover {
-    background: rgba(255, 53, 53, 0.15);
+  .pc-clip:hover {
+    background: #ffb8b8;
     transform: scale(1.1);
   }
-  .pc-heart.active {
-    background: rgba(255, 53, 53, 0.18);
+  .pc-clip.active {
+    background: rgba(255, 207, 207, 0.8);
     color: #FF3535;
   }
-  .pc-heart.active svg path {
+  .pc-clip.active svg path {
     fill: #FF3535;
-    stroke: #FF3535;
   }
-  .pc-heart:active {
+  .pc-clip:active {
     transform: scale(0.9);
   }
 
@@ -247,18 +240,18 @@
     .pc-img-wrap {
       width: 290px;
       height: 290px;
-      border-radius: 30px;
+      border-radius: 33px 13px 33px 13px; /* mobile 174→290px 배율(×5/3)로 20/8 비율 확대 */
     }
 
-    .pc-heart {
-      top: 12px;
-      right: 12px;
-      width: 36px;
-      height: 36px;
+    .pc-clip {
+      top: 14px;
+      right: 14px;
+      width: 44px;
+      height: 44px;
     }
-    .pc-heart svg {
-      width: 16px;
-      height: 14px;
+    .pc-clip svg {
+      width: 34px;
+      height: 34px;
     }
 
     .pc-info   { gap: var(--spacing-5); padding: var(--spacing-5) 0 0; }

@@ -4,6 +4,7 @@ import { env } from '$env/dynamic/private';
 import { getSupabaseUrl } from '$lib/env/supabasePublic';
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 import { getCategoryGroups, joinDisplayCategories, type CatSettingsItem, type DisplayCategory } from '$lib/server/productCategorySettings';
+import { getWishedProductIds } from '$lib/server/getWishedProductIds';
 import {
 	CANON_EOS_R5_FIXTURE,
 	isLegacyNumericId,
@@ -51,12 +52,14 @@ async function attachPrices(
 	};
 }
 
-function devFallbackForLegacyNine(rawId: string): { product: ProductDetailRow; productId: string; categoryLabel: string | null } | null {
+function devFallbackForLegacyNine(rawId: string): { product: ProductDetailRow; productId: string; categoryLabel: string | null; wishedIds: string[]; isLoggedIn: boolean } | null {
 	if (!dev || rawId !== '9') return null;
 	return {
 		product: CANON_EOS_R5_FIXTURE,
 		productId: '9',
 		categoryLabel: null,
+		wishedIds: [],
+		isLoggedIn: false,
 	};
 }
 
@@ -267,6 +270,8 @@ export const load: PageServerLoad = async ({ params, locals }) => {
 		});
 	}
 
+	const wishedIds = await getWishedProductIds(locals.supabase, session?.user.id, [String(row.id), ...popularProducts.map((p) => p.id)]);
+
 	// BUG-FIX(2026-08-10): 상품상세 상단(ProductHero)의 카테고리 라벨이 하드코딩 영문 맵
 	// (CATEGORY_MAP)에 의존하고 있었음 — 백오피스(code_mapping_groups) 값으로 통일. RLS가
 	// is_cms_user()라 일반 고객은 anon key로 못 읽으므로 이 조회에 한해 service_role 사용
@@ -311,6 +316,8 @@ export const load: PageServerLoad = async ({ params, locals }) => {
 		shippingPolicy,
 		shotlogs,
 		popularProducts,
+		wishedIds,
+		isLoggedIn: !!session?.user.id,
 		categoryLabel,
 		categories,
 	};

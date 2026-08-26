@@ -28,6 +28,7 @@ interface AccountProfile {
   foreign_doc_url: string | null
   foreign_verified_at: string | null
   created_at: string | null
+  cms_role: string | null
 }
 
 export const load: PageServerLoad = async ({ locals, depends }) => {
@@ -38,7 +39,7 @@ export const load: PageServerLoad = async ({ locals, depends }) => {
   const [profileRes, addressRes, statsRes, recentRentalRes, rentalsRes, cancelsRes, inquiriesRes, wishlistRes, coupons] = await Promise.all([
     locals.supabase
       .from('user_profiles')
-      .select('id, email, full_name, avatar_url, phone, birth_date, address, member_code, member_type, membership_grade, credit_score, rental_count, points, allow_rental_alert, allow_benefit_alert, allow_privacy_consent, allow_third_party_consent, identity_type, identity_doc_url, identity_verified_at, is_foreign, foreign_doc_url, foreign_verified_at, created_at')
+      .select('id, email, full_name, avatar_url, phone, birth_date, address, member_code, member_type, membership_grade, credit_score, rental_count, points, allow_rental_alert, allow_benefit_alert, allow_privacy_consent, allow_third_party_consent, identity_type, identity_doc_url, identity_verified_at, is_foreign, foreign_doc_url, foreign_verified_at, created_at, cms_role')
       .eq('id', session.user.id)
       .maybeSingle(),
     locals.supabase
@@ -97,6 +98,7 @@ export const load: PageServerLoad = async ({ locals, depends }) => {
       email: session.user.email ?? '',
     },
     profile,
+    isCmsAdmin: !!(profile?.cms_role),
     authEmail: session.user.email ?? null,
     addresses: (addressRes.data ?? []) as Array<{
       id: string; label: string; recipient: string | null; phone: string | null

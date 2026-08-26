@@ -45,6 +45,10 @@ export interface ThemeGroupWithProducts {
   products: ThemeGroupProduct[]
 }
 
+export interface ThemeGroupAdmin extends ThemeGroupWithProducts {
+  is_active: boolean
+}
+
 export const load: PageServerLoad = async ({ locals }) => {
   const { session } = await locals.safeGetSession()
   let isCms = false
@@ -74,14 +78,26 @@ export const load: PageServerLoad = async ({ locals }) => {
   }
 
   // Pack 테마그룹 로드 (hype-pack 전용 — home_theme_groups와 완전히 독립된 테이블/RPC, Migration #342)
+  // 공개용(is_active=true만) — 실제 /hype-pack 카드 렌더링에 사용
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const { data: themeGroupsRaw } = await (locals.supabase.rpc as any)('get_hype_pack_theme_groups_with_products')
   const themeGroups: ThemeGroupWithProducts[] = (themeGroupsRaw as ThemeGroupWithProducts[] | null) ?? []
 
+  // 관리자 전용(is_active 무관 전체) — "테마그룹 관리" 모달에서 비노출 그룹도 편집 가능해야
+  // 하므로 별도 RPC로 조회(Migration #343). 비관리자에게는 절대 노출되지 않음.
+  let themeGroupsAdmin: ThemeGroupAdmin[] = []
+  if (isCms) {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const { data: adminRaw } = await (locals.supabase.rpc as any)('get_hype_pack_theme_groups_admin')
+    themeGroupsAdmin = (adminRaw as ThemeGroupAdmin[] | null) ?? []
+  }
+
   // 12H·24H 실가격 배치 조회 (products.md §대여 기준가격 패턴과 동일)
-  // 배너 상품 ID + 테마그룹 상품 ID를 하나로 합쳐 단일 쿼리로 처리(중복 쿼리 방지)
+  // 배너 상품 ID + 테마그룹 상품 ID(공개+관리자 전체)를 하나로 합쳐 단일 쿼리로 처리(중복 쿼리 방지)
   const bannerIds = raw.items.map((i) => i.product_id)
-  const themeProductIds = themeGroups.flatMap((g) => g.products.map((p) => p.id))
+  const themeProductIds = themeGroupsAdmin.length > 0
+    ? themeGroupsAdmin.flatMap((g) => g.products.map((p) => p.id))
+    : themeGroups.flatMap((g) => g.products.map((p) => p.id))
   const allPriceIds = Array.from(new Set([...bannerIds, ...themeProductIds]))
 
   const price12hMap: Record<string, number> = {}
@@ -147,6 +163,13 @@ export const load: PageServerLoad = async ({ locals }) => {
       base_price_daily: p.base_price_daily > 0 ? p.base_price_daily : (price24hMap[p.id] ?? 0),
     })),
   }))
+  const enrichedThemeGroupsAdmin: ThemeGroupAdmin[] = themeGroupsAdmin.map((g) => ({
+    ...g,
+    products: g.products.map((p) => ({
+      ...p,
+      base_price_daily: p.base_price_daily > 0 ? p.base_price_daily : (price24hMap[p.id] ?? 0),
+    })),
+  }))
 
   return {
     isCms,
@@ -169,5 +192,6 @@ export const load: PageServerLoad = async ({ locals }) => {
       })),
     },
     themeGroups: enrichedThemeGroups,
+    themeGroupsAdmin: enrichedThemeGroupsAdmin,
   }
 }

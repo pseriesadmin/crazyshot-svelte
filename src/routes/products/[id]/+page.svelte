@@ -16,6 +16,7 @@
   import { isRealMemberSession } from '$lib/utils/authGuard';
   import SignUpModal from '$lib/components/auth/SignUpModal.svelte';
   import { csToast } from '$lib/utils/toast';
+  import { toggleWish } from '$lib/utils/wishlist';
 
   /** 실서비스 DB products 행 (가격·status 등 런타임 컬럼 포함) */
   type ProductRow = Tables<'products'> & {
@@ -75,6 +76,8 @@
       shippingPolicy: { items: { label: string; fee: number }[]; guide: string } | null;
       shotlogs: ShotlogItem[];
       popularProducts: PopularItem[];
+      wishedIds: string[];
+      isLoggedIn: boolean;
       categoryLabel: string | null;
       categories: DisplayCategory[];
     };
@@ -224,6 +227,18 @@
 
   const shotlogs = $derived(data.shotlogs);
   const popularProducts = $derived(data.popularProducts);
+
+  let wishedSet = $state(new Set(data.wishedIds ?? []));
+  $effect(() => { wishedSet = new Set(data.wishedIds ?? []); });
+
+  async function handleWishToggle(id: string | undefined) {
+    if (!id) return;
+    const action = await toggleWish(id);
+    if (!action) return;
+    const next = new Set(wishedSet);
+    if (action === 'added') next.add(id); else next.delete(id);
+    wishedSet = next;
+  }
 
   let reviews = $state(data.reviews);
   // SPA 네비게이션으로 다른 상품 상세로 이동 시 이전 상품의 후기가 남아있지 않도록 재동기화
@@ -749,6 +764,8 @@
           onreserve={handleReserve}
           onchange={handleCalChange}
           chatCallback={() => showToast('준비중입니다.')}
+          wished={wishedSet.has(product.id)}
+          onwishtoggle={data.isLoggedIn ? () => handleWishToggle(product.id) : undefined}
         />
       </div>
     </div>
@@ -774,6 +791,8 @@
         onreserve={handleReserve}
         onchange={handleCalChange}
         chatCallback={() => showToast('준비중입니다.')}
+        wished={wishedSet.has(product.id)}
+        onwishtoggle={data.isLoggedIn ? () => handleWishToggle(product.id) : undefined}
       />
 
     </div>
@@ -1006,6 +1025,8 @@
             imageUrl={item.imageUrl ?? '/sample/product-main.png'}
             price24h={item.price24h}
             href="/products/{item.slug ?? item.id}"
+            wished={wishedSet.has(item.id)}
+            onWishToggle={data.isLoggedIn ? handleWishToggle : undefined}
           />
         {/each}
       {/if}

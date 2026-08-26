@@ -1,4 +1,5 @@
 import { getCategoryGroups } from '$lib/server/productCategorySettings'
+import { getWishedProductIds } from '$lib/server/getWishedProductIds'
 import type { PageServerLoad } from './$types'
 
 export const load: PageServerLoad = async ({ locals, url }) => {
@@ -46,6 +47,27 @@ export const load: PageServerLoad = async ({ locals, url }) => {
   // 상품상세(ProductHero)와 공유하는 헬퍼로 이관됨 — src/lib/server/productCategorySettings.ts
   const CMS_CATEGORIES = await getCategoryGroups()
 
+  // get_products_by_ids(WHERE id = ANY(...))는 입력 배열 순서를 보장하지 않으므로,
+  // 관리자가 드래그로 지정한 고정 순서(order)를 여기서 직접 재정렬한다.
+  // mode='random'이면 매 요청마다 셔플 — 이전에는 이 값이 어디서도 읽히지 않아 무효였음.
+  function applyProductOrder(
+    cards: ProductCard[],
+    setting: { products: { id: string; order: number }[]; mode: 'random' | 'fixed' },
+  ): ProductCard[] {
+    if (setting.mode === 'random') {
+      const shuffled = [...cards]
+      for (let i = shuffled.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1))
+        ;[shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]]
+      }
+      return shuffled
+    }
+    const orderMap = new Map(setting.products.map((p) => [p.id, p.order]))
+    return [...cards].sort(
+      (a, b) => (orderMap.get(a.id) ?? Number.MAX_SAFE_INTEGER) - (orderMap.get(b.id) ?? Number.MAX_SAFE_INTEGER)
+    )
+  }
+
   const heroIds = heroSettings.products.map((p) => p.id)
   const mdIds   = mdSettings.products.map((p) => p.id)
 
@@ -76,7 +98,7 @@ export const load: PageServerLoad = async ({ locals, url }) => {
       : Promise.resolve({ data: [] as unknown[], error: null }),
   ])
 
-  const heroProducts: ProductCard[] = (heroRes.data ?? []) as ProductCard[]
+  const heroProducts: ProductCard[] = applyProductOrder((heroRes.data ?? []) as ProductCard[], heroSettings)
   const gridProducts: ProductCard[] = ((gridRes.data ?? []) as Record<string, unknown>[]).map((r) => ({
     id:               String(r['product_id'] ?? r['id'] ?? ''),
     name:             String(r['name'] ?? ''),
@@ -93,7 +115,7 @@ export const load: PageServerLoad = async ({ locals, url }) => {
     price_12h:        null,
     price_24h:        null,
   }))
-  const mdProducts: ProductCard[] = (mdRes.data ?? []) as ProductCard[]
+  const mdProducts: ProductCard[] = applyProductOrder((mdRes.data ?? []) as ProductCard[], mdSettings)
 
   // 12H·24H 실가격 배치 조회 — 전체 상품 ID 수집 후 price_rules 단일 쿼리
   const allIds = [
@@ -101,6 +123,8 @@ export const load: PageServerLoad = async ({ locals, url }) => {
     ...gridProducts.map((p) => p.id),
     ...mdProducts.map((p) => p.id),
   ].filter(Boolean)
+
+  const wishedIds = await getWishedProductIds(locals.supabase, session?.user.id, allIds)
 
   const price12hMap: Record<string, number> = {}
   const price24hMap: Record<string, number> = {}
@@ -127,6 +151,8 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 
   return {
     isCms,
+    isLoggedIn: !!session?.user.id,
+    wishedIds,
     urlCategory,
     settings: {
       hero:       heroSettings,

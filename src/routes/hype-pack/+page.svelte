@@ -289,7 +289,7 @@
   />
 {:else if data.isCms && activeModal === 'themeGroups'}
   <HypePackThemeGroupModal
-    groups={data.themeGroups}
+    groups={data.themeGroupsAdmin}
     packageCategoryKey={data.packageCategoryKey}
     onclose={() => { activeModal = null }}
   />
