@@ -74,6 +74,57 @@
     return VALID_TABS.includes(tab as CustomerTabKey) ? (tab as CustomerTabKey) : 'info'
   }
 
+  // ─── 관리자용 회원 QR 조회/인쇄 ───────────────────────────────────────────
+  // 페이로드는 상품 QR(원문 그대로)과 겹치지 않도록 `/qr/member/{member_code}` 경로형 고정.
+  // UI는 RentalDetailPanel.svelte의 예약 QR(헤더 인라인, 44px, 토글 없음) 패턴과 통일 —
+  // 애초에 ProductDetailPanel.svelte QR을 참고했었으나(2026-08-18) RentalDetailPanel이
+  // 같은 날 별도로 더 최신 헤더인라인형으로 재구성한 것을 뒤늦게 확인해(2026-08-26) 통일함.
+  let qrCanvasEl = $state<HTMLCanvasElement | null>(null)
+
+  $effect(() => {
+    const canvas = qrCanvasEl
+    const code = row.member_code
+    if (!canvas || !code) return
+    renderMemberQR(canvas, `/qr/member/${code}`)
+  })
+
+  async function renderMemberQR(canvas: HTMLCanvasElement, payload: string) {
+    try {
+      const QRCode = (await import('qrcode')).default
+      await QRCode.toCanvas(canvas, payload, {
+        width: 44,
+        margin: 1,
+        color: { dark: '#100B32', light: '#FFFFFF' },
+      })
+    } catch { /* 미설치 시 무시 */ }
+  }
+
+  function downloadMemberQR() {
+    if (!qrCanvasEl || !row.member_code) return
+    const code = row.member_code
+    const qrSize = qrCanvasEl.width
+    const fontSize = 11
+    const padding = 6
+    const textH = fontSize + padding * 2
+    const out = document.createElement('canvas')
+    out.width = qrSize
+    out.height = qrSize + textH
+    const ctx = out.getContext('2d')
+    if (!ctx) return
+    ctx.fillStyle = '#FFFFFF'
+    ctx.fillRect(0, 0, out.width, out.height)
+    ctx.drawImage(qrCanvasEl, 0, 0)
+    ctx.fillStyle = '#100B32'
+    ctx.font = `700 ${fontSize}px "Noto Sans KR", sans-serif`
+    ctx.textAlign = 'center'
+    ctx.textBaseline = 'middle'
+    ctx.fillText(code, qrSize / 2, qrSize + textH / 2)
+    const a = document.createElement('a')
+    a.href = out.toDataURL('image/png')
+    a.download = `member-qr-${code}.png`
+    a.click()
+  }
+
   interface CsInquiryReply {
     id: string
     response: string
@@ -719,6 +770,12 @@
         <code class="panel-code">{row.member_code}</code>
       {/if}
     </div>
+    {#if row.member_code}
+      <div class="member-qr-wrap member-qr-wrap--header">
+        <canvas bind:this={qrCanvasEl} width="44" height="44" aria-label="회원 QR 코드"></canvas>
+        <button class="qr-dl-btn" onclick={downloadMemberQR} title="QR PNG 다운로드" type="button">↓ QR 저장</button>
+      </div>
+    {/if}
     <button class="close-btn" onclick={onclose} aria-label="닫기">✕</button>
   </div>
 
@@ -1675,6 +1732,22 @@
   .panel-user { display: flex; flex-direction: column; gap: 4px; }
   .panel-name { font: var(--text-pc-body-14); font-weight: 700; color: var(--cs-text); }
   .panel-code { font: var(--text-pc-script-12); font-family: monospace; background: var(--cs-surface-gray); padding: 2px 6px; border-radius: 4px; color: var(--cs-text-mid); }
+  .member-qr-wrap {
+    flex-shrink: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 4px;
+  }
+  .member-qr-wrap canvas { display: block; border-radius: var(--cms-radius-sm); border: 1px solid var(--cs-surface-gray); }
+  .member-qr-wrap .qr-dl-btn {
+    background: transparent; border: none;
+    color: var(--cs-text-light); font: var(--text-pc-script-12);
+    cursor: pointer; padding: 2px 6px; border-radius: var(--radius-sm); min-height: 24px;
+    transition: color 0.12s, background 0.12s;
+  }
+  .member-qr-wrap .qr-dl-btn:hover { background: var(--cs-lilac); color: var(--cs-purple); }
+  .member-qr-wrap--header { margin-left: auto; margin-right: 12px; }
   .close-btn {
     width: 28px; height: 28px;
     display: flex; align-items: center; justify-content: center;

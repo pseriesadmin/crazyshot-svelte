@@ -381,6 +381,54 @@
     return row.reservation_code ?? `CZ-${String(row.reservation_id).padStart(5, '0')}`
   }
 
+  // 예약 QR — ProductDetailPanel.svelte renderQR/downloadQR과 동일 패턴(qrcode 패키지,
+  // 콘텐츠는 예약코드 원문 텍스트 그대로 — products.md §2-4와 동일 철학, 링크 아님)
+  let reservationQrCanvasEl = $state<HTMLCanvasElement | null>(null)
+
+  $effect(() => {
+    const canvas = reservationQrCanvasEl
+    const code = reservationCode()
+    if (!canvas || !code) return
+    renderReservationQR(canvas, code)
+  })
+
+  async function renderReservationQR(canvas: HTMLCanvasElement, payload: string) {
+    try {
+      const QRCode = (await import('qrcode')).default
+      await QRCode.toCanvas(canvas, payload, {
+        width: 44,
+        margin: 1,
+        color: { dark: '#100B32', light: '#FFFFFF' },
+      })
+    } catch { /* 미설치 시 무시 */ }
+  }
+
+  function downloadReservationQR() {
+    if (!reservationQrCanvasEl) return
+    const code = reservationCode()
+    const qrSize = reservationQrCanvasEl.width
+    const fontSize = 11
+    const padding = 6
+    const textH = fontSize + padding * 2
+    const out = document.createElement('canvas')
+    out.width = qrSize
+    out.height = qrSize + textH
+    const ctx = out.getContext('2d')
+    if (!ctx) return
+    ctx.fillStyle = '#FFFFFF'
+    ctx.fillRect(0, 0, out.width, out.height)
+    ctx.drawImage(reservationQrCanvasEl, 0, 0)
+    ctx.fillStyle = '#100B32'
+    ctx.font = `700 ${fontSize}px "Noto Sans KR", sans-serif`
+    ctx.textAlign = 'center'
+    ctx.textBaseline = 'middle'
+    ctx.fillText(code, qrSize / 2, qrSize + textH / 2)
+    const a = document.createElement('a')
+    a.href = out.toDataURL('image/png')
+    a.download = `qr-${code}.png`
+    a.click()
+  }
+
   const NOTIFY_TYPE_MAP: Record<string, string> = {
     confirmed:        'shipment_notify',
     in_use:           'return_remind',
@@ -692,6 +740,10 @@
       {#if row.status === 'hold' && row.payment_confirmed_at}
         <span class="payment-contract-badge">결제완료 · 계약대기</span>
       {/if}
+    </div>
+    <div class="reservation-qr-wrap reservation-qr-wrap--header">
+      <canvas bind:this={reservationQrCanvasEl} width="44" height="44" aria-label="예약 QR 코드"></canvas>
+      <button class="qr-dl-btn" onclick={downloadReservationQR} title="QR PNG 다운로드" type="button">↓ QR 저장</button>
     </div>
     <button class="close-btn" onclick={onclose} aria-label="패널 닫기">✕</button>
   </div>
@@ -1532,6 +1584,25 @@
   }
   .info-row:last-child { border-bottom: none; }
   .highlight-row { background: rgba(59,47,138,0.04); }
+
+  /* 예약 QR 코드(2026-08-26, ProductDetailPanel .qr-wrap/.qr-dl-btn 패턴 재사용) — 패널
+     헤더로 이동 배치 + 원래 88px 대비 50% 축소(44px) */
+  .reservation-qr-wrap {
+    flex-shrink: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 4px;
+  }
+  .reservation-qr-wrap canvas { display: block; border-radius: var(--cms-radius-sm); border: 1px solid var(--cs-surface-gray); }
+  .reservation-qr-wrap .qr-dl-btn {
+    background: transparent; border: none;
+    color: var(--cs-text-light); font: var(--text-pc-script-12);
+    cursor: pointer; padding: 2px 6px; border-radius: var(--radius-sm); min-height: 24px;
+    transition: color 0.12s, background 0.12s;
+  }
+  .reservation-qr-wrap .qr-dl-btn:hover { background: var(--cs-lilac); color: var(--cs-purple); }
+  .reservation-qr-wrap--header { margin-left: auto; margin-right: 12px; }
 
   .info-label {
     flex: 0 0 96px;

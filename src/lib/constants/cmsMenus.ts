@@ -55,7 +55,7 @@ export const CMS_MENUS: CmsMainMenuDef[] = [
     subMenus: [
       { menu_key: 'rental.reservation', label: '예약대여현황', href: '/cms/reservation' },
       { menu_key: 'rental.history', label: '이력관리', href: '/cms/rental/history' },
-      { menu_key: 'rental.contracts', label: '계약서양식', href: '/cms/reservation/contracts' },
+      { menu_key: 'rental.contracts', label: '계약서양식', href: '/cms/reservation/contracts', requiresSettingsAccess: true },
     ],
   },
   {
@@ -73,8 +73,8 @@ export const CMS_MENUS: CmsMainMenuDef[] = [
     label: '구독',
     requiresSettingsAccess: true,
     subMenus: [
-      { menu_key: 'subscription.list', label: '구독목록', href: '/cms/subscriptions' },
-      { menu_key: 'subscription.new', label: '구독등록', href: '/cms/subscriptions/new' },
+      { menu_key: 'subscription.list', label: '구독목록', href: '/cms/subscriptions', requiresSettingsAccess: true },
+      { menu_key: 'subscription.new', label: '구독등록', href: '/cms/subscriptions/new', requiresSettingsAccess: true },
     ],
   },
   {
@@ -82,11 +82,11 @@ export const CMS_MENUS: CmsMainMenuDef[] = [
     menu_key: 'customers',
     label: '고객',
     subMenus: [
-      { menu_key: 'customers.list', label: '고객목록', href: '/cms/customers' },
-      { menu_key: 'customers.membership', label: '멤버십', href: '/cms/customers/membership' },
-      { menu_key: 'customers.score', label: '스코어', href: '/cms/customers/score' },
-      { menu_key: 'customers.inquiry', label: '빠른문의', href: '/cms/customers/inquiry' },
-      { menu_key: 'customers.settings', label: '설정', href: '/cms/customers/settings' },
+      { menu_key: 'customers.list', label: '고객목록', href: '/cms/customers', requiresSettingsAccess: true },
+      { menu_key: 'customers.membership', label: '멤버십', href: '/cms/customers/membership', requiresSettingsAccess: true },
+      { menu_key: 'customers.score', label: '스코어', href: '/cms/customers/score', requiresSettingsAccess: true },
+      { menu_key: 'customers.inquiry', label: '빠른문의', href: '/cms/customers/inquiry', requiresSettingsAccess: true },
+      { menu_key: 'customers.settings', label: '설정', href: '/cms/customers/settings', requiresSettingsAccess: true },
     ],
   },
   {
@@ -94,13 +94,13 @@ export const CMS_MENUS: CmsMainMenuDef[] = [
     menu_key: 'promotion',
     label: '프로모션',
     subMenus: [
-      { menu_key: 'promotion.ad', label: '홍보', href: '/cms/promotion/ad' },
-      { menu_key: 'promotion.coupon', label: '쿠폰', href: '/cms/promotion/coupon' },
-      { menu_key: 'promotion.point', label: '포인트', href: '/cms/promotion/point' },
-      { menu_key: 'promotion.segment', label: '세그먼트', href: '/cms/promotion/segment' },
-      { menu_key: 'promotion.rules', label: '룰엔진', href: '/cms/promotion/rules' },
-      { menu_key: 'promotion.analytics', label: '분석', href: '/cms/promotion/analytics' },
-      { menu_key: 'promotion.content', label: '콘텐츠', href: '/cms/promotion/content' },
+      { menu_key: 'promotion.ad', label: '홍보', href: '/cms/promotion/ad', requiresSettingsAccess: true },
+      { menu_key: 'promotion.coupon', label: '쿠폰', href: '/cms/promotion/coupon', requiresSettingsAccess: true },
+      { menu_key: 'promotion.point', label: '포인트', href: '/cms/promotion/point', requiresSettingsAccess: true },
+      { menu_key: 'promotion.segment', label: '세그먼트', href: '/cms/promotion/segment', requiresSettingsAccess: true },
+      { menu_key: 'promotion.rules', label: '룰엔진', href: '/cms/promotion/rules', requiresSettingsAccess: true },
+      { menu_key: 'promotion.analytics', label: '분석', href: '/cms/promotion/analytics', requiresSettingsAccess: true },
+      { menu_key: 'promotion.content', label: '콘텐츠', href: '/cms/promotion/content', requiresSettingsAccess: true },
     ],
   },
   {
@@ -108,7 +108,7 @@ export const CMS_MENUS: CmsMainMenuDef[] = [
     menu_key: 'settings',
     label: '설정',
     subMenus: [
-      { menu_key: 'settings.code', label: '코드설정', href: '/cms/set/code' },
+      { menu_key: 'settings.code', label: '코드설정', href: '/cms/codes', requiresSettingsAccess: true },
       { menu_key: 'settings.rental', label: '대여관리', href: '/cms/set/rental' },
       { menu_key: 'settings.push', label: '푸시알림', href: '/cms/set/push', requiresSettingsAccess: true },
       { menu_key: 'settings.admin', label: '관리정보', href: '/cms/set/admin', requiresSettingsAccess: true },

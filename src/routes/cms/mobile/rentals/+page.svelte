@@ -4,7 +4,7 @@
   import RentalDetailPanel from '$lib/components/cms/RentalDetailPanel.svelte'
   import QrScannerOverlay from '$lib/components/common/QrScannerOverlay.svelte'
   import ChevronIcon from '$lib/components/common/ChevronIcon.svelte'
-  import { extractProductId, isProductMatch } from '$lib/utils/qrProductId'
+  import { extractProductId, extractMemberCode, isProductMatch } from '$lib/utils/qrProductId'
   import { nextStatus } from '$lib/utils/rentalTransition'
   import { scrollPeek } from '$lib/utils/scrollPeek'
   import type { PageData } from './$types'
@@ -108,6 +108,11 @@
   let fabPeek = $state(false)
 
   function handleGeneralQrDetected(raw: string): boolean {
+    const memberCode = extractMemberCode(raw)
+    if (memberCode) {
+      goto(`/cms/mobile/qr/member/${encodeURIComponent(memberCode)}`)
+      return true
+    }
     const id = extractProductId(raw)
     if (!id) return false
     goto(`/cms/mobile/qr/${id}`)
