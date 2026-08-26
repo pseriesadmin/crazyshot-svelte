@@ -217,6 +217,7 @@
       id="cat-picker"
       bind:selectedId={pickerSelectedId}
       options={pickerOptions}
+      clearOnSelect
       placeholder="분류선택-카테고리 검색 또는 선택..."
       listLabel="카테고리 제안"
       onselect={(opt) => addCategory(opt.id)}
@@ -306,6 +307,7 @@
         id="kw-picker"
         bind:selectedId={kwPickerSelectedId}
         options={availableKwOptions}
+        clearOnSelect
         placeholder="브랜드·키워드 검색 또는 선택..."
         listLabel="키워드 제안"
         onselect={(opt) => addKeyword(opt.id)}

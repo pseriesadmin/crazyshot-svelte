@@ -37,6 +37,10 @@
     variant?: SuggestPickerVariant
     /** true: options가 이미 외부에서 필터링된 경우 내부 필터 건너뜀 (비동기 검색용) */
     noFilter?: boolean
+    /** true: 선택 즉시 onselect로 통지 후 입력창을 비움 — "검색→목록에 추가→다시 검색"을
+     *  반복하는 UX 전용. 기본값 false(기존 동작 유지) — 선택한 라벨을 입력창에 남겨두는
+     *  단일값 선택기(카테고리/등급 등 <select> 대체용)에는 절대 true로 바꾸지 말 것. */
+    clearOnSelect?: boolean
     oninput?: (value: string) => void
     onselect?: (option: SuggestPickerOption, previousId: string | null) => void
     field: Snippet<[SuggestPickerFieldControl]>
@@ -57,6 +61,7 @@
     listLabel,
     variant = 'generic',
     noFilter = false,
+    clearOnSelect = false,
     oninput,
     onselect,
     field,
@@ -137,11 +142,29 @@
 
   function selectOption(option: SuggestPickerOption): void {
     const previousId = selectedId
-    selectedId = option.id
-    query = option.label
-    closeSuggest()
+    if (clearOnSelect) {
+      // 반복 검색+추가 UX: 선택한 라벨을 입력창에 남기지 않고 즉시 비움 — 다음 검색을
+      // 바로 이어서 입력할 수 있게 함(선택할 때마다 직접 지워야 하는 불편 제거)
+      selectedId = null
+      query = ''
+    } else {
+      selectedId = option.id
+      query = option.label
+    }
+    // closeSuggest()가 아니라 드롭다운만 닫는다 — 옵션 클릭 시 onmousedown에서
+    // preventDefault로 실제 DOM 포커스는 입력창에 그대로 남아있는데, closeSuggest()는
+    // isFocused까지 강제로 false로 만들어버려 "실제 포커스 상태"와 어긋난다. 그 결과
+    // 이후 비동기 검색 결과(options prop 갱신)가 도착해도 $effect의 isFocused 분기가
+    // else로 빠져 드롭다운이 다시 열리지 않는 버그(연속 검색·추가 불가) 발생.
+    suggestOpen = false
+    suggestIdx = -1
     onselect?.(option, previousId)
-    oninput?.(query)
+    // oninput?.(query)는 호출하지 않는다 — 선택 직후 query가 "선택한 항목의 label"로
+    // 채워진 채 부모의 검색 콜백(외부 RPC 디바운스 검색)을 다시 트리거하면, 방금 고른
+    // 상품명 그대로 재검색이 발생해 유사 상품이 뜬금없이 드롭다운에 다시 나타난다
+    // ("검색 한 번에 다른 상품이 줄줄이 딸려오는" 것처럼 보이는 원인). oninput은 실제
+    // 사용자가 타이핑할 때(handleNativeInput)만 호출하면 충분 — 선택 결과 통지는
+    // onselect만으로 이미 충분하다.
   }
 
   function handleKeydown(e: KeyboardEvent): void {

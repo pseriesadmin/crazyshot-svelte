@@ -559,21 +559,21 @@
     min-width: 0;
   }
 
+  /* cms-field 표준(§0-A #8) 그대로 — 배너 제목/서브카피/링크 필드가 이 표준의 명시 대상 */
   .cms-field {
     width: 100%;
-    height: 32px;
-    padding: 0 10px;
-    background: var(--cs-white);
-    border: 1px solid var(--cs-lilac);
+    min-height: 44px;
+    padding: 12px 16px;
+    background: var(--cs-surface-gray);
+    border: none;
     border-radius: var(--cms-radius-sm);
-    font: var(--text-pc-script-12);
+    font: var(--text-pc-body-14);
     color: var(--cs-text);
     box-sizing: border-box;
   }
   .cms-field:focus {
     outline: 2px solid var(--cs-purple);
     outline-offset: -2px;
-    border-color: transparent;
   }
   .cms-field::placeholder { color: var(--cs-text-light); }
 
