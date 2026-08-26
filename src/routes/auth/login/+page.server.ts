@@ -1,3 +1,4 @@
+import { redirect } from '@sveltejs/kit'
 import type { PageServerLoad } from './$types'
 
 // ──────────────────────────────────────────────────────────────
@@ -32,7 +33,34 @@ const DEFAULT_BANNER: PromoBanner = {
   link_url: null,
 }
 
-export const load: PageServerLoad = async ({ locals }) => {
+export const load: PageServerLoad = async ({ locals, url }) => {
+  const { session } = await locals.safeGetSession()
+
+  if (session) {
+    // CMS 어드민이면 로그인 페이지 접근 허용 (배너 관리 버튼 노출용)
+    const { data: profile } = await locals.supabase
+      .from('user_profiles')
+      .select('cms_role')
+      .eq('id', session.user.id)
+      .single()
+    const isCmsAdmin = !!(profile as { cms_role?: string | null } | null)?.cms_role
+
+    if (isCmsAdmin) {
+      // CMS 어드민: 페이지 유지, isCmsAdmin 전달
+      return fetchBanner(locals)
+        .then((rest) => ({ ...rest, isCmsAdmin: true }))
+    }
+
+    // 일반 로그인 사용자: 목적지로 이동
+    const redirectTo = url.searchParams.get('redirect')
+    throw redirect(303, redirectTo ?? '/')
+  }
+
+  return fetchBanner(locals).then((rest) => ({ ...rest, isCmsAdmin: false }))
+}
+
+async function fetchBanner(locals: App.Locals) {
+
   // CMS → 프로모션 → 광고 (promotion_banners) 에서 로그인 모바일 배너 조회
   // promotion_banners 테이블 미생성 시 catch → DEFAULT_BANNER fallback
   try {

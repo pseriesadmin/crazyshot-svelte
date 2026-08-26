@@ -2,9 +2,10 @@
   interface Props {
     userName?: string
     benefitCount?: number
+    onQrClick?: () => void
   }
 
-  let { userName = '스티브 꽁지', benefitCount = 3 }: Props = $props()
+  let { userName = '스티브 꽁지', benefitCount = 3, onQrClick }: Props = $props()
 
   const writingPath = 'M22.9985 1L1 13.6663L6.47363 25.9984L25.0278 15.7259V1H22.9985ZM5.02791 23.9987L2.00012 13.6663L5.02791 23.9987Z'
   const qrPaths = {
@@ -30,7 +31,13 @@
           </p>
         </div>
       </div>
-      <div class="bg-[#553fe0] flex flex-col gap-[10px] items-center justify-center relative rounded-[25px] shrink-0 size-[70px]">
+      <button
+        type="button"
+        onclick={onQrClick}
+        aria-label="회원 확인 QR 보기"
+        class="bg-[#553fe0] flex flex-col gap-[10px] items-center justify-center relative rounded-[25px] shrink-0 size-[70px]"
+        style="border:none; padding:0; cursor:pointer;"
+      >
         <!-- writing icon -->
         <!-- QR icon -->
         <div class="flex flex-col gap-[5px] items-center justify-center shrink-0">
@@ -46,7 +53,7 @@
           </div>
           <p class="font-['Noto_Sans_KR',sans-serif] font-medium leading-[1.6] relative shrink-0 text-[12px] text-[#ffffff] tracking-[-0.5px] whitespace-nowrap">QR체크</p>
         </div>
-      </div>
+      </button>
     </div>
   </div>
 </div>
