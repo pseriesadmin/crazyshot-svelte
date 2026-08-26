@@ -2,7 +2,7 @@
   import { goto } from '$app/navigation'
   import { browser } from '$app/environment'
   import { matchesSearch } from '$lib/utils/chosungSearch'
-  import { extractProductId } from '$lib/utils/qrProductId'
+  import { extractProductId, extractMemberCode } from '$lib/utils/qrProductId'
   import { scrollPeek } from '$lib/utils/scrollPeek'
   import ChevronIcon from '$lib/components/common/ChevronIcon.svelte'
   import QrScannerOverlay from '$lib/components/common/QrScannerOverlay.svelte'
@@ -86,6 +86,11 @@
   let fabPeek = $state(false)
 
   function handleQrDetected(raw: string): boolean {
+    const memberCode = extractMemberCode(raw)
+    if (memberCode) {
+      goto(`/cms/mobile/qr/member/${encodeURIComponent(memberCode)}`)
+      return true
+    }
     const id = extractProductId(raw)
     if (!id) return false
     goto(`/cms/mobile/qr/${id}`)

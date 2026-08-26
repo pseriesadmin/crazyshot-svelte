@@ -120,6 +120,47 @@ describe('findCmsMenuKeyForPath — pathname → menu_key 역매핑 (Stage 3, +l
 
   it('CMS_MENUS에 등록되지 않은 경로는 null을 반환한다(기존 role 전용 가드만 적용됨을 보장)', () => {
     expect(findCmsMenuKeyForPath('/cms/login')).toBeNull();
-    expect(findCmsMenuKeyForPath('/cms/codes')).toBeNull();
+  });
+
+  it('settings.code의 실제 목적지(/cms/codes)가 menu_key로 매핑된다(QA 정밀검수 결함② 수정 — ' +
+    '스텁 경로가 아닌 실제 목적지에 오버레이가 적용돼야 URL 직접 접근 우회를 막을 수 있다)', () => {
+    expect(findCmsMenuKeyForPath('/cms/codes')).toBe('settings.code');
+  });
+
+  it('구 스텁 경로(/cms/set/code)는 더 이상 CMS_MENUS에 매핑되지 않는다(href가 실제 목적지로 ' +
+    '이전됨 — 스텁 자체는 /cms/codes로 302 리다이렉트만 수행하는 별도 파일, 수정 대상 아님)', () => {
+    expect(findCmsMenuKeyForPath('/cms/set/code')).toBeNull();
+  });
+});
+
+describe('QA 정밀검수(2026-08-26) 결함③ 수정 — role 기본값 정합성 16개 서브메뉴', () => {
+  // 실제 목적지 페이지가 전부 hasSettingsAccess()(manager+) 게이트를 갖고 있음에도
+  // requiresSettingsAccess 플래그가 빠져 roleAllowsMenuByDefault('partner', ...)가 잘못
+  // true를 반환하던 항목들. partner는 false, manager는 true여야 한다(대조군).
+  const menuKeys = [
+    'customers.list',
+    'customers.membership',
+    'customers.score',
+    'customers.inquiry',
+    'customers.settings',
+    'promotion.ad',
+    'promotion.coupon',
+    'promotion.point',
+    'promotion.segment',
+    'promotion.rules',
+    'promotion.analytics',
+    'promotion.content',
+    'rental.contracts',
+    'settings.code',
+    'subscription.list',
+    'subscription.new',
+  ];
+
+  it.each(menuKeys)('partner / %s → roleAllowsMenuByDefault는 false여야 한다', (menuKey) => {
+    expect(roleAllowsMenuByDefault('partner', menuKey)).toBe(false);
+  });
+
+  it.each(menuKeys)('manager / %s → roleAllowsMenuByDefault는 true여야 한다(정상 허용 대조군)', (menuKey) => {
+    expect(roleAllowsMenuByDefault('manager', menuKey)).toBe(true);
   });
 });

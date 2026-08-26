@@ -167,6 +167,16 @@ describe('PUT /api/cms/accounts/[id]/menu-permissions', () => {
     });
   });
 
+  it('Q6(QA 정밀검수 결함③ 재발방지): partner 대상으로 customers.list에 allowed=true 시도 시 ' +
+    '400으로 거부한다(cmsMenus.ts requiresSettingsAccess 플래그 누락 회귀 재현용 표본)', async () => {
+    mockFetchCmsProfile.mockResolvedValue({ cms_role: 'partner' });
+    const result = (await PUT(
+      makeEventPUT('manager', 'target-partner-uid', { menu_key: 'customers.list', allowed: true })
+    )) as unknown as ApiResult;
+    expect(result.status).toBe(400);
+    expect(mockRpc).not.toHaveBeenCalled();
+  });
+
   it('role 허용범위 내 allowed=true는 정상 저장된다(role 상한선을 넘지 않는 경우)', async () => {
     mockFetchCmsProfile.mockResolvedValue({ cms_role: 'partner' });
     const result = (await PUT(
