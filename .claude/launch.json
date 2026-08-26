@@ -9,5 +9,5 @@
       "autoPort": true
     }
   ],
-  "autoVerify": false
+  "autoVerify": true
 }
