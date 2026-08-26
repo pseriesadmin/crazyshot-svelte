@@ -5,6 +5,7 @@
   import HomeThemeGroupModal from '$lib/components/home/admin/HomeThemeGroupModal.svelte'
   import ProductCategoryModal from '$lib/components/products/admin/ProductCategoryModal.svelte'
   import HomeCategoryProductsModal from '$lib/components/home/admin/HomeCategoryProductsModal.svelte'
+  import ProductMdPickModal from '$lib/components/products/admin/ProductMdPickModal.svelte'
   import type { PageData } from './$types'
 
   interface Props { data: PageData }
@@ -61,6 +62,7 @@
   let showCatProductsModal    = $state(false)
   let catProductsTabId        = $state('')
   let catProductsTabName      = $state('')
+  let showMdPickModal         = $state(false)
   // ── 로컬 컬러 (app.css 토큰에 없는 값) ──────────────────────────
   const navy     = '#100b32'
   const navyDeep = '#201857'
@@ -151,7 +153,6 @@
   )
   let openFaqId = $state<string | null>(null)
   let pkgIdx = $state(0)
-  let mpickIdx = $state(0)
   let mActiveTab = $state('Home')
   let poppingTab = $state<string | null>(null)
   let moreMenuOpen = $state(false)
@@ -187,16 +188,16 @@
     themeTabsEl?.scrollBy({ left: dir === 'right' ? 210 : -210, behavior: 'smooth' })
   }
 
+  // 취향직격 테마 원형탭(Mobile) — PC와 동일 구조(activeThemeId 공유, 3개 초과 시 화살표)
+  let mThemeTabsEl: { scrollBy: (opts: { left: number; behavior: 'smooth' | 'instant' | 'auto' }) => void } | undefined
+  function scrollMThemeTabs(dir: 'left' | 'right') {
+    mThemeTabsEl?.scrollBy({ left: dir === 'right' ? 165 : -165, behavior: 'smooth' })
+  }
+
   let pkgSliderEl: { scrollLeft: number } | undefined
   function onPkgScroll() {
     if (!pkgSliderEl) return
     pkgIdx = Math.round(pkgSliderEl.scrollLeft / 316)
-  }
-
-  let mpickSliderEl: { scrollLeft: number } | undefined
-  function onMpickScroll() {
-    if (!mpickSliderEl) return
-    mpickIdx = Math.round(mpickSliderEl.scrollLeft / 280)
   }
 
   const MOBILE_TABS = [
@@ -387,16 +388,6 @@
 
   <!-- ④ 카테고리 탭 + 슬라이더 -->
   <div class="d-section d-cat-section">
-    <!-- Package 타이틀 바 -->
-    <div class="pkg-bar">
-      <span class="pkg-bar-label">Package</span>
-      <div class="pkg-bar-icon">
-        <svg width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden="true">
-          <path d="M5 2l5 5-5 5" stroke="{purpleLight}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
-        </svg>
-      </div>
-    </div>
-
     <!-- 카테고리 아이콘 탭 -->
     <div class="cat-tabs">
       {#each CATEGORY_TABS as tab}
@@ -430,6 +421,16 @@
     <!-- 미칠 PICK 헤딩 -->
     <div class="michil-heading">
       <h2 class="michil-title"><span style="color:{redDeep}">미·칠</span> PICK!</h2>
+    </div>
+
+    <!-- Package 타이틀 바 -->
+    <div class="pkg-bar">
+      <span class="pkg-bar-label">Package</span>
+      <div class="pkg-bar-icon">
+        <svg width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden="true">
+          <path d="M5 2l5 5-5 5" stroke="{purpleLight}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+      </div>
     </div>
 
     {#if data.isCms}
@@ -633,19 +634,29 @@
   <!-- ② 취향직격 테마그룹 (Mobile) -->
   <div class="m-section m-theme-section">
     <div class="section-head">
-      <svg width="34" height="16" viewBox="0 0 34 16" fill="none" aria-hidden="true">
-        <path d="M2 8 Q8.5 2 17 8 Q25.5 14 32 8" stroke="#ff3535" stroke-width="3.5" stroke-linecap="round" fill="none"/>
+      <!-- PC(.theme-pick-title-wrap)와 동일한 스파클 아이콘을 모바일 비율로 축소 반영
+           (2026-08-26, Stephen 지적 — 기존엔 다른 섹션과 공용인 일반 물결 아이콘을 오용) -->
+      <svg width="34" height="19" viewBox="0 0 38 21" fill="none" aria-hidden="true">
+        <path d="M17.8899 0.218353C18.6016 -0.0728023 19.3988 -0.072768 20.1106 0.218353L20.262 0.28476L20.387 0.349213C20.995 0.681504 21.3406 1.19289 21.5178 1.47714C21.7224 1.80539 21.9327 2.22721 22.1321 2.62265L24.2747 6.87363L28.9592 5.30624C29.4012 5.15823 29.8653 5.00075 30.2551 4.90878C30.6075 4.8257 31.3078 4.68499 32.052 4.96542C32.9 5.28515 33.5462 5.97536 33.8196 6.82675C34.058 7.57012 33.8969 8.25404 33.801 8.60507C33.6952 8.99225 33.5215 9.45227 33.3567 9.89511L31.8293 13.9967L36.8264 16.2633C37.8322 16.7196 38.2776 17.9049 37.8215 18.9107C37.3651 19.9163 36.1798 20.3621 35.1741 19.9059L29.7776 17.4586C29.5783 17.3682 29.3209 17.2523 29.1028 17.1314C28.8626 16.9983 28.5301 16.7857 28.2366 16.4303C27.8561 15.9694 27.6248 15.4047 27.5706 14.8131C27.5289 14.3582 27.6129 13.9752 27.6877 13.7125C27.756 13.4731 27.8555 13.2084 27.9329 13.0006L29.2639 9.42148L25.134 10.8053C24.9449 10.8686 24.6962 10.9535 24.47 11.0103C24.2191 11.0734 23.8562 11.1416 23.427 11.0953C22.8646 11.0345 22.3332 10.8121 21.8958 10.4586C21.5626 10.1893 21.3547 9.88693 21.2219 9.6666C21.1019 9.46734 20.9848 9.23285 20.8938 9.05234L18.9993 5.2955L17.1067 9.05136V9.05234C17.0157 9.23282 16.8986 9.46742 16.7786 9.6666C16.6458 9.8869 16.4377 10.1894 16.1047 10.4586C15.6673 10.8119 15.1358 11.0346 14.5735 11.0953C14.1442 11.1415 13.7813 11.0734 13.5305 11.0103C13.3042 10.9534 13.0556 10.8686 12.8665 10.8053L8.7356 9.42148L10.0676 13.0006C10.145 13.2085 10.2445 13.4731 10.3127 13.7125C10.3876 13.9752 10.4716 14.3581 10.4299 14.8131C10.3757 15.4046 10.1444 15.9694 9.76392 16.4303C9.47044 16.7855 9.13786 16.9983 8.89771 17.1314C8.67964 17.2522 8.42204 17.3683 8.2229 17.4586L2.82642 19.9059C1.82066 20.3619 0.635292 19.9164 0.178955 18.9107C-0.277049 17.905 0.168563 16.7197 1.17407 16.2633L6.17017 13.9967L4.6438 9.89511C4.479 9.45221 4.30527 8.99228 4.19946 8.60507C4.10357 8.25406 3.94252 7.57005 4.18091 6.82675L4.23657 6.66953C4.53582 5.89099 5.15351 5.26527 5.94849 4.96542L6.08716 4.91757C6.77856 4.70212 7.41493 4.83087 7.74536 4.90878C8.13518 5.00072 8.59918 5.1582 9.04126 5.30624L13.7249 6.87363L15.8684 2.62265C16.0677 2.22732 16.2781 1.80535 16.4827 1.47714C16.6716 1.17402 17.0524 0.611777 17.7385 0.28476L17.8899 0.218353Z" fill="#FF3535"/>
       </svg>
       <span class="section-title" style="color:{redDeep}">취·향·직·격 PICK!</span>
       <!-- 관리자 전용 버튼 게이팅은 PC 반응형 전용 노출 기능 — 모바일에는 노출하지 않음 -->
     </div>
     {#if data.themeGroups && data.themeGroups.length > 0}
-      <div class="m-theme-groups">
-        {#each data.themeGroups as tg}
-          <div class="m-theme-row">
-            <div class="m-theme-header">
-              <!-- 테마 대표이미지: 원형 아바타 스타일(관리모달 등록 형태와 통일) -->
-              <div class="theme-hl-card theme-hl-card--m theme-hl-card--circle">
+      <!-- PC와 동일 구조: 원형 탭 선택 시 하나의 상품슬라이드만 전환(그룹마다 반복 아님) -->
+      <div class="m-theme-circle-tabs-wrap">
+        {#if data.themeGroups.length > 3}
+          <button class="m-theme-tabs-arrow left" onclick={() => scrollMThemeTabs('left')} aria-label="이전 테마">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+              <path d="M15 18l-6-6 6-6" stroke={navy} stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+            </svg>
+          </button>
+        {/if}
+        <div class="m-theme-circle-tabs" class:m-theme-circle-tabs--capped={data.themeGroups.length > 3} bind:this={mThemeTabsEl}>
+          {#each data.themeGroups as tg}
+            {@const isActive = (activeThemeId ?? data.themeGroups[0].id) === tg.id}
+            <button class="theme-circle-tab" onclick={() => (activeThemeId = tg.id)} type="button" aria-pressed={isActive}>
+              <div class="theme-hl-card theme-hl-card--m theme-hl-card--circle" class:is-active={isActive}>
                 {#if tg.image_url}
                   <img src={tg.image_url} alt={tg.title} class="theme-hl-card-img"/>
                 {:else}
@@ -658,36 +669,47 @@
                   <span class="theme-circle-sub">{tg.sub_copy}</span>
                 {/if}
               </div>
-            </div>
-            {#if tg.products && tg.products.length > 0}
-              <!-- 표준 상품슬라이드 디자인(m-prod-card, "미칠 PICK"과 동일 규격) 재사용 -->
-              <div class="m-snap-slider theme-m-prod-slider">
-                {#each tg.products as prod}
-                  <div
-                    class="m-prod-card"
-                    onclick={() => goto('/products/' + (prod.slug || prod.id))}
-                    role="button"
-                    tabindex={0}
-                    onkeydown={(e) => e.key === 'Enter' && goto('/products/' + (prod.slug || prod.id))}
-                  >
-                    <img src={prod.image_urls?.[0] ?? '/favicon.png'} alt={prod.name} class="m-prod-img" loading="lazy"/>
-                    <div class="m-prod-info">
-                      <div class="m-prod-headline">
-                        <span class="m-prod-name">{prod.name}</span>
-                      </div>
-                      <div class="m-prod-price">
-                        {#if prod.price_24h}<span class="price-label">Day</span><span class="price-num">{prod.price_24h.toLocaleString('ko-KR')}</span>{/if}
-                        {#if prod.price_24h && prod.price_12h}<span class="price-sep">/</span>{/if}
-                        {#if prod.price_12h}<span class="price-label">12H</span><span class="price-num">{prod.price_12h.toLocaleString('ko-KR')}</span>{/if}
-                      </div>
-                    </div>
-                  </div>
-                {/each}
-              </div>
-            {/if}
-          </div>
-        {/each}
+              <svg class="theme-tab-polygon" width="21" height="19" viewBox="0 0 21.1583 18.5113" fill="none" aria-hidden="true">
+                <path d="M8.8573 0.982543C9.63142 -0.327512 11.5269 -0.327516 12.301 0.982539L20.8727 15.4885C21.812 17.0781 20.2796 18.9829 18.5257 18.4057L11.2043 15.9966C10.7982 15.8629 10.3601 15.8629 9.95401 15.9966L2.63259 18.4057C0.878729 18.9829 -0.653715 17.0781 0.285591 15.4885L8.8573 0.982543Z" fill={isActive ? '#3b2f8a' : '#c1bbec'}/>
+              </svg>
+            </button>
+          {/each}
+        </div>
+        {#if data.themeGroups.length > 3}
+          <button class="m-theme-tabs-arrow right" onclick={() => scrollMThemeTabs('right')} aria-label="다음 테마">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+              <path d="M9 18l6-6-6-6" stroke={navy} stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+            </svg>
+          </button>
+        {/if}
       </div>
+
+      {#if activeThemeProducts.length > 0}
+        <!-- 표준 상품슬라이드 디자인(m-prod-card, "미칠 PICK"과 동일 규격) 재사용 -->
+        <div class="m-snap-slider theme-m-prod-slider">
+          {#each activeThemeProducts as prod}
+            <div
+              class="m-prod-card"
+              onclick={() => goto('/products/' + (prod.slug || prod.id))}
+              role="button"
+              tabindex={0}
+              onkeydown={(e) => e.key === 'Enter' && goto('/products/' + (prod.slug || prod.id))}
+            >
+              <img src={prod.image_urls?.[0] ?? '/favicon.png'} alt={prod.name} class="m-prod-img" loading="lazy"/>
+              <div class="m-prod-info">
+                <div class="m-prod-headline">
+                  <span class="m-prod-name">{prod.name}</span>
+                </div>
+                <div class="m-prod-price">
+                  {#if prod.price_24h}<span class="price-label">Day</span><span class="price-num">{prod.price_24h.toLocaleString('ko-KR')}</span>{/if}
+                  {#if prod.price_24h && prod.price_12h}<span class="price-sep">/</span>{/if}
+                  {#if prod.price_12h}<span class="price-label">12H</span><span class="price-num">{prod.price_12h.toLocaleString('ko-KR')}</span>{/if}
+                </div>
+              </div>
+            </div>
+          {/each}
+        </div>
+      {/if}
     {:else}
       <!-- 테마그룹 0개 — 레이아웃 자리 유지용 샘플 배너(모든 방문자에게 노출, 신규 상품슬라이드
            등록 시 위 {#if} 분기로 자동 전환되어 샘플은 가려짐) -->
@@ -734,47 +756,43 @@
     {/if}
   </div>
 
-  <!-- ③ 미칠 PICK 슬라이더 (Phase 4: DB 큐레이션 데이터) -->
-  <div class="m-section m-michil-section">
-    <div class="m-michil-head">
-      <h2 class="michil-title"><span style="color:{redDeep}">미·칠</span> PICK!</h2>
-      <!-- 관리자 전용 버튼 게이팅은 PC 반응형 전용 노출 기능 — 모바일에는 노출하지 않음 -->
-    </div>
-    {#if activeCatProds.length > 0}
-      <div bind:this={mpickSliderEl} onscroll={onMpickScroll} class="m-snap-slider">
-        {#each activeCatProds as p, _i}
-          <div
-            class="m-prod-card"
-            onclick={() => goto('/products/' + (p.slug || p.id))}
-            role="button"
-            tabindex={0}
-            onkeydown={(e) => e.key === 'Enter' && goto('/products/' + (p.slug || p.id))}
-          >
-            <img src={p.image_urls?.[0] ?? '/favicon.png'} alt={p.name} class="m-prod-img" loading="lazy"/>
-            <div class="m-prod-dots" aria-hidden="true">
-              {#each activeCatProds as _, j}
-                <div class="dot" class:active={j === mpickIdx} style="background:white"></div>
-              {/each}
+  <!-- ③ MD 추천 (모바일 초기화면 — /products의 "MD 추천"과 동일한 cms_settings 키
+       (product_page_md_picks) 공유, Stephen 확정: 카테고리 슬라이드 메뉴 영역을 대체 -->
+  {#if data.mdProducts && data.mdProducts.length > 0}
+    <div class="m-section md-picks-section" style="position:relative">
+      {#if data.isCms}
+        <button class="md-picks-cms-btn" onclick={() => (showMdPickModal = true)} aria-label="MD 추천 설정">
+          ✦ MD 추천 설정
+        </button>
+      {/if}
+      <div class="md-picks-header">
+        <span class="md-picks-label">MD 추천</span>
+      </div>
+      <div class="md-picks-track">
+        {#each data.mdProducts as prod}
+          <a href={'/products/' + (prod.slug || prod.id)} class="md-pick-card">
+            <div class="md-pick-img-box">
+              <img src={prod.image_urls?.[0] ?? '/favicon.png'} alt={prod.name} class="md-pick-img" loading="lazy" />
             </div>
-            <div class="m-prod-info">
-              <div class="m-prod-headline">
-                {#if p.category}<span class="m-prod-cat">{p.category}</span>{/if}
-                <span class="m-prod-name">{p.name}</span>
-              </div>
-              <div class="m-prod-price">
-                {#if p.price_24h}<span class="price-label">Day</span><span class="price-num">{p.price_24h.toLocaleString('ko-KR')}</span>{/if}
-                {#if p.price_24h && p.price_12h}<span class="price-sep">/</span>{/if}
-                {#if p.price_12h}<span class="price-label">12H</span><span class="price-num">{p.price_12h.toLocaleString('ko-KR')}</span>{/if}
-              </div>
-              {#if p.product_caption}<div class="m-prod-desc">{p.product_caption}</div>{/if}
+            <div class="md-pick-info">
+              <p class="md-pick-name">{prod.name}</p>
+              <p class="md-pick-price">
+                {#if prod.price_24h}Day {prod.price_24h.toLocaleString('ko-KR')}{/if}
+                {#if prod.price_24h && prod.price_12h} / {/if}
+                {#if prod.price_12h}12H {prod.price_12h.toLocaleString('ko-KR')}{/if}
+              </p>
             </div>
-          </div>
+          </a>
         {/each}
       </div>
-    {:else if data.isCms}
-      <p class="cat-empty-notice cat-empty-notice--mobile">⚙ 큐레이션 버튼으로 상품을 추가하세요.</p>
-    {/if}
-  </div>
+    </div>
+  {:else if data.isCms}
+    <div class="m-section md-picks-section md-picks-empty">
+      <button class="md-picks-cms-btn md-picks-cms-btn--empty" onclick={() => (showMdPickModal = true)}>
+        ✦ MD 추천 상품 설정하기
+      </button>
+    </div>
+  {/if}
 
   <!-- ④ 요즘 크레이지로그 -->
   <div class="m-blog-section">
@@ -930,7 +948,7 @@
 
 {#if data.isCms && showThemeGroupModal}
   <HomeThemeGroupModal
-    groups={data.themeGroups ?? []}
+    groups={data.themeGroupsAdmin ?? []}
     onclose={() => (showThemeGroupModal = false)}
   />
 {/if}
@@ -953,6 +971,13 @@
       onclose={() => (showCatProductsModal = false)}
     />
   {/key}
+{/if}
+
+{#if data.isCms && showMdPickModal}
+  <ProductMdPickModal
+    initialSettings={data.mdPicksRaw ?? { products: [], mode: 'fixed' }}
+    onclose={() => (showMdPickModal = false)}
+  />
 {/if}
 
 <style>
@@ -1007,13 +1032,6 @@
     text-align: center;
     padding: 24px 0;
     margin: 0;
-  }
-  .cat-empty-notice--mobile { padding: 16px 0; }
-  .m-michil-head {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    flex-wrap: wrap;
   }
 
   /* ── 히어로 배너 서브카피 ─────────────────────────── */
@@ -1234,7 +1252,9 @@
     line-height: 1.6;
   }
   /* 원형탭 슬라이드 — 3개 초과 시 슬라이드 화살표로 이동(.theme-circle-tabs--capped) */
-  .theme-circle-tabs-wrap { position: relative; }
+  /* 탭 그룹(.theme-circle-tabs)을 래퍼 폭 안에서 중앙 정렬 — 모바일(.m-theme-circle-tabs-wrap)과
+     동일한 좌측 쏠림 문제가 PC에도 동일하게 있어 동일 처리(2026-08-26) */
+  .theme-circle-tabs-wrap { position: relative; display: flex; justify-content: center; }
   .theme-tabs-arrow {
     position: absolute;
     top: 90px; /* 180px 원형 이미지의 세로 중앙 */
@@ -1264,7 +1284,14 @@
   }
   .theme-circle-tabs::-webkit-scrollbar { display: none; }
   /* 테마 3개 초과 시 한 화면에 3개만 노출(180px 원형×3 + gap 30px×2) */
-  .theme-circle-tabs--capped { max-width: 600px; scroll-snap-type: x proximity; }
+  .theme-circle-tabs--capped {
+    max-width: 600px;
+    scroll-snap-type: x proximity;
+    /* 좌우 끝을 투명하게 페이드 — 스크롤 중 카드가 컨테이너 경계에서 뚝 잘려나가는
+       느낌 대신 배경으로 부드럽게 스며드는 것처럼 보이게 함 */
+    mask-image: linear-gradient(to right, transparent 0, black 30px, black calc(100% - 30px), transparent 100%);
+    -webkit-mask-image: linear-gradient(to right, transparent 0, black 30px, black calc(100% - 30px), transparent 100%);
+  }
   .theme-circle-tabs--capped .theme-circle-tab { scroll-snap-align: start; }
   .theme-circle-tab {
     display: flex;
@@ -1297,7 +1324,6 @@
   .theme-group-img-ph { width: 100%; height: 100%; background: #ebe9f5; }
   /* 테마 대표이미지 원형 아바타 변형(관리모달 등록 형태와 통일) — 텍스트는 카드 밖 아래에 별도 표시 */
   .theme-hl-card--circle { border-radius: 50%; }
-  .theme-hl-card--circle.is-active { box-shadow: 0 0 0 3px var(--cs-purple, #3b2f8a); }
   .theme-circle-info {
     display: flex;
     flex-direction: column;
@@ -1348,6 +1374,51 @@
     height: 140px;
     border-radius: 28px;
   }
+  /* 복합 선택자로 명시적 우선순위 확보 — 단일클래스끼리는 소스 순서로 승패가 갈려
+     위 .theme-hl-card--m의 28px가 .theme-hl-card--circle(50%)보다 나중에 선언되면
+     원형이 깨짐(실사용 중 발견: 모바일 테마 아바타가 완전한 원이 아닌 둥근 사각형으로 렌더링) */
+  .theme-hl-card--m.theme-hl-card--circle { border-radius: 50%; }
+
+  /* 원형탭 슬라이드(Mobile) — PC(.theme-circle-tabs)와 동일 구조·동일 3개 초과 기준,
+     원형 크기(140px)만 모바일 규격으로 축소 */
+  /* 좌측으로 쏠려 보이던 문제 해소 — 탭 그룹(.m-theme-circle-tabs)을 래퍼 폭 안에서 중앙
+     정렬. 화살표 버튼은 absolute라 flex 정렬 영향을 받지 않음(2026-08-26 실사용 중 발견) */
+  .m-theme-circle-tabs-wrap { position: relative; width: 100%; display: flex; justify-content: center; }
+  .m-theme-tabs-arrow {
+    position: absolute;
+    top: 70px; /* 140px 원형 이미지의 세로 중앙 */
+    transform: translateY(-50%);
+    z-index: 10;
+    width: 32px; height: 32px;
+    min-width: 44px; min-height: 44px;
+    border-radius: 9999px;
+    background: white;
+    border: none;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    box-shadow: 0 4px 16px rgba(0,0,0,0.15);
+  }
+  .m-theme-tabs-arrow.left  { left: -14px; }
+  .m-theme-tabs-arrow.right { right: -14px; }
+  .m-theme-circle-tabs {
+    display: flex;
+    gap: 20px;
+    align-items: center;
+    overflow-x: auto;
+    padding-bottom: 4px;
+  }
+  .m-theme-circle-tabs::-webkit-scrollbar { display: none; }
+  /* 테마 3개 초과 시 한 화면에 3개만 노출(140px 원형×3 + gap 20px×2) */
+  .m-theme-circle-tabs--capped {
+    max-width: 460px;
+    scroll-snap-type: x proximity;
+    /* 좌우 끝을 투명하게 페이드 — PC(.theme-circle-tabs--capped)와 동일 원리, 모바일 규격만 축소 */
+    mask-image: linear-gradient(to right, transparent 0, black 24px, black calc(100% - 24px), transparent 100%);
+    -webkit-mask-image: linear-gradient(to right, transparent 0, black 24px, black calc(100% - 24px), transparent 100%);
+  }
+  .m-theme-circle-tabs--capped .theme-circle-tab { scroll-snap-align: start; }
   .m-theme-img-ph { width: 100%; height: 100%; background: #ebe9f5; }
   /* 상품슬라이드는 "미칠 PICK"과 동일한 표준 m-prod-card를 재사용(.m-snap-slider/.m-prod-card) */
   .theme-m-prod-slider { padding-left: 0; }
@@ -1392,16 +1463,32 @@
     justify-content: center;
     width: 100px; height: 100px;
     border-radius: 30px;
-    transition: background 0.18s;
+    transition: background 0.18s, filter 0.18s;
   }
-  .cat-tab-custom-icon { width: 40px; height: 40px; object-fit: contain; }
+  /* 호버·선택 인터랙션 — 테두리(box-shadow 링) 대신 filter(밝기·채도) 컬러 톤 변화로 표현.
+     parent(.cat-tab-icon)에 filter를 걸면 내장 SVG 아이콘·커스텀 이미지 아이콘(자체 배경
+     baked-in) 둘 다 렌더링된 픽셀 전체에 동일하게 적용되어 아이콘 종류 분기 없이 일관 동작 */
+  .cat-tab:hover .cat-tab-icon {
+    filter: brightness(1.12) saturate(1.15);
+  }
+  .cat-tab.active .cat-tab-icon {
+    filter: brightness(1) saturate(1.3);
+  }
+  /* 업로드된 커스텀 아이콘 SVG는 전부 100x100 캔버스에 자체 배경(#E1DEF3, rx=30 —
+     .cat-tab-icon의 비활성 배경·radius와 동일)을 이미 포함한 "완결형 타일"로 제작돼 있음
+     — .cat-tab-icon(부모, 100x100)에 꽉 채워야 실제 글리프가 정상 크기로 보임.
+     40x40으로 축소하면 아이콘 내부 여백까지 함께 줄어들어 실제 그림 부분만 40px의 절반
+     이하로 쪼그라들어 매우 작게 보이던 버그(2026-08-26 실사용 중 발견) */
+  .cat-tab-custom-icon { width: 100px; height: 100px; object-fit: contain; border-radius: 30px; }
   .cat-tab-label {
     font-family: var(--font-kr);
     font-size: 15px;
     font-weight: 700;
     color: var(--cs-dark);
   }
-  .michil-heading { display: flex; justify-content: center; }
+  /* cat-tabs(카테고리 아이콘 탭)와의 간격 확보 — 부모 .d-cat-section의 공용 gap(32px) 외에
+     이 지점에만 추가 여백을 더함(margin-top으로 국소 적용, 다른 형제 요소 간격엔 영향 없음) */
+  .michil-heading { display: flex; justify-content: center; margin-top: 24px; }
   .michil-title {
     font-family: var(--font-kr-heading);
     font-size: 32px;
@@ -1771,9 +1858,6 @@
   }
   .dot.active { width: 28px; opacity: 0.8; }
 
-  /* MOBILE MICHIL */
-  .m-michil-section { padding-top: 40px; }
-  .m-michil-head { padding: 0; }
   /* 표준 상품슬라이드 카드 — Figma node 600:862 스펙(정사각) 모바일 축소 적용 */
   .m-prod-card {
     position: relative;
@@ -1790,15 +1874,6 @@
   }
   .m-prod-card:active { transform: scale(0.97); }
   .m-prod-img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
-  .m-prod-dots {
-    position: absolute;
-    top: 16px;
-    left: 0; right: 0;
-    display: flex;
-    justify-content: center;
-    gap: 8px;
-    z-index: 10;
-  }
   .m-prod-info {
     position: relative;
     width: 100%;
@@ -1820,6 +1895,93 @@
   .m-prod-price .price-num   { font-family: var(--font-kr); font-size: 21px; font-weight: 900; }
   .m-prod-price .price-sep   { font-family: var(--font-kr); font-size: 12px; font-weight: 700; }
   .m-prod-desc { font-family: var(--font-kr); font-size: 11px; font-weight: 700; color: #fff; }
+
+  /* ── MD 추천 (모바일 초기화면, /products의 md-picks-* 디자인 그대로 이식) ──
+     기존 .m-prod-name/.m-prod-info(흰 글자, 이미지 오버레이용)와 완전히 다른 레이아웃
+     (어두운 글자, 이미지 박스 아래 별도 텍스트 영역)이라 이름 충돌 방지를 위해 전용
+     클래스로 분리 */
+  .md-picks-section { padding-top: 64px; }
+  .md-picks-empty {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 80px;
+  }
+  .md-picks-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 16px;
+  }
+  .md-picks-label {
+    font-family: var(--font-kr-heading);
+    font-size: 20px;
+    font-weight: 900;
+    color: var(--cs-dark);
+    letter-spacing: -0.5px;
+  }
+  .md-picks-track {
+    display: flex;
+    gap: 15px;
+    overflow-x: auto;
+    scrollbar-width: none;
+    -webkit-overflow-scrolling: touch;
+  }
+  .md-picks-track::-webkit-scrollbar { display: none; }
+  .md-pick-card {
+    flex: none;
+    width: 160px;
+    text-decoration: none;
+    display: flex;
+    flex-direction: column;
+  }
+  .md-pick-card:active { transform: scale(0.97); }
+  .md-pick-img-box {
+    width: 100%;
+    height: 160px;
+    border-radius: 20px 20px 0 0;
+    overflow: hidden;
+    position: relative;
+    background: var(--cs-lilac);
+  }
+  .md-pick-img { width: 100%; height: 100%; object-fit: cover; }
+  .md-pick-info { padding: 8px 4px 0; }
+  .md-pick-name {
+    font-family: var(--font-kr);
+    font-weight: 700;
+    font-size: 14px;
+    color: var(--cs-text, #1d183e);
+    line-height: 1.4;
+    letter-spacing: -0.5px;
+    margin: 0 0 2px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .md-pick-price {
+    font-family: var(--font-kr);
+    font-weight: 700;
+    font-size: 13px;
+    color: var(--cs-purple, #3b2f8a);
+    margin: 0;
+  }
+  /* CMS 관리 버튼 — 기존 .hero-cms-btn/.cat-cms-btn과 동일 위치·스타일 규칙 통일 */
+  .md-picks-cms-btn {
+    position: absolute;
+    top: 10px;
+    right: 10px;
+    z-index: 20;
+    padding: 6px 12px;
+    background: rgba(16, 11, 50, 0.75);
+    border: none;
+    border-radius: var(--radius-sm);
+    color: var(--cs-white);
+    font-size: 12px;
+    font-weight: 700;
+    cursor: pointer;
+    white-space: nowrap;
+  }
+  .md-picks-cms-btn--empty { position: static; }
 
   /* ── MOBILE BLOG ── */
   .m-blog-section {

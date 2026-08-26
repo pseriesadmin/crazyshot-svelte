@@ -228,6 +228,7 @@ export const load: PageServerLoad = async ({ locals }) => {
     id: string; title: string; sub_copy: string | null;
     image_url: string; sort_order: number; products: ThemeGroupProduct[]
   }
+  type ThemeGroupAdmin = ThemeGroupWithProducts & { is_active: boolean }
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const { data: tgData, error: tgError } = await (db.rpc as any)('get_home_theme_groups_with_products')
@@ -235,13 +236,26 @@ export const load: PageServerLoad = async ({ locals }) => {
     ? []
     : ((tgData as ThemeGroupWithProducts[] | null) ?? [])
 
+  // 관리자 전용(is_active 무관 전체) — "테마그룹 관리" 모달에서 비노출 그룹도 편집 가능해야
+  // 하므로 별도 RPC로 조회(Migration #355, hype-pack #343과 동일 패턴). 비관리자에게는 절대 노출 안 됨.
+  let themeGroupsAdmin: ThemeGroupAdmin[] = []
+  if (isCms) {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const { data: tgAdminData } = await (db.rpc as any)('get_home_theme_groups_admin')
+    themeGroupsAdmin = (tgAdminData as ThemeGroupAdmin[] | null) ?? []
+  }
+
   // ── Phase 4: 카테고리+상품 큐레이션 ────────────────────────────────────────
   // home_category_products: migration #325 적용 후 RLS 화이트리스트 추가됨
   // 적용 전에는 maybeSingle() → null → { items: [] } 폴백으로 슬라이더 빈 상태
-  const [catProductsSettingRes, catPageSettingRes, kwPageSettingRes] = await Promise.all([
+  // product_page_md_picks: /products 페이지의 "MD 추천"과 완전히 동일한 cms_settings 키를
+  // 그대로 재사용 — 관리 기능을 별도로 만들지 않고 /products의 "✦ MD 추천 설정" 모달과
+  // 100% 동기화되도록 함(어느 화면에서 편집해도 같은 데이터를 공유)
+  const [catProductsSettingRes, catPageSettingRes, kwPageSettingRes, mdPicksSettingRes] = await Promise.all([
     locals.supabase.from('cms_settings').select('value').eq('key', 'home_category_products').maybeSingle(),
     locals.supabase.from('cms_settings').select('value').eq('key', 'product_page_categories').maybeSingle(),
     locals.supabase.from('cms_settings').select('value').eq('key', 'product_page_keywords').maybeSingle(),
+    locals.supabase.from('cms_settings').select('value').eq('key', 'product_page_md_picks').maybeSingle(),
   ])
 
   type CatProductEntry = { category_id: string; products: { id: string; order: number }[]; mode: 'random' | 'fixed' }
@@ -260,6 +274,11 @@ export const load: PageServerLoad = async ({ locals }) => {
     ((kwPageSettingRes.data as { value: unknown } | null)?.value as { items: string[] } | null) ??
     { items: [] }
 
+  type MdPicksRaw = { products: { id: string; order: number }[]; mode: 'random' | 'fixed' }
+  const mdPicksRaw: MdPicksRaw =
+    ((mdPicksSettingRes.data as { value: unknown } | null)?.value as MdPicksRaw | null) ??
+    { products: [], mode: 'fixed' }
+
   // 전체 상품 ID 수집 + get_products_by_ids 일괄 조회
   type HomeProductRow = {
     id: string; name: string; slug: string; category: string
@@ -268,8 +287,12 @@ export const load: PageServerLoad = async ({ locals }) => {
     price_12h?: number | null; price_24h?: number | null
   }
 
+  const mdPickIds = mdPicksRaw.products.map((p) => p.id)
   const allCatProductIds = [
-    ...new Set(homeCategoryProductsRaw.items.flatMap((it) => it.products.map((p) => p.id)))
+    ...new Set([
+      ...homeCategoryProductsRaw.items.flatMap((it) => it.products.map((p) => p.id)),
+      ...mdPickIds,
+    ])
   ]
 
   let homeProductRows: HomeProductRow[] = []
@@ -299,12 +322,28 @@ export const load: PageServerLoad = async ({ locals }) => {
     categoryProducts[item.category_id] = ordered
   }
 
+  let mdProducts: HomeProductRow[] = mdPicksRaw.products
+    .slice()
+    .sort((a, b) => a.order - b.order)
+    .map((p) => homeProductById.get(p.id))
+    .filter((p): p is HomeProductRow => !!p)
+  if (mdPicksRaw.mode === 'random') {
+    for (let i = mdProducts.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1))
+      ;[mdProducts[i], mdProducts[j]] = [mdProducts[j], mdProducts[i]]
+    }
+  }
+
   // ── 표준 상품슬라이드(prod-card) Day/12H 이중가격 — Figma node 600:862 스펙 반영 ──
   // price_24h(Day)는 legacy base_price_daily 우선(기존 mergePrice 패턴과 동일), price_12h는 price_rules 전용
+  const themeProductIdsForPrice = themeGroupsAdmin.length > 0
+    ? themeGroupsAdmin.flatMap((g) => g.products.map((p) => p.id))
+    : themeGroups.flatMap((g) => g.products.map((p) => p.id))
   const priceProductIds = [
     ...new Set([
-      ...themeGroups.flatMap((g) => g.products.map((p) => p.id)),
+      ...themeProductIdsForPrice,
       ...Object.values(categoryProducts).flatMap((rows) => rows.map((p) => p.id)),
+      ...mdProducts.map((p) => p.id),
     ]),
   ]
   const price12hMap: Record<string, number> = {}
@@ -328,11 +367,14 @@ export const load: PageServerLoad = async ({ locals }) => {
     price_24h: p.base_price_daily > 0 ? p.base_price_daily : (price24hMap[p.id] ?? null),
   })
   for (const g of themeGroups) g.products = g.products.map(withDualPrice)
+  for (const g of themeGroupsAdmin) g.products = g.products.map(withDualPrice)
   for (const key of Object.keys(categoryProducts)) categoryProducts[key] = categoryProducts[key].map(withDualPrice)
+  mdProducts = mdProducts.map(withDualPrice)
 
   return {
     bannerMap, isCms, categories, crazylogPosts, topFaqs, faqHeroBgUrl,
-    heroBannerRowsRaw, heroBannerSettings, themeGroups,
+    heroBannerRowsRaw, heroBannerSettings, themeGroups, themeGroupsAdmin,
     homeCategoryProductsRaw, categoryProducts, categoryPageSettings, keywordsPageSettings,
+    mdPicksRaw, mdProducts,
   }
 }

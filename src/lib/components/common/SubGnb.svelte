@@ -42,7 +42,7 @@
 
 </script>
 
-<!-- ── PC Sub GNB (≥641px) — floating/mobileOnly 모드에서는 렌더링 안 함 ── -->
+<!-- ── PC Sub GNB (≥768px) — floating/mobileOnly 모드에서는 렌더링 안 함 ── -->
 {#if !floating && !mobileOnly}
 <header class="sub-gnb-pc" class:transparent class:gnb-hidden={gnbHidden} class:no-gnb-offset={noGnbOffset}>
   <div class="sub-gnb-pc-inner">
@@ -93,7 +93,9 @@
     transform: translateY(-100%);
   }
 
-  @media (min-width: 641px) {
+  /* [GNB-BREAKPOINT-FIX 2026-08-10] 641px → 768px: GNB.svelte(768px 전환)와 불일치로
+     641~767px 구간에서 GNB=모바일/SubGnb=PC로 어긋나던 문제 수정. 복원 시 641px로 되돌릴 것. */
+  @media (min-width: 768px) {
     .sub-gnb-pc {
       display: block;
       position: sticky;
@@ -208,7 +210,8 @@
     z-index: 10;
   }
 
-  @media (min-width: 641px) {
+  /* [GNB-BREAKPOINT-FIX 2026-08-10] 641px → 768px: 위 PC 블록과 짝 맞춤. 복원 시 641px로. */
+  @media (min-width: 768px) {
     .sub-gnb-mobile-wrap,
     .sub-gnb-mobile {
       display: none;

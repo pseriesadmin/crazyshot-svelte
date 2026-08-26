@@ -65,7 +65,7 @@
 
 <div class="page-wrap">
 
-  <SubGnb title="빠른 문의" />
+  <SubGnb title="빠른 문의" noGnbOffset />
 
   <div class="content">
 
