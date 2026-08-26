@@ -1,4 +1,5 @@
 import { error } from '@sveltejs/kit'
+import { getWishedProductIds } from '$lib/server/getWishedProductIds'
 import type { PageServerLoad } from './$types'
 
 interface ThemeGroupProduct {
@@ -24,6 +25,7 @@ export interface ThemeGroupProductCard extends ThemeGroupProduct {
 }
 
 export const load: PageServerLoad = async ({ locals, params }) => {
+  const { session } = await locals.safeGetSession()
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const { data: groupsRaw } = await (locals.supabase.rpc as any)('get_hype_pack_theme_groups_with_products')
   const groups: ThemeGroupWithProducts[] = (groupsRaw as ThemeGroupWithProducts[] | null) ?? []
@@ -54,6 +56,8 @@ export const load: PageServerLoad = async ({ locals, params }) => {
     price12h: price12hMap[p.id] ?? null,
   }))
 
+  const wishedIds = await getWishedProductIds(locals.supabase, session?.user.id, productIds)
+
   return {
     group: {
       id:         group.id,
@@ -63,5 +67,7 @@ export const load: PageServerLoad = async ({ locals, params }) => {
       sort_order: group.sort_order,
     },
     products,
+    wishedIds,
+    isLoggedIn: !!session?.user.id,
   }
 }

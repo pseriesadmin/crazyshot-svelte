@@ -4,7 +4,6 @@
   import CmsDragList from '$lib/components/cms/CmsDragList.svelte'
   import SuggestPicker from '$lib/components/common/SuggestPicker.svelte'
   import ChevronIcon from '$lib/components/common/ChevronIcon.svelte'
-  import { matchesSearch } from '$lib/utils/chosungSearch'
   import type { SuggestPickerOption } from '$lib/types/suggest-picker'
 
   // ── 타입 ─────────────────────────────────────────────────────────────
@@ -22,6 +21,7 @@
     sub_copy: string | null
     image_url: string
     sort_order: number
+    is_active: boolean
     products: ProductItem[]
   }
 
@@ -31,6 +31,7 @@
     title: string
     sub_copy: string
     image_url: string
+    is_active: boolean
     _preview: string | null
     _file: File | null
     _uploading: boolean
@@ -62,9 +63,12 @@
   let activeProductsList  = $state<ProductItem[]>([])
 
   // 상품 검색 (SuggestPicker)
-  let pickerOptions  = $state<SuggestPickerOption[]>([])
-  let pickerSelId    = $state<string | null>(null)
+  let pickerOptions    = $state<SuggestPickerOption[]>([])
+  let pickerSelId      = $state<string | null>(null)
   let debounceTimer: ReturnType<typeof setTimeout> | null = null
+  // I-3: 마지막 실제 검색어 + 마지막 검색 결과 캐시 (onProductSelect에서 사용)
+  let lastSearchQuery  = $state('')
+  let pickerItemsCache = $state<Map<string, { image_url: string | null; price: number }>>(new Map())
 
   // ── Props 동기화 ($state(prop) 절대 금지 → $effect 사용) ──────────────
   $effect(() => {
@@ -83,11 +87,18 @@
       title:        g.title,
       sub_copy:     g.sub_copy ?? '',
       image_url:    g.image_url,
+      is_active:    g.is_active,
       _preview:     null,
       _file:        null,
       _uploading:   false,
       productItems: [...g.products],
     }
+  }
+
+  function toggleActive(tempId: string) {
+    localGroups = localGroups.map((g) =>
+      g._tempId === tempId ? { ...g, is_active: !g.is_active } : g
+    )
   }
 
   function newTempId() {
@@ -120,7 +131,7 @@
     const tempId = newTempId()
     const newGrp: LocalGroup = {
       _tempId: tempId, id: null,
-      title: '', sub_copy: '', image_url: '',
+      title: '', sub_copy: '', image_url: '', is_active: true,
       _preview: null, _file: null, _uploading: false,
       productItems: [],
     }
@@ -168,65 +179,61 @@
     return data.publicUrl
   }
 
-  // ── 상품 검색 (SuggestPicker) — "패키지" 카테고리로 잠금 + 초성 검색 지원 ──
-  // 카테고리가 잠겨있어 후보군 자체가 소수라, 카테고리 전체를 1회만 가져와 캐시한 뒤
-  // 매 입력마다 클라이언트에서 matchesSearch(부분일치+초성)로 필터링한다 —
-  // Postgres FTS/trigram은 초성만 입력된 검색어("ㅇㄷ" 등)를 매칭하지 못하므로
-  // (chosungSearch.ts와 동일 로직이 core/koreanTokenizer.ts에도 있으나 그쪽은
-  // src/lib/server/** 라 클라이언트 컴포넌트에서 import 불가 — SvelteKit이 빌드 타임에
-  // server-only import를 차단함. 클라이언트에서 쓸 수 있는 lib/utils/chosungSearch.ts를 재사용)
-  let productCandidates  = $state<{ id: string; name: string; price: number }[]>([])
-  let candidatesLoaded   = false
-
-  async function loadProductCandidates() {
-    if (candidatesLoaded) return
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const { data } = await (supabase.rpc as any)('search_products', {
-      p_query:      '',
-      p_category:   searchCategory,
-      p_page:       1,
-      p_limit:      100,
-      p_session_id: null,
-      p_user_id:    null,
-    }) as { data: Record<string, unknown>[] | null }
-    productCandidates = ((data ?? []) as Record<string, unknown>[]).map((r) => ({
-      id:    String(r['product_id'] ?? r['id'] ?? ''),
-      name:  String(r['name'] ?? ''),
-      price: Number(r['price_min'] ?? r['base_price_daily'] ?? 0),
-    }))
-    candidatesLoaded = true
-  }
-
+  // ── 상품 검색 (SuggestPicker) — 서버 API 경유, 카테고리+초성 서버에서 처리 ──
   function onPickerInput(value: string) {
     if (debounceTimer) clearTimeout(debounceTimer)
     const q = value.trim()
     if (!q) { pickerOptions = []; return }
     debounceTimer = setTimeout(async () => {
-      await loadProductCandidates()
-      const activeIds = new Set(activeProductsList.map((p) => p.id))
-      pickerOptions = productCandidates
-        .filter((p) => !activeIds.has(p.id) && matchesSearch({ name: p.name, product_code: null }, q))
-        .map((p) => ({
-          id:    p.id,
-          label: p.name,
-          meta:  [p.price > 0 ? `${p.price.toLocaleString()}원/일` : ''],
-        }))
+      lastSearchQuery = q
+      try {
+        const res = await fetch(
+          `/api/cms/products/search-suggestions?q=${encodeURIComponent(q)}&category=${encodeURIComponent(searchCategory)}&limit=10&activeOnly=true`
+        )
+        if (!res.ok) { pickerOptions = []; return }
+        const items = await res.json() as Array<{ id: string; name: string; image_url?: string | null; price_24h?: number | null }>
+        const activeIds   = new Set(activeProductsList.map((p) => p.id))
+        const newCache    = new Map<string, { image_url: string | null; price: number }>()
+        pickerOptions = items
+          .filter((r) => !!r.id && !activeIds.has(r.id))
+          .map((r) => {
+            newCache.set(r.id, { image_url: r.image_url ?? null, price: r.price_24h ?? 0 })
+            return {
+              id:    r.id,
+              label: r.name,
+              meta:  [r.price_24h && r.price_24h > 0 ? `${r.price_24h.toLocaleString()}원/일` : ''],
+            }
+          })
+        pickerItemsCache = newCache
+      } catch {
+        pickerOptions = []
+      }
     }, 280)
   }
 
   function onProductSelect(opt: SuggestPickerOption) {
     if (activeProductsList.length >= MAX_PRODUCTS) return
     if (activeProductsList.some((p) => p.id === opt.id)) return
+    // 마지막 검색 캐시에서 실제 썸네일·가격을 찾아 채움
+    const cached = pickerItemsCache.get(opt.id)
     const newItem: ProductItem = {
       id:               opt.id,
       name:             opt.label,
       slug:             '',
-      image_urls:       null,
-      base_price_daily: 0,
+      image_urls:       cached?.image_url ? [cached.image_url] : null,
+      base_price_daily: cached?.price ?? 0,
     }
     activeProductsList = [...activeProductsList, newItem]
-    pickerOptions      = []
-    pickerSelId        = null
+    // I-3: 학습 신호 — fire-and-forget
+    if (lastSearchQuery) {
+      fetch('/api/cms/products/search-suggestions', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ product_id: opt.id, search_term: lastSearchQuery, context: 'hype_pack_theme_group' }),
+      }).catch(() => {})
+    }
+    pickerOptions = []
+    pickerSelId   = null
   }
 
   function removeProduct(productId: string) {
@@ -269,6 +276,7 @@
           p_image_url:   g.image_url,
           p_product_ids: productIds,
           p_sort_order:  i,
+          p_is_active:   g.is_active,
         }
 
         if (g.id === null) {
@@ -294,6 +302,11 @@
   // ── 가격 포맷 ─────────────────────────────────────────────────────────
   function fmtPrice(n: number) {
     return n > 0 ? `${n.toLocaleString()}원/일` : ''
+  }
+
+  const MAX_NAME_LEN = 20
+  function truncateName(name: string): string {
+    return name.length > MAX_NAME_LEN ? `${name.slice(0, MAX_NAME_LEN)}…` : name
   }
 </script>
 
@@ -377,6 +390,18 @@
                 aria-label="그룹 삭제"
                 type="button"
               >✕</button>
+              <button
+                class="checkbox-btn tg-visible-btn"
+                class:checked={g.is_active}
+                onclick={() => toggleActive(g._tempId)}
+                aria-label={g.is_active ? '노출 중 — 클릭 시 숨김' : '숨김 — 클릭 시 노출'}
+                type="button"
+              >
+                <svg width="18" height="12" viewBox="0 0 18 12" fill="none" aria-hidden="true">
+                  <path d="M14.788 0.40847C15.5937 -0.206503 16.7506 -0.123176 17.4589 0.632103C18.2144 1.4379 18.1729 2.70376 17.3671 3.45925L17.3622 3.46413C17.3585 3.46759 17.3528 3.47297 17.3456 3.47976C17.3311 3.49333 17.3101 3.51407 17.2821 3.54031C17.2261 3.59279 17.1437 3.66974 17.039 3.76784C16.8294 3.96413 16.5289 4.24474 16.1669 4.58327C15.4428 5.26035 14.4707 6.169 13.4774 7.09304C12.4848 8.01654 11.4689 8.95836 10.6591 9.70144C9.90326 10.3949 9.21125 11.0229 8.954 11.219C8.38484 11.6526 7.64783 12.0001 6.7831 12.0003C5.89707 12.0003 5.14509 11.6357 4.57217 11.138C4.258 10.865 3.25694 9.9462 2.37197 9.13015C1.92122 8.71451 1.48885 8.31388 1.16885 8.01785C1.0088 7.86979 0.875998 7.74749 0.78408 7.66238C0.738281 7.61997 0.702073 7.58638 0.677634 7.56374C0.665704 7.55269 0.656551 7.54415 0.650291 7.53835C0.647126 7.53542 0.644094 7.53301 0.642478 7.53152L0.641502 7.52956H0.640525C-0.169647 6.77877 -0.217693 5.51259 0.533103 4.70242C1.28393 3.89251 2.55017 3.84526 3.36025 4.59597L3.36123 4.59792C3.3628 4.59938 3.36592 4.60089 3.36904 4.60378C3.37524 4.60953 3.38439 4.61807 3.39638 4.62917C3.42067 4.65167 3.45618 4.68551 3.50185 4.72781C3.59333 4.81251 3.72524 4.93384 3.88467 5.08132C4.2037 5.37646 4.63512 5.77493 5.08388 6.18874C5.73477 6.78894 6.40077 7.39812 6.82217 7.78054C6.86093 7.74604 6.90358 7.70918 6.94814 7.66921C7.21008 7.43424 7.55408 7.12113 7.954 6.75417C8.7536 6.02049 9.76226 5.0859 10.7528 4.16433C11.7428 3.24336 12.7128 2.33711 13.4354 1.6614C13.7965 1.32374 14.0957 1.04357 14.3046 0.847923C14.409 0.750147 14.491 0.67359 14.5468 0.621361C14.5745 0.595342 14.5959 0.575239 14.6103 0.56179C14.6174 0.555065 14.6232 0.549566 14.6269 0.546165L14.6317 0.541282L14.788 0.40847Z"
+                    fill="currentColor" />
+                </svg>
+              </button>
             </div>
           </div>
 
@@ -408,7 +433,7 @@
                           class="tg-prod-thumb"
                         />
                         <div class="tg-prod-info">
-                          <span class="tg-prod-name">{p.name}</span>
+                          <span class="tg-prod-name" title={p.name}>{truncateName(p.name)}</span>
                           {#if p.base_price_daily > 0}
                             <span class="tg-prod-price">{fmtPrice(p.base_price_daily)}</span>
                           {/if}
@@ -432,6 +457,7 @@
                       bind:selectedId={pickerSelId}
                       options={pickerOptions}
                       noFilter
+                      clearOnSelect
                       itemLayout="row"
                       placeholder="패키지 상품 검색…"
                       listLabel="검색 결과"
@@ -661,6 +687,26 @@
     transition: background 0.15s;
   }
   .tg-del-btn:hover { background: #fff0f0; }
+
+  /* 그룹 노출 선택 — 체크아이콘 버튼 표준(front-uiux.md §17, CMS 재사용) */
+  .checkbox-btn {
+    background: none;
+    border: none;
+    padding: 0;
+    cursor: pointer;
+    flex-shrink: 0;
+    width: 30px;
+    height: 30px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: var(--radius-sm, 8px);
+    transition: background 0.15s;
+  }
+  .tg-visible-btn { color: var(--cs-purple-op10, #ECEBF4); }
+  .tg-visible-btn.checked { color: var(--cs-purple, #3b2f8a); }
+  .tg-visible-btn:hover { background: rgba(59, 47, 138, 0.06); }
+  .tg-visible-btn svg { width: 18px; height: 12px; }
 
   /* 서브카피 */
   .tg-subcopy-input {

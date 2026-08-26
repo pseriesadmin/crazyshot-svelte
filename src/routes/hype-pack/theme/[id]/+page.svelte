@@ -1,10 +1,23 @@
 <script lang="ts">
   import BottomTabBar from '$lib/components/common/BottomTabBar.svelte'
   import ProductDPCard from '$lib/components/products/ProductDPCard.svelte'
+  import { toggleWish } from '$lib/utils/wishlist'
   import type { PageData } from './$types'
 
   interface Props { data: PageData }
   let { data }: Props = $props()
+
+  let wishedSet = $state(new Set(data.wishedIds))
+  $effect(() => { wishedSet = new Set(data.wishedIds) })
+
+  async function handleWishToggle(id: string | undefined) {
+    if (!id) return
+    const action = await toggleWish(id)
+    if (!action) return
+    const next = new Set(wishedSet)
+    if (action === 'added') next.add(id); else next.delete(id)
+    wishedSet = next
+  }
 
   function productImg(p: { image_urls: string[] | null }): string {
     return p.image_urls?.[0] ?? '/images/products/grid-flat.png'
@@ -33,6 +46,8 @@
             price24h={prod.price24h}
             price12h={prod.price12h}
             href={productLink(prod)}
+            wished={wishedSet.has(prod.id)}
+            onWishToggle={data.isLoggedIn ? handleWishToggle : undefined}
           />
         {/each}
       </div>
