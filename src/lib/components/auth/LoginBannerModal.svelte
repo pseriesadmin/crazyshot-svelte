@@ -1,5 +1,4 @@
 <script lang="ts">
-  import { invalidateAll } from '$app/navigation'
   import { supabase } from '$lib/services/supabase'
   import CmsDragList from '$lib/components/cms/CmsDragList.svelte'
 
@@ -13,8 +12,8 @@
   }
 
   interface LocalBanner {
-    _tempId: string       // CmsDragList 키 (로컬 전용)
-    id: string | null     // DB id (null = 신규)
+    _tempId: string
+    id: string | null
     title: string
     sub_copy: string
     image_url: string
@@ -23,14 +22,10 @@
   }
 
   interface Props {
-    pcBanners: SourceBanner[]
-    mobileBanners: SourceBanner[]
-    pcMode: 'random' | 'fixed'
-    mobileMode: 'random' | 'fixed'
     onclose: () => void
   }
 
-  let { pcBanners, mobileBanners, pcMode, mobileMode, onclose }: Props = $props()
+  let { onclose }: Props = $props()
 
   const MAX = 10
 
@@ -47,24 +42,55 @@
   }
 
   // ── 로컬 상태 ─────────────────────────────────────────────────────
-  let localPc = $state<LocalBanner[]>([])
+  let localPc     = $state<LocalBanner[]>([])
   let localMobile = $state<LocalBanner[]>([])
-  let localPcMode = $state<'random' | 'fixed'>('fixed')
+  let localPcMode     = $state<'random' | 'fixed'>('fixed')
   let localMobileMode = $state<'random' | 'fixed'>('fixed')
-  let origPcIds = $state<Set<string>>(new Set())
+  let origPcIds     = $state<Set<string>>(new Set())
   let origMobileIds = $state<Set<string>>(new Set())
-  let isSaving = $state(false)
+  let isSaving  = $state(false)
   let saveError = $state<string | null>(null)
+  let isLoading = $state(true)
 
-  // prop 동기화 ($state(prop) 초기화 금지 — $effect 패턴 사용)
-  $effect(() => {
-    localPc = toLocal(pcBanners)
-    localMobile = toLocal(mobileBanners)
-    localPcMode = pcMode
-    localMobileMode = mobileMode
-    origPcIds = new Set(pcBanners.map((b) => b.id))
-    origMobileIds = new Set(mobileBanners.map((b) => b.id))
-  })
+  // ── 데이터 로드 ($state(prop) 초기화 금지 — self-load 패턴) ──────
+  $effect(() => { loadData() })
+
+  async function loadData() {
+    isLoading = true
+    const [pcRes, mobileRes, settingsRes] = await Promise.all([
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (supabase as any).from('promotion_banners')
+        .select('id, title, sub_copy, image_url, link_url')
+        .eq('placement', 'login_pc')
+        .is('deleted_at', null)
+        .order('sort_order', { ascending: true }),
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (supabase as any).from('promotion_banners')
+        .select('id, title, sub_copy, image_url, link_url')
+        .eq('placement', 'login_mobile')
+        .is('deleted_at', null)
+        .order('sort_order', { ascending: true }),
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (supabase as any).from('page_settings')
+        .select('value')
+        .eq('key', 'login_banner_mode')
+        .maybeSingle(),
+    ])
+
+    const pcData: SourceBanner[]     = pcRes.data     ?? []
+    const mobileData: SourceBanner[] = mobileRes.data ?? []
+
+    localPc     = toLocal(pcData)
+    localMobile = toLocal(mobileData)
+    origPcIds     = new Set(pcData.map((b) => b.id))
+    origMobileIds = new Set(mobileData.map((b) => b.id))
+
+    const settings = settingsRes.data?.value as { pc_mode?: string; mobile_mode?: string } | null
+    localPcMode     = (settings?.pc_mode     === 'random' ? 'random' : 'fixed')
+    localMobileMode = (settings?.mobile_mode === 'random' ? 'random' : 'fixed')
+
+    isLoading = false
+  }
 
   // ── 행 추가 / 제거 ─────────────────────────────────────────────────
   function addBanner(slot: 'pc' | 'mobile') {
@@ -86,7 +112,7 @@
     else localMobile = localMobile.filter((b) => b._tempId !== tempId)
   }
 
-  // ── 이미지 업로드 (행별) ────────────────────────────────────────────
+  // ── 이미지 업로드 ──────────────────────────────────────────────────
   async function onImageChange(slot: 'pc' | 'mobile', tempId: string, e: Event) {
     const input = e.target as HTMLInputElement
     const file = input.files?.[0]
@@ -142,10 +168,9 @@
     localList: LocalBanner[],
     origIds: Set<string>,
   ): Promise<string | null> {
-    const slotKey = slot === 'pc' ? 'hero_pc' : 'hero_mobile'
+    const slotKey = slot === 'pc' ? 'login_pc' : 'login_mobile'
     const finalIds = new Set(localList.filter((b) => b.id).map((b) => b.id!))
 
-    // 삭제된 배너 소프트삭제
     for (const id of origIds) {
       if (!finalIds.has(id)) {
         const err = await callRpc('cms_delete_banner', { p_id: id })
@@ -153,10 +178,9 @@
       }
     }
 
-    // 생성 / 수정
     for (let i = 0; i < localList.length; i++) {
       const b = localList[i]
-      if (!b.image_url) continue  // 이미지 없는 신규 행 스킵
+      if (!b.image_url) continue
       if (b.id) {
         const err = await callRpc('cms_update_banner', {
           p_id: b.id,
@@ -192,15 +216,13 @@
       const mobileErr = await saveBannerSlot('mobile', localMobile, origMobileIds)
       if (mobileErr) { saveError = mobileErr; return }
 
-      // 설정 저장
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const { error: settingsErr } = await (supabase.rpc as any)('upsert_product_page_setting', {
-        p_key: 'home_hero_banner_settings',
+        p_key: 'login_banner_mode',
         p_value: { pc_mode: localPcMode, mobile_mode: localMobileMode },
       })
       if (settingsErr) { saveError = `설정 저장 실패: ${settingsErr.message}`; return }
 
-      await invalidateAll()
       onclose()
     } catch (e) {
       saveError = e instanceof Error ? e.message : '저장 실패'
@@ -212,17 +234,21 @@
 <!-- svelte-ignore a11y_no_static_element_interactions -->
 <div class="modal-backdrop" onclick={onclose} role="presentation"></div>
 
-<aside class="modal-panel" role="dialog" aria-modal="true" aria-label="홈 히어로 배너 관리">
+<aside class="modal-panel" role="dialog" aria-modal="true" aria-label="로그인 배너 관리">
   <div class="modal-header">
-    <span class="modal-title">홈 히어로 배너 관리</span>
+    <span class="modal-title">로그인 배너 관리</span>
     <button class="modal-close" onclick={onclose} aria-label="닫기">✕</button>
   </div>
 
   <div class="modal-body">
 
+    {#if isLoading}
+      <p class="empty-msg">불러오는 중…</p>
+    {:else}
+
     <!-- ── PC 배너 섹션 ──────────────────────────────────────── -->
     <div class="section">
-      <p class="section-label">PC 배너 <span class="hint">데스크탑 히어로 영역</span></p>
+      <p class="section-label">PC 배너 <span class="hint">로그인 화면 — PC 배경·콘텐츠 영역</span></p>
       <div class="radio-group">
         <label class="radio-opt">
           <input
@@ -297,7 +323,7 @@
         </CmsDragList>
       </div>
     {:else}
-      <p class="empty-msg">PC 배너를 추가하면 데스크탑 히어로에 표시됩니다.</p>
+      <p class="empty-msg">PC 배너를 추가하면 로그인 화면 PC 영역에 표시됩니다.</p>
     {/if}
 
     {#if localPc.length < MAX}
@@ -310,7 +336,7 @@
 
     <!-- ── 모바일 배너 섹션 ───────────────────────────────────── -->
     <div class="section">
-      <p class="section-label">모바일 배너 <span class="hint">모바일 히어로 영역</span></p>
+      <p class="section-label">모바일 배너 <span class="hint">로그인 화면 — 모바일 배경·콘텐츠 영역</span></p>
       <div class="radio-group">
         <label class="radio-opt">
           <input
@@ -385,7 +411,7 @@
         </CmsDragList>
       </div>
     {:else}
-      <p class="empty-msg">모바일 배너를 추가하면 모바일 히어로에 표시됩니다.</p>
+      <p class="empty-msg">모바일 배너를 추가하면 로그인 화면 모바일 영역에 표시됩니다.</p>
     {/if}
 
     {#if localMobile.length < MAX}
@@ -397,11 +423,13 @@
     {#if saveError}
       <p class="save-error" role="alert">{saveError}</p>
     {/if}
+
+    {/if}
   </div>
 
   <div class="modal-footer">
     <button class="btn-cancel" onclick={onclose} disabled={isSaving}>취소</button>
-    <button class="btn-save" onclick={save} disabled={isSaving}>
+    <button class="btn-save" onclick={save} disabled={isSaving || isLoading}>
       {isSaving ? '저장 중…' : '저장'}
     </button>
   </div>
@@ -504,7 +532,6 @@
     cursor: pointer;
   }
 
-  /* ── 배너 행 ─────────────────────────────────────── */
   .banner-row {
     display: flex;
     align-items: flex-start;
@@ -559,7 +586,6 @@
     min-width: 0;
   }
 
-  /* cms-field 표준(§0-A #8) 그대로 — 배너 제목/서브카피/링크 필드가 이 표준의 명시 대상 */
   .cms-field {
     width: 100%;
     min-height: 44px;
@@ -592,7 +618,6 @@
   }
   .btn-remove:hover { color: var(--cs-red-badge); }
 
-  /* ── 추가 버튼 ─────────────────────────────────────── */
   .btn-add {
     height: 36px;
     padding: 0 16px;
@@ -626,7 +651,6 @@
     margin: 0;
   }
 
-  /* ── 푸터 ─────────────────────────────────────────── */
   .modal-footer {
     padding: 16px 24px;
     display: flex;

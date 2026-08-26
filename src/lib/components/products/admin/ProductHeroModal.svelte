@@ -38,6 +38,8 @@
   let error = $state<string | null>(null)
   let debounceTimer = $state<ReturnType<typeof setTimeout> | null>(null)
   let pickerSelectedId = $state<string | null>(null)
+  // I-3: 마지막 실제 검색어 추적
+  let lastSearchQuery = $state('')
 
   const selectedIds = $derived(new Set(selected.map((s) => s.id)))
 
@@ -65,7 +67,17 @@
 
   function onProductSelect(opt: SuggestPickerOption) {
     const product = searchResults.find((p) => p.id === opt.id)
-    if (product) addProduct(product)
+    if (product) {
+      addProduct(product)
+      // I-3: 실제 검색 후 선택한 경우에만 학습 신호 전송 (fire-and-forget)
+      if (lastSearchQuery) {
+        fetch('/api/cms/products/search-suggestions', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ product_id: product.id, search_term: lastSearchQuery, context: 'product_hero' }),
+        }).catch(() => {})
+      }
+    }
     setTimeout(() => { pickerSelectedId = null; searchResults = [] }, 0)
   }
 
@@ -98,24 +110,32 @@
     )
   })
 
-  // Fix 2+3 — product_id→id, price_min→base_price_daily 정규화
+  // H-6: search_products RPC + get_products_by_ids 이중 호출 → activeOnly=true 단일 서버라우트로 전환
+  // nlsearch.md §2 "브라우저 직접 RPC 호출 금지" 준수
+  // activeOnly=true 파라미터가 is_active 필터를 서버에서 직접 적용 — get_products_by_ids 크로스체크 불필요
   async function doSearch(q: string) {
     isSearching = true
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const { data } = await (supabase.rpc as any)('search_products', {
-      p_query: q,
-      p_category: null,
-      p_page: 1,
-      p_limit: 10,
-      p_session_id: null,
-      p_user_id: null,
-    })
-    searchResults = ((data ?? []) as Record<string, unknown>[]).map((r) => ({
-      id:               String(r['product_id'] ?? r['id'] ?? ''),
-      name:             String(r['name'] ?? ''),
-      image_urls:       (r['image_urls'] as string[] | null) ?? null,
-      base_price_daily: Number(r['price_min'] ?? r['base_price_daily'] ?? 0),
-    }))
+    lastSearchQuery = q
+    try {
+      const res = await fetch(
+        `/api/cms/products/search-suggestions?q=${encodeURIComponent(q)}&limit=10&activeOnly=true`,
+      )
+      if (res.ok) {
+        const items = await res.json() as Array<{ id: string; name: string; image_url?: string | null; price_24h?: number | null }>
+        searchResults = items
+          .filter((r) => !!r.id)
+          .map((r) => ({
+            id:               r.id,
+            name:             r.name,
+            image_urls:       r.image_url ? [r.image_url] : null,
+            base_price_daily: r.price_24h ?? 0,
+          }))
+      } else {
+        searchResults = []
+      }
+    } catch {
+      searchResults = []
+    }
     isSearching = false
   }
 
@@ -182,14 +202,12 @@
     <div class="section">
       <p class="section-label">상품 추가 <span class="count-badge">{selected.length}/{MAX_ITEMS}</span></p>
       <div class="search-wrap">
-        {#if isLoadingInitial || isSearching}
-          <p class="search-hint">{isLoadingInitial ? '저장된 상품 불러오는 중…' : '검색 중…'}</p>
-        {/if}
         <SuggestPicker
           id="product-search"
           bind:selectedId={pickerSelectedId}
           options={pickerOptions}
           noFilter
+          clearOnSelect
           itemLayout="row"
           placeholder="상품명으로 검색..."
           listLabel="상품 검색 결과"
@@ -219,6 +237,9 @@
             <span class="suggest-price">{item.meta?.[0] ?? ''}</span>
           {/snippet}
         </SuggestPicker>
+        {#if isLoadingInitial || isSearching}
+          <p class="search-hint">{isLoadingInitial ? '저장된 상품 불러오는 중…' : '검색 중…'}</p>
+        {/if}
       </div>
     </div>
 

@@ -12,6 +12,9 @@
  * - `description` 컬럼은 products.md §2-10⑤에 따라 영구 미사용(항상 NULL) — 제외
  * - J-2(2026-08-07): product_search_stats 학습 기반 키워드 자동승격 — promote_threshold 이상 클릭된
  *   (product_id, search_term) 쌍을 색인 키워드에 추가 (TTL 60초 캐시 패턴 재사용)
+ * - I-4(2026-08-26): cms_admin_product_search_confirmations 관리자 확인 신호 소비 — status='confirmed'인
+ *   (product_id, search_term)을 J-2 학습 키워드와 같은 라인에서 keywords_text에 병합
+ *   (저장 분리 / 소비 시점 병합 — service-operations.md §14 원칙과 동일)
  *
  * ⚠️ 이 파일은 crazyshot 전용 import 포함 가능 (adapters/ 계층)
  */
@@ -190,6 +193,33 @@ async function loadLearnedSearchTerms(
   return map
 }
 
+// ── I-4: 관리자 확인 신호 로드 (cms_admin_product_search_confirmations) ─────────
+// service_role 전용 → admin 클라이언트 필수 (RLS 정책 없음)
+// J-2 loadLearnedSearchTerms()와 완전히 동일한 패턴 재사용
+async function loadAdminConfirmedSearchTerms(): Promise<Map<string, string[]>> {
+  try {
+    const admin = createClient(PUBLIC_SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
+    const { data, error } = await admin
+      .from('cms_admin_product_search_confirmations')
+      .select('product_id, search_term')
+      .eq('status', 'confirmed')
+    if (error || !data) {
+      console.error('[productSearchIndex] 관리자 확인 신호 조회 실패:', error?.message)
+      return new Map()
+    }
+    const map = new Map<string, string[]>()
+    for (const row of data as { product_id: string; search_term: string }[]) {
+      const pid = String(row.product_id)
+      const existing = map.get(pid) ?? []
+      existing.push(String(row.search_term))
+      map.set(pid, existing)
+    }
+    return map
+  } catch {
+    return new Map()
+  }
+}
+
 // ── 내보내기 함수 ─────────────────────────────────────────────────────────────
 
 /**
@@ -199,13 +229,16 @@ async function loadLearnedSearchTerms(
  * J-2: 인덱스 빌드 시 product_search_stats에서 학습된 검색어를 가져와
  * 각 상품의 keywords_text에 병합 (promote_threshold 이상 클릭된 search_term만).
  *
+ * I-4: cms_admin_product_search_confirmations에서 status='confirmed'인 신호를 함께 로드해
+ * 동일 keywords_text 병합 라인에서 J-2 학습 키워드와 합산(저장 분리 / 소비 시점 병합).
+ *
  * @returns 즉시 search() 호출 가능한 NaturalSearchProvider
  */
 export async function getProductSearchIndex(): Promise<NaturalSearchProvider<ProductDoc>> {
   if (isCacheValid()) return cachedIndex!
 
-  // J-2: 상품 조회와 promote_threshold 조회를 병렬 실행
-  const [productResult, promoteThreshold] = await Promise.all([
+  // J-2 + I-4: 상품 조회 · promote_threshold · 관리자 확인 신호를 병렬 실행
+  const [productResult, promoteThreshold, adminConfirmedTerms] = await Promise.all([
     supabase
       .from('products')
       .select(
@@ -215,6 +248,7 @@ export async function getProductSearchIndex(): Promise<NaturalSearchProvider<Pro
       .eq('is_active', true)
       .is('deleted_at', null),
     loadPromoteThreshold(),
+    loadAdminConfirmedSearchTerms(),   // I-4: 관리자 확인 신호 (fail-safe: 실패 시 빈 맵)
   ])
 
   const { data, error } = productResult
@@ -233,9 +267,10 @@ export async function getProductSearchIndex(): Promise<NaturalSearchProvider<Pro
     const baseKeywords = Array.isArray(row['keywords'])
       ? (row['keywords'] as string[]).join(' ')
       : ''
-    // J-2: 학습된 검색어를 keywords_text에 병합 (중복 제거 없이 빈도 강조)
-    const learned = learnedTerms.get(productId) ?? []
-    const keywords_text = [baseKeywords, ...learned].filter(Boolean).join(' ')
+    // J-2 + I-4: 고객 학습 키워드 + 관리자 확인 신호를 같은 병합 라인에서 join
+    const learned        = learnedTerms.get(productId) ?? []
+    const adminConfirmed = adminConfirmedTerms.get(productId) ?? []
+    const keywords_text  = [baseKeywords, ...learned, ...adminConfirmed].filter(Boolean).join(' ')
 
     return {
       id: productId,

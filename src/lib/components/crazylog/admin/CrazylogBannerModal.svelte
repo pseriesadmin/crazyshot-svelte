@@ -164,14 +164,12 @@
     <div class="section">
       <p class="section-label">로그 추가 <span class="count-badge">{selected.length}/{MAX_ITEMS}</span></p>
       <div class="search-wrap">
-        {#if isLoadingInitial || isSearching}
-          <p class="search-hint">{isLoadingInitial ? '저장된 로그 불러오는 중…' : '검색 중…'}</p>
-        {/if}
         <SuggestPicker
           id="crazylog-banner-search"
           bind:selectedId={pickerSelectedId}
           options={pickerOptions}
           noFilter
+          clearOnSelect
           itemLayout="row"
           placeholder="포스트 제목으로 검색..."
           listLabel="크레이지 로그 검색 결과"
@@ -201,6 +199,9 @@
             <span class="suggest-type">{item.meta?.[0] ?? ''}</span>
           {/snippet}
         </SuggestPicker>
+        {#if isLoadingInitial || isSearching}
+          <p class="search-hint">{isLoadingInitial ? '저장된 로그 불러오는 중…' : '검색 중…'}</p>
+        {/if}
       </div>
     </div>
 

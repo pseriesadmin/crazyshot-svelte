@@ -226,6 +226,144 @@ supabase/migrations/20260815000254_254_nlsearch_reformulation_cron.sql
 
 ---
 
+## 4-3. 관리자 검색 확인 신호 (§K, 2026-08-26 신설)
+
+> 목적: CMS 관리자가 검색어 입력 후 특정 상품을 직접 선택했다는 행동을 학습 신호로 포착해,
+> 고객 자연어 검색 인덱스에 반영한다 — 운영자의 상품 지식을 자동으로 검색 품질에 녹이는 파이프라인.
+
+### K-1. 저장 분리 / 소비 병합 원칙
+
+```
+저장은 분리: 관리자 신호(cms_admin_product_search_confirmations)와
+             고객 재검색 신호(product_search_stats)는 서로 다른 테이블에 독립 저장된다.
+             두 신호의 출처·신뢰도·시점이 달라 혼합 저장하면 오염 위험이 있음.
+
+소비는 병합: getProductSearchIndex() 빌드 시 J-2 pattern(loadLearnedSearchTerms)과
+             loadAdminConfirmedSearchTerms()를 동시에 호출(Promise.all)해 keywords_text에
+             함께 merge한다.
+             → 어느 한쪽만 있어도 정상 동작(실패 시 Map 빈 값으로 안전 폴백).
+
+⛔ cms_admin_product_search_confirmations를 product_search_stats에 합치지 않는다
+   이유: 두 테이블의 카운트 단위·기여자·의미가 달라 합산하면 통계 오염이 생긴다
+         (고객 재검색 vs 관리자 단일 선택).
+```
+
+### K-2. 신규 테이블 스키마 (Migration #357)
+
+```sql
+-- cms_admin_product_search_confirmations
+-- RLS: 활성화 + 정책 없음 (service_role 전용)
+id                UUID        PRIMARY KEY
+product_id        UUID        FK products(id) ON DELETE CASCADE
+search_term       TEXT        NOT NULL
+admin_id          UUID        FK auth.users(id) ON DELETE SET NULL
+context           TEXT        — 어느 모달에서 선택했는지 식별
+occurrence_count  INT         DEFAULT 1  — 같은 (product_id, search_term) 쌍의 누적 선택 횟수
+status            TEXT        CHECK ('candidate' | 'confirmed')  DEFAULT 'candidate'
+first_confirmed_at TIMESTAMPTZ — 최초 confirmed 전환 시점
+last_confirmed_at  TIMESTAMPTZ DEFAULT NOW()
+created_at         TIMESTAMPTZ DEFAULT NOW()
+UNIQUE(product_id, search_term)
+```
+
+### K-3. RPC: record_admin_search_confirmation
+
+```sql
+-- Migration #357 — SECURITY DEFINER, service_role 전용
+record_admin_search_confirmation(
+  p_product_id  UUID,
+  p_search_term TEXT,
+  p_admin_id    UUID,
+  p_context     TEXT,
+  p_threshold   INT DEFAULT 3  -- SYNONYM_PROMOTE_THRESHOLD 와 동일 상수값 재사용
+)
+
+동작:
+  1. search_term이 빈 문자열이면 즉시 RETURN (무의미한 신호 차단)
+  2. UPSERT ON CONFLICT(product_id, search_term):
+     occurrence_count += 1 / last_confirmed_at = NOW() / context = p_context 갱신
+  3. 신규 count >= p_threshold이면 같은 트랜잭션에서 status = 'confirmed' 업데이트
+     (candidate → confirmed 한 번만 일어나며 이후 재호출해도 idempotent)
+```
+
+### K-4. 승격 임계값 (SYNONYM_PROMOTE_THRESHOLD = 3)
+
+```
+3회 이상 같은 (상품, 검색어) 쌍이 선택됐을 때 status = 'confirmed' 승격.
+이 값은 synonymLearning.ts의 SYNONYM_PROMOTE_THRESHOLD를 그대로 재사용한다
+— 별도 config 테이블을 만들지 않는다(운용 부담 최소화 원칙).
+confirmed 행만 검색 인덱스 키워드에 반영된다(candidate는 무시).
+```
+
+### K-5. 신호 포착 위치 — 5개 CMS 모달 onProductSelect()
+
+```
+context 값            모달
+─────────────────── ────────────────────────────────────────
+home_category_products   HomeCategoryProductsModal.svelte
+home_theme_group         HomeThemeGroupModal.svelte
+product_hero             ProductHeroModal.svelte
+hype_pack_banner         HypePackBannerModal.svelte
+hype_pack_theme_group    HypePackThemeGroupModal.svelte
+
+공통 패턴 (fire-and-forget, 실패해도 모달 동작 무관):
+  if (lastSearchQuery) {
+    fetch('/api/cms/products/search-suggestions', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        product_id:  opt.id,
+        search_term: lastSearchQuery,
+        context:     '{context 값}',
+      }),
+    }).catch(() => {})
+  }
+
+lastSearchQuery = $state('') — 사용자가 실제로 타이핑해서 검색했을 때만 채워짐.
+  빈 문자열이면 POST 자체를 보내지 않는다(RPC 내부 guard와 이중 방어).
+
+⛔ CrazylogBannerModal.svelte — 다른 RPC(search_crazylog_posts)를 쓰므로 이 파이프라인 미적용
+```
+
+### K-6. 인덱스 소비 (productSearchIndex.ts)
+
+```typescript
+// §J-2 pattern 재사용 — loadLearnedSearchTerms()와 동일 Map<product_id, term[]> 반환 형식
+async function loadAdminConfirmedSearchTerms(): Promise<Map<string, string[]>>
+  → cms_admin_product_search_confirmations.status = 'confirmed' 행만 조회
+  → service_role 클라이언트 사용 (RLS 우회)
+  → 실패 시 빈 Map 반환 (안전 폴백)
+
+getProductSearchIndex() 내 병렬 호출:
+  const [productResult, promoteThreshold, adminConfirmedTerms] = await Promise.all([
+    supabase.from('products').select(...),
+    loadPromoteThreshold(),
+    loadAdminConfirmedSearchTerms(),     // ← K-6 신규 추가
+  ])
+
+keywords_text 병합:
+  const learned        = learnedTerms.get(productId) ?? []          // J-2 고객 재검색 신호
+  const adminConfirmed = adminConfirmedTerms.get(productId) ?? []   // K-6 관리자 확인 신호
+  const keywords_text  = [baseKeywords, ...learned, ...adminConfirmed].filter(Boolean).join(' ')
+
+⛔ synonym_groups 테이블 미사용: 관리자 확인 신호는 동의어 개념이 아니라
+   "특정 상품에 대한 검색어 연결" 이므로 synonym_groups 구조와 맞지 않는다.
+   소비 방식도 expandQueryWithConfirmedSynonyms와 다르다(쿼리 확장이 아닌 색인 보강).
+```
+
+### K-7. 구현 파일 참조
+
+```
+Migration SQL  : supabase/migrations/20260826080000_357_cms_admin_product_search_confirmations.sql
+                 (Stephen이 Stage → Production 순으로 직접 적용)
+POST 핸들러    : src/routes/api/cms/products/search-suggestions/+server.ts  (I-2 완료)
+신호 포착      : HomeCategoryProductsModal / HomeThemeGroupModal / ProductHeroModal
+                 HypePackBannerModal / HypePackThemeGroupModal (각 onProductSelect, I-3 완료)
+인덱스 소비    : src/lib/server/searchEngine/adapters/productSearchIndex.ts (I-4 완료)
+```
+
+---
+
 ## 5. 캐싱 정책 (전체 공통 패턴)
 
 ```
@@ -263,4 +401,10 @@ H-1: components·specs 색인 추가 / J-2: 학습 기반 키워드 승격 / §I
 §E(synonymExpander.ts 순수함수 + 검색 API 동의어 확장 연동 + 10개 테스트),
 §F(nlsearch.md §1·§2·§4 갱신),
 §G(재검색 행동학습 — migration 253+254, pg_cron 매일 새벽 3시 자동 스캔 + 관리자 수동 재스캔
-버튼 병행, 오탐방지 7종, 유닛테스트 6건) — §4-2 신설*
+버튼 병행, 오탐방지 7종, 유닛테스트 6건) — §4-2 신설 |
+2026-08-26 §K 신설(§4-3) — 관리자 검색 확인 신호 파이프라인:
+CMS 5개 모달(HomeCategoryProducts·HomeThemeGroup·ProductHero·HypePackBanner·HypePackThemeGroup)의
+onProductSelect fire-and-forget POST 신호를 cms_admin_product_search_confirmations(Migration #357)에
+저장 분리, status='confirmed'(임계값 3회) 행만 productSearchIndex.ts 인덱스 빌드 시 J-2 pattern으로
+병합 소비 — "저장 분리/소비 병합" 원칙 명문화, synonym_groups 미사용 근거(색인 보강 vs 쿼리 확장
+구조 차이) 포함*

@@ -146,6 +146,55 @@
     width: max-content;
   }
 
+  /* "관심가져봄" 상품 썸네일 — front-uiux.md §14-4 "S(소형)" 크기 등급(2026-08-26 신설,
+     ProductDPCard 기본(M) 대비 30% 축소) 적용. ProductDPCard.svelte는 §14-4 "⛔ 내부 CSS
+     직접 수정 금지" 원칙에 따라 그대로 두고 부모 :global() 오버라이드로만 처리.
+     기준값은 실제 ProductDPCard.svelte 라이브 코드(.pc-clip, 비대칭 radius)를 그대로
+     ×0.7 스케일 — 문서(§14-4) 구버전(.pc-heart/30px 균일/36px)은 최신 코드와 불일치해
+     이번에 함께 정정함. 모바일·PC 둘 다 각자의 M 기준값에서 동일 비율로 축소. */
+
+  /* Mobile 기본(M 174px → S 122px) */
+  .scroll-inner :global(.pc-card) {
+    width: 122px;
+  }
+  .scroll-inner :global(.pc-img-wrap) {
+    width: 122px;
+    height: 122px;
+    border-radius: 14px 6px 14px 6px;
+  }
+  .scroll-inner :global(.pc-clip) {
+    width: 15px;
+    height: 15px;
+    top: 5px;
+    right: 5px;
+  }
+  .scroll-inner :global(.pc-clip svg) {
+    width: 10px;
+    height: 10px;
+  }
+
+  /* PC(M 290px → S 203px, ×5/3 비대칭 radius 33/13 → 23/9) */
+  @media (min-width: 768px) {
+    .scroll-inner :global(.pc-card) {
+      width: 203px;
+    }
+    .scroll-inner :global(.pc-img-wrap) {
+      width: 203px;
+      height: 203px;
+      border-radius: 23px 9px 23px 9px;
+    }
+    .scroll-inner :global(.pc-clip) {
+      width: 31px;
+      height: 31px;
+      top: 10px;
+      right: 10px;
+    }
+    .scroll-inner :global(.pc-clip svg) {
+      width: 24px;
+      height: 24px;
+    }
+  }
+
   .empty-wish {
     display: flex;
     flex-direction: column;

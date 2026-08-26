@@ -82,6 +82,7 @@
         id="kw-picker"
         bind:selectedId={kwPickerSelectedId}
         options={availableKwOptions}
+        clearOnSelect
         placeholder="키워드 검색 또는 선택..."
         listLabel="키워드 제안"
         onselect={(opt) => addKeyword(opt.id)}

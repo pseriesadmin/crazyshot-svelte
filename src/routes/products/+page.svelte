@@ -8,8 +8,21 @@
   import ProductHeroModal from '$lib/components/products/admin/ProductHeroModal.svelte'
   import ProductGridModal from '$lib/components/products/admin/ProductGridModal.svelte'
   import ProductMdPickModal from '$lib/components/products/admin/ProductMdPickModal.svelte'
+  import { toggleWish } from '$lib/utils/wishlist'
 
   let { data }: { data: PageData } = $props()
+
+  let wishedSet = $state(new Set(data.wishedIds))
+  $effect(() => { wishedSet = new Set(data.wishedIds) })
+
+  async function handleWishToggle(id: string | undefined) {
+    if (!id) return
+    const action = await toggleWish(id)
+    if (!action) return
+    const next = new Set(wishedSet)
+    if (action === 'added') next.add(id); else next.delete(id)
+    wishedSet = next
+  }
 
   // ── 정적 타입 (폴백용) ──────────────────────────────────────────────────
   interface ImgStyle { h: string; l: string; t: string; w: string }
@@ -18,12 +31,9 @@
 
   // ── 카테고리 아이콘 매핑 (code → SVG 인덱스 0~7) ───────────────────────
 
-  const KEYWORDS_FALLBACK = ['SONY', 'CANON', 'NIKON', 'Fujitsu', 'Olympus', 'Panasonic']
-  let displayKeywords = $derived(
-    data.settings.keywords.items.length > 0
-      ? data.settings.keywords.items
-      : KEYWORDS_FALLBACK
-  )
+  // 모바일 키워드 필은 CMS "카테고리 설정"에 저장된 값만 반영 — 트렌딩/하드코딩 폴백 없음.
+  // 설정값이 없으면 섹션 자체를 숨기고, 저장되면 다시 노출된다.
+  let displayKeywords = $derived(data.settings.keywordsRaw.items)
 
 
   const desktopProducts: DesktopProduct[] = [
@@ -150,10 +160,6 @@
     if (d12 != null) parts.push(`12H ${formatPrice(d12)}`)
     return parts.join(' / ') || '–'
   }
-  function heroMobilePrice(p: ProductCard): string {
-    const d24 = p.price_24h ?? (p.base_price_daily > 0 ? p.base_price_daily : null)
-    return d24 != null ? `${formatPrice(d24)} 원 / 1일` : '–'
-  }
   function productImg(p: ProductCard): string {
     return p.image_urls?.[0] ?? '/images/products/grid-flat.png'
   }
@@ -204,12 +210,14 @@
         {/if}
       </div>
 
-      <!-- Mobile: keyword pills -->
-      <div class="m-keywords">
-        {#each displayKeywords as kw}
-          <button class="kw-pill" onclick={() => goto(`/products/search?q=${encodeURIComponent(kw)}`)}>{kw}</button>
-        {/each}
-      </div>
+      <!-- Mobile: keyword pills — 설정값 없으면 섹션 자체 미노출 -->
+      {#if displayKeywords.length > 0}
+        <div class="m-keywords">
+          {#each displayKeywords as kw}
+            <button class="kw-pill" onclick={() => goto(`/products/search?q=${encodeURIComponent(kw)}`)}>{kw}</button>
+          {/each}
+        </div>
+      {/if}
 
       <!-- Mobile: section header (category label + chevron + more) -->
       <div class="m-sec-header">
@@ -251,10 +259,26 @@
               {/each}
             </div>
             <div class="m-feat-info">
-              <p class="m-feat-title">{prod.name}</p>
-              <div class="m-feat-price-wrap">
-                <p class="m-feat-price">{heroMobilePrice(prod)}</p>
-                <p class="m-feat-desc">{prod.product_caption ?? ''}</p>
+              <p class="m-feat-name">{prod.name}</p>
+              {#if prod.product_caption}
+                <p class="m-feat-desc">{prod.product_caption}</p>
+              {/if}
+              <div class="m-feat-price-row">
+                {#if (prod.price_24h ?? prod.base_price_daily) > 0}
+                  <div class="m-feat-price-unit">
+                    <span class="m-feat-plabel">Day</span>
+                    <span class="m-feat-pnum">{formatPrice(prod.price_24h ?? prod.base_price_daily)}</span>
+                    <span class="m-feat-pcur">원</span>
+                  </div>
+                {/if}
+                {#if prod.price_12h}
+                  <span class="m-feat-psep">/</span>
+                  <div class="m-feat-price-unit">
+                    <span class="m-feat-plabel">12H</span>
+                    <span class="m-feat-pnum">{formatPrice(prod.price_12h)}</span>
+                    <span class="m-feat-pcur">원</span>
+                  </div>
+                {/if}
               </div>
             </div>
           </a>
@@ -373,10 +397,39 @@
               <img src={productImg(prod)} alt={prod.name} class="abs-img"
                 style="width:100%;height:100%;object-fit:cover;left:0;top:0"
                 loading="lazy" />
+              {#if wishedSet.has(prod.id)}
+                <button
+                  class="mdp-clip active"
+                  aria-label="찜 해제"
+                  aria-pressed="true"
+                  onclick={(e) => { e.preventDefault(); e.stopPropagation(); handleWishToggle(prod.id) }}
+                >
+                  <svg width="14" height="14" viewBox="0 0 63 63" fill="none" aria-hidden="true">
+                    <path d="M31.3184 17.7266C34.3143 14.7584 39.1662 14.7584 42.1621 17.7266C45.1654 20.7024 45.1656 25.5331 42.1621 28.5088L29.5205 41.0322C27.7302 42.8059 24.8332 42.8059 23.043 41.0322C21.2452 39.2508 21.245 36.3565 23.043 34.5752L34.5674 23.1582C35.1558 22.5752 36.1054 22.5796 36.6885 23.168C37.2715 23.7564 37.2671 24.706 36.6787 25.2891L25.1543 36.707C24.5414 37.3146 24.5413 38.2939 25.1543 38.9014C25.7753 39.5166 26.7882 39.5165 27.4092 38.9014L40.0508 26.377C41.8692 24.575 41.8692 21.6594 40.0508 19.8574C38.2241 18.0477 35.2563 18.0477 33.4297 19.8574L20.7686 32.4014C17.744 35.3979 17.744 40.2506 20.7686 43.2471C23.8008 46.251 28.7227 46.2511 31.7549 43.2471L44.9443 30.1797C45.5328 29.5967 46.4824 29.6011 47.0654 30.1895C47.6484 30.7779 47.644 31.7275 47.0557 32.3105L33.8662 45.3779C29.6647 49.5405 22.8588 49.5405 18.6572 45.3779C14.4479 41.2076 14.448 34.4408 18.6572 30.2705L31.3184 17.7266Z" fill="currentColor"/>
+                  </svg>
+                </button>
+              {/if}
             </div>
-            <div class="m-prod-info">
-              <p class="m-prod-name">{prod.name}</p>
-              <p class="m-prod-price">{dayPrice(prod)}</p>
+            <div class="mdp-info">
+              {#if prod.category}
+                <p class="mdp-category">{prod.category}</p>
+              {/if}
+              <div class="mdp-price-row">
+                {#if (prod.price_24h ?? prod.base_price_daily) > 0}
+                  <span class="mdp-price-group">
+                    <span class="mdp-price-label">Day</span>
+                    <span class="mdp-price-num">{formatPrice(prod.price_24h ?? prod.base_price_daily)}</span>
+                  </span>
+                {/if}
+                {#if prod.price_12h}
+                  <span class="mdp-price-sep">/</span>
+                  <span class="mdp-price-group">
+                    <span class="mdp-price-label">12H</span>
+                    <span class="mdp-price-num">{formatPrice(prod.price_12h)}</span>
+                  </span>
+                {/if}
+              </div>
+              <p class="mdp-name">{prod.name}</p>
             </div>
           </a>
         {/each}
@@ -419,6 +472,18 @@
               <img src={productImg(prod)} alt={prod.name} class="abs-img"
                 style="width:100%;height:100%;object-fit:cover;left:0;top:0"
                 loading="lazy" />
+              {#if wishedSet.has(prod.id)}
+                <button
+                  class="mprod-clip active"
+                  aria-label="찜 해제"
+                  aria-pressed="true"
+                  onclick={(e) => { e.preventDefault(); e.stopPropagation(); handleWishToggle(prod.id) }}
+                >
+                  <svg width="30" height="30" viewBox="0 0 63 63" fill="none" aria-hidden="true">
+                    <path d="M31.3184 17.7266C34.3143 14.7584 39.1662 14.7584 42.1621 17.7266C45.1654 20.7024 45.1656 25.5331 42.1621 28.5088L29.5205 41.0322C27.7302 42.8059 24.8332 42.8059 23.043 41.0322C21.2452 39.2508 21.245 36.3565 23.043 34.5752L34.5674 23.1582C35.1558 22.5752 36.1054 22.5796 36.6885 23.168C37.2715 23.7564 37.2671 24.706 36.6787 25.2891L25.1543 36.707C24.5414 37.3146 24.5413 38.2939 25.1543 38.9014C25.7753 39.5166 26.7882 39.5165 27.4092 38.9014L40.0508 26.377C41.8692 24.575 41.8692 21.6594 40.0508 19.8574C38.2241 18.0477 35.2563 18.0477 33.4297 19.8574L20.7686 32.4014C17.744 35.3979 17.744 40.2506 20.7686 43.2471C23.8008 46.251 28.7227 46.2511 31.7549 43.2471L44.9443 30.1797C45.5328 29.5967 46.4824 29.6011 47.0654 30.1895C47.6484 30.7779 47.644 31.7275 47.0557 32.3105L33.8662 45.3779C29.6647 49.5405 22.8588 49.5405 18.6572 45.3779C14.4479 41.2076 14.448 34.4408 18.6572 30.2705L31.3184 17.7266Z" fill="currentColor"/>
+                  </svg>
+                </button>
+              {/if}
             </div>
             <div class="m-prod-info">
               <p class="m-prod-name">{prod.name}</p>
@@ -473,6 +538,18 @@
               <img src={productImg(prod)} alt={prod.name} class="abs-img"
                 style="width:100%;height:100%;object-fit:cover;left:0;top:0"
                 loading="lazy" />
+              {#if wishedSet.has(prod.id)}
+                <button
+                  class="mprod-clip active"
+                  aria-label="찜 해제"
+                  aria-pressed="true"
+                  onclick={(e) => { e.preventDefault(); e.stopPropagation(); handleWishToggle(prod.id) }}
+                >
+                  <svg width="30" height="30" viewBox="0 0 63 63" fill="none" aria-hidden="true">
+                    <path d="M31.3184 17.7266C34.3143 14.7584 39.1662 14.7584 42.1621 17.7266C45.1654 20.7024 45.1656 25.5331 42.1621 28.5088L29.5205 41.0322C27.7302 42.8059 24.8332 42.8059 23.043 41.0322C21.2452 39.2508 21.245 36.3565 23.043 34.5752L34.5674 23.1582C35.1558 22.5752 36.1054 22.5796 36.6885 23.168C37.2715 23.7564 37.2671 24.706 36.6787 25.2891L25.1543 36.707C24.5414 37.3146 24.5413 38.2939 25.1543 38.9014C25.7753 39.5166 26.7882 39.5165 27.4092 38.9014L40.0508 26.377C41.8692 24.575 41.8692 21.6594 40.0508 19.8574C38.2241 18.0477 35.2563 18.0477 33.4297 19.8574L20.7686 32.4014C17.744 35.3979 17.744 40.2506 20.7686 43.2471C23.8008 46.251 28.7227 46.2511 31.7549 43.2471L44.9443 30.1797C45.5328 29.5967 46.4824 29.6011 47.0654 30.1895C47.6484 30.7779 47.644 31.7275 47.0557 32.3105L33.8662 45.3779C29.6647 49.5405 22.8588 49.5405 18.6572 45.3779C14.4479 41.2076 14.448 34.4408 18.6572 30.2705L31.3184 17.7266Z" fill="currentColor"/>
+                  </svg>
+                </button>
+              {/if}
             </div>
             <div class="m-prod-info">
               <p class="m-prod-name">{prod.name}</p>
@@ -523,6 +600,8 @@
               price12h={prod.price_12h ?? null}
               href={productLink(prod)}
               category={prod.category}
+              wished={wishedSet.has(prod.id)}
+              onWishToggle={data.isLoggedIn ? handleWishToggle : undefined}
             />
           {/each}
         {:else}
@@ -708,6 +787,7 @@
     object-fit: cover;
   }
   .cat-label {
+    display: none;
     font-family: 'Noto Sans KR', sans-serif;
     font-weight: 700;
     font-size: 14px;
@@ -783,7 +863,7 @@
     width: 310px;
     min-width: 310px;
     height: 450px;
-    border-radius: 50px 50px 50px 20px;
+    border-radius: 50px 20px 50px 20px;
     overflow: clip;
     position: relative;
     scroll-snap-align: start;
@@ -797,13 +877,13 @@
     position: absolute;
     inset: 0;
     background: #e1def3;
-    border-radius: 50px 50px 50px 20px;
+    border-radius: 50px 20px 50px 20px;
   }
   .m-feat-img-box {
     position: absolute;
     inset: 0;
     overflow: hidden;
-    border-radius: 50px 50px 50px 20px;
+    border-radius: 50px 20px 50px 20px;
   }
   .m-feat-dots {
     display: flex;
@@ -827,45 +907,56 @@
     background: rgba(255,255,255,0.6);
     display: inline-block;
   }
+  /* ── m-feat-info: d-feat-info(PC)와 동일 구조(flex-col + gap + padding) ── */
   .m-feat-info {
     background: linear-gradient(to bottom, rgba(225,222,243,0) 0%, rgba(225,222,243,0.85) 30%, rgba(225,222,243,0.95) 100%);
     position: relative;
     z-index: 10;
     width: 100%;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+    padding: 36px 30px 26px;
   }
-  .m-feat-info > * {
-    padding: 0 30px 30px;
-  }
-  .m-feat-title {
-    font-family: 'Noto Sans KR', sans-serif;
-    font-weight: 700;
-    font-size: 18px;
+  .m-feat-name {
+    font: var(--text-m-title-18B);
     color: #100b32;
-    line-height: 1.6;
     letter-spacing: -0.3px;
+    margin: 0;
+    width: 100%;
     white-space: nowrap;
-    margin: 0 0 15px;
-    padding: 30px 30px 0;
-  }
-  .m-feat-price-wrap { padding: 0 30px 30px; }
-  .m-feat-price {
-    font-family: 'Noto Sans KR', sans-serif;
-    font-weight: 700;
-    font-size: 16px;
-    color: #3b2f8a;
-    line-height: 1.6;
-    letter-spacing: -0.5px;
-    white-space: nowrap;
-    margin: 0 0 5px;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
   .m-feat-desc {
-    font-family: 'Noto Sans KR', sans-serif;
-    font-weight: 500;
-    font-size: 14px;
+    font: var(--text-m-script-12);
     color: #666;
-    line-height: 1.6;
+    letter-spacing: -0.3px;
     margin: 0;
+    width: 100%;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
+  .m-feat-price-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-wrap: wrap;
+    margin: 4px 0 0;
+    color: var(--cs-red-badge, #FF3535);
+  }
+  .m-feat-price-unit { display: flex; align-items: baseline; gap: 3px; }
+  .m-feat-plabel { font: var(--text-m-body-16B); }
+  .m-feat-pnum {
+    font: var(--text-m-htitle-24B);
+    font-weight: 900;
+    line-height: 1;
+    font-variant-numeric: tabular-nums;
+  }
+  .m-feat-pcur { font: var(--text-m-body-16B); }
+  .m-feat-psep { font: var(--text-m-body-16B); }
 
   /* ── DESKTOP SLIDER – hidden on mobile ── */
   .d-slider-outer { display: none; }
@@ -913,7 +1004,7 @@
     flex: 0 0 calc((100% - (20px * var(--dpp) - 20px)) / var(--dpp));
     min-width: 300px;
     height: 580px;
-    border-radius: 50px;
+    border-radius: 50px 20px 50px 20px;
     overflow: clip;
     position: relative;
     text-decoration: none;
@@ -929,13 +1020,13 @@
     position: absolute;
     inset: 0;
     background: #e1def3;
-    border-radius: 50px;
+    border-radius: 50px 20px 50px 20px;
   }
   .d-feat-img-box {
     position: absolute;
     inset: 0;
     overflow: hidden;
-    border-radius: 50px;
+    border-radius: 50px 20px 50px 20px;
   }
   .d-feat-info {
     background: linear-gradient(to bottom, rgba(225,222,243,0) 0%, rgba(225,222,243,0.88) 30%, rgba(225,222,243,0.97) 100%);
@@ -949,11 +1040,8 @@
     padding: 48px 30px 28px;
   }
   .d-feat-name {
-    font-family: 'Noto Sans KR', sans-serif;
-    font-weight: 800;
-    font-size: 17px;
+    font: var(--text-pc-title-18);
     color: var(--cs-dark, #1d183e);
-    line-height: 1.3;
     letter-spacing: -0.5px;
     margin: 0;
     width: 100%;
@@ -962,11 +1050,8 @@
     text-overflow: ellipsis;
   }
   .d-feat-desc {
-    font-family: 'Noto Sans KR', sans-serif;
-    font-weight: 500;
-    font-size: 13px;
+    font: var(--text-pc-script-12);
     color: var(--cs-text-dark, #444);
-    line-height: 1.3;
     letter-spacing: -0.3px;
     margin: 0;
     width: 100%;
@@ -979,7 +1064,7 @@
     align-items: center;
     gap: 8px;
     margin: 8px 0 0;
-    flex-wrap: nowrap;
+    flex-wrap: wrap;
     color: var(--cs-red-badge, #FF3535);
   }
   .d-feat-price-unit { display: flex; align-items: baseline; gap: 4px; }
@@ -1051,7 +1136,7 @@
   .md-picks-track::-webkit-scrollbar { display: none; }
   .md-pick-card {
     flex: none;
-    width: 200px;
+    width: 174px;
     text-decoration: none;
     display: flex;
     flex-direction: column;
@@ -1061,11 +1146,102 @@
   .md-pick-card:hover { transform: scale(1.02); }
   .md-pick-img-box {
     width: 100%;
-    height: 200px;
-    border-radius: 20px 20px 0 0;
+    aspect-ratio: 1 / 1;
+    border-radius: var(--radius-lg) var(--radius-sm) var(--radius-lg) var(--radius-sm);
     overflow: hidden;
     position: relative;
-    background: #e1def3;
+    background: var(--cs-lilac);
+  }
+  .mdp-clip {
+    position: absolute;
+    top: 7px;
+    right: 7px;
+    width: 22px;
+    height: 22px;
+    border-radius: 50%;
+    border: none;
+    background: rgba(255, 207, 207, 0.8); /* var(--cs-chat-in-bg) #FFCFCF 80% 투명도 */
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: white;
+    transition: background 0.18s, transform 0.18s, color 0.18s;
+    padding: 0;
+  }
+  .mdp-clip svg { width: 14px; height: 14px; }
+  .mdp-clip:hover { background: #ffb8b8; transform: scale(1.1); }
+  .mdp-clip.active { background: rgba(255, 207, 207, 0.8); color: #FF3535; }
+  .mdp-clip.active svg path { fill: #FF3535; }
+  .mdp-clip:active { transform: scale(0.9); }
+
+  /* Best Pick(m-prod-card) 전용 — 박스가 174px 정사각형이 아니라 157.5×200px로 더 커서
+     mdp-clip(22px) 그대로 쓰면 비율상 작아 보임(Stephen 2026-08-26 확인) — 이 카드만 확대 */
+  .mprod-clip {
+    position: absolute;
+    top: 12px;
+    right: 12px;
+    width: 36px;
+    height: 36px;
+    border-radius: 50%;
+    border: none;
+    background: rgba(255, 207, 207, 0.8); /* var(--cs-chat-in-bg) #FFCFCF 80% 투명도 */
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: white;
+    transition: background 0.18s, transform 0.18s, color 0.18s;
+    padding: 0;
+  }
+  .mprod-clip svg { width: 30px; height: 30px; }
+  .mprod-clip:hover { background: #ffb8b8; transform: scale(1.1); }
+  .mprod-clip.active { background: rgba(255, 207, 207, 0.8); color: #FF3535; }
+  .mprod-clip.active svg path { fill: #FF3535; }
+  .mprod-clip:active { transform: scale(0.9); }
+  .mdp-info {
+    display: flex;
+    flex-direction: column;
+    gap: var(--spacing-3);
+    padding: var(--spacing-3) 0 0;
+    width: 100%;
+    min-width: 0;
+  }
+  .mdp-category {
+    font: var(--text-m-script-12);
+    font-weight: 700;
+    color: var(--cs-text-light);
+    line-height: 1;
+    margin: 0;
+    text-transform: uppercase;
+  }
+  .mdp-price-row {
+    display: flex;
+    align-items: center;
+    gap: 3px;
+    color: var(--cs-text);
+    letter-spacing: -0.5px;
+    flex-wrap: wrap;
+  }
+  .mdp-price-group { display: flex; align-items: center; gap: 3px; }
+  .mdp-price-label { font: var(--text-m-script-14B); line-height: 1; }
+  .mdp-price-num {
+    font: var(--text-m-body-16B);
+    font-weight: 900;
+    line-height: 1;
+    font-variant-numeric: tabular-nums;
+  }
+  .mdp-price-sep { font: var(--text-m-script-14B); line-height: 1; }
+  .mdp-name {
+    font: var(--text-m-script-14B);
+    color: var(--cs-text-mid);
+    letter-spacing: -0.5px;
+    line-height: 1;
+    margin: 0;
+    width: 100%;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
 
   /* ─────────────────────────────────────────────────────────────────── */
@@ -1134,8 +1310,8 @@
   .m-prod-card:hover { transform: scale(1.02); }
   .m-prod-img-box {
     width: 100%;
-    height: 200px;
-    border-radius: 20px 20px 0 0;
+    aspect-ratio: 1 / 1;
+    border-radius: var(--radius-lg) var(--radius-sm) var(--radius-lg) var(--radius-sm);
     overflow: hidden;
     position: relative;
     background: #e1def3;
@@ -1374,6 +1550,7 @@
     }
     .cat-btn { height: 140px; justify-content: space-between; }
     .cat-icon-box { width: 100px; height: 100px; min-width: 100px; min-height: 100px; border-radius: 30px; justify-content: center; align-items: center; }
+    .cat-label { display: block; }
     .cat-label.active { color: #3b2f8a; }
 
     /* Desktop: hide mobile-only elements */
@@ -1398,5 +1575,10 @@
 
     /* MD picks: desktop layout */
     .md-picks-section { padding: 20px 56px 40px; max-width: 100%; }
+    .md-pick-card { width: 290px; }
+    .md-pick-img-box { border-radius: 33px 13px 33px 13px; }
+    .mdp-clip { top: 14px; right: 14px; width: 44px; height: 44px; }
+    .mdp-clip svg { width: 34px; height: 34px; }
+    .mdp-info { gap: var(--spacing-5); padding: var(--spacing-5) 0 0; }
   }
 </style>

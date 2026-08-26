@@ -28,6 +28,7 @@ import { supabase } from '$lib/services/supabase'
 import { getProductSearchIndex } from '$lib/server/searchEngine/adapters/productSearchIndex'
 import { loadSynonymGroups } from '$lib/server/synonymLearning'
 import { expandQueryWithConfirmedSynonyms } from '$lib/server/searchEngine/core/synonymExpander'
+import { getWishedProductIds } from '$lib/server/getWishedProductIds'
 import type { RequestHandler } from './$types'
 
 // RPC 결과 "약한 매칭" 기준 — 이 건수 이하면 자연어 폴백 보강 실행
@@ -97,7 +98,14 @@ export const GET: RequestHandler = async ({ url, locals }) => {
   const shouldFallback = q.length >= 1 && rpcResults.length <= WEAK_MATCH_THRESHOLD
 
   if (!shouldFallback) {
-    return json({ results: rpcResults, query: q, page, limit, search_log_id: searchLogId })
+    const wishedIds = await getWishedProductIds(
+      locals.supabase,
+      session?.user?.id,
+      rpcResults.map((r) => String(r['product_id'] ?? r['id'] ?? '')),
+    )
+    const wishedSet = new Set(wishedIds)
+    const results = rpcResults.map((r) => ({ ...r, wished: wishedSet.has(String(r['product_id'] ?? r['id'] ?? '')) }))
+    return json({ results, query: q, page, limit, search_log_id: searchLogId })
   }
 
   // ── 2차: 동의어 확장 RPC 재조회 + 3차 MiniSearch 폴백 (약한 매칭 보강 — §E-2) ──
@@ -170,5 +178,14 @@ export const GET: RequestHandler = async ({ url, locals }) => {
     // 자연어 폴백 실패 시 현재까지 병합된 결과만 반환 (서비스 중단 방지)
   }
 
-  return json({ results: mergedResults.slice(0, limit), query: q, page, limit, search_log_id: searchLogId })
+  const finalResults = mergedResults.slice(0, limit)
+  const wishedIds = await getWishedProductIds(
+    locals.supabase,
+    session?.user?.id,
+    finalResults.map((r) => String(r['product_id'] ?? r['id'] ?? '')),
+  )
+  const wishedSet = new Set(wishedIds)
+  const results = finalResults.map((r) => ({ ...r, wished: wishedSet.has(String(r['product_id'] ?? r['id'] ?? '')) }))
+
+  return json({ results, query: q, page, limit, search_log_id: searchLogId })
 }

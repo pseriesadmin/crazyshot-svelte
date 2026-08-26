@@ -4,6 +4,7 @@
   import { performSignIn } from '$lib/stores/auth'
   import MobileMoreMenu from '$lib/components/common/MobileMoreMenu.svelte'
   import SignUpModal from '$lib/components/auth/SignUpModal.svelte'
+  import LoginBannerModal from '$lib/components/auth/LoginBannerModal.svelte'
   import type { PageData } from './$types'
 
   // ── 서버 데이터 (CMS → 프로모션 → 광고 배너) ──
@@ -18,6 +19,7 @@
   let isLoading = $state(false)
   let errorMsg = $state<string | null>(null)
   let showSignUpModal = $state(false)
+  let showLoginBannerModal = $state(false)
 
   // 이메일+비밀번호 모두 입력 시 Sign In 모드, 아니면 Sign Up 모드
   let isSignInMode = $derived(email.trim().length > 0 && password.length > 0)
@@ -56,16 +58,19 @@
   <!-- Body — 메인 레이아웃 GNB(fixed 100px) 아래부터 시작 -->
   <div class="d-body">
     <div class="d-container">
-      <!-- 백 버튼 nav pill -->
+      <!-- 백 버튼 nav pill (sub-gnb_navi_b 표준) -->
       <button class="d-nav-pill" onclick={handleBack} aria-label="이전 페이지로">
-        <span class="d-back-icon" aria-hidden="true">
-          <svg width="21" height="17" viewBox="0 0 21.3844 17.1421" fill="none">
-            <path d="M20.3844 8.5711H1M8.5 1L1 8.5711L8.5 16.1421"
-              stroke="var(--cs-text)" stroke-width="3"
-              stroke-linecap="round" stroke-linejoin="round"/>
-          </svg>
-        </span>
-        <span class="d-back-label">Back</span>
+        <div class="d-nav-pill-left">
+          <span class="d-back-icon" aria-hidden="true">
+            <svg width="21" height="17" viewBox="0 0 21.3844 17.1421" fill="none">
+              <path d="M20.3844 8.5711H1M8.5 1L1 8.5711L8.5 16.1421"
+                stroke="currentColor" stroke-width="3"
+                stroke-linecap="round" stroke-linejoin="round"/>
+            </svg>
+          </span>
+          <span class="d-back-label">Back</span>
+        </div>
+        <span class="d-nav-pill-title">Log In</span>
       </button>
 
       <!-- 메인 카드 -->
@@ -78,6 +83,13 @@
           <div class="d-title-content">
             <p class="d-welcome-en">Welcome</p>
             <p class="d-welcome-sub">let's start with us</p>
+            {#if data.isCmsAdmin}
+              <button
+                class="d-admin-edit-btn"
+                onclick={() => showLoginBannerModal = true}
+                aria-label="로그인 배너 관리"
+              >배너 관리</button>
+            {/if}
           </div>
         </div>
 
@@ -253,6 +265,10 @@
     goto(redirectTo)
   }}
 />
+
+{#if showLoginBannerModal}
+  <LoginBannerModal onclose={() => showLoginBannerModal = false} />
+{/if}
 
 
 <!-- ═══════════════════════════════════════════════
@@ -485,13 +501,13 @@
     .m-wrap  { display: none !important; }
   }
 
-  /* Body — 메인 레이아웃 fixed GNB(약 114px) 아래부터 시작 */
+  /* Body — GNB 없는 auth 전용 레이아웃, 상단 여백 */
   .d-body {
     flex: 1;
     display: flex;
     flex-direction: column;
     align-items: center;
-    padding-top: 114px;
+    padding-top: 40px;
     padding-bottom: 80px;
   }
   .d-container {
@@ -503,28 +519,38 @@
     gap: 50px;
   }
 
-  /* 백 버튼 nav pill */
+  /* 백 버튼 nav pill — sub-gnb_navi_b 표준 (front-uiux.md §13-2) */
   .d-nav-pill {
-    margin-top: 0;
-    background: var(--cs-lilac-nav);
-    border: 1px solid rgba(255,255,255,0.6);
-    backdrop-filter: blur(8px);
-    border-radius: var(--radius-lg);
+    background: rgba(225, 222, 243, 0.4);
+    border: none;
+    border-radius: 25px;
     padding: 20px 40px;
     display: flex;
     align-items: center;
-    gap: 12px;
+    justify-content: space-between;
+    gap: 16px;
     cursor: pointer;
-    align-self: flex-start;
-    min-height: 44px;
-    transition: background 0.15s;
+    width: 100%;
+    align-self: stretch;   /* .d-body align-items:center 수축 방지 (front-uiux.md §13 가로폭 확보 규칙) */
+    min-width: 0;
+    min-height: 62px;
+    box-sizing: border-box;
+    color: var(--cs-text);
+    transition: background 0.2s;
   }
-  .d-nav-pill:hover { background: var(--cs-lilac-nav); }
+  .d-nav-pill:hover { background: rgba(225, 222, 243, 0.65); }
+  .d-nav-pill-left { display: flex; align-items: center; gap: 12px; }
   .d-back-icon { display: flex; align-items: center; }
   .d-back-label {
     font: var(--text-pc-title-16);
     color: var(--cs-text);
-    font-weight: 700;
+    white-space: nowrap;
+  }
+  .d-nav-pill-title {
+    font: var(--text-pc-menu-en-20);
+    color: var(--cs-text);
+    flex-shrink: 0;
+    white-space: nowrap;
   }
 
   /* 메인 카드 */
@@ -582,6 +608,31 @@
     color: var(--cs-purple-op10);
     letter-spacing: -0.5px;
     white-space: nowrap;
+  }
+
+  /* 관리자 전용 배너 관리 버튼 — 패널 우측 상단 고정 */
+  .d-admin-edit-btn {
+    position: absolute;
+    top: 16px;
+    right: 16px;
+    z-index: 10;
+    padding: 6px 12px;
+    border: none;
+    border-radius: var(--radius-sm);
+    background: rgba(16, 11, 50, 0.75);
+    color: var(--cs-white);
+    font-family: 'Noto Sans KR', sans-serif;
+    font-size: 12px;
+    font-weight: 700;
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    min-height: 32px;
+    white-space: nowrap;
+    transition: background 0.12s;
+  }
+  .d-admin-edit-btn:hover {
+    background: rgba(16, 11, 50, 0.92);
   }
 
   /* 폼 패널 (우) */

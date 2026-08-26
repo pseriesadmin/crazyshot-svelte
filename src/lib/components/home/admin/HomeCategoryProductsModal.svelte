@@ -43,6 +43,8 @@
   let error             = $state<string | null>(null)
   let pickerSelectedId  = $state<string | null>(null)
   let debounceTimer: ReturnType<typeof setTimeout> | null = null
+  // I-3: 마지막 실제 검색어 추적 (초기 데이터 복원 시에는 빈 문자열 유지)
+  let lastSearchQuery   = $state('')
 
   const MAX_ITEMS = 10
   const selectedIds = $derived(new Set(selected.map((s) => s.id)))
@@ -98,30 +100,40 @@
     const product = searchResults.find((p) => p.id === opt.id)
     if (product && selected.length < MAX_ITEMS && !selectedIds.has(product.id)) {
       selected = [...selected, product]
+      // I-3: 실제 검색 후 선택한 경우에만 학습 신호 전송 (fire-and-forget)
+      if (lastSearchQuery) {
+        fetch('/api/cms/products/search-suggestions', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ product_id: product.id, search_term: lastSearchQuery, context: 'home_category_products' }),
+        }).catch(() => {})
+      }
     }
     setTimeout(() => { pickerSelectedId = null; searchResults = [] }, 0)
   }
 
+  // H-4: search_products 직접 RPC → /api/cms/products/search-suggestions 서버라우트 전환
+  // nlsearch.md §2 "브라우저 직접 RPC 호출 금지" 준수
   async function doSearch(q: string) {
     isSearching = true
+    lastSearchQuery = q
     try {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const { data } = await (supabase.rpc as any)('search_products', {
-        p_query:      q,
-        p_category:   null,
-        p_page:       1,
-        p_limit:      10,
-        p_session_id: null,
-        p_user_id:    null,
-      })
-      searchResults = ((data ?? []) as Record<string, unknown>[])
-        .map((r) => ({
-          id:               String(r['product_id'] ?? r['id'] ?? ''),
-          name:             String(r['name'] ?? ''),
-          image_urls:       (r['image_urls'] as string[] | null) ?? null,
-          base_price_daily: Number(r['price_min'] ?? r['base_price_daily'] ?? 0),
-        }))
-        .filter((r) => !!r.id)
+      const res = await fetch(
+        `/api/cms/products/search-suggestions?q=${encodeURIComponent(q)}&limit=10`,
+      )
+      if (res.ok) {
+        const items = await res.json() as Array<{ id: string; name: string; image_url?: string | null; price_24h?: number | null }>
+        searchResults = items
+          .filter((r) => !!r.id)
+          .map((r) => ({
+            id:               r.id,
+            name:             r.name,
+            image_urls:       r.image_url ? [r.image_url] : null,
+            base_price_daily: r.price_24h ?? 0,
+          }))
+      } else {
+        searchResults = []
+      }
     } catch {
       searchResults = []
     }
@@ -194,14 +206,12 @@
       {/if}
       {#if selected.length < MAX_ITEMS}
         <div class="hcp-picker-wrap">
-          {#if isSearching}
-            <p class="hcp-hint hcp-hint--searching">검색 중…</p>
-          {/if}
           <SuggestPicker
             id="hcp-search-{categoryId}"
             bind:selectedId={pickerSelectedId}
             options={pickerOptions}
             noFilter
+            clearOnSelect
             itemLayout="row"
             placeholder="상품명으로 검색..."
             listLabel="상품 검색 결과"
@@ -211,7 +221,7 @@
             {#snippet field(c)}
               <input
                 type="text"
-                class="hcp-input"
+                class="f-input"
                 id={c.id}
                 placeholder={c.placeholder}
                 value={c.value}
@@ -230,6 +240,9 @@
               <span class="hcp-suggest-price">{item.meta?.[0] ?? ''}</span>
             {/snippet}
           </SuggestPicker>
+          {#if isSearching}
+            <p class="hcp-hint hcp-hint--searching">검색 중…</p>
+          {/if}
         </div>
       {:else}
         <p class="hcp-hint hcp-hint--max">최대 {MAX_ITEMS}개 선택 완료. 아래 목록에서 불필요한 항목을 제거하세요.</p>
@@ -370,19 +383,19 @@
 
   .hcp-picker-wrap { position: relative; }
 
-  .hcp-input {
-    width: 100%;
-    height: 40px;
-    padding: 0 12px;
-    border: 1.5px solid var(--cs-lilac);
-    border-radius: var(--radius-md);
-    font: var(--text-pc-script-12);
+  /* SuggestPicker 표준 입력 — cms-uiux.md §7-7/§12 정본(.f-input) 그대로 사용 */
+  .f-input {
+    background: var(--cs-surface-gray);
+    border: none;
+    border-radius: var(--radius-sm);
+    padding: 10px 16px;
+    font: var(--text-pc-body-14);
     color: var(--cs-text);
-    background: #fff;
-    outline: none;
+    width: 100%;
     box-sizing: border-box;
   }
-  .hcp-input:focus { border-color: var(--cs-purple); }
+  .f-input::placeholder { color: var(--cs-text-light); }
+  .f-input:focus { outline: 2px solid var(--cs-purple); outline-offset: -2px; }
 
   .hcp-hint {
     font: var(--text-pc-script-12);
