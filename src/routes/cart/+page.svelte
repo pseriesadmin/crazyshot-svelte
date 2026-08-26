@@ -1768,7 +1768,7 @@
     /* 모바일: SubGnb가 대체 — 헤더 숨김 */
     display: none;
   }
-  @media (min-width: 641px) {
+  @media (min-width: 768px) {
     .sub-gnb-b { display: block; }
   }
   .sub-gnb-b-inner {

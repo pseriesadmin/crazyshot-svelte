@@ -18,6 +18,8 @@
     onreserve?: (data: { startDate: string; endDate: string; startHour: number; startMin: number; endHour: number; endMin: number; methodId: string; periodId: string }) => void;
     onchange?: (data: { startDate: string; endDate: string; startHour: number; startMin: number; endHour: number; endMin: number }) => void;
     chatCallback?: () => void;
+    wished?: boolean;
+    onwishtoggle?: () => void;
   }
 
   let {
@@ -37,6 +39,8 @@
     onreserve,
     onchange,
     chatCallback,
+    wished = false,
+    onwishtoggle,
   }: Props = $props();
 
   // ── Calendar state
@@ -426,6 +430,20 @@
 
     <!-- CTAs -->
     <div class="cta-row">
+      {#if onwishtoggle}
+        <button
+          class="wish-btn"
+          class:active={wished}
+          onclick={onwishtoggle}
+          aria-label={wished ? '찜 해제' : '찜하기'}
+          aria-pressed={wished}
+        >
+          <svg xmlns="http://www.w3.org/2000/svg" width="50" height="50" viewBox="0 0 63 63" fill="none">
+            <path class="wish-bg" d="M63 31.5C63 48.897 48.897 63 31.5 63C14.103 63 0 48.897 0 31.5C0 14.103 14.103 0 31.5 0C48.897 0 63 14.103 63 31.5Z"/>
+            <path class="wish-heart" d="M31.3184 17.7266C34.3143 14.7584 39.1662 14.7584 42.1621 17.7266C45.1654 20.7024 45.1656 25.5331 42.1621 28.5088L29.5205 41.0322C27.7302 42.8059 24.8332 42.8059 23.043 41.0322C21.2452 39.2508 21.245 36.3565 23.043 34.5752L34.5674 23.1582C35.1558 22.5752 36.1054 22.5796 36.6885 23.168C37.2715 23.7564 37.2671 24.706 36.6787 25.2891L25.1543 36.707C24.5414 37.3146 24.5413 38.2939 25.1543 38.9014C25.7753 39.5166 26.7882 39.5165 27.4092 38.9014L40.0508 26.377C41.8692 24.575 41.8692 21.6594 40.0508 19.8574C38.2241 18.0477 35.2563 18.0477 33.4297 19.8574L20.7686 32.4014C17.744 35.3979 17.744 40.2506 20.7686 43.2471C23.8008 46.251 28.7227 46.2511 31.7549 43.2471L44.9443 30.1797C45.5328 29.5967 46.4824 29.6011 47.0654 30.1895C47.6484 30.7779 47.644 31.7275 47.0557 32.3105L33.8662 45.3779C29.6647 49.5405 22.8588 49.5405 18.6572 45.3779C14.4479 41.2076 14.448 34.4408 18.6572 30.2705L31.3184 17.7266Z"/>
+          </svg>
+        </button>
+      {/if}
       <button
         class="reserve-btn"
         onclick={handleReserve}
@@ -783,6 +801,27 @@
   }
   .reserve-btn:hover { background: var(--cs-red); }
   .reserve-btn:disabled { background: var(--cs-text-light); cursor: not-allowed; }
+
+  .wish-btn {
+    width: 50px;
+    height: 50px;
+    flex-shrink: 0;
+    border-radius: 50%;
+    background: none;
+    border: none;
+    padding: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    transition: transform 0.15s;
+  }
+  .wish-btn svg { width: 100%; height: 100%; }
+  .wish-btn:hover { transform: scale(1.06); }
+  .wish-btn:active { transform: scale(0.94); }
+  .wish-btn .wish-bg { fill: var(--cs-chat-in-bg); } /* red-10 #FFCFCF — 기본·선택 상태 공통 */
+  .wish-btn .wish-heart { fill: var(--cs-white); transition: fill 0.15s; }
+  .wish-btn.active .wish-heart { fill: var(--cs-red-badge); } /* red-80 #FF3535 */
 
   .chat-btn {
     display: none;

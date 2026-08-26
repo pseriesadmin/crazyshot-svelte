@@ -183,7 +183,7 @@
 <div class="gnb-mobile-wrap" class:gnb-hidden={gnbHidden}>
   <nav class="gnb-mobile-nav">
     <a href="/" class="gnb-logo" aria-label="CRAZYSHOT 홈">
-      <img src="/logo-bi2.svg" alt="CRAZYSHOT" class="gnb-logo-img gnb-logo-mobile" width="117" height="72" />
+      <img src="/logo-bi2.svg" alt="CRAZYSHOT" class="gnb-logo-img gnb-logo-mobile" width="103" height="64" />
     </a>
 
     {#if !$authState.loading}
@@ -241,7 +241,7 @@
     justify-content: space-between;
     gap: clamp(16px, 5vw, 150px);   /* 고정 150px → fluid: 소형 PC 오버플로 방지 */
     padding: 0 clamp(16px, 2.5vw, 30px);
-    height: 100px;
+    height: 90px;
     width: 100%;
     max-width: var(--layout-pc-max);
     border-radius: 30px;
@@ -358,7 +358,7 @@
     align-items: center;
     justify-content: space-between;
     padding: 0 20px;
-    height: 61px;
+    height: 55px;
     width: 100%;
     border-radius: 22px;
     background: #1d183e;
@@ -366,11 +366,12 @@
     pointer-events: all;
   }
 
-  /* 모바일 로고: 72px tall in 61px nav → ~5.5px overflow 상하 (브랜드 아이덴티티) */
+  /* 모바일 로고: 64px tall in 55px nav → 상하 각 4.5px 균등 overflow(align-items:center 자연 정렬)
+     이전 translateY(-3px) 오프셋은 과거 크기(117x72/nav 61px) 기준값이라 현재 크기에서
+     상단 7.5px·하단 1.5px로 비대칭 쏠림을 유발해 제거함 */
   .gnb-logo-mobile {
-    width: 117px;
-    height: 72px;
-    transform: translateY(-3px);
+    width: 103px;
+    height: 64px;
   }
 
   .gnb-avatar-btn {
