@@ -1271,6 +1271,227 @@ TDD도메인: 결제·쿠폰(AGENTS.md TDD 강제 키워드 명백 해당) — `
   - Stage(ezyvffjvuwmtuhpxdjrw) TDD 전부 GREEN + 기존 발급 쿠폰 회귀 확인(§Q4) + Stephen 승인
     전까지 Production 미적용.
 
+
+### 🔍 QA 정밀검수 — 메뉴별 세부 접근권한이 실제로 화면 접근을 제어하는가 (2026-08-26, sp3-qa-agent)
+
+> Stephen이 권한설정 탭 실제 렌더링 화면을 보고 "화면·기능별 접근 제어 연동이 정말 되는지"
+> 정밀검수를 직접 요청. 이전 QA(Stage 9)는 API 레벨 정합성만 확인했고, 이번이 "토글을 끄면
+> 그 계정이 실제로 그 화면에 못 들어가는가"를 코드 트레이스로 끝까지 추적한 최초 검수다.
+> 검증은 코드 직독 + `roleAllowsMenuByDefault`/`findCmsMenuKeyForPath`/`hasMenuAccess`를
+> vitest로 실제 호출해 반환값을 확인하는 방식으로 수행(추측 없음, 전부 라이브 실행 결과).
+
+**① 저장 키 vs 판정 키 일치 여부 — CONFIRMED (정상)**
+```
+PUT /api/cms/accounts/[id]/menu-permissions → cms_set_menu_permission(p_target_user_id=params.id, ...)
+  → cms_menu_permissions.user_id = 편집 대상 계정 id (Migration #352 20260826030000, 61-67행)
++layout.server.ts fetchMenuPermissionOverrides(session.user.id) → 현재 로그인한 본인 세션 id로 조회
+```
+편집 대상(target)과 실제 그 계정이 로그인했을 때 조회 키가 정확히 일치 — "편집은 되는데 아무
+효과 없는 죽은 기능"은 아님. 또한 `hasMenuAccess('partner', [{menu_key:'customers.list',
+allowed:false}], 'customers.list')` 실제 실행 결과 `false`(정상 차단)로 확인 — 명시적 차단
+(narrowing) 메커니즘 자체는 정확히 동작한다.
+
+**② `findCmsMenuKeyForPath()` 경로 매핑 — BROKEN 1건 발견 (실제 우회 가능한 구멍)**
+```
+findCmsMenuKeyForPath('/cms/codes')     => null   ← "코드설정"의 실제 목적지 페이지, 매핑 없음
+findCmsMenuKeyForPath('/cms/set/code')  => 'settings.code'  ← 매핑 있지만 즉시 302 리다이렉트되는 죽은 스텁
+```
+CMS_MENUS의 `settings.code` href는 `/cms/set/code`(스텁, `src/routes/cms/set/code/+page.server.ts`가
+`throw redirect(302, '/cms/codes')`만 수행)이고, 실제 기능이 있는 페이지는 `/cms/codes`(자체
+`hasSettingsAccess()` 게이트만 있고 `cms_menu_permissions` 조회 전혀 없음, `src/routes/cms/codes/
++page.server.ts:149-150`)다. 결과:
+  - GNB "코드설정" 링크(href=`/cms/set/code`)로 진입하면 `+layout.server.ts`가 `/cms/set/code`
+    시점에 오버레이를 정확히 적용 → 차단 시 정상적으로 `access_denied`로 리다이렉트됨(여기까지는 정상)
+  - 그러나 **같은 계정이 주소창에 `/cms/codes`를 직접 입력하거나 북마크로 진입하면 오버레이
+    자체가 적용되지 않는다** — `/cms/codes`의 자체 게이트는 role(`manager+`)만 보고
+    `cms_menu_permissions`를 전혀 참조하지 않으므로, "이 특정 매니저 계정만 코드설정 접근을
+    막는다"는 세부 차단이 URL 직접 접근으로 우회된다.
+  - 그 외 경로 매핑(consulting.*, rental.reservation/contracts, products.*, promotion.*,
+    subscription.*, customers.*)은 전수 표본 검증 결과 전부 정확(가장 긴 href 우선 매칭 로직
+    정상 — 예: `/cms/products/abc-uuid` → `products.list`, `/cms/products/new` → `products.new`
+    올바르게 구분됨).
+  - `/cms/rentals`(대여현황, `isRentalView=true`) → `null` — 이는 버그가 아니라 Stage 0 조사에서
+    이미 "의도적으로 전 CMS 역할 개방"(그룹 C, partner도 접근 가능한 화면)으로 확인된 경로라
+    애초에 메뉴권한 모델 대상이 아님(정상).
+
+**③ 역할 기본값("기본정보") 정합성 — BROKEN, 광범위 (16개 서브메뉴 항목)**
+`roleAllowsMenuByDefault()`를 실제로 호출해 확인한 결과:
+```
+partner / customers.list        => true   (실제 페이지 게이트: manager+ — 항상 거부돼야 함)
+partner / customers.membership  => true   (동일)
+partner / customers.score       => true   (동일)
+partner / customers.inquiry     => true   (동일)
+partner / customers.settings    => true   (동일)
+partner / promotion.ad          => true   (동일)
+partner / promotion.coupon      => true   (동일)
+partner / promotion.point       => true   (동일)
+partner / promotion.segment     => true   (동일)
+partner / promotion.rules       => true   (동일)
+partner / promotion.analytics   => true   (동일)
+partner / promotion.content     => true   (동일)
+partner / rental.contracts      => true   (동일 — 계약서양식, security-auth.md P7-1 manager+ 명시)
+partner / settings.code         => true   (동일 — ②의 실제 목적지 /cms/codes 게이트와 불일치)
+partner / subscription.list     => true   (동일, 원인 별도 — 아래 참고)
+partner / subscription.new      => true   (동일, 원인 별도 — 아래 참고)
+
+--- 대조군(정상 동작 확인) ---
+partner / settings.push  => false  (정상 — sub 자신에 requiresSettingsAccess:true 직접 선언됨)
+partner / settings.admin => false  (정상 — 동일)
+manager / subscription.list => true (정상 — manager는 실제로도 허용 대상)
+```
+**원인**: `src/lib/constants/cmsMenus.ts`의 `CMS_MENUS`에서 위 14개 서브메뉴
+(customers 5·promotion 7·rental.contracts 1·settings.code 1)는 실제 페이지가 전부
+`hasSettingsAccess()`(manager+) 게이트를 갖고 있음에도(직접 grep 확인:
+`src/routes/cms/customers/*/+page.server.ts`, `src/routes/cms/promotion/*/+page.server.ts`,
+`src/routes/cms/reservation/contracts/+page.server.ts`, `src/routes/cms/codes/+page.server.ts`
+전부 `hasSettingsAccess(cmsRole)` 체크 보유) `requiresSettingsAccess` 플래그가 전혀 선언돼
+있지 않다. `ROUTE_MIN_ROLE`(`cmsPermissions.ts`)에도 `/cms/accounts` 1건 외에는 등록이
+없어(Stage 0 조사에서 이미 "16경로 미등록" 확인됨), `roleAllowsMenuByDefault()`가 최종적으로
+`hasRouteAccess()`의 "명시적 제한 없으면 통과" 기본값에 fall-through해 `true`를 반환한다.
+`subscription.list`/`.new` 2건은 **다른 원인**: 부모(`subscription` 메인메뉴)에는
+`requiresSettingsAccess:true`가 선언돼 있으나, `findCmsMenuByKey()`가 서브메뉴 조회 시
+`main.subMenus.find(...)`로 서브메뉴 객체를 그대로 반환할 뿐 부모의 플래그를 상속하지
+않는다(`cmsMenus.ts` 120-134행) — 서브메뉴 자신에게 별도로 `requiresSettingsAccess:true`를
+선언하지 않으면(설정>푸시알림/관리정보처럼) 부모 플래그는 무의미하다.
+
+**실제 영향(코드로 확인된 구체적 결과)**:
+  - `AccountDetailPanel.svelte` "메뉴 접근 권한" 그리드에서, `partner` 등급 계정을 열면 위 16개
+    항목이 `isRoleAllowed=true`로 계산돼 **dimmed 처리되지 않고 토글 가능한 상태로 표시된다**
+    (601행 `class:menu-item-dimmed={!isRoleAllowed}`) — 실제로는 그 partner 계정이 해당 화면에
+    영원히 못 들어감에도 UI는 "기본 허용됨(ON)"으로 보여준다. "역할 기본 허용 범위 안에서만
+    차단할 수 있습니다"라는 안내문(576행) 자체가 이 16개 항목에 한해서는 부정확한 상태를 그대로
+    노출한다.
+  - `PUT .../menu-permissions`의 Q6 "좁히기 전용" 서버 검증(102-110행)도 동일 함수를
+    재사용하므로, `partner` 대상 계정에 이 16개 메뉴 중 하나를 `allowed:true`로 저장하는 요청이
+    **거부돼야 하는데 실제로는 수락되어 DB에 저장된다**(직접 실행 확인:
+    `roleAllowsMenuByDefault('partner','customers.list')===true`이므로 400 에러가 발생하지
+    않음). 다행히 이 잘못 저장된 `allowed:true` 오버라이드 자체가 실제 접근을 열어주지는
+    못한다 — 각 목적지 페이지(`/cms/customers` 등)의 독립적인 `hasSettingsAccess()` 게이트가
+    `cms_menu_permissions`와 무관하게 별도로 partner를 차단하기 때문(실질적 보안사고로 이어지는
+    권한상승은 아님, §④·⑤와 마찬가지로 "이중 방어" 구조 덕분에 실피해는 없음). 그러나 이 결과는
+    문서(`service-operations.md` GATE C, `security-auth.md` GATE C)가 명시한 "메뉴권한이
+    role 허용범위를 절대 넘어설 수 없다"는 불변조건이 **이 기능의 데이터 계층에서 실제로
+    깨진다**는 뜻이며, "역할 기본값이 정확히 반영되는지" 검수 요청의 핵심을 정면으로 위반한다.
+
+**④ 자기잠금(self-lockout) 방지 — CONFIRMED (안전)**
+  - `PUT .../menu-permissions`가 `targetUserId === session.user.id`를 정확히 비교해 403 차단
+    (EC-5, `+server.ts` 81-83행) — 클라이언트(`setMenuPermission()`)도 이 에러를
+    `csToast.error(...)`로 명확히 표시(216행), 조용히 무시되거나 UI가 깨지지 않음.
+  - `/cms/accounts`·`/cms/accounts/list`(관리정보 화면 자신)는 `CMS_MENUS`에 아예 등록돼 있지
+    않음을 직접 실행으로 재확인(`findCmsMenuKeyForPath('/cms/accounts')` /
+    `findCmsMenuKeyForPath('/cms/accounts/list')` 둘 다 `null`) — 이 화면 자체를 메뉴권한으로
+    잠글 수 있는 경로가 구조적으로 없음. `settings.admin`(GNB "관리정보", href
+    `/cms/set/admin`)은 등록돼 있으나 이 경로는 `/cms/accounts/list`로 즉시 302 리다이렉트되는
+    스텁일 뿐 실제 목적지가 아니므로, 다른 관리자가 어떤 매니저의 "관리정보" 항목을 차단해도
+    그 매니저는 GNB 진입점만 잃을 뿐 `/cms/accounts/list`를 주소창에 직접 입력하면 여전히
+    도달 가능(②와 동일 클래스의 "스텁 vs 실제 목적지" 구조지만, 여기서는 대상 페이지 자체가
+    메뉴권한 시스템 밖에 있어 오히려 영구잠금 방지 쪽으로 작동함) — 결함이 아니라 참고사항.
+
+**⑤ GNB 표시와 실제 차단의 일관성 — CONFIRMED (기존부터 있던 상태, 이번 신규 회귀 아님)**
+  `src/routes/cms/+layout.svelte`의 `mainMenus` `$derived`(82-90행)는 `sub.requiresSettingsAccess`
+  플래그가 선언된 항목만 GNB에서 숨긴다. ③에서 발견한 14개 항목(subscription 2건 제외 — 이건
+  메인메뉴 자체가 `requiresSettingsAccess:true`라 GNB 그룹 전체가 숨겨짐)은 플래그가 없어
+  `partner`에게도 GNB에 그대로 노출된다 — 클릭하면 목적지 페이지 자체의 독립 게이트가 리다이렉트로
+  막는 방식(안전하지만 혼란스러운 UX). Stage 1 완료 보고서(TASK.md 476-480행)에 "필터링 결과
+  무변경, 출처만 CMS_MENUS로 통일"이라 명시돼 있어 이 리팩터링 이전부터 있던 상태 그대로임을
+  재확인 — 이번 아젠다가 새로 만든 회귀는 아니다.
+
+---
+
+**종합 판정**
+
+```
+① 저장/조회 키 일치            : CONFIRMED — 기능 자체는 죽어있지 않음
+② 경로 매핑 정확성              : BROKEN(1건) — settings.code(/cms/set/code) 오버레이가
+                                   실제 목적지(/cms/codes)에는 적용 안 됨, URL 직접 접근으로 우회 가능
+③ 역할 기본값("기본정보") 정합성 : BROKEN(16건) — customers 5·promotion 7·rental.contracts 1·
+                                   settings.code 1·subscription 2 서브메뉴가 role 기본값을
+                                   잘못 계산(partner에 false여야 할 것이 true) → UI 오표시 +
+                                   Q6 서버 불변조건(좁히기 전용) 데이터 계층 위반
+④ 자기잠금 방지                  : CONFIRMED — 안전
+⑤ GNB 노출 vs 실차단 일관성      : CONFIRMED — 기존부터 있던 상태(신규 회귀 아님), 개선사항으로 분류
+```
+
+①이 완전히 죽은 기능은 아니었으므로(요청 우려사항의 최악 시나리오는 아님) 최상위 CRITICAL
+"기능 전체 미작동"으로 분류하지는 않으나, ③이 16개 서브메뉴(GATE C 체크리스트가 요구하는
+"역할 상한선을 절대 넘어설 수 없다"는 명시적 불변조건)에 걸쳐 광범위하게 깨져 있고 ②가 실제
+우회 가능한 구멍이라는 점에서 **이 기능은 "실제로 화면 접근을 정밀 제어한다"는 GATE E
+통과 당시의 전제를 충족하지 못한 상태 — 🔴 CRITICAL 재작업 필요**로 판정한다.
+
+**권장 수정 방향(코드 미수정, 참고용)**
+```
+- src/lib/constants/cmsMenus.ts: customers.list/.membership/.score/.inquiry/.settings,
+  promotion.ad/.coupon/.point/.segment/.rules/.analytics/.content, rental.contracts,
+  settings.code 14개 서브메뉴 각각에 requiresSettingsAccess:true 직접 선언(settings.push/
+  settings.admin과 동일 패턴) + subscription.list/.new 2개도 동일하게 직접 선언(부모 플래그
+  상속에 의존하지 않도록) — 또는 findCmsMenuByKey()가 부모의 requiresSettingsAccess를
+  서브메뉴에 상속하도록 별도 리팩터링(후자는 부모 플래그가 있는 다른 신규 메인메뉴에도
+  일괄 적용되므로 더 근본적이나 영향범위 재검토 필요).
+- settings.code: CMS_MENUS의 href를 실제 목적지(/cms/codes)로 변경하거나, findCmsMenuKeyForPath가
+  스텁→실제 목적지 리다이렉트 체인을 인식하도록 보강 필요 — 또는 /cms/codes/+page.server.ts
+  자체에 cms_menu_permissions 오버레이 조회를 추가(다른 페이지들처럼 이중 방어 구조가 아니라
+  이 기능의 유일한 집행 지점이 되도록).
+```
+
+---
+
+### ✅ CRITICAL 결함 2건 수정 완료 (2026-08-26, TDD Worker)
+
+위 QA 정밀검수가 발견한 결함②(경로 매핑 우회)·결함③(role 기본값 정합성 16건)을 TDD
+RED→GREEN으로 수정했다.
+
+**수정 파일**
+```
+src/lib/constants/cmsMenus.ts
+  - settings.code href: '/cms/set/code'(스텁) → '/cms/codes'(실제 목적지)로 변경
+  - requiresSettingsAccess:true 추가(16개 서브메뉴):
+    customers.list / customers.membership / customers.score / customers.inquiry /
+    customers.settings / promotion.ad / promotion.coupon / promotion.point /
+    promotion.segment / promotion.rules / promotion.analytics / promotion.content /
+    rental.contracts / settings.code / subscription.list / subscription.new
+  - 스텁 파일(src/routes/cms/set/code/+page.server.ts)·목적지 페이지(/cms/codes 등)·
+    +layout.server.ts·+layout.svelte는 요청 범위대로 전부 무수정(읽기만 확인) —
+    settings.code href 변경만으로 +layout.server.ts의 findCmsMenuKeyForPath('/cms/codes')가
+    'settings.code'를 반환하게 되어 오버레이가 실제 목적지에 정상 적용됨(부수 효과 아님,
+    설계된 인과관계 확인 완료)
+
+src/__tests__/services/cmsMenus.test.ts (RED→GREEN)
+  - findCmsMenuKeyForPath('/cms/codes') === 'settings.code' 신규 검증
+  - findCmsMenuKeyForPath('/cms/set/code') === null 신규 검증(구 스텁 경로는 더 이상 매핑 안 됨)
+  - roleAllowsMenuByDefault('partner', menuKey) === false — 16개 menu_key 전수(it.each)
+  - roleAllowsMenuByDefault('manager', menuKey) === true — 동일 16개 대조군(it.each)
+
+src/__tests__/server/cmsMenuPermissionsApi.test.ts (표본 회귀 테스트 1건 추가)
+  - Q6: partner 대상 customers.list에 allowed=true 시도 → 400 거부 + RPC 미호출 확인
+```
+
+**RED → GREEN 결과**
+```
+RED (수정 전): src/__tests__/services/cmsMenus.test.ts 18개 실패(신규 추가분 전부) —
+  roleAllowsMenuByDefault('partner', ...)가 16개 menu_key 모두 true 오반환,
+  findCmsMenuKeyForPath('/cms/codes')가 null 오반환 확인(QA 서술과 100% 일치 재현)
+
+GREEN (수정 후):
+  - src/__tests__/services/cmsMenus.test.ts        50/50 통과
+  - src/__tests__/server/cmsMenuPermissionsApi.test.ts   9/9 통과(신규 1건 포함)
+  - src/__tests__/server/cmsLayoutMenuPermissionOverlay.test.ts  9/9 통과(무회귀)
+  - 전체 vitest 스위트: 981 passed / 3 failed(전부 무관 — memberCodeCombo.test.ts 2건 +
+    deliveryCutoffHolidays.test.ts 1건, 라이브 Stage DB 픽스처 상태 의존 테스트로 이번
+    변경 범위(cmsMenus.ts) 밖의 기존 flake, 재실행 시 통과 가능성 높음) / 7 skipped
+  - npm run check: 기존과 동일하게 vite.config.ts의 사전 존재 타입 에러 1건만(이번 수정과
+    무관, TDD 대상 파일 3개는 신규 에러 0건) + 기존 warning 390건 그대로
+  - eslint(수정 3개 파일 한정): 0 errors, 기존 1개 warning(수정 라인과 무관한 기존 코드)
+```
+
+**잔여 이슈**: 없음. QA가 지목한 결함②·③ 전부 해소, 요청 범위 외 파일은 읽기로만 확인하고
+수정하지 않음(스텁 리다이렉트 체인·목적지 페이지 게이트·layout 파일 전부 무변경).
+
+**GATE E 재판정**: 🟢 통과 — "메뉴별 세부 접근권한이 실제로 화면 접근을 제어한다"는 전제가
+결함② 수정(오버레이가 실제 목적지 /cms/codes에 적용)·결함③ 수정(16개 서브메뉴 role
+상한선이 실제 페이지 게이트와 일치)으로 충족됨. GATE C 3단계(RED/GREEN/REFACTOR — 이번
+변경은 상수·플래그 선언 수정으로 REFACTOR 대상 로직 없음, GREEN 상태가 곧 최종 상태) 전부
+확인 완료.
+
 ---
 
 ### 조사 결과 요약 (구현 착수 전 반드시 인지할 것 — 코드베이스 직접 확인 완료, DB 실측은 §Q4 참고)
@@ -4406,9 +4627,325 @@ pre-existing 유지). 실화면 검증은 Stephen이 로컬 dev 서버에서 직
   해소(위 참고). 부가로 경미한 기술부채 3건 발견 → BACKLOG 이관(아래).
 
 ## BACKLOG — 확정되지 않은 세부 가정 (실행 중 Stephen 확인 필요, 블로킹 아님)
-- [sp3-qa-agent 발견, 2026-08-21] 3개 신규 관리모달의 입력창이 §0-A 표준 `cms-field`(44px
-  min-height)를 그대로 쓰지 않고 각자 로컬 커스텀 클래스(32~40px)로 재정의됨 — 밀도 높은 행
-  레이아웃을 위한 의도적 선택으로 보이나 엄밀한 표준 재사용은 아님(기능 문제 없음, 저위험)
+- ~~[sp3-qa-agent 발견, 2026-08-21] 3개 신규 관리모달의 입력창이 §0-A 표준 `cms-field`(44px
+  min-height)를 그대로 쓰지 않고 각자 로컬 커스텀 클래스(32~40px)로 재정의됨~~ → **✅ 해소
+  (2026-08-26)**: Stephen이 `ProductCategoryModal`(`#kw-picker`)과 `HomeCategoryProductsModal`
+  (`#hcp-search-camera`)의 SuggestPicker 입력창 UI가 서로 다르게 보인다고 직접 지적 →
+  `cms-uiux.md §7-7/§12`에 이미 정본으로 문서화돼 있던 `.f-input`(gray-fill·테두리없음·
+  radius 8px·outline focus) 스펙을 기준으로 `HomeThemeGroupModal.tg-search-input`,
+  `HomeCategoryProductsModal.hcp-input`을 전부 `.f-input`으로 교체·통일. 재발 방지를 위해
+  `uiux-index.md` SuggestPicker 항목에 `.f-input` 강제 사용 경고를 명시적으로 추가(기존엔
+  cms-uiux.md §12 상세문서에만 있어 놓치기 쉬웠음).
+
+- **"검색 중…" 안내문 위치 통일 (2026-08-26, 같은 세션 후속)** — Stephen 지적: 비동기 검색
+  피커(`noFilter`+디바운스 RPC)의 "검색 중…"/"불러오는 중…" 텍스트가 `SuggestPicker` 여는
+  태그 위(앞)에 있어 입력창보다 먼저 보임 → `SuggestPicker` 닫는 태그 아래(뒤)로 통일 이동.
+  대상 4곳 전부 수정: `HomeCategoryProductsModal.svelte`, `ProductHeroModal.svelte`,
+  `HypePackBannerModal.svelte`, `CrazylogBannerModal.svelte`(`HomeThemeGroupModal`/
+  `HypePackThemeGroupModal`은 애초에 이 안내문 자체가 없어 대상 아님). `npm run check` 신규
+  ERROR 0건. `uiux-index.md` SuggestPicker 항목에 위치 규칙 명문화(신규 피커 추가 시 재발 방지).
+
+- **`SuggestPicker` 선택 후 입력창 자동 비움 — `clearOnSelect` prop 신설 (2026-08-26, 같은
+  세션 후속)** — Stephen 지적: `HomeCategoryProductsModal`에서 상품을 검색·선택할 때마다
+  선택한 상품명이 입력창에 그대로 남아 다음 검색 전에 매번 직접 지워야 하는 불편 존재, "컴포넌트
+  에도 적용해"(공통 컴포넌트 레벨 수정) 요청. **주의**: 전체 15개 소비처를 조사한 결과 절반가량
+  (`cms/promotion/coupon`의 `f_type`/`f_discount_type`/`f_user_grade`, `onGroupPickerSelect`
+  계열, `/products/search` 등)은 `<select>` 대체용 **단일값 선택기**라 선택한 라벨을 입력창에
+  계속 보여주는 현재 동작이 오히려 정답이라, 컴포넌트 기본값을 무조건 바꾸면 그쪽이 회귀함 —
+  그래서 `clearOnSelect?: boolean`(기본값 `false`, 기존 동작 100% 보존) opt-in prop으로 설계.
+  `selectOption()`에서 `clearOnSelect` true일 때만 `selectedId=null; query=''`로 즉시 초기화.
+  "검색→추가→재검색" 반복 패턴인 10개 SuggestPicker 인스턴스에 `clearOnSelect` 명시 적용:
+  `HomeCategoryProductsModal`·`HomeThemeGroupModal`·`HypePackThemeGroupModal`·
+  `ProductHeroModal`·`HypePackBannerModal`(상품피커+키워드피커 2개)·`CrazylogBannerModal`·
+  `ProductCategoryModal`(카테고리피커+키워드피커 2개)·`CrazylogKeywordModal`. 단일값 선택기
+  9곳은 기본값 유지로 무수정. `npm run check`: 신규 ERROR 0건(vite.config.ts 기존 무관 에러
+  1건만 잔존). `cms-uiux.md §12-3` Props 표에 `noFilter`(기존 누락분 포함)·`clearOnSelect`
+  추가, `uiux-index.md`에 사용 기준(반복추가용 vs 단일값선택기) 명문화.
+
+- **`HomeThemeGroupModal` 아코디언 토글 버튼 스타일을 `HypePackThemeGroupModal`과 통일
+  (2026-08-26, 같은 세션 후속)** — Stephen이 두 "테마그룹 관리" 모달의 그룹 카드 레이아웃을
+  직접 스크린샷 비교로 대조 지적. 실제 CSS를 전수 대조한 결과 `.tg-group-card`/`.tg-group-row`/
+  `.tg-title-input`/`.tg-del-btn`/`.tg-subcopy-input`/`.tg-add-btn`는 이미 두 파일이 완전히
+  동일한 수치였고, 유일한 실제 차이는 `.tg-expand-btn`(상품편집 아코디언 토글) — HypePack은
+  `ChevronIcon` SVG 컴포넌트(+flex 중앙정렬 CSS)를 쓰는데 Home은 `▲`/`▼` 유니코드 텍스트 글자를
+  그대로 렌더링(중앙정렬 CSS도 누락)해 시각적으로 다르게 보였음. `HomeThemeGroupModal.svelte`에
+  `ChevronIcon` import 추가 + 텍스트 글리프를 `<ChevronIcon direction/size={8}/color>`로 교체 +
+  `.tg-expand-btn`에 `display:flex;align-items:center;justify-content:center` 추가로 통일.
+  **명시적으로 유지**: 그룹 대표 썸네일은 Home=원형(`border-radius:50%`) 그대로 유지, HypePack의
+  정사각 라운드(`var(--radius-sm)`)로 바꾸지 않음(Stephen 명시 지시). HypePack에만 있는
+  "노출(is_active) 토글" 체크아이콘 버튼은 이번 요청이 "레이아웃 스타일"에 한정돼 기능 이식은
+  하지 않음(범위 외 — 필요시 별도 요청). `npm run check` 신규 ERROR 0건.
+
+  ⛔ **1차 수정 불충분 — Stephen 재지적("레이아웃 스타일이 전혀 반영되지 않았어")**: 알려진
+  선택자 이름만 grep으로 대조하는 방식으로 접근해 진짜 원인을 놓침. `<style>` 블록 전체를
+  `diff`로 재대조한 결과 **`.tg-body > :global(.drag-list) { gap: 30px }`**(그룹 카드 사이
+  간격) 규칙이 HypePack에는 있고 Home에는 통째로 빠져 있었음 — `CmsDragList` 기본 gap이
+  8px라 Home의 카드가 훨씬 빽빽하게 붙어 보인 것이 스크린샷에서 가장 두드러진 실제 차이였음
+  (버튼 아이콘 차이는 부차적이었음). `HomeThemeGroupModal.svelte`에 동일 규칙(그룹카드
+  30px + 상품편집 아코디언 내부 상품목록은 8px 유지, `.tg-products-area :global(.drag-list)`로
+  분리)을 추가해 해소. `npm run check` 신규 ERROR 0건 재확인.
+  **교훈**: 두 파일 레이아웃 비교 시 알고 있는 선택자만 골라 대조하지 말고 `<style>` 블록
+  전체를 `diff`로 대조할 것 — 예상 못한 선택자(이번 경우 부모 `.tg-body`에 걸린 자식결합자
+  규칙)가 실제 원인일 수 있음.
+
+  ⛔ **2차 재지적("그룹카드 목록 별 노출 체크아이콘 버튼 UI 누락, 상품목록 별 제목명 줄임
+  누락")**: 1차 수정에서 "노출(is_active) 토글은 레이아웃 스타일 요청 범위 밖"이라고 판단해
+  의도적으로 제외했던 것이 Stephen 기준에서는 틀린 판단이었음 — 이번엔 명시적으로 두 항목
+  전부 포함해 재작업. **DB 구조 문제 발견**: `home_theme_groups`는 Migration #322 설계 당시
+  이미 `is_active` 컬럼을 갖고 있었으나, 관리자 편집모달(`groups` prop)이 공개용
+  `get_home_theme_groups_with_products()`(is_active=true만 반환)를 그대로 재사용하고
+  있어서, 토글 UI만 이식하면 "비노출로 바꾼 그룹이 관리자 목록에서도 사라져 다시 켤 수
+  없는" 함정이 있었음 — HypePack 쪽(Migration #343, 같은 세션 중 동시 진행 중이던 다른
+  작업)이 이미 `get_hype_pack_theme_groups_admin()`(비노출 포함 전체 조회, 관리자 전용)
+  분리로 해결한 선례를 그대로 재사용. **구현**: Migration #355
+  (`20260826060000_355_home_theme_groups_visibility_toggle.sql`, hype-pack #343과 동일
+  패턴) — `cms_create_theme_group`/`cms_update_theme_group`에 `p_is_active` 파라미터 추가
+  (5-param 오버로드 DROP 후 6-param 재생성, PGRST203 방지) + 신규 `get_home_theme_groups_
+  admin()`(관리자 전용, is_active 무관 전체 조회) RPC. `src/routes/+page.server.ts`에
+  `themeGroupsAdmin`(isCms일 때만 조회) 추가 + 가격 조회 대상 상품ID를 admin 데이터 우선
+  사용하도록 조정 + `withDualPrice` admin 배열에도 적용 + load 반환값에 `themeGroupsAdmin`
+  추가. `src/routes/+page.svelte`의 `<HomeThemeGroupModal groups={...}>`를 `data.themeGroups`
+  → `data.themeGroupsAdmin`로 교체(비관리자에게는 애초에 로드 안 됨). `HomeThemeGroupModal.
+  svelte`에 `is_active` 필드·`toggleActive()`·노출 체크아이콘 버튼(HypePack과 동일 SVG+CSS)
+  + `truncateName()`(MAX_NAME_LEN=20, `title={p.name}` 툴팁 포함, HypePack과 동일) 추가.
+  Stage(ezyvffjvuwmtuhpxdjrw) 적용 완료 — 함수 시그니처 재조회로 6-param 정상 등록 확인,
+  `npm run check` 신규 ERROR 0건. **production 적용은 Stephen 승인 대기 중.**
+
+- **원형탭 "3개 초과 시 가로 스크롤" — PC 실측 검증 + 모바일 미구현 발견 → 모바일도 PC와
+  동일 구조로 신규 구현 (2026-08-26, 같은 세션 후속)** — Stephen 요청: "3개 이상 그룹 생성 시
+  가로 스크롤 UX 로직 작동 정상 확인, 모바일 반응형에도 반영 확인." Stage DB에 QA검증용 4번째
+  그룹을 임시 INSERT해 실측 → **PC: 정상 확인**(4개일 때 좌우 화살표 노출, 클릭 시 3개 노출
+  구간이 정확히 슬라이드, 검증 후 임시 데이터 즉시 DELETE로 원복). **모바일: 애초에 미구현
+  발견** — PC는 "원형 탭 1개 선택 → 공유 상품슬라이드 1개만 전환"(`activeThemeId`/
+  `activeThemeProducts`) 구조인데, 모바일은 `{#each data.themeGroups as tg}`로 전체 그룹을
+  세로로 나열하고 그룹마다 독립 슬라이드를 반복하는 완전히 다른 구조라 캡핑·화살표 개념 자체가
+  없었음(탭 전환이 아니므로). Stephen 확인 후 **모바일도 PC와 동일한 탭 구조로 변경** 결정.
+  **구현**: `mThemeTabsEl`/`scrollMThemeTabs()`(PC의 `themeTabsEl`/`scrollThemeTabs`와 동일
+  패턴, 별도 DOM 참조) 신규 추가. 모바일 마크업을 그룹별 반복 슬라이드 구조에서 PC와 동일한
+  원형 탭 목록(`.m-theme-circle-tabs-wrap`, 3개 초과 시 화살표, `activeThemeId` 공유) + 공유
+  상품슬라이드(`activeThemeProducts`, 기존 `.m-prod-card`/`.m-snap-slider` 재사용) 구조로
+  교체. CSS는 PC(`.theme-circle-tabs` 180px 원형·gap 30px·max-width 600px)를 모바일
+  규격(140px 원형·gap 20px·max-width 460px = 140×3+20×2)으로 축소해 신규 작성
+  (`.m-theme-circle-tabs`/`.m-theme-tabs-arrow`). 그룹 0개일 때의 샘플 자리표시 블록(단일
+  원형, 캡핑 불필요)은 변경 없이 유지. 실제 브라우저(모바일 375px 뷰포트)로 탭 클릭 시
+  슬라이드 전환 확인 완료.
+  ⛔ **검증 중 부가 발견·수정(회귀 아님, 기존 결함)**: `.theme-hl-card--m`(모바일 축소
+  변형, `border-radius:28px`)이 CSS 소스 순서상 `.theme-hl-card--circle`(50%)보다 뒤에
+  선언돼 있어 단일클래스 동률 특이성으로 후자를 덮어씀 — 모바일 테마 아바타가 코드 주석의
+  의도("원형 아바타 스타일")와 달리 완전한 원이 아닌 28px 둥근 사각형으로 렌더링되고 있던
+  기존 결함(이번 세션 변경 이전부터 존재, 이번 작업 중 실측하다 발견). 복합 선택자
+  `.theme-hl-card--m.theme-hl-card--circle { border-radius: 50% }`로 명시적 우선순위를
+  부여해 해소, `getComputedStyle`로 50% 반영 확인.
+  DB 변경 없음(순수 프론트) — `npm run check` 신규 ERROR 0건(기존 vite.config.ts 무관 에러
+  1건만 잔존).
+
+- **원형탭 캡핑 슬라이드 좌우 끝 페이드 처리 (2026-08-26, 같은 세션 후속)** — Stephen 지적:
+  3개 초과 캡핑 시 스크롤 컨테이너 경계에서 카드가 뚝 잘려나가는 느낌이 있어 배경으로
+  부드럽게 스며드는 페이드 처리 요청. `.theme-circle-tabs--capped`(PC)·
+  `.m-theme-circle-tabs--capped`(모바일) 둘 다에 `mask-image`/`-webkit-mask-image:
+  linear-gradient(to right, transparent 0, black Npx, black calc(100% - Npx), transparent 100%)`
+  추가(PC 30px, 모바일 24px — 각 원형 크기(180px/140px)에 비례). 배경색에 의존하지 않는
+  마스크 방식이라 별도 오버레이 DOM 없이 순수 CSS로 해결. Stage에 QA검증용 그룹을 5개까지
+  임시로 늘려 실제로 `scrollWidth(1230px) > clientWidth(600px)`로 오버플로우가 발생하는
+  상태에서 `getComputedStyle`로 `mask-image` 정상 적용 확인 후 임시 데이터 삭제로 원복
+  (테스트 중 동시 진행 중이던 다른 세션이 추가한 정식 그룹 "모험가"는 건드리지 않고 내가
+  넣은 행만 정확히 골라 삭제). DB 변경 없음 — `npm run check` 신규 ERROR 0건.
+
+- **카테고리 메뉴 커스텀 아이콘 PC에서 매우 작게 보이는 결함 원인분석·수정 + 모바일 부재
+  확인 (2026-08-26, 같은 세션 후속)** — Stephen 지적: "중고품" 카테고리 탭 아이콘이 PC에서
+  매우 작게 보임. **원인**: 업로드된 커스텀 아이콘 SVG 3개(`lens`/`camera`/`used-item`)를
+  전부 직접 fetch해 대조한 결과, 셋 다 동일하게 **100x100 캔버스에 자체 배경(`#E1DEF3`,
+  `rx=30` — `.cat-tab-icon`의 비활성 배경색·radius와 완전히 동일)을 이미 포함한 "완결형
+  타일"**로 제작돼 있었음. 그런데 프론트 CSS(`.cat-tab-custom-icon`)는 이걸 40x40으로
+  욱여넣고 있어서, 아이콘 파일 자체의 여백까지 함께 축소돼 실제 그림 부분이 40px의 절반
+  이하(체감 18px 수준)로 쪼그라들어 보였음(내장 SVG 폴백 아이콘들은 24-unit viewBox를
+  40x40에 꽉 채우는 방식이라 이 문제가 없었음 — 커스텀 아이콘만 유독 작아 보인 이유).
+  **수정**: `.cat-tab-custom-icon`을 부모 `.cat-tab-icon`과 동일한 100x100(+radius 30px)로
+  확대해 아이콘 파일을 있는 그대로 꽉 채움. 실측(getBoundingClientRect)으로 정상 크기 확인.
+  ⚠️ **부작용 발견 → ✅ 해소(2026-08-26, 같은 세션 후속)**: 커스텀 아이콘 3개가 전부 비활성
+  배경색을 정적으로 baked-in하고 있어(활성 상태 색 배리언트 없음), 크기를 100%로 키우면
+  부모의 활성/비활성 배경색 전환이 완전히 가려짐 — 커스텀 아이콘 탭은 클릭해도 활성 표시가
+  사라지는 부작용이 있음을 Stephen에게 보고, 처음엔 보완 여부를 물어 "응답 보류 — 다음 지시
+  대기" 상태였으나 이후 Stephen이 명시적으로 해결 요청 → `.cat-tab.active .cat-tab-icon:has(
+  .cat-tab-custom-icon)`에 `box-shadow: 0 0 0 3px var(--cs-purple)` 보라색 링 추가로 해소.
+  `:has()` 선택자로 커스텀 아이콘 탭에만 정확히 스코프해 내장 SVG 아이콘 탭(이미 배경색
+  전환만으로 충분)에는 중복 표시 없음 — 실측(getComputedStyle)으로 "중고품"(커스텀) 활성
+  시 링 정상 적용 확인. `npm run check` 신규 ERROR 0건.
+  **모바일 확인**: 이 카테고리 아이콘 탭 섹션(`.d-cat-section`) 자체가 `<div class="desktop-
+  wrap">` 안에만 존재하고 `<div class="mobile-wrap">`에는 대응 마크업이 없음 — 모바일에는
+  이 UI가 아예 렌더링되지 않아 "작게 보이는지" 확인할 대상 자체가 없음(PC 전용 기능, 별도
+  버그 아님). DB 변경 없음 — `npm run check` 신규 ERROR 0건.
+
+- **cat-tabs(카테고리 아이콘 탭) ↔ "미·칠 PICK!" 헤딩 사이 여백 확보 + 모바일 반영
+  (2026-08-26, 같은 세션 후속)** — Stephen 지적: 두 영역 사이가 너무 붙어 보임. PC는
+  `.michil-heading`에 `margin-top:24px` 국소 추가(부모 `.d-cat-section`의 공용 flex
+  gap 32px는 다른 형제 요소 간격에도 영향을 주므로 건드리지 않고, 이 지점에만 국소
+  적용 — 실측 결과 cat-tabs 하단↔michil-heading 상단 간격 정확히 56px(32+24) 확인).
+  **모바일**: 이 카테고리 아이콘 탭이 없어 동일한 두 요소 페어링 자체가 존재하지 않으므로,
+  가장 가까운 대응 관계인 이전 섹션(취향직격 테마그룹, `.m-theme-section`) → "미칠 PICK"
+  섹션(`.m-michil-section`) 경계에 PC와 동일한 증분(+24px)을 반영 — `padding-top: 40px`
+  → `64px`. 브라우저(1280px PC / 375px 모바일)로 실측 스크린샷 대조해 양쪽 다 여백 확대
+  확인. DB 변경 없음 — `npm run check` 신규 ERROR 0건.
+
+- **"Package" 타이틀 바를 "미·칠 PICK!" 헤딩 아래로 재배치 — PC 전용
+  (2026-08-26, 같은 세션 후속)** — Stephen 지적: `.pkg-bar`("Package" 라벨+화살표)가
+  카테고리 아이콘 탭보다 위에 있던 걸 "미·칠 PICK!" 헤딩 바로 아래로 옮겨달라는 요청.
+  `.d-cat-section`(PC `desktop-wrap` 전용, 모바일에는 대응 마크업 자체가 없어 "PC
+  반응형만 해당" 조건이 자동 충족됨) 내 직계 자식 순서를 `pkg-bar → cat-tabs →
+  michil-heading → ...`에서 `cat-tabs → michil-heading → pkg-bar → ...`로 재배치(마크업
+  블록을 통째로 이동, 스타일·로직 변경 없음 — `.d-cat-section`이 flex-column+gap이라
+  DOM 순서만 바꾸면 시각적 순서도 그대로 따라옴). 브라우저 스크린샷으로 카테고리 아이콘 탭
+  → "미·칠 PICK!" → "Package" 바 → 상품카드 순서 확인. DB 변경 없음 — `npm run check`
+  신규 ERROR 0건.
+
+- **모바일 초기화면 "카테고리 슬라이드 메뉴 영역" → "MD 추천" 영역으로 대체 +
+  /products와 관리기능 완전 공유 (2026-08-26, 같은 세션 후속)** — Stephen 요청: `/products`
+  페이지의 "MD 추천" 레이아웃을 홈페이지 모바일 초기화면에 노출하되, ①관리기능을 동기화
+  공유하고 ②모바일에서는 기존 카테고리 슬라이드 메뉴 영역(`.m-michil-section`, "미칠
+  PICK!" 카테고리 탭 연동 상품슬라이드)을 가리고 이 레이아웃으로 대체할 것.
+  **조사(Explore 서브에이전트)**: `/products`의 "MD 추천"은 `cms_settings` 키
+  `product_page_md_picks`(`{products:[{id,order}], mode}`)를 `get_product_page_settings()`
+  RPC로 읽고, 관리 모달은 `ProductMdPickModal.svelte`(`ProductHeroModal.svelte`를
+  `settingKey="product_page_md_picks"`로 파라미터화한 얇은 래퍼) → 저장 시
+  `upsert_product_page_setting(p_key:'product_page_md_picks', ...)` 호출 — 이미 확립된
+  5개 화이트리스트 키(`product_page_hero`/`categories`/`grid`/`md_picks`/`keywords`) 중
+  하나. **구현**: 별도 신규 기능을 만들지 않고 **동일한 키·동일한 모달 컴포넌트를 홈페이지에
+  그대로 재사용**해 요구사항 ①(관리기능 동기화)을 근본적으로 충족(어느 화면에서 편집해도
+  같은 `cms_settings` 행을 공유하므로 "동기화"를 위한 별도 배선이 필요 없음). `src/routes/
+  +page.server.ts`에 `product_page_md_picks` 조회(기존 `Promise.all` 배치에 4번째 항목
+  추가) + `mdPickIds`를 기존 `get_products_by_ids` 일괄조회에 병합(중복 RPC 호출 방지) +
+  `mdProducts` 파생(정렬·random 모드 셔플) + `priceProductIds`/`withDualPrice`에 포함 +
+  `mdPicksRaw`(모달 편집용 원본)·`mdProducts`(표시용 해석값) 분리 반환(§0-A #12 편집
+  초기값 오염 방지 패턴 재사용). `src/routes/+page.svelte`에 `ProductMdPickModal` import +
+  `showMdPickModal` state + "✦ MD 추천 설정" 버튼. **요구사항 ②**: 모바일 마크업에서 기존
+  `.m-michil-section` 블록(카테고리 탭 연동 상품슬라이드, activeCatProds 기반)을 완전히
+  제거하고 `.md-picks-section`(신규, `/products`의 `.md-picks-*` 디자인을 모바일 폭에
+  맞게 이식 — 카드 200px→160px, 이미지박스 200px→160px로 축소, 나머지 레이아웃 동일)으로
+  교체 — PC의 카테고리 탭+미칠PICK 섹션(`.d-cat-section`)은 이 요청 범위 밖이라 전혀
+  손대지 않음(모바일에는 애초에 대응 마크업이 없어 "모바일 전용" 조건 자동 충족).
+  **동반 데드코드 정리**: 제거된 블록에서만 쓰이던 `mpickIdx`/`mpickSliderEl`/
+  `onMpickScroll`(JS)과 `.m-michil-section`/`.m-michil-head`/`.m-prod-dots`/
+  `.cat-empty-notice--mobile`(CSS)를 함께 삭제(내가 이번 편집으로 직접 orphan시킨
+  코드라 정리 — 이전 세션이 남긴 `.m-pkg-*`/`pkgIdx` 등 무관한 기존 BACKLOG 데드코드는
+  건드리지 않음). 텍스트 클래스는 기존 `.m-prod-name`(흰 글자, 이미지 오버레이용 — 다른
+  용도로 이미 사용 중)과 이름이 겹치지 않도록 `.md-pick-name`/`.md-pick-price` 등 전용
+  클래스로 분리(색상 반전 버그 방지). 실측: `cms_settings.product_page_md_picks`에 이미
+  등록된 실제 데이터(Sony FX6-12·SONY PXW-Z90)로 모바일 뷰포트(375px)에서 이미지·가격
+  정상 렌더링 확인 + "✦ MD 추천 설정" 버튼 클릭 시 `/products`와 완전히 동일한 상품
+  목록이 뜨는 모달 확인(진짜 공유 검증) + PC(1280px)에서 기존 카테고리 탭 섹션이 전혀
+  변경되지 않았음을 재확인. DB 변경 없음(기존 `product_page_md_picks` 키·RPC 재사용) —
+  `npm run check` 신규 ERROR 0건.
+
+- **모바일 취향직격 원형탭 그룹 좌측 정렬 → 중앙 정렬 (2026-08-26, 같은 세션 후속)** —
+  Stephen 지적: 모바일 반응형 전환 시 `.m-theme-circle-tabs-wrap`(원형탭 그룹, 좌우
+  화살표 포함) 내용이 좌측에 쏠려 보임. 원인: `.m-theme-circle-tabs-wrap`이
+  `position:relative`만 있고 `display:flex`/정렬 속성이 없어, 자식 `.m-theme-circle-tabs`
+  (3개 초과 시 `max-width:460px`로 캡핑됨)가 일반 블록 흐름대로 좌측에 붙어 렌더링되던
+  것. `.m-theme-circle-tabs-wrap`에 `display:flex; justify-content:center` 추가로 해소 —
+  화살표 버튼(`.m-theme-tabs-arrow`)은 `position:absolute`라 flex 정렬의 영향을 받지 않고
+  기존 좌우 끝 배치 그대로 유지됨. 모바일(375px) 브라우저 실측으로 탭 그룹이 정중앙에
+  배치되고 화살표가 좌우 대칭으로 유지되는 것 확인. DB 변경 없음 — `npm run check` 신규
+  ERROR 0건.
+
+- **PC 반응형에도 동일 중앙 정렬 적용 (2026-08-26, 같은 세션 후속)** — Stephen 요청:
+  방금 모바일에 적용한 원형탭 중앙 정렬을 PC에도 동일하게. PC `.theme-circle-tabs-wrap`에도
+  동일한 `display:flex; justify-content:center` 추가. 실측 결과 PC는 `.theme-pick-row`가
+  이미 `justify-content:center`로 (제목+탭그룹)을 한 덩어리로 중앙 정렬하고 있었고, 캡핑된
+  탭 그룹(600px)이 래퍼 자체 폭과 정확히 일치해(`getBoundingClientRect`로 wrap=tabs=600px,
+  leftGap=rightGap=0 확인) 육안상 이미 중앙에 있었음 — 이번 추가는 향후 래퍼 폭이 콘텐츠보다
+  커지는 경우에도 안전하게 중앙을 보장하는 방어적 적용(모바일과 동일 패턴 유지, 회귀 없음).
+  ⚠️ **환경 이슈, 별도 보고**: 이번 검증 중 Claude Browser 패널이 반복적으로 정지/빈 화면
+  (동일 프레임 고착)을 반환해 스크린샷으로 최종 확인은 못함 — 대신 `read_page`(접근성
+  트리)로 탭 5개(Idol/크리에이터/여행가/모험가/감성리스트)·화살표·상품슬라이드·카테고리탭
+  ·미칠PICK·Package 순서가 전부 정상 렌더링됨을 확인했고, `getBoundingClientRect`로 정렬
+  수치까지 직접 검증함 — 코드 자체의 정상 동작은 확인됐으나 픽셀 단위 스크린샷 재확인은
+  브라우저 도구 복구 후 필요 시 추가 진행. `npm run check` 신규 ERROR 0건.
+
+- **모바일 "취향직격 PICK" 섹션 아이콘을 PC와 동일한 스파클 아이콘으로 교체
+  (2026-08-26, 같은 세션 후속)** — Stephen 지적: PC `.theme-pick-title-wrap`의 스파클
+  아이콘(`viewBox 0 0 38 21`, 채워진 별 모양)이 모바일에는 반영 안 되고, 다른 여러 섹션과
+  공용인 일반 물결 곡선 아이콘(`M2 8 Q8.5 2 17 8 Q25.5 14 32 8`)이 대신 쓰이고 있었음 —
+  모바일 "취향직격 PICK" 헤더만 PC와 동일한 아이콘으로 교체하고 비율(38:21)을 유지한 채
+  모바일 규격(34x19)으로 축소. 다른 모바일 섹션(헬프·크레이지로그 등)의 물결 아이콘은
+  그대로 유지(공용 자산이라 범위 밖). `npm run check` 신규 ERROR 0건.
+
+- **`HomeBannerModal` 3종 검수(기능·CMS 표준·히어로 샘플이미지 처리) (2026-08-26, 같은
+  세션 후속)** — Stephen 요청: "홈 히어로 배너 관리" 모달의 기능 정상 작동 여부, CMS 표준
+  디자인시스템 위배 요소, 초기화면 히어로 BG 이미지가 하드코딩인지 샘플인지 확인.
+  **① 기능 검증**: 코드 리뷰(`save()`/`saveBannerSlot()`/`onImageChange()`) + 브라우저 실측
+  (행 추가→텍스트 입력 반영→✕ 삭제) 정상 확인 — 삭제된 배너 소프트삭제, 신규/기존 배너
+  생성·수정 분기, `home_hero_banner_settings` 저장까지 로직 정상. 단, 이 개발서버 브라우저
+  세션의 로그인 세션이 실제로는 만료돼 있어(`/account` 접근 시 로그인 페이지로 리다이렉트
+  확인) 실제 이미지 업로드→저장 전체 라운드트립까지는 검증 못함 — 모달 코드 문제 아니라
+  이 세션의 인증 상태 문제.
+  **② CMS 표준 위배 발견·수정**: `.cms-field` 클래스가 이름은 §0-A #8 표준("cms-field")을
+  따르는 것처럼 보이나 실제 값은 딴판이었음 — `height:32px`(표준: `min-height:44px`),
+  `padding:0 10px`(표준: `12px 16px`), `background:var(--cs-white)`(표준: `var(--cs-
+  surface-gray)`), `border:1px solid var(--cs-lilac)`(표준: `border:none`). §0-A #8은
+  "배너 헤더카피/서브카피/링크" 필드를 명시 대상으로 지정하고 있어 바로 이 모달이 원래
+  적용 대상이었음. 표준값 그대로 수정, 브라우저 실측으로 44px 이상 회색채움 무테두리
+  입력창 정상 반영 확인.
+  **③ 히어로 샘플이미지 처리 확인**: `/home/desktop/1fbafe64...png`·`1bbde5f7...png`(PC),
+  `/home/mobile/ac4438...png`(모바일)는 `{#if pcCarousel.length > 0}...{:else}`(모바일도
+  동일 패턴)의 `{:else}` 분기에서만 렌더링되도록 이미 정확히 게이팅돼 있음 — 실제 배너를
+  추가하면 `pcCarousel`/`mobileCarousel`이 채워지며 `{#if}` 분기로 전환돼 샘플이 자동으로
+  가려짐(이미 올바르게 구현됨, 버그 아님). 현재 등록된 배너가 0개라 샘플이 보이는 것이
+  정상 상태. `npm run check` 신규 ERROR 0건.
+
+### 세션 종합 요약 (Phase 4 후속, 2026-08-26 — GATE E 검수 요청 시점까지)
+
+이 세션에서 Phase 4 완료 이후 Stephen이 실사용 중 발견한 결함·요청을 순차 처리한 전체 목록
+(각 항목 상세는 위 개별 bullet 참고, 전부 `npm run check` 신규 ERROR 0건 확인 완료):
+
+1. [x] `SuggestPicker.svelte` 연속 검색+추가 불가 버그 — `closeSuggest()`의 `isFocused` 강제
+   초기화가 원인, 드롭다운만 닫도록 분리해 해소
+2. [x] `SuggestPicker.svelte` 선택 직후 유사상품이 뜬금없이 재검색되는 버그 —
+   `selectOption()`의 불필요한 `oninput` 재호출 제거
+3. [x] `SuggestPicker.svelte` `clearOnSelect` prop 신설(opt-in, 기본값 false) — "검색→추가→
+   재검색" 반복 패턴 10개 인스턴스(8개 파일)에 적용, 단일값 선택기 9곳은 무수정
+4. [x] `HomeCategoryProductsModal`/`HomeThemeGroupModal` SuggestPicker 입력창을 §7-7/§12
+   표준 `.f-input`으로 통일(기존 `.hcp-input`/`.tg-search-input` 커스텀 클래스 제거)
+5. [x] 비동기 검색 피커 4곳("검색 중…" 안내문)을 `SuggestPicker` 닫는 태그 아래로 위치 이동
+6. [x] `HomeThemeGroupModal` 아코디언 토글 아이콘을 `HypePackThemeGroupModal`과 동일한
+   `ChevronIcon`으로 통일 + 그룹 카드 간 여백(30px) 정상화(진짜 원인은 `.tg-body >
+   :global(.drag-list) { gap: 30px }` 누락이었음, 1차 아이콘 수정은 불충분했음)
+7. [x] `HomeThemeGroupModal`에 "노출(is_active) 토글" 체크아이콘 버튼 + `truncateName()`
+   추가 — Migration #355(`get_home_theme_groups_admin` 신설, 관리자 전용 전체조회) +
+   `+page.server.ts`의 `themeGroupsAdmin` 배선 포함(Stage+Production 적용 완료)
+8. [x] 한글 초성(chosung) 검색 지원 — Migration #354(`hangul_chosung()` 함수 +
+   `products.name_chosung`/`brand_chosung` 생성열 + `search_products` RPC 확장), 영문↔한글
+   상호 매핑은 없음(Stephen 확정), Stage+Production 적용 완료
+9. [x] 취향직격 원형탭 "3개 초과 시 가로 스크롤" — PC 실측 검증 완료 + 모바일에 동일 구조
+   신규 구현(기존엔 탭 전환 개념 자체가 없었음) + 좌우 끝 페이드(mask-image) 추가
+10. [x] 카테고리 메뉴 커스텀 아이콘이 PC에서 매우 작게 보이던 버그 — 아이콘 파일 자체가
+    100x100 완결형 타일인데 40x40으로 욱여넣던 것이 원인, 100x100로 확대 수정 + 활성화 시
+    시각 표시가 사라지는 부작용을 보라색 링(`:has()` 스코프)으로 해소
+11. [x] `cat-tabs`↔"미·칠 PICK!" 헤딩 사이 여백 확보(PC+모바일 동일 증분 반영)
+12. [x] "Package" 타이틀 바를 "미·칠 PICK!" 헤딩 아래로 재배치(PC 전용)
+13. [x] 모바일 초기화면 "카테고리 슬라이드 메뉴 영역" → `/products`와 **완전히 동일한
+    `product_page_md_picks` 키·모달을 공유**하는 "MD 추천" 영역으로 대체(관리기능 동기화
+    요구사항 충족) — DB 마이그레이션 없이 기존 인프라 재사용
+14. [x] 모바일 취향직격 원형탭 그룹 좌측 정렬 → 중앙 정렬(PC도 동일 적용, 방어적 조치)
+15. [x] 모바일 "취향직격 PICK" 섹션 아이콘을 PC와 동일한 스파클 아이콘으로 교체(기존엔
+    공용 물결 아이콘 오용)
+16. [x] `HomeBannerModal` 3종 검수 — 기능 정상(코드리뷰+실측), `.cms-field`가 §0-A #8 표준과
+    괴리돼 있던 것을 수정, 히어로 샘플이미지 게이팅은 이미 정상 구현 확인(버그 아님)
+
+신규 마이그레이션(전부 Stage+Production 적용 완료): #354(초성검색), #355(테마그룹
+노출토글). DB 변경 없는 순수 프론트 수정 다수. 동시 진행 중이던 다른 세션의 변경분(예:
+`HypePackThemeGroupModal`의 is_active/초성검색 자체 구현, `hype-pack/+page.server.ts`,
+Migration #343/#356 등)은 이 세션 작업물이 아니므로 위 목록에서 제외.
+
+**GATE E(@sp3-qa-agent) 검수 결과 — ✅ 통과 (2026-08-26)**: 검수1(공통 보안·도메인 규칙)·
+검수2(기술부채: console.log/any타입/TODO 신규 0건, `npm run check` 이 세션 관련 신규 ERROR
+0건)·검수3(시범오픈 기준: 마이그레이션 rollback 포함·RLS 격리·N+1 쿼리 없음·가격병합 누락
+없음·PC `.d-cat-section` 무영향·비밀키 안전) 전 항목 통과. 개별 확인: ①`clearOnSelect`
+opt-in 유지로 단일값 선택기(coupon f_type/f_discount_type, products/search 등) 회귀 없음
+②Migration #354/#355 함수 시그니처 충돌 없음·권한 적절 ③`+page.server.ts` N+1/가격병합
+문제 없음 ④모바일 MD추천과 PC 카테고리 섹션 완전 독립 ⑤범위 외 수정·타 세션 작업물 침범
+없음. 블로킹 수정 0건 — 비블로킹 권고 1건(`.m-pkg-*` 죽은 코드, 기존 BACKLOG 항목과 동일,
+이번 세션 범위 아님). **커밋은 Stephen이 직접 실행.**
+
 - [sp3-qa-agent 발견, 2026-08-21] `HomeCategoryProductsModal.svelte`의 상품검색 결과 매핑이
   `search_products` RPC에 없는 필드(`image_urls`, 실제는 `image_url` 단수)를 참조해 항상 null로
   귀결되는 죽은 필드 참조 — 화면에 렌더링되지 않아 실사용 영향 없음
@@ -4428,6 +4965,58 @@ pre-existing 유지). 실화면 검증은 Stephen이 로컬 dev 서버에서 직
   100% 동기화됐으나 탭 목록은 여전히 `code_mapping_groups` 전체 노출 유지. 탭 목록까지
   완전 동기화하려면 `+page.server.ts`의 categories 조회 로직을 `product_page_categories`
   필터/정렬 반영하도록 별도 후속 작업 필요(의도적으로 범위 보수적 제한, 버그 아님)
+
+### Phase 4 후속 — 상품검색 SuggestPicker 버그 3건 수정 (2026-08-26, 같은 세션)
+
+Stephen이 `HomeCategoryProductsModal`/`HomeThemeGroupModal`의 상품 검색 UI 실사용 중 발견한
+결함 3건. 전부 진단→수정 완료.
+
+1. **"1개 이상 상품 추가 불가" 버그** (`HomeCategoryProductsModal`에서 최초 재현) — 원인:
+   공용 `SuggestPicker.svelte`의 `selectOption()`이 `closeSuggest()`를 호출해 `isFocused`를
+   강제로 `false`로 만드는데, 옵션 클릭 시 `onmousedown preventDefault`로 실제 DOM 포커스는
+   입력창에 남아있어 "실제 포커스 상태"와 어긋남. 이후 비동기 검색결과(`options` prop 갱신)가
+   도착해도 `$effect`의 `isFocused` 분기가 else로 빠져 드롭다운이 다시 열리지 않아, 첫 상품
+   추가 후 두 번째 검색부터 결과가 전혀 안 뜨는 것으로 나타남. **수정**: `selectOption()`에서
+   `closeSuggest()` 대신 드롭다운만 닫음(`suggestOpen=false; suggestIdx=-1`), `isFocused`는
+   건드리지 않음.
+2. **"검색 한 번에 다른 상품이 줄줄이 딸려오는" 버그** (`HomeThemeGroupModal`에서 재현, 1번
+   수정 직후 드러남) — 원인: `selectOption()`이 선택 직후 `oninput?.(query)`를 호출하는데
+   이때 `query`가 방금 선택한 상품명 그대로라, 부모의 디바운스 검색 콜백이 그 상품명으로
+   몰래 재검색을 실행 → 유사한 이름의 다른 상품이 뜬금없이 드롭다운에 다시 나타남(1번 수정
+   전에는 `isFocused`가 죽어있어 이 재검색 결과가 화면에 반영되지 못해 숨겨져 있던 버그).
+   **수정**: `selectOption()`에서 `oninput?.(query)` 호출 제거 — 선택 통지는 `onselect`만으로
+   충분, `oninput`은 실제 타이핑(`handleNativeInput`) 시에만 호출.
+   → 두 수정 모두 `SuggestPicker.svelte`(전역 공용 컴포넌트)에 적용되어 동일 검색+선택
+   패턴을 쓰는 모든 소비처(`ProductHeroModal`·`HypePackBannerModal`·`/products/search`·
+   `CrazylogBannerModal`·`cms/promotion/coupon`·`cms/subscriptions/new`·`cms/products/new`
+   등)에 공통 반영됨.
+3. **초성 검색 미지원** (`search_products` RPC 자체의 기존 한계, 이 세션에서 신규 지원 추가) —
+   Postgres FTS(`'simple'` config)+`pg_trgm` 유사도만 쓰던 기존 로직은 한글 초성(예: "ㅇㅅㅌㅅ")
+   만으로는 매칭이 안 됨. Stephen 확인(2026-08-26): "영문 한글 초성을 넣었을때 해당 상품이
+   노출되면 돼, 영문을 한글로 or 한글을 영문으로 매핑할 필요 없어" — 즉 한글 상품명/브랜드에
+   대한 한글 초성 검색만 지원하면 되고, 영문↔한글 상호 매핑(예: "Manfrotto"를 한글 초성으로
+   찾기)은 불필요. **구현**: `hangul_chosung(text) RETURNS text IMMUTABLE` 함수(완성형 한글
+   음절만 초성으로 치환, 그 외 문자는 그대로 통과) 신설 → `products.name_chosung`/
+   `brand_chosung` 생성열(GENERATED ALWAYS AS ... STORED) 추가 + trigram GIN 인덱스 2개 →
+   `search_products` 본문에 초성 LIKE 매칭 조건 추가(함수 시그니처·반환타입 불변, 호출부 TS
+   무수정). 이 RPC는 `/products` 검색 등 사이트 전역 상품검색이 공유하므로 전체 영향범위.
+
+   수정 파일: `src/lib/components/common/SuggestPicker.svelte`(1·2번),
+   `src/lib/components/home/admin/HomeThemeGroupModal.svelte`(상품 썸네일 제거 요청 포함),
+   `supabase/migrations/20260826050000_354_search_products_chosung_support.sql`(신규, 3번)
+
+   ✅ **stage(ezyvffjvuwmtuhpxdjrw) 적용·검증 완료(2026-08-26)** — 라이브 SQL로 4가지 확인:
+   ① 한글 초성 부분검색(`'ㅇㅅㅌㅅ'` → "인스탁스 와이드필름 10매") 정상 매칭, ② 영문 전체
+   검색(`'Manfrotto'` → "Manfrotto 055") 회귀 없음, ③ 한글 전체단어 검색(`'인스탁스'`) 회귀
+   없음, ④ 빈 문자열/공백 쿼리 회귀 없음(전체 목록 정상 반환).
+   ✅ **production(vnbpmvxruyciuuaermyh) 적용 완료(2026-08-26, Stephen 승인)** — 적용 전
+   pg_trgm 존재·`search_products` 현재 정의가 stage와 동일함을 재확인 후 진행. 적용 후
+   직접 재조회로 검증: 활성 부모상품 53/53 전부 `name_chosung` 백필 정상(생성열이므로
+   ALTER 시점에 자동 계산), 실제 한글 상품명("SAMSUNG S26 울트라...") 초성 부분검색
+   (`'ㅇㅌㄹ'`)으로 2건 정확히 매칭 확인.
+
+   1·2번(SuggestPicker) 수정은 순수 프론트 로직이라 DB 마이그레이션 없음 — `npm run check`
+   신규 ERROR 0건(기존 a11y warning만 잔존, 전부 사전 존재).
 
 ---
 
@@ -4966,6 +5555,113 @@ git commit: Stephen 직접 실행 필요.
 
 DB 변경: 없음
 Migration: 없음
+
+---
+
+## DONE — 🟢 ROUTINE: /hype-pack 테마그룹 모달 상품행 UX 보완 + Stage QA 샘플 확충 (2026-08-26) — ✅ 완료
+
+아젠다: "Pack 테마그룹 관리" 모달의 연관상품 목록 UI 결함 2건 수정 + 상품검색 후보군이
+3건뿐이라 "3개 이상 담으면 검색 안 됨"으로 오인됐던 현상 해소.
+
+수행 작업:
+  [1] 상품 제목명 20자 줄임 표시
+    · `HypePackThemeGroupModal.svelte`에 `truncateName()`(한글/영문/숫자 구분 없이
+      20자 초과 시 `…` 말줄임) 신설, `.tg-prod-name`에 적용 + `title` 속성으로 전체명 hover 확인 가능
+
+  [2] 검색 직후 추가된 상품의 썸네일 깨짐 수정
+    · 원인: `onProductSelect()`가 새 상품 추가 시 `image_urls: null`(placeholder)로만 채워서
+      실제 이미지가 반영되기 전까지 깨진 상태로 보였음
+    · 수정: `loadProductCandidates()` 캐시에 `image_url`(search_products RPC 반환값) 필드를
+      추가로 저장해두고, `onProductSelect()`가 후보 캐시에서 실제 썸네일·가격을 찾아 즉시 채움
+
+  [3] Stage(ezyvffjvuwmtuhpxdjrw) QA 샘플 상품 3건 추가(총 6건으로 확충)
+    · Stephen이 "상품 3개 이상 선택 후 검색 시 목록 미노출" 현상을 보고 — 분석 결과 버그
+      아니라 stage의 hypepack 카테고리 실존 상품이 3건뿐이라 전부 그룹에 담으면 후보군이
+      0건이 되는 정상 동작이었음(카테고리 잠금 자체는 의도된 사양)
+    · Activity SET01 / Analog SET01 / Creator SET02 3건 INSERT — 전부 `static/hype-pack/*.png`
+      실존 정적 파일만 image_urls로 사용(썸네일 깨짐 방지), `search_products` RPC로 6건 전부
+      `image_url` 정상 반환 확인
+    · Production은 무변경(이미 실제 상품 존재, 가짜 QA 데이터 추가 안 함 — 이전 세션에서
+      Stephen이 이미 확정한 원칙 재확인)
+
+  [4] 동시편집 세션 점검(Stephen 요청) — "Pack 테마그룹" 관련 파일에 타 세션 개입 여부 확인
+    · `HypePackThemeGroupModal.svelte` 자체는 이번 세션 수정만 존재, 타 세션 개입 없음 확인
+    · 인접 파일 2곳에서 타 세션 수정 확인(둘 다 정당한 별건 수정, 충돌·훼손 아님):
+      - `HypePackBannerModal.svelte` — `clearOnSelect` 추가 + "검색 중…" 안내문 위치를
+        SuggestPicker 아래로 이동(uiux-index.md에 이미 "2026-08-26 4곳 통일" 기록된 것과 일치)
+      - 신규 마이그레이션 `20260826050000_354_search_products_chosung_support.sql` —
+        `search_products` RPC 자체에 서버사이드 초성검색 신설(함수 시그니처 불변,
+        DROP 없이 안전하게 CREATE OR REPLACE만 사용 — 오버로드 충돌 위험 없음).
+        이번 세션이 만든 클라이언트 측 임시 초성검색(chosungSearch.ts 캐시+필터 방식)을
+        추후 대체할 수 있는 보완 기능으로 판단, 복원 조치 불필요 확인
+
+수정 파일:
+  - src/lib/components/hype-pack/HypePackThemeGroupModal.svelte
+
+DB 변경: 없음(코드 수정만) — Stage에 QA 샘플 상품 3건 INSERT(데이터 시딩, 마이그레이션 아님).
+Production 데이터는 무변경.
+
+GATE C:
+  [x] svelte-check 신규 에러 0건
+  [x] 20자 truncateName 적용 스크린샷 대조 확인(정확히 20자 지점에서 절단 확인)
+  [x] Stage 신규 QA 상품 3건 전부 실존 정적 이미지만 사용(썸네일 깨짐 없음)
+  [x] GATE E(@sp3-qa-agent) 검수 대기
+
+---
+
+## DONE — 🟡 BOUNDARY: /hype-pack 테마그룹 카드별 노출(is_active) 선택 기능 추가 (2026-08-26) — ✅ 완료
+
+아젠다: "테마그룹 관리" 모달에서 그룹별로 `/hype-pack` 화면 노출 여부를 켜고 끌 수 있게
+(삭제와 별개로) 체크아이콘 토글 UI 추가.
+
+수행 작업:
+  [1] Migration #343 — `hype_pack_theme_groups.is_active` 토글을 실제로 반영하는 경로 신설
+    · `cms_create_hype_pack_theme_group` / `cms_update_hype_pack_theme_group`에
+      `p_is_active BOOLEAN DEFAULT true` 파라미터 추가
+    · 🔴 오버로드 함정 발견·수정: `CREATE OR REPLACE`는 파라미터 개수가 다르면 "교체"가
+      아니라 새 오버로드를 추가한다는 사실을 간과해, 마이그레이션 적용 직후 5-param/6-param
+      오버로드가 동시에 존재하는 상태가 됐음 — products.md §2-3에 이미 문서화된 것과
+      동일 클래스의 PGRST203(PostgREST 오버로드 모호성) 위험. `pg_proc` 조회로 즉시
+      발견해 옛 5-param 오버로드를 `DROP FUNCTION`으로 제거(stage·production 둘 다),
+      마이그레이션 파일에도 DROP 문을 추가해 재적용 시 동일 문제 재발하지 않도록 반영
+    · 신규 RPC `get_hype_pack_theme_groups_admin()` — `is_cms_user()` 게이트, `is_active`
+      무관 전체 조회(공개용 `get_hype_pack_theme_groups_with_products()`는 기존처럼
+      `is_active=true`만 반환하도록 무변경 — 비노출 그룹의 제목·이미지·상품 정보가 anon에게
+      노출되지 않게 두 RPC를 분리)
+    · Stage(ezyvffjvuwmtuhpxdjrw) ✅ → Production(vnbpmvxruyciuuaermyh) ✅ 적용 완료
+      (오버로드 정리 포함)
+
+  [2] `+page.server.ts` — 관리자 전용 전체 목록 로드 분리
+    · `isCms`일 때만 `get_hype_pack_theme_groups_admin()` 추가 호출 → `themeGroupsAdmin`
+      (모달 전용, is_active 무관 전체) 반환. 공개 카드 렌더링용 `themeGroups`(active만)는
+      기존 그대로 유지 — 두 목적이 섞이지 않도록 분리
+    · 12h/24h 가격 배치조회의 상품 ID 수집 범위를 `themeGroupsAdmin`(있으면) 기준으로 확장
+
+  [3] `+page.svelte` — 모달에 전달하는 groups prop을 `data.themeGroups` → `data.themeGroupsAdmin`
+      으로 교체(비노출 그룹도 모달에서 계속 편집·재노출 가능해야 하므로)
+
+  [4] `HypePackThemeGroupModal.svelte` — 체크아이콘(CheckIcon) 버튼 UI + 토글 로직
+    · `ThemeGroupRow`/`LocalGroup` 타입에 `is_active: boolean` 추가, `toLocal()`/`addGroup()`
+      (신규 그룹 기본값 true) 반영
+    · `toggleActive(tempId)` 신설 — 로컬 상태만 flip, 저장 시 `p_is_active`로 함께 전송
+    · UI: front-uiux.md §17 "체크 확인 버튼" 표준 그대로 적용(인라인 SVG path 정본 +
+      `.checkbox-btn`/`.checked` 패턴, `<input type="checkbox">` 신규 작성 금지 규정 준수) —
+      그룹 행 우측 끝(삭제 버튼 다음)에 배치, `class:checked={g.is_active}`로 ON/OFF 시각화
+
+수정/신규 파일:
+  - supabase/migrations/20260826010000_343_hype_pack_theme_groups_visibility_toggle.sql (신규)
+  - src/routes/hype-pack/+page.server.ts
+  - src/routes/hype-pack/+page.svelte
+  - src/lib/components/hype-pack/HypePackThemeGroupModal.svelte
+
+DB 마이그레이션: Migration #343 — Stage ✅ / Production ✅ (오버로드 정리 포함 검증 완료)
+
+GATE C:
+  [x] svelte-check 신규 에러 0건
+  [x] 오버로드 모호성(PGRST203) 위험 발견 즉시 수정 — pg_proc 조회로 재확인 완료
+  [x] 공개 RPC(get_hype_pack_theme_groups_with_products)는 무변경 — 비노출 그룹 정보가
+      anon에게 노출되지 않음 확인
+  [x] GATE E(@sp3-qa-agent) 검수 대기
 
 ---
 
@@ -6682,7 +7378,7 @@ TDD도메인: 없음 (GSD 도메인)
 
 ---
 
-## DONE — /account 내정보 UX 정비 세션 일괄 (계정RPC타입·미등록안내·아바타업로드·중복배지제거·쿠폰메뉴·취소내역노출·PC대여목록복구·PC카드배경·products RLS·본인외국인증명 재등록/삭제·토스트표준화·섹션타이틀폰트토큰·PC카드레이아웃정합) (2026-08-16~26) — T1~T8 커밋·배포 완료(T8 Stage+Production 적용 완료), T9~T15(2026-08-26분) 코드 미커밋·Migration #349만 Stage+Production 적용 완료
+## DONE — /account 내정보 UX 정비 세션 일괄 (계정RPC타입·미등록안내·아바타업로드·중복배지제거·쿠폰메뉴·취소내역노출·PC대여목록복구·PC카드배경·products RLS·본인외국인증명 재등록/삭제·토스트표준화·섹션타이틀폰트토큰·PC카드레이아웃정합·위시토글전면구현·상품썸네일S등급) (2026-08-16~26) — T1~T8 커밋·배포 완료(T8 Stage+Production 적용 완료), T9~T15 sp3-qa-agent GATE E 통과(참고3건), T16~T19(2026-08-26분) 코드 미커밋·Migration #349만 Stage+Production 적용 완료
 
 아젠다: 단일 세션 내 Stephen의 launch-selected-element 기반 순차 지시 5건을 처리한 /account
 (내정보) 화면 UX 정비 묶음. B-START 정식 편입 없이 진행된 ad-hoc 세션이라 사후 하네스 등록.
@@ -6898,7 +7594,102 @@ T9~T15 전부 매 단계 svelte-check 재실행으로 신규 에러 0건 확인(
 toast.ts·ProfileTabContent.svelte·NotificationTabContent.svelte·WishlistScroll.svelte·
 MenuSection.svelte·account/+page.svelte·upload-doc/+server.ts·신규 delete-doc/+server.ts·
 database.ts·front-uiux.md·uiux-index.md)는 여전히 미커밋 — Stephen 직접 커밋 필요.
-sp3-qa-agent 검수 대기.
+
+✅ **@sp3-qa-agent 검수 완료(T9~T15, GATE E 통과)** — 지정 파일 13개 범위 내 보안·RLS·데이터
+격리(delete-doc/upload-doc 전부 auth.uid()/user_id 경로 한정, DB 성공 후에만 실물 삭제)·
+svelte-check 신규에러 0건·§18 폰트토큰 문서-코드 일치·콤보버튼 표준 일치 전부 통과. 비차단
+참고 3건: ① `app.css` 닫기버튼 `right` PC 기본 12px/모바일만 20px로 갈라짐(설명과 diff 불일치,
+기능 문제 없음) ② 신규 삭제 아이콘(`.btn-doc-delete`) 28×28px가 ui-mobile.md 44px 터치타겟
+기준 미달(단, `AddressTabContent.btn-delete` 기존 패턴 그대로 재사용) ③ 삭제/재등록 API
+자동화 테스트 없음(TDD 강제 도메인 아님). 커밋 시 `database.ts`/`front-uiux.md`/`uiux-index.md`는
+다른 세션 변경분과 섞여 있어 `git add -p` 권장.
+
+[2026-08-26 후속 — 이 세션] T9~T15 QA 완료 이후 계속 이어진 launch-selected-element 기반
+순차 지시. 동일 블록에 계속 기록(B-START 정식 편입 없는 ad-hoc 세션).
+
+  - T16: (T9~T15 기록 당시 누락분 사후 보정) PC "대여 정보" 메뉴 카드가 원래 우측
+    대시보드(`pc-right`, "관심가져봄" 카드 아래)에 있던 게 좌측 사이드바 메뉴 목록과
+    구조적으로 안 맞는다는 Stephen 지적 — 좌측 컬럼(`pc-left`)의 "계정 이름 정보" 카드
+    바로 아래·"내정보" 카드 바로 위로 재배치(모바일 `MenuSection`의 "대여 정보→내정보"
+    순서와 구조 일치). 같은 turn에서 PC "관심가져봄" 카드의 `bg-[#ffffff]` 배경색도
+    제거(모바일 `WishlistScroll.svelte` 루트가 원래 배경색 없는 것과 통일).
+  - T17: 위시(찜) 토글 기능 신규 전면 구현. Stephen이 "관심 상품이 없습니다" 빈 상태
+    문구를 점검하다가 "상품 위시 체크 시 정상 반영되는지 점검해" 요청 → 조사 결과
+    `ProductDPCard`를 쓰는 5곳 중 `WishlistScroll.svelte`(이미 찜한 것만 표시, 해제만
+    가능) 단 1곳만 `onWishToggle`이 연결돼 있고, 실제 상품을 새로 찜할 수 있는 화면
+    (`/products`·`/products/[id]`·`/hype-pack/theme/[id]`·`/products/search`)은 전부
+    하트 버튼 자체가 안 보이는 상태(컴포넌트 자체 규칙상 `onWishToggle` prop 없으면
+    버튼 미노출)임을 확인·보고 → "구현 진행해!" 지시로 4곳 전부 신규 연결.
+    공용 서버 헬퍼 `src/lib/server/getWishedProductIds.ts`(후보 id 중 이미 찜한 것만
+    조회) + 공용 클라이언트 헬퍼 `src/lib/utils/wishlist.ts`(`toggleWish`) 신설.
+    `/products`·`/products/[id]`·`/hype-pack/theme/[id]` 세 곳은 각 `+page.server.ts`에
+    `wishedIds`/`isLoggedIn` 추가 후 그리드에 배선. `/products/search`는 검색결과가
+    클라이언트 fetch(`/api/search/products`)로 오길래 그 **API 응답 자체에 `wished`
+    필드를 서버에서 미리 계산해 얹는** 방식으로 처리(두 반환 경로 모두), 추천상품(마운트
+    시 클라이언트 직접 supabase 조회)은 별도로 `product_wishlists` 재조회 후 병합,
+    `SearchProductGrid.svelte`에 `onWishToggle` prop 신설. 비로그인 사용자는
+    `onWishToggle`을 `undefined`로 넘겨 기존 컴포넌트 규칙 그대로 하트 자체를 숨김(새
+    UI 패턴 없이 기존 계약 재사용). 디버깅 중 `products/[id]/+page.svelte`에서 신규
+    필드가 타입에러로 안 잡히는 문제가 계속 재현돼 상당 시간 오진단(캐시 문제로 오인)
+    했으나, 실제 원인은 그 파일이 SvelteKit 자동생성 `PageData` 대신 **손으로 직접 쓴
+    `Props.data` 인터페이스**를 쓰고 있어서였음 — 그 인터페이스에 필드 추가로 해결.
+  - T18: T17 디버깅 중 `rm -rf .svelte-kit`를 반복 실행하면서, 이미 떠 있던 다른 dev
+    서버 프로세스(포트 5173/5174) 두 개가 실행 중인 상태로 `.svelte-kit` 삭제가 일어나
+    `.svelte-kit/generated/server/internal.js`(dev 서버 런타임 필수 파일 — `svelte-kit
+    sync`만으로는 재생성 안 되고 서버 재시작 시에만 생성됨)가 없는 채로 남는 장애를
+    2회 유발. Stephen이 붙여준 Vite 에러로 발견 → 원인이 이 세션(내 `rm -rf .svelte-kit`
+    실행)임을 직접 확인해 고지 → 깨진 프로세스 종료 후 재기동으로 복구, `/products`·
+    `/products/search` 200 응답 확인.
+  - T19: 상품 썸네일 "S(소형)" 크기 등급 신설. `/account` "관심가져봄" 목록의 카드를
+    30% 축소해달라는 요청에 1차로 `front-uiux.md §14-4`(당시 이미 다른 세션이 최신화해둔
+    버전을 재확인 안 하고 예전 기억으로) 잘못된 기준값(균일 30px 라운드·`.pc-heart`
+    36px)으로 축소 적용했다가, Stephen이 "front 표준 지침에 상품 썸네일 기준정보를
+    찾아 리뷰하라"고 재차 지적 → 재확인 결과 실제 `ProductDPCard.svelte` 라이브 코드는
+    비대칭 라운드(`33px 13px 33px 13px`)·`.pc-clip`(44px)이 이미 정본임을 확인하고
+    `WishlistScroll.svelte`의 축소값을 정정. `front-uiux.md §14-4`에 "크기 등급 —
+    M(기본)/S(소형)" 표를 신설해 M 실측치의 ×0.7 축소값(PC 203px·모바일 122px)을 정식
+    기록, `uiux-index.md`에도 포인터 각주 추가(Stephen 요청 — "PC 관심상품 영역은 S급
+    소형으로 분류 기록"). 모바일 반응형에도 동일 비율(M×0.7)로 확대 적용(요청 — "모바일
+    반응형에 비율대로 노출") — 기존 `hideTitle`(PC 전용) 조건부 적용을 제거하고 모바일
+    ·PC 공통 CSS로 재구성.
+
+T16~T19 전부 매 단계 svelte-check 재실행으로 신규 에러 0건 확인(사전존재 에러 1건은
+`vite.config.ts` 무관 에러로 전 구간 불변). git 쓰기(add/commit/push)는 이번 세션에서
+전혀 실행하지 않음 — T16~T19 대상 파일(account/+page.svelte·WishlistScroll.svelte·
+front-uiux.md·uiux-index.md·신규 getWishedProductIds.ts·신규 wishlist.ts·products/
++page.server.ts·products/[id]/+page.server.ts·products/[id]/+page.svelte·products/
++page.svelte·hype-pack/theme/[id]/+page.server.ts·hype-pack/theme/[id]/+page.svelte·
+api/search/products/+server.ts·products/search/+page.server.ts·products/search/
++page.svelte·SearchProductGrid.svelte) 전부 미커밋 — Stephen 직접 커밋 필요.
+
+⚠️ **@sp3-qa-agent 1차 검수 — 보류(수정 후 재검수 필요) 판정, 발견 즉시 수정 완료**:
+  1. `src/routes/api/search/products/+server.ts` — `getWishedProductIds()` 호출 시 두
+     지점(early-return 경로·최종 병합 경로) 모두 모듈 전역 `supabase`(세션 미바인딩 익명
+     클라이언트)를 넘기고 있어 `product_wishlists` RLS상 `auth.uid()`가 항상 NULL이 되어
+     로그인 사용자라도 검색결과 `wished`가 항상 false로 나오던 결함 → `locals.supabase`로
+     교체(2곳).
+  2. `src/routes/products/[id]/+page.svelte` — `CalendarTimePicker`(모바일·PC 2곳)에
+     넘기는 `onwishtoggle`이 `data.isLoggedIn` 게이팅 없이 항상 함수로 전달돼, 비로그인
+     방문자에게도 메인 예약위젯의 찜 하트가 노출되던 결함(클릭 시 401 후 조용히 무반응 —
+     크래시는 아니나 UX 결함) → `onwishtoggle={data.isLoggedIn ? (...) : undefined}`로
+     양쪽 다 게이팅.
+  3. `front-uiux.md §14-4` "크기 등급 M/S" 표 — Mobile M 라운드값을 `18px`(균일)로 잘못
+     기재(실제 `ProductDPCard.svelte`·`WishlistScroll.svelte` 코드는 이미 비대칭
+     `20px 8px 20px 8px`(M)/`14px 6px 14px 6px`(S) 사용 중이었음 — 코드는 처음부터 맞았고
+     문서 표기만 틀렸던 것) → 표 값 정정. `WishlistScroll.svelte` 자체는 수정 불필요(이미
+     정확했음).
+  QA가 지적한 "파일 혼재"(account/+page.svelte·products/+page.server.ts 등에 다른 세션의
+  무관 변경이 섞여 있음) 참고 — 이번 배치(T16~T19) 자체 로직에는 영향 없음, 커밋 시
+  `git add -p`로 선별 필요.
+
+✅ **@sp3-qa-agent 재검수 완료(위 3건 한정) — GATE E 통과**: `getWishedProductIds` 호출 2곳
+`locals.supabase` 교체 확인(hooks.server.ts의 쿠키 기반 세션 클라이언트 맞음, 다른 곳의
+모듈 전역 `supabase` 사용은 무관 기존 코드라 손대지 않은 것도 확인), `CalendarTimePicker`
+2곳 `data.isLoggedIn` 게이팅 확인(`wished` prop은 미변경 그대로 유지), front-uiux.md 표
+4개 셀 전부 `ProductDPCard.svelte`/`WishlistScroll.svelte` 실제 코드와 일치 확인.
+svelte-check 신규 에러 0건. 수정 필요 0건 — GATE E 진행 가능 판정.
+
+다음 단계: Stephen 커밋(위 T16~T19 전체 + 이번 3건 수정 포함, 파일 혼재 주의 — git add -p 권장).
 
 ---
 
@@ -33059,6 +33850,55 @@ src/routes/api/contracts/[token]/sign/+server.ts  (MODIFY)
 
 ---
 
+## NOW — 전자계약 뷰어 BI 로고 결함 수정 + 대표 BI 표준 문서화 (2026-08-20, 이 세션)
+
+생성일: 2026-08-20
+아젠다: Stephen 제보(`<launch-selected-element>` 스크린샷) — "전자계약 뷰어 상단 BI를 분명히
+교체한 것으로 아는데 여전히 텍스트 로고" → 업데이트 정황 조사 지시 → 원인 확인 후 ①양쪽
+계약서 화면 BI 통일 ②대표 BI 표준을 디자인 시스템 문서에 규정, 순서로 처리.
+
+### 조사 결과 (Explore 에이전트 실측)
+
+- drop-shadow 정본 BI SVG(`filter0_d`, 빨강 `#CF0000`+흰색 `#FEFEFF`)는 전역 푸터
+  (`+layout.svelte`)와 `/contract/[token]`(고객 서명 화면) 딱 두 곳에만 적용돼 있었음.
+- GNB·MobileMoreMenu·CMS 레이아웃 등은 drop-shadow 없는 별개 정적 파일
+  `/static/logo-bi2.svg`를 `&lt;img&gt;`로 참조 — 애초에 다른 자산 계열.
+- 별도의 재사용 Logo 컴포넌트는 프로젝트에 없음(양쪽 다 완전 하드코딩 인라인 SVG/파일 참조).
+- **원인**: `/account/rental/[id]/contract`(이 세션에서 직전에 신설)와 `/contract/[token]`의
+  BI 교체 작업이 거의 동시각(4분 차이)에 서로 다른 커밋으로 진행되면서, SVG 교체가
+  `/contract/[token]` 한 파일에만 적용되고 신규 화면은 교체 대상에서 누락됨 — 전형적인
+  "동시각 병렬작업 반영 누락" 케이스.
+- 디자인 시스템 문서(`front-uiux.md`/`uiux-index.md`) 어디에도 BI SVG 자체에 대한 표준
+  규정이 없었고, `--cs-orange`="로고 전용"이라는 기존 서술이 실제 BI(오렌지 미사용, 빨강+흰색)와
+  오독을 유발할 수 있는 상태였음.
+
+### 수정 — BI 통일 + 표준 문서화
+
+- `src/routes/account/rental/[id]/contract/+page.svelte`: 헤더의 텍스트 로고(`.logo-text`/
+  `.logo-orange`)를 `/contract/[token]`과 동일한 drop-shadow SVG(117×66 viewBox, 71×40 렌더)로
+  교체 — filter id는 두 페이지가 동시 렌더되는 경우가 없지만 안전하게 `_a` 접미사로 구분.
+- `.claude/rules-ref/front-uiux.md` §19 신설(대표 BI 표준) — ①drop-shadow 정본 BI(계약서·
+  푸터) vs ②평면 `/logo-bi2.svg`(GNB류) 용도 구분 규정, 신규 화면 판단 기준, 이번 결함 이력
+  기록, `--cs-orange` 오독 방지 각주.
+- `.claude/rules/uiux-index.md` — 컬러 핵심 표에 오독 방지 각주 + "🔴 대표 BI(로고)" 빠른참조
+  섹션 신규(front-uiux.md §19로 연결).
+
+### 검증
+
+`npx svelte-check` — 신규 에러 0건(기존 1건만 유지), 수정 파일 신규 경고 0건.
+
+### 수정 파일
+
+```
+src/routes/account/rental/[id]/contract/+page.svelte  (MODIFY)
+.claude/rules-ref/front-uiux.md                         (MODIFY)
+.claude/rules/uiux-index.md                             (MODIFY)
+```
+
+**GATE E: 자체판정 ✅ (경량 GSD 수정 — 기존 서명화면 SVG를 그대로 복제 적용, 로직 변경 없음)**
+
+---
+
 ## DONE — 🔴 CRITICAL: Production 날짜미정 임시예약(draft) 스키마 누락 복구 (2026-08-20, 이 세션, Stephen 승인)
 
 > ⚠️ 이 항목은 이 세션이 처리한 것만 기록한다. 동일 워킹트리에서 동시 진행 중인 다른 세션들의
@@ -34893,3 +35733,832 @@ closure 패턴이었다"는 부분이 git 커밋 이력과 정확히 대응하�
 시행착오 과정을 서술한 것으로 추정, 현재 코드 상태에는 영향 없어 블로킹 아님).
 
 **GATE E: ✅ 통과 — 블로킹 0건. 커밋은 Stephen 직접 실행.**
+
+---
+
+## NOW — 회원 QR코드: 고객 본인확인·체크인 스캔 시스템 신설 (2026-08-26, 이 세션) — ⏳ 구현 착수
+
+**아젠다**: Stephen이 CMS 고객상세 패널(`CustomerDetailPanel.svelte`) 헤더에서 QR코드 기능
+부재를 재검증 요청 → 조사 결과 상품(product_code) QR 시스템은 정교하게 구축돼 있으나 처음부터
+끝까지 상품 전용 설계라 회원 QR은 애초에 범위 밖이었음을 확인. 다만 고객 계정화면(`/account`)에
+클릭해도 동작 없는 장식용 "QR체크" 배지가 이미 존재해 원래 기획 의도가 있었음을 시사 —
+Stephen이 AskUserQuestion으로 "고객 본인확인·체크인 스캔 시스템"(Option B, 전체 파이프라인)을
+선택. Plan Mode로 설계 완료(플랜 파일: `/Users/stevenmac/.claude/plans/fluffy-twirling-seahorse.md`),
+승인 받아 구현 착수.
+
+**핵심설계**: 상품 QR(원문 텍스트 그대로 인코딩, 실물 스티커 호환성 때문에 절대 변경 금지)과
+겹치지 않도록 회원 QR 페이로드는 `/qr/member/{member_code}` 경로형 문자열로 분리 —
+`extractProductId()`가 이미 이 형식을 안전하게 거부함을 확인해 그 함수 무변경, `extractMemberCode()`
+신규 함수만 추가. 스캔 후 랜딩은 이번 세션에 이미 구축된 `/cms/customers?selected=&tab=` 딥링크를
+재사용 — 신규 DB 마이그레이션·RPC 전혀 불필요.
+
+**신규/수정 파일**:
+```
+신규: src/lib/components/account/MemberQrModal.svelte
+신규: src/routes/cms/mobile/qr/member/[code]/+page.server.ts
+수정: src/lib/components/account/ProfileCard.svelte (QR체크 배지 클릭 연결)
+수정: src/routes/account/+page.svelte (PC 중복 QR체크 블록 클릭 연결)
+수정: src/lib/utils/qrProductId.ts (extractMemberCode 추가)
+수정: src/routes/cms/mobile/+page.svelte (handleQrDetected 회원QR 분기)
+수정: src/routes/cms/mobile/rentals/+page.svelte (handleGeneralQrDetected 회원QR 분기)
+수정: src/lib/components/cms/CustomerDetailPanel.svelte (헤더에 QR 보기/인쇄 버튼)
+```
+
+**절대금지**: 상품 QR 원문 인코딩 방식 변경 금지, `extractProductId()` 수정 금지, 회원코드
+조회는 `.ilike()`+`escapeLikePattern()` 필수(QR-CASE-1), 카드별 검증 스캐너(`isProductMatch`
+기반) 무변경.
+
+**구현 완료 (2026-08-26) — ✅ 전체 검증 통과**
+
+- [x] `qrProductId.ts`에 `extractMemberCode()` 추가 — 단위 테스트로 상품/회원 QR 상호 배타성
+  확인(`/qr/member/{code}`는 `extractProductId()`가 이미 null 반환, 기존 상품 스캔 무회귀)
+- [x] `/cms/mobile/+page.svelte`·`/cms/mobile/rentals/+page.svelte`(범용 스캐너만, 카드별
+  검증 스캐너는 계획대로 무변경) — 회원 QR 분기 추가
+- [x] 신규 `/cms/mobile/qr/member/[code]/+page.server.ts` — Stage에서 실제 회원코드
+  (`CSBC26081080`)로 ilike 조회 쿼리 직접 재현, 정확한 user_id로 해석됨을 SQL로 확인
+- [x] 고객 화면 "QR체크" 배지 활성화(`ProfileCard.svelte` 모바일 + `account/+page.svelte`
+  PC 중복 블록) + 신규 `MemberQrModal.svelte`(ChatBottomSheet 패턴 재사용) — Stage 브라우저
+  라이브 확인: 실제 로그인 고객("이기성", `CSBC26081083`)으로 QR 렌더링·닫기 정상 동작
+- [x] `CustomerDetailPanel.svelte` 헤더에 관리자용 "QR" 버튼 추가 — Stage 브라우저 라이브 확인:
+  `/cms/customers?selected=...&tab=rental` 딥링크(이전 세션에 이미 구축된 기능 재사용)로
+  진입 후 QR 팝오버 렌더링·다운로드 버튼 정상 노출 확인(실제 고객 "이용희", `CSBC26081080`
+  — Stephen이 최초 선택했던 바로 그 패널)
+- [x] `npx svelte-check` — 신규 파일·수정 라인 전부 에러 0건(전체 1건은 `vite.config.ts`의
+  무관한 사전 존재 이슈, 다른 세션 소관)
+- [x] `npx eslint` — 신규 파일·수정 라인 전부 에러 0건(combined 실행에서 나온 5건은 전부
+  git diff 대조로 손대지 않은 기존 코드에 있던 사전 존재 이슈로 확인, 범위 밖이라 미수정)
+
+**DB 마이그레이션 없음(계획대로)**. 커밋은 Stephen 직접 실행.
+
+**후속 — CustomerDetailPanel QR UI를 RentalDetailPanel 헤더인라인 패턴으로 재정렬 (2026-08-26,
+같은 세션, 아래 RentalDetailPanel 건 이후)**
+
+```
+경위: 위 구현 당시(2026-08-18 시점 조사)에는 ProductDetailPanel.svelte의 88px 바디영역
+  qr-wrap(토글 없음) 패턴만 커밋돼 있어 그것을 참고 — CustomerDetailPanel에 "QR" 토글버튼 +
+  140px 별도 팝오버(qr-popover) 구조로 구현했었다. 이후 같은 세션에서(아래 "예약 QR 코드
+  생성" 건, 2026-08-26) RentalDetailPanel.svelte에 더 최신 패턴(헤더 인라인 44px 캔버스,
+  토글 없이 항상 노출, .panel-header의 title/닫기버튼과 나란히 배치)이 새로 생겼는데
+  CustomerDetailPanel은 그 갱신을 반영하지 못한 채 남아 있었다. Stephen이
+  <launch-selected-element>로 두 UI를 나란히 비교 제시하며 "왜 표준 스타일로 배치하지
+  않았냐" 지적 → 경위 설명 후 "RentalDetailPanel 방식으로 맞춰줘" 승인.
+
+수정(`CustomerDetailPanel.svelte` 1개 파일만): showQrPopover state 제거, qrCanvasEl을
+  member_code 존재 시 무조건 렌더(토글 조건 제거), 캔버스 140→44px, 다운로드 폰트 12→11px
+  (RentalDetailPanel 값과 정확히 일치), 마크업을 panel-header 내부 .member-qr-wrap.
+  member-qr-wrap--header(margin-left:auto)로 재배치해 .panel-user·.close-btn과 같은 행에
+  배치. CSS도 .qr-toggle-btn/.qr-popover* 전부 제거하고 RentalDetailPanel의
+  .reservation-qr-wrap 값 그대로(투명 배경 텍스트버튼, hover 시 lilac bg+purple 텍스트)
+  .member-qr-wrap으로 이식.
+
+검증:
+  - grep으로 .qr-toggle-btn/.qr-popover/showQrPopover 잔존 참조 0건 확인
+  - npx svelte-check — CustomerDetailPanel.svelte 신규 에러 0건(전체 1건은 vite.config.ts
+    무관 사전이슈, 그대로)
+  - npx eslint — CustomerDetailPanel.svelte 에러 2건(510/525행 이메일 정규식
+    no-useless-escape)은 이번 수정과 무관한 QR 섹션 밖 사전 존재 코드로 확인, 미수정
+  - Stage 실브라우저(이 세션 launch-selected-element 세션 중 허용): user_id를 SQL로 직접
+    조회(`CSBC26081080` → `9589cf3c-...`) 후 `/cms/customers?selected=...&tab=rental`
+    딥링크로 "이용희" 패널 재진입 → DOM 직접 조회로 .member-qr-wrap.member-qr-wrap--header가
+    .panel-user·.close-btn과 같은 .panel-header 행에 44×44 캔버스 + "↓ QR 저장" 버튼으로
+    렌더링됨을 outerHTML로 확인 + 스크린샷으로 RentalDetailPanel과 동일한 시각 스타일(헤더
+    우측 정렬, 토글 없이 항상 노출) 확인
+```
+
+---
+
+## DONE — 예약 QR 코드 생성: `RentalDetailPanel` 헤더 신설 (2026-08-26, 이 세션) — ✅ 완료
+
+```
+[CONTEXT BRIDGE]
+plan_source: Stephen 직접 지시(2026-08-26, Plan 모드) — CMS 예약/대여 상세 패널
+  (RentalDetailPanel.svelte) 헤더(선택 영역: "대여 CS26081012 계약완료")를 보며 예약코드
+  정보를 담은 QR 코드 생성 요청. Plan 모드에서 Explore 에이전트 3개 병렬 조사(QR 생성
+  패턴·RentalDetailPanel 구조/예약코드 체계·스캔 조회 라우트) 후 AskUserQuestion으로 QR
+  콘텐츠 방식·배치 위치 확정.
+확정 사항(AskUserQuestion):
+  - QR 콘텐츠 = 예약코드 원문 텍스트만(`CS26081012`) — 상품 QR과 동일 철학(products.md
+    §2-4, "QR = 원문 텍스트 그대로, 링크 아님"). 스캔 시 별도 조회 라우트로 이동하는 기능은
+    이번 스코프에서 신설하지 않음(회원 QR·상품 QR과 달리 순수 표시·다운로드 전용).
+  - 배치 위치 = 최초 "대여정보" 탭 "예약 정보" 섹션에 인라인 배치로 구현 후, Stephen 실사용
+    확인 중 패널 헤더로 재배치 지시 → 헤더(제목·상태뱃지·닫기버튼 행)로 이동 완료.
+  - 크기 = 헤더 재배치 시 Stephen 지시로 88px→44px(50%) 축소(캔버스 크기뿐 아니라
+    `QRCode.toCanvas` 실제 렌더 해상도도 44로 낮춰 축소 — CSS만 축소하는 방식이 아니므로
+    화질 저하 없음).
+절대금지: `ProductDetailPanel.svelte`·`MemberQrModal.svelte`를 건드려 공용 QR 유틸로
+  추출하지 않는다(요청 범위 외 수정 금지 — 두 파일 모두 이번 작업과 무관, 기존처럼 각자
+  로컬 구현 유지가 프로젝트 기존 관행과 일치). QR 콘텐츠를 URL/경로형으로 바꾸지 않는다
+  (products.md §2-4 철학과 일치시키기로 확정).
+```
+
+**구현(`src/lib/components/cms/RentalDetailPanel.svelte` 1개 파일만 수정)**:
+```
+- renderReservationQR()/downloadReservationQR() 함수 신설 — ProductDetailPanel.svelte의
+  renderQR()/downloadQR() 패턴 그대로 재현(qrcode 패키지, 이미 설치돼 있어 신규 의존성 없음).
+  기존 reservationCode() 헬퍼(예약코드 원문, 트리거로 항상 자동 채번돼 있어 상품 QR과 달리
+  "미발급" placeholder 분기 불필요)를 페이로드로 사용.
+- 패널 헤더(.panel-header, 제목·상태뱃지 + 닫기버튼 행)에 QR 캔버스(44×44) + "↓ QR 저장"
+  버튼을 인라인 배치. margin-left: auto로 닫기 버튼과 그룹핑.
+- $effect가 reservationCode() 값 변경에 반응 — 다른 예약을 선택해도(패널 재마운트 여부와
+  무관) QR이 즉시 올바른 값으로 재렌더링됨.
+```
+
+**검증(Claude Browser, 이 세션 launch-selected-element 세션 중 명시 허용)**:
+```
+- svelte-check 신규 에러 0건(기존 무관 에러 1건만 잔존, baseline과 동일)
+- 실브라우저: /cms/rentals에서 예약 "CS26081012" 클릭 → 헤더에 44×44 QR 렌더링 확인
+  (getImageData로 실제 QR 패턴 픽셀 존재 직접 확인, 빈 캔버스 아님)
+- 다른 예약(SONY PXW-Z90, CSREV260700052)으로 전환 → 헤더 QR이 즉시 새 예약코드로
+  재렌더링됨을 픽셀 패턴 변화로 확인(Stephen도 직접 재확인 완료 — "다른 예약도 클릭해서
+  헤더 QR 정상 갱신되는지 확인되었음")
+- "↓ QR 저장" 버튼 텍스트·클릭 핸들러 정상 배선 확인(다운로드 자체는 헤드리스 브라우저
+  환경 한계로 실제 파일 저장까지는 미실행 — 코드 리뷰로 로직 검증)
+```
+
+**수정 파일**: `src/lib/components/cms/RentalDetailPanel.svelte` (단일 파일)
+
+**DB 마이그레이션 없음**. 신규 npm 의존성 없음(`qrcode` 기존 설치분 재사용). 커밋은 Stephen
+직접 실행.
+
+---
+
+## DONE — 🟡 BOUNDARY: 하이프팩 테스트 상품 썸네일 깨짐 — Supabase Storage 재등록 (2026-08-26) — ✅ 완료
+
+### 요청 원문
+
+"AI가 직접 테스트로 넣은 상품DB에서 썸네일 깨짐 증상이 로직 오류인지, ai 등록 문제인지 원인
+분석해." → 원인 확인 후 "Cloudinary publicId로 재등록해줘." → AskUserQuestion으로 재확인한 결과
+"Supabase Storage로 대신 (권장)" 선택.
+
+### 진단(root cause) — Stage DB 직접 조회로 확인
+
+`Traveler SET01`(`8221dc9f...`)·`Idol SET01`(부모 `f2f6c48a...`, 자식 `dca56753...`) 하이프팩
+테스트 상품의 `image_urls`가 `["/hype-pack/d-pack-traveler.png"]`처럼 **로컬 정적 파일 경로**로
+저장돼 있었음(실재하는 파일 — 가짜 값 아님, `static/hype-pack/`에 존재 확인). CMS 목록/상세
+패널의 `thumbUrl()`(`src/routes/cms/products/+page.svelte:186-191`)은 `image_urls[0]`을
+**항상 Cloudinary publicId**로 간주해 `https://res.cloudinary.com/.../q_auto/${first}.jpg`를
+조립하는데, 저장값이 이미 `/`로 시작 + `.png` 확장자를 가진 정적 경로라 선행 슬래시 중복
+(`q_auto//hype-pack/...`) + 이중 확장자(`.png.jpg`)가 겹쳐 깨진 URL이 생성됨 — 로직 버그가
+아니라 **컨벤션이 다른 값을 등록한 데이터 문제**로 판정(하이프팩 사용자 화면
+`/hype-pack/+page.svelte`가 이 정적 경로를 하드코딩 목록 `pack.img`로 직접 쓰는 것과 혼동한
+것으로 추정).
+
+### GATE B 확인 — 재등록 경로 결정 (AskUserQuestion)
+
+조사 중 `src/routes/api/cms/upload/+server.ts` 확인 결과, **현재 실제 상품 이미지 업로드
+파이프라인은 Cloudinary가 아니라 Supabase Storage(`product-images` 버킷)** 임을 발견(주석:
+"Supabase Image Transformation API 미사용 → 추가 과금 없음"). `thumbUrl()`의 Cloudinary
+분기는 이 전환 이전 레거시 상품을 위한 하위호환 경로로 보임. Cloudinary로 재등록하려면
+서버측 업로드 유틸이 없어 새로 만들어야 하는 반면, Supabase Storage는 기존 엔드포인트와
+동일한 구조를 그대로 재사용 가능 — 이 사실을 알리고 재확인한 결과 Stephen이 "Supabase
+Storage로 대신"을 선택.
+
+### 실행 내역 (코드 변경 없음 — 순수 데이터 수정)
+
+1. `static/hype-pack/d-pack-traveler.png`·`d-pack-idol.png`(원본 2048px)를 `sips`로
+   thumb(400×300)·large(1200×900) 2종씩 리사이즈(스크래치 디렉토리, 작업 후 삭제).
+2. `.env.local`의 `PUBLIC_SUPABASE_URL`/`SUPABASE_SERVICE_ROLE_KEY`를 안전하게 추출(전체
+   `source`는 파일 내 따옴표 없는 멀티워드 시크릿 때문에 셸 파싱 오류 유발 확인 — 특정 키만
+   `grep`으로 추출하는 방식으로 전환)해, `/api/cms/upload`와 동일한 Storage 경로 규칙
+   (`{product_id}/thumb_{uuid}.png`, `large_{uuid}.png`)으로 4개 파일을 `product-images`
+   버킷에 직접 업로드(REST API, curl). 업로드 후 공개 URL 응답(200 OK) 직접 재확인.
+3. `products.image_urls`를 새 Supabase Storage 공개 URL로 UPDATE(기존 이미지탭 저장
+   핸들러의 `.update({ image_urls })` 패턴과 동일한 direct-update 재사용, jsonb 캐스팅 필요
+   — Postgres 배열 리터럴이 아니라 `'[...]'::jsonb` 문법 사용). Idol SET01은 Storage 폴더를
+   자식(`dca56753`) UUID 기준으로 업로드했고, 부모(`f2f6c48a`)도 그 동일 URL을 그대로
+   재사용하도록 반영(§9 Q4 정책상 화면 표시엔 부모 값만 쓰이므로 영향 없음 — QA 검수로
+   폴더 소유 방향이 최초 기록과 반대임을 확인해 이 항목에서 정정).
+4. 로컬 리사이즈 파일 + 서비스롤 키를 담았던 임시 텍스트 파일 전부 삭제.
+
+### 검증
+
+- 업로드 4건 전부 HTTP 200 확인, 공개 URL 재조회로 `image/png` 정상 응답 확인.
+- Claude Browser로 두 상품 모두 재진입해 실제 썸네일이 정상 렌더링됨을 시각적으로 확인
+  (중간에 이 세션 내내 사용해온 브라우저 탭의 낡은 클라이언트 상태로 엉뚱한 이미지가 잠깐
+  보였으나, 하드 리로드 후 정상 확인 — DB 값 자체는 처음부터 정확했음, 소스코드 결함 아님).
+- 애플리케이션 코드(`thumbUrl()` 등) 전혀 수정하지 않음 — svelte-check/vitest 대상 아님.
+
+### 범위
+
+이번 작업은 **코드 변경이 아니라 Stage DB(ezyvffjvuwmtuhpxdjrw)의 잘못된 시드 데이터 3행을
+바로잡은 데이터 수정**이다. Production DB에는 이 하이프팩 테스트 상품 자체가 존재하지 않아
+(다른 세션이 하이프팩 테마그룹 기능 개발 중 Stage에만 심은 시드 데이터로 추정) 별도 조치
+불필요.
+
+GATE C: BOUNDARY(코드 변경 없음, Stage 전용 데이터 수정, 실서비스 영향 없음) — QA
+(@sp3-qa-agent) 검수 완료.
+
+### QA(@sp3-qa-agent) 검수 — 통과 (블로킹 0건, 비블로킹 권고 2건 반영 완료)
+
+코드 diff 0건임을 git status/diff로 재확인(보고와 일치). Stage DB(PostgREST 직접 조회,
+MCP 미보유라 이 경로로 대체)로 3개 행 image_urls 전부 Supabase Storage 공개 URL임을
+재확인 — 로컬 정적 경로·이전 깨진 값 잔존 없음. 업로드 4개 URL(대표 large + 파생 thumb
+전부) curl로 HTTP 200 + image/png 재확인. 스크래치 디렉토리 삭제 확인 + 리포 전체
+git grep으로 서비스롤 키 값 대조해 신규 유출 없음(매치된 3곳은 전부 .gitignore 대상인
+빌드산출물·타 워크트리, 이번 작업과 무관). Production 자격증명이 로컬에 아예 없어 실행
+경로상 Production 영향이 구조적으로 불가능함을 확인(직접 조회는 자격증명 부재로 생략).
+비블로킹 권고 2건 — ① 이 항목만 NOW/DONE 헤딩 컨벤션 미준수(반영 완료, 위 제목 수정),
+② Idol SET01 부모/자식 URL 폴더 소유 방향 서술이 실제와 반대(반영 완료, 위 3번 항목 정정).
+
+**GATE E: ✅ 통과 — 블로킹 0건. 이 건은 코드 변경이 없어 커밋 대상 자체가 없음(git add/commit
+불필요) — Stage DB 데이터 수정으로 이미 종료.**
+
+## NOW — 사용자 공통 GNB/SubGnb 반응형 breakpoint 불일치 결함 진단 + 수정 (2026-08-10) ✅ 완료
+
+[CONTEXT BRIDGE]
+plan_source: Stephen 리포트 — "① PC↔모바일 전환 구간 특정 해상도에서 GNB(및 SubGnb 유사증상)
+  아예 미노출, ② 모바일 반응형에서 간헐적 mobile GNB 미노출 또는 상하 뒤바뀌어 노출"
+핵심제약: "수정이 GNB 전역에 문제를 일으킬 경우 복원 쉽게 할 수 있도록 안전하게 수정" 명시
+  지시 — 원본 로직 삭제/치환 대신 최소 변경 + 복원 포인터 주석 필수
+TDD도메인: 없음 — GSD (반응형 CSS breakpoint 정합, 상태전이·결제·보안 무관)
+절대금지: 요청 범위 외 파일 수정 금지 — 조사 중 발견한 의도된 설계(profile 레이아웃 등)는
+  버그로 오판해 손대지 않음
+
+---
+
+- [x] 증상 ① 원인 분석 | GSD | ✅ 완료
+  - `GNB.svelte` 자체(데스크톱↔모바일 768px 상호 정합)는 문제 없음을 코드 대조로 확인
+  - 실제 원인: 개별 라우트가 GNB와 다른 breakpoint로 `.gnb-desktop-wrap`/`.gnb-mobile-wrap`을
+    전역 오버라이드(`:global()`)하면서 발생하는 "이중 은닉 구간"
+    1) `SubGnb.svelte` PC/모바일 전환 기준이 `641px`(GNB는 `768px`) — 641~767px 구간에서
+       GNB=모바일 레이아웃 / SubGnb=PC 레이아웃으로 서로 어긋남
+    2) `src/routes/members/+layout.svelte`가 데스크톱 GNB를 `max-width:1023px`까지 숨기는데
+       GNB 자체 모바일 버전은 `≥768px`에서 이미 숨겨진 상태 — 768~1023px 구간에서
+       데스크톱·모바일 GNB가 동시에 사라짐(증상①과 정확히 일치)
+  - 조사했으나 버그 아님으로 확인 후 미수정: `members/profile`·`account/profile`
+    (`SubGnb`가 GNB를 완전 대체하는 의도된 설계), `crazylog/view/[slug]`
+    (자체 모바일 pill 네비 `.m-nav-pill`가 GNB 모바일을 완전 대체하는 의도된 구조 —
+    `gnb-mobile-wrap` 조건 없이 숨기는 코드가 있었으나 요청 범위 외로 판단해 미수정)
+- [x] 증상 ① 수정 — SubGnb.svelte breakpoint 통일 | GSD | ✅ 완료
+  - `src/lib/components/common/SubGnb.svelte` — PC/모바일 전환 `641px → 768px` 2곳
+    (line 96 PC 블록, line 211 모바일 숨김 블록) 통일, 각 지점에
+    `[GNB-BREAKPOINT-FIX 2026-08-10]` 주석 + "복원 시 641px로 되돌릴 것" 명시
+- [x] 증상 ① 수정 — members/+layout.svelte 안전 보강 | GSD | ✅ 완료
+  - 최초 시도(원본 `max-width:1023px`를 `767px`로 직접 치환)는 되돌림 — `MembersHero.svelte`와
+    이 페이지의 PC 여백 보정이 GNB와 다른 `1024px`을 자체 기준으로 쓰고 있어, 단순 치환 시
+    768~1023px 구간에서 데스크톱 GNB가 여백 미보정 모바일 히어로 위에 겹쳐 가려지는
+    **새로운 결함**을 유발함을 발견 → 원본 로직 완전 복원
+  - 최종 방식: 원본 `@media (max-width:1023px) { .gnb-desktop-wrap, .fab-bar 숨김 }` 규칙을
+    전혀 건드리지 않고, 그 아래에 `@media (min-width:768px) and (max-width:1023px) {
+    .gnb-mobile-wrap 강제 노출 }` 블록만 순수 추가 — 768px 미만·1024px 이상 원본 동작은
+    무변경, 768~1023px 구간의 "GNB 완전 미노출"만 해소. 복원 시 이 추가 블록 하나만
+    삭제하면 원본 상태로 완전 복귀(Stephen 지시 "안전하게, 복원 쉽게" 요건 충족)
+- [x] 증상 ② 원인 분석 | GSD | ⚠️ 정적분석으로 미확정
+  - GNB는 루트 레이아웃(`+layout.svelte`)에서 단 1회만 렌더링(중복 마운트 없음),
+    `{#key}` 강제 리마운트 없음 — 구조적으로 "뒤바뀜"을 일으킬 명확한 코드 원인을
+    특정하지 못함
+  - 의심 지점만 기록(수정 안 함, 재현 경로 없이 임의 수정 금지 원칙): `{#if
+    !$authState.loading}` 게이팅(아바타 슬롯 로딩 중 완전 공백 렌더 → 로딩 완료 시
+    레이아웃 시프트), SPA 네비게이션 시 라우트별 `<svelte:head><style>` 주입 타이밍
+  - Stephen에게 구체 재현 경로(페이지·조작) 요청, 재현 정보 확보 시 후속 세션에서 추가 조사
+
+검증: 정적 코드 검증만 완료(Claude Browser 사용 금지 원칙) — `npx svelte-check` 결과 수정
+2개 파일(SubGnb.svelte, members/+layout.svelte)에 신규 에러·경고 0건 확인(`vite.config.ts`
+에러 1건은 이번 수정과 무관한 기존 베이스라인 이슈). 실제 브라우저 반응형 전환 확인은
+Stephen 직접 확인 필요. git 커밋은 Stephen 요청 대기.
+
+---
+
+## NOW — 🟢 ROUTINE: /products 페이지 상품 썸네일 UI 표준화 + 헤더/MD추천 슬라이드 설정 모달 결함 수정 (2026-08-26) ✅ 완료
+
+[CONTEXT BRIDGE]
+plan_source: Stephen 라이브 UI 지적 다수(launch-selected-element 기반 순차 지시 — 단일
+  아젠다로 사전 계획된 것이 아니라, 세션 중 화면을 직접 짚어가며 발견된 다건의 UI 표준화·
+  결함 수정 요청이 누적된 것). 이번 세션에서 조건부 허용 조건(①launch-selected-element
+  세션 진행 중)을 근거로 Claude Browser 능동 사용.
+핵심제약: 각 지시가 개별적으로 왔으나 결과적으로 "상품 썸네일 클립(찜) 아이콘 표준"과
+  "상품 썸네일 박스 라운드값·정사각형 구조 표준"이라는 재사용 가능한 디자인 시스템 규칙으로
+  수렴 → front-uiux.md/uiux-index.md에 정식 등록.
+TDD도메인: 없음 — 순수 UI/CSS 표준화 + 클라이언트 검색필터/서버 정렬 로직 GSD 결함수정
+  (AGENTS.md TDD 강제 키워드: 결제·예약·보안·크레이지스코어 어디에도 미해당).
+절대금지: 요청 범위 외 파일 수정 금지 원칙 준수 — `WishlistScroll.svelte`의 S(70%)등급
+  오버라이드는 병렬 세션이 이미 동기화해둔 상태를 그대로 유지만 하고 이 세션에서 추가로
+  손대지 않음(중복 수정 금지). 리네임 중 발견된 동일 파일의 `.pc-heart` 오버라이드 누락
+  1곳만 이 세션에서 직접 수정.
+
+---
+
+### 1. 찜(클립) 아이콘 UI 표준 등록 + 3개 지점 통일 (`pc-clip`·`mdp-clip`·`mprod-clip`)
+- 하트→클립(paperclip) 아이콘 리네임 도중 `WishlistScroll.svelte`의 `:global(.pc-heart)`
+  오버라이드 누락 발견·수정
+- MD추천 PC 브레이크포인트 사이즈 누락분 보완, 클립 아이콘 배경을 여러 차례 조정 끝에
+  `rgba(255, 207, 207, 0.8)`(cs-chat-in-bg 80% 투명도)로 PC·모바일 통일 확정
+- Best Pick 모바일 그리드(`m-prod-card`)에 클립 버튼 자체가 없던 공백 발견 →
+  `.mprod-clip` 신설(버튼 36px·SVG 30px — 박스가 표준(174px)보다 커서 확대 적용)
+- 3개 지점 전부 "찜된 상품에만 노출"로 동작 변경(찜 안 한 상품은 버튼 자체 미렌더링 —
+  찜 추가 진입점은 상품상세 전용, Stephen 확정 설계)
+- `front-uiux.md` §14-4·`uiux-index.md`에 표준 스펙·예외·변경 이력 전부 문서화
+
+### 2. 상품 썸네일 박스 — 라운드값 좌우 비대칭 + 정사각형 구조 표준 신규 등록
+- `m-prod-img-box`/`md-pick-img-box`/`pc-img-wrap`(모바일+PC) 전부
+  `border-radius: 20/8/20/8`(모바일)·`33/13/33/13`(PC, ×5/3 배율)로 통일
+- `m-prod-img-box` 고정 200×200px 시도 후 Stephen 요청으로 반응형 `aspect-ratio:1/1`로
+  재조정(2열 그리드 유지)
+- `md-pick-img-box`(신규 표준 적용 시 최초 누락분) 소급 갱신
+- 헤더 포스터 슬라이드(`d-feat-card`/`m-feat-card`)는 별도 배율(대형 `50/20/50/20`)로
+  통일 + 모바일 구조를 PC(이름→설명→가격행) 기준으로 재정렬, 폰트 하드코딩 → PC/모바일
+  토큰 쌍으로 전환, 가격행 `flex-wrap:nowrap→wrap`으로 우측 overflow 결함(카드 경계
+  32px 초과 실측 확인) 수정
+- `front-uiux.md`에 전부 문서화
+
+### 3. 카테고리 라벨(`.cat-label`) 모바일 숨김
+- 모바일 `display:none`, PC(`≥768px`)만 `display:block` — 아이콘(`.cat-icon-box`)은
+  그대로 유지
+
+### 4. 모바일 키워드 필(`m-keywords`) 노출 로직 결함 수정
+- 기존: 트렌딩 자동집계 → CMS 수동설정 → 하드코딩 순 폴백이라, CMS에서 키워드를 지워도
+  트렌딩 값이 계속 노출되던 결함
+- 수정: `keywordsRaw.items`(CMS 수동설정)만 사용, 비어있으면 섹션 자체 미노출
+
+### 5. `+page.server.ts` — 헤더/MD추천 슬라이드 순서·랜덤모드 결함 수정
+- `get_products_by_ids`가 입력 배열 순서를 보장하지 않아 관리자가 드래그로 지정한
+  "고정 순서"가 실제로 무시되던 결함 → `applyProductOrder()` 헬퍼로 서버에서 `order`
+  필드 기준 재정렬
+- `mode:'random'`이 저장만 되고 아무 효과 없던 결함 → 매 요청 Fisher-Yates 셔플 구현
+- 헤더 슬라이드·MD추천 픽 양쪽에 동일 적용
+
+### 6. `ProductHeroModal.svelte`(헤더 슬라이드 + MD추천 공용 컴포넌트) — 결함 2건 진단
+- ① "초성입력 검색 노출 안됨" — **버그 아님으로 판정**: migration 354(당일 적용)로
+  서버 초성검색이 이미 정상 동작함을 실측 확인(한글 상품명 기준 정상 매칭). 테스트한
+  상품명이 전부 영문("Sony" 등)이라 애초에 매칭 대상이 아니었을 뿐 — 영↔한 교차매핑은
+  Stephen이 같은 날(migration 354) 명시적으로 배제한 설계
+- ② "선택→저장해도 슬라이드 미반영" — **실제 결함으로 확인·수정**: `search_products`는
+  `is_active` 여부와 무관하게 검색되는데 실제 노출은 `get_products_by_ids`(is_active=true
+  전용)만 사용해, 비활성 상품을 선택·저장하면 DB엔 정상 기록되지만 화면엔 영원히 안
+  보이는 불일치가 발생. `doSearch()`에 `get_products_by_ids` 교차검증을 추가해 비활성
+  상품을 애초에 검색 후보에서 제외하도록 수정
+- `ProductMdPickModal.svelte`는 `ProductHeroModal`을 감싸는 얇은 래퍼라 별도 코드 수정 없이
+  동일 수정이 자동 적용됨을 실측 확인 — Stephen이 직접 저장→반영 재확인 완료
+
+---
+
+검증: 매 변경마다 `svelte-check`(신규 에러 0건 유지) + Claude Browser 실측(launch-selected-
+element 세션 진행 중이라 조건부 허용, PC/모바일 뷰포트 전환 검증) 반복 수행. 테스트 중
+저장한 비활성 상품(SONY PXW-Z90)은 원상복구 완료. git 커밋은 Stephen 직접 실행 대기.
+
+수정 파일: `src/routes/products/+page.svelte`, `src/routes/products/+page.server.ts`,
+`src/lib/components/products/ProductDPCard.svelte`,
+`src/lib/components/products/admin/ProductHeroModal.svelte`,
+`src/lib/components/account/WishlistScroll.svelte`(리네임 누락분 1곳만),
+`.claude/rules-ref/front-uiux.md`, `.claude/rules/uiux-index.md`
+
+GATE C: ROUTINE(UI 표준화 + 비-critical 데이터 결함 수정, 결제·예약·보안 무관) —
+@sp3-qa-agent 검수 대기.
+
+---
+
+## DONE — 🟡 BOUNDARY: 상품상세 예약신청 버튼 좌측 'wish' 아이콘 버튼 신설 (2026-08-26, 이 세션)
+
+**요청 흐름** (`<launch-selected-element>` 기반 3회 지시):
+1. CalendarTimePicker `.cta-row`의 `.reserve-btn`(예약신청) 좌측에 지정 SVG로 'wish' 아이콘
+   버튼 신설 — 실행 시 `/account` wishedIds 영역에 반영 + 예약신청 버튼 상하폭(50px)에 맞춘
+   정사각 크기(PC·mobile 반응형 비율 동일 적용).
+2. `wish-btn` 기본 색상토큰 'red-10 #FFCFCF' / 선택상태 색상토큰 'red-80 #FF3535' 반영 +
+   `product_wishlists` 연동 확인 지시.
+3. 완성 SVG 2벌(기본/선택) 제시 — 서클 배경은 두 상태 공통 `#FFCFCF`, 실제로 바뀌는 건
+   내부 하트 도형(기본 흰색 → 선택 `#FF3535`)뿐이었음을 확인, 2번째 지시 때의 오적용(서클
+   배경을 토글시켰던 것)을 정정.
+
+**조사**: 프로젝트에 찜 인프라(`$lib/utils/wishlist.ts` `toggleWish` · `/api/wishlist` ·
+`toggle_product_wishlist` RPC · `product_wishlists` 테이블 · `getWishedProductIds` 헬퍼)가
+이미 완성돼 있었고, 이 페이지의 "많이 본 상품" 섹션(`ProductDPCard`)에는 이미 연결돼 있었으나
+정작 지금 보고 있는 메인 상품 자체는 찜 버튼도 없고 초기 wished 상태 조회 대상에도 빠져 있던
+기존 공백이었음 — 신규 RPC/테이블 없이 기존 인프라를 메인 상품에도 연결하는 것으로 충분.
+
+**구현**:
+- `src/lib/components/products/CalendarTimePicker.svelte` — `wished`/`onwishtoggle` prop
+  추가, `.reserve-btn` 앞에 `.wish-btn`(50×50px 원형) 삽입. 서클(`.wish-bg`)은 기본·선택
+  공통 `var(--cs-chat-in-bg)`(#FFCFCF, app.css에 이미 "red-10%"로 주석된 기존 토큰) 고정,
+  하트 도형(`.wish-heart`)만 기본 `var(--cs-white)` → `.active` 시 `var(--cs-red-badge)`
+  (#FF3535, "red-80%" 기존 토큰)로 토글 — 신규 색상토큰 추가 없이 기존 팔레트 재사용.
+- `src/routes/products/[id]/+page.svelte` — mobile/PC 두 `CalendarTimePicker` 인스턴스
+  양쪽에 `wished={wishedSet.has(product.id)}` / `onwishtoggle={() => handleWishToggle
+  (product.id)}` 배선(기존 "많이 본 상품" 섹션과 동일한 상태·핸들러 재사용).
+- `src/routes/products/[id]/+page.server.ts` — `getWishedProductIds` 조회 대상에
+  `String(row.id)`(메인 상품 자신) 추가 — 이전엔 popularProducts만 조회해 메인 상품이
+  초기 wished 판정에서 빠져 있었음.
+- `product_wishlists` 연동은 별도 코드 추가 없이 기존 경로(`toggleWish`→`/api/wishlist`→
+  `toggle_product_wishlist` RPC)가 이미 그 테이블에 직접 insert/delete하는 것을 migration
+  158 원문 대조로 재확인.
+
+**검증**: `npx svelte-check` — 신규 에러 0건(기존 무관 에러 1건만 잔존).
+
+**GATE 등급**: 🟡 BOUNDARY — 기존 찜 인프라 재사용 + 단일 컴포넌트 prop/CSS 추가, 신규
+DB/RPC 없음.
+
+---
+
+## DONE — 🟡 BOUNDARY: 예약신청 본인증명 흐름 4단계 재확인 + 등록완료 자동복귀 결함 수정
+(2026-08-26, 이 세션)
+
+**1차 요청**: `/products/creator-set01-qa-stage` 예약신청 시 4단계 로직(①로그인게이트
+②본인증명 미등록 안내토스트→`/account/profile?tab=profile` 랜딩 ③본인증명 등록 UI(콤보
+선택+드래그/파일선택 업로더+1~5개 파일+등록하기 버튼 활성화) ④등록완료 시 완료토스트+이전
+상품상세화면 자동복귀) 구현 상태 재확인 요청.
+
+**재확인 결과**:
+- ①②는 직전 세션에서 이미 구현·QA 통과된 그대로 코드상 정상 존재 — 변경 없음.
+- ③은 **다른 동시 진행 세션**이 이미 완전히 구현해둔 상태였음(Migration 345/346/349,
+  `/api/profile/upload-doc` `MAX_IDENTITY_FILES=5` + 배열 저장, `ProfileTabContent`의
+  `identityFiles`(배열)·`ondragover`/`ondragleave`/`ondrop`·파일카운트 등) — 요청 스펙과
+  정확히 일치, 코드 확인만 하고 손대지 않음.
+- ④는 실제로 누락돼 있었음 — `uploadIdentityDoc()` 성공 시 완료 토스트만 뜨고 화면 이동
+  로직이 전혀 없어 개인정보 화면에 계속 남아있는 상태였음.
+
+**1차 수정**(1차 요청 대응): `history.length > 1 ? history.back() : goto('/account')`
+추가(`ProductHero.svelte`의 `goBack()` 관례와 동일 패턴).
+
+**2차 요청**(Stephen이 1차 수정을 3건 재수정 지시):
+1. 암묵적 브라우저 히스토리(`history.back()`)가 아니라 "이전 상품 경로값을 명시적으로
+   보유"하는 구조로 교체.
+2. 완료 토스트 문구를 정확히 "본인증명 등록이 확인되었습니다."로 지정.
+3. 토스트 호출 조건 — "등록하기" 실행 직후 "정합됨" 신호를 확인한 뒤에만 토스트를 부르는
+   구조일 것.
+
+**2차 수정**:
+- `src/routes/products/[id]/+page.svelte` — 본인증명 미등록 안내 토스트의 '확인' onClick에서
+  `window.location.pathname + window.location.search`를 `returnTo` 쿼리파라미터로 인코딩해
+  `/account/profile?tab=profile&returnTo=...`로 이동(기존엔 `tab`만 전달).
+- `src/lib/components/members/profile/ProfileTabContent.svelte` — `$app/stores`의 `page`
+  스토어로 `returnTo`를 읽음(prop 스레딩 없이 렌더트리 어디서든 `$page` 접근 가능한 SvelteKit
+  특성 활용 — PC 임베드 모드(`/account?tab=profile&returnTo=...`)와 모바일 전용 라우트
+  (`/account/profile?tab=profile&returnTo=...`) 양쪽 다 기존 리다이렉트가 쿼리스트링 전체를
+  그대로 들고 가므로 추가 배선 없이 동일 동작). "정합됨" 신호는 업로드 API 응답의 `ok:true`
+  만으로 판정하지 않고, 실제 반환된 `docUrls.length`가 제출한 `identityFiles.length`와
+  정확히 일치할 때만 `isConsistent`로 판정 — 불일치 시 완료 토스트·화면이동 모두 생략, 에러
+  메시지만 표시. 정합 확인 후에야 `csToast.success('본인증명 등록이 확인되었습니다.')` 호출.
+  복귀 우선순위: `returnTo`(오픈리다이렉트 방지 — `/`로 시작 + `//` 아님 검증) → 없으면
+  `history.back()` → 그마저 없으면 `/account`.
+
+**검증**: `npx svelte-check` — 신규 에러 0건(기존 무관 에러 1건만 잔존).
+
+**GATE 등급**: 🟡 BOUNDARY — 회원 화면 내비게이션·토스트 로직 수정, DB/RPC 변경 없음.
+
+---
+
+## NOW — 🔴 CRITICAL: NLSearch CMS 관리모달 5개 서버라우트 전환 + 상품 등록정보 학습신호 캡처·소비연동 (2026-08-26, @promptor 분석) — ✅ GATE B 승인 완료(Q1~Q4 확정, 2026-08-26) — harness-executor 실행 대기
+
+생성일: 2026-08-26 (갱신: 2026-08-26 GATE B 확인 4건 반영 — §I 재설계: 캡처+소비연동까지 범위
+확장, 임계값 승격 방식 확정)
+아젠다: 메인세션이 직접 조사해 발견한 사실 — CMS 관리모달 5개(`HomeCategoryProductsModal`·
+`HomeThemeGroupModal`·`HypePackBannerModal`·`HypePackThemeGroupModal`·`ProductHeroModal`)가
+전부 `supabase.rpc('search_products', ...)`를 브라우저에서 직접 호출 중이라 nlsearch.md §2
+"브라우저 직접 RPC 호출 금지" 원칙 위반이며, 확정 동의어 확장(§E-2)·검색 학습 인프라가 전혀
+적용되지 않는 문제를 발견. 이를 기존 `/api/cms/products/search-suggestions` 서버라우트 경유로
+전환(§H)한 뒤, 관리자의 검색→상품선택 행위를 "이 검색어=이 상품" 확인신호로 캡처하고, 반복
+관찰로 임계값을 넘으면 실제 검색 인덱스 소비 로직까지 연결하는 학습 파이프라인(§I)을 설계한다.
+
+> ⚠️ 이 태스크는 `@promptor` 분석만 수행. 코드/마이그레이션 미작성 — 아래는 계획이며 GATE B
+> 승인 완료 후 `@harness-executor`가 §H → §I 순서로 실행한다(§H가 §I의 전제조건 — 5개 모달이
+> 공유 라우트를 거치게 된 이후에야 그 라우트에서 학습신호를 캡처할 지점이 생긴다).
+>
+> **GATE B 확인 완료(2026-08-26, Stephen 답변 4건 반영):**
+> ① Q1: "이번에 결과반영까지" → §I 범위를 캡처 인프라만에서 **소비 로직 연결까지** 확장(I-4/I-5
+> 신설) ② Q2: "반복 임계값 거치게" → 단 1회 즉시확정 기본안 폐기, 기존 동의어학습과 동일한
+> occurrence_count+threshold(3, `SYNONYM_PROMOTE_THRESHOLD` 재사용) 승격 방식으로 확정
+> ③ Q3: "통합" → 기본안 그대로 확정(5개 모달 컨텍스트 구분 없이 통합, context는 감사추적
+> 메타데이터로만 저장) ④ Q4: "진행" → 기본안 그대로 확정(§H-1/H-2 부수변경 포함 5개 모달
+> 전부 이번 전환 대상) — **추가 승인 없이 즉시 실행 가능.**
+
+[CONTEXT BRIDGE]
+plan_source: 메인세션이 이번 세션 중 직접 조사(grep+Read)한 결과 — 별도 plannode 없음, 직접
+  아젠다. nlsearch.md §2·§4·§6, `/api/cms/products/search-suggestions/+server.ts`,
+  `/api/search/products/+server.ts`(§E-2 원본), 5개 모달 소스코드, migration 354(초성지원)·
+  114(product_search_stats 스키마) 전부 이번 promptor 세션에서 직접 재확인 완료.
+핵심제약:
+  - nlsearch.md §6 "절대 기억할 것" 전부 준수 — pgvector·임베딩 API 등 신규 인프라 도입 금지,
+    core/에 crazyshot 전용 import 추가 금지, 기존 마이그레이션 직접 수정 금지(신규 파일만)
+  - `/api/cms/products/search-suggestions`는 이미 CMS 상품목록 검색창(`/cms/products`)과
+    관리자 채팅 상품검색 팝업(`ChatInput.svelte`) 2곳이 쓰는 공유 라우트 — 이번 확장이
+    그 2곳에 회귀를 일으키면 안 됨(신규 파라미터는 전부 opt-in, 생략 시 기존과 100% 동일)
+  - §I의 신규 학습신호는 기존 고객 신호(`product_search_stats`, J-2 학습 기반 키워드 승격)와
+    반드시 **저장 단계에서 분리**(별도 테이블, source 구분 불필요할 만큼 완전히 다른 테이블) —
+    service-operations.md §13/§14가 이미 확립한 "신호 오염 방지" 원칙과 동일하게, 관리자 신호를
+    고객 CTR 테이블에 직접 섞어 쓰지 않는다. 단, **소비(검색 인덱스 빌드) 시점에는 confirmed
+    승격된 관리자 신호와 고객 학습 키워드를 함께 `keywords_text`에 병합해도 된다**(Stephen
+    Q1/Q2 확정 반영) — 분리 원칙은 "저장"에 적용되는 것이지 "소비 결과"에 적용되는 것이 아니다
+TDD도메인: 없음 — AGENTS.md TDD 강제 키워드(결제/예약/재고/HOLD/auth/RLS/크레이지스코어 등)
+  미해당. 단, §H의 라우트 확장(H-1~H-3)은 다른 2개 기존 소비처에 영향을 주는 공유 코드라
+  회귀 검증(H-9)을 완료기준에 필수 포함(2026-08-06~09 기존 NLSearch 확장 선례와 동일 원칙).
+절대금지:
+  - git 자율 실행
+  - pgvector·임베딩 API 등 신규 인프라 도입
+  - 기존 마이그레이션 파일(114·115·198·203·354 등) 직접 수정 — CREATE OR REPLACE 신규 파일로만
+  - `CrazylogBannerModal.svelte`의 `search_crazylog_posts` RPC — 이번 범위(Stephen이 "5개
+    모달"로 명시 한정)에 포함되지 않음, 절대 손대지 않는다
+  - §I 신규 테이블(`cms_admin_product_search_confirmations`)을 `product_search_stats`와
+    병합하거나 그 테이블에 직접 INSERT하는 방식으로 구현 금지(신호 분리 원칙 위반)
+  - 요청 범위 외 파일 수정
+frozen_files (Claude Code 전용 — Cursor 수정 금지, GATE C 필수):
+  - src/routes/api/**/* (§H-1~H-3 라우트 확장, §I-2 POST 핸들러 전부 해당)
+  - src/lib/server/searchEngine/adapters/productSearchIndex.ts (§I-4 소비 로직 연결 — 기존
+    J-2 학습 기반 키워드 승격과 같은 파일, 고객 검색 CTR 파이프라인 전체가 걸린 공유 어댑터)
+  - supabase/migrations/** (§I-1 신규 ADD만 허용)
+  - $env import가 있는 모든 파일
+실패롤백: §H는 `/api/cms/products/search-suggestions/+server.ts` 단일 파일 git 롤백 + 5개
+  모달 각각 개별 파일 롤백으로 독립 복구 가능(공유 라우트 확장은 전부 opt-in이라 롤백해도
+  기존 2개 소비처는 무영향). §I는 신규 마이그레이션 파일 삭제 + POST 핸들러·5개 모달의
+  fire-and-forget 호출 라인만 되돌리면 전체 원복(신규 테이블이라 기존 데이터에 영향 없음).
+
+---
+
+### 사전조사 결과 — 배경 정보 중 이미 해소된 부분 (재작업 불필요)
+
+```
+background에 기술된 "search-suggestions 라우트에 가격 필드가 없다"는 현재 코드와 다르다 —
+2026-08-13 세션에서 이미 image_urls·slug·price_24h(price_rules 조인)가 전부 추가됨(관리자
+채팅 @멘션 product_link 기능용, "L1 QA Fix" 주석 참고). 즉 1단계 작업 (a)는 이미 충족돼
+있어 추가 코드 변경이 필요 없다 — 아래 §H 체크리스트에서 제외.
+
+실제로 남은 격차는 두 가지뿐이다:
+  b. 확정 동의어 확장(§E-2)이 이 라우트에는 이식돼 있지 않음 (H-3)
+  c. 5개 모달 중 2개(HypePackBannerModal·HypePackThemeGroupModal)는 카테고리 고정 검색 +
+     클라이언트 초성(chosung) 매칭을 위해 "카테고리 전체 100건 캐시 후 클라이언트 필터"라는
+     별도 아키텍처를 쓰고 있어, 단순 RPC→fetch 치환만으로는 안 되고 라우트에 `category`
+     파라미터(H-1)와 서버단 초성 매칭(H-2, migration 354의 name_chosung/brand_chosung 재사용)을
+     함께 추가해야 두 모달의 클라이언트 캐시+chosung 아키텍처를 안전하게 걷어낼 수 있다
+     (나머지 3개 모달은 카테고리 고정이 없어 단순 치환만 하면 됨 — HomeCategoryProductsModal·
+     HomeThemeGroupModal·ProductHeroModal 전부 `p_category: null`로 호출 중임을 코드로 확인)
+```
+
+### GATE 등급
+
+```
+🔴 CRITICAL — 공유 검색 라우트(다른 2개 기존 소비처 영향) 로직 변경 + 신규 DB 테이블/RPC +
+5개 파일 연동. 서비스 의도 확인 필수.
+```
+
+---
+
+### 🔴 CRITICAL — §H 1단계: CMS 관리모달 5개 서버라우트 경유 전환
+
+- [x] H-1: `search-suggestions` 라우트에 `category`(선택) 쿼리 파라미터 추가 — 지정 시 ilike
+  1차 쿼리에 `.eq('category', category)` 추가, MiniSearch 폴백 결과도 `document.category`
+  일치 항목만 통과 | GSD | 완료기준: 파라미터 생략 시 기존 3개 소비처(CMS 상품목록·ChatInput·
+  이번 미해당 3개 모달) 100% 동일 동작, `category=hypepack` 지정 시 그 카테고리만 반환 |
+  ✅ 완료
+- [x] H-2: 한글 초성(chosung) ilike 매칭 추가 — `core/koreanTokenizer.ts`의 `isChosungQuery(q)`
+  재사용, 참이면 ilike 대상을 `name`/`brand` 대신 migration 354 생성열 `name_chosung`/
+  `brand_chosung`으로 전환(그 외 경우 기존 4필드 그대로) | GSD | ✅ 완료
+- [x] H-3: 확정 동의어 확장 이식(`/api/search/products/+server.ts` §E-2 패턴 그대로) — ilike
+  결과가 WEAK_MATCH_THRESHOLD(3건) 이하일 때 `loadSynonymGroups()` +
+  `expandQueryWithConfirmedSynonyms()`로 확장어 추출 → 각 확장어로 동일 ilike 쿼리(category·
+  activeOnly·excludeId 조건 유지) 재조회 → dedupe 병합 → 그래도 부족하면 기존 MiniSearch
+  폴백을 원 쿼리+확장어 전부로 재실행 | GSD | ✅ 완료
+- [x] H-4: `HomeCategoryProductsModal.svelte` 전환 — `supabase.rpc('search_products', ...)`
+  제거, `fetch('/api/cms/products/search-suggestions?q=...')`로 교체, 응답을 기존
+  `ProductItem`(id/name/image_urls/base_price_daily)으로 매핑 | GSD | ✅ 완료
+- [x] H-5: `HomeThemeGroupModal.svelte` 전환 — H-4와 동일 패턴, 기존 `activeProductsList` 제외
+  필터 유지 | GSD | ✅ 완료
+- [x] H-6: `ProductHeroModal.svelte` 전환 — 기존 "검색 후 `get_products_by_ids`로 비활성 상품
+  교차 제외" 2단계 로직을 라우트의 `activeOnly=true` 파라미터 1회 호출로 단순화 | GSD | ✅ 완료
+- [x] H-7: `HypePackBannerModal.svelte` 전환 — `category=hypepack`(또는 `packageCategoryKey`)
+  파라미터로 카테고리 고정, 기존 `loadProductCandidates()`(100건 캐시) + `matchesSearch()`
+  (클라이언트 초성 필터) 아키텍처를 제거하고 나머지 모달과 동일한 280ms 디바운스 per-keystroke
+  fetch 패턴으로 단순화 | GSD | ✅ 완료
+- [x] H-8: `HypePackThemeGroupModal.svelte` 전환 — H-7과 완전히 동일한 패턴 | GSD | ✅ 완료
+- [x] H-9: 회귀 검증 — `npm run check` 신규 에러 0건(vite.config.ts 기존 에러 1건 제외) | GSD | ✅ 완료
+
+예상(§H): GSD 9개 = 225분(≈3.75시간)
+
+### 🔴 CRITICAL — §I 2단계: 상품 등록정보 학습신호 캡처 + 소비연동 (GATE B Q1/Q2 확정 반영 — 범위 확장)
+
+```
+설계: 관리자가 5개 모달에서 상품을 검색→선택(첨부)하는 행위를 "이 검색어=이 상품"이라는
+확인신호로 별도 테이블에 반복 관찰 누적 기록하고, 기존 동의어학습(synonymLearning.ts)과
+동일한 occurrence_count+threshold 승격 방식으로 candidate→confirmed 전환되면 실제 검색
+인덱스 소비 로직에 연결한다.
+
+신규 테이블을 쓰는 이유(product_search_stats 재사용 안 함): 그 테이블은 (product_id,
+search_term) 단일 PRIMARY KEY라 source 구분 컬럼이 없고, click_count 증가가 곧바로
+productSearchIndex.ts의 "학습 기반 키워드 자동승격"(J-2)에 반영되는 구조라 관리자 신호를
+섞으면 고객 CTR 신호와 저장 단계에서 분리할 방법이 없다(service-operations.md §13/§14
+"신호 오염 방지" 원칙과 동일 근거). 신규 테이블로 저장을 완전히 분리하되, confirmed 승격
+이후에는 소비(인덱스 빌드) 시점에 고객 학습 키워드와 병합해도 된다(Stephen 확정).
+
+승격 임계값 설계(Q2 반영, 과설계 금지 원칙 — 기존 패턴 그대로 재사용):
+  - 신규 설정 테이블을 만들지 않는다. `synonymLearning.ts`가 이미 export 중인
+    `SYNONYM_PROMOTE_THRESHOLD = 3`을 그대로 값으로 재사용(마이그레이션 SQL에는 동일 값 3을
+    하드코딩 — 새 튜닝 인프라 없음, "과설계 금지" 명시 반영).
+  - 컬럼 명명·의미도 `synonym_group_members`와 동일한 어휘 재사용: `occurrence_count`
+    (기존 안의 `confirmed_count`를 이 이름으로 통일) + `status`('candidate'/'confirmed')
+    — 매 확인마다 occurrence_count+1, 그 값이 임계값(3) 이상이 되는 순간 status가
+    'confirmed'로 전환(재조회 없이 UPSERT 시점에 그 자리에서 판정 — 별도 배치 잡 불필요).
+
+소비 메커니즘 선택(조사 결과 — J-2 재사용 확정, synonym_groups 아님):
+  - `productSearchIndex.ts`의 J-2 "학습 기반 키워드 자동승격"을 코드로 재확인한 결과,
+    `loadLearnedSearchTerms()`가 `product_search_stats`에서 click_count≥threshold인
+    (product_id, search_term) 쌍을 모아 **그 product_id의 keywords_text에 search_term을
+    직접 추가**하는 방식(특정 상품의 검색가능 텍스트 확장)이었다 — 즉 "이 검색어 → 이
+    특정 상품"이라는 1:1 매핑 신호를 소비하는 구조.
+  - 반면 `synonym_groups`/`upsert_synonym_member`(§E-2)는 "이 검색어 ≡ 저 검색어"라는
+    **검색어-검색어 동의어 등가** 신호를 다루는 구조로, 우리 신호(검색어-특정상품 매핑)와
+    의미론적으로 맞지 않는다(admin이 확인한 건 "이 단어가 이 상품을 가리킨다"이지 "이
+    단어가 저 단어와 같은 뜻이다"가 아님).
+  - → **J-2와 완전히 동일한 소비 패턴을 재사용**하기로 확정: 신규 로더
+    `loadAdminConfirmedSearchTerms()`(`loadLearnedSearchTerms()`와 동일 시그니처·동일 TTL
+    60초 캐시 패턴)가 `cms_admin_product_search_confirmations`에서 `status='confirmed'`인
+    행만 조회해 별도 맵으로 반환하고, `getProductSearchIndex()` 빌드 시 기존
+    `learnedTerms` 맵과 이 신규 맵을 **같은 `keywords_text` 병합 라인에서 함께 join**한다
+    (저장은 별도 테이블로 분리, 소비 시점에만 병합 — 위 CONTEXT BRIDGE 핵심제약과 일치).
+    `synonym_groups` 인프라는 이번 신호에 전혀 관여하지 않는다(§H-3에서 이식한 §E-2는
+    검색 API 자체의 동의어 확장 용도로 그대로 유지, 이번 신호와는 별개 경로).
+```
+
+- [x] I-1: 신규 마이그레이션(번호는 실행 직전 `ls supabase/migrations/`로 재확인 — 이 문서
+  작성 시점 최신은 356이라 잠정 357) — `cms_admin_product_search_confirmations` 테이블
+  (`id` / `product_id` FK products(id) ON DELETE CASCADE / `search_term` TEXT NOT NULL /
+  `admin_id` FK auth.users(id) ON DELETE SET NULL / `context` TEXT NOT NULL(모달 식별자,
+  통합 취급 — Q3 확정) / `occurrence_count` INT DEFAULT 1 / `status` TEXT DEFAULT 'candidate'
+  CHECK IN ('candidate','confirmed') / `first_confirmed_at`/`last_confirmed_at` TIMESTAMPTZ /
+  UNIQUE(product_id, search_term)) + RLS 활성화(정책 없음 — service_role 전용,
+  `cms_login_logs`/`cms_admin_audit_log`와 동일 패턴) + `record_admin_search_confirmation(
+  p_product_id, p_search_term, p_admin_id, p_context, p_threshold INT DEFAULT 3)` SECURITY
+  DEFINER RPC(UPSERT — ON CONFLICT (product_id, search_term) DO UPDATE
+  occurrence_count+1·last_confirmed_at·context 갱신, 갱신된 occurrence_count가
+  `p_threshold`(기본값 3, `SYNONYM_PROMOTE_THRESHOLD`와 동일 값) 이상이면 그 자리에서
+  `status='confirmed'`로 전환) | GSD | 완료기준: stage 적용 후 동일 (product_id, search_term)
+  3회 재호출 시 3번째 호출에서 status가 candidate→confirmed로 전환됨, `product_search_stats`는
+  전혀 건드리지 않음(직접 조회로 무변화 확인) | 예상: 30분
+- [x] I-2: `/api/cms/products/search-suggestions/+server.ts`에 `POST` 핸들러 추가(신규 라우트
+  파일 생성 없이 기존 GET과 co-locate) — `{ product_id, search_term, context }` 바디,
+  `getCmsRoleForAction`(GET과 동일 게이트 — 모든 CMS 역할 허용, 이 신호는 파괴적 액션이
+  아니므로) 인증 후 `record_admin_search_confirmation` RPC 호출 | GSD | ✅ 완료
+- [x] I-3: 5개 모달의 `onProductSelect()`에 fire-and-forget POST 배선 — 상품 선택 시
+  `{ product_id: opt.id, search_term: 직전 검색어, context: '<모달 식별자>' }`를 I-2 엔드포인트로
+  `fetch(...).catch(() => {})`(await 없이, 저장 흐름 절대 블록 안 함) | GSD | ✅ 완료
+  (context 식별자: home_category_products / home_theme_group / product_hero / hype_pack_banner /
+  hype_pack_theme_group)
+- [x] I-4: `productSearchIndex.ts`에 소비 로직 연결(신규) — `loadAdminConfirmedSearchTerms()`
+  함수 신설(`loadLearnedSearchTerms()`와 동일 패턴: TTL 60초 캐시 공유, admin 클라이언트로
+  `cms_admin_product_search_confirmations WHERE status='confirmed'` 조회 → `Map<product_id,
+  search_term[]>` 반환) → `getProductSearchIndex()` 빌드 라인에서 기존 `learnedTerms`(고객
+  신호) 맵과 이 신규 맵을 **같은 `keywords_text` 병합식**에서 함께 join(예:
+  `[baseKeywords, ...learned, ...adminConfirmed].filter(Boolean).join(' ')`) | GSD | 완료기준:
+  confirmed 승격된 (product_id, search_term)이 그 상품의 검색 키워드에 실제로 반영되어
+  검색 결과에 노출됨, `product_search_stats` 기반 기존 J-2 동작은 무회귀 | 예상: 25분
+- [x] I-5: 회귀·기능 검증 — 기존 J-2 유닛테스트(`productSearchCtr.test.ts` 등)가 여전히
+  GREEN인지 확인 + 신규 시나리오(동일 검색어로 동일 상품을 3회 확인 → confirmed 전환 →
+  인덱스에 키워드 반영 → 그 검색어로 검색 시 해당 상품 노출) 수동 또는 유닛테스트로 검증 |
+  GSD | 완료기준: 기존 테스트 무회귀 + 신규 시나리오 성공 | 예상: 25분
+- [x] I-6: `nlsearch.md` 문서화 — 신규 테이블·RPC·임계값 승격 방식·소비 연결(J-2 재사용,
+  synonym_groups 미사용 근거 포함)·"저장은 분리, 소비는 병합" 원칙을 명시하는 절 추가
+  (문서 내부 섹션 레터는 nlsearch.md 자체 최신 레터 다음 것으로 배정 — 이 문서 작성 시점
+  §1~§6/H-1/I/J-2/§G까지 사용 중이므로 실행 시점에 재확인) | GSD | 예상: 15분
+
+예상(§I): GSD 6개 = 145분(≈2.4시간) — **이번 사이클에 캡처+임계값 승격+소비연동(검색
+인덱스 반영)까지 전부 포함(Q1/Q2 확정 반영, 범위 확장).**
+
+전체 예상: GSD 15개 = 370분(≈6.2시간)
+
+### Stage → Production 순서
+
+```
+1단계 → crazyshot-stage(ezyvffjvuwmtuhpxdjrw): §I-1 마이그레이션 적용 → §H 전체 + §I-2~I-6
+        코드 배포 → 5개 모달 전부 검색·선택·저장 스모크 테스트 + 동일 검색어 3회 확인→
+        confirmed 승격→검색결과 반영 시나리오 확인 → Stephen 리뷰
+2단계 → crazyshot(vnbpmvxruyciuuaermyh) 실배포: Stephen 명시 승인 후에만 마이그레이션 적용
+
+⚠️ MCP apply_migration 실행 전 project_id 반드시 재확인(CLAUDE.md 원칙)
+```
+
+### GATE C 확인 항목
+
+```
+[ ] §H 신규 파라미터(category·chosung 매칭·동의어 확장) 전부 미지정/미해당 시 기존 3개
+    소비처(CMS 상품목록·ChatInput·§H 미해당 3개 모달)와 100% 동일 동작하는가?
+[ ] §H-7/H-8 전환 후 클라이언트 초성 매칭 캐시(loadProductCandidates·matchesSearch)가
+    완전히 제거되고 서버단 매칭으로만 동작하는가?
+[ ] §H-6 ProductHeroModal 전환이 `get_products_by_ids` 교차검증과 동일하게 비활성 상품을
+    여전히 제외하는가?
+[ ] `CrazylogBannerModal.svelte`(search_crazylog_posts RPC)에 손대지 않았는가? (범위 외 명시)
+[ ] §I 신규 테이블이 `product_search_stats`와 저장 단계에서 완전히 분리돼 있는가? (신호
+    오염 방지 원칙 — 소비 시점 병합은 허용, 저장 시점 병합은 금지)
+[ ] §I-2 POST 핸들러가 신규 라우트 파일 없이 기존 GET과 co-locate됐는가?
+[ ] §I-3 fire-and-forget 호출이 5개 모달의 저장/선택 흐름을 블록하지 않는가?
+[ ] §I-1 승격 임계값이 새 설정 테이블 없이 `SYNONYM_PROMOTE_THRESHOLD`(3)와 동일 값을
+    재사용하는가? (과설계 금지 — 새 튜닝 인프라 추가 안 됨)
+[ ] §I-1 occurrence_count가 임계값 도달 시 별도 배치 없이 UPSERT 그 자리에서 즉시
+    status='confirmed'로 전환되는가?
+[ ] §I-4가 `synonym_groups`/`upsert_synonym_member`가 아니라 J-2 `loadLearnedSearchTerms()`와
+    동일한 키워드 병합 패턴을 재사용했는가? (검색어-특정상품 매핑 신호에 맞는 소비 메커니즘)
+[ ] §I-4 변경 후 기존 J-2(고객 클릭 기반) 학습 동작이 무회귀인가?
+[ ] 마이그레이션 번호를 실행 직전 `ls supabase/migrations/`로 재확인했는가?
+```
+
+---
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+✅ GATE B — Stephen 확인 완료(4건 반영, 2026-08-26)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+**Stephen 답변 4건 (확정, 재논의 불필요):**
+
+Q1 답변: "이번에 결과반영까지" → §I 범위를 캡처 인프라만(기본안)에서 **소비 로직 연결까지**
+  확장 확정. I-4(productSearchIndex.ts 연결)·I-5(회귀·기능 검증) 신설.
+Q2 답변: "반복 임계값 거치게" → 단 1회 즉시확정 기본안 폐기. 기존 동의어학습과 동일한
+  occurrence_count+threshold(3, `SYNONYM_PROMOTE_THRESHOLD` 재사용) 승격 방식으로 확정.
+Q3 답변: "통합" → 기본안 그대로 확정. 5개 모달 컨텍스트 구분 없이 통합 취급, `context`
+  컬럼은 감사추적 메타데이터로만 저장(가중치 분리 없음).
+Q4 답변: "진행" → 기본안 그대로 확정. §H-1/H-2(category 파라미터·서버단 초성 매칭) 부수
+  변경 포함해 5개 모달 전부 이번 전환 대상.
+
+→ 위 4건 전부 §H·§I 체크리스트·GATE C에 반영 완료. **추가 승인 없이 즉시 실행 가능.**
+→ `@harness-executor`가 §H-1 → ... → §H-9 → §I-1 → ... → §I-6 순서로 순차 실행한다.
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+🔍 QA 검수 완료 — sp3-qa-agent (2026-08-26)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+검수 범위: §H-1~H-9, §I-1~I-6 전체(코드 8개 파일 + 신규 마이그레이션 #357).
+재현 검증(보고를 그대로 신뢰하지 않고 직접 실행) 항목:
+  - `npx svelte-check --tsconfig ./tsconfig.json` 직접 재실행 → 1 ERRORS(전량
+    vite.config.ts 기존 무관 건, in-scope 8개 파일 신규 에러 0건 확인)
+  - `npx vitest run`(전체 스위트) 직접 재실행 → 2 test files 실패(deliveryCutoffHolidays.
+    test.ts·memberCodeCombo.test.ts, 둘 다 이번 스코프와 무관한 날짜기반 회원코드 라이브
+    통합테스트 — 오늘 날짜(2026-08-26)로 인한 사전 존재 flake로 판단, in-scope 파일과
+    무관), 나머지 75 test files·981 tests 전부 통과
+  - `productSearchIndex.ts`·`search-suggestions/+server.ts` 관련 3개 테스트 파일(48건)
+    개별 재실행 → 전부 GREEN
+  - 마이그레이션 #357 SQL 원문 직접 읽어 `product_search_stats` 미접촉·SECURITY DEFINER+
+    REVOKE PUBLIC/GRANT service_role 확인
+  - 5개 모달 `onProductSelect()` fire-and-forget 배선(`.catch(() => {})`, await 없음) 코드 직접 확인
+  - `CmsSimilarNameInput.svelte`·`ChatInput.svelte`(기존 2개 소비처) 신규 파라미터
+    미사용 여부 grep 확인 → 하위호환 확인
+  - `CrazylogBannerModal.svelte` diff 직접 대조 → `search_crazylog_posts` RPC 라인 무변경
+    확인(이번 diff는 별개 SuggestPicker `clearOnSelect` 태스크 잔여분, 범위 위반 아님)
+  - `loadProductCandidates`/`matchesSearch` grep → 2개 하입팩 모달에서 완전 제거 확인
+
+## 검수 1: 규칙 정합성
+
+| 규칙 | 결과 | 상세 |
+|------|------|------|
+| 공통 보안 | ✅ | SERVICE_ROLE_KEY는 8개 파일 전부 서버측(`$env/static/private`)에서만 사용, 5개 모달 클라이언트 코드에 노출 없음. RPC는 SECURITY DEFINER + REVOKE PUBLIC + GRANT service_role만 |
+| nlsearch.md §2 (브라우저 직접 RPC 금지) | ✅ | 5개 모달 전부 `supabase.rpc('search_products'...)` 제거 완료, `fetch('/api/cms/products/search-suggestions')`로 일괄 전환 |
+| service-operations.md 신호 분리 원칙 | ✅ | `cms_admin_product_search_confirmations`는 `product_search_stats`와 완전 별도 테이블, 저장 단계 분리·소비(인덱스 빌드) 단계에서만 병합 |
+| security-auth.md (RPC 게이트) | ✅ | POST 핸들러 `getCmsRoleForAction` + `safeGetSession` 이중 확인, 파괴적 액션 아니므로 파트너 포함 전 역할 허용은 계획과 일치 |
+
+## 검수 2: 기술 부채
+
+- console.log: 0건(8개 파일 grep 확인) / any 타입: 신규 코드에 명시적 `any` 없음(기존 `supabase.rpc as any` 패턴은 이번 작업 범위 밖 기존 코드) / TODO·FIXME: 0건
+- TS 컴파일(svelte-check): 신규 에러 0건 — 유일한 1건은 기존 무관 `vite.config.ts` 에러(H-9 완료기준과 일치)
+
+## 검수 3: 시범오픈 기준
+
+| 항목 | 결과 | 비고 |
+|------|------|------|
+| 마이그레이션 rollback 섹션 | N/A | 신규 테이블 추가만(ADD-only), 실패 시 파일 삭제로 완전 원복 가능(TASK.md 실패롤백 섹션과 일치) |
+| RLS 고객 격리 | ✅ | 신규 테이블 RLS 활성화 + 정책 없음(service_role 전용), anon/authenticated 접근 불가 |
+| 비밀키 안전 | ✅ | 8개 파일 전부 확인 |
+| B-START 완료조건(TASK.md §H·§I 체크리스트) | ✅ | 아래 개별 항목 참고 |
+
+### GATE C 체크리스트 개별 대조 결과
+
+```
+[✅] §H 신규 파라미터 미지정 시 기존 2개 소비처(CmsSimilarNameInput·ChatInput) 100% 동일 동작 — grep으로 category/chosung 미사용 확인
+[✅] §H-7/H-8 클라이언트 초성 캐시(loadProductCandidates·matchesSearch) 완전 제거 — grep 0건
+[✅] §H-6 ProductHeroModal — activeOnly=true 단일 호출로 단순화, get_products_by_ids는 "초기 저장상품 복원" 용도로만 잔존(교차검증 목적 아님, 의도된 설계)
+[✅] CrazylogBannerModal.svelte(search_crazylog_posts RPC) 무변경 확인
+[✅] 신규 테이블 product_search_stats와 저장 단계 완전 분리(SQL 직접 확인, ALTER 없음)
+[✅] §I-2 POST가 신규 라우트 파일 없이 기존 GET과 co-locate
+[✅] §I-3 fire-and-forget이 5개 모달 저장/선택 흐름 블록하지 않음(.catch(() => {}), await 없음)
+[✅] §I-1 임계값 SYNONYM_PROMOTE_THRESHOLD(3) 하드코딩 재사용, 신규 설정 테이블 없음
+[✅] §I-1 occurrence_count 도달 시 별도 배치 없이 UPSERT 그 자리에서 즉시 confirmed 전환
+[✅] §I-4 J-2 loadLearnedSearchTerms()와 동일 패턴 재사용(synonym_groups 미사용) — Promise.all 병렬 + keywords_text 병합 라인 직접 확인
+[✅] §I-4 변경 후 기존 J-2 테스트 무회귀(productSearchCtr.test.ts 등 48건 GREEN)
+[⚠️] 마이그레이션 번호 재확인 — #357 파일명 확인됨, 단 Stage/Production 어디에도 아직 미적용(의도된 상태, 배경 설명과 일치 — QA 이후 메인세션이 적용 예정)
+```
+
+## 발견 사항 (블로킹 아님 — 참고용)
+
+| # | 유형 | 내용 |
+|---|------|------|
+| 1 | 검증 공백 | I-1·I-5의 TASK.md 완료기준 중 "stage 적용 후 3회 재호출→confirmed 전환 확인", "신규 시나리오(3회 확인→confirmed→인덱스 반영→검색노출) 성공"은 마이그레이션이 아직 어디에도 적용되지 않아 **실제로 검증된 적이 없다**(자동화 테스트도 신규 작성되지 않음 — `loadAdminConfirmedSearchTerms`·POST 핸들러·RPC 승격 로직에 대한 유닛/통합 테스트 0건). 코드·SQL 자체는 정적 검토상 로직이 맞으나, TASK.md에 [x] 완료로 체크된 것과 별개로 "라이브 동작 검증"은 아직 수행되지 않은 상태 — Stage 마이그레이션 적용 직후 반드시 실제 3회 확인 시나리오를 한 번 수동 실행해 확인할 것을 권고 |
+| 2 | 로깅 공백 | GSD_LOG.md에 H-1~H-6·I-2·I-3 개별 실행 로그가 없음(H-7~H-9, I-1, I-4~I-6만 기록됨) — 코드 diff로 구현 자체는 직접 확인했으므로 기능상 문제는 아니나 실행 이력 추적성 차원의 사소한 공백 |
+| 3 | 설계 참고 | `record_admin_search_confirmation`의 `search_term` 매칭은 `trim()`만 적용되고 대소문자 정규화(`LOWER()`)는 없음 — 동일 상품에 대해 "Canon"/"canon"처럼 대소문자만 다른 검색어가 별도 candidate 행으로 분리 집계될 수 있음. 이번 요구사항(Q1~Q4)에 명시되지 않은 사항이라 결함은 아니며, 향후 필요 시 참고 |
+
+## 종합 판정
+
+**GATE E 진행 가능 ✅**
+
+블로킹 이슈 없음. 위 발견사항 1건(검증 공백)은 코드 결함이 아니라 "아직 라이브로 검증되지
+않았다"는 사실 확인이며, 애초에 이번 태스크 설계상 DB 마이그레이션 적용을 QA 이후 메인세션이
+수행하기로 되어 있어 이 시점에 라이브 검증이 불가능한 것이 정상이다. Stage 적용 직후 3회
+확인→confirmed 전환 시나리오를 1회 수동 확인할 것을 권고(블로킹 아님).
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+🚦 GATE E — 👤 최종 확인 + 커밋 허가
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+QA 종합: 통과 ✅
+수정 건: 0건(블로킹 없음, 참고 권고 1건)
+
+Stephen, 아래 순서로 진행해주세요.
+1. supabase/migrations/20260826080000_357_cms_admin_product_search_confirmations.sql을
+   crazyshot-stage(ezyvffjvuwmtuhpxdjrw)에 먼저 적용
+2. 5개 모달 검색·선택·저장 스모크 테스트 + 동일 검색어 3회 확인→confirmed 승격→검색결과
+   반영 시나리오 1회 수동 확인(권고사항 1번)
+3. 문제 없으면 git add/commit(커밋 메시지 제안 요청 가능) → Stage 배포 확인 후 Production 마이그레이션 적용
+
+커밋 메시지 제안해줘.
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━

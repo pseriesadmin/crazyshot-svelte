@@ -1,6 +1,235 @@
 # GSD_LOG.md — 크레이지샷 실행 이력
 # 형식: [YYYY-MM-DD HH:MM] 타입 | 타스크명 | 파일 | 소요 | 결과
 
+[2026-08-26] 🟡BOUNDARY | 본인증명 등록완료 자동복귀 로직 — returnTo 경로값 방식으로 재설계 + 정합성확인 게이트 + 토스트 문구 수정 | src/lib/components/members/profile/ProfileTabContent.svelte, src/routes/products/[id]/+page.svelte | ✅ 수정 완료(GATE E 검수 대기)
+  Stephen 지시(직전 GSD 항목의 history.back() 구현에 대한 3건 재수정 요청):
+  1. "완료 토스트 호출 이후 상품상세화면 자동 랜딩: 이전 상품 경로값 보유 로직 구현" —
+     암묵적 브라우저 히스토리(history.back())가 아니라 실제 이전 경로값을 명시적으로
+     들고 있다가 그 경로로 이동하는 구조로 교체 요청.
+  2. 완료 토스트 문구를 정확히 "본인증명 등록이 확인되었습니다."로 지정.
+  3. 토스트 호출 조건 — 등록하기 실행 직후 "정합됨" 신호를 확인한 뒤에만 토스트를 부르는
+     구조일 것.
+  수정:
+  ① products/[id]/+page.svelte — 본인증명 미등록 안내 토스트의 '확인' onClick에서
+     `window.location.pathname + window.location.search`를 `returnTo` 쿼리파라미터로
+     인코딩해 `/account/profile?tab=profile&returnTo=...`로 이동(기존엔 tab만 전달).
+  ② ProfileTabContent.svelte — `$app/stores`의 `page` 스토어로 `returnTo` 쿼리파라미터를
+     읽음(prop 스레딩 없이 렌더트리 어디서든 $page 접근 가능한 SvelteKit 특성 활용 — PC
+     임베드 모드(/account?tab=profile&returnTo=...)와 모바일 전용 라우트(/account/profile?
+     tab=profile&returnTo=...) 양쪽 다 이전 세션이 이미 구현해 둔 리다이렉트가 쿼리스트링
+     전체를 그대로 들고 가므로 추가 배선 없이 동일하게 동작).
+     "정합됨" 신호: 업로드 API 응답의 `data.ok`만으로 완료 판정하지 않고, 실제 반환된
+     `docUrls.length`가 이번에 제출한 `identityFiles.length`와 정확히 일치할 때만
+     `isConsistent`로 판정 — 불일치 시 완료 토스트 대신 에러 메시지, 화면 이동도 안 함.
+     정합 확인 후에야 `csToast.success('본인증명 등록이 확인되었습니다.')` 호출.
+     복귀 우선순위: returnTo(안전성 검증 — '/'로 시작 + '//' 아님, 오픈리다이렉트 방지)
+     > 없으면 history.back() > 그마저 없으면 /account.
+  검증: svelte-check 신규 에러 0건(기존 무관 에러 1건만 잔존, 새 경고 전부 이 두 파일의
+  기존 사전 존재 경고와 동일 성격).
+  GATE E 1차(2026-08-27, @sp3-qa-agent): 🔴 CONFIRMED — startsWith('/')+!startsWith('//')
+  검증이 `/\evil.com`(선두 슬래시+백슬래시) 값을 통과시킴을 실제 코드 재현으로 확인.
+  WHATWG URL 파서가 http(s) 스킴에서 `\`를 `/`와 동일 취급해 goto()가 실제로
+  https://evil.com으로 전체 페이지 이동시키는 오픈 리다이렉트 — 나머지 6개 검수 포인트는
+  전부 통과, 이 1건만 블로킹으로 보류 판정.
+  즉시 수정: 문자열 접두사 검사 대신 `new URL(returnTo, window.location.origin).origin
+  === window.location.origin`으로 실제 파싱 후 origin 직접 비교하는 방식으로 교체(goto()가
+  내부적으로 쓰는 것과 동일한 파싱 규칙 재사용) — node로 6개 케이스(정상 상대경로/백슬래시
+  우회/프로토콜상대 우회/`/@evil.com`/절대URL/일반경로) 직접 실행해 의도대로 차단·허용됨을
+  재확인.
+  GATE E 2차(2026-08-27, @sp3-qa-agent): ✅ 통과 — 파일 재확인(492~503행, 수정 그대로
+  반영·컴파일 정상) + 이 세션 보고를 신뢰하지 않고 독립 재현(node -e, 원 6케이스 + 백슬래시
+  중복·단일슬래시 https:/evil.com·javascript:/data:/mailto: 스킴 등 추가 4~7종까지) 결과
+  전부 의도대로 차단/허용 확인, same-origin 오탐 없음, 다른 로직 미변경. 블로킹 이슈 해소
+  확정.
+  미완료: git commit(Stephen 직접 실행 필요).
+  Stephen 지시: `/products/creator-set01-qa-stage` 예약신청 시 4단계 로직(①로그인게이트
+  ②본인증명 미등록 안내토스트→/account/profile?tab=profile 랜딩 ③본인증명 등록 UI(콤보
+  선택+드래그/파일선택 업로더+1~5개 파일+등록하기 버튼 활성화) ④등록완료 시 완료토스트+
+  이전 상품상세화면 자동복귀) 구현 상태 재확인 요청.
+  확인 결과:
+  ①②는 직전 세션에서 이미 구현·QA 통과된 그대로 코드상 정상 존재(`+page.svelte`
+  isRealMemberSession 게이트 + hasVerifiedDoc 토스트) — 변경 없음.
+  ③은 이번 세션이 아니라 **다른 동시 진행 세션**이 이미 완전히 구현해둔 상태였음(Migration
+  345/346/349, `/api/profile/upload-doc` MAX_IDENTITY_FILES=5 + 배열 저장, ProfileTabContent
+  의 identityFiles(배열)·ondragover/ondragleave/ondrop·doc-file-count 등) — 요청 스펙과
+  거의 정확히 일치, 코드 확인만 하고 손대지 않음.
+  ④는 실제로 누락돼 있었음 — uploadIdentityDoc() 성공 시 완료 토스트만 뜨고 페이지 이동
+  로직이 전혀 없어 사용자가 계속 개인정보 화면에 남아있는 상태였음(원 요청 흐름을 벗어남).
+  수정: 성공 처리 직후 `if (history.length > 1) history.back(); else goto('/account')`
+  추가(ProductHero.svelte의 goBack() 관례와 동일 패턴) — 상품상세에서 유입된 경우 히스토리
+  스택상 바로 그 화면으로 복귀. 특정 상품상세 경로를 하드코딩하지 않고 범용 "이전 화면
+  복귀"로 구현해 어느 경로로 진입했든 동일하게 동작.
+  검증: svelte-check 신규 에러 0건(기존 무관 에러 1건만 잔존, 새로 뜬 경고들도 전부 이
+  파일의 기존 `profile` state_referenced_locally류 사전 존재 경고).
+  미완료: git commit(Stephen 직접 실행 필요).
+
+[2026-08-26] DEPLOY | CMS 관리모달 5개 NLSearch 연동 + 상품등록정보 학습신호(§H~§I) 완료 · Stage 적용 | Migration #357 | 완료
+  harness-executor가 §H-1~H-9(HomeCategoryProductsModal·HomeThemeGroupModal·ProductHeroModal·
+  HypePackBannerModal·HypePackThemeGroupModal 5개 모달의 브라우저 직접 RPC 호출을
+  `/api/cms/products/search-suggestions` 서버라우트 경유로 전환 + category 파라미터·초성매칭·
+  §E-2 동의어 확장 이식) + §I-1~I-6(관리자 검색→선택 확인신호 캡처 테이블 + 임계값 승격 +
+  productSearchIndex.ts 소비연결) 전체 구현. H-1~H-6·I-2·I-3 개별 실행 로그가 누락됐던 것을
+  sp3-qa-agent 2차 검수가 지적해 이 통합 기록으로 보완(구현 자체는 diff로 이미 확인됨).
+  @sp3-qa-agent 독립검수 GATE E 통과 — svelte-check 신규 에러 0건, vitest 991건 중 무관 flake
+  2건 제외 전부 통과, 기존 2개 소비처(CMS 상품목록·ChatInput) 무회귀, CrazylogBannerModal
+  범위 외 유지 확인.
+  ⚠️ 메인세션 배포 전 보안 재확인 중 발견·즉시수정: Migration #357의
+  `record_admin_search_confirmation` RPC가 `REVOKE ALL ... FROM PUBLIC`만 명시하고
+  `anon, authenticated`를 누락 — 이 프로젝트 public 스키마의 `ALTER DEFAULT PRIVILEGES`가
+  신규 함수에 anon·authenticated EXECUTE를 자동부여하는 구조(Migration 251b/260/262/263/338과
+  동일 원인)라, 그대로 배포하면 비인증 실행이 가능한 상태가 될 뻔했음. 배포 전 `FROM PUBLIC,
+  anon, authenticated`로 수정 후 Stage 적용.
+  Stage(ezyvffjvuwmtuhpxdjrw) 적용 검증: `has_function_privilege` 직접 조회로 anon/authenticated
+  차단·service_role만 허용 확인, RPC 3연속 호출로 occurrence_count 3·status='confirmed' 임계값
+  승격 실제 동작 확인(테스트 행 정리 완료), `product_search_stats` 무변화 확인.
+  남은 것: 앱코드 커밋·푸시 미실행(Stephen 지시 대기), Production(vnbpmvxruyciuuaermyh) 마이그레이션
+  미적용(Stephen 명시 승인 대기).
+  GATE E: 완료 — Stage 배포 완료. Production 적용·커밋은 Stephen 승인 대기.
+
+  ✅ **Production 적용 완료(2026-08-26, 같은 날 후속)** — Stephen "Production DB 적용 승인" 명시
+  승인 후 메인세션이 Production(vnbpmvxruyciuuaermyh)에 Migration #357(anon/authenticated
+  REVOKE 수정판) 적용. 사전 의존성(products·auth.users) 확인 → 적용 → 재검증: anon/authenticated
+  실행 차단·service_role만 허용 확인, RPC 3연속 호출로 occurrence_count 3·status='confirmed'
+  승격 실제 동작 확인(Stage와 동일 결과), 테스트 행 정리 완료. Stage+Production 양쪽 배포 완료.
+  남은 것: 앱코드 커밋·푸시만 Stephen 지시 대기.
+
+[2026-08-26] ⚡GSD  | §H-7 HypePackBannerModal 전환 | src/lib/components/hype-pack/HypePackBannerModal.svelte | 브라우저 RPC 제거 + doSearch/doKwSearch 서버라우트 전환 + I-3 fire-and-forget 배선 | GATE C: 완료
+[2026-08-26] ⚡GSD  | §H-8 HypePackThemeGroupModal 전환 | src/lib/components/hype-pack/HypePackThemeGroupModal.svelte | 클라이언트 초성캐시 완전 제거 + pickerItemsCache 패턴 + 서버라우트 전환 + I-3 fire-and-forget 배선 | GATE C: 완료
+[2026-08-26] ⚡GSD  | §H-9 회귀검증 | npm run check | 신규 에러 0건(vite.config.ts 기존 에러 1건 제외) | GATE C: 완료
+[2026-08-26] ⚡GSD  | §I-1 Migration #357 | supabase/migrations/20260826080000_357_cms_admin_product_search_confirmations.sql | cms_admin_product_search_confirmations 테이블 + record_admin_search_confirmation RPC | GATE C: 완료(Stephen이 Stage 적용)
+[2026-08-26] ⚡GSD  | §I-4 productSearchIndex 소비 연결 | src/lib/server/searchEngine/adapters/productSearchIndex.ts | loadAdminConfirmedSearchTerms() + Promise.all 병렬 + keywords_text 병합 | GATE C: 완료
+[2026-08-26] ⚡GSD  | §I-5 회귀검증 | npx vitest run | 전체 테스트 스위트 exit code 0, 기존 J-2 테스트 무회귀 | GATE C: 완료
+[2026-08-26] ⚡GSD  | §I-6 nlsearch.md 문서화 | .claude/rules-ref/nlsearch.md | §K(§4-3) 신설 — 저장분리/소비병합 원칙·테이블·RPC·임계값·5개 모달 context값·synonym_groups 미사용 근거 | GATE C: 완료
+[2026-08-26] 🔴CRITICAL 후속수정 | sp3-qa-agent 1차 검수 발견분 즉시 수정(T16~T19 배치) |
+src/routes/api/search/products/+server.ts(getWishedProductIds 호출 2곳 supabase→
+locals.supabase 교체), src/routes/products/[id]/+page.svelte(CalendarTimePicker
+onwishtoggle 2곳 data.isLoggedIn 게이팅 추가), .claude/rules-ref/front-uiux.md(§14-4
+크기등급 표 Mobile M 라운드값 오기재 정정) | QA가 검색 API의 wished가 세션 미바인딩
+익명 클라이언트 사용으로 항상 false였던 결함과, 상품상세 메인 예약위젯 찜 버튼이
+비로그인 사용자에게도 노출되던 결함을 발견 — 둘 다 즉시 수정. 문서 표 오기재는
+`WishlistScroll.svelte` 코드 자체는 처음부터 정확했고 표기만 틀렸던 것으로 확인,
+표만 정정. | 검증: svelte-check 무회귀(1 error는 vite.config.ts 기존 무관 건).
+
+[2026-08-26] 🟢ROUTINE | PC "대여 정보" 카드 좌측 사이드바 재배치 + "관심가져봄" PC 배경색
+제거 | src/routes/account/+page.svelte | 우측 대시보드(`pc-right`, "관심가져봄" 아래)에
+있던 "대여 정보" 메뉴 카드가 좌측 사이드바 메뉴 목록과 구조적으로 어긋난다는 Stephen
+지적 — 좌측 컬럼(`pc-left`)의 "계정 이름 정보" 카드 아래·"내정보" 카드 위로 이동해
+모바일 `MenuSection` 순서(대여 정보→내정보)와 통일. "관심가져봄" PC 카드의
+`bg-[#ffffff]`도 모바일(`WishlistScroll.svelte` 루트, 배경색 없음)과 통일해 제거. |
+검증: svelte-check 무회귀.
+
+[2026-08-26] 🟡BOUNDARY | 위시(찜) 토글 기능 신규 전면 구현 — 상품 탐색 4개 화면 전부 연결 |
+src/lib/server/getWishedProductIds.ts(신규), src/lib/utils/wishlist.ts(신규),
+src/routes/products/+page.server.ts·+page.svelte, src/routes/products/[id]/+page.server.ts·
++page.svelte, src/routes/hype-pack/theme/[id]/+page.server.ts·+page.svelte,
+src/routes/api/search/products/+server.ts, src/routes/products/search/+page.server.ts·
++page.svelte, src/lib/components/products/SearchProductGrid.svelte | Stephen이 "관심 상품이
+없습니다" 빈 상태를 점검하다 "위시 체크 시 정상 반영되는지 점검해" 요청 → `ProductDPCard`
+사용 5곳 중 `WishlistScroll.svelte`(해제 전용) 1곳만 `onWishToggle` 연결돼 있고 나머지
+4개 실제 탐색 화면은 하트 버튼 자체가 렌더링 안 되는 상태(컴포넌트 규칙상 콜백 없으면
+버튼 미노출)임을 발견·보고 → "구현 진행해!" 지시로 전면 구현. `/products/search`는 검색
+결과가 클라이언트 fetch로 오길래 API 응답에 `wished` 필드를 서버에서 얹는 방식으로 처리.
+디버깅 중 `products/[id]/+page.svelte`가 SvelteKit 자동생성 PageData 대신 손으로 쓴
+`Props.data` 인터페이스를 쓰고 있어 신규 필드가 타입에러로 잡히던 원인을 특정·해결. |
+검증: svelte-check 무회귀(1 error는 vite.config.ts 기존 무관 건).
+
+[2026-08-26] 🟢ROUTINE | dev 서버 장애 발견·복구 — 세션 중 `rm -rf .svelte-kit` 반복 실행이
+원인 | (코드 변경 없음, 프로세스 재기동만) | 타입추론 디버깅 중 `.svelte-kit`를 여러 차례
+삭제·재생성하면서, 이미 떠 있던 다른 dev 서버 프로세스(포트 5173/5174) 두 개가 실행 중인
+상태로 삭제가 일어나 `.svelte-kit/generated/server/internal.js`(서버 재시작 시에만
+재생성되는 파일)가 없는 채로 남아 Vite 로드 에러 유발. Stephen이 붙여준 에러 로그로
+발견 → 원인이 이 세션임을 직접 확인해 고지 → 깨진 프로세스 종료 후 재기동, `/products`·
+`/products/search` 200 응답 확인 후 검증용 서버 종료.
+
+[2026-08-26] 🟢ROUTINE | 상품 썸네일 "S(소형)" 크기 등급 신설 + 오적용 정정 |
+src/lib/components/account/WishlistScroll.svelte, .claude/rules-ref/front-uiux.md §14-4,
+.claude/rules/uiux-index.md | "관심가져봄" 카드 30% 축소 1차 적용 시 `front-uiux.md §14-4`를
+재확인 안 하고 예전 기억(균일 30px 라운드·`.pc-heart` 36px)으로 잘못된 기준값을 썼다가,
+Stephen이 "front 표준 지침에서 상품 썸네일 기준정보를 찾아 리뷰하라"고 재지적 → 실제
+`ProductDPCard.svelte` 라이브 코드(비대칭 라운드 `33/13/33/13`·`.pc-clip` 44px)로
+정정. §14-4에 M(기본)/S(소형) 크기 등급표 신설(PC 203px·모바일 122px = M×0.7)해 정식
+문서화, `hideTitle`(PC 전용) 조건 제거하고 모바일까지 동일 비율로 확대 적용. |
+검증: svelte-check 무회귀.
+
+[2026-08-26] 🟢ROUTINE | GNB·SubGnb §20 반응형 컴플라이언스 수정 | src/routes/account/+page.svelte, src/routes/cart/+page.svelte, src/routes/account/inquiry/+page.svelte | ✅ 수정 완료(sp3-qa-agent 검수 진행)
+  배경: front-uiux.md §20(GNB·SubGnb·BottomTabBar 반응형 자동배치 정책)을 새로 문서화한 후,
+  USER 화면 전역 컴플라이언스 리뷰 결과 3개 파일에서 §20 정책 위반이 확인됨.
+  수정 1 — account/+page.svelte
+    · 주석 "PC SubGnb (≥ 641px)" → "PC SubGnb (≥ 768px)" (GNB-BREAKPOINT-FIX 반영)
+    · <SubGnb title="내정보" pcOnly> → <SubGnb title="내정보" pcOnly noGnbOffset />
+      이유: /account 경로는 GNB 미렌더링 → SubGnb 기본값 top:100px이 dead space 유발
+    · @media (min-width: 1024px) → @media (min-width: 768px) (레이아웃 브레이크포인트 교정)
+      이유: 768~1023px 구간에서 모바일 SubGnb 숨김(≥768px)인데 PC 레이아웃 미진입 갭 해소
+  수정 2 — cart/+page.svelte
+    · .sub-gnb-b { display: block } @media (min-width: 641px) → @media (min-width: 768px)
+      이유: 641~767px 구간에서 PC 커스텀 헤더(.sub-gnb-b)만 표시되고 SubGnb 모바일은 숨겨진 갭
+  수정 3 — account/inquiry/+page.svelte
+    · <SubGnb title="빠른 문의" /> → <SubGnb title="빠른 문의" noGnbOffset />
+      이유: /account/inquiry도 GNB 미렌더링 경로 → noGnbOffset 누락 시 top:100px dead space
+  검증: svelte-check 신규 에러 0건.
+
+[2026-08-26] 🟡BOUNDARY | 상품상세 예약신청 버튼 좌측 'wish' 아이콘 버튼 추가 | src/lib/components/products/CalendarTimePicker.svelte, src/routes/products/[id]/+page.svelte, src/routes/products/[id]/+page.server.ts | ✅ 수정 완료(GATE E 검수 대기)
+  Stephen 지시: `<launch-selected-element>`로 CalendarTimePicker의 예약신청 버튼(`.cta-row`
+  > `.reserve-btn`) 선택, 그 좌측에 지정 SVG 아이콘의 'wish' 버튼 추가 + 실행 시 /account
+  wishedIds 영역에 반영 + 예약신청 버튼 상하폭(50px)에 맞춘 정사각 크기 요청.
+  조사: 이미 완성된 찜 인프라(`$lib/utils/wishlist.ts` toggleWish · `/api/wishlist` ·
+  `toggle_product_wishlist` RPC · `product_wishlists` 테이블 · `getWishedProductIds` 헬퍼)가
+  프로젝트에 이미 존재했고, 이 페이지 자체도 "많이 본 상품" 섹션(ProductDPCard)에는 이미
+  wishedSet/handleWishToggle이 연결돼 있었으나 정작 지금 보고 있는 메인 상품 자체는 찜
+  버튼도, wishedIds 조회 대상에도 빠져있던 상태 — 기존 인프라를 재사용해 메인 상품에도
+  연결하는 것으로 충분(신규 RPC/테이블 불필요).
+  수정:
+  ① CalendarTimePicker.svelte — `wished`/`onwishtoggle` prop 추가, `.cta-row`의
+     `.reserve-btn` 앞에 `.wish-btn`(50×50px 원형, 지정 SVG 그대로) 삽입. `.reserve-btn`이
+     모든 브레이크포인트에서 동일하게 height:50px 고정(PC/모바일 별도 오버라이드 없음)이라
+     같은 50px 정사각으로 맞추면 반응형 전반에서 비율이 자동으로 일치.
+  ② +page.svelte — mobile/PC 두 CalendarTimePicker 인스턴스(인덴트가 서로 달라 처음엔
+     mobile 쪽만 치환됨 — 재확인 후 PC 쪽도 별도 반영) 양쪽 다 `wished={wishedSet.has
+     (product.id)}` / `onwishtoggle={() => handleWishToggle(product.id)}` 배선(기존 "많이 본
+     상품" 섹션과 동일한 wishedSet/handleWishToggle 재사용, 신규 상태 없음).
+  ③ +page.server.ts — `getWishedProductIds` 호출 대상 목록에 popularProducts뿐 아니라
+     현재 보고 있는 상품 자신의 id(`String(row.id)`)도 포함 — 이전에는 메인 상품이 초기
+     wished 상태 판정 대상에서 아예 빠져 있었음(이번 요청으로 처음 드러난 기존 공백).
+  검증: svelte-check 신규 에러 0건(기존 무관 에러 1건만 잔존).
+  후속(같은 세션): ① 색상토큰 반영 — 서클 배경 fill을 하드코딩 #C1BBEC 대신 클래스
+  (.wish-bg)로 분리, var(--cs-chat-in-bg)(#FFCFCF, app.css에 이미 "red-10%"로 주석돼 있던
+  기존 토큰) 고정 적용 — 신규 토큰 추가 없이 기존 팔레트 재사용.
+  ② product_wishlists 연동 재확인 — 이미 handleWishToggle→toggleWish→/api/wishlist→
+  toggle_product_wishlist RPC 경로가 그 테이블에 직접 insert/delete하도록 처음부터
+  연결돼 있었음(migration 158 직접 대조 확인), 추가 코드 변경 불필요.
+  재후속(같은 세션, Stephen이 완성 SVG 2벌 제시 — 기본/선택 둘 다 서클 배경은 동일 #FFCFCF,
+  차이는 내부 하트 도형 색상뿐이었음): ①에서 "wished 상태의 서클 배경을 red-80으로 바꾼다"고
+  잘못 이해했던 것을 정정 — 서클(.wish-bg)은 기본·선택 상태 공통으로 var(--cs-chat-in-bg)
+  고정 유지, 대신 내부 하트 도형에 새 클래스(.wish-heart) 부여해 기본 var(--cs-white) →
+  wished 시 var(--cs-red-badge)(#FF3535, red-80)로 토글하도록 수정.
+  GATE E(2026-08-26, @sp3-qa-agent): DB연동경로(toggleWish→/api/wishlist→toggle_product_
+  wishlist→product_wishlists)와 /account 조회경로(get_user_wishlists→동일 테이블) 완전
+  일치 확인 / 색상토큰 3차 정정 반영 확인(서클 고정·하트만 토글, hex 3종 app.css 대조
+  일치) / 비로그인 시 크래시 없이 조용히 no-op 확인 / .reserve-btn breakpoint 오버라이드
+  없어 50px 반응형 비율 전제 성립 확인 / CalendarTimePicker 소비처 이 2곳뿐이라
+  {#if onwishtoggle} 조건부 렌더링 회귀 없음 확인 — 전부 통과, 블로킹 이슈 0건. 참고사항
+  2건(비차단): ①"많이 본 상품" 섹션 찜 배선도 이번 커밋 범위인지 확인 권장(이미 이전
+  세션에서 처리된 부분), ②CTA 옆 wish 버튼은 비로그인 시 로그인 유도 안내 없이 조용히
+  무반응(vs "많이 본 상품" 쪽은 비로그인 시 버튼 자체를 숨김) — UX 비일관성이나 차단
+  사유 아님, 필요 시 후속 검토.
+  미완료: git commit(Stephen 직접 실행 필요).
+
+[2026-08-26] 🟡BOUNDARY | 하이프팩 테스트 상품 썸네일 깨짐 — Supabase Storage 재등록(데이터 수정) | GATE C: BOUNDARY
+  배경: Traveler/Idol SET01 하이프팩 테스트 상품의 image_urls가 Cloudinary publicId 전용
+    컨벤션 대신 로컬 정적 경로(/hype-pack/*.png)로 저장돼 CMS 썸네일이 깨짐. thumbUrl()
+    로직 자체는 정상 — 데이터 컨벤션 불일치가 원인으로 판정.
+  GATE B: 조사 중 실제 상품이미지 파이프라인이 Cloudinary가 아니라 Supabase Storage
+    (product-images 버킷, /api/cms/upload)임을 발견 → AskUserQuestion으로 Stephen에게
+    보고 후 "Supabase Storage로 대신" 확정.
+  실행: static/hype-pack/*.png를 sips로 리사이즈(thumb/large) → curl로 product-images
+    버킷에 직접 업로드(REST API, .env.local에서 서비스롤 키 grep 추출 — 전체 source는
+    파일 내 따옴표없는 시크릿 때문에 셸 파싱 오류 발생 확인) → products.image_urls를
+    새 공개 URL로 UPDATE(jsonb 캐스팅). 애플리케이션 코드 변경 없음 — 순수 데이터 수정.
+  검증: 업로드 4건 HTTP 200, 공개 URL 재조회 확인. Claude Browser로 두 상품 재진입해
+    썸네일 정상 렌더링 시각 확인(브라우저 탭 낡은 클라이언트 상태로 잠깐 오표시 → 하드
+    리로드 후 정상, DB 값 자체는 처음부터 정확했음). 대상: Stage DB 전용, Production 무관
+    (하이프팩 테스트 상품 자체가 Production에 없음).
+
 [2026-08-26] 🟢ROUTINE | /account 본인·외국인증명 완전삭제 기능 신규 + 재등록 시 옛 Storage
 파일 정리 | supabase/migrations/20260826000000_349_delete_user_doc.sql(신규 RPC, Stage+
 Production 적용 완료), src/routes/api/profile/delete-doc/+server.ts(신규),
@@ -68,6 +297,48 @@ account/+page.svelte(섹션타이틀 4종 --text-pc-title-18 적용, 위시리�
   footer 약관동의 체크박스 svg에서 `checkbox-terms-icon` 클래스가 제거됐는데 대응 CSS
   `.checkbox-terms-icon{}`가 정리되지 않고 남아있던 죽은 선택자 — 제거 완료(svelte-check
   경고 388→387건).
+
+  ⚠️ **후속 발견(2026-08-26, QA 완료 이후 Stephen 재지적)**: `.cart-root { min-height: 100vh }`
+  — PC 반응형 모바일 시뮬레이션에서 스크롤 최하단 도달 시 브라우저 툴바 숨김/재출현으로 100vh
+  값이 매번 재계산돼 화면이 미세하게 잔떨림하는 잘 알려진 모바일 100vh 버그. Stephen이 이미
+  `account/profile/+page.svelte`(`.page-root`)에서 동일 패턴을 발견·수정한 뒤, 같은 버그가
+  cart 화면에도 있다고 지적 — `contract/complete`·`contract/expired`의 `.page{min-height:
+  100dvh}` 기존 확립 패턴 그대로 `.cart-root`에도 적용(100vh→100dvh). `.cart-footer`의
+  `padding-bottom: env(safe-area-inset-bottom)` 2곳(고정 하단바)은 Stephen이 별도로 지적한
+  "고정 하단바 화면 전용 env() 패턴"에 해당해 그대로 유지(수정 대상 아님, 오판 방지 확인
+  완료). svelte-check 무회귀(cart 관련 신규 에러 0건).
+
+  ⚠️ **후속 발견(2026-08-26, Stephen 재지적)**: "회원정보 반영" 체크박스(고객정보 memberCheck·
+  배송지 memberCheck2) — 체크 해제 시 자동입력됐던 값(name/email/phone, addr/addrDetail)이
+  그대로 남아있던 결함. onclick 핸들러의 false 분기가 `memberCheck: false`만 세팅하고
+  필드값은 건드리지 않던 것이 원인 — 두 핸들러 모두 uncheck 시 해당 필드를 빈 문자열로
+  명시적으로 초기화하도록 수정(memberCheck: name/email/phone, memberCheck2: addr/addrDetail).
+  기존 회원정보·주소정보 부재 시 버튼을 막는 disabled 게이팅(`!hasUserProfileInfo`/
+  `!hasUserAddress`)은 onclick 바깥의 별도 속성이라 이번 수정과 무관하게 그대로 유지됨을
+  코드 확인(disabled=true면 onclick 자체가 실행되지 않음 — 브라우저 네이티브 동작).
+  검증: svelte-check 무회귀, 라이브 브라우저로 체크→값 자동입력→체크해제→값 공란 전환
+  왕복 확인(고객정보·배송지 양쪽).
+
+[2026-08-26] 🟢ROUTINE | LoginBannerModal.svelte 전면 재작성 — HomeBannerModal 로직 동일화 |
+  src/lib/components/auth/LoginBannerModal.svelte
+  배경: 기존 LoginBannerModal이 bg_image_url+overlay_image_url 이중 thumb + html_content
+    textarea 구조로 HomeBannerModal(image_url+title+sub_copy+link_url 단일 thumb 구조)과
+    전혀 다른 필드·UI를 쓰고 있었음. Stephen이 두 화면 스크린샷 비교로 불일치 직접 발견·지목.
+  재작성 핵심:
+    - LocalBanner: { _tempId, id, title, sub_copy, image_url, link_url, _uploading }
+      (HomeBannerModal와 동일 인터페이스)
+    - 행 구조: 단일 thumb-wrap(64×52px) + banner-fields(제목/서브카피/링크URL 3개 input)
+    - 라디오 순서: "순서대로 노출"(fixed) 먼저, "랜덤 노출"(random) 두 번째 (HomeBannerModal 동일)
+    - MAX: 5 → 10 (HomeBannerModal 동일)
+    - RPC: cms_create_banner(p_slot_key='login_pc'/'login_mobile') / cms_update_banner / cms_delete_banner
+    - 설정 키: login_banner_mode → { pc_mode, mobile_mode } (upsert_product_page_setting)
+    - Self-load 패턴: $effect(() => loadData()) + Promise.all 3건 병렬 fetch
+    - isLoading 가드로 로드 완료 전 body 렌더링 차단
+  후속 정리: DOM 선택 확인 후 미사용 변수(const db) 1건 제거
+  검증: DOM HTML 전수 대조(라디오 바인딩·thumb-wrap·banner-fields 3입력 필드 정상 확인),
+    소스 18개 체크포인트 전부 통과 — isLoading 가드·삭제/수정/생성 분기·이미지 없는
+    행 skip(if !b.image_url continue)·settings 저장·Svelte 5 이벤트 문법 전부 정상.
+    ⚠️ 코드 미커밋 상태. DB 마이그레이션 없음(기존 promotion_banners 테이블·RPC 재활용).
 
 [2026-08-26] 🔴CRITICAL 후속수정 | 장바구니 배송안내문(CMS shipping_guide) 노출 + 하드코딩 안내문구 제거 |
   src/routes/cart/+page.server.ts(rental_shipping_settings select에 shipping_guide 추가),
@@ -5325,3 +5596,85 @@ Stephen 직접 실행 필요
   GATE E: ✅ 통과(코드 변경만, 신규 마이그레이션 없음 — Stage/Production 순서 이슈 없음).
   Production 반영은 코드 배포(git 커밋·push)만으로 충분하나, git 커밋은 Stephen 직접
   실행 대기.
+
+[2026-08-26] GSD | 회원 QR코드 — 고객 본인확인·체크인 스캔 시스템 신설 | DB 변경 없음 | 완료
+  Stephen이 CMS 고객상세 패널(CustomerDetailPanel.svelte) 헤더에서 회원코드 옆에 QR코드
+  기능이 없는 이유를 재검증 요청. 조사 결과 상품(product_code) QR 시스템은 정교하게 구축돼
+  있으나 처음부터 끝까지 상품 전용 설계라 회원 QR은 애초에 범위 밖이었음을 확인. 다만 고객
+  계정화면(/account)에 클릭해도 동작 없는 장식용 "QR체크" 배지가 이미 존재해 원래 기획
+  의도가 있었음을 시사 — AskUserQuestion으로 "고객 본인확인·체크인 스캔 시스템"(전체
+  파이프라인) 선택 → Plan Mode 설계·승인 후 구현.
+
+  핵심 설계: 회원 QR 페이로드를 상품코드와 형식이 겹치는 원문 그대로가 아니라
+  `/qr/member/{member_code}` 경로형으로 고정 — 기존 `extractProductId()`의 마지막 분기
+  (`!text.startsWith('/')`)가 이미 이 형식을 자동으로 거부함을 직접 확인해, 그 함수는 전혀
+  수정하지 않고 신규 `extractMemberCode()`만 별도 추가.
+
+  구현 파일:
+    신규: src/lib/components/account/MemberQrModal.svelte(ChatBottomSheet 패턴 재사용),
+          src/routes/cms/mobile/qr/member/[code]/+page.server.ts(+page.svelte)
+          (member_code→user_id ilike+escapeLikePattern 조회 → 기존 /cms/customers?selected=
+          &tab= 딥링크로 리다이렉트, 신규 RPC·마이그레이션 없음)
+    수정: src/lib/utils/qrProductId.ts(extractMemberCode 추가),
+          src/lib/components/account/ProfileCard.svelte("QR체크" 배지 클릭 연결),
+          src/routes/account/+page.svelte(PC 중복 QR체크 블록 클릭 연결 + MemberQrModal 배선),
+          src/routes/cms/mobile/+page.svelte·rentals/+page.svelte(범용 스캐너만 회원QR 분기,
+          카드별 검증 스캐너 isProductMatch는 계획대로 무변경),
+          src/lib/components/cms/CustomerDetailPanel.svelte(헤더 관리자용 QR 버튼)
+
+  검증: qrProductId 상호배타성 단위 확인, Stage SQL로 회원코드(CSBC26081080) ilike 조회 →
+  정확한 user_id 해석 직접 확인, Stage 브라우저 라이브로 고객측(이기성 CSBC26081083)·
+  관리자측(이용희 CSBC26081080) 양쪽 QR 렌더링·다운로드 정상 동작 확인. svelte-check/eslint
+  신규 에러 0건. 상세는 TASK.md "회원 QR코드" NOW 블록.
+
+  GATE E: ✅ 통과. DB 마이그레이션 없음. 커밋은 Stephen 직접 실행.
+
+[2026-08-26] GSD | 예약 QR 코드 생성 — RentalDetailPanel 헤더 신설 | 앱코드만 | 완료
+  Stephen 직접 지시(Plan 모드) — RentalDetailPanel.svelte 헤더(선택 영역: "대여
+  CS26081012 계약완료")를 보며 예약코드 QR 요청. Explore 에이전트 3개 병렬 조사 후
+  AskUserQuestion으로 QR 콘텐츠·배치 확정: 콘텐츠 = 예약코드 원문 텍스트만(상품 QR과 동일
+  철학 — products.md §2-4 "링크 아닌 원문"), 별도 조회 라우트 신설 없음(순수 표시·다운로드
+  전용). 최초 "대여정보" 탭 인라인 배치로 구현 후 Stephen 실사용 확인 중 패널 헤더로
+  재배치 지시, 크기도 88px→44px로 축소(캔버스 렌더 해상도 자체를 낮춤, CSS 축소 아님 —
+  화질 저하 없음).
+
+  구현(RentalDetailPanel.svelte 1개 파일만): renderReservationQR()/downloadReservationQR()
+  신설(ProductDetailPanel.svelte의 renderQR/downloadQR 패턴 재현, qrcode 패키지 기존
+  설치분 재사용). 패널 헤더에 44×44 캔버스 + "↓ QR 저장" 버튼을 margin-left:auto로
+  닫기버튼과 그룹핑 배치. $effect가 reservationCode() 변경에 반응해 다른 예약 선택 시
+  즉시 재렌더링.
+
+  절대금지 준수: ProductDetailPanel.svelte·MemberQrModal.svelte를 공용 유틸로 추출하지
+  않음(요청 범위 외 수정 금지 — 각자 로컬 구현 유지가 기존 관행과 일치), QR 콘텐츠를
+  URL/경로형으로 바꾸지 않음.
+
+  검증: svelte-check 신규 에러 0건. Stage 실브라우저(이 세션 launch-selected-element 세션
+  중 허용)로 예약 CS26081012 클릭 → 헤더 QR 렌더링을 getImageData로 픽셀 존재 직접 확인,
+  다른 예약(CSREV260700052) 전환 시 즉시 재렌더링됨을 픽셀 변화로 확인 + Stephen 직접
+  재확인. "↓ QR 저장" 배선 정상(실제 파일 저장은 헤드리스 환경 한계로 코드 리뷰로 검증).
+
+  GATE E: ✅ 통과. 커밋은 Stephen 직접 실행.
+
+[2026-08-26] FIX | CustomerDetailPanel QR UI를 RentalDetailPanel 헤더인라인 패턴으로 재정렬 | 앱코드만 | 완료
+  위 두 건이 시차를 두고 각각 구현되며 같은 "관리자용 QR 조회" 기능이 서로 다른 UI 패턴으로
+  갈라졌다 — CustomerDetailPanel(2026-08-18 조사분, 당시 유일한 커밋 선례였던
+  ProductDetailPanel의 88px 바디영역 토글+팝오버 패턴 참고)과 RentalDetailPanel(같은 세션
+  2026-08-26 신설, 헤더인라인 44px 상시노출 패턴). Stephen이 <launch-selected-element>로
+  두 UI를 나란히 비교 제시하며 "왜 표준 스타일로 배치하지 않았냐" 지적 → 경위(두 패턴 생성
+  시점 차이, 고의적 불일치 아님) 설명 후 "RentalDetailPanel 방식으로 맞춰줘" 승인.
+
+  수정(CustomerDetailPanel.svelte 1개 파일만): showQrPopover state·qr-toggle-btn·qr-popover
+  마크업/CSS 전부 제거, qrCanvasEl을 member_code 존재 시 무조건 렌더(토글 조건 제거),
+  캔버스 140→44px·다운로드 폰트 12→11px(RentalDetailPanel 값과 정확히 일치), 마크업을
+  .panel-header 내부 .member-qr-wrap.member-qr-wrap--header(margin-left:auto)로 재배치해
+  .panel-user·.close-btn과 같은 행 배치. CSS도 RentalDetailPanel의 .reservation-qr-wrap
+  값(투명배경 텍스트버튼, hover 시 lilac bg+purple 텍스트) 그대로 이식.
+
+  검증: grep으로 구 클래스명(.qr-toggle-btn/.qr-popover/showQrPopover) 잔존 참조 0건,
+  svelte-check 이 파일 신규 에러 0건(eslint 2건은 510/525행 이메일 정규식 no-useless-escape
+  — QR 섹션과 무관한 사전 존재 코드, git diff 대조로 미수정 확인), Stage 실브라우저로
+  user_id를 SQL 직접 조회(CSBC26081080→9589cf3c-...) 후 딥링크 재진입 → DOM outerHTML로
+  .member-qr-wrap이 .panel-user·.close-btn과 같은 행에 44×44 캔버스+버튼으로 렌더링됨을
+  확인 + 스크린샷으로 RentalDetailPanel과 동일한 시각 스타일 확인.
+
+  GATE E: ✅ 통과. 커밋은 Stephen 직접 실행.
