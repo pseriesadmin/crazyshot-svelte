@@ -391,7 +391,10 @@
     if (!hasVerifiedDoc) {
       showToast('내정보(개인정보)에서 본인증명정보를 등록(확인)해주세요.', {
         label: '확인',
-        onClick: () => goto('/account/profile?tab=profile'),
+        onClick: () => {
+          const returnTo = encodeURIComponent(window.location.pathname + window.location.search);
+          goto(`/account/profile?tab=profile&returnTo=${returnTo}`);
+        },
       });
       return;
     }
