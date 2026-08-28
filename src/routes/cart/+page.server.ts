@@ -2,6 +2,7 @@ import { redirect } from '@sveltejs/kit'
 import { isRealMemberSession } from '$lib/utils/authGuard'
 import { loadCourierClosedDates } from '$lib/server/courierClosedDates'
 import { isCouponEligible } from '$lib/server/coupons/couponEligibility'
+import { groupCartLineItems } from '$lib/utils/cartLineGrouping'
 import type { PageServerLoad } from './$types'
 import type { SupabaseClient } from '@supabase/supabase-js'
 
@@ -51,7 +52,7 @@ export const load: PageServerLoad = async ({ locals }) => {
   // 실제 배송(is_bulk_delivery)인지를 클라이언트에서 조합해 판정한다(2026-08-25 — 그동안
   // rental_method_options.fee_amount(전부 0)만 보고 있어 "무료"로 잘못 표시되던 결함 수정).
   const { data: shippingSettingsData } = await untypedFrom(supabase, 'rental_shipping_settings')
-    .select('enable_round_trip, round_trip_fee, enable_delivery, delivery_fee, enable_return, return_fee, shipping_guide')
+    .select('enable_round_trip, round_trip_fee, enable_delivery, delivery_fee, enable_return, return_fee, shipping_guide, restrict_return_delivery')
     .limit(1)
     .single()
   const shippingSettings = shippingSettingsData as {
@@ -62,7 +63,21 @@ export const load: PageServerLoad = async ({ locals }) => {
     enable_return: boolean
     return_fee: number | null
     shipping_guide: string | null
+    restrict_return_delivery: boolean
   } | null
+
+  // 배송료 우대설정(/cms/set/rental "배송료 우대설정") — 조건 만족 시 배송비 할인 조합(최대
+  // 3개). 세션 무관, 공개 조회(deliveryOptions/shippingSettings와 동일 패턴).
+  const { data: discountTiersData } = await untypedFrom(supabase, 'delivery_fee_discount_tiers')
+    .select('min_rental_amount, condition_type, discount_rate')
+    .eq('is_active', true)
+    .is('deleted_at', null)
+    .order('min_rental_amount', { ascending: true })
+  const discountTiers = (discountTiersData ?? []) as Array<{
+    min_rental_amount: number
+    condition_type: 'long_term_rental' | 'sale_only_purchase'
+    discount_rate: number
+  }>
 
   const { session } = await locals.safeGetSession()
 
@@ -173,6 +188,7 @@ export const load: PageServerLoad = async ({ locals }) => {
   let serverProducts: ProductRow[] = []
   let cartProducts:   ProductRow[] = []   // 예약 순서대로 정렬된 카드용 상품 (하위호환)
   let cartLineItems:  CartLineItem[] = []
+  let cartLineGroups: ReturnType<typeof groupCartLineItems> = []
   let productPriceRules: Record<string, { price12h: number | null; price24h: number | null; deposit: number | null }> = {}
   let calcTotal = 0, calcDiscount = 0, calcFinal = 0, depositTotal = 0
 
@@ -185,7 +201,7 @@ export const load: PageServerLoad = async ({ locals }) => {
       productIds.length > 0
         ? supabase
             .from('products')
-            .select('id, name, category, brand, slug, image_urls, is_active, created_at, updated_at, deleted_at, allowed_method_ids, allowed_pickup_ids, parent_product_id, shipping_round_trip, shipping_delivery, shipping_return')
+            .select('id, name, category, brand, slug, image_urls, is_active, created_at, updated_at, deleted_at, allowed_method_ids, allowed_pickup_ids, parent_product_id, shipping_round_trip, shipping_delivery, shipping_return, sale_only')
             .in('id', productIds)
         : Promise.resolve({ data: [] as ProductRow[] }),
       productIds.length > 0
@@ -216,7 +232,7 @@ export const load: PageServerLoad = async ({ locals }) => {
     if (parentIdsNeeded.length > 0) {
       const { data: parentRows } = await supabase
         .from('products')
-        .select('id, allowed_method_ids, allowed_pickup_ids, shipping_round_trip, shipping_delivery, shipping_return')
+        .select('id, allowed_method_ids, allowed_pickup_ids, shipping_round_trip, shipping_delivery, shipping_return, sale_only')
         .in('id', parentIdsNeeded)
       const parentRowsTyped = (parentRows ?? []) as Array<{
         id: string
@@ -225,6 +241,7 @@ export const load: PageServerLoad = async ({ locals }) => {
         shipping_round_trip: boolean | null
         shipping_delivery: boolean | null
         shipping_return: boolean | null
+        sale_only: boolean | null
       }>
       const parentMethodMap = new Map(parentRowsTyped.map(p => [p.id, p.allowed_method_ids ?? []]))
       const parentPickupMap = new Map(parentRowsTyped.map(p => [p.id, p.allowed_pickup_ids ?? []]))
@@ -243,6 +260,7 @@ export const load: PageServerLoad = async ({ locals }) => {
           next.shipping_round_trip = parentShipping.shipping_round_trip
           next.shipping_delivery   = parentShipping.shipping_delivery
           next.shipping_return     = parentShipping.shipping_return
+          next.sale_only           = parentShipping.sale_only
         }
         return next
       })
@@ -313,6 +331,11 @@ export const load: PageServerLoad = async ({ locals }) => {
       }
     })
 
+    // 장바구니 표시 레이어 그룹핑(2026-08-28, Stephen GATE B 승인) — 예약행(재고단위)은 그대로
+    // 1건=1대 유지하되, 같은 부모상품+같은 날짜(hold)/같은 부모상품(draft)인 예약행들을 카드
+    // 1개로 묶어 표시한다. calculate_cart_total 등 금액 계산은 예약행 단위 그대로 유지(아래).
+    cartLineGroups = groupCartLineItems(cartLineItems)
+
     // calculate_cart_total RPC — subtotal, discount_amount, final_total, deposit_required 반환
     // (Database.Functions 타입 불일치로 as unknown as 캐스트 사용 — 기존 products/[id] 패턴 동일)
     // draft 행(날짜 NULL)이 섞이면 subtotal이 NULL로 오염되므로 hold 상태 행만 필터링해 전달 (DB-5는 2차 방어)
@@ -379,10 +402,12 @@ export const load: PageServerLoad = async ({ locals }) => {
     courierClosedDates,
     rentalGuideText,
     shippingSettings,
+    discountTiers,
     userId:          session.user.id,
     reservationIds,
     cartProducts,
     cartLineItems,
+    cartLineGroups,
     productPriceRules,
     depositTotal,
     calcTotal,
@@ -441,6 +466,7 @@ interface ProductRow {
   shipping_round_trip?: boolean | null
   shipping_delivery?:   boolean | null
   shipping_return?:     boolean | null
+  sale_only?:           boolean | null
 }
 
 interface PickupPointRow {

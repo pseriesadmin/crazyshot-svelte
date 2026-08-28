@@ -55,6 +55,15 @@ export interface RentalShippingSettings {
   enable_return: boolean
   return_fee: number | null
   shipping_guide: string
+  restrict_return_delivery: boolean
+}
+
+export interface DeliveryFeeDiscountTier {
+  id: string
+  min_rental_amount: number
+  condition_type: 'long_term_rental' | 'sale_only_purchase'
+  discount_rate: number
+  is_active: boolean
 }
 
 export interface DeliveryCutoffSettings {
@@ -77,7 +86,7 @@ export const load: PageServerLoad = async ({ locals }) => {
   const supabase = locals.supabase
   const todayIso = new Date().toISOString().slice(0, 10)
 
-  const [periods, methods, branches, guide, consents, shippingRow, cutoffRow, holidays] = await Promise.all([
+  const [periods, methods, branches, guide, consents, shippingRow, cutoffRow, holidays, discountTiers] = await Promise.all([
     untypedFrom(supabase, 'rental_period_options')
       .select('id, name, display_order, is_active')
       .is('deleted_at', null)
@@ -105,7 +114,7 @@ export const load: PageServerLoad = async ({ locals }) => {
       .order('display_order'),
 
     untypedFrom(supabase, 'rental_shipping_settings')
-      .select('enable_round_trip, round_trip_fee, enable_delivery, delivery_fee, enable_return, return_fee, shipping_guide')
+      .select('enable_round_trip, round_trip_fee, enable_delivery, delivery_fee, enable_return, return_fee, shipping_guide, restrict_return_delivery')
       .limit(1)
       .single(),
 
@@ -118,6 +127,11 @@ export const load: PageServerLoad = async ({ locals }) => {
       .select('id, date, name, holiday_type, note, is_active')
       .gte('date', todayIso)
       .order('date'),
+
+    untypedFrom(supabase, 'delivery_fee_discount_tiers')
+      .select('id, min_rental_amount, condition_type, discount_rate, is_active')
+      .is('deleted_at', null)
+      .order('created_at'),
   ])
 
   type GuideRow = { guide_text: string | null }
@@ -131,6 +145,7 @@ export const load: PageServerLoad = async ({ locals }) => {
     shippingSettings: ((shippingRow as { data: RentalShippingSettings | null }).data ?? null),
     cutoffSettings: ((cutoffRow as { data: DeliveryCutoffSettings | null }).data ?? null),
     holidays: ((holidays as { data: PublicHolidayRow[] | null }).data ?? []),
+    discountTiers: ((discountTiers as { data: DeliveryFeeDiscountTier[] | null }).data ?? []),
   }
 }
 
@@ -232,6 +247,15 @@ export const actions: Actions = {
     const data = await request.formData()
     const id = data.get('id') as string
     const { error } = await untypedRpc(locals.supabase, 'toggle_rental_method_bulk_delivery', { p_id: id })
+    if (error) return fail(400, { error: error.message })
+    return { success: true }
+  },
+
+  // 대여 제한옵션 — /cart 반납 설정에서 '배송' 반납방식 노출 여부 전역 토글
+  toggleReturnDeliveryRestriction: async ({ locals }) => {
+    const { session } = await locals.safeGetSession()
+    if (!session) return fail(401, { error: '인증 필요' })
+    const { error } = await untypedRpc(locals.supabase, 'toggle_return_delivery_restriction', {})
     if (error) return fail(400, { error: error.message })
     return { success: true }
   },
@@ -451,6 +475,46 @@ export const actions: Actions = {
     if (!raw) return fail(400, { error: 'ids required' })
     const ids = JSON.parse(raw as string) as string[]
     const { error } = await untypedRpc(locals.supabase, 'reorder_rental_consent_items', { p_ids: ids })
+    if (error) return fail(500, { error: error.message })
+    return { success: true }
+  },
+
+  // ─── 배송료 우대설정 (최대 3개) ─────────────────
+  addDiscountTier: async ({ request, locals }) => {
+    const { session } = await locals.safeGetSession()
+    if (!session) return fail(401, { error: '인증 필요' })
+    const data = await request.formData()
+    const amountRaw = (data.get('min_rental_amount') as string | null) ?? ''
+    const amount = amountRaw !== '' ? parseInt(amountRaw, 10) : NaN
+    const conditionType = (data.get('condition_type') as string | null) ?? ''
+    const discountKey = (data.get('discount_rate') as string | null) ?? ''
+    const count = parseInt(data.get('count') as string, 10)
+
+    if (Number.isNaN(amount) || amount < 0) return fail(400, { error: '대여금액을 입력하세요.' })
+    if (!['long_term_rental', 'sale_only_purchase'].includes(conditionType)) {
+      return fail(400, { error: '조건을 선택하세요.' })
+    }
+    const DISCOUNT_RATE_MAP: Record<string, number> = { free: 1, half: 0.5, base: 0 }
+    const discountRate = DISCOUNT_RATE_MAP[discountKey]
+    if (discountRate === undefined) return fail(400, { error: '우대옵션을 선택하세요.' })
+    if (count >= 3) return fail(400, { error: '배송료 우대설정은 최대 3개까지 등록할 수 있습니다.' })
+
+    const { error } = await untypedRpc(locals.supabase, 'upsert_delivery_fee_discount_tier', {
+      p_id: null,
+      p_min_rental_amount: amount,
+      p_condition_type: conditionType,
+      p_discount_rate: discountRate,
+    })
+    if (error) return fail(500, { error: error.message })
+    return { success: true }
+  },
+
+  deleteDiscountTier: async ({ request, locals }) => {
+    const { session } = await locals.safeGetSession()
+    if (!session) return fail(401, { error: '인증 필요' })
+    const data = await request.formData()
+    const id = data.get('id') as string
+    const { error } = await untypedRpc(locals.supabase, 'delete_delivery_fee_discount_tier', { p_id: id })
     if (error) return fail(500, { error: error.message })
     return { success: true }
   },

@@ -9,7 +9,12 @@
   import { supabase } from '$lib/services/supabase';
   import { csToast } from '$lib/utils/toast';
   import { isLockerHour } from '$lib/utils/lockerTimeRange';
-  import { calcRoundTripFee, calcReturnFee, type ShippingFeeItem } from '$lib/utils/cartShippingFee';
+  import { calcRoundTripFee, calcReturnFee, calcShippingDiscountRate, type ShippingFeeItem, type DeliveryFeeDiscountTier, type DiscountConditionItem } from '$lib/utils/cartShippingFee';
+  import {
+    createMultiUnitReservation,
+    resolveParentProductId,
+    type UnitReservationResult,
+  } from '$lib/services/reservationHelper';
 
   function readInputValue(event: { currentTarget: { value: string } }): string {
     return event.currentTarget.value;
@@ -86,11 +91,13 @@
   }
 
   // ── 카트 라인아이템 UI 상태 (무제한 — 카드1/카드2 고정 구조 폐기 2026-07-27)
+  // 2026-08-28: 동일 부모상품 중복담기 병합 — id는 항상 그룹의 canonical(최초 생성) 예약id,
+  // qty는 실제 예약행 개수(reservationIds.length)에서 파생되는 값으로 전환(로컬 장식용 숫자 폐기).
   interface CartItemUiState {
-    id: string;   // reservationId (rental_reservations.id)
+    id: string;   // canonical reservationId (rental_reservations.id) — 옵션·방식 저장 기준
+    reservationIds: string[]; // 이 그룹에 속한 모든 실제 예약id(오름차순, [0]===id)
     checked: boolean;
     deleted: boolean;
-    qty: number;
     durType: DurationType;
     opts: CardOptions;
     rentalForm: FormState;
@@ -101,10 +108,10 @@
     returnTime: string;
   }
 
-  function newItemState(id: string, rentalDate: string, returnDate: string, seed?: CartLineItemSeed): CartItemUiState {
+  function newItemState(id: string, rentalDate: string, returnDate: string, seed?: CartLineItemSeed, reservationIds?: string[]): CartItemUiState {
     const defaults = defaultOptions();
     return {
-      id, checked: true, deleted: false, qty: 1,
+      id, reservationIds: reservationIds ?? [id], checked: true, deleted: false,
       durType: toDurationType(seed?.durationType ?? null),
       opts: {
         ...defaults,
@@ -143,6 +150,116 @@
     } catch {
       updateItem(item.id, { deleted: false })
       csToast.error('네트워크 오류가 발생했습니다.')
+    }
+  }
+
+  // ── 그룹 수량(−/+) 실동작화 (2026-08-28, Stephen GATE B 승인) — 화면 표시용 숫자가 아니라
+  // 실제 예약 생성/취소로 서버에 반영한다. 날짜는 그룹에 이미 설정된 값을 그대로 재사용하고
+  // 새로 묻지 않는다(핵심 확정사항 — products/[id]/+page.svelte의 createMultiUnitReservation
+  // 패턴을 qty=1로 그대로 재사용).
+  let pendingQtyKey = $state<string | null>(null)
+
+  async function incrementGroupQty(line: CartLineGroup | undefined) {
+    if (!line || pendingQtyKey === line.canonicalReservationId) return
+    pendingQtyKey = line.canonicalReservationId
+    try {
+      const cancelUnit = async (reservationId: number) => {
+        await fetch('/api/reservations/cancel-hold', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ reservationId }),
+        }).catch(() => {})
+      }
+      type UnitRpcFn = (name: string, args: Record<string, unknown>) => Promise<{
+        data: Array<{ success: boolean; reservation_id: number | null; error_message: string | null }> | null
+        error: unknown
+      }>
+      const parentProductId = resolveParentProductId(line.product)
+      const createUnit = async (): Promise<UnitReservationResult> => {
+        if (line.status === 'draft') {
+          const { data } = await (supabase.rpc as unknown as UnitRpcFn)('create_draft_reservation', {
+            p_product_id: parentProductId,
+          })
+          const row = data?.[0]
+          return { success: !!row?.success, reservationId: row?.reservation_id ?? null, errorMessage: row?.error_message ?? null }
+        }
+        const { data } = await (supabase.rpc as unknown as UnitRpcFn)('create_hold_reservation', {
+          p_product_id: parentProductId,
+          p_start_date: line.startDate,
+          p_end_date:   line.endDate,
+        })
+        const row = data?.[0]
+        return { success: !!row?.success, reservationId: row?.reservation_id ?? null, errorMessage: row?.error_message ?? null }
+      }
+
+      const outcome = await createMultiUnitReservation(1, { createUnit, cancelUnit })
+      if (!outcome.success) {
+        csToast.error(outcome.errorMessage ?? '재고가 부족합니다.')
+        return
+      }
+
+      if (line.status === 'hold') {
+        const newId = outcome.reservationIds[0]
+        const shipmentResult = await saveShipmentMethod(
+          String(newId),
+          toDeliveryMethod(line.pickupMethod, 'visit'),
+          toDeliveryMethod(line.returnMethod, 'visit'),
+          line.pickupTime ?? undefined,
+          line.returnTime ?? undefined,
+        )
+        if (!shipmentResult.success) {
+          csToast.error(shipmentResult.errorMessage ?? '수령/반납 방식 저장에 실패했습니다.')
+          await cancelUnit(newId)
+          return
+        }
+        type DurationRpcFn = (name: string, args: Record<string, unknown>) => Promise<{ error: unknown }>
+        await (supabase.rpc as unknown as DurationRpcFn)('set_reservation_duration', {
+          p_reservation_id: newId,
+          p_duration_type:  line.durationType ?? '24h',
+        })
+        fetch('/api/checkout/notify-hold', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ reservationId: newId }),
+        }).catch(() => {})
+      }
+
+      await invalidateAll()
+    } catch {
+      csToast.error('네트워크 오류가 발생했습니다.')
+    } finally {
+      pendingQtyKey = null
+    }
+  }
+
+  async function decrementGroupQty(line: CartLineGroup | undefined) {
+    if (!line || pendingQtyKey === line.canonicalReservationId) return
+    // 그룹에 예약이 1건만 남아있으면 감소가 아니라 카드 전체 삭제(기존 removeItem 재사용)
+    if (line.reservationIds.length <= 1) {
+      const target = itemsState.find(it => it.id === line.canonicalReservationId)
+      if (target) await removeItem(target)
+      return
+    }
+    pendingQtyKey = line.canonicalReservationId
+    try {
+      // reservationIds는 항상 오름차순 정렬돼 있으므로 마지막(가장 최근 생성) id를 취소하면
+      // canonical(0번, 옵션 보유)은 그룹에 다른 멤버가 남아있는 한 절대 선택되지 않는다.
+      const targetId = line.reservationIds[line.reservationIds.length - 1]
+      const res = await fetch('/api/checkout/remove-item', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ reservationId: targetId }),
+      })
+      const result = await res.json()
+      if (!res.ok || !result.ok) {
+        csToast.error('삭제 처리 중 오류가 발생했습니다.')
+        return
+      }
+      await invalidateAll()
+    } catch {
+      csToast.error('네트워크 오류가 발생했습니다.')
+    } finally {
+      pendingQtyKey = null
     }
   }
 
@@ -334,28 +451,37 @@
 
   // ── 서버 데이터 추출 (PageData는 +page.ts 기준이므로 server 필드는 캐스트 필요)
   // datesSet 등 canProceed 조건이 라인아이템 목록을 참조하므로 Footer 섹션보다 앞에 선언
-  type ProductRow = { id: string; name: string; category: string; brand: string | null; slug: string; image_urls: string[]; is_active: boolean; shipping_round_trip?: boolean | null; shipping_delivery?: boolean | null; shipping_return?: boolean | null }
+  type ProductRow = { id: string; name: string; category: string; brand: string | null; slug: string; image_urls: string[]; is_active: boolean; shipping_round_trip?: boolean | null; shipping_delivery?: boolean | null; shipping_return?: boolean | null; sale_only?: boolean | null }
   type UserCouponExt = { id: string; coupon_id: string; coupons: { id: string; code: string; discount_type: string; discount_value: number; description: string | null; valid_until: string } | null }
   type PriceRuleExt = { price12h: number | null; price24h: number | null; deposit: number | null }
   type CartLineItemOption = { optionProductId: string | null; name: string; qty: number; unitPrice: number; imageUrl: string | null }
   type CartLineItem = { reservationId: string; productId: string | null; product: ProductRow | null; price12h: number | null; price24h: number | null; deposit: number | null; startDate: string; endDate: string; pickupMethod: string | null; returnMethod: string | null; pickupTime: string | null; returnTime: string | null; durationType: string | null; options: CartLineItemOption[]; status: string }
-  type ServerExt = { calcTotal: number; calcDiscount: number; calcFinal: number; depositTotal: number; membershipGrade: string | null; userPoints: number; userCoupons: UserCouponExt[]; cartLineItems: CartLineItem[]; productPriceRules: Record<string, PriceRuleExt>; hasUserAddress: boolean; rentalGuideText: string }
+  // 2026-08-28: 동일 부모상품 중복담기 병합 — 서버(cartLineGrouping.ts groupCartLineItems)가
+  // 예약행(재고단위) 여러 건을 하나의 그룹으로 묶어 내려준다. qty=reservationIds.length,
+  // canonicalReservationId가 옵션·방식 저장 기준(=CartItemUiState.id와 동일).
+  type CartLineGroup = { groupKey: string; canonicalReservationId: string; reservationIds: string[]; qty: number; productId: string | null; product: ProductRow | null; price12h: number | null; price24h: number | null; deposit: number | null; startDate: string; endDate: string; pickupMethod: string | null; returnMethod: string | null; pickupTime: string | null; returnTime: string | null; durationType: string | null; options: CartLineItemOption[]; status: string }
+  type ServerExt = { calcTotal: number; calcDiscount: number; calcFinal: number; depositTotal: number; membershipGrade: string | null; userPoints: number; userCoupons: UserCouponExt[]; cartLineItems: CartLineItem[]; cartLineGroups: CartLineGroup[]; productPriceRules: Record<string, PriceRuleExt>; hasUserAddress: boolean; rentalGuideText: string }
   const sd = $derived(data as unknown as ServerExt)
 
   // 카트 라인아이템 — 항상 실 DB 기준 (게스트도 예약 시 익명 로그인으로 실 세션을 가지므로
   // 별도 데모/미리보기 데이터가 필요 없음 — 2026-07-27 fixture 폴백 설계 제거)
   const effectiveLineItems = $derived<CartLineItem[]>((sd as { cartLineItems?: CartLineItem[] }).cartLineItems ?? [])
+  // 동일 부모상품 중복담기 병합 그룹 — 카드 렌더링·수량·옵션합산은 전부 이 그룹 기준으로 동작
+  const effectiveLineGroups = $derived<CartLineGroup[]>((sd as { cartLineGroups?: CartLineGroup[] }).cartLineGroups ?? [])
+  // itemsState[i]↔effectiveLineItems[i] 배열 인덱스 결합(과거 1예약행=1카드 시절의 landmine)을
+  // 전부 제거하기 위한 canonical id → 그룹 조회 Map — 5곳 전부 이걸로 교체(2026-08-28)
+  const groupsById = $derived(new Map(effectiveLineGroups.map(g => [g.canonicalReservationId, g])))
   const sdPriceRules = $derived<Record<string, PriceRuleExt>>((sd as { productPriceRules?: Record<string, PriceRuleExt> }).productPriceRules ?? {})
 
-  // effectiveLineItems ↔ itemsState 동기화 — 기존 로컬 UI 상태(아코디언 열림 등)는 보존
+  // effectiveLineGroups ↔ itemsState 동기화 — 기존 로컬 UI 상태(아코디언 열림 등)는 보존
   $effect(() => {
-    const lines = effectiveLineItems
+    const groups = effectiveLineGroups
     const prev = untrack(() => itemsState)
-    itemsState = lines.map(line => prev.find(it => it.id === line.reservationId) ?? newItemState(line.reservationId, line.startDate ?? '', line.endDate ?? '', {
-      pickupMethod: line.pickupMethod, returnMethod: line.returnMethod,
-      pickupTime: line.pickupTime, returnTime: line.returnTime,
-      durationType: line.durationType,
-    }))
+    itemsState = groups.map(group => prev.find(it => it.id === group.canonicalReservationId) ?? newItemState(group.canonicalReservationId, group.startDate ?? '', group.endDate ?? '', {
+      pickupMethod: group.pickupMethod, returnMethod: group.returnMethod,
+      pickupTime: group.pickupTime, returnTime: group.returnTime,
+      durationType: group.durationType,
+    }, group.reservationIds))
   })
 
   // ── Footer + canProceed 5조건 가드
@@ -450,25 +576,26 @@
   }
 
   // 단가: 실제 요금정책(price_rules) 기준 (없으면 기본 단가 폴백)
-  function itemRate24h(line: CartLineItem | undefined): number {
+  // 2026-08-28: 그룹 병합 이후 카드 렌더링은 전부 CartLineGroup 기준으로 동작
+  function itemRate24h(line: CartLineGroup | undefined): number {
     if (!line) return 150000
     return sdPriceRules[line.productId ?? '']?.price24h ?? line.price24h ?? 150000
   }
-  function itemRate12h(line: CartLineItem | undefined, rate24: number): number {
+  function itemRate12h(line: CartLineGroup | undefined, rate24: number): number {
     if (!line) return Math.round(rate24 * 0.6)
     return sdPriceRules[line.productId ?? '']?.price12h ?? line.price12h ?? Math.round(rate24 * 0.6)
   }
-  function itemCardRate(line: CartLineItem | undefined, durType: DurationType): number {
+  function itemCardRate(line: CartLineGroup | undefined, durType: DurationType): number {
     const r24 = itemRate24h(line)
     const r12 = itemRate12h(line, r24)
     return cardRate(r24, r12, durType)
   }
-  function itemDeposit(line: CartLineItem | undefined): number {
+  function itemDeposit(line: CartLineGroup | undefined): number {
     if (!line) return 0
     return sdPriceRules[line.productId ?? '']?.deposit ?? line.deposit ?? 0
   }
   // 옵션상품 금액 합계 (unit_price × qty) — 상품상세에서 선택한 옵션이 체크아웃 합계에도 반영되도록
-  function itemOptionsAmount(line: CartLineItem | undefined): number {
+  function itemOptionsAmount(line: CartLineGroup | undefined): number {
     if (!line) return 0
     return line.options.reduce((s, o) => s + o.unitPrice * o.qty, 0)
   }
@@ -482,10 +609,10 @@
   // 대여료 소계 — 체크된(선택된) 상품만 합산 (체크 해제 시 약정요금에서 제외)
   // 옵션상품 금액(itemOptionsAmount)도 기본 대여료와 동일하게 qty 배수 적용해 합산
   const otSubtotal = $derived(
-    itemsState.reduce((sum, it, i) => {
+    itemsState.reduce((sum, it) => {
       if (it.deleted || !it.checked) return sum
-      const line = effectiveLineItems[i]
-      return sum + (itemCardRate(line, it.durType) + itemOptionsAmount(line)) * Math.max(it.qty, 1)
+      const line = groupsById.get(it.id)
+      return sum + (itemCardRate(line, it.durType) + itemOptionsAmount(line)) * Math.max(line?.qty ?? 1, 1)
     }, 0)
   )
 
@@ -513,11 +640,12 @@
     enable_delivery: boolean;   delivery_fee: number | null
     enable_return: boolean;     return_fee: number | null
     shipping_guide: string | null
+    restrict_return_delivery: boolean
   } | null | undefined) ?? null)
 
   const checkedShippingItems = $derived<ShippingFeeItem[]>(
     itemsState
-      .map((it, i) => ({ it, product: effectiveLineItems[i]?.product }))
+      .map((it) => ({ it, product: groupsById.get(it.id)?.product }))
       .filter(({ it }) => !it.deleted && it.checked)
       .map(({ it, product }) => ({
         pickupIsDelivery: isDeliveryLocked(it.opts.rentalMethod),
@@ -529,23 +657,47 @@
   const otRoundTripFee = $derived(calcRoundTripFee(sdShippingSettings, checkedShippingItems))
   const otReturnFee = $derived(calcReturnFee(sdShippingSettings, checkedShippingItems))
 
-  // 수령·반납 방식 DB 저장 (hold 예약에만)
-  type RpcFn = (name: string, args: Record<string, unknown>) => Promise<unknown>
+  // 배송료 우대설정(/cms/set/rental) — 대여금액(otSubtotal) + 조건(3일이상 장기대여/판매상품
+  // 구매) 만족 시 배송비(왕복+배송+반납 합계)에 할인율 적용(Stephen 확정, 2026-08-29).
+  // rentalDays()는 이 스크립트 블록 하단에 함수 선언돼 있으나 호이스팅으로 여기서 호출 가능.
+  const checkedDiscountItems = $derived<DiscountConditionItem[]>(
+    itemsState
+      .map((it) => ({ it, product: groupsById.get(it.id)?.product }))
+      .filter(({ it }) => !it.deleted && it.checked)
+      .map(({ it, product }) => ({
+        rentalDays: rentalDays(it.rentalDate, it.returnDate),
+        saleOnlyPurchase: (product as ProductRow & { sale_only?: boolean | null } | undefined)?.sale_only ?? false,
+      }))
+  )
+  const otShippingDiscountRate = $derived(
+    calcShippingDiscountRate(
+      (data.discountTiers as DeliveryFeeDiscountTier[] | undefined) ?? [],
+      otSubtotal,
+      checkedDiscountItems,
+    )
+  )
+
+  // 수령·반납 방식 DB 저장 (hold 예약에만) — RPC 에러(예: restrict_return_delivery 서버
+  // 가드 거부, Migration 373)를 호출부가 확인할 수 있도록 반드시 반환한다. 과거엔 결과를
+  // 버렸는데, 그 경우 서버가 저장을 거부해도 클라이언트는 성공한 것처럼 계속 진행해
+  // 방식이 저장 안 된 예약이 "성공" 화면까지 도달하는 silent 실패가 있었다(QA 발견, 2026-08-28).
+  type RpcFn = (name: string, args: Record<string, unknown>) => Promise<{ error: { message?: string } | null }>
   async function saveShipmentMethod(
     resId: string | undefined,
     pickup: DeliveryMethod,
     return_: DeliveryMethod,
     pickupTime?: string,
     returnTime?: string,
-  ) {
-    if (!resId) return
-    await (supabase.rpc as unknown as RpcFn)('set_reservation_shipment_method', {
+  ): Promise<{ success: boolean; errorMessage: string | null }> {
+    if (!resId) return { success: true, errorMessage: null }
+    const { error } = await (supabase.rpc as unknown as RpcFn)('set_reservation_shipment_method', {
       p_reservation_id: Number(resId),
       p_pickup_method:  pickup,
       p_return_method:  return_,
       p_pickup_time:    pickupTime || null,
       p_return_time:    returnTime || null,
     })
+    return { success: !error, errorMessage: error?.message ?? null }
   }
 
   // 옵션상품 수량 변경 — set_reservation_options는 전체 옵션 목록을 통째로 교체(delete+insert)하는
@@ -554,7 +706,7 @@
   // 낙관적 갱신 없음(effectiveLineItems가 서버 파생값이라 직접 변형 불가)
   let pendingOptionKey = $state<string | null>(null)
   type SetOptionsRpcFn = (name: string, args: Record<string, unknown>) => Promise<{ error: unknown }>
-  async function updateOptionQty(reservationId: string, line: CartLineItem | undefined, optionProductId: string | null, newQty: number) {
+  async function updateOptionQty(reservationId: string, line: CartLineGroup | undefined, optionProductId: string | null, newQty: number) {
     if (!line || newQty < 1) return
     const key = `${reservationId}:${optionProductId}`
     pendingOptionKey = key
@@ -600,7 +752,7 @@
   }
 
   // 카트 상품에 설정된 허용 방식 ID 교집합 ('all'=전체, 'none'=없음, Set=필터)
-  const cartProductRows = $derived<ProductRow[]>(effectiveLineItems.map(l => l.product).filter((p): p is ProductRow => p !== null))
+  const cartProductRows = $derived<ProductRow[]>(effectiveLineGroups.map(g => g.product).filter((p): p is ProductRow => p !== null))
   const allowedMethodIds = $derived(computeAllowedMethodIds(cartProductRows))
   const deliveryTabs = $derived<DeliveryTabMeta[]>(
     allowedMethodIds === 'none' ? [] :
@@ -608,9 +760,21 @@
       .filter((o: DeliveryOptionRow) => o.method_key && (allowedMethodIds === 'all' || allowedMethodIds.has(o.id)))
       .map((o: DeliveryOptionRow) => ({ v: o.method_key as DeliveryMethod, label: o.name, deadline: o.deadline_time ?? '' }))
   );
+  // 대여 제한옵션 "반납 배송선택 제한"(CMS) — ON이면 수령·반납 콤보 양쪽 모두에서 배송
+  // (is_bulk_delivery) 방식을 제거한다. 반납에서만 제거하면 "요청 A"(수령=배송 선택 시
+  // 반납방식을 자동으로 같은 배송값으로 강제복사)와 충돌해, 수령을 배송으로 고르는 순간
+  // 반납이 목록에 없는 값으로 강제고정되며 반납 콤보 전체가 비활성화되는 UI 데드엔드가
+  // 발생함(QA 발견, 2026-08-28) — 수령 쪽도 함께 막아 그 충돌 자체가 생기지 않게 함
+  // (Stephen 확정: "수령 방문대여 선택 시 반납 크레이지배송 대여 가려서 선택 못하게 막음").
+  const restrictedDeliveryTabs = $derived<DeliveryTabMeta[]>(
+    deliveryTabs.filter(tab => !isDeliveryLocked(tab.v))
+  )
   const otDeliveryFee = $derived(
-    itemsState.reduce((sum, it) => sum + ((it.deleted || !it.checked) ? 0 : deliveryFee(it.opts.rentalMethod, otGrade)), 0)
-    + otRoundTripFee + otReturnFee
+    Math.round(
+      (itemsState.reduce((sum, it) => sum + ((it.deleted || !it.checked) ? 0 : deliveryFee(it.opts.rentalMethod, otGrade)), 0)
+        + otRoundTripFee + otReturnFee)
+      * (1 - otShippingDiscountRate)
+    )
   )
 
   // 택배 휴무일 캘린더 제어(2026-08-24) — 마스터 토글 OFF면 서버가 이미 빈 배열을 내려줌
@@ -711,10 +875,13 @@
   const otTotal = $derived(Math.max(0, otNetBeforeVat + otDeliveryFee - otCouponDiscount - otPointsUsed))
 
   // 보증금 (PRD.1.2.2.1.11) — 체크된(선택된) 상품만 합산
+  // 2026-08-28: 그룹 qty만큼 곱하지 않던 기존 결함을 그룹 도입과 함께 수정 — 예약행(재고단위)이
+  // N대 병합된 카드는 보증금도 N배로 정확히 청구돼야 한다.
   const otDeposit = $derived(
-    itemsState.reduce((sum, it, i) => {
+    itemsState.reduce((sum, it) => {
       if (it.deleted || !it.checked) return sum
-      return sum + itemDeposit(effectiveLineItems[i])
+      const line = groupsById.get(it.id)
+      return sum + itemDeposit(line) * Math.max(line?.qty ?? 1, 1)
     }, 0)
   )
 
@@ -775,8 +942,8 @@
       <section class="cs-section">
         <!-- 모바일 전용(<641px): 상품별 개별 카드 (기존 레이아웃 그대로 유지 — 2026-07-27 마스터-디테일 변경은 PC 전용) -->
         <div class="mobile-cart-list">
-          {#each itemsState as item, i (item.id)}
-            {@render OrderCard(item, effectiveLineItems[i])}
+          {#each itemsState as item (item.id)}
+            {@render OrderCard(item, groupsById.get(item.id))}
           {/each}
 
           {#if itemsState.length === 0 || itemsState.every(it => it.deleted)}
@@ -804,9 +971,9 @@
               </div>
             {:else}
               <div class="card-list" role="list">
-                {#each itemsState as item, i (item.id)}
+                {#each itemsState as item (item.id)}
                   {#if !item.deleted}
-                    {@render ItemListCard(item, effectiveLineItems[i])}
+                    {@render ItemListCard(item, groupsById.get(item.id))}
                   {/if}
                 {/each}
               </div>
@@ -1000,20 +1167,22 @@
           if (!canProceed || isConfirming) return
           isConfirming = true
           try {
-            // 체크 해제한 상품은 이번 결제 확정 대상에서 제외 — 선택된(checked) 예약 id만 전송
-            const checkedIds = itemsState.filter(it => !it.deleted && it.checked).map(it => it.id)
+            // 체크 해제한 상품은 이번 결제 확정 대상에서 제외 — 2026-08-28: 그룹 병합 이후
+            // 카드 1개가 여러 실제 예약id를 가질 수 있어, 그룹의 canonical id가 아니라
+            // 그룹 내 모든 reservationIds를 펼쳐서 전송해야 한다.
+            const checkedItemsState = itemsState.filter(it => !it.deleted && it.checked)
+            const checkedIds = checkedItemsState.flatMap(it => it.reservationIds)
 
-            // draft 항목(날짜 없는 임시예약)을 먼저 승격(promote_draft_reservation) — 모두 성공한 뒤 주문연결 진행
-            const draftItemIds = new Set(
-              effectiveLineItems
-                .filter(l => l.status === 'draft' && checkedIds.includes(l.reservationId))
-                .map(l => l.reservationId)
-            )
-            if (draftItemIds.size > 0) {
+            // draft 그룹(날짜 없는 임시예약)을 먼저 승격(promote_draft_reservation) — 모두 성공한
+            // 뒤 주문연결 진행. 그룹당 1건이 아니라 그룹 내 모든 개별 예약id를 순회하며 그룹의
+            // 공유 날짜/방식/기간유형을 각각 적용한다(병합된 그룹이라도 실제 재고배정은 여전히
+            // 1예약행=1대 단위로 이뤄져야 하므로).
+            const checkedDraftItems = checkedItemsState.filter(it => groupsById.get(it.id)?.status === 'draft')
+            if (checkedDraftItems.length > 0) {
               const TWO_DAY_LEADTIME_KEYS_CO = new Set(['delivery', 'epost'])
               const nowTimeCo = new Date()
-              for (const it of itemsState.filter(x => !x.deleted && x.checked && draftItemIds.has(x.id))) {
-                // 리드타임 재검증 (날짜 없이 예약됐으므로 여기서 처음 검증)
+              for (const it of checkedDraftItems) {
+                // 리드타임 재검증 (날짜 없이 예약됐으므로 여기서 처음 검증) — 그룹 공유 날짜 기준 1회
                 const needsTwoDayLeadtime = TWO_DAY_LEADTIME_KEYS_CO.has(it.opts.rentalMethod)
                 if (needsTwoDayLeadtime) {
                   const twoDaysLater = new Date(nowTimeCo.getFullYear(), nowTimeCo.getMonth(), nowTimeCo.getDate() + 2)
@@ -1036,24 +1205,7 @@
                     }
                   }
                 }
-                // promote_draft_reservation RPC 호출
-                type PromoteRpcFn = (name: string, args: Record<string, unknown>) => Promise<{
-                  data: Array<{ success: boolean; reservation_id: number | null; error_message: string | null }> | null;
-                  error: unknown;
-                }>
-                const { data: promoteRows } = await (supabase.rpc as unknown as PromoteRpcFn)('promote_draft_reservation', {
-                  p_reservation_id: Number(it.id),
-                  p_start_date:     it.rentalDate,
-                  p_end_date:       it.returnDate,
-                })
-                const promoteRow = promoteRows?.[0]
-                if (!promoteRow?.success) {
-                  csToast.error(promoteRow?.error_message ?? '해당 기간에 예약 가능한 재고가 없습니다.')
-                  return
-                }
-                // 수령·반납 방식 저장 (기존 saveShipmentMethod 재사용)
-                await saveShipmentMethod(it.id, it.opts.rentalMethod, it.opts.returnMethod, it.rentalTime, it.returnTime)
-                // 대여 기간 유형 저장 (products/[id]/+page.svelte L320-322와 동일 판정 기준)
+                // 대여 기간 유형 계산(그룹 공유값, products/[id]/+page.svelte L320-322와 동일 판정 기준)
                 const isSameDayRentalCo = it.rentalDate === it.returnDate
                 const [rhStr, rmStr] = (it.rentalTime || '00:00').split(':')
                 const [etStr, emStr] = (it.returnTime || '00:00').split(':')
@@ -1061,17 +1213,42 @@
                 const endMinsCo   = parseInt(etStr ?? '0', 10) * 60 + parseInt(emStr ?? '0', 10)
                 const sameDayMinsCo   = endMinsCo - startMinsCo
                 const durationTypeCo  = isSameDayRentalCo && sameDayMinsCo > 0 && sameDayMinsCo <= 720 ? '12h' : '24h'
+
+                type PromoteRpcFn = (name: string, args: Record<string, unknown>) => Promise<{
+                  data: Array<{ success: boolean; reservation_id: number | null; error_message: string | null }> | null;
+                  error: unknown;
+                }>
                 type DurationRpcFnCo = (name: string, args: Record<string, unknown>) => Promise<{ error: unknown }>
-                await (supabase.rpc as unknown as DurationRpcFnCo)('set_reservation_duration', {
-                  p_reservation_id: Number(it.id),
-                  p_duration_type:  durationTypeCo,
-                })
-                // 채팅 알림 발송 (draft 생성 시 미발송 → 승격 성공 시점에 최초 발송 — FE-2 STEP4 참고)
-                fetch('/api/checkout/notify-hold', {
-                  method: 'POST',
-                  headers: { 'Content-Type': 'application/json' },
-                  body: JSON.stringify({ reservationId: Number(it.id) }),
-                }).catch(() => {})
+
+                // 그룹 내 모든 개별 예약id에 각각 승격/방식/기간을 적용
+                for (const reservationId of it.reservationIds) {
+                  const { data: promoteRows } = await (supabase.rpc as unknown as PromoteRpcFn)('promote_draft_reservation', {
+                    p_reservation_id: Number(reservationId),
+                    p_start_date:     it.rentalDate,
+                    p_end_date:       it.returnDate,
+                  })
+                  const promoteRow = promoteRows?.[0]
+                  if (!promoteRow?.success) {
+                    csToast.error(promoteRow?.error_message ?? '해당 기간에 예약 가능한 재고가 없습니다.')
+                    return
+                  }
+                  // 수령·반납 방식 저장 (기존 saveShipmentMethod 재사용)
+                  const shipmentResultCo = await saveShipmentMethod(reservationId, it.opts.rentalMethod, it.opts.returnMethod, it.rentalTime, it.returnTime)
+                  if (!shipmentResultCo.success) {
+                    csToast.error(shipmentResultCo.errorMessage ?? '수령/반납 방식 저장에 실패했습니다. 방식을 다시 선택해주세요.')
+                    return
+                  }
+                  await (supabase.rpc as unknown as DurationRpcFnCo)('set_reservation_duration', {
+                    p_reservation_id: Number(reservationId),
+                    p_duration_type:  durationTypeCo,
+                  })
+                  // 채팅 알림 발송 (draft 생성 시 미발송 → 승격 성공 시점에 최초 발송 — FE-2 STEP4 참고)
+                  fetch('/api/checkout/notify-hold', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ reservationId: Number(reservationId) }),
+                  }).catch(() => {})
+                }
               }
             }
             // 신청(hold) 시점 주문(orders/order_items) 연결 — CMS "대여정보" 탭 통합 표시 기반
@@ -1099,10 +1276,9 @@
             const nowDt = new Date()
             const padN = (n: number) => String(n).padStart(2, '0')
             const confirmedAt = `${nowDt.getFullYear()}.${padN(nowDt.getMonth()+1)}.${padN(nowDt.getDate())}·${padN(nowDt.getHours())}:${padN(nowDt.getMinutes())}`
-            const activeItems = itemsState
-              .filter(it => !it.deleted && it.checked)
+            const activeItems = checkedItemsState
               .map((it) => {
-                const line = effectiveLineItems.find(l => l.reservationId === it.id)
+                const line = groupsById.get(it.id)
                 return {
                   name: line?.product?.name ?? '촬영 장비',
                   code: '',
@@ -1110,7 +1286,7 @@
                   endDate: it.returnDate,
                   pickupMethod: DELIVERY_LABELS[it.opts.rentalMethod] ?? it.opts.rentalMethod,
                   returnMethod: DELIVERY_LABELS[it.opts.returnMethod] ?? it.opts.returnMethod,
-                  price: itemCardRate(line, it.durType) * Math.max(it.qty, 1),
+                  price: itemCardRate(line, it.durType) * Math.max(line?.qty ?? 1, 1),
                   options: (line?.options ?? []).map(o => ({ name: o.name, qty: o.qty })),
                 }
               })
@@ -1164,7 +1340,7 @@
 
 <!-- ═══════════════════════ SNIPPET COMPONENTS ═══════════════════════ -->
 
-{#snippet OrderCard(item: CartItemUiState, line: CartLineItem | undefined)}
+{#snippet OrderCard(item: CartItemUiState, line: CartLineGroup | undefined)}
   {#if !item.deleted}
     {@const rate24 = itemRate24h(line)}
     {@const rate12 = itemRate12h(line, rate24)}
@@ -1215,22 +1391,22 @@
             <div class="dual-price-row">
               <div class="price-unit">
                 <span class="price-unit-label">Day</span>
-                <span class="price-amount">{fmtKrw(rate24 * item.qty)}</span>
+                <span class="price-amount">{fmtKrw(rate24 * (line?.qty ?? 1))}</span>
                 <span class="price-currency">원</span>
               </div>
               <span class="price-sep">/</span>
               <div class="price-unit">
                 <span class="price-unit-label">12H</span>
-                <span class="price-amount">{fmtKrw(rate12 * item.qty)}</span>
+                <span class="price-amount">{fmtKrw(rate12 * (line?.qty ?? 1))}</span>
                 <span class="price-currency">원</span>
               </div>
             </div>
           </div>
           <div class="qty-wrap">
             <div class="qty-ctrl qty-ctrl--optstyle" role="group" aria-label="수량">
-              <button class="qty-arrow qty-arrow--optstyle" onclick={() => updateItem(item.id, { qty: Math.max(1, item.qty - 1) })} disabled={item.qty <= 1} aria-label="수량 감소">−</button>
-              <span class="qty-num qty-num--optstyle">{item.qty}</span>
-              <button class="qty-arrow qty-arrow--optstyle" onclick={() => updateItem(item.id, { qty: item.qty + 1 })} aria-label="수량 증가">+</button>
+              <button class="qty-arrow qty-arrow--optstyle" onclick={() => decrementGroupQty(line)} disabled={pendingQtyKey === item.id} aria-label="수량 감소">−</button>
+              <span class="qty-num qty-num--optstyle">{line?.qty ?? 1}</span>
+              <button class="qty-arrow qty-arrow--optstyle" onclick={() => incrementGroupQty(line)} disabled={pendingQtyKey === item.id} aria-label="수량 증가">+</button>
             </div>
           </div>
           </div>
@@ -1258,11 +1434,13 @@
                         <span class="price-amount">{fmtKrw(opt.unitPrice * opt.qty)}</span>
                         <span class="price-currency">원</span>
                       </div>
-                      <span class="price-sep">/</span>
-                      <div class="price-unit">
-                        <span class="price-unit-label">12H</span>
-                        <span class="price-amount">{fmtKrw(opt.unitPrice * opt.qty)}</span>
-                        <span class="price-currency">원</span>
+                      <div class="price-unit-group">
+                        <span class="price-sep">/</span>
+                        <div class="price-unit">
+                          <span class="price-unit-label">12H</span>
+                          <span class="price-amount">{fmtKrw(opt.unitPrice * opt.qty)}</span>
+                          <span class="price-currency">원</span>
+                        </div>
                       </div>
                     </div>
                     <div class="opt-qty-ctrl">
@@ -1282,7 +1460,7 @@
   {/if}
 {/snippet}
 
-{#snippet ItemListCard(item: CartItemUiState, line: CartLineItem | undefined)}
+{#snippet ItemListCard(item: CartItemUiState, line: CartLineGroup | undefined)}
   {@const rate24 = itemRate24h(line)}
   {@const rate12 = itemRate12h(line, rate24)}
   <div class="item-card" class:selected={item.checked} role="listitem">
@@ -1317,22 +1495,22 @@
             <div class="dual-price-row">
               <div class="price-unit">
                 <span class="price-unit-label">Day</span>
-                <span class="price-amount">{fmtKrw(rate24 * item.qty)}</span>
+                <span class="price-amount">{fmtKrw(rate24 * (line?.qty ?? 1))}</span>
                 <span class="price-currency">원</span>
               </div>
               <span class="price-sep">/</span>
               <div class="price-unit">
                 <span class="price-unit-label">12H</span>
-                <span class="price-amount">{fmtKrw(rate12 * item.qty)}</span>
+                <span class="price-amount">{fmtKrw(rate12 * (line?.qty ?? 1))}</span>
                 <span class="price-currency">원</span>
               </div>
             </div>
           </div>
           <div class="qty-wrap qty-wrap--sm">
             <div class="qty-ctrl qty-ctrl--optstyle" role="group" aria-label="수량">
-              <button class="qty-arrow qty-arrow--optstyle" onclick={(e) => { e.stopPropagation(); updateItem(item.id, { qty: Math.max(1, item.qty - 1) }) }} disabled={item.qty <= 1} aria-label="수량 감소">−</button>
-              <span class="qty-num qty-num--optstyle">{item.qty}</span>
-              <button class="qty-arrow qty-arrow--optstyle" onclick={(e) => { e.stopPropagation(); updateItem(item.id, { qty: item.qty + 1 }) }} aria-label="수량 증가">+</button>
+              <button class="qty-arrow qty-arrow--optstyle" onclick={(e) => { e.stopPropagation(); decrementGroupQty(line) }} disabled={pendingQtyKey === item.id} aria-label="수량 감소">−</button>
+              <span class="qty-num qty-num--optstyle">{line?.qty ?? 1}</span>
+              <button class="qty-arrow qty-arrow--optstyle" onclick={(e) => { e.stopPropagation(); incrementGroupQty(line) }} disabled={pendingQtyKey === item.id} aria-label="수량 증가">+</button>
             </div>
           </div>
         </div>
@@ -1358,11 +1536,13 @@
                       <span class="price-amount">{fmtKrw(opt.unitPrice * opt.qty)}</span>
                       <span class="price-currency">원</span>
                     </div>
-                    <span class="price-sep">/</span>
-                    <div class="price-unit">
-                      <span class="price-unit-label">12H</span>
-                      <span class="price-amount">{fmtKrw(opt.unitPrice * opt.qty)}</span>
-                      <span class="price-currency">원</span>
+                    <div class="price-unit-group">
+                      <span class="price-sep">/</span>
+                      <div class="price-unit">
+                        <span class="price-unit-label">12H</span>
+                        <span class="price-amount">{fmtKrw(opt.unitPrice * opt.qty)}</span>
+                        <span class="price-currency">원</span>
+                      </div>
                     </div>
                   </div>
                   <div class="opt-qty-ctrl">
@@ -1456,6 +1636,10 @@
   <!-- 배송(delivery/crazydelivery) 잠금 상태(요청 A) — 시간선택 숨김 + 반납leg 콤보 잠금 기준 -->
   {@const locked = isDeliveryLocked(props.method)}
   {@const returnComboLocked = props.type === 'return' && locked}
+  <!-- 대여 제한옵션 "반납 배송선택 제한"(CMS) — ON이면 수령·반납 콤보 양쪽 모두에서 배송
+       방식 제외(2026-08-28 정정 — 반납에서만 제외하면 위 요청 A 강제고정과 충돌해 UI
+       데드엔드 발생, restrictedDeliveryTabs 정의부 주석 참고) -->
+  {@const visibleTabs = sdShippingSettings?.restrict_return_delivery ? restrictedDeliveryTabs : deliveryTabs}
 
 
   <div class="rental-form">
@@ -1465,7 +1649,7 @@
       <div class="form-section-body">
         <!-- DB rental_method_options → 콤보 버튼 -->
         <div class="delivery-combo">
-          {#each deliveryTabs as tab}
+          {#each visibleTabs as tab}
             <button
               class="combo-btn"
               class:combo-btn-active={props.method === tab.v}
@@ -1479,7 +1663,7 @@
           {/each}
         </div>
         <!-- 선택된 방식 마감 정보 -->
-        {#each deliveryTabs.filter(t => t.v === props.method) as tab}
+        {#each visibleTabs.filter(t => t.v === props.method) as tab}
           {#if tab.deadline}<p class="delivery-deadline">{tab.deadline}</p>{/if}
         {/each}
         <!-- Date/Time buttons + Calendar -->
@@ -2230,9 +2414,13 @@
      옵션 카드 쪽이 좁게 유지 */
   /* 2026-08-24: 좁은 화면에서 option-subcard-bottom(가격+수량 한 행)이 빠듯할 때, 이 내부
      dual-price-row 자체가 먼저 wrap되어 "Day 23,000원 /"가 어색하게 줄바꿈되던 결함 —
-     가격 블록은 항상 한 줄로 유지하고, 대신 바깥 option-subcard-bottom(flex-wrap:wrap)이
-     가격 블록 전체 vs 수량 컨트롤 단위로 줄바꿈하도록 역할 분리 */
-  .dual-price-row--opt { gap: 6px; flex-wrap: nowrap; }
+     당시엔 nowrap으로 막고 폰트만 축소했으나, 2026-08-26 재발(카드 우측 밖으로 실제 overflow,
+     컬럼 폭이 그 사이 144.6px까지 더 좁아져 폰트를 8px대까지 낮춰야 겨우 맞는 수준이라
+     가독성 훼손 없이는 더 축소 불가) — "/"를 두 번째 price-unit과 하나의 그룹
+     (.price-unit-group)으로 묶어 wrap을 다시 허용, wrap 시 "/"가 줄 끝에 혼자 남지 않고
+     두 번째 값과 함께 다음 줄로 내려가도록 구조 변경 */
+  .dual-price-row--opt { gap: 6px; flex-wrap: wrap; }
+  .price-unit-group { display: flex; align-items: center; gap: 6px; }
   /* 2026-08-25: 위 전역 .price-amount(모바일 14px)/.price-unit-label·.price-currency(12px)가
      옵션카드의 좁은 컬럼 폭(~190px)엔 너무 커서, nowrap인 이 가격 행이 카드 우측 밖으로
      밀려나가던 결함(실측: 컬럼 191px인데 행 자체 폭 212.6px) — 옵션카드 전용으로만 한 단계

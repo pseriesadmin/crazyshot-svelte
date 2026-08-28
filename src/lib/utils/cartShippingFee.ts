@@ -55,3 +55,47 @@ export function calcReturnFee(settings: ShippingSettings | null, items: Shipping
 
   return settings.return_fee ?? 0
 }
+
+// 배송료 우대설정 — CMS에서 등록한 "대여금액 임계값 + 조건" 조합(최대 3개)이 만족되면
+// 배송비(왕복+배송+반납 합계)에 할인율을 적용한다(Stephen 확정, 2026-08-29).
+//
+// 확정된 판정 규칙:
+//   - 대여금액 기준: 장바구니 전체 대여금액 합계(otSubtotal) >= min_rental_amount
+//   - 조건 판정 범위: 체크된 카트 항목 중 하나라도(OR) 조건을 만족하면 매칭
+//   - 다중 매칭: 다수 조합이 동시에 만족되면 가장 유리한(할인율 큰) 조합 1개만 적용(스태킹 없음)
+
+export interface DeliveryFeeDiscountTier {
+  min_rental_amount: number
+  condition_type: 'long_term_rental' | 'sale_only_purchase'
+  discount_rate: number // 0 | 0.5 | 1
+}
+
+export interface DiscountConditionItem {
+  rentalDays: number
+  saleOnlyPurchase: boolean
+}
+
+/**
+ * otSubtotal 기준 임계값을 충족하고, 체크된 아이템 중 최소 1개가 그 조합의 조건을 만족하는
+ * 조합들 중 가장 유리한(할인율 최대) 단일 할인율을 반환한다. 매칭되는 조합이 없으면 0.
+ */
+export function calcShippingDiscountRate(
+  tiers: DeliveryFeeDiscountTier[],
+  otSubtotal: number,
+  items: DiscountConditionItem[],
+): number {
+  if (!tiers.length || items.length === 0) return 0
+
+  const anyLongTerm = items.some((it) => it.rentalDays >= 3)
+  const anySaleOnly = items.some((it) => it.saleOnlyPurchase)
+
+  let best = 0
+  for (const tier of tiers) {
+    if (otSubtotal < tier.min_rental_amount) continue
+    const conditionMet =
+      (tier.condition_type === 'long_term_rental' && anyLongTerm) ||
+      (tier.condition_type === 'sale_only_purchase' && anySaleOnly)
+    if (conditionMet && tier.discount_rate > best) best = tier.discount_rate
+  }
+  return best
+}

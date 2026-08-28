@@ -303,3 +303,74 @@ export async function createMultiUnitReservation(
 
 	return { success: true, reservationIds: created, errorMessage: null };
 }
+
+/**
+ * 장바구니 동일 부모상품 중복담기 병합 (2026-08-28)
+ * 상품상세에서 같은 부모상품을 두 번째 담을 때, 기존에 카트에 있는 예약과 병합하기 위한
+ * 순수 헬퍼 2개. DB 조회 자체는 find_matching_cart_reservation_group RPC가 담당하고,
+ * 이 함수들은 그 결과를 가공하는 순수 로직만 갖는다.
+ */
+
+export interface ParentResolvableProduct {
+	id: string;
+	parent_product_id?: string | null;
+}
+
+/** hold 행은 product_id가 배정된 자식(재고단위) UUID, draft 행은 부모 UUID 그대로 —
+ *  항상 이 함수로 부모 id를 해석해야 병합 키가 일관된다. */
+export function resolveParentProductId(product: ParentResolvableProduct | null | undefined): string | null {
+	if (!product) return null;
+	return product.parent_product_id ?? product.id;
+}
+
+export interface ReservationOptionInput {
+	option_product_id: string | null;
+	option_name: string;
+	qty: number;
+	unit_price: number;
+}
+
+/**
+ * 기존(existing) 옵션 목록에 새로 선택한(incoming) 옵션을 병합한다.
+ * - option_product_id가 같으면 qty를 합산하고 이름/단가는 incoming 값으로 갱신(최신 제출값 우선)
+ * - incoming에만 있는 옵션은 새로 추가, existing에만 있는 옵션은 그대로 보존
+ * - option_product_id가 null인 항목은 병합 대상에서 제외하고 항상 별도 유지(중복 판단 불가)
+ */
+export function mergeReservationOptions(
+	existing: ReservationOptionInput[],
+	incoming: ReservationOptionInput[]
+): ReservationOptionInput[] {
+	const merged: ReservationOptionInput[] = [];
+	const indexByProductId = new Map<string, number>();
+
+	for (const opt of existing) {
+		if (opt.option_product_id == null) {
+			merged.push({ ...opt });
+			continue;
+		}
+		indexByProductId.set(opt.option_product_id, merged.length);
+		merged.push({ ...opt });
+	}
+
+	for (const opt of incoming) {
+		if (opt.option_product_id == null) {
+			merged.push({ ...opt });
+			continue;
+		}
+		const idx = indexByProductId.get(opt.option_product_id);
+		if (idx == null) {
+			indexByProductId.set(opt.option_product_id, merged.length);
+			merged.push({ ...opt });
+		} else {
+			const prev = merged[idx];
+			merged[idx] = {
+				option_product_id: opt.option_product_id,
+				option_name: opt.option_name,
+				qty: prev.qty + opt.qty,
+				unit_price: opt.unit_price
+			};
+		}
+	}
+
+	return merged;
+}
