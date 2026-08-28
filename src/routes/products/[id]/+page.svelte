@@ -11,7 +11,10 @@
   import {
     clampReservationQty,
     createMultiUnitReservation,
+    resolveParentProductId,
+    mergeReservationOptions,
     type UnitReservationResult,
+    type ReservationOptionInput,
   } from '$lib/services/reservationHelper';
   import { isRealMemberSession } from '$lib/utils/authGuard';
   import SignUpModal from '$lib/components/auth/SignUpModal.svelte';
@@ -415,6 +418,29 @@
         }).catch(() => {});
       };
 
+      // 동일 부모상품 중복담기 병합(2026-08-28, Stephen GATE B 승인) — 이미 카트(hold/draft)에
+      // 이 부모상품이 있는지 조회한다. hold는 날짜까지 완전히 같아야 매치, draft는 부모만 같으면
+      // 매치(날짜가 아직 없으므로). 매치되면 새로 담는 옵션은 기존 그룹의 canonical 예약에
+      // 합산 반영되고, 새로 생성되는 예약행들은 기존 그룹의 방식/기간과 함께 병합된다.
+      type FindGroupRpcFn = (name: string, args: Record<string, unknown>) => Promise<{
+        data: Array<{
+          canonical_reservation_id: number;
+          member_reservation_ids: number[];
+          existing_options: ReservationOptionInput[] | null;
+        }> | null;
+        error: unknown;
+      }>;
+      const parentProductId = resolveParentProductId(product);
+      const { data: groupRows } = await (supabase.rpc as unknown as FindGroupRpcFn)(
+        'find_matching_cart_reservation_group',
+        {
+          p_product_id: parentProductId,
+          p_start_date: e.startDate || null,
+          p_end_date:   e.startDate ? (e.endDate || e.startDate) : null,
+        }
+      );
+      const existingGroup = groupRows?.[0] ?? null;
+
       if (!e.startDate) {
         // ── draft 경로 (날짜 없는 임시예약 — 체크아웃에서 날짜 입력 후 promote_draft_reservation로 승격)
         type DraftRpcFn = (name: string, args: Record<string, unknown>) => Promise<{
@@ -439,18 +465,20 @@
           return;
         }
 
-        // 옵션상품 + 수량 저장 (draft 상태에서도 가능 — DB-4) — 첫 예약에만 귀속(중복과금 방지,
-        // reservation_options.reservation_id는 1건 FK)
+        // 옵션상품 + 수량 저장 (draft 상태에서도 가능 — DB-4) — 기존에 카트에 이미 이 부모상품이
+        // 있으면(existingGroup) 그 canonical 예약에 옵션을 병합(합산) 반영하고, 없으면 이번
+        // 제출의 첫 예약에 귀속(중복과금 방지, reservation_options.reservation_id는 1건 FK)
         // set_reservation_duration / set_reservation_shipment_method는 날짜 없어 의미 없음 — 체크아웃 승격(FE-4) 시점에 호출
-        const firstReservationId = outcome.reservationIds[0];
+        const targetCanonicalId = existingGroup?.canonical_reservation_id ?? outcome.reservationIds[0];
         const selectedOptions = optionItems
           .filter((o) => o.qty > 0)
           .map((o) => ({ option_product_id: o.id, option_name: o.label, qty: o.qty, unit_price: o.price }));
-        if (selectedOptions.length > 0 && firstReservationId != null) {
+        const mergedOptions = mergeReservationOptions(existingGroup?.existing_options ?? [], selectedOptions);
+        if (mergedOptions.length > 0 && targetCanonicalId != null) {
           type OptionsRpcFn = (name: string, args: Record<string, unknown>) => Promise<{ error: unknown }>;
           const { error: optionsError } = await (supabase.rpc as unknown as OptionsRpcFn)('set_reservation_options', {
-            p_reservation_id: firstReservationId,
-            p_options:        selectedOptions,
+            p_reservation_id: targetCanonicalId,
+            p_options:        mergedOptions,
           });
           if (optionsError) {
             console.error('[products/[id]] set_reservation_options (draft) 저장 실패:', optionsError);
@@ -497,13 +525,32 @@
         const selectedOptions = optionItems
           .filter((o) => o.qty > 0)
           .map((o) => ({ option_product_id: o.id, option_name: o.label, qty: o.qty, unit_price: o.price }));
+        // 기존 카트에 이미 이 부모상품+같은 날짜의 hold 그룹이 있으면(existingGroup) 옵션은
+        // 그 canonical 예약에 병합(합산) 반영 — 없으면 이번 제출의 첫 예약에 귀속(기존 동작)
+        const targetCanonicalId = existingGroup?.canonical_reservation_id ?? outcome.reservationIds[0];
+        const mergedOptions = mergeReservationOptions(existingGroup?.existing_options ?? [], selectedOptions);
 
         type ShipRpcFn = (name: string, args: Record<string, unknown>) => Promise<{ error: unknown }>;
         type DurationRpcFn = (name: string, args: Record<string, unknown>) => Promise<{ error: unknown }>;
         type OptionsRpcFn = (name: string, args: Record<string, unknown>) => Promise<{ error: unknown }>;
 
-        // N건(qty) 각각에 반출·반납 시각/요금구간 적용. 옵션상품은 첫 건에만 귀속(중복과금 방지).
-        for (const [index, reservationId] of outcome.reservationIds.entries()) {
+        if (mergedOptions.length > 0) {
+          const { error: optionsError } = await (supabase.rpc as unknown as OptionsRpcFn)('set_reservation_options', {
+            p_reservation_id: targetCanonicalId,
+            p_options:        mergedOptions,
+          });
+          if (optionsError) {
+            console.error('[products/[id]] set_reservation_options 저장 실패:', optionsError);
+            showToast('선택한 옵션상품 저장에 실패했습니다. 체크아웃에서 다시 확인해 주세요.');
+          }
+        }
+
+        // 방식/기간유형은 그룹 전체(기존 멤버 + 이번에 새로 생성된 예약)에 동일하게 적용 —
+        // 최신 제출값이 그룹 전체에 반영된다(orders.selected_coupon_id/points의 "최신값 우선"과
+        // 동일 원칙). 옵션은 위에서 이미 canonical 1건에만 병합 반영했으므로 이 루프에서는 제외.
+        const allMemberIds = [...(existingGroup?.member_reservation_ids ?? []), ...outcome.reservationIds];
+        const newlyCreatedIds = new Set(outcome.reservationIds);
+        for (const reservationId of allMemberIds) {
           // A-2: 반출·반납 시각 저장 (Migration 147 set_reservation_shipment_method)
           const { error: shipError } = await (supabase.rpc as unknown as ShipRpcFn)('set_reservation_shipment_method', {
             p_reservation_id: reservationId,
@@ -526,24 +573,15 @@
             showToast('대여기간 정보 저장에 실패했습니다. 체크아웃에서 다시 확인해 주세요.');
           }
 
-          // 옵션상품 + 수량 저장 (Migration 176 reservation_options) — 첫 예약에만 귀속
-          if (index === 0 && selectedOptions.length > 0) {
-            const { error: optionsError } = await (supabase.rpc as unknown as OptionsRpcFn)('set_reservation_options', {
-              p_reservation_id: reservationId,
-              p_options:        selectedOptions,
-            });
-            if (optionsError) {
-              console.error('[products/[id]] set_reservation_options 저장 실패:', optionsError);
-              showToast('선택한 옵션상품 저장에 실패했습니다. 체크아웃에서 다시 확인해 주세요.');
-            }
+          // 예약신청(hold) 채팅 알림 발송 — fire-and-forget. 기존 그룹 멤버는 담을 당시 이미
+          // 알림을 받았으므로 이번에 새로 생성된 예약에만 발송.
+          if (newlyCreatedIds.has(reservationId)) {
+            fetch('/api/checkout/notify-hold', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ reservationId }),
+            }).catch(() => {})
           }
-
-          // 예약신청(hold) 채팅 알림 발송 — fire-and-forget
-          fetch('/api/checkout/notify-hold', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ reservationId }),
-          }).catch(() => {})
         }
         goto('/cart');
       }

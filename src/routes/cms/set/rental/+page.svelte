@@ -6,7 +6,7 @@
   import CmsDragList from '$lib/components/cms/CmsDragList.svelte'
   import CmsDeleteButton from '$lib/components/cms/CmsDeleteButton.svelte'
   import type { PageData, ActionData } from './$types'
-  import type { RentalPeriodOption, RentalMethodOption, PickupPoint, RentalConsentItem, RentalShippingSettings, PublicHolidayRow } from './+page.server'
+  import type { RentalPeriodOption, RentalMethodOption, PickupPoint, RentalConsentItem, RentalShippingSettings, PublicHolidayRow, DeliveryFeeDiscountTier } from './+page.server'
 
   interface Props {
     data: PageData
@@ -87,6 +87,8 @@
   let enableReturn     = $state(data.shippingSettings?.enable_return       ?? false)
   let returnFee        = $state<number | ''>(data.shippingSettings?.return_fee       ?? '')
   let shippingGuide    = $state(data.shippingSettings?.shipping_guide      ?? '')
+  let restrictReturnDelivery = $state(data.shippingSettings?.restrict_return_delivery ?? false)
+  let restrictReturnDeliveryLoading = $state(false)
   let shippingLoading  = $state(false)
   let shippingFormEl = $state<HTMLFormElement | undefined>(undefined)
   let shippingGuideCount = $derived(shippingGuide.length)
@@ -114,6 +116,7 @@
     enableReturn    = data.shippingSettings?.enable_return       ?? false
     returnFee       = data.shippingSettings?.return_fee          ?? ''
     shippingGuide   = data.shippingSettings?.shipping_guide      ?? ''
+    restrictReturnDelivery = data.shippingSettings?.restrict_return_delivery ?? false
   })
 
   // ─── 택배 휴무일 캘린더 제어 ───
@@ -151,6 +154,30 @@
   let consentCharCount = $derived(consentInput.length)
 
   $effect(() => { consents = data.consents })
+
+  // ─── 배송료 우대설정 (최대 3개) ───
+  let discountTiers = $state<DeliveryFeeDiscountTier[]>(data.discountTiers)
+  let tierAmount = $state<number | ''>('')
+  let tierCondition = $state<'' | 'long_term_rental' | 'sale_only_purchase'>('')
+  let tierDiscount = $state<'' | 'free' | 'half' | 'base'>('')
+  let tierLoading = $state(false)
+
+  const TIER_CONDITION_OPTIONS = [
+    { value: 'long_term_rental', label: '3일이상 장기대여' },
+    { value: 'sale_only_purchase', label: '판매상품 구매' },
+  ] as const satisfies { value: 'long_term_rental' | 'sale_only_purchase'; label: string }[]
+  const TIER_DISCOUNT_OPTIONS = [
+    { value: 'free', label: '무료' },
+    { value: 'half', label: '50% 할인' },
+    { value: 'base', label: '기본왕복배송요금' },
+  ] as const satisfies { value: 'free' | 'half' | 'base'; label: string }[]
+  const TIER_CONDITION_LABELS: Record<string, string> = {
+    long_term_rental: '3일이상 장기대여',
+    sale_only_purchase: '판매상품 구매',
+  }
+  const TIER_DISCOUNT_LABELS: Record<number, string> = { 1: '무료', 0.5: '50% 할인', 0: '기본왕복배송요금' }
+
+  $effect(() => { discountTiers = data.discountTiers })
 
   // ─── 드래그 후 순서 저장 헬퍼 ───
   async function savePeriodOrder(): Promise<void> {
@@ -490,6 +517,8 @@
         </div>
       </form>
 
+      <!-- 대여옵션 일괄적용·제한·휴무일 제어 옵션 통합 레이아웃 -->
+      <div class="rental-restriction-group">
       <!-- 배송대여 수령/반납 일괄 지정 — /cart에서 선택 시 반납방식 강제고정+시간선택 비활성화(요청 A) -->
       <div class="subsection bulk-delivery-section">
         <div class="sf-row">
@@ -520,6 +549,142 @@
         </div>
         {#if methods.length === 0}
           <p class="empty-hint">등록된 대여 방식이 없습니다. "대여 방식 옵션" 섹션에서 먼저 등록해주세요.</p>
+        {/if}
+      </div>
+
+      <!-- 대여 제한옵션 — /cart 반납 설정에서 '배송' 반납방식 노출 여부 전역 제한 -->
+      <div class="subsection bulk-delivery-section">
+        <div class="sf-row">
+          <span class="sf-label">대여옵션 제한</span>
+          <div class="shipping-chips">
+            <form
+              method="POST"
+              action="?/toggleReturnDeliveryRestriction"
+              class="chip-form"
+              use:enhance={() => {
+                restrictReturnDeliveryLoading = true
+                return async ({ result, update }) => {
+                  restrictReturnDeliveryLoading = false
+                  if (result.type === 'success') {
+                    await update()
+                  } else if (result.type === 'failure') {
+                    csToast.error((result.data as { error?: string })?.error ?? '변경에 실패했습니다.')
+                  }
+                }
+              }}
+            >
+              <button type="submit" class="s-chip" class:s-chip--on={restrictReturnDelivery} disabled={restrictReturnDeliveryLoading}>
+                반납 배송선택 제한
+              </button>
+            </form>
+          </div>
+        </div>
+      </div>
+
+      <!-- 배송료 우대설정 — 대여금액+조건 만족 시 배송비(왕복+배송+반납 합계)를 할인해주는
+           조합 규칙(최대 3개). 여러 조합이 동시 매칭되면 가장 유리한(할인율 큰) 조합 1개만
+           자동 적용(스태킹 없음), 대여금액은 장바구니 전체 합계(otSubtotal) 기준. -->
+      <div class="subsection bulk-delivery-section">
+        <div class="sf-row">
+          <span class="sf-label">배송료 우대설정</span>
+          <span class="section-badge">{discountTiers.length} / 3</span>
+        </div>
+
+        <form
+          method="POST"
+          action="?/addDiscountTier"
+          class="add-form add-form--method"
+          use:enhance={({ formData, cancel }) => {
+            if (tierAmount === '') { csToast.error('대여금액을 입력하세요.'); cancel(); return }
+            if (!tierCondition) { csToast.error('조건을 선택하세요.'); cancel(); return }
+            if (!tierDiscount) { csToast.error('우대옵션을 선택하세요.'); cancel(); return }
+            formData.set('count', String(discountTiers.length))
+            tierLoading = true
+            return async ({ result, update }) => {
+              tierLoading = false
+              if (result.type === 'success') {
+                tierAmount = ''
+                tierCondition = ''
+                tierDiscount = ''
+                csToast.success('배송료 우대설정이 추가되었습니다.')
+                await update()
+              } else if (result.type === 'failure') {
+                csToast.error((result.data as { error?: string })?.error ?? '추가에 실패했습니다.')
+              }
+            }
+          }}
+        >
+          <input type="hidden" name="min_rental_amount" value={tierAmount} />
+          <input type="hidden" name="condition_type" value={tierCondition} />
+          <input type="hidden" name="discount_rate" value={tierDiscount} />
+
+          <div class="fee-input-wrap">
+            <input
+              type="text"
+              inputmode="numeric"
+              class="add-input fee-input"
+              value={tierAmount === '' ? '' : tierAmount.toLocaleString('ko-KR')}
+              placeholder="0"
+              aria-label="대여금액"
+              disabled={tierLoading}
+              oninput={(e) => {
+                const digits = e.currentTarget.value.replace(/[^0-9]/g, '')
+                tierAmount = digits ? parseInt(digits, 10) : ''
+              }}
+            />
+            <span class="fee-unit">원 이상</span>
+          </div>
+
+          <div class="mk-select-row">
+            <span class="mk-select-label">조건</span>
+            <div class="mk-chips">
+              {#each TIER_CONDITION_OPTIONS as opt}
+                <button
+                  type="button"
+                  class="mk-chip"
+                  class:mk-chip--on={tierCondition === opt.value}
+                  onclick={() => { tierCondition = tierCondition === opt.value ? '' : opt.value }}
+                >{opt.label}</button>
+              {/each}
+            </div>
+          </div>
+
+          <div class="mk-select-row">
+            <span class="mk-select-label">우대옵션</span>
+            <div class="mk-chips">
+              {#each TIER_DISCOUNT_OPTIONS as opt}
+                <button
+                  type="button"
+                  class="mk-chip"
+                  class:mk-chip--on={tierDiscount === opt.value}
+                  onclick={() => { tierDiscount = tierDiscount === opt.value ? '' : opt.value }}
+                >{opt.label}</button>
+              {/each}
+            </div>
+          </div>
+
+          <button
+            type="submit"
+            class="btn-add"
+            disabled={tierLoading || discountTiers.length >= 3}
+          >
+            {tierLoading ? '추가 중...' : '추가'}
+          </button>
+        </form>
+
+        {#if discountTiers.length > 0}
+          <div class="drag-list-wrap">
+            {#each discountTiers as tier (tier.id)}
+              <div class="list-row">
+                <span class="mk-badge">{tier.min_rental_amount.toLocaleString('ko-KR')}원 이상</span>
+                <span class="list-row-name">{TIER_CONDITION_LABELS[tier.condition_type]}</span>
+                <span class="mk-badge mk-badge--shipping">{TIER_DISCOUNT_LABELS[tier.discount_rate]}</span>
+                <CmsDeleteButton action="?/deleteDiscountTier" id={tier.id} successMessage="배송료 우대설정이 삭제되었습니다." />
+              </div>
+            {/each}
+          </div>
+        {:else}
+          <p class="empty-hint">등록된 배송료 우대설정이 없습니다.</p>
         {/if}
       </div>
 
@@ -685,6 +850,7 @@
             <p class="empty-hint">등록된 임시 휴무일이 없습니다.</p>
           {/if}
         </div>
+      </div>
       </div>
     </section>
 

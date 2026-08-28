@@ -12,7 +12,10 @@ import {
 	clampReservationQty,
 	createMultiUnitReservation,
 	MAX_RESERVATION_QTY,
-	type UnitReservationResult
+	resolveParentProductId,
+	mergeReservationOptions,
+	type UnitReservationResult,
+	type ReservationOptionInput
 } from '$lib/services/reservationHelper';
 
 /**
@@ -410,5 +413,70 @@ describe('다중예약 오케스트레이션: createMultiUnitReservation', () =>
 		await createMultiUnitReservation(999, { createUnit, cancelUnit });
 
 		expect(createUnit).toHaveBeenCalledTimes(MAX_RESERVATION_QTY);
+	});
+});
+
+describe('부모상품ID 해석: resolveParentProductId (2026-08-28 카트 병합)', () => {
+	it('자식(재고단위) 상품 — parent_product_id가 있으면 그 값을 반환', () => {
+		expect(resolveParentProductId({ id: 'child-1', parent_product_id: 'parent-1' })).toBe('parent-1');
+	});
+
+	it('부모 상품(draft 행에 저장되는 값) — parent_product_id가 null/undefined면 자기 자신 id 반환', () => {
+		expect(resolveParentProductId({ id: 'parent-1', parent_product_id: null })).toBe('parent-1');
+		expect(resolveParentProductId({ id: 'parent-1' })).toBe('parent-1');
+	});
+
+	it('product가 null/undefined면 null 반환(안전 저하 — 단독 그룹 처리용)', () => {
+		expect(resolveParentProductId(null)).toBeNull();
+		expect(resolveParentProductId(undefined)).toBeNull();
+	});
+});
+
+describe('옵션 병합: mergeReservationOptions (2026-08-28 카트 병합)', () => {
+	function opt(overrides: Partial<ReservationOptionInput>): ReservationOptionInput {
+		return { option_product_id: 'opt-1', option_name: '옵션', qty: 1, unit_price: 1000, ...overrides };
+	}
+
+	it('같은 option_product_id — qty를 합산하고 이름/단가는 incoming(최신 제출) 값으로 갱신', () => {
+		const existing = [opt({ option_product_id: 'opt-1', option_name: '메모리카드', qty: 2, unit_price: 5000 })];
+		const incoming = [opt({ option_product_id: 'opt-1', option_name: '메모리카드(대용량)', qty: 3, unit_price: 6000 })];
+
+		const merged = mergeReservationOptions(existing, incoming);
+
+		expect(merged).toEqual([
+			{ option_product_id: 'opt-1', option_name: '메모리카드(대용량)', qty: 5, unit_price: 6000 }
+		]);
+	});
+
+	it('incoming에만 있는 새 옵션은 추가되고, existing에만 있는 옵션은 그대로 보존', () => {
+		const existing = [opt({ option_product_id: 'opt-1', qty: 1 })];
+		const incoming = [opt({ option_product_id: 'opt-2', option_name: '삼각대', qty: 2, unit_price: 3000 })];
+
+		const merged = mergeReservationOptions(existing, incoming);
+
+		expect(merged).toEqual([
+			opt({ option_product_id: 'opt-1', qty: 1 }),
+			{ option_product_id: 'opt-2', option_name: '삼각대', qty: 2, unit_price: 3000 }
+		]);
+	});
+
+	it('option_product_id가 null인 항목은 병합 대상에서 제외 — 항상 별도로 유지(양쪽 다 보존)', () => {
+		const existing = [opt({ option_product_id: null, option_name: '자유입력옵션A' })];
+		const incoming = [opt({ option_product_id: null, option_name: '자유입력옵션B' })];
+
+		const merged = mergeReservationOptions(existing, incoming);
+
+		expect(merged).toHaveLength(2);
+		expect(merged.map((m) => m.option_name)).toEqual(['자유입력옵션A', '자유입력옵션B']);
+	});
+
+	it('existing이 빈 배열이면 incoming 그대로 반환', () => {
+		const incoming = [opt({ option_product_id: 'opt-1' })];
+		expect(mergeReservationOptions([], incoming)).toEqual(incoming);
+	});
+
+	it('incoming이 빈 배열이면 existing 그대로 반환(옵션 없이 재담기해도 기존 옵션 유지)', () => {
+		const existing = [opt({ option_product_id: 'opt-1' })];
+		expect(mergeReservationOptions(existing, [])).toEqual(existing);
 	});
 });

@@ -10,7 +10,7 @@
  */
 
 import { describe, it, expect } from 'vitest'
-import { calcRoundTripFee, calcReturnFee } from '$lib/utils/cartShippingFee'
+import { calcRoundTripFee, calcReturnFee, calcShippingDiscountRate, type DeliveryFeeDiscountTier, type DiscountConditionItem } from '$lib/utils/cartShippingFee'
 
 // ── 테스트용 기본 배송 설정 ───────────────────────────────────────────────────
 const SHIPPING_ON = {
@@ -135,5 +135,98 @@ describe('calcReturnFee — 반납요금 카트 1회 부과', () => {
     expect(calcRoundTripFee(SHIPPING_ON, [item])).toBe(0)
     // 반납 플래그 true → 반납요금 2000
     expect(calcReturnFee(SHIPPING_ON, [item])).toBe(2000)
+  })
+})
+
+// ════════════════════════════════════════════════════════════════════
+// calcShippingDiscountRate — 배송료 우대설정(대여금액+조건 만족 시 배송비 할인)
+// (TASK.md "배송료 우대설정" 2026-08-29 Stephen 확정: 적용대상=배송비 전체합계,
+//  다중매칭=최유리 1개만 적용, 조건판정=체크된 항목 OR, 금액기준=otSubtotal)
+// ════════════════════════════════════════════════════════════════════
+function makeTier(opts: {
+  min_rental_amount: number
+  condition_type: 'long_term_rental' | 'sale_only_purchase'
+  discount_rate: number
+}): DeliveryFeeDiscountTier {
+  return { ...opts }
+}
+
+function makeDiscountItem(opts: { rentalDays?: number; saleOnlyPurchase?: boolean }): DiscountConditionItem {
+  return {
+    rentalDays: opts.rentalDays ?? 1,
+    saleOnlyPurchase: opts.saleOnlyPurchase ?? false,
+  }
+}
+
+describe('calcShippingDiscountRate — 배송료 우대설정 최유리 조합 판정', () => {
+  it('등록된 조합 0개 → 0', () => {
+    const items = [makeDiscountItem({ rentalDays: 5 })]
+    expect(calcShippingDiscountRate([], 100000, items)).toBe(0)
+  })
+
+  it('otSubtotal이 임계값 미만 → 0', () => {
+    const tiers = [makeTier({ min_rental_amount: 100000, condition_type: 'long_term_rental', discount_rate: 1 })]
+    const items = [makeDiscountItem({ rentalDays: 5 })]
+    expect(calcShippingDiscountRate(tiers, 99999, items)).toBe(0)
+  })
+
+  it('otSubtotal이 임계값과 정확히 같음(>=) → 매칭(포함)', () => {
+    const tiers = [makeTier({ min_rental_amount: 100000, condition_type: 'long_term_rental', discount_rate: 1 })]
+    const items = [makeDiscountItem({ rentalDays: 5 })]
+    expect(calcShippingDiscountRate(tiers, 100000, items)).toBe(1)
+  })
+
+  it('장기대여 조건 — 체크된 항목 중 1개만 3일 이상이어도(OR) 매칭', () => {
+    const tiers = [makeTier({ min_rental_amount: 0, condition_type: 'long_term_rental', discount_rate: 0.5 })]
+    const items = [makeDiscountItem({ rentalDays: 1 }), makeDiscountItem({ rentalDays: 3 })]
+    expect(calcShippingDiscountRate(tiers, 0, items)).toBe(0.5)
+  })
+
+  it('장기대여 조건 — 모든 항목이 2일 이하면 미적용', () => {
+    const tiers = [makeTier({ min_rental_amount: 0, condition_type: 'long_term_rental', discount_rate: 0.5 })]
+    const items = [makeDiscountItem({ rentalDays: 1 }), makeDiscountItem({ rentalDays: 2 })]
+    expect(calcShippingDiscountRate(tiers, 0, items)).toBe(0)
+  })
+
+  it('판매상품구매 조건 — 체크된 항목 중 1개만 판매상품이어도(OR) 매칭', () => {
+    const tiers = [makeTier({ min_rental_amount: 0, condition_type: 'sale_only_purchase', discount_rate: 1 })]
+    const items = [makeDiscountItem({}), makeDiscountItem({ saleOnlyPurchase: true })]
+    expect(calcShippingDiscountRate(tiers, 0, items)).toBe(1)
+  })
+
+  it('조건 타입 불일치 — 장기대여 룰만 있는데 판매상품만 체크됨 → 미적용', () => {
+    const tiers = [makeTier({ min_rental_amount: 0, condition_type: 'long_term_rental', discount_rate: 1 })]
+    const items = [makeDiscountItem({ rentalDays: 1, saleOnlyPurchase: true })]
+    expect(calcShippingDiscountRate(tiers, 0, items)).toBe(0)
+  })
+
+  it('여러 조합 동시 매칭 → 최대 할인율(무료) 우선 적용, 스태킹 없음', () => {
+    const tiers = [
+      makeTier({ min_rental_amount: 0, condition_type: 'long_term_rental', discount_rate: 0.5 }),
+      makeTier({ min_rental_amount: 0, condition_type: 'long_term_rental', discount_rate: 1 }),
+      makeTier({ min_rental_amount: 0, condition_type: 'long_term_rental', discount_rate: 0 }),
+    ]
+    const items = [makeDiscountItem({ rentalDays: 5 })]
+    expect(calcShippingDiscountRate(tiers, 0, items)).toBe(1)
+  })
+
+  it('임계값을 넘는 조합만 후보에 포함 — 더 유리해도 임계값 미달이면 제외', () => {
+    const tiers = [
+      makeTier({ min_rental_amount: 50000, condition_type: 'long_term_rental', discount_rate: 0.5 }),
+      makeTier({ min_rental_amount: 500000, condition_type: 'long_term_rental', discount_rate: 1 }),
+    ]
+    const items = [makeDiscountItem({ rentalDays: 5 })]
+    expect(calcShippingDiscountRate(tiers, 100000, items)).toBe(0.5)
+  })
+
+  it('삭제/미체크 항목은 애초에 items 배열에서 제외되어 있어야 함(호출부 책임) — 빈 배열 → 0', () => {
+    const tiers = [makeTier({ min_rental_amount: 0, condition_type: 'long_term_rental', discount_rate: 1 })]
+    expect(calcShippingDiscountRate(tiers, 100000, [])).toBe(0)
+  })
+
+  it('기본왕복배송요금(할인율 0) 조합만 매칭 → 0 (다른 미매칭과 결과상 구분 안 되지만 로직상 정상)', () => {
+    const tiers = [makeTier({ min_rental_amount: 0, condition_type: 'sale_only_purchase', discount_rate: 0 })]
+    const items = [makeDiscountItem({ saleOnlyPurchase: true })]
+    expect(calcShippingDiscountRate(tiers, 0, items)).toBe(0)
   })
 })
