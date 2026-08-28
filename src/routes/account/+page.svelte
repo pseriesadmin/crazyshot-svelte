@@ -18,6 +18,7 @@
   import ProfileTabContent from '$lib/components/members/profile/ProfileTabContent.svelte'
   import AddressTabContent from '$lib/components/members/profile/AddressTabContent.svelte'
   import NotificationTabContent from '$lib/components/members/profile/NotificationTabContent.svelte'
+  import WithdrawalTabContent from '$lib/components/members/profile/WithdrawalTabContent.svelte'
   import PcRentalPanel from '$lib/components/account/PcRentalPanel.svelte'
   import PcCancelPanel from '$lib/components/account/PcCancelPanel.svelte'
   import PcInquiryPanel from '$lib/components/account/PcInquiryPanel.svelte'
@@ -62,13 +63,14 @@
     { label: '개인정보',    href: '/account/profile?tab=profile',      panel: 'profile' },
     { label: '기본 배송지', href: '/account/profile?tab=address',      panel: 'address' },
     { label: '알림설정',    href: '/account/profile?tab=notification',  panel: 'notification' },
+    { label: '탈회',        href: '/account/profile?tab=withdrawal',    panel: 'withdrawal' },
   ]
 
   /* PC 우측 패널 전환 — 'home': 기본 대시보드, 그 외: 내정보 서브섹션 */
   // /account/profile?tab=X (모바일 전용 라우트)는 PC(≥1024px) 진입 시 /account로 리다이렉트
   // 되는데(account/profile/+page.svelte), 그 리다이렉트가 ?tab= 값을 그대로 들고 오므로
   // 여기서도 초기값을 URL의 tab 파라미터로 맞춰야 PC에서도 같은 탭으로 랜딩한다.
-  const PC_TAB_PANELS = new Set(['coupon', 'log', 'review', 'profile', 'address', 'notification'])
+  const PC_TAB_PANELS = new Set(['coupon', 'log', 'review', 'profile', 'address', 'notification', 'withdrawal'])
   function getInitialPcSection(): string {
     const tab = $page.url.searchParams.get('tab')
     return tab && PC_TAB_PANELS.has(tab) ? tab : 'home'
@@ -330,6 +332,11 @@
               <NotificationTabContent
                 rentalAlert={data.profile?.allow_rental_alert ?? true}
                 benefitAlert={data.profile?.allow_benefit_alert ?? false}
+              />
+            {:else if activePcSection === 'withdrawal'}
+              <WithdrawalTabContent
+                profile={data.profile}
+                onswitchtab={(tab) => { activePcSection = tab }}
               />
             {/if}
           </div>
