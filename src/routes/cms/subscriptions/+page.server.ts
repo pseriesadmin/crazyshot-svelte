@@ -264,4 +264,26 @@ export const actions: Actions = {
     if (!data?.success) return fail(400, { error: '이미 품번 체계가 설정된 상품입니다' })
     return { ok: true }
   },
+
+  retrySubscriberCode: async ({ request, locals }) => {
+    const cmsRole = await getCmsRoleForAction(locals)
+    if (!hasSettingsAccess(cmsRole ?? '')) return fail(403, { error: '권한 없음' })
+
+    const formData = await request.formData()
+    const userSubscriptionId = Number(formData.get('user_subscription_id'))
+    const planId = Number(formData.get('plan_id'))
+    if (!userSubscriptionId || !planId) return fail(400, { error: '잘못된 요청' })
+
+    const { data, error } = await admin().rpc('generate_subscription_inventory_product_code', {
+      p_user_subscription_id: userSubscriptionId,
+      p_plan_id: planId,
+    })
+    if (error) return fail(500, { error: error.message })
+    if (!data?.success) {
+      if (data?.error === 'ALREADY_ISSUED') return fail(400, { error: '이미 품번이 발급된 구독자입니다' })
+      if (data?.error === 'NO_CODE_SERIES') return fail(400, { error: '플랜의 품번 체계가 설정되지 않았습니다' })
+      return fail(400, { error: data?.error ?? '품번 발급에 실패했습니다' })
+    }
+    return { ok: true }
+  },
 }

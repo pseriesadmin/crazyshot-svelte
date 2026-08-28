@@ -1,6 +1,6 @@
 <script lang="ts">
   import { invalidateAll } from '$app/navigation'
-  import { enhance } from '$app/forms'
+  import { enhance, deserialize } from '$app/forms'
   import { csToast } from '$lib/utils/toast'
   import FreeRentalItemSelector from './FreeRentalItemSelector.svelte'
   import CmsContentEditor from '$lib/components/cms/CmsContentEditor.svelte'
@@ -275,11 +275,32 @@
     fd.set('category', plan.category)
     const res = await fetch('?/retryProductCode', { method: 'POST', body: fd })
     isSaving = false
-    if (res.ok) {
+    // res.ok만으로는 실제 실패 사유를 알 수 없음 — SvelteKit fail()도 HTTP 200으로 내려오므로
+    // deserialize로 ActionResult를 직접 해석해야 정확한 성공/실패 판정이 됨(ProductDetailPanel.svelte 패턴)
+    const result = deserialize(await res.text()) as { type: string; data?: { error?: string } }
+    if (result.type === 'success') {
       await invalidateAll()
       csToast.success('품번 체계가 설정됐습니다.')
     } else {
-      csToast.error('품번 체계 설정에 실패했습니다.')
+      csToast.error(result.data?.error ?? '품번 체계 설정에 실패했습니다.')
+    }
+  }
+
+  let retryingSubscriberId = $state<number | null>(null)
+
+  async function retrySubscriberCode(userSubscriptionId: number, planId: number): Promise<void> {
+    retryingSubscriberId = userSubscriptionId
+    const fd = new FormData()
+    fd.set('user_subscription_id', String(userSubscriptionId))
+    fd.set('plan_id', String(planId))
+    const res = await fetch('?/retrySubscriberCode', { method: 'POST', body: fd })
+    retryingSubscriberId = null
+    const result = deserialize(await res.text()) as { type: string; data?: { error?: string } }
+    if (result.type === 'success') {
+      await invalidateAll()
+      csToast.success('품번이 발급됐습니다.')
+    } else {
+      csToast.error(result.data?.error ?? '품번 발급에 실패했습니다.')
     }
   }
 
@@ -644,23 +665,35 @@
           {#if subscribers.length > 0}
             <div class="subscriber-list">
               {#each subscribers as sub (sub.id)}
-                <a
-                  class="subscriber-row"
-                  href="/cms/customers?selected={sub.user_id}&tab=subscription"
-                  target="_blank"
-                  rel="noopener"
-                >
+                <div class="subscriber-row">
                   <span class="subscriber-code" class:pending={!sub.product_code}>
                     {sub.product_code ?? '품번 발급 대기'}
                   </span>
-                  <span class="subscriber-email">{sub.email ?? sub.user_id}</span>
-                  <span class="subscriber-status subscriber-status-{sub.status}">
-                    {sub.status === 'active' ? '활성' : sub.status === 'cancelled' ? '취소' : '만료'}
-                  </span>
-                  <span class="subscriber-date">
-                    {sub.started_at ? new Date(sub.started_at).toLocaleDateString('ko-KR') : '-'}
-                  </span>
-                </a>
+                  {#if !sub.product_code}
+                    <button
+                      type="button"
+                      class="subscriber-retry-btn"
+                      disabled={retryingSubscriberId === sub.id}
+                      onclick={() => retrySubscriberCode(sub.id, plan.id)}
+                    >
+                      {retryingSubscriberId === sub.id ? '재시도 중...' : '재시도'}
+                    </button>
+                  {/if}
+                  <a
+                    class="subscriber-info-link"
+                    href="/cms/customers?selected={sub.user_id}&tab=subscription"
+                    target="_blank"
+                    rel="noopener"
+                  >
+                    <span class="subscriber-email">{sub.email ?? sub.user_id}</span>
+                    <span class="subscriber-status subscriber-status-{sub.status}">
+                      {sub.status === 'active' ? '활성' : sub.status === 'cancelled' ? '취소' : '만료'}
+                    </span>
+                    <span class="subscriber-date">
+                      {sub.started_at ? new Date(sub.started_at).toLocaleDateString('ko-KR') : '-'}
+                    </span>
+                  </a>
+                </div>
               {/each}
             </div>
           {:else}
@@ -888,15 +921,26 @@
 
   .subscriber-list { display: flex; flex-direction: column; gap: 4px; margin-top: 16px; }
   .subscriber-row {
-    display: flex; align-items: center; gap: 14px; padding: 10px 12px;
+    display: flex; align-items: center; gap: 8px; padding: 10px 12px;
     border-bottom: 1px solid var(--cs-surface-gray); font: var(--text-pc-script-12);
-    text-decoration: none; color: inherit; cursor: pointer; border-radius: var(--cms-radius-sm);
-    transition: background 0.12s;
+    color: inherit; border-radius: var(--cms-radius-sm);
   }
-  .subscriber-row:hover { background: rgba(59,47,138,0.04); }
   .subscriber-row:last-child { border-bottom: none; }
-  .subscriber-code { flex: 0 0 150px; font-family: monospace; font-weight: 700; color: var(--cs-text); }
+  .subscriber-info-link {
+    display: flex; align-items: center; gap: 14px; flex: 1;
+    text-decoration: none; color: inherit; cursor: pointer;
+    transition: background 0.12s; border-radius: var(--cms-radius-sm); padding: 2px 4px;
+  }
+  .subscriber-info-link:hover { background: rgba(59,47,138,0.04); }
+  .subscriber-code { flex: 0 0 130px; font-family: monospace; font-weight: 700; color: var(--cs-text); }
   .subscriber-code.pending { color: var(--cs-text-light); font-family: inherit; font-weight: 400; }
+  .subscriber-retry-btn {
+    flex: 0 0 auto; padding: 3px 8px; font: var(--text-pc-script-12); font-weight: 700;
+    background: transparent; border: 1px solid var(--cs-purple); border-radius: var(--radius-full);
+    color: var(--cs-purple); cursor: pointer; white-space: nowrap; transition: opacity 0.12s;
+  }
+  .subscriber-retry-btn:hover { opacity: 0.75; }
+  .subscriber-retry-btn:disabled { opacity: 0.4; cursor: not-allowed; }
   .subscriber-email { flex: 1; color: var(--cs-text-mid); }
   .subscriber-status { flex: 0 0 44px; font-weight: 700; }
   .subscriber-status-active { color: var(--cs-purple); }
