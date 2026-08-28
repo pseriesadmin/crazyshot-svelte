@@ -1,6 +1,5 @@
 <script lang="ts">
-  import { env as publicEnv } from '$env/dynamic/public'
-  import { csToast } from '$lib/utils/toast'
+  import { goto } from '$app/navigation'
   import type { PageData } from './$types'
   import type { ContentBlock } from '$lib/types/content-editor'
 
@@ -22,58 +21,14 @@
     catch { return [] }
   })
 
-  // TossPayments v2 CDN SDK — declare global 불가로 타입 별칭 캐스팅 사용
-  type TossPaymentsInstance = {
-    payment: (opts: { customerKey: string }) => {
-      requestBillingAuth: (opts: {
-        method: 'CARD'
-        successUrl: string
-        failUrl: string
-        customerEmail?: string
-      }) => Promise<void>
-    }
-  }
-  type TossWindow = typeof window & { TossPayments?: (clientKey: string) => TossPaymentsInstance }
-
   let isLoading = $state(false)
 
-  function loadTossScript(): Promise<void> {
-    return new Promise((resolve, reject) => {
-      if ((window as unknown as TossWindow).TossPayments) { resolve(); return }
-      const existing = document.querySelector('script[data-toss-sdk]')
-      if (existing) {
-        existing.addEventListener('load', () => resolve())
-        return
-      }
-      const script = document.createElement('script')
-      script.src = 'https://js.tosspayments.com/v2/standard'
-      script.dataset.tossSdk = 'true'
-      script.onload = () => resolve()
-      script.onerror = () => reject(new Error('TossPayments SDK 로드 실패'))
-      document.head.appendChild(script)
-    })
-  }
-
+  // ⛔ 더미 결제 연동(2026-08-20) — TossPayments 실 SDK 호출 대신 /subscribe/success를
+  // mock=1로 호출해 create_user_subscription을 더미 빌링키로 즉시 등록한다.
+  // 실 결제(TossPayments requestBillingAuth) 연동은 후속 별도 요청 시 이 핸들러를 교체한다.
   async function handleSubscribe(): Promise<void> {
     isLoading = true
-    try {
-      await loadTossScript()
-      const tossPayments = (window as unknown as TossWindow).TossPayments?.(publicEnv.PUBLIC_TOSS_CLIENT_KEY ?? '')
-      if (!tossPayments) throw new Error('TossPayments SDK 초기화 실패')
-
-      const payment = tossPayments.payment({ customerKey: data.customerKey })
-      const origin = window.location.origin
-      await payment.requestBillingAuth({
-        method: 'CARD',
-        successUrl: `${origin}/subscribe/success?planId=${data.plan.id}`,
-        failUrl: `${origin}/subscribe/fail?planId=${data.plan.id}`,
-        customerEmail: data.customerEmail || undefined,
-      })
-    } catch (err) {
-      isLoading = false
-      const message = err instanceof Error ? err.message : '카드 등록 중 오류가 발생했습니다.'
-      csToast.error(message)
-    }
+    await goto(`/subscribe/success?planId=${data.plan.id}&mock=1`)
   }
 </script>
 
@@ -83,66 +38,91 @@
 
 <div class="subscribe-wrap">
   <div class="subscribe-card">
-    <!-- 이미지: 다중 갤러리(image_urls) 우선, 단일 image_url 폴백 -->
-    {#if galleryUrls.length > 1}
-      <div class="subscribe-gallery">
-        {#each galleryUrls as url}
-          <img src={url} alt="" class="subscribe-gallery-img" loading="lazy" />
-        {/each}
-      </div>
-    {:else if galleryUrls.length === 1}
-      <img src={galleryUrls[0]} alt="" class="subscribe-img" />
-    {/if}
+    <!-- 헤더 밴드 — 이미지 + 이름 + 태그라인 + 가격 (PricingCards PC 카드 톤 재활용) -->
+    <div class="subscribe-header">
+      {#if galleryUrls.length > 0}
+        <div class="subscribe-header-img-wrap">
+          <img src={galleryUrls[0]} alt="" class="subscribe-header-img" />
+        </div>
+      {/if}
+      <h1 class="subscribe-name">{data.plan.name}</h1>
+      {#if data.plan.tagline}
+        <p class="subscribe-tagline">{data.plan.tagline}</p>
+      {/if}
+      <p class="subscribe-price">{data.plan.monthly_price.toLocaleString()}<span>원 / 월</span></p>
+    </div>
 
-    <h1 class="subscribe-name">{data.plan.name}</h1>
-    {#if data.plan.tagline}
-      <p class="subscribe-tagline">{data.plan.tagline}</p>
-    {/if}
-    <p class="subscribe-price">{data.plan.monthly_price.toLocaleString()}<span>원 / 월</span></p>
+    <div class="subscribe-body">
+      <!-- 나머지 갤러리 이미지(2번째 이후) -->
+      {#if galleryUrls.length > 1}
+        <div class="subscribe-gallery">
+          {#each galleryUrls.slice(1) as url}
+            <img src={url} alt="" class="subscribe-gallery-img" loading="lazy" />
+          {/each}
+        </div>
+      {/if}
 
-    <!-- 설명: content_blocks 있으면 블록 렌더러, 없으면 plain description 폴백 -->
-    {#if contentBlocks.length > 0}
-      <div class="cb-body">
-        {#each contentBlocks as block}
-          {#if block.type === 'text'}
-            <!-- eslint-disable-next-line svelte/no-at-html-tags -->
-            <div class="cb-text">{@html block.html}</div>
-          {:else if block.type === 'image'}
-            <div class="cb-images cb-images--{block.layout}">
-              {#each block.images.filter((img: { isHead?: boolean }) => !img.isHead) as img}
-                <img src={img.url} alt={img.alt} loading="lazy" class="cb-img" />
+      <!-- 설명: content_blocks 있으면 블록 렌더러, 없으면 plain description 폴백 -->
+      {#if contentBlocks.length > 0}
+        <div class="cb-body">
+          {#each contentBlocks as block}
+            {#if block.type === 'text'}
+              <!-- eslint-disable-next-line svelte/no-at-html-tags -->
+              <div class="cb-text">{@html block.html}</div>
+            {:else if block.type === 'image'}
+              <div class="cb-images cb-images--{block.layout}">
+                {#each block.images.filter((img: { isHead?: boolean }) => !img.isHead) as img}
+                  <img src={img.url} alt={img.alt} loading="lazy" class="cb-img" />
+                {/each}
+              </div>
+            {:else if block.type === 'youtube'}
+              <div class="cb-youtube">
+                <iframe
+                  src="https://www.youtube.com/embed/{block.videoId}"
+                  title="YouTube 영상"
+                  allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+                  allowfullscreen
+                  loading="lazy"
+                ></iframe>
+              </div>
+            {:else if block.type === 'html'}
+              <!-- eslint-disable-next-line svelte/no-at-html-tags -->
+              <div class="cb-html">{@html block.content}</div>
+            {:else if block.type === 'divider'}
+              <hr class="cb-divider" />
+            {:else if block.type === 'link-entry'}
+              <a href={block.url} class="cb-link" target="_blank" rel="noopener noreferrer">{block.text}</a>
+            {/if}
+          {/each}
+        </div>
+      {:else if data.plan.description}
+        <p class="subscribe-desc">{data.plan.description}</p>
+      {/if}
+
+      <!-- 제공 내용 표 테이블 (/members FeaturesTable 라벨 응용 — 이 플랜 값만 단일 열 표시) -->
+      {#if data.featureRows.length > 0}
+        <div class="feature-table-wrap">
+          <p class="feature-table-title">제공 내용</p>
+          <table class="feature-table">
+            <tbody>
+              {#each data.featureRows as row, i (row.label)}
+                <tr class:alt={i % 2 !== 0}>
+                  <th scope="row">{row.label}</th>
+                  <td>{row.value}</td>
+                </tr>
               {/each}
-            </div>
-          {:else if block.type === 'youtube'}
-            <div class="cb-youtube">
-              <iframe
-                src="https://www.youtube.com/embed/{block.videoId}"
-                title="YouTube 영상"
-                allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
-                allowfullscreen
-                loading="lazy"
-              ></iframe>
-            </div>
-          {:else if block.type === 'html'}
-            <!-- eslint-disable-next-line svelte/no-at-html-tags -->
-            <div class="cb-html">{@html block.content}</div>
-          {:else if block.type === 'divider'}
-            <hr class="cb-divider" />
-          {:else if block.type === 'link-entry'}
-            <a href={block.url} class="cb-link" target="_blank" rel="noopener noreferrer">{block.text}</a>
-          {/if}
-        {/each}
-      </div>
-    {:else if data.plan.description}
-      <p class="subscribe-desc">{data.plan.description}</p>
-    {/if}
+            </tbody>
+          </table>
+        </div>
+      {/if}
 
-    <button type="button" class="subscribe-cta" disabled={isLoading} onclick={handleSubscribe}>
-      {isLoading ? '카드 등록창 여는 중...' : '카드 등록하고 구독 시작'}
-    </button>
-    <p class="subscribe-notice">
-      매달 자동으로 결제되며, 언제든지 마이페이지에서 해지할 수 있습니다.
-    </p>
+      <button type="button" class="subscribe-cta" disabled={isLoading} onclick={handleSubscribe}>
+        {isLoading ? '구독 등록 중...' : '카드 등록하고 구독 시작'}
+      </button>
+      <p class="subscribe-notice">
+        매달 자동으로 결제되며, 언제든지 마이페이지에서 해지할 수 있습니다.
+      </p>
+    </div>
   </div>
 </div>
 
@@ -152,46 +132,69 @@
     background: var(--cs-lilac); padding: 40px 20px;
   }
   .subscribe-card {
-    width: 100%; max-width: 420px; background: var(--cs-white); border-radius: var(--radius-2xl, 50px);
-    padding: 40px 32px; display: flex; flex-direction: column; align-items: center; gap: 12px;
+    width: 100%; max-width: 900px; background: var(--cs-white); border-radius: var(--radius-2xl, 50px);
+    overflow: hidden;
+  }
+
+  /* ── 헤더 밴드 — 이미지+이름+태그라인+가격을 진하게 강조 ── */
+  .subscribe-header {
+    background: var(--cs-purple);
+    padding: 40px 32px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 12px;
     text-align: center;
   }
-  .subscribe-img { width: 140px; height: 140px; object-fit: contain; margin-bottom: 8px; }
-  .subscribe-name { font-family: var(--font-kr); font-size: 24px; font-weight: 900; color: var(--cs-text); margin: 0; }
-  .subscribe-tagline {
-    background: var(--cs-red-badge); color: var(--cs-white); font-size: 14px; font-weight: 700;
-    border-radius: 20px; padding: 6px 16px; margin: 0;
+  .subscribe-header-img-wrap {
+    width: 220px; height: 220px;
+    display: flex; align-items: center; justify-content: center;
+    margin-bottom: 8px;
   }
-  .subscribe-price { font-family: var(--font-kr); font-size: 32px; font-weight: 900; color: var(--cs-purple); margin: 8px 0; }
-  .subscribe-price span { font-size: 16px; font-weight: 700; color: var(--cs-text-mid); margin-left: 4px; }
-  .subscribe-desc { font-size: 14px; color: var(--cs-text-mid); line-height: 1.6; margin: 0 0 8px; }
+  .subscribe-header-img { width: 100%; height: 100%; object-fit: contain; }
+  .subscribe-name { font-family: var(--font-kr); font-size: 32px; font-weight: 900; color: var(--cs-white); margin: 0; }
+  .subscribe-tagline {
+    background: var(--cs-red-badge); color: var(--cs-white); font-size: 15px; font-weight: 700;
+    border-radius: 20px; padding: 8px 20px; margin: 0;
+  }
+  .subscribe-price { font-family: var(--font-kr); font-size: 40px; font-weight: 900; color: var(--cs-white); margin: 8px 0 0; }
+  .subscribe-price span { font-size: 18px; font-weight: 700; color: rgba(255,255,255,0.75); margin-left: 4px; }
+
+  /* ── 본문 ── */
+  .subscribe-body {
+    padding: 40px 32px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 16px;
+  }
+  .subscribe-desc { width: 100%; font-size: 15px; color: var(--cs-text-mid); line-height: 1.7; margin: 0; }
 
   .subscribe-cta {
-    width: 100%; padding: 16px; border: none; border-radius: var(--radius-xl);
+    width: 100%; max-width: 420px; padding: 16px; border: none; border-radius: var(--radius-xl);
     background: var(--cs-red-badge); color: var(--cs-white); font-size: 16px; font-weight: 700;
-    cursor: pointer; transition: opacity 0.15s;
+    cursor: pointer; transition: opacity 0.15s; margin-top: 8px;
   }
   .subscribe-cta:hover:not(:disabled) { opacity: 0.85; }
   .subscribe-cta:disabled { opacity: 0.6; cursor: not-allowed; }
 
   .subscribe-notice { font-size: 12px; color: var(--cs-text-light); margin: 0; }
 
-  /* 다중 이미지 갤러리 */
+  /* 다중 이미지 갤러리(헤더 이미지 제외 나머지) */
   .subscribe-gallery {
     display: flex;
     flex-direction: column;
     gap: 8px;
     width: 100%;
-    margin-bottom: 8px;
   }
   .subscribe-gallery-img {
     width: 100%;
     border-radius: var(--radius-md);
     object-fit: cover;
-    max-height: 240px;
+    max-height: 320px;
   }
 
-  /* ── content_blocks 렌더러 (products/[id] 패턴 이식) */
+  /* ── content_blocks 렌더러 (products/[id] 패턴 이식) ── */
   .cb-body {
     display: flex;
     flex-direction: column;
@@ -262,4 +265,55 @@
     text-decoration: none;
   }
   .cb-link:hover { background: var(--cs-lilac); }
+
+  /* ── 제공 내용 표 테이블 (/members FeaturesTable 라벨 응용) ── */
+  .feature-table-wrap {
+    width: 100%;
+  }
+  .feature-table-title {
+    font-family: var(--font-kr);
+    font-size: 16px;
+    font-weight: 900;
+    color: var(--cs-text);
+    margin: 0 0 12px;
+  }
+  .feature-table {
+    width: 100%;
+    border-collapse: collapse;
+    border-radius: var(--radius-md);
+    overflow: hidden;
+  }
+  .feature-table tr {
+    background: var(--cs-white);
+  }
+  .feature-table tr.alt {
+    background: var(--cs-surface-gray);
+  }
+  .feature-table th {
+    text-align: left;
+    font-family: var(--font-kr);
+    font-size: 14px;
+    font-weight: 700;
+    color: var(--cs-text-mid);
+    padding: 14px 16px;
+    width: 55%;
+  }
+  .feature-table td {
+    text-align: right;
+    font-family: var(--font-kr);
+    font-size: 14px;
+    font-weight: 700;
+    color: var(--cs-purple);
+    padding: 14px 16px;
+  }
+
+  /* PC 반응형 — 카드를 좀 더 넓게, 헤더 이미지도 더 크게 */
+  @media (min-width: 768px) {
+    .subscribe-wrap { padding: 60px 20px; }
+    .subscribe-header { padding: 56px 48px; }
+    .subscribe-header-img-wrap { width: 280px; height: 280px; }
+    .subscribe-name { font-size: 40px; }
+    .subscribe-price { font-size: 52px; }
+    .subscribe-body { padding: 48px; }
+  }
 </style>

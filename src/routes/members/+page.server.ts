@@ -2,8 +2,9 @@ import { env } from '$env/dynamic/private'
 import { getSupabaseUrl } from '$lib/env/supabasePublic'
 import { createClient } from '@supabase/supabase-js'
 import type { PageServerLoad } from './$types'
-import type { SubscriptionPlanRow } from '$lib/types/subscription'
+import type { SubscriptionPlanRow, TierBenefitRow } from '$lib/types/subscription'
 import type { SubscriptionPolicyItem } from '$lib/types/database'
+import { formatBenefitForDisplay } from '$lib/utils/subscriptionBenefits'
 
 export interface HeroBannerImageItem {
   url: string
@@ -83,9 +84,35 @@ export const load: PageServerLoad = async ({ locals }) => {
     }
   }
 
+  const planRows = (data ?? []) as { id: number; features: unknown }[]
+  const planIds = planRows.map((p) => p.id)
+
+  // CMS '혜택관리'(tier_benefits)는 '상품 스펙'(features)과 별개 테이블이라, 지금까지
+  // /members 'Plans & features' 표에는 상품 스펙만 반영되고 혜택관리 설정은 전혀 반영되지
+  // 않고 있었음(2026-08-20 확인) — 활성화된 혜택을 라벨/값으로 변환해 features에 병합해
+  // 표에 함께 노출한다. DB에는 저장하지 않고 표시 시점에만 병합(두 CMS 탭은 계속 독립 관리).
+  const { data: benefitRows } = planIds.length > 0
+    ? await admin
+        .from('tier_benefits')
+        .select('plan_id, benefit_type, is_enabled, benefit_params')
+        .in('plan_id', planIds)
+        .eq('is_enabled', true)
+    : { data: [] as TierBenefitRow[] }
+
+  const benefitsByPlan = new Map<number, { label: string; value: string }[]>()
+  for (const b of (benefitRows ?? []) as TierBenefitRow[]) {
+    const row = formatBenefitForDisplay(b.benefit_type, b.benefit_params)
+    const list = benefitsByPlan.get(b.plan_id) ?? []
+    list.push(row)
+    benefitsByPlan.set(b.plan_id, list)
+  }
+
   const plans: SubscriptionPlanRow[] = (data ?? []).map((r) => ({
     ...r,
-    features: Array.isArray(r.features) ? r.features : [],
+    features: [
+      ...(Array.isArray(r.features) ? r.features : []),
+      ...(benefitsByPlan.get(r.id) ?? []),
+    ],
   })) as SubscriptionPlanRow[]
 
   const { data: policyItemRows } = await admin
