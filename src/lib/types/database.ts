@@ -369,6 +369,10 @@ export interface UserProfile {
   created_at: string;
   updated_at: string;
   deleted_at: string | null;
+  withdrawal_status?: 'none' | 'requested' | 'purged';
+  withdrawal_requested_at?: string | null;
+  withdrawal_purge_at?: string | null;
+  withdrawal_purged_at?: string | null;
 }
 
 export type UserProfileInsert = Omit<UserProfile, 'id' | 'grade' | 'created_at' | 'updated_at'> & {
@@ -730,6 +734,7 @@ export interface DeactivatePushTokensArgs {
 export interface AccountRpcResult {
   ok: boolean;
   error?: string;
+  error_code?: string;
 }
 
 export interface UpdateUserConsentArgs {
@@ -766,10 +771,32 @@ export interface VerifyAndUpdatePhoneArgs {
   p_code: string;
 }
 
+// ── 탈회(Withdrawal) RPC (Migration 365~370) ──
+export interface RequestAccountWithdrawalArgs {
+  p_reasons: string[];
+  p_reason_etc: string | null;
+}
+
+export interface RequestAccountWithdrawalResult {
+  ok: boolean;
+  error?: string;
+  error_code?: string;
+  purge_at?: string;
+}
+
+export interface RestoreWithdrawnAccountResult {
+  ok: boolean;
+  restored?: boolean;
+  expired?: boolean;
+  error?: string;
+}
+
 export interface UpdateUserDocUrlArgs {
   p_type: string;
   p_doc_url: string[];
   p_identity_type: string[] | null;
+  p_foreign_type?: string[] | null;
+  p_foreign_stay_type?: string | null;
 }
 
 export interface DeleteUserDocArgs {
@@ -883,6 +910,20 @@ export type Database = {
         Args: { p_user_coupon_id: string };
         Returns: string | null;
       };
+      // 탈회 RPC 4종 등록 (Migration 366~370)
+      request_account_withdrawal: {
+        Args: { p_reasons: string[]; p_reason_etc: string | null };
+        Returns: { ok: boolean; error?: string; error_code?: string; purge_at?: string };
+      };
+      restore_withdrawn_account: {
+        Args: Record<string, never>;
+        Returns: { ok: boolean; restored?: boolean; expired?: boolean; error?: string };
+      };
+      purge_withdrawn_accounts: {
+        Args: Record<string, never>;
+        Returns: undefined;
+      };
+      // verify_and_update_phone은 이미 위에 등록됨 — AccountRpcResult에 error_code? 추가로 처리
       // 채번내역 CMS 조회 RPC 등록 (migration 297, 신규 — 기존 무타입 34곳은 별도 백로그)
       get_coupon_redemptions: {
         Args: { p_coupon_id: string };
