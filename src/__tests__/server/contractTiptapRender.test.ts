@@ -409,3 +409,207 @@ describe('substituteVariables — tiptap-doc 블록 처리 회귀 방지', () =>
     expect(html).not.toContain('data-merge-field')
   })
 })
+
+// ── substituteTiptapDoc — 반복 영역 확장 (Stage 5) ──────────────────────────
+
+/**
+ * 반복 영역이 있는 표 노드 빌더 헬퍼.
+ * rows: { isRepeat: boolean; cellTexts: (string | { mergeField: string })[] }[]
+ */
+function makeTableDoc(
+  rows: { isRepeat?: boolean; cells: (string | { mergeField: string })[] }[],
+): JSONContent {
+  return {
+    type: 'doc',
+    content: [
+      {
+        type: 'table',
+        content: rows.map((row) => ({
+          type: 'tableRow',
+          attrs: { repeatRegion: row.isRepeat ?? false },
+          content: row.cells.map((cell) => ({
+            type: 'tableCell',
+            attrs: {},
+            content: [
+              {
+                type: 'paragraph',
+                content:
+                  typeof cell === 'string'
+                    ? [{ type: 'text', text: cell }]
+                    : [{ type: 'mergeField', attrs: { variable: cell.mergeField, label: cell.mergeField } }],
+              },
+            ],
+          })),
+        })),
+      },
+    ],
+  }
+}
+
+describe('substituteTiptapDoc — 반복 영역 확장 (Stage 5)', () => {
+  it('반복 영역이 없는 기존 표는 스칼라 치환만 수행한다 — 무회귀', async () => {
+    const { substituteTiptapDoc } = await import('$lib/utils/tiptapRender.js')
+
+    const doc = makeTableDoc([
+      { cells: ['헤더'] },
+      { cells: [{ mergeField: '고객이름' }] },
+    ])
+
+    const data: ContractSubstitutionData = { 고객이름: '김영희' }
+    const result = substituteTiptapDoc(doc, data)
+
+    const rows = result.content?.[0]?.content ?? []
+    // 행 수는 그대로 2개
+    expect(rows).toHaveLength(2)
+    // 두 번째 행 첫 셀에 실제 값이 치환됐는가?
+    const cellContent = rows[1]?.content?.[0]?.content?.[0]?.content?.[0]
+    expect(cellContent?.type).toBe('text')
+    expect(cellContent?.text).toBe('김영희')
+  })
+
+  it('반복 영역 행이 1개이고 항목이 2개면 행이 2개로 확장된다', async () => {
+    const { substituteTiptapDoc } = await import('$lib/utils/tiptapRender.js')
+
+    const doc = makeTableDoc([
+      { cells: ['상품명', '수량'] },                             // 헤더(비반복)
+      { isRepeat: true, cells: [{ mergeField: '상품명' }, { mergeField: '수량' }] }, // 반복 템플릿
+    ])
+
+    const data: ContractSubstitutionData = {
+      상품목록: [
+        { 상품명: '카메라A', 수량: '1', 금액: '100,000원' },
+        { 상품명: '렌즈B', 수량: '2', 금액: '50,000원' },
+      ],
+    }
+
+    const result = substituteTiptapDoc(doc, data)
+    const rows = result.content?.[0]?.content ?? []
+
+    // 헤더 1행 + 항목 2행 = 3행
+    expect(rows).toHaveLength(3)
+
+    // 확장된 첫 번째 항목 행
+    const row1Cell0 = rows[1]?.content?.[0]?.content?.[0]?.content?.[0]
+    expect(row1Cell0?.text).toBe('카메라A')
+    const row1Cell1 = rows[1]?.content?.[1]?.content?.[0]?.content?.[0]
+    expect(row1Cell1?.text).toBe('1')
+
+    // 확장된 두 번째 항목 행
+    const row2Cell0 = rows[2]?.content?.[0]?.content?.[0]?.content?.[0]
+    expect(row2Cell0?.text).toBe('렌즈B')
+    const row2Cell1 = rows[2]?.content?.[1]?.content?.[0]?.content?.[0]
+    expect(row2Cell1?.text).toBe('2')
+  })
+
+  it('항목 수(3)가 템플릿 행 수(1)를 초과하면 마지막 템플릿 행을 재사용한다', async () => {
+    const { substituteTiptapDoc } = await import('$lib/utils/tiptapRender.js')
+
+    const doc = makeTableDoc([
+      { isRepeat: true, cells: [{ mergeField: '상품명' }, { mergeField: '금액' }] },
+    ])
+
+    const data: ContractSubstitutionData = {
+      상품목록: [
+        { 상품명: 'A', 수량: '1', 금액: '10,000원' },
+        { 상품명: 'B', 수량: '1', 금액: '20,000원' },
+        { 상품명: 'C', 수량: '1', 금액: '30,000원' },
+      ],
+    }
+
+    const result = substituteTiptapDoc(doc, data)
+    const rows = result.content?.[0]?.content ?? []
+
+    // 3항목 → 3행
+    expect(rows).toHaveLength(3)
+    const names = rows.map(
+      (r) => r.content?.[0]?.content?.[0]?.content?.[0]?.text
+    )
+    expect(names).toEqual(['A', 'B', 'C'])
+  })
+
+  it('항목이 0개면 반복 영역 행이 전부 제거되고 비반복 행만 남는다', async () => {
+    const { substituteTiptapDoc } = await import('$lib/utils/tiptapRender.js')
+
+    const doc = makeTableDoc([
+      { cells: ['헤더'] },
+      { isRepeat: true, cells: [{ mergeField: '상품명' }] },
+      { cells: ['합계'] },
+    ])
+
+    const data: ContractSubstitutionData = { 상품목록: [] }
+    const result = substituteTiptapDoc(doc, data)
+    const rows = result.content?.[0]?.content ?? []
+
+    // 헤더 + 합계 = 2행 (반복 행 0개)
+    expect(rows).toHaveLength(2)
+    // 헤더행 텍스트 확인
+    const headerText = rows[0]?.content?.[0]?.content?.[0]?.content?.[0]?.text
+    expect(headerText).toBe('헤더')
+    // 합계행 텍스트 확인
+    const footerText = rows[1]?.content?.[0]?.content?.[0]?.content?.[0]?.text
+    expect(footerText).toBe('합계')
+  })
+
+  it('반복 행 안의 스칼라 변수(상품목록에 없는 키)는 data 스칼라로 폴백한다', async () => {
+    const { substituteTiptapDoc } = await import('$lib/utils/tiptapRender.js')
+
+    // {{고객이름}}은 ContractLineItem 필드가 아니므로 data 스칼라로 폴백해야 함
+    const doc = makeTableDoc([
+      { isRepeat: true, cells: [{ mergeField: '상품명' }, { mergeField: '고객이름' }] },
+    ])
+
+    const data: ContractSubstitutionData = {
+      고객이름: '박영수',
+      상품목록: [{ 상품명: '카메라', 수량: '1', 금액: '100,000원' }],
+    }
+
+    const result = substituteTiptapDoc(doc, data)
+    const rows = result.content?.[0]?.content ?? []
+
+    expect(rows).toHaveLength(1)
+    // 상품명 → 아이템 필드
+    expect(rows[0]?.content?.[0]?.content?.[0]?.content?.[0]?.text).toBe('카메라')
+    // 고객이름 → 스칼라 폴백
+    expect(rows[0]?.content?.[1]?.content?.[0]?.content?.[0]?.text).toBe('박영수')
+  })
+
+  it('반복 영역이 있어도 상품목록이 미정의(undefined)면 기존 스칼라 치환만 수행한다', async () => {
+    const { substituteTiptapDoc } = await import('$lib/utils/tiptapRender.js')
+
+    const doc = makeTableDoc([
+      { isRepeat: true, cells: [{ mergeField: '상품명' }] },
+    ])
+
+    // 상품목록 없음 → 반복 확장 스킵, 기존 동작 유지
+    const data: ContractSubstitutionData = { 상품명: '스칼라값' }
+    const result = substituteTiptapDoc(doc, data)
+    const rows = result.content?.[0]?.content ?? []
+
+    // 행 수 그대로(확장 없음)
+    expect(rows).toHaveLength(1)
+    // 스칼라 치환 적용됨
+    const cellText = rows[0]?.content?.[0]?.content?.[0]?.content?.[0]
+    expect(cellText?.type).toBe('text')
+    expect(cellText?.text).toBe('스칼라값')
+  })
+
+  it('확장된 출력 행에 data-repeat-region 속성이 남지 않는다 (HTML 렌더링 확인)', async () => {
+    const { substituteTiptapDoc, renderTiptapDocToHtml } = await import('$lib/utils/tiptapRender.js')
+
+    const doc = makeTableDoc([
+      { isRepeat: true, cells: [{ mergeField: '상품명' }] },
+    ])
+
+    const data: ContractSubstitutionData = {
+      상품목록: [{ 상품명: '렌즈', 수량: '1', 금액: '50,000원' }],
+    }
+
+    const substituted = substituteTiptapDoc(doc, data)
+    const html = renderTiptapDocToHtml(substituted)
+
+    // 출력 HTML에 반복 영역 마커가 노출되면 안 됨
+    expect(html).not.toContain('data-repeat-region')
+    // 실제 상품명이 HTML에 포함됐는가?
+    expect(html).toContain('렌즈')
+  })
+})

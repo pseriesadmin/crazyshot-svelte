@@ -186,14 +186,50 @@ describe('sheetToWorksheetConfig', () => {
     expect(config.style['A1']).toContain('font-size: large')
   })
 
-  it('합계 colWidths > 642px 이면 columns 너비 합이 642 이하로 축소된다', () => {
+  it('text-align이 CSS style 레코드에 포함된다 (2026-08-28 — CMS 실사용 중 발견, 정렬 툴바로 지정한 값이 저장 시 유실되던 문제)', () => {
+    const sheetWithAlign: SpreadsheetSheet = {
+      ...baseSheet,
+      cellFormatting: [
+        [{ textAlign: 'right' }, {}, {}],
+        [{}, {}, {}],
+      ],
+    }
+    const config = sheetToWorksheetConfig(sheetWithAlign)
+    expect(config.style['A1']).toContain('text-align: right')
+  })
+
+  it('border-top/right/bottom/left이 CSS style 레코드에 각각 포함된다 (2026-08-28(같은 날 후속) — 테두리 툴바로 지정한 값이 저장 시 유실되던 문제)', () => {
+    const sheetWithBorders: SpreadsheetSheet = {
+      ...baseSheet,
+      cellFormatting: [
+        [
+          {
+            borderTop: '1px solid rgb(0, 0, 0)',
+            borderRight: '2px dashed rgb(255, 0, 0)',
+            borderBottom: '1px solid rgb(0, 0, 0)',
+            borderLeft: '1px solid rgb(0, 0, 0)',
+          },
+          {},
+          {},
+        ],
+        [{}, {}, {}],
+      ],
+    }
+    const config = sheetToWorksheetConfig(sheetWithBorders)
+    expect(config.style['A1']).toContain('border-top: 1px solid rgb(0, 0, 0)')
+    expect(config.style['A1']).toContain('border-right: 2px dashed rgb(255, 0, 0)')
+    expect(config.style['A1']).toContain('border-bottom: 1px solid rgb(0, 0, 0)')
+    expect(config.style['A1']).toContain('border-left: 1px solid rgb(0, 0, 0)')
+  })
+
+  it('합계 colWidths > 642px 이어도 재계산 없이 원본 그대로 유지된다 (2026-08-27 — A4 자동축소는 가져오기 시점 1회만, 로드 시 재적용 안 함)', () => {
     const wideSheet: SpreadsheetSheet = {
       ...baseSheet,
       colWidths: [300, 300, 300], // 합계 900px > 642px
     }
     const config = sheetToWorksheetConfig(wideSheet)
-    const total = config.columns.reduce((s, col) => s + col.width, 0)
-    expect(total).toBeLessThanOrEqual(642)
+    const widths = config.columns.map((c) => c.width)
+    expect(widths).toEqual([300, 300, 300])
   })
 
   it('합계 colWidths ≤ 642px 이면 columns 너비가 그대로 유지된다', () => {
@@ -285,6 +321,126 @@ describe('worksheetConfigToSheet', () => {
       fontWeight: 'bold',
       fontSize: 'large',
     })
+  })
+
+  it('getStyle CSS에서 text-align이 파싱된다 (2026-08-28 — 정렬 툴바 저장값 유실 수정)', () => {
+    const ws = makeWs({
+      data: [['A']],
+      widths: [100],
+      styles: { A1: 'text-align: right' },
+    })
+    const sheet = worksheetConfigToSheet('시트1', ws)
+    expect(sheet.cellFormatting[0][0].textAlign).toBe('right')
+  })
+
+  it('getStyle CSS에서 border-top/right/bottom/left이 각각 파싱된다 (2026-08-28(같은 날 후속) — 테두리 툴바 저장값 유실 수정)', () => {
+    const ws = makeWs({
+      data: [['A']],
+      widths: [100],
+      styles: {
+        A1: 'border-top: 1px solid rgb(0, 0, 0); border-right: 2px dashed rgb(255, 0, 0); border-bottom: 1px solid rgb(0, 0, 0); border-left: 1px solid rgb(0, 0, 0)',
+      },
+    })
+    const sheet = worksheetConfigToSheet('시트1', ws)
+    expect(sheet.cellFormatting[0][0].borderTop).toBe('1px solid rgb(0, 0, 0)')
+    expect(sheet.cellFormatting[0][0].borderRight).toBe('2px dashed rgb(255, 0, 0)')
+    expect(sheet.cellFormatting[0][0].borderBottom).toBe('1px solid rgb(0, 0, 0)')
+    expect(sheet.cellFormatting[0][0].borderLeft).toBe('1px solid rgb(0, 0, 0)')
+  })
+
+  it('border-top만 지정돼도 다른 변은 undefined로 남는다(부분 테두리 정확히 구분)', () => {
+    const ws = makeWs({
+      data: [['A']],
+      widths: [100],
+      styles: { A1: 'border-top: 1px solid rgb(0, 0, 0)' },
+    })
+    const sheet = worksheetConfigToSheet('시트1', ws)
+    expect(sheet.cellFormatting[0][0].borderTop).toBe('1px solid rgb(0, 0, 0)')
+    expect(sheet.cellFormatting[0][0].borderRight).toBeUndefined()
+    expect(sheet.cellFormatting[0][0].borderBottom).toBeUndefined()
+    expect(sheet.cellFormatting[0][0].borderLeft).toBeUndefined()
+  })
+
+  it('border-width/border-style/border-color 축약형(브라우저 재직렬화) 3값도 4변으로 파싱된다 (2026-08-28(같은 날 3차 후속) — 이미 사방 테두리가 있던 셀에 한 변만 재지정하면 브라우저가 border-top: 같은 단일 선언 대신 이 축약형으로 재직렬화, 실사용 브라우저 자동화로 직접 확인된 회귀)', () => {
+    const ws = makeWs({
+      data: [['A']],
+      widths: [100],
+      styles: {
+        // 3값: top='black', right·left='rgb(0,0,0)', bottom='rgb(0,0,0)'
+        A1: 'border-width: 1px; border-style: solid; border-color: black rgb(0, 0, 0) rgb(0, 0, 0); border-image: initial;',
+      },
+    })
+    const sheet = worksheetConfigToSheet('시트1', ws)
+    expect(sheet.cellFormatting[0][0].borderTop).toBe('1px solid black')
+    expect(sheet.cellFormatting[0][0].borderRight).toBe('1px solid rgb(0, 0, 0)')
+    expect(sheet.cellFormatting[0][0].borderBottom).toBe('1px solid rgb(0, 0, 0)')
+    expect(sheet.cellFormatting[0][0].borderLeft).toBe('1px solid rgb(0, 0, 0)')
+  })
+
+  it('border-color 축약형 4값이 top/right/bottom/left 순서로 정확히 매핑된다', () => {
+    const ws = makeWs({
+      data: [['A']],
+      widths: [100],
+      styles: {
+        A1: 'border-width: 1px; border-style: solid; border-color: red green blue yellow;',
+      },
+    })
+    const sheet = worksheetConfigToSheet('시트1', ws)
+    expect(sheet.cellFormatting[0][0].borderTop).toBe('1px solid red')
+    expect(sheet.cellFormatting[0][0].borderRight).toBe('1px solid green')
+    expect(sheet.cellFormatting[0][0].borderBottom).toBe('1px solid blue')
+    expect(sheet.cellFormatting[0][0].borderLeft).toBe('1px solid yellow')
+  })
+
+  it('border-top: 단일 선언과 border-color 축약형이 함께 있으면 단일 선언이 우선한다', () => {
+    const ws = makeWs({
+      data: [['A']],
+      widths: [100],
+      styles: {
+        A1: 'border-top: 2px dashed red; border-width: 1px; border-style: solid; border-color: black rgb(0, 0, 0) rgb(0, 0, 0);',
+      },
+    })
+    const sheet = worksheetConfigToSheet('시트1', ws)
+    expect(sheet.cellFormatting[0][0].borderTop).toBe('2px dashed red')
+    expect(sheet.cellFormatting[0][0].borderRight).toBe('1px solid rgb(0, 0, 0)')
+  })
+
+  it('통일 border shorthand의 non-solid 스타일(dashed 등)이 4변 모두에 반영된다 (2026-08-29 — 두께·선스타일을 먼저 지정한 뒤 사방 패턴을 적용하면 브라우저가 "border: 3px dashed black" 같은 단일 shorthand로 직렬화하는데, 기존 정규식이 "solid" 리터럴만 요구해 전부 유실되던 회귀. Stephen 실사용 재현)', () => {
+    const ws = makeWs({
+      data: [['A']],
+      widths: [100],
+      styles: { A1: 'text-align: center; background-color: rgb(255, 255, 255); border: 3px dashed black;' },
+    })
+    const sheet = worksheetConfigToSheet('시트1', ws)
+    expect(sheet.cellFormatting[0][0].borderTop).toBe('3px dashed black')
+    expect(sheet.cellFormatting[0][0].borderRight).toBe('3px dashed black')
+    expect(sheet.cellFormatting[0][0].borderBottom).toBe('3px dashed black')
+    expect(sheet.cellFormatting[0][0].borderLeft).toBe('3px dashed black')
+  })
+
+  it('통일 border shorthand — dotted/double 스타일도 정상 파싱된다', () => {
+    const wsDotted = makeWs({
+      data: [['A']], widths: [100],
+      styles: { A1: 'border: 2px dotted rgb(255, 0, 0);' },
+    })
+    expect(worksheetConfigToSheet('s', wsDotted).cellFormatting[0][0].borderTop).toBe('2px dotted rgb(255, 0, 0)')
+
+    const wsDouble = makeWs({
+      data: [['A']], widths: [100],
+      styles: { A1: 'border: 4px double #00ff00;' },
+    })
+    expect(worksheetConfigToSheet('s', wsDouble).cellFormatting[0][0].borderLeft).toBe('4px double #00ff00')
+  })
+
+  it('통일 border shorthand(solid)는 여전히 borderColor(레거시)도 함께 채운다(하위호환)', () => {
+    const ws = makeWs({
+      data: [['A']],
+      widths: [100],
+      styles: { A1: 'border: 1px solid #333333' },
+    })
+    const sheet = worksheetConfigToSheet('시트1', ws)
+    expect(sheet.cellFormatting[0][0].borderColor).toBe('#333333')
+    expect(sheet.cellFormatting[0][0].borderTop).toBe('1px solid #333333')
   })
 
   it('"color:" 파싱이 "background-color:" 값을 오매칭하지 않는다', () => {

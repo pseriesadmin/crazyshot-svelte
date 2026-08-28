@@ -40,9 +40,15 @@
     initialDoc?: SpreadsheetDocument | null
     /** 읽기전용 모드 (true면 툴바 비활성화) */
     readonly?: boolean
+    /**
+     * 그리드 내용이 실제로 바뀔 때(셀 값·서식·컬럼너비·병합·행/열 추가삭제·붙여넣기·
+     * 되돌리기/다시하기·정렬 등) 호출되는 콜백 — 부모(ContractTemplatePanel.svelte)가
+     * "수정 저장" 버튼의 활성/비활성(isDirty) 판정에 사용한다. 2026-08-28 Stephen 요청.
+     */
+    onchange?: () => void
   }
 
-  let { initialDoc = null, readonly = false }: Props = $props()
+  let { initialDoc = null, readonly = false, onchange }: Props = $props()
 
   // ─────────────────────────────────────────────────────────────────────────────
   // 내부 duck-type 인터페이스 (jspreadsheet-ce 런타임 import 없이 타입 안전성 유지)
@@ -137,6 +143,101 @@
   }
 
   // ─────────────────────────────────────────────────────────────────────────────
+  // 반복 영역 상태 (Stage 3, 2026-08-28)
+  // jspreadsheet-ce는 repeatRegion 개념이 없으므로 앱 레벨에서 별도 관리한다.
+  // getSpreadsheetDocument() 호출 시 여기서 추적한 값을 각 SpreadsheetSheet에 주입한다.
+  // ─────────────────────────────────────────────────────────────────────────────
+
+  /** 시트 인덱스별 반복 영역 — SpreadsheetSheet.repeatRegion과 동기화 */
+  let sheetRepeatRegions = $state<Array<{ startRow: number; endRow: number } | undefined>>([])
+
+  /** 현재 활성 시트 인덱스 — onselection 콜백에서 갱신(반복 영역 버튼 표시에 사용) */
+  let activeSheetIndexState = $state(0)
+
+  /**
+   * onselection에서 마지막으로 캡처한 행 범위.
+   * 순수 클로저 변수(비반응성) — 버튼 클릭 시 현재 값을 한 번만 읽으면 충분하다.
+   */
+  let lastSelectedRowRange: { y1: number; y2: number } | null = null
+
+  /**
+   * 각 시트의 실제 <table> 엘리먼트 참조 — onMount setTimeout 내에서 wsInstances로부터 추출.
+   * DOM 조작(반복 영역 시각적 밴드 적용)에 직접 사용한다.
+   */
+  let wsTableElements: (HTMLTableElement | null)[] = []
+
+  /**
+   * 특정 시트의 <tr> 엘리먼트에 data-cse-repeat 속성을 부여해 시각적 밴드를 표시한다.
+   * jspreadsheet-ce는 셀 값 변경 시 <tr>을 재생성하지 않으므로 속성이 유지된다.
+   * 행 추가/삭제(oninsertrow/ondeleterow) 시에는 reapplyRepeatRegionAllSheets()로 재적용.
+   */
+  function applyRepeatRegionDOM(
+    sheetIndex: number,
+    region: { startRow: number; endRow: number } | undefined,
+  ): void {
+    const tableEl = wsTableElements[sheetIndex]
+    if (!tableEl) return
+    const rows = tableEl.querySelectorAll<HTMLTableRowElement>('tbody > tr')
+    rows.forEach((tr, idx) => {
+      if (!region || idx < region.startRow || idx > region.endRow) {
+        tr.removeAttribute('data-cse-repeat')
+      } else {
+        const isSingle = region.startRow === region.endRow
+        const marker = isSingle
+          ? 'only'
+          : idx === region.startRow
+            ? 'first'
+            : idx === region.endRow
+              ? 'last'
+              : 'mid'
+        tr.setAttribute('data-cse-repeat', marker)
+      }
+    })
+  }
+
+  /** 모든 시트에 현재 sheetRepeatRegions 상태를 DOM에 재적용한다(행 삽입·삭제 후 호출). */
+  function reapplyRepeatRegionAllSheets(): void {
+    sheetRepeatRegions.forEach((region, i) => {
+      applyRepeatRegionDOM(i, region)
+    })
+  }
+
+  /**
+   * "반복 영역으로 지정" / "반복 해제" 토글.
+   * onselection에서 캡처한 lastSelectedRowRange를 현재 활성 시트의 repeatRegion으로 설정하거나,
+   * 동일 범위를 다시 클릭하면 해제한다.
+   */
+  function toggleRepeatRegion(): void {
+    if (!spreadsheetParent) {
+      csToast.error('스프레드시트가 아직 준비되지 않았습니다.')
+      return
+    }
+    if (!lastSelectedRowRange) {
+      csToast.error('먼저 반복할 행 범위를 드래그로 선택하세요.')
+      return
+    }
+
+    const sheetIndex = spreadsheetParent.getWorksheetActive()
+    const startRow = Math.min(lastSelectedRowRange.y1, lastSelectedRowRange.y2)
+    const endRow   = Math.max(lastSelectedRowRange.y1, lastSelectedRowRange.y2)
+    const current  = sheetRepeatRegions[sheetIndex]
+
+    if (current && current.startRow === startRow && current.endRow === endRow) {
+      // 동일 범위 재클릭 → 해제
+      sheetRepeatRegions[sheetIndex] = undefined
+      applyRepeatRegionDOM(sheetIndex, undefined)
+      csToast.success('반복 영역 지정을 해제했습니다.')
+    } else {
+      // 새 범위 지정
+      const newRegion = { startRow, endRow }
+      sheetRepeatRegions[sheetIndex] = newRegion
+      applyRepeatRegionDOM(sheetIndex, newRegion)
+      csToast.success(`${startRow + 1}~${endRow + 1}행을 반복 영역으로 지정했습니다.`)
+    }
+    onchange?.()
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────────
   // 서명/직인 자산 삽입 팝오버 (2026-08-16 — ContractDocumentEditor.svelte의 동일 기능과
   // 같은 GET /api/cms/signature-assets 재사용, UI 패턴도 동일하게 맞춤)
   // ─────────────────────────────────────────────────────────────────────────────
@@ -177,14 +278,17 @@
   }
 
   // ─────────────────────────────────────────────────────────────────────────────
-  // A4 용지 맞춤 보조도구 (2026-08-16)
+  // A4 용지 맞춤 보조도구 (2026-08-16, 2026-08-27 동작 범위 정정)
   //
-  // sheetToWorksheetConfig()가 최초 로드 시 fitColumnWidthsToTarget()으로 컬럼너비를
-  // A4 폭(642px) 안에 맞춰주지만, 이후 사용자가 컬럼 경계를 직접 드래그해 넓히면 다시
-  // A4 폭을 벗어날 수 있다. 이 버튼은 현재 활성 시트의 실제 컬럼너비를 다시 읽어 동일한
+  // A4 폭(642px) 자동축소는 xlsx 최초 가져오기 시점(xlsxImport.ts parseSheet)에만 1회
+  // 적용된다 — sheetToWorksheetConfig()는 더 이상 로드할 때마다 재계산하지 않는다(과거엔
+  // 매 로드마다 재계산해, 관리자가 A4 폭보다 넓게 직접 조정해 저장한 값이 재오픈할 때마다
+  // 조용히 되돌아가는 문제가 있었음 — 2026-08-27 실사용 중 발견). 이 버튼은 관리자가
+  // 필요할 때 수동으로 현재 활성 시트의 실제 컬럼너비를 다시 읽어 동일한
   // fitColumnWidthsToTarget() 함수(고객 화면 렌더러 spreadsheetRender.ts와 동일 기준)로
   // 재계산한 뒤 ws.setWidth()로 그리드에 즉시 반영한다 — "지금 보이는 그대로"가 곧
-  // A4 출력 결과와 일치하도록 보장.
+  // A4 출력 결과와 일치하도록 보장. 자동으로는 실행되지 않으며 저장 시에도 호출되지
+  // 않는다(관리자가 A4보다 넓은 표를 의도적으로 유지하고 싶을 수 있으므로).
   // ─────────────────────────────────────────────────────────────────────────────
 
   function fitColumnsToA4(): void {
@@ -621,7 +725,11 @@
         // 위젯 인스턴스를 읽지 못하면 initialDoc 해당 시트로 폴백
         return initialDoc?.sheets[i] ?? emptySheet(name)
       }
-      return worksheetConfigToSheet(name, ws)
+      const sheet = worksheetConfigToSheet(name, ws)
+      // repeatRegion은 jspreadsheet-ce가 알지 못하므로 별도 Svelte 상태에서 주입한다
+      const repeatRegion = sheetRepeatRegions[i]
+      if (repeatRegion !== undefined) sheet.repeatRegion = repeatRegion
+      return sheet
     })
 
     return { sheets, activeSheetIndex }
@@ -718,6 +826,10 @@
       const jspreadsheet = jssModule.default
 
       const doc = initialDoc ?? emptyDoc()
+
+      // 반복 영역 초기값 복원 (initialDoc에서 — Stage 3, 2026-08-28)
+      sheetRepeatRegions = doc.sheets.map((s) => s.repeatRegion)
+
       const worksheetConfigs = doc.sheets.map((sheet) => {
         const config = sheetToWorksheetConfig(sheet)
         return {
@@ -726,6 +838,20 @@
           columns: config.columns.map((col) => ({ ...col, render: renderCellValue })),
         }
       })
+
+      // ─────────────────────────────────────────────────────────────────────
+      // isDirty 변경감지 가드 (2026-08-28) — jspreadsheet(el, opts) 생성자 호출 자체가
+      // worksheetConfigs의 mergeCells/style을 실제로 적용하는 과정에서 onmerge·
+      // onchangestyle 등 "사용자 편집"과 동일한 이벤트를 내부적으로 재사용해 발생시킨다
+      // (실측 확인 — 그리드를 열기만 했는데 "수정 저장" 버튼이 곧바로 활성화됨). 생성자
+      // 호출이 끝난 뒤(다음 macrotask, 지연 렌더링까지 포함해 안전하게) 이 가드를 풀기
+      // 전까지는 onchange?.()를 호출하지 않아, 초기 로드 시점의 이벤트를 "실제 사용자
+      // 편집"과 구분한다.
+      // ─────────────────────────────────────────────────────────────────────
+      let skipChangeTracking = true
+      const notifyChange = () => {
+        if (!skipChangeTracking) onchange?.()
+      }
 
       // jspreadsheet(el, opts) → WorksheetInstance[]
       // WorksheetInstance[0].parent → SpreadsheetInstance (tabs 공유 부모)
@@ -768,10 +894,45 @@
               return defaultToolbar
             },
         worksheets: worksheetConfigs,
-        onselection: (instance: unknown, x1: number, y1: number) => {
+        // ─────────────────────────────────────────────────────────────────────
+        // "수정 저장" 버튼 isDirty 판정용 변경 감지 (2026-08-28, Stephen 요청)
+        //
+        // jspreadsheet-ce는 "무언가 하나라도 바뀌었다"를 한 번에 알려주는 단일 이벤트가
+        // 없다 — 실제로 콘텐츠를 바꾸는 조작(셀 값·서식·컬럼너비·병합·행/열 추가삭제·
+        // 붙여넣기·정렬·되돌리기/다시하기)마다 서로 다른 이벤트가 개별적으로 발생한다.
+        // onselection과 동일하게 이 이벤트들도 WorksheetOptions가 아니라 최상위
+        // SpreadsheetOptions 소속이라 여기(jspreadsheet() 최상위 호출 인자)에 등록해야
+        // 실제로 호출된다. 전부 동일하게 notifyChange()만 호출(위 skipChangeTracking
+        // 가드 경유) — "무엇이 바뀌었는지"는 구분할 필요 없이 "바뀌었다"는 사실만
+        // 부모에 전달하면 충분하다.
+        // ─────────────────────────────────────────────────────────────────────
+        onafterchanges: () => notifyChange(),
+        onchangestyle: () => notifyChange(),
+        onresizecolumn: () => notifyChange(),
+        onresizerow: () => notifyChange(),
+        onmerge: () => notifyChange(),
+        oninsertrow: () => { notifyChange(); reapplyRepeatRegionAllSheets() },
+        ondeleterow: () => { notifyChange(); reapplyRepeatRegionAllSheets() },
+        oninsertcolumn: () => notifyChange(),
+        ondeletecolumn: () => notifyChange(),
+        onmoverow: () => notifyChange(),
+        onmovecolumn: () => notifyChange(),
+        onpaste: () => notifyChange(),
+        onundo: () => notifyChange(),
+        onredo: () => notifyChange(),
+        onsort: () => notifyChange(),
+        // ⚠️ y2는 jspreadsheet-ce가 실제로 전달하는 4번째 인자 — .d.ts 타입선언에는 없지만
+        // 런타임에서 항상 제공된다(드래그 선택의 끝 행). 반복 영역 행 범위 캡처에 필요.
+        onselection: (instance: unknown, x1: number, y1: number, _x2: number, y2: number) => {
           if (isWorksheetLike(instance)) {
             lastSelectedWs = instance
             lastSelectedCoords = [x1, y1]
+            // 반복 영역 지정을 위해 마지막 선택 행 범위를 캐시 (Stage 3, 2026-08-28)
+            lastSelectedRowRange = { y1, y2: y2 ?? y1 }
+            // 활성 시트 인덱스 갱신 (탭 전환 시에도 onselection이 호출됨)
+            if (spreadsheetParent) {
+              activeSheetIndexState = spreadsheetParent.getWorksheetActive()
+            }
             // 이미지 레이어 클릭은 pointerdown에서 preventDefault+stopPropagation으로
             // 이 onselection 자체가 발생하지 않도록 막아뒀다 — 따라서 여기 도달했다는 건
             // 보통 "이미지가 아닌 다른 곳(다른 셀 등)을 선택했다"는 뜻이므로 이전에 선택돼
@@ -821,6 +982,21 @@
       }
 
       initialized = true
+      // 생성자 호출 도중(및 그 직후 마이크로태스크에서) 발생하는 초기 렌더링용
+      // 이벤트를 모두 흘려보낸 뒤에야 실제 사용자 편집 감지를 시작한다.
+      // 동시에 반복 영역 DOM 밴드도 그리드 완전 렌더링 후에 적용한다(Stage 3, 2026-08-28).
+      setTimeout(() => {
+        skipChangeTracking = false
+        // jspreadsheet-ce 런타임 worksheet 인스턴스의 .table 프로퍼티로 <table> 요소 확보
+        wsTableElements = wsInstances.map((ws) => {
+          const t = (ws as unknown as Record<string, unknown>)['table']
+          return t instanceof HTMLTableElement ? t : null
+        })
+        // initialDoc에서 복원한 반복 영역을 DOM에 반영
+        sheetRepeatRegions.forEach((region, i) => {
+          if (region) applyRepeatRegionDOM(i, region)
+        })
+      }, 0)
     } catch (err) {
       initError = err instanceof Error ? err.message : '스프레드시트 에디터 로딩 실패'
     }
@@ -904,6 +1080,25 @@
           onclick={printAsA4}
           title="A4 용지 기준으로 인쇄합니다"
         >A4 출력</button>
+      </div>
+
+      <!-- 반복 영역 지정 (Stage 3, 2026-08-28) — 드래그로 행 범위 선택 후 클릭으로 지정/해제 -->
+      <span class="cse-sep"></span>
+      <div class="cse-tool-group cse-repeat-group" role="group" aria-label="반복 영역 도구">
+        {#if sheetRepeatRegions[activeSheetIndexState]}
+          <span class="cse-repeat-badge" title="현재 반복 영역 행 범위">
+            {sheetRepeatRegions[activeSheetIndexState]!.startRow + 1}~{sheetRepeatRegions[activeSheetIndexState]!.endRow + 1}행
+          </span>
+        {/if}
+        <button
+          type="button"
+          class="cse-tool-btn"
+          class:cse-repeat-active={!!sheetRepeatRegions[activeSheetIndexState]}
+          onclick={toggleRepeatRegion}
+          title={sheetRepeatRegions[activeSheetIndexState]
+            ? '현재 반복 영역 지정을 해제합니다'
+            : '드래그로 행 범위를 선택한 뒤 클릭하면 반복 영역으로 지정됩니다'}
+        >{sheetRepeatRegions[activeSheetIndexState] ? '반복 해제' : '반복 영역 지정'}</button>
       </div>
 
       <!-- 2026-08-19: 크기조절 UI 중복 제거(Stephen 요청) — 이전에는 이 상단 툴바에도
@@ -1114,6 +1309,65 @@
     cursor: not-allowed;
   }
 
+  /* 반복 영역 지정 버튼 — 활성(지정된) 상태 (Stage 3, 2026-08-28) */
+  .cse-tool-btn.cse-repeat-active {
+    background: var(--cs-purple-op10, rgba(59, 47, 138, 0.10));
+    border-color: var(--cs-purple, #3B2F8A);
+    color: var(--cs-purple, #3B2F8A);
+  }
+  .cse-tool-btn.cse-repeat-active:hover {
+    background: rgba(59, 47, 138, 0.16);
+  }
+
+  /* 현재 반복 영역 행 범위 표시 배지 */
+  .cse-repeat-badge {
+    font-size: 10px;
+    font-weight: 700;
+    color: var(--cs-purple, #3B2F8A);
+    background: var(--cs-purple-op10, rgba(59, 47, 138, 0.10));
+    border-radius: var(--radius-full, 99px);
+    padding: 1px 7px;
+    white-space: nowrap;
+    flex-shrink: 0;
+  }
+
+  .cse-repeat-group {
+    flex-shrink: 0;
+  }
+
+  /* ─────────────────────────────────────────────────────────────────────────────
+   * 반복 영역 행 시각적 밴드 (Stage 3, 2026-08-28)
+   * data-cse-repeat 속성은 applyRepeatRegionDOM()이 <tr>에 직접 설정한다.
+   * <tr>에 background-color를 적용하면 jspreadsheet의 셀 선택 강조(<td>에 직접 적용)가
+   * 자연스럽게 우선됨 — !important 충돌 없이 선택 하이라이트와 공존 가능.
+   * ───────────────────────────────────────────────────────────────────────────── */
+
+  /* 반복 영역 전체 행 — 연한 보라 배경 */
+  .spreadsheet-container :global(tr[data-cse-repeat]) {
+    background-color: rgba(59, 47, 138, 0.06);
+  }
+
+  /* 반복 영역 첫 행(또는 단독 행) — 약간 더 진한 배경 + 상단 경계선 */
+  .spreadsheet-container :global(tr[data-cse-repeat="first"] > td),
+  .spreadsheet-container :global(tr[data-cse-repeat="only"] > td) {
+    border-top: 2px solid rgba(59, 47, 138, 0.45) !important;
+  }
+  .spreadsheet-container :global(tr[data-cse-repeat="first"]),
+  .spreadsheet-container :global(tr[data-cse-repeat="only"]) {
+    background-color: rgba(59, 47, 138, 0.10);
+  }
+
+  /* 반복 영역 끝 행(또는 단독 행) — 하단 경계선 */
+  .spreadsheet-container :global(tr[data-cse-repeat="last"] > td),
+  .spreadsheet-container :global(tr[data-cse-repeat="only"] > td) {
+    border-bottom: 2px solid rgba(59, 47, 138, 0.45) !important;
+  }
+
+  /* 반복 영역 첫 번째 열 — 왼쪽 강조 인디케이터 */
+  .spreadsheet-container :global(tr[data-cse-repeat] > td:first-child) {
+    box-shadow: inset 3px 0 0 rgba(59, 47, 138, 0.5) !important;
+  }
+
   .cse-sig-popover {
     position: absolute;
     top: calc(100% + 4px);
@@ -1283,6 +1537,13 @@
    * .spreadsheet-container 상단에 고정해 동일한 "스크롤해도 편집메뉴 유지" 동작을
    * 맞춘다 — 중간 조상(.jss_container 등)에 overflow 제약이 없어(기본값 visible)
    * sticky 동작을 막지 않는다(jspreadsheet.css 확인 완료).
+   *
+   * ⛔ 2026-08-28 추가 — 아래 "기준자 바 고정" 절에서 tableOverflow를 꺼서 가로 스크롤을
+   * `.jss_content` 대신 이 `.spreadsheet-container`가 전담하게 되면서, 이 툴바도 함께
+   * 좌우로 흘러가버리는 회귀가 생겼다(실측: scrollLeft=100 적용 시 툴바 x좌표가 그만큼
+   * 그대로 왼쪽으로 이동 — sticky가 top만 걸려있고 left는 없었기 때문). left:0을 추가해
+   * 가로 스크롤에도 화면 왼쪽에 고정되도록 보정. z-index도 기준자 바(thead 3 · 코너 4)
+   * 보다 위(5)로 올려 항상 최상단에 보이게 한다.
    */
   .spreadsheet-container :global(.jss_toolbar) {
     background: var(--cs-surface-gray, #f6f6f6);
@@ -1293,7 +1554,8 @@
     padding: 6px 10px;
     position: sticky;
     top: 0;
-    z-index: 2;
+    left: 0;
+    z-index: 5;
   }
   .spreadsheet-container :global(.jtoolbar-item) {
     border-radius: var(--radius-sm, 8px);
@@ -1318,5 +1580,108 @@
   .spreadsheet-container :global(.jtoolbar .jpicker-header) {
     font-size: 12px;
     color: var(--cs-text, #100B32);
+  }
+
+  /*
+   * 열(A,B,C…)·행(1,2,3…) 기준자 바 캔버스 스크롤 고정 (2026-08-28, Stephen UX 요청)
+   *
+   * ⛔ 최초 구현(2026-08-28 초판)은 이 두 규칙만으로는 세로 스크롤 고정이 안 돼(아래
+   * 참고) JS scroll 리스너 + transform:translateY 보정을 덧붙였으나, 그 결과 thead가
+   * 실제 레이아웃 위치는 그대로 둔 채 "그림만" 이동해 스크롤된 실제 콘텐츠 위에
+   * 겹쳐 그려지는 부작용(열 문자 바가 문서 중간에 떠 있는 것처럼 보임 — Stephen 실사용
+   * 중 재현)이 있었다. 근본 원인은 jspreadsheet-ce의 tableOverflow:true 옵션이
+   * `.jss_content`에 자체 overflow-x:auto를 걸어 별도의 가로 스크롤 래퍼를 만드는
+   * 것이었다 — CSS 스펙상 overflow-x가 'visible'이 아니면 overflow-y도 자동으로
+   * 'auto'가 되어(브라우저 강제 계산값) `.jss_content`가 세로축에서도 "스크롤
+   * 컨테이너"로 취급되지만, 정작 세로 스크롤은 그 바깥 `.spreadsheet-container`가
+   * 담당해 `.jss_content` 자신은 실제로 스크롤되는 일이 없다 — position:sticky의
+   * "가장 가까운 스크롤 조상"이 엉뚱한 `.jss_content`로 잡혀 top이 고정되지 않았다.
+   *
+   * ✅ 최종 해결: spreadsheetWidgetAdapter.ts sheetToWorksheetConfig()에서
+   * tableOverflow를 false로 꺼서 이 내부 래퍼 자체를 생성하지 않는다 — 가로 스크롤도
+   * 세로 스크롤과 동일하게 바깥 `.spreadsheet-container`(CSS overflow:auto, 원래도
+   * 양축 모두 처리 가능) 하나가 전담하게 되어, thead·행 번호 열 모두 position:sticky의
+   * "가장 가까운 스크롤 조상"이 항상 이 컨테이너와 일치한다 — JS 보정 없이 아래
+   * 순수 CSS만으로 두 축 모두 정상 고정된다(실측 확인).
+   *
+   * top: 41px는 .jss_toolbar의 실측 높이(padding 6px*2 + 버튼 높이) — 툴바도 sticky
+   * top:0이므로 그 바로 아래에 이어 붙어야 겹치지 않는다.
+   * 코너 셀(.jss_selectall)은 가로·세로 두 축 모두 고정돼야 하므로 두 규칙이 함께
+   * 적용되고, 다른 sticky 요소보다 z-index를 더 높여 항상 최상단에 보이게 한다.
+   */
+  .spreadsheet-container :global(.jss_worksheet thead td) {
+    position: sticky;
+    top: 41px;
+    z-index: 3;
+    background: var(--cs-surface-gray, #f6f6f6);
+  }
+  .spreadsheet-container :global(.jss_worksheet tbody td.jss_row) {
+    position: sticky;
+    left: 0;
+    z-index: 2;
+    background: var(--cs-surface-gray, #f6f6f6);
+  }
+  .spreadsheet-container :global(.jss_worksheet thead td.jss_selectall) {
+    left: 0;
+    z-index: 4;
+  }
+
+  /*
+   * 드래그 선택 영역 시각적 표시 강화 (2026-08-28, Stephen 요청)
+   *
+   * jspreadsheet-ce는 다중 셀 드래그선택 자체는 정상 동작하지만(내부적으로
+   * .highlight/.highlight-selected/.highlight-top·left·right·bottom 클래스를 정확히
+   * 붙임 — 실측 확인), 기본 CSS(jspreadsheet.css)가 이 클래스들에 주는 효과가
+   * `background-color:rgba(0,0,0,0.05)`(5% 검정)와 `border-*:1px solid #000` 정도로
+   * 매우 옅다. 계약서 셀 대부분이 이미 자체 서식(배경색·테두리를 인라인 style로 직접
+   * 지정 — spreadsheetWidgetAdapter.ts formattingToCss)을 갖고 있는데, 인라인 style은
+   * 항상 외부 stylesheet 클래스 규칙보다 우선하므로 그 기본 highlight 효과가 완전히
+   * 가려져 "드래그해도 선택된 게 안 보인다"로 이어졌다(2026-08-28 Stephen 재현).
+   *
+   * 해결: 인라인 style이 절대 건드리지 않는 속성만 사용한다.
+   *   - 채움: background-color 대신 background-image(단색 linear-gradient)를 얹는다.
+   *     background-image는 background-color와 별개 레이어라 인라인 background-color
+   *     위에도 그대로 겹쳐 그려진다(같은 background 축약형이 아닌 한 서로 안 가림).
+   *   - 테두리: border 대신 box-shadow(inset)를 쓴다. box-shadow는 셀 서식 데이터
+   *     (XlsxCellFormatting)에 아예 없는 속성이라 어떤 셀에도 인라인으로 지정될 일이
+   *     없음 — 항상 위에 그려짐이 보장된다.
+   */
+  .spreadsheet-container :global(.jss_worksheet .highlight) {
+    background-image: linear-gradient(rgba(59, 47, 138, 0.22), rgba(59, 47, 138, 0.22));
+  }
+  .spreadsheet-container :global(.jss_worksheet .highlight-selected) {
+    background-image: linear-gradient(rgba(59, 47, 138, 0.36), rgba(59, 47, 138, 0.36));
+  }
+  .spreadsheet-container :global(.jss_worksheet .highlight-top) {
+    box-shadow: inset 0 2px 0 0 var(--cs-purple, #3B2F8A);
+  }
+  .spreadsheet-container :global(.jss_worksheet .highlight-left) {
+    box-shadow: inset 2px 0 0 0 var(--cs-purple, #3B2F8A);
+  }
+  .spreadsheet-container :global(.jss_worksheet .highlight-right) {
+    box-shadow: inset -2px 0 0 0 var(--cs-purple, #3B2F8A);
+  }
+  .spreadsheet-container :global(.jss_worksheet .highlight-bottom) {
+    box-shadow: inset 0 -2px 0 0 var(--cs-purple, #3B2F8A);
+  }
+  /* box-shadow는 셀당 하나만 그려지므로, 모서리 셀(두 변이 동시에 선택 경계)은
+     두 방향을 합성한 값을 직접 지정 — jspreadsheet.css가 highlight-top.highlight-left
+     조합에만 자체 대응하던 것과 동일한 원칙을 4방향 전부로 확장. */
+  .spreadsheet-container :global(.jss_worksheet .highlight-top.highlight-left) {
+    box-shadow: inset 2px 2px 0 0 var(--cs-purple, #3B2F8A);
+  }
+  .spreadsheet-container :global(.jss_worksheet .highlight-top.highlight-right) {
+    box-shadow: inset -2px 2px 0 0 var(--cs-purple, #3B2F8A);
+  }
+  .spreadsheet-container :global(.jss_worksheet .highlight-bottom.highlight-left) {
+    box-shadow: inset 2px -2px 0 0 var(--cs-purple, #3B2F8A);
+  }
+  .spreadsheet-container :global(.jss_worksheet .highlight-bottom.highlight-right) {
+    box-shadow: inset -2px -2px 0 0 var(--cs-purple, #3B2F8A);
+  }
+  /* 단일 활성 셀(앵커) 테두리 — 4방향 selection-* 클래스가 항상 함께 붙는 경우
+     (jspreadsheet.css 기본 동작)를 하나의 링으로 합성. */
+  .spreadsheet-container :global(.jss_worksheet .selection-top.selection-left.selection-right.selection-bottom) {
+    box-shadow: inset 0 0 0 2px var(--cs-purple, #3B2F8A);
   }
 </style>

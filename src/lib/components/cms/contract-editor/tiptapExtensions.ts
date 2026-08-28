@@ -172,6 +172,29 @@ export const CustomImage = Image.extend({
 })
 
 /**
+ * 반복 영역(repeatRegion) 속성 보존 확장.
+ *
+ * 다중 상품 반복행 기능(Stage 5)에서 어느 행이 반복 템플릿인지를 표시한다.
+ * HTML 직렬화 시 data-repeat-region="true" 속성으로 저장되며,
+ * 에디터 DOM 스타일링(배경 강조)에도 활용된다.
+ * substituteTiptapDoc()이 이 속성을 읽어 반복 영역을 확장한다.
+ */
+export const CustomTableRow = TableRow.extend({
+  addAttributes() {
+    return {
+      ...this.parent?.(),
+      repeatRegion: {
+        default: false,
+        parseHTML: (element: HTMLElement) =>
+          element.getAttribute('data-repeat-region') === 'true',
+        renderHTML: (attrs: Record<string, unknown>) =>
+          attrs['repeatRegion'] ? { 'data-repeat-region': 'true' } : {},
+      },
+    }
+  },
+})
+
+/**
  * 표 헤더 backgroundColor / borderColor 보존 확장.
  */
 export const CustomTableHeader = TableHeader.extend({
@@ -220,7 +243,7 @@ export const TIPTAP_CONTRACT_EXTENSIONS = [
   FontFamily,
   Link.configure({ openOnClick: false }),
   Table.configure({ resizable: true }),
-  TableRow,
+  CustomTableRow,       // TableRow → CustomTableRow (반복 영역 지정 지원, Stage 5)
   CustomTableHeader,
   CustomTableCell,
   CustomImage,          // Image → CustomImage (width·align 속성 추가)
