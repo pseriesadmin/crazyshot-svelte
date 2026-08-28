@@ -72,6 +72,30 @@ function isValidFontSize(value: string): boolean {
   return CSS_FONT_SIZE.test(value.trim())
 }
 
+/** jspreadsheet 정렬 툴바가 실제로 저장하는 4개 값만 허용 */
+const CSS_TEXT_ALIGN = /^(left|center|right|justify)$/i
+
+function isValidTextAlign(value: string): boolean {
+  return CSS_TEXT_ALIGN.test(value.trim())
+}
+
+/**
+ * jspreadsheet 테두리 툴바가 border-top/right/bottom/left에 저장하는 "Npx 스타일 색상"
+ * 형식만 허용(2026-08-28 추가). 예: "1px solid rgb(0, 0, 0)", "2px dashed #FF0000".
+ *
+ * 2026-08-28(같은 날 3차 후속): 순수 CSS 색상 키워드("black" 등)도 허용 —
+ * 이미 사방 테두리가 있는 셀에 한 변만 툴바로 재지정하면 브라우저(CSSOM)가
+ * border-color 축약형을 재직렬화하면서 새로 지정한 변만 'black' 같은 키워드로,
+ * 나머지 변은 기존 'rgb(...)' 그대로 섞어서 돌려준다(실측 확인) — 문자만으로
+ * 구성된 식별자라 콜론·괄호·세미콜론 등 인젝션에 쓰일 문자가 없어 안전.
+ */
+const CSS_BORDER_SIDE_VALUE =
+  /^\d+(\.\d+)?px\s+(solid|dashed|dotted|double)\s+(#[0-9A-Fa-f]{6}|rgba?\(\s*\d{1,3}\s*,\s*\d{1,3}\s*,\s*\d{1,3}\s*(,\s*(0|1|0?\.\d+)\s*)?\)|[A-Za-z]{3,20})$/i
+
+function isValidBorderSideValue(value: string): boolean {
+  return CSS_BORDER_SIDE_VALUE.test(value.trim())
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // 셀 인라인 스타일 생성
 // ─────────────────────────────────────────────────────────────────────────────
@@ -85,6 +109,18 @@ function cellFormattingToStyle(fmt: XlsxCellFormatting): string {
   if (fmt.borderColor && isValidCssColor(fmt.borderColor)) {
     parts.push(`border:1px solid ${fmt.borderColor}`)
   }
+  if (fmt.borderTop && isValidBorderSideValue(fmt.borderTop)) {
+    parts.push(`border-top:${fmt.borderTop}`)
+  }
+  if (fmt.borderRight && isValidBorderSideValue(fmt.borderRight)) {
+    parts.push(`border-right:${fmt.borderRight}`)
+  }
+  if (fmt.borderBottom && isValidBorderSideValue(fmt.borderBottom)) {
+    parts.push(`border-bottom:${fmt.borderBottom}`)
+  }
+  if (fmt.borderLeft && isValidBorderSideValue(fmt.borderLeft)) {
+    parts.push(`border-left:${fmt.borderLeft}`)
+  }
   if (fmt.color && isValidCssColor(fmt.color)) {
     parts.push(`color:${fmt.color}`)
   }
@@ -93,6 +129,9 @@ function cellFormattingToStyle(fmt: XlsxCellFormatting): string {
   }
   if (fmt.fontSize && isValidFontSize(fmt.fontSize)) {
     parts.push(`font-size:${fmt.fontSize}`)
+  }
+  if (fmt.textAlign && isValidTextAlign(fmt.textAlign)) {
+    parts.push(`text-align:${fmt.textAlign}`)
   }
   return parts.join(';')
 }

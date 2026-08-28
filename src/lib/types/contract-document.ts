@@ -187,6 +187,17 @@ export interface SpreadsheetSheet {
   merges: SheetMergeRange[]
   colWidths: (number | null)[]
   cellFormatting: XlsxCellFormatting[][]
+  /**
+   * 다중 상품 반복 영역 (Stage 2 신규).
+   * 이 범위의 템플릿 행을 ContractSubstitutionData.상품목록 배열 항목 수만큼 확장한다.
+   *
+   * - startRow / endRow: 0-indexed 행 범위 (inclusive 양끝 포함)
+   * - 항목 수 N > 템플릿 행 수 T: 마지막 템플릿 행의 셀 포맷을 복제해 행 자동 추가
+   * - 항목 수 N < T: 항목 수만큼만 출력 (잉여 템플릿 행 미출력)
+   * - 항목 수 N = 0 또는 상품목록 미정의: 기존 스칼라 치환 동작 유지
+   * - 없으면 기존 스프레드시트 1:1 스칼라 치환 동작 완전 유지 (하위호환)
+   */
+  repeatRegion?: { startRow: number; endRow: number }
 }
 
 /**

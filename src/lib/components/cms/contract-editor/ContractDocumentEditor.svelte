@@ -19,6 +19,7 @@
   import { CustomImage, TIPTAP_CONTRACT_EXTENSIONS } from './tiptapExtensions'
   import type { TiptapDocBlock, ContractDocumentPayload, MergeFieldAttrs } from '$lib/types/contract-document'
   import { ensureMaterialIconsFont } from '$lib/utils/loadMaterialIconsFont'
+  import { fillMissingTableColwidths } from '$lib/utils/docImport/tableColwidthFill'
 
   // --------------------------------------------------------------------------
   // Props
@@ -439,7 +440,7 @@
   const editorStore = createEditor({
     extensions: editorExtensions,
     content: untrack(() =>
-      initialContent?.doc ??
+      (initialContent?.doc ? fillMissingTableColwidths(initialContent.doc) : null) ??
       initialHtml ??
       ({ type: 'doc', content: [{ type: 'paragraph' }] } as JSONContent)
     ),
@@ -662,6 +663,53 @@
   }
 
   // --------------------------------------------------------------------------
+  // 반복 영역 지정/해제 (Stage 5 — 다중 상품 반복행)
+  // 현재 커서가 있는 tableRow 노드의 repeatRegion 속성을 토글한다.
+  // --------------------------------------------------------------------------
+
+  /** 현재 커서 위치가 반복 영역으로 지정된 행 안에 있는지 여부 */
+  let isInRepeatRow = $derived(
+    (() => {
+      const editor = $editorStore
+      if (!editor) return false
+      const selFrom = editor.state.selection.$from
+      for (let d = selFrom.depth; d >= 0; d--) {
+        const node = selFrom.node(d)
+        if (node.type.name === 'tableRow') {
+          return node.attrs['repeatRegion'] === true
+        }
+      }
+      return false
+    })()
+  )
+
+  /**
+   * 현재 커서가 있는 표 행의 repeatRegion 속성을 토글한다.
+   * 반복 영역이면 해제, 아니면 지정한다.
+   * 표 바깥에서 호출하면 경고 토스트를 표시한다.
+   */
+  function toggleRepeatRegionOnCurrentRow(): void {
+    const editor = $editorStore
+    if (!editor) return
+    const { state } = editor
+    const selFrom = state.selection.$from
+    for (let d = selFrom.depth; d >= 0; d--) {
+      const node = selFrom.node(d)
+      if (node.type.name === 'tableRow') {
+        const rowPos = selFrom.before(d)
+        editor.view.dispatch(
+          state.tr.setNodeMarkup(rowPos, undefined, {
+            ...node.attrs,
+            repeatRegion: !node.attrs['repeatRegion'],
+          })
+        )
+        return
+      }
+    }
+    csToast.warning('표 안의 행을 클릭한 뒤 사용하세요.')
+  }
+
+  // --------------------------------------------------------------------------
   // 이미지 업로드 핸들러 (P1-6, P0-3 검증 포함)
   // --------------------------------------------------------------------------
   function triggerImgUpload() {
@@ -733,7 +781,8 @@
   // 현재 에디터 JSON 반환 (폼 직렬화·저장용)
   // --------------------------------------------------------------------------
   export function getEditorJSON(): JSONContent | null {
-    return $editorStore?.getJSON() ?? null
+    const doc = $editorStore?.getJSON()
+    return doc ? fillMissingTableColwidths(doc) : null
   }
 
   // --------------------------------------------------------------------------
@@ -745,7 +794,7 @@
     if (!e) return
     saving = true
     try {
-      const doc = e.getJSON()
+      const doc = fillMissingTableColwidths(e.getJSON())
       const block: TiptapDocBlock = { type: 'tiptap-doc', doc }
       await onSave({
         title:          titleProp,
@@ -1069,6 +1118,14 @@
           title="헤더열 토글"
           aria-label="헤더열 토글"
         >헤더열</button>
+        <button
+          type="button"
+          class="cde-btn"
+          class:active={isInRepeatRow}
+          onclick={toggleRepeatRegionOnCurrentRow}
+          title="이 행을 반복 영역으로 지정/해제 — 계약서 발송 시 상품목록 항목별로 행이 반복됩니다"
+          aria-label="반복 영역 지정/해제"
+        >반복↩</button>
         <button
           type="button"
           class="cde-btn cde-icon-btn"
@@ -1453,6 +1510,19 @@
   }
   .cde-editor-area :global(.ProseMirror .selectedCell) {
     background: rgba(59,47,138,0.08);
+  }
+
+  /*
+   * 반복 영역으로 지정된 표 행(repeatRegion=true) 시각적 표시 (Stage 5).
+   * CustomTableRow의 renderHTML이 data-repeat-region="true"를 <tr>에 렌더링하고
+   * 이 CSS가 그 셀들에 옅은 배경 + 하단 강조선을 적용해 에디터에서 반복 영역을 식별하게 한다.
+   * 발송·인쇄 시에는 이 CSS가 적용되지 않으므로(인라인 스타일 아님) 출력에 영향 없음.
+   */
+  .cde-editor-area :global(.ProseMirror tr[data-repeat-region="true"] td),
+  .cde-editor-area :global(.ProseMirror tr[data-repeat-region="true"] th) {
+    background: rgba(59,47,138,0.06);
+    outline: 1px dashed rgba(59,47,138,0.30);
+    outline-offset: -1px;
   }
 
   /* 이미지 — NodeView 인라인 스타일이 이 스타일보다 우선하므로 폴백 역할만 수행 */

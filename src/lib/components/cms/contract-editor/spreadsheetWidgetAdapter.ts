@@ -13,7 +13,6 @@
 import * as XLSX from 'xlsx'
 import type { SpreadsheetSheet } from '$lib/types/contract-document'
 import type { SheetMergeRange, XlsxCellFormatting } from '$lib/types/sheet-format'
-import { fitColumnWidthsToTarget } from '$lib/utils/docImport/fitColumnWidths'
 
 // ─────────────────────────────────────────────────────────────────────────────
 // jspreadsheet-ce API duck-type 인터페이스 (런타임 import 없음)
@@ -106,15 +105,62 @@ export function jssMergesToSheet(
  * 있어도 cssToFormatting()이 통째로 버려 — 저장 후 재로드하면 배경색만 남고 글자색·
  * 굵기·크기는 매번 소실됐다(실사용 계약서에서 어두운 배경 위 글자색이 기본값으로
  * 되돌아가 판독 불가 상태가 되는 것으로 확인).
+ *
+ * 2026-08-28: text-align 필드 추가 — 정렬 툴바(좌/가운데/우/양쪽정렬)로 지정한 값도
+ * 동일한 이유로 저장 시 통째로 유실되고 있었다(CMS 실사용 중 발견 — 저장 후 재오픈하면
+ * 정렬이 항상 기본값(가운데)으로 되돌아감).
+ *
+ * 2026-08-28(같은 날 후속): border-top/right/bottom/left 4개 필드 추가 — 테두리 툴바
+ * (사방/외곽/안쪽/가로/세로/선 스타일 등)로 지정한 값도 동일한 이유로 유실되고 있었다.
+ * 기존 borderColor(사방 통일 "border: 1px solid X" shorthand — .xlsx 임포트 전용 경로)는
+ * 하위호환을 위해 그대로 유지, 신규 4필드와 별개로 함께 출력된다.
  */
 function formattingToCss(fmt: XlsxCellFormatting): string {
   const parts: string[] = []
   if (fmt.backgroundColor) parts.push(`background-color: ${fmt.backgroundColor}`)
   if (fmt.borderColor) parts.push(`border: 1px solid ${fmt.borderColor}`)
+  if (fmt.borderTop) parts.push(`border-top: ${fmt.borderTop}`)
+  if (fmt.borderRight) parts.push(`border-right: ${fmt.borderRight}`)
+  if (fmt.borderBottom) parts.push(`border-bottom: ${fmt.borderBottom}`)
+  if (fmt.borderLeft) parts.push(`border-left: ${fmt.borderLeft}`)
   if (fmt.color) parts.push(`color: ${fmt.color}`)
   if (fmt.fontWeight) parts.push(`font-weight: ${fmt.fontWeight}`)
   if (fmt.fontSize) parts.push(`font-size: ${fmt.fontSize}`)
+  if (fmt.textAlign) parts.push(`text-align: ${fmt.textAlign}`)
   return parts.join('; ')
+}
+
+/**
+ * CSS 값 목록을 공백 기준으로 분리 — rgb()/rgba() 내부의 쉼표·공백은 분리하지 않는다
+ * (괄호 depth를 추적해 함수값 내부 공백은 하나의 토큰으로 유지).
+ */
+function splitCssValueList(value: string): string[] {
+  const tokens: string[] = []
+  let depth = 0
+  let current = ''
+  for (const ch of value.trim()) {
+    if (ch === '(') depth++
+    if (ch === ')') depth--
+    if (ch === ' ' && depth === 0) {
+      if (current) {
+        tokens.push(current)
+        current = ''
+      }
+    } else {
+      current += ch
+    }
+  }
+  if (current) tokens.push(current)
+  return tokens
+}
+
+/** CSS box-model 축약형(1~4개 값) → [top, right, bottom, left] */
+function expandBoxValues(tokens: string[]): [string, string, string, string] {
+  if (tokens.length === 1) return [tokens[0], tokens[0], tokens[0], tokens[0]]
+  if (tokens.length === 2) return [tokens[0], tokens[1], tokens[0], tokens[1]]
+  if (tokens.length === 3) return [tokens[0], tokens[1], tokens[2], tokens[1]]
+  if (tokens.length >= 4) return [tokens[0], tokens[1], tokens[2], tokens[3]]
+  return ['', '', '', '']
 }
 
 /**
@@ -123,6 +169,26 @@ function formattingToCss(fmt: XlsxCellFormatting): string {
  * ⚠️ "color:" 정규식은 "background-color:"의 부분 문자열이기도 하므로, 문자열 시작 또는
  * 세미콜론 직후에 오는 "color:"만 매칭하도록 (?:^|;)\s* 앵커를 둔다 — 앵커 없이 매칭하면
  * background-color 값이 fmt.color로도 잘못 이중 추출된다.
+ *
+ * 2026-08-28(같은 날 3차 후속) — border-width/border-style/border-color 축약형(box-model
+ * 1~4값) 폴백 추가. 이미 사방 테두리("border: 1px solid X")가 있는 셀에 테두리 툴바로
+ * 특정 한 변만 다시 지정하면, 브라우저(CSSOM)가 그 결과를 "border-top: ...;" 같은 단일
+ * 선언이 아니라 border-width/border-style/border-color 3개 축약 선언(변마다 값이 다르면
+ * 공백구분 2~4개 값)으로 자동 재직렬화한다 — 실사용 브라우저 자동화 검증으로 직접 확인된
+ * 동작(jspreadsheet-ce가 cell.style.cssText를 그대로 getStyle()에 반영). 기존
+ * border-top:/border-right:/... 단일 선언 매칭만으로는 이 형태를 전혀 못 읽어 테두리가
+ * 저장 후 재오픈 시 통째로 유실됐다 — 이미 있던 통일 테두리까지 함께 사라지는 회귀였음.
+ *
+ * 2026-08-29 — 통일 border shorthand의 non-solid 스타일 유실 수정. 테두리 툴바에서
+ * 두께·선스타일(점선/파선/이중선)을 먼저 지정한 뒤 사방 패턴(border_all 등 4변 동일값)을
+ * 적용하면, 4변이 전부 같은 값이라 브라우저가 굳이 box-model 축약형(위 폴백)으로 안 쪼개고
+ * "border: 3px dashed black" 같은 단일 border shorthand로 직렬화한다 — Stephen 실사용
+ * 재현(launch-selected-element로 border 피커의 두께·점선/파선 서브컨트롤 직접 확인).
+ * 기존 정규식(borderMatch)은 "solid" 리터럴을 필수로 요구해 dashed/dotted/double 값이
+ * 오면 아예 매칭되지 않아 통째로 유실됐다 — 아래 unifiedBorderMatch가 스타일 무관하게
+ * 폭·스타일·색상을 전부 캡처해 4변 모두에 반영한다(레거시 borderColor는 폭·스타일 정보를
+ * "1px solid"로 고정 렌더링하는 한계가 있어 유지하되, 실제 렌더링은 이 4변 필드가 있으면
+ * 더 구체적인 선언으로 뒤에서 덮어써 정확한 값으로 표시된다 — spreadsheetRender.ts 참고).
  */
 function cssToFormatting(css: string): XlsxCellFormatting {
   const fmt: XlsxCellFormatting = {}
@@ -130,12 +196,60 @@ function cssToFormatting(css: string): XlsxCellFormatting {
   if (bgMatch) fmt.backgroundColor = bgMatch[1].trim()
   const borderMatch = css.match(/border:[^;]*\bsolid\s+([^;]+)/i)
   if (borderMatch) fmt.borderColor = borderMatch[1].trim()
+  const unifiedBorderMatch = css.match(
+    /(?:^|;)\s*border:\s*(\d+(?:\.\d+)?px)\s+(solid|dashed|dotted|double)\s+([^;]+)/i,
+  )
   const colorMatch = css.match(/(?:^|;)\s*color:\s*([^;]+)/i)
   if (colorMatch) fmt.color = colorMatch[1].trim()
   const weightMatch = css.match(/font-weight:\s*([^;]+)/i)
   if (weightMatch) fmt.fontWeight = weightMatch[1].trim()
   const sizeMatch = css.match(/font-size:\s*([^;]+)/i)
   if (sizeMatch) fmt.fontSize = sizeMatch[1].trim()
+  const alignMatch = css.match(/(?:^|;)\s*text-align:\s*([^;]+)/i)
+  if (alignMatch) fmt.textAlign = alignMatch[1].trim()
+  const borderTopMatch = css.match(/(?:^|;)\s*border-top:\s*([^;]+)/i)
+  if (borderTopMatch) fmt.borderTop = borderTopMatch[1].trim()
+  const borderRightMatch = css.match(/(?:^|;)\s*border-right:\s*([^;]+)/i)
+  if (borderRightMatch) fmt.borderRight = borderRightMatch[1].trim()
+  const borderBottomMatch = css.match(/(?:^|;)\s*border-bottom:\s*([^;]+)/i)
+  if (borderBottomMatch) fmt.borderBottom = borderBottomMatch[1].trim()
+  const borderLeftMatch = css.match(/(?:^|;)\s*border-left:\s*([^;]+)/i)
+  if (borderLeftMatch) fmt.borderLeft = borderLeftMatch[1].trim()
+
+  const boxWidthMatch = css.match(/(?:^|;)\s*border-width:\s*([^;]+)/i)
+  const boxStyleMatch = css.match(/(?:^|;)\s*border-style:\s*([^;]+)/i)
+  const boxColorMatch = css.match(/(?:^|;)\s*border-color:\s*([^;]+)/i)
+  if (boxWidthMatch || boxStyleMatch || boxColorMatch) {
+    const widths = expandBoxValues(
+      boxWidthMatch ? splitCssValueList(boxWidthMatch[1]) : ['1px'],
+    )
+    const styles = expandBoxValues(
+      boxStyleMatch ? splitCssValueList(boxStyleMatch[1]) : ['solid'],
+    )
+    const colors = expandBoxValues(
+      boxColorMatch ? splitCssValueList(boxColorMatch[1]) : ['currentColor'],
+    )
+    const sides: Array<['borderTop' | 'borderRight' | 'borderBottom' | 'borderLeft', number]> = [
+      ['borderTop', 0],
+      ['borderRight', 1],
+      ['borderBottom', 2],
+      ['borderLeft', 3],
+    ]
+    for (const [key, idx] of sides) {
+      if (!fmt[key]) {
+        fmt[key] = `${widths[idx]} ${styles[idx]} ${colors[idx]}`.trim()
+      }
+    }
+  }
+
+  if (unifiedBorderMatch) {
+    const full = `${unifiedBorderMatch[1]} ${unifiedBorderMatch[2]} ${unifiedBorderMatch[3].trim()}`
+    if (!fmt.borderTop) fmt.borderTop = full
+    if (!fmt.borderRight) fmt.borderRight = full
+    if (!fmt.borderBottom) fmt.borderBottom = full
+    if (!fmt.borderLeft) fmt.borderLeft = full
+  }
+
   return fmt
 }
 
@@ -146,14 +260,16 @@ function cssToFormatting(css: string): XlsxCellFormatting {
 /**
  * SpreadsheetSheet → jspreadsheet-ce 워크시트 설정.
  *
- * - colWidths: fitColumnWidthsToTarget()으로 A4 폭(642px) 초과 시 비율 축소
+ * - colWidths: sheet.colWidths를 그대로 사용(재계산 없음) — A4 폭(642px) 자동축소는
+ *   xlsx 최초 가져오기 시점(xlsxImport.ts parseSheet)에 1회만 적용된다. 여기서 매번
+ *   다시 축소하면 관리자가 A4 폭보다 넓게 직접 조정해 저장한 값이 재오픈할 때마다
+ *   조용히 되돌아가는 문제가 있었다(2026-08-27 실사용 중 발견 — "수정 저장 후 재오픈해도
+ *   여전히 이상한 폭으로 열림"). A4 폭 유지가 필요하면 "A4 용지 맞춤" 버튼(수동)을 사용.
  * - merges: SheetMergeRange[] → 셀 주소 키 Record
  * - cellFormatting: [행][열] → "셀주소→CSS 문자열" Record
  */
 export function sheetToWorksheetConfig(sheet: SpreadsheetSheet): JssWorksheetConfig {
-  const fittedWidths = fitColumnWidthsToTarget(sheet.colWidths)
-
-  const columns: { width: number }[] = fittedWidths.map((w) => ({
+  const columns: { width: number }[] = sheet.colWidths.map((w) => ({
     width: typeof w === 'number' && w > 0 ? w : 100,
   }))
 
@@ -176,7 +292,24 @@ export function sheetToWorksheetConfig(sheet: SpreadsheetSheet): JssWorksheetCon
     columns,
     mergeCells,
     style,
-    tableOverflow: true,
+    // ⛔ 2026-08-28 tableOverflow:true(+tableWidth:'100%') 폐기 — 이 옵션이 켜지면
+    // jspreadsheet-ce가 `.jss_content`에 자체 overflow-x:auto를 걸어 가로 스크롤 전용
+    // 내부 래퍼를 만드는데, CSS 스펙상 overflow-x가 'visible'이 아니면 overflow-y도
+    // 자동으로 'auto'가 되어(브라우저 강제 계산값, 우회 불가) `.jss_content`가 세로축
+    // 에서도 "스크롤 컨테이너"로 취급된다. 정작 세로 스크롤은 그 바깥의
+    // `.spreadsheet-container`(ContractSpreadsheetEditor.svelte)가 담당하는데
+    // `.jss_content` 자신은 실제로 세로로 스크롤되는 일이 없어(내용 높이만큼 그대로
+    // 늘어남), 그 안의 thead td에 건 position:sticky의 top이 전혀 고정되지 않고
+    // 콘텐츠와 함께 흘러가버리는 문제(스크롤 시 열 문자 기준자 바가 페이지 중간에
+    // "떠 있는" 것처럼 보임 — Stephen 실사용 중 발견·재현)로 이어졌다. tableOverflow를
+    // 꺼서(기본값 false) 이 내부 래퍼 자체를 만들지 않으면, 가로 스크롤도 세로 스크롤과
+    // 동일하게 바깥 `.spreadsheet-container`(CSS overflow:auto — 원래도 양축 모두 처리
+    // 가능) 하나가 전담하게 되어 sticky의 "가장 가까운 스크롤 조상"이 항상 올바른
+    // 컨테이너로 일치한다 — 별도 JS 보정(translateY 트릭) 없이 순수 CSS만으로 해결.
+    tableOverflow: false,
+    // tableOverflow가 false면 jspreadsheet-ce는 tableWidth를 아예 읽지 않는다(source 확인:
+    // `tableOverflow&&(...&&tableWidth&&(...))` 형태로 tableOverflow 뒤에 묶여있음) — 값은
+    // 이제 무의미하지만 JssWorksheetConfig 타입이 필수 필드로 요구해 형식상 유지한다.
     tableWidth: '100%',
   }
 }

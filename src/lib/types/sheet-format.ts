@@ -26,6 +26,23 @@ export interface XlsxCellFormatting {
   fontWeight?: string
   /** CSS font-size — jspreadsheet 툴바는 키워드값(x-small~x-large) 사용, .xlsx 임포트는 'Npt' */
   fontSize?: string
+  /** CSS text-align — 'left'|'center'|'right'|'justify' (jspreadsheet 정렬 툴바 저장값,
+   *  2026-08-28 추가 — 기존엔 이 필드가 아예 없어 정렬 툴바로 지정한 값이 저장 시
+   *  통째로 유실됐다) */
+  textAlign?: string
+  /**
+   * CSS border-top/right/bottom/left 전체 값(예: "1px solid rgb(0, 0, 0)") — jspreadsheet
+   * 네이티브 테두리 툴바(선택 영역에 사방/외곽/안쪽/가로/세로 등 패턴으로 적용) 저장값.
+   * (2026-08-28 추가 — 기존 borderColor 단일 필드는 "border: 1px solid X" 통일 shorthand
+   * 하나만 가정했는데, 실제 테두리 툴바는 border-top/-right/-bottom/-left를 변 단위로
+   * 각각 개별 지정한다(node_modules/jspreadsheet-ce/dist/index.js 툴바 정의 직접 확인) —
+   * borderColor로는 이 개별 선언을 전혀 읽지 못해 테두리 지정이 저장 후 재오픈 시 통째로
+   * 사라지는 현상으로 이어졌다. 값을 파싱하지 않고 원문 그대로 보존해 손실 없이 왕복시킨다.
+   */
+  borderTop?: string
+  borderRight?: string
+  borderBottom?: string
+  borderLeft?: string
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

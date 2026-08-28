@@ -9,7 +9,6 @@
    */
 
   import { enhance, deserialize } from '$app/forms'
-  import { invalidateAll } from '$app/navigation'
   import { csToast } from '$lib/utils/toast'
   import CmsDeleteButton from '$lib/components/cms/CmsDeleteButton.svelte'
   import ContractDocumentEditor from '$lib/components/cms/contract-editor/ContractDocumentEditor.svelte'
@@ -80,17 +79,55 @@
   // spreadsheet 에디터 강제 재마운트 키 (새 xlsx 임포트 시 increments)
   let spreadsheetMountKey     = $state(0)
 
+  // --------------------------------------------------------------------------
+  // isDirty 판정 — spreadsheet 모드 "수정 저장" 버튼 활성/비활성 (2026-08-28 Stephen 요청)
+  //
+  // title/specs/requiresIssuerSignature는 template 로드 시점 스냅샷(origXxx)과 비교해
+  // isDirty를 계산한다(products.md §4 isDirty 감지 패턴과 동일 원칙 — localXxx vs origXxx).
+  // 그리드 자체의 편집(셀 값·서식·컬럼너비·병합 등)은 jspreadsheet-ce 내부 상태라 Svelte
+  // 리액티비티 밖에 있으므로, ContractSpreadsheetEditor의 onchange 콜백으로 별도
+  // spreadsheetContentDirty 플래그를 직접 세운다.
+  // --------------------------------------------------------------------------
+  let origTitle                   = ''
+  let origSpecsJson               = '[]'
+  let origRequiresIssuerSignature = false
+  let spreadsheetContentDirty     = $state(false)
+
   $effect(() => {
-    specs = Array.isArray(template?.specifications) && (template.specifications as unknown[]).length > 0
+    // ⛔ 반드시 로컬 상수에 먼저 계산해두고 그 값을 $state에 대입 + origXxx 스냅샷
+    // 양쪽에 그대로 재사용할 것 — specs/title/requiresIssuerSignature($state)를 이
+    // effect 안에서 쓰고 나서 다시 읽으면(예: `origTitle = title`) 그 읽기가 effect의
+    // 의존성으로 잡혀, 이 effect 자신이 만든 변경이 자기 자신을 다시 트리거하는 무한
+    // 루프(Svelte effect_update_depth_exceeded)가 발생한다(2026-08-28 실제 발생·수정 —
+    // specs는 매번 새 배열 리터럴이라 참조가 항상 달라 특히 즉시 재현됐음).
+    const nextSpecs = Array.isArray(template?.specifications) && (template.specifications as unknown[]).length > 0
       ? (template.specifications as { key: string; value: string }[])
       : [{ key: '', value: '' }]
-    title                   = template?.title ?? ''
-    requiresIssuerSignature = template?.requires_issuer_signature ?? false
+    const nextTitle = template?.title ?? ''
+    const nextRequiresIssuerSignature = template?.requires_issuer_signature ?? false
     // 모드 초기화: 기존 템플릿이면 authoring_mode 사용, 신규면 null(미선택)
-    authoringMode = template
+    const nextAuthoringMode = template
       ? ((template.authoring_mode as 'flow' | 'canvas' | 'spreadsheet') ?? 'flow')
       : null
+
+    specs                   = nextSpecs
+    title                   = nextTitle
+    requiresIssuerSignature = nextRequiresIssuerSignature
+    authoringMode           = nextAuthoringMode
+
+    // isDirty 비교 기준 스냅샷 갱신 + 그리드 변경 플래그 초기화(양식 전환·재로드 시점)
+    origTitle                   = nextTitle
+    origSpecsJson               = JSON.stringify(nextSpecs)
+    origRequiresIssuerSignature = nextRequiresIssuerSignature
+    spreadsheetContentDirty     = false
   })
+
+  const isSpreadsheetDirty = $derived(
+    title !== origTitle ||
+    JSON.stringify(specs) !== origSpecsJson ||
+    requiresIssuerSignature !== origRequiresIssuerSignature ||
+    spreadsheetContentDirty
+  )
 
   /** canvas 모드 초기 문서 — template의 canvas_document를 파싱 */
   const canvasDocInit = $derived<CanvasDocument | null>(
@@ -232,6 +269,8 @@
     // ContractSpreadsheetEditor를 임포트된 doc으로 초기화하려면 key를 활용.
     // 실제 initialDoc은 아래 {#key spreadsheetMountKey} 블록에서 _importedDoc 변수로 전달.
     _importedSpreadsheetDoc = doc
+    // xlsx 가져오기 자체가 저장 전 변경 사항이므로 즉시 dirty 처리
+    spreadsheetContentDirty = true
   }
 
   /** 임포트된 SpreadsheetDocument 임시 저장 — key 재마운트 시 initialDoc으로 전달 */
@@ -261,8 +300,14 @@
       if (result.type === 'success') {
         csToast.success(template ? '수정되었습니다.' : '등록되었습니다.')
         const id = (result.data as { id?: string })?.id ?? template?.id ?? ''
-        await invalidateAll()
-        if (onsaved) onsaved(id)
+        // ⛔ 2026-08-28 발견 — invalidateAll()을 여기서 한 번 호출하고, 곧이어 호출하는
+        // onsaved(id)(부모 +page.svelte의 onSaved)에서 또 한 번 중복 호출하고 있었다.
+        // 저장 자체는 이미 성공했는데, 성공 토스트가 뜬 "이후"에 실행되는 이 중복
+        // invalidateAll()에서 문제가 생기면 catch가 이를 저장 실패로 오인해 성공 토스트와
+        // 오류 토스트가 동시에 뜨는 버그로 이어졌다(Stephen 실사용 중 발견). 부모의
+        // onSaved()가 invalidateAll + 네비게이션을 전담하므로 여기서는 제거 — 저장 자체의
+        // 성공/실패 판정과 그 이후의 화면 갱신을 명확히 분리한다.
+        onsaved?.(id)
       } else if (result.type === 'failure') {
         csToast.error((result.data as { error?: string })?.error ?? '저장에 실패했습니다.')
       } else {
@@ -322,8 +367,10 @@
       if (result.type === 'success') {
         csToast.success(template ? '수정되었습니다.' : '등록되었습니다.')
         const id = (result.data as { id?: string })?.id ?? template?.id ?? ''
-        await invalidateAll()
-        if (onsaved) onsaved(id)
+        // ⛔ 2026-08-28 발견 — 스프레드시트 모드 저장 함수(handleSpreadsheetSave)와 동일한
+        // 버그 — invalidateAll() 중복 호출 제거(부모 onSaved()가 전담). 상세 사유는 그쪽
+        // 주석 참고.
+        onsaved?.(id)
       } else if (result.type === 'failure') {
         csToast.error((result.data as { error?: string })?.error ?? '저장에 실패했습니다.')
       } else {
@@ -357,6 +404,7 @@
   </div>
 
   <form
+    id="tpl-form"
     method="POST"
     action={template ? '?/update' : '?/create'}
     use:enhance={({ formData, cancel }) => {
@@ -535,6 +583,7 @@
             <ContractSpreadsheetEditor
               bind:this={spreadsheetEditorRef}
               initialDoc={_importedSpreadsheetDoc ?? spreadsheetDocInit}
+              onchange={() => { spreadsheetContentDirty = true }}
             />
           {/key}
         </div>
@@ -568,39 +617,58 @@
         </div>
       {/if}
     </div>
-
-    <!-- 액션 영역 -->
-    <div class="panel-actions">
-      {#if template}
-        <CmsDeleteButton
-          action="?/softDelete"
-          id={template.id}
-          warnMessage="한번 더 클릭 시 이 양식이 삭제됩니다."
-          successMessage="양식이 삭제되었습니다."
-          onsuccess={() => { onsaved?.('') }}
-        />
-      {/if}
-      {#if authoringMode === 'canvas'}
-        <!-- canvas 모드: 에디터 내 저장 버튼 사용 — 외부 저장 버튼 숨김 -->
-        <span class="canvas-save-hint">저장은 캔버스 에디터 내 저장 버튼을 사용하세요.</span>
-      {:else if authoringMode === 'spreadsheet'}
-        <!-- spreadsheet 모드: fetch 기반 저장 -->
-        <button
-          type="button"
-          class="btn-action"
-          disabled={saving}
-          onclick={handleSpreadsheetSave}
-        >
-          {saving ? '저장 중...' : template ? '수정 저장' : '양식 등록'}
-        </button>
-      {:else if authoringMode !== null}
-        <!-- flow 모드: 일반 저장 버튼 -->
-        <button type="submit" class="btn-action" disabled={saving}>
-          {saving ? '저장 중...' : template ? '수정 저장' : '양식 등록'}
-        </button>
-      {/if}
-    </div>
   </form>
+
+  <!--
+    액션 영역 — ⛔ 2026-08-29 위 <form id="tpl-form">의 형제(sibling)로 의도적으로 폼 밖에
+    배치한다. CmsDeleteButton은 자기 자신도 독립된 <form>을 렌더링하는데(CmsDeleteButton.svelte),
+    예전에는 이 영역이 위 <form> "안"에 있어 <form> 안에 또 <form>이 중첩되는 상태였다 —
+    HTML 규격상 폼 중첩은 무효라 브라우저가 SSR로 받은 마크업을 파싱할 때 구조를 임의로
+    고쳐버려, 그 결과 Svelte 5의 하이드레이션(SSR 결과와 클라이언트 렌더 결과를 맞춰보는
+    과정) 자체가 매번 깨지고 있었다(모든 기존 계약서 양식 최초 진입 시 100% 재현되던
+    "Illegal invocation" 콘솔 에러). 하이드레이션이 깨진 상태에서 좌측 목록의 다른 양식을
+    클릭하면 이전 패널 DOM이 정상적으로 정리(unmount)되지 않고 새 패널이 그 위에 또
+    쌓여, 화면은 이전 양식 그대로인데 실제로는 인스턴스가 중복 생성되는 증상으로
+    이어졌다(Stephen 최초 발견 — 다른 양식 클릭해도 화면이 안 바뀜). 아래 flow 모드
+    저장 버튼은 물리적으로 폼 밖에 있지만 `form="tpl-form"` 속성으로 여전히 그 폼을
+    제출한다(HTML5 표준 기능) — 동작은 이전과 동일, 마크업 구조만 중첩을 없앴다.
+  -->
+  <div class="panel-actions">
+    {#if template}
+      <CmsDeleteButton
+        action="?/softDelete"
+        id={template.id}
+        warnMessage="한번 더 클릭 시 이 양식이 삭제됩니다."
+        successMessage="양식이 삭제되었습니다."
+        onsuccess={() => { onsaved?.('') }}
+      />
+    {/if}
+    {#if authoringMode === 'canvas'}
+      <!-- canvas 모드: 에디터 내 저장 버튼 사용 — 외부 저장 버튼 숨김 -->
+      <span class="canvas-save-hint">저장은 캔버스 에디터 내 저장 버튼을 사용하세요.</span>
+    {:else if authoringMode === 'spreadsheet'}
+      <!--
+        spreadsheet 모드: fetch 기반 저장
+        기존 양식 수정("수정 저장")은 isSpreadsheetDirty(실제 변경 감지)가 true일 때만
+        활성화 — 2026-08-28 Stephen 요청("수정 감지 시 활성화, 미감지 시 비활성화").
+        신규 양식 등록("양식 등록")은 비교 대상 원본이 없어 이 게이팅에서 제외(기존
+        동작 그대로 항상 클릭 가능).
+      -->
+      <button
+        type="button"
+        class="btn-action"
+        disabled={saving || (!!template && !isSpreadsheetDirty)}
+        onclick={handleSpreadsheetSave}
+      >
+        {saving ? '저장 중...' : template ? '수정 저장' : '양식 등록'}
+      </button>
+    {:else if authoringMode !== null}
+      <!-- flow 모드: 일반 저장 버튼 — form="tpl-form"으로 폼 밖에서도 정상 제출 -->
+      <button type="submit" form="tpl-form" class="btn-action" disabled={saving}>
+        {saving ? '저장 중...' : template ? '수정 저장' : '양식 등록'}
+      </button>
+    {/if}
+  </div>
 </div>
 
 <!-- 임포트 모달 -->

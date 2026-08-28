@@ -476,6 +476,90 @@ describe('renderSpreadsheetToHtml — CSS 색상 검증', () => {
     expect(html).not.toContain('expression')
     expect(html).not.toContain('style=')
   })
+
+  it('text-align이 인라인 style로 출력된다 (2026-08-28 — CMS 실사용 중 발견, 정렬값 저장 시 유실되던 문제)', () => {
+    const doc: SpreadsheetDocument = {
+      sheets: [{
+        name: 'Sheet1',
+        rows: [['우측 정렬']],
+        merges: [],
+        colWidths: [null],
+        cellFormatting: [[{ textAlign: 'right' }]],
+      }],
+      activeSheetIndex: 0,
+    }
+    const html = renderSpreadsheetToHtml(doc)
+    expect(html).toContain('text-align:right')
+  })
+
+  it('허용되지 않는 text-align 값은 무시한다', () => {
+    const doc: SpreadsheetDocument = {
+      sheets: [{
+        name: 'Sheet1',
+        rows: [['악의적 정렬값']],
+        merges: [],
+        colWidths: [null],
+        cellFormatting: [[{ textAlign: 'expression(alert(1))' }]],
+      }],
+      activeSheetIndex: 0,
+    }
+    const html = renderSpreadsheetToHtml(doc)
+    expect(html).not.toContain('expression')
+    expect(html).not.toContain('style=')
+  })
+
+  it('border-top/right/bottom/left이 각각 인라인 style로 출력된다 (2026-08-28(같은 날 후속) — 테두리 툴바로 지정한 값이 고객 화면에서 유실되던 문제)', () => {
+    const doc: SpreadsheetDocument = {
+      sheets: [{
+        name: 'Sheet1',
+        rows: [['일부 변만 테두리']],
+        merges: [],
+        colWidths: [null],
+        cellFormatting: [[{
+          borderTop: '1px solid rgb(0, 0, 0)',
+          borderBottom: '2px dashed #FF0000',
+        }]],
+      }],
+      activeSheetIndex: 0,
+    }
+    const html = renderSpreadsheetToHtml(doc)
+    expect(html).toContain('border-top:1px solid rgb(0, 0, 0)')
+    expect(html).toContain('border-bottom:2px dashed #FF0000')
+    // 지정하지 않은 변은 출력되지 않아야 함
+    expect(html).not.toContain('border-right:')
+    expect(html).not.toContain('border-left:')
+  })
+
+  it('CSS 색상 키워드("black" 등)도 border 인라인 style로 허용된다 (2026-08-28(같은 날 3차 후속) — 이미 사방 테두리가 있던 셀에 한 변만 재지정하면 브라우저가 나머지 변은 rgb(...), 새로 지정한 변은 "black" 키워드로 섞어 재직렬화하는 실측 동작)', () => {
+    const doc: SpreadsheetDocument = {
+      sheets: [{
+        name: 'Sheet1',
+        rows: [['키워드 색상 테두리']],
+        merges: [],
+        colWidths: [null],
+        cellFormatting: [[{ borderTop: '1px solid black' }]],
+      }],
+      activeSheetIndex: 0,
+    }
+    const html = renderSpreadsheetToHtml(doc)
+    expect(html).toContain('border-top:1px solid black')
+  })
+
+  it('허용되지 않는 border 값(색상 인젝션 시도)은 무시한다', () => {
+    const doc: SpreadsheetDocument = {
+      sheets: [{
+        name: 'Sheet1',
+        rows: [['악의적 테두리값']],
+        merges: [],
+        colWidths: [null],
+        cellFormatting: [[{ borderTop: '1px solid red; background:url(javascript:alert(1))' }]],
+      }],
+      activeSheetIndex: 0,
+    }
+    const html = renderSpreadsheetToHtml(doc)
+    expect(html).not.toContain('javascript:')
+    expect(html).not.toContain('style=')
+  })
 })
 
 // ─────────────────────────────────────────────────────────────────────────────

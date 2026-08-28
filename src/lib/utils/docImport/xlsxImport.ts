@@ -23,6 +23,7 @@ import JSZip from 'jszip'
 import type { JSONContent } from '@tiptap/core'
 // Types now live in sheet-format.ts — import here for use in this file and re-export for backward compat
 import type { SheetMergeRange, XlsxCellFormatting } from '$lib/types/sheet-format'
+import { fitColumnWidthsToTarget } from './fitColumnWidths'
 export type { SheetMergeRange, XlsxCellFormatting } from '$lib/types/sheet-format'
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -296,7 +297,13 @@ export async function parseSheet(
   const fallbackWidth = knownWidths.length > 0
     ? Math.round(knownWidths.reduce((a, b) => a + b, 0) / knownWidths.length)
     : 60
-  const colWidths: (number | null)[] = rawColWidths.map((w) => w ?? fallbackWidth)
+  const filledColWidths: (number | null)[] = rawColWidths.map((w) => w ?? fallbackWidth)
+
+  // A4 폭(642px) 자동축소는 가져오기(import) 시점에 딱 1회만 적용한다 — 에디터가 열릴
+  // 때마다(sheetToWorksheetConfig) 다시 적용하면 관리자가 그 이후 직접 넓힌 값이 재오픈
+  // 시 매번 되돌아가는 문제가 있었다(2026-08-27 발견). 여기서 축소해 SpreadsheetSheet에
+  // 담아 반환하면, 이후 저장·재오픈은 이 값을 그대로 유지한다.
+  const colWidths: (number | null)[] = fitColumnWidthsToTarget(filledColWidths)
 
   // 셀 서식 — 배경색은 ws[addr].s.fgColor.rgb(SheetJS cellStyles:true로 이미 읽힘,
   // 테마 색상도 resolve됨), 테두리색은 OOXML 직접 파싱(extractBorderColors)으로 보완
