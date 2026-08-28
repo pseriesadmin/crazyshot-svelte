@@ -9,25 +9,28 @@ import { callTypedRpc } from '$lib/utils/rpc'
 const BUCKET = 'user-documents'
 const MAX_SIZE = 10 * 1024 * 1024 // 10MB — CMS 표준 기술 지침(개별 파일 업로드 용량)과 동일
 const MAX_IDENTITY_FILES = 5
+const MAX_FOREIGN_FILES = 4 // 체류기간별 필수 증명서 콤보 최대 개수(단기/장기 각 4종)와 동일
 
 export const POST: RequestHandler = async ({ request, locals }) => {
   const { session } = await locals.safeGetSession()
   if (!session) return json({ ok: false, error: '로그인 필요' }, { status: 403 })
 
   const form = await request.formData()
-  const type          = String(form.get('type') ?? '').trim()
-  const identityTypes = form.getAll('identity_type').map(v => String(v).trim()).filter(Boolean)
-  const files          = form.getAll('file').filter((f): f is File => f instanceof File && f.size > 0)
+  const type            = String(form.get('type') ?? '').trim()
+  const identityTypes   = form.getAll('identity_type').map(v => String(v).trim()).filter(Boolean)
+  const foreignTypes    = form.getAll('foreign_type').map(v => String(v).trim()).filter(Boolean)
+  const foreignStayType = String(form.get('foreign_stay_type') ?? '').trim() || null
+  const files            = form.getAll('file').filter((f): f is File => f instanceof File && f.size > 0)
 
   if (!['identity', 'foreign'].includes(type)) return json({ ok: false, error: '잘못된 요청' }, { status: 400 })
   if (files.length === 0) return json({ ok: false, error: '파일이 없습니다.' }, { status: 400 })
 
-  // identity: 최대 5개 동시 업로드 허용. foreign: 기존과 동일하게 1개만 허용(범위 밖 — 무변경)
+  // identity: 최대 5개, foreign: 체류기간별 콤보 최대 4개 동시 업로드 허용
   if (type === 'identity' && files.length > MAX_IDENTITY_FILES) {
     return json({ ok: false, error: `최대 ${MAX_IDENTITY_FILES}개까지 등록할 수 있어요.` }, { status: 400 })
   }
-  if (type === 'foreign' && files.length > 1) {
-    return json({ ok: false, error: '외국인증명은 1개 파일만 등록할 수 있어요.' }, { status: 400 })
+  if (type === 'foreign' && files.length > MAX_FOREIGN_FILES) {
+    return json({ ok: false, error: `최대 ${MAX_FOREIGN_FILES}개까지 등록할 수 있어요.` }, { status: 400 })
   }
 
   for (const file of files) {
@@ -44,7 +47,9 @@ export const POST: RequestHandler = async ({ request, locals }) => {
   const admin = createClient(getSupabaseUrl(), serviceRoleKey)
 
   // 재등록 시 옛 파일 정리용 — 새 파일 업로드/DB 반영 전에 기존 URL을 미리 확보해 둔다
-  const docColumn = type === 'identity' ? 'identity_doc_url' : 'foreign_doc_url'
+  // foreign은 다중 파일 전체 목록이 foreign_doc_urls에 있으므로 그쪽을 조회(foreign_doc_url은
+  // 첫 번째 파일만 담는 하위호환 스칼라 컬럼 — CMS·채팅 등 기존 소비처가 계속 참조)
+  const docColumn = type === 'identity' ? 'identity_doc_url' : 'foreign_doc_urls'
   const { data: existingProfile } = await admin
     .from('user_profiles')
     .select(docColumn)
@@ -84,7 +89,13 @@ export const POST: RequestHandler = async ({ request, locals }) => {
   const { data, error: rpcError } = await callTypedRpc<{ ok: boolean; error?: string }>(
     locals.supabase,
     'update_user_doc_url',
-    { p_type: type, p_doc_url: publicUrls, p_identity_type: identityTypes.length > 0 ? identityTypes : null },
+    {
+      p_type: type,
+      p_doc_url: publicUrls,
+      p_identity_type: identityTypes.length > 0 ? identityTypes : null,
+      p_foreign_type: foreignTypes.length > 0 ? foreignTypes : null,
+      p_foreign_stay_type: foreignStayType,
+    },
   )
 
   if (rpcError || !(data as { ok: boolean } | null)?.ok) {

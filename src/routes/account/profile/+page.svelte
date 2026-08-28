@@ -9,14 +9,15 @@
   import ProfileTabContent from '$lib/components/members/profile/ProfileTabContent.svelte'
   import AddressTabContent from '$lib/components/members/profile/AddressTabContent.svelte'
   import NotificationTabContent from '$lib/components/members/profile/NotificationTabContent.svelte'
+  import WithdrawalTabContent from '$lib/components/members/profile/WithdrawalTabContent.svelte'
   import type { PageData } from './$types'
 
   interface Props { data: PageData }
   let { data }: Props = $props()
 
-  type Tab = 'coupon' | 'log' | 'review' | 'profile' | 'address' | 'notification'
+  type Tab = 'coupon' | 'log' | 'review' | 'profile' | 'address' | 'notification' | 'withdrawal'
 
-  const VALID_TABS: Tab[] = ['coupon', 'log', 'review', 'profile', 'address', 'notification']
+  const VALID_TABS: Tab[] = ['coupon', 'log', 'review', 'profile', 'address', 'notification', 'withdrawal']
 
   const TAB_LABELS: { id: Tab; label: string; count?: number }[] = [
     { id: 'coupon',        label: '쿠폰' },
@@ -25,6 +26,7 @@
     { id: 'profile',      label: '개인정보' },
     { id: 'address',      label: '기본 배송지' },
     { id: 'notification', label: '알림설정' },
+    { id: 'withdrawal',   label: '탈회' },
   ]
 
   function getInitialTab(): Tab {
@@ -99,6 +101,15 @@
             <NotificationTabContent
               rentalAlert={data.profile?.allow_rental_alert ?? true}
               benefitAlert={data.profile?.allow_benefit_alert ?? false}
+            />
+          </div>
+        </div>
+      {:else if activeTab === 'withdrawal'}
+        <div class="flex flex-col gap-[10px] w-full">
+          <div class="bg-white rounded-tl-[30px] rounded-tr-[30px] w-full">
+            <WithdrawalTabContent
+              profile={data.profile}
+              onswitchtab={(tab) => { activeTab = tab as Tab }}
             />
           </div>
         </div>

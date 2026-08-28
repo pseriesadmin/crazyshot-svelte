@@ -22,15 +22,21 @@
     blacklist_reason: string | null
     is_student: boolean
     is_foreign: boolean
-    identity_type: string | null
-    identity_doc_url: string | null
+    identity_type: string[] | null
+    identity_doc_url: string[] | null
     identity_verified_at: string | null
     foreign_doc_url: string | null
+    foreign_doc_urls: string[] | null
+    foreign_type: string[] | null
+    foreign_stay_type: string | null
     foreign_verified_at: string | null
     password_set: boolean
     created_at: string
     total_count: number
     birth_date: string | null
+    withdrawal_status: string
+    withdrawal_requested_at: string | null
+    withdrawal_purge_at: string | null
   }
 
   interface Subscription {
@@ -610,11 +616,54 @@
     }
   })
 
-  // ── 본인증명 뷰어 ──────────────────────────────────────────────
-  let identityDocUrl = $state<string | null>(null)
+  // ── 본인증명·외국인증명 파일 목록 + 뷰어 ────────────────────────
+  // identity_doc_url/identity_type은 migration 359로 TEXT[](최대 5개)로 확장됐고,
+  // foreign_doc_urls도 migration 360으로 신설된 TEXT[](최대 4개) 컬럼이다 — get_customer_list가
+  // 이 배열을 그대로 반환하도록 migration 361로 수정(과거엔 ::TEXT 강제캐스팅으로 배열이
+  // "{url1,url2}" 형태 문자열로 뭉개져 등록된 파일도 "미등록"으로 오표시되던 버그였음).
+  const IDENTITY_TYPE_LABELS: Record<string, string> = {
+    student: '학생증', enrollment: '재학증명서', resident: '주민등록증', resident_copy: '주민등록등본',
+    driver: '운전면허증', other: '기타 증명', general: '일반 증명',
+  }
 
-  function openIdentityDoc(url: string) {
+  function identityTypeLabel(types: string[] | null): string {
+    if (!types || types.length === 0) return '일반 증명'
+    return types.map(t => IDENTITY_TYPE_LABELS[t] ?? '증명서').join(', ')
+  }
+
+  // foreign_doc_urls가 없는 레거시 등록자는 foreign_doc_url(첫 파일만 담은 하위호환 스칼라)로
+  // 1개짜리 배열을 만들어 동일하게 목록 렌더링(계정 화면 ProfileTabContent.svelte와 동일 원칙)
+  function foreignDocList(r: CustomerRow): string[] {
+    if (r.foreign_doc_urls && r.foreign_doc_urls.length > 0) return r.foreign_doc_urls
+    return r.foreign_doc_url ? [r.foreign_doc_url] : []
+  }
+
+  // 외국인증명 체류기간(short/long) + 콤보 증명서 종류(foreign_type, migration 360) —
+  // ProfileTabContent.svelte의 FOREIGN_STAY_OPTIONS/FOREIGN_SHORT_TYPES/FOREIGN_LONG_TYPES와
+  // 동일 라벨. 하나로 통합(단기/장기 둘 다 passport_photo를 공유하므로 값 충돌 없음).
+  const FOREIGN_STAY_LABELS: Record<string, string> = {
+    short: '단기체류(90일 내)', long: '장기체류(90일 이상)',
+  }
+  const FOREIGN_TYPE_LABELS: Record<string, string> = {
+    passport_photo: '여권사진면', accommodation_reservation: '숙소예약확인서',
+    entry_eticket: '입국 E-Ticket', exit_eticket: '출국 E-Ticket',
+    arc_front: '외국인등록증 앞면', arc_back: '외국인등록증 뒷면', foreign_fact_cert: '외국인사실증명서',
+  }
+
+  function foreignTypeLabel(r: CustomerRow): string {
+    const stay  = r.foreign_stay_type ? (FOREIGN_STAY_LABELS[r.foreign_stay_type] ?? r.foreign_stay_type) : null
+    const types = r.foreign_type && r.foreign_type.length > 0
+      ? r.foreign_type.map(t => FOREIGN_TYPE_LABELS[t] ?? '증명서').join(', ')
+      : '외국인증명'
+    return stay ? `${stay} · ${types}` : types
+  }
+
+  let identityDocUrl   = $state<string | null>(null)
+  let docViewerTitle    = $state('본인증명 문서')
+
+  function openIdentityDoc(url: string, title = '본인증명 문서') {
     identityDocUrl = url
+    docViewerTitle = title
   }
 
   function closeIdentityDoc() {
@@ -633,6 +682,24 @@
   }
 
   const isPdf = $derived(identityDocUrl ? identityDocUrl.toLowerCase().includes('.pdf') : false)
+
+  // Supabase Storage 공개 URL에 ?download를 붙이면 스토리지 서버가 Content-Disposition:
+  // attachment로 응답한다(supabase-js getPublicUrl(path,{download:true})와 동일한 메커니즘) —
+  // fetch+blob 없이도 크로스오리진 강제다운로드가 가능해 대용량 PDF도 안전하게 처리된다.
+  function downloadDocFile(url: string, filename: string) {
+    const clean = url.split('?')[0].split('#')[0]
+    const seg    = clean.split('/').pop() ?? ''
+    const dotIdx = seg.lastIndexOf('.')
+    const ext    = dotIdx >= 0 ? seg.slice(dotIdx + 1) : 'jpg'
+    const sep    = url.includes('?') ? '&' : '?'
+    const a = document.createElement('a')
+    a.href     = `${url}${sep}download=${encodeURIComponent(`${filename}.${ext}`)}`
+    a.download = `${filename}.${ext}`
+    a.rel      = 'noopener'
+    document.body.appendChild(a)
+    a.click()
+    a.remove()
+  }
 
   // ── 증명서 재업로드 (기간경과 / 미등록) ───────────────────────
   const DOC_ACCEPT = 'image/png,image/jpeg,image/webp,image/heif,image/heic,application/pdf'
@@ -701,7 +768,7 @@
       fd.append('user_id', row.user_id)
       fd.append('type', type)
       fd.append('file', file)
-      if (type === 'identity' && row.identity_type) fd.append('identity_type', row.identity_type)
+      if (type === 'identity' && row.identity_type?.[0]) fd.append('identity_type', row.identity_type[0])
 
       const res  = await fetch('/api/cms/upload-doc', { method: 'POST', body: fd })
       const data = await res.json() as { ok: boolean; error?: string }
@@ -873,20 +940,12 @@
         <!-- 본인 증명 -->
         <div class="info-row">
           <span class="info-label">본인 증명</span>
-          <button
-            type="button"
-            class="btn-file-view"
-            disabled={!row.identity_type || !row.identity_doc_url}
-            onclick={() => row.identity_doc_url && openIdentityDoc(row.identity_doc_url)}
-          >
-            {#if row.identity_type === 'student'}학생증 보기
-            {:else if row.identity_type === 'resident'}주민등록증 보기
-            {:else if row.identity_type === 'driver'}운전면허증 보기
-            {:else if row.identity_type === 'other'}기타 증명 보기
-            {:else if row.identity_type === 'general'}일반증명 보기
-            {:else}미등록{/if}
-          </button>
-          {#if row.identity_type && row.identity_verified_at}
+          {#if row.identity_doc_url && row.identity_doc_url.length > 0}
+            <span class="doc-type-badge-cms">{identityTypeLabel(row.identity_type)}</span>
+          {:else}
+            <span class="info-val-empty">미등록</span>
+          {/if}
+          {#if row.identity_doc_url?.length && row.identity_verified_at}
             <span class="identity-date">
               {formatIdentityDate(row.identity_verified_at)}
               {#if isIdentityExpired(row.identity_verified_at)}
@@ -894,7 +953,7 @@
               {/if}
             </span>
           {/if}
-          {#if !row.identity_doc_url || (row.identity_verified_at && isIdentityExpired(row.identity_verified_at))}
+          {#if !row.identity_doc_url?.length || (row.identity_verified_at && isIdentityExpired(row.identity_verified_at))}
             <button
               type="button"
               class="btn-reupload"
@@ -903,6 +962,25 @@
             >{reuploadIdentityOpen ? '취소' : '재등록'}</button>
           {/if}
         </div>
+        {#if row.identity_doc_url && row.identity_doc_url.length > 0}
+          <div class="doc-file-list">
+            {#each row.identity_doc_url as url, i (`${i}:${url}`)}
+              <div class="doc-file-row">
+                <span class="doc-file-label">{row.identity_doc_url.length > 1 ? `파일 ${i + 1}` : '파일'}</span>
+                <button type="button" class="btn-file-view" onclick={() => openIdentityDoc(url, '본인증명 문서')}>보기</button>
+                <button
+                  type="button"
+                  class="btn-file-download"
+                  onclick={() => downloadDocFile(url, `${row.member_code ?? row.user_id}_identity_${i + 1}`)}
+                  aria-label="본인증명 파일 다운로드"
+                  title="다운로드"
+                >
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+                </button>
+              </div>
+            {/each}
+          </div>
+        {/if}
         {#if reuploadIdentityOpen}
           <div class="reupload-box">
             <p class="reupload-hint">PNG · JPEG · WebP · HEIF · PDF (최대 10MB)</p>
@@ -945,14 +1023,12 @@
         <!-- 외국인 증명 -->
         <div class="info-row">
           <span class="info-label">외국인 여부</span>
-          {#if row.is_foreign}<span class="info-val">외국인</span>{/if}
-          <button
-            type="button"
-            class="btn-file-view"
-            disabled={!row.is_foreign || !row.foreign_doc_url}
-            onclick={() => row.foreign_doc_url && openIdentityDoc(row.foreign_doc_url)}
-          >여권 보기</button>
-          {#if row.is_foreign && row.foreign_verified_at}
+          {#if foreignDocList(row).length > 0}
+            <span class="doc-type-badge-cms">{foreignTypeLabel(row)}</span>
+          {:else if row.is_foreign}
+            <span class="info-val-empty">미등록</span>
+          {/if}
+          {#if row.is_foreign && foreignDocList(row).length > 0 && row.foreign_verified_at}
             <span class="identity-date">
               {formatIdentityDate(row.foreign_verified_at)}
               {#if isIdentityExpired(row.foreign_verified_at)}
@@ -960,7 +1036,7 @@
               {/if}
             </span>
           {/if}
-          {#if row.is_foreign && (!row.foreign_doc_url || (row.foreign_verified_at && isIdentityExpired(row.foreign_verified_at)))}
+          {#if row.is_foreign && (foreignDocList(row).length === 0 || (row.foreign_verified_at && isIdentityExpired(row.foreign_verified_at)))}
             <button
               type="button"
               class="btn-reupload"
@@ -969,6 +1045,25 @@
             >{reuploadForeignOpen ? '취소' : '재등록'}</button>
           {/if}
         </div>
+        {#if foreignDocList(row).length > 0}
+          <div class="doc-file-list">
+            {#each foreignDocList(row) as url, i (`${i}:${url}`)}
+              <div class="doc-file-row">
+                <span class="doc-file-label">{foreignDocList(row).length > 1 ? `파일 ${i + 1}` : '파일'}</span>
+                <button type="button" class="btn-file-view" onclick={() => openIdentityDoc(url, '외국인증명 문서')}>보기</button>
+                <button
+                  type="button"
+                  class="btn-file-download"
+                  onclick={() => downloadDocFile(url, `${row.member_code ?? row.user_id}_foreign_${i + 1}`)}
+                  aria-label="외국인증명 파일 다운로드"
+                  title="다운로드"
+                >
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+                </button>
+              </div>
+            {/each}
+          </div>
+        {/if}
         {#if reuploadForeignOpen}
           <div class="reupload-box">
             <p class="reupload-hint">PNG · JPEG · WebP · HEIF · PDF (최대 10MB)</p>
@@ -1172,6 +1267,26 @@
             {/if}
             <button type="button" class="btn-secondary modal-close-btn" onclick={() => (showMemberTypeModal = false)}>닫기</button>
           </div>
+        </div>
+      {/if}
+
+      <!-- 탈회 상태 블록 -->
+      {#if row.withdrawal_status && row.withdrawal_status !== 'none'}
+        <div class="withdrawal-status-banner">
+          <div class="withdrawal-status-left">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="4.93" y1="4.93" x2="19.07" y2="19.07"/></svg>
+            {#if row.withdrawal_status === 'requested'}
+              <span class="withdrawal-status-text">탈회 신청됨</span>
+            {:else if row.withdrawal_status === 'purged'}
+              <span class="withdrawal-status-text">탈회 완전삭제 완료</span>
+            {/if}
+          </div>
+          {#if row.withdrawal_status === 'requested'}
+            <div class="withdrawal-status-detail">
+              <span>신청일: {formatDate(row.withdrawal_requested_at)}</span>
+              <span>완전삭제 예정일: {formatDate(row.withdrawal_purge_at)}</span>
+            </div>
+          {/if}
         </div>
       {/if}
 
@@ -1683,24 +1798,24 @@
       class="doc-viewer-dialog"
       role="dialog"
       aria-modal="true"
-      aria-label="본인증명 문서 보기"
+      aria-label="{docViewerTitle} 보기"
       onclick={(e) => e.stopPropagation()}
     >
       <div class="doc-viewer-header">
-        <span class="doc-viewer-title">본인증명 문서</span>
+        <span class="doc-viewer-title">{docViewerTitle}</span>
         <button type="button" class="doc-viewer-close" onclick={closeIdentityDoc} aria-label="닫기">✕</button>
       </div>
       <div class="doc-viewer-body">
         {#if isPdf}
           <iframe
             src={identityDocUrl}
-            title="본인증명 문서"
+            title={docViewerTitle}
             class="doc-viewer-iframe"
           ></iframe>
         {:else}
           <img
             src={identityDocUrl}
-            alt="본인증명 문서"
+            alt={docViewerTitle}
             class="doc-viewer-img"
           />
         {/if}
@@ -2075,6 +2190,51 @@
   }
   .btn-file-view:disabled { opacity: 0.35; cursor: not-allowed; }
   .btn-file-view:not(:disabled):hover { background: rgba(59,47,138,0.12); }
+
+  /* 본인증명·외국인증명 유형 요약 배지 */
+  .doc-type-badge-cms {
+    display: inline-flex;
+    align-items: center;
+    height: 22px;
+    padding: 0 8px;
+    background: var(--cs-purple-op10);
+    color: var(--cs-purple);
+    border-radius: var(--radius-sm);
+    font: var(--text-pc-script-12);
+    font-weight: 700;
+    white-space: nowrap;
+  }
+
+  /* 본인증명·외국인증명 다중 파일 목록 (info-row 바로 아래 들여쓰기 정렬) */
+  .doc-file-list {
+    margin-left: 92px;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    padding: 4px 0 8px;
+  }
+  .doc-file-row { display: flex; align-items: center; gap: 8px; }
+  .doc-file-label {
+    font: var(--text-pc-script-12);
+    color: var(--cs-text-light);
+    min-width: 40px;
+    flex-shrink: 0;
+  }
+  .btn-file-download {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 24px;
+    height: 24px;
+    background: none;
+    border: none;
+    border-radius: var(--radius-sm);
+    color: var(--cs-text-mid);
+    cursor: pointer;
+    flex-shrink: 0;
+    transition: background 0.12s, color 0.12s;
+  }
+  .btn-file-download:hover { background: var(--cs-purple-op10); color: var(--cs-purple); }
 
   /* 저장 바 */
   .save-bar {
@@ -2501,6 +2661,35 @@
     color: var(--cs-text-mid);
   }
   .bl-status-banner.bl-active .bl-status-left { color: var(--cs-red-badge); }
+
+  /* 탈회 상태 배너 */
+  .withdrawal-status-banner {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 12px 14px;
+    background: rgba(255,53,53,0.06);
+    border-radius: var(--cms-radius-sm);
+    border: 1px solid rgba(255,53,53,0.20);
+    gap: 8px;
+    flex-wrap: wrap;
+  }
+  .withdrawal-status-left {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    color: var(--cs-red-badge);
+  }
+  .withdrawal-status-text {
+    font: var(--text-pc-body-14);
+    font-weight: 700;
+  }
+  .withdrawal-status-detail {
+    display: flex;
+    gap: 12px;
+    font: var(--text-pc-script-12);
+    color: var(--cs-text-mid);
+  }
 
   .bl-status-text {
     font: var(--text-pc-body-14);
