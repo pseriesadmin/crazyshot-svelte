@@ -27,8 +27,16 @@ export interface UserProfile {
   identity_verified_at: string | null
   is_foreign: boolean
   foreign_doc_url: string | null
+  foreign_doc_urls: string[] | null
+  foreign_type: string[] | null
+  foreign_stay_type: string | null
   foreign_verified_at: string | null
   created_at: string | null
+  // 탈회 관련
+  withdrawal_status?: string | null
+  withdrawal_requested_at?: string | null
+  withdrawal_purge_at?: string | null
+  withdrawal_purged_at?: string | null
 }
 
 export interface ShippingAddress {
@@ -51,7 +59,7 @@ export const load: PageServerLoad = async ({ locals }) => {
   const [profileRes, addressRes, coupons] = await Promise.all([
     locals.supabase
       .from('user_profiles')
-      .select('id, email, full_name, avatar_url, phone, birth_date, address, member_code, member_type, membership_grade, credit_score, rental_count, points, allow_rental_alert, allow_benefit_alert, allow_privacy_consent, allow_third_party_consent, identity_type, identity_doc_url, identity_verified_at, is_foreign, foreign_doc_url, foreign_verified_at, created_at')
+      .select('id, email, full_name, avatar_url, phone, birth_date, address, member_code, member_type, membership_grade, credit_score, rental_count, points, allow_rental_alert, allow_benefit_alert, allow_privacy_consent, allow_third_party_consent, identity_type, identity_doc_url, identity_verified_at, is_foreign, foreign_doc_url, foreign_doc_urls, foreign_type, foreign_stay_type, foreign_verified_at, created_at, withdrawal_status, withdrawal_requested_at, withdrawal_purge_at, withdrawal_purged_at')
       .eq('id', session.user.id)
       .maybeSingle(),
     locals.supabase
@@ -221,5 +229,39 @@ export const actions: Actions = {
     const result = data as { ok: boolean; error?: string } | null
     if (!result?.ok) return fail(400, { ok: false, error: result?.error ?? '저장 실패' })
     return { ok: true }
+  },
+
+  requestWithdrawal: async ({ request, locals }) => {
+    const { session } = await locals.safeGetSession()
+    if (!session) return fail(401, { error: '로그인이 필요합니다.' })
+
+    const form = await request.formData()
+    const reasons = form.getAll('reasons').map(String)
+    const reasonEtc = String(form.get('reasonEtc') ?? '').trim() || null
+
+    const { data, error } = await callTypedRpc<{
+      ok: boolean
+      error?: string
+      error_code?: string
+      purge_at?: string
+    }>(locals.supabase, 'request_account_withdrawal', {
+      p_reasons: reasons,
+      p_reason_etc: reasonEtc,
+    })
+
+    if (error) return fail(500, { error: '처리 중 오류가 발생했습니다.' })
+
+    const result = data as {
+      ok: boolean
+      error?: string
+      error_code?: string
+      purge_at?: string
+    } | null
+
+    if (!result?.ok) {
+      return fail(400, { error: result?.error, error_code: result?.error_code })
+    }
+
+    return { success: true, purge_at: result.purge_at }
   },
 }

@@ -380,6 +380,9 @@
     }
   }
 
+  /* ── 본인증명·외국인증명 탭 UI (이번 세션 신규) */
+  let activeDocTab = $state<'identity' | 'foreign'>('identity')
+
   /* ── 본인증명 업로드 */
   const IDENTITY_TYPES = [
     { value: 'student',       label: '학생증' },
@@ -544,58 +547,153 @@
     return types.map(t => map[t] ?? '증명서').join(', ')
   }
 
-  /* ── 외국인증명 업로드 */
-  let foreignDocUrl     = $state(profile?.foreign_doc_url     ?? null)
+  /* ── 외국인증명 업로드 (체류기간 하위탭 + 콤보버튼 다중파일 등록, 이번 세션 신규) */
+  const FOREIGN_SHORT_TYPES = [
+    { value: 'passport_photo',            label: '여권사진면' },
+    { value: 'accommodation_reservation', label: '숙소예약확인서' },
+    { value: 'entry_eticket',             label: '입국 E-Ticket' },
+    { value: 'exit_eticket',              label: '출국 E-Ticket' },
+  ] as const
+
+  const FOREIGN_LONG_TYPES = [
+    { value: 'arc_front',         label: '외국인등록증 앞면' },
+    { value: 'arc_back',          label: '외국인등록증 뒷면' },
+    { value: 'passport_photo',    label: '여권사진면' },
+    { value: 'foreign_fact_cert', label: '외국인사실증명서' },
+  ] as const
+
+  const FOREIGN_STAY_OPTIONS = [
+    { value: 'short', label: '단기체류(90일 내)' },
+    { value: 'long',  label: '장기체류(90일 이상)' },
+  ] as const
+
+  const MAX_FOREIGN_FILES = 4
+  const FOREIGN_MAX_FILE_SIZE = 10 * 1024 * 1024 // 10MB — 본인증명과 동일 기준
+
+  let foreignDocUrls    = $state<string[]>(profile?.foreign_doc_urls ?? (profile?.foreign_doc_url ? [profile.foreign_doc_url] : []))
   let foreignVerifiedAt = $state(profile?.foreign_verified_at ?? null)
   let showForeignForm   = $state(false)
-  let foreignFile       = $state<File | null>(null)
-  let foreignPreview    = $state<string | null>(null)
-  let foreignIsPdf      = $state(false)
+  let foreignStayType   = $state<'short' | 'long'>((profile?.foreign_stay_type as 'short' | 'long' | null) ?? 'short')
+  let foreignSelTypes   = $state<string[]>([])
+  let foreignFiles      = $state<File[]>([])
+  let foreignPreviews   = $state<(string | null)[]>([])   // null = PDF(썸네일 없음)
   let isUploadingForeign = $state(false)
   let foreignError      = $state('')
+  let foreignDragOver   = $state(false)
   let isDeletingForeign  = $state(false)
 
+  const currentForeignTypes = $derived(foreignStayType === 'short' ? FOREIGN_SHORT_TYPES : FOREIGN_LONG_TYPES)
+
   $effect(() => {
-    foreignDocUrl     = profile?.foreign_doc_url     ?? null
+    foreignDocUrls    = profile?.foreign_doc_urls ?? (profile?.foreign_doc_url ? [profile.foreign_doc_url] : [])
     foreignVerifiedAt = profile?.foreign_verified_at ?? null
   })
 
+  function selectForeignStayType(value: 'short' | 'long') {
+    if (foreignStayType === value) return
+    foreignStayType = value
+    foreignSelTypes = []
+    foreignFiles    = []
+    foreignPreviews = []
+    foreignError    = ''
+  }
+
+  function toggleForeignSelType(value: string) {
+    foreignSelTypes = foreignSelTypes.includes(value)
+      ? foreignSelTypes.filter(v => v !== value)
+      : [...foreignSelTypes, value]
+  }
+
+  // 선택한 증명 종류 수만큼 파일이 등록되지 않았을 때 안내 — 파일 추가/제거 직후에만 호출
+  // (유형 선택 직후 매번 뜨면 아직 파일을 추가하기도 전에 불필요하게 나가므로 제외, 본인증명과 동일 원칙)
+  function warnIfForeignFileShortfall() {
+    if (foreignSelTypes.length > 0 && foreignFiles.length > 0 && foreignFiles.length < foreignSelTypes.length) {
+      csToast.warning('선택된 증명서 모두 등록 부탁드립니다.')
+    }
+  }
+
+  function addForeignFiles(files: FileList | File[]) {
+    foreignError = ''
+    const room = MAX_FOREIGN_FILES - foreignFiles.length
+    if (room <= 0) { foreignError = `최대 ${MAX_FOREIGN_FILES}개까지 등록할 수 있어요.`; return }
+    const accepted: File[] = []
+    for (const file of Array.from(files)) {
+      if (accepted.length >= room) break
+      const result = validateUploadFile(file)
+      if (!result.ok) { foreignError = result.error ?? ''; continue }
+      if (file.size > FOREIGN_MAX_FILE_SIZE) { foreignError = '파일 크기는 10MB 이하여야 합니다.'; continue }
+      accepted.push(file)
+    }
+    if (accepted.length === 0) return
+    foreignFiles    = [...foreignFiles, ...accepted]
+    foreignPreviews = [
+      ...foreignPreviews,
+      ...accepted.map(f => f.type === 'application/pdf' ? null : URL.createObjectURL(f)),
+    ]
+    warnIfForeignFileShortfall()
+  }
+
   function handleForeignFileChange(e: Event) {
     const input = e.target as HTMLInputElement
-    const file  = input.files?.[0] ?? null
-    foreignError = ''
-    foreignFile  = null
-    foreignPreview = null
-    if (!file) return
-    const result = validateUploadFile(file)
-    if (!result.ok) { foreignError = result.error ?? ''; return }
-    foreignFile  = file
-    foreignIsPdf = file.type === 'application/pdf'
-    if (!foreignIsPdf) foreignPreview = URL.createObjectURL(file)
+    if (input.files && input.files.length > 0) addForeignFiles(input.files)
+    input.value = ''
+  }
+
+  function removeForeignFile(index: number) {
+    foreignFiles    = foreignFiles.filter((_, i) => i !== index)
+    foreignPreviews = foreignPreviews.filter((_, i) => i !== index)
+    warnIfForeignFileShortfall()
+  }
+
+  function handleForeignDragOver(e: DragEvent) {
+    e.preventDefault()
+    foreignDragOver = true
+  }
+
+  function handleForeignDragLeave() {
+    foreignDragOver = false
+  }
+
+  function handleForeignDrop(e: DragEvent) {
+    e.preventDefault()
+    foreignDragOver = false
+    if (e.dataTransfer?.files?.length) addForeignFiles(e.dataTransfer.files)
   }
 
   async function uploadForeignDoc() {
-    if (!foreignFile) return
+    if (foreignFiles.length === 0) return
+    if (foreignSelTypes.length < currentForeignTypes.length) {
+      csToast.warning('모든 증명서를 선택해주세요.')
+      return
+    }
+    if (foreignFiles.length < foreignSelTypes.length) {
+      csToast.warning('선택된 증명서 모두 등록 부탁드립니다.')
+      return
+    }
     isUploadingForeign = true
     foreignError = ''
     const fd = new FormData()
     fd.set('type', 'foreign')
-    fd.set('file', foreignFile)
+    for (const f of foreignFiles) fd.append('file', f)
+    for (const t of foreignSelTypes) fd.append('foreign_type', t)
+    fd.set('foreign_stay_type', foreignStayType)
     try {
       const res  = await fetch('/api/profile/upload-doc', { method: 'POST', body: fd })
-      const data = await res.json() as { ok: boolean; docUrls?: string[]; verifiedAt?: string; error?: string }
-      if (!data.ok) { foreignError = data.error ?? '업로드 실패'; return }
+      const data = await res.json() as { ok: boolean; docUrls?: string[]; error?: string }
+      // 본인증명과 동일 원칙 — 반환된 docUrls 개수가 제출 파일 개수와 정확히 일치할 때만 완료 처리
+      const isConsistent = data.ok && Array.isArray(data.docUrls) && data.docUrls.length === foreignFiles.length
+      if (!isConsistent) { foreignError = data.error ?? '등록 처리가 정확히 반영되지 않았습니다. 다시 시도해주세요.'; return }
       csToast.success('외국인증명이 등록되었습니다.')
       showForeignForm = false
-      foreignFile     = null
-      foreignPreview  = null
+      foreignFiles    = []
+      foreignPreviews = []
       await invalidateAll()
     } catch { foreignError = '네트워크 오류가 발생했습니다.' }
     finally  { isUploadingForeign = false }
   }
 
-  function openForeignDoc() {
-    if (foreignDocUrl) window.open(foreignDocUrl, '_blank', 'noopener,noreferrer')
+  function openForeignDoc(url: string) {
+    window.open(url, '_blank', 'noopener,noreferrer')
   }
 
   function requestForeignReRegister() {
@@ -603,8 +701,10 @@
       actionLabel: '확인',
       onClick: () => {
         showForeignForm = true
-        foreignFile     = null
-        foreignPreview  = null
+        foreignStayType = (profile?.foreign_stay_type as 'short' | 'long' | null) ?? 'short'
+        foreignSelTypes = profile?.foreign_type ?? []
+        foreignFiles    = []
+        foreignPreviews = []
       },
     })
   }
@@ -621,7 +721,7 @@
       const data = await res.json() as { ok: boolean; error?: string }
       if (!data.ok) { csToast.error(data.error ?? '삭제에 실패했습니다.'); return }
       csToast.success('외국인증명이 삭제되었습니다.')
-      foreignDocUrl     = null
+      foreignDocUrls    = []
       foreignVerifiedAt = null
       await invalidateAll()
     } catch {
@@ -787,18 +887,23 @@
               {profile?.created_at ? new Date(profile.created_at).toLocaleDateString('ko-KR', { year: 'numeric', month: '2-digit', day: '2-digit' }).replace(/\. /g, '.').replace(/\.$/, '') : '—'}
             </p>
           </div>
-          <button type="button" class="profile-avatar-initial" onclick={openAvatarModal} aria-label="프로필 사진 변경">
-            {#if avatarUrl}
-              <img src={avatarUrl} alt="" class="profile-avatar-img" />
-            {:else}
-              {(displayEmail[0] ?? '?').toUpperCase()}
-            {/if}
-          </button>
+          <div class="flex flex-col items-center gap-[6px]">
+            <button type="button" class="profile-avatar-initial" onclick={openAvatarModal} aria-label="프로필 사진 변경">
+              {#if avatarUrl}
+                <img src={avatarUrl} alt="" class="profile-avatar-img" />
+              {:else}
+                {(displayEmail[0] ?? '?').toUpperCase()}
+              {/if}
+            </button>
+            <button type="button" class="profile-avatar-link" onclick={openAvatarModal}>
+              {avatarUrl ? '프로필 편집' : '프로필 등록'}
+            </button>
+          </div>
         </div>
       </div>
 
       <!-- 개인정보 폼 -->
-      <div class="flex flex-col gap-[20px] items-start pt-[30px] w-full">
+      <div class="personal-info-form flex flex-col gap-[20px] items-start pt-[30px] w-full">
         <div class="flex flex-col gap-[10px] w-full">
           <p class="font-['Noto_Sans_KR',sans-serif] font-medium text-[16px] text-[#444] tracking-[-0.5px] leading-[1.6] whitespace-nowrap">개인정보</p>
           <p class="font-['Noto_Sans_KR',sans-serif] font-medium text-[12px] text-[#aaa] tracking-[-0.5px] leading-[1.6]">항목을 클릭하면 수정할 수 있습니다</p>
@@ -1009,254 +1114,333 @@
     </div>
   </div>
 
-  <!-- 본인 증명 섹션 -->
+  <!-- 본인 증명 · 외국인 증명 탭 섹션 (이번 세션 신규 — 탭 UI 재구성) -->
   <div class="doc-card">
     <div class="doc-card-inner">
-      <div class="doc-section-head">
-        <div>
-          <p class="doc-title">본인 증명</p>
+      <div class="doc-tab-nav" role="tablist" aria-label="증명서 탭">
+        <button
+          type="button"
+          class="doc-tab-title"
+          class:active={activeDocTab === 'identity'}
+          role="tab"
+          aria-selected={activeDocTab === 'identity'}
+          onclick={() => activeDocTab = 'identity'}
+        >본인 증명</button>
+        <button
+          type="button"
+          class="doc-tab-title"
+          class:active={activeDocTab === 'foreign'}
+          role="tab"
+          aria-selected={activeDocTab === 'foreign'}
+          onclick={() => activeDocTab = 'foreign'}
+        >외국인 증명</button>
+      </div>
+
+      {#if activeDocTab === 'identity'}
+        <div class="doc-section-head">
           <p class="doc-subtitle">신원 확인용 증명서를 등록하세요</p>
+          {#if identityDocUrls.length > 0 && !showIdentityForm}
+            <button class="btn-doc-re" onclick={requestIdentityReRegister}>재등록</button>
+          {/if}
         </div>
+
         {#if identityDocUrls.length > 0 && !showIdentityForm}
-          <button class="btn-doc-re" onclick={requestIdentityReRegister}>재등록</button>
-        {/if}
-      </div>
-
-      {#if identityDocUrls.length > 0 && !showIdentityForm}
-        <!-- 등록 완료 상태 -->
-        <div class="doc-registered">
-          <span class="doc-type-badge">{identityTypeLabel(identityType)}</span>
-          {#if identityVerifiedAt}
-            <span class="doc-date">{formatDocDate(identityVerifiedAt)}</span>
-          {/if}
-          <div class="doc-view-links">
-            {#each identityDocUrls as url, i}
-              <button type="button" class="btn-doc-view" onclick={() => openIdentityDoc(url)}>
-                {identityDocUrls.length > 1 ? `보기 ${i + 1}` : '보기'}
-              </button>
-            {/each}
-          </div>
-          <button
-            type="button"
-            class="btn-doc-delete"
-            disabled={isDeletingIdentity}
-            onclick={requestIdentityDelete}
-            aria-label="본인증명 삭제"
-          >
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3,6 5,6 21,6"/><path d="M19,6l-1,14H6L5,6"/><path d="M10,11v6M14,11v6"/><path d="M9,6V4h6v2"/></svg>
-          </button>
-        </div>
-      {:else if showIdentityForm}
-        <!-- 업로드 폼 -->
-        <div class="doc-upload-wrap">
-          <!-- 증명 유형 선택 (다중 선택 가능) -->
-          <div class="doc-type-row">
-            {#each IDENTITY_TYPES as t}
-              <button
-                type="button"
-                class="btn-doc-type"
-                class:active={identitySelTypes.includes(t.value)}
-                onclick={() => toggleIdentitySelType(t.value)}
-              >{t.label}</button>
-            {/each}
-          </div>
-
-          <!-- 파일 선택 (드래그앤드롭 + 다중 선택, 최대 5개) -->
-          <label
-            class="doc-file-label"
-            class:drag-over={identityDragOver}
-            aria-disabled={isUploadingId}
-            ondragover={handleIdentityDragOver}
-            ondragleave={handleIdentityDragLeave}
-            ondrop={handleIdentityDrop}
-          >
-            <input
-              type="file"
-              class="sr-only"
-              multiple
-              disabled={isUploadingId}
-              accept="image/png,image/jpeg,image/webp,image/heif,image/heic,application/pdf"
-              onchange={handleIdentityFileChange}
-            />
-            <span class="doc-file-btn">
-              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><polyline points="16 16 12 12 8 16"/><line x1="12" y1="12" x2="12" y2="21"/><path d="M20.39 18.39A5 5 0 0 0 18 9h-1.26A8 8 0 1 0 3 16.3"/></svg>
-              <span>파일 선택 또는 드래그</span>
-              <span class="doc-file-hint">PNG · JPEG · WebP · HEIF · PDF · 최대 {MAX_IDENTITY_FILES}개 · 개별 10MB 이하</span>
-            </span>
-          </label>
-
-          {#if identityFiles.length > 0}
-            <div class="doc-file-grid">
-              {#each identityFiles as file, i}
-                <div class="doc-file-item">
-                  {#if identityPreviews[i]}
-                    <img src={identityPreviews[i]} alt="미리보기" class="doc-img-preview" />
-                  {:else}
-                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
-                    <span class="doc-file-name">{file.name}</span>
-                  {/if}
-                  <button type="button" class="doc-file-remove" disabled={isUploadingId} onclick={() => removeIdentityFile(i)} aria-label="파일 제거">✕</button>
-                </div>
-              {/each}
-              <span class="doc-file-count">{identityFiles.length}/{MAX_IDENTITY_FILES}</span>
-            </div>
-          {/if}
-
-          {#if identityError}
-            <p class="doc-error" role="alert">{identityError}</p>
-          {/if}
-
-          <div class="doc-upload-btns">
-            <button
-              type="button"
-              class="btn-doc-upload"
-              onclick={uploadIdentityDoc}
-              disabled={isUploadingId || identityFiles.length === 0 || identitySelTypes.length === 0}
-            >{isUploadingId ? '업로드 중...' : '등록하기'}</button>
-          </div>
-        </div>
-      {:else}
-        <!-- 미등록 상태 -->
-        <div class="doc-upload-wrap">
-          <div class="doc-type-row">
-            {#each IDENTITY_TYPES as t}
-              <button
-                type="button"
-                class="btn-doc-type"
-                class:active={identitySelTypes.includes(t.value)}
-                onclick={() => toggleIdentitySelType(t.value)}
-              >{t.label}</button>
-            {/each}
-          </div>
-
-          <!-- 파일 선택 (드래그앤드롭 + 다중 선택, 최대 5개) -->
-          <label
-            class="doc-file-label"
-            class:drag-over={identityDragOver}
-            aria-disabled={isUploadingId}
-            ondragover={handleIdentityDragOver}
-            ondragleave={handleIdentityDragLeave}
-            ondrop={handleIdentityDrop}
-          >
-            <input
-              type="file"
-              class="sr-only"
-              multiple
-              disabled={isUploadingId}
-              accept="image/png,image/jpeg,image/webp,image/heif,image/heic,application/pdf"
-              onchange={handleIdentityFileChange}
-            />
-            <span class="doc-file-btn">
-              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><polyline points="16 16 12 12 8 16"/><line x1="12" y1="12" x2="12" y2="21"/><path d="M20.39 18.39A5 5 0 0 0 18 9h-1.26A8 8 0 1 0 3 16.3"/></svg>
-              <span>파일 선택 또는 드래그</span>
-              <span class="doc-file-hint">PNG · JPEG · WebP · HEIF · PDF · 최대 {MAX_IDENTITY_FILES}개 · 개별 10MB 이하</span>
-            </span>
-          </label>
-
-          {#if identityFiles.length > 0}
-            <div class="doc-file-grid">
-              {#each identityFiles as file, i}
-                <div class="doc-file-item">
-                  {#if identityPreviews[i]}
-                    <img src={identityPreviews[i]} alt="미리보기" class="doc-img-preview" />
-                  {:else}
-                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
-                    <span class="doc-file-name">{file.name}</span>
-                  {/if}
-                  <button type="button" class="doc-file-remove" disabled={isUploadingId} onclick={() => removeIdentityFile(i)} aria-label="파일 제거">✕</button>
-                </div>
-              {/each}
-              <span class="doc-file-count">{identityFiles.length}/{MAX_IDENTITY_FILES}</span>
-            </div>
-          {/if}
-
-          {#if identityError}
-            <p class="doc-error" role="alert">{identityError}</p>
-          {/if}
-
-          <div class="doc-upload-btns">
-            <button
-              type="button"
-              class="btn-doc-upload"
-              onclick={uploadIdentityDoc}
-              disabled={isUploadingId || identityFiles.length === 0 || identitySelTypes.length === 0}
-            >{isUploadingId ? '업로드 중...' : '등록하기'}</button>
-          </div>
-        </div>
-      {/if}
-    </div>
-  </div>
-
-  <!-- 외국인 증명 섹션 -->
-  <div class="doc-card">
-    <div class="doc-card-inner">
-      <div class="doc-section-head">
-        <div>
-          <p class="doc-title">외국인 증명</p>
-          <p class="doc-subtitle">여권 또는 외국인등록증을 등록하세요</p>
-        </div>
-        {#if foreignDocUrl && !showForeignForm}
-          <button class="btn-doc-re" onclick={requestForeignReRegister}>재등록</button>
-        {/if}
-      </div>
-
-      {#if foreignDocUrl && !showForeignForm}
-        <!-- 등록 완료 상태 -->
-        <div class="doc-registered">
-          <span class="doc-type-badge">외국인증명</span>
-          {#if foreignVerifiedAt}
-            <span class="doc-date">{formatDocDate(foreignVerifiedAt)}</span>
-          {/if}
-          <button type="button" class="btn-doc-view" onclick={openForeignDoc}>보기</button>
-          <button
-            type="button"
-            class="btn-doc-delete"
-            disabled={isDeletingForeign}
-            onclick={requestForeignDelete}
-            aria-label="외국인증명 삭제"
-          >
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3,6 5,6 21,6"/><path d="M19,6l-1,14H6L5,6"/><path d="M10,11v6M14,11v6"/><path d="M9,6V4h6v2"/></svg>
-          </button>
-        </div>
-      {:else}
-        <!-- 업로드 폼 (미등록 / 재등록) -->
-        <div class="doc-upload-wrap">
-          <label class="doc-file-label">
-            <input
-              type="file"
-              class="sr-only"
-              accept="image/png,image/jpeg,image/webp,image/heif,image/heic,application/pdf"
-              onchange={handleForeignFileChange}
-            />
-            <span class="doc-file-btn">
-              {#if foreignFile}
-                {#if foreignIsPdf}
-                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
-                  {foreignFile.name}
-                {:else}
-                  <img src={foreignPreview ?? ''} alt="미리보기" class="doc-img-preview" />
-                {/if}
-              {:else}
-                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><polyline points="16 16 12 12 8 16"/><line x1="12" y1="12" x2="12" y2="21"/><path d="M20.39 18.39A5 5 0 0 0 18 9h-1.26A8 8 0 1 0 3 16.3"/></svg>
-                <span>파일 선택</span>
-                <span class="doc-file-hint">PNG · JPEG · WebP · HEIF · PDF</span>
+          <!-- 등록 완료 상태 -->
+          <div class="doc-registered">
+            <div class="doc-registered-head">
+              <span class="doc-type-badge">{identityTypeLabel(identityType)}</span>
+              {#if identityVerifiedAt}
+                <span class="doc-date">{formatDocDate(identityVerifiedAt)}</span>
               {/if}
-            </span>
-          </label>
-
-          {#if foreignError}
-            <p class="doc-error" role="alert">{foreignError}</p>
-          {/if}
-
-          <div class="doc-upload-btns">
-            <button
-              type="button"
-              class="btn-doc-upload"
-              onclick={uploadForeignDoc}
-              disabled={isUploadingForeign || !foreignFile}
-            >{isUploadingForeign ? '업로드 중...' : '등록하기'}</button>
+              <button
+                type="button"
+                class="btn-doc-delete"
+                disabled={isDeletingIdentity}
+                onclick={requestIdentityDelete}
+                aria-label="본인증명 삭제"
+              >
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3,6 5,6 21,6"/><path d="M19,6l-1,14H6L5,6"/><path d="M10,11v6M14,11v6"/><path d="M9,6V4h6v2"/></svg>
+              </button>
+            </div>
+            <ul class="doc-file-list">
+              {#each identityDocUrls as url, i}
+                <li class="doc-file-list-item">
+                  <span class="doc-file-list-icon" aria-hidden="true">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+                  </span>
+                  <span class="doc-file-list-name">파일 {i + 1}</span>
+                  <button type="button" class="btn-doc-view" onclick={() => openIdentityDoc(url)}>보기</button>
+                </li>
+              {/each}
+            </ul>
           </div>
+        {:else if showIdentityForm}
+          <!-- 업로드 폼 -->
+          <div class="doc-upload-wrap">
+            <!-- 증명 유형 선택 (다중 선택 가능) -->
+            <div class="doc-type-row">
+              {#each IDENTITY_TYPES as t}
+                <button
+                  type="button"
+                  class="btn-doc-type"
+                  class:active={identitySelTypes.includes(t.value)}
+                  onclick={() => toggleIdentitySelType(t.value)}
+                >{t.label}</button>
+              {/each}
+            </div>
+
+            <!-- 파일 선택 (드래그앤드롭 + 다중 선택, 최대 5개) -->
+            <label
+              class="doc-file-label"
+              class:drag-over={identityDragOver}
+              aria-disabled={isUploadingId}
+              ondragover={handleIdentityDragOver}
+              ondragleave={handleIdentityDragLeave}
+              ondrop={handleIdentityDrop}
+            >
+              <input
+                type="file"
+                class="sr-only"
+                multiple
+                disabled={isUploadingId}
+                accept="image/png,image/jpeg,image/webp,image/heif,image/heic,application/pdf"
+                onchange={handleIdentityFileChange}
+              />
+              <span class="doc-file-btn">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><polyline points="16 16 12 12 8 16"/><line x1="12" y1="12" x2="12" y2="21"/><path d="M20.39 18.39A5 5 0 0 0 18 9h-1.26A8 8 0 1 0 3 16.3"/></svg>
+                <span>파일 선택 또는 드래그</span>
+                <span class="doc-file-hint">PNG · JPEG · WebP · HEIF · PDF · 최대 {MAX_IDENTITY_FILES}개 · 개별 10MB 이하</span>
+              </span>
+            </label>
+
+            {#if identityFiles.length > 0}
+              <div class="doc-file-grid">
+                {#each identityFiles as file, i}
+                  <div class="doc-file-item">
+                    {#if identityPreviews[i]}
+                      <img src={identityPreviews[i]} alt="미리보기" class="doc-img-preview" />
+                    {:else}
+                      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+                      <span class="doc-file-name">{file.name}</span>
+                    {/if}
+                    <button type="button" class="doc-file-remove" disabled={isUploadingId} onclick={() => removeIdentityFile(i)} aria-label="파일 제거">✕</button>
+                  </div>
+                {/each}
+                <span class="doc-file-count">{identityFiles.length}/{MAX_IDENTITY_FILES}</span>
+              </div>
+            {/if}
+
+            {#if identityError}
+              <p class="doc-error" role="alert">{identityError}</p>
+            {/if}
+
+            <div class="doc-upload-btns">
+              <button
+                type="button"
+                class="btn-doc-upload"
+                onclick={uploadIdentityDoc}
+                disabled={isUploadingId || identityFiles.length === 0 || identitySelTypes.length === 0}
+              >{isUploadingId ? '업로드 중...' : '등록하기'}</button>
+            </div>
+          </div>
+        {:else}
+          <!-- 미등록 상태 -->
+          <div class="doc-upload-wrap">
+            <div class="doc-type-row">
+              {#each IDENTITY_TYPES as t}
+                <button
+                  type="button"
+                  class="btn-doc-type"
+                  class:active={identitySelTypes.includes(t.value)}
+                  onclick={() => toggleIdentitySelType(t.value)}
+                >{t.label}</button>
+              {/each}
+            </div>
+
+            <!-- 파일 선택 (드래그앤드롭 + 다중 선택, 최대 5개) -->
+            <label
+              class="doc-file-label"
+              class:drag-over={identityDragOver}
+              aria-disabled={isUploadingId}
+              ondragover={handleIdentityDragOver}
+              ondragleave={handleIdentityDragLeave}
+              ondrop={handleIdentityDrop}
+            >
+              <input
+                type="file"
+                class="sr-only"
+                multiple
+                disabled={isUploadingId}
+                accept="image/png,image/jpeg,image/webp,image/heif,image/heic,application/pdf"
+                onchange={handleIdentityFileChange}
+              />
+              <span class="doc-file-btn">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><polyline points="16 16 12 12 8 16"/><line x1="12" y1="12" x2="12" y2="21"/><path d="M20.39 18.39A5 5 0 0 0 18 9h-1.26A8 8 0 1 0 3 16.3"/></svg>
+                <span>파일 선택 또는 드래그</span>
+                <span class="doc-file-hint">PNG · JPEG · WebP · HEIF · PDF · 최대 {MAX_IDENTITY_FILES}개 · 개별 10MB 이하</span>
+              </span>
+            </label>
+
+            {#if identityFiles.length > 0}
+              <div class="doc-file-grid">
+                {#each identityFiles as file, i}
+                  <div class="doc-file-item">
+                    {#if identityPreviews[i]}
+                      <img src={identityPreviews[i]} alt="미리보기" class="doc-img-preview" />
+                    {:else}
+                      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+                      <span class="doc-file-name">{file.name}</span>
+                    {/if}
+                    <button type="button" class="doc-file-remove" disabled={isUploadingId} onclick={() => removeIdentityFile(i)} aria-label="파일 제거">✕</button>
+                  </div>
+                {/each}
+                <span class="doc-file-count">{identityFiles.length}/{MAX_IDENTITY_FILES}</span>
+              </div>
+            {/if}
+
+            {#if identityError}
+              <p class="doc-error" role="alert">{identityError}</p>
+            {/if}
+
+            <div class="doc-upload-btns">
+              <button
+                type="button"
+                class="btn-doc-upload"
+                onclick={uploadIdentityDoc}
+                disabled={isUploadingId || identityFiles.length === 0 || identitySelTypes.length === 0}
+              >{isUploadingId ? '업로드 중...' : '등록하기'}</button>
+            </div>
+          </div>
+        {/if}
+      {:else}
+        <div class="doc-section-head">
+          <p class="doc-subtitle">여권 또는 외국인등록증을 등록하세요</p>
+          {#if foreignDocUrls.length > 0 && !showForeignForm}
+            <button class="btn-doc-re" onclick={requestForeignReRegister}>재등록</button>
+          {/if}
         </div>
+
+        {#if foreignDocUrls.length > 0 && !showForeignForm}
+          <!-- 등록 완료 상태 -->
+          <div class="doc-registered">
+            <div class="doc-registered-head">
+              <span class="doc-type-badge">외국인증명</span>
+              {#if foreignVerifiedAt}
+                <span class="doc-date">{formatDocDate(foreignVerifiedAt)}</span>
+              {/if}
+              <button
+                type="button"
+                class="btn-doc-delete"
+                disabled={isDeletingForeign}
+                onclick={requestForeignDelete}
+                aria-label="외국인증명 삭제"
+              >
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3,6 5,6 21,6"/><path d="M19,6l-1,14H6L5,6"/><path d="M10,11v6M14,11v6"/><path d="M9,6V4h6v2"/></svg>
+              </button>
+            </div>
+            <ul class="doc-file-list">
+              {#each foreignDocUrls as url, i}
+                <li class="doc-file-list-item">
+                  <span class="doc-file-list-icon" aria-hidden="true">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+                  </span>
+                  <span class="doc-file-list-name">파일 {i + 1}</span>
+                  <button type="button" class="btn-doc-view" onclick={() => openForeignDoc(url)}>보기</button>
+                </li>
+              {/each}
+            </ul>
+          </div>
+        {:else}
+          <!-- 업로드 폼 (미등록 / 재등록) -->
+          <div class="doc-upload-wrap">
+            <!-- 체류기간 하위 선택 탭 (단일 선택) -->
+            <div class="foreign-stay-select" role="radiogroup" aria-label="체류 기간 선택">
+              {#each FOREIGN_STAY_OPTIONS as opt}
+                <button
+                  type="button"
+                  class="foreign-stay-row"
+                  class:active={foreignStayType === opt.value}
+                  role="radio"
+                  aria-checked={foreignStayType === opt.value}
+                  onclick={() => selectForeignStayType(opt.value)}
+                >
+                  <span class="checkbox-btn checkbox-btn-terms" class:checked={foreignStayType === opt.value} aria-hidden="true">
+                    <svg width="18" height="12" viewBox="0 0 18 12" fill="none">
+                      <path d="M14.788 0.40847C15.5937 -0.206503 16.7506 -0.123176 17.4589 0.632103C18.2144 1.4379 18.1729 2.70376 17.3671 3.45925L17.3622 3.46413C17.3585 3.46759 17.3528 3.47297 17.3456 3.47976C17.3311 3.49333 17.3101 3.51407 17.2821 3.54031C17.2261 3.59279 17.1437 3.66974 17.039 3.76784C16.8294 3.96413 16.5289 4.24474 16.1669 4.58327C15.4428 5.26035 14.4707 6.169 13.4774 7.09304C12.4848 8.01654 11.4689 8.95836 10.6591 9.70144C9.90326 10.3949 9.21125 11.0229 8.954 11.219C8.38484 11.6526 7.64783 12.0001 6.7831 12.0003C5.89707 12.0003 5.14509 11.6357 4.57217 11.138C4.258 10.865 3.25694 9.9462 2.37197 9.13015C1.92122 8.71451 1.48885 8.31388 1.16885 8.01785C1.0088 7.86979 0.875998 7.74749 0.78408 7.66238C0.738281 7.61997 0.702073 7.58638 0.677634 7.56374C0.665704 7.55269 0.656551 7.54415 0.650291 7.53835C0.647126 7.53542 0.644094 7.53301 0.642478 7.53152L0.641502 7.52956H0.640525C-0.169647 6.77877 -0.217693 5.51259 0.533103 4.70242C1.28393 3.89251 2.55017 3.84526 3.36025 4.59597L3.36123 4.59792C3.3628 4.59938 3.36592 4.60089 3.36904 4.60378C3.37524 4.60953 3.38439 4.61807 3.39638 4.62917C3.42067 4.65167 3.45618 4.68551 3.50185 4.72781C3.59333 4.81251 3.72524 4.93384 3.88467 5.08132C4.2037 5.37646 4.63512 5.77493 5.08388 6.18874C5.73477 6.78894 6.40077 7.39812 6.82217 7.78054C6.86093 7.74604 6.90358 7.70918 6.94814 7.66921C7.21008 7.43424 7.55408 7.12113 7.954 6.75417C8.7536 6.02049 9.76226 5.0859 10.7528 4.16433C11.7428 3.24336 12.7128 2.33711 13.4354 1.6614C13.7965 1.32374 14.0957 1.04357 14.3046 0.847923C14.409 0.750147 14.491 0.67359 14.5468 0.621361C14.5745 0.595342 14.5959 0.575239 14.6103 0.56179C14.6174 0.555065 14.6232 0.549566 14.6269 0.546165L14.6317 0.541282L14.788 0.40847Z" fill="currentColor" />
+                    </svg>
+                  </span>
+                  <span class="foreign-stay-label">{opt.label}</span>
+                </button>
+              {/each}
+            </div>
+
+            <!-- 증명서 콤보 버튼 (체류기간별 필수 증명서 — 본인증명과 동일한 콤보 버튼 스타일) -->
+            <div class="doc-type-row">
+              {#each currentForeignTypes as t}
+                <button
+                  type="button"
+                  class="btn-doc-type"
+                  class:active={foreignSelTypes.includes(t.value)}
+                  onclick={() => toggleForeignSelType(t.value)}
+                >{t.label}</button>
+              {/each}
+            </div>
+
+            <!-- 파일 선택 (드래그앤드롭 + 다중 선택, 최대 4개) -->
+            <label
+              class="doc-file-label"
+              class:drag-over={foreignDragOver}
+              aria-disabled={isUploadingForeign}
+              ondragover={handleForeignDragOver}
+              ondragleave={handleForeignDragLeave}
+              ondrop={handleForeignDrop}
+            >
+              <input
+                type="file"
+                class="sr-only"
+                multiple
+                disabled={isUploadingForeign}
+                accept="image/png,image/jpeg,image/webp,image/heif,image/heic,application/pdf"
+                onchange={handleForeignFileChange}
+              />
+              <span class="doc-file-btn">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><polyline points="16 16 12 12 8 16"/><line x1="12" y1="12" x2="12" y2="21"/><path d="M20.39 18.39A5 5 0 0 0 18 9h-1.26A8 8 0 1 0 3 16.3"/></svg>
+                <span>파일 선택 또는 드래그</span>
+                <span class="doc-file-hint">PNG · JPEG · WebP · HEIF · PDF · 최대 {MAX_FOREIGN_FILES}개 · 개별 10MB 이하</span>
+              </span>
+            </label>
+
+            {#if foreignFiles.length > 0}
+              <div class="doc-file-grid">
+                {#each foreignFiles as file, i}
+                  <div class="doc-file-item">
+                    {#if foreignPreviews[i]}
+                      <img src={foreignPreviews[i]} alt="미리보기" class="doc-img-preview" />
+                    {:else}
+                      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+                      <span class="doc-file-name">{file.name}</span>
+                    {/if}
+                    <button type="button" class="doc-file-remove" disabled={isUploadingForeign} onclick={() => removeForeignFile(i)} aria-label="파일 제거">✕</button>
+                  </div>
+                {/each}
+                <span class="doc-file-count">{foreignFiles.length}/{MAX_FOREIGN_FILES}</span>
+              </div>
+            {/if}
+
+            {#if foreignError}
+              <p class="doc-error" role="alert">{foreignError}</p>
+            {/if}
+
+            <div class="doc-upload-btns">
+              <button
+                type="button"
+                class="btn-doc-upload"
+                onclick={uploadForeignDoc}
+                disabled={isUploadingForeign || foreignFiles.length === 0 || foreignFiles.length < foreignSelTypes.length}
+              >{isUploadingForeign ? '업로드 중...' : '등록하기'}</button>
+            </div>
+          </div>
+        {/if}
       {/if}
     </div>
   </div>
@@ -1377,6 +1561,11 @@
     flex-direction: column;
     gap: 10px;
     width: 100%;
+  }
+
+  /* 로그인 정보 카드 ↔ 개인정보 폼 사이 여백 — PC(≥768px)에서만 50px 확대 (이번 세션 신규) */
+  @media (min-width: 768px) {
+    .personal-info-form { padding-top: 50px; }
   }
 
   /* ── 읽기 전용 필드 (클릭 가능) */
@@ -1641,6 +1830,21 @@
     height: 100%;
     object-fit: cover;
     border-radius: 50%;
+  }
+
+  /* 프로필 등록/편집 텍스트 링크 — 최소 크기 폰트토큰 + 중간 그레이톤 (이번 세션 신규) */
+  .profile-avatar-link {
+    background: none;
+    border: none;
+    padding: 0;
+    cursor: pointer;
+    font: var(--text-m-script-12);
+    color: var(--cs-text-mid);
+    white-space: nowrap;
+  }
+  .profile-avatar-link:hover { color: var(--cs-text-dark); }
+  @media (min-width: 768px) {
+    .profile-avatar-link { font: var(--text-pc-script-12); }
   }
 
   .consent-btn {
@@ -1919,15 +2123,6 @@
     justify-content: space-between;
     gap: 12px;
   }
-  .doc-title {
-    font-family: 'Noto Sans KR', sans-serif;
-    font-weight: 600;
-    font-size: 16px;
-    color: #444;
-    letter-spacing: -0.5px;
-    line-height: 1.6;
-    margin: 0;
-  }
   .doc-subtitle {
     font-family: 'Noto Sans KR', sans-serif;
     font-weight: 400;
@@ -1938,15 +2133,130 @@
     margin: 0;
   }
 
-  /* 등록 완료 상태 */
+  /* 본인증명·외국인증명 탭 내비 (이번 세션 신규) — 열림: 기존 doc-title 컬러톤(#444) / 미열림: 옅은 그레이 */
+  .doc-tab-nav {
+    display: flex;
+    align-items: center;
+    gap: 20px;
+  }
+  .doc-tab-title {
+    background: none;
+    border: none;
+    padding: 0 0 8px;
+    margin: 0;
+    cursor: pointer;
+    font-family: 'Noto Sans KR', sans-serif;
+    font-weight: 600;
+    font-size: 16px;
+    letter-spacing: -0.5px;
+    line-height: 1.6;
+    color: var(--cs-text-light, #aaa);
+    border-bottom: 2px solid transparent;
+    transition: color 0.15s, border-color 0.15s;
+  }
+  .doc-tab-title.active {
+    color: #444;
+    border-bottom-color: #444;
+  }
+
+  /* 외국인증명 — 체류기간 하위 선택(단일 선택) — front-uiux.md §16 콤보 버튼 선택 그룹 표준
+     (수평 flex + overflow-x auto, PC·모바일 공통 — 항상 병렬 배열) + 우측 아닌 좌측 체크아이콘 결합 */
+  .foreign-stay-select {
+    display: flex;
+    gap: 6px;
+    overflow-x: auto;
+    padding-bottom: 2px;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: none;
+  }
+  .foreign-stay-select::-webkit-scrollbar { display: none; }
+  .foreign-stay-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 9px 16px;
+    border-radius: var(--radius-xl);
+    border: 1.5px solid #DCDCDC;
+    background: #fff;
+    cursor: pointer;
+    transition: all 0.18s;
+    flex-shrink: 0;
+    white-space: nowrap;
+  }
+  .foreign-stay-row:hover {
+    border-color: var(--cs-purple);
+    background: #F5F4FA;
+  }
+  .foreign-stay-row.active {
+    border-color: var(--cs-purple);
+    background: var(--cs-purple);
+  }
+  .foreign-stay-label {
+    font-family: 'Noto Sans KR', sans-serif;
+    font-weight: 700;
+    font-size: 13px;
+    color: var(--cs-text);
+  }
+  .foreign-stay-row.active .foreign-stay-label { color: #fff; }
+  @media (max-width: 640px) {
+    .foreign-stay-row   { padding: 8px 12px; }
+    .foreign-stay-label { font-size: 12px; }
+  }
+  .checkbox-btn { background: none; border: none; padding: 0; cursor: pointer; flex-shrink: 0; }
+  .checkbox-btn-terms { color: var(--cs-purple-op10); }
+  .checkbox-btn-terms.checked { color: var(--cs-purple); }
+  .foreign-stay-row.active .checkbox-btn-terms.checked { color: #fff; }
+  .checkbox-btn-terms svg { width: 22px; height: 15px; }
+  @media (min-width: 768px) {
+    .checkbox-btn-terms svg { width: 18px; height: 12px; }
+  }
+
+  /* 등록 완료 상태 — 파일 목록형 */
   .doc-registered {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    border-radius: 20px;
+    padding: 14px 18px;
+  }
+  .doc-registered-head {
     display: flex;
     align-items: center;
     gap: 10px;
     flex-wrap: wrap;
+  }
+  .doc-file-list {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+  .doc-file-list-item {
+    display: flex;
+    align-items: center;
+    gap: 10px;
     background: #f0eff8;
-    border-radius: 20px;
-    padding: 14px 18px;
+    border-radius: 14px;
+    padding: 10px 14px;
+  }
+  .doc-file-list-icon {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    color: #888;
+  }
+  .doc-file-list-name {
+    flex: 1;
+    min-width: 0;
+    font-family: 'Noto Sans KR', sans-serif;
+    font-size: 13px;
+    color: #444;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
   .doc-type-badge {
     display: inline-flex;
@@ -2164,13 +2474,6 @@
     white-space: nowrap;
   }
 
-  /* 등록 완료 상태 — 다건 "보기" 링크 */
-  .doc-view-links {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 6px;
-  }
-
   /* 오류 메시지 */
   .doc-error {
     font-family: 'Noto Sans KR', sans-serif;
@@ -2221,7 +2524,6 @@
 
   /* PC 반응형 */
   @media (min-width: 768px) {
-    .doc-registered { flex-wrap: nowrap; }
     .doc-type-row { flex-wrap: nowrap; }
     .btn-doc-upload { height: 50px; }
     .btn-doc-cancel { height: 50px; }

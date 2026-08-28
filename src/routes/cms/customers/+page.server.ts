@@ -23,16 +23,22 @@ export interface CustomerRow {
   blacklist_reason: string | null
   is_student: boolean
   is_foreign: boolean
-  identity_type: string | null
-  identity_doc_url: string | null
+  identity_type: string[] | null
+  identity_doc_url: string[] | null
   identity_verified_at: string | null
   foreign_doc_url: string | null
+  foreign_doc_urls: string[] | null
+  foreign_type: string[] | null
+  foreign_stay_type: string | null
   foreign_verified_at: string | null
   password_set: boolean
   created_at: string
   total_count: number
   cms_role: string | null
   birth_date: string | null
+  withdrawal_status: string
+  withdrawal_requested_at: string | null
+  withdrawal_purge_at: string | null
 }
 
 export const load: PageServerLoad = async ({ parent, url }) => {

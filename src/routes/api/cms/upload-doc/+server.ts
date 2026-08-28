@@ -54,15 +54,20 @@ export const POST: RequestHandler = async ({ request, locals }) => {
   const now = new Date().toISOString()
 
   // service_role로 RLS 우회 — 다른 사용자 프로필 업데이트
+  // identity_doc_url/identity_type, foreign_doc_urls/foreign_type은 migration 359/360으로
+  // TEXT[]로 확장됨 — 이 관리자 재등록은 기존 다중 파일 전체를 이 1개 파일로 교체하는
+  // 단일 파일 재등록(응급 대체) 동작이므로 1개짜리 배열로 감싸 저장한다.
+  // foreign_doc_url(레거시 스칼라, 다른 화면 하위호환용)도 계속 함께 채운다.
   const updates =
     type === 'identity'
       ? {
-          identity_doc_url:     publicUrl,
+          identity_doc_url:     [publicUrl],
           identity_verified_at: now,
-          ...(identityType ? { identity_type: identityType } : {}),
+          ...(identityType ? { identity_type: [identityType] } : {}),
         }
       : {
           foreign_doc_url:     publicUrl,
+          foreign_doc_urls:    [publicUrl],
           foreign_verified_at: now,
         }
 

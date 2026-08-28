@@ -240,7 +240,9 @@
                 </td>
                 <td class="col-hide">{row.points.toLocaleString('ko-KR')}P</td>
                 <td>
-                  {#if row.blacklisted}
+                  {#if row.withdrawal_status && row.withdrawal_status !== 'none'}
+                    <span class="badge-withdrawn">탈회</span>
+                  {:else if row.blacklisted}
                     <span class="badge-danger">블랙리스트</span>
                   {:else}
                     <span class="badge-normal">정상</span>
@@ -508,6 +510,7 @@
   /* 상태 배지 */
   .badge-normal { display: inline-flex; align-items: center; padding: 2px 8px; border-radius: var(--radius-sm); font: var(--text-pc-script-12); background: rgba(16,185,129,0.12); color: var(--cs-success-light); }
   .badge-danger { display: inline-flex; align-items: center; padding: 2px 8px; border-radius: var(--radius-sm); font: var(--text-pc-script-12); background: rgba(255,53,53,0.10); color: var(--cs-red-badge); }
+  .badge-withdrawn { display: inline-flex; align-items: center; padding: 2px 8px; border-radius: var(--radius-sm); font: var(--text-pc-script-12); background: rgba(255,53,53,0.10); color: var(--cs-red-badge); }
 
   .no-data { text-align: center; padding: 40px 20px; color: var(--cs-text-light); font: var(--text-pc-body-14); }
 

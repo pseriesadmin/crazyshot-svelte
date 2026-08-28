@@ -21,7 +21,9 @@ export const POST: RequestHandler = async ({ request, locals }) => {
   const admin = createClient(getSupabaseUrl(), serviceRoleKey)
 
   // 실제 Storage 파일 삭제용 — DB 초기화 전에 기존 URL을 먼저 확보해 둔다
-  const docColumn = type === 'identity' ? 'identity_doc_url' : 'foreign_doc_url'
+  // foreign은 다중 파일 전체 목록이 foreign_doc_urls에 있으므로 그쪽을 조회(foreign_doc_url은
+  // 첫 번째 파일만 담는 하위호환 스칼라 컬럼)
+  const docColumn = type === 'identity' ? 'identity_doc_url' : 'foreign_doc_urls'
   const { data: existingProfile } = await admin
     .from('user_profiles')
     .select(docColumn)
