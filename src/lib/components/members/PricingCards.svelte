@@ -32,12 +32,14 @@
   <!-- Cards -->
   <div class="pricing-pc-inner">
     {#each plans as plan, i (plan.id)}
-      <button
-        type="button"
+      <div
         class="plan-card-pc {slotClass(i)}"
         class:selected={selectedPlanId === plan.id}
         data-name="plan{i + 1}"
         onclick={() => onselect(plan.id)}
+        role="button"
+        tabindex="0"
+        onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onselect(plan.id) } }}
       >
         <!-- 순수 배경 div — 자식 없음 -->
         <div class="plan-title-block" data-name="title"></div>
@@ -55,15 +57,16 @@
         {#if plan.description}
           <div class="plan-pc-desc">{plan.description}</div>
         {/if}
-      </button>
+        <a
+          href="/subscribe/{plan.id}"
+          class="plan-subscribe-btn"
+          onclick={(e) => e.stopPropagation()}
+        >
+          구독신청하기
+        </a>
+      </div>
     {/each}
   </div>
-
-  {#if selectedPlanId !== null}
-    <div class="pc-cta-wrap">
-      <a href="/subscribe/{selectedPlanId}" class="pc-cta">구독하기</a>
-    </div>
-  {/if}
 </section>
 
 <!-- ── Mobile 플랜 카드 (<1024px) ────────────────────────────── -->
@@ -167,16 +170,6 @@
     justify-content: space-between;
   }
 
-  .pc-cta-wrap { display: flex; justify-content: center; margin-top: 40px; }
-  .pc-cta {
-    padding: 16px 48px; border-radius: var(--radius-xl); background: var(--cs-red-badge); color: var(--cs-white);
-    font-family: var(--font-kr); font-size: 18px; font-weight: 700; text-decoration: none;
-    transition: background 0.2s, transform 0.2s, box-shadow 0.2s;
-  }
-  .pc-cta:hover {
-    background: #E02020; transform: scale(1.03); box-shadow: 0 6px 20px rgba(255, 53, 53, 0.45);
-  }
-
   /* ─ Card hover/selected ─ */
   .plan-card-pc {
     transition: transform 0.35s cubic-bezier(0.34, 1.56, 0.64, 1),
@@ -204,12 +197,13 @@
   /* ─ Card ─ */
   .plan-card-pc {
     width: 400px;
-    height: 400px;
+    height: 470px;
     border-radius: 50px;
     background: var(--cs-dark);
     overflow: hidden;
     position: relative;
     flex-shrink: 0;
+    cursor: pointer;
   }
 
   /* ─ Title block (순수 bg div) ─ */
@@ -309,6 +303,33 @@
     letter-spacing: -0.5px;
     line-height: 1.6;
     z-index: 1;
+  }
+
+  /* ─ 카드별 구독신청 버튼 ─ */
+  .plan-subscribe-btn {
+    position: absolute;
+    left: 50%;
+    bottom: 24px;
+    transform: translateX(-50%);
+    z-index: 2;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    height: 44px;
+    padding: 0 28px;
+    background: var(--cs-red-badge);
+    color: var(--cs-white);
+    border-radius: var(--radius-xl);
+    font-family: var(--font-kr);
+    font-size: 14px;
+    font-weight: 700;
+    text-decoration: none;
+    white-space: nowrap;
+    transition: background 0.2s, transform 0.2s;
+  }
+  .plan-subscribe-btn:hover {
+    background: #E02020;
+    transform: translateX(-50%) scale(1.05);
   }
 
   /* ── Mobile ── */

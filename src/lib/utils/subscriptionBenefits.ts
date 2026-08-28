@@ -116,3 +116,33 @@ export function defaultBenefitParams(type: BenefitType): Record<string, number |
   }
   return params
 }
+
+/**
+ * CMS '혜택관리' 탭(tier_benefits)의 구조화 값을 front 'Plans & features' 표 행(label/value)으로
+ * 변환한다. is_enabled=true인 혜택만 호출측에서 필터링해 넘길 것 — 이 함수는 포맷팅만 담당.
+ */
+export function formatBenefitForDisplay(
+  benefitType: BenefitType,
+  params: Record<string, number | string | boolean>
+): { label: string; value: string } {
+  const def = BENEFIT_DEFS[benefitType]
+  const num = (key: string): number => (typeof params[key] === 'number' ? (params[key] as number) : 0)
+
+  switch (benefitType) {
+    case 'DISCOUNT_COUPON':
+      return { label: def.label, value: `${num('coupon_amount').toLocaleString('ko-KR')}원 · 월 ${num('coupon_frequency')}회` }
+    case 'FREE_SHIPPING': {
+      const typeLabel = def.fields.find((f) => f.key === 'shipping_type')?.options
+        ?.find((o) => o.value === params.shipping_type)?.label ?? ''
+      return { label: def.label, value: `월 ${num('monthly_limit')}회${typeLabel ? ` (${typeLabel})` : ''}` }
+    }
+    case 'FREE_RENTAL':
+      return { label: def.label, value: `월 ${num('monthly_limit')}회 · ${num('duration_hours')}시간` }
+    case 'INSURANCE_WAIVE':
+      return { label: def.label, value: `월 ${num('monthly_limit')}회` }
+    case 'LOYALTY_POINTS':
+      return { label: def.label, value: `${num('points_rate')}%` }
+    default:
+      return { label: def.label, value: '포함' }
+  }
+}
