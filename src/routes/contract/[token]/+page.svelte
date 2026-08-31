@@ -9,7 +9,7 @@
   import { renderSpreadsheetToHtml } from '$lib/utils/spreadsheetRender'
   import { browser } from '$app/environment'
   import { csToast } from '$lib/utils/toast'
-  import { PUBLIC_TOSS_CLIENT_KEY } from '$env/static/public'
+  import { env as publicEnv } from '$env/dynamic/public'
 
   // Toss v2 standard SDK (CDN 동적 로드) — window.TossPayments 타입 정의
   // ⚠️ 실브라우저 E2E 검증 중 발견: 결제위젯(주문서형·결제창형) 클라이언트 키는 `.payment()`
@@ -202,7 +202,7 @@
         await loadTossSDK()
         const toss = (window as Window & { TossPayments?: TossPaymentsSDK }).TossPayments
         if (!toss) throw new Error('Toss SDK를 불러올 수 없습니다.')
-        const widgets = toss(PUBLIC_TOSS_CLIENT_KEY).widgets({ customerKey: 'ANONYMOUS' })
+        const widgets = toss(publicEnv.PUBLIC_TOSS_CLIENT_KEY ?? '').widgets({ customerKey: 'ANONYMOUS' })
         await widgets.setAmount({ currency: 'KRW', value: payTotal })
         await widgets.renderPaymentMethods({ selector: '#toss-payment-method', variantKey: 'DEFAULT' })
         await widgets.renderAgreement({ selector: '#toss-agreement', variantKey: 'AGREEMENT' })
