@@ -44,8 +44,12 @@ export interface ContractSubstitutionData {
   반납일시?: string
   기본대여요금?: string
   할인금액?: string
+  배송비?: string
   부가세?: string
   최종합계?: string
+  // ── 신규: 요금 유형(대여 기간 구분) 라벨 (2026-08-31) ───────────────────────
+  /** duration_type('12h'|'24h'|'1day'|'monthly')을 사람이 읽을 수 있는 라벨로 변환 */
+  요금유형?: string
   // ── 신규: 반복 영역 전용 항목 배열 ────────────────────────────────────────
   /**
    * 주문에 묶인 모든 reservation의 메인상품 + 옵션상품을 평탄화한 배열.

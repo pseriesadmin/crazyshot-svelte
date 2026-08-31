@@ -20,11 +20,13 @@ export type ActionCardType =
   | 'reservation_approval'
   | 'payment_request'
   | 'shipment_notify'
+  | 'tracking_notify'   // 운송장 번호 발송 알림 (고객 수신, RSV-B-B4)
   | 'rental_confirm'        // 대여확인(수령확인) 알림 (고객 수신)
   | 'return_remind'
   | 'coupon_issued'
   | 'contract_link'    // 전자계약 서명 링크 발송 (고객 수신)
   | 'contract_signed'  // 전자계약 서명 완료 알림 (관리자 수신)
+  | 'refund_failed'    // 환불 RPC 실패 알림 (관리자 전용, admin_only=true)
   // 자동답변 메타데이터 (message_type: 'text', sender_type: 'admin')
   | 'auto_canned_reply'   // 빠른답변 자동매칭 성공 (하이브리드 1단계, AI 호출 전)
   // GSD-17: 관리자 @ 멘션 상품 카드 / GSD-20: 이미지·CTA 있는 자동응답 카드
