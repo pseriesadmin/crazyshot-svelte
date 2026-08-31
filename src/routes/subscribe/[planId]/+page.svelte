@@ -4,7 +4,7 @@
   import { page } from '$app/stores'
   // 정기결제(빌링, mid=bill_crazyhevr) 전용 클라이언트 키 — 단건결제(mid=crazysfc8s)
   // PUBLIC_TOSS_CLIENT_KEY와는 서로 다른 상점의 별개 키(공용 아님)
-  import { PUBLIC_TOSS_BILLING_CLIENT_KEY } from '$env/static/public'
+  import { env as publicEnv } from '$env/dynamic/public'
 
   // Toss v2 standard SDK 타입 정의 (requestBillingAuth 전용)
   type TossPaymentsSDK = (clientKey: string) => {
@@ -70,7 +70,7 @@
       const successUrl = `${origin}/subscribe/success?planId=${data.plan.id}`
       const failUrl    = `${origin}/subscribe/${data.plan.id}?error=billing`
 
-      const payment = toss(PUBLIC_TOSS_BILLING_CLIENT_KEY).payment({ customerKey: data.customerKey })
+      const payment = toss(publicEnv.PUBLIC_TOSS_BILLING_CLIENT_KEY ?? '').payment({ customerKey: data.customerKey })
       await payment.requestBillingAuth({
         method:        'CARD',
         successUrl,
