@@ -106,6 +106,8 @@ hasSettingsAccess(role) → getRoleLevel(role) >= 50
 | 코드 이관 | `/cms/codes` → `transferCode` | ❌ | ❌ | ✅ |
 | 코드설정 기타 전체(20개 액션 중 19개) | `/cms/codes` → `addCode`·`editCode`·`deleteCode`·`toggleActive`·`saveFormat`·`updateCodeRule`·`saveMapping`·`savePrefixCodes`·`addGroup`·`editGroup`·`deleteGroup`·`toggleGroupActive`·`toggleGroupProductFilter`·`toggleGroupPartnerType`·`addGroupItem`·`updateGroupItemSettings`·`removeGroupCombo`·`removeGroupItem`·`removeComboItem` | ❌ | ✅ | ✅ |
 | 상품 코드 재반영(2026-08-25) | `/cms/products` → `reassignCodeSeries`(재고 0개 부모상품의 기준 품번 재할당, products.md §2-11) | ❌ | ✅ | ✅ |
+| 환불 처리(2026-08-29) | `/api/cms/reservations/[id]/payment` PUT → Toss 전액취소 API + `cancel_reservation_payment` RPC (결제정보 탭 "환불 처리" 버튼) | ❌ | ✅ | ✅ |
+| 두발히어로 배송 API(2026-08-31) | `/api/cms/reservations/[id]/dhero` GET·POST — 두발히어로 배송 주문 조회·생성 / `/api/cms/reservations/[id]/dhero/cancel` PUT — 배송 취소 / `/api/cms/reservations/[id]/dhero/return` POST — 반납 배송 등록 (4개 핸들러 전부 — RSV-B-B6, `hasSettingsAccess` 적용) | ❌ | ✅ | ✅ |
 | 계정 상세 조회 | `/cms/accounts/list` → `AccountDetailPanel` — 기본정보·권한설정·접속로그 탭 열람 | ❌ | ✅ | ✅ |
 | 계정 이름 수정 | `/cms/accounts/list` → `updateName` | ❌ | ✅(대상이 partner/manager일 때) | ✅ |
 | 계정 휴대번호 수정 | `/cms/accounts/list` → `updatePhone` | ❌ | ✅(대상이 partner/manager일 때) | ✅ |
@@ -345,4 +347,4 @@ function verifyTossSignature(body: unknown, signature: string | null): boolean {
 미등재였음이 발견됨(로그인만 되어 있으면 partner도 접근 가능한 상태). 이 화면은
 `/cms/products` 상세패널 '이력' 탭과 동일 데이터(`product_history_records`)를 공유하므로
 `/cms/products`가 이미 partner에게 세션만으로 허용하는 것과 동일 정책으로 확정(Stephen
-확인) — 코드 변경 없음, 매트릭스 등재로 공백만 해소*
+확인) — 코드 변경 없음, 매트릭스 등재로 공백만 해소 | 2026-08-31 두발히어로 배송 API 행 신규 추가 — dhero 4개 핸들러(GET·POST·cancel PUT·return POST)가 세션 체크만 있고 등급 체크 없어 partner도 호출 가능하던 공백을 RSV-B-B6으로 `hasSettingsAccess(manager+)` 추가 + 매트릭스 등재*

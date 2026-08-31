@@ -81,6 +81,13 @@ hold (신청대기)
   → 결제 실패 → cancel_payment_and_release_hold RPC → HOLD 해제 + cancelled
   → 결제 성공 → confirm_payment_and_update_reservation RPC → confirmed 자동 전환
   → 관리자가 CMS에서 "승인하기" 클릭 → update_reservation_status → confirmed (수동 경로)
+
+expired (만료됨)
+  → STATUS_LABEL: '만료됨' (/cms/reservation/+page.svelte — RSV-A-B1, 2026-08-31 추가)
+  → hold 생성 후 30분 경과 시 pg_cron(hold_expiration_cleanup, 매 1분)이 status='expired'로 자동 전환
+  → 이 전환 자체가 재고 해제 (별도 해제 로직 없음 — service-operations.md §10)
+  → /cms/reservation 목록에서 "만료됨" 필터로 조회 가능
+  → STATUS_LABEL이 2026-08-31 이전에는 없어 목록에서 status 원문(expired)이 그대로 노출됐음 — RSV-A-B1로 수정
 ```
 
 > ⚠️ hold가 "장바구니 담기 상태"와 "결제 완료 대기 상태" 둘 다를 의미함.
@@ -118,7 +125,7 @@ CMS 전체: min-width 1280px (PC 전용)
 ```
 [예약 단계]       pending → hold → confirmed
                                ↘ cancelled
-                               ↘ expired (HOLD 10분 pg_cron)
+                               ↘ expired (HOLD 30분 pg_cron — service-operations.md §10)
 
 [대여 라이프사이클]
   confirmed ──────────────────────────────────┐
@@ -256,6 +263,15 @@ cancelled / damage_claimed → 취소 UI (✕ 아이콘 + 빨간 텍스트)
 > HOLD 30분 자동만료(`release_reservation_hold` pg_cron)도 2026-08-18부터 `hold_expired` 알림을
 > 발송한다 — 위 표(app 코드 AUTO_NOTIFY 매핑)와 달리 이건 RPC 내부 루프에서 직접 호출된다
 > (service-operations.md §10 참고).
+>
+> ⚠️ **HOLD D-1 타이머 리셋 정책(2026-08-31, Migration 394)**: `release_reservation_hold()`
+> D-1 조건이 "계약 발송됐으면 영구 제외(NOT EXISTS)"에서 **"계약 발송 시점에 타이머 리셋"**
+> (GREATEST(rr.created_at, cs.sent_at) + 30분)으로 변경됐다.
+> - 계약서 미발송 hold → created_at 기준 30분 만료 (기존과 동일)
+> - 계약서 발송된 hold → 최신 sent_at 기준으로 리셋된 30분 만료
+> - "재발송"(RentalContractViewer 재발송 버튼)할 때마다 sent_at이 갱신돼 타이머가 다시 리셋됨
+> - D-3(payment_confirmed_at IS NOT NULL, 결제완료 예외)는 변경 없이 그대로 유지
+> Stage DB(ezyvffjvuwmtuhpxdjrw) 적용 대기 중(2026-08-31 기준).
 >
 > `locker_guide`(무인보관함 1시간 전 안내, 2026-08-20 신설)도 위 표와 마찬가지로 상태 전이가
 > 아니라 **Vercel Cron**(`/api/cron/locker-guide`, 10분 간격)이 `claim_reservations_due_for_
@@ -432,6 +448,20 @@ CTA 새 창 열기 수정          : src/lib/components/chat/ActionCard.svelte (
 [ ] AUTO_NOTIFY 표에 새 notify_type을 추가했다면 push.ts CUSTOMER_LIFECYCLE_PUSH_COPY에도
     동일 타입을 함께 추가했는가? (채팅카드와 브라우저 푸시는 별개 경로 — 위 표 하단 각주,
     service-operations.md §15 참고)
+[ ] QR 스캔 경로(rentalQrTransition.ts)와 RentalDetailPanel 수동버튼 경로 둘 다
+    log_rental_action RPC 호출이 포함됐는가(fail-soft)? note 값으로 경로를 구분하는가
+    ('qr_scan' vs 'manual')? (2026-08-31 — EC-4 검증 대상)
+[ ] RentalContractViewer "재발송" 버튼이 /api/cms/contracts/[id]/send-chat을 호출하는가?
+    (신규 엔드포인트 생성 없음, 기존 재사용) "폐기" 버튼이 discardSentContract 액션을 통해
+    clearIssuedContractHelper.discardSentContract()를 경유하는가?
+[ ] 재발송·폐기 버튼 모두 manager 이상 권한 게이트가 적용됐는가? (security-auth.md
+    "계약서 양식·발행·발송" 게이트와 동일 수준 — isRentalView=false 전용)
+[ ] D-1 타이머 리셋 관련 변경 시(Migration 394) — D-3(payment_confirmed_at IS NOT NULL)
+    조건을 건드리지 않았는가? GREATEST(created_at, sent_at) 기준이 "계약 미발송 hold"에서도
+    created_at 단독으로 정확히 계산되는가?
+[ ] 고객의 탈퇴 신청 차단 조건을 바꿀 때(대여 상태 머신 변경 포함) — hold·confirmed·
+    shipped·in_use·return_requested 상태가 모두 "진행중 대여" 범위에 포함돼 있는지 확인했는가?
+    (service-operations.md §16 — 탈퇴 신청 시 RPC 레벨 차단 대상 상태)
 ```
 
 ---
@@ -439,4 +469,5 @@ CTA 새 창 열기 수정          : src/lib/components/chat/ActionCard.svelte (
 *rental-lifecycle.md v1.5 | Harness Flow v3.2 | 2026-07-27 채팅 알림 자동/수동 매핑 분리 + 대기 재진입 조건 문서화 |
 2026-07-28 전자계약 발송·서명 상세 내용을 contract.md로 이관(중복 제거) | 2026-08-19 AUTO_NOTIFY
 표에 "채팅카드≠브라우저푸시" 각주 추가(신규 알림타입 추가 시 push.ts 동기화 필요, 상세는
-service-operations.md §15 정본) + GATE C 체크리스트 1건 추가*
+service-operations.md §15 정본) + GATE C 체크리스트 1건 추가 | 2026-08-28 GATE C에 탈퇴 신청
+차단 상태범위 점검 항목 추가 (service-operations.md §16 탈퇴 기능 신설에 따른 상호참조)*

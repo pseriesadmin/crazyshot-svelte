@@ -456,6 +456,7 @@ viewed 기록과 동일 관례로 고객 본인의 재열람도 append-only로 �
 | `{{할인금액}}` | `orders.discount_amount` (쿠폰+포인트 통합) |
 | `{{부가세}}` | `orders.tax_amount` |
 | `{{최종합계}}` | `orders.final_amount` |
+| `{{요금유형}}` | `rental_reservations.duration_type`(12h/24h/1day/monthly → 사람이 읽을 수 있는 라벨로 변환, 2026-08-31 신규) |
 
 ---
 

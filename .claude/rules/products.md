@@ -396,6 +396,47 @@ UI                 : src/lib/components/cms/ProductDetailPanel.svelte
 
 ---
 
+### 2-12. 옵션 상품 전용(option_only) — 고객 화면 진열 제외 + 옵션상품 후보 유지 (2026-08-31 신설)
+
+```
+부모 상품 전용 정책 컬럼(sale_only와 동일 성격, Migration #66 명명 컨벤션 그대로 재사용).
+자식(재고) 상품에는 의미 없음 — 부모→자식 상속 시 sale_only와 항상 함께 전달된다
+(loadSelectedProductDetail.ts, cloneProduct 양쪽 분기).
+
+option_only = true  → 카탈로그·홈·하이프팩·검색 등 고객용 상품 진열 화면 전체(5곳 이상)에서
+                       제외되고, 다른 부모상품의 '옵션상품'(option_links) 설정 후보 목록에만
+                       노출된다.
+option_only = false (기본값) → 기존과 동일하게 정상 노출.
+
+⛔ CMS 옵션상품 선택 피커(ProductDetailPanel.svelte/new/+page.svelte의
+   searchOptionProducts)는 이 컬럼을 검사하지 않는다 — 원래부터 is_active만 검사해 왔으므로
+   option_only=true 상품도 그대로 후보 목록에 노출된다(별도 코드 변경 불필요, 설계 단순화).
+```
+
+**제외 대상 5곳 (전부 `option_only = false` 조건 추가)**
+```
+search_products RPC(전체목록 검색)
+get_products_by_ids RPC(헤더 히어로·MD픽·홈 카테고리 큐레이션·하이프팩 배너 보강 공용)
+get_home_theme_groups_with_products / get_home_theme_groups_admin
+get_hype_pack_theme_groups_with_products / get_hype_pack_theme_groups_admin
+NLSearch 인덱스 쿼리(productSearchIndex.ts) + 검색페이지 추천상품 클라이언트 쿼리
+```
+
+구현 파일:
+```
+컬럼             : supabase/migrations/20260901000000_389_products_option_only_column.sql
+RPC 필터 4종     : Migration #390~393
+등록·수정 UI     : src/routes/cms/products/new/+page.svelte,
+                   src/lib/components/cms/ProductDetailPanel.svelte (기본정보 탭
+                   "노출 조건" 옆 슬라이딩 토글, cms-uiux.md §7-8 표준)
+서버 반영        : src/routes/cms/products/new/+page.server.ts,
+                   src/routes/cms/products/+page.server.ts (updateSection 'basic',
+                   cloneProduct 양쪽 분기)
+상속·조회        : src/lib/server/products/loadSelectedProductDetail.ts
+```
+
+---
+
 ## 3. is_active 토글 — 재고 가용성 연동
 
 ```
@@ -859,7 +900,10 @@ Q5. 선택된 상품(rootId)이 현재 페이지네이션 범위(productIds, 20�
 
 ---
 
-*products.md v2.7 | Harness Flow v3.2 | 2026-08-06 품번(product_code) 정책 전면 재설계 —
+*products.md v2.8 | Harness Flow v3.2 | 2026-08-31 §2-12 신설 — 옵션 상품 전용(option_only)
+정책 문서화(전역 코드감사 중 코드 주석이 존재하지 않는 §2-12를 참조하던 공백 발견·해소,
+Migration #389~393, 카탈로그·홈·하이프팩·검색 등 5곳 제외 + 옵션상품 피커는 영향 없음) |
+2026-08-06 품번(product_code) 정책 전면 재설계 —
 부모=code_series(구조저장)/자식=실채번, 영구고정, QR=product_code 전환, RLS 보안 수정,
 QR 반출입 자동화, sale_only 등록 정책 반영 | 2026-08-XX 부모 QR 노출 폐기(BND-7 폐기),
 자가복구 버튼(품번 채번·품번 체계 설정) 추가, 레거시 프리픽스 불일치 자동 우회,
