@@ -43,6 +43,13 @@ export interface XlsxCellFormatting {
   borderRight?: string
   borderBottom?: string
   borderLeft?: string
+  /** CSS font-family — jspreadsheet 글꼴 툴바 저장값(Default/Verdana/Arial/Courier New 등,
+   *  2026-08-29 추가 — 툴바 전체 기능 점검 중 발견, 이 필드가 없어 글꼴 지정이 저장 시
+   *  통째로 유실됐다) */
+  fontFamily?: string
+  /** CSS vertical-align — 'top'|'middle'|'bottom' (jspreadsheet 세로정렬 툴바 저장값,
+   *  2026-08-29 추가 — 위와 동일 점검에서 함께 발견, 세로정렬 지정이 저장 시 유실됐다) */
+  verticalAlign?: string
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
