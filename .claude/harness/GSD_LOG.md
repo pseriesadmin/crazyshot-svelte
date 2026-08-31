@@ -1,6 +1,372 @@
 # GSD_LOG.md — 크레이지샷 실행 이력
 # 형식: [YYYY-MM-DD HH:MM] 타입 | 타스크명 | 파일 | 소요 | 결과
 
+[2026-08-31] ✅확인 | CS2654(reservation_id=2654) 계약서 변수미치환 CRITICAL — 백필 최종 재확인 완료 | (DB데이터만, 코드파일 아님) | — | ✅ 해결 확인 — Stage DB 재조회 결과 contracts.spreadsheet_document updated_at=2026-08-31 07:54:40(직전 백필), {{ 플레이스홀더 완전 소거. 실값 치환도 개별 확인: 고객실명(이기성)·상품명(Sony FX6-12)·실제대여기간(2026-08-30)·결제금액(50000) 전부 정상. 이 세션은 백필을 직접 수행하지 않음(타 세션 수행분 재검증만).
+
+[2026-08-31] ✅QA재검수 | 전자계약 링크+PC버튼 6개 파일 — 형제예약 확장 로직 결합 후 GATE E 2차 독립검수 | loadRentalContractStatus.ts, account/rental/+page.server.ts, +page.svelte, account/+page.server.ts, +page.svelte, PcRentalPanel.svelte | — | ✅ 통과 — 타 세션이 loadRentalContractStatus.ts에 추가한 형제예약(order_items 경유) 확장 로직 포함 최신 결합상태를 @sp3-qa-agent가 처음부터 재검수. RLS 이중보호로 데이터유출 불가, 단독예약 회귀없음, 3개이상 형제예약도 정확확장, 쿼리 3회 고정(N+1 아님), 신규테스트 5/5 GREEN 재확인, npm run check 신규에러 0건, 호출부 5개 파일 Map타입 계약 불변. CRITICAL/HIGH/MEDIUM/LOW 신규이슈 없음. git commit은 Stephen 직접 실행 대기.
+
+[2026-08-31] 🟡BOUNDARY | CS2654 계약서 변수 미치환 백필 + 요금유형(duration_type) 신규 변수 추가 |
+  배경: account_rental_contract_payment_review_2026-08-31.md 학습 리포트가 CRITICAL로
+  지목한 "CS2654 스프레드시트 계약서 {{}} 변수 미치환" 건을 Stephen 지시로 원인규명·백필.
+  ① 원인규명: user_id=mublues@gmail.com(내부 QA 계정, 실고객 아님) 확인 — 심각도 CRITICAL→
+  LOW 재조정. contracts 테이블 전체 스캔(표본 아닌 전수)으로 오염 건 CS2654 단 1건뿐임을
+  확정. contract-substitution.ts(스프레드시트)·tiptapRender.ts(워드) 양쪽 치환 함수가
+  "값이 string 아니면 {{키}} 원문 유지"라는 동일한 침묵-통과 설계를 공유함을 코드 대조로
+  확인 — 오늘(2026-08-31 기준) contract-data 엔드포인트는 16개 필드 전부 `?? '-'` 폴백이
+  있어 재현 불가하나, 2026-08-20(계약 생성일) 당시는 이 엔드포인트가 2026-08-28 Stage 1
+  재작성 이전 구버전이라 근본원인은 "임시 개발/테스트 중 구버전 코드의 일회성 결함"으로
+  결론(Stephen 가설과 정합, 반증 없음).
+  ② 백필(Stage DB 직접 SQL, jsonb_set): 실 예약 데이터 기준으로 9개 변수 셀 + 상품명 중복
+  셀 1개 + 대여·반납 날짜/시각 셀 4개 + 요금유형 라벨 셀 1개, 총 15개 셀 UPDATE. 매 UPDATE
+  직후 재조회로 검증(추정 아님). 전체 재스캔으로 `{{` 잔존 0건 확인.
+  ③ 신규 기능(재발 방지 겸 근본 개선): `요금유형`(duration_type 기반) 변수를
+  ContractSubstitutionData에 18번째로 추가 — DURATION_TYPE_LABELS(12h→12시간, 24h→
+  24시간(1일), 1day→1일, monthly→월간) 신설해 contract-data API가 채움. 3개 에디터 변수
+  피커(ContractFieldPanel·ContractCanvasFieldPalette, flow/spreadsheet/canvas 전체) 모두에
+  칩 등록 + contract.md 변수 표 갱신. 레거시 ContractModuleBar.svelte(미사용 확인)는
+  변경 안 함.
+  수정 파일: src/lib/types/contract-module.ts, src/routes/api/cms/reservations/[id]/
+  contract-data/+server.ts, src/lib/components/cms/contract-editor/ContractFieldPanel.svelte,
+  src/lib/components/cms/contract-editor/ContractCanvasFieldPalette.svelte,
+  .claude/rules-ref/contract.md, .claude/harness/learnings/account_rental_contract_payment_
+  review_2026-08-31.md(백필·근본원인 상세 기록)
+  검증: svelte-check 신규 에러 0건(기존 vite.config.ts 1건만 유지), contractAuthGates.test.ts
+  31/31 GREEN, contractDataLineItems+contractP6Canvas+spreadsheetRepeatRegion 61/61 GREEN.
+  (paymentContractOrderRedesign.test.ts의 라이브 DB 통합테스트 일부 타임아웃 발견 — 이번
+  변경과 무관한 별개 병렬세션 소관 파일이라 재확인만 하고 손대지 않음, 반복 실행 시 실패
+  건수가 매번 달라 네트워크/Stage DB 부하성 flaky로 판단.)
+  Stage DB(ezyvffjvuwmtuhpxdjrw) 데이터 백필 완료. Production 무관(이 예약은 Stage 전용
+  테스트 데이터). 코드 커밋은 Stephen 직접 실행 대기.
+
+[2026-08-31] 🔴CRITICAL·TDD | PG 결제연동 화면(/cms/reservation·/account/rental/[id]/contract·/account) 전역 감사 + CRITICAL 회귀 연쇄 수정 |
+  신규 마이그레이션: 397(try_confirm_reservation 주문단위 확장), 398(397의 결제부수효과
+  분리 — 적용 직후 TDD로 발견한 2차 결함 긴급수정), 399(get_rental_list 계약조회 주문단위
+  확장) — 전부 Stage+Production 적용 완료 |
+  신규 테스트: loadRentalContractStatus.test.ts(5), accountRentalContractPage.test.ts(1),
+  cmsReservationPaymentSiblingFallback.test.ts(3) | 기존 확장: paymentContractOrderRedesign.
+  test.ts(+4), tossPaymentGroupRpc.test.ts(+3) |
+  수정: src/routes/api/contracts/[token]/sign/+server.ts, .../pay-mock/+server.ts,
+  src/lib/server/account/loadRentalContractStatus.ts,
+  src/routes/account/rental/[id]/contract/+page.server.ts,
+  src/routes/api/cms/reservations/[id]/payment/+server.ts,
+  src/lib/components/cms/RentalDetailPanel.svelte(PAYMENT_STATUS_LABELS) |
+  ✅ 완료 — Stephen 지시로 4개 에이전트(CMS/고객계약서화면/마이페이지/실데이터교차검증)
+  병렬 조사 실행, 전부 독립적으로 같은 근본원인에 도달: 이번 세션 앞부분에서 계약서를
+  "예약 단위"에서 "주문 단위"로 통일한 수정(init-contract API)이 그 전제를 못 따라간
+  다른 4개 지점을 연쇄로 깨뜨렸음(같은 세션 안에서 만든 회귀를 같은 세션 안에서 발견·수정).
+  ①CRITICAL: try_confirm_reservation이 여전히 "예약 자신 소유 계약"만 봐서 형제 예약이
+  결제+서명 다 끝나도 영원히 hold에 갇히고 30분 자동만료될 수 있었음 — 주문 전체 순회로
+  수정. 수정 과정에서 mark_reservation_payment_confirmed(결제를 무조건 기록하는 부수효과
+  있는 함수)를 "재확인" 용도로 잘못 재사용해 "결제 없이 서명만 해도 confirmed 전환"되는
+  더 위험한 결함을 만들 뻔했으나 TDD가 즉시 재현·발견해 Migration 398로 순수재확인/
+  결제기록 RPC를 완전히 분리해 해소. ②CRITICAL: 고객이 형제 예약의 서명완료 계약서를
+  마이페이지 어디서도 열람할 수 없었음(loadRentalContractStatus.ts·account/rental/[id]/
+  contract 둘 다 같은 원인) — order_items 경유 형제 조회로 수정. ③HIGH: CMS "계약서" 탭이
+  형제 예약을 "계약서 미생성"으로 오판(get_rental_list) — 수정. ④HIGH: CMS "결제정보" 탭이
+  형제 예약을 "결제 정보 없음"으로 오판 + 환불 버튼 비활성(GET/PUT payment API) — 공유
+  헬퍼로 수정. ⑤MEDIUM: payment_status 영문 원문(done/cancelled 등) 노출 — 한글 라벨맵 추가.
+  검증: 관련 스위트 13개 파일 178 passed+7 skipped(무관) 0 failed, npm run check 신규
+  에러 0건. 상세: .claude/harness/learnings/pg_screens_global_audit_2026-08-31.md.
+  ⚠️ DB는 이미 Production 반영됐으나 앱 코드(sign/pay-mock 엔드포인트 등)는 git commit
+  전이라 실제 서비스에는 아직 미반영 — 커밋·배포 우선순위 높음.
+
+[2026-08-31] 🔴QA종합검수 | /account 대여관리·전자계약·PG결제 연동 전역 종합 리포트 (Stephen 지시) | .claude/harness/learnings/account_rental_contract_payment_review_2026-08-31.md(신규) | — | 코드 수정 없음(순수 검수) — 🔴CRITICAL 신규발견 1건: reservation_id=2654 전자계약서 본문 변수 미치환({{고객이름}} 등 그대로 노출, Claude Browser 실측+Stage DB spreadsheet_document 직접조회로 확정, 다른 유사계약 4건은 정상이라 이 1건 국한 추정·근본원인 미특정) → Stephen 확인 후 데이터 백필 필요. ✅BOUNDARY 발견→검수 중 타세션이 즉시수정: loadRentalContractStatus.ts 형제예약(order_items 경유) 확장 로직 추가됨, 신규 TDD 5/5 GREEN 재검증. ✅고아 RPC 3종(confirm_payment_and_update_reservation/cancel_payment_and_release_hold/atomic_reserve_asset) Stage DB 재조회로 삭제 확인. 참고인용(재수행 안함): rental_management_global_logic_audit(CMS전역 CRITICAL 5건)·toss_payments_pg_integration(PG결제 F1~F3+공백A/B 수정완료) 기존 리포트 2건.
+
+[2026-08-31] 🟡BOUNDARY | [재검증] 장바구니 지속성·동일상품 병합 기능 재확인 (코드변경 없음) |
+  수정: .claude/harness/TASK.md("이번 세션(재검증) 수정 내역" 항목), .claude/harness/GSD_LOG.md
+  (본 항목) | ✅ 완료 — Stephen 지시("[재검증] 장바구니에 다음 기능 구현 여부 검증": ①담긴
+  상품 정보 유지 ②동일 부모상품 중복담기 병합) 처리. Explore 에이전트로 5개 관련 파일이
+  2026-08-28 구현 커밋(5ab8e9b) 이후 무변경(git diff 0줄)임을 재확인 + 라이브 카트 페이지·
+  Stage DB 직접조회로 ①8/17~8/28 담긴 예약 3건이 8/31까지 지속 노출 ②Sony FX6-12 그룹
+  (3482+3540+4328) 카드 1개·수량3·옵션 SONY PXW-Z90 수량합산(1+1=2) 정상 병합 표시 — 둘 다
+  재검증 통과. 상품상세 페이지 "예약신청" 재담기 실클릭 시나리오는 이번 세션에서도 Claude
+  Browser 패널 "pane is currently hidden" 타임아웃 재현으로 미해결 유지(지난 세션과 동일
+  도구 환경 결함, TASK.md [NEXT] 그대로 존치). 부수적으로 Stephen이 문의한 `/app/` 404는
+  무관한 브라우저 확장프로그램 노이즈로 진단(코드 수정 없음, 별도 이슈).
+
+[2026-08-31] 🔴CRITICAL·TDD | 고아 레거시 결제 RPC 3종 삭제(Stage+Production) — Stephen 승인 |
+  신규 마이그레이션: supabase/migrations/20260831030000_396_drop_orphaned_legacy_payment_rpcs.sql |
+  수정: src/__tests__/services/payment.test.ts(RPC 직접호출 테스트 7개 제거,
+  라우트 삭제로 무의미해진 헬퍼·픽스처 함께 정리) |
+  ✅ 완료 — confirm_payment_and_update_reservation·cancel_payment_and_release_hold·
+  atomic_reserve_asset 3종을 Stage·Production 양쪽에서 DROP FUNCTION. 삭제 직전
+  재검증 과정에서 `calculate_cart_total`을 같은 고아 그룹으로 오판했던 최초 F2 조사의
+  실수를 발견·정정 — `(supabase.rpc as unknown as CalcRpcFn)('calculate_cart_total', ...)`
+  타입캐스팅 호출 패턴 때문에 `grep "rpc('calculate_cart_total'"` 패턴이
+  `cart/+page.server.ts`의 실제 라이브 호출을 놓쳤던 것(그 RPC는 카트 금액계산에 현재도
+  사용 중 — 삭제 대상에서 제외, 건드리지 않음). 삭제 후 payment.test.ts가 사라진 RPC를
+  직접 호출하던 7개 테스트가 즉시 실패(PGRST202)함을 확인 → 해당 테스트·미사용 헬퍼
+  전부 제거, 나머지 7개(webhook 저장·스펙 문서화 테스트)는 GREEN 유지.
+  검증: payment.test.ts 7/7 GREEN + 관련 스위트 10개 파일(161 passed, 7 skipped) 무회귀,
+  npm run check 신규 에러 0건. Production에서도 3개 함수 모두 제거·calculate_cart_total만
+  잔존함을 재조회로 확인.
+  상세: .claude/harness/learnings/toss_payments_pg_integration_2026-08-30.md.
+
+[2026-08-31] 🔴CRITICAL | PG 관련 마이그레이션 8건 Production 배포 완료(378/379/380/383/384/387/388/395) |
+  Stephen 승인 후 Stage에서 검증 완료된 마이그레이션을 vnbpmvxruyciuuaermyh(Production)에
+  순서대로 적용. 적용 전 Production 현재 스키마를 직접 조회해 의존성(mark_reservation_
+  payment_confirmed 존재, payment_transactions/order_items/raw_webhook_logs 컬럼·테이블
+  존재, get_rental_list가 Migration 369 베이스와 정확히 일치) 확인 후 진행 —
+  confirm_order_payment_and_update_reservations(378), cancel_reservation_payment(379,
+  384에서 감사컬럼 추가 재정의), process_pending_toss_webhooks + pg_cron 2분마다(380,
+  383에서 payload 파싱 수정, 388에서 편도판정 보완), get_rental_list payment_status
+  소스교체(387), create_reservation_order 배송비 합산(395, 원래 389로 작성했으나 병렬
+  세션과 번호충돌 발견해 리네임).
+  ⚠️ 적용 과정에서 발견한 기존 결함(이번 세션이 만든 것 아님): Production의
+  create_reservation_order가 2-param(Migration 280)·4-param(Migration 340) 오버로드
+  둘 다 남아있었음 — Migration 340의 마지막 DROP FUNCTION 구문이 Production에는 반영
+  안 됐던 것으로 추정(컬럼·CREATE OR REPLACE는 정상 반영, DROP만 누락). 이번 395 적용
+  시 두 구버전 오버로드 모두 명시적으로 DROP해 Stage와 동일한 단일 시그니처로 수렴시킴.
+  검증: pg_get_function_identity_arguments로 5개 함수 전부 시그니처 확인, orders.
+  delivery_fee·payment_transactions.cancel_reason/cancelled_by 컬럼 존재 확인,
+  cron.job에 toss-webhook-reconcile active=true·*/2 * * * * 확인 — 전부 Stage와 일치.
+  380 적용 1차 시도가 auto-mode classifier에 의해 일시 차단(pg_cron 등록 관련 안전장치로
+  추정) → 재시도 성공.
+  git commit 대기(Stephen 직접 실행) — 이 마이그레이션들을 소비하는 앱 코드(F1~F3,
+  배송비, 계약서 주문단위 통일)는 아직 git에 커밋되지 않은 상태이므로, Production DB는
+  이미 새 컬럼/함수를 갖췄지만 실제 배포된 앱 코드가 반영되기 전까지는 새 로직이 실사용
+  트래픽에 영향을 주지 않음(기존 컬럼 CREATE OR REPLACE는 하위호환 유지).
+
+[2026-08-31] 🟡BOUNDARY | 상품등록관리(/cms/products, /cms/products/new) 전역 코드 감사 + HIGH·MEDIUM 수정 |
+  Explore 에이전트 3개 병렬(목록화면/ProductDetailPanel.svelte 9개탭/신규등록+공용RPC) 전수
+  조사 → 리포트 산출(.claude/harness/learnings/product_management_global_logic_audit_2026-08-31.md,
+  HIGH 1·MEDIUM 5·LOW 6·문제없음 8건) → Stephen 확인 "리포트+HIGH·MEDIUM 전부 수정" 선택.
+  수정: ProductDetailPanel.svelte(콘텐츠/키워드 재동기화 누락 추가, isDirtyPricing
+  damage_fee_percentage Number() 정규화), new/+page.server.ts·+page.server.ts(sale_price
+  falsy-zero 버그 수정, price_rules .error 체크 추가), products.md(§2-12 옵션상품전용 정책
+  신설, v2.7→v2.8). svelte-check 0건, vitest 12파일 110/110 GREEN. M-4(cloneProduct N+1)는
+  구조변경 없이 현황만 기록, L-1~L-6 백로그.
+
+[2026-08-31] 🔴CRITICAL·TDD | Stephen 재지적 — 배송비 실결제 반영 + 계약서 '예약(=주문)' 단위 통일 |
+  신규 마이그레이션: supabase/migrations/20260831020000_395_orders_delivery_fee.sql
+  (원래 389로 작성했으나 같은 날 병렬 세션의 무관한 389_products_option_only_column과
+  번호 충돌 발견 — 파일명만 395로 재명명, Stage DB 적용은 이미 389 이름으로 완료된 상태라
+  기능 영향 없음) |
+  신규 테스트: src/__tests__/services/contractOrderLevelDedup.test.ts |
+  수정: src/routes/api/cms/reservations/[id]/init-contract/+server.ts,
+  src/routes/api/reservations/create-order/+server.ts, src/routes/cart/+page.svelte,
+  src/routes/contract/[token]/+page.server.ts, src/routes/contract/[token]/+page.svelte,
+  src/routes/account/rental/[id]/contract/+page.server.ts,
+  src/routes/account/rental/[id]/contract/+page.svelte,
+  src/routes/api/cms/reservations/[id]/contract-data/+server.ts,
+  src/lib/types/contract-module.ts, src/__tests__/services/tossPaymentGroupRpc.test.ts,
+  src/__tests__/server/contractAuthGates.test.ts |
+  ✅ 완료 — 직전 F1(payment_status 수정) 자체는 옳았으나 Stephen이 "장바구니 정책 로직
+  혼돈" 우려로 상위 계층 재검증을 지시, 재조사로 2건의 실제 구조 공백 확인·수정.
+  ① 배송비 누락: 장바구니 총액(otTotal)엔 배송비가 포함되는데 orders.final_amount·실제
+  Toss 청구금액(payTotal)엔 전혀 반영 안 됐음 — Stage 실측(reservation 4688,
+  payment_transactions.delivery_fee=NULL)으로 재현 확인. orders.delivery_fee 컬럼 신설 +
+  create_reservation_order가 장바구니 계산값을 받아 final_amount에 합산(배송비 계산
+  로직 자체는 SQL 재구현 안 함, 기존 등급별 우대할인 로직 그대로 재사용) — Migration
+  395에서 4-param 구 오버로드 DROP(PGRST203 모호성 방지, products.md §2-3 동일 패턴).
+  ② 계약서 개별상품 단위 생성 가능: Stephen 확정 — "'예약' 단위=상품 몇개든 예약신청
+  1회 실행 결과(=주문), '예약'과 '주문'은 동일어, 형제 예약단위는 없어야 함". init-contract
+  API가 reservation_id 하나만 보고 계약 생성해 같은 주문의 다른 상품에 개별 발송 시
+  계약서·서명링크·결제트리거가 쪼개질 수 있던 구조 확인 → 같은 주문에 이미 발행된 계약이
+  있으면 재사용하도록 수정("1주문=계약서 정확히 1건" 보장).
+  TDD: 신규 6케이스(배송비 합산 3종 + 계약 주문단위 재사용 3종) GREEN + 기존
+  133개 스위트 무회귀. contractAuthGates.test.ts 목업 스텁에 .in() 메서드 누락 발견·추가
+  (내 신규 코드가 처음으로 그 메서드를 호출하며 드러난 기존 테스트 인프라 공백).
+  npm run check 신규 에러 0건(ContractSubstitutionData 타입에 배송비 필드 누락 1건 즉시
+  수정 후 해소). Stage 적용 완료. Production 미적용(378~380/383/384/387/388/395 일괄
+  확인 필요).
+  상세: .claude/harness/learnings/toss_payments_pg_integration_2026-08-30.md §6.
+
+[2026-08-31] 🔴CRITICAL | CMS 대여관리 전역감사 CRITICAL 4건 통합수정 — Stage 5(재발송/폐기 UI) + Stage 6(문서 갱신) 완료 | GATE C: CRITICAL(Stage 4 DB 적용 대기, Stage 7 QA 미실시)
+  Stage 5 완료: discardSentContract() 헬퍼 신설(clearIssuedContractHelper.ts) + discardSentContract
+    form action(reservation/+page.server.ts) + RentalContractViewer "재발송"(send-chat 재활용) ·
+    "폐기"(CmsDeleteButton) 버튼 추가 + .btn-tpl-resend CSS. manager+ 권한 게이트 양쪽 확인.
+    npm run check 에러 0건(pre-existing vite.config.ts 제외).
+  Stage 6 완료: rental-lifecycle.md D-1 타이머 리셋 정책 + 재발송/폐기 GATE C 항목 4건 추가.
+    service-operations.md §9 승인 알림 게이팅 동기화 내역 추가, §10 D-1 정정 내역 추가.
+    TASK.md Stage 3·4·5 체크박스 완료 처리.
+  ⚠️ 블로킹: Stage 4 Migration 394 Stage DB 미적용(Supabase MCP apply_migration 필요).
+    Stephen 직접 실행 필요: project_id="ezyvffjvuwmtuhpxdjrw", 적용 후 TDD 4/4 GREEN 확인 요망.
+
+[2026-08-31] 🔴CRITICAL | '옵션 상품 전용'(option_only) 재검증 — Production 390~393 적용, Stage·Production 정합 완료 | GATE C: CRITICAL(QA 대기)
+  "정상 구현되었는지 재검증" 요청으로 착수. 코드 8개 파일 diff 전수 대조 → 계획과 100%
+    일치 확인. svelte-check 재실행(신규에러 0) + 관련 vitest 12파일 110/110 GREEN 독립
+    재실행(로그 신뢰 아닌 직접 검증). 옵션상품 피커가 여전히 is_active만 검사함을 재확인
+    (옵션전용 상품도 후보 유지 요구사항 충족).
+  Stage/Production 양쪽 pg_proc.prosrc 직접 조회로 이전 세션 기록(Production 반쪽 상태)이
+    사실과 일치함을 재확인. AskUserQuestion으로 Stephen에게 처리방향 질의 → "390~393
+    마저 적용(권장)" 선택 → apply_migration으로 4건 Production(vnbpmvxruyciuuaermyh)
+    순서대로 적용, 재조회로 6개 함수 전부 option_only 필터 반영 확인.
+  ✅ Stage·Production 완전 정합 상태로 전환 완료. 잔여: products.md §2-12 신설(코드
+    주석이 참조 중인데 미작성), QA(@sp3-qa-agent) 검수 미실시, 커밋 없음(Stephen 직접).
+
+[2026-09-01] 🔴CRITICAL | '옵션 상품 전용'(option_only) 신설 — Stage 완료·Production 부분적용 중단 | GATE C: CRITICAL(재검증 세션에서 해소, 위 항목 참고)
+  배경: "판매 상태" 옆에 '옵션 상품' 토글 신설 — ON 시 카탈로그·홈·하이프팩·검색 등 고객
+    화면 전 진열 지점에서 숨기고 다른 부모상품의 옵션상품 후보로만 노출. GATE B로 숨김
+    범위 "전체(권장)" 확정.
+  구현: 마이그레이션 5건(컬럼 신설 + RPC 5종 필터 추가) + 코드 8개 파일(CMS 등록/수정
+    폼 토글 UI, 클론 상속, NLSearch/검색페이지 필터). svelte-check 0건, vitest 14파일
+    155/155 GREEN.
+  ⚠️ 배포 상태 불일치 발견: Stage는 5건 전부 적용·정합 확인됨. Production은 Plan 모드
+    전환 중 첫 마이그레이션(389, 컬럼추가)만 사용자 도구거부 처리 전에 이미 실행완료된
+    상태로 확인됨(390~393 RPC 필터는 미실행) — Production 앱코드 미배포라 현재 실질
+    위험 낮음(모든 행 기본값 false)이나 DB가 반쪽 상태. Stephen 지시 대기 — 임의 진행
+    안 함. TASK.md에 3가지 처리옵션 기록.
+
+[2026-08-31] 🔴CRITICAL·TDD | PG 검증 후속조치 — F1/F2/F3/문서 4건 수정 + 구독빌링 신규버그 발견·수정 |
+  신규 마이그레이션: supabase/migrations/20260831000000_387_get_rental_list_payment_status_from_transactions.sql,
+  supabase/migrations/20260831010000_388_toss_webhook_reconcile_reverse_mismatch.sql |
+  삭제: src/routes/payment/success/{+page.server.ts,+page.svelte}, src/routes/payment/fail/{+page.server.ts,+page.svelte},
+  src/routes/api/payment/confirm/+server.ts, src/routes/api/checkout/initiate/+server.ts |
+  수정: src/routes/subscribe/[planId]/+page.svelte(method:'카드'→'CARD'), .claude/rules-ref/payment.md(v4.0 전면 재작성),
+  src/__tests__/services/payment.test.ts(삭제된 라우트 스펙 블록 정리), src/__tests__/services/tossPaymentGroupRpc.test.ts(신규 6케이스) |
+  ✅ 완료 — toss_payments_pg_integration_2026-08-30.md 검증 리포트의 F1(orders.status 영구
+  pending)·F2(고아 레거시 4파일)·F3(웹훅 대사 편도판정) 전부 Stephen 승인 받아 수정 실행.
+  F1: get_rental_list의 payment_status를 payment_transactions 기준(대표+형제 예약)으로
+  교체 — 대표 예약 직접매칭 실패 시 order_items 경유 형제 조회, payment_transactions.status가
+  varchar(20)라 TEXT 캐스팅 필요했음(구현 중 42804 타입불일치 실제 발견·수정). F2: 사용처
+  0건 확인된 레거시 체크아웃 라우트 4개 삭제, 전용 RPC 4종은 되돌리기 어려운 작업이라 Stephen
+  지시대로 이번엔 보류. F3: pt_status=done+웹훅취소류 상태 조합도 STATUS_MISMATCH_WARN
+  탐지하도록 보완(기존 방향 A만 잡던 편도 갭 해소). TDD: RED(구DB로 4건 실패 확인)→GREEN
+  (Stage 적용 후 tossPaymentGroupRpc.test.ts 15/15, payment.test.ts+paymentContractOrderRedesign.test.ts
+  29/29) 전부 GREEN. npm run check 신규 에러 0건(기존 vite.config.ts 1건만 유지).
+  부수 발견(Stephen 실사용 중 제보 → 즉시 조사·수정): /subscribe/[planId] 구독 카드등록이
+  "method 파라미터에 사용할 수 없는 enum 값입니다" 에러로 완전히 막혀 있었음 — v2 SDK
+  객체형 requestBillingAuth({method})가 영문 대문자 'CARD'를 요구하는데 v1 SDK 위치인자
+  관례(한글 '카드')를 그대로 써서 발생. Toss 공식 enum-codes 문서(WebFetch)로 확인 후 수정.
+  보안 처리: Stephen이 채팅에 직접 붙여넣은 Toss 라이브/테스트 시크릿키 전체를 즉시 확인만
+  하고 재노출하지 않음 — 테스트키는 이미 .env.local과 일치함을 대조 확인, LIVE키는 Stephen
+  선택(보관만, Vercel 미등록)에 따라 어디에도 저장하지 않음. 보안키·머트키(bill_crazyhevr)도
+  Stephen 선택(직전 세션 결론 유지)에 따라 미배선.
+  Stage(ezyvffjvuwmtuhpxdjrw) 적용 완료. Production 미적용 — Migration 378~388 일괄
+  재확인 필요(별도 승인 대기). git commit 대기(Stephen 직접 실행).
+
+[2026-08-31] 🔴검증 | CMS 9개 PG(결제) API 전역 기능 로직 정밀 작동 검증 — 코드 대조 + Stage DB 라이브 쿼리 |
+  결과 상세: `.claude/harness/learnings/toss_payments_pg_integration_2026-08-30.md` 참조 |
+  ✅ 완료 — plan_source(`golden-snacking-shore.md`)의 "다음 세션 체크리스트"를 실제 실행.
+  🔴CONFIRMED(라이브 데이터로 재현) F1: `orders.status`("결제 상태" 필드, get_rental_list
+  payment_status 소스)가 영구히 'pending' 고정 — 실제 완료된 결제(reservation 4688,
+  payment_transactions.status='done')도 CMS "결제정보" 탭에 "결제 상태: pending"으로
+  잘못 표시되며, 같은 탭 하단 환불 버튼(정확한 소스 사용)과 서로 모순되는 정보를 동시에
+  노출함을 Stage DB 직접 쿼리로 확인. 수정은 결제 CRITICAL 도메인이라 미실행 — Stephen
+  확인 대기. F2: `/payment/success`·`/payment/fail`·`/api/payment/confirm`·
+  `/api/checkout/initiate` 4개 레거시 라우트 + 전용 RPC 4종이 전수 grep으로 사용처 0건
+  확인된 완전 고아 코드이며, 그중 `/payment/success`는 실제 존재하지 않는 컬럼(rental_
+  start_date/rental_end_date/special_requests)을 조회해 도달 시 100% 크래시함을
+  information_schema 직접 조회로 확정(단, 사용처 없어 잠재 위험). F3: 웹훅 대사(Migration
+  380/383)는 편도(one-way) 판정이라 반대 방향 상태불일치는 놓칠 수 있음(현재까지 실트래픽
+  71건은 전부 Toss 테스트 핑이라 미발현). F4: 나머지 항목(중복 금액계산·구독로그 분리·
+  매출KPI·이중청구방지·RPC명명)은 확인 결과 문제없음. 부수발견: `payment.md` 문서가
+  실제 아키텍처와 괴리된 스테일 상태. 코드 수정 없음(전부 읽기 전용 검증), git commit
+  대상 아님.
+
+[2026-08-31] 🟡BOUNDARY | /account/rental 카드 — 서명대기 전자계약 링크 추가 + PC 채팅·계약 버튼 누락 해소 | src/lib/server/account/loadRentalContractStatus.ts(신규), src/routes/account/rental/+page.server.ts, +page.svelte, src/routes/account/+page.server.ts, +page.svelte, src/lib/components/account/PcRentalPanel.svelte | 30분 | ✅ 완료 — ①signed_at 있는 계약만 판정하던 기존 로직을 pending(서명대기, contract_signings.token 최신값)까지 판정하도록 확장(loadRentalContractStatus 헬퍼로 모바일·PC 공유), 서명대기 시 "전자계약 서명하기"→/contract/{token} 새창, 서명완료 시 "전자계약 확인"→/account/rental/{id}/contract 새창. ②PcRentalPanel.svelte(PC 임베드 패널)에 chat-btn/contract-btn이 애초에 구현된 적이 없었음(CSS로 숨긴 게 아니라 기능 자체 누락)을 확인 — 모바일 라우트와 동일 스타일·로직으로 이식 + /account/+page.svelte에 FloatingButton(hideFab) 최초 마운트(이 화면 전역엔 없었음). Claude Browser로 실제 로그인 세션에서 mobile+PC 양쪽 시각·기능 검증(신청 데이터로 signed/pending 두 케이스 모두 실확인, 채팅 버튼 클릭→예약카드 포함 정상 오픈, 네트워크 200 전부). npm run check 신규 에러 0건. | GATE E: ✅ @sp3-qa-agent 독립검수 통과(2026-08-31) — CRITICAL/HIGH 0건, MEDIUM 1건(다른 병렬세션의 init-contract 미커밋 변경과 상호작용 시 다중상품 주문 형제예약 사각지대 가능성, 이 6개 파일 자체 결함 아님)+LOW 1건(expires_at 미체크, /contract/[token] 자체가 처리해 실질위험 없음) 비블로킹 참고사항만. git commit은 Stephen 직접 실행 대기.
+
+[2026-08-30] ❌sp3QA반려→수정 | QA CRITICAL 2건 + BOUNDARY 2건(BOUNDARY #5 calc_at은 "의도된 생략"으로 Stephen 확정, 미수정) 전부 수정 — Phase 3~5 QA 후속 패치 |
+  수정 파일: src/routes/api/cms/reservations/[id]/payment/+server.ts (CRITICAL#1: 환불 후 알림·dhero 취소 추가),
+  src/routes/contract/[token]/pay-result/+page.server.ts (BOUNDARY#3: Toss confirm 전 이중결제 가드),
+  src/lib/components/cms/RentalDetailPanel.svelte (BOUNDARY#4: prompt()로 환불 사유 입력),
+  src/__tests__/services/tossPaymentGroupRpc.test.ts (CRITICAL#2: 웹훅 테스트 픽스처 nested 구조로 교체) |
+  신규 마이그레이션: supabase/migrations/20260830000000_383_toss_webhook_reconcile_payload_fix.sql
+    (CRITICAL#2: process_pending_toss_webhooks → payload->'data'->>'orderId' 경로 수정, CREATE OR REPLACE),
+  supabase/migrations/20260830010000_384_payment_transactions_cancel_audit.sql
+    (BOUNDARY#4: payment_transactions에 cancel_reason·cancelled_by 컬럼 추가 + cancel_reservation_payment 재정의) |
+  검증: svelte-check 0신규에러(기존1건=vite.config.ts pre-existing 유지) |
+  TDD: tossPaymentGroupRpc.test.ts 9/9 GREEN, payment.test.ts 17/17 GREEN |
+  Stage DB 마이그레이션 383·384: 파일 준비 완료, coordinator MCP apply_migration으로 적용 필요 |
+  Production: 미적용 (git commit Stephen 직접 실행 대기)
+
+[2026-08-30] ⚡GSD | Phase 1~5 종합 이력 — Toss 결제 실연동 아젠다 전체 |
+  Phase 1 (TDD RED/GREEN/REFACTOR): Migration 378(confirm_order_payment_and_update_reservations),
+    379(cancel_reservation_payment), 380(process_pending_toss_webhooks+pg_cron) — Stage 적용, TDD 9/9 GREEN |
+  Phase 2: 기존 subscriptionBillingCron.test.ts 등 회귀 — 관련 테스트 GREEN (상세는 이전 세션) |
+  Phase 3 (계약서명 결제 실연동): 신규 src/routes/contract/[token]/pay-result/+page.server.ts
+    (Toss confirm API → confirm_order_payment_and_update_reservations RPC → 알림/쿠폰/포인트 소진 → /contract/complete),
+    src/routes/contract/[token]/+page.svelte (loadTossSDK + submitPay Toss requestPayment 교체, 0원 free-path 유지) |
+  Phase 4 (구독 빌링 실연동): src/routes/subscribe/[planId]/+page.svelte (requestBillingAuth),
+    src/routes/subscribe/success/+page.server.ts (isMock 제거, 실 billingKey 교환·chargeSubscription) |
+  Phase 5 (CMS 환불 UI): src/routes/api/cms/reservations/[id]/payment/+server.ts PUT 신설(Toss 전액취소 API + cancel_reservation_payment RPC),
+    src/lib/components/cms/RentalDetailPanel.svelte (환불 버튼 status/cancelled 더블가드, handleRefund),
+    .claude/rules/security-auth.md (환불 처리 매트릭스 행 추가) |
+  전체 TDD: 26/26 GREEN(tossPaymentGroupRpc+payment합산) + 1 pre-existing timeout(paymentContractOrderRedesign F-3 DB timeout) |
+  Production: 미적용, git commit Stephen 직접 실행 대기
+
+[2026-08-29] 🔴보안 | verify_and_update_phone anon 실행권한 REVOKE (탈퇴기능 배포 중 발견된 기존 공백 해소) | supabase/migrations/20260829040000_377_verify_and_update_phone_revoke_anon.sql | — | ✅ 완료 — Stephen 지시로 즉시 조치. 함수 본문 무변경, REVOKE ALL FROM PUBLIC,anon,authenticated 후 GRANT authenticated만 재적용. 적용 전 SignUpModal.svelte가 항상 signInAnonymously()로 authenticated 세션을 먼저 확보함을 코드로 확인해 순수anon 호출경로 없음(회귀위험 없음) 사전검증. Stage 적용→proacl재조회(anon 제거 확인)→테스트 3/3 GREEN→Production 적용→proacl재조회 동일확인, 전부 완료.
+[2026-08-29] 🔴CRITICAL | 회원 탈퇴('탈회') 기능 — Production 마이그레이션 6개 전부 적용 완료 | 365/366/367/368/370/376(舊373, 번호충돌로 재명명) | — | ✅ 완료 — Stephen "번호 충돌 정리하고 Production 적용해" 승인 후 순서대로 적용, Stage와 동일 항목(컬럼·proacl·cron·실호출) 전부 재검증 GREEN. 파일명 충돌(373이 다른 병렬세션과 373/374/375 연쇄충돌)은 이 세션 소유 파일만 376으로 재명명해 해소(DB 자체는 apply_migration 내부버전 추적이라 충돌 없었음). 부수발견: verify_and_update_phone에 anon 실행권한이 Stage·Production 양쪽 기존부터 존재(이번 변경 무관, auth.uid() 가드로 즉각위험 낮음) — 범위 밖이라 미조치, Stephen 인지 필요. git commit은 Stephen 직접 실행 대기.
+[2026-08-28] ⚡GSD | G5 CMS 배지 3-way + CustomerDetailPanel 상세블록 (탈퇴 기능) — 완료 | src/routes/cms/customers/+page.svelte, src/lib/components/cms/CustomerDetailPanel.svelte | 30분 | ✅ 완료 — 배지 우선순위 탈회>블랙리스트>정상, .badge-withdrawn/.withdrawal-status-banner 전부 기존 red-tint 토큰 재사용(.badge-danger/.bl-active와 동일 값). withdrawal_reasons는 G4에 미포함이라 상태·날짜만 표시(사유 생략, 문서화됨). 메인세션 재검증: 병렬세션 무관 diff와 분리해 withdrawal 관련 라인만 grep 대조, CSS 토큰 일치 확인, npm run check GREEN. G6(통합스모크+문서갱신) 착수 예정.
+[2026-08-28] ⚡GSD | G4 get_customer_list 재정의 (탈퇴 기능, CMS 탈회 컬럼 3개) — 완료 | supabase/migrations/20260829030000_376_get_customer_list_withdrawal_status.sql, src/routes/cms/customers/+page.server.ts | 30분 | ✅ 완료 — Migration 361과 SELECT/WHERE/ORDER 완전 동일(라인단위 대조), 신규 3컬럼만 추가. deleted_at IS NULL 필터 유지로 탈회 회원 목록노출 자동충족. Stage 적용 후 proacl 재조회로 anon/authenticated 완전차단 재확인(364 사고 재발없음), 실SELECT로 신규컬럼 반환 확인. 부가: Claude Browser 선택요소 검증 중 콤보버튼 세로스택 레이아웃이 front-uiux.md §16(가로스크롤)과 다름을 발견 → Stephen "세로 유지" 확정(승인된 예외).
+[2026-08-28] ⚡GSD | G3 /account·/account/profile 탈회 메뉴 배선 (탈퇴 기능) — 완료 | src/routes/account/+page.svelte, +page.server.ts, src/routes/account/profile/+page.svelte, +page.server.ts, WithdrawalTabContent.svelte | 30분 | ✅ 완료 — myInfoMenuItems/PC_TAB_PANELS/Tab/VALID_TABS/TAB_LABELS 전부 배선(기존 6개 항목 무변경), select 컬럼 추가, "이미 신청됨" 상태 안내 블록 추가. 메인세션 재검증: git diff 전수대조+npm run check 재실행 GREEN. G4(CMS get_customer_list 재정의) 착수 예정.
+[2026-08-28] 🔴CRITICAL·TDD | 장바구니 동일 부모상품 중복담기 → 하나로 병합(수량/옵션 자동 반영) |
+  신규: supabase/migrations/20260828070000_371_find_matching_cart_reservation_group.sql,
+  src/lib/utils/cartLineGrouping.ts, src/__tests__/services/cartLineGrouping.test.ts,
+  src/__tests__/services/cartReservationGrouping.test.ts |
+  수정: src/lib/services/reservationHelper.ts(resolveParentProductId/mergeReservationOptions
+  추가), src/__tests__/services/reservationHelper.test.ts, src/routes/products/[id]/
+  +page.svelte(handleReserve — 담기 직전 그룹조회+옵션/방식 병합), src/routes/cart/
+  +page.server.ts(cartLineGroups 반환), src/routes/cart/+page.svelte(itemsState 그룹단위
+  리팩터, 5곳 인덱스결합 제거, 수량−/+ 실동작화, 체크아웃 flatMap)
+  | plan_source: Plan Mode 승인(/Users/stevenmac/.claude/plans/joyful-floating-codd.md,
+  Stephen GATE B 확정 3항목 — 병합조건은 hold 완전일치만/두번째 담기는 자기 날짜를 갖지
+  않고 카드 기존 날짜 재사용/수량−+ 버튼은 실제 예약 생성·취소로 서버 반영)
+
+  발견 경위: Stephen 실화면 지적 → Stage DB 직접조회로 재현(같은 user_id+product_id
+  hold/draft 3건 별도 존재) → Explore 에이전트 3개 병렬 조사(담기 플로우/카트 표시
+  레이어/CMS·QR 등 하위시스템 영향범위) → Plan 에이전트로 설계 → AskUserQuestion 2건으로
+  GATE B 확정 → 구현.
+
+  구현 중 발견·수정한 실제 버그 2건:
+  ① 마이그레이션 최초 적용본에서 hold 경로 JOIN에 `p.deleted_at IS NULL` 누락 —
+    자식상품이 soft-delete돼도 여전히 매치되던 결함을 Stage 라이브 테스트로 실측 발견,
+    CREATE OR REPLACE로 즉시 재적용.
+  ② `otDeposit`(보증금 합계)이 기존부터 qty를 곱하지 않던 결함 — 그룹 도입으로 qty가
+    실제 예약행 개수를 의미하게 되면서 이번에 함께 수정(그룹 N대 병합 카드는 보증금도
+    N배 청구돼야 함).
+
+  검증: reservationHelper.test.ts 45/45, cartLineGrouping.test.ts 11/11(순수함수),
+  cartReservationGrouping.test.ts 7/7(Stage 라이브 DB — accountWithdrawal.test.ts의
+  createEphemeralSession 패턴으로 실제 로그인 세션 확보 후 create_hold_reservation/
+  create_draft_reservation 실RPC 호출, H-01 직접 INSERT 금지 준수) — 전부 GREEN,
+  회귀 스위트(couponEligibilityValidation/cartShippingFee/reservation.test.ts) 무회귀,
+  svelte-check 무회귀(신규 에러 0건, 기존 vite.config.ts 1건만 유지), Stage 테스트
+  데이터 잔여물 0건 재확인.
+
+  ✅ **라이브 브라우저 검증(2026-08-28 후속 세션) — 원 버그리포트 데이터로 직접 재현·확인
+  완료**: 다른 세션의 개발서버 점유 해소 후 localhost 정상화. Stephen이 최초 버그를 제보한
+  근거였던 실제 계정(`6c80778c-28de-4b00-b1ab-fa9c9d07089f`)·실제 예약행(Sony FX6-12,
+  id 3482/3540/3541 — 병합 전 완전 별도 draft 3건)을 그대로 사용:
+    1. 병합 표시: 카드 3개 → 1개·수량"3"·옵션"SONY PXW-Z90" 정상 병합 확인. DB 원본 3행은
+       그대로 보존(비파괴적 표시 레이어 병합, SQL 재조회로 확인).
+    2. 수량(−) 실동작: 클릭 → 화면 3→2. SQL 확인 결과 가장 최근(최대 id 3541)만
+       `status='cancelled'`, canonical(3482, 옵션보유)과 3540은 `'draft'` 유지 — "최근분부터
+       취소, canonical 최후까지 보호" 설계 그대로 동작. 옵션도 카드에 계속 표시.
+    3. 수량(+) 실동작: 클릭 → 화면 2→3. SQL로 클릭 시각과 정확히 일치하는 신규 draft(id
+       4328) 생성 확인 — 날짜/방식 재질문 없이 그룹 값 그대로 재사용(GATE B 확정사항 2 충족).
+
+  ⚠️ 미완료 1건(정직 기록): 상품상세 페이지의 "예약신청"(handleReserve) 재담기 경로는 세션
+  후반 Claude Browser 패널이 반복적으로 "pane is currently hidden"에 빠져, 클릭 대상 엘리먼트
+  자체는 elementFromPoint로 정확히 특정되는데도 클릭 이벤트가 document에 전혀 도달하지 않음을
+  디버그 리스너로 직접 확인 — 앱 버그가 아니라 브라우저 도구 환경 결함으로 판단(카트 스테퍼가
+  이미 동일 RPC·병합 로직을 실브라우저+실DB로 검증 완료했고, svelte-check 0 errors, Stage
+  라이브 통합테스트 7/7 GREEN이 그 RPC 자체를 뒷받침). TASK.md [NEXT]에 낮은 리스크의 잔여
+  확인 항목으로 남겨둠.
+
+  GATE E: 코드·TDD 기준 통과 + 원 버그리포트 데이터로 라이브 브라우저 핵심 시나리오(병합표시·
+  수량 증감 실동작) 3건 검증 완료. 상품상세 재담기 1건 잔여 확인 + Production 마이그레이션
+  적용은 별도 승인/재확인 대기.
+
+[2026-08-28] ⚡GSD | G2 WithdrawalTabContent.svelte 신규 작성 (탈퇴 UI) | src/lib/components/members/profile/WithdrawalTabContent.svelte | 20분 | GATE C:자동승인(BOUNDARY) — 신규 컴포넌트 단독 작성. 콤보버튼 5종(다중선택), etc textarea, 유의사항 안내블록, 최종 탈회 버튼(window.confirm+RPC+handleLogout 동일 패턴). npm run check: vite.config.ts 기존 에러 1건 외 신규 에러 없음(GREEN). G3(계정 메뉴 배선) 착수 대기.
+[2026-08-28] ⚡GSD | G2 WithdrawalTabContent.svelte 신규 컴포넌트 (탈퇴 기능) — 완료 | src/lib/components/members/profile/WithdrawalTabContent.svelte | 30분 | ✅ 완료 — 사유5종 다중선택+etc textarea+유의사항블록+최종탈회버튼, callTypedRpc 호출, 성공시 handleLogout 동일 시퀀스. 메인세션 재검증: 하드코딩 색상은 NotificationTabContent 기존 패턴 재사용(신규 위반 아님), UserProfile 임포트도 ProfileTabContent와 동일 경로 확인. npm run check GREEN. 아직 /account 메뉴 미배선(G3 예정).
+[2026-08-28] ⚡GSD | G1 database.ts 타입확장 (탈퇴 기능) — 완료 | src/lib/types/database.ts, src/routes/account/profile/+page.server.ts | 30분 | ✅ 완료 — UserProfile 4필드 옵셔널 추가, Functions맵 신규 RPC 3종+AccountRpcResult error_code 추가, account/profile 237행 타입에러를 callTypedRpc 전환으로 해소. 메인세션 재검증: cart/+page.svelte 잔여 7건은 병렬세션(cartLineGrouping.ts)발 무관 이슈 확인. GSD 트랙 G2 착수 예정.
+[2026-08-28] ⚡GSD | 계약서 스프레드시트 반복행 미리보기 (Stage 4) | ContractTemplatePreviewModal.svelte | 15분 | GATE C:자동승인(BOUNDARY) — 코드 변경 없음. 조사 결과 Stage 1(상품목록 데이터)·Stage 2(expandSheet 확장 로직) 완료로 previewSpreadsheetDocument $derived이 이미 substituteSpreadsheetDocument() 경유, renderSpreadsheetToHtml()이 확장 행 그대로 렌더링. 바이패스 경로 없음 확인. vitest 90/90 GREEN, svelte-check 신규 에러 0건.
+[2026-08-28] ⚡TDD | T6 verify_and_update_phone 탈퇴유예 휴대폰 충돌 차단 — RED→GREEN 완료 | accountWithdrawalPhone.test.ts, 20260828060000_370_verify_and_update_phone_withdrawal_check.sql | 15분 | ✅ 완료 — Stage 적용 후 3/3 GREEN(충돌차단+phone미변경/상대정상회원회귀없음/중복없음회귀없음). 시그니처불변(TEXT,TEXT) 준수, Q8정책 반영, OTP미소모 보장. id/user_id 두 컬럼 실측 재확인(156행 전부 일치, 버그아님). npm run check 신규에러 0건. **TDD 트랙(T1~T6) 전체 완료** — G1~G6(프론트/CMS)은 Stephen 지시 대기.
+[2026-08-28] ⚡GSD | 계약서 스프레드시트 반복 영역 지정 UI (Stage 3) | ContractSpreadsheetEditor.svelte | 20분 | GATE C:자동승인(BOUNDARY) — svelte-check 신규 에러 0건, vitest 82/82 GREEN. sheetRepeatRegions 시트별 상태관리 + onselection y2 캡처 + 툴바 버튼(지정/해제/배지) + <tr data-cse-repeat> DOM 밴드 + getSpreadsheetDocument() repeatRegion 주입 + 행 삽입·삭제 후 재적용.
+[2026-08-28] ⚡GSD | 구독자 단위 품번 재시도 버튼 신규 개발 | cms/subscriptions/+page.server.ts, SubscriptionDetailPanel.svelte | 15분 | GATE C:자동승인(BOUNDARY) — npm run check 신규 에러 0건. retrySubscriberCode 액션+버튼 구현, <a> 중첩 구조 해소, product_code NULL 행에만 버튼 노출.
+[2026-08-28] ⚡TDD | T5 purge_withdrawn_accounts RPC + pg_cron (탈퇴 기능, PII 자동삭제) — RED→GREEN 완료 | src/__tests__/services/accountWithdrawalPurge.test.ts, supabase/migrations/20260828030000_368_purge_withdrawn_accounts.sql | 15분+버그수정 | ✅ 완료 — Stage 적용 후 2/2 GREEN. TDD 라이브테스트 중 실결함 발견·즉시수정: email NOT NULL 제약으로 최초 NULL대입 시 23502 위반, id기반 익명 placeholder(purged-{id}@purged.crazyshot.kr)로 교체 후 재적용. cron.job 'purge-withdrawn-accounts'(매일 01:00 UTC) 등록·active 확인. Production 미적용(Stephen 승인 대기).
+[2026-08-28] ⚡TDD | T4 restore_withdrawn_account RPC + 신규 src/routes/+layout.server.ts (탈퇴 기능, 자동복구) — RED→GREEN 완료 | supabase/migrations/20260828020000_367_restore_withdrawn_account.sql, src/routes/+layout.server.ts, src/__tests__/services/accountWithdrawalRestore.test.ts, src/__tests__/server/accountWithdrawalRestore.test.ts | 15분 | ✅ 완료 — Stage 적용 후 7/7 GREEN(RPC 통합 4케이스 + layout mock 3케이스). 루트 레이아웃 서버 로드 최초 신설(hooks.server.ts 핫패스는 그대로 둠).
+[2026-08-28] ⚡TDD | T2 request_account_withdrawal RPC (탈퇴 기능) — RED→GREEN 완료 | supabase/migrations/20260828010000_366_request_account_withdrawal.sql, src/__tests__/services/accountWithdrawal.test.ts | 15분 | ✅ 완료 — Stage(ezyvffjvuwmtuhpxdjrw) 적용 후 ephemeral 유저 라이브 통합테스트 9/9 GREEN(정상신청·hold/in_use진행중대여차단·중복신청차단·anon차단·사유검증3종·etc검증). npm run check 신규에러 0건. Production 미적용(Stephen 승인 대기). T3(RPC②자동복구) 착수 예정.
+[2026-08-28] ⚡GSD | T1 스키마 마이그레이션 (탈퇴 기능) — 작성+Stage DB적용+검증 완료 | supabase/migrations/20260828000000_365_withdrawal_columns.sql | 15분 | ✅ 완료 — Stage(ezyvffjvuwmtuhpxdjrw) 적용 후 6컬럼 information_schema 재조회 + CHECK 제약 실제 위반시도(23514 거부 확인) 2건 전부 실측 검증. Production 미적용(Stephen 승인 대기). T2~T6/G1~G6은 Stephen 승인 후 착수.
+
+[2026-08-28] 🔴TDD | T2 request_account_withdrawal RPC — RED(테스트+마이그레이션 파일 작성 완료, Stage DB 적용 대기) | src/__tests__/services/accountWithdrawal.test.ts, supabase/migrations/20260828010000_366_request_account_withdrawal.sql | 9케이스(정상신청·purge_at+30일, hold/in_use대여차단, already_requested중복차단, anon비로그인차단, 빈배열검증, 잘못된코드, etc+내용없음, etc+내용정상) | ⏳ Stage DB 적용 대기 — 메인세션이 Migration #366 apply_migration 후 GREEN 검증 진행 예정
+
+[2026-08-28 13:57] 🔴TDD | 계약서 다중상품 반복행 Stage 2 — SpreadsheetSheet.repeatRegion + substituteSpreadsheetDocument() 반복행 확장 | src/lib/types/contract-document.ts, src/lib/utils/contract-substitution.ts, src/__tests__/services/spreadsheetRepeatRegion.test.ts | 17/17 GREEN(무회귀2·항목수=템플릿5·항목수>템플릿4·병합3·엣지3), 연관 3파일 99/99 GREEN | GATE C:자동(BOUNDARY — 순수 타입+로직 확장, 기존 템플릿 완전 하위호환)
+
+[2026-08-28 13:33] 🔴TDD | 계약서 다중상품 반복행 Stage 1 — ContractSubstitutionData.상품목록 배열 필드 + contract-data API 다중 reservation/옵션 조회 확장 | src/lib/types/contract-module.ts, src/lib/utils/contractLineItems.ts, src/routes/api/cms/reservations/[id]/contract-data/+server.ts, src/lib/utils/contract-substitution.ts, src/lib/utils/tiptapRender.ts, src/__tests__/services/contractDataLineItems.test.ts | 18개 테스트 GREEN, 기존 85개 무회귀 | GATE C:자동(BOUNDARY — 순수 타입+유틸 확장, 기존 API 하위호환)
+
 [2026-08-26] 🟡BOUNDARY | 본인증명 등록완료 자동복귀 로직 — returnTo 경로값 방식으로 재설계 + 정합성확인 게이트 + 토스트 문구 수정 | src/lib/components/members/profile/ProfileTabContent.svelte, src/routes/products/[id]/+page.svelte | ✅ 수정 완료(GATE E 검수 대기)
   Stephen 지시(직전 GSD 항목의 history.back() 구현에 대한 3건 재수정 요청):
   1. "완료 토스트 호출 이후 상품상세화면 자동 랜딩: 이전 상품 경로값 보유 로직 구현" —
@@ -318,6 +684,69 @@ account/+page.svelte(섹션타이틀 4종 --text-pc-title-18 적용, 위시리�
   코드 확인(disabled=true면 onclick 자체가 실행되지 않음 — 브라우저 네이티브 동작).
   검증: svelte-check 무회귀, 라이브 브라우저로 체크→값 자동입력→체크해제→값 공란 전환
   왕복 확인(고객정보·배송지 양쪽).
+
+  ⚠️ **후속 UI 조정(2026-08-26, Stephen 재지적)**: "사용 가능한 쿠폰"(coupon-section)·
+  "포인트 사용"(points-select-section) 섹션이 "약정 요금" gray bg 박스(total-gray-section)와
+  별도 흰 배경 섹션으로 분리돼 있던 것을, 순서·기능 로직 변경 없이 순수 DOM 위치만
+  total-gray-section 내부(약정요금 라벨 앞)로 이동해 하나의 연속된 gray bg 블록으로 통합.
+  이동 시 이중 padding(부모 40px + 자식 20px)으로 인한 박스-안-박스 시각 잔재를 막기 위해
+  `.coupon-section`/`.points-select-section`의 자체 `padding: 20px`만 제거(배경·gap 등
+  나머지 스타일·onclick·바인딩·disabled 게이팅은 전부 무수정).
+
+  ⚠️ **후속 발견(2026-08-26, 같은 날 재지적)**: 위 통합 이후 `.coupon-row`가 부모
+  `.total-gray-section`과 똑같은 배경(#F6F6F6, 둘 다 하드코딩값)을 써서 쿠폰 행이 부모
+  gray bg에 파묻혀 시각적 구분이 사라짐 — `--cs-surface-gray`(#f6f6f6, 부모와 동일값)보다
+  한 단계 밝은 `--cs-bg-row-hover`(#fafafa, 프로젝트 팔레트 내 유일하게 더 옅은 회색 계열
+  토큰)로 교체 — 겸사겸사 기존 하드코딩 색상도 토큰 참조로 정리됨.
+
+  ⚠️ **후속 발견(2026-08-26, 같은 날 3차 지적)**: 같은 원인의 연쇄 — "포인트 사용" 입력창
+  (`.points-input`)도 공용 `.f-input` 베이스(#F6F6F6)를 그대로 써서 gray bg 통합 이후 부모
+  `.total-gray-section`(#f6f6f6)에 파묻혀 구분이 안 됨 — `.points-input`에만
+  `background: var(--cs-white)` 오버라이드 추가(공용 `.f-input` 베이스 자체는 무수정, 다른
+  입력창 영향 없음).
+
+  ⚠️ **후속 발견(2026-08-26, 같은 날 4차 지적 + QA 재검수로 2차 결함 발견)**: 옵션상품
+  서브카드 가격행(`.dual-price-row--opt`, "Day 90,000원 / 12H 90,000원")이 모바일에서 카드
+  우측 밖으로 실제 overflow — 2026-08-24/25 두 차례 "nowrap 유지+폰트 축소"로 땜질했던
+  자리인데 그 사이 컬럼 가용폭이 144.6px까지 더 좁아져 재발, 이번엔 폰트를 8px대까지
+  낮춰야 겨우 맞아 가독성이 심각히 훼손되는 걸 실측 확인해 폰트 축소로는 근본 해결
+  불가로 판단. `<span class="price-sep">` + 두 번째 `.price-unit`을
+  `.price-unit-group`으로 묶어 하나의 flex 자식으로 만들고 `.dual-price-row--opt`의
+  `flex-wrap: nowrap`을 `wrap`으로 되돌림 — 좁을 때 "/"가 줄 끝에 혼자 남는 대신
+  두 번째 값과 함께 다음 줄로 내려가도록 개선.
+  cart/+page.svelte 내 동일 마크업 2곳(OrderCard 풀사이즈 옵션서브카드·ItemListCard
+  compact 옵션서브카드) 모두 수정 대상 — **@sp3-qa-agent 1차 검수에서 두 곳 중 한 곳
+  (ItemListCard/compact)에만 반영되고 한 곳(OrderCard/풀사이즈)이 누락된 결함을 실제로
+  발견**(원인: 최초 편집 시 두 마크업이 byte-identical하다고 판단해 replace_all로 처리했으나
+  실제로는 들여쓰기가 미세하게 달라 하나만 매칭됨 + 이 세션 동안 동일 폴더에서 별도 채팅
+  세션이 함께 dev 서버를 띄우고 파일을 동시에 수정 중이라는 사실도 이 과정에서 발견 — 아래
+  참고) → 누락분 즉시 수정, 2곳 모두 `.price-unit-group` 존재 재확인(grep 2건).
+  검증: svelte-check 무회귀(cart 관련 신규 에러 0건), 375px·320px 폭 overflow 0 확인
+  (1차 수정 시점, ItemListCard 결함 발견 전), 데스크톱 1280px 단일행 유지 무회귀 확인.
+
+  ⚠️⚠️ **중요 — 병렬 세션 충돌 발견(2026-08-26)**: 위 QA 재검수 과정에서 이 저장소 폴더에
+  현재 **다른 채팅 세션이 별도로 접속해 자체 dev 서버를 띄우고 동시에 파일을 수정 중**임을
+  발견(Claude Browser 도구가 "다른 채팅의 dev 서버가 이 폴더에서 실행 중이라 이 세션의
+  Browser 도구로는 접근 불가"라고 명시적으로 알림). core-rules.md GP-1(2026-08-19 실사고)이
+  경고하는 바로 그 시나리오가 실제로 재현됨 — 이 세션이 GSD_LOG.md/TASK.md에 순차적으로
+  추가한 "쿠폰/포인트 gray-box 통합"·"coupon-row 토큰화"·"points-input 화이트배경"·
+  "옵션가격행 overflow 1차수정" 4개 기록 항목이 두 세션의 파일 동시쓰기 경합(read-modify-
+  write race)으로 한 차례 통째로 유실됐다가 이번에 재작성으로 복구함. **소스 코드
+  자체(cart/+page.svelte)도 같은 경합으로 유실될 수 있음이 바로 다음 라운드에서 실제로
+  확인됨(아래 참고) — 하네스 로그뿐 아니라 소스 코드도 안전하지 않다는 뜻이므로 Stephen에게
+  명시 보고할 것.** 다른 세션과 겹치는 작업이 있다면 조율이 필요할 수 있음.
+
+  ⚠️⚠️ **2차 확인 — 소스 코드 CSS도 유실됨(2026-08-26, @sp3-qa-agent 2차 재검수)**: 마크업
+  누락(1차 결함) 수정 후 재QA를 돌린 결과, 이번엔 CSS 쪽에서 결함 발견 — `.dual-price-row--opt`
+  의 `flex-wrap`이 방금 `wrap`으로 고쳤던 것이 다시 `nowrap`으로 돌아가 있었고,
+  `.price-unit-group` CSS 규칙 자체가 파일에서 통째로 사라져 있었음(원인: 위 병렬 세션이
+  거의 같은 시각에 `<style>` 블록을 포함해 파일 전체를 자기 쪽 스냅샷으로 덮어씀 — 마크업은
+  마침 그 사이 재작성돼 살아남았지만 CSS는 그 전 상태로 되돌아감). 즉시 재적용
+  (`.dual-price-row--opt { flex-wrap: wrap }` + `.price-unit-group { display:flex;
+  align-items:center; gap:6px }`) 후 grep으로 연속 2회 재확인해 안정 상태 확보. **결론: 이
+  세션 동안 병렬 세션과의 파일 경합으로 하네스 로그뿐 아니라 실제 소스 코드(CSS)까지
+  최소 1회 실제로 유실됐다가 복구됐다 — 단순 "위험이 있었다" 수준이 아니라 실제 발생한
+  사고로 격상해 기록.**
 
 [2026-08-26] 🟢ROUTINE | LoginBannerModal.svelte 전면 재작성 — HomeBannerModal 로직 동일화 |
   src/lib/components/auth/LoginBannerModal.svelte
@@ -1002,6 +1431,63 @@ src/app.css · src/routes/cart/+page.svelte | ✅ 완료
     · +page.server.ts — help_hero_bg_images 로드 + 서버사이드 랜덤 선택(heroBgUrl) 반환
     · +page.svelte — heroBgUrl 동적 적용, isCms 게이팅 기어 버튼, 모달 연결
   검증: svelte-check 신규 에러 0건. git commit Stephen 직접 실행 필요.
+
+[2026-08-20] CRITICAL FIX | /subscribe/[planId] Toss 빌링인증 실패 시 안내문구 미표시 결함 수정 | src/routes/subscribe/[planId]/+page.svelte | ✅ 수정 완료(GATE E 검수 대기)
+  배경: sp3-qa-agent가 외부자 교체분(실 Toss 빌링SDK) 검수 중 발견 — failUrl(?error=billing)
+  리다이렉트를 읽는 코드가 없어 결제실패 안내가 전혀 안 뜨던 결함. $app/stores page로
+  searchParams 읽어 subscribeError 초기값 설정. Stephen 승인 후 즉시 수정.
+  검증: svelte-check 신규 이슈 0건, curl 컴파일 정상 확인.
+  미완료: git commit(Stephen 직접 실행 필요).
+
+[2026-08-20] 진단(코드변경없음) | /subscribe/[planId] Toss 결제창 web-vitals 400 콘솔에러 원인 분석 | 해당없음(진단만) | ✅ 완료
+  배경: Stephen이 정기구독 결제 시도 시 `event.tosspayments.com/api/v1/monitor/web-vitals 400`
+  콘솔에러 제보. 스택트레이스(_app-*.js/framework-*.js 등 Toss 자체 호스팅 결제위젯 번들)를
+  근거로 이 에러가 우리 앱코드가 아닌 Toss 결제창(iframe) 내부 자체 텔레메트리 호출이며,
+  localhost 등 비운영 도메인에서 흔한 현상(referrer/origin 검증 실패로 400)임을 확인·설명.
+  실제 카드등록/successUrl 리다이렉트가 정상 진행되는지, billing/authorizations 관련 별도
+  400/500이 있는지 Stephen에게 확인 요청 — 회신 대기 중이라 코드 수정 없음.
+  부가확인: /subscribe/[planId]/+page.svelte가 이전 세션의 더미(mock) 구현에서 실
+  TossPayments SDK 연동(PUBLIC_TOSS_BILLING_CLIENT_KEY, requestBillingAuth)으로 이미
+  타 주체에 의해 교체되어 있음을 확인(이번 세션 작업 아님, 현상태 유지).
+
+[2026-08-20] ROUTINE | /subscribe/success 확인버튼 우측 화살표 아이콘 제거 | src/routes/subscribe/success/+page.svelte | ✅ 수정 완료(GATE E 검수 대기)
+  배경: confirm-btn 우측(텍스트 뒤) svg 화살표 선택 → 제거 요청. 좌측 화살표는 유지.
+  검증: svelte-check 신규 이슈 0건.
+  미완료: git commit(Stephen 직접 실행 필요).
+
+[2026-08-20] CRITICAL FIX | CMS 혜택관리(tier_benefits) front Plans&features 표 미반영 결함 수정 | src/lib/utils/subscriptionBenefits.ts, src/routes/members/+page.server.ts, src/routes/subscribe/[planId]/+page.server.ts | ✅ 수정 완료(GATE E 검수 대기)
+  배경: Stephen 질의로 CMS 혜택관리(tier_benefits)탭 설정이 front 표에 전혀 반영 안 되던
+  구조적 결함 발견(상품스펙만 반영되고 있었음). formatBenefitForDisplay()로 5종 혜택타입을
+  label/value로 변환, /members·/subscribe 양쪽 load()에서 is_enabled=true 혜택 조회 후
+  features에 표시시점 병합(DB미저장, CMS 두 탭 독립 유지). tier_benefits RLS 기존 공개
+  SELECT라 마이그레이션 불필요. 이미지 교체는 CMS에 이미 완전 구현 확인(별도조치 없음).
+  검증: svelte-check 신규 이슈 0건, curl SSR 200 확인.
+  미완료: git commit(Stephen 직접 실행 필요).
+
+[2026-08-20] BOUNDARY | /subscribe/[planId] 랜딩 리디자인 + 더미 토스페이먼츠 정기구독 연동 | src/routes/subscribe/[planId]/+page.server.ts, src/routes/subscribe/[planId]/+page.svelte, src/routes/subscribe/success/+page.server.ts, src/routes/subscribe/success/+page.svelte | ✅ 수정 완료(GATE E 검수 대기)
+  배경: 구독CTA에 토스페이먼츠 연동(더미, /payment/success 재활용)+카드 100%폭 리디자인
+  (이미지/헤더 강조)+카드하단 제공내용 표테이블(/members FeaturesTable 응용) 3건 요청.
+  /subscribe/success에 mock=1 분기 추가(실 Toss API 스킵, create_user_subscription/
+  record_subscription_charge_result RPC는 실제 호출), 성공화면을 /payment/success 레이아웃으로
+  재작성(구독정보 표시). 랜딩카드는 헤더밴드(퍼플bg+큰이미지+이름+가격)+본문(설명+제공내용표+
+  CTA) 구조로 전면 리디자인, featureRows는 전체플랜 union라벨 서버계산.
+  검증: svelte-check 신규 이슈 0건, curl SSR 컴파일 정상(로그인가드 303, 500 없음).
+  미완료: git commit(Stephen 직접 실행 필요).
+
+[2026-08-20] ROUTINE FIX | /members PC 플랜카드 그룹 CTA 중복 제거 | src/lib/components/members/PricingCards.svelte | ✅ 수정 완료(GATE E 검수 대기)
+  배경: 카드별 구독신청하기 버튼 신설 직후 Stephen이 기존 그룹 하단 "구독하기"(pc-cta-wrap)와
+  중복 여부 확인 요청 → 중복 확정, 제거 지시. pc-cta-wrap 블록 + 관련 CSS 완전 제거, 카드별
+  plan-subscribe-btn만 유지. FeaturesTable 모바일 구독하기 버튼은 별개 기능이라 미변경.
+  검증: svelte-check 신규 이슈 0건, curl SSR로 중복 제거 확인.
+  미완료: git commit(Stephen 직접 실행 필요).
+
+[2026-08-20] ROUTINE | /members PC 플랜카드 개별 구독신청하기 버튼 신설 | src/lib/components/members/PricingCards.svelte | ✅ 수정 완료(GATE E 검수 대기)
+  배경: 카드 선택→하단 비교표 연동(기존 정상), /subscribe/[planId] 랜딩 설명+결제버튼(기존 정상
+  구현) 확인 후, 카드별 개별 구독신청 버튼만 신규 필요 판단. plan-card-pc를 button→
+  div[role=button]으로 전환(내부 <a> 중첩 위한 HTML 유효성 확보), stopPropagation으로 카드선택과
+  버튼클릭 이벤트 분리, 카드높이 400→470px 확장.
+  검증: svelte-check 신규 ERROR/WARNING 0건. Claude Browser 시각검증은 정책상 미실시.
+  미완료: git commit(Stephen 직접 실행 필요).
 
 [2026-08-20] ROUTINE FIX | CommonBenefits PC 반응형 이용안내 미반영 버그수정 | src/lib/components/members/CommonBenefits.svelte | ✅ 수정 완료(GATE E 검수 대기)
   배경: 직전 세션에서 모바일 m-red-block만 policyItems 목록으로 교체하고 PC 전용
@@ -5678,3 +6164,337 @@ Stephen 직접 실행 필요
   확인 + 스크린샷으로 RentalDetailPanel과 동일한 시각 스타일 확인.
 
   GATE E: ✅ 통과. 커밋은 Stephen 직접 실행.
+
+[2026-08-27] 🔴CRITICAL | CMS 고객상세 본인증명·외국인증명 노출 검증 + 다중파일 뷰어·다운로드 신설 | Migration 361·362 | Stage+Production 완료
+  Stephen이 CustomerDetailPanel(기본정보 탭)의 본인증명 등록파일이 /account?tab=profile
+  등록분과 정확히 일치 노출되는지 검증 요청 + 파일별 뷰어 모달·다운로드 아이콘 신설 요청.
+
+  근본원인: identity_doc_url/identity_type이 migration 359로 다중파일 지원을 위해 TEXT[]로
+  확장됐으나, CMS get_customer_list() RPC는 여전히 ::TEXT로 배열을 강제 캐스팅해 반환 —
+  실제 등록 고객도 CMS엔 "미등록"으로 오표시되거나 뷰어에 깨진 배열 리터럴 문자열이 그대로
+  로드됨(Production 실고객 2명 확인). foreign_doc_urls(외국인증명 다중파일, migration 360)는
+  RPC 응답에서 아예 누락.
+
+  Migration 361: get_customer_list() DROP+재생성 — identity_doc_url/identity_type 배열
+  그대로 반환 + foreign_doc_urls/foreign_type/foreign_stay_type 3개 컬럼 추가(반환타입 변경이라
+  DROP 필수). SELECT 로직·필터·grant(service_role 전용) 무변경.
+
+  검증 중 별개 CRITICAL 발견(Stephen 승인 후 포함) — Migration 362: user_profiles_identity_
+  type_check 제약조건에 'enrollment'(재학증명서) 누락으로, 프론트가 필수조합으로 강제하는
+  "학생증+재학증명서" 등록 시도가 DB 에러로 전면 실패 중이었음(migration 359가 RPC 내부
+  화이트리스트만 갱신하고 테이블 CHECK 갱신을 빠뜨림). 화이트리스트 추가만이라 회귀 없음.
+
+  앱코드: cms/customers/+page.server.ts(CustomerRow 배열화), cms/upload-doc/+server.ts
+  (배열 컬럼에 스칼라 저장하려던 쓰기버그 수정), CustomerDetailPanel.svelte(identityTypeLabel/
+  foreignTypeLabel 배지, foreignDocList 하위호환, 파일별 독립 목록+보기+다운로드, docViewerTitle
+  로 본인/외국인증명 뷰어 제목 구분, downloadDocFile()이 Storage ?download= 파라미터로
+  Content-Disposition:attachment 유도, each 블록 복합키로 each_key_duplicate 방지, 배지와
+  100% 중복이던 "외국인" 정적 텍스트 span 제거).
+
+  검증: svelte-check/eslint 신규 에러 0건. Stage 전 상태 매트릭스(미등록/단일/다중파일 ×
+  본인·외국인, 기간경과, 재등록 폼) 재현 확인. 뷰어 파일별 상이 URL 로드 확인. 다운로드는
+  앱의 실제 downloadDocFile() href를 캡처해 curl로 직접 요청 → Content-Disposition 헤더 실측
+  확인. front-CMS 연동은 update_user_doc_url RPC를 authenticated 역할+auth.uid() 시뮬레이션
+  으로 프론트와 동일 경로로 커밋 → CMS에 정확히 반영됨을 실데이터 왕복 확인(테스트 계정 사후
+  정리). Migration 361·362 Stage+Production 양쪽 적용, Production 실고객 데이터로 재확인.
+
+  GATE E: `@sp3-qa-agent` 검수 예정. 커밋은 Stephen 직접 실행.
+
+[2026-08-27] 🔴CRITICAL | get_customer_list() anon/authenticated EXECUTE 노출 긴급 차단 | Migration 364 | Stage+Production 완료
+  위 건(Migration 361) @sp3-qa-agent 검수 중 CRITICAL 발견: 361이 get_customer_list()를
+  반환타입 변경 때문에 DROP FUNCTION 후 CREATE FUNCTION으로 재생성했는데, GRANT EXECUTE
+  ... TO service_role만 다시 넣고 migration 261이 걸어둔 REVOKE ALL ... FROM PUBLIC, anon,
+  authenticated를 재적용하지 않았음 — Postgres는 함수 재생성 시 기본적으로 PUBLIC에 EXECUTE를
+  부여하므로 이 누락으로 261의 차단이 초기화되며 261이 원래 막았던 것과 정확히 동일한 PII
+  노출(전체 고객 이메일·전화번호·본인증명 문서 URL·블랙리스트 사유 등, anon 키로 직접 조회
+  가능)이 재발했다. QA가 Stage에서 curl로 직접 재현·proacl 조회로 확인.
+
+  Migration 364로 261과 동일한 REVOKE/GRANT 재적용(순수 권한 원복, SELECT 로직·반환타입
+  무변경). Stage 적용 즉시 proacl 재확인(anon/authenticated 제거, service_role만 잔존).
+  Production도 이미 migration 361이 적용돼 있어 동일하게 노출 중임을 즉시 재확인(proacl
+  직접 조회로 anon=X/authenticated=X 확인) → Stephen 긴급승인 받아 Production도 즉시 적용,
+  재확인 완료.
+
+  교훈: RETURNS TABLE 변경으로 함수를 DROP+CREATE해야 하는 모든 마이그레이션은 GRANT뿐 아니라
+  기존에 걸려있던 REVOKE도 반드시 함께 재적용해야 한다 — GRANT만 다시 걸면 "권한이 이전과
+  동일할 것"이라는 가정이 깨진다(PUBLIC 기본 EXECUTE 권한 때문). 이후 유사 DROP+CREATE
+  마이그레이션 작성 시 대상 함수의 기존 REVOKE 이력을 먼저 조회하고 동일하게 재적용할 것.
+
+  GATE E: ✅ 통과(재검수 완료). 커밋은 Stephen 직접 실행.
+
+[2026-08-28 13:51] TDD  | 탈회 T3 requestWithdrawal 서버 액션 | src/routes/account/profile/+page.server.ts + src/__tests__/server/accountWithdrawal.test.ts | 15분 | TDD 3/3 GREEN | GATE C: T3 완료(테스트 GREEN 기준) — T4 이후 Stephen 지시 대기
+
+[2026-08-28] GSD  | 탈회 G1 database.ts 타입 확장 | src/lib/types/database.ts + src/routes/account/profile/+page.server.ts | 20분 | npm run check GREEN(vite.config.ts 기존1건 제외, cart 에러는 타 세션 발생분) | GATE C: G1 완료 — G2 이후 Stephen 지시 대기
+
+[2026-08-28] GSD  | 탈회 G3 계정 메뉴+라우팅 배선 | src/lib/components/members/profile/WithdrawalTabContent.svelte + src/routes/account/+page.svelte + src/routes/account/profile/+page.svelte + src/routes/account/+page.server.ts + src/routes/account/profile/+page.server.ts | 25분 | npm run check GREEN(vite.config.ts 기존1건만) | GATE C: G3 완료 — G4 이후 Stephen 지시 대기
+
+[2026-08-28] GSD  | 탈회 G4 get_customer_list 재정의(탈회 컬럼 3개 추가) | supabase/migrations/20260829030000_376_get_customer_list_withdrawal_status.sql + src/routes/cms/customers/+page.server.ts | 15분 | npm run check GREEN(기존 vite.config.ts 1건+ContractDocumentEditor 1건 외 신규 에러 0건) | GATE C: G4 완료(파일작성 기준) — Stage DB 적용 대기
+
+[2026-08-28] ⚡GSD | G5 CMS 배지 3-way 확장 + CustomerDetailPanel 탈회 상세 블록 — 완료 | src/routes/cms/customers/+page.svelte, src/lib/components/cms/CustomerDetailPanel.svelte | 15분 | ✅ 완료 — 배지 2→3-way(탈회최우선), .badge-withdrawn CSS 추가, CustomerRow 인터페이스에 탈회 3컬럼 추가, .withdrawal-status-banner 블록(.delete-account-section 바로 위). withdrawal_reasons 미포함(G4 범위 제외) — 상태·날짜만 표시. npm run check GREEN(신규 타입에러 0건).
+
+[2026-08-28] ⚡GSD | G6 통합스모크 + callTypedRpc mock 버그 수정 + 규칙문서 갱신 — 완료 | src/__tests__/server/accountWithdrawal.test.ts + .claude/rules/service-operations.md + .claude/rules/rental-lifecycle.md | 20분 | vitest 6개 파일 24/24 GREEN(callTypedRpc mock mockImplementation으로 수정, supabase.rpc 프록시). npm run check 1 ERROR(기존 vite.config.ts pre-existing). service-operations.md §16 신설, rental-lifecycle.md GATE C 1건 추가. TASK.md 블록 제목·G6 완료기록·최종요약 갱신. | GATE C: G6 완료 — 전체 아젠다 완료(Stage). Production 마이그레이션 Stephen 승인 대기.
+
+[2026-08-29/30] 🔴CRITICAL·TDD | TossPayments v2 PG 모듈 실연동 — Phase 1~5 전체 완료(Stage) | plan_source: /Users/stevenmac/.claude/plans/cart-cms-reservation-status-selected-30-merry-fiddle.md, .claude/harness/TASK.md "NOW — TossPayments v2 PG 모듈 실연동" 항목 | ✅ 완료(Stage) — Production 미적용
+
+  배경: 결제 흐름 전체가 mock이었음(`/contract/[token]`→pay-mock, `/subscribe`→mock=1, CMS
+  "환불 처리" 버튼은 disabled placeholder). Stephen 승인(Plan Mode + "개발 착수해!")으로 실연동
+  착수. Stage DB(ezyvffjvuwmtuhpxdjrw) 실스키마 사전조회로 payment_transactions.order_id UNIQUE
+  제약 등 계획 전제 재확인 후 진행.
+
+  Phase 1(환경설정): `.env.local`에 PUBLIC_TOSS_CLIENT_KEY/VITE_TOSS_CLIENT_KEY/TOSS_SECRET_KEY
+  (테스트키, mid crazysfc8s·bill_crazyhevr 공용) 설정, `.env.example` 플레이스홀더 갱신.
+  ⚠️ "보안 키"·"머트 키" 2종은 Toss 대시보드 라벨 미확인 상태로 미배선 — 웹훅 HMAC 검증은 기존
+  TOSS_SECRET_KEY 기반 코드 그대로 유지.
+
+  Phase 2(TDD, DB RPC 신규 — Stage 적용 완료):
+    - Migration 378: confirm_order_payment_and_update_reservations — 주문(order) 단위 그룹
+      결제확정. 멱등가드(idempotency_key/toss_order_id) → payment_transactions 1행(대표
+      reservation_id=배열[1]) INSERT → 전체 reservation_id에 mark_reservation_payment_confirmed
+      루프(기존 §9 게이팅 재사용, 중복구현 없음). 기존 confirm_payment_and_update_reservation
+      (단일예약용, Migration 284)은 시그니처 불변 유지.
+    - Migration 379: cancel_reservation_payment — CMS 환불용. Toss 실취소는 앱서버 선행,
+      이 RPC는 DB만 갱신. **Stephen 확정 설계("주문 전체 전액환불")**: 예약 1건으로 호출해도
+      order_items 경유로 같은 주문에 묶인 전체 예약을 조회해 전부 cancelled 전이(이미
+      cancelled는 스킵, 멱등), payment_transactions도 전액 cancelled 1행만 갱신. 응답에
+      cancelled_reservation_ids 배열 포함.
+    - Migration 380: process_pending_toss_webhooks + pg_cron('toss-webhook-reconcile', 2분
+      간격) — raw_webhook_logs processed=false 행을 payment_transactions와 대사 후
+      process_result 로그+processed=true 마킹(안전망 1차 범위, 자동 상태전이는 후속 아젠다).
+    - TDD: src/__tests__/services/tossPaymentGroupRpc.test.ts 신규(9케이스, 전부 GREEN) —
+      그룹결제 확정 정상/멱등 2종, 주문전체 환불 정상/미결제 차단/멱등 스킵, 웹훅 대사 정상/멱등.
+    - Stage 적용 후 직접 SQL로 함수 3개·cron job 재확인 완료. **Production 미적용**(Stephen
+      승인 대기).
+
+  Phase 3(`/contract/[token]` 계약서명 결제 실연동): Toss v2 SDK 라우트 전용 동적로드,
+  `submitPay()` 교체 — 결제금액 0원(쿠폰/포인트 전액할인)이면 기존 pay-mock 무료경로 유지,
+  1원 이상이면 위젯 결제 → 신규 `pay-result/+page.server.ts`+`+page.svelte`에서 Toss confirm
+  API 호출 → confirm_order_payment_and_update_reservations RPC → 완료 이동. 실패 시
+  `/contract/[token]?payStatus=fail`로 복귀해 재시도 UI. TOSS_SECRET_KEY는 서버 전용 유지.
+
+  Phase 4(`/subscribe` 빌링 실연동): `handleSubscribe()`가 실 requestBillingAuth() 호출로
+  교체, `/subscribe/success`의 mock=1 더미 billingKey 생성 분기 완전 삭제 — 기존에 이미 구현돼
+  있던 실경로(authKey/customerKey 검증→billing key 발급→create_user_subscription→
+  chargeSubscription())만 남음. chargeSubscription()·정기결제 cron은 무변경.
+
+  Phase 5(CMS 환불): `/api/cms/reservations/[id]/payment/+server.ts`에 PUT 액션 추가(manager+
+  게이트, Toss 전액취소 API 선행 호출 → cancel_reservation_payment RPC). RentalDetailPanel.svelte
+  "환불 처리" 버튼을 `paymentDetail?.status==='done' && row.status!=='cancelled'` 조건으로
+  활성화(그 외엔 취소됨/권한없음/결제정보없음 각각 disabled 버튼+안내 title). security-auth.md
+  매트릭스에 "예약 결제 환불 처리" 행 신규 추가(manager+).
+
+  ⚠️ 중간 발견·수정 사항:
+    ① GATE C 진행 중 harness-executor가 "1개 예약만 환불하면 같은 주문의 나머지는?" 설계공백을
+       스스로 발견·질문 → Stephen "주문 전체 전액환불" 확정 후 cancel_reservation_payment를
+       그에 맞게 수정.
+    ② 최초 구현본은 환불 버튼이 이미 취소된 결제에도 노출되는 가드 누락(플랜에 이미 명시돼
+       있던 요구사항) — 메인세션이 지적해 프론트(button 조건문)+서버(PUT 핸들러 더블가드)
+       양쪽에 상태체크 추가로 해소.
+    ③ 신규 테스트 파일의 Supabase 쿼리 타입추론이 `never`로 좁혀져 발생한 신규 타입에러 3건
+       (`as unknown as T` 대신 `.returns<T>()` 명시적 타입 지정으로 해소, core-rules.md
+       "as unknown as T 캐스팅 금지" 준수) — 메인세션이 svelte-check 재검증으로 직접 발견·수정.
+    ④ 백그라운드 실행 중 harness-executor 세션이 1회 stall(600s 무진행)로 강제종료됨 — 마지막
+       GSD_LOG 기록 직전이었음. 메인세션이 실제 코드 상태(git diff)·테스트 결과를 직접
+       재확인한 뒤 이 기록을 대신 작성함(에이전트 자체보고를 그대로 신뢰하지 않고 재검증).
+
+  검증(메인세션 최종 재확인, 2026-08-30):
+    - npx vitest run tossPaymentGroupRpc.test.ts + payment.test.ts — 26/26 GREEN.
+    - npx svelte-check(전체 1617파일) — 1 ERROR만 잔존(vite.config.ts, 기존 무관 pre-existing),
+      신규 에러 0건.
+    - Stage DB 함수 3종(confirm_order_payment_and_update_reservations,
+      cancel_reservation_payment, process_pending_toss_webhooks) + cron job
+      'toss-webhook-reconcile'(*/2 * * * *, active=true) 실SQL 조회로 존재 확인.
+
+  미완료/후속 필요:
+    - "보안 키"·"머트 키" 2종 용도 미확인 — Toss 대시보드 확인 후 배선 여부 재검토.
+    - Production DB 마이그레이션(378·379·380) 미적용 — Stephen 승인 후 별도 진행.
+    - `/api/payment/confirm`, `/payment/success`, `/api/checkout/confirm-mock`,
+      `/api/checkout/initiate`(기존 orphan 코드)는 이번 범위에서 의도적으로 미변경 — 삭제
+      여부 별도 확인 필요.
+    - Stage에서 Toss 테스트카드로 실제 결제위젯 1건·환불 1건·구독 빌링등록 1건 end-to-end
+      라이브 실행 검증은 아직 미실시(플랜의 "검증 계획" 항목) — 다음 세션 또는 Stephen 직접
+      확인 필요.
+    - git commit은 Stephen 직접 실행 대기.
+
+  GATE E: sp3-qa-agent 독립검수 완료 — CRITICAL 2건·BOUNDARY 3건 발견(아래 참고).
+
+[2026-08-30] 🔴CRITICAL 후속수정 | TossPayments PG 실연동 — sp3-qa-agent 발견분 4건 즉시 수정 | ✅ 완료(Stage)
+
+  sp3-qa-agent 독립검수 결과 CRITICAL 2건·BOUNDARY 3건 발견. BOUNDARY 1건(calc_at 재검증
+  누락)은 Stephen "의도된 생략 — 주문금액은 계약생성 시점에 이미 고정"으로 확정, 수정 불필요.
+  나머지 4건 즉시 수정(메인세션이 각 항목 코드 재확인 후 harness-executor에 정확한 수정 지시,
+  자체보고를 그대로 신뢰하지 않고 재검증):
+
+  ① CRITICAL — CMS 환불 시 고객알림·두발히어로 배송취소 누락: `cancel_reservation_payment`
+     RPC가 SQL에서 직접 `update_reservation_status`를 호출해, 실제 알림(`send_rental_chat_
+     notification`)·푸시(`sendReservationLifecyclePush`)·두발히어로 취소(`cancelDelivery`)가
+     전부 있는 `cms/reservation/+page.server.ts`의 `updateStatus` 앱코드 경로를 완전히 우회하고
+     있었음(DB 트리거 없음, 직접 확인 완료). 수정: `/api/cms/reservations/[id]/payment/
+     +server.ts` PUT 핸들러에서 RPC 성공 후 `cancelled_reservation_ids` 각각에 대해 채팅알림+
+     푸시+(tracking_number 있으면) 두발히어로 취소를 fail-soft로 호출하도록 추가.
+  ② CRITICAL — 웹훅 후속처리 RPC가 실제 Toss 페이로드 구조와 안 맞아 항상 no-op: Migration
+     380이 `payload->>'orderId'`로 최상위에서 읽었으나 실제 Toss 웹훅은 `{eventType,
+     data:{orderId,status,...}}` 중첩 구조(기존 payment.test.ts 픽스처로 확인). 신규 테스트가
+     우연히 flat 구조로 작성돼 잡히지 않았던 버그. 기존 마이그레이션(380) 직접수정 금지 원칙
+     준수해 Migration 383(`process_pending_toss_webhooks` CREATE OR REPLACE, `payload->'data'
+     ->>'orderId'`로 수정) 신규 작성 + 테스트 픽스처도 nested로 교체.
+  ③ BOUNDARY — pay-result `load()` 동시 재진입 시 이중결제 위험: Toss confirm API 호출 전
+     `payment_transactions`에 동일 idempotency_key/order_id 존재 여부 선확인 가드 추가(있으면
+     Toss 재호출 없이 즉시 완료 리다이렉트).
+  ④ BOUNDARY — 환불 사유 미저장(감사추적 없음) + UI가 `confirm()` 한 줄: RentalDetailPanel의
+     환불 버튼을 `window.prompt()`로 실제 사유 입력받도록 교체 + Migration 384(payment_
+     transactions에 `cancel_reason TEXT`·`cancelled_by UUID` 컬럼 추가, `cancel_reservation_
+     payment` 재정의해 취소 시 기록).
+
+  적용: Migration 383·384 메인세션이 Stage(ezyvffjvuwmtuhpxdjrw)에 apply_migration으로 적용 +
+  직접 SQL로 컬럼·함수 재확인 완료. Production은 여전히 미적용.
+
+  검증(메인세션 재확인): npx vitest run tossPaymentGroupRpc.test.ts payment.test.ts — 26/26
+  GREEN. npx svelte-check(전체 1617파일) — 신규 에러 0건(vite.config.ts 1건만 pre-existing
+  잔존). `/api/cms/reservations/[id]/payment/+server.ts`의 dhero 취소 로직이 기존
+  `cms/reservation/+page.server.ts`의 `res.trackingNumber`/`cancelDelivery(bookId)` 패턴과
+  동일한 컬럼(`tracking_number`=dhero bookId)을 정확히 사용하는지 코드 직접 대조로 확인.
+
+  미완료: Production DB 마이그레이션(378~380, 383~384) 전부 미적용 — Stephen 승인 대기.
+  git commit — Stephen 직접 실행 대기. Toss 테스트카드 실브라우저 E2E(위젯결제·환불·빌링등록
+  각 1건) 미실시.
+
+  GATE E(재검수, 2026-08-30): ✅ 통과 — sp3-qa-agent가 4건 수정을 좁혀서 재검수, 전부 정확히
+  반영 확인(회귀 없음, 관련 컬럼·순서·fail-soft 처리 전부 코드 대조로 확인). 커밋 시 스테이징
+  범위를 이번 TossPayments 관련 파일(마이그레이션 378~380·383·384, payment/+server.ts,
+  pay-result, RentalDetailPanel.svelte, tossPaymentGroupRpc.test.ts)로 한정할 것 — 워킹트리에
+  섞인 다른 병렬세션 변경분(GNB.svelte·cartShippingFee 등)은 이번 아젠다와 무관.
+
+  git commit — Stephen 직접 실행 대기.
+
+[2026-08-30] 🔴CRITICAL 후속수정 | 단건결제(crazysfc8s)·정기결제(bill_crazyhevr) 키 분리 + "보안키/머트키" 용도 확정 | ✅ 완료(Stage)
+
+  Stephen이 Toss 개발자센터 실 대시보드 스크린샷·값을 제공 — 세션 초반 "보안 키"·"머트 키"
+  미확인 블로킹 항목이 해소됨:
+    - 머트 키: 대시보드에 "구 모듈(XPay)로 연동한 상점만 사용해요" 명시 — 이번 v2 REST/SDK
+      구현에는 불필요, 배선하지 않음.
+    - 보안 키: 정산지급대행·현금영수증 등 이번 스코프에서 쓰지 않는 기능 그룹에 속함 — 마찬가지로
+      불필요.
+
+  동시에 실 대시보드 값을 대조하는 과정에서 **더 심각한 기존 버그를 발견**: 단건결제(주문서형
+  결제위젯, mid=crazysfc8s)와 정기결제(빌링, mid=bill_crazyhevr)는 완전히 다른 상점의 별개
+  클라이언트키/시크릿키 쌍인데, 이번 세션 Phase 1~4 구현이 둘 다 동일한 `PUBLIC_TOSS_CLIENT_KEY`
+  /`TOSS_SECRET_KEY`를 공유해서 썼음(최초 세션에서 받은 테스트키를 "공용"으로 잘못 가정) — 이
+  상태로는 구독 빌링 발급·청구가 전부 인증실패(잘못된 상점 키로 Toss 호출)로 실패했을 것.
+
+  수정:
+    - `.env.local`: crazysfc8s 테스트 키를 실 대시보드 값(`test_gck_.../test_gsk_...`)으로
+      교체 + `PUBLIC_TOSS_BILLING_CLIENT_KEY`/`TOSS_BILLING_SECRET_KEY`(bill_crazyhevr 전용)
+      신규 추가. `.env.example`도 동일 구조로 갱신.
+    - `src/routes/subscribe/[planId]/+page.svelte`: `PUBLIC_TOSS_CLIENT_KEY` →
+      `PUBLIC_TOSS_BILLING_CLIENT_KEY`.
+    - `src/routes/subscribe/success/+page.server.ts`: `env.TOSS_SECRET_KEY` →
+      `env.TOSS_BILLING_SECRET_KEY`(빌링키 발급 API + `chargeSubscription()` 양쪽에 전달되는
+      동일 변수).
+    - `src/routes/api/cron/subscription-billing/+server.ts`: 동일하게 `TOSS_BILLING_SECRET_KEY`
+      로 교체.
+    - `src/__tests__/server/subscriptionBillingCron.test.ts`: mock env 키 이름을
+      `TOSS_BILLING_SECRET_KEY`로 갱신(이름 변경 무대응 시 테스트가 "서버 설정 오류"로 깨짐).
+    - LIVE 키(live_gck_/live_gsk_/live_ck_/live_sk_ 등)는 의도적으로 어떤 파일에도 기록하지
+      않음 — Production 전환은 Stephen이 Vercel 대시보드에서 직접 등록(플랜 범위 밖).
+
+  검증: `npx vitest run subscriptionBillingCron.test.ts payment.test.ts tossPaymentGroupRpc.test.ts`
+  — 32/32 GREEN. `npx svelte-check` — 신규 에러 0건(vite.config.ts 1건만 pre-existing 잔존).
+
+  미완료: 이 새 빌링 키로 실제 Toss 카드등록 E2E 테스트는 아직 미실시. Production 마이그레이션·
+  git commit은 계속 Stephen 대기.
+
+[2026-08-30] 🔴CRITICAL 후속수정 | 실브라우저 E2E 중 발견 — `.payment()` API는 결제위젯 키와 호환 안 됨, `.widgets()`로 교체 | ✅ 완료(Stage) — E2E는 iframe 클릭 제약으로 부분완료
+
+  Stephen 요청으로 Toss 테스트카드 실브라우저 E2E를 직접 진행. Stage DB에 테스트 픽스처(고객
+  계정·CMS매니저 계정·hold 예약·주문(55,000원)·서명완료 계약)를 직접 생성해 `/contract/[token]`
+  결제 화면까지 도달, "결제하기" 버튼을 실제로 클릭했다.
+
+  **CRITICAL 발견**: Toss가 즉시 에러 반환 — "API 개별 연동 키의 클라이언트 키로 SDK를
+  연동해주세요. 결제위젯 연동 키는 지원하지 않습니다." Phase 3 구현이 `toss(clientKey).payment
+  ({customerKey}).requestPayment()`(API 개별연동용 "일반결제" 방식)을 사용했는데, 이는
+  Stephen이 제공한 결제위젯(주문서형·결제창형) 클라이언트 키(`test_gck_...`)와 애초에
+  호환되지 않는 조합이었다 — 원래 가이드(https://docs.tosspayments.com/guides/v2/payment-widget/
+  integration)가 요구하는 `.widgets()` 기반 임베드 위젯 방식(renderPaymentMethods/
+  renderAgreement로 결제수단 UI를 화면에 직접 마운트)을 구현하지 않고 더 단순한 오버레이형
+  API를 대신 썼던 것 — TDD(mock 기반)·코드리뷰·1·2차 sp3-qa-agent 검수 전부 이 클래스의
+  버그를 잡아내지 못했다(Toss를 실제로 호출하지 않는 한 드러나지 않는 종류의 결함이라 이번
+  실브라우저 E2E가 아니었다면 Production에서야 발견됐을 것).
+
+  수정(`src/routes/contract/[token]/+page.svelte`):
+    - `TossPaymentsSDK` 타입을 `.payment()` → `.widgets()` 반환 형태로 교체.
+    - 신규 `$effect` — 서명완료(`done`)+유상결제(`payTotal>0`) 상태가 되면 위젯 인스턴스를
+      1회 생성해 `setAmount()`→`renderPaymentMethods()`→`renderAgreement()`로 실제 결제수단
+      UI를 페이지에 마운트(`#toss-payment-method`/`#toss-agreement` div). 쿠폰·포인트 변경 시
+      `setAmount()` 재호출로 금액 동기화.
+    - `submitPay()`는 이제 새 인스턴스를 만들지 않고 이미 마운트된 `tossWidgets.requestPayment()`
+      만 호출. 위젯이 아직 준비 안 됐으면 버튼 disabled 처리.
+
+  재검증 결과(실브라우저, Stage 테스트키 `test_gck_.../test_gsk_...`):
+    - 위젯 정상 마운트 확인 — 실제 Toss iframe 2개(`payment-widget.tosspayments.com/v2/entry/
+      payment-methods`, `.../agreement`) 로드, "테스트 환경이에요, 실제로 결제되지 않아요"
+      배너 정상 표시, 결제수단 3종(실시간 계좌이체·신용체크카드·네이버페이) 정상 렌더링.
+    - "결제하기" 클릭 → `requestPayment()`가 실제로 Toss까지 도달해 Toss 자체 검증 로직이
+      작동함을 확인("필수 약관에 동의해주세요" 인라인 에러가 Toss 위젯에서 반환됨) — 이는
+      clientKey·orderId·orderName·successUrl·failUrl 배선이 전부 올바르다는 뚜렷한 증거.
+    - npx svelte-check — 신규 에러 0건(기존 1건만 잔존).
+
+  ⚠️ **미완료(정직 기록)**: 실제 카드결제 완료(약관 체크 → 카드선택 → 승인 → pay-result
+  리다이렉트 → payment_transactions 생성 확인)까지는 도달하지 못했다. 이 세션의 Claude Browser
+  자동화 도구가 Toss가 자체 도메인(cross-origin iframe)에 렌더링하는 위젯 내부 요소(결제수단
+  탭·약관 체크박스)에 대해 좌표 클릭·더블클릭·키보드 포커스+Tab+Space를 전부 시도했으나 전혀
+  반응하지 않음(같은 도구로 우리 페이지 자체의 버튼 클릭은 정상 동작 확인) — 이 환경의 브라우저
+  자동화 도구가 중첩된 타사 도메인 iframe에 입력 이벤트를 전달하지 못하는 제약으로 판단(코드
+  결함 아님). 남은 카드결제 1단계는 Stephen이 직접 브라우저로 클릭 몇 번이면 완료 가능한
+  상태(핵심 버그는 이미 해소·검증됨).
+
+  테스트 픽스처(고객/매니저 테스트 계정, 예약 4687, 주문 483, 계약)는 Stage DB에서 전부
+  정리 완료(고아 데이터 없음).
+
+  Production 마이그레이션·git commit은 계속 Stephen 대기.
+
+  ✅ **후속(2026-08-30, 같은 날) — Stephen이 직접 실브라우저로 카드결제까지 완주, 실측 확인
+  완료**: 메인세션이 예약 4688(주문 484, 계약서 링크 e2e-1788062563791-8kqghaby)로 신규
+  테스트 픽스처를 재생성해 전달 → Stephen이 로컬 개발서버에서 직접 결제수단 선택·약관동의·
+  Toss 테스트카드 결제를 완료. Stage DB 직접 재조회로 전체 파이프라인 실동작 확인:
+    - `payment_transactions`: status='done', total_amount/paid_amount=55,000원 일치,
+      payment_method='카드', `toss_response`에 실제 Toss 카드결제 응답 전체 저장(카드사
+      승인번호·마스킹된 카드번호·영수증 URL 등), `confirmed_at` 기록됨.
+    - `rental_reservations`(id=4688): status가 `hold`→`confirmed`로 정상 전이,
+      `payment_confirmed_at` 기록 — §9 게이팅(서명완료 AND 결제완료) 정상 작동 확인.
+    - 웹훅 로그는 미수신(정상 — 로컬 dev 서버는 인터넷에서 접근 불가하므로 Toss 웹훅이
+      도달할 수 없음, 동기 confirm 경로가 실제 처리 주체라는 설계와 일치, Stage/Production
+      배포 후에는 웹훅도 정상 수신될 것).
+
+  이로써 Phase 3(계약서명 결제 실연동)의 마지막 미검증 구간(실카드 승인→DB 반영)까지 실측
+  완료 — TossPayments PG 모듈 실연동 전체(Phase 1~5 + 4건 QA 후속수정 + 위젯API 교체)가
+  Stage 환경에서 end-to-end로 실제 동작함을 최종 확인했다. 픽스처(예약 4688·주문 484·계약)는
+  Stephen 확인 후 정리 예정.
+
+[2026-09-01] 🔴CRITICAL | CMS 백오피스 정밀 검증 v5 — 17건 재검증 + 확장감사 + 배치수정 4건 |
+  플랜: clever-conjuring-fiddle.md. 병렬 10개 에이전트로 기존 8개 감사문서 CRITICAL 17건 전수
+  재검증(15건 FIXED, 1건 부분해소, 1건 STILL OPEN=CART-C2 의도적 보류) + 미커버 영역 확장감사
+  5개(products option_only·promotion·customers/구독·accounts/codes/set·rentals RLS) — CLOSED,
+  단 promotion에서 신규 CRITICAL 2건 발견(포인트 자동적립 트리거 0곳, 배너 mid_banner_pc/mobile
+  front 미노출). Stephen 승인 배치로 3건 착수(RLS역할혼동 Migration#408 is_cms_user() 교체,
+  포인트 자동적립 rental_complete만 Migration#407+awardRentalCompletePoints.ts 헬퍼+QR/수동
+  양쪽경로 배선, 배너 mid슬롯 CMS등록화면 선택지 제거) — CART-C2는 Stephen 확정으로 보류.
+  ⚠️ 오판 발견: 초안에서 membership_grade(easy/pop/crazy=구독티어)를 고객등급으로 오인해
+  포인트배수 매핑 시도 → Stephen 지적 즉시수정(misidentifications.md 기록). 후속으로
+  /cms/customers "등급"→"분류"(인증상태 일반/학생/구독 다중선택) 재구성, get_customer_list
+  Migration#409(p_classifications 필터 신설). 잔여 재검증: RSV-A-C1(목록stale) FIXED 확인,
+  Phase5 마이그레이션 6종(387·388·396·397·398·399) 소비앱코드 실배선 전부 정합 확인(DROP된
+  레거시 RPC 호출 잔존 0건). 신규 마이그레이션 4개(#407~#409) 전부 stage/production 미적용 —
+  Stephen 배포 승인 대기. git commit 미실행(GP-1). 종합문서:
+  learnings/cms_global_verification_v5_synthesis_2026-08-31.md(A~F절).
+
+[2026-09-01] ✅적용 | 마이그레이션 407·408·409 — stage+production 양쪽 적용 완료 | (DB만,
+  코드파일 아님) | — | Stephen 지시로 stage(ezyvffjvuwmtuhpxdjrw) 적용 후 이어서
+  production(vnbpmvxruyciuuaermyh)도 적용. Production 사전점검에서 rental_reservations가
+  stage와 정책 구조 상이함을 발견(select/insert/update/delete 세분화 정책만 존재, "관리자
+  전체" 정책 자체가 없었음) — Migration 408은 순수 추가라 충돌 없이 안전 적용, production
+  기준으로는 CMS 브라우저 직접 접근을 원천 허용하는 더 근본적인 개선이었음. get_customer_list
+  기존 6-param 반환컬럼이 stage와 동일(withdrawal_status 등 포함, Migration 376 상태)함을
+  사전 확인해 시그니처 충돌 없이 DROP+재생성. 양쪽 환경 전부 권한(anon/authenticated=false,
+  service_role=true) + RLS정책(is_cms_user()) + ref_id 컬럼타입(text) + 보안어드바이저
+  (ERROR 0건, 대상객체 신규경고 0건) 확인 완료. git commit·앱코드 배포(Vercel)는 미실행 —
+  DB적용과 앱배포는 별개(§9 사고 전례) 상태 그대로 Stephen 대기.

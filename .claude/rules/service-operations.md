@@ -146,6 +146,17 @@ execution.md` §1 ②④행(실화면 검증 기준 트리거·배지 매핑)
 전부 service_role 전용) + `confirm-mock`·`contracts/[token]/sign` 엔드포인트 반영, TDD 라이브
 통합테스트로 대칭성(결제먼저/서명먼저)·관리자 우회 무회귀 확인.
 
+✅ **승인 알림 게이팅·5개 발신지점 동기화 추가 적용 완료(2026-08-31)**:
+  - `sendApprovalNotifications()` 공용 헬퍼(`src/lib/server/sendApprovalNotifications.ts`) 신설 —
+    `confirm_payment_and_update_reservation`의 `confirmed` 반환값에 연동해 게이팅 결과가
+    FALSE(미서명)이면 채팅·푸시 알림을 발송하지 않는다.
+  - 5개 발신지점(approveReservation·pay-mock·pay-result·sign·payment/success) 중 활성 4개에
+    헬퍼 적용 완료(payment/success는 구코드 — 파일 자체 없음, Stage 0 확인).
+  - §4 묶음주문 통합/개별/보류 판정(`resolveApprovalNotifyPlan`) 이후에만 푸시 발송 — 보류
+    (mode='hold') 시 채팅·푸시 둘 다 미발송, 확정 시 mode에 따라 통합/개별로 동기화.
+  - sign/+server.ts에 누락돼 있던 `reservation_approval` 계열 푸시 추가(NTF-C3 해소).
+  - TDD 4/4 GREEN(EC-1/EC-2/EC-3 검증 완료).
+
 ⚠️ **배포 순서 사고 이력(2026-08-18, 복구 완료)**: 이 기능의 애플리케이션 코드는 git
 커밋·PR 머지를 거쳐 Production에 먼저 배포됐으나, DB 마이그레이션 적용이 별도로 누락돼
 한동안 Production 실고객 체크아웃이 전부 실패할 수 있는 상태였다(다행히 실제 피해 없이
@@ -180,6 +191,16 @@ restore.sql`(release_reservation_hold RPC) · `rental-lifecycle.md` "전체 상�
 (2026-08-18) — Stage는 TDD 검증(경계값·비hold상태 무영향·멱등성 5건 GREEN), Production은
 적용 직후 cron이 1분 이내 첫 실행돼 방치돼 있던 hold 29건이 실제로 expired 전환됨을
 직접 SQL 조회로 확인(`status='hold'` 잔여 0건).
+
+✅ **D-1 조건 정정(2026-08-31, Migration 394 — Stage DB 적용 완료)**:
+  Migration 324의 D-1("계약 발송됐으면 NOT EXISTS로 영구 제외")이 §9 게이팅 도입 이후
+  "계약 발송된 미서명 hold가 영구히 재고를 점유"하는 결함을 유발한다는 점이 전역감사에서
+  발견됐다. Migration 394로 D-1을 **GREATEST(created_at, sent_at) 기준 타이머 리셋** 방식으로
+  교체 — 계약 발송 순간부터 새로 30분을 부여하고, "재발송"할 때마다 sent_at이 갱신돼 타이머가
+  다시 리셋된다. D-3(payment_confirmed_at IS NOT NULL, 결제완료 예외)은 변경 없이 유지.
+  마이그레이션 파일: `supabase/migrations/20260901050000_394_hold_expiration_d1_greatest_timer.sql`
+  Stage(ezyvffjvuwmtuhpxdjrw) 적용 완료, TDD EC-5a/5b/5c 4/4 GREEN 확인 완료(2026-08-31).
+  Production(vnbpmvxruyciuuaermyh) 미적용 — Stephen 승인 후 별도 적용.
 
 ---
 
@@ -270,7 +291,7 @@ front 고객이 보낸 메시지가 AI 의도분류에서 CS_ESCALATE(상담원 
 ```
 고객이 받는 "대화카드" 알림에는 서로 완전히 독립된 두 개의 전달 경로가 있다:
   ① 채팅카드(chat_messages INSERT) — send_rental_chat_notification RPC의 CASE 분기
-     (10개 notify_type)에 새 타입을 추가하면 즉시 발송된다.
+     (11개 notify_type — tracking_notify가 Migration 406, 2026-08-31 추가됨)에 새 타입을 추가하면 즉시 발송된다.
   ② 브라우저 푸시(FCM) — 앱코드 sendReservationLifecyclePush()가 push.ts의
      CUSTOMER_LIFECYCLE_PUSH_COPY 매핑에서 문구를 찾아 별도로 발송한다.
 
@@ -282,6 +303,11 @@ push를 대신 쏴주는 구조도 아니다). reservation_cancelled·damage_cla
 문구 3종 추가로 수정 — `hold_expired`는 release_reservation_hold()가 순수 SQL(pg_cron)
 내부에서만 실행돼 앱코드의 push 함수를 호출할 경로 자체가 없어 구조적으로 여전히 미발송,
 별도 아키텍처 없이는 해소 안 됨).
+
+`tracking_notify`(운송장 번호 등록 알림)는 2026-08-31 Migration 406(RSV-B-B4)으로 추가됐으며,
+① send_rental_chat_notification RPC CASE 분기와 ② push.ts CUSTOMER_LIFECYCLE_PUSH_COPY 양쪽 모두
+동시에 추가돼 위의 누락 패턴을 반복하지 않았다. ActionCard.svelte(`tracking_notify` 케이스)와
+chat.ts(`ActionCardType` 유니온)도 함께 업데이트됨.
 
 즉 새 예약 라이프사이클 알림 타입을 추가할 때는 항상 두 곳을 세트로 확인한다:
   1. send_rental_chat_notification RPC CASE 분기(채팅카드)
@@ -382,6 +408,75 @@ approve_pending_coupon_gift(선물 채팅 카드) 분기:
 
 ---
 
+## 16. 회원 자율 탈퇴('탈회') — 30일 보관·이메일기준 자동복구·CMS 배지 (2026-08-28 구현)
+
+```
+고객이 마이페이지에서 직접 '탈회 신청'을 할 수 있는 자율 탈퇴 기능. 관리자 즉시삭제
+(soft_delete_customer — deleted_at 기록)와 완전히 별개 경로이며, CMS 목록 노출·DB 실데이터
+유지라는 점에서 핵심적으로 다르다.
+
+withdrawal_status 3단계:
+  'none'      → 정상 상태(기본값)
+  'requested' → 탈회 신청 완료, 30일 유예기간 중
+  'purged'    → 30일 경과 후 pg_cron(purge_withdrawn_accounts)이 개인정보 자동 마스킹 처리 완료
+
+핵심 원칙:
+  ① deleted_at은 변경하지 않는다 — 탈회 신청해도 CMS 고객 목록에서 숨기지 않음(관리자
+     즉시삭제와 UI 충돌 방지). ⚠️ request_account_withdrawal RPC는 현재 deleted_at 여부를
+     별도로 체크하지 않는다(이미 관리자가 즉시삭제한 계정이 탈회를 신청하는 경로는 현재
+     막혀있지 않음 — 실무상 발생 가능성이 낮아 이번 스코프에서 의도적으로 다루지 않았으나,
+     향후 실제로 문제가 되면 별도 확인 후 가드 추가 검토).
+  ② 진행중 대여(hold·confirmed·shipped·in_use·return_requested)가 있으면 RPC 레벨에서 차단
+     — 'active_rental_exists' error_code 반환
+  ③ 30일 유예기간(withdrawal_status='requested') 내 동일 이메일로 재로그인(Supabase Auth
+     성공 시점)하면 자동복구됨 — +layout.server.ts load()에서 withdrawal_status='requested'
+     감지 → restore_withdrawn_account RPC 호출. 유예기간 중에는 phone/email 등 PII를 전혀
+     건드리지 않으므로(아래 ④ 참고) 복구는 단순히 withdrawal_status 등 5개 컬럼만 원복하는
+     것으로 끝난다.
+  ④ PII 스크럽은 유예기간이 끝난 후(purge_withdrawn_accounts, 30일 경과) 딱 한 번만 일어난다
+     — phone은 임시번호가 아니라 단순 NULL 처리, email은 NOT NULL 제약 때문에
+     `purged-{id}@purged.crazyshot.kr` 형태 익명 placeholder로 대체(§ 위 발견 경위 참고).
+     **purged 상태가 되면 restore는 더 이상 동작하지 않는다**(restore RPC는
+     withdrawal_status='requested'일 때만 복구, 'purged'는 no-op) — "30일 지나면 복구 불가"
+     정책이 이 방식으로 보장된다.
+  ⑤ 휴대폰 재사용 차단(별개 시나리오, ③④와 무관): 탈회 유예기간 중인 **다른 계정**이 쓰던
+     휴대폰번호로 **제3의 계정**이 새로 인증(verify_and_update_phone)을 시도하면, 병합하지
+     않고 안내만 표시하며 차단한다(withdrawal_conflict) — 번호 소유권 혼선 방지 목적.
+  ⑥ CMS 고객 목록 배지: withdrawal_status별 "탈회" 배지(레드 계열, `--cs-red-badge` —
+     블랙리스트 배지와 동일 색상 언어, 우선순위 탈회>블랙리스트>정상) + CustomerDetailPanel에
+     탈회 정보(신청일·삭제예정일) 블록 표시. 관리자가 별도로 취소/복구하는 액션은 없다.
+
+구현 파일:
+  - 스키마: supabase/migrations/20260828000000_365_withdrawal_columns.sql
+  - 탈퇴신청 RPC: supabase/migrations/20260828010000_366_request_account_withdrawal.sql
+  - 자동복구 RPC: supabase/migrations/20260828020000_367_restore_withdrawn_account.sql
+  - 자동삭제 RPC+cron: supabase/migrations/20260828030000_368_purge_withdrawn_accounts.sql
+  - 휴대폰 차단: supabase/migrations/20260828060000_370_verify_and_update_phone_withdrawal_check.sql
+  - CMS 목록 필드: supabase/migrations/20260829030000_376_get_customer_list_withdrawal_status.sql
+  - 자동복구 훅: src/routes/+layout.server.ts (load 함수)
+  - 탈퇴 UI: src/lib/components/members/profile/WithdrawalTabContent.svelte
+  - 마이페이지 배선: src/routes/account/+page.svelte, +page.server.ts
+  - 프로필 서버 액션: src/routes/account/profile/+page.server.ts (requestWithdrawal)
+  - CMS 배지: src/routes/cms/customers/+page.svelte, +page.server.ts
+  - CMS 상세: src/lib/components/cms/CustomerDetailPanel.svelte
+  - 타입: src/lib/types/database.ts (withdrawal_status·withdrawal_purge_at 등)
+
+✅ **현재 상태(2026-08-29)**: 마이그레이션 365~370·376(舊373, 파일명 번호충돌로 재명명)·377
+  (verify_and_update_phone REVOKE 보강) 7건 Stage(ezyvffjvuwmtuhpxdjrw)·
+  Production(vnbpmvxruyciuuaermyh) 양쪽 전부 적용·재검증 완료, TDD 24/24 GREEN. git commit만
+  Stephen 직접 실행 대기.
+
+✅ **해소 완료(2026-08-29, Stephen 지시)**: verify_and_update_phone(Migration 132 원본)의
+  실행권한에 anon이 포함돼 있던 기존 공백(Stage·Production 공통, CREATE OR REPLACE가 기존
+  ACL을 보존해 Migration #370도 그대로 물려받았던 상태)을 Migration #377로 명시적 REVOKE 후
+  authenticated만 재부여해 해소. `SignUpModal.svelte`가 이 RPC 호출 전 항상
+  `signInAnonymously()`로 authenticated 세션을 먼저 확보함을 코드로 확인 — 순수 anon 상태
+  호출 경로가 실제로 없어 REVOKE로 인한 회귀 없음(적용 후 accountWithdrawalPhone.test.ts
+  3/3 GREEN 재확인). 함수 본문(로직)은 무변경, 권한만 정정.
+```
+
+---
+
 ## GATE C 확인 항목 (front-cms 연동 변경 시)
 
 ```
@@ -413,6 +508,10 @@ approve_pending_coupon_gift(선물 채팅 카드) 분기:
     선채번하는 코드를 추가하지 않았는가?)
 [ ] sequenced 모드 쿠폰 등록 시 code 필드가 NULL이고 code_series가 채워지는가? (반대는 금지)
 [ ] approve_pending_coupon_gift가 sequenced 쿠폰에 code를 직접 노출하지 않는가? (§14)
+[ ] 탈퇴(§16) 관련 변경 시 — deleted_at을 절대 변경하지 않는가?
+    (탈퇴 신청·삭제 여부를 deleted_at이 아닌 withdrawal_status로만 판별 — CMS 목록에서 숨기지 않음)
+[ ] 탈퇴 신청 경로에서 진행중 대여(hold·confirmed·shipped·in_use·return_requested) 차단이
+    RPC 레벨에서 유지되고 있는가? 클라이언트 단독 차단으로 대체하지 않았는가?
 ```
 
 ---
@@ -451,4 +550,6 @@ GREEN. 랜딩 UX(채번내역 목록 클릭 시 이동 대상)는 Stephen 피드
 (`@resvg/resvg-js`) + `manifest.json`·`app.html` 메타태그 적용으로 iOS "홈 화면에 추가" 최소
 요건 충족(1단계 해소 완료) — iOS 홈 화면 추가 안내 UI 배너(2단계)는 여전히 별건 승인 대기.
 | 2026-08-19(같은 날 4차 후속) §15 — `IosAddToHomeScreenBanner.svelte` 신설로 2단계까지 해소
-완료(iOS+비-standalone 한정 노출, localStorage 영구 dismiss, /cms 제외) 반영.*
+완료(iOS+비-standalone 한정 노출, localStorage 영구 dismiss, /cms 제외) 반영. | 2026-08-28
+§16 신설 — 회원 자율 탈퇴 기능(TASK.md "마이페이지 회원 탈퇴('탈회') 기능 신설" 블록 참고,
+마이그레이션 365~370·373, TDD 24/24 GREEN, Stage 적용 완료·Production 미적용)*
