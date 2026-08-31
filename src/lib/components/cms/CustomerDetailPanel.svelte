@@ -438,6 +438,20 @@
     return `${Math.max(2, score)}%`
   }
 
+  // 인증분류(일반/학생/구독) — 2026-09-01 재구성. easy/pop/crazy(membership_grade)는 고객등급이
+  // 아니라 정기구독 상품 티어이므로, 실제 고객 분류는 인증 상태 기준 3종으로 별도 정의한다.
+  // 한 고객이 학생이면서 동시에 구독자일 수 있어(Stephen 확정) 복수 배지 표시 가능.
+  // /cms/customers 목록 화면(+page.svelte)의 동일 로직과 일치시킴.
+  const CLASSIFICATION_LABEL: Record<string, string> = { general: '일반', student: '학생', subscriber: '구독' }
+
+  function classificationsOf(r: CustomerRow): string[] {
+    const tags: string[] = []
+    if (r.is_student) tags.push('student')
+    if (r.membership_grade && r.membership_grade !== 'NONE') tags.push('subscriber')
+    if (tags.length === 0) tags.push('general')
+    return tags
+  }
+
   function tierLabel(tier: string): string {
     return tier.toUpperCase()
   }
@@ -930,8 +944,12 @@
           </button>
         </div>
         <div class="info-row">
-          <span class="info-label">등급</span>
-          <span class="info-val grade-badge grade-{row.membership_grade}">{row.membership_grade.toUpperCase()}</span>
+          <span class="info-label">분류</span>
+          <span class="info-val classification-badges">
+            {#each classificationsOf(row) as c}
+              <span class="grade-badge grade-{c}">{CLASSIFICATION_LABEL[c] ?? c}</span>
+            {/each}
+          </span>
         </div>
         <div class="info-row">
           <span class="info-label">포인트</span>
@@ -1927,16 +1945,22 @@
   }
   .info-val { font: var(--text-pc-body-14); color: var(--cs-text); }
 
-  /* 등급 배지 */
+  /* 배지(등급 배지 — 구독 탭 플랜 티어용 / 인증분류 배지 — 상단 "분류" 항목용, 클래스 공유) */
+  .classification-badges { display: inline-flex; gap: 4px; flex-wrap: wrap; }
   .grade-badge {
     display: inline-flex; align-items: center;
     padding: 2px 8px; border-radius: var(--radius-sm);
     font: var(--text-pc-script-12); font-weight: 700;
+    white-space: nowrap;
   }
   .grade-none  { background: var(--cs-surface-gray); color: var(--cs-text-mid); }
   .grade-easy  { background: rgba(14,165,233,0.12);  color: var(--cs-info); }
   .grade-pop   { background: rgba(59,47,138,0.10);   color: var(--cs-purple); }
   .grade-crazy { background: rgba(255,69,0,0.12);    color: var(--cs-orange); }
+  /* 인증분류(일반/학생/구독) — 위 grade-none/easy/pop/crazy(구독 탭 플랜 티어)와는 별개 */
+  .grade-general    { background: var(--cs-surface-gray); color: var(--cs-text-mid); }
+  .grade-student    { background: rgba(14,165,233,0.12);  color: var(--cs-info); }
+  .grade-subscriber { background: rgba(59,47,138,0.10);   color: var(--cs-purple); }
 
   /* 구분선 */
   .section-divider { height: 1px; background: #ECEBF4; margin: 4px 0; }

@@ -48,13 +48,18 @@ export const load: PageServerLoad = async ({ parent, url }) => {
   const serviceRoleKey = env.SUPABASE_SERVICE_ROLE_KEY
   if (!serviceRoleKey) {
     return {
-      customers: [] as CustomerRow[], totalCount: 0, search: '', grade: '', bl: null, page: 1,
+      customers: [] as CustomerRow[], totalCount: 0, search: '', classifications: [] as string[], bl: null, page: 1,
       selected: null as string | null, selectedCustomer: null as CustomerRow | null, tab: null as string | null,
     }
   }
 
   const search   = url.searchParams.get('search') ?? ''
-  const grade    = url.searchParams.get('grade')  ?? ''
+  // 인증분류(일반/학생/구독) 다중선택 필터 — 콤마 구분(예: ?classification=student,subscriber)
+  // (2026-09-01 재구성 — membership_grade는 고객등급이 아니라 구독상품 티어였음, Stephen 확인)
+  const classifications = (url.searchParams.get('classification') ?? '')
+    .split(',')
+    .map((v) => v.trim())
+    .filter(Boolean)
   const bl       = url.searchParams.get('bl')         // 'true' | 'false' | null
   const page     = Math.max(1, Number(url.searchParams.get('page') ?? '1'))
   const selected = url.searchParams.get('selected')   // 딥링크 대상 user_id — /cms/subscriptions 구독자현황 탭에서 연결
@@ -65,10 +70,10 @@ export const load: PageServerLoad = async ({ parent, url }) => {
   const [{ data, error }, selectedResult] = await Promise.all([
     admin.rpc('get_customer_list', {
       p_search:           search || null,
-      p_membership_grade: grade  || null,
       p_blacklisted:      bl === 'true' ? true : bl === 'false' ? false : null,
       p_page:             page,
       p_limit:            30,
+      p_classifications:  classifications.length > 0 ? classifications : null,
     }),
     // 딥링크 대상이 현재 페이지/필터 밖에 있을 수 있으므로 검색·페이지네이션과 무관하게 별도 조회
     selected
@@ -79,7 +84,7 @@ export const load: PageServerLoad = async ({ parent, url }) => {
   if (error) {
     console.error('[customers/load] get_customer_list error:', error)
     return {
-      customers: [] as CustomerRow[], totalCount: 0, search, grade, bl, page,
+      customers: [] as CustomerRow[], totalCount: 0, search, classifications, bl, page,
       selected, selectedCustomer: null as CustomerRow | null, tab,
     }
   }
@@ -88,7 +93,7 @@ export const load: PageServerLoad = async ({ parent, url }) => {
   const totalCount = rows[0]?.total_count ?? 0
   const selectedCustomer = ((selectedResult.data as CustomerRow[] | null)?.[0]) ?? null
 
-  return { customers: rows, totalCount, search, grade, bl, page, selected, selectedCustomer, tab }
+  return { customers: rows, totalCount, search, classifications, bl, page, selected, selectedCustomer, tab }
 }
 
 export const actions: Actions = {

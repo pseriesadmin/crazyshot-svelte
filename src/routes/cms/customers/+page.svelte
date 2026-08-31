@@ -14,13 +14,23 @@
   }
   let { data, form }: Props = $props()
 
-  const GRADES = [
-    { value: '',      label: '전체 등급' },
-    { value: 'none',  label: 'NONE' },
-    { value: 'easy',  label: 'EASY' },
-    { value: 'pop',   label: 'POP' },
-    { value: 'crazy', label: 'CRAZY' },
+  // 인증분류(일반/학생/구독) — 2026-09-01 재구성. easy/pop/crazy(membership_grade)는 고객등급이
+  // 아니라 정기구독 상품 티어이므로, 실제 고객 분류는 인증 상태 기준 3종으로 별도 정의한다.
+  // 한 고객이 학생이면서 동시에 구독자일 수 있어(Stephen 확정) 다중선택 필터 + 배지 복수표시.
+  const CLASSIFICATIONS = [
+    { value: 'general',    label: '일반' },
+    { value: 'student',    label: '학생' },
+    { value: 'subscriber', label: '구독' },
   ]
+
+  // 고객 1명이 해당하는 분류 전부 반환(복수 가능) — 일반은 학생·구독 어디에도 해당 안 될 때만
+  function classificationsOf(row: CustomerRow): string[] {
+    const tags: string[] = []
+    if (row.is_student) tags.push('student')
+    if (row.membership_grade && row.membership_grade !== 'NONE') tags.push('subscriber')
+    if (tags.length === 0) tags.push('general')
+    return tags
+  }
 
   const BL_OPTIONS = [
     { value: '',      label: '전체' },
@@ -56,15 +66,19 @@
   function applySearch() {
     const params = new URLSearchParams()
     if (searchInput.trim()) params.set('search', searchInput.trim())
-    if (data.grade) params.set('grade', data.grade)
+    if (data.classifications.length > 0) params.set('classification', data.classifications.join(','))
     if (data.bl) params.set('bl', data.bl)
     params.delete('page')
     goto(`/cms/customers?${params.toString()}`, { replaceState: true })
   }
 
-  function setGrade(val: string) {
+  // 다중선택 토글 — 이미 선택된 값이면 해제, 아니면 추가
+  function toggleClassification(val: string) {
     const params = new URLSearchParams(window.location.search)
-    if (val) params.set('grade', val); else params.delete('grade')
+    const next = data.classifications.includes(val)
+      ? data.classifications.filter((v) => v !== val)
+      : [...data.classifications, val]
+    if (next.length > 0) params.set('classification', next.join(',')); else params.delete('classification')
     params.delete('page')
     goto(`/cms/customers?${params.toString()}`, { replaceState: true })
   }
@@ -114,8 +128,8 @@
     return '100%'
   }
 
-  function gradeLabel(g: string): string {
-    return g.toUpperCase()
+  function classificationLabel(c: string): string {
+    return CLASSIFICATIONS.find((x) => x.value === c)?.label ?? c
   }
 
   function formatDate(dt: string): string {
@@ -146,12 +160,12 @@
       </div>
 
       <div class="filter-chips">
-        {#each GRADES as g}
+        {#each CLASSIFICATIONS as c}
           <button
             class="chip"
-            class:chip-active={(data.grade ?? '') === g.value}
-            onclick={() => setGrade(g.value)}
-          >{g.label}</button>
+            class:chip-active={data.classifications.includes(c.value)}
+            onclick={() => toggleClassification(c.value)}
+          >{c.label}</button>
         {/each}
       </div>
 
@@ -191,7 +205,7 @@
               <th>이메일</th>
               <th class="col-hide">회원번호</th>
               <th class="col-hide">전화번호</th>
-              <th>등급</th>
+              <th>분류</th>
               <th class="col-hide">크레이지스코어</th>
               <th class="col-hide">보증금율</th>
               <th class="col-hide">포인트</th>
@@ -226,9 +240,11 @@
                 </td>
                 <td class="col-hide">{row.phone ?? '-'}</td>
                 <td>
-                  <span class="grade-badge grade-{row.membership_grade}">
-                    {gradeLabel(row.membership_grade)}
-                  </span>
+                  <div class="classification-badges">
+                    {#each classificationsOf(row) as c}
+                      <span class="grade-badge grade-{c}">{classificationLabel(c)}</span>
+                    {/each}
+                  </div>
                 </td>
                 <td class="col-hide">
                   <span class="score-val {getScoreClass(row.credit_score)}">
@@ -353,6 +369,11 @@
   }
   .chip:hover     { background: rgba(59,47,138,0.06); }
   .chip-active    { background: var(--cs-purple-dark); color: var(--cs-white); border-color: var(--cs-purple-dark); }
+  .chip:focus-visible {
+    outline: 2px solid var(--cs-purple);
+    outline-offset: -2px;
+    border-color: var(--cs-purple);
+  }
 
   .count-badge {
     font: var(--text-pc-script-12);
@@ -484,7 +505,12 @@
   }
   .text-light { color: var(--cs-text-light); font: var(--text-pc-script-12); }
 
-  /* 등급 배지 */
+  /* 인증분류 배지(일반/학생/구독) — 한 고객이 복수 배지를 가질 수 있음(2026-09-01) */
+  .classification-badges {
+    display: inline-flex;
+    gap: 4px;
+    flex-wrap: wrap;
+  }
   .grade-badge {
     display: inline-flex;
     align-items: center;
@@ -492,12 +518,11 @@
     border-radius: var(--radius-sm);
     font: var(--text-pc-script-12);
     font-weight: 700;
+    white-space: nowrap;
   }
-  .grade-none  { background: var(--cs-surface-gray); color: var(--cs-text-mid); }
-  .grade-easy  { background: rgba(14,165,233,0.12);  color: var(--cs-info); }
-  .grade-pop   { background: rgba(59,47,138,0.10);   color: var(--cs-purple); }
-  .grade-crazy { background: rgba(255,69,0,0.12);    color: var(--cs-orange); }
-  .grade-admin { background: var(--cs-lilac);        color: var(--cs-purple-dark); }
+  .grade-general    { background: var(--cs-surface-gray); color: var(--cs-text-mid); }
+  .grade-student    { background: rgba(14,165,233,0.12);  color: var(--cs-info); }
+  .grade-subscriber { background: rgba(59,47,138,0.10);   color: var(--cs-purple); }
 
   /* 스코어 */
   .score-val { font-weight: 700; }

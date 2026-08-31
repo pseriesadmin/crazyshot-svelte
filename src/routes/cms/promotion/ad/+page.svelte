@@ -9,11 +9,13 @@
   import CmsStatRing from '$lib/components/cms/CmsStatRing.svelte'
   import CmsStatBars from '$lib/components/cms/CmsStatBars.svelte'
 
+  // mid_banner_pc/mid_banner_mobile 제거(2026-09-01, CMS 전역 정밀 검증 v5) — front가 hero_pc/
+  // hero_mobile 슬롯만 조회·렌더링해 두 슬롯을 등록해도 고객에게 절대 노출되지 않는 죽은 옵션이었음
+  // (렌더링 위치 미확정 — Stephen 확인 전까지 등록 자체를 차단). 기존에 이미 등록된 배너가 있다면
+  // 목록 탭·대시보드에는 slotLabel() 폴백으로 계속 표시되며, 이 배열 축소는 신규 등록만 제한한다.
   const SLOTS = [
-    { key: 'hero_pc',           label: 'PC 히어로 슬라이드' },
-    { key: 'hero_mobile',       label: '모바일 히어로 슬라이드' },
-    { key: 'mid_banner_pc',     label: 'PC 중간 배너' },
-    { key: 'mid_banner_mobile', label: '모바일 중간 배너' },
+    { key: 'hero_pc',     label: 'PC 히어로 슬라이드' },
+    { key: 'hero_mobile', label: '모바일 히어로 슬라이드' },
   ]
 
   interface Props { data: PageData; form: ActionData }
