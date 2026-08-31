@@ -79,6 +79,12 @@ const CUSTOMER_LIFECYCLE_PUSH_COPY: Record<string, { title: string; body: (produ
     title: '수령 위치를 등록해 주세요',
     body: (p) => `${p} 두발히어로 배송이 접수됐어요. 채팅에서 수령 위치를 등록해 주세요.`,
   },
+  // RSV-B-B4 추가(2026-08-31): 운송장 번호 발송 알림. 채팅카드(send_rental_chat_notification
+  // 'tracking_notify' CASE)와 쌍을 이루는 브라우저 푸시 — service-operations.md §15 동기화 원칙.
+  tracking_notify: {
+    title: '운송장 번호가 등록됐어요',
+    body: (p) => `${p} 운송장 번호가 등록됐어요. 채팅에서 배송 정보를 확인해주세요.`,
+  },
 }
 
 const CHUNK_SIZE = 500

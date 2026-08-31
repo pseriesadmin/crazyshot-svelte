@@ -6,6 +6,7 @@ import type { RequestHandler } from './$types'
 import { getCmsRoleForAction } from '$lib/server/getCmsRoleForAction'
 import { hasSettingsAccess } from '$lib/utils/cmsPermissions'
 import { isCanvasDocument, hasSignatureField, isSpreadsheetDocument } from '$lib/types/contract-document'
+import { isContractIssueBlocked } from '$lib/utils/contractIssueGuard'
 
 export const GET: RequestHandler = async ({ params, locals, url }) => {
   const cmsRole = await getCmsRoleForAction(locals)
@@ -80,6 +81,35 @@ export const PATCH: RequestHandler = async ({ params, locals, request }) => {
     body = await request.json() as typeof body
   } catch {
     return json({ error: '잘못된 요청 형식입니다.' }, { status: 400 })
+  }
+
+  // RSV-C-C3: 서명 완료된 계약서는 콘텐츠 편집 차단
+  // (clearIssuedContractHelper.clearIssuedContractContent()와 동일 원칙 — 일관된 서버 가드)
+  const { data: signingCheck } = await admin
+    .from('contract_signings')
+    .select('signed_at')
+    .eq('contract_id', contractId)
+    .maybeSingle()
+  if ((signingCheck as { signed_at: string | null } | null)?.signed_at) {
+    return json({ error: '서명이 완료된 계약서는 내용을 수정할 수 없습니다.' }, { status: 400 })
+  }
+
+  // RSV-C-B2: 취소·만료된 예약의 계약서 편집 차단
+  // (isContractIssueBlocked — send-chat과 동일 정책 적용)
+  const { data: contractForStatus } = await admin
+    .from('contracts')
+    .select('reservation_id')
+    .eq('id', contractId)
+    .maybeSingle()
+  if (contractForStatus?.reservation_id != null) {
+    const { data: rvStatus } = await admin
+      .from('rental_reservations')
+      .select('status')
+      .eq('id', contractForStatus.reservation_id)
+      .maybeSingle()
+    if (isContractIssueBlocked(rvStatus?.status)) {
+      return json({ error: '취소되었거나 만료된 예약의 계약서는 수정할 수 없습니다.' }, { status: 422 })
+    }
   }
 
   const updatePayload: Record<string, unknown> = {

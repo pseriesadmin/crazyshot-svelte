@@ -14,9 +14,12 @@
    */
 
   import { onMount, onDestroy } from 'svelte'
+  import * as XLSX from 'xlsx'
   import {
     sheetToWorksheetConfig,
     worksheetConfigToSheet,
+    cssToFormatting,
+    computeUniformStyleCorrections,
     type JssWorksheetInstance,
   } from './spreadsheetWidgetAdapter'
   import type { SpreadsheetDocument, SpreadsheetSheet } from '$lib/types/contract-document'
@@ -110,6 +113,10 @@
   let spreadsheetParent: JssSpreadsheetParent | null = null
   /** onDestroy 정리 함수 */
   let destroyFn: (() => void) | null = null
+  /** 테두리 색상 팔레트 backdrop 클릭 가로채기 보정용 리스너 정리 함수 (2026-08-30) */
+  let borderPaletteFixCleanup: (() => void) | null = null
+  /** 테두리 패턴(사방/외곽/...지우기) 네이티브 결함 우회용 리스너 정리 함수 (2026-08-31) */
+  let borderPatternFixCleanup: (() => void) | null = null
   /**
    * 마지막으로 선택이 발생한 워크시트 인스턴스 + 그 좌표 캐시. 변수 칩 버튼(그리드 바깥 DOM)
    * 클릭 시 그리드가 blur되며 jspreadsheet-ce의 실시간 getSelection()이 선택 정보를 잃을
@@ -159,6 +166,12 @@
    * 순수 클로저 변수(비반응성) — 버튼 클릭 시 현재 값을 한 번만 읽으면 충분하다.
    */
   let lastSelectedRowRange: { y1: number; y2: number } | null = null
+
+  /**
+   * onselection에서 마지막으로 캡처한 열 범위 — insertTextAtSelection()이 다중 셀 선택
+   * 전체에 변수를 반영할 때 사용(2026-08-30 신설, 아래 resolveActiveRange() 참고).
+   */
+  let lastSelectedColRange: { x1: number; x2: number } | null = null
 
   /**
    * 각 시트의 실제 <table> 엘리먼트 참조 — onMount setTimeout 내에서 wsInstances로부터 추출.
@@ -384,6 +397,66 @@
         img.addEventListener('error', proceedWhenReady)
       }
     })
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────────
+  // 문서 미리보기 (2026-08-31) — 실제 출력(A4) 크기로 모달 안에 렌더링
+  //
+  // A4 출력(printAsA4)과 동일한 렌더링 파이프라인(renderSpreadsheetToHtml + PRINT_CSS)을
+  // 재사용해 새 창 인쇄 대신 모달 iframe에 그대로 표시한다 — 서명/직인 이미지·셀 테두리는
+  // 이미 그 파이프라인이 그대로 그려주므로 별도 처리 불필요.
+  // 다만 이 화면은 실제 예약 데이터 없이 "양식 자체"만 보는 화면이라 {{변수명}} 원문
+  // 토큰을 그대로 노출하면 혼란스럽다 — 미리보기 전용으로 빈 문자열 치환한 사본을 만들어
+  // 렌더링한다(원본 문서·저장 데이터는 전혀 건드리지 않음). 서명/직인 오버레이 마커
+  // (`cs-image://...`, sheet-format.ts)는 중괄호를 쓰지 않는 별도 문법이라 이 치환의
+  // 영향을 받지 않는다 — 셀 텍스트 뒤에 이어붙는 접미사이므로 텍스트 부분만 걸러지고
+  // 마커는 그대로 보존된다.
+  // ─────────────────────────────────────────────────────────────────────────────
+
+  let showPreview        = $state(false)
+  let previewHtml         = $state('')
+  let previewIframeEl: HTMLIFrameElement | null = $state(null)
+
+  function blankVariablesForPreview(doc: SpreadsheetDocument): SpreadsheetDocument {
+    return {
+      ...doc,
+      sheets: doc.sheets.map((sheet) => ({
+        ...sheet,
+        rows: sheet.rows.map((row) => row.map((cell) => cell.replace(/\{\{([^}]+)\}\}/g, ''))),
+      })),
+    }
+  }
+
+  function openPreview(): void {
+    const doc = getSpreadsheetDocument()
+    const blanked = blankVariablesForPreview(doc)
+    const bodyHtml = renderSpreadsheetToHtml(blanked)
+
+    // ⛔ printAsA4()와 동일한 이유로 문자열 결합으로 스타일 태그 마크업을 만들지 않는다 —
+    // Svelte 컴파일러가 script 블록을 스캔하다 문자열 리터럴(주석 포함) 안에 우연히 포함된
+    // 스타일 태그 여는/닫는 토큰을 실제 최상위 스타일 블록 시작으로 오인해 CSS 파싱 오류를
+    // 낸다(위 printAsA4 주석 참고, 2026-08-16 최초 발견). DOM API로 구성 후 outerHTML로
+    // 직렬화해 srcdoc에 넘긴다.
+    const htmlDoc = document.implementation.createHTMLDocument('문서 미리보기')
+    const styleEl = htmlDoc.createElement('style')
+    styleEl.textContent = PRINT_CSS
+    htmlDoc.head.appendChild(styleEl)
+    htmlDoc.body.innerHTML = bodyHtml
+    previewHtml = htmlDoc.documentElement.outerHTML
+
+    showPreview = true
+  }
+
+  function closePreview(): void {
+    showPreview = false
+  }
+
+  /** iframe 로드 완료 후 내부 문서 실제 높이만큼 iframe 자체 높이를 맞춘다(내부 이중스크롤 방지). */
+  function onPreviewIframeLoad(): void {
+    if (!previewIframeEl) return
+    const doc = previewIframeEl.contentDocument
+    if (!doc) return
+    previewIframeEl.style.height = `${doc.documentElement.scrollHeight}px`
   }
 
   // ─────────────────────────────────────────────────────────────────────────────
@@ -765,20 +838,71 @@
   }
 
   /**
-   * 현재 활성 시트의 선택된 셀(좌상단)에 텍스트를 삽입한다(기존 값 뒤에 이어붙임).
-   * ContractFieldPanel의 변수 칩 클릭 → {{변수명}} 삽입에 사용(V2, 2026-08-16).
+   * resolveActiveCell()과 동일한 폴백 원칙(실시간 getSelection() 우선, blur 시
+   * onselection 캐시로 폴백)이지만 좌상단 한 셀이 아니라 **드래그 선택 범위 전체**
+   * (x1,y1)~(x2,y2)를 반환한다 — insertTextAtSelection()이 다중 셀 선택에 변수를
+   * 동일하게 반영하는 데 사용(2026-08-30 신설).
+   */
+  function resolveActiveRange(): {
+    ws: JssWorksheetInstance
+    x1: number; y1: number; x2: number; y2: number
+  } | null {
+    if (!spreadsheetParent) return null
+    const activeIndex = spreadsheetParent.getWorksheetActive()
+    const ws = spreadsheetParent.worksheets[activeIndex]
+    if (!isWorksheetLike(ws)) return null
+
+    const selection = ws.getSelection()
+    let x1: number | undefined, y1: number | undefined
+    let x2: number | undefined, y2: number | undefined
+    if (Array.isArray(selection) && selection.length >= 4 &&
+        typeof selection[0] === 'number' && typeof selection[1] === 'number' &&
+        typeof selection[2] === 'number' && typeof selection[3] === 'number' &&
+        selection[0] >= 0 && selection[1] >= 0) {
+      [x1, y1, x2, y2] = selection
+    } else if (lastSelectedWs === ws && lastSelectedColRange && lastSelectedRowRange) {
+      x1 = lastSelectedColRange.x1
+      y1 = lastSelectedRowRange.y1
+      x2 = lastSelectedColRange.x2
+      y2 = lastSelectedRowRange.y2
+    }
+    if (x1 === undefined || y1 === undefined || x2 === undefined || y2 === undefined) return null
+    return {
+      ws,
+      x1: Math.min(x1, x2), y1: Math.min(y1, y2),
+      x2: Math.max(x1, x2), y2: Math.max(y1, y2),
+    }
+  }
+
+  /**
+   * 현재 활성 시트의 선택 범위(드래그로 여러 셀을 선택했다면 그 전체)에 동일한 텍스트를
+   * 삽입한다(각 셀의 기존 값 뒤에 이어붙임). ContractFieldPanel의 변수 칩 클릭 →
+   * {{변수명}} 삽입에 사용(V2, 2026-08-16).
+   *
+   * ⛔ 2026-08-30 발견·수정 — 그동안 좌상단 셀 하나에만 삽입됐다(resolveActiveCell()이
+   * 선택 범위의 시작 좌표만 반환). "여러 셀을 선택한 뒤 변수 칩을 누르면 선택한 셀 전부에
+   * 동일하게 반영돼야 한다"는 기존 요청(TASK.md 2026-08-28 GATE B 아젠다 인용문)이 실제로는
+   * 이 단일 셀 삽입 지점에서 전혀 구현되지 않은 채 남아있었다 — Stephen 재확인으로 발견.
+   * resolveActiveRange()로 선택 범위 전체를 얻어 그 안의 모든 셀에 동일하게 삽입한다
+   * (병합으로 가려진 비-anchor 셀도 다른 다중 셀 툴들과 동일하게 별도 예외 처리 없이
+   * setValueFromCoords를 그대로 호출 — jspreadsheet-ce가 내부적으로 안전하게 처리).
+   *
    * jspreadsheet-ce는 "커서 위치" 개념이 없어 TipTap의 insertMergeField와 달리
-   * "현재 선택된 셀 전체"를 대상으로 한다 — 텍스트 셀 안 특정 위치 삽입은 지원하지 않음.
+   * "선택된 셀 전체"를 대상으로 한다 — 텍스트 셀 안 특정 위치 삽입은 지원하지 않음.
    * 위젯 미초기화 또는 선택 정보를 읽을 수 없으면 false를 반환하고 아무 것도 하지 않는다.
    */
   export function insertTextAtSelection(text: string): boolean {
-    const target = resolveActiveCell()
-    if (!target) return false
-    const { ws, x, y } = target
+    const range = resolveActiveRange()
+    if (!range) return false
+    const { ws, x1, y1, x2, y2 } = range
 
-    const current = ws.getValueFromCoords(x, y)
-    const currentText = current == null ? '' : String(current)
-    ws.setValueFromCoords(x, y, currentText + text)
+    for (let y = y1; y <= y2; y++) {
+      for (let x = x1; x <= x2; x++) {
+        const current = ws.getValueFromCoords(x, y)
+        const currentText = current == null ? '' : String(current)
+        ws.setValueFromCoords(x, y, currentText + text)
+      }
+    }
     return true
   }
 
@@ -809,11 +933,299 @@
   }
 
   // ─────────────────────────────────────────────────────────────────────────────
+  // 다중 셀 선택 테두리 툴 — 내부 경계 불일치 보정 (2026-08-29)
+  // ─────────────────────────────────────────────────────────────────────────────
+
+  /**
+   * jspreadsheet-ce 네이티브 테두리 툴바는 `border-collapse: separate`(이 위젯의 실제 표
+   * 렌더링 방식 — 실측 확인) 환경에서, 2개 이상의 셀을 한번에 선택해 사방(border_all) 등의
+   * 패턴을 적용하면 선택 범위 "내부"(인접한 두 선택 셀이 맞닿는 경계)의 두께·스타일·색상을
+   * 항상 양쪽 셀 모두에 정확히 반영하지 않는다 — 실사용 브라우저 자동화로 직접 확인된
+   * 라이브러리 자체의 동작:
+   *   세로 방향(여러 행 선택): 매 셀의 "위쪽" 변은 항상 새 값으로 정확히 갱신되지만,
+   *     "아래쪽" 변은 그 선택의 맨 아래 셀에서만 새 값이 반영되고 중간 셀들은 예전 값
+   *     그대로 남는다(예: 4행 선택 시 1·4행은 사방 전부 새 값, 2·3행은 위·좌·우만 새 값이고
+   *     아래쪽만 예전 값) — border-collapse:separate라 두 셀의 경계가 병합되지 않으므로
+   *     실제 화면에 "가는 예전 선 바로 옆에 굵은 새 선"이 겹쳐 보이는 이중선 결함으로
+   *     나타난다. 가로 방향(여러 열 선택)도 동일한 구조적 원인으로 대칭적인 문제가
+   *     발생할 수 있다고 보고 좌/우 방향도 동일하게 보정한다.
+   *
+   * 어느 테두리 패턴(사방/외곽/안쪽/가로/세로/한쪽 등)이 적용됐는지는 이 함수가 알 필요가
+   * 없다 — jspreadsheet가 이번 조작으로 실제로 건드린 셀 목록(onchangestyle의 `changes`
+   * 인자)만 보고, 그 안에서 세로로 맞닿은 두 셀·가로로 맞닿은 두 셀 쌍마다 "아래(오른쪽)
+   * 셀의 위(왼쪽) 변" 값을 신뢰할 수 있는 새 값으로 간주해 "위(왼쪽) 셀의 아래(오른쪽) 변"에
+   * 그대로 강제 반영한다 — 두 변이 이미 같으면 아무 것도 하지 않는다(불필요한 재적용으로
+   * 인한 무한 이벤트 루프 방지, setStyle은 값이 같으면 스스로도 no-op이지만 이중 방어).
+   * 테두리 관련이 아닌 일반 셀 서식(배경색 등) 변경 시에도 매번 호출되지만, borderTop/Left가
+   * 없는 changes에는 아무 영향이 없다(안전한 idempotent 연산).
+   */
+  function normalizeMultiCellBorderEdges(
+    ws: JssWorksheetInstance,
+    changes: Record<string, string>,
+  ): void {
+    const addrs = Object.keys(changes)
+    if (addrs.length < 2) return // 단일 셀 변경은 내부 경계 자체가 없음
+
+    const coordOf = new Map<string, { r: number; c: number }>()
+    for (const addr of addrs) {
+      try {
+        coordOf.set(addr, XLSX.utils.decode_cell(addr))
+      } catch {
+        // 셀 주소가 아닌 키(라이브러리 내부 예약 키 등)는 무시
+      }
+    }
+    const addrAtCoord = new Map<string, string>()
+    for (const [addr, { r, c }] of coordOf) addrAtCoord.set(`${c},${r}`, addr)
+
+    const styleCache = new Map<string, string>()
+    const getCellCss = (addr: string): string => {
+      let css = styleCache.get(addr)
+      if (css === undefined) {
+        const raw = ws.getStyle(addr)
+        css = typeof raw === 'string' ? raw : ''
+        styleCache.set(addr, css)
+      }
+      return css
+    }
+
+    for (const [addr, { r, c }] of coordOf) {
+      const belowAddr = addrAtCoord.get(`${c},${r + 1}`)
+      if (belowAddr) {
+        const belowTop = cssToFormatting(getCellCss(belowAddr)).borderTop
+        const curBottom = cssToFormatting(getCellCss(addr)).borderBottom
+        if (belowTop && belowTop !== curBottom) {
+          ws.setStyle(addr, 'border-bottom', belowTop, true)
+          styleCache.delete(addr)
+        }
+      }
+      const rightAddr = addrAtCoord.get(`${c + 1},${r}`)
+      if (rightAddr) {
+        const rightLeft = cssToFormatting(getCellCss(rightAddr)).borderLeft
+        const curRight = cssToFormatting(getCellCss(addr)).borderRight
+        if (rightLeft && rightLeft !== curRight) {
+          ws.setStyle(addr, 'border-right', rightLeft, true)
+          styleCache.delete(addr)
+        }
+      }
+    }
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────────
+  // 다중 셀 선택 서식 툴 — 값 일치 셀 삭제(clear-on-match) 결함 보정 (2026-08-30)
+  // ─────────────────────────────────────────────────────────────────────────────
+
+  /**
+   * 굵게·글자색·배경색·글꼴·글꼴크기·정렬·세로정렬 7개 네이티브 툴바 항목은 선택된 모든
+   * 셀에 동일한 값을 한 번에 broadcast하면서 jspreadsheet-ce의 setStyle()에 force를 넘기지
+   * 않는다 — 그 결과 "이미 그 값을 갖고 있던 셀"만 오히려 지워지고 나머지만 새로 적용되는
+   * 결함으로 이어진다(spreadsheetWidgetAdapter.ts의 computeUniformStyleCorrections() 상단
+   * 주석 참고 — 근본 원인은 위 normalizeMultiCellBorderEdges()가 이미 문서화한
+   * JssWorksheetInstance.setStyle의 "force 없으면 값이 같을 때 지워버림" 동작과 동일한
+   * 메커니즘. 실 브라우저 자동화로 직접 재현: 4셀 중 1셀만 이미 굵게인 상태에서 4셀 전체
+   * 선택 후 굵게 클릭 → 그 1셀만 굵게가 풀리고 나머지 3셀만 새로 굵게 적용됨).
+   *
+   * computeUniformStyleCorrections()(순수 함수, spreadsheetWidgetAdapter.ts)가 이번 배치의
+   * changes를 분석해 보정이 필요한 (주소, 속성, 값) 목록을 계산하면, 여기서는 그 결과를
+   * 받아 실제 ws.setStyle() 호출(부수효과)만 수행한다.
+   */
+  function normalizeMultiCellUniformStyle(
+    ws: JssWorksheetInstance,
+    changes: Record<string, string>,
+  ): void {
+    const corrections = computeUniformStyleCorrections(changes)
+    for (const { addr, key, value } of corrections) {
+      ws.setStyle(addr, key, value, true)
+    }
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────────
+  // 테두리 색상 팔레트 backdrop이 패턴 버튼 클릭을 가로채는 결함 보정 (2026-08-30)
+  // ─────────────────────────────────────────────────────────────────────────────
+
+  /**
+   * jspreadsheet-ce 네이티브 테두리 툴바 드롭다운은 사방/외곽 등 10개 패턴 버튼과 색상
+   * 팔레트(`.jcolor`)가 같은 드롭다운 박스 안에 함께 들어있다. 팔레트를 열어 색을 고른 뒤
+   * "Done"(`.jcolor-close`)을 누르지 않고 바로 패턴 버튼을 클릭하면, 팔레트의 전체화면
+   * 오버레이(`.jcolor-backdrop`)가 그 자리를 덮고 있어 클릭이 패턴 버튼이 아니라 backdrop에
+   * 떨어진다 — 실측 확인(document.elementFromPoint가 패턴 버튼이 아닌 `.jcolor-backdrop`을
+   * 반환). backdrop 자신은 클릭해도 아무 동작이 없어(직접 확인 — 팔레트가 닫히지도 않음)
+   * 사용자 입장에서는 "패턴 버튼을 눌러도 화면이 전혀 안 바뀐다"로 보인다(Stephen 실사용
+   * 재현 — "선 첫 반영은 되지만 수정이 반영 안 됨").
+   *
+   * 컨테이너에 캡처링 단계(capture:true) mousedown 리스너를 달아, 클릭 대상이
+   * `.jcolor-backdrop`이면: (1) 그 클릭이 실제로는 backdrop 뒤에 가려진 패턴 버튼
+   * (`.jpicker-item`) 위치였는지 좌표로 확인하고, (2) 맞으면 원래 이벤트를 막은 뒤 팔레트를
+   * "Done"으로 먼저 닫고, (3) 그 직후 원래 사용자가 누르려던 패턴 버튼을 대신 클릭해준다 —
+   * "색만 고르고 바로 패턴 버튼을 눌러도 자동으로 팔레트를 닫고 이어서 패턴이 적용"되도록
+   * 만든다. jspreadsheet-ce 라이브러리 내부 코드는 건드리지 않고 이벤트 리스너로만 감싼다.
+   */
+  function setupBorderPaletteClickFix(container: HTMLElement): () => void {
+    const handler = (e: MouseEvent) => {
+      const target = e.target
+      if (!(target instanceof Element)) return
+      const backdrop = target.closest('.jcolor-backdrop')
+      if (!backdrop) return
+
+      // backdrop에 가려진 실제 대상 탐색 — backdrop을 잠시 통과시켜(pointer-events:none)
+      // 같은 좌표의 진짜 요소를 확인한다.
+      const prevPointerEvents = (backdrop as HTMLElement).style.pointerEvents
+      ;(backdrop as HTMLElement).style.pointerEvents = 'none'
+      const behind = document.elementFromPoint(e.clientX, e.clientY)
+      ;(backdrop as HTMLElement).style.pointerEvents = prevPointerEvents
+
+      const patternBtn = behind?.closest('.jpicker-item') as HTMLElement | null
+      if (!patternBtn) return // 패턴 버튼이 아니면(팔레트 자체를 닫으려는 의도 등) 그대로 둠
+
+      e.preventDefault()
+      e.stopPropagation()
+
+      const doneBtn = backdrop.parentElement?.querySelector('.jcolor-close') as HTMLElement | null
+      doneBtn?.click()
+
+      // Done 처리로 팔레트가 사라진 뒤(다음 프레임) 원래 누르려던 패턴 버튼을 대신 클릭
+      requestAnimationFrame(() => {
+        patternBtn.click()
+      })
+    }
+    container.addEventListener('mousedown', handler, { capture: true })
+    return () => container.removeEventListener('mousedown', handler, { capture: true })
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────────
+  // 테두리 패턴 버튼(사방/외곽/...지우기) 네이티브 로직 결함 — 자체 구현으로 대체 (2026-08-31)
+  // ─────────────────────────────────────────────────────────────────────────────
+
+  /**
+   * jspreadsheet-ce 네이티브 테두리 패턴 onchange(node_modules/jspreadsheet-ce/dist/index.js
+   * 직접 추적, Stephen "일부 면만 적용됨" 재현으로 발견)에는 두 가지 결함이 있다:
+   *
+   * ① 선택 영역 안에 병합 셀이 2개 이상 있으면, 선택 영역의 "맨 왼쪽 위" 셀 결과가
+   *    이후 병합 셀을 순회하며 잘못 덮어써진다 — 원본 알고리즘은 각 병합 셀을 만날
+   *    때마다 `h(getCellNameFromCoords(선택영역 좌상단), 그 병합셀의 col, row)`를
+   *    추가로 호출해, "좌상단 셀의 border 계산"을 "그 병합셀 자신의 위치 기준"으로
+   *    엉뚱하게 재계산해 덮어쓴다. 라이브 재현: 3개 병합 셀(각 1행)을 세로로 선택해
+   *    "외곽선"을 적용하면 맨 위 셀의 위쪽 테두리가 새 값으로 전혀 안 바뀌고 원래
+   *    값 그대로 남는다(왼쪽/오른쪽은 정상 반영됨).
+   * ② "지우기"(border_clear) 패턴은 onchange의 판정 로직 어디에도 매칭되는 조건이
+   *    없다 — 그 결과 셀 개수·병합 여부와 무관하게 항상 완전히 무동작이다(라이브
+   *    재현 — 단일 셀에 지우기를 클릭해도 기존 테두리가 그대로 남음).
+   *
+   * 라이브러리 코드는 수정할 수 없으므로, 패턴 버튼 클릭을 캡처링 단계에서 가로채
+   * 네이티브 onchange를 아예 실행시키지 않고 이 함수가 대신 처리한다. 병합 셀 개수로
+   * 조건부 분기하지 않고 모든 패턴 클릭을 항상 이 경로로 처리한다 — native/자체구현
+   * 두 경로를 병존시키면 코드가 갈라져 회귀 위험만 커진다(이미 단일 셀·병합無 다중
+   * 셀 선택 모두 네이티브와 동일한 결과를 내도록 검증 완료). 두께/선스타일/색상은
+   * 같은 드롭다운 안의 서브 피커(jSuites.picker/jSuites.color) DOM이 항상 현재 선택값을
+   * 그대로 반영해 렌더링하므로(내부 상태 클로저에 직접 접근할 필요 없음) 거기서 읽는다.
+   * setStyle()을 그대로 호출하므로 jspreadsheet-ce 자체의 onchangestyle 훅(→
+   * normalizeMultiCellBorderEdges 등)은 기존과 동일하게 이어서 정상 동작한다.
+   */
+  const BORDER_PATTERN_ICONS = new Set([
+    'border_all', 'border_outer', 'border_inner', 'border_horizontal', 'border_vertical',
+    'border_left', 'border_top', 'border_right', 'border_bottom', 'border_clear',
+  ])
+
+  function shouldSetBorderSide(
+    side: 'top' | 'right' | 'bottom' | 'left',
+    pattern: string,
+    colIdx: number,
+    rowIdx: number,
+    minCol: number,
+    minRow: number,
+    maxCol: number,
+    maxRow: number,
+  ): boolean {
+    if (pattern === 'border_clear') return true
+    switch (side) {
+      case 'top':
+        return (
+          (['border_top', 'border_outer'].includes(pattern) && rowIdx === minRow) ||
+          (['border_inner', 'border_horizontal'].includes(pattern) && rowIdx > minRow) ||
+          pattern === 'border_all'
+        )
+      case 'left':
+        return (
+          (['border_left', 'border_outer'].includes(pattern) && colIdx === minCol) ||
+          (['border_inner', 'border_vertical'].includes(pattern) && colIdx > minCol) ||
+          pattern === 'border_all'
+        )
+      case 'right':
+        return ['border_all', 'border_right', 'border_outer'].includes(pattern) && colIdx === maxCol
+      case 'bottom':
+        return ['border_all', 'border_bottom', 'border_outer'].includes(pattern) && rowIdx === maxRow
+    }
+  }
+
+  function setupBorderPatternFix(container: HTMLElement): () => void {
+    const handler = (e: MouseEvent) => {
+      const target = e.target
+      if (!(target instanceof Element)) return
+      const patternBtn = target.closest('.jpicker-item') as HTMLElement | null
+      if (!patternBtn) return
+      const icon = patternBtn.querySelector(':scope > i.material-icons')
+      const pattern = icon?.textContent?.trim() ?? ''
+      // 두께(1~5)·선스타일(실선/점선/파선/이중선) 서브 피커 항목도 .jpicker-item을
+      // 공유하므로, 테두리 패턴 10개 아이콘일 때만 가로챈다.
+      if (!BORDER_PATTERN_ICONS.has(pattern)) return
+
+      if (!spreadsheetParent) return
+      const activeIndex = spreadsheetParent.getWorksheetActive()
+      const ws = spreadsheetParent.worksheets[activeIndex]
+      if (!isWorksheetLike(ws)) return
+      const selection = ws.getSelection()
+      if (!Array.isArray(selection) || selection.length < 4) return
+
+      e.preventDefault()
+      e.stopPropagation()
+
+      const dropdown = patternBtn.closest('.jpicker-columns')
+      const subPickers = dropdown?.querySelectorAll(':scope .jpicker') ?? []
+      const thicknessHeader = subPickers[0]?.querySelector('.jpicker-header')
+      const styleHeader = subPickers[1]?.querySelector('.jpicker-header')
+      const colorIcon = dropdown
+        ? (Array.from(dropdown.querySelectorAll('i.material-icons')).find(
+            (i) => i.textContent === 'color_lens',
+          ) as HTMLElement | undefined)
+        : undefined
+
+      const thicknessMatch = thicknessHeader?.innerHTML.match(/height:\s*(\d+)px/)
+      let thickness = thicknessMatch ? parseInt(thicknessMatch[1], 10) : 1
+      const styleMatch = styleHeader?.innerHTML.match(/border-top:\s*\d+px\s+(\w+)/)
+      const lineStyle = styleMatch ? styleMatch[1] : 'solid'
+      if (lineStyle === 'double') thickness += 2
+      const color = colorIcon?.style.color || 'black'
+
+      const [x1, y1, x2, y2] = selection
+      const minCol = Math.min(x1, x2)
+      const maxCol = Math.max(x1, x2)
+      const minRow = Math.min(y1, y2)
+      const maxRow = Math.max(y1, y2)
+
+      const sides: Array<'top' | 'right' | 'bottom' | 'left'> = ['top', 'right', 'bottom', 'left']
+      for (let rowIdx = minRow; rowIdx <= maxRow; rowIdx++) {
+        for (let colIdx = minCol; colIdx <= maxCol; colIdx++) {
+          const addr = XLSX.utils.encode_cell({ r: rowIdx, c: colIdx })
+          for (const side of sides) {
+            if (!shouldSetBorderSide(side, pattern, colIdx, rowIdx, minCol, minRow, maxCol, maxRow)) continue
+            const value = pattern === 'border_clear' ? 'none' : `${thickness}px ${lineStyle} ${color}`
+            ws.setStyle(addr, `border-${side}`, value, true)
+          }
+        }
+      }
+    }
+    container.addEventListener('mousedown', handler, { capture: true })
+    return () => container.removeEventListener('mousedown', handler, { capture: true })
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────────
   // 초기화 (onMount — SSR 번들에서 완전히 격리)
   // ─────────────────────────────────────────────────────────────────────────────
 
   onMount(async () => {
     if (!containerEl) return
+
+    borderPaletteFixCleanup = setupBorderPaletteClickFix(containerEl)
+    borderPatternFixCleanup = setupBorderPatternFix(containerEl)
 
     try {
       // CSS 먼저 주입 (jsuites → jspreadsheet 순서 중요)
@@ -836,6 +1248,12 @@
           ...config,
           // 모든 컬럼에 이미지 셀 렌더링 훅 부여 — 어느 셀이든 서명/직인 삽입 대상이 될 수 있음
           columns: config.columns.map((col) => ({ ...col, render: renderCellValue })),
+          // ⚠️ 2026-08-30 추가 — jspreadsheet-ce는 셀 편집 중 Alt+Enter로 줄바꿈을 넣어주는
+          // 기능이 있지만, 소스 확인 결과 wordWrap 옵션(전역 또는 열별)이 켜져 있거나 그 셀의
+          // 기존 값이 200자를 넘는 경우에만 동작한다(그 외엔 그냥 Enter처럼 편집을 종료해버림).
+          // WorksheetOptions 소속이라 여기(각 시트 설정)에 둬야 적용된다 — 짧은 셀에서도
+          // Alt+Enter가 항상 작동하도록 시트별로 켠다.
+          wordWrap: true,
         }
       })
 
@@ -907,7 +1325,25 @@
         // 부모에 전달하면 충분하다.
         // ─────────────────────────────────────────────────────────────────────
         onafterchanges: () => notifyChange(),
-        onchangestyle: () => notifyChange(),
+        // ⛔ 2026-08-29 발견 — jspreadsheet-ce는 생성자가 초기 options.style(저장된 전체
+        // 서식)을 일괄 적용할 때도 이 콜백을 그대로 재사용한다(다른 이벤트들과 마찬가지로
+        // "사용자 편집"과 "최초 로드" 구분이 없음). normalizeMultiCellBorderEdges는 라이브
+        // 툴바 조작(선택 범위가 작음, 몇~수십 셀) 대상으로 설계됐는데, 로드 시점에는
+        // `changes`에 시트 전체의 기존 테두리 셀 수백 개가 한 번에 들어온다 — 이미 DB에서
+        // 정확하게 불러온(둘 다 올바른) 인접 셀 쌍까지 함께 훑으면서 강제 재적용하다 보니
+        // 실사용 브라우저 자동화로 직접 확인된 오염이 발생: 저장 시점엔 4변 모두 동일했던
+        // 값이 재오픈 후 화면엔 위/왼쪽만 새 값이고 아래/오른쪽은 예전 값으로 보이는(즉 로드
+        // 자체가 값을 깨뜨리는) 현상으로 이어졌다. skipChangeTracking(위 951행 — 생성자 호출
+        // 구간 동안 true, 완료 후 false로 해제되는 동일한 가드)이 정확히 "지금이 최초 로드냐
+        // 실제 사용자 조작이냐"를 구분하는 신호이므로, 정규화도 notifyChange와 동일하게 이
+        // 가드로 감싸 최초 로드 구간에는 절대 실행되지 않도록 한다.
+        onchangestyle: (instance: unknown, changes: Record<string, string>) => {
+          if (!skipChangeTracking && isWorksheetLike(instance)) {
+            normalizeMultiCellBorderEdges(instance, changes)
+            normalizeMultiCellUniformStyle(instance, changes)
+          }
+          notifyChange()
+        },
         onresizecolumn: () => notifyChange(),
         onresizerow: () => notifyChange(),
         onmerge: () => notifyChange(),
@@ -921,14 +1357,16 @@
         onundo: () => notifyChange(),
         onredo: () => notifyChange(),
         onsort: () => notifyChange(),
-        // ⚠️ y2는 jspreadsheet-ce가 실제로 전달하는 4번째 인자 — .d.ts 타입선언에는 없지만
-        // 런타임에서 항상 제공된다(드래그 선택의 끝 행). 반복 영역 행 범위 캡처에 필요.
-        onselection: (instance: unknown, x1: number, y1: number, _x2: number, y2: number) => {
+        // ⚠️ x2/y2는 jspreadsheet-ce가 실제로 전달하는 3·4번째 인자 — .d.ts 타입선언에는
+        // 없지만 런타임에서 항상 제공된다(드래그 선택의 끝 열·행). 반복 영역 범위 캡처 +
+        // 다중 셀 변수 삽입(resolveActiveRange, 2026-08-30)에 필요.
+        onselection: (instance: unknown, x1: number, y1: number, x2: number, y2: number) => {
           if (isWorksheetLike(instance)) {
             lastSelectedWs = instance
             lastSelectedCoords = [x1, y1]
             // 반복 영역 지정을 위해 마지막 선택 행 범위를 캐시 (Stage 3, 2026-08-28)
             lastSelectedRowRange = { y1, y2: y2 ?? y1 }
+            lastSelectedColRange = { x1, x2: x2 ?? x1 }
             // 활성 시트 인덱스 갱신 (탭 전환 시에도 onselection이 호출됨)
             if (spreadsheetParent) {
               activeSheetIndexState = spreadsheetParent.getWorksheetActive()
@@ -1009,6 +1447,8 @@
   onDestroy(() => {
     destroyFn?.()
     spreadsheetParent = null
+    borderPaletteFixCleanup?.()
+    borderPatternFixCleanup?.()
   })
 </script>
 
@@ -1107,9 +1547,36 @@
            존재했다. 이제 크기 조절·삭제는 이미지를 클릭해 뜨는 플로팅 툴바 하나로 통일 —
            updateOverlayWidthAtSelection/removeOverlayAtSelection/selectedHasOverlay 등
            이 상단 툴바 전용이던 상태·함수는 전부 제거. -->
-      <p class="cse-sig-hint">
-        {'셀을 먼저 선택한 뒤 눌러주세요. 삽입된 이미지를 클릭하면 크기 조절·삭제 도구가 나타납니다.'}
-      </p>
+
+      <!-- 문서 미리보기 (2026-08-31) — 위 사용법 안내 텍스트(.cse-sig-hint) 자리를
+           대체(Stephen 요청): 안내 문구는 제거하고 실제 출력 크기 미리보기 버튼을 배치 -->
+      <span class="cse-sep"></span>
+      <button
+        type="button"
+        class="cse-tool-btn"
+        onclick={openPreview}
+        title="계약서를 실제 출력 크기로 미리봅니다 (변수는 노출되지 않음)"
+      >문서 미리보기</button>
+    </div>
+  {/if}
+
+  {#if showPreview}
+    <div class="cse-preview-overlay" role="dialog" aria-modal="true" aria-label="문서 미리보기">
+      <div class="cse-preview-modal">
+        <div class="cse-preview-header">
+          <span class="cse-preview-title">문서 미리보기 (실제 출력 크기)</span>
+          <button type="button" class="close-btn" onclick={closePreview} aria-label="닫기">✕</button>
+        </div>
+        <div class="cse-preview-body">
+          <iframe
+            title="문서 미리보기"
+            bind:this={previewIframeEl}
+            class="cse-preview-iframe"
+            srcdoc={previewHtml}
+            onload={onPreviewIframeLoad}
+          ></iframe>
+        </div>
+      </div>
     </div>
   {/if}
 
@@ -1272,10 +1739,65 @@
     background: var(--cs-lilac, #ECEBF4);
   }
 
-  .cse-sig-hint {
-    margin: 0;
-    font-size: 11px;
+  /* 문서 미리보기 모달 (2026-08-31) — 실제 출력(A4) 크기 iframe. ContractImportModal.svelte
+     .cim-overlay/.cim-header와 동일한 오버레이·헤더 패턴(재사용 가능한 별도 컴포넌트로 뽑을
+     정도의 규모는 아니라 이 파일에 인라인 유지). */
+  .cse-preview-overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.45);
+    z-index: 400;
+    display: flex;
+    align-items: flex-start;
+    justify-content: center;
+    padding: 32px 24px;
+    overflow-y: auto;
+  }
+  .cse-preview-modal {
+    background: var(--cs-white, #fff);
+    border-radius: var(--cms-radius-sm, 8px);
+    width: fit-content;
+    max-width: 100%;
+    display: flex;
+    flex-direction: column;
+    box-shadow: 0 8px 40px rgba(0, 0, 0, 0.18);
+  }
+  .cse-preview-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+    padding: 14px 18px;
+    border-bottom: 1px solid var(--cs-lilac, #ECEBF4);
+    flex-shrink: 0;
+  }
+  .cse-preview-title {
+    font: var(--text-pc-title-16, 16px);
+    font-weight: 700;
+    color: var(--cs-text, #100B32);
+    white-space: nowrap;
+  }
+  .close-btn {
+    background: none;
+    border: none;
+    cursor: pointer;
+    font-size: 15px;
     color: var(--cs-text-mid, #666);
+    padding: 4px 8px;
+    border-radius: var(--radius-sm, 8px);
+    transition: background 0.1s;
+  }
+  .close-btn:hover { background: var(--cs-lilac, #ECEBF4); }
+  .cse-preview-body {
+    padding: 20px;
+  }
+  .cse-preview-iframe {
+    display: block;
+    width: 210mm;
+    max-width: 100%;
+    border: none;
+    background: #fff;
+    box-shadow: 0 4px 24px rgba(0, 0, 0, 0.15);
   }
 
   /* A4 용지 도구 (2026-08-16) — .cse-size-btn과 동일 톤. 확대/축소는 2026-08-16 셀 리사이즈

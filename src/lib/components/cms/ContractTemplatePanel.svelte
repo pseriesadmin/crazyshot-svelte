@@ -153,6 +153,49 @@
   let showImport              = $state(false)
 
   // --------------------------------------------------------------------------
+  // 외부 문서 가져오기 — 헤더 버튼 클릭 → 바로 OS 파일탐색기 (2026-08-30)
+  // 과거엔 헤더 버튼 클릭 → 모달의 "선택" 화면 → 그 안의 "파일 선택" 버튼 클릭, 총 2단계였음.
+  // 파일 선택(및 크기·확장자 검증)을 여기서 먼저 처리한 뒤 결과 File을 모달에 넘겨 1단계로 통합.
+  // --------------------------------------------------------------------------
+  const CONTRACT_IMPORT_ACCEPT = [
+    'application/vnd.openxmlformats-officedocument.wordprocessingml.document', // .docx
+    'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',       // .xlsx
+    'application/vnd.ms-excel',                                                 // .xls (xlsx fallback)
+    '.docx',
+    '.xlsx',
+    '.xls',
+    '.hwp',
+    '.hwpx',
+  ].join(',')
+  const MAX_IMPORT_FILE_SIZE = 10 * 1024 * 1024 // 10MB
+
+  let importFileInput = $state<HTMLInputElement | null>(null)
+  let importFile       = $state<File | null>(null)
+
+  function triggerImport() {
+    importFileInput?.click()
+  }
+
+  function onImportFileChange(event: Event) {
+    const file = (event.target as HTMLInputElement).files?.[0]
+    if (!file) return
+
+    if (file.size > MAX_IMPORT_FILE_SIZE) {
+      csToast.error('파일 크기가 10MB를 초과합니다. 더 작은 파일로 다시 시도해주세요.')
+    } else {
+      const ext = file.name.split('.').pop()?.toLowerCase() ?? ''
+      if (!['docx', 'xlsx', 'xls', 'hwp', 'hwpx'].includes(ext)) {
+        csToast.error('.docx, .xlsx, .hwp, .hwpx 파일만 지원합니다.')
+      } else {
+        importFile  = file
+        showImport  = true
+      }
+    }
+    // 동일 파일 재선택 허용
+    if (importFileInput) importFileInput.value = ''
+  }
+
+  // --------------------------------------------------------------------------
   // 서명 & 직인 이미지 등록 — 로컬 업로드 UI
   // gif 허용: 이 컴포넌트 전용 로컬 검증만 사용 (전역 validateUploadFile 사용 금지)
   // --------------------------------------------------------------------------
@@ -390,10 +433,18 @@
     <span class="panel-title">{template ? '계약서 양식 수정' : '계약서 양식 등록'}</span>
     <div class="panel-header-actions">
       {#if authoringMode === 'flow'}
+        <input
+          type="file"
+          accept={CONTRACT_IMPORT_ACCEPT}
+          style="display:none"
+          bind:this={importFileInput}
+          onchange={onImportFileChange}
+          aria-label="문서 파일 선택"
+        />
         <button
           type="button"
           class="btn-import"
-          onclick={() => { showImport = true }}
+          onclick={triggerImport}
           title="외부 문서 가져오기"
         >문서 가져오기</button>
       {/if}
@@ -672,9 +723,10 @@
 </div>
 
 <!-- 임포트 모달 -->
-{#if showImport}
+{#if showImport && importFile}
   <ContractImportModal
-    onclose={() => { showImport = false }}
+    initialFile={importFile}
+    onclose={() => { showImport = false; importFile = null }}
     onImport={handleImport}
     onImportSpreadsheet={handleImportSpreadsheet}
   />

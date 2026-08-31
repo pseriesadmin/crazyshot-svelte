@@ -1,7 +1,23 @@
 <script lang="ts">
-  import { goto } from '$app/navigation'
   import type { PageData } from './$types'
   import type { ContentBlock } from '$lib/types/content-editor'
+  import { page } from '$app/stores'
+  // 정기결제(빌링, mid=bill_crazyhevr) 전용 클라이언트 키 — 단건결제(mid=crazysfc8s)
+  // PUBLIC_TOSS_CLIENT_KEY와는 서로 다른 상점의 별개 키(공용 아님)
+  import { PUBLIC_TOSS_BILLING_CLIENT_KEY } from '$env/static/public'
+
+  // Toss v2 standard SDK 타입 정의 (requestBillingAuth 전용)
+  type TossPaymentsSDK = (clientKey: string) => {
+    payment(opts: { customerKey: string }): {
+      requestBillingAuth(params: {
+        method: string
+        successUrl: string
+        failUrl: string
+        customerName?: string
+        customerEmail?: string
+      }): Promise<void>
+    }
+  }
 
   interface Props { data: PageData }
   let { data }: Props = $props()
@@ -22,13 +38,51 @@
   })
 
   let isLoading = $state(false)
+  // Toss 빌링 인증 실패 시 failUrl(?error=billing)로 리다이렉트되는데, 이 쿼리파라미터를
+  // 읽어 안내하는 로직이 없어 사용자가 실패 이유를 전혀 알 수 없던 결함 수정(2026-08-20)
+  let subscribeError = $state($page.url.searchParams.get('error') === 'billing'
+    ? '카드 등록에 실패했습니다. 다시 시도해 주세요.'
+    : '')
 
-  // ⛔ 더미 결제 연동(2026-08-20) — TossPayments 실 SDK 호출 대신 /subscribe/success를
-  // mock=1로 호출해 create_user_subscription을 더미 빌링키로 즉시 등록한다.
-  // 실 결제(TossPayments requestBillingAuth) 연동은 후속 별도 요청 시 이 핸들러를 교체한다.
+  // Toss v2 standard SDK CDN 로드 헬퍼 (contract/[token]/+page.svelte와 동일 패턴)
+  async function loadTossSDK(): Promise<void> {
+    if ((window as Window & { TossPayments?: unknown }).TossPayments) return
+    return new Promise<void>((resolve, reject) => {
+      const script = document.createElement('script')
+      script.src = 'https://js.tosspayments.com/v2/standard'
+      script.onload  = () => resolve()
+      script.onerror = () => reject(new Error('Toss SDK 로드에 실패했습니다. 다시 시도해 주세요.'))
+      document.head.appendChild(script)
+    })
+  }
+
+  // 구독 빌링 인증 — Toss requestBillingAuth → successUrl(/subscribe/success?planId=…)
+  // success 서버가 authKey + customerKey를 billingKey로 교환 → create_user_subscription RPC 호출
   async function handleSubscribe(): Promise<void> {
+    subscribeError = ''
     isLoading = true
-    await goto(`/subscribe/success?planId=${data.plan.id}&mock=1`)
+    try {
+      await loadTossSDK()
+      const toss = (window as Window & { TossPayments?: TossPaymentsSDK }).TossPayments
+      if (!toss) throw new Error('Toss SDK를 불러올 수 없습니다. 다시 시도해 주세요.')
+
+      const origin     = window.location.origin
+      const successUrl = `${origin}/subscribe/success?planId=${data.plan.id}`
+      const failUrl    = `${origin}/subscribe/${data.plan.id}?error=billing`
+
+      const payment = toss(PUBLIC_TOSS_BILLING_CLIENT_KEY).payment({ customerKey: data.customerKey })
+      await payment.requestBillingAuth({
+        method:        'CARD',
+        successUrl,
+        failUrl,
+        customerName:  undefined,    // 선택 — 이름 정보가 PageData에 없음
+        customerEmail: data.customerEmail || undefined,
+      })
+      // requestBillingAuth()는 Toss 인증창으로 리다이렉트 — 이 줄 이후 실행 안 됨
+    } catch (err) {
+      subscribeError = err instanceof Error ? err.message : '카드 등록에 실패했습니다. 다시 시도해 주세요.'
+      isLoading = false
+    }
   }
 </script>
 
@@ -117,8 +171,11 @@
       {/if}
 
       <button type="button" class="subscribe-cta" disabled={isLoading} onclick={handleSubscribe}>
-        {isLoading ? '구독 등록 중...' : '카드 등록하고 구독 시작'}
+        {isLoading ? '카드 등록 중...' : '카드 등록하고 구독 시작'}
       </button>
+      {#if subscribeError}
+        <p class="subscribe-error" role="alert">{subscribeError}</p>
+      {/if}
       <p class="subscribe-notice">
         매달 자동으로 결제되며, 언제든지 마이페이지에서 해지할 수 있습니다.
       </p>
@@ -178,6 +235,7 @@
   .subscribe-cta:hover:not(:disabled) { opacity: 0.85; }
   .subscribe-cta:disabled { opacity: 0.6; cursor: not-allowed; }
 
+  .subscribe-error { font-size: 13px; color: var(--cs-red-badge); margin: 0; text-align: center; }
   .subscribe-notice { font-size: 12px; color: var(--cs-text-light); margin: 0; }
 
   /* 다중 이미지 갤러리(헤더 이미지 제외 나머지) */

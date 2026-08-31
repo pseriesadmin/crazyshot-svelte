@@ -17,6 +17,14 @@ const PICKUP_LABELS: Record<string, string> = {
   epost:         '택배',
 }
 
+// cart/+page.svelte DUR_TYPES · ProductDetailPanel.svelte "24시간(1일)" 표기 관례와 동일
+const DURATION_TYPE_LABELS: Record<string, string> = {
+  '12h':     '12시간',
+  '24h':     '24시간(1일)',
+  '1day':    '1일',
+  'monthly': '월간',
+}
+
 function formatAmount(n: number | null | undefined): string {
   if (n == null) return '-'
   return n.toLocaleString('ko-KR') + '원'
@@ -39,7 +47,7 @@ export const GET: RequestHandler = async ({ params, locals }) => {
   // ── 1. 기본 예약 정보 조회 (16개 스칼라 필드의 기준 reservation) ────────────
   const { data: res, error: resErr } = await admin
     .from('rental_reservations')
-    .select('reservation_code, pickup_method, return_method, pickup_time, return_time, user_id, product_id')
+    .select('reservation_code, pickup_method, return_method, pickup_time, return_time, user_id, product_id, duration_type')
     .eq('id', reservationId)
     .maybeSingle()
 
@@ -58,13 +66,13 @@ export const GET: RequestHandler = async ({ params, locals }) => {
       .maybeSingle(),
   ])
 
-  let orderData: { total_amount: number | null; discount_amount: number | null; tax_amount: number | null; final_amount: number | null } | null = null
+  let orderData: { total_amount: number | null; discount_amount: number | null; tax_amount: number | null; delivery_fee: number | null; final_amount: number | null } | null = null
   const orderId = orderItemRes.data?.order_id as string | number | null ?? null
 
   if (orderId) {
     const { data: o } = await admin
       .from('orders')
-      .select('total_amount, discount_amount, tax_amount, final_amount')
+      .select('total_amount, discount_amount, tax_amount, delivery_fee, final_amount')
       .eq('id', orderId)
       .maybeSingle()
     orderData = o
@@ -222,8 +230,10 @@ export const GET: RequestHandler = async ({ params, locals }) => {
     반납일시:     res.return_time ?? '-',
     기본대여요금: formatAmount(orderData?.total_amount),
     할인금액:     formatAmount(orderData?.discount_amount),
+    배송비:       formatAmount(orderData?.delivery_fee),
     부가세:       formatAmount(orderData?.tax_amount),
     최종합계:     formatAmount(orderData?.final_amount),
+    요금유형:     res.duration_type ? (DURATION_TYPE_LABELS[res.duration_type] ?? res.duration_type) : '-',
     // 신규: 주문 전체 상품 목록 (반복 영역 전용)
     상품목록: buildLineItems(lineItemReservations),
   }

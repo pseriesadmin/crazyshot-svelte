@@ -155,10 +155,11 @@
 
   $effect(() => { consents = data.consents })
 
-  // ─── 배송료 우대설정 (최대 3개) ───
+  // ─── 배송료 우대설정 (최대 5개) ───
   let discountTiers = $state<DeliveryFeeDiscountTier[]>(data.discountTiers)
   let tierAmount = $state<number | ''>('')
-  let tierCondition = $state<'' | 'long_term_rental' | 'sale_only_purchase'>('')
+  // 조건은 다중선택(둘 다 선택 시 AND — 두 조건 모두 충족해야 매칭, Stephen 확정 2026-08-29)
+  let tierConditions = $state<Array<'long_term_rental' | 'sale_only_purchase'>>([])
   let tierDiscount = $state<'' | 'free' | 'half' | 'base'>('')
   let tierLoading = $state(false)
 
@@ -176,6 +177,9 @@
     sale_only_purchase: '판매상품 구매',
   }
   const TIER_DISCOUNT_LABELS: Record<number, string> = { 1: '무료', 0.5: '50% 할인', 0: '기본왕복배송요금' }
+  function tierConditionsLabel(types: string[]): string {
+    return types.map((t) => TIER_CONDITION_LABELS[t] ?? t).join(' + ')
+  }
 
   $effect(() => { discountTiers = data.discountTiers })
 
@@ -289,7 +293,8 @@
         method="POST"
         action="?/addMethod"
         class="add-form add-form--method"
-        use:enhance={({ formData }) => {
+        use:enhance={({ formData, cancel }) => {
+          if (!methodKey) { csToast.error('방식 유형을 선택하세요.'); cancel(); return }
           formData.set('count', String(methods.length))
           methodLoading = true
           return async ({ result, update }) => {
@@ -338,7 +343,7 @@
           <button
             type="submit"
             class="btn-add"
-            disabled={methodLoading || !methodInput.trim() || methods.length >= 10}
+            disabled={methodLoading || !methodInput.trim() || !methodKey || methods.length >= 10}
           >
             {methodLoading ? '추가 중...' : '추가'}
           </button>
@@ -402,7 +407,7 @@
         <input type="hidden" name="enable_return"      value={enableReturn      ? 'true' : 'false'} />
 
         <!-- 요금 입력 (활성/비활성) -->
-        <div class="fee-grid">
+        <div class="fee-grid fee-grid--spaced">
           <div class="fee-row" class:fee-row--disabled={!enableRoundTrip}>
             <span class="fee-label">왕복요금</span>
             <div class="fee-input-wrap">
@@ -490,14 +495,14 @@
         </div>
 
         <!-- 배송 안내문 (200자) -->
-        <div class="subsection shipping-guide-sub">
+        <div class="subsection shipping-guide-sub shipping-guide-sub--spaced">
           <div class="subsection-head">
             <h3 class="subsection-title">배송 안내문</h3>
           </div>
           <div class="textarea-wrap">
             <textarea
               name="shipping_guide"
-              class="guide-textarea"
+              class="guide-textarea guide-textarea--has-save-btn"
               maxlength="200"
               rows="4"
               bind:value={shippingGuide}
@@ -507,20 +512,22 @@
             <span class="char-count" class:char-count--warn={shippingGuideCount > 180}
               >{shippingGuideCount} / 200</span
             >
+            <button
+              type="submit"
+              class="btn-save textarea-save-btn"
+              disabled={shippingLoading || !shippingGuideIsDirty}
+            >
+              {shippingLoading ? '저장 중...' : '안내문 저장'}
+            </button>
           </div>
-        </div>
-
-        <div class="guide-actions">
-          <button type="submit" class="btn-save" disabled={shippingLoading || !shippingGuideIsDirty}>
-            {shippingLoading ? '저장 중...' : '안내문 저장'}
-          </button>
         </div>
       </form>
 
       <!-- 대여옵션 일괄적용·제한·휴무일 제어 옵션 통합 레이아웃 -->
       <div class="rental-restriction-group">
-      <!-- 배송대여 수령/반납 일괄 지정 — /cart에서 선택 시 반납방식 강제고정+시간선택 비활성화(요청 A) -->
-      <div class="subsection bulk-delivery-section">
+      <!-- 배송대여 수령/반납 일괄 지정(요청 A) + 대여 제한옵션 — 하나의 카드로 통합 레이아웃
+           (2026-08-30, Stephen 지시로 두 sf-row를 단일 div로 병합) -->
+      <div class="subsection bulk-delivery-section bulk-delivery-section--group-start">
         <div class="sf-row">
           <span class="sf-label">대여옵션(수령/반납) 일괄적용</span>
           <div class="shipping-chips">
@@ -547,13 +554,39 @@
             {/each}
           </div>
         </div>
+        <!-- 휴무일 캘린더 제한 대상(택배사 의존 여부) — 위 "일괄적용"(요청 A, 반납방식
+             강제고정용)과는 별개 목적(감사 RSC-B3, 2026-08-30 신설). 공휴일·일요일에 이
+             방식의 날짜 선택을 막을지 여기서만 독립적으로 결정한다. -->
+        <div class="sf-row">
+          <span class="sf-label">휴무일 제한 방식</span>
+          <div class="shipping-chips">
+            {#each methods as m (m.id)}
+              <form
+                method="POST"
+                action="?/toggleCourierDependent"
+                class="chip-form"
+                use:enhance={() => {
+                  return async ({ result, update }) => {
+                    if (result.type === 'success') {
+                      await update()
+                    } else if (result.type === 'failure') {
+                      csToast.error((result.data as { error?: string })?.error ?? '변경에 실패했습니다.')
+                    }
+                  }
+                }}
+              >
+                <input type="hidden" name="id" value={m.id} />
+                <button type="submit" class="s-chip" class:s-chip--on={m.is_courier_dependent}>
+                  {m.name}
+                </button>
+              </form>
+            {/each}
+          </div>
+        </div>
         {#if methods.length === 0}
           <p class="empty-hint">등록된 대여 방식이 없습니다. "대여 방식 옵션" 섹션에서 먼저 등록해주세요.</p>
         {/if}
-      </div>
 
-      <!-- 대여 제한옵션 — /cart 반납 설정에서 '배송' 반납방식 노출 여부 전역 제한 -->
-      <div class="subsection bulk-delivery-section">
         <div class="sf-row">
           <span class="sf-label">대여옵션 제한</span>
           <div class="shipping-chips">
@@ -582,12 +615,12 @@
       </div>
 
       <!-- 배송료 우대설정 — 대여금액+조건 만족 시 배송비(왕복+배송+반납 합계)를 할인해주는
-           조합 규칙(최대 3개). 여러 조합이 동시 매칭되면 가장 유리한(할인율 큰) 조합 1개만
+           조합 규칙(최대 5개). 여러 조합이 동시 매칭되면 가장 유리한(할인율 큰) 조합 1개만
            자동 적용(스태킹 없음), 대여금액은 장바구니 전체 합계(otSubtotal) 기준. -->
-      <div class="subsection bulk-delivery-section">
-        <div class="sf-row">
+      <div class="subsection bulk-delivery-section discount-tier-section">
+        <div class="sf-row discount-tier-title-row">
           <span class="sf-label">배송료 우대설정</span>
-          <span class="section-badge">{discountTiers.length} / 3</span>
+          <span class="section-badge">{discountTiers.length} / 5</span>
         </div>
 
         <form
@@ -596,7 +629,7 @@
           class="add-form add-form--method"
           use:enhance={({ formData, cancel }) => {
             if (tierAmount === '') { csToast.error('대여금액을 입력하세요.'); cancel(); return }
-            if (!tierCondition) { csToast.error('조건을 선택하세요.'); cancel(); return }
+            if (tierConditions.length === 0) { csToast.error('조건을 선택하세요.'); cancel(); return }
             if (!tierDiscount) { csToast.error('우대옵션을 선택하세요.'); cancel(); return }
             formData.set('count', String(discountTiers.length))
             tierLoading = true
@@ -604,7 +637,7 @@
               tierLoading = false
               if (result.type === 'success') {
                 tierAmount = ''
-                tierCondition = ''
+                tierConditions = []
                 tierDiscount = ''
                 csToast.success('배송료 우대설정이 추가되었습니다.')
                 await update()
@@ -615,61 +648,69 @@
           }}
         >
           <input type="hidden" name="min_rental_amount" value={tierAmount} />
-          <input type="hidden" name="condition_type" value={tierCondition} />
+          <input type="hidden" name="condition_types" value={JSON.stringify(tierConditions)} />
           <input type="hidden" name="discount_rate" value={tierDiscount} />
 
-          <div class="fee-input-wrap">
-            <input
-              type="text"
-              inputmode="numeric"
-              class="add-input fee-input"
-              value={tierAmount === '' ? '' : tierAmount.toLocaleString('ko-KR')}
-              placeholder="0"
-              aria-label="대여금액"
-              disabled={tierLoading}
-              oninput={(e) => {
-                const digits = e.currentTarget.value.replace(/[^0-9]/g, '')
-                tierAmount = digits ? parseInt(digits, 10) : ''
-              }}
-            />
-            <span class="fee-unit">원 이상</span>
-          </div>
-
-          <div class="mk-select-row">
-            <span class="mk-select-label">조건</span>
-            <div class="mk-chips">
-              {#each TIER_CONDITION_OPTIONS as opt}
-                <button
-                  type="button"
-                  class="mk-chip"
-                  class:mk-chip--on={tierCondition === opt.value}
-                  onclick={() => { tierCondition = tierCondition === opt.value ? '' : opt.value }}
-                >{opt.label}</button>
-              {/each}
+          <div class="tier-input-row">
+            <div class="fee-input-wrap">
+              <input
+                type="text"
+                inputmode="numeric"
+                class="add-input fee-input"
+                value={tierAmount === '' ? '' : tierAmount.toLocaleString('ko-KR')}
+                placeholder="0"
+                aria-label="대여금액"
+                disabled={tierLoading}
+                oninput={(e) => {
+                  const digits = e.currentTarget.value.replace(/[^0-9]/g, '')
+                  tierAmount = digits ? parseInt(digits, 10) : ''
+                }}
+              />
+              <span class="fee-unit">원 이상</span>
             </div>
-          </div>
 
-          <div class="mk-select-row">
-            <span class="mk-select-label">우대옵션</span>
-            <div class="mk-chips">
-              {#each TIER_DISCOUNT_OPTIONS as opt}
-                <button
-                  type="button"
-                  class="mk-chip"
-                  class:mk-chip--on={tierDiscount === opt.value}
-                  onclick={() => { tierDiscount = tierDiscount === opt.value ? '' : opt.value }}
-                >{opt.label}</button>
-              {/each}
+            <div class="mk-select-row">
+              <span class="mk-select-label">조건</span>
+              <!-- 다중선택(독립 토글) — cms-uiux.md §7-12-B .s-chip 표준. 둘 다 선택 시 AND
+                   (두 조건 모두 충족해야 매칭, Stephen 확정 2026-08-29) -->
+              <div class="mk-chips">
+                {#each TIER_CONDITION_OPTIONS as opt}
+                  <button
+                    type="button"
+                    class="s-chip"
+                    class:s-chip--on={tierConditions.includes(opt.value)}
+                    onclick={() => {
+                      tierConditions = tierConditions.includes(opt.value)
+                        ? tierConditions.filter((v) => v !== opt.value)
+                        : [...tierConditions, opt.value]
+                    }}
+                  >{opt.label}</button>
+                {/each}
+              </div>
             </div>
-          </div>
 
-          <button
-            type="submit"
-            class="btn-add"
-            disabled={tierLoading || discountTiers.length >= 3}
-          >
-            {tierLoading ? '추가 중...' : '추가'}
-          </button>
+            <div class="mk-select-row">
+              <span class="mk-select-label">우대옵션</span>
+              <div class="mk-chips">
+                {#each TIER_DISCOUNT_OPTIONS as opt}
+                  <button
+                    type="button"
+                    class="mk-chip"
+                    class:mk-chip--on={tierDiscount === opt.value}
+                    onclick={() => { tierDiscount = tierDiscount === opt.value ? '' : opt.value }}
+                  >{opt.label}</button>
+                {/each}
+              </div>
+            </div>
+
+            <button
+              type="submit"
+              class="btn-add tier-add-btn"
+              disabled={tierLoading || discountTiers.length >= 5}
+            >
+              {tierLoading ? '추가 중...' : '추가'}
+            </button>
+          </div>
         </form>
 
         {#if discountTiers.length > 0}
@@ -677,7 +718,7 @@
             {#each discountTiers as tier (tier.id)}
               <div class="list-row">
                 <span class="mk-badge">{tier.min_rental_amount.toLocaleString('ko-KR')}원 이상</span>
-                <span class="list-row-name">{TIER_CONDITION_LABELS[tier.condition_type]}</span>
+                <span class="list-row-name">{tierConditionsLabel(tier.condition_types)}</span>
                 <span class="mk-badge mk-badge--shipping">{TIER_DISCOUNT_LABELS[tier.discount_rate]}</span>
                 <CmsDeleteButton action="?/deleteDiscountTier" id={tier.id} successMessage="배송료 우대설정이 삭제되었습니다." />
               </div>
@@ -706,7 +747,7 @@
             }
           }}
         >
-          <div class="sf-row">
+          <div class="sf-row holiday-toggle-row">
             <span class="sf-label">휴무일 제어 옵션</span>
             <div class="shipping-chips">
               <button
@@ -1200,6 +1241,31 @@
     gap: 12px;
   }
 
+  /* 배송료 우대설정 — 대여금액+조건+우대옵션을 옅은 그레이 박스로 묶어 한 행 정렬
+     (2026-08-29, 낱개 행 stack이 지저분해 보인다는 Stephen 지적으로 카드형 정리) */
+  .tier-input-row {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 24px;
+    background: var(--cs-surface-gray);
+    border-radius: var(--cms-radius-sm);
+    padding: 16px 20px;
+  }
+
+  .tier-input-row .fee-input {
+    background: var(--cs-white);
+  }
+
+  /* "추가" 버튼을 tier-input-row 우측 끝에 재배치(2026-08-29, Stephen 지시) — 기존
+     add-form--method(column flex) 하위 단독 자식일 때의 stretch로 인한 전체폭 대신,
+     행 안에서는 auto폭 + margin-left:auto로 우측 정렬 */
+  .tier-add-btn {
+    margin-left: auto;
+    flex-shrink: 0;
+    width: auto;
+  }
+
   .mk-select-row {
     display: flex;
     align-items: center;
@@ -1590,6 +1656,28 @@
     margin-top: 30px;
   }
 
+  /* 배송료 우대설정 ↔ 휴무일 제어 옵션 사이 여백 — 기능 간 시각적 분리도 확보 위해
+     한 차례 더 2배 반영(2026-08-30, Stephen 지시): 28px → 56px → 112px */
+  .discount-tier-section {
+    margin-bottom: 112px;
+    /* 대여옵션 카드 ↔ 배송료 우대설정 사이 여백도 2배(같은 날 후속 지시) — 인접 마진
+       collapse를 고려해 이 쪽(margin-top)도 함께 60px로 올려 시각적 간격을 보장 */
+    margin-top: 60px;
+  }
+
+  /* 휴무일 제어 옵션 토글 행과 그 아래 법정공휴일·임시휴무일 목록 사이 여백 2배 —
+     기본 .sf-row margin-bottom(24px)의 2배 */
+  .holiday-toggle-row {
+    margin-bottom: 48px;
+  }
+
+  /* "배송료 우대설정" 타이틀과 그 아래 입력폼(tier-input-row) 사이 여백 축소 —
+     하나의 기능을 설명하는 타이틀이므로 시각적 결합성 확보(2026-08-30, Stephen 지시) —
+     기본 .sf-row margin-bottom(24px)의 절반 */
+  .discount-tier-title-row {
+    margin-bottom: 12px;
+  }
+
   .subsection-head {
     display: flex;
     align-items: center;
@@ -1666,6 +1754,21 @@
     font-weight: 700;
   }
 
+  /* 배송 안내문 "안내문 저장" 버튼 — 입력폼 외부(guide-actions) 대신 textarea-wrap 내부
+     우측 상단에 배치(2026-08-30, Stephen 지시 — "입력폼 내부 배치가 UX 최선") */
+  .textarea-save-btn {
+    position: absolute;
+    top: 10px;
+    right: 14px;
+  }
+
+  /* 버튼이 textarea 위에 겹치지 않도록 상단 여백 확보(char-count의 하단 여백 확보와
+     동일 원리) — .guide-textarea 공용 클래스는 "공통 대여 안내문" 섹션과 공유하므로
+     이 인스턴스에만 스코프한 modifier로 상단 패딩만 확장 */
+  .guide-textarea--has-save-btn {
+    padding-top: 52px;
+  }
+
   /* ─── 동의문 입력 래퍼 ─── */
   .consent-input-wrap {
     flex: 1;
@@ -1707,6 +1810,12 @@
     font: var(--text-pc-body-14);
     color: var(--cs-text-mid);
     white-space: nowrap;
+  }
+
+  /* 배송료 우대설정 행의 "N / 5" 카운터(목록 수량 인덱스) — 행 우측 끝으로 정렬
+     (2026-08-30, Stephen 지시) */
+  .sf-row .section-badge {
+    margin-left: auto;
   }
 
   .shipping-chips {
@@ -1757,6 +1866,27 @@
     flex-direction: column;
     gap: 12px;
     margin-bottom: 28px;
+  }
+
+  /* 요금 입력(fee-grid) ↔ 배송 안내문 사이 여백 2배 확보(2026-08-30, Stephen 지시 —
+     "메뉴 기능 간 분리도 확보") — 기본 margin-bottom(28px)의 2배 */
+  .fee-grid--spaced {
+    margin-bottom: 56px;
+  }
+
+  /* 배송 안내문 블록 자체의 하단 여백 — rental-restriction-group과의 분리도 확보 위해
+     한 차례 더 2배 반영(2026-08-30, Stephen 지시): 28px → 56px → 112px */
+  .shipping-guide-sub--spaced {
+    margin-bottom: 112px;
+  }
+
+  /* rental-restriction-group 진입부(첫 카드) 상단 여백 2배 — 기본 .bulk-delivery-section
+     margin-top(30px)의 2배. 이 카드 뒤(배송료 우대설정 등)의 margin-top은 변경하지 않음 */
+  .bulk-delivery-section--group-start {
+    margin-top: 60px;
+    /* 이 카드 ↔ 배송료 우대설정 사이 여백도 2배(같은 날 후속 지시) — 기본 .subsection
+       margin-bottom(28px)의 2배 */
+    margin-bottom: 56px;
   }
 
   .fee-row {

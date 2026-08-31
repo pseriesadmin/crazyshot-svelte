@@ -42,6 +42,30 @@ export const load: PageServerLoad = async ({ params, locals }) => {
   // 뒤부터는 /contract/[token] 서명화면과 동일하게 admin 클라이언트로 조회(RLS 우회)
   const admin = createClient(PUBLIC_SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
 
+  // 2026-08-31(CRITICAL 수정): init-contract API가 "같은 주문에 이미 계약이 있으면 재사용"
+  // 으로 바뀌어(예약=주문 단위 통일), 계약은 이제 주문당 1건만 존재하고 대표 예약에만
+  // anchor된다. 이 예약(res.id) 자신이 계약을 직접 소유하지 않는 형제 예약(같은 주문의
+  // 다른 상품)일 수 있으므로, 같은 주문의 예약 전체를 대상으로 조회해야 한다 — 그렇지
+  // 않으면 실제로 서명 완료된 계약이 있어도 "계약 없음" 안내만 뜨는 결함이 발생한다.
+  const { data: orderItemRow } = await admin
+    .from('order_items')
+    .select('order_id')
+    .eq('reservation_id', res.id)
+    .maybeSingle()
+
+  let candidateReservationIds: (string | number)[] = [res.id]
+  const orderId = (orderItemRow as { order_id?: string | number | null } | null)?.order_id
+  if (orderId != null) {
+    const { data: siblingItems } = await admin
+      .from('order_items')
+      .select('reservation_id')
+      .eq('order_id', orderId)
+    const siblingIds = ((siblingItems ?? []) as { reservation_id: string | number | null }[])
+      .map((r) => r.reservation_id)
+      .filter((v): v is string | number => v != null)
+    if (siblingIds.length > 0) candidateReservationIds = siblingIds
+  }
+
   const { data: signingRow } = await admin
     .from('contract_signings')
     .select(`
@@ -51,7 +75,7 @@ export const load: PageServerLoad = async ({ params, locals }) => {
         canvas_document, spreadsheet_document, reservation_id
       )
     `)
-    .eq('contracts.reservation_id', res.id)
+    .in('contracts.reservation_id', candidateReservationIds)
     .not('signed_at', 'is', null)
     .order('signed_at', { ascending: false })
     .limit(1)
@@ -144,18 +168,14 @@ export const load: PageServerLoad = async ({ params, locals }) => {
     total_amount: number | null
     discount_amount: number | null
     tax_amount: number | null
+    delivery_fee: number | null
     final_amount: number | null
   } | null = null
-  const { data: orderItemData } = await admin
-    .from('order_items')
-    .select('order_id')
-    .eq('reservation_id', res.id)
-    .maybeSingle()
-  if (orderItemData && (orderItemData as { order_id?: string | null }).order_id) {
-    const orderId = (orderItemData as { order_id: string }).order_id
+  // orderId는 위 계약 조회 시점에 이미 조회해둔 값을 재사용(중복 쿼리 방지)
+  if (orderId != null) {
     const { data: o } = await admin
       .from('orders')
-      .select('total_amount, discount_amount, tax_amount, final_amount')
+      .select('total_amount, discount_amount, tax_amount, delivery_fee, final_amount')
       .eq('id', orderId)
       .maybeSingle()
     orderData = o as typeof orderData

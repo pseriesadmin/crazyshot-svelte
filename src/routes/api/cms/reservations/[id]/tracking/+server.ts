@@ -11,6 +11,7 @@ import { createClient } from '@supabase/supabase-js'
 import { SUPABASE_SERVICE_ROLE_KEY } from '$env/static/private'
 import { PUBLIC_SUPABASE_URL } from '$env/static/public'
 import { getCmsRoleForAction } from '$lib/server/getCmsRoleForAction'
+import { sendReservationLifecyclePush } from '$lib/server/push'
 import type { RequestHandler } from './$types'
 
 export const GET: RequestHandler = async ({ params, locals }) => {
@@ -49,6 +50,13 @@ export const PATCH: RequestHandler = async ({ params, request, locals }) => {
   const trackingNumber = (body.tracking_number ?? '').trim() || null
   const courierCode    = (body.courier_code    ?? '').trim() || null
 
+  // RSV-B-B5: 운송장 번호 형식 검증 (숫자·영문·하이픈 조합, 최대 50자)
+  if (trackingNumber !== null) {
+    if (trackingNumber.length > 50 || !/^[A-Za-z0-9\-]+$/.test(trackingNumber)) {
+      throw error(400, '운송장 번호 형식이 올바르지 않습니다. 영문·숫자·하이픈만 허용하며 최대 50자입니다.')
+    }
+  }
+
   // locals.supabase 사용 필수 — update_reservation_tracking RPC 내부의 is_cms_user()가
   // auth.uid() 기반이라 관리자의 실세션으로 호출해야 통과됨
   // (service_role 호출 시 auth.uid()=null → is_cms_user() false → EXCEPTION 발생)
@@ -62,6 +70,23 @@ export const PATCH: RequestHandler = async ({ params, request, locals }) => {
   })
 
   if (rpcErr) throw error(500, '운송장 정보 저장 중 오류가 발생했습니다.')
+
+  // RSV-B-B4: 운송장 등록 완료 안내 — 채팅카드 + 브라우저 푸시(fail-soft, 저장 자체는 이미 성공)
+  // service-operations.md §15: 채팅카드(RPC)와 브라우저 푸시는 별개 시스템이라 둘 다 명시 호출 필요.
+  const admin = createClient(PUBLIC_SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
+  try {
+    await admin.rpc('send_rental_chat_notification', {
+      p_reservation_id: reservationId,
+      p_notify_type:    'tracking_notify',
+    })
+  } catch (e) {
+    console.error(`[tracking/chat-notify] fail-soft [${reservationId}]:`, e instanceof Error ? e.message : e)
+  }
+  try {
+    await sendReservationLifecyclePush(admin, reservationId, 'tracking_notify')
+  } catch (e) {
+    console.error(`[tracking/push-notify] fail-soft [${reservationId}]:`, e instanceof Error ? e.message : e)
+  }
 
   return json({ success: true, tracking_number: trackingNumber, courier_code: courierCode })
 }

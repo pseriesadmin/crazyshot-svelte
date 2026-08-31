@@ -602,3 +602,157 @@ describe('EC-3: 관리자 수동 승인 후 고객이 뒤늦게 결제(mock) 페
     expect((await getReservationRow(reservationId))?.status).toBe('confirmed');
   });
 });
+
+// ── G: Migration 397 — 계약 서명 게이팅 주문단위 통일 (형제 예약 CRITICAL 회귀 수정) ──
+// 배경: init-contract API가 "같은 주문에 이미 계약이 있으면 재사용"으로 바뀌어(2026-08-31),
+// 계약(contracts)이 이제 주문당 정확히 1건만 존재한다(대표 예약에만 anchor). 그런데
+// try_confirm_reservation의 서명완료 판정이 여전히 "그 예약 자신이 직접 소유한 계약"만
+// 봐서, 형제 예약(같은 주문의 다른 상품)은 결제+서명이 다 끝나도 영원히 hold에 갇히는
+// CRITICAL 회귀가 감사 에이전트로 발견됨 — 이 스위트가 그 수정(Migration 397)을 검증한다.
+describe('G: 형제 예약 결제확정 게이팅 — 주문 단위로 통일(Migration 397)', () => {
+  async function linkToOrder(userId: string, reservationIds: number[]): Promise<void> {
+    const { error } = await admin.rpc('create_reservation_order', {
+      p_user_id: userId,
+      p_reservation_ids: reservationIds,
+    });
+    if (error) throw new Error(`create_reservation_order 실패: ${error.message}`);
+  }
+
+  it('CRITICAL 회귀 확인: 형제 예약(계약 미소유)도 대표 예약의 계약이 서명되면 mark_reservation_payment_confirmed 재호출로 confirmed 전환된다', async () => {
+    const userId = await createEphemeralUser();
+    cleanups.push(() => deleteEphemeralUser(userId));
+
+    const anchorId  = await createReservation(userId, 'hold');
+    const siblingId = await createReservation(userId, 'hold');
+    cleanups.push(async () => {
+      await admin.from('order_items').delete().in('reservation_id', [anchorId, siblingId]);
+      await admin.from('rental_reservations').delete().in('id', [anchorId, siblingId]);
+    });
+    await linkToOrder(userId, [anchorId, siblingId]);
+
+    // 대표 예약(anchor)에만 계약을 만들고 서명 완료 — init-contract 정책과 동일하게
+    // 형제 예약(siblingId)은 계약을 직접 소유하지 않는다.
+    const { contractId, signingId, token } = await createSentContract(userId, anchorId);
+    cleanups.push(async () => {
+      await admin.from('contract_signings').delete().eq('id', signingId);
+      await admin.from('contracts').delete().eq('id', contractId);
+    });
+    await callSign(token);
+
+    // 형제 예약은 결제도 아직 안 됐으니 여전히 hold — payment_confirmed_at을 채워 결제완료를
+    // 재현(실제로는 confirm_order_payment_and_update_reservations의 루프가 이 역할을 함).
+    await admin.rpc('mark_reservation_payment_confirmed', { p_reservation_id: siblingId });
+
+    // 수정 전(버그): 형제 예약은 자기 자신 소유 계약이 없어 서명완료로 인정 안 되고 hold 유지.
+    // 수정 후: try_confirm_reservation이 주문 전체의 계약을 봐서 confirmed로 전환.
+    expect((await getReservationRow(siblingId))?.status).toBe('confirmed');
+  });
+
+  it('결제가 서명보다 먼저 끝난 경우 — sign 엔드포인트 호출 한 번으로 대표+형제 예약이 함께 confirmed 전환된다(Migration 398 수정 후 동작)', async () => {
+    const userId = await createEphemeralUser();
+    cleanups.push(() => deleteEphemeralUser(userId));
+
+    const anchorId  = await createReservation(userId, 'hold');
+    const siblingId = await createReservation(userId, 'hold');
+    cleanups.push(async () => {
+      await admin.from('order_items').delete().in('reservation_id', [anchorId, siblingId]);
+      await admin.from('rental_reservations').delete().in('id', [anchorId, siblingId]);
+    });
+    await linkToOrder(userId, [anchorId, siblingId]);
+
+    // 결제가 서명보다 먼저 끝난 시나리오 재현 — 이 시점엔 아직 계약 서명 전이라 둘 다
+    // try_confirm_reservation이 실패하고 hold 그대로 유지된다(정상).
+    await admin.rpc('mark_reservation_payment_confirmed', { p_reservation_id: anchorId });
+    await admin.rpc('mark_reservation_payment_confirmed', { p_reservation_id: siblingId });
+    expect((await getReservationRow(anchorId))?.status).toBe('hold');
+    expect((await getReservationRow(siblingId))?.status).toBe('hold');
+
+    const { contractId, signingId, token } = await createSentContract(userId, anchorId);
+    cleanups.push(async () => {
+      await admin.from('contract_signings').delete().eq('id', signingId);
+      await admin.from('contracts').delete().eq('id', contractId);
+    });
+    await callSign(token);
+
+    // sign 엔드포인트가 try_confirm_reservation_order(주문 전체 순회, 결제 부수효과 없음)를
+    // 호출하도록 수정됐으므로, 이미 결제완료 상태였던 대표+형제 예약이 서명 한 번으로
+    // 한꺼번에 confirmed 전환된다 — CRITICAL 회귀 완전 해소.
+    expect((await getReservationRow(anchorId))?.status).toBe('confirmed');
+    expect((await getReservationRow(siblingId))?.status).toBe('confirmed');
+  });
+
+  it('결제가 서명보다 나중에 끝난 경우 — pay-mock 호출로 대표+형제 예약이 함께 confirmed 전환된다', async () => {
+    const userId = await createEphemeralUser();
+    cleanups.push(() => deleteEphemeralUser(userId));
+
+    const anchorId  = await createReservation(userId, 'hold');
+    const siblingId = await createReservation(userId, 'hold');
+    cleanups.push(async () => {
+      await admin.from('order_items').delete().in('reservation_id', [anchorId, siblingId]);
+      await admin.from('rental_reservations').delete().in('id', [anchorId, siblingId]);
+    });
+    await linkToOrder(userId, [anchorId, siblingId]);
+
+    const { contractId, signingId, token } = await createSentContract(userId, anchorId);
+    cleanups.push(async () => {
+      await admin.from('contract_signings').delete().eq('id', signingId);
+      await admin.from('contracts').delete().eq('id', contractId);
+    });
+    // 서명 먼저 — 아직 결제 전이라 둘 다 hold 유지.
+    await callSign(token);
+    expect((await getReservationRow(anchorId))?.status).toBe('hold');
+    expect((await getReservationRow(siblingId))?.status).toBe('hold');
+
+    // 결제(mock, 쿠폰/포인트로 전액상쇄되는 무료결제 경로) — 대표 예약의 토큰으로 호출.
+    const payRes = await callPayMock(token);
+    expect(payRes.status).toBe(200);
+    expect(payRes.body.confirmed).toBe(true);
+
+    expect((await getReservationRow(anchorId))?.status).toBe('confirmed');
+    expect((await getReservationRow(siblingId))?.status).toBe('confirmed');
+  });
+
+  it('무회귀: try_confirm_reservation_order는 결제 여부를 조작하지 않는다(결제 전 예약은 호출해도 그대로 hold)', async () => {
+    const userId = await createEphemeralUser();
+    cleanups.push(() => deleteEphemeralUser(userId));
+
+    const reservationId = await createReservation(userId, 'hold');
+    cleanups.push(async () => {
+      await admin.from('rental_reservations').delete().eq('id', reservationId);
+    });
+
+    const { data: confirmedIds, error } = await admin.rpc('try_confirm_reservation_order', {
+      p_reservation_id: reservationId,
+    });
+    expect(error).toBeNull();
+    expect(confirmedIds as number[]).toEqual([]);
+
+    const row = await getReservationRow(reservationId);
+    expect(row?.status).toBe('hold');
+    expect(row?.payment_confirmed_at).toBeNull(); // 결제 부수효과가 없어야 함(Migration 398 핵심)
+  });
+
+  it('무회귀: 형제 예약이 없는 단일 예약은 기존과 동일하게 동작한다', async () => {
+    const userId = await createEphemeralUser();
+    cleanups.push(() => deleteEphemeralUser(userId));
+
+    const reservationId = await createReservation(userId, 'hold');
+    cleanups.push(async () => {
+      await admin.from('rental_reservations').delete().eq('id', reservationId);
+    });
+
+    const { contractId, signingId, token } = await createSentContract(userId, reservationId);
+    cleanups.push(async () => {
+      await admin.from('contract_signings').delete().eq('id', signingId);
+      await admin.from('contracts').delete().eq('id', contractId);
+    });
+    await callSign(token);
+    await admin.rpc('mark_reservation_payment_confirmed', { p_reservation_id: reservationId });
+
+    const { data: confirmedIds } = await admin.rpc('try_confirm_reservation_order', {
+      p_reservation_id: reservationId,
+    });
+    expect(confirmedIds as number[]).toEqual([]); // 이미 confirmed라 "새로" 전환된 건 없음
+    expect((await getReservationRow(reservationId))?.status).toBe('confirmed');
+  });
+});

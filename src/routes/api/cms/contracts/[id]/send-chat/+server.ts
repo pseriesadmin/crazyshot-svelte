@@ -58,17 +58,35 @@ export const POST: RequestHandler = async ({ params, locals, url }) => {
   // contract_signings: 존재하면 재사용, 없으면 신규 생성
   const { data: existing } = await admin
     .from('contract_signings')
-    .select('id, token')
+    .select('id, token, signed_at')
     .eq('contract_id', contractId)
     .maybeSingle()
 
+  // RSV-C-B1: 이미 서명 완료된 계약서는 재발송 차단 — 서명 완료 후 재발송하면
+  // 서명링크가 리셋돼 expires_at이 갱신되고, 고객이 또다시 서명 액션카드를 받아
+  // 혼란을 줄 수 있다. signed_at이 있으면 발송을 막는다.
+  const existingTyped = existing as { id: string; token: string; signed_at: string | null } | null
+  if (existingTyped?.signed_at) {
+    return json({ error: '이미 서명이 완료된 계약서는 재발송할 수 없습니다.' }, { status: 400 })
+  }
+
   let token: string
-  if (existing) {
-    token = existing.token
+  if (existingTyped) {
+    token = existingTyped.token
+    // 재발송 시 sent_at과 함께 expires_at도 "지금부터 30일"로 리셋한다.
+    // Migration 146은 최초 INSERT 시 1회만 expires_at을 설정하므로, 재발송 경로에서는
+    // 별도로 갱신하지 않으면 최초 발송 시각 기준 30일이 그대로 유지돼 서명 기한이 줄어든다.
+    // 이 sent_at 갱신 시각이 release_reservation_hold의 D-1 타이머 리셋 기준(GREATEST 조건)으로도
+    // 사용된다 — service-operations.md §10, TASK.md GATE B Q7 확정.
+    const now = new Date()
+    const expires = new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000)
     await admin
       .from('contract_signings')
-      .update({ sent_at: new Date().toISOString() })
-      .eq('id', existing.id)
+      .update({
+        sent_at:    now.toISOString(),
+        expires_at: expires.toISOString(),
+      })
+      .eq('id', existingTyped.id)
   } else {
     const { data: newSigning, error: insertErr } = await admin
       .from('contract_signings')

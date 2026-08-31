@@ -2,6 +2,7 @@ import { redirect, fail } from '@sveltejs/kit'
 import type { PageServerLoad, Actions } from './$types'
 import { callTypedRpc } from '$lib/utils/rpc'
 import { loadUserCoupons } from '$lib/server/account/loadUserCoupons'
+import { loadRentalContractStatus } from '$lib/server/account/loadRentalContractStatus'
 
 interface AccountProfile {
   id: string
@@ -99,6 +100,11 @@ export const load: PageServerLoad = async ({ locals, depends }) => {
 
   const profile = (profileRes.data ?? null) as AccountProfile | null
 
+  // PC 대여 패널 카드에 "전자계약 확인"(서명완료) / "전자계약 서명하기"(서명대기) 버튼을
+  // 노출할지 판단 — 모바일 /account/rental과 동일 헬퍼 공유(loadRentalContractStatus 참고)
+  const rentalReservationIds = ((rentalsRes.data ?? []) as Array<Record<string, unknown>>).map(r => r.id as string | number)
+  const contractStatus = await loadRentalContractStatus(locals.supabase, rentalReservationIds)
+
   return {
     user: {
       name: profile?.full_name ?? '고객',
@@ -133,15 +139,18 @@ export const load: PageServerLoad = async ({ locals, depends }) => {
     })(),
     rentals: ((rentalsRes.data ?? []) as Array<Record<string, unknown>>).map(r => {
       const product = r.products as { name: string; category: string } | null
+      const status = contractStatus.get(String(r.id))
       return {
-        id:               r.id as string,
-        status:           r.status as string,
-        reservation_code: r.reservation_code as string,
-        start_date:       r.start_date as string | null,
-        end_date:         r.end_date as string | null,
-        created_at:       r.created_at as string,
-        product_name:     product?.name ?? null,
-        product_category: product?.category ?? null,
+        id:                     r.id as string,
+        status:                 r.status as string,
+        reservation_code:       r.reservation_code as string,
+        start_date:             r.start_date as string | null,
+        end_date:               r.end_date as string | null,
+        created_at:             r.created_at as string,
+        product_name:           product?.name ?? null,
+        product_category:       product?.category ?? null,
+        has_signed_contract:    status?.signed ?? false,
+        pending_contract_token: status?.pendingToken ?? null,
       }
     }),
     cancels: (cancelsRes.data ?? []) as Array<{

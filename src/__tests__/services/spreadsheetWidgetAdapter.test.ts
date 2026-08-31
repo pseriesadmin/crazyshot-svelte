@@ -16,6 +16,8 @@ import {
   jssMergesToSheet,
   sheetToWorksheetConfig,
   worksheetConfigToSheet,
+  parseCssDeclarations,
+  computeUniformStyleCorrections,
   type JssWorksheetInstance,
 } from '$lib/components/cms/contract-editor/spreadsheetWidgetAdapter'
 import type { SpreadsheetSheet } from '$lib/types/contract-document'
@@ -35,13 +37,16 @@ function makeWs(options: {
     getData: () => options.data ?? [],
     getMerge: () => options.merges ?? {},
     getWidth: () => options.widths ?? [],
-    getStyle: () => options.styles ?? {},
+    getStyle: ((cell?: string) =>
+      cell === undefined ? (options.styles ?? {}) : (options.styles ?? {})[cell] ?? ''
+    ) as JssWorksheetInstance['getStyle'],
     // 이 테스트 스위트에서는 worksheetConfigToSheet()(저장 시 역변환)만 검증한다 —
     // insertTextAtSelection()의 선택/셀입력 경로는 별도 목업 없이 아래 메서드로 충분.
     getSelection: () => [0, 0, 0, 0],
     getValueFromCoords: () => null,
     setValueFromCoords: () => {},
     setWidth: () => {},
+    setStyle: () => {},
   }
 }
 
@@ -184,6 +189,19 @@ describe('sheetToWorksheetConfig', () => {
     expect(config.style['A1']).toContain('color: rgb(255, 255, 255)')
     expect(config.style['A1']).toContain('font-weight: bold')
     expect(config.style['A1']).toContain('font-size: large')
+  })
+
+  it('font-family·vertical-align이 CSS style 레코드에 포함된다 (2026-08-29 — 툴바 전체 기능 점검 중 발견, 글꼴/세로정렬 툴바로 지정한 값이 저장 시 유실되던 문제)', () => {
+    const sheetWithFontVAlign: SpreadsheetSheet = {
+      ...baseSheet,
+      cellFormatting: [
+        [{ fontFamily: 'Verdana', verticalAlign: 'bottom' }, {}, {}],
+        [{}, {}, {}],
+      ],
+    }
+    const config = sheetToWorksheetConfig(sheetWithFontVAlign)
+    expect(config.style['A1']).toContain('font-family: Verdana')
+    expect(config.style['A1']).toContain('vertical-align: bottom')
   })
 
   it('text-align이 CSS style 레코드에 포함된다 (2026-08-28 — CMS 실사용 중 발견, 정렬 툴바로 지정한 값이 저장 시 유실되던 문제)', () => {
@@ -331,6 +349,17 @@ describe('worksheetConfigToSheet', () => {
     })
     const sheet = worksheetConfigToSheet('시트1', ws)
     expect(sheet.cellFormatting[0][0].textAlign).toBe('right')
+  })
+
+  it('getStyle CSS에서 font-family·vertical-align이 파싱된다 (2026-08-29 — 글꼴/세로정렬 툴바 저장값 유실 수정)', () => {
+    const ws = makeWs({
+      data: [['A']],
+      widths: [100],
+      styles: { A1: 'font-family: Arial; vertical-align: top' },
+    })
+    const sheet = worksheetConfigToSheet('시트1', ws)
+    expect(sheet.cellFormatting[0][0].fontFamily).toBe('Arial')
+    expect(sheet.cellFormatting[0][0].verticalAlign).toBe('top')
   })
 
   it('getStyle CSS에서 border-top/right/bottom/left이 각각 파싱된다 (2026-08-28(같은 날 후속) — 테두리 툴바 저장값 유실 수정)', () => {
@@ -496,5 +525,90 @@ describe('전체 라운드트립 (sheetToWorksheetConfig → worksheetConfigToSh
     expect(result.merges[0].s).toEqual(original.merges[0].s)
     expect(result.merges[0].e).toEqual(original.merges[0].e)
     expect(result.cellFormatting[0][0].backgroundColor).toBe('#AABBCC')
+  })
+})
+
+// ─────────────────────────────────────────────────────────────────────────────
+// parseCssDeclarations / computeUniformStyleCorrections (2026-08-30)
+//
+// 다중 셀 선택 시 굵게·글자색·배경색·글꼴·글꼴크기·정렬·세로정렬이 일부 셀에만 적용되던
+// 결함(jspreadsheet-ce setStyle이 force 없이 "이미 값이 같으면 지워버리는" 동작) 보정 로직.
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('parseCssDeclarations', () => {
+  it('단일 선언을 파싱한다', () => {
+    const result = parseCssDeclarations('font-weight: bold')
+    expect(result.get('font-weight')).toBe('bold')
+  })
+
+  it('세미콜론으로 구분된 여러 선언을 파싱한다', () => {
+    const result = parseCssDeclarations('font-weight: bold; color: red')
+    expect(result.get('font-weight')).toBe('bold')
+    expect(result.get('color')).toBe('red')
+  })
+
+  it('빈 값("prop:")도 그대로 보존한다 (지워진 상태 — clear-on-match 감지에 필수)', () => {
+    const result = parseCssDeclarations('font-weight:')
+    expect(result.has('font-weight')).toBe(true)
+    expect(result.get('font-weight')).toBe('')
+  })
+
+  it('값 안에 콜론이 없는 일반적인 경우(rgb 색상 등)를 안전하게 처리한다', () => {
+    const result = parseCssDeclarations('color: rgb(255, 0, 0)')
+    expect(result.get('color')).toBe('rgb(255, 0, 0)')
+  })
+})
+
+describe('computeUniformStyleCorrections', () => {
+  it('주소가 2개 미만이면(단일 셀 편집) 보정하지 않는다', () => {
+    expect(computeUniformStyleCorrections({ A1: 'font-weight:' })).toEqual([])
+  })
+
+  it('배치 전체가 동일한 값이면(정상 — 전부 굵게) 보정하지 않는다', () => {
+    const changes = { A1: 'font-weight:bold', A2: 'font-weight:bold', A3: 'font-weight:bold' }
+    expect(computeUniformStyleCorrections(changes)).toEqual([])
+  })
+
+  it('배치 전체가 빈값이면(정상 — 전부 굵게 해제) 보정하지 않는다', () => {
+    const changes = { A1: 'font-weight:', A2: 'font-weight:', A3: 'font-weight:' }
+    expect(computeUniformStyleCorrections(changes)).toEqual([])
+  })
+
+  it('빈값/값이 섞여 있으면(결함 재현 — 4셀 중 1셀만 이미 굵게였던 경우) 값 쪽으로 통일 보정한다', () => {
+    const changes = {
+      A1: 'font-weight:',       // 원래 굵게였다가 이번 클릭으로 지워진 셀
+      A2: 'font-weight:bold',
+      A3: 'font-weight:bold',
+      A4: 'font-weight:bold',
+    }
+    const corrections = computeUniformStyleCorrections(changes)
+    expect(corrections).toEqual([{ addr: 'A1', key: 'font-weight', value: 'bold' }])
+  })
+
+  it('border-* 프로퍼티는 감시 대상에서 제외한다(normalizeMultiCellBorderEdges가 별도 전담)', () => {
+    const changes = {
+      A1: 'border-top:',
+      A2: 'border-top: 1px solid black',
+    }
+    expect(computeUniformStyleCorrections(changes)).toEqual([])
+  })
+
+  it('여러 속성이 한 배치에 섞여 있어도 실제로 값이 갈린 속성만 보정한다', () => {
+    const changes = {
+      A1: 'font-weight:; color: red',
+      A2: 'font-weight:bold; color: red',
+    }
+    const corrections = computeUniformStyleCorrections(changes)
+    expect(corrections).toEqual([{ addr: 'A1', key: 'font-weight', value: 'bold' }])
+  })
+
+  it('한 속성에 서로 다른 non-empty 값이 2종 이상 섞여 있으면(예상 밖 상황) 보정하지 않는다', () => {
+    const changes = { A1: 'color:red', A2: 'color:blue', A3: 'color:' }
+    expect(computeUniformStyleCorrections(changes)).toEqual([])
+  })
+
+  it('배치의 일부 주소에서만 그 속성이 등장하면(전체 broadcast 아님) 보정하지 않는다', () => {
+    const changes = { A1: 'font-weight:bold', A2: 'color:red' }
+    expect(computeUniformStyleCorrections(changes)).toEqual([])
   })
 })

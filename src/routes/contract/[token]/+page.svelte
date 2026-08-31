@@ -9,6 +9,30 @@
   import { renderSpreadsheetToHtml } from '$lib/utils/spreadsheetRender'
   import { browser } from '$app/environment'
   import { csToast } from '$lib/utils/toast'
+  import { PUBLIC_TOSS_CLIENT_KEY } from '$env/static/public'
+
+  // Toss v2 standard SDK (CDN 동적 로드) — window.TossPayments 타입 정의
+  // ⚠️ 실브라우저 E2E 검증 중 발견: 결제위젯(주문서형·결제창형) 클라이언트 키는 `.payment()`
+  // (API 개별연동용 "일반결제" 방식)와 호환되지 않는다 — Toss가 "API 개별 연동 키의 클라이언트
+  // 키로 SDK를 연동해주세요. 결제위젯 연동 키는 지원하지 않습니다." 에러를 반환한다. 반드시
+  // `.widgets()`로 위젯 인스턴스를 만들고 renderPaymentMethods()/renderAgreement()로 결제수단
+  // UI를 화면에 내장(mount)한 뒤 그 인스턴스의 requestPayment()를 호출해야 한다.
+  interface TossPaymentWidgets {
+    setAmount(amount: { currency: string; value: number }): Promise<void>
+    renderPaymentMethods(params: { selector: string; variantKey?: string }): Promise<void>
+    renderAgreement(params: { selector: string; variantKey?: string }): Promise<void>
+    requestPayment(params: {
+      orderId: string
+      orderName: string
+      successUrl: string
+      failUrl: string
+      customerName?: string
+      customerEmail?: string
+    }): Promise<void>
+  }
+  type TossPaymentsSDK = (clientKey: string) => {
+    widgets(opts: { customerKey: string }): TossPaymentWidgets
+  }
 
   interface Props { data: PageData }
   let { data }: Props = $props()
@@ -22,6 +46,7 @@
     total_amount: number | null
     discount_amount: number | null
     tax_amount: number | null
+    delivery_fee: number | null
     final_amount: number | null
   } | null)
 
@@ -121,6 +146,7 @@
                     ?? (reservation?.end_date ? formatDate(reservation.end_date) : ''),
     '기본대여요금': formatAmount(orderData?.total_amount),
     '할인금액':     formatAmount(orderData?.discount_amount),
+    '배송비':       formatAmount(orderData?.delivery_fee),
     '부가세':       formatAmount(orderData?.tax_amount),
     '최종합계':     formatAmount(orderData?.final_amount),
   })
@@ -146,6 +172,8 @@
   let pointsUsed        = $state(data.preselectedPoints ?? 0)
   let paying             = $state(false)
   let payError            = $state('')
+  let tossWidgets         = $state<TossPaymentWidgets | null>(null)
+  let widgetInitError     = $state('')
 
   const couponDiscount = $derived.by(() => {
     const uc = userCoupons.find((u) => u.id === selectedCouponId)
@@ -162,6 +190,36 @@
     if (pointsUsed > maxPoints) pointsUsed = maxPoints
   })
   const payTotal = $derived(Math.max(0, finalAmount - couponDiscount - pointsUsed))
+
+  // Toss v2 결제위젯 인스턴스 초기화 — 서명완료+유상결제(payTotal>0) 상태가 되면 1회 마운트.
+  // renderPaymentMethods()/renderAgreement()로 결제수단 UI가 실제로 DOM에 렌더링된 뒤에만
+  // requestPayment() 호출이 가능하므로, 버튼 클릭 시점이 아니라 여기서 미리 만들어 재사용한다.
+  $effect(() => {
+    if (!browser || !done || payTotal <= 0 || tossWidgets) return
+    let cancelled = false
+    ;(async () => {
+      try {
+        await loadTossSDK()
+        const toss = (window as Window & { TossPayments?: TossPaymentsSDK }).TossPayments
+        if (!toss) throw new Error('Toss SDK를 불러올 수 없습니다.')
+        const widgets = toss(PUBLIC_TOSS_CLIENT_KEY).widgets({ customerKey: 'ANONYMOUS' })
+        await widgets.setAmount({ currency: 'KRW', value: payTotal })
+        await widgets.renderPaymentMethods({ selector: '#toss-payment-method', variantKey: 'DEFAULT' })
+        await widgets.renderAgreement({ selector: '#toss-agreement', variantKey: 'AGREEMENT' })
+        if (!cancelled) tossWidgets = widgets
+      } catch (e) {
+        if (!cancelled) widgetInitError = e instanceof Error ? e.message : '결제 위젯을 불러오지 못했습니다.'
+      }
+    })()
+    return () => { cancelled = true }
+  })
+
+  // 쿠폰·포인트 변경으로 결제금액이 바뀌면 이미 마운트된 위젯에도 즉시 반영
+  $effect(() => {
+    if (tossWidgets && payTotal > 0) {
+      tossWidgets.setAmount({ currency: 'KRW', value: payTotal }).catch(() => {})
+    }
+  })
 
   function handleSigChange(valid: boolean, data: SignatureData | null) {
     sigValid = valid
@@ -202,38 +260,87 @@
     }
   }
 
+  // Toss v2 standard SDK CDN 로드 헬퍼
+  async function loadTossSDK(): Promise<void> {
+    if ((window as Window & { TossPayments?: unknown }).TossPayments) return
+    return new Promise<void>((resolve, reject) => {
+      const script = document.createElement('script')
+      script.src = 'https://js.tosspayments.com/v2/standard'
+      script.onload  = () => resolve()
+      script.onerror = () => reject(new Error('Toss SDK 로드에 실패했습니다. 다시 시도해 주세요.'))
+      document.head.appendChild(script)
+    })
+  }
+
+  const COUPON_ERR_MSG: Record<string, string> = {
+    MIN_AMOUNT_NOT_MET:     '주문 금액이 쿠폰 최소 사용 금액에 미달해 쿠폰이 적용되지 않았습니다.',
+    MIN_DAYS_NOT_MET:       '최소 대여 기간 조건을 충족하지 않아 쿠폰이 적용되지 않았습니다.',
+    WALK_IN_ONLY:           '방문 수령 전용 쿠폰입니다. 쿠폰이 적용되지 않았습니다.',
+    FIRST_RENTAL_ONLY:      '첫 대여 전용 쿠폰입니다. 쿠폰이 적용되지 않았습니다.',
+    STUDENT_ONLY:           '학생 전용 쿠폰입니다. 쿠폰이 적용되지 않았습니다.',
+    SUBSCRIPTION_ONLY:      '구독자 전용 쿠폰입니다. 쿠폰이 적용되지 않았습니다.',
+    ORDER_CONTEXT_REQUIRED: '쿠폰을 적용할 수 없는 상태입니다. 고객센터에 문의해 주세요.',
+    ALREADY_USED:           '이미 사용된 쿠폰입니다.',
+    COUPON_EXPIRED:         '쿠폰 유효기간이 만료되었습니다.',
+  }
+
+  // Toss 결제 실패 리다이렉트 수신 — failUrl = /contract/[token]?payStatus=fail&code=...
+  $effect(() => {
+    if (!browser) return
+    const params = new URLSearchParams(window.location.search)
+    if (params.get('payStatus') === 'fail') {
+      const code = params.get('code') ?? ''
+      payError   = code
+        ? `결제에 실패했습니다. (${decodeURIComponent(code)})`
+        : '결제에 실패했습니다. 다시 시도해 주세요.'
+    }
+  })
+
   async function submitPay() {
     payError = ''
     paying   = true
     try {
-      const res = await fetch(`/api/contracts/${signing.token}/pay-mock`, {
-        method:  'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body:    JSON.stringify({ userCouponId: selectedCouponId, pointsUsed }),
-      })
-      if (res.ok) {
-        const body = await res.json().catch(() => ({})) as { couponError?: string | null }
-        if (body.couponError) {
-          const couponErrMsg: Record<string, string> = {
-            MIN_AMOUNT_NOT_MET:   '주문 금액이 쿠폰 최소 사용 금액에 미달해 쿠폰이 적용되지 않았습니다.',
-            MIN_DAYS_NOT_MET:     '최소 대여 기간 조건을 충족하지 않아 쿠폰이 적용되지 않았습니다.',
-            WALK_IN_ONLY:         '방문 수령 전용 쿠폰입니다. 쿠폰이 적용되지 않았습니다.',
-            FIRST_RENTAL_ONLY:    '첫 대여 전용 쿠폰입니다. 쿠폰이 적용되지 않았습니다.',
-            STUDENT_ONLY:         '학생 전용 쿠폰입니다. 쿠폰이 적용되지 않았습니다.',
-            SUBSCRIPTION_ONLY:    '구독자 전용 쿠폰입니다. 쿠폰이 적용되지 않았습니다.',
-            ORDER_CONTEXT_REQUIRED: '쿠폰을 적용할 수 없는 상태입니다. 고객센터에 문의해 주세요.',
-            ALREADY_USED:         '이미 사용된 쿠폰입니다.',
-            COUPON_EXPIRED:       '쿠폰 유효기간이 만료되었습니다.',
+      if (payTotal === 0) {
+        // 쿠폰·포인트로 전액 무료 — pay-mock으로 즉시 처리 (Toss 결제창 불필요)
+        const res = await fetch(`/api/contracts/${signing.token}/pay-mock`, {
+          method:  'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body:    JSON.stringify({ userCouponId: selectedCouponId, pointsUsed }),
+        })
+        if (res.ok) {
+          const body = await res.json().catch(() => ({})) as { couponError?: string | null }
+          if (body.couponError) {
+            csToast.warning(COUPON_ERR_MSG[body.couponError] ?? '쿠폰이 적용되지 않았습니다.')
           }
-          csToast.warning(couponErrMsg[body.couponError] ?? '쿠폰이 적용되지 않았습니다.')
+          window.location.href = '/contract/complete'
+        } else {
+          const body = await res.json().catch(() => ({})) as { error?: string }
+          payError = body.error ?? '결제 처리 중 오류가 발생했습니다.'
         }
-        window.location.href = '/contract/complete'
       } else {
-        const body = await res.json().catch(() => ({})) as { error?: string }
-        payError = body.error ?? '결제 처리 중 오류가 발생했습니다.'
+        // 실결제 — 이미 마운트된 결제위젯 인스턴스(tossWidgets)의 requestPayment() 호출.
+        // .payment().requestPayment()(API 개별연동용 "일반결제")는 결제위젯 클라이언트 키와
+        // 호환되지 않는다(실브라우저 E2E 검증 중 Toss 응답으로 확인된 실제 제약) — 반드시
+        // widgets() 인스턴스여야 한다.
+        if (!tossWidgets) throw new Error(widgetInitError || '결제 위젯이 아직 준비되지 않았습니다. 잠시 후 다시 시도해 주세요.')
+
+        const tossOrderId = `CSHOT-${Date.now()}`
+        const origin      = window.location.origin
+        const successUrl  = `${origin}/contract/${signing.token}/pay-result?couponId=${selectedCouponId ?? ''}&points=${pointsUsed}`
+        const failUrl     = `${origin}/contract/${signing.token}?payStatus=fail`
+
+        await tossWidgets.requestPayment({
+          orderId:       tossOrderId,
+          orderName:     '크레이지샷 장비 대여',
+          successUrl,
+          failUrl,
+          customerName:  customer?.full_name ?? undefined,
+          customerEmail: customer?.email     ?? undefined,
+        })
+        // requestPayment()는 Toss 결제창으로 리다이렉트되므로 이 줄 이후 실행 안 됨
       }
-    } catch {
-      payError = '네트워크 오류가 발생했습니다. 다시 시도해 주세요.'
+    } catch (err) {
+      payError = err instanceof Error ? err.message : '결제 처리 중 오류가 발생했습니다.'
     } finally {
       paying = false
     }
@@ -579,6 +686,12 @@
               <span>-{formatAmount(orderData?.discount_amount)}</span>
             </div>
           {/if}
+          {#if (orderData?.delivery_fee ?? 0) > 0}
+            <div class="pay-detail-row">
+              <span>배송비</span>
+              <span>{formatAmount(orderData?.delivery_fee)}</span>
+            </div>
+          {/if}
           <div class="pay-detail-row">
             <span>부가세</span>
             <span>{formatAmount(orderData?.tax_amount)}</span>
@@ -602,6 +715,15 @@
           <strong>{payTotal.toLocaleString('ko-KR')}원</strong>
         </div>
 
+        {#if payTotal > 0}
+          <!-- Toss 결제위젯 마운트 지점 — renderPaymentMethods/renderAgreement가 이 id를 채운다 -->
+          <div id="toss-payment-method"></div>
+          <div id="toss-agreement"></div>
+          {#if widgetInitError && !tossWidgets}
+            <p class="sign-error" role="alert">{widgetInitError}</p>
+          {/if}
+        {/if}
+
         {#if payError}
           <p class="sign-error" role="alert">{payError}</p>
         {/if}
@@ -609,7 +731,7 @@
         <button
           class="btn-sign"
           onclick={submitPay}
-          disabled={paying}
+          disabled={paying || (payTotal > 0 && !tossWidgets)}
         >
           {paying ? '결제 처리 중...' : `${payTotal.toLocaleString('ko-KR')}원 결제하기`}
         </button>

@@ -29,7 +29,8 @@ export const GET: RequestHandler = async ({ request }) => {
   if (authHeader !== `Bearer ${cronSecret}`) return json({ error: '인증 실패' }, { status: 401 })
 
   const serviceRoleKey = env.SUPABASE_SERVICE_ROLE_KEY
-  const tossSecretKey = env.TOSS_SECRET_KEY
+  // 정기결제(빌링, mid=bill_crazyhevr) 전용 시크릿 키 — 단건결제(mid=crazysfc8s) 키와 별개
+  const tossSecretKey = env.TOSS_BILLING_SECRET_KEY
   if (!serviceRoleKey || !tossSecretKey) return json({ error: '서버 설정 오류' }, { status: 500 })
 
   const admin = createClient(getSupabaseUrl(), serviceRoleKey)

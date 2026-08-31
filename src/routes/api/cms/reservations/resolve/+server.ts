@@ -41,7 +41,10 @@ export const GET: RequestHandler = async ({ locals, url }) => {
     resolvedId = fee.reservation_id
   }
 
-  let query = admin.from('rental_reservations').select('id, status').limit(1)
+  // 2026-08-31(Migration 400): reservation_code가 이제 같은 주문(여러 상품)의 예약 전체가
+  // 공유하는 값이라 code만으로는 여러 행이 매칭될 수 있다 — 가장 먼저 생성된 예약(대표
+  // 예약과 동일한 결정 기준, create_reservation_order 참고)을 결정론적으로 선택한다.
+  let query = admin.from('rental_reservations').select('id, status').order('id', { ascending: true }).limit(1)
   query = resolvedId != null ? query.eq('id', resolvedId) : query.eq('reservation_code', codeParam as string)
 
   const { data, error } = await query.maybeSingle()

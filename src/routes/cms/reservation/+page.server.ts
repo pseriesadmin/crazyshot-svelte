@@ -6,11 +6,14 @@ import type { Actions, PageServerLoad } from './$types'
 import { getCmsRoleForAction } from '$lib/server/getCmsRoleForAction'
 import { hasSettingsAccess } from '$lib/utils/cmsPermissions'
 import { sendReservationLifecyclePush } from '$lib/server/push'
-import { clearIssuedContractContent } from '$lib/server/clearIssuedContractHelper'
+import { sendApprovalNotifications } from '$lib/server/sendApprovalNotifications'
+import { clearIssuedContractContent, discardSentContract } from '$lib/server/clearIssuedContractHelper'
 import { resolveApprovalNotifyPlan } from '$lib/server/reservationApprovalNotify'
 import { createDelivery, cancelDelivery, registerReturn, DheroApiError, DHERO_STATUS_LABEL } from '$lib/server/dhero'
+import { escapeLikePattern } from '$lib/server/escapeLikePattern'
 import { isBulkDeliveryMethod } from '$lib/server/isBulkDeliveryMethod'
 import { getReservationForDhero } from '$lib/server/getReservationForDhero'
+import { awardRentalCompletePoints } from '$lib/server/awardRentalCompletePoints'
 
 export interface RentalListRow {
   reservation_id:    number
@@ -89,7 +92,7 @@ export const load: PageServerLoad = async ({ parent, url }) => {
 
   const { data: rows, error } = await admin.rpc('get_rental_list', {
     p_status:                          status   || null,
-    p_search:                          search   || null,
+    p_search:                          escapeLikePattern(search) || null,
     p_date_from:                       dateFrom || null,
     p_date_to:                         dateTo   || null,
     p_page:                            page,
@@ -127,32 +130,10 @@ export const actions: Actions = {
     const res = result as { ok: boolean; error?: string } | null
     if (!res?.ok) return fail(400, { message: res?.error ?? '처리 실패' })
 
-    // 예약 승인 채팅 알림 — 같은 주문(order_items)으로 묶인 다중상품 예약이면 상품별 개별
-    // 발송 대신, 주문 전체가 승인 완료된 시점(이번 건이 마지막 승인)에만 통합 카드 1건으로
-    // 발송한다(service-operations.md §4). 단일 상품 예약은 기존과 동일하게 즉시 단건 발송.
+    // 예약 승인 채팅 알림 + 고객 푸시 — 공용 헬퍼로 통합 (NTF-C2 수정, 2026-08-31)
+    // mode='hold'(같은 주문의 다른 상품 미승인)이면 채팅·푸시 둘 다 보류 — service-operations.md §4/§15
     const notifyPlan = await resolveApprovalNotifyPlan(admin, reservationId)
-    if (notifyPlan.mode === 'batch') {
-      const { data: batchResult, error: batchError } = await admin.rpc('send_rental_chat_notification_batch', {
-        p_reservation_ids: notifyPlan.reservationIds,
-        p_notify_type: 'reservation_approval',
-      })
-      if (batchError) {
-        console.error('[cms/reservation] send_rental_chat_notification_batch error:', batchError.message)
-      } else {
-        const batchRes = batchResult as { ok: boolean; error?: string } | null
-        if (!batchRes?.ok) console.error('[cms/reservation] send_rental_chat_notification_batch rejected:', batchRes?.error)
-      }
-    } else if (notifyPlan.mode === 'single') {
-      await admin.rpc('send_rental_chat_notification', {
-        p_reservation_id: reservationId,
-        p_notify_type: 'reservation_approval',
-      })
-    }
-    // notifyPlan.mode === 'hold' → 같은 주문의 다른 상품이 아직 미승인 — 알림 보류(마지막
-    // 승인 시 위 batch 분기가 통합 카드로 한 번에 발송함)
-
-    // 예약 승인 푸시 알림 병행 발송 (채팅과 독립 — 실패해도 위 처리에 영향 없음)
-    await sendReservationLifecyclePush(admin, reservationId, 'reservation_approval')
+    await sendApprovalNotifications(admin, reservationId, notifyPlan)
     return { ok: true }
   },
 
@@ -175,6 +156,26 @@ export const actions: Actions = {
     if (error) return fail(500, { message: error.message })
     const res = result as { ok: boolean; error?: string } | null
     if (!res?.ok) return fail(400, { message: res?.error ?? '처리 실패' })
+
+    // 대여 액션 로그 기록 — 실패해도 메인 처리에 영향 없음 (fail-soft)
+    // note='manual'로 수동 CMS 조작임을 표시 (QR 경로 note='qr_scan'과 구분 — EC-4)
+    try {
+      await admin.rpc('log_rental_action', {
+        p_reservation_id: reservationId,
+        p_action_type:    newStatus,
+        p_admin_id:       session.user.id,
+        p_note:           'manual',
+      })
+    } catch { /* 로그 실패는 무시 */ }
+
+    // 대여완료 포인트 자동적립 — returned 전이 시에만, fail-soft(공용 헬퍼가 내부 처리)
+    // QR 반납 경로(rentalQrTransition.ts)도 동일하게 배선됨(log_rental_action과 동일 이중 배선)
+    if (newStatus === 'returned') {
+      try {
+        await awardRentalCompletePoints(admin, reservationId)
+      } catch { /* 포인트 적립 실패는 무시 */ }
+    }
+
     // 상태 전환별 채팅 알림 자동 발송
     // cancelled·damage_claimed 추가(2026-08-18 검수 발견 — 상태만 바뀌고 고객 알림이 전혀
     // 없던 공백. HOLD 30분 자동만료는 release_reservation_hold RPC 내부에서 별도 발송)
@@ -311,6 +312,24 @@ export const actions: Actions = {
     if (!contractId) return fail(400, { error: '계약서 ID가 없습니다.' })
 
     const result = await clearIssuedContractContent(contractId, admin)
+    if (!result.ok) return fail(result.httpStatus, { error: result.error })
+    return { ok: true }
+  },
+
+  // Stage 5 (EC-6): 발송된 미서명 계약서 폐기 — 서명 링크 즉시 만료 + 콘텐츠 초기화 (GATE B Q7)
+  // manager 이상 전용 (send-chat 엔드포인트와 동일 권한 기준 — security-auth.md 접근 매트릭스 참조)
+  discardSentContract: async ({ request, locals }) => {
+    const { session } = await locals.safeGetSession()
+    if (!session) return fail(401, { error: '인증 필요' })
+    const cmsRole = await getCmsRoleForAction(locals)
+    if (!cmsRole || !hasSettingsAccess(cmsRole)) return fail(403, { error: '권한 없음' })
+
+    const admin      = createClient(PUBLIC_SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
+    const data       = await request.formData()
+    const contractId = data.get('id') as string
+    if (!contractId) return fail(400, { error: '계약서 ID가 없습니다.' })
+
+    const result = await discardSentContract(contractId, admin)
     if (!result.ok) return fail(result.httpStatus, { error: result.error })
     return { ok: true }
   },

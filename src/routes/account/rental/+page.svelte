@@ -36,6 +36,12 @@
     window.open(`/account/rental/${rentalId}/contract`, '_blank', 'noopener,noreferrer')
   }
 
+  // 서명 대기 중인 전자계약서 — 채팅 액션카드와 동일한 토큰 기반 서명화면(/contract/[token])을
+  // 새 창으로 연다(같은 팝업차단 우회 패턴)
+  function openContractSigning(token: string): void {
+    window.open(`/contract/${token}`, '_blank', 'noopener,noreferrer')
+  }
+
   const STATUS_LABEL: Record<string, string> = {
     hold:             '신청대기',
     confirmed:        '계약완료',
@@ -123,6 +129,14 @@
                 onclick={() => openContractViewer(rental.id)}
               >
                 전자계약 확인
+              </button>
+            {:else if rental.pending_contract_token}
+              <button
+                type="button"
+                class="contract-btn"
+                onclick={() => openContractSigning(rental.pending_contract_token ?? '')}
+              >
+                전자계약 서명하기
               </button>
             {/if}
           </div>
