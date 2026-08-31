@@ -740,11 +740,12 @@ export const actions: Actions = {
       const brand = ((form.get('brand') as string | null) ?? '').trim() || null
       const caption = ((form.get('caption') as string | null) ?? '').trim().slice(0, 20) || null
       const is_active = form.get('is_active') === 'true'
+      const option_only = form.get('option_only') === 'true'
       const category = ((form.get('category') as string | null) ?? '').trim() || null
 
       if (!name) return fail(400, { error: '상품명은 필수입니다.' })
 
-      const updatePayload: Record<string, unknown> = { name, brand, product_caption: caption, is_active }
+      const updatePayload: Record<string, unknown> = { name, brand, product_caption: caption, is_active, option_only }
       if (category) updatePayload.category = category
 
       const { error: updateError } = await admin
@@ -779,7 +780,14 @@ export const actions: Actions = {
     }
 
     if (sectionType === 'pricing') {
-      const salePrice = parseInt((form.get('sale_price') as string | null) ?? '0') || null
+      // M-2(2026-08-31 감사 발견): `parseInt(x) || null`은 "0"을 falsy로 취급해 명시적으로
+      // 입력한 0원이 조용히 null로 유실됐다 — 빈 문자열만 null, 그 외 숫자는 0 포함 그대로 저장.
+      // (priceMap 12h/24h/monthly는 아래 `price && price > 0` 게이트가 0/null을 똑같이
+      // "미제공"으로 취급하도록 이미 의도된 설계라 별도 수정 불필요 — sale_price만 직접
+      // DB에 쓰여 이 falsy-zero 버그의 영향을 받았다.)
+      const salePriceRaw = (form.get('sale_price') as string | null) ?? ''
+      const salePriceParsed = parseInt(salePriceRaw, 10)
+      const salePrice = salePriceRaw === '' || isNaN(salePriceParsed) ? null : salePriceParsed
       const saleOnly = form.get('sale_only') === 'true'
 
       const depositAmount = parseFloat((form.get('deposit_amount') as string | null) ?? '0') || 0
@@ -809,23 +817,30 @@ export const actions: Actions = {
         return fail(400, { error: '24시간(1일) 가격은 필수입니다.' })
 
       // sale_price / sale_only → products 테이블
-      await admin.from('products').update({ sale_price: salePrice, sale_only: saleOnly }).eq('id', productId)
+      // M-3(2026-08-31 감사 발견): 아래 가격 관련 DB 호출 전체가 .error를 확인하지 않아
+      // 부분 실패가 서버·클라 양쪽에서 조용히 무시됐다 — 전부 체크 후 실패 시 fail(500) 반환.
+      const { error: saleUpdateError } = await admin
+        .from('products')
+        .update({ sale_price: salePrice, sale_only: saleOnly })
+        .eq('id', productId)
+      if (saleUpdateError) return fail(500, { error: '판매금액 저장에 실패했습니다.' })
 
       for (const dtype of durationTypes) {
         // eslint-disable-next-line security/detect-object-injection
         const price = priceMap[dtype]
         // soft-delete된 행 포함 조회 (partial unique index WHERE deleted_at IS NULL 대응)
-        const { data: anyRule } = await admin
+        const { data: anyRule, error: anyRuleError } = await admin
           .from('price_rules')
           .select('id, deleted_at')
           .eq('product_id', productId)
           .eq('duration_type', dtype)
           .maybeSingle()
+        if (anyRuleError) return fail(500, { error: '가격정책 조회에 실패했습니다.' })
 
         if (price && price > 0) {
           // 가격 입력 있음 → 기존 행 재활성화 또는 신규 INSERT
           if (anyRule) {
-            await admin.from('price_rules').update({
+            const { error: priceUpdateError } = await admin.from('price_rules').update({
               price,
               deposit_amount: depositAmount,
               late_fee_per_hour: lateFeePerHour,
@@ -833,8 +848,9 @@ export const actions: Actions = {
               is_active: true,
               deleted_at: null,
             }).eq('id', anyRule.id)
+            if (priceUpdateError) return fail(500, { error: '가격정책 저장에 실패했습니다.' })
           } else {
-            await admin.from('price_rules').insert({
+            const { error: priceInsertError } = await admin.from('price_rules').insert({
               product_id: productId,
               duration_type: dtype,
               price,
@@ -842,14 +858,16 @@ export const actions: Actions = {
               late_fee_per_hour: lateFeePerHour,
               damage_fee_percentage: damageFeePercentage,
             })
+            if (priceInsertError) return fail(500, { error: '가격정책 저장에 실패했습니다.' })
           }
         } else if (dtype !== '24h' && anyRule && !anyRule.deleted_at) {
           // BND-PRICEDEL-1: 12h/monthly 가격을 비워서 저장하면 소프트삭제 (24h 제외 — 필수 보호됨)
           // anyRule.deleted_at이 null인 active 행만 대상 (이미 soft-deleted인 행은 변경 불필요)
-          await admin.from('price_rules').update({
+          const { error: priceDeleteError } = await admin.from('price_rules').update({
             is_active: false,
             deleted_at: new Date().toISOString(),
           }).eq('id', anyRule.id)
+          if (priceDeleteError) return fail(500, { error: '가격정책 삭제에 실패했습니다.' })
         }
       }
     }
@@ -1101,7 +1119,7 @@ export const actions: Actions = {
 
     const { data: source, error: sourceError } = await admin
       .from('products')
-      .select('id, category, name, slug, brand, description, product_caption, image_urls, specifications, sale_price, sale_only, product_code, code_series, parent_product_id, content_blocks, keywords')
+      .select('id, category, name, slug, brand, description, product_caption, image_urls, specifications, sale_price, sale_only, option_only, product_code, code_series, parent_product_id, content_blocks, keywords')
       .eq('id', sourceProductId)
       .is('deleted_at', null)
       .single()
@@ -1163,6 +1181,7 @@ export const actions: Actions = {
             is_active: true, // products.md §3: 신규 자식 기본값 true (즉시 대여 가능)
             sale_price: source.sale_price,
             sale_only: source.sale_only,
+            option_only: (source as Record<string, unknown>).option_only ?? false,
             parent_product_id: rootProductId,
           })
           .select('id')
@@ -1333,6 +1352,7 @@ export const actions: Actions = {
           is_active: false, // 신규 부모 복제 상품은 미노출 상태로 시작 (의도된 동작)
           sale_price: source.sale_price,
           sale_only: source.sale_only,
+          option_only: (source as Record<string, unknown>).option_only ?? false,
         })
         .select('id')
         .single()

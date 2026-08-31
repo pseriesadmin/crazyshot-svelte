@@ -246,6 +246,7 @@ export async function getProductSearchIndex(): Promise<NaturalSearchProvider<Pro
       )
       .is('parent_product_id', null)
       .eq('is_active', true)
+      .eq('option_only', false)
       .is('deleted_at', null),
     loadPromoteThreshold(),
     loadAdminConfirmedSearchTerms(),   // I-4: 관리자 확인 신호 (fail-safe: 실패 시 빈 맵)

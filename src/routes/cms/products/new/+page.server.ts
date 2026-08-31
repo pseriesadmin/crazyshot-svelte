@@ -98,6 +98,7 @@ export const actions: Actions = {
     const product_caption = captionRaw || null
     const description = (form.get('description') as string | null) || null
     const is_active = form.get('is_active') === 'true'
+    const optionOnly = form.get('option_only') === 'true'
 
     // category가 비어 있고 그룹이 선택됐으면 그룹의 default_category로 자동 설정
     if (!category && groupId) {
@@ -191,8 +192,11 @@ export const actions: Actions = {
       }
     }
 
+    // M-2(2026-08-31 감사 발견): `parseInt(x,10) || null`은 "0"을 falsy로 취급해 명시적으로
+    // 입력한 0원이 조용히 null로 유실됐다 — 빈 문자열만 null, 그 외 숫자는 0 포함 그대로 저장.
     const salePriceRaw = (form.get('sale_price') as string | null) ?? ''
-    const salePrice = parseInt(salePriceRaw, 10) || null
+    const salePriceParsed = parseInt(salePriceRaw, 10)
+    const salePrice = salePriceRaw === '' || isNaN(salePriceParsed) ? null : salePriceParsed
     const saleOnly = form.get('sale_only') === 'true'
 
     // BND-8/9: 가격 데이터를 INSERT 전에 파싱 + 검증 (실패 시 orphaned product 방지)
@@ -228,6 +232,7 @@ export const actions: Actions = {
         specifications,
         components,
         is_active,
+        option_only: optionOnly,
         sale_price: salePrice,
         sale_only: saleOnly,
         content_blocks,

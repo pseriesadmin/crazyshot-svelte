@@ -377,6 +377,10 @@
 
   let isLoading = $state(false)
   let isActive = $state(true)
+  // 옵션 상품 전용(2026-09-01 신규): ON이면 고객 화면 상품 썸네일 목록(카탈로그·홈·
+  // 하이프팩·검색)에서 제외되고, 다른 부모상품의 '옵션상품' 설정에서만 선택 가능해진다.
+  // OFF(기본값)는 기존과 동일하게 전 화면에 정상 노출.
+  let optionOnly = $state(false)
   let saleOnly = $state(false)
   let category = $state('')
 
@@ -403,6 +407,9 @@
   // ────────────────────────────────────────────────────────────
 
   type PriceField = 'price_12h' | 'price_24h' | 'price_monthly' | 'sale_price' | 'deposit_amount' | 'late_fee_per_hour'
+  // 2026-08-31 되돌림: 기본값을 '0'으로 강제 표기했더니 입력칸이 항상 채워진 상태가 되어
+  // placeholder 안내문구(예: "-예: 45,000")가 영구히 가려지는 회귀가 발생했다(Stephen 지적).
+  // 빈 문자열 기본값으로 원복하고, "0을 입력하면 사라지는 버그"만 handlePriceInput에서 계속 방지한다.
   let localPricing = $state<Record<PriceField, string>>({
     price_12h: '',
     price_24h: '',
@@ -412,10 +419,23 @@
     late_fee_per_hour: '',
   })
 
-  function handlePriceInput(field: PriceField, raw: string): void {
+  // Svelte의 oninput 타입은 plain Event라 isComposing이 없다 — as InputEvent 직접 캐스팅은
+  // core-rules.md "as unknown as T 금지" 규칙에 걸려 타입 가드 함수로 우회한다.
+  function isComposingEvent(e: Event): boolean {
+    return 'isComposing' in e && Boolean((e as unknown as { isComposing?: boolean }).isComposing)
+  }
+
+  // IME-SAFE-INPUT(core-rules.md): 한글 등 조합 중(isComposing)에는 값을 건드리지 않고,
+  // 조합이 끝난 뒤(oncompositionend) 다시 걸러낸다 — 조합 중 강제로 value를 초기화하면
+  // 브라우저 IME 오버레이와 충돌해 "가다나" 같은 비숫자 텍스트가 필터링되지 않고 그대로
+  // 남는 사례가 있었다(2026-08-31 실사용 중 발견, ProductDetailPanel.svelte와 동일 결함).
+  // '0' 입력 시 사라지던 버그(2026-08-31)는 `num ? ... : ''` 삼항연산 제거로 계속 방지 —
+  // 다만 전부 지웠을 때는 '0'이 아니라 원래대로 빈 문자열로 복귀해 placeholder가 다시 보이게 한다.
+  function handlePriceInput(field: PriceField, raw: string, isComposing = false): void {
+    if (isComposing) return
     const digits = raw.replace(/[^0-9]/g, '')
-    const num = parseInt(digits, 10)
-    localPricing[field] = num ? num.toLocaleString('ko-KR') : ''
+    if (!digits) { localPricing[field] = ''; return }
+    localPricing[field] = parseInt(digits, 10).toLocaleString('ko-KR')
   }
 
   function priceSubmitValue(field: PriceField): string {
@@ -630,6 +650,7 @@
     <input type="hidden" name="components" value={serializeComponents()} />
     <input type="hidden" name="image_urls" value={serializeImages()} />
     <input type="hidden" name="is_active" value={isActive.toString()} />
+    <input type="hidden" name="option_only" value={optionOnly.toString()} />
     <input type="hidden" name="option_links" value={serializeOptionLinks()} />
     <!-- BND-11: 임시 업로드 폴더 식별자 — 서버에서 temp/{tempId} → {productId} 이관 처리 -->
     <input type="hidden" name="temp_id" value={tempId} />
@@ -840,19 +861,41 @@
       </div>
 
       <div class="field-row">
-        <div class="field-label">판매 상태</div>
-        <div class="toggle-wrap">
-          <button
-            type="button"
-            class="toggle-btn"
-            class:on={isActive}
-            onclick={() => (isActive = !isActive)}
-            aria-pressed={isActive}
-            aria-label="판매 상태 전환"
-          >
-            <span class="toggle-knob"></span>
-          </button>
-          <span class="toggle-label">{isActive ? '활성 (판매중)' : '비활성 (숨김)'}</span>
+        <div class="field-label">노출 조건</div>
+        <div class="toggle-row">
+          <div class="toggle-wrap">
+            <button
+              type="button"
+              class="toggle-btn"
+              class:on={isActive}
+              onclick={() => (isActive = !isActive)}
+              aria-pressed={isActive}
+              aria-label="판매 상태 전환"
+            >
+              <span class="toggle-knob"></span>
+            </button>
+            <span class="toggle-label">{isActive ? '활성 (판매중)' : '비활성 (숨김)'}</span>
+          </div>
+
+          <!-- 옵션 상품 전용(2026-09-01): ON이면 카탈로그·홈·하이프팩·검색 등 사용자 화면
+               상품 썸네일 목록에서 제외되고, 다른 부모상품의 '옵션상품' 설정에서만 선택
+               가능해진다(그 피커는 is_active만 검사하므로 별도 처리 불필요 — products.md
+               §2-12). OFF(기본값)는 기존과 동일하게 정상 노출. '노출 조건' 활성 토글
+               우측에 나란히 배치(Stephen 2026-08-31 확정). -->
+          <div class="toggle-wrap toggle-wrap-secondary">
+            <span class="toggle-sublabel">옵션 상품</span>
+            <button
+              type="button"
+              class="toggle-btn"
+              class:on={optionOnly}
+              onclick={() => (optionOnly = !optionOnly)}
+              aria-pressed={optionOnly}
+              aria-label="옵션 상품 전용 전환"
+            >
+              <span class="toggle-knob"></span>
+            </button>
+            <span class="toggle-label">{optionOnly ? '옵션 전용 (썸네일 미노출)' : '일반 (정상 노출)'}</span>
+          </div>
         </div>
       </div>
     </section>
@@ -1147,12 +1190,13 @@
             id="price_12h"
             type="text"
             inputmode="numeric"
-            class="f-input"
+            class="f-input f-input-number"
             placeholder="12시간 가격 (원)-예: 45,000"
             aria-label="12시간 가격 (원)"
             disabled={saleOnly}
             value={localPricing.price_12h}
-            oninput={(e) => handlePriceInput('price_12h', e.currentTarget.value)}
+            oninput={(e) => handlePriceInput('price_12h', e.currentTarget.value, isComposingEvent(e))}
+            oncompositionend={(e) => handlePriceInput('price_12h', e.currentTarget.value)}
           />
         </div>
         <div class="field-row" class:row-disabled={saleOnly}>
@@ -1160,12 +1204,13 @@
             id="price_24h"
             type="text"
             inputmode="numeric"
-            class="f-input"
+            class="f-input f-input-number"
             placeholder="24시간 가격 (원)-예: 85,000"
             aria-label="24시간 가격 (원) (필수)"
             disabled={saleOnly}
             value={localPricing.price_24h}
-            oninput={(e) => handlePriceInput('price_24h', e.currentTarget.value)}
+            oninput={(e) => handlePriceInput('price_24h', e.currentTarget.value, isComposingEvent(e))}
+            oncompositionend={(e) => handlePriceInput('price_24h', e.currentTarget.value)}
           />
         </div>
         <div class="field-row" class:row-disabled={saleOnly}>
@@ -1173,12 +1218,13 @@
             id="price_monthly"
             type="text"
             inputmode="numeric"
-            class="f-input"
+            class="f-input f-input-number"
             placeholder="월정액 가격 (원)-예: 1,200,000"
             aria-label="월정액 가격 (원)"
             disabled={saleOnly}
             value={localPricing.price_monthly}
-            oninput={(e) => handlePriceInput('price_monthly', e.currentTarget.value)}
+            oninput={(e) => handlePriceInput('price_monthly', e.currentTarget.value, isComposingEvent(e))}
+            oncompositionend={(e) => handlePriceInput('price_monthly', e.currentTarget.value)}
           />
         </div>
         <div class="field-row">
@@ -1187,11 +1233,12 @@
               id="sale_price"
               type="text"
               inputmode="numeric"
-              class="f-input"
+              class="f-input f-input-number"
               placeholder="판매금액 (원)-예: 3,500,000"
               aria-label="판매금액 (원)"
               value={localPricing.sale_price}
-              oninput={(e) => handlePriceInput('sale_price', e.currentTarget.value)}
+              oninput={(e) => handlePriceInput('sale_price', e.currentTarget.value, isComposingEvent(e))}
+              oncompositionend={(e) => handlePriceInput('sale_price', e.currentTarget.value)}
             />
             <label class="sale-only-label">
               <input
@@ -1220,12 +1267,13 @@
             id="deposit_amount"
             type="text"
             inputmode="numeric"
-            class="f-input"
+            class="f-input f-input-number"
             placeholder="보증금 (원)-예: 500,000"
             aria-label="보증금 (원)"
             disabled={saleOnly}
             value={localPricing.deposit_amount}
-            oninput={(e) => handlePriceInput('deposit_amount', e.currentTarget.value)}
+            oninput={(e) => handlePriceInput('deposit_amount', e.currentTarget.value, isComposingEvent(e))}
+            oncompositionend={(e) => handlePriceInput('deposit_amount', e.currentTarget.value)}
           />
         </div>
         <div class="field-row" class:row-disabled={saleOnly}>
@@ -1233,12 +1281,13 @@
             id="late_fee_per_hour"
             type="text"
             inputmode="numeric"
-            class="f-input"
+            class="f-input f-input-number"
             placeholder="연체료/시간 (원)-예: 5,000"
             aria-label="연체료/시간 (원)"
             disabled={saleOnly}
             value={localPricing.late_fee_per_hour}
-            oninput={(e) => handlePriceInput('late_fee_per_hour', e.currentTarget.value)}
+            oninput={(e) => handlePriceInput('late_fee_per_hour', e.currentTarget.value, isComposingEvent(e))}
+            oncompositionend={(e) => handlePriceInput('late_fee_per_hour', e.currentTarget.value)}
           />
         </div>
         <div class="field-row" class:row-disabled={saleOnly}>
@@ -1533,15 +1582,31 @@
   }
   .f-input::placeholder { color: var(--cs-text-placeholder); }
   .f-input:focus { outline: 2px solid var(--cs-purple); outline-offset: -2px; }
+  /* 금액 입력은 숫자 정렬 관례상 우측 정렬(ProductDetailPanel.svelte .il-number와 동일 원칙) */
+  .f-input-number { text-align: right; }
   .f-select { cursor: pointer; }
   .f-textarea { resize: vertical; min-height: 100px; }
 
   /* 토글 */
+  .toggle-row {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: var(--spacing-6);
+  }
   .toggle-wrap {
     display: flex;
     align-items: center;
     gap: 10px;
     min-height: 44px;
+  }
+  .toggle-wrap-secondary {
+    padding-left: var(--spacing-6);
+    border-left: 1px solid var(--cs-lilac);
+  }
+  .toggle-sublabel {
+    font: var(--text-pc-body-14);
+    color: var(--cs-text-dark);
   }
   .toggle-btn {
     position: relative;
