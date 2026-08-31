@@ -51,6 +51,7 @@ export type SelectedProduct = {
   qr_payload: string | null
   sale_price: number | null
   sale_only: boolean
+  option_only: boolean
   assetCount: number
   price12h: number | null
   price24h: number | null
@@ -136,7 +137,7 @@ export async function loadSelectedProductDetail(
       spParentId
         ? admin
             .from('products')
-            .select('name, brand, category, product_caption, slug, image_urls, allowed_period_ids, allowed_method_ids, allowed_pickup_ids, shipping_round_trip, shipping_delivery, shipping_return, sale_price, sale_only, content_blocks, keywords, components, specifications')
+            .select('name, brand, category, product_caption, slug, image_urls, allowed_period_ids, allowed_method_ids, allowed_pickup_ids, shipping_round_trip, shipping_delivery, shipping_return, sale_price, sale_only, option_only, content_blocks, keywords, components, specifications')
             .eq('id', spParentId)
             .is('deleted_at', null)  // BND-2: 삭제된 부모가 선택된 경우 데이터 노출 차단
             .single()
@@ -167,6 +168,7 @@ export async function loadSelectedProductDetail(
       product_caption: (src.product_caption as string | null) ?? null,
       sale_price: (src.sale_price as number | null) ?? null,
       sale_only: (src.sale_only as boolean) ?? false,
+      option_only: (src.option_only as boolean) ?? false,
       allowed_period_ids: (src.allowed_period_ids as string[] | null) ?? [],
       allowed_method_ids: (src.allowed_method_ids as string[] | null) ?? [],
       allowed_pickup_ids: (src.allowed_pickup_ids as string[] | null) ?? [],

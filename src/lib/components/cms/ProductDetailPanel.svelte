@@ -52,6 +52,7 @@
     qr_payload: string | null
     sale_price: number | null
     sale_only: boolean
+    option_only: boolean
     assetCount: number
     price12h: number | null
     price24h: number | null
@@ -179,6 +180,7 @@
     brand: product.brand ?? '',
     caption: product.product_caption ?? '',
     is_active: product.is_active,
+    option_only: product.option_only,
     category: product.category,
   })
   const isDirtyBasic = $derived(
@@ -186,6 +188,7 @@
     localBasic.brand !== (product.brand ?? '') ||
     localBasic.caption !== (product.product_caption ?? '') ||
     localBasic.is_active !== product.is_active ||
+    localBasic.option_only !== product.option_only ||
     localBasic.category !== product.category
   )
 
@@ -199,10 +202,21 @@
     return val.toLocaleString('ko-KR')
   }
 
-  function handlePriceInput(field: keyof typeof localPricing, raw: string) {
+  // Svelte의 oninput 타입은 plain Event라 isComposing이 없다 — as InputEvent 직접 캐스팅은
+  // core-rules.md "as unknown as T 금지" 규칙에 걸려 타입 가드 함수로 우회한다.
+  function isComposingEvent(e: Event): boolean {
+    return 'isComposing' in e && Boolean((e as unknown as { isComposing?: boolean }).isComposing)
+  }
+
+  // IME-SAFE-INPUT(core-rules.md): 한글 등 조합 중(e.isComposing)에는 값을 건드리지 않고,
+  // 조합이 끝난 뒤(oncompositionend) 다시 한 번 걸러낸다 — 그렇지 않으면 조합 중 강제로
+  // value를 초기화할 때 브라우저 IME 오버레이와 충돌해 "가다나" 같은 비숫자 텍스트가
+  // 필터링되지 않고 그대로 화면에 남는 사례가 있었다(2026-08-31 실사용 중 발견).
+  function handlePriceInput(field: keyof typeof localPricing, raw: string, isComposing = false) {
+    if (isComposing) return
     const digits = raw.replace(/[^0-9]/g, '')
-    const num = parseInt(digits, 10)
-    localPricing[field] = num ? num.toLocaleString('ko-KR') : ''
+    if (!digits) { localPricing[field] = ''; return }
+    localPricing[field] = parseInt(digits, 10).toLocaleString('ko-KR')
   }
 
   // ── 가격정책 로컬 상태 ──────────────────────────────────────
@@ -234,7 +248,10 @@
     localPricing.price_monthly         !== origPricing.price_monthly ||
     localPricing.deposit_amount        !== origPricing.deposit_amount ||
     localPricing.late_fee_per_hour     !== origPricing.late_fee_per_hour ||
-    localPricing.damage_fee_percentage !== origPricing.damage_fee_percentage ||
+    // M-1(2026-08-31 감사 발견): damage_fee_percentage는 type="number" bind:value라
+    // 사용자가 값을 건드리면 런타임 타입이 string→number로 바뀌는데 origPricing은 항상
+    // String()이라 저장 후에도 !==가 영구 true가 될 수 있었다 — 양쪽 Number()로 정규화.
+    Number(localPricing.damage_fee_percentage) !== Number(origPricing.damage_fee_percentage) ||
     localPricing.sale_price            !== origPricing.sale_price ||
     localSaleOnly                      !== origSaleOnly
   )
@@ -337,6 +354,7 @@
     localBasic.caption  = product.product_caption ?? ''
     localBasic.category = product.category
     localBasic.is_active = product.is_active
+    localBasic.option_only = product.option_only
     // 배송 옵션 재동기화: product prop 변경 시 isDirtyShip 오탐 방지
     shipRoundTrip = product.shipping_round_trip ?? true
     shipDelivery  = product.shipping_delivery   ?? true
@@ -357,6 +375,11 @@
     localPickupIds = [...(product.allowed_pickup_ids ?? [])]
     localOptions = parseOptionLinks(product)
     optionNamesLoaded = false
+    // H-1(2026-08-31 감사 발견): 콘텐츠/키워드 재동기화 누락 — {#key activeSelectedId}는
+    // "다른 상품 선택"만 방어하고, "같은 상품에서 다른 탭 저장→invalidateAll"은 방어하지
+    // 못해 콘텐츠 탭의 미저장 로컬 편집이 조용히 남아있던 버그(products.md §4-2 위반).
+    localContentBlocks = parseContentBlocks(product)
+    localKeywords = parseKeywords(product)
   })
 
   // 탭 전환: 미저장 변경 존재 시 경고 토스트
@@ -1468,6 +1491,7 @@
           <input type="hidden" name="product_id" value={product.id} />
           <input type="hidden" name="section_type" value="basic" />
           <input type="hidden" name="is_active" value={String(localBasic.is_active)} />
+          <input type="hidden" name="option_only" value={String(localBasic.option_only)} />
           <input type="hidden" name="category" value={localBasic.category} />
           <div class="inline-row">
             <span class="vr-label">카테고리</span>
@@ -1500,18 +1524,41 @@
             </div>
           </div>
           <div class="inline-row">
-            <span class="vr-label">노출 상태</span>
-            <div class="toggle-group">
-              <label class="radio-label">
-                <input type="radio" name="_is_active_radio" value="true"
-                  checked={localBasic.is_active}
-                  onchange={() => { localBasic.is_active = true }} /><span>노출(ON)</span>
-              </label>
-              <label class="radio-label">
-                <input type="radio" name="_is_active_radio" value="false"
-                  checked={!localBasic.is_active}
-                  onchange={() => { localBasic.is_active = false }} /><span>미노출(OFF)</span>
-              </label>
+            <span class="vr-label">노출 조건</span>
+            <div class="toggle-wrap">
+              <button
+                type="button"
+                class="toggle-btn"
+                class:on={localBasic.is_active}
+                onclick={() => { localBasic.is_active = !localBasic.is_active }}
+                aria-pressed={localBasic.is_active}
+                aria-label="노출 조건 전환"
+              >
+                <span class="toggle-thumb"></span>
+              </button>
+              <span class="toggle-state-label">{localBasic.is_active ? '노출(ON)' : '미노출(OFF)'}</span>
+            </div>
+          </div>
+          <!-- 옵션 상품 전용(2026-09-01): ON이면 카탈로그·홈·하이프팩·검색 등 사용자 화면
+               상품 썸네일 목록에서 제외되고, 다른 부모상품의 '옵션상품' 설정에서만 선택
+               가능해진다(그 피커는 is_active만 검사하므로 별도 처리 불필요 —
+               products.md §2-12). OFF(기본값)는 기존과 동일하게 정상 노출. 라디오 버튼
+               2개짜리 그룹이 "노출 조건"과 나란히 있어 헷갈린다는 피드백으로 cms-uiux.md
+               §7-8 표준 슬라이딩 토글(toggle-btn)로 전환(Stephen 2026-08-31 확정). -->
+          <div class="inline-row">
+            <span class="vr-label">옵션 상품</span>
+            <div class="toggle-wrap">
+              <button
+                type="button"
+                class="toggle-btn"
+                class:on={localBasic.option_only}
+                onclick={() => { localBasic.option_only = !localBasic.option_only }}
+                aria-pressed={localBasic.option_only}
+                aria-label="옵션 상품 전용 전환"
+              >
+                <span class="toggle-thumb"></span>
+              </button>
+              <span class="toggle-state-label">{localBasic.option_only ? '옵션 전용(썸네일 미노출)' : '일반(정상 노출)'}</span>
             </div>
           </div>
         </form>
@@ -1777,28 +1824,32 @@
             <input id="ip-12h" class="il-input il-number" type="text" inputmode="numeric" placeholder="0"
               disabled={localSaleOnly}
               value={localPricing.price_12h}
-              oninput={(e) => handlePriceInput('price_12h', e.currentTarget.value)} />
+              oninput={(e) => handlePriceInput('price_12h', e.currentTarget.value, isComposingEvent(e))}
+              oncompositionend={(e) => handlePriceInput('price_12h', e.currentTarget.value)} />
           </div>
           <div class="inline-row" class:row-disabled={localSaleOnly}>
             <label class="vr-label" for="ip-24h">24시간(1일) <span class="required">*</span></label>
             <input id="ip-24h" class="il-input il-number" type="text" inputmode="numeric" placeholder="0"
               disabled={localSaleOnly}
               value={localPricing.price_24h}
-              oninput={(e) => handlePriceInput('price_24h', e.currentTarget.value)} />
+              oninput={(e) => handlePriceInput('price_24h', e.currentTarget.value, isComposingEvent(e))}
+              oncompositionend={(e) => handlePriceInput('price_24h', e.currentTarget.value)} />
           </div>
           <div class="inline-row" class:row-disabled={localSaleOnly}>
             <label class="vr-label" for="ip-mo">월간 요금</label>
             <input id="ip-mo" class="il-input il-number" type="text" inputmode="numeric" placeholder="0"
               disabled={localSaleOnly}
               value={localPricing.price_monthly}
-              oninput={(e) => handlePriceInput('price_monthly', e.currentTarget.value)} />
+              oninput={(e) => handlePriceInput('price_monthly', e.currentTarget.value, isComposingEvent(e))}
+              oncompositionend={(e) => handlePriceInput('price_monthly', e.currentTarget.value)} />
           </div>
           <!-- 판매금액 + 판매만 가능 체크박스 (월간요금 다음) -->
           <div class="inline-row">
             <label class="vr-label" for="ip-sale">판매금액</label>
             <input id="ip-sale" class="il-input il-number" type="text" inputmode="numeric" placeholder="0"
               value={localPricing.sale_price}
-              oninput={(e) => handlePriceInput('sale_price', e.currentTarget.value)} />
+              oninput={(e) => handlePriceInput('sale_price', e.currentTarget.value, isComposingEvent(e))}
+              oncompositionend={(e) => handlePriceInput('sale_price', e.currentTarget.value)} />
             <!-- svelte-ignore a11y_label_has_associated_control -->
             <label class="sale-only-label">
               <input
@@ -1818,14 +1869,16 @@
             <input id="ip-dep" class="il-input il-number" type="text" inputmode="numeric" placeholder="0"
               disabled={localSaleOnly}
               value={localPricing.deposit_amount}
-              oninput={(e) => handlePriceInput('deposit_amount', e.currentTarget.value)} />
+              oninput={(e) => handlePriceInput('deposit_amount', e.currentTarget.value, isComposingEvent(e))}
+              oncompositionend={(e) => handlePriceInput('deposit_amount', e.currentTarget.value)} />
           </div>
           <div class="inline-row" class:row-disabled={localSaleOnly}>
             <label class="vr-label" for="ip-late">연체료/시간</label>
             <input id="ip-late" class="il-input il-number" type="text" inputmode="numeric" placeholder="0"
               disabled={localSaleOnly}
               value={localPricing.late_fee_per_hour}
-              oninput={(e) => handlePriceInput('late_fee_per_hour', e.currentTarget.value)} />
+              oninput={(e) => handlePriceInput('late_fee_per_hour', e.currentTarget.value, isComposingEvent(e))}
+              oncompositionend={(e) => handlePriceInput('late_fee_per_hour', e.currentTarget.value)} />
           </div>
           <div class="inline-row" class:row-disabled={localSaleOnly}>
             <label class="vr-label" for="ip-dmg">손상배상 (%)</label>
@@ -3039,11 +3092,35 @@
   }
   .f-input:focus { outline: 2px solid var(--cs-purple); outline-offset: -2px; }
   .f-textarea { resize: vertical; min-height: 80px; }
-  .toggle-group { display: flex; gap: 16px; }
-  .radio-label {
-    display: flex; align-items: center; gap: 6px;
-    font: var(--text-pc-body-14); color: var(--cs-text); cursor: pointer;
+  /* 슬라이딩 토글 스위치 — cms-uiux.md §7-8 표준 (36×20px / ON: --cs-purple) */
+  .toggle-wrap { display: flex; align-items: center; gap: 10px; }
+  .toggle-btn {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    width: 36px;
+    height: 20px;
+    border-radius: var(--cms-radius-sm);
+    background: var(--cs-disabled-toggle);
+    border: none;
+    cursor: pointer;
+    padding: 0;
+    flex-shrink: 0;
+    transition: background 0.18s;
   }
+  .toggle-btn.on { background: var(--cs-purple); }
+  .toggle-thumb {
+    position: absolute;
+    left: 2px;
+    width: 16px;
+    height: 16px;
+    border-radius: 50%;
+    background: var(--cs-white);
+    box-shadow: 0 1px 3px rgba(0,0,0,0.2);
+    transition: transform 0.18s;
+  }
+  .toggle-btn.on .toggle-thumb { transform: translateX(16px); }
+  .toggle-state-label { font: var(--text-pc-body-14); color: var(--cs-text); }
   .price-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
   .form-footer { display: flex; justify-content: flex-end; padding-top: 4px; }
   .btn-save {

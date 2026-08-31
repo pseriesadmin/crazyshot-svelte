@@ -37,6 +37,7 @@
       .from('products')
       .select('id, name, category, image_urls, slug, price_rules(price, duration_type)')
       .eq('is_active', true)
+      .eq('option_only', false)
       .limit(6)
       .then(async ({ data: rows }) => {
         if (!rows) return
