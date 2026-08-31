@@ -1,5 +1,7 @@
 <script lang="ts">
   import RentalJourneyStepper from '$lib/components/common/RentalJourneyStepper.svelte'
+  import ChatIcon from '$lib/components/common/ChatIcon.svelte'
+  import { openChatWithContext } from '$lib/stores/chat.svelte'
 
   interface RentalItem {
     id: string
@@ -10,6 +12,8 @@
     created_at: string
     product_name?: string | null
     product_category?: string | null
+    has_signed_contract?: boolean
+    pending_contract_token?: string | null
   }
 
   interface Props {
@@ -18,6 +22,22 @@
   }
 
   let { rentals, onback }: Props = $props()
+
+  // 대여 건별 채팅 문의 — 공통 플로팅 채팅 모달을 여는 트리거(모달 자체는 상위 /account
+  // 페이지가 FloatingButton hideFab으로 마운트해둠, account/rental/+page.svelte와 동일 패턴)
+  function openReservationChat(rentalId: string): void {
+    openChatWithContext({ context_type: 'reservation', context_reservation_id: Number(rentalId) })
+  }
+
+  // 서명 완료된 전자계약서를 새 창(탭)으로 열람 — account/rental/+page.svelte와 동일 패턴
+  function openContractViewer(rentalId: string): void {
+    window.open(`/account/rental/${rentalId}/contract`, '_blank', 'noopener,noreferrer')
+  }
+
+  // 서명 대기 중인 전자계약서 — 토큰 기반 서명화면(/contract/[token])을 새 창으로 연다
+  function openContractSigning(token: string): void {
+    window.open(`/contract/${token}`, '_blank', 'noopener,noreferrer')
+  }
 
   const STATUS_LABEL: Record<string, string> = {
     hold:             '신청대기',
@@ -70,9 +90,20 @@
         <div class="rental-card">
           <div class="card-head">
             <span class="code">{rental.reservation_code}</span>
-            <span class="status-chip" style="background:{st.bg};color:{st.color}">
-              {STATUS_LABEL[rental.status] ?? rental.status}
-            </span>
+            <div class="card-head-right">
+              <span class="status-chip" style="background:{st.bg};color:{st.color}">
+                {STATUS_LABEL[rental.status] ?? rental.status}
+              </span>
+              <button
+                type="button"
+                class="chat-btn"
+                onclick={() => openReservationChat(rental.id)}
+                aria-label="이 대여 건으로 채팅 문의하기"
+                title="채팅 문의"
+              >
+                <ChatIcon size={28} />
+              </button>
+            </div>
           </div>
 
           {#if rental.product_name}
@@ -92,6 +123,24 @@
           <div class="stepper-wrap">
             <RentalJourneyStepper status={rental.status} />
           </div>
+
+          {#if rental.has_signed_contract}
+            <button
+              type="button"
+              class="contract-btn"
+              onclick={() => openContractViewer(rental.id)}
+            >
+              전자계약 확인
+            </button>
+          {:else if rental.pending_contract_token}
+            <button
+              type="button"
+              class="contract-btn"
+              onclick={() => openContractSigning(rental.pending_contract_token ?? '')}
+            >
+              전자계약 서명하기
+            </button>
+          {/if}
         </div>
       {/each}
     </div>
@@ -187,6 +236,30 @@
     font-weight: 700;
     white-space: nowrap;
   }
+
+  .card-head-right {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+  }
+
+  /* 대여 건별 채팅 문의 버튼 — account/rental/+page.svelte(모바일)와 동일 스펙 */
+  .chat-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 44px;
+    height: 44px;
+    flex-shrink: 0;
+    background: none;
+    border: none;
+    padding: 0;
+    cursor: pointer;
+    transition: transform 0.15s;
+  }
+  .chat-btn:hover  { transform: scale(1.07); }
+  .chat-btn:active { transform: scale(0.95); }
+
   .product-row {
     display: flex;
     flex-direction: column;
@@ -222,4 +295,24 @@
     color: var(--cs-text);
   }
   .stepper-wrap { margin-top: 4px; }
+
+  /* 전자계약 확인/서명하기 버튼 — account/rental/+page.svelte(모바일)와 동일 스펙 */
+  .contract-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    height: 44px;
+    min-height: 44px;
+    border-radius: var(--radius-xl);
+    background: var(--cs-white);
+    border: 1.5px solid var(--cs-purple);
+    color: var(--cs-purple);
+    font-family: 'Noto Sans KR', sans-serif;
+    font-size: 14px;
+    font-weight: 700;
+    cursor: pointer;
+    transition: background 0.15s;
+  }
+  .contract-btn:hover  { background: var(--cs-lilac); }
+  .contract-btn:active { background: var(--cs-purple-pale); }
 </style>

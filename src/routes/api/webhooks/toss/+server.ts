@@ -40,6 +40,13 @@ export const POST: RequestHandler = async ({ request }) => {
 
   // 1. HMAC-SHA256 서명 검증
   if (!verifyTossSignature(rawBody, signature, tossSecretKey)) {
+    // 서명 실패는 raw_webhook_logs에 남지 않아(검증 통과 전이라 INSERT 이전 단계) 디버깅
+    // 흔적이 전혀 없는 문제가 있었다 — 진단용 최소 정보만 콘솔에 기록(시크릿·서명 원문은
+    // 노출하지 않음, 수신 여부·서명 헤더 존재 여부만).
+    console.warn('[webhook/toss] signature verification failed', {
+      hasSignatureHeader: !!signature,
+      bodyLength:         rawBody.length,
+    })
     return new Response('Unauthorized', { status: 401 })
   }
 

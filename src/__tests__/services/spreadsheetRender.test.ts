@@ -477,6 +477,38 @@ describe('renderSpreadsheetToHtml — CSS 색상 검증', () => {
     expect(html).not.toContain('style=')
   })
 
+  it('font-family·vertical-align이 인라인 style로 출력된다 (2026-08-29 — 스프레드시트 툴바 전체 기능 점검 중 발견, 글꼴/세로정렬 값이 저장 시 유실되던 문제)', () => {
+    const doc: SpreadsheetDocument = {
+      sheets: [{
+        name: 'Sheet1',
+        rows: [['글꼴·세로정렬']],
+        merges: [],
+        colWidths: [null],
+        cellFormatting: [[{ fontFamily: 'Verdana', verticalAlign: 'bottom' }]],
+      }],
+      activeSheetIndex: 0,
+    }
+    const html = renderSpreadsheetToHtml(doc)
+    expect(html).toContain('font-family:Verdana')
+    expect(html).toContain('vertical-align:bottom')
+  })
+
+  it('허용되지 않는 font-family/vertical-align 값은 무시한다', () => {
+    const doc: SpreadsheetDocument = {
+      sheets: [{
+        name: 'Sheet1',
+        rows: [['악의적 글꼴/세로정렬값']],
+        merges: [],
+        colWidths: [null],
+        cellFormatting: [[{ fontFamily: 'expression(alert(1))', verticalAlign: 'expression(alert(1))' }]],
+      }],
+      activeSheetIndex: 0,
+    }
+    const html = renderSpreadsheetToHtml(doc)
+    expect(html).not.toContain('expression')
+    expect(html).not.toContain('style=')
+  })
+
   it('text-align이 인라인 style로 출력된다 (2026-08-28 — CMS 실사용 중 발견, 정렬값 저장 시 유실되던 문제)', () => {
     const doc: SpreadsheetDocument = {
       sheets: [{

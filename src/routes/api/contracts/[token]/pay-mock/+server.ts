@@ -2,8 +2,9 @@ import { createClient } from '@supabase/supabase-js'
 import { SUPABASE_SERVICE_ROLE_KEY } from '$env/static/private'
 import { PUBLIC_SUPABASE_URL } from '$env/static/public'
 import { json } from '@sveltejs/kit'
-import { sendPaymentCompletedAdminPush, sendReservationLifecyclePush } from '$lib/server/push'
+import { sendPaymentCompletedAdminPush } from '$lib/server/push'
 import { resolveApprovalNotifyPlan } from '$lib/server/reservationApprovalNotify'
+import { sendApprovalNotifications } from '$lib/server/sendApprovalNotifications'
 import type { RequestHandler } from './$types'
 
 // 3단계(계약서명 완료 후) mock 결제 트리거 — TASK.md "예약 결제·계약서명 순서 재설계"
@@ -78,34 +79,29 @@ export const POST: RequestHandler = async ({ params, request }) => {
     .maybeSingle()
   const orderId = (orderItem as { order_id: number | null } | null)?.order_id ?? null
 
-  const { data: confirmed, error: rpcErr } = await admin.rpc('mark_reservation_payment_confirmed', {
+  // 2026-08-31(Migration 397/398): 계약이 주문당 1건만 존재해(init-contract 정책) 이
+  // 계약을 소유한 대표 예약뿐 아니라 같은 주문의 형제 예약도 결제 시 함께 payment_confirmed_at을
+  // 기록해야 한다 — mark_reservation_payment_confirmed_order가 주문 전체(단일 예약이면
+  // 자기 자신만)를 순회하며 결제확인 기록 + 게이팅 재확인을 수행한다. (⚠️ 서명 전용
+  // 재확인은 try_confirm_reservation_order를 써야 함 — 이 함수는 결제를 실제로 기록하는
+  // 부수효과가 있어 결제가 확정되는 이 시점에만 호출한다.)
+  const { data: confirmedIds, error: rpcErr } = await admin.rpc('mark_reservation_payment_confirmed_order', {
     p_reservation_id: reservationId,
   })
   if (rpcErr) {
-    console.error('[contracts/pay-mock] mark_reservation_payment_confirmed 실패:', rpcErr)
+    console.error('[contracts/pay-mock] mark_reservation_payment_confirmed_order 실패:', rpcErr)
     return json({ error: '결제 처리 중 오류가 발생했습니다.' }, { status: 500 })
   }
+  const confirmed = ((confirmedIds ?? []) as number[]).includes(reservationId)
 
   if (confirmed === true && reservationUserId) {
-    // 결제완료 관리자 푸시 + 예약승인 고객 푸시 (confirm-mock과 동일 패턴)
+    // 결제완료 관리자 푸시 — 승인 관련 고객 알림과 별도로 즉시 발송
     await sendPaymentCompletedAdminPush(admin, reservationId, reservationUserId, 0)
-    await sendReservationLifecyclePush(admin, reservationId, 'reservation_approval')
 
-    // 채팅 알림 — sign/+server.ts의 "서명 먼저" 경로와 동일하게 resolveApprovalNotifyPlan으로
-    // 묶음주문(service-operations.md §4) 통합/개별 판단을 일치시킨다(회귀 없음, Phase C-1 완료기준)
+    // 채팅 알림 + 고객 푸시 — 공용 헬퍼로 통합 (NTF-C2 수정, 2026-08-31)
+    // mode='hold' 시 채팅·푸시 둘 다 보류. 푸시는 §4 판정 이후에만 발송 — service-operations.md §4/§15
     const notifyPlan = await resolveApprovalNotifyPlan(admin, reservationId)
-    if (notifyPlan.mode === 'batch') {
-      await admin.rpc('send_rental_chat_notification_batch', {
-        p_reservation_ids: notifyPlan.reservationIds,
-        p_notify_type:     'reservation_approval',
-      })
-    } else if (notifyPlan.mode === 'single') {
-      await admin.rpc('send_rental_chat_notification', {
-        p_reservation_id: reservationId,
-        p_notify_type:    'reservation_approval',
-      })
-    }
-    // notifyPlan.mode === 'hold' → 같은 주문의 다른 상품이 아직 미승인 — 알림 보류
+    await sendApprovalNotifications(admin, reservationId, notifyPlan)
   }
 
   // 쿠폰/포인트 소진(Phase C-4) — confirm-mock과 동일하게 실제로 confirmed 전환된 경우에만

@@ -2,7 +2,9 @@
   /**
    * ContractImportModal.svelte — 외부 문서(.docx/.xlsx) 임포트 모달
    *
-   * - accept 목록은 계약 전용 로컬 관리 (전역 fileValidation.ts 이미지 표준 미변경)
+   * - 파일 선택(OS 파일탐색기 트리거·크기/확장자 검증)은 호출부(ContractTemplatePanel /
+   *   ContractEditorModal)에서 처리하고, 선택된 File을 initialFile prop으로 전달한다
+   *   (2026-08-30 — 트리거 버튼 클릭 → 모달의 별도 "파일 선택" 클릭 2단계를 1단계로 통합)
    * - 파싱은 클라이언트에서 수행 (mammoth / SheetJS)
    * - onImport(docx/hwpx HTML)과 onImportSpreadsheet(xlsx SpreadsheetDocument)
    *   두 콜백으로 결과를 부모에게 전달
@@ -27,6 +29,8 @@
   // Props
   // --------------------------------------------------------------------------
   interface Props {
+    /** 호출부에서 이미 선택·검증(크기/확장자)까지 마친 파일 — 모달은 이 파일을 즉시 처리한다 */
+    initialFile: File
     onclose: () => void
     /** docx/hwpx → HTML 문자열 */
     onImport: (result: { type: 'html'; html: string }) => void
@@ -34,27 +38,12 @@
     onImportSpreadsheet?: (doc: SpreadsheetDocument) => void
   }
 
-  let { onclose, onImport, onImportSpreadsheet }: Props = $props()
-
-  // --------------------------------------------------------------------------
-  // 계약 전용 accept 목록 (전역 fileValidation.ts 미변경)
-  // --------------------------------------------------------------------------
-  const CONTRACT_IMPORT_ACCEPT = [
-    'application/vnd.openxmlformats-officedocument.wordprocessingml.document', // .docx
-    'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',       // .xlsx
-    'application/vnd.ms-excel',                                                 // .xls (xlsx fallback)
-    '.docx',
-    '.xlsx',
-    '.xls',
-    '.hwp',
-    '.hwpx',
-  ].join(',')
+  let { initialFile, onclose, onImport, onImportSpreadsheet }: Props = $props()
 
   // --------------------------------------------------------------------------
   // 상태
   // --------------------------------------------------------------------------
   type Step =
-    | 'select'
     | 'docx-preview'
     | 'xlsx-spreadsheet-preview'    // xlsx → 모든 시트 → 스프레드시트 에디터 모드
     | 'hwp-notice'                  // P5-1: .hwp / .hwpx 기본 안내 모달
@@ -62,9 +51,8 @@
     | 'hwpx-preview'                // P5-2: .hwpx 변환 결과 미리보기
     | 'loading'
 
-  let step        = $state<Step>('select')
-  let fileInput:    HTMLInputElement | null = $state(null)
-  let selectedFile: File | null            = $state(null)
+  let step        = $state<Step>('loading')
+  let selectedFile: File | null            = $state(initialFile)
   let fileType:     'docx' | 'xlsx' | 'hwp' | 'hwpx' | null = $state(null)
 
   // docx 상태
@@ -81,22 +69,9 @@
   let hwpxConsentGiven = $state(false)    // 사용자 동의 체크박스
 
   // --------------------------------------------------------------------------
-  // 파일 선택
+  // 파일 라우팅 — 호출부에서 이미 검증된 initialFile을 확장자별로 분기 처리
   // --------------------------------------------------------------------------
-  const MAX_IMPORT_FILE_SIZE = 10 * 1024 * 1024 // 10MB
-
-  function onFileChange(event: Event) {
-    const file = (event.target as HTMLInputElement).files?.[0]
-    if (!file) return
-
-    if (file.size > MAX_IMPORT_FILE_SIZE) {
-      csToast.error('파일 크기가 10MB를 초과합니다. 더 작은 파일로 다시 시도해주세요.')
-      if (fileInput) fileInput.value = ''
-      return
-    }
-
-    selectedFile = file
-
+  function routeFile(file: File) {
     const ext = file.name.split('.').pop()?.toLowerCase() ?? ''
     if (ext === 'docx') {
       fileType = 'docx'
@@ -117,13 +92,10 @@
       } else {
         step = 'hwp-notice'
       }
-    } else {
-      csToast.error('.docx, .xlsx, .hwp, .hwpx 파일만 지원합니다.')
-      selectedFile = null
     }
-    // 동일 파일 재선택 허용
-    if (fileInput) fileInput.value = ''
   }
+
+  routeFile(initialFile)
 
   // --------------------------------------------------------------------------
   // docx 처리
@@ -137,7 +109,7 @@
       step         = 'docx-preview'
     } catch (err) {
       csToast.error(err instanceof Error ? err.message : '.docx 변환에 실패했습니다.')
-      step = 'select'
+      onclose()
     }
   }
 
@@ -165,7 +137,7 @@
       step = 'xlsx-spreadsheet-preview'
     } catch (err) {
       csToast.error(err instanceof Error ? err.message : '.xlsx 로드에 실패했습니다.')
-      step = 'select'
+      onclose()
     }
   }
 
@@ -222,31 +194,6 @@
       {#if step === 'loading'}
         <div class="cim-loading">변환 중...</div>
 
-      {:else if step === 'select'}
-        <!-- 파일 선택 -->
-        <div class="cim-section">
-          <p class="cim-desc">
-            .docx 파일은 편집 가능한 문서로 변환됩니다.<br />
-            .xlsx 파일은 모든 시트를 스프레드시트 에디터로 가져옵니다.<br />
-            .hwpx 파일은 실험적 변환을 시도하거나 안내 메시지를 제공합니다.<br />
-            .hwp 파일은 직접 변환이 지원되지 않으며 안내 메시지가 표시됩니다.
-          </p>
-          <div class="warn-banner">
-            <strong>손실 가능 요소:</strong> 복잡한 레이아웃(워터마크·다단·도형)은 임포트 시 제외될 수 있습니다.
-          </div>
-          <input
-            type="file"
-            accept={CONTRACT_IMPORT_ACCEPT}
-            style="display:none"
-            bind:this={fileInput}
-            onchange={onFileChange}
-            aria-label="문서 파일 선택"
-          />
-          <button type="button" class="btn-upload" onclick={() => fileInput?.click()}>
-            파일 선택 (.docx / .xlsx / .hwpx / .hwp)
-          </button>
-        </div>
-
       {:else if step === 'hwp-notice'}
         <!-- P5-1: HWP / HWPX 기본 안내 모달 -->
         <div class="cim-section">
@@ -270,7 +217,7 @@
           </div>
         </div>
         <div class="cim-footer">
-          <button type="button" class="btn-cancel" onclick={() => { step = 'select'; selectedFile = null }}>
+          <button type="button" class="btn-cancel" onclick={onclose}>
             다른 파일 선택
           </button>
           <button type="button" class="btn-action" onclick={onclose}>확인</button>
@@ -305,7 +252,7 @@
           </label>
         </div>
         <div class="cim-footer">
-          <button type="button" class="btn-cancel" onclick={() => { step = 'select'; selectedFile = null; hwpxConsentGiven = false }}>
+          <button type="button" class="btn-cancel" onclick={onclose}>
             다른 파일 선택
           </button>
           <button
@@ -365,7 +312,7 @@
           </div>
         </div>
         <div class="cim-footer">
-          <button type="button" class="btn-cancel" onclick={() => { step = 'select' }}>다시 선택</button>
+          <button type="button" class="btn-cancel" onclick={onclose}>다시 선택</button>
           <button type="button" class="btn-action" onclick={confirmDocxImport}>
             이 내용으로 가져오기
           </button>
@@ -408,7 +355,7 @@
           </p>
         </div>
         <div class="cim-footer">
-          <button type="button" class="btn-cancel" onclick={() => { step = 'select'; xlsxSpreadsheetDoc = null }}>
+          <button type="button" class="btn-cancel" onclick={onclose}>
             다시 선택
           </button>
           <button type="button" class="btn-action" onclick={confirmXlsxSpreadsheetImport}>
@@ -574,21 +521,6 @@
     flex-shrink: 0;
     accent-color: var(--cs-purple, #3B2F8A);
   }
-
-  .btn-upload {
-    align-self: flex-start;
-    height: 38px;
-    padding: 0 20px;
-    background: var(--cs-purple, #3B2F8A);
-    color: var(--cs-white, #fff);
-    border: none;
-    border-radius: var(--cms-radius-sm, 8px);
-    font: var(--text-pc-body-14, 14px);
-    font-weight: 700;
-    cursor: pointer;
-    transition: background 0.12s;
-  }
-  .btn-upload:hover { background: var(--cs-purple-hover, #2d2470); }
 
   /* docx 미리보기 */
   .docx-preview {

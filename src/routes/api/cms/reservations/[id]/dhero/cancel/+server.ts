@@ -11,12 +11,14 @@ import { createClient } from '@supabase/supabase-js'
 import { SUPABASE_SERVICE_ROLE_KEY } from '$env/static/private'
 import { PUBLIC_SUPABASE_URL } from '$env/static/public'
 import { getCmsRoleForAction } from '$lib/server/getCmsRoleForAction'
+import { hasSettingsAccess } from '$lib/utils/cmsPermissions'
 import { cancelDelivery, DheroApiError } from '$lib/server/dhero'
 import type { RequestHandler } from './$types'
 
 export const PUT: RequestHandler = async ({ params, locals }) => {
   const cmsRole = await getCmsRoleForAction(locals)
-  if (!cmsRole) return json({ error: '권한이 없습니다.' }, { status: 403 })
+  // RSV-B-B6: 두발히어로 배송 취소는 manager 이상 전용
+  if (!cmsRole || !hasSettingsAccess(cmsRole)) return json({ error: '권한이 없습니다.' }, { status: 403 })
 
   const reservationId = Number(params.id)
   if (!Number.isInteger(reservationId) || reservationId <= 0) {
@@ -39,6 +41,14 @@ export const PUT: RequestHandler = async ({ params, locals }) => {
 
   try {
     await cancelDelivery(trackingNumber)
+    // RSV-B-C4: 취소 성공 후 tracking_number NULL 초기화 (fail-soft)
+    // clear_reservation_tracking_number RPC(Migration 403) — 재접수 가능 상태로 되돌림.
+    // 실패해도 취소 자체는 이미 완료됐으므로 ok:true 응답 유지.
+    try {
+      await admin.rpc('clear_reservation_tracking_number', { p_reservation_id: reservationId })
+    } catch (rpcErr) {
+      console.error('[dhero/cancel] tracking_number 초기화 RPC 실패(fail-soft):', rpcErr instanceof Error ? rpcErr.message : rpcErr)
+    }
     return json({ ok: true })
   } catch (e) {
     if (e instanceof DheroApiError) {

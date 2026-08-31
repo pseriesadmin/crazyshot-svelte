@@ -52,6 +52,13 @@ export const PATCH: RequestHandler = async ({ params, request, locals }) => {
   const body = await request.json() as { locker_password?: string | null }
   const lockerPassword = (body.locker_password ?? '').trim() || null
 
+  // RSV-B-B5: 무인보관함 비밀번호 형식 검증 (숫자 4~6자리)
+  if (lockerPassword !== null) {
+    if (!/^\d{4,6}$/.test(lockerPassword)) {
+      throw error(400, '보관함 비밀번호는 숫자 4~6자리이어야 합니다.')
+    }
+  }
+
   // locals.supabase 사용 필수 — update_reservation_locker_password RPC 내부의 is_cms_user()가
   // auth.uid() 기반이라 관리자의 실세션으로 호출해야 통과됨(update_reservation_tracking과 동일 패턴)
   const { error: rpcErr } = await (locals.supabase.rpc as unknown as (

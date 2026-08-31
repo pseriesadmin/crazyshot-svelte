@@ -63,6 +63,7 @@ export const load: PageServerLoad = async ({ locals, url }) => {
     qr_payload: string | null
     sale_price: number | null
     sale_only: boolean
+    option_only: boolean
     assetCount: number
     price12h: number | null
     price24h: number | null

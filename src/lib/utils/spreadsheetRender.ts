@@ -80,6 +80,25 @@ function isValidTextAlign(value: string): boolean {
 }
 
 /**
+ * jspreadsheet 글꼴 툴바가 실제로 제공하는 3개 값만 허용(2026-08-29 추가 — "Default" 선택
+ * 시엔 애초에 빈 문자열이 저장되므로 이 필드 자체가 채워지지 않음, node_modules/jspreadsheet-ce
+ * 직접 확인). "Courier New"처럼 값 안에 공백이 들어가는 폰트명도 있어 전체 문자열 allowlist로
+ * 고정 매칭 — 임의 폰트명 인젝션 방지.
+ */
+const CSS_FONT_FAMILY = /^(Verdana|Arial|Courier New)$/i
+
+function isValidFontFamily(value: string): boolean {
+  return CSS_FONT_FAMILY.test(value.trim())
+}
+
+/** jspreadsheet 세로정렬 툴바가 실제로 저장하는 3개 값만 허용(2026-08-29 추가) */
+const CSS_VERTICAL_ALIGN = /^(top|middle|bottom)$/i
+
+function isValidVerticalAlign(value: string): boolean {
+  return CSS_VERTICAL_ALIGN.test(value.trim())
+}
+
+/**
  * jspreadsheet 테두리 툴바가 border-top/right/bottom/left에 저장하는 "Npx 스타일 색상"
  * 형식만 허용(2026-08-28 추가). 예: "1px solid rgb(0, 0, 0)", "2px dashed #FF0000".
  *
@@ -130,8 +149,14 @@ function cellFormattingToStyle(fmt: XlsxCellFormatting): string {
   if (fmt.fontSize && isValidFontSize(fmt.fontSize)) {
     parts.push(`font-size:${fmt.fontSize}`)
   }
+  if (fmt.fontFamily && isValidFontFamily(fmt.fontFamily)) {
+    parts.push(`font-family:${fmt.fontFamily}`)
+  }
   if (fmt.textAlign && isValidTextAlign(fmt.textAlign)) {
     parts.push(`text-align:${fmt.textAlign}`)
+  }
+  if (fmt.verticalAlign && isValidVerticalAlign(fmt.verticalAlign)) {
+    parts.push(`vertical-align:${fmt.verticalAlign}`)
   }
   return parts.join(';')
 }

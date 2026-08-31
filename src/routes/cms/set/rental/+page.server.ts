@@ -29,6 +29,9 @@ export interface RentalMethodOption {
   display_order: number
   is_active: boolean
   is_bulk_delivery: boolean
+  // 휴무일 캘린더 제한 대상(택배사 의존 여부) — is_bulk_delivery("요청 A" 전용)와는
+  // 별개 목적(감사 RSC-B3, Migration #386). /cart courierClosedMap 적용 방식 판정에만 쓰임.
+  is_courier_dependent: boolean
 }
 
 export interface PickupPoint {
@@ -61,7 +64,7 @@ export interface RentalShippingSettings {
 export interface DeliveryFeeDiscountTier {
   id: string
   min_rental_amount: number
-  condition_type: 'long_term_rental' | 'sale_only_purchase'
+  condition_types: ('long_term_rental' | 'sale_only_purchase')[]
   discount_rate: number
   is_active: boolean
 }
@@ -93,7 +96,7 @@ export const load: PageServerLoad = async ({ locals }) => {
       .order('display_order'),
 
     untypedFrom(supabase, 'rental_method_options')
-      .select('id, name, method_key, display_order, is_active, is_bulk_delivery')
+      .select('id, name, method_key, display_order, is_active, is_bulk_delivery, is_courier_dependent')
       .is('deleted_at', null)
       .order('display_order'),
 
@@ -129,7 +132,7 @@ export const load: PageServerLoad = async ({ locals }) => {
       .order('date'),
 
     untypedFrom(supabase, 'delivery_fee_discount_tiers')
-      .select('id, min_rental_amount, condition_type, discount_rate, is_active')
+      .select('id, min_rental_amount, condition_types, discount_rate, is_active')
       .is('deleted_at', null)
       .order('created_at'),
   ])
@@ -204,6 +207,10 @@ export const actions: Actions = {
     const methodKey = (data.get('method_key') as string | null)?.trim() || null
 
     if (!name) return fail(400, { error: '대여방식명을 입력해주세요.' })
+    // 2026-08-30: method_key 없이 등록되면 카트의 deliveryTabs/isDeliveryLocked가 이 방식을
+    // 전혀 인식하지 못해 카트에 노출도 안 되고 "일괄적용" 토글도 무효과가 되는 결함이었음
+    // (감사 RSC-B1) — 필수값으로 강제.
+    if (!methodKey) return fail(400, { error: '방식 유형을 선택하세요.' })
     if (count >= 10) return fail(400, { error: '대여 방식은 최대 10개까지 등록할 수 있습니다.' })
 
     const { error } = await untypedRpc(locals.supabase, 'upsert_rental_method_option', {
@@ -247,6 +254,18 @@ export const actions: Actions = {
     const data = await request.formData()
     const id = data.get('id') as string
     const { error } = await untypedRpc(locals.supabase, 'toggle_rental_method_bulk_delivery', { p_id: id })
+    if (error) return fail(400, { error: error.message })
+    return { success: true }
+  },
+
+  // 휴무일 캘린더 제한 대상(택배사 의존 여부) — is_bulk_delivery("요청 A")와 별개 목적
+  // (감사 RSC-B3, 2026-08-30). /cart courierClosedMap 적용 방식 판정 전용.
+  toggleCourierDependent: async ({ request, locals }) => {
+    const { session } = await locals.safeGetSession()
+    if (!session) return fail(401, { error: '인증 필요' })
+    const data = await request.formData()
+    const id = data.get('id') as string
+    const { error } = await untypedRpc(locals.supabase, 'toggle_rental_method_courier_dependent', { p_id: id })
     if (error) return fail(400, { error: error.message })
     return { success: true }
   },
@@ -479,30 +498,41 @@ export const actions: Actions = {
     return { success: true }
   },
 
-  // ─── 배송료 우대설정 (최대 3개) ─────────────────
+  // ─── 배송료 우대설정 (최대 5개) ─────────────────
   addDiscountTier: async ({ request, locals }) => {
     const { session } = await locals.safeGetSession()
     if (!session) return fail(401, { error: '인증 필요' })
     const data = await request.formData()
     const amountRaw = (data.get('min_rental_amount') as string | null) ?? ''
     const amount = amountRaw !== '' ? parseInt(amountRaw, 10) : NaN
-    const conditionType = (data.get('condition_type') as string | null) ?? ''
+    const conditionTypesRaw = (data.get('condition_types') as string | null) ?? '[]'
+    let conditionTypes: string[] = []
+    try {
+      conditionTypes = JSON.parse(conditionTypesRaw)
+    } catch {
+      conditionTypes = []
+    }
     const discountKey = (data.get('discount_rate') as string | null) ?? ''
     const count = parseInt(data.get('count') as string, 10)
 
     if (Number.isNaN(amount) || amount < 0) return fail(400, { error: '대여금액을 입력하세요.' })
-    if (!['long_term_rental', 'sale_only_purchase'].includes(conditionType)) {
+    const VALID_CONDITION_TYPES = ['long_term_rental', 'sale_only_purchase']
+    if (
+      !Array.isArray(conditionTypes) ||
+      conditionTypes.length === 0 ||
+      !conditionTypes.every((c) => VALID_CONDITION_TYPES.includes(c))
+    ) {
       return fail(400, { error: '조건을 선택하세요.' })
     }
     const DISCOUNT_RATE_MAP: Record<string, number> = { free: 1, half: 0.5, base: 0 }
     const discountRate = DISCOUNT_RATE_MAP[discountKey]
     if (discountRate === undefined) return fail(400, { error: '우대옵션을 선택하세요.' })
-    if (count >= 3) return fail(400, { error: '배송료 우대설정은 최대 3개까지 등록할 수 있습니다.' })
+    if (count >= 5) return fail(400, { error: '배송료 우대설정은 최대 5개까지 등록할 수 있습니다.' })
 
     const { error } = await untypedRpc(locals.supabase, 'upsert_delivery_fee_discount_tier', {
       p_id: null,
       p_min_rental_amount: amount,
-      p_condition_type: conditionType,
+      p_condition_types: conditionTypes,
       p_discount_rate: discountRate,
     })
     if (error) return fail(500, { error: error.message })

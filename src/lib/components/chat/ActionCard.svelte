@@ -88,11 +88,13 @@
       case 'reservation_hold':        return { label: '예약 신청 확인', color: 'purple' }
       case 'reservation_approval':   return { label: '예약 승인 확인', color: 'purple' }
       case 'shipment_notify':        return { label: '배송 추적', color: 'green' }
+      case 'tracking_notify':        return { label: '배송 정보 확인', color: 'green' }
       case 'rental_confirm':         return { label: '대여 정보 확인', color: 'purple' }
       case 'return_remind':          return { label: '반납 등록하기', color: 'orange' }
       case 'coupon_issued':          return { label: '쿠폰 확인하기', color: 'purple' }
       case 'contract_link':          return { label: '전자계약서명', color: 'purple' }
       case 'contract_signed':        return { label: '전자계약완료', color: 'purple' }
+      case 'refund_failed':          return { label: '환불실패확인', color: 'red' }
       case 'INQUIRY_REPLY_CARD':     return { label: '답변 확인하기', color: 'purple' }
       case 'INQUIRY_NEW_CARD':       return { label: '빠른문의 답변등록', color: 'purple' }
       // GSD-17: 제품 링크 카드 (관리자 @ 멘션으로 삽입)

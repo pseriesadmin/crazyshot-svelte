@@ -9,7 +9,7 @@
   import { supabase } from '$lib/services/supabase';
   import { csToast } from '$lib/utils/toast';
   import { isLockerHour } from '$lib/utils/lockerTimeRange';
-  import { calcRoundTripFee, calcReturnFee, calcShippingDiscountRate, type ShippingFeeItem, type DeliveryFeeDiscountTier, type DiscountConditionItem } from '$lib/utils/cartShippingFee';
+  import { calcShippingFee, calcShippingDiscountRate, type ShippingFeeItem, type DeliveryFeeDiscountTier, type DiscountConditionItem } from '$lib/utils/cartShippingFee';
   import {
     createMultiUnitReservation,
     resolveParentProductId,
@@ -57,8 +57,12 @@
   }
 
   function defaultOptions(): CardOptions {
+    // 2026-08-30(감사 RSC-B2): 기본값이 배송 계열('crazydelivery')이면 restrict_return_
+    // delivery ON 상태에서 사용자가 탭을 한 번도 클릭하지 않아도 이미 차단 대상인 값으로
+    // 시작해 체크아웃 마지막에야 실패가 드러나던 문제 — 배송 제한과 무관한 'visit'(방문)로
+    // 변경. methodSelectionValid 검증(아래)이 최종 방어선.
     return {
-      rentalMethod: 'crazydelivery', returnMethod: 'crazydelivery',
+      rentalMethod: 'visit', returnMethod: 'visit',
       copyToReturn: false, couponWelcome: false, couponMembership: false
     };
   }
@@ -72,6 +76,13 @@
   // 시점에만 호출되므로 참조 가능).
   function isDeliveryLocked(m: DeliveryMethod): boolean {
     return sdDeliveryOpts.some(o => o.method_key === m && o.is_bulk_delivery);
+  }
+
+  // 휴무일 캘린더 제한(공휴일·일요일 날짜 선택 차단) 대상 판정 — is_bulk_delivery("요청 A"
+  // 반납방식 강제고정 전용)와는 별개 목적의 독립 플래그(감사 RSC-B3, 2026-08-30 신설,
+  // Migration #386). CMS "휴무일 제한 방식"에서 관리자가 방식별로 직접 토글한다.
+  function isCourierDependent(m: DeliveryMethod): boolean {
+    return sdDeliveryOpts.some(o => o.method_key === m && o.is_courier_dependent);
   }
 
   function addDays(iso: string, n: number): string {
@@ -460,7 +471,8 @@
   // 예약행(재고단위) 여러 건을 하나의 그룹으로 묶어 내려준다. qty=reservationIds.length,
   // canonicalReservationId가 옵션·방식 저장 기준(=CartItemUiState.id와 동일).
   type CartLineGroup = { groupKey: string; canonicalReservationId: string; reservationIds: string[]; qty: number; productId: string | null; product: ProductRow | null; price12h: number | null; price24h: number | null; deposit: number | null; startDate: string; endDate: string; pickupMethod: string | null; returnMethod: string | null; pickupTime: string | null; returnTime: string | null; durationType: string | null; options: CartLineItemOption[]; status: string }
-  type ServerExt = { calcTotal: number; calcDiscount: number; calcFinal: number; depositTotal: number; membershipGrade: string | null; userPoints: number; userCoupons: UserCouponExt[]; cartLineItems: CartLineItem[]; cartLineGroups: CartLineGroup[]; productPriceRules: Record<string, PriceRuleExt>; hasUserAddress: boolean; rentalGuideText: string }
+  type RentalConsentItemRow = { id: string; content: string; display_order: number }
+  type ServerExt = { calcTotal: number; calcDiscount: number; calcFinal: number; depositTotal: number; membershipGrade: string | null; userPoints: number; userCoupons: UserCouponExt[]; cartLineItems: CartLineItem[]; cartLineGroups: CartLineGroup[]; productPriceRules: Record<string, PriceRuleExt>; hasUserAddress: boolean; rentalGuideText: string; consentItems: RentalConsentItemRow[] }
   const sd = $derived(data as unknown as ServerExt)
 
   // 카트 라인아이템 — 항상 실 DB 기준 (게스트도 예약 시 익명 로그인으로 실 세션을 가지므로
@@ -485,7 +497,17 @@
   })
 
   // ── Footer + canProceed 5조건 가드
-  let agreed = $state(false);
+  // 필수 동의문 항목(rental_consent_items)이 등록돼 있으면 각 항목을 개별 체크해야 하고,
+  // 등록된 항목이 없으면(레거시/미설정 상태) 기존처럼 단일 체크박스로 동작(하위호환).
+  // 2026-08-30: CMS에 등록 UI만 있고 체크아웃에 전혀 연결되지 않던 공백을 감사로 발견해 연결.
+  let manualAgreed = $state(false);
+  let consentChecked = $state<Record<string, boolean>>({});
+  const consentItems = $derived<RentalConsentItemRow[]>(sd.consentItems ?? [])
+  const agreed = $derived(
+    consentItems.length === 0
+      ? manualAgreed
+      : consentItems.every((c) => consentChecked[c.id] === true)
+  )
   let showGuideModal = $state(false);
   let isConfirming = $state(false);
   let footerVisible = $state(false);
@@ -619,22 +641,13 @@
   // 멤버십 할인 — 등급 할인율을 체크된 소계에 적용
   const otMembershipDiscount = $derived(Math.round(otSubtotal * otDiscountRate / 100))
 
-  // @ts-expect-error — deliveryOptions: +page.server.ts 제공
-  const sdDeliveryOpts = $derived((data.deliveryOptions as Array<{ method_key: string; name: string; fee_amount: number; is_free_for_top_grade: boolean; is_bulk_delivery: boolean }> | undefined) ?? [])
-
-  // 배송비: DB rental_method_options.fee_amount 우선, 없으면 하드코딩 폴백
-  function deliveryFee(method: DeliveryMethod, grade: string): number {
-    if (sdDeliveryOpts.length) {
-      const opt = sdDeliveryOpts.find(o => o.method_key === method)
-      if (opt) return (opt.is_free_for_top_grade && grade === 'CRAZY') ? 0 : opt.fee_amount
-    }
-    return method === 'crazydelivery' && grade !== 'CRAZY' ? 3500 : 0
-  }
+  const sdDeliveryOpts = $derived((data.deliveryOptions as Array<{ method_key: string; name: string; is_bulk_delivery: boolean; is_courier_dependent: boolean }> | undefined) ?? [])
 
   // 왕복요금/반납요금: CMS "/cms/set/rental > 배송 설정"(rental_shipping_settings) —
-  // 위 방식별 fee_amount와는 별개 항목이라 가산한다(대체 금지, 핵심제약). Q5 확정(2026-08-25):
-  // 상품(예약)마다 반복 부과하지 않고 체크된 카트 전체 기준으로 각각 최대 1회만 부과 —
-  // 순수 함수(calcRoundTripFee/calcReturnFee, $lib/utils/cartShippingFee)에 위임.
+  // 배송비(왕복/배송/반납요금) — 3-way 배타 규칙(2026-08-30 확정, cartShippingFee.ts 헤더
+  // 참고): 수령+반납 둘 다 배송이면 왕복요금만, 수령만 배송이면 배송요금만, 반납만 배송이면
+  // 반납요금만 부과(스태킹 없음). 상품(예약)마다 반복 부과하지 않고 체크된 카트 전체
+  // 기준으로 최대 1회만 부과 — 순수 함수(calcShippingFee, $lib/utils/cartShippingFee)에 위임.
   const sdShippingSettings = $derived((data.shippingSettings as {
     enable_round_trip: boolean; round_trip_fee: number | null
     enable_delivery: boolean;   delivery_fee: number | null
@@ -651,11 +664,11 @@
         pickupIsDelivery: isDeliveryLocked(it.opts.rentalMethod),
         returnIsDelivery: isDeliveryLocked(it.opts.returnMethod),
         shipping_round_trip: (product as ProductRow & { shipping_round_trip?: boolean | null } | undefined)?.shipping_round_trip ?? true,
+        shipping_delivery: (product as ProductRow & { shipping_delivery?: boolean | null } | undefined)?.shipping_delivery ?? true,
         shipping_return: (product as ProductRow & { shipping_return?: boolean | null } | undefined)?.shipping_return ?? true,
       }))
   )
-  const otRoundTripFee = $derived(calcRoundTripFee(sdShippingSettings, checkedShippingItems))
-  const otReturnFee = $derived(calcReturnFee(sdShippingSettings, checkedShippingItems))
+  const otShippingFee = $derived(calcShippingFee(sdShippingSettings, checkedShippingItems))
 
   // 배송료 우대설정(/cms/set/rental) — 대여금액(otSubtotal) + 조건(3일이상 장기대여/판매상품
   // 구매) 만족 시 배송비(왕복+배송+반납 합계)에 할인율 적용(Stephen 확정, 2026-08-29).
@@ -769,12 +782,29 @@
   const restrictedDeliveryTabs = $derived<DeliveryTabMeta[]>(
     deliveryTabs.filter(tab => !isDeliveryLocked(tab.v))
   )
+  // 체크아웃에 실제 노출되는 콤보 목록(restrict_return_delivery 반영) — 아래 유효성 검증과
+  // 화면 렌더링(1670행 visibleTabs) 둘 다 이 동일 파생값을 공유한다.
+  const otVisibleTabs = $derived<DeliveryTabMeta[]>(
+    sdShippingSettings?.restrict_return_delivery ? restrictedDeliveryTabs : deliveryTabs
+  )
+  // 2026-08-30(감사 RSC-B2): 신규/드래프트 카트 항목의 로컬 기본 수령·반납 방식이
+  // 'crazydelivery'로 하드코딩돼 있어, restrict_return_delivery ON 상태에서 사용자가
+  // 방식 탭을 한 번도 명시적으로 클릭하지 않으면 "아무것도 잘못 고른 적 없는데" 체크아웃
+  // 마지막 단계(서버 가드)에서만 실패가 드러나던 결함 — 제출 전에 미리 감지해 CTA를
+  // 비활성화하고 안내 문구로 원인을 명확히 보여준다(defaultOptions()의 기본값 자체도
+  // 'visit'로 변경해 애초에 이 상태에 잘 빠지지 않도록 함께 방어).
+  const methodSelectionValid = $derived(
+    itemsState.every(it => it.deleted || !it.checked || (
+      otVisibleTabs.some(t => t.v === it.opts.rentalMethod) &&
+      otVisibleTabs.some(t => t.v === it.opts.returnMethod)
+    ))
+  )
+  const readyToSubmit = $derived(canProceed && methodSelectionValid)
+  // 2026-08-30: rental_method_options.fee_amount(방식별 기본배송비) 경로는 CMS에 입력 UI
+  // 자체가 없어 항상 0으로 방치돼 있던 죽은 코드였음(감사 RSC-C3) — 배송비는 전부
+  // rental_shipping_settings(왕복/배송/반납요금) + 배송료 우대설정으로만 계산하도록 정리.
   const otDeliveryFee = $derived(
-    Math.round(
-      (itemsState.reduce((sum, it) => sum + ((it.deleted || !it.checked) ? 0 : deliveryFee(it.opts.rentalMethod, otGrade)), 0)
-        + otRoundTripFee + otReturnFee)
-      * (1 - otShippingDiscountRate)
-    )
+    Math.round(otShippingFee * (1 - otShippingDiscountRate))
   )
 
   // 택배 휴무일 캘린더 제어(2026-08-24) — 마스터 토글 OFF면 서버가 이미 빈 배열을 내려줌
@@ -1151,20 +1181,28 @@
   <footer class="cart-footer" class:footer-visible={footerVisible}>
     <div class="footer-inner">
       <label class="footer-terms">
-        <button class="checkbox-btn checkbox-btn-terms" class:checked={agreed} onclick={() => agreed = !agreed} aria-label="동의">
+        <button
+          class="checkbox-btn checkbox-btn-terms"
+          class:checked={agreed}
+          onclick={() => { if (consentItems.length > 0) { showGuideModal = true } else { manualAgreed = !manualAgreed } }}
+          aria-label="동의"
+        >
           <svg width="22" height="15" viewBox="0 0 18 12" fill="none" aria-hidden="true">
             <path d="M14.788 0.40847C15.5937 -0.206503 16.7506 -0.123176 17.4589 0.632103C18.2144 1.4379 18.1729 2.70376 17.3671 3.45925L17.3622 3.46413C17.3585 3.46759 17.3528 3.47297 17.3456 3.47976C17.3311 3.49333 17.3101 3.51407 17.2821 3.54031C17.2261 3.59279 17.1437 3.66974 17.039 3.76784C16.8294 3.96413 16.5289 4.24474 16.1669 4.58327C15.4428 5.26035 14.4707 6.169 13.4774 7.09304C12.4848 8.01654 11.4689 8.95836 10.6591 9.70144C9.90326 10.3949 9.21125 11.0229 8.954 11.219C8.38484 11.6526 7.64783 12.0001 6.7831 12.0003C5.89707 12.0003 5.14509 11.6357 4.57217 11.138C4.258 10.865 3.25694 9.9462 2.37197 9.13015C1.92122 8.71451 1.48885 8.31388 1.16885 8.01785C1.0088 7.86979 0.875998 7.74749 0.78408 7.66238C0.738281 7.61997 0.702073 7.58638 0.677634 7.56374C0.665704 7.55269 0.656551 7.54415 0.650291 7.53835C0.647126 7.53542 0.644094 7.53301 0.642478 7.53152L0.641502 7.52956H0.640525C-0.169647 6.77877 -0.217693 5.51259 0.533103 4.70242C1.28393 3.89251 2.55017 3.84526 3.36025 4.59597L3.36123 4.59792C3.3628 4.59938 3.36592 4.60089 3.36904 4.60378C3.37524 4.60953 3.38439 4.61807 3.39638 4.62917C3.42067 4.65167 3.45618 4.68551 3.50185 4.72781C3.59333 4.81251 3.72524 4.93384 3.88467 5.08132C4.2037 5.37646 4.63512 5.77493 5.08388 6.18874C5.73477 6.78894 6.40077 7.39812 6.82217 7.78054C6.86093 7.74604 6.90358 7.70918 6.94814 7.66921C7.21008 7.43424 7.55408 7.12113 7.954 6.75417C8.7536 6.02049 9.76226 5.0859 10.7528 4.16433C11.7428 3.24336 12.7128 2.33711 13.4354 1.6614C13.7965 1.32374 14.0957 1.04357 14.3046 0.847923C14.409 0.750147 14.491 0.67359 14.5468 0.621361C14.5745 0.595342 14.5959 0.575239 14.6103 0.56179C14.6174 0.555065 14.6232 0.549566 14.6269 0.546165L14.6317 0.541282L14.788 0.40847Z" fill="currentColor" />
           </svg>
         </button>
         <span class="footer-terms-text" style:color={agreed ? 'var(--cs-purple)' : 'var(--cs-purple-op10)'}>등록한 대여조건 및 <button type="button" class="terms-guide-link" onclick={() => (showGuideModal = true)}>이용안내</button>에 모두 동의합니다.</span>
       </label>
+      {#if canProceed && !methodSelectionValid}
+        <p class="footer-method-warning">수령·반납 방식을 다시 선택해주세요.</p>
+      {/if}
       <button
         class="footer-cta"
-        class:footer-cta-active={canProceed && !isConfirming}
-        class:footer-cta-disabled={!canProceed || isConfirming}
-        disabled={!canProceed || isConfirming}
+        class:footer-cta-active={readyToSubmit && !isConfirming}
+        class:footer-cta-disabled={!readyToSubmit || isConfirming}
+        disabled={!readyToSubmit || isConfirming}
         onclick={async () => {
-          if (!canProceed || isConfirming) return
+          if (!readyToSubmit || isConfirming) return
           isConfirming = true
           try {
             // 체크 해제한 상품은 이번 결제 확정 대상에서 제외 — 2026-08-28: 그룹 병합 이후
@@ -1261,7 +1299,14 @@
             const createOrderRes = await fetch('/api/reservations/create-order', {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ reservationIds: checkedIds, couponId: selectedCouponId, points: otPointsUsed }),
+              body: JSON.stringify({
+                reservationIds: checkedIds,
+                couponId:       selectedCouponId,
+                points:         otPointsUsed,
+                // 2026-08-31: 여기서 고객에게 보여준 배송비를 그대로 주문에 합산 —
+                // 실결제 금액이 이 화면의 총액과 정확히 일치하도록 함
+                deliveryFee:    otDeliveryFee,
+              }),
             }).catch((e) => { console.error('[cart] create-order 실패:', e); return null })
 
             // 2026-08-21(TASK.md "예약 결제·계약서명 순서 재설계" Phase B): 결제(mock) 트리거를
@@ -1330,6 +1375,28 @@
             <p class="guide-modal-text">{sd.rentalGuideText}</p>
           {:else}
             <p class="guide-modal-empty">등록된 이용안내가 없습니다.</p>
+          {/if}
+
+          {#if consentItems.length > 0}
+            <div class="consent-list">
+              <p class="consent-list-title">필수 동의 사항 — 전부 체크해야 예약신청이 가능합니다.</p>
+              {#each consentItems as item (item.id)}
+                <label class="consent-item-row">
+                  <button
+                    type="button"
+                    class="checkbox-btn checkbox-btn-terms consent-item-checkbox"
+                    class:checked={consentChecked[item.id]}
+                    onclick={() => { consentChecked[item.id] = !consentChecked[item.id] }}
+                    aria-label={item.content}
+                  >
+                    <svg width="18" height="12" viewBox="0 0 18 12" fill="none" aria-hidden="true">
+                      <path d="M14.788 0.40847C15.5937 -0.206503 16.7506 -0.123176 17.4589 0.632103C18.2144 1.4379 18.1729 2.70376 17.3671 3.45925L17.3622 3.46413C17.3585 3.46759 17.3528 3.47297 17.3456 3.47976C17.3311 3.49333 17.3101 3.51407 17.2821 3.54031C17.2261 3.59279 17.1437 3.66974 17.039 3.76784C16.8294 3.96413 16.5289 4.24474 16.1669 4.58327C15.4428 5.26035 14.4707 6.169 13.4774 7.09304C12.4848 8.01654 11.4689 8.95836 10.6591 9.70144C9.90326 10.3949 9.21125 11.0229 8.954 11.219C8.38484 11.6526 7.64783 12.0001 6.7831 12.0003C5.89707 12.0003 5.14509 11.6357 4.57217 11.138C4.258 10.865 3.25694 9.9462 2.37197 9.13015C1.92122 8.71451 1.48885 8.31388 1.16885 8.01785C1.0088 7.86979 0.875998 7.74749 0.78408 7.66238C0.738281 7.61997 0.702073 7.58638 0.677634 7.56374C0.665704 7.55269 0.656551 7.54415 0.650291 7.53835C0.647126 7.53542 0.644094 7.53301 0.642478 7.53152L0.641502 7.52956H0.640525C-0.169647 6.77877 -0.217693 5.51259 0.533103 4.70242C1.28393 3.89251 2.55017 3.84526 3.36025 4.59597L3.36123 4.59792C3.3628 4.59938 3.36592 4.60089 3.36904 4.60378C3.37524 4.60953 3.38439 4.61807 3.39638 4.62917C3.42067 4.65167 3.45618 4.68551 3.50185 4.72781C3.59333 4.81251 3.72524 4.93384 3.88467 5.08132C4.2037 5.37646 4.63512 5.77493 5.08388 6.18874C5.73477 6.78894 6.40077 7.39812 6.82217 7.78054C6.86093 7.74604 6.90358 7.70918 6.94814 7.66921C7.21008 7.43424 7.55408 7.12113 7.954 6.75417C8.7536 6.02049 9.76226 5.0859 10.7528 4.16433C11.7428 3.24336 12.7128 2.33711 13.4354 1.6614C13.7965 1.32374 14.0957 1.04357 14.3046 0.847923C14.409 0.750147 14.491 0.67359 14.5468 0.621361C14.5745 0.595342 14.5959 0.575239 14.6103 0.56179C14.6174 0.555065 14.6232 0.549566 14.6269 0.546165L14.6317 0.541282L14.788 0.40847Z" fill="currentColor" />
+                    </svg>
+                  </button>
+                  <span class="consent-item-text" class:consent-item-text--checked={consentChecked[item.id]}>{item.content}</span>
+                </label>
+              {/each}
+            </div>
           {/if}
         </div>
       </div>
@@ -1635,11 +1702,13 @@
   {@const isTimeOpen = openTimeId === props.timeId}
   <!-- 배송(delivery/crazydelivery) 잠금 상태(요청 A) — 시간선택 숨김 + 반납leg 콤보 잠금 기준 -->
   {@const locked = isDeliveryLocked(props.method)}
+  <!-- 휴무일 캘린더 제한 전용 판정(RSC-B3) — 위 locked(요청 A)와 별개 플래그이므로 독립 계산 -->
+  {@const courierRestricted = isCourierDependent(props.method)}
   {@const returnComboLocked = props.type === 'return' && locked}
   <!-- 대여 제한옵션 "반납 배송선택 제한"(CMS) — ON이면 수령·반납 콤보 양쪽 모두에서 배송
        방식 제외(2026-08-28 정정 — 반납에서만 제외하면 위 요청 A 강제고정과 충돌해 UI
        데드엔드 발생, restrictedDeliveryTabs 정의부 주석 참고) -->
-  {@const visibleTabs = sdShippingSettings?.restrict_return_delivery ? restrictedDeliveryTabs : deliveryTabs}
+  {@const visibleTabs = otVisibleTabs}
 
 
   <div class="rental-form">
@@ -1661,6 +1730,12 @@
               <span class="combo-label">{tab.label}</span>
             </button>
           {/each}
+          {#if visibleTabs.length === 0}
+            <!-- 2026-08-30: 카트에 담긴 상품들의 허용 방식(allowed_method_ids)이 서로 겹치지
+                 않으면 교집합이 비어 콤보 자체가 통째로 사라지는 극단 케이스(감사 RSC-B4) —
+                 안내 없이 빈 화면만 보이던 것을 명시적 안내 문구로 대체 -->
+            <p class="delivery-combo-empty">선택 가능한 수령·반납 방식이 없습니다. 담긴 상품 구성을 확인해주세요.</p>
+          {/if}
         </div>
         <!-- 선택된 방식 마감 정보 -->
         {#each visibleTabs.filter(t => t.v === props.method) as tab}
@@ -1713,7 +1788,7 @@
                 rangeStartLabel="수령일"
                 rangeEndLabel="반납일"
                 onselect={(iso) => props.onDateChange(iso)}
-                isDateDisabled={!locked ? undefined : (props.type === 'rental'
+                isDateDisabled={!courierRestricted ? undefined : (props.type === 'rental'
                   ? (iso: string) => courierClosedMap.has(addDays(iso, -1))
                   : (iso: string) => courierClosedMap.has(iso))}
                 onDisabledClick={(iso) => {
@@ -2834,6 +2909,16 @@
     margin: 4px 0 0;
   }
 
+  /* 수령/반납 방식 콤보 완전 소실 시 안내(RSC-B4, 2026-08-30) */
+  .delivery-combo-empty {
+    width: 100%;
+    box-sizing: border-box;
+    text-align: center;
+    font: var(--text-m-script-14B);
+    color: var(--cs-text-mid);
+    padding: 12px 16px;
+  }
+
   /* 대여일시 통합 요약 배지 — 날짜+시간 모두 선택 시 확인용 */
   .datetime-summary {
     display: block;
@@ -3266,6 +3351,14 @@
     line-height: 2;
     white-space: nowrap;
   }
+  /* 수령/반납 방식 선택 무효 경고(RSC-B2, 2026-08-30) — footer CTA 바로 위 */
+  .footer-method-warning {
+    font-size: 13px;
+    font-weight: 700;
+    color: var(--cs-error, #E53E3E);
+    text-align: center;
+    margin: 0 0 8px;
+  }
   .terms-guide-link {
     background: none;
     border: none;
@@ -3331,6 +3424,41 @@
     word-break: break-word;
   }
   .guide-modal-empty { font-size: 14px; color: var(--cs-text-light, #AAAAAA); }
+
+  /* 필수 동의 사항 체크리스트 — 2026-08-30, 등록 UI만 있고 체크아웃에 미연결이던
+     rental_consent_items를 이 모달에 연결(감사 RSC-C1 해소) */
+  .consent-list {
+    margin-top: 20px;
+    padding-top: 20px;
+    border-top: 1px solid var(--cs-lilac);
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+  }
+  .consent-list-title {
+    font-size: 13px;
+    font-weight: 700;
+    color: var(--cs-text-dark);
+    margin: 0;
+  }
+  .consent-item-row {
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+    cursor: pointer;
+  }
+  .consent-item-checkbox {
+    margin-top: 2px;
+  }
+  .consent-item-text {
+    font-size: 14px;
+    line-height: 1.6;
+    color: var(--cs-text-mid, var(--cs-text-dark));
+    word-break: break-word;
+  }
+  .consent-item-text--checked {
+    color: var(--cs-text-dark);
+  }
 
   @media (max-width: 640px) {
     .guide-modal-overlay { align-items: flex-end; padding: 0; }

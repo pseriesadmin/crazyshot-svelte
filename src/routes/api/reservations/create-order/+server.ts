@@ -26,6 +26,10 @@ export const POST: RequestHandler = async ({ locals, request }) => {
   // 확정 시점(pay-mock)에서만 일어난다.
   const selectedCouponId = typeof body.couponId === 'string' && body.couponId ? body.couponId : null
   const selectedPoints = Number.isFinite(body.points) && body.points > 0 ? Math.floor(body.points) : 0
+  // 2026-08-31(Migration 395): 장바구니가 이미 계산해 고객에게 보여준 배송비(등급별 우대할인
+  // 반영된 최종값)를 그대로 받아 orders.final_amount에 합산 — 실결제 금액과 장바구니 총액
+  // 불일치 해소(toss_payments_pg_integration_2026-08-30.md F1 후속 지적).
+  const deliveryFee = Number.isFinite(body.deliveryFee) && body.deliveryFee > 0 ? Math.floor(body.deliveryFee) : 0
 
   const admin = createClient(getSupabaseUrl(), env.SUPABASE_SERVICE_ROLE_KEY)
 
@@ -36,6 +40,7 @@ export const POST: RequestHandler = async ({ locals, request }) => {
       p_reservation_ids: number[]
       p_selected_coupon_id: string | null
       p_selected_points: number
+      p_delivery_fee: number
     }
   ) => Promise<{ data: { order_id: number; order_key: string; final_amount: number }[] | null; error: unknown }>
   const { data, error } = await (admin.rpc as unknown as CreateReservationOrderRpcFn)(
@@ -45,6 +50,7 @@ export const POST: RequestHandler = async ({ locals, request }) => {
       p_reservation_ids: reservationIds,
       p_selected_coupon_id: selectedCouponId,
       p_selected_points: selectedPoints,
+      p_delivery_fee: deliveryFee,
     }
   )
 

@@ -10,18 +10,16 @@ export const load: PageServerLoad = async ({ url, locals }) => {
   if (!session) throw redirect(303, '/login')
 
   const planId = Number(url.searchParams.get('planId'))
-  // ⛔ 더미 결제 연동(2026-08-20) — mock=1이면 TossPayments 실 SDK/API 호출을 전부 건너뛰고
-  // 더미 빌링키로 create_user_subscription/record_subscription_charge_result만 정상 호출한다.
-  // "일단 더미 형태로" 요청에 따른 임시 경로 — 실 결제(authKey/customerKey) 경로는 그대로 유지.
-  const isMock = url.searchParams.get('mock') === '1'
 
   if (!Number.isFinite(planId)) {
     return { success: false, error: '잘못된 접근입니다.' }
   }
 
   const serviceRoleKey = env.SUPABASE_SERVICE_ROLE_KEY
-  const tossSecretKey = env.TOSS_SECRET_KEY
-  if (!serviceRoleKey || (!isMock && !tossSecretKey)) {
+  // 정기결제(빌링, mid=bill_crazyhevr) 전용 시크릿 키 — 단건결제(mid=crazysfc8s)의
+  // TOSS_SECRET_KEY와는 서로 다른 상점의 별개 키(공용 아님)
+  const tossSecretKey = env.TOSS_BILLING_SECRET_KEY
+  if (!serviceRoleKey || !tossSecretKey) {
     return { success: false, error: '서버 설정 오류입니다. 잠시 후 다시 시도해주세요.' }
   }
 
@@ -35,34 +33,28 @@ export const load: PageServerLoad = async ({ url, locals }) => {
 
   if (!plan) return { success: false, error: '구독 상품을 찾을 수 없습니다.' }
 
-  let billingKey: string
-
-  if (isMock) {
-    billingKey = `DUMMY_${session.user.id.slice(0, 8)}_${planId}_${Date.now()}`
-  } else {
-    const authKey = url.searchParams.get('authKey')
-    const customerKey = url.searchParams.get('customerKey')
-    if (!authKey || !customerKey) {
-      return { success: false, error: '잘못된 접근입니다.' }
-    }
-    if (customerKey !== session.user.id) {
-      return { success: false, error: '요청 정보가 일치하지 않습니다.' }
-    }
-
-    // authKey → billingKey 교환
-    const authHeader = 'Basic ' + Buffer.from(`${tossSecretKey}:`).toString('base64')
-    const issueRes = await fetch('https://api.tosspayments.com/v1/billing/authorizations/issue', {
-      method: 'POST',
-      headers: { Authorization: authHeader, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ authKey, customerKey }),
-    })
-    const issueData = await issueRes.json()
-
-    if (!issueRes.ok || !issueData.billingKey) {
-      return { success: false, error: '카드 등록에 실패했습니다. 다시 시도해주세요.' }
-    }
-    billingKey = issueData.billingKey
+  // authKey → billingKey 교환 (Toss 빌링 인증 완료 콜백)
+  const authKey = url.searchParams.get('authKey')
+  const customerKey = url.searchParams.get('customerKey')
+  if (!authKey || !customerKey) {
+    return { success: false, error: '잘못된 접근입니다.' }
   }
+  if (customerKey !== session.user.id) {
+    return { success: false, error: '요청 정보가 일치하지 않습니다.' }
+  }
+
+  const authHeader = 'Basic ' + Buffer.from(`${tossSecretKey}:`).toString('base64')
+  const issueRes = await fetch('https://api.tosspayments.com/v1/billing/authorizations/issue', {
+    method: 'POST',
+    headers: { Authorization: authHeader, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ authKey, customerKey }),
+  })
+  const issueData = await issueRes.json()
+
+  if (!issueRes.ok || !issueData.billingKey) {
+    return { success: false, error: '카드 등록에 실패했습니다. 다시 시도해주세요.' }
+  }
+  const billingKey: string = issueData.billingKey
 
   const billingCycleDay = new Date().getDate()
 
@@ -84,31 +76,17 @@ export const load: PageServerLoad = async ({ url, locals }) => {
 
   const subscriptionId = subResult.subscription_id as number
 
-  let chargeSucceeded: boolean
-  let paymentMethod: string
-
-  if (isMock) {
-    // 실 Toss 빌링 API를 호출하지 않고 청구 성공 기록만 남긴다(더미 빌링키로는 실 청구 불가).
-    const { data: recordResult } = await admin.rpc('record_subscription_charge_result', {
-      p_user_subscription_id: subscriptionId,
-      p_status: 'succeeded',
-      p_amount: plan.monthly_price,
-      p_toss_response: { mock: true, method: '카드(더미)', approvedAt: new Date().toISOString() },
-    })
-    chargeSucceeded = (recordResult as { success?: boolean } | null)?.success === true
-    paymentMethod = '카드 (더미)'
-  } else {
-    const chargeResult = await chargeSubscription(admin, {
-      userSubscriptionId: subscriptionId,
-      billingKey,
-      customerKey: session.user.id,
-      amount: plan.monthly_price,
-      orderName: `${plan.name} 정기구독`,
-      tossSecretKey: tossSecretKey as string,
-    })
-    chargeSucceeded = chargeResult.success
-    paymentMethod = '카드'
-  }
+  // 등록 직후 최초 빌링 청구
+  const chargeResult = await chargeSubscription(admin, {
+    userSubscriptionId: subscriptionId,
+    billingKey,
+    customerKey: session.user.id,
+    amount: plan.monthly_price,
+    orderName: `${plan.name} 정기구독`,
+    tossSecretKey: tossSecretKey as string,
+  })
+  const chargeSucceeded = chargeResult.success
+  const paymentMethod = '카드'
 
   const confirmedAt = new Date().toISOString().replace(/T(\d{2}):(\d{2}).*/, '·$1:$2').replace(/-/g, '.')
   const nextBillingDay = Math.min(billingCycleDay, 28)

@@ -130,6 +130,7 @@ export const load: PageServerLoad = async ({ params }) => {
     total_amount: number | null
     discount_amount: number | null
     tax_amount: number | null
+    delivery_fee: number | null
     final_amount: number | null
     selected_coupon_id: string | null
     selected_points: number | null
@@ -164,7 +165,7 @@ export const load: PageServerLoad = async ({ params }) => {
       const orderId = (orderItemData as { order_id: string }).order_id
       const { data: o } = await admin
         .from('orders')
-        .select('total_amount, discount_amount, tax_amount, final_amount, selected_coupon_id, selected_points')
+        .select('total_amount, discount_amount, tax_amount, delivery_fee, final_amount, selected_coupon_id, selected_points')
         .eq('id', orderId)
         .maybeSingle()
       orderData = o as OrderData | null

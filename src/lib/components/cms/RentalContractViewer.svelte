@@ -5,6 +5,7 @@
   import ContractEditorModal from '$lib/components/cms/ContractEditorModal.svelte'
   import ContractTemplatePreviewModal from '$lib/components/cms/ContractTemplatePreviewModal.svelte'
   import CmsDeleteButton from '$lib/components/cms/CmsDeleteButton.svelte'
+  import { csToast } from '$lib/utils/toast'
 
   interface Props {
     contractId:       string | null
@@ -132,6 +133,28 @@
     : reservationStatus === 'damage_claimed' ? '파손 신고된'
     : '취소된'
   )
+
+  // Stage 5 (EC-6): 재발송 버튼 — 기존 send-chat 엔드포인트 재사용 (sent_at 갱신 + 채팅 재발송)
+  let isResending = $state(false)
+
+  async function handleResend() {
+    if (!contractId || isResending) return
+    isResending = true
+    try {
+      const res = await fetch(`/api/cms/contracts/${contractId}/send-chat`, { method: 'POST' })
+      if (!res.ok) {
+        const json = await res.json() as { error?: string }
+        csToast.error(json.error ?? '재발송에 실패했습니다.')
+      } else {
+        csToast.success('계약서가 재발송되었습니다.')
+        onrefresh()
+      }
+    } catch {
+      csToast.error('재발송 중 오류가 발생했습니다.')
+    } finally {
+      isResending = false
+    }
+  }
 </script>
 
 <div class="contract-viewer">
@@ -175,7 +198,8 @@
   {/if}
 
   <!-- 발행 목록: 편집된 content_blocks가 있을 때만 표시.
-       대여현황(isRentalView)에서는 서명완료된 계약만 "서명완료 목록"으로 노출하고 보기만 허용 -->
+       RSV-C-B3: 대여현황(isRentalView) 또는 고객이 서명완료(customerSignedAt)한 경우
+       → "서명완료 목록"으로 노출 + 보기(view-only)만 허용. 그 외는 편집·발송 포함 전체 기능. -->
   {#if hasIssuedContent && contractId && (!isRentalView || customerSignedAt)}
     <div class="tpl-section">
       <div class="tpl-section-head">
@@ -199,7 +223,7 @@
               title={(!isRentalView && issueBlocked) ? `${issueBlockedLabel} 예약은 계약서를 발송할 수 없습니다.` : undefined}
               onclick={() => { previewTemplateId = '' }}
             >
-              {isRentalView ? '보기' : '미리보기 & 발송'}
+              {isRentalView || customerSignedAt ? '보기' : '미리보기 & 발송'}
             </button>
             {#if !isRentalView && !signingsentAt && !customerSignedAt}
               <span class="tpl-card-del-gap"></span>
@@ -209,6 +233,26 @@
                 warnMessage="한번 더 선택 시 이 계약서 내용이 초기화됩니다."
                 successMessage="계약서 내용이 초기화되었습니다."
                 onsuccess={() => { issuedCheckTick++ }}
+              />
+            {/if}
+            {#if !isRentalView && signingsentAt && !customerSignedAt}
+              <!-- Stage 5 (EC-6): 재발송 — 기존 서명 링크 유지, sent_at 갱신 후 채팅 재발송 -->
+              <button
+                class="btn-tpl-resend"
+                disabled={issueBlocked || isResending}
+                title={issueBlocked ? `${issueBlockedLabel} 예약은 계약서를 재발송할 수 없습니다.` : undefined}
+                onclick={handleResend}
+              >
+                {isResending ? '발송 중...' : '재발송'}
+              </button>
+              <!-- Stage 5 (EC-6): 폐기 — 서명 링크 만료 + 콘텐츠 초기화 (manager 이상 서버단 게이트) -->
+              <span class="tpl-card-del-gap"></span>
+              <CmsDeleteButton
+                action="?/discardSentContract"
+                id={contractId!}
+                warnMessage="한번 더 선택 시 발송된 계약서가 폐기됩니다. 고객의 서명 링크가 만료됩니다."
+                successMessage="계약서가 폐기되었습니다."
+                onsuccess={() => { issuedCheckTick++; onrefresh() }}
               />
             {/if}
           </div>
@@ -431,6 +475,22 @@
   }
   .btn-tpl-preview:hover { background: var(--cs-purple-hover); }
   .btn-tpl-preview:disabled { opacity: 0.5; cursor: not-allowed; }
+  /* Stage 5 (EC-6): 재발송 버튼 — 아웃라인 스타일 (편집 버튼과 동일 계열) */
+  .btn-tpl-resend {
+    height: 28px;
+    padding: 0 12px;
+    background: var(--cs-white);
+    color: var(--cs-info, #0ea5e9);
+    border: 1px solid var(--cs-info, #0ea5e9);
+    border-radius: var(--cms-radius-sm);
+    font: var(--text-pc-script-12);
+    font-weight: 700;
+    cursor: pointer;
+    transition: background 0.12s;
+    white-space: nowrap;
+  }
+  .btn-tpl-resend:hover { background: rgba(14,165,233,0.06); }
+  .btn-tpl-resend:disabled { opacity: 0.5; cursor: not-allowed; }
   .tpl-card-del-gap {
     width: 8px;
     flex-shrink: 0;

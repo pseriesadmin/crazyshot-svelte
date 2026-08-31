@@ -4,6 +4,7 @@
 // H-01: 직접 DML 금지 — RPC 경유만 허용.
 
 import { sendReservationLifecyclePush } from '$lib/server/push'
+import { awardRentalCompletePoints } from '$lib/server/awardRentalCompletePoints'
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type AnyClient = any
@@ -48,6 +49,26 @@ export async function processRentalQrTransition(
     } catch { /* 알림 실패는 무시 */ }
     // 고객 FCM 푸시 병행 발송 (채팅과 독립 — 실패해도 메인 처리에 영향 없음, 갭#3 수정 2026-08-09)
     await sendReservationLifecyclePush(admin, reservationId, notifyType)
+  }
+
+  // QR-3: 대여 액션 로그 기록 — 실패해도 메인 처리에 영향 없음 (fail-soft)
+  // log_rental_action은 action_type이 visit_pickup 등 특정 값이 아니면 status 변경 없이
+  // rental_action_logs에만 INSERT한다 — update_reservation_status가 이미 처리했으므로 안전.
+  // note='qr_scan'으로 QR 경로임을 표시 (수동 경로 note='manual'과 구분)
+  try {
+    await admin.rpc('log_rental_action', {
+      p_reservation_id: reservationId,
+      p_action_type:    newStatus,
+      p_admin_id:       userId,
+      p_note:           'qr_scan',
+    })
+  } catch { /* 로그 실패는 무시 */ }
+
+  // 대여완료 포인트 자동적립 — returned 전이 시에만, fail-soft(공용 헬퍼가 내부 처리)
+  if (newStatus === 'returned') {
+    try {
+      await awardRentalCompletePoints(admin, reservationId)
+    } catch { /* 포인트 적립 실패는 무시 */ }
   }
 
   // QR-3: 상품 이력 자동 기록 — 실패해도 메인 처리에 영향 없음

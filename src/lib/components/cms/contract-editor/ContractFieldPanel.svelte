@@ -42,7 +42,7 @@
   let activeTab = $state<TabKey>('계약자정보')
 
   // --------------------------------------------------------------------------
-  // 변수 카탈로그 (ContractSubstitutionData 16개 변수)
+  // 변수 카탈로그 (ContractSubstitutionData 17개 스칼라 변수 중 UI 노출분)
   // NOTE: 수량은 서버 하드코딩 '1' — 다중수량 선택지 없음 (P3-3, products.md §5)
   // --------------------------------------------------------------------------
   const FIELD_GROUPS: Record<Exclude<TabKey, '특약'>, MergeFieldAttrs[]> = {
@@ -61,6 +61,7 @@
       { variable: '수령일시', label: '수령일시' },
       { variable: '반납형태', label: '반납형태' },
       { variable: '반납일시', label: '반납일시' },
+      { variable: '요금유형', label: '요금유형' },
     ],
     결제정보: [
       { variable: '기본대여요금', label: '기본대여요금' },

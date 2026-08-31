@@ -17,7 +17,8 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 const mockEnv = vi.hoisted(() => ({
   CRON_SECRET: 'test-cron-secret',
   SUPABASE_SERVICE_ROLE_KEY: 'test-service-role-key',
-  TOSS_SECRET_KEY: 'test-toss-secret',
+  // 정기결제(빌링, mid=bill_crazyhevr) 전용 키로 분리(2026-08-30) — 단건결제 TOSS_SECRET_KEY와 별개
+  TOSS_BILLING_SECRET_KEY: 'test-toss-billing-secret',
 }));
 
 vi.mock('$env/dynamic/private', () => ({ env: mockEnv }));

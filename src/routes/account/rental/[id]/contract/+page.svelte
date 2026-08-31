@@ -35,6 +35,7 @@
     total_amount: number | null
     discount_amount: number | null
     tax_amount: number | null
+    delivery_fee: number | null
     final_amount: number | null
   } | null)
   const mySignature = $derived(data.mySignature as { signature_data: string | null; signed_at: string; ip_address: string | null } | null)
@@ -105,6 +106,7 @@
                     ?? (reservation?.end_date ? formatDate(reservation.end_date) : ''),
     '기본대여요금': formatAmount(orderData?.total_amount),
     '할인금액':     formatAmount(orderData?.discount_amount),
+    '배송비':       formatAmount(orderData?.delivery_fee),
     '부가세':       formatAmount(orderData?.tax_amount),
     '최종합계':     formatAmount(orderData?.final_amount),
   })
@@ -112,6 +114,81 @@
   function handlePrint(): void {
     if (browser) window.print()
   }
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // 스프레드시트 모드 — 모바일 A4 출력양식 유지 (2026-08-31)
+  //
+  // 문제: .ss-table은 <colgroup><col style="width:Npx"></colgroup>로 실제 픽셀 폭을
+  // 지정하지만, table-layout:auto(기본값) + min-width:100% 조합에서는 부모 컨테이너가
+  // 그 픽셀 합보다 좁으면(모바일) 브라우저가 컬럼 폭을 비율대로 눌러 축소해버린다 —
+  // 셀마다 다른 비율로 줄바꿈되며 A4 서식 자체가 찌그러져 보이는 결함(PC는 컨테이너가
+  // 항상 더 넓어 문제 없음).
+  //
+  // 해결: 표는 항상 원본(A4 기준) 픽셀 폭 그대로 렌더링하도록 두고, 그 바깥 래퍼에
+  // transform:scale()을 적용해 "찌그러짐 없이 통째로 축소"한다. 기본값은 "화면 폭에
+  // 맞춰 축소"(찌그러짐 없는 A4 축소본), 상세 확인이 필요할 때만 버튼으로 실제
+  // 크기(scale:1, 가로 스크롤)로 전환한다. PC(≥768px)는 항상 여유 폭이 있어 fitZoom이
+  // 1로 계산되므로 시각적 변화 없음.
+  //
+  // ⚠️ 2026-08-31 zoom → transform:scale() 교체 — 처음엔 CSS zoom(레이아웃 박스 자체를
+  // 줄여줘 빈 여백 계산이 필요 없는 장점)을 썼으나, 모바일 실기기(Safari)에서 좌측으로
+  // 쏠려 보인다는 제보가 있었다(Chromium 기반 자동화 테스트에서는 getBoundingClientRect
+  // 실측상 재현 안 됐지만, zoom은 표준화 이력이 짧고 엔진별 박스모델 처리가 미묘하게
+  // 달라 완전히 신뢰하기 어렵다). transform:scale()은 모든 브라우저에서 동일하게
+  // 동작이 보장되는 표준 속성이라 이걸로 교체하고, zoom이 자동으로 해주던 "레이아웃
+  // 박스 축소"는 바깥 ss-scale-outer에 실측한 높이(px)를 직접 지정해 수동으로
+  // 재현한다(transform은 페인트만 바꾸고 레이아웃 박스는 그대로라 이 보정이 없으면
+  // 축소된 그림 아래로 빈 여백이 남는다).
+  // ─────────────────────────────────────────────────────────────────────────
+  let ssWrapEl: HTMLDivElement | null = $state(null)
+  let ssZoomedIn      = $state(false)
+  let ssFitZoom       = $state(1)
+  let ssNaturalHeight = $state(0)
+
+  function computeSsFitZoom(): void {
+    if (!ssWrapEl) return
+    const container = ssWrapEl.parentElement
+    if (!container) return
+    // ⚠️ ss-table 하나만 재서(scrollWidth/Height) 계산하면 그 위 시트 이름 라벨
+    // (.ss-sheet-name)과 시트 사이 여백(.ss-sheet-page margin-bottom)이 실측에서
+    // 빠져 축소 비율은 맞는데 예약해둔 높이가 실제보다 짧아 하단이 살짝 잘려 보이는
+    // 결함이 있었다(2026-08-31). ss-scale-wrap 자신의 scrollWidth/Height를 재면
+    // 그 안의 모든 콘텐츠(다중 시트 포함)를 빠짐없이 포함한다.
+    const naturalWidth  = ssWrapEl.scrollWidth
+    const naturalHeight = ssWrapEl.scrollHeight
+    const available = container.clientWidth
+    ssNaturalHeight = naturalHeight
+    if (naturalWidth <= 0 || available <= 0) return
+    ssFitZoom = Math.min(1, available / naturalWidth)
+  }
+
+  function toggleSsZoom(): void {
+    ssZoomedIn = !ssZoomedIn
+  }
+
+  // mount 직후 동기 측정은 브라우저가 방금 삽입된 {@html} 콘텐츠의 레이아웃을 아직
+  // 완전히 정착시키기 전이라 실측보다 살짝 작은 값이 나올 수 있다(2026-08-31 실측
+  // 확인 — 초기 1255px vs 실제 1268px, 강제 resize 이벤트로 재계산하면 정확해짐).
+  // 동기 측정을 1차 값으로 먼저 반영해두고(화면이 비어 보이지 않도록), requestAnimationFrame
+  // 으로 보정 측정을 예약한다. rAF는 배경/숨김 탭에서 지연되거나 아예 실행되지 않을 수
+  // 있어(실측 확인 — 탭이 숨김 상태면 1초 넘게도 발화 안 함) setTimeout도 함께 예약해
+  // 이중 안전망을 둔다(setTimeout은 배경 탭에서도 지연은 될지언정 결국은 실행됨).
+  // 창 크기 변경·콘텐츠 자체 크기 변화(예: 시트 여러 개)는 ResizeObserver로 계속 추적.
+  $effect(() => {
+    if (!browser || !isSpreadsheetMode || !spreadsheetDoc || !ssWrapEl) return
+    computeSsFitZoom()
+    const raf = requestAnimationFrame(() => computeSsFitZoom())
+    const timeoutId = setTimeout(() => computeSsFitZoom(), 300)
+    const ro = new ResizeObserver(() => computeSsFitZoom())
+    ro.observe(ssWrapEl)
+    window.addEventListener('resize', computeSsFitZoom)
+    return () => {
+      cancelAnimationFrame(raf)
+      clearTimeout(timeoutId)
+      ro.disconnect()
+      window.removeEventListener('resize', computeSsFitZoom)
+    }
+  })
 </script>
 
 <svelte:head>
@@ -244,8 +321,34 @@
             <h2 class="doc-title">{contract.title}</h2>
           {/if}
           <div class="spreadsheet-doc-content">
-            {@html renderSpreadsheetToHtml(spreadsheetDoc)}
+            <div class="ss-scale-outer" style:height="{ssNaturalHeight * (ssZoomedIn ? 1 : ssFitZoom)}px">
+              <div
+                class="ss-scale-wrap"
+                bind:this={ssWrapEl}
+                style:transform="scale({ssZoomedIn ? 1 : ssFitZoom})"
+              >
+                {@html renderSpreadsheetToHtml(spreadsheetDoc)}
+              </div>
+            </div>
           </div>
+          <button
+            type="button"
+            class="ss-zoom-toggle-btn"
+            onclick={toggleSsZoom}
+            aria-label={ssZoomedIn ? '문서 축소' : '문서 확대'}
+            title={ssZoomedIn ? '문서 축소' : '문서 확대'}
+          >
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+              <circle cx="11" cy="11" r="7" stroke="currentColor" stroke-width="2" />
+              <line x1="21" y1="21" x2="16.65" y2="16.65" stroke="currentColor" stroke-width="2" stroke-linecap="round" />
+              {#if ssZoomedIn}
+                <line x1="8" y1="11" x2="14" y2="11" stroke="currentColor" stroke-width="2" stroke-linecap="round" />
+              {:else}
+                <line x1="11" y1="8" x2="11" y2="14" stroke="currentColor" stroke-width="2" stroke-linecap="round" />
+                <line x1="8" y1="11" x2="14" y2="11" stroke="currentColor" stroke-width="2" stroke-linecap="round" />
+              {/if}
+            </svg>
+          </button>
         </div>
       {:else if contentBlocks.length > 0}
         <div class="doc-section">
@@ -437,11 +540,14 @@
   .issuer-sig-img { max-width: 120px; max-height: 80px; object-fit: contain; }
   .issuer-sig-placeholder { width: 120px; height: 60px; background: #eee; border-radius: 8px; display: flex; align-items: center; justify-content: center; font-size: 12px; color: #999; }
 
-  /* 고객 서명 완료 (flow/spreadsheet 모드) */
+  /* 고객 서명 완료 (flow/spreadsheet 모드) — 제목(.doc-title)은 다른 섹션과 동일하게
+     좌측 정렬 유지, 배지는 가운데. 서명 이미지는 2026-08-31 Stephen 확정 요청에 따라
+     max-width 제한을 없애고 카드 가로폭 100%로 크게 확대(작게 중앙정렬하는 대신). */
   .signed-section { align-items: flex-start; }
   .signed-badge {
     display: inline-flex;
     align-items: center;
+    align-self: center;
     gap: 6px;
     padding: 6px 14px;
     border-radius: var(--radius-full, 9999px);
@@ -450,7 +556,17 @@
     font-size: 13px;
     font-weight: 700;
   }
-  .my-sig-img { max-width: 240px; max-height: 100px; object-fit: contain; border: 1px solid #eee; border-radius: 8px; padding: 8px; }
+  .my-sig-img {
+    align-self: stretch;
+    width: 100%;
+    height: auto;
+    max-height: 320px;
+    box-sizing: border-box;
+    object-fit: contain;
+    border: 1px solid #eee;
+    border-radius: 8px;
+    padding: 8px;
+  }
 
   /* ── canvas 모드 ── */
   .canvas-doc-section { padding: 16px; }
@@ -466,11 +582,66 @@
 
   /* ── spreadsheet 모드 ── */
   .spreadsheet-doc-content { overflow-x: auto; }
-  .spreadsheet-doc-content :global(.ss-sheet-page) { margin-bottom: 24px; }
-  .spreadsheet-doc-content :global(.ss-sheet-name) { font-size: 13px; font-weight: 700; color: var(--cs-dark, #100B32); margin: 0 0 8px; }
+  /* ⚠️ 2026-08-31 발견 — 좁은 <col> 폭(라벨 열 다수가 24px)이 많은 표에서는
+     table-layout:auto 브라우저가 min-width:100% 확장을 실제로 적용하지 않고 컬럼 폭
+     합계(원본 폭)만큼만 렌더링하는 경우가 있다(PC 실측 — 컨테이너 705px인데 표는
+     544px로 렌더링돼 161px가 빈 공간으로 남음). <table>은 기본이 block이라 이 남는
+     공간이 전부 오른쪽에만 남아 좌측으로 쏠려 보였다.
+     margin:0 auto로 먼저 시도했으나 display:table 요소에서 auto 마진이 resolve되지
+     않는 걸 실측으로 확인(computed marginLeft/Right가 0px으로 나옴 — table 특유의
+     알려진 크로스브라우저 결함) → 대신 부모(.ss-sheet-page)를 flex 컨테이너로 만들어
+     정렬한다(표가 min-width:100%대로 꽉 차는 경우엔 가운데 정렬해도 남는 공간이 없어
+     시각적 차이 없음, 모바일 ss-scale-wrap 안에서도 표 폭이 이미 wrap과 같아 영향 없음). */
+  .spreadsheet-doc-content :global(.ss-sheet-page) { margin-bottom: 24px; display: flex; flex-direction: column; align-items: center; }
+  .spreadsheet-doc-content :global(.ss-sheet-name) { align-self: flex-start; font-size: 13px; font-weight: 700; color: var(--cs-dark, #100B32); margin: 0 0 8px; }
   .spreadsheet-doc-content :global(.ss-table) { border-collapse: collapse; font-size: 12px; color: var(--cs-dark, #100B32); min-width: 100%; }
   .spreadsheet-doc-content :global(.ss-table td) { border: 1px solid #ccc; padding: 4px 6px; white-space: pre-wrap; vertical-align: top; word-break: break-all; }
   .spreadsheet-doc-content :global(.ss-cell-image) { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); max-width: 600px; height: auto; z-index: 5; pointer-events: none; }
+
+  /* 모바일 A4 출력양식 유지 (2026-08-31) — PC는 min-width:100%로 A4 폭에 맞춰 늘어나는
+     것이 정상(그대로 유지)이지만, 그 규칙이 모바일 좁은 컨테이너에서는 역으로 컬럼을
+     원본 픽셀 폭 밑으로 눌러버려 서식이 찌그러지는 원인이었다. 모바일에서만 표를 항상
+     원본(A4 기준) 폭 그대로(width:max-content) 렌더링하도록 되돌리고, 그 결과 좁아진
+     화면에 안 맞는 폭은 아래 ss-scale-wrap(transform:scale)이 찌그러짐 없이 축소해
+     보여준다. */
+  /* ⚠️ 2026-08-31 발견 — ss-scale-wrap의 width:max-content를 PC에도 무조건 적용했더니
+     wrap 자신이 표의 원본(544px) 폭으로 쪼그라들어, 그 안의 .ss-table이 min-width:100%
+     를 계산할 기준(containing block) 자체가 705px가 아니라 544px가 돼버려 PC에서도
+     "꽉 채우기"가 원천적으로 불가능해지는 결함으로 이어졌다(위 margin:auto·flex 정렬
+     시도가 전부 안 먹힌 진짜 원인 — 정렬 문제가 아니라애초에 늘어날 공간 자체가
+     없었음). max-content 강제는 모바일(찌그러짐 방지 목적)에만 필요하므로 미디어쿼리
+     범위를 이 규칙까지 함께 넓힌다 — PC는 wrap이 다시 컨테이너 전체 폭을 그대로
+     상속해 .ss-table의 min-width:100% 확장이 정상 작동한다. */
+  @media (max-width: 767px) {
+    .spreadsheet-doc-content :global(.ss-table) { width: max-content; min-width: 0; }
+    .ss-scale-wrap { width: max-content; }
+  }
+
+  /* ss-scale-outer: transform은 페인트만 바꾸고 레이아웃 박스는 그대로라, 축소된
+     그림 아래로 빈 여백이 남지 않도록 script에서 실측한 높이(px)를 직접 지정해
+     레이아웃 박스 자체를 줄인다(overflow:hidden은 반올림 오차 대비 방어용). */
+  .ss-scale-outer { overflow: hidden; }
+  .ss-scale-wrap { transform-origin: top left; }
+
+  .ss-zoom-toggle-btn {
+    display: none;
+    align-self: center;
+    align-items: center;
+    justify-content: center;
+    width: 40px;
+    height: 40px;
+    padding: 0;
+    background: var(--cs-white, #fff);
+    border: 1px solid #DDDDDD;
+    border-radius: 50%;
+    color: var(--cs-text-mid, #666);
+    cursor: pointer;
+  }
+  .ss-zoom-toggle-btn:active { background: var(--cs-surface-gray, #f6f6f6); }
+
+  @media (max-width: 767px) {
+    .ss-zoom-toggle-btn { display: flex; }
+  }
 
   /* 인쇄 — A4 기준 출력 */
   @page { size: A4; margin: 20mm; }
@@ -480,5 +651,18 @@
     .contract-main { max-width: none; padding: 0; }
     .summary-card { display: none !important; }
     .doc-section { border-radius: 0; box-shadow: none; padding: 0; break-inside: avoid; }
+
+    /* ⚠️ 2026-08-31 — 모바일 축소보기(ss-scale-wrap의 인라인 transform:scale·
+       ss-scale-outer의 인라인 height)는 스크립트가 직접 element.style에 써넣는
+       인라인 스타일이라 미디어쿼리로는 자동으로 풀리지 않는다 — 인쇄 시점에 화면이
+       모바일 비율이었으면 그 축소 비율 그대로 인쇄돼 "A4 실제 크기가 아니라 화면
+       비율로 나온다"는 결함으로 이어졌다. 인라인 스타일보다 우선하도록 !important로
+       강제 리셋해, PC·모바일 어느 화면에서 인쇄를 눌러도 @page 규격(A4) 그대로
+       실제 크기·꽉 찬 폭으로 출력되게 한다. */
+    .ss-scale-outer { height: auto !important; overflow: visible !important; }
+    .ss-scale-wrap { transform: none !important; width: auto !important; }
+    .spreadsheet-doc-content { overflow-x: visible !important; }
+    .spreadsheet-doc-content :global(.ss-table) { width: auto !important; min-width: 100% !important; }
+    .ss-zoom-toggle-btn { display: none !important; }
   }
 </style>

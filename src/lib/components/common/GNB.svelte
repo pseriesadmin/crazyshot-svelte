@@ -1,6 +1,7 @@
 <script lang="ts">
   import { authState, performSignOut } from '$lib/stores/auth'
   import { goto } from '$app/navigation'
+  import { supabase } from '$lib/services/supabase'
 
   interface Props {
     pathname?: string
@@ -8,6 +9,24 @@
   let { pathname = '/' }: Props = $props()
 
   let isLoggingOut = $state(false)
+
+  // 등록된 프로필 이미지 — GNB 아바타에 반영(없으면 이니셜 표시로 폴백, 이번 세션 신규)
+  let gnbAvatarUrl = $state<string | null>(null)
+
+  $effect(() => {
+    const userId = $authState.user?.id
+    if (!userId || isGuestUser) { gnbAvatarUrl = null; return }
+    let cancelled = false
+    supabase
+      .from('user_profiles')
+      .select('avatar_url')
+      .eq('id', userId)
+      .maybeSingle()
+      .then(({ data }) => {
+        if (!cancelled) gnbAvatarUrl = (data as { avatar_url: string | null } | null)?.avatar_url ?? null
+      })
+    return () => { cancelled = true }
+  })
 
   // 스크롤 인터랙션: 다운 → 보임, 업 → 가림
   let gnbHidden = $state(false)
@@ -169,7 +188,11 @@
       {#if !$authState.loading}
         {#if $authState.user && !isGuestUser}
           <button class="gnb-avatar-initial" onclick={() => goto('/account')} aria-label="내 계정">
-            {userInitial()}
+            {#if gnbAvatarUrl}
+              <img src={gnbAvatarUrl} alt="" class="gnb-avatar-img" />
+            {:else}
+              {userInitial()}
+            {/if}
           </button>
         {:else}
           <a href="/auth/login" class="gnb-signin-btn">Sign In</a>
@@ -190,7 +213,11 @@
       {#if $authState.user && !isGuestUser}
         <button class="gnb-avatar-btn gnb-avatar-btn-initial" onclick={() => goto('/account')} aria-label="내 계정">
           <canvas class="gnb-holo-canvas" width="120" height="120" aria-hidden="true" bind:this={holoCanvas}></canvas>
-          <span class="gnb-avatar-initial-text">{userInitial()}</span>
+          {#if gnbAvatarUrl}
+            <img src={gnbAvatarUrl} alt="" class="gnb-avatar-img gnb-avatar-img-mobile" />
+          {:else}
+            <span class="gnb-avatar-initial-text">{userInitial()}</span>
+          {/if}
         </button>
       {:else}
         <a href="/auth/login" class="gnb-avatar-btn" aria-label="내 계정">
@@ -318,6 +345,7 @@
     width: clamp(50px, 6.5vw, 70px);
     height: clamp(50px, 6.5vw, 70px);
     border-radius: 50%;
+    overflow: hidden;
     background: var(--cs-purple-pale);
     color: var(--cs-dark);
     font-family: var(--font-en-display);
@@ -331,6 +359,18 @@
   }
   .gnb-avatar-initial:hover { filter: brightness(0.92); }
   .gnb-avatar-initial:disabled { opacity: 0.5; cursor: not-allowed; }
+
+  /* 등록된 프로필 이미지 — 이니셜 대체 표시 (이번 세션 신규) */
+  .gnb-avatar-img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    border-radius: 50%;
+  }
+  .gnb-avatar-img-mobile {
+    position: relative;
+    z-index: 3;
+  }
 
   /* ── Mobile ── */
   .gnb-mobile-wrap {

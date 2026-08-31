@@ -11,6 +11,7 @@ import { createClient } from '@supabase/supabase-js'
 import { SUPABASE_SERVICE_ROLE_KEY } from '$env/static/private'
 import { PUBLIC_SUPABASE_URL } from '$env/static/public'
 import { getCmsRoleForAction } from '$lib/server/getCmsRoleForAction'
+import { hasSettingsAccess } from '$lib/utils/cmsPermissions'
 import {
   getDeliveryByBookId,
   createDelivery,
@@ -36,7 +37,8 @@ function parseId(raw: string): number | null {
 
 export const GET: RequestHandler = async ({ params, locals }) => {
   const cmsRole = await getCmsRoleForAction(locals)
-  if (!cmsRole) return json({ error: '권한이 없습니다.' }, { status: 403 })
+  // RSV-B-B6: 두발히어로 배송 API는 manager 이상 전용 (partner 조회만 허용, 조작 불가)
+  if (!cmsRole || !hasSettingsAccess(cmsRole)) return json({ error: '권한이 없습니다.' }, { status: 403 })
 
   const reservationId = parseId(params.id)
   if (!reservationId) return json({ error: '유효하지 않은 예약 ID입니다.' }, { status: 400 })
@@ -122,7 +124,7 @@ export const GET: RequestHandler = async ({ params, locals }) => {
 
 export const POST: RequestHandler = async ({ params, locals }) => {
   const cmsRole = await getCmsRoleForAction(locals)
-  if (!cmsRole) return json({ error: '권한이 없습니다.' }, { status: 403 })
+  if (!cmsRole || !hasSettingsAccess(cmsRole)) return json({ error: '권한이 없습니다.' }, { status: 403 })
 
   const reservationId = parseId(params.id)
   if (!reservationId) return json({ error: '유효하지 않은 예약 ID입니다.' }, { status: 400 })
@@ -130,6 +132,14 @@ export const POST: RequestHandler = async ({ params, locals }) => {
   const admin = createClient(PUBLIC_SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
   const res = await getReservationForDhero(admin, reservationId)
   if (!res) return json({ error: '예약을 찾을 수 없습니다.' }, { status: 404 })
+
+  // RSV-B-C3: 멱등성 가드 — 이미 배송 접수된 예약은 중복 접수 차단
+  if (res.trackingNumber) {
+    return json(
+      { error: '이미 배송이 접수된 예약입니다. 두발히어로 콘솔에서 현황을 확인해주세요.' },
+      { status: 409 },
+    )
+  }
 
   // bulk-delivery 방식이 아니면 두발히어로 접수 불가
   const isBulk = await isBulkDeliveryMethod(admin, res.pickupMethod)

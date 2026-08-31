@@ -4,6 +4,8 @@
   import { supabase } from '$lib/services/supabase'
   import { unregisterCurrentPushToken } from '$lib/utils/push'
   import { csToast } from '$lib/utils/toast'
+  import { authState } from '$lib/stores/auth'
+  import FloatingButton from '$lib/components/chat/FloatingButton.svelte'
   import SubGnb from '$lib/components/common/SubGnb.svelte'
   import BottomTabBar from '$lib/components/common/BottomTabBar.svelte'
   import RentalJourneyStepper from '$lib/components/common/RentalJourneyStepper.svelte'
@@ -42,6 +44,21 @@
       csToast.warning('상세 개인정보를 등록해주세요.')
     }
   })
+
+  // PcRentalPanel의 대여 건별 채팅 문의 버튼이 여는 공통 플로팅 채팅 모달(바텀시트) —
+  // 이 화면(/account)은 루트 레이아웃에서 FloatingBar가 제외되어 있어(account/rental과
+  // 동일 이유) 여기서 직접 마운트한다.
+  let chatUserId = $derived($authState.user?.id ?? 'test-user')
+  let chatUserName = $derived(
+    ($authState.user?.user_metadata?.full_name as string | undefined) ??
+    $authState.user?.email?.split('@')[0] ??
+    '테스트유저'
+  )
+  let chatUserHandle = $derived(
+    ($authState.user?.user_metadata?.username as string | undefined) ??
+    $authState.user?.email?.split('@')[0] ??
+    'test'
+  )
 
   const rentalStats = $derived([
     { label: '대여중',    count: data.rentalStats.active },
@@ -349,6 +366,8 @@
 </div>
 
 <BottomTabBar />
+
+<FloatingButton userId={chatUserId} userName={chatUserName} userHandle={chatUserHandle} hideFab />
 
 <MemberQrModal
   open={showQrModal}

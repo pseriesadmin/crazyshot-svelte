@@ -29,6 +29,8 @@ export interface JssWorksheetInstance {
   getMerge(): Record<string, [number, number]>
   /** 전체 셀 스타일을 "셀주소→CSS 문자열" 레코드로 반환 */
   getStyle(): Record<string, string>
+  /** 특정 셀 하나의 CSS 문자열만 반환 — 다중 셀 선택 테두리 경계 보정(normalizeMultiCellBorderEdges)에서 사용 */
+  getStyle(cell: string): string
   /** 전체 컬럼 너비 배열 반환 */
   getWidth(): (number | string)[]
   /** 현재 선택 범위 좌표 [좌상단x, 좌상단y, 우하단x, 우하단y] */
@@ -39,6 +41,13 @@ export interface JssWorksheetInstance {
   setValueFromCoords(x: number, y: number, value: string | number | boolean): void
   /** 컬럼 너비 지정 — "A4 용지 맞춤" 보조도구(ContractSpreadsheetEditor.svelte)에서 사용 */
   setWidth(column: number, width: number): void
+  /**
+   * 셀 하나의 CSS 프로퍼티 하나만 변경 — 다중 셀 선택 테두리 경계 보정에서 내부 경계
+   * (아래쪽·오른쪽 변)를 인접 셀의 값과 강제로 일치시키는 데 사용(2026-08-29).
+   * force=true여야 이미 같은 값이라도 스타일이 제거되지 않고 유지된다(jspreadsheet-ce
+   * 기본 동작 — 새 값이 현재 값과 같으면 해당 프로퍼티를 지워버림).
+   */
+  setStyle(cell: string, key: string, value: string, force?: boolean): void
 }
 
 /**
@@ -114,6 +123,12 @@ export function jssMergesToSheet(
  * (사방/외곽/안쪽/가로/세로/선 스타일 등)로 지정한 값도 동일한 이유로 유실되고 있었다.
  * 기존 borderColor(사방 통일 "border: 1px solid X" shorthand — .xlsx 임포트 전용 경로)는
  * 하위호환을 위해 그대로 유지, 신규 4필드와 별개로 함께 출력된다.
+ *
+ * 2026-08-29: font-family/vertical-align 2개 필드 추가 — 스프레드시트 툴바 전체 기능
+ * 점검 중 발견(Stephen "미작동 툴 찾아내" 요청) — 글꼴 툴바(Default/Verdana/Arial/Courier
+ * New)와 세로정렬 툴바(위/가운데/아래) 둘 다 이전까지 대응 필드가 아예 없어 저장 후
+ * 재오픈하면 항상 기본값으로 되돌아갔다. 위 필드들과 동일한 패턴(jspreadsheet-ce가 실제로
+ * 적용하는 CSS 프로퍼티명을 그대로 사용).
  */
 function formattingToCss(fmt: XlsxCellFormatting): string {
   const parts: string[] = []
@@ -126,7 +141,9 @@ function formattingToCss(fmt: XlsxCellFormatting): string {
   if (fmt.color) parts.push(`color: ${fmt.color}`)
   if (fmt.fontWeight) parts.push(`font-weight: ${fmt.fontWeight}`)
   if (fmt.fontSize) parts.push(`font-size: ${fmt.fontSize}`)
+  if (fmt.fontFamily) parts.push(`font-family: ${fmt.fontFamily}`)
   if (fmt.textAlign) parts.push(`text-align: ${fmt.textAlign}`)
+  if (fmt.verticalAlign) parts.push(`vertical-align: ${fmt.verticalAlign}`)
   return parts.join('; ')
 }
 
@@ -190,7 +207,7 @@ function expandBoxValues(tokens: string[]): [string, string, string, string] {
  * "1px solid"로 고정 렌더링하는 한계가 있어 유지하되, 실제 렌더링은 이 4변 필드가 있으면
  * 더 구체적인 선언으로 뒤에서 덮어써 정확한 값으로 표시된다 — spreadsheetRender.ts 참고).
  */
-function cssToFormatting(css: string): XlsxCellFormatting {
+export function cssToFormatting(css: string): XlsxCellFormatting {
   const fmt: XlsxCellFormatting = {}
   const bgMatch = css.match(/background-color:\s*([^;]+)/i)
   if (bgMatch) fmt.backgroundColor = bgMatch[1].trim()
@@ -205,8 +222,12 @@ function cssToFormatting(css: string): XlsxCellFormatting {
   if (weightMatch) fmt.fontWeight = weightMatch[1].trim()
   const sizeMatch = css.match(/font-size:\s*([^;]+)/i)
   if (sizeMatch) fmt.fontSize = sizeMatch[1].trim()
+  const familyMatch = css.match(/(?:^|;)\s*font-family:\s*([^;]+)/i)
+  if (familyMatch) fmt.fontFamily = familyMatch[1].trim()
   const alignMatch = css.match(/(?:^|;)\s*text-align:\s*([^;]+)/i)
   if (alignMatch) fmt.textAlign = alignMatch[1].trim()
+  const vAlignMatch = css.match(/(?:^|;)\s*vertical-align:\s*([^;]+)/i)
+  if (vAlignMatch) fmt.verticalAlign = vAlignMatch[1].trim()
   const borderTopMatch = css.match(/(?:^|;)\s*border-top:\s*([^;]+)/i)
   if (borderTopMatch) fmt.borderTop = borderTopMatch[1].trim()
   const borderRightMatch = css.match(/(?:^|;)\s*border-right:\s*([^;]+)/i)
@@ -357,4 +378,118 @@ export function worksheetConfigToSheet(
   )
 
   return { name, rows, merges, colWidths, cellFormatting }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 다중 셀 선택 서식 툴 — 값 일치 셀 삭제(clear-on-match) 결함 보정 (2026-08-30)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * jspreadsheet-ce의 `setStyle(cellRecord)` 내부 구현은 프로퍼티별로 "새 값이 현재 값과
+ * 같으면 오히려 그 프로퍼티를 지워버리는"(force 인자 없을 때) 동작을 한다 — 이미
+ * JssWorksheetInstance.setStyle의 JSDoc(위 참고, 2026-08-29 테두리 보정 작업 중 발견)에
+ * 문서화돼 있던 바로 그 동작이다. 그런데 굵게·글자색·배경색·글꼴·글꼴크기·정렬·세로정렬
+ * 7개 네이티브 툴바 항목 전부가 선택된 모든 셀 주소에 "동일한 값"을 한 번에
+ * `setStyle(Object.fromEntries(addrs.map(addr => [addr, value])))` 형태로 일괄 전달하면서
+ * force를 넘기지 않는다(node_modules/jspreadsheet-ce/dist/index.js 직접 확인). 그 결과
+ * 다중 셀 선택 중 이미 그 값을 갖고 있던 셀은 지워지고, 다른 값을 갖고 있던 셀만 새로
+ * 적용되는 결함으로 이어진다 — 같은 클릭 한 번인데 셀마다 결과가 갈린다(예: 4셀 중 1셀만
+ * 이미 굵게였는데 4셀 전체에 "굵게"를 클릭하면 그 1셀만 오히려 굵게가 풀리고 나머지 3셀만
+ * 새로 굵게 적용됨 — 실 브라우저 자동화로 직접 재현·확인). 단일 셀에서는 "다시 클릭하면
+ * 꺼진다"는 정상 토글처럼 보여 이번 세션 초반 단일 셀 툴바 전수점검에서는 발견되지 않았다.
+ *
+ * ContractSpreadsheetEditor.svelte의 `onchangestyle` 콜백이 매번 받는 `changes`(jspreadsheet가
+ * 이번 조작으로 실제로 건드린 "셀주소 → 최종 CSS 선언 문자열" 레코드, 지워진 프로퍼티는
+ * 빈 값으로 포함됨)만 보면 이 결함을 감지·보정할 수 있다 — 같은 배치 안에서 한 속성의 값이
+ * "빈값 / 어떤 값" 두 가지로 섞여 있으면 그 자체가 결함 신호이므로, 그 어떤 값 쪽으로
+ * 강제 통일한다. 순수 함수로 분리해 DOM/jspreadsheet-ce 의존 없이 단위테스트 가능하게 하고,
+ * 실제 `ws.setStyle()` 호출(부수효과)은 ContractSpreadsheetEditor.svelte
+ * normalizeMultiCellUniformStyle()이 이 함수의 결과를 받아서 수행한다.
+ */
+
+/**
+ * CSS 선언 문자열("key: value; key2: value2" 또는 지워진 경우 "key:")을
+ * Map<프로퍼티명, 값>으로 분리한다 — cssToFormatting()과 달리 알려진 필드명으로 제한하지
+ * 않고 등장하는 모든 key:value 쌍을 그대로 반환하는 범용 파서. 빈 값도 그대로 보존한다
+ * (지워진 상태를 구분해야 하므로 — computeUniformStyleCorrections()가 이 구분에 의존).
+ */
+export function parseCssDeclarations(css: string): Map<string, string> {
+  const result = new Map<string, string>()
+  for (const decl of css.split(';')) {
+    const idx = decl.indexOf(':')
+    if (idx === -1) continue
+    const key = decl.slice(0, idx).trim()
+    const value = decl.slice(idx + 1).trim()
+    if (key) result.set(key, value)
+  }
+  return result
+}
+
+/** computeUniformStyleCorrections()가 보정 대상으로 감시하는 프로퍼티 — border-*는
+ *  normalizeMultiCellBorderEdges()(ContractSpreadsheetEditor.svelte)가 별도로 전담하므로
+ *  여기서는 제외해 이중 처리를 방지한다. */
+const UNIFORM_STYLE_KEYS = [
+  'font-weight',
+  'color',
+  'background-color',
+  'font-family',
+  'font-size',
+  'text-align',
+  'vertical-align',
+] as const
+
+export interface StyleCorrection {
+  addr: string
+  key: string
+  value: string
+}
+
+/**
+ * onchangestyle의 changes 레코드를 분석해, 같은 배치 안에서 값이 "빈값/어떤 값"으로 섞여
+ * 있는 프로퍼티를 찾아 그 값으로 통일하기 위한 보정 목록을 계산한다(순수 함수, 부수효과 없음).
+ *
+ * - 2개 미만 주소(단일 셀 편집)는 애초에 이 결함이 발생하지 않으므로 빈 배열 반환.
+ * - 한 속성에 서로 다른 non-empty 값이 2개 이상 섞여 있으면(단일 클릭이 항상 동일 값을
+ *   전체에 броadcast하는 네이티브 툴바 동작과 맞지 않는, 예상 밖 상황) 어느 쪽이 "의도된
+ *   값"인지 알 수 없으므로 보정하지 않고 그대로 둔다(잘못된 값으로 덮어쓰는 것을 방지).
+ * - 그 속성이 애초에 이번 배치의 일부 주소에서만 등장하면(전체 선택 범위에 균일하게
+ *   broadcast되지 않은 경우) 마찬가지로 판단이 애매하므로 보정하지 않는다.
+ */
+export function computeUniformStyleCorrections(
+  changes: Record<string, string>,
+): StyleCorrection[] {
+  const addrs = Object.keys(changes)
+  if (addrs.length < 2) return []
+
+  const perAddrDecls = new Map(addrs.map((addr) => [addr, parseCssDeclarations(changes[addr] ?? '')]))
+  const corrections: StyleCorrection[] = []
+
+  for (const key of UNIFORM_STYLE_KEYS) {
+    let presentCount = 0
+    let anyEmpty = false
+    const nonEmptyValues = new Set<string>()
+
+    for (const addr of addrs) {
+      const decl = perAddrDecls.get(addr)
+      if (!decl || !decl.has(key)) continue
+      presentCount++
+      const value = decl.get(key)!
+      if (value === '') anyEmpty = true
+      else nonEmptyValues.add(value)
+    }
+
+    // 이번 배치 전체 주소에 고르게 등장하지 않았거나(broadcast 아님), non-empty 값이
+    // 정확히 1종류가 아니거나(모호함), 애초에 섞이지 않았으면(정상) 보정하지 않는다.
+    if (presentCount !== addrs.length) continue
+    if (nonEmptyValues.size !== 1) continue
+    if (!anyEmpty) continue
+
+    const target = [...nonEmptyValues][0]
+    for (const addr of addrs) {
+      const value = perAddrDecls.get(addr)!.get(key)!
+      if (value !== target) corrections.push({ addr, key, value: target })
+    }
+  }
+
+  return corrections
 }

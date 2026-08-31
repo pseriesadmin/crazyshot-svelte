@@ -6,6 +6,7 @@ import { sendPushToAdmins, sendPushToUser } from '$lib/server/push'
 import { computeContentHash } from '$lib/contract-signature/contentHash'
 import { recordAuditLog } from '$lib/contract-signature/auditLog'
 import { resolveApprovalNotifyPlan } from '$lib/server/reservationApprovalNotify'
+import { sendApprovalNotifications } from '$lib/server/sendApprovalNotifications'
 import type { RequestHandler } from './$types'
 
 export const POST: RequestHandler = async ({ params, request, getClientAddress }) => {
@@ -111,30 +112,21 @@ export const POST: RequestHandler = async ({ params, request, getClientAddress }
       // 까지 이미 충족돼 있어야만 이 시점에 confirmed로 전환된다(try_confirm_reservation이
       // AND 조건을 다시 검증) — 결제가 아직이면 hold 그대로 유지되고 관리자가 결제 확인 후
       // 별도 트리거(mark_reservation_payment_confirmed)로 재시도된다.
+      // 2026-08-31(Migration 397): 계약이 이제 주문당 1건만 존재해(init-contract 정책)
+      // 이 계약을 직접 소유하지 않은 형제 예약(같은 주문의 다른 상품)은 이 대표 예약만
+      // 재시도해서는 영원히 hold에 갇힌다 — try_confirm_reservation_order로 같은 주문
+      // 전체를 함께 재시도한다(단일 예약 주문이면 자기 자신만 처리해 무회귀).
       if (currentReservation?.status === 'hold') {
-        const { data: justConfirmed } = await admin.rpc('try_confirm_reservation', {
+        const { data: justConfirmedIds } = await admin.rpc('try_confirm_reservation_order', {
           p_reservation_id: contract.reservation_id,
         })
-        if (justConfirmed === true) {
-          // 같은 주문(order_items)으로 묶인 다중상품 예약이면 관리자 수동승인
-          // (approveReservation)과 동일하게 통합 카드로 안내 — service-operations.md §4
-          // 정책을 승인 트리거(관리자 수동 vs 고객 서명완료 자동)와 무관하게 일치시킴
-          // (reservation-rental-execution.md §0-4 #7 — 이전엔 이 경로만 항상 단건 발송이라
-          // 묶음주문도 상품별로 개별 카드가 여러 건 나가던 설계공백이었음)
+        if (((justConfirmedIds ?? []) as number[]).length > 0) {
+          // 채팅 알림 + 고객 푸시 — 공용 헬퍼로 통합 (NTF-C2/NTF-C3 수정, 2026-08-31)
+          // mode='hold' 시 채팅·푸시 둘 다 보류. 기존에는 채팅만 있고 reservation_approval
+          // 푸시 호출이 완전히 없어 서명완료 자동승인 시 고객이 푸시를 받지 못하던 NTF-C3
+          // 공백을 이 헬퍼 적용으로 해소한다 — service-operations.md §4/§15
           const notifyPlan = await resolveApprovalNotifyPlan(admin, contract.reservation_id)
-          if (notifyPlan.mode === 'batch') {
-            await admin.rpc('send_rental_chat_notification_batch', {
-              p_reservation_ids: notifyPlan.reservationIds,
-              p_notify_type:     'reservation_approval',
-            })
-          } else if (notifyPlan.mode === 'single') {
-            await admin.rpc('send_rental_chat_notification', {
-              p_reservation_id: contract.reservation_id,
-              p_notify_type:    'reservation_approval',
-            })
-          }
-          // notifyPlan.mode === 'hold' → 같은 주문의 다른 상품이 아직 미승인 — 알림 보류
-          // (마지막 상품이 confirmed되는 시점에 위 batch 분기가 통합 카드로 한 번에 발송)
+          await sendApprovalNotifications(admin, contract.reservation_id, notifyPlan)
         }
       } else if (currentReservation?.status === 'shipped') {
         await admin.rpc('update_reservation_status', {

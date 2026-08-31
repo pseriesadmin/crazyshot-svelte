@@ -71,7 +71,7 @@ let nextMaybeSingleResult: { data: unknown; error: unknown } | null = null;
 let nextMaybeSingleByTable: Record<string, { data: unknown; error: unknown }> = {};
 
 function makeAdminStub() {
-  const fns = ['select','insert','update','delete','eq','is','not','order','limit','single','maybeSingle'];
+  const fns = ['select','insert','update','delete','eq','in','is','not','order','limit','single','maybeSingle'];
   return {
     from: vi.fn().mockImplementation((table: string) => {
       const chain: Record<string, unknown> = {};

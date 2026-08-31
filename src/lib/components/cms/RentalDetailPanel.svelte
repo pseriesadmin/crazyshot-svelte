@@ -58,15 +58,18 @@
   }
 
   interface PaymentDetail {
-    toss_order_id:   string | null
-    payment_key:     string | null
-    payment_method:  string | null
-    total_amount:    number | null
-    paid_amount:     number | null
-    point_amount:    number | null
-    coupon_discount: number | null
-    confirmed_at:    string | null
-    toss_response:   Record<string, unknown> | null
+    toss_order_id:          string | null
+    payment_key:            string | null
+    payment_method:         string | null
+    total_amount:           number | null
+    paid_amount:            number | null
+    point_amount:           number | null
+    coupon_discount:        number | null
+    confirmed_at:           string | null
+    toss_response:          Record<string, unknown> | null
+    status:                 string | null   // 'done' | 'cancelled' | null
+    refund_failed_at:       string | null   // RSV-B-C1: Toss취소 성공 후 RPC 실패 시 기록
+    refund_failure_reason:  string | null
   }
 
   interface Props {
@@ -81,12 +84,17 @@
         컴포넌트가 마운트된 이후 row가 갱신(onrefresh)돼도 재적용되지 않음(마운트 시 1회만) —
         관리자가 이미 다른 탭으로 전환한 상태를 되돌리지 않기 위함 */
     initialTab?:  'rental' | 'customer' | 'payment' | 'contract'
+    /** 예약 단계 상태 변경(승인·거부·취소) 완료 시 호출 — /cms/reservation에서 closePanel에 연결.
+        /cms/rentals에서는 미사용(isRentalView=true일 때 undefined가 기본값). */
+    onstatuschange?: () => void
   }
-  let { row, onclose, onrefresh, stepFilter, isRentalView = false, enableQrVerify = false, cmsRole = null, initialTab }: Props = $props()
+  let { row, onclose, onrefresh, stepFilter, isRentalView = false, enableQrVerify = false, cmsRole = null, initialTab, onstatuschange }: Props = $props()
 
-  let canManageLockerPassword = $derived(hasSettingsAccess(cmsRole ?? ''))
+  // RSV-B-B3: 이 derived는 "환불 처리" + "보관함 비밀번호" 두 기능 모두의 권한 게이트이므로
+  // canManagePaymentAndLocker 대신 실제 역할을 반영한 이름으로 변경.
+  let canManagePaymentAndLocker = $derived(hasSettingsAccess(cmsRole ?? ''))
   let showLockerPasswordField = $derived(
-    canManageLockerPassword &&
+    canManagePaymentAndLocker &&
     ((row.pickup_method === 'visit' && isLockerHour(row.pickup_time)) ||
      (row.return_method === 'visit' && isLockerHour(row.return_time)))
   )
@@ -137,6 +145,45 @@
 
   let activeTab   = $state<'rental' | 'customer' | 'payment' | 'contract'>(initialTab ?? 'rental')
   let isSubmitting = $state(false)
+
+  // 환불 처리 상태 (결제정보 탭 PUT /api/cms/reservations/[id]/payment)
+  let isRefunding = $state(false)
+  let refundError = $state<string | null>(null)
+
+  async function handleRefund(): Promise<void> {
+    // RSV-B-B1: 환불 확인 다이얼로그에 실결제 금액 포함 — 관리자가 어떤 금액을 환불하는지 명확히 인지하도록.
+    const amountStr = paymentDetail?.paid_amount != null
+      ? `환불 금액: ${paymentDetail.paid_amount.toLocaleString('ko-KR')}원\n`
+      : ''
+    // 환불 사유 입력 (prompt — 새 모달 컴포넌트 신설 없이 가장 가벼운 CMS 인라인 패턴)
+    const reason = window.prompt('환불 사유를 입력해 주세요.\n(비워 두면 "관리자 환불"로 기록됩니다.)', '')
+    if (reason === null) return   // 취소 버튼: 환불 중단
+    const cancelReason = reason.trim() || '관리자 환불'
+    if (!window.confirm(`전액 환불하시겠습니까?\n${amountStr}사유: ${cancelReason}\n\n이 작업은 취소할 수 없습니다.`)) return
+    isRefunding = true
+    refundError = null
+    try {
+      const res = await fetch(`/api/cms/reservations/${row.reservation_id}/payment`, {
+        method:  'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({ cancelReason }),
+      })
+      const data = await res.json() as { ok?: boolean; error?: string; cancelledIds?: number[] }
+      if (!res.ok || !data.ok) {
+        refundError = data.error ?? '환불 처리에 실패했습니다.'
+      } else {
+        csToast.success('환불이 완료되었습니다.')
+        // RSV-B-B2: 결제 정보 캐시 무효화 — 다음 결제정보 탭 진입 시 새 데이터 로드
+        fetchedForId = null
+        paymentDetail = null
+        onrefresh()
+      }
+    } catch {
+      refundError = '네트워크 오류가 발생했습니다. 다시 시도해 주세요.'
+    } finally {
+      isRefunding = false
+    }
+  }
 
   let fetchedForId    = $state<number | null>(null)
   let paymentDetail   = $state<PaymentDetail | null>(null)
@@ -346,7 +393,40 @@
     easyPay:           '간편결제',
   }
 
+  // 2026-08-31: row.payment_status(Migration 387부터 payment_transactions.status 그대로
+  // 노출)를 영문 원문 대신 한글로 표시 — 다른 라벨맵과 동일 원칙.
+  const PAYMENT_STATUS_LABELS: Record<string, string> = {
+    pending:           '결제 대기',
+    done:              '결제완료',
+    cancelled:         '환불완료',
+    partial_cancelled: '부분환불',
+    failed:            '결제실패',
+  }
+
   const TERMINAL = new Set(['completed', 'cancelled', 'damage_claimed'])
+
+  // §9 게이팅 완료 후 승인이력 표시 대상 상태 (rental-lifecycle.md 전체 상태 머신 기준)
+  const APPROVAL_HISTORY_STATUSES = new Set([
+    'confirmed', 'shipped', 'in_use', 'return_requested', 'returned', 'completed', 'damage_claimed',
+  ])
+
+  // 승인 이력 3단계 파생값 (Q3 확정 — "전자계약 서명 완료 → 결제 확인 → 승인확정" 고정 순서)
+  // 각 단계는 완료 시각이 있을 때만 표시 — 서명/결제 완료 순서와 무관하게 화면 표시 순서는 고정
+  let approvalSignedAt   = $derived(row.customer_signed_at ?? row.auto_signed_at ?? null)
+  let approvalPaymentAt  = $derived(row.payment_confirmed_at ?? null)
+  let approvalConfirmedAt = $derived.by((): string | null => {
+    if (!APPROVAL_HISTORY_STATUSES.has(row.status)) return null
+    // try_confirm_reservation이 BOTH 서명+결제를 만족했을 때만 실행됨 — 두 값 중 더 늦은 시각
+    const candidates = ([approvalSignedAt, approvalPaymentAt] as (string | null)[])
+      .filter((v): v is string => v != null)
+    // RSV-C-C1: 서명·결제 둘 다 완료(candidates.length === 2)일 때만 승인확정 시각 표시.
+    // 하나만 있을 때는 아직 승인 완료 조건 미충족 — null 반환으로 "승인확정" 행 미노출.
+    if (candidates.length !== 2) return null
+    return [...candidates].sort().at(-1) ?? null
+  })
+  let hasApprovalHistory = $derived(
+    approvalSignedAt !== null || approvalPaymentAt !== null || approvalConfirmedAt !== null,
+  )
 
   function isTerminal(s: string): boolean { return TERMINAL.has(s) }
 
@@ -792,6 +872,42 @@
         </div>
       </div>
 
+      <!-- 승인 이력 — §9 게이팅 완료(confirmed 전환) 3단계 타임라인
+           (Q3 확정: "전자계약 서명 완료 → 결제 확인 → 승인확정" 고정 순서, 2026-08-31)
+           각 단계는 완료 시각이 있을 때만 표시 — service-operations.md §9 -->
+      {#if hasApprovalHistory}
+        <div class="section-title">승인 이력</div>
+        <div class="info-section approval-history-section">
+          {#if approvalSignedAt !== null}
+            <div class="info-row approval-history-row">
+              <span class="info-label approval-step-label">
+                <span class="approval-step-dot approval-step-dot--done"></span>
+                전자계약 서명 완료
+              </span>
+              <span class="info-value">{formatDateTime(approvalSignedAt)}</span>
+            </div>
+          {/if}
+          {#if approvalPaymentAt !== null}
+            <div class="info-row approval-history-row">
+              <span class="info-label approval-step-label">
+                <span class="approval-step-dot approval-step-dot--done"></span>
+                결제 확인
+              </span>
+              <span class="info-value">{formatDateTime(approvalPaymentAt)}</span>
+            </div>
+          {/if}
+          {#if approvalConfirmedAt !== null}
+            <div class="info-row approval-history-row">
+              <span class="info-label approval-step-label">
+                <span class="approval-step-dot approval-step-dot--confirmed"></span>
+                승인확정
+              </span>
+              <span class="info-value fw-bold">{formatDateTime(approvalConfirmedAt)}</span>
+            </div>
+          {/if}
+        </div>
+      {/if}
+
       <!-- 상품 정보 -->
       <div class="section-title-row">
         <span class="section-title">상품 정보{#if productInfoItems.length > 1} ({productInfoItems.length}개){/if}</span>
@@ -1117,7 +1233,7 @@
               isSubmitting = true
               return async ({ result, update }) => {
                 isSubmitting = false
-                if (result.type === 'success') { csToast.success('예약이 승인되었습니다.'); onrefresh() }
+                if (result.type === 'success') { csToast.success('예약이 승인되었습니다.'); onstatuschange?.(); onrefresh() }
                 else csToast.error('처리 중 오류가 발생했습니다.')
                 await update()
               }
@@ -1133,7 +1249,7 @@
               isSubmitting = true
               return async ({ result, update }) => {
                 isSubmitting = false
-                if (result.type === 'success') { csToast.success('예약이 거부되었습니다.'); onrefresh() }
+                if (result.type === 'success') { csToast.success('예약이 거부되었습니다.'); onstatuschange?.(); onrefresh() }
                 else csToast.error('처리 중 오류가 발생했습니다.')
                 await update()
               }
@@ -1183,6 +1299,7 @@
                   if ((result.data as Record<string, unknown> | undefined)?.dhero_cancel_failed) {
                     csToast.warning('배송사 측 취소에 실패했습니다. 실물 배송을 별도로 확인하세요.')
                   }
+                  onstatuschange?.()
                   onrefresh()
                 } else {
                   csToast.error('처리 중 오류가 발생했습니다.')
@@ -1304,7 +1421,7 @@
         {/if}
         <div class="info-row">
           <span class="info-label">결제 상태</span>
-          <span class="info-value">{row.payment_status ?? '-'}</span>
+          <span class="info-value">{row.payment_status ? (PAYMENT_STATUS_LABELS[row.payment_status] ?? row.payment_status) : '-'}</span>
         </div>
       </div>
 
@@ -1324,6 +1441,20 @@
               <span class="info-value">{sib.productName} · {STATUS_LABEL[sib.status] ?? sib.status}</span>
             </div>
           {/each}
+        </div>
+      {/if}
+
+      <!-- RSV-B-C1: 환불실패 배지 — Toss 취소는 완료됐으나 DB 반영 실패 시 표시 -->
+      {#if paymentDetail?.refund_failed_at}
+        <div class="refund-failed-banner" role="alert">
+          <span class="refund-failed-badge">⚠ 환불실패</span>
+          <span class="refund-failed-desc">
+            Toss 결제취소는 완료됐으나 DB 반영에 실패했습니다.
+            Toss 콘솔에서 직접 확인 후 수동 처리가 필요합니다.
+            {#if paymentDetail.refund_failure_reason}
+              <br /><span class="refund-failed-reason">사유: {paymentDetail.refund_failure_reason}</span>
+            {/if}
+          </span>
         </div>
       {/if}
 
@@ -1386,7 +1517,25 @@
       {/if}
 
       <div class="action-section">
-        <button class="btn-action" disabled title="결제 연동 완료 후 활성화 예정">환불 처리</button>
+        {#if canManagePaymentAndLocker && paymentDetail?.status === 'done' && row.status !== 'cancelled'}
+          <!-- manager 이상 + payment done + 예약 미취소 상태에서만 활성 환불 버튼 -->
+          <button
+            class="btn-action btn-action--danger"
+            disabled={isRefunding}
+            onclick={handleRefund}
+          >
+            {isRefunding ? '환불 처리 중...' : '환불 처리'}
+          </button>
+          {#if refundError}
+            <p class="refund-error" role="alert">{refundError}</p>
+          {/if}
+        {:else if paymentDetail?.status === 'cancelled' || row.status === 'cancelled'}
+          <button class="btn-action" disabled title="이미 취소된 예약입니다">환불 처리 (취소됨)</button>
+        {:else if !canManagePaymentAndLocker && paymentDetail?.status === 'done'}
+          <button class="btn-action" disabled title="매니저 이상 권한이 필요합니다">환불 처리</button>
+        {:else}
+          <button class="btn-action" disabled title="결제 정보 없음">환불 처리</button>
+        {/if}
       </div>
     {/if}
 
@@ -1623,6 +1772,21 @@
   .fw-bold { font-weight: 700; }
   .mono    { font-family: monospace; }
   .small   { font-size: 11px; word-break: break-all; }
+
+  /* 승인 이력 섹션 (Stage 2, Q3 확정, 2026-08-31) */
+  .approval-step-label {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .approval-step-dot {
+    flex-shrink: 0;
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+  }
+  .approval-step-dot--done      { background: var(--cs-purple); }
+  .approval-step-dot--confirmed { background: var(--cs-orange, #FF4500); }
   .amount-discount { color: var(--cs-error, #ef4444); }
   .option-code {
     display: inline-block;
@@ -1756,6 +1920,39 @@
   }
   .btn-action:hover    { background: var(--cs-purple-hover); }
   .btn-action:disabled { background: var(--cs-disabled-button); cursor: not-allowed; }
+  .btn-action--danger             { background: var(--cs-error); }
+  .btn-action--danger:hover       { background: var(--cs-red-badge); }
+  .btn-action--danger:disabled    { background: var(--cs-disabled-button); cursor: not-allowed; }
+  .refund-error { font-size: 12px; color: var(--cs-error); margin: 6px 0 0; }
+  /* RSV-B-C1 환불실패 배지 */
+  .refund-failed-banner {
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+    background: #fff5f5;
+    border: 1.5px solid var(--cs-error, #e53e3e);
+    border-radius: var(--cms-radius-sm, 8px);
+    padding: 10px 12px;
+    margin-bottom: 12px;
+  }
+  .refund-failed-badge {
+    flex-shrink: 0;
+    font-size: 12px;
+    font-weight: 700;
+    color: var(--cs-error, #e53e3e);
+    background: #ffe0e0;
+    border-radius: 4px;
+    padding: 2px 6px;
+  }
+  .refund-failed-desc {
+    font-size: 12px;
+    color: var(--cs-text, #100B32);
+    line-height: 1.5;
+  }
+  .refund-failed-reason {
+    color: var(--cs-text-mid, #666);
+    font-size: 11px;
+  }
 
   .btn-danger-sm {
     display: inline-flex;

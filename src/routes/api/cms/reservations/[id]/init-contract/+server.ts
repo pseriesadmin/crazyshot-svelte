@@ -32,12 +32,40 @@ export const POST: RequestHandler = async ({ params, locals }) => {
     return json({ error: '취소되었거나 만료된 예약은 계약서를 발행할 수 없습니다.' }, { status: 422 })
   }
 
-  // 이미 존재하면 재사용 (idempotent)
+  // 2026-08-31(Stephen 확정): '예약' 단위 = '주문' 단위 — 장바구니에 상품이 몇 개 담기든
+  // 하나의 예약신청(주문)에는 전자계약이 정확히 1건만 존재해야 한다. 이 예약이 속한 주문에
+  // 이미 다른 상품(형제 행) 쪽에서 발행된 계약이 있으면 새로 만들지 않고 그 계약을 그대로
+  // 재사용한다 — 상품별로 각각 "계약서 발송"을 눌러도 계약서·서명링크·결제 트리거가
+  // 여러 개로 쪼개지지 않도록 하기 위함(toss_payments_pg_integration_2026-08-30.md 후속
+  // 지적 — 개별결제 정책은 현재 사용하지 않음).
+  const { data: orderItem } = await admin
+    .from('order_items')
+    .select('order_id')
+    .eq('reservation_id', reservationId)
+    .maybeSingle()
+
+  const sameOrderReservationIds: number[] = [reservationId]
+  if (orderItem?.order_id) {
+    const { data: siblingItems } = await admin
+      .from('order_items')
+      .select('reservation_id')
+      .eq('order_id', orderItem.order_id)
+    for (const item of (siblingItems ?? []) as { reservation_id: number | null }[]) {
+      if (item.reservation_id != null && !sameOrderReservationIds.includes(item.reservation_id)) {
+        sameOrderReservationIds.push(item.reservation_id)
+      }
+    }
+  }
+
+  // 이미 존재하면 재사용 (idempotent) — 이 예약 자신뿐 아니라 같은 주문의 다른 상품(예약
+  // 행)에 걸린 계약도 함께 확인. 가장 먼저 발행된 계약을 정본으로 삼는다.
   const { data: existing } = await admin
     .from('contracts')
     .select('id')
-    .eq('reservation_id', reservationId)
+    .in('reservation_id', sameOrderReservationIds)
     .is('deleted_at', null)
+    .order('created_at', { ascending: true })
+    .limit(1)
     .maybeSingle()
 
   if (existing) return json({ contractId: existing.id })

@@ -10,12 +10,14 @@ import { createClient } from '@supabase/supabase-js'
 import { SUPABASE_SERVICE_ROLE_KEY } from '$env/static/private'
 import { PUBLIC_SUPABASE_URL } from '$env/static/public'
 import { getCmsRoleForAction } from '$lib/server/getCmsRoleForAction'
+import { hasSettingsAccess } from '$lib/utils/cmsPermissions'
 import { registerReturn, DHERO_STATUS_LABEL, DheroApiError } from '$lib/server/dhero'
 import type { RequestHandler } from './$types'
 
 export const POST: RequestHandler = async ({ params, locals }) => {
   const cmsRole = await getCmsRoleForAction(locals)
-  if (!cmsRole) return json({ error: '권한이 없습니다.' }, { status: 403 })
+  // RSV-B-B6: 두발히어로 반품 등록은 manager 이상 전용
+  if (!cmsRole || !hasSettingsAccess(cmsRole)) return json({ error: '권한이 없습니다.' }, { status: 403 })
 
   const reservationId = Number(params.id)
   if (!Number.isInteger(reservationId) || reservationId <= 0) {

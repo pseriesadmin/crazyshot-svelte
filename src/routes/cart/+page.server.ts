@@ -18,7 +18,7 @@ export const load: PageServerLoad = async ({ locals }) => {
   // 배송 방식 옵션 — 세션 불필요, 모든 사용자에게 제공
   const { data: deliveryOptionsData } = await supabase
     .from('rental_method_options')
-    .select('id, method_key, name, fee_amount, fee_description, deadline_time, display_order, is_bulk_delivery')
+    .select('id, method_key, name, deadline_time, display_order, is_bulk_delivery, is_courier_dependent')
     .eq('is_active', true)
     .is('deleted_at', null)
     .order('display_order', { ascending: true })
@@ -46,11 +46,24 @@ export const load: PageServerLoad = async ({ locals }) => {
     .single()
   const rentalGuideText = (guideData as { guide_text?: string } | null)?.guide_text ?? ''
 
+  // 필수 동의문 항목(/cms/set/rental "필수 동의문 항목") — 체크아웃 진행 전 고객이 개별로
+  // 확인·체크해야 하는 항목 목록. 세션 불필요, 공개 조회(rentalGuideText와 동일 패턴).
+  // 2026-08-30: 등록 UI만 있고 카트/체크아웃 어디서도 조회되지 않던 공백을 감사로 발견해 연결.
+  const { data: consentItemsData } = await untypedFrom(supabase, 'rental_consent_items')
+    .select('id, content, display_order')
+    .eq('is_active', true)
+    .is('deleted_at', null)
+    .order('display_order', { ascending: true })
+  const consentItems = (consentItemsData ?? []) as Array<{ id: string; content: string; display_order: number }>
+
   // 배송비(왕복/배송/반납요금) — CMS "/cms/set/rental > 배송적용옵션"에서 설정한 전역 요금.
   // 상품상세(products/[id])의 "예상 배송비" 안내와 동일 테이블·동일 select — 실제 가격 계산은
   // 상품별 shipping_round_trip/delivery/return 플래그(products 테이블) × 수령·반납 방식이
   // 실제 배송(is_bulk_delivery)인지를 클라이언트에서 조합해 판정한다(2026-08-25 — 그동안
   // rental_method_options.fee_amount(전부 0)만 보고 있어 "무료"로 잘못 표시되던 결함 수정).
+  // 2026-08-30: CMS에 fee_amount 입력 UI 자체가 없어 항상 0으로 방치되던 죽은 코드 경로를
+  // 감사(RSC-C3)로 발견 — rental_method_options의 fee_amount/is_free_for_top_grade select·
+  // 사용을 완전히 제거하고 이 테이블(rental_shipping_settings)만으로 배송비를 계산.
   const { data: shippingSettingsData } = await untypedFrom(supabase, 'rental_shipping_settings')
     .select('enable_round_trip, round_trip_fee, enable_delivery, delivery_fee, enable_return, return_fee, shipping_guide, restrict_return_delivery')
     .limit(1)
@@ -67,15 +80,15 @@ export const load: PageServerLoad = async ({ locals }) => {
   } | null
 
   // 배송료 우대설정(/cms/set/rental "배송료 우대설정") — 조건 만족 시 배송비 할인 조합(최대
-  // 3개). 세션 무관, 공개 조회(deliveryOptions/shippingSettings와 동일 패턴).
+  // 5개). 세션 무관, 공개 조회(deliveryOptions/shippingSettings와 동일 패턴).
   const { data: discountTiersData } = await untypedFrom(supabase, 'delivery_fee_discount_tiers')
-    .select('min_rental_amount, condition_type, discount_rate')
+    .select('min_rental_amount, condition_types, discount_rate')
     .eq('is_active', true)
     .is('deleted_at', null)
     .order('min_rental_amount', { ascending: true })
   const discountTiers = (discountTiersData ?? []) as Array<{
     min_rental_amount: number
-    condition_type: 'long_term_rental' | 'sale_only_purchase'
+    condition_types: Array<'long_term_rental' | 'sale_only_purchase'>
     discount_rate: number
   }>
 
@@ -401,6 +414,7 @@ export const load: PageServerLoad = async ({ locals }) => {
     pickupPoints,
     courierClosedDates,
     rentalGuideText,
+    consentItems,
     shippingSettings,
     discountTiers,
     userId:          session.user.id,
@@ -563,11 +577,12 @@ interface DeliveryOptionRow {
   id:               string
   method_key:       string
   name:             string
-  fee_amount:       number
-  fee_description:  string | null
   deadline_time:    string | null
   display_order:    number
   // 배송대여 수령/반납 일괄 지정(2026-08-24) — true인 방식은 /cart에서 반납방식 강제고정+
   // 시간선택 비활성화 대상(cms/set/rental "배송대여 수령/반납 일괄 지정" 콤보로 관리자 토글)
   is_bulk_delivery: boolean
+  // 휴무일 캘린더 제한 대상(택배사 의존 여부) — is_bulk_delivery("요청 A" 전용)와는 별개
+  // 목적(감사 RSC-B3, Migration #386). courierClosedMap 적용 방식 판정에만 쓰인다.
+  is_courier_dependent: boolean
 }

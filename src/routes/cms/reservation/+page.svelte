@@ -35,6 +35,7 @@
     completed:        '완료',
     cancelled:        '취소',
     damage_claimed:   '파손신고',
+    expired:          '만료됨',
   }
 
   const STATUS_STYLE: Record<string, { bg: string; color: string }> = {
@@ -48,6 +49,7 @@
     completed:        { bg: 'rgba(102,102,102,0.10)', color: 'var(--cs-text-mid)' },
     cancelled:        { bg: 'rgba(255,53,53,0.10)',   color: 'var(--cs-red-badge)' },
     damage_claimed:   { bg: 'rgba(255,53,53,0.10)',   color: 'var(--cs-red-badge)' },
+    expired:          { bg: 'rgba(102,102,102,0.10)', color: 'var(--cs-text-mid)' },
   }
 
   let searchInput  = $state(data.search ?? '')
@@ -64,21 +66,33 @@
   $effect(() => {
     if (selectedId != null) {
       const updated = data.rentals.find(r => r.reservation_id === selectedId)
-      if (updated) selectedRow = updated
+      if (updated) {
+        selectedRow = updated
+      } else {
+        // RSV-A-C1: 상태 변경 후 invalidateAll로 목록이 갱신됐는데 해당 row가 더 이상
+        // 현재 필터에 없으면(예: 승인 → hold 목록에서 사라짐) 패널을 자동으로 닫는다.
+        closePanel()
+      }
     }
   })
 
   function applyFilters() {
-    const params = new URLSearchParams()
+    // RSV-A-C1: 현재 URL 파라미터를 기준으로 시작해 selected 등 기존 값을 유지한다.
+    // 기존에 new URLSearchParams()로 빈 객체를 생성하면 selected 파라미터가 소실됐다.
+    const params = new URLSearchParams(window.location.search)
     // status는 빈 값('전체')이어도 명시적으로 채운다 — 파라미터 자체가 없으면 서버가
     // 최초진입 기본값('신청대기')으로 되돌리므로, '전체' 선택 상태가 유지되게 하려면
     // 빈 문자열이라도 항상 params에 실어 보내야 한다(요구사항 1, +page.server.ts 참고).
     params.set('status', data.status ?? '')
     // '계약대기' 선택 상태도 검색·날짜 필터 적용 시 함께 유지
     if (data.contractPending) params.set('contract_pending', '1')
+    else params.delete('contract_pending')
     if (searchInput.trim()) params.set('search', searchInput.trim())
-    if (dateFrom)        params.set('date_from', dateFrom)
-    if (dateTo)          params.set('date_to', dateTo)
+    else params.delete('search')
+    if (dateFrom) params.set('date_from', dateFrom)
+    else params.delete('date_from')
+    if (dateTo) params.set('date_to', dateTo)
+    else params.delete('date_to')
     params.delete('page')
     goto(`/cms/reservation?${params.toString()}`, { replaceState: true })
   }
@@ -301,6 +315,7 @@
             row={selectedRow}
             onclose={closePanel}
             onrefresh={invalidateAll}
+            onstatuschange={closePanel}
             stepFilter={['hold', 'confirmed']}
             cmsRole={data.cmsRole}
           />
