@@ -89,9 +89,12 @@ export const actions: Actions = {
       p_session_timeout_hours: timeout,
     })
 
-    const { data: token } = await serviceClient.rpc('cms_create_invite_token', {
+    const { data: token, error: tokenErr } = await serviceClient.rpc('cms_create_invite_token', {
       p_created_by: userId,
     })
+    if (tokenErr) {
+      console.error('[cms/accounts] cms_create_invite_token 실패:', tokenErr.message)
+    }
 
     const inviteLink = token ? `/cms/login?invite=${token}` : null
 

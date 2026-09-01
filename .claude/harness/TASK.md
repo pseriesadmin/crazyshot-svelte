@@ -12,12 +12,183 @@
 
 ---
 
-## NOW — 🟡 배송료 우대설정(delivery_fee_discount_tiers) '대여상품' 조건 신설 + 금액기준 분리 — GATE B 대기 (2026-09-01)
+## NOW — 🔴 CRITICAL: restrict_return_delivery 토글 leg-aware 재구현 — "배송대여 누락" 실사용 결함 수정 (2026-09-01, 이 세션)
 
-> ⚠️ **GATE B 승인 전까지 착수 금지.** 아래 "GATE B 열린 질문" Q1·Q2 확정 후 진행.
-> @promptor 호출 — DB 제약(2건 재정의) + RPC(1건 재정의) + 8개 코드 지점(서버 2·클라이언트
-> 3·타입정의 3) 동시 변경이 필요한 복수 목적 아젠다. **이번 호출은 플랜 작성만 — 코드·
-> 마이그레이션 작성 없음.**
+배경: Stephen 리포트 — "장바구니에 상품 담기 시 배송대여 옵션이 누락상태(fxlion-nano-two-
+v-mount-battery-2609 상품, 대여옵션엔 배송대여가 선택돼 있음)". Stephen 명시 승인
+("Claude Browser로 직접 확인해줘")으로 실서버(crazyshot-svelte.vercel.app) 직접 접속해 재현.
+
+**조사 경과**:
+1. 상품 DB 설정(`allowed_method_ids`)엔 배송옵션(`크레이지배송(택배)`, is_bulk_delivery=true)
+   정상 포함, `rental_method_options` RLS 공개조회 정상, 상품상세 페이지 자체엔 "대여 방식"에
+   퀵서비스·크레이지배송(택배)·방문 3개 전부 정상 렌더링됨(Claude Browser로 직접 확인) —
+   **상품 설정·상품상세 화면은 결함 없음**.
+2. 실제로 로그인 세션(공용 QA 계정)으로 장바구니(체크아웃) 화면까지 진입해 확인한 결과,
+   "수령 방식"에 **방문·퀵서비스 2개만 노출되고 배송이 빠짐** — 재현 확인.
+3. `rental_shipping_settings.restrict_return_delivery`가 production에서 현재 **true**로
+   켜져 있음을 SQL로 직접 확인 — 이 세션 앞부분에서 이미 문서화해뒀던 기존 설계갭
+   ("이 토글이 ON이면 수령·반납 콤보 **양쪽 모두**에서 배송(is_bulk_delivery) 방식을
+   제거하도록 구현돼 있음 — 원래 의도는 '수령 방문대여 선택 시 반납에서만 배송 제외'")이
+   토글이 켜지는 순간 바로 실사용 결함으로 나타난 것. 배송옵션이 설정된 **모든 상품**이
+   동일하게 영향받는 상태였음(이 상품만의 문제가 아니었음).
+
+**Stephen 결정**: 토글은 그대로 두고(끄지 않고) leg-aware 코드로 즉시 수정.
+
+**수정**: `src/routes/cart/+page.svelte`
+- `otVisibleTabs`(수령·반납 공용, 토글 ON 시 양쪽 다 배송 제외) 제거 →
+  `pickupVisibleTabs`(항상 전체 `deliveryTabs`, 토글과 무관) +
+  `returnVisibleTabsFor(pickupMethod)`(토글 ON **AND** pickupMethod==='visit'일 때만
+  `restrictedDeliveryTabs`, 그 외엔 전체) 2개로 분리.
+- `methodSelectionValid` — 항목별 수령(`pickupVisibleTabs`)·반납(그 항목의 실제 수령방식
+  기준 `returnVisibleTabsFor(it.opts.rentalMethod)`) 각각 leg-aware하게 검증하도록 변경
+  (기존엔 양쪽 다 같은 제한 목록으로 검증해 UI에서 열어준 수령=배송 선택을 검증 단계에서
+  다시 막는 모순이 있었음).
+- `RentalForm` snippet의 `visibleTabs` — `props.type==='rental'`이면 항상 `pickupVisibleTabs`,
+  `'return'`이면 `returnVisibleTabsFor(bulkOpts.rentalMethod)`(현재 카트 화면이 개별상품이
+  아닌 단일 일괄편집기(bulkOpts) 구조라 그 값을 그대로 참조).
+- 기존 "요청 A"(수령=배송 선택 시 반납을 같은 배송값으로 강제복사·잠금, `isDeliveryLocked`/
+  `returnComboLocked`)는 무변경 — 수령이 배송일 때는 반납도 전체목록(deliveryTabs)을 봐야
+  강제잠긴 값이 탭에 정상 렌더링되므로 이번 leg-aware 조건("pickupMethod==='visit'일 때만
+  제한")과 자연스럽게 양립함.
+
+**검증**: `svelte-check` 재실행 → 신규 에러 0건(기존 `vite.config.ts` 무관 에러 1건 외
+동일). `otVisibleTabs` 잔여 참조 0건 확인(grep). **실서버 시각 재검증은 미실행** — 이번
+Claude Browser 승인은 "실서버 결함 재현·진단" 1건에 한정된 것이라(CLAUDE.md — 허용된 사용
+종료 후 자동 이월 안 됨), 로컬 수정 확인용 재사용은 별도 승인 필요 판단 → 코드 리뷰로
+갈음. git commit 및 실배포 후 실사용 화면 재확인 필요.
+
+**미해결**: 배포 후 실서버에서 (a) 수령=방문 + 토글ON → 반납에 배송 제외 여전히 정상 동작,
+(b) 수령=배송(크레이지배송택배) 선택 시 반납이 정상적으로 같은 값에 강제고정되며 탭에도
+보임, (c) 토글 OFF 시 기존과 동일(양쪽 다 배송 노출) 3가지 시나리오 재확인 필요 — Stephen
+배포 후 요청 시 재검증.
+
+### ✅ QA 검수 완료 (2026-09-01, sp3-qa-agent) — GATE E 통과
+
+- **CRITICAL/HIGH**: 0건. 요청한 (a)(b)(c) 3가지 시나리오 전부 코드 추적으로 정상 확인 —
+  특히 (b) "수령=배송 선택 시 반납 강제고정값이 탭 목록에 정상 존재"는 `bulkHandleMethod`의
+  `forceCopy` 동기 복사(비동기 갭 없음) 덕에 안전함을 재확인.
+  `svelte-check` 신규 에러 0건, `check-rpc-error-handling.mjs` VIOLATION 0건,
+  `otVisibleTabs` 잔여 참조 0건(grep 재확인) — 전부 정상.
+- **MEDIUM 1건**: `pickupVisibleTabs`/`returnVisibleTabsFor` 등 leg-aware 필터링 로직 자체가
+  단위 테스트 커버리지 0%(순수함수로 추출돼 있지 않고 컴포넌트 내부 인라인 파생값/함수라
+  테스트하기도 어려운 구조) — **이번 실사고를 낸 바로 그 로직**이라는 점에서 후속 태스크로
+  순수함수 추출 + 테스트 작성 권장(이번 스코프 작성 요구는 아님).
+- **LOW 1건**: `methodSelectionValid`(커밋된 `it.opts.rentalMethod` 기준)와 `RentalForm`
+  snippet(편집중인 `bulkOpts.rentalMethod` 기준)이 서로 다른 소스를 참조 — 현재는 반납
+  아코디언이 `bulkOpenAcc==='return_'` 조건으로 지연렌더되고 상호배타 구조라 실사용 경로상
+  불일치 창이 없음(안전)이나, 향후 아코디언 동시오픈을 허용하도록 구조가 바뀌면 재발 가능한
+  잠재 취약점 — "이 안전성이 아코디언 상호배타 구조에 의존한다"는 근거를 코드 주석으로
+  남겨두는 것을 권장.
+- `visibleTabs.length===0` 안내문구(§)는 이번 변경 후에도 여전히 도달 가능한 정상 경로임을
+  확인(배송전용 상품만 담긴 상태+기본값 미변경+토글ON 조합에서 실제 발생 가능).
+
+**결론**: 블로킹 이슈 0건, git 커밋 진행 가능. 커밋은 Stephen 직접 실행.
+
+---
+
+## NOW — 🔴 CRITICAL: 하네스 인프라 신설 — DB 드리프트 검증절차 + RPC 에러처리 정적분석 (2026-09-01, 이 세션)
+
+배경: 이 세션이 발견·복구한 `promote_draft_reservation` production 12일 미발견 사고(TASK.md
+"🔴 실서버 전역 테스트" 항목 9)를 Stephen이 지적 — "CMS 백오피스 정밀 검증 v5"처럼 35개
+화면을 전수검수하고도, 대규모 PG결제·전자계약·배송API 연동 개발을 거치고도 왜 핵심 대여결제
+영역에서 이런 CRITICAL 결함이 반복되는지 근본원인 추론 요청. 분석 결과 "하네스 GATE/QA/
+misidentifications.md가 전부 사후기록(reactive log)이지 사전차단(preventive gate)이
+아니었다"는 구조적 공백이 확인됨 — Stephen 지시로 즉시 실질적 안전망 3종 설계·구현.
+
+**1. 사전 조사 — "상품상세 캘린더/draft흐름이 부산물이라 미사용 아니냐"는 가설 검증**
+`products/[id]/+page.svelte` → `CalendarTimePicker.svelte` 코드 추적 결과 **가설 기각**:
+"예약신청" 버튼(CalendarTimePicker.svelte:447)이 `reserveDisabled` prop을 부모가 아예
+전달하지 않아 항상 활성 상태 — 고객이 캘린더를 한 번도 건드리지 않고 버튼을 눌러도
+`handleReserve()`가 빈 `startDate`를 그대로 넘겨 `create_draft_reservation` 분기를 태운다.
+즉 "날짜없이 옵션만 먼저 담기"는 죽은 코드가 아니라 캘린더를 만지기 전에 버튼만 눌러도
+항상 타는 기본 경로 — 오늘 발견한 방치 draft 3건(id 86·87·88)이 실사용 증거. 이 UX 자체를
+없앨지는 별도 제품판단이므로 미착수, "부산물이라 차단 가능"이라는 전제만 정정.
+
+**2. DB 드리프트 검증 절차서 신설**: `.claude/harness/DRIFT_CHECK_PROCEDURE.md` — stage
+자격증명(.env.local)과 production 자격증명이 의도적으로 분리된 프로젝트 원칙(혼용절대금지)을
+지키기 위해 "로컬 스크립트에 양쪽 DB 키를 동시에 쥐는" 방식 대신, Claude Code 세션이 이미
+가진 Supabase MCP(project_id로 프로젝트 명시 구분)로 실행할 고정 쿼리 5절차(함수정의 대조·
+권한 대조·제약 대조·마이그레이션이력 대조·배포상태 교차검증)를 문서화. `sp3-qa-agent.md`
+검수3단계(DB 안전성)와 `sp4-deploy-agent.md`(시작전 확인 + Production DB 마이그레이션
+섹션) 양쪽에 실행 의무화 문구 추가 — "마이그레이션 적용 성공" 응답만으로 완료 판정하던
+관행을 차단.
+
+**3. RPC 에러처리 정적분석 스크립트 신설**: `scripts/check-rpc-error-handling.mjs`(신규) —
+`const { data } = await supabase.rpc(...)`처럼 `error`를 구조분해하지 않는 패턴과
+반환값을 아예 할당하지 않는 fire-and-forget 패턴을 `src/**/*.{ts,svelte}` 전역에서
+정적분석. `package.json`에 `check:rpc-errors`(리포트용)·`check:rpc-errors:ci`
+(`--fail-on-violation`, CI 게이트용) 스크립트 등록. `sp3-qa-agent.md` 검수2단계(기술부채)에
+실행 의무화 추가 — "이번 태스크가 건드린 파일에 새 VIOLATION이 없는가"만 GATE E 블로킹
+대상으로 하고 기존 잔존분은 별도 태스크로 분리(전역 즉시수정은 요청범위 밖).
+
+**실행 결과(참고용, 이번 세션 미수정)**: 프로젝트 전역 22건 VIOLATION 발견 — 그중
+`contract/[token]/pay-result/+page.server.ts:161`(`confirm_order_payment_and_update_
+reservations`, 결제확정)과 `api/contracts/[token]/sign/+server.ts:120`(`try_confirm_
+reservation_order`, 계약서명→예약확정)는 오늘과 동일 클래스의 CRITICAL 결제/예약 경로
+위험군 — Stephen 승인 시 별도 태스크로 착수 필요.
+
+**수정 파일**: 신규 3개(`scripts/check-rpc-error-handling.mjs`,
+`.claude/harness/DRIFT_CHECK_PROCEDURE.md`, 본 TASK.md 항목), 수정 3개
+(`package.json`, `.claude/agents/shared/sp3-qa-agent.md` v3.2→v3.3,
+`.claude/agents/shared/sp4-deploy-agent.md` v3.0→v3.1). DB 변경 없음, git commit 미실행.
+
+**미해결**: 상품상세 draft-UX 자체를 유지할지 여부, 이번 세션 관측된 실시간 병렬세션
+충돌(다른 세션이 TASK.md 최상단에 동시 삽입 — 항목 자체는 무손실 병합됐으나 "동시 편집"
+위험은 여전히 존재, 이 문서가 해결하는 범위 밖) — Stephen 결정 대기.
+
+### ✅ 후속 수정 완료 — 전역 22건 RPC 에러처리 전부 반영 (2026-09-01, 같은 세션)
+
+Stephen 지시로 위 스크립트가 찾은 22건 전부 즉시 수정(13개 파일). 컨텍스트별로 3가지
+패턴을 구분 적용:
+
+1. **load 함수(대시보드·설정 조회, 14곳)** — `cms/promotion/{analytics,coupon×2,point×2,
+   segment×2}/+page.server.ts`, `products/+page.server.ts`, `products/[id]/+page.server.ts`,
+   `account/rental/[id]/history/+page.server.ts` — `error`를 구조분해해 실패 시
+   `console.error`로 로그만 남기고 기존 안전한 폴백값(빈 배열·0값 기본객체)은 그대로 유지.
+   화면 동작은 안 바뀌지만 "왜 0으로 보이는지" 서버로그로 추적 가능해짐.
+2. **CMS 관리 액션(고객관리 5곳 — `toggle_blacklist`·`admin_update_subscription_status`·
+   `update_customer_info`·`adjust_credit_score`·`soft_delete_customer`)** — 이미
+   `fail(400, {error: result?.error ?? '기본문구'})`로 실패 자체는 정상 감지하고 있었으나
+   RPC 자체 실패 시 사유가 안 보였음 — `result?.error ?? error?.message ?? '기본문구'`로
+   폴백체인 보강. `cms/accounts/+page.server.ts`(초대링크 생성)도 동일하게 로그 추가.
+   `cms/products/+page.server.ts`(옵션링크 조회, 빠른 재고 등록)는 바로 옆 `priceErr`
+   형제 패턴과 동일하게 `invWarnings`에 실패 메시지 push하도록 통일.
+3. **CRITICAL 결제/예약 경로(3곳, fail-soft 유지하되 로그 강화)**:
+   - `api/contracts/[token]/sign/+server.ts:120`(`try_confirm_reservation_order`) — 서명
+     자체는 이미 저장된 뒤라 응답은 그대로 `{ok:true}`, 다만 실패 시 "결제+서명 다 됐는데
+     왜 hold에 머무나"를 나중에 추적할 수 있도록 reservationId 포함 상세 로그 추가(재시도는
+     멱등이라 안전).
+   - `api/contracts/[token]/sign/+server.ts:170`(`find_or_create_general_chat_session`) +
+     `api/cms/reservations/[id]/payment/+server.ts:218`(동일 RPC, 환불실패 알림 경로) —
+     fail-soft 로그만 추가.
+   - `contract/[token]/pay-result/+page.server.ts:161`(`confirm_order_payment_and_update_
+     reservations`) — **가장 위험한 케이스**: Toss가 이미 결제를 승인한 뒤 이 RPC가 실패하면
+     "돈은 받았는데 DB엔 결제·예약 확정이 반영 안 된" 상태가 됨. `internalOrderId·
+     tossOrderId·paymentKey·amount`를 포함한 상세 `console.error` 추가 + 기존 에러 메시지
+     폴백체인에 `error?.message`도 추가. (관리자 자동알림(sendPushToAdmins) 연동은 이번
+     스코프에 포함하지 않음 — 결제 크리티컬 파일의 동작 변경 최소화 원칙, 필요시 별도 승인
+     후 추가 권장.)
+   - `api/chat/sessions/+server.ts:35`(`get_and_mark_unanswered_sessions`) — 기존 fire-and-
+     forget 의도 유지, 로그만 추가.
+
+검증: `node scripts/check-rpc-error-handling.mjs` 재실행 → **VIOLATION 0건**. `svelte-check`
+전체 재실행 → 신규 에러 0건(`vite.config.ts`의 사전존재 에러 1건은 이 세션이 건드리지 않은
+파일 — `git status`로 무변경 확인, 무관). DB 변경 없음, git commit 미실행.
+
+---
+
+## NOW — 🟡 배송료 우대설정(delivery_fee_discount_tiers) '대여상품' 조건 신설 + 금액기준 분리 — GATE B 승인 완료 (2026-09-01)
+
+> ✅ **GATE B 승인 완료(Stephen, 2026-09-01, AskUserQuestion 경유)** — Q1·Q2 전부 확정.
+> Q1: 값 키 `rental_item`, 라벨 **"대여상품"**(간결형 채택). "대여상품/판매상품" 선별 구조는
+> 이미 `products.sale_only` boolean 컬럼으로 존재함을 확인·설명 완료(신규 "판매전용
+> 코드품번" 체계는 불필요·비권장 — 품번은 재고 시리얼링 목적이라 레거시 접두어 불일치 등
+> 예외가 있어 `sale_only` 플래그보다 신뢰도 낮음). "대여상품" 조건은 이 기존 플래그를 그대로
+> 재사용(`!saleOnlyPurchase`)한다.
+> Q2: **(a) 전면 교체** 확정 — `otRentalOnlySubtotal`(신규 파생값)이 모든 티어의 금액판정
+> 기준이 된다. 기존 등록 티어(장기대여 단독·판매상품구매 단독)의 할인 발동 조건도 함께
+> 바뀐다는 것을 Stephen이 인지한 상태로 확정(EC-1 회귀 위험 인지·승인됨, GATE C에서 최종
+> 확인 필요).
 
 ```
 [CONTEXT BRIDGE]
@@ -146,38 +317,19 @@ E. `otSubtotal`의 다른 소비 지점(절대 변경 금지 대상, §핵심제
 
 ---
 
-### GATE B 열린 질문 (Stephen 확정 필요 — 추측으로 진행 금지)
+### GATE B 확정 사항 (Stephen, AskUserQuestion 경유, 2026-09-01)
 
 ```
-Q1. [신규 조건 값·라벨] 값 키(영문 slug)와 화면 라벨 문구를 확정해야 한다.
-    - 값 키 후보: `rental_item` (기본 제안 — `long_term_rental`/`sale_only_purchase`와
-      동일하게 스네이크케이스 명사형).
-    - 라벨 후보: 기존 두 라벨("3일이상 장기대여"·"판매상품 구매")은 전부 "행위·조건 서술형"
-      스타일인데, "대여상품"은 정적 명사라 스타일이 어긋날 수 있음. 대안: "일반 대여상품 포함"
-      (기본 제안) / "대여상품 구매"(판매상품 구매와 대구를 이루는 형태) / Stephen이 원하는
-      다른 문구.
-    → 값 키·라벨 문구 확정 필요.
+Q1. [신규 조건 값·라벨] → 확정: 값 키 `rental_item`, 라벨 **"대여상품"**(간결형).
+    선별 구조 재확인 결과: `products.sale_only`(boolean) 컬럼이 이미 "대여상품/판매상품"
+    구분 용도로 프로젝트 전역에서 쓰이고 있고(products.md §2-9), 현재 "판매상품 구매" 조건도
+    이미 이 플래그를 그대로 읽는다(`cart/+page.svelte:701`) — 신규 체계 불필요, 그대로 재사용.
 
-Q2. [금액기준 분리 범위] `calcShippingDiscountRate(tiers, otSubtotal, items)`는 현재 모든
-    티어에 대해 단일 `otSubtotal`(카트 전체 합계) 하나로만 비교한다(§조사결과 C). 금액기준
-    분리 구현 방식 2가지:
-      (a) **전면 교체** — 이 함수의 금액 비교 자체를 `otSubtotal` 대신 신규
-          `otRentalOnlySubtotal`(판매전용 제외, 체크된 대여상품만 합산)로 완전히 바꾼다.
-          `min_rental_amount`(컬럼명이 이미 "대여금액")라는 이름과 가장 일치하는 해석.
-          단, **이미 등록된 기존 티어(장기대여 단독·판매상품구매 단독 조합)의 금액판정 기준도
-          전부 "대여상품 금액만"으로 조용히 바뀐다** — 운영 중인 설정이 있다면 그 설정들의
-          실제 할인 발동 조건이 이번 변경으로 달라짐(예: 판매전용상품을 많이 담아 기존엔
-          임계값을 넘겼던 카트가 더 이상 넘기지 못하게 될 수 있음).
-      (b) **조건부 분리** — "대여상품" 조건이 `condition_types`에 포함된 티어만
-          `otRentalOnlySubtotal` 기준을 쓰고, 그 외(장기대여/판매상품구매 단독) 티어는 기존
-          `otSubtotal`(전체 합계)을 그대로 유지. 함수가 티어별로 다른 비교 기준을 쓸 수
-          있도록 시그니처(예: 티어마다 두 금액을 모두 전달하거나 항목별 사전계산)를 재설계해야
-          해서 (a)보다 구현 복잡도가 높음. 기존 등록 티어의 동작을 전혀 바꾸지 않는다는 장점.
-    → **반드시 Stephen이 (a)/(b) 중 선택** — promptor가 임의로 확정하지 않음(파급력이 큰
-    운영 데이터 영향 판단이 필요한 지점).
+Q2. [금액기준 분리 범위] → 확정: **(a) 전면 교체**. `calcShippingDiscountRate`의 금액 비교
+    기준을 `otSubtotal`에서 신규 `otRentalOnlySubtotal`로 전면 교체 — 기존 등록 티어(장기대여
+    단독·판매상품구매 단독)의 할인 발동 조건도 함께 바뀐다는 것을 Stephen이 인지하고 확정.
 
-Q3. [`saleOnlyPurchase` 반전 방식] `!saleOnlyPurchase`(§조사결과 C)로 "대여상품" 조건을
-    구현하는 데 이견 없음 — 확정, 질문 불필요.
+Q3. [`saleOnlyPurchase` 반전 방식] → 확정: `!saleOnlyPurchase`로 구현, 이견 없음.
 ```
 
 ---
@@ -216,42 +368,121 @@ EC-4: 카트가 비어있음(`items.length === 0`, 예: 전부 삭제/체크해�
 
 ---
 
-### 구현 범위 확정 (Q1·Q2 확정 후 착수 — 현재는 계획만)
+### 구현 범위 확정 (GATE B 승인 완료 — 아래 체크리스트대로 착수)
 
 ```
-포함 (Q1·Q2 확정 시 착수):
-- TIER_CONDITION_OPTIONS/TIER_CONDITION_LABELS 신규 값 추가 (GSD)
-- 서버 액션 VALID_CONDITION_TYPES + DeliveryFeeDiscountTier 인터페이스 + cart/+page.server.ts
-  유니온 리터럴 동기화 (GSD)
-- DB 마이그레이션 A — CHECK 제약 재정의(#382 계승, DROP+ADD CONSTRAINT) (TDD)
-- DB 마이그레이션 B — upsert_delivery_fee_discount_tier RPC 화이트리스트 재정의(#385 계승,
-  CREATE OR REPLACE) (TDD)
-- calcShippingDiscountRate() "대여상품" 조건 분기 추가 + DiscountConditionItem 필드 정리 (TDD)
-- Q2 확정 답변에 따른 금액기준 분리 구현 — (a) otRentalOnlySubtotal 신규 파생값 전면교체
-  또는 (b) 티어별 분기 재설계 (TDD)
-- cartShippingFee.test.ts 스위트 확장(신규 조건·EC-1~4 케이스) (TDD)
+포함 (착수 대상):
+- [x] TIER_CONDITION_OPTIONS/TIER_CONDITION_LABELS에 `rental_item`/"대여상품" 추가 (GSD)
+      → cms/set/rental/+page.svelte:162-178 — 칩 옵션·라벨 딕셔너리 추가 완료
+- [x] 서버 액션 VALID_CONDITION_TYPES + DeliveryFeeDiscountTier 인터페이스 + cart/+page.server.ts
+      유니온 리터럴에 `rental_item` 동기화 (GSD)
+      → cms/set/rental/+page.server.ts:67 인터페이스, :519 VALID_CONDITION_TYPES
+      → cart/+page.server.ts:91 유니온 리터럴
+- [x] DB 마이그레이션 A — CHECK 제약 재정의(#382 계승, DROP+ADD CONSTRAINT, `rental_item` 추가) (TDD)
+      → supabase/migrations/20260901160000_414_delivery_fee_discount_tiers_rental_item_check.sql
+- [x] DB 마이그레이션 B — upsert_delivery_fee_discount_tier RPC 화이트리스트 재정의(#385 계승,
+      CREATE OR REPLACE, `rental_item` 추가) (TDD)
+      → supabase/migrations/20260901170000_415_upsert_delivery_fee_discount_tier_rental_item.sql
+- [x] calcShippingDiscountRate()에 `anyRentalItem = items.some((it) => !it.saleOnlyPurchase)`
+      조건 분기 추가 (TDD)
+      → src/lib/utils/cartShippingFee.ts:103-107 conditionSatisfied 맵 확장
+- [x] 신규 파생값 `otRentalOnlySubtotal`(cart/+page.svelte) 추가 — `otSubtotal`과 동일한 소스
+      필터(`!it.deleted && it.checked`) 사용하되 `sale_only` 상품은 합산 제외. Q2(a) 확정에
+      따라 `calcShippingDiscountRate` 호출부의 금액 인자를 이 값으로 전면 교체 (TDD)
+      → src/routes/cart/+page.svelte — otRentalOnlySubtotal $derived 추가, 호출부 교체 완료
+- [x] cartShippingFee.test.ts 스위트 확장(신규 조건·EC-1~4 케이스 전부) (TDD)
+      → src/__tests__/services/cartShippingFee.test.ts — 43케이스 GREEN(기존 31+신규 12)
 
 제외 → BACKLOG:
 - 배송료 우대설정 등록화면의 role 게이트 강화(manager 이상 등) — 요청 범위 밖, security-
   auth.md 기존 매트릭스("세션만") 유지가 원칙, 별도 지시 없으면 손대지 않음.
-- Q2(b) 선택 시 필요한 "티어별 금액기준 분기" 일반화 설계는 이번 스코프를 넘어서는 리팩터가
-  필요하면 별도 서브태스크로 분리 검토(GATE B 승인 후 재판단).
-
-미확인 — Stephen 결정 필요 (Default: BACKLOG 보류):
-- Q1(값 키·라벨), Q2(금액기준 분리 범위 a/b) — 위 "GATE B 열린 질문" 참고. 확정 전 착수 금지.
 
 GATE C 확인 항목 (착수 시):
-- [ ] 신규 조건 값이 4개 지점(클라이언트 칩·서버 whitelist·DB CHECK·RPC whitelist) 전부에
+- [x] 신규 조건 값이 4개 지점(클라이언트 칩·서버 whitelist·DB CHECK·RPC whitelist) 전부에
       동시 반영됐는가?
-- [ ] 기존 2개 조건 값(`long_term_rental`/`sale_only_purchase`)이 그대로 유효한가? (회귀 없음)
-- [ ] `otSubtotal` 계산식과 5개 소비 지점(662/900/905/1136/1361행)이 이번 변경으로 값이
-      달라지지 않았는가?
-- [ ] EC-1~4가 전부 테스트로 커버됐는가?
-- [ ] Q2=a 선택 시 — 기존 운영 티어(있다면)의 할인 발동 조건 변경이 Stephen에게 사전 고지됐는가?
-- [ ] 신규 마이그레이션 2건이 기존 파일(#382·#385)을 직접 수정하지 않고 신규 파일로만
-      추가됐는가? (GP-10)
+- [x] 기존 2개 조건 값(`long_term_rental`/`sale_only_purchase`)이 그대로 유효한가? (회귀 없음 — 기존 39케이스 유지)
+- [x] `otSubtotal` 계산식과 5개 소비 지점(662/900/905/1136/1361행)이 이번 변경으로 값이
+      달라지지 않았는가? (otRentalOnlySubtotal을 별도 추가, otSubtotal 자체 무변경)
+- [x] EC-1~4가 전부 테스트로 커버됐는가? (EC-1×2, EC-2×3, EC-3×2, EC-4×1 케이스 포함)
+- [x] Q2=a 선택 시 — 기존 운영 티어(있다면)의 할인 발동 조건 변경이 Stephen에게 사전 고지됐는가?
+      (GATE B 승인 시 인지·확정, TASK.md 17행)
+- [x] 신규 마이그레이션 2건이 기존 파일(#382·#385)을 직접 수정하지 않고 신규 파일로만
+      추가됐는가? (GP-10) → #414·#415 신규 파일로만 추가
 
 예상: GSD 2개×30분 + TDD 5개×15분(× Q2 분기에 따라 세부 개수 변동 가능) ≈ 총 2.5~3.5시간
+실제 완료: 2026-09-01, TDD 43/43 GREEN, npm run check 신규 에러 0건
+```
+
+### ✅ 후속 실테스트(Stage 라이브) + 상호배타 안전장치 신설 (2026-09-01, 같은 세션 후속)
+
+```
+Stephen 요청: "다음 조합도 다양하게 로직 실테스트해" — Stage CMS(/cms/set/rental)에 실제 티어
+2건을 등록해 시나리오별 계산 결과를 production 함수(calcShippingDiscountRate, 재구현 아님
+직접 import)로 검증 + "조건 조합이 여러 변수에 제대로 적용되는지 철저히 점검".
+
+[실테스트 결과 — src/__tests__/services/_scratchScenarioVerify.test.ts, 12/12 GREEN 확인 후 삭제(스코프 외 임시 파일)]
+- 시나리오1(100,000원+판매상품구매+50%할인, 카트=대여상품50,000+판매상품50,000):
+  라이브 4개 티어 그대로는 discount=1(무료) — Stephen 기대(미적용)와 다름. 원인: 이전 세션
+  임시등록분 "30,000원+대여상품+무료" 티어가 대신 매칭(50,000≥30,000). 그 티어 제외 시
+  discount=0으로 기대와 일치. 추가로 100,000원 임계값엔 기존 "원본" 무료(discount=1)
+  티어가 있어 best-of 로직상 신규 50%티어는 그 조합에서 항상 사문화됨(50%단독효과는 원본
+  무료티어 제외 시 정상 확인).
+- 시나리오2(200,000원+장기대여+대여상품 AND+무료): 2-A(250,000원,4일)는 discount=1로 기대와
+  일치. 2-B(200,000원,2일 단기)는 30,000원 티어 오염으로 discount=1(기대는 0) — 순수격리 시
+  기대와 일치.
+- 점검3(다변수 점검): 판매전용상품만 있는 카트→rental_item 계열 전부 미매칭 정상, 경계값
+  (199,999원) 오염 재확인, 여러 티어 동시매칭 시 스태킹 없이 최댓값 1개만 적용 확인, 빈카트→0.
+- 결론: calcShippingDiscountRate 로직 자체(AND평가·best-of매칭·대여상품전용 금액기준)는
+  버그 없음 — 문제는 라이브 CMS에 남은 테스트 데이터(30,000원 티어, 100,000원 중복 임계값
+  티어)가 새로 등록한 세밀한 조건부 티어를 가림. 두 건 다 Stephen에게 보고 후 "직접/관리자가
+  알아서 처리" 확인 — 이 세션에서 CMS 티어 데이터 자체는 손대지 않음.
+
+[신규 요청 — 배송료 우대설정 개입 순서 검증 + 배송쿠폰 중복적용 차단]
+Stephen 추가 지시:
+  1. 배송료 우대설정값이 "장바구니 상품의 대여반납 설정정보 적용 직후" 개입되는지 검증
+  2. 최종 상품 대여요금에 배송료 우대설정 반영 후 '배송' 우대 쿠폰은 중복사용 차단(비활성화)
+
+① 검증 결과 — 이미 정합(코드 변경 없음): cart/+page.svelte의 반응성 그래프가 순서를 구조적
+   으로 보장. otShippingFee(699행, checkedShippingItems가 각 카트상품의 실제 선택된
+   pickupMethod/returnMethod를 반영해 계산한 "설정 적용 후" 기본요금) → otDeliveryFee
+   (851-852행) = otShippingFee × (1 − otShippingDiscountRate). 우대할인율이 항상 설정 반영된
+   기본요금에 곱해지는 구조라 순서 역전 불가능.
+
+② 구현 — free_delivery 쿠폰 상호배타 안전장치 (GATE B: AskUserQuestion 2회, Stephen 확정):
+   - 최초 조사에서 database.ts(생성 타입파일, stale)만 보고 "free_delivery 타입이 존재하지
+     않는다"고 잘못 보고 → Stage DB(ezyvffjvuwmtuhpxdjrw) pg_enum 직접 조회로 정정: coupon_
+     type_enum에 free_delivery 이미 존재(12개 값 중 하나), 다만 발급된 쿠폰 0건 + 그 타입이
+     실제로 배송료를 할인하는 계산 로직 자체가 없음(쿠폰 할인은 discount_type 기준으로 전부
+     상품금액에만 적용, otDeliveryFee는 건드리지 않음).
+   - Stephen 확정(Q2): "상호배타 안전장치만" 구축 — free_delivery 쿠폰이 실제 배송료를
+     할인하는 계산로직 신설은 이번 스코프 제외(발급 0건이라 당장 필요 없음, 별도 요청 시 진행).
+   - isFreeDeliveryCouponBlocked(couponType, shippingDiscountRate) 순수함수 신설
+     → src/lib/utils/cartShippingFee.ts (TDD, 4케이스 신규)
+   - cart/+page.server.ts: userCoupons 쿼리 select에 coupons.type 추가, RawCouponFields/
+     UserCouponRow.coupons 인터페이스에 type 필드 추가(그 외 필터링 로직은 raw row 그대로
+     통과라 별도 매핑 불필요)
+   - cart/+page.svelte: UserCouponExt.coupons에 type 추가, otBlockedCouponIds derived 신설
+     (sdCoupons 선언 직후 배치 — otShippingDiscountRate 참조는 문제없으나 sdCoupons를
+     $derived 선언 전에 참조하면 TS 컴파일 에러(TDZ) 발생해 재배치함), 선택된 쿠폰이 뒤늦게
+     차단대상이 되면 자동 해제하는 $effect 추가, CouponRow 스니펫에 note prop 추가해 차단
+     사유("배송 우대설정 적용 중 — 중복 적용 불가") 표시 + 기존 .coupon-row-disabled 클래스 재사용
+   - src/__tests__/services/cartShippingFee.test.ts: isFreeDeliveryCouponBlocked 4케이스 추가
+     → 47/47 GREEN(기존 43+신규 4)
+   - svelte-check: cart/+page.svelte 관련 에러 0건(재배치 전 TDZ 에러 1건 발견·수정 확인)
+
+GATE C 확인 항목:
+- [x] otBlockedCouponIds가 sdCoupons 선언 이후에 위치해 TS TDZ 에러가 없는가?
+- [x] free_delivery가 아닌 기존 쿠폰 타입(all/first_purchase/student/subscription 등)은
+      영향받지 않는가? (TDD 케이스로 확인)
+- [x] otShippingDiscountRate=0(우대설정 미적용)일 때는 free_delivery 쿠폰도 정상 선택 가능한가?
+- [x] 이미 선택된 쿠폰이 카트 구성 변경으로 뒤늦게 차단대상이 되면 자동 해제되는가? ($effect)
+- [ ] (스코프 외, 별도 요청 대기) free_delivery 쿠폰이 실제로 otDeliveryFee를 할인하는 계산
+      로직 자체는 미구현 — 발급 0건 상태라 당장 영향 없음, Stephen이 실제 발급을 계획하면
+      그 시점에 별도 GATE B 필요.
+
+실제 완료: 2026-09-01, TDD 47/47 GREEN, svelte-check cart 관련 에러 0건. Stage CMS 라이브
+티어 데이터(30,000원 테스트분·100,000원 중복 임계값 50%티어) 정리는 Stephen/관리자 계정이
+직접 처리하기로 확인 — 이 세션에서 CMS 데이터 자체는 미변경.
 ```
 
 ---
@@ -29664,5 +29895,238 @@ git commit 대상 5개 파일(위 목록) — Stephen 직접 실행. 단, 같은
 변경분도 함께 포함됨(git status로 실제 스테이징 대상 재확인 권장). DB 변경분(백필·템플릿)은
 이미 Stage에 반영 완료(마이그레이션 파일 없음 — 코드 커밋과 별개로 이미 적용된 상태).
 
+---
+
+## NOW — 🔴 CRITICAL: 판매전용(sale_only) 상품 "구매" 흐름 신설 — Stage 구현 완료·Production 미적용 (2026-09-01)
+
+### 요청 원문
+
+"상품등록 목록에서 '판매만 가능' 체크 및 등록된 상품이 시스템에서 분별될 수 있도록 로직
+구현하고, 판매전용 상품 재고 목록이 '판매' 기록 시 자동으로 재고 카운팅되는 로직 미구현 시
+함께 보완 개발할 것. -장바구니에서 판매상품과 대여상품이 시스템적으로 구별 될 수 있는 로직이
+최우선이고 추후에 이벤트 로직과 연동할 것."(장바구니 판매상품 구매가격 합산액 기준 할인이벤트
+적용을 위한 사전 정지작업 목적)
+
+### 착수 전 조사로 밝혀진 사실 (구현 방향을 바꾼 핵심 발견)
+
+Explore 에이전트 4개 + 직접 SQL 조회로 확인: 판매전용(sale_only) 상품은 **대여 상품과
+완전히 동일한 예약/결제 흐름을 그대로 타고 있어 "판매 완료"라는 개념 자체가 시스템에
+없었다.** 구체적으로 3중 결함:
+1. `rental_reservations.duration_type` CHECK 제약이 `12h/24h/1day/monthly`만 허용 —
+   "구매" 유형 자체가 DB 레벨에서 불가능했음(`cart_items.duration_type`의 `'purchase'`
+   enum값은 실제로는 안 쓰이는 다른 테이블의 죽은 값).
+2. 실제 결제금액 계산 함수 `compute_reservation_line_amount`가 날짜×대여요금(price_rules)
+   방식으로만 계산 — 판매전용 상품의 `sale_price`는 결제금액에 전혀 반영되지 않았음.
+3. `try_confirm_reservation`이 결제완료 AND 전자계약서명 둘 다 요구(service-operations.md
+   §9 기존 확정 정책) — 판매전용 상품은 계약서명 개념이 없어 영원히 confirmed에 도달 못함
+   → 재고 자동제외 로직을 걸 지점 자체가 없었음.
+
+### Stephen 확정 사항 (AskUserQuestion 3라운드)
+
+1. 판매전용 상품 결제완료 시 재고 처리: **결제완료 즉시 자동으로 재고에서 제외(recommended)**
+2. CMS 목록 표시: **카드에 '판매전용' 배지만 추가(recommended)**
+3. 작업범위: 장바구니 "구별" 표시만으로는 반쪽짜리 위험 기능이 된다는 설명 후 —
+   **구별+금액계산 전부 진행(recommended)**
+4. 판매전용 상품의 확정조건: **전자계약 서명 없이 결제만으로 즉시 확정(recommended)**
+
+### 구현 완료 (Stage 전용 — Production 미적용)
+
+**Migration #416** (`supabase/migrations/20260901180000_416_sale_only_purchase_flow.sql`,
+Stage(ezyvffjvuwmtuhpxdjrw)에만 적용·검증 완료):
+```
+1) rental_reservations.duration_type CHECK에 'purchase' 추가
+2) compute_reservation_line_amount — 판매전용 상품이면 날짜×요금 계산 스킵,
+   products.sale_price를 그대로 rental_fee로 반환(보증금 0)
+3) try_confirm_reservation — 판매전용 상품은 계약서명 여부 무관, 결제완료만으로 즉시 confirm
+4) update_reservation_status — confirmed 전환 시 판매전용 상품이면 그 재고(자식 유닛)
+   is_active=false 자동 처리(관리자 수동 "승인하기" 우회 경로도 동일 함수를 거치므로
+   똑같이 적용됨)
+```
+대여 상품 경로(sale_only=false)는 100% 기존과 동일하게 동작 — 신규 분기는 전부
+`IF v_is_sale THEN ... END IF;` 형태로 조건부 추가만 했다.
+
+**애플리케이션 코드 6개 파일**
+```
+src/routes/products/[id]/+page.svelte
+  판매전용 상품이면 durationType='purchase'로 예약 생성(대여기간 계산 로직 건너뜀)
+  로컬 ProductRow 타입에 sale_only/sale_price 필드 추가
+src/routes/cart/+page.svelte
+  체크아웃 승격(draft→hold) 시 durationTypeCo도 동일 분기(판매전용 → 'purchase')
+  itemCardRate/itemRentalFee — 'purchase'/durationType==='purchase'면 날짜기반 계산
+    대신 product.sale_price를 그대로 반환(다른 세션이 남겨둔 "daily*8 임시값" 플레이스홀더
+    교체 — Stephen 확인 후 진행, 그 세션 작업은 별개 기능(#414/#415 배송비 할인 등급)이었음)
+  otTotalDays — 구매 항목은 "대여기간" 일수 합산에서 제외
+  pricingReady — 구매 항목만 있는 카트도 금액이 정상 노출되도록 otHasPurchaseItem 조건 추가
+  로컬 ProductRow 타입에 sale_price 필드 추가
+src/routes/cart/+page.server.ts
+  products 조회 2곳(직접+부모fallback)에 sale_price 추가, ProductRow 인터페이스 갱신
+src/routes/cms/products/+page.server.ts
+  목록 쿼리에 sale_only 추가
+src/routes/cms/products/+page.svelte
+  카드 2곳(그리드 카드 + 대표상품카드)에 "판매전용" 배지 추가(.sale-only-badge,
+  블랙리스트/탈회 배지와 동일 색상 언어 --cs-red-badge)
+src/lib/server/products/loadSelectedProductDetail.ts
+  RootProductInfo 타입에 sale_only 추가 + 두 분기(자식선택/부모선택) 모두 값 채움
+```
+
+### 세션 중 발생한 병렬세션 충돌 우려 — 확인 후 정정
+
+구현 도중 `cart/+page.svelte`에서 이미 `'purchase'` 타입과 "임시값 — 구매(판매) 요금정책
+연동 예정" 플레이스홀더 주석을 발견해 다른 세션이 동시에 같은 기능을 개발 중인 것으로
+오판, 즉시 작업을 중단하고 Stephen에게 확인 요청(GP-1 병렬세션 충돌 원칙 준수). Stephen
+확인 결과 그 플레이스홀더는 기존 스캐폴딩이었고, 동시에 진행되던 다른 세션의 실제 작업은
+별개 기능(#414/#415, 배송비 할인 등급에 rental_item 조건 추가)이었음 — 재개 승인 받고 계속.
+
+### 검증
+
+- `npx svelte-check` — 전 과정 신규 에러 0건(전체 1 error는 무관한 vite.config.ts 기존 결함)
+- 관련 vitest 12개 파일(cart*/reservation*/product* 전체) 162 passed | 7 skipped, 회귀 없음
+- Stage DB 직접 SQL 조회로 CHECK 제약·3개 함수 정의 반영 확인
+
+### QA 검수 결과 (2026-09-01, @sp3-qa-agent) — 조건부 통과 → 리스크 해소 완료
+
+검수 대상 7개 파일(앱코드 6 + Migration #416) 전수 diff 대조 + Stage DB 정적/구조 검증.
+**규칙 정합성·기술부채·vitest(12파일 162 passed/7 skipped) 전부 통과.** 단, CRITICAL 결제
+리스크 1건 발견 — **"sale_only=true인데 sale_price가 비어있으면 등록 자체는 성공하고,
+고객이 실제로 0원에 구매를 완료할 수 있다"**(원인: CMS 등록·수정 폼 서버 검증에 24h 필수
+체크(BND-9)의 대칭 짝인 "sale_only면 sale_price 필수" 체크가 아예 없었음 — Migration #416
+적용 전부터 잠재해 있던 기존 코드의 구멍이지만, #416이 이 구멍을 실제 금전 손실로 연결하는
+방아쇠가 됨).
+
+**즉시 수정 완료**: `new/+page.server.ts`·`+page.server.ts`(기존 상품수정 pricing 액션)
+양쪽에 BND-9와 대칭 구조로 `if (saleOnly && (salePrice === null || salePrice <= 0)) return
+fail(400, '판매전용 상품은 판매금액이 필수입니다.')` 추가. svelte-check 신규 에러 0건,
+productNew/productUpdateSection/productClone 3개 파일 17개 테스트 재실행 GREEN(회귀 없음).
+
+QA가 직접 SQL로 Stage 재대조를 못 했던 부분(서브에이전트 환경에 Supabase MCP 미제공)은
+오케스트레이팅 세션이 직접 재확인 — CHECK 제약·3개 함수 정의 전부 보고 내용과 일치.
+
+**Stephen 결정 대기(블로킹 아님, 별건)**: 판매전용 상품을 CMS에서 전액환불 처리하면
+`is_active=false`로 내려간 재고가 다시 켜지지 않는 문제(QA 발견) — 이번 3라운드 확정
+사항에 포함되지 않았던 사안이라 별도로 여쭤야 함.
+
+### Production 적용 + 환불 시 재고 복구 (2026-09-01, Stephen 확정 2건)
+
+Stephen 최종 확인: ① "지금 Production에도 적용" ② "환불 완료 시 자동으로 재고 다시 켜기".
+
+**Migration #417 신규 작성**(`supabase/migrations/20260901190000_417_sale_only_refund_restock.sql`)
+— `cancel_reservation_payment` RPC가 예약별로 `update_reservation_status(id, 'cancelled')`를
+호출하는 기존 구조를 그대로 활용해, 그 함수의 'cancelled' 조기분기에 "판매전용 상품이면
+재고(is_active) 다시 true" 로직 추가. hold 단계에서 취소되는 경우(애초에 is_active가 꺼진
+적 없음)에도 안전한 no-op. Stage 먼저 적용·검증 후 Production 적용.
+
+**Production(vnbpmvxruyciuuaermyh) 적용 완료** — Migration #416(결제금액·즉시확정·재고차감)
++ #417(환불 시 재고복구) 순서대로 적용. 적용 직후 CHECK 제약 + 3개 함수(`compute_
+reservation_line_amount`/`try_confirm_reservation`/`update_reservation_status`) 전부
+Stage와 정확히 동일함을 직접 SQL 재조회로 확인(정상).
+
+### 잔여 작업
+
+1. ~~QA(@sp3-qa-agent) 검수 디스패치~~ ✅ 완료 — 조건부 통과, 발견된 결제 리스크 즉시 해소
+2. ~~Production 마이그레이션 적용~~ ✅ 완료(#416+#417, Stage·Production 정합 확인)
+3. ~~환불 시 재고 미복원~~ ✅ 완료(Migration #417)
+4. 별도 미해결 설계 이슈(이번 스코프 밖, 향후 확인 필요): 판매전용 예약이 confirmed 이후에도
+   기존 대여 라이프사이클(shipped→in_use→returned→completed)을 그대로 따라가는데 "판매"는
+   반납 개념이 없어 하위 단계들이 의미상 맞지 않음 — 관리자가 수동으로 진행시키지 않으면
+   오동작은 없으나 CMS에 판매전용 예약임을 알려주는 표시가 없어 실수 위험 존재.
+5. 할인이벤트 연동(장바구니 판매상품 합산액 기준) — Stephen 지시대로 이번 스코프에서 제외,
+   추후 별도 진행.
+
+GATE C: CRITICAL(결제·예약·재고 핵심 로직 + DB 함수 변경 + 다중 파일) — **Stage·Production
+구현·검증·QA 완료(발견된 결제 리스크 해소 + 환불 시 재고복구 포함). 코드 커밋은 전혀 없음
+(git 실행은 Stephen 직접).**
+
+## NOW — 🔴 CRITICAL: Production PG(Toss) 연동 전면 장애 — Vercel 환경변수 5종 전부 미등록 (2026-09-01, 이 세션 단독 진단)
+
+```
+[CONTEXT BRIDGE]
+plan_source: Stephen이 /subscribe/4 화면 스크린샷과 함께 "정상 연동되어있던 PG api가 왜
+  연동오류가 발생하지? 당장 확인해서 정상 연동 복원해. 어느시점에 어떤 이유에서 수정되었던
+  건지도 확인해" 긴급 요청. 화면에는 Toss SDK 에러 "API 개별 연동 키의 클라이언트 키로
+  SDK를 연동해주세요. 주문서형, 결제창형 연동 키는 지원하지 않습니다." 노출.
+GATE 등급: 🔴 CRITICAL — 결제 도메인 실서비스 장애(실고객 영향 가능성).
+```
+
+### 진단 결과 — 근본원인 확정
+
+```
+Vercel 프로젝트(prj_K6PEw1WfblRxqqOlaqSep8KeNXxs)에 `vercel env ls`로 전체 환경변수(57행)를
+직접 조회한 결과, TOSS 관련 변수가 Production·Preview 어디에도 단 하나도 등록돼 있지 않음
+(VITE_TOSS_CLIENT_KEY / PUBLIC_TOSS_CLIENT_KEY / TOSS_SECRET_KEY /
+PUBLIC_TOSS_BILLING_CLIENT_KEY / TOSS_BILLING_SECRET_KEY 전부 부재) — 실측 확인, 추정 아님.
+
+반면 .env.local(로컬 개발·Stage 전용, Vercel과 무관)에는 다섯 값 전부 실제 키 형식(36~37자,
+placeholder 아님)으로 존재함 — 즉 "값 자체는 이미 준비돼 있으나 Vercel에 한 번도 등록된 적이
+없다"가 정확한 상태.
+
+영향 범위(PUBLIC_TOSS_CLIENT_KEY·TOSS_SECRET_KEY를 참조하는 전체 6개 파일 grep 확인):
+  - src/routes/contract/[token]/+page.svelte(전자계약 서명 후 실카드 결제)
+  - src/routes/contract/[token]/pay-result/+page.server.ts(결제승인 서버측 확인)
+  - src/routes/subscribe/[planId]/+page.svelte(구독 빌링 카드등록 — 이번에 신고된 화면)
+  - src/routes/subscribe/success/+page.server.ts(빌링키 발급 교환)
+  - src/routes/api/cms/reservations/[id]/payment/+server.ts(CMS 환불 처리)
+  - src/routes/api/webhooks/toss/+server.ts(웹훅 HMAC 검증)
+→ 즉 이번 신고 화면(구독)만이 아니라 일반 대여 예약 결제·CMS 환불·웹훅 정산까지 Production
+  전체 PG 연동이 동일한 이유로 막혀 있을 가능성이 높음(실카드 시도 시 전부 이 화면과 유사한
+  형태로 실패할 것으로 예상 — 이 세션은 실카드 결제를 직접 시도하지 않음, §복원 조치 참고).
+```
+
+### 시점·경위 — "언제·왜 수정됐는지"
+
+```
+1. 2026-08-29~30 "TossPayments v2 PG 모듈 실연동"(TASK.md 위 블록, CRITICAL/TDD, Plan Mode
+   승인 완료) — 그동안 mock이었던 결제 흐름(계약서명 결제 pay-mock, 구독 mock=1 분기, CMS
+   환불 disabled)을 실제 Toss SDK/API 호출로 교체하는 것이 정당한 목적의 계획된 작업이었음.
+   Phase 1(환경설정)이 "완료"로 표시됐으나 실제로는 `.env.local`/`.env.example`만 반영 —
+   Vercel Dashboard 등록은 그 Phase 범위에 없었음(그 세션의 실제 범위 누락, 은폐 아님 —
+   "미완료: ... Production 마이그레이션 적용, 실카드 end-to-end 라이브 검증" 항목에 이미
+   본인들이 명시).
+   Phase 4에서 subscribe/success의 mock=1 더미 분기를 완전 삭제 — 이 시점부터 /subscribe
+   화면은 무조건 실 Toss SDK를 호출하게 됨(이전에는 mock 경로가 있어 키가 없어도 화면상
+   "작동하는 것처럼" 보였을 수 있음 — Stephen이 "정상 연동돼 있었다"고 기억하는 상태는 실은
+   mock 경로였을 가능성이 높음).
+2. 2026-09-01 04:14 커밋 13664fc(fix(subscribe): PUBLIC_TOSS_BILLING_CLIENT_KEY를
+   dynamic/public으로 교체 — 빌드타임 누락 오류 해결) — `$env/static/public`(빌드타임에
+   변수가 없으면 빌드 자체를 실패시킴)에서 `$env/dynamic/public`(런타임 조회, 없으면 `?? ''`
+   폴백으로 조용히 빈 문자열)로 변경. 이 커밋 자체는 "빌드가 막혀 있던" 증상만 없앴을 뿐 —
+   Vercel에 변수가 없다는 근본 원인은 그대로 남아, 이후 배포부터는 빌드는 성공하지만 런타임에
+   빈 문자열이 Toss SDK로 전달돼 이번 스크린샷의 에러 문구가 발생하게 됨. 즉 이 커밋은
+   "정상이던 걸 고장낸" 원인이 아니라, "고장난 상태(env 미등록)를 가리고 있던 빌드에러를
+   제거해 실제 증상(런타임 SDK 에러)이 겉으로 드러나게 만든" 커밋 — 근본원인은 여전히 1번의
+   Vercel 환경변수 미등록.
+```
+
+### 복원 조치 — Stephen 직접 실행 필요(이 세션은 실행 불가)
+
+```
+⛔ 이 세션은 API 키/시크릿 값을 어떤 필드에도 입력할 수 없음(세션 안전규칙 — "API 키를
+어떤 필드에도 입력 금지"는 사용자 요청으로도 해제되지 않는 절대 금지 항목). `.env.local`에
+이미 있는 값을 그대로 Vercel에 옮기기만 하면 되는 작업이지만, 이 실행 행위 자체는 Stephen이
+직접 해야 한다.
+
+권장 절차:
+1. 아래 5개 변수를 Vercel Production 환경에 등록(터미널에서 실행하면 값 입력 프롬프트가
+   뜸 — .env.local에 있는 값을 그대로 붙여넣기):
+     vercel env add VITE_TOSS_CLIENT_KEY production
+     vercel env add PUBLIC_TOSS_CLIENT_KEY production
+     vercel env add TOSS_SECRET_KEY production
+     vercel env add PUBLIC_TOSS_BILLING_CLIENT_KEY production
+     vercel env add TOSS_BILLING_SECRET_KEY production
+   (Vercel 대시보드 UI로 등록해도 동일 — Settings → Environment Variables)
+2. Preview(stage) 환경에도 필요하면(실카드 테스트를 Preview에서도 하고 싶다면) 위 5개를
+   `preview` 타깃으로 추가 등록.
+3. 등록 후 반드시 재배포 필요(Vercel은 기존 배포에 새 env var를 소급 반영하지 않음) —
+   `vercel --prod` 또는 대시보드 "Redeploy".
+4. 재배포 후 이 세션(또는 다음 세션)에 요청하면 /subscribe/4 등 실제 화면에서 에러가
+   해소됐는지 재확인 가능.
+
+⚠️ 위 5개 값이 실서비스용(live) 키인지 테스트(test) 키인지는 이 세션이 값을 직접 열람하지
+않았으므로(비밀값이라 확인 자체를 하지 않음) 판단 불가 — Production에 등록하기 전에 Stephen이
+Toss 개발자센터에서 이 값들이 "라이브" 키가 맞는지 반드시 직접 확인할 것(테스트 키를
+Production에 등록하면 실카드 결제 자체가 Toss 측에서 거부됨 — 별개의 흔한 실수 패턴).
+```
+
+GATE C: CRITICAL — 원인 진단 완료, 복원 조치는 Stephen의 시크릿 입력이 필요해 이 세션이
+대행 불가. git 관련 조치 없음(이번 진단은 코드 변경 없음, TASK.md 기록만).
 
 

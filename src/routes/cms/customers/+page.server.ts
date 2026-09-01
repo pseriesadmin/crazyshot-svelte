@@ -116,14 +116,14 @@ export const actions: Actions = {
     if (!user_id) return fail(400, { ok: false, error: '사용자 ID 필수' })
     if (blacklisted && !reason) return fail(400, { ok: false, error: '블랙리스트 등록 시 사유 필수' })
 
-    const { data } = await admin.rpc('toggle_blacklist', {
+    const { data, error } = await admin.rpc('toggle_blacklist', {
       p_user_id:     user_id,
       p_blacklisted: blacklisted,
       p_reason:      reason,
     })
 
     const result = data as { ok: boolean; error?: string } | null
-    if (!result?.ok) return fail(400, { ok: false, error: result?.error ?? '처리 실패' })
+    if (!result?.ok) return fail(400, { ok: false, error: result?.error ?? error?.message ?? '처리 실패' })
     return { ok: true }
   },
 
@@ -145,14 +145,14 @@ export const actions: Actions = {
     if (!subscription_id) return fail(400, { ok: false, error: '구독 ID 필수' })
     if (!['cancelled', 'paused'].includes(status)) return fail(400, { ok: false, error: '유효하지 않은 상태값' })
     if (!reason) return fail(400, { ok: false, error: '사유 필수' })
-    const { data } = await adminCheck.rpc('admin_update_subscription_status', {
+    const { data, error } = await adminCheck.rpc('admin_update_subscription_status', {
       p_subscription_id: subscription_id,
       p_status:          status,
       p_reason:          reason,
     })
 
     const result = data as { ok: boolean; error?: string } | null
-    if (!result?.ok) return fail(400, { ok: false, error: result?.error ?? '처리 실패' })
+    if (!result?.ok) return fail(400, { ok: false, error: result?.error ?? error?.message ?? '처리 실패' })
     return { ok: true }
   },
 
@@ -181,7 +181,7 @@ export const actions: Actions = {
 
     const createdAtTs = created_at ? new Date(created_at).toISOString() : null
 
-    const { data } = await adminUpd.rpc('update_customer_info', {
+    const { data, error } = await adminUpd.rpc('update_customer_info', {
       p_user_id:     user_id,
       p_name:        name    || null,
       p_email:       email   || null,
@@ -192,7 +192,7 @@ export const actions: Actions = {
     })
 
     const result = data as { ok: boolean; error?: string } | null
-    if (!result?.ok) return fail(400, { ok: false, error: result?.error ?? '수정 실패' })
+    if (!result?.ok) return fail(400, { ok: false, error: result?.error ?? error?.message ?? '수정 실패' })
     return { ok: true }
   },
 
@@ -215,14 +215,14 @@ export const actions: Actions = {
     if (delta === 0) return fail(400, { ok: false, error: '조정값은 0이 될 수 없습니다' })
     if (!reason) return fail(400, { ok: false, error: '조정 사유 필수' })
 
-    const { data } = await adminAdj.rpc('adjust_credit_score', {
+    const { data, error } = await adminAdj.rpc('adjust_credit_score', {
       p_user_id: user_id,
       p_delta:   delta,
       p_reason:  reason,
     })
 
     const result = data as { ok: boolean; old_score?: number; new_score?: number; error?: string } | null
-    if (!result?.ok) return fail(400, { ok: false, error: result?.error ?? '조정 실패' })
+    if (!result?.ok) return fail(400, { ok: false, error: result?.error ?? error?.message ?? '조정 실패' })
     return { ok: true, old_score: result.old_score, new_score: result.new_score }
   },
 
@@ -243,13 +243,13 @@ export const actions: Actions = {
 
     if (!user_id) return fail(400, { ok: false, error: '사용자 ID 필수' })
 
-    const { data } = await adminClient.rpc('soft_delete_customer', {
+    const { data, error } = await adminClient.rpc('soft_delete_customer', {
       p_user_id:    user_id,
       p_deleted_by: session.user.email ?? session.user.id,
     })
 
     const result = data as { ok: boolean; error?: string } | null
-    if (!result?.ok) return fail(400, { ok: false, error: result?.error ?? '삭제 실패' })
+    if (!result?.ok) return fail(400, { ok: false, error: result?.error ?? error?.message ?? '삭제 실패' })
     return { ok: true, deleted: true }
   },
 }
