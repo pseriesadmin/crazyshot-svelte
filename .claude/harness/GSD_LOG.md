@@ -1,6 +1,34 @@
 # GSD_LOG.md — 크레이지샷 실행 이력
 # 형식: [YYYY-MM-DD HH:MM] 타입 | 타스크명 | 파일 | 소요 | 결과
 
+[2026-09-01] 🔴CRITICAL | 판매전용(sale_only) 상품 "구매" 흐름 신설 — Stage 구현 완료·Production 미적용 |
+  Migration #416(rental_reservations.duration_type에 'purchase' 추가 + compute_reservation_line_amount·
+  try_confirm_reservation·update_reservation_status 3개 함수 판매전용 분기) + 앱코드 6개 파일
+  (products/[id]/+page.svelte, cart/+page.svelte, cart/+page.server.ts, cms/products/+page.svelte,
+  cms/products/+page.server.ts, loadSelectedProductDetail.ts) |
+  착수 전 조사로 판매전용 상품이 실제로는 "판매 완료" 개념 없이 대여와 동일 흐름을 타고 있어
+  결제금액·확정조건·재고차감 3중 결함 발견 → Stephen AskUserQuestion 3라운드로 확정(결제완료 즉시
+  재고제외/CMS 배지만/구별+금액계산 전부/계약서명 없이 즉시확정) 후 구현. 세션 중 다른 병렬세션과
+  기능 중복 오판으로 일시 중단 → Stephen 확인 후 재개(실제로는 별개 기능(#414/#415 배송비 할인)이었음). |
+  svelte-check 신규에러 0건, vitest 12파일(cart*/reservation*/product*) 162 passed/7 skipped GREEN |
+  잔여: QA 디스패치 예정, Production 마이그레이션 적용은 Stephen 지시 대기, 할인이벤트 연동은 별도 진행
+
+[2026-09-01] 🔴CRITICAL | 판매전용 구매흐름 QA 검수(조건부 통과) + 0원결제 리스크 즉시 해소 |
+  new/+page.server.ts·+page.server.ts | sp3-qa-agent가 sale_only=true인데 sale_price 없으면
+  0원 결제 가능한 CRITICAL 리스크 발견(기존 코드의 구멍, Migration #416이 방아쇠) → BND-9
+  대칭으로 "sale_only면 sale_price 필수" 서버검증 즉시 추가 → svelte-check 0건, product 관련
+  3파일 17개 테스트 GREEN(회귀 없음) | 잔여: 전액환불 시 재고 미복원 여부 Stephen 결정 대기,
+  Production 마이그레이션 적용 여부 확인 필요
+
+[2026-09-01] 🔴CRITICAL | 판매전용 구매흐름 Production 적용 + 환불 시 재고 자동복구 |
+  supabase/migrations/20260901190000_417_sale_only_refund_restock.sql(신규) |
+  Stephen 확정 2건 반영: ①Migration #416을 Production(vnbpmvxruyciuuaermyh)에도 적용
+  ②환불(cancel_reservation_payment→update_reservation_status 'cancelled') 시 판매전용
+  상품 재고(is_active) 자동 재활성화 로직(#417) 추가 — hold 단계 취소는 안전한 no-op |
+  Stage 먼저 적용·검증 후 Production 적용(#416+#417), 적용 직후 CHECK 제약·3개 함수 정의
+  Stage와 동일함을 직접 SQL 재조회로 확인 | 코드 커밋 없음(git 실행은 Stephen 직접)
+
+[2026-09-01 14:27] 🔴TDD  | 배송료 우대설정 rental_item 조건 신설 + 금액기준 분리 | cartShippingFee.ts·cartShippingFee.test.ts·cms/set/rental/+page.svelte·cms/set/rental/+page.server.ts·cart/+page.server.ts·cart/+page.svelte·migration#414·#415 | RED 4개 확인→GREEN 43/43→REFACTOR 완료 | GATE C:승인대기 | npm run check: 신규 에러 0건 | 마이그레이션 적용 대기: #414·#415
 [2026-08-31] ✅확인 | CS2654(reservation_id=2654) 계약서 변수미치환 CRITICAL — 백필 최종 재확인 완료 | (DB데이터만, 코드파일 아님) | — | ✅ 해결 확인 — Stage DB 재조회 결과 contracts.spreadsheet_document updated_at=2026-08-31 07:54:40(직전 백필), {{ 플레이스홀더 완전 소거. 실값 치환도 개별 확인: 고객실명(이기성)·상품명(Sony FX6-12)·실제대여기간(2026-08-30)·결제금액(50000) 전부 정상. 이 세션은 백필을 직접 수행하지 않음(타 세션 수행분 재검증만).
 
 [2026-08-31] ✅QA재검수 | 전자계약 링크+PC버튼 6개 파일 — 형제예약 확장 로직 결합 후 GATE E 2차 독립검수 | loadRentalContractStatus.ts, account/rental/+page.server.ts, +page.svelte, account/+page.server.ts, +page.svelte, PcRentalPanel.svelte | — | ✅ 통과 — 타 세션이 loadRentalContractStatus.ts에 추가한 형제예약(order_items 경유) 확장 로직 포함 최신 결합상태를 @sp3-qa-agent가 처음부터 재검수. RLS 이중보호로 데이터유출 불가, 단독예약 회귀없음, 3개이상 형제예약도 정확확장, 쿼리 3회 고정(N+1 아님), 신규테스트 5/5 GREEN 재확인, npm run check 신규에러 0건, 호출부 5개 파일 Map타입 계약 불변. CRITICAL/HIGH/MEDIUM/LOW 신규이슈 없음. git commit은 Stephen 직접 실행 대기.
@@ -6537,3 +6565,58 @@ Stephen 직접 실행 필요
   error.message를 fallback 문구 앞에 노출(재고없음 등 무관한 문구로 원인이 가려지는 것 방지).
   set_reservation_duration 2곳은 반환값 자체를 버리던 것을 error 확인 후 비차단 경고 토스트로
   전환(결제 흐름은 막지 않음). svelte-check 신규 에러 0건. DB 변경 없음. git commit 미실행.
+
+[2026-09-01] 🔴CRITICAL | 하네스 인프라 신설 — DB드리프트 검증절차 + RPC에러처리 정적분석 |
+  scripts/check-rpc-error-handling.mjs, .claude/harness/DRIFT_CHECK_PROCEDURE.md,
+  package.json, .claude/agents/shared/sp3-qa-agent.md, sp4-deploy-agent.md | — |
+  Stephen 근본원인 추론 요청("대규모 개발+전수검수에도 왜 CRITICAL 결함 반복?")에 대한 답으로,
+  하네스 GATE/QA가 전부 사후기록이지 사전차단이 아니었다는 구조적 공백을 인정하고 즉시 3종
+  안전망 구현. ①상품상세 캘린더/draft흐름이 "부산물이라 미사용"이라는 가설을 코드추적으로
+  기각(reserveDisabled prop 미전달로 버튼이 항상 활성 — 실사용 확인) ②DRIFT_CHECK_PROCEDURE.md
+  신설(stage/production 자격증명 분리원칙 준수 위해 로컬스크립트 대신 Supabase MCP 고정쿼리
+  절차서로 구현, sp3/sp4 양쪽 게이트에 실행의무화) ③check-rpc-error-handling.mjs 신설(RPC
+  error 미확인 패턴 정적분석, package.json 스크립트 등록, sp3 검수2단계 의무화) — 실행결과
+  전역 22건 VIOLATION 발견(그중 pay-result/+page.server.ts·contracts/sign/+server.ts 2곳은
+  결제확정 CRITICAL 경로, 이번 세션 미수정·별도승인 필요). 작업 중 다른 병렬세션이 TASK.md
+  최상단에 실시간으로 새 항목을 삽입하는 것을 직접 관측(무손실 병합됐으나 동시편집 위험은
+  이 인프라의 해결범위 밖으로 별도 기록). DB 변경 없음, git commit 미실행.
+
+[2026-09-01] 🔴CRITICAL | 전역 22건 RPC 에러처리 전부 수정 (check-rpc-error-handling.mjs 발견분) |
+  13개 파일: account/rental/[id]/history, api/chat/sessions, api/cms/reservations/[id]/payment,
+  api/contracts/[token]/sign(2곳), cms/accounts, cms/customers(5곳), cms/products,
+  cms/promotion/{analytics,coupon×2,point×2,segment×2}, contract/[token]/pay-result,
+  products, products/[id] | — | 컨텍스트별 3패턴 적용: ①load함수 14곳은 error 로그만 추가
+  (폴백값 유지) ②CMS관리액션 5곳+accounts는 기존 fail() 폴백체인에 error.message 추가
+  ③CRITICAL 결제/예약 경로 3곳(contracts/sign의 try_confirm_reservation_order·
+  find_or_create_general_chat_session, pay-result의 confirm_order_payment_and_update_
+  reservations)은 fail-soft 유지하되 상세 컨텍스트 포함 로그 강화 — 특히 pay-result는
+  Toss결제승인 후 DB반영 실패 시나리오라 가장 위험한 케이스로 별도 상세 로그. check-rpc-
+  error-handling.mjs 재실행 → VIOLATION 0건. svelte-check 전체 재실행 → 신규에러 0건
+  (vite.config.ts 기존에러 1건은 이 세션 무관, git status로 무변경 확인). DB변경 없음,
+  git commit 미실행.
+
+[2026-09-01] 🔴CRITICAL | restrict_return_delivery leg-aware 재구현 — 배송대여 누락 실사용결함 수정 |
+  src/routes/cart/+page.svelte | — | Stephen 리포트(fxlion-nano-two-v-mount-battery-2609
+  장바구니 담기 시 배송대여 누락) 조사 — Claude Browser 명시승인으로 실서버 직접 재현.
+  상품 DB설정·상품상세화면은 정상(크레이지배송택배 정상노출 확인), 장바구니 체크아웃
+  화면에서만 수령방식에 방문·퀵서비스만 뜨고 배송 누락 확인. rental_shipping_settings.
+  restrict_return_delivery=true(production 현재 ON) 확인 — 이 세션 앞부분에 이미 문서화해둔
+  "토글ON시 양쪽leg 다 배송제거" 설계갭이 토글이 켜지며 실사용 결함으로 발현된 것(배송옵션
+  설정된 모든 상품에 영향, 이 상품만의 문제 아니었음). Stephen 결정: 토글 유지, leg-aware
+  코드 수정. otVisibleTabs(공용) 제거 → pickupVisibleTabs(항상 전체)+returnVisibleTabsFor
+  (pickup==='visit'&& 토글ON일때만 제한) 2개로 분리, methodSelectionValid·RentalForm snippet
+  둘 다 leg-aware로 갱신, 기존 "요청A"(수령=배송시 반납 강제복사)는 무변경 양립 확인.
+  svelte-check 신규에러 0건. 실서버 시각 재검증은 Claude Browser 승인범위(진단 1건 한정)
+  밖이라 미실행 — 배포 후 3가지 시나리오(방문+토글ON/배송선택/토글OFF) 재확인 필요.
+  git commit 미실행.
+
+[2026-09-01] 🔍QA검수 | leg-aware restrict_return_delivery 재구현 — sp3-qa-agent 검수 완료 |
+  src/routes/cart/+page.svelte | — | ✅ GATE E 통과(CRITICAL/HIGH 0건). 요청한 3가지
+  시나리오(방문+토글ON/배송선택+강제고정/토글OFF) 전부 코드추적으로 정상 확인 — 특히
+  "수령=배송 선택 시 반납 강제고정값이 탭목록에 존재"가 bulkHandleMethod의 forceCopy
+  동기실행 덕에 안전함을 재확인. svelte-check·check-rpc-error-handling.mjs·otVisibleTabs
+  잔여참조 전부 정상. MEDIUM 1건: leg-aware 필터링 로직(이번 실사고 유발 로직 자체) 단위
+  테스트 커버리지 0% — 순수함수 추출+테스트 작성 후속권고. LOW 1건: methodSelectionValid
+  (committed값)와 RentalForm snippet(bulkOpts 편집중값)의 소스 이원화가 현재는 아코디언
+  상호배타 구조 덕에 안전하나 향후 구조변경 시 재발가능 — 주석 보강 권고. visibleTabs
+  빈배열 안내문구는 여전히 도달가능한 정상경로 확인. git commit 미실행, Stephen 대기.

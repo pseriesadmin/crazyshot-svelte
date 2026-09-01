@@ -32,7 +32,10 @@ export const GET: RequestHandler = async ({ url, locals }) => {
   // get_and_mark_unanswered_sessions()가 동시에 unanswered_notified_at을 갱신해 중복 발송 방지
   ;(async () => {
     try {
-      const { data: userIds } = await admin.rpc('get_and_mark_unanswered_sessions') as { data: string[] | null }
+      const { data: userIds, error: unansweredErr } = await admin.rpc('get_and_mark_unanswered_sessions') as { data: string[] | null; error: { message?: string } | null }
+      if (unansweredErr) {
+        console.error('[chat/sessions] get_and_mark_unanswered_sessions 실패(fail-soft):', unansweredErr.message)
+      }
       if (userIds && userIds.length > 0) {
         await Promise.allSettled(
           userIds.map((uid) =>

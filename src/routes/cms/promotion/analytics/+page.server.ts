@@ -31,7 +31,10 @@ export const load: PageServerLoad = async ({ parent, locals }) => {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const db = locals.supabase as unknown as any
 
-  const { data: analyticsRaw } = await db.rpc('get_promotion_analytics')
+  const { data: analyticsRaw, error: analyticsErr } = await db.rpc('get_promotion_analytics')
+  if (analyticsErr) {
+    console.error('[cms/promotion/analytics] get_promotion_analytics 실패:', analyticsErr.message)
+  }
 
   const analytics: AnalyticsData = analyticsRaw ?? {
     total_revenue: 0,

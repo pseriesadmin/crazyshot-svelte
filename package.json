@@ -22,6 +22,8 @@
     "harness:health": "bash scripts/harness-health-check.sh",
     "harness:health:fix": "bash scripts/harness-health-check.sh --fix",
     "check": "svelte-check --tsconfig ./tsconfig.json",
+    "check:rpc-errors": "node scripts/check-rpc-error-handling.mjs",
+    "check:rpc-errors:ci": "node scripts/check-rpc-error-handling.mjs --fail-on-violation",
     "postinstall": "patch-package"
   },
   "keywords": [],

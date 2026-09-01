@@ -32,6 +32,10 @@ Stephen이 안전하게 시범서비스를 오픈할 수 있도록
 □ GATE E 통과 확인 (QA 리포트)
 □ Stephen git commit 완료 확인
 □ 배포 환경: Staging / Production
+□ CRITICAL DB 마이그레이션이 포함된 배포라면 → DRIFT_CHECK_PROCEDURE.md 절차1~4
+  (함수정의·권한·제약·마이그레이션이력 stage↔production 대조)를 실행해 통과했는가?
+  (2026-09-01 신설 — "마이그레이션 적용 성공" 응답만으로 완료 판정 금지, 실제 대조 필수.
+  promote_draft_reservation이 정확히 이 확인 부재로 12일간 production에서 누락돼 있었음)
 ```
 
 ---
@@ -113,6 +117,9 @@ DB 마이그레이션 (Production):
 □ 👤 실행: supabase db push --linked (prod 프로젝트)
 □ 마이그레이션 로그 에러 없음
 □ RLS 정책 적용 확인
+□ DRIFT_CHECK_PROCEDURE.md 절차5(배포상태 교차검증) — 이번에 배포되는 코드가 참조하는
+  RPC·컬럼·제약이 방금 적용한 마이그레이션에 전부 포함돼 있는가? (§9 "코드 배포≠DB 적용"
+  분리 사고 재발 방지 — 코드만 먼저 나가고 DB가 뒤늦게 따라가는 순서 오류 차단)
 
 배포:
 □ 👤 Vercel 대시보드 → Preview → Promote to Production
@@ -173,4 +180,6 @@ DB 롤백 필요 시:
 
 ---
 
-*sp4-deploy-agent.md v3.0 | Harness Flow v3.0 | 시범서비스 오픈 Deployer*
+*sp4-deploy-agent.md v3.1 | Harness Flow v3.2 | 시범서비스 오픈 Deployer |
+2026-09-01 DRIFT_CHECK_PROCEDURE.md 실행 의무화 추가(promote_draft_reservation production
+12일 미발견 사고 계기 — "마이그레이션 적용 성공" 응답만으로 완료 판정하던 관행 차단)*

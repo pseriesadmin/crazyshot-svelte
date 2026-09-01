@@ -132,6 +132,14 @@ SvelteKit 5 패턴 (신규 — v3.1):
 □ $env/static/public에 서버 키 없음
   → grep -rn "TOSS_SECRET\|SERVICE_ROLE" src/ | grep "static/public"
 
+RPC 에러처리 (신규 — v3.3, 2026-09-01 promote_draft_reservation 12일 미발견 사고 계기):
+□ 이번 태스크가 새로 추가하거나 수정한 supabase.rpc(...) 호출부는 반드시 error를
+  구조분해해 확인하는가? (`const { data } = await supabase.rpc(...)`처럼 error를 버리면
+  RPC 자체 실패가 엉뚱한 fallback 문구로 둔갑해 실제 원인이 가려짐 — 실제 사고 사례)
+  → node scripts/check-rpc-error-handling.mjs 로 전체 스캔 후, 이번 태스크가 건드린
+    파일에 새로운 VIOLATION이 없는지 확인(기존 잔존 위반은 별도 태스크 — 이번 diff에
+    새로 추가된 것만 GATE E 블로킹 대상)
+
 성능:
 □ N+1 쿼리 없음
 □ 불필요한 realtime 구독 없음 ($effect cleanup 또는 onDestroy 해제)
@@ -152,6 +160,11 @@ SvelteKit 5 패턴 (신규 — v3.1):
 DB 안전성:
 □ 마이그레이션 파일에 rollback 섹션 존재 (DB 변경 포함 시)
 □ RLS 정책 — 고객 A가 고객 B 데이터 못 보는가
+□ 이번 태스크가 CRITICAL 등급 DB 마이그레이션을 stage+production 양쪽에 적용했다고
+  기록하려는 경우 — DRIFT_CHECK_PROCEDURE.md 절차 1~4(함수정의·권한·제약·마이그레이션
+  이력 대조)를 실제로 실행해 두 DB가 일치함을 직접 확인했는가? ("적용 성공" 응답만
+  믿지 말 것 — 2026-09-01 promote_draft_reservation은 #315가 "적용 완료"로 기록됐지만
+  실제로는 12일간 함수 자체가 production에 없었음)
 
 결제 추적:
 □ payment_transactions에 모든 거래 기록됨
@@ -241,4 +254,6 @@ QA 종합: {통과 ✅ / 재검수 필요 ⚠️}
 
 ---
 
-*sp3-qa-agent.md v3.2 | Harness Flow v3.2 | QA Evaluator + SvelteKit 5 체크 + 도메인 규칙 6종 반영 + GATE D 죽은 참조 제거*
+*sp3-qa-agent.md v3.3 | Harness Flow v3.2 | QA Evaluator + SvelteKit 5 체크 + 도메인 규칙 6종 반영 + GATE D 죽은 참조 제거 |
+2026-09-01 RPC 에러처리 정적분석(check-rpc-error-handling.mjs) + DRIFT_CHECK_PROCEDURE.md
+실행 의무화 추가(promote_draft_reservation production 12일 미발견 사고 계기)*

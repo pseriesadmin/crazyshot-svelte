@@ -43,7 +43,10 @@ export const load: PageServerLoad = async ({ parent, locals, url }) => {
   const admin = locals.supabase as unknown as any
 
   // 세그먼트 통계
-  const { data: statsRaw } = await admin.rpc('get_segment_stats')
+  const { data: statsRaw, error: statsErr } = await admin.rpc('get_segment_stats')
+  if (statsErr) {
+    console.error('[cms/promotion/segment] get_segment_stats 실패:', statsErr.message)
+  }
   const stats: SegmentStats = statsRaw ?? {
     total_tracked_users: 0,
     total_events_7d: 0,
@@ -54,11 +57,14 @@ export const load: PageServerLoad = async ({ parent, locals, url }) => {
   // 선택된 세그먼트 사용자 목록
   let segmentUsers: SegmentUser[] = []
   if (activeSegment) {
-    const { data: users } = await admin.rpc('get_segment_users', {
+    const { data: users, error: usersErr } = await admin.rpc('get_segment_users', {
       p_segment: activeSegment,
       p_limit:   50,
       p_offset:  0,
     })
+    if (usersErr) {
+      console.error('[cms/promotion/segment] get_segment_users 실패:', usersErr.message)
+    }
     segmentUsers = (users ?? []) as SegmentUser[]
   }
 

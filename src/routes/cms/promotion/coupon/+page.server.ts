@@ -158,7 +158,10 @@ export const load: PageServerLoad = async ({ parent, locals, url }) => {
   }
 
   // 쿠폰 통계 (확장 — migration #51)
-  const { data: statsRaw } = await admin.rpc('get_coupon_stats')
+  const { data: statsRaw, error: statsErr } = await admin.rpc('get_coupon_stats')
+  if (statsErr) {
+    console.error('[cms/promotion/coupon] get_coupon_stats 실패:', statsErr.message)
+  }
   const stats: CouponStats = statsRaw ?? {
     total_issued: 0, total_active: 0, total_used: 0,
     total_expired: 0, total_discount_amount: 0, conversion_rate: 0,
@@ -174,11 +177,14 @@ export const load: PageServerLoad = async ({ parent, locals, url }) => {
   // 사용량 리포트 (리포트 탭일 때만)
   let usageReport: UsageReportRow[] = []
   if (tab === 'report') {
-    const { data: report } = await admin.rpc('get_coupon_usage_report', {
+    const { data: report, error: reportErr } = await admin.rpc('get_coupon_usage_report', {
       p_period: period,
       p_from: from,
       p_to: to,
     })
+    if (reportErr) {
+      console.error('[cms/promotion/coupon] get_coupon_usage_report 실패:', reportErr.message)
+    }
     usageReport = report ?? []
   }
 

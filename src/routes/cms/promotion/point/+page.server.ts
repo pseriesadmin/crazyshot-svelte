@@ -60,7 +60,10 @@ export const load: PageServerLoad = async ({ parent, locals, url }) => {
   const admin = locals.supabase as unknown as any
 
   // 포인트 통계 (확장 — migration #51)
-  const { data: statsRaw } = await admin.rpc('get_point_stats')
+  const { data: statsRaw, error: statsErr } = await admin.rpc('get_point_stats')
+  if (statsErr) {
+    console.error('[cms/promotion/point] get_point_stats 실패:', statsErr.message)
+  }
   const stats: PointStats = statsRaw ?? {
     total_granted: 0, total_used: 0, total_expired: 0,
     total_balance: 0, usage_rate: 0, avg_user_balance: 0,
@@ -97,7 +100,10 @@ export const load: PageServerLoad = async ({ parent, locals, url }) => {
   // 적립 규칙 (탭5 전용)
   let earnRules: EarnRule[] = []
   if (tab === 'rules') {
-    const { data: rules } = await admin.rpc('get_point_earn_rules')
+    const { data: rules, error: rulesErr } = await admin.rpc('get_point_earn_rules')
+    if (rulesErr) {
+      console.error('[cms/promotion/point] get_point_earn_rules 실패:', rulesErr.message)
+    }
     earnRules = (rules ?? []) as EarnRule[]
   }
 
