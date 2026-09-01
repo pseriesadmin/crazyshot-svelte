@@ -29,6 +29,7 @@ import { getProductSearchIndex } from '$lib/server/searchEngine/adapters/product
 import { loadSynonymGroups } from '$lib/server/synonymLearning'
 import { expandQueryWithConfirmedSynonyms } from '$lib/server/searchEngine/core/synonymExpander'
 import { getWishedProductIds } from '$lib/server/getWishedProductIds'
+import { getPriceMinForProducts } from '$lib/server/getPriceMinForProducts'
 import type { RequestHandler } from './$types'
 
 // RPC 결과 "약한 매칭" 기준 — 이 건수 이하면 자연어 폴백 보강 실행
@@ -179,13 +180,28 @@ export const GET: RequestHandler = async ({ url, locals }) => {
   }
 
   const finalResults = mergedResults.slice(0, limit)
+
+  // 자연어 폴백(natural_fallback) 결과는 search_products RPC를 거치지 않아 price_min이 없다 —
+  // 배치 조회로 채워 넣는다(2026-09-01, 검색결과 가격 0원/누락 버그 수정).
+  const missingPriceIds = finalResults
+    .filter((r) => r['price_min'] == null)
+    .map((r) => String(r['product_id'] ?? r['id'] ?? ''))
+  const priceMinMap = await getPriceMinForProducts(locals.supabase, missingPriceIds)
+
   const wishedIds = await getWishedProductIds(
     locals.supabase,
     session?.user?.id,
     finalResults.map((r) => String(r['product_id'] ?? r['id'] ?? '')),
   )
   const wishedSet = new Set(wishedIds)
-  const results = finalResults.map((r) => ({ ...r, wished: wishedSet.has(String(r['product_id'] ?? r['id'] ?? '')) }))
+  const results = finalResults.map((r) => {
+    const id = String(r['product_id'] ?? r['id'] ?? '')
+    return {
+      ...r,
+      price_min: r['price_min'] ?? priceMinMap[id] ?? null,
+      wished: wishedSet.has(id),
+    }
+  })
 
   return json({ results, query: q, page, limit, search_log_id: searchLogId })
 }

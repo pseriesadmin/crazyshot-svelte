@@ -10,6 +10,7 @@
   import { csToast } from '$lib/utils/toast';
   import { isLockerHour } from '$lib/utils/lockerTimeRange';
   import { calcShippingFee, calcShippingDiscountRate, type ShippingFeeItem, type DeliveryFeeDiscountTier, type DiscountConditionItem } from '$lib/utils/cartShippingFee';
+  import { calcRentalDays, calcRentalFee } from '$lib/utils/cartRentalFee';
   import {
     createMultiUnitReservation,
     resolveParentProductId,
@@ -181,26 +182,29 @@
           body: JSON.stringify({ reservationId }),
         }).catch(() => {})
       }
+      // RPC 자체가 실패(함수 없음·네트워크 등)하면 data가 null이 되어 row도 undefined가 되므로,
+      // error를 확인하지 않으면 "재고가 부족합니다" 같은 무관한 기본 문구로 실제 원인이 가려진다
+      // (promote_draft_reservation production 누락 결함과 동일 클래스 — QA 발견, 2026-09-01).
       type UnitRpcFn = (name: string, args: Record<string, unknown>) => Promise<{
         data: Array<{ success: boolean; reservation_id: number | null; error_message: string | null }> | null
-        error: unknown
+        error: { message?: string } | null
       }>
       const parentProductId = resolveParentProductId(line.product)
       const createUnit = async (): Promise<UnitReservationResult> => {
         if (line.status === 'draft') {
-          const { data } = await (supabase.rpc as unknown as UnitRpcFn)('create_draft_reservation', {
+          const { data, error } = await (supabase.rpc as unknown as UnitRpcFn)('create_draft_reservation', {
             p_product_id: parentProductId,
           })
           const row = data?.[0]
-          return { success: !!row?.success, reservationId: row?.reservation_id ?? null, errorMessage: row?.error_message ?? null }
+          return { success: !!row?.success, reservationId: row?.reservation_id ?? null, errorMessage: row?.error_message ?? error?.message ?? null }
         }
-        const { data } = await (supabase.rpc as unknown as UnitRpcFn)('create_hold_reservation', {
+        const { data, error } = await (supabase.rpc as unknown as UnitRpcFn)('create_hold_reservation', {
           p_product_id: parentProductId,
           p_start_date: line.startDate,
           p_end_date:   line.endDate,
         })
         const row = data?.[0]
-        return { success: !!row?.success, reservationId: row?.reservation_id ?? null, errorMessage: row?.error_message ?? null }
+        return { success: !!row?.success, reservationId: row?.reservation_id ?? null, errorMessage: row?.error_message ?? error?.message ?? null }
       }
 
       const outcome = await createMultiUnitReservation(1, { createUnit, cancelUnit })
@@ -223,11 +227,16 @@
           await cancelUnit(newId)
           return
         }
-        type DurationRpcFn = (name: string, args: Record<string, unknown>) => Promise<{ error: unknown }>
-        await (supabase.rpc as unknown as DurationRpcFn)('set_reservation_duration', {
+        type DurationRpcFn = (name: string, args: Record<string, unknown>) => Promise<{ error: { message?: string } | null }>
+        const { error: durationError } = await (supabase.rpc as unknown as DurationRpcFn)('set_reservation_duration', {
           p_reservation_id: newId,
           p_duration_type:  line.durationType ?? '24h',
         })
+        if (durationError) {
+          // 대여기간유형 저장 실패는 결제·재고 확정을 막을 정도로 치명적이지 않으므로
+          // 계속 진행하되, 완전 무음 처리 대신 비차단 경고로 알린다(1296행과 동일 패턴, 2026-09-01).
+          csToast.error('대여기간유형 저장에 실패했습니다. CMS에 문의해주세요.')
+        }
         fetch('/api/checkout/notify-hold', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -612,6 +621,25 @@
     const r12 = itemRate12h(line, r24)
     return cardRate(r24, r12, durType)
   }
+  // 대여료(실제 결제금액 계산 RPC와 정합) — calcRentalFee(cartRentalFee.ts)가
+  // calculate_cart_total RPC와 동일 산식으로 일수×24h요율 + 잔여시간 12h요율 가산을 계산한다.
+  // 2026-09-01: 위 itemCardRate()의 단일요율 근사값(다일 대여 시 일수 미반영, 당일대여 12h/24h
+  // 조합 미반영)을 대체 — "총 대여기간" 표시·실제 결제금액과 일치하는 미리보기 제공.
+  function itemRentalFee(
+    line: CartLineGroup | undefined,
+    it: { rentalDate: string; returnDate: string; rentalTime: string; returnTime: string },
+  ): number {
+    const r24 = itemRate24h(line)
+    const r12 = itemRate12h(line, r24)
+    return calcRentalFee({
+      startDate: it.rentalDate,
+      endDate: it.returnDate,
+      pickupTime: it.rentalTime,
+      returnTime: it.returnTime,
+      dailyPrice: r24,
+      halfDayPrice: r12,
+    })
+  }
   function itemDeposit(line: CartLineGroup | undefined): number {
     if (!line) return 0
     return sdPriceRules[line.productId ?? '']?.deposit ?? line.deposit ?? 0
@@ -634,7 +662,7 @@
     itemsState.reduce((sum, it) => {
       if (it.deleted || !it.checked) return sum
       const line = groupsById.get(it.id)
-      return sum + (itemCardRate(line, it.durType) + itemOptionsAmount(line)) * Math.max(line?.qty ?? 1, 1)
+      return sum + (itemRentalFee(line, it) + itemOptionsAmount(line)) * Math.max(line?.qty ?? 1, 1)
     }, 0)
   )
 
@@ -925,12 +953,9 @@
     return Math.max(0, Math.ceil(diff / 86400000))
   }
 
-  // 대여 기간 (일수)
-  function rentalDays(start: string, end: string): number {
-    if (!start || !end) return 0
-    const diff = new Date(end).getTime() - new Date(start).getTime()
-    return Math.max(0, Math.ceil(diff / 86400000))
-  }
+  // 대여 기간 (일수) — calculate_cart_total RPC와 정합되는 계산은 $lib/utils/cartRentalFee 참고
+  // (2026-09-01: 당일대여 시 0을 반환해 "날짜 미선택"으로 오인되던 CRITICAL 버그 수정)
+  const rentalDays = calcRentalDays
   const otTotalDays = $derived(
     itemsState.reduce((sum, it) => sum + ((it.deleted || !it.checked) ? 0 : rentalDays(it.rentalDate, it.returnDate)), 0)
   )
@@ -1252,22 +1277,26 @@
                 const sameDayMinsCo   = endMinsCo - startMinsCo
                 const durationTypeCo  = isSameDayRentalCo && sameDayMinsCo > 0 && sameDayMinsCo <= 720 ? '12h' : '24h'
 
+                // RPC 자체가 실패(함수 없음·네트워크 등)하면 data가 null이 되어 promoteRow도
+                // undefined가 되므로, error를 확인하지 않으면 실제 재고와 무관하게 "재고가 없습니다"
+                // 기본 문구로 진짜 원인(RPC 실패)이 가려진다 — promote_draft_reservation이 production
+                // 에서 통째로 누락돼 있던 결함이 이 패턴 때문에 재고 문제로 오인됐었다(QA 발견, 2026-09-01).
                 type PromoteRpcFn = (name: string, args: Record<string, unknown>) => Promise<{
                   data: Array<{ success: boolean; reservation_id: number | null; error_message: string | null }> | null;
-                  error: unknown;
+                  error: { message?: string } | null;
                 }>
-                type DurationRpcFnCo = (name: string, args: Record<string, unknown>) => Promise<{ error: unknown }>
+                type DurationRpcFnCo = (name: string, args: Record<string, unknown>) => Promise<{ error: { message?: string } | null }>
 
                 // 그룹 내 모든 개별 예약id에 각각 승격/방식/기간을 적용
                 for (const reservationId of it.reservationIds) {
-                  const { data: promoteRows } = await (supabase.rpc as unknown as PromoteRpcFn)('promote_draft_reservation', {
+                  const { data: promoteRows, error: promoteError } = await (supabase.rpc as unknown as PromoteRpcFn)('promote_draft_reservation', {
                     p_reservation_id: Number(reservationId),
                     p_start_date:     it.rentalDate,
                     p_end_date:       it.returnDate,
                   })
                   const promoteRow = promoteRows?.[0]
                   if (!promoteRow?.success) {
-                    csToast.error(promoteRow?.error_message ?? '해당 기간에 예약 가능한 재고가 없습니다.')
+                    csToast.error(promoteRow?.error_message ?? promoteError?.message ?? '해당 기간에 예약 가능한 재고가 없습니다.')
                     return
                   }
                   // 수령·반납 방식 저장 (기존 saveShipmentMethod 재사용)
@@ -1276,10 +1305,15 @@
                     csToast.error(shipmentResultCo.errorMessage ?? '수령/반납 방식 저장에 실패했습니다. 방식을 다시 선택해주세요.')
                     return
                   }
-                  await (supabase.rpc as unknown as DurationRpcFnCo)('set_reservation_duration', {
+                  const { error: durationErrorCo } = await (supabase.rpc as unknown as DurationRpcFnCo)('set_reservation_duration', {
                     p_reservation_id: Number(reservationId),
                     p_duration_type:  durationTypeCo,
                   })
+                  if (durationErrorCo) {
+                    // 대여기간유형 저장 실패는 결제·재고 확정을 막을 정도로 치명적이지 않으므로
+                    // 체크아웃은 계속 진행하되, 완전 무음 처리 대신 비차단 경고로 알린다(QA 발견, 2026-09-01).
+                    csToast.error('대여기간유형 저장에 실패했습니다. CMS에 문의해주세요.')
+                  }
                   // 채팅 알림 발송 (draft 생성 시 미발송 → 승격 성공 시점에 최초 발송 — FE-2 STEP4 참고)
                   fetch('/api/checkout/notify-hold', {
                     method: 'POST',
@@ -1331,7 +1365,7 @@
                   endDate: it.returnDate,
                   pickupMethod: DELIVERY_LABELS[it.opts.rentalMethod] ?? it.opts.rentalMethod,
                   returnMethod: DELIVERY_LABELS[it.opts.returnMethod] ?? it.opts.returnMethod,
-                  price: itemCardRate(line, it.durType) * Math.max(line?.qty ?? 1, 1),
+                  price: itemRentalFee(line, it) * Math.max(line?.qty ?? 1, 1),
                   options: (line?.options ?? []).map(o => ({ name: o.name, qty: o.qty })),
                 }
               })

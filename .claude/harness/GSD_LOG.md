@@ -6498,3 +6498,42 @@ Stephen 직접 실행 필요
   service_role=true) + RLS정책(is_cms_user()) + ref_id 컬럼타입(text) + 보안어드바이저
   (ERROR 0건, 대상객체 신규경고 0건) 확인 완료. git commit·앱코드 배포(Vercel)는 미실행 —
   DB적용과 앱배포는 별개(§9 사고 전례) 상태 그대로 Stephen 대기.
+
+[2026-09-01] 🔴CRITICAL | promote_draft_reservation production 누락 발견·복구 + anon 권한 회수 |
+  supabase/migrations/20260901140000_412_promote_draft_reservation_production_gap.sql,
+  supabase/migrations/20260901150000_413_promote_draft_reservation_anon_revoke.sql | — |
+  Stephen 질문("로컬은 재고경고 없는데 실서버는 왜?")을 계기로 pg_get_functiondef 직접 대조 —
+  promote_draft_reservation RPC가 production에 통째로 없음을 확인(Migration #179가 production
+  이력에 없고, #315가 2026-08-20에 제약만 재적용하며 STEP5 함수생성을 놓침). 장바구니
+  "예약신청" 클릭 시 RPC-not-found 에러를 cart/+page.svelte가 조용히 삼켜 fallback 문구
+  "해당 기간에 예약 가능한 재고가 없습니다"만 표시 — 상품·재고와 무관하게 100% 재현되던
+  구조적 결함. set_reservation_options도 status='hold'만 허용(draft 단계 옵션 무시) 동반 발견.
+  #412로 #179 STEP5·STEP6 동일 정의 재적용(stage→production, Stephen 매 단계 명시 승인).
+  적용 직후 anon이 두 함수 EXECUTE 권한을 갖고 있음을 추가 발견(REVOKE ALL FROM PUBLIC이
+  anon 별개 권한주체엔 무효 — Supabase 기본 ALTER DEFAULT PRIVILEGES 추정) → #413으로
+  anon EXECUTE 명시 회수(자동분류기 1차 차단 후 Stephen 재승인으로 production 적용). 방치된
+  draft 행 3건(id 86·87·88)은 미정리 상태로 남겨둠. TASK.md "🔴 실서버 전역 테스트" NOW
+  블록에 항목 9로 기록, sp3-qa-agent 검수 예정.
+
+[2026-09-01] 🔍QA검수 | 항목9(promote_draft_reservation production 복구) — sp3-qa-agent 검수 완료 |
+  supabase/migrations/20260901140000_412_*.sql, 20260901150000_413_*.sql | — |
+  ✅ GATE E 통과(CRITICAL/HIGH 0건). 함수본문 diff대조 Migration #179 STEP5·STEP6과 완전동일
+  확인(GRANT만 anon 제외로 강화, 문제아님). 재고매칭 동시성(FOR UPDATE SKIP LOCKED, 락순서)
+  create_hold_reservation과 동일패턴 확인, 데드락·이중제출 위험 없음. set_reservation_options
+  status확장이 새 침투경로 없음 확인. anon REVOKE는 Migration #260 pg_default_acl 조회이력과
+  일치하는 정당한 조치로 확인. MEDIUM 3건 발견: ①#413 근거서술 중 "#262가 이미 잠금대상"이라는
+  표현이 사실과 반대(실제론 #262 allowlist=anon 허용 예외였음, misidentifications.md 기록+
+  TASK.md 정정완료) ②promote_draft_reservation에 Migration #306의 is_anonymous 차단로직 누락
+  (현재 실익스플로잇 없음, 후속권고) ③cart/+page.svelte 192·198·1280·1296행에 이번과 동일
+  클래스(error 미확인) 결함 잔존 — 특히 1280행은 이번에 고친 promote_draft_reservation 호출부
+  자체라 RPC 재소실 시 동일 CRITICAL 재발 위험, 별도 태스크 권고(이번 세션 미착수). LOW: 방치된
+  draft 3건은 재고판정에 영향없음 확인(product_id가 부모id라 자식겹침판정 매칭안됨), 다만
+  cron 정리대상 아니라 누적가능성 있어 위생적 정리 권고. TASK.md 항목9 QA섹션 기록 완료.
+
+[2026-09-01] 🟢ROUTINE | cart/+page.svelte RPC error 무시 패턴 5곳 수정(QA MEDIUM 3번 반영) |
+  src/routes/cart/+page.svelte | — | Stephen 지시로 QA가 지목한 192·198·1280·1296행 +
+  동일 클래스로 함께 발견한 228행(Stephen 확인 후 포함) 총 5곳 수정. create_draft_reservation/
+  create_hold_reservation/promote_draft_reservation은 error 구조분해 추가해 RPC 자체 실패 시
+  error.message를 fallback 문구 앞에 노출(재고없음 등 무관한 문구로 원인이 가려지는 것 방지).
+  set_reservation_duration 2곳은 반환값 자체를 버리던 것을 error 확인 후 비차단 경고 토스트로
+  전환(결제 흐름은 막지 않음). svelte-check 신규 에러 0건. DB 변경 없음. git commit 미실행.
