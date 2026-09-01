@@ -12,7 +12,473 @@
 
 ---
 
-## DONE — 🔴 CMS 백오피스 정밀 검증 v5 — 17건 재검증 + 확장감사 + 배치수정 4건 (2026-09-01) — ✅ 완료
+## NOW — 🟡 배송료 우대설정(delivery_fee_discount_tiers) '대여상품' 조건 신설 + 금액기준 분리 — GATE B 대기 (2026-09-01)
+
+> ⚠️ **GATE B 승인 전까지 착수 금지.** 아래 "GATE B 열린 질문" Q1·Q2 확정 후 진행.
+> @promptor 호출 — DB 제약(2건 재정의) + RPC(1건 재정의) + 8개 코드 지점(서버 2·클라이언트
+> 3·타입정의 3) 동시 변경이 필요한 복수 목적 아젠다. **이번 호출은 플랜 작성만 — 코드·
+> 마이그레이션 작성 없음.**
+
+```
+[CONTEXT BRIDGE]
+plan_source: 이번 대화 세션 — Stephen이 CMS `/cms/set/rental` 배송료 우대설정 등록폼
+  스크린샷("200,000원 + 판매상품구매 미선택 + 무료")을 보여주며 "대여상품만 20만원 이상이면
+  무료배송"으로 동작하는지 검증 요청 → 조사 결과 조건 칩 최소 1개 선택이 UI+서버+DB 3중으로
+  강제돼 순수 금액조건 단독 티어 자체가 등록 불가함을 확인, 추가로 금액 임계값 비교기준이
+  "체크된 카트 전체(판매상품 포함) 합계"라 "대여상품만 20만원" 의도와도 괴리됨을 확인.
+  Stephen 확정: "① '대여상품' 콤보 버튼을 조건 칩에 추가 ② 금액기준도 대여상품만으로 분리"
+  — 전체 옵션 채택(부분 채택 아님). 근거 문서 없음 — 이 TASK.md 항목 자체가 plan_source.
+
+핵심제약:
+  - 신규 조건 값(가칭 `rental_item`)은 §조사결과 C의 기존 3중 화이트리스트 지점(클라이언트
+    TIER_CONDITION_OPTIONS/서버 VALID_CONDITION_TYPES/DB CHECK 제약/RPC 내부 검증) **전부**에
+    동시에 추가해야 한다 — 한 지점만 추가하면 나머지 지점에서 400/CHECK위반으로 저장이 막힌다
+    (기존 2개 값 `long_term_rental`·`sale_only_purchase`가 정확히 이 4중 구조로 보호되고
+    있음, §조사결과 A 참고).
+  - 기존 등록된 티어(장기대여 단독·판매상품구매 단독 등)의 `condition_types` 값은 그대로
+    유효해야 한다 — 화이트리스트는 **확장**만 하고 기존 2개 값을 제거·변경하지 않는다.
+  - `calcShippingDiscountRate()`(순수함수, `src/lib/utils/cartShippingFee.ts:95-117`)의 조건
+    판정 패턴(`items.some(...)`로 OR 판정 후 `conditionSatisfied` 맵에 채워 넣고, 조합 내
+    여러 조건은 `every`로 AND 결합 — §조사결과 B)을 그대로 따른다. "대여상품" 조건은
+    `items.some((it) => !it.saleOnlyPurchase)`로 구현(기존 스타일과 정합 — Q3, 이견 없음).
+  - **`otSubtotal`(`src/routes/cart/+page.svelte:653-659`) 자체의 계산식은 절대 변경 금지**
+    — 이 값은 배송료 우대설정 판정 외에도 4곳에서 재사용되는 카트 핵심 값이다: 662행(멤버십
+    할인 계산 기준) · 900행(쿠폰 퍼센트할인 기준) · 905행(`otNetBeforeVat`, 부가세 전 순액) ·
+    1136행("대여요금" 화면 표시) · 1361행(체크아웃 제출 payload의 `subtotal`). 금액기준 분리가
+    필요하면 **신규 파생값**(가칭 `otRentalOnlySubtotal`)을 별도로 추가해 배송료 우대설정
+    판정에만 투입한다 — `otSubtotal` 자체를 대여상품 전용으로 바꿔치기하지 않는다.
+  - `checkedDiscountItems`(`src/routes/cart/+page.svelte:696-704`)는 `otSubtotal`과 완전히
+    동일한 소스 필터(`!it.deleted && it.checked`)를 쓴다(§조사결과 D) — 신규 `rentalItem` 판별
+    필드(또는 `!saleOnlyPurchase` 재사용)를 추가할 때도 이 필터·소스를 그대로 유지한다(별도
+    쿼리·별도 필터 신설 금지).
+  - CMS `/cms/set/rental`의 `addDiscountTier`/`deleteDiscountTier` 액션은 세션 체크만 하고
+    `hasSettingsAccess` 등 role 게이트가 없다(RPC 내부 `is_cms_user()` 체크만 존재,
+    security-auth.md 매트릭스 "대여 설정 | /cms/set/rental | ✅ 세션만" 항목과 일치) — 이번
+    변경으로 이 권한 레벨을 임의로 강화·완화하지 않는다(요청 범위 밖).
+
+TDD도메인: 결제·금액계산 관련 태스크는 GATE C 강화: YES.
+  - TDD: `calcShippingDiscountRate()` 신규 조건 분기 추가(`cartShippingFee.ts`, 기존
+    `src/__tests__/services/cartShippingFee.test.ts` 31케이스 스위트 확장) · 신규 파생값
+    `otRentalOnlySubtotal` 계산·투입(Q2 확정 답변에 따라 구현 범위 결정) · DB CHECK 제약 재정의
+    ·  RPC(`upsert_delivery_fee_discount_tier`) 화이트리스트 재정의(둘 다 저장 자격=금액 게이팅
+    로직에 직결되므로 AGENTS.md TDD 강제 키워드(결제·금액) 대상으로 보수적 판정) — 전부 15분
+    단위 분해.
+  - GSD: `TIER_CONDITION_OPTIONS`/`TIER_CONDITION_LABELS` 칩 목록에 신규 값 추가(순수 UI
+    노출 확장, 계산 로직 무관) · 서버 액션 `VALID_CONDITION_TYPES` 배열 확장(단순 값 나열,
+    별도 판정 로직 없음) — 30분 단위. ⚠️ "모호하면 TDD 보수적 판정" 원칙에 따라 이 GSD 판정에
+    이견이 있으면 TDD로 상향할 것.
+
+절대금지:
+  - `otSubtotal`(§핵심제약)의 계산식·소비 지점(멤버십할인·쿠폰할인·부가세계산·화면표시·체크아웃
+    payload) 중 어느 하나도 이번 작업으로 값이 달라지지 않는다 — 신규 파생값 추가로만 해결한다.
+  - `condition_types <@ ARRAY[...]::text[]` 화이트리스트에서 기존 2개 값(`long_term_rental`·
+    `sale_only_purchase`)을 제거·이름변경하지 않는다.
+  - 기존 마이그레이션 파일(#382 CHECK 제약, #385 RPC)을 직접 수정하지 않는다(GP-10) — 신규
+    파일에서 `DROP CONSTRAINT ... ADD CONSTRAINT`(#382 자체가 이미 이 패턴으로 #381을
+    계승한 선례) 및 `CREATE OR REPLACE FUNCTION`(#385가 #375/#381을 계승한 선례와 동일 패턴)
+    으로만 처리한다.
+  - `upsert_delivery_fee_discount_tier` RPC의 시그니처(파라미터 4개: p_id/p_min_rental_amount/
+    p_condition_types/p_discount_rate)를 변경하지 않는다 — 화이트리스트 배열 값만 확장.
+  - Q2 답변이 확정되기 전까지 `calcShippingDiscountRate` 호출부(`cart/+page.svelte:705-711`)의
+    `otSubtotal` 인자를 임의로 다른 값으로 바꾸지 않는다 — (a)/(b) 중 어느 쪽인지에 따라
+    구현 형태가 근본적으로 다르다(§GATE B Q2).
+
+실패롤백:
+  - DB 마이그레이션 2건(CHECK 제약 재정의·RPC 재정의)은 각 파일 하단에 실행 가능한 롤백 SQL
+    주석을 포함한다(#385의 "ROLLBACK (수동 실행)" 주석 선례 그대로 재사용).
+  - 애플리케이션 코드 변경(칩 목록·서버 whitelist·`cartShippingFee.ts`·`cart/+page.svelte`)은
+    신규 마이그레이션이 필요 없는 범위라면 git revert만으로 즉시 롤백 가능.
+  - 착수 후 예상치 못한 스키마 변경이 추가로 필요하다고 판단되면 임의 진행 금지 — 즉시 Stephen
+    확인 후 신규 마이그레이션 파일로만 추가.
+```
+
+---
+
+### 조사결과 요약 (코드베이스 실측 — 파일:라인 확인 완료)
+
+```
+A. 조건 칩 4중 화이트리스트 구조 (신규 값 추가 시 전부 동시 수정 필요):
+   ① 클라이언트 칩 목록 — `src/routes/cms/set/rental/+page.svelte:166-169`
+      (`TIER_CONDITION_OPTIONS`) + `175-178`(`TIER_CONDITION_LABELS`, 라벨 딕셔너리 별도 유지)
+   ② 클라이언트 제출 게이트 — 같은 파일 632행: `tierConditions.length === 0`이면 즉시
+      `csToast.error('조건을 선택하세요.')` 후 `cancel()` — 조건 0개 조합(순수 금액조건) 자체가
+      원천 차단되는 지점.
+   ③ 서버 액션 화이트리스트 — `src/routes/cms/set/rental/+page.server.ts:519`
+      (`VALID_CONDITION_TYPES = ['long_term_rental', 'sale_only_purchase']`) +
+      `64-70`(`DeliveryFeeDiscountTier` 인터페이스 유니온 리터럴, `condition_types:
+      ('long_term_rental' | 'sale_only_purchase')[]`).
+   ④ DB — `delivery_fee_discount_tiers_condition_types_check` CHECK 제약(Migration #382,
+      `condition_types <@ ARRAY['long_term_rental','sale_only_purchase']::text[] AND
+      cardinality(condition_types) >= 1`) + `upsert_delivery_fee_discount_tier` RPC 내부
+      동일 화이트리스트 검증(Migration #385, `IF NOT (p_condition_types <@ ARRAY[...])`) —
+      RPC는 `is_cms_user()` 체크만 하고 role 게이트 없음(security-auth.md 매트릭스와 일치).
+
+B. `src/routes/cart/+page.server.ts:89-93` — `discountTiers` 타입 정의에도 동일 유니온
+   리터럴이 하드코딩(4번째 소비 지점, ③의 인터페이스와 별도로 관리됨 — 하나만 고치면 타입
+   불일치로 컴파일 에러 또는 조용한 타입 캐스팅 실패 위험).
+
+C. `src/lib/utils/cartShippingFee.ts` 계산 로직(현재 상태 실측):
+   - `DiscountConditionItem`(85-88행): `{ rentalDays: number; saleOnlyPurchase: boolean }` —
+     "일반 대여상품 여부"를 직접 나타내는 필드가 없음(`!saleOnlyPurchase`로만 유추 가능,
+     Q3에서 이 방식 채택 확정).
+   - `calcShippingDiscountRate()`(95-117행): `anyLongTerm`/`anySaleOnly`를 각각
+     `items.some(...)`(OR)로 구하고 `conditionSatisfied` 맵에 채운 뒤, 티어별
+     `condition_types.every((ct) => conditionSatisfied[ct])`(AND)로 결합 — 여러 조건을
+     선택한 조합은 "같은 항목일 필요 없이 각 조건이 카트 어딘가에서 최소 1개씩 만족되면 매칭"
+     방식(2026-08-29 Stephen 확정, 파일 헤더 주석 70-76행에 이미 문서화됨). 신규 "대여상품"
+     조건도 동일 패턴(`anyRentalItem = items.some((it) => !it.saleOnlyPurchase)`)으로
+     자연스럽게 추가 가능 — 함수 구조 자체를 바꿀 필요 없음.
+   - 임계값 비교(111행): `if (otSubtotal < tier.min_rental_amount) continue` — 파라미터
+     이름 그대로 카트 전체(체크된 항목) 합계 단일값이며, 티어별로 다른 금액 기준을 쓰는 구조가
+     아니다(§GATE B Q2가 이 지점의 구조적 확장 여부를 묻는 이유).
+
+D. `src/routes/cart/+page.svelte` 소스 필터 일치 확인:
+   - `otSubtotal`(653-659행)과 `checkedDiscountItems`(696-704행) 둘 다 정확히 동일한 필터
+     `!it.deleted && it.checked`를 사용 — 판매전용 상품도 그대로 포함된 채 두 값 모두 계산됨.
+   - `otShippingDiscountRate`(705-711행)가 `calcShippingDiscountRate(tiers, otSubtotal,
+     checkedDiscountItems)`를 호출하는 유일한 지점 — Q2 답변에 따라 이 호출의 두 번째 인자를
+     신규 파생값으로 교체(a) 하거나, 티어별 분기를 위해 함수 시그니처 자체를 재설계(b) 한다.
+
+E. `otSubtotal`의 다른 소비 지점(절대 변경 금지 대상, §핵심제약과 동일):
+   662행(멤버십 할인) · 900행(쿠폰 퍼센트할인) · 905행(`otNetBeforeVat`) · 1136행(대여요금
+   화면 표시) · 1361행(체크아웃 제출 payload `subtotal`).
+```
+
+---
+
+### GATE B 열린 질문 (Stephen 확정 필요 — 추측으로 진행 금지)
+
+```
+Q1. [신규 조건 값·라벨] 값 키(영문 slug)와 화면 라벨 문구를 확정해야 한다.
+    - 값 키 후보: `rental_item` (기본 제안 — `long_term_rental`/`sale_only_purchase`와
+      동일하게 스네이크케이스 명사형).
+    - 라벨 후보: 기존 두 라벨("3일이상 장기대여"·"판매상품 구매")은 전부 "행위·조건 서술형"
+      스타일인데, "대여상품"은 정적 명사라 스타일이 어긋날 수 있음. 대안: "일반 대여상품 포함"
+      (기본 제안) / "대여상품 구매"(판매상품 구매와 대구를 이루는 형태) / Stephen이 원하는
+      다른 문구.
+    → 값 키·라벨 문구 확정 필요.
+
+Q2. [금액기준 분리 범위] `calcShippingDiscountRate(tiers, otSubtotal, items)`는 현재 모든
+    티어에 대해 단일 `otSubtotal`(카트 전체 합계) 하나로만 비교한다(§조사결과 C). 금액기준
+    분리 구현 방식 2가지:
+      (a) **전면 교체** — 이 함수의 금액 비교 자체를 `otSubtotal` 대신 신규
+          `otRentalOnlySubtotal`(판매전용 제외, 체크된 대여상품만 합산)로 완전히 바꾼다.
+          `min_rental_amount`(컬럼명이 이미 "대여금액")라는 이름과 가장 일치하는 해석.
+          단, **이미 등록된 기존 티어(장기대여 단독·판매상품구매 단독 조합)의 금액판정 기준도
+          전부 "대여상품 금액만"으로 조용히 바뀐다** — 운영 중인 설정이 있다면 그 설정들의
+          실제 할인 발동 조건이 이번 변경으로 달라짐(예: 판매전용상품을 많이 담아 기존엔
+          임계값을 넘겼던 카트가 더 이상 넘기지 못하게 될 수 있음).
+      (b) **조건부 분리** — "대여상품" 조건이 `condition_types`에 포함된 티어만
+          `otRentalOnlySubtotal` 기준을 쓰고, 그 외(장기대여/판매상품구매 단독) 티어는 기존
+          `otSubtotal`(전체 합계)을 그대로 유지. 함수가 티어별로 다른 비교 기준을 쓸 수
+          있도록 시그니처(예: 티어마다 두 금액을 모두 전달하거나 항목별 사전계산)를 재설계해야
+          해서 (a)보다 구현 복잡도가 높음. 기존 등록 티어의 동작을 전혀 바꾸지 않는다는 장점.
+    → **반드시 Stephen이 (a)/(b) 중 선택** — promptor가 임의로 확정하지 않음(파급력이 큰
+    운영 데이터 영향 판단이 필요한 지점).
+
+Q3. [`saleOnlyPurchase` 반전 방식] `!saleOnlyPurchase`(§조사결과 C)로 "대여상품" 조건을
+    구현하는 데 이견 없음 — 확정, 질문 불필요.
+```
+
+---
+
+### 엣지케이스 (최소 3개, TDD 도메인 필수)
+
+```
+EC-1: 기존 "3일이상 장기대여" 단독조건 티어가 등록된 상태에서, 카트에 판매전용상품(고액)+
+      대여상품(소액, 3일 이상 대여)이 함께 체크됨. 판매전용상품 금액을 포함해야만 임계값을
+      넘는 조합.
+      → 예상 동작(Q2=a 선택 시): 대여상품 금액만으로 비교하므로 임계값 미충족 시 할인
+        미적용(기존 대비 회귀 — Q2 질문의 핵심 리스크, 반드시 사전 인지 후 승인 필요).
+      → 예상 동작(Q2=b 선택 시): 이 티어는 "대여상품" 조건이 없으므로 기존과 동일하게
+        `otSubtotal`(전체 합계) 기준 그대로 판정 — 회귀 없음.
+
+EC-2: 신규 "대여상품" 조건과 기존 "판매상품 구매" 조건을 동시에 선택한 조합 티어 등록.
+      → 예상 동작: 기존 AND 결합 규칙(§조사결과 C) 그대로 — 체크된 항목 중 대여상품 1개
+        이상 AND 판매전용상품 1개 이상이 각각 존재해야 매칭(같은 항목일 필요 없음). 임계값
+        비교는 Q2 확정 답변에 따른 기준(otSubtotal 또는 otRentalOnlySubtotal) 적용.
+
+EC-3: 카트에 체크된 항목이 전부 판매전용상품뿐(대여상품 0개)인 경우.
+      → 예상 동작: `anyRentalItem = items.some((it) => !it.saleOnlyPurchase)`가 false →
+        "대여상품" 조건을 포함하는 모든 티어는 매칭 실패(discount 0), "판매상품 구매" 단독
+        조건 티어는 기존과 동일하게 매칭 가능.
+
+EC-4: 카트가 비어있음(`items.length === 0`, 예: 전부 삭제/체크해제).
+      → 예상 동작: 기존 가드(`calcShippingDiscountRate` 100행 `if (!tiers.length ||
+        items.length === 0) return 0`) 그대로 유지 — 신규 조건 추가로 이 가드를 우회하지
+        않는다.
+```
+
+**리스크 점수**: 🟠 중간 — 결제 최종금액에 직결되는 배송료 할인율 계산 로직 변경이지만, 순수
+함수(TDD 커버 용이) + 기존 계산 패턴(OR/AND 결합) 재사용 + 신규 마이그레이션도 기존 #382/#385
+계승 패턴 그대로라 구조적 리스크는 낮음. 유일한 🔴 급 리스크는 Q2(a) 선택 시 기존 운영 중인
+티어의 할인 발동 조건이 조용히 바뀔 수 있다는 점 — GATE B에서 반드시 확정 필요.
+
+---
+
+### 구현 범위 확정 (Q1·Q2 확정 후 착수 — 현재는 계획만)
+
+```
+포함 (Q1·Q2 확정 시 착수):
+- TIER_CONDITION_OPTIONS/TIER_CONDITION_LABELS 신규 값 추가 (GSD)
+- 서버 액션 VALID_CONDITION_TYPES + DeliveryFeeDiscountTier 인터페이스 + cart/+page.server.ts
+  유니온 리터럴 동기화 (GSD)
+- DB 마이그레이션 A — CHECK 제약 재정의(#382 계승, DROP+ADD CONSTRAINT) (TDD)
+- DB 마이그레이션 B — upsert_delivery_fee_discount_tier RPC 화이트리스트 재정의(#385 계승,
+  CREATE OR REPLACE) (TDD)
+- calcShippingDiscountRate() "대여상품" 조건 분기 추가 + DiscountConditionItem 필드 정리 (TDD)
+- Q2 확정 답변에 따른 금액기준 분리 구현 — (a) otRentalOnlySubtotal 신규 파생값 전면교체
+  또는 (b) 티어별 분기 재설계 (TDD)
+- cartShippingFee.test.ts 스위트 확장(신규 조건·EC-1~4 케이스) (TDD)
+
+제외 → BACKLOG:
+- 배송료 우대설정 등록화면의 role 게이트 강화(manager 이상 등) — 요청 범위 밖, security-
+  auth.md 기존 매트릭스("세션만") 유지가 원칙, 별도 지시 없으면 손대지 않음.
+- Q2(b) 선택 시 필요한 "티어별 금액기준 분기" 일반화 설계는 이번 스코프를 넘어서는 리팩터가
+  필요하면 별도 서브태스크로 분리 검토(GATE B 승인 후 재판단).
+
+미확인 — Stephen 결정 필요 (Default: BACKLOG 보류):
+- Q1(값 키·라벨), Q2(금액기준 분리 범위 a/b) — 위 "GATE B 열린 질문" 참고. 확정 전 착수 금지.
+
+GATE C 확인 항목 (착수 시):
+- [ ] 신규 조건 값이 4개 지점(클라이언트 칩·서버 whitelist·DB CHECK·RPC whitelist) 전부에
+      동시 반영됐는가?
+- [ ] 기존 2개 조건 값(`long_term_rental`/`sale_only_purchase`)이 그대로 유효한가? (회귀 없음)
+- [ ] `otSubtotal` 계산식과 5개 소비 지점(662/900/905/1136/1361행)이 이번 변경으로 값이
+      달라지지 않았는가?
+- [ ] EC-1~4가 전부 테스트로 커버됐는가?
+- [ ] Q2=a 선택 시 — 기존 운영 티어(있다면)의 할인 발동 조건 변경이 Stephen에게 사전 고지됐는가?
+- [ ] 신규 마이그레이션 2건이 기존 파일(#382·#385)을 직접 수정하지 않고 신규 파일로만
+      추가됐는가? (GP-10)
+
+예상: GSD 2개×30분 + TDD 5개×15분(× Q2 분기에 따라 세부 개수 변동 가능) ≈ 총 2.5~3.5시간
+```
+
+---
+
+## NOW — 🔴 실서버 전역 테스트(CMS+사용자 화면) — 후속 발견·수정 3건 + 미해결 조사 5건 (2026-09-01)
+
+배경: 위 "CMS 백오피스 정밀 검증 v5" 배치가 Stephen에 의해 커밋·배포된 이후(commit c835c35 등),
+Stephen 지시로 실서버(crazyshot-svelte.vercel.app) CMS·사용자 화면 전역 핸즈온 테스트를 이어서
+진행. 로그인 필요한 CMS는 Chrome 확장 미연결로 보류, 사용자 화면(공개영역) 위주로 진행하다가
+Stephen이 직접 장바구니·상품상세를 조작하며 실사용 버그를 다수 리포트.
+
+### ✅ 수정 완료 (로컬, git 커밋 미실행 — Stephen 대기)
+
+1. **검색결과 가격 0원/누락(CRITICAL)** — `/products/search` API 응답에 `price_min:0` 또는
+   필드 자체 누락. 원인: `search_products` RPC가 Migration #80에서 "price_rules로 대체된
+   레거시 컬럼, DEFAULT 0"으로 이미 문서화된 죽은 컬럼(`base_price_daily`)을 그대로 참조.
+   수정: `supabase/migrations/20260901130000_411_search_products_price_rules_fix.sql`
+   (price_rules 24h 기준 계산으로 교체, legacy 컬럼>0이면 우선), `src/lib/server/
+   getPriceMinForProducts.ts` 신설(MiniSearch 자연어 폴백 결과 가격 배치보강),
+   `src/routes/api/search/products/+server.ts` 반영. **stage+production 양쪽 DB 적용·검증
+   완료**(실가격 반환 확인) — 단 DB엔 원래 이름 `410_search_products_price_rules_fix`로
+   적용돼 있고, 로컬 파일만 번호충돌 회피로 `411`로 재번호(아래 "번호충돌" 항목 참고).
+   신규 테스트: `getPriceMinForProducts.test.ts`(3케이스 GREEN). 이 RPC를 직접 호출하는
+   CMS 상품 큐레이션 모달 3곳(HomeThemeGroupModal 등)도 동일 버그를 겪고 있었으므로 함께 해소.
+
+2. **장바구니 대여기간·요금 계산 오류(CRITICAL)** — Stephen 리포트: "당일 1일 선택하면 대여 안
+   되다가 1박2일로 해야 됨", "방문/퀵 12h·Day+12h 요금 미반영", "당일 12h 이내여도 12h요금
+   자동계산 안 됨". 원인: 클라이언트 미리보기 계산(`rentalDays()`)이 당일대여(start===end)
+   에서 `Math.ceil(0/86400000)`=0을 반환해 "날짜 미선택"으로 오인·게이팅되고, 별도로
+   `itemCardRate()`는 다일 대여 시 일수를 전혀 곱하지 않는 단일요율 근사값이라 실제 결제
+   정본(`calculate_cart_total` RPC, migration 179)과 산식 자체가 달랐음. 수정:
+   `src/lib/utils/cartRentalFee.ts` 신설(`calcRentalDays`/`calcRentalFee`가
+   calculate_cart_total과 정확히 동일 산식 재현 — 당일 12h/24h 분기, 다일 일수×24h+잔여
+   12h가산), `src/routes/cart/+page.svelte` 두 사용처(`otSubtotal`, 신청완료 요약) 전부
+   교체. TDD 13케이스 GREEN(정확히 12시간 경계값·역전시각·Day+12h 조합 포함).
+   **DB 마이그레이션 없음(순수 클라이언트 로직) — 배포는 git 커밋만 있으면 됨.**
+
+3. **iOS/Chrome PWA meta 태그 deprecated 경고** — Chrome이 `apple-mobile-web-app-capable`만
+   있고 표준 `mobile-web-app-capable`이 없다고 경고. `src/app.html`에 표준 태그 추가(iOS 대응
+   기존 태그는 유지, 병기).
+
+### ⬜ 발견했지만 미해결 — Stephen 의사결정 대기
+
+4. **ProductDPCard.svelte 카테고리 라벨 미번역** — 상품카드에 "accessorie"/"camera"/"actcam"/
+   "dronegim" 등 원시 category enum 값이 그대로 노출(`ProductDPCard.svelte:77`
+   `<p class="pc-category">{category}</p>`, 매핑 유틸 `productCategoryTaxonomy.ts` 미사용).
+   `/products` 목록·검색결과·홈 큐레이션 등 이 컴포넌트를 쓰는 모든 화면에 영향. 아직 미수정.
+
+5. **`/products` 메인그리드 CMS "정렬(views)" 설정이 실제로는 미연동** — CMS
+   `product_page_grid` 설정값 `{"sort":"views","count":16}`인데 `search_products` RPC에
+   sort 파라미터 자체가 없어 항상 `created_at DESC`(최신순)로만 동작 — 실측: RPC 반환 16개가
+   `ORDER BY created_at DESC LIMIT 16`과 완전히 일치. 활성상품 44개 중 16개만 노출되고 어느
+   16개가 뜨는지는 순수 최신등록순(관리자가 고른 "인기순" 의도와 무관). Stephen에게 방향 확인
+   요청(①views 실연동 구현 vs ②우선 count 캡만 완화) — 회신 대기.
+
+6. **반납배송 제한 CMS 옵션(`restrict_return_delivery`)이 원래 의도와 다르게 구현됨** —
+   Stephen 원 요청("방문대여 선택 시 반납에서 배송대여 불가능해야")과 달리, 현재 코드는 이
+   토글이 ON이면 수령·반납 **양쪽 모두**에서 배송방식을 제거(2026-08-28 UI충돌 회피 타협,
+   `cart/+page.svelte:796-809` 주석 참고). 현재 production은 토글 OFF라 아무 제한도 없는
+   상태. "수령=방문일 때만 반납 배송탭 제외"로 정밀 구현할지 결정 대기 — 회신 대기
+   (구현 방향은 이미 코드로 설계해 제안해둠, `cart/+page.svelte` `otVisibleTabs`/
+   `RentalForm` 스니펫의 leg-aware 조건분기로 전환 필요).
+
+7. **크레이지배송 당일예약 "재고가 없습니다"** — ✅ **근본원인 특정·수정 완료(아래 항목 9로 이관)**.
+   당초 재고매칭 SQL 재실행으로는 "쿼리 자체는 정상"까지만 확인했으나, 이는 증상의 일부만
+   본 것이었음 — 실제로는 `promote_draft_reservation` RPC 자체가 production에 없어서 재고
+   여부와 무관하게 이 메시지가 매번 뜨는 구조적 결함이었다(항목 9 참고). 이 항목은 그 상위
+   결함의 한 사례였던 것으로 판명.
+
+8. **상품상세 진입 시 콘솔 `reportAllChanges`/`VM####` + `{status:403}` 에러** — Stephen이
+   확장 삭제 후에도 재현 보고. 조사 결과 `handleError`/`app.CQmak6js.js` 등 실제 앱 번들에서
+   발생 확인(확장 아님, 앞선 판단 정정). 쿠키에서 세션 계정이 `mublues@gmail.com`(공용 QA
+   테스트계정)임을 확인 — 이 세션이 이전에 같은 계정으로 CMS 접속 시 "세션 제한으로 자동
+   로그아웃"을 직접 겪은 바 있어, **여러 곳에서 동시 로그인된 공용 계정의 Supabase refresh
+   token 회전 충돌**로 추정(코드 버그 아닐 가능성 높음, 로그아웃 후 재로그인으로 재현되는지
+   Stephen 검증 요청 중 — 회신 대기).
+
+### ✅ 후속 수정 완료 — 장바구니 예약신청 전면 실패(CRITICAL) (2026-09-01, 같은 세션 후속)
+
+9. **`promote_draft_reservation` RPC가 production에 통째로 없어서 장바구니 "예약신청"이
+   상품·기간과 무관하게 매번 "해당 기간에 예약 가능한 재고가 없습니다"로 실패** — Stephen이
+   "로컬(stage)에서는 재고 경고가 없는데 실서버는 왜 그렇지?"라고 재질문한 것을 계기로
+   `pg_get_functiondef`로 stage/production을 직접 대조해 발견.
+   - **근본원인**: Migration #179(`20260731000179_179_draft_reservation_no_date.sql`, 날짜
+     미정 임시예약 기능)가 stage엔 원본 그대로 있으나 production 마이그레이션 이력에는 애초에
+     없었음. 2026-08-20 Migration #315가 "179가 production에 부분 적용된 상태"를 발견하고
+     STEP1(nullable)·STEP3(EXCLUDE 제약 draft 제외)만 재적용했는데, 그 조사가 제약(constraint)
+     에만 그치고 STEP5(`promote_draft_reservation` 함수 생성) 확인을 놓쳐 계속 누락 상태로 남음.
+     (STEP4 `create_draft_reservation`·STEP2 status CHECK는 그 이전에 이미 어떤 경로로든
+     production에 반영돼 있었음 — 정확한 유입 경위는 마이그레이션 이력에 남아있지 않아 특정
+     불가, STEP5만 홀로 빠져있었음.)
+   - **실패 메커니즘**: RPC 자체가 없어 PostgREST가 에러 반환 → `cart/+page.svelte`가
+     `const { data: promoteRows } = await supabase.rpc(...)`로 `error`를 구조분해 없이 버림 →
+     `promoteRow = promoteRows?.[0]`가 undefined → `csToast.error(promoteRow?.error_message ??
+     '해당 기간에 예약 가능한 재고가 없습니다.')`의 fallback 문구가 항상 표시됨. 실제 재고와
+     무관 — 어떤 상품·어떤 날짜여도 100% 재현되는 이유가 이것. 방치된 `draft` 상태 행 3건
+     (id 86·87·88, `start_date`/`end_date` NULL, 2026-09-01 생성)이 직접 증거로 남아있었음.
+   - **부수 발견**: `set_reservation_options`도 production에서 `status = 'hold'`만 허용(#179
+     STEP6 미반영) — draft 단계(promote 이전)에서 옵션을 담아도 조용히 무시되는 2차 결함이
+     동반돼 있었음. `calculate_cart_total`은 production이 이미 더 발전한 버전(
+     `compute_reservation_line_amount` 위임)으로 대체돼 있고 `start_date/end_date IS NOT NULL`
+     조건으로 draft 행을 이미 안전하게 걸러내고 있어 — 손대지 않음.
+   - **수정**: `supabase/migrations/20260901140000_412_promote_draft_reservation_production_gap.sql`
+     (#179 STEP5·STEP6과 완전히 동일한 함수 정의 재적용, 내용 변경 없음) — Stephen 명시적
+     승인 후 stage·production 양쪽 적용 완료.
+   - **후속 보안 강화**: #412 적용 직후 grants를 직접 조회해보니 두 함수 모두 `anon` 역할에
+     EXECUTE 권한이 남아있음을 발견(`REVOKE ALL FROM PUBLIC`은 PUBLIC 의사역할에만 적용되고
+     `anon`은 별개 권한주체라 영향 없음 — Supabase 프로젝트의 `ALTER DEFAULT PRIVILEGES`가
+     신규 함수에 anon EXECUTE를 기본 부여하는 것으로 추정, 정확한 유입 경위는 특정 불가 —
+     이 "추정"은 sp3-qa-agent가 Migration #260 `pg_default_acl` 직접 조회 이력으로 이미
+     검증된 프로젝트 전역 패턴임을 재확인함, 아래 QA 검수 결과 참고).
+     `supabase/migrations/20260901150000_413_promote_draft_reservation_anon_revoke.sql`로
+     anon EXECUTE 명시적 회수(내부 `auth.uid() IS NULL` 체크가 있어 실질 악용 경로는 아니었으나
+     프로젝트 컨벤션에 맞춰 방어적으로 잠금). Stephen 명시적 승인 후 stage·production 양쪽
+     적용 완료, grants 재조회로 `anon` 빠지고 `authenticated`/`service_role`/`postgres`만
+     남은 것 확인.
+     ⚠️ **오인 정정(QA 검수로 발견)**: 위 근거 서술에서 "두 함수 모두 Migration #262
+     (`global_anon_rpc_lockdown`)의 명시적 잠금 대상 목록에 이미 있던 함수"라고 썼던 것은
+     **사실과 반대** — 실제로 #262의 allowlist(카테고리 ③ "비로그인 게스트 세션이 호출하는
+     예약 생성 화면")에는 이 두 함수가 **잠금 예외(anon 접근 의도적 허용)**로 등재돼 있었다.
+     즉 #262 작성 시점(2026-08-15)엔 anon 접근이 오히려 설계 의도였고, 이후 Migration #306
+     (2026-08-19, 회원전용 예약 정책)이 `create_hold_reservation`/`create_draft_reservation`
+     에만 `is_anonymous` 익명세션 차단을 추가했을 뿐 이 두 함수는 그 패치 범위에서 누락됐다.
+     #413의 REVOKE 결론 자체는 현재 정책(#306 이후 회원전용)과 일치해 옳으나, 그 근거로 든
+     "#262가 이미 잠금 대상이었다"는 서술이 틀렸던 것 — `misidentifications.md` 기록함.
+   - **DB 적용 상태**: Migration #412·#413 전부 stage(ezyvffjvuwmtuhpxdjrw)·
+     production(vnbpmvxruyciuuaermyh) 양쪽 적용 완료(2026-09-01, Stephen 매 단계 명시적 확인
+     후 진행 — production 함수 생성은 CRITICAL 게이트 질문으로, anon REVOKE는 자동분류기
+     1차 차단 후 Stephen 재확인으로 각각 승인받음).
+   - **미해결**: 방치됐던 draft 행 3건(id 86·87·88)은 자동 정리하지 않음 — 고객이 재시도하면
+     정상 처리되거나, 필요 시 Stephen 요청으로 별도 정리 가능.
+
+### ✅ QA 검수 완료 (2026-09-01, sp3-qa-agent, 항목 9 대상) — GATE E 통과
+
+- **CRITICAL/HIGH**: 0건.
+- 함수 본문(#412) diff 대조 결과 Migration #179 STEP5·STEP6과 완전히 동일(로직 무변경) —
+  단 `promote_draft_reservation`의 GRANT는 원본(`anon, authenticated`)과 다르게 `authenticated`
+  만 부여(완화가 아닌 강화 방향, #412 자체 주석에 명시돼 있어 문제 아님).
+- 재고매칭(`FOR UPDATE SKIP LOCKED`, daterange 겹침판정)이 `create_hold_reservation`과 완전히
+  동일 패턴, draft 행 자기잠금까지 락 순서 일관(데드락 위험 없음), 이중제출도 안전하게 실패.
+- `set_reservation_options`의 `status IN ('draft','hold')` 확장 — 조건 밖 상태(confirmed 등)는
+  조용히 no-op, 소유권 검증 유지 — 새로운 침투경로 없음.
+- anon REVOKE(#413) 필요성 — Migration #260의 `pg_default_acl` 조회 이력으로 이미 검증된
+  프로젝트 전역 패턴(신규/재생성 함수에 anon EXECUTE 자동 부여)과 일치, 정당한 방어조치.
+  실 호출부(`cart/+page.svelte`, `products/[id]/+page.svelte`)는 전부 `authenticated` role
+  세션 경유(`signInAnonymously()`도 postgres role은 authenticated)라 회귀 위험 없음.
+- **MEDIUM 3건(비블로킹, 후속조치 권고)**:
+  1. #262 근거 서술 오류 — 위에서 정정 완료.
+  2. `promote_draft_reservation`에 Migration #306의 `is_anonymous` 익명세션 차단 로직이
+     누락 — 현재는 draft 생성 자체가 회원전용이라 실익스플로잇 경로 없음, 다만 이번에 함수를
+     새로 재도입하는 시점이니 일관성을 위해 후속 마이그레이션으로 동일 체크 추가 권고.
+  3. `src/routes/cart/+page.svelte`에 이번 결함과 동일 클래스(`error` 미구조분해 →
+     RPC 실패가 엉뚱한 fallback 문구로 둔갑)가 4곳 더 존재: 192·198행(`create_draft_reservation`/
+     `create_hold_reservation`), **1280행(`promote_draft_reservation` — 바로 이번에 고친 그
+     호출부, 향후 RPC가 다시 사라지면 동일 CRITICAL 재발 위험)**, 1296행(`set_reservation_duration`,
+     error·data 둘 다 버림 — 저장 실패가 완전 무음 처리). 726·753행은 2026-08-28 QA로 이미
+     동일 클래스가 수정된 선례가 있어 나머지 4곳도 동일하게 고칠 것을 별도 태스크로 권고
+     (이번 세션 스코프는 DB 복구뿐이라 미착수).
+- **LOW**: 방치된 draft 3건은 재고·가용성 판정에 영향 없음 확인(product_id가 부모 id라
+  자식 겹침판정에 매칭 자체가 안 됨) — `hold_expiration_cleanup` cron이 draft를 정리 대상으로
+  삼지 않아 향후에도 계속 누적될 수 있어(체크아웃 중단 시마다) 위생적 정리 정책 권고(CRITICAL
+  아님). Production 직접 재검증은 QA agent 로컬 환경(Stage 전용 `.env.local`) 한계로 불가 —
+  이 세션이 Supabase MCP로 이미 production 직접 검증 완료(항목 9 본문 참고)와 상호보완.
+
+**결론**: 블로킹 이슈 0건, DB 마이그레이션(#412·#413) 자체는 GATE E 통과. 위 MEDIUM 3건은
+후속 태스크로 등록해 별도 처리 권장. git commit은 Stephen 직접 실행.
+
+### ✅ 후속 수정 완료 — MEDIUM 3번(cart/+page.svelte RPC error 무시 패턴) 즉시 반영 (2026-09-01, 같은 세션)
+
+Stephen 지시로 위 QA MEDIUM 3번을 즉시 반영. 원래 지목된 4곳(192·198·1280·1296행) + 동일
+클래스로 이번에 함께 발견한 5번째(228행, `incrementGroupQty` 내부 `set_reservation_duration`
+호출 — QA 리포트엔 없었으나 1296행과 완전히 동일한 미확인 패턴이라 Stephen에게 별도 확인 후
+포함) 총 5곳 전부 수정:
+
+- **192·198행**(`create_draft_reservation`/`create_hold_reservation`): `error`를 추가
+  구조분해해 RPC 자체 실패 시 `error?.message`를 `errorMessage`에 담도록 수정(기존엔 `data`만
+  보고 `error`를 완전히 버렸음). 타입도 `error: unknown` → `error: { message?: string } | null`로
+  명시.
+- **1280행**(`promote_draft_reservation` — 오늘 production에 복구한 바로 그 RPC): 동일 패턴으로
+  `error: promoteError`를 추가 확인, `promoteError?.message`를 fallback 문구 앞에 추가해
+  향후 RPC가 다시 사라져도 진짜 원인이 가려지지 않도록 방어.
+- **228·1296행**(`set_reservation_duration`, 서로 다른 두 호출부): 기존엔 반환값 자체를 아예
+  버렸음(`await` 결과 미할당) — `error`를 확인해 실패 시 비차단 경고 토스트("대여기간유형
+  저장에 실패했습니다. CMS에 문의해주세요.") 표시. 결제·재고 확정을 막는 치명적 오류는 아니므로
+  `return`으로 흐름을 끊지는 않음(경고만).
+
+svelte-check 재실행으로 신규 에러/경고 0건 확인(기존 a11y·CSS 경고만 잔존, 무관). DB 변경
+없음(순수 클라이언트 로직). git commit은 Stephen 직접 실행.
+
+### ⚠️ 번호충돌·오인 정정
+
+- 이 세션이 작성한 검색가격 마이그레이션을 로컬에서 `#410`으로 작성했으나, Stephen이 병렬로
+  커밋한 `20260901120000_410_get_customer_list_classification_case_fix.sql`(Migration #409의
+  `membership_grade` 소문자 비교 버그를 대문자로 정정)과 번호 충돌 발견 → 로컬 파일만
+  `#411`로 재번호(DB엔 이미 `410_search_products_price_rules_fix` 이름으로 적용 완료,
+  재적용 안 함— 항목 1 참고).
+- **오인 정정**: 이 세션이 앞서 작성한 Migration #409의 `membership_grade IS DISTINCT FROM
+  'none'`(소문자)은 실제로는 버그였음(실 DB는 전부 대문자 `'NONE'`, Migration #98 CHECK
+  제약) — Stephen이 Migration #410으로 이미 정정 완료. 이 세션은 그 정정을 오히려
+  "버그처럼 보인다"고 재지적하는 2차 오인을 범함 — `misidentifications.md` 기록 완료.
+  **재수정 불필요**(Stephen 정정이 이미 맞음).
+
+### ✅ QA 검수 완료 (2026-09-01, sp3-qa-agent) — GATE E 통과
+
+위 1~3 항목(로컬 미커밋 수정) 검수 결과:
+- 대상 테스트 47/47 GREEN(cartRentalFee 13 + getPriceMinForProducts 3 + cartShippingFee 31),
+  svelte-check 신규 에러·경고 0건, `calcRentalFee` 산식이 `calculate_cart_total` RPC(migration
+  179)와 라인단위 1:1 대조 완전 일치(분(min) 버리고 시(hour)만 비교하는 특이규칙까지 정확 재현),
+  `itemCardRate(` 호출부 전수 교체 확인, 가격 merge 로직(`??`)이 RPC 정상값(0원 포함)을
+  덮어쓰지 않음 확인.
+- 전체 스위트 1230개 중 4건 실패는 이번 diff와 무관(`paymentContractOrderRedesign.test.ts`
+  타임아웃 플레이키, `memberCodeCombo.test.ts` pre-existing 실패 — 둘 다 변경 파일 목록 밖).
+- **MEDIUM(비블로킹) 1건**: `price_rules` 조회 시 `deleted_at IS NULL`/`is_active=true` 필터
+  누락(마이그레이션 서브쿼리 + `getPriceMinForProducts.ts` 양쪽) — `products/+page.server.ts`가
+  이미 쓰는 정본 패턴과 다름. Stage 실측으로는 현재 영향 사례 0건(소프트삭제된 24h 가격
+  잔존 상품 없음)이라 커밋 블로킹 아님 — 후속 마이그레이션에서 방어적 보강 권장.
+- LOW 2건(cart/+page.svelte:1462 stale 주석, production DB 직접 재검증은 QA agent 로컬
+  자격정보로 불가) — QA agent는 `.env.local`이 Stage(ezyvffjvuwmtuhpxdjrw)에만 연결돼
+  Production 직접 재검증을 못했다고 보고했으나, **이 세션은 별도로 Supabase MCP를 통해
+  Production(vnbpmvxruyciuuaermyh)에 직접 execute_sql로 실가격 반환을 이미 확인함**(항목 1
+  본문 참고) — 두 경로가 상호보완적으로 확인된 것으로 판단, 추가 조치 불필요.
+
+**결론**: 블로킹 이슈 0건, git 커밋 진행 가능. 커밋은 Stephen 직접 실행.
+
+---
+
+## DONE — 🔴 CMS 백오피스 정밀 검증 v5 — 17건 재검증 + 배치수정 4건 (2026-09-01) — ✅ 완료
 
 플랜: `/Users/stevenmac/.claude/plans/clever-conjuring-fiddle.md`. 종합 결과 문서:
 `.claude/harness/learnings/cms_global_verification_v5_synthesis_2026-08-31.md`(A~F절, 이 세션

@@ -18,6 +18,9 @@
 		<link rel="icon" type="image/png" sizes="16x16" href="/app-icons/icon-16.png" />
 		<link rel="apple-touch-icon" href="/app-icons/icon-180.png" />
 		<meta name="theme-color" content="#271B7A" />
+		<!-- iOS Safari는 apple- 접두 태그만 인식(표준 태그 무시) — 둘 다 유지.
+		     Chrome은 apple- 접두 태그를 deprecated로 표시하며 표준 태그를 요구(2026-09-01). -->
+		<meta name="mobile-web-app-capable" content="yes" />
 		<meta name="apple-mobile-web-app-capable" content="yes" />
 		<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
 		<meta name="apple-mobile-web-app-title" content="크레이지샷" />
