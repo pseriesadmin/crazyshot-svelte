@@ -117,9 +117,16 @@ export const POST: RequestHandler = async ({ params, request, getClientAddress }
       // 재시도해서는 영원히 hold에 갇힌다 — try_confirm_reservation_order로 같은 주문
       // 전체를 함께 재시도한다(단일 예약 주문이면 자기 자신만 처리해 무회귀).
       if (currentReservation?.status === 'hold') {
-        const { data: justConfirmedIds } = await admin.rpc('try_confirm_reservation_order', {
+        const { data: justConfirmedIds, error: confirmOrderErr } = await admin.rpc('try_confirm_reservation_order', {
           p_reservation_id: contract.reservation_id,
         })
+        if (confirmOrderErr) {
+          // 서명 자체는 위에서 이미 정상 저장됨(signed_at) — 이 RPC 실패는 confirmed 자동전환
+          // 시도가 조용히 안 됐다는 뜻이라, 로그로 남겨야 나중에 "결제+서명 다 됐는데 왜
+          // hold에 머물러 있나"를 추적할 수 있다(try_confirm_reservation_order는 멱등이라
+          // 이후 다른 트리거로 재시도돼도 안전).
+          console.error('[contracts/sign] try_confirm_reservation_order 실패:', confirmOrderErr.message, { reservationId: contract.reservation_id })
+        }
         if (((justConfirmedIds ?? []) as number[]).length > 0) {
           // 채팅 알림 + 고객 푸시 — 공용 헬퍼로 통합 (NTF-C2/NTF-C3 수정, 2026-08-31)
           // mode='hold' 시 채팅·푸시 둘 다 보류. 기존에는 채팅만 있고 reservation_approval
@@ -167,10 +174,13 @@ export const POST: RequestHandler = async ({ params, request, getClientAddress }
         // 이벤트의 reservation_approval(위 RPC 경유, 정상)과 contract_signed(이 블록,
         // 비정상) 두 알림이 서로 다른 세션으로 쪼개지는 문제가 있었다(2026-08-18 실화면
         // 검증으로 재현·확인).
-        const { data: chatSessionId } = await admin.rpc('find_or_create_general_chat_session', {
+        const { data: chatSessionId, error: signChatErr } = await admin.rpc('find_or_create_general_chat_session', {
           p_user_id:        signing.user_id,
           p_reservation_id: contract.reservation_id,
         })
+        if (signChatErr) {
+          console.error('[contracts/sign] find_or_create_general_chat_session 실패(fail-soft):', signChatErr.message)
+        }
 
         if (chatSessionId) {
           const content = fullName

@@ -9,7 +9,7 @@
   import { supabase } from '$lib/services/supabase';
   import { csToast } from '$lib/utils/toast';
   import { isLockerHour } from '$lib/utils/lockerTimeRange';
-  import { calcShippingFee, calcShippingDiscountRate, type ShippingFeeItem, type DeliveryFeeDiscountTier, type DiscountConditionItem } from '$lib/utils/cartShippingFee';
+  import { calcShippingFee, calcShippingDiscountRate, isFreeDeliveryCouponBlocked, type ShippingFeeItem, type DeliveryFeeDiscountTier, type DiscountConditionItem } from '$lib/utils/cartShippingFee';
   import { calcRentalDays, calcRentalFee } from '$lib/utils/cartRentalFee';
   import {
     createMultiUnitReservation,
@@ -471,8 +471,8 @@
 
   // ── 서버 데이터 추출 (PageData는 +page.ts 기준이므로 server 필드는 캐스트 필요)
   // datesSet 등 canProceed 조건이 라인아이템 목록을 참조하므로 Footer 섹션보다 앞에 선언
-  type ProductRow = { id: string; name: string; category: string; brand: string | null; slug: string; image_urls: string[]; is_active: boolean; shipping_round_trip?: boolean | null; shipping_delivery?: boolean | null; shipping_return?: boolean | null; sale_only?: boolean | null }
-  type UserCouponExt = { id: string; coupon_id: string; coupons: { id: string; code: string; discount_type: string; discount_value: number; description: string | null; valid_until: string } | null }
+  type ProductRow = { id: string; name: string; category: string; brand: string | null; slug: string; image_urls: string[]; is_active: boolean; shipping_round_trip?: boolean | null; shipping_delivery?: boolean | null; shipping_return?: boolean | null; sale_only?: boolean | null; sale_price?: number | null }
+  type UserCouponExt = { id: string; coupon_id: string; coupons: { id: string; code: string; type: string; discount_type: string; discount_value: number; description: string | null; valid_until: string } | null }
   type PriceRuleExt = { price12h: number | null; price24h: number | null; deposit: number | null }
   type CartLineItemOption = { optionProductId: string | null; name: string; qty: number; unitPrice: number; imageUrl: string | null }
   type CartLineItem = { reservationId: string; productId: string | null; product: ProductRow | null; price12h: number | null; price24h: number | null; deposit: number | null; startDate: string; endDate: string; pickupMethod: string | null; returnMethod: string | null; pickupTime: string | null; returnTime: string | null; durationType: string | null; options: CartLineItemOption[]; status: string }
@@ -616,7 +616,11 @@
     if (!line) return Math.round(rate24 * 0.6)
     return sdPriceRules[line.productId ?? '']?.price12h ?? line.price12h ?? Math.round(rate24 * 0.6)
   }
+  // 판매전용(sale_only) 상품 카드 표시요율 — 대여요율(daily/half)과 무관하게 실제 판매금액을
+  // 그대로 보여준다(Migration #416, 실제 결제금액 계산 함수 compute_reservation_line_amount와
+  // 정합). "구매" 카드는 durationType==='purchase'로만 진입하므로 이 분기가 우선한다.
   function itemCardRate(line: CartLineGroup | undefined, durType: DurationType): number {
+    if (durType === 'purchase') return line?.product?.sale_price ?? 0
     const r24 = itemRate24h(line)
     const r12 = itemRate12h(line, r24)
     return cardRate(r24, r12, durType)
@@ -625,10 +629,12 @@
   // calculate_cart_total RPC와 동일 산식으로 일수×24h요율 + 잔여시간 12h요율 가산을 계산한다.
   // 2026-09-01: 위 itemCardRate()의 단일요율 근사값(다일 대여 시 일수 미반영, 당일대여 12h/24h
   // 조합 미반영)을 대체 — "총 대여기간" 표시·실제 결제금액과 일치하는 미리보기 제공.
+  // 판매전용(sale_only) 상품은 대여일수와 무관하게 판매금액을 그대로 반환한다(Migration #416).
   function itemRentalFee(
     line: CartLineGroup | undefined,
     it: { rentalDate: string; returnDate: string; rentalTime: string; returnTime: string },
   ): number {
+    if (line?.durationType === 'purchase') return line.product?.sale_price ?? 0
     const r24 = itemRate24h(line)
     const r12 = itemRate12h(line, r24)
     return calcRentalFee({
@@ -698,8 +704,25 @@
   )
   const otShippingFee = $derived(calcShippingFee(sdShippingSettings, checkedShippingItems))
 
-  // 배송료 우대설정(/cms/set/rental) — 대여금액(otSubtotal) + 조건(3일이상 장기대여/판매상품
-  // 구매) 만족 시 배송비(왕복+배송+반납 합계)에 할인율 적용(Stephen 확정, 2026-08-29).
+  // 배송료 우대설정(/cms/set/rental) — 대여금액(otRentalOnlySubtotal) + 조건 만족 시 배송비
+  // 할인율 적용(Stephen 확정, 2026-08-29/2026-09-01).
+  //
+  // otRentalOnlySubtotal: 배송료 우대설정 금액 임계값 비교 전용 파생값.
+  //   otSubtotal(카트 전체 대여료 소계)과 동일한 소스 필터(!deleted && checked)를 쓰되
+  //   판매전용상품(sale_only=true)을 합산에서 제외한다 — "대여상품만 20만원 이상이면 무료배송"
+  //   의도에 맞게 분리(Q2=a 전면 교체, 2026-09-01 Stephen 확정).
+  //   ⚠️ otSubtotal 자체(멤버십할인·쿠폰할인·부가세계산·화면표시·체크아웃 payload 5곳 재사용)는
+  //      이 변경으로 값이 달라지지 않는다 — 신규 파생값 추가로만 해결.
+  const otRentalOnlySubtotal = $derived(
+    itemsState.reduce((sum, it) => {
+      if (it.deleted || !it.checked) return sum
+      const line = groupsById.get(it.id)
+      const product = line?.product as ProductRow & { sale_only?: boolean | null } | undefined
+      if (product?.sale_only) return sum
+      return sum + (itemRentalFee(line, it) + itemOptionsAmount(line)) * Math.max(line?.qty ?? 1, 1)
+    }, 0)
+  )
+
   // rentalDays()는 이 스크립트 블록 하단에 함수 선언돼 있으나 호이스팅으로 여기서 호출 가능.
   const checkedDiscountItems = $derived<DiscountConditionItem[]>(
     itemsState
@@ -713,7 +736,7 @@
   const otShippingDiscountRate = $derived(
     calcShippingDiscountRate(
       (data.discountTiers as DeliveryFeeDiscountTier[] | undefined) ?? [],
-      otSubtotal,
+      otRentalOnlySubtotal,
       checkedDiscountItems,
     )
   )
@@ -801,20 +824,29 @@
       .filter((o: DeliveryOptionRow) => o.method_key && (allowedMethodIds === 'all' || allowedMethodIds.has(o.id)))
       .map((o: DeliveryOptionRow) => ({ v: o.method_key as DeliveryMethod, label: o.name, deadline: o.deadline_time ?? '' }))
   );
-  // 대여 제한옵션 "반납 배송선택 제한"(CMS) — ON이면 수령·반납 콤보 양쪽 모두에서 배송
-  // (is_bulk_delivery) 방식을 제거한다. 반납에서만 제거하면 "요청 A"(수령=배송 선택 시
-  // 반납방식을 자동으로 같은 배송값으로 강제복사)와 충돌해, 수령을 배송으로 고르는 순간
-  // 반납이 목록에 없는 값으로 강제고정되며 반납 콤보 전체가 비활성화되는 UI 데드엔드가
-  // 발생함(QA 발견, 2026-08-28) — 수령 쪽도 함께 막아 그 충돌 자체가 생기지 않게 함
-  // (Stephen 확정: "수령 방문대여 선택 시 반납 크레이지배송 대여 가려서 선택 못하게 막음").
+  // 대여 제한옵션 "반납 배송선택 제한"(CMS) — restrict_return_delivery ON일 때 배송
+  // (is_bulk_delivery) 방식을 제외한 탭 목록. "요청 A"(수령=배송 선택 시 반납방식을
+  // 자동으로 같은 배송값으로 강제복사)와는 별개 개념 — 이 목록은 "수령이 방문일 때"의
+  // 반납 leg 전용으로만 쓴다(아래 returnVisibleTabsFor 참고).
   const restrictedDeliveryTabs = $derived<DeliveryTabMeta[]>(
     deliveryTabs.filter(tab => !isDeliveryLocked(tab.v))
   )
-  // 체크아웃에 실제 노출되는 콤보 목록(restrict_return_delivery 반영) — 아래 유효성 검증과
-  // 화면 렌더링(1670행 visibleTabs) 둘 다 이 동일 파생값을 공유한다.
-  const otVisibleTabs = $derived<DeliveryTabMeta[]>(
-    sdShippingSettings?.restrict_return_delivery ? restrictedDeliveryTabs : deliveryTabs
-  )
+  // leg-aware 재구성(2026-09-01, Stephen 확정) — 과거엔 이 토글이 ON이면 수령·반납 양쪽
+  // 모두에서 배송방식을 제거했으나(2026-08-28 UI충돌 회피 임시조치), 그 결과 배송옵션이
+  // 설정된 모든 상품에서 "수령 방식"에마저 배송이 통째로 사라지는 회귀가 실사용 중 발견됨
+  // (Stephen 리포트, fxlion-nano-two-v-mount-battery-2609 — 상품 자체 대여옵션 설정은 정상,
+  // 토글의 양쪽-leg 제거 구현이 원인이었음). 원래 의도("수령 방문대여 선택 시 반납에서만
+  // 배송 선택 못하게 막음")대로 분리:
+  //   - 수령(pickup) leg: 이 토글과 무관하게 항상 전체 목록(deliveryTabs) 노출
+  //   - 반납(return) leg: 수령이 'visit'일 때만(그리고 토글 ON일 때만) 배송 제외, 수령이
+  //     배송(delivery 등)이면 "요청 A" 강제복사 로직이 이미 반납을 같은 값으로 잠그므로
+  //     전체 목록을 그대로 노출해야 그 값이 탭에 렌더링됨
+  const pickupVisibleTabs = $derived<DeliveryTabMeta[]>(deliveryTabs)
+  function returnVisibleTabsFor(pickupMethod: DeliveryMethod): DeliveryTabMeta[] {
+    return sdShippingSettings?.restrict_return_delivery && pickupMethod === 'visit'
+      ? restrictedDeliveryTabs
+      : deliveryTabs
+  }
   // 2026-08-30(감사 RSC-B2): 신규/드래프트 카트 항목의 로컬 기본 수령·반납 방식이
   // 'crazydelivery'로 하드코딩돼 있어, restrict_return_delivery ON 상태에서 사용자가
   // 방식 탭을 한 번도 명시적으로 클릭하지 않으면 "아무것도 잘못 고른 적 없는데" 체크아웃
@@ -823,8 +855,8 @@
   // 'visit'로 변경해 애초에 이 상태에 잘 빠지지 않도록 함께 방어).
   const methodSelectionValid = $derived(
     itemsState.every(it => it.deleted || !it.checked || (
-      otVisibleTabs.some(t => t.v === it.opts.rentalMethod) &&
-      otVisibleTabs.some(t => t.v === it.opts.returnMethod)
+      pickupVisibleTabs.some(t => t.v === it.opts.rentalMethod) &&
+      returnVisibleTabsFor(it.opts.rentalMethod).some(t => t.v === it.opts.returnMethod)
     ))
   )
   const readyToSubmit = $derived(canProceed && methodSelectionValid)
@@ -865,6 +897,23 @@
 
   // 서버 데이터 안전 추출
   const sdCoupons = $derived<UserCouponExt[]>((sd as { userCoupons?: UserCouponExt[] }).userCoupons ?? [])
+
+  // 배송료 우대설정 적용 중(otShippingDiscountRate>0)이면 free_delivery(무료배송) 쿠폰은
+  // 중복 혜택 방지를 위해 선택 불가 — 상호배타 안전장치(Stephen 확정, 2026-09-01).
+  const otBlockedCouponIds = $derived<Set<string>>(
+    new Set(
+      sdCoupons
+        .filter((uc) => isFreeDeliveryCouponBlocked(uc.coupons?.type, otShippingDiscountRate))
+        .map((uc) => uc.id)
+    )
+  )
+  // 카트 구성 변경으로 우대설정이 뒤늦게 적용되며 이미 선택된 free_delivery 쿠폰이 차단
+  // 대상이 되면 자동 해제(다음 렌더에 잘못 반영된 값으로 계산되는 것을 방지).
+  $effect(() => {
+    if ([...otSelectedCouponIds].some((id) => otBlockedCouponIds.has(id))) {
+      otSelectedCouponIds = new Set()
+    }
+  })
   const sdUserPoints = $derived<number>((sd as { userPoints?: number }).userPoints ?? 0)
   // "회원정보 반영"(배송지) 체크박스 활성화 조건 — 저장된 배송지 주소가 있을 때만 사용 가능
   const sdHasUserAddress = $derived<boolean>((sd as { hasUserAddress?: boolean }).hasUserAddress ?? false)
@@ -955,13 +1004,22 @@
 
   // 대여 기간 (일수) — calculate_cart_total RPC와 정합되는 계산은 $lib/utils/cartRentalFee 참고
   // (2026-09-01: 당일대여 시 0을 반환해 "날짜 미선택"으로 오인되던 CRITICAL 버그 수정)
+  // 판매전용(구매) 항목은 "대여기간" 개념이 없으므로 일수 합산에서 제외한다(Migration #416).
   const rentalDays = calcRentalDays
   const otTotalDays = $derived(
-    itemsState.reduce((sum, it) => sum + ((it.deleted || !it.checked) ? 0 : rentalDays(it.rentalDate, it.returnDate)), 0)
+    itemsState.reduce((sum, it) => {
+      if (it.deleted || !it.checked) return sum
+      if (groupsById.get(it.id)?.durationType === 'purchase') return sum
+      return sum + rentalDays(it.rentalDate, it.returnDate)
+    }, 0)
+  )
+  const otHasPurchaseItem = $derived(
+    itemsState.some(it => !it.deleted && it.checked && groupsById.get(it.id)?.durationType === 'purchase')
   )
   // 대여기간(수령/반납일)이 아직 확정되지 않은 상태에서 확정 금액인 것처럼 노출되던 결함 수정
-  // — "총 대여기간" 행의 미선택 판정 기준(otTotalDays)과 동일 조건으로 금액 표시도 함께 게이팅
-  const pricingReady = $derived(otTotalDays > 0)
+  // — "총 대여기간" 행의 미선택 판정 기준(otTotalDays)과 동일 조건으로 금액 표시도 함께 게이팅.
+  // 구매(판매) 항목은 대여기간이 0이어도 결제금액이 확정돼 있으므로 별도로 ready 처리한다.
+  const pricingReady = $derived(otTotalDays > 0 || otHasPurchaseItem)
 
   function fmtKrw(n: number): string {
     return n === 0 ? '0' : n.toLocaleString('ko-KR')
@@ -1085,13 +1143,15 @@
               {#each sdCoupons.filter(uc => uc.coupons !== null) as uc (uc.id)}
                 {@const c = uc.coupons!}
                 {@const couponLabel = c.description ?? (c.discount_type === 'fixed' ? `${c.discount_value.toLocaleString('ko-KR')}원 할인` : `${c.discount_value}% 할인`)}
+                {@const isBlocked = otBlockedCouponIds.has(uc.id)}
                 {@render CouponRow({
                   label: couponLabel,
                   days: daysUntilExpiry(c.valid_until),
+                  note: isBlocked ? '배송 우대설정 적용 중 — 중복 적용 불가' : undefined,
                   checked: otSelectedCouponIds.has(uc.id),
-                  disabled: !pricingReady,
+                  disabled: !pricingReady || isBlocked,
                   onToggle: () => {
-                    if (!pricingReady) return
+                    if (!pricingReady || isBlocked) return
                     // 중복 쿠폰 적용 불가 — 단일 선택만 허용(계약서명 페이지와 동일 정책)
                     otSelectedCouponIds = otSelectedCouponIds.has(uc.id) ? new Set() : new Set([uc.id])
                   },
@@ -1269,13 +1329,16 @@
                   }
                 }
                 // 대여 기간 유형 계산(그룹 공유값, products/[id]/+page.svelte L320-322와 동일 판정 기준)
+                // 판매전용(sale_only) 상품은 "구매" 건으로 구별한다(Migration #416).
                 const isSameDayRentalCo = it.rentalDate === it.returnDate
                 const [rhStr, rmStr] = (it.rentalTime || '00:00').split(':')
                 const [etStr, emStr] = (it.returnTime || '00:00').split(':')
                 const startMinsCo = parseInt(rhStr ?? '0', 10) * 60 + parseInt(rmStr ?? '0', 10)
                 const endMinsCo   = parseInt(etStr ?? '0', 10) * 60 + parseInt(emStr ?? '0', 10)
                 const sameDayMinsCo   = endMinsCo - startMinsCo
-                const durationTypeCo  = isSameDayRentalCo && sameDayMinsCo > 0 && sameDayMinsCo <= 720 ? '12h' : '24h'
+                const durationTypeCo  = groupsById.get(it.id)?.product?.sale_only
+                  ? 'purchase'
+                  : (isSameDayRentalCo && sameDayMinsCo > 0 && sameDayMinsCo <= 720 ? '12h' : '24h')
 
                 // RPC 자체가 실패(함수 없음·네트워크 등)하면 data가 null이 되어 promoteRow도
                 // undefined가 되므로, error를 확인하지 않으면 실제 재고와 무관하게 "재고가 없습니다"
@@ -1739,10 +1802,11 @@
   <!-- 휴무일 캘린더 제한 전용 판정(RSC-B3) — 위 locked(요청 A)와 별개 플래그이므로 독립 계산 -->
   {@const courierRestricted = isCourierDependent(props.method)}
   {@const returnComboLocked = props.type === 'return' && locked}
-  <!-- 대여 제한옵션 "반납 배송선택 제한"(CMS) — ON이면 수령·반납 콤보 양쪽 모두에서 배송
-       방식 제외(2026-08-28 정정 — 반납에서만 제외하면 위 요청 A 강제고정과 충돌해 UI
-       데드엔드 발생, restrictedDeliveryTabs 정의부 주석 참고) -->
-  {@const visibleTabs = otVisibleTabs}
+  <!-- 대여 제한옵션 "반납 배송선택 제한"(CMS) leg-aware 반영(2026-09-01) — 수령(rental) leg은
+       이 토글과 무관하게 항상 전체 목록, 반납(return) leg만 수령이 'visit'일 때 배송 제외
+       (returnVisibleTabsFor 정의부 주석 참고 — 과거엔 양쪽 다 제외해 배송옵션 상품 전체의
+       "수령 방식"에서마저 배송이 사라지는 회귀가 있었음) -->
+  {@const visibleTabs = props.type === 'rental' ? pickupVisibleTabs : returnVisibleTabsFor(bulkOpts.rentalMethod)}
 
 
   <div class="rental-form">
@@ -2008,7 +2072,7 @@
   </div>
 {/snippet}
 
-{#snippet CouponRow(props: { label: string; days: number; checked: boolean; onToggle: () => void; disabled?: boolean })}
+{#snippet CouponRow(props: { label: string; days: number; checked: boolean; onToggle: () => void; disabled?: boolean; note?: string })}
   <div class="coupon-row" class:coupon-row-disabled={props.disabled}>
     <label class="coupon-row-left">
       <button class="checkbox-btn checkbox-btn-terms" class:checked={props.checked} onclick={props.onToggle} disabled={props.disabled} aria-label={props.label}>
@@ -2017,11 +2081,16 @@
         </svg>
       </button>
       <span class="coupon-label">{props.label}</span>
+      {#if props.note}
+        <span class="coupon-note">{props.note}</span>
+      {/if}
     </label>
-    <div class="coupon-expiry">
-      <span class="coupon-days">{props.days}</span>
-      <span>일</span>
-    </div>
+    {#if !props.note}
+      <div class="coupon-expiry">
+        <span class="coupon-days">{props.days}</span>
+        <span>일</span>
+      </div>
+    {/if}
   </div>
 {/snippet}
 
@@ -3141,6 +3210,8 @@
   }
   .coupon-expiry { font-size: 14px; font-weight: 700; color: #444; display: flex; align-items: center; gap: 10px; flex-shrink: 0; }
   .coupon-days { color: var(--cs-red-badge); }
+  /* free_delivery 쿠폰 상호배타 안내(2026-09-01) — 배송 우대설정과 중복 적용 불가 사유 표시 */
+  .coupon-note { font-size: 12px; font-weight: 500; color: var(--cs-red-badge); flex-shrink: 0; }
   .coupon-section { display: flex; flex-direction: column; gap: 15px; padding: 20px; }
   .coupon-section .section-sub-label { padding: 0 0 5px; }
 

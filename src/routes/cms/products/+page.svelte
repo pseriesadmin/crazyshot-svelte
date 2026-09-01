@@ -502,6 +502,7 @@
                 <div class="card-info">
                   <div class="card-info-top">
                     <span class="cat-badge">{CATEGORY_LABEL[product.category] ?? product.category}</span>
+                    {#if product.sale_only}<span class="sale-only-badge">판매전용</span>{/if}
                     <span class="stock-badge" class:stock-zero={product.assetCount === 0}>{product.assetCount}(on) / {product.assetTotal ?? 0}</span>
                   </div>
                   {#if rsc && (rsc.holding + rsc.outgoing + rsc.renting + rsc.returning + rsc.returned) > 0}
@@ -608,6 +609,7 @@
               <div class="rep-card-info">
                 <div class="rep-card-top">
                   <span class="cat-badge">{CATEGORY_LABEL[rp.category] ?? rp.category}</span>
+                  {#if rp.sale_only}<span class="sale-only-badge">판매전용</span>{/if}
                   <span class="stock-badge" class:stock-zero={rp.assetCount === 0}>{rp.assetCount}(on) / {rp.assetTotal ?? 0}</span>
                 </div>
                 <!-- QR-LABEL-1: QR만으로는 코드를 읽을 수 없어 기준 품번을 텍스트로 병기.
@@ -1035,6 +1037,15 @@
   .stock-badge.stock-zero {
     background: rgba(255,53,53,0.10);
     color: var(--cs-red-badge);
+  }
+  .sale-only-badge {
+    display: inline-block;
+    padding: 5px 10px;
+    background: rgba(255,53,53,0.10);
+    color: var(--cs-red-badge);
+    border-radius: var(--radius-sm);
+    font: var(--text-pc-descript-10);
+    white-space: nowrap;
   }
   .card-name {
     font: var(--text-pc-body-14);

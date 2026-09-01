@@ -64,7 +64,7 @@ export interface RentalShippingSettings {
 export interface DeliveryFeeDiscountTier {
   id: string
   min_rental_amount: number
-  condition_types: ('long_term_rental' | 'sale_only_purchase')[]
+  condition_types: ('long_term_rental' | 'sale_only_purchase' | 'rental_item')[]
   discount_rate: number
   is_active: boolean
 }
@@ -516,7 +516,7 @@ export const actions: Actions = {
     const count = parseInt(data.get('count') as string, 10)
 
     if (Number.isNaN(amount) || amount < 0) return fail(400, { error: '대여금액을 입력하세요.' })
-    const VALID_CONDITION_TYPES = ['long_term_rental', 'sale_only_purchase']
+    const VALID_CONDITION_TYPES = ['long_term_rental', 'sale_only_purchase', 'rental_item']
     if (
       !Array.isArray(conditionTypes) ||
       conditionTypes.length === 0 ||

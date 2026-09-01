@@ -75,8 +75,11 @@ export const load: PageServerLoad = async ({ params, locals }) => {
   // 이력 초기 로드 (SECURITY DEFINER RPC — auth.uid() 소유권 재검증 내장)
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const sb: AnyClient = locals.supabase as unknown as any
-  const { data: historyData } = await sb
+  const { data: historyData, error: historyError } = await sb
     .rpc('get_product_history_for_customer', { p_reservation_id: reservationId })
+  if (historyError) {
+    console.error('[rental/history] get_product_history_for_customer 실패:', historyError.message)
+  }
 
   const history: CustomerHistoryRecord[] = ((historyData as unknown[]) ?? []).map(
     (h: unknown) => {

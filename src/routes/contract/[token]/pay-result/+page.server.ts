@@ -158,7 +158,7 @@ export const load: PageServerLoad = async ({ params, url }) => {
   }
 
   // ── 7. confirm_order_payment_and_update_reservations RPC ──────────────────
-  const { data: rpcResult } = await admin.rpc('confirm_order_payment_and_update_reservations', {
+  const { data: rpcResult, error: confirmRpcErr } = await admin.rpc('confirm_order_payment_and_update_reservations', {
     p_order_id:        internalOrderId,
     p_reservation_ids: reservationIds,
     p_payment_key:     paymentKey,
@@ -173,9 +173,18 @@ export const load: PageServerLoad = async ({ params, url }) => {
     p_calc_at:         (tossData.approvedAt as string) ?? new Date().toISOString(),
   })
 
+  if (confirmRpcErr) {
+    // Toss는 이미 결제를 승인(위 6단계 완료)했는데 이 RPC 자체가 실패하면 "돈은 받았는데
+    // DB엔 결제·예약 확정이 반영 안 된" 상태가 된다 — 반드시 상세 로그를 남겨야
+    // 운영자가 Toss 콘솔과 대조해 수동 정합화할 수 있다(§9 배포순서사고와 동일 급의 위험군).
+    console.error('[contract/pay-result] confirm_order_payment_and_update_reservations 실패 — Toss 결제는 이미 승인됨:', confirmRpcErr.message, {
+      internalOrderId, tossOrderId, paymentKey, amount,
+    })
+  }
+
   const result = rpcResult as { success?: boolean; idempotent?: boolean; error?: string } | null
   if (!result?.success) {
-    const errMsg = result?.error ?? '결제 처리 중 오류가 발생했습니다.'
+    const errMsg = result?.error ?? confirmRpcErr?.message ?? '결제 처리 중 오류가 발생했습니다.'
     throw redirect(
       303,
       `${failBase}&code=RPC_ERROR&message=${encodeURIComponent(errMsg)}`,

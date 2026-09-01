@@ -87,6 +87,7 @@ export type RootProductInfo = {
   price24h: number | null
   product_code: string | null
   code_series: Record<string, unknown> | null
+  sale_only: boolean
   assetCount: number
   assetTotal: number
 }
@@ -396,7 +397,7 @@ export async function loadSelectedProductDetail(
     // 자식 선택: 부모 데이터 별도 조회 (BND-2: 삭제된 부모 노출 차단)
     const { data: rpData } = await admin
       .from('products')
-      .select('id, name, brand, category, image_urls, product_code, code_series')
+      .select('id, name, brand, category, image_urls, product_code, code_series, sale_only')
       .eq('id', rootId)
       .is('deleted_at', null)
       .single()
@@ -413,6 +414,7 @@ export async function loadSelectedProductDetail(
         price24h: selectedProduct?.price24h ?? null,
         product_code: (rpData as Record<string, unknown>).product_code as string | null,
         code_series: (rpData as Record<string, unknown>).code_series as Record<string, unknown> | null,
+        sale_only: (rpData as Record<string, unknown>).sale_only as boolean ?? false,
         assetCount: rootAssetCount,
         assetTotal: rootAssetTotal,
       }
@@ -429,6 +431,7 @@ export async function loadSelectedProductDetail(
       price24h: selectedProduct.price24h ?? null,
       product_code: (selectedProduct as unknown as Record<string, unknown>).product_code as string | null,
       code_series: selectedProduct.code_series,
+      sale_only: selectedProduct.sale_only,
       assetCount: rootAssetCount,
       assetTotal: rootAssetTotal,
     }

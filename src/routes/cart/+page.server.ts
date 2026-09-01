@@ -88,7 +88,7 @@ export const load: PageServerLoad = async ({ locals }) => {
     .order('min_rental_amount', { ascending: true })
   const discountTiers = (discountTiersData ?? []) as Array<{
     min_rental_amount: number
-    condition_types: Array<'long_term_rental' | 'sale_only_purchase'>
+    condition_types: Array<'long_term_rental' | 'sale_only_purchase' | 'rental_item'>
     discount_rate: number
   }>
 
@@ -122,7 +122,7 @@ export const load: PageServerLoad = async ({ locals }) => {
       .from('user_coupons')
       .select(`id, coupon_id, used_count,
         coupons(
-          id, code, discount_type, discount_value, description,
+          id, code, type, discount_type, discount_value, description,
           is_active, deleted_at, valid_from, valid_until,
           user_grade_required, usage_limit, usage_count, total_usage_limit,
           is_first_rental_only, is_student_only, is_subscription_only, is_walk_in_only,
@@ -214,7 +214,7 @@ export const load: PageServerLoad = async ({ locals }) => {
       productIds.length > 0
         ? supabase
             .from('products')
-            .select('id, name, category, brand, slug, image_urls, is_active, created_at, updated_at, deleted_at, allowed_method_ids, allowed_pickup_ids, parent_product_id, shipping_round_trip, shipping_delivery, shipping_return, sale_only')
+            .select('id, name, category, brand, slug, image_urls, is_active, created_at, updated_at, deleted_at, allowed_method_ids, allowed_pickup_ids, parent_product_id, shipping_round_trip, shipping_delivery, shipping_return, sale_only, sale_price')
             .in('id', productIds)
         : Promise.resolve({ data: [] as ProductRow[] }),
       productIds.length > 0
@@ -245,7 +245,7 @@ export const load: PageServerLoad = async ({ locals }) => {
     if (parentIdsNeeded.length > 0) {
       const { data: parentRows } = await supabase
         .from('products')
-        .select('id, allowed_method_ids, allowed_pickup_ids, shipping_round_trip, shipping_delivery, shipping_return, sale_only')
+        .select('id, allowed_method_ids, allowed_pickup_ids, shipping_round_trip, shipping_delivery, shipping_return, sale_only, sale_price')
         .in('id', parentIdsNeeded)
       const parentRowsTyped = (parentRows ?? []) as Array<{
         id: string
@@ -255,6 +255,7 @@ export const load: PageServerLoad = async ({ locals }) => {
         shipping_delivery: boolean | null
         shipping_return: boolean | null
         sale_only: boolean | null
+        sale_price: number | null
       }>
       const parentMethodMap = new Map(parentRowsTyped.map(p => [p.id, p.allowed_method_ids ?? []]))
       const parentPickupMap = new Map(parentRowsTyped.map(p => [p.id, p.allowed_pickup_ids ?? []]))
@@ -274,6 +275,7 @@ export const load: PageServerLoad = async ({ locals }) => {
           next.shipping_delivery   = parentShipping.shipping_delivery
           next.shipping_return     = parentShipping.shipping_return
           next.sale_only           = parentShipping.sale_only
+          next.sale_price          = parentShipping.sale_price
         }
         return next
       })
@@ -481,6 +483,7 @@ interface ProductRow {
   shipping_delivery?:   boolean | null
   shipping_return?:     boolean | null
   sale_only?:           boolean | null
+  sale_price?:          number | null
 }
 
 interface PickupPointRow {
@@ -533,6 +536,7 @@ interface UserCouponRow {
   coupons: {
     id:                  string
     code:                string | null   // sequenced 모드 쿠폰은 NULL — B-0 타입 정합성 보완
+    type:                string
     discount_type:       string
     discount_value:      number
     description:         string | null
@@ -547,6 +551,7 @@ interface UserCouponRow {
 interface RawCouponFields {
   id:                   string
   code:                 string | null   // sequenced 모드 쿠폰은 NULL — B-0 타입 정합성 보완
+  type:                 string
   discount_type:        string
   discount_value:       number
   description:          string | null

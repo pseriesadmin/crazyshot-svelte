@@ -31,6 +31,8 @@
     image_url?: string;
     content_blocks?: unknown;
     product_caption?: string | null;
+    sale_only?: boolean | null;
+    sale_price?: number | null;
   };
 
   interface ReviewItem {
@@ -521,7 +523,11 @@
         // (당일 대여 12시간 이하 → 12h, 그 외(당일 12시간 초과·복수일) → 24h)
         const isSameDayRental = e.startDate === endDate;
         const sameDayMinutes = (e.endHour * 60 + e.endMin) - (e.startHour * 60 + e.startMin);
-        const durationType = isSameDayRental && sameDayMinutes > 0 && sameDayMinutes <= 720 ? '12h' : '24h';
+        // 판매전용(sale_only) 상품은 대여기간 계산과 무관하게 "구매" 건으로 구별한다
+        // (Migration #416 — 결제금액은 price_rules가 아닌 products.sale_price를 사용).
+        const durationType = (product as ProductRow).sale_only
+          ? 'purchase'
+          : (isSameDayRental && sameDayMinutes > 0 && sameDayMinutes <= 720 ? '12h' : '24h');
         const selectedOptions = optionItems
           .filter((o) => o.qty > 0)
           .map((o) => ({ option_product_id: o.id, option_name: o.label, qty: o.qty, unit_price: o.price }));
