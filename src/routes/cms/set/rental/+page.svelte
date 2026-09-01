@@ -159,14 +159,15 @@
   let discountTiers = $state<DeliveryFeeDiscountTier[]>(data.discountTiers)
   let tierAmount = $state<number | ''>('')
   // 조건은 다중선택(둘 다 선택 시 AND — 두 조건 모두 충족해야 매칭, Stephen 확정 2026-08-29)
-  let tierConditions = $state<Array<'long_term_rental' | 'sale_only_purchase'>>([])
+  let tierConditions = $state<Array<'long_term_rental' | 'sale_only_purchase' | 'rental_item'>>([])
   let tierDiscount = $state<'' | 'free' | 'half' | 'base'>('')
   let tierLoading = $state(false)
 
   const TIER_CONDITION_OPTIONS = [
     { value: 'long_term_rental', label: '3일이상 장기대여' },
     { value: 'sale_only_purchase', label: '판매상품 구매' },
-  ] as const satisfies { value: 'long_term_rental' | 'sale_only_purchase'; label: string }[]
+    { value: 'rental_item', label: '대여상품' },
+  ] as const satisfies { value: 'long_term_rental' | 'sale_only_purchase' | 'rental_item'; label: string }[]
   const TIER_DISCOUNT_OPTIONS = [
     { value: 'free', label: '무료' },
     { value: 'half', label: '50% 할인' },
@@ -175,6 +176,7 @@
   const TIER_CONDITION_LABELS: Record<string, string> = {
     long_term_rental: '3일이상 장기대여',
     sale_only_purchase: '판매상품 구매',
+    rental_item: '대여상품',
   }
   const TIER_DISCOUNT_LABELS: Record<number, string> = { 1: '무료', 0.5: '50% 할인', 0: '기본왕복배송요금' }
   function tierConditionsLabel(types: string[]): string {

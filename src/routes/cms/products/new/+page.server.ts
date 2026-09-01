@@ -218,6 +218,10 @@ export const actions: Actions = {
     // BND-9: 24시간 가격 필수 (sale_only 상품은 대여가격 불필요 — 스킵)
     if (!saleOnly && (isNaN(price24hPre) || price24hPre <= 0))
       return fail(400, { error: '24시간(1일) 가격은 필수입니다.' })
+    // QA(2026-09-01, Migration #416 검수) 발견 — sale_only인데 판매금액이 비어있으면
+    // 고객이 실제로 0원에 구매를 완료할 수 있는 결제 위험이 있어 BND-9와 대칭으로 필수화.
+    if (saleOnly && (salePrice === null || salePrice <= 0))
+      return fail(400, { error: '판매전용 상품은 판매금액이 필수입니다.' })
 
     const { data: product, error: productError } = await admin
       .from('products')

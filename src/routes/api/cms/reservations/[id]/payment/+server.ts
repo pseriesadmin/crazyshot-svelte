@@ -215,10 +215,13 @@ export const PUT: RequestHandler = async ({ params, locals, request }) => {
         .maybeSingle()
       const chatUserId = (rvForChat as { user_id?: string | null } | null)?.user_id
       if (chatUserId) {
-        const { data: chatSessionId } = await admin.rpc('find_or_create_general_chat_session', {
+        const { data: chatSessionId, error: chatSessionErr } = await admin.rpc('find_or_create_general_chat_session', {
           p_user_id: chatUserId,
           p_reservation_id: reservationId,
         })
+        if (chatSessionErr) {
+          console.error('[refund/rpc-fail] find_or_create_general_chat_session 실패(fail-soft):', chatSessionErr.message)
+        }
         if (chatSessionId) {
           await admin.from('chat_messages').insert({
             session_id:   chatSessionId,

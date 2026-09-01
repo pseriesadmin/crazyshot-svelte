@@ -335,7 +335,7 @@ export const load: PageServerLoad = async ({ locals, url }) => {
   // 목록 쿼리 — 부모 상품만 (재고 자식 제외)
   let listQ = admin
     .from('products')
-    .select('id, category, name, slug, brand, image_urls, is_active, created_at')
+    .select('id, category, name, slug, brand, image_urls, is_active, created_at, sale_only')
     .is('deleted_at', null)
     .is('parent_product_id', null)
 
@@ -815,6 +815,10 @@ export const actions: Actions = {
       // BND-9: 24시간 가격 필수 강제 (sale_only 상품은 대여가격 불필요 — 스킵)
       if (!saleOnly && (!priceMap['24h'] || priceMap['24h'] <= 0))
         return fail(400, { error: '24시간(1일) 가격은 필수입니다.' })
+      // QA(2026-09-01, Migration #416 검수) 발견 — sale_only인데 판매금액이 비어있으면
+      // 고객이 실제로 0원에 구매를 완료할 수 있는 결제 위험이 있어 BND-9와 대칭으로 필수화.
+      if (saleOnly && (salePrice === null || salePrice <= 0))
+        return fail(400, { error: '판매전용 상품은 판매금액이 필수입니다.' })
 
       // sale_price / sale_only → products 테이블
       // M-3(2026-08-31 감사 발견): 아래 가격 관련 DB 호출 전체가 .error를 확인하지 않아
@@ -1228,8 +1232,9 @@ export const actions: Actions = {
           if (priceErr) invWarnings.push(`${i}번째 재고 가격정책 복사 실패 (수동 확인 필요)`)
         }
 
-        const { data: invSourceOptions } = await admin
+        const { data: invSourceOptions, error: optionsFetchErr } = await admin
           .rpc('get_product_option_links', { p_product_id: rootProductId })
+        if (optionsFetchErr) invWarnings.push(`${i}번째 재고 옵션링크 조회 실패 (수동 확인 필요)`)
         if (invSourceOptions && Array.isArray(invSourceOptions) && invSourceOptions.length > 0) {
           // JSONB 파라미터는 JS 배열 직접 전달 (JSON.stringify 금지 — string으로 처리되어 silent fail)
           const { error: optErr } = await admin.rpc('upsert_product_option_links', {

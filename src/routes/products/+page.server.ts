@@ -18,8 +18,11 @@ export const load: PageServerLoad = async ({ locals, url }) => {
   }
 
   // 페이지 설정 로드 (RPC — migration 118)
-  const { data: settingsRaw } = await locals.supabase
+  const { data: settingsRaw, error: settingsErr } = await locals.supabase
     .rpc('get_product_page_settings')
+  if (settingsErr) {
+    console.error('[products] get_product_page_settings 실패:', settingsErr.message)
+  }
 
   const settings = ((settingsRaw as unknown) as Record<string, unknown>) ?? {}
 

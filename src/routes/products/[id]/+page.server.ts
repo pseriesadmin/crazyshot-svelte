@@ -295,7 +295,10 @@ export const load: PageServerLoad = async ({ params, locals }) => {
 	// 이동용 내비게이션이므로 /products의 카테고리 탭과 동일한 목록이어야 함).
 	let categories: DisplayCategory[] = [];
 	{
-		const { data: pageSettingsRaw } = await locals.supabase.rpc('get_product_page_settings');
+		const { data: pageSettingsRaw, error: pageSettingsErr } = await locals.supabase.rpc('get_product_page_settings');
+		if (pageSettingsErr) {
+			console.error('[products/[id]] get_product_page_settings 실패:', pageSettingsErr.message);
+		}
 		const pageSettings = (pageSettingsRaw as unknown as Record<string, unknown>) ?? {};
 		const catSettings = (pageSettings['product_page_categories'] as { items: CatSettingsItem[] }) ?? { items: [] };
 		if (catSettings.items.length > 0) {

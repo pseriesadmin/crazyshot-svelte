@@ -78,7 +78,7 @@ export function calcShippingFee(settings: ShippingSettings | null, items: Shippi
 
 export interface DeliveryFeeDiscountTier {
   min_rental_amount: number
-  condition_types: Array<'long_term_rental' | 'sale_only_purchase'>
+  condition_types: Array<'long_term_rental' | 'sale_only_purchase' | 'rental_item'>
   discount_rate: number // 0 | 0.5 | 1
 }
 
@@ -88,30 +88,53 @@ export interface DiscountConditionItem {
 }
 
 /**
- * otSubtotal 기준 임계값을 충족하고, 그 조합에 선택된 조건 전부(AND)가 체크된 아이템 중
+ * 금액 임계값을 충족하고, 그 조합에 선택된 조건 전부(AND)가 체크된 아이템 중
  * 최소 1개씩으로 만족되는 조합들 중 가장 유리한(할인율 최대) 단일 할인율을 반환한다.
  * 매칭되는 조합이 없으면 0.
+ *
+ * 금액 인자(두 번째 파라미터)는 호출부가 otRentalOnlySubtotal(대여상품 전용 소계)을
+ * 전달한다 — Q2=a(전면 교체, 2026-09-01 Stephen 확정): 모든 티어의 금액 비교 기준이
+ * 대여상품만의 합계로 통일됨. otSubtotal(전체 합계) 대신 이 값을 쓰므로 기존 티어
+ * (long_term_rental·sale_only_purchase 단독)도 대여상품 금액 기준으로 판정된다.
  */
 export function calcShippingDiscountRate(
   tiers: DeliveryFeeDiscountTier[],
-  otSubtotal: number,
+  rentalOnlySubtotal: number,
   items: DiscountConditionItem[],
 ): number {
   if (!tiers.length || items.length === 0) return 0
 
   const anyLongTerm = items.some((it) => it.rentalDays >= 3)
   const anySaleOnly = items.some((it) => it.saleOnlyPurchase)
-  const conditionSatisfied: Record<'long_term_rental' | 'sale_only_purchase', boolean> = {
+  const anyRentalItem = items.some((it) => !it.saleOnlyPurchase)
+  const conditionSatisfied: Record<'long_term_rental' | 'sale_only_purchase' | 'rental_item', boolean> = {
     long_term_rental: anyLongTerm,
     sale_only_purchase: anySaleOnly,
+    rental_item: anyRentalItem,
   }
 
   let best = 0
   for (const tier of tiers) {
-    if (otSubtotal < tier.min_rental_amount) continue
+    if (rentalOnlySubtotal < tier.min_rental_amount) continue
     if (!tier.condition_types.length) continue
     const conditionMet = tier.condition_types.every((ct) => conditionSatisfied[ct])
     if (conditionMet && tier.discount_rate > best) best = tier.discount_rate
   }
   return best
+}
+
+/**
+ * 배송료 우대설정(calcShippingDiscountRate)이 이미 배송료를 할인/무료화한 카트에서
+ * 'free_delivery'(무료배송) 타입 쿠폰을 중복 선택하지 못하도록 막는 상호배타 가드
+ * (Stephen 확정, 2026-09-01) — 사용자만 이중 혜택을 보는 결과를 방지.
+ *
+ * ⚠️ free_delivery 쿠폰이 실제로 배송료를 할인하는 계산 로직 자체는 이번 스코프에
+ * 포함되지 않는다(현재 시스템에 발급된 free_delivery 쿠폰 0건 — 상호배타 안전장치만
+ * 선제 구축, Stephen 확정) — otCouponDiscount는 여전히 상품금액에만 적용된다.
+ */
+export function isFreeDeliveryCouponBlocked(
+  couponType: string | null | undefined,
+  shippingDiscountRate: number,
+): boolean {
+  return couponType === 'free_delivery' && shippingDiscountRate > 0
 }

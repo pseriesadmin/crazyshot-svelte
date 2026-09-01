@@ -15,7 +15,10 @@
  */
 
 import { describe, it, expect } from 'vitest'
-import { calcShippingFee, calcShippingDiscountRate, type DeliveryFeeDiscountTier, type DiscountConditionItem } from '$lib/utils/cartShippingFee'
+import { calcShippingFee, calcShippingDiscountRate, isFreeDeliveryCouponBlocked, type DeliveryFeeDiscountTier, type DiscountConditionItem } from '$lib/utils/cartShippingFee'
+
+// ── 주의: DeliveryFeeDiscountTier.condition_types에 'rental_item'이 추가돼야 아래 테스트가 GREEN
+// (현재 미추가 상태 = RED)
 
 // ── 테스트용 기본 배송 설정 ───────────────────────────────────────────────────
 const SHIPPING_ON = {
@@ -156,7 +159,7 @@ describe('calcShippingFee — 왕복/배송/반납요금 3-way 배타 부과', (
 // ════════════════════════════════════════════════════════════════════
 function makeTier(opts: {
   min_rental_amount: number
-  condition_types: Array<'long_term_rental' | 'sale_only_purchase'>
+  condition_types: Array<'long_term_rental' | 'sale_only_purchase' | 'rental_item'>
   discount_rate: number
 }): DeliveryFeeDiscountTier {
   return { ...opts }
@@ -267,5 +270,111 @@ describe('calcShippingDiscountRate — 배송료 우대설정 최유리 조합 �
     ]
     const items = [makeDiscountItem({ rentalDays: 5 }), makeDiscountItem({ saleOnlyPurchase: true })]
     expect(calcShippingDiscountRate(tiers, 0, items)).toBe(1)
+  })
+
+  // ── 신규 조건: rental_item (2026-09-01) ──────────────────────────────────
+  // 'rental_item': !saleOnlyPurchase인 항목이 1개 이상 존재하면 OR 충족
+  it('[rental_item] 대여상품 조건 — 체크된 항목 중 1개만 대여상품이어도(OR) 매칭', () => {
+    const tiers = [makeTier({ min_rental_amount: 0, condition_types: ['rental_item'], discount_rate: 1 })]
+    const items = [makeDiscountItem({ saleOnlyPurchase: true }), makeDiscountItem({ saleOnlyPurchase: false })]
+    expect(calcShippingDiscountRate(tiers, 0, items)).toBe(1)
+  })
+
+  it('[rental_item] 대여상품 조건 — 대여상품만 있는 카트 → 매칭', () => {
+    const tiers = [makeTier({ min_rental_amount: 0, condition_types: ['rental_item'], discount_rate: 0.5 })]
+    const items = [makeDiscountItem({ saleOnlyPurchase: false }), makeDiscountItem({ saleOnlyPurchase: false })]
+    expect(calcShippingDiscountRate(tiers, 0, items)).toBe(0.5)
+  })
+
+  // EC-1: 기존 long_term_rental 단독 티어 — Q2=a 채택 후 금액 기준이 rental-only로 바뀜.
+  //  판매전용상품 포함 총액만 임계값 초과하고 대여상품 금액만으로는 미달이면 → 미적용(회귀, Stephen 인지·승인).
+  it('[EC-1] 장기대여 단독 티어 — 대여상품 금액(otRentalOnlySubtotal)만 임계값 미달 → 미적용', () => {
+    const tiers = [makeTier({ min_rental_amount: 200000, condition_types: ['long_term_rental'], discount_rate: 1 })]
+    // 대여상품 금액만 50000, 총액은 250000이라도 호출부가 otRentalOnlySubtotal=50000을 전달
+    const items = [makeDiscountItem({ rentalDays: 5, saleOnlyPurchase: false })]
+    expect(calcShippingDiscountRate(tiers, 50000, items)).toBe(0)
+  })
+
+  it('[EC-1] 장기대여 단독 티어 — 대여상품 금액(otRentalOnlySubtotal)이 임계값 이상이면 → 매칭', () => {
+    const tiers = [makeTier({ min_rental_amount: 50000, condition_types: ['long_term_rental'], discount_rate: 1 })]
+    const items = [makeDiscountItem({ rentalDays: 5, saleOnlyPurchase: false })]
+    expect(calcShippingDiscountRate(tiers, 50000, items)).toBe(1)
+  })
+
+  // EC-2: rental_item AND sale_only_purchase 조합
+  it('[EC-2] 대여상품+판매상품 AND 조합 — 각각 1개씩 존재하면 매칭', () => {
+    const tiers = [makeTier({ min_rental_amount: 0, condition_types: ['rental_item', 'sale_only_purchase'], discount_rate: 1 })]
+    const items = [makeDiscountItem({ saleOnlyPurchase: false }), makeDiscountItem({ saleOnlyPurchase: true })]
+    expect(calcShippingDiscountRate(tiers, 0, items)).toBe(1)
+  })
+
+  it('[EC-2] 대여상품+판매상품 AND 조합 — 대여상품만 있고 판매상품 없으면 미적용', () => {
+    const tiers = [makeTier({ min_rental_amount: 0, condition_types: ['rental_item', 'sale_only_purchase'], discount_rate: 1 })]
+    const items = [makeDiscountItem({ saleOnlyPurchase: false })]
+    expect(calcShippingDiscountRate(tiers, 0, items)).toBe(0)
+  })
+
+  it('[EC-2] 대여상품+판매상품 AND 조합 — 판매상품만 있고 대여상품 없으면 미적용', () => {
+    const tiers = [makeTier({ min_rental_amount: 0, condition_types: ['rental_item', 'sale_only_purchase'], discount_rate: 1 })]
+    const items = [makeDiscountItem({ saleOnlyPurchase: true })]
+    expect(calcShippingDiscountRate(tiers, 0, items)).toBe(0)
+  })
+
+  // EC-3: 전부 판매전용상품 — rental_item 조건 미적용, sale_only_purchase 조건만 매칭 가능
+  it('[EC-3] 전부 판매전용상품 — rental_item 조건 미적용', () => {
+    const tiers = [makeTier({ min_rental_amount: 0, condition_types: ['rental_item'], discount_rate: 1 })]
+    const items = [makeDiscountItem({ saleOnlyPurchase: true }), makeDiscountItem({ saleOnlyPurchase: true })]
+    expect(calcShippingDiscountRate(tiers, 0, items)).toBe(0)
+  })
+
+  it('[EC-3] 전부 판매전용상품 — sale_only_purchase 조건 단독 티어는 여전히 매칭 가능', () => {
+    const tiers = [
+      makeTier({ min_rental_amount: 0, condition_types: ['rental_item'], discount_rate: 1 }),
+      makeTier({ min_rental_amount: 0, condition_types: ['sale_only_purchase'], discount_rate: 0.5 }),
+    ]
+    const items = [makeDiscountItem({ saleOnlyPurchase: true })]
+    expect(calcShippingDiscountRate(tiers, 0, items)).toBe(0.5)
+  })
+
+  // EC-4: 빈 카트 — 기존 가드(items.length === 0 → 0) 유지
+  it('[EC-4] 빈 카트 — 0 (기존 가드 유지)', () => {
+    const tiers = [makeTier({ min_rental_amount: 0, condition_types: ['rental_item'], discount_rate: 1 })]
+    expect(calcShippingDiscountRate(tiers, 0, [])).toBe(0)
+  })
+
+  // rental_item 조건과 long_term_rental 동시 AND 조합
+  it('[rental_item+long_term_rental AND] 대여상품 중 3일이상 항목 있으면 매칭', () => {
+    const tiers = [makeTier({ min_rental_amount: 0, condition_types: ['rental_item', 'long_term_rental'], discount_rate: 1 })]
+    const items = [makeDiscountItem({ rentalDays: 5, saleOnlyPurchase: false })]
+    expect(calcShippingDiscountRate(tiers, 0, items)).toBe(1)
+  })
+
+  it('[rental_item+long_term_rental AND] 대여상품이 있어도 3일 미만이면 미적용', () => {
+    const tiers = [makeTier({ min_rental_amount: 0, condition_types: ['rental_item', 'long_term_rental'], discount_rate: 1 })]
+    const items = [makeDiscountItem({ rentalDays: 2, saleOnlyPurchase: false })]
+    expect(calcShippingDiscountRate(tiers, 0, items)).toBe(0)
+  })
+})
+
+// isFreeDeliveryCouponBlocked — 배송료 우대설정 적용 중 free_delivery 쿠폰 상호배타 가드
+// (Stephen 확정, 2026-09-01)
+describe('isFreeDeliveryCouponBlocked', () => {
+  it('배송료 우대설정 적용 중(rate>0) + free_delivery 쿠폰 → 차단(true)', () => {
+    expect(isFreeDeliveryCouponBlocked('free_delivery', 1)).toBe(true)
+    expect(isFreeDeliveryCouponBlocked('free_delivery', 0.5)).toBe(true)
+  })
+
+  it('배송료 우대설정 미적용(rate=0) → free_delivery 쿠폰이어도 차단 안 함(false)', () => {
+    expect(isFreeDeliveryCouponBlocked('free_delivery', 0)).toBe(false)
+  })
+
+  it('free_delivery가 아닌 다른 쿠폰 타입 → 우대설정 적용 여부와 무관하게 차단 안 함(false)', () => {
+    expect(isFreeDeliveryCouponBlocked('all', 1)).toBe(false)
+    expect(isFreeDeliveryCouponBlocked('first_purchase', 1)).toBe(false)
+  })
+
+  it('타입이 null/undefined → 차단 안 함(false, 방어적 처리)', () => {
+    expect(isFreeDeliveryCouponBlocked(null, 1)).toBe(false)
+    expect(isFreeDeliveryCouponBlocked(undefined, 1)).toBe(false)
   })
 })
