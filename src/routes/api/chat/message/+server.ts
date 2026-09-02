@@ -1,5 +1,11 @@
 // POST /api/chat/message — 메시지 전송 + Claude AI 의도 분류
 // PRD.1.7.4 | H-05: ANTHROPIC_API_KEY → $env/static/private 전용
+//
+// ⛔ 2026-09-02 Stephen 지시로 Anthropic 연결만 임시 차단(disconnect) — 코드 삭제 아님.
+// 프로덕션 Anthropic API 계정 크레딧 잔액 소진으로 /api/chat/message가 반복 500 에러를
+// 내던 것이 계기. 아래 ANTHROPIC_ENABLED 상수 하나로만 켜고 끈다 — SYSTEM_PROMPT·
+// Anthropic 클라이언트·history 로드·호출 로직은 전부 그대로 보존돼 있다.
+// 재활성화: Anthropic 콘솔에서 크레딧 잔액 확인 후 ANTHROPIC_ENABLED를 true로 변경.
 
 import { json } from '@sveltejs/kit'
 import Anthropic from '@anthropic-ai/sdk'
@@ -17,6 +23,7 @@ import type { EnrichContext } from '$lib/server/chatActionEnrich'
 import { registerCrossLingualCandidates } from '$lib/server/crossLingualSynonymScan'
 import { sendPushToUser } from '$lib/server/push'
 
+const ANTHROPIC_ENABLED = false
 const anthropic = new Anthropic({ apiKey: ANTHROPIC_API_KEY })
 
 // 캔드매칭이 AI 의도분류를 건너뛰므로 chat_intent_logs가 비어 긴급배지(is_urgent)가 뜨지
@@ -291,6 +298,12 @@ export const POST: RequestHandler = async ({ request, locals }) => {
   }
 
   try {
+    // ⛔ Anthropic 연결 임시 차단(파일 상단 안내) — ANTHROPIC_ENABLED=false인 동안은
+    // 실제 네트워크 호출 없이 즉시 catch로 떨어져 위 기본값(CS_ESCALATE 폴백)을 그대로 쓴다.
+    if (!ANTHROPIC_ENABLED) {
+      throw new Error('Anthropic 연결 임시 차단 상태입니다 (ANTHROPIC_ENABLED=false).')
+    }
+
     const response = await anthropic.messages.create({
       model: 'claude-haiku-4-5-20251001',
       max_tokens: 512,
