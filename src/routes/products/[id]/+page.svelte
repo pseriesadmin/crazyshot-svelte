@@ -13,6 +13,7 @@
     createMultiUnitReservation,
     resolveParentProductId,
     mergeReservationOptions,
+    clampToAvailableStock,
     type UnitReservationResult,
     type ReservationOptionInput,
   } from '$lib/services/reservationHelper';
@@ -73,6 +74,7 @@
       product: ProductRow;
       productId: string;
       optionLinks: ProductOptionLinkRow[];
+      availableStock?: Record<string, number>;
       session: { user: { id: string; email?: string } } | null;
       reviews: ReviewItem[];
       depositAmount: number | null;
@@ -102,7 +104,11 @@
       id: link.option_product_id,
       label: link.option_product_name,
       price: link.price_24h ?? 0,
-      qty: link.is_required ? 1 : 0,  // [C-1] 필수 옵션 기본 수량 1
+      // [C-1] 필수 옵션 기본 수량 1 — 단, 가용재고가 0이면 무조건 1로 세팅하지 않고 0으로 시작
+      // (2026-09-03, QA 지적 — 재고 0인 필수옵션도 예약이 그대로 제출되던 결함 수정).
+      // handleReserve 제출 검증이 "필수 옵션 qty===0"이면 별도 안내 후 차단하므로, 재고가
+      // 없는 필수 옵션은 이 경로로 자연스럽게 제출이 막힌다.
+      qty: link.is_required ? Math.min(1, stockCapFor(link.option_product_id)) : 0,
       is_required: link.is_required,
       min_select_required: link.min_select_required,
       delivery_rental_disabled: link.delivery_rental_disabled,
@@ -117,6 +123,32 @@
   let optionsOpen = $state(true);
   let hasOptionItems = $derived(optionItems.length > 0);
   let isReserving = $state(false);
+
+  // ── 가용 재고 상한 (2026-09-02, Stephen GATE B 승인 — Migration 421)
+  // "등록된 총 수량 - 점유되지 않은 실제 가용 재고"를 수량 스테퍼 상한에 반영(사전차단).
+  // 날짜 무관 — 페이지 로드 시점의 현재 점유 상태 스냅샷 1회만 사용(실시간 재조회 없음,
+  // Stephen 확정). MAX_RESERVATION_QTY(10) 안전상한은 그대로 병행 적용.
+  function stockCapFor(productId: string): number {
+    return clampToAvailableStock(data.availableStock?.[productId]);
+  }
+  const mainStockCap = $derived(stockCapFor(product?.id != null ? String(product.id) : ''));
+
+  function incrementQty() {
+    if (qty >= mainStockCap) {
+      showToast('예약 가능한 재고가 없습니다.');
+      return;
+    }
+    qty = clampReservationQty(qty + 1);
+  }
+
+  function incrementOptionQty(opt: (typeof optionItems)[number]) {
+    const cap = stockCapFor(opt.id);
+    if (opt.qty >= cap) {
+      showToast('예약 가능한 재고가 없습니다.');
+      return;
+    }
+    opt.qty += 1;
+  }
 
   // ── 예약 대상 = 가입 완료 계정 게이트 (2026-08-18) ──
   // 비회원(세션 없음) 또는 익명세션(anon sign-in)은 예약 실행 불가.
@@ -318,7 +350,12 @@
       return;
     }
 
-    // 필수 옵션 미선택
+    // 필수 옵션 미선택 — 재고 부족으로 qty가 0인 경우(2026-09-03 수정)와 단순 미선택을 구분해 안내
+    const outOfStockRequired = optionItems.find((o) => o.is_required && o.qty === 0 && stockCapFor(o.id) === 0);
+    if (outOfStockRequired) {
+      showToast('필수 옵션 상품의 재고가 부족해 예약할 수 없습니다.');
+      return;
+    }
     if (optionItems.some((o) => o.is_required && o.qty === 0)) {
       showToast('필수 옵션상품을 선택하세요.');
       return;
@@ -484,7 +521,12 @@
           });
           if (optionsError) {
             console.error('[products/[id]] set_reservation_options (draft) 저장 실패:', optionsError);
-            showToast('선택한 옵션상품 저장에 실패했습니다. 체크아웃에서 다시 확인해 주세요.');
+            const msg = (optionsError as { message?: string })?.message ?? '';
+            showToast(
+              msg.includes('OPTION_STOCK_EXCEEDED')
+                ? '옵션상품 재고가 부족해 저장하지 못했습니다. 수량을 확인해 주세요.'
+                : '선택한 옵션상품 저장에 실패했습니다. 체크아웃에서 다시 확인해 주세요.'
+            );
           }
         }
         // notify-hold는 draft 생성 시 발송하지 않음 — 체크아웃 승격(FE-4) 성공 시점에 발송
@@ -547,7 +589,12 @@
           });
           if (optionsError) {
             console.error('[products/[id]] set_reservation_options 저장 실패:', optionsError);
-            showToast('선택한 옵션상품 저장에 실패했습니다. 체크아웃에서 다시 확인해 주세요.');
+            const msg = (optionsError as { message?: string })?.message ?? '';
+            showToast(
+              msg.includes('OPTION_STOCK_EXCEEDED')
+                ? '옵션상품 재고가 부족해 저장하지 못했습니다. 수량을 확인해 주세요.'
+                : '선택한 옵션상품 저장에 실패했습니다. 체크아웃에서 다시 확인해 주세요.'
+            );
           }
         }
 
@@ -694,9 +741,25 @@
                   </svg>
                 </button>
                 <div class="qty-val-wrap">
-                  <input type="number" bind:value={opt.qty} min="0" class="qty-input" aria-label="옵션 수량"/>
+                  <input
+                    type="number"
+                    bind:value={opt.qty}
+                    onchange={() => {
+                      const cap = stockCapFor(opt.id);
+                      if (opt.qty > cap) {
+                        showToast('예약 가능한 재고가 없습니다.');
+                        opt.qty = cap;
+                      } else if (opt.qty < 0) {
+                        opt.qty = 0;
+                      }
+                    }}
+                    min="0"
+                    max={stockCapFor(opt.id)}
+                    class="qty-input"
+                    aria-label="옵션 수량"
+                  />
                 </div>
-                <button onclick={() => { opt.qty += 1; }} class="qty-btn" aria-label="옵션 수량 증가">
+                <button onclick={() => incrementOptionQty(opt)} disabled={opt.qty >= stockCapFor(opt.id)} class="qty-btn" aria-label="옵션 수량 증가">
                   <svg width="12" height="12" viewBox="0 0 14 14" fill="none">
                     <path d="M1 7H13M7 1V13" stroke="var(--cs-text-dark)" stroke-width="2" stroke-linecap="round"/>
                   </svg>
@@ -772,14 +835,22 @@
               <input
                 type="number"
                 bind:value={qty}
-                onchange={() => qty = clampReservationQty(qty)}
+                onchange={() => {
+                  const clamped = clampReservationQty(qty);
+                  if (clamped > mainStockCap) {
+                    showToast('예약 가능한 재고가 없습니다.');
+                    qty = mainStockCap;
+                  } else {
+                    qty = clamped;
+                  }
+                }}
                 min="1"
-                max="10"
+                max={mainStockCap}
                 class="qty-input"
                 aria-label="수량"
               />
             </div>
-            <button onclick={() => qty = clampReservationQty(qty + 1)} class="qty-btn" aria-label="수량 증가">
+            <button onclick={incrementQty} disabled={qty >= mainStockCap} class="qty-btn" aria-label="수량 증가">
               <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
                 <path d="M1 7H13M7 1V13" stroke="var(--cs-text-dark)" stroke-width="2" stroke-linecap="round"/>
               </svg>

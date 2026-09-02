@@ -254,6 +254,20 @@ export function clampReservationQty(qty: number): number {
 	return Math.min(Math.floor(qty), MAX_RESERVATION_QTY);
 }
 
+/**
+ * 실제 가용 재고(get_available_stock_counts RPC 결과)를 수량 스테퍼 상한으로 변환한다
+ * (2026-09-02, Stephen GATE B 승인 — "등록된 총 수량 - 점유되지 않은 실제 가용 재고" 반영).
+ * availableCount가 없으면(재고 조회 실패 등) 기존 하드코딩 상한(MAX_RESERVATION_QTY)으로
+ * 안전 폴백한다 — 재고 조회가 안 됐다고 담기 자체를 막지는 않는다.
+ */
+export function clampToAvailableStock(
+	availableCount: number | null | undefined,
+	hardCap: number = MAX_RESERVATION_QTY,
+): number {
+	if (availableCount == null || !Number.isFinite(availableCount)) return hardCap;
+	return Math.max(0, Math.min(Math.floor(availableCount), hardCap));
+}
+
 export interface UnitReservationResult {
 	success: boolean;
 	reservationId: number | null;
