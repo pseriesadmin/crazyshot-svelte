@@ -2,7 +2,7 @@
   import { performSignUp, performSignIn } from '$lib/stores/auth'
   import { supabase, rpc } from '$lib/services/supabase'
 
-  type Mode = 'login' | 'signup'
+  type Mode = 'login' | 'signup' | 'find-email' | 'reset-pw'
 
   interface Props {
     open: boolean
@@ -45,6 +45,19 @@
   let errorMsg = $state<string | null>(null)
   let otpSent = $state(false)
 
+  // ── 아이디 찾기 상태 ──
+  let findPhone = $state('')
+  let findCode = $state('')
+  let findOtpSent = $state(false)
+  let isSendingFindOtp = $state(false)
+  let isFinding = $state(false)
+  let foundEmail = $state<string | null>(null)
+
+  // ── 비밀번호 재설정 상태 ──
+  let resetEmail = $state('')
+  let isResetting = $state(false)
+  let resetSent = $state(false)
+
   // ── 초기화 (모달 닫힐 때) ──
   function reset() {
     mode = initialMode
@@ -62,6 +75,15 @@
     otpSent = false
     isLoading = false
     isSendingOtp = false
+    findPhone = ''
+    findCode = ''
+    findOtpSent = false
+    isSendingFindOtp = false
+    isFinding = false
+    foundEmail = null
+    resetEmail = ''
+    isResetting = false
+    resetSent = false
   }
 
   // ── 로그인 제출 ──
@@ -73,7 +95,9 @@
     }
     isLoggingIn = true
     try {
-      await performSignIn(loginEmail, loginPassword)
+      // 이메일은 반드시 trim 후 전송 — auth/login/+page.svelte와 동일 이유(복사·붙여넣기
+      // 공백/개행으로 인한 "Invalid login credentials" 오탐 방지). 비밀번호는 트림 안 함.
+      await performSignIn(loginEmail.trim(), loginPassword)
       reset()
       onsuccess()
     } catch (err) {
@@ -150,12 +174,14 @@
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ phone: cleaned }),
       })
-      const data = await res.json() as { ok: boolean; error?: string }
+      const data = await res.json() as { ok: boolean; error?: string; devCode?: string }
       if (!data.ok) {
         errorMsg = data.error ?? '인증번호 발송에 실패했습니다.'
         return
       }
       otpSent = true
+      // 개발 환경 바이패스: 서버가 devCode를 내려주면 자동 입력
+      if (data.devCode) verifyCode = data.devCode
     } catch {
       errorMsg = '네트워크 오류가 발생했습니다.'
     } finally {
@@ -219,6 +245,95 @@
     }
   }
 
+  // ── 아이디 찾기: OTP 발송 ──
+  async function handleFindSendOtp() {
+    errorMsg = null
+    const cleaned = findPhone.replace(/\D/g, '')
+    if (!/^010\d{8}$/.test(cleaned)) {
+      errorMsg = '올바른 휴대폰 번호를 입력해주세요. (예: 01012345678)'
+      return
+    }
+    isSendingFindOtp = true
+    try {
+      const ready = await ensureSignupSession()
+      if (!ready) {
+        errorMsg = '인증 세션 생성에 실패했습니다. 잠시 후 다시 시도해주세요.'
+        return
+      }
+      const res = await fetch('/api/profile/send-otp', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ phone: cleaned }),
+      })
+      const data = await res.json() as { ok: boolean; error?: string; devCode?: string }
+      if (!data.ok) {
+        errorMsg = data.error ?? '인증번호 발송에 실패했습니다.'
+        return
+      }
+      findOtpSent = true
+      if (data.devCode) findCode = data.devCode
+    } catch {
+      errorMsg = '네트워크 오류가 발생했습니다.'
+    } finally {
+      isSendingFindOtp = false
+    }
+  }
+
+  // ── 아이디 찾기: OTP 검증 후 이메일 조회 ──
+  async function handleFindEmail() {
+    errorMsg = null
+    if (!findCode) {
+      errorMsg = '인증번호를 입력해주세요.'
+      return
+    }
+    isFinding = true
+    try {
+      const res = await fetch('/api/auth/find-email', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ phone: findPhone.replace(/\D/g, ''), code: findCode }),
+      })
+      const data = await res.json() as { ok: boolean; email?: string; error?: string }
+      if (!data.ok) {
+        errorMsg = data.error ?? '아이디를 찾을 수 없습니다.'
+        return
+      }
+      foundEmail = data.email ?? null
+    } catch {
+      errorMsg = '네트워크 오류가 발생했습니다.'
+    } finally {
+      isFinding = false
+    }
+  }
+
+  // ── 비밀번호 재설정 링크 발송 ──
+  async function handleResetPw() {
+    errorMsg = null
+    if (!resetEmail) {
+      errorMsg = '이메일 주소를 입력해주세요.'
+      return
+    }
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(resetEmail)) {
+      errorMsg = '올바른 이메일 형식이 아닙니다.'
+      return
+    }
+    isResetting = true
+    try {
+      const { error } = await supabase.auth.resetPasswordForEmail(resetEmail, {
+        redirectTo: `${window.location.origin}/auth/reset-password`,
+      })
+      if (error) {
+        errorMsg = '재설정 링크 발송에 실패했습니다. 잠시 후 다시 시도해주세요.'
+        return
+      }
+      resetSent = true
+    } catch {
+      errorMsg = '네트워크 오류가 발생했습니다.'
+    } finally {
+      isResetting = false
+    }
+  }
+
   function handleOverlayClick(e: MouseEvent) {
     if (e.target === e.currentTarget) handleClose()
   }
@@ -234,7 +349,7 @@
   class="su-overlay"
   role="dialog"
   aria-modal="true"
-  aria-label={mode === 'login' ? '로그인' : '회원가입'}
+  aria-label={mode === 'login' ? '로그인' : mode === 'find-email' ? '아이디 찾기' : mode === 'reset-pw' ? '비밀번호 찾기' : '회원가입'}
   tabindex="-1"
   onclick={handleOverlayClick}
   onkeydown={handleKeydown}
@@ -242,7 +357,7 @@
   <div class="su-modal">
     <!-- 헤더 -->
     <div class="su-header">
-      <span class="su-title">{mode === 'login' ? 'Login' : 'Sign Up'}</span>
+      <span class="su-title">{mode === 'login' ? 'Login' : mode === 'find-email' ? '아이디 찾기' : mode === 'reset-pw' ? '비밀번호 찾기' : 'Sign Up'}</span>
       <button class="su-close" onclick={handleClose} aria-label="닫기" type="button">
         <svg width="18" height="18" viewBox="0 0 18 18" fill="none">
           <path d="M1 1L17 17M17 1L1 17" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
@@ -329,24 +444,28 @@
           {isLoggingIn ? '로그인 중...' : '로그인'}
         </button>
 
+        <div class="su-auth-links">
+          <button class="su-auth-link" type="button" onclick={() => { mode = 'find-email'; errorMsg = null }}>아이디 찾기</button>
+          <span class="su-auth-sep">·</span>
+          <button class="su-auth-link" type="button" onclick={() => { mode = 'reset-pw'; errorMsg = null }}>비밀번호 찾기</button>
+        </div>
+
         <button class="su-switch-mode" type="button" onclick={() => { mode = 'signup'; errorMsg = null }}>
           아직 계정이 없으신가요? <span>5초 회원가입</span>
         </button>
 
-      {:else}
+      {:else if mode === 'signup'}
       {#if step === 'form'}
         <!-- ── 폼 그룹 ── -->
         <div class="su-group">
-          <p class="su-group-label">계정 정보</p>
 
           <!-- 이메일 -->
           <div class="su-field">
-            <label class="su-field-label" for="su-email">이메일 주소</label>
             <input
               id="su-email"
               class="su-input"
               type="email"
-              placeholder="example@email.com"
+              placeholder="사용할 메일 아이디를 입력하세요."
               bind:value={email}
               autocomplete="email"
             />
@@ -354,13 +473,12 @@
 
           <!-- 비밀번호 -->
           <div class="su-field">
-            <label class="su-field-label" for="su-pw">비밀번호</label>
             <div class="su-input-wrap">
               <input
                 id="su-pw"
                 class="su-input"
                 type={showPassword ? 'text' : 'password'}
-                placeholder="6자 이상 입력하세요"
+                placeholder="비밀번호 6자 이상 입력하세요."
                 bind:value={password}
                 autocomplete="new-password"
               />
@@ -389,7 +507,6 @@
 
           <!-- 비밀번호 확인 -->
           <div class="su-field">
-            <label class="su-field-label" for="su-pw2">비밀번호 확인</label>
             <div class="su-input-wrap">
               <input
                 id="su-pw2"
@@ -510,6 +627,121 @@
           </button>
         </div>
       {/if}
+
+      {:else if mode === 'find-email'}
+        <!-- ── 아이디 찾기 ── -->
+        {#if !foundEmail}
+          <div class="su-group">
+            <p class="su-group-label">가입 시 등록한 휴대폰 번호로 아이디를 찾습니다.</p>
+            <div class="su-field">
+              <label class="su-field-label" for="su-find-phone">휴대폰 번호</label>
+              <div class="su-phone-row">
+                <input
+                  id="su-find-phone"
+                  class="su-input su-phone-input"
+                  type="tel"
+                  placeholder="01012345678"
+                  bind:value={findPhone}
+                  maxlength={11}
+                  disabled={findOtpSent}
+                />
+                <button
+                  class="su-otp-btn"
+                  type="button"
+                  onclick={handleFindSendOtp}
+                  disabled={isSendingFindOtp || findOtpSent}
+                >
+                  {#if isSendingFindOtp}
+                    발송 중...
+                  {:else if findOtpSent}
+                    발송됨 ✓
+                  {:else}
+                    인증 발송
+                  {/if}
+                </button>
+              </div>
+              {#if findOtpSent}
+                <p class="su-otp-hint">📱 인증번호가 발송되었습니다. (5분 이내 입력)</p>
+              {/if}
+            </div>
+            {#if findOtpSent}
+              <div class="su-field">
+                <label class="su-field-label" for="su-find-code">인증번호</label>
+                <input
+                  id="su-find-code"
+                  class="su-input"
+                  type="text"
+                  placeholder="인증번호 6자리"
+                  bind:value={findCode}
+                  maxlength={6}
+                />
+              </div>
+            {/if}
+          </div>
+
+          {#if errorMsg}
+            <p class="su-error" role="alert">{errorMsg}</p>
+          {/if}
+
+          {#if findOtpSent}
+            <button class="su-cta" type="button" onclick={handleFindEmail} disabled={isFinding} aria-busy={isFinding}>
+              {isFinding ? '확인 중...' : '아이디 확인'}
+            </button>
+          {/if}
+        {:else}
+          <div class="su-result-box">
+            <p class="su-result-label">가입된 아이디(이메일)</p>
+            <p class="su-result-email">{foundEmail}</p>
+          </div>
+          <button class="su-cta" type="button" onclick={() => { reset(); mode = 'login' }}>로그인하기</button>
+        {/if}
+
+        <button class="su-switch-mode" type="button" onclick={() => { mode = 'login'; errorMsg = null; findPhone = ''; findCode = ''; findOtpSent = false; foundEmail = null }}>
+          <span>← 로그인으로 돌아가기</span>
+        </button>
+
+      {:else if mode === 'reset-pw'}
+        <!-- ── 비밀번호 재설정 ── -->
+        {#if !resetSent}
+          <div class="su-group">
+            <p class="su-group-label">가입 시 사용한 이메일로 비밀번호 재설정 링크를 발송합니다.</p>
+            <div class="su-field">
+              <label class="su-field-label" for="su-reset-email">이메일 주소</label>
+              <input
+                id="su-reset-email"
+                class="su-input"
+                type="email"
+                placeholder="example@email.com"
+                bind:value={resetEmail}
+                autocomplete="email"
+                inputmode="email"
+                oninput={(e) => {
+                  const el = e.currentTarget as HTMLInputElement
+                  el.value = el.value.replace(/[^\x20-\x7E]/g, '')
+                  resetEmail = el.value
+                }}
+              />
+            </div>
+          </div>
+
+          {#if errorMsg}
+            <p class="su-error" role="alert">{errorMsg}</p>
+          {/if}
+
+          <button class="su-cta" type="button" onclick={handleResetPw} disabled={isResetting} aria-busy={isResetting}>
+            {isResetting ? '발송 중...' : '재설정 링크 발송'}
+          </button>
+        {:else}
+          <div class="su-result-box">
+            <p class="su-result-label">📧 이메일을 확인해주세요</p>
+            <p class="su-result-desc">{resetEmail}으로<br>비밀번호 재설정 링크가 발송되었습니다.</p>
+          </div>
+        {/if}
+
+        <button class="su-switch-mode" type="button" onclick={() => { mode = 'login'; errorMsg = null; resetEmail = ''; resetSent = false }}>
+          <span>← 로그인으로 돌아가기</span>
+        </button>
+
       {/if}
 
     </div>
@@ -775,6 +1007,69 @@
     flex-shrink: 0;
   }
   .su-back-btn:hover { background: var(--cs-purple-pale); }
+
+  /* 아이디/비밀번호 찾기 링크 */
+  .su-auth-links {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    min-height: 36px;
+  }
+  .su-auth-link {
+    background: none;
+    border: none;
+    cursor: pointer;
+    font-family: var(--font-kr);
+    font-size: 12px;
+    color: var(--cs-text-mid);
+    padding: 0 2px;
+    text-decoration: underline;
+    min-height: 36px;
+    transition: color 0.15s;
+  }
+  .su-auth-link:hover { color: var(--cs-purple); }
+  .su-auth-sep {
+    font-size: 12px;
+    color: var(--cs-text-light);
+    line-height: 1;
+  }
+
+  /* 결과 박스 */
+  .su-result-box {
+    background: var(--cs-surface-gray);
+    border-radius: var(--radius-md);
+    padding: 24px 20px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 10px;
+    text-align: center;
+  }
+  .su-result-label {
+    font-family: var(--font-kr);
+    font-size: 12px;
+    font-weight: 700;
+    color: var(--cs-text-mid);
+    margin: 0;
+    letter-spacing: -0.2px;
+  }
+  .su-result-email {
+    font-family: var(--font-kr);
+    font-size: 20px;
+    font-weight: 900;
+    color: var(--cs-purple);
+    margin: 0;
+    letter-spacing: -0.5px;
+    word-break: break-all;
+  }
+  .su-result-desc {
+    font-family: var(--font-kr);
+    font-size: 13px;
+    color: var(--cs-text-dark);
+    margin: 0;
+    line-height: 1.6;
+  }
 
   /* 모바일 */
   @media (max-width: 540px) {
