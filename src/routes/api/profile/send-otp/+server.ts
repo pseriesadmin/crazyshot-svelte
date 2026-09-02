@@ -4,6 +4,7 @@ import { SUPABASE_SERVICE_ROLE_KEY } from '$env/static/private'
 import { PUBLIC_SUPABASE_URL } from '$env/static/public'
 import { createClient } from '@supabase/supabase-js'
 import { sendSms } from '$lib/server/sms'
+import { dev } from '$app/environment'
 
 export const POST: RequestHandler = async ({ request, locals }) => {
   const { session } = await locals.safeGetSession()
@@ -45,6 +46,12 @@ export const POST: RequestHandler = async ({ request, locals }) => {
   if (insertErr) {
     console.error('[send-otp] insert error:', insertErr)
     return json({ ok: false, error: '인증번호 생성 실패' }, { status: 500 })
+  }
+
+  if (dev) {
+    // 개발 환경: SMS 미발송, 코드를 서버 콘솔에 출력 + 응답에 포함
+    console.log(`\n[send-otp:DEV] 📱 ${phone} 인증번호: ${code}\n`)
+    return json({ ok: true, devCode: code })
   }
 
   try {

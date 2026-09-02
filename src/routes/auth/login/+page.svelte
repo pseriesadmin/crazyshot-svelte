@@ -1,10 +1,12 @@
 <script lang="ts">
   import { goto } from '$app/navigation'
   import { page } from '$app/stores'
+  import { get } from 'svelte/store'
   import { performSignIn } from '$lib/stores/auth'
   import MobileMoreMenu from '$lib/components/common/MobileMoreMenu.svelte'
   import SignUpModal from '$lib/components/auth/SignUpModal.svelte'
   import LoginBannerModal from '$lib/components/auth/LoginBannerModal.svelte'
+  import { csToast } from '$lib/utils/toast'
   import type { PageData } from './$types'
 
   // ── 서버 데이터 (CMS → 프로모션 → 광고 배너) ──
@@ -12,13 +14,21 @@
 
   // ── 상태 ──
   let menuOpen = $state(false)
+  let emailKoreanWarned = false  // 이메일 한글 경고 중복 방지
   let email = $state('')
   let password = $state('')
   let rememberMe = $state(false)
   let showPassword = $state(false)
   let isLoading = $state(false)
   let errorMsg = $state<string | null>(null)
-  let showSignUpModal = $state(false)
+  let modalInitialMode = $state<'login' | 'signup' | 'find-email' | 'reset-pw'>('login')
+  let showSignUpModal = $state(get(page).url.searchParams.get('mode') === 'signup')
+  $effect(() => {
+    if ($page.url.searchParams.get('mode') === 'signup') {
+      modalInitialMode = 'signup'
+      showSignUpModal = true
+    }
+  })
   let showLoginBannerModal = $state(false)
 
   // 이메일+비밀번호 모두 입력 시 Sign In 모드, 아니면 Sign Up 모드
@@ -32,7 +42,10 @@
     isLoading = true
     errorMsg = null
     try {
-      await performSignIn(email, password)
+      // 이메일은 반드시 trim 후 전송 — 복사·붙여넣기 시 섞여 들어간 공백/개행이 있으면
+      // Supabase가 계정을 못 찾아 "Invalid login credentials"로 오인되는 문제 방지
+      // (비밀번호는 트림하지 않음 — 공백이 실제 비밀번호의 일부일 수 있음)
+      await performSignIn(email.trim(), password)
       const redirectTo = $page.url.searchParams.get('redirect') ?? '/'
       goto(redirectTo)
     } catch (err) {
@@ -112,6 +125,18 @@
                 placeholder="이메일을 입력하세요"
                 bind:value={email}
                 onkeydown={handleKeydown}
+                oninput={(e) => {
+                  const el = e.currentTarget as HTMLInputElement
+                  const filtered = el.value.replace(/[^\x00-\x7F]/g, '')
+                  if (el.value !== filtered) {
+                    el.value = filtered; email = filtered
+                    if (!emailKoreanWarned) {
+                      emailKoreanWarned = true
+                      csToast.warning('영문(숫자) 메일 형식으로 입력하세요.')
+                      setTimeout(() => { emailKoreanWarned = false }, 3000)
+                    }
+                  }
+                }}
                 autocomplete="email"
                 aria-label="이메일"
               />
@@ -176,7 +201,7 @@
               </span>
               <span class="d-remember-label">Remember me</span>
             </label>
-            <button type="button" class="d-forgot" onclick={() => goto('/auth/forgot-password')}>
+            <button type="button" class="d-forgot" onclick={() => { modalInitialMode = 'reset-pw'; showSignUpModal = true }}>
               Forgot password?
             </button>
           </div>
@@ -187,16 +212,18 @@
           </div>
 
           <!-- 소셜 아이콘 -->
-          <div class="d-social">
+          <div class="d-social d-social-coming">
             <!-- Apple -->
-            <button class="d-social-icon" type="button" aria-label="Apple로 로그인">
+            <button class="d-social-icon" type="button" aria-label="Apple로 로그인"
+              onclick={() => csToast.warning('SNS 로그인 오픈 예정입니다.')}>
               <svg width="44" height="44" viewBox="0 0 44 44" fill="none">
                 <rect width="44" height="44" rx="22" fill="white"/>
                 <path d="M27.6128 21.6254C27.6429 24.652 30.4655 25.6592 30.4967 25.672C30.4729 25.743 30.0458 27.1074 29.0097 28.5166C28.114 29.735 27.1845 30.9488 25.7203 30.974C24.2814 30.9986 23.8188 30.1799 22.1738 30.1799C20.5293 30.1799 20.0153 30.9489 18.6533 30.9987C17.2399 31.0485 16.1636 29.6812 15.2605 28.4673C13.4152 25.9842 12.005 21.4508 13.8986 18.3906C14.8392 16.8709 16.5203 15.9086 18.3449 15.8839C19.7328 15.8593 21.0428 16.753 21.8913 16.753C22.7393 16.753 24.3312 15.6782 26.0048 15.8361C26.7055 15.8632 28.6722 16.0995 29.935 17.8199C29.8332 17.8786 27.5883 19.095 27.6128 21.6254ZM24.9087 14.1933C25.6591 13.3479 26.1641 12.171 26.0263 11C24.9447 11.0405 23.6368 11.6709 22.8609 12.5158C22.1656 13.264 21.5567 14.4616 21.721 15.6095C22.9266 15.6963 24.1582 15.0392 24.9087 14.1933Z" fill="var(--cs-dark)"/>
               </svg>
             </button>
             <!-- Instagram -->
-            <button class="d-social-icon" type="button" aria-label="Instagram으로 로그인">
+            <button class="d-social-icon" type="button" aria-label="Instagram으로 로그인"
+              onclick={() => csToast.warning('SNS 로그인 오픈 예정입니다.')}>
               <div class="d-insta-wrap">
                 <div class="d-insta-bg"></div>
                 <svg width="19" height="19" viewBox="0 0 19 19" fill="none" class="d-insta-icon">
@@ -206,7 +233,8 @@
               </div>
             </button>
             <!-- X (Twitter) -->
-            <button class="d-social-icon" type="button" aria-label="X로 로그인">
+            <button class="d-social-icon" type="button" aria-label="X로 로그인"
+              onclick={() => csToast.warning('SNS 로그인 오픈 예정입니다.')}>
               <svg width="44" height="44" viewBox="0 0 44 44" fill="none">
                 <rect width="44" height="44" rx="22" fill="white"/>
                 <path d="M27.1761 13H29.9362L23.9061 20.6246L31 31H25.4456L21.0951 24.7074L16.1172 31H13.3554L19.8052 22.8446L13 13H18.6955L22.6279 18.7517L27.1761 13ZM26.2073 29.1723H27.7368L17.8644 14.7317H16.2232L26.2073 29.1723Z" fill="var(--cs-dark)"/>
@@ -240,7 +268,7 @@
             <!-- 기본 상태 → Sign Up 버튼 -->
             <button
               class="d-signup-submit"
-              onclick={() => showSignUpModal = true}
+              onclick={() => { modalInitialMode = 'signup'; showSignUpModal = true }}
               type="button"
             >
               Sign Up
@@ -258,7 +286,8 @@
 <!-- 회원가입 모달 -->
 <SignUpModal
   open={showSignUpModal}
-  onclose={() => showSignUpModal = false}
+  initialMode={modalInitialMode}
+  onclose={() => { showSignUpModal = false; modalInitialMode = 'login' }}
   onsuccess={() => {
     showSignUpModal = false
     const redirectTo = $page.url.searchParams.get('redirect') ?? '/'
@@ -351,6 +380,18 @@
             placeholder="이메일을 입력하세요"
             bind:value={email}
             onkeydown={handleKeydown}
+            oninput={(e) => {
+              const el = e.currentTarget as HTMLInputElement
+              const filtered = el.value.replace(/[^\x00-\x7F]/g, '')
+              if (el.value !== filtered) {
+                el.value = filtered; email = filtered
+                if (!emailKoreanWarned) {
+                  emailKoreanWarned = true
+                  csToast.warning('영문(숫자) 메일 형식으로 입력하세요.')
+                  setTimeout(() => { emailKoreanWarned = false }, 3000)
+                }
+              }
+            }}
             autocomplete="email"
             aria-label="이메일"
           />
@@ -413,7 +454,7 @@
           </span>
           <span class="m-remember-label">Remember me</span>
         </label>
-        <button type="button" class="m-forgot" onclick={() => goto('/auth/forgot-password')}>
+        <button type="button" class="m-forgot" onclick={() => { modalInitialMode = 'reset-pw'; showSignUpModal = true }}>
           Forgot password?
         </button>
       </div>
@@ -424,14 +465,16 @@
       </div>
 
       <!-- 소셜 아이콘 -->
-      <div class="m-social">
-        <button class="m-social-icon" type="button" aria-label="Apple로 로그인">
+      <div class="m-social m-social-coming">
+        <button class="m-social-icon" type="button" aria-label="Apple로 로그인"
+          onclick={() => csToast.warning('SNS 로그인 오픈 예정입니다.')}>
           <svg width="44" height="44" viewBox="0 0 44 44" fill="none">
             <rect width="44" height="44" rx="22" fill="white"/>
             <path d="M27.6128 21.6254C27.6429 24.652 30.4655 25.6592 30.4967 25.672C30.4729 25.743 30.0458 27.1074 29.0097 28.5166C28.114 29.735 27.1845 30.9488 25.7203 30.974C24.2814 30.9986 23.8188 30.1799 22.1738 30.1799C20.5293 30.1799 20.0153 30.9489 18.6533 30.9987C17.2399 31.0485 16.1636 29.6812 15.2605 28.4673C13.4152 25.9842 12.005 21.4508 13.8986 18.3906C14.8392 16.8709 16.5203 15.9086 18.3449 15.8839C19.7328 15.8593 21.0428 16.753 21.8913 16.753C22.7393 16.753 24.3312 15.6782 26.0048 15.8361C26.7055 15.8632 28.6722 16.0995 29.935 17.8199C29.8332 17.8786 27.5883 19.095 27.6128 21.6254ZM24.9087 14.1933C25.6591 13.3479 26.1641 12.171 26.0263 11C24.9447 11.0405 23.6368 11.6709 22.8609 12.5158C22.1656 13.264 21.5567 14.4616 21.721 15.6095C22.9266 15.6963 24.1582 15.0392 24.9087 14.1933Z" fill="var(--cs-dark)"/>
           </svg>
         </button>
-        <button class="m-social-icon" type="button" aria-label="Instagram으로 로그인">
+        <button class="m-social-icon" type="button" aria-label="Instagram으로 로그인"
+          onclick={() => csToast.warning('SNS 로그인 오픈 예정입니다.')}>
           <div class="m-insta-wrap">
             <div class="m-insta-bg"></div>
             <svg width="19" height="19" viewBox="0 0 19 19" fill="none" class="m-insta-icon">
@@ -440,7 +483,8 @@
             </svg>
           </div>
         </button>
-        <button class="m-social-icon" type="button" aria-label="X로 로그인">
+        <button class="m-social-icon" type="button" aria-label="X로 로그인"
+          onclick={() => csToast.warning('SNS 로그인 오픈 예정입니다.')}>
           <svg width="44" height="44" viewBox="0 0 44 44" fill="none">
             <rect width="44" height="44" rx="22" fill="white"/>
             <path d="M27.1761 13H29.9362L23.9061 20.6246L31 31H25.4456L21.0951 24.7074L16.1172 31H13.3554L19.8052 22.8446L13 13H18.6955L22.6279 18.7517L27.1761 13ZM26.2073 29.1723H27.7368L17.8644 14.7317H16.2232L26.2073 29.1723Z" fill="var(--cs-dark)"/>
@@ -472,7 +516,7 @@
       {:else}
         <button
           class="m-signup-submit"
-          onclick={() => showSignUpModal = true}
+          onclick={() => { modalInitialMode = 'signup'; showSignUpModal = true }}
           type="button"
         >
           Sign Up
@@ -759,6 +803,11 @@
     align-items: center;
     justify-content: center;
   }
+  .d-social-coming {
+    opacity: 0.4;
+    pointer-events: auto;
+    filter: grayscale(0.3);
+  }
   .d-social-icon {
     background: none;
     border: none;
@@ -772,6 +821,7 @@
     border-radius: var(--radius-full);
     transition: transform 0.15s;
   }
+  .d-social-coming .d-social-icon:hover { transform: none; }
   .d-social-icon:hover { transform: scale(1.1); }
   .d-insta-wrap {
     position: relative;
@@ -1087,6 +1137,12 @@
     transition: transform 0.15s;
   }
   .m-social-icon:hover { transform: scale(1.1); }
+  .m-social-coming {
+    opacity: 0.4;
+    pointer-events: auto;
+    filter: grayscale(0.3);
+  }
+  .m-social-coming .m-social-icon:hover { transform: none; }
   .m-insta-wrap {
     position: relative;
     width: 44px;
@@ -1115,7 +1171,7 @@
 
   /* PC Sign Up 버튼 (기본 노출) */
   .d-signup-submit {
-    background: var(--cs-purple);
+    background: linear-gradient(90deg, #f19065 0%, #893be6 100%);
     border: none;
     border-radius: var(--radius-full);
     height: 56px;
@@ -1127,10 +1183,10 @@
     align-items: center;
     justify-content: center;
     gap: 10px;
-    transition: background 0.2s, transform 0.15s;
+    transition: opacity 0.2s, transform 0.15s;
   }
-  .d-signup-submit:hover { background: var(--cs-purple-dark); transform: translateY(-1px); }
-  .d-signup-submit:active { transform: translateY(0); }
+  .d-signup-submit:hover { opacity: 0.9; transform: translateY(-1px); }
+  .d-signup-submit:active { transform: translateY(0); opacity: 1; }
 
   /* 모바일 로그인 버튼 */
   .m-signin-submit {
@@ -1155,7 +1211,7 @@
 
   /* 모바일 Sign Up 버튼 (기본 노출) */
   .m-signup-submit {
-    background: var(--cs-purple);
+    background: linear-gradient(90deg, #f19065 0%, #893be6 100%);
     border: none;
     border-radius: var(--radius-full);
     height: 56px;
@@ -1167,7 +1223,8 @@
     align-items: center;
     justify-content: center;
     gap: 10px;
-    transition: background 0.2s;
+    transition: opacity 0.2s, transform 0.15s;
   }
-  .m-signup-submit:hover { background: var(--cs-purple-dark); }
+  .m-signup-submit:hover:not(:disabled) { opacity: 0.9; transform: translateY(-1px); }
+  .m-signup-submit:active:not(:disabled) { transform: translateY(0); }
 </style>
