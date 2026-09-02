@@ -14,6 +14,7 @@ import {
 	MAX_RESERVATION_QTY,
 	resolveParentProductId,
 	mergeReservationOptions,
+	clampToAvailableStock,
 	type UnitReservationResult,
 	type ReservationOptionInput
 } from '$lib/services/reservationHelper';
@@ -478,5 +479,41 @@ describe('옵션 병합: mergeReservationOptions (2026-08-28 카트 병합)', ()
 	it('incoming이 빈 배열이면 existing 그대로 반환(옵션 없이 재담기해도 기존 옵션 유지)', () => {
 		const existing = [opt({ option_product_id: 'opt-1' })];
 		expect(mergeReservationOptions(existing, [])).toEqual(existing);
+	});
+});
+
+describe('가용재고 상한: clampToAvailableStock (2026-09-02 재고 동기화)', () => {
+	it('가용재고가 하드상한보다 작으면 가용재고 값을 그대로 상한으로 사용', () => {
+		expect(clampToAvailableStock(3)).toBe(3);
+	});
+
+	it('가용재고가 하드상한(10)보다 크면 하드상한으로 클램프', () => {
+		expect(clampToAvailableStock(50)).toBe(MAX_RESERVATION_QTY);
+	});
+
+	it('가용재고가 0이면 0 반환(더 이상 담을 수 없음)', () => {
+		expect(clampToAvailableStock(0)).toBe(0);
+	});
+
+	it('음수 가용재고는 0으로 보정(방어적 처리, 실제로는 RPC가 GREATEST(0,...)로 보장)', () => {
+		expect(clampToAvailableStock(-5)).toBe(0);
+	});
+
+	it('null/undefined(재고 조회 실패)면 기존 하드코딩 상한으로 안전 폴백', () => {
+		expect(clampToAvailableStock(null)).toBe(MAX_RESERVATION_QTY);
+		expect(clampToAvailableStock(undefined)).toBe(MAX_RESERVATION_QTY);
+	});
+
+	it('NaN도 폴백 처리(유효하지 않은 수치)', () => {
+		expect(clampToAvailableStock(Number.NaN)).toBe(MAX_RESERVATION_QTY);
+	});
+
+	it('소수점 가용재고는 내림 처리(반쪽 재고는 없음)', () => {
+		expect(clampToAvailableStock(3.9)).toBe(3);
+	});
+
+	it('커스텀 hardCap을 지정하면 그 값이 상한으로 쓰인다', () => {
+		expect(clampToAvailableStock(50, 5)).toBe(5);
+		expect(clampToAvailableStock(2, 5)).toBe(2);
 	});
 });

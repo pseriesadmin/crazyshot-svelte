@@ -3,6 +3,7 @@ import { isRealMemberSession } from '$lib/utils/authGuard'
 import { loadCourierClosedDates } from '$lib/server/courierClosedDates'
 import { isCouponEligible } from '$lib/server/coupons/couponEligibility'
 import { groupCartLineItems } from '$lib/utils/cartLineGrouping'
+import { resolveParentProductId } from '$lib/services/reservationHelper'
 import type { PageServerLoad } from './$types'
 import type { SupabaseClient } from '@supabase/supabase-js'
 
@@ -202,6 +203,7 @@ export const load: PageServerLoad = async ({ locals }) => {
   let cartProducts:   ProductRow[] = []   // 예약 순서대로 정렬된 카드용 상품 (하위호환)
   let cartLineItems:  CartLineItem[] = []
   let cartLineGroups: ReturnType<typeof groupCartLineItems> = []
+  const availableStock: Record<string, number> = {}
   let productPriceRules: Record<string, { price12h: number | null; price24h: number | null; deposit: number | null }> = {}
   let calcTotal = 0, calcDiscount = 0, calcFinal = 0, depositTotal = 0
 
@@ -351,6 +353,36 @@ export const load: PageServerLoad = async ({ locals }) => {
     // 1개로 묶어 표시한다. calculate_cart_total 등 금액 계산은 예약행 단위 그대로 유지(아래).
     cartLineGroups = groupCartLineItems(cartLineItems)
 
+    // 가용 재고 수 — 각 그룹의 메인상품(부모 해석) + 옵션상품 전부 배치 조회(Migration 421).
+    // products/[id]/+page.server.ts와 동일 규칙("등록된 총 수량 - 점유되지 않은 실제 가용
+    // 재고", 날짜 무관 현재시점 스냅샷) — 카트 수량(+) 버튼·옵션 수량(+) 버튼의 사전차단에 사용.
+    const stockProductIds = [...new Set(
+      cartLineGroups.flatMap(g => {
+        const ids: string[] = []
+        const parentId = resolveParentProductId(g.product)
+        if (parentId) ids.push(parentId)
+        for (const o of g.options) {
+          if (o.optionProductId) ids.push(o.optionProductId)
+        }
+        return ids
+      })
+    )]
+    if (stockProductIds.length > 0) {
+      type StockRpcFn = (name: string, args: Record<string, unknown>) => Promise<{
+        data: Array<{ product_id: string; available_count: number }> | null
+        error: unknown
+      }>
+      const { data: stockRows, error: stockError } = await (supabase.rpc as unknown as StockRpcFn)(
+        'get_available_stock_counts',
+        { p_product_ids: stockProductIds },
+      )
+      if (stockError) {
+        console.error('[cart] get_available_stock_counts 실패:', (stockError as { message?: string }).message)
+      } else {
+        for (const r of stockRows ?? []) availableStock[r.product_id] = r.available_count
+      }
+    }
+
     // calculate_cart_total RPC — subtotal, discount_amount, final_total, deposit_required 반환
     // (Database.Functions 타입 불일치로 as unknown as 캐스트 사용 — 기존 products/[id] 패턴 동일)
     // draft 행(날짜 NULL)이 섞이면 subtotal이 NULL로 오염되므로 hold 상태 행만 필터링해 전달 (DB-5는 2차 방어)
@@ -424,6 +456,7 @@ export const load: PageServerLoad = async ({ locals }) => {
     cartProducts,
     cartLineItems,
     cartLineGroups,
+    availableStock,
     productPriceRules,
     depositTotal,
     calcTotal,

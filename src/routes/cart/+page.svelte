@@ -12,9 +12,8 @@
   import { calcShippingFee, calcShippingDiscountRate, isFreeDeliveryCouponBlocked, type ShippingFeeItem, type DeliveryFeeDiscountTier, type DiscountConditionItem } from '$lib/utils/cartShippingFee';
   import { calcRentalDays, calcRentalFee } from '$lib/utils/cartRentalFee';
   import {
-    createMultiUnitReservation,
     resolveParentProductId,
-    type UnitReservationResult,
+    clampToAvailableStock,
   } from '$lib/services/reservationHelper';
 
   function readInputValue(event: { currentTarget: { value: string } }): string {
@@ -167,84 +166,138 @@
 
   // ── 그룹 수량(−/+) 실동작화 (2026-08-28, Stephen GATE B 승인) — 화면 표시용 숫자가 아니라
   // 실제 예약 생성/취소로 서버에 반영한다. 날짜는 그룹에 이미 설정된 값을 그대로 재사용하고
-  // 새로 묻지 않는다(핵심 확정사항 — products/[id]/+page.svelte의 createMultiUnitReservation
-  // 패턴을 qty=1로 그대로 재사용).
+  // 새로 묻지 않는다(핵심 확정사항). 이후 로딩 최소화(2026-09-02, "1번" 승인) + RPC 왕복
+  // 절감·연타 디바운스(2026-09-02, "2번·3번" 승인)로 3단계 확장:
+  //   ① 클릭 즉시 네트워크 호출 없이 pendingDelta만 누적 + 화면(qty)만 즉시 갱신
+  //   ② DEBOUNCE_MS 동안 추가 클릭이 없으면 그때 실제로 서버에 반영(+/−가 상쇄되면 왕복 자체가
+  //      발생하지 않음)
+  //   ③ hold 그룹은 create_hold_reservation_with_shipment(Migration 424)로 예약생성+수령/
+  //      반납방식+대여기간유형을 한 번의 서버 왕복에 묶음(기존 3회 순차 호출 → 1회)
+  const DEBOUNCE_MS = 350
+  // pendingDelta는 groupsById(아래쪽 526행 부근)가 참조하므로 그 옆에서 선언된다(TDZ 방지).
+  const debounceTimers: Record<string, ReturnType<typeof setTimeout>> = {}
   let pendingQtyKey = $state<string | null>(null)
 
-  async function incrementGroupQty(line: CartLineGroup | undefined) {
-    if (!line || pendingQtyKey === line.canonicalReservationId) return
-    pendingQtyKey = line.canonicalReservationId
+  // qtyOverrides와 itemsState.reservationIds를 함께 갱신 — itemsState.reservationIds는
+  // 체크아웃·draft승격이 실제로 참조하는 필드라 qtyOverrides만 갱신하면 체크아웃이 구값을
+  // 그대로 제출하는 버그가 생긴다(2026-09-02 발견·수정).
+  //
+  // ⚠️ consumeDelta(선택) — flushQtyChange 경유 호출은 반드시 이 값을 함께 넘겨야 한다.
+  // qtyOverrides 갱신과 pendingDelta 차감을 별도의 두 번의 $state 대입(서로 다른 await 이후
+  // 마이크로태스크)으로 나누면, Svelte가 그 사이(override는 반영, delta는 아직 안 줄어든)
+  // 순간의 화면을 실제로 한 프레임 그려버려 수량이 잠깐 한 칸 더 튀었다가(예: 2→3 클릭인데
+  // 잠깐 4로 보였다가 3으로 정정) +/− 버튼의 disabled(재고상한 비교)도 함께 깜빡인다
+  // (2026-09-02, Stephen이 버튼 비활성/활성 반복으로 직접 발견·재보고). 반드시 override와
+  // delta 차감을 같은 동기 구간(하나의 함수 호출) 안에서 함께 반영해 중간 프레임 자체가
+  // 생기지 않게 한다.
+  function applyQtyOverride(canonicalId: string, qty: number, reservationIds: string[], consumeDelta: 1 | -1 | 0 = 0) {
+    qtyOverrides = { ...qtyOverrides, [canonicalId]: { qty, reservationIds } }
+    itemsState = itemsState.map(it => it.id === canonicalId ? { ...it, reservationIds } : it)
+    if (consumeDelta !== 0) {
+      const nextDelta = { ...pendingDelta }
+      const remaining = (nextDelta[canonicalId] ?? 0) - consumeDelta
+      if (remaining === 0) delete nextDelta[canonicalId]; else nextDelta[canonicalId] = remaining
+      pendingDelta = nextDelta
+    }
+  }
+
+  type UnitRpcFn = (name: string, args: Record<string, unknown>) => Promise<{
+    data: Array<{ success: boolean; reservation_id: number | null; error_message: string | null }> | null
+    error: { message?: string } | null
+  }>
+
+  // 예약 1개 생성 — hold는 combo RPC로 예약+수령반납방식+대여기간유형을 한 번에, draft는
+  // 기존 그대로(원래도 1회 호출). 실패 시 false(호출측이 델타 처리를 중단).
+  // consumeDelta — flushQtyChange가 호출할 때만 1을 넘겨 override 반영과 같은 동기 구간에서
+  // pendingDelta도 함께 차감한다(중간 프레임 방지, 위 applyQtyOverride 주석 참고).
+  async function incrementGroupQtyImmediate(line: CartLineGroup, consumeDelta: 1 | 0 = 0): Promise<boolean> {
+    const parentProductId = resolveParentProductId(line.product)
+    if (line.status === 'draft') {
+      const { data, error } = await (supabase.rpc as unknown as UnitRpcFn)('create_draft_reservation', {
+        p_product_id: parentProductId,
+      })
+      const row = data?.[0]
+      if (!row?.success || row.reservation_id == null) {
+        csToast.error(row?.error_message ?? error?.message ?? '재고가 부족합니다.')
+        return false
+      }
+      applyQtyOverride(line.canonicalReservationId, line.qty + 1, [...line.reservationIds, String(row.reservation_id)], consumeDelta)
+      return true
+    }
+
+    const { data, error } = await (supabase.rpc as unknown as UnitRpcFn)('create_hold_reservation_with_shipment', {
+      p_product_id:    parentProductId,
+      p_start_date:    line.startDate,
+      p_end_date:      line.endDate,
+      p_pickup_method: toDeliveryMethod(line.pickupMethod, 'visit'),
+      p_return_method: toDeliveryMethod(line.returnMethod, 'visit'),
+      p_pickup_time:   line.pickupTime ?? null,
+      p_return_time:   line.returnTime ?? null,
+      p_duration_type: line.durationType ?? '24h',
+    })
+    const row = data?.[0]
+    if (!row?.success || row.reservation_id == null) {
+      csToast.error(row?.error_message ?? error?.message ?? '재고가 부족합니다.')
+      return false
+    }
+    if (row.error_message?.startsWith('DURATION_SAVE_FAILED:')) {
+      // 대여기간유형 저장 실패는 결제·재고 확정을 막을 정도로 치명적이지 않으므로 비차단 경고만
+      csToast.error('대여기간유형 저장에 실패했습니다. CMS에 문의해주세요.')
+    }
+    fetch('/api/checkout/notify-hold', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ reservationId: row.reservation_id }),
+    }).catch(() => {})
+    applyQtyOverride(line.canonicalReservationId, line.qty + 1, [...line.reservationIds, String(row.reservation_id)], consumeDelta)
+    return true
+  }
+
+  // 그룹의 가장 최근(가장 큰 id) 예약 1건 취소 — reservationIds는 항상 오름차순 정렬돼
+  // 있으므로 canonical(0번, 옵션 보유)은 다른 멤버가 남아있는 한 절대 선택되지 않는다.
+  // consumeDelta — incrementGroupQtyImmediate와 동일 이유(위 주석 참고).
+  async function decrementGroupQtyImmediate(line: CartLineGroup, consumeDelta: -1 | 0 = 0): Promise<boolean> {
+    const targetId = line.reservationIds[line.reservationIds.length - 1]
+    const res = await fetch('/api/checkout/remove-item', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ reservationId: targetId }),
+    })
+    const result = await res.json().catch(() => ({ ok: false }))
+    if (!res.ok || !result.ok) {
+      csToast.error('삭제 처리 중 오류가 발생했습니다.')
+      return false
+    }
+    applyQtyOverride(line.canonicalReservationId, line.qty - 1, line.reservationIds.slice(0, -1), consumeDelta)
+    return true
+  }
+
+  // pendingDelta를 실제 서버 반영으로 확정 — delta 크기만큼 순차로 생성/취소(부분 실패 시 중단).
+  // 이미 같은 그룹을 처리 중이면(레이스) 델타를 보존한 채 이번 트리거만 건너뛴다 — 다음 클릭이나
+  // flushAllPendingQtyChanges(체크아웃 직전)가 다시 시도한다.
+  //
+  // ⚠️ RPC에는 groupsBaseById(확정값만)를 넘기고, pendingDelta는 스텝마다 "1개씩만" 줄인다
+  // (전부 한번에 비우지 않음) — 그래야 override 반영 전후로 화면(groupsById=확정값+남은
+  // 델타)에 순간적인 값 되돌림(깜빡임)이 생기지 않는다(2026-09-02 발견·수정).
+  async function flushQtyChange(canonicalId: string): Promise<void> {
+    if (pendingQtyKey === canonicalId) return
+    clearTimeout(debounceTimers[canonicalId])
+    delete debounceTimers[canonicalId]
+    const totalDelta = pendingDelta[canonicalId] ?? 0
+    if (totalDelta === 0) return
+    pendingQtyKey = canonicalId
     try {
-      const cancelUnit = async (reservationId: number) => {
-        await fetch('/api/reservations/cancel-hold', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ reservationId }),
-        }).catch(() => {})
+      const steps = Math.abs(totalDelta)
+      const dir = totalDelta > 0 ? 1 : -1
+      for (let i = 0; i < steps; i++) {
+        const fresh = groupsBaseById.get(canonicalId)
+        if (!fresh) break
+        // consumeDelta를 함께 넘겨 override 반영과 delta 차감이 같은 동기 구간(applyQtyOverride
+        // 내부)에서 한 번에 일어나게 한다 — 별도 두 단계로 나누면 그 사이 프레임에 화면이
+        // 순간적으로 한 칸 더 튀는 깜빡임이 생긴다(2026-09-02 발견·수정, 위 주석 참고).
+        const ok = dir === 1 ? await incrementGroupQtyImmediate(fresh, 1) : await decrementGroupQtyImmediate(fresh, -1)
+        if (!ok) break
       }
-      // RPC 자체가 실패(함수 없음·네트워크 등)하면 data가 null이 되어 row도 undefined가 되므로,
-      // error를 확인하지 않으면 "재고가 부족합니다" 같은 무관한 기본 문구로 실제 원인이 가려진다
-      // (promote_draft_reservation production 누락 결함과 동일 클래스 — QA 발견, 2026-09-01).
-      type UnitRpcFn = (name: string, args: Record<string, unknown>) => Promise<{
-        data: Array<{ success: boolean; reservation_id: number | null; error_message: string | null }> | null
-        error: { message?: string } | null
-      }>
-      const parentProductId = resolveParentProductId(line.product)
-      const createUnit = async (): Promise<UnitReservationResult> => {
-        if (line.status === 'draft') {
-          const { data, error } = await (supabase.rpc as unknown as UnitRpcFn)('create_draft_reservation', {
-            p_product_id: parentProductId,
-          })
-          const row = data?.[0]
-          return { success: !!row?.success, reservationId: row?.reservation_id ?? null, errorMessage: row?.error_message ?? error?.message ?? null }
-        }
-        const { data, error } = await (supabase.rpc as unknown as UnitRpcFn)('create_hold_reservation', {
-          p_product_id: parentProductId,
-          p_start_date: line.startDate,
-          p_end_date:   line.endDate,
-        })
-        const row = data?.[0]
-        return { success: !!row?.success, reservationId: row?.reservation_id ?? null, errorMessage: row?.error_message ?? error?.message ?? null }
-      }
-
-      const outcome = await createMultiUnitReservation(1, { createUnit, cancelUnit })
-      if (!outcome.success) {
-        csToast.error(outcome.errorMessage ?? '재고가 부족합니다.')
-        return
-      }
-
-      if (line.status === 'hold') {
-        const newId = outcome.reservationIds[0]
-        const shipmentResult = await saveShipmentMethod(
-          String(newId),
-          toDeliveryMethod(line.pickupMethod, 'visit'),
-          toDeliveryMethod(line.returnMethod, 'visit'),
-          line.pickupTime ?? undefined,
-          line.returnTime ?? undefined,
-        )
-        if (!shipmentResult.success) {
-          csToast.error(shipmentResult.errorMessage ?? '수령/반납 방식 저장에 실패했습니다.')
-          await cancelUnit(newId)
-          return
-        }
-        type DurationRpcFn = (name: string, args: Record<string, unknown>) => Promise<{ error: { message?: string } | null }>
-        const { error: durationError } = await (supabase.rpc as unknown as DurationRpcFn)('set_reservation_duration', {
-          p_reservation_id: newId,
-          p_duration_type:  line.durationType ?? '24h',
-        })
-        if (durationError) {
-          // 대여기간유형 저장 실패는 결제·재고 확정을 막을 정도로 치명적이지 않으므로
-          // 계속 진행하되, 완전 무음 처리 대신 비차단 경고로 알린다(1296행과 동일 패턴, 2026-09-01).
-          csToast.error('대여기간유형 저장에 실패했습니다. CMS에 문의해주세요.')
-        }
-        fetch('/api/checkout/notify-hold', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ reservationId: newId }),
-        }).catch(() => {})
-      }
-
-      await invalidateAll()
     } catch {
       csToast.error('네트워크 오류가 발생했습니다.')
     } finally {
@@ -252,36 +305,59 @@
     }
   }
 
-  async function decrementGroupQty(line: CartLineGroup | undefined) {
-    if (!line || pendingQtyKey === line.canonicalReservationId) return
-    // 그룹에 예약이 1건만 남아있으면 감소가 아니라 카드 전체 삭제(기존 removeItem 재사용)
-    if (line.reservationIds.length <= 1) {
-      const target = itemsState.find(it => it.id === line.canonicalReservationId)
-      if (target) await removeItem(target)
+  // 모든 그룹의 미확정 수량변경을 즉시 확정 — 체크아웃 제출 직전 반드시 호출해야 디바운스
+  // 창이 남아있는 상태로 제출해 최신 수량이 누락되는 사고를 막는다(2026-09-02).
+  async function flushAllPendingQtyChanges(): Promise<void> {
+    const ids = Object.keys(pendingDelta).filter(id => (pendingDelta[id] ?? 0) !== 0)
+    for (const id of ids) await flushQtyChange(id)
+  }
+
+  function scheduleQtyChange(line: CartLineGroup | undefined, direction: 1 | -1) {
+    if (!line) return
+    const id = line.canonicalReservationId
+    const nextQty = line.qty + direction
+
+    if (direction === 1) {
+      // 가용 재고 사전차단(2026-09-02, Stephen GATE B 승인) — 로드 시점 재고 스냅샷으로 먼저
+      // 막는다(실제 서버 재검증은 create_hold_reservation_with_shipment가 여전히 담당).
+      if (nextQty > stockCapFor(resolveParentProductId(line.product))) {
+        csToast.error('예약 가능한 재고가 없습니다.')
+        return
+      }
+    } else if (nextQty < 1) {
+      // 마지막 1개 취소(=카드 전체 삭제)는 디바운스 대상 밖 — 쌓인 변경을 먼저 확정한 뒤
+      // 기존 삭제 흐름(removeItem)을 그대로 사용한다(이번 스코프는 카드삭제 자체는 다루지 않음).
+      void (async () => {
+        await flushQtyChange(id)
+        if (pendingQtyKey === id) return // 레이스 방어 — 이미 다른 처리 중이면 건드리지 않음
+        const fresh = groupsById.get(id)
+        if (!fresh) return
+        if (fresh.reservationIds.length <= 1) {
+          const target = itemsState.find(it => it.id === id)
+          if (target) await removeItem(target)
+        } else {
+          pendingQtyKey = id
+          try {
+            await decrementGroupQtyImmediate(fresh)
+          } catch {
+            csToast.error('네트워크 오류가 발생했습니다.')
+          } finally {
+            pendingQtyKey = null
+          }
+        }
+      })()
       return
     }
-    pendingQtyKey = line.canonicalReservationId
-    try {
-      // reservationIds는 항상 오름차순 정렬돼 있으므로 마지막(가장 최근 생성) id를 취소하면
-      // canonical(0번, 옵션 보유)은 그룹에 다른 멤버가 남아있는 한 절대 선택되지 않는다.
-      const targetId = line.reservationIds[line.reservationIds.length - 1]
-      const res = await fetch('/api/checkout/remove-item', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ reservationId: targetId }),
-      })
-      const result = await res.json()
-      if (!res.ok || !result.ok) {
-        csToast.error('삭제 처리 중 오류가 발생했습니다.')
-        return
-      }
-      await invalidateAll()
-    } catch {
-      csToast.error('네트워크 오류가 발생했습니다.')
-    } finally {
-      pendingQtyKey = null
-    }
+
+    const nextDelta = { ...pendingDelta, [id]: (pendingDelta[id] ?? 0) + direction }
+    if (nextDelta[id] === 0) delete nextDelta[id]
+    pendingDelta = nextDelta
+    clearTimeout(debounceTimers[id])
+    debounceTimers[id] = setTimeout(() => { void flushQtyChange(id) }, DEBOUNCE_MS)
   }
+
+  function incrementGroupQty(line: CartLineGroup | undefined) { scheduleQtyChange(line, 1) }
+  function decrementGroupQty(line: CartLineGroup | undefined) { scheduleQtyChange(line, -1) }
 
   // ── 통합 대여예약옵션 상태 (통합 단일 정책 — 2026-08-05)
   let bulkOpen    = $state(false)
@@ -515,7 +591,7 @@
   // canonicalReservationId가 옵션·방식 저장 기준(=CartItemUiState.id와 동일).
   type CartLineGroup = { groupKey: string; canonicalReservationId: string; reservationIds: string[]; qty: number; productId: string | null; product: ProductRow | null; price12h: number | null; price24h: number | null; deposit: number | null; startDate: string; endDate: string; pickupMethod: string | null; returnMethod: string | null; pickupTime: string | null; returnTime: string | null; durationType: string | null; options: CartLineItemOption[]; status: string }
   type RentalConsentItemRow = { id: string; content: string; display_order: number }
-  type ServerExt = { calcTotal: number; calcDiscount: number; calcFinal: number; depositTotal: number; membershipGrade: string | null; userPoints: number; userCoupons: UserCouponExt[]; cartLineItems: CartLineItem[]; cartLineGroups: CartLineGroup[]; productPriceRules: Record<string, PriceRuleExt>; hasUserAddress: boolean; rentalGuideText: string; consentItems: RentalConsentItemRow[] }
+  type ServerExt = { calcTotal: number; calcDiscount: number; calcFinal: number; depositTotal: number; membershipGrade: string | null; userPoints: number; userCoupons: UserCouponExt[]; cartLineItems: CartLineItem[]; cartLineGroups: CartLineGroup[]; availableStock: Record<string, number>; productPriceRules: Record<string, PriceRuleExt>; hasUserAddress: boolean; rentalGuideText: string; consentItems: RentalConsentItemRow[] }
   const sd = $derived(data as unknown as ServerExt)
 
   // 카트 라인아이템 — 항상 실 DB 기준 (게스트도 예약 시 익명 로그인으로 실 세션을 가지므로
@@ -523,9 +599,43 @@
   const effectiveLineItems = $derived<CartLineItem[]>((sd as { cartLineItems?: CartLineItem[] }).cartLineItems ?? [])
   // 동일 부모상품 중복담기 병합 그룹 — 카드 렌더링·수량·옵션합산은 전부 이 그룹 기준으로 동작
   const effectiveLineGroups = $derived<CartLineGroup[]>((sd as { cartLineGroups?: CartLineGroup[] }).cartLineGroups ?? [])
+  // 수량(±) 낙관적 로컬 오버라이드 (2026-09-02, Stephen 승인 — "전체 재로딩 제거, 필요한
+  // 값만 다시 계산") — incrementGroupQty/decrementGroupQty가 성공하면 invalidateAll()로
+  // 카트 load() 전체(쿠폰·배송설정·재고조회 등 수십 개 쿼리)를 다시 실행하는 대신, 이 그룹의
+  // qty/reservationIds만 로컬로 즉시 반영한다. 화면에 실제로 렌더링되는 모든 금액(otSubtotal/
+  // otDeposit 등)은 groupsById → line.qty 파생값이라(dead prop인 sd.calcTotal 등과 무관),
+  // 이 오버레이만으로 합계까지 함께 즉시 갱신된다. 다른 흐름(옵션수량 변경·카드삭제·체크아웃
+  // 등)이 실제로 invalidateAll()을 부르면 아래 동기화 이펙트가 오버라이드를 전부 비워
+  // 서버값으로 정합화한다.
+  let qtyOverrides = $state<Record<string, { qty: number; reservationIds: string[] }>>({})
+  // 연타 디바운스(2026-09-02, Stephen "3번" 승인) — 아직 서버에 반영 전인 클릭 누적분(±).
+  // groupsById가 이걸 읽으므로 반드시 groupsById보다 먼저 선언돼야 한다(TDZ 방지).
+  let pendingDelta = $state<Record<string, number>>({})
   // itemsState[i]↔effectiveLineItems[i] 배열 인덱스 결합(과거 1예약행=1카드 시절의 landmine)을
   // 전부 제거하기 위한 canonical id → 그룹 조회 Map — 5곳 전부 이걸로 교체(2026-08-28)
-  const groupsById = $derived(new Map(effectiveLineGroups.map(g => [g.canonicalReservationId, g])))
+  //
+  // ⚠️ groupsBaseById(오버라이드까지만) vs groupsById(오버라이드+미확정 델타까지, 표시용)를
+  // 분리한다(2026-09-02, "수량 값 변동 시 두 번 반복 적용되는 것처럼 보이는" 버그 수정) —
+  // flushQtyChange가 실제 RPC 호출 시 base로 groupsById(델타 포함)를 넘기면, 이미 화면에
+  // 반영된 pendingDelta를 새 override 계산에 다시 더해 이중 반영되고, 그 사이 pendingDelta를
+  // 먼저 비우면 화면이 순간적으로 이전 값으로 되돌아갔다가 override 완료 시 다시 올라가는
+  // 깜빡임(사용자가 "두 번 반복 적용"으로 인지)이 발생했다. RPC에는 항상 "진짜 확정된 값"
+  // (groupsBaseById)만 넘기고, 표시는 항상 groupsById(확정값+미확정 델타)로 일관되게 유지한다.
+  const groupsBaseById = $derived(new Map(effectiveLineGroups.map(g => {
+    const ov = qtyOverrides[g.canonicalReservationId]
+    return [g.canonicalReservationId, ov ? { ...g, qty: ov.qty, reservationIds: ov.reservationIds } : g]
+  })))
+  const groupsById = $derived(new Map(Array.from(groupsBaseById.entries()).map(([id, base]) => {
+    const delta = pendingDelta[id] ?? 0
+    return [id, delta === 0 ? base : { ...base, qty: base.qty + delta }]
+  })))
+  // 가용 재고 상한 (2026-09-02, Stephen GATE B 승인 — Migration 421) — products/[id]/+page.svelte와
+  // 동일 규칙. 로드 시점 스냅샷 1회만 사용(실시간 재조회 없음).
+  const availableStockMap = $derived<Record<string, number>>((sd as { availableStock?: Record<string, number> }).availableStock ?? {})
+  function stockCapFor(productId: string | null | undefined): number {
+    if (!productId) return clampToAvailableStock(null);
+    return clampToAvailableStock(availableStockMap[productId]);
+  }
   const sdPriceRules = $derived<Record<string, PriceRuleExt>>((sd as { productPriceRules?: Record<string, PriceRuleExt> }).productPriceRules ?? {})
 
   // effectiveLineGroups ↔ itemsState 동기화 — 기존 로컬 UI 상태(아코디언 열림 등)는 보존
@@ -537,6 +647,15 @@
       pickupTime: group.pickupTime, returnTime: group.returnTime,
       durationType: group.durationType,
     }, group.reservationIds))
+    // 서버값(effectiveLineGroups)이 실제로 갱신된 시점(=다른 흐름의 invalidateAll 등)에는
+    // 낙관적 오버라이드·미확정 디바운스 델타가 더 이상 필요 없다 — 전부 비워 서버값으로
+    // 정합화(2026-09-02).
+    qtyOverrides = {}
+    for (const id of Object.keys(debounceTimers)) {
+      clearTimeout(debounceTimers[id])
+      delete debounceTimers[id]
+    }
+    pendingDelta = {}
   })
 
   // ── Footer + canProceed 5조건 가드
@@ -806,6 +925,12 @@
   type SetOptionsRpcFn = (name: string, args: Record<string, unknown>) => Promise<{ error: unknown }>
   async function updateOptionQty(reservationId: string, line: CartLineGroup | undefined, optionProductId: string | null, newQty: number) {
     if (!line || newQty < 1) return
+    // 가용 재고 사전차단(2026-09-02, Stephen GATE B 승인) — 옵션상품도 동일하게 실제 가용
+    // 재고를 상한으로 반영한다.
+    if (newQty > stockCapFor(optionProductId)) {
+      csToast.error('예약 가능한 재고가 없습니다.')
+      return
+    }
     const key = `${reservationId}:${optionProductId}`
     pendingOptionKey = key
     try {
@@ -820,7 +945,12 @@
         p_options:        payload,
       })
       if (error) {
-        csToast.error('옵션 수량 변경에 실패했습니다.')
+        const msg = (error as { message?: string })?.message ?? ''
+        csToast.error(
+          msg.includes('OPTION_STOCK_EXCEEDED')
+            ? '옵션상품 재고가 부족해 변경하지 못했습니다.'
+            : '옵션 수량 변경에 실패했습니다.'
+        )
         return
       }
       await invalidateAll()
@@ -922,6 +1052,69 @@
   const courierClosedMap = $derived(new Map<string, string>(
     ((data.courierClosedDates as { date: string; reason: string }[] | undefined) ?? []).map((h) => [h.date, h.reason])
   ))
+
+  // 대여예약옵션 캘린더 ↔ 실제 날짜별 재고 동기화(2026-09-02, Stephen 승인 — "요구사항 1") —
+  // 장바구니에 체크된 상품(복수 가능) 중 하나라도 해당 일자에 필요 수량만큼 가용 재고가 없으면
+  // 그 날짜를 캘린더에서 선택 불가로 반영한다(get_unavailable_dates_for_cart, Migration 426).
+  // 수령일 캘린더는 [d,d] 1일 기준 사전필터, 반납일 캘린더는 이미 정해진 수령일 기준 실제
+  // [수령일,d] 구간으로 검증(p_fixed_start) — RPC 자체 설명 참고.
+  const checkedAvailabilityItems = $derived(
+    itemsState
+      .filter(it => !it.deleted && it.checked)
+      .map(it => {
+        const line = groupsById.get(it.id)
+        if (!line) return null
+        const productId = resolveParentProductId(line.product)
+        if (!productId) return null
+        return { productId, qty: Math.max(line.qty ?? 1, 1) }
+      })
+      .filter((x): x is { productId: string; qty: number } => x !== null)
+  )
+  type UnavailRpcFn = (name: string, args: Record<string, unknown>) => Promise<{
+    data: Array<{ unavailable_date: string }> | null
+    error: unknown
+  }>
+  function todayIso(): string {
+    const d = new Date()
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+  }
+  const AVAILABILITY_WINDOW_DAYS = 180
+  let unavailablePickupDates = $state<Set<string>>(new Set())
+  let unavailableReturnDates = $state<Set<string>>(new Set())
+
+  $effect(() => {
+    const items = checkedAvailabilityItems
+    if (items.length === 0) { unavailablePickupDates = new Set(); return }
+    const start = todayIso()
+    const end = addDays(start, AVAILABILITY_WINDOW_DAYS)
+    void (async () => {
+      const { data, error } = await (supabase.rpc as unknown as UnavailRpcFn)('get_unavailable_dates_for_cart', {
+        p_product_ids: items.map(i => i.productId),
+        p_qty_needed:  items.map(i => i.qty),
+        p_range_start: start,
+        p_range_end:   end,
+        p_fixed_start: null,
+      })
+      if (!error) unavailablePickupDates = new Set((data ?? []).map(r => r.unavailable_date))
+    })()
+  })
+
+  $effect(() => {
+    const items = checkedAvailabilityItems
+    const fixedStart = bulkDate
+    if (items.length === 0 || !fixedStart) { unavailableReturnDates = new Set(); return }
+    const end = addDays(fixedStart, AVAILABILITY_WINDOW_DAYS)
+    void (async () => {
+      const { data, error } = await (supabase.rpc as unknown as UnavailRpcFn)('get_unavailable_dates_for_cart', {
+        p_product_ids: items.map(i => i.productId),
+        p_qty_needed:  items.map(i => i.qty),
+        p_range_start: fixedStart,
+        p_range_end:   end,
+        p_fixed_start: fixedStart,
+      })
+      if (!error) unavailableReturnDates = new Set((data ?? []).map(r => r.unavailable_date))
+    })()
+  })
 
   // 방문대여 지점 — 카트 상품의 allowed_pickup_ids 기준으로 pickup_points 필터링(deliveryTabs와 동일 원칙)
   interface PickupPointRow { id: string; name: string; address: string; phone: string | null }
@@ -1340,6 +1533,10 @@
           if (!readyToSubmit || isConfirming) return
           isConfirming = true
           try {
+            // 수량(±) 디바운스 창이 남아있는 상태로 제출하면 방금 누른 클릭이 실제 예약행으로
+            // 반영되기 전에 checkedIds가 먼저 계산돼 최신 수량이 누락될 수 있다 — 반드시 먼저
+            // 확정한다(2026-09-02).
+            await flushAllPendingQtyChanges()
             // 체크 해제한 상품은 이번 결제 확정 대상에서 제외 — 2026-08-28: 그룹 병합 이후
             // 카드 1개가 여러 실제 예약id를 가질 수 있어, 그룹의 canonical id가 아니라
             // 그룹 내 모든 reservationIds를 펼쳐서 전송해야 한다.
@@ -1620,7 +1817,7 @@
             <div class="qty-ctrl qty-ctrl--optstyle" role="group" aria-label="수량">
               <button class="qty-arrow qty-arrow--optstyle" onclick={() => decrementGroupQty(line)} disabled={pendingQtyKey === item.id} aria-label="수량 감소">−</button>
               <span class="qty-num qty-num--optstyle">{line?.qty ?? 1}</span>
-              <button class="qty-arrow qty-arrow--optstyle" onclick={() => incrementGroupQty(line)} disabled={pendingQtyKey === item.id} aria-label="수량 증가">+</button>
+              <button class="qty-arrow qty-arrow--optstyle" onclick={() => incrementGroupQty(line)} disabled={pendingQtyKey === item.id || (line?.qty ?? 0) >= stockCapFor(resolveParentProductId(line?.product))} aria-label="수량 증가">+</button>
             </div>
           </div>
           </div>
@@ -1660,7 +1857,7 @@
                     <div class="opt-qty-ctrl">
                       <button class="opt-qty-arrow" onclick={() => updateOptionQty(item.id, line, opt.optionProductId, opt.qty - 1)} disabled={opt.qty <= 1 || pendingOptionKey === `${item.id}:${opt.optionProductId}`} aria-label="옵션 수량 감소">−</button>
                       <span class="opt-qty-num">{opt.qty}</span>
-                      <button class="opt-qty-arrow" onclick={() => updateOptionQty(item.id, line, opt.optionProductId, opt.qty + 1)} disabled={pendingOptionKey === `${item.id}:${opt.optionProductId}`} aria-label="옵션 수량 증가">+</button>
+                      <button class="opt-qty-arrow" onclick={() => updateOptionQty(item.id, line, opt.optionProductId, opt.qty + 1)} disabled={pendingOptionKey === `${item.id}:${opt.optionProductId}` || opt.qty >= stockCapFor(opt.optionProductId)} aria-label="옵션 수량 증가">+</button>
                     </div>
                   </div>
                 </div>
@@ -1724,7 +1921,7 @@
             <div class="qty-ctrl qty-ctrl--optstyle" role="group" aria-label="수량">
               <button class="qty-arrow qty-arrow--optstyle" onclick={(e) => { e.stopPropagation(); decrementGroupQty(line) }} disabled={pendingQtyKey === item.id} aria-label="수량 감소">−</button>
               <span class="qty-num qty-num--optstyle">{line?.qty ?? 1}</span>
-              <button class="qty-arrow qty-arrow--optstyle" onclick={(e) => { e.stopPropagation(); incrementGroupQty(line) }} disabled={pendingQtyKey === item.id} aria-label="수량 증가">+</button>
+              <button class="qty-arrow qty-arrow--optstyle" onclick={(e) => { e.stopPropagation(); incrementGroupQty(line) }} disabled={pendingQtyKey === item.id || (line?.qty ?? 0) >= stockCapFor(resolveParentProductId(line?.product))} aria-label="수량 증가">+</button>
             </div>
           </div>
         </div>
@@ -1762,7 +1959,7 @@
                   <div class="opt-qty-ctrl">
                     <button class="opt-qty-arrow" onclick={(e) => { e.stopPropagation(); updateOptionQty(item.id, line, opt.optionProductId, opt.qty - 1) }} disabled={opt.qty <= 1 || pendingOptionKey === `${item.id}:${opt.optionProductId}`} aria-label="옵션 수량 감소">−</button>
                     <span class="opt-qty-num">{opt.qty}</span>
-                    <button class="opt-qty-arrow" onclick={(e) => { e.stopPropagation(); updateOptionQty(item.id, line, opt.optionProductId, opt.qty + 1) }} disabled={pendingOptionKey === `${item.id}:${opt.optionProductId}`} aria-label="옵션 수량 증가">+</button>
+                    <button class="opt-qty-arrow" onclick={(e) => { e.stopPropagation(); updateOptionQty(item.id, line, opt.optionProductId, opt.qty + 1) }} disabled={pendingOptionKey === `${item.id}:${opt.optionProductId}` || opt.qty >= stockCapFor(opt.optionProductId)} aria-label="옵션 수량 증가">+</button>
                   </div>
                 </div>
               </div>
@@ -1937,13 +2134,26 @@
                 rangeStartLabel="수령일"
                 rangeEndLabel="반납일"
                 onselect={(iso) => props.onDateChange(iso)}
-                isDateDisabled={!courierRestricted ? undefined : (props.type === 'rental'
-                  ? (iso: string) => courierClosedMap.has(addDays(iso, -1))
-                  : (iso: string) => courierClosedMap.has(iso))}
+                isDateDisabled={(iso: string) => {
+                  if (courierRestricted) {
+                    const closedKey = props.type === 'rental' ? addDays(iso, -1) : iso
+                    if (courierClosedMap.has(closedKey)) return true
+                  }
+                  // 요구사항 1(2026-09-02) — 장바구니 체크된 상품 중 하나라도 해당 일자에
+                  // 필요 수량만큼 가용 재고가 없으면 선택 불가로 반영.
+                  return props.type === 'rental' ? unavailablePickupDates.has(iso) : unavailableReturnDates.has(iso)
+                }}
                 onDisabledClick={(iso) => {
                   const closedKey = props.type === 'rental' ? addDays(iso, -1) : iso
-                  const reason = courierClosedMap.get(closedKey)
-                  csToast.error(reason ? `${reason} — 택배 휴무일이라 선택할 수 없습니다.` : '택배 휴무일이라 선택할 수 없습니다.')
+                  if (courierRestricted && courierClosedMap.has(closedKey)) {
+                    const reason = courierClosedMap.get(closedKey)
+                    csToast.error(reason ? `${reason} — 택배 휴무일이라 선택할 수 없습니다.` : '택배 휴무일이라 선택할 수 없습니다.')
+                    return
+                  }
+                  const stockUnavailable = props.type === 'rental' ? unavailablePickupDates.has(iso) : unavailableReturnDates.has(iso)
+                  if (stockUnavailable) {
+                    csToast.error('해당 일자는 장바구니 상품의 재고가 모두 점유되어 예약할 수 없습니다.')
+                  }
                 }}
               />
             </div>

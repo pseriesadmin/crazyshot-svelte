@@ -159,7 +159,7 @@
           class:cal-day-in-range={isInRange}
           disabled={past}
           aria-disabled={holidayDisabled}
-          title={holidayDisabled ? '택배 휴무일' : undefined}
+          title={holidayDisabled ? '선택할 수 없는 날짜입니다' : undefined}
           onclick={() => holidayDisabled ? onDisabledClick?.(iso) : onselect(iso)}
           onmouseenter={() => { hoverIso = iso }}
           onmouseleave={() => { hoverIso = null }}

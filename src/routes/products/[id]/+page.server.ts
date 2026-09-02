@@ -171,6 +171,26 @@ export const load: PageServerLoad = async ({ params, locals }) => {
 		}
 	}
 
+	// 가용 재고 수 — 메인 상품 + 옵션 상품 전부 배치 조회(N+1 방지, Migration 421)
+	// "등록된 총 수량 - 점유되지 않은 실제 가용 재고" 반영(2026-09-02 Stephen GATE B 승인).
+	// 날짜 무관 — 현재 시점에 비종결 상태(hold/confirmed/shipped/in_use/return_requested)
+	// 예약이 걸려있지 않은 자식 수만 계산한다(Stephen 확정 — 정밀한 기간별 재계산은 하지 않음).
+	const availableStock: Record<string, number> = {};
+	{
+		const stockProductIds = [String(row.id), ...optionLinks.map((l) => l.option_product_id)];
+		const { data: stockRows, error: stockError } = await (locals.supabase.rpc as unknown as RpcFn)(
+			'get_available_stock_counts',
+			{ p_product_ids: stockProductIds },
+		);
+		if (stockError) {
+			console.error('[products/[id]] get_available_stock_counts 실패:', (stockError as { message?: string }).message);
+		} else {
+			for (const r of (stockRows ?? []) as Array<{ product_id: string; available_count: number }>) {
+				availableStock[r.product_id] = r.available_count;
+			}
+		}
+	}
+
 	// 상품 후기 목록 로드
 	type ReviewItem = { id: string; author_name: string; title: string; content: string; created_at: string };
 	let reviews: ReviewItem[] = [];
@@ -311,6 +331,7 @@ export const load: PageServerLoad = async ({ params, locals }) => {
 		product: enriched,
 		productId: String(row.id),
 		optionLinks,
+		availableStock,
 		session,
 		reviews,
 		depositAmount: enriched.deposit_amount,
