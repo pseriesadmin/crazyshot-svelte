@@ -12,135 +12,131 @@
 
 ---
 
-## DONE — 🟡 BOUNDARY: RentalDetailPanel 메인상품 수량 UX 재설계 — 카드 중복 → 그룹당 카드 1장 + 상품코드 행 단위 편집 (2026-09-03, 이 세션)
+## NOW — 🔴 CRITICAL: 상담채팅 대화카드 정밀검증 + HOLD만료 구조적 결함 수정 + NLSearch 능동학습 고도화 A/B/C안 (2026-09-02~03, 이 세션)
 
-배경: Stephen이 "RentalDetailPanel 예약상품 CMS 편집 기능" Stage 4에서 구현된 메인상품 수량
-스텝퍼(+/-)를 실사용 스크린샷으로 지목 — "동일 상품카드를 추가하는 구조라 수량 증가 시 카드가
-중복 노출되고, 새로 추가된 카드에는 수량 제어 자체가 없어 UX 불일치"라고 지적.
+아젠다: Stephen이 "모든 상품 예약 대화카드 발송 및 수신이 안되고 있음" + "대여(/cms/reservation)
+정보와 전혀 동기화가 안되는 건지 정밀 검증해"로 시작. 조사 결과 원인 2가지 확인 후 수정, 이어서
+"Anthropic 연결 일단 끊고 NLSearch 능동학습 고도화 방안 제안해" 지시로 A/B/C안 제안·승인·구현까지
+같은 세션에서 연속 진행. 아래 전부 **이 세션의 작업만** 기록 — 같은 기간 작업트리에 병렬 세션의
+다른 변경(cart/, products/[id]/, reservationHelper.ts 등)이 섞여 있었으나 그쪽은 이 세션 소관 아님.
 
-**원인**: 이전 구현은 그룹의 "첫 유닛"에만 +/- 스텝퍼를 붙이고, 나머지 유닛(수량 증가로 새로
-생긴 것 포함)은 여전히 `productInfoItems`를 그대로 순회해 각자 독립된 `.info-section` 카드로
-렌더링했다 — 즉 "수량 2"라는 숫자는 첫 카드에 보이는데, 그 아래에 똑같이 생긴 카드가 하나 더
-있고 그 카드엔 아무 조작 버튼도 없는 상태였음(1번 카드=제어 가능, 2번째 이후 카드=제어 불가).
+### 1단계 — 채팅 대화카드 정밀검증 결과
 
-**Stephen 지시 2가지 반영**:
-1. "단일 상품카드 내 수량 더하거나 빼기 시 '상품코드' 항목 셀행을 추가 형태로 고려" →
-   그룹(부모상품 기준) 당 카드 1장만 렌더링하도록 재구성. 상품명·이미지·카테고리는 대표 유닛
-   기준으로 카드당 1회만 표시하고, "상품 코드"만 유닛 개수만큼 행으로 반복(2개 이상이면
-   "상품 코드 #1"/"#2"처럼 번호 표기) — "수량"이 그 카드 안의 상품코드 행 개수와 시각적으로
-   정확히 일치하게 됨.
-2. "'상품코드' 항목 셀행의 '재발행' 버튼 UI 우측 끝에 '삭제(휴지통)' 아이콘 버튼 UI 추가:
-   실행 시 해당 셀행 삭제로 재고 삭제 표현" → 기존 +/- 스텝퍼를 완전히 제거하고, 각 상품코드
-   행마다 [재배정] 버튼 옆에 삭제(✕) 아이콘을 추가 — 클릭 시 기존 2단계 삭제 확인
-   (`handleDeleteProduct`)이 그 행(=그 유닛)만 정확히 대상으로 삭제한다. "수량 증가"는 카드
-   하단의 새 "+ 재고 추가" 버튼(대시보드 테두리 스타일)이 담당 — 검색 모달 재오픈 없이 즉시
-   같은 부모상품 유닛 1개를 추가.
+- **진짜 원인(코드로 해결 불가, 미해결)**: 프로덕션 Anthropic API 계정 크레딧 잔액 소진 —
+  `/api/chat/message`(AI 의도분류·자유응답)가 반복 500 에러. Vercel 런타임 에러 로그로 확인.
+  결제/계정설정 문제라 Stephen 직접 조치 필요 → 이후 "Anthropic 연결 일단 끊어" 지시로 대응(§3).
+- **발견·수정한 구조적 버그 2건** (예약 라이프사이클 알림 RPC 경로 — Anthropic과 무관):
+  ① 다중수량/다중상품 주문에서 형제 예약이 같은 배치에서 함께 HOLD 만료되면 예약 건별로
+     거의 동일한 카드가 중복 발송됨.
+  ② **CRITICAL**: `release_reservation_hold()`의 D-1(계약발송 시 30분 타이머 리셋) 로직이
+     `contracts.reservation_id = rr.id`로 예약 자기 자신만 비교했는데, 2026-08-31 확정 설계
+     ("예약 단위=주문 단위, 계약은 주문당 1건")상 계약은 주문 내 형제 예약 중 하나만 소유한다
+     — 계약을 소유하지 않은 형제 예약은 타이머가 리셋 안 돼 조용히 HOLD 만료됨. "하나의
+     주문=하나의 계약+결제"인데 일부만 만료되는 데이터 정합성 결함. **프로덕션 실사례로
+     실증**(주문 #13: 예약 43·44·45·46 expired / 47만 confirmed, 주문 #14: 90·91 expired /
+     93만 confirmed) — Stephen 확인 후 "테스트 주문이니 그대로 둘 것, 이 시점 이후 신규
+     예약부터 정상 적용되면 됨"으로 결론.
 
-**부수 변경**: 삭제 버튼이 이전엔 `item.isSibling`(형제상품)에만 노출되고 메인(패널이 열려있는
-그 예약 자신)은 삭제 불가였는데, 이제 모든 상품코드 행에 동일하게 노출 — 어차피
-`cms_remove_reservation_product_unit` RPC 자체가 "주문 내 마지막 상품이면 차단"을 이미 보장하므로
-행 단위 UI에서 굳이 메인/형제를 구분해 막을 이유가 없어짐(TDD로 이미 검증된 안전장치).
-⚠️ 참고용 엣지케이스: 패널이 열려있는 바로 그 예약(main)을 삭제하면(형제가 남아있어 RPC가
-허용하는 경우) `onrefresh()`로 목록이 갱신되면서 그 reservation_id가 더 이상 활성 상태로
-조회되지 않을 수 있어 패널이 닫히거나 예기치 않게 보일 수 있음 — 실사용 중 문제로 확인되면
-후속 처리 검토.
+### 2단계 — 수정 (Migration 419·420·431(舊421)) — stage+Production 전부 적용·검증 완료
 
-**구현**: `productGroupInfo`(unitsByParent/firstKeyByParent 두 Map)를 `productGroups`(그룹별
-`{key, representative, units}` 순서 있는 배열 하나)로 교체, 템플릿의 `{#each productInfoItems}`
-단일 루프를 `{#each productGroups} ... {#each group.units}` 이중 루프로 재구성. 죽은
-`handleGroupQtyDecrease` 함수 제거, 관련 CSS(`.prod-qty-*`)를 신규 CSS(`.qty-count-badge`,
-`.btn-add-unit-small`)로 교체.
+```
+[NOW]
+- [x] (Migration 419) send_rental_chat_notification_batch — hold_expired 전용 문구·카드타입
+      (RESERVATION_STATUS_CARD)·button_label 추가(기존 reservation_approval 전용 통합문구
+      패턴을 hold_expired에도 확장)
+- [x] (Migration 420) release_reservation_hold() — 배치 내 함께 만료된 예약을 order_items
+      기준으로 그룹핑해 형제 2건 이상이면 send_rental_chat_notification_batch 1회만 호출
+      (기존 예약 건별 개별호출 → 통합카드로 변경, 단독/주문미연결 예약은 기존과 100% 동일)
+- [x] (Migration 431, 舊421 — 파일번호가 병렬 세션 작업물과 두 차례 충돌해 421→429→431로
+      재명명, DB 적용 자체는 무관하게 처음부터 정상) release_reservation_hold() D-1
+      서브쿼리를 "예약 자기 자신"이 아니라 "같은 주문(order_items 기준) 형제 예약 전체"로
+      확장 — 형제 중 누구든 계약이 발송돼 있으면 주문 전체 타이머가 함께 리셋되도록 수정
+```
 
-**검증**: `npx tsc --noEmit` + `npx svelte-check` — 신규 에러/경고 0건(기존 vite.config.ts 에러
-1건, 경고 404건 베이스라인 그대로 — RentalDetailPanel은 기존에 이미 식별된 `initialTab`/모달
-포커스트랩 경고만 유지, 신규 unused-CSS 경고 없음). git add/commit 미실행(Stephen 직접 실행
-대기) — 변경 파일: `src/lib/components/cms/RentalDetailPanel.svelte`(수정만, 신규 파일 없음).
+stage 실증검증(테스트데이터 생성 후 즉시 정리, 3회 반복):
+  · 다중수량 주문 형제 2건 동시만료 → 통합카드 1건만 발송(items 배열 2건) 확인
+  · 주문 미연결 단독예약 → 기존과 동일하게 개별카드 발송(회귀없음) 확인
+  · 계약 미소유 형제예약 → 계약소유 형제와 함께 hold 유지(수정 전엔 expired로 갈라짐) 확인
+Production 적용 + 함수 정의 stage 대조 일치 확인 완료(Stephen 명시 승인 후 진행).
 
----
+### 3단계 — Anthropic 연결 임시 차단 (코드 삭제 아님, ANTHROPIC_ENABLED 플래그)
 
-## DONE — 🟡 BOUNDARY: "상품찾기" 모달 카테고리 하드코딩 제거 — 실제 등록 상품 기준 실시간 조회로 교체 (2026-09-03, 이 세션)
+- [x] `src/routes/api/chat/message/+server.ts` — 최초 시도에서 SYSTEM_PROMPT·Anthropic
+      클라이언트·history로드·호출로직을 통째로 삭제했다가 Stephen이 "삭제하라고 안 했다"고
+      지적 → 원본 100% 복원 후 `ANTHROPIC_ENABLED = false` 상수 + 호출 직전 가드(false면
+      즉시 catch로 떨어져 기존 CS_ESCALATE 폴백 사용)로 재구현. `git diff` 순수 13줄
+      추가만으로 확인. 재활성화는 상수 하나만 true로.
 
-배경: Stephen이 RentalDetailPanel의 "상품찾기" 모달(`ReservationProductFinderModal.svelte`, 위
-"RentalDetailPanel 예약상품 CMS 편집 기능" 태스크 Stage 3 산출물) 스크린샷을 `launch-selected-
-element`로 공유하며 "카테고리 노출 기준이 심각한 오류 — 실제 등록 상품 카테고리가 반영돼야
-하는데 하드코딩됨, 출처를 확인해 제거 처리할 것"이라고 지시.
+### 4단계 — NLSearch 능동학습 고도화 A/B/C안 (Stephen 승인 후 순차 구현, 전부 stage+Production 적용 완료)
 
-**원인**: Stage 3 구현 당시 `$lib/utils/productCategoryTaxonomy.ts`의 정적 9종 배열
-(`PRODUCT_CATEGORY_OPTIONS`, 원래 마이그레이션 91의 CHECK 제약을 미러링하려던 상수)을 그대로
-가져다 썼는데, 조사 결과:
-- 이 정적 배열은 Migration 101이 그 CHECK 제약을 완전히 제거한 시점부터 이미 낡은 소스였음.
-- `code_mapping_groups.default_category`(카테고리 라벨의 실제 관리 지점, `/cms/products`가
-  2026-08-10 Stephen 확정으로 이미 정본으로 채택)도 구독 등 다른 도메인과 자유 문자열을 공유해
-  그대로 신뢰할 수 없음(`membership`/`used-item`/`partner` 등 상품 카테고리가 아닌 값도 섞임).
-- 더 근본적으로, `products.category`는 원래 고정 9종 Postgres ENUM이었으나 **현재 Stage DB에서
-  이미 일반 TEXT 컬럼으로 바뀌어 있고 `product_category_enum` 타입 자체가 더 이상 존재하지
-  않음**(직접 `information_schema`/`pg_enum` 조회로 확인) — 즉 카테고리 값 자체에 고정된
-  값집합이 아예 없는 상태. 실제 등록 상품의 `category` 값도 `accessory/camera/hypepack/lens/
-  lighting/other/used-item` 등 원래 9종 밖의 값을 포함(직접 조회 확인).
+**A안 — 빠른답변 후보 학습 루프 (Migration 422)**
+- [x] `chat_reply_candidates` 테이블 + RPC 3종(`record_chat_reply_candidate` service_role
+      전용 / `cms_approve_chat_reply_candidate` / `cms_reject_chat_reply_candidate`, 전부
+      is_cms_user() 게이트)
+- [x] `admin-reply/+server.ts` — 캔드매칭 미사용(자유텍스트) 관리자 답변 시 직전 고객메시지와
+      짝지어 fire-and-forget 기록
+- [x] `/cms/chat/qna` 3번째 탭 "빠른답변 후보" — 승격 모달(제목·내용·도움말분류·카테고리·
+      단축키·매칭키워드) + 거부 버튼
+- stage 실증: 기록→승격(canned_responses 신규행 생성 확인)→거부→비-CMS계정 접근차단
+  (ACCESS_DENIED) 4단계 전부 RPC 직접호출로 검증, 테스트데이터 정리 완료
 
-**수정**: 신규 엔드포인트 `GET /api/cms/products/category-options`(`src/routes/api/cms/products/
-category-options/+server.ts`) — 실제 등록된 부모 상품(`is_active=true, deleted_at IS NULL,
-parent_product_id IS NULL`)의 `category` 값을 `DISTINCT`로 조회하고, `code_mapping_groups`에서
-매칭되는 라벨이 있으면 그걸, 없으면 원본 값 그대로를 라벨로 폴백해 반환. 이 방식은 "검색 필터에
-넘겨도 항상 결과가 나오는 값만" 보장한다(코드설정 테이블의 임의 값을 그대로 신뢰하지 않음).
-`ReservationProductFinderModal.svelte`는 이제 이 엔드포인트를 모달이 열릴 때 1회 lazy-fetch해
-카테고리 pill·라벨을 채운다 — `productCategoryTaxonomy.ts` import 완전 제거.
+**B안 — 검색 갭 대시보드 (Migration 432)**
+- [x] `get_zero_result_search_terms(p_lookback_days, p_limit)` RPC — search_logs
+      result_count=0 검색어 빈도순 집계, confirmed 동의어로 이미 커버된 검색어 제외,
+      service_role 전용
+- [x] `/cms/chat/qna` 4번째 탭 "검색 갭" — 읽기전용 테이블(검색어·발생횟수·최근검색일)
+- stage 실데이터 검증: "소니" 3건·"카메라" 2건 등 실제 갭 확인(정상 동작 확인, 데이터 삭제 없음)
 
-**"출처 제거" 관련 중요 발견(Stephen 확인 필요)**: `productCategoryTaxonomy.ts` 파일 자체는
-삭제하지 않았다 — 요청 범위 밖의 다른 2개 라이브 파일이 여전히 이 파일을 그대로 쓰고 있어
-삭제 시 그쪽이 깨진다:
-1. `src/routes/cms/products/new/+page.svelte` — **신규 상품 등록 폼의 카테고리 드롭다운**.
-   이번에 발견한 동일 계열 문제(하드코딩된 9종이 실제 카테고리 체계와 어긋남)가 여기서는
-   상품 "등록" 시점에 영향을 준다는 점에서 더 심각할 수 있음 — 관리자가 잘못된/존재하지 않는
-   카테고리 값으로 신규 상품을 등록하게 될 위험.
-2. `src/routes/cms/codes/_shared.ts` — `PRODUCT_CATS`로 재노출, `/cms/codes` 하위 화면에서 사용.
+**C안 — 동의어 후보 영구 거부 (Migration 433)**
+- [x] `synonym_group_members.status` CHECK에 `rejected` 추가
+- [x] `upsert_synonym_member`(전 학습경로 공통 진입점) — rejected 상태 최우선 보존 분기 추가
+- [x] `cms_reject_synonym_candidate` RPC 신규, CMS "동의어 후보" 탭 "✕" 버튼을 하드삭제
+      (`cms_delete_synonym_candidate`, 이제 미사용) 대신 이 RPC로 교체. 거부된 후보는 목록
+      쿼리에서 제외(`.neq('status','rejected')`)
+- stage 실증: 후보 생성→거부→3회 재관찰(threshold 3 초과, occurrence_count 1→4)해도 여전히
+  rejected 유지 확인, 테스트데이터 정리 완료
 
-이번 세션은 Stephen이 명시적으로 지목한 "선택영역"(상품찾기 모달)만 수정 범위로 삼았다
-(요청범위 외 수정 절대 금지 원칙). 위 2개 파일도 같은 방식(실시간 조회)으로 고칠지는 별도
-확인 필요 — 확인되면 이어서 진행 가능.
+### 검증 공통사항
 
-**검증**: `npx tsc --noEmit` + `npx svelte-check` — 신규 에러 0건(기존 vite.config.ts 무관 에러
-1건만 유지, 기존에 이미 식별된 LOW급 a11y 포커스트랩 경고 1건 그대로). Stage DB
-(ezyvffjvuwmtuhpxdjrw) 직접 조회로 신규 엔드포인트 쿼리 로직 사전 검증(실제 카테고리 7종 확인,
-`code_mapping_groups` 라벨 매칭 3종/미매칭 4종 폴백 동작 확인). git add/commit 미실행(Stephen
-직접 실행 대기).
+전 단계 `tsc --noEmit`/`svelte-check` 재확인 — 신규 에러 0건(기존 무관 warning만 동일하게
+잔존). git 커밋 미실행(Stephen 직접 실행 대기). 마이그레이션 421 파일번호가 병렬 세션
+작업물과 충돌 발견되어 429→431로 2회 재명명(DB에는 처음부터 정상 적용된 상태라 기능 영향
+없음, 파일 정합성만 정리) — 이후 매 마이그레이션 작성·적용 전 `ls supabase/migrations/ |
+sort | tail`로 충돌 재검사하는 절차를 이번 세션 내내 적용함(Stephen 지시).
 
-### 후속 — 나머지 2개 라이브 파일도 동일 방식으로 수정 + 파일 삭제 완료 (2026-09-03, 같은 세션, "두 곳 다 같은 방식으로 고쳐줘" 승인)
+[NEXT]
+- [ ] Anthropic 크레딧 충전 확인 후 `ANTHROPIC_ENABLED=true` 재활성화 — Stephen 직접 확인 필요
+- [ ] 프로덕션 주문 #13·#14(형제예약 독립만료 결함 실사례)는 테스트 데이터로 확인, 별도 복구
+      조치 없음(Stephen 확정, 2026-09-02)
+- [x] (선택, 비차단 — QA 발견, Stephen "지금 고쳐줘" 요청으로 즉시 처리) `/cms/chat/qna`
+      "빠른답변 승격" 모달 포커스 트랩 — SignUpModal.svelte와 동일한 경량 패턴(오버레이에
+      role="dialog"+tabindex="-1"+Escape키 핸들러+바깥클릭 판정을 e.target===e.currentTarget
+      로 이동) 적용 + 제목 입력란 autofocus 추가(기존 3개 파일과 동일 패턴). svelte-check
+      해당 WARNING 2건 완전 해소, 신규 컴파일 에러 0건 재확인.
 
-**추가 조사로 드러난 사실**: `information_schema`/`pg_enum` 직접 조회로 재확인 — `products.category`는
-현재 순수 TEXT 컬럼이고(원래 있던 `product_category_enum` 타입 자체가 더 이상 존재하지 않음),
-따라서 카테고리 값 자체에 고정된 값집합이 원천적으로 없다. 실제 등록 상품의 category 값도
-`accessory/camera/hypepack/lens/lighting/other/used-item` 등 원 9종을 이미 크게 벗어나 있었다.
+### ✅ QA 검수 완료 (2026-09-03, sp3-qa-agent) — GATE E 통과(조건부 권고 1건, 비차단)
 
-1. **`src/routes/cms/products/new/+page.svelte`(신규 상품 등록 폼)**: 이 화면은 평소엔
-   `code_mapping_groups`(`show_in_product_filter=true`) 기반 SuggestPicker 조합그룹 선택을 쓰고,
-   `productCategoryTaxonomy.ts` 기반 `<select>`는 **"그룹 미등록 시"에만 노출되는 폴백 경로**였음
-   (거의 항상 숨겨진 코드지만 그래도 수정). `+page.server.ts`의 `load()`에 실제 등록 상품
-   `category` DISTINCT 조회 + `code_mapping_groups` 라벨 매핑을 추가해 `categoryFallbackOptions`로
-   내려주고, `+page.svelte`가 이를 `$derived`로 사용하도록 교체. 품번/슬러그 미리보기용
-   `CATEGORY_CODES[cat]` 4곳(정적 3자 코드 맵)은 이미 `load()`가 로드해둔 `taxonomyCodes`
-   (`product_category_codes`, `generate_product_code` RPC가 실제로 참조하는 바로 그 테이블)에서
-   depth=0 매칭 코드를 우선 조회하고 없으면 `UPPER(LEFT(category,3))`로 계산하는
-   `categoryCodePrefix()` 헬퍼로 교체(Migration 240이 이미 확립한 동일 폴백 원칙 재사용 —
-   이 미리보기는 어차피 확정값 아님, 실제 품번은 제출 시 서버 RPC가 최종 결정).
-2. **`src/routes/cms/codes/_shared.ts` + `_MappingTab.svelte`("카테고리 → 분류코드 매핑" 화면)**:
-   이 화면은 정확히 `category_taxonomy_map`(=`generate_product_code`가 참조하는 실제 매핑
-   테이블)을 관리하는 화면이라, 하드코딩된 카테고리 목록을 쓰면 실제 존재하는 카테고리에 대한
-   매핑을 아예 설정할 수 없는 실질적 기능 결함이었다. 별도 쿼리 추가 없이 `+page.server.ts`
-   `load()`가 이미 계산해 내려주던 `productCountMap`(실제 등록 상품 category 집계, `deleted_at
-   IS NULL` 전체)을 그대로 카테고리 목록으로 재사용(`_MappingTab.svelte`에 `$derived` 추가),
-   라벨은 `mappingGroups`(이미 로드됨)에서 매칭. `_shared.ts`의 `PRODUCT_CATS` 재노출 제거.
-3. **`src/lib/utils/productCategoryTaxonomy.ts` 삭제 완료**: 위 3곳(모달 포함) 수정 후 전체
-   저장소 재검색(`grep -rn "from '\$lib/utils/productCategoryTaxonomy'"`) 결과 실제 import
-   0건 확인 후 파일 삭제 — Stephen이 요청한 "출처 제거"를 문자 그대로 완료(더 이상 어디서도
-   재사용될 수 없음).
+병렬 세션의 다른 변경분(cart/, products/[id]/, reservationHelper.ts 등)은 검수 범위에서
+명시적으로 제외하고 이 세션 산출물만 검수.
 
-**검증**: `npx tsc --noEmit` + `npx svelte-check` 재실행 — 신규 에러/경고 0건(기존 vite.config.ts
-에러 1건, 경고 404건 베이스라인 그대로 — `$derived` 전환 과정에서 잠깨 발생했던
-`state_referenced_locally` 신규 경고 1건도 `CATEGORIES`/`CATEGORY_LABELS`를 `$derived`로
-바꿔 즉시 해소 확인). git add/commit 미실행(Stephen 직접 실행 대기) — 변경 파일: 신규
-`category-options/+server.ts`(전 세션), 수정 `+page.server.ts`·`+page.svelte`(products/new),
-`_shared.ts`·`_MappingTab.svelte`(codes), 삭제 `productCategoryTaxonomy.ts`.
+- **규칙 정합성**: 전부 ✅ — D-1 서브쿼리(Migration 431)가 Migration 394/420과 D-3·나머지
+  WHERE절 바이트 단위로 동일함을 재대조, order_items 미연결 예약 안전 폴백 확인. 신규 RPC
+  4종(record_chat_reply_candidate·cms_approve/reject_chat_reply_candidate·
+  get_zero_result_search_terms·cms_reject_synonym_candidate) 전부 is_cms_user() 게이트
+  또는 service_role REVOKE/GRANT로 anon·authenticated 노출 없음 확인. canned_responses
+  category/help_category CHECK 값이 상수 파일과 정확히 일치 확인. `chat/message/+server.ts`
+  git diff가 순수 추가(SYSTEM_PROMPT·Anthropic 클라이언트·history로드·호출로직 전부 원본
+  보존) 재확인.
+  ⚠️ 유일한 발견(비차단): 신규 "빠른답변 승격" 모달에 포커스 트랩 없음(ui-mobile.md 모달
+  접근성 기준 일부 미충족, svelte-check WARNING 2건 — 기능 결함 아님).
+- **기술 부채**: console.log 0건 / any타입 신규분 0건(기존 파일 컨벤션 재사용만) / TODO 0건 /
+  RPC 에러처리 정적분석(check-rpc-error-handling.mjs) VIOLATION 0건 / svelte-check 신규
+  컴파일 에러 0건(무관 warning 2건만).
+- **S2 체크**: 마이그레이션 6건 전부 ROLLBACK 섹션 포함, RLS 고객격리 해당범위 정상, 비밀키
+  전부 $env/static·dynamic/private 경유, B-START 완료조건 전부 코드와 부합 확인.
+
+**결론**: 블로킹 이슈 0건, git commit 진행 가능(Stephen 직접 실행). 모달 포커스 트랩은
+선택 후속 과제로 [NEXT]에 등록.
 
 ---
 
@@ -1154,7 +1150,388 @@ Stage DB(ezyvffjvuwmtuhpxdjrw) 대상 curl 직접 호출(service_role·anon 키 
 **종합 판정: GATE E 통과.** CRITICAL/HIGH/MEDIUM×2 전부 실동작으로 해결 확인, 새로운 블로킹
 이슈 발견 없음. git add/commit은 이번에도 미실행 — Stephen 직접 실행 대기.
 
+### 후속 — "상품찾기" 모달 카테고리 하드코딩 제거 — 실제 등록 상품 기준 실시간 조회로 교체 (2026-09-03, 같은 세션)
+
+배경: Stephen이 RentalDetailPanel의 "상품찾기" 모달(`ReservationProductFinderModal.svelte`, 위
+"RentalDetailPanel 예약상품 CMS 편집 기능" 태스크 Stage 3 산출물) 스크린샷을 `launch-selected-
+element`로 공유하며 "카테고리 노출 기준이 심각한 오류 — 실제 등록 상품 카테고리가 반영돼야
+하는데 하드코딩됨, 출처를 확인해 제거 처리할 것"이라고 지시.
+
+**원인**: Stage 3 구현 당시 `$lib/utils/productCategoryTaxonomy.ts`의 정적 9종 배열
+(`PRODUCT_CATEGORY_OPTIONS`, 원래 마이그레이션 91의 CHECK 제약을 미러링하려던 상수)을 그대로
+가져다 썼는데, 조사 결과:
+- 이 정적 배열은 Migration 101이 그 CHECK 제약을 완전히 제거한 시점부터 이미 낡은 소스였음.
+- `code_mapping_groups.default_category`(카테고리 라벨의 실제 관리 지점, `/cms/products`가
+  2026-08-10 Stephen 확정으로 이미 정본으로 채택)도 구독 등 다른 도메인과 자유 문자열을 공유해
+  그대로 신뢰할 수 없음(`membership`/`used-item`/`partner` 등 상품 카테고리가 아닌 값도 섞임).
+- 더 근본적으로, `products.category`는 원래 고정 9종 Postgres ENUM이었으나 **현재 Stage DB에서
+  이미 일반 TEXT 컬럼으로 바뀌어 있고 `product_category_enum` 타입 자체가 더 이상 존재하지
+  않음**(직접 `information_schema`/`pg_enum` 조회로 확인) — 즉 카테고리 값 자체에 고정된
+  값집합이 아예 없는 상태. 실제 등록 상품의 `category` 값도 `accessory/camera/hypepack/lens/
+  lighting/other/used-item` 등 원래 9종 밖의 값을 포함(직접 조회 확인).
+
+**수정**: 신규 엔드포인트 `GET /api/cms/products/category-options`(`src/routes/api/cms/products/
+category-options/+server.ts`) — 실제 등록된 부모 상품(`is_active=true, deleted_at IS NULL,
+parent_product_id IS NULL`)의 `category` 값을 `DISTINCT`로 조회하고, `code_mapping_groups`에서
+매칭되는 라벨이 있으면 그걸, 없으면 원본 값 그대로를 라벨로 폴백해 반환. 이 방식은 "검색 필터에
+넘겨도 항상 결과가 나오는 값만" 보장한다(코드설정 테이블의 임의 값을 그대로 신뢰하지 않음).
+`ReservationProductFinderModal.svelte`는 이제 이 엔드포인트를 모달이 열릴 때 1회 lazy-fetch해
+카테고리 pill·라벨을 채운다 — `productCategoryTaxonomy.ts` import 완전 제거.
+
+**"출처 제거" 관련 중요 발견(Stephen 확인 필요)**: `productCategoryTaxonomy.ts` 파일 자체는
+삭제하지 않았다 — 요청 범위 밖의 다른 2개 라이브 파일이 여전히 이 파일을 그대로 쓰고 있어
+삭제 시 그쪽이 깨진다:
+1. `src/routes/cms/products/new/+page.svelte` — **신규 상품 등록 폼의 카테고리 드롭다운**.
+   이번에 발견한 동일 계열 문제(하드코딩된 9종이 실제 카테고리 체계와 어긋남)가 여기서는
+   상품 "등록" 시점에 영향을 준다는 점에서 더 심각할 수 있음 — 관리자가 잘못된/존재하지 않는
+   카테고리 값으로 신규 상품을 등록하게 될 위험.
+2. `src/routes/cms/codes/_shared.ts` — `PRODUCT_CATS`로 재노출, `/cms/codes` 하위 화면에서 사용.
+
+이번 세션은 Stephen이 명시적으로 지목한 "선택영역"(상품찾기 모달)만 수정 범위로 삼았다
+(요청범위 외 수정 절대 금지 원칙). 위 2개 파일도 같은 방식(실시간 조회)으로 고칠지는 별도
+확인 필요 — 확인되면 이어서 진행 가능.
+
+**검증**: `npx tsc --noEmit` + `npx svelte-check` — 신규 에러 0건(기존 vite.config.ts 무관 에러
+1건만 유지, 기존에 이미 식별된 LOW급 a11y 포커스트랩 경고 1건 그대로). Stage DB
+(ezyvffjvuwmtuhpxdjrw) 직접 조회로 신규 엔드포인트 쿼리 로직 사전 검증(실제 카테고리 7종 확인,
+`code_mapping_groups` 라벨 매칭 3종/미매칭 4종 폴백 동작 확인). git add/commit 미실행(Stephen
+직접 실행 대기).
+
+### 후속 — 나머지 2개 라이브 파일도 동일 방식으로 수정 + 파일 삭제 완료 (2026-09-03, 같은 세션, "두 곳 다 같은 방식으로 고쳐줘" 승인)
+
+**추가 조사로 드러난 사실**: `information_schema`/`pg_enum` 직접 조회로 재확인 — `products.category`는
+현재 순수 TEXT 컬럼이고(원래 있던 `product_category_enum` 타입 자체가 더 이상 존재하지 않음),
+따라서 카테고리 값 자체에 고정된 값집합이 원천적으로 없다. 실제 등록 상품의 category 값도
+`accessory/camera/hypepack/lens/lighting/other/used-item` 등 원 9종을 이미 크게 벗어나 있었다.
+
+1. **`src/routes/cms/products/new/+page.svelte`(신규 상품 등록 폼)**: 이 화면은 평소엔
+   `code_mapping_groups`(`show_in_product_filter=true`) 기반 SuggestPicker 조합그룹 선택을 쓰고,
+   `productCategoryTaxonomy.ts` 기반 `<select>`는 **"그룹 미등록 시"에만 노출되는 폴백 경로**였음
+   (거의 항상 숨겨진 코드지만 그래도 수정). `+page.server.ts`의 `load()`에 실제 등록 상품
+   `category` DISTINCT 조회 + `code_mapping_groups` 라벨 매핑을 추가해 `categoryFallbackOptions`로
+   내려주고, `+page.svelte`가 이를 `$derived`로 사용하도록 교체. 품번/슬러그 미리보기용
+   `CATEGORY_CODES[cat]` 4곳(정적 3자 코드 맵)은 이미 `load()`가 로드해둔 `taxonomyCodes`
+   (`product_category_codes`, `generate_product_code` RPC가 실제로 참조하는 바로 그 테이블)에서
+   depth=0 매칭 코드를 우선 조회하고 없으면 `UPPER(LEFT(category,3))`로 계산하는
+   `categoryCodePrefix()` 헬퍼로 교체(Migration 240이 이미 확립한 동일 폴백 원칙 재사용 —
+   이 미리보기는 어차피 확정값 아님, 실제 품번은 제출 시 서버 RPC가 최종 결정).
+2. **`src/routes/cms/codes/_shared.ts` + `_MappingTab.svelte`("카테고리 → 분류코드 매핑" 화면)**:
+   이 화면은 정확히 `category_taxonomy_map`(=`generate_product_code`가 참조하는 실제 매핑
+   테이블)을 관리하는 화면이라, 하드코딩된 카테고리 목록을 쓰면 실제 존재하는 카테고리에 대한
+   매핑을 아예 설정할 수 없는 실질적 기능 결함이었다. 별도 쿼리 추가 없이 `+page.server.ts`
+   `load()`가 이미 계산해 내려주던 `productCountMap`(실제 등록 상품 category 집계, `deleted_at
+   IS NULL` 전체)을 그대로 카테고리 목록으로 재사용(`_MappingTab.svelte`에 `$derived` 추가),
+   라벨은 `mappingGroups`(이미 로드됨)에서 매칭. `_shared.ts`의 `PRODUCT_CATS` 재노출 제거.
+3. **`src/lib/utils/productCategoryTaxonomy.ts` 삭제 완료**: 위 3곳(모달 포함) 수정 후 전체
+   저장소 재검색(`grep -rn "from '\$lib/utils/productCategoryTaxonomy'"`) 결과 실제 import
+   0건 확인 후 파일 삭제 — Stephen이 요청한 "출처 제거"를 문자 그대로 완료(더 이상 어디서도
+   재사용될 수 없음).
+
+**검증**: `npx tsc --noEmit` + `npx svelte-check` 재실행 — 신규 에러/경고 0건(기존 vite.config.ts
+에러 1건, 경고 404건 베이스라인 그대로 — `$derived` 전환 과정에서 잠깨 발생했던
+`state_referenced_locally` 신규 경고 1건도 `CATEGORIES`/`CATEGORY_LABELS`를 `$derived`로
+바꿔 즉시 해소 확인). git add/commit 미실행(Stephen 직접 실행 대기) — 변경 파일: 신규
+`category-options/+server.ts`(전 세션), 수정 `+page.server.ts`·`+page.svelte`(products/new),
+`_shared.ts`·`_MappingTab.svelte`(codes), 삭제 `productCategoryTaxonomy.ts`.
+
+
+### 후속 — RentalDetailPanel 메인상품 수량 UX 재설계 — 카드 중복 → 그룹당 카드 1장 + 상품코드 행 단위 편집 (2026-09-03, 같은 세션)
+
+배경: Stephen이 "RentalDetailPanel 예약상품 CMS 편집 기능" Stage 4에서 구현된 메인상품 수량
+스텝퍼(+/-)를 실사용 스크린샷으로 지목 — "동일 상품카드를 추가하는 구조라 수량 증가 시 카드가
+중복 노출되고, 새로 추가된 카드에는 수량 제어 자체가 없어 UX 불일치"라고 지적.
+
+**원인**: 이전 구현은 그룹의 "첫 유닛"에만 +/- 스텝퍼를 붙이고, 나머지 유닛(수량 증가로 새로
+생긴 것 포함)은 여전히 `productInfoItems`를 그대로 순회해 각자 독립된 `.info-section` 카드로
+렌더링했다 — 즉 "수량 2"라는 숫자는 첫 카드에 보이는데, 그 아래에 똑같이 생긴 카드가 하나 더
+있고 그 카드엔 아무 조작 버튼도 없는 상태였음(1번 카드=제어 가능, 2번째 이후 카드=제어 불가).
+
+**Stephen 지시 2가지 반영**:
+1. "단일 상품카드 내 수량 더하거나 빼기 시 '상품코드' 항목 셀행을 추가 형태로 고려" →
+   그룹(부모상품 기준) 당 카드 1장만 렌더링하도록 재구성. 상품명·이미지·카테고리는 대표 유닛
+   기준으로 카드당 1회만 표시하고, "상품 코드"만 유닛 개수만큼 행으로 반복(2개 이상이면
+   "상품 코드 #1"/"#2"처럼 번호 표기) — "수량"이 그 카드 안의 상품코드 행 개수와 시각적으로
+   정확히 일치하게 됨.
+2. "'상품코드' 항목 셀행의 '재발행' 버튼 UI 우측 끝에 '삭제(휴지통)' 아이콘 버튼 UI 추가:
+   실행 시 해당 셀행 삭제로 재고 삭제 표현" → 기존 +/- 스텝퍼를 완전히 제거하고, 각 상품코드
+   행마다 [재배정] 버튼 옆에 삭제(✕) 아이콘을 추가 — 클릭 시 기존 2단계 삭제 확인
+   (`handleDeleteProduct`)이 그 행(=그 유닛)만 정확히 대상으로 삭제한다. "수량 증가"는 카드
+   하단의 새 "+ 재고 추가" 버튼(대시보드 테두리 스타일)이 담당 — 검색 모달 재오픈 없이 즉시
+   같은 부모상품 유닛 1개를 추가.
+
+**부수 변경**: 삭제 버튼이 이전엔 `item.isSibling`(형제상품)에만 노출되고 메인(패널이 열려있는
+그 예약 자신)은 삭제 불가였는데, 이제 모든 상품코드 행에 동일하게 노출 — 어차피
+`cms_remove_reservation_product_unit` RPC 자체가 "주문 내 마지막 상품이면 차단"을 이미 보장하므로
+행 단위 UI에서 굳이 메인/형제를 구분해 막을 이유가 없어짐(TDD로 이미 검증된 안전장치).
+⚠️ 참고용 엣지케이스: 패널이 열려있는 바로 그 예약(main)을 삭제하면(형제가 남아있어 RPC가
+허용하는 경우) `onrefresh()`로 목록이 갱신되면서 그 reservation_id가 더 이상 활성 상태로
+조회되지 않을 수 있어 패널이 닫히거나 예기치 않게 보일 수 있음 — 실사용 중 문제로 확인되면
+후속 처리 검토.
+
+**구현**: `productGroupInfo`(unitsByParent/firstKeyByParent 두 Map)를 `productGroups`(그룹별
+`{key, representative, units}` 순서 있는 배열 하나)로 교체, 템플릿의 `{#each productInfoItems}`
+단일 루프를 `{#each productGroups} ... {#each group.units}` 이중 루프로 재구성. 죽은
+`handleGroupQtyDecrease` 함수 제거, 관련 CSS(`.prod-qty-*`)를 신규 CSS(`.qty-count-badge`,
+`.btn-add-unit-small`)로 교체.
+
+**검증**: `npx tsc --noEmit` + `npx svelte-check` — 신규 에러/경고 0건(기존 vite.config.ts 에러
+1건, 경고 404건 베이스라인 그대로 — RentalDetailPanel은 기존에 이미 식별된 `initialTab`/모달
+포커스트랩 경고만 유지, 신규 unused-CSS 경고 없음). git add/commit 미실행(Stephen 직접 실행
+대기) — 변경 파일: `src/lib/components/cms/RentalDetailPanel.svelte`(수정만, 신규 파일 없음).
+
+
+### 후속 — 옵션상품 추가 시 카탈로그 연동 옵션(product_option_links) 우선 제안 + 옵션 카드 레이아웃 통일 (2026-09-03, 같은 세션)
+
+배경: Stephen이 "옵션상품 추가" 버튼 지목 — "모달에 '기본상품'과 연동된 '옵션 상품' 목록이
+노출되는 게 정합적인 UX"라며 구현 방식 분석 요청 + "선택된 옵션상품카드 내 수량 추가 UI는
+[메인]상품카드에 구현된 수량추가 UI를 그대로 반영할 것" 지시.
+
+**조사 결과**: 상품 등록 시 설정하는 "옵션상품" 연동은 `product_option_links` 테이블(부모
+상품 id ↔ 옵션상품 id) + `get_product_option_links(p_product_id)` RPC로 관리되고, 고객 상세
+페이지(`/products/[id]`)가 예약 시 보여주는 옵션 목록도 정확히 이 RPC로 해석된다 — 이게
+"기본상품과 연동된 옵션상품"의 유일한 정본 경로(`product_option_links` 테이블을 직접 조인하는
+지점은 앱 전체에 없음, 항상 이 RPC 경유). 재사용 가능한 기존 API는 없어 신규 생성.
+`reservation_options`(이미 예약에 담긴 옵션, RentalDetailPanel이 원래 다루던 것)와는 완전히
+다른 테이블이라는 점 확인 — 혼동 주의.
+
+**구현**:
+1. 신규 `GET /api/cms/products/[id]/option-links` — 받은 id가 부모/자식 어느 쪽이든
+   `parent_product_id`를 먼저 해석(자식이면 그 부모로, 부모면 자기 자신으로)한 뒤
+   `get_product_option_links` RPC를 그대로 호출·반환. `product_option_links` 테이블을 직접
+   조인하지 않고 항상 이 RPC 경유(H-01 원칙 + 앱 전역 기존 관례 준수).
+2. `ReservationProductFinderModal.svelte`에 `baseProductId` prop 신설 — 옵션상품 추가 목적일
+   때만 전달(메인상품 추가 목적일 땐 생략, 일반 검색만 유지). 값이 있으면 모달 최상단(카테고리
+   필터보다 위)에 "추천 옵션상품" 섹션을 먼저 보여주고, 그 아래 기존 일반 검색은 그대로 유지
+   (연동 안 된 상품도 여전히 선택 가능해야 하므로 검색 자체를 없애지 않음).
+3. `RentalDetailPanel.svelte`: 모달 호출부에 `baseProductId={finderModalPurpose==='option' ?
+   row.product_id : null}` 전달 — 이 패널이 열려있는 예약(row)의 상품을 "기본상품"으로 판단.
+4. **옵션 카드 레이아웃을 메인상품 카드와 통일**: 기존엔 옵션 1건이 `.info-row` 한 줄(옵션명+
+   수량스텝퍼(+/-)+상품코드+삭제아이콘)에 전부 몰려있었는데, 메인상품처럼 `.info-section` 카드
+   (옵션명 행 / 상품코드 행 / 수량 행 / "+ 수량 추가" 행)로 재구성. 단, `reservation_options`는
+   유닛별 실물 재고 행이 아니라 "1행 + qty 정수 필드" 구조(rental-lifecycle.md "옵션상품" —
+   시리얼 단위 추적 안 하는 의도된 설계)라 메인상품처럼 "행 자체를 추가/삭제"할 수는 없음 —
+   대신 "+"는 메인상품과 동일한 `.btn-add-unit-small` 버튼을 그대로 재사용(qty+1 PATCH),
+   "-"는 수량 행 옆 소형 버튼 유지(qty-1 PATCH, 1 미만 차단), 옵션 전체 삭제(✕)는 옵션명
+   행이 담당 — 이 구조적 차이는 TASK.md에 명시했으니 "메인상품처럼 상품코드 행을 여러 개
+   만들어야 하는 것 아니냐"는 재작업 요청이 오면 이 설계 노트 참고.
+
+**검증**: Stage DB(ezyvffjvuwmtuhpxdjrw)에서 `get_product_option_links` 실제 시그니처
+(`p_product_id uuid`)·반환 컬럼(`option_product_id, option_product_name, price_24h, image_url,
+is_required` 등)·권한(`service_role` 포함) 전부 직접 조회로 대조 확인. `npx tsc --noEmit` +
+`npx svelte-check` — 신규 에러/경고 0건(기존 vite.config.ts 에러 1건, 경고 404건 베이스라인
+그대로). git add/commit 미실행(Stephen 직접 실행 대기) — 신규 파일:
+`src/routes/api/cms/products/[id]/option-links/+server.ts`. 수정:
+`ReservationProductFinderModal.svelte`, `RentalDetailPanel.svelte`.
+
+### 후속 — 옵션상품 추가를 카탈로그 연동 옵션(product_option_links)으로만 제한 (2026-09-03, 같은 세션)
+
+Stephen이 스크린샷으로 "기본상품과 연동성 없는 상품을 일반검색으로 골라 옵션에 추가하면
+정합성 깨짐이 발현되는 비정상 기능일 수 있다" 지적 — 판단 결과, DB 정합성 자체는 깨지지
+않지만(`reservation_options`는 원래 `product_option_links`와 무관하게 자유 상품을 받을 수
+있는 구조) 업무적으로 무관한 조합이 기록될 위험은 실재해, AskUserQuestion으로 확정:
+**"연동된 옵션으로만 제한"**.
+
+**수정**: `ReservationProductFinderModal.svelte` — `baseProductId`(옵션상품 추가 모드)가 있으면
+카테고리 필터·일반 검색 UI를 통째로 숨기고 오직 "연동된 옵션상품" 목록만 노출하도록 변경
+(이전엔 추천 목록을 상단에, 일반검색을 그 아래 병용 노출했었음 — 이제 일반검색 자체가
+옵션 추가 모드에서 사라짐). 연동된 옵션이 0개면 "이 상품에 연동된 옵션상품이 없습니다.
+상품 등록 화면의 '옵션상품' 탭에서 먼저 연동해주세요" 안내만 표시하고 대체 검색 경로 없음
+— 옵션을 추가하려면 반드시 그 상품의 등록 화면에서 연동을 먼저 설정해야 하는 구조로 확정.
+메인상품 추가 모드(`baseProductId` 없음)는 기존 그대로 카테고리+일반검색 유지(영향 없음).
+죽은 CSS(`.finder-suggested-wrap`/`-title`/`-loading`) 제거.
+
+**검증**: `npx tsc --noEmit` + `npx svelte-check` — 신규 에러/경고 0건(베이스라인 그대로).
+git add/commit 미실행.
+
+### 후속 — "이미 계약/결제 진행됨" 오류의 실제 원인 분석 + 메시지·UI 게이트 정확도 수정 (2026-09-03, 같은 세션)
+
+Stephen이 "신청대기 목록의 예약에서 +/✕/재배정 버튼을 눌렀는데 '이미 계약 또는 결제가
+진행되어...' 경고가 뜬다 — 정말 계약·결제가 안 된 목록인데 오류인지 정상인지 분석"을 요청.
+
+**Stage DB 실측으로 원인 확정**: 문제의 주문(4개 유닛)을 직접 조회 — 패널이 열려있던 예약
+자신(id 8735)은 `status='hold'`이지만 **`payment_confirmed_at`이 이미 설정**돼 있었고
+(§9 이중게이트 — 결제는 끝났고 계약서명만 대기 중인 정상 상태), 형제 유닛 3개(8707/8711/8712)는
+**`status='expired'`**(30분 hold 자동만료, §10)였다. 둘 다 RPC 게이트가 정확히 차단한 것 —
+**차단 자체는 버그가 아니라 정상 동작**이었다. 다만 Stephen이 "실제 상품예약 설정에서 발생할
+수 있는 로직 오류일 수 있다"고 판단해 아래 2가지 실제 결함은 확인 후 수정 지시:
+
+1. **오류 메시지가 실제 사유와 다름**: RPC가 "만료"와 "계약/결제 진행"을 구분하지 않고 항상
+   같은 문구를 반환 — 만료된 유닛인데 "계약/결제가 진행되어"라고 잘못 안내.
+2. **행 단위 상태 미확인**: 삭제(✕)/재배정 버튼이 유닛 자신의 상태(만료·결제확인 등)를 확인
+   하지 않고 패널 전체(`canEditProducts`/`canReassignProductCode`, 앵커 예약 기준)로만
+   노출돼, 이미 개별적으로 불가능한 유닛에도 멀쩡해 보이는 버튼이 뜸.
+
+**수정**:
+- 신규 마이그레이션 `20260903020000_429_cms_reservation_edit_rpcs_error_messages.sql` — 6개
+  RPC 전부 게이트 거부 메시지를 상태별로 세분화(`예약이 만료되어...`/`취소된 예약은...`/
+  `이미 계약이 진행되어...`/`이미 결제가 진행되어...`, ⑥은 `...재고를 재배정할 수 없습니다`
+  계열로 별도) — **차단 조건 자체는 절대 변경 없음, 메시지 문자열만 교체**. Stage DB 적용
+  완료(anon/authenticated REVOKE도 이번엔 같은 파일에 인라인 포함 — Migration #364/#409/
+  #423 사고 재발 방지, 재조회로 grants 확인 완료).
+- `rental-siblings/+server.ts` — 형제 유닛별 `paymentConfirmedAt`/`trackingNumber` 필드 추가
+  반환(기존엔 없었음).
+- `RentalDetailPanel.svelte` — `canEditUnit(unit)`/`canReassignUnit(unit)` 신규 헬퍼로 유닛
+  자신의 상태까지 확인한 뒤에만 삭제/재배정 버튼·패널을 노출하도록 변경(형제 유닛이
+  `status==='hold' && !paymentConfirmedAt`가 아니면 삭제 버튼 자체를 안 보여줌 — "눌러야만
+  서버가 거부하는" 눈속임 버튼 제거). 앵커(메인) 유닛은 기존 `canEditProducts`/
+  `canReassignProductCode` 판정에 이미 자신의 상태가 반영돼 있어 그대로 통과시킴.
+- `reservationProductEdit.test.ts` — 메시지 변경에 따라 기존 6개 GATE_MSG 단언을
+  CONTRACT_MSG/PAID_MSG로 세분화 + expired/cancelled 신규 시나리오 5건 추가(①②⑥).
+
+**검증**: Stage DB에서 `pg_proc.proacl` 재조회로 anon/authenticated 여전히 차단됨 확인.
+`npx vitest run reservationProductEdit.test.ts` 독립 2회 연속 실행 — **31/31 GREEN**(기존 26 +
+신규 5), TDD-RPE 잔여 픽스처 0건. `npx tsc --noEmit` + `npx svelte-check` — 신규 에러/경고
+0건(베이스라인 그대로). git add/commit 미실행.
+
+⚠️ **참고**: Stephen이 실제로 테스트하신 그 주문(id 8735/8707/8711/8712, 상품 "Canon EOS R6
+Mark II + Canon 100-500mm...")은 Stage DB에 그대로 남아있다 — 별도로 정리 요청이 없어 손대지
+않음. 이제 그 화면을 다시 열면 형제 유닛(만료됨) 3개는 재고 삭제 버튼 자체가 사라지고, 앵커
+유닛(결제확인됨)에서 "+ 재고 추가"/"+ 추가" 클릭 시 "이미 결제가 진행되어..."로 정확한 사유가
+뜨는지 직접 재확인 가능.
+
+### ✅ QA 검수 완료 — 세션 후속 수정 6건 (2026-09-03, sp3-qa-agent, 독립 재검수)
+
+**검수 대상**: GATE E 통과 이후 같은 세션에서 Stephen이 실사용/스크린샷으로 지적해 추가로
+수정한 6건(카테고리 하드코딩 제거 2건 + 메인상품 수량 UX 재설계 + 옵션상품 카탈로그 연동
+제안 + 옵션상품 카탈로그 연동 전용 제한 + 오류메시지/유닛별 게이트 정확도 수정) — 지금까지
+별도 sp3-qa-agent 검수를 거치지 않았던 부분의 첫 독립검수.
+
+**검수 방법**: 메인 세션의 자체 보고를 그대로 신뢰하지 않고 코드·DB·테스트를 직접 재확인 —
+Stage DB(ezyvffjvuwmtuhpxdjrw) 대상 curl 직접 호출(service_role·anon 키 양쪽, 비밀키는
+`.env.local`을 `sed`로 마스킹 후 셸 변수로만 로드, 출력에 노출 없음) + 소스코드 직독 +
+`npx vitest run reservationProductEdit.test.ts` 독립 2회 재실행 + `npx tsc --noEmit` +
+`npx svelte-check --tsconfig ./tsconfig.json` + `npx eslint` 재실행 + `git diff`/`git status`로
+변경 파일 범위 재확인.
+
+**1. 카테고리 하드코딩 제거(상품찾기 모달)** — 해결 확인:
+Stage DB에 `products.category` 실측 조회 결과 실제 카테고리 7종(`accessory/camera/hypepack/
+lens/lighting/other/used-item`) 확인, `code_mapping_groups` 라벨 매칭 3종/미매칭 4종 폴백
+동작도 실측 확인(TASK.md 기록과 일치). `category-options/+server.ts`가 `getCmsRoleForAction`
+인증을 갖췄음을 코드로 확인(읽기 전용 + `/cms/reservation` 세션-only 접근수준과 일치, manager+
+게이트 불필요 판단 타당).
+
+**2. 나머지 2개 라이브 파일 수정 + 파일 삭제** — 해결 확인:
+`grep -rn "from '\$lib/utils/productCategoryTaxonomy'" src/` 결과 0건(주석 참조만 5건, 실제
+import 없음), 파일 자체 삭제 확인. `products/new/+page.svelte`의 `<select>` 폴백이
+`{#if (mappingGroups).length > 0 && ...} ... {:else} <select>...{/if}` 구조로 그룹 미등록
+시에만 노출됨을 템플릿 코드로 확인. `codes/_MappingTab.svelte`가 신규 쿼리 없이 기존
+`productCountMap`(`+page.server.ts` 무변경, git diff로 확인)을 재사용함을 확인.
+
+**3. RentalDetailPanel 메인상품 수량 UX 재설계** — 해결 확인:
+`productGroups`(`$derived.by`, `parentProductId` 기준 그룹화, 없으면 `single-${key}` 폴백)
+로직과 템플릿의 이중 루프(`{#each productGroups} ... {#each group.units}`)를 코드로 직접
+확인 — 그룹당 카드 1장, 상품명/이미지/카테고리는 대표 유닛 1회, "상품 코드" 행만 유닛 수만큼
+반복, "+ 재고 추가"가 `handleGroupQtyIncrease`로 검색 모달 재오픈 없이 즉시 1건 추가함을
+확인. 옵션 카드가 동일 `.btn-add-unit-small`/`.qty-count-badge` 클래스를 재사용해 레이아웃이
+통일됨을 확인.
+
+**4. 옵션상품 카탈로그 연동(product_option_links) 우선 제안** — 해결 확인:
+Stage DB에서 `get_product_option_links` RPC를 실제 연동 데이터로 라이브 호출 — 반환 컬럼
+(`option_product_id, option_product_name, price_24h, image_url, is_required` 등)이
+`option-links/+server.ts`의 `OptionLinkRow` 매핑과 정확히 일치함을 실측 확인. 부모/자식 id
+해석 로직(자식이면 `parent_product_id`로 치환, 부모면 그대로)도 실제 부모 상품 id로 재확인.
+
+**5. 옵션상품 추가를 카탈로그 연동 옵션으로만 제한** — 해결 확인:
+`ReservationProductFinderModal.svelte` 템플릿을 직독 — `{#if baseProductId}` 블록이 카테고리
+필터·일반 검색 UI 전체를 완전히 대체(else 분기)하며, 연동 옵션이 0개일 때도 대체 검색 경로
+없이 안내 문구만 표시함을 확인. 새는 경로 없음 — Stephen이 확정한 "연동된 옵션으로만 제한"
+요구사항과 코드가 정확히 일치.
+
+**6. "이미 계약/결제 진행됨" 오류 메시지·유닛 게이트 정확도 수정** — 해결 확인(가장 중요):
+Stage DB에 남아있는 실제 사고 재현 데이터(예약 8707/8711/8712=`status:'expired'`,
+8735=`status:'hold' AND payment_confirmed_at IS NOT NULL`)로 6개 RPC를 service_role 키로 직접
+curl 호출 — Migration 429 소스 파일에 적힌 문자열과 실시간 응답이 정확히 일치함을 실측 확인
+(예: 8707 재고추가 시도 → `"예약이 만료되어 상품 구성을 수정할 수 없습니다."`, 8735 → `"이미
+결제가 진행되어 상품 구성을 수정할 수 없습니다."`, ⑥ 재배정도 `"예약이 만료되어 재고를
+재배정할 수 없습니다."`). anon 키 동일 호출 → `42501 permission denied` 정상 차단 확인(REVOKE
+유지). `canEditUnit(unit)`/`canReassignUnit(unit)` 헬퍼가 형제 유닛(`isSibling`)은
+`status`/`paymentConfirmedAt`/`trackingNumber`를 직접 재검사하고, 메인(non-sibling) 유닛은
+`canEditProducts`/`canReassignProductCode`(이미 `row.status`/`row.payment_confirmed_at` 반영)에
+위임함을 코드로 확인 — 로직 정확. `npx vitest run reservationProductEdit.test.ts` 독립 2회
+재실행 — **31/31 GREEN** 재현, Stage DB에 `TDD-RPE%` 잔여 픽스처 0건(`products` 테이블
+`ilike.*TDD-RPE*` 조회로 재확인).
+
+**회귀 확인**:
+- `canEditProducts`/`canReassignProductCode` 둘 다 `!isRentalView &&`로 시작 — `/cms/rentals`
+  (`isRentalView=true`)에서 신규 편집 UI가 노출되지 않음을 코드로 재확인.
+- `git diff --stat`/`git status` — 이번 6건이 건드린 파일은 프롬프트에 명시된 목록과 정확히
+  일치(`ReservationProductFinderModal.svelte`, `RentalDetailPanel.svelte`,
+  `rental-siblings/+server.ts`, `category-options/+server.ts`(신규),
+  `[id]/option-links/+server.ts`(신규), `products/new/+page.server.ts`·`+page.svelte`,
+  `codes/_shared.ts`·`_MappingTab.svelte`, Migration 429, `reservationProductEdit.test.ts`,
+  `productCategoryTaxonomy.ts` 삭제). 워킹트리에는 이 세션에서 병렬 진행 중인 **다른 NOW
+  항목**(chat/qna 빠른답변 학습, admin-reply/message 수정, hold_expired 배치알림·주문단위
+  계약타이머 등 마이그레이션 419/420/431~433)도 함께 존재하나 이번 6건과는 무관 — 재검수
+  대상에서 의도적으로 제외(TASK.md 자체가 이미 이를 별도 NOW 항목으로 구분해 기록 중). git
+  add/commit 시 이 6건과 무관한 파일을 함께 스테이징하지 않도록 선택적 add를 권장.
+- `npx tsc --noEmit` — vite.config.ts 기존(무관) 에러 1건 외 신규 에러 0건.
+- `npx svelte-check --tsconfig ./tsconfig.json` — 1651 FILES 1 ERRORS(vite.config.ts) 404
+  WARNINGS(전 파일 기준 베이스라인과 동일) — 이번 6건이 건드린 8개 파일 한정 재확인 결과도
+  전부 기존에 이미 있던 경고만 유지(신규 unused-CSS·state_referenced_locally 없음).
+- console.log 0건 / `: any`·`as any` 0건(신규 코드 기준 — `products/new/+page.svelte`의 기존
+  `as any` 3곳은 이번 diff가 건드리지 않은 줄임을 `git diff` 헝크로 확인) / TODO·FIXME 0건.
+
+**LOW(비블로킹, 참고용)**:
+1. `category-options/+server.ts` 상단 주석이 "products.category는 고정 9종 Postgres
+   ENUM(product_category_enum, Migration 02)"라고 서술하는데, 같은 세션의 다른 후속 섹션
+   ("나머지 2개 라이브 파일도 동일 방식으로 수정")과 직접 DB 조회 결과 둘 다 `products.category`가
+   이미 순수 TEXT이고 그 ENUM 타입 자체가 더 이상 존재하지 않음을 확인했다 — 이 주석은 그
+   발견 이전에 작성된 채로 갱신되지 않은 낡은 서술로 보인다. 쿼리 로직 자체는 DISTINCT 실측
+   값을 그대로 쓰므로 동작에는 영향 없음(기능 결함 아님) — 다음에 이 파일을 손댈 때 주석만
+   정정 권장.
+2. `products/new/+page.svelte` 620행 부근 주석이 이미 삭제된 변수명 `CATEGORY_CODES`를 여전히
+   언급 — 실제 참조는 없고 설명 목적의 잔존 문구라 동작에 영향 없음.
+3. (기존 발견, 이번 6건과 무관) `products/new/+page.svelte`에 `RentalPeriodSimple`/
+   `RentalMethodSimple`/`PickupPointSimple` 미사용 타입 import 3건이 `npx eslint` 에러로
+   잡힘 — `git show HEAD:...`로 대조한 결과 이번 세션의 6건 diff 이전부터 이미 있던 기존
+   위반(pre-existing)이며, 이번 6건이 새로 만들거나 악화시키지 않음. 별도 정리 대상으로만
+   참고.
+
+**종합 판정: GATE E(재검증) 통과.** CRITICAL/HIGH/MEDIUM 등급 결함 발견 없음. LOW 3건은 전부
+비블로킹 문서/주석 정확도 또는 이번 스코프와 무관한 기존 이슈. git add/commit은 이번에도
+미실행 — Stephen 직접 실행 대기.
+
+**LOW 1·2 즉시 수정 완료(2026-09-03, 메인 세션)**: 둘 다 순수 주석 정정이라 별도 승인 없이
+바로 반영 — `category-options/+server.ts` 헤더 주석을 "고정 9종 ENUM" 서술에서 "원래는 ENUM
+이었으나 이후 타입 자체가 제거되고 TEXT로 바뀜(2026-09-03 stage DB 직접 조회로 확인)"으로
+정정, `products/new/+page.svelte` 620행 주석에 `CATEGORY_CODES`가 `categoryCodePrefix()`로
+대체됐다는 안내 추가. `npx tsc --noEmit` 재확인 — 기존 vite.config.ts 에러 1건만 유지, 신규
+에러 없음. LOW 3(사전 존재 ESLint 미사용 import 3건)은 이번 6건과 무관해 손대지 않음 — 필요
+시 별도 확인 후 진행.
+
+### 후속 — 마이그레이션 리플레이 순서 역전 발견·수정: #423(REVOKE) → #430으로 재번호 (2026-09-03, 같은 세션, Stephen "검증" 요청 → "진행해줘" 승인)
+
+Stephen이 "본 프로젝트 전역의 세션별 커밋 미실행 코드파일을 비교해서, 이번 세션만 먼저
+커밋·배포할 경우 순서오류가 발생할 가능성"을 검증 요청.
+
+**발견**: 이번 세션 마이그레이션 3개를 파일명(리플레이) 순서로 나열하면 `423(REVOKE) →
+428(CREATE FUNCTION) → 429(메시지 수정)` 순이었는데, **423이 428에서 비로소 생성되는 함수
+6개에 REVOKE를 거는 내용**이었다 — PostgreSQL의 `REVOKE ON FUNCTION`은 대상이 이미 존재해야
+성공하므로, 빈 DB에 파일 순서대로 리플레이하면(신규 환경 구축·production 최초 적용 등) 423에서
+"함수가 존재하지 않습니다" 에러로 즉시 실패하는 상태였다. 원인: 원래 422였던 RPC 생성 파일이
+세션 도중 유실돼(다른 병렬 세션이 동일 번호 선점) 428로 재작성되면서, 이미 그보다 앞선 번호인
+423이 그 함수들을 참조하고 있다는 걸 반영하지 못함. **Stage DB 자체는 문제 없음**(실제 적용은
+제가 직접 올바른 순서로 실행) — 파일 순서만 문제였음.
+
+병렬 세션과의 교차 검증: 같은 번호를 공유하는 `428_set_reservation_options_stock_guard.sql`
+(다른 세션)은 함수명이 전혀 겹치지 않아(`set_reservation_options` vs `cms_*` 6종) 충돌 없음.
+나머지 병렬 마이그레이션(419/420/422-chat/431/432/433)도 함수명·테이블 참조 대조 결과 직접
+충돌 없음 확인.
+
+**수정**: `20260902050000_423_cms_reservation_product_edit_rpcs_revoke_fix.sql`을 내용
+변경 없이 `20260903030000_430_cms_reservation_product_edit_rpcs_revoke_fix.sql`로 재번호
+(Migration #306 선례와 동일 방식 — 아직 git 커밋 전이라 파일명 변경 제약 없음). 헤더 주석에
+재번호 경위 추가. 이 파일을 "422/423"으로 언급하던 나머지 소스 2곳(`reservationProductEdit.test.ts`
+헤더+describe 제목, `products/+server.ts` 헤더 주석)도 "428/430"으로 함께 정정 — 다른 세션의
+파일(`427_stock_sync_rpcs_anon_revoke_fix.sql`)이 언급하는 "#423"은 범위 밖이라 손대지 않음.
+
+**검증**: `ls supabase/migrations/ | grep -E "_(428|429|430)_"`로 새 리플레이 순서(428→429→430)
+확인. `npx vitest run reservationProductEdit.test.ts` 재실행 — 31/31 GREEN 유지(설명 문구만
+바뀐 순수 코스메틱 변경이라 로직 영향 없음, 재확인 완료). `npx tsc --noEmit` — 기존
+vite.config.ts 에러 1건만 유지. git add/commit 미실행.
+
 ---
+
 
 ## NOW — 🟢 ROUTINE: "모바일 반응형 화면 미세떨림" 트리거 명령 문서화 (2026-09-02, 이 세션)
 

@@ -13,8 +13,7 @@
   import { datePart } from '../../codes/_shared'
   import type { CodeFormat } from '../../codes/+page.server'
   import type { PageData, ActionData } from './$types'
-  import type { MappingGroupSimple, MappingItemSimple, TaxonomyCodeSimple, RentalPeriodSimple, RentalMethodSimple, PickupPointSimple } from './+page.server'
-  import { PRODUCT_CATEGORY_OPTIONS, CATEGORY_CODES } from '$lib/utils/productCategoryTaxonomy'
+  import type { MappingGroupSimple, MappingItemSimple, TaxonomyCodeSimple, RentalPeriodSimple, RentalMethodSimple, PickupPointSimple, CategoryOptionSimple } from './+page.server'
   import { sortByTier } from '$lib/utils/comboCategoryCode'
 
   interface Props { data: PageData; form: ActionData }
@@ -22,8 +21,23 @@
 
   type FormResult = { error?: string } | null
 
-  // 9종 카테고리 값·라벨·품번 프리픽스 정의는 $lib/utils/productCategoryTaxonomy.ts 단일 소스로 통합됨
-  const CATEGORIES = PRODUCT_CATEGORY_OPTIONS
+  // ⛔ 2026-09-03 버그 수정: $lib/utils/productCategoryTaxonomy.ts의 정적 9종 배열을 더 이상
+  // 쓰지 않는다 — 실제 등록 상품·code_mapping_groups 라벨과 어긋나 있었음(ReservationProductFinderModal.svelte
+  // 카테고리 필터 버그와 동일 원인, TASK.md 참고). 이 <select>는 "그룹 미등록 시" 폴백 경로에서만
+  // 노출되므로(아래 706행 부근) load()가 실제 등록 상품 기준으로 미리 계산해준 값을 그대로 쓴다.
+  let CATEGORIES = $derived(data.categoryFallbackOptions as CategoryOptionSimple[])
+
+  // generate_product_code RPC(supabase/migrations/…_248_product_code_format_separation.sql)와
+  // 동일한 폴백 원칙 — product_category_codes(이미 load()가 taxonomyCodes로 로드해둠)에서
+  // depth=0 매칭 코드를 우선 쓰고, 없으면 UPPER(LEFT(category,3))로 계산(Migration 240과 동일
+  // 원칙 — 정적 CATEGORY_CODES 맵을 대신 하드코딩하지 않음). 이 값은 어디까지나 미리보기용이며
+  // 실제 품번은 제출 시 서버의 generate_product_code RPC가 최종 결정한다.
+  function categoryCodePrefix(cat: string): string {
+    if (!cat) return ''
+    const matched = (data.taxonomyCodes as TaxonomyCodeSimple[])
+      .find((t) => t.product_category === cat && t.depth === 0)
+    return matched?.code ?? cat.slice(0, 3).toUpperCase()
+  }
 
   // ─── 옵션상품 ───────────────────────────────────────────────
   interface OptionSearchResult {
@@ -332,8 +346,8 @@
     category = ''
   }
 
-  const CATEGORY_LABELS: Record<string, string> = Object.fromEntries(
-    CATEGORIES.map((c) => [c.value, c.label])
+  let CATEGORY_LABELS = $derived<Record<string, string>>(
+    Object.fromEntries(CATEGORIES.map((c) => [c.value, c.label]))
   )
 
   let groupPickerOptions = $derived<SuggestPickerOption[]>(
@@ -465,7 +479,7 @@
   })
 
   function autoSlug(name: string, cat: string): string {
-    const catCode = CATEGORY_CODES[cat]?.toLowerCase() ?? ''
+    const catCode = cat ? categoryCodePrefix(cat).toLowerCase() : ''
     const cleaned = name
       .toLowerCase()
       .replace(/[^\w\s-]/g, '')
@@ -603,10 +617,10 @@
   }
 
   // BUG-FIX(2026-08-14): 부모상품이 실제로 선택한 조합코드(콤보) 구조가 이 미리보기에
-  // 전혀 반영되지 않고, CATEGORY_CODES(기본 카테고리 드롭다운 기준 고정 3자 코드)로만
-  // 계산되고 있었음 — 콤보를 선택한 경우 실제 채번 로직(buildComboPreview, generate_product_code
-  // 7-param 경로)과 동일한 코드 구조를 보여주도록 우선순위를 바꿈. 콤보 미선택 시에만
-  // 기존 카테고리 기반 추정값으로 폴백.
+  // 전혀 반영되지 않고, 당시 CATEGORY_CODES(고정 3자 코드 정적 맵, 2026-09-03 categoryCodePrefix()로
+  // 대체됨 — 위 33행 참고)로만 계산되고 있었음 — 콤보를 선택한 경우 실제 채번 로직
+  // (buildComboPreview, generate_product_code 7-param 경로)과 동일한 코드 구조를 보여주도록
+  // 우선순위를 바꿈. 콤보 미선택 시에만 기존 카테고리 기반 추정값으로 폴백.
   let selectedCombo = $derived(
     selectedComboRowId
       ? combosForGroup.find((c) => c.combo_row_id === selectedComboRowId) ?? null
@@ -616,7 +630,7 @@
     selectedCombo
       ? buildComboPreview(selectedCombo)
       : category
-        ? `CS-${CATEGORY_CODES[category] ?? '???'}-${new Date().toISOString().slice(2, 7).replace('-', '')}-001`
+        ? `CS-${categoryCodePrefix(category)}-${new Date().toISOString().slice(2, 7).replace('-', '')}-001`
         : 'CS-???-2607-001'
   )
 </script>
@@ -1472,7 +1486,7 @@
           품번 자동 생성 형식: <code class="asset-code-preview">{assetCodePreview}</code>
         </p>
         <p class="info-subtext">
-          CS-{selectedCombo ? comboCatCodeStr(selectedCombo.codes) : (category ? CATEGORY_CODES[category] : '???')}-{'{'}YYMM{'}'}-{'{'}SEQ{'}'}  형식으로 생성됩니다.
+          CS-{selectedCombo ? comboCatCodeStr(selectedCombo.codes) : (category ? categoryCodePrefix(category) : '???')}-{'{'}YYMM{'}'}-{'{'}SEQ{'}'}  형식으로 생성됩니다.
         </p>
       </div>
     </section>

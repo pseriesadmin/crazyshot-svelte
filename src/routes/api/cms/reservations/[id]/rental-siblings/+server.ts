@@ -21,6 +21,22 @@ export const GET: RequestHandler = async ({ params, locals }) => {
 
   const admin = createClient(PUBLIC_SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
 
+  // Stage 4: 메인 예약의 상품 parent_product_id — 상품 그룹화 UI용. order_items 존재 여부와
+  // 무관하게(체크아웃 전 hold 예약도 포함) 항상 조회해야 한다 — order_items가 없다고 조기
+  // 반환하면 이 값이 항상 null로 남아 그룹 수량 스텝퍼/수정 배지가 렌더링되지 않는 결함이었음
+  // (QA GATE E에서 발견, 2026-09-03).
+  const { data: mainResRow, error: mainErr } = await admin
+    .from('rental_reservations')
+    .select(`products(parent_product_id)`)
+    .eq('id', reservationId)
+    .maybeSingle()
+
+  if (mainErr) return json({ error: mainErr.message }, { status: 500 })
+
+  const mainParentProductId = (mainResRow as unknown as {
+    products: { parent_product_id: string | null } | null
+  } | null)?.products?.parent_product_id ?? null
+
   const { data: ownItem, error: ownErr } = await admin
     .from('order_items')
     .select('order_id')
@@ -28,7 +44,7 @@ export const GET: RequestHandler = async ({ params, locals }) => {
     .maybeSingle()
 
   if (ownErr) return json({ error: ownErr.message }, { status: 500 })
-  if (!ownItem) return json({ siblings: [] })
+  if (!ownItem) return json({ siblings: [], mainParentProductId })
 
   const { data: siblingItems, error: siblingErr } = await admin
     .from('order_items')
@@ -42,13 +58,14 @@ export const GET: RequestHandler = async ({ params, locals }) => {
     .map(r => r.reservation_id as number | null)
     .filter((v): v is number => v != null)
 
-  if (siblingIds.length === 0) return json({ siblings: [] })
+  if (siblingIds.length === 0) return json({ siblings: [], mainParentProductId })
 
   const { data: rows, error: rowsErr } = await admin
     .from('rental_reservations')
     .select(`
       id, reservation_code, status, start_date, end_date, pickup_method, return_method,
-      products(name, product_code, category, image_urls)
+      payment_confirmed_at, tracking_number,
+      products(name, product_code, category, image_urls, parent_product_id)
     `)
     .in('id', siblingIds)
 
@@ -60,6 +77,7 @@ export const GET: RequestHandler = async ({ params, locals }) => {
       product_code: string | null
       category: string | null
       image_urls: string[] | null
+      parent_product_id: string | null
     } | null
     return {
       reservationId:     r.id as number,
@@ -69,12 +87,17 @@ export const GET: RequestHandler = async ({ params, locals }) => {
       rentalEnd:         r.end_date as string | null,
       pickupMethod:      r.pickup_method as string | null,
       returnMethod:      r.return_method as string | null,
+      // 유닛별 편집 가능 여부 판정용(2026-09-03 버그 수정) — 형제 유닛이 개별적으로 이미
+      // 결제확인됐거나 운송장이 등록된 상태일 수 있어, 앵커(row) 기준 게이트만으로는 부족함.
+      paymentConfirmedAt: r.payment_confirmed_at as string | null,
+      trackingNumber:     r.tracking_number as string | null,
       productName:       product?.name ?? '상품',
       productCode:       product?.product_code ?? null,
       productCategory:   product?.category ?? null,
       productImageUrl:   product?.image_urls?.[0] ?? null,
+      parentProductId:   product?.parent_product_id ?? null,
     }
   })
 
-  return json({ siblings })
+  return json({ siblings, mainParentProductId })
 }

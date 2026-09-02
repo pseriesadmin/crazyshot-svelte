@@ -26,6 +26,7 @@ export type TaxonomyCodeSimple = { id: string; code: string; name: string; produ
 export type RentalPeriodSimple = { id: string; name: string; display_order: number }
 export type RentalMethodSimple = { id: string; name: string; display_order: number }
 export type PickupPointSimple  = { id: string; name: string; address: string }
+export type CategoryOptionSimple = { value: string; label: string }
 
 export const load: PageServerLoad = async ({ locals }) => {
   const { session } = await locals.safeGetSession()
@@ -33,7 +34,10 @@ export const load: PageServerLoad = async ({ locals }) => {
 
   const admin = createClient(getSupabaseUrl(), env.SUPABASE_SERVICE_ROLE_KEY ?? '')
 
-  const [{ data: rawGroups }, { data: rawItems }, periodsRes, methodsRes, pickupsRes] = await Promise.all([
+  const [
+    { data: rawGroups }, { data: rawItems }, periodsRes, methodsRes, pickupsRes,
+    { data: fallbackProductRows }, { data: fallbackLabelGroups },
+  ] = await Promise.all([
     admin.from('code_mapping_groups')
       .select('id, name, description, default_category')
       .eq('is_active', true)
@@ -57,7 +61,32 @@ export const load: PageServerLoad = async ({ locals }) => {
       .eq('is_active', true)
       .is('deleted_at', null)
       .order('created_at'),
+    // "그룹 미등록 시 기존 카테고리 선택" <select> 폴백 전용(mappingGroups가 빈 경우에만
+    // 화면에 노출됨) — 실제 등록 상품이 쓰고 있는 category 값만 조회한다(고정 하드코딩 금지,
+    // ReservationProductFinderModal.svelte 카테고리 버그 수정과 동일 원칙 — 2026-09-03).
+    admin.from('products')
+      .select('category')
+      .is('parent_product_id', null)
+      .is('deleted_at', null)
+      .eq('is_active', true),
+    admin.from('code_mapping_groups')
+      .select('default_category, name')
+      .not('default_category', 'is', null)
+      .eq('is_active', true),
   ])
+
+  const fallbackLabelByCategory: Record<string, string> = Object.fromEntries(
+    (fallbackLabelGroups ?? [])
+      .filter((g) => g.default_category)
+      .map((g) => [g.default_category as string, g.name as string])
+  )
+  const categoryFallbackOptions: CategoryOptionSimple[] = [...new Set(
+    (fallbackProductRows ?? [])
+      .map((p) => p.category as string | null)
+      .filter((v): v is string => !!v)
+  )]
+    .sort((a, b) => a.localeCompare(b))
+    .map((value) => ({ value, label: fallbackLabelByCategory[value] ?? value }))
 
   const codeIds = [...new Set((rawItems ?? []).map((i: MappingItemSimple) => i.taxonomy_code_id))]
   let taxonomyCodes: TaxonomyCodeSimple[] = []
@@ -78,6 +107,7 @@ export const load: PageServerLoad = async ({ locals }) => {
     rentalPeriods: ((periodsRes as { data: RentalPeriodSimple[] | null }).data ?? []),
     rentalMethods: ((methodsRes as { data: RentalMethodSimple[] | null }).data ?? []),
     pickupPoints:  (pickupsRes.data ?? []) as PickupPointSimple[],
+    categoryFallbackOptions,
   }
 }
 
