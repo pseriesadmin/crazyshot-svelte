@@ -27,6 +27,9 @@
 | **보더 (주력)** | `--cs-purple` `#3B2F8A` | `--cs-lilac` `#ECEBF4` (1px) |
 | **브랜드 오렌지** | `--cs-orange` `#FF4500` — 로고 전용, 버튼 금지 | — |
 
+> ⚠️ `--cs-orange`는 "로고 전용"이라는 사용 제약 토큰일 뿐, 실제 대표 BI 로고의 색상이
+> 아니다(BI는 빨강 `#CF0000`+흰색). 로고=오렌지로 오독하지 말 것 — `front-uiux.md §20` 참고.
+
 ---
 
 ## 버튼 핵심
@@ -369,6 +372,22 @@ accept="image/png,image/jpeg,image/webp,image/heif,image/heic,application/pdf"
   contract/complete·expired(.page)·cart(.cart-root) — 2026-08-26 최초 확정, 2026-09-02
   cart·account/profile 2곳 재회귀 발견·재수정
 세부 절차·GATE C → @.claude/rules-ref/front-uiux.md §19
+```
+
+---
+
+## 🔴 대표 BI(로고) — 신규 화면 헤더 적용 시 필수 ★★★
+
+> **신규 화면 헤더에 로고를 넣을 때 → 아래 2계열 중 어느 쪽인지 먼저 판단.**
+
+```
+① drop-shadow 정본 BI(빨강+흰색, filter0_d_* 인라인 SVG) — 계약서·서명·인쇄 등 공식문서
+   성격 화면. 적용처: 전역 푸터, /contract/[token], /account/rental/[id]/contract
+② 평면 로고(/static/logo-bi2.svg) — GNB·MobileMoreMenu·CMS 등 일반 내비게이션 화면
+
+⛔ `--cs-orange`는 "로고 색상"이 아니다(사용 제약 토큰일 뿐, 실제 BI는 오렌지 미사용) —
+   신규 화면에 오렌지 텍스트 로고를 만드는 오독 금지(2026-08-20 실제 발견된 결함).
+세부 판단기준·복제 방법·filter id 충돌 방지 → @.claude/rules-ref/front-uiux.md §20
 ```
 
 ---

@@ -477,6 +477,46 @@ withdrawal_status 3단계:
 
 ---
 
+## 17. "관리자 전용" 알림을 chat_messages에 넣지 말 것 — 고객과 세션을 공유하기 때문 (2026-09-02 명문화)
+
+```
+이 프로젝트의 chat_sessions/chat_messages는 "고객 1명당 세션 1개" 구조다. audience(누가 볼
+수 있는가)를 구분하는 컬럼이 애초에 없다 — sender_type('user'/'admin'/'ai')은 "누가 보냈나"만
+나타낼 뿐 "누가 볼 수 있나"와는 무관하다. 그 결과 chat_messages에 INSERT된 모든 행은 그
+세션의 소유 고객 화면(ChatWindow)과 CMS 관리자 패널(AdminChatPanel) 양쪽에 항상 동시에
+노출된다 — 한쪽에만 보이게 하는 방법이 이 스키마에는 없다.
+
+⛔ 실사고 사례(Migration 328, 2026-08-21~2026-09-02): "신규 빠른문의 등록 시 관리자에게
+알려야 한다"는 요구를 find_or_create_general_chat_session(auth.uid(), NULL)로 그 문의를
+남긴 고객 본인의 세션을 찾아 action_card를 삽입하는 방식으로 구현했다. §11의 "세션조회는
+공유 RPC 경유" 원칙 자체는 정확히 지켰지만, "관리자에게만 보여야 할 카드"를 고객이 소유한
+세션에 넣었다는 점에서 원천적으로 성립할 수 없는 설계였다 — 결과적으로 그 카드가 고객 본인
+채팅창에도 그대로 노출되고, 고객이 그 카드의 버튼(CMS 전용 경로로 연결)을 누르면 cms_role이
+없어 로그인/접근거부 화면으로 튕겨나가는 실사용 버그로 이어졌다.
+
+✅ 올바른 경로 — "관리자만 봐야 하는" 알림은 아래 둘 중 하나로 구현한다(chat_messages 사용 금지):
+  1. 브라우저 푸시: `sendPushToAdmins(eventKey, payload)`(push.ts) — cms_role 보유자 전원 중
+     `admin_notify_<event>` 플래그가 켜진 대상에게만 발송(§15와 별개로 관리자 전용 발신
+     허브가 이미 있다).
+  2. CMS 화면 자체의 UI 리마인더 — 별도 API로 "처리 필요" 목록을 조회해 CMS 화면(예:
+     AdminChatPanel 세션 목록 사이드바)에 전용 카드로 렌더링. chat_messages를 전혀 거치지
+     않으므로 고객 화면에 노출될 방법 자체가 없다. 실제 적용 예:
+     `src/routes/api/cms/chat/pending-inquiries/+server.ts`(신규) +
+     `AdminChatPanel.svelte`의 "빠른문의 답변등록" 리마인더 카드(세션 목록 최상단, `--cs-red-
+     xlight` 배경, 클릭 시 `/cms/customers/inquiry?post={id}`로 이동 — 그 페이지의
+     `selectedPostId` 딥링크가 해당 문의를 자동으로 펼침).
+
+판별 기준: "이 알림을 관리자만 봐야 하는가, 아니면 그 세션의 고객도 함께 봐도 되는가"를
+먼저 명확히 하고, 전자라면 반드시 위 두 경로 중 하나를 쓴다 — find_or_create_general_chat_
+session이나 그 어떤 채팅 RPC도 "관리자 전용"을 보장해줄 수 없다(그 헬퍼가 찾는 세션은
+언제나 특정 고객 1명의 것이기 때문).
+```
+→ 상세: `.claude/harness/TASK.md` "관리자 채팅 세션 빠른문의 리마인더 카드 신규 구현"
+(2026-09-02) · Migration 425(`submit_cs_post`에서 고객세션 오노출 INSERT 제거) ·
+`security-auth.md` 역할별 CMS 접근 매트릭스(`/api/cms/chat/pending-inquiries` 등재)
+
+---
+
 ## GATE C 확인 항목 (front-cms 연동 변경 시)
 
 ```
@@ -512,6 +552,9 @@ withdrawal_status 3단계:
     (탈퇴 신청·삭제 여부를 deleted_at이 아닌 withdrawal_status로만 판별 — CMS 목록에서 숨기지 않음)
 [ ] 탈퇴 신청 경로에서 진행중 대여(hold·confirmed·shipped·in_use·return_requested) 차단이
     RPC 레벨에서 유지되고 있는가? 클라이언트 단독 차단으로 대체하지 않았는가?
+[ ] "관리자만 봐야 하는" 새 알림을 추가한다면(§17) — chat_messages/chat_sessions에 넣지
+    않았는가? (그 세션의 소유 고객에게도 항상 함께 노출됨) sendPushToAdmins 또는 CMS 전용
+    UI 리마인더 중 하나를 사용했는가?
 ```
 
 ---
@@ -552,4 +595,7 @@ GREEN. 랜딩 UX(채번내역 목록 클릭 시 이동 대상)는 Stephen 피드
 | 2026-08-19(같은 날 4차 후속) §15 — `IosAddToHomeScreenBanner.svelte` 신설로 2단계까지 해소
 완료(iOS+비-standalone 한정 노출, localStorage 영구 dismiss, /cms 제외) 반영. | 2026-08-28
 §16 신설 — 회원 자율 탈퇴 기능(TASK.md "마이페이지 회원 탈퇴('탈회') 기능 신설" 블록 참고,
-마이그레이션 365~370·373, TDD 24/24 GREEN, Stage 적용 완료·Production 미적용)*
+마이그레이션 365~370·373, TDD 24/24 GREEN, Stage 적용 완료·Production 미적용) |
+2026-09-02 §17 신설 — "관리자 전용" 알림을 chat_messages에 넣으면 안 되는 이유(고객과 세션
+공유) 명문화, Migration 328(빠른문의 신규등록 알림)의 고객세션 오노출 결함을 사례로 기록 +
+Migration 425로 해소 + GATE C 체크리스트 1건 추가*

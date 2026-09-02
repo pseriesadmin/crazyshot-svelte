@@ -312,6 +312,40 @@ export function subscribeToChatMessages(
 }
 ```
 
+### 9-1. 낙관적(optimistic) 사용자 메시지 ↔ Realtime 경쟁 — "중복 노출 후 사라짐" 결함 (2026-09-02 발견·수정)
+
+```
+증상: 사용자가 메시지를 보내면 말풍선이 잠깐 2개(임시+실제)로 겹쳐 보였다가 그중 하나만
+사라지는 실서비스 결함 — 캔드매칭/AI 폴백·푸시발송 등 서버 후속 처리가 오래 걸릴수록
+재현 확률이 높아짐(발생 조건 아래 참고).
+
+원인: ChatWindow.svelte handleSend()가 pushMessage({id:`temp-${uuid}`, ...})로 낙관적
+말풍선을 먼저 그리고, POST 응답이 돌아올 때까지 기다린 뒤에야 removeMessage(tempId) +
+pushMessage(response.user_message)를 실행한다. 그런데 서버(/api/chat/message)는 사용자
+메시지를 요청 초반에 즉시 INSERT하고 그 뒤에 캔드매칭/AI 폴백/푸시발송을 처리한 다음에야
+HTTP 응답을 반환하므로, 그 지연 구간 동안 Supabase Realtime이 같은 INSERT를 먼저 통지해
+pushMessage(실제 메시지)가 호출된다. 기존 pushMessage()의 중복방지는 `id` 단순 일치
+비교뿐이라 temp-id와 실제 id를 같은 메시지로 인식하지 못해 배열에 둘 다 남았다가,
+나중에 POST가 resolve되며 removeMessage(tempId)가 임시 쪽만 지워 "중복 후 하나만 사라짐"
+처럼 보였다.
+
+수정: pushMessage()(src/lib/stores/chat.svelte.ts)에 "낙관적 임시 메시지 치환" 로직 추가 —
+sender_type='user'인 실제 메시지가 들어오면, 같은 session_id·sender_type='user'·동일
+content를 가진 temp-* 메시지가 배열에 있는지 먼저 찾아 그 자리에서 교체(추가가 아님)한다.
+handleSend()의 흐름(먼저 push → await → removeMessage → pushMessage)은 그대로 두되, 두
+경쟁 순서 모두 최종적으로 말풍선 1개만 남도록 보장:
+  - POST가 먼저 끝나는 일반적인 경우: removeMessage(tempId)가 임시를 지우고 pushMessage가
+    실제 메시지를 추가 — 기존 흐름과 동일.
+  - Realtime이 먼저 도착하는 경쟁 경우: pushMessage가 temp를 실제 메시지로 즉시 치환 →
+    이후 removeMessage(tempId)는 이미 없는 id라 no-op, pushMessage(response.user_message)도
+    id가 이미 존재해 dedup으로 no-op — 중간에 두 번째 말풍선이 나타나는 순간 자체가 없음.
+
+⚠️ 이 치환은 content 문자열 완전 일치를 전제로 한다 — ChatInput.svelte가 onsend 호출 전
+`content.trim()`을 거치고 서버도 `body.content.trim()`으로 저장하므로 정상 흐름에서는
+항상 일치하지만, 향후 이 trim 처리 중 하나를 제거하면 이 치환이 조용히 안 먹히고(폴백으로
+기존 remove+push 흐름만 동작) 결함이 재발할 수 있다 — trim 처리를 양쪽에서 유지할 것.
+```
+
 ---
 
 ## 10. Intent Classifier (PRD.1.7.4)
@@ -467,6 +501,44 @@ is_expired: false (초기) → 만료 시 true (버튼 비활성화)
    - 관리자 미응답 알림(FCM) — TASK.md CS-A3 참고, Stephen 승인 대기 중 별건
 ```
 
+### 14-1. 포그라운드 안내 토스트 문구 3종 단일화 (2026-09-02 확정)
+
+```
+PushNotificationInit.svelte의 onMessage(FCM 포그라운드 수신) 콜백이 과거엔 서버가 그 발송
+건에 지정한 title/body를 그대로 이어붙여 보여줬다 — notifyType마다 문구가 제각각이었음.
+
+✅ 확정: src/lib/utils/pushToastMessage.ts의 buildUnifiedPushToastMessage(notifyType)가
+payload.data.notifyType 하나만 보고 아래 3종 정형 문구 중 하나로 통일해 반환한다(title/body
+텍스트는 토스트에 더 이상 쓰이지 않음 — OS 백그라운드 푸시 알림에는 계속 사용됨, 포그라운드
+토스트만 대상):
+
+  ① 신규 대화(매핑 없는 기본값)     : "새로운 대화를 확인하세요."
+  ② 질문에 대한 답변(canned_auto_reply·ai_auto_reply·admin_chat_reply)
+                                     : "새로운 답변을 확인하세요."
+  ③ 중요 실행 알림(정보)            : "새로운 {정보명} 정보를 확인하세요."
+     — 정보명 매핑(IMPORTANT_NOTIFY_LABELS): reservation_hold→예약신청,
+       reservation_approval→예약승인, shipment_notify→반출, rental_confirm→대여,
+       return_registration/return_remind→반납, rental_complete→대여완료,
+       reservation_cancelled→예약취소, damage_claimed→파손신고, hold_expired→예약만료,
+       contract_signed_customer/contract_signed→전자계약, coupon_gift→쿠폰,
+       late_fee_paid→연체료, locker_guide→보관함, dhero_place_guide→수령위치,
+       tracking_notify→운송장, chat_unanswered→미답변, identity_request→본인증명,
+       contract_sent→전자계약, new_reservation→예약, payment_completed→결제, new_session→상담
+
+⚠️ 2026-09-02(같은 날 후속, sp3-qa-agent 검수로 발견) — 최초 배포 시 이미 서비스 중이던
+locker_guide/dhero_place_guide/tracking_notify(예약 라이프사이클)·chat_unanswered/
+identity_request/contract_sent(개별 sendPushToUser 호출) 6종이 이 매핑에서 누락돼 있었다
+— push.ts의 CUSTOMER_LIFECYCLE_PUSH_COPY 등 기존에 이미 발송 중이던 타입은 신규 매핑을
+만들 때 전수 대조해야 한다(신규 타입만 챙기고 기존 타입을 빠뜨리기 쉬움). 위 표는 수정
+완료 반영.
+
+새 notify_type을 추가할 때 이 매핑에 등록하지 않으면 자동으로 ①(기본값)으로 폴백돼
+화면이 깨지지는 않지만, 의도한 분류(②/③)로 보이게 하려면 반드시
+pushToastMessage.ts에 함께 등록할 것 — CUSTOMER_LIFECYCLE_PUSH_COPY(push.ts)에만
+등록하고 이 파일에 빠뜨리면 포그라운드 토스트만 "새로운 대화를 확인하세요"로 뭉뚱그려
+보이는 결함이 재발한다.
+```
+
 ---
 
 ## 15. GATE C 확인 항목 (채팅 시스템)
@@ -489,6 +561,10 @@ Realtime
 [ ] subscribeToChatMessages 채널명 고유 ID 포함? (_channelSeq)
 [ ] $effect cleanup에서 supabase.removeChannel() 호출?
 [ ] REPLICA IDENTITY FULL 설정 확인?
+[ ] 사용자 메시지 전송 경로를 수정했다면 — 낙관적 임시 메시지(`temp-*`)와 Realtime이 먼저
+    배달하는 실제 메시지가 화면에 동시에(중복) 보이지 않는가? pushMessage()의 temp 치환
+    로직(§9-1)이 여전히 동작하는지 확인(특히 ChatInput의 content.trim() 제거 시 이 치환이
+    조용히 깨질 수 있음)?
 
 UI
 [ ] sender_type = 'ai' 관리자 패널 미표시?
@@ -506,6 +582,9 @@ UI
 [ ] 새 예약 라이프사이클 알림 타입 추가 시 — 채팅카드(RPC)뿐 아니라 push.ts의
     CUSTOMER_LIFECYCLE_PUSH_COPY(브라우저 푸시)에도 함께 추가했는가? (service-operations.md
     §15 — 둘은 완전히 별개 경로, 자동 동기화 없음)
+[ ] 새 notify_type 추가 시 — pushToastMessage.ts(§14-1)의 ANSWER_NOTIFY_TYPES 또는
+    IMPORTANT_NOTIFY_LABELS에도 분류를 등록했는가? (누락 시 포그라운드 토스트가 ①기본값으로
+    뭉뚱그려 보임 — 에러는 아니지만 의도한 분류가 아님)
 ```
 
 ---
@@ -755,3 +834,6 @@ manifest.json·app.html 메타태그 적용으로 iOS "홈 화면에 추가" 최
 안내 UI 배너(2단계)는 여전히 별건 승인 대기로 갱신.*
 *2026-08-19(같은 날 4차 후속) §14 — IosAddToHomeScreenBanner.svelte 신설로 2단계까지 해소
 완료 반영(iOS Safari 웹푸시 대응 완전 종료).*
+*2026-09-02 §9-1 신설 — 낙관적 사용자 메시지와 Realtime 경쟁으로 인한 "중복 노출 후 사라짐"
+결함 발견·수정(pushMessage() temp 치환 로직) 반영 + §14-1 신설 — 포그라운드 안내 토스트
+문구 3종 단일화(pushToastMessage.ts) 반영 + GATE C 체크리스트 2건 추가.*

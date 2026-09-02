@@ -15,6 +15,7 @@
   import { csToast } from '$lib/utils/toast'
   import { PUSH_TOKEN_STORAGE_KEY } from '$lib/utils/push'
   import { callTypedRpc } from '$lib/utils/rpc'
+  import { buildUnifiedPushToastMessage } from '$lib/utils/pushToastMessage'
 
   let initialized = false
 
@@ -65,10 +66,10 @@
         }
 
         disposeOnMessage = onMessage(messaging, (payload) => {
-          const title = payload.notification?.title ?? ''
-          const body = payload.notification?.body ?? ''
-          const message = title && body ? `${title} — ${body}` : title || body
-          if (!message) return
+          // 개별 push 문구(title/body)를 그대로 노출하지 않고 3종 표준 안내 문구로 단일화
+          // (신규대화/답변/중요알림 — pushToastMessage.ts 참고, Stephen 확정)
+          const notifyType = payload.data?.notifyType
+          const message = buildUnifiedPushToastMessage(notifyType)
 
           const link = payload.data?.link
           csToast.info(message, link ? { onClick: () => goto(link) } : undefined)

@@ -55,6 +55,21 @@
 
   $effect(() => { searchInput = data.search ?? '' })
 
+  // AdminChatPanel "빠른문의 답변등록" 카드에서 ?post=<id>로 진입 시 해당 문의를 자동 펼침 +
+  // 스크롤. 페이지네이션(20건/페이지) 밖에 있으면 목록에 없어 펼쳐지지 않는 한계는
+  // /cms/reservation·/cms/rentals의 ?selected= 딥링크와 동일(contract.md 참고).
+  $effect(() => {
+    const postId = data.selectedPostId
+    if (!postId) return
+    const post = data.posts.find((p) => p.id === postId)
+    if (!post) return
+    expandedId = postId
+    if (!statusEdits[postId]) statusEdits[postId] = post.status
+    queueMicrotask(() => {
+      document.getElementById(`inquiry-${postId}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+    })
+  })
+
   $effect(() => {
     if (form?.ok === true) {
       csToast.success('처리되었습니다.')
@@ -150,7 +165,7 @@
         {@const isOpen = expandedId === post.id}
 
         <!-- 아코디언 행 -->
-        <div class="accordion-item" class:accordion-open={isOpen}>
+        <div id="inquiry-{post.id}" class="accordion-item" class:accordion-open={isOpen}>
           <button
             class="accordion-head"
             onclick={() => toggleRow(post.id)}

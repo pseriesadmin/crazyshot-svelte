@@ -12,6 +12,573 @@
 
 ---
 
+## NOW — 🔴 CRITICAL: 장바구니 대여예약옵션 캘린더 ↔ 실제 날짜별 재고 동기화 (2026-09-02, Stephen "요구사항 1부터 진행해" 승인, 이 세션 구현 완료)
+
+아젠다: Stephen이 캘린더에서 특정 날짜(9/7~9일)가 `cal-day-past`로 비활성화된 것을 보고 재검증
+요청 — 조사 결과 그 날짜들은 실제로는 "이미 선택된 수령일보다 이전"이라 막힌 것(버그 아님)이었지만,
+그 과정에서 요구사항 2가지를 확인:
+1. 장바구니 상품(복수) 중 해당 일자에 재고가 모두 점유되어 예약신청이 불가능한 경우 → **미구현
+   확인**(캘린더가 재고를 전혀 조회하지 않았음).
+2. 배송 선택 후 예약일 전날이 휴무일이면 배송예약 불가 → 이미 정상 구현 확인(무관).
+Stephen이 "요구사항 1부터 진행해"로 승인해 이번 세션에서 구현.
+
+### 구현 (신규 마이그레이션 426 + `src/routes/cart/+page.svelte` + `src/lib/components/common/CalendarGrid.svelte`)
+```
+[NOW]
+- [x] (TDD-RED→GREEN) get_unavailable_dates_for_cart RPC 신규
+      (supabase/migrations/20260902080000_426_get_unavailable_dates_for_cart.sql) — Stage
+      (ezyvffjvuwmtuhpxdjrw) 적용 완료. create_hold_reservation의 날짜-겹침 판정과 동일 기준을
+      배치로 계산: 병렬배열(p_product_ids, p_qty_needed)로 여러 상품을 한 번에 받아, 두 모드로
+      동작 — p_fixed_start=NULL(수령일 캘린더, 후보일 d를 [d,d] 1일 기준 사전필터) /
+      p_fixed_start=고정값(반납일 캘린더, 이미 정해진 수령일 기준 실제 [수령일,d] 구간 검증).
+      getUnavailableDatesForCart.test.ts(신규, Stage 라이브 DB) 9/9 GREEN — 기본 점유판정·
+      qty_needed 초과·복수상품 OR판정·p_fixed_start 구간중간 점유 포착·anon 케이스 전부 검증.
+- [x] (GSD) cart/+page.svelte — checkedAvailabilityItems(체크된 그룹의 부모상품id+수량)
+      파생값 신설, 수령일/반납일 각각에 대해 $effect로 RPC 호출해 unavailablePickupDates/
+      unavailableReturnDates(Set) 캐싱(오늘~+180일 창), CalendarGrid의 isDateDisabled/
+      onDisabledClick에 기존 휴무일 체크와 함께 병합(휴무일 우선 판정 후 재고 판정) — 재고
+      부족 시 "해당 일자는 장바구니 상품의 재고가 모두 점유되어 예약할 수 없습니다." 토스트.
+- [x] (버그 수정, 조사 중 발견) CalendarGrid.svelte의 비활성 날짜 title 속성이 "택배 휴무일"로
+      하드코딩돼 있어, 이번에 추가한 재고부족 사유로 비활성화된 날짜에도 (실제로는 휴무일이
+      아닌데) 마우스오버 시 "택배 휴무일"이라고 잘못 표시되는 문제를 라이브 확인 중 발견 →
+      "선택할 수 없는 날짜입니다"(사유중립) 문구로 수정. 이 컴포넌트를 쓰는 다른 2곳
+      (CmsDatePicker.svelte, ProfileTabContent.svelte)은 isDateDisabled 자체를 안 넘겨
+      영향 없음을 grep으로 확인.
+```
+
+검증: vitest 9/9(신규) 포함 전체 관련 스위트 GREEN. svelte-check 신규 에러 0건(1건 무관
+pre-existing 유지, warning 404건 동일). ✅ **라이브 Stage DB 검증 완료** — 실제 로그인 세션
+(브라우저 dev-import로 인증된 supabase 클라이언트 확보, `import('/src/lib/services/supabase.ts')`)
+으로 SONY PXW-Z90(활성 자식 1개)에 2026-09-12 hold 예약을 실제로 생성해 완전 점유시킨 뒤 RPC를
+직접 호출해 정확히 그 날짜 하나만 반환됨을 확인, 카트 화면의 실제 캘린더에서도 그 날짜가
+`aria-disabled="true"`·`cal-day-holiday` 클래스로 정확히 비활성 반영됨을 DOM에서 직접 확인
+(검증 후 테스트 예약행은 삭제 정리 완료).
+
+⚠️ **라이브 브라우저 검증 일부 미완료(정직 기록)**: 비활성 날짜를 실제로 클릭했을 때 뜨는
+토스트가 재고부족 전용 문구("...재고가 모두 점유되어...")로 정확히 뜨는지까지는 확인하지
+못함 — 클릭 자체는 코드상 disabled=false로 정상 가능한 버튼인데, Claude Browser의 스크린샷
+컴포지팅이 실제 라이브 DOM 상태와 어긋나는 현상(이 세션 전반에 걸쳐 반복된 환경 결함, 스크린샷이
+실제로는 열려있는 캘린더를 닫힌 상태로 보여주는 등)이 재발해 좌표기반 클릭이 안정적으로
+전달되지 않았음. document-level 클릭 리스너로 클릭 자체가 DOM에 도달하지 않음을 직접 확인해
+"버튼이 막혀서" 가 아니라 "도구가 클릭을 못 전달해서"임을 구분했음. 비활성화 자체(핵심 기능)는
+DOM 속성으로 이미 확정 검증됐고, `onDisabledClick`의 분기 로직(휴무일 우선 체크 후 재고 체크)도
+간단한 if/else라 코드 검토로 충분히 신뢰 가능 — 다만 완전한 종결을 위해 도구 안정화 후 클릭
+1회만 추가 확인 권장.
+
+[NEXT]
+- [ ] Production(vnbpmvxruyciuuaermyh) 마이그레이션 426 적용 — 별도 승인 대기
+- [ ] 비활성 날짜 클릭 시 토스트 문구 실브라우저 최종 확인(위 참고, 낮은 우선순위)
+
+---
+
+## NOW — 🔴 CRITICAL: 실서버 CMS·사용자화면 전역 심각한 로딩 지연 원인 규명 + 수정 (2026-09-02)
+
+아젠다: Stephen 보고 — "실서버 CMS 접속 시 메뉴 구간마다 매우 심각한 로딩이 발현되고 있는 원인을
+먼저 규명할 것. 사용자 화면에서도 동일한 증상이 점점 더 심각해짐. 사용자가 메뉴나 기능을 선택해도
+무응답 상태로 오인할 정도임." AskUserQuestion으로 "수정까지 진행" + "리전정렬·세션캐싱 둘 다 진행"
+확정 승인 받고 구현까지 진행.
+
+### 조사 결과 (원인 규명)
+1. **DB 자체는 정상 — 배제됨**: `pg_stat_activity` 활성커넥션 10(idle)+2(active), 풀 고갈 없음.
+   `pg_stat_statements` 상 앱 RPC(`get_rental_list`·`search_products` 등) 전부 수 ms~수십 ms.
+   장기실행 쿼리·lock 대기 없음. Vercel 런타임 로그도 24h 전부 200/3xx, 5xx·타임아웃 0건.
+2. **진짜 원인 — 리전 불일치 × 세션 재검증 무캐싱 중복호출**:
+   - Vercel 함수 배포 리전: `iad1`(미국 동부) — `svelte.config.js`가 `adapter()`를 옵션 없이
+     호출해 기본값 그대로였음. Supabase DB/Auth 리전: `ap-northeast-1`(도쿄, `get_project` 확인).
+   - `src/hooks.server.ts`의 `safeGetSession()`이 매 호출마다 `getSession()`(쿠키, 저비용) +
+     `getUser()`(Auth 서버 실제 네트워크 왕복, JWT 위변조 재검증용— 의도된 보안설계)를 무캐싱
+     재실행. 이 함수를 호출하는 지점이 전역 128개 파일(`+layout.server.ts`/`+page.server.ts`/
+     `+server.ts`).
+   - CMS 페이지 1건 열람 시: 루트 `+layout.server.ts`(호출#1) → `cms/+layout.server.ts`(호출#2,
+     +`cms_menu_permissions` 조회용 admin 클라이언트 매 요청 신규생성) → 해당 `+page.server.ts`
+     (호출#3) → 디테일패널 lazy API 5~7개 각자 자기 `+server.ts`에서 재호출 → 동일 세션을
+     화면 1건당 최대 10회 안팎 도쿄로 재검증 왕복 — "메뉴마다 심각한 지연"과 정확히 일치.
+   - `hooks.server.ts`가 전역 hook이라 CMS·사용자 화면 둘 다 증상 발현 설명됨. 기능(서브메뉴·
+     lazy API)이 늘어날수록 페이지당 왕복 횟수도 함께 늘어 "점점 심해짐"과도 일치(회귀가 아니라
+     기능 성장에 비례해 증폭되는 구조적 성능부채).
+3. **별건 발견(미수정, 이번 증상과 무관)**: `/api/chat/message`에서 Anthropic API
+   `credit balance too low` 400 에러 24h 내 3건 — 채팅 AI 응답 기능만 별도로 막혀있는 상태.
+   Stephen 확인 필요(과금/크레딧 충전 사안이라 코드 수정 대상 아님).
+
+### 구현 내용 (Stephen 승인 경로: AskUserQuestion "수정까지 진행" + "둘 다 진행")
+```
+[NOW]
+- [x] svelte.config.js — adapter({ regions: ['icn1'] }) 리전 고정(서울, 도쿄와 최근접+
+      실사용자 대부분 한국인 서비스라 엔드유저 지연도 함께 개선). 기존 adapter() 무옵션 →
+      옵션 부여만, 다른 설정 변경 없음.
+- [x] src/hooks.server.ts(Frozen 파일, CRITICAL) — safeGetSession()을 요청 스코프 Promise
+      캐싱으로 전환. getSessionAndUser() 내부 로직(getSession+getUser 순서, 에러 처리) 완전
+      무변경 — 요청당 최초 1회만 실제 실행되고 이후 같은 요청 내 재호출은 캐싱된 Promise를
+      그대로 반환(동시호출도 in-flight Promise 공유로 중복 네트워크 왕복 방지). event.locals가
+      요청마다 새로 생성되므로 클로저 캐시가 자연스럽게 요청 스코프로 격리됨 — 다른 사용자/
+      요청 간 세션 누수 없음.
+```
+
+### 검증
+```
+[x] npm run check — 변경 2개 파일(hooks.server.ts, svelte.config.js) 신규 에러/경고 0건
+    (전체 1 ERRORS는 vite.config.ts의 vitest 타입 오버로드 문제로 이번 변경과 무관한 기존
+    이슈 — 요청범위 외 미수정)
+[x] npm run build — 정상 완료, .vercel/output/functions/*.func/.vc-config.json에
+    "regions": ["icn1"] 반영 실측 확인
+[ ] 실서버(Vercel Production) 배포 후 체감 지연 재측정 — git 커밋·push·Vercel 배포는 Stephen
+    직접 실행 필요(GP-1 원칙). 배포 후 CMS 메뉴 이동 체감속도 Stephen 확인 요망.
+```
+
+### ✅ QA 검수 완료 (sp3-qa-agent, 2026-09-02)
+
+GATE E 진행 가능(핵심 로직 안전 — 요청별 격리·에러 캐시 일관성·race condition을 SvelteKit
+`respond.js` 소스 레벨까지 대조해 확인, git diff가 최소 변경, build 산출물에 icn1 반영 실측
+확인). 조건부 권고 1건(비블로킹): `hooks.server.ts`는 Frozen+보안(auth) TDD 강제 도메인인데
+이번 캐싱 로직 자체를 검증하는 회귀 테스트가 없음 — Stephen이 AskUserQuestion으로
+"회귀테스트 추가 후 커밋 진행" 선택.
+
+### ✅ 회귀 테스트 추가 완료 (같은 날 후속)
+
+`src/__tests__/server/hooksSessionCaching.test.ts` 신규(5개 케이스, 전부 GREEN):
+① 동일 요청 내 여러 번 호출 → getSession/getUser 각 1회만 실행 ② getSession 실패(session=null)
+→ getUser 미호출 + 재호출도 일관되게 null ③ getUser 실패(JWT 재검증 실패) → getSession 1회만 +
+재호출도 일관되게 null ④ 서로 다른 요청(handle 별도 호출) 간 캐시 미공유(요청별 격리) ⑤ 동시
+(parallel) 호출도 in-flight Promise 공유로 1회만 실행. `@supabase/ssr`의 `createServerClient`와
+`$lib/env/supabasePublic`을 vi.mock으로 대체해 순수 단위테스트로 구성(라이브 DB 불필요) —
+accountWithdrawalRestore.test.ts와 동일한 "동적 import + 느슨한 타입별칭 캐스팅" 패턴 재사용.
+`npm run check` 신규 에러 0건(전체 에러 수 기존과 동일하게 1건 — vite.config.ts 무관 기존 이슈).
+
+---
+
+## NOW — 🔴 CRITICAL: 상품상세·장바구니 수량 UI ↔ 실제 가용재고 동기화 + 마지막 재고 사전차단 (2026-09-02, GATE B 승인 완료, 이 세션 구현 완료)
+
+아젠다: Stephen이 재검증 중 지적 — 상품상세/장바구니의 수량(±) 스테퍼가 실제 등록 재고와 무관한
+하드코딩 상한(`MAX_RESERVATION_QTY=10`)만 참조하고 있었고, 옵션 상품 수량은 상한 자체가 없어
+무제한 담기가 가능했음(조사로 확인, 아래 조사결과 참고). Stephen 요청 3가지:
+1. 상품상세 로드 시 실제 가용재고(점유되지 않은) 수를 계산해 내려주고 프론트 상한(사전차단·
+   버튼 disable)에 반영.
+2. 옵션 상품(사실상 부모상품)도 동일하게 실제 가용재고를 계산해 상한(사전차단·버튼 disable)에 반영.
+3. 모든 상품 수량은 "등록된 총 수량 - 점유되지 않은 실제 가용 재고"를 반영해야 한다.
+
+### GATE B 확정 사항 (Stephen, AskUserQuestion 경유, 2026-09-02)
+1. 가용재고 계산 기준: **날짜 무관 — 현재 시점 점유 여부만**(권장안 채택). 대여 희망 기간별 정밀
+   재계산은 하지 않음(products.md §6 "상태별 재고 카운트 칩"과 동일한 날짜무관 방식).
+   → available = (활성 자식 수) - (비종결 상태(hold/confirmed/shipped/in_use/return_requested)
+   예약이 걸려있는 자식 수). cancelled/returned/completed/expired는 점유 아님.
+2. 사전차단 시 토스트 문구: 기존 재고 관련 토스트 메커니즘 재사용하되 문구는 정확히
+   **"예약 가능한 재고가 없습니다."**로 통일(기존 서버 hold-생성 실패 메시지 `'해당 기간에
+   예약 가능한 재고가 없습니다.'`와는 별개 — 그쪽은 무변경).
+
+### 조사 결과 요약 (구현 전 재확인 아젠다에서 발견)
+- 메인 상품: `+page.server.ts` load()가 재고 관련 필드를 전혀 계산하지 않았고, 프론트는
+  `clampReservationQty`(하드코딩 10)만 참조 — 실제 재고와 완전히 무관했음.
+- 옵션 상품: 상한 로직 자체가 없어(`opt.qty += 1`, 하드코딩 10조차 없음) 무제한 담기 가능했음.
+- 마지막 재고 차단: hold(날짜 확정) 경로만 서버 RPC가 사후차단(재고 없으면
+  `create_hold_reservation`이 에러 반환 → 토스트) — draft(날짜 미선택) 경로와 옵션 상품은
+  차단 자체가 없었음. 사전차단(버튼 disable)은 어디에도 없었음.
+
+### 구현 내용
+
+```
+[NOW]
+- [x] (TDD-RED→GREEN) get_available_stock_counts RPC 신규
+      (supabase/migrations/20260902030000_421_get_available_stock_counts.sql) — Stage
+      (ezyvffjvuwmtuhpxdjrw) 적용 완료. 여러 부모상품 id를 배치로 받아
+      "GREATEST(0, 활성자식수 - 비종결상태 점유 자식수)"를 반환(SECURITY DEFINER,
+      anon+authenticated 실행권한 — 비로그인 상품상세 방문자도 조회 가능해야 하므로).
+      cartReservationGrouping.test.ts와 동일한 createEphemeralSession 패턴의 라이브 Stage DB
+      통합테스트(getAvailableStockCounts.test.ts) 7/7 GREEN — 기본계산·상태전환 복귀·배치조회·
+      존재하지않는id·anon조회 전부 검증.
+- [x] (TDD-GREEN) reservationHelper.ts에 clampToAvailableStock(availableCount, hardCap?) 순수
+      함수 추가 — 재고값을 하드상한(기본 10)과 함께 정확한 상한으로 변환, null/NaN은 기존
+      하드코딩 상한으로 안전 폴백. reservationHelper.test.ts에 8개 케이스 추가.
+- [x] (GSD) products/[id]/+page.server.ts — 메인상품 id + 전체 optionLinks의 option_product_id를
+      배치 조회해 `availableStock: Record<string,number>`로 반환.
+- [x] (GSD) products/[id]/+page.svelte — mainStockCap($derived) 도입, 메인 수량 +버튼
+      disabled + 클릭 시 사전차단(토스트), input onchange도 초과 입력 시 캡 값으로 보정+토스트,
+      옵션 수량도 동일 패턴(incrementOptionQty, stockCapFor(opt.id)).
+- [x] (GSD) cart/+page.server.ts — cartLineGroups의 각 그룹 메인상품(resolveParentProductId로
+      부모 해석) + 그룹 내 전체 옵션상품 id를 배치 조회해 `availableStock` 반환.
+- [x] (GSD) cart/+page.svelte — incrementGroupQty 최상단에 사전차단 추가(RPC 호출 전에 캡
+      확인), 수량 +버튼 disabled에 캡 조건 추가(모바일·PC 2곳), updateOptionQty도 동일하게
+      사전차단 + 옵션 +버튼 disabled에 캡 조건 추가(모바일·PC 2곳).
+
+검증:
+- vitest: reservationHelper.test.ts(53) + getAvailableStockCounts.test.ts(7, Stage 라이브 DB)
+  + cartLineGrouping.test.ts(11) + cartReservationGrouping.test.ts(7) = 78/78 GREEN.
+- svelte-check: 신규 에러 0건(기존 vite.config.ts 1건만 무관하게 유지, 401 warning 동일).
+- ✅ 라이브 브라우저+DB 검증 완료(2026-09-02) — 실제 Stage 데이터로 3가지 케이스 확인:
+  1. DJI RS4 Pro(f0660be5..., 활성자식 1개가 confirmed 예약으로 점유돼 available=0) 상품상세
+     페이지에서 메인수량 input max="0", +버튼 disabled=true 확인. input에 직접 큰 값을 입력해도
+     onchange 핸들러가 0으로 clamp + "예약 가능한 재고가 없습니다." 토스트 표시 확인
+     (document.querySelector('.toast-msg')로 실제 DOM 텍스트 확인).
+  2. SONY PXW-Z90(467c8f9b..., available=0)을 옵션으로 갖는 Sony FX6-12 상품상세에서 옵션
+     +버튼 disabled=true, max="0" 확인 + 동일 토스트 확인.
+  3. 카트 페이지 실데이터 교차검증 — SQL로 조회한 실시간 available_count(SONY PXW-Z90=0,
+     Sony FX6-12=2, Canon RF 24-70mm F2.8L=4)와 카트 화면의 각 카드/옵션 +버튼 disabled 상태가
+     전부 정확히 일치함을 확인(Canon 카드는 qty3<available4라 미비활성, 나머지는 재고초과로
+     비활성 — DB값과 UI 상태 1:1 대응 확인).
+
+⚠️ **범위 명시(요청범위 외 수정 방지)**: 이번 작업은 요청된 "수량 UI 사전차단"에만 한정했다.
+create_draft_reservation(날짜 미선택 경로)이나 reservation_options 저장 RPC 자체에 서버측
+재고 검증을 추가하는 것은 이번 스코프에 포함하지 않음(더 큰 범위의 별도 결정 필요 — Stephen이
+요청한 3가지 항목은 전부 "프론트 상한 반영"이었음). hold 경로의 기존 서버측 사후차단
+메시지(`'해당 기간에 예약 가능한 재고가 없습니다.'`)도 무변경.
+
+[NEXT]
+- [ ] Production(vnbpmvxruyciuuaermyh) 마이그레이션 421 적용 — 별도 승인 대기
+```
+
+### ✅ 후속 — 카트 수량(±) 클릭 로딩 최소화 (2026-09-02, Stephen "1번부터 진행해" 승인)
+
+배경: Stephen이 로컬에서도 수량(±) 클릭 시 로딩이 눈에 띄게 느끼진다고 지적 — 원인 조사 결과,
+`incrementGroupQty`/`decrementGroupQty`가 성공 후 매번 `invalidateAll()`을 호출해 `/cart`
+load() 함수 전체(예약목록·상품·가격룰·옵션+이미지·이번 재고조회·쿠폰 자격판정·할인구간·
+배송설정·`calculate_cart_total` 등 수십 개 쿼리)를 처음부터 다시 실행하는 게 지연의
+실질적 원인으로 확인됨(로컬도 느껴지면 실서버는 리전거리·부하로 더 악화될 것이라는 Stephen의
+우려가 타당함을 확인).
+
+조사(Explore 에이전트)로 확정된 전제:
+- 화면에 실제로 렌더링되는 모든 금액(대여요금·옵션금액·보증금·합계 등)은 서버 load()가 계산해
+  내려주는 `sd.calcTotal`/`calcDiscount`/`calcFinal`/`depositTotal`이 **전혀 아니고**, 전부
+  `groupsById`(그룹 canonical id 조회 Map, cart/+page.svelte:535)에서 파생되는 클라이언트
+  계산값(`otSubtotal`/`otDeposit` 등)이다 — 서버 계산값 4종은 클라이언트로 전달만 되고
+  화면 어디에도 쓰이지 않는 dead prop(단, 서버 load() 내부에서 쿠폰 자격판정의 `orderAmount`
+  대리값으로는 소비됨).
+- 이 사실 덕분에, "이 그룹의 qty/reservationIds만 로컬로 즉시 갱신"하는 것만으로 화면에 보이는
+  합계까지 전부 함께 즉시 갱신된다 — 별도로 금액을 다시 fetch할 필요 자체가 없음이 확인됨.
+
+구현(GATE B "1번 대안 — 전체 재로딩 제거" 채택, `src/routes/cart/+page.svelte`만 수정):
+```
+[NOW]
+- [x] qtyOverrides($state, canonicalReservationId 키) 신규 도입 — groupsById 생성 시점에
+      effectiveLineGroups(서버값) 위에 이 오버라이드를 병합해 반환(535행 수정) — "5곳 전부
+      groupsById로 교체" 기존 아키텍처를 그대로 활용, 하위 파생값(가격·재고상한 등) 무수정.
+- [x] incrementGroupQty 성공 시 `await invalidateAll()` 제거 → RPC가 반환한 실제 newId를
+      qtyOverrides에 반영(qty+1, reservationIds에 append)
+- [x] decrementGroupQty 성공 시 동일하게 `await invalidateAll()` 제거 → qty-1,
+      reservationIds에서 마지막 id 제거
+- [x] effectiveLineGroups↔itemsState 동기화 이펙트에 `qtyOverrides = {}` 추가 — 다른 흐름
+      (옵션수량 변경·카드삭제·체크아웃 등, 전부 여전히 invalidateAll 사용)이 실제로 서버값을
+      갱신하면 오버라이드를 비워 서버 실값으로 정합화(오버라이드가 영구히 서버값을 가리지 않음)
+```
+
+⚠️ **범위 명시**: 카드 전체 삭제(그룹에 1건만 남았을 때의 decrementGroupQty→removeItem 경로)·
+옵션 수량 변경(updateOptionQty)·체크아웃 제출은 이번 스코프에서 건드리지 않음(여전히
+invalidateAll 사용) — Stephen이 지목한 "수량(±) 클릭"에만 한정. RPC 호출 횟수 자체를 줄이는
+2번 대안(수령방식·대여기간 저장을 단일 RPC로 통합), 연타 디바운스인 3번 대안은 미착수.
+
+검증:
+- svelte-check 신규 에러 0건(1건 무관 pre-existing 유지, warning 개수도 이번 diff 범위와
+  무관한 변동만 확인).
+- ✅ 라이브 브라우저+DB 검증 완료 — Canon RF 24-70mm F2.8L(draft 그룹, qty1)의 + 클릭 →
+  화면이 즉시(로딩 표시 없이) qty2·가격 2배로 갱신, 그 사이 localhost 신규 네트워크 요청
+  0건(=페이지 재조회 없었음), SQL로 실제 신규 draft 예약행(id 8100) 생성 확인. − 클릭 →
+  화면 즉시 qty1·가격 원복, SQL로 8100이 실제 `status='cancelled'`로 전환됨을 확인 — 실제
+  예약 생성/취소(서버 반영)는 그대로 유지하면서 체감 로딩만 제거됐음을 실증.
+
+⚠️ **별도 발견(이번 최적화와 무관, 조사 중 우연히 확인 — 미수정, Stephen 확인 필요)**:
+`calculate_cart_total` RPC의 `authenticated` 실행권한이 Migration 263(2026-08-15,
+"코드베이스 전수검색 결과 브라우저/authenticated 호출 지점 0건"이라는 근거로 REVOKE)에서
+회수됐는데, 실제로는 `cart/+page.server.ts`의 `locals.supabase.rpc('calculate_cart_total',...)`
+호출이 `locals.supabase`(anon key + 세션쿠키 → DB에서는 `authenticated` 롤)로 지금도 이
+함수를 호출 중이라 263의 조사가 이 호출지점을 놓친 것으로 보임(Migration 396이 "여전히
+서버코드가 쓴다"며 함수 자체는 DROP 대상에서 제외했으나 REVOKE된 권한은 복구하지 않음).
+이 호출은 `error`를 확인하지 않아 실패해도 조용히 `calcTotal=0` 등 기본값으로 넘어가는데,
+이 값이 쿠폰 자격판정(`isCouponEligible`)의 `orderAmount`로 쓰여 **금액/기간 조건이 있는
+쿠폰이 카트 화면에서 전부 숨겨지고 있을 가능성**이 있다(Stage/Production 실제
+`has_function_privilege` 확인 필요 — 이번 세션은 검증만 하고 수정하지 않음, 별도 확인·
+결정 요청 예정).
+
+### ✅ 후속 — RPC 왕복 절감(2번) + 연타 디바운스(3번) (2026-09-02, Stephen "2번·3번도 이어서 진행" 승인)
+
+구현(`src/routes/cart/+page.svelte` + 신규 마이그레이션 424):
+```
+[NOW]
+- [x] (TDD-RED→GREEN) create_hold_reservation_with_shipment RPC 신규
+      (supabase/migrations/20260902060000_424_create_hold_reservation_with_shipment.sql)
+      — Stage(ezyvffjvuwmtuhpxdjrw) 적용 완료. create_hold_reservation +
+      set_reservation_shipment_method + set_reservation_duration 3개 기존 RPC를 그대로
+      순차 호출하는 래퍼(로직 중복 없음) — 서버 왕복 3회→1회. 실패 시맨틱은 기존 앱단 로직과
+      동일하게 유지: ①생성 실패→그대로 실패 ②수령/반납방식 실패→방금 만든 hold를
+      status='cancelled'로 취소 후 실패 반환(기존 cancelUnit과 동일 결과) ③대여기간유형
+      실패→비차단(hold 유지, error_message에 'DURATION_SAVE_FAILED:' 접두사로 구분해 반환).
+      createHoldReservationWithShipment.test.ts(신규, Stage 라이브 DB) 5/5 GREEN — 성공경로·
+      재고없음 실패·수령방식 실패시 롤백(rental_shipping_settings.restrict_return_delivery+
+      임시 배송방식으로 강제 유발)·대여기간유형 실패시 비차단(CHECK 제약 위반값으로 강제
+      유발)·anon 인증실패 전부 검증.
+- [x] (GSD) incrementGroupQtyImmediate — hold 그룹은 위 combo RPC 1회 호출로 교체(기존
+      create_hold_reservation→saveShipmentMethod→set_reservation_duration 3회 순차 호출 제거).
+      draft 그룹은 원래도 1회라 무변경.
+- [x] (GSD) 연타 디바운스 — pendingDelta($state, groupsById가 참조하므로 TDZ 방지 위해
+      qtyOverrides 옆에 선언) 신규 도입. scheduleQtyChange가 클릭마다 네트워크 호출 없이
+      delta만 누적 + 화면(qty)만 즉시 갱신, DEBOUNCE_MS(350ms) 동안 추가 클릭이 없으면 그때
+      flushQtyChange가 실제 RPC를 delta 크기만큼 순차 실행(+/−가 상쇄돼 delta=0이면 서버
+      왕복 자체가 발생하지 않음). incrementGroupQty/decrementGroupQty는 scheduleQtyChange의
+      얇은 래퍼로 남겨 템플릿 바인딩(onclick) 변경 없음.
+- [x] (GSD) 마지막 1개 취소(=카드 전체 삭제로 이어지는 지점)는 디바운스 대상에서 명시적으로
+      제외 — 쌓인 delta를 먼저 flush로 확정한 뒤 기존 removeItem/decrementGroupQtyImmediate
+      흐름을 그대로 사용(카드삭제 자체는 이번 스코프 밖 원칙 유지).
+- [x] (버그 수정, 이번 세션 자체 회귀) applyQtyOverride 신설 — qtyOverrides만 갱신하던 기존
+      코드(1번 구현분)가 itemsState.reservationIds를 갱신하지 않아, 체크아웃(`checkedIds =
+      checkedItemsState.flatMap(it => it.reservationIds)`)과 draft승격 루프가 수량(±) 변경
+      이후에도 구(舊) reservationIds를 그대로 제출하는 회귀를 이번 세션 구현 중 자체 발견·
+      즉시 수정. flushAllPendingQtyChanges를 체크아웃 제출 핸들러 최상단에 추가해, 디바운스
+      창이 남은 상태로 제출해도 먼저 확정 후 진행하도록 안전장치 추가.
+- [x] effectiveLineGroups↔itemsState 동기화 이펙트에 pendingDelta·debounceTimers 초기화도
+      추가(기존 qtyOverrides 리셋과 함께) — 다른 흐름의 invalidateAll이 실제로 서버값을
+      갱신하면 미확정 델타도 함께 정리.
+```
+
+검증:
+- vitest: createHoldReservationWithShipment.test.ts 5/5 GREEN(Stage 라이브 DB) + 기존
+  reservationHelper/getAvailableStockCounts/cartLineGrouping/cartReservationGrouping 전체
+  83/83 GREEN. svelte-check 신규 에러 0건(1건 무관 pre-existing 유지, warning 403건 동일).
+- ⚠️ **라이브 브라우저 검증 미완료(정직 기록)**: 클라이언트 디바운스·조합RPC 클릭 흐름을
+  실브라우저로 재현하려 했으나, 이 세션 초반부터 반복됐던 것과 동일한 Claude Browser
+  "navigation to http://localhost:5174 denied or failed" 환경 결함이 재발 — 탭 재생성·
+  preview_start 재시도·완전히 새 pane으로도 동일하게 실패해 이번엔 자연 해소를 기다리지
+  못하고 마감. 대신 (a) 신규 RPC(Migration 424) 자체는 성공/실패/롤백/비차단경고 4개
+  분기 전부 Stage 라이브 DB 통합테스트로 확정 검증됨 (b) 디바운스·상쇄 로직은 코드
+  리뷰로 시나리오별(증가/감소/상쇄/0도달 카드삭제 연계) 수동 트레이스 완료 (c) 이 기능이
+  얹히는 기반(qtyOverrides 낙관적 갱신 메커니즘, 1번 대안)은 같은 세션 앞서 실브라우저+DB로
+  이미 검증됨. 브라우저 도구 안정화 후 최종 클릭 재현 확인 권장(낮은 우선순위 — 근거
+  다층이라 리스크는 낮다고 판단).
+
+### ✅ 후속 — 수량변동 시 "두 번 반복 적용" 깜빡임 버그 수정 + 요금 결합/최종금액 재검증 (2026-09-02, Stephen 화면요소 선택으로 직접 발견·재검증 지시)
+
+Stephen이 카트에서 선택요소(launch-selected-element)로 가격 표시 영역을 짚어 "수량 값 변동 시
+두 번 반복 적용되는 불완전성 상태 발현 — 오류로 오인 우려"를 직접 발견·보고.
+
+**근본원인**: `flushQtyChange`가 실제 RPC 호출 **전에** `pendingDelta`를 먼저 비웠다가, RPC가
+성공한 뒤에야 `qtyOverrides`를 갱신하는 순서였음 — 그 사이(네트워크 왕복 시간) `groupsById`가
+"오버라이드도 없고 델타도 방금 비워진" 상태를 잠깐 계산해 화면이 이전 값으로 순간 되돌아갔다가
+RPC 완료 시 다시 새 값으로 튀어오르는 깜빡임 발생. 또한 flush 루프가 이 시점의 `groupsById`
+(델타 포함된 표시값)를 그대로 RPC 파라미터의 base로 넘겨, 다단계(2회 이상) flush 시 이미
+표시에 반영된 델타를 새 override 계산에 또 더하는 이중 반영 위험도 함께 있었음.
+
+**수정**(`src/routes/cart/+page.svelte`):
+```
+[NOW]
+- [x] groupsBaseById(오버라이드까지만 반영) / groupsById(오버라이드+미확정 델타, 표시 전용)로
+      분리 — RPC 호출용 base는 항상 groupsBaseById에서만 가져온다(표시값 재사용 금지).
+- [x] flushQtyChange가 델타를 한번에 비우지 않고, 각 스텝(예약 1건 생성/취소) 성공 직후
+      "그 1개분"만 델타에서 차감 — override 반영과 델타 차감이 항상 같은 스텝에서 함께
+      일어나 화면에 순간적인 되돌림이 생기지 않는다.
+```
+검증: svelte-check 신규 에러 0건(1건 pre-existing 유지, 403 warning 동일). 라이브 브라우저는
+이 턴에서도 재시도했으나 동일한 "navigation denied" 환경 결함으로 클릭 재현은 못했고, 대신
+수동 코드 트레이스로 수정 전/후 시나리오(N=1에서 +2 연속 플러시)를 단계별로 검산해 override+
+잔여델타 합이 항상 최종값과 일치함을 확인.
+
+**요금 결합·최종금액 로직 재검증(Stephen 요구사항 2건)**:
+1. "수량 연산 요금 + 대여옵션(12h/1일 이상) 자동연산 요금이 결합된 총 요금 노출" —
+   `otSubtotal = Σ (itemRentalFee(line,it) + itemOptionsAmount(line)) × line.qty`(+page.svelte
+   806-812행). `itemRentalFee`가 내부적으로 호출하는 `calcRentalFee`(cartRentalFee.ts)는
+   `calculate_cart_total` RPC와 동일 산식(당일: 분단위로 12h/24h 판정, 다일: 일수×24h요율 +
+   잔여시간≥12h면 12h요율 가산)으로 실제 기간에 맞는 요금을 계산 — 이 값에 수량(qty)을 곱해
+   합산하므로 요구사항대로 결합돼 있음. `calcRentalFee`/`calcRentalDays`는 이미 전용
+   TDD(cartRentalFee.test.ts) 13/13 GREEN으로 검증된 상태(2026-09-01, 이번 세션 변경 없음,
+   재실행으로 재확인만 함).
+2. "결합된 총 요금액에서 쿠폰+포인트 반영한 최종금액 노출" —
+   `otNetBeforeVat = otSubtotal - otMembershipDiscount` → `otTotal = max(0, otNetBeforeVat +
+   otDeliveryFee - otCouponDiscount - otPointsUsed)`(1123-1143행) — 쿠폰(`otCouponDiscount`,
+   선택된 쿠폰의 정액/정률)과 포인트(`otPointsUsed`, 보유량·잔여결제액 중 작은 값으로
+   `otMaxPoints`에 자동 클램프) 둘 다 최종 차감에 포함됨. `합계요금`(1378행)·`총 약정요금`
+   (1406행)·체크아웃 제출 payload(`amount: String(otTotal)`, 1605행) 전부 이 `otTotal` 하나만
+   렌더링/제출 — 다른 값(예: 서버 dead prop인 `sd.calcTotal`)을 잘못 참조하지 않음을 grep으로
+   확인.
+3. 이번 세션 어떤 작업도 위 가격 계산 공식 자체(otSubtotal/otCouponDiscount/otTotal/otDeposit)를
+   수정한 적 없음 — 유일한 관련 리스크는 공식이 입력으로 쓰는 `line.qty`의 순간적 부정확성
+   (=위 깜빡임 버그)이었고, 그 버그를 고쳤으므로 결과적으로 이 공식들의 정확성도 함께 보장됨.
+
+⚠️ **정직 기록**: 실제 다일대여+쿠폰+포인트를 전부 실브라우저로 끝까지 입력해 최종금액 숫자를
+눈으로 검산하는 end-to-end 테스트는 "대여예약옵션" 다단계 폼(고객정보 필수 입력 등)과 반복된
+브라우저 navigation 장애로 이번 세션엔 완료하지 못함 — 대신 (a) 요금 산식 자체는 기존
+TDD(cartRentalFee.test.ts 13/13)로, (b) 결합·최종차감 공식은 코드 구조 검토로, (c) 렌더링
+지점은 grep 전수확인으로 각각 검증. 필요하면 다음 세션에서 실브라우저 end-to-end 1회 재확인 권장.
+
+### ✅ 후속2 — +/− 버튼 비활성·활성 반복 재보고 → 근본원인 특정·수정·실브라우저 확인 완료 (2026-09-02, 같은 세션)
+
+Stephen이 다시 `+`/`−` 버튼을 launch-selected-element로 짚어 "수량 변동 시 비활성·활성을
+반복하는 불완전성 움직임"을 보고 — 바로 위 "후속" 수정이 증상을 없애지 못했음을 시사해 재조사.
+
+**MutationObserver로 실측(직접 원인 확정)**: `+` 버튼의 `disabled` 속성 변화를 타임스탬프와
+함께 기록하며 실제 클릭 재현 → 클릭 1회에 수량이 "3 → 4 → 3"처럼 최종값보다 1 많은 값으로
+잠깐 튀었다가 정정되는 것을 직접 관측(로그: `qty:"3"→qty:"4"(오버슈트)→qty:"3"(정정)`,
+73~106ms 간격). 바로 위 "후속" 수정에서 override 반영과 pendingDelta 차감을 분리는 했지만,
+`incrementGroupQtyImmediate`(RPC await 포함)가 override를 먼저 반영하고 **함수를 return한
+뒤에야** `flushQtyChange`가 delta를 차감했는데, 그 return 자체가 Promise resolution이라
+별도 마이크로태스크 경계를 만들어 그 사이 Svelte가 "override는 반영, delta는 아직 안 줄어든
+(=1 많게 보이는)" 프레임을 실제로 렌더링했음 — 근본원인 확정.
+
+**수정**: `applyQtyOverride`에 `consumeDelta`(1|-1|0) 파라미터를 추가해 override 반영과
+pendingDelta 차감을 **같은 함수 호출(=같은 동기 구간) 안에서 함께** 처리하도록 변경.
+`incrementGroupQtyImmediate`/`decrementGroupQtyImmediate`도 동일 파라미터를 받아 그대로
+전달, `flushQtyChange`는 더 이상 별도로 delta를 차감하지 않고 이 두 함수 호출 시
+`consumeDelta`만 넘긴다(제로크로싱/카드삭제 경로의 기존 직접호출은 파라미터 생략 시
+기본값 0=무영향으로 하위호환 유지).
+
+검증: svelte-check 신규 에러 0건. **라이브 브라우저 재확인 완료**(이번엔 접속 성공) —
+동일 MutationObserver 기법으로 수정 전/후 비교: 수정 후에는 클릭 1회당 qty 값이 처음부터
+끝까지 최종값 하나로만 유지됨(오버슈트 없음, +방향 "3→4" 단일클릭 재현: 로그 전부
+`qty:"4"`만 기록, −방향 "4→3" 재현: 로그 전부 `qty:"3"`만 기록). `disabled` 속성 자체는
+여전히 true→false로 바뀌지만(처리 중 잠금 → 처리 완료, 의도된 동작) 값이 실제 재고상한과
+일치하는 정상적인 단일 전이이며 잘못된 중간값에 의한 오탐 비활성화는 사라짐.
+
+⚠️ **별도 발견(이번 작업과 무관, 조사 중 우연히 확인 — 미수정, Stephen 확인 필요)**: 카트
+카드의 "삭제"(휴지통 아이콘, `removeItem`)가 병합 그룹(qty>1, 즉 reservationIds가 여러 개인
+카드)에서 **canonical 예약 1건만 취소하고 나머지 예약행은 그대로 hold/draft 상태로 남긴다**
+(`removeItem`이 `item.id`=canonical 하나만 `/api/checkout/remove-item`에 전달, 그룹 전체를
+순회하지 않음 — `src/routes/cart/+page.svelte:148-167`, 호출부 1627·1738행 근처). 사용자는
+카드가 화면에서 사라지므로 "전부 삭제됐다"고 인식하지만 실제로는 나머지 예약행이 재고를
+계속 점유한 채 orphan으로 남을 수 있다(hold는 30분 후 자동만료되지만 draft는 만료 로직
+자체가 없어 무기한 남을 수 있음, service-operations.md §10 참고). 2026-08-28 병합 기능
+도입 당시부터 있었던 기존 결함으로 추정되며 이번 세션 작업과는 무관 — spawn_task로 별도
+플래그 예정.
+
+---
+
+## NOW — 🔴 CRITICAL: RentalDetailPanel 예약상품 CMS 편집 기능 — Stage 1 마이그레이션 파일 작성 완료, Stage DB 적용 대기 (2026-09-02, 이 세션)
+
+배경: Stephen이 `/cms/reservation?selected=7972` 예약현황 탭에서 관리자가 예약상품 구성(추가/수정/
+삭제)을 직접 CMS에서 수정할 수 있게 해달라고 요청 — "하네스 플로 시스템 적용해 단계 별 개발계획
+수립" 명시 지시에 따라 이번 세션은 **플랜 수립까지만** 진행(Claude Code 네이티브 plan mode로 조사 후
+Stephen 승인 받음 — 하네스 플래닝 규칙상 실제 TASK.md 등록은 이 항목으로 대체).
+
+**핵심 설계 충돌 발견 및 확인**: `rental_reservations` 1행 = 실물 재고 1개가 원자배정된 진짜 예약이며
+`qty` 컬럼 자체가 없음(products.md §5). "수량 입력폼" 요구사항이 이 구조와 충돌해 AskUserQuestion으로
+4가지 CRITICAL 설계 결정을 Stephen과 확정:
+1. 수량 = 동일 상품의 `rental_reservations` 행 여러 건 생성/삭제(각 건 실제 재고 원자배정) — 기존
+   "1예약=1실물배정" 구조와 정합시키는 방식으로 확정.
+2. 편집 허용 범위 = `status='hold' AND payment_confirmed_at IS NULL`(PG 결제 전)만.
+3. 결제금액(order_amount) 재계산·부분환불 등은 이번 스코프 제외(PG 결제 전 단계 기능이므로 무관).
+4. 옵션상품(reservation_options)도 메인상품과 동일하게 추가/수량수정/삭제 가능하도록 범위 확장.
+
+추가로 Stephen이 플랜 검토 중 **별개 기능**을 추가 요청 — 이미 결제+계약 완료(`confirmed`)된 예약이라도
+실물 파손/오배정 시 "상품코드"(실물 재고단위)만 다른 가용재고로 재배정할 수 있어야 함. 허용 상한선도
+AskUserQuestion으로 확정: **`hold` 자유 + `confirmed` 진입 후에는 "운송장 정보 등록" 또는 "방문 출고
+처리" 중 먼저 도달하는 시점까지만**(실물이 물류상 이동 시작하면 재배정 무의미).
+
+**플랜 전문**: `/Users/stevenmac/.claude/plans/cms-cms-reservation-selected-7972-sprightly-quilt.md`
+(Claude Code plan-mode 승인 완료 — Stage 1 DB/RPC 5종+확장RPC 1종 → Stage 2 API 3개 파일 → Stage 3
+상품찾기 모달 신규 컴포넌트 → Stage 4 RentalDetailPanel UI 편집기능 → Stage 5 QA/GATE E, 각 Stage별
+GATE C 체크리스트 포함).
+
+**Stage 1 진행 현황 (2026-09-02, 이 세션)**:
+- [x] 마이그레이션 파일 작성 완료 — `supabase/migrations/20260902040000_422_cms_reservation_product_edit_rpcs.sql` (485줄)
+  6개 RPC 전부 구현:
+  ① `cms_add_reservation_product_unit` — 메인상품 유닛 추가 (FOR UPDATE SKIP LOCKED 원자배정)
+  ② `cms_remove_reservation_product_unit` — 메인상품 유닛 소프트 취소 (마지막 상품 차단)
+  ③ `cms_add_reservation_option` — 옵션상품 추가
+  ④ `cms_update_reservation_option_qty` — 옵션상품 수량 수정
+  ⑤ `cms_delete_reservation_option` — 옵션상품 삭제
+  ⑥ `cms_reassign_reservation_product_code` — 재고단위 재배정 (별도 게이트)
+  전부 SECURITY DEFINER + REVOKE ALL FROM PUBLIC + GRANT EXECUTE TO service_role 적용.
+- [x] **Stage DB(ezyvffjvuwmtuhpxdjrw) 적용 완료** — 메인 세션이 MCP `apply_migration`으로
+  Migration 422 적용. 적용 직후 `pg_proc.proacl` 직접 조회로 `REVOKE ALL FROM PUBLIC`만으로는
+  `anon`/`authenticated`의 EXECUTE 권한이 실제로 제거되지 않는 이 프로젝트의 알려진 재발
+  패턴(Migration #364/#409 선례)을 발견해, `supabase/migrations/20260902050000_423_
+  cms_reservation_product_edit_rpcs_revoke_fix.sql`로 즉시 봉쇄·적용. 재조회로 6개 함수 전부
+  `postgres=X/postgres, service_role=X/postgres`만 남은 것 확인 완료.
+- [x] **Stage DB 적용 후 TDD 라이브 통합테스트 검증 완료(서브 에이전트 실행, 2026-09-02)**
+  → 아래 "Stage 1 TDD 검증 결과" 하위 섹션 참고. **26/26 GREEN, RPC 코드 수정 없음.**
+- [x] GATE C 체크리스트(Stage 1 전용, 플랜 원문 §Stage 1) 통과 확인 — 아래 섹션에서 항목별 매핑.
+- [x] **Stage 2 완료 (2026-09-02, 이 세션)** — API 서버 라우트 3개 파일 작성:
+  - 신규: `src/routes/api/cms/reservations/[id]/products/+server.ts`
+    (POST=유닛추가, DELETE=유닛소프트취소, PATCH=재고단위재배정 — 3개 핸들러)
+  - 수정: `src/routes/api/cms/reservations/[id]/options/+server.ts`
+    (기존 GET 무수정 + POST=옵션추가, PATCH=수량수정, DELETE=옵션삭제 추가)
+  - 신규: `src/routes/api/cms/reservations/[id]/available-units/+server.ts`
+    (GET=가용재고 조회, 직접 SELECT — service-role admin 클라이언트)
+  전부 `getCmsRoleForAction` + `hasSettingsAccess(manager 이상)` 이중 게이트 적용.
+  RPC error_message를 그대로 400으로 클라이언트에 전달.
+  `npm run check` — 14 ERRORS(신규 파일 $types 미생성) → svelte-kit sync 후 1 ERROR(vite.config.ts 기존 에러).
+  스모크 테스트: 7개 엔드포인트 전부 인증 없이 401 Unauthorized 정상 반환 확인.
+- [x] **메인 세션 리뷰로 실제 결함 1건 발견·직접 수정 완료(2026-09-02, 같은 세션)**:
+  `available-units/+server.ts`의 날짜 겹침 판정이 `cms_reassign_reservation_product_code` RPC의
+  `daterange(...,'[]') &&`(양끝 포함) 겹침과 다른 배타적 비교(`.lt()`/`.gt()`)를 쓰고 있었음 —
+  기존 예약의 종료일과 신규 예약의 시작일이 같은 경계일 케이스에서 실제로는 겹치는(RPC가
+  거부하는) 유닛을 "가용"으로 잘못 노출해, 관리자가 선택해도 재배정이 거부되는 UX 불일치가
+  발생할 수 있었음. `.lte('start_date', endDate).gte('end_date', startDate)`로 수정해 RPC의
+  판정 기준과 일치시킴(파일 상세 주석 추가). `npx tsc --noEmit` 재확인 — vite.config.ts 기존
+  에러 1건 외 신규 에러 없음.
+- [x] **Stage 3 완료 (2026-09-02, 이 세션)** — 상품찾기 모달 신규 컴포넌트 작성:
+  - 신규: `src/lib/components/cms/ReservationProductFinderModal.svelte`
+    (Svelte 5 Runes, 카테고리 필터 `.cat-pill` + 검색 `.search-in` + 결과 카드 그리드)
+  - Props: `{ open: boolean, onclose: () => void, onselect: (product: FinderSelectedProduct) => void }`
+  - 검색: `GET /api/cms/products/search-suggestions` 재사용, 300ms 디바운스+AbortController
+  - 카테고리: `PRODUCT_CATEGORY_OPTIONS`(productCategoryTaxonomy.ts) 재사용 — 하드코딩 없음
+  - Stage 3 GATE C 전 항목 통과 (아래 체크리스트 참조)
+  - `npm run check` — 신규 파일 관련 에러 0건 (기존 vite.config.ts 1건만 유지)
+  - 주의사항: `search-suggestions` API가 빈 q에 [] 반환하므로 초기 상태는 검색 유도
+    ("상품명을 입력하면 검색 결과가 표시됩니다.") — 이 UX는 범용 사용성 상 적절하며,
+    Stage 4(RentalDetailPanel 연결 시) 추가 요구가 있으면 별도 초기로드 엔드포인트 검토 가능
+- [x] **메인 세션 리뷰로 실제 결함 1건 발견·직접 수정 완료(2026-09-02, 같은 세션)**:
+  `search-suggestions` 엔드포인트(`src/routes/api/cms/products/search-suggestions/+server.ts`
+  245-251행)는 실제로 각 항목에 `price_24h`를 이미 포함해 반환하는데, 컴포넌트의
+  `ProductResult` 타입이 이 필드를 아예 선언하지 않고 `selectProduct()`가
+  `price_24h: null`을 하드코딩해 버리고 있었음 — Stage 4에서 옵션상품 추가 시 단가를
+  자동 채우려면 이 값이 필요한데(플랜 원문), 그대로 두면 Stage 4가 항상 null을 받게 될
+  뻔했음. `ProductResult`/`FinderSelectedProduct` 양쪽에 `price_24h` 필드를 추가하고
+  `selectProduct()`가 `item.price_24h`를 그대로 전달하도록 수정. `npx tsc --noEmit`
+  재확인 — vite.config.ts 기존 에러 1건 외 신규 에러 없음.
+- [ ] Stage 4~5 (Stephen 확인 후 진행)
+
+**다음 Stage 진행 시 주의사항**:
+- 각 Stage 완료 시 GATE C 체크리스트 통과 확인 후 다음 Stage 진행
+- 전체 완료 후 `@sp3-qa-agent` 독립검수 필수(자체 통과 선언만으로 GATE E 통과 처리 금지)
+- git 커밋은 각 Stage 완료 후에도 Stephen 직접 실행(자율 커밋 금지, core-rules.md GP-1)
+
+### Stage 1 TDD 검증 결과 (2026-09-02, 서브 에이전트 실행)
+
+신규 테스트 파일: `src/__tests__/services/reservationProductEdit.test.ts`(883줄, 26개 테스트) —
+Stage DB(ezyvffjvuwmtuhpxdjrw) 대상 라이브 통합테스트(`couponLazySequencing.test.ts`·
+`paymentContractOrderRedesign.test.ts`와 동일 관례 — service_role 클라이언트로 테스트 전용
+부모/자식 상품·예약·주문 픽스처를 직접 INSERT, `afterEach`에서 정리).
+
+**결과: 26/26 GREEN. RPC 코드(Migration 422) 자체는 수정하지 않음 — 결함 미발견.**
+`npx vitest run reservationProductEdit.test.ts` 전체 실행 2회(13.9초/26/26) + 동시성 테스트만
+3회 반복 재실행(총 5회 연속 GREEN, 재현성 확인) + 종료 후 stage DB에 `TDD-RPE%` 잔여 픽스처
+0건 확인(cleanup 정상 동작).
+
+**시나리오별 커버리지**(플랜 원문 §Stage 1 GATE C 항목과 1:1 대응):
+- 공통 게이트(①~⑤ 5개 RPC 전부, `status<>'hold'` 또는 `payment_confirmed_at IS NOT NULL`)
+  → 5/5 정확히 차단 + 정확한 에러 메시지(`'이미 계약 또는 결제가 진행되어 상품 구성을 수정할
+  수 없습니다.'`) 반환 확인. ④⑤는 "옵션을 hold 상태에서 생성 → 이후 예약을 confirmed로 전환"
+  순서로 게이트가 옵션 자신이 아니라 소속 예약을 재조회해 검증함을 확인.
+- ① 정상 추가: 새 `rental_reservations`(status=hold) + 원본과 동일 `order_id`로 `order_items`
+  신규 INSERT(24h 단가 정확히 반영) 확인.
+- ① 재고소진: 가용 자식 0개 → `'해당 기간에 예약 가능한 재고가 없습니다.'` 정확히 반환.
+- ① 동시성: 가용 자식 정확히 1개인 상태에서 `Promise.all` 병렬 호출 2건 → 정확히 1건만 성공
+  (`FOR UPDATE SKIP LOCKED` 동시성 보호 실증, 5회 연속 재현).
+- ② 정상 삭제: 형제 2건 order에서 1건 삭제 → `status='cancelled'` + 해당 `order_items`만 삭제,
+  형제 `order_items`는 무손상.
+- ② 마지막 상품 차단: order 내 유일 상품 삭제 시도 → 정확한 메시지로 차단 + status·order_items
+  둘 다 원상태 유지 확인(부수효과 없음).
+- ③④⑤ 옵션 CRUD: 추가 성공/qty≤0 차단/공백 이름 차단, 수정 성공/qty≤0 차단, 삭제 성공/
+  존재하지 않는 option_id 시 `'옵션상품을 찾을 수 없습니다.'` — 전부 정확한 메시지 확인.
+- ⑥ 재배정 게이트 매트릭스: `hold`→성공, `confirmed`+`tracking_number IS NULL`→성공,
+  `confirmed`+운송장 등록됨→차단, `in_use`→차단(둘 다 동일 메시지 `'운송장 등록 후 또는
+  대여 진행 중인 예약은 재고를 재배정할 수 없습니다.'` 반환하는 것도 코드 그대로 확인 —
+  버그 아님, 하나의 IF NOT 조건이 두 케이스를 함께 포괄하는 의도된 설계).
+- ⑥ 다른 부모상품 유닛 차단: `'같은 상품의 다른 재고단위로만 재배정할 수 있습니다.'` 확인.
+- ⑥ 재배정 성공 시 `rental_reservations.product_id`·`order_items.product_id` 둘 다 동기화 확인.
+- ⑥ 동시성: 가용 유닛 1개에 두 confirmed 예약이 동시 재배정 시도 → 정확히 1건만 성공,
+  나머지는 `'선택한 재고가 이미 다른 예약에 배정되었습니다.'`.
+- 권한 스팟체크: anon 클라이언트로 `cms_add_reservation_product_unit` 직접 호출 →
+  Migration 423 REVOKE 보강이 애플리케이션 레벨에서도 실제로 거부됨을 재확인(`error` not null,
+  `data` null).
+
+**참고(결함 아님, 설계 확인 사항)**: `cms_remove_reservation_product_unit`의 "마지막 상품 차단"
+로직은 대상 예약 자신이 `order_items`에 연결돼 있을 때만(`v_order_id IS NOT NULL`) 발동한다 —
+체크아웃 이전이라 `order_items` 자체가 없는 예약은 이 검사를 완전히 건너뛰고 곧바로 소프트
+취소된다(서비스 흐름상 hold 예약은 체크아웃 제출 시점에만 order_items가 생기므로 정상 범위 —
+service-operations.md §4). 요청 시나리오(order_items가 있고 형제 0건인 경우의 차단)는
+검증했고 정확히 통과했다. 이 여백 케이스는 이번 스코프의 필수 검증 시나리오는 아니었으나
+향후 Stage 4 UI에서 "order_items 없는 예약"에 삭제 버튼을 노출할 계획이 있다면 참고할 것.
+
+git add/commit 미실행(Stephen 직접 실행 대기) — 신규 파일: `src/__tests__/services/
+reservationProductEdit.test.ts`.
+
+---
+
 ## NOW — 🟢 ROUTINE: "모바일 반응형 화면 미세떨림" 트리거 명령 문서화 (2026-09-02, 이 세션)
 
 배경: 직전 cart `.cart-root` 100vh→100dvh 회귀 수정건을 계기로, Stephen이 "front 표준
@@ -30619,5 +31186,196 @@ loginEmail, loginPassword)` → `performSignIn(loginEmail.trim(), loginPassword)
 
 이로써 "이메일 미trim 로그인 실패" 문제 클래스(`/auth/login`·`SignUpModal` 로그인모달
 2개 진입점)가 전부 해소됨. git commit은 Stephen 직접 실행.
+
+---
+
+## NOW — 채팅 대화카드 중복노출 결함 수정 + 안내 토스트 3종 단일화 (2026-09-02, 이 세션)
+
+생성일: 2026-09-02
+아젠다: Stephen 지시 2건 — ① "입력한 대화카드가 로딩 후 중복 노출되었다가 사라짐(실서비스
+심각)" 원인분석 후 수정, ② "대화카드 수신 시 안내 토스트 노출 내용을 단일화" — 신규대화/
+답변/중요실행알림 3종 정형 문구로 통일.
+TDD도메인: 없음 (GSD — 스토어 로직·클라이언트 유틸 수정)
+
+### ① 중복노출 후 사라짐 — 원인·수정 (Explore 에이전트 실측)
+
+**원인**: `ChatWindow.svelte handleSend()`가 `pushMessage({id:'temp-'+uuid, sender_type:'user',
+...})`로 낙관적 말풍선을 먼저 그리고 POST 응답을 기다린 뒤 `removeMessage(tempId)` +
+`pushMessage(response.user_message)`를 실행하는데, 서버(`/api/chat/message`)는 사용자
+메시지를 요청 초반에 즉시 INSERT하고 그 뒤 캔드매칭/AI폴백/푸시발송을 처리한 다음에야
+응답을 반환한다 — 이 지연 구간에 Supabase Realtime이 같은 INSERT를 먼저 통지해
+`pushMessage(실제 메시지)`가 호출된다. 기존 `pushMessage()`의 중복방지가 `id` 단순 일치
+비교뿐이라 temp-id와 실제 id를 다른 메시지로 인식해 배열에 둘 다 남았다가, 나중에
+`removeMessage(tempId)`가 임시 쪽만 지워 "중복 후 하나만 사라짐"처럼 보였음. 캔드매칭/
+AI폴백 처리로 응답이 지연될수록(=실서비스 트래픽 상황) 재현 확률이 높아지는 구조.
+
+**수정**: `src/lib/stores/chat.svelte.ts` `pushMessage()`에 "낙관적 임시 메시지 치환" 로직
+추가 — `sender_type='user'`인 실제 메시지가 들어오면 같은 `session_id`·`sender_type='user'`·
+동일 `content`를 가진 `temp-*` 메시지를 배열에서 찾아 **그 자리에서 교체**(추가 아님)한다.
+두 경쟁 순서(POST 먼저/Realtime 먼저) 모두 최종적으로 말풍선 1개만 남도록 보장 — Realtime이
+먼저 오는 경우 이후의 `removeMessage(tempId)`·`pushMessage(response.user_message)`는 각각
+no-op(이미 없는 id 필터·이미 존재하는 id dedup)이 되어 중간에 두 번째 말풍선이 나타나는
+순간 자체가 사라짐. `ChatInput.svelte`가 이미 `content.trim()`을 거쳐 `onsend`를 호출하고
+서버도 동일하게 trim해 저장하므로 content 완전일치 전제가 정상 흐름에서 항상 성립함을 확인.
+
+### ② 포그라운드 안내 토스트 3종 단일화
+
+- `src/lib/utils/pushToastMessage.ts`(신규) — `buildUnifiedPushToastMessage(notifyType)`:
+  `payload.data.notifyType` 하나만 보고 3종 정형 문구 중 하나를 반환.
+  - ①신규대화(기본값, 매핑 없음) : "새로운 대화를 확인하세요."
+  - ②질문에 대한 답변(`canned_auto_reply`·`ai_auto_reply`·`admin_chat_reply`)
+    : "새로운 답변을 확인하세요."
+  - ③중요 실행 알림(정보) : "새로운 {정보명} 정보를 확인하세요." — 예약 라이프사이클 10종+
+    계약·쿠폰·연체료·관리자용 이벤트까지 전부 매핑(정확한 매핑표는 chat.md §14-1 참고).
+- `src/lib/components/common/PushNotificationInit.svelte`: 기존에 서버가 지정한 title/body를
+  그대로 이어붙여 보여주던 로직을 제거하고 위 유틸 호출로 교체. 매핑에 없는 notify_type은
+  자동으로 ①(기본값)로 폴백해 화면이 깨지지 않음.
+- ⚠️ 카테고리 분류는 이번 세션의 판단(Stephen이 준 정의를 기준으로 기존 notify_type 13종을
+  분류)이므로, 특정 타입의 분류가 의도와 다르면 `pushToastMessage.ts` 한 파일만 고치면 됨
+  (모든 알림 타입이 이 한 곳을 거치도록 중앙화).
+
+### 검증
+
+`npx svelte-check` — 신규 에러 0건(기존 vite.config.ts 1건만 유지), 수정 파일 신규 경고 0건.
+낙관적 메시지 치환 로직은 코드 리뷰로 두 경쟁 순서(POST 먼저/Realtime 먼저) 시나리오를
+직접 트레이스해 최종 상태(말풍선 1개)를 확인 — 실기기 네트워크 지연 재현은 이 세션 도구로
+불가(Claude Browser는 Stephen 명시 요청 없이는 정책상 사용 금지).
+
+### 수정 파일
+
+```
+src/lib/stores/chat.svelte.ts                          (MODIFY — pushMessage temp 치환)
+src/lib/utils/pushToastMessage.ts                       (NEW — 토스트 3종 통일 유틸)
+src/lib/components/common/PushNotificationInit.svelte   (MODIFY — 유틸 호출로 교체)
+.claude/rules-ref/chat.md                                (MODIFY — §9-1·§14-1 신설 + GATE C 2건)
+```
+
+**GATE E: 자체판정 ✅ (경량 GSD 수정 — 스토어 dedup 로직 확장 + 클라이언트 유틸 중앙화,
+스키마·API 계약 변경 없음) — 실서비스 네트워크 지연 재현 확인은 Stephen 몫**
+
+---
+
+## NOW — 관리자 채팅 세션 빠른문의 리마인더 카드 신규 구현 (2026-09-02, 이 세션)
+
+생성일: 2026-09-02
+아젠다: 직전 세션에서 "빠른문의 답변등록" 카드가 관리자 전용 알림인데 고객 채팅창에도
+새는 결함을 발견·판단(원인: chat_sessions/chat_messages에 audience 구분 컬럼 자체가 없어
+"관리자 전용" 채널을 표현할 방법이 없음) → Stephen 지시: 고객과 공유하는 채팅 세션이
+아니라 CMS 상담 세션 목록(AdminChatPanel) 사이드바에 별도 리마인더 카드로 재구현.
+1. 가장 옅은 레드 컬러토큰(`--cs-red-xlight`)을 카드 배경에 반영
+2. 카드 선택 시 `/cms/customers/inquiry`의 해당 문의로 랜딩
+TDD도메인: 없음 (GSD — DB 함수 원복 1건 + 신규 API 1건 + 컴포넌트 UI 추가)
+
+### 수정 — 버그 근본 제거 + 대체 UX 구현
+
+**Migration 425** (`submit_cs_post_remove_leaking_chat_card`, stage·production 둘 다 적용
+완료) — Migration 328이 추가했던 `chat_messages` INSERT 블록(고객 세션에 `INQUIRY_NEW_CARD`
+액션카드를 삽입하던 코드)을 제거하고 Migration 157의 원본 정의로 복원. `prosrc LIKE
+'%chat_messages%'`로 양쪽 DB에서 제거 확인.
+
+**신규 API**: `src/routes/api/cms/chat/pending-inquiries/+server.ts` — 미답변(status='open')
+빠른문의 목록을 `get_all_cs_posts` RPC로 조회(manager 이상 게이트, `/cms/customers/inquiry`
+페이지와 동일 권한 수준). chat_messages와 완전히 무관한 순수 CMS 조회 엔드포인트.
+
+**AdminChatPanel.svelte**: `pendingInquiries` 상태 + `loadPendingInquiries()` 추가(마운트 시
++ 새로고침 버튼 클릭 시 재조회). "진행중"(open) 탭 세션 목록 최상단에 리마인더 카드로 렌더링
+— 배경색 `var(--cs-red-xlight)`(가장 옅은 레드 토큰, hover 시 `--cs-red-light`), 고객명·문의
+제목·접수시각 표시, 클릭 시 `goto('/cms/customers/inquiry?post={id}')`.
+
+**딥링크**: `/cms/customers/inquiry` `+page.server.ts`가 `?post=` 파라미터를
+`selectedPostId`로 파싱해 반환 → `+page.svelte`가 마운트 시 해당 문의를 아코디언에서 자동
+펼치고(`expandedId`) `scrollIntoView`로 스크롤 — `/cms/reservation`·`/cms/rentals`의
+`?selected=` 딥링크와 동일 패턴(현재 페이지네이션 20건 밖에 있으면 자동으로 안 펼쳐지는
+동일한 한계도 그대로 승계, contract.md에 이미 문서화된 기존 한계와 동일 유형).
+
+### 문서화
+
+`service-operations.md` §17 신설 — "관리자 전용 알림을 chat_messages에 넣지 말 것"을
+일반 원칙으로 명문화(이번 실사고를 근거 사례로 기록) + GATE C 체크리스트 1건 추가.
+
+### 검증
+
+`npx svelte-check` — 신규 에러 0건(기존 vite.config.ts 1건만 유지), 이번 세션에서 수정한
+파일(AdminChatPanel.svelte, pending-inquiries/+server.ts, customers/inquiry 2개 파일)
+신규 경고 0건. Migration 425는 stage(`ezyvffjvuwmtuhpxdjrw`)·production
+(`vnbpmvxruyciuuaermyh`) 양쪽 다 `pg_get_functiondef` 기준 재확인 완료.
+
+### 수정 파일
+
+```
+supabase/migrations/20260902070000_425_submit_cs_post_remove_leaking_chat_card.sql (NEW, stage+production 적용완료)
+src/routes/api/cms/chat/pending-inquiries/+server.ts    (NEW)
+src/lib/components/chat/AdminChatPanel.svelte           (MODIFY)
+src/routes/cms/customers/inquiry/+page.server.ts        (MODIFY — ?post= 딥링크)
+src/routes/cms/customers/inquiry/+page.svelte            (MODIFY — 자동펼침·스크롤)
+.claude/rules/service-operations.md                      (MODIFY — §17 신설)
+```
+
+**GATE E: 자체판정 ✅ (DB 함수 원복 + 신규 CMS 전용 UI, 고객 화면 영향 없음) — 실기기
+시각 확인(카드 색상·레이아웃)은 Stephen 몫**
+
+### 후속 수정 — 카드 UI 간소화 (2026-09-02, 같은 세션)
+
+Stephen 실기기 확인 후 3가지 지적 반영:
+```
+1. 세로폭 50% 축소 — 3행(이름/미리보기/시각) 구조를 1행으로 재구성
+   (min-height 64px → 32px, flex-direction: row)
+2. 이름(사용자명) 제거 — 문의 내용이 우선이므로 표시 안 함
+   (API 응답에서도 user_name 필드 자체 제거 — 미사용 필드 방치 금지)
+3. "빠른문의 답변등록 —" 중복 문구 제거 → "빠른문의" 배지(--cs-red-badge 채움) + 제목만 노출
+4. "확인 처리된 카드 자동 제거" 요구 대응 — add_cs_reply RPC가 답변등록 시 status를
+   open→in_progress/resolved로 항상 전환(Migration 157 기존 로직, 신규 아님)하므로
+   재조회 시점부터 자연히 목록에서 빠짐. 이 "재조회 시점"을 실제로 자동화하기 위해
+   ① 30초 주기 폴링(loadPendingInquiries) 신규 추가
+   ② CTA모달(inquiry-reply-form) 경유 답변등록 시에도 즉시 재조회하도록 연결
+   → 대기/종료 탭으로 이동하는 UI는 만들지 않음(Stephen 확정 — 그냥 사라지면 됨)
+```
+```
+src/routes/api/cms/chat/pending-inquiries/+server.ts    (MODIFY — user_name 필드 제거)
+src/lib/components/chat/AdminChatPanel.svelte           (MODIFY — 카드 마크업·CSS 재구성 + 30초 폴링 + CTA모달 재조회 연결)
+```
+svelte-check 재검증: 신규 에러 0건(기존 무관 에러 1건만 유지) 확인 완료.
+
+### @sp3-qa-agent 검수 (2026-09-02, 같은 세션) — 이 세션 4건 전체 대상
+
+검수 범위: ①고객용 서명완료 계약서 열람 신규 ②BI 로고 통일+표준문서화 ③채팅 대화카드
+중복노출 수정+토스트 3종 단일화 ④빠른문의 리마인더 카드(본 항목).
+
+**1차 검수 결과 — 재검수 필요(⚠️) 3건 발견, GATE E 보류:**
+```
+❌ 결함1: BI 로고 통일 작업(②)의 문서화 산출물(front-uiux.md §19 "대표 BI 표준")이
+   실제로는 존재하지 않음 — 2026-09-02 다른 병렬세션이 같은 파일에 동일 번호(§19)로
+   "모바일 반응형 화면 미세떨림" 섹션을 신설하면서 먼저 있던 내용이 유실됨. 코드
+   (contract 페이지 SVG 교체) 자체는 정상이었으나 그 코드 주석이 가리키는 문서가
+   증발한 상태였음.
+⚠️ 경미: pushToastMessage.ts IMPORTANT_NOTIFY_LABELS에 이미 서비스 중이던 6개 타입
+   (locker_guide/dhero_place_guide/tracking_notify/chat_unanswered/identity_request/
+   contract_sent)이 누락 — 매핑 없으면 안전하게 ①기본값("새로운 대화를 확인하세요")로
+   폴백되나, 기존엔 더 구체적인 문구가 있었던 타입들이라 체감상 다운그레이드.
+⚠️ 검증불가: sp3-qa-agent에 Supabase MCP 도구가 없어 Migration 425의 stage/production
+   실제 적용 여부를 자체 확인하지 못함(상위 세션에서 재확인 요청).
+```
+
+**수정 완료(같은 세션, 즉시 반영):**
+```
+1. front-uiux.md — §19 자리 다툼을 피해 §20으로 "대표 BI(로고) 표준" 섹션 복원(20-1
+   두 로고 계열 구분표 · 20-2 재사용 방법+filter id 충돌 방지 · 20-3 --cs-orange 오독
+   방지 각주 · GATE C 3건). uiux-index.md에도 컬러표 각주 + "🔴 대표 BI(로고)" 빠른참조
+   블록 복원(front-uiux.md §20 연결).
+2. pushToastMessage.ts IMPORTANT_NOTIFY_LABELS에 누락 6종 추가(locker_guide→보관함,
+   dhero_place_guide→수령위치, tracking_notify→운송장, chat_unanswered→미답변,
+   identity_request→본인증명, contract_sent→전자계약). push.ts CUSTOMER_LIFECYCLE_
+   PUSH_COPY 13개 키 전수 대조로 완전성 확인. chat.md §14-1 매핑표·경위 갱신.
+3. Migration 425 stage(ezyvffjvuwmtuhpxdjrw)·production(vnbpmvxruyciuuaermyh) 양쪽
+   `SELECT prosrc LIKE '%chat_messages%' FROM pg_proc WHERE proname='submit_cs_post'`
+   직접 재조회 — 둘 다 false 확인(적용 완료).
+```
+
+수정 파일(추가): `.claude/rules-ref/front-uiux.md`, `.claude/rules/uiux-index.md`,
+`src/lib/utils/pushToastMessage.ts`, `.claude/rules-ref/chat.md`
+
+svelte-check 재검증: 신규 에러 0건 유지.
+
+**GATE E: ✅ 통과 (재검수 지적 3건 전부 즉시 해소) — git commit은 Stephen 직접 실행 대기**
 
 

@@ -65,6 +65,31 @@ export function setActiveSession(sessionId: string | null): void {
 export function pushMessage(message: ChatMessage): void {
   // 중복 방지
   if (chatStore.messages.some((m) => m.id === message.id)) return
+
+  // 낙관적 임시 메시지(ChatWindow.handleSend가 만드는 `temp-<uuid>`) 치환 —
+  // Supabase Realtime이 서버 POST 응답보다 먼저 같은 사용자 메시지의 INSERT를 통지하는
+  // 경쟁 상황(캔드매칭/AI 폴백 처리로 응답이 지연될수록 자주 발생)에서, 실제 메시지를
+  // 임시 메시지 옆에 추가하지 않고 그 자리에서 교체한다. 그대로 추가하면 "말풍선이 잠깐
+  // 중복 노출됐다가 POST 완료 시 removeMessage(tempId)로 하나만 사라지는" 것처럼 보이는
+  // 실서비스 결함으로 이어졌다(2026-09-02 발견·수정).
+  if (message.sender_type === 'user' && !message.id.startsWith('temp-')) {
+    const tempIdx = chatStore.messages.findIndex(
+      (m) =>
+        m.id.startsWith('temp-') &&
+        m.session_id === message.session_id &&
+        m.sender_type === 'user' &&
+        m.content === message.content
+    )
+    if (tempIdx !== -1) {
+      chatStore.messages = [
+        ...chatStore.messages.slice(0, tempIdx),
+        message,
+        ...chatStore.messages.slice(tempIdx + 1),
+      ]
+      return
+    }
+  }
+
   chatStore.messages = [...chatStore.messages, message]
 
   // 본인 세션이 열려 있지 않은 경우 unread 증가
