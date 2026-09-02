@@ -313,6 +313,29 @@
     if (!first) return
     hasSeededBulk = true
     bulkOpts = { ...bulkOpts, rentalMethod: first.opts.rentalMethod, returnMethod: first.opts.returnMethod }
+    // 첫 상품의 기존 저장값으로 시간도 함께 시딩(2026-09-01 — 방식만 시딩하고 시간은 항상
+    // 빈 값으로 열리던 결함. 특히 저장된 방식이 이미 배송(is_bulk_delivery)이면 시간선택
+    // 버튼 자체가 안 보여 사용자가 채울 방법이 없어 datesSet이 영구 미충족 상태로
+    // 고정됐었다 — bulkHandleMethod의 자동채움과 동일한 기본값(12:00/13:00)으로 방어).
+    bulkTime = first.rentalTime
+    bulkReturnTime = first.returnTime
+    if (isDeliveryLocked(first.opts.rentalMethod)) {
+      if (!bulkTime) bulkTime = '12:00'
+      if (!bulkReturnTime) bulkReturnTime = '13:00'
+      // ⛔ 2026-09-02 QA 발견·Stephen 확정: 여기서 applyBulkToItems()를 호출하면 사용자가
+      // 통합설정 패널을 건드리기도 전에, 마운트하는 것만으로 다른 상품(itemsState의 2번째
+      // 이후 항목)이 개별적으로 갖고 있던 자기 자신의 수령방식·시간까지 첫 상품 값으로
+      // 조용히 덮어써버린다 — "통합 대여 설정"(2026-08-03 확정) 적용 이전부터 남아있는
+      // "상품 건별 대여옵션 설정" 데이터(각 CartItemUiState 고유 rentalTime/returnTime/
+      // opts)가 사용자 모르게 사라지는 실질적 오류였다. 이 자동채움은 오직 "배송방식이라
+      // 시간을 채울 방법이 아예 없는" first 상품 자신의 datesSet 충족에만 필요하므로,
+      // 브로드캐스트 없이 first 하나에만 patch한다 — 다른 상품의 기존 개별값은 그대로 보존.
+      // ⚠️ "상품 건별 대여옵션 설정" 기능 자체(각 아이템이 자기 고유 opts/시간을 갖는 데이터
+      // 구조)는 향후 복원 가능성을 위해 의도적으로 유지 — applyBulkToItems() 호출(=통합
+      // 브로드캐스트)만 여기서 차단하는 것이지, CartItemUiState의 개별 필드나 updateItem()
+      // 같은 하부 로직은 절대 삭제하지 않는다.
+      updateItem(first.id, { rentalTime: bulkTime, returnTime: bulkReturnTime })
+    }
   })
 
   // ── Order Total
@@ -357,6 +380,17 @@
       rentalMethod: v,
       ...(forceCopy || bulkOpts.copyToReturn ? { returnMethod: v } : {}),
       ...(forceCopy ? { copyToReturn: true } : {}),
+    }
+    // 배송(is_bulk_delivery) 방식은 시간선택 버튼 자체가 화면에서 사라지므로(요청 A,
+    // RentalForm snippet의 `{#if !locked}`), 사용자가 시간을 입력할 방법이 없어 datesSet이
+    // 영원히 미충족 상태로 고정되는 결함이 있었다(2026-09-01 실사용 발견 — "예약신청완료"
+    // 버튼이 배송방식 선택 시 영구 비활성). 상품상세 CalendarTimePicker.svelte가 이미 쓰고
+    // 있는 기본값(시작 12:00 / 종료 13:00, startHour=$bindable(12)·endHour=$bindable(13))을
+    // 그대로 재사용해, 아직 시간이 비어있는 경우에만 자동 채운다(사용자가 이미 넣은 값은
+    // 덮어쓰지 않음).
+    if (forceCopy) {
+      if (!bulkTime) bulkTime = '12:00'
+      if (!bulkReturnTime) bulkReturnTime = '13:00'
     }
     applyBulkToItems()
   }
@@ -816,7 +850,17 @@
   }
 
   // 카트 상품에 설정된 허용 방식 ID 교집합 ('all'=전체, 'none'=없음, Set=필터)
-  const cartProductRows = $derived<ProductRow[]>(effectiveLineGroups.map(g => g.product).filter((p): p is ProductRow => p !== null))
+  // ⛔ 2026-09-02 Stephen 매트릭스 테스트 중 발견·수정: effectiveLineGroups(카트에 존재하는
+  // 전체 상품군)를 그대로 썼던 탓에, 체크 해제(비선택)한 상품도 계속 교집합에 남아 실제로는
+  // 제출 대상이 아닌 상품의 allowed_method_ids가 수령/반납 방식 탭을 계속 제한했다 —
+  // hasItems/datesSet/methodSelectionValid 등 다른 파생값과 동일하게 "체크됨+미삭제"만
+  // 반영하도록 itemsState 기준으로 교체(groupsById로 그룹 조회).
+  const cartProductRows = $derived<ProductRow[]>(
+    itemsState
+      .filter(it => !it.deleted && it.checked)
+      .map(it => groupsById.get(it.id)?.product ?? null)
+      .filter((p): p is ProductRow => p !== null)
+  )
   const allowedMethodIds = $derived(computeAllowedMethodIds(cartProductRows))
   const deliveryTabs = $derived<DeliveryTabMeta[]>(
     allowedMethodIds === 'none' ? [] :
@@ -826,7 +870,7 @@
   );
   // 대여 제한옵션 "반납 배송선택 제한"(CMS) — restrict_return_delivery ON일 때 배송
   // (is_bulk_delivery) 방식을 제외한 탭 목록. "요청 A"(수령=배송 선택 시 반납방식을
-  // 자동으로 같은 배송값으로 강제복사)와는 별개 개념 — 이 목록은 "수령이 방문일 때"의
+  // 자동으로 같은 배송값으로 강제복사)와는 별개 개념 — 이 목록은 "수령이 배송이 아닐 때"의
   // 반납 leg 전용으로만 쓴다(아래 returnVisibleTabsFor 참고).
   const restrictedDeliveryTabs = $derived<DeliveryTabMeta[]>(
     deliveryTabs.filter(tab => !isDeliveryLocked(tab.v))
@@ -838,12 +882,18 @@
   // 토글의 양쪽-leg 제거 구현이 원인이었음). 원래 의도("수령 방문대여 선택 시 반납에서만
   // 배송 선택 못하게 막음")대로 분리:
   //   - 수령(pickup) leg: 이 토글과 무관하게 항상 전체 목록(deliveryTabs) 노출
-  //   - 반납(return) leg: 수령이 'visit'일 때만(그리고 토글 ON일 때만) 배송 제외, 수령이
-  //     배송(delivery 등)이면 "요청 A" 강제복사 로직이 이미 반납을 같은 값으로 잠그므로
-  //     전체 목록을 그대로 노출해야 그 값이 탭에 렌더링됨
+  //   - 반납(return) leg: 수령이 배송(is_bulk_delivery)이 **아닐 때만**(그리고 토글 ON일
+  //     때만) 배송 제외, 수령이 배송(delivery 등)이면 "요청 A" 강제복사 로직이 이미 반납을
+  //     같은 값으로 잠그므로 전체 목록을 그대로 노출해야 그 값이 탭에 렌더링됨
+  //
+  // ⛔ 2026-09-02 Stephen 스크린샷(출고/반납 O·X 매트릭스) 대조로 발견·수정: 조건을
+  // `pickupMethod === 'visit'`로 좁게 짜서 수령=퀵서비스일 때 반납에 배송이 여전히
+  // 허용되던 결함(매트릭스: 퀵서비스×크레이지배송 = X여야 하는데 O로 노출됨). "수령이
+  // 방문일 때만"이 아니라 "수령이 배송이 아닌 모든 경우"(방문·무인함·퀵서비스 전부)로
+  // 일반화 — `!isDeliveryLocked(pickupMethod)`로 교체.
   const pickupVisibleTabs = $derived<DeliveryTabMeta[]>(deliveryTabs)
   function returnVisibleTabsFor(pickupMethod: DeliveryMethod): DeliveryTabMeta[] {
-    return sdShippingSettings?.restrict_return_delivery && pickupMethod === 'visit'
+    return sdShippingSettings?.restrict_return_delivery && !isDeliveryLocked(pickupMethod)
       ? restrictedDeliveryTabs
       : deliveryTabs
   }
@@ -1802,8 +1852,9 @@
   <!-- 휴무일 캘린더 제한 전용 판정(RSC-B3) — 위 locked(요청 A)와 별개 플래그이므로 독립 계산 -->
   {@const courierRestricted = isCourierDependent(props.method)}
   {@const returnComboLocked = props.type === 'return' && locked}
-  <!-- 대여 제한옵션 "반납 배송선택 제한"(CMS) leg-aware 반영(2026-09-01) — 수령(rental) leg은
-       이 토글과 무관하게 항상 전체 목록, 반납(return) leg만 수령이 'visit'일 때 배송 제외
+  <!-- 대여 제한옵션 "반납 배송선택 제한"(CMS) leg-aware 반영(2026-09-01, 2026-09-02 방문→
+       배송아님 일반화) — 수령(rental) leg은 이 토글과 무관하게 항상 전체 목록, 반납(return)
+       leg만 수령이 배송(is_bulk_delivery)이 아닐 때(방문·무인함·퀵서비스 전부) 배송 제외
        (returnVisibleTabsFor 정의부 주석 참고 — 과거엔 양쪽 다 제외해 배송옵션 상품 전체의
        "수령 방식"에서마저 배송이 사라지는 회귀가 있었음) -->
   {@const visibleTabs = props.type === 'rental' ? pickupVisibleTabs : returnVisibleTabsFor(bulkOpts.rentalMethod)}
@@ -2113,7 +2164,13 @@
   }
 
   .cart-root {
-    min-height: 100vh;
+    /* 2026-08-26 확정 패턴 재적용(회귀 수정) — PC 반응형 모바일 시뮬레이션에서 스크롤
+       최하단 도달 시 브라우저 툴바 숨김/재출현으로 100vh 값이 매번 재계산돼 화면이 미세하게
+       잔떨림하는 잘 알려진 모바일 100vh 버그. account/profile(.page-root)·contract/complete·
+       contract/expired(.page)와 동일하게 100dvh로 고정 — 임의로 100vh로 되돌리지 말 것.
+       .cart-footer의 env(safe-area-inset-bottom)는 별개의 "고정 하단바 전용" 패턴이라
+       이 규칙과 무관, 그대로 유지. */
+    min-height: 100dvh;
     background: #ECEBF4;
     display: flex;
     flex-direction: column;

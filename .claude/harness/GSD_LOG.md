@@ -1,6 +1,19 @@
 # GSD_LOG.md — 크레이지샷 실행 이력
 # 형식: [YYYY-MM-DD HH:MM] 타입 | 타스크명 | 파일 | 소요 | 결과
 
+[2026-09-02] ✅QA재검수 | /auth/login 이메일trim 수정 — GATE E 독립검수 | src/routes/auth/login/+page.svelte | — | ✅ 조건부 통과 — 수정 자체(email.trim() 1줄) 정확·Frozen파일 미해당·npm run check 신규에러 0건. ⚠️HIGH 신규발견(이 세션 재확인 완료): SignUpModal.svelte:98 로그인모드(performSignIn(loginEmail,...))가 동일 미trim 버그 보유, products/[id]/+page.svelte:1127에서 실사용 경로로 확인(상품상세 로그인모달) — 이번 태스크 범위 밖이라 미수정, Stephen 확인 후 별도 진행. login/+page.svelte에 무관한 타 변경 혼재도 참고 전달(비블로킹).
+
+[2026-09-02] 🟡BOUNDARY | 아이디 찾기 + 비밀번호 재설정 기능 신설 (SignUpModal 확장) |
+  src/lib/components/auth/SignUpModal.svelte (CSS 7개 클래스 추가),
+  src/routes/api/auth/find-email/+server.ts (신규 — OTP 검증+이메일마스킹 service_role 엔드포인트),
+  src/routes/auth/reset-password/+page.svelte (신규 — 비밀번호 재설정 랜딩 페이지),
+  src/routes/auth/login/+page.svelte (modalInitialMode + SignUpModal initialMode prop 연결) |
+  DB변경 없음(Migration #418 Stage 기적용), npm run check 신규에러 0건 | ✅ 구현 완료 — sp3-qa-agent 검수 대기, git commit은 Stephen 직접 실행
+
+[2026-09-02] ✅확인 | /auth/login 이메일trim 수정 — Production 실사용 검증 완료 + Stage 테스트계정 신설 | (login/+page.svelte는 코드변경 없음, 이번 항목은 후속 조치만) | — | ✅ Production 재로그인 성공 확인(Stephen 실사용 검증) — 이메일trim 수정 효과 확정. Stage 400은 별개원인(계정 미존재, 코드버그 아님) 재확인. Stage에 동일 계정(payment-test-1788323177844@..., email_confirm:true) Admin API로 신규 생성 — 임시스크립트 실행 직후 삭제(레포 무흔적), bcrypt대조로 비밀번호 100%일치·user_profiles 자동생성 확인.
+
+[2026-09-02] 🔴CRITICAL | /auth/login 로그인 실패 — 이메일 미trim 전송 버그 수정 | src/routes/auth/login/+page.svelte | — | ✅ 완료 — Stephen 실사용 제보(Production 결제테스트 계정 로그인 400 "Invalid login credentials"). Stage/Production auth.users 직접조회로 계정 건강함 확인, bcrypt crypt() 대조로 비밀번호 100%일치 확정 → 원인을 이메일로 좁힘. handleSignIn()이 isSignInMode 판정엔 email.trim()을 쓰면서 실제 performSignIn 호출엔 미trim 원본을 보내던 불일치 발견·수정(performSignIn(email.trim(), password)). npm run check 신규에러 0건. 실로그인 재현은 비밀번호 입력 필요해 이 세션 미실시. git commit은 Stephen 직접 실행.
+
 [2026-09-01] 🔴CRITICAL | 판매전용(sale_only) 상품 "구매" 흐름 신설 — Stage 구현 완료·Production 미적용 |
   Migration #416(rental_reservations.duration_type에 'purchase' 추가 + compute_reservation_line_amount·
   try_confirm_reservation·update_reservation_status 3개 함수 판매전용 분기) + 앱코드 6개 파일
@@ -6620,3 +6633,120 @@ Stephen 직접 실행 필요
   (committed값)와 RentalForm snippet(bulkOpts 편집중값)의 소스 이원화가 현재는 아코디언
   상호배타 구조 덕에 안전하나 향후 구조변경 시 재발가능 — 주석 보강 권고. visibleTabs
   빈배열 안내문구는 여전히 도달가능한 정상경로 확인. git commit 미실행, Stephen 대기.
+
+[2026-09-02] 🔴CRITICAL | 배송방식 선택시 예약신청완료 영구비활성 수정 + Toss결제확정RPC실패 관리자알림 |
+  src/routes/cart/+page.svelte, src/routes/contract/[token]/pay-result/+page.server.ts | — |
+  Stephen이 이전 조사결과(배송방식 선택 시 시간UI가 사라져 datesSet 영구 false) 붙여넣고
+  해소여부 확인 요청 → 코드대조로 미해소 확인 → "둘 다 지금 고쳐줘" 지시로 즉시 수정.
+  스크린샷의 "대여예약정보를 모두 확인해주세요" 토스트가 동일 datesSet 원인임을 코드로
+  일치 확인(575행). "4일은 되는데 12시간은 안됨"은 재고문제 아님 — CalendarTimePicker.svelte
+  (상품상세, 시간기본값 12:00/13:00 항상 존재, 배송이어도 시간UI 안숨김)로 담았는지 vs
+  draft(예약신청 버튼, 날짜없이도 항상 클릭가능) 경로로 담았는지의 차이로 추정. 수정1:
+  cart/+page.svelte의 bulkHandleMethod + 패널오픈시딩 $effect 2곳에 배송방식 선택시 기존
+  CalendarTimePicker 기본값(12:00/13:00) 재사용해 시간 자동채움. 수정2: pay-result의
+  confirm_order_payment_and_update_reservations 실패분기(이전 세션에서 로그만 추가해둔
+  지점)에 sendPushToAdmins 관리자알림 추가(refund실패 알림과 동일패턴·동일이벤트키 재사용).
+  작업중 파일시스템 EPERM 일시장애 발생·Stephen 재시도 지시로 복구(코드무관, 기록만).
+  svelte-check·check-rpc-error-handling.mjs 신규이슈 0건. 실서버 재검증 미실행(Claude
+  Browser 승인범위 밖). git commit 미실행.
+
+[2026-09-02] 🔍재점검 | 12시간 단건 배송예약 시나리오 재검증 — 코드추적 정상, 실기 로그인벽 중단 |
+  (파일변경 없음, TASK.md 기록만) | — | Stephen 요청으로 "예약신청완료" 재점검. datesSet·
+  요금계산(반일요율 정상분류)·methodSelectionValid·체크아웃 값전달 4개 전부 코드추적으로
+  정상 확인. Stephen이 "지금 바로 로컬 개발서버로 확인"으로 재승인 → dev서버(localhost:5175)
+  기동+Claude Browser 접속 성공했으나 /cart가 로그인 리다이렉트 — 비밀번호 대신입력 불가
+  안전규칙(예외없음)으로 실기검증 중단, Stephen 확인 대기.
+
+[2026-09-02] 🔍QA검수+실기검증 | 배송시간자동채움+Toss관리자알림 — Stephen 실기검증 완료, QA 조건부통과 |
+  src/routes/cart/+page.svelte, src/routes/contract/[token]/pay-result/+page.server.ts | — |
+  Stephen이 dev서버(localhost:5175)에 직접 로그인해 단건+배송+당일(12h) 시나리오로 실기검증
+  완료 — 12:00 자동입력·총대여기간1일·요금50,000원·예약신청완료 버튼 활성화 전부 확인. 중간에
+  2개그룹 체크 상태에서 "총대여기간2일"로 보여 신규버그로 오인했으나 otTotalDays가 체크된
+  그룹 전체 합산값(1+1=2)임을 확인해 오인 정정. sp3-qa-agent 병행 검수 결과: 원 CRITICAL 결함
+  해소 확인, CRITICAL/HIGH 0건, MEDIUM 1건(시딩 $effect의 신규분기가 마운트 시점에 다른
+  카트아이템까지 강제동기화하는 부수효과 — 기존 통합정책 방향은 일치하나 트리거 시점이 새로
+  생김, Stephen 확인 권장) + LOW 2건(12h가격 서버fallback 불일치는 기존이슈, 동적import
+  스타일). svelte-check·check-rpc-error-handling.mjs·cart관련테스트98개 전부 재확인 통과.
+  GATE E 조건부통과 — git commit 전 MEDIUM 1건만 확인 권장.
+
+[2026-09-02] 🟡BOUNDARY | QA MEDIUM1건(마운트시 타상품 강제동기화) 즉시 차단 |
+  src/routes/cart/+page.svelte | — | Stephen 확정 지시 — QA가 찾은 부수효과가 "통합대여설정
+  이전 상품건별설정 기능이 보이지 않게 작동하는 오류"이니 작동만 차단, 로직(데이터구조)은
+  향후 복원 가능하게 삭제하지 말 것. 시딩 $effect의 배송방식 자동채움 분기에서
+  applyBulkToItems() 전체브로드캐스트를 제거하고 updateItem(first.id,{...})로 첫상품
+  자신에게만 patch하도록 축소. CartItemUiState 개별필드·updateItem() 자체는 무변경 보존,
+  bulkHandleMethod 등 사용자 조작 시 발생하는 기존 브로드캐스트(2026-08-03 정책)도 무변경.
+  svelte-check 신규에러 0건, grep으로 시딩effect 내 실호출 제거 확인. 실기재검증은 현재
+  계정 저장값이 전부 방문대여라 재현조건 자체가 없어 스킵, 코드추적으로 갈음. DB변경 없음,
+  git commit 미실행.
+
+[2026-09-02] 🔍QA검수 | 마운트시 타상품강제동기화 차단 수정 — sp3-qa-agent 검수 완료 |
+  src/routes/cart/+page.svelte | — | ✅ GATE E 통과, CRITICAL/HIGH/MEDIUM/LOW 전부 0건.
+  부수효과 제거·first참조 정확성·bulkOpts 무해성·git diff 범위일치 전부 확인, 실기재현
+  스킵판단도 타당함으로 인정. 블로킹 이슈 없음, git commit 진행 가능(Stephen 직접 실행).
+
+[2026-09-02] 🔴CRITICAL | 수령/반납 방식 콤보 매트릭스 결함 2건 수정 |
+  src/routes/cart/+page.svelte | — | Stephen이 출고/반납 O·X 매트릭스 스크린샷 첨부하며 검증
+  요청 → 실기테스트 중 결함2건 발견. ①returnVisibleTabsFor가 pickupMethod==='visit'로만
+  좁게 체크해 퀵서비스 pickup일 때 반납배송제외가 적용 안되던 버그 → !isDeliveryLocked(
+  pickupMethod)로 일반화. ②cartProductRows가 effectiveLineGroups 전체(체크해제 상품 포함)를
+  기준으로 방식교집합 계산하던 버그(hasItems 등 다른 파생값과 다른 패턴) → itemsState의
+  checked&&!deleted 필터+groupsById로 통일. 방문pickup 케이스는 실기재확인(회귀없음), 결함2
+  수정 후 재검증 중 dev서버 풀리로드로 로그인세션 만료 — Stephen 재로그인 대기. svelte-check
+  신규에러 0건. DB변경 없음, git commit 미실행.
+
+[2026-09-02] ✅실기검증완료 | 수령/반납 방식 콤보 매트릭스 결함 2건 — Stephen 재로그인 후 3케이스 전부 확인 |
+  src/routes/cart/+page.svelte | — | Stephen 재로그인 후 3×3 매트릭스 전체를 실제 카트화면
+  으로 대조 완료: 크레이지샷배송pickup→반납전체O, 방문pickup→반납크레이지배송만X, 퀵배송
+  pickup→반납크레이지배송만X 전부 스크린샷 매트릭스와 일치 확인. 결함2(체크해제상품이 교집합
+  오염)도 Canon RF 체크해제 후 퀵배송이 수령탭에 정상노출되는 것으로 직접 확인. 미해결 항목
+  없음. git commit은 Stephen 직접 실행 대기.
+
+[2026-09-02] 🔍QA검수 | 수령/반납 방식 콤보 매트릭스 결함 2건 — sp3-qa-agent 검수 완료 |
+  src/routes/cart/+page.svelte | — | ✅ GATE E 통과, CRITICAL/HIGH/MEDIUM/LOW 전부 0건.
+  isDeliveryLocked 데이터기반 판정(하드코딩 없음)·요청A 양립성·cartProductRows 필터일관성·
+  groupsById 키체계 전부 재확인. 체크0개 폴백은 canProceed가 별도가드해 무해 확인. 정적분석
+  전부 통과, cart관련 테스트 4/5파일 100%PASS(deliveryCutoffHolidays.test.ts 3건은 스테일
+  픽스처 문제로 이번 diff와 무관한 기존이슈, 별도 후속처리 권장). 블로킹 이슈 없음, git commit
+  진행 가능(Stephen 직접 실행).
+
+[2026-09-02] 🟡BOUNDARY | deliveryCutoffHolidays.test.ts 3건 수정 + 오인정정 + 실기기능검증 |
+  src/__tests__/services/deliveryCutoffHolidays.test.ts, .claude/harness/learnings/
+  misidentifications.md | — | Stephen 지시로 "스테일 픽스처" 진단을 직접 재검증 → stage DB
+  조회 결과 충돌행이 테스트잔재가 아니라 진짜 법정공휴일(2027 노동절·대체공휴일·어린이날,
+  2026-08-24 정상동기화)이었음을 발견 — 오인 정정. 실제 원인은 테스트의 날짜오프셋
+  (240~248,500)이 실제 공휴일 동기화 커버리지(~490일 이내) 안에 있었던 것 — 같은 파일의
+  sync_national_holidays 블록이 이미 쓰던 격리전략(오늘+1000~1100일)을 loadCourierClosedDates
+  블록만 놓치고 있었음. 오프셋을 1200~1224로 이동해 해결(테스트파일만 수정, delivery_cutoff_
+  settings 로직·실공휴일데이터 무손상). vitest 2연속 18/18 통과, stage DB 재조회로 실데이터
+  무손상+cleanup정상 확인. misidentifications.md에 "UNIQUE위반=테스트정리실패로 성급히
+  단정 금지" 교훈 기록. 이어서 Stephen 질문(CMS토글값이 실제 캘린더에 정상반영되는지)에 대해
+  javascript_tool로 실제 DOM 속성(cal-day-holiday 클래스·title) 직접조회 + CalendarGrid.svelte
+  클릭라우팅 코드 확인으로 전체 파이프라인 정상 작동 재확인. 나머지 3개 실패파일(member
+  CodeCombo/accountWithdrawalPhone/contractSigningGate)은 스코프 밖, 동일 오인 패턴 가능성
+  플래그만 남김. DB변경 없음, git commit 미실행.
+
+[2026-09-02] 🔍QA검수 | deliveryCutoffHolidays.test.ts 오인정정 — sp3-qa-agent 검수 완료 |
+  src/__tests__/services/deliveryCutoffHolidays.test.ts | — | ✅ GATE E 통과, CRITICAL/HIGH/
+  MEDIUM/LOW 전부 0건. 새 오프셋 9개 재계산으로 중복없음+syncTestRangeArgs 비중첩 재확인,
+  vitest 2연속 18/18 통과, stage DB 재조회로 실공휴일 무손상·픽스처 잔여 0건·설정값 정상
+  전부 확인. LOW참고(비블로킹): 같은파일 upsert_manual_holiday 블록도 동일 위험군이나
+  이번 스코프 밖으로 이미 명시돼있어 GATE E 안막음. git commit 진행 가능(Stephen 직접).
+
+[2026-09-02] 🟡BOUNDARY | 장바구니 PC모바일반응형 100vh 잔떨림 회귀 수정 |
+  src/routes/cart/+page.svelte | — | Stephen이 launch-selected-element로 잔떨림 재현 리포트
+  → 하네스 이력 검색으로 2026-08-26 동일증상 기수정 이력(100vh→100dvh, account/profile
+  .page-root 원발견지 + contract/complete·expired 확립패턴) 발견 → 현재 .cart-root가
+  100dvh에서 100vh로 회귀돼있음을 직접 확인, 100dvh로 재적용+방지주석 추가. 부수발견:
+  원발견지였던 account/profile/+page.svelte(.page-root)도 동일하게 100vh로 회귀돼있음 —
+  이번 요청범위(cart) 밖이라 수정 안하고 발견사실만 보고(요청범위외 수정금지 원칙).
+  svelte-check 신규에러 0건. 실기재현·account/profile 수정여부는 Stephen 확인 대기.
+
+[2026-09-02] 🟢ROUTINE | "모바일 반응형 화면 미세떨림" 트리거 명령 문서화 |
+  .claude/rules-ref/front-uiux.md, .claude/rules/uiux-index.md | — | Stephen 지시로 100vh→
+  100dvh 회귀버그 수정법을 front 표준 디자인 시스템 지침에 기록. front-uiux.md §19 신설(원인·
+  자동수정절차·기존4곳 표+회귀이력경고·GATE C), uiux-index.md에 축약 트리거 블록 추가(기존
+  콤보버튼/파일업로드 포맷과 동일 스타일). 특정파일 하드코딩 대신 "전역grep재검색+페이지최상위
+  루트만 선별교체" 절차를 문서화해 향후 재회귀에도 자동 대응 가능하게 설계. 문서만 수정, 코드
+  변경 없음. account/profile 100vh 회귀 자체는 아직 미수정(요청범위 밖, Stephen 확인 대기).
+  git commit 미실행.

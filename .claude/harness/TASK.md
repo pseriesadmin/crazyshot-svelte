@@ -12,6 +12,393 @@
 
 ---
 
+## NOW — 🟢 ROUTINE: "모바일 반응형 화면 미세떨림" 트리거 명령 문서화 (2026-09-02, 이 세션)
+
+배경: 직전 cart `.cart-root` 100vh→100dvh 회귀 수정건을 계기로, Stephen이 "front 표준
+디자인 시스템 지침의 관련 지침파일을 찾아 위 버그 수정방법을 기록하고 '모바일 반응형 화면
+미세떨림' 명령하면 알아서 수정되게 해"라고 지시.
+
+**수정 파일 2개(문서만, 코드 무변경)**:
+- `.claude/rules-ref/front-uiux.md` — §19(신규) "모바일 반응형 화면 미세떨림(100vh
+  재계산) — PC 브라우저 모바일 시뮬레이션 전용 결함" 추가. 트리거 문구 콜아웃 + 원인
+  설명 + 자동수정 절차(전역 grep → "페이지 최상위 루트"만 선별 교체 → 방지주석) +
+  기존 4곳(account/profile·contract/complete·expired·cart) 표(회귀 이력 경고 포함) +
+  GATE C 체크리스트.
+- `.claude/rules/uiux-index.md` — 빠른 참조용 축약 트리거 블록 추가(★★★, front-uiux.md
+  §19로 연결) — 기존 "🔴 콤보 버튼 선택 그룹"/"🔴 파일 업로드" 등과 동일한
+  "언급 시 즉시 적용" 포맷 유지.
+
+**설계 판단**: 특정 파일 목록을 하드코딩하지 않고 "전역 grep 재검색" 절차 자체를 문서화 —
+표에 있는 4곳도 이미 2곳(cart·account/profile)이 회귀된 전례가 있어, 표만 믿고 넘어가지
+말고 매번 `grep -rn "min-height:\s*100vh" src/routes src/lib/components`를 다시 실행하도록
+명시. "페이지 최상위 루트인지 먼저 판단 후에만 교체"라는 안전장치도 명문화(모달·카드 등
+국소 100vh까지 무분별 교체 방지).
+
+**미해결**: 이 문서화 자체는 완료됐으나, 문서에 나열된 `account/profile/+page.svelte`의
+100vh 회귀는 아직 실제로 고치지 않은 상태(이전 턴에서 "요청범위 밖"으로 보고만 하고
+대기 중) — Stephen 확인 시 진행. git commit 미실행.
+
+---
+
+## NOW — 🟡 BOUNDARY: deliveryCutoffHolidays.test.ts 3건 실패 수정 — "스테일 픽스처" 오인 정정 (2026-09-02, 이 세션)
+
+배경: QA agent가 백그라운드 전체 스위트 실행에서 발견한 4개 실패 파일 중 하나. 이전 턴에서
+"stage DB에 정리 안 된 테스트 픽스처 잔재"로 진단했었으나(별도 태스크 칩까지 스폰), Stephen이
+"장바구니 대여설정에 중요한 기능"이라며 이번 세션에서 직접 진행 지시 — 단 "delivery_cutoff_
+settings CMS 설정의 원천 기능 로직에 문제 생기는 것 아니라면"이라는 조건 명시.
+
+**기능 설명(Stephen 요청으로 먼저 제공)**: `delivery_cutoff_settings`(CMS 토글 3종: 마스터
+스위치·고정휴무일·임시휴무일)와 `public_holidays`(national=API동기화 법정공휴일 / manual=
+CMS 등록 임시휴무일) 조합으로 `loadCourierClosedDates()`가 "이 날짜는 택배 불가"를 계산해
+장바구니 캘린더에 경고로 노출하는 기능 — 오늘 세션에서 다룬 "수령/반납 방식 노출"과는 다른
+계층(방식은 골랐는데 그 방식이 이 날짜엔 막히는지).
+
+**실제 원인(오인 정정)**: 직접 stage DB를 조회한 결과, 충돌한 행은 테스트 잔재가 아니라
+**진짜 법정공휴일**이었음 — 2027-05-01(노동절)·2027-05-03(대체공휴일(노동절))·
+2027-05-05(어린이날), 전부 2026-08-24에 `sync_national_holidays`로 정상 동기화된 실데이터.
+테스트가 `nonSundayDaysFromNow(241~248, 500)`처럼 실제 공휴일 동기화 커버리지(오늘부터 최대
+약 490일 이내) **안에 있는** 오프셋으로 날짜를 골라 `insertHoliday(..., 'national')`을
+시도한 것이 원인 — 같은 파일의 `sync_national_holidays` describe 블록은 이미 이 위험을
+인지해 `syncTestRangeArgs()`로 오늘+1000~1100일 범위로 격리해뒀는데, `loadCourierClosedDates`
+describe 블록만 그 격리를 놓치고 있었음. **`delivery_cutoff_settings` CMS 토글 로직·RPC·
+실제 공휴일 데이터 어느 쪽도 결함 없음** — Stephen이 우려한 "원천 기능 로직 문제"는 아니었음.
+
+**수정**: `src/__tests__/services/deliveryCutoffHolidays.test.ts`의 `loadCourierClosedDates`
+describe 블록 — 오프셋 상수를 240~248/500에서 1200~1224(오늘+1200일 이후, 다른 describe
+블록의 1000~1100 범위와도 안 겹침)로 전부 이동. 테스트 파일 외 어떤 소스 파일·마이그레이션·
+실데이터도 건드리지 않음.
+
+**검증**: `npx vitest run deliveryCutoffHolidays.test.ts` 2연속 실행 → 18/18 전부 통과(플레이
+키니스 없음 확인). 실행 전후로 stage DB 직접 조회 — 실제 공휴일 데이터(노동절 등) 무손상,
+`delivery_cutoff_settings` 실값(`afterAll` 복원) 정상, 새 오프셋 범위(2029-12-14~2030-01-09)에
+잔여 픽스처 행 0건(cleanup 정상 동작 확인).
+
+**오인 정정 기록**: `misidentifications.md`에 "UNIQUE 제약 위반을 곧바로 '테스트 정리
+실패'로 단정하지 말고 실제 충돌 행을 먼저 SELECT로 확인할 것" 교훈 기록 완료.
+
+**미해결**: QA agent가 함께 발견한 나머지 3개 실패 파일(`memberCodeCombo.test.ts`,
+`accountWithdrawalPhone.test.ts`, `contractSigningGate.test.ts`)은 이번 세션 스코프
+밖 — 동일하게 "스테일 픽스처"로 성급히 진단됐을 가능성이 있어(오늘 발견한 오인 패턴과
+동일 계열), 손대기 전 각각 실제 충돌 원인을 먼저 확인 필요. DB 변경 없음, git commit 미실행.
+
+### 🔍 후속 확인 — CMS 토글값이 실제 캘린더에 정상 반영되는지 실기 검증 (2026-09-02, 같은 세션)
+
+Stephen 질문 — "delivery_cutoff_settings CMS 설정(토글 3종)의 원천 기능 로직이 설정값으로
+장바구니 대여설정 내 달력에 정상 반영되는 상태 맞지?" (테스트 파일 수정과 별개로 실제 기능
+자체의 동작 확인 요청).
+
+**코드 추적**: `+page.server.ts`가 `loadCourierClosedDates(supabase)` 호출 → `data.
+courierClosedDates`로 전달 → `+page.svelte`의 `courierClosedMap`(date→reason Map)으로 변환
+→ 캘린더의 `isDateDisabled`/`onDisabledClick` prop으로 주입(단, `isCourierDependent(method)`
+= `rental_method_options.is_courier_dependent` 플래그가 true인 방식을 선택했을 때만 활성화).
+
+**실기 검증(Stephen 로그인 상태, 로컬 dev 서버)**: `is_courier_dependent=true`인
+"크레이지샷배송 대여"를 수령방식으로 선택 후 캘린더를 열어 `javascript_tool`로 실제 날짜
+버튼의 DOM 속성을 직접 조회 — 여러 날짜가 `cal-day-holiday` 클래스 + `title="택배 휴무일"`로
+정확히 마킹돼 있음을 확인. `CalendarGrid.svelte` 코드 확인 결과 이 마킹은 순수 표시용이
+아니라 실제 클릭 라우팅에 반영됨(`onclick={() => holidayDisabled ? onDisabledClick?.(iso) :
+onselect(iso)}`) — 클릭 시 날짜 선택이 실제로 막히고 사유가 담긴 에러 토스트가 뜸, 시각적으로도
+취소선(`line-through`)+비활성 커서로 명확히 구분됨. 여러 날짜가 연속으로 막힌 패턴도
+"수령은 전날 기준"(`courierClosedMap.has(addDays(iso,-1))`) 로직과 실제 동기화된 다일
+국경일(연휴) 데이터가 맞물린 정상 결과임을 확인.
+
+**결론**: ✅ CMS 토글값(`delivery_cutoff_settings`) → `loadCourierClosedDates()` →
+`courierClosedMap` → 캘린더 disable/토스트까지 전체 파이프라인이 실제로 정상 반영되고
+있음을 DOM 레벨 증거로 확인. 이번 세션 어떤 수정도 이 경로를 건드리지 않았음(테스트 파일
+오프셋 수정만 있었음) — Stephen이 우려한 원천 기능 로직 문제 없음, 재확인 완료.
+
+### ✅ QA 검수 완료 (2026-09-02, sp3-qa-agent) — GATE E 통과
+
+- **CRITICAL/HIGH/MEDIUM/LOW 전부 0건**. `git diff --stat` 대조로 실제 변경 파일이
+  `deliveryCutoffHolidays.test.ts` 1개뿐임(+ 하네스 기록 3개) 확인, 소스코드·마이그레이션
+  무변경. 새 오프셋 9개(1200~1224)가 실제로 2029-12-15~2030-01-08 범위에 중복 없이 분산되고
+  `syncTestRangeArgs()`(2029-05-29~2029-09-06)와도 안 겹침을 직접 재계산해 재확인.
+- `vitest run` 독립 2연속 재실행 → 18/18 통과(flaky 없음). stage DB 직접 재조회로 실제
+  법정공휴일 3건 무손상·새 오프셋 범위 잔여 픽스처 0건·`delivery_cutoff_settings` 값 이상
+  없음 확인. `misidentifications.md` 기록 내용도 실제 조사결과와 정확히 일치 확인.
+- **LOW 참고(비블로킹)**: 같은 파일의 `upsert_manual_holiday`/`delete_manual_holiday`
+  블록(`nonSundayDaysFromNow(230~234)`)도 구조적으로 동일한 위험군(짧은 오프셋)이지만 이번
+  실행에선 충돌 없었음 — 이미 TASK.md에 "동일 계열 오인 가능성, 스코프 밖"으로 명시돼 있어
+  이번 GATE E는 막지 않음, 향후 참고용 기록만.
+
+**결론**: 블로킹 이슈 0건, git 커밋 진행 가능. 커밋은 Stephen 직접 실행.
+
+---
+
+## NOW — 🟡 BOUNDARY: 장바구니 화면 PC 모바일반응형 레이아웃 잔떨림 회귀 수정 (2026-09-02, 이 세션)
+
+배경: Stephen이 launch-selected-element로 장바구니 화면(대여요금 요약 영역) 스크린샷을
+공유하며 "PC 브라우저 '모바일 반응형' 환경으로 확인 시 페이지 레이아웃 떨림이 발생하는데
+이전에 수정한거 아닌가?" 질문 — 하네스 이력 검색으로 정확한 전례 발견.
+
+**전례 확인**: 2026-08-26에 이미 동일 증상이 리포트·수정된 이력이 GSD_LOG.md에 있음 — "PC
+반응형 모바일 시뮬레이션에서 스크롤 최하단 도달 시 브라우저 툴바 숨김/재출현으로 100vh 값이
+매번 재계산돼 화면이 미세하게 잔떨림하는 잘 알려진 모바일 100vh 버그"를 `account/profile/
++page.svelte`(`.page-root`)에서 먼저 발견·수정한 뒤 동일 패턴을 `contract/complete`·
+`contract/expired`(`.page{min-height:100dvh}`)에 이어 `.cart-root`에도 적용(100vh→100dvh)한
+기록.
+
+**회귀 확인**: 현재 코드를 직접 조회한 결과 `.cart-root`(2166행 부근)가 `100dvh`가 아니라
+다시 `min-height: 100vh`로 되돌아가 있었음 — 순수 회귀(누가·언제 되돌렸는지는 특정 불가,
+git blame 미실행). **추가로 원본 발견지였던 `account/profile/+page.svelte`(`.page-root`)도
+동일하게 `100vh`로 회귀돼 있음을 확인** — cart 단독이 아니라 최소 2개 파일에 걸친 회귀.
+
+**수정(이번 세션 요청 범위인 cart만)**: `src/routes/cart/+page.svelte` `.cart-root`를
+`min-height: 100dvh`로 재적용 + "임의로 100vh로 되돌리지 말 것" 방지 주석 추가.
+`account/profile/+page.svelte`는 **이번 요청 범위 밖이라 수정하지 않고 발견 사실만 보고**
+(요청범위 외 수정 절대 금지 원칙) — Stephen 확인 시 이어서 처리 가능.
+
+**검증**: `svelte-check` 재실행 → 신규 에러 0건.
+
+**미해결**: (a) 실기 재현(PC 브라우저 모바일반응형 모드에서 실제로 잔떨림이 사라졌는지)
+Stephen 확인 필요, (b) `account/profile/+page.svelte`의 동일 회귀 수정 여부 — Stephen
+확인 후 진행.
+
+---
+
+## NOW — 🟡 BOUNDARY: 아이디 찾기 + 비밀번호 재설정 기능 신설 (SignUpModal 확장) (2026-09-02, 이 세션)
+
+```
+배경: 로그인 화면에서 "아이디 찾기"(휴대폰 인증 → 마스킹 이메일 확인)와 "비밀번호 찾기"
+(이메일 입력 → Supabase 리셋 링크 발송 → /auth/reset-password 랜딩) 기능 신설.
+기존 SignUpModal 레이아웃(max-width:480px + 모바일 반응형) 재활용, PC·Mobile 모두 적용.
+
+수정 내역:
+- src/lib/components/auth/SignUpModal.svelte: CSS 7개 클래스 추가
+  (.su-auth-links .su-auth-link .su-auth-sep .su-result-box .su-result-label
+   .su-result-email .su-result-desc)
+- src/routes/api/auth/find-email/+server.ts (신규): service_role POST 엔드포인트 —
+  OTP 검증(phone_otps) + user_profiles phone 조회 + admin.auth.admin.getUserById()로
+  이메일 취득 + 마스킹 반환
+- src/routes/auth/reset-password/+page.svelte (신규): Supabase 리셋 링크 랜딩 페이지 —
+  supabase.auth.updateUser({ password }) + 완료 후 2초 뒤 /auth/login 리다이렉트
+- src/routes/auth/login/+page.svelte: modalInitialMode $state 추가 + PC/모바일 "비밀번호
+  찾기" 버튼 → 'reset-pw' 모드로 SignUpModal 열기 + SignUpModal에 initialMode prop 연결
+
+DB 변경: 없음 (phone_otps 기존 테이블 재사용, Migration #418 이미 Stage 적용됨)
+npm run check: 신규 에러 0건 (기존 vite.config.ts 에러 1건만 — 무관)
+git commit: Stephen 직접 실행 대기
+
+GATE C 확인 항목:
+- [x] 서버 키(SUPABASE_SERVICE_ROLE_KEY)가 $env/static/private에서만 import?
+- [x] find-email 엔드포인트가 session 필수 체크(anon 포함)?
+- [x] OTP verified_at 마킹으로 재사용 차단?
+- [x] maskEmail이 로컬 파트가 2자 이하일 때도 안전하게 처리?
+- [x] reset-password 페이지가 supabase.auth.updateUser — 클라이언트 SDK 전용?
+- [x] Svelte 4 문법(on:event) 없음? (onclick/onsubmit 전용)
+- [x] $state(prop) 초기화 패턴 없음?
+```
+
+---
+
+## NOW — 🔴 CRITICAL: 수령/반납 방식 콤보 노출 매트릭스 결함 2건 수정 (2026-09-02, 이 세션)
+
+배경: Stephen이 출고/반납 방식 허용 매트릭스 스크린샷(크레이지배송 pickup→반납 전부 O,
+방문/무인함·퀵서비스 pickup→반납 크레이지배송만 X 나머지 O)을 첨부하며 "장바구니 대여옵션
+설정 중 수령/반납 방식 콤보버튼 UI 목록 노출 조건이 이 표대로 구현됐는지 테스트하면서 로직
+확인해달라"고 요청. 로컬 dev 서버(Stephen 직접 로그인)로 실기 테스트하며 코드 대조.
+
+**결함 1 — 반납leg 배송제외 조건이 'visit'로만 좁게 걸려있던 버그**
+`returnVisibleTabsFor(pickupMethod)`가 `pickupMethod === 'visit'`일 때만 배송(크레이지배송)을
+반납 목록에서 제외했음 — 표에서는 퀵서비스 pickup도 반납에서 배송이 X여야 하는데, 코드는
+퀵서비스일 때 이 제외를 전혀 적용하지 않아 O(허용)로 잘못 노출되고 있었음. **실기 확인**:
+수령=방문대여 → 반납 목록에 크레이지샷배송 정상 제외됨(표와 일치, 정상 동작 확인) — 단
+퀵서비스 케이스는 이 카트의 상품 구성상 퀵서비스 자체가 pickup 탭에 노출 안 돼 직접 재현은
+못했으나(→ 결함2로 원인 규명), 코드 조건문 자체가 문자열 하드코딩이라 정적으로 확정 가능한
+결함이었음.
+- **수정**: `src/routes/cart/+page.svelte` `returnVisibleTabsFor` — 조건을
+  `pickupMethod === 'visit'`에서 `!isDeliveryLocked(pickupMethod)`로 일반화(방문·무인함·
+  퀵서비스 전부 동일하게 반납배송 제외 적용). `RentalForm` snippet 주석도 함께 갱신.
+
+**결함 2 — 체크 해제(비선택)한 상품도 방식 교집합 계산에 계속 포함되던 버그**
+결함1을 퀵서비스 pickup으로 직접 재현하려다 발견 — `cartProductRows`(수령/반납 방식 탭의
+allowed_method_ids 교집합 계산 기준)가 `effectiveLineGroups`(카트에 존재하는 전체 상품군)를
+그대로 사용해, 사용자가 체크박스를 꺼서 "이번 제출에서 제외"한 상품도 계속 교집합에 남아있었음
+— `hasItems`/`datesSet`/`methodSelectionValid` 등 다른 파생값은 전부 `!it.deleted && it.checked`
+필터를 쓰는데 이 계산만 예외였음. 퀵서비스를 지원 안 하는 상품(Canon RF)이 체크 해제됐는데도
+계속 교집합을 오염시켜, 퀵서비스를 지원하는 다른 상품만 남겨도 퀵서비스 탭이 끝까지 안 뜨는
+현상으로 실기 확인.
+- **수정**: `cartProductRows` — `effectiveLineGroups` 직접 순회 대신, `itemsState.filter(it
+  => !it.deleted && it.checked)`로 좁힌 뒤 `groupsById`로 그룹 조회하도록 교체(다른 파생값과
+  동일 패턴 통일).
+
+**검증**: `svelte-check` 재실행(결함1·결함2 각각) → 신규 에러 0건.
+
+**실기 최종검증 완료(2026-09-02, Stephen 재로그인 후)** — Stephen이 첨부한 3×3 매트릭스
+전체를 실제 카트 화면으로 대조:
+| 수령(pickup) | 반납(return) 노출 | 결과 |
+|---|---|---|
+| 크레이지샷배송 대여 | 방문·크레이지배송·퀵배송 전부 O | ✅ 매트릭스 일치 |
+| 방문대여 | 크레이지배송만 X, 나머지 O | ✅ 매트릭스 일치 |
+| 퀵배송 대여 | 크레이지배송만 X, 나머지 O | ✅ 매트릭스 일치(결함2 수정으로 퀵배송이
+  수령 탭에 정상 노출된 것까지 포함해 확인) |
+
+결함2 수정도 실기로 직접 확인 — Canon RF(퀵배송 미지원) 체크 해제 후 "퀵배송 대여"가 수령
+방식 탭에 정상 노출됨. DB 변경 없음, git commit 미실행. **미해결 항목 없음.**
+
+### ✅ QA 검수 완료 (2026-09-02, sp3-qa-agent) — GATE E 통과
+
+- **CRITICAL/HIGH/MEDIUM/LOW 전부 0건**.
+- `isDeliveryLocked`가 `is_bulk_delivery` 컬럼 기반 데이터 판정이라 향후 CMS에 새 배송형
+  방식이 추가돼도 하드코딩 없이 자동 포함됨 확인. "요청 A"(수령=배송 시 반납 강제고정)와의
+  양립성도 코드로 재확인(수령이 배송이면 `returnVisibleTabsFor`가 무조건 전체 목록 반환).
+- `cartProductRows` 새 필터가 `hasItems`와 동일 조건식, `groupsById` 키 체계도
+  `itemsState[].id`와 정확히 일치 확인.
+- 상호작용 점검: 체크된 상품 0개일 때 전체노출로 폴백되는 것은 `canProceed`가 별도로
+  `hasItems`를 요구해 무해 — 의도된 동작으로 판단.
+- 정적분석 전부 재확인 통과(svelte-check·check-rpc-error-handling.mjs 신규이슈 0건).
+  cart 관련 테스트 5개 파일 중 4개 100% PASS, `deliveryCutoffHolidays.test.ts` 3건 실패는
+  스테일 픽스처 데이터(`public_holidays_date_country_key` 중복키) 문제로 **이번 diff와
+  무관한 기존 이슈**(휴무일 cutoff 로직, 방식노출 로직과 무관) — 별도 후속 처리 권장,
+  이번 건 블로킹 아님.
+- 로컬 dev 서버는 QA 세션 자체엔 로그인 접근 권한이 없어 코드 추적으로 갈음, Stephen의
+  실기 3케이스 확인 결과와 정합.
+- **후속 발견(같은 QA agent, 전체 스위트 백그라운드 실행 결과)**: 위 §71에서 1개로만 보고된
+  스테일 픽스처 실패가 전체 스위트 기준으로는 4개 파일·7건으로 확장 확인됨 —
+  `memberCodeCombo.test.ts`(회원코드 재발급) · `accountWithdrawalPhone.test.ts`(탈퇴
+  유예기간 휴대폰 충돌) · `contractSigningGate.test.ts`(묶음주문 계약서명 자동승인) ·
+  `deliveryCutoffHolidays.test.ts`(배송 마감 휴무일). 전부 `returnVisibleTabsFor`/
+  `cartProductRows`/`isDeliveryLocked`와 무관한 도메인이며, stage DB(ezyvffjvuwmtuhpxdjrw)에
+  남은 중복/오래된 테스트 픽스처 데이터(`duplicate key value violates unique constraint`,
+  `expected null not to be null`)가 원인으로 추정 — 이번 GATE E 판정 불변, 별도 태스크로
+  분리 등록(`task_4b99bcca`).
+
+**결론**: 블로킹 이슈 0건, git 커밋 진행 가능. 커밋은 Stephen 직접 실행.
+
+---
+
+## NOW — 🔴 CRITICAL: 배송방식 선택 시 "예약신청완료" 영구 비활성 결함 수정 + Toss 결제확정 RPC 실패 관리자알림 추가 (2026-09-02, 이 세션)
+
+배경: 직전 세션(또는 다른 경로)에서 진행된 "예약신청완료 버튼 비활성" 조사 결과를 Stephen이
+붙여넣고 "원인이 해소됐는지 확인"을 요청 — 코드 직접 대조 결과 **미해소**로 확인, 이어서
+Stephen이 "둘 다 지금 고쳐줘"로 즉시 수정 지시 + 스크린샷(경고 토스트) 및 "4일은 결제되는데
+1일(12시간)은 안 됨, 재고 문제 아닌지" 추가 질문.
+
+**작업 중 환경 이슈**: 파일시스템 접근이 일시적으로 `EPERM`(Read/Bash 전부)으로 막혔다가
+Stephen이 "다시 시도해줘"로 재개 지시 후 정상 복구됨 — 코드 문제 아님, 기록만 남김.
+
+**조사 결과(질문 답변)**:
+1. 스크린샷의 "대여예약정보를 모두 확인해 주세요" 경고 토스트는 `cart/+page.svelte:575`
+   `hasItems && !datesSet` 조건과 정확히 일치 — **동일한 datesSet 미충족이 원인** 확인.
+2. "4일 vs 12시간" 차이는 **재고 문제 아님**. 실제 원인은 담기 경로 차이로 추정:
+   - 상품상세 `CalendarTimePicker.svelte`는 시간선택 기본값(시작 12:00/종료 13:00)이 항상
+     잡혀있고 배송방식이어도 시간 UI를 숨기지 않음(시간숨김은 **장바구니 화면에만** 있음).
+   - 반면 "예약신청" 버튼은 날짜를 전혀 안 골라도 항상 눌리는 draft 경로(이전 세션 항목 9
+     인접 발견)라, 이 경로로 담으면 날짜·시간 전부 공백 상태로 시작.
+   - 장바구니에서 이 공백 상태 아이템에 배송방식을 고르면 시간입력 버튼 자체가 사라져
+     채울 방법이 영구히 없어짐 — 기간 길이(4일/12시간)가 원인이 아니라 어느 경로로
+     담았는지가 원인이었을 가능성이 높음.
+
+**수정 1 — `src/routes/cart/+page.svelte`**: 배송(is_bulk_delivery) 방식 선택 시
+`bulkTime`/`bulkReturnTime`이 비어있으면 상품상세 `CalendarTimePicker.svelte`가 이미 쓰는
+기존 기본값(시작 12:00/종료 13:00, `startHour=$bindable(12)`·`endHour=$bindable(13)`)을
+그대로 재사용해 자동 채움 — 새 관례를 만들지 않고 기존에 이미 승인된 기본값만 재사용.
+2곳 적용: ① `bulkHandleMethod`(사용자가 화면에서 직접 배송방식을 고르는 시점) ②
+패널 최초 오픈 시딩 `$effect`(서버에 이미 배송방식으로 저장된 상태로 페이지 재진입하는
+경우 — 여기선 첫 상품의 기존 저장값으로 우선 시딩 후, 그래도 비어있으면 동일 기본값 적용).
+
+**수정 2 — `src/routes/contract/[token]/pay-result/+page.server.ts`**: Toss 결제승인은
+성공했는데 `confirm_order_payment_and_update_reservations` RPC가 실패하는 분기(이전
+"22건 RPC 에러처리" 작업에서 상세 로그만 추가해뒀던 지점)에 관리자 알림(fail-soft)을
+추가 — `api/cms/reservations/[id]/payment/+server.ts`의 환불실패 알림과 동일 패턴·동일
+이벤트키(`payment_completed`) 재사용, `sendPushToAdmins` 동적 import + try/catch. 로그만
+있으면 30분 HOLD 자동만료까지 아무도 인지 못한 채 방치될 수 있어(결제완료+예약미확정),
+관리자가 즉시 알아채도록 함.
+
+**검증**: `svelte-check` 재실행 → 신규 에러 0건(기존 `vite.config.ts` 무관 에러 1건 외
+동일). `check-rpc-error-handling.mjs` → VIOLATION 0건. DB 변경 없음. **실서버 시각
+재검증 미실행** — Claude Browser 승인은 이전 진단 1건에 한정. git commit 미실행,
+Stephen 직접 실행 대기.
+
+**미해결**: 배포 후 실서버에서 (a) 배송방식 선택 시 시간 자동입력 → 예약신청완료 버튼
+정상 활성화 (b) 12시간(당일) + 배송방식 조합의 실제 요금이 12:00~13:00 기본값 기준으로
+올바른 금액대(반일/half 요율)로 계산되는지 (c) Toss confirm RPC를 의도적으로 실패시켜
+관리자 알림이 실제 수신되는지 — 3가지 재확인 필요.
+
+### 🔍 후속 재점검 (2026-09-02, 같은 세션)
+
+Stephen 요청 — "고객 계정으로 대여설정 '단건(12시간 내외)' 설정 시 총 대여요금 자동연산과
+'예약신청완료' 버튼 실행이 가능해진 건지" 재점검.
+
+- **코드 추적 재검증**: `datesSet`(시간 자동채움 12:00/13:00으로 4개 필드 전부 충족) ·
+  요금계산(60분 차이 → 720분 이하 반일요율 정상 분류, 0원 아님) · `methodSelectionValid`
+  (leg-aware라 배송이 pickup 유효목록에 항상 포함) · 체크아웃 제출 시 `it.rentalTime`/
+  `it.returnTime` 값이 `promote_draft_reservation`·`saveShipmentMethod`·
+  `set_reservation_duration`까지 끊김없이 전달되는지 — **전부 로직상 정상 확인**.
+- **로컬 dev 서버 실제 화면 재검증은 로그인 벽에서 중단** → **Stephen이 직접 로그인 후
+  "로그인해서 장바구니에 들어왔어" 확인 → 실기 검증 완료(2026-09-02, 같은 세션)**:
+  단건(Canon RF 24-70mm F2.8L) + 크레이지샷배송 대여 + 수령일=반납일=2026.09.09(당일) 시나리오로
+  끝까지 확인 — "12:00 수령" 시간 자동입력 ✅ · "총 대여기간 1일" 정상표시 ✅ ·
+  대여요금 50,000원(12시간 요율 정상, 0원 아님) ✅ · 합계 58,000원 ✅ · **"예약신청완료"
+  버튼 활성화(진한 남색, 클릭 가능) ✅**. 실제 제출(예약 생성)까지는 진행하지 않음(Stephen
+  선택 대기 중 다음 항목으로 넘어감).
+  - 부가 확인 1: 초기 테스트에서 카트에 2개 그룹이 체크된 채로 봐서 "총 대여기간 2일"이
+    나와 신규버그로 의심했으나, `otTotalDays`가 체크된 전체 그룹의 일수를 **합산**하는
+    값(1일+1일=2일)임을 코드로 확인 — 단건으로 좁히니 정확히 "1일" 확인, 버그 아님.
+  - 부가 확인 2: "동의" 체크박스는 CMS 등록 필수동의 항목이 있으면 모달 안 개별 항목을
+    전부 체크해야 활성화되는 기존 설계(이번 테스트 계정엔 1개 항목 등록돼 있었음) —
+    정상 동작.
+
+### ✅ QA 검수 완료 (2026-09-02, sp3-qa-agent) — 조건부 통과
+
+- **원 CRITICAL 결함(배송방식 선택 시 예약신청완료 영구비활성) 해소**: ✅ 코드추적 +
+  이후 Stephen 실기검증(위 항목)으로 이중 확인.
+- **CRITICAL/HIGH**: 0건.
+- **MEDIUM 1건 — Stephen 확인 필요**: 시딩 `$effect`의 신규 분기(`isDeliveryLocked(첫
+  상품 저장방식)`일 때 `applyBulkToItems()` 즉시 호출)가, 사용자가 통합설정 패널을 건드리기도
+  전에 **페이지를 여는 것만으로 다른 카트 아이템(2번째 상품 이후)의 수령방식·시간까지
+  1번째 상품 값으로 강제 동기화**함 — 기존에는 이 강제동기화가 사용자가 직접 패널을
+  조작할 때만 발생했는데, 이번 수정으로 마운트 시점에도 트리거되는 새 경로가 생김.
+  "체크아웃 통합 단일 정책"(2026-08-03 확정) 방향과는 일치하나, 이 마운트-시점 자동실행은
+  이번 수정이 만든 부수효과라 Stephen이 명시적으로 인지·수용했는지 확인 권장(차단 사유는
+  아님 — 원 신고 결함보다 영향범위가 훨씬 좁음).
+- **LOW 2건**: ① 상품에 12h 가격정책이 없으면 서버 RPC는 0원 처리하는데 클라이언트
+  미리보기는 24h가의 60% 추정치를 보여주는 기존 불일치(이번 diff가 만든 버그 아님, 이번
+  수정으로 "배송+당일" 조합이 실제로 결제에 도달 가능해지며 새로 노출 가능해짐 — 별도
+  후속 티켓 권장) ② `pay-result`의 동적 import가 이미 같은 파일에 있는 정적 import와
+  중복(기능엔 무해, 스타일 정리 권장).
+- **정적분석 독립 재실행**: svelte-check 신규에러 0건(vite.config.ts 무관 에러 1건만 재확인),
+  check-rpc-error-handling.mjs VIOLATION 0건, console.log/any 0건 — 세션 자체 보고와 일치.
+- **테스트**: cart 관련 5개 파일 98/98 PASS, 회귀 없음.
+
+**결론**: GATE E 조건부 통과 — git commit 전 §MEDIUM 1건만 Stephen 확인 권장(차단 아님).
+
+### ✅ 후속 수정 완료 — MEDIUM 1건(마운트 시 타상품 강제동기화) 즉시 차단 (2026-09-02, 같은 세션)
+
+Stephen 확정 — "확인한 부수효과는 '통합 대여 설정' 적용 이전의 '상품 건별 대여옵션 설정'
+기능 일부가 보이지 않게 작동하는 증상이니 분명한 오류, 막을 것. 단 그 기능을 추후 복원할 수
+있도록 로직 자체(데이터 구조)는 삭제하지 말고 작동(브로드캐스트)만 차단."
+
+**수정**: `src/routes/cart/+page.svelte` 시딩 `$effect`(310~336행 부근) — 배송방식 자동채움
+분기에서 전체 아이템에 브로드캐스트하던 `applyBulkToItems()` 호출을 제거하고,
+`updateItem(first.id, { rentalTime: bulkTime, returnTime: bulkReturnTime })`로 **첫 상품
+자기 자신에게만** 패치하도록 축소. `CartItemUiState`의 개별 필드(`rentalTime`·`returnTime`·
+`opts` 등)나 `updateItem()` 자체는 전혀 건드리지 않음 — "상품 건별 대여옵션 설정" 데이터
+구조·하부 로직은 그대로 보존, 오직 마운트 시점의 전체-브로드캐스트 트리거 1곳만 차단.
+`bulkHandleMethod` 등 사용자가 통합설정 패널을 직접 조작할 때 발생하는 기존
+`applyBulkToItems()` 호출(2026-08-03 확정 정책)은 전부 무변경 유지.
+
+**검증**: `svelte-check` 재실행 → 신규 에러 0건. `grep applyBulkToItems()`로 시딩 effect
+안에 더 이상 실호출이 없음(주석만 남음) 확인. 실기 재검증은 이 계정의 현재 저장값이 이미
+전부 `방문대여`(delivery로 저장된 적 없음)라 "마운트 시 타상품 덮어쓰기" 시나리오를
+DB단에서 재현할 조건 자체가 없어 스킵 — 순수 코드 추적으로 갈음(변경 자체가 브로드캐스트
+호출 1줄 제거+단일 아이템 patch로 대체하는 기계적 수정이라 로직 위험 낮음). DB 변경 없음.
+git commit 미실행.
+
+### ✅ QA 검수 완료 (2026-09-02, sp3-qa-agent) — GATE E 통과
+
+- **CRITICAL/HIGH/MEDIUM/LOW 전부 0건** — 부수효과 제거 확인(시딩 effect에 `applyBulkToItems()`
+  실호출 없음, `updateItem`은 대상 id만 정확히 갱신), `first` 참조가 재할당 없이 동일 객체를
+  가리켜 판정 대상과 patch 대상이 어긋날 여지 없음, `bulkOpts` 시딩은 표시용일 뿐 다른
+  자동동기화 경로 없음(모든 `applyBulkToItems()` 호출은 12개 `bulkHandle*` 사용자조작
+  트리거뿐), `svelte-check` 신규에러 0건, `git diff` 대조로 변경범위가 주장한 두 지점과
+  정확히 일치(console.log/any/Svelte4 문법 신규없음) — 전부 확인.
+- 실기 재현 스킵 판단도 타당함으로 확인(대안은 stage DB 직접조작뿐이라 스코프 밖 인정).
+
+**결론**: 블로킹 이슈 0건, git 커밋 진행 가능. 커밋은 Stephen 직접 실행.
+
+---
+
 ## NOW — 🔴 CRITICAL: restrict_return_delivery 토글 leg-aware 재구현 — "배송대여 누락" 실사용 결함 수정 (2026-09-01, 이 세션)
 
 배경: Stephen 리포트 — "장바구니에 상품 담기 시 배송대여 옵션이 누락상태(fxlion-nano-two-
@@ -30128,5 +30515,91 @@ Production에 등록하면 실카드 결제 자체가 Toss 측에서 거부됨 �
 
 GATE C: CRITICAL — 원인 진단 완료, 복원 조치는 Stephen의 시크릿 입력이 필요해 이 세션이
 대행 불가. git 관련 조치 없음(이번 진단은 코드 변경 없음, TASK.md 기록만).
+
+---
+
+## NOW — 🔴 CRITICAL: `/auth/login` 로그인 실패 — 이메일 미trim 전송 버그 (2026-09-02) — ✅ 완료
+
+[CONTEXT BRIDGE]
+plan_source: Stephen 실사용 중 제보 — "실서버 사용자단에서 로그인 안돼!!" (Production
+결제 테스트 계정으로 재현), 이후 로컬에서도 동일 계정으로 로그인 시도 시 콘솔에
+`POST .../auth/v1/token?grant_type=password 400 (Bad Request)` 확인.
+
+### 진단 경위(코드 수정 없이 확인만, Stage/Production DB 직접 조회)
+1. 로컬(Stage, ezyvffjvuwmtuhpxdjrw) 400 — 이 테스트 계정이 Production에서만 생성돼
+   Stage `auth.users`에 아예 존재하지 않음(0건) 확인 — Stage/Production은 완전히 분리된
+   사용자 풀이라 이건 버그 아님, 정상 동작.
+2. Production(vnbpmvxruyciuuaermyh) 400 — `auth.users` 직접 조회로 계정 자체는 건강함을
+   확인(email_confirmed_at 있음·banned_until null·비밀번호 해시 존재·이메일 중복 없음·
+   과거 성공 로그인 기록(last_sign_in_at) 있음).
+3. Stephen이 브라우저 Network 탭에서 정확한 에러 문구 `Invalid login credentials` 확인.
+4. 비밀번호 자체가 틀렸을 가능성을 배제하기 위해 저장된 bcrypt 해시를 실제 비밀번호와
+   Postgres `crypt()` 함수로 직접 대조(로그인 폼을 거치지 않는 순수 SQL 비교) →
+   **완전 일치 확인**(`matches_exact: true`) — 비밀번호는 100% 정확함이 확정됨.
+5. Supabase가 "비밀번호 틀림"과 "그 이메일 계정 없음"을 동일한 `Invalid login
+   credentials` 메시지로 반환하는 설계(이메일 존재 여부 비노출 목적)라는 점에 착안,
+   비밀번호가 확정적으로 맞으므로 남은 원인은 이메일 쪽으로 좁힘.
+6. 코드 재검토 결과 확정: `src/routes/auth/login/+page.svelte`의 `isSignInMode`
+   판정(Sign In/Sign Up 버튼 전환)에는 `email.trim()`을 쓰면서, 실제
+   `performSignIn(email, password)` 호출에는 **트림되지 않은 원본 `email`**을 그대로
+   전송하는 불일치 발견 — 이메일을 채팅/문서에서 복사할 때 섞여 들어간 공백·개행이 있으면
+   화면상 정상으로 보여도 실제 전송값이 저장된 이메일과 달라 계정을 못 찾는 정확한
+   실패 패턴과 일치.
+
+### 수정 (Stephen 승인 후 적용)
+`src/routes/auth/login/+page.svelte` `handleSignIn()` 1곳만 수정 — `performSignIn(email,
+password)` → `performSignIn(email.trim(), password)`. 비밀번호는 트림하지 않음(공백이
+실제 비밀번호의 일부일 수 있으므로 정책상 트림 금지).
+
+검증: `npm run check` 신규 에러 0건(기존 vite.config.ts 무관 에러 1건만 잔존). 순수 로직
+변경(공백 제거)이라 시각적 회귀 없음 — 실제 로그인 재현은 비밀번호 입력이 필요해 이
+세션이 대행하지 않음(Prohibited action 원칙).
+
+### 후속 — Production 정상 로그인 확인, Stage 400은 별개 원인(계정 미존재)으로 확정
+
+Stephen 재현 결과: **Production은 정상 로그인 성공**(위 수정이 실제로 효과 있었음을 실사용
+확인) — 단, Stage(로컬)에서는 동일 계정으로 여전히 400. 재조회 결과 이 계정이 Stage
+`auth.users`에 애초에 존재하지 않음(0건, 기존에 이미 한 번 확인했던 사실과 동일) — Stage·
+Production은 완전히 분리된 사용자 풀이라 **이건 코드 버그가 아니라 정상 동작**임을
+재확인·설명.
+
+### 후속 — Stage에 동일 테스트 계정 신설(Stephen 지시, 코드 수정 아님)
+
+Supabase Admin API(`auth.admin.createUser`, `email_confirm: true`)로 Stage
+(ezyvffjvuwmtuhpxdjrw)에 Production과 동일한 이메일·비밀번호(`payment-test-1788323177844@
+crazyshot-test.invalid` / `PayTest2026!`)의 계정을 신규 생성. 프로젝트 루트에 임시 스크립트
+(`.tmp-create-stage-user.mjs`)를 만들어 실행 직후 즉시 삭제(저장소에 남지 않음, git status로
+확인). 생성 후 실측 검증: `email_confirmed_at` 세팅됨·`banned_until` null·bcrypt
+`crypt()` 대조로 비밀번호 100% 일치 확인·`user_profiles` 트리거로 프로필 행도 정상 자동
+생성(member_code 발급 확인). Stage DB에 대한 순수 데이터 추가일 뿐 앱 코드 변경 아님.
+
+GATE C: CRITICAL(인증 도메인) — 원인 진단·수정 완료, Production 실사용 검증 완료, Stage
+테스트 계정 별도 신설 완료. git commit은 Stephen 직접 실행(코드 변경은 login/+page.svelte
+1개 파일뿐 — 계정 생성은 git 대상 아님).
+
+### GATE E 독립검수(2026-09-02, `@sp3-qa-agent`) — 조건부 통과 + 동일 버그 클래스 HIGH 발견
+
+**판정: 조건부 통과 ✅** — 이번 수정(`login/+page.svelte` `email.trim()` 1줄)은 정확함,
+Frozen 파일 미해당 확인(`supabase.ts`/`hooks.server.ts`/`auth.ts` 스토어 3개 무변경 재확인),
+`npm run check` 신규 에러 0건, 요청범위 준수(이 수정 자체는 1개 파일·1줄로 정확히 국한).
+이 diff는 그대로 커밋 가능.
+
+**⚠️ HIGH 신규 발견(이 세션이 직접 재확인 완료)**: `src/lib/components/auth/SignUpModal.svelte:98`
+의 로그인 모드(`performSignIn(loginEmail, loginPassword)`)가 **동일한 미trim 버그를 그대로
+갖고 있음** — `loginEmail`(23행) 트림 없이 그대로 전송. 이 로그인 모드는 죽은 코드가 아니라
+`src/routes/products/[id]/+page.svelte:1127`(`<SignUpModal initialMode="login" .../>`)에서
+실제로 쓰이는 경로 — 상품상세 화면에서 로그인이 필요할 때 뜨는 모달이 이 미trim 경로를 그대로
+탄다. 즉 이번에 고친 "이메일 미trim 로그인 실패" 문제 클래스가 `/auth/login`은 닫혔지만
+이 진입점에서는 여전히 열려 있음. (참고 LOW: 같은 파일 219행 회원가입 이메일도 미trim이나
+정규식 앵커(`^...$`)로 앞뒤 공백 시 가입 자체가 막혀 실질 위험 낮음.)
+
+**참고(비블로킹)**: `login/+page.svelte`에 이번 태스크와 무관한 다른 uncommitted 변경
+(아이디찾기·비밀번호재설정 모달, SNS "오픈 예정" 토스트, 이메일 한글입력 필터 등)이 이미
+섞여 있음을 QA가 git diff로 확인 — 이번 CRITICAL 수정 자체의 결함은 아니나, 커밋 시
+`login/+page.svelte`를 통째로 add하면 그 변경들도 함께 커밋될 수 있어 Stephen이 그 변경들의
+출처·완료 여부를 먼저 확인 후 커밋 권장.
+
+**다음 조치**: SignUpModal.svelte 동일 버그 수정 여부는 Stephen 확인 후 별도 진행(이 세션
+범위 밖이라 자동 확장하지 않음).
 
 

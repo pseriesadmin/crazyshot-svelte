@@ -486,8 +486,29 @@ describe('[TDD] upsert_manual_holiday / delete_manual_holiday — 임시 휴무�
 // ── 4. loadCourierClosedDates — /cart 캘린더 폐쇄일 계산 로직 ────────────────
 
 describe('[TDD] loadCourierClosedDates — 마스터 토글·고정/임시 휴무일 조합 판정', () => {
+  // ⛔ 2026-09-02 실패 원인 재규명(오인 정정) — 이 describe 블록은 240~248·500 같은 짧은
+  // 오프셋을 써왔는데, 실행 시점 기준 그 날짜들이 실제로 sync_national_holidays가 이미
+  // 동기화해둔 **진짜** 법정공휴일(예: 노동절·대체공휴일(노동절)·어린이날, 2026-08-24
+  // 동기화됨)과 우연히 겹쳐 `insertHoliday(..., 'national')`이 UNIQUE(date, country) 위반으로
+  // 실패했다 — "이전 테스트 실행의 정리 안 된 픽스처"가 원인이라는 최초 진단은 오인이었음
+  // (misidentifications.md 기록). 진짜 원인은 이 테스트 자체가 실제 공휴일 동기화 커버리지
+  // (오늘부터 최대 약 490일 이내, holidaySync.ts "올해+내년" 범위)와 겹치는 날짜를 그대로
+  // 썼다는 것 — delivery_cutoff_settings CMS 토글 자체나 loadCourierClosedDates 로직에는
+  // 결함이 없다. sync_national_holidays describe 블록이 이미 쓰고 있는 완전 격리 전략
+  // (syncTestRangeArgs, 오늘+1000~1100일)과 동일한 원리로, 이 블록도 실동기화 커버리지
+  // 밖(오늘+1200일 이후, syncTestRangeArgs의 1000~1100 범위와도 안 겹치는 대역)으로 이동.
+  const OFFSET_SKIP = 1200;
+  const OFFSET_NATIONAL_1 = 1203;
+  const OFFSET_MANUAL_1 = 1206;
+  const OFFSET_NATIONAL_2 = 1209;
+  const OFFSET_MANUAL_2 = 1212;
+  const OFFSET_NATIONAL_3 = 1215;
+  const OFFSET_MANUAL_3 = 1218;
+  const OFFSET_NATIONAL_4 = 1221;
+  const OFFSET_MANUAL_4 = 1224;
+
   it('마스터 토글 OFF면 휴무일 데이터가 있어도 완전히 스킵하고 빈 배열을 반환한다', async () => {
-    const date = nonSundayDaysFromNow(240);
+    const date = nonSundayDaysFromNow(OFFSET_SKIP);
     await insertHoliday(date, '스킵되어야 할 국경일', 'national');
     await setCutoffSettings(false, true, true);
 
@@ -496,8 +517,8 @@ describe('[TDD] loadCourierClosedDates — 마스터 토글·고정/임시 휴�
   });
 
   it('마스터+고정휴무일 ON, 임시휴무일 OFF면 일요일·national만 포함하고 manual은 제외한다', async () => {
-    const nationalDate = nonSundayDaysFromNow(241);
-    const manualDate = nonSundayDaysFromNow(242);
+    const nationalDate = nonSundayDaysFromNow(OFFSET_NATIONAL_1);
+    const manualDate = nonSundayDaysFromNow(OFFSET_MANUAL_1);
     await insertHoliday(nationalDate, '국경일', 'national');
     await insertHoliday(manualDate, '임시휴무', 'manual');
     await setCutoffSettings(true, true, false);
@@ -510,11 +531,8 @@ describe('[TDD] loadCourierClosedDates — 마스터 토글·고정/임시 휴�
   });
 
   it('마스터+임시휴무일 ON, 고정휴무일 OFF면 manual만 포함하고 national·일요일은 제외한다', async () => {
-    // 오프셋을 크게 벌려 두 가지 우연한 충돌을 모두 방지:
-    // ① nonSundayDaysFromNow의 일요일 +1일 보정이 두 날짜를 같은 값으로 만드는 충돌
-    // ② sync_national_holidays로 이미 동기화된 실제 법정공휴일(최대 대략 490일 이내)과의 충돌
-    const nationalDate = nonSundayDaysFromNow(243);
-    const manualDate = nonSundayDaysFromNow(500);
+    const nationalDate = nonSundayDaysFromNow(OFFSET_NATIONAL_2);
+    const manualDate = nonSundayDaysFromNow(OFFSET_MANUAL_2);
     await insertHoliday(nationalDate, '국경일', 'national');
     await insertHoliday(manualDate, '임시휴무', 'manual');
     await setCutoffSettings(true, false, true);
@@ -527,8 +545,8 @@ describe('[TDD] loadCourierClosedDates — 마스터 토글·고정/임시 휴�
   });
 
   it('마스터+고정+임시휴무일 전부 ON이면 national·manual·일요일 전부 포함된다', async () => {
-    const nationalDate = nonSundayDaysFromNow(245);
-    const manualDate = nonSundayDaysFromNow(246);
+    const nationalDate = nonSundayDaysFromNow(OFFSET_NATIONAL_3);
+    const manualDate = nonSundayDaysFromNow(OFFSET_MANUAL_3);
     await insertHoliday(nationalDate, '국경일', 'national');
     await insertHoliday(manualDate, '임시휴무', 'manual');
     await setCutoffSettings(true, true, true);
@@ -543,8 +561,8 @@ describe('[TDD] loadCourierClosedDates — 마스터 토글·고정/임시 휴�
   // 2026-08-25 — CMS에서 등록한 사유(name)가 courierClosedDates에 실려 클라이언트 경고
   // 토스트까지 전달되어야 하는데, 서버 select에서 name 컬럼이 빠져 유실되던 결함 재발 방지
   it('국경일·임시휴무 각각 CMS에 등록한 사유(name)가 reason 필드에 그대로 실린다', async () => {
-    const nationalDate = nonSundayDaysFromNow(247);
-    const manualDate = nonSundayDaysFromNow(248);
+    const nationalDate = nonSundayDaysFromNow(OFFSET_NATIONAL_4);
+    const manualDate = nonSundayDaysFromNow(OFFSET_MANUAL_4);
     await insertHoliday(nationalDate, '추석 연휴', 'national');
     await insertHoliday(manualDate, '창립기념일', 'manual');
     await setCutoffSettings(true, true, true);
