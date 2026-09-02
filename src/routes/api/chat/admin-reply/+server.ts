@@ -90,6 +90,32 @@ export const POST: RequestHandler = async ({ request, locals }) => {
   // §E SYN-8: 동의어 학습 — 관리자가 미리답변을 선택해 실제 발신한 경우에만 fire-and-forget
   if (cannedResponseId) {
     recordSynonymLearning(cannedResponseId, sessionId).catch(() => {})
+  } else {
+    // NLSearch A안(2026-09-02): 캔드매칭 없이 관리자가 직접 입력한 자유텍스트 답변 —
+    // 직전 고객 메시지와 짝지어 빠른답변 후보로 기록(fire-and-forget). Anthropic 자유응답이
+    // 임시 차단된 동안, 관리자가 수기로 처리하는 답변을 그대로 흘려보내지 않고 /cms/chat
+    // QnA탭 "빠른답변 후보"에서 검토·승격할 수 있게 함(nlsearch.md §4-4).
+    ;(async () => {
+      const { data: lastCustomerMsg } = await admin
+        .from('chat_messages')
+        .select('id, content')
+        .eq('session_id', sessionId)
+        .eq('sender_type', 'user')
+        .order('created_at', { ascending: false })
+        .limit(1)
+        .maybeSingle()
+
+      if (!lastCustomerMsg?.content) return
+
+      await admin.rpc('record_chat_reply_candidate', {
+        p_session_id: sessionId,
+        p_customer_message_id: lastCustomerMsg.id,
+        p_customer_message: lastCustomerMsg.content,
+        p_admin_message_id: message.id,
+        p_admin_reply: content,
+        p_admin_id: session.user.id,
+      })
+    })().catch(() => {})
   }
 
   // §C-3: 관리자 메시지 이중언어 병기 패턴 학습 훅 (fire-and-forget)

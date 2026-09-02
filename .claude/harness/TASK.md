@@ -1530,6 +1530,26 @@ Stephen이 "본 프로젝트 전역의 세션별 커밋 미실행 코드파일�
 바뀐 순수 코스메틱 변경이라 로직 영향 없음, 재확인 완료). `npx tsc --noEmit` — 기존
 vite.config.ts 에러 1건만 유지. git add/commit 미실행.
 
+### ✅ Production 마이그레이션 428·429·430 적용 완료 (2026-09-03, Stephen "production 마이그레이션 428·429·430 적용해줘" 승인)
+
+crazyshot(vnbpmvxruyciuuaermyh)에 정정된 순서(428→429→430) 그대로 적용 — production은 이 3개
+전부 최초 적용(Stage에만 있던 상태에서 처음 반영). 적용 직후 직접 검증:
+- `pg_proc.proacl` 재조회 — 6개 함수 전부 `postgres=X/postgres, service_role=X/postgres`만
+  존재, anon/authenticated 권한 없음 확인.
+- `pg_get_functiondef`로 `cms_add_reservation_product_unit` 본문에 429의 최종 메시지
+  (`예약이 만료되어...`/`이미 결제가 진행되어...`)가 정확히 반영됐는지 확인 — 구버전 통합
+  메시지가 아닌 최신 로직이 적용됨을 확인.
+
+Production 대상으로는 TDD 스위트(`reservationProductEdit.test.ts`)를 실행하지 않음 —
+그 테스트는 항상 Stage(ezyvffjvuwmtuhpxdjrw)만 대상으로 설계돼 있고, 실제 예약 데이터가
+있는 production에 픽스처성 테스트 데이터를 만들 이유가 없어 의도적으로 제외. Stage에서
+이미 31/31 GREEN 검증된 것과 완전히 동일한 함수 본문이 그대로 적용됐음을 위 두 조회로
+대체 확인.
+
+git add/commit 미실행 — Stephen 직접 실행 대기(코드 커밋과 DB 마이그레이션 적용은 서로
+다른 별도 액션 — core-rules.md/service-operations.md §9 배포 순서 사고 참고, 이번엔 둘 다
+정상 순서로 진행 중: DB 적용 → 이후 커밋 예정).
+
 ---
 
 

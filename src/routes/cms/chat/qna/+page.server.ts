@@ -20,6 +20,22 @@ export interface SynonymCandidateRow {
   group_id: string
 }
 
+// NLSearch A안(2026-09-02): 빠른답변 후보 (Migration #422)
+export interface ReplyCandidateRow {
+  id: string
+  session_id: string
+  customer_message: string
+  admin_reply: string
+  created_at: string
+}
+
+// NLSearch B안(2026-09-03): 0건 검색어 갭 (Migration #432)
+export interface ZeroResultTermRow {
+  query: string
+  occurrence_count: number
+  last_searched_at: string
+}
+
 export interface CannedResponseRow {
   id: string
   title: string
@@ -59,7 +75,7 @@ export const load: PageServerLoad = async ({ parent, url }) => {
     synonym_groups: { canonical_term: string } | null
   }
 
-  const [itemsResult, autoReplyResult, candidatesResult] = await Promise.all([
+  const [itemsResult, autoReplyResult, candidatesResult, replyCandidatesResult, zeroResultResult] = await Promise.all([
     admin
       .from('canned_responses')
       .select('id, title, content, category, help_category, shortcut, match_keywords, usage_count, created_at, image_url, cta_label, cta_url')
@@ -71,13 +87,26 @@ export const load: PageServerLoad = async ({ parent, url }) => {
       .limit(1)
       .maybeSingle(),
     // §D-2: learned, seed 제외 — 관리자 검토 대상만 (cross_lingual_pattern, query_reformulation)
+    // NLSearch C안(2026-09-03): rejected는 목록에서 제외 — 거부된 후보는 조용히 사라짐
+    // (upsert_synonym_member가 rejected 상태를 영구 보존하므로 재관찰돼도 다시 안 나타남)
     admin
       .from('synonym_group_members')
       .select('id, term, source, status, occurrence_count, created_at, last_observed_at, group_id, synonym_groups!inner(canonical_term)')
       .in('source', ['cross_lingual_pattern', 'query_reformulation'])
+      .neq('status', 'rejected')
       .order('created_at', { ascending: false })
       .limit(200)
       .returns<RawCandidateRow[]>(),
+    // NLSearch A안(2026-09-02): 빠른답변 후보 — pending 상태만
+    admin
+      .from('chat_reply_candidates')
+      .select('id, session_id, customer_message, admin_reply, created_at')
+      .eq('status', 'pending')
+      .order('created_at', { ascending: false })
+      .limit(200)
+      .returns<ReplyCandidateRow[]>(),
+    // NLSearch B안(2026-09-03): 0건 검색어 갭 — 최근 30일, 빈도순 상위 50건
+    admin.rpc('get_zero_result_search_terms', { p_lookback_days: 30, p_limit: 50 }),
   ])
 
   const items = (itemsResult.error ? [] : (itemsResult.data ?? [])) as CannedResponseRow[]
@@ -100,6 +129,9 @@ export const load: PageServerLoad = async ({ parent, url }) => {
     canonical_term: r.synonym_groups?.canonical_term ?? '',
   }))
 
+  const replyCandidates = (replyCandidatesResult.error ? [] : (replyCandidatesResult.data ?? [])) as ReplyCandidateRow[]
+  const zeroResultTerms = (zeroResultResult.error ? [] : (zeroResultResult.data ?? [])) as ZeroResultTermRow[]
+
   return {
     items,
     selectedId,
@@ -108,11 +140,13 @@ export const load: PageServerLoad = async ({ parent, url }) => {
     autoReplySettingId: autoReplySetting?.id ?? null,
     cmsRole,
     synonymCandidates,
+    replyCandidates,
+    zeroResultTerms,
   }
 }
 
 export const actions: Actions = {
-  // manager 이상만 삭제 가능 — 같은 파일의 promoteCandidate/deleteCandidateMember와 역할
+  // manager 이상만 삭제 가능 — 같은 파일의 promoteCandidate/rejectCandidateMember와 역할
   // 경계 통일(CMS 전역 정밀검증 v3 STAGE 1 BOUNDARY-3, migration 331)
   delete: async ({ locals, request }) => {
     const cmsRole = await getCmsRoleForAction(locals)
@@ -155,8 +189,11 @@ export const actions: Actions = {
     return { success: true }
   },
 
-  // §D-2: 동의어 후보 삭제 (manager 이상)
-  deleteCandidateMember: async ({ locals, request }) => {
+  // NLSearch C안(2026-09-03): 동의어 후보 거부 (manager 이상) — 하드 삭제 대신 status='rejected'로
+  // 영구 보존. upsert_synonym_member(Migration #433)가 이 상태를 최우선 보존하므로 같은 오탐
+  // 후보가 재관찰돼도 다시 candidate/confirmed로 돌아오지 않는다(기존 cms_delete_synonym_candidate
+  // 하드삭제는 재학습 경로가 그 사실을 몰라 동일 후보가 계속 재등록되던 문제가 있었음).
+  rejectCandidateMember: async ({ locals, request }) => {
     const cmsRole = await getCmsRoleForAction(locals)
     if (!cmsRole) return fail(401, { error: '인증 필요' })
     if (!hasSettingsAccess(cmsRole)) return fail(403, { error: '권한 없음 (manager 이상 필요)' })
@@ -167,10 +204,67 @@ export const actions: Actions = {
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const db = locals.supabase as unknown as any
-    const { data, error } = await db.rpc('cms_delete_synonym_candidate', { p_id: id })
+    const { data, error } = await db.rpc('cms_reject_synonym_candidate', { p_id: id })
     if (error) return fail(500, { error: error.message })
     const result = data as { ok: boolean; error?: string } | null
-    if (!result?.ok) return fail(400, { error: result?.error ?? '삭제 실패' })
+    if (!result?.ok) return fail(400, { error: result?.error ?? '거부 실패' })
+    return { success: true }
+  },
+
+  // NLSearch A안(2026-09-02): 빠른답변 후보 승격 (manager 이상) — canned_responses 신규 생성
+  approveReplyCandidate: async ({ locals, request }) => {
+    const cmsRole = await getCmsRoleForAction(locals)
+    if (!cmsRole) return fail(401, { error: '인증 필요' })
+    if (!hasSettingsAccess(cmsRole)) return fail(403, { error: '권한 없음 (manager 이상 필요)' })
+
+    const formData = await request.formData()
+    const id = formData.get('id') as string | null
+    const title = (formData.get('title') as string | null)?.trim() ?? ''
+    const content = (formData.get('content') as string | null)?.trim() ?? ''
+    const category = (formData.get('category') as string | null) || null
+    const helpCategory = (formData.get('help_category') as string | null) ?? ''
+    const shortcut = (formData.get('shortcut') as string | null)?.trim() || null
+    const matchKeywordsRaw = (formData.get('match_keywords') as string | null) ?? ''
+    const matchKeywords = matchKeywordsRaw
+      .split(',')
+      .map((k) => k.trim())
+      .filter(Boolean)
+
+    if (!id) return fail(400, { error: 'id 필요' })
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const db = locals.supabase as unknown as any
+    const { data, error } = await db.rpc('cms_approve_chat_reply_candidate', {
+      p_id: id,
+      p_title: title,
+      p_content: content,
+      p_category: category,
+      p_help_category: helpCategory,
+      p_shortcut: shortcut,
+      p_match_keywords: matchKeywords,
+    })
+    if (error) return fail(500, { error: error.message })
+    const result = data as { ok: boolean; error?: string; canned_response_id?: string } | null
+    if (!result?.ok) return fail(400, { error: result?.error ?? '승격 실패' })
+    return { success: true }
+  },
+
+  // NLSearch A안(2026-09-02): 빠른답변 후보 거부 (manager 이상)
+  rejectReplyCandidate: async ({ locals, request }) => {
+    const cmsRole = await getCmsRoleForAction(locals)
+    if (!cmsRole) return fail(401, { error: '인증 필요' })
+    if (!hasSettingsAccess(cmsRole)) return fail(403, { error: '권한 없음 (manager 이상 필요)' })
+
+    const formData = await request.formData()
+    const id = formData.get('id') as string | null
+    if (!id) return fail(400, { error: 'id 필요' })
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const db = locals.supabase as unknown as any
+    const { data, error } = await db.rpc('cms_reject_chat_reply_candidate', { p_id: id })
+    if (error) return fail(500, { error: error.message })
+    const result = data as { ok: boolean; error?: string } | null
+    if (!result?.ok) return fail(400, { error: result?.error ?? '거부 실패' })
     return { success: true }
   },
 }

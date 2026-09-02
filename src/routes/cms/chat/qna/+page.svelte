@@ -7,16 +7,50 @@
   import CannedResponsePanel from '$lib/components/cms/CannedResponsePanel.svelte'
   import { csToast } from '$lib/utils/toast'
   import { CANNED_RESPONSE_CATEGORIES, getCategoryLabel } from '$lib/constants/cannedResponseCategories'
+  import { HELP_CATEGORIES } from '$lib/constants/helpCategories'
   import { hasSettingsAccess } from '$lib/utils/cmsPermissions'
   import type { PageData } from './$types'
-  import type { CannedResponseRow } from './+page.server'
+  import type { CannedResponseRow, ReplyCandidateRow } from './+page.server'
 
   interface Props { data: PageData }
   let { data }: Props = $props()
 
-  // 탭 상태 — 빠른답변(qna) | 동의어 후보(candidates)
-  type ActiveTab = 'qna' | 'candidates'
+  // 탭 상태 — 빠른답변(qna) | 동의어 후보(candidates) | 빠른답변 후보(replies, NLSearch A안)
+  // | 검색 갭(zeroResults, NLSearch B안)
+  type ActiveTab = 'qna' | 'candidates' | 'replies' | 'zeroResults'
   let activeTab = $state<ActiveTab>('qna')
+
+  // NLSearch A안(2026-09-02): 빠른답변 후보 승격 모달 상태
+  let approvingCandidate = $state<ReplyCandidateRow | null>(null)
+  let approveTitle    = $state('')
+  let approveContent  = $state('')
+  let approveCategory = $state<string | null>(null)
+  let approveHelpCategory = $state<string | null>(null)
+  let approveShortcut = $state('')
+  let approveKeywords = $state('')
+
+  function openApproveModal(row: ReplyCandidateRow): void {
+    approvingCandidate = row
+    approveTitle = ''
+    approveContent = row.admin_reply
+    approveCategory = null
+    approveHelpCategory = null
+    approveShortcut = ''
+    approveKeywords = ''
+  }
+
+  function closeApproveModal(): void {
+    approvingCandidate = null
+  }
+
+  // 포커스 트랩(QA 발견, 2026-09-03) — SignUpModal.svelte와 동일한 경량 패턴:
+  // 오버레이 자체에 role="dialog"+tabindex="-1"를 두고 Escape 키·바깥클릭으로 닫는다.
+  function handleApproveOverlayClick(e: MouseEvent): void {
+    if (e.target === e.currentTarget) closeApproveModal()
+  }
+  function handleApproveOverlayKeydown(e: KeyboardEvent): void {
+    if (e.key === 'Escape') closeApproveModal()
+  }
 
   // 로컬 UI 상태
   let showNew      = $state(false)
@@ -232,6 +266,20 @@
       aria-selected={activeTab === 'candidates'}
       onclick={() => { activeTab = 'candidates'; showNew = false }}
     >동의어 후보 <span class="tab-count">{data.synonymCandidates.length}</span></button>
+    <button
+      class="tab-nav-btn"
+      class:tab-active={activeTab === 'replies'}
+      role="tab"
+      aria-selected={activeTab === 'replies'}
+      onclick={() => { activeTab = 'replies'; showNew = false }}
+    >빠른답변 후보 <span class="tab-count">{data.replyCandidates.length}</span></button>
+    <button
+      class="tab-nav-btn"
+      class:tab-active={activeTab === 'zeroResults'}
+      role="tab"
+      aria-selected={activeTab === 'zeroResults'}
+      onclick={() => { activeTab = 'zeroResults'; showNew = false }}
+    >검색 갭 <span class="tab-count">{data.zeroResultTerms.length}</span></button>
   </div>
 
   {#if activeTab === 'qna'}
@@ -461,21 +509,21 @@
                     {/if}
                     <form
                       method="POST"
-                      action="?/deleteCandidateMember"
+                      action="?/rejectCandidateMember"
                       use:enhance={() => {
                         return async ({ result, update }) => {
                           if (result.type === 'success') {
-                            csToast.success(`"${row.term}" 삭제`)
+                            csToast.success(`"${row.term}" 거부 — 재학습으로도 다시 나타나지 않습니다`)
                             await invalidateAll()
                           } else {
-                            csToast.error('삭제 실패')
+                            csToast.error('거부 실패')
                           }
                           await update()
                         }
                       }}
                     >
                       <input type="hidden" name="id" value={row.id} />
-                      <button type="submit" class="act-del" title="후보 삭제" aria-label="삭제">✕</button>
+                      <button type="submit" class="act-del" title="후보 거부 (영구 — 재학습돼도 다시 안 나타남)" aria-label="거부">✕</button>
                     </form>
                   </td>
                 {/if}
@@ -488,8 +536,209 @@
   </div>
   {/if}
 
+  {#if activeTab === 'replies'}
+  <!-- NLSearch A안(2026-09-02): 빠른답변 후보 관리 탭 — 캔드매칭 실패 후 관리자가 직접
+       답한 (고객메시지, 관리자답변) 쌍을 검토해 빠른답변으로 승격 -->
+  <div class="cand-toolbar">
+    <div class="toolbar-left">
+      <h2 class="page-title">빠른답변 후보</h2>
+      <span class="count-badge">{data.replyCandidates.length}건</span>
+    </div>
+  </div>
+
+  <div class="cand-body">
+    {#if data.replyCandidates.length === 0}
+      <div class="cand-empty">
+        <p>아직 대기 중인 빠른답변 후보가 없습니다.</p>
+        <p class="cand-empty-sub">캔드매칭에 걸리지 않은 고객 메시지에 관리자가 직접(빠른답변 선택 없이) 자유텍스트로 답하면 자동으로 여기 쌓입니다.</p>
+      </div>
+    {:else}
+      <div class="cand-table-wrap">
+        <table class="cand-table">
+          <thead>
+            <tr>
+              <th>고객 메시지</th>
+              <th>관리자 답변</th>
+              <th>등록일</th>
+              {#if canManageCandidates}<th>액션</th>{/if}
+            </tr>
+          </thead>
+          <tbody>
+            {#each data.replyCandidates as row (row.id)}
+              <tr class="cand-row">
+                <td class="reply-cand-msg">{row.customer_message}</td>
+                <td class="reply-cand-msg">{row.admin_reply}</td>
+                <td class="cand-date">{formatDate(row.created_at)}</td>
+                {#if canManageCandidates}
+                  <td class="cand-actions">
+                    <button
+                      type="button"
+                      class="act-confirm-btn"
+                      onclick={() => openApproveModal(row)}
+                    >빠른답변으로 승격</button>
+                    <form
+                      method="POST"
+                      action="?/rejectReplyCandidate"
+                      use:enhance={() => {
+                        return async ({ result, update }) => {
+                          if (result.type === 'success') {
+                            csToast.success('후보 거부됨')
+                            await invalidateAll()
+                          } else {
+                            csToast.error('거부 실패')
+                          }
+                          await update()
+                        }
+                      }}
+                    >
+                      <input type="hidden" name="id" value={row.id} />
+                      <button type="submit" class="act-del" title="후보 거부" aria-label="거부">✕</button>
+                    </form>
+                  </td>
+                {/if}
+              </tr>
+            {/each}
+          </tbody>
+        </table>
+      </div>
+    {/if}
+  </div>
+  {/if}
+
+  {#if activeTab === 'zeroResults'}
+  <!-- NLSearch B안(2026-09-03): 0건 검색어 갭 — 최근 30일, 재검색 없이 그냥 이탈한 검색어 -->
+  <div class="cand-toolbar">
+    <div class="toolbar-left">
+      <h2 class="page-title">검색 갭 (0건 검색어)</h2>
+      <span class="count-badge">{data.zeroResultTerms.length}건</span>
+    </div>
+  </div>
+
+  <div class="cand-body">
+    {#if data.zeroResultTerms.length === 0}
+      <div class="cand-empty">
+        <p>최근 30일간 0건 검색어가 없습니다.</p>
+        <p class="cand-empty-sub">고객이 검색했지만 결과가 하나도 없었던 검색어가 여기 빈도순으로 쌓입니다. confirmed 동의어로 이미 해결된 검색어는 자동 제외됩니다.</p>
+      </div>
+    {:else}
+      <div class="cand-table-wrap">
+        <table class="cand-table">
+          <thead>
+            <tr>
+              <th>검색어</th>
+              <th>발생 횟수</th>
+              <th>최근 검색일</th>
+            </tr>
+          </thead>
+          <tbody>
+            {#each data.zeroResultTerms as row (row.query)}
+              <tr class="cand-row">
+                <td class="cand-term">{row.query}</td>
+                <td class="cand-count">{row.occurrence_count}</td>
+                <td class="cand-date">{formatDate(row.last_searched_at)}</td>
+              </tr>
+            {/each}
+          </tbody>
+        </table>
+      </div>
+    {/if}
+  </div>
+  {/if}
+
   </div>
 </div>
+
+{#if approvingCandidate}
+  <div
+    class="rc-modal-overlay"
+    role="dialog"
+    aria-modal="true"
+    aria-label="빠른답변 승격"
+    tabindex="-1"
+    onclick={handleApproveOverlayClick}
+    onkeydown={handleApproveOverlayKeydown}
+  >
+    <div class="rc-modal">
+      <div class="rc-modal-header">
+        <h3>빠른답변으로 승격</h3>
+        <button type="button" class="close-btn" onclick={closeApproveModal} aria-label="닫기">✕</button>
+      </div>
+
+      <div class="rc-modal-body">
+        <div class="rc-field">
+          <span class="rc-field-label">고객 메시지</span>
+          <p class="rc-source-text">{approvingCandidate.customer_message}</p>
+        </div>
+
+        <form
+          method="POST"
+          action="?/approveReplyCandidate"
+          use:enhance={() => {
+            return async ({ result, update }) => {
+              if (result.type === 'success') {
+                csToast.success('빠른답변으로 승격됐습니다')
+                closeApproveModal()
+                await invalidateAll()
+              } else {
+                const err = (result as { data?: { error?: string } }).data?.error
+                csToast.error(err ?? '승격 실패')
+              }
+              await update()
+            }
+          }}
+        >
+          <input type="hidden" name="id" value={approvingCandidate.id} />
+
+          <div class="rc-field">
+            <label class="rc-field-label" for="rc-title">제목 <span class="req">*</span></label>
+            <input id="rc-title" name="title" type="text" class="rc-input" bind:value={approveTitle} placeholder="빠른답변 제목" maxlength="100" required autofocus />
+          </div>
+
+          <div class="rc-field">
+            <label class="rc-field-label" for="rc-content">내용 <span class="req">*</span></label>
+            <textarea id="rc-content" name="content" class="rc-input rc-textarea" bind:value={approveContent} maxlength="1000" required></textarea>
+          </div>
+
+          <div class="rc-field">
+            <span class="rc-field-label">도움말 분류 <span class="req">*</span></span>
+            <div class="cat-pills">
+              {#each HELP_CATEGORIES as cat}
+                <button type="button" class="cat-pill" class:active={approveHelpCategory === cat.value} onclick={() => approveHelpCategory = cat.value}>{cat.label}</button>
+              {/each}
+            </div>
+            <input type="hidden" name="help_category" value={approveHelpCategory ?? ''} />
+          </div>
+
+          <div class="rc-field">
+            <span class="rc-field-label">빠른답변 분류</span>
+            <div class="cat-pills">
+              <button type="button" class="cat-pill" class:active={approveCategory === null} onclick={() => approveCategory = null}>없음</button>
+              {#each CANNED_RESPONSE_CATEGORIES as cat}
+                <button type="button" class="cat-pill" class:active={approveCategory === cat.value} onclick={() => approveCategory = cat.value}>{cat.label}</button>
+              {/each}
+            </div>
+            <input type="hidden" name="category" value={approveCategory ?? ''} />
+          </div>
+
+          <div class="rc-field">
+            <label class="rc-field-label" for="rc-shortcut">단축키</label>
+            <input id="rc-shortcut" name="shortcut" type="text" class="rc-input" bind:value={approveShortcut} placeholder="예: return" maxlength="30" />
+          </div>
+
+          <div class="rc-field">
+            <label class="rc-field-label" for="rc-keywords">매칭 키워드 (쉼표로 구분)</label>
+            <input id="rc-keywords" name="match_keywords" type="text" class="rc-input" bind:value={approveKeywords} placeholder="예: 반납, 연체, 늦음" />
+          </div>
+
+          <div class="rc-modal-actions">
+            <button type="button" class="cta-btn cta-secondary" onclick={closeApproveModal}>취소</button>
+            <button type="submit" class="cta-btn" disabled={!approveTitle.trim() || !approveContent.trim() || !approveHelpCategory}>승격</button>
+          </div>
+        </form>
+      </div>
+    </div>
+  </div>
+{/if}
 
 <style>
   /* /cms/chat(채팅) 화면(AdminChatPanel.svelte .admin-panel)과 동일한 가로폭 규격:
@@ -1135,5 +1384,139 @@
   .act-del:hover {
     background: rgba(220,53,69,0.10);
     color: var(--cs-red-badge, #FF3535);
+  }
+
+  /* NLSearch A안(2026-09-02): 빠른답변 후보 탭 + 승격 모달 */
+  .reply-cand-msg {
+    max-width: 320px;
+    font-size: 13px;
+    color: var(--cs-text);
+    white-space: pre-wrap;
+    word-break: break-word;
+  }
+
+  .rc-modal-overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(16, 11, 50, 0.45);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 300;
+  }
+
+  .rc-modal {
+    width: 480px;
+    max-width: calc(100vw - 32px);
+    max-height: calc(100vh - 64px);
+    overflow-y: auto;
+    background: var(--cs-white, #fff);
+    border-radius: var(--cms-radius-sm, 10px);
+    box-shadow: 0 12px 40px rgba(16, 11, 50, 0.25);
+  }
+
+  .rc-modal-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 16px 20px;
+    border-bottom: 1px solid var(--cs-lilac);
+  }
+  .rc-modal-header h3 {
+    margin: 0;
+    font: 700 16px/1.3 'Noto Sans KR', sans-serif;
+    color: var(--cs-text);
+  }
+
+  /* CMS 표준 닫기 버튼(close-red) — uiux-index.md §0-10-A */
+  .close-btn {
+    width: 28px;
+    height: 28px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: transparent;
+    border: none;
+    border-radius: var(--radius-sm);
+    font-size: 14px;
+    color: var(--cs-text-mid, #666);
+    cursor: pointer;
+    transition: background 0.15s, color 0.15s;
+  }
+  .close-btn:hover {
+    background: rgba(220,53,69,0.10);
+    color: var(--cs-red-badge, #FF3535);
+  }
+
+  .rc-modal-body {
+    padding: 16px 20px 20px;
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+  }
+
+  .rc-field {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    margin-bottom: 14px;
+  }
+  .rc-field:last-child { margin-bottom: 0; }
+  .rc-field-label {
+    font: 700 12px/1 'Noto Sans KR', sans-serif;
+    color: var(--cs-text-mid, #666);
+  }
+  .req { color: var(--cs-red-badge, #FF3535); }
+
+  .rc-source-text {
+    margin: 0;
+    padding: 10px 12px;
+    background: var(--cs-lilac);
+    border-radius: var(--cms-radius-sm, 10px);
+    font-size: 13px;
+    color: var(--cs-text);
+    white-space: pre-wrap;
+    word-break: break-word;
+  }
+
+  .rc-input {
+    width: 100%;
+    box-sizing: border-box;
+    padding: 8px 10px;
+    border: 1px solid var(--cs-lilac);
+    border-radius: var(--radius-sm);
+    font: 400 13px/1.4 'Noto Sans KR', sans-serif;
+    color: var(--cs-text);
+  }
+  .rc-input:focus { outline: none; border-color: var(--cs-purple); }
+  .rc-textarea { min-height: 90px; resize: vertical; }
+
+  .cat-pills {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+  .cat-pill {
+    height: 28px;
+    padding: 0 12px;
+    background: var(--cs-white, #fff);
+    border: 1px solid var(--cs-lilac);
+    border-radius: var(--radius-xl, 30px);
+    font: 600 12px/1 'Noto Sans KR', sans-serif;
+    color: var(--cs-text-mid, #666);
+    cursor: pointer;
+    transition: background 0.15s, color 0.15s, border-color 0.15s;
+  }
+  .cat-pill.active {
+    background: var(--cs-purple);
+    border-color: var(--cs-purple);
+    color: var(--cs-white, #fff);
+  }
+
+  .rc-modal-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+    margin-top: 6px;
   }
 </style>
