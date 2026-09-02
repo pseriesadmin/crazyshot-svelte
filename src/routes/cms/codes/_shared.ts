@@ -1,5 +1,4 @@
 import type { CodeFormat } from './+page.server'
-import { PRODUCT_CATEGORY_OPTIONS } from '$lib/utils/productCategoryTaxonomy'
 
 export const ROOT_COLORS: Record<string, string> = {
   CAM: '#FF4500', OPT: '#3B2F8A', LGT: '#F59E0B', AUD: '#0EA5E9',
@@ -7,8 +6,10 @@ export const ROOT_COLORS: Record<string, string> = {
   STD: '#14B8A6', VID: '#F97316', ACC: '#84CC16', PKG: '#06B6D4',
 }
 
-// 9종 카테고리 값·라벨 정의는 $lib/utils/productCategoryTaxonomy.ts 단일 소스로 통합됨
-export const PRODUCT_CATS = PRODUCT_CATEGORY_OPTIONS
+// ⛔ 2026-09-03 버그 수정: 이 파일이 재노출하던 PRODUCT_CATS(정적 9종 하드코딩,
+// $lib/utils/productCategoryTaxonomy.ts)는 실제 등록 상품과 어긋나 있어 제거함 —
+// 유일한 소비처였던 _MappingTab.svelte는 이제 load()가 내려주는 productCountMap
+// (실제 등록 상품 집계)으로 카테고리 목록을 직접 계산한다. TASK.md 참고.
 
 export function datePart(fmt: string): string {
   const now = new Date()

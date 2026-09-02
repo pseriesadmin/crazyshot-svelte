@@ -2,8 +2,8 @@
   import { enhance } from '$app/forms'
   import { csToast } from '$lib/utils/toast'
   import type { PageData, ActionData } from './$types'
-  import type { TaxonomyMapping } from './+page.server'
-  import { ROOT_COLORS, PRODUCT_CATS, buildPreview } from './_shared'
+  import type { TaxonomyMapping, MappingGroup } from './+page.server'
+  import { ROOT_COLORS, buildPreview } from './_shared'
 
   interface Props { data: PageData; form: ActionData }
   let { data, form }: Props = $props()
@@ -11,6 +11,21 @@
   function getMappedCodeId(category: string): string {
     return data.mappings.find((m: TaxonomyMapping) => m.product_category === category)?.taxonomy_code_id ?? ''
   }
+
+  // ⛔ 2026-09-03 버그 수정: $lib/utils/productCategoryTaxonomy.ts의 정적 9종 배열(PRODUCT_CATS)을
+  // 더 이상 쓰지 않는다 — 실제 등록 상품과 어긋나 있었음(ReservationProductFinderModal.svelte
+  // 카테고리 필터 버그와 동일 원인, TASK.md 참고). load()가 이미 내려주는 productCountMap
+  // (실제 등록 상품이 쓰고 있는 category 값 집계, deleted_at IS NULL 전체)을 그대로 카테고리
+  // 목록으로 쓴다 — 이 화면 자체가 "카테고리 → 분류코드 매핑"을 관리하는 화면이라, 매핑 대상
+  // 카테고리가 실제 존재하는 값과 어긋나면 이 화면에서 설정한 매핑 자체가 무의미해진다.
+  let categoryOptions = $derived<{ value: string; label: string }[]>(
+    Object.keys(data.productCountMap ?? {})
+      .sort((a, b) => a.localeCompare(b))
+      .map((value) => ({
+        value,
+        label: (data.mappingGroups as MappingGroup[]).find((g) => g.default_category === value)?.name ?? value,
+      }))
+  )
 
   $effect(() => {
     if (!form) return
@@ -29,7 +44,7 @@
 </div>
 
 <div class="mapping-list">
-  {#each PRODUCT_CATS as cat}
+  {#each categoryOptions as cat}
     {@const mappedId = getMappedCodeId(cat.value)}
     {@const mappedNode = data.codes.find(c => c.id === mappedId)}
     {@const color = mappedNode ? (ROOT_COLORS[mappedNode.path_codes[0]] ?? '#888') : undefined}

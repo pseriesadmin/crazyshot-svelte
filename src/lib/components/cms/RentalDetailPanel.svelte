@@ -10,6 +10,9 @@
   import { hasSettingsAccess } from '$lib/utils/cmsPermissions'
   import { isLockerHour } from '$lib/utils/lockerTimeRange'
   import { DHERO_STATUS_LABEL } from '$lib/utils/dheroLabels'
+  import ReservationProductFinderModal from '$lib/components/cms/ReservationProductFinderModal.svelte'
+  import type { FinderSelectedProduct } from '$lib/components/cms/ReservationProductFinderModal.svelte'
+  import SuggestPicker from '$lib/components/common/SuggestPicker.svelte'
 
   interface RentalListRow {
     reservation_id:    number
@@ -93,6 +96,18 @@
   // RSV-B-B3: 이 derived는 "환불 처리" + "보관함 비밀번호" 두 기능 모두의 권한 게이트이므로
   // canManagePaymentAndLocker 대신 실제 역할을 반영한 이름으로 변경.
   let canManagePaymentAndLocker = $derived(hasSettingsAccess(cmsRole ?? ''))
+
+  // Stage 4 확장 기능 권한 게이트:
+  // canEditProducts — hold 상태이고 결제 미완료(payment_confirmed_at IS NULL)인 경우만 상품 추가/삭제 허용
+  let canEditProducts = $derived(
+    !isRentalView && row.status === 'hold' && !row.payment_confirmed_at
+  )
+  // canReassignProductCode — hold 또는 계약완료(confirmed) + 운송장 미등록 상태일 때 상품코드 재배정 허용
+  let canReassignProductCode = $derived(
+    !isRentalView &&
+    (row.status === 'hold' ||
+      (row.status === 'confirmed' && !row.tracking_number))
+  )
   let showLockerPasswordField = $derived(
     canManagePaymentAndLocker &&
     ((row.pickup_method === 'visit' && isLockerHour(row.pickup_time)) ||
@@ -100,6 +115,23 @@
   )
 
   let qrOverlayOpen = $state(false)
+
+  // Stage 4 — 상품 편집 상태 (canEditProducts / canReassignProductCode)
+  let deletePendingKeys     = $state<Set<string>>(new Set())  // 2-step delete: 1차 클릭 후 키 보존
+  let modifiedKeys          = $state<Set<string>>(new Set())  // 클라이언트 "수정" 배지 (현재 사용 예약)
+  let showFinderModal       = $state(false)
+  let finderModalPurpose    = $state<'product' | 'option'>('product')
+  let reassignTargetId      = $state<number | null>(null)     // 재배정 중인 예약 ID
+  let availableUnits        = $state<{ id: string; product_code: string | null }[]>([])
+  let availableUnitsLoading = $state(false)
+  let availableUnitsError   = $state<string | null>(null)
+  let availableUnitsFetchedForId = $state<number | null>(null)
+  let reassigning           = $state(false)
+  let addingProduct         = $state(false)
+  let addingOption          = $state(false)
+  let deletingKey           = $state<string | null>(null)
+  // deleteTimers는 비반응형 Map — $state로 감싸면 Set 변이가 반응성 오류를 유발
+  const deleteTimers = new Map<string, ReturnType<typeof setTimeout>>()
 
   // QR 일치 시: '계약완료'는 반출로, '반납중'은 반납으로 확인 탭 없이 즉시 자동 기록.
   // 그 외 상태는 기존처럼 /cms/mobile/qr/[id] 수동 처리 화면으로 이동 —
@@ -306,16 +338,20 @@
     rentalEnd:       string | null
     pickupMethod:    string | null
     returnMethod:    string | null
+    paymentConfirmedAt: string | null  // 2026-09-03: 유닛별 편집가능 판정용
+    trackingNumber:     string | null  // 2026-09-03: 유닛별 재배정가능 판정용
     productName:     string
     productCode:     string | null
     productCategory: string | null
     productImageUrl: string | null
+    parentProductId: string | null  // Stage 4: 상품 그룹화 UI용
   }
 
   let rentalSiblingsFetchedForId = $state<number | null>(null)
   let rentalSiblings              = $state<RentalSibling[]>([])
   let rentalSiblingsLoading       = $state(false)
   let rentalSiblingsError         = $state<string | null>(null)
+  let mainParentProductId         = $state<string | null>(null)  // Stage 4: 메인 예약 상품 그룹 ID
 
   // 같은 주문(orders/order_items, Migration 280)에 묶인 다른 상품 — 대여정보 탭 "상품 정보"
   // 섹션에 장바구니에 함께 담긴 상품 전부를 반복 표시하기 위함(옵션상품/결제정보 탭과 동일한
@@ -328,6 +364,7 @@
     const id = row.reservation_id
     rentalSiblingsFetchedForId = id
     rentalSiblings        = []
+    mainParentProductId   = null
     rentalSiblingsError    = null
     rentalSiblingsLoading  = true
 
@@ -336,6 +373,7 @@
       .then(d => {
         if (rentalSiblingsFetchedForId === id) {
           rentalSiblings = Array.isArray(d.siblings) ? d.siblings : []
+          mainParentProductId = (d.mainParentProductId as string | null | undefined) ?? null
           rentalSiblingsLoading = false
         }
       })
@@ -345,13 +383,17 @@
   })
 
   interface ProductInfoItem {
-    key:      string
-    isSibling: boolean
-    imageUrl: string | null
-    name:     string
-    code:     string | null
-    category: string | null
-    status?:  string
+    key:             string
+    isSibling:       boolean
+    imageUrl:        string | null
+    name:            string
+    code:            string | null
+    category:        string | null
+    status?:         string
+    reservationId:   number          // Stage 4: 삭제/재배정 API 호출용
+    parentProductId: string | null   // Stage 4: 동일 그룹 여부 판단용
+    paymentConfirmedAt: string | null  // 2026-09-03: 유닛별 편집가능 판정용
+    trackingNumber:     string | null  // 2026-09-03: 유닛별 재배정가능 판정용
   }
 
   // "상품 정보" 섹션 반복 렌더링용 — 현재 선택된 상품(row) + 같은 주문의 형제 상품(rentalSiblings)을
@@ -361,13 +403,323 @@
       key: `main-${row.reservation_id}`, isSibling: false,
       imageUrl: row.product_image_url, name: row.product_name,
       code: row.product_code, category: row.product_category,
+      reservationId: row.reservation_id,
+      parentProductId: mainParentProductId,
+      paymentConfirmedAt: row.payment_confirmed_at ?? null,
+      trackingNumber: row.tracking_number ?? null,
     },
     ...rentalSiblings.map(s => ({
       key: `sib-${s.reservationId}`, isSibling: true,
       imageUrl: s.productImageUrl, name: s.productName,
       code: s.productCode, category: s.productCategory, status: s.status,
+      reservationId: s.reservationId,
+      parentProductId: s.parentProductId,
+      paymentConfirmedAt: s.paymentConfirmedAt,
+      trackingNumber: s.trackingNumber,
     })),
   ])
+
+  // 2026-09-03 버그 수정: 형제 유닛이 앵커(row)와 무관하게 개별적으로 이미 결제확인됐거나
+  // 만료·취소 등으로 상태가 벗어나 있을 수 있어, canEditProducts/canReassignProductCode
+  // (앵커 기준)만으로 버튼을 노출하면 "눌러야만 서버가 거부하는" 눈속임 버튼이 된다.
+  // 유닛 자신의 상태까지 함께 확인해 애초에 성공 못 할 버튼은 렌더링하지 않는다.
+  function canEditUnit(unit: ProductInfoItem): boolean {
+    if (!canEditProducts) return false
+    if (!unit.isSibling) return true  // 메인 유닛은 canEditProducts에 이미 자신의 상태가 반영됨
+    return unit.status === 'hold' && !unit.paymentConfirmedAt
+  }
+  function canReassignUnit(unit: ProductInfoItem): boolean {
+    if (!canReassignProductCode) return false
+    if (!unit.isSibling) return true
+    return unit.status === 'hold' || (unit.status === 'confirmed' && !unit.trackingNumber)
+  }
+
+  interface ProductGroupView {
+    key:            string             // parentProductId, 없으면 `single-${item.key}` 폴백
+    representative: ProductInfoItem    // 상품명·이미지·카테고리 표시용(그룹당 1회만 표시)
+    units:          ProductInfoItem[]  // 실물 유닛(=상품 코드 행) 목록 — 이게 "수량"
+  }
+
+  // Stage 4(UX 재수정, 2026-09-03): 동일 부모상품(parentProductId) 기준으로 그룹당 카드 1장만
+  // 렌더링 — 이전 버전은 "수량 스텝퍼"만 첫 유닛에 붙이고 나머지 유닛은 여전히 각자 별도
+  // info-section 카드로 중복 렌더링해, 수량을 늘릴 때마다 똑같이 생긴 카드가 반복 노출되고
+  // 그 새 카드에는 수량 조작 UI 자체가 없는 UX 불일치가 있었음(Stephen 스크린샷으로 발견).
+  // 이제 그룹 하나 = 카드 하나, 상품명/이미지/카테고리는 대표 유닛 기준 1회만, "상품 코드"
+  // 행만 유닛 수만큼 반복 — "수량"이 곧 그 카드 안의 상품코드 행 개수로 시각적으로 일치한다.
+  // parentProductId가 없는 항목(레거시/미확인 데이터)은 각자 단독 그룹으로 폴백(그룹화 안 됨).
+  let productGroups = $derived.by(() => {
+    const order: string[] = []
+    const map = new Map<string, ProductGroupView>()
+    for (const item of productInfoItems) {
+      const key = item.parentProductId ?? `single-${item.key}`
+      let g = map.get(key)
+      if (!g) {
+        g = { key, representative: item, units: [] }
+        map.set(key, g)
+        order.push(key)
+      }
+      g.units.push(item)
+    }
+    return order.map((k) => map.get(k)!)
+  })
+
+  // ─────────────────────────────────────────────────────────────────────────────
+  // Stage 4: 상품 편집 핸들러 (canEditProducts / canReassignProductCode)
+  // ─────────────────────────────────────────────────────────────────────────────
+
+  function openProductFinder(): void {
+    finderModalPurpose = 'product'
+    showFinderModal = true
+  }
+
+  function openOptionFinder(): void {
+    finderModalPurpose = 'option'
+    showFinderModal = true
+  }
+
+  async function handleFinderSelect(product: FinderSelectedProduct): Promise<void> {
+    showFinderModal = false
+    if (finderModalPurpose === 'option') {
+      const existing = options.find(o => o.option_name === product.name)
+      if (existing) {
+        await handleOptionQtyChange(existing.id, existing.qty + 1)
+      } else {
+        await handleAddOption(product)
+      }
+    } else {
+      await handleAddProduct(product)
+    }
+  }
+
+  async function handleAddProduct(product: FinderSelectedProduct): Promise<void> {
+    addingProduct = true
+    try {
+      const res = await fetch(`/api/cms/reservations/${row.reservation_id}/products`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ product_id: product.id }),
+      })
+      const d = await res.json() as { success?: boolean; error?: string }
+      if (!res.ok || !d.success) {
+        csToast.error(d.error ?? '상품 추가에 실패했습니다.')
+      } else {
+        csToast.success(`${product.name}이(가) 추가됐습니다.`)
+        modifiedKeys = new Set([...modifiedKeys, `prod-${product.id}`])
+        rentalSiblingsFetchedForId = null  // 형제 목록 강제 재조회
+        onrefresh()
+      }
+    } catch {
+      csToast.error('네트워크 오류가 발생했습니다.')
+    } finally {
+      addingProduct = false
+    }
+  }
+
+  // 그룹(부모상품 기준)에 재고 유닛 1개 추가 — 상품찾기 모달 재오픈 없이 즉시 상품코드 행 하나를
+  // 더 추가한다("수량 증가" = 이 그룹 카드에 상품 코드 행이 하나 더 생기는 것으로 표현).
+  function handleGroupQtyIncrease(item: ProductInfoItem): void {
+    if (!item.parentProductId) return
+    void handleAddProduct({
+      id: item.parentProductId,
+      name: item.name,
+      product_code: null,
+      image_url: null,
+      price_24h: null,
+    })
+  }
+  // "수량 감소"는 더 이상 그룹 단위 스텝퍼로 존재하지 않는다 — 각 "상품 코드" 행 자체에 붙는
+  // 삭제(휴지통) 버튼이 정확히 그 유닛(=그 행)을 대상으로 handleDeleteProduct를 호출한다
+  // (아래 템플릿 참고, 어느 유닛을 지울지 관리자가 직접 행 단위로 선택 — 자동으로 "마지막
+  // 유닛" 등을 임의로 고르지 않음).
+
+  async function handleAddOption(product: FinderSelectedProduct): Promise<void> {
+    addingOption = true
+    try {
+      const res = await fetch(`/api/cms/reservations/${row.reservation_id}/options`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          option_product_id: product.id,
+          option_name: product.name,
+          qty: 1,
+          unit_price: product.price_24h ?? 0,
+        }),
+      })
+      const d = await res.json() as { success?: boolean; option_id?: number; error?: string }
+      if (!res.ok || !d.success) {
+        csToast.error(d.error ?? '옵션 추가에 실패했습니다.')
+      } else {
+        csToast.success(`옵션 ${product.name}이(가) 추가됐습니다.`)
+        if (d.option_id != null) modifiedKeys = new Set([...modifiedKeys, `opt-${d.option_id}`])
+        optionsFetchedForId = null  // 옵션 목록 강제 재조회
+      }
+    } catch {
+      csToast.error('네트워크 오류가 발생했습니다.')
+    } finally {
+      addingOption = false
+    }
+  }
+
+  function handleDeleteProduct(item: ProductInfoItem): void {
+    const key = `prod-${item.reservationId}`
+    if (deletePendingKeys.has(key)) {
+      // 2차 클릭 — 실제 삭제 실행
+      clearTimeout(deleteTimers.get(key))
+      deleteTimers.delete(key)
+      deletePendingKeys = new Set([...deletePendingKeys].filter(k => k !== key))
+      doDeleteProduct(item)
+    } else {
+      // 1차 클릭 — 대기 상태 진입 (4초 후 자동 해제)
+      csToast.warning('한 번 더 클릭하면 삭제됩니다.')
+      deletePendingKeys = new Set([...deletePendingKeys, key])
+      const timer = setTimeout(() => {
+        deletePendingKeys = new Set([...deletePendingKeys].filter(k => k !== key))
+        deleteTimers.delete(key)
+      }, 4000)
+      deleteTimers.set(key, timer)
+    }
+  }
+
+  async function doDeleteProduct(item: ProductInfoItem): Promise<void> {
+    const key = `prod-${item.reservationId}`
+    deletingKey = key
+    try {
+      const res = await fetch(`/api/cms/reservations/${row.reservation_id}/products`, {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ target_reservation_id: item.reservationId }),
+      })
+      const d = await res.json() as { success?: boolean; error?: string }
+      if (!res.ok || !d.success) {
+        csToast.error(d.error ?? '상품 삭제에 실패했습니다.')
+      } else {
+        csToast.success(`${item.name}이(가) 삭제됐습니다.`)
+        rentalSiblingsFetchedForId = null
+        onrefresh()
+      }
+    } catch {
+      csToast.error('네트워크 오류가 발생했습니다.')
+    } finally {
+      deletingKey = null
+    }
+  }
+
+  function handleDeleteOption(opt: ReservationOption): void {
+    const key = `opt-${opt.id}`
+    if (deletePendingKeys.has(key)) {
+      clearTimeout(deleteTimers.get(key))
+      deleteTimers.delete(key)
+      deletePendingKeys = new Set([...deletePendingKeys].filter(k => k !== key))
+      doDeleteOption(opt)
+    } else {
+      csToast.warning('한 번 더 클릭하면 삭제됩니다.')
+      deletePendingKeys = new Set([...deletePendingKeys, key])
+      const timer = setTimeout(() => {
+        deletePendingKeys = new Set([...deletePendingKeys].filter(k => k !== key))
+        deleteTimers.delete(key)
+      }, 4000)
+      deleteTimers.set(key, timer)
+    }
+  }
+
+  async function doDeleteOption(opt: ReservationOption): Promise<void> {
+    const key = `opt-${opt.id}`
+    deletingKey = key
+    try {
+      const res = await fetch(`/api/cms/reservations/${row.reservation_id}/options`, {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ option_id: opt.id }),
+      })
+      const d = await res.json() as { success?: boolean; error?: string }
+      if (!res.ok || !d.success) {
+        csToast.error(d.error ?? '옵션 삭제에 실패했습니다.')
+      } else {
+        csToast.success(`옵션 ${opt.option_name}이(가) 삭제됐습니다.`)
+        optionsFetchedForId = null
+      }
+    } catch {
+      csToast.error('네트워크 오류가 발생했습니다.')
+    } finally {
+      deletingKey = null
+    }
+  }
+
+  async function handleOptionQtyChange(optId: number, newQty: number): Promise<void> {
+    if (newQty < 1) return
+    try {
+      const res = await fetch(`/api/cms/reservations/${row.reservation_id}/options`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ option_id: optId, qty: newQty }),
+      })
+      const d = await res.json() as { success?: boolean; error?: string }
+      if (!res.ok || !d.success) {
+        csToast.error(d.error ?? '수량 변경에 실패했습니다.')
+      } else {
+        modifiedKeys = new Set([...modifiedKeys, `opt-${optId}`])
+        optionsFetchedForId = null  // 서버 반영 값으로 재조회
+      }
+    } catch {
+      csToast.error('네트워크 오류가 발생했습니다.')
+    }
+  }
+
+  async function openReassign(targetReservationId: number): Promise<void> {
+    if (reassignTargetId === targetReservationId) {
+      // 이미 열린 경우 토글 닫기
+      reassignTargetId = null
+      return
+    }
+    reassignTargetId = targetReservationId
+    if (availableUnitsFetchedForId === targetReservationId) return  // 이미 로드된 경우 재사용
+    availableUnits = []
+    availableUnitsError = null
+    availableUnitsLoading = true
+    availableUnitsFetchedForId = targetReservationId
+    try {
+      const res = await fetch(`/api/cms/reservations/${targetReservationId}/available-units`)
+      const d = await res.json() as { units?: { id: string; product_code: string | null }[]; error?: string }
+      if (availableUnitsFetchedForId === targetReservationId) {
+        if (!res.ok) {
+          availableUnitsError = d.error ?? '가용 재고를 불러오지 못했습니다.'
+        } else {
+          availableUnits = d.units ?? []
+        }
+      }
+    } catch {
+      if (availableUnitsFetchedForId === targetReservationId) {
+        availableUnitsError = '네트워크 오류가 발생했습니다.'
+      }
+    } finally {
+      if (availableUnitsFetchedForId === targetReservationId) availableUnitsLoading = false
+    }
+  }
+
+  async function handleReassign(targetReservationId: number, newUnitId: string): Promise<void> {
+    reassigning = true
+    try {
+      const res = await fetch(`/api/cms/reservations/${targetReservationId}/products`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ new_unit_id: newUnitId }),
+      })
+      const d = await res.json() as { success?: boolean; error?: string }
+      if (!res.ok || !d.success) {
+        csToast.error(d.error ?? '상품코드 재배정에 실패했습니다.')
+      } else {
+        csToast.success('상품코드가 재배정됐습니다.')
+        reassignTargetId = null
+        availableUnitsFetchedForId = null
+        rentalSiblingsFetchedForId = null
+        onrefresh()
+      }
+    } catch {
+      csToast.error('네트워크 오류가 발생했습니다.')
+    } finally {
+      reassigning = false
+    }
+  }
 
   const STATUS_LABEL: Record<string, string> = {
     pending: '접수', hold: '신청대기', confirmed: '계약완료',
@@ -582,6 +934,9 @@
         trackingError = d.error ?? '저장에 실패했습니다.'
       } else {
         csToast.success('운송장 정보가 저장되었습니다.')
+        // Stage 4 QA 수정: onrefresh() 없으면 row.tracking_number가 stale해
+        // canReassignProductCode(재배정 버튼 노출 게이트)가 저장 직후에도 그대로 true로 남아있음.
+        onrefresh()
       }
     } catch {
       trackingError = '저장 중 오류가 발생했습니다.'
@@ -911,33 +1266,44 @@
       <!-- 상품 정보 -->
       <div class="section-title-row">
         <span class="section-title">상품 정보{#if productInfoItems.length > 1} ({productInfoItems.length}개){/if}</span>
-        {#if enableQrVerify}
-          <button
-            type="button"
-            class="qr-verify-icon-btn"
-            onclick={() => (qrOverlayOpen = true)}
-            aria-label="상품 QR 확인"
-            title="상품 QR 확인"
-          >
-            <svg width="18" height="18" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
-              <path fill-rule="evenodd" clip-rule="evenodd" d="M10.3882 10.4939C10.3694 10.5503 10.35 10.6473 10.35 10.8L10.35 11.7092L13.05 11.7C13.6387 11.7 14.2455 11.8478 14.6988 12.3009C15.1521 12.754 15.3 13.3607 15.3 13.9492V14.4C15.3 14.8971 14.8971 15.3 14.4 15.3C13.9029 15.3 13.5 14.8971 13.5 14.4V13.9492C13.5 13.7968 13.4806 13.7 13.4619 13.6438C13.4447 13.5924 13.4291 13.5767 13.4263 13.574C13.4236 13.5713 13.4077 13.5554 13.3561 13.5382C13.2997 13.5194 13.2027 13.5 13.05 13.5L10.35 13.5092V14.4092C10.35 14.9062 9.94706 15.3092 9.45 15.3092C8.95294 15.3092 8.55 14.9062 8.55 14.4092L8.55001 10.8C8.55001 10.2113 8.6978 9.60452 9.15088 9.15124C9.60403 8.6979 10.2107 8.55 10.7992 8.55H10.8038H13.0546C13.5516 8.55253 13.9525 8.95752 13.95 9.45457C13.9475 9.95162 13.5425 10.3525 13.0454 10.35L10.7972 10.35C10.6459 10.3502 10.5498 10.3695 10.4938 10.3881C10.4424 10.4053 10.4268 10.4209 10.424 10.4237C10.4213 10.4264 10.4054 10.4423 10.3882 10.4939Z" fill="currentColor"/>
-              <path d="M1.8 2.25C1.8 2.00147 2.00147 1.8 2.25 1.8H4.5C4.74853 1.8 4.95 2.00147 4.95 2.25V4.5C4.95 4.74853 4.74853 4.95 4.5 4.95H2.25C2.00147 4.95 1.8 4.74853 1.8 4.5V2.25Z" fill="currentColor"/>
-              <path fill-rule="evenodd" clip-rule="evenodd" d="M2.25 0H4.5C5.74264 0 6.75 1.00736 6.75 2.25V4.5C6.75 5.74264 5.74264 6.75 4.5 6.75H2.25C1.00736 6.75 0 5.74264 0 4.5V2.25C0 1.00736 1.00736 0 2.25 0ZM2.25 1.8C2.00147 1.8 1.8 2.00147 1.8 2.25V4.5C1.8 4.74853 2.00147 4.95 2.25 4.95H4.5C4.74853 4.95 4.95 4.74853 4.95 4.5V2.25C4.95 2.00147 4.74853 1.8 4.5 1.8H2.25Z" fill="currentColor"/>
-              <path fill-rule="evenodd" clip-rule="evenodd" d="M10.8 0H13.05C14.2926 0 15.3 1.00736 15.3 2.25V4.5C15.3 5.74264 14.2926 6.75 13.05 6.75H10.8C9.55736 6.75 8.55 5.74264 8.55 4.5V2.25C8.55 1.00736 9.55736 0 10.8 0ZM10.8 1.8C10.5515 1.8 10.35 2.00147 10.35 2.25V4.5C10.35 4.74853 10.5515 4.95 10.8 4.95H13.05C13.2985 4.95 13.5 4.74853 13.5 4.5V2.25C13.5 2.00147 13.2985 1.8 13.05 1.8H10.8Z" fill="currentColor"/>
-              <path fill-rule="evenodd" clip-rule="evenodd" d="M2.25 8.55H4.5C5.74264 8.55 6.75 9.55736 6.75 10.8V13.05C6.75 14.2926 5.74264 15.3 4.5 15.3H2.25C1.00736 15.3 0 14.2926 0 13.05V10.8C0 9.55736 1.00736 8.55 2.25 8.55ZM2.25 10.35C2.00147 10.35 1.8 10.5515 1.8 10.8V13.05C1.8 13.2985 2.00147 13.5 2.25 13.5H4.5C4.74853 13.5 4.95 13.2985 4.95 13.05V10.8C4.95 10.5515 4.74853 10.35 4.5 10.35H2.25Z" fill="currentColor"/>
-            </svg>
-          </button>
-        {/if}
+        <div class="section-title-btns">
+          {#if enableQrVerify}
+            <button
+              type="button"
+              class="qr-verify-icon-btn"
+              onclick={() => (qrOverlayOpen = true)}
+              aria-label="상품 QR 확인"
+              title="상품 QR 확인"
+            >
+              <svg width="18" height="18" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+                <path fill-rule="evenodd" clip-rule="evenodd" d="M10.3882 10.4939C10.3694 10.5503 10.35 10.6473 10.35 10.8L10.35 11.7092L13.05 11.7C13.6387 11.7 14.2455 11.8478 14.6988 12.3009C15.1521 12.754 15.3 13.3607 15.3 13.9492V14.4C15.3 14.8971 14.8971 15.3 14.4 15.3C13.9029 15.3 13.5 14.8971 13.5 14.4V13.9492C13.5 13.7968 13.4806 13.7 13.4619 13.6438C13.4447 13.5924 13.4291 13.5767 13.4263 13.574C13.4236 13.5713 13.4077 13.5554 13.3561 13.5382C13.2997 13.5194 13.2027 13.5 13.05 13.5L10.35 13.5092V14.4092C10.35 14.9062 9.94706 15.3092 9.45 15.3092C8.95294 15.3092 8.55 14.9062 8.55 14.4092L8.55001 10.8C8.55001 10.2113 8.6978 9.60452 9.15088 9.15124C9.60403 8.6979 10.2107 8.55 10.7992 8.55H10.8038H13.0546C13.5516 8.55253 13.9525 8.95752 13.95 9.45457C13.9475 9.95162 13.5425 10.3525 13.0454 10.35L10.7972 10.35C10.6459 10.3502 10.5498 10.3695 10.4938 10.3881C10.4424 10.4053 10.4268 10.4209 10.424 10.4237C10.4213 10.4264 10.4054 10.4423 10.3882 10.4939Z" fill="currentColor"/>
+                <path d="M1.8 2.25C1.8 2.00147 2.00147 1.8 2.25 1.8H4.5C4.74853 1.8 4.95 2.00147 4.95 2.25V4.5C4.95 4.74853 4.74853 4.95 4.5 4.95H2.25C2.00147 4.95 1.8 4.74853 1.8 4.5V2.25Z" fill="currentColor"/>
+                <path fill-rule="evenodd" clip-rule="evenodd" d="M2.25 0H4.5C5.74264 0 6.75 1.00736 6.75 2.25V4.5C6.75 5.74264 5.74264 6.75 4.5 6.75H2.25C1.00736 6.75 0 5.74264 0 4.5V2.25C0 1.00736 1.00736 0 2.25 0ZM2.25 1.8C2.00147 1.8 1.8 2.00147 1.8 2.25V4.5C1.8 4.74853 2.00147 4.95 2.25 4.95H4.5C4.74853 4.95 4.95 4.74853 4.95 4.5V2.25C4.95 2.00147 4.74853 1.8 4.5 1.8H2.25Z" fill="currentColor"/>
+                <path fill-rule="evenodd" clip-rule="evenodd" d="M10.8 0H13.05C14.2926 0 15.3 1.00736 15.3 2.25V4.5C15.3 5.74264 14.2926 6.75 13.05 6.75H10.8C9.55736 6.75 8.55 5.74264 8.55 4.5V2.25C8.55 1.00736 9.55736 0 10.8 0ZM10.8 1.8C10.5515 1.8 10.35 2.00147 10.35 2.25V4.5C10.35 4.74853 10.5515 4.95 10.8 4.95H13.05C13.2985 4.95 13.5 4.74853 13.5 4.5V2.25C13.5 2.00147 13.2985 1.8 13.05 1.8H10.8Z" fill="currentColor"/>
+                <path fill-rule="evenodd" clip-rule="evenodd" d="M2.25 8.55H4.5C5.74264 8.55 6.75 9.55736 6.75 10.8V13.05C6.75 14.2926 5.74264 15.3 4.5 15.3H2.25C1.00736 15.3 0 14.2926 0 13.05V10.8C0 9.55736 1.00736 8.55 2.25 8.55ZM2.25 10.35C2.00147 10.35 1.8 10.5515 1.8 10.8V13.05C1.8 13.2985 2.00147 13.5 2.25 13.5H4.5C4.74853 13.5 4.95 13.2985 4.95 13.05V10.8C4.95 10.5515 4.74853 10.35 4.5 10.35H2.25Z" fill="currentColor"/>
+              </svg>
+            </button>
+          {/if}
+          {#if canEditProducts}
+            <button
+              type="button"
+              class="btn-add-small"
+              onclick={openProductFinder}
+              disabled={addingProduct}
+              aria-label="상품 추가"
+            >+ 추가</button>
+          {/if}
+        </div>
       </div>
-      {#each productInfoItems as item (item.key)}
+      {#each productGroups as group (group.key)}
         <div class="info-section">
-          {#if item.imageUrl}
+          {#if group.representative.imageUrl}
             <div class="info-row">
               <span class="info-label">상품 이미지</span>
               <div class="info-value">
                 <img
-                  src={item.imageUrl}
-                  alt={item.name}
+                  src={group.representative.imageUrl}
+                  alt={group.representative.name}
                   class="product-thumb"
                   width="60"
                   height="60"
@@ -948,19 +1314,103 @@
           <div class="info-row">
             <span class="info-label">상품명</span>
             <span class="info-value fw-bold">
-              {item.name}
-              {#if item.isSibling}
-                <span class="sibling-status-badge">{STATUS_LABEL[item.status ?? ''] ?? item.status}</span>
+              {group.representative.name}
+              {#if group.units.length > 1}
+                <span class="qty-count-badge">수량 {group.units.length}</span>
+              {/if}
+              {#if group.representative.parentProductId && modifiedKeys.has(`prod-${group.representative.parentProductId}`)}
+                <span class="badge-modified">수정</span>
               {/if}
             </span>
           </div>
-          <div class="info-row">
-            <span class="info-label">상품 코드</span>
-            <span class="info-value mono">{item.code ?? '-'}</span>
-          </div>
+          <!-- 상품 코드 — 유닛(=실물 재고) 하나당 한 행. "수량"은 이 행의 개수로 시각적으로
+               일치한다(+/- 스텝퍼 대신 행 자체를 추가·삭제하는 방식 — 2026-09-03 UX 재수정). -->
+          {#each group.units as unit, i (unit.key)}
+            <div class="info-row">
+              <span class="info-label">상품 코드{#if group.units.length > 1} #{i + 1}{/if}</span>
+              <span class="info-value mono">
+                {unit.code ?? '-'}
+                {#if unit.isSibling}
+                  <span class="sibling-status-badge">{STATUS_LABEL[unit.status ?? ''] ?? unit.status}</span>
+                {/if}
+              </span>
+              {#if canReassignUnit(unit)}
+                <button
+                  type="button"
+                  class="btn-reassign-small"
+                  onclick={() => openReassign(unit.reservationId)}
+                  aria-label="상품코드 재배정"
+                >{reassignTargetId === unit.reservationId ? '닫기' : '재배정'}</button>
+              {/if}
+              {#if canEditUnit(unit)}
+                {@const delKey = `prod-${unit.reservationId}`}
+                <button
+                  type="button"
+                  class="btn-delete-icon"
+                  class:btn-delete-icon--pending={deletePendingKeys.has(delKey)}
+                  onclick={() => handleDeleteProduct(unit)}
+                  disabled={deletingKey === delKey}
+                  aria-label="재고 삭제"
+                  title={deletePendingKeys.has(delKey) ? '한 번 더 클릭하면 삭제됩니다' : '재고 삭제'}
+                >✕</button>
+              {/if}
+            </div>
+            {#if canReassignUnit(unit) && reassignTargetId === unit.reservationId}
+              <div class="reassign-row">
+                {#if availableUnitsLoading}
+                  <span class="reassign-loading">가용 재고 조회 중...</span>
+                {:else if availableUnitsError}
+                  <span class="reassign-error">{availableUnitsError}</span>
+                {:else if availableUnits.length === 0}
+                  <span class="reassign-empty">이 날짜에 교체 가능한 재고가 없습니다.</span>
+                {:else}
+                  <div class="reassign-picker-wrap">
+                    <SuggestPicker
+                      noFilter={true}
+                      options={availableUnits.map(u => ({
+                        id: u.id,
+                        label: u.product_code ?? '(코드 없음)',
+                      }))}
+                      onselect={(opt) => {
+                        if (opt) handleReassign(unit.reservationId, opt.id)
+                      }}
+                    >
+                      {#snippet field(ctrl)}
+                        <input
+                          id={ctrl.id}
+                          name={ctrl.name}
+                          class="reassign-input"
+                          placeholder="재고 선택..."
+                          value={ctrl.value}
+                          oninput={ctrl.oninput}
+                          onkeydown={ctrl.onkeydown}
+                          onfocus={ctrl.onfocus}
+                          onblur={ctrl.onblur}
+                          aria-autocomplete={ctrl.ariaAutocomplete}
+                          aria-expanded={ctrl.ariaExpanded}
+                          aria-controls={ctrl.ariaControls}
+                          disabled={reassigning}
+                        />
+                      {/snippet}
+                    </SuggestPicker>
+                  </div>
+                {/if}
+              </div>
+            {/if}
+          {/each}
+          {#if canEditProducts && group.representative.parentProductId}
+            <div class="info-row">
+              <button
+                type="button"
+                class="btn-add-unit-small"
+                onclick={() => handleGroupQtyIncrease(group.representative)}
+                disabled={addingProduct}
+              >+ 재고 추가</button>
+            </div>
+          {/if}
           <div class="info-row">
             <span class="info-label">카테고리</span>
-            <span class="info-value">{item.category ?? '-'}</span>
+            <span class="info-value">{group.representative.category ?? '-'}</span>
           </div>
         </div>
       {/each}
@@ -977,21 +1427,87 @@
       {:else if optionsError}
         <div class="section-title">옵션상품</div>
         <div class="error-box">{optionsError}</div>
-      {:else if options.length > 0}
-        <div class="section-title">옵션상품 ({options.length}개)</div>
-        <div class="info-section">
+      {:else if options.length > 0 || canEditProducts}
+        <div class="section-title-row">
+          <span class="section-title">옵션상품{#if options.length > 0} ({options.length}개){/if}</span>
+          {#if canEditProducts}
+            <button
+              type="button"
+              class="btn-add-small"
+              onclick={openOptionFinder}
+              disabled={addingOption}
+              aria-label="옵션상품 추가"
+            >+ 추가</button>
+          {/if}
+        </div>
+        {#if options.length > 0}
+          <!-- 옵션상품 카드 — 메인상품 "상품 정보" 카드(그룹당 1장, 상품명/상품코드/수량 행
+               구조)와 동일한 레이아웃·수량 UI로 통일(2026-09-03, Stephen 지시). reservation_options
+               는 유닛별 실물 재고 행이 아니라 "1행 + qty 정수 필드" 구조라(rental-lifecycle.md
+               "옵션상품" — 시리얼 단위 추적 안 함, 의도된 설계) 메인상품처럼 "행 자체를 추가/삭제"
+               할 수는 없다 — 대신 수량 행의 "+"는 메인상품과 동일한 .btn-add-unit-small 버튼을
+               그대로 재사용(qty+1 PATCH), "-"는 그 행 옆 소형 버튼으로 유지(qty-1 PATCH,
+               1 미만 차단). 옵션 자체 삭제(전체 제거)는 상품명 행의 ✕ 아이콘이 담당. -->
           {#each options as opt (opt.id)}
-            <div class="info-row">
-              <span class="info-label">{opt.option_name}</span>
-              <span class="info-value">
-                {opt.qty}개
-                {#if opt.product_code}
-                  <code class="mono option-code">{opt.product_code}</code>
+            <div class="info-section">
+              <div class="info-row">
+                <span class="info-label">옵션명</span>
+                <span class="info-value fw-bold">
+                  {opt.option_name}
+                  {#if modifiedKeys.has(`opt-${opt.id}`)}
+                    <span class="badge-modified">수정</span>
+                  {/if}
+                </span>
+                {#if canEditProducts}
+                  {@const delKey = `opt-${opt.id}`}
+                  <button
+                    type="button"
+                    class="btn-delete-icon"
+                    class:btn-delete-icon--pending={deletePendingKeys.has(delKey)}
+                    onclick={() => handleDeleteOption(opt)}
+                    disabled={deletingKey === delKey}
+                    aria-label="옵션 삭제"
+                    title={deletePendingKeys.has(delKey) ? '한 번 더 클릭하면 삭제됩니다' : '옵션 삭제'}
+                  >✕</button>
                 {/if}
-              </span>
+              </div>
+              {#if opt.product_code}
+                <div class="info-row">
+                  <span class="info-label">상품 코드</span>
+                  <span class="info-value mono">{opt.product_code}</span>
+                </div>
+              {/if}
+              <div class="info-row">
+                <span class="info-label">수량</span>
+                <span class="info-value">
+                  {#if canEditProducts}
+                    <span class="qty-count-badge">수량 {opt.qty}</span>
+                    <button
+                      type="button"
+                      class="opt-qty-minus-small"
+                      onclick={() => handleOptionQtyChange(opt.id, opt.qty - 1)}
+                      disabled={opt.qty <= 1}
+                      aria-label="수량 감소"
+                    >−</button>
+                  {:else}
+                    {opt.qty}개
+                  {/if}
+                </span>
+              </div>
+              {#if canEditProducts}
+                <div class="info-row">
+                  <button
+                    type="button"
+                    class="btn-add-unit-small"
+                    onclick={() => handleOptionQtyChange(opt.id, opt.qty + 1)}
+                  >+ 수량 추가</button>
+                </div>
+              {/if}
             </div>
           {/each}
-        </div>
+        {:else}
+          <div class="loading-box" style="color: var(--cs-text-mid); font-style: italic;">옵션 없음 — + 추가로 등록하세요</div>
+        {/if}
       {/if}
 
       <!-- 대여 일정 -->
@@ -1425,6 +1941,14 @@
         </div>
       </div>
 
+      {#if modifiedKeys.size > 0}
+        <!-- Stage 4: 상품구성 편집 후 금액 정합은 이번 스코프 밖(플랜 "Out of Scope") —
+             표시 금액이 실제 변경된 구성을 반영하지 않을 수 있음을 관리자에게 안내만 함 -->
+        <div class="amount-sync-notice">
+          상품 구성이 변경됐습니다. 위 금액은 변경 전 기준일 수 있으니 별도로 확인해주세요.
+        </div>
+      {/if}
+
       <!-- 같은 주문의 다른 상품 — 한 번에 결제된 여러 예약이 있을 때만 노출 -->
       {#if orderSiblingsLoading}
         <div class="section-title">같은 주문의 다른 상품</div>
@@ -1577,6 +2101,15 @@
   />
 {/if}
 
+<!-- Stage 4: 상품 검색 및 선택 모달 — transform 조상 서브트리 밖에 독립 렌더링
+     (ui-mobile.md "CSS transform + position:fixed 충돌" 원칙 준수) -->
+<ReservationProductFinderModal
+  open={showFinderModal}
+  onclose={() => (showFinderModal = false)}
+  onselect={handleFinderSelect}
+  baseProductId={finderModalPurpose === 'option' ? row.product_id : null}
+/>
+
 <style>
   .panel {
     background: var(--cs-white);
@@ -1702,6 +2235,12 @@
   }
   .section-title-row .section-title { padding: 4px 0 2px; }
 
+  .section-title-btns {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+
   .qr-verify-icon-btn {
     width: 32px;
     height: 32px;
@@ -1713,6 +2252,194 @@
     border-radius: var(--radius-sm);
     color: var(--cs-purple);
     cursor: pointer;
+  }
+
+  /* Stage 4: 상품 편집 UI */
+  .btn-add-small {
+    font-size: 12px;
+    font-weight: 600;
+    padding: 4px 10px;
+    border: 1.5px solid var(--cs-purple);
+    border-radius: var(--radius-xl);
+    background: transparent;
+    color: var(--cs-purple);
+    cursor: pointer;
+    white-space: nowrap;
+    transition: background 0.15s, color 0.15s;
+  }
+  .btn-add-small:hover:not(:disabled) {
+    background: var(--cs-purple);
+    color: #fff;
+  }
+  .btn-add-small:disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
+  }
+
+  .btn-delete-icon {
+    flex-shrink: 0;
+    width: 24px;
+    height: 24px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border: none;
+    border-radius: var(--cms-radius-sm);
+    background: var(--cs-surface-gray);
+    color: var(--cs-text-mid);
+    font-size: 13px;
+    cursor: pointer;
+    transition: background 0.15s, color 0.15s;
+  }
+  .btn-delete-icon:hover:not(:disabled) {
+    background: rgba(207,0,0,0.12);
+    color: var(--cs-error);
+  }
+  .btn-delete-icon--pending {
+    background: var(--cs-error);
+    color: #fff;
+  }
+  .btn-delete-icon--pending:hover:not(:disabled) {
+    background: #a80000;
+    color: #fff;
+  }
+  .btn-delete-icon:disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
+  }
+
+  .btn-reassign-small {
+    flex-shrink: 0;
+    font-size: 11px;
+    font-weight: 600;
+    padding: 3px 8px;
+    border: 1px solid var(--cs-text-mid);
+    border-radius: var(--radius-xl);
+    background: transparent;
+    color: var(--cs-text-mid);
+    cursor: pointer;
+    white-space: nowrap;
+    transition: border-color 0.15s, color 0.15s;
+  }
+  .btn-reassign-small:hover {
+    border-color: var(--cs-purple);
+    color: var(--cs-purple);
+  }
+
+  .reassign-row {
+    padding: 6px 14px 10px;
+  }
+  .reassign-picker-wrap {
+    width: 100%;
+  }
+  .reassign-input {
+    width: 100%;
+    font-size: 13px;
+    padding: 6px 10px;
+    border: 1px solid var(--cs-lilac);
+    border-radius: var(--cms-radius-sm);
+    background: var(--cs-surface-gray);
+    color: var(--cs-text);
+    outline: none;
+  }
+  .reassign-input:focus {
+    border-color: var(--cs-purple);
+  }
+  .reassign-loading,
+  .reassign-error,
+  .reassign-empty {
+    font-size: 12px;
+    color: var(--cs-text-mid);
+    font-style: italic;
+  }
+  .reassign-error { color: var(--cs-error); }
+
+  /* 옵션상품 수량 "-" — 메인상품 카드와 톤 통일(.qty-count-badge 옆 소형 원형 버튼) */
+  .opt-qty-minus-small {
+    width: 22px;
+    height: 22px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border: 1px solid var(--cs-lilac);
+    border-radius: 50%;
+    background: var(--cs-surface-gray);
+    color: var(--cs-text);
+    font-size: 14px;
+    line-height: 1;
+    cursor: pointer;
+    transition: background 0.12s;
+    vertical-align: middle;
+    margin-left: 6px;
+  }
+  .opt-qty-minus-small:hover:not(:disabled) {
+    background: var(--cs-purple);
+    border-color: var(--cs-purple);
+    color: #fff;
+  }
+  .opt-qty-minus-small:disabled {
+    opacity: 0.35;
+    cursor: not-allowed;
+  }
+
+  /* Stage 4 UX 재수정(2026-09-03): 그룹당 카드 1장 + 상품코드 행 반복 방식으로 전환하며
+     +/- 스텝퍼(.prod-qty-*)는 제거 — "수량"은 이제 상품코드 행 개수 자체로 표현되고, 증가는
+     아래 .btn-add-unit-small, 감소는 각 상품코드 행의 .btn-delete-icon이 담당한다. */
+  .qty-count-badge {
+    display: inline-block;
+    margin-left: 6px;
+    padding: 1px 8px;
+    border-radius: var(--radius-full, 99px);
+    background: var(--cs-lilac);
+    color: var(--cs-purple);
+    font-size: 11px;
+    font-weight: 700;
+    vertical-align: middle;
+  }
+
+  .btn-add-unit-small {
+    height: 28px;
+    padding: 0 12px;
+    border: 1.5px dashed var(--cs-purple);
+    border-radius: var(--cms-radius-sm);
+    background: transparent;
+    color: var(--cs-purple);
+    font-size: 12px;
+    font-weight: 700;
+    cursor: pointer;
+    transition: background 0.15s, color 0.15s;
+  }
+  .btn-add-unit-small:hover:not(:disabled) {
+    background: var(--cs-purple);
+    color: #fff;
+  }
+  .btn-add-unit-small:disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
+  }
+
+  /* Stage 4: 결제정보 탭 — 상품구성 변경 후 금액 별도확인 안내(cs-warning 톤) */
+  .amount-sync-notice {
+    margin: 4px 0 12px;
+    padding: 8px 12px;
+    border-radius: var(--cms-radius-sm);
+    background: rgba(245, 158, 11, 0.12);
+    color: var(--cs-warning);
+    font: var(--text-pc-script-12);
+    font-weight: 600;
+  }
+
+  /* Stage 4: 클라이언트 세션 한정 "수정" 배지 — cs-info(정보 파랑) 톤, cms-uiux.md §7-6 배지 계열 */
+  .badge-modified {
+    display: inline-block;
+    margin-left: 6px;
+    padding: 1px 8px;
+    border-radius: var(--radius-full, 99px);
+    background: rgba(14, 165, 233, 0.12);
+    color: var(--cs-info);
+    font-size: 11px;
+    font-weight: 700;
+    vertical-align: middle;
   }
 
   /* 정보 섹션 */
@@ -1788,15 +2515,6 @@
   .approval-step-dot--done      { background: var(--cs-purple); }
   .approval-step-dot--confirmed { background: var(--cs-orange, #FF4500); }
   .amount-discount { color: var(--cs-error, #ef4444); }
-  .option-code {
-    display: inline-block;
-    margin-left: 8px;
-    font-size: 11px;
-    background: var(--cs-surface-gray);
-    padding: 2px 6px;
-    border-radius: 4px;
-    color: var(--cs-text-mid);
-  }
   .sibling-status-badge {
     display: inline-block;
     margin-left: 8px;
