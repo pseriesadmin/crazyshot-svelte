@@ -167,6 +167,10 @@ Stephen 확인 필요, (b) `account/profile/+page.svelte`의 동일 회귀 수�
 - src/lib/components/auth/SignUpModal.svelte: CSS 7개 클래스 추가
   (.su-auth-links .su-auth-link .su-auth-sep .su-result-box .su-result-label
    .su-result-email .su-result-desc)
+  + 이메일 입력 한글 입력 방지 버그 수정(2026-09-02 세션2):
+    su-reset-email input에 inputmode="email" + oninput 핸들러 추가
+    (replace(/[^\x20-\x7E]/g, '') — IME isComposing 체크와 달리 비ASCII 전체 차단,
+    비밀번호 찾기 이메일 입력 시 한글/CJK 입력이 그대로 남는 UX 결함 해소)
 - src/routes/api/auth/find-email/+server.ts (신규): service_role POST 엔드포인트 —
   OTP 검증(phone_otps) + user_profiles phone 조회 + admin.auth.admin.getUserById()로
   이메일 취득 + 마스킹 반환
@@ -30601,5 +30605,19 @@ Frozen 파일 미해당 확인(`supabase.ts`/`hooks.server.ts`/`auth.ts` 스토�
 
 **다음 조치**: SignUpModal.svelte 동일 버그 수정 여부는 Stephen 확인 후 별도 진행(이 세션
 범위 밖이라 자동 확장하지 않음).
+
+### ✅ HIGH 후속 수정 완료(2026-09-02, Stephen "같은 방식으로 마저 수정해" 승인)
+
+`src/lib/components/auth/SignUpModal.svelte` `handleLogin()` 1줄 수정 — `performSignIn(
+loginEmail, loginPassword)` → `performSignIn(loginEmail.trim(), loginPassword)`(login/
++page.svelte와 동일 패턴, 비밀번호는 트림 안 함).
+
+검증: `npm run check` 신규 에러 0건(기존 vite.config.ts 무관 1건만 잔존). 이 파일에
+`initialMode` 관련 경고 1건이 있으나 `git diff`로 대조해 다른 병렬 세션이 이미 만든
+아이디찾기/비밀번호재설정 기능 코드(17행 근처, 이번 수정과 무관한 위치)에서 온 기존
+경고임을 확인 — 이번 1줄 수정이 만든 신규 결함 아님.
+
+이로써 "이메일 미trim 로그인 실패" 문제 클래스(`/auth/login`·`SignUpModal` 로그인모달
+2개 진입점)가 전부 해소됨. git commit은 Stephen 직접 실행.
 
 

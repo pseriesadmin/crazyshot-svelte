@@ -1,7 +1,11 @@
 # GSD_LOG.md — 크레이지샷 실행 이력
 # 형식: [YYYY-MM-DD HH:MM] 타입 | 타스크명 | 파일 | 소요 | 결과
 
+[2026-09-02] 🔴HIGH | SignUpModal.svelte 로그인모드 이메일trim 후속수정 (QA HIGH 발견분) | src/lib/components/auth/SignUpModal.svelte | — | ✅ 완료 — Stephen 승인 후 performSignIn(loginEmail, loginPassword) → performSignIn(loginEmail.trim(), loginPassword) 1줄 수정(login/+page.svelte와 동일 패턴). npm run check 신규에러 0건, 기존 initialMode 경고는 타 세션의 무관 코드에서 온 것 git diff로 확인. "이메일 미trim 로그인실패" 버그클래스 2개 진입점(auth/login·SignUpModal 로그인모달) 전부 해소. git commit은 Stephen 직접 실행.
+
 [2026-09-02] ✅QA재검수 | /auth/login 이메일trim 수정 — GATE E 독립검수 | src/routes/auth/login/+page.svelte | — | ✅ 조건부 통과 — 수정 자체(email.trim() 1줄) 정확·Frozen파일 미해당·npm run check 신규에러 0건. ⚠️HIGH 신규발견(이 세션 재확인 완료): SignUpModal.svelte:98 로그인모드(performSignIn(loginEmail,...))가 동일 미trim 버그 보유, products/[id]/+page.svelte:1127에서 실사용 경로로 확인(상품상세 로그인모달) — 이번 태스크 범위 밖이라 미수정, Stephen 확인 후 별도 진행. login/+page.svelte에 무관한 타 변경 혼재도 참고 전달(비블로킹).
+
+[2026-09-02] 🟡BOUNDARY | 비밀번호찾기 이메일 입력 한글 차단 버그 수정 | src/lib/components/auth/SignUpModal.svelte | — | ✅ 완료 — su-reset-email input에 inputmode="email" + oninput 핸들러(replace /[^\x20-\x7E]/g) 추가. type="email"만으로는 PC 데스크탑 IME 한글 입력이 차단되지 않는 결함 해소. sp3-qa-agent 검수 대기.
 
 [2026-09-02] 🟡BOUNDARY | 아이디 찾기 + 비밀번호 재설정 기능 신설 (SignUpModal 확장) |
   src/lib/components/auth/SignUpModal.svelte (CSS 7개 클래스 추가),

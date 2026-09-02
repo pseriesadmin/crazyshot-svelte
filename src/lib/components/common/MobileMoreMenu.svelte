@@ -75,14 +75,14 @@
     {:else}
       <!-- 미로그인 상태: 로그인 버튼 + 회원가입 링크 -->
       <a href="/auth/login" class="mm-action-btn" onclick={onclose}>
-        <span class="mm-action-text">로그인</span>
+        <span class="mm-action-text">Sign in</span>
         <span class="mm-action-arrow" aria-hidden="true">
           <svg width="17" height="12" viewBox="0 0 17 12" fill="none" xmlns="http://www.w3.org/2000/svg">
             <path d="M1 6H16M11.3845 1L16 6L11.3845 11" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
           </svg>
         </span>
       </a>
-      <a href="/auth/signup" class="mm-signup-link" onclick={onclose}>회원가입</a>
+      <a href="/auth/login?mode=signup" class="mm-signup-link" onclick={onclose}>Sign up</a>
     {/if}
   </div>
 
@@ -198,15 +198,15 @@
     width: 100%;
     min-width: 300px;
     padding: 15px 50px;
-    background: var(--cs-purple);
+    background: var(--cs-login-btn-gradient);
     border: none;
     border-radius: var(--radius-2xl);
     cursor: pointer;
     text-decoration: none;
-    transition: background 0.15s;
+    transition: opacity 0.15s, transform 0.15s;
   }
-  .mm-action-btn:hover  { background: var(--cs-purple-hover); }
-  .mm-action-btn:active { background: var(--cs-purple-dark); }
+  .mm-action-btn:hover  { opacity: 0.9; transform: translateY(-1px); }
+  .mm-action-btn:active { opacity: 1; transform: translateY(0); }
 
   .mm-action-text {
     flex: 1;
