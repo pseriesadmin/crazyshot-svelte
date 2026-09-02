@@ -34,9 +34,15 @@ export const load: PageServerLoad = async ({ parent, url }) => {
   const { cmsRole } = await parent()
   if (!hasSettingsAccess(cmsRole ?? '')) throw redirect(303, '/cms?notice=access_denied')
 
+  // AdminChatPanel의 "빠른문의 답변등록" 리마인더 카드가 붙이는 딥링크 파라미터 —
+  // 해당 문의를 아코디언에서 자동으로 펼쳐 보여준다. /cms/reservation·/cms/rentals의
+  // ?selected= 딥링크와 동일한 원리(contract.md "관리자 딥링크 라우팅" 참고) — 대상이
+  // 현재 페이지네이션(20건/페이지) 밖에 있으면 자동으로 펼쳐지지 않는 동일한 한계를 그대로 가짐.
+  const selectedPostId = url.searchParams.get('post')
+
   const serviceRoleKey = env.SUPABASE_SERVICE_ROLE_KEY
   if (!serviceRoleKey) {
-    return { posts: [] as InquiryRow[], totalCount: 0, totalPages: 1, page: 1, status: '', search: '' }
+    return { posts: [] as InquiryRow[], totalCount: 0, totalPages: 1, page: 1, status: '', search: '', selectedPostId }
   }
 
   const status = url.searchParams.get('status') ?? ''
@@ -66,6 +72,7 @@ export const load: PageServerLoad = async ({ parent, url }) => {
     page,
     status,
     search,
+    selectedPostId,
   }
 }
 

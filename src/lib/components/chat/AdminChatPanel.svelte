@@ -156,6 +156,32 @@
       .catch(() => {})
   })
 
+  // "빠른문의 답변등록" 리마인더 — 미답변(status='open') 빠른문의를 세션 목록 최상단에
+  // 별도 카드로 노출(chat_messages와 무관한 CMS 전용 UI, 2026-09-02). 과거엔 고객 본인의
+  // 채팅 세션에 알림카드를 삽입해 고객 화면에도 새던 결함이 있었음(Migration 425로 제거) —
+  // 이 방식은 그 대체다.
+  interface PendingInquiryCard { id: string; title: string; created_at: string }
+  let pendingInquiries = $state<PendingInquiryCard[]>([])
+  async function loadPendingInquiries(): Promise<void> {
+    try {
+      const res = await fetch('/api/cms/chat/pending-inquiries')
+      if (!res.ok) return
+      const d = await res.json() as { posts?: PendingInquiryCard[] }
+      pendingInquiries = d.posts ?? []
+    } catch {
+      // 조회 실패는 조용히 무시 — 리마인더는 부가 기능, 세션 목록 자체를 막지 않음
+    }
+  }
+  $effect(() => { loadPendingInquiries() })
+
+  // 답변등록(add_cs_reply)은 status를 open→in_progress/resolved로 항상 바꾸므로(Migration 157),
+  // 다음 조회 시점부터 이 카드는 자동으로 목록에서 빠진다 — 별도의 "대기/종료" 이동 UI는 없음
+  // (2026-09-02, Stephen 확정: 처리되면 그냥 사라지면 됨). 30초 주기로 이 사실을 실제 반영한다.
+  $effect(() => {
+    const timer = setInterval(() => { loadPendingInquiries() }, 30 * 1000)
+    return () => clearInterval(timer)
+  })
+
   type FilterTab = 'open' | 'pending' | 'closed'
 
   let filterTab = $state<FilterTab>('open')
@@ -336,6 +362,8 @@
 
   function refetchCtaModalPost(): void {
     if (ctaModalPostId != null) void loadCtaModalPost(ctaModalPostId)
+    // 이 모달 경로로 답변 등록 시에도 좌측 "빠른문의" 리마인더 카드를 즉시 갱신(자동 제거)
+    void loadPendingInquiries()
   }
 
   function refetchCtaModalRow(): void {
@@ -849,6 +877,11 @@
   async function handleRefresh(): Promise<void> {
     const { sessions } = await loadAdminSessions()
     setSessions(sessions)
+    loadPendingInquiries()
+  }
+
+  function handleSelectInquiry(postId: string): void {
+    goto(`/cms/customers/inquiry?post=${postId}`)
   }
 
   function handleDeleteRequest(e: MouseEvent, sid: string): void {
@@ -944,8 +977,28 @@
     </div>
 
     <ul class="session-list" role="listbox" aria-label="채팅 세션 목록">
+      {#if filterTab === 'open'}
+        {#each pendingInquiries as inquiry (inquiry.id)}
+          <li>
+            <div
+              class="session-card inquiry-reminder-card"
+              onclick={() => handleSelectInquiry(inquiry.id)}
+              onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') handleSelectInquiry(inquiry.id) }}
+              role="option"
+              tabindex="0"
+              aria-selected="false"
+            >
+              <span class="inquiry-badge">빠른문의</span>
+              <span class="inquiry-title">{inquiry.title}</span>
+              <span class="inquiry-time">{formatDateTime(inquiry.created_at)}</span>
+            </div>
+          </li>
+        {/each}
+      {/if}
       {#if filteredSessions.length === 0}
-        <li class="empty-sessions">세션 없음</li>
+        {#if pendingInquiries.length === 0 || filterTab !== 'open'}
+          <li class="empty-sessions">세션 없음</li>
+        {/if}
       {:else}
         {#each filteredSessions as session (session.id)}
           <li>
@@ -1477,6 +1530,45 @@
   .session-card:hover    { background: var(--cs-lilac); }
   .session-card.selected { background: var(--cs-lilac); }
   .session-card.flash    { animation: session-card-flash 0.6s ease-in-out 3; }
+
+  /* "빠른문의" 리마인더 카드 — 가장 옅은 레드 토큰(red-5%)으로 일반 세션카드와 구분.
+     일반 세션카드(3행: 이름/미리보기/시각, min-height 64px)보다 단순한 1행 구성으로
+     세로폭을 절반 수준(min-height 32px)으로 축소(2026-09-02, Stephen 확정 — 이름 제거,
+     "빠른문의 답변등록 —" 중복 문구 대신 배지 UI로 대체). */
+  .inquiry-reminder-card {
+    flex-direction: row;
+    align-items: center;
+    gap: 8px;
+    min-height: 32px;
+    padding: 8px 50px 8px 14px;
+    background: var(--cs-red-xlight);
+  }
+  .inquiry-reminder-card:hover { background: var(--cs-red-light); }
+
+  .inquiry-badge {
+    flex-shrink: 0;
+    background: var(--cs-red-badge);
+    color: var(--cs-white);
+    font-size: 10px;
+    font-weight: 700;
+    line-height: 1.5;
+    padding: 1px 7px;
+    border-radius: var(--radius-full);
+  }
+  .inquiry-title {
+    flex: 1;
+    min-width: 0;
+    font: var(--text-pc-body-14);
+    color: var(--cs-text);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .inquiry-time {
+    flex-shrink: 0;
+    font: var(--text-m-script-12);
+    color: var(--cs-text-light);
+  }
 
   @keyframes session-card-flash {
     0%, 100% {
