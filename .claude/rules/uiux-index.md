@@ -355,6 +355,24 @@ accept="image/png,image/jpeg,image/webp,image/heif,image/heic,application/pdf"
 
 ---
 
+## 🔴 모바일 반응형 화면 미세떨림 — 즉시 자동 수정 ★★★
+
+> **"모바일 반응형 화면 미세떨림" 언급 시 → 원인 재추론 없이 즉시 아래 실행.**
+
+```
+증상: PC 브라우저 모바일 반응형(디바이스 툴바) 모드에서 스크롤 시 화면 전체가 미세하게 흔들림
+원인: 페이지 최상위 컨테이너의 min-height: 100vh — 스크롤 시 브라우저 툴바 숨김/재출현으로
+      100vh 값이 매번 재계산되는 잘 알려진 모바일 100vh 버그
+수정: grep -rn "min-height:\s*100vh" src/routes src/lib/components 로 전역 재검색 →
+      "페이지 최상위 루트" 셀렉터인 것만 100dvh로 교체(모달·카드 등 국소 100vh는 그대로 둠)
+과거 회귀 이력(표만 믿지 말고 매번 전역 재검색할 것): account/profile(.page-root)·
+  contract/complete·expired(.page)·cart(.cart-root) — 2026-08-26 최초 확정, 2026-09-02
+  cart·account/profile 2곳 재회귀 발견·재수정
+세부 절차·GATE C → @.claude/rules-ref/front-uiux.md §19
+```
+
+---
+
 ## 전체 정본 로드 조건
 
 ```

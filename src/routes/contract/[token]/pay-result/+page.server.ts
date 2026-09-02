@@ -180,6 +180,19 @@ export const load: PageServerLoad = async ({ params, url }) => {
     console.error('[contract/pay-result] confirm_order_payment_and_update_reservations 실패 — Toss 결제는 이미 승인됨:', confirmRpcErr.message, {
       internalOrderId, tossOrderId, paymentKey, amount,
     })
+    // 관리자 알림 (fail-soft) — api/cms/reservations/[id]/payment/+server.ts의 환불실패
+    // 알림과 동일 패턴·동일 이벤트키 재사용. 로그만으로는 30분 HOLD 자동만료까지 아무도
+    // 인지 못한 채 방치될 수 있어(결제완료+예약미확정 상태), 관리자가 즉시 알아채도록 함.
+    try {
+      const { sendPushToAdmins } = await import('$lib/server/push')
+      await sendPushToAdmins('payment_completed', {
+        title: '결제 확정 처리 실패 — 확인 필요',
+        body: `주문 #${internalOrderId}: Toss 결제는 완료됐으나 DB 반영에 실패했습니다. Toss 콘솔·예약상태를 직접 확인해주세요.`,
+        link: `/cms/reservation?selected=${reservationId}`,
+      })
+    } catch (pushErr) {
+      console.error('[contract/pay-result] 관리자 알림 오류(fail-soft):', pushErr instanceof Error ? pushErr.message : pushErr)
+    }
   }
 
   const result = rpcResult as { success?: boolean; idempotent?: boolean; error?: string } | null
