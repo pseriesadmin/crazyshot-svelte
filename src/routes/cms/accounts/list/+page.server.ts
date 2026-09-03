@@ -19,11 +19,13 @@ interface ProfileRow {
 }
 
 export const load: PageServerLoad = async ({ parent }) => {
-  const { cmsRole } = await parent()
+  const { cmsRole, session } = await parent()
   if (!hasSettingsAccess(cmsRole ?? '')) throw redirect(303, '/cms?notice=access_denied')
 
+  const callerId = session?.user.id ?? null
+
   const serviceRoleKey = env.SUPABASE_SERVICE_ROLE_KEY
-  if (!serviceRoleKey) return { accounts: [] as AccountRow[] }
+  if (!serviceRoleKey) return { accounts: [] as AccountRow[], callerId }
 
   const admin = createClient(getSupabaseUrl(), serviceRoleKey)
 
@@ -55,7 +57,7 @@ export const load: PageServerLoad = async ({ parent }) => {
     is_suspended: bannedMap[p.id] ?? false,
   }))
 
-  return { accounts }
+  return { accounts, callerId }
 }
 
 export interface AccountRow {

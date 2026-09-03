@@ -44,12 +44,24 @@
     onclose: () => void
     initialTab?: string | null
     callerRole?: string
+    callerId?: string
   }
 
-  let { row, onclose, initialTab = null, callerRole = '' }: Props = $props()
+  let { row, onclose, initialTab = null, callerRole = '', callerId = '' }: Props = $props()
 
   /** 호출자가 마스터(superadmin)인지 여부 — 역할 변경 콤보버튼 활성 판정 */
   let callerIsSuperadmin = $derived(callerRole === 'superadmin')
+  /** 호출자가 지금 보고 있는 계정이 본인 계정인지 — "비밀번호 변경" 레이아웃은 항상 노출되나
+      실행 버튼은 본인 계정에서만 활성화 */
+  let isOwnAccount = $derived(!!callerId && row.id === callerId)
+
+  // ── 비밀번호 변경 모달 상태 ─────────────────────────────────
+  let showChangePwModal = $state(false)
+  let changingPw = $state(false)
+  let changePwError = $state<string | null>(null)
+  let currentPasswordKoreanWarned = false
+  let newPasswordKoreanWarned = false
+  let confirmPasswordKoreanWarned = false
 
   const VALID_TABS: AccountTabKey[] = ['info', 'permissions', 'logs']
   function resolveInitialTab(tab: string | null): AccountTabKey {
@@ -452,6 +464,23 @@
           {/if}
         </div>
 
+        <!-- 비밀번호 변경 (레이아웃은 항상 노출, 실행 버튼만 본인 계정에서만 활성화) -->
+        <div class="toggle-group">
+          <div class="toggle-info">
+            <span class="toggle-label">비밀번호 변경</span>
+            <span class="toggle-desc">
+              {isOwnAccount ? '본인 계정의 로그인 비밀번호를 변경합니다' : '본인 계정에서만 변경할 수 있습니다'}
+            </span>
+          </div>
+          <button
+            type="button"
+            class="combo-btn"
+            disabled={!isOwnAccount}
+            title={isOwnAccount ? undefined : '본인 계정에서만 변경할 수 있습니다'}
+            onclick={() => { showChangePwModal = true; changePwError = null }}
+          >변경</button>
+        </div>
+
         <!-- 구분선 -->
         <div class="section-divider"></div>
 
@@ -688,6 +717,117 @@
 
   </div>
 </div>
+
+{#if showChangePwModal}
+  <div class="pw-modal-overlay" role="dialog" aria-modal="true" aria-label="비밀번호 변경">
+    <div class="pw-modal-wrap">
+      <div class="pw-modal-header">
+        <span class="pw-modal-title">비밀번호 변경</span>
+        <button type="button" class="close-btn" onclick={() => { showChangePwModal = false }} aria-label="닫기">✕</button>
+      </div>
+      <form
+        method="POST"
+        action="/cms/login?/changePassword"
+        class="pw-modal-form"
+        use:enhance={() => {
+          changingPw = true
+          changePwError = null
+          return async ({ result }: { result: ActionResult }) => {
+            changingPw = false
+            if (result.type === 'failure') {
+              changePwError = (result.data as { error?: string })?.error ?? '비밀번호 변경에 실패했습니다.'
+            } else if (result.type === 'success') {
+              csToast.success('비밀번호가 변경되었습니다.')
+              showChangePwModal = false
+            } else if (result.type === 'error') {
+              changePwError = '비밀번호 변경 중 오류가 발생했습니다.'
+            }
+          }
+        }}
+      >
+        {#if changePwError}
+          <p class="pw-error" role="alert">{changePwError}</p>
+        {/if}
+
+        <label class="field-label" for="pw-current">현재 비밀번호</label>
+        <input
+          id="pw-current"
+          name="currentPassword"
+          type="password"
+          class="field-input"
+          maxlength={72}
+          placeholder="현재 비밀번호 입력"
+          autocomplete="current-password"
+          oninput={(e) => {
+            const el = e.currentTarget as HTMLInputElement
+            const filtered = el.value.replace(/[^\x00-\x7F]/g, '')
+            if (el.value !== filtered) {
+              el.value = filtered
+              if (!currentPasswordKoreanWarned) {
+                currentPasswordKoreanWarned = true
+                csToast.warning('영문(숫자)으로 입력하세요.')
+                setTimeout(() => { currentPasswordKoreanWarned = false }, 3000)
+              }
+            }
+          }}
+          required
+        />
+
+        <label class="field-label" for="pw-new">새 비밀번호</label>
+        <input
+          id="pw-new"
+          name="newPassword"
+          type="password"
+          class="field-input"
+          maxlength={72}
+          placeholder="8자 이상 입력"
+          autocomplete="new-password"
+          oninput={(e) => {
+            const el = e.currentTarget as HTMLInputElement
+            const filtered = el.value.replace(/[^\x00-\x7F]/g, '')
+            if (el.value !== filtered) {
+              el.value = filtered
+              if (!newPasswordKoreanWarned) {
+                newPasswordKoreanWarned = true
+                csToast.warning('영문(숫자)으로 입력하세요.')
+                setTimeout(() => { newPasswordKoreanWarned = false }, 3000)
+              }
+            }
+          }}
+          required
+        />
+
+        <label class="field-label" for="pw-confirm">새 비밀번호 확인</label>
+        <input
+          id="pw-confirm"
+          name="confirmPassword"
+          type="password"
+          class="field-input"
+          maxlength={72}
+          placeholder="비밀번호 재입력"
+          autocomplete="new-password"
+          oninput={(e) => {
+            const el = e.currentTarget as HTMLInputElement
+            const filtered = el.value.replace(/[^\x00-\x7F]/g, '')
+            if (el.value !== filtered) {
+              el.value = filtered
+              if (!confirmPasswordKoreanWarned) {
+                confirmPasswordKoreanWarned = true
+                csToast.warning('영문(숫자)으로 입력하세요.')
+                setTimeout(() => { confirmPasswordKoreanWarned = false }, 3000)
+              }
+            }
+          }}
+          required
+        />
+
+        <button type="submit" class="pw-submit-btn" disabled={changingPw}>
+          {changingPw ? '변경 중...' : '비밀번호 변경'}
+        </button>
+      </form>
+    </div>
+  </div>
+{/if}
 
 <style>
   /* ── 패널 컨테이너 ── */
@@ -1287,4 +1427,62 @@
     transition: opacity 0.12s;
   }
   .perms-retry-btn:hover { opacity: 0.75; }
+
+  /* ── 비밀번호 변경 모달 ── */
+  .pw-modal-overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.45);
+    z-index: 300;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 24px;
+  }
+  .pw-modal-wrap {
+    background: var(--cs-white);
+    border-radius: var(--cms-radius-sm);
+    width: 360px;
+    max-width: 100%;
+    box-shadow: 0 8px 40px rgba(0, 0, 0, 0.18);
+  }
+  .pw-modal-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 16px 20px;
+    border-bottom: 1px solid var(--cs-lilac);
+  }
+  .pw-modal-title {
+    font: var(--text-pc-title-16);
+    font-weight: 700;
+    color: var(--cs-text);
+  }
+  .pw-modal-form {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    padding: 20px;
+  }
+  .pw-modal-form .field-label { margin-top: 10px; }
+  .pw-modal-form .field-label:first-child { margin-top: 0; }
+  .pw-error {
+    font: var(--text-pc-script-12);
+    color: var(--cs-red-badge);
+    margin: 0 0 4px;
+  }
+  .pw-submit-btn {
+    height: 40px;
+    margin-top: 16px;
+    background: var(--cs-purple);
+    border: none;
+    border-radius: var(--cms-radius-md);
+    color: #fff;
+    font: var(--text-pc-body-14);
+    font-weight: 700;
+    cursor: pointer;
+    transition: opacity 0.12s;
+  }
+  .pw-submit-btn:hover:not(:disabled) { opacity: 0.85; }
+  .pw-submit-btn:disabled { opacity: 0.5; cursor: not-allowed; }
 </style>

@@ -99,7 +99,7 @@
     {#if selectedAccount}
       <div class="panel-area">
         {#key selectedAccount.id}
-          <AccountDetailPanel row={selectedAccount} onclose={closePanel} callerRole={data.cmsRole ?? ''} />
+          <AccountDetailPanel row={selectedAccount} onclose={closePanel} callerRole={data.cmsRole ?? ''} callerId={data.callerId ?? ''} />
         {/key}
       </div>
     {/if}

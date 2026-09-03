@@ -162,4 +162,42 @@ export const actions: Actions = {
 
     throw redirect(303, '/cms')
   },
+
+  changePassword: async ({ request, locals }) => {
+    const { session } = await locals.safeGetSession()
+    if (!session) return fail(401, { error: '인증이 필요합니다.' })
+
+    const email = session.user.email
+    if (!email) return fail(400, { error: '계정 정보를 확인할 수 없습니다.' })
+
+    const form = await request.formData()
+    const currentPassword = (form.get('currentPassword') as string | null) ?? ''
+    const newPassword     = (form.get('newPassword')     as string | null) ?? ''
+    const confirmPassword = (form.get('confirmPassword') as string | null) ?? ''
+
+    if (!currentPassword || !newPassword || !confirmPassword) {
+      return fail(400, { error: '모든 항목을 입력해주세요.' })
+    }
+    if (
+      newPassword.length !== confirmPassword.length ||
+      Buffer.from(newPassword).equals(Buffer.from(confirmPassword)) === false
+    ) {
+      return fail(400, { error: '새 비밀번호가 일치하지 않습니다.' })
+    }
+    if (newPassword.length < 8) {
+      return fail(400, { error: '새 비밀번호는 8자 이상이어야 합니다.' })
+    }
+
+    // 현재 비밀번호 재확인(재인증) — 세션이 살아있어도 실제 비밀번호를 아는지 확인
+    const { error: verifyErr } = await locals.supabase.auth.signInWithPassword({
+      email,
+      password: currentPassword,
+    })
+    if (verifyErr) return fail(400, { error: '현재 비밀번호가 올바르지 않습니다.' })
+
+    const { error: updateErr } = await locals.supabase.auth.updateUser({ password: newPassword })
+    if (updateErr) return fail(500, { error: '비밀번호 변경에 실패했습니다.' })
+
+    return { success: true }
+  },
 }

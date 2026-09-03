@@ -14,7 +14,10 @@
 
   // ── 상태 ──
   let menuOpen = $state(false)
-  let emailKoreanWarned = false  // 이메일 한글 경고 중복 방지
+  let emailKoreanWarned = false     // 이메일 한글 경고 중복 방지
+  let passwordKoreanWarned = false  // 비밀번호 한글 경고 중복 방지
+  const EMAIL_MAX_LENGTH = 254      // RFC 5321 표준 최대길이
+  const PASSWORD_MAX_LENGTH = 72    // Supabase Auth/bcrypt 72바이트 이후 절단 한계
   let email = $state('')
   let password = $state('')
   let rememberMe = $state(false)
@@ -122,6 +125,7 @@
               <input
                 class="d-input"
                 type="email"
+                maxlength={EMAIL_MAX_LENGTH}
                 placeholder="이메일을 입력하세요"
                 bind:value={email}
                 onkeydown={handleKeydown}
@@ -153,9 +157,22 @@
               <input
                 class="d-input"
                 type={showPassword ? 'text' : 'password'}
+                maxlength={PASSWORD_MAX_LENGTH}
                 placeholder="비밀번호를 입력하세요"
                 bind:value={password}
                 onkeydown={handleKeydown}
+                oninput={(e) => {
+                  const el = e.currentTarget as HTMLInputElement
+                  const filtered = el.value.replace(/[^\x00-\x7F]/g, '')
+                  if (el.value !== filtered) {
+                    el.value = filtered; password = filtered
+                    if (!passwordKoreanWarned) {
+                      passwordKoreanWarned = true
+                      csToast.warning('영문(숫자)으로 입력하세요.')
+                      setTimeout(() => { passwordKoreanWarned = false }, 3000)
+                    }
+                  }
+                }}
                 autocomplete="current-password"
                 aria-label="비밀번호"
               />
@@ -377,6 +394,7 @@
           <input
             class="m-input"
             type="email"
+            maxlength={EMAIL_MAX_LENGTH}
             placeholder="이메일을 입력하세요"
             bind:value={email}
             onkeydown={handleKeydown}
@@ -408,9 +426,22 @@
           <input
             class="m-input"
             type={showPassword ? 'text' : 'password'}
+            maxlength={PASSWORD_MAX_LENGTH}
             placeholder="비밀번호를 입력하세요"
             bind:value={password}
             onkeydown={handleKeydown}
+            oninput={(e) => {
+              const el = e.currentTarget as HTMLInputElement
+              const filtered = el.value.replace(/[^\x00-\x7F]/g, '')
+              if (el.value !== filtered) {
+                el.value = filtered; password = filtered
+                if (!passwordKoreanWarned) {
+                  passwordKoreanWarned = true
+                  csToast.warning('영문(숫자)으로 입력하세요.')
+                  setTimeout(() => { passwordKoreanWarned = false }, 3000)
+                }
+              }
+            }}
             autocomplete="current-password"
             aria-label="비밀번호"
           />

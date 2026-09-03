@@ -1,6 +1,253 @@
 # GSD_LOG.md — 크레이지샷 실행 이력
 # 형식: [YYYY-MM-DD HH:MM] 타입 | 타스크명 | 파일 | 소요 | 결과
 
+[2026-09-03(후속)] 🔴CRITICAL | 슈퍼마스터 계정 Production 직접생성 + 비밀번호 자가변경 UI
+  AccountDetailPanel 재배치 |
+  수정: src/routes/cms/+layout.svelte(상단바 링크 제거), src/routes/cms/login/
+  +page.server.ts(changePasswordMode 분기 제거, changePassword 액션 success 반환값 변경),
+  src/routes/cms/login/+page.svelte(changePasswordMode branch 제거), src/routes/cms/
+  accounts/list/+page.server.ts(callerId 반환 추가), src/routes/cms/accounts/list/
+  +page.svelte(callerId prop 전달), src/lib/components/cms/AccountDetailPanel.svelte
+  (계정활성화 아래 비밀번호변경 토글그룹+모달 신규), src/__tests__/server/
+  cmsChangePassword.test.ts(케이스⑥ 기대값 갱신) |
+  plan_source: Stephen "직접 슈퍼 마스터 등록해" + "어디에도 관리자 계정 본인의 비번 수정
+  UI는 만들어지지 않았어" → 위치 재지시(상단바 반려, 계정상세패널 재배치) → "레이아웃은
+  항상 보이고 변경 버튼만 본인 아니면 비활성화" |
+  ✅ 계정: Production DB에 raw SQL로 직접 생성(스키마 실측 후 GoTrue 트리거·RPC 재사용,
+  bcrypt 해시 매치 실측 검증) — 한광익/rattaf@hanmail.net/superadmin. ✅ UI: 상단바 진입점
+  전량 제거 후 AccountDetailPanel "기본정보"탭 "계정 활성화" 아래로 이전, 클릭 시 모달
+  즉시오픈(페이지이동 없음), isOwnAccount 기준 버튼만 disabled(레이아웃은 항상 노출).
+  서버액션 성공반환을 redirect→{success:true}로 변경(모달이 그자리에서 처리). npm run
+  check 신규에러 0건, vitest cmsChangePassword.test.ts 6/6 GREEN.
+
+[2026-09-03(재후속)] 🔴CRITICAL | QA 지적 2건 해소 — Production DB 실측 확인 + 감사로그 공백 보강 |
+  수정: cms_admin_audit_log 1행 INSERT(action_type='create', target=rattaf@hanmail.net) |
+  plan_source: sp3-qa-agent가 이번 세션에 Supabase MCP가 없어 Production 데이터 실측을
+  못했다며 SQL 3종 직접실행 요청 + "raw SQL 경로라 감사로그 누락 가능성" 비블로킹 지적 |
+  ✅ QA가 제시한 3개 쿼리 전부 직접 실행해 정합성 확인: auth.users(is_anonymous=false,
+  is_sso_user=false, aud/role=authenticated), auth.identities(1건, provider=email,
+  identity_data에 sub/email/email_verified 정상), user_profiles(cms_role=superadmin,
+  user_id=id 일치), encrypted_password 해시(prefix=$2a$, len=60, bcrypt 정상). 감사로그
+  공백은 실제로 확인돼 cms_admin_audit_log에 action_type='create' 1행을 직접 INSERT로
+  보강(actor=steven@pseries.net, after_value에 "DB 직접 provisioning" 사유 명시) — 이제
+  createAccount 정상경로로 만든 계정과 감사추적 관점에서 동일한 상태.
+
+[2026-09-03] 🟢ROUTINE | Order Total "쿠폰·포인트·약정요금" 3영역 단일 배경 카드로 묶기 |
+  수정: src/routes/cart/+page.svelte(.total-details-box에 background:var(--cs-white)
+  추가) |
+  plan_source: Stephen launch-selected-element로 coupon-section·points-select-section·
+  total-gray-section 3개 선택 → "선택영역을 하나의 BG 레이아웃(div)으로 묶어 정리할 것" |
+  ✅ 완료 — 세 영역을 감싸는 `.total-details-box`는 이미 구조적으로 하나의 div였지만
+  background 자체가 없어(computed backgroundColor 확인: rgba(0,0,0,0)) coupon-section·
+  points-select-section이 페이지 배경(라일락) 위에 떠 있는 것처럼 보이고 total-gray-section
+  (자체 회색 배경 보유)만 별도 카드처럼 분리돼 보였음 — 원인 특정 후 총 컨테이너에 흰 배경만
+  추가해 해결(총정요금 영역의 회색 톤은 기존 total-gray-section 배경 그대로 유지해 카드 내
+  2단 톤 디자인 유지, 새 색상 발명 없음). 실브라우저 스크린샷으로 쿠폰·포인트·약정요금이
+  하나의 둥근 카드(백·백·회색)로 통합돼 보임을 확인. svelte-check 신규 에러/경고 0건.
+
+[2026-09-03] 🟡BOUNDARY | "대여예약옵션" 헤더+접힘요약 단일 배경그룹 묶기 + 좌우 패딩
+  소실 결함 수정 |
+  수정: src/routes/cart/+page.svelte(bulkHeadButton {#snippet} 신규 추출 → bulkOpen
+  false && bulkDate&&bulkTime 상태일 때 bulk-head를 bulk-collapsed-bar와 함께
+  `.bulk-collapsed-group` 단일 div로 묶음 / `.acc-collapsed-summary`를
+  `.datetime-wrap.acc-collapsed-summary`로 결합 선택자화 — 기존 `.datetime-wrap{padding:
+  30px 0}` 규칙과 동일 우선순위(0,1,0)라 소스 순서상 좌우 패딩이 통째로 덮여 사라지던
+  결함 수정) |
+  plan_source: Stephen launch-selected-element로 bulk-head+요약바 2건 선택 → "①선택영역을
+  하나의 BG 레이아웃(div)으로 묶을 것 ②수령/반납 바 UI가 배경 폭에 100% 붙는 게 시각적
+  문제이니 좌우 패딩을 넣어 여백을 만들 것" |
+  ✅ 완료 — 새 배경색은 추가하지 않고(bulk-panel의 기존 흰 배경 그대로 물려받음) 구조적으로만
+  하나의 div로 묶음. 좌우 여백 문제의 실제 원인은 CSS 선택자 우선순위 충돌(동일 명시도의
+  두 규칙이 소스 순서로 승부, 나중에 정의된 `.datetime-wrap` 기본 규칙이 좌우 패딩 없는
+  `30px 0`으로 덮어씀)이었음을 특정해 결합 선택자로 근본 수정. 실브라우저 확인: 그룹 div가
+  bulk-head+bulk-collapsed-bar 둘 다 포함, computed padding-left/right 30px 정상 적용,
+  스크린샷으로 좌우 여백 정상 노출 확인. svelte-check 신규 에러/경고 0건. GSD_LOG.md 파일
+  상단 헤더 라인이 다른 세션 편집으로 유실돼 있어(무관한 발견) 같은 편집 지점에서 함께 복원.
+
+[2026-09-03] 🟡BOUNDARY | "대여예약옵션" 접힘 요약 바 — 임의 신규 UI 제거, 기존 datetime-wrap
+  레이아웃 재사용으로 정정 |
+  수정: src/routes/cart/+page.svelte(.bulk-collapsed-bar 내부를 라일락 텍스트 행(자체
+  고안 디자인)에서 "대여 방법"/"반납 방법"이 이미 쓰는 datetime-wrap/datetime-btns 풀 마크업
+  그대로 재사용으로 교체, 클릭 시 각각 bulkOpen=true+bulkOpenAcc='rental'/'return_'로 해당
+  아코디언 재오픈, 이제 안 쓰는 .bulk-collapsed-row/tag/value CSS 제거) |
+  plan_source: Stephen이 이전 구현을 보고 "왜 AI 멋대로 UI를 만들었냐" 지적 → "2번째·3번째
+  선택영역(acc-collapsed-summary·datetime-wrap)의 레이아웃이 그대로 노출되게 하라" |
+  ✅ 완료 — 신규 시각 디자인을 만든 것 자체가 문제였음을 인정, 기존 컴포넌트 마크업을
+  그대로 복제 재사용하는 방식으로 즉시 정정. svelte-check 신규 에러/경고 0건. 수령(단일)
+  값만 설정한 단순 시나리오에서 요약 바가 정확히 재사용 레이아웃(캘린더+시계 아이콘, 보라
+  선택배경, 날짜/시간 텍스트)으로 뜨는 것을 DOM 조회로 확인.
+  ⚠️ **별도 발견(이번 작업과 무관, 미수정, spawn_task로 별도 세션 제안 등록—task_b04bf123)**:
+  수령일·시간을 먼저 설정하고 이어서 반납일·시간을 설정하면, 수령 쪽 값이 알 수 없는 경로로
+  초기화되고 반납 값이 중복 표시되는 기존 상태관리 버그를 실브라우저 테스트 중 우연히 발견.
+  이번 UI 레이아웃 수정 자체의 결함이 아니라 bulkHandleDate류 핸들러 또는 copyToReturn 동기화
+  로직의 기존 버그로 추정 — 원인 미확인, 별도 조사 필요.
+
+[2026-09-03] 🔴CRITICAL | 계약서 {{주소}} 변수 — 배송지 스냅샷 컬럼 신설(Migration 434) |
+  배경: 계약서 변수 전수 감사 중 {{주소}}가 예약과 무관하게 항상 "고객 현재 기본 배송지"를
+  실시간 조회함을 발견(Stephen 지적) — rental_reservations/orders 어디에도 예약별 주소를
+  저장하는 컬럼이 없었고, 장바구니 "배송지 정보" 입력창(기본주소/직접입력)도 실제로는
+  서버로 전송되지 않는 로컬 상태였음(cart/+page.svelte 전체 추적으로 확인).
+  구현: rental_reservations.pickup_address_road/detail 컬럼 신설 + set_reservation_
+  shipment_method RPC를 5-param→7-param으로 교체(구 오버로드 명시적 DROP, PGRST203
+  모호성 재발 방지) + cart/+page.svelte saveShipmentMethod() 호출부에서 it.rentalForm.
+  addr/addrDetail 전달 + contract-data/+server.ts가 스냅샷 우선·기존 라이브조회 폴백으로
+  읽도록 변경. contract.md {{주소}} 행 재작성.
+  검증: svelte-check 신규 에러 0건, vitest contractAuthGates+contractDataLineItems
+  53/53 + createHoldReservationWithShipment 5/5 GREEN(RPC 오버로드 교체 회귀 없음).
+  라이브 종단검증(reservation 2654) — Stage DB에 스냅샷 값 임시 설정 → 실제 contract-data
+  API가 폴백 대신 스냅샷을 우선 반환함을 확인 후 원복.
+  Stage(ezyvffjvuwmtuhpxdjrw)·Production(vnbpmvxruyciuuaermyh) 둘 다 적용 완료(같은 날,
+  Production은 Stephen 지시로 후속 적용 — 적용 전 project_id 재확인 + Production 현재
+  상태가 Stage 적용 전과 정확히 동일함을 먼저 조회 확인 후 진행, 적용 후 재조회로 Stage와
+  동일 결과 확인). git commit 대상 4개 파일(마이그레이션 1+코드 2+문서 1) 커밋 대기
+  (Stephen 직접). 상세: TASK.md "CS2654 전자계약 변수 미치환 백필..." 블록 후속 7.
+
+[2026-09-03] 🟡BOUNDARY | "대여예약옵션" 아코디언 — 모바일 스크롤로 Order Total 진입 시
+  자동접힘 + 수령/반납 요약 바 신규 |
+  수정: src/routes/cart/+page.svelte(orderTotalSectionEl ref + IntersectionObserver
+  $effect 신규(모바일 전용, matchMedia max-width:640px 가드) — Order Total 섹션이 뷰포트
+  상단 20% 안으로 들어오면 bulkOpen=false 자동 설정 / bulk-head의 {:else if bulkDate &&
+  bulkTime} 분기로 수령·반납 요약 바(.bulk-collapsed-bar) 신규 — 수동 접기·자동 접기 공통
+  조건) |
+  plan_source: Stephen launch-selected-element로 "대여예약옵션" bulk-head 선택 →
+  "다운스크롤로 Order Total 진입 시 자동 접힘 + 수령/반납 설정값 바 UI는 그대로 노출" +
+  "①모바일 반응형에서만 동작 ②PC·반응형 이중 레이아웃이 필요하면 구현 중지" |
+  ✅ 완료 — bulk-panel 자체가 이미 `@media(min-width:641px){display:none}`으로 PC에서는
+  전혀 렌더링되지 않고 PC는 별도 detail-pane을 쓰는 기존 구조라, 이번 기능도 PC 분기 신설 없이
+  기존 컴포넌트 안에서만 구현 가능함을 먼저 확인 후 진행(중지 조건 해당 없음). IntersectionObserver
+  effect가 정상 실행·바인딩·매체쿼리 통과·옵저버 attach까지 되는 것은 임시 디버그 계측으로
+  직접 확인, else-if 요약 바 분기의 조건부 렌더링(있음/없음)과 표시 내용(방문대여·날짜·시간
+  정확히 일치)도 실제 DOM 조회로 확인. svelte-check 신규 에러/경고 0건.
+  ⚠️ **라이브 스크롤 트리거 최종 확인 미완료(정직 기록)**: Claude Browser의 Pane이 "표시되지
+  않음" 상태일 때 컴포지팅이 중단되는 이 세션 반복 환경결함이 이번엔 IntersectionObserver
+  콜백 자체와 Svelte `transition:slide` 아웃트로 완료 콜백까지 함께 억제시킴 — 독립적으로 만든
+  테스트용 IntersectionObserver로 "Pane 비표시 시 콜백 0건 / Pane 포그라운드 시 정상 발화"를
+  직접 대조 확인했고, 이 기능과 무관한 기존 `.bulk-body`(신규 코드 아님)의 `transition:slide`
+  아웃트로도 동일하게 재현돼(수령/반납값을 아예 설정 안 한 대조군에서도 동일 증상) 근본원인이
+  이번 신규 코드가 아니라 도구 환경 자체임을 격리 확인. 코드 로직 자체(상태 전환·조건부 렌더링)
+  는 직접 상태조회로 검증 완료 — 실기기/실브라우저에서의 최종 스크롤 체감 확인만 남음.
+
+[2026-09-03] 🟢ROUTINE | 카트 수령일·반납일 날짜/시간 라벨 모바일 폰트 한 단계 상향 |
+  수정: src/routes/cart/+page.svelte(@media max-width:640px `.datetime-btn-label`을
+  `--text-m-body-16B`(16px Bold)→`--text-m-title-18B`(18px Bold)로 변경) |
+  plan_source: Stephen launch-selected-element로 날짜("2026.09.08")·시간("09:00") 라벨
+  각각 선택 → "모바일 반응형에서 한단계 큰 폰트토큰 반영" + "반납 방법도 동일하게 적용해" |
+  ✅ 완료 — `.datetime-btn-label`은 수령/반납 양쪽 버튼(RentalForm 공유 템플릿)과 "대여 방법"
+  닫힘 요약(acc-collapsed-summary)까지 전부 공유하는 단일 클래스라 한 번의 수정으로 4곳
+  전부(수령일·수령시간·반납일·반납시간) 함께 반영됨 — 반납 방법에 별도 수정 불필요.
+  모바일 뷰포트(375px) 실측으로 18px/700 정상 적용 확인. svelte-check 신규 에러/경고 0건.
+
+[2026-09-03] 🟢ROUTINE | 카트 "대여 방법" 아코디언 닫힘 시 수령일·시간 요약 유지 노출 신규 |
+  수정: src/routes/cart/+page.svelte("대여 방법" acc-item에 {:else if bulkDate && bulkTime}
+  분기 추가 — datetime-wrap과 동일한 레이아웃(달력+시계 버튼)을 acc-head 바로 아래에 렌더링,
+  클릭 시 bulkOpenAcc='rental'로 아코디언 재오픈) + .acc-collapsed-summary CSS 신규 |
+  plan_source: Stephen launch-selected-element로 datetime-wrap(수령일/시간 버튼) 선택 →
+  "선택영역의 '달력+시간' 적용 상태의 레이아웃을 '대여방법' 아코디언으로 닫힐 때 '대여방법'
+  아래에 중복 노출되게 할 것" |
+  ✅ 완료 — "반납 방법" 아코디언을 열어 "대여 방법"이 닫히도록 만든 뒤(bulkOpenAcc는 단일값이라
+  둘 중 하나만 열림), 날짜(2026.09.10)·시간(00:00)을 미리 선택해둔 상태에서 요약이 "대여
+  방법" 헤더 바로 아래 동일 레이아웃(보라색 선택 배경 포함)으로 정상 노출됨을 실행 중인 로컬
+  dev 서버에서 직접 확인(스크린샷 대조). 이전 세션에서 제거했던 "대여일시 통합 요약" 문구
+  (열림 상태에서의 중복 표시)와는 반대 상황(닫힘 상태에서 정보 유지)이라 모순 아님. "반납
+  방법" 아코디언에는 동일 로직을 적용하지 않음(요청 범위가 "대여 방법"으로 명시됨). svelte-check
+  신규 에러/경고 0건.
+
+[2026-09-03] 🟢ROUTINE | 카트 시간 버튼 시계 아이콘 fill 하드코딩 rgba → 컬러토큰 전환 |
+  수정: src/routes/cart/+page.svelte(시계 아이콘 path의 fill="rgba(255,255,255,0.8)" →
+  fill="var(--cs-white)") |
+  plan_source: Stephen launch-selected-element로 시계 아이콘 path 선택 → "선택영역 아이콘
+  bg를 화이트 컬러토큰으로 수정" |
+  ✅ 완료 — 기존 products/[id]/+page.svelte에도 있는 `fill="var(--cs-...)"` 인라인 SVG
+  패턴 그대로 재사용. svelte-check 신규 에러/경고 0건.
+
+[2026-09-03] 🟢ROUTINE | 카트 수령일·반납일 버튼 달력 아이콘 교체 |
+  수정: src/routes/cart/+page.svelte(datetime-btn-dark 내 캘린더 SVG를 Stephen 제공
+  아이콘(viewBox 0 0 32 32, 흰색 바디 + #3B2F8A 포인트)으로 교체, width/height는 기존
+  22px 슬롯 유지) |
+  plan_source: Stephen launch-selected-element로 기존 달력 아이콘(rect) 선택 → "선택영역
+  달력 아이콘을 교체" + 신규 SVG 코드 제공 |
+  ✅ 완료 — svelte-check 신규 에러/경고 0건. 적용 직후 자체 검증 중 "날짜 선택 시 버튼
+  배경이 purple-80(`#3B2F8A`)으로 바뀌면 아이콘의 동일 색(#3B2F8A) 포인트 부분이 배경에
+  묻혀 안 보일 수 있다"고 잠정 지적했으나, Stephen이 실제 렌더 스크린샷으로 정상 가독됨을
+  확인시켜 착오로 정정 — 코드 변경 없음, 추가 조치 불필요.
+
+[2026-09-03] 🟢ROUTINE | 카트 수령일·시간 버튼 선택 즉시 배경색 전환(purple-80/60) |
+  수정: src/routes/cart/+page.svelte(datetime-btn-dark/mid에 class:datetime-btn-date-selected·
+  class:datetime-btn-time-selected 바인딩 + CSS 2줄 추가) |
+  plan_source: Stephen launch-selected-element로 "수령일"·"시간" 버튼 각각 선택 →
+  "①날짜 선택 즉시 bg 'purple-80' 전환 ②시간 선택 즉시 bg 'purple-60' 전환" |
+  ✅ 완료 — app.css 기존 주석("--cs-purple = purple-80%", "--cs-purple-light = purple-60%")
+  기준으로 정확한 토큰 매핑 확인 후 적용. 날짜 선택 시 `.datetime-btn-dark`가
+  `var(--cs-text-dark)`(회색)→`var(--cs-purple)`로, 시간 선택 시 `.datetime-btn-mid`가
+  `var(--cs-text-mid)`→`var(--cs-purple-light)`로 즉시 전환. 수령/반납 양쪽에 공유되는
+  단일 템플릿이라 한 번의 수정으로 둘 다 반영. 실행 중인 로컬 dev 서버에서 실제 날짜·시간
+  클릭 후 getComputedStyle로 배경색이 각각 rgb(59,47,138)(purple-80)·rgb(85,63,224)
+  (purple-60)로 정확히 전환됨을 직접 확인. svelte-check 신규 에러/경고 0건.
+
+[2026-09-03] 🟢ROUTINE | 카트 수령일·반납일 "대여일시 통합 요약" 중복 문구 제거 |
+  수정: src/routes/cart/+page.svelte(datetime-summary <p> 블록 + weekdayKr 헬퍼(유일
+  호출부였음) + .datetime-summary CSS 전부 제거) |
+  plan_source: Stephen launch-selected-element로 "2026.09.09(수) 09:00 수령" 요약 문구
+  직접 선택 → "선택영역은 중복 레이아웃이니 제거" |
+  ✅ 완료 — 날짜 버튼(날짜 표시)·시간 버튼(시간 표시) 바로 아래 별도로 "날짜(요일) 시간
+  수령/반납" 한 줄을 다시 보여주던 중복 요약 문구 제거. 수령/반납 양쪽에 공유되는 단일
+  템플릿이라 한 번 제거로 둘 다 반영. displayDate는 날짜 버튼 라벨에서 계속 쓰여 유지,
+  weekdayKr는 이 블록이 유일한 호출부라 완전 제거. grep 잔존 참조 0건, svelte-check 신규
+  에러/경고 0건.
+
+[2026-09-03] 🟢ROUTINE | CMS 로그인 한글차단 이식 + 로그인 입력폼 표준(한글차단+글자수제한)
+  신설·문서화 |
+  수정: src/routes/cms/login/+page.svelte(이메일·비밀번호 한글차단+maxlength 254/72 신규),
+  src/routes/auth/login/+page.svelte(PC·Mobile 비밀번호 필드에 한글차단 신규 이식 +
+  이메일·비밀번호 maxlength 254/72 신규) |
+  신규: .claude/rules-ref/front-uiux.md §21(로그인 입력폼 표준 — 트리거명령·표준패턴·GATE C),
+  .claude/rules/uiux-index.md 트리거카드(항상 로드되는 인덱스, §21 포인터) |
+  plan_source: Stephen <launch-selected-element>(CMS 로그인 이메일·비밀번호 선택) "선택영역,
+  한글 입력 제한할 것 - 사용자 로그인 입력폼 반영 로직을 동일하게 적용" → "표준 기술 지침
+  문서에 '로그인 입력폼' 한글 제한, 글자수 제한 로직을 자동 반영될 수 있게 기록할 것" |
+  ✅ 완료 — CMS 로그인 폼에 사용자 로그인과 동일한 oninput 비ASCII 필터+토스트 경고 로직
+  이식(이메일·비밀번호 둘 다). 글자수 제한은 기존에 어느 로그인 폼에도 없었음을 확인 →
+  AskUserQuestion으로 Stephen에 값 확인("이메일 254 / 비밀번호 72" 승인, RFC 5321 표준
+  길이 + Supabase Auth/bcrypt 72바이트 절단 한계 근거) → 사용자·CMS 로그인 전체(front
+  PC·Mobile 포함) 4개 입력지점에 일괄 적용해 대칭성 확보(front 비밀번호 필드는 기존에
+  한글차단이 없었던 것도 이번에 함께 신규 이식). 문서화는 항상 로드되는 uiux-index.md에
+  트리거 카드를, 명시적 호출 시 로드되는 front-uiux.md에 전체 패턴·GATE C를 배치하는
+  기존 §19(모바일 반응형 미세떨림) 트리거 문서 정책과 동일 구조 재사용. npm run check
+  신규에러 0건(기존 무관 에러 1건만 유지).
+
+[2026-09-03(같은 날 후속)] 🟢ROUTINE | CMS 초대링크 비밀번호 설정 폼까지 로그인 입력폼
+  표준 확장 |
+  수정: src/routes/cms/login/+page.svelte(`?/setPassword` 액션 — "새 비밀번호"·"비밀번호
+  확인" 두 필드에 한글차단+maxlength=72 추가, newPasswordKoreanWarned/
+  confirmPasswordKoreanWarned 독립 플래그 신설) |
+  신규: .claude/rules-ref/front-uiux.md §21-4 적용현황표 갱신(제외 각주 제거, 신규 행 추가) |
+  plan_source: Stephen "초대링크 비밀번호 설정 폼에도 동일하게 적용해줘"(직전 turn에서
+  범위 밖으로 명시했던 폼을 명시적으로 확장 지시) |
+  ✅ 완료 — §21 표준 그대로 재사용(필드별 독립 경고 플래그 원칙 포함), npm run check
+  신규에러 0건.
+
+[2026-09-03] 🟢ROUTINE | 카트 수령일·시간 버튼 chevron 아이콘 제거 |
+  수정: src/routes/cart/+page.svelte(datetime-btn-chevron SVG 2개 + 관련 CSS 2개 제거) |
+  plan_source: Stephen launch-selected-element로 직접 선택 → "선택영역, PC반응형과 모바일
+  반응형에서 제거해" |
+  ✅ 완료 — 수령일/반납일 날짜·시간 버튼 우측 화살표 아이콘 제거. PC·모바일이 단일 템플릿
+  공유(반응형 CSS만 분기)라 한 번의 수정으로 양쪽 다 반영됨. 클릭·열림상태 로직 무변경,
+  고아 CSS(.datetime-btn-chevron 등) 함께 정리. svelte-check 신규 에러/경고 0건.
+
+[2026-09-03] 🟡BOUNDARY | 예약신청완료(1단계) "DEV 테스트 모드" 배너 제거 + 실서버 단건(12h) 체크아웃 실테스트 |
+  수정: src/routes/payment/success/dev/+page.svelte(dev-banner div+CSS 제거) |
+  plan_source: Stephen "상품 단건(12시간) 결제 가능한지 실테스트해" → 실테스트 중 발견된
+  DEV 배너를 launch-selected-element로 직접 짚어 "선택영역 제거해" |
+  ✅ 완료 — Production(crazyshot-svelte.vercel.app)에서 FXLION NANO TWO 단건 12h 체크아웃을
+  실제 로그인 세션으로 끝까지 진행. `/payment/success/dev` 화면 도달 — 배너 문구("실 결제·DB
+  연동 없음")와 달리 실제로는 Production DB에 주문(ORD-20260903-00001)·예약(hold 승격,
+  duration_type=12h)이 실제 생성됨을 SQL로 직접 확인(2026-08-21 GATE B 승인된 "1단계=결제
+  없음, hold만 생성" 설계는 정상 동작 — 문구만 그 이전 시절 잔재로 부정확했던 것). 배너 제거
+  완료, 화면 자체의 설계(결제는 3단계 계약서명 시점)는 무변경. 테스트로 생성된 실제 주문/
+  예약은 30분 HOLD 자동만료로 이미 expired 처리됨을 재확인 — 별도 정리 불필요.
+  ⚠️ 범위 외 관찰(미조치): 페이지 title·라우트 경로(`/payment/success/dev`)의 "dev" 네이밍은
+  이번 배너 제거 요청 범위 밖이라 그대로 유지 — 필요시 별도 확인 후 정리 권장.
+
 [2026-09-03] ✅QA | sp3-qa-agent — Migration 427(anon 권한수정)·428(옵션상품 재고 최종방어선) 2건
   범위한정 GATE E 검수 |
   대상 파일: 427/428 마이그레이션 2개 + 관련 신규/수정 테스트 3개 + products/[id]/+page.svelte
