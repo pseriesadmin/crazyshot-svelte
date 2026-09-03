@@ -154,8 +154,8 @@
 			<div class="footer-bottom">
 				<div class="footer-biz-block">
 					<p class="footer-company">(주)크레이지샷</p>
-					<p class="footer-biz">대표자 : 한광익&nbsp; |&nbsp; 서울특별시 강서구 양천로 418 1,2층 101,201호(등촌동)&nbsp; |&nbsp; 사업자 등록번호 : 107-88-22133</p>
-					<p class="footer-biz">통신판매업신고 : 2023-서울강서-1755&nbsp; |&nbsp; 개인정보관리책임자 : 이용희&nbsp; |&nbsp; Email : crazymedia@hanmail.net</p>
+					<p class="footer-biz">대표자 : 한광익&nbsp; |&nbsp; 서울특별시 강서구 양천로 418. 2층 202호(등촌동)&nbsp; |&nbsp; 사업자 등록번호 : 372-81-03954</p>
+					<p class="footer-biz">통신판매업신고 : 제 2026-서울강서-0597호&nbsp; |&nbsp; 개인정보관리책임자 : 한광익&nbsp; |&nbsp; Email : crazyshothq@naver.com</p>
 				</div>
 				<p class="footer-copy">copyrightⓒ crazymedia 2025. All right reserved.</p>
 			</div>

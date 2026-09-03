@@ -32605,6 +32605,327 @@ Stephen 직접 실행 시 이번 검수 대상 5개 파일만 정확히 스테�
 
 ---
 
+## DONE — 🟢 ROUTINE: 계약서 스프레드시트 모드 서명/직인 이미지 더블클릭 시 셀편집모드 진입 결함 수정 (2026-09-03, 이 세션 단독)
+
+### 요청 원문
+
+"선택영역, 삽입된 '서명직인' 이미지 선택해 크기값을 직접 넣어 수정 하거나 이미지를 더블
+클릭 시 해당 위치의 셀이 선택되고 이미지가 사라지고 셀 내 메타값으로 노출되는 오류문제를
+검증해." — `<launch-selected-element>`로 서명/직인 이미지(`img.cse-cell-image`)와 크기입력
+input(`type=number`) 두 요소를 선택해 제보.
+
+### 원인
+
+`ContractSpreadsheetEditor.svelte`의 `renderCellValue()`가 이미지 오버레이(`wrap` div +
+`img` + 크기조절 플로팅 툴바 `bar`)를 셀 위에 그릴 때, 단일클릭(선택·드래그)은 `wrap`의
+`pointerdown` 리스너가 `preventDefault()+stopPropagation()`으로 이미 완전히 가로채고
+있었으나(2026-08-16/19 두 차례 개선 기록 존재), **네이티브 `dblclick` 이벤트는 어디서도
+가로채지 않아 그대로 버블링**되고 있었다. jspreadsheet-ce는
+`document.addEventListener('dblclick', doubleClickControls)`로 더블클릭을 문서 레벨에서
+델리게이트하고 있어(`node_modules/jspreadsheet-ce/dist/index.js` 확인), 이미지를 더블클릭
+하거나(제보 사례) 크기입력창의 기존 텍스트를 더블클릭으로 선택하려는 등 wrap 내부 어디서든
+더블클릭이 발생하면 그 이벤트가 셀(td)→document까지 그대로 도달해 jspreadsheet가 그 셀을
+편집모드로 전환했다. 편집모드는 `renderCellValue()`가 그린 이미지 오버레이 DOM을 통째로
+`<textarea>`로 교체하며, 그 textarea 값에는 원본 마커 문자열(`cs-image://100:0:0:https://
+...png`, `sheet-format.ts` `toImageOverlayMarker` 포맷)이 그대로 노출된다 — 제보된 "이미지가
+사라지고 셀 내 메타값으로 노출" 증상과 정확히 일치.
+
+### 실사용 재현 (Claude Browser, launch-selected-element 세션 내 조건부 허용)
+
+CMS 계약서 스프레드시트 편집기(`/cms/reservation/contracts?selected=...`)에서 실제 서명/직인
+셀에 대해 `javascript_tool`로 실제 프로덕션 DOM에 `dblclick` MouseEvent를 직접 디스패치해
+수정 전 상태에서 재현 성공 확인(`td.editor` 클래스 부여 + `<textarea>` 노출, `textarea.value`
+= `"cs-image://100:0:0:https://ezyvffjvuwmtuhpxdjrw.supabase.co/.../905e744e-....png"`).
+
+### 수정
+
+`wrap.addEventListener('pointerdown', ...)` 블록 바로 뒤에 동일 원칙의 `dblclick` 리스너
+추가 — bar 내부/이미지 어느 쪽에서 발생하든 분기 없이 무조건 `preventDefault()+
+stopPropagation()`하여 document까지 도달하지 못하게 차단.
+
+```
+파일: src/lib/components/cms/contract-editor/ContractSpreadsheetEditor.svelte
+변경: +19줄 (wrap.addEventListener('dblclick', ...) 신규, 기존 코드 무변경)
+```
+
+### 검증
+
+- 수정 전: 이미지 더블클릭 → `td.editor` + textarea 노출(재현 성공, 위 참고)
+- 수정 후 재실행(같은 브라우저 세션, 페이지 재로드 후):
+  ① 이미지 직접 더블클릭 → 이미지 그대로 유지, textarea 미노출(정상)
+  ② 이미지 선택 후 크기입력 input을 더블클릭(텍스트 선택 시도 시나리오) → 동일하게 정상
+     유지(회귀 없음)
+  ③ 회귀 확인 — 크기입력 input에 값 입력 후 Enter(100px→450px) → 정상 리사이즈 확인
+     (기존 단일클릭 선택·드래그·프리셋버튼·삭제 플로우는 이번 수정과 무관한 pointerdown
+     경로라 코드상 영향 없음)
+- `npx svelte-check` — 신규 에러 0건(기존 `vite.config.ts` pre-existing 1건만 유지)
+- 요청범위 외 수정 없음 — 대상 파일 1개, 순수 추가(+19줄), 기존 라인 무변경
+
+### sp3-qa-agent 검수 결과 (2026-09-03)
+
+```
+GATE E 판정: 통과 ✅ (수정 필요 항목 0건)
+
+- 요청범위 외 수정 없음: 대상 파일 1개, 순수 추가(+19줄), 기존 라인 무변경 재확인
+- 메커니즘 소스 대조: node_modules/jspreadsheet-ce/dist/index.js 직접 확인 —
+  doubleClickControls는 document에 버블 단계(capture 아님)로 등록되고, e.target 기반으로
+  셀을 찾아 openEditor를 호출하는 구조(별도 더블탭 타이밍 로직 아님) — wrap 레벨에서
+  버블링을 끊으면 구조적으로 100% 차단됨을 소스 레벨에서 확인.
+- 회귀 검토: 프리셋버튼/삭제버튼의 기존 click 리스너, 너비입력 blur/keydown 리사이즈,
+  텍스트선택(더블클릭 시 브라우저의 mousedown detail=2 기반 처리라 dblclick.preventDefault로
+  되돌려지지 않음 — 스펙상 정상) 전부 다른 이벤트 타입이라 충돌 지점 없음.
+- svelte-check 재실행 — 대상 파일 신규 에러·경고 0건(기존 vite.config.ts pre-existing 1건만
+  유지). 관련 자동화 테스트 없음(신설 요구 아닌 ROUTINE 버그수정이라 해당없음 처리).
+```
+
+⚠️ working tree 참고(QA agent 지적, 후속 11-QA와 동일): 이 변경도 다른 세션 소관 변경들과
+함께 uncommitted 상태로 섞여 있음 — git add 시 이 파일
+(`src/lib/components/cms/contract-editor/ContractSpreadsheetEditor.svelte`)만 정확히
+스테이징할 것(GP-1 원칙, AI 자율 커밋 없음).
+
+### 추가 라이브 검증 — "다른 이미지 첨부" + 프리셋 버튼 회귀 재확인 (2026-09-03, 같은 세션)
+
+Stephen 요청("다른 이미지 첨부·프리셋 버튼 클릭 시나리오도 실브라우저에서 한번 더 확인해줘")에
+따라 동일 실브라우저 세션(`/cms/reservation/contracts?selected=...`)에서 두 시나리오를 실제
+UI 경로(픽셀 좌표 클릭 대신 jspreadsheet `updateSelectionFromCoords()` API로 그리드 선택 후
+실제 버튼 `.click()` 디스패치 — 이전 세션에서 픽셀 좌표 클릭이 스케일/스크롤 불일치로
+신뢰도가 낮음이 이미 확인된 바 있어, 실제 컴포넌트 이벤트 리스너를 100% 그대로 통과하는 이
+방식으로 검증)로 재확인:
+
+```
+① 다른 이미지 첨부(재삽입/교체) 시나리오:
+   - 이미지가 이미 얹힌 셀(15,4)은 오버레이(wrap)가 td 전체를 덮어 그리드 자체 선택이
+     클릭으로 불가능함을 실측 확인(overlay wrap 100x100 vs td 103x78 — 여백 없음) →
+     jspreadsheet 자체 API(updateSelectionFromCoords)로 그리드 선택 후 실제 툴바
+     "서명/직인 삽입" 버튼 → 팝오버의 다른 자산("qr-PCPTNall001") 항목을 실제 .click()으로
+     선택
+   - 결과: 셀 원본값이 새 마커 1개로 깨끗이 교체됨(cs-image://200:0:0:...1d1559f6...png),
+     기존 마커 잔존/중복 없음(markerCount 검증 1건), 너비는 DEFAULT_IMAGE_OVERLAY_WIDTH(200)
+     로 정상 초기화, img.src 정상 교체 확인
+   - 교체 직후 새로 렌더링된 오버레이에 대해 dblclick 재현 시도 → 이미지 유지·textarea
+     미노출(회귀 없음, 신규 DOM에도 dblclick 수정이 정상 적용됨을 재확인)
+
+② 프리셋 버튼(소/중/대) 클릭 시나리오:
+   - 위에서 교체된 새 이미지에 대해 "대(400)" 버튼 실제 클릭 → 200px→400px 정상 적용
+   - 이어서 "소(100)" 버튼 실제 클릭 → 400px→100px 정상 적용, 원본 셀 값 marker 1개만
+     존재(중복/잔존 없음) 재확인
+
+검증 후 페이지를 재로드해 저장 버튼을 누르지 않은 인메모리 테스트 상태를 폐기(DB 미반영,
+템플릿 원본 데이터 무변경).
+```
+
+결론: "다른 이미지 첨부" 시나리오는 그리드 선택이 오버레이에 완전히 가려 픽셀클릭 단독으로는
+불가능하다는 사실 자체는 UX상 참고할 만하나(관리자는 셀을 처음 클릭할 때 이미지가 없는
+상태에서만 직접 클릭 선택 가능 — 재삽입 시에는 다른 셀에서 화살표키로 이동해오거나 이미
+선택된 상태를 유지해야 함, 별도 버그 리포트는 아님), 코드 로직 자체(재삽입 시 기존 마커
+교체, 프리셋 리사이즈, dblclick 방지)는 전부 정상 동작 재확인됨 — 이번 세션의 dblclick
+수정과 무관한 기존 동작이며 회귀 없음.
+
+### sp3-qa-agent 검수 결과 — 추가 라이브 검증 섹션 (2026-09-03)
+
+```
+GATE E 판정: 통과 ✅ (수정 필요 항목 0건 — 이전 판정 유지)
+
+- 코드 변경 0건 재확인(git diff --stat 기준 여전히 dblclick 리스너 +19줄뿐, 이번 라운드는
+  순수 검증)
+- 검증 방법론(jspreadsheet updateSelectionFromCoords로 선택 확보 + 실제 .click() 디스패치)은
+  픽셀좌표 클릭보다 오히려 신뢰도 높은 결정적 증거로 판정(실제 컴포넌트 리스너를 100% 경유)
+- "이미지 있는 셀은 오버레이가 여백 없이 덮어 픽셀클릭 그리드선택 불가"는 wrap 100x100 고정
+  vs td 103x78 가변이라는 기존 오버레이 렌더링 설계(이번 세션 미변경분)에서 비롯된 별개
+  특성으로 스코프 밖 판정 — 이번 GATE E에 영향 없음
+- 마커 중복없음(markerCount=1) 검증은 splitCellImageOverlay()가 indexOf로 첫 마커 이전까지만
+  text로 반환하는 구조 자체가 이미 "재삽입=교체"를 강제하므로 구조적으로 충분하다고 판정
+- 이전 GATE E 판정을 뒤집을 신규 발견 없음
+```
+
+---
+
+## DONE — 🟡 BOUNDARY: 계약서 반복영역 잉여슬롯 공백처리 + 드래그 다중선택 자동스크롤 (2026-09-03, 이 세션 단독)
+
+### 배경 — 반복영역 잉여슬롯 공백처리
+
+"[수정2] 엑셀 계약 문서양식"(예약목록 발행 시 기본 선택 템플릿) 정밀검사 중, 다중상품
+예약에서 2번째 이후 상품이 문서에 전혀 반영되지 않는 결함을 발견·보고했다(원인: 이
+템플릿에 `repeatRegion`이 지정돼 있지 않아 스칼라 1:1 치환 경로로 빠짐 — 코드 결함 아님,
+템플릿 설정 누락). 이후 Stephen이 "반복영역에 다중상품 있는 정보만큼만 반영하고 나머지
+빈 반복 셀은 그냥 비워두면 되잖아"라고 확정 — 기존 `expandSheet()`는 항목 수(N) <
+템플릿행수(T)일 때 행 자체를 N행으로 축소(shrink)하는 설계였는데, 이를 "T행을 그대로
+유지하고 앞 N행만 채우고 나머지(T-N)행은 변수만 공백 처리"로 변경 요청.
+
+### 구현
+
+```
+파일: src/lib/utils/contract-substitution.ts
+  - blankVariables() 신규 — {{...}} 패턴을 빈 문자열로 치환하는 헬퍼
+  - expandSheet() N<=T 분기 신설 — 템플릿 T행 그대로 유지, i<N이면 applyItemSubstitution,
+    i>=N이면 blankVariables. 행 수·위치가 전혀 바뀌지 않으므로 merges는 재계산 없이
+    원본 그대로 반환(expandMerges 호출 불필요 — rowDelta 항상 0).
+  - N>T(항목 수가 템플릿행수 초과) 분기는 기존 오버플로우 확장 동작 완전히 그대로 유지.
+
+테스트: src/__tests__/services/spreadsheetRepeatRegion.test.ts
+  - E-1/E-3 기존 테스트를 새 스펙(행 수 축소 아님)에 맞춰 갱신
+  - F군(F-1~F-3) 신규 — 잉여 슬롯 공백 처리·행 수 고정·merges 불변 3건 추가
+  - 전체 20개(기존 17 + 신규 3) 전부 GREEN, contractDataLineItems 등 인접 스위트 무회귀
+```
+
+### 배경 — 드래그 다중선택 자동스크롤
+
+위 반복영역 기능을 실제로 켜려면 "반복 영역 지정" 버튼 사용 전에 17~33행(17개 행)을
+드래그로 선택해야 하는데, Stephen이 "드래그 다중 선택 시 가려진 셀까지 스크롤되면서
+선택되게 만들어. 보이는 셀만 선택할 수밖에 없게 되어 있어"라고 지적 — jspreadsheet-ce
+소스(`node_modules/jspreadsheet-ce/dist/index.js`)를 직접 확인한 결과 `mouseOverControls`가
+오직 커서 바로 아래(`data-x`/`data-y`) 셀만으로 선택을 확장하며, `scrollIntoView`/
+`autoScroll` 류 로직이 전혀 없어 뷰포트 밖 셀은 애초에 마우스가 올라갈 수 없어 선택
+확장이 구조적으로 불가능함을 확인(라이브러리 자체의 결함/미구현, 우리 코드가 막은 게
+아님).
+
+### 구현
+
+```
+파일: src/lib/components/cms/contract-editor/ContractSpreadsheetEditor.svelte
+  - setupDragAutoScroll(container) 신규 — 기존 setupBorderPaletteClickFix/
+    setupBorderPatternFix와 동일한 "container에 리스너 부착 + cleanup 함수 반환" 패턴
+  - .spreadsheet-container(유일한 overflow:auto 스크롤 박스)에서 mousedown으로 드래그
+    시작 셀(x,y) 기억 → 실제 이동(MOVE_THRESHOLD_PX=4) 감지 후에만 활성화(일반 클릭
+    오탐 방지) → requestAnimationFrame 루프로 커서가 컨테이너 상/하/좌/우 가장자리
+    EDGE_PX(36px) 이내에 머무르면 container.scrollTop/scrollLeft를 점증적으로 스크롤
+  - 스크롤만으로는 마우스가 정지한 채로는 새 mousemove가 발생하지 않아 jspreadsheet
+    자체 선택확장 로직이 트리거되지 않으므로, 매 프레임 document.elementFromPoint()로
+    고정 커서 좌표 아래 셀을 재조회해 ws.updateSelectionFromCoords(x1,y1,x2,y2)로 선택을
+    능동적으로 확장
+  - onMount에서 dragAutoScrollCleanup = setupDragAutoScroll(containerEl) 등록,
+    onDestroy에서 정리
+
+파일: src/lib/components/cms/contract-editor/spreadsheetWidgetAdapter.ts
+  - JssWorksheetInstance 인터페이스에 updateSelectionFromCoords(x1,y1,x2,y2) 메서드
+    시그니처 추가(런타임엔 이미 존재 — 이번 세션 초반 "다른 이미지 첨부" 검증 때
+    jspreadsheet 인스턴스에서 직접 확인한 API를 타입에 반영)
+
+테스트: src/__tests__/services/spreadsheetWidgetAdapter.test.ts
+  - makeWs() 목업에 updateSelectionFromCoords 필드 추가(타입 준수, 기존 테스트 로직
+    무변경)
+```
+
+### 검증
+
+- svelte-check 신규 에러 0건(기존 vite.config.ts pre-existing 1건만 유지)
+- 관련 테스트 5개 파일 149/149 GREEN(spreadsheetWidgetAdapter·spreadsheetRepeatRegion·
+  contractTiptapRender·contractDataLineItems·contractAuthGates)
+- 라이브 브라우저 검증(실 템플릿 "[수정2] 엑셀 계약 문서양식" + 실 예약 2654, 상품 2개):
+  - 반복영역 공백처리: repeatRegion을 17~33행으로 지정한 사본으로 실제 substituteSpread
+    sheetDocument() 실행 → 17행=Sony FX6-12, 18행=SONY PXW-Z90(두 번째 상품 정확히
+    반영), 19행 이후 전부 공백(원문 {{}} 노출도, 이전 항목 값 잔존도 없음) 확인
+  - 드래그 자동스크롤: 뷰포트에 보이는 셀(y=17)에서 mousedown 후 컨테이너 하단
+    가장자리(EDGE_PX 이내)에 커서를 고정한 채 대기 → 최초 뷰포트 밖에 있던 y=30 행까지
+    선택 범위가 실제로 확장됨(`ws.getSelection() = [1,17,1,30]`) 확인. 가장자리에서
+    충분히 떨어진 일반 드래그는 스크롤에 전혀 영향받지 않음(회귀 없음) 확인.
+
+### 참고 — 이번 세션 중 발견된 별개 이슈(해결 완료, Stephen 본인 조치)
+
+정밀검사 중 해당 템플릿의 상품목록 반복 셀(17~33행)이 일시적으로 빈 문자열로 변경된
+상태가 DB에서 발견됐다(원인 미확정 — 세션의 자동화 상호작용 가능성을 포함해 여러 후보를
+검토했으나 확정하지 못함). Stephen이 직접 CMS 화면에서 셀을 다시 채워 저장 완료 —
+이 세션에서 별도 데이터 복구 조치는 하지 않음.
+
+### sp3-qa-agent 검수 결과 (2026-09-03)
+
+```
+GATE E 판정: 통과 ✅ (블로킹 수정 필요 항목 0건, 비차단 권고 1건)
+
+- 요청범위 확인: 5개 대상 파일 외 신규 변경 없음. ContractSpreadsheetEditor.svelte diff에
+  이 태스크(setupDragAutoScroll)와 별개 태스크(dblclick 방지, +19줄)가 같은 파일에
+  섞여 있으나 서로 다른 이벤트(mousedown/mousemove vs dblclick)·다른 DOM 타겟이라
+  상호 간섭 없음 확인.
+- 변경1(반복영역 공백처리): blankVariables() 정규식 정확, N===T 경계값에서 구코드의
+  expandMerges 결과와 수학적으로 동일함을 로직 대조로 확인(회귀 없음), merges 재계산
+  생략이 안전한 이유(rowDelta 항상 0)를 코드로 재확인, N>T 오버플로우 분기 문자 그대로
+  보존 확인. E-1/E-3 갱신 기대값이 Stephen 확정사항과 정확히 일치 — 테스트 왜곡 없음.
+- 변경2(드래그 자동스크롤): MOVE_THRESHOLD_PX 가드가 단일클릭 오탐을 정확히 차단,
+  좌표 처리(startX/Y 고정 + 매프레임 재조회) 타당, 가장자리 밖에서는 스크롤도
+  updateSelectionFromCoords 호출도 발생하지 않는 구조 확인, 기존 캡처단계 리스너
+  (border 관련)와 매칭 대상이 겹치지 않아 충돌 없음, updateSelectionFromCoords가
+  실제 jspreadsheet-ce 런타임에 존재함을 grep으로 재확인.
+- svelte-check 신규 에러 0건, 관련 5개 테스트 파일 149/149 GREEN.
+- 콘솔로그/any/TODO 등 기술부채 diff 내 0건.
+- 비차단 권고 1건(반영 완료): spreadsheetRepeatRegion.test.ts 테스트 총 개수 표기가
+  "25개(22+3)"로 오기재됐던 것을 실측치 "20개(17+3)"로 정정.
+```
+
+---
+
+## DONE — 🟢 ROUTINE: 계약서 변수탭 메뉴(탭·칩 버튼) 클릭 시 셀 선택 해제 결함 수정 (2026-09-03, 이 세션 단독)
+
+### 요청 원문
+
+"셀 선택 상태에서 변수탭 메뉴 선택 시 선택한 셀이 해제되어 사용 상 불편."
+
+### 원인
+
+`ContractFieldPanel.svelte`의 탭 버튼(계약자/상품/결제/특약)과 변수 칩 버튼은 그리드
+바깥 DOM인데, jspreadsheet-ce는 자체 `root` 옵션을 지정하지 않으면 mousedown 등 모든
+마우스 리스너를 **`document`에 직접** 건다(`setEvents(t.root ? t.root : document)`,
+`node_modules/jspreadsheet-ce/dist/index.js` 확인 — 이 세션 앞서 dblclick 결함을 수정할
+때 발견한 것과 동일한 전역 이벤트 위임 구조). 그 `mouseDownControls` 핸들러는 클릭
+target이 자신의 워크시트 셀이 아니면 무조건 `resetSelection()`을 호출해 현재 선택을
+지운다 — 그리드 바깥의 어떤 요소를 클릭해도(탭·칩 버튼 포함) document까지 mousedown이
+버블링되는 순간 선택이 풀린다.
+
+`ContractSpreadsheetEditor.svelte`의 `resolveActiveCell()`이 이런 상황을 대비한 좌표
+캐시(`lastSelectedWs`/`lastSelectedCoords`) 폴백을 이미 갖고 있어 변수 삽입 "기능" 자체는
+이전에도 정상 동작했지만, 화면상 하이라이트가 사라져 사용자가 지금 어느 셀에 삽입될지
+눈으로 확인할 수 없는 UX 문제가 남아있었다.
+
+### 수정
+
+`ContractFieldPanel.svelte`의 탭 버튼·변수 칩 버튼에 `onmousedown={(e) => {
+e.preventDefault(); e.stopPropagation() }}` 추가 — mousedown을 버튼 단계에서
+stopPropagation해 document의 `mouseDownControls`에 도달하지 못하게 막는다. 이 세션에서
+`ContractSpreadsheetEditor.svelte`에 이미 적용한 dblclick 방지 수정(wrap의 dblclick을
+wrap 단계에서 stopPropagation)과 정확히 동일한 원리. preventDefault()는 버튼으로의 기본
+포커스 이동도 함께 막는 보조 조치.
+
+```
+파일: src/lib/components/cms/contract-editor/ContractFieldPanel.svelte
+변경: 탭 버튼 1곳 + 칩 버튼 1곳(each 루프이므로 실제로는 N개 칩 전부 적용) —
+      onmousedown 핸들러 추가, 기존 코드 무변경
+```
+
+### 검증
+
+- 실브라우저(같은 세션, `/cms/reservation/contracts?selected=...`) 실제 mousedown→mouseup→
+  click 시퀀스로 재현: 수정 전 셀(5,8) 선택 후 탭 버튼 클릭 → `ws.getSelection()`이
+  `null`로, 시각적 하이라이트 클래스도 완전히 사라짐(재현 성공) → 수정 후 동일 시퀀스 →
+  선택 `[5,8,5,8]` 그대로 유지, 하이라이트 클래스 그대로 유지, 탭은 정상 전환(`active`
+  클래스 정상 부여) 확인.
+- 회귀 확인 — 변수 칩("상품명") 클릭 시 여전히 정상 삽입됨(`{{연락처}}` → `{{연락처}}
+  {{상품명}}`), 선택도 그대로 유지 확인. 테스트 삽입은 저장 없이 페이지 재로드로 폐기,
+  DB(`row8_c5`) 직접 SQL 조회로 미반영 재확인.
+- `npx svelte-check` — 신규 에러 0건(기존 vite.config.ts pre-existing 1건만 유지)
+- 요청범위 외 수정 없음 — 대상 파일 1개, onmousedown 핸들러 2곳 추가 + 헤더 주석 갱신뿐
+
+### sp3-qa-agent 검수 결과 (2026-09-03)
+
+```
+GATE E 판정: 통과 ✅ (수정 필요 항목 0건)
+
+- 요청범위 외 수정 없음 재확인(같은 파일에 다른 후속 9·10 DONE 블록의 미커밋 변경이
+  섞여 diff에 함께 보이나, 이번 태스크가 건드린 부분은 onmousedown 2곳+헤더주석뿐임을
+  확인 — 커밋 시 여러 태스크 변경이 한 파일에 함께 들어간다는 점만 Stephen 인지 필요)
+- 원인 진단 소스 대조: jspreadsheet-ce의 setEvents(document) 분기·mouseDownControls의
+  resetSelection 호출 로직을 직접 확인해 claim과 정확히 일치함을 검증. ContractSpread
+  sheetEditor.svelte의 jspreadsheet() 초기화 호출부에 root 옵션이 실제로 미지정돼
+  있음도 확인.
+- mousedown stopPropagation이 별도 이벤트인 click 발동을 막지 않는다는 전제 타당성 확인
+- ContractFieldPanel과 ContractSpreadsheetEditor가 ContractTemplatePanel.svelte 안에서
+  형제(sibling) div로 렌더링돼 이벤트 경로가 애초에 겹치지 않음을 DOM 구조로 재확인 —
+  setupDragAutoScroll 등 그리드 내부 리스너와 충돌 가능성 없음
+- svelte-check 신규 에러 0건, 기술부채 0건
+- 라이브검증 방법론(수정전/후 실제 mousedown→mouseup→click 시퀀스 대조 + 회귀확인 +
+  DB 미반영 SQL 재확인)이 이 유형 결함 검증에 충분·적절하다고 판정
+```
+
+---
+
 ## NOW — 🔴 CRITICAL: 판매전용(sale_only) 상품 "구매" 흐름 신설 — Stage 구현 완료·Production 미적용 (2026-09-01)
 
 ### 요청 원문
