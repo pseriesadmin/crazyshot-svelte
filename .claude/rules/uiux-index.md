@@ -392,6 +392,25 @@ accept="image/png,image/jpeg,image/webp,image/heif,image/heic,application/pdf"
 
 ---
 
+## 🔴 로그인 입력폼 표준 — 한글 차단 + 글자수 제한 ★★★ (2026-09-03 확정)
+
+> **신규 로그인·인증류(이메일/비밀번호) 입력란을 만들거나 "로그인 입력폼 표준 적용해"
+> 언급 시 → 아래 두 로직을 세트로 즉시 적용. 적용 대상: 사용자 로그인 + CMS 로그인 둘 다.**
+
+```
+① 한글(비ASCII) 차단: oninput에서 /[^\x00-\x7F]/g 로 즉시 필터링 + 필드별 독립 boolean
+   플래그로 토스트 경고 1회만(3초 debounce). bind:value 폼은 el.value 치환과 함께 바인딩
+   변수도 갱신 필수(안 하면 필터링 무효화).
+② 글자수 제한(maxlength): 이메일 254(RFC 5321) / 비밀번호 72(Supabase Auth/bcrypt가 그
+   이후를 조용히 절단하는 실제 한계값).
+
+적용 현황: src/routes/auth/login/+page.svelte(PC·Mobile) ·
+          src/routes/cms/login/+page.svelte — 전부 적용 완료(2026-09-03)
+표준 코드 패턴·필드별 문구·GATE C → @.claude/rules-ref/front-uiux.md §21
+```
+
+---
+
 ## 전체 정본 로드 조건
 
 ```

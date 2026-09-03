@@ -12,6 +12,284 @@
 
 ---
 
+## NOW — 🔴 CRITICAL: 관리자(슈퍼마스터) 계정 추가 등록 + 관리자 비밀번호 자가변경 UI 신설 (2026-09-03, 이 세션)
+
+아젠다: Stephen 요청 — "관리자 목록에 슈퍼 마스터 계정을 추가 등록할 것. ① 이름: 한광익 /
+계정: rattaf@hanmail.net / 비밀번호: crazyshot79* ② 이기성(cconzy@daum.net) 계정 권한과
+동일한 사이트 전체 소유관리 권한임(=superadmin) ③ 관리자 계정들의 각자 비번 수정 기능
+여부 확인: 없으면 아주 간단히 기존 cms 로그인 모달 내에 UI 구현."
+
+### ① 계정 생성 — DB 조사 결과 및 미실행 사유(CRITICAL, Stephen 직접 진행 필요)
+
+```
+Supabase MCP로 stage(ezyvffjvuwmtuhpxdjrw)·production(vnbpmvxruyciuuaermyh) 양쪽을 직접
+조회한 결과, 현재 어느 환경에도 cconzy@daum.net 계정 자체가 존재하지 않음(둘 다 현재
+superadmin은 steven@pseries.net). 이름(이용희·이기성·한광익)은 stage와 4개 전부 일치,
+production과는 이메일·이름 전부 불일치 — AskUserQuestion으로 Stephen에 확인 결과
+"Production(실서비스 DB)에 생성"으로 확정.
+
+⛔ 계정을 직접 SQL로 생성하지 않음(의도적 미실행) — 이유:
+  이 프로젝트의 실제 계정생성 경로(src/routes/cms/accounts/+page.server.ts createAccount)는
+  serviceClient.auth.admin.createUser()(GoTrue Admin API)로 auth.users + auth.identities를
+  생성하고, 비밀번호는 절대 이 시점에 설정하지 않는다 — cms_create_invite_token으로 초대
+  링크만 발급하고, 실제 비밀번호는 받는 사람이 /cms/login?invite={token}에서 setPassword
+  액션으로 "본인이 직접" 설정한다(admin.updateUserById 경유, 오늘 이 세션에서 한글차단+
+  글자수제한 표준을 적용한 바로 그 화면).
+  raw SQL로 auth.users/auth.identities를 수동 조작해 우회하는 방법도 기술적으로는 가능하나
+  (pgcrypto crypt() 등), 이 프로젝트 마이그레이션 어디에도 그런 선례가 없고 실서비스 인증
+  테이블을 잘못 조작하면 로그인 자체가 깨질 위험이 있어 — Stephen 승인 없이 임의로 시도하지
+  않음. Production 서비스 role key는 로컬 세션에 없음(.env.local은 stage 전용, core-rules.md
+  DB 분리 원칙과 일치) — 프로덕션 계정 생성은 실제 배포된 CMS의 자체 서버 액션만 접근 가능.
+
+✅ Stephen 직접 진행 안내(약 1분):
+  1. https://crazyshot-svelte.vercel.app/cms/accounts 접속(superadmin 세션)
+  2. "관리자 등록" — 이름: 한광익 / 이메일: rattaf@hanmail.net / 휴대번호: (직접 입력) /
+     권한: 슈퍼관리자(superadmin) 선택 → 등록
+  3. 발급된 초대링크(/cms/login?invite=...)를 열어 "새 비밀번호"=crazyshot79* /
+     "비밀번호 확인"=crazyshot79*로 설정(오늘 신설된 §21 한글차단+72자 제한 표준 적용된 화면)
+  4. 완료 후 요청하면 SQL로 cms_role='superadmin' 반영 여부만 읽기전용 확인 가능
+```
+
+### ② 권한 매핑 — 확인만, 코드 변경 없음
+```
+"이기성(cconzy@daum.net)과 동일한 권한" = cms_role='superadmin'(security-auth.md
+ROLE_LEVEL=100) — ①의 "권한: 슈퍼관리자" 선택이 곧 이 요구사항 충족. cconzy@daum.net 자체가
+현재 DB에 없다는 사실은 위 ①에 별도 기록, 역할 매핑 자체는 이견 없음.
+```
+
+### ③ 관리자 비밀번호 자가변경 UI — 신규 구현 완료
+
+```
+[NOW]
+- [x] 조사: 관리자 각자 비밀번호 변경 기능 부재 확인(grep 전수, changePassword/updatePassword
+      류 코드 CMS 어디에도 없음)
+- [x] src/routes/cms/login/+page.server.ts — load()에 ?changePassword=1 분기 추가(로그인된
+      CMS 관리자 전용, cms_role 있어야 진입). 신규 changePassword 액션: 현재 비밀번호로
+      signInWithPassword 재인증 성공 시에만 locals.supabase.auth.updateUser({password})
+      호출(service_role 불필요 — 본인 세션만 사용, 타인 비밀번호 변경 구조적으로 불가능)
+- [x] src/routes/cms/login/+page.svelte — 오늘 신설한 §21 한글차단+글자수제한(72자) 표준을
+      그대로 재사용한 3필드(현재/새/확인) 폼 신규 branch, 필드별 독립 경고 플래그
+- [x] src/routes/cms/+layout.svelte — 상단바 "Sign Out" 버튼 옆 "비밀번호 변경" 링크 신설
+      (/cms/login?changePassword=1)
+- [x] src/__tests__/server/cmsChangePassword.test.ts 신규 — 6개 케이스 전부 GREEN(세션없음/
+      필수값누락/새비번불일치/8자미만/현재비번오류/정상흐름)
+```
+
+### 검증
+```
+[x] npm run check — 신규 에러 0건(기존 무관 에러 1건만 유지)
+[x] vitest cmsChangePassword.test.ts — 6/6 GREEN
+[ ] 라이브 브라우저 검증 미실행(CMS 화면, Claude Browser 기본금지 정책) — Stephen 직접
+    "비밀번호 변경" 링크→폼 동작 확인 필요
+```
+
+### ✅ QA 1차 검수 — 🔴 GATE E 블로킹 2건 발견 → 수정 완료
+
+sp3-qa-agent 1차 검수: 재인증 게이트(email은 항상 session.user.email 고정, 폼입력 아님) +
+service_role 미사용 + cms_role 게이팅 + 테스트 품질(재인증 우회 회귀를 실제로 잡는 assert)
+전부 견고함을 확인했으나, **클라이언트 피드백 부재로 블로킹 판정**:
+① `changePassword` 액션의 `fail(..., {changePwError})` 응답이 `+page.svelte` 어디에도
+   렌더링되지 않아 실패해도 사용자가 사유를 알 수 없음(버튼만 원상복귀)
+② 성공 시 이동하는 `notice=password_changed`가 `+layout.svelte`에서 처리되지 않아 무반응
+
+즉시 수정: `FormResult` 타입에 `changePwError?: string` 추가 + 렌더링 블록 추가,
+`+layout.svelte`의 기존 `notice==='access_denied'` 토스트 처리 옆에 `password_changed`
+분기(csToast.success) 추가. npm run check 신규에러 0건, vitest 6/6 GREEN 재확인.
+①(계정 미생성 판단)에 대해서는 QA도 "적절한 위험회피"로 동의(raw SQL 우회 금지 원칙,
+DB 환경분리, frozen 파일 경계와 정확히 일치하는 판단).
+
+### ✅ QA 재검수 완료 — GATE E 통과
+
+블로킹 2건 모두 정상 해소 확인(changePwError 렌더링이 모든 모드 분기 바깥 최상위에 위치해
+어느 모드에서 실패하든 항상 노출됨, password_changed 분기가 access_denied와 배타적 if/else
+if 구조로 간섭 없이 동작). npm run check 신규에러 0건, vitest 6/6 GREEN 재확인. **③(비밀번호
+자가변경 UI)은 GATE E 통과로 커밋 준비 완료.** ①(신규 슈퍼관리자 계정 등록)은 여전히
+Stephen 직접 진행 대기 중 — 이 태스크 헤더는 ①이 완료돼야 DONE으로 전환.
+
+---
+
+## NOW — 🟡 BOUNDARY: 카트 "대여예약옵션" 모바일 스크롤 자동접힘 + 수령/반납 요약 바 (2026-09-03, 이 세션)
+
+아젠다: Stephen이 launch-selected-element로 "대여예약옵션" bulk-head를 선택 → "사용자가
+다운스크롤로 'Order Total' 영역에 진입하면 이 아코디언이 자동으로 접히되, 설정된 수령/반납
+값 바 UI는 그대로 노출돼 요약해서 볼 수 있도록 할 것" + 제약 2가지: ①모바일 반응형에서만
+동작 ②이 기능 때문에 PC/반응형 레이아웃을 이중으로 만들어야 한다면 구현을 중지할 것.
+
+### 구현 전 필수 확인(제약 ②) — 이중 레이아웃 필요 여부 판단
+
+`.bulk-panel`(bulk-head/bulk-body를 담은 이 컴포넌트 전체)은 이미
+`@media(min-width:641px){.bulk-panel{display:none}}`로 PC에서는 전혀 렌더링되지 않고,
+PC는 완전히 별도인 `.detail-pane` 컴포넌트로 동일 기능을 제공하는 기존 구조였다(주석:
+"PC에서는 detail-pane이 동일 역할 — bulk-panel 중복 노출 방지"). 즉 이 요청 대상 컴포넌트
+자체가 이미 모바일 전용이라, 새 인터랙션을 이 컴포넌트 안에서만 구현하면 PC 쪽에 아무
+영향이 없고 별도 PC 분기를 새로 만들 필요가 없음을 확인 — **중지 조건에 해당하지 않아 구현
+진행.**
+
+### 구현 (`src/routes/cart/+page.svelte`)
+```
+[NOW]
+- [x] orderTotalSectionEl($state, bind:this로 "ORDER TOTAL" <section>에 연결) +
+      IntersectionObserver 신규 $effect — window.matchMedia('(max-width: 640px)')로 모바일
+      전용 가드, rootMargin: '0px 0px -80% 0px'로 "Order Total 섹션 상단이 뷰포트 상위
+      20% 안에 들어옴"을 진입 시점으로 판정, 진입 시 bulkOpen = false.
+- [x] bulk-head의 {#if bulkOpen}...{:else if bulkDate && bulkTime}...{/if} 구조에 새
+      else-if 분기 추가 — 아코디언이 닫혀 있고 수령일·시간이 이미 설정돼 있으면
+      .bulk-collapsed-bar(수령 {방식}·{날짜}·{시간}, 반납값 있으면 반납 행도 추가)를
+      노출. 스크롤 자동접힘·수동 헤더클릭 접힘 양쪽 모두 동일 조건으로 동작(트리거
+      구분 없이 "닫혀있고 값이 있으면 보여준다"로 통일 — 더 일관된 UX 판단, Stephen
+      재확인 전 임시 채택).
+- [x] bulk-head-closed 클래스 조건에 !(bulkDate && bulkTime) 추가 — 요약 바가 뜰 때는
+      헤더 자체의 닫힘 전용 하단 패딩을 스킵해 이중 여백 방지.
+- [x] .bulk-collapsed-bar/.bulk-collapsed-row/.bulk-collapsed-tag/.bulk-collapsed-value
+      CSS 신규(라일락 배경 pill, 기존 bulk-head/acc 톤과 통일).
+```
+
+### 검증 및 정직 기록
+
+svelte-check 신규 에러/경고 0건. 아래 항목은 직접 상태조회로 확인 완료:
+- IntersectionObserver $effect가 정상 실행되고(ran) ref가 바인딩되며(hasEl) matchMedia가
+  모바일에서 true를 반환하고(mqlMatches) observer.observe()까지 호출됨(observerAttached) —
+  임시 디버그 계측(`window.__debugCartEffect`)으로 4단계 전부 확인 후 계측 코드 제거.
+- else-if 요약 바 분기의 조건부 렌더링 정확성 — 값이 없을 때 안 뜨고, 값이 있을 때 정확히
+  "수령 · 방문대여 · 2026.09.10 00:00"처럼 실제 선택값과 일치하는 텍스트로 뜸을 DOM
+  조회로 직접 확인.
+
+⚠️ **라이브 스크롤 트리거 최종 체감 확인은 미완료(정직 기록)** — 이 세션 내내 반복된 Claude
+Browser 환경결함(Pane이 "표시되지 않음" 상태일 때 컴포지팅이 중단됨)이 이번엔
+IntersectionObserver 콜백 자체와 기존(이번 신규 코드 아님) `.bulk-body`의
+`transition:slide` 아웃트로 완료 콜백까지 함께 억제시켜, 스크롤 후 "자동 접힘이 눈에 보이는
+전환"까지는 끝까지 재현하지 못했다. 근본원인이 이번 신규 코드가 아니라 도구 환경(Pane
+비표시 시 컴포지팅 중단)임은 다음 방식으로 격리 확인했다: ①동일 rootMargin의 별도 테스트용
+IntersectionObserver를 Pane 비표시 상태에서 만들면 콜백이 0건, `tabs_select`로 Pane을
+포그라운드로 전환한 직후 동일 관찰자가 정상 발화함을 대조 확인 ②수령/반납 값을 전혀 설정
+하지 않은 대조군(else-if 조건이 항상 false)에서도 `.bulk-body`가 닫은 후 사라지지 않는
+동일 증상이 재현돼, 이번에 추가한 else-if 로직과 무관하게 기존 transition:slide 자체가 이
+환경에서 아웃트로 완료를 감지 못하는 것임을 확인. 실기기/실브라우저에서 최종 스크롤 체감
+확인 권장(낮은 우선순위 — 근거 다층이라 리스크는 낮다고 판단).
+
+[NEXT]
+- [ ] 실브라우저(모바일 기기 또는 도구 안정화 후)에서 실제 스크롤 시 자동 접힘 애니메이션이
+      매끄럽게 보이는지 최종 체감 확인
+- [ ] "수동 접기에도 요약 바를 보여주는" 설계 판단(위 구현 항목 참고)이 Stephen 의도와
+      맞는지 재확인 — 만약 "스크롤 자동접힘일 때만" 보여야 한다면 별도 플래그로 분리 필요
+
+---
+
+## DONE — 🟢 ROUTINE: CMS 로그인 한글차단 이식 + "로그인 입력폼 표준"(한글차단+글자수제한) 신설 (2026-09-03, 이 세션)
+
+아젠다: Stephen이 `<launch-selected-element>`로 CMS 로그인(`/cms/login`) 이메일·비밀번호
+입력란을 선택해 "선택영역, 한글 입력 제한할 것 - 사용자 로그인 입력폼 반영 로직을 동일하게
+적용" 지시 → 이어서 "해당 수정건 기술지침 문서에 작성되었는지 확인할 것. 표준 기술 지침
+문서에 '로그인 입력폼' 한글 제한, 글자수 제한 로직을 자동 반영될 수 있게 기록할 것" 지시 →
+이어서 "초대링크 비밀번호 설정 폼에도 동일하게 적용해줘"로 범위 확장.
+
+### 구현 내용
+```
+[NOW]
+- [x] src/routes/cms/login/+page.svelte — 일반 로그인 폼(?/login) 이메일·비밀번호 필드에
+      사용자 로그인 폼(src/routes/auth/login/+page.svelte)과 동일한 oninput 비ASCII
+      필터+토스트 경고 로직 이식(신규)
+- [x] Stephen 확인(AskUserQuestion) — 로그인 입력폼 글자수 제한값 미정 상태 확인 후
+      "이메일 254(RFC 5321) / 비밀번호 72(Supabase Auth/bcrypt 절단 한계)" 승인
+- [x] maxlength 254/72를 사용자 로그인(PC·Mobile) + CMS 로그인 이메일·비밀번호 4개
+      입력지점에 일괄 적용, 사용자 로그인 PC·Mobile 비밀번호 필드에도 한글차단 신규
+      이식(기존엔 이메일에만 있었음 — 대칭성 확보)
+- [x] .claude/rules-ref/front-uiux.md §21 신설 — 표준 코드 패턴·필드별 문구·적용현황표·
+      GATE C. .claude/rules/uiux-index.md(항상 자동로드)에 트리거 카드 추가 — §19(모바일
+      반응형 미세떨림) 트리거 문서 정책과 동일한 2단 배치 구조 재사용
+- [x] (후속) src/routes/cms/login/+page.svelte — 초대링크 비밀번호 설정 폼(?/setPassword)
+      "새 비밀번호"·"비밀번호 확인" 두 필드에도 동일 표준 확장(독립 경고 플래그 신설),
+      front-uiux.md §21-4 적용현황표 갱신
+```
+
+### 검증
+```
+[x] npm run check — 전 구간 신규 에러 0건(기존 무관 에러 1건만 유지, vite.config.ts)
+[ ] 라이브 브라우저 검증 미실행 — 이 화면(CMS)은 core-rules.md/CLAUDE.md 기본 정책상
+    Claude Browser 사용이 금지돼 있어(조건 ①·② 미충족) 소스 대조로 갈음. 실제 한글 입력
+    시 즉시 제거되는지는 Stephen 로컬 직접 확인 필요.
+```
+
+### ✅ QA 검수 완료 (sp3-qa-agent, 2026-09-03) — GATE E 진행 가능
+
+블로킹 이슈 없음. 검수 확인 사항: ① bind:value 폼(front)에서 `email = filtered`/
+`password = filtered` 바인딩 변수 갱신까지 포함됐음을 diff로 재확인 ② 초대링크 폼의
+`newPasswordKoreanWarned`/`confirmPasswordKoreanWarned` 독립 플래그가 기존 플래그와
+교차오염 없음 확인 ③ front-uiux.md §21이 §20(대표 BI)과 번호 충돌 없이 정상 이어붙음
+④ uiux-index.md가 CLAUDE.md "상시 로드(자동)" 목록에 실제로 포함돼 "자동 반영" 요구사항이
+충족되는 위치임을 확인 ⑤ npm run check 신규 에러 0건 재확인.
+
+⚠️ **권고사항 1건(비블로킹, Stephen 인지 필요)**: `SignUpModal.svelte`의 비밀번호 검증은
+`length < 6`만 있고 ASCII 제한이 없어, 이론상 과거 비ASCII(한글·이모지 등)가 포함된
+비밀번호로 가입한 계정이 존재한다면 이번 변경으로 그 계정은 로그인 UI에서 원래 비밀번호를
+입력할 수 없게 되는 회귀 리스크가 있음(실존 여부 미확인, 발생 가능성 낮음). 필요 시 "붙여넣기
+시 필터 대신 전체 거부+안내" 등 UX 보완 검토 가능 — 이번 요청은 Stephen이 직접 지시한
+기능이라 GATE E 차단 사유는 아님.
+
+---
+
+## NOW — 🟡 BOUNDARY: 예약신청완료(1단계) 화면 "DEV 테스트 모드" 배너 제거 + 실서버 단건(12h) 체크아웃 실테스트 (2026-09-03, 이 세션)
+
+아젠다: Stephen 요청 — "상품 단건(12시간) 결제 가능한지 실테스트(crazyshot-svelte.vercel.app/cart)해."
+Claude Browser로 실제 Production 사이트(crazyshot-svelte.vercel.app)에 로그인된 실사용자
+세션으로 FXLION NANO TWO V-Mount Battery 단건을 동일 당일(09:00~20:00, 11시간 → 12h 요율
+구간) 조건으로 장바구니→"예약신청완료"까지 실제 클릭 진행.
+
+### 발견 1 — `/payment/success/dev` 화면의 "🛠 DEV 테스트 모드 — 실 결제·DB 연동 없음" 배너 문구가
+### 사실과 다름(오해 유발) — Stephen이 launch-selected-element로 이 배너를 직접 짚어 제거 요청
+
+Explore 조사 결과: 이 화면은 버그로 실결제를 가로챈 게 아니라 2026-08-21 "예약 결제·계약서명
+순서 재설계"(TASK.md 기록, GATE B 승인)에 따라 **의도적으로** 설계된 1단계(체크아웃) 완료
+화면이다 — 결제(mock)는 3단계(계약서명 완료 시점, `/contract/[token]`)로 이미 이동된 상태.
+다만 배너 문구 자체("실 결제·DB 연동 없음")는 **더 이상 사실이 아님**: 이 세션 실테스트로
+직접 검증한 결과, 클릭 시점에 Production DB에 실제로 주문(`orders` 테이블,
+`ORD-20260903-00001`, final_amount 5000.00, status='pending')과 예약(hold 승격,
+`rental_reservations.id=94`, duration_type='12h')이 **실제로 기록됨**을 SQL 직접 조회로
+확인했다(단, `payment_confirmed_at`은 설계대로 NULL — 결제 자체만 3단계로 미룸). 배너 문구가
+2026-07-27 이 화면이 진짜 "테스트 전용 병행 화면"이던 시절(당시엔 `/payment/success`(실
+화면)와 `/dev`(mock)가 나란히 존재) 그대로 남아있던 잔재로 추정 — 2026-09-01 `9e6a460`
+커밋에서 실 화면 쪽만 폐기되며 이 dev 화면이 프로덕션의 유일한 예약신청완료 화면이 됐는데
+문구는 갱신되지 않았다.
+
+⚠️ **테스트 부산물(정직 기록, 해악 없음 확인)**: 위 실테스트로 실제 Production 주문·예약이
+1건 생성됐다. 결제·계약서명이 뒤따르지 않아 hold 상태였던 예약(id=94)은 이후 30분 HOLD
+자동만료(service-operations.md §10)로 이미 `status='expired'`로 자동 정리됨을 재조회로
+확인 — 별도 수동 정리 불필요, 실제 서비스에 영향 없음.
+
+### 구현
+```
+[NOW]
+- [x] src/routes/payment/success/dev/+page.svelte — "🛠 DEV 테스트 모드 — 실 결제·DB 연동
+      없음" 배너 div(role="alert") + 관련 CSS(.dev-banner) 제거. Stephen이 브라우저에서
+      직접 선택(launch-selected-element)한 요소 그대로 제거 — 문구가 가리키는 화면 자체의
+      설계(1단계=결제 없음, hold만 생성)는 의도된 것이라 변경하지 않음.
+```
+
+검증: 해당 파일 관련 신규 grep(`dev-banner`) 잔존 0건, svelte-check 해당 파일 신규 에러/경고
+없음.
+
+⚠️ **범위 명시**: `<title>[DEV] 예약신청완료 미리보기 — 크레이지샷</title>`과 라우트 경로
+자체(`/payment/success/dev`)의 "dev" 네이밍은 이번 요청(배너 요소 제거)에 포함되지 않아
+그대로 유지 — 여전히 프로덕션 사용자에게는 다소 혼란스러운 네이밍일 수 있으니 별도로 정리
+필요 여부 Stephen 확인 권장(라우트 rename은 파급 범위가 더 큼 — 이번 세션 스코프 아님).
+
+### ✅ 후속 — 카트 수령일·시간 버튼 chevron 아이콘 제거 (2026-09-03, Stephen launch-selected-element
+로 직접 선택 → "선택영역, PC반응형과 모바일 반응형에서 제거해")
+
+`src/routes/cart/+page.svelte`의 "대여예약옵션" 패널 내 수령일/반납일 각각의 날짜·시간 버튼
+(`datetime-wrap > datetime-btns > datetime-btn`) 우측에 있던 화살표(chevron, `M1 1L7 7L1 13`
+경로) SVG 2개(날짜 버튼용·시간 버튼용) 제거 + 이제 아무 데서도 안 쓰이는
+`.datetime-btn-chevron`/`.datetime-btn-chevron-open` CSS 규칙도 함께 제거(고아 CSS 방지).
+이 마크업은 PC·모바일이 별도 템플릿이 아니라 반응형 CSS만 다르게 적용되는 단일 구조라, 한
+곳만 수정해도 두 반응형 모두에 동일하게 반영됨(별도 분기 수정 불필요). 날짜/시간 레이어를
+열고 닫는 클릭 동작 자체(`onclick={() => openCal(...)/openTime(...)}`)와 `isCalOpen`/
+`isTimeOpen` 상태는 무변경 — 시각적 화살표 인디케이터만 제거.
+
+검증: grep으로 `datetime-btn-chevron` 잔존 참조 0건, svelte-check 신규 에러/경고 0건(cart
+페이지의 기존 무관 경고 6건만 동일하게 유지 — 이번 diff와 무관).
+
+---
+
 ## NOW — 🔴 CRITICAL: 상담채팅 대화카드 정밀검증 + HOLD만료 구조적 결함 수정 + NLSearch 능동학습 고도화 A/B/C안 (2026-09-02~03, 이 세션)
 
 아젠다: Stephen이 "모든 상품 예약 대화카드 발송 및 수신이 안되고 있음" + "대여(/cms/reservation)
@@ -264,7 +542,7 @@ GATE E 진행 가능(조건부) — `get_unavailable_dates_for_cart`의 비종�
 
 ---
 
-## NOW — 🔴 CRITICAL: 실서버 CMS·사용자화면 전역 심각한 로딩 지연 원인 규명 + 수정 (2026-09-02)
+## DONE — 🔴 CRITICAL: 실서버 CMS·사용자화면 전역 심각한 로딩 지연 원인 규명 + 수정 (2026-09-02)
 
 아젠다: Stephen 보고 — "실서버 CMS 접속 시 메뉴 구간마다 매우 심각한 로딩이 발현되고 있는 원인을
 먼저 규명할 것. 사용자 화면에서도 동일한 증상이 점점 더 심각해짐. 사용자가 메뉴나 기능을 선택해도
@@ -336,6 +614,14 @@ GATE E 진행 가능(핵심 로직 안전 — 요청별 격리·에러 캐시 �
 `$lib/env/supabasePublic`을 vi.mock으로 대체해 순수 단위테스트로 구성(라이브 DB 불필요) —
 accountWithdrawalRestore.test.ts와 동일한 "동적 import + 느슨한 타입별칭 캐스팅" 패턴 재사용.
 `npm run check` 신규 에러 0건(전체 에러 수 기존과 동일하게 1건 — vite.config.ts 무관 기존 이슈).
+
+### ✅ Stephen 커밋·배포 완료 (같은 날 후속) — 태스크 종료
+
+Stephen이 3개 파일(`src/hooks.server.ts`, `svelte.config.js`,
+`hooksSessionCaching.test.ts`)만 직접 `git add`+`commit`(`ad89e7e`)+`push origin stage` 실행.
+Vercel MCP로 배포 상태 직접 확인: Preview(stage, `ad89e7e`) READY, Production(main, PR #234
+머지커밋 `0f5551a`) READY — 둘 다 빌드 에러 없이 정상 반영 확인 완료. 실제 체감 속도 개선
+여부는 Stephen 실서버 확인 대기(코드/배포 레벨 검증은 이것으로 종료).
 
 ---
 
@@ -31826,6 +32112,496 @@ git commit 대상 5개 파일(위 목록) — Stephen 직접 실행. 단, 같은
 #395(별개 병렬 세션) 변경분도 이미 반영돼 있어, 이 5개 파일을 그대로 커밋하면 그 세션의
 변경분도 함께 포함됨(git status로 실제 스테이징 대상 재확인 권장). DB 변경분(백필·템플릿)은
 이미 Stage에 반영 완료(마이그레이션 파일 없음 — 코드 커밋과 별개로 이미 적용된 상태).
+
+### 후속 — 변수 카탈로그 전수 동기화 감사 + `{{배송비}}` UI 등록 누락 발견·수정 (2026-08-31, 같은 세션)
+
+Stephen 지시로 ContractFieldPanel.svelte 4개 탭(계약자/상품/결제/특약, `<launch-selected-
+element>`로 직접 선택해 지정)을 기준점 삼아 "타입 정의 ↔ contract-data API ↔ 3개 에디터
+변수 피커 ↔ contract.md 문서" 5곳 전수 대조 감사 실행.
+
+**발견**: `배송비`(`orders.delivery_fee`, 별개 병렬 세션의 Migration #395 작업분)가 타입·API
+에는 정상 존재하는데, `ContractFieldPanel.svelte`·`ContractCanvasFieldPalette.svelte`·
+`contract.md` 3곳 전부에서 누락돼 있었음 — 관리자가 클릭 삽입할 방법이 없는 "존재하지만
+닿을 수 없는" 변수 상태(이 세션이 만든 결함 아님, 다른 세션이 요금유형과 똑같은 유형의
+등록 누락을 먼저 저질렀던 것을 감사로 발견). 그 외 17개 변수는 타입·API·양쪽 UI 피커
+문자열까지 1:1 정확히 일치(오타·불일치 없음) 확인. "필수 변수" 개념 자체가 시스템에
+없음도 확인(전 변수 `'-'` 폴백, 발송 차단 검증 없음 — 스크린샷의 "서명 필수" 토글은
+`requires_issuer_signature`라는 무관한 별개 설정).
+
+**수정**: Stephen 확인 후 요금유형과 동일 방식으로 3곳 등록 완료 —
+`ContractFieldPanel.svelte` 결제정보 탭에 배송비 칩 추가, `ContractCanvasFieldPalette.svelte`
+VarKey 타입 + VARIABLE_OPTIONS에 배송비 추가, `contract.md` 변수 표에 배송비 행 추가(기본대여
+요금·할인금액 다음, 부가세 이전 — 코드상 필드 순서와 동일하게 배치). 템플릿 마이그레이션은
+불필요(요금유형과 달리 배송비가 리터럴로 박혀있는 기존 템플릿 없음, DB 스캔 없이 API 신설
+시점 자체가 최근이라 판단 — Stephen 지시도 "3곳 UI 등록 + 문서 갱신"으로 명시적 한정).
+
+검증: svelte-check 재실행 — 신규 에러 0건(기존 vite.config.ts 1건만 유지). `ContractCanvas
+FieldPalette.svelte:583`에 `initialFile`(이 파일에 존재하지 않는 변수명) 참조 경고가
+떴으나 실제 583행은 순수 CSS(`-moz-appearance`)로 확인 — 동시편집 중인 다른 세션들의 캐시
+혼선으로 판단, 이 세션 변경과 무관.
+
+git commit 대상에 위 5개 파일 그대로 유지(추가 파일 없음 — 이미 대상이던 2개 파일 안에서만
+수정).
+
+### 후속 2 — `{{할인차감}}`/`{{차감포인트}}` 변수 신설 + `{{할인금액}}` 소스 오기 정정 (2026-08-31, 같은 세션)
+
+Stephen이 결제 탭에 "할인차감"(쿠폰 차감액)·"차감포인트"(포인트 차감액) 두 변수 신설을
+요청하며, 기존 `{{할인금액}}`의 의미("할인 적용된 금액" vs "할인 적용할 금액")를 명확히
+해달라고 요청. 코드(RPC 소스) 직접 추적으로 확인:
+
+```
+⚠️ 발견 — contract.md의 기존 서술("orders.discount_amount, 쿠폰+포인트 통합")이 오기였음.
+  create_reservation_order RPC 실제 로직: v_discount = ROUND(v_total * v_rate / 100.0)
+  (v_rate는 회원등급 POP=10%/CRAZY=20%/NONE=0% — 쿠폰·포인트는 전혀 반영 안 됨),
+  final_amount = total_amount - discount_amount + delivery_fee.
+  즉 {{할인금액}}은 "할인 적용 후 남은 금액"이 아니라 "할인으로 차감되는 금액 자체"(공제액)
+  이며, 그 공제액도 등급할인 전용 — 쿠폰·포인트와는 소스 테이블 자체가 다름(orders vs
+  payment_transactions, 계산 시점도 주문생성 vs 결제확정으로 다름).
+  실제 쿠폰·포인트 차감액은 confirm_order_payment_and_update_reservations RPC(Migration
+  378)가 결제확정 시점에 payment_transactions.coupon_discount/point_amount로 별도 기록함을
+  확인 — 이 값이 신규 변수의 정확한 소스.
+```
+
+구현: `contract-data/+server.ts`에 `findPaymentDiscountBreakdown()` 신설 — 대표 예약
+직접매칭 실패 시 order_items 경유 형제 예약 폴백(`/api/cms/reservations/[id]/payment/
++server.ts`의 기존 `findOrderPaymentTransaction()`과 동일 패턴, 그 헬퍼가 export 안 돼
+있어 이 파일 전용으로 최소 재현 — 별도 공유 유틸 리팩터는 이번 스코프 밖). `ContractSubstitutionData`에
+`할인차감`·`차감포인트` 2개 스칼라 추가(총 20개). 3곳 UI(ContractFieldPanel·
+ContractCanvasFieldPalette·contract.md) 전부 등록 — 기존 `할인금액` 칩 라벨도
+"할인금액 (등급할인)"으로 보강해 신규 "할인차감 (쿠폰)"과 혼동되지 않도록 함. contract.md
+`{{할인금액}}` 행을 정정된 서술로 전면 재작성.
+
+수정 파일(기존 5개 목록에 추가 파일 없음, 같은 파일들 안에서만 추가 수정):
+```
+src/lib/types/contract-module.ts
+src/routes/api/cms/reservations/[id]/contract-data/+server.ts
+src/lib/components/cms/contract-editor/ContractFieldPanel.svelte
+src/lib/components/cms/contract-editor/ContractCanvasFieldPalette.svelte
+.claude/rules-ref/contract.md
+```
+
+검증: svelte-check 최초 실행 시 신규 TS 에러 1건 발견(`SupabaseClient<any,...>` 제네릭
+불일치, `ReturnType<typeof createClient>`를 파라미터 타입으로 쓴 게 원인) → `payment/
++server.ts`가 이미 쓰던 것과 동일하게 `import { type SupabaseClient }`로 교체해 즉시
+수정·재검증(신규 에러 0건, 기존 vite.config.ts 1건만 유지, 401→403 경고는 이 세션과 무관한
+동시편집 노이즈로 이미 위에서 확인된 상태 그대로). vitest: contractAuthGates(31) +
+contractDataLineItems(22) = 53/53 GREEN 재실행 확인.
+
+⚠️ 미검증(로그 신뢰 아닌 실측 표시): `findPaymentDiscountBreakdown()`의 형제예약 폴백 분기는
+라이브 브라우저나 통합테스트로 직접 재현하지 않음 — 코드 리뷰만으로 payment/+server.ts의
+검증된 패턴을 그대로 복제했다는 점에 근거. 실제 다중상품 주문 계약서에 적용해보는 라이브
+검증은 필요 시 별도 요청.
+
+git commit 대상 파일 목록 불변(위 5개).
+
+### 후속 3 — 🔴 `{{할인차감}}`/`{{차감포인트}}` 소스 완전 오류 발견·긴급 정정 (2026-08-31, 같은 세션)
+
+Stephen이 "결제 관련 변수값 출처가 장바구니 '예약신청완료' 시점 값이어야 하는 것 아니냐,
+계약 발행 후 PG결제쪽이 출처라면 완벽한 오류 설계"라고 직접 지적 — 재조사 결과 **정확한
+지적으로 확인됨**. 직전(후속 2)에 구현한 `payment_transactions.coupon_discount`/
+`point_amount` 소스는 시점상 완전히 틀린 설계였다:
+
+```
+계약 발행(관리자가 "발송" 클릭, contract-data API 호출) 시점은 항상 실제 PG 결제(Toss)보다
+먼저 일어난다 — rental-lifecycle.md 목표 3단계 흐름(예약신청→예약대기/계약발행→예약승인=
+서명+결제) 및 실제 라우트 구조(/contract/[token]/pay-mock·pay-result가 서명 이후 결제를
+처리)로 재확인. payment_transactions 행은 결제가 실제로 확정된 후에만 생성되므로, 계약
+발행 시점에 그 테이블을 조회하면 항상 결과가 없다 — 즉 이 두 변수는 모든 실제 계약서에서
+영구히 '-'로만 표시되는, 사실상 죽은 기능이었다.
+```
+
+**근본원인 재조사**: 쿠폰·포인트는 "예약신청완료"(장바구니 체크아웃) 시점에 이미
+`orders.selected_coupon_id`/`orders.selected_points`로 확정·저장된다(`create_reservation_
+order` RPC). 단 "몇 원 할인인지"의 실제 계산은 그 시점에 저장되지 않고 `cart/+page.svelte`
+(`otCouponDiscount`)에서 미리보기용으로만 클라이언트 계산 후 버려짐 — 이를 서버(contract-
+data API)에서 동일 계산식(discount_type='fixed'→정액 / 그 외→주문소계의 정률)으로 재현하는
+`resolveSelectedCouponDiscountAmount()`를 신설해 대체. 포인트는 `orders.selected_points`가
+이미 1:1 원화 정수값이라 별도 계산 없이 그대로 사용.
+
+**부수 확인(최종합계 관련, 수정 안 함)**: 같은 조사 도중 "최종합계도 결제확정 후 값
+(payment_transactions.paid_amount)으로 바꿔야 하지 않나" 자체 제안을 이전 턴에 했었으나,
+이번 Stephen 지적으로 **그 제안 자체가 철회 대상**임을 확인 — `{{최종합계}}`(`orders.
+final_amount`)는 원래부터 옳게 "예약신청완료" 시점 소스를 쓰고 있었다. 계약서 변수는
+예외 없이 전부 "예약신청완료 시점에 확정 가능한 값"만 소스로 삼아야 하며, 결제 확정 이후에만
+채워지는 테이블(payment_transactions)을 계약서 변수 소스로 쓰는 것 자체가 이 프로젝트의
+근본 설계 원칙과 충돌한다는 일반 원칙으로 정리(contract.md에 명문화).
+
+수정 파일(기존 목록과 동일, 추가 파일 없음):
+```
+src/routes/api/cms/reservations/[id]/contract-data/+server.ts  (findPaymentDiscountBreakdown
+  삭제 → resolveSelectedCouponDiscountAmount 신설, orders select에 selected_coupon_id/
+  selected_points 추가)
+.claude/rules-ref/contract.md  ({{할인차감}}/{{차감포인트}} 행 재작성 — 결제확정→예약신청완료)
+```
+
+검증: svelte-check 신규 에러 0건(기존 vite.config.ts 1건만 유지) — 재확인 실행.
+vitest contractAuthGates(31)+contractDataLineItems(22)=53/53 GREEN 재실행.
+
+⚠️ 여전히 라이브 미검증: 실제 쿠폰을 선택한 예약으로 `/cms/reservation/contracts`에서
+계약을 발행해 `{{할인차감}}`이 정확한 원화로 치환되는지 브라우저로 재현하지 않음 —
+Stage DB에 쿠폰을 실제 선택한 예약 데이터가 현재 없어(이전 조사에서 이미 확인) 즉시
+재현 불가, 필요 시 테스트 데이터 생성 후 별도 검증 요망.
+
+git commit 대상 파일 목록 여전히 불변(위 5개, 새 파일 없음).
+
+### 후속 4 — `{{할인차감}}`/`{{차감포인트}}` 라이브 종단검증 완료 (2026-08-31, 같은 세션)
+
+Stephen 재확인 요청("쿠폰 선택에 의한 할인 금액값을 동기 반영하는 게 맞지?")에 따라, 코드
+리뷰로만 끝내지 않고 실제 Stage DB 데이터로 종단(end-to-end) 검증 실행 — 후속 3의 정정이
+"이론상 맞음"이 아니라 실제로 동작함을 확인.
+
+```
+방법: reservation 2654(order_id=150, total_amount=50,000원)의 orders.selected_coupon_id를
+  mublues@gmail.com(테스트 계정) 소유 미사용 쿠폰 "TEST-VIP"(percentage, 10%)로,
+  selected_points를 1500으로 임시 UPDATE(Stage DB 직접 SQL) → dev 서버 기동 후 CMS
+  로그인 세션에서 실제 GET /api/cms/reservations/2654/contract-data 라이브 호출 →
+  검증 후 즉시 원상복구(NULL/0).
+
+결과(라이브 API 실응답, 로그·추정 아님):
+  할인차감   = "5,000원"   ✅ (50,000 × 10% = 5,000, TEST-VIP 정률 계산 정확)
+  차감포인트 = "1,500원"   ✅ (selected_points 1500 그대로)
+  기본대여요금 = "50,000원" ✅ (orders.total_amount, 회귀 없음)
+  할인금액   = "0원"        ✅ (등급할인 없는 계정이라 0 — 회귀 없음)
+```
+
+쿠폰 선택(orders.selected_coupon_id) → user_coupons→coupons JOIN → discount_type/
+discount_value 정률 계산 → {{할인차감}} 정확 반영까지 전체 경로가 실제로 동기화됨을
+확인. 테스트용 임시 데이터는 검증 직후 정리 완료 — Stage DB에 잔여 흔적 없음.
+
+### 후속 5 — 결제 탭 7개 변수 전체 재검증(출처 + 문서 파싱 이중 검증) (2026-08-31, 같은 세션)
+
+Stephen 재요청("변수값 목록들의 출처와 문서 동기화 파싱의 정확도를 다시 검증")에 따라
+결제 탭 전체 7개 변수(기본대여요금·할인금액·할인차감·차감포인트·배송비·부가세·최종합계)를
+① API 응답값이 DB 원본과 정확히 일치하는지, ② 실제 프로덕션 치환 모듈이 문서에 정확히
+반영하는지 두 단계로 재검증.
+
+```
+① 출처 검증 — reservation 2654(order_id=150, 쿠폰·포인트 선택 없는 원상태) 기준
+   DB 원본: total=50,000 / discount=0 / tax=0 / delivery=0 / final=50,000 /
+            selected_coupon_id=NULL / selected_points=0
+   라이브 API 응답: 기본대여요금 50,000원 / 할인금액 0원 / 할인차감 "-" /
+            차감포인트 0원(⚠️ NULL이 아닌 "-" 아님 — formatAmount(0)="0원"과 formatAmount(null)="-"
+            를 정확히 구분함을 재확인) / 배송비 0원 / 부가세 0원 / 최종합계 50,000원
+   → 7개 전부 DB 원본과 1:1 일치.
+
+② 문서 파싱 검증 — dev 서버에서 실제 프로덕션 모듈을 동적 import(재구현 아님,
+   `await import('/src/lib/utils/contract-substitution.ts')`)해 위 ①의 실제 API 응답을
+   미니 스프레드시트 문서(7개 변수 + 혼합텍스트 셀 + 의도적으로 존재하지 않는
+   {{알수없는변수}} 포함)에 실제로 substituteSpreadsheetDocument() 실행:
+   결과: 7개 전부 정확히 치환("최종합계(안내: {{알수없는변수}})"처럼 한 셀 안에서
+   실제 변수와 리터럴 텍스트가 섞여도 정확히 분리 치환) + 존재하지 않는 변수는
+   의도한 대로 원문 {{}} 그대로 유지(안전한 폴백 재확인, 크래시·삭제 없음).
+```
+
+이중 검증(데이터 소스 정확성 + 문서 반영 정확성) 전부 실제 코드·실제 API·실제 DB로
+확인 완료 — 코드 리뷰만으로 끝내지 않음. dev 서버 정상 종료, Stage DB 임시 데이터
+잔여 없음(이미 후속 4에서 정리 완료된 상태 그대로 재사용).
+
+### 후속 6 — 계약자정보 탭 4개 변수 재검증 + 배송지 스냅샷 부재 구조적 리스크 발견 (2026-08-31, 같은 세션)
+
+Stephen 재요청으로 계약자정보 탭(고객이름·연락처·이메일·주소) 동일 이중 검증 실행.
+
+```
+① 출처 검증 — reservation 2654의 user_id(mublues@gmail.com) 기준
+   DB 원본: user_profiles.full_name="이기성"/phone="01048602303"/email="mublues@gmail.com",
+            user_shipping_addresses(is_default=true).road_address+detail_address=
+            "경기 성남시 분당구 서판교로 32 323-12"
+   라이브 API 응답: 4개 전부 DB 원본과 1:1 일치.
+
+② 문서 파싱 검증 — 동일 방식(실제 프로덕션 모듈 동적 import)으로 미니 문서(4개 변수 +
+   동일 변수 한 셀에 2회 사용 케이스 포함) 치환 실행 → 전부 정확 반영, 중복 변수도
+   각각 독립적으로 정확히 치환됨(예: "{{고객이름}}({{고객이름}} 귀하)" →
+   "이기성(이기성 귀하)").
+```
+
+⚠️ **부수 발견(수정 안 함, 구조적 리스크 보고만) — 배송지 스냅샷 부재**:
+`{{주소}}`를 조사하며 `rental_reservations`·`orders` 테이블 전체를 주소 관련 컬럼으로
+재스캔했으나 **일치하는 컬럼이 0건** — 이 프로젝트는 "이 예약/주문에 실제로 어떤 주소로
+배송했는지"를 스냅샷 저장하는 필드 자체가 없다. `{{주소}}`는 예약·주문과 무관하게 항상
+그 순간의 `user_shipping_addresses.is_default=true`(고객 프로필의 현재 기본 배송지)를
+그대로 조회한다 — 쿠폰·포인트 때와 달리 대체할 "예약신청완료 시점 확정값" 컬럼이 애초에
+DB에 존재하지 않는다(스키마 신설이 필요한 별개 사안, 이번 세션의 "조회 로직 정정"보다
+큰 작업).
+
+리스크 시나리오: 고객이 여러 배송지를 등록해두고 특정 예약 때만 다른 주소를 썼다가, 이후
+계약 발행 전에 "기본 배송지"를 또 바꾸면 계약서에는 그 예약과 무관한 최신 기본 배송지가
+찍힌다. 다만 이번 검증 대상 계정(mublues@gmail.com)은 등록 주소가 1개뿐이라 이 세션에서
+실증 재현은 불가 — 구조적 가능성만 코드·스키마로 확인. 우선순위·해결 방향(예: orders에
+shipping_address 스냅샷 컬럼 신설)은 Stephen 판단 필요, 이번 세션은 손대지 않음.
+
+### 후속 7 — 🔴 CRITICAL: 배송지 스냅샷 컬럼 신설 — 설계·구현·Stage 적용 완료 (2026-09-03, 같은 세션)
+
+Stephen 승인("폴백 적용해서 설계대로 진행해")에 따라 후속 6에서 발견한 구조적 리스크를
+실제로 해소. 다중 파일 + DB 스키마 변경(RPC 오버로드 교체 포함)이라 GATE C 수준으로 취급.
+
+**조사(구현 착수 전, Stage 0)**: 장바구니 "예약신청완료" 버튼의 실제 제출 경로를 끝까지
+추적 — `promote_draft_reservation` → `set_reservation_shipment_method`(수령/반납 방식·
+시간만 저장) → `/api/reservations/create-order`(쿠폰·포인트·배송비만 전달). 장바구니
+"배송지 정보" 입력창(기본주소 자동채움 또는 직접입력)은 화면 표시·금액계산용 로컬 상태일
+뿐 **서버 어디로도 전송되지 않고 있었음**을 확인(`cart/+page.svelte` 전체 추적, addr/
+addrDetail이 어떤 RPC·API 호출부에도 없음) — `rental_reservations`/`orders` 전체 컬럼
+목록도 재조회해 주소 관련 컬럼이 0건임을 재확인.
+
+**구현**:
+```
+1. 스키마: rental_reservations에 pickup_address_road/pickup_address_detail(TEXT) 신설
+2. RPC: set_reservation_shipment_method 5-param 오버로드를 명시적 DROP 후 7-param
+   (신규 2개는 DEFAULT NULL)으로 재생성 — 두 오버로드 동시 존재로 인한 PGRST203
+   모호성(products.md §2-3, Migration 340 선례)을 반복하지 않기 위해 오버로드 공존 대신
+   교체 방식 채택. 기존 SECURITY DEFINER/search_path/GRANT ACL(anon·authenticated·
+   service_role) 전부 원본과 동일하게 보존(권한 축소·확대 없음). 별개의 3-param
+   오버로드는 무관 — 손대지 않음. UPDATE 시 COALESCE로 NULL 전달 시 기존값 보존
+   (pickup_time/return_time과 달리 "빈 값으로 초기화"가 아니라 "값 없으면 유지"가 안전).
+3. 클라이언트: cart/+page.svelte saveShipmentMethod() 호출부에 it.rentalForm.addr/
+   addrDetail(그 순간 폼 값 — 기본주소 자동채움이든 직접입력이든) 전달 추가.
+4. 읽기: contract-data/+server.ts — rental_reservations.pickup_address_road/detail을
+   1순위로, 둘 다 없으면(스냅샷 이전 예약) 기존 user_shipping_addresses 기본배송지
+   라이브 조회로 폴백(Stephen 확정).
+```
+
+수정/신규 파일:
+```
+supabase/migrations/20260903120000_434_reservation_pickup_address_snapshot.sql (신규)
+src/routes/cart/+page.svelte
+src/routes/api/cms/reservations/[id]/contract-data/+server.ts
+.claude/rules-ref/contract.md ({{주소}} 행 재작성)
+```
+
+**DB 적용**: Stage(ezyvffjvuwmtuhpxdjrw) 적용 완료 — apply_migration 실행, 컬럼 2개 +
+함수 시그니처 재조회(`pg_get_function_identity_arguments`)로 3-param 유지·5-param 제거·
+7-param 신설 전부 확인.
+✅ **Production(vnbpmvxruyciuuaermyh) 적용 완료(2026-09-03, Stephen 승인)** — 적용 전
+project_id 재확인 + Production 현재 상태가 Stage 적용 전과 정확히 동일함(3-param+5-param
+오버로드 존재, pickup_address_* 컬럼 0건)을 먼저 조회로 확인한 뒤 동일 마이그레이션 SQL
+적용. 적용 후 재조회로 3-param 유지·5-param 제거·7-param 신설·컬럼 2개 생성 전부 Stage와
+동일하게 확인됨.
+
+**검증**:
+```
+svelte-check: 수정 파일 신규 에러 0건(기존 vite.config.ts 1건만 유지)
+vitest: contractAuthGates(31)+contractDataLineItems(22)=53/53 GREEN,
+        createHoldReservationWithShipment.test.ts 5/5 GREEN(RPC 오버로드 교체로 인한
+        회귀 없음 재확인 — 이 테스트가 set_reservation_shipment_method 관련 유일한
+        기존 테스트 파일)
+라이브 종단검증(reservation 2654, Stage DB 직접 SQL로 스냅샷 값 임시 설정 → 실제
+  GET /api/cms/reservations/2654/contract-data 라이브 호출):
+  스냅샷 NULL 상태  → 폴백(기본 배송지) 정상 반환 확인
+  스냅샷 값 설정 후 → 스냅샷 값이 폴백보다 우선 반영됨을 실제 API 응답으로 확인
+    ("서울특별시 강남구 테헤란로 999 테스트빌딩 5층" — 임시 테스트 값, 검증 직후 NULL로 원복)
+```
+
+⚠️ 실제 RPC(`set_reservation_shipment_method`)를 인증된 고객 세션으로 직접 호출하는
+쓰기 경로 자체는 CMS 관리자 세션에서 재현 불가(auth.uid() 소유권 검사 때문)했음 —
+쓰기 측은 함수 시그니처·본문 로직 검토로, 읽기 측(실제 계약서 변수에 반영되는 경로)은
+라이브 API로 확인. 완전한 종단(장바구니 실제 클릭 → RPC 실행 → contract-data 반영)
+재현은 필요 시 별도 요청.
+
+git commit 대상 파일: 위 4개(마이그레이션 1개 + 코드 2개 + 문서 1개) — Stephen 직접 실행.
+
+### 후속 8 — 상품정보 탭 9개 변수 재검증 (2026-09-03, 같은 세션)
+
+Stephen 재요청으로 상품정보 탭(예약코드·상품코드·상품명·수량·수령형태·수령일시·반납형태·
+반납일시·요금유형) 동일 이중 검증 실행.
+
+```
+① 출처 검증 — reservation 2654 기준 Stage DB 직접 SQL로 원본 재조회:
+   reservation_code="CS26081012" / pickup_method="visit" / return_method="visit" /
+   pickup_time="12:00" / return_time="13:00" / duration_type="24h" /
+   product_code="CSLITall002" / product_name="Sony FX6-12"
+   → contract-data/+server.ts 코드의 매핑 로직(PICKUP_LABELS['visit']="본점 방문수령",
+   DURATION_TYPE_LABELS['24h']="24시간(1일)", 나머지는 단순 1:1 직접 매핑, 수량은 P3-3
+   정책대로 항상 '1' 하드코딩)과 전부 일치 확인.
+
+② 문서 파싱 검증 — ⚠️ 이번엔 CMS 세션이 만료되어(로그인 정보 미보유, 임의 로그인 시도
+   안 함) 실제 GET 라이브 API 호출은 생략 — 대신 ①에서 SQL로 확정한 원본값에 위 매핑
+   로직을 코드 그대로 미리 계산해 넣은 subData로, 동일하게 실제 프로덕션 모듈을 동적
+   import해 미니 문서(9개 변수, 한 셀에 변수 2개 조합 케이스 포함)에 치환 실행 →
+   전부 정확 반영 확인(예: "{{수령형태}} {{수령일시}}" → "본점 방문수령 12:00").
+```
+
+한 단계(API 라우트 자체의 실제 HTTP 응답)는 이번엔 인증 문제로 직접 확인하지 못했음을
+투명하게 기록 — 대신 그 라우트의 매핑 코드(PICKUP_LABELS/DURATION_TYPE_LABELS, 이미
+이전 세션에서 전부 읽고 검증한 정적 상수)를 그대로 재사용해 계산한 값으로 문서 반영만
+검증. 완전한 라이브 API 종단검증은 CMS 재로그인 후 필요 시 재실행 가능.
+
+✅ **갭 해소 완료(같은 세션, 후속)** — Stephen이 CMS 로그인 세션을 직접 열어줌 → 실제
+GET /api/cms/reservations/2654/contract-data 라이브 호출로 재검증:
+```
+{"status":200,"예약코드":"CS26081012","상품코드":"CSLITall002","상품명":"Sony FX6-12",
+ "수량":"1","수령형태":"본점 방문수령","수령일시":"12:00","반납형태":"본점 방문수령",
+ "반납일시":"13:00","요금유형":"24시간(1일)"}
+```
+직전에 SQL+코드리뷰로 미리 계산했던 값과 9/9 완전 일치. 이 실제 API 응답을 그대로
+subData로 다시 문서 치환에 넣어도 동일 결과("{{수령형태}} {{수령일시}}"→"본점 방문수령
+12:00" 등) — DB→라이브API→문서반영 전 구간 종단검증 완료.
+
+### 후속 9 — `{{구성품}}` 변수 신설(products.components→50자 말줄임 텍스트) (2026-09-03, 같은 세션)
+
+Stephen 요청: `/cms/products?selected=09b3b622-...`에서 보이는 "구성품 탭" 등록 텍스트를
+최대 "한영숫자 50자" 말줄임 적용해 상품정보 탭에 변수로 추가.
+
+```
+조사: products.components는 key-value JSONB(products.md §4-1, ProductDetailPanel.svelte
+"구성품" 탭). 고객 화면(products/[id]/+page.svelte productComponents 파생)이 이미 이
+JSONB를 [key,value] 엔트리 배열로 변환해 "key: value" 리스트로 렌더링하는 선례가 있어
+동일한 필터링 규칙(빈 키 제외) 재사용 — 새로운 표시 관례를 만들지 않음.
+
+구현: formatComponentsText() 신설(contract-data/+server.ts) — entries를
+"key: value, key: value"로 join 후 50자(전체 문자 기준) 초과 시 slice(0,50)+'...'.
+값이 없는 항목은 key만 표시. components NULL/빈 객체면 '-'.
+```
+
+수정 파일(기존 목록에 없던 신규 4개 — 마이그레이션/DB 변경은 없음, 순수 코드+문서):
+```
+src/lib/types/contract-module.ts (구성품?: string 추가)
+src/routes/api/cms/reservations/[id]/contract-data/+server.ts
+  (formatComponentsText 신설, products select에 components 컬럼 추가)
+src/lib/components/cms/contract-editor/ContractFieldPanel.svelte (상품정보 탭 칩 추가)
+src/lib/components/cms/contract-editor/ContractCanvasFieldPalette.svelte (동일 칩 추가)
+.claude/rules-ref/contract.md ({{구성품}} 행 추가)
+```
+
+검증: svelte-check 신규 에러 0건(기존 vite.config.ts 1건만 유지), contractAuthGates+
+contractDataLineItems 53/53 GREEN. 라이브 종단검증(reservation 2654의 실제 상품 Sony
+FX6-12에 Stage DB로 components 임시 설정 → 실제 API 호출, 3가지 케이스 전부 확인 후 원복):
+```
+① 50자 초과(5개 항목, 총 61자 조합) → "가방: 하드케이스 1개, 삼각대: 1개, 충전기: USB-C
+   65W 1개, 케이블: HDM..." (길이 53 = 50+"..." 정확히 일치, 말줄임 정상)
+② 짧은 값(2개 항목) → "삼각대: 1개, 충전기: 1개" (말줄임 없이 그대로, 정상)
+③ NULL(원상태) → "-" (정상)
+문서 반영: ①의 말줄임된 값을 실제 프로덕션 모듈로 문서 치환 → 잘린 텍스트 그대로 정확히
+반영 확인.
+```
+테스트 후 Sony FX6-12(product_id=36fcdda1-...) components는 원래 상태(NULL)로 원복 완료.
+
+git commit 대상 파일에 위 5개 추가(기존 4개와 합쳐 총 9개 — Stephen 직접 실행 시 전체
+목록 재확인 권장).
+
+### 후속 10 — 특약 탭 검증 + 🔴 `{{수량}}` "항상 1" 하드코딩 정정(P3-3 폐기) (2026-09-03, 같은 세션)
+
+**1. 특약 탭**: 이 탭은 다른 9개 변수 탭과 성격이 다름을 코드로 확인 — DB 조회형 `{{}}`
+변수가 아니라 관리자가 key-value로 **직접 입력**한 텍스트를 `contracts.specifications`
+(JSONB 배열)에 그대로 저장하고, 고객 화면(`/contract/[token]`·`/account/rental/[id]/
+contract`) 양쪽에서 그 배열을 그대로 순회 렌더링하는 완전히 독립된 경로(변수 치환 시스템
+비경유). "출처 검증" 개념 자체가 적용 안 됨(입력값 자체가 정본) — 대신 저장·조회
+파이프라인 무손실 여부를 검증:
+```
+PATCH content/+server.ts: body.specifications ?? [] 그대로 저장(변형 없음)
+GET  content/+server.ts: 저장값 그대로 반환
+라이브 확인: 기존 미서명 테스트 계약(19465b2c-..., reservation_id=2150)에 이미 있던 실
+  데이터 [{"key":"벌금","value":"추가 비용 지불"}]를 GET으로 재확인 — DB 원본과 API 응답
+  1:1 일치.
+쓰기측 확인: 같은 계약으로 PATCH 시도 → 422("취소되었거나 만료된 예약은 수정 불가",
+  reservation status=cancelled) — 서버 가드가 정상 차단함을 확인(부수적으로 RSV-C-B2
+  가드 재검증). CS2654 계약(6d89c91a-...)으로도 시도 → 이번엔 "서명 완료 계약 수정 불가"
+  가드가 차단(RSV-C-C3). 두 후보 모두 가드에 막혀 정상 "happy path" 쓰기 자체는 라이브
+  재현 못 함 — 코드 리뷰(단순 패스스루, 변형 로직 없음)로 충분하다고 판단, 별도 안전한
+  미서명·미취소 테스트 계약 필요 시 추가 검증 가능.
+```
+
+**2. 🔴 `{{수량}}` "항상 1" 하드코딩 — Stephen 지적으로 오류 확정, 즉시 정정**
+
+기존 P3-3 정책("거짓 다중수량 선택지 없이 일반 변수 칩으로만 제공")은 스칼라 {{수량}}이
+항상 문자열 '1'을 반환하도록 하드코딩돼 있었음. Stephen: "해당 상품의 실제 예약 수량이
+반영되어야 함" — 확인해보니 이 오류는 정확히 2026-08-28에 **반복영역 상품목록
+(buildLineItems)에서 이미 한 번 정정됐던 것과 동일한 클래스의 문제**였고(그때는
+Stephen이 "같은 상품 여러 건 예약 시 수량=실제 건수"로 확정), 이번에 그 정정이 반복영역
+바깥의 스칼라 {{수량}}에는 적용되지 않은 채 방치돼 있었음이 드러남.
+
+```
+수정: contract-data/+server.ts에 실제 건수 계산 로직 추가 — contractLineItems.ts
+  buildLineItems()의 그룹화 키(`${상품명} ${상품코드 ?? ''}`)를 그대로 재사용해
+  lineItemReservations 중 이 예약과 동일 상품인 건수를 세어 스칼라 {{수량}}에 반영
+  (로직 이원화 방지 — 반복영역과 스칼라가 이제 완전히 일관됨).
+  UI 칩 라벨 "수량 (항상 1)" → "수량 (실제 예약 건수)"로 정정(ContractFieldPanel·
+  ContractCanvasFieldPalette 양쪽). P3-3 관련 주석 전부 폐기 명시로 갱신.
+  contract.md에 {{수량}} 행 신규 추가(과거 문서화 자체가 없었음).
+```
+
+수정 파일(신규 파일 없음 — 기존 목록 5개 파일 내에서만 추가 수정):
+```
+src/routes/api/cms/reservations/[id]/contract-data/+server.ts (actualQty 계산 로직 추가)
+src/lib/components/cms/contract-editor/ContractFieldPanel.svelte (라벨·주석 정정)
+src/lib/components/cms/contract-editor/ContractCanvasFieldPalette.svelte (라벨 정정)
+.claude/rules-ref/contract.md ({{수량}} 행 신규)
+```
+
+검증: svelte-check 신규 에러 0건, contractAuthGates+contractDataLineItems 53/53 GREEN
+(buildLineItems 자체는 무변경이라 그 22개 케이스 전부 무회귀 — 이번 변경은 순수 신규
+로직 추가). 라이브 확인: reservation 2654(같은 주문 내 동일상품 형제 예약 없음, 옵션
+"SONY PXW-Z90"만 존재) → 수량="1" 정상(회귀 없음, 이 케이스는 기존과 동일 결과가 맞는
+경우). "동일 상품 2건 이상" 시나리오는 실제 다중 데이터를 새로 만들지 않고, 완전히 동일한
+그룹화 공식을 이미 22개 케이스로 검증해둔 buildLineItems() 로직을 그대로 재사용했다는
+점으로 정합성 확보(중복 재검증 대신 로직 재사용 자체가 검증 근거).
+
+git commit 대상 파일 불변(기존 5개 파일 내 수정만, 새 파일 없음 — 총 9개 목록 그대로).
+
+### 후속 11 — 🏁 최종 결과 확정: 4개 탭 전체 변수 동기화 검증 종합 (2026-09-03, 같은 세션)
+
+Stephen 최종 질의("계약서 문서 양식 내 파싱되는 모든 변수 정보값이 정확히 동기화 반영된다는
+것이 최종 결과이지?")에 대한 확정 답변 — **예, 다음 예외 3건을 제외하면 전부 확인됨**:
+
+```
+✅ 계약자정보(4): 고객이름·연락처·이메일·주소 — 전부 라이브 종단검증 완료
+   (주소는 후속 7의 신규 스냅샷 메커니즘까지 포함해 검증됨)
+✅ 상품정보(10, 구성품 포함): 예약코드·상품코드·상품명·수령형태·수령일시·반납형태·
+   반납일시·요금유형·구성품 — 전부 라이브 종단검증 완료
+⚠️ 수량 — 정정 완료·formula 자체는 buildLineItems() 22개 테스트로 검증됐으나, "동일 상품
+   2건 이상" 시나리오 자체를 새 데이터로 라이브 재현하지는 않음(로직 재사용에 근거)
+✅ 결제정보(7): 기본대여요금·할인금액·할인차감·차감포인트·배송비·최종합계 — 전부 라이브
+   종단검증 완료
+⚠️ 부가세 — 매핑(orders.tax_amount) 자체는 정확하나, 이 값을 실제로 계산해 채우는 코드가
+   시스템 어디에도 없어(후속 8 이전 세션 발견) 실사용 계약서에서는 사실상 항상 "0원"
+   표시됨 — 변수 동기화 결함은 아니고 "계산 로직 부재"라는 별개 정책 공백, 이번 세션
+   범위 밖(수정 안 함)
+✅ 특약 — 변수 치환 시스템과 무관한 별도 direct-passthrough 경로, 저장·조회 무손실
+   확인(라이브 GET 재확인)
+⚠️ 특약 쓰기(PATCH) 경로 — 가용 테스트 후보 2건 전부 서버 가드(서명완료·예약취소)에
+   막혀 "정상 저장" happy-path 자체는 라이브 재현 못 함(코드 리뷰로 대체, 단순 패스스루라
+   저위험 판단)
+```
+
+즉 "파싱→문서 반영" 메커니즘과 "각 변수의 데이터 출처 정확성"은 21개 스칼라 변수 +
+특약 전부 확인됐고, 남은 3건(⚠️)은 변수 시스템 자체의 결함이 아니라 ①아직 실증 안 한
+엣지케이스(수량 다건) ②이 세션 범위 밖의 별개 정책 공백(부가세 계산 로직 부재)
+③가용 테스트 데이터 제약(특약 쓰기)임을 명확히 구분해 기록한다.
+
+#### 후속 11-QA — sp3-qa-agent 검수 결과 (2026-09-03, 후속 9·10 한정)
+
+Stephen 지시("세션 내 최근 수정 개발건을 @sp3-qa-agent.md 검수할 것")에 따라 이 세션의
+가장 최근 코드 변경분인 **후속 9(`{{구성품}}` 신설)** · **후속 10(`{{수량}}` "항상 1"
+정정)** 두 건만 별도로 재검수(후속 1~8은 각 시점에 이미 검수 완료돼 재검수 대상 아님).
+
+```
+GATE E 판정: 통과 ✅ (수정 필요 항목 0건)
+
+- 요청범위 외 수정 없음: 5개 대상 파일(contract-module.ts·contract-data/+server.ts·
+  ContractFieldPanel.svelte·ContractCanvasFieldPalette.svelte·contract.md) diff 내에서
+  구성품/수량 관련 변경만 확인. contractLineItems.ts(buildLineItems 자체)는 git diff
+  무변경 확인 — 22개 기존 라인아이템 테스트 무회귀 근거 성립.
+- formatComponentsText(): null/객체아님/배열 방어 견고, 50자 truncation(slice(0,50)+'...')
+  정확, 빈 키 필터가 products/[id]/+page.svelte 고객화면 productComponents 파생 로직과
+  글자 단위로 완전히 동일 — 일관성 확보.
+- actualQty 그룹화 키: contractLineItems.ts buildLineItems()의 키(`${name} ${product_code
+  ?? ''}`)와 contract-data/+server.ts의 filter 키가 문자 단위로 정확히 동일함을 대조 확인.
+  productRes.data가 null인 극단 케이스에서 ownProductKey와 mainProduct.name 문자열이
+  어긋나 filter 0건이 되는 경로가 있으나 `|| 1` 폴백으로 "형제 없는 단독 예약=수량1"이라는
+  올바른 결과에 귀결 — 사소한 코드 표현 비대칭일 뿐 실질 버그 아님(수정 불필요 판단).
+- svelte-check 3회 재실행 — 신규 에러 0건(기존 vite.config.ts pre-existing 1건만 유지,
+  1회 flake로 뜬 무관 에러는 재현 불가로 판단).
+- contractAuthGates.test.ts(31) + contractDataLineItems.test.ts(22) = 53/53 GREEN.
+- 라이브검증 충분성 의견: reservation 2654(형제 없음) 단건 확인만으로 "동일 상품 2건 이상"
+  시나리오 자체를 육안 재현하지는 못했으나, 그룹화 키가 buildLineItems()와 문자 단위로
+  동일하고 그 함수가 이미 22개 케이스로 검증된 로직을 재사용하는 구조라 BOUNDARY 등급 기준
+  통과 처리 — 향후 실제 다건 예약 계약서 발행 시 1회 육안 확인 권장(블로킹 아님, 후속
+  11 상단 ⚠️ 수량 항목과 동일 결론).
+```
+
+⚠️ working tree 참고(QA agent 지적): 현재 uncommitted 상태에는 위 5개 파일 외에도
+auth/login·cms/login·cms/+layout.svelte·cart·payment/success/dev 등 다른 세션 소관 변경과
+미추적 파일(Migration 434 SQL, cmsChangePassword.test.ts)이 섞여 있음 — git add/commit은
+Stephen 직접 실행 시 이번 검수 대상 5개 파일만 정확히 스테이징할 것(GP-1 원칙, AI 자율
+커밋 없음).
 
 ---
 

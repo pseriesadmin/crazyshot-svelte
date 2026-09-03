@@ -2635,6 +2635,100 @@ SVG가 같은 페이지에 존재하게 되면 필터가 깨질 수 있다.
 
 ---
 
+## 21. 로그인 입력폼 표준 — 한글(비ASCII) 차단 + 글자수 제한 ★★★ (2026-09-03 확정)
+
+> **"로그인 입력폼 표준 적용해" 또는 새 로그인·인증 관련 이메일/비밀번호 입력란을 만들 때
+> → 아래 두 로직을 세트로 즉시 적용.** 적용 대상: 사용자 로그인(`src/routes/auth/login/
+> +page.svelte`, PC·Mobile 두 블록 모두)과 CMS 로그인(`src/routes/cms/login/+page.svelte`)
+> — 두 화면 모두 동일 패턴을 공유한다(front 오리진에서 CMS로 이식된 패턴, 2026-09-03 확정).
+
+### 21-1. 배경
+
+CMS 로그인 폼에 사용자 로그인 폼과 동일한 한글 차단 로직이 빠져 있던 것을 Stephen이
+`<launch-selected-element>`로 지적해(이메일·비밀번호 두 입력란 선택) 이식했고, 이어서
+"이 로직이 향후 신규 로그인류 폼에도 자동 반영되도록 표준 문서에 기록할 것"을 지시받아
+신설된 섹션이다. 글자수 제한(`maxlength`)은 이 문서화 시점까지 두 로그인 폼 어디에도
+없었음이 확인돼, Stephen 확인(AskUserQuestion) 후 함께 신설했다.
+
+### 21-2. 한글(비ASCII) 차단 로직 — 표준 패턴
+
+```svelte
+<!-- ✅ 표준 패턴(그대로 복붙, 필드별 경고 문구·debounce 플래그만 교체) -->
+<script lang="ts">
+  let emailKoreanWarned = false     // 필드별 독립 — 다른 필드 경고와 섞이지 않게 분리
+  let passwordKoreanWarned = false
+</script>
+
+<input
+  type="email"
+  oninput={(e) => {
+    const el = e.currentTarget as HTMLInputElement
+    const filtered = el.value.replace(/[^\x00-\x7F]/g, '')
+    if (el.value !== filtered) {
+      el.value = filtered
+      if (!emailKoreanWarned) {
+        emailKoreanWarned = true
+        csToast.warning('영문(숫자) 메일 형식으로 입력하세요.')
+        setTimeout(() => { emailKoreanWarned = false }, 3000)
+      }
+    }
+  }}
+/>
+```
+
+```
+원리: /[^\x00-\x7F]/g 로 ASCII 범위를 벗어난 모든 문자(한글 포함, 이모지 등도 함께 차단)를
+      즉시 제거. 매 입력마다 필터링하되, 토스트 경고는 emailKoreanWarned류 boolean +
+      setTimeout(3000ms) 디바운스로 최초 1회만(3초 내 재경고 안 함) — 타이핑 중 한글 조합
+      단계마다 토스트가 연속으로 뜨는 것을 방지.
+필드별 경고 문구: 이메일 "영문(숫자) 메일 형식으로 입력하세요." / 비밀번호 "영문(숫자)으로
+  입력하세요." (문구만 필드 성격에 맞게 조정, 로직은 동일)
+bind:value 기반 폼(front)에서는 el.value 치환 후 반드시 바인딩 변수도 함께 갱신할 것
+  (예: email = filtered) — 안 하면 다음 재렌더 시 $state 값이 필터링 이전 값으로 되돌아감.
+name 속성 기반 네이티브 폼(CMS, use:enhance)에서는 별도 바인딩 변수가 없으므로 el.value
+  치환만으로 충분 — 제출 시점에 DOM의 최종 el.value가 그대로 전송됨.
+```
+
+### 21-3. 글자수 제한(`maxlength`) — 확정값
+
+| 필드 | `maxlength` | 근거 |
+|---|---|---|
+| 이메일 | `254` | RFC 5321 표준 이메일 주소 최대 길이 |
+| 비밀번호 | `72` | Supabase Auth/bcrypt가 72바이트 이후를 조용히 절단하는 실제 기술적 한계값 — 그 이상 입력해도 의미 없이 잘려나가므로 UI 단에서 미리 차단 |
+
+```svelte
+<input type="email" maxlength={254} ... />
+<input type={showPassword ? 'text' : 'password'} maxlength={72} ... />
+```
+
+### 21-4. 적용 현황 (2026-09-03)
+
+| 화면 | 파일 | 한글차단(이메일) | 한글차단(비밀번호) | maxlength |
+|---|---|---|---|---|
+| 사용자 로그인 PC | `src/routes/auth/login/+page.svelte` (`.d-input`) | ✅ | ✅ | ✅ 254/72 |
+| 사용자 로그인 Mobile | 〃 (`.m-input`) | ✅ | ✅ | ✅ 254/72 |
+| CMS 로그인(`?/login`) | `src/routes/cms/login/+page.svelte` | ✅ | ✅ | ✅ 254/72 |
+| CMS 초대링크 비밀번호 설정(`?/setPassword`) | 〃 (같은 파일, invite 전용) | — (이메일 필드 없음) | ✅ (새 비밀번호·확인 둘 다) | ✅ 72(둘 다) |
+
+> 초대링크 비밀번호 설정 폼은 최초 적용(2026-09-03) 시점에는 범위 밖이었으나(선택 요소가
+> 일반 로그인 폼이었음), 같은 날 Stephen이 "동일하게 적용해줘"로 확장 지시해 두 필드(새
+> 비밀번호·비밀번호 확인) 모두 반영 완료 — `newPasswordKoreanWarned`/
+> `confirmPasswordKoreanWarned` 독립 플래그 사용(§21-2 "필드별 독립" 원칙 그대로 적용).
+
+### GATE C 확인 항목
+
+```
+[ ] 신규 로그인·인증류(이메일/비밀번호) 입력란에 §21-2 한글차단 oninput 패턴을 적용했는가?
+[ ] 이메일 maxlength=254 / 비밀번호 maxlength=72를 적용했는가?
+[ ] bind:value 기반 폼이면 el.value 치환과 함께 바인딩 변수도 갱신했는가?(안 하면 필터링
+    무효화)
+[ ] 필드별 경고 debounce 플래그(emailKoreanWarned류)를 서로 다른 필드끼리 공유하지 않고
+    독립적으로 뒀는가?
+[ ] svelte-check 신규 에러 0건 확인했는가?
+```
+
+---
+
 *front-uiux.md | 사용자(USER) 화면 표준 디자인 시스템 | Harness Flow v3.2*
 *소스: crazyshot-Front_design-system.json (2026-07-10)*
 *2026-08-26 §18 추가 — `/account` 마이페이지 섹션 타이틀 PC(`--text-pc-title-18`)/모바일
@@ -2644,4 +2738,8 @@ SVG가 같은 페이지에 존재하게 되면 필터가 깨질 수 있다.
 회귀됐던 것을 계기로, 재도출 없이 즉시 전역 재검색+수정하는 절차로 문서화*
 *2026-09-02(같은 날 후속) §20 추가 — 2026-08-20 최초 작성됐던 "대표 BI(로고) 표준" 섹션이
 번호 충돌(§19)로 다른 세션 편집에 유실된 것을 sp3-qa-agent 검수로 발견, §20으로 복원*
+*2026-09-03 §21 추가 — "로그인 입력폼 표준"(한글/비ASCII 차단 + 글자수 제한) 신설. CMS
+로그인 폼에 사용자 로그인과 동일한 한글차단 로직이 빠져 있던 것을 이식한 작업을 계기로,
+향후 신규 로그인류 폼에 자동 반영되도록 트리거 명령으로 문서화(글자수 제한은 이 시점까지
+어느 로그인 폼에도 없었음을 확인 후 Stephen 승인으로 함께 신설: 이메일 254 / 비밀번호 72)*
 *대응 CMS 문서: cms-uiux.md (절대 혼용 금지)*

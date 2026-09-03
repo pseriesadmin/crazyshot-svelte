@@ -10,6 +10,10 @@
   let isLoading = $state(false)
   let rememberMe = $state(false)
   let toastShown = false
+  let emailKoreanWarned = false        // 이메일 한글 경고 중복 방지
+  let passwordKoreanWarned = false     // 비밀번호(로그인) 한글 경고 중복 방지
+  let newPasswordKoreanWarned = false  // 새 비밀번호(초대링크 설정) 한글 경고 중복 방지
+  let confirmPasswordKoreanWarned = false // 비밀번호 확인(초대링크 설정) 한글 경고 중복 방지
 
   // 실시간 시각
   let now = $state(new Date())
@@ -112,8 +116,21 @@
           name="password"
           type="password"
           class="f-input"
+          maxlength={72}
           placeholder="8자 이상 입력"
           autocomplete="new-password"
+          oninput={(e) => {
+            const el = e.currentTarget as HTMLInputElement
+            const filtered = el.value.replace(/[^\x00-\x7F]/g, '')
+            if (el.value !== filtered) {
+              el.value = filtered
+              if (!newPasswordKoreanWarned) {
+                newPasswordKoreanWarned = true
+                csToast.warning('영문(숫자)으로 입력하세요.')
+                setTimeout(() => { newPasswordKoreanWarned = false }, 3000)
+              }
+            }
+          }}
           required
         />
 
@@ -123,8 +140,21 @@
           name="confirm"
           type="password"
           class="f-input"
+          maxlength={72}
           placeholder="비밀번호 재입력"
           autocomplete="new-password"
+          oninput={(e) => {
+            const el = e.currentTarget as HTMLInputElement
+            const filtered = el.value.replace(/[^\x00-\x7F]/g, '')
+            if (el.value !== filtered) {
+              el.value = filtered
+              if (!confirmPasswordKoreanWarned) {
+                confirmPasswordKoreanWarned = true
+                csToast.warning('영문(숫자)으로 입력하세요.')
+                setTimeout(() => { confirmPasswordKoreanWarned = false }, 3000)
+              }
+            }
+          }}
           required
         />
 
@@ -154,8 +184,21 @@
               name="email"
               type="email"
               class="f-input"
+              maxlength={254}
               placeholder="admin@crazyshot.kr"
               autocomplete="email"
+              oninput={(e) => {
+                const el = e.currentTarget as HTMLInputElement
+                const filtered = el.value.replace(/[^\x00-\x7F]/g, '')
+                if (el.value !== filtered) {
+                  el.value = filtered
+                  if (!emailKoreanWarned) {
+                    emailKoreanWarned = true
+                    csToast.warning('영문(숫자) 메일 형식으로 입력하세요.')
+                    setTimeout(() => { emailKoreanWarned = false }, 3000)
+                  }
+                }
+              }}
               required
             />
           </div>
@@ -167,8 +210,21 @@
               name="password"
               type="password"
               class="f-input"
+              maxlength={72}
               placeholder="비밀번호 입력"
               autocomplete="current-password"
+              oninput={(e) => {
+                const el = e.currentTarget as HTMLInputElement
+                const filtered = el.value.replace(/[^\x00-\x7F]/g, '')
+                if (el.value !== filtered) {
+                  el.value = filtered
+                  if (!passwordKoreanWarned) {
+                    passwordKoreanWarned = true
+                    csToast.warning('영문(숫자)으로 입력하세요.')
+                    setTimeout(() => { passwordKoreanWarned = false }, 3000)
+                  }
+                }
+              }}
               required
             />
           </div>
