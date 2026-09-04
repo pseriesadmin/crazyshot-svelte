@@ -28,9 +28,15 @@
  *    D-3: 반복 영역 안 컬럼 span 병합이 각 항목 행에 복제됨
  *
  *  E. 엣지케이스
- *    E-1: 상품목록이 빈 배열 + repeatRegion 있음 → 반복 영역 0행으로 축소
+ *    E-1: 상품목록이 빈 배열 + repeatRegion 있음 → 템플릿 행 수 유지, 전부 공백 처리
  *    E-2: 상품목록이 undefined + repeatRegion 있음 → 기존 스칼라 치환 동작 유지
- *    E-3: 항목수 < 템플릿행수 → 항목 수만큼만 출력 (잉여 템플릿행 미출력)
+ *    E-3: 항목수 < 템플릿행수 → 템플릿 행 수 유지, 앞쪽 N행만 채우고 나머지는 공백
+ *         (2026-09-03 Stephen 확정 — 잉여 템플릿행을 없애지 않고 공백으로 유지하도록 변경)
+ *
+ *  F. 잉여 슬롯 공백 처리 (2026-09-03 신규)
+ *    F-1: N < T — 잉여 행의 변수가 {{}} 원문도, 이전 항목 값도 아닌 빈 문자열로 치환됨
+ *    F-2: N < T — 잉여 행을 포함한 전체 행 수가 항상 T로 고정됨(항목 수와 무관)
+ *    F-3: N < T — merges가 원본과 완전히 동일(행 위치가 전혀 바뀌지 않으므로 재계산 없음)
  */
 
 import { describe, it, expect } from 'vitest'
@@ -389,7 +395,7 @@ describe('D. merges 처리', () => {
 // ─────────────────────────────────────────────────────────────────────────────
 
 describe('E. 엣지케이스', () => {
-  it('E-1: 상품목록이 빈 배열 + repeatRegion 있음 → 반복 영역 0행으로 축소', () => {
+  it('E-1: 상품목록이 빈 배열 + repeatRegion 있음 → 템플릿 행 수 유지, 변수는 공백 처리', () => {
     const sheet = makeSheet({
       rows: [
         ['헤더'],                  // row 0: before
@@ -401,10 +407,11 @@ describe('E. 엣지케이스', () => {
     })
     const data: ContractSubstitutionData = { 상품목록: [] }
     const result = substituteSpreadsheetDocument(makeDoc(sheet), data)
-    // before(1) + repeat(0) + after(1) = 2행
-    expect(result.sheets[0].rows.length).toBe(2)
+    // before(1) + repeat(1, 공백 유지) + after(1) = 3행 — 행 자체는 사라지지 않음
+    expect(result.sheets[0].rows.length).toBe(3)
     expect(result.sheets[0].rows[0][0]).toBe('헤더')
-    expect(result.sheets[0].rows[1][0]).toBe('합계')
+    expect(result.sheets[0].rows[1][0]).toBe('') // {{상품명}} → 공백(원문 노출도, 이전 값도 아님)
+    expect(result.sheets[0].rows[2][0]).toBe('합계')
   })
 
   it('E-2: 상품목록이 undefined + repeatRegion 있음 → 기존 스칼라 치환 동작 유지', () => {
@@ -425,7 +432,7 @@ describe('E. 엣지케이스', () => {
     expect(result.sheets[0].rows[0][1]).toBe('홍길동')
   })
 
-  it('E-3: 항목수(2) < 템플릿행수(4) → 항목 수만큼 2행만 출력', () => {
+  it('E-3: 항목수(2) < 템플릿행수(4) → 템플릿 행 수(4) 그대로 유지, 앞 2행만 채움', () => {
     const sheet = makeSheet({
       rows: [
         ['template row 0'],
@@ -443,7 +450,60 @@ describe('E. 엣지케이스', () => {
       ],
     }
     const result = substituteSpreadsheetDocument(makeDoc(sheet), data)
-    // 항목이 2개이므로 2행만 출력
-    expect(result.sheets[0].rows.length).toBe(2)
+    // 항목이 2개여도 템플릿 4행 전부 유지(잉여 2행은 뒤에서 공백 처리)
+    expect(result.sheets[0].rows.length).toBe(4)
+  })
+})
+
+// ─────────────────────────────────────────────────────────────────────────────
+// F. 잉여 슬롯 공백 처리 (2026-09-03 신규 — Stephen 확정: "항목 수만큼만 반영하고
+// 나머지 빈 반복 셀은 그냥 비워두면 된다")
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('F. 잉여 슬롯 공백 처리', () => {
+  const sheet4rows = makeSheet({
+    rows: [
+      ['{{상품명}}', '{{수량}}'],
+      ['{{상품명}}', '{{수량}}'],
+      ['{{상품명}}', '{{수량}}'],
+      ['{{상품명}}', '{{수량}}'],
+    ],
+    merges: [
+      { s: { r: 5, c: 0 }, e: { r: 5, c: 1 } }, // repeatRegion 밖 — 무관 병합(변경 없음 확인용)
+    ],
+    cellFormatting: [[{}, {}], [{}, {}], [{}, {}], [{}, {}]],
+    repeatRegion: { startRow: 0, endRow: 3 },
+  })
+  const data2items: ContractSubstitutionData = {
+    상품목록: [
+      { 상품명: '카메라 A', 수량: '1', 금액: '100,000원' },
+      { 상품명: '렌즈 B', 수량: '2', 금액: '150,000원' },
+    ],
+  }
+
+  it('F-1: 앞 N행은 항목값, 잉여 행은 {{}} 원문도 이전 값도 아닌 빈 문자열', () => {
+    const result = substituteSpreadsheetDocument(makeDoc(sheet4rows), data2items)
+    const rows = result.sheets[0].rows
+    expect(rows[0]).toEqual(['카메라 A', '1'])
+    expect(rows[1]).toEqual(['렌즈 B', '2'])
+    // 잉여 행(2·3) — 원문 {{}} 노출 금지 + 직전 항목(렌즈 B) 값 잔존 금지 + 빈 문자열이어야 함
+    expect(rows[2]).toEqual(['', ''])
+    expect(rows[3]).toEqual(['', ''])
+  })
+
+  it('F-2: 전체 행 수가 항목 수와 무관하게 항상 템플릿 행 수(T=4)로 고정됨', () => {
+    const zeroItems = substituteSpreadsheetDocument(makeDoc(sheet4rows), { 상품목록: [] })
+    const oneItem = substituteSpreadsheetDocument(makeDoc(sheet4rows), {
+      상품목록: [{ 상품명: '단독상품', 수량: '1', 금액: '1,000원' }],
+    })
+    const twoItems = substituteSpreadsheetDocument(makeDoc(sheet4rows), data2items)
+    expect(zeroItems.sheets[0].rows.length).toBe(4)
+    expect(oneItem.sheets[0].rows.length).toBe(4)
+    expect(twoItems.sheets[0].rows.length).toBe(4)
+  })
+
+  it('F-3: 행 수·위치가 바뀌지 않으므로 merges가 원본과 완전히 동일(재계산 없음)', () => {
+    const result = substituteSpreadsheetDocument(makeDoc(sheet4rows), data2items)
+    expect(result.sheets[0].merges).toEqual(sheet4rows.merges)
   })
 })

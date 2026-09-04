@@ -45,6 +45,7 @@ function makeWs(options: {
     getSelection: () => [0, 0, 0, 0],
     getValueFromCoords: () => null,
     setValueFromCoords: () => {},
+    updateSelectionFromCoords: () => {},
     setWidth: () => {},
     setStyle: () => {},
   }

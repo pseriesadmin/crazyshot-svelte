@@ -446,17 +446,54 @@ viewed 기록과 동일 관례로 고객 본인의 재열람도 append-only로 �
 | `{{고객이름}}` | `user_profiles.full_name` |
 | `{{연락처}}` | `user_profiles.phone` |
 | `{{이메일}}` | `user_profiles.email` |
-| `{{주소}}` | `user_shipping_addresses` (is_default=true) |
+| `{{주소}}` | **2026-09-03 정정(Migration 434)**: 정본은 `rental_reservations.pickup_
+  address_road`/`pickup_address_detail` — "예약신청완료"(장바구니 체크아웃, `set_
+  reservation_shipment_method` RPC) 시점에 확정되는 수령 주소 스냅샷(기본주소 자동채움이든
+  직접입력이든 그 순간 값). 둘 다 NULL이면(이 컬럼 신설 이전 예약) `user_shipping_addresses`
+  (is_default=true, 그 순간의 고객 현재 기본 배송지)로 폴백. 과거엔 스냅샷 컬럼 자체가
+  없어 예약과 무관하게 항상 현재 기본 배송지만 보여줬다(고객이 나중에 기본 배송지를
+  바꾸면 예전 계약서 발행 내용도 달라져 보이는 시점 불일치 결함, Stephen 지적으로 발견). |
 | `{{예약코드}}` | `rental_reservations.reservation_code` |
 | `{{상품명}}` | `products.name` |
 | `{{상품코드}}` | `products.product_code` |
+| `{{수량}}` | **2026-09-03 정정**: 같은 주문 안에서 이 예약과 동일한 상품(이름+품번)으로
+  묶인 reservation 건수(`contractLineItems.ts` `buildLineItems()`와 완전히 동일한
+  `${name} ${product_code}` 그룹화 키 재사용 — 반복영역 상품목록과 이 스칼라가 이제
+  일관됨). 과거엔 "항상 1"로 하드코딩(P3-3, 폐기)돼 있었으나 Stephen 지적으로 정정. |
 | `{{수령형태}}` / `{{수령일시}}` | pickup_method(레이블 치환) / pickup_time |
 | `{{반납형태}}` / `{{반납일시}}` | return_method(레이블 치환) / return_time |
 | `{{기본대여요금}}` | `orders.total_amount` |
-| `{{할인금액}}` | `orders.discount_amount` (쿠폰+포인트 통합) |
+| `{{할인금액}}` | `orders.discount_amount` — ⚠️ **2026-08-31 정정**: "쿠폰+포인트 통합"이라는 과거
+  서술은 오기였다. 실제로는 `create_reservation_order` RPC가 **주문 생성(장바구니 체크아웃)
+  시점**에 회원등급(POP=10%/CRAZY=20%, NONE=0%) 비율만으로 계산하는 값이며(`v_discount =
+  ROUND(v_total * v_rate / 100.0)`), 쿠폰·포인트는 전혀 반영하지 않는다. 의미는 "할인 적용
+  후 남은 금액"이 아니라 **"할인으로 차감되는 금액 자체"**(공제액) — `final_amount = total_
+  amount - discount_amount + delivery_fee` 공식의 피감액이다. 쿠폰·포인트 차감액은 아래
+  `{{할인차감}}`/`{{차감포인트}}`를 사용할 것 — 계산 방식만 다를 뿐 셋 다 동일하게 "예약신청
+  완료"(장바구니 체크아웃) 시점의 확정값이다. |
+| `{{할인차감}}` | `orders.selected_coupon_id`(**예약신청완료 시점** 확정) → `user_coupons.
+  coupon_id` → `coupons.discount_type`/`discount_value`로 원화 환산 계산(fixed=정액,
+  그 외=주문 소계(`orders.total_amount`)의 정률 — `cart/+page.svelte`의 `otCouponDiscount`와
+  완전히 동일한 계산식을 서버에서 재현, `resolveSelectedCouponDiscountAmount()`).
+  ⛔ **2026-08-31 정정(같은 날)**: 최초 구현은 `payment_transactions.coupon_discount`
+  (결제 확정 시점 기록)를 소스로 썼으나, 계약은 실제 PG 결제(Toss)보다 훨씬 먼저(관리자
+  "계약 발행" 시점) 생성·발송되므로 그 시점엔 `payment_transactions` 행 자체가 없어 이
+  변수가 모든 계약서에서 영구히 `-`로만 표시되는 설계 오류였다(Stephen 지적으로 발견·
+  즉시 정정) — 반드시 "예약신청완료" 시점에 이미 확정돼 있는 `orders.selected_*` 계열을
+  소스로 삼을 것, 결제 후에나 채워지는 테이블(payment_transactions)을 계약서 변수 소스로
+  쓰지 말 것(이 프로젝트의 계약↔결제 시점 순서 원칙, rental-lifecycle.md 목표 3단계 흐름
+  참고). |
+| `{{차감포인트}}` | `orders.selected_points`(**예약신청완료 시점** 확정 — 정수 포인트 수를
+  1:1 원화로 그대로 표시, 별도 환산 계산 없음) |
+| `{{배송비}}` | `orders.delivery_fee`(Migration #395로 신설된 필드 — 타입·API에는 있었으나 UI 변수 칩 3곳에 미등록된 상태였다가 2026-08-31 후속 세션에서 등록·문서화) |
 | `{{부가세}}` | `orders.tax_amount` |
 | `{{최종합계}}` | `orders.final_amount` |
 | `{{요금유형}}` | `rental_reservations.duration_type`(12h/24h/1day/monthly → 사람이 읽을 수 있는 라벨로 변환, 2026-08-31 신규) |
+| `{{구성품}}` | `products.components`(key-value JSONB, ProductDetailPanel.svelte "구성품" 탭 —
+  products.md §4-1) → `"key: value, key: value"` 텍스트로 합쳐서 노출. **50자(한영숫자 포함
+  전체 문자 기준) 초과 시 말줄임(`...`) 적용**(Stephen 확정, 2026-09-03 신규). 빈 키는
+  제외(products/[id]/+page.svelte의 고객 화면 표시 필터링 규칙과 동일), components가
+  NULL이거나 유효 항목이 0개면 `-`. |
 
 ---
 

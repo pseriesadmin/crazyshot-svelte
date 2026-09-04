@@ -18,6 +18,16 @@ function applySubstitution(text: string, data: ContractSubstitutionData): string
   })
 }
 
+/**
+ * 반복영역 잉여 슬롯(미리 준비된 템플릿 행 수가 실제 항목 수보다 많을 때, 항목이 없는
+ * 나머지 행)의 변수 자리를 공백으로 치환한다 — 2026-09-03, Stephen 확정: "항목 수만큼만
+ * 반영하고 나머지 빈 반복 셀은 그냥 비워두면 된다". 이전 항목의 값이 남거나 {{}} 원문이
+ * 그대로 노출되는 것을 방지한다.
+ */
+function blankVariables(text: string): string {
+  return text.replace(/\{\{[^}]+\}\}/g, '')
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // 항목별 치환 (반복 영역 전용)
 // 1순위: ContractLineItem 필드(상품명·상품코드·수량·금액·비고)
@@ -124,8 +134,30 @@ function expandSheet(sheet: SpreadsheetSheet, data: ContractSubstitutionData): S
   const substitutedBefore = beforeRows.map((row) => row.map((cell) => applySubstitution(cell, data)))
   const substitutedAfter = afterRows.map((row) => row.map((cell) => applySubstitution(cell, data)))
 
-  // ── 반복 영역 확장 (N행, N=0이면 빈 배열) ────────────────────────────────
-  // 항목 i → 템플릿 행 min(i, T-1): 항목 수 > 템플릿 수이면 마지막 행 재사용
+  // ── 항목수(N) ≤ 템플릿행수(T): 템플릿 행 수를 그대로 유지 ──────────────────
+  // 2026-09-03 Stephen 확정: 항목 수가 미리 준비된 반복 슬롯보다 적어도 뒤쪽 행을
+  // 통째로 없애지(shrink) 않는다 — 앞쪽 N행만 실제 항목으로 채우고 나머지(T-N)행은
+  // 변수 자리만 공백 처리한 채 그대로 남긴다. 문서의 전체 행 수·인쇄 레이아웃이 항목
+  // 수와 무관하게 항상 고정되도록 하기 위함(이전엔 N행으로 축소돼 이후 정적 영역까지
+  // 위로 밀려 올라갔음 — E-1/E-3 테스트 케이스가 이 이전 동작을 검증하고 있었으나
+  // 새 스펙에 맞춰 함께 갱신함). 행 수·위치가 전혀 바뀌지 않으므로 merges도 원본 그대로
+  // 유지한다(expandMerges 재계산 불필요 — rowDelta가 항상 0).
+  if (N <= T) {
+    const filledRows: string[][] = templateRows.map((row, i) =>
+      i < N
+        ? row.map((cell) => applyItemSubstitution(cell, items[i], data))
+        : row.map((cell) => blankVariables(cell)),
+    )
+    return {
+      ...sheet,
+      rows: [...substitutedBefore, ...filledRows, ...substitutedAfter],
+      cellFormatting: [...beforeFmt, ...templateFmt, ...afterFmt],
+      merges: sheet.merges,
+    }
+  }
+
+  // ── 항목수(N) > 템플릿행수(T): 기존 오버플로우 확장 동작 유지 ──────────────
+  // 항목 i → 템플릿 행 min(i, T-1): 마지막 템플릿 행 서식을 재사용해 행을 추가한다.
   const expandedRows: string[][] = items.map((item, i) =>
     templateRows[Math.min(i, T - 1)].map((cell) => applyItemSubstitution(cell, item, data)),
   )

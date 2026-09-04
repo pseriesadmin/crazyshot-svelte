@@ -35,6 +35,13 @@ export interface JssWorksheetInstance {
   getWidth(): (number | string)[]
   /** 현재 선택 범위 좌표 [좌상단x, 좌상단y, 우하단x, 우하단y] */
   getSelection(): [number, number, number, number]
+  /**
+   * 선택 범위를 (x1,y1)~(x2,y2)로 강제 설정 — 드래그 다중 선택 시 뷰포트 자동 스크롤
+   * (ContractSpreadsheetEditor.svelte setupDragAutoScroll, 2026-09-03)에서, 스크롤로 새로
+   * 드러난 셀까지 선택을 능동적으로 확장하는 데 사용. x1,y1은 드래그 시작 지점(고정),
+   * x2,y2는 현재 커서 아래 셀(매 프레임 갱신).
+   */
+  updateSelectionFromCoords(x1: number, y1: number, x2: number, y2: number): void
   /** 좌표로 셀 값 조회 */
   getValueFromCoords(x: number, y: number): string | number | boolean | null
   /** 좌표로 셀 값 설정 */

@@ -5,7 +5,7 @@
    * 역할:
    *   1. 4종 필드 타입 버튼 (서명 / DB연동텍스트 / 고정라벨 / 발행자 이미지)
    *   2. 선택된 필드 속성 패널 (라벨·필수여부·DB변수 바인딩·자산 선택)
-   *   3. ContractFieldPanel과 동일 ContractSubstitutionData 17개 변수 카탈로그 재사용
+   *   3. ContractFieldPanel과 동일 ContractSubstitutionData 21개 변수 카탈로그 재사용
    *
    * 설계 원칙:
    *   - v1 = 3종(signature/text/label), v2 = issuer-image 추가 (발행자 서명·직인 이미지 배치)
@@ -39,13 +39,13 @@
   }: Props = $props()
 
   // --------------------------------------------------------------------------
-  // ContractSubstitutionData 변수 카탈로그 (ContractFieldPanel과 동일 17개 변수)
+  // ContractSubstitutionData 변수 카탈로그 (ContractFieldPanel과 동일 21개 변수)
   // --------------------------------------------------------------------------
   type VarKey =
     | '고객이름' | '연락처' | '이메일' | '주소'
     | '예약코드' | '상품코드' | '상품명' | '수량'
-    | '수령형태' | '수령일시' | '반납형태' | '반납일시' | '요금유형'
-    | '기본대여요금' | '할인금액' | '부가세' | '최종합계'
+    | '수령형태' | '수령일시' | '반납형태' | '반납일시' | '요금유형' | '구성품'
+    | '기본대여요금' | '할인금액' | '할인차감' | '차감포인트' | '배송비' | '부가세' | '최종합계'
 
   interface VarOption {
     key: VarKey
@@ -61,14 +61,18 @@
     { key: '예약코드',   label: '예약코드',     group: '상품' },
     { key: '상품코드',   label: '상품코드',     group: '상품' },
     { key: '상품명',     label: '상품명',       group: '상품' },
-    { key: '수량',       label: '수량 (항상 1)',  group: '상품' },
+    { key: '수량',       label: '수량 (실제 예약 건수)',  group: '상품' },
     { key: '수령형태',   label: '수령형태',     group: '상품' },
     { key: '수령일시',   label: '수령일시',     group: '상품' },
     { key: '반납형태',   label: '반납형태',     group: '상품' },
     { key: '반납일시',   label: '반납일시',     group: '상품' },
     { key: '요금유형',   label: '요금유형',     group: '상품' },
+    { key: '구성품',     label: '구성품 (50자 말줄임)', group: '상품' },
     { key: '기본대여요금', label: '기본대여요금', group: '결제' },
-    { key: '할인금액',   label: '할인금액',     group: '결제' },
+    { key: '할인금액',   label: '할인금액 (등급할인)', group: '결제' },
+    { key: '할인차감',   label: '할인차감 (쿠폰)', group: '결제' },
+    { key: '차감포인트', label: '차감포인트',   group: '결제' },
+    { key: '배송비',     label: '배송비',       group: '결제' },
     { key: '부가세',     label: '부가세',       group: '결제' },
     { key: '최종합계',   label: '최종합계',     group: '결제' },
   ]
