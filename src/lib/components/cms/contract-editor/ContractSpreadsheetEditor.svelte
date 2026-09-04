@@ -117,6 +117,8 @@
   let borderPaletteFixCleanup: (() => void) | null = null
   /** 테두리 패턴(사방/외곽/...지우기) 네이티브 결함 우회용 리스너 정리 함수 (2026-08-31) */
   let borderPatternFixCleanup: (() => void) | null = null
+  /** 드래그 다중 선택 시 뷰포트 자동 스크롤용 리스너 정리 함수 (2026-09-03) */
+  let dragAutoScrollCleanup: (() => void) | null = null
   /**
    * 마지막으로 선택이 발생한 워크시트 인스턴스 + 그 좌표 캐시. 변수 칩 버튼(그리드 바깥 DOM)
    * 클릭 시 그리드가 blur되며 jspreadsheet-ce의 실시간 getSelection()이 선택 정보를 잃을
@@ -775,6 +777,25 @@
       wrap.addEventListener('pointerup', onUp)
       wrap.addEventListener('pointercancel', onUp)
     })
+
+    // ⚠️ 다섯 번째 개선(2026-09-03, 더블클릭 셀편집모드 진입 결함): 위 pointerdown 억제는
+    // "단일 클릭"(선택·드래그)만 다루고 있었고, 네이티브 'dblclick' 이벤트는 어디서도
+    // 가로채지 않아 그대로 버블링됐다. jspreadsheet-ce는 `document.addEventListener(
+    // 'dblclick', doubleClickControls)`로 문서 레벨에서 더블클릭을 델리게이트하고 있어
+    // (node_modules/jspreadsheet-ce/dist/index.js), 이미지 자체를 더블클릭하거나(예:
+    // 이미지를 빠르게 두 번 클릭) 너비입력창에서 값을 고치려고 기존 텍스트를 더블클릭으로
+    // 선택하는 것처럼 wrap 내부 어디서든 더블클릭이 발생하면 그 이벤트가 셀(td)을 거쳐
+    // document까지 그대로 도달해 jspreadsheet가 그 셀을 편집모드로 전환했다 — 편집모드는
+    // renderCellValue()가 그린 이미지 오버레이 DOM을 통째로 <textarea>로 교체하며, 그
+    // textarea 값은 원본 마커 문자열(`cs-image://100:0:0:https://...png`)이 그대로
+    // 노출된다("이미지가 사라지고 셀 내 메타값으로 노출" — Stephen 실사용 제보 및
+    // 브라우저 라이브 재현으로 확인). pointerdown과 동일하게 wrap 레벨에서 무조건
+    // preventDefault+stopPropagation해 이 이벤트가 document까지 도달하지 못하게 막는다
+    // (bar 내부/이미지 어느 쪽에서 발생하든 동일하게 차단 — 분기 불필요).
+    wrap.addEventListener('dblclick', (e: MouseEvent) => {
+      e.preventDefault()
+      e.stopPropagation()
+    })
   }
 
   // ─────────────────────────────────────────────────────────────────────────────
@@ -1217,6 +1238,137 @@
     return () => container.removeEventListener('mousedown', handler, { capture: true })
   }
 
+  /**
+   * 드래그 다중 셀 선택 시 뷰포트 자동 스크롤 (2026-09-03, Stephen 제보).
+   *
+   * jspreadsheet-ce는 드래그 중 "커서 바로 아래 있는 셀"(data-x/data-y)만으로 선택 범위를
+   * 넓히는 mouseOverControls만 구현하고 있고(node_modules/jspreadsheet-ce/dist/index.js
+   * 직접 확인 — scrollIntoView·autoScroll류 로직이 전혀 없음), 화면에 보이지 않는 셀 위로는
+   * 마우스를 가져갈 수조차 없으므로 드래그 선택이 절대 화면 밖으로 확장되지 않는다 — 예:
+   * 17행짜리 반복영역(§ "반복 영역 지정" 버튼)을 지정하려면 뷰포트보다 긴 범위를 한 번에
+   * 드래그해야 하는데, 지금은 보이는 셀까지만 선택하고 다시 스크롤해 처음부터 다시
+   * 드래그해야 했다.
+   *
+   * `.spreadsheet-container`(유일한 overflow:auto 스크롤 박스)에서 mousedown으로 드래그
+   * 시작 셀을 기억해두고, 드래그 중 커서가 컨테이너 상/하/좌/우 가장자리 EDGE_PX 이내에
+   * 머무르면 requestAnimationFrame 루프로 컨테이너를 자동 스크롤한다. 스크롤만으로는
+   * 마우스가 정지해 있는 한 새 mousemove가 발생하지 않아 jspreadsheet 자체의 선택 확장
+   * 로직이 트리거되지 않으므로, 매 프레임 스크롤 직후 document.elementFromPoint()로
+   * 고정된 커서 좌표 아래 셀을 다시 조회해 ws.updateSelectionFromCoords()로 선택 범위를
+   * 능동적으로 갱신한다. 마우스가 실제로 이동하기 전(작은 클릭)에는 개입하지 않도록
+   * MOVE_THRESHOLD_PX 이상 움직인 뒤에만 활성화한다.
+   */
+  function setupDragAutoScroll(container: HTMLElement): () => void {
+    const EDGE_PX = 36
+    const MAX_SPEED = 18
+    const MOVE_THRESHOLD_PX = 4
+
+    let dragging = false
+    let armed = false // MOVE_THRESHOLD_PX 이상 실제로 움직였는지
+    let startX = -1
+    let startY = -1
+    let startClientX = 0
+    let startClientY = 0
+    let lastClientX = 0
+    let lastClientY = 0
+    let rafId: number | null = null
+
+    function cellCoordsAt(clientX: number, clientY: number): { x: number; y: number } | null {
+      const el = document.elementFromPoint(clientX, clientY)
+      if (!(el instanceof Element)) return null
+      const td = el.closest('td[data-x][data-y]')
+      if (!td) return null
+      const x = Number(td.getAttribute('data-x'))
+      const y = Number(td.getAttribute('data-y'))
+      if (!Number.isInteger(x) || !Number.isInteger(y)) return null
+      return { x, y }
+    }
+
+    function tick(): void {
+      if (!dragging || !armed) { rafId = null; return }
+      const rect = container.getBoundingClientRect()
+      let dx = 0
+      let dy = 0
+
+      if (lastClientY >= rect.top && lastClientY - rect.top < EDGE_PX) {
+        dy = -MAX_SPEED * (1 - (lastClientY - rect.top) / EDGE_PX)
+      } else if (lastClientY <= rect.bottom && rect.bottom - lastClientY < EDGE_PX) {
+        dy = MAX_SPEED * (1 - (rect.bottom - lastClientY) / EDGE_PX)
+      }
+      if (lastClientX >= rect.left && lastClientX - rect.left < EDGE_PX) {
+        dx = -MAX_SPEED * (1 - (lastClientX - rect.left) / EDGE_PX)
+      } else if (lastClientX <= rect.right && rect.right - lastClientX < EDGE_PX) {
+        dx = MAX_SPEED * (1 - (rect.right - lastClientX) / EDGE_PX)
+      }
+
+      if (dx !== 0 || dy !== 0) {
+        container.scrollTop += dy
+        container.scrollLeft += dx
+
+        if (spreadsheetParent) {
+          const activeIndex = spreadsheetParent.getWorksheetActive()
+          const ws = spreadsheetParent.worksheets[activeIndex]
+          if (isWorksheetLike(ws)) {
+            const end = cellCoordsAt(lastClientX, lastClientY)
+            if (end) ws.updateSelectionFromCoords(startX, startY, end.x, end.y)
+          }
+        }
+      }
+
+      rafId = requestAnimationFrame(tick)
+    }
+
+    function onMouseDown(e: MouseEvent): void {
+      const target = e.target
+      if (!(target instanceof Element)) return
+      const td = target.closest('td[data-x][data-y]')
+      if (!td) return
+      const x = Number(td.getAttribute('data-x'))
+      const y = Number(td.getAttribute('data-y'))
+      if (!Number.isInteger(x) || !Number.isInteger(y)) return
+      dragging = true
+      armed = false
+      startX = x
+      startY = y
+      startClientX = e.clientX
+      startClientY = e.clientY
+      lastClientX = e.clientX
+      lastClientY = e.clientY
+    }
+
+    function onMouseMove(e: MouseEvent): void {
+      if (!dragging) return
+      lastClientX = e.clientX
+      lastClientY = e.clientY
+      if (!armed) {
+        const moved = Math.abs(e.clientX - startClientX) + Math.abs(e.clientY - startClientY)
+        if (moved < MOVE_THRESHOLD_PX) return
+        armed = true
+      }
+      if (rafId == null) rafId = requestAnimationFrame(tick)
+    }
+
+    function onMouseUp(): void {
+      dragging = false
+      armed = false
+      if (rafId != null) {
+        cancelAnimationFrame(rafId)
+        rafId = null
+      }
+    }
+
+    container.addEventListener('mousedown', onMouseDown)
+    document.addEventListener('mousemove', onMouseMove)
+    document.addEventListener('mouseup', onMouseUp)
+
+    return () => {
+      container.removeEventListener('mousedown', onMouseDown)
+      document.removeEventListener('mousemove', onMouseMove)
+      document.removeEventListener('mouseup', onMouseUp)
+      if (rafId != null) cancelAnimationFrame(rafId)
+    }
+  }
+
   // ─────────────────────────────────────────────────────────────────────────────
   // 초기화 (onMount — SSR 번들에서 완전히 격리)
   // ─────────────────────────────────────────────────────────────────────────────
@@ -1226,6 +1378,7 @@
 
     borderPaletteFixCleanup = setupBorderPaletteClickFix(containerEl)
     borderPatternFixCleanup = setupBorderPatternFix(containerEl)
+    dragAutoScrollCleanup = setupDragAutoScroll(containerEl)
 
     try {
       // CSS 먼저 주입 (jsuites → jspreadsheet 순서 중요)
@@ -1449,6 +1602,7 @@
     spreadsheetParent = null
     borderPaletteFixCleanup?.()
     borderPatternFixCleanup?.()
+    dragAutoScrollCleanup?.()
   })
 </script>
 
