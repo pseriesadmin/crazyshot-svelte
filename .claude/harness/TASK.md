@@ -12,6 +12,155 @@
 
 ---
 
+## DONE — 🔴 CRITICAL: 장바구니 수령/반납 방식 콤보바 최초진입 시 '방문' 오선택 표시 제거 (2026-09-04, 이 세션) — ✅ GATE E 통과
+
+### 아젠다
+
+Stephen 신고: "/cart 최초 진입 시 수령/반납 방식 설정 바에 '방문 or 배송....' 옵션이 이미
+선택된 것처럼 보인다 — 최초 진입은 어떤 방식도 선택되지 않은 빈 상태여야 정상."
+
+### 조사 결과 (코드 수정 전, Explore 에이전트 2회 위임)
+
+```
+① 원인: defaultOptions()(src/routes/cart/+page.svelte:59-68)가 신규 카트 아이템의
+   rentalMethod/returnMethod 기본값을 'visit'(방문)으로 강제 세팅 — 콤보 버튼 active
+   클래스(class:combo-btn-active={props.method === tab.v}, 2265행)는 실제 상태값을 정직하게
+   비교하므로, UI 착시가 아니라 진짜 '방문'이 사전 선택된 상태였음.
+
+② 이 로직은 즉흥 수정이 아니라 2026-08-30 정식 하네스 플로(GATE 0 통과, BOUNDARY 등급)로
+   실행된 RSC-B2(.claude/harness/archive/TASK_ARCHIVE_2026-08.md) — "restrict_return_
+   delivery ON 상태에서 사용자가 탭을 한번도 안 눌러도 이미 차단 대상 값('crazydelivery')
+   으로 시작해 체크아웃 마지막에 결제 실패가 드러나는 문제"를 막으려 기본값을 배송과
+   무관한 'visit'로 바꾼 것.
+
+③ Stephen이 이 전제 자체에 이의 제기 → 재조사 결과 확인:
+   (a) "체크아웃 마지막 결제 실패" 전제가 틀림 — 실제 결제(mock/실결제)는 장바구니 제출
+       시점(/api/reservations/create-order, 토스 API 호출 없음)이 아니라 훨씬 나중인
+       전자계약 서명 페이지(pay-mock/토스 위젯)에서만 발생. 장바구니 제출은 hold 예약
+       생성만 할 뿐 payment_confirmed_at은 계속 NULL로 남음(payment.md/contract.md/
+       service-operations.md §9 대조 확인).
+   (b) methodSelectionValid + readyToSubmit(cart/+page.svelte:1102-1108, 1667-1673)이
+       이미 수령/반납 방식 미선택 시 "예약신청완료" 버튼을 차단하고 경고 토스트를
+       띄우는 독립적 안전장치로 존재 — 'visit' 기본값에 의존하지 않음(타입만 null 허용
+       하면 그대로 미선택도 차단됨).
+   → 결론: 'visit' 사전선택 트릭은 이미 틀린 전제로 만들어진 불필요한 방어코드였고,
+     제거해도 기존 안전장치가 그대로 예약신청을 막아준다.
+
+Stephen GATE B 승인 완료("진행 (예)") — 진짜 미선택(null) 상태로 전환 진행.
+```
+
+### 구현 범위 (TDD 도메인 — AGENTS.md "특화 로직: canProceed" 키워드 매칭)
+
+```
+- CardOptions.rentalMethod/returnMethod → DeliveryMethod | null로 위임, defaultOptions()
+  기본값 null로 변경.
+- 관련 타입 시그니처(toDeliveryMethod fallback, isDeliveryLocked/isCourierDependent 인자,
+  RentalForm snippet method prop) null 허용으로 최소 위임.
+- 범위 제외(명시): incrementGroupQtyImmediate의 toDeliveryMethod(line.pickupMethod,
+  'visit') 방어적 폴백(228-236행 부근, 수량 +1 시 기존 DB저장값 복제 용도)은 이번 버그와
+  무관한 별개 경로 — 손대지 않음.
+
+@sp2-tdd-agents 위임 — RED→GREEN→REFACTOR 완료(GATE C 재검증: svelte-check 신규 에러
+0건, 관련 vitest 111/111 GREEN, 스코프 준수 코드 직접 대조로 확인).
+
+### 후속 발견 — 진짜 근본원인은 DB RPC 하드코딩 (2026-09-04, 같은 세션)
+
+```
+위 앱코드 수정 반영 후 Stephen이 <launch-selected-element>로 재현 신고("여전히 '방문대여'가
+노출") — Claude Browser(조건① 적용, 선택 세션 진행 중)로 직접 재현·조사한 결과, 이 증상은
+앱코드가 아니라 create_draft_reservation Postgres 함수 자체가 pickup_method/return_method를
+'visit','visit'로 하드코딩 INSERT하고 있던 것이 진짜 원인이었음(컬럼은 NULL 허용, 체크 제약
+없음 — Stage SQL 직접조회로 확인). 장바구니 "담기"(날짜·방식 선택 없는 draft 예약) 시점부터
+DB에 'visit'가 실제로 저장되고 있었으므로, 앞서 고친 cart/+page.svelte(null을 정확히 빈
+선택으로 표시)는 정상 동작했지만 애초에 DB 값 자체가 null이 아니었던 것.
+
+Stephen 승인("Stage에서 진행해줘") → Migration #442
+(supabase/migrations/20260904020000_442_create_draft_reservation_no_default_method.sql)로
+create_draft_reservation을 CREATE OR REPLACE — INSERT 값 'visit','visit' → NULL,NULL만
+변경(그 외 권한검증·로직 전부 동일). Stage(ezyvffjvuwmtuhpxdjrw)에만 적용, Production 미적용
+(Stephen이 Stage 한정으로 승인).
+
+검증:
+  - Stage prosrc 재조회로 함수 본문 NULL,NULL 반영 확인
+  - 기존 재현용 draft 행(id 9748/9749, Stephen이 이번 세션에 직접 담은 항목) pickup_method/
+    return_method를 NULL로 UPDATE(이번 버그의 재현 데이터 그 자체 — 범위 내 정리)
+  - Claude Browser로 /cart 재접속 → "대여 방법"/"반납 방법" 아코디언 헤더 "미선택" 표시,
+    콤보 탭 어느 것도 강조 없음(스크린샷 확인)
+  - vitest reservation.test.ts/payment.test.ts/createHoldReservationWithShipment.test.ts
+    16 passed(M3 결제 연관 도메인 회귀 — middleware-guards.md Guard 9 안내에 따라 확인)
+
+⚠️ Production(vnbpmvxruyciuuaermyh) 미적용 상태 — DB 마이그레이션 필수 순서(stage 검증 →
+production 적용) 원칙상 Stephen 별도 승인 후 진행 필요.
+```
+
+### Production 적용 완료 (2026-09-04, 같은 세션, Stephen 승인)
+
+```
+적용 전 Production prosrc 재확인 — Stage 적용 전과 동일하게 'visit','visit' 하드코딩 상태였음
+(베이스라인 일치 확인 후 진행). 동일 CREATE OR REPLACE(Migration #442) Production
+(vnbpmvxruyciuuaermyh)에 적용, 적용 후 prosrc에 'NULL, NULL' 존재 + "'visit', 'visit'" 부재
+직접 SQL로 재확인 완료. Stage·Production 양쪽 모두 적용 완료.
+```
+
+### 후속 — '미선택' 상태 시각적 구분(ROUTINE, 같은 세션)
+
+```
+Stephen 요청: 대여/반납 방법 아코디언 요약값의 '미선택' 텍스트에 그레이 컬러토큰 반영.
+cart/+page.svelte .acc-value에 값 없을 때만 .acc-value-unset 클래스 부여, --cs-text-light
+(#AAAAAA, 기존 placeholder 톤 재사용 — 신규 토큰 발명 없음) 적용. 선택 완료 시 기존
+--cs-purple-dark 유지. Claude Browser 실측(computed color rgb(170,170,170)) + 관련 vitest
+27건 GREEN 확인.
+```
+
+### @sp3-qa-agent 검수 (2026-09-04, 같은 세션) — GATE E 통과 ✅
+
+```
+검수 범위: 이번 세션 3건만(앱코드 null 허용 확장/TDD, Migration #442, ROUTINE 그레이 스타일) —
+같은 세션 내 다른 NOW 블록(관리자 계정 등록·대여예약옵션 캘린더 동기화 등)은 검수 대상 아님.
+
+결과: 규칙 정합성(보안·$state(prop) 금지·any 금지·요청범위·uiux 토큰) 전부 ✅, 기술부채
+0건(console.log/any 신규 0, RPC 에러처리 정적분석 0 violation), svelte-check 신규 에러 0건,
+관련 vitest 127 passed. it.opts.rentalMethod/returnMethod null 허용 확장 전 지점(isDeliveryLocked·
+methodSelectionValid·체크아웃 제출 루프·methodLabel·RentalForm snippet) 전수 대조 — 크래시·
+오계산 없음, non-null assertion 미사용 확인.
+
+⚠️ 비차단 참고사항 2건:
+  1. isVisit(props.method==='visit')이 null일 때 false가 되어, 아코디언 최초 오픈 시
+     "방문지점 정보" 대신 "배송지 정보"(주소입력 폼)가 기본 노출되는 부수효과 — 기능 오류나
+     제출 차단은 아님(readyToSubmit이 계속 막음), "최초진입 시 완전 미선택 UI" 목표와 상충
+     안 함. 필요 시 후속 확인.
+  2. QA 에이전트는 이번 세션에서 Supabase MCP 접근 권한이 제한돼 Stage/Production prosrc
+     직접 재조회는 못했음(TASK.md 기록된 절차 자체는 타당하다고 평가) — 이 세션의 상위
+     대화에서는 이미 두 프로젝트 모두 prosrc 직접 SQL 재확인 완료(NULL,NULL 존재,
+     'visit','visit' 부재).
+  3. Migration #442는 UPDATE가 아니라 함수 로직 교체라 2026-09-04 이전 생성된 draft 행은
+     여전히 'visit'로 남음(의도적 미소급, draft는 체크아웃 미완료 임시 상태라 실사용 영향
+     제한적으로 판단) — 최종 판단 Stephen 확인 권장.
+
+GATE E: ✅ 통과 — git commit은 Stephen 직접 실행 대기.
+```
+
+### 후속 — 레거시 draft 행 'visit' 데이터 정리 (2026-09-04, 같은 세션, Stephen 요청)
+
+```
+QA 비차단 참고사항 3번(Migration #442은 함수 로직만 교체 — 기존 draft 행은 소급 미반영)에
+대한 후속 조치. 판정 근거: status='draft'인 행은 promote_draft_reservation(체크아웃 승격)을
+거친 적이 없어야만 draft로 남아있고, saveShipmentMethod(실제 방식 저장)는 승격 시점에만
+호출된다(cart/+page.svelte:1770 부근) — 즉 draft 상태에서 pickup_method='visit'인 행은
+100% Migration #442 이전 하드코딩 기본값이지 실사용자 선택일 수 없음(created_at 필터 불필요,
+status='draft' 자체가 충분조건).
+
+Stage(ezyvffjvuwmtuhpxdjrw): draft 2건 조회 결과 이미 'visit' 0건(앞서 재현·정리한 9748/9749) —
+추가 조치 불필요.
+
+Production(vnbpmvxruyciuuaermyh): draft 3건(id 104/109/110, 생성일 2026-09-03~04) 전부
+pickup_method=return_method='visit' 확인 → UPDATE ... SET pickup_method=NULL,
+return_method=NULL WHERE status='draft' AND pickup_method='visit' AND return_method='visit'
+실행, 3건 전부 NULL 반영 확인.
+```
+
+---
+
 ## NOW — 🔴 CRITICAL: 관리자(슈퍼마스터) 계정 추가 등록 + 관리자 비밀번호 자가변경 UI 신설 (2026-09-03, 이 세션)
 
 아젠다: Stephen 요청 — "관리자 목록에 슈퍼 마스터 계정을 추가 등록할 것. ① 이름: 한광익 /
@@ -33448,5 +33597,368 @@ svelte-check 재검증: 신규 에러 0건(기존 무관 에러 1건만 유지) 
 svelte-check 재검증: 신규 에러 0건 유지.
 
 **GATE E: ✅ 통과 (재검수 지적 3건 전부 즉시 해소) — git commit은 Stephen 직접 실행 대기**
+
+---
+
+## DONE — 🔴 CRITICAL: "반납 배송선택 제한" 미동작 신고 — 조사 완료, 코드결함 아님·Stage DB 설정공백 (2026-09-01) — ✅ 완료
+
+Stephen 신고: `<launch-selected-element>`로 `/cms/set/rental`의 "반납 배송선택 제한" 칩(ON)을
+가리키며 — 장바구니(localhost:5173/cart)에서 수령='방문 or 퀵' 선택 시 반납에서 '배송'이
+여전히 선택 가능(비활성 표시 안 됨), 정상이라면 선택 불가능해야 함. "절대 요구사항 외 기능
+수정 불가능, 영향을 줄 수 있는 부분을 최대한 조사 후 진행" 지시에 따라 harness 조사 우선
+수행(코드 수정 없이 이번 턴에서 직접 조사 완료 — 신규 subagent 위임 없이 세션 내 이미 확보한
+컨텍스트로 진행, 중복작업 방지).
+
+### 조사 결과 — 코드 로직은 이미 정상, 원인은 Stage DB 설정 공백
+
+```
+① src/routes/cart/+page.svelte의 leg-aware 재구성(2026-09-01/09-02, 이전 세션에서 이미
+   구현·수정 완료 확인):
+   - returnVisibleTabsFor(pickupMethod) 함수(1090-1094행): restrict_return_delivery ON +
+     !isDeliveryLocked(pickupMethod)(수령이 배송이 아닐 때)일 때만 restrictedDeliveryTabs
+     (배송 방식 제외 목록) 반환 — 그 외엔 전체 목록.
+   - RentalForm 스니펫(2251행): 반납(return) 탭 렌더링 시 returnVisibleTabsFor(bulkOpts.
+     rentalMethod) 사용 — 실제 UI 렌더 경로도 이 함수를 정확히 거침(우회 경로 없음).
+   - methodSelectionValid(1101-1106행)도 동일 함수로 서버 제출 전 검증.
+   - 이 로직 자체는 정확 — "수령이 방문일 때만"으로 좁게 짰던 과거 결함(2026-09-02
+     매트릭스 대조로 발견·수정, `pickupMethod==='visit'` → `!isDeliveryLocked(pickupMethod)`
+     일반화)도 이미 해소된 상태였음.
+
+② 진짜 원인 — isDeliveryLocked(m) = sdDeliveryOpts.some(o => o.method_key===m &&
+   o.is_bulk_delivery)가 항상 false를 반환: Stage DB(ezyvffjvuwmtuhpxdjrw) 직접 조회 결과
+   rental_method_options의 활성 행 5개(visit/crazydelivery/quick/locker/epost) 전부
+   is_bulk_delivery=false. 즉 "이 방식이 배송이다"라고 표시된 행이 Stage에 단 하나도 없어
+   restrictedDeliveryTabs가 deliveryTabs와 완전히 동일해지고(아무것도 필터링 안 됨),
+   returnVisibleTabsFor의 조건이 맞아도 반환값에 배송 방식이 그대로 남아 제한이 무효화됨.
+
+③ Production DB(vnbpmvxruyciuuaermyh) 대조 조회 — Production은 정상 설정: "delivery"
+   ("크레이지배송(택배)") 행이 is_bulk_delivery=true로 정확히 설정돼 있음(다른 3개 방식은
+   false로 정상). 즉 이 기능은 **Production에서는 정상 동작할 가능성이 높고**, Stephen이
+   테스트한 로컬 dev 서버(.env.local → Stage 연결, CLAUDE.md 원칙)에서만 재현되는 **Stage
+   전용 테스트데이터 공백**임 — 코드 결함이 아니라 Stage 시드데이터가 Production 설정을
+   따라가지 못한 드리프트.
+
+④ CMS 토글 위치 확인: /cms/set/rental → "대여옵션(수령/반납) 일괄적용" 행(cms/set/rental/
+   +page.svelte:534, ?/toggleBulkDelivery 액션) — 방식별 개별 칩. 이 값이 "요청 A"(수령=배송
+   선택 시 반납 자동 강제복사 + 시간선택 비활성화)와 이번 "반납 배송선택 제한" 둘 다의 공통
+   판정 기준(isDeliveryLocked)으로 재사용되고 있어, Stage에서는 두 기능이 동시에 무효화된
+   상태였을 것으로 추정(요청 A도 함께 재현 확인 필요 — 이번 조사에서 별도 실측은 안 함).
+```
+
+### 결론 — 코드 수정 불필요, Stage DB 설정 1건만 필요 (요구범위 밖 임의 실행 보류)
+
+```
+Stage(ezyvffjvuwmtuhpxdjrw)의 crazydelivery("크레이지샷배송 대여", id=1641613e-018b-484d-
+bba0-fed582658498) 행 is_bulk_delivery를 true로 변경하면 Production과 동일하게 정상 동작할
+것으로 예상(코드 변경 0건). 다만 이 값은 코드가 아닌 라이브 DB 설정이고, "요청 A"(반납방식
+자동 강제복사+시간선택 비활성화) 기능에도 함께 영향을 미치는 공용 플래그라 — 요청범위
+("반납 배송선택 제한"만 명시)를 넘어서는 부작용 가능성이 있어 Stephen 확인 없이 임의로
+UPDATE 실행하지 않음. GATE B 질문으로 에스컬레이션(AskUserQuestion) 후 승인 시에만 진행.
+```
+
+### ✅ Stephen 승인 후 적용 + Claude Browser 실측 검증 완료 (같은 세션 후속)
+
+```
+Stephen 승인("라이브 서버에서 그렇다니까!!!" — .env.local 재확인 결과 localhost:5173이 실제
+Stage(ezyvffjvuwmtuhpxdjrw) 연결임을 재확인 후 진행) → Stage DB UPDATE 1건 실행:
+  UPDATE rental_method_options SET is_bulk_delivery = true
+  WHERE id = '1641613e-018b-484d-bba0-fed582658498' AND method_key = 'crazydelivery'
+  (RETURNING으로 반영 확인: is_bulk_delivery=true)
+
+Claude Browser 조건부 허용(CLAUDE.md 조건①, <launch-selected-element> 세션 진행 중)으로
+localhost:5173/cart 실측 3케이스 검증(장바구니 기존 아이템 SONY PXW-Z90/Sony FX6-12 사용):
+  1. 수령=크레이지샷배송(배송) 선택 → "배송 선택 시 반납방식이 자동으로 동일하게 고정됩니다"
+     문구 노출 + 반납 방법 자동 "크레이지샷배송 대여"로 강제고정 확인("요청 A" 정상화 확인 —
+     is_bulk_delivery=false였을 때는 이 문구·강제고정 자체가 발동 불가능했던 상태였음)
+  2. 수령=방문대여 선택 → 반납 방법 탭 목록에서 "크레이지샷배송" 0건(page 전체에서 "수령
+     방식" 탭 1건만 매칭, 반납 쪽엔 미노출) — Stephen 신고 시나리오 정확히 재현·해소 확인
+  3. 수령=퀵배송 대여 선택 → 동일하게 반납 탭에서 "크레이지샷배송" 0건 확인
+
+결론: 코드 수정 없이 Stage DB 설정 1건 교정만으로 신고된 증상 완전 해소, Production은
+원래부터 정상이었으므로 실사용자 영향 없음(Stage 테스트 환경 전용 이슈였음).
+```
+
+---
+
+## NOW — 🔴 CRITICAL: "반납 배송선택 제한" ↔ is_bulk_delivery 결합 구조 분리 (2026-09-04)
+
+배경: 위 태스크 완료 보고 직후, Stephen이 실제 프로덕션(crazyshot-svelte.vercel.app)에서도
+동일 증상이 재현됨을 신고. 재조사 결과 Production은 배포된 코드(commit 765aa4d, Vercel MCP로
+실배포 커밋 확인)에 leg-aware 로직이 이미 포함돼 있었고 — 문제는 Production DB의
+`is_bulk_delivery`가 세션 도중 true→false로 바뀌어 있던 것(다른 병렬 세션이 건드렸을 가능성,
+직접 만지지 않았음에도 값이 변동됨을 재조회로 확인). 이 값만 되돌리자는 제안을 Stephen이
+명확히 거부 — "'반납 배송선택 제한' 토글 기능을 찾아, 대여옵션(수령/반납) 일괄적용 토글
+목록을 기준으로 설명하는 오류를 범하고 있어"라는 정정 지시.
+
+### 재조사로 확인한 정확한 구조
+
+```
+"반납 배송선택 제한" 토글 자체(cms/set/rental/+page.svelte:592-616, action
+?/toggleReturnDeliveryRestriction → RPC toggle_return_delivery_restriction()) — RPC 본문
+직접 조회 결과 오직 rental_shipping_settings.restrict_return_delivery 한 컬럼만 토글, 완전히
+독립적이고 결함 없음.
+
+문제는 이 값을 "적용"하는 /cart 쪽 코드(returnVisibleTabsFor, cart/+page.svelte)가 "어느
+방식이 배송인지" 판정할 때 is_bulk_delivery("대여옵션(수령/반납) 일괄적용", "요청 A" 전용
+플래그)를 재사용하고 있었다는 것 — 완전히 다른 목적의 두 admin 설정이 코드 레벨에서
+암묵적으로 결합돼 있었음. is_bulk_delivery가 설정 안 돼 있으면 "반납 배송선택 제한"을 ON해도
+아무 효과가 없는 구조였음(Stage·Production 둘 다 동일 근본원인).
+```
+
+### Stephen 확정 지시 (2026-09-04)
+
+```
+1. "대여옵션(수령/반납) 일괄적용"과 "반납 배송선택 제한" 동시 적용 차단 — 같은 방식이
+   "일괄적용"(요청 A) 대상이면 그 방식은 이미 반납이 강제고정되므로 "반납 배송선택 제한"
+   판정 대상으로 삼는 게 의미 없음(같은 행에 두 플래그 동시 true 금지).
+2. 결합 구조 자체를 코드 수정으로 분리(GATE B: "이 결합 구조 자체를 분리(코드 수정)" 선택).
+```
+
+### 구현 (완료, Stage 적용 + TDD 검증 — Production 미적용, git commit 미실행)
+
+```
+스키마(Stage 적용 완료, Production 미적용 — Stephen 확인 대기):
+  Migration #440: rental_method_options.is_delivery_type BOOLEAN DEFAULT false 신설
+    → supabase/migrations/20260904000000_440_rental_method_is_delivery_type_column.sql
+  Migration #441: toggle_rental_method_delivery_type(p_id) 신규 RPC +
+    toggle_rental_method_bulk_delivery(p_id) CREATE OR REPLACE(상호배타 가드 추가) — 같은
+    행이 is_bulk_delivery/is_delivery_type 중 하나가 이미 true면 반대쪽을 true로 켜는 것을
+    RAISE EXCEPTION으로 차단(끄는 것은 항상 허용)
+    → supabase/migrations/20260904010000_441_rental_method_delivery_type_toggle_rpc.sql
+
+CMS(cms/set/rental):
+  - RentalMethodOption 인터페이스 + methods select 쿼리에 is_delivery_type 추가(+page.server.ts)
+  - 신규 서버 액션 toggleDeliveryType → RPC toggle_rental_method_delivery_type 호출
+  - 신규 chip row "반납 배송선택 제한 대상"(+page.svelte, "휴무일 제한 방식"과 "대여옵션 제한"
+    사이 배치) — 상대쪽 플래그가 true인 방식은 disabled 처리(클라이언트 UX 가드, RPC 가드와
+    이중 방어)
+  - 기존 "대여옵션(수령/반납) 일괄적용" chip도 동일하게 반대쪽 disabled 처리 추가
+
+장바구니(cart):
+  - cart/+page.server.ts: deliveryOptions select + DeliveryOptionRow 인터페이스에
+    is_delivery_type 추가
+  - $lib/utils/cartShippingFee.ts: 신규 순수함수 computeReturnVisibleTabs(allTabs,
+    deliveryTypeMethods, pickupMethodKey, restrictReturnDelivery) — is_delivery_type
+    단독 기준으로 반납 탭 필터링(TDD, cartShippingFee.test.ts에 6케이스 추가)
+  - cart/+page.svelte: restrictedDeliveryTabs 파생값 제거(순수함수로 대체), returnVisibleTabsFor가
+    computeReturnVisibleTabs 호출로 위임, 기존 isDeliveryLocked(is_bulk_delivery)는 "요청 A"
+    전용 용도(자동복사·시간선택 잠금·왕복요금 계산)에서 완전히 그대로 유지 — 이번 변경과 무관
+
+검증:
+  - npx vitest run cartShippingFee.test.ts → 53/53 GREEN(기존 47 + 신규 6)
+  - npx vitest run payment.test.ts reservation.test.ts createHoldReservationWithShipment.test.ts
+    → 16 passed, 7 skipped(네트워크 의존, 무관) — 회귀 없음 확인(Guard 9 훅 안내 대응)
+  - svelte-check → 신규 에러 0건
+  - Stage DB 재확인: is_delivery_type 컬럼 정상 추가, 기존 is_bulk_delivery(crazydelivery=true,
+    이전 태스크에서 설정)와 충돌 없이 공존
+```
+
+### 미결 — Stephen 확인 대기
+
+```
+[ ] Production(vnbpmvxruyciuuaermyh) 마이그레이션 440/441 적용 여부 — 코드가 아직 배포 전이라
+    지금 적용해도 기존 라이브 동작에는 영향 없음(is_delivery_type 기본값 false라 신규 RPC
+    가드가 트리거될 조건 자체가 아직 없음), 다만 Stephen 확인 후 적용
+[ ] "반납 배송선택 제한 대상" 마이그레이션 시드값(어느 방식을 is_delivery_type=true로 초기
+    설정할지) — Stephen 지시로 보류("일단 앞단의 수정 후 재확인할 것") → 위 구현 완료됐으니
+    재확인 필요. 현재 Stage·Production 둘 다 is_delivery_type 전부 false — CMS 신규 chip으로
+    관리자가 직접 설정하거나, Stephen 승인 시 이 세션에서 크레이지샷배송/크레이지배송(택배)
+    방식에 시드 적용 가능
+[ ] git commit·push — Stephen 직접 실행 필요(이 코드 수정 자체가 로컬에만 있고, 실제
+    프로덕션에 반영되려면 커밋+배포가 별도로 필요함 — "코드 배포 ≠ DB 마이그레이션 적용"
+    원칙과 반대로 이번엔 "DB는 준비됐는데 코드가 아직 미배포"인 상태)
+```
+
+### ✅ QA 검수 완료 (2026-09-04, sp3-qa-agent) — GATE E 통과 (재확인 후)
+
+```
+1차 검수: 이 태스크 자체(is_delivery_type 신설·상호배타 가드·computeReturnVisibleTabs·
+  TDD 6케이스)는 로직·보안·테스트 전부 통과. 단 cart/+page.svelte에 동시 진행 중인 다른
+  세션(장바구니 최초진입 "방문" 오선택 표시 제거 태스크)의 미완성 변경(toDeliveryMethod
+  중복선언·KNOWN_DELIVERY_METHODS 미정의)이 같은 파일에 공존해 svelte-check 11건 에러 —
+  이 태스크의 결함 아님을 QA가 라인별 대조로 확인, "재검수 필요" 판정.
+
+QA 완료 직후 재확인: 다른 세션이 해당 문제를 자체적으로 해소함 — returnVisibleTabsFor가
+pickupMethod: DeliveryMethod | null을 받도록 확장되고 computeReturnVisibleTabs 호출부가
+`pickupMethod ?? ''`로 안전하게 null을 처리하도록 통합됨(양쪽 세션 작업이 충돌 없이 호환).
+npx svelte-check 재실행 → 신규 에러 0건. npx vitest run cartShippingFee.test.ts +
+payment.test.ts + reservation.test.ts + createHoldReservationWithShipment.test.ts →
+69 passed, 7 skipped(네트워크 의존) — 전부 GREEN.
+
+**GATE E: ✅ 통과 — git commit은 Stephen 직접 실행 대기**
+```
+
+### ✅ 후속 수정 — "반납 배송선택 제한 대상" 라벨 오독 방지 (2026-09-04, 같은 세션 후속)
+
+```
+Stephen 실사용 검증 중 실제로 라벨을 오독해 반대로 설정(방문·퀵·무인함·택배 ON / 크레이지샷
+배송 OFF — 정확히는 방향이 뒤집혀야 함)한 사례가 발생 — "'반납 배송선택 제한 대상'이란
+제목 자체가 이상하다"는 지적.
+
+수정: cms/set/rental/+page.svelte
+  - 칩 행 라벨 "반납 배송선택 제한 대상" → "배송 방식 지정"(sf-label 폭 210px 제약상 방향성
+    설명을 라벨 자체에 담을 수 없어 명칭을 단순화)
+  - 라벨 아래 신규 캡션 문단(.chip-row-caption) 추가: "ON으로 지정한 방식 = '배송'입니다.
+    아래 '반납 배송선택 제한'이 켜져 있으면, 수령을 배송이 아닌 방식으로 고를 때 반납
+    콤보에서 ON인 방식이 제외되어 선택할 수 없습니다." — ON=제외 방향을 명시적으로 고지
+  - 로직(is_delivery_type/computeReturnVisibleTabs) 자체는 무변경 — 순수 라벨/UX 문구 수정
+
+svelte-check 재검증: 신규 에러 0건, .chip-row-caption 미사용 경고 없음(정상 참조 확인).
+```
+
+### ✅ 후속 재설계 — 마스터 토글 완전 제거 + 서버 최종방어선 동기화 결함 발견·수정 (2026-09-04, 같은 세션 후속)
+
+Stephen UX 지적: "'배송 방식 지정' 칩 하나로 충분한데 왜 '대여옵션 제한'(전역 마스터 토글)이
+별도로 있어 복잡한가 — 그냥 제거해."
+
+```
+① 조사 중 발견한 별개 CRITICAL 결함: set_reservation_shipment_method(7-param, Migration 147,
+   /cart 체크아웃 및 상품상세 즉시예약에서 실제 호출되는 서버 최종방어선)가 클라이언트
+   (cart/+page.svelte)와는 별도로 자체적으로 restrict_return_delivery + is_bulk_delivery를
+   검사하고 있었다 — 앞선 Migration #440/#441(클라이언트 판정기준을 is_delivery_type으로
+   분리)이 이 RPC까지는 반영하지 못해, 서버 최종방어선만 구식 기준으로 계속 남아있던 상태
+   (is_bulk_delivery가 그동안 계속 false였어서 실제로 트리거된 적은 없어 지금까지 미발견).
+   추가로 기존 로직은 "수령 자체가 배송이면 차단"까지 검사해 클라이언트의 leg-aware 설계
+   (수령은 이 제한과 무관하게 항상 전체 노출, 2026-09-01 확정)와도 불일치하는 잠재 버그였음.
+
+② Stephen 지시대로 마스터 토글(rental_shipping_settings.restrict_return_delivery 컬럼 +
+   toggle_return_delivery_restriction RPC + CMS "대여옵션 제한" UI) 완전 제거, is_delivery_type
+   존재 자체를 활성화 조건으로 단순화. 동시에 서버 최종방어선도 is_delivery_type 기준으로
+   통일하고 "수령 자체가 배송이면 차단" 조건 삭제(클라이언트와 완전히 일치시킴).
+
+Migration #442(Stage 적용 완료, Production 미적용):
+  → supabase/migrations/20260904020000_442_return_delivery_restriction_simplify.sql
+  - set_reservation_shipment_method(7-param) CREATE OR REPLACE — is_delivery_type 기준 단일
+    조건("수령이 배송 아니고 반납이 배송이면 차단")으로 교체
+  - DROP FUNCTION toggle_return_delivery_restriction()
+  - ALTER TABLE rental_shipping_settings DROP COLUMN restrict_return_delivery
+
+수정 파일:
+  - cartShippingFee.ts: computeReturnVisibleTabs 시그니처에서 restrictReturnDelivery 파라미터
+    제거(존재 자체가 조건), TDD 6케이스 시그니처 갱신
+  - cart/+page.svelte, cart/+page.server.ts: restrict_return_delivery select·타입·호출부 제거
+  - cms/set/rental/+page.server.ts: restrict_return_delivery select·타입·toggleReturnDelivery
+    Restriction 액션 전부 제거
+  - cms/set/rental/+page.svelte: "대여옵션 제한" sf-row 전체 삭제, restrictReturnDelivery
+    state·$effect 동기화 제거, "배송 방식 지정" 캡션 문구 갱신(마스터 스위치 없음을 명시)
+  - createHoldReservationWithShipment.test.ts: 라이브 Stage DB가 Stephen이 동시에 CMS로
+    편집 중인 공유 상태라 기존 'visit' 등 등록방식에 의존하지 않도록, pickup/return 둘 다
+    이 테스트 전용 임시 방식으로 완전히 격리해 재작성(pickup=is_delivery_type:false 임시방식,
+    return=is_delivery_type:true 임시방식)
+
+검증:
+  - npx vitest run cartShippingFee.test.ts → 53/53 GREEN
+  - npx vitest run createHoldReservationWithShipment.test.ts → 5/5 GREEN(라이브 Stage 통합
+    테스트 — 새 서버 최종방어선이 실제로 RAISE EXCEPTION → hold 자동 취소까지 확인)
+  - npx vitest run payment.test.ts reservation.test.ts → 회귀 없음(69 passed, 7 skipped 유지)
+  - svelte-check → 신규 에러 0건
+```
+
+### ✅ QA 검수 완료 (2026-09-04, sp3-qa-agent) — 조건부 통과 → 지적사항 즉시 해소
+
+```
+QA 판정: "조건부 통과" — 로직·테스트·보안 전부 통과, 다만 Production 적용 전 필수 확인 2건 지적:
+
+A. [CRITICAL] Production 적용 순서 의존성 미고지 — 새 set_reservation_shipment_method가
+   is_delivery_type 컬럼(#440 신설)을 직접 참조하므로, #440 없이 이 마이그레이션만 단독
+   적용되면 함수 생성은 성공하지만 실제 체크아웃 시 "column does not exist" 런타임 에러로
+   전체 예약 저장이 깨질 위험 — TASK.md에 순서 강제를 명시적으로 경고할 것.
+   → 해소: 아래 Production 적용 전 체크리스트에 "440→441→443 반드시 한 번에, 순서대로"
+     명시 추가.
+
+B. [필수] 마이그레이션 번호 충돌 — 같은 타임스탬프대(20260904020000)에 다른 병렬 세션이
+   이미 #442(create_draft_reservation_no_default_method.sql)를 선점 — SSOT 번호 원칙 위반.
+   → 해소: 이 태스크의 마이그레이션을 #442 → #443으로 재명명
+     (supabase/migrations/20260904030000_443_return_delivery_restriction_simplify.sql).
+     Stage DB에 "443" 이름으로 동일 SQL 재적용 완료(CREATE OR REPLACE/DROP IF EXISTS라
+     재적용 안전, 함수·컬럼 최종 상태 동일함을 재확인). 코드 내 모든 "Migration #442" 주석
+     참조도 "#440·#441·#443"으로 일괄 정정(cartShippingFee.ts/.test.ts, cart/+page.svelte,
+     cart/+page.server.ts, cms/set/rental/+page.server.ts, createHoldReservationWithShipment.test.ts).
+
+C. (참고, 비블로킹) rollback 섹션 부재 — 443 파일 하단에 ROLLBACK 절차 명문화 추가 완료
+   (컬럼 재추가 + RPC 2종 원복 SQL 스니펫).
+
+재검증: npx vitest run cartShippingFee.test.ts payment.test.ts reservation.test.ts
+createHoldReservationWithShipment.test.ts → 69 passed, 7 skipped 유지. svelte-check →
+신규 에러 0건.
+
+**GATE E: ✅ 통과 — git commit은 Stephen 직접 실행 대기**
+```
+
+### ✅ 후속 라벨 재수정 — "배송 방식 지정" → "배송 반납 허용 지정" (2026-09-04, 같은 세션 후속)
+
+```
+Stephen 지시: cms/set/rental/+page.svelte의 sf-label 텍스트를 "배송 방식 지정"에서
+"배송 반납 허용 지정"으로 수정. 순수 라벨 텍스트 변경만 적용 — 로직(is_delivery_type/
+computeReturnVisibleTabs/서버 RPC)은 무변경. 하단 캡션("ON으로 지정한 방식 = '배송'입니다...")
+은 이미 정확한 동작 설명이라 그대로 유지(라벨=기능 카테고리명, 캡션=정확한 동작 설명이라는
+기존 패턴과 일치). 코드 내 관련 주석도 전부 "배송 반납 허용 지정"으로 동기화.
+
+svelte-check 재검증: 신규 에러 0건.
+```
+
+### ✅ QA 재검수 완료 (2026-09-04, sp3-qa-agent) — GATE E 통과
+
+```
+검수 범위: ①#442→#443 재명명(번호충돌 해소) ②라벨 "배송 방식 지정"→"배송 반납 허용 지정".
+
+① REST API 행동 기반 검증(Supabase MCP 미보유 세션이라 pg_get_functiondef 대신 실제 RPC
+   호출로 대체): toggle_return_delivery_restriction 호출 → PGRST202(함수 없음) 확인,
+   restrict_return_delivery select → 42703(컬럼 없음) 확인, set_reservation_shipment_method
+   3케이스(수령=방문+반납=배송→차단 메시지 일치/수령=배송+반납=배송→통과/수령=방문+반납=방문
+   →통과) 전부 443 SQL 파일과 일치 — Stage DB 재적용이 실제로 유효함을 라이브로 재확인.
+   구 442 파일 삭제 확인, 443 파일 하나만 존재 확인, "Migration #442" 잔존 참조 0건.
+② 라벨 텍스트·캡션 유지·주석 동기화 전부 정확히 반영 확인.
+
+재검증: 69 passed·7 skipped 유지, svelte-check 신규 에러 0건(vite.config.ts 기존 무관 에러
+1건은 이번 세션 미수정 파일 — 신규 아님). 요청범위 외 파일 미수정 확인(mtime 대조로 이전
+단계 산출물과 시간대 명확히 분리됨).
+
+**GATE E: ✅ 통과 — git commit은 Stephen 직접 실행 대기**
+```
+
+### ✅ 후속 UI 정리 — 캡션 문단 제거 (2026-09-04, 같은 세션 후속)
+
+```
+Stephen 지시: <launch-selected-element>로 "배송 반납 허용 지정" 칩 행 아래 캡션 문단
+(.chip-row-caption, "ON으로 지정한 방식 = '배송'입니다...") 직접 선택해 "제거-불필요 UI".
+
+수정: cms/set/rental/+page.svelte
+  - <p class="chip-row-caption">...</p> 블록 삭제
+  - 이제 사용처 없는 .chip-row-caption CSS 규칙도 함께 삭제(dead code 방지)
+  - 로직(is_delivery_type/computeReturnVisibleTabs/서버 RPC) 무변경 — 순수 UI 정리
+
+svelte-check 재검증: 신규 에러 0건, .chip-row-caption 관련 unused-selector 경고도 없음
+(완전히 제거돼 참조 자체가 사라졌으므로 정상).
+```
+
+### ✅ Production 마이그레이션 적용 완료 (2026-09-04, Stephen 지시 "DB 마이그레이션 진행해")
+
+```
+적용 전 Production 실측(사전 조사 결과 재확인) — 다른 세션과의 겹침 없음, Production이
+정확히 "#440~443 미적용 원상태" 그대로임을 확인 후 순서대로 적용:
+
+1. #440 (rental_method_options.is_delivery_type 컬럼 신설) → 적용 후 컬럼 존재·기본값 false 확인
+2. #441 (toggle_rental_method_delivery_type 신규 RPC + toggle_rental_method_bulk_delivery
+   상호배타 가드 재정의) → 적용 후 두 RPC 모두 정상 존재 확인
+3. #443 (set_reservation_shipment_method 7-param을 is_delivery_type 기준으로 재정의 +
+   toggle_return_delivery_restriction 삭제 + rental_shipping_settings.restrict_return_delivery
+   컬럼 삭제) → 적용 후 3가지 전부 실측 재확인:
+   - restrict_return_delivery 컬럼: 조회 결과 0건(삭제 확인)
+   - toggle_return_delivery_restriction RPC: 조회 결과 0건(삭제 확인)
+   - set_reservation_shipment_method(7-param) 본문: is_delivery_type 참조 true /
+     is_bulk_delivery 참조 false(신규 로직으로 완전히 교체됐음을 SQL 텍스트 검색으로 확인)
+
+Production rental_method_options 현재 상태(전부 is_delivery_type=false, is_bulk_delivery=false)
+— 마이그레이션만으로는 기능이 활성화되지 않음, CMS "/cms/set/rental → 배송 반납 허용 지정"에서
+실제 배송 방식(delivery="크레이지배송(택배)")을 ON으로 지정해야 기능이 살아남(Stage와 별개로
+Production 쪽 CMS 설정은 아직 미실행 — Stephen 후속 조치 필요).
+```
+
+**최종 상태: DB 마이그레이션 #440·#441·#443 Stage+Production 양쪽 전부 적용 완료. 남은 것은
+① Production CMS에서 "배송 반납 허용 지정" 칩 설정(어느 방식을 배송으로 지정할지) ② git commit
+— 둘 다 Stephen 직접 진행**
+
+
 
 

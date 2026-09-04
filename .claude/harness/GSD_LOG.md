@@ -1,6 +1,305 @@
 # GSD_LOG.md — 크레이지샷 실행 이력
 # 형식: [YYYY-MM-DD HH:MM] 타입 | 타스크명 | 파일 | 소요 | 결과
 
+[2026-09-04(후속13)] 🟡BOUNDARY | 반납방법 자동동기화(copyToReturn) stuck-true 결함 수정
+  (@harness-executor 위임) |
+  수정: src/routes/cart/+page.svelte bulkHandleMethod(470~480행) — `wasLocked =
+  isDeliveryLocked(bulkOpts.rentalMethod)` 신설, copyToReturn 대입 삼항을
+  `forceCopy ? true : wasLocked ? false : (유지)`로 확장(배송→비배송 전환 순간에만 리셋,
+  비배송↔비배송 전환은 사용자 수동설정 보존) |
+  plan_source: Stephen이 직전(후속9~12) 조사에서 "CMS 배송잠금(is_bulk_delivery) 토글이
+  꺼져 있는 상태에서도 수령배송→반납배송 자동선택이 발생하는 게 오류 아니냐"고 지적 →
+  원인 확인(설정옵션 체크박스가 과거 is_bulk_delivery=true였던 시점에 켜진 뒤 되돌아오는
+  코드가 없어 stuck) → "하네스 플로 호출해 수정 실행" |
+  ✅ 근본원인: bulkHandleMethod가 forceCopy(=is_bulk_delivery) true일 때 copyToReturn을
+  true로 켜기만 하고 되돌리는 코드가 전혀 없었음 — CMS 토글이 나중에 꺼지거나 대여방법을
+  비배송으로 바꿔도 한 번 켜진 copyToReturn이 영구히 true로 남아 반납방법이 계속 자동
+  동기화됨.
+  ✅ 브라우저 직접 재검증 3단계(현재 Stage crazydelivery is_bulk_delivery=true 상태,
+  parallel 세션이 계속 값을 바꾸고 있어 확인 시점 값 재조회 후 진행) — ①크레이지샷배송
+  선택 → 체크박스 자동 ON + 반납방법 동일 동기화 확인(요청 A 정상) ②방문대여로 전환 →
+  체크박스 자동 OFF 확인(1차 검증 시 스코프 미지정 쿼리로 페이지의 다른(.bulk-panel도
+  .detail-pane도 아닌 제3의) 체크박스 인스턴스를 잘못 짚어 "여전히 checked"로 오판했다가,
+  `.bulk-panel` 범위로 정확히 좁혀 재확인해 실제로는 정상 리셋됨을 확인 — 이번에도 검증
+  스코프 실수였고 코드 자체는 처음부터 정확했음) ③리셋 후 대여방법을 방문↔퀵배송으로
+  전환해도 반납방법(퀵배송 유지)이 더 이상 자동으로 따라가지 않음 확인(수동 설정 존중).
+  svelte-check 신규 에러 0건.
+  ℹ️ DB 변경 없음(순수 클라이언트 상태 로직) — Production 배포 대기 항목(#437·#439)과 무관.
+
+[2026-09-04(후속12)] 🟡BOUNDARY | 배송방식 시간선택 숨김 — is_bulk_delivery(CMS 배송잠금 토글)
+  단독 의존 제거, is_courier_dependent 병행 판정으로 견고화 (@harness-executor 위임) |
+  수정: src/routes/cart/+page.svelte:2299 — `{#if !locked}` → `{#if !locked && !courierRestricted}`
+  (1행만 수정, locked/courierRestricted 정의부·다른 사용처는 전혀 건드리지 않음) |
+  plan_source: Stephen "CMS의 '크레이지샷배송 대여' 배송잠금 설정과 관계없이, 상시에도 '배송'
+  선택 시 기능(수령/반납 시간영역 숨김)이 동작해야 한다. 하네스 플로 호출해 수정 실행." →
+  @harness-executor에 위임 실행(Agent tool), 완료 후 브라우저 실동작은 별도로 직접 재검증 |
+  ✅ 배경: 직전(후속9~11) 조사에서 시간선택 숨김이 `locked`(=isDeliveryLocked, CMS
+  `rental_method_options.is_bulk_delivery` 단일 컬럼)에만 의존하고 있었음이 드러남 — 이
+  컬럼은 "왕복 배송료 + 반납방식 강제 동일고정(요청 A)"이라는 별개 목적의 토글인데, 시간선택
+  UI 노출 여부라는 무관한 관심사가 얹혀 있었음. 실사용 중 이 플래그가 (다른 세션의 동시
+  CMS 작업으로 추정) false로 바뀌자 시간선택 버튼이 계속 노출되는 결함이 실제로 재현됨.
+  ✅ 해결: 이미 별도 목적(휴무일 캘린더 제한, RSC-B3)으로 존재하던 독립 플래그
+  `is_courier_dependent` 기반 `courierRestricted`를 시간선택 숨김 조건에 OR로 병행 추가 —
+  `is_bulk_delivery`가 꺼져도 `is_courier_dependent`(크레이지샷배송 대여는 계속 true 유지
+  중)만으로 숨김이 보장됨. `locked`의 다른 용도(returnComboLocked·콤보 잠금 등)는 전혀
+  변경하지 않음.
+  ✅ 브라우저 직접 재검증(현재 Stage DB 실제 is_bulk_delivery=false 상태 그대로 테스트) —
+  대여 방법/반납 방법 양쪽 다 "크레이지샷배송 대여" 선택 시 시간버튼 사라지고 날짜버튼만
+  남음 확인(datetime-btn count 2→1). 방문대여로 되돌리면 시간버튼 정상 복귀(회귀 없음)
+  확인. svelte-check 신규 에러 0건.
+  ℹ️ DB 마이그레이션 없음(순수 클라이언트 조건식 변경) — Production 배포 대기 항목(#437·
+  #439)과 무관.
+
+[2026-09-03(후속11)] 🔴CRITICAL | Migration #437·#439 Production 적용 완료(옵션 12h 독립가 +
+  배송잠금 포함일수) |
+  수정: DB만 — 로컬 코드 변경 없음(후속5·후속8에서 이미 완료·Stage 검증된 SQL을 그대로 재사용,
+  #438은 #439로 완전히 대체돼 Production에 적용하지 않음) |
+  plan_source: Stephen "Production에 적용해." |
+  ✅ 적용 전 Production 현재 정의를 직접 조회해 #436(unit_price/2 파생 버그) 상태 그대로임을
+  재확인 — Stage와 동일한 출발점, 드리프트 없음 확인 후 진행.
+  ✅ vnbpmvxruyciuuaermyh(Production)에 437→439 순서로 apply_migration 적용 완료 — 적용 직후
+  함수 정의 재조회로 #436 버그 패턴(unit_price/2.0) 완전 제거 + v_delivery_locked 분기 +
+  #439의 GREATEST(...,0)+1 포함일수 산식 존재 3가지 모두 확인.
+  ✅ Production 실물 검증(throwaway INSERT→RPC호출→기대값대조→DELETE, 실서비스 데이터 아님):
+  "Idol SET01..."(24h=115000/12h=95000) 기준 09-09→09-10(delivery 잠금, 날짜차이1→포함일수2)
+  예약 + 옵션 "Sony NP-F780"(24h=20000/12h=15000, qty=1) → rental_fee=230000(=2×115000) ✓,
+  options_fee=40000(=2×20000, 배송잠금이라 옵션의 12h가는 무시되고 본상품과 동일하게 순수
+  일수만 적용됨) ✓ — 예상값과 정확히 일치. 검증 직후 삭제, 잔존 카운트 0/0 재확인 완료
+  (reservation id=108, Production method_key='delivery'로 Stage의 'crazydelivery'와 다름을
+  사전 확인 후 사용).
+  ✅ 이제 Stage·Production 양쪽 다 #439(최종본 — 12시간 블록 대여요금 + 옵션 독립 12h가 +
+  배송잠금 포함일수 전부 반영)로 완전히 동기화됨. git commit은 Stephen 직접 실행 대기
+  (코드 자체 변경분은 이미 후속2~10에서 로컬에 존재).
+
+[2026-09-03(후속10)] 🟡BOUNDARY | 배송잠금 수령 시간 라벨 — "00:00" 고정 표시(순수 UI, DB 무관,
+  후속9 반납=24:00과 대칭) |
+  수정: src/routes/cart/+page.svelte(bulk-collapsed-bar·"대여 방법" acc-item 접힘요약 2곳의
+  수령 시간 라벨을 `isDeliveryLocked(bulkOpts.rentalMethod) ? '00:00' : bulkTime`로 교체) |
+  plan_source: Stephen "대여수령 '배송' 경우 '배송' 선택영역 시간이 00:00로 자동 지정 표시.
+  -배송 정책: 대여일 N일/00:00 ~ 반납일 N일/24:00 = 고객 점유일을 24시간(1일) 규정." |
+  ✅ 후속9(반납=24:00)와 짝을 이루는 수령측 정정 — "대여일 00:00 ~ 반납일 24:00" 정책을
+  양쪽 라벨 모두에 반영 완료. 방문 등 시간선택이 있는 방식은 영향 없음(bulkTime 그대로).
+  ✅ 브라우저 실측(9월8일→9월9일 배송) — "2026.09.08/00:00"·"2026.09.09/24:00" 양쪽 정상
+  표시. svelte-check 신규 에러 0건, vitest 47/47 GREEN(로직 무변경, 순수 표시전용).
+  ℹ️ DB 마이그레이션 없음 — Production 배포 대기 항목(#437·#439)과 무관.
+
+[2026-09-03(후속9)] 🟡BOUNDARY | 배송잠금 반납 시간 라벨 — "24:00" 고정 표시(순수 UI, DB 무관) |
+  수정: src/routes/cart/+page.svelte(bulk-collapsed-bar·"반납 방법" acc-item 접힘요약 2곳의
+  반납 시간 라벨을 `isDeliveryLocked(bulkOpts.returnMethod) ? '24:00' : bulkReturnTime`로 교체) |
+  plan_source: Stephen "대여수령 '배송' 경우 '반납' 선택영역은 자동으로 24:00 표시" |
+  ✅ #439에서 확정한 "대여일 00:00~반납일 24:00" 산정 기준을 화면 라벨에도 반영 — 실제
+  bulkReturnTime 값(화면 임시 기본값 13:00, 요금계산에는 애초에 미반영됨)을 노출하는 대신
+  "24:00"을 항상 고정 표시. 방문 등 시간선택이 있는 방식은 영향 없음(bulkReturnTime 그대로).
+  ✅ 브라우저 실측(9일→10일 배송) — "반납 방법" 접힘요약이 "2026.09.10 / 24:00"으로 정상
+  표시, 총 대여기간·대여요금 등 기존 계산 무영향 확인. svelte-check 신규 에러 0건,
+  vitest 47/47 GREEN(로직 변경 없음, 순수 표시전용이라 회귀 없음).
+  ℹ️ DB 마이그레이션 없음(순수 클라이언트 표시) — Production 배포 대기 항목과 무관.
+
+[2026-09-03(후속8)] 🔴CRITICAL | 배송잠금 일수 계산 — "대여일 00:00~반납일 24:00"(양쪽 날짜
+  모두 포함) 방식으로 재정정(#439) |
+  수정: src/lib/utils/cartRentalFee.ts(calcRentalMinutes deliveryLocked 분기를
+  `Math.max(days,1)` → `(Math.max(days,0)+1)`로 변경 — 날짜차이가 아니라 수령일·반납일 모두
+  포함한 일수), src/__tests__/services/cartRentalFee.test.ts(EC-M6/M7 기대값 갱신, EC-14/15
+  기대값 갱신 + EC-15b 신규, 34→35 GREEN), 신규 마이그레이션
+  supabase/migrations/20260903170000_439_delivery_locked_fee_inclusive_days.sql
+  (compute_reservation_line_amount — 배송잠금 분기 v_days 계산식만 정정, #438 그대로 대체) |
+  plan_source: Stephen이 #438 검증 스크린샷 직후 "대여일 00:00 ~ 반납일 24:00, 만약 2일이면
+  대여일은 '2일' / 대여요금 '2일' 표시" — 수령일 9일·반납일 10일(날짜차이 1) 캘린더 선택
+  스크린샷과 함께 구체 기준 제시 |
+  ✅ #438(직전 후속6/7)은 배송잠금 일수를 GREATEST(날짜차이,1)로 계산해 "9일→10일"(날짜차이 1)을
+  "1일"로 냈다 — 그러나 배송은 시간선택이 없어 "수령일에 도착~반납일에 발송"까지 두 날짜
+  모두 고객이 점유하는 날로 봐야 하므로 "2일"이 맞다(날짜차이+1). 시간 기준 12h 블록 산식
+  (#435, 방문 등 시간선택 있는 방식 전용)과는 애초에 다른 산정 기준임을 명확히 함.
+  ✅ Stage(ezyvffjvuwmtuhpxdjrw) 적용 완료 + throwaway 검증(수령일 09-09·반납일 09-10,
+  daily=30000) → rental_fee=60000(=2×30000) 정확히 일치. 브라우저 실측(동일 9→10 시나리오) →
+  "총 대여기간=2일"/"대여요금=50,000원"(=2×25,000) 확인. vitest 47/47 GREEN, svelte-check
+  신규 에러 0건.
+  ⛔ Production(vnbpmvxruyciuuaermyh) — #437·#439(#438은 #439로 완전히 대체돼 Production에는
+  적용할 필요 없음) 여전히 미적용, #436(버그 버전) 그대로 live. Stephen 승인 대기 중.
+
+[2026-09-03(후속7)] 🔴CRITICAL | #438 클라이언트측 배송잠금 판정 오류 — line.pickupMethod(서버
+  스냅샷) 대신 it.opts.rentalMethod(실시간 상태) 사용으로 수정 |
+  수정: src/routes/cart/+page.svelte(isDeliveryLockedLine 헬퍼 제거, itemRentalFee·
+  itemOptionsAmount의 it 파라미터 타입에 opts.rentalMethod 추가해 호출부에서 이미 갖고 있던
+  전체 it 객체 그대로 활용, otTotalMinutes도 it.opts.rentalMethod로 판정) |
+  plan_source: Stephen이 #438 적용 직후 실브라우저에서 재현 — "왕복 배송 조건인데
+  잘못계산하고 있어" (수령방식을 방금 배송으로 전환했는데도 "2일 12시간"/70,000원으로
+  여전히 12h 산식이 붙어 표시됨을 스크린샷으로 제시) |
+  ✅ 근본원인: #438 최초 구현이 CartLineGroup.pickupMethod(서버가 페이지 로드 시점에 내려준
+  DB 저장값)로 배송잠금을 판정했는데, "대여예약옵션" 패널에서 사용자가 막 전환한 수령방식은
+  아직 서버에 저장되지 않은 상태라 이 값에 반영되지 않는다 — 실시간 반영 대상은
+  itemsState[].opts.rentalMethod(체크아웃 이전 클라이언트 상태)여야 하며, 배송비 계산
+  (checkedShippingItems)이 이미 이 필드를 쓰고 있던 것과 동일 원칙을 놓쳤음.
+  ✅ Stage 코드 재검증(브라우저 실측): 방문→크레이지샷배송 전환 + 2박3일 선택 →
+  "총 대여기간=2일"(12시간 없음)/"대여요금=50,000원"(2×25,000) 정확히 확인(수정 전엔
+  "2일 12시간"/70,000원 오표시). 방문수령 대조군(동일 2박3일, 21:00→13:00 조합) →
+  기존 12h 블록 산식 그대로 "2일"/50,000원 유지(회귀 없음). svelte-check 신규 에러 0건,
+  cartRentalFee.test.ts+cartLineGrouping.test.ts 46/46 GREEN.
+  ℹ️ DB RPC(#438)는 rental_reservations.pickup_method(이미 저장된 최종값)를 읽으므로 이
+  "실시간 미리보기 vs 서버 스냅샷" 문제 자체가 없어 RPC 코드는 무변경 — 이번 정정은 클라이언트
+  미리보기 전용.
+  ⛔ Production(vnbpmvxruyciuuaermyh) — #437·#438 여전히 미적용(#436 버그 버전 live), 이번
+  클라이언트 정정은 로컬 코드에만 적용(로컬 파일이라 별도 배포 절차 없음, git commit은
+  Stephen 대기). Stephen 승인 대기 중.
+
+[2026-09-03(후속6)] 🔴CRITICAL | 배송(왕복 배송료) 잠금 예약 — 12시간 블록 산식 배제, 순수 N일
+  청구로 수정(#438) |
+  수정: src/lib/utils/cartRentalFee.ts(calcRentalMinutes/calcRentalFee에 deliveryLocked
+  파라미터 추가 — true면 시각 무시하고 GREATEST(일수,1)×1440분 반환), src/routes/cart/
+  +page.svelte(isDeliveryLockedLine 신설 — line.pickupMethod가 CMS rental_method_options.
+  is_bulk_delivery인지 판정, itemRentalFee·itemOptionsAmount·otTotalMinutes 3곳에 전달),
+  src/__tests__/services/cartRentalFee.test.ts(EC-M6~8, EC-14~15 신규, 34→46 GREEN),
+  신규 마이그레이션 supabase/migrations/20260903160000_438_delivery_locked_fee_excludes_
+  12h_block.sql(compute_reservation_line_amount — rental_method_options.is_bulk_delivery로
+  판정해 v_days=GREATEST(일수,1)/v_has_half=false 고정, 본상품·옵션 공유) |
+  plan_source: Stephen "수령옵션을 배송 선택함에 따라 반납일이 강제로 배송 설정된 경우...
+  대여일~반납일까지 N일로 요금계산을 고려할 것. -12h 계산식 배제." |
+  ✅ 근본원인: bulkHandleMethod가 배송(is_bulk_delivery) 선택 시 시간선택 UI 자체를 숨기면서
+  pickup_time/return_time을 화면 임시 기본값(12:00/13:00)으로 채워 넣는데(사용자가 실제로
+  고른 값 아님), #435의 12h 블록 산식이 이 임의의 1시간 차이를 그대로 반영해 "N일"이어야 할
+  요금에 불필요한 +12시간이 가산되고 있었음(예: 1박2일 배송 예약 → daily만이어야 하는데
+  daily+half로 과금).
+  ✅ 해결: deliveryLocked 플래그가 켜지면 시각을 완전히 무시하고 날짜차이(GREATEST(N,1))만
+  1440분 단위 정수배로 반환 — 12h 블록 산식(ceil)에 넣어도 항상 짝수 블록만 나와 자동으로
+  "N일"에서 멈춘다(별도 분기 없이 동일 공식 재사용). 옵션상품도 v_days/v_has_half를 그대로
+  공유해 동일하게 적용됨(#437과 정합).
+  ✅ Stage(ezyvffjvuwmtuhpxdjrw) 적용 완료 + 실물 검증(throwaway INSERT→RPC→DELETE):
+  crazydelivery 1박2일(pickup=12:00/return=13:00, daily=30000) → rental_fee=30000(daily만,
+  버그 상태였다면 50000) 확인, 동일 예약에 12h가 있는 옵션(SONY PXW-Z90 24h=30000/12h=25000)
+  달아도 options_fee=30000(1×24h가만, half 미가산) 확인. 대조군(visit 방식, 동일 28h) →
+  기존과 동일 daily+half=50000 유지(회귀 없음) 확인. svelte-check 신규 에러 0건.
+  ⛔ Production(vnbpmvxruyciuuaermyh) 미적용 — #437(옵션 12h 독립가 수정)과 함께 승인 대기 중
+  (아래 후속5 참고 — #437 Production 적용 시도가 auto mode classifier에 의해 차단돼 확인 요청함).
+
+[2026-09-03(후속5)] 🔴CRITICAL | 옵션 12h 요금 unit_price÷2 파생 오류 — 옵션 상품 자체의
+  독립 price_rules 조회로 수정(#437) |
+  수정: src/routes/cart/+page.server.ts(optionPrice12hMap 신설 — 옵션 상품별 price_rules
+  duration_type='12h' 조회, CartLineItemOption.unitPrice12h 추가), src/routes/cart/
+  +page.svelte(CartLineItemOption 타입에 unitPrice12h 추가, itemOptionsAmount가 derive 대신
+  o.unitPrice12h 사용 + null이면 flat 폴백, 12H 표시 2곳 수정), src/lib/utils/
+  cartLineGrouping.ts(CartLineItemOption에 unitPrice12h 추가, imageUrl과 동일한 방식으로
+  옵션상품별 고정값 병합 보존), src/__tests__/services/cartLineGrouping.test.ts(기존 옵션
+  fixture 4곳 갱신 + 신규 EC 1건), 신규 마이그레이션 supabase/migrations/
+  20260903150000_437_option_fee_independent_12h_price_fix.sql(compute_reservation_line_
+  amount — 옵션 12h가를 LATERAL JOIN으로 그 옵션 상품 자체의 price_rules에서 직접 조회,
+  없으면 flat 폴백) |
+  plan_source: Stephen이 직전(후속3, #436) 구현을 "우려했던 오류"로 직접 지적 — "하나의 상품
+  대여요금은 '12시간 or 1일' 두 개의 요금체계를 가지고 있어. 1일 요금이 12시간×2가 절대
+  아니야!! 1일 요금을 12시간 단위로 자동 계산하면 절대 안돼!" |
+  ✅ 근본원인 확인: #436이 옵션 12h가를 ROUND(unit_price/2)로 파생시켰음 — 실데이터 대조로
+  확정(SONY PXW-Z90 24h=30000/12h=25000, Sony FX6-12 24h=23000/12h=53000 — 어느 쪽도
+  2배 관계 아님). get_product_option_links RPC(#161)는 원래 price_24h만 select하고 있어
+  옵션의 독립 12h가가 어디에도 조회되지 않고 있었음 — 이번에 서버 로드 단계에 신규 조회 추가.
+  ✅ Stage(ezyvffjvuwmtuhpxdjrw) 적용 완료 + 실물 검증: SONY PXW-Z90(24h=30000/12h=25000)
+  옵션을 28h(3블록) 예약에 달면 options_fee=55000(=30000+25000, 파생 버그였다면 45000)
+  정확히 일치. 12h price_rule 없는 옵션(Manfrotto 055)은 flat 폴백(options_fee=unit_price×qty
+  그대로) 확인. svelte-check 신규 에러 0건, cartLineGrouping.test.ts 12/12 GREEN.
+  ⛔ Production(vnbpmvxruyciuuaermyh)에 적용 시도 — auto mode classifier가 차단
+  ("Permission for this action was denied by the Claude Code auto mode classifier")하여
+  Stephen에게 명시적 승인 요청함. 현재 Production은 여전히 #436(파생 버그 있는 버전)이 live
+  상태 — #437·#438 둘 다 승인 대기 중.
+
+[2026-09-03(후속4)] 🔴CRITICAL | Migration #435·#436 Production 적용 완료
+  (12시간 블록 대여요금 산식 — 본상품+옵션상품) |
+  수정: DB만 — 로컬 코드 변경 없음(직전 후속2·후속3에서 이미 완료·Stage 검증된 SQL을
+  그대로 재사용) |
+  plan_source: Stephen "Production에도 적용해" → Plan Mode로 계획 작성·승인 후 실행 |
+  ✅ 적용 전 Production 현재 정의를 pg_get_functiondef로 직접 조회해 #416 버전(=#435/#436
+  이전 상태) 그대로임을 확인 — Stage와 동일한 출발점, 드리프트 없음 확인 후 진행.
+  ✅ vnbpmvxruyciuuaermyh(Production)에 435→436 순서로 apply_migration 적용 완료 —
+  적용 직후 함수 정의에 v_has_half 존재(신규 로직)·v_remain_hours 부재(구 로직 제거 확인)
+  재조회로 검증.
+  ✅ Production 실물 검증(throwaway INSERT→RPC호출→기대값대조→DELETE, Stage와 동일 패턴,
+  실서비스 데이터 아님): Sony NP-F780(daily=20000/half=15000) 기준 28시간(3블록) 예약 +
+  옵션 unit_price=10000×qty=2 → rental_fee=35000(=20000+15000) ✓, options_fee=30000
+  (=2×(10000+5000)) ✓ — 예상값과 정확히 일치. 검증 직후 삭제, 잔존 카운트 0/0 재확인
+  완료(reservation id=106, 실사용자 user_profiles id를 FK 요건상 사용했으나 INSERT 트리거는
+  reservation_code_trigger뿐이라 부작용 없음을 사전 확인 후 진행, 즉시 삭제로 흔적 없음).
+  ⚠️ 참고: Production은 Stage와 달리 해당 상품에 deposit_amount(24h) 설정이 없어
+  deposit=0으로 나왔음 — 이번 변경과 무관한 상품 데이터 차이일 뿐, 로직 결함 아님.
+  git commit은 Stephen 직접 실행 대기(코드 자체는 변경 없음 — 이전 커밋 대상은 후속2·
+  후속3의 로컬 파일 diff).
+
+[2026-09-03(후속3)] 🔴CRITICAL | 옵션상품 요금도 본상품과 동일한 12시간 블록 산식 적용
+  (2026-08-18 "옵션은 기간별 요금 없음" 결정 번복) |
+  수정: src/routes/cart/+page.svelte(itemOptionsAmount가 line뿐 아니라 it(날짜/시각)도 받아
+  calcRentalFee 재사용 — unit_price="1일"기준가, round(unit_price/2)="12시간"기준가로 취급.
+  판매전용(구매) 라인의 옵션은 기존처럼 flat 유지. 옵션카드 Day/12H 표시 2곳(detail-pane·
+  ItemListCard)의 12H 값을 opt.unitPrice*qty에서 Math.round(opt.unitPrice/2)*qty로 수정,
+  2026-08-18 스테일 주석 갱신), 신규 마이그레이션
+  supabase/migrations/20260903140000_436_rental_option_fee_12h_block_rounding.sql
+  (compute_reservation_line_amount — v_days/v_has_half를 옵션 SUM에도 재사용하도록 재작성,
+  sale_only 분기는 flat 유지) |
+  plan_source: 직전 12시간 블록 재설계(후속2) 재확인 요청 중 Stephen이 5번째 규칙으로
+  "본상품 + 옵션 상품 동일 적용해 합산" 제시 → AskUserQuestion으로 2026-08-18 결정(옵션은
+  기간별 요금 없음, unitPrice*qty flat)과의 충돌 확인 요청 → Stephen "새 구조로 변경 — 옵션도
+  일수/12h 블록을 곱해 비례해야 함(8/18 결정 번복)" 확정 |
+  ✅ Stage(ezyvffjvuwmtuhpxdjrw) 마이그레이션 적용 완료 + execute_sql로 실제 rental_reservations/
+  reservation_options 행을 만들어 RPC 직접 호출 검증(테스트 후 즉시 삭제, 잔존 데이터 없음
+  확인): 28시간(3블록) 케이스 — 옵션 unit_price=10000×qty=2 → options_fee=30000(=2×
+  (10000+5000)) 정확히 일치. 12시간(1블록) 케이스 — 옵션 unit_price=10000×qty=1 →
+  options_fee=5000(=1×(0+5000)) 정확히 일치. svelte-check 신규 에러 0건, cartRentalFee.test.ts
+  28/28 GREEN(무관, 회귀 없음 재확인).
+  ⛔ Production(vnbpmvxruyciuuaermyh) 미적용 — 결제금액 산식 변경(CRITICAL)이라 별도 승인 필요.
+  ⚠️ 클라이언트 측 옵션+본상품 결합 실화면(장바구니에 옵션이 담긴 카드) E2E 스크린샷 검증은
+  현재 세션의 테스트 카트에 옵션 항목이 없어 생략 — 서버 RPC 직접검증 + 이미 검증된
+  calcRentalFee 재사용 + svelte-check로 대체 확인.
+
+[2026-09-03(후속2)] 🔴CRITICAL | "총 대여기간" 표시·대여요금 산식 — 12시간 블록 올림 방식 재설계 |
+  수정: src/lib/utils/cartRentalFee.ts(calcRentalFee 전면 재작성 + calcRentalMinutes·
+  calcRentalPeriodParts 신설, calcRentalDays는 레거시로 유지), src/routes/cart/+page.svelte
+  (otTotalDays→otTotalMinutes/otRentalPeriodParts 교체, pricingReady 게이팅 갱신, "총
+  대여기간" 템플릿을 {#each}로 다중 period-val 렌더링, checkedDiscountItems는 무관 소비처라
+  calcRentalDays 그대로 유지), src/__tests__/services/cartRentalFee.test.ts(EC-11 기대값
+  변경 + EC-M/EC-P 신규 스위트 추가, 28/28 GREEN), 신규 마이그레이션
+  supabase/migrations/20260903130000_435_rental_fee_12h_block_rounding.sql
+  (compute_reservation_line_amount CREATE OR REPLACE) |
+  plan_source: Stephen "총 대여기간 값 출처를 확인해" + 3단계 표시규칙(12시간 이내="12시간"/
+  초과="1일"/28시간 이상="1일 12시간") 제시 → AskUserQuestion으로 "28시간"과 자연스러운
+  36시간(24+12) 경계값 불일치 확인 요청 → Stephen "24h 초과 경우 24+12h 금액으로 연산" 확정
+  (=24시간을 조금이라도 초과하면 즉시 +12시간 요금 가산, 종전엔 잔여시간이 hour 단위로
+  12시간 이상이어야만 가산했음) → "제시한 규칙이 반영되어 금액이 연산되면 정합" 재확인 |
+  ✅ 근본원인: "총 대여기간" 표시(otTotalDays)는 calcRentalDays()로 달력일(day) 차이만
+  계산해 항상 "N일" 고정 단위로만 표시 — 시각(수령/반납 시간)을 전혀 반영하지 않아 당일
+  3시간 대여도 "1일"로 표시됨. 반면 실제 결제금액(otSubtotal→calcRentalFee)은 이미 12h/24h
+  요율 구조를 갖고 있었으나, 다일 대여 잔여시간 가산 기준이 "hour 단위 ≥12"라 24시간을
+  살짝만 넘긴 경우(예: 33시간) 가산 없이 daily만 부과되던 것이 실제 요구사항과 어긋남.
+  ✅ 해결: 총 대여시간(분)을 720분(12시간) 블록으로 올림(Math.ceil) 처리해 블록2개=1일,
+  홀수블록=12시간 가산으로 통일한 단일 산식(calcRentalFee/calcRentalPeriodParts가 동일
+  경계 공유) — "총 대여기간" 라벨과 "대여요금" 금액이 항상 같은 근거로 계산됨.
+  ✅ 서버 정본(compute_reservation_line_amount, create_checkout_order·calculate_cart_total이
+  공유 호출)도 동일 산식으로 CREATE OR REPLACE — 클라이언트 미리보기와 실제 결제금액 불일치
+  방지(이 파일 자체 주석이 강조하는 "미리보기=실제 결제금액 항상 일치" 원칙 준수).
+  ✅ Stage(ezyvffjvuwmtuhpxdjrw) 마이그레이션 적용 완료 + execute_sql로 블록/일수/half여부
+  9개 경계값 직접 대조 검증(180/720/721/1200/1440/1441/1680/2160/2161분) — 전부 클라이언트
+  계산과 일치. 브라우저 실측: 당일 09:00→12:00(3h) → "12시간"+20,000원(half가), 1박2일
+  09:00→13:00(28h) → "1일 12시간"+45,000원(daily+half) 확인.
+  ⛔ Production(vnbpmvxruyciuuaermyh) 미적용 — 결제금액 산식 변경(CRITICAL)이라 Stephen 별도
+  승인 후 적용 필요. svelte-check 신규 에러 0건(vite.config.ts 기존 무관 에러 1건만 존재).
+
+[2026-09-03] 🟢ROUTINE | 수령일·시간 pill 모바일 좁은폭에서 잘려보이던 결함 수정
+  (flex 자동 최소크기 충돌) |
+  수정: src/routes/cart/+page.svelte(.datetime-btn·.datetime-btn-left에 min-width:0 추가,
+  .datetime-btn-left svg에 flex-shrink:0 추가, .datetime-btn-label에 overflow:hidden+
+  text-overflow:ellipsis+min-width:0 추가) |
+  plan_source: Stephen이 "대여 방법" 접힘요약(datetime-wrap acc-collapsed-summary) 선택 →
+  "모바일 반응형 시 시간 쪽 bg 영역 바 가로폭이 줄어들며 깨지는 증상 원인 분석해" → 원인
+  보고 후 "이거 어떻게 해서든 고쳐. 단순 레이아웃 문제잖아" |
+  ✅ 완료 — 원인: `.datetime-btn{flex:1}`은 있지만 `min-width:auto`(기본값)라 각 버튼의
+  실제 최소폭이 줄바꿈 없는 라벨 텍스트 폭으로 고정됨(flex-shrink가 그 밑으로 못 줄임).
+  날짜 라벨("2026.09.10")이 시간 라벨("00:00")보다 훨씬 길어 두 버튼의 최소폭 합계
+  (286.5px)가 이 위치의 실제 컨테이너 폭(251px, "대여 방법"/"반납 방법" 서브아코디언은
+  .bulk-body 패딩이 한 겹 더 있어 특히 좁음)을 초과 → `.datetime-btns`의
+  `overflow:hidden`이 뒤쪽(시간) 버튼 꼬리를 그대로 잘라 배경 바가 깨져 보였음. 실브라우저
+  실측으로 수정 전(날짜165.7px vs 시간120.8px, 합계286.5>251 초과분 클리핑) → 수정 후
+  (양쪽 정확히 125.5px씩 균등분배, 초과 없음, 필요한 라벨만 "202…"처럼 말줄임)까지 직접
+  확인. svelte-check 신규 에러/경고 0건.
+  ⚠️ 별도 발견(이번 수정과 무관, 미조치): RentalOptionsEditor() 스니펫이 모바일
+  .bulk-panel과 PC 전용 .detail-pane 두 곳에 동일 상태를 공유하며 DOM에 중복 렌더링되고
+  있음(원인 분석 조사 중 우연히 발견) — 이번 버그의 원인은 아니었으나 향후 유사 조사 시
+  `document.querySelector`가 의도와 다른(숨겨진 PC) 사본을 잡을 수 있으니 항상
+  `.bulk-panel` 스코프로 좁혀 조회할 것.
+
 [2026-09-03(후속)] 🔴CRITICAL | 슈퍼마스터 계정 Production 직접생성 + 비밀번호 자가변경 UI
   AccountDetailPanel 재배치 |
   수정: src/routes/cms/+layout.svelte(상단바 링크 제거), src/routes/cms/login/
