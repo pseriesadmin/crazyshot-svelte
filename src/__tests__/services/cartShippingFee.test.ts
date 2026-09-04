@@ -15,7 +15,7 @@
  */
 
 import { describe, it, expect } from 'vitest'
-import { calcShippingFee, calcShippingDiscountRate, isFreeDeliveryCouponBlocked, type DeliveryFeeDiscountTier, type DiscountConditionItem } from '$lib/utils/cartShippingFee'
+import { calcShippingFee, calcShippingDiscountRate, isFreeDeliveryCouponBlocked, computeReturnVisibleTabs, type DeliveryFeeDiscountTier, type DiscountConditionItem, type DeliveryTypeMethod } from '$lib/utils/cartShippingFee'
 
 // ── 주의: DeliveryFeeDiscountTier.condition_types에 'rental_item'이 추가돼야 아래 테스트가 GREEN
 // (현재 미추가 상태 = RED)
@@ -376,5 +376,66 @@ describe('isFreeDeliveryCouponBlocked', () => {
   it('타입이 null/undefined → 차단 안 함(false, 방어적 처리)', () => {
     expect(isFreeDeliveryCouponBlocked(null, 1)).toBe(false)
     expect(isFreeDeliveryCouponBlocked(undefined, 1)).toBe(false)
+  })
+})
+
+// computeReturnVisibleTabs — "배송 반납 허용 지정" 판정을 is_bulk_delivery("요청 A" 전용)와
+// 완전히 분리된 is_delivery_type 단독 기준으로 수행(Stephen 확정, 2026-09-04, Migration
+// #440·#441·#443). 별도 마스터 on/off 토글 없음 — is_delivery_type=true인 방식이 있다는 사실
+// 자체가 곧 활성화 조건(Stephen UX 지적으로 마스터 토글 완전 제거, 같은 세션 후속).
+describe('computeReturnVisibleTabs', () => {
+  type Tab = { v: string; label: string }
+  const tabs: Tab[] = [
+    { v: 'visit', label: '방문대여' },
+    { v: 'quick', label: '퀵배송 대여' },
+    { v: 'crazydelivery', label: '크레이지샷배송 대여' },
+  ]
+  // is_bulk_delivery만 true(is_delivery_type은 false) — "요청 A" 전용으로만 쓰이는 방식,
+  // 반납선택제한 판정에서는 배송으로 취급되면 안 됨을 검증하기 위한 대조군
+  const methods: DeliveryTypeMethod[] = [
+    { method_key: 'visit', is_delivery_type: false },
+    { method_key: 'quick', is_delivery_type: false },
+    { method_key: 'crazydelivery', is_delivery_type: true },
+  ]
+
+  it('아무 방식도 is_delivery_type=true가 아니면 수령방식과 무관하게 항상 전체 목록 반환(자연 no-op)', () => {
+    const noneMarked: DeliveryTypeMethod[] = [
+      { method_key: 'visit', is_delivery_type: false },
+      { method_key: 'quick', is_delivery_type: false },
+      { method_key: 'crazydelivery', is_delivery_type: false },
+    ]
+    expect(computeReturnVisibleTabs(tabs, noneMarked, 'visit')).toEqual(tabs)
+    expect(computeReturnVisibleTabs(tabs, noneMarked, 'quick')).toEqual(tabs)
+  })
+
+  it('수령=방문(배송 아님) → 배송(is_delivery_type=true)으로 지정된 방식만 제외', () => {
+    const result = computeReturnVisibleTabs(tabs, methods, 'visit')
+    expect(result.map((t) => t.v)).toEqual(['visit', 'quick'])
+  })
+
+  it('수령=퀵서비스(배송 아님) → 동일하게 배송 방식 제외 (Stephen 신고 시나리오 2 — 방문 아닌 다른 비배송 방식도 커버)', () => {
+    const result = computeReturnVisibleTabs(tabs, methods, 'quick')
+    expect(result.map((t) => t.v)).toEqual(['visit', 'quick'])
+  })
+
+  it('수령=배송(crazydelivery) → 요청 A가 반납을 이미 잠그므로 전체 목록 그대로 반환', () => {
+    const result = computeReturnVisibleTabs(tabs, methods, 'crazydelivery')
+    expect(result).toEqual(tabs)
+  })
+
+  it('is_bulk_delivery만 true인 방식(is_delivery_type=false)은 배송으로 취급되지 않는다 — is_bulk_delivery와 완전히 무관한 판정임을 증명', () => {
+    // "요청 A" 전용으로 등록된 방식이 있어도(예: 실무에서 다른 방식에 is_bulk_delivery=true가
+    // 설정돼 있는 상황을 가정), is_delivery_type이 false면 반납 탭에서 제외되지 않아야 한다.
+    const methodsWithSeparateBulk: DeliveryTypeMethod[] = [
+      { method_key: 'visit', is_delivery_type: false },
+      { method_key: 'quick', is_delivery_type: false },
+      { method_key: 'crazydelivery', is_delivery_type: false }, // is_bulk_delivery=true였어도 무관
+    ]
+    const result = computeReturnVisibleTabs(tabs, methodsWithSeparateBulk, 'visit')
+    expect(result).toEqual(tabs) // 배송으로 판정된 방식이 없으므로 아무것도 제외 안 됨
+  })
+
+  it('빈 methods 배열 → 아무 방식도 배송으로 판정 안 되어 항상 전체 목록', () => {
+    expect(computeReturnVisibleTabs(tabs, [], 'visit')).toEqual(tabs)
   })
 })

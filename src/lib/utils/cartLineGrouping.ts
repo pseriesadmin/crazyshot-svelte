@@ -17,6 +17,7 @@ export interface CartLineItemOption {
   name: string
   qty: number
   unitPrice: number
+  unitPrice12h: number | null
   imageUrl: string | null
 }
 
@@ -78,13 +79,18 @@ function toOptionInput(o: CartLineItemOption): ReservationOptionInput {
 
 function fromOptionInput(
   o: ReservationOptionInput,
-  imageUrlByProductId: Map<string, string | null>
+  imageUrlByProductId: Map<string, string | null>,
+  unitPrice12hByProductId: Map<string, number | null>
 ): CartLineItemOption {
   return {
     optionProductId: o.option_product_id,
     name: o.option_name,
     qty: o.qty,
     unitPrice: o.unit_price,
+    // 2026-09-03(Stephen 확정) — 옵션 12h 요금은 mergeReservationOptions(ReservationOptionInput)이
+    // 다루지 않는 표시·계산 전용 필드라 imageUrl과 동일한 패턴으로 별도 복원(옵션 상품 자체의
+    // price_rules에서 조회한 독립 12h 가격 — unit_price/2로 파생시키지 않음).
+    unitPrice12h: o.option_product_id ? (unitPrice12hByProductId.get(o.option_product_id) ?? null) : null,
     imageUrl: o.option_product_id ? (imageUrlByProductId.get(o.option_product_id) ?? null) : null,
   }
 }
@@ -115,12 +121,17 @@ export function groupCartLineItems(items: GroupableLineItem[]): CartLineGroup[] 
     const canonicalReservationId = reservationIds[0]
     const canonical = members.find((m) => m.reservationId === canonicalReservationId) as GroupableLineItem
 
-    // 옵션상품 imageUrl은 mergeReservationOptions가 다루지 않는 표시 전용 필드라 별도 복원
+    // 옵션상품 imageUrl·unitPrice12h는 mergeReservationOptions가 다루지 않는 표시·계산 전용
+    // 필드라 별도 복원(둘 다 option_product_id 1개당 고정값 — reservation마다 달라지지 않음)
     const imageUrlByProductId = new Map<string, string | null>()
+    const unitPrice12hByProductId = new Map<string, number | null>()
     for (const m of members) {
       for (const o of m.options) {
         if (o.optionProductId && !imageUrlByProductId.get(o.optionProductId)) {
           imageUrlByProductId.set(o.optionProductId, o.imageUrl)
+        }
+        if (o.optionProductId && unitPrice12hByProductId.get(o.optionProductId) == null) {
+          unitPrice12hByProductId.set(o.optionProductId, o.unitPrice12h)
         }
       }
     }
@@ -148,7 +159,7 @@ export function groupCartLineItems(items: GroupableLineItem[]): CartLineGroup[] 
       returnTime: canonical.returnTime,
       durationType: canonical.durationType,
       status: canonical.status,
-      options: mergedOptions.map((o) => fromOptionInput(o, imageUrlByProductId)),
+      options: mergedOptions.map((o) => fromOptionInput(o, imageUrlByProductId, unitPrice12hByProductId)),
     }
   })
 }

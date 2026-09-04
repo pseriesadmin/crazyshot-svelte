@@ -19,7 +19,7 @@ export const load: PageServerLoad = async ({ locals }) => {
   // 배송 방식 옵션 — 세션 불필요, 모든 사용자에게 제공
   const { data: deliveryOptionsData } = await supabase
     .from('rental_method_options')
-    .select('id, method_key, name, deadline_time, display_order, is_bulk_delivery, is_courier_dependent')
+    .select('id, method_key, name, deadline_time, display_order, is_bulk_delivery, is_courier_dependent, is_delivery_type')
     .eq('is_active', true)
     .is('deleted_at', null)
     .order('display_order', { ascending: true })
@@ -66,7 +66,7 @@ export const load: PageServerLoad = async ({ locals }) => {
   // 감사(RSC-C3)로 발견 — rental_method_options의 fee_amount/is_free_for_top_grade select·
   // 사용을 완전히 제거하고 이 테이블(rental_shipping_settings)만으로 배송비를 계산.
   const { data: shippingSettingsData } = await untypedFrom(supabase, 'rental_shipping_settings')
-    .select('enable_round_trip, round_trip_fee, enable_delivery, delivery_fee, enable_return, return_fee, shipping_guide, restrict_return_delivery')
+    .select('enable_round_trip, round_trip_fee, enable_delivery, delivery_fee, enable_return, return_fee, shipping_guide')
     .limit(1)
     .single()
   const shippingSettings = shippingSettingsData as {
@@ -77,7 +77,6 @@ export const load: PageServerLoad = async ({ locals }) => {
     enable_return: boolean
     return_fee: number | null
     shipping_guide: string | null
-    restrict_return_delivery: boolean
   } | null
 
   // 배송료 우대설정(/cms/set/rental "배송료 우대설정") — 조건 만족 시 배송비 할인 조합(최대
@@ -305,6 +304,22 @@ export const load: PageServerLoad = async ({ locals }) => {
       }
     }
 
+    // 옵션상품 자체의 12h 요금(2026-09-03, Stephen 확정 — unit_price/2로 파생시키면 안 됨:
+    // 옵션도 본상품처럼 12h/24h 요금이 서로 독립적으로 설정돼 있을 수 있음, 예) 24h=30000인데
+    // 12h=25000처럼 절반이 아닌 경우가 실데이터에도 존재). 해당 옵션 상품에 12h price_rule이
+    // 없으면 null — 호출부(itemOptionsAmount)가 flat(unit_price×qty)으로 폴백.
+    const optionPrice12hMap = new Map<string, number>()
+    if (optionProductIds.length > 0) {
+      const { data: optionPriceRules } = await supabase
+        .from('price_rules')
+        .select('product_id, price')
+        .in('product_id', optionProductIds)
+        .eq('duration_type', '12h')
+      for (const p of (optionPriceRules ?? []) as Array<{ product_id: string; price: number }>) {
+        optionPrice12hMap.set(p.product_id, p.price)
+      }
+    }
+
     const optionsByReservation: Record<string, CartLineItemOption[]> = {}
     for (const row of optionRows) {
       const key = String(row.reservation_id)
@@ -314,6 +329,7 @@ export const load: PageServerLoad = async ({ locals }) => {
         name:            row.option_name,
         qty:             row.qty,
         unitPrice:       row.unit_price,
+        unitPrice12h:    row.option_product_id ? optionPrice12hMap.get(row.option_product_id) ?? null : null,
         imageUrl:        row.option_product_id ? optionImageMap.get(row.option_product_id) ?? null : null,
       })
       optionsByReservation[key] = list
@@ -531,6 +547,7 @@ interface CartLineItemOption {
   name:            string
   qty:             number
   unitPrice:       number
+  unitPrice12h:    number | null
   imageUrl:        string | null
 }
 
@@ -623,4 +640,8 @@ interface DeliveryOptionRow {
   // 휴무일 캘린더 제한 대상(택배사 의존 여부) — is_bulk_delivery("요청 A" 전용)와는 별개
   // 목적(감사 RSC-B3, Migration #386). courierClosedMap 적용 방식 판정에만 쓰인다.
   is_courier_dependent: boolean
+  // "배송 반납 허용 지정" — ON이면 수령이 배송이 아닐 때 반납 콤보에서 제외됨(Migration #440·#441·#443,
+  // 2026-09-04) — is_bulk_delivery("요청 A" 전용)와 완전히 분리된 별개 플래그. 별도 마스터
+  // 토글 없음(is_delivery_type=true 존재 자체가 활성화 조건).
+  is_delivery_type: boolean
 }

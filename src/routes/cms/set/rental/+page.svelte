@@ -87,8 +87,6 @@
   let enableReturn     = $state(data.shippingSettings?.enable_return       ?? false)
   let returnFee        = $state<number | ''>(data.shippingSettings?.return_fee       ?? '')
   let shippingGuide    = $state(data.shippingSettings?.shipping_guide      ?? '')
-  let restrictReturnDelivery = $state(data.shippingSettings?.restrict_return_delivery ?? false)
-  let restrictReturnDeliveryLoading = $state(false)
   let shippingLoading  = $state(false)
   let shippingFormEl = $state<HTMLFormElement | undefined>(undefined)
   let shippingGuideCount = $derived(shippingGuide.length)
@@ -116,7 +114,6 @@
     enableReturn    = data.shippingSettings?.enable_return       ?? false
     returnFee       = data.shippingSettings?.return_fee          ?? ''
     shippingGuide   = data.shippingSettings?.shipping_guide      ?? ''
-    restrictReturnDelivery = data.shippingSettings?.restrict_return_delivery ?? false
   })
 
   // ─── 택배 휴무일 캘린더 제어 ───
@@ -549,7 +546,7 @@
                 }}
               >
                 <input type="hidden" name="id" value={m.id} />
-                <button type="submit" class="s-chip" class:s-chip--on={m.is_bulk_delivery}>
+                <button type="submit" class="s-chip" class:s-chip--on={m.is_bulk_delivery} disabled={!m.is_bulk_delivery && m.is_delivery_type}>
                   {m.name}
                 </button>
               </form>
@@ -589,29 +586,44 @@
           <p class="empty-hint">등록된 대여 방식이 없습니다. "대여 방식 옵션" 섹션에서 먼저 등록해주세요.</p>
         {/if}
 
+        <!-- "배송 반납 허용 지정" — 위 "대여옵션(수령/반납) 일괄적용"(is_bulk_delivery, "요청 A"
+             전용)과 완전히 분리된 플래그(Migration #440). 같은 방식을 두 곳에 동시에 켤 수
+             없다(RPC 상호배타 가드) — 일괄적용이 켜진 방식은 반납이 이미 그 값으로 강제고정돼
+             이 판정 대상으로 삼는 것 자체가 의미 없기 때문(Stephen 지적).
+
+             ⛔ 2026-09-04 라벨 정정(Stephen 지적) — "반납 배송선택 제한 대상"이라는 원래 라벨이
+             ON/OFF 방향을 헷갈리게 만들어 실제로 반대로 설정하는 오조작이 발생함. "배송 방식
+             지정"으로 라벨을 단순화하고, ON 시 정확히 무슨 일이 일어나는지(반납 콤보에서 제외)
+             를 캡션으로 명시해 방향성 오독을 방지한다.
+
+             ⛔ 2026-09-04(같은 세션 후속) Stephen UX 지적으로 별도 마스터 on/off 토글("대여옵션
+             제한 → 반납 배송선택 제한")을 완전히 제거(Migration #443, 컬럼+RPC 모두 DROP) —
+             칩과 별개로 켜야 하는 스위치가 하나 더 있는 구조 자체가 혼란스럽다는 지적. 이제
+             이 칩에서 ON으로 지정한 방식이 있다는 사실 자체가 곧 활성화 조건이다. -->
         <div class="sf-row">
-          <span class="sf-label">대여옵션 제한</span>
+          <span class="sf-label">배송 반납 허용 지정</span>
           <div class="shipping-chips">
-            <form
-              method="POST"
-              action="?/toggleReturnDeliveryRestriction"
-              class="chip-form"
-              use:enhance={() => {
-                restrictReturnDeliveryLoading = true
-                return async ({ result, update }) => {
-                  restrictReturnDeliveryLoading = false
-                  if (result.type === 'success') {
-                    await update()
-                  } else if (result.type === 'failure') {
-                    csToast.error((result.data as { error?: string })?.error ?? '변경에 실패했습니다.')
+            {#each methods as m (m.id)}
+              <form
+                method="POST"
+                action="?/toggleDeliveryType"
+                class="chip-form"
+                use:enhance={() => {
+                  return async ({ result, update }) => {
+                    if (result.type === 'success') {
+                      await update()
+                    } else if (result.type === 'failure') {
+                      csToast.error((result.data as { error?: string })?.error ?? '변경에 실패했습니다.')
+                    }
                   }
-                }
-              }}
-            >
-              <button type="submit" class="s-chip" class:s-chip--on={restrictReturnDelivery} disabled={restrictReturnDeliveryLoading}>
-                반납 배송선택 제한
-              </button>
-            </form>
+                }}
+              >
+                <input type="hidden" name="id" value={m.id} />
+                <button type="submit" class="s-chip" class:s-chip--on={m.is_delivery_type} disabled={!m.is_delivery_type && m.is_bulk_delivery}>
+                  {m.name}
+                </button>
+              </form>
+            {/each}
           </div>
         </div>
       </div>
@@ -1829,7 +1841,6 @@
   .chip-form {
     display: inline-flex;
   }
-
   /* cms-uiux.md §7-12-B "콤보버튼 UI(옵션 선택/토글) — mk-chip 표준" 값 그대로 적용
      (이 페이지의 .mk-chip과 완전히 동일한 스타일 토큰 — 2026-08-24 Stephen 지시로 통일) */
   .s-chip {
