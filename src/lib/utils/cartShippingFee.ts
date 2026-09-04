@@ -138,3 +138,34 @@ export function isFreeDeliveryCouponBlocked(
 ): boolean {
   return couponType === 'free_delivery' && shippingDiscountRate > 0
 }
+
+export interface DeliveryTypeMethod {
+  method_key: string
+  is_delivery_type: boolean
+}
+
+/**
+ * "배송 반납 허용 지정"(rental_method_options.is_delivery_type) — 수령이 배송이 아닐 때만, ON으로
+ * 지정된 방식을 반납 탭 목록에서 제외한다. (Stephen 확정, 2026-09-04 — Migration #440·#441·#443)
+ *
+ * ⛔ 별도 마스터 on/off 토글은 없다 — 원래 있던 rental_shipping_settings.restrict_return_delivery
+ * 전역 토글은 UX 혼란(칩과 별개로 켜야 하는 스위치가 하나 더 있는 구조)을 이유로 완전히
+ * 제거됨(Stephen 지시: "그냥 제거해"). is_delivery_type=true로 지정된 방식이 있으면 그 자체가
+ * 곧 활성화 조건 — 아무 방식도 지정 안 하면 자연히 아무것도 제외되지 않는 no-op이 된다.
+ *
+ * is_bulk_delivery("요청 A" 전용, 완전히 별개 플래그)와는 무관하게 독립 판정한다 — 같은
+ * 방식이 두 플래그를 동시에 가질 수 없다는 전제(RPC 상호배타 가드)는 이 함수 밖(DB 레벨)에서
+ * 보장된다. 서버 최종방어선(set_reservation_shipment_method, Migration #443)도 동일 기준으로
+ * 통일됨.
+ */
+export function computeReturnVisibleTabs<T extends { v: string }>(
+  allTabs: T[],
+  deliveryTypeMethods: DeliveryTypeMethod[],
+  pickupMethodKey: string,
+): T[] {
+  const isDeliveryType = (k: string) => deliveryTypeMethods.some((m) => m.method_key === k && m.is_delivery_type)
+  if (!isDeliveryType(pickupMethodKey)) {
+    return allTabs.filter((tab) => !isDeliveryType(tab.v))
+  }
+  return allTabs
+}

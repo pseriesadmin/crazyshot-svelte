@@ -135,19 +135,19 @@ describe('groupCartLineItems — 옵션 합산(그룹 내 전체 멤버 대상)'
     const items = [
       makeItem({
         reservationId: '10',
-        options: [{ optionProductId: 'opt-1', name: '메모리카드', qty: 1, unitPrice: 5000, imageUrl: null }],
+        options: [{ optionProductId: 'opt-1', name: '메모리카드', qty: 1, unitPrice: 5000, unitPrice12h: null, imageUrl: null }],
       }),
       makeItem({
         reservationId: '20',
-        options: [{ optionProductId: 'opt-2', name: '삼각대', qty: 1, unitPrice: 3000, imageUrl: null }],
+        options: [{ optionProductId: 'opt-2', name: '삼각대', qty: 1, unitPrice: 3000, unitPrice12h: null, imageUrl: null }],
       }),
     ]
     const groups = groupCartLineItems(items)
 
     expect(groups).toHaveLength(1)
     expect(groups[0].options).toEqual([
-      { optionProductId: 'opt-1', name: '메모리카드', qty: 1, unitPrice: 5000, imageUrl: null },
-      { optionProductId: 'opt-2', name: '삼각대', qty: 1, unitPrice: 3000, imageUrl: null },
+      { optionProductId: 'opt-1', name: '메모리카드', qty: 1, unitPrice: 5000, unitPrice12h: null, imageUrl: null },
+      { optionProductId: 'opt-2', name: '삼각대', qty: 1, unitPrice: 3000, unitPrice12h: null, imageUrl: null },
     ])
   })
 
@@ -155,11 +155,11 @@ describe('groupCartLineItems — 옵션 합산(그룹 내 전체 멤버 대상)'
     const items = [
       makeItem({
         reservationId: '10',
-        options: [{ optionProductId: 'opt-1', name: '메모리카드', qty: 1, unitPrice: 5000, imageUrl: 'img.jpg' }],
+        options: [{ optionProductId: 'opt-1', name: '메모리카드', qty: 1, unitPrice: 5000, unitPrice12h: null, imageUrl: 'img.jpg' }],
       }),
       makeItem({
         reservationId: '20',
-        options: [{ optionProductId: 'opt-1', name: '메모리카드', qty: 2, unitPrice: 5000, imageUrl: null }],
+        options: [{ optionProductId: 'opt-1', name: '메모리카드', qty: 2, unitPrice: 5000, unitPrice12h: null, imageUrl: null }],
       }),
     ]
     const groups = groupCartLineItems(items)
@@ -168,6 +168,22 @@ describe('groupCartLineItems — 옵션 합산(그룹 내 전체 멤버 대상)'
     expect(groups[0].options[0].qty).toBe(3)
     // imageUrl은 두 번째(incoming)에 값이 없으면 첫 번째에서 확보한 값을 보존
     expect(groups[0].options[0].imageUrl).toBe('img.jpg')
+  })
+
+  it('2026-09-03: unitPrice12h(옵션 자체의 독립 12h가)도 imageUrl과 동일하게 — 첫 값이 null이면 이후 값으로 보완', () => {
+    const items = [
+      makeItem({
+        reservationId: '10',
+        options: [{ optionProductId: 'opt-1', name: '메모리카드', qty: 1, unitPrice: 5000, unitPrice12h: null, imageUrl: null }],
+      }),
+      makeItem({
+        reservationId: '20',
+        options: [{ optionProductId: 'opt-1', name: '메모리카드', qty: 1, unitPrice: 5000, unitPrice12h: 4000, imageUrl: null }],
+      }),
+    ]
+    const groups = groupCartLineItems(items)
+
+    expect(groups[0].options[0].unitPrice12h).toBe(4000)
   })
 })
 

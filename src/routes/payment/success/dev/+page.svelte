@@ -17,11 +17,6 @@
   <title>[DEV] 예약신청완료 미리보기 — 크레이지샷</title>
 </svelte:head>
 
-<!-- 개발 전용 배너 -->
-<div class="dev-banner" role="alert">
-  🛠 DEV 테스트 모드 — 실 결제·DB 연동 없음
-</div>
-
 <div class="page-root">
 
   <!-- GNB pill -->
@@ -189,20 +184,6 @@
 </div>
 
 <style>
-  /* DEV 배너 */
-  .dev-banner {
-    position: fixed;
-    top: 0; left: 0; right: 0;
-    z-index: 9999;
-    background: #FF8C00;
-    color: #fff;
-    font-size: 12px;
-    font-weight: 700;
-    text-align: center;
-    padding: 6px 16px;
-    letter-spacing: -0.3px;
-  }
-
   .page-root {
     display: flex;
     flex-direction: column;

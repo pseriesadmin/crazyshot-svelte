@@ -9,8 +9,9 @@
   import { supabase } from '$lib/services/supabase';
   import { csToast } from '$lib/utils/toast';
   import { isLockerHour } from '$lib/utils/lockerTimeRange';
-  import { calcShippingFee, calcShippingDiscountRate, isFreeDeliveryCouponBlocked, type ShippingFeeItem, type DeliveryFeeDiscountTier, type DiscountConditionItem } from '$lib/utils/cartShippingFee';
-  import { calcRentalDays, calcRentalFee } from '$lib/utils/cartRentalFee';
+  import { calcShippingFee, calcShippingDiscountRate, isFreeDeliveryCouponBlocked, computeReturnVisibleTabs, type ShippingFeeItem, type DeliveryFeeDiscountTier, type DiscountConditionItem } from '$lib/utils/cartShippingFee';
+  import { calcRentalDays, calcRentalFee, calcRentalMinutes, calcRentalPeriodParts } from '$lib/utils/cartRentalFee';
+  import { toDeliveryMethod, isMethodSelectionValid } from '$lib/utils/cartMethodSelection';
   import {
     resolveParentProductId,
     clampToAvailableStock,
@@ -34,8 +35,10 @@
   type CartLineItemSeed = { pickupMethod: string | null; returnMethod: string | null; pickupTime: string | null; returnTime: string | null; durationType: string | null };
 
   interface CardOptions {
-    rentalMethod: DeliveryMethod;
-    returnMethod: DeliveryMethod;
+    // 2026-09-04: 최초진입 시 콤보바가 완전 미선택 상태로 보여야 하므로 null 허용
+    // (TASK.md "장바구니 수령/반납 방식 콤보바 최초진입 시 '방문' 오선택 표시 제거" 참고)
+    rentalMethod: DeliveryMethod | null;
+    returnMethod: DeliveryMethod | null;
     copyToReturn: boolean;
     couponWelcome: boolean;
     couponMembership: boolean;
@@ -57,42 +60,46 @@
   }
 
   function defaultOptions(): CardOptions {
-    // 2026-08-30(감사 RSC-B2): 기본값이 배송 계열('crazydelivery')이면 restrict_return_
-    // delivery ON 상태에서 사용자가 탭을 한 번도 클릭하지 않아도 이미 차단 대상인 값으로
-    // 시작해 체크아웃 마지막에야 실패가 드러나던 문제 — 배송 제한과 무관한 'visit'(방문)로
-    // 변경. methodSelectionValid 검증(아래)이 최종 방어선.
+    // 2026-08-30(감사 RSC-B2, 폐기됨): 원래 이 기본값을 'visit'(방문)으로 세팅했던 이유는
+    // "restrict_return_delivery ON 상태에서 사용자가 탭을 한 번도 클릭하지 않아도 이미
+    // 차단 대상인 값('crazydelivery')으로 시작해 체크아웃 마지막에야 결제 실패가 드러난다"는
+    // 전제였다. 2026-09-04 Stephen 재조사로 이 전제 자체가 틀렸음이 확인됨 — 실제 결제(mock/
+    // 실결제)는 장바구니 제출 시점이 아니라 훨씬 나중인 전자계약 서명 페이지에서만 발생하고,
+    // methodSelectionValid(아래)가 이미 수령/반납 방식 미선택 시 "예약신청완료" 버튼을
+    // 차단하는 독립적 안전장치로 존재한다(타입만 null 허용하면 그대로 미선택도 차단됨).
+    // → 'visit' 사전선택은 불필요한 방어코드였고, 최초진입 시 콤보바가 어느 탭도 선택되지
+    // 않은 완전 미선택 상태로 보여야 한다는 요구사항에 따라 null로 되돌린다.
     return {
-      rentalMethod: 'visit', returnMethod: 'visit',
+      rentalMethod: null, returnMethod: null,
       copyToReturn: false, couponWelcome: false, couponMembership: false
     };
   }
-
-  // 상품 상세에서 저장된 값 → 체크아웃 표시값 매핑 (알 수 없는 method_key는 기존 기본값으로 폴백)
-  const KNOWN_DELIVERY_METHODS: DeliveryMethod[] = ['crazydelivery', 'quick', 'locker', 'visit', 'epost', 'delivery'];
 
   // "배송" 그룹(요청 A/B 공통 판정 기준) — CMS "/cms/set/rental > 배송 설정 > 배송대여
   // 수령/반납 일괄 지정" 콤보에서 관리자가 직접 토글한 방식만 해당(2026-08-24부터 하드코딩
   // 대신 데이터 기반 판정 — sdDeliveryOpts는 이 파일 하단에서 선언되지만 이 함수는 렌더
   // 시점에만 호출되므로 참조 가능).
-  function isDeliveryLocked(m: DeliveryMethod): boolean {
+  // m이 null(미선택)이면 sdDeliveryOpts 어느 행과도 일치하지 않아 항상 false를 반환한다 —
+  // "아직 아무것도 선택하지 않았으면 잠금도 없다"는 의도된 동작(2026-09-04, null 허용 확장).
+  function isDeliveryLocked(m: DeliveryMethod | null): boolean {
     return sdDeliveryOpts.some(o => o.method_key === m && o.is_bulk_delivery);
   }
 
   // 휴무일 캘린더 제한(공휴일·일요일 날짜 선택 차단) 대상 판정 — is_bulk_delivery("요청 A"
   // 반납방식 강제고정 전용)와는 별개 목적의 독립 플래그(감사 RSC-B3, 2026-08-30 신설,
   // Migration #386). CMS "휴무일 제한 방식"에서 관리자가 방식별로 직접 토글한다.
-  function isCourierDependent(m: DeliveryMethod): boolean {
+  function isCourierDependent(m: DeliveryMethod | null): boolean {
     return sdDeliveryOpts.some(o => o.method_key === m && o.is_courier_dependent);
   }
+
 
   function addDays(iso: string, n: number): string {
     const d = new Date(iso);
     d.setDate(d.getDate() + n);
     return d.toISOString().slice(0, 10);
   }
-  function toDeliveryMethod(v: string | null, fallback: DeliveryMethod): DeliveryMethod {
-    return v && (KNOWN_DELIVERY_METHODS as string[]).includes(v) ? (v as DeliveryMethod) : fallback;
-  }
+  // toDeliveryMethod는 $lib/utils/cartMethodSelection에서 import(2026-09-04 — 순수함수 추출,
+  // null-fallback 허용). 이 페이지 로컬 정의는 제거됨(TDD GREEN 단계).
   function toDurationType(v: string | null): DurationType {
     return v === '12h' ? '12h' : '24h';
   }
@@ -374,6 +381,26 @@
   let bulkRentalForm  = $state<FormState>(defaultForm())
   let bulkReturnForm  = $state<FormState>(defaultForm())
 
+  // 2026-09-03(Stephen 확정) — 모바일 전용: 스크롤로 "Order Total" 섹션에 진입하면 "대여예약옵션"
+  // 아코디언을 자동으로 접는다(bulk-panel 자체가 이미 PC에서는 display:none이라 별도 PC 분기
+  // 불필요 — 이 인터랙션도 모바일 뷰포트에서만 관찰자를 붙인다). 접힌 상태에서는 이미 설정된
+  // 수령/반납 값을 압축 요약 바(.bulk-collapsed-bar)로 계속 보여준다(수동 접기와 동일 조건).
+  let orderTotalSectionEl = $state<HTMLElement | null>(null)
+  $effect(() => {
+    const el = orderTotalSectionEl
+    if (!el) return
+    const mql = window.matchMedia('(max-width: 640px)')
+    if (!mql.matches) return
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries[0]?.isIntersecting) bulkOpen = false
+      },
+      { rootMargin: '0px 0px -80% 0px' }
+    )
+    observer.observe(el)
+    return () => observer.disconnect()
+  })
+
   // 패널을 열 때 첫 번째(가장 위) 상품 카드의 현재 대여/반납 방식으로 시딩 — 항상 기본값
   // (크레이지배송)으로 빈 상태로 열리던 문제 수정. 이 대입 자체는 다른 카드에 되쓰지 않음
   // (실 반영은 아래 applyBulkToItems() 호출부에서만 발생 — 시딩과 반영을 분리)
@@ -450,12 +477,13 @@
   function bulkHandleMethod(v: DeliveryMethod) {
     // 배송(delivery/crazydelivery) 선택 시 반납방식 강제 고정(요청 A, Stephen 확정) —
     // copyToReturn 사용자 선택과 무관하게 항상 동일 방식으로 동기화
+    const wasLocked = isDeliveryLocked(bulkOpts.rentalMethod)
     const forceCopy = isDeliveryLocked(v)
     bulkOpts = {
       ...bulkOpts,
       rentalMethod: v,
       ...(forceCopy || bulkOpts.copyToReturn ? { returnMethod: v } : {}),
-      ...(forceCopy ? { copyToReturn: true } : {}),
+      ...(forceCopy ? { copyToReturn: true } : wasLocked ? { copyToReturn: false } : {}),
     }
     // 배송(is_bulk_delivery) 방식은 시간선택 버튼 자체가 화면에서 사라지므로(요청 A,
     // RentalForm snippet의 `{#if !locked}`), 사용자가 시간을 입력할 방법이 없어 datesSet이
@@ -572,19 +600,12 @@
     return `${y}.${m}.${d}`;
   }
 
-  // 대여일시 통합 요약(요일 포함) — 날짜+시간이 모두 선택되면 한눈에 재확인할 수 있도록 노출
-  const WEEKDAY_KR = ['일', '월', '화', '수', '목', '금', '토'];
-  function weekdayKr(iso: string): string {
-    if (!iso) return '';
-    return WEEKDAY_KR[new Date(`${iso}T00:00:00`).getDay()];
-  }
-
   // ── 서버 데이터 추출 (PageData는 +page.ts 기준이므로 server 필드는 캐스트 필요)
   // datesSet 등 canProceed 조건이 라인아이템 목록을 참조하므로 Footer 섹션보다 앞에 선언
   type ProductRow = { id: string; name: string; category: string; brand: string | null; slug: string; image_urls: string[]; is_active: boolean; shipping_round_trip?: boolean | null; shipping_delivery?: boolean | null; shipping_return?: boolean | null; sale_only?: boolean | null; sale_price?: number | null }
   type UserCouponExt = { id: string; coupon_id: string; coupons: { id: string; code: string; type: string; discount_type: string; discount_value: number; description: string | null; valid_until: string } | null }
   type PriceRuleExt = { price12h: number | null; price24h: number | null; deposit: number | null }
-  type CartLineItemOption = { optionProductId: string | null; name: string; qty: number; unitPrice: number; imageUrl: string | null }
+  type CartLineItemOption = { optionProductId: string | null; name: string; qty: number; unitPrice: number; unitPrice12h: number | null; imageUrl: string | null }
   type CartLineItem = { reservationId: string; productId: string | null; product: ProductRow | null; price12h: number | null; price24h: number | null; deposit: number | null; startDate: string; endDate: string; pickupMethod: string | null; returnMethod: string | null; pickupTime: string | null; returnTime: string | null; durationType: string | null; options: CartLineItemOption[]; status: string }
   // 2026-08-28: 동일 부모상품 중복담기 병합 — 서버(cartLineGrouping.ts groupCartLineItems)가
   // 예약행(재고단위) 여러 건을 하나의 그룹으로 묶어 내려준다. qty=reservationIds.length,
@@ -754,9 +775,18 @@
     locker:        '무인보관함',   visit: '직접방문', epost: '택배',
     delivery:      '택배',
   };
-  function methodLabel(m: DeliveryMethod): string {
+  // 2026-09-04: 최초진입 시 방식이 완전 미선택(null)일 수 있음 — "날짜 미선택"(period-unset)과
+  // 동일한 문구 관례로 "미선택" 표시.
+  function methodLabel(m: DeliveryMethod | null): string {
+    if (!m) return '미선택'
     const cmsOpt = sdDeliveryOpts.find(o => o.method_key === m)
     return cmsOpt?.name ?? DELIVERY_LABELS[m] ?? m;
+  }
+  // activeItems(예약신청 완료 화면 파라미터) 전용 — DELIVERY_LABELS 폴백 그대로 유지하되
+  // null(미선택)만 방어. readyToSubmit 게이트를 통과한 뒤에만 도달하는 경로라 실제로는
+  // 항상 non-null이지만, TypeScript 인덱스 시그니처 요구를 non-null assertion 없이 충족한다.
+  function deliveryLabelOrRaw(m: DeliveryMethod | null): string {
+    return m ? (DELIVERY_LABELS[m] ?? m) : '';
   }
 
   // 단가: 실제 요금정책(price_rules) 기준 (없으면 기본 단가 폴백)
@@ -783,9 +813,22 @@
   // 2026-09-01: 위 itemCardRate()의 단일요율 근사값(다일 대여 시 일수 미반영, 당일대여 12h/24h
   // 조합 미반영)을 대체 — "총 대여기간" 표시·실제 결제금액과 일치하는 미리보기 제공.
   // 판매전용(sale_only) 상품은 대여일수와 무관하게 판매금액을 그대로 반환한다(Migration #416).
+  // 2026-09-03(Stephen 확정) — 수령방식이 배송(CMS is_bulk_delivery)으로 잠기면 반납방식도
+  // 강제로 배송 동일방식이 되어(요청 A) "왕복 배송료" 조건이 성립하는데, 이 경우
+  // 시간선택 UI 자체가 사라져 pickup_time/return_time이 실제 선택값이 아니라 화면 임시
+  // 기본값(12:00/13:00)일 뿐이다 — 12시간 블록 산식(calcRentalFee)에 그 임의의 1시간
+  // 차이를 넣으면 "N일"이어야 할 요금이 "N일+12시간"으로 잘못 가산된다. calcRentalMinutes의
+  // deliveryLocked 옵션으로 시각을 무시하고 순수 N일만 청구하도록 우회한다.
+  // ⚠️ 2026-09-03(같은 날 정정, Stephen 지적 — CRITICAL) — 최초 구현은 line.pickupMethod(서버가
+  // 페이지 로드 시점에 내려준 DB 저장값, CartLineGroup)로 판정했으나, 사용자가 "대여예약옵션"
+  // 패널에서 수령방식을 바꾸는 즉시(체크아웃 제출 전) 반영돼야 할 값은 그 방식이 아니라
+  // it.opts.rentalMethod(itemsState의 실시간 클라이언트 상태)다 — checkedShippingItems(배송비
+  // 계산)가 이미 이 필드를 쓰고 있던 것과 동일 원칙. line.pickupMethod 기준으로는 아직
+  // 서버에 저장되지 않은 방금 전환한 배송 선택이 반영되지 않아 "왕복 배송" 화면에서도 여전히
+  // 12h 블록 산식이 잘못 적용되는 실사용 버그로 이어졌다.
   function itemRentalFee(
     line: CartLineGroup | undefined,
-    it: { rentalDate: string; returnDate: string; rentalTime: string; returnTime: string },
+    it: { rentalDate: string; returnDate: string; rentalTime: string; returnTime: string; opts: { rentalMethod: DeliveryMethod | null } },
   ): number {
     if (line?.durationType === 'purchase') return line.product?.sale_price ?? 0
     const r24 = itemRate24h(line)
@@ -797,16 +840,48 @@
       returnTime: it.returnTime,
       dailyPrice: r24,
       halfDayPrice: r12,
+      deliveryLocked: isDeliveryLocked(it.opts.rentalMethod),
     })
   }
   function itemDeposit(line: CartLineGroup | undefined): number {
     if (!line) return 0
     return sdPriceRules[line.productId ?? '']?.deposit ?? line.deposit ?? 0
   }
-  // 옵션상품 금액 합계 (unit_price × qty) — 상품상세에서 선택한 옵션이 체크아웃 합계에도 반영되도록
-  function itemOptionsAmount(line: CartLineGroup | undefined): number {
+  // 옵션상품 금액 합계 — 2026-09-03(Stephen 확정, 2026-08-18 결정 번복): 옵션도 본상품과
+  // 동일한 12시간 블록 산식(calcRentalFee)을 적용한다. 옵션은 본상품과 같은 예약 건에 귀속돼
+  // 동일 대여기간(it)을 공유하므로 그대로 재사용.
+  // ⚠️ 2026-09-03(같은 날 정정, Stephen 지적 — CRITICAL) — 최초 구현은 "12시간 요금 =
+  // unit_price÷2"로 파생시켰으나, 이는 "1일 요금 = 12시간×2"라는 잘못된 가정이다. 본상품처럼
+  // 옵션상품도 실제로는 12h/24h가 서로 독립적으로 설정된 별개 요금이다(예: 실데이터에서
+  // 24h=30000인 옵션의 실제 12h가는 25000 — 15000이 아님). unit_price÷2로 계산하면 절대 안 됨.
+  // → 옵션 상품 자체의 price_rules에서 조회한 독립 12h가(unitPrice12h, +page.server.ts에서
+  // 옵션상품별로 조회)를 사용한다. 그 옵션 상품에 12h price_rule이 아예 없으면(unitPrice12h
+  // null) 블록 가산을 적용할 근거가 없으므로 기존(#436 이전)처럼 flat(unit_price × qty)로
+  // 폴백한다 — 없는 값을 추정해서 채우지 않는다.
+  // 판매전용(구매) 상품은 "대여기간" 개념이 없으므로 기존처럼 flat 유지(Migration #436과 정합).
+  function itemOptionsAmount(
+    line: CartLineGroup | undefined,
+    it: { rentalDate: string; returnDate: string; rentalTime: string; returnTime: string; opts: { rentalMethod: DeliveryMethod | null } },
+  ): number {
     if (!line) return 0
-    return line.options.reduce((s, o) => s + o.unitPrice * o.qty, 0)
+    if (line.durationType === 'purchase') {
+      return line.options.reduce((s, o) => s + o.unitPrice * o.qty, 0)
+    }
+    return line.options.reduce((s, o) => {
+      if (o.unitPrice12h == null) {
+        return s + o.unitPrice * o.qty
+      }
+      const fee = calcRentalFee({
+        startDate: it.rentalDate,
+        endDate: it.returnDate,
+        pickupTime: it.rentalTime,
+        returnTime: it.returnTime,
+        dailyPrice: o.unitPrice,
+        halfDayPrice: o.unitPrice12h,
+        deliveryLocked: isDeliveryLocked(it.opts.rentalMethod),
+      })
+      return s + fee * o.qty
+    }, 0)
   }
 
   // ── 등급별 할인율
@@ -821,14 +896,14 @@
     itemsState.reduce((sum, it) => {
       if (it.deleted || !it.checked) return sum
       const line = groupsById.get(it.id)
-      return sum + (itemRentalFee(line, it) + itemOptionsAmount(line)) * Math.max(line?.qty ?? 1, 1)
+      return sum + (itemRentalFee(line, it) + itemOptionsAmount(line, it)) * Math.max(line?.qty ?? 1, 1)
     }, 0)
   )
 
   // 멤버십 할인 — 등급 할인율을 체크된 소계에 적용
   const otMembershipDiscount = $derived(Math.round(otSubtotal * otDiscountRate / 100))
 
-  const sdDeliveryOpts = $derived((data.deliveryOptions as Array<{ method_key: string; name: string; is_bulk_delivery: boolean; is_courier_dependent: boolean }> | undefined) ?? [])
+  const sdDeliveryOpts = $derived((data.deliveryOptions as Array<{ method_key: string; name: string; is_bulk_delivery: boolean; is_courier_dependent: boolean; is_delivery_type: boolean }> | undefined) ?? [])
 
   // 왕복요금/반납요금: CMS "/cms/set/rental > 배송 설정"(rental_shipping_settings) —
   // 배송비(왕복/배송/반납요금) — 3-way 배타 규칙(2026-08-30 확정, cartShippingFee.ts 헤더
@@ -840,7 +915,6 @@
     enable_delivery: boolean;   delivery_fee: number | null
     enable_return: boolean;     return_fee: number | null
     shipping_guide: string | null
-    restrict_return_delivery: boolean
   } | null | undefined) ?? null)
 
   const checkedShippingItems = $derived<ShippingFeeItem[]>(
@@ -872,17 +946,18 @@
       const line = groupsById.get(it.id)
       const product = line?.product as ProductRow & { sale_only?: boolean | null } | undefined
       if (product?.sale_only) return sum
-      return sum + (itemRentalFee(line, it) + itemOptionsAmount(line)) * Math.max(line?.qty ?? 1, 1)
+      return sum + (itemRentalFee(line, it) + itemOptionsAmount(line, it)) * Math.max(line?.qty ?? 1, 1)
     }, 0)
   )
 
-  // rentalDays()는 이 스크립트 블록 하단에 함수 선언돼 있으나 호이스팅으로 여기서 호출 가능.
+  // 배송비 할인조건(calcShippingDiscountRate)은 "총 대여기간" 표시(§2026-09-03 12시간 블록
+  // 재설계)와 무관한 별도 소비처 — 기존 달력일수 기준(calcRentalDays) 그대로 유지.
   const checkedDiscountItems = $derived<DiscountConditionItem[]>(
     itemsState
       .map((it) => ({ it, product: groupsById.get(it.id)?.product }))
       .filter(({ it }) => !it.deleted && it.checked)
       .map(({ it, product }) => ({
-        rentalDays: rentalDays(it.rentalDate, it.returnDate),
+        rentalDays: calcRentalDays(it.rentalDate, it.returnDate),
         saleOnlyPurchase: (product as ProductRow & { sale_only?: boolean | null } | undefined)?.sale_only ?? false,
       }))
   )
@@ -905,14 +980,20 @@
     return_: DeliveryMethod,
     pickupTime?: string,
     returnTime?: string,
+    // 2026-09-03: 예약신청완료 시점의 수령 주소 스냅샷(Migration 434) — 계약서 {{주소}}
+    // 변수 정본 소스. 기본주소 자동채움이든 직접입력이든 그 순간 폼에 있는 값 그대로 전달.
+    pickupAddressRoad?: string,
+    pickupAddressDetail?: string,
   ): Promise<{ success: boolean; errorMessage: string | null }> {
     if (!resId) return { success: true, errorMessage: null }
     const { error } = await (supabase.rpc as unknown as RpcFn)('set_reservation_shipment_method', {
-      p_reservation_id: Number(resId),
-      p_pickup_method:  pickup,
-      p_return_method:  return_,
-      p_pickup_time:    pickupTime || null,
-      p_return_time:    returnTime || null,
+      p_reservation_id:        Number(resId),
+      p_pickup_method:         pickup,
+      p_return_method:         return_,
+      p_pickup_time:           pickupTime || null,
+      p_return_time:           returnTime || null,
+      p_pickup_address_road:   pickupAddressRoad || null,
+      p_pickup_address_detail: pickupAddressDetail || null,
     })
     return { success: !error, errorMessage: error?.message ?? null }
   }
@@ -998,46 +1079,47 @@
       .filter((o: DeliveryOptionRow) => o.method_key && (allowedMethodIds === 'all' || allowedMethodIds.has(o.id)))
       .map((o: DeliveryOptionRow) => ({ v: o.method_key as DeliveryMethod, label: o.name, deadline: o.deadline_time ?? '' }))
   );
-  // 대여 제한옵션 "반납 배송선택 제한"(CMS) — restrict_return_delivery ON일 때 배송
-  // (is_bulk_delivery) 방식을 제외한 탭 목록. "요청 A"(수령=배송 선택 시 반납방식을
-  // 자동으로 같은 배송값으로 강제복사)와는 별개 개념 — 이 목록은 "수령이 배송이 아닐 때"의
+  // "배송 반납 허용 지정"(CMS, rental_method_options.is_delivery_type) — ON으로 지정된 방식을
+  // 반납 탭 목록에서 제외한다. "요청 A"(수령=배송 선택 시 반납방식을 자동으로 같은 배송값으로
+  // 강제복사, is_bulk_delivery 판정)와는 별개 개념 — 이 목록은 "수령이 배송이 아닐 때"의
   // 반납 leg 전용으로만 쓴다(아래 returnVisibleTabsFor 참고).
-  const restrictedDeliveryTabs = $derived<DeliveryTabMeta[]>(
-    deliveryTabs.filter(tab => !isDeliveryLocked(tab.v))
-  )
-  // leg-aware 재구성(2026-09-01, Stephen 확정) — 과거엔 이 토글이 ON이면 수령·반납 양쪽
-  // 모두에서 배송방식을 제거했으나(2026-08-28 UI충돌 회피 임시조치), 그 결과 배송옵션이
-  // 설정된 모든 상품에서 "수령 방식"에마저 배송이 통째로 사라지는 회귀가 실사용 중 발견됨
-  // (Stephen 리포트, fxlion-nano-two-v-mount-battery-2609 — 상품 자체 대여옵션 설정은 정상,
-  // 토글의 양쪽-leg 제거 구현이 원인이었음). 원래 의도("수령 방문대여 선택 시 반납에서만
-  // 배송 선택 못하게 막음")대로 분리:
-  //   - 수령(pickup) leg: 이 토글과 무관하게 항상 전체 목록(deliveryTabs) 노출
-  //   - 반납(return) leg: 수령이 배송(is_bulk_delivery)이 **아닐 때만**(그리고 토글 ON일
-  //     때만) 배송 제외, 수령이 배송(delivery 등)이면 "요청 A" 강제복사 로직이 이미 반납을
-  //     같은 값으로 잠그므로 전체 목록을 그대로 노출해야 그 값이 탭에 렌더링됨
   //
-  // ⛔ 2026-09-02 Stephen 스크린샷(출고/반납 O·X 매트릭스) 대조로 발견·수정: 조건을
-  // `pickupMethod === 'visit'`로 좁게 짜서 수령=퀵서비스일 때 반납에 배송이 여전히
-  // 허용되던 결함(매트릭스: 퀵서비스×크레이지배송 = X여야 하는데 O로 노출됨). "수령이
-  // 방문일 때만"이 아니라 "수령이 배송이 아닌 모든 경우"(방문·무인함·퀵서비스 전부)로
-  // 일반화 — `!isDeliveryLocked(pickupMethod)`로 교체.
+  // ⛔ 2026-09-04(같은 세션 후속) Stephen UX 지적: 별도 마스터 on/off 토글(rental_shipping_
+  // settings.restrict_return_delivery, "대여옵션 제한")이 "배송 반납 허용 지정" 칩과 별개로
+  // 존재해 혼란스럽다 — "ON 체크된 콤보만 반납 시 배송 감춤 동작하게 하면 간단하다",
+  // "기존 대여옵션 제한 영역도 그냥 제거해". Migration #443로 그 전역 토글(컬럼+RPC) 자체를
+  // 완전히 삭제 — 이제 is_delivery_type=true로 지정된 방식이 있다는 사실 자체가 곧 활성화
+  // 조건이다(computeReturnVisibleTabs 정의부 참고). 서버 최종방어선(set_reservation_
+  // shipment_method)도 동일 마이그레이션으로 같은 기준으로 통일됨.
+  //
+  // leg-aware 구조(2026-09-01 Stephen 확정) —
+  //   - 수령(pickup) leg: 이 판정과 무관하게 항상 전체 목록(deliveryTabs) 노출
+  //   - 반납(return) leg: 수령이 배송(is_delivery_type)이 **아닐 때만** 배송 제외 — 수령
+  //     자체가 배송 방식이면 "요청 A"(is_bulk_delivery, 완전히 별개 플래그) 강제복사 로직이
+  //     있다면 그쪽이 반납을 이미 잠그므로 전체 목록을 그대로 노출해야 그 값이 탭에 렌더링됨
   const pickupVisibleTabs = $derived<DeliveryTabMeta[]>(deliveryTabs)
-  function returnVisibleTabsFor(pickupMethod: DeliveryMethod): DeliveryTabMeta[] {
-    return sdShippingSettings?.restrict_return_delivery && !isDeliveryLocked(pickupMethod)
-      ? restrictedDeliveryTabs
-      : deliveryTabs
+  // pickupMethod가 null(미선택)이면 computeReturnVisibleTabs에는 어떤 method_key와도
+  // 일치하지 않는 빈 문자열로 넘긴다 — "미선택 상태는 배송(is_delivery_type)이 아니다"와
+  // 동일하게 안전히 처리되는 값(2026-09-04, null 허용 확장).
+  function returnVisibleTabsFor(pickupMethod: DeliveryMethod | null): DeliveryTabMeta[] {
+    return computeReturnVisibleTabs(deliveryTabs, sdDeliveryOpts, pickupMethod ?? '')
   }
-  // 2026-08-30(감사 RSC-B2): 신규/드래프트 카트 항목의 로컬 기본 수령·반납 방식이
-  // 'crazydelivery'로 하드코딩돼 있어, restrict_return_delivery ON 상태에서 사용자가
-  // 방식 탭을 한 번도 명시적으로 클릭하지 않으면 "아무것도 잘못 고른 적 없는데" 체크아웃
-  // 마지막 단계(서버 가드)에서만 실패가 드러나던 결함 — 제출 전에 미리 감지해 CTA를
-  // 비활성화하고 안내 문구로 원인을 명확히 보여준다(defaultOptions()의 기본값 자체도
-  // 'visit'로 변경해 애초에 이 상태에 잘 빠지지 않도록 함께 방어).
+  // 2026-09-04: 신규/드래프트 카트 항목의 로컬 기본 수령·반납 방식은 null(완전 미선택)이다
+  // (defaultOptions() 참고 — 과거 'visit' 강제 기본값은 불필요한 전제로 확인돼 폐기됨).
+  // rentalMethod/returnMethod가 null이면 pickupVisibleTabs/returnVisibleTabsFor의 어떤
+  // tab.v와도 일치하지 않으므로(모든 tab.v는 항상 구체적인 DeliveryMethod) 아래 판정은
+  // 자동으로 invalid를 반환한다 — "최초진입 시 미선택 상태에서는 제출 버튼이 막힌다"는
+  // 안전장치가 그대로 유지된다. 순수함수(isMethodSelectionValid, $lib/utils/
+  // cartMethodSelection)로 위임 — 단위테스트 가능하게 분리.
   const methodSelectionValid = $derived(
-    itemsState.every(it => it.deleted || !it.checked || (
-      pickupVisibleTabs.some(t => t.v === it.opts.rentalMethod) &&
-      returnVisibleTabsFor(it.opts.rentalMethod).some(t => t.v === it.opts.returnMethod)
-    ))
+    itemsState.every(it => isMethodSelectionValid({
+      deleted: it.deleted,
+      checked: it.checked,
+      rentalMethod: it.opts.rentalMethod,
+      returnMethod: it.opts.returnMethod,
+      pickupVisibleTabs,
+      returnVisibleTabs: returnVisibleTabsFor(it.opts.rentalMethod),
+    }))
   )
   const readyToSubmit = $derived(canProceed && methodSelectionValid)
   // 2026-08-30: rental_method_options.fee_amount(방식별 기본배송비) 경로는 CMS에 입력 UI
@@ -1245,24 +1327,30 @@
     return Math.max(0, Math.ceil(diff / 86400000))
   }
 
-  // 대여 기간 (일수) — calculate_cart_total RPC와 정합되는 계산은 $lib/utils/cartRentalFee 참고
+  // 대여 기간(분) — calculate_cart_total RPC와 정합되는 계산은 $lib/utils/cartRentalFee 참고
   // (2026-09-01: 당일대여 시 0을 반환해 "날짜 미선택"으로 오인되던 CRITICAL 버그 수정)
-  // 판매전용(구매) 항목은 "대여기간" 개념이 없으므로 일수 합산에서 제외한다(Migration #416).
-  const rentalDays = calcRentalDays
-  const otTotalDays = $derived(
+  // 판매전용(구매) 항목은 "대여기간" 개념이 없으므로 합산에서 제외한다(Migration #416).
+  // 2026-09-03(Stephen 확정): "총 대여기간" 표시를 달력일수(N일)만이 아니라 12시간/N일/N일 12시간
+  // 구간으로 세분화 — otTotalDays(달력일 diff, 시각 무시) 대신 실제 분(minute) 합산으로 교체.
+  // 배송(왕복 배송료) 잠금 항목은 it.opts.rentalMethod(실시간 클라이언트 상태 — line.
+  // pickupMethod의 서버 저장값이 아님, 위 itemRentalFee 주석 참고)로 감지해 시각을 무시하고
+  // 순수 N일만 반영(itemRentalFee와 동일 원리 — "총 대여기간" 라벨이 실제 청구액과 항상 일치하도록).
+  const otTotalMinutes = $derived(
     itemsState.reduce((sum, it) => {
       if (it.deleted || !it.checked) return sum
-      if (groupsById.get(it.id)?.durationType === 'purchase') return sum
-      return sum + rentalDays(it.rentalDate, it.returnDate)
+      const line = groupsById.get(it.id)
+      if (line?.durationType === 'purchase') return sum
+      return sum + calcRentalMinutes(it.rentalDate, it.returnDate, it.rentalTime, it.returnTime, isDeliveryLocked(it.opts.rentalMethod))
     }, 0)
   )
+  const otRentalPeriodParts = $derived(calcRentalPeriodParts(otTotalMinutes))
   const otHasPurchaseItem = $derived(
     itemsState.some(it => !it.deleted && it.checked && groupsById.get(it.id)?.durationType === 'purchase')
   )
   // 대여기간(수령/반납일)이 아직 확정되지 않은 상태에서 확정 금액인 것처럼 노출되던 결함 수정
-  // — "총 대여기간" 행의 미선택 판정 기준(otTotalDays)과 동일 조건으로 금액 표시도 함께 게이팅.
+  // — "총 대여기간" 행의 미선택 판정 기준(otTotalMinutes)과 동일 조건으로 금액 표시도 함께 게이팅.
   // 구매(판매) 항목은 대여기간이 0이어도 결제금액이 확정돼 있으므로 별도로 ready 처리한다.
-  const pricingReady = $derived(otTotalDays > 0 || otHasPurchaseItem)
+  const pricingReady = $derived(otTotalMinutes > 0 || otHasPurchaseItem)
 
   function fmtKrw(n: number): string {
     return n === 0 ? '0' : n.toLocaleString('ko-KR')
@@ -1349,26 +1437,92 @@
         </div>
 
         <!-- ── 통합 대여예약옵션 패널 (체크된 상품 1개 이상일 때만 렌더 — 모바일 전용, PC는 detail-pane) -->
+        {#snippet bulkHeadButton()}
+          <button class="bulk-head" class:bulk-head-closed={!bulkOpen && !(bulkDate && bulkTime)} onclick={() => bulkOpen = !bulkOpen}>
+            <span class="bulk-head-title">대여예약옵션</span>
+            <svg width="11" height="7" viewBox="0 0 12 8" fill="none" aria-hidden="true" class="bulk-chevron"
+                 style="transform:{bulkOpen ? 'rotate(180deg)' : 'rotate(0deg)'}">
+              <path d="M1 1L6 7L11 1" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+            </svg>
+          </button>
+        {/snippet}
         {#if hasItems}
           <div class="bulk-panel">
-            <button class="bulk-head" class:bulk-head-closed={!bulkOpen} onclick={() => bulkOpen = !bulkOpen}>
-              <span class="bulk-head-title">대여예약옵션</span>
-              <svg width="11" height="7" viewBox="0 0 12 8" fill="none" aria-hidden="true" class="bulk-chevron"
-                   style="transform:{bulkOpen ? 'rotate(180deg)' : 'rotate(0deg)'}">
-                <path d="M1 1L6 7L11 1" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
-              </svg>
-            </button>
             {#if bulkOpen}
+              {@render bulkHeadButton()}
               <div transition:slide={{ duration: 250 }} class="bulk-body">
                 {@render RentalOptionsEditor()}
               </div>
+            {:else if bulkDate && bulkTime}
+              <!-- 2026-09-03(Stephen 확정) — 아코디언이 접혀도(스크롤 자동접힘·수동접힘 모두)
+                   설정된 수령/반납 값을, "대여 방법"/"반납 방법" 아코디언에 이미 쓰는 것과
+                   동일한 datetime-wrap 레이아웃 그대로(임의 신규 UI 없이) 노출한다. 헤더+요약
+                   바를 하나의 배경 레이아웃으로 묶고(Stephen 확정), 좌우 여백을 명시적으로
+                   확보한다(요약 바가 배경 폭에 100% 붙어보이던 결함 수정). -->
+              <div class="bulk-collapsed-group">
+                {@render bulkHeadButton()}
+                <div class="bulk-collapsed-bar">
+                <div class="datetime-wrap acc-collapsed-summary">
+                  <div class="datetime-btns">
+                    <button class="datetime-btn datetime-btn-dark datetime-btn-date-selected" onclick={() => { bulkOpen = true; bulkOpenAcc = 'rental' }}>
+                      <div class="datetime-btn-left">
+                        <svg width="22" height="22" viewBox="0 0 32 32" fill="none">
+                          <path d="M9.95555 2.16871C18.4889 2.16871 15.4583 2.08796 21.3333 2.16868C29.8667 2.16871 31.2889 7.85107 31.2889 12.1128C31.2889 15.9495 31.2889 17.7936 31.2889 22.0553C31.2889 26.3171 28.4444 31.9995 21.3333 31.9995C15.6444 31.9995 12.8 31.9994 9.95555 31.9995C2.84444 31.9995 -9.85013e-10 26.3172 0 22.0553C9.85013e-10 17.7935 0 12.1128 0 12.1128C0 7.85107 1.42222 2.16871 9.95555 2.16871Z" fill="white"/>
+                          <path d="M7.11133 2.84444C7.11133 1.2735 8.32946 0 9.8321 0H10.0794C11.5821 0 12.8002 1.2735 12.8002 2.84444C12.8002 4.41539 11.5821 5.68889 10.0794 5.68889H9.8321C8.32946 5.68889 7.11133 4.41539 7.11133 2.84444Z" fill="white"/>
+                          <path d="M18.4885 2.84444C18.4885 1.2735 19.7067 0 21.2093 0H21.4566C22.9593 0 24.1774 1.2735 24.1774 2.84444C24.1774 4.41539 22.9593 5.68889 21.4566 5.68889H21.2093C19.7067 5.68889 18.4885 4.41539 18.4885 2.84444Z" fill="white"/>
+                          <path d="M22.7556 9.59961C23.7375 9.59961 24.5334 10.3955 24.5334 11.3774C24.5334 12.3592 23.7375 13.1552 22.7556 13.1552L8.53339 13.1552C7.55155 13.1552 6.75561 12.3592 6.75562 11.3774C6.75562 10.3955 7.55155 9.59961 8.53339 9.59961L22.7556 9.59961Z" fill="#3B2F8A"/>
+                          <path d="M7.11133 18.7162C7.1113 17.4124 7.99206 16.3555 9.07854 16.3555L14.3886 16.3555C15.475 16.3555 16.3558 17.4124 16.3558 18.7162V21.1059C16.3558 22.4097 15.475 23.4666 14.3886 23.4666H9.07862C7.99217 23.4666 7.11143 22.4097 7.11141 21.1059L7.11133 18.7162Z" fill="#3B2F8A"/>
+                        </svg>
+                        <span class="datetime-btn-label">{displayDate(bulkDate)}</span>
+                      </div>
+                    </button>
+                    <button class="datetime-btn datetime-btn-mid datetime-btn-time-selected" onclick={() => { bulkOpen = true; bulkOpenAcc = 'rental' }}>
+                      <div class="datetime-btn-left">
+                        <svg width="23" height="23" viewBox="0 0 22.5 22.5" fill="none">
+                          <path d="M11.25 0C13.69 0 15.95 0.78 17.8 2.1L19 0.5C19.41 -0.05 20.2 -0.16 20.75 0.25C21.3 0.66 21.41 1.45 21 2L19.66 3.78C21.43 5.77 22.5 8.38 22.5 11.25C22.5 17.46 17.46 22.5 11.25 22.5C5.04 22.5 0 17.46 0 11.25C0 8.33 1.11 5.68 2.93 3.68L1.55 2.06C1.1 1.54 1.16 0.75 1.69 0.3C2.21 -0.15 3 -0.09 3.45 0.44L4.81 2.03C6.63 0.75 8.85 0 11.25 0ZM11 5C10.31 5 9.75 5.56 9.75 6.25V12.17C9.75 12.64 10.01 13.07 10.42 13.28L14.42 15.36C15.04 15.68 15.79 15.44 16.11 14.83C16.43 14.21 16.19 13.46 15.58 13.14L12.25 11.41V6.25C12.25 5.56 11.69 5 11 5Z" fill="var(--cs-white)"/>
+                        </svg>
+                        <span class="datetime-btn-label">{isDeliveryLocked(bulkOpts.rentalMethod) ? '00:00' : bulkTime}</span>
+                      </div>
+                    </button>
+                  </div>
+                </div>
+                {#if bulkReturnDate && bulkReturnTime}
+                  <div class="datetime-wrap acc-collapsed-summary">
+                    <div class="datetime-btns">
+                      <button class="datetime-btn datetime-btn-dark datetime-btn-date-selected" onclick={() => { bulkOpen = true; bulkOpenAcc = 'return_' }}>
+                        <div class="datetime-btn-left">
+                          <svg width="22" height="22" viewBox="0 0 32 32" fill="none">
+                            <path d="M9.95555 2.16871C18.4889 2.16871 15.4583 2.08796 21.3333 2.16868C29.8667 2.16871 31.2889 7.85107 31.2889 12.1128C31.2889 15.9495 31.2889 17.7936 31.2889 22.0553C31.2889 26.3171 28.4444 31.9995 21.3333 31.9995C15.6444 31.9995 12.8 31.9994 9.95555 31.9995C2.84444 31.9995 -9.85013e-10 26.3172 0 22.0553C9.85013e-10 17.7935 0 12.1128 0 12.1128C0 7.85107 1.42222 2.16871 9.95555 2.16871Z" fill="white"/>
+                            <path d="M7.11133 2.84444C7.11133 1.2735 8.32946 0 9.8321 0H10.0794C11.5821 0 12.8002 1.2735 12.8002 2.84444C12.8002 4.41539 11.5821 5.68889 10.0794 5.68889H9.8321C8.32946 5.68889 7.11133 4.41539 7.11133 2.84444Z" fill="white"/>
+                            <path d="M18.4885 2.84444C18.4885 1.2735 19.7067 0 21.2093 0H21.4566C22.9593 0 24.1774 1.2735 24.1774 2.84444C24.1774 4.41539 22.9593 5.68889 21.4566 5.68889H21.2093C19.7067 5.68889 18.4885 4.41539 18.4885 2.84444Z" fill="white"/>
+                            <path d="M22.7556 9.59961C23.7375 9.59961 24.5334 10.3955 24.5334 11.3774C24.5334 12.3592 23.7375 13.1552 22.7556 13.1552L8.53339 13.1552C7.55155 13.1552 6.75561 12.3592 6.75562 11.3774C6.75562 10.3955 7.55155 9.59961 8.53339 9.59961L22.7556 9.59961Z" fill="#3B2F8A"/>
+                            <path d="M7.11133 18.7162C7.1113 17.4124 7.99206 16.3555 9.07854 16.3555L14.3886 16.3555C15.475 16.3555 16.3558 17.4124 16.3558 18.7162V21.1059C16.3558 22.4097 15.475 23.4666 14.3886 23.4666H9.07862C7.99217 23.4666 7.11143 22.4097 7.11141 21.1059L7.11133 18.7162Z" fill="#3B2F8A"/>
+                          </svg>
+                          <span class="datetime-btn-label">{displayDate(bulkReturnDate)}</span>
+                        </div>
+                      </button>
+                      <button class="datetime-btn datetime-btn-mid datetime-btn-time-selected" onclick={() => { bulkOpen = true; bulkOpenAcc = 'return_' }}>
+                        <div class="datetime-btn-left">
+                          <svg width="23" height="23" viewBox="0 0 22.5 22.5" fill="none">
+                            <path d="M11.25 0C13.69 0 15.95 0.78 17.8 2.1L19 0.5C19.41 -0.05 20.2 -0.16 20.75 0.25C21.3 0.66 21.41 1.45 21 2L19.66 3.78C21.43 5.77 22.5 8.38 22.5 11.25C22.5 17.46 17.46 22.5 11.25 22.5C5.04 22.5 0 17.46 0 11.25C0 8.33 1.11 5.68 2.93 3.68L1.55 2.06C1.1 1.54 1.16 0.75 1.69 0.3C2.21 -0.15 3 -0.09 3.45 0.44L4.81 2.03C6.63 0.75 8.85 0 11.25 0ZM11 5C10.31 5 9.75 5.56 9.75 6.25V12.17C9.75 12.64 10.01 13.07 10.42 13.28L14.42 15.36C15.04 15.68 15.79 15.44 16.11 14.83C16.43 14.21 16.19 13.46 15.58 13.14L12.25 11.41V6.25C12.25 5.56 11.69 5 11 5Z" fill="var(--cs-white)"/>
+                          </svg>
+                          <span class="datetime-btn-label">{isDeliveryLocked(bulkOpts.returnMethod) ? '24:00' : bulkReturnTime}</span>
+                        </div>
+                      </button>
+                    </div>
+                  </div>
+                {/if}
+                </div>
+              </div>
+            {:else}
+              {@render bulkHeadButton()}
             {/if}
           </div>
         {/if}
       </section>
 
       <!-- ── ORDER TOTAL ── -->
-      <section class="cs-section">
+      <section class="cs-section" bind:this={orderTotalSectionEl}>
         <div class="sec-header">
           <span class="sec-title">Order Total</span>
         </div>
@@ -1437,8 +1591,10 @@
               <div class="price-period-row">
                 <span class="price-period-label">총 대여기간</span>
                 <div class="price-period-values">
-                  {#if otTotalDays > 0}
-                    <div class="period-val"><span class="period-num">{otTotalDays}</span><span class="period-unit">일</span></div>
+                  {#if otRentalPeriodParts.length > 0}
+                    {#each otRentalPeriodParts as part}
+                      <div class="period-val"><span class="period-num">{part.num}</span><span class="period-unit">{part.unit}</span></div>
+                    {/each}
                   {:else}
                     <span class="period-unset">날짜 미선택</span>
                   {/if}
@@ -1552,8 +1708,19 @@
               const TWO_DAY_LEADTIME_KEYS_CO = new Set(['delivery', 'epost'])
               const nowTimeCo = new Date()
               for (const it of checkedDraftItems) {
+                // 2026-09-04: readyToSubmit(methodSelectionValid)이 이미 rentalMethod/
+                // returnMethod가 null(최초진입 미선택)이면 CTA 자체를 막으므로 정상 흐름에서는
+                // 이 지점에 null이 도달하지 않는다 — 그러나 saveShipmentMethod가 non-null
+                // DeliveryMethod를 요구하므로, non-null assertion 대신 실제 런타임 null 체크로
+                // 타입을 좁혀 방어한다(요청사항: non-null assertion 사용 금지).
+                const pickupMethodCo = it.opts.rentalMethod
+                const returnMethodCo = it.opts.returnMethod
+                if (!pickupMethodCo || !returnMethodCo) {
+                  csToast.error('수령·반납 방식을 다시 선택해주세요.')
+                  return
+                }
                 // 리드타임 재검증 (날짜 없이 예약됐으므로 여기서 처음 검증) — 그룹 공유 날짜 기준 1회
-                const needsTwoDayLeadtime = TWO_DAY_LEADTIME_KEYS_CO.has(it.opts.rentalMethod)
+                const needsTwoDayLeadtime = TWO_DAY_LEADTIME_KEYS_CO.has(pickupMethodCo)
                 if (needsTwoDayLeadtime) {
                   const twoDaysLater = new Date(nowTimeCo.getFullYear(), nowTimeCo.getMonth(), nowTimeCo.getDate() + 2)
                   const startDateOnly = new Date(`${it.rentalDate}T00:00:00`)
@@ -1609,8 +1776,8 @@
                     csToast.error(promoteRow?.error_message ?? promoteError?.message ?? '해당 기간에 예약 가능한 재고가 없습니다.')
                     return
                   }
-                  // 수령·반납 방식 저장 (기존 saveShipmentMethod 재사용)
-                  const shipmentResultCo = await saveShipmentMethod(reservationId, it.opts.rentalMethod, it.opts.returnMethod, it.rentalTime, it.returnTime)
+                  // 수령·반납 방식 저장 (기존 saveShipmentMethod 재사용) + 수령 주소 스냅샷(Migration 434)
+                  const shipmentResultCo = await saveShipmentMethod(reservationId, pickupMethodCo, returnMethodCo, it.rentalTime, it.returnTime, it.rentalForm.addr, it.rentalForm.addrDetail)
                   if (!shipmentResultCo.success) {
                     csToast.error(shipmentResultCo.errorMessage ?? '수령/반납 방식 저장에 실패했습니다. 방식을 다시 선택해주세요.')
                     return
@@ -1673,8 +1840,8 @@
                   code: '',
                   startDate: it.rentalDate,
                   endDate: it.returnDate,
-                  pickupMethod: DELIVERY_LABELS[it.opts.rentalMethod] ?? it.opts.rentalMethod,
-                  returnMethod: DELIVERY_LABELS[it.opts.returnMethod] ?? it.opts.returnMethod,
+                  pickupMethod: deliveryLabelOrRaw(it.opts.rentalMethod),
+                  returnMethod: deliveryLabelOrRaw(it.opts.returnMethod),
                   price: itemRentalFee(line, it) * Math.max(line?.qty ?? 1, 1),
                   options: (line?.options ?? []).map(o => ({ name: o.name, qty: o.qty })),
                 }
@@ -1849,7 +2016,7 @@
                         <span class="price-sep">/</span>
                         <div class="price-unit">
                           <span class="price-unit-label">12H</span>
-                          <span class="price-amount">{fmtKrw(opt.unitPrice * opt.qty)}</span>
+                          <span class="price-amount">{fmtKrw((opt.unitPrice12h ?? opt.unitPrice) * opt.qty)}</span>
                           <span class="price-currency">원</span>
                         </div>
                       </div>
@@ -1951,7 +2118,7 @@
                       <span class="price-sep">/</span>
                       <div class="price-unit">
                         <span class="price-unit-label">12H</span>
-                        <span class="price-amount">{fmtKrw(opt.unitPrice * opt.qty)}</span>
+                        <span class="price-amount">{fmtKrw((opt.unitPrice12h ?? opt.unitPrice) * opt.qty)}</span>
                         <span class="price-currency">원</span>
                       </div>
                     </div>
@@ -1979,7 +2146,7 @@
       <button class="acc-head" onclick={() => bulkOpenAcc = 'rental'}>
         <span class="acc-label">대여 방법</span>
         <div class="acc-head-right">
-          <span class="acc-value">{methodLabel(bulkOpts.rentalMethod)}</span>
+          <span class="acc-value" class:acc-value-unset={!bulkOpts.rentalMethod}>{methodLabel(bulkOpts.rentalMethod)}</span>
           <svg width="12" height="8" viewBox="0 0 12 8" fill="none" style="transition:transform 0.3s;transform:{bulkOpenAcc === 'rental' ? 'rotate(180deg)' : 'none'}">
             <path d="M1 1L6 7L11 1" stroke="#444" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
           </svg>
@@ -1989,6 +2156,34 @@
         <div transition:slide={{ duration: 300 }} class="acc-body">
           {@render RentalForm({ type: 'rental', calId: 'bulk-rental', selectedDate: bulkDate, onDateChange: bulkHandleDate, timeId: 'bulk-rental-t', selectedTime: bulkTime, onTimeChange: bulkHandleTime, method: bulkOpts.rentalMethod, form: bulkRentalForm, copyToReturn: bulkOpts.copyToReturn, onMethodChange: bulkHandleMethod, onFormChange: bulkHandleRentalForm, onCopyChange: bulkHandleCopy, hasUserAddress: sdHasUserAddress, hasUserProfileInfo: sdHasUserProfileInfo, userProfileInfo: sdUserProfileInfo, userAddressInfo: sdUserAddressInfo, pickupPoints: visitPickupPoints, rangeStart: bulkDate, rangeEnd: bulkReturnDate })}
         </div>
+      {:else if bulkDate && bulkTime}
+        <!-- 2026-09-03(Stephen 확정) — "대여 방법" 아코디언이 닫혀도 이미 선택된 수령일·시간을
+             동일 레이아웃(달력+시간 버튼)으로 헤더 아래에 계속 노출한다(선택값 확인용,
+             클릭 시 아코디언 재오픈). -->
+        <div class="datetime-wrap acc-collapsed-summary">
+          <div class="datetime-btns">
+            <button class="datetime-btn datetime-btn-dark datetime-btn-date-selected" onclick={() => bulkOpenAcc = 'rental'}>
+              <div class="datetime-btn-left">
+                <svg width="22" height="22" viewBox="0 0 32 32" fill="none">
+                  <path d="M9.95555 2.16871C18.4889 2.16871 15.4583 2.08796 21.3333 2.16868C29.8667 2.16871 31.2889 7.85107 31.2889 12.1128C31.2889 15.9495 31.2889 17.7936 31.2889 22.0553C31.2889 26.3171 28.4444 31.9995 21.3333 31.9995C15.6444 31.9995 12.8 31.9994 9.95555 31.9995C2.84444 31.9995 -9.85013e-10 26.3172 0 22.0553C9.85013e-10 17.7935 0 12.1128 0 12.1128C0 7.85107 1.42222 2.16871 9.95555 2.16871Z" fill="white"/>
+                  <path d="M7.11133 2.84444C7.11133 1.2735 8.32946 0 9.8321 0H10.0794C11.5821 0 12.8002 1.2735 12.8002 2.84444C12.8002 4.41539 11.5821 5.68889 10.0794 5.68889H9.8321C8.32946 5.68889 7.11133 4.41539 7.11133 2.84444Z" fill="white"/>
+                  <path d="M18.4885 2.84444C18.4885 1.2735 19.7067 0 21.2093 0H21.4566C22.9593 0 24.1774 1.2735 24.1774 2.84444C24.1774 4.41539 22.9593 5.68889 21.4566 5.68889H21.2093C19.7067 5.68889 18.4885 4.41539 18.4885 2.84444Z" fill="white"/>
+                  <path d="M22.7556 9.59961C23.7375 9.59961 24.5334 10.3955 24.5334 11.3774C24.5334 12.3592 23.7375 13.1552 22.7556 13.1552L8.53339 13.1552C7.55155 13.1552 6.75561 12.3592 6.75562 11.3774C6.75562 10.3955 7.55155 9.59961 8.53339 9.59961L22.7556 9.59961Z" fill="#3B2F8A"/>
+                  <path d="M7.11133 18.7162C7.1113 17.4124 7.99206 16.3555 9.07854 16.3555L14.3886 16.3555C15.475 16.3555 16.3558 17.4124 16.3558 18.7162V21.1059C16.3558 22.4097 15.475 23.4666 14.3886 23.4666H9.07862C7.99217 23.4666 7.11143 22.4097 7.11141 21.1059L7.11133 18.7162Z" fill="#3B2F8A"/>
+                </svg>
+                <span class="datetime-btn-label">{displayDate(bulkDate)}</span>
+              </div>
+            </button>
+            <button class="datetime-btn datetime-btn-mid datetime-btn-time-selected" onclick={() => bulkOpenAcc = 'rental'}>
+              <div class="datetime-btn-left">
+                <svg width="23" height="23" viewBox="0 0 22.5 22.5" fill="none">
+                  <path d="M11.25 0C13.69 0 15.95 0.78 17.8 2.1L19 0.5C19.41 -0.05 20.2 -0.16 20.75 0.25C21.3 0.66 21.41 1.45 21 2L19.66 3.78C21.43 5.77 22.5 8.38 22.5 11.25C22.5 17.46 17.46 22.5 11.25 22.5C5.04 22.5 0 17.46 0 11.25C0 8.33 1.11 5.68 2.93 3.68L1.55 2.06C1.1 1.54 1.16 0.75 1.69 0.3C2.21 -0.15 3 -0.09 3.45 0.44L4.81 2.03C6.63 0.75 8.85 0 11.25 0ZM11 5C10.31 5 9.75 5.56 9.75 6.25V12.17C9.75 12.64 10.01 13.07 10.42 13.28L14.42 15.36C15.04 15.68 15.79 15.44 16.11 14.83C16.43 14.21 16.19 13.46 15.58 13.14L12.25 11.41V6.25C12.25 5.56 11.69 5 11 5Z" fill="var(--cs-white)"/>
+                </svg>
+                <span class="datetime-btn-label">{isDeliveryLocked(bulkOpts.rentalMethod) ? '00:00' : bulkTime}</span>
+              </div>
+            </button>
+          </div>
+        </div>
       {/if}
     </div>
     <!-- 반납 방법 -->
@@ -1996,7 +2191,7 @@
       <button class="acc-head" onclick={() => bulkOpenAcc = 'return_'}>
         <span class="acc-label">반납 방법</span>
         <div class="acc-head-right">
-          <span class="acc-value">{methodLabel(bulkOpts.returnMethod)}</span>
+          <span class="acc-value" class:acc-value-unset={!bulkOpts.returnMethod}>{methodLabel(bulkOpts.returnMethod)}</span>
           <svg width="12" height="8" viewBox="0 0 12 8" fill="none" style="transition:transform 0.3s;transform:{bulkOpenAcc === 'return_' ? 'rotate(180deg)' : 'none'}">
             <path d="M1 1L6 7L11 1" stroke="#444" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
           </svg>
@@ -2006,6 +2201,33 @@
         <div transition:slide={{ duration: 300 }} class="acc-body">
           {@render RentalForm({ type: 'return', calId: 'bulk-return', selectedDate: bulkReturnDate, onDateChange: bulkHandleReturnDate, timeId: 'bulk-return-t', selectedTime: bulkReturnTime, onTimeChange: bulkHandleReturnTime, method: bulkOpts.returnMethod, form: bulkReturnForm, onMethodChange: bulkHandleReturnMethod, onFormChange: bulkHandleReturnForm, hasUserAddress: sdHasUserAddress, hasUserProfileInfo: sdHasUserProfileInfo, userProfileInfo: sdUserProfileInfo, userAddressInfo: sdUserAddressInfo, pickupPoints: visitPickupPoints, minDate: bulkDate, rangeStart: bulkDate, rangeEnd: bulkReturnDate })}
         </div>
+      {:else if bulkReturnDate && bulkReturnTime}
+        <!-- "대여 방법"과 동일하게 "반납 방법"도 접혔을 때 이미 선택된 반납일·시간을
+             같은 datetime-wrap 레이아웃으로 노출(2026-09-03, 위 "대여 방법" 분기와 대칭). -->
+        <div class="datetime-wrap acc-collapsed-summary">
+          <div class="datetime-btns">
+            <button class="datetime-btn datetime-btn-dark datetime-btn-date-selected" onclick={() => bulkOpenAcc = 'return_'}>
+              <div class="datetime-btn-left">
+                <svg width="22" height="22" viewBox="0 0 32 32" fill="none">
+                  <path d="M9.95555 2.16871C18.4889 2.16871 15.4583 2.08796 21.3333 2.16868C29.8667 2.16871 31.2889 7.85107 31.2889 12.1128C31.2889 15.9495 31.2889 17.7936 31.2889 22.0553C31.2889 26.3171 28.4444 31.9995 21.3333 31.9995C15.6444 31.9995 12.8 31.9994 9.95555 31.9995C2.84444 31.9995 -9.85013e-10 26.3172 0 22.0553C9.85013e-10 17.7935 0 12.1128 0 12.1128C0 7.85107 1.42222 2.16871 9.95555 2.16871Z" fill="white"/>
+                  <path d="M7.11133 2.84444C7.11133 1.2735 8.32946 0 9.8321 0H10.0794C11.5821 0 12.8002 1.2735 12.8002 2.84444C12.8002 4.41539 11.5821 5.68889 10.0794 5.68889H9.8321C8.32946 5.68889 7.11133 4.41539 7.11133 2.84444Z" fill="white"/>
+                  <path d="M18.4885 2.84444C18.4885 1.2735 19.7067 0 21.2093 0H21.4566C22.9593 0 24.1774 1.2735 24.1774 2.84444C24.1774 4.41539 22.9593 5.68889 21.4566 5.68889H21.2093C19.7067 5.68889 18.4885 4.41539 18.4885 2.84444Z" fill="white"/>
+                  <path d="M22.7556 9.59961C23.7375 9.59961 24.5334 10.3955 24.5334 11.3774C24.5334 12.3592 23.7375 13.1552 22.7556 13.1552L8.53339 13.1552C7.55155 13.1552 6.75561 12.3592 6.75562 11.3774C6.75562 10.3955 7.55155 9.59961 8.53339 9.59961L22.7556 9.59961Z" fill="#3B2F8A"/>
+                  <path d="M7.11133 18.7162C7.1113 17.4124 7.99206 16.3555 9.07854 16.3555L14.3886 16.3555C15.475 16.3555 16.3558 17.4124 16.3558 18.7162V21.1059C16.3558 22.4097 15.475 23.4666 14.3886 23.4666H9.07862C7.99217 23.4666 7.11143 22.4097 7.11141 21.1059L7.11133 18.7162Z" fill="#3B2F8A"/>
+                </svg>
+                <span class="datetime-btn-label">{displayDate(bulkReturnDate)}</span>
+              </div>
+            </button>
+            <button class="datetime-btn datetime-btn-mid datetime-btn-time-selected" onclick={() => bulkOpenAcc = 'return_'}>
+              <div class="datetime-btn-left">
+                <svg width="23" height="23" viewBox="0 0 22.5 22.5" fill="none">
+                  <path d="M11.25 0C13.69 0 15.95 0.78 17.8 2.1L19 0.5C19.41 -0.05 20.2 -0.16 20.75 0.25C21.3 0.66 21.41 1.45 21 2L19.66 3.78C21.43 5.77 22.5 8.38 22.5 11.25C22.5 17.46 17.46 22.5 11.25 22.5C5.04 22.5 0 17.46 0 11.25C0 8.33 1.11 5.68 2.93 3.68L1.55 2.06C1.1 1.54 1.16 0.75 1.69 0.3C2.21 -0.15 3 -0.09 3.45 0.44L4.81 2.03C6.63 0.75 8.85 0 11.25 0ZM11 5C10.31 5 9.75 5.56 9.75 6.25V12.17C9.75 12.64 10.01 13.07 10.42 13.28L14.42 15.36C15.04 15.68 15.79 15.44 16.11 14.83C16.43 14.21 16.19 13.46 15.58 13.14L12.25 11.41V6.25C12.25 5.56 11.69 5 11 5Z" fill="var(--cs-white)"/>
+                </svg>
+                <span class="datetime-btn-label">{isDeliveryLocked(bulkOpts.returnMethod) ? '24:00' : bulkReturnTime}</span>
+              </div>
+            </button>
+          </div>
+        </div>
       {/if}
     </div>
   </div>
@@ -2013,7 +2235,9 @@
 
 {#snippet RentalForm(props: {
   type: 'rental' | 'return';
-  method: DeliveryMethod;
+  // 2026-09-04: 최초진입 시 완전 미선택 상태를 표현하기 위해 null 허용 — method===tab.v
+  // 비교는 null이면 어떤 tab과도 일치하지 않아 자연스럽게 "빈 선택"으로 렌더링된다.
+  method: DeliveryMethod | null;
   form: FormState;
   calId: string;
   selectedDate: string;
@@ -2049,11 +2273,10 @@
   <!-- 휴무일 캘린더 제한 전용 판정(RSC-B3) — 위 locked(요청 A)와 별개 플래그이므로 독립 계산 -->
   {@const courierRestricted = isCourierDependent(props.method)}
   {@const returnComboLocked = props.type === 'return' && locked}
-  <!-- 대여 제한옵션 "반납 배송선택 제한"(CMS) leg-aware 반영(2026-09-01, 2026-09-02 방문→
-       배송아님 일반화) — 수령(rental) leg은 이 토글과 무관하게 항상 전체 목록, 반납(return)
-       leg만 수령이 배송(is_bulk_delivery)이 아닐 때(방문·무인함·퀵서비스 전부) 배송 제외
-       (returnVisibleTabsFor 정의부 주석 참고 — 과거엔 양쪽 다 제외해 배송옵션 상품 전체의
-       "수령 방식"에서마저 배송이 사라지는 회귀가 있었음) -->
+  <!-- 대여 제한옵션 "반납 배송선택 제한"(CMS) leg-aware 반영(2026-09-01 최초, 2026-09-04
+       판정기준을 is_delivery_type으로 분리·교체) — 수령(rental) leg은 이 토글과 무관하게
+       항상 전체 목록, 반납(return) leg만 수령이 배송(is_delivery_type)이 아닐 때
+       (방문·무인함·퀵서비스 전부) 배송 제외(returnVisibleTabsFor 정의부 주석 참고) -->
   {@const visibleTabs = props.type === 'rental' ? pickupVisibleTabs : returnVisibleTabsFor(bulkOpts.rentalMethod)}
 
 
@@ -2090,38 +2313,29 @@
         <!-- Date/Time buttons + Calendar -->
         <div class="datetime-wrap">
           <div class="datetime-btns">
-            <button class="datetime-btn datetime-btn-dark" onclick={() => openCal(props.calId, props.selectedDate)}>
+            <button class="datetime-btn datetime-btn-dark" class:datetime-btn-date-selected={!!props.selectedDate} onclick={() => openCal(props.calId, props.selectedDate)}>
               <div class="datetime-btn-left">
-                <svg width="22" height="22" viewBox="0 0 22 22" fill="none">
-                  <rect fill="rgba(255,255,255,0.3)" height="20" rx="5.5" width="22" y="2"/>
-                  <path d="M3 3C3 1.27 4.27 0 5.97 0C7.47 0 8.69 1.27 8.69 2.84C8.69 4.42 7.47 5.69 5.97 5.69H5.72C4.22 5.69 3 4.42 3 2.84" fill="rgba(255,255,255,0.6)"/>
-                  <path d="M13.28 2.84C13.28 1.27 14.5 0 16 0C17.75 0 18.97 1.27 18.97 2.84C18.97 4.42 17.75 5.69 16.25 5.69H16C14.5 5.69 13.28 4.42 13.28 2.84" fill="rgba(255,255,255,0.6)"/>
-                  <path d="M3 7C3 5.89 3.72 5 4.6 5L17.4 5C18.28 5 19 5.9 19 7C19 8.1 18.28 9 17.4 9L4.6 9C3.72 9 3 8.1 3 7Z" fill="white"/>
-                  <path d="M3 13C3 11.9 3.76 11 4.7 11L9.3 11C10.24 11 11 11.9 11 13V15C11 16.1 10.24 17 9.3 17H4.7C3.76 17 3 16.1 3 15V13Z" fill="white"/>
+                <svg width="22" height="22" viewBox="0 0 32 32" fill="none">
+                  <path d="M9.95555 2.16871C18.4889 2.16871 15.4583 2.08796 21.3333 2.16868C29.8667 2.16871 31.2889 7.85107 31.2889 12.1128C31.2889 15.9495 31.2889 17.7936 31.2889 22.0553C31.2889 26.3171 28.4444 31.9995 21.3333 31.9995C15.6444 31.9995 12.8 31.9994 9.95555 31.9995C2.84444 31.9995 -9.85013e-10 26.3172 0 22.0553C9.85013e-10 17.7935 0 12.1128 0 12.1128C0 7.85107 1.42222 2.16871 9.95555 2.16871Z" fill="white"/>
+                  <path d="M7.11133 2.84444C7.11133 1.2735 8.32946 0 9.8321 0H10.0794C11.5821 0 12.8002 1.2735 12.8002 2.84444C12.8002 4.41539 11.5821 5.68889 10.0794 5.68889H9.8321C8.32946 5.68889 7.11133 4.41539 7.11133 2.84444Z" fill="white"/>
+                  <path d="M18.4885 2.84444C18.4885 1.2735 19.7067 0 21.2093 0H21.4566C22.9593 0 24.1774 1.2735 24.1774 2.84444C24.1774 4.41539 22.9593 5.68889 21.4566 5.68889H21.2093C19.7067 5.68889 18.4885 4.41539 18.4885 2.84444Z" fill="white"/>
+                  <path d="M22.7556 9.59961C23.7375 9.59961 24.5334 10.3955 24.5334 11.3774C24.5334 12.3592 23.7375 13.1552 22.7556 13.1552L8.53339 13.1552C7.55155 13.1552 6.75561 12.3592 6.75562 11.3774C6.75562 10.3955 7.55155 9.59961 8.53339 9.59961L22.7556 9.59961Z" fill="#3B2F8A"/>
+                  <path d="M7.11133 18.7162C7.1113 17.4124 7.99206 16.3555 9.07854 16.3555L14.3886 16.3555C15.475 16.3555 16.3558 17.4124 16.3558 18.7162V21.1059C16.3558 22.4097 15.475 23.4666 14.3886 23.4666H9.07862C7.99217 23.4666 7.11143 22.4097 7.11141 21.1059L7.11133 18.7162Z" fill="#3B2F8A"/>
                 </svg>
                 <span class="datetime-btn-label">{props.selectedDate ? displayDate(props.selectedDate) : dateLabel}</span>
               </div>
-              <svg width="8" height="14" viewBox="0 0 8 14" fill="none" class="datetime-btn-chevron" class:datetime-btn-chevron-open={isCalOpen}><path d="M1 1L7 7L1 13" stroke="white" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"/></svg>
             </button>
-            {#if !locked}
-              <button class="datetime-btn datetime-btn-mid" onclick={() => openTime(props.timeId)}>
+            {#if !locked && !courierRestricted}
+              <button class="datetime-btn datetime-btn-mid" class:datetime-btn-time-selected={!!props.selectedTime} onclick={() => openTime(props.timeId)}>
                 <div class="datetime-btn-left">
                   <svg width="23" height="23" viewBox="0 0 22.5 22.5" fill="none">
-                    <path d="M11.25 0C13.69 0 15.95 0.78 17.8 2.1L19 0.5C19.41 -0.05 20.2 -0.16 20.75 0.25C21.3 0.66 21.41 1.45 21 2L19.66 3.78C21.43 5.77 22.5 8.38 22.5 11.25C22.5 17.46 17.46 22.5 11.25 22.5C5.04 22.5 0 17.46 0 11.25C0 8.33 1.11 5.68 2.93 3.68L1.55 2.06C1.1 1.54 1.16 0.75 1.69 0.3C2.21 -0.15 3 -0.09 3.45 0.44L4.81 2.03C6.63 0.75 8.85 0 11.25 0ZM11 5C10.31 5 9.75 5.56 9.75 6.25V12.17C9.75 12.64 10.01 13.07 10.42 13.28L14.42 15.36C15.04 15.68 15.79 15.44 16.11 14.83C16.43 14.21 16.19 13.46 15.58 13.14L12.25 11.41V6.25C12.25 5.56 11.69 5 11 5Z" fill="rgba(255,255,255,0.8)"/>
+                    <path d="M11.25 0C13.69 0 15.95 0.78 17.8 2.1L19 0.5C19.41 -0.05 20.2 -0.16 20.75 0.25C21.3 0.66 21.41 1.45 21 2L19.66 3.78C21.43 5.77 22.5 8.38 22.5 11.25C22.5 17.46 17.46 22.5 11.25 22.5C5.04 22.5 0 17.46 0 11.25C0 8.33 1.11 5.68 2.93 3.68L1.55 2.06C1.1 1.54 1.16 0.75 1.69 0.3C2.21 -0.15 3 -0.09 3.45 0.44L4.81 2.03C6.63 0.75 8.85 0 11.25 0ZM11 5C10.31 5 9.75 5.56 9.75 6.25V12.17C9.75 12.64 10.01 13.07 10.42 13.28L14.42 15.36C15.04 15.68 15.79 15.44 16.11 14.83C16.43 14.21 16.19 13.46 15.58 13.14L12.25 11.41V6.25C12.25 5.56 11.69 5 11 5Z" fill="var(--cs-white)"/>
                   </svg>
                   <span class="datetime-btn-label">{props.selectedTime || timeLabel}</span>
                 </div>
-                <svg width="8" height="14" viewBox="0 0 8 14" fill="none" class="datetime-btn-chevron" class:datetime-btn-chevron-open={isTimeOpen}><path d="M1 1L7 7L1 13" stroke="white" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"/></svg>
               </button>
             {/if}
           </div>
-
-          <!-- 대여일시 통합 요약 — 날짜+시간 모두 선택 시 요일 포함 한 줄로 재확인 -->
-          {#if props.selectedDate && props.selectedTime}
-            <p class="datetime-summary">
-              {displayDate(props.selectedDate)}({weekdayKr(props.selectedDate)}) {props.selectedTime} {props.type === 'rental' ? '수령' : '반납'}
-            </p>
-          {/if}
 
           <!-- 달력 레이어 -->
           {#if isCalOpen}
@@ -2295,7 +2509,9 @@
             placeholder="기본주소 입력 (클릭하여 검색)"
             onselect={(road, postal) => {
               props.onFormChange({ ...props.form, addr: road, postalCode: postal })
-              validateDeliveryAddress(road, postal, props.method)
+              // 2026-09-04: 최초진입 시 방식이 미선택(null)일 수 있음 — 방식 자체를 아직
+              // 고르지 않은 상태에서는 배송가능지역 검증 대상 방식이 없으므로 스킵한다.
+              if (props.method) validateDeliveryAddress(road, postal, props.method)
             }}
           />
           {#if props.form.postalCode}
@@ -2851,9 +3067,12 @@
     margin: 0;
     word-break: break-word;
   }
-  /* 2026-08-18: 옵션상품도 본상품과 동일한 Day/12H price-row로 통일(옵션은 기간별
-     요금이 실제로 없어 동일 unitPrice*qty 값을 양쪽에 동일 표시 — Stephen 확인).
-     옵션 카드 규모(본상품보다 작음)에 맞춰 price-amount 등 폭 축소 */
+  /* 2026-08-18: 옵션상품도 본상품과 동일한 Day/12H price-row로 통일.
+     옵션 카드 규모(본상품보다 작음)에 맞춰 price-amount 등 폭 축소.
+     2026-09-03(Stephen 확정, 위 8/18 "기간별 요금 없음" 결정 번복): 옵션도 unit_price를
+     "1일" 기준가, unit_price/2(반올림)를 "12시간" 기준가로 보고 본상품과 동일한 12시간
+     블록 산식(calcRentalFee, itemOptionsAmount)을 적용 — 이제 Day/12H 두 값이 서로 다르게
+     표시된다(과거엔 옵션에 기간 개념이 없어 양쪽에 동일 unitPrice*qty를 표시했었음). */
   /* 2026-08-18: 본상품 price-amount/label/currency도 이 옵션 규격과 동일하게
      맞춰져(위 본상품 규칙 참고) 폰트 크기 오버라이드는 더 이상 필요 없음 — gap만
      옵션 카드 쪽이 좁게 유지 */
@@ -3105,6 +3324,12 @@
     font: var(--text-pc-title-18);
     color: var(--cs-purple-dark);
   }
+  /* 미선택 상태(수령/반납 방식 아직 안 고름) — 선택완료 상태(--cs-purple-dark)와 구분되는
+     그레이 톤(2026-09-04, Stephen 요청). 날짜 미선택(.period-unset)은 경고 성격의 red 톤을
+     쓰지만, 이건 "아직 안 골랐을 뿐"인 중립 상태라 placeholder에 쓰는 --cs-text-light 재사용. */
+  .acc-value-unset {
+    color: var(--cs-text-light);
+  }
   .acc-body {
     padding-top: 30px;
     /* overflow는 지정하지 않음 — transition:slide가 애니메이션 중에만 자체적으로 clip 처리.
@@ -3112,6 +3337,23 @@
        아코디언 높이를 넘어서는 부분에서 배경까지 잘려 보이는 문제가 있었음. */
   }
   .rotate-180 { transform: rotate(180deg); }
+  /* 대여 방법 아코디언이 닫혔을 때의 수령일·시간 요약(2026-09-03) — acc-head(padding 30px)와
+     좌우 정렬을 맞추고, 열림 상태의 acc-body(padding-top:30px)와 유사한 간격을 준다.
+     ⚠️ 반드시 .datetime-wrap과 결합한 선택자로 유지할 것 — 단일 클래스(.acc-collapsed-summary)만
+     쓰면 뒤에 정의된 기존 .datetime-wrap{padding:30px 0} 규칙과 동일 우선순위(0,1,0)라
+     소스 순서상 그 규칙에 좌우 패딩이 덮여 사라지는 결함이 있었다(2026-09-03 발견·수정). */
+  .datetime-wrap.acc-collapsed-summary { padding: 0 30px 20px; }
+  /* Stephen 확인(2026-09-03) — "대여 방법" 아코디언이 열린 상태의 .datetime-wrap(패딩 없음,
+     .form-section-body 폭 그대로 꽉 채움)과 "대여 방법" 아코디언이 닫혔을 때 같은 위치에
+     나오는 위 .acc-collapsed-summary(좌우 30px)의 가로폭이 서로 달라 보이는 결함 — .acc-item의
+     직계 자식(=이 아코디언 자체의 접힘 요약)만 좌우 패딩을 0으로 되돌려 열림 상태와 폭을
+     맞춘다. .bulk-collapsed-bar(패널 전체 접힘 요약, 별도 래퍼 안에 위치)는 이 선택자에
+     매칭되지 않으므로 기존 좌우 30px 여백 그대로 유지됨(자식결합자 특이도가 더 높아 우선 적용).
+     ⚠️ 좌우 패딩만 0으로 되돌리고 위쪽(top) 패딩까지 0으로 남겨둔 채였던 결함(2026-09-03) —
+     .acc-head(button) 바로 아래 이 요약 pill이 여백 없이 맞붙어 보였다. 열림 상태의
+     .acc-body{padding-top:30px}만큼은 아니어도(요약용 pill은 더 컴팩트해야 하므로) 시각적
+     구분이 되도록 16px을 부여한다. */
+  .acc-item > .datetime-wrap.acc-collapsed-summary { padding: 16px 0 20px; }
 
   /* ══ Rental Form ══ */
   .rental-form {
@@ -3289,21 +3531,6 @@
     padding: 12px 16px;
   }
 
-  /* 대여일시 통합 요약 배지 — 날짜+시간 모두 선택 시 확인용 */
-  .datetime-summary {
-    display: block;
-    width: 100%;
-    box-sizing: border-box;
-    text-align: center;
-    font: var(--text-m-script-14B);
-    font-weight: 700;
-    color: var(--cs-purple-dark);
-    background: var(--cs-purple-op10);
-    border-radius: var(--radius-full, 9999px);
-    padding: 10px 16px;
-    margin: 8px 0 0;
-  }
-
   /* Datetime buttons */
   .datetime-btns {
     display: flex;
@@ -3313,6 +3540,14 @@
   }
   .datetime-btn {
     flex: 1;
+    /* 2026-09-03(원인 분석 후 수정) — min-width:auto(기본값)에서는 flex-shrink가 있어도
+       버튼이 내용물(줄바꿈 없는 라벨 텍스트) 폭 밑으로 줄어들 수 없어, 날짜·시간 두 라벨의
+       길이 차이만큼 컨테이너가 좁아지면 합계가 컨테이너 폭을 넘어서고 .datetime-btns의
+       overflow:hidden이 뒤쪽(시간) 버튼 끝을 그대로 잘라버리는 결함이 있었다(대여 방법/반납
+       방법 접힘요약처럼 폭이 좁은 위치에서 재현). min-width:0으로 풀어 실제로 줄어들 수 있게
+       하고, 줄어든 만큼은 라벨에서 말줄임(…) 처리한다(아래 datetime-btn-label 참고) —
+       버튼이 잘려나가는 대신 텍스트만 우아하게 축약된다. */
+    min-width: 0;
     border: none;
     cursor: pointer;
     display: flex;
@@ -3324,21 +3559,25 @@
   .datetime-btn:hover { filter: brightness(1.1); }
   .datetime-btn-dark { background: var(--cs-text-dark); }
   .datetime-btn-mid { background: var(--cs-text-mid); }
+  /* 날짜/시간 선택 즉시 배경 전환(2026-09-03, Stephen 확정) — purple-80/60 토큰 */
+  .datetime-btn-date-selected { background: var(--cs-purple); }
+  .datetime-btn-time-selected { background: var(--cs-purple-light); }
   .datetime-btn-left {
     display: flex;
     align-items: center;
     gap: 20px;
+    min-width: 0; /* 위 .datetime-btn과 동일 이유 — 부모가 줄어들 때 함께 줄어들 수 있어야 함 */
   }
+  .datetime-btn-left svg { flex-shrink: 0; } /* 아이콘은 항상 원래 크기 유지, 줄어드는 건 텍스트만 */
   .datetime-btn-label {
     color: white;
     font: var(--text-m-title-18B);
     letter-spacing: -0.5px;
     white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    min-width: 0;
   }
-  /* 수령일/수령시간 아코디언 펼침 상태 표시 — 화살표 90도 회전(2026-08-24) */
-  .datetime-btn-chevron { transition: transform 0.2s ease; flex-shrink: 0; }
-  .datetime-btn-chevron-open { transform: rotate(90deg); }
-
   /* ══ Calendar + Time Layer ══ */
   .datetime-wrap { position: relative; display: flex; flex-direction: column; gap: 0; padding: 30px 0; }
   .cal-layer {
@@ -3563,6 +3802,12 @@
     border-radius: var(--radius-xl, 30px);
     overflow: hidden;
     width: 100%;
+    /* 2026-09-03(Stephen 확정) — 이 박스 자체엔 배경이 없어 coupon-section/
+       points-select-section이 페이지 배경(라일락) 위에 떠 있는 것처럼 보이고,
+       그 아래 total-gray-section(자체 회색 배경)만 별도 카드처럼 분리돼 보이던 문제.
+       쿠폰·포인트·약정요금 3영역을 하나의 흰 배경 카드로 묶는다(총정요금 영역의
+       회색 톤은 기존 .total-gray-section 배경으로 그대로 유지 — 카드 내 2단 톤 유지). */
+    background: var(--cs-white, #fff);
   }
   .total-gray-section {
     background: #F6F6F6;
@@ -3972,7 +4217,9 @@
     .acc-value { font: var(--text-m-title-18B); }
     .acc-body { padding-top: 20px; }
     .datetime-btn { padding: 12px 16px; }
-    .datetime-btn-label { font: var(--text-m-body-16B); letter-spacing: -0.5px; }
+    /* 2026-09-03(Stephen 확정) — 모바일에서 한 단계 큰 토큰으로 상향(16px Bold→18px Bold,
+       PC 기본값과 동일해짐). 수령/반납 양쪽 버튼이 이 클래스를 공유해 함께 적용됨. */
+    .datetime-btn-label { font: var(--text-m-title-18B); letter-spacing: -0.5px; }
     /* 모바일: 시간선택 리스트는 50%(PC 기준)로는 너무 좁아 전체폭 확보(가독성 개선,
        2026-08-17) — 날짜/시간 팝업은 한 번에 하나만 열리므로 폭 겹침 없음 */
     .time-layer { width: 100%; }
@@ -4062,6 +4309,21 @@
     flex-direction: column;
     gap: 14px;
     border-top: 1px solid var(--cs-lilac, #ECEBF4);
+  }
+  /* "대여예약옵션" 헤더 + 접힌 상태 수령/반납 요약을 하나의 배경 레이아웃으로 묶음(2026-09-03,
+     Stephen 확정) — bulk-panel의 기존 흰 배경을 그대로 물려받아 새 색상은 만들지 않고,
+     구조적으로 bulk-head+bulk-collapsed-bar를 한 div 안에 묶기만 한다. */
+  .bulk-collapsed-group {
+    display: flex;
+    flex-direction: column;
+  }
+  /* 내부는 "대여 방법"/"반납 방법"의 acc-collapsed-summary와 완전히 동일한 datetime-wrap
+     레이아웃을 그대로 재사용(임의 신규 UI 금지, Stephen 확정). 좌우 패딩은 각 자식
+     acc-collapsed-summary(padding:0 30px 20px, .datetime-wrap과 결합한 선택자로 적용)가
+     이미 갖고 있어 여기서는 세로 배치만 담당. */
+  .bulk-collapsed-bar {
+    display: flex;
+    flex-direction: column;
   }
 
 </style>

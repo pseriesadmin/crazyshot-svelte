@@ -140,25 +140,32 @@ describe('[TDD] create_hold_reservation_with_shipment — 실패 경로', () => 
     const { client } = await createEphemeralSession()
     const { start, end } = randomFutureRange()
 
-    // restrict_return_delivery를 켜고, is_bulk_delivery=true인 방식을 만들어 강제로
+    // Migration #443(2026-09-04, Stephen UX 지적으로 마스터 on/off 토글 완전 제거) — 이제
+    // is_delivery_type=true로 지정된 방식이 있다는 사실 자체가 곧 활성화 조건이다. 라이브
+    // Stage CMS가 동시에 다른 방식들의 is_delivery_type을 편집 중일 수 있어(공유 DB), 기존
+    // 등록 방식(visit 등)에 의존하지 않고 픽업·반납 둘 다 이 테스트 전용 임시 방식으로
+    // 완전히 격리해 만든다 — pickup=비배송, return=배송(is_delivery_type=true)으로 강제해
     // set_reservation_shipment_method의 RAISE EXCEPTION 경로를 유발한다.
-    const { data: settingsRow } = await admin.from('rental_shipping_settings').select('id, restrict_return_delivery').limit(1).single()
-    const settingsId = (settingsRow as { id: string }).id
-    const originalRestricted = (settingsRow as { restrict_return_delivery: boolean | null }).restrict_return_delivery
-    await admin.from('rental_shipping_settings').update({ restrict_return_delivery: true }).eq('id', settingsId)
-    cleanups.push(async () => {
-      await admin.from('rental_shipping_settings').update({ restrict_return_delivery: originalRestricted }).eq('id', settingsId)
-    })
-
-    const methodKey = `tdd-bulk-${Date.now()}`
-    const { data: methodRow, error: methodErr } = await admin
+    const pickupKey = `tdd-nondelivery-${Date.now()}`
+    const returnKey = `tdd-delivery-${Date.now()}`
+    const { data: pickupMethodRow, error: pickupMethodErr } = await admin
       .from('rental_method_options')
-      .insert({ method_key: methodKey, name: 'TDD 임시 배송방식', is_bulk_delivery: true, is_active: true })
+      .insert({ method_key: pickupKey, name: 'TDD 임시 비배송방식', is_delivery_type: false, is_active: true })
       .select('id')
       .single()
-    if (methodErr) throw new Error(`임시 배송방식 생성 실패: ${methodErr.message}`)
+    if (pickupMethodErr) throw new Error(`임시 비배송방식 생성 실패: ${pickupMethodErr.message}`)
     cleanups.push(async () => {
-      await admin.from('rental_method_options').delete().eq('id', (methodRow as { id: string }).id)
+      await admin.from('rental_method_options').delete().eq('id', (pickupMethodRow as { id: string }).id)
+    })
+
+    const { data: returnMethodRow, error: returnMethodErr } = await admin
+      .from('rental_method_options')
+      .insert({ method_key: returnKey, name: 'TDD 임시 배송방식', is_delivery_type: true, is_active: true })
+      .select('id')
+      .single()
+    if (returnMethodErr) throw new Error(`임시 배송방식 생성 실패: ${returnMethodErr.message}`)
+    cleanups.push(async () => {
+      await admin.from('rental_method_options').delete().eq('id', (returnMethodRow as { id: string }).id)
     })
 
     const before = await admin
@@ -167,7 +174,7 @@ describe('[TDD] create_hold_reservation_with_shipment — 실패 경로', () => 
       .eq('user_id', (await client.auth.getUser()).data.user?.id)
     const beforeCount = (before.data ?? []).length
 
-    const result = await createComboHold(client, { start, end, pickupMethod: methodKey })
+    const result = await createComboHold(client, { start, end, pickupMethod: pickupKey, returnMethod: returnKey })
 
     expect(result.success).toBe(false)
     expect(result.reservation_id).toBeNull()

@@ -32,6 +32,11 @@ export interface RentalMethodOption {
   // 휴무일 캘린더 제한 대상(택배사 의존 여부) — is_bulk_delivery("요청 A" 전용)와는
   // 별개 목적(감사 RSC-B3, Migration #386). /cart courierClosedMap 적용 방식 판정에만 쓰임.
   is_courier_dependent: boolean
+  // "배송 반납 허용 지정" — ON이면 수령이 배송이 아닐 때 반납 콤보에서 제외됨(Migration #440·#441·#443,
+  // 2026-09-04) — is_bulk_delivery와 완전히 분리된 별개 플래그. 같은 방식이 두 플래그를
+  // 동시에 true로 가질 수 없다(toggle RPC 상호배타 가드, Migration #441). 별도 마스터 토글
+  // 없음(is_delivery_type=true 존재 자체가 활성화 조건).
+  is_delivery_type: boolean
 }
 
 export interface PickupPoint {
@@ -58,7 +63,6 @@ export interface RentalShippingSettings {
   enable_return: boolean
   return_fee: number | null
   shipping_guide: string
-  restrict_return_delivery: boolean
 }
 
 export interface DeliveryFeeDiscountTier {
@@ -96,7 +100,7 @@ export const load: PageServerLoad = async ({ locals }) => {
       .order('display_order'),
 
     untypedFrom(supabase, 'rental_method_options')
-      .select('id, name, method_key, display_order, is_active, is_bulk_delivery, is_courier_dependent')
+      .select('id, name, method_key, display_order, is_active, is_bulk_delivery, is_courier_dependent, is_delivery_type')
       .is('deleted_at', null)
       .order('display_order'),
 
@@ -117,7 +121,7 @@ export const load: PageServerLoad = async ({ locals }) => {
       .order('display_order'),
 
     untypedFrom(supabase, 'rental_shipping_settings')
-      .select('enable_round_trip, round_trip_fee, enable_delivery, delivery_fee, enable_return, return_fee, shipping_guide, restrict_return_delivery')
+      .select('enable_round_trip, round_trip_fee, enable_delivery, delivery_fee, enable_return, return_fee, shipping_guide')
       .limit(1)
       .single(),
 
@@ -270,11 +274,15 @@ export const actions: Actions = {
     return { success: true }
   },
 
-  // 대여 제한옵션 — /cart 반납 설정에서 '배송' 반납방식 노출 여부 전역 토글
-  toggleReturnDeliveryRestriction: async ({ locals }) => {
+  // "반납 배송선택 제한" 판정 전용 플래그(Migration #440/#441, 2026-09-04) — is_bulk_delivery
+  // ("요청 A" 전용)와 완전히 분리. RPC 자체에 상호배타 가드가 있어(같은 방식이 두 플래그를
+  // 동시에 true로 가질 수 없음) 여기서 별도 사전검증 없이 RPC 에러 메시지를 그대로 전달한다.
+  toggleDeliveryType: async ({ request, locals }) => {
     const { session } = await locals.safeGetSession()
     if (!session) return fail(401, { error: '인증 필요' })
-    const { error } = await untypedRpc(locals.supabase, 'toggle_return_delivery_restriction', {})
+    const data = await request.formData()
+    const id = data.get('id') as string
+    const { error } = await untypedRpc(locals.supabase, 'toggle_rental_method_delivery_type', { p_id: id })
     if (error) return fail(400, { error: error.message })
     return { success: true }
   },
