@@ -329,6 +329,25 @@ $$ SECURITY DEFINER;
 
 ## Guard 9: Regression Coverage (회귀 테스트 기준)
 
+> ✅ **2026-09-03부터 실제 Claude Code 훅으로 연결됨(v1)** — 그 전까지는 이 문서만 존재하고
+> 기계적 집행 장치가 전혀 없었다(과거 실행 로그 전수검색 결과 "Guard 9" 언급 0건, 실행
+> 이력 없음 — Stephen 질의로 발견). 아래는 이제 문서 그대로가 아니라 실제 훅 스크립트
+> (`.claude/hooks/guard9-*.mjs`, `.claude/settings.local.json`의 `hooks` 항목)로 동작한다:
+> - PostToolUse(Edit|Write) — 수정 파일을 도메인에 매핑해 연관 도메인이 있으면 즉시
+>   컨텍스트에 리마인더 주입(비차단)
+> - PostToolUse(Bash) — 세션 내 테스트/체크 명령 실행 여부를 세션별 상태파일에 기록
+> - Stop — 세션 종료 직전, 연관 도메인 파일을 건드렸는데 세션 내내 테스트 명령이 한 번도
+>   실행되지 않았으면 `systemMessage`로 경고(v1 — 오탐 위험 때문에 의도적으로 차단(block)
+>   아님, 경고만)
+> 상태파일 위치: `.claude/harness/telemetry/guard9/<session_id>.json`(세션별 격리, gitignore
+> 대상). **2026-09-03(같은 날 후속) 팀 전체 적용 완료** — `.claude/settings.json`(git 추적,
+> 신규 생성)으로 이전해 모든 세션·기여자에게 자동 적용됨. `.claude/settings.local.json`
+> (개인 전용, git-ignored)에 있던 동일 `hooks` 블록은 중복 발동 방지를 위해 제거했다(둘
+> 다 남겨두면 파일 하나 수정에 리마인더가 2번 뜨는 등 중복 실행됨). 이전(개인 로컬)·이후
+> (settings.json) 양쪽 다 실제 Edit로 발동 확인 완료(1회만 발동, 중복 없음).
+> ⚠️ 도메인 판정은 파일 경로 기반 휴리스틱(`guard9-lib.mjs`의 `PATH_RULES`)이라 완벽하지
+> 않다 — 오탐/누락 발견 시 그 배열만 조정하면 됨(다른 스크립트 수정 불필요).
+
 ### 목적
 
 변경 파일과 관련된 테스트만 실행하면 모듈 간 의존성 회귀를 놓친다.

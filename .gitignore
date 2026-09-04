@@ -33,6 +33,9 @@ Icon?
 # Claude Code — 로컬 권한·경로 (개인 설정)
 .claude/settings.local.json
 
+# Guard 9 훅 세션별 임시 상태(세션마다 새로 생성되는 런타임 상태 — 커밋 대상 아님)
+.claude/harness/telemetry/
+
 # Cursor harness — .claude/ 정본과 중복되는 심볼릭 링크
 .cursor/harness/*.md
 !.cursor/harness/CURSOR_START.md
