@@ -50,6 +50,23 @@ export interface ContractSubstitutionData {
   // ── 신규: 요금 유형(대여 기간 구분) 라벨 (2026-08-31) ───────────────────────
   /** duration_type('12h'|'24h'|'1day'|'monthly')을 사람이 읽을 수 있는 라벨로 변환 */
   요금유형?: string
+  // ── 신규: 결제 확정 시점 쿠폰·포인트 차감 내역 (2026-08-31) ─────────────────
+  /**
+   * 쿠폰으로 차감된 금액 — payment_transactions.coupon_discount(결제 확정 시점 기록).
+   * ⚠️ 기존 `할인금액`(orders.discount_amount)과는 소스가 다르다 — orders.discount_amount는
+   * 주문 생성 시점(create_reservation_order)에 회원등급(POP/CRAZY) 할인율만으로 계산되며
+   * 쿠폰·포인트는 전혀 반영하지 않는다(과거 문서에 "쿠폰+포인트 통합"으로 잘못 기재돼
+   * 있었음 — 실제 RPC 코드 대조로 정정, contract.md 참고).
+   */
+  할인차감?: string
+  /** 포인트로 차감된 금액 — payment_transactions.point_amount(결제 확정 시점 기록) */
+  차감포인트?: string
+  // ── 신규: 구성품 목록 (2026-09-03) ──────────────────────────────────────────
+  /**
+   * products.components(key-value JSONB)를 "key: value, key: value" 텍스트로 합친 값.
+   * 50자(한영숫자 포함 전체 문자 기준) 초과 시 말줄임(...) 적용 — Stephen 확정.
+   */
+  구성품?: string
   // ── 신규: 반복 영역 전용 항목 배열 ────────────────────────────────────────
   /**
    * 주문에 묶인 모든 reservation의 메인상품 + 옵션상품을 평탄화한 배열.
