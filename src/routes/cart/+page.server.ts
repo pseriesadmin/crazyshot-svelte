@@ -320,6 +320,28 @@ export const load: PageServerLoad = async ({ locals }) => {
       }
     }
 
+    // 옵션상품 배송대여 불가/필수/최소1개선택 여부(product_option_links.delivery_rental_disabled·
+    // is_required·min_select_required) — 상품상세 등록 시점 설정(products.md §옵션상품)을 카트
+    // 화면까지 이어받아 배송방식 선택 제한 + 배지 표시(2026-09-05, products/[id] 옵션선택 UI의
+    // "필수"/"최소 1개 선택"/"배송대여 불가" 배지를 카트 화면에도 동일하게 노출)에 사용.
+    // reservation_options에는 이 플래그들이 저장되지 않으므로(옵션 확정 시 스냅샷되지 않음) 매번
+    // product_option_links를 다시 조회 — 동일 optionProductId가 여러 부모상품 링크에 걸쳐있는
+    // edge case까지 안전하게 처리하기 위해 "하나라도 true면 true"(OR)로 보수적으로 판정한다.
+    const optionDeliveryDisabledMap = new Map<string, boolean>()
+    const optionRequiredMap = new Map<string, boolean>()
+    const optionMinSelectMap = new Map<string, boolean>()
+    if (optionProductIds.length > 0) {
+      const { data: optionLinkRows } = await supabase
+        .from('product_option_links')
+        .select('option_product_id, delivery_rental_disabled, is_required, min_select_required')
+        .in('option_product_id', optionProductIds)
+      for (const l of (optionLinkRows ?? []) as Array<{ option_product_id: string; delivery_rental_disabled: boolean | null; is_required: boolean | null; min_select_required: boolean | null }>) {
+        if (l.delivery_rental_disabled) optionDeliveryDisabledMap.set(l.option_product_id, true)
+        if (l.is_required) optionRequiredMap.set(l.option_product_id, true)
+        if (l.min_select_required) optionMinSelectMap.set(l.option_product_id, true)
+      }
+    }
+
     const optionsByReservation: Record<string, CartLineItemOption[]> = {}
     for (const row of optionRows) {
       const key = String(row.reservation_id)
@@ -331,6 +353,9 @@ export const load: PageServerLoad = async ({ locals }) => {
         unitPrice:       row.unit_price,
         unitPrice12h:    row.option_product_id ? optionPrice12hMap.get(row.option_product_id) ?? null : null,
         imageUrl:        row.option_product_id ? optionImageMap.get(row.option_product_id) ?? null : null,
+        deliveryRentalDisabled: row.option_product_id ? (optionDeliveryDisabledMap.get(row.option_product_id) ?? false) : false,
+        isRequired:      row.option_product_id ? (optionRequiredMap.get(row.option_product_id) ?? false) : false,
+        minSelectRequired: row.option_product_id ? (optionMinSelectMap.get(row.option_product_id) ?? false) : false,
       })
       optionsByReservation[key] = list
     }
@@ -549,6 +574,9 @@ interface CartLineItemOption {
   unitPrice:       number
   unitPrice12h:    number | null
   imageUrl:        string | null
+  deliveryRentalDisabled: boolean
+  isRequired: boolean
+  minSelectRequired: boolean
 }
 
 interface CartLineItem {

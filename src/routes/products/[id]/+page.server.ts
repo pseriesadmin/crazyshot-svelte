@@ -171,6 +171,25 @@ export const load: PageServerLoad = async ({ params, locals }) => {
 		}
 	}
 
+	// 옵션상품 12H 요금(2026-09-05) — get_product_option_links RPC가 price_24h만 반환해
+	// 옵션 카드에 12H 가격이 통째로 누락돼 있던 결함 수정. 장바구니(cart/+page.server.ts
+	// optionPrice12hMap)와 동일하게 price_rules를 별도 조회해 병합 — RPC/스키마 변경 없음.
+	if (optionLinks.length > 0) {
+		const optionProductIds = optionLinks.map((l) => l.option_product_id);
+		const { data: opt12hRules } = await locals.supabase
+			.from('price_rules')
+			.select('product_id, price')
+			.in('product_id', optionProductIds)
+			.eq('duration_type', '12h')
+			.eq('is_active', true)
+			.is('deleted_at', null);
+		const price12hMap = new Map<string, number>();
+		for (const r of (opt12hRules ?? []) as Array<{ product_id: string; price: number }>) {
+			price12hMap.set(r.product_id, r.price);
+		}
+		optionLinks = optionLinks.map((l) => ({ ...l, price_12h: price12hMap.get(l.option_product_id) ?? null }));
+	}
+
 	// 가용 재고 수 — 메인 상품 + 옵션 상품 전부 배치 조회(N+1 방지, Migration 421)
 	// "등록된 총 수량 - 점유되지 않은 실제 가용 재고" 반영(2026-09-02 Stephen GATE B 승인).
 	// 날짜 무관 — 현재 시점에 비종결 상태(hold/confirmed/shipped/in_use/return_requested)

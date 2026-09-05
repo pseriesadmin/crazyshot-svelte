@@ -19,6 +19,9 @@ export interface CartLineItemOption {
   unitPrice: number
   unitPrice12h: number | null
   imageUrl: string | null
+  deliveryRentalDisabled: boolean
+  isRequired: boolean
+  minSelectRequired: boolean
 }
 
 export interface GroupableProduct {
@@ -80,7 +83,10 @@ function toOptionInput(o: CartLineItemOption): ReservationOptionInput {
 function fromOptionInput(
   o: ReservationOptionInput,
   imageUrlByProductId: Map<string, string | null>,
-  unitPrice12hByProductId: Map<string, number | null>
+  unitPrice12hByProductId: Map<string, number | null>,
+  deliveryDisabledByProductId: Map<string, boolean>,
+  requiredByProductId: Map<string, boolean>,
+  minSelectByProductId: Map<string, boolean>
 ): CartLineItemOption {
   return {
     optionProductId: o.option_product_id,
@@ -92,6 +98,14 @@ function fromOptionInput(
     // price_rules에서 조회한 독립 12h 가격 — unit_price/2로 파생시키지 않음).
     unitPrice12h: o.option_product_id ? (unitPrice12hByProductId.get(o.option_product_id) ?? null) : null,
     imageUrl: o.option_product_id ? (imageUrlByProductId.get(o.option_product_id) ?? null) : null,
+    // 배송대여 불가(product_option_links.delivery_rental_disabled) — imageUrl/unitPrice12h와
+    // 동일한 패턴의 표시·판정 전용 필드(옵션상품 1개당 고정값). 장바구니 배송방식 선택 제한에 사용.
+    deliveryRentalDisabled: o.option_product_id ? (deliveryDisabledByProductId.get(o.option_product_id) ?? false) : false,
+    // 필수/최소1개선택(product_option_links.is_required/min_select_required, 2026-09-05) —
+    // 위 deliveryRentalDisabled와 동일한 패턴의 표시 전용 필드. products/[id] 옵션선택 UI의
+    // "필수"/"최소 1개 선택" 배지와 동일 데이터를 카트 화면에도 노출하기 위해 추가.
+    isRequired: o.option_product_id ? (requiredByProductId.get(o.option_product_id) ?? false) : false,
+    minSelectRequired: o.option_product_id ? (minSelectByProductId.get(o.option_product_id) ?? false) : false,
   }
 }
 
@@ -125,6 +139,9 @@ export function groupCartLineItems(items: GroupableLineItem[]): CartLineGroup[] 
     // 필드라 별도 복원(둘 다 option_product_id 1개당 고정값 — reservation마다 달라지지 않음)
     const imageUrlByProductId = new Map<string, string | null>()
     const unitPrice12hByProductId = new Map<string, number | null>()
+    const deliveryDisabledByProductId = new Map<string, boolean>()
+    const requiredByProductId = new Map<string, boolean>()
+    const minSelectByProductId = new Map<string, boolean>()
     for (const m of members) {
       for (const o of m.options) {
         if (o.optionProductId && !imageUrlByProductId.get(o.optionProductId)) {
@@ -132,6 +149,15 @@ export function groupCartLineItems(items: GroupableLineItem[]): CartLineGroup[] 
         }
         if (o.optionProductId && unitPrice12hByProductId.get(o.optionProductId) == null) {
           unitPrice12hByProductId.set(o.optionProductId, o.unitPrice12h)
+        }
+        if (o.optionProductId && !deliveryDisabledByProductId.get(o.optionProductId)) {
+          deliveryDisabledByProductId.set(o.optionProductId, o.deliveryRentalDisabled)
+        }
+        if (o.optionProductId && !requiredByProductId.get(o.optionProductId)) {
+          requiredByProductId.set(o.optionProductId, o.isRequired)
+        }
+        if (o.optionProductId && !minSelectByProductId.get(o.optionProductId)) {
+          minSelectByProductId.set(o.optionProductId, o.minSelectRequired)
         }
       }
     }
@@ -159,7 +185,7 @@ export function groupCartLineItems(items: GroupableLineItem[]): CartLineGroup[] 
       returnTime: canonical.returnTime,
       durationType: canonical.durationType,
       status: canonical.status,
-      options: mergedOptions.map((o) => fromOptionInput(o, imageUrlByProductId, unitPrice12hByProductId)),
+      options: mergedOptions.map((o) => fromOptionInput(o, imageUrlByProductId, unitPrice12hByProductId, deliveryDisabledByProductId, requiredByProductId, minSelectByProductId)),
     }
   })
 }

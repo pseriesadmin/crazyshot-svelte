@@ -135,19 +135,19 @@ describe('groupCartLineItems — 옵션 합산(그룹 내 전체 멤버 대상)'
     const items = [
       makeItem({
         reservationId: '10',
-        options: [{ optionProductId: 'opt-1', name: '메모리카드', qty: 1, unitPrice: 5000, unitPrice12h: null, imageUrl: null }],
+        options: [{ optionProductId: 'opt-1', name: '메모리카드', qty: 1, unitPrice: 5000, unitPrice12h: null, imageUrl: null, deliveryRentalDisabled: false, isRequired: false, minSelectRequired: false }],
       }),
       makeItem({
         reservationId: '20',
-        options: [{ optionProductId: 'opt-2', name: '삼각대', qty: 1, unitPrice: 3000, unitPrice12h: null, imageUrl: null }],
+        options: [{ optionProductId: 'opt-2', name: '삼각대', qty: 1, unitPrice: 3000, unitPrice12h: null, imageUrl: null, deliveryRentalDisabled: false, isRequired: false, minSelectRequired: false }],
       }),
     ]
     const groups = groupCartLineItems(items)
 
     expect(groups).toHaveLength(1)
     expect(groups[0].options).toEqual([
-      { optionProductId: 'opt-1', name: '메모리카드', qty: 1, unitPrice: 5000, unitPrice12h: null, imageUrl: null },
-      { optionProductId: 'opt-2', name: '삼각대', qty: 1, unitPrice: 3000, unitPrice12h: null, imageUrl: null },
+      { optionProductId: 'opt-1', name: '메모리카드', qty: 1, unitPrice: 5000, unitPrice12h: null, imageUrl: null, deliveryRentalDisabled: false, isRequired: false, minSelectRequired: false },
+      { optionProductId: 'opt-2', name: '삼각대', qty: 1, unitPrice: 3000, unitPrice12h: null, imageUrl: null, deliveryRentalDisabled: false, isRequired: false, minSelectRequired: false },
     ])
   })
 
@@ -155,11 +155,11 @@ describe('groupCartLineItems — 옵션 합산(그룹 내 전체 멤버 대상)'
     const items = [
       makeItem({
         reservationId: '10',
-        options: [{ optionProductId: 'opt-1', name: '메모리카드', qty: 1, unitPrice: 5000, unitPrice12h: null, imageUrl: 'img.jpg' }],
+        options: [{ optionProductId: 'opt-1', name: '메모리카드', qty: 1, unitPrice: 5000, unitPrice12h: null, imageUrl: 'img.jpg', deliveryRentalDisabled: false, isRequired: false, minSelectRequired: false }],
       }),
       makeItem({
         reservationId: '20',
-        options: [{ optionProductId: 'opt-1', name: '메모리카드', qty: 2, unitPrice: 5000, unitPrice12h: null, imageUrl: null }],
+        options: [{ optionProductId: 'opt-1', name: '메모리카드', qty: 2, unitPrice: 5000, unitPrice12h: null, imageUrl: null, deliveryRentalDisabled: false, isRequired: false, minSelectRequired: false }],
       }),
     ]
     const groups = groupCartLineItems(items)
@@ -174,16 +174,34 @@ describe('groupCartLineItems — 옵션 합산(그룹 내 전체 멤버 대상)'
     const items = [
       makeItem({
         reservationId: '10',
-        options: [{ optionProductId: 'opt-1', name: '메모리카드', qty: 1, unitPrice: 5000, unitPrice12h: null, imageUrl: null }],
+        options: [{ optionProductId: 'opt-1', name: '메모리카드', qty: 1, unitPrice: 5000, unitPrice12h: null, imageUrl: null, deliveryRentalDisabled: false, isRequired: false, minSelectRequired: false }],
       }),
       makeItem({
         reservationId: '20',
-        options: [{ optionProductId: 'opt-1', name: '메모리카드', qty: 1, unitPrice: 5000, unitPrice12h: 4000, imageUrl: null }],
+        options: [{ optionProductId: 'opt-1', name: '메모리카드', qty: 1, unitPrice: 5000, unitPrice12h: 4000, imageUrl: null, deliveryRentalDisabled: false, isRequired: false, minSelectRequired: false }],
       }),
     ]
     const groups = groupCartLineItems(items)
 
     expect(groups[0].options[0].unitPrice12h).toBe(4000)
+  })
+
+  it('2026-09-05: isRequired/minSelectRequired/deliveryRentalDisabled는 두 예약 중 하나라도 true면 true(OR 병합)', () => {
+    const items = [
+      makeItem({
+        reservationId: '10',
+        options: [{ optionProductId: 'opt-1', name: '메모리카드', qty: 1, unitPrice: 5000, unitPrice12h: null, imageUrl: null, deliveryRentalDisabled: false, isRequired: false, minSelectRequired: false }],
+      }),
+      makeItem({
+        reservationId: '20',
+        options: [{ optionProductId: 'opt-1', name: '메모리카드', qty: 1, unitPrice: 5000, unitPrice12h: null, imageUrl: null, deliveryRentalDisabled: true, isRequired: true, minSelectRequired: true }],
+      }),
+    ]
+    const groups = groupCartLineItems(items)
+
+    expect(groups[0].options[0].deliveryRentalDisabled).toBe(true)
+    expect(groups[0].options[0].isRequired).toBe(true)
+    expect(groups[0].options[0].minSelectRequired).toBe(true)
   })
 })
 

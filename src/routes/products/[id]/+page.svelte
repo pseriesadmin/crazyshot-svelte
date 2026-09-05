@@ -12,7 +12,6 @@
     clampReservationQty,
     createMultiUnitReservation,
     resolveParentProductId,
-    mergeReservationOptions,
     clampToAvailableStock,
     type UnitReservationResult,
     type ReservationOptionInput,
@@ -104,6 +103,7 @@
       id: link.option_product_id,
       label: link.option_product_name,
       price: link.price_24h ?? 0,
+      price12h: link.price_12h ?? null,
       // [C-1] 필수 옵션 기본 수량 1 — 단, 가용재고가 0이면 무조건 1로 세팅하지 않고 0으로 시작
       // (2026-09-03, QA 지적 — 재고 0인 필수옵션도 예약이 그대로 제출되던 결함 수정).
       // handleReserve 제출 검증이 "필수 옵션 qty===0"이면 별도 안내 후 차단하므로, 재고가
@@ -362,9 +362,11 @@
     }
 
     // 최소 1개 선택 필수 그룹 — 그룹 내 전부 미선택
+    // 표준 토스트 헬퍼(csToast) 사용 — 이 페이지의 showToast()는 비표준 커스텀 구현이라
+    // 이 경고에는 쓰지 않는다(2026-09-06 지적, uiux-index.md 표준 토스트 헬퍼 지침).
     const minSelectGroup = optionItems.filter((o) => o.min_select_required);
     if (minSelectGroup.length > 0 && !minSelectGroup.some((o) => o.qty > 0)) {
-      showToast('최소 1개 이상의 옵션상품을 선택하세요.');
+      csToast.warning('옵션상품의 조건을 확인하세요.');
       return;
     }
 
@@ -505,19 +507,30 @@
         }
 
         // 옵션상품 + 수량 저장 (draft 상태에서도 가능 — DB-4) — 기존에 카트에 이미 이 부모상품이
-        // 있으면(existingGroup) 그 canonical 예약에 옵션을 병합(합산) 반영하고, 없으면 이번
-        // 제출의 첫 예약에 귀속(중복과금 방지, reservation_options.reservation_id는 1건 FK)
+        // 있으면(existingGroup) 그 canonical 예약에 옵션을 반영하고, 없으면 이번 제출의 첫
+        // 예약에 귀속(중복과금 방지, reservation_options.reservation_id는 1건 FK)
         // set_reservation_duration / set_reservation_shipment_method는 날짜 없어 의미 없음 — 체크아웃 승격(FE-4) 시점에 호출
+        //
+        // ⛔ 2026-09-06 CRITICAL 수정 — mergeReservationOptions(existingGroup.existing_options,
+        // selectedOptions)로 합산 제출하던 기존 로직 제거. existingGroup.existing_options는
+        // find_matching_cart_reservation_group이 바로 이 targetCanonicalId "자기 자신"의 행에서
+        // 조회해온 값인데, set_reservation_options RPC는 호출될 때마다 그 행의 옵션을
+        // DELETE 후 재삽입(완전 교체)한다 — 즉 서버가 이미 통째로 갈아엎는 값을 클라이언트가
+        // 미리 두 번 합산해서 보낸 셈이라, 동일 상품을 재방문/재제출할 때마다 옵션 수량이
+        // 실제 선택값의 배수로 누적 저장되는 결함이었다(실사례: 실재고 2대인 옵션을 화면에서
+        // 매번 qty=2로 선택했는데 기존 저장값 2 + 신규 2 = 4로 합산 제출돼
+        // OPTION_STOCK_EXCEEDED 발생 — DB 직접 조회로 재현 확인). 화면에 항상 표시되는
+        // optionItems(selectedOptions)가 사용자의 "현재 총 의도 수량"이므로, 그 값 그대로
+        // 교체 제출하는 것이 RPC의 교체 시맨틱과 일치하는 올바른 동작이다.
         const targetCanonicalId = existingGroup?.canonical_reservation_id ?? outcome.reservationIds[0];
         const selectedOptions = optionItems
           .filter((o) => o.qty > 0)
           .map((o) => ({ option_product_id: o.id, option_name: o.label, qty: o.qty, unit_price: o.price }));
-        const mergedOptions = mergeReservationOptions(existingGroup?.existing_options ?? [], selectedOptions);
-        if (mergedOptions.length > 0 && targetCanonicalId != null) {
+        if (selectedOptions.length > 0 && targetCanonicalId != null) {
           type OptionsRpcFn = (name: string, args: Record<string, unknown>) => Promise<{ error: unknown }>;
           const { error: optionsError } = await (supabase.rpc as unknown as OptionsRpcFn)('set_reservation_options', {
             p_reservation_id: targetCanonicalId,
-            p_options:        mergedOptions,
+            p_options:        selectedOptions,
           });
           if (optionsError) {
             console.error('[products/[id]] set_reservation_options (draft) 저장 실패:', optionsError);
@@ -574,18 +587,21 @@
           .filter((o) => o.qty > 0)
           .map((o) => ({ option_product_id: o.id, option_name: o.label, qty: o.qty, unit_price: o.price }));
         // 기존 카트에 이미 이 부모상품+같은 날짜의 hold 그룹이 있으면(existingGroup) 옵션은
-        // 그 canonical 예약에 병합(합산) 반영 — 없으면 이번 제출의 첫 예약에 귀속(기존 동작)
+        // 그 canonical 예약에 반영 — 없으면 이번 제출의 첫 예약에 귀속(기존 동작)
+        // ⛔ 2026-09-06 CRITICAL 수정 — mergeReservationOptions 합산 제출 제거(draft 경로와
+        // 동일 결함·동일 이유, 위 draft 분기 주석 참고). set_reservation_options RPC가 매번
+        // DELETE+INSERT로 완전 교체하므로 selectedOptions(화면의 현재 총 의도 수량)를 그대로
+        // 제출해야 한다.
         const targetCanonicalId = existingGroup?.canonical_reservation_id ?? outcome.reservationIds[0];
-        const mergedOptions = mergeReservationOptions(existingGroup?.existing_options ?? [], selectedOptions);
 
         type ShipRpcFn = (name: string, args: Record<string, unknown>) => Promise<{ error: unknown }>;
         type DurationRpcFn = (name: string, args: Record<string, unknown>) => Promise<{ error: unknown }>;
         type OptionsRpcFn = (name: string, args: Record<string, unknown>) => Promise<{ error: unknown }>;
 
-        if (mergedOptions.length > 0) {
+        if (selectedOptions.length > 0) {
           const { error: optionsError } = await (supabase.rpc as unknown as OptionsRpcFn)('set_reservation_options', {
             p_reservation_id: targetCanonicalId,
-            p_options:        mergedOptions,
+            p_options:        selectedOptions,
           });
           if (optionsError) {
             console.error('[products/[id]] set_reservation_options 저장 실패:', optionsError);
@@ -689,81 +705,91 @@
 
     {#snippet optionsSection()}
     <div class="options-section">
-      <div
-        class="options-header"
-        class:options-header--disabled={!hasOptionItems}
-        onclick={() => { if (hasOptionItems) optionsOpen = !optionsOpen; }}
-        role="button"
-        tabindex={hasOptionItems ? 0 : -1}
-        aria-disabled={!hasOptionItems}
-        onkeydown={(e) => { if (hasOptionItems && (e.key === 'Enter' || e.key === ' ')) optionsOpen = !optionsOpen; }}
-        aria-expanded={hasOptionItems ? optionsOpen : undefined}
-      >
+      <div class="options-header" class:options-header--disabled={!hasOptionItems}>
         <span class="options-title">옵션 상품</span>
-        <div class="options-more-btn">
-          <span class="options-more-text">더보기</span>
-          <svg
-            class="options-chevron"
-            class:open={hasOptionItems && optionsOpen}
-            width="8" height="14" viewBox="0 0 8 14" fill="none"
-          >
-            <path d="M1 1L7 7L1 13" stroke="var(--cs-text-dark)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
-          </svg>
+        <div
+          class="options-more-btn"
+          onclick={() => { if (hasOptionItems) optionsOpen = !optionsOpen; }}
+          role="button"
+          tabindex={hasOptionItems ? 0 : -1}
+          aria-disabled={!hasOptionItems}
+          onkeydown={(e) => { if (hasOptionItems && (e.key === 'Enter' || e.key === ' ')) optionsOpen = !optionsOpen; }}
+          aria-expanded={hasOptionItems ? optionsOpen : undefined}
+        >
+          <span class="options-count-badge">{optionItems.length}</span>
         </div>
       </div>
       {#if hasOptionItems && optionsOpen}
       <div class="options-list">
         {#each optionItems as opt}
           <div class="option-item">
-            <div class="option-label-row">
-              <p class="option-label">{opt.label}</p>
-              <div class="option-badges">
-                {#if opt.is_required}
-                  <span class="opt-badge opt-badge--required">필수</span>
-                {/if}
-                {#if opt.min_select_required}
-                  <span class="opt-badge opt-badge--min-select">최소 1개 선택</span>
-                {/if}
-                {#if opt.delivery_rental_disabled}
-                  <span class="opt-badge opt-badge--no-delivery">배송대여 불가</span>
-                {/if}
-              </div>
+            <div class="option-thumb">
+              {#if opt.image_url}
+                <img src={opt.image_url} alt={opt.label} loading="lazy" />
+              {/if}
             </div>
-            <div class="option-bottom-row">
-              <div class="option-price-wrap">
-                <span class="option-price-num">{fmt(opt.price)}</span>
-                <span class="option-price-unit">원</span>
-              </div>
-              <div class="qty-control small">
-                <button onclick={() => { opt.qty = Math.max(0, opt.qty - 1); }} class="qty-btn" aria-label="옵션 수량 감소">
-                  <svg width="12" height="2" viewBox="0 0 14 2" fill="none">
-                    <path d="M1 1H13" stroke="var(--cs-text-dark)" stroke-width="2" stroke-linecap="round"/>
-                  </svg>
-                </button>
-                <div class="qty-val-wrap">
-                  <input
-                    type="number"
-                    bind:value={opt.qty}
-                    onchange={() => {
-                      const cap = stockCapFor(opt.id);
-                      if (opt.qty > cap) {
-                        showToast('예약 가능한 재고가 없습니다.');
-                        opt.qty = cap;
-                      } else if (opt.qty < 0) {
-                        opt.qty = 0;
-                      }
-                    }}
-                    min="0"
-                    max={stockCapFor(opt.id)}
-                    class="qty-input"
-                    aria-label="옵션 수량"
-                  />
+            <div class="option-info">
+              <div class="option-label-row">
+                <p class="option-label">{opt.label}</p>
+                <div class="option-badges">
+                  {#if opt.is_required}
+                    <span class="opt-badge opt-badge--required">필수</span>
+                  {/if}
+                  {#if opt.min_select_required}
+                    <span class="opt-badge opt-badge--min-select">최소 1개 선택</span>
+                  {/if}
+                  {#if opt.delivery_rental_disabled}
+                    <span class="opt-badge opt-badge--no-delivery">배송대여 불가</span>
+                  {/if}
                 </div>
-                <button onclick={() => incrementOptionQty(opt)} disabled={opt.qty >= stockCapFor(opt.id)} class="qty-btn" aria-label="옵션 수량 증가">
-                  <svg width="12" height="12" viewBox="0 0 14 14" fill="none">
-                    <path d="M1 7H13M7 1V13" stroke="var(--cs-text-dark)" stroke-width="2" stroke-linecap="round"/>
-                  </svg>
-                </button>
+              </div>
+              <div class="option-bottom-row">
+                <div class="option-dual-price">
+                  <div class="option-price-wrap">
+                    <span class="option-price-label">Day</span>
+                    <span class="option-price-num">{fmt(opt.price)}</span>
+                    <span class="option-price-unit">원</span>
+                  </div>
+                  <div class="option-price-group">
+                    <span class="option-price-sep">/</span>
+                    <div class="option-price-wrap">
+                      <span class="option-price-label">12H</span>
+                      <span class="option-price-num">{fmt(opt.price12h ?? opt.price)}</span>
+                      <span class="option-price-unit">원</span>
+                    </div>
+                  </div>
+                </div>
+                <div class="qty-control small">
+                  <button onclick={() => { opt.qty = Math.max(0, opt.qty - 1); }} class="qty-btn" aria-label="옵션 수량 감소">
+                    <svg width="12" height="2" viewBox="0 0 14 2" fill="none">
+                      <path d="M1 1H13" stroke="var(--cs-text-dark)" stroke-width="2" stroke-linecap="round"/>
+                    </svg>
+                  </button>
+                  <div class="qty-val-wrap">
+                    <input
+                      type="number"
+                      bind:value={opt.qty}
+                      onchange={() => {
+                        const cap = stockCapFor(opt.id);
+                        if (opt.qty > cap) {
+                          showToast('예약 가능한 재고가 없습니다.');
+                          opt.qty = cap;
+                        } else if (opt.qty < 0) {
+                          opt.qty = 0;
+                        }
+                      }}
+                      min="0"
+                      max={stockCapFor(opt.id)}
+                      class="qty-input"
+                      aria-label="옵션 수량"
+                    />
+                  </div>
+                  <button onclick={() => incrementOptionQty(opt)} disabled={opt.qty >= stockCapFor(opt.id)} class="qty-btn" aria-label="옵션 수량 증가">
+                    <svg width="12" height="12" viewBox="0 0 14 14" fill="none">
+                      <path d="M1 7H13M7 1V13" stroke="var(--cs-text-dark)" stroke-width="2" stroke-linecap="round"/>
+                    </svg>
+                  </button>
+                </div>
               </div>
             </div>
           </div>
@@ -1429,18 +1455,69 @@
     flex-direction: column;
     gap: 30px;
   }
+  /* 썸네일(.option-thumb)을 위시한 하나의 상품설명 레이아웃 그룹으로 통합(2026-09-06,
+     Stephen 지적) — 라벨/배지 행(.option-label-row)과 가격+수량 행(.option-bottom-row)을
+     .option-info 컬럼 하나로 다시 묶어 썸네일 옆에 배치. 단, 이전에 이 통합 구조에서 실측
+     확인된 오버플로(수량 UI 자연폭 ~192px이 좁은 폭에서 정보열 밖으로 밀려남)를 재발시키지
+     않기 위해 카트(/cart) .option-subcard/.option-subcard-info와 동일한 반응형 처리 방식
+     (flex-wrap + 정보열 min-width)을 그대로 적용 — 폭이 부족한 화면에서는 썸네일이 먼저
+     줄바꿈되고 정보열이 카드 전체 폭을 차지하도록 해 수량 UI가 항상 자기 폭(192px) 이상의
+     공간을 확보하게 함(min-width 200px = 192px 필요폭 + 여유 8px). */
   .option-item {
     background: var(--cs-surface-gray);
     border-radius: var(--radius-xl);
     padding: 15px 30px;
     display: flex;
-    flex-direction: column;
+    /* 2026-09-06: Stephen 지적 — 썸네일이 정보열(이름+배지+가격+수량) 높이 중앙에 떠
+       보이던 문제 → 상단 정렬로 변경(썸네일을 명칭 텍스트와 상단 나란히 고정) */
+    align-items: flex-start;
     gap: 20px;
+    flex-wrap: wrap;
+  }
+  /* 카트(/cart) 옵션카드 .option-subcard-img와 동일 크기·반경·배경 그대로 이식
+     (2026-09-06) — 임의 치수 대신 프로젝트 전역에서 이미 확정된 옵션 썸네일 규격 재사용 */
+  /* 2026-09-06: Stephen 지적 — 20% 축소(모바일 86.4px→69.12px, radius 21.6px→17.28px /
+     PC 150px→120px, radius 30px→24px) — cart(/cart) .option-subcard-img의 과거 단계적
+     축소 이력(2026-08-18/25, "20% 축소" 표기 관례)과 동일한 방식으로 비율 유지 축소.
+     후속(같은 날): 모바일만 다시 10% 확대 지적 — 69.12px→76.032px, radius 17.28px→
+     19.008px(×1.1). PC(120px)는 변경 없음 — 모바일 스코프만. */
+  .option-thumb {
+    width: 76.032px;
+    height: 76.032px;
+    border-radius: 19.008px;
+    overflow: hidden;
+    background: #EDEDF2;
+    flex-shrink: 0;
+  }
+  .option-thumb img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    display: block;
+  }
+  @media (min-width: 641px) {
+    .option-thumb { width: 120px; height: 120px; border-radius: 24px; }
+  }
+  /* 카트(/cart) .option-subcard-info와 동일한 "폭 부족 시 정보열 전체 줄바꿈" 방식
+     (2026-09-06) — 수량 UI(.qty-control.small) 자연폭 192px + 여유 8px = 200px를
+     min-width로 보장해, 폭이 부족한 화면에서는 flex-wrap으로 썸네일이 먼저 줄바꿈되고
+     정보열(라벨+배지+가격+수량)이 카드 전체 폭을 차지하도록 함 — 수량 UI가 항상 자기
+     폭 이상의 공간에서 렌더링되어 오버플로 재발 없음. */
+  .option-info {
+    flex: 1;
+    min-width: 200px;
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
   }
   .option-label-row {
     display: flex;
     flex-direction: column;
-    gap: 4px;
+    flex: 1;
+    min-width: 0;
+    /* 2026-09-06: 명칭(.option-label)과 배지 그룹(.option-badges) 사이 행간 여백 부족
+       지적(Stephen) — 4px→10px로 확대해 분리성 확보 */
+    gap: 10px;
     margin-bottom: 0;
   }
   .option-badges {
@@ -1470,8 +1547,11 @@
     background: rgba(59,47,138,0.10);
     color: var(--cs-purple);
   }
+  /* 2026-09-06: 모바일 한 단계 큰 폰트 토큰 적용(Stephen 지적) — cart(/cart)
+     .option-subcard-name가 2026-08-18에 이미 거친 동일한 단계업(--text-m-script-14B
+     14px Bold → --text-m-body-16B 16px Bold)을 그대로 이식. PC는 기존값 유지. */
   .option-label {
-    font: var(--text-m-script-14B);
+    font: var(--text-m-body-16B);
     color: var(--cs-text);
     margin: 0;
     line-height: 1;
@@ -1479,24 +1559,64 @@
   @media (min-width: 641px) {
     .option-label { font: var(--text-pc-title-16); }
   }
+  /* 가격(대여요금)행 위 / 수량 UI 아래로 항상 세로 배치(2026-09-06, Stephen 지적 —
+     PC 전용 가로배치(space-between)가 옵션 썸네일 추가로 정보열(.option-info) 폭이
+     줄어들면서 수량 UI가 카드 배경 우측 바깥으로 밀려나는 오버플로 결함을 유발함.
+     PC(≥641px) 전용 가로배치 오버라이드를 제거하고 전 breakpoint에서 세로 스택으로 통일). */
   .option-bottom-row {
     display: flex;
-    align-items: center;
-    justify-content: space-between;
+    flex-direction: column;
+    align-items: flex-start;
     gap: 12px;
+  }
+  /* 카트(/cart) 옵션카드 .dual-price-row--opt와 동일 스타일(색상·크기·구조) 그대로 이식
+     — 임의 팔레트(회색) 대신 프로젝트 전역에서 이미 확정된 옵션가격 표시 규격을 재사용 */
+  .option-dual-price {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-wrap: wrap;
+    color: var(--cs-red-badge);
   }
   .option-price-wrap {
     display: flex;
     align-items: baseline;
     gap: 2px;
   }
+  @media (min-width: 641px) {
+    .option-price-wrap { gap: 4px; }
+  }
+  .option-price-group {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+  /* 2026-09-06: 모바일 반응형 한 단계 큰 폰트 토큰 적용(Stephen 지적 — 너무 작아 가독성
+     저하) — cart(/cart) .dual-price-row--opt가 동일 문제로 2026-08-18에 이미 거친
+     10px→--text-m-script-12(12px) 복귀와 동일한 조치를 그대로 이식. PC(≥641px)는 기존값 유지. */
+  .option-price-label {
+    font: var(--text-m-script-12);
+  }
+  @media (min-width: 641px) {
+    .option-price-label { font-size: 11px; }
+  }
+  .option-price-sep {
+    font: var(--text-m-script-14);
+    color: var(--cs-red-badge);
+  }
   .option-price-num {
-    font: var(--text-m-script-14B);
-    color: var(--cs-text-dark);
+    font-family: var(--font-kr-heading);
+    font-weight: 700;
+    font-size: 14px;
+  }
+  @media (min-width: 641px) {
+    .option-price-num { font-size: 13px; }
   }
   .option-price-unit {
     font: var(--text-m-script-12);
-    color: var(--cs-text-dark);
+  }
+  @media (min-width: 641px) {
+    .option-price-unit { font-size: 11px; }
   }
   .qty-control.small { gap: 12px; }
 
@@ -2031,30 +2151,46 @@
     display: flex;
     align-items: center;
     justify-content: space-between;
-    cursor: pointer;
     padding: 4px 0;
-    user-select: none;
   }
-  .options-header:focus-visible { outline: 2px solid var(--cs-purple); outline-offset: 2px; border-radius: 4px; }
   .options-header--disabled {
-    cursor: default;
     opacity: 0.45;
   }
+  /* 2026-09-06: 아코디언 펼침/접힘 토글 대상을 헤더 전체에서 이 버튼(배지)로 이동
+     (Stephen 지시) — 쉐브론 아이콘은 제거, 배지 자체가 유일한 토글 컨트롤 */
   .options-more-btn {
     display: flex;
     align-items: center;
-    gap: 6px;
+    cursor: pointer;
+    user-select: none;
   }
-  .options-more-text {
-    font: var(--text-m-script-12);
-    color: var(--cs-text-mid);
+  .options-more-btn:focus-visible { outline: 2px solid var(--cs-purple); outline-offset: 2px; border-radius: 50%; }
+  .options-header--disabled .options-more-btn { cursor: default; }
+  /* 2026-09-06: Stephen 지적 — "더보기" 텍스트 대신 원형 배경 안에 옵션 개수를 숫자로
+     표현. 그레이 중간~짙은 배경(--cs-text-dark) + 화이트 폰트(--cs-white), 폰트
+     --text-m-script-14B/--text-pc-body-14(14px Bold). 크기(가로세로): 1.5배 확대
+     (모바일 20px→30px, PC 30px→45px, 2026-09-06 최종) */
+  /* 2026-09-06: 배경을 한 단계 더 옅은 그레이로 조정(Stephen 지적) — --cs-text-dark
+     (#444444) → --cs-text-mid(#666666, 프로젝트 3단계 그레이 중 중간값). 화이트 폰트
+     대비 약 5.7:1로 WCAG AA(4.5:1) 유지 — 후속12에서 반려된 --cs-surface-gray(#f6f6f6,
+     거의 흰색이라 흰 폰트와 대비가 사라짐) 재시도가 아니라 그보다 한 단계만 옅게 조정. */
+  .options-count-badge {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 30px;
+    height: 30px;
+    border-radius: 50%;
+    background: var(--cs-text-mid);
+    color: var(--cs-white);
+    font: var(--text-m-script-14B);
   }
-  .options-chevron {
-    transform: rotate(90deg);
-    transition: transform 0.2s ease;
-  }
-  .options-chevron.open {
-    transform: rotate(-90deg);
+  @media (min-width: 641px) {
+    .options-count-badge {
+      width: 45px;
+      height: 45px;
+      font: var(--text-pc-body-14);
+    }
   }
 
   /* ── Q&A */

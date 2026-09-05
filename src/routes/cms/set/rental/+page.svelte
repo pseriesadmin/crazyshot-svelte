@@ -546,7 +546,7 @@
                 }}
               >
                 <input type="hidden" name="id" value={m.id} />
-                <button type="submit" class="s-chip" class:s-chip--on={m.is_bulk_delivery} disabled={!m.is_bulk_delivery && m.is_delivery_type}>
+                <button type="submit" class="s-chip" class:s-chip--on={m.is_bulk_delivery}>
                   {m.name}
                 </button>
               </form>
@@ -587,9 +587,7 @@
         {/if}
 
         <!-- "배송 반납 허용 지정" — 위 "대여옵션(수령/반납) 일괄적용"(is_bulk_delivery, "요청 A"
-             전용)과 완전히 분리된 플래그(Migration #440). 같은 방식을 두 곳에 동시에 켤 수
-             없다(RPC 상호배타 가드) — 일괄적용이 켜진 방식은 반납이 이미 그 값으로 강제고정돼
-             이 판정 대상으로 삼는 것 자체가 의미 없기 때문(Stephen 지적).
+             전용)과 완전히 분리된 플래그(Migration #440).
 
              ⛔ 2026-09-04 라벨 정정(Stephen 지적) — "반납 배송선택 제한 대상"이라는 원래 라벨이
              ON/OFF 방향을 헷갈리게 만들어 실제로 반대로 설정하는 오조작이 발생함. "배송 방식
@@ -599,7 +597,17 @@
              ⛔ 2026-09-04(같은 세션 후속) Stephen UX 지적으로 별도 마스터 on/off 토글("대여옵션
              제한 → 반납 배송선택 제한")을 완전히 제거(Migration #443, 컬럼+RPC 모두 DROP) —
              칩과 별개로 켜야 하는 스위치가 하나 더 있는 구조 자체가 혼란스럽다는 지적. 이제
-             이 칩에서 ON으로 지정한 방식이 있다는 사실 자체가 곧 활성화 조건이다. -->
+             이 칩에서 ON으로 지정한 방식이 있다는 사실 자체가 곧 활성화 조건이다.
+
+             ⛔ 2026-09-04(같은 날 재후속, Stephen 확정) — 이전엔 is_bulk_delivery와 동시에 켤 수
+             없도록 RPC 상호배타 가드가 있었으나(Migration #441, "일괄적용이 켜진 방식은 반납이
+             이미 그 값으로 강제고정돼 이 판정 대상으로 삼는 것 자체가 의미 없다"는 전제), 이
+             전제가 틀렸음이 확인됨 — is_bulk_delivery는 "이 방식이 수령일 때"의 동작(반납
+             강제복사+시간숨김+순수청구)을, is_delivery_type은 "이 방식이 수령이 아닐 때" 반납
+             옵션 목록 노출을 규정하는 서로 겹치지 않는 독립 조건이라, 크레이지샷배송처럼 같은
+             방식이 두 동작을 동시에 필요로 하는 경우가 실제로 있었다(크레이지샷배송을 수령으로
+             선택해도 반납이 자동 동기화되지 않던 실사용 결함으로 발견). Migration #444로 RPC
+             상호배타 가드 제거 — 이제 두 칩을 동일 방식에 동시에 켤 수 있다. -->
         <div class="sf-row">
           <span class="sf-label">배송 반납 허용 지정</span>
           <div class="shipping-chips">
@@ -619,7 +627,7 @@
                 }}
               >
                 <input type="hidden" name="id" value={m.id} />
-                <button type="submit" class="s-chip" class:s-chip--on={m.is_delivery_type} disabled={!m.is_delivery_type && m.is_bulk_delivery}>
+                <button type="submit" class="s-chip" class:s-chip--on={m.is_delivery_type}>
                   {m.name}
                 </button>
               </form>

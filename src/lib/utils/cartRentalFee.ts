@@ -71,6 +71,30 @@ export function calcRentalMinutes(
   return total > 0 ? total : 0
 }
 
+/**
+ * 장바구니 "총 대여기간" 합산 — 2026-09-04(Stephen 신고) CRITICAL 버그 수정.
+ *
+ * 배경: "대여예약옵션" 통합설정 패널(applyBulkToItems())이 체크된 모든 상품에 동일한
+ * 날짜·시간을 강제 적용하므로, 기존 itemsState.reduce() 방식(상품별로 calcRentalMinutes를
+ * 계산해 전부 더함)은 체크된 상품이 N개면 "N개 × 선택한 1개 기간"이 되어버렸다.
+ *
+ * 이 함수는 상품 "개수"를 아예 파라미터로 받지 않는다 — 체크된 비삭제·비구매(purchase 아닌)
+ * 상품이 1개 이상 존재하는지(hasQualifyingItem)만 boolean으로 받아, 존재하면 공통 기간
+ * (bulk*, 모든 아이템에 동일하게 적용되는 원본 소스)을 calcRentalMinutes()로 딱 1회만
+ * 계산한다 — 개수를 받지 않는 시그니처 자체가 배수 합산을 구조적으로 불가능하게 만든다.
+ */
+export function computeCartTotalMinutes(
+  hasQualifyingItem: boolean,
+  startDate: string,
+  endDate: string,
+  pickupTime: string | null | undefined,
+  returnTime: string | null | undefined,
+  deliveryLocked?: boolean,
+): number {
+  if (!hasQualifyingItem) return 0
+  return calcRentalMinutes(startDate, endDate, pickupTime, returnTime, deliveryLocked)
+}
+
 export interface RentalFeeInput {
   startDate: string
   endDate: string

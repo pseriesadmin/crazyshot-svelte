@@ -10,7 +10,7 @@
   import { csToast } from '$lib/utils/toast';
   import { isLockerHour } from '$lib/utils/lockerTimeRange';
   import { calcShippingFee, calcShippingDiscountRate, isFreeDeliveryCouponBlocked, computeReturnVisibleTabs, type ShippingFeeItem, type DeliveryFeeDiscountTier, type DiscountConditionItem } from '$lib/utils/cartShippingFee';
-  import { calcRentalDays, calcRentalFee, calcRentalMinutes, calcRentalPeriodParts } from '$lib/utils/cartRentalFee';
+  import { calcRentalDays, calcRentalFee, calcRentalPeriodParts, computeCartTotalMinutes } from '$lib/utils/cartRentalFee';
   import { toDeliveryMethod, isMethodSelectionValid } from '$lib/utils/cartMethodSelection';
   import {
     resolveParentProductId,
@@ -83,6 +83,19 @@
   // "아직 아무것도 선택하지 않았으면 잠금도 없다"는 의도된 동작(2026-09-04, null 허용 확장).
   function isDeliveryLocked(m: DeliveryMethod | null): boolean {
     return sdDeliveryOpts.some(o => o.method_key === m && o.is_bulk_delivery);
+  }
+
+  // 대여요금 "1day 강제청구" 판정 — is_bulk_delivery("요청 A" 반납강제고정 전용)와 완전히
+  // 분리된 is_delivery_type 기준(2026-09-04, Stephen 확정 — 4가지 수령→반납 조합별 금액
+  // 검증 중 발견·수정). 수령(pickup) 한쪽 방식만으로 판정하며 반납 방식과는 무관하다:
+  //   ① 배송+배송, ② 배송+배송아님 → 둘 다 "수령이 배송"이므로 동일하게 1day 블록 청구
+  //   ③ 배송아님+배송 → computeReturnVisibleTabs/서버가 이미 선택 자체를 차단(별도 검증됨)
+  //   ④ 배송아님+배송아님 → 12h/24h 블록 산식 그대로(잠금 없음)
+  // is_bulk_delivery를 그대로 쓰면 "요청 A"(반납강제고정)가 켜져 있을 때만 결제조건도 함께
+  // 바뀌어버려 ②(배송+배송아님) 조합 자체가 UI에서 선택 불가능해지는 구조적 충돌이 있었다 —
+  // 결제조건 판정을 이 독립 함수로 분리해 반납강제고정 여부와 무관하게 항상 정확히 동작하게 함.
+  function isDeliveryTypeMethod(m: DeliveryMethod | null): boolean {
+    return sdDeliveryOpts.some(o => o.method_key === m && o.is_delivery_type);
   }
 
   // 휴무일 캘린더 제한(공휴일·일요일 날짜 선택 차단) 대상 판정 — is_bulk_delivery("요청 A"
@@ -416,6 +429,11 @@
     if (!first) return
     hasSeededBulk = true
     bulkOpts = { ...bulkOpts, rentalMethod: first.opts.rentalMethod, returnMethod: first.opts.returnMethod }
+    // 날짜도 방식·시간과 동일하게 첫 상품의 기존 저장값으로 시딩(2026-09-06 — 날짜만 시딩
+    // 로직이 없어 이미 저장된 예약을 다시 열어도 pricingReady(otTotalMinutes 기준)가 항상
+    // false로 남아 합계금액이 0원으로 표시되던 결함 수정).
+    bulkDate = first.rentalDate
+    bulkReturnDate = first.returnDate
     // 첫 상품의 기존 저장값으로 시간도 함께 시딩(2026-09-01 — 방식만 시딩하고 시간은 항상
     // 빈 값으로 열리던 결함. 특히 저장된 방식이 이미 배송(is_bulk_delivery)이면 시간선택
     // 버튼 자체가 안 보여 사용자가 채울 방법이 없어 datesSet이 영구 미충족 상태로
@@ -474,7 +492,30 @@
   // 통합 단일 정책 전환(2026-08-05)으로 제거되어 item 단위 핸들러는 더 이상 필요 없음)
   // 2026-07-28: 버튼("전체 적용") 클릭 없이 입력 즉시 전체 상품 카드에 반영 — 각 핸들러 끝에
   // applyBulkToItems() 호출
+
+  // 2026-09-04(Stephen 신고): 수령 '방문'에서 날짜·시간을 고른 뒤 '배송'으로 바꾸면, 배송은
+  // deliveryLocked라 시각을 무시하고 날짜만으로 청구해야 하는데 applyBulkToItems()의 "bulk값이
+  // 비어있으면 기존 itemsState 값을 유지"하는 병합 로직(아래 함수 587-590행 부근) 때문에
+  // '방문' 시절 시각이 itemsState에 그대로 남아 "총 금액 합산" 오류로 이어졌다. bulk*만
+  // 비워서는 이 병합 로직이 itemsState의 기존 값을 그대로 살려두므로, itemsState도 함께
+  // 직접 비워야 실제로 지워진다 — 방식이 실제로 바뀌고 기존에 입력된 날짜·시간이 하나라도
+  // 있을 때만 초기화 + 안내 토스트(최초 선택 시에는 지울 게 없으므로 토스트 없음).
+  function hasDateTimeSet(): boolean {
+    if (bulkDate || bulkTime || bulkReturnDate || bulkReturnTime) return true
+    return itemsState.some(it => it.rentalDate || it.rentalTime || it.returnDate || it.returnTime)
+  }
+  function resetDateTimeForMethodChange() {
+    bulkDate = ''
+    bulkTime = ''
+    bulkReturnDate = ''
+    bulkReturnTime = ''
+    itemsState = itemsState.map(it => ({ ...it, rentalDate: '', rentalTime: '', returnDate: '', returnTime: '' }))
+    csToast.warning('수령(반납) 일시 정보가 초기화되었습니다.')
+  }
   function bulkHandleMethod(v: DeliveryMethod) {
+    if (v !== bulkOpts.rentalMethod && hasDateTimeSet()) {
+      resetDateTimeForMethodChange()
+    }
     // 배송(delivery/crazydelivery) 선택 시 반납방식 강제 고정(요청 A, Stephen 확정) —
     // copyToReturn 사용자 선택과 무관하게 항상 동일 방식으로 동기화
     const wasLocked = isDeliveryLocked(bulkOpts.rentalMethod)
@@ -501,6 +542,10 @@
   function bulkHandleReturnMethod(v: DeliveryMethod) {
     // 수령방식이 배송으로 잠긴 상태에서는 반납방식 독립 변경 차단(요청 A)
     if (isDeliveryLocked(bulkOpts.rentalMethod)) return
+    // 위 bulkHandleMethod와 동일 이유(2026-09-04) — 반납 방식 재변경 시에도 기존 날짜·시간 초기화
+    if (v !== bulkOpts.returnMethod && hasDateTimeSet()) {
+      resetDateTimeForMethodChange()
+    }
     bulkOpts = { ...bulkOpts, returnMethod: v }
     applyBulkToItems()
   }
@@ -605,7 +650,7 @@
   type ProductRow = { id: string; name: string; category: string; brand: string | null; slug: string; image_urls: string[]; is_active: boolean; shipping_round_trip?: boolean | null; shipping_delivery?: boolean | null; shipping_return?: boolean | null; sale_only?: boolean | null; sale_price?: number | null }
   type UserCouponExt = { id: string; coupon_id: string; coupons: { id: string; code: string; type: string; discount_type: string; discount_value: number; description: string | null; valid_until: string } | null }
   type PriceRuleExt = { price12h: number | null; price24h: number | null; deposit: number | null }
-  type CartLineItemOption = { optionProductId: string | null; name: string; qty: number; unitPrice: number; unitPrice12h: number | null; imageUrl: string | null }
+  type CartLineItemOption = { optionProductId: string | null; name: string; qty: number; unitPrice: number; unitPrice12h: number | null; imageUrl: string | null; deliveryRentalDisabled: boolean; isRequired: boolean; minSelectRequired: boolean }
   type CartLineItem = { reservationId: string; productId: string | null; product: ProductRow | null; price12h: number | null; price24h: number | null; deposit: number | null; startDate: string; endDate: string; pickupMethod: string | null; returnMethod: string | null; pickupTime: string | null; returnTime: string | null; durationType: string | null; options: CartLineItemOption[]; status: string }
   // 2026-08-28: 동일 부모상품 중복담기 병합 — 서버(cartLineGrouping.ts groupCartLineItems)가
   // 예약행(재고단위) 여러 건을 하나의 그룹으로 묶어 내려준다. qty=reservationIds.length,
@@ -693,6 +738,23 @@
   )
   let showGuideModal = $state(false);
   let isConfirming = $state(false);
+
+  // hold 재발행 확인 — 확정사양(AdminChatPanel.svelte .confirm-toast 패턴 재사용, 네이티브
+  // window.confirm() 금지)을 따르기 위해 /account/rental/+page.svelte의 cancelPendingId
+  // 패턴과 동일하게 Promise 기반으로 구현(2026-09-06 QA 지적 수정 — 기존엔 window.confirm()
+  // 사용). askReissueConfirm()이 반환하는 Promise가 사용자가 버튼을 누를 때까지 대기하므로
+  // 기존 footer-cta onclick 핸들러의 제어흐름(확인 시 계속, 취소 시 return)은 그대로 유지된다.
+  let reissueConfirmVisible = $state(false)
+  let reissueConfirmResolve: ((v: boolean) => void) | null = null
+  function askReissueConfirm(): Promise<boolean> {
+    reissueConfirmVisible = true
+    return new Promise<boolean>((resolve) => { reissueConfirmResolve = resolve })
+  }
+  function resolveReissueConfirm(v: boolean): void {
+    reissueConfirmVisible = false
+    reissueConfirmResolve?.(v)
+    reissueConfirmResolve = null
+  }
   let footerVisible = $state(false);
   let footerSentinel = $state<HTMLDivElement | null>(null);
 
@@ -813,12 +875,15 @@
   // 2026-09-01: 위 itemCardRate()의 단일요율 근사값(다일 대여 시 일수 미반영, 당일대여 12h/24h
   // 조합 미반영)을 대체 — "총 대여기간" 표시·실제 결제금액과 일치하는 미리보기 제공.
   // 판매전용(sale_only) 상품은 대여일수와 무관하게 판매금액을 그대로 반환한다(Migration #416).
-  // 2026-09-03(Stephen 확정) — 수령방식이 배송(CMS is_bulk_delivery)으로 잠기면 반납방식도
-  // 강제로 배송 동일방식이 되어(요청 A) "왕복 배송료" 조건이 성립하는데, 이 경우
-  // 시간선택 UI 자체가 사라져 pickup_time/return_time이 실제 선택값이 아니라 화면 임시
-  // 기본값(12:00/13:00)일 뿐이다 — 12시간 블록 산식(calcRentalFee)에 그 임의의 1시간
-  // 차이를 넣으면 "N일"이어야 할 요금이 "N일+12시간"으로 잘못 가산된다. calcRentalMinutes의
-  // deliveryLocked 옵션으로 시각을 무시하고 순수 N일만 청구하도록 우회한다.
+  // 2026-09-03(Stephen 확정) — 수령방식이 배송으로 잠기면(요청 A 발동 시) 시간선택 UI 자체가
+  // 사라져 pickup_time/return_time이 실제 선택값이 아니라 화면 임시 기본값(12:00/13:00)일
+  // 뿐이다 — 12시간 블록 산식(calcRentalFee)에 그 임의의 1시간 차이를 넣으면 "N일"이어야 할
+  // 요금이 "N일+12시간"으로 잘못 가산된다. calcRentalMinutes의 deliveryLocked 옵션으로
+  // 시각을 무시하고 순수 N일만 청구하도록 우회한다.
+  // 2026-09-04(Stephen 확정, 4가지 수령→반납 조합별 금액 검증 중 수정) — 이 deliveryLocked
+  // 판정은 CMS is_bulk_delivery가 아니라 is_delivery_type 기준(isDeliveryTypeMethod)으로
+  // 바뀌었다 — "요청 A"(반납강제고정)가 켜져있는지와 무관하게, 수령이 배송이면 항상 1day
+  // 청구가 성립해야 하기 때문(배송+배송아님 조합도 동일하게 1day 청구).
   // ⚠️ 2026-09-03(같은 날 정정, Stephen 지적 — CRITICAL) — 최초 구현은 line.pickupMethod(서버가
   // 페이지 로드 시점에 내려준 DB 저장값, CartLineGroup)로 판정했으나, 사용자가 "대여예약옵션"
   // 패널에서 수령방식을 바꾸는 즉시(체크아웃 제출 전) 반영돼야 할 값은 그 방식이 아니라
@@ -840,7 +905,7 @@
       returnTime: it.returnTime,
       dailyPrice: r24,
       halfDayPrice: r12,
-      deliveryLocked: isDeliveryLocked(it.opts.rentalMethod),
+      deliveryLocked: isDeliveryTypeMethod(it.opts.rentalMethod),
     })
   }
   function itemDeposit(line: CartLineGroup | undefined): number {
@@ -878,7 +943,7 @@
         returnTime: it.returnTime,
         dailyPrice: o.unitPrice,
         halfDayPrice: o.unitPrice12h,
-        deliveryLocked: isDeliveryLocked(it.opts.rentalMethod),
+        deliveryLocked: isDeliveryTypeMethod(it.opts.rentalMethod),
       })
       return s + fee * o.qty
     }, 0)
@@ -917,13 +982,22 @@
     shipping_guide: string | null
   } | null | undefined) ?? null)
 
+  // 2026-09-05(Stephen 지시 — 배송요금 미부과 CRITICAL 결함 수정): "이 방식이 배송인가"
+  // 판정을 isDeliveryLocked(is_bulk_delivery, "요청 A" 강제묶음 전용)에서
+  // isDeliveryTypeMethod(is_delivery_type)로 교체. is_bulk_delivery는 크레이지샷배송의
+  // 반납강제고정 여부와 무관하게 false로 유지될 수 있는 별개 운영 토글이라, 그 값에 배송비
+  // 부과 여부를 의존시키면 is_bulk_delivery=false인 상태에서 실제로 배송 방식을 선택해도
+  // 왕복/배송/반납요금이 전부 0원으로 계산되는 결함이 있었다(실측 확인 — calcShippingFee 자체는
+  // 정상, 입력값만 잘못됐었음). is_delivery_type은 이미 대여요금 1day 강제청구·반납콤보
+  // 제외·서버 최종방어선(set_reservation_shipment_method) 전부가 공유하는 "이 방식은
+  // 배송이다"라는 유일한 판정 기준(Migration #445)이므로 배송비도 동일 기준으로 통일한다.
   const checkedShippingItems = $derived<ShippingFeeItem[]>(
     itemsState
       .map((it) => ({ it, product: groupsById.get(it.id)?.product }))
       .filter(({ it }) => !it.deleted && it.checked)
       .map(({ it, product }) => ({
-        pickupIsDelivery: isDeliveryLocked(it.opts.rentalMethod),
-        returnIsDelivery: isDeliveryLocked(it.opts.returnMethod),
+        pickupIsDelivery: isDeliveryTypeMethod(it.opts.rentalMethod),
+        returnIsDelivery: isDeliveryTypeMethod(it.opts.returnMethod),
         shipping_round_trip: (product as ProductRow & { shipping_round_trip?: boolean | null } | undefined)?.shipping_round_trip ?? true,
         shipping_delivery: (product as ProductRow & { shipping_delivery?: boolean | null } | undefined)?.shipping_delivery ?? true,
         shipping_return: (product as ProductRow & { shipping_return?: boolean | null } | undefined)?.shipping_return ?? true,
@@ -1073,10 +1147,20 @@
       .filter((p): p is ProductRow => p !== null)
   )
   const allowedMethodIds = $derived(computeAllowedMethodIds(cartProductRows))
+  // 배송대여 불가 옵션상품(qty>0) 포함 여부 — 체크됨+미삭제 항목만 대상(cartProductRows와
+  // 동일 스코프 원칙, 2026-09-02 수정 사례 준수). 하나라도 있으면 배송(is_delivery_type) 방식
+  // 자체를 탭 목록에서 제외해, 상품상세 handleReserve의 사후 차단(에러 토스트)과 달리 카트
+  // 단계에서는 애초에 선택 자체가 불가능하도록 UI에서 원천 차단한다.
+  const hasDeliveryDisabledOption = $derived(
+    itemsState
+      .filter(it => !it.deleted && it.checked)
+      .some(it => (groupsById.get(it.id)?.options ?? []).some(o => o.deliveryRentalDisabled && o.qty > 0))
+  )
   const deliveryTabs = $derived<DeliveryTabMeta[]>(
     allowedMethodIds === 'none' ? [] :
     ((data.deliveryOptions as DeliveryOptionRow[] | undefined) ?? [])
       .filter((o: DeliveryOptionRow) => o.method_key && (allowedMethodIds === 'all' || allowedMethodIds.has(o.id)))
+      .filter((o: DeliveryOptionRow) => !hasDeliveryDisabledOption || !isDeliveryTypeMethod(o.method_key as DeliveryMethod))
       .map((o: DeliveryOptionRow) => ({ v: o.method_key as DeliveryMethod, label: o.name, deadline: o.deadline_time ?? '' }))
   );
   // "배송 반납 허용 지정"(CMS, rental_method_options.is_delivery_type) — ON으로 지정된 방식을
@@ -1092,11 +1176,18 @@
   // 조건이다(computeReturnVisibleTabs 정의부 참고). 서버 최종방어선(set_reservation_
   // shipment_method)도 동일 마이그레이션으로 같은 기준으로 통일됨.
   //
-  // leg-aware 구조(2026-09-01 Stephen 확정) —
-  //   - 수령(pickup) leg: 이 판정과 무관하게 항상 전체 목록(deliveryTabs) 노출
-  //   - 반납(return) leg: 수령이 배송(is_delivery_type)이 **아닐 때만** 배송 제외 — 수령
-  //     자체가 배송 방식이면 "요청 A"(is_bulk_delivery, 완전히 별개 플래그) 강제복사 로직이
-  //     있다면 그쪽이 반납을 이미 잠그므로 전체 목록을 그대로 노출해야 그 값이 탭에 렌더링됨
+  // leg-aware 구조(2026-09-01 Stephen 확정, 2026-09-05 주석 정정 — 실제 동작과 어긋나
+  // 있던 서술 수정) —
+  //   - 수령(pickup) leg: deliveryTabs를 그대로 사용. deliveryTabs 자체가 이미
+  //     hasDeliveryDisabledOption 필터(위 1132행)를 포함하므로, 배송대여 불가 옵션이
+  //     담겨 있으면 수령 leg에서도 배송(is_delivery_type) 방식이 제외된다 — "이 판정과
+  //     무관하게 항상 전체 목록 노출"이 아니다(배송불가 옵션을 배송 방식으로 수령하는
+  //     모순을 막기 위한 의도된 동작).
+  //   - 반납(return) leg: 위 hasDeliveryDisabledOption 필터에 더해, 수령이 배송
+  //     (is_delivery_type)이 **아닐 때만** 배송을 추가로 제외한다(returnVisibleTabsFor) —
+  //     수령 자체가 배송 방식이면 "요청 A"(is_bulk_delivery, 완전히 별개 플래그) 강제복사
+  //     로직이 있다면 그쪽이 반납을 이미 잠그므로 전체 목록을 그대로 노출해야 그 값이
+  //     탭에 렌더링됨
   const pickupVisibleTabs = $derived<DeliveryTabMeta[]>(deliveryTabs)
   // pickupMethod가 null(미선택)이면 computeReturnVisibleTabs에는 어떤 method_key와도
   // 일치하지 않는 빈 문자열로 넘긴다 — "미선택 상태는 배송(is_delivery_type)이 아니다"와
@@ -1332,16 +1423,20 @@
   // 판매전용(구매) 항목은 "대여기간" 개념이 없으므로 합산에서 제외한다(Migration #416).
   // 2026-09-03(Stephen 확정): "총 대여기간" 표시를 달력일수(N일)만이 아니라 12시간/N일/N일 12시간
   // 구간으로 세분화 — otTotalDays(달력일 diff, 시각 무시) 대신 실제 분(minute) 합산으로 교체.
-  // 배송(왕복 배송료) 잠금 항목은 it.opts.rentalMethod(실시간 클라이언트 상태 — line.
-  // pickupMethod의 서버 저장값이 아님, 위 itemRentalFee 주석 참고)로 감지해 시각을 무시하고
-  // 순수 N일만 반영(itemRentalFee와 동일 원리 — "총 대여기간" 라벨이 실제 청구액과 항상 일치하도록).
+  // 수령이 배송(is_delivery_type)인 항목은 시각을 무시하고 순수 N일만 반영(itemRentalFee와
+  // 동일 원리 — "총 대여기간" 라벨이 실제 청구액과 항상 일치하도록). 2026-09-04부터
+  // is_bulk_delivery("요청 A" 반납강제고정) 대신 is_delivery_type으로 판정 — isDeliveryTypeMethod
+  // 정의부 주석 참고(반납강제고정 여부와 무관하게 항상 정확히 1day 청구되도록 분리).
+  // 2026-09-04(Stephen 신고, CRITICAL 수정): 기존 itemsState.reduce() 합산 방식은 "대여예약옵션"
+  // 통합설정 패널이 체크된 모든 상품에 동일한 날짜·시간을 강제 적용한다는 전제를 놓쳐, 체크된
+  // 상품이 N개면 "N개 × 선택한 1개 기간"으로 배수 합산되는 버그가 있었다. computeCartTotalMinutes는
+  // 상품 "개수"를 파라미터로 받지 않는 시그니처로 배수 합산을 구조적으로 차단한다 — 체크된
+  // 비삭제·비구매 상품이 1개 이상 존재하면 그 공통 기간(bulk*)을 딱 1회만 계산한다.
+  const otHasQualifyingItem = $derived(
+    itemsState.some(it => !it.deleted && it.checked && groupsById.get(it.id)?.durationType !== 'purchase')
+  )
   const otTotalMinutes = $derived(
-    itemsState.reduce((sum, it) => {
-      if (it.deleted || !it.checked) return sum
-      const line = groupsById.get(it.id)
-      if (line?.durationType === 'purchase') return sum
-      return sum + calcRentalMinutes(it.rentalDate, it.returnDate, it.rentalTime, it.returnTime, isDeliveryLocked(it.opts.rentalMethod))
-    }, 0)
+    computeCartTotalMinutes(otHasQualifyingItem, bulkDate, bulkReturnDate, bulkTime, bulkReturnTime, isDeliveryTypeMethod(bulkOpts.rentalMethod))
   )
   const otRentalPeriodParts = $derived(calcRentalPeriodParts(otTotalMinutes))
   const otHasPurchaseItem = $derived(
@@ -1697,7 +1792,83 @@
             // 카드 1개가 여러 실제 예약id를 가질 수 있어, 그룹의 canonical id가 아니라
             // 그룹 내 모든 reservationIds를 펼쳐서 전송해야 한다.
             const checkedItemsState = itemsState.filter(it => !it.deleted && it.checked)
-            const checkedIds = checkedItemsState.flatMap(it => it.reservationIds)
+            let checkedIds = checkedItemsState.flatMap(it => it.reservationIds)
+
+            // ── hold 그룹 — 로컬에서 방식·날짜가 변경됐으면 재발행(reissue)으로 처리
+            // promote_draft_reservation이 status='draft'만 지원하므로, hold 상태에서의
+            // 방식·날짜 변경은 구 hold 취소 + 신규 hold 생성으로 우회한다(Migration 448).
+            const checkedHoldItems = checkedItemsState.filter(it => groupsById.get(it.id)?.status === 'hold')
+            // 재발행 대상이 1개라도 있으면 사전 확인 — 새 예약코드로 바뀜을 안내
+            const hasChangedHolds = checkedHoldItems.some(it => {
+              const sg = groupsById.get(it.id)
+              const lp = it.opts.rentalMethod
+              return sg && lp && (
+                lp !== sg.pickupMethod || it.opts.returnMethod !== sg.returnMethod ||
+                it.rentalDate !== sg.startDate || it.returnDate !== sg.endDate
+              )
+            })
+            if (hasChangedHolds) {
+              const confirmed = await askReissueConfirm()
+              if (!confirmed) return
+            }
+            for (const it of checkedHoldItems) {
+              const serverGroup = groupsById.get(it.id)
+              const localPickup = it.opts.rentalMethod
+              const localReturn = it.opts.returnMethod
+              const changed = serverGroup && localPickup && (
+                localPickup !== serverGroup.pickupMethod ||
+                localReturn !== serverGroup.returnMethod ||
+                it.rentalDate !== serverGroup.startDate ||
+                it.returnDate !== serverGroup.endDate
+              )
+              if (!changed) continue
+              csToast.info('예약신청 재발행 중...')
+              const newReservationIds: string[] = []
+              // 대여 기간 유형 계산 — draft 승격 경로(durationTypeCo, 아래 참고)와 동일한
+              // 720분(12시간) 임계값 기준(2026-09-06 QA 지적 수정 — 기존엔 "당일이면 무조건
+              // 12h"로 단순화돼 있어 당일이지만 12시간을 초과하는 시간대(예: 09~22시)로
+              // 재발행하면 duration_type이 실제와 다르게 저장됐다. 실제 청구액은
+              // compute_reservation_line_amount가 duration_type과 무관하게 날짜/시간으로
+              // 매번 재계산하므로 영향 없었지만, CMS 계약서 "요금유형" 표기가 어긋날 수
+              // 있었다).
+              const [reissuePickH, reissuePickM] = (it.rentalTime || '00:00').split(':')
+              const [reissueRetH, reissueRetM]   = (it.returnTime || '00:00').split(':')
+              const reissueStartMins = parseInt(reissuePickH ?? '0', 10) * 60 + parseInt(reissuePickM ?? '0', 10)
+              const reissueEndMins   = parseInt(reissueRetH ?? '0', 10) * 60 + parseInt(reissueRetM ?? '0', 10)
+              const reissueSameDayMins = reissueEndMins - reissueStartMins
+              const durType = serverGroup?.product?.sale_only
+                ? 'purchase'
+                : (it.rentalDate === it.returnDate && reissueSameDayMins > 0 && reissueSameDayMins <= 720 ? '12h' : '24h')
+              for (const reservationId of it.reservationIds) {
+                const reissueRes = await fetch('/api/checkout/reissue-reservation', {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({
+                    reservationId: Number(reservationId),
+                    startDate:     it.rentalDate,
+                    endDate:       it.returnDate,
+                    pickupMethod:  localPickup,
+                    returnMethod:  localReturn ?? null,
+                    pickupTime:    it.rentalTime || null,
+                    returnTime:    it.returnTime || null,
+                    durationType:  durType,
+                  }),
+                })
+                const reissueJson = await reissueRes.json().catch(() => ({ ok: false }))
+                const reissueTyped = reissueJson as { ok: boolean; newReservationId?: number; error?: string }
+                if (!reissueTyped.ok) {
+                  csToast.error(reissueTyped.error ?? '재발행에 실패했습니다. 다시 시도해주세요.')
+                  return
+                }
+                newReservationIds.push(String(reissueTyped.newReservationId))
+              }
+              // itemsState의 해당 그룹 reservationIds를 신규 값으로 교체
+              itemsState = itemsState.map(s =>
+                s.id === it.id ? { ...s, reservationIds: newReservationIds } : s
+              )
+            }
+            // reissue 후 checkedIds 갱신 — 신규 reservationId가 create-order로 전달되어야 함
+            checkedIds = itemsState.filter(s => !s.deleted && s.checked).flatMap(s => s.reservationIds)
 
             // draft 그룹(날짜 없는 임시예약)을 먼저 승격(promote_draft_reservation) — 모두 성공한
             // 뒤 주문연결 진행. 그룹당 1건이 아니라 그룹 내 모든 개별 예약id를 순회하며 그룹의
@@ -1914,6 +2085,20 @@
     </div>
   {/if}
 
+  <!-- hold 재발행 확인 — 이용안내 모달과 동일하게 footer(transform 조상) 밖 형제로 배치
+       (ui-mobile.md "CSS transform + position:fixed 충돌" 원칙), account/rental/+page.svelte
+       예약취소 확인 오버레이와 동일한 .confirm-toast/.toast-backdrop 패턴 재사용 -->
+  {#if reissueConfirmVisible}
+    <button type="button" class="toast-backdrop" onclick={() => resolveReissueConfirm(false)} aria-label="닫기"></button>
+    <div class="confirm-toast" role="alertdialog" aria-modal="true" aria-label="예약신청 재발행 확인">
+      <p class="confirm-toast-msg">대여예약신청이 재발행됩니다.<br>변경된 날짜·방식으로 새 예약코드가 발행되고 기존 예약코드는 폐기됩니다.<br>계속 진행하시겠습니까?</p>
+      <div class="confirm-toast-actions">
+        <button type="button" class="toast-btn toast-btn-cancel" onclick={() => resolveReissueConfirm(false)}>아니요</button>
+        <button type="button" class="toast-btn toast-btn-confirm" onclick={() => resolveReissueConfirm(true)}>계속할게요</button>
+      </div>
+    </div>
+  {/if}
+
 </div>
 
 <!-- ═══════════════════════ SNIPPET COMPONENTS ═══════════════════════ -->
@@ -2004,7 +2189,16 @@
                   {/if}
                 </div>
                 <div class="option-subcard-info">
-                  <p class="option-subcard-name">{opt.name}</p>
+                  <div class="option-label-row">
+                    <p class="option-subcard-name">{opt.name}</p>
+                    {#if opt.isRequired || opt.minSelectRequired || opt.deliveryRentalDisabled}
+                      <div class="option-badges">
+                        {#if opt.isRequired}<span class="opt-badge opt-badge--required">필수</span>{/if}
+                        {#if opt.minSelectRequired}<span class="opt-badge opt-badge--min-select">최소 1개 선택</span>{/if}
+                        {#if opt.deliveryRentalDisabled}<span class="opt-badge opt-badge--no-delivery">배송대여 불가</span>{/if}
+                      </div>
+                    {/if}
+                  </div>
                   <div class="option-subcard-bottom">
                     <div class="dual-price-row dual-price-row--opt">
                       <div class="price-unit">
@@ -2106,7 +2300,16 @@
                 {/if}
               </div>
               <div class="option-subcard-info">
-                <p class="option-subcard-name">{opt.name}</p>
+                <div class="option-label-row">
+                  <p class="option-subcard-name">{opt.name}</p>
+                  {#if opt.isRequired || opt.minSelectRequired || opt.deliveryRentalDisabled}
+                    <div class="option-badges">
+                      {#if opt.isRequired}<span class="opt-badge opt-badge--required">필수</span>{/if}
+                      {#if opt.minSelectRequired}<span class="opt-badge opt-badge--min-select">최소 1개 선택</span>{/if}
+                      {#if opt.deliveryRentalDisabled}<span class="opt-badge opt-badge--no-delivery">배송대여 불가</span>{/if}
+                    </div>
+                  {/if}
+                </div>
                 <div class="option-subcard-bottom">
                   <div class="dual-price-row dual-price-row--opt">
                     <div class="price-unit">
@@ -2311,9 +2514,16 @@
           {#if tab.deadline}<p class="delivery-deadline">{tab.deadline}</p>{/if}
         {/each}
         <!-- Date/Time buttons + Calendar -->
+        <!-- 2026-09-04(Stephen 요청): 수령/반납 방식 미선택(props.method=null) 상태에서 날짜·시간
+             버튼을 누르면 달력을 열지 않고 경고 토스트로 먼저 안내한다 — 미선택 상태로 달력을
+             열어도 실제로는 methodSelectionValid가 제출을 막을 뿐이라, 원인을 이 시점에
+             바로 알려주기 위함. -->
         <div class="datetime-wrap">
           <div class="datetime-btns">
-            <button class="datetime-btn datetime-btn-dark" class:datetime-btn-date-selected={!!props.selectedDate} onclick={() => openCal(props.calId, props.selectedDate)}>
+            <button class="datetime-btn datetime-btn-dark" class:datetime-btn-date-selected={!!props.selectedDate} onclick={() => {
+              if (!props.method) { csToast.error('수령(반납) 형태를 선택해주세요.'); return }
+              openCal(props.calId, props.selectedDate)
+            }}>
               <div class="datetime-btn-left">
                 <svg width="22" height="22" viewBox="0 0 32 32" fill="none">
                   <path d="M9.95555 2.16871C18.4889 2.16871 15.4583 2.08796 21.3333 2.16868C29.8667 2.16871 31.2889 7.85107 31.2889 12.1128C31.2889 15.9495 31.2889 17.7936 31.2889 22.0553C31.2889 26.3171 28.4444 31.9995 21.3333 31.9995C15.6444 31.9995 12.8 31.9994 9.95555 31.9995C2.84444 31.9995 -9.85013e-10 26.3172 0 22.0553C9.85013e-10 17.7935 0 12.1128 0 12.1128C0 7.85107 1.42222 2.16871 9.95555 2.16871Z" fill="white"/>
@@ -2326,7 +2536,10 @@
               </div>
             </button>
             {#if !locked && !courierRestricted}
-              <button class="datetime-btn datetime-btn-mid" class:datetime-btn-time-selected={!!props.selectedTime} onclick={() => openTime(props.timeId)}>
+              <button class="datetime-btn datetime-btn-mid" class:datetime-btn-time-selected={!!props.selectedTime} onclick={() => {
+                if (!props.method) { csToast.error('수령(반납) 형태를 선택해주세요.'); return }
+                openTime(props.timeId)
+              }}>
                 <div class="datetime-btn-left">
                   <svg width="23" height="23" viewBox="0 0 22.5 22.5" fill="none">
                     <path d="M11.25 0C13.69 0 15.95 0.78 17.8 2.1L19 0.5C19.41 -0.05 20.2 -0.16 20.75 0.25C21.3 0.66 21.41 1.45 21 2L19.66 3.78C21.43 5.77 22.5 8.38 22.5 11.25C22.5 17.46 17.46 22.5 11.25 22.5C5.04 22.5 0 17.46 0 11.25C0 8.33 1.11 5.68 2.93 3.68L1.55 2.06C1.1 1.54 1.16 0.75 1.69 0.3C2.21 -0.15 3 -0.09 3.45 0.44L4.81 2.03C6.63 0.75 8.85 0 11.25 0ZM11 5C10.31 5 9.75 5.56 9.75 6.25V12.17C9.75 12.64 10.01 13.07 10.42 13.28L14.42 15.36C15.04 15.68 15.79 15.44 16.11 14.83C16.43 14.21 16.19 13.46 15.58 13.14L12.25 11.41V6.25C12.25 5.56 11.69 5 11 5Z" fill="var(--cs-white)"/>
@@ -3066,6 +3279,37 @@
     letter-spacing: -0.3px;
     margin: 0;
     word-break: break-word;
+  }
+  /* 옵션상품 "필수"/"최소 1개 선택"/"배송대여 불가" 배지 — products/[id] 옵션선택 UI
+     (.option-badges/.opt-badge*)와 동일 스타일 재사용(2026-09-05, 카트 화면 미노출 결함 수정) */
+  .option-label-row {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+  .option-badges {
+    display: flex;
+    gap: 4px;
+    flex-wrap: wrap;
+  }
+  .opt-badge {
+    display: inline-flex;
+    align-items: center;
+    padding: 2px 8px;
+    border-radius: var(--radius-full);
+    font-size: 11px;
+    font-weight: 600;
+    line-height: 1.6;
+    white-space: nowrap;
+  }
+  .opt-badge--required,
+  .opt-badge--min-select {
+    background: rgba(59,47,138,0.10);
+    color: var(--cs-purple);
+  }
+  .opt-badge--no-delivery {
+    background: var(--cs-surface-gray);
+    color: var(--cs-text-mid);
   }
   /* 2026-08-18: 옵션상품도 본상품과 동일한 Day/12H price-row로 통일.
      옵션 카드 규모(본상품보다 작음)에 맞춰 price-amount 등 폭 축소.
@@ -3989,6 +4233,68 @@
     text-decoration: underline;
     cursor: pointer;
   }
+
+  /* ══ hold 재발행 확인 오버레이 (account/rental/+page.svelte 예약취소 확인과 동일 패턴) ══ */
+  .toast-backdrop {
+    position: fixed;
+    inset: 0;
+    background: rgba(0,0,0,0.40);
+    z-index: 1000;
+    border: none;
+    padding: 0;
+    cursor: default;
+  }
+  .confirm-toast {
+    position: fixed;
+    bottom: 90px;
+    left: 50%;
+    transform: translateX(-50%);
+    width: calc(100% - 40px);
+    max-width: 480px;
+    background: #fff;
+    border-radius: var(--radius-xl);
+    padding: 20px;
+    z-index: 1001;
+    box-shadow: 0 8px 32px rgba(0,0,0,0.18);
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+  }
+  .confirm-toast-msg {
+    font-family: 'Noto Sans KR', sans-serif;
+    font-size: 15px;
+    font-weight: 700;
+    color: var(--cs-text);
+    margin: 0;
+    text-align: center;
+    line-height: 1.6;
+  }
+  .confirm-toast-actions {
+    display: flex;
+    gap: 8px;
+  }
+  .toast-btn {
+    flex: 1;
+    height: 44px;
+    border-radius: var(--radius-xl);
+    font-family: 'Noto Sans KR', sans-serif;
+    font-size: 14px;
+    font-weight: 700;
+    cursor: pointer;
+    border: none;
+    transition: background 0.15s;
+  }
+  .toast-btn:disabled { opacity: 0.6; cursor: not-allowed; }
+  .toast-btn-cancel {
+    background: var(--cs-surface-gray, #f6f6f6);
+    color: var(--cs-text-mid);
+  }
+  .toast-btn-cancel:hover:not(:disabled) { background: #e8e8e8; }
+  .toast-btn-confirm {
+    background: var(--cs-red-badge, #FF3535);
+    color: #fff;
+  }
+  .toast-btn-confirm:hover:not(:disabled) { background: var(--cs-red, #CF0000); }
 
   /* ══ 이용안내 모달 ══ */
   .guide-modal-overlay {
