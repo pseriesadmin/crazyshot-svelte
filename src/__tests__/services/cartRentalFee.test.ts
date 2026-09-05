@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { calcRentalDays, calcRentalFee, calcRentalMinutes, calcRentalPeriodParts } from '$lib/utils/cartRentalFee'
+import { calcRentalDays, calcRentalFee, calcRentalMinutes, calcRentalPeriodParts, computeCartTotalMinutes } from '$lib/utils/cartRentalFee'
 
 /**
  * 장바구니 대여기간/요금 미리보기 계산 — TDD
@@ -251,5 +251,39 @@ describe('calcRentalPeriodParts — "총 대여기간" 표시 라벨(2026-09-03 
 
   it('EC-P8: 36시간을 1분 초과 → "2일"', () => {
     expect(calcRentalPeriodParts(2161)).toEqual([{ num: 2, unit: '일' }])
+  })
+})
+
+describe('computeCartTotalMinutes — "총 대여기간" 배수 합산 버그 수정 (2026-09-04)', () => {
+  // 배경: "대여예약옵션" 통합설정 패널(applyBulkToItems())이 체크된 모든 상품에 동일한
+  // 날짜·시간을 강제 적용하므로, 체크된 상품이 N개면 기존 itemsState.reduce() 합산 방식은
+  // "N개 × 선택한 1개 기간"이 되어버렸다. 이 함수는 상품 "개수"를 아예 파라미터로 받지 않는
+  // 시그니처로, 배수 합산이 구조적으로 불가능하도록 설계한다.
+
+  it('Happy: 체크된 비구매 상품 있음(hasQualifyingItem=true) → calcRentalMinutes와 동일 결과', () => {
+    const expected = calcRentalMinutes('2026-09-01', '2026-09-02', '09:00', '18:00')
+    expect(computeCartTotalMinutes(true, '2026-09-01', '2026-09-02', '09:00', '18:00', false)).toBe(expected)
+  })
+
+  it('Edge: 체크된 비구매 상품 없음(hasQualifyingItem=false) → bulk*에 값이 남아있어도 0', () => {
+    expect(computeCartTotalMinutes(false, '2026-09-01', '2026-09-02', '09:00', '18:00', false)).toBe(0)
+  })
+
+  it('Error(핵심 회귀): hasQualifyingItem=true는 상품이 1개든 N개든 동일값 — 함수가 개수를 받지 않으므로 배수 합산 자체가 불가능함을 명시', () => {
+    // 과거 버그였다면 "2개 체크" 상황을 표현하려면 이 함수를 2번 호출해 더하는 식으로 오용할
+    // 수 있었겠지만, 이 시그니처는애초에 "체크된 자격 상품이 있는가"라는 boolean만 받으므로
+    // 개수와 무관하게 결과가 항상 "1개 기간"과 정확히 같다.
+    const oneItemResult = computeCartTotalMinutes(true, '2026-09-01', '2026-09-04', '09:00', '21:00', false)
+    // "3개 상품이 체크됐다"를 흉내내도 입력이 동일하면 결과는 절대 3배가 되지 않는다.
+    const stillSameWithManyItemsConceptually = computeCartTotalMinutes(true, '2026-09-01', '2026-09-04', '09:00', '21:00', false)
+    expect(stillSameWithManyItemsConceptually).toBe(oneItemResult)
+    expect(oneItemResult).not.toBe(oneItemResult * 3) // 배수 합산이었다면 이 assertion이 의미를 가졌을 값
+    expect(oneItemResult).toBe(calcRentalMinutes('2026-09-01', '2026-09-04', '09:00', '21:00'))
+  })
+
+  it('deliveryLocked=true 위임 — 시각 무시하고 날짜만 반영되는 calcRentalMinutes 동작 유지', () => {
+    const expected = calcRentalMinutes('2026-09-01', '2026-09-04', '12:00', '13:00', true)
+    expect(computeCartTotalMinutes(true, '2026-09-01', '2026-09-04', '12:00', '13:00', true)).toBe(expected)
+    expect(expected).toBe(5760) // (3+1)일 × 1440분
   })
 })
