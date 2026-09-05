@@ -168,6 +168,7 @@ export interface ProductOptionLink {
   product_id: string;
   option_product_id: string;
   is_required: boolean;
+  min_select_required: boolean;
   delivery_rental_disabled: boolean;
   display_order: number;
   created_at: string;
@@ -181,6 +182,7 @@ export interface ProductOptionLinkRow {
   option_product_id: string;
   option_product_name: string;
   price_24h: number | null;
+  price_12h: number | null;
   stock_quantity: number;
   is_required: boolean;
   min_select_required: boolean;
