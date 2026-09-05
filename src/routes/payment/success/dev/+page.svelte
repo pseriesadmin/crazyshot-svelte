@@ -19,7 +19,7 @@
 
 <div class="page-root">
 
-  <!-- GNB pill -->
+  <!-- GNB pill (모바일 전용 — PC는 아래 sub-gnb-b(sub-gnb_navi_b 표준)로 대체, 2026-09-06 지적) -->
   <div class="gnb-wrap">
     <div class="gnb-pill">
       <button class="gnb-back" onclick={() => goto('/cart')} aria-label="체크아웃으로">
@@ -27,7 +27,7 @@
           <path d="M14 5H1M1 5L5.5 1M1 5L5.5 9" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
         </svg>
       </button>
-      <span class="gnb-title">신청완료</span>
+      <span class="gnb-title">예약신청완료</span>
       <button class="gnb-ham" aria-label="더보기 메뉴" onclick={() => {}}>
         <svg width="20" height="17" viewBox="0 0 20 17" fill="none" aria-hidden="true">
           <path d="M18.5 6.75C19.3284 6.75 20 7.42157 20 8.25C20 9.07843 19.3284 9.75 18.5 9.75H1.5C0.671573 9.75 0 9.07843 0 8.25C0 7.42157 0.671573 6.75 1.5 6.75H18.5Z" fill="#CF0000"/>
@@ -36,6 +36,21 @@
       </button>
     </div>
   </div>
+
+  <!-- PC 전용 서브 GNB(sub-gnb_navi_b 표준, front-uiux.md §13-2 — Back Pill 단독) -->
+  <header class="sub-gnb-b">
+    <div class="sub-gnb-b-inner">
+      <button type="button" class="sub-gnb-b-pill" onclick={() => goto('/cart')} aria-label="뒤로 가기, 예약신청완료">
+        <div class="sub-gnb-b-pill-left">
+          <svg class="sub-gnb-b-arrow" viewBox="0 0 21.3844 17.1421" fill="none" aria-hidden="true">
+            <path d="M19.8844 8.5707L1.5 8.57107M8.57107 1.5L1.5 8.57107L8.57107 15.6421" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="3"/>
+          </svg>
+          <span class="sub-gnb-b-back">Back</span>
+        </div>
+        <span class="sub-gnb-b-title">예약신청완료</span>
+      </button>
+    </div>
+  </header>
 
   <!-- 타이틀 영역 -->
   <!-- 2026-08-21(TASK.md "예약 결제·계약서명 순서 재설계" Phase B): 결제(mock) 트리거가
@@ -190,14 +205,30 @@
     align-items: center;
     min-height: 100vh;
     background: var(--cs-lilac);
-    padding-top: 28px;
+    /* 모바일: 0 — 이전엔 여기 28px + .gnb-wrap 40px가 이중으로 쌓여 있어(둘 다 예전엔
+       숨겨진 전역 GNB를 위한 여백), .gnb-wrap만 16px로 고쳐도 이 28px이 남아 표준
+       서브GNB 페이지(top:0)보다 여전히 더 벌어져 있었다(2026-09-06 재지적으로 발견).
+       PC는 기존 28px 그대로 유지(@media min-width:768px 참고, 이번 지적 범위 밖). */
+    padding-top: 0;
     padding-bottom: 60px;
   }
 
   /* GNB */
   .gnb-wrap {
     width: 100%;
-    padding: 40px 25px 0;
+    /* 표준 모바일 서브GNB 공백값(SubGnb.svelte .sub-gnb-mobile: padding:16px 25px 0)과
+       동일하게 맞춤 — 기존 40px는 이제 숨겨진 전역 GNB를 위해 남겨뒀던 여백이라
+       불필요한 공백이었음(2026-09-06 지적) */
+    padding: 16px 25px 0;
+  }
+  /* 이 화면은 root +layout.svelte의 GNB 제외 경로 목록에 없어 전역 GNB(GNB.svelte)가
+     이 페이지 자체 헤더(.gnb-wrap) 위에 함께 뜬다. 모바일 반응형에서만 전역 GNB의
+     모바일 nav를 숨김(2026-09-06 지적) — PC는 그대로 유지, 전역 컴포넌트는 미수정 */
+  @media (max-width: 767px) {
+    /* GNB.svelte 자체 scoped 규칙(.gnb-mobile-wrap.svelte-xxxxx)이 명시도가 더 높아
+       일반 :global() 단일클래스로는 안 이겨서 !important 필요 — 이 화면 전용의 의도된
+       예외적 오버라이드(전역 컴포넌트 자체는 미수정) */
+    :global(.gnb-mobile-wrap) { display: none !important; }
   }
   .gnb-pill {
     display: flex;
@@ -230,6 +261,87 @@
     letter-spacing: -0.5px;
   }
 
+  /* ━━━ PC 전용 서브 GNB(sub-gnb_navi_b, front-uiux.md §13-2 표준 그대로) ━━━ */
+  .sub-gnb-b {
+    /* 표준 스펙(cart/+page.svelte)의 부모는 align-items 기본값(stretch)이라 폭 지정이
+       불필요하지만, 이 페이지의 .page-root는 align-items:center라 stretch가 되지 않는다
+       — width:100% 누락 시 알약이 콘텐츠 크기로 쪼그라들며 화면 중앙에 떠 보이는 결함
+       발생(2026-09-06 지적). 이 페이지의 다른 최상위 자식(.gnb-wrap·.title-bar·.body)도
+       전부 동일한 이유로 width:100%를 명시하고 있음 — 그 관례를 그대로 따름. */
+    width: 100%;
+    position: sticky;
+    top: 0;
+    z-index: 50;
+    background: transparent;
+    border-bottom: none;
+    display: none;                        /* 모바일 숨김 */
+  }
+  @media (min-width: 641px) {
+    .sub-gnb-b { display: block; }        /* PC에서만 표시 */
+    /* 이 화면 자체의 모바일 스타일 GNB 알약(.gnb-wrap)은 sub-gnb_navi_b와 같은 641px
+       분기점에서 대체 — 그 사이 구간에도 두 GNB가 동시에 뜨지 않도록 함(2026-09-06 지적) */
+    .gnb-wrap { display: none; }
+  }
+  .sub-gnb-b-inner {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 30px;
+    width: 100%;
+    max-width: var(--layout-pc-max);
+    margin: 0 auto;
+    padding: 20px var(--layout-pc-pad);
+    flex-wrap: nowrap;
+    box-sizing: border-box;
+  }
+  .sub-gnb-b-pill {
+    /* Stephen 지시(2026-09-06): PC반응형 가로폭 100% — front-uiux.md §13-2 문서상
+       기본값(max-width:460px)은 cart/+page.svelte 실제 코드의 넓은 화면(>1024px) 케이스
+       기준이고, 좁은 PC~태블릿 구간(≤1024px)에서는 그 소스 정본 자체가 이미
+       max-width:none; flex:1 1 auto로 폭을 100%까지 풀어둔다 — 이 화면은 항상 그 넓힌
+       쪽 값을 쓴다. */
+    background: rgba(225, 222, 243, 0.4);
+    border: none;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+    padding: 20px 40px;
+    border-radius: 25px;
+    width: 100%;
+    max-width: none;
+    min-width: 0;
+    min-height: 62px;
+    flex: 1 1 auto;
+    box-sizing: border-box;
+    color: var(--cs-text);
+    transition: background 0.2s;
+  }
+  .sub-gnb-b-pill:hover { background: rgba(225, 222, 243, 0.85); }
+  .sub-gnb-b-pill-left {
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    min-width: 0;
+  }
+  .sub-gnb-b-arrow {
+    width: 22px;
+    height: 18px;
+    flex-shrink: 0;
+  }
+  .sub-gnb-b-back {
+    font: var(--text-pc-title-16);
+    color: var(--cs-text);
+    white-space: nowrap;
+  }
+  .sub-gnb-b-title {
+    font: var(--text-pc-menu-en-20);
+    color: var(--cs-text);
+    flex-shrink: 0;
+    white-space: nowrap;
+  }
+
   /* 타이틀 */
   .title-bar {
     display: flex;
@@ -245,14 +357,20 @@
     display: flex;
     align-items: center;
     justify-content: center;
-    width: 70px;
-    height: 70px;
-    border-radius: var(--radius-icon-box);
+    width: 48px;
+    height: 48px;
+    /* --radius-icon-box(25px)는 PC 70px 박스 기준 고정값이라, 모바일 48px 박스에 그대로
+       쓰면 반경이 박스 절반을 넘어 사각 라운드가 아니라 완전한 원으로 보였다(2026-09-06
+       지적). PC와 동일한 반경 비율(25/70)로 스케일링해 48px에서도 같은 사각 라운드
+       형태를 유지 — 절대값이 아니라 비율을 맞추는 것이 핵심이라 계산식을 그대로 둠. */
+    border-radius: calc(var(--radius-icon-box) * 48 / 70);
     flex-shrink: 0;
   }
   .icon-box--success { background: var(--cs-purple); }
   .title-text {
-    font: var(--text-m-htitle-24L);
+    /* 모바일 반응형: 아이콘·폰트를 htitle(24L) 대비 두 단계 작은 body(16L) 티어로
+       축소(2026-09-06 지적) — PC는 아래 @media (min-width:768px)에서 원래 크기로 복원 */
+    font: var(--text-m-body-16L);
     color: var(--cs-purple-dark);
     letter-spacing: -0.5px;
     margin: 0;
@@ -400,11 +518,27 @@
 
   /* PC 반응형 */
   @media (min-width: 768px) {
-    .gnb-wrap { display: none; }
+    .page-root { padding-top: 28px; }
+    /* 이 화면은 전역 메인 GNB가 아니라 화면 자체의 서브GNB 알약(.gnb-wrap)만 노출돼야
+       정상(2026-09-06 지적) — 과거엔 PC에서 .gnb-wrap을 숨기고 전역 GNB(GNB.svelte)의
+       데스크톱 nav가 그 자리를 대신 채우고 있었음. GNB.svelte 자체 scoped 규칙
+       (.gnb-desktop-wrap.svelte-xxxxx)이 일반 :global() 단일클래스보다 명시도가 높아
+       !important 필요 — 모바일 쪽과 동일한 예외적 오버라이드 패턴(전역 컴포넌트 자체는
+       미수정), 같은 768px 분기점에서 뒤집는다. */
+    :global(.gnb-desktop-wrap) { display: none !important; }
     .title-bar {
       max-width: 900px;
       margin-left: auto;
       margin-right: auto;
+    }
+    /* 모바일에서만 두 단계 축소(위 base 스타일) — PC는 원래 크기(htitle-24L/70px) 유지 */
+    .icon-box {
+      width: 70px;
+      height: 70px;
+      border-radius: var(--radius-icon-box);
+    }
+    .title-text {
+      font: var(--text-m-htitle-24L);
     }
     .body {
       max-width: 900px;
