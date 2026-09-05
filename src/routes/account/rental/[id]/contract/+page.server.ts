@@ -72,7 +72,7 @@ export const load: PageServerLoad = async ({ params, locals }) => {
       id, signed_at, ip_address, signature_data, stroke_count, signed_content_snapshot,
       contracts!inner (
         id, title, content_blocks, specifications, authoring_mode,
-        canvas_document, spreadsheet_document, reservation_id
+        canvas_document, spreadsheet_document, html_document, reservation_id
       )
     `)
     .in('contracts.reservation_id', candidateReservationIds)
@@ -95,6 +95,7 @@ export const load: PageServerLoad = async ({ params, locals }) => {
     authoring_mode: string | null
     canvas_document: unknown
     spreadsheet_document: unknown
+    html_document: unknown
   }
 
   // 2026-08-21: 서명 시점 스냅샷이 있으면 그걸 우선 사용 — 서명 이후 관리자가 계약 원본을
@@ -108,6 +109,7 @@ export const load: PageServerLoad = async ({ params, locals }) => {
     authoring_mode: string | null
     canvas_document: unknown
     spreadsheet_document: unknown
+    html_document: unknown
   } | null
 
   const contract = {
@@ -118,6 +120,7 @@ export const load: PageServerLoad = async ({ params, locals }) => {
     authoring_mode: (snapshot ?? liveContract).authoring_mode,
     canvas_document: (snapshot ?? liveContract).canvas_document,
     spreadsheet_document: (snapshot ?? liveContract).spreadsheet_document,
+    html_document: (snapshot ?? liveContract).html_document,
   }
 
   // P8A-3와 동일한 감사로그 관례 — 고객 본인의 열람도 append-only로 기록

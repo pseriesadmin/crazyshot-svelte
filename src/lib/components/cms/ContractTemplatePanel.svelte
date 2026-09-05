@@ -16,8 +16,9 @@
   import ContractImportModal from '$lib/components/cms/contract-editor/ContractImportModal.svelte'
   import ContractCanvasEditor from '$lib/components/cms/contract-editor/ContractCanvasEditor.svelte'
   import ContractSpreadsheetEditor from '$lib/components/cms/contract-editor/ContractSpreadsheetEditor.svelte'
-  import { isTiptapDocBlock, isCanvasDocument, hasSignatureField, isSpreadsheetDocument } from '$lib/types/contract-document'
+  import { isTiptapDocBlock, isCanvasDocument, hasSignatureField, isSpreadsheetDocument, isHtmlDocument } from '$lib/types/contract-document'
   import type { TiptapDocBlock, MergeFieldAttrs, CanvasDocument, ContractCanvasPayload, SpreadsheetDocument } from '$lib/types/contract-document'
+  import { DEFAULT_RENTAL_CONTRACT_HTML } from '$lib/components/cms/contract-editor/templates/defaultRentalContractHtml'
   import type { ContractTemplate } from '$lib/types/contract-template'
   import type { JSONContent } from '@tiptap/core'
 
@@ -71,11 +72,11 @@
   let title                   = $state('')
   let requiresIssuerSignature = $state(false)
   /**
-   * 작성 모드: 'flow' | 'canvas' | 'spreadsheet' | null(신규 미선택)
+   * 작성 모드: 'flow' | 'canvas' | 'spreadsheet' | 'html' | null(신규 미선택)
    * 신규(template=null): 처음엔 null → 모드 선택 UI → 선택 후 고정
    * 기존(template!=null): template.authoring_mode에서 초기화 (이후 변경 불가)
    */
-  let authoringMode           = $state<'flow' | 'canvas' | 'spreadsheet' | null>(null)
+  let authoringMode           = $state<'flow' | 'canvas' | 'spreadsheet' | 'html' | null>(null)
   // spreadsheet 에디터 강제 재마운트 키 (새 xlsx 임포트 시 increments)
   let spreadsheetMountKey     = $state(0)
 
@@ -107,7 +108,7 @@
     const nextRequiresIssuerSignature = template?.requires_issuer_signature ?? false
     // 모드 초기화: 기존 템플릿이면 authoring_mode 사용, 신규면 null(미선택)
     const nextAuthoringMode = template
-      ? ((template.authoring_mode as 'flow' | 'canvas' | 'spreadsheet') ?? 'flow')
+      ? ((template.authoring_mode as 'flow' | 'canvas' | 'spreadsheet' | 'html') ?? 'flow')
       : null
 
     specs                   = nextSpecs
@@ -466,7 +467,12 @@
       }
       formData.set('content_blocks', serializeBlocks())
       formData.set('specifications', serializeSpecs())
-      formData.set('authoring_mode', 'flow')
+      // ⛔ 2026-09-05 발견·수정 — 이 블록은 canvas/spreadsheet를 제외한 나머지 전부(flow +
+      // html)가 타는 일반 form submit 경로인데, authoring_mode를 'flow' 리터럴로 무조건
+      // 덮어써 html 모드로 저장해도 항상 'flow'로 저장되는 결함이 있었다(html_document 자체는
+      // 폼의 hidden input으로 별도 제출돼 정상 저장되지만 authoring_mode만 틀리게 저장되는
+      // 상태 — 실브라우저로 직접 재현·확인). 실제 선택된 모드를 반영한다.
+      formData.set('authoring_mode', authoringMode === 'html' ? 'html' : 'flow')
       saving = true
       return async ({ result, update }) => {
         saving = false
@@ -612,6 +618,14 @@
               <span class="mode-name">고정 캔버스형</span>
               <span class="mode-desc">기존 서식(PDF·이미지)을 배경으로 불러와 서명·텍스트 필드를 좌표로 배치합니다.</span>
             </button>
+            <button
+              type="button"
+              class="mode-btn"
+              onclick={() => { authoringMode = 'html' }}
+            >
+              <span class="mode-name">HTML형 (고정 서식)</span>
+              <span class="mode-desc">Excel 기반 고정 HTML 서식을 사용합니다. 고객정보·상품목록 등 변수가 자동으로 치환됩니다. 특약 조항만 직접 입력하세요.</span>
+            </button>
           </div>
         </div>
       {:else if authoringMode === 'canvas'}
@@ -644,6 +658,27 @@
               const ok = spreadsheetEditorRef?.insertTextAtSelection(`{{${attrs.variable}}}`)
               if (!ok) csToast.error('삽입할 셀을 먼저 선택해주세요.')
             }}
+            specifications={specs}
+            onSpecsChange={(s: { key: string; value: string }[]) => { specs = s }}
+          />
+        </div>
+      {:else if authoringMode === 'html'}
+        <!-- html 모드: 고정 HTML 서식 미리보기(읽기 전용) + 특약 조항 입력 패널 -->
+        <!-- html_document 필드: 항상 DEFAULT_RENTAL_CONTRACT_HTML을 저장 (변경 불가) -->
+        <input type="hidden" name="html_document" value={DEFAULT_RENTAL_CONTRACT_HTML} />
+        <div class="html-preview-wrap">
+          <div class="html-preview-label">
+            <span>HTML 고정 서식 미리보기</span>
+            <span class="html-preview-hint">이 서식은 편집할 수 없습니다. 특약 조항만 우측 패널에서 입력하세요.</span>
+          </div>
+          <div class="html-preview-doc">
+            {@html DEFAULT_RENTAL_CONTRACT_HTML}
+          </div>
+        </div>
+        <div class="panel-col">
+          <ContractFieldPanel
+            onInsertField={() => {}}
+            htmlMode={true}
             specifications={specs}
             onSpecsChange={(s: { key: string; value: string }[]) => { specs = s }}
           />
@@ -1122,5 +1157,39 @@
   .spreadsheet-editor-wrap :global(.cse-wrap) {
     flex: 1;
     min-height: 0;
+  }
+
+  /* html 모드 미리보기 */
+  .html-preview-wrap {
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    border: 1px solid var(--cs-lilac);
+    border-radius: var(--cms-radius-sm);
+  }
+  .html-preview-label {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 8px 12px;
+    background: var(--cs-surface-gray);
+    border-bottom: 1px solid var(--cs-lilac);
+    font: var(--text-pc-body-14);
+    font-weight: 600;
+    color: var(--cs-text);
+    flex-shrink: 0;
+  }
+  .html-preview-hint {
+    font: var(--text-pc-script-12);
+    color: var(--cs-text-mid);
+    font-weight: 400;
+  }
+  .html-preview-doc {
+    flex: 1;
+    overflow: auto;
+    padding: 16px;
+    background: #fff;
   }
 </style>

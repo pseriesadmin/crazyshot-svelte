@@ -55,7 +55,7 @@ export const POST: RequestHandler = async ({ params, locals, request, getClientA
   // 무관하게 고정되던 결함이 있었음.
   const { data: contract } = await admin
     .from('contracts')
-    .select('title, authoring_mode, content_blocks, specifications, canvas_document, spreadsheet_document')
+    .select('title, authoring_mode, content_blocks, specifications, canvas_document, spreadsheet_document, html_document')
     .eq('id', contractId)
     .maybeSingle()
 

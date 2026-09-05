@@ -3,6 +3,7 @@ import type { TiptapDocBlock, SpreadsheetDocument, SpreadsheetSheet } from '$lib
 import type { ContractSubstitutionData, ContractLineItem } from '$lib/types/contract-module'
 import type { SheetMergeRange } from '$lib/types/sheet-format'
 import { substituteTiptapDoc } from '$lib/utils/tiptapRender'
+import { escapeHtml } from '$lib/utils/spreadsheetRender'
 
 // ─────────────────────────────────────────────────────────────────────────────
 // 스칼라 치환 (배열 필드 스킵 — 반복 영역에서 별도 처리)
@@ -220,4 +221,88 @@ export function substituteVariables(
     }
     return block
   })
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// HTML형(고정 템플릿) 계약서 치환
+//
+// 보안 원칙: 모든 사용자 입력(고객이름·주소·상품명 등)을 escapeHtml()로 필수 이스케이프.
+// XSS 방어의 유일한 서버측 장벽이다 — 이 함수를 거치지 않고 html_document에 사용자
+// 입력값을 삽입하는 경로를 절대로 추가하지 말 것.
+//
+// 반복 영역: <!--REPEAT:상품목록-->...<!--/REPEAT--> HTML 주석 마커로 지정.
+// 마커 사이 HTML 조각을 ContractSubstitutionData.상품목록 배열 항목 수만큼 복제·치환한다.
+// N=0 이면 마커만 제거하고 행 없음. N≥1 이면 각 행마다 {{NO.}}(1-based)·항목 필드 치환.
+// ─────────────────────────────────────────────────────────────────────────────
+
+const REPEAT_MARKER_RE = /<!--REPEAT:상품목록-->([\s\S]*?)<!--\/REPEAT-->/g
+
+/**
+ * HTML형 계약서의 스칼라 변수 치환 (XSS 이스케이프 적용).
+ * @internal
+ */
+function applyHtmlSubstitution(text: string, data: ContractSubstitutionData): string {
+  return text.replace(/\{\{([^}]+)\}\}/g, (match, key: string) => {
+    const trimmed = key.trim() as keyof ContractSubstitutionData
+    const value = data[trimmed]
+    // 스칼라(string)만 치환 — 배열(상품목록)은 반복 영역에서 별도 처리
+    if (typeof value === 'string') return escapeHtml(value)
+    // 치환 불가 변수 → 빈 문자열(원문 제거)
+    return ''
+  })
+}
+
+/**
+ * 반복 행 안에서 ContractLineItem 필드 우선 치환 후 스칼라 폴백 치환 (XSS 이스케이프 적용).
+ * {{NO.}} 는 1-based 순번으로 치환한다.
+ * @internal
+ */
+function applyHtmlItemSubstitution(
+  text: string,
+  item: ContractLineItem,
+  data: ContractSubstitutionData,
+  index: number,
+): string {
+  // 1순위: 순번 {{NO.}} 및 ContractLineItem 필드
+  const withItem = text.replace(/\{\{([^}]+)\}\}/g, (match, key: string) => {
+    const trimmed = key.trim()
+    // {{NO.}} → 1-based 순번
+    if (trimmed === 'NO.' || trimmed === 'NO') return String(index + 1)
+    // ContractLineItem 필드
+    const itemValue = item[trimmed as keyof ContractLineItem]
+    if (itemValue !== undefined && typeof itemValue === 'string') return escapeHtml(itemValue)
+    return match // 항목 필드에 없으면 원문 유지 → 2순위 스칼라 폴백
+  })
+  // 2순위: 스칼라 폴백 (ContractSubstitutionData, 이스케이프 포함)
+  return applyHtmlSubstitution(withItem, data)
+}
+
+/**
+ * HTML형(고정 템플릿) 계약서의 변수 치환.
+ *
+ * 1. <!--REPEAT:상품목록-->...<!--/REPEAT--> 반복 영역: 상품목록 배열 항목 수만큼 확장 후 치환.
+ * 2. 나머지 영역: 스칼라 변수 1:1 치환.
+ * 3. 모든 치환값은 escapeHtml()로 이스케이프 (XSS 방어).
+ * 4. 치환 불가 변수(키가 ContractSubstitutionData에 없음)는 빈 문자열로 대체(원문 제거).
+ *
+ * @param html  변수 치환 전 HTML 원본 (DEFAULT_RENTAL_CONTRACT_HTML 등)
+ * @param data  치환 데이터 (ContractSubstitutionData)
+ * @returns     치환 완료된 HTML — DB 저장 및 {@html} 렌더링에 안전
+ */
+export function substituteHtmlDocument(
+  html: string,
+  data: ContractSubstitutionData,
+): string {
+  const items = data.상품목록 ?? []
+
+  // 반복 영역 처리
+  const withRepeat = html.replace(REPEAT_MARKER_RE, (_match, innerTemplate: string) => {
+    if (items.length === 0) return ''
+    return items
+      .map((item, i) => applyHtmlItemSubstitution(innerTemplate, item, data, i))
+      .join('')
+  })
+
+  // 나머지 스칼라 치환
+  return applyHtmlSubstitution(withRepeat, data)
 }

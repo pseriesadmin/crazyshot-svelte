@@ -5,7 +5,7 @@ import { json } from '@sveltejs/kit'
 import type { RequestHandler } from './$types'
 import { getCmsRoleForAction } from '$lib/server/getCmsRoleForAction'
 import { hasSettingsAccess } from '$lib/utils/cmsPermissions'
-import { isCanvasDocument, hasSignatureField, isSpreadsheetDocument } from '$lib/types/contract-document'
+import { isCanvasDocument, hasSignatureField, isSpreadsheetDocument, isHtmlDocument } from '$lib/types/contract-document'
 import { isContractIssueBlocked } from '$lib/utils/contractIssueGuard'
 
 export const GET: RequestHandler = async ({ params, locals, url }) => {
@@ -37,7 +37,7 @@ export const GET: RequestHandler = async ({ params, locals, url }) => {
 
   const { data, error } = await admin
     .from('contracts')
-    .select('title, content_blocks, specifications, authoring_mode, canvas_document, spreadsheet_document')
+    .select('title, content_blocks, specifications, authoring_mode, canvas_document, spreadsheet_document, html_document')
     .eq('id', contractId)
     .maybeSingle()
 
@@ -76,6 +76,7 @@ export const PATCH: RequestHandler = async ({ params, locals, request }) => {
     authoring_mode?: string
     canvas_document?: unknown
     spreadsheet_document?: unknown
+    html_document?: unknown
   }
   try {
     body = await request.json() as typeof body
@@ -165,6 +166,12 @@ export const PATCH: RequestHandler = async ({ params, locals, request }) => {
       return json({ error: 'spreadsheet_document 형식이 올바르지 않습니다.' }, { status: 400 })
     }
     updatePayload.spreadsheet_document = body.spreadsheet_document
+  }
+  if ('html_document' in body && body.html_document != null) {
+    if (!isHtmlDocument(body.html_document)) {
+      return json({ error: 'html_document는 비어있지 않은 문자열이어야 합니다.' }, { status: 400 })
+    }
+    updatePayload.html_document = body.html_document
   }
 
   const { error } = await admin

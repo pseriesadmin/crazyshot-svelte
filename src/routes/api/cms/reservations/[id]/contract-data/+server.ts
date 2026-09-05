@@ -30,6 +30,12 @@ function formatAmount(n: number | null | undefined): string {
   return n.toLocaleString('ko-KR') + '원'
 }
 
+// rental_reservations.start_date/end_date("YYYY-MM-DD") → 원본 엑셀 표기("YYYY.MM.DD")
+function formatDateDot(d: string | null | undefined): string {
+  if (!d) return '-'
+  return d.slice(0, 10).replace(/-/g, '.')
+}
+
 const COMPONENTS_TEXT_MAX = 50
 
 // products.components(key-value JSONB, ProductDetailPanel.svelte "구성품" 탭 — products.md
@@ -102,18 +108,29 @@ export const GET: RequestHandler = async ({ params, locals }) => {
   // ── 1. 기본 예약 정보 조회 (16개 스칼라 필드의 기준 reservation) ────────────
   const { data: res, error: resErr } = await admin
     .from('rental_reservations')
-    .select('reservation_code, pickup_method, return_method, pickup_time, return_time, user_id, product_id, duration_type, pickup_address_road, pickup_address_detail')
+    .select('reservation_code, pickup_method, return_method, pickup_time, return_time, start_date, end_date, user_id, product_id, duration_type, pickup_address_road, pickup_address_detail')
     .eq('id', reservationId)
     .maybeSingle()
 
   if (resErr) return json({ error: resErr.message }, { status: 500 })
   if (!res) return json({ error: '예약 정보를 찾을 수 없습니다.' }, { status: 404 })
 
+  // rental-fee-policy.md §2 — is_delivery_type(배송 반납 허용 지정) 판정. 수령/반납
+  // 방식이 "배송"으로 지정된 방식이면 pickup_time/return_time은 실제 고객이 고른
+  // 시각이 아니라(1day 강제청구라 시간선택 UI 자체가 무의미) 화면 임시값일 뿐이므로
+  // 계약서에는 노출하지 않는다(아래 수령일시/반납일시 계산부 참고). pickup_method/
+  // return_method는 둘 다 nullable(드래프트 예약 등)이라 빈 배열이면 .in() 호출 자체를
+  // 스킵한다 — PostgREST가 빈 IN 목록을 받았을 때의 동작에 기대지 않기 위한 방어.
+  const methodKeys = [res.pickup_method, res.return_method].filter((v): v is string => !!v)
+
   // ── 2. 병렬 조회: 기본 예약의 스칼라 필드용 데이터 ────────────────────────
-  const [productRes, userRes, orderItemRes, addrRes] = await Promise.all([
+  const [productRes, userRes, orderItemRes, methodOptsRes, addrRes] = await Promise.all([
     admin.from('products').select('name, product_code, components').eq('id', res.product_id).maybeSingle(),
     admin.from('user_profiles').select('full_name, phone, email').eq('id', res.user_id).maybeSingle(),
     admin.from('order_items').select('order_id').eq('reservation_id', reservationId).maybeSingle(),
+    methodKeys.length > 0
+      ? admin.from('rental_method_options').select('method_key, is_delivery_type').in('method_key', methodKeys)
+      : Promise.resolve({ data: [] as { method_key: string; is_delivery_type: boolean | null }[], error: null }),
     // ⚠️ 2026-09-03(Migration 434): 이 조회는 이제 "정본"이 아니라 하위호환 폴백 전용이다 —
     // rental_reservations.pickup_address_road/detail(예약신청완료 시점 스냅샷)가 있으면
     // 그걸 우선 쓰고, 이 쿼리는 그 컬럼 신설 이전에 생성된 예약(res.pickup_address_road가
@@ -303,6 +320,16 @@ export const GET: RequestHandler = async ({ params, locals }) => {
     : ''
   const addrStr = snapshotAddr || fallbackAddr || '-'
 
+  // rental-fee-policy.md §2 — is_delivery_type=true인 방식은 pickup_time/return_time이
+  // 실제 고객이 고른 시각이 아니므로(1day 강제청구, 시간선택 UI 자체가 무의미) 계약서에
+  // 노출하지 않는다. 방식이 rental_method_options에 없으면(레거시·설정 누락) 배송이
+  // 아닌 것으로 간주해 시각을 그대로 노출(데이터를 임의로 숨기지 않는 안전한 기본값).
+  const deliveryTypeByMethod = new Map(
+    (methodOptsRes.data ?? []).map((m) => [m.method_key, m.is_delivery_type === true]),
+  )
+  const isPickupDelivery = res.pickup_method ? (deliveryTypeByMethod.get(res.pickup_method) ?? false) : false
+  const isReturnDelivery = res.return_method ? (deliveryTypeByMethod.get(res.return_method) ?? false) : false
+
   const data: ContractSubstitutionData = {
     // 기존 16개 스칼라 필드 (하위호환 — 기준 reservationId 기반)
     고객이름:     userRes.data?.full_name ?? '-',
@@ -314,9 +341,11 @@ export const GET: RequestHandler = async ({ params, locals }) => {
     상품명:       productRes.data?.name ?? '-',
     수량:         String(actualQty),
     수령형태:     res.pickup_method ? (PICKUP_LABELS[res.pickup_method] ?? res.pickup_method) : '-',
-    수령일시:     res.pickup_time ?? '-',
+    수령일시:     isPickupDelivery ? '-' : (res.pickup_time ?? '-'),
+    수령일자:     formatDateDot(res.start_date),
     반납형태:     res.return_method ? (PICKUP_LABELS[res.return_method] ?? res.return_method) : '-',
-    반납일시:     res.return_time ?? '-',
+    반납일시:     isReturnDelivery ? '-' : (res.return_time ?? '-'),
+    반납일자:     formatDateDot(res.end_date),
     기본대여요금: formatAmount(orderData?.total_amount),
     할인금액:     formatAmount(orderData?.discount_amount),
     배송비:       formatAmount(orderData?.delivery_fee),

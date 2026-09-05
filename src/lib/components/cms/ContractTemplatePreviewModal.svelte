@@ -1,9 +1,9 @@
 <script lang="ts">
   import { csToast } from '$lib/utils/toast'
-  import { substituteVariables, substituteSpreadsheetDocument, type AnyContentBlock } from '$lib/utils/contract-substitution'
+  import { substituteVariables, substituteSpreadsheetDocument, substituteHtmlDocument, type AnyContentBlock } from '$lib/utils/contract-substitution'
   import { applyContractTemplate } from '$lib/utils/contract-apply-template'
   import { hasExistingContractContent } from '$lib/utils/contract-content-mode'
-  import { isTiptapDocBlock, isSpreadsheetDocument } from '$lib/types/contract-document'
+  import { isTiptapDocBlock, isSpreadsheetDocument, isHtmlDocument } from '$lib/types/contract-document'
   import { renderTiptapDocToHtml } from '$lib/utils/tiptapRender'
   import { renderSpreadsheetToHtml } from '$lib/utils/spreadsheetRender'
   import type { TiptapDocBlock } from '$lib/types/contract-document'
@@ -21,6 +21,8 @@
     canvas_document?: unknown
     /** spreadsheet 모드 문서 — authoring_mode='spreadsheet'일 때 contracts.spreadsheet_document에 저장 */
     spreadsheet_document?: unknown
+    /** html 모드 문서 — authoring_mode='html'일 때 contracts.html_document에 저장 */
+    html_document?: unknown
   }
 
   interface Props {
@@ -64,6 +66,8 @@
   let existingCanvasDocument       = $state<unknown>(null)
   // spreadsheet 계약의 경우 content_blocks는 항상 [] — spreadsheet_document를 보관해 미리보기 분기에 활용
   let existingSpreadsheetDocument  = $state<unknown>(null)
+  // html 계약의 경우 content_blocks는 항상 [] — html_document를 보관해 미리보기 분기에 활용
+  let existingHtmlDocument         = $state<unknown>(null)
   let hasExistingContent = $state(false)
   // viewOnly는 항상 existing 취급 — 양식 선택 자체가 UI에서 제거되므로 template 모드로 빠질 일이 없음
   let contentMode        = $state<'existing' | 'template'>(viewOnly ? 'existing' : 'template')
@@ -102,12 +106,27 @@
           : null)
   )
 
+  /**
+   * html형 미리보기 문서 — existing 모드는 저장된 html_document 그대로,
+   * template 모드는 subData가 있으면 변수 치환 후 표시.
+   */
+  const previewHtmlDocument = $derived<string | null>(
+    contentMode === 'existing'
+      ? (isHtmlDocument(existingHtmlDocument) ? (existingHtmlDocument as string) : null)
+      : (selectedTemplate && isHtmlDocument(selectedTemplate.html_document)
+          ? (subData
+              ? substituteHtmlDocument(selectedTemplate.html_document as string, subData)
+              : (selectedTemplate.html_document as string))
+          : null)
+  )
+
   const showPreview = $derived(
-    // canvas / spreadsheet 계약은 existingBlocks가 [] 이므로 각 document 유무도 함께 확인
+    // canvas / spreadsheet / html 계약은 existingBlocks가 [] 이므로 각 document 유무도 함께 확인
     (contentMode === 'existing' && (
       existingBlocks.length > 0 ||
       existingCanvasDocument != null ||
-      existingSpreadsheetDocument != null
+      existingSpreadsheetDocument != null ||
+      existingHtmlDocument != null
     )) ||
     (contentMode === 'template' && selectedTemplate !== null)
   )
@@ -151,9 +170,10 @@
               content_blocks?: unknown
               canvas_document?: unknown
               spreadsheet_document?: unknown
+              html_document?: unknown
               authoring_mode?: string
             }
-            if (hasExistingContractContent(contentData.content_blocks, contentData.canvas_document)) {
+            if (hasExistingContractContent(contentData.content_blocks, contentData.canvas_document, contentData.spreadsheet_document, contentData.html_document)) {
               existingBlocks = contentData.content_blocks as AnyContentBlock[]
               // canvas 계약은 canvas_document를 보관 — 미리보기 분기 및 showPreview 조건에 사용
               existingCanvasDocument = contentData.canvas_document ?? null
@@ -165,6 +185,14 @@
             ) {
               // spreadsheet 계약은 content_blocks가 항상 [] — spreadsheet_document로 판별
               existingSpreadsheetDocument = contentData.spreadsheet_document
+              hasExistingContent = true
+              contentMode = 'existing'
+            } else if (
+              contentData.authoring_mode === 'html' &&
+              isHtmlDocument(contentData.html_document)
+            ) {
+              // html 계약은 content_blocks가 항상 [] — html_document로 판별
+              existingHtmlDocument = contentData.html_document
               hasExistingContent = true
               contentMode = 'existing'
             }
@@ -227,17 +255,22 @@
 
     const isCanvas      = selectedTemplate.authoring_mode === 'canvas'
     const isSpreadsheet = selectedTemplate.authoring_mode === 'spreadsheet'
-    // canvas / spreadsheet 모드는 content_blocks가 빈 배열 — substituteVariables 적용 불필요.
-    // canvas는 렌더 시점(/contract/[token])에 필드 바인딩으로 치환되지만, spreadsheet는
-    // 셀 텍스트가 flow의 텍스트 노드와 동일한 성격(불투명 문자열 어디든 {{변수}} 등장 가능)
-    // 이라 flow와 동일하게 여기서 적용시점(apply-time) 치환을 수행해 저장한다.
-    const substitutedBlocks = (isCanvas || isSpreadsheet)
+    const isHtml        = selectedTemplate.authoring_mode === 'html'
+    // canvas / spreadsheet / html 모드는 content_blocks가 빈 배열 — substituteVariables 적용 불필요.
+    // canvas는 렌더 시점(/contract/[token])에 필드 바인딩으로 치환되지만, spreadsheet/html는
+    // 텍스트 어디든 {{변수}} 등장 가능이라 apply-time 치환을 수행해 저장한다.
+    const substitutedBlocks = (isCanvas || isSpreadsheet || isHtml)
       ? []
       : substituteVariables(selectedTemplate.content_blocks ?? [], subData)
 
     const substitutedSpreadsheetDocument =
       isSpreadsheet && isSpreadsheetDocument(selectedTemplate.spreadsheet_document)
         ? substituteSpreadsheetDocument(selectedTemplate.spreadsheet_document, subData)
+        : undefined
+
+    const substitutedHtmlDocument =
+      isHtml && isHtmlDocument(selectedTemplate.html_document)
+        ? substituteHtmlDocument(selectedTemplate.html_document as string, subData)
         : undefined
 
     const result = await applyContractTemplate({
@@ -247,9 +280,10 @@
       contentBlocks:       substitutedBlocks,
       specifications:      selectedTemplate.specifications ?? [],
       templateId:          selectedTemplate.id,
-      authoring_mode:      isSpreadsheet ? 'spreadsheet' : isCanvas ? 'canvas' : 'flow',
+      authoring_mode:      isSpreadsheet ? 'spreadsheet' : isCanvas ? 'canvas' : isHtml ? 'html' : 'flow',
       canvasDocument:      isCanvas      ? selectedTemplate.canvas_document      : undefined,
       spreadsheetDocument: substitutedSpreadsheetDocument,
+      htmlDocument:        substitutedHtmlDocument,
     })
 
     if (result.error) throw new Error(result.error)
@@ -440,6 +474,12 @@
                        실제 내용은 발송 후에만 확인 가능했던 공백을 해소). -->
                   <div class="preview-block spreadsheet-doc-content">
                     {@html renderSpreadsheetToHtml(previewSpreadsheetDocument)}
+                  </div>
+                {/if}
+                {#if previewHtmlDocument}
+                  <!-- html형: 변수 치환된 고정 HTML 서식을 그대로 렌더링 -->
+                  <div class="preview-block html-contract-doc">
+                    {@html previewHtmlDocument}
                   </div>
                 {/if}
               </div>

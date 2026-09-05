@@ -7,7 +7,7 @@
   // 관련 결함 사례 참고 — 구조가 달라지면 겹치기 이미지 위치가 틀어짐).
   import type { PageData } from './$types'
   import type { ContentBlock } from '$lib/types/content-editor'
-  import { isCanvasDocument, isSpreadsheetDocument, isTiptapDocBlock } from '$lib/types/contract-document'
+  import { isCanvasDocument, isSpreadsheetDocument, isTiptapDocBlock, isHtmlDocument } from '$lib/types/contract-document'
   import type { CanvasDocument, SpreadsheetDocument, TiptapDocBlock } from '$lib/types/contract-document'
   import { renderTiptapDocToHtml } from '$lib/utils/tiptapRender'
   import { renderSpreadsheetToHtml } from '$lib/utils/spreadsheetRender'
@@ -48,6 +48,7 @@
     authoring_mode: string | null
     canvas_document: unknown
     spreadsheet_document: unknown
+    html_document: unknown
   } | null)
 
   const contentBlocks  = $derived(contract?.content_blocks ?? [])
@@ -61,6 +62,12 @@
   const isSpreadsheetMode = $derived(contract?.authoring_mode === 'spreadsheet')
   const spreadsheetDoc = $derived<SpreadsheetDocument | null>(
     isSpreadsheetDocument(contract?.spreadsheet_document) ? (contract?.spreadsheet_document as SpreadsheetDocument) : null
+  )
+
+  // html 모드 분기 — 고정 템플릿 HTML 문서를 그대로 렌더링 (변수 치환은 발행 시점에 완료됨)
+  const isHtmlMode = $derived(contract?.authoring_mode === 'html')
+  const htmlDoc = $derived<string | null>(
+    isHtmlDocument(contract?.html_document) ? (contract?.html_document as string) : null
   )
 
   const PICKUP_LABELS: Record<string, string> = {
@@ -349,6 +356,11 @@
               {/if}
             </svg>
           </button>
+        </div>
+      {:else if isHtmlMode && htmlDoc}
+        <!-- html 모드: 고정 템플릿 HTML — 변수 치환은 발행(applyContractTemplate) 시점에 완료됨 -->
+        <div class="doc-section html-contract-doc">
+          {@html htmlDoc}
         </div>
       {:else if contentBlocks.length > 0}
         <div class="doc-section">

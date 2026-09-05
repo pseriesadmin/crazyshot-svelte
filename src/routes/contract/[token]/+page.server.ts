@@ -28,6 +28,7 @@ export const load: PageServerLoad = async ({ params }) => {
         authoring_mode,
         canvas_document,
         spreadsheet_document,
+        html_document,
         rental_reservations (
           id,
           status,

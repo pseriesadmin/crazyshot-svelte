@@ -43,23 +43,36 @@
     specifications: SpecRow[]
     /** 특약 목록 변경 알림 */
     onSpecsChange: (specs: SpecRow[]) => void
+    /**
+     * HTML형 고정 서식 모드.
+     * true일 때: 변수 삽입 탭(계약자/상품/결제)을 숨기고 특약 탭만 노출.
+     * HTML형은 모든 변수가 발행 시점에 자동 치환되므로 관리자가 직접 삽입할 필요가 없다.
+     */
+    htmlMode?: boolean
   }
 
-  let { onInsertField, specifications, onSpecsChange }: Props = $props()
+  let { onInsertField, specifications, onSpecsChange, htmlMode = false }: Props = $props()
 
   // --------------------------------------------------------------------------
   // 탭 정의
   // --------------------------------------------------------------------------
   type TabKey = '계약자정보' | '상품정보' | '결제정보' | '특약'
 
-  const TABS: { key: TabKey; label: string }[] = [
+  const ALL_TABS: { key: TabKey; label: string }[] = [
     { key: '계약자정보', label: '계약자' },
     { key: '상품정보',   label: '상품' },
     { key: '결제정보',   label: '결제' },
     { key: '특약',       label: '특약' },
   ]
 
-  let activeTab = $state<TabKey>('계약자정보')
+  // HTML 모드에서는 특약 탭만 노출 (변수 삽입 탭은 불필요 — 자동 치환됨)
+  const TABS = $derived(htmlMode ? ALL_TABS.filter(t => t.key === '특약') : ALL_TABS)
+
+  // HTML 모드 진입 시 activeTab을 항상 '특약'으로 초기화
+  let activeTab = $state<TabKey>(htmlMode ? '특약' : '계약자정보')
+  $effect(() => {
+    if (htmlMode) activeTab = '특약'
+  })
 
   // --------------------------------------------------------------------------
   // 변수 카탈로그 (ContractSubstitutionData 21개 스칼라 변수 중 UI 노출분)
