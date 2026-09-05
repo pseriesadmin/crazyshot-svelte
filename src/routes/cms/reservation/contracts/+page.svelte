@@ -90,6 +90,7 @@
     flow:        '문서형',
     canvas:      '캔버스형',
     spreadsheet: '스프레드시트형',
+    html:        'HTML형',
   }
   function modeLabel(mode: string | null | undefined): string {
     return MODE_LABEL[mode ?? 'flow'] ?? MODE_LABEL.flow
@@ -145,7 +146,7 @@
                 <span class="status-badge" class:archived={tpl.status === 'archived'}>
                   {STATUS_LABEL[tpl.status] ?? tpl.status}
                 </span>
-                <span class="mode-badge" class:spreadsheet={(tpl.authoring_mode ?? 'flow') === 'spreadsheet'} class:canvas={tpl.authoring_mode === 'canvas'}>
+                <span class="mode-badge" class:spreadsheet={(tpl.authoring_mode ?? 'flow') === 'spreadsheet'} class:canvas={tpl.authoring_mode === 'canvas'} class:html={tpl.authoring_mode === 'html'}>
                   {modeLabel(tpl.authoring_mode)}
                 </span>
                 <span class="tpl-date">{formatDate(tpl.created_at)}</span>
@@ -359,6 +360,10 @@
   .mode-badge.spreadsheet {
     background: rgba(59, 47, 138, 0.1);
     color: var(--cs-purple);
+  }
+  .mode-badge.html {
+    background: rgba(14, 165, 233, 0.1);
+    color: var(--cs-info);
   }
   .tpl-date {
     font: var(--text-pc-script-12);

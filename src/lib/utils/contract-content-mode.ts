@@ -28,23 +28,25 @@
  *   재발했다. spreadsheetDocument 파라미터를 추가해 세 번째 authoring_mode도 인식하도록 수정.
  */
 
-import { isCanvasDocument, isSpreadsheetDocument } from '$lib/types/contract-document'
+import { isCanvasDocument, isSpreadsheetDocument, isHtmlDocument } from '$lib/types/contract-document'
 
 /**
- * contracts.content_blocks / canvas_document / spreadsheet_document 중 하나라도
- * 발행된 내용이 있는지 판별.
+ * contracts.content_blocks / canvas_document / spreadsheet_document / html_document 중
+ * 하나라도 발행된 내용이 있는지 판별.
  *
  * 판별 기준:
  *   blocks가 하나 이상의 블록을 포함하는 배열 (flow 모드 계약)
  *   OR canvasDocument가 유효한 CanvasDocument이면서 fields 배열에 1개 이상 항목이 있음 (canvas 모드 계약)
  *   OR spreadsheetDocument가 유효한 SpreadsheetDocument이면서 rows가 있는 시트가 1개 이상 있음 (spreadsheet 모드 계약)
+ *   OR htmlDocument가 비어있지 않은 문자열 (html 모드 계약)
  *
- * canvas·spreadsheet 계약 공통 특성: content_blocks는 항상 [] — 실제 내용은 각 전용 컬럼에 저장.
+ * canvas·spreadsheet·html 계약 공통 특성: content_blocks는 항상 [] — 실제 내용은 각 전용 컬럼에 저장.
  *   따라서 그 전용 컬럼 없이 content_blocks만 검사하면 항상 "내용 없음"으로 오판한다.
  *
  * @param blocks               DB에서 조회한 content_blocks 원본값 (any 타입 의도적 허용 — DB JSONB 파싱값)
  * @param canvasDocument       DB에서 조회한 canvas_document 원본값 (optional — 미전달 시 무시)
  * @param spreadsheetDocument  DB에서 조회한 spreadsheet_document 원본값 (optional — 미전달 시 무시)
+ * @param htmlDocument         DB에서 조회한 html_document 원본값 (optional — 미전달 시 무시)
  * @returns true  = 발행된 내용 있음 → existing 모드 진입
  *          false = 내용 없음       → template 모드 진입 (기존 동작)
  */
@@ -52,9 +54,11 @@ export function hasExistingContractContent(
   blocks: unknown,
   canvasDocument?: unknown,
   spreadsheetDocument?: unknown,
+  htmlDocument?: unknown,
 ): boolean {
   if (Array.isArray(blocks) && blocks.length > 0) return true
   if (isCanvasDocument(canvasDocument) && canvasDocument.fields.length > 0) return true
   if (isSpreadsheetDocument(spreadsheetDocument) && spreadsheetDocument.sheets.some((s) => s.rows.length > 0)) return true
+  if (isHtmlDocument(htmlDocument)) return true
   return false
 }

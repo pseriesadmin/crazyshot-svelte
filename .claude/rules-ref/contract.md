@@ -460,8 +460,20 @@ viewed 기록과 동일 관례로 고객 본인의 재열람도 append-only로 �
   묶인 reservation 건수(`contractLineItems.ts` `buildLineItems()`와 완전히 동일한
   `${name} ${product_code}` 그룹화 키 재사용 — 반복영역 상품목록과 이 스칼라가 이제
   일관됨). 과거엔 "항상 1"로 하드코딩(P3-3, 폐기)돼 있었으나 Stephen 지적으로 정정. |
-| `{{수령형태}}` / `{{수령일시}}` | pickup_method(레이블 치환) / pickup_time |
-| `{{반납형태}}` / `{{반납일시}}` | return_method(레이블 치환) / return_time |
+| `{{수령형태}}` / `{{수령일시}}` | pickup_method(레이블 치환) / pickup_time(TEXT, 시간만 — 날짜 아님).
+  **2026-09-06 신규**: 수령방식이 `rental_method_options.is_delivery_type=true`인 방식(현재
+  'crazydelivery')이면 `{{수령일시}}`는 무조건 `-`. 배송 방식은 1day 강제청구라 시간선택
+  UI 자체가 없어 pickup_time에 저장된 값이 실제 고객이 고른 시각이 아니라 화면 임시값
+  (예: 12:00)일 뿐이기 때문(rental-fee-policy.md §2·§3 deliveryLocked 참고) — 계약서에
+  실제로 존재하지 않는 시간 정보를 노출하지 않기 위한 가드. |
+| `{{반납형태}}` / `{{반납일시}}` | return_method(레이블 치환) / return_time(TEXT, 시간만 — 날짜 아님).
+  `{{수령일시}}`와 동일 원리로 반납방식이 is_delivery_type=true면 `{{반납일시}}`는 `-`.
+  판정은 수령·반납 각각 독립적(한쪽만 배송이어도 그 쪽만 `-`) — contract-data/+server.ts의
+  `isPickupDelivery`/`isReturnDelivery`. |
+| `{{수령일자}}` / `{{반납일자}}` | **2026-09-06 신규**: `rental_reservations.start_date`/`end_date`(DATE) →
+  `formatDateDot()`로 "YYYY.MM.DD" 포맷. `{{수령일시}}`/`{{반납일시}}`는 이름과 달리 시간만
+  담고 있어(위 행 참고) HTML형 "대여 및 반납시간" 표의 날짜 행을 표시할 변수가 없었다 —
+  실제 발행·발송 테스트 중 발견해 추가(defaultRentalContractHtml.ts 4차 수정 참고). |
 | `{{기본대여요금}}` | `orders.total_amount` |
 | `{{할인금액}}` | `orders.discount_amount` — ⚠️ **2026-08-31 정정**: "쿠폰+포인트 통합"이라는 과거
   서술은 오기였다. 실제로는 `create_reservation_order` RPC가 **주문 생성(장바구니 체크아웃)
@@ -497,6 +509,56 @@ viewed 기록과 동일 관례로 고객 본인의 재열람도 append-only로 �
 
 ---
 
+## HTML형 작성 모드 — 고정 서식 (4번째 모드, 2026-09-04 신설)
+
+```
+기존 3가지 작성 모드(flow/canvas/spreadsheet)에 html 모드를 추가.
+html 모드는 관리자가 직접 서식 내용을 편집하지 않는 "고정 템플릿" 방식이다.
+
+핵심 원칙:
+  - 계약서 본문(DEFAULT_RENTAL_CONTRACT_HTML) 자체는 코드에 하드코딩 — CMS에서 편집 불가
+  - 발송 시점에 substituteHtmlDocument()가 {{변수명}} 토큰을 실데이터로 치환
+  - 치환 결과를 contracts.html_document(TEXT)에 저장(발송 완료 후 고객 화면에서 그대로 렌더링)
+  - 특약(specifications)만 관리자가 자유롭게 입력 가능 — ContractFieldPanel의 특약 탭만 노출
+  - 모드 선택: ContractTemplatePanel "HTML형 (고정 서식)" 버튼
+
+⛔ XSS 방어 (절대 준수):
+  고객 입력값(이름·주소·연락처 등)이 HTML 문서 내부에 문자열 치환으로 삽입되므로
+  escapeHtml() 처리가 필수다 — content_blocks({@html} 렌더링과 달리 CMS-only 신뢰 경계를
+  적용할 수 없어 고객 데이터가 HTML 태그를 포함할 수 있다.
+  substituteHtmlDocument()는 모든 변수 값에 escapeHtml()을 적용한 후 치환한다.
+
+치환 흐름:
+  1. ContractTemplatePanel에서 "HTML형 (고정 서식)" 모드 선택
+     → hidden input에 html_document = DEFAULT_RENTAL_CONTRACT_HTML 포함
+     → 서버 PATCH에서 contracts.html_document에 고정 서식 원본 저장
+  2. 발송(ContractTemplatePreviewModal.send()) 시
+     → substituteHtmlDocument(html_document, substitutionData) 호출
+     → 결과를 PATCH contracts.html_document에 다시 저장(치환 완료본으로 덮어씀)
+  3. 고객 화면(/contract/[token], /account/rental/[id]/contract)
+     → contracts.html_document가 있으면 {@html html_document}로 렌더링(content_blocks 미사용)
+     → contracts.html_document가 null이면 기존 content_blocks/canvas/spreadsheet 분기로 폴백
+
+DB 컬럼:
+  contract_templates.html_document TEXT DEFAULT NULL  (Migration 447)
+  contracts.html_document TEXT DEFAULT NULL           (Migration 447)
+  contract_authoring_mode ENUM에 'html' 추가          (Migration 446)
+
+서명 스냅샷:
+  sign/+server.ts의 signed_content_snapshot에 html_document 포함
+  (src/routes/api/contracts/[token]/sign/+server.ts의 SELECT 쿼리에 추가됨)
+```
+
+구현 파일:
+  - `src/lib/components/cms/contract-editor/templates/defaultRentalContractHtml.ts` — DEFAULT_RENTAL_CONTRACT_HTML 상수 (7.7 KB, 고정)
+  - `src/lib/utils/contract-substitution.ts` — `substituteHtmlDocument()` 함수, `escapeHtml()` 포함
+  - `src/lib/components/cms/ContractTemplatePanel.svelte` — HTML형 모드 블록, htmlMode prop 전달
+  - `src/lib/components/cms/contract-editor/ContractFieldPanel.svelte` — htmlMode prop (특약 탭만 노출)
+  - `supabase/migrations/20260904060000_446_html_authoring_mode_enum.sql` — ENUM 'html' 추가
+  - `supabase/migrations/20260904070000_447_html_document_column.sql` — html_document 컬럼 추가
+
+---
+
 ## 고객 서명 화면 UI 확정 사항 (2026-07-28)
 
 ```
@@ -528,12 +590,15 @@ viewed 기록과 동일 관례로 고객 본인의 재열람도 append-only로 �
 | 계약서 내용 저장 API | `src/routes/api/cms/contracts/[id]/content/+server.ts` |
 | 채팅 발송 API | `src/routes/api/cms/contracts/[id]/send-chat/+server.ts` |
 | 고객 서명 등록 API | `src/routes/api/contracts/[token]/sign/+server.ts` |
-| 변수 치환 유틸 | `src/lib/utils/contract-substitution.ts` |
+| 변수 치환 유틸 | `src/lib/utils/contract-substitution.ts` (`substituteVariables` + `substituteHtmlDocument` + `escapeHtml`) |
+| HTML 고정 서식 상수 | `src/lib/components/cms/contract-editor/templates/defaultRentalContractHtml.ts` (`DEFAULT_RENTAL_CONTRACT_HTML`) |
 | 타입 정의 | `src/lib/types/contract-module.ts`, `contract-template.ts` |
 | CMS 예약목록(서명 배지) | `src/routes/cms/reservation/+page.svelte`, `+page.server.ts` (`get_rental_list` RPC) |
 | CMS 대여현황(딥링크 대상) | `src/routes/cms/rentals/+page.svelte`, `+page.server.ts` |
 | 만료 컬럼 마이그레이션 | `supabase/migrations/20260723000146_146_contract_signings_expiry.sql` |
 | 콘텐츠 필드 마이그레이션 | `supabase/migrations/20260723000149_149_contracts_content_fields.sql` |
+| HTML형 ENUM 마이그레이션 | `supabase/migrations/20260904060000_446_html_authoring_mode_enum.sql` |
+| html_document 컬럼 마이그레이션 | `supabase/migrations/20260904070000_447_html_document_column.sql` |
 
 ---
 
@@ -573,15 +638,27 @@ viewed 기록과 동일 관례로 고객 본인의 재열람도 append-only로 �
     (P8A-3 구현 후 활성화)
 [ ] (P8B) 발행자 서명 필수 플래그가 켜진 양식은 서명 없이 발송 시도 시 서버에서 차단되는가?
     (P8B-4 구현 후 활성화)
+[ ] HTML형 계약서 발행 시 고객 입력 변수(이름·주소·연락처 등)가 substituteHtmlDocument() 내에서
+    escapeHtml()로 이스케이프된 후 HTML에 삽입되는가? (XSS 실위험 — HTML형 전용 보안 검증.
+    flow/canvas/spreadsheet 모드의 content_blocks는 CMS 신뢰 경계가 있어 {@html}이 안전하지만,
+    HTML형은 고객 데이터를 문자열 치환으로 직접 HTML에 삽입하므로 반드시 이스케이프 필요)
+[ ] HTML형 계약서 고객 화면(/contract/[token], /account/rental/[id]/contract)에서
+    contracts.html_document가 있으면 이 값을 {@html}로 우선 렌더링하고, null이면 기존
+    content_blocks/canvas_document/spreadsheet_document 분기로 정확히 폴백하는가?
+[ ] ContractFieldPanel의 htmlMode=true 시 특약(specifications) 탭만 노출되고, 계약자/상품/결제
+    변수 칩 탭은 숨겨져 있는가? (HTML 모드에서 변수 칩은 no-op이므로 혼동 방지)
 ```
 
 ---
 
-*contract.md v1.4 | Harness Flow v3.2 | 2026-07-28 신규 작성 — rental-lifecycle.md·TASK.md 세션 로그·
+*contract.md v1.5 | Harness Flow v3.2 | 2026-07-28 신규 작성 — rental-lifecycle.md·TASK.md 세션 로그·
 코드 직접 조사로 흩어져 있던 전자계약(CMS 발송 + 고객 서명 + 채팅 연동 + 보안) 개발정보 통합 |
 2026-08-11 권한 계정별 흐름(작성→발행→발송→서명→확인) 전역 감사 추가 — 앞선 세션에서는 Stephen이
 role 무차별 허용을 의도된 설계로 확인했으나(구v1.2), 같은 날 이어진 전자계약 에디터 고도화
 플래닝 세션에서 이 결론을 뒤집고 11개 액션 전부에 manager 이상 게이트 적용을 최종 확정 |
+2026-09-04 HTML형 작성 모드(4번째 모드, 고정 서식) 신설 반영 — DEFAULT_RENTAL_CONTRACT_HTML /
+substituteHtmlDocument / escapeHtml XSS 보안 원칙 / Migration 446·447 / ContractFieldPanel htmlMode
+prop / GATE C 3개 체크항목 추가 |
 2026-08-13 발송 흐름 §업데이트 — QA 3차 재검수 발견 워크플로우 버그 수정:
   "미리보기 & 발송"이 기존 편집 내용을 무시하고 템플릿 원본으로 덮어쓰는 버그 해소.
   ContractTemplatePreviewModal에 existing/template 모드 분기 도입 —

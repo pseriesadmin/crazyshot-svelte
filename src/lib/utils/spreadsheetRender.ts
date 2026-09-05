@@ -27,8 +27,8 @@ const SAFE_IMAGE_URL = /^https?:\/\//i
 // XSS 방지 HTML 이스케이프
 // ─────────────────────────────────────────────────────────────────────────────
 
-/** 셀 텍스트를 HTML에 안전하게 삽입하기 위한 이스케이프 */
-function escapeHtml(text: string): string {
+/** 셀 텍스트를 HTML에 안전하게 삽입하기 위한 이스케이프 (HTML형 계약서에서도 공유 사용) */
+export function escapeHtml(text: string): string {
   return text
     .replace(/&/g, '&amp;')
     .replace(/</g, '&lt;')

@@ -53,7 +53,7 @@ export const POST: RequestHandler = async ({ params, request, getClientAddress }
   if (signing.contract_id) {
     const { data: contractContent } = await admin
       .from('contracts')
-      .select('title, authoring_mode, content_blocks, specifications, canvas_document, spreadsheet_document')
+      .select('title, authoring_mode, content_blocks, specifications, canvas_document, spreadsheet_document, html_document')
       .eq('id', signing.contract_id)
       .maybeSingle()
     if (contractContent) {

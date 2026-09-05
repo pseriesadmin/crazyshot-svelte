@@ -6,7 +6,7 @@ import type { Actions, PageServerLoad } from './$types'
 import type { ContractTemplate, ContractTemplateSummary } from '$lib/types/contract-template'
 import { getCmsRoleForAction } from '$lib/server/getCmsRoleForAction'
 import { hasSettingsAccess } from '$lib/utils/cmsPermissions'
-import { isCanvasDocument, hasSignatureField, isSpreadsheetDocument } from '$lib/types/contract-document'
+import { isCanvasDocument, hasSignatureField, isSpreadsheetDocument, isHtmlDocument } from '$lib/types/contract-document'
 import type { CanvasDocument, CanvasField, SpreadsheetDocument } from '$lib/types/contract-document'
 
 // --------------------------------------------------------------------------
@@ -103,6 +103,7 @@ export const actions: Actions = {
     const contentBlocks            = form.get('content_blocks') as string | null
     const canvasDocumentRaw        = form.get('canvas_document') as string | null
     const spreadsheetDocumentRaw   = form.get('spreadsheet_document') as string | null
+    const htmlDocumentRaw          = form.get('html_document') as string | null
     const specifications           = form.get('specifications') as string | null
     const requiresIssuerSignature  = form.get('requires_issuer_signature') === 'true'
     const authoringMode            = (form.get('authoring_mode') as string | null)?.trim() || 'flow'
@@ -113,6 +114,7 @@ export const actions: Actions = {
     let parsedSpecs:  unknown[] = []
     let parsedCanvas: CanvasDocument | null = null
     let parsedSpreadsheet: SpreadsheetDocument | null = null
+    let parsedHtml: string | null = null
     try { parsedBlocks = JSON.parse(contentBlocks ?? '[]') } catch { /* empty */ }
     try { parsedSpecs  = JSON.parse(specifications ?? '[]') } catch { /* empty */ }
     if (canvasDocumentRaw) {
@@ -132,6 +134,12 @@ export const actions: Actions = {
       } catch {
         return fail(400, { error: 'spreadsheet_document JSON 파싱 실패.' })
       }
+    }
+    if (htmlDocumentRaw) {
+      if (!isHtmlDocument(htmlDocumentRaw)) {
+        return fail(400, { error: 'html_document는 비어있지 않은 문자열이어야 합니다.' })
+      }
+      parsedHtml = htmlDocumentRaw
     }
 
     // EC-3 + issuer-image assetId 존재 검증 (있을 때만)
@@ -153,6 +161,7 @@ export const actions: Actions = {
     }
     if (parsedCanvas !== null) insertPayload.canvas_document = parsedCanvas
     if (parsedSpreadsheet !== null) insertPayload.spreadsheet_document = parsedSpreadsheet
+    if (parsedHtml !== null) insertPayload.html_document = parsedHtml
 
     const { data, error } = await admin
       .from('contract_templates')
@@ -179,6 +188,7 @@ export const actions: Actions = {
     const contentBlocks            = form.get('content_blocks') as string | null
     const canvasDocumentRaw        = form.get('canvas_document') as string | null
     const spreadsheetDocumentRaw   = form.get('spreadsheet_document') as string | null
+    const htmlDocumentRaw          = form.get('html_document') as string | null
     const specifications           = form.get('specifications') as string | null
     const requiresIssuerSignature  = form.get('requires_issuer_signature') === 'true'
     const authoringMode            = (form.get('authoring_mode') as string | null)?.trim() || 'flow'
@@ -211,6 +221,7 @@ export const actions: Actions = {
     let parsedSpecs:  unknown[] = []
     let parsedCanvas: CanvasDocument | null = null
     let parsedSpreadsheet: SpreadsheetDocument | null = null
+    let parsedHtml: string | null = null
     try { parsedBlocks = JSON.parse(contentBlocks ?? '[]') } catch { /* empty */ }
     try { parsedSpecs  = JSON.parse(specifications ?? '[]') } catch { /* empty */ }
     if (canvasDocumentRaw) {
@@ -230,6 +241,12 @@ export const actions: Actions = {
       } catch {
         return fail(400, { error: 'spreadsheet_document JSON 파싱 실패.' })
       }
+    }
+    if (htmlDocumentRaw) {
+      if (!isHtmlDocument(htmlDocumentRaw)) {
+        return fail(400, { error: 'html_document는 비어있지 않은 문자열이어야 합니다.' })
+      }
+      parsedHtml = htmlDocumentRaw
     }
 
     // EC-3 + issuer-image assetId 존재 검증 (있을 때만)
@@ -251,6 +268,7 @@ export const actions: Actions = {
     }
     if (parsedCanvas !== null) updatePayload.canvas_document = parsedCanvas
     if (parsedSpreadsheet !== null) updatePayload.spreadsheet_document = parsedSpreadsheet
+    if (parsedHtml !== null) updatePayload.html_document = parsedHtml
 
     const { error } = await admin
       .from('contract_templates')
