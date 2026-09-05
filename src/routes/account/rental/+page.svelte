@@ -6,6 +6,7 @@
   import FloatingButton from '$lib/components/chat/FloatingButton.svelte'
   import { openChatWithContext } from '$lib/stores/chat.svelte'
   import { authState } from '$lib/stores/auth'
+  import { goto, invalidateAll } from '$app/navigation'
   import type { PageData } from './$types'
   import type { MyRental } from './+page.server'
 
@@ -68,6 +69,60 @@
     if (!dt) return '-'
     return dt.slice(0, 10)
   }
+
+  // 예약신청 취소 모달
+  // modalType A: 취소 가능 → 확인 모달
+  // modalType B: 취소 불가 → 채팅 문의 안내
+  let cancelPendingId  = $state<string | null>(null)
+  let cancelModalType  = $state<'A' | 'B' | null>(null)
+  let cancelLoading    = $state(false)
+  let cancelErrorMsg   = $state<string | null>(null)
+
+  function openCancelModal(rental: MyRental): void {
+    cancelPendingId  = rental.id
+    cancelErrorMsg   = null
+    cancelModalType  = rental.canCancel ? 'A' : 'B'
+  }
+
+  function dismissCancel(): void {
+    if (cancelLoading) return
+    cancelPendingId  = null
+    cancelModalType  = null
+    cancelErrorMsg   = null
+  }
+
+  async function confirmCancel(): Promise<void> {
+    if (!cancelPendingId) return
+    cancelLoading  = true
+    cancelErrorMsg = null
+    try {
+      const res = await fetch('/api/checkout/cancel-reservation', {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({ reservationId: Number(cancelPendingId) }),
+      })
+      const json = await res.json() as { ok: boolean; error?: string }
+      if (!res.ok || !json.ok) {
+        // 서버 재검증 결과 취소 불가 → Modal B로 전환
+        cancelModalType = 'B'
+        cancelErrorMsg  = json.error ?? '예약신청취소가 불가합니다.'
+        return
+      }
+      cancelPendingId = null
+      cancelModalType = null
+      await invalidateAll()
+    } catch {
+      cancelModalType = 'B'
+      cancelErrorMsg  = '일시적인 오류가 발생했습니다. 채팅으로 문의해주세요.'
+    } finally {
+      cancelLoading = false
+    }
+  }
+
+  function goToCancelChat(): void {
+    if (cancelPendingId) openReservationChat(cancelPendingId)
+    dismissCancel()
+  }
 </script>
 
 <div class="page-wrap">
@@ -122,6 +177,27 @@
               <RentalJourneyStepper status={rental.status} />
             </div>
 
+            {#if rental.status === 'hold' || (rental.status === 'confirmed' && !rental.tracking_number)}
+              <div class="card-actions">
+                {#if rental.status === 'hold'}
+                  <button
+                    type="button"
+                    class="card-actions-btn primary"
+                    onclick={() => goto(`/account/rental/${rental.id}`)}
+                  >
+                    예약신청 확인
+                  </button>
+                {/if}
+                <button
+                  type="button"
+                  class="card-actions-btn danger"
+                  onclick={() => openCancelModal(rental)}
+                >
+                  예약신청 취소
+                </button>
+              </div>
+            {/if}
+
             {#if rental.has_signed_contract}
               <button
                 type="button"
@@ -151,6 +227,75 @@
   <!-- 이 화면(/account)은 루트 레이아웃에서 FloatingBar가 제외되어 있어, 카드별 채팅
        버튼이 여는 공통 플로팅 채팅 모달(바텀시트)을 이 페이지에서 직접 마운트한다. -->
   <FloatingButton userId={chatUserId} userName={chatUserName} userHandle={chatUserHandle} hideFab />
+
+  {#if cancelModalType}
+    <!-- position:fixed 모달 — FloatingButton의 transform 서브트리 밖 형제로 배치돼 뷰포트 기준으로 정확히 렌더링됨 (ui-mobile.md §transform+fixed 충돌 규칙) -->
+    <button type="button" class="cancel-modal-backdrop" onclick={dismissCancel} aria-label="닫기"></button>
+
+    {#if cancelModalType === 'A'}
+      <!-- Modal A: 취소 가능 — 확인 모달 -->
+      <div class="cancel-modal" role="alertdialog" aria-modal="true" aria-label="예약신청취소 확인">
+        <div class="cancel-modal-top">
+          <div class="cancel-modal-icon" aria-hidden="true">⚠️</div>
+          <p class="cancel-modal-title">예약신청을 취소하시겠어요?</p>
+          <p class="cancel-modal-sub">취소하면 되돌릴 수 없어요.<br>결제한 경우 전액 환불됩니다.</p>
+        </div>
+        <div class="cancel-modal-bottom">
+          {#if cancelErrorMsg}
+            <p class="cancel-modal-error">{cancelErrorMsg}</p>
+          {/if}
+          <div class="cancel-modal-actions">
+            <button
+              type="button"
+              class="cancel-modal-btn outline"
+              onclick={dismissCancel}
+              disabled={cancelLoading}
+            >
+              아니요
+            </button>
+            <button
+              type="button"
+              class="cancel-modal-btn red"
+              onclick={confirmCancel}
+              disabled={cancelLoading}
+            >
+              {cancelLoading ? '처리 중...' : '네, 취소할게요'}
+            </button>
+          </div>
+        </div>
+      </div>
+    {:else}
+      <!-- Modal B: 취소 불가 — 채팅 문의 안내 -->
+      <div class="cancel-modal" role="alertdialog" aria-modal="true" aria-label="예약신청취소 불가 안내">
+        <div class="cancel-modal-top">
+          <div class="cancel-modal-icon" aria-hidden="true">🔒</div>
+          <p class="cancel-modal-title">예약신청 취소가 어렵습니다</p>
+          <p class="cancel-modal-sub">
+            {cancelErrorMsg ?? '방문 수령 예정 건은 수령 6시간 전부터 취소가 제한됩니다.'}
+            <br>채팅으로 문의해주세요.
+          </p>
+        </div>
+        <div class="cancel-modal-bottom">
+          <div class="cancel-modal-actions">
+            <button
+              type="button"
+              class="cancel-modal-btn outline"
+              onclick={dismissCancel}
+            >
+              닫기
+            </button>
+            <button
+              type="button"
+              class="cancel-modal-btn purple"
+              onclick={goToCancelChat}
+            >
+              채팅 문의하기
+            </button>
+          </div>
+        </div>
+      </div>
+    {/if}
+  {/if}
 </div>
 
 <style>
@@ -317,6 +462,139 @@
   }
   .contract-btn:hover  { background: var(--cs-lilac); }
   .contract-btn:active { background: var(--cs-purple-pale); }
+
+  /* 예약신청 확인/취소 버튼 (hold 상태 전용) */
+  .card-actions {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+  .card-actions-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    height: 44px;
+    min-height: 44px;
+    border-radius: var(--radius-xl);
+    font-family: 'Noto Sans KR', sans-serif;
+    font-size: 14px;
+    font-weight: 700;
+    cursor: pointer;
+    transition: background 0.15s, border-color 0.15s;
+    border: 1.5px solid transparent;
+  }
+  .card-actions-btn.primary {
+    background: var(--cs-purple);
+    border-color: var(--cs-purple);
+    color: #fff;
+  }
+  .card-actions-btn.primary:hover  { background: #2d2470; border-color: #2d2470; }
+  .card-actions-btn.primary:active { background: #1f1a55; border-color: #1f1a55; }
+  .card-actions-btn.danger {
+    background: var(--cs-white);
+    border-color: var(--cs-red-badge, #FF3535);
+    color: var(--cs-red-badge, #FF3535);
+  }
+  .card-actions-btn.danger:hover  { background: rgba(255,53,53,0.06); }
+  .card-actions-btn.danger:active { background: rgba(255,53,53,0.12); }
+
+  /* 예약신청취소 모달 (Figma 기준: --cs-purple-dark top + --cs-dark bottom + --radius-2xl) */
+  .cancel-modal-backdrop {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.55);
+    z-index: 300;
+    border: none;
+    padding: 0;
+    cursor: default;
+  }
+  .cancel-modal {
+    position: fixed;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    width: clamp(340px, calc(100% - 40px), 605px);
+    border-radius: var(--radius-2xl);
+    overflow: hidden;
+    z-index: 301;
+    display: flex;
+    flex-direction: column;
+  }
+  .cancel-modal-top {
+    background: var(--cs-purple-dark, #1d183e);
+    padding: 32px 28px 28px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 10px;
+  }
+  .cancel-modal-icon {
+    font-size: 36px;
+    line-height: 1;
+  }
+  .cancel-modal-title {
+    font-family: 'Noto Sans KR', sans-serif;
+    font-size: 18px;
+    font-weight: 700;
+    color: #fff;
+    margin: 0;
+    text-align: center;
+  }
+  .cancel-modal-sub {
+    font-family: 'Noto Sans KR', sans-serif;
+    font-size: 14px;
+    color: rgba(255, 255, 255, 0.72);
+    margin: 0;
+    text-align: center;
+    line-height: 1.6;
+  }
+  .cancel-modal-bottom {
+    background: var(--cs-dark, #100B32);
+    padding: 20px 28px 28px;
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+  }
+  .cancel-modal-error {
+    font-family: 'Noto Sans KR', sans-serif;
+    font-size: 13px;
+    color: var(--cs-red-badge, #FF3535);
+    text-align: center;
+    margin: 0;
+  }
+  .cancel-modal-actions {
+    display: flex;
+    gap: 10px;
+  }
+  .cancel-modal-btn {
+    flex: 1;
+    height: 50px;
+    min-height: 44px;
+    border-radius: var(--radius-xl);
+    font-family: 'Noto Sans KR', sans-serif;
+    font-size: 15px;
+    font-weight: 700;
+    cursor: pointer;
+    border: none;
+    transition: opacity 0.15s, background 0.15s;
+  }
+  .cancel-modal-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+  .cancel-modal-btn.outline {
+    background: rgba(255, 255, 255, 0.10);
+    color: rgba(255, 255, 255, 0.80);
+    border: 1.5px solid rgba(255, 255, 255, 0.20);
+  }
+  .cancel-modal-btn.outline:hover:not(:disabled) { background: rgba(255, 255, 255, 0.16); }
+  .cancel-modal-btn.red {
+    background: var(--cs-red-badge, #FF3535);
+    color: #fff;
+  }
+  .cancel-modal-btn.red:hover:not(:disabled) { background: var(--cs-red, #CF0000); }
+  .cancel-modal-btn.purple {
+    background: var(--cs-purple, #3B2F8A);
+    color: #fff;
+  }
+  .cancel-modal-btn.purple:hover:not(:disabled) { background: #2d2470; }
 
   @media (min-width: 768px) {
     .content {

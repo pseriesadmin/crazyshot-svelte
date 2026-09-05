@@ -3,6 +3,7 @@ import type { PageServerLoad, Actions } from './$types'
 import { callTypedRpc } from '$lib/utils/rpc'
 import { loadUserCoupons } from '$lib/server/account/loadUserCoupons'
 import { loadRentalContractStatus } from '$lib/server/account/loadRentalContractStatus'
+import { canCancelReservation } from '$lib/utils/canCancelReservation'
 
 interface AccountProfile {
   id: string
@@ -67,7 +68,7 @@ export const load: PageServerLoad = async ({ locals, depends }) => {
     // PC 패널용: 대여 목록
     locals.supabase
       .from('rental_reservations')
-      .select('id, status, reservation_code, start_date, end_date, created_at, product_id, products(name, category)')
+      .select('id, status, reservation_code, start_date, end_date, created_at, product_id, tracking_number, pickup_method, pickup_time, products(name, category)')
       .eq('user_id', session.user.id)
       .in('status', ['hold', 'confirmed', 'shipped', 'in_use', 'return_requested', 'returned', 'completed'])
       .order('created_at', { ascending: false })
@@ -105,6 +106,24 @@ export const load: PageServerLoad = async ({ locals, depends }) => {
   const rentalReservationIds = ((rentalsRes.data ?? []) as Array<Record<string, unknown>>).map(r => r.id as string | number)
   const contractStatus = await loadRentalContractStatus(locals.supabase, rentalReservationIds)
 
+  // canCancel 계산: 수령방식 별 is_delivery_type 일괄 조회 (N+1 방지)
+  const uniqueRentalMethods = [...new Set(
+    ((rentalsRes.data ?? []) as Array<Record<string, unknown>>)
+      .map(r => r.pickup_method as string | null)
+      .filter((m): m is string => !!m)
+  )]
+  const rentalDeliveryTypeByMethod = new Map<string, boolean>()
+  if (uniqueRentalMethods.length > 0) {
+    const { data: methodOpts } = await locals.supabase
+      .from('rental_method_options')
+      .select('method_key, is_delivery_type')
+      .in('method_key', uniqueRentalMethods)
+    for (const opt of (methodOpts ?? []) as { method_key: string; is_delivery_type: boolean | null }[]) {
+      rentalDeliveryTypeByMethod.set(opt.method_key, opt.is_delivery_type === true)
+    }
+  }
+  const pcNowMs = Date.now()
+
   return {
     user: {
       name: profile?.full_name ?? '고객',
@@ -140,6 +159,7 @@ export const load: PageServerLoad = async ({ locals, depends }) => {
     rentals: ((rentalsRes.data ?? []) as Array<Record<string, unknown>>).map(r => {
       const product = r.products as { name: string; category: string } | null
       const status = contractStatus.get(String(r.id))
+      const pickupMethod = r.pickup_method as string | null
       return {
         id:                     r.id as string,
         status:                 r.status as string,
@@ -151,6 +171,15 @@ export const load: PageServerLoad = async ({ locals, depends }) => {
         product_category:       product?.category ?? null,
         has_signed_contract:    status?.signed ?? false,
         pending_contract_token: status?.pendingToken ?? null,
+        tracking_number:        r.tracking_number as string | null,
+        canCancel: canCancelReservation({
+          status:         r.status as string,
+          trackingNumber: r.tracking_number as string | null,
+          isDeliveryType: pickupMethod ? (rentalDeliveryTypeByMethod.get(pickupMethod) ?? false) : false,
+          startDate:      r.start_date as string | null,
+          pickupTime:     r.pickup_time as string | null,
+          nowMs:          pcNowMs,
+        }),
       }
     }),
     cancels: (cancelsRes.data ?? []) as Array<{
