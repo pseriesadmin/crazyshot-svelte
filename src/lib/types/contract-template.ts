@@ -8,10 +8,11 @@ export interface ContractTemplate {
   created_at:                 string
   updated_at:                 string
   /**
-   * 작성 모드: 'flow'(문서형 TipTap) | 'canvas'(고정캔버스형) | 'spreadsheet'(스프레드시트형).
+   * 작성 모드: 'flow'(문서형 TipTap) | 'canvas'(고정캔버스형) | 'spreadsheet'(스프레드시트형)
+   * | 'html'(고정 HTML 서식, 2026-09-04 신설).
    * null 또는 undefined는 레거시 템플릿으로 'flow' 취급.
    */
-  authoring_mode?:            'flow' | 'canvas' | 'spreadsheet' | null
+  authoring_mode?:            'flow' | 'canvas' | 'spreadsheet' | 'html' | null
   /**
    * canvas 모드 전용: 배경 페이지 + 필드 배치 정보 (CanvasDocument 직렬화).
    * flow 모드 또는 미지정 시 null.
@@ -22,6 +23,11 @@ export interface ContractTemplate {
    * flow/canvas 모드 또는 미지정 시 null.
    */
   spreadsheet_document?:      unknown
+  /**
+   * html 모드 전용: 치환 완료된 최종 HTML 문자열(TEXT). flow/canvas/spreadsheet 모드 또는
+   * 미지정 시 null.
+   */
+  html_document?:             string | null
 }
 
 export type ContractTemplateSummary = Pick<ContractTemplate, 'id' | 'title' | 'status' | 'created_at' | 'authoring_mode'>

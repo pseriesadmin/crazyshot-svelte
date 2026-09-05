@@ -74,4 +74,13 @@ export interface ContractSubstitutionData {
    * 반복 영역이 없는 기존 템플릿은 이 필드를 사용하지 않으므로 기존 동작에 영향 없음.
    */
   상품목록?: ContractLineItem[]
+  // ── 신규: 수령/반납 날짜 (2026-09-06, HTML형 원본 엑셀 "대여 및 반납시간" 표 대조로 발견) ──
+  /**
+   * rental_reservations.start_date/end_date(DATE) — "YYYY.MM.DD" 형식으로 포맷.
+   * 기존 {{수령일시}}/{{반납일시}}는 이름과 달리 pickup_time/return_time(TEXT, 시간만)이
+   * 소스라 날짜 정보가 없다 — 원본 엑셀은 대여/반납 칸에 날짜 행(YYYY.MM.DD)과 시간 행
+   * (HH:MM)을 별도 행으로 나눠 표시하는데, 이 날짜 행을 재현할 변수가 그동안 없었다.
+   */
+  수령일자?: string
+  반납일자?: string
 }

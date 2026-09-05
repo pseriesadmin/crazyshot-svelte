@@ -219,6 +219,15 @@ export function isSpreadsheetDocument(value: unknown): value is SpreadsheetDocum
   )
 }
 
+/**
+ * HTML형(고정 템플릿) 계약서 콘텐츠 타입 가드.
+ * html_document 컬럼 값이 비어있지 않은 string인지 확인한다.
+ * 빈 문자열("")은 "콘텐츠 없음"으로 간주해 false 반환.
+ */
+export function isHtmlDocument(value: unknown): value is string {
+  return typeof value === 'string' && value.length > 0
+}
+
 /** EC-2: 좌표 범위 검증 — 필드가 해당 페이지 경계 안에 있는지 확인 */
 export function validateFieldBounds(field: CanvasField, page: CanvasPage): boolean {
   return (
