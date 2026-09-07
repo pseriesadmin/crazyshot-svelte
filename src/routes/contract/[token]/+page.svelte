@@ -190,6 +190,15 @@
       ? c.discount_value
       : Math.round(finalAmount * c.discount_value / 100)
   })
+  // 장바구니 선택값 읽기 전용 표시용 라벨(2026-09-07) — 미선택이어도 "없음"으로 항상 표시
+  // (블록 자체를 숨기면 "왜 안 보이냐"는 혼란을 유발 — Stephen 지시로 항상 노출로 변경)
+  const couponLabel = $derived.by(() => {
+    if (!selectedCouponId) return '없음'
+    const uc = userCoupons.find((u) => u.id === selectedCouponId)
+    if (!uc?.coupons) return '없음'
+    const c = uc.coupons
+    return c.description ?? (c.discount_type === 'fixed' ? `${c.discount_value.toLocaleString('ko-KR')}원 할인` : `${c.discount_value}% 할인`)
+  })
   const maxPoints = $derived(Math.min(userPointsAvail, Math.max(0, finalAmount - couponDiscount)))
   // 쿠폰 변경으로 maxPoints가 줄어들면 이미 입력된 포인트를 자동 재클램프
   // (cart/+page.svelte의 동일 정합성 보정 패턴 — 2026-08-19 발견 결함 재발 방지)
@@ -637,52 +646,20 @@
       </div>
 
       <div class="sign-section pay-section">
-        {#if userCoupons.length > 0}
-          <div class="pay-sub-block">
-            <span class="pay-sub-label">사용 가능한 쿠폰</span>
-            <div class="pay-coupon-list">
-              {#each userCoupons as uc (uc.id)}
-                {#if uc.coupons}
-                  {@const c = uc.coupons}
-                  {@const couponLabel = c.description ?? (c.discount_type === 'fixed' ? `${c.discount_value.toLocaleString('ko-KR')}원 할인` : `${c.discount_value}% 할인`)}
-                  <label class="pay-coupon-row">
-                    <input
-                      type="checkbox"
-                      checked={selectedCouponId === uc.id}
-                      onchange={() => {
-                        // 중복 쿠폰 적용 불가 — 단일 선택만 허용(cart 정책과 동일)
-                        selectedCouponId = selectedCouponId === uc.id ? null : uc.id
-                      }}
-                    />
-                    <span>{couponLabel}</span>
-                  </label>
-                {/if}
-              {/each}
-            </div>
-          </div>
-        {/if}
+        <!-- 2026-09-07(Stephen 확정): 쿠폰/포인트는 장바구니(1단계)에서 이미 확정된 선택값이다
+             — 이 화면에서 다시 고르거나 바꾸게 하면 그 선택이 실제 결제금액·쿠폰소진(use_coupon)/
+             포인트차감(use_points)의 유일한 입력값이라 장바구니와 다른 값으로 결제가 나갈 위험이
+             있다. 편집 UI(체크박스·입력창)는 제거하고 장바구니에서 고른 값만 읽기 전용으로
+             표시한다 — selectedCouponId/pointsUsed 상태·payTotal 계산·실제 결제 요청 로직은
+             전혀 변경하지 않음(값의 출처가 이제 "재선택 불가"가 됐을 뿐, 여전히 preselected 값). -->
+        <div class="pay-sub-block">
+          <span class="pay-sub-label">적용된 쿠폰</span>
+          <span class="pay-readonly-value">{couponLabel}</span>
+        </div>
 
         <div class="pay-sub-block">
-          <span class="pay-sub-label">포인트 사용 (보유 {userPointsAvail.toLocaleString('ko-KR')}p)</span>
-          <div class="pay-points-row">
-            <input
-              type="number"
-              class="pay-points-input"
-              min="0"
-              max={maxPoints}
-              value={pointsUsed}
-              oninput={(e) => {
-                const v = Math.min(maxPoints, Math.max(0, parseInt((e.target as HTMLInputElement).value) || 0))
-                pointsUsed = v
-              }}
-            />
-            <button
-              type="button"
-              class="pay-points-all-btn"
-              disabled={maxPoints === 0}
-              onclick={() => { pointsUsed = maxPoints }}
-            >모두 사용</button>
-          </div>
+          <span class="pay-sub-label">사용 포인트</span>
+          <span class="pay-readonly-value">{pointsUsed.toLocaleString('ko-KR')}p</span>
         </div>
 
         <!-- 2026-08-21: 장바구니(cart/+page.svelte)와 동일하게 최종 결제금액 이전에 상세
@@ -1125,43 +1102,8 @@
   .pay-section { margin-top: 16px; }
   .pay-sub-block { display: flex; flex-direction: column; gap: 8px; }
   .pay-sub-label { font-size: 13px; font-weight: 700; color: var(--cs-dark, #100B32); }
-  .pay-coupon-list { display: flex; flex-direction: column; gap: 8px; }
-  .pay-coupon-row {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    font-size: 14px;
-    color: var(--cs-dark, #100B32);
-    cursor: pointer;
-  }
-  .pay-coupon-row input[type='checkbox'] {
-    width: 18px;
-    height: 18px;
-    accent-color: var(--cs-purple, #3B2F8A);
-    cursor: pointer;
-  }
-  .pay-points-row { display: flex; gap: 8px; align-items: center; }
-  .pay-points-input {
-    flex: 1;
-    height: 44px;
-    border: 1px solid #ddd;
-    border-radius: 12px;
-    padding: 0 14px;
-    font-size: 14px;
-  }
-  .pay-points-all-btn {
-    height: 44px;
-    padding: 0 14px;
-    border: 1px solid var(--cs-purple, #3B2F8A);
-    border-radius: 12px;
-    background: #fff;
-    color: var(--cs-purple, #3B2F8A);
-    font-size: 13px;
-    font-weight: 700;
-    cursor: pointer;
-    min-width: 44px;
-  }
-  .pay-points-all-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+  /* 장바구니 선택값 읽기 전용 표시(2026-09-07) — 쿠폰 체크박스·포인트 입력창 대체 */
+  .pay-readonly-value { font-size: 14px; color: var(--cs-dark, #100B32); }
   .pay-detail-list {
     display: flex;
     flex-direction: column;

@@ -57,6 +57,10 @@
     notes: string;
     memberCheck: boolean;
     memberCheck2: boolean;
+    // 2026-09-07(Stephen 요청) — 방문대여/방문반납 선택 시 여러 방문 지점 중 하나를 고를 수
+    // 있도록(콤보버튼) 선택된 지점 id를 leg별로 독립 추적. 배송지(addr)와 마찬가지로
+    // rental/return 각자의 FormState에 별도 보관 — leg 간 자동 동기화 없음(요청 범위 밖).
+    pickupPointId: string;
   }
 
   function defaultOptions(): CardOptions {
@@ -118,7 +122,7 @@
   }
 
   function defaultForm(): FormState {
-    return { name: '', email: '', phone: '', addr: '', addrDetail: '', postalCode: '', notes: '', memberCheck: false, memberCheck2: false };
+    return { name: '', email: '', phone: '', addr: '', addrDetail: '', postalCode: '', notes: '', memberCheck: false, memberCheck2: false, pickupPointId: '' };
   }
 
   // ── 카트 라인아이템 UI 상태 (무제한 — 카드1/카드2 고정 구조 폐기 2026-07-27)
@@ -428,19 +432,28 @@
     const first = itemsState.find(it => !it.deleted)
     if (!first) return
     hasSeededBulk = true
-    bulkOpts = { ...bulkOpts, rentalMethod: first.opts.rentalMethod, returnMethod: first.opts.returnMethod }
-    // 날짜도 방식·시간과 동일하게 첫 상품의 기존 저장값으로 시딩(2026-09-06 — 날짜만 시딩
-    // 로직이 없어 이미 저장된 예약을 다시 열어도 pricingReady(otTotalMinutes 기준)가 항상
-    // false로 남아 합계금액이 0원으로 표시되던 결함 수정).
-    bulkDate = first.rentalDate
-    bulkReturnDate = first.returnDate
-    // 첫 상품의 기존 저장값으로 시간도 함께 시딩(2026-09-01 — 방식만 시딩하고 시간은 항상
-    // 빈 값으로 열리던 결함. 특히 저장된 방식이 이미 배송(is_bulk_delivery)이면 시간선택
-    // 버튼 자체가 안 보여 사용자가 채울 방법이 없어 datesSet이 영구 미충족 상태로
-    // 고정됐었다 — bulkHandleMethod의 자동채움과 동일한 기본값(12:00/13:00)으로 방어).
-    bulkTime = first.rentalTime
-    bulkReturnTime = first.returnTime
-    if (isDeliveryLocked(first.opts.rentalMethod)) {
+    // 2026-09-07(Stephen 재신고 — "완전 입력해도 경고 토스트가 여전히 뜬다") 수정:
+    // itemsState[0](=first, 서버가 최신순으로 내려주는 배열의 맨 앞)을 무조건 시딩 소스로
+    // 삼으면, 이미 날짜를 다 채운 상품보다 방금 추가한(아직 미설정) 상품이 배열 앞쪽에 오는
+    // 경우(신규로 담긴 상품이 최신순 정렬로 먼저 나열됨) 시딩 자체가 빈 값으로 이루어져
+    // 통합설정 패널이 텅 빈 채로 열리고, datesSet 판정에서도 그 신규 상품 하나 때문에
+    // 계속 미충족으로 남았다. 이미 rentalDate가 채워진 상품이 있으면 그쪽을 우선 시딩
+    // 소스로 사용.
+    const seedSource = itemsState.find(it => !it.deleted && it.rentalDate) ?? first
+    bulkOpts = { ...bulkOpts, rentalMethod: seedSource.opts.rentalMethod, returnMethod: seedSource.opts.returnMethod }
+    // 날짜도 방식·시간과 동일하게 시딩 소스 상품의 기존 저장값으로 시딩(2026-09-06 — 날짜만
+    // 시딩 로직이 없어 이미 저장된 예약을 다시 열어도 pricingReady(otTotalMinutes 기준)가
+    // 항상 false로 남아 합계금액이 0원으로 표시되던 결함 수정).
+    bulkDate = seedSource.rentalDate
+    bulkReturnDate = seedSource.returnDate
+    // 시딩 소스 상품의 기존 저장값으로 시간도 함께 시딩(2026-09-01 — 방식만 시딩하고 시간은
+    // 항상 빈 값으로 열리던 결함. 특히 저장된 방식이 이미 배송(is_bulk_delivery)이면
+    // 시간선택 버튼 자체가 안 보여 사용자가 채울 방법이 없어 datesSet이 영구 미충족
+    // 상태로 고정됐었다 — bulkHandleMethod의 자동채움과 동일한 기본값(12:00/13:00)으로
+    // 방어).
+    bulkTime = seedSource.rentalTime
+    bulkReturnTime = seedSource.returnTime
+    if (isDeliveryLocked(seedSource.opts.rentalMethod)) {
       if (!bulkTime) bulkTime = '12:00'
       if (!bulkReturnTime) bulkReturnTime = '13:00'
       // ⛔ 2026-09-02 QA 발견·Stephen 확정: 여기서 applyBulkToItems()를 호출하면 사용자가
@@ -449,14 +462,25 @@
       // 조용히 덮어써버린다 — "통합 대여 설정"(2026-08-03 확정) 적용 이전부터 남아있는
       // "상품 건별 대여옵션 설정" 데이터(각 CartItemUiState 고유 rentalTime/returnTime/
       // opts)가 사용자 모르게 사라지는 실질적 오류였다. 이 자동채움은 오직 "배송방식이라
-      // 시간을 채울 방법이 아예 없는" first 상품 자신의 datesSet 충족에만 필요하므로,
-      // 브로드캐스트 없이 first 하나에만 patch한다 — 다른 상품의 기존 개별값은 그대로 보존.
+      // 시간을 채울 방법이 아예 없는" seedSource 상품 자신의 datesSet 충족에만 필요하므로,
+      // 브로드캐스트 없이 seedSource 하나에만 patch한다 — 다른 상품의 기존 개별값은 그대로 보존.
       // ⚠️ "상품 건별 대여옵션 설정" 기능 자체(각 아이템이 자기 고유 opts/시간을 갖는 데이터
       // 구조)는 향후 복원 가능성을 위해 의도적으로 유지 — applyBulkToItems() 호출(=통합
       // 브로드캐스트)만 여기서 차단하는 것이지, CartItemUiState의 개별 필드나 updateItem()
       // 같은 하부 로직은 절대 삭제하지 않는다.
-      updateItem(first.id, { rentalTime: bulkTime, returnTime: bulkReturnTime })
+      updateItem(seedSource.id, { rentalTime: bulkTime, returnTime: bulkReturnTime })
     }
+    // ⛔ 2026-09-07(같은 날 3차 후속, Stephen 명시적 확정) — 한때 여기서 "seedSource에
+    // 날짜가 있으면 날짜·시간·방식이 없는 나머지 상품에도 자동으로 채워준다"는 백필
+    // 로직을 추가했었으나, 그 결과 "일부 상품만 미입력 상태여도 경고 토스트가 아예 뜨지
+    // 않는" 회귀를 유발해 완전히 제거했다. Stephen 확정: "완벽하게 입력된 것을 확인하는
+    // 절차가 필요하다" — 통합설정 패널이 이미 결정된 값을 표시해 주는 것(위 seedSource
+    // 선택 로직)까지는 유지하되, 그 값을 사용자 동의 없이 다른(특히 신규 추가된) 상품에
+    // 조용히 전파해 완료 상태로 둔갑시키는 것은 검증 안전장치를 무력화하는 행위라 금지.
+    // 신규로 담긴 상품은 datesSet/methodSelectionValid가 실제로 비어있음을 정확히
+    // 반영해 경고·제출버튼 비활성화가 정상 발동해야 하며, 사용자가 통합설정 패널을 통해
+    // 그 상품까지 포함해 직접 다시 확정해야 한다(브로드캐스트는 오직 applyBulkToItems()—
+    // 사용자가 실제로 패널을 조작할 때만—를 통해서만 일어난다).
   })
 
   // ── Order Total
@@ -512,6 +536,16 @@
     itemsState = itemsState.map(it => ({ ...it, rentalDate: '', rentalTime: '', returnDate: '', returnTime: '' }))
     csToast.warning('수령(반납) 일시 정보가 초기화되었습니다.')
   }
+  // 2026-09-07(Stephen 신고): bulkHandleReturnMethod가 위 resetDateTimeForMethodChange()를
+  // 그대로 재사용해, 반납방식만 바꿨는데도 수령일·수령시간(다른 leg)까지 통째로 리셋되고
+  // 반납일(달력에 이미 선택된 날짜)까지 지워지는 결함 — 반납방식 변경은 반납 leg의
+  // 시간만 재설정이 필요할 뿐(방식별로 시간선택 UI·유효범위가 달라질 수 있음), 날짜는
+  // 방식과 무관하게 계속 유효하므로 리셋 대상이 아니다. 반납 leg만, 그것도 시간만 초기화.
+  function resetReturnTimeForMethodChange() {
+    bulkReturnTime = ''
+    itemsState = itemsState.map(it => ({ ...it, returnTime: '' }))
+    csToast.warning('반납 시간 정보가 초기화되었습니다.')
+  }
   function bulkHandleMethod(v: DeliveryMethod) {
     if (v !== bulkOpts.rentalMethod && hasDateTimeSet()) {
       resetDateTimeForMethodChange()
@@ -542,9 +576,11 @@
   function bulkHandleReturnMethod(v: DeliveryMethod) {
     // 수령방식이 배송으로 잠긴 상태에서는 반납방식 독립 변경 차단(요청 A)
     if (isDeliveryLocked(bulkOpts.rentalMethod)) return
-    // 위 bulkHandleMethod와 동일 이유(2026-09-04) — 반납 방식 재변경 시에도 기존 날짜·시간 초기화
-    if (v !== bulkOpts.returnMethod && hasDateTimeSet()) {
-      resetDateTimeForMethodChange()
+    // 2026-09-07 수정 — 반납방식만 변경하는 것이므로 수령 leg(bulkDate/bulkTime)는 절대
+    // 건드리지 않고, 반납 leg도 날짜(bulkReturnDate)는 보존한 채 시간만 재설정 대상으로
+    // 좁힌다(위 resetReturnTimeForMethodChange 정의부 주석 참고).
+    if (v !== bulkOpts.returnMethod && bulkReturnTime) {
+      resetReturnTimeForMethodChange()
     }
     bulkOpts = { ...bulkOpts, returnMethod: v }
     applyBulkToItems()
@@ -616,6 +652,7 @@
       notes: bulkForm.notes || itemForm.notes,
       memberCheck: bulkForm.memberCheck || itemForm.memberCheck,
       memberCheck2: bulkForm.memberCheck2 || itemForm.memberCheck2,
+      pickupPointId: bulkForm.pickupPointId || itemForm.pickupPointId,
     }
   }
 
@@ -738,6 +775,15 @@
   )
   let showGuideModal = $state(false);
   let isConfirming = $state(false);
+  // 2026-09-07(Stephen 요청) — 이용안내 모달의 필수 동의 항목을 전부 체크하면 모달을
+  // 자동으로 닫는다. 토글 직후 값으로 판정해야 하므로(consentChecked는 $state라 이 함수
+  // 호출 시점엔 이미 갱신됨) 매 클릭마다 전체 목록을 재확인.
+  function toggleConsentItem(id: string): void {
+    consentChecked[id] = !consentChecked[id]
+    if (consentItems.length > 0 && consentItems.every((c) => consentChecked[c.id] === true)) {
+      showGuideModal = false
+    }
+  }
 
   // hold 재발행 확인 — 확정사양(AdminChatPanel.svelte .confirm-toast 패턴 재사용, 네이티브
   // window.confirm() 금지)을 따르기 위해 /account/rental/+page.svelte의 cancelPendingId
@@ -764,10 +810,20 @@
   // 조건 2: 결제 확정 대상 상품의 날짜·시간(수령일·수령시간·반납일·반납시간) 모두 입력됨
   // (체크 해제한 상품은 제외) — 2026-08-19 재검수: 기존엔 날짜만 검증해 시간을 한 번도
   // 선택하지 않아도(빈 문자열 → 하위 로직에서 '00:00'으로 암묵 대체) 제출이 가능했던 결함 수정
+  //
+  // ⛔ 2026-09-07 정정(Stephen 확정) — 배송(isDeliveryLocked) 또는 택배의존
+  // (isCourierDependent, 예: 크레이지샷배송) 방식은 RentalForm 스니펫이 시간선택 UI 자체를
+  // 의도적으로 숨긴다(정책, 되돌리지 않음) — 그 leg는 애초에 사용자가 시간을 입력할 방법이
+  // 없으므로, datesSet도 그 leg의 시간은 필수 항목에서 제외해야 한다. 날짜는 방식과 무관하게
+  // 항상 필수로 유지 — 시간만 leg별로 조건부 면제.
   const datesSet = $derived(
-    itemsState.every(it => it.deleted || !it.checked || (
-      it.rentalDate !== '' && it.rentalTime !== '' && it.returnDate !== '' && it.returnTime !== ''
-    ))
+    itemsState.every(it => {
+      if (it.deleted || !it.checked) return true
+      const pickupTimeNeeded = !isDeliveryLocked(it.opts.rentalMethod) && !isCourierDependent(it.opts.rentalMethod)
+      const returnTimeNeeded = !isDeliveryLocked(it.opts.returnMethod) && !isCourierDependent(it.opts.returnMethod)
+      return it.rentalDate !== '' && (!pickupTimeNeeded || it.rentalTime !== '') &&
+        it.returnDate !== '' && (!returnTimeNeeded || it.returnTime !== '')
+    })
   )
 
   // 조건 3: 배송 마감 미초과 (TASK-D: check_delivery_deadline() 연동 후 대체)
@@ -779,9 +835,26 @@
   // data.userId는 +page.server.ts 반환값 (PageData 병합 — dev server 기동 시 $types 자동 재생성)
   const identityOk = $derived(data.userId != null)
 
+  // 조건 2-1: 방문(visit) 방식 선택 + 등록된 방문지점이 1개 이상인 경우 지점 선택 필수
+  // (2026-09-07 방문지점 콤보버튼 신규 기능 후속 — Stephen 확인 요청으로 발견된 공백 수정)
+  // 지점이 정확히 1개면 자동선택 $effect(위 visitPickupPoints 선언부 참고)가 즉시
+  // pickupPointId를 채우므로 실질적으로는 지점이 2개 이상일 때만 사용자가 직접 골라야
+  // 통과한다. 지점이 0개(등록된 지점 없음)면 애초에 선택할 방법이 없으므로 필수에서 제외
+  // — visitPickupPoints는 아래(§) 선언되지만 $derived 콜백은 컴포넌트 초기화가 끝난
+  // 뒤에야 실제로 평가되므로 선언 순서와 무관하게 참조 가능(다른 $derived들도 동일 패턴).
+  const pickupPointsSet = $derived(
+    itemsState.every(it => {
+      if (it.deleted || !it.checked) return true
+      const pickupPointNeeded = it.opts.rentalMethod === 'visit' && visitPickupPoints.length > 0
+      const returnPointNeeded = it.opts.returnMethod === 'visit' && visitPickupPoints.length > 0
+      return (!pickupPointNeeded || it.rentalForm.pickupPointId !== '') &&
+        (!returnPointNeeded || it.returnForm.pickupPointId !== '')
+    })
+  )
+
   // 조건 5: 약관 동의
-  // canProceed: 5가지 조건 모두 충족
-  const canProceed = $derived(hasItems && datesSet && deadlineOk && identityOk && agreed)
+  // canProceed: 6가지 조건 모두 충족
+  const canProceed = $derived(hasItems && datesSet && pickupPointsSet && deadlineOk && identityOk && agreed)
 
   // 완료 버튼 문구 — 2026-08-18: 장바구니 접근이 회원 전용으로 고정되어 비회원 분기 제거
   const confirmLabel = '예약신청완료'
@@ -807,7 +880,7 @@
     if (!sentinel) return
     const observer = new IntersectionObserver(
       ([entry]) => {
-        if (entry.isIntersecting && hasItems && !datesSet) {
+        if (entry.isIntersecting && hasItems && (!datesSet || !pickupPointsSet)) {
           csToast.warning('대여예약정보를 모두 확인해 주세요.')
         }
       },
@@ -1122,7 +1195,16 @@
 
   function computeAllowedMethodIds(prods: ProductRow[]): Set<string> | 'all' | 'none' {
     type P = ProductRow & { allowed_method_ids?: string[] | null }
-    const configured = prods.filter(p => Array.isArray((p as P).allowed_method_ids))
+    // ⛔ 2026-09-07 발견·수정: CMS "대여정책" 탭 저장 로직(cms/products/+page.server.ts
+    // sectionType==='rental')은 관리자가 수령/반납 방식을 하나도 선택하지 않고 저장하면
+    // null이 아니라 빈 배열([])을 그대로 DB에 저장한다 — "미설정=전체 허용"이라는 이
+    // 파일 자체의 의도(바로 아래 주석)와 달리, Array.isArray([])는 true이므로 그 상품이
+    // "허용 방식 0개로 명시 제한"된 것으로 오인되어 교집합이 항상 빈 배열이 됐다. 결과적으로
+    // 그런 상품이 다른 상품과 함께 장바구니에 담기는 순간 "선택 가능한 수령·반납 방식이
+    // 없습니다"가 떠 다중 상품 예약 자체가 불가능해지는 실사용 결함(라이브 재현 확인:
+    // allowed_method_ids=[]인 상품 + 정상 상품 조합). null과 빈 배열을 동일하게(=미설정)
+    // 취급하도록 길이 조건을 추가 — length>0인 배열만 "실제로 제한을 건" 것으로 인정한다.
+    const configured = prods.filter(p => Array.isArray((p as P).allowed_method_ids) && (p as P).allowed_method_ids!.length > 0)
     // 카트가 비어있거나 allowed_method_ids 미설정 상품만 있으면 → 전체 표시
     if (configured.length === 0) return 'all'
     const sets = configured.map(p => (p as P).allowed_method_ids as string[])
@@ -1294,7 +1376,10 @@
 
   function computeAllowedPickupIds(prods: ProductRow[]): Set<string> | 'all' | 'none' {
     type P = ProductRow & { allowed_pickup_ids?: string[] | null }
-    const configured = prods.filter(p => Array.isArray((p as P).allowed_pickup_ids))
+    // ⛔ 2026-09-07 — computeAllowedMethodIds와 동일한 결함(빈 배열([])이 "허용 0개로
+    // 명시 제한"으로 오인돼 다른 상품과 함께 담기면 교집합이 항상 빈 값이 되는 문제) 재발
+    // 확인 후 동일하게 수정 — length>0인 배열만 "실제로 제한을 건" 것으로 인정.
+    const configured = prods.filter(p => Array.isArray((p as P).allowed_pickup_ids) && (p as P).allowed_pickup_ids!.length > 0)
     if (configured.length === 0) return 'all'
     const sets = configured.map(p => (p as P).allowed_pickup_ids as string[])
     const intersection = sets.reduce((acc, ids) => {
@@ -1310,6 +1395,19 @@
     ((data.pickupPoints as PickupPointRow[] | undefined) ?? [])
       .filter((p: PickupPointRow) => allowedPickupIds === 'all' || allowedPickupIds.has(p.id))
   )
+  // 2026-09-07(Stephen 요청) — 방문 지점이 정확히 1개뿐이면 사용자가 굳이 콤보버튼을
+  // 클릭하지 않아도 자동 선택. 수령·반납 leg 각각 독립 판단(그 leg의 방식이 'visit'이고
+  // 아직 미선택 상태일 때만) — 2개 이상이면 자동 선택하지 않고 사용자가 직접 고르게 둔다.
+  $effect(() => {
+    if (visitPickupPoints.length !== 1) return
+    const onlyPoint = visitPickupPoints[0]
+    if (bulkOpts.rentalMethod === 'visit' && !bulkRentalForm.pickupPointId) {
+      bulkRentalForm = { ...bulkRentalForm, pickupPointId: onlyPoint.id }
+    }
+    if (bulkOpts.returnMethod === 'visit' && !bulkReturnForm.pickupPointId) {
+      bulkReturnForm = { ...bulkReturnForm, pickupPointId: onlyPoint.id }
+    }
+  })
 
   // 서버 데이터 안전 추출
   const sdCoupons = $derived<UserCouponExt[]>((sd as { userCoupons?: UserCouponExt[] }).userCoupons ?? [])
@@ -2068,7 +2166,7 @@
                     type="button"
                     class="checkbox-btn checkbox-btn-terms consent-item-checkbox"
                     class:checked={consentChecked[item.id]}
-                    onclick={() => { consentChecked[item.id] = !consentChecked[item.id] }}
+                    onclick={() => toggleConsentItem(item.id)}
                     aria-label={item.content}
                   >
                     <svg width="18" height="12" viewBox="0 0 18 12" fill="none" aria-hidden="true">
@@ -2536,6 +2634,13 @@
               </div>
             </button>
             {#if !locked && !courierRestricted}
+              <!-- 2026-09-07 재확정(Stephen): 배송(locked)·택배의존(courierRestricted,
+                   예: 크레이지샷배송) 방식은 시간선택 UI 자체를 숨기는 것이 의도된 정책이다
+                   — 한때 이 courierRestricted 조건을 제거했으나(datesSet이 시간을 필수로
+                   요구해 제출이 영구 불가능해지는 것으로 오인) Stephen이 명시적으로 정정:
+                   UI는 원래대로 복원하고, 대신 datesSet 쪽에서 이 방식일 때 시간을 필수
+                   항목에서 제외하도록 수정했다(datesSet 정의부 주석 참고) — 여기는 절대
+                   다시 건드리지 말 것. -->
               <button class="datetime-btn datetime-btn-mid" class:datetime-btn-time-selected={!!props.selectedTime} onclick={() => {
                 if (!props.method) { csToast.error('수령(반납) 형태를 선택해주세요.'); return }
                 openTime(props.timeId)
@@ -2705,14 +2810,33 @@
         {/if}
       </div>
       {#if isVisit}
-        <!-- 방문대여/방문반납 선택 시 배송지 입력 대신 실제 방문 지점 정보로 대체(2026-08-17) -->
+        <!-- 방문대여/방문반납 선택 시 배송지 입력 대신 실제 방문 지점 정보로 대체(2026-08-17)
+             — 2026-09-07(Stephen 요청): 지점이 여러 개면 콤보버튼으로 직접 선택 가능하게
+             변경(기존엔 전부 텍스트로만 나열, 선택 자체가 불가능했음). 1개면 자동 선택
+             (아래 pickupPointId 자동선택 이펙트 참고) — 수령/반납 두 leg 모두 동일 컴포넌트
+             (RentalForm 스니펫)를 공유하므로 별도 구현 불필요.
+             2026-09-07(같은 날 후속, Stephen 재요청) — 방식 콤보(.combo-btn, 짧은 라벨
+             다건 가로배열 전용)를 그대로 재사용했던 걸 전용 스타일로 교체: 각 지점을
+             가로로 긴 버튼 1개당 1행(직렬 목록)으로 쌓고, 그 버튼 안에 점명+주소를 함께
+             표시(선택 전에도 주소가 바로 보임 — 이전엔 선택 후에만 별도로 아래 표시).
+             버튼 상하 패딩은 표준 .combo-btn(9px)의 70%(6px)로 축소. -->
         <div class="visit-info">
           {#if props.pickupPoints && props.pickupPoints.length > 0}
-            {#each props.pickupPoints as point (point.id)}
-              <p><strong>{point.name}</strong>{point.address ? ` — ${point.address}` : ''}</p>
-            {/each}
+            <div class="pickup-point-list">
+              {#each props.pickupPoints as point (point.id)}
+                <button
+                  type="button"
+                  class="pickup-point-btn"
+                  class:pickup-point-btn-active={props.form.pickupPointId === point.id}
+                  onclick={() => props.onFormChange({ ...props.form, pickupPointId: point.id })}
+                >
+                  <span class="pickup-point-name">{point.name}</span>
+                  {#if point.address}<span class="pickup-point-addr">{point.address}</span>{/if}
+                </button>
+              {/each}
+            </div>
           {:else}
-            <p>등록된 방문 지점이 없습니다. 고객센터로 문의해 주세요.</p>
+            <p class="visit-info-empty">등록된 방문 지점이 없습니다. 고객센터로 문의해 주세요.</p>
           {/if}
         </div>
       {:else}
@@ -3672,16 +3796,73 @@
     margin: -8px 0 0;
     letter-spacing: -0.3px;
   }
+  /* 2026-09-07(같은 날 후속, Stephen 요청) — wrapper(.visit-info) 자체의 회색 배경
+     박스 레이아웃 제거. 콤보버튼(.pickup-point-btn)이 각자 자기 배경을 가지므로
+     바깥 박스는 순수 레이아웃(세로 정렬용)만 담당. */
   .visit-info {
-    background: var(--cs-surface-gray);
-    border-radius: var(--radius-md, 15px);
-    padding: 16px 20px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+  .visit-info p { margin: 0; }
+  /* 2026-09-07(Stephen 요청) — 지점이 1개도 없는 예외 상황에서만 기존의 강조(빨강·굵게)
+     스타일을 유지. */
+  .visit-info-empty {
     font-size: 14px;
     font-weight: 700;
     color: var(--cs-red);
     line-height: 2;
   }
-  .visit-info p { margin: 0; }
+  /* 2026-09-07(같은 날 후속, Stephen 재요청) — 방문 지점 콤보: 짧은 라벨 다건용
+     .combo-btn(가로 배열)이 아니라, 지점명+주소를 한 행에 함께 보여줘야 해서 세로로
+     쌓는 "직렬 목록"(1버튼=1행, 폭 100%) 전용 스타일로 분리. 상하 패딩은 표준
+     .combo-btn 기준(9px)의 70%(=6.3px→6px 반올림)로 축소 — "지침보다 상하폭 30%
+     축소" 요구사항 그대로 반영. PC 값도 동일 비율로 축소(11.7px→8.2px). */
+  .pickup-point-list {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+  }
+  .pickup-point-btn {
+    /* 2026-09-07(같은 날 후속, Stephen 요청) — 표준 콤보버튼(.combo-btn) 기본 BG 토큰
+       (--cs-lilac)을 그대로 적용 — 임의로 흰색을 쓰지 않는다. */
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    width: 100%;
+    box-sizing: border-box;
+    padding: 6px 16px;
+    border-radius: var(--radius-xl, 30px);
+    border: none;
+    background: var(--cs-lilac, #ECEBF4);
+    cursor: pointer;
+    transition: all 0.18s;
+    text-align: left;
+  }
+  .pickup-point-btn:hover { background: #F5F4FA; }
+  .pickup-point-btn-active {
+    background: var(--cs-purple, #3B2F8A);
+  }
+  .pickup-point-btn-active:hover { background: var(--cs-purple-light, #553FE0); }
+  .pickup-point-name {
+    font-size: 13px;
+    font-weight: 700;
+    color: var(--cs-text, #100B32);
+    flex-shrink: 0;
+  }
+  .pickup-point-addr {
+    font-size: 12px;
+    color: var(--cs-text-mid);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .pickup-point-btn-active .pickup-point-name { color: #fff; }
+  .pickup-point-btn-active .pickup-point-addr { color: rgba(255, 255, 255, 0.8); }
+  @media (min-width: 641px) {
+    .pickup-point-btn { padding: 8.2px 20.8px; }
+    .pickup-point-name { font: var(--text-pc-body-14); }
+  }
   .copy-label {
     display: flex;
     align-items: center;
@@ -4351,9 +4532,13 @@
   /* 필수 동의 사항 체크리스트 — 2026-08-30, 등록 UI만 있고 체크아웃에 미연결이던
      rental_consent_items를 이 모달에 연결(감사 RSC-C1 해소) */
   .consent-list {
+    /* 2026-09-07(Stephen 요청) — 필수 동의 항목이 시각적으로 눈에 띄도록 이 파일의 기존
+       "가장 옅은 레드" 관례(.delivery-deadline, --cs-red-xlight)를 그대로 재사용 — 상단
+       구분선(border-top)은 배경 박스 자체가 구분 역할을 대신하므로 제거. */
     margin-top: 20px;
-    padding-top: 20px;
-    border-top: 1px solid var(--cs-lilac);
+    padding: 16px 18px;
+    background: var(--cs-red-xlight);
+    border-radius: var(--radius-lg);
     display: flex;
     flex-direction: column;
     gap: 12px;

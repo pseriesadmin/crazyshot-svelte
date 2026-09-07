@@ -971,14 +971,36 @@ export const actions: Actions = {
 
     if (sectionType === 'rental') {
       let allowed_period_ids: string[] = []
-      let allowed_method_ids: string[] = []
-      let allowed_pickup_ids: string[] = []
+      // ⛔ 2026-09-07 수정: 관리자가 수령/반납 방식을 하나도 선택하지 않고 저장하면 빈
+      // 배열([])이 아니라 null로 저장한다 — 카트(cart/+page.svelte computeAllowedMethodIds)는
+      // "allowed_method_ids 미설정 상품 → 전체 허용"을 의도하는데, 빈 배열은 Array.isArray()가
+      // true라 "허용 방식 0개로 명시 제한"으로 오인돼, 그 상품이 다른 상품과 함께 장바구니에
+      // 담기면 교집합이 항상 빈 값이 되어 다중 상품 예약 자체가 막히는 실사용 결함으로
+      // 이어졌다(카트 쪽은 방어 로직 추가로 이미 수정 — 이건 애초에 잘못된 값이 저장되지
+      // 않도록 하는 근본 수정).
+      let allowed_method_ids: string[] | null = null
+      // ⛔ 2026-09-07(같은 날 후속) — allowed_method_ids와 완전히 동일한 결함이
+      // allowed_pickup_ids(방문 지점 허용 목록)에도 있었다 — 빈 배열이 "허용 지점 0개로
+      // 명시 제한"으로 오인돼, 그 상품이 다른 상품과 함께 담기면 방문 지점 콤보 자체가
+      // 통째로 사라지는 실사용 결함으로 이어졌다(카트 쪽 computeAllowedPickupIds도 동일하게
+      // 방어 로직 추가). 동일하게 null로 저장.
+      let allowed_pickup_ids: string[] | null = null
       const periodStr = form.get('allowed_period_ids') as string | null
       const methodStr = form.get('allowed_method_ids') as string | null
       const pickupStr = form.get('allowed_pickup_ids') as string | null
       if (periodStr) { try { allowed_period_ids = JSON.parse(periodStr) } catch { /* ignore */ } }
-      if (methodStr) { try { allowed_method_ids = JSON.parse(methodStr) } catch { /* ignore */ } }
-      if (pickupStr) { try { allowed_pickup_ids = JSON.parse(pickupStr) } catch { /* ignore */ } }
+      if (methodStr) {
+        try {
+          const parsed = JSON.parse(methodStr)
+          allowed_method_ids = Array.isArray(parsed) && parsed.length > 0 ? parsed : null
+        } catch { /* ignore */ }
+      }
+      if (pickupStr) {
+        try {
+          const parsed = JSON.parse(pickupStr)
+          allowed_pickup_ids = Array.isArray(parsed) && parsed.length > 0 ? parsed : null
+        } catch { /* ignore */ }
+      }
 
       const { error: updateError } = await admin
         .from('products')

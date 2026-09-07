@@ -167,13 +167,26 @@ export const actions: Actions = {
     const periodIdsStr = form.get('allowed_period_ids') as string | null
     if (periodIdsStr) { try { allowedPeriodIds = JSON.parse(periodIdsStr) } catch { /* ignore */ } }
 
-    let allowedMethodIds: string[] = []
+    // ⛔ 2026-09-07 수정: 빈 배열([])이 아니라 null로 저장 — cms/products/+page.server.ts
+    // sectionType==='rental' 분기와 동일한 이유(카트 다중상품 교집합 오인 방지, 상세 주석 참고).
+    let allowedMethodIds: string[] | null = null
     const methodIdsStr = form.get('allowed_method_ids') as string | null
-    if (methodIdsStr) { try { allowedMethodIds = JSON.parse(methodIdsStr) } catch { /* ignore */ } }
+    if (methodIdsStr) {
+      try {
+        const parsed = JSON.parse(methodIdsStr)
+        allowedMethodIds = Array.isArray(parsed) && parsed.length > 0 ? parsed : null
+      } catch { /* ignore */ }
+    }
 
-    let allowedPickupIds: string[] = []
+    // ⛔ 2026-09-07(같은 날 후속) — allowed_method_ids와 동일 이유로 빈 배열 대신 null 저장.
+    let allowedPickupIds: string[] | null = null
     const pickupIdsStr = form.get('allowed_pickup_ids') as string | null
-    if (pickupIdsStr) { try { allowedPickupIds = JSON.parse(pickupIdsStr) } catch { /* ignore */ } }
+    if (pickupIdsStr) {
+      try {
+        const parsed = JSON.parse(pickupIdsStr)
+        allowedPickupIds = Array.isArray(parsed) && parsed.length > 0 ? parsed : null
+      } catch { /* ignore */ }
+    }
 
     let image_urls: string[] = []
     const imagesStr = form.get('image_urls') as string | null

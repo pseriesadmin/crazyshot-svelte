@@ -7,10 +7,13 @@
  * 설계 원칙:
  * - DB 오류가 발생해도 주 흐름을 막지 않는다 (silent fail — 로그 기록 실패가 서명 처리를 막으면 안 됨)
  * - actor_type: 'customer' | 'admin' | 'system'
- * - event_type: 'viewed' | 'signed' | 'sent' | 'issuer_signed'
+ * - event_type: 'viewed' | 'signed' | 'sent' | 'issuer_signed' | 'cancelled'
+ *   ('cancelled' = 2026-09-07 Migration #457 추가 — 전자계약 발행취소(서명완료건 포함,
+ *    cancel_issued_contract RPC) 기록용. 서명 데이터를 비가역적으로 완전 삭제하는 액션이라
+ *    "누가·언제 취소했는가"를 남길 유일한 증빙 지점이다.)
  */
 
-export type AuditEventType = 'viewed' | 'signed' | 'sent' | 'issuer_signed'
+export type AuditEventType = 'viewed' | 'signed' | 'sent' | 'issuer_signed' | 'cancelled'
 export type AuditActorType = 'customer' | 'admin' | 'system'
 
 export interface AuditLogParams {

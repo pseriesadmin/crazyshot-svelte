@@ -286,19 +286,50 @@ export function applyIssuerSignatureMarker(
 const SPECIAL_NOTES_MARKER = '<!--SPECIAL_NOTES-->'
 
 /**
- * "특약 조항"(specifications) 목록을 "key: value"쌍을 <br/>로 이어붙인 텍스트로 합쳐
- * 정산내역 "특이사항" 마커에 채운다. 빈 배열/키 없는 항목은 제외 — 전부 없으면 &nbsp;(빈 칸
- * 유지, 기존 하드코딩 동작과 시각적으로 동일).
+ * "특약 조항"(specifications) 목록을 "key: value"쌍을 <br/>로 이어붙인 텍스트로 합친다.
+ * 빈 배열/키 없는 항목은 제외 — 전부 없으면 &nbsp;(빈 칸 유지, 기존 하드코딩 동작과 시각적으로
+ * 동일). applySpecialNotesMarker()와 updateSpecialNotesInHtml() 둘 다 이 포맷을 공유한다.
+ */
+function formatSpecialNotesText(
+  specifications: { key: string; value: string }[] | null | undefined,
+): string {
+  const rows = (specifications ?? []).filter((s) => s.key?.trim())
+  return rows.length === 0
+    ? '&nbsp;'
+    : rows.map((s) => `${escapeHtml(s.key)}: ${escapeHtml(s.value)}`).join('<br/>')
+}
+
+/**
+ * "특약 조항"(specifications) 목록을 정산내역 "특이사항" 마커(`<!--SPECIAL_NOTES-->`)에
+ * 채운다. 발행 시점(applySelectedTemplate)에 1회 호출돼 결과가 html_document에 그대로
+ * 저장된다 — 마커 자체는 이 호출 이후 사라진다(재호출해도 마커가 없으면 아무 효과 없음).
  */
 export function applySpecialNotesMarker(
   html: string,
   specifications: { key: string; value: string }[] | null | undefined,
 ): string {
-  const rows = (specifications ?? []).filter((s) => s.key?.trim())
-  const replacement = rows.length === 0
-    ? '&nbsp;'
-    : rows.map((s) => `${escapeHtml(s.key)}: ${escapeHtml(s.value)}`).join('<br/>')
-  return html.split(SPECIAL_NOTES_MARKER).join(replacement)
+  return html.split(SPECIAL_NOTES_MARKER).join(formatSpecialNotesText(specifications))
+}
+
+// 계약 발행 보기 화면에서 특약을 클릭 편집할 때 사용 — defaultRentalContractHtml.ts의
+// `<td class="cs-special-notes-cell" ...>` 셀을 앵커로 찾는다(발행 시점에 이미
+// `<!--SPECIAL_NOTES-->` 마커가 텍스트로 치환된 뒤라 applySpecialNotesMarker()를 그대로
+// 재사용할 수 없음 — 마커가 이미 사라진 상태이므로 클래스명으로 위치를 다시 찾아야 함).
+// formatSpecialNotesText()가 만드는 텍스트는 HTML 이스케이프돼 있어 `</td>`를 깨뜨릴 수
+// 없으므로 non-greedy 매칭으로 안전하게 셀 내용만 교체 가능.
+const SPECIAL_NOTES_CELL_REGEX = /(<td class="cs-special-notes-cell"[^>]*>)([\s\S]*?)(<\/td>)/
+
+/**
+ * 이미 발행된(=마커가 이미 치환된) html_document에서 특약 영역만 재교체한다. 2026-09-07
+ * 이전에 발행된 계약서는 이 클래스 자체가 없어 아무 효과 없이 원본을 그대로 반환한다
+ * (레거시 계약은 클릭 편집 UI 자체가 노출되지 않으므로 이 함수가 호출될 일도 없음).
+ */
+export function updateSpecialNotesInHtml(
+  html: string,
+  specifications: { key: string; value: string }[] | null | undefined,
+): string {
+  if (!SPECIAL_NOTES_CELL_REGEX.test(html)) return html
+  return html.replace(SPECIAL_NOTES_CELL_REGEX, `$1${formatSpecialNotesText(specifications)}$3`)
 }
 
 /**

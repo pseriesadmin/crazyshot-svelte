@@ -88,6 +88,7 @@
           content_blocks?: unknown
           canvas_document?: unknown
           spreadsheet_document?: unknown
+          html_document?: unknown
           title?: string
         }
         if (!alive) return
@@ -95,7 +96,9 @@
         // spreadsheet_document도 함께 넘겨야 "발행된 내용 있음"으로 정확히 판별된다(2026-08-21
         // 발견 — 이 인자가 빠져있어 서명 완료된 spreadsheet 계약도 "서명완료 목록" 섹션 자체가
         // 렌더링되지 않는 결함이 있었다. contract-content-mode.ts 참고).
-        hasIssuedContent    = hasExistingContractContent(data.content_blocks, data.canvas_document, data.spreadsheet_document)
+        // 2026-09-07 같은 클래스의 결함 추가 발견: html_document도 동일한 이유로 누락돼 있어
+        // authoring_mode='html' 계약은 발행 여부와 무관하게 항상 "미발행"으로 오판됐다.
+        hasIssuedContent    = hasExistingContractContent(data.content_blocks, data.canvas_document, data.spreadsheet_document, data.html_document)
         issuedContractTitle = data.title ?? null
       } catch {
         if (alive) hasIssuedContent = false
@@ -252,6 +255,22 @@
                 id={contractId!}
                 warnMessage="한번 더 선택 시 발송된 계약서가 폐기됩니다. 고객의 서명 링크가 만료됩니다."
                 successMessage="계약서가 폐기되었습니다."
+                onsuccess={() => { issuedCheckTick++; onrefresh() }}
+              />
+            {/if}
+            {#if !isRentalView && customerSignedAt}
+              <!-- 2026-09-07(Stephen 확정): 전자계약 발행 취소 — 고객이 이미 서명 완료한
+                   계약서도 대상. "회수처리"가 아니라 발행 자체를 취소(서명 데이터까지 초기화)
+                   하는 상위 액션 — discardSentContract(미서명 발송건 전용)와 별개.
+                   실행 시 대화카드는 ActionCard.svelte의 라이브 체크(contract-status)로
+                   "기한 만료" 처리되고, 이 "발행 목록" 카드는 onsuccess에서 issuedCheckTick을
+                   올려 hasIssuedContent가 false로 재계산되며 자동으로 사라진다. -->
+              <span class="tpl-card-del-gap"></span>
+              <CmsDeleteButton
+                action="?/cancelIssuedContract"
+                id={contractId!}
+                warnMessage="한번 더 선택 시 서명 완료된 전자계약 발행이 취소됩니다. 고객의 서명 내용도 함께 삭제되며 되돌릴 수 없습니다."
+                successMessage="전자계약 발행이 취소되었습니다."
                 onsuccess={() => { issuedCheckTick++; onrefresh() }}
               />
             {/if}

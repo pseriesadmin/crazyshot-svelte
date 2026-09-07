@@ -32,6 +32,153 @@ GATE E: ✅ 통과 — 커밋은 Stephen 직접 실행 대기. (1차·2차 검�
 
 ---
 
+## DONE — 🔴 CRITICAL: 전자계약 서명완료 후 결제화면 쿠폰·포인트를 재선택 가능한 편집 UI → 장바구니 선택값 읽기 전용 표시로 전환 (2026-09-07, 이 세션, ✅ GATE E 통과)
+
+### 발견 경위
+
+Stephen이 `/contract/[token]` 서명완료 후 결제 단계 화면에서 "사용 가능한 쿠폰"(체크박스 목록)·
+"포인트 사용"(숫자입력+모두사용 버튼) UI를 선택 캡처해 지적: "①이미 장바구니 결제설정에서
+완료된 내역이라 총 결제금액에 기반영된 상태로 중복 UI ②중복 체크 시 심각한 결제 오류 야기 —
+제외할 것."
+
+### 조사 결과 — 삭제 요청의 전제가 실제 코드와 반대였음(직접 코드·DB 대조로 확인)
+
+- 장바구니 단계 `create_reservation_order` RPC(Migration #340)가 계산하는
+  `orders.final_amount`는 **등급할인만** 반영(`v_discount := ROUND(v_total * v_rate / 100.0)`)
+  — 쿠폰·포인트는 `selected_coupon_id`/`selected_points` 컬럼에 "기록"만 되고 이 금액 계산에는
+  전혀 관여하지 않음(직접 SQL 확인).
+- 실제 쿠폰 소진(`use_coupon`)·포인트 차감(`use_points`) RPC 호출은 **오직 계약서명 후 결제
+  확정 시점**(`pay-mock`/`pay-result` 서버 라우트)에서만 일어남(직접 코드 확인,
+  `pay-mock/+server.ts` 115-148행).
+- 즉 사용자가 지적한 이 UI는 "장바구니에서 이미 끝난 걸 중복으로 보여주는 화면"이 아니라
+  "쿠폰·포인트가 실제로 결제금액에 반영되고 소진 처리되는 유일한 지점" — 그대로 삭제하면
+  중복 결제 오류가 해결되는 게 아니라 **모든 전자계약 결제에서 쿠폰·포인트 혜택이 전혀
+  적용되지 않게 되는 정반대의 심각한 회귀**가 발생함. 이 사실을 서비스 의도 언어로 보고하고
+  대안 2건을 제시해 재확인 요청.
+- Stephen 확정: "1번, 장바구니 선택값을 읽기 전용으로 표시할 것" — 즉 삭제가 아니라 편집
+  불가(읽기 전용) 전환으로 방향 확정.
+
+### 구현
+
+`src/routes/contract/[token]/+page.svelte`:
+- "사용 가능한 쿠폰" 체크박스 목록(`{#each userCoupons}` + `onchange`로 selectedCouponId
+  토글) → 장바구니에서 이미 고른 쿠폰 1개만 읽기 전용 텍스트로 표시.
+- "포인트 사용" 숫자입력(`oninput`)+"모두 사용" 버튼(`onclick`) → 장바구니에서 고른
+  포인트값만 읽기 전용 텍스트로 표시.
+- `selectedCouponId`/`pointsUsed` 상태, `couponDiscount`/`payTotal` 계산식, 실제 Toss 결제
+  요청·`use_coupon`/`use_points` 호출 로직은 전혀 변경하지 않음(편집 수단만 제거 — 값의
+  출처와 실제 결제 반영 경로는 기존 그대로 유지).
+- 신규 `couponLabel` derived 추가(`$derived.by`) — 쿠폰 미선택 시 "없음"으로 표시.
+
+#### 1차 구현 결함 발견·즉시 수정 — 미선택 시 블록 자체가 사라지는 문제
+
+1차 구현은 `{#if selectedCouponId}`/`{#if pointsUsed > 0}`로 감싸 "선택된 값이 있을 때만"
+블록을 노출했다. 실브라우저로 확인한 결과(실제 예약 CS26095153, 장바구니에서 쿠폰·포인트
+모두 미선택인 케이스) 블록 자체가 안 보여, Stephen이 "왜 지워버리는 오류를 범했는지"로
+재확인 요청. DB 직접 대조로 이 예약은 애초에 `orders.selected_coupon_id`/`selected_points`가
+`null`/`0`이라 "숨김"이 아니라 "표시할 값이 원래 없었던" 정상 동작임을 먼저 규명했으나,
+Stephen 최종 지시: "장바구니 단계에서 쿠폰·포인트 선택값이 없어도 없는 상태로 읽기 전용
+노출할 것" — 조건부 렌더링(`{#if}`)을 제거하고 미선택 시에도 "없음"/"0p"를 항상 노출하도록
+수정 완료.
+
+### 검증
+
+- `npm run check` 신규 에러 0건(기존 `$state(prop)` 관련 경고 3건만 유지, 이 파일 손대기
+  전부터 있던 것).
+- 실브라우저 검증: 실제 서명완료 상태의 예약(reservation_code=CS26095153, order id=2057,
+  `selected_coupon_id`/`selected_points`가 DB상 `null`/`0`으로 확인된 건)의 `/contract/[token]`
+  페이지를 직접 열어 "적용된 쿠폰: 없음" / "사용 포인트: 0p"가 정확히 노출됨을 스크린샷으로
+  확인.
+- ⚠️ 미실증: 장바구니에서 쿠폰·포인트를 **실제로 선택한** 케이스의 읽기 전용 노출은 아직
+  실브라우저로 확인하지 못함 — Stage DB 전체를 조회한 결과 `selected_coupon_id`가 채워진
+  주문이 현재 1건도 없어(이 기능 자체가 실사용 중 거의 검증되지 않은 경로로 추정) 재현 불가.
+  실제 선택값이 있는 케이스의 라벨 표시(쿠폰명·할인율 텍스트 포맷)는 코드 리뷰로만 검증됨.
+
+GATE E: ✅ sp3-qa-agent 독립검수 통과(규칙 정합성·기술부채·핵심요구사항 8개 항목 전부 확인,
+수정 필요 항목 0건). 체크박스·숫자입력·"모두 사용" 버튼 완전 제거, selectedCouponId/
+pointsUsed가 cart-stage 값에서만 초기화되고 재대입 경로 없음, couponDiscount/maxPoints/
+payTotal 계산식 무변경, +page.server.ts 무변경(diff 없음) 전부 재확인됨.
+
+⚠️ 비차단 참고(QA 지적): pay-mock/pay-result 서버 엔드포인트 자체는 클라이언트가 보낸
+userCouponId/pointsUsed(request body·query string)를 별도 서버측 대조 없이 신뢰하는 기존
+설계(이 세션 이전부터 존재, 토큰 기반 결제 트리거 — 세션 인증 없음)다. 이번 작업 범위는
+"UI에서 재선택 가능하던 것을 읽기전용으로 전환"이었고 이는 정확히 달성됐으나, devtools로
+직접 API를 재호출해 body를 위변조하는 경로까지 막는 것은 이번 스코프 밖 — 필요 시 별건으로
+Stephen 확인 권장.
+
+git add/commit은 Stephen 직접 실행 대기.
+
+---
+
+## NOW — 전자계약 발행취소(서명완료건 포함) + 채팅 대화카드 "기간만료" 재활용 (2026-09-07, 구현 완료·GATE E 검수 대기)
+
+### 발견 경위·요구사항
+
+Stephen이 `/cms/reservation` 계약서탭 "발행 목록"의 "보기" 버튼을 선택 캡처해 지시:
+"보기 버튼 우측에 삭제(휴지통) 버튼 UI 배치, 실행 시 전자계약 발행 취소 및 회수처리할 것" +
+"사용자 채팅, 상담 세션 내 채팅에 대화카드에 '기간만료' 컴포넌트 재활용 반영".
+
+AskUserQuestion으로 2가지 핵심 결정을 확인(추측 금지 원칙 — 기존 코드에 "서명완료 계약
+취소"라는 개념 자체가 없었음):
+  1. 서명 데이터 처리 → Stephen: "회수처리라기보단 기존 배포된 전자계약 발행 취소(전자계약
+     취소)하기 기능. 삭제 실행 시 대화카드 전자계약취소 + CMS 발행계약목록 삭제." → 감사보관
+     없이 완전 초기화(wipe)로 확정.
+  2. 적용 화면 범위 → Stephen: "/cms/reservation만 (기존 삭제 기능과 동일한 정책)" 확정.
+
+### 1) 전자계약 발행취소 기능
+
+기존 `discardSentContract`(미서명 발송건 폐기)·`clearIssuedContractContent`(미발송건
+초기화) 둘 다 `signed_at`이 있으면 명시적으로 차단(RSV-C-C3 원칙) — 서명완료건을 취소하는
+경로 자체가 없었다. 이번에 그 상위(서명완료건도 대상) 액션을 신설.
+
+- `supabase/migrations/20260907060000_456_cancel_issued_contract.sql`(신규 RPC
+  `cancel_issued_contract`) — **Stage·Production 적용 완료**. `discard_sent_contract`(#405)와
+  달리 signed_at 가드 없음 + canvas_document/spreadsheet_document/html_document까지 전체
+  초기화(discard_sent_contract는 content_blocks만 비워 flow 모드 외 authoring_mode에서
+  "발행 목록"이 안 사라지는 기존 갭이 있었음 — 이번 신규 함수는 그 갭 없이 구현).
+- `src/lib/server/clearIssuedContractHelper.ts`(`cancelIssuedContract` 헬퍼 신규) +
+  `src/routes/cms/reservation/+page.server.ts`(`cancelIssuedContract` action 신규,
+  manager 이상 게이트, discardSentContract와 동일 권한 기준)
+- `src/lib/components/cms/RentalContractViewer.svelte` — "보기" 버튼 우측에
+  `CmsDeleteButton`(action=`?/cancelIssuedContract`) 추가, `!isRentalView && customerSignedAt`
+  조건으로 /cms/reservation·서명완료 상태에서만 노출(Stephen 확정 범위와 정확히 일치)
+- **브라우저 직접 검증 완료**: Stage에 서명완료 상태 테스트 계약 생성 → 삭제 클릭(2단계
+  확인) → 토스트 "전자계약 발행이 취소되었습니다." → 목록 "서명완료"→"미서명" 전환 +
+  "발행 목록" 섹션 소멸 확인 → DB 직접 조회로 `content_blocks/signed_at/sent_at` 전부
+  정상 초기화 확인.
+
+### 2) 채팅 대화카드 "기간만료" 컴포넌트 재활용
+
+같은 날 앞서 구현한 HOLD 정책 개편의 `reservationHoldExpiredLive`(ActionCard.svelte) 라이브
+체크 패턴을 그대로 재사용 — 사용자 채팅·상담세션 채팅이 동일한 `ActionCard.svelte` 하나를
+공유하므로 그 파일 한 곳만 고치면 양쪽 다 자동 반영됨(별도 작업 불필요).
+
+- `src/routes/api/chat/contract-status/[id]/+server.ts`(신규) — `reservation-status/[id]`와
+  동일한 접근정책(관리자 OR 소유고객) 패턴. "취소됨" 판정은 새 플래그 컬럼을 만들지 않고
+  `hasExistingContractContent()`(기존 판별함수) 재사용 — cancel_issued_contract가 콘텐츠를
+  전부 비운 상태 = 취소됨.
+- `src/lib/components/chat/ActionCard.svelte` — `contractCancelledLive` 라이브체크 추가,
+  `contract_link`(서명요청)·`contract_signed`(서명완료 확인) 두 카드 타입 대상, `isExpired`에
+  병합.
+- `src/routes/api/contracts/[token]/sign/+server.ts` — `contract_signed` payload에
+  `contract_id` 추가(기존엔 `reservation_id`만 있어 계약 단위 취소를 감지할 수단이 없었음).
+- `src/routes/api/chat/messages/[id]/execute-action/+server.ts` — 클릭 시점 서버 재검증에도
+  동일 기준 추가(reservation_hold 때와 동일하게 클라이언트 라이브체크 완료 전 클릭하는
+  경쟁상황 방어).
+- **직접 검증**: 위 1)의 취소 실행 후 `GET /api/chat/contract-status/[id]` 호출 →
+  `{"cancelled": true}` 정상 반환 확인(카드가 "기한 만료"로 표시될 조건이 실제로 충족됨을
+  데이터 레벨에서 확인 — 실채팅 화면 스크린샷까지는 아니고 API 응답 기준 확인).
+
+### 검증 상태
+
+`npm run check` 신규 에러 0건 · 관련 기존 테스트(`clearIssuedContract.test.ts`·
+`contractSign.test.ts`) 10/10 GREEN(무회귀) · 브라우저 실측 1)·2) 각 1회 성공 · 테스트
+데이터(Stage ephemeral user·reservation·contract) 정리 완료.
+
+**GATE E 검수 대기 — @sp3-qa-agent 호출 예정.** git 커밋은 Stephen 직접 실행 대기.
+
+---
+
 ## NOW — CMS 예약목록 정밀검증 3건 수정 + HOLD 정책 전면 개편 (2026-09-07, 구현 완료·GATE E 검수 대기)
 
 ### 발견 경위
@@ -2877,6 +3024,24 @@ git add/commit은 Stephen 직접 실행 대기.
 ✅ 검증: npm run check 신규 에러 0건(기존 경고 2건만 유지). 관련 vitest 3개 파일 61/61 GREEN.
 
 git add/commit은 Stephen 직접 실행 대기.
+```
+
+### 배포 후기 — git commit + Migration #450·#451 Production 적용 완료 (2026-09-07, 같은 세션)
+
+```
+sp3-qa-agent GATE E 통과 후 Stephen이 커밋 메시지+터미널 명령 텍스트 제안 요청(실행은
+직접) → 최초 제안한 git add 명령이 zsh에서 `[id]` 경로를 글롭 패턴으로 오인해 전체
+add가 실패하는 사고 발생(따옴표 누락) → 경로 quoting 수정해 재제안, Stephen이 직접
+git add + git commit 실행 완료.
+
+이어서 "DB마이그레이션은?" 질문에 git commit(저장소 반영)과 DB 마이그레이션 적용(별개
+액션)을 구분 설명 — Migration #450·#451이 이 세션 것이 맞는지 재확인 요청에도 확인 답변.
+Stephen 승인 후 Production(vnbpmvxruyciuuaermyh)에 #450·#451 적용 완료, information_schema
+직접 조회로 contract_templates·contracts 양쪽 모두 html_issuer_signature_url(text)·
+html_issuer_signature_width(integer) 컬럼 존재 확인.
+
+✅ 최종 상태: Migration #450·#451 — Stage(ezyvffjvuwmtuhpxdjrw)·Production
+(vnbpmvxruyciuuaermyh) 양쪽 전부 적용 완료. git commit도 완료(Stephen 직접 실행).
 ```
 
 ---
@@ -37433,4 +37598,93 @@ DELETE+INSERT로 완전 교체하므로, 서버가 이미 통째로 갈아엎는
 
 **GATE 등급**: 🔴 CRITICAL — 예약 핵심 흐름 결함, 순수 클라이언트 코드 수정(DB/마이그레이션
 변경 없음).
+
+---
+
+## NOW — 🔴 CRITICAL: `/payment/success/dev` GNB 격리 + 장바구니 대여설정 검증로직 정밀화 +
+방문지점 콤보버튼 UI 신규 (2026-09-07, 이 세션) — 구현 완료·GATE E 검수 대기
+
+**세션 범위**: 이 세션에서 Stephen이 순차적으로 요청한 서로 다른 6개 하위 아젠다 묶음.
+각 항목의 라이브 검증 상세는 `.claude/harness/GSD_LOG.md` 2026-09-07 날짜 항목들(1차~10차
+후속) 참고 — 이 블록은 TASK.md 정본 규칙에 맞춘 상위 요약.
+
+**① `/payment/success/dev` PC 반응형 서브GNB 표준 적용**
+- front-uiux.md §13-2 `sub-gnb_navi_b`(Back Pill 단독, PC 전용) 적용.
+- 중간에 `align-items:center`(`.page-root`)가 flex stretch를 깨서 pill이 중앙에 좁게
+  뭉치던 버그 발견·수정(`.sub-gnb-b`에 `width:100%` 명시).
+- Stephen이 참고 스크린샷 기준 "가로 100% 정확히" 요구 → `.sub-gnb-b-pill`을
+  `max-width:460px`(문서 기본값) 대신 `max-width:none; flex:1 1 auto`로 조정(cart.svelte의
+  실제 좁은화면 동작과 통일).
+- 파일: `src/routes/payment/success/dev/+page.svelte`
+
+**② GNB CSS 누출 구조적 결함 발견·수정**
+- 위 ① 작업 중 `+page.svelte`에 넣은 `:global(.gnb-mobile-wrap/.gnb-desktop-wrap)
+  {display:none!important}` 오버라이드가 SPA 클라이언트 사이드 네비게이션 시 다른 라우트로
+  넘어가도 CSS가 언로드되지 않아(SvelteKit/Vite 특성) 잔존 누출됨을 sp3-qa-agent 검수로 발견.
+  `window.__navMarker` + synthetic DOM probe로 라이브 재현, 하드리로드 대조군으로 역증명.
+- 근본 수정: CSS 패치가 아니라 루트 `+layout.svelte`의 GNB 렌더 조건(`{#if}`)에 `/payment`
+  제외 패턴 추가(`/cart`·`/account` 등 기존 패턴과 동일 구조) — `/payment/success/dev`
+  자체에서 GNB가 애초에 마운트되지 않으므로 오버라이드 CSS 블록 2개 전부 제거.
+- 파일: `src/routes/+layout.svelte`, `src/routes/payment/success/dev/+page.svelte`
+
+**③ 장바구니 대여설정 검증로직 정밀조사 — "완벽히 입력해도 경고 토스트" 반복 신고**
+- 1차 원인(다상품 카트에서 첫 항목에만 날짜 시딩) — 형제항목 백필 시도는 Stephen이
+  "검증 완화"로 명시 반려(정당한 안전장치를 무력화하는 방향이라 부적절) → 전면 되돌림,
+  시딩 소스 선택 개선만 유지.
+- 2차(진짜 근본원인) — `isCourierDependent`(courierRestricted)가 캘린더 휴무일 차단이라는
+  본래 목적과 무관하게 "시간 선택 버튼" UI 노출까지 함께 게이팅해, 크레이지샷배송 등
+  택배의존 방식에서 시간을 영원히 입력할 수 없는 상태였음. 1차 수정(UI 노출 조건 제거)은
+  Stephen이 "시간선택 UI 숨김은 의도된 정책"이라며 반려 → 원래 UI 숨김 조건은 그대로
+  복원하고, 대신 `datesSet`(제출 필수조건 판정)에서 배송·택배의존 leg의 시간만 필수항목에서
+  제외하는 방향으로 재수정 — 이후 Stephen 확인.
+- 파일: `src/routes/cart/+page.svelte`
+
+**④ `allowed_method_ids`/`allowed_pickup_ids` 빈배열↔null 결함**
+- CMS 대여정책 탭에서 방식/지점을 하나도 선택하지 않고 저장하면 빈 배열(`[]`)이 저장돼왔고,
+  카트 측 교집합 로직(`computeAllowedMethodIds`/`computeAllowedPickupIds`)은
+  `Array.isArray([])===true`이므로 "미설정=전체허용"이 아니라 "0개로 명시제한"으로 오인 —
+  다상품 카트에서 교집합이 항상 빈 값이 되어 해당 방식/지점 선택 UI 자체가 사라지는 결함.
+  `allowed_method_ids`에서 먼저 발견·수정 후, 방문지점 콤보버튼(⑤) 구현 중 동일 결함이
+  `allowed_pickup_ids`에도 있음을 재발견.
+- 3중 수정(둘 다 동일 패턴): ⓐ 카트 가드에 `.length>0` 조건 추가 ⓑ CMS 저장 로직
+  (`cms/products/+page.server.ts`, `cms/products/new/+page.server.ts`) 빈 선택 시 `null`
+  저장으로 변경 ⓒ 기존 오염 데이터 일괄 정정 마이그레이션.
+- 마이그레이션(Stage(ezyvffjvuwmtuhpxdjrw)만 적용, **Production(vnbpmvxruyciuuaermyh) 미적용
+  — Stephen 승인 대기**):
+  `supabase/migrations/20260907050000_455_products_allowed_method_ids_empty_to_null.sql`
+  (244행 정정), `supabase/migrations/20260907060000_456_products_allowed_pickup_ids_empty_to_null.sql`
+  (247행 정정).
+
+**⑤ 방문지점 콤보버튼 UI 신규 + 리파인 4라운드**
+- 요구사항: "등록된 방문 지점이 없습니다" 텍스트 대신 CMS 등록 지점을 콤보버튼으로 노출,
+  1개면 자동선택, 2개 이상이면 선택 가능, 수령·반납 동일 적용.
+- `FormState`에 `pickupPointId` 필드 신설(leg별 독립), `visitPickupPoints`
+  `$derived`(allowedPickupIds 교집합 기반) 신설, 지점 정확히 1개일 때만 자동선택하는
+  `$effect` 신설(2개 이상은 사용자가 직접 선택).
+- 리파인 3회(전부 Stephen 라이브 스크린샷 피드백 반영): (a) 짧은 라벨용 `.combo-btn` 재사용을
+  버리고 직렬 목록 전용 스타일(`.pickup-point-list`/`.pickup-point-btn`, 1버튼=1행, 지점명+
+  주소 인라인, 상하패딩 표준 대비 30% 축소) 신설 (b) wrapper(`.visit-info`)의 회색 배경 박스
+  제거 + 버튼 기본 배경을 표준 콤보버튼 토큰(`--cs-lilac`)으로 정정 (c) 목록 항목 간 세로
+  gap 8px→16px(2배) 확대.
+- 파일: `src/routes/cart/+page.svelte`
+
+**⑥ 방문지점 미선택 시 제출차단 공백 발견·수정(⑤ 완성도 최종 확인 중 Stephen 지적)**
+- `datesSet`/`methodSelectionValid` 둘 다 `pickupPointId`를 검사하지 않아, 방문지점 2개
+  이상 등록 상품에서 방문대여를 고르고 지점을 한 번도 클릭하지 않아도 제출이 막히지 않던
+  실질적 공백을 Stephen 확인 요청으로 재발견.
+- 신규 `pickupPointsSet` 파생값(방식='visit' + 등록지점>0인 leg만 `pickupPointId!==''`
+  요구) 신설, `canProceed`에 편입 + 스크롤 경고 토스트 조건에도 반영.
+- 파일: `src/routes/cart/+page.svelte`
+
+**기타(경미)**: 이용안내 모달 필수동의 전체체크 시 자동닫힘, 필수동의 박스
+`--cs-red-xlight` 배경 적용 — 둘 다 `src/routes/cart/+page.svelte`, 라이브 검증 완료.
+
+**검증 요약**: 매 항목마다 `npx svelte-check`(신규 에러 0건, `vite.config.ts` 기존 무관
+에러 1건만 잔존) + `npx vitest run src/__tests__/services/cart`(123/123 GREEN, 회귀 없음)
+확인. UI 변경은 Claude Browser 라이브 클릭·getComputedStyle·getBoundingClientRect 실측으로
+매번 재검증(GSD_LOG.md 각 항목 "라이브 검증" 절 참고).
+
+**GATE 등급**: 🔴 CRITICAL — 결제 직전 제출 게이팅 로직(③⑥) + Production 미적용 DB
+마이그레이션 2건(④) 포함. 커밋은 Stephen 직접 실행 대기, 마이그레이션 455·456 Production
+적용도 별도 승인 대기(둘 다 반복 요청했으나 아직 미답변).
 

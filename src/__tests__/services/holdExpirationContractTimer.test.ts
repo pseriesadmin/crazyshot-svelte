@@ -4,20 +4,26 @@ import { SUPABASE_SERVICE_ROLE_KEY } from '$env/static/private'
 import { PUBLIC_SUPABASE_URL } from '$env/static/public'
 
 /**
- * Stage 4 — HOLD D-1 타이머 리셋(GREATEST 방식) TDD (EC-5)
+ * Stage 4 — HOLD 만료 정책 전면 개편 이후의 D-1(계약발송 타이머)·D-3(결제완료 예외) TDD (EC-5)
  * Harness Flow v3.2 — RED → GREEN → REFACTOR
  *
- * 대상: release_reservation_hold() — Migration 394 (D-1 NOT EXISTS → GREATEST 교체)
+ * 대상: release_reservation_hold() — Migration 453 (2026-09-07, Stephen 확정 — "생성 후 30분"
+ * 타이머 자체를 없애고 "계약 발송 시각(sent_at) 기준 30분"만 남김)
  *
- * 정합기준(GATE B Q6, EC-5):
- *   EC-5a: 계약서 미발송 hold — created_at 기준 30분 만료 (기존 동작 유지)
- *   EC-5b: 계약서 발송 1시간 전 + created_at 2시간 전 → GREATEST(2h,1h)=1h > 30min → 만료
- *          (OLD NOT EXISTS: 영구 제외돼 never expire — 이 동작이 RED 확인 지점)
- *   EC-5c: payment_confirmed_at IS NOT NULL → D-3 예외 유지, 만료 안 됨
+ * 정합기준(GATE B Q6, EC-5 — 2026-09-07 정책 반전에 맞춰 갱신):
+ *   EC-5a: 계약서 미발송 hold — created_at이 아무리 오래돼도 만료되지 않는다(타이머 자체 없음,
+ *          이전 정책의 "생성 후 30분 만료"를 완전히 반전).
+ *   EC-5b: 계약서가 발송(sent_at)되고 그 시각 기준 30분 초과 → expired 전환.
+ *          (이 케이스를 실제로 검증하려면 release_reservation_hold()의 D-1 서브쿼리가 요구하는
+ *           order_items 연결이 반드시 있어야 한다 — 연결이 없으면 계약을 아예 "발견"하지
+ *           못해 검증 자체가 무의미해지므로 create_reservation_order RPC로 명시적으로 연결한다.)
+ *   EC-5b-edge: 계약서 발송 후 30분 이내 → hold 유지(경계값).
+ *   EC-5c: payment_confirmed_at IS NOT NULL → D-3 예외 유지, 만료 안 됨(변경 없음).
  *
  * 핵심 불변식:
  *   D-3(결제완료 예외)는 이번 변경에서 절대 건드리지 않는다.
- *   D-1의 변경은 "영구 제외"에서 "타이머 리셋"으로만 좁힌다.
+ *   D-1은 이제 "타이머 리셋"이 아니라 "타이머의 유일한 시작점"이다 — created_at은 더 이상
+ *   어떤 형태로도 만료 판정에 관여하지 않는다.
  */
 
 const admin = createClient(PUBLIC_SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
@@ -103,6 +109,21 @@ async function createHoldReservation(
   return id
 }
 
+// release_reservation_hold()의 D-1 서브쿼리는 "같은 주문(order_items) 형제 예약 중 계약이
+// 발송된 것이 있는지"를 기준으로 삼는다 — order_items 연결이 없으면 계약이 있어도 절대
+// "발견"되지 않는다(주문 전체 형제 대조용 자기조인이 애초에 빈 집합을 반환). 실제 체크아웃
+// 흐름(cart/+page.svelte)이 쓰는 것과 동일한 create_reservation_order RPC로 연결한다.
+async function linkToOrder(userId: string, reservationId: number): Promise<void> {
+  const { error } = await admin.rpc('create_reservation_order', {
+    p_user_id: userId,
+    p_reservation_ids: [reservationId],
+  })
+  if (error) throw new Error(`create_reservation_order 실패: ${error.message}`)
+  cleanups.push(async () => {
+    await admin.from('order_items').delete().eq('reservation_id', reservationId)
+  })
+}
+
 async function createContractWithSigning(
   reservationId: number,
   userId: string,
@@ -143,10 +164,10 @@ async function getStatus(reservationId: number): Promise<string | null> {
   return (data?.status as string | undefined) ?? null
 }
 
-describe('release_reservation_hold — D-1 타이머 리셋(GREATEST) + D-3 불변 (EC-5)', () => {
+describe('release_reservation_hold — D-1(계약발송 타이머, 유일한 시작점) + D-3 불변 (EC-5)', () => {
 
-  // ── EC-5a: 계약서 미발송 → created_at 기준 30분 만료 (기존 동작 유지) ───────
-  it('EC-5a: 계약서 미발송 + created_at 40분 전 → expired 전환', async () => {
+  // ── EC-5a(2026-09-07 반전): 계약서 미발송 → 생성 후 아무리 오래돼도 만료되지 않는다 ──
+  it('EC-5a: 계약서 미발송 + created_at 40분 전 → hold 그대로 유지(구 정책 반전)', async () => {
     const userId = await createEphemeralUser()
     cleanups.push(() => deleteEphemeralUser(userId))
 
@@ -158,13 +179,11 @@ describe('release_reservation_hold — D-1 타이머 리셋(GREATEST) + D-3 불�
 
     await admin.rpc('release_reservation_hold', {})
 
-    expect(await getStatus(reservationId)).toBe('expired')
+    expect(await getStatus(reservationId)).toBe('hold')
   })
 
-  // ── EC-5b: D-1 타이머 리셋 — 계약서 발송 1시간 전 → GREATEST 기준 만료 ────
-  // OLD D-1(NOT EXISTS): 영구 제외 → hold 유지 (이게 RED 포인트)
-  // NEW D-1(GREATEST):   GREATEST(2h, 1h) = 1h > 30min → expired
-  it('EC-5b: 계약서 발송됐지만 sent_at 기준 30분 초과 → expired 전환 (D-1 GREATEST)', async () => {
+  // ── EC-5b: 계약서 발송 1시간 전 → sent_at 기준 30분 초과 → expired ─────────
+  it('EC-5b: 계약서 발송(sent_at) 1시간 전 → 30분 초과로 expired 전환', async () => {
     const userId = await createEphemeralUser()
     cleanups.push(() => deleteEphemeralUser(userId))
 
@@ -176,17 +195,16 @@ describe('release_reservation_hold — D-1 타이머 리셋(GREATEST) + D-3 불�
       await admin.from('rental_reservations').delete().eq('id', reservationId)
     })
 
+    await linkToOrder(userId, reservationId)
     await createContractWithSigning(reservationId, userId, oneHourAgo)
 
     await admin.rpc('release_reservation_hold', {})
 
-    // OLD: 영구 제외 → 'hold' (RED)
-    // NEW: GREATEST(2h, 1h) = 1h > 30min → 'expired' (GREEN)
     expect(await getStatus(reservationId)).toBe('expired')
   })
 
-  // ── 경계값: 계약서 발송 15분 전 → GREATEST(40min, 15min)=15min < 30min → 생존 ─
-  it('EC-5b-edge: 계약서 발송 15분 전 → sent_at 기준 30분 이내 → hold 유지', async () => {
+  // ── 경계값: 계약서 발송 15분 전 → 30분 이내 → 생존 ──────────────────────────
+  it('EC-5b-edge: 계약서 발송(sent_at) 15분 전 → 30분 이내 → hold 유지', async () => {
     const userId = await createEphemeralUser()
     cleanups.push(() => deleteEphemeralUser(userId))
 
@@ -198,6 +216,7 @@ describe('release_reservation_hold — D-1 타이머 리셋(GREATEST) + D-3 불�
       await admin.from('rental_reservations').delete().eq('id', reservationId)
     })
 
+    await linkToOrder(userId, reservationId)
     await createContractWithSigning(reservationId, userId, fifteenMinAgo)
 
     await admin.rpc('release_reservation_hold', {})

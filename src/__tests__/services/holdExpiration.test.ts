@@ -4,15 +4,19 @@ import { SUPABASE_SERVICE_ROLE_KEY } from '$env/static/private';
 import { PUBLIC_SUPABASE_URL } from '$env/static/public';
 
 /**
- * reservation-rental-execution.md §0-5 — HOLD 자동만료(pg_cron) 메커니즘 복구 (TDD)
+ * release_reservation_hold() — HOLD 만료 정책 전면 개편 (Migration 453, 2026-09-07 Stephen 확정)
  * Harness Flow v3.2 — RED → GREEN
  *
- * 배경: release_reservation_hold() 함수 + hold_expiration_cleanup pg_cron 잡이 Stage·
- * Production 둘 다에 실존하지 않아 "HOLD 30분(구 10분) 자동만료" 정책이 전혀 동작하지
- * 않고 있었다(Production 실측 hold 29건 전부 30분 초과). Migration 285로 복구.
+ * 이전 정책(Migration 285~431): "생성 후 30분" 타이머가 계약 미발송 상태에서도 그냥 흘렀다
+ * (계약 발송 시 GREATEST(created_at, sent_at)로 리셋될 뿐, 발송 자체가 없으면 created_at
+ * 기준으로 만료됨).
  *
- * 완료기준: status='hold'이고 created_at이 30분보다 오래된 예약만 'expired'로 전환한다.
- * 30분 이내의 최근 hold, 그리고 hold가 아닌 다른 상태(confirmed 등)는 절대 건드리지 않는다.
+ * 신규 정책(Migration 453): "고객 예약신청완료(hold) 건은 타이머 자체가 없다 — 관리자가
+ * 전자계약을 발송한 시점부터만 30분이 시작된다. 계약이 한 번도 발송되지 않았으면 생성 후
+ * 아무리 오래 지나도 이 함수는 손대지 않는다." 이 파일의 5개 케이스는 전부 "계약 미발송"
+ * 시나리오만 다루므로, 이전 정책에서의 "expired 전환"이 신규 정책에서는 "hold 유지"로
+ * 정확히 반전된다 — 이것이 이번 정책 반전이 실제로 적용됐음을 보증하는 회귀 테스트다.
+ * "계약 발송 후" 시나리오(D-1 타이머 실제 동작)는 holdExpirationContractTimer.test.ts가 담당.
  *
  * 이 테스트는 Stage DB(ezyvffjvuwmtuhpxdjrw)에 실제 ephemeral 행을 만드는 라이브
  * 통합테스트다(contractSigningGate.test.ts와 동일 패턴).
@@ -102,8 +106,8 @@ async function getStatus(reservationId: number): Promise<string | null> {
   return (data?.status as string | undefined) ?? null;
 }
 
-describe('release_reservation_hold — HOLD 30분 자동만료', () => {
-  it('GREEN: 생성된 지 30분 초과한 hold 예약은 expired로 전환된다', async () => {
+describe('release_reservation_hold — HOLD 만료 정책 전면 개편(계약 미발송 시나리오)', () => {
+  it('REVERSED: 계약 미발송 + 생성 후 30분 초과해도 hold 그대로 유지된다(구 정책 반전)', async () => {
     const userId = await createEphemeralUser();
     cleanups.push(() => deleteEphemeralUser(userId));
 
@@ -117,10 +121,25 @@ describe('release_reservation_hold — HOLD 30분 자동만료', () => {
     expect(error).toBeNull();
     expect((data as { ok?: boolean } | null)?.ok).toBe(true);
 
-    expect(await getStatus(reservationId)).toBe('expired');
+    expect(await getStatus(reservationId)).toBe('hold');
   });
 
-  it('GREEN: 생성된 지 30분 이내인 hold 예약은 건드리지 않는다(경계 회귀 방지)', async () => {
+  it('REVERSED: 계약 미발송 + 생성 후 며칠(엿새) 지나도 여전히 hold 유지된다(타이머 자체가 없음을 극단값으로 확인)', async () => {
+    const userId = await createEphemeralUser();
+    cleanups.push(() => deleteEphemeralUser(userId));
+
+    const sixDaysAgo = new Date(Date.now() - 6 * 24 * 60 * 60 * 1000);
+    const reservationId = await createReservationWithCreatedAt('hold', sixDaysAgo, userId);
+    cleanups.push(async () => {
+      await admin.from('rental_reservations').delete().eq('id', reservationId);
+    });
+
+    await admin.rpc('release_reservation_hold', {});
+
+    expect(await getStatus(reservationId)).toBe('hold');
+  });
+
+  it('무회귀: 생성된 지 30분 이내인 hold 예약은 (여전히) 건드리지 않는다', async () => {
     const userId = await createEphemeralUser();
     cleanups.push(() => deleteEphemeralUser(userId));
 
@@ -135,7 +154,7 @@ describe('release_reservation_hold — HOLD 30분 자동만료', () => {
     expect(await getStatus(reservationId)).toBe('hold');
   });
 
-  it('GREEN: hold가 아닌 상태(confirmed)는 30분이 지나도 건드리지 않는다', async () => {
+  it('무회귀: hold가 아닌 상태(confirmed)는 계약 미발송·시간 경과와 무관하게 건드리지 않는다', async () => {
     const userId = await createEphemeralUser();
     cleanups.push(() => deleteEphemeralUser(userId));
 
@@ -150,7 +169,7 @@ describe('release_reservation_hold — HOLD 30분 자동만료', () => {
     expect(await getStatus(reservationId)).toBe('confirmed');
   });
 
-  it('GREEN: expired_count가 이번 호출에서 실제로 만료시킨 행 수를 정확히 반영한다', async () => {
+  it('무회귀: 계약 미발송 hold 여러 건을 한 번에 호출해도 expired_count에 포함되지 않는다', async () => {
     const userId = await createEphemeralUser();
     cleanups.push(() => deleteEphemeralUser(userId));
 
@@ -163,25 +182,8 @@ describe('release_reservation_hold — HOLD 30분 자동만료', () => {
     const { data } = await admin.rpc('release_reservation_hold', {});
     const result = data as { ok: boolean; expired_count: number } | null;
 
-    expect(result?.expired_count).toBeGreaterThanOrEqual(2);
-    expect(await getStatus(old1)).toBe('expired');
-    expect(await getStatus(old2)).toBe('expired');
-  });
-
-  it('멱등: 이미 expired인 예약을 다시 호출해도 에러 없이 안전하다(재실행 안전성)', async () => {
-    const userId = await createEphemeralUser();
-    cleanups.push(() => deleteEphemeralUser(userId));
-
-    const reservationId = await createReservationWithCreatedAt('hold', new Date(Date.now() - 60 * 60 * 1000), userId);
-    cleanups.push(async () => {
-      await admin.from('rental_reservations').delete().eq('id', reservationId);
-    });
-
-    await admin.rpc('release_reservation_hold', {});
-    expect(await getStatus(reservationId)).toBe('expired');
-
-    const { error } = await admin.rpc('release_reservation_hold', {});
-    expect(error).toBeNull();
-    expect(await getStatus(reservationId)).toBe('expired');
+    expect(result?.ok).toBe(true);
+    expect(await getStatus(old1)).toBe('hold');
+    expect(await getStatus(old2)).toBe('hold');
   });
 });

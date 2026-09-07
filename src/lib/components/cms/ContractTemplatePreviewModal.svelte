@@ -1,13 +1,16 @@
 <script lang="ts">
   import { csToast } from '$lib/utils/toast'
-  import { substituteVariables, substituteSpreadsheetDocument, substituteHtmlDocument, findHtmlUnresolvedVariables, applyIssuerSignatureMarker, applySpecialNotesMarker, type AnyContentBlock } from '$lib/utils/contract-substitution'
+  import { substituteVariables, substituteSpreadsheetDocument, substituteHtmlDocument, findHtmlUnresolvedVariables, applyIssuerSignatureMarker, applySpecialNotesMarker, updateSpecialNotesInHtml, type AnyContentBlock } from '$lib/utils/contract-substitution'
   import { applyContractTemplate } from '$lib/utils/contract-apply-template'
   import { hasExistingContractContent } from '$lib/utils/contract-content-mode'
   import { isTiptapDocBlock, isSpreadsheetDocument, isHtmlDocument } from '$lib/types/contract-document'
   import { renderTiptapDocToHtml } from '$lib/utils/tiptapRender'
   import { renderSpreadsheetToHtml } from '$lib/utils/spreadsheetRender'
+  import ContractFieldPanel from '$lib/components/cms/contract-editor/ContractFieldPanel.svelte'
   import type { TiptapDocBlock } from '$lib/types/contract-document'
   import type { ContractSubstitutionData } from '$lib/types/contract-module'
+
+  interface SpecRow { key: string; value: string }
 
   interface TemplateSummary {
     id: string
@@ -72,6 +75,9 @@
   let existingSpreadsheetDocument  = $state<unknown>(null)
   // html 계약의 경우 content_blocks는 항상 [] — html_document를 보관해 미리보기 분기에 활용
   let existingHtmlDocument         = $state<unknown>(null)
+  // 발행된 계약의 구조화된 특약 배열 — "계약 발행 보기" 특약 클릭편집 모달을 채우는 데만 쓰임
+  // (표시 자체는 이미 existingHtmlDocument에 구운 텍스트로 baked돼 있음, 2026-09-07 신규)
+  let existingSpecifications       = $state<SpecRow[]>([])
   let hasExistingContent = $state(false)
   // viewOnly는 항상 existing 취급 — 양식 선택 자체가 UI에서 제거되므로 template 모드로 빠질 일이 없음
   let contentMode        = $state<'existing' | 'template'>(viewOnly ? 'existing' : 'template')
@@ -182,14 +188,18 @@
               spreadsheet_document?: unknown
               html_document?: unknown
               authoring_mode?: string
+              specifications?: SpecRow[]
             }
-            if (hasExistingContractContent(contentData.content_blocks, contentData.canvas_document, contentData.spreadsheet_document, contentData.html_document)) {
-              existingBlocks = contentData.content_blocks as AnyContentBlock[]
-              // canvas 계약은 canvas_document를 보관 — 미리보기 분기 및 showPreview 조건에 사용
-              existingCanvasDocument = contentData.canvas_document ?? null
-              hasExistingContent = true
-              contentMode = 'existing'
-            } else if (
+            existingSpecifications = contentData.specifications ?? []
+            // ⚠️ 2026-09-07 순서 수정: hasExistingContractContent()가 html_document까지 함께
+            // 검사하도록 넓어진 뒤로는(위 4번째 인자), authoring_mode='html'/'spreadsheet'인
+            // 계약도 이 첫 분기 조건을 그대로 통과해버려 existingHtmlDocument/
+            // existingSpreadsheetDocument를 채우는 자기 분기까지 도달하지 못하는 회귀가 있었다
+            // (html_document만 있고 content_blocks는 항상 []인 계약이 "발행됨"으로는 잡히지만
+            // 정작 그 내용을 담을 변수는 비어 있어 미리보기가 "표시할 계약 내용이 없습니다"로
+            // 뜸). authoring_mode별 전용 분기를 먼저 확인하고, 어디에도 안 걸리는 flow/canvas
+            // 계약만 마지막 범용 분기로 떨어지도록 순서를 바꿔 해소.
+            if (
               contentData.authoring_mode === 'spreadsheet' &&
               contentData.spreadsheet_document != null
             ) {
@@ -203,6 +213,12 @@
             ) {
               // html 계약은 content_blocks가 항상 [] — html_document로 판별
               existingHtmlDocument = contentData.html_document
+              hasExistingContent = true
+              contentMode = 'existing'
+            } else if (hasExistingContractContent(contentData.content_blocks, contentData.canvas_document, contentData.spreadsheet_document, contentData.html_document)) {
+              existingBlocks = contentData.content_blocks as AnyContentBlock[]
+              // canvas 계약은 canvas_document를 보관 — 미리보기 분기 및 showPreview 조건에 사용
+              existingCanvasDocument = contentData.canvas_document ?? null
               hasExistingContent = true
               contentMode = 'existing'
             }
@@ -406,6 +422,53 @@
     }
   }
 
+  // ── 특약 클릭 편집 (2026-09-07 신규, "계약 발행 보기" 화면 전용) ─────────────
+  // viewOnly가 아닌 existing 모드에서만 노출 — template 모드(발행 전 양식 선택 미리보기)는
+  // 이미 좌측 양식목록+"편집" 버튼으로 특약을 포함한 전체 내용을 고칠 수 있어 스코프 외.
+  let specialNotesModalOpen = $state(false)
+  let editingSpecs          = $state<SpecRow[]>([])
+  let savingSpecialNotes    = $state(false)
+
+  function handleHtmlDocClick(e: MouseEvent) {
+    if (viewOnly || contentMode !== 'existing') return
+    const cell = (e.target as HTMLElement).closest('.cs-special-notes-cell')
+    if (!cell) return
+    editingSpecs = existingSpecifications.length > 0
+      ? existingSpecifications.map((s) => ({ ...s }))
+      : [{ key: '', value: '' }]
+    specialNotesModalOpen = true
+  }
+
+  function closeSpecialNotesModal() {
+    specialNotesModalOpen = false
+  }
+
+  async function saveSpecialNotes() {
+    if (!contractId || !isHtmlDocument(existingHtmlDocument)) return
+    savingSpecialNotes = true
+    try {
+      const filtered = editingSpecs.filter((s) => s.key.trim())
+      const newHtml = updateSpecialNotesInHtml(existingHtmlDocument as string, filtered)
+      const res = await fetch(`/api/cms/contracts/${contractId}/content`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ content_blocks: [], specifications: filtered, html_document: newHtml }),
+      })
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}))
+        throw new Error((body as { error?: string }).error ?? '저장에 실패했습니다.')
+      }
+      existingHtmlDocument = newHtml
+      existingSpecifications = filtered
+      csToast.success('특약 내용이 저장되었습니다.')
+      specialNotesModalOpen = false
+    } catch (e) {
+      csToast.error(e instanceof Error ? e.message : '저장에 실패했습니다.')
+    } finally {
+      savingSpecialNotes = false
+    }
+  }
+
   loadData()
 </script>
 
@@ -515,8 +578,13 @@
                   </div>
                 {/if}
                 {#if previewHtmlDocument}
-                  <!-- html형: 변수 치환된 고정 HTML 서식을 그대로 렌더링 -->
-                  <div class="preview-block html-contract-doc">
+                  <!-- html형: 변수 치환된 고정 HTML 서식을 그대로 렌더링.
+                       특약 셀(.cs-special-notes-cell) 클릭 편집은 발행 보기(existing)에서만 -->
+                  <div
+                    class="preview-block html-contract-doc"
+                    class:html-doc-editable={!viewOnly && contentMode === 'existing'}
+                    onclick={handleHtmlDocClick}
+                  >
                     {@html previewHtmlDocument}
                   </div>
                 {/if}
@@ -555,6 +623,31 @@
     {/if}
   </div>
 </div>
+
+{#if specialNotesModalOpen}
+  <div class="modal-overlay special-notes-overlay" role="dialog" aria-modal="true" aria-label="특약 입력">
+    <div class="special-notes-modal">
+      <div class="modal-header">
+        <span class="modal-title">특약 입력</span>
+        <button type="button" class="close-btn" onclick={closeSpecialNotesModal} aria-label="닫기">✕</button>
+      </div>
+      <div class="special-notes-body">
+        <ContractFieldPanel
+          htmlMode={true}
+          specifications={editingSpecs}
+          onSpecsChange={(s) => { editingSpecs = s }}
+          onInsertField={() => {}}
+        />
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn-cancel" onclick={closeSpecialNotesModal}>취소</button>
+        <button type="button" class="btn-send" onclick={saveSpecialNotes} disabled={savingSpecialNotes}>
+          {savingSpecialNotes ? '저장 중...' : '저장'}
+        </button>
+      </div>
+    </div>
+  </div>
+{/if}
 
 <style>
   .modal-overlay {
@@ -971,5 +1064,37 @@
     font: var(--text-pc-script-12);
     color: var(--cs-text-mid);
     margin-right: auto;
+  }
+
+  /* 특약 클릭 편집 — 발행 보기(existing)에서만 커서·hover로 클릭 가능함을 표시.
+     .cs-special-notes-cell은 defaultRentalContractHtml.ts가 굽는 고정 앵커 클래스명. */
+  .html-doc-editable :global(.cs-special-notes-cell) {
+    cursor: pointer;
+    transition: background-color 0.12s;
+  }
+  .html-doc-editable :global(.cs-special-notes-cell:hover) {
+    background-color: rgba(59, 47, 138, 0.08);
+  }
+
+  /* 특약 입력 모달 — 정중앙 오버레이(.modal-overlay 재사용) 위에 작은 카드로 표시 */
+  .special-notes-overlay {
+    z-index: 210;
+  }
+  .special-notes-modal {
+    background: var(--cs-white);
+    border-radius: var(--cms-radius-sm);
+    width: 480px;
+    max-width: 100%;
+    max-height: calc(100vh - 48px);
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    box-shadow: 0 8px 40px rgba(0, 0, 0, 0.18);
+  }
+  .special-notes-body {
+    flex: 1;
+    min-height: 240px;
+    padding: 16px 20px;
+    overflow-y: auto;
   }
 </style>

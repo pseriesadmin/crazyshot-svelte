@@ -264,17 +264,20 @@ cancelled / damage_claimed → 취소 UI (✕ 아이콘 + 빨간 텍스트)
 > 발송한다 — 위 표(app 코드 AUTO_NOTIFY 매핑)와 달리 이건 RPC 내부 루프에서 직접 호출된다
 > (service-operations.md §10 참고).
 >
-> ✅ **HOLD D-1 타이머 리셋 정책(2026-08-31, Migration 394)**: `release_reservation_hold()`
-> D-1 조건이 "계약 발송됐으면 영구 제외(NOT EXISTS)"에서 **"계약 발송 시점에 타이머 리셋"**
-> (GREATEST(rr.created_at, cs.sent_at) + 30분)으로 변경됐다.
-> - 계약서 미발송 hold → created_at 기준 30분 만료 (기존과 동일)
-> - 계약서 발송된 hold → 최신 sent_at 기준으로 리셋된 30분 만료
-> - "재발송"(RentalContractViewer 재발송 버튼)할 때마다 sent_at이 갱신돼 타이머가 다시 리셋됨
-> - D-3(payment_confirmed_at IS NOT NULL, 결제완료 예외)는 변경 없이 그대로 유지
-> Stage(ezyvffjvuwmtuhpxdjrw)·Production(vnbpmvxruyciuuaermyh) 양쪽 다 적용 완료
-> (2026-09-06 재확인 — `release_reservation_hold()` 함수 정의에 `GREATEST(...,sent_at)`
-> 존재 직접 조회로 확인. 과거 "Stage 적용 대기 중" 문구는 이후 세션에서 Production까지
-> 적용 완료된 뒤 갱신되지 않고 남아있던 스테일 서술이었음).
+> ⛔ **HOLD 만료 정책 전면 반전(2026-09-07, Migration 453 — Stephen 확정)**: 아래는 최신
+> 정책이며, 이 절의 과거 버전(Migration 394 "GREATEST 타이머 리셋" 서술)은 완전히 폐기됐다.
+> `release_reservation_hold()`의 만료 판정이 "생성 후 30분(계약 발송 시 리셋)"에서
+> **"전자계약이 발송된 적이 있을 때만, 그 발송 시각(sent_at) 기준으로만 30분"**으로 바뀌었다.
+> - 계약서 미발송 hold → **타이머 자체가 없음**. created_at이 며칠 지나도 만료되지 않는다
+>   (구 정책과 정반대 — 과거엔 이 케이스가 30분 뒤 expired였다).
+> - 계약서 발송된 hold → sent_at 기준 30분 만료(리셋 개념 자체가 사라짐 — 애초에 발송 전엔
+>   타이머가 없었으므로 "리셋"할 대상이 없다). "재발송"(RentalContractViewer 재발송 버튼)할
+>   때마다 sent_at이 갱신돼 새로 30분이 시작되는 동작은 동일하게 유지.
+> - 고객 본인 취소·관리자 거부 → 기존 `update_reservation_status(...,'cancelled')` 경로로
+>   즉시 전이(이번 개편과 무관하게 이미 요구사항 충족 — 코드 변경 없음).
+> - D-3(payment_confirmed_at IS NOT NULL, 결제완료 예외)는 이번에도 변경 없이 그대로 유지.
+> Stage(ezyvffjvuwmtuhpxdjrw)·Production(vnbpmvxruyciuuaermyh) 양쪽 다 적용 완료(2026-09-07,
+> 관련 TDD 3개 파일 29/29 GREEN 확인 후 적용). 상세 근거: service-operations.md §10.
 >
 > `locker_guide`(무인보관함 1시간 전 안내, 2026-08-20 신설)도 위 표와 마찬가지로 상태 전이가
 > 아니라 **Vercel Cron**(`/api/cron/locker-guide`, 10분 간격)이 `claim_reservations_due_for_
@@ -481,4 +484,7 @@ service-operations.md §15 정본) + GATE C 체크리스트 1건 추가 | 2026-0
 2026-09-06(같은 날 후속) "상담채팅 세션 상태 — 대기 재진입 조건" 절 정정 — "오직 1시간
 자동전환으로만 재진입"이라는 서술이 실제로는 ① 3시간(migration 226)이 맞고 ② 2026-08-12
 GATE B 승인된 관리자 수동 "대기 전환" 버튼(chat.md §17-1)이라는 두 번째 재진입 경로가 이미
-존재해 "오직"이 더 이상 사실이 아니었음을 CMS 전역 정밀검증 v6에서 발견해 정정.*
+존재해 "오직"이 더 이상 사실이 아니었음을 CMS 전역 정밀검증 v6에서 발견해 정정. | 2026-09-07
+HOLD 만료 정책 전면 반전(Migration 453, Stephen 확정) — "생성 후 30분(계약 발송 시 GREATEST
+리셋)"을 폐기하고 "계약 미발송 hold는 타이머 없음, 계약 발송 시각 기준으로만 30분"으로 교체.
+Stage·Production 적용 완료, TDD 29/29 GREEN.*

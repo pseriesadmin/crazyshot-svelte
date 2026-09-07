@@ -166,43 +166,55 @@ execution.md` §1 ②④행(실화면 검증 기준 트리거·배지 매핑)
 
 ---
 
-## 10. HOLD 자동만료 — 30분 경과 시 status='expired' 자동 전환 (✅ 구현·Stage·Production 전부 검증 완료, 2026-08-18)
+## 10. HOLD 만료 — 전자계약 발송 시점에만 30분 타이머 시작 (⛔ 2026-09-07 정책 전면 반전, Stephen 확정)
 
 ```
-front 고객이 상품을 예약신청(hold 생성)만 하고 결제·서명 등 후속 절차를 진행하지 않으면,
-그 hold는 생성 후 30분이 지나는 시점에 pg_cron(hold_expiration_cleanup, 매 1분 실행)이
-자동으로 status='expired'로 전환한다. 별도의 "재고 해제" 로직은 필요 없다 — 날짜 배제
-제약(rental_reservations_product_dates_excl)과 create_hold_reservation의 가용성 검사
-둘 다 이미 status='expired'인 행을 배제 대상에서 제외하도록 설계돼 있어, status 전환
-자체가 곧 재고 해제다.
+⛔ 이 절은 2026-09-07 Stephen 지시로 기존 정책을 근본적으로 뒤집은 최신 버전이다. 과거
+"생성 후 30분(계약 발송 시 GREATEST로 리셋)" 정책은 완전히 폐기됐다 — 아래가 유일한 현재
+정책이며, 이 문서의 과거 버전(2026-08-18~2026-08-31 서술)을 참고하지 말 것.
 
-⚠️ 이 정책은 §9(계약서명 게이팅)와 상호작용한다 — §9 도입으로 결제만 완료된 예약도
-계약서명 전까지는 hold에 더 오래 머무르게 됐으므로, 이 30분 자동만료가 정상 동작해야
-"계약서명을 하지 않는 고객의 예약이 재고를 무기한 점유"하는 상황을 막을 수 있다. 원래
-10분이었으나(Migration 30, 2026-05-29) 고객 체크아웃 시간에 비해 UX상 과도하게 짧아
-2026-08-18 Stephen 확정으로 30분으로 변경.
+현재 정책: front 고객이 상품을 예약신청(hold 생성)만 하면 — 그 자체로는 타이머가 전혀
+시작되지 않는다. hold는 다음 중 하나가 실행되기 전까지 재고점유를 무기한 유지한다:
+  ① 관리자가 CMS '계약서'탭에서 전자계약을 발송(contract_signings.sent_at 기록) —
+     이 시점부터 정확히 30분의 타이머가 시작되고, 그 안에 서명하지 않으면 status='expired'로
+     자동 전환된다. "재발송"할 때마다 sent_at이 갱신돼 타이머가 다시 리셋된다(기존 동작 유지).
+  ② 고객 본인이 예약을 취소(status='cancelled')
+  ③ 관리자가 예약을 거부(status='cancelled', ②와 DB상 동일 값 — 액터 구분 컬럼 없음)
+
+pg_cron(hold_expiration_cleanup, 매 1분 실행)이 release_reservation_hold()를 호출하는
+구조 자체는 변경 없음 — 그 함수 내부의 만료 판정 조건만 바뀌었다. 계약이 한 번도 발송되지
+않은 hold는 created_at이 며칠이 지나도 이 함수가 절대 손대지 않는다(SQL 3치논리상
+`NULL < NOW()-INTERVAL '30 minutes'`가 FALSE로 평가되어 자동으로 후보에서 제외됨 — 별도
+EXISTS 분기 불필요). D-3(payment_confirmed_at IS NOT NULL, 결제완료 예외)은 이번 개편에서도
+전혀 건드리지 않고 그대로 유지.
+
+②③(고객취소/관리자거부)은 이미 update_reservation_status(...,'cancelled') RPC로 즉시
+전이되는 기존 경로라 이번 개편과 무관하게 그대로 요구사항을 충족한다 — 별도 코드 변경 없음.
 ```
-→ 상세: `reservation-rental-execution.md` §0-5(부재 발견 경위 — Stage·Production 둘 다
-pg_cron 잡 자체가 실존하지 않았음 + status CHECK 제약에 'expired' 값이 애초에 누락돼
-있었던 별개 결함 동시 발견) · `supabase/migrations/20260818000285_285_hold_expiration_
-restore.sql`(release_reservation_hold RPC) · `rental-lifecycle.md` "전체 상태 머신"
+→ 상세: `supabase/migrations/20260907030000_453_release_reservation_hold_contract_trigger_only.sql`
+(release_reservation_hold RPC 재설계) · `rental-lifecycle.md` "전체 상태 머신" ·
+`src/__tests__/services/holdExpiration.test.ts`(계약 미발송 시나리오 — "아무리 오래돼도
+만료 안 됨" 검증) · `src/__tests__/services/holdExpirationContractTimer.test.ts`(EC-5,
+계약 발송 후 sent_at 기준 30분 검증)
 
 ✅ **Stage(ezyvffjvuwmtuhpxdjrw)·Production(vnbpmvxruyciuuaermyh) 둘 다 적용 완료**
-(2026-08-18) — Stage는 TDD 검증(경계값·비hold상태 무영향·멱등성 5건 GREEN), Production은
-적용 직후 cron이 1분 이내 첫 실행돼 방치돼 있던 hold 29건이 실제로 expired 전환됨을
-직접 SQL 조회로 확인(`status='hold'` 잔여 0건).
+(2026-09-07) — Stage에서 관련 TDD 3개 파일 29/29 GREEN 확인 후 Production 적용.
 
-✅ **D-1 조건 정정(2026-08-31, Migration 394 — Stage+Production 둘 다 적용 완료)**:
-  Migration 324의 D-1("계약 발송됐으면 NOT EXISTS로 영구 제외")이 §9 게이팅 도입 이후
-  "계약 발송된 미서명 hold가 영구히 재고를 점유"하는 결함을 유발한다는 점이 전역감사에서
-  발견됐다. Migration 394로 D-1을 **GREATEST(created_at, sent_at) 기준 타이머 리셋** 방식으로
-  교체 — 계약 발송 순간부터 새로 30분을 부여하고, "재발송"할 때마다 sent_at이 갱신돼 타이머가
-  다시 리셋된다. D-3(payment_confirmed_at IS NOT NULL, 결제완료 예외)은 변경 없이 유지.
-  마이그레이션 파일: `supabase/migrations/20260901050000_394_hold_expiration_d1_greatest_timer.sql`
-  Stage(ezyvffjvuwmtuhpxdjrw) 적용 완료, TDD EC-5a/5b/5c 4/4 GREEN 확인 완료(2026-08-31).
-  Production(vnbpmvxruyciuuaermyh)도 적용 완료 — 2026-09-06 `release_reservation_hold()`
-  함수 정의를 DB에서 직접 조회해 `GREATEST(...,sent_at)` 존재를 재확인함(과거 "Production
-  미적용" 문구는 이후 어느 세션에서 적용이 진행된 뒤 갱신되지 않고 남아있던 스테일 서술).
+⛔ **폐기된 과거 이력(더 이상 유효하지 않음, 기록만 남김)**: 2026-08-18 Migration 285로
+최초 도입된 "생성 후 30분 자동만료", 2026-08-31 Migration 394의 "D-1 GREATEST(created_at,
+sent_at) 타이머 리셋" 방식 — 둘 다 "계약 미발송 상태에서도 created_at만으로 만료된다"는
+전제를 공유했고, 이번 2026-09-07 개편이 그 전제 자체를 없앴다. §15(채팅카드 발송)의
+`hold_expired` notify_type 자체는 변경 없이 그대로 재사용된다(발생 조건만 바뀜).
+
+✅ **채팅카드 실시간 만료 반영(2026-09-07, 함께 적용 완료)**: "예약신청완료"(reservation_hold)
+채팅카드가 계약 미발송 상태에선 무기한 활성 상태를 유지하고, 위 ①②③ 중 하나가 실제로
+일어난 뒤에만(status가 'expired' 또는 'cancelled'로 전환된 뒤에만) "기간 만료"로 표시되도록
+`ActionCard.svelte`에 `reservationHoldExpiredLive` 라이브 체크를 추가(§13 "긴급 배지" 전제조건
+패턴과 동일하게 `/api/chat/reservation-status/[id]` 재사용) + `execute-action/+server.ts`
+서버측 클릭 재검증도 동일한 상태 집합으로 확장. `send_rental_chat_notification`
+(Migration 454)의 `action_payload`에 `reservation_id`를 추가해 이 라이브 체크가 참조할 수
+있게 함 — 마이그레이션 이전에 이미 발송된 레거시 카드는 `reservation_id`가 없어 이 체크를
+건너뛴다(fail-open, 회귀 아님).
 
 ---
 
@@ -622,4 +634,10 @@ Migration 425로 해소 + GATE C 체크리스트 1건 추가 | 2026-09-05 §18 �
 이미 적용돼 있음을 재확인. | 2026-09-06(같은 날 후속) §7 대기 재진입 서술 정정 — "오직 1시간
 무응답 자동전환으로만 일어난다, 수동 액션 없음"은 스테일 서술이었고, 실제로는 3시간(migration
 226)이 맞으며 2026-08-12 GATE B 승인된 관리자 수동 "대기 전환" 버튼(chat.md §17-1)도 이미
-존재하는 두 번째 경로임을 CMS 전역 정밀검증 v6에서 발견해 정정.*
+존재하는 두 번째 경로임을 CMS 전역 정밀검증 v6에서 발견해 정정. | 2026-09-07 §10 전면 재작성
+— Stephen 지시로 HOLD 만료 정책을 근본적으로 반전(Migration 453): "생성 후 30분(계약 발송 시
+GREATEST 리셋)"을 폐기하고 "전자계약 발송 시점에만 30분 타이머 시작, 미발송 hold는 무기한
+유지"로 교체. `send_rental_chat_notification`(Migration 454)에 `reservation_id` 추가 +
+`ActionCard.svelte`·`execute-action/+server.ts`에 실시간 상태 재검증 추가해 "예약신청완료"
+채팅카드의 "기간 만료" 표시도 동일 정책에 맞춰 동기화. Stage·Production 둘 다 적용,
+관련 TDD 3개 파일 29/29 GREEN.*

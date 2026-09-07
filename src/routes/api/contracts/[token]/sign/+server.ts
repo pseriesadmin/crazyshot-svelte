@@ -196,6 +196,11 @@ export const POST: RequestHandler = async ({ params, request, getClientAddress }
               content,
               action_payload: {
                 type:         'contract_signed',
+                // 2026-09-07: contract_id 추가 — 관리자가 서명 완료된 계약의 발행을 취소하면
+                // (ActionCard.svelte 라이브 체크가 /api/chat/contract-status/[id]로 이
+                // contract_id를 조회해) 이 카드도 "기한 만료" 처리되도록 하기 위함
+                // (기존엔 reservation_id만 있어 contract 단위 취소를 감지할 수단이 없었음).
+                contract_id:  signing.contract_id ?? undefined,
                 reservation_id: contract.reservation_id != null ? String(contract.reservation_id) : undefined,
                 reservation_no: reservationCode ?? undefined,
                 button_label: '전자계약완료',

@@ -324,8 +324,11 @@ describe('F-5: 관리자 수동 승인(approveReservation) 우회 경로 — 계
 });
 
 // ── F-6: HOLD 30분 만료 크론 방어조건(Phase D-1 + D-3) ─────────────────────────
-describe('F-6: HOLD 30분 만료 크론 — 계약 발송·결제완료 방어조건(Migration 324)', () => {
-  it('GREEN: 계약 미발송 hold는 기존대로 30분 후 expired 처리된다(회귀 없음)', async () => {
+describe('F-6: HOLD 30분 만료 크론 — 계약 발송·결제완료 방어조건(Migration 453)', () => {
+  // 2026-09-07 Stephen 확정으로 정책 반전(Migration 453) — "생성 후 30분"이라는 기본 타이머
+  // 자체가 없어지고 "계약 발송(sent_at) 기준 30분"만 남았다. 계약 미발송 hold는 이제
+  // created_at이 아무리 오래돼도 만료되지 않는다(구 기대값 'expired'를 'hold'로 반전).
+  it('GREEN: 계약 미발송 hold는 생성 후 30분이 지나도 expired 처리되지 않는다(정책 반전, 2026-09-07)', async () => {
     const userId = await createEphemeralUser();
     cleanups.push(() => deleteEphemeralUser(userId));
 
@@ -335,7 +338,7 @@ describe('F-6: HOLD 30분 만료 크론 — 계약 발송·결제완료 방어�
     });
 
     await admin.rpc('release_reservation_hold', {});
-    expect((await getReservationRow(reservationId))?.status).toBe('expired');
+    expect((await getReservationRow(reservationId))?.status).toBe('hold');
   });
 
   it('GREEN: D-1 — 계약이 발송된(sent_at) hold는 30분이 지나도 expired 처리되지 않는다', async () => {

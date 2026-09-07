@@ -124,6 +124,17 @@
  *    섹션(모드 무관 공용 렌더링, 기존 그대로 유지)에도 별도로 계속 표시된다 — 이 마커
  *    추가는 그 표시를 대체하는 게 아니라 정산내역 표 안에도 같은 데이터를 인라인으로
  *    보여주는 것을 추가한 것.
+ *
+ * ⚠️ 2026-09-07 발견·수정(9차, 계약 발행 보기 화면에서 특약 클릭 편집 지원) — "특이사항" 값
+ *    셀에 `class="cs-special-notes-cell"`을 추가했다. 이 클래스는 어떤 변수 치환에도 관여하지
+ *    않는 순수 앵커(anchor)로, `ContractTemplatePreviewModal.svelte`가 "계약 발행 보기"에서
+ *    이 셀을 클릭하면 특약 입력 모달을 띄우고, 저장 시 `contract-substitution.ts`의
+ *    `updateSpecialNotesInHtml()`이 이 클래스로 셀 위치를 찾아 내용만 교체한다(발행 시점에
+ *    이미 `<!--SPECIAL_NOTES-->` 마커가 텍스트로 치환된 뒤라 마커 재치환이 불가능하므로 별도
+ *    함수로 분리 — `applySpecialNotesMarker()` 자체와 그 테스트 계약은 전혀 건드리지 않음).
+ *    이 클래스는 신규로 발행되는 계약서부터만 적용되며, 이 변경 이전에 이미 발행된 계약서의
+ *    저장된 html_document에는 없어 그 화면에서는 클릭 편집이 노출되지 않는다(레거시 계약은
+ *    조용히 미노출 — 회귀 아님, 기존에도 없던 기능).
  */
 
 export const DEFAULT_RENTAL_CONTRACT_HTML = `
@@ -257,7 +268,7 @@ export const DEFAULT_RENTAL_CONTRACT_HTML = `
         <td class="label-cell">정상 대여가 총액</td>
         <td style="text-align:right">{{기본대여요금}}</td>
         <td class="label-cell" rowspan="4">특이사항</td>
-        <td colspan="2" rowspan="4"><!--SPECIAL_NOTES--></td>
+        <td class="cs-special-notes-cell" colspan="2" rowspan="4"><!--SPECIAL_NOTES--></td>
       </tr>
       <tr>
         <td class="label-cell">할인 적용</td>
