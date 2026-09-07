@@ -250,6 +250,8 @@ export interface RentalReservation {
   return_method: ShipmentMethodEnum | null;
   pickup_time: string | null;
   return_time: string | null;
+  pickup_point_id: string | null;      // UUID FK → pickup_points.id (Migration 452, 2026-09-07 — CS2654 C2 지점옵션)
+  return_point_id: string | null;      // UUID FK → pickup_points.id
   notes: string | null;
   courier_code: string | null;
   tracking_number: string | null;
