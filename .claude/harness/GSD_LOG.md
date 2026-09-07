@@ -1,6 +1,194 @@
 # GSD_LOG.md — 크레이지샷 실행 이력
 # 형식: [YYYY-MM-DD HH:MM] 타입 | 타스크명 | 파일 | 소요 | 결과
 
+[2026-09-07(같은 날 7차 후속)] 🟢ROUTINE | 방문지점 콤보버튼 스타일 전용화 — 짧은 라벨용 .combo-btn 재사용 대신 직렬 목록(1행1버튼, 점명+주소 인라인, 상하패딩 30% 축소) 전용 스타일로 교체 | src/routes/cart/+page.svelte | 라이브 검증
+  Stephen 재요청: 방금 만든 방문지점 콤보버튼이 방식선택용 .combo-btn(짧은 라벨 가로배열)을
+  그대로 재사용해 지점명만 보이고 주소는 선택 후에만 하단에 별도 표시되던 것을,
+  ① 가로로 긴 버튼 1개당 1행(직렬 목록)으로 쌓고 점명+주소를 같은 행에 함께 표시
+  ② 버튼 상하폭을 표준 .combo-btn(9px)의 70%(6px 반올림, PC는 11.7px→8.2px)로 축소.
+
+  신규 전용 클래스(.pickup-point-list/.pickup-point-btn/-name/-addr)로 분리 —
+  기존 .combo-btn/.delivery-combo는 다른 곳에서 계속 원래 용도로 쓰이므로 건드리지
+  않음. 선택 시 라벨·주소 색상은 uiux-index.md "콤보 버튼 선택 그룹"의 "요금 보조"
+  선례(선택 시 rgba(255,255,255,0.8))를 주소 텍스트에 그대로 적용.
+
+  라이브 검증: 방문대여 선택 → 방문지점 정보에 "본점 강서구 양천로 418, 1층101호"(선택,
+  보라 배경) + "지점 1"(미선택, 흰 배경) 세로 1행씩 스택으로 정상 렌더링 확인. svelte-check
+  신규 에러 0건, cart vitest 123/123 통과.
+
+[2026-09-07(같은 날 6차 후속)] 🟡BOUNDARY | 방문지점 콤보버튼 선택 UI 신규 + allowed_pickup_ids 동일 결함(빈 배열↔null) 발견·수정 | src/routes/cart/+page.svelte, src/routes/cms/products/+page.server.ts, src/routes/cms/products/new/+page.server.ts, supabase/migrations/20260907060000_456_products_allowed_pickup_ids_empty_to_null.sql | 라이브 검증
+  Stephen 요청: "등록된 방문 지점이 없습니다" 대신 CMS 등록 지점을 콤보버튼으로 노출,
+  1개면 자동선택, 2개 이상이면 선택 가능하게, 수령/반납 동일 적용.
+
+  조사 중 allowed_method_ids와 완전히 동일한 결함을 allowed_pickup_ids에서도 발견 —
+  "Canon RF 24-70mm"이 allowed_pickup_ids=[](빈 배열)이라 실제로는 pickup_points에
+  지점이 2개(본점·지점 1) 등록돼 있었음에도 다른 상품과 교집합이 항상 빈 값이 되어
+  방문 지점 목록 자체가 사라져 있었다. Migration 455와 동일한 3중 수정 적용:
+  ① cart computeAllowedPickupIds에 length>0 가드 ② CMS 저장 로직(+page.server.ts,
+  new/+page.server.ts) 빈 선택 시 null 저장으로 변경 ③ Migration 456 — NOT NULL 제약
+  완화 + 기존 [] 246건 → null 일괄 정정(Stage 적용 완료, 247건 정정 확인).
+
+  신규 기능: FormState에 pickupPointId 필드 추가(leg별 독립), visit-info 블록을 기존
+  텍스트 나열에서 .delivery-combo/.combo-btn 재사용 콤보버튼으로 교체 + 선택된 지점의
+  주소만 하단에 표시. 지점 정확히 1개일 때만 자동선택하는 $effect 추가(2개 이상은
+  자동선택 안 함, 사용자가 직접 선택). RentalForm 스니펫을 수령/반납 양쪽이 공유하므로
+  별도 구현 없이 요구사항 4(수령/반납 동일 노출) 자동 충족.
+
+  라이브 검증: allowed_pickup_ids=null 상품(지점 2개 교집합) → 콤보 2개 노출, 초기
+  미선택 확인 → 지점 클릭 시 active 토글 + 주소 표시 확인 → 임시로 지점 1개로 제한한
+  상품으로 재테스트 → 자동선택(active) + 주소 자동표시 확인 → 테스트용 DB 값 원복
+  완료. svelte-check 신규 에러 0건(FormState 필드 추가로 발생한 mergeFormForBulk
+  누락 1건 즉시 수정), cart vitest 123/123 통과.
+
+  ⚠️ Production 미적용 — 이번 세션에 쌓인 마이그레이션 455·456 둘 다 Stephen 승인 대기 중.
+
+[2026-09-07(같은 날 8차 후속)] 🟢ROUTINE | 방문지점 콤보버튼 UI 2차 리파인 — wrapper 배경 제거 + 기본 BG 토큰을 표준 콤보버튼 지침값으로 정정 | src/routes/cart/+page.svelte | 라이브 검증
+  Stephen 요청: ① 콤보 버튼 UI 목록의 외부 bg레이아웃 제거 ② 지점 콤보 버튼 기본 BG를
+  표준 디자인 시스템 콤보버튼 지침 토큰(--cs-lilac) 적용(임시로 썼던 흰색 대체).
+
+  .visit-info의 background/border-radius/padding 제거(순수 flex 레이아웃만 유지) —
+  각 .pickup-point-btn이 이미 자체 배경을 갖고 있어 wrapper 박스가 이중 레이어였음.
+  .pickup-point-btn 기본(비선택) background를 #fff → var(--cs-lilac, #ECEBF4)로 교체
+  (uiux-index.md "콤보 버튼 선택 그룹" 표준 비선택 배경과 동일 토큰).
+
+  라이브 검증: /cart 방문대여 선택 → getComputedStyle로 .visit-info background가
+  rgba(0,0,0,0)(투명)임을 확인, .pickup-point-btn 비선택 background가
+  rgb(236,235,244)(=--cs-lilac)로 렌더링됨을 확인. svelte-check 신규 에러 0건,
+  cart vitest 123/123 통과.
+
+[2026-09-07(같은 날 9차 후속)] 🟢ROUTINE | 방문지점 콤보 목록 항목 간 여백 2배 확대 | src/routes/cart/+page.svelte | 라이브 검증
+  Stephen 요청: "콤보목록 간 여백 2배 추가" — .pickup-point-list의 세로 gap을 기존
+  8px(표준 .combo-btn 상하패딩 30% 축소와 별개로 목록 자체에 적용돼 있던 값)에서
+  16px로 확대.
+
+  라이브 검증: getBoundingClientRect로 두 버튼(본점/지점 1) 사이 실측 간격이
+  16px임을 확인. cart vitest 123/123 통과(회귀 없음).
+
+[2026-09-07(같은 날 10차 후속)] 🔴CRITICAL | 방문지점 미선택 시 제출 차단 공백 발견·수정 — datesSet/methodSelectionValid 둘 다 pickupPointId를 검사하지 않던 결함 | src/routes/cart/+page.svelte | 라이브 검증
+  Stephen 확인 요청: "지점 목록이 1개인 경우 자동 선택되어 문제 없지만, 1개 이상 목록
+  경우 미선택 시 '대여정보 미기입' 경고 토스트 호출에 반영되어 있는지만 마지막 확인."
+
+  코드 전수 확인 결과 반영돼 있지 않았음 — datesSet(날짜·시간 필수값 판정)과
+  methodSelectionValid(방식 선택 판정) 둘 다 pickupPointId를 전혀 검사하지 않아,
+  방문지점이 2개 이상 등록된 상품에서 수령/반납 방식을 '방문대여'로 고르고도 지점을
+  한 번도 클릭하지 않으면 canProceed/readyToSubmit이 그대로 true가 되어 제출 버튼이
+  막히지 않고 "대여예약정보를 모두 확인해 주세요" 경고도 호출되지 않던 실질적 공백.
+
+  신규 파생값 pickupPointsSet 추가 — 체크된 상품 중 rentalMethod/returnMethod가
+  'visit'이고 visitPickupPoints.length > 0(등록된 지점이 있음)인 leg만 그 leg의
+  pickupPointId !== '' 를 요구(지점 0개면 애초에 고를 방법이 없으므로 제외, 1개면
+  자동선택 $effect가 즉시 채우므로 실질 영향은 2개 이상일 때만). canProceed에
+  hasItems && datesSet && pickupPointsSet && ... 로 편입 + priceSectionSentinel
+  스크롤 경고 토스트 조건에도 !pickupPointsSet 추가.
+
+  라이브 검증: /cart에서 수령 방식을 방문대여(지점 2개, 본점/지점 1)로 선택 후 지점
+  미클릭 상태 → 예약신청완료 버튼 disabled=true 확인. 지점 1개(본점) 선택 후에도
+  다른 필수항목(약관 동의 등) 미기입으로 여전히 disabled였으나, 그건 별개 게이트가
+  정상 작동 중인 것으로 이번 수정과 무관 — pickupPointsSet 자체는 코드 검토로
+  canProceed 체인에 정확히 편입됨을 확인. svelte-check 신규 에러 0건(vite.config.ts
+  기존 무관 에러 1건만 잔존), cart vitest 123/123 통과.
+
+[2026-09-07(같은 날 5차 후속)] 🔴CRITICAL | 바로 위 courierRestricted 수정을 Stephen이 반려·정정 — "시간선택 UI 숨김은 의도된 정책, 시간을 필수 등록정보에서 제외해서 해결할 것" | src/routes/cart/+page.svelte | 라이브 재검증
+  Stephen 확정: 배송(isDeliveryLocked)·택배의존(isCourierDependent, 크레이지샷배송 포함)
+  방식에서 시간선택 UI를 숨기는 것 자체는 의도된 정책이었다 — 문제는 UI를 숨기면서도
+  datesSet이 여전히 그 leg의 시간을 필수로 요구했다는 데 있었다. 이전 수정(courierRestricted
+  제거로 시간버튼 강제 노출)을 완전히 되돌리고, 대신 datesSet 정의를 수정 — 체크된 상품의
+  rentalMethod/returnMethod가 isDeliveryLocked() 또는 isCourierDependent()이면 그 leg의
+  시간(rentalTime/returnTime)은 필수 항목에서 제외, 날짜(rentalDate/returnDate)는 방식과
+  무관하게 항상 필수로 유지.
+
+  라이브 재검증(2개 서로 다른 상품, 크레이지샷배송으로 양쪽 leg 설정, 시간 버튼은 UI에
+  노출되지 않는 원래 정책 그대로): 시간 버튼 DOM 부재 재확인(정책 복원 확인) → 날짜만
+  실클릭 입력(시간 없음) → datesSet=true, methodSelectionValid=true 확인(rentalTime/
+  returnTime은 계속 빈 문자열로 남아있음에도) → 약관 체크 → readyToSubmit=true, 경고
+  토스트 0건, 제출버튼 활성화 확인. "방문대여" 등 시간이 실제로 필요한 방식은 isDeliveryLocked/
+  isCourierDependent 둘 다 false라 datesSet의 시간 필수 조건이 그대로 유지됨(DB 확인,
+  로직 무변경 경로 — 이전 세션에서 이미 다회 라이브 검증된 경로라 재테스트 생략).
+  svelte-check 신규 에러 0건, cart vitest 123/123 통과. 디버그 계측 전부 원복(grep 0건).
+
+[2026-09-07(같은 날 4차 후속)] 🔴CRITICAL | "완벽히 입력해도 경고 토스트" 진짜 근본원인 — 크레이지샷배송(courier-dependent) 선택 시 시간선택 버튼 자체가 사라져 rentalTime/returnTime을 영원히 채울 수 없던 구조적 결함 | src/routes/cart/+page.svelte | 전수조사+라이브 재현+수정+재검증
+  Stephen 지시: 앞선 3차례의 hasSeededBulk/백필 관련 수정은 전부 기각·원복된 뒤(위 항목들
+  참고), "대여설정 코드값 어딘가에서 충족되지 않은 문제가 있으니 경고 토스트 기능과 연동된
+  대여설정 로직을 전수 조사할 것"이라는 명시적 지시를 받음. Stephen이 선택한 요소 스크린샷이
+  "대여 방법: 크레이지샷배송 대여" + "반납 방법: 크레이지샷배송 대여"로 두 leg 모두 배송
+  계열이었다는 게 결정적 단서였다 — 이전까지의 모든 성공 재현은 전부 "방문대여"만 썼음.
+
+  조사 방법: window.__cartDebug 임시 계측(hasItems/datesSet/methodSelectionValid/canProceed/
+  readyToSubmit/bulkOpts/bulkDate 등/itemsState 전체를 매 렌더마다 window에 노출)을 추가해
+  SQL 우회 없이 실제 UI 클릭(수령방식 선택→날짜→시간→반납방식→날짜→시간→약관)만으로 라이브
+  재현.
+
+  진짜 원인: `rental_method_options` 테이블에서 "크레이지샷배송 대여"(crazydelivery)는
+  is_bulk_delivery=false(배송 잠금 아님, isDeliveryLocked=false)이지만
+  is_courier_dependent=true(택배 의존, isCourierDependent=true — 원래 용도는 "휴무일
+  캘린더 제한 전용" 판정, RSC-B3)다. 그런데 RentalForm 스니펫(다중상품 master-detail
+  레이아웃에서 실제 렌더링되는 아코디언)의 시간선택 버튼 노출 조건이
+  `{#if !locked && !courierRestricted}`로, locked와 무관한 courierRestricted까지 시간버튼
+  가시성에 잘못 얽혀 있었다 — courierRestricted의 유일한 정당한 용도(isDateDisabled/
+  onDisabledClick, 캘린더 특정 날짜 차단)와 무관하게 시간버튼 자체를 통째로 숨겨버린 것.
+  같은 스니펫의 시간 레이어 노출 조건(2644행, `{#if isTimeOpen && !locked}`)은
+  courierRestricted를 포함하지 않아 — 이 버튼 하나만 불일치했다. 결과: 크레이지샷배송을
+  고르면 rentalTime/returnTime을 채울 UI 자체가 사라져, 사용자가 아무리 "완벽하게" 다른
+  모든 값을 입력해도 datesSet이 구조적으로 영구 미충족 — 경고 토스트·제출버튼 비활성화가
+  절대 풀리지 않는 CRITICAL 결함이었다.
+
+  수정: 조건을 `{#if !locked}`로 단순화(courierRestricted 제거) — 2644행과 동일 기준으로
+  통일.
+
+  라이브 검증(2개 서로 다른 상품, 크레이지샷배송으로 양쪽 leg 전부 실클릭 설정): 수정 전
+  시간 버튼 DOM 자체 부재 확인 → 수정 후 시간 버튼 정상 노출 → 수령/반납 날짜·시간·방식
+  전부 실클릭 입력 → __cartDebug로 datesSet=true, methodSelectionValid=true 확인 → 약관
+  체크 → readyToSubmit=true, 경고 토스트 0건, 제출버튼 footer-cta-active 전환 전부 실측
+  확인. svelte-check 신규 에러 0건, cart vitest 123/123 통과. 디버그 계측 전부 원복(grep
+  0건).
+
+[2026-09-07(같은 날 후속)] 🔴CRITICAL | 위 hasSeededBulk 수정 후속 — opts.rentalMethod/returnMethod 백필 누락 추가수정 + "예약신청완료 버튼 비활성화" 재신고 원인 규명(무관 확인) | src/routes/cart/+page.svelte | 라이브 재현+수정+재검증
+  Stephen이 날짜 경고 해소 후 "예약신청완료 버튼이 비활성화된다"고 재신고. 실측 결과 2건이
+  섞여 있었음:
+  ① 실제 코드 공백(수정 대상): 위 hasSeededBulk 수정이 rentalDate/rentalTime/returnDate/
+     returnTime 4개 필드만 백필하고 opts.rentalMethod/returnMethod는 빠뜨렸다. bulkOpts.
+     rentalMethod는 정상 시딩돼 패널 표시("방문대여")는 맞게 나오지만, 그건 패널 자신의
+     표시값일 뿐 각 상품 고유 itemsState[].opts.rentalMethod와는 별개 상태다.
+     methodSelectionValid(canProceed와 별개의 독립된 제출 가드)가 이 값을 개별 검사하므로,
+     신규 추가 상품은 날짜는 채워져도 방식이 계속 null로 남아 제출이 막혔다 — 날짜와 동일한
+     원리로 방식도 함께 백필(이미 값 있는 상품은 덮어쓰지 않음, ?? 연산자로 방어).
+  ② 무관함으로 확인(버그 아님): ①을 수정한 뒤에도 새 서버+새 탭으로 재확인했더니 여전히
+     버튼이 disabled였음 — 원인은 전혀 다른 곳(canProceed의 5번째 조건 `agreed`)이었다.
+     이 카트에 등록된 필수 동의문 2건을 실제로 체크(약관 모달 열기→항목 체크)하자 즉시
+     footer-cta-active로 전환 확인 — "약관 미동의" 상태였을 뿐, 날짜·방식 관련 결함이
+     전혀 아니었다.
+  라이브 검증(로컬): ①번 수정 후 새 서버+새 탭에서 동일 4개 항목(1개만 방식·날짜 있음)
+  로드 → 약관 2건 체크 → 버튼 disabled→active 전환 직접 확인. svelte-check 신규 에러
+  0건, cart vitest 123/123 통과(회귀 없음).
+
+[2026-09-07] 🔴CRITICAL | 장바구니 다중상품 "대여예약정보를 모두 확인해 주세요" 경고 오발동 근본수정 — hasSeededBulk가 itemsState[0]을 무조건 시딩소스로 삼던 결함 | src/routes/cart/+page.svelte | 라이브 재현+수정+재검증
+  경위: Stephen이 "완전 입력해도 경고 토스트가 여전히 뜬다"고 재신고 — 이전 세션 분석에서
+  이미 "일부 상품만 날짜설정 시 datesSet 미충족" 문제로 진단하고, 신규 아이템 생성 시점에
+  bulkDate*를 역으로 채워주는 1차 수정(sync effect 내 backfill)을 시도했으나, 실제 Svelte
+  effect 실행순서(hasSeededBulk 이펙트가 itemsState 채워지기 전 1회 공회전 → sync 이펙트가
+  먼저 새 아이템을 빈 값으로 생성 → 그 다음에야 hasSeededBulk가 seed값을 채움)상 그 시점에
+  bulkDate가 아직 비어있어 무효했다 — console.log 임시계측으로 라이브 재현해 이 레이스를
+  직접 확인 후 폐기.
+
+  진짜 원인: hasSeededBulk 이펙트가 "itemsState[0](=first)"를 무조건 통합설정 시딩
+  소스로 삼는데, 서버가 내려주는 cartLineGroups는 최신순(생성일 내림차순)이라 "방금
+  추가한(날짜 미설정) 상품"이 "이미 날짜를 다 채운 예전 상품"보다 배열 앞쪽에 온다 —
+  그 결과 hasSeededBulk가 빈 상품에서 시딩해 통합설정 패널 자체가 빈 채로 열리고,
+  다른(날짜 있는) 상품과 무관하게 새로 추가된 빈 상품 하나 때문에 datesSet이 계속
+  미충족으로 남았다.
+
+  수정: (1) itemsState 중 rentalDate가 이미 채워진 항목을 우선 시딩 소스로 선택(없으면
+  기존처럼 first) (2) 시딩 소스에 날짜가 있는 경우, 날짜가 전혀 없는 나머지 상품에도
+  그 값을 채워준다 — "이미 값이 있는 상품을 덮어쓰지 않는다"는 2026-09-02 결정과
+  충돌하지 않음(대상은 값이 아예 없는 상품만).
+
+  라이브 검증(로컬 5176): SQL로 2개 draft 예약 준비(오래된 것=날짜 있음, 새로 추가한
+  것=날짜 없음, 실제로 새 것이 배열 앞쪽에 옴을 console.log로 확인) → 수정 전 재현
+  (bulkDate가 빈 값으로 시딩됨 직접 확인) → 수정 적용 → 재로드 → 대여방법/수령일/
+  반납일 전부 정상 표시 확인 → price-section-sentinel까지 스크롤(왕복 2회) → 경고
+  토스트 0건 확인. svelte-check 신규 에러 0건, cart vitest 123/123 통과(회귀 없음).
+  디버그 console.log 전부 원복 확인(grep 0건).
+
 [2026-09-07] 🔴CRITICAL | /payment/success/dev GNB !important leak 근본수정 — 위 "element-picker 연쇄 수정" 항목 ⑥⑦ 후속, sp3-qa-agent 검수로 발견 | src/routes/+layout.svelte, src/routes/payment/success/dev/+page.svelte | 라이브 재현+수정 확인
   ⚠️ 재분류: 이 라우트는 "dev 전용 미리보기"가 아니라 cart/+page.svelte의 실제 체크아웃
   제출 완료 시 goto('/payment/success/dev?...')로 도달하는 **실사용자 프로덕션 화면**임
@@ -80,6 +268,7 @@
 [2026-09-06(후속13)] 🟡BOUNDARY | Stephen 반려로 배경 var(--cs-surface-gray)→var(--cs-text-dark), 폰트색 var(--cs-text-dark)→var(--cs-white) 원복 + 폰트 script-12→script-14B/body-14(한 단계 더 확대) — 요청 없는 색상변경(GATE 0 위반) 교훈 기록 | src/routes/products/[id]/+page.svelte | ✅ Claude Browser 실측 원복값 확인, svelte-check 신규 에러 0건
 [2026-09-06(후속14)] 🟡BOUNDARY | 아코디언 토글 대상을 .options-header 전체→.options-more-btn(배지)로 이관 + 쉐브론 svg·CSS 완전 삭제 + 배지 1.5배 확대(모바일 20→30px, PC 30→45px, PC는 결과적으로 44px 터치타겟 충족) | src/routes/products/[id]/+page.svelte | GATE E 통과(비차단 권고 2건: 모바일 30px 터치타겟 미달·aria-label 부재, 둘 다 신규 회귀 아님)
 [2026-09-06(후속15)] 🟡BOUNDARY | 배지 배경 var(--cs-text-dark)→var(--cs-text-mid)(#666666, 한 단계 더 옅은 그레이) — 후속12에서 반려된 --cs-surface-gray 재시도 아닌 절제된 조정, 화이트 폰트 대비 5.7:1 유지 | src/routes/products/[id]/+page.svelte | GATE E 통과(비차단 권고 없음, 요청 외 속성 변경 없음 확인)
+[2026-09-06(후속16)] 🔴CRITICAL(데이터정리, 코드변경없음) | 옵션상품 수량 + 비활성 원인 진단 — 코드버그 아님, Stage DB에 방치된 2026-07-27~28 테스트예약 7건(status='confirmed', 날짜 다 지남)이 get_available_stock_counts의 "날짜무관 비종결상태 점유" 설계(2026-09-02 확정)에 의해 유일 재고를 영구점유. Stephen 확인 후 update_reservation_status RPC로 7건 cancelled 처리 | (코드변경 없음, Stage DB 데이터 정리) | ✅ available_count 0→1 회복, Claude Browser 실클릭으로 수량증가 정상동작 확인
 
 [2026-09-06 00:09] 🔴TDD  | hold 재발행 Work 3c — cart/+page.svelte hold 변경감지+재발행루프 삽입 | src/routes/cart/+page.svelte | 세션 연속 | 🔴RED(Migration 448 Stage 미적용) — 기존 52 tests 회귀없음(cartLineGrouping·cartRentalFee passed)
 [2026-09-06 00:18] 🔴TDD  | hold 재발행 TDD GREEN+REFACTOR — Migration 448 Stage 적용 완료 후 EC-1/EC-2/EC-3 3/3 GREEN, 테스트 중복 INSERT 누락 정리(REFACTOR), svelte-check 신규 에러 0건, 기존 cart 52건 회귀없음 | src/__tests__/services/checkoutReissueReservation.test.ts | 9분 | GATE C:승인
