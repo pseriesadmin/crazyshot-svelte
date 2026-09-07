@@ -9,6 +9,7 @@ import { recordAuditLog } from '$lib/contract-signature/auditLog'
 import { checkIssuerSignatureRequired } from '$lib/contract-signature/issuerSignatureCheck'
 import { sendPushToUser } from '$lib/server/push'
 import { isContractIssueBlocked } from '$lib/utils/contractIssueGuard'
+import { findUnresolvedVariables } from '$lib/utils/contract-substitution'
 
 export const POST: RequestHandler = async ({ params, locals, url }) => {
   const cmsRole = await getCmsRoleForAction(locals)
@@ -23,12 +24,27 @@ export const POST: RequestHandler = async ({ params, locals, url }) => {
   // 계약서 조회 → user_id 확인
   const { data: contract, error: contractErr } = await admin
     .from('contracts')
-    .select('id, user_id, reservation_id')
+    .select('id, user_id, reservation_id, content_blocks, spreadsheet_document, html_document')
     .eq('id', contractId)
     .maybeSingle()
 
   if (contractErr || !contract) {
     return json({ error: '계약서를 찾을 수 없습니다.' }, { status: 404 })
+  }
+
+  // CS2654 보완(CMS 전역 정밀검증 v6, 2026-09-07): 발송 직전 저장된 콘텐츠에 치환되지
+  // 못한 {{변수명}} 원문이 남아있으면 발송을 막는다. html 모드는 치환 실패 시 빈 문자열로
+  // 지워지는 사양(§HT-6)이라 이 스캔으로는 잡히지 않음 — html 모드 사전검증은 클라이언트
+  // 측(ContractTemplatePreviewModal) findHtmlUnresolvedVariables()가 별도로 담당한다.
+  const unresolvedVars = [
+    ...findUnresolvedVariables(contract.content_blocks),
+    ...findUnresolvedVariables(contract.spreadsheet_document),
+  ]
+  if (unresolvedVars.length > 0) {
+    return json(
+      { error: `계약서에 아직 채워지지 않은 항목이 있어 발송할 수 없습니다: ${unresolvedVars.join(', ')}` },
+      { status: 422 },
+    )
   }
 
   // 취소·만료된 예약은 발송 차단

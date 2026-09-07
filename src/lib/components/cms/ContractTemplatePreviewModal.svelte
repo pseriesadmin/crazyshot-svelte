@@ -1,6 +1,6 @@
 <script lang="ts">
   import { csToast } from '$lib/utils/toast'
-  import { substituteVariables, substituteSpreadsheetDocument, substituteHtmlDocument, type AnyContentBlock } from '$lib/utils/contract-substitution'
+  import { substituteVariables, substituteSpreadsheetDocument, substituteHtmlDocument, findHtmlUnresolvedVariables, type AnyContentBlock } from '$lib/utils/contract-substitution'
   import { applyContractTemplate } from '$lib/utils/contract-apply-template'
   import { hasExistingContractContent } from '$lib/utils/contract-content-mode'
   import { isTiptapDocBlock, isSpreadsheetDocument, isHtmlDocument } from '$lib/types/contract-document'
@@ -297,6 +297,22 @@
     if (contentMode === 'existing' && !contractId) {
       csToast.error('계약서 정보를 찾을 수 없습니다.')
       return
+    }
+
+    // CS2654 보완(CMS 전역 정밀검증 v6, 2026-09-07) — html 모드는 치환 실패 시 빈 문자열로
+    // 조용히 지워지는 사양(§HT-6)이라 저장 이후에는 서버(send-chat)가 잔존 변수를 스캔해도
+    // 잡히지 않는다. 저장 전(원본 템플릿 + subData) 시점에만 검증 가능하므로 여기서 먼저 막는다.
+    if (
+      contentMode === 'template' &&
+      selectedTemplate?.authoring_mode === 'html' &&
+      subData &&
+      isHtmlDocument(selectedTemplate.html_document)
+    ) {
+      const missing = findHtmlUnresolvedVariables(selectedTemplate.html_document as string, subData)
+      if (missing.length > 0) {
+        csToast.error(`계약서에 아직 채워지지 않은 항목이 있어 발송할 수 없습니다: ${missing.join(', ')}`)
+        return
+      }
     }
 
     sending = true
