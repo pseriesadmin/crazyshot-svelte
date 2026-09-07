@@ -90,7 +90,8 @@ PRD.1.7 — 대화형 렌탈예약 어시스턴트 시스템 V1.0
   관리자 메시지 (텍스트·첨부) + pending → open
   관리자 메시지 + open                  → open (유지)
 
-  3시간 비활성 (auto_pending_inactive_sessions RPC) → pending  ← pending 재진입 유일 경로
+  3시간 비활성 (auto_pending_inactive_sessions RPC) → pending  ← 자동 재진입 경로
+  관리자 수동 "대기 전환" 버튼 (POST /api/chat/sessions/[id]/pending, §17-1, 2026-08-12 추가) → pending  ← 수동 재진입 경로
   관리자 닫기 버튼                                  → closed
 
 신규 세션 생성 조건 (유일):
@@ -401,7 +402,7 @@ is_expired: false (초기) → 만료 시 true (버튼 비활성화)
 
 탭 구조:
   진행중 (open)  → 현재 대화 중, 닫기 버튼 있음
-  대기   (pending) → 1시간 비활성 자동 이동 (auto_pending_inactive_sessions)
+  대기   (pending) → 3시간 비활성 자동 이동 (auto_pending_inactive_sessions) 또는 관리자 수동 "대기 전환" 버튼(§17-1)
   종료   (closed)  → 관리자 닫기 또는 게스트 기록삭제 후 보존
 
 기능:
@@ -816,7 +817,11 @@ GATE C 확인 항목:
 
 ---
 
-*chat.md | PRD.1.7 채팅 시스템 도메인 정본 | Harness Flow v3.2*
+*chat.md | PRD.1.7 채팅 시스템 도메인 정본 | Harness Flow v3.2 | 2026-09-06 문서 내부 드리프트
+정정 — 93행("pending 재진입 유일 경로")·404행("1시간 비활성 자동 이동")이 §17-1(2026-08-12
+추가된 관리자 수동 "대기 전환" 버튼)·418행(실제 3시간) 둘 다와 모순되던 것을 CMS 전역
+정밀검증 v6에서 발견해 정정. auto_pending_inactive_sessions RPC(3시간)와 관리자 수동
+버튼(§17-1) 두 재진입 경로를 명시적으로 병기하는 것으로 통일.*
 *참조: CLAUDE.md → 에이전트 호출 규칙 | core-rules.md → 스택 규칙*
 *계획 파일: crazyshot-re_v1.56-plannode-tree.json (PRD.1.7 노드)*
 *2026-08-13 Phase 2~3 CRITICAL 6기능 도메인 정본 추가 (§17, M1-M3/L1-L3 QA Fix)*

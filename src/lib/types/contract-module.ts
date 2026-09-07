@@ -83,4 +83,23 @@ export interface ContractSubstitutionData {
    */
   수령일자?: string
   반납일자?: string
+  // ── 신규: CMS 전역 정밀검증 v6 CRITICAL #5(CS2654) C2 — 대응데이터 없던 6개 항목 (2026-09-07) ──
+  /** contracts.created_at(이 예약의 최신 계약 발행 시각) — "YYYY.MM.DD" 형식 */
+  계약서발행일?: string
+  /**
+   * rental_reservations.pickup_point_id → pickup_points.name 우선, 없으면
+   * return_point_id → pickup_points.name. 둘 다 없으면 '-'. (Stephen 확정: "새로 연결
+   * 필요" — 어느 지점(수령/반납)을 우선할지는 명시 지정이 없어 수령 지점을 1순위로 함)
+   */
+  지점옵션?: string
+  /** 기본대여요금과 완전히 동일한 값(Stephen 확인) — 할인 반영 전 정상가 alias */
+  '총 정상 대여가'?: string
+  /** 수령일시~반납일시 실제 시간차(총 시간). 배송형 수령/반납(is_delivery_type)이면
+   *  pickup_time/return_time이 실제 고객 선택 시각이 아니므로(§상단 주석) '-' 처리 */
+  총사용시간?: string
+  /** 할인차감과 완전히 동일한 값(Stephen 확인) — alias */
+  할인반영금액?: string
+  // 이용기간금액: Stephen 확정(2026-09-07) — "나중에 사용할 수도 있는 항목으로 남겨놓아도
+  // 문제 없을 경우 '추후 재사용 예정' 주석 기록" — 현재 미구현, 코드 추가 없음(의도적 보류).
+  // 기본대여요금과 개념이 겹칠 가능성이 있어 별도 계산 없이 보류 상태 유지.
 }

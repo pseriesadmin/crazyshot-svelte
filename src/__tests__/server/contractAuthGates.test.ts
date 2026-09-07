@@ -584,3 +584,90 @@ describe('[신규] 취소·만료·파손신고 예약 — 계약서 발행/발�
     expect(res.status).not.toBe(422);
   });
 });
+
+// ── 신규: 잔존/치환불가 변수 발송 차단 (CS2654 보완, CMS 전역 정밀검증 v6, 2026-09-07) ──
+//
+// Production 계약서식이 {{}} 원문이 남은 채 발송돼 이미 서명완료된 계약서 3건에까지
+// 영향을 준 결함(CS2654) 재발 방지 — 발송 직전 저장된 콘텐츠에 잔존 {{변수명}}이 있으면
+// 422로 차단한다(Stephen GATE B Q7 승인).
+
+describe('[CS2654 보완] send-chat — 잔존 변수 발송 차단', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    nextMaybeSingleResult = null;
+    nextMaybeSingleByTable = {};
+    mockGetCmsRoleForAction.mockResolvedValue('manager');
+  });
+
+  it('RED → GREEN: spreadsheet_document에 잔존 {{}}이 있으면 422', async () => {
+    nextMaybeSingleByTable = {
+      contracts: {
+        data: {
+          id: 'contract-id-1',
+          user_id: 'user-1',
+          reservation_id: 42,
+          authoring_mode: 'spreadsheet',
+          spreadsheet_document: { sheets: [{ cells: [{ text: '{{계약서발행일}}' }] }] },
+        },
+        error: null,
+      },
+      rental_reservations: { data: { status: 'confirmed' }, error: null },
+    };
+    const event = {
+      params: { id: 'contract-id-1' },
+      locals: makeLocals('manager'),
+      url: new URL('http://localhost/api/cms/contracts/contract-id-1/send-chat'),
+      request: makeRequest(),
+    };
+    const res = await (sendChatPost as (e: unknown) => Promise<unknown>)(event) as { status: number };
+    expect(res.status).toBe(422);
+  });
+
+  it('RED → GREEN: content_blocks(flow 모드)에 잔존 {{}}이 있으면 422', async () => {
+    nextMaybeSingleByTable = {
+      contracts: {
+        data: {
+          id: 'contract-id-1',
+          user_id: 'user-1',
+          reservation_id: 42,
+          authoring_mode: 'flow',
+          content_blocks: [{ type: 'text', html: '<p>{{할인반영금액}}</p>' }],
+        },
+        error: null,
+      },
+      rental_reservations: { data: { status: 'confirmed' }, error: null },
+    };
+    const event = {
+      params: { id: 'contract-id-1' },
+      locals: makeLocals('manager'),
+      url: new URL('http://localhost/api/cms/contracts/contract-id-1/send-chat'),
+      request: makeRequest(),
+    };
+    const res = await (sendChatPost as (e: unknown) => Promise<unknown>)(event) as { status: number };
+    expect(res.status).toBe(422);
+  });
+
+  it('GREEN: 잔존 변수가 없으면 정상 발송(422 아님)', async () => {
+    nextMaybeSingleByTable = {
+      contracts: {
+        data: {
+          id: 'contract-id-1',
+          user_id: 'user-1',
+          reservation_id: 42,
+          authoring_mode: 'spreadsheet',
+          spreadsheet_document: { sheets: [{ cells: [{ text: '김철수' }] }] },
+        },
+        error: null,
+      },
+      rental_reservations: { data: { status: 'confirmed' }, error: null },
+    };
+    const event = {
+      params: { id: 'contract-id-1' },
+      locals: makeLocals('manager'),
+      url: new URL('http://localhost/api/cms/contracts/contract-id-1/send-chat'),
+      request: makeRequest(),
+    };
+    const res = await (sendChatPost as (e: unknown) => Promise<unknown>)(event) as { status: number };
+    expect(res.status).not.toBe(422);
+  });
+});

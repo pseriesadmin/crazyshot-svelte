@@ -306,3 +306,48 @@ export function substituteHtmlDocument(
   // 나머지 스칼라 치환
   return applyHtmlSubstitution(withRepeat, data)
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// CS2654 보완 — 발송 전 잔존/치환불가 변수 탐지 (CMS 전역 정밀검증 v6, 2026-09-07)
+// ─────────────────────────────────────────────────────────────────────────────
+
+const RESIDUAL_VAR_RE = /\{\{([^}]+)\}\}/g
+
+/**
+ * 이미 저장된 계약서 콘텐츠(authoring_mode 무관 — content_blocks/spreadsheet_document/
+ * html_document/canvas_document 아무거나)에서 아직 {{변수명}} 원문으로 남아있는 값을
+ * 전부 찾아 중복 제거된 변수명 목록으로 반환한다. 발송 직전 최종 안전장치(send-chat).
+ *
+ * ⚠️ html 모드는 치환 실패 시 applyHtmlSubstitution이 빈 문자열로 조용히 삭제하므로
+ * (§HT-6, 의도된 사양) 저장 이후 시점에서는 이 스캔으로 잡히지 않는다 — html 모드의
+ * 사전 검증은 findHtmlUnresolvedVariables()(치환 전 원본 템플릿 대상)를 별도로 쓴다.
+ */
+export function findUnresolvedVariables(content: unknown): string[] {
+  if (content == null) return []
+  const text = typeof content === 'string' ? content : JSON.stringify(content)
+  const found = new Set<string>()
+  for (const match of text.matchAll(RESIDUAL_VAR_RE)) {
+    found.add(match[1].trim())
+  }
+  return [...found]
+}
+
+/**
+ * HTML형 원본 템플릿(치환 전)을 대상으로, ContractSubstitutionData에 값이 없어(스칼라
+ * string이 아니어서) applyHtmlSubstitution이 빈 문자열로 지워버릴 변수명을 미리 찾아
+ * 중복 제거된 목록으로 반환한다. 저장/발송 전에 호출해 발송을 막는 용도(클라이언트 측
+ * 사전 검증) — substituteHtmlDocument 자체의 반환 시그니처는 기존 호출부·테스트(HT-1~7)
+ * 보호를 위해 변경하지 않는다.
+ */
+export function findHtmlUnresolvedVariables(
+  html: string,
+  data: ContractSubstitutionData,
+): string[] {
+  const found = new Set<string>()
+  for (const match of html.matchAll(RESIDUAL_VAR_RE)) {
+    const key = match[1].trim()
+    if (key === 'NO.' || key === 'NO') continue // 반복영역 순번은 항상 치환됨
+    if (typeof data[key as keyof ContractSubstitutionData] !== 'string') found.add(key)
+  }
+  return [...found]
+}
