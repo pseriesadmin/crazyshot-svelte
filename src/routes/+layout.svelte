@@ -60,7 +60,7 @@
 {/if}
 
 <div class="min-h-screen flex flex-col">
-	{#if !page.url.pathname.startsWith('/cms') && !page.url.pathname.startsWith('/products/') && !page.url.pathname.startsWith('/cart') && !page.url.pathname.startsWith('/account') && !page.url.pathname.startsWith('/contract') && !page.url.pathname.startsWith('/auth')}
+	{#if !page.url.pathname.startsWith('/cms') && !page.url.pathname.startsWith('/products/') && !page.url.pathname.startsWith('/cart') && !page.url.pathname.startsWith('/account') && !page.url.pathname.startsWith('/contract') && !page.url.pathname.startsWith('/auth') && !page.url.pathname.startsWith('/payment')}
 		<GNB pathname={page.url.pathname} />
 	{/if}
 

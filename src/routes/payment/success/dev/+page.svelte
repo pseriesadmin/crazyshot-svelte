@@ -221,15 +221,12 @@
        불필요한 공백이었음(2026-09-06 지적) */
     padding: 16px 25px 0;
   }
-  /* 이 화면은 root +layout.svelte의 GNB 제외 경로 목록에 없어 전역 GNB(GNB.svelte)가
-     이 페이지 자체 헤더(.gnb-wrap) 위에 함께 뜬다. 모바일 반응형에서만 전역 GNB의
-     모바일 nav를 숨김(2026-09-06 지적) — PC는 그대로 유지, 전역 컴포넌트는 미수정 */
-  @media (max-width: 767px) {
-    /* GNB.svelte 자체 scoped 규칙(.gnb-mobile-wrap.svelte-xxxxx)이 명시도가 더 높아
-       일반 :global() 단일클래스로는 안 이겨서 !important 필요 — 이 화면 전용의 의도된
-       예외적 오버라이드(전역 컴포넌트 자체는 미수정) */
-    :global(.gnb-mobile-wrap) { display: none !important; }
-  }
+  /* 2026-09-07 — 전역 GNB(GNB.svelte)를 CSS !important로 숨기는 대신, root
+     +layout.svelte의 GNB 제외 경로 목록에 '/payment'를 추가해 이 화면에서 애초에
+     전역 GNB가 렌더링되지 않도록 구조적으로 해결(:global() !important 오버라이드는
+     +page.svelte 언마운트 후에도 컴파일된 CSS 청크가 SPA 네비게이션 중 제거되지 않아,
+     이 화면을 거친 뒤 다른 GNB 노출 화면으로 이동해도 GNB가 계속 숨겨진 채로 남는
+     실제 회귀 버그로 이어졌음 — 라이브 검증으로 확인·근본 수정). */
   .gnb-pill {
     display: flex;
     align-items: center;
@@ -519,13 +516,6 @@
   /* PC 반응형 */
   @media (min-width: 768px) {
     .page-root { padding-top: 28px; }
-    /* 이 화면은 전역 메인 GNB가 아니라 화면 자체의 서브GNB 알약(.gnb-wrap)만 노출돼야
-       정상(2026-09-06 지적) — 과거엔 PC에서 .gnb-wrap을 숨기고 전역 GNB(GNB.svelte)의
-       데스크톱 nav가 그 자리를 대신 채우고 있었음. GNB.svelte 자체 scoped 규칙
-       (.gnb-desktop-wrap.svelte-xxxxx)이 일반 :global() 단일클래스보다 명시도가 높아
-       !important 필요 — 모바일 쪽과 동일한 예외적 오버라이드 패턴(전역 컴포넌트 자체는
-       미수정), 같은 768px 분기점에서 뒤집는다. */
-    :global(.gnb-desktop-wrap) { display: none !important; }
     .title-bar {
       max-width: 900px;
       margin-left: auto;

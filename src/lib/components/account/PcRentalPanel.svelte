@@ -249,19 +249,18 @@
       </div>
     {:else}
       <div class="cancel-modal" role="alertdialog" aria-modal="true" aria-label="예약신청취소 불가 안내">
-        <div class="cancel-modal-top">
-          <div class="cancel-modal-icon" aria-hidden="true">🔒</div>
+        <div class="cancel-modal-closerow">
+          <button type="button" class="cancel-modal-close" onclick={dismissCancel} aria-label="닫기">✕</button>
+        </div>
+        <div class="cancel-modal-top cancel-modal-top--info">
           <p class="cancel-modal-title">예약신청 취소가 어렵습니다</p>
           <p class="cancel-modal-sub">
             {cancelErrorMsg ?? '방문 수령 예정 건은 수령 6시간 전부터 취소가 제한됩니다.'}
             <br>채팅으로 문의해주세요.
           </p>
         </div>
-        <div class="cancel-modal-bottom">
-          <div class="cancel-modal-actions">
-            <button type="button" class="cancel-modal-btn outline" onclick={dismissCancel}>닫기</button>
-            <button type="button" class="cancel-modal-btn purple" onclick={goToCancelChat}>채팅 문의하기</button>
-          </div>
+        <div class="cancel-modal-bottom cancel-modal-bottom--info">
+          <button type="button" class="cancel-modal-chatbtn" onclick={goToCancelChat}>채팅 문의하기</button>
         </div>
       </div>
     {/if}
@@ -468,15 +467,25 @@
     left: 50%;
     transform: translate(-50%, -50%);
     width: clamp(340px, calc(100% - 40px), 605px);
+    /* Figma "popup-modal_basic"(node 594:3103) 기준 — 바깥 셸에 10px 패딩을 둬 하단 섹션이
+       그 안에서 별도로 라운드 처리되며 살짝 인셋된 "프레임" 형태로 보이도록 함 */
+    background: var(--cs-purple-dark, #1d183e);
+    padding: 10px;
     border-radius: var(--radius-2xl);
     overflow: hidden;
     z-index: 301;
     display: flex;
     flex-direction: column;
   }
+  .cancel-modal-closerow {
+    display: flex;
+    justify-content: flex-end;
+    padding: 2px 10px 0;
+  }
   .cancel-modal-top {
     background: var(--cs-purple-dark, #1d183e);
     padding: 32px 28px 28px;
+    border-radius: 40px 40px 0 0;
     display: flex;
     flex-direction: column;
     align-items: center;
@@ -484,12 +493,11 @@
   }
   .cancel-modal-icon { font-size: 36px; line-height: 1; }
   .cancel-modal-title {
-    font-family: 'Noto Sans KR', sans-serif;
-    font-size: 18px;
-    font-weight: 700;
+    font: var(--text-pc-menu-kr-20);
     color: #fff;
     margin: 0;
     text-align: center;
+    word-break: keep-all;
   }
   .cancel-modal-sub {
     font-family: 'Noto Sans KR', sans-serif;
@@ -498,10 +506,12 @@
     margin: 0;
     text-align: center;
     line-height: 1.6;
+    word-break: keep-all;
   }
   .cancel-modal-bottom {
     background: var(--cs-dark, #100B32);
     padding: 20px 28px 28px;
+    border-radius: 0 0 40px 40px;
     display: flex;
     flex-direction: column;
     gap: 14px;
@@ -538,11 +548,40 @@
     color: #fff;
   }
   .cancel-modal-btn.red:hover:not(:disabled) { background: var(--cs-red, #CF0000); }
-  .cancel-modal-btn.purple {
-    background: var(--cs-purple, #3B2F8A);
-    color: #fff;
+  /* Figma "popup-modal_basic"(node 594:3103) 기준 — X는 안내문 섹션 위 별도 행에 배치되는
+     44px 터치타겟의 투명 아이콘버튼(원형 hover bg 없음). absolute 오버랩 대신 실제 레이아웃
+     흐름에 놓아 라운드 코너 클리핑·겹침 문제 없이 배치 */
+  .cancel-modal-close {
+    width: 44px;
+    height: 44px;
+    min-width: 44px;
+    min-height: 44px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: transparent;
+    border: none;
+    color: rgba(255, 255, 255, 0.72);
+    font-size: 16px;
+    line-height: 1;
+    cursor: pointer;
+    transition: color 0.15s;
   }
-  .cancel-modal-btn.purple:hover:not(:disabled) { background: #2d2470; }
+  .cancel-modal-close:hover { color: #fff; }
+  /* Figma 기준 안내문/하단 섹션 상하 여백(40px/20px, 40px/15px) */
+  .cancel-modal-top--info { padding: 20px 40px; }
+  .cancel-modal-bottom--info { padding: 15px 40px; }
+  .cancel-modal-chatbtn {
+    align-self: center;
+    padding: 4px;
+    border: none;
+    background: none;
+    color: rgba(255, 255, 255, 0.80);
+    font: var(--text-pc-title-16);
+    cursor: pointer;
+    transition: color 0.15s;
+  }
+  .cancel-modal-chatbtn:hover { color: #fff; }
 
   /* 전자계약 확인/서명하기 버튼 — account/rental/+page.svelte(모바일)와 동일 스펙 */
   .contract-btn {
