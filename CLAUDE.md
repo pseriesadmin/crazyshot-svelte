@@ -196,6 +196,8 @@ Class D (보안 위반) → 즉시 중단
 | 대여 라이프사이클 버튼·스텝퍼 | `@.claude/rules/rental-lifecycle.md` | RentalDetailPanel·RentalJourneyStepper 작업 시 |
 | 전자계약·서명 (CMS 발송 + 고객 서명) | `@.claude/rules-ref/contract.md` | 계약서·전자서명·contract_signings·서명 딥링크 작업 시 |
 | 결제·웹훅 (M3) | `@.claude/rules-ref/payment.md` | 결제 승인·환불·웹훅 작업 시 |
+| 대여요금 산정(장바구니+CMS) | `@.claude/rules-ref/rental-fee-policy.md` | 대여요금·12h블록 산식·1day 강제청구·is_bulk_delivery/is_delivery_type 배송판정 작업 시 |
+| CMS 대여관리 설정 ↔ 장바구니 연동 | `@.claude/rules-ref/rental-cms-settings.md` | `/cms/set/rental` 설정 화면 또는 장바구니 대여옵션(수령/반납 방식·배송료·휴무일·동의문 등) 로직 작업 시 |
 | 채팅 시스템 (PRD.1.7) | `@.claude/rules-ref/chat.md` | 채팅·세션·Realtime 작업 시 |
 | 자연어검색엔진 (NLSearch) | `@.claude/rules-ref/nlsearch.md` | NLSearch·자연어검색·상품검색 매칭·상담매칭·동의어학습 작업 시 |
 | CMS 화면 퍼블리싱 | `@.claude/rules-ref/cms-uiux.md` | CMS 컴포넌트·레이아웃 작업 시 |

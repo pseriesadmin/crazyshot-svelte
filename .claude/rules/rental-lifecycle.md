@@ -264,14 +264,17 @@ cancelled / damage_claimed → 취소 UI (✕ 아이콘 + 빨간 텍스트)
 > 발송한다 — 위 표(app 코드 AUTO_NOTIFY 매핑)와 달리 이건 RPC 내부 루프에서 직접 호출된다
 > (service-operations.md §10 참고).
 >
-> ⚠️ **HOLD D-1 타이머 리셋 정책(2026-08-31, Migration 394)**: `release_reservation_hold()`
+> ✅ **HOLD D-1 타이머 리셋 정책(2026-08-31, Migration 394)**: `release_reservation_hold()`
 > D-1 조건이 "계약 발송됐으면 영구 제외(NOT EXISTS)"에서 **"계약 발송 시점에 타이머 리셋"**
 > (GREATEST(rr.created_at, cs.sent_at) + 30분)으로 변경됐다.
 > - 계약서 미발송 hold → created_at 기준 30분 만료 (기존과 동일)
 > - 계약서 발송된 hold → 최신 sent_at 기준으로 리셋된 30분 만료
 > - "재발송"(RentalContractViewer 재발송 버튼)할 때마다 sent_at이 갱신돼 타이머가 다시 리셋됨
 > - D-3(payment_confirmed_at IS NOT NULL, 결제완료 예외)는 변경 없이 그대로 유지
-> Stage DB(ezyvffjvuwmtuhpxdjrw) 적용 대기 중(2026-08-31 기준).
+> Stage(ezyvffjvuwmtuhpxdjrw)·Production(vnbpmvxruyciuuaermyh) 양쪽 다 적용 완료
+> (2026-09-06 재확인 — `release_reservation_hold()` 함수 정의에 `GREATEST(...,sent_at)`
+> 존재 직접 조회로 확인. 과거 "Stage 적용 대기 중" 문구는 이후 세션에서 Production까지
+> 적용 완료된 뒤 갱신되지 않고 남아있던 스테일 서술이었음).
 >
 > `locker_guide`(무인보관함 1시간 전 안내, 2026-08-20 신설)도 위 표와 마찬가지로 상태 전이가
 > 아니라 **Vercel Cron**(`/api/cron/locker-guide`, 10분 간격)이 `claim_reservations_due_for_
@@ -333,8 +336,10 @@ cancelled / damage_claimed → 취소 UI (✕ 아이콘 + 빨간 텍스트)
 ```
 2026-07-27 변경: 세션이 대기/종료 상태였다면 새 메시지(고객 발신이든 관리자 발신이든)가 도착하는
   즉시 AI 의도분류 결과와 무관하게 무조건 진행중(open)으로 전환된다(src/routes/api/chat/message/+server.ts).
-  대기(pending) 상태는 이제 오직 auto_pending_inactive_sessions RPC(1시간 무응답 자동전환)로만
-  재진입한다 — AI가 CS_ESCALATE로 분류해도 더 이상 즉시 대기로 강등되지 않는다.
+  대기(pending) 상태로의 재진입 경로는 두 가지다 — ① auto_pending_inactive_sessions RPC(3시간
+  무응답 자동전환), ② 관리자의 수동 "대기 전환" 버튼(POST /api/chat/sessions/[id]/pending,
+  2026-08-12 GATE B 승인 완료, chat.md §17-1 정본). AI가 CS_ESCALATE로 분류해도 더 이상
+  즉시 대기로 강등되지 않는다.
 
 긴급 배지: 관리자 응답이 아직 없는 상태에서 마지막 고객 메시지가 CS_ESCALATE로 분류된 세션은
   상담세션 목록 카드 제목 우측에 "긴급" 배지로 표시된다(/api/chat/sessions 응답의 is_urgent 필드,
@@ -466,8 +471,14 @@ CTA 새 창 열기 수정          : src/lib/components/chat/ActionCard.svelte (
 
 ---
 
-*rental-lifecycle.md v1.5 | Harness Flow v3.2 | 2026-07-27 채팅 알림 자동/수동 매핑 분리 + 대기 재진입 조건 문서화 |
+*rental-lifecycle.md v1.6 | Harness Flow v3.2 | 2026-07-27 채팅 알림 자동/수동 매핑 분리 + 대기 재진입 조건 문서화 |
 2026-07-28 전자계약 발송·서명 상세 내용을 contract.md로 이관(중복 제거) | 2026-08-19 AUTO_NOTIFY
 표에 "채팅카드≠브라우저푸시" 각주 추가(신규 알림타입 추가 시 push.ts 동기화 필요, 상세는
 service-operations.md §15 정본) + GATE C 체크리스트 1건 추가 | 2026-08-28 GATE C에 탈퇴 신청
-차단 상태범위 점검 항목 추가 (service-operations.md §16 탈퇴 기능 신설에 따른 상호참조)*
+차단 상태범위 점검 항목 추가 (service-operations.md §16 탈퇴 기능 신설에 따른 상호참조) |
+2026-09-06 HOLD D-1 타이머 리셋(Migration 394) 적용 상태 문구 정정 — "Stage 적용 대기 중"은
+스테일 서술이었고, Stage·Production 둘 다 이미 적용 완료된 것을 DB 직접 조회로 재확인. |
+2026-09-06(같은 날 후속) "상담채팅 세션 상태 — 대기 재진입 조건" 절 정정 — "오직 1시간
+자동전환으로만 재진입"이라는 서술이 실제로는 ① 3시간(migration 226)이 맞고 ② 2026-08-12
+GATE B 승인된 관리자 수동 "대기 전환" 버튼(chat.md §17-1)이라는 두 번째 재진입 경로가 이미
+존재해 "오직"이 더 이상 사실이 아니었음을 CMS 전역 정밀검증 v6에서 발견해 정정.*
