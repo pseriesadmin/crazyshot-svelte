@@ -7,13 +7,15 @@ import { getCmsRoleForAction } from '$lib/server/getCmsRoleForAction'
 import { hasSettingsAccess } from '$lib/utils/cmsPermissions'
 import { sendReservationLifecyclePush } from '$lib/server/push'
 import { sendApprovalNotifications } from '$lib/server/sendApprovalNotifications'
-import { clearIssuedContractContent, discardSentContract } from '$lib/server/clearIssuedContractHelper'
+import { clearIssuedContractContent, discardSentContract, cancelIssuedContract } from '$lib/server/clearIssuedContractHelper'
+import { recordAuditLog } from '$lib/contract-signature/auditLog'
 import { resolveApprovalNotifyPlan } from '$lib/server/reservationApprovalNotify'
 import { createDelivery, cancelDelivery, registerReturn, DheroApiError, DHERO_STATUS_LABEL } from '$lib/server/dhero'
 import { escapeLikePattern } from '$lib/server/escapeLikePattern'
 import { isBulkDeliveryMethod } from '$lib/server/isBulkDeliveryMethod'
 import { getReservationForDhero } from '$lib/server/getReservationForDhero'
 import { awardRentalCompletePoints } from '$lib/server/awardRentalCompletePoints'
+import { attachRentalDaysLabel } from '$lib/server/rentalDaysLabel'
 
 export interface RentalListRow {
   reservation_id:    number
@@ -22,6 +24,9 @@ export interface RentalListRow {
   rental_start:      string
   rental_end:        string
   rental_days:       number | null
+  /** "대여일수" 표시 라벨(예: "12시간"·"1일"·"1일 12시간") — attachRentalDaysLabel()가 채움.
+      rental_days(GENERATED, end_date-start_date 단순 캘린더 일수차) 대신 이 필드를 화면에 쓸 것 */
+  rental_days_label?: string
   duration_type:     string | null
   pickup_method:     string | null
   return_method:     string | null
@@ -104,6 +109,7 @@ export const load: PageServerLoad = async ({ parent, url }) => {
   if (error) console.error('[cms/reservation] get_rental_list error:', error.message)
 
   const rentals: RentalListRow[] = rows ?? []
+  await attachRentalDaysLabel(admin, rentals)
   const totalCount = rentals[0]?.total_count ?? 0
   const totalPages = Math.max(1, Math.ceil(totalCount / 30))
 
@@ -331,6 +337,33 @@ export const actions: Actions = {
 
     const result = await discardSentContract(contractId, admin)
     if (!result.ok) return fail(result.httpStatus, { error: result.error })
+    return { ok: true }
+  },
+
+  // 전자계약 발행 취소 — 고객 서명 완료건 포함 (2026-09-07 Stephen 확정)
+  // manager 이상 전용 — discardSentContract와 동일 권한 기준(security-auth.md 접근 매트릭스 참조)
+  cancelIssuedContract: async ({ request, locals }) => {
+    const { session } = await locals.safeGetSession()
+    if (!session) return fail(401, { error: '인증 필요' })
+    const cmsRole = await getCmsRoleForAction(locals)
+    if (!cmsRole || !hasSettingsAccess(cmsRole)) return fail(403, { error: '권한 없음' })
+
+    const admin      = createClient(PUBLIC_SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
+    const data       = await request.formData()
+    const contractId = data.get('id') as string
+    if (!contractId) return fail(400, { error: '계약서 ID가 없습니다.' })
+
+    const result = await cancelIssuedContract(contractId, admin)
+    if (!result.ok) return fail(result.httpStatus, { error: result.error })
+
+    await recordAuditLog(admin as Parameters<typeof recordAuditLog>[0], {
+      contractId,
+      eventType: 'cancelled',
+      actorType: 'admin',
+      actorId: session.user.id,
+      ipAddress: null,
+    })
+
     return { ok: true }
   },
 }

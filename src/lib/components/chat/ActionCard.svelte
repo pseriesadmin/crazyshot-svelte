@@ -127,6 +127,55 @@
     return () => { cancelled = true }
   })
 
+  // HOLD 정책 전면 개편(2026-09-07, Stephen 확정) — "예약신청완료"(reservation_hold) 카드는
+  // 발송 시점엔 만료 여부를 알 수 없다(전자계약 발송 전까지 hold 자체에 타이머가 없음 —
+  // service-operations.md §10). 그래서 send_rental_chat_notification이 이 타입엔 is_expired/
+  // expires_at을 채워준 적이 없고, 대신 매 렌더 시 실제 예약 상태를 가볍게 조회해 판단한다
+  // (returnRemindBlocked와 동일 패턴 재사용). "기간 만료" 표시는 세 경우에만 나타나야 한다:
+  // ① 전자계약 발송 후 미서명 상태로 30분 경과(status='expired'), ② 고객 본인 예약취소,
+  // ③ 관리자 예약거부 — ②③은 DB상 구분되지 않고 둘 다 status='cancelled'로 수렴한다.
+  let reservationHoldExpiredLive = $state(false)
+
+  $effect(() => {
+    if (payload.type !== 'reservation_hold' || !payload.reservation_id) {
+      reservationHoldExpiredLive = false
+      return
+    }
+    let cancelled = false
+    fetch(`/api/chat/reservation-status/${payload.reservation_id}`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((data: { status: string } | null) => {
+        if (cancelled) return
+        reservationHoldExpiredLive = data ? ['expired', 'cancelled'].includes(data.status) : false
+      })
+      .catch(() => { if (!cancelled) reservationHoldExpiredLive = false })
+    return () => { cancelled = true }
+  })
+
+  // 전자계약 발행취소 반영(2026-09-07 신규) — 관리자가 "발행 취소"(서명완료건 포함,
+  // cancel_issued_contract RPC)를 실행하면 이 두 카드 타입("전자계약서명" 요청 카드와
+  // "전자계약완료" 확인 카드)은 더 이상 유효하지 않다. reservationHoldExpiredLive와 동일한
+  // 패턴 재사용 — send_rental_chat_notification 계열과 무관하게 이 두 타입은 발송 시점에
+  // is_expired/expires_at을 채운 적이 없으므로 매 렌더 시 라이브로 재확인해야 한다.
+  let contractCancelledLive = $state(false)
+
+  $effect(() => {
+    const isContractCard = payload.type === 'contract_link' || payload.type === 'contract_signed'
+    if (!isContractCard || !payload.contract_id) {
+      contractCancelledLive = false
+      return
+    }
+    let cancelled = false
+    fetch(`/api/chat/contract-status/${payload.contract_id}`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((data: { cancelled: boolean } | null) => {
+        if (cancelled) return
+        contractCancelledLive = data?.cancelled === true
+      })
+      .catch(() => { if (!cancelled) contractCancelledLive = false })
+    return () => { cancelled = true }
+  })
+
   // 대여 라이프사이클(확정 이후) 상태 — /cms/rentals 소관. 그 외(hold/pending/cancelled 등)는
   // /cms/reservation 소관(rental-lifecycle.md — 두 화면은 상태 도메인이 배타적으로 분리됨)
   const RENTAL_LIFECYCLE_STATUSES = new Set([
@@ -247,10 +296,13 @@
     }
   }
 
-  // 만료 여부 (PAYMENT_REQUEST_CARD: expires_at 체크)
+  // 만료 여부 (PAYMENT_REQUEST_CARD: expires_at 체크 + reservation_hold/contract_link/
+  // contract_signed: 라이브 상태 체크)
   let isExpired = $derived(
     payload.is_expired === true ||
-    (payload.expires_at ? new Date(payload.expires_at) < new Date() : false)
+    (payload.expires_at ? new Date(payload.expires_at) < new Date() : false) ||
+    reservationHoldExpiredLive ||
+    contractCancelledLive
   )
 
   // pending 상태: 고객 화면에선 CTA 비활성 / 관리자 화면엔 승인·거절 버튼으로 대체

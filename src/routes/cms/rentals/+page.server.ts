@@ -7,6 +7,7 @@ import { getCmsRoleForAction } from '$lib/server/getCmsRoleForAction'
 import { hasSettingsAccess } from '$lib/utils/cmsPermissions'
 import { sendReservationLifecyclePush } from '$lib/server/push'
 import { clearIssuedContractContent } from '$lib/server/clearIssuedContractHelper'
+import { attachRentalDaysLabel } from '$lib/server/rentalDaysLabel'
 
 import type { RentalListRow } from '../reservation/+page.server'
 export type { RentalListRow }
@@ -44,6 +45,7 @@ export const load: PageServerLoad = async ({ parent, url }) => {
   if (error) console.error('[cms/rentals] get_rental_list error:', error.message)
 
   const rentals: RentalListRow[] = rows ?? []
+  await attachRentalDaysLabel(admin, rentals)
   const totalCount = rentals[0]?.total_count ?? 0
   const totalPages = Math.max(1, Math.ceil(totalCount / 30))
 

@@ -96,7 +96,7 @@
   function formatPeriod(row: RentalListRow): string {
     const start = row.rental_start?.slice(0, 10) ?? ''
     const end = row.rental_end?.slice(0, 10) ?? ''
-    const days = row.rental_days ? ` (${row.rental_days}일)` : ''
+    const days = row.rental_days_label ? ` (${row.rental_days_label})` : ''
     return `${start} ~ ${end}${days}`
   }
 

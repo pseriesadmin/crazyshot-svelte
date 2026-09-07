@@ -251,8 +251,8 @@
                 <td>
                   <span class="date-range">
                     {formatDate(row.rental_start)} ~ {formatDate(row.rental_end)}
-                    {#if row.rental_days != null}
-                      <span class="rental-days">({row.rental_days}일)</span>
+                    {#if row.rental_days_label}
+                      <span class="rental-days">({row.rental_days_label})</span>
                     {/if}
                   </span>
                 </td>

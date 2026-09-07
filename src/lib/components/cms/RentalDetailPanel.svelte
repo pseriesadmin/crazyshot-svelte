@@ -21,6 +21,10 @@
     rental_start:      string
     rental_end:        string
     rental_days:       number | null
+    /** "대여일수" 표시 라벨(예: "12시간"·"1일"·"1일 12시간") — 서버(attachRentalDaysLabel)가
+        rental-fee-policy.md §3 12시간 블록 산식으로 계산. rental_days(GENERATED, 단순 캘린더
+        일수차)는 방문 당일 12시간 이내 대여를 "0일"로 잘못 표시해 이 필드로 대체함(2026-09-07). */
+    rental_days_label?: string
     pickup_method:     string | null
     return_method:     string | null
     pickup_time:       string | null
@@ -1519,7 +1523,7 @@
         </div>
         <div class="info-row">
           <span class="info-label">대여일수</span>
-          <span class="info-value">{row.rental_days != null ? `${row.rental_days}일` : '-'}</span>
+          <span class="info-value">{row.rental_days_label ?? (row.rental_days != null ? `${row.rental_days}일` : '-')}</span>
         </div>
       </div>
 

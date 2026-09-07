@@ -13,6 +13,7 @@ import { PUBLIC_SUPABASE_URL } from '$env/static/public'
 import { json } from '@sveltejs/kit'
 import type { RequestHandler } from './$types'
 import { getCmsRoleForAction } from '$lib/server/getCmsRoleForAction'
+import { attachRentalDaysLabel } from '$lib/server/rentalDaysLabel'
 
 export const GET: RequestHandler = async ({ params, locals }) => {
   const cmsRole = await getCmsRoleForAction(locals)
@@ -36,6 +37,8 @@ export const GET: RequestHandler = async ({ params, locals }) => {
 
   const row = data?.[0] ?? null
   if (!row) return json({ error: '예약을 찾을 수 없습니다.' }, { status: 404 })
+
+  await attachRentalDaysLabel(admin, [row])
 
   return json({ row })
 }
