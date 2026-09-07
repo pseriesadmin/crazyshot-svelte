@@ -66,6 +66,7 @@
     if (selectedId != null) {
       const updated = data.rentals.find(r => r.reservation_id === selectedId)
       if (updated) selectedRow = updated
+      else closePanel()
     }
   })
 

@@ -36,6 +36,25 @@ function formatDateDot(d: string | null | undefined): string {
   return d.slice(0, 10).replace(/-/g, '.')
 }
 
+// CS2654 C2 — 총사용시간: 수령일시~반납일시 실제 시간차(총 시간 단위).
+// pickup_time/return_time은 "HH:MM"(시각만) — start_date/end_date와 결합해 전체 순간을
+// 구성한 뒤 차이를 구한다. 둘 중 하나라도 배송형(is_delivery_type)이면 그 시각 자체가
+// 실제 고객 선택값이 아니므로(위 isPickupDelivery/isReturnDelivery 판정과 동일 근거) '-'.
+function formatTotalUsageHours(
+  startDate: string | null | undefined,
+  pickupTime: string | null | undefined,
+  endDate: string | null | undefined,
+  returnTime: string | null | undefined,
+): string {
+  if (!startDate || !pickupTime || !endDate || !returnTime) return '-'
+  const start = new Date(`${startDate.slice(0, 10)}T${pickupTime}`)
+  const end = new Date(`${endDate.slice(0, 10)}T${returnTime}`)
+  if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) return '-'
+  const diffHours = Math.round((end.getTime() - start.getTime()) / (1000 * 60 * 60))
+  if (diffHours <= 0) return '-'
+  return `${diffHours}시간`
+}
+
 const COMPONENTS_TEXT_MAX = 50
 
 // products.components(key-value JSONB, ProductDetailPanel.svelte "구성품" 탭 — products.md
@@ -108,7 +127,7 @@ export const GET: RequestHandler = async ({ params, locals }) => {
   // ── 1. 기본 예약 정보 조회 (16개 스칼라 필드의 기준 reservation) ────────────
   const { data: res, error: resErr } = await admin
     .from('rental_reservations')
-    .select('reservation_code, pickup_method, return_method, pickup_time, return_time, start_date, end_date, user_id, product_id, duration_type, pickup_address_road, pickup_address_detail')
+    .select('reservation_code, pickup_method, return_method, pickup_time, return_time, start_date, end_date, user_id, product_id, duration_type, pickup_address_road, pickup_address_detail, pickup_point_id, return_point_id')
     .eq('id', reservationId)
     .maybeSingle()
 
@@ -123,8 +142,11 @@ export const GET: RequestHandler = async ({ params, locals }) => {
   // 스킵한다 — PostgREST가 빈 IN 목록을 받았을 때의 동작에 기대지 않기 위한 방어.
   const methodKeys = [res.pickup_method, res.return_method].filter((v): v is string => !!v)
 
+  // CS2654 C2 — 지점옵션(수령/반납 지점 이름) 대상 pickup_point_id 목록
+  const pointIds = [res.pickup_point_id, res.return_point_id].filter((v): v is string => !!v)
+
   // ── 2. 병렬 조회: 기본 예약의 스칼라 필드용 데이터 ────────────────────────
-  const [productRes, userRes, orderItemRes, methodOptsRes, addrRes] = await Promise.all([
+  const [productRes, userRes, orderItemRes, methodOptsRes, addrRes, pointRes, contractRes] = await Promise.all([
     admin.from('products').select('name, product_code, components').eq('id', res.product_id).maybeSingle(),
     admin.from('user_profiles').select('full_name, phone, email').eq('id', res.user_id).maybeSingle(),
     admin.from('order_items').select('order_id').eq('reservation_id', reservationId).maybeSingle(),
@@ -141,6 +163,18 @@ export const GET: RequestHandler = async ({ params, locals }) => {
       .select('road_address, detail_address')
       .eq('user_id', res.user_id)
       .eq('is_default', true)
+      .maybeSingle(),
+    // CS2654 C2 — 지점옵션
+    pointIds.length > 0
+      ? admin.from('pickup_points').select('id, name').in('id', pointIds)
+      : Promise.resolve({ data: [] as { id: string; name: string }[], error: null }),
+    // CS2654 C2 — 계약서발행일(이 예약의 최신 계약 발행 시각)
+    admin.from('contracts')
+      .select('created_at')
+      .eq('reservation_id', reservationId)
+      .is('deleted_at', null)
+      .order('created_at', { ascending: false })
+      .limit(1)
       .maybeSingle(),
   ])
 
@@ -330,6 +364,13 @@ export const GET: RequestHandler = async ({ params, locals }) => {
   const isPickupDelivery = res.pickup_method ? (deliveryTypeByMethod.get(res.pickup_method) ?? false) : false
   const isReturnDelivery = res.return_method ? (deliveryTypeByMethod.get(res.return_method) ?? false) : false
 
+  // CS2654 C2 — 지점옵션: 수령 지점 우선, 없으면 반납 지점
+  const pointNameMap = new Map((pointRes.data ?? []).map((p) => [p.id, p.name]))
+  const branchName =
+    (res.pickup_point_id ? pointNameMap.get(res.pickup_point_id) : undefined) ??
+    (res.return_point_id ? pointNameMap.get(res.return_point_id) : undefined) ??
+    null
+
   const data: ContractSubstitutionData = {
     // 기존 16개 스칼라 필드 (하위호환 — 기준 reservationId 기반)
     고객이름:     userRes.data?.full_name ?? '-',
@@ -357,6 +398,17 @@ export const GET: RequestHandler = async ({ params, locals }) => {
     구성품:       formatComponentsText(productRes.data?.components),
     // 신규: 주문 전체 상품 목록 (반복 영역 전용)
     상품목록: buildLineItems(lineItemReservations),
+    // CS2654 C2 — 대응데이터 없던 6개 중 5개 신규 반영(이용기간금액은 의도적 보류)
+    계약서발행일: formatDateDot(contractRes.data?.created_at ?? null),
+    지점옵션:     branchName ?? '-',
+    '총 정상 대여가': formatAmount(orderData?.total_amount),
+    총사용시간:   formatTotalUsageHours(
+      res.start_date,
+      isPickupDelivery ? null : res.pickup_time,
+      res.end_date,
+      isReturnDelivery ? null : res.return_time,
+    ),
+    할인반영금액: formatAmount(couponDiscountAmount),
   }
 
   return json(data)

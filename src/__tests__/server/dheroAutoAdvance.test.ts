@@ -14,6 +14,10 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
  *   6. EC-3: direction='return', currentStatus='in_use' → 스킵 (반납접수 자체가 안 된 상태)
  *   7. update_reservation_status RPC 실패 → fail-soft (외부에 throw 안 함)
  *   8. 채팅알림 발송 실패 → fail-soft (전이 결과는 유지)
+ *   9. [CMS 전역 정밀검증 v6 CRITICAL #4] newStatus==='returned' → awardRentalCompletePoints
+ *      호출(포인트 적립) — rentalQrTransition.ts:69-71과 동일 패턴. 현재 코드는 이 호출이
+ *      누락돼 있어 두발히어로 자동반납 경로에서만 포인트가 빠지는 결함이 있었음.
+ *  10. newStatus==='in_use'(반출 leg) → awardRentalCompletePoints 미호출(반납 완료가 아니므로)
  *
  * cron 연동 케이스:
  *   C-1. tracking_number 있는 예약 동기화 후 direction='pickup'으로 자동전이 함수 호출
@@ -43,6 +47,12 @@ vi.mock('$env/static/public', () => ({
 const mockSendPush = vi.fn()
 vi.mock('$lib/server/push', () => ({
   sendReservationLifecyclePush: (...args: unknown[]) => mockSendPush(...args),
+}))
+
+// 포인트 적립 모킹 (CMS 전역 정밀검증 v6 CRITICAL #4)
+const mockAwardPoints = vi.fn()
+vi.mock('$lib/server/awardRentalCompletePoints', () => ({
+  awardRentalCompletePoints: (...args: unknown[]) => mockAwardPoints(...args),
 }))
 
 // rentalTransition — 실제 로직 그대로 사용 (mock 안 함)
@@ -91,6 +101,7 @@ function makeAdmin({
 describe('maybeAutoAdvanceOnDheroDelivered', () => {
   beforeEach(() => {
     mockSendPush.mockReset()
+    mockAwardPoints.mockReset()
   })
 
   it('케이스 1 — statusCode가 5가 아니면 전이 없음', async () => {
@@ -191,6 +202,41 @@ describe('maybeAutoAdvanceOnDheroDelivered', () => {
     // 전이는 성공적으로 호출됨
     expect(admin._mockRpc).toHaveBeenCalledWith('update_reservation_status', expect.objectContaining({
       p_new_status: 'in_use',
+    }))
+  })
+
+  it('RED → GREEN: 케이스 9 — direction=return 완료(returned) 시 awardRentalCompletePoints 호출해야 한다', async () => {
+    const admin = makeAdmin({ freshStatus: 'return_requested' })
+    const { maybeAutoAdvanceOnDheroDelivered } = await import('$lib/server/dheroAutoAdvance')
+
+    await maybeAutoAdvanceOnDheroDelivered(admin, 900, 'return', 5, null, 'crazydelivery', 'return_requested')
+
+    // RED: 현재 dheroAutoAdvance.ts는 이 호출이 없어 실패함
+    // GREEN: rentalQrTransition.ts:69-71과 동일하게 newStatus==='returned' 시 호출
+    expect(mockAwardPoints).toHaveBeenCalledWith(admin, 900)
+  })
+
+  it('케이스 10 — direction=pickup(in_use 전이) 시 awardRentalCompletePoints 미호출', async () => {
+    const admin = makeAdmin({ freshStatus: 'shipped' })
+    const { maybeAutoAdvanceOnDheroDelivered } = await import('$lib/server/dheroAutoAdvance')
+
+    await maybeAutoAdvanceOnDheroDelivered(admin, 1000, 'pickup', 5, 'crazydelivery', null, 'shipped')
+
+    expect(mockAwardPoints).not.toHaveBeenCalled()
+  })
+
+  it('케이스 11 — awardRentalCompletePoints 실패 시 fail-soft(throw 안 함, 알림은 정상 발송)', async () => {
+    const admin = makeAdmin({ freshStatus: 'return_requested' })
+    mockAwardPoints.mockRejectedValue(new Error('포인트 적립 실패'))
+    const { maybeAutoAdvanceOnDheroDelivered } = await import('$lib/server/dheroAutoAdvance')
+
+    await expect(
+      maybeAutoAdvanceOnDheroDelivered(admin, 1100, 'return', 5, null, 'crazydelivery', 'return_requested')
+    ).resolves.not.toThrow()
+
+    expect(admin._mockRpc).toHaveBeenCalledWith('send_rental_chat_notification', expect.objectContaining({
+      p_reservation_id: 1100,
+      p_notify_type: 'rental_complete',
     }))
   })
 })

@@ -4,6 +4,7 @@ import { PUBLIC_SUPABASE_URL } from '$env/static/public'
 import { json } from '@sveltejs/kit'
 import type { RequestHandler } from './$types'
 import { getCmsRoleForAction } from '$lib/server/getCmsRoleForAction'
+import { hasSettingsAccess } from '$lib/utils/cmsPermissions'
 
 // 쿠폰 관리 화면 "사용 채번 목록" — 실제 사용(manual/sequenced 모드 무관, used_at 기준)
 // 이력을 지연 로드. 랜딩 대상은 RentalDetailPanel(/cms/reservation 또는 /cms/rentals) —
@@ -18,6 +19,7 @@ const RENTAL_STATUSES = new Set([
 export const GET: RequestHandler = async ({ params, locals }) => {
   const cmsRole = await getCmsRoleForAction(locals)
   if (!cmsRole) return json({ error: 'Unauthorized' }, { status: 401 })
+  if (!hasSettingsAccess(cmsRole)) return json({ error: '권한 없음' }, { status: 403 })
 
   const couponId = params.id
   if (!couponId) return json({ error: '잘못된 쿠폰 ID입니다.' }, { status: 400 })
