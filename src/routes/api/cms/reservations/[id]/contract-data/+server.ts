@@ -146,7 +146,7 @@ export const GET: RequestHandler = async ({ params, locals }) => {
   const pointIds = [res.pickup_point_id, res.return_point_id].filter((v): v is string => !!v)
 
   // ── 2. 병렬 조회: 기본 예약의 스칼라 필드용 데이터 ────────────────────────
-  const [productRes, userRes, orderItemRes, methodOptsRes, addrRes, pointRes, contractRes] = await Promise.all([
+  const [productRes, userRes, orderItemRes, methodOptsRes, addrRes, pointRes, contractRes, ownPriceRes] = await Promise.all([
     admin.from('products').select('name, product_code, components').eq('id', res.product_id).maybeSingle(),
     admin.from('user_profiles').select('full_name, phone, email').eq('id', res.user_id).maybeSingle(),
     admin.from('order_items').select('order_id').eq('reservation_id', reservationId).maybeSingle(),
@@ -176,6 +176,18 @@ export const GET: RequestHandler = async ({ params, locals }) => {
       .order('created_at', { ascending: false })
       .limit(1)
       .maybeSingle(),
+    // 대여 장비내역 Amount(금액) — 기준 예약(단독 예약 경로 전용) 실제 대여요금(price_rules).
+    // 주문 묶음 경로(siblingRows)는 아래 §3에서 reservation별 duration_type이 서로 다를 수
+    // 있어 별도 배치 조회로 처리 — 이 쿼리는 orderId가 없는 단독 예약일 때만 사용된다.
+    res.duration_type
+      ? admin.from('price_rules')
+          .select('price')
+          .eq('product_id', res.product_id)
+          .eq('duration_type', res.duration_type)
+          .eq('is_active', true)
+          .is('deleted_at', null)
+          .maybeSingle()
+      : Promise.resolve({ data: null as { price: number } | null, error: null }),
   ])
 
   let orderData: {
@@ -211,10 +223,10 @@ export const GET: RequestHandler = async ({ params, locals }) => {
       .filter((v): v is number => v != null)
 
     if (siblingIds.length > 0) {
-      // 모든 reservation 기본정보 + 메인상품
+      // 모든 reservation 기본정보 + 메인상품 (duration_type — 대여요금 조회용)
       const { data: siblingRows } = await admin
         .from('rental_reservations')
-        .select('id, product_id')
+        .select('id, product_id, duration_type')
         .in('id', siblingIds)
         .order('id', { ascending: true })
 
@@ -234,6 +246,21 @@ export const GET: RequestHandler = async ({ params, locals }) => {
             { name: p.name as string, product_code: p.product_code as string | null },
           ])
         )
+
+      // 대여 장비내역 Amount(금액) — 메인상품 실제 대여요금(price_rules, product_id+duration_type
+      // 조합별 단가). 같은 상품이라도 reservation마다 duration_type이 다를 수 있어
+      // product_id 하나로만 캐시하지 않고 "product_id|duration_type" 복합키로 조회한다.
+      const { data: priceRows } = productIdSet.length > 0
+        ? await admin.from('price_rules')
+            .select('product_id, duration_type, price')
+            .in('product_id', productIdSet)
+            .eq('is_active', true)
+            .is('deleted_at', null)
+        : { data: [] }
+
+      const priceMap = new Map<string, number>(
+        (priceRows ?? []).map(p => [`${p.product_id}|${p.duration_type}`, p.price as number])
+      )
 
       // 모든 reservation의 옵션상품 일괄 조회 (N+1 방지)
       const { data: allOptions } = await admin
@@ -271,6 +298,7 @@ export const GET: RequestHandler = async ({ params, locals }) => {
       lineItemReservations = (siblingRows ?? []).map(row => {
         const pid = row.product_id as string
         const prod = productMap[pid] ?? { name: '-', product_code: null }
+        const unitPrice = priceMap.get(`${pid}|${row.duration_type}`) ?? null
         const opts = (optionsByResId[row.id as number] ?? []).map(o => ({
           option_name:  o.option_name as string,
           qty:          o.qty as number,
@@ -279,7 +307,7 @@ export const GET: RequestHandler = async ({ params, locals }) => {
             ? (optionCodeMap[o.option_product_id as string] ?? null)
             : null,
         }))
-        return { mainProduct: prod, options: opts }
+        return { mainProduct: { ...prod, unit_price: unitPrice }, options: opts }
       })
     }
   } else {
@@ -311,6 +339,7 @@ export const GET: RequestHandler = async ({ params, locals }) => {
         mainProduct: {
           name:         productRes.data?.name ?? '-',
           product_code: productRes.data?.product_code ?? null,
+          unit_price:   ownPriceRes.data?.price ?? null,
         },
         options: (soloOptions ?? []).map(o => ({
           option_name:  o.option_name as string,

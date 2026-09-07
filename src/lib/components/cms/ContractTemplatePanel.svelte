@@ -19,6 +19,7 @@
   import { isTiptapDocBlock, isCanvasDocument, hasSignatureField, isSpreadsheetDocument, isHtmlDocument } from '$lib/types/contract-document'
   import type { TiptapDocBlock, MergeFieldAttrs, CanvasDocument, ContractCanvasPayload, SpreadsheetDocument } from '$lib/types/contract-document'
   import { DEFAULT_RENTAL_CONTRACT_HTML } from '$lib/components/cms/contract-editor/templates/defaultRentalContractHtml'
+  import { applyIssuerSignatureMarker, applySpecialNotesMarker } from '$lib/utils/contract-substitution'
   import type { ContractTemplate } from '$lib/types/contract-template'
   import type { JSONContent } from '@tiptap/core'
 
@@ -79,6 +80,10 @@
   let authoringMode           = $state<'flow' | 'canvas' | 'spreadsheet' | 'html' | null>(null)
   // spreadsheet 에디터 강제 재마운트 키 (새 xlsx 임포트 시 increments)
   let spreadsheetMountKey     = $state(0)
+  // html 모드 발행자 서명·직인 이미지 URL/너비(Migration #450/#451) — $effect 동기화는 위 Pattern 1과 동일
+  let htmlIssuerSignatureUrl   = $state<string | null>(null)
+  let htmlIssuerSignatureWidth = $state<number | null>(null)
+  const HTML_SIG_DEFAULT_WIDTH = 90
 
   // --------------------------------------------------------------------------
   // isDirty 판정 — spreadsheet 모드 "수정 저장" 버튼 활성/비활성 (2026-08-28 Stephen 요청)
@@ -110,11 +115,16 @@
     const nextAuthoringMode = template
       ? ((template.authoring_mode as 'flow' | 'canvas' | 'spreadsheet' | 'html') ?? 'flow')
       : null
+    // html 모드 발행자 서명·직인 이미지 URL/너비(Migration #450/#451) — 템플릿 로드 시 동기화
+    const nextHtmlIssuerSignatureUrl   = template?.html_issuer_signature_url ?? null
+    const nextHtmlIssuerSignatureWidth = template?.html_issuer_signature_width ?? null
 
-    specs                   = nextSpecs
-    title                   = nextTitle
-    requiresIssuerSignature = nextRequiresIssuerSignature
-    authoringMode           = nextAuthoringMode
+    specs                     = nextSpecs
+    title                     = nextTitle
+    requiresIssuerSignature   = nextRequiresIssuerSignature
+    authoringMode             = nextAuthoringMode
+    htmlIssuerSignatureUrl    = nextHtmlIssuerSignatureUrl
+    htmlIssuerSignatureWidth  = nextHtmlIssuerSignatureWidth
 
     // isDirty 비교 기준 스냅샷 갱신 + 그리드 변경 플래그 초기화(양식 전환·재로드 시점)
     origTitle                   = nextTitle
@@ -246,6 +256,150 @@
       sigUploading = false
     }
   }
+
+  // --------------------------------------------------------------------------
+  // html 모드 발행자 서명·직인 삽입 팝오버(Migration #450) — ContractDocumentEditor.svelte
+  // "서명/직인 삽입" 팝오버(GET /api/cms/signature-assets)와 완전히 동일한 자산 목록·동일한
+  // 엔드포인트를 재사용한다. flow/spreadsheet 모드는 에디터 커서 위치에 <img> 노드를 삽입하지만,
+  // html 모드는 편집 캔버스 자체가 없으므로(고정 템플릿) 셀 위치 대신 "이 템플릿 전체에 1개"
+  // 라는 더 단순한 모델로 htmlIssuerSignatureUrl 상태 하나에만 저장한다.
+  // --------------------------------------------------------------------------
+  interface HtmlSigAsset {
+    id: string
+    asset_type: string
+    image_url: string
+    label: string | null
+    is_default: boolean
+  }
+
+  let showHtmlSigPicker = $state(false)
+  let htmlSigAssets     = $state<HtmlSigAsset[]>([])
+  let htmlSigLoading    = $state(false)
+  let htmlSigPickerEl: HTMLDivElement | null = $state(null)
+
+  async function openHtmlSigPicker() {
+    if (showHtmlSigPicker) {
+      showHtmlSigPicker = false
+      return
+    }
+    showHtmlSigPicker = true
+    htmlSigLoading = true
+    try {
+      const res = await fetch('/api/cms/signature-assets')
+      htmlSigAssets = res.ok ? (await res.json() as HtmlSigAsset[]) : []
+    } catch {
+      htmlSigAssets = []
+    } finally {
+      htmlSigLoading = false
+    }
+  }
+
+  function selectHtmlSigAsset(asset: HtmlSigAsset) {
+    htmlIssuerSignatureUrl   = asset.image_url
+    htmlIssuerSignatureWidth = HTML_SIG_DEFAULT_WIDTH
+    showHtmlSigPicker = false
+  }
+
+  // 크기조절 툴바(ContractSpreadsheetEditor.svelte 소(100)/중(200)/대(400)+커스텀 입력과
+  // 동일 인터랙션 — 위치 이동은 HTML형에 해당 없음) — 서버측 20~1200 클램프는
+  // applyIssuerSignatureMarker()가 재검증하므로 여기서는 UX 편의 목적만
+  function setHtmlSigWidth(px: number) {
+    if (!Number.isFinite(px) || px <= 0) return
+    htmlIssuerSignatureWidth = Math.min(1200, Math.max(20, Math.round(px)))
+  }
+
+  function removeHtmlSigAsset() {
+    htmlIssuerSignatureUrl   = null
+    htmlIssuerSignatureWidth = null
+  }
+
+  // 팝오버 외부 클릭 시 닫기 (ContractDocumentEditor.svelte 동일 패턴)
+  $effect(() => {
+    if (!showHtmlSigPicker) return
+    function onDocClick(e: MouseEvent) {
+      const el = htmlSigPickerEl
+      if (el && !el.contains(e.target as Node)) {
+        showHtmlSigPicker = false
+      }
+    }
+    document.addEventListener('click', onDocClick)
+    return () => document.removeEventListener('click', onDocClick)
+  })
+
+  // --------------------------------------------------------------------------
+  // 문서 안 도장 이미지 클릭 → 크기조절 툴바를 그 이미지 바로 위에 표시
+  // (ContractSpreadsheetEditor.svelte renderCellValue()와 동일 UX — "이미지를 선택하면
+  // 그 위에 툴바가 뜬다". 위 발행자 서명·직인 행의 작은 미리보기와는 완전히 별개 —
+  // Stephen 지시: "설정바가 문서양식 내 직인(서명) 이미지 선택 시 위에 위치해야해".
+  // .html-preview-doc은 {@html previewHtml}로 매번 새 DOM을 그리므로, 그 안의
+  // <img class="issuer-sig-overlay">도 매번 새 노드로 교체된다 — previewHtml이 바뀔
+  // 때마다 이 effect가 다시 돌아 최신 img에 리스너를 재바인딩한다.
+  // --------------------------------------------------------------------------
+  let htmlPreviewDocEl: HTMLDivElement | null = $state(null)
+  let showDocSigToolbar  = $state(false)
+  let docSigToolbarPos   = $state({ top: 0, left: 0 })
+  // 이미지가 크거나 스크롤 위치상 이미지 위쪽 공간이 부족하면(overflow:auto 컨테이너 경계
+  // 밖으로 잘림) 툴바를 이미지 아래쪽으로 전환 — 툴바 자체 높이(34px 실측)+여백(8px)
+  const DOC_SIG_TOOLBAR_CLEARANCE = 42
+  let docSigToolbarBelow = $state(false)
+
+  const previewHtml = $derived(
+    applySpecialNotesMarker(
+      applyIssuerSignatureMarker(DEFAULT_RENTAL_CONTRACT_HTML, htmlIssuerSignatureUrl, htmlIssuerSignatureWidth),
+      specs,
+    )
+  )
+
+  /** 문서 컨테이너 기준으로 도장 이미지의 상/하단 중앙 좌표를 구해 툴바 위치를 갱신 */
+  function positionDocSigToolbar(): void {
+    const container = htmlPreviewDocEl
+    const img = container?.querySelector<HTMLImageElement>('.issuer-sig-overlay')
+    if (!container || !img) return
+    const cRect = container.getBoundingClientRect()
+    const iRect = img.getBoundingClientRect()
+    const viewportTopGap = iRect.top - cRect.top // 현재 스크롤 위치 기준 이미지 위쪽 여백
+    docSigToolbarBelow = viewportTopGap < DOC_SIG_TOOLBAR_CLEARANCE
+    docSigToolbarPos = {
+      top:  (docSigToolbarBelow ? iRect.bottom : iRect.top) - cRect.top + container.scrollTop,
+      left: iRect.left - cRect.left + container.scrollLeft + iRect.width / 2,
+    }
+  }
+
+  $effect(() => {
+    void previewHtml // {@html} 재생성 시마다 새 <img> 엘리먼트를 다시 찾아 리스너 재바인딩
+    const container = htmlPreviewDocEl
+    const img = container?.querySelector<HTMLImageElement>('.issuer-sig-overlay')
+    if (!container || !img) {
+      showDocSigToolbar = false
+      return
+    }
+    // 고객·서명 화면에서는 pointer-events:none(클릭 통과)이 기본이지만, 이 편집 패널의
+    // 미리보기에서만 인라인 스타일로 재활성화 — 다른 렌더링 지점(고객 서명 페이지 등)에는
+    // 영향 없음(그쪽은 이 컴포넌트를 거치지 않음).
+    img.style.cursor = 'pointer'
+    img.style.pointerEvents = 'auto'
+    function onImgClick(e: MouseEvent): void {
+      e.stopPropagation()
+      showDocSigToolbar = !showDocSigToolbar
+      if (showDocSigToolbar) positionDocSigToolbar()
+    }
+    img.addEventListener('click', onImgClick)
+    if (showDocSigToolbar) positionDocSigToolbar()
+    return () => img.removeEventListener('click', onImgClick)
+  })
+
+  // 문서 밖 클릭 시 툴바 닫기
+  $effect(() => {
+    if (!showDocSigToolbar) return
+    function onDocClick(e: MouseEvent) {
+      const el = htmlPreviewDocEl
+      if (el && !el.contains(e.target as Node)) {
+        showDocSigToolbar = false
+      }
+    }
+    document.addEventListener('click', onDocClick)
+    return () => document.removeEventListener('click', onDocClick)
+  })
 
   // --------------------------------------------------------------------------
   // 폼 직렬화 (use:enhance에서 content_blocks를 에디터에서 읽어 주입)
@@ -666,13 +820,103 @@
         <!-- html 모드: 고정 HTML 서식 미리보기(읽기 전용) + 특약 조항 입력 패널 -->
         <!-- html_document 필드: 항상 DEFAULT_RENTAL_CONTRACT_HTML을 저장 (변경 불가) -->
         <input type="hidden" name="html_document" value={DEFAULT_RENTAL_CONTRACT_HTML} />
+        <input type="hidden" name="html_issuer_signature_url" value={htmlIssuerSignatureUrl ?? ''} />
+        <input type="hidden" name="html_issuer_signature_width" value={htmlIssuerSignatureWidth ?? ''} />
         <div class="html-preview-wrap">
           <div class="html-preview-label">
             <span>HTML 고정 서식 미리보기</span>
             <span class="html-preview-hint">이 서식은 편집할 수 없습니다. 특약 조항만 우측 패널에서 입력하세요.</span>
           </div>
-          <div class="html-preview-doc">
-            {@html DEFAULT_RENTAL_CONTRACT_HTML}
+
+          <!-- 발행자(대표이사) 서명·직인 삽입/제거 — flow/spreadsheet 모드의 "서명/직인 삽입"
+               팝오버와 동일한 자산 목록을 재사용한다. 크기조절 툴바는 이 행이 아니라 아래
+               .html-preview-doc 안에 실제로 렌더링된 도장 이미지를 클릭했을 때 그 이미지 바로
+               위에 뜬다(ContractSpreadsheetEditor.svelte 방식과 동일 — "이미지를 선택하면
+               그 자리에 툴바가 뜬다") — Stephen 지시: "설정바가 문서양식 내 직인(서명) 이미지
+               선택 시 위에 위치해야해". -->
+          <div class="html-sig-row" bind:this={htmlSigPickerEl}>
+            <span class="f-label">발행자(대표이사) 서명·직인</span>
+            {#if htmlIssuerSignatureUrl}
+              <img
+                src={htmlIssuerSignatureUrl}
+                alt="발행자 서명/직인 미리보기"
+                class="html-sig-preview"
+              />
+              <span class="html-sig-hint">아래 문서 안의 도장 이미지를 클릭하면 크기를 조절할 수 있습니다.</span>
+              <button type="button" class="btn-sig-cancel" onclick={removeHtmlSigAsset} aria-label="발행자 서명·직인 이미지 삭제">제거</button>
+            {:else}
+              <button
+                type="button"
+                class="btn-sig-upload"
+                class:active={showHtmlSigPicker}
+                onclick={openHtmlSigPicker}
+                aria-expanded={showHtmlSigPicker}
+                aria-haspopup="listbox"
+                aria-label="발행자 서명·직인 삽입"
+              >서명/직인 삽입</button>
+            {/if}
+            {#if showHtmlSigPicker}
+              <div class="html-sig-popover" role="listbox" aria-label="서명/직인 자산 목록">
+                {#if htmlSigLoading}
+                  <div class="html-sig-info">불러오는 중...</div>
+                {:else if htmlSigAssets.length === 0}
+                  <div class="html-sig-info">
+                    등록된 서명·직인이 없습니다.<br />위 '서명 &amp; 직인 이미지 등록' 버튼으로 먼저 등록하세요.
+                  </div>
+                {:else}
+                  <div class="html-sig-list">
+                    {#each htmlSigAssets as asset (asset.id)}
+                      <button
+                        type="button"
+                        class="html-sig-item"
+                        role="option"
+                        aria-selected={false}
+                        onclick={() => selectHtmlSigAsset(asset)}
+                        aria-label="{asset.asset_type === 'signature' ? '서명' : '직인'} 삽입{asset.label ? ': ' + asset.label : ''}"
+                      >
+                        <img src={asset.image_url} alt="{asset.asset_type === 'signature' ? '서명' : '직인'} 미리보기" class="html-sig-thumb" />
+                        <span class="html-sig-item-label">{asset.label ?? (asset.asset_type === 'signature' ? '서명' : '직인')}</span>
+                      </button>
+                    {/each}
+                  </div>
+                {/if}
+              </div>
+            {/if}
+          </div>
+
+          <div class="html-preview-doc" bind:this={htmlPreviewDocEl}>
+            {@html previewHtml}
+            {#if showDocSigToolbar}
+              <!-- ContractSpreadsheetEditor.svelte renderCellValue()의 플로팅 툴바(소/중/대
+                   프리셋+구분선+너비입력+구분선+✕삭제, #fff/#ECEBF4/#100B32/#FF3535 동일
+                   색상)를 그대로 이식 — 문서 안 실제 도장 이미지를 클릭했을 때 그 이미지
+                   바로 위에 뜬다(docSigToolbarPos, positionDocSigToolbar() 참고). -->
+              <div
+                class="html-sig-toolbar"
+                class:html-sig-toolbar--below={docSigToolbarBelow}
+                style="top:{docSigToolbarPos.top}px; left:{docSigToolbarPos.left}px;"
+                role="group"
+                aria-label="서명·직인 이미지 크기 조절"
+              >
+                <button type="button" class="html-sig-tbtn" title="너비 100px" onclick={() => setHtmlSigWidth(100)}>소(100)</button>
+                <button type="button" class="html-sig-tbtn" title="너비 200px" onclick={() => setHtmlSigWidth(200)}>중(200)</button>
+                <button type="button" class="html-sig-tbtn" title="너비 400px" onclick={() => setHtmlSigWidth(400)}>대(400)</button>
+                <span class="html-sig-tsep"></span>
+                <input
+                  type="number"
+                  class="html-sig-tinput"
+                  min="20"
+                  max="1200"
+                  placeholder="px"
+                  value={htmlIssuerSignatureWidth ?? HTML_SIG_DEFAULT_WIDTH}
+                  onkeydown={(e) => { if (e.key === 'Enter') setHtmlSigWidth(Number((e.currentTarget as HTMLInputElement).value)) }}
+                  onblur={(e) => setHtmlSigWidth(Number((e.currentTarget as HTMLInputElement).value))}
+                  aria-label="서명·직인 이미지 너비(px)"
+                />
+                <span class="html-sig-tsep"></span>
+                <button type="button" class="html-sig-tbtn html-sig-tbtn--danger" title="이미지 삭제" onclick={() => { removeHtmlSigAsset(); showDocSigToolbar = false }} aria-label="발행자 서명·직인 이미지 삭제">✕</button>
+              </div>
+            {/if}
           </div>
         </div>
         <div class="panel-col">
@@ -1187,9 +1431,164 @@
     font-weight: 400;
   }
   .html-preview-doc {
+    position: relative; /* 도장 이미지 클릭 시 뜨는 .html-sig-toolbar의 위치 기준점 */
     flex: 1;
     overflow: auto;
     padding: 16px;
     background: #fff;
+  }
+
+  /* 발행자 서명·직인 삽입 행(Migration #450) — ContractDocumentEditor.svelte .cde-sig-* 와
+     동일한 시각 언어(팝오버 위치·썸네일 크기·색상)를 재사용해 flow/spreadsheet 모드와
+     일관되게 유지한다. */
+  .html-sig-row {
+    position: relative;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 8px 12px;
+    border-bottom: 1px solid var(--cs-lilac);
+    background: var(--cs-white, #fff);
+    flex-shrink: 0;
+  }
+  /* 발행자 서명·직인 미리보기 썸네일(위 행) */
+  .html-sig-preview {
+    display: block;
+    max-height: 48px;
+    width: auto;
+    height: auto;
+    object-fit: contain;
+    border: 1px solid var(--cs-lilac);
+    border-radius: 4px;
+    background: #fafafa;
+    flex-shrink: 0;
+  }
+  .html-sig-hint {
+    font: var(--text-pc-script-12);
+    color: var(--cs-text-mid);
+  }
+  /* 문서 안 도장 이미지를 클릭했을 때 뜨는 플로팅 크기조절 툴바 — ContractSpreadsheetEditor.svelte
+     renderCellValue()의 인라인 style 툴바(소/중/대 프리셋+구분선+너비입력+구분선+✕삭제,
+     #fff/#ECEBF4/#100B32/#FF3535 고정 색상)를 CSS 클래스로 그대로 옮겨 적었다 — 임의로 새
+     디자인을 만들지 않고 그 팝오버와 동일한 색상·크기값을 재현한다. 위치(top/left)는
+     positionDocSigToolbar()가 클릭된 이미지의 실제 좌표를 계산해 인라인으로 지정 —
+     .html-preview-doc(position:relative) 기준 절대좌표. (Stephen "설정바가 문서양식 내
+     직인(서명) 이미지 선택 시 위에 위치해야해" 지시, 2026-09-07 재수정) */
+  .html-sig-toolbar {
+    position: absolute;
+    transform: translate(-50%, calc(-100% - 8px)); /* 기본: 이미지 위쪽 */
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    background: #fff;
+    border: 1px solid #ECEBF4;
+    border-radius: 8px;
+    box-shadow: 0 4px 16px rgba(16, 11, 50, 0.12);
+    padding: 4px 8px;
+    white-space: nowrap;
+    z-index: 20;
+  }
+  /* 이미지 위쪽 공간이 부족할 때(overflow:auto 컨테이너 상단 경계에 잘림) 아래쪽으로 전환
+     — positionDocSigToolbar()의 docSigToolbarBelow 판정과 짝을 이룸 */
+  .html-sig-toolbar--below {
+    transform: translate(-50%, 8px);
+  }
+  .html-sig-tbtn {
+    min-height: 24px;
+    min-width: 24px;
+    padding: 2px 7px;
+    background: transparent;
+    border: 1px solid transparent;
+    border-radius: 6px;
+    font-size: 11px;
+    font-weight: 600;
+    color: #100B32;
+    cursor: pointer;
+    line-height: 1.4;
+    flex-shrink: 0;
+    transition: background 0.1s;
+    white-space: nowrap;
+  }
+  .html-sig-tbtn:hover { background: #ECEBF4; }
+  .html-sig-tbtn--danger { color: #FF3535; }
+  .html-sig-tsep {
+    width: 1px;
+    height: 16px;
+    background: #ECEBF4;
+    flex-shrink: 0;
+    align-self: center;
+  }
+  .html-sig-tinput {
+    width: 56px;
+    height: 24px;
+    padding: 0 4px;
+    border: 1px solid #ECEBF4;
+    border-radius: 6px;
+    font-size: 11px;
+    color: #100B32;
+    outline: none;
+    box-sizing: border-box;
+    flex-shrink: 0;
+  }
+  .html-sig-popover {
+    position: absolute;
+    top: calc(100% + 4px);
+    left: 12px;
+    z-index: 200;
+    background: var(--cs-white, #fff);
+    border: 1px solid var(--cs-lilac);
+    border-radius: var(--cms-radius-sm);
+    box-shadow: 0 4px 16px rgba(16, 11, 50, 0.12);
+    min-width: 220px;
+    max-width: 320px;
+    overflow: hidden;
+  }
+  .html-sig-info {
+    padding: 14px 16px;
+    font: var(--text-pc-script-12);
+    color: var(--cs-text-mid);
+    line-height: 1.6;
+    text-align: center;
+  }
+  .html-sig-list {
+    display: flex;
+    flex-direction: column;
+    max-height: 280px;
+    overflow-y: auto;
+    padding: 4px;
+  }
+  .html-sig-item {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 8px 10px;
+    background: none;
+    border: 1px solid transparent;
+    border-radius: var(--cms-radius-sm);
+    cursor: pointer;
+    text-align: left;
+    transition: background 0.1s, border-color 0.1s;
+    width: 100%;
+  }
+  .html-sig-item:hover {
+    background: var(--cs-lilac);
+    border-color: var(--cs-lilac);
+  }
+  .html-sig-thumb {
+    width: 48px;
+    height: 32px;
+    object-fit: contain;
+    border: 1px solid var(--cs-lilac);
+    border-radius: 4px;
+    background: #fafafa;
+    flex-shrink: 0;
+  }
+  .html-sig-item-label {
+    font: var(--text-pc-script-12);
+    font-weight: 600;
+    color: var(--cs-text);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
 </style>

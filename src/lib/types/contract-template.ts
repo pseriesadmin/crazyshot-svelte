@@ -28,6 +28,16 @@ export interface ContractTemplate {
    * 미지정 시 null.
    */
   html_document?:             string | null
+  /**
+   * html 모드 전용: 발행자(대표이사) 서명·직인 이미지 URL(Migration #450).
+   * cms_signature_assets.image_url 값을 그대로 복사 저장 — FK 아님. flow/canvas/spreadsheet
+   * 모드 또는 미지정 시 null.
+   */
+  html_issuer_signature_url?: string | null
+  /**
+   * html 모드 전용: 발행자 서명·직인 이미지 너비(px, Migration #451). NULL이면 기본값(90px).
+   */
+  html_issuer_signature_width?: number | null
 }
 
 export type ContractTemplateSummary = Pick<ContractTemplate, 'id' | 'title' | 'status' | 'created_at' | 'authoring_mode'>

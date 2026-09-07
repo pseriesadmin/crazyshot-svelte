@@ -1,6 +1,6 @@
 <script lang="ts">
   import { csToast } from '$lib/utils/toast'
-  import { substituteVariables, substituteSpreadsheetDocument, substituteHtmlDocument, findHtmlUnresolvedVariables, type AnyContentBlock } from '$lib/utils/contract-substitution'
+  import { substituteVariables, substituteSpreadsheetDocument, substituteHtmlDocument, findHtmlUnresolvedVariables, applyIssuerSignatureMarker, applySpecialNotesMarker, type AnyContentBlock } from '$lib/utils/contract-substitution'
   import { applyContractTemplate } from '$lib/utils/contract-apply-template'
   import { hasExistingContractContent } from '$lib/utils/contract-content-mode'
   import { isTiptapDocBlock, isSpreadsheetDocument, isHtmlDocument } from '$lib/types/contract-document'
@@ -23,6 +23,10 @@
     spreadsheet_document?: unknown
     /** html 모드 문서 — authoring_mode='html'일 때 contracts.html_document에 저장 */
     html_document?: unknown
+    /** html 모드 전용: 발행자 서명·직인 이미지 URL(Migration #450) */
+    html_issuer_signature_url?: string | null
+    /** html 모드 전용: 발행자 서명·직인 이미지 너비(px, Migration #451) */
+    html_issuer_signature_width?: number | null
   }
 
   interface Props {
@@ -114,9 +118,15 @@
     contentMode === 'existing'
       ? (isHtmlDocument(existingHtmlDocument) ? (existingHtmlDocument as string) : null)
       : (selectedTemplate && isHtmlDocument(selectedTemplate.html_document)
-          ? (subData
-              ? substituteHtmlDocument(selectedTemplate.html_document as string, subData)
-              : (selectedTemplate.html_document as string))
+          ? (() => {
+              const withSig = applyIssuerSignatureMarker(
+                selectedTemplate.html_document as string,
+                selectedTemplate.html_issuer_signature_url,
+                selectedTemplate.html_issuer_signature_width,
+              )
+              const withNotes = applySpecialNotesMarker(withSig, selectedTemplate.specifications)
+              return subData ? substituteHtmlDocument(withNotes, subData) : withNotes
+            })()
           : null)
   )
 
@@ -270,7 +280,17 @@
 
     const substitutedHtmlDocument =
       isHtml && isHtmlDocument(selectedTemplate.html_document)
-        ? substituteHtmlDocument(selectedTemplate.html_document as string, subData)
+        ? substituteHtmlDocument(
+            applySpecialNotesMarker(
+              applyIssuerSignatureMarker(
+                selectedTemplate.html_document as string,
+                selectedTemplate.html_issuer_signature_url,
+                selectedTemplate.html_issuer_signature_width,
+              ),
+              selectedTemplate.specifications,
+            ),
+            subData,
+          )
         : undefined
 
     const result = await applyContractTemplate({
@@ -284,6 +304,8 @@
       canvasDocument:      isCanvas      ? selectedTemplate.canvas_document      : undefined,
       spreadsheetDocument: substitutedSpreadsheetDocument,
       htmlDocument:        substitutedHtmlDocument,
+      htmlIssuerSignatureUrl:   isHtml ? (selectedTemplate.html_issuer_signature_url ?? null)   : undefined,
+      htmlIssuerSignatureWidth: isHtml ? (selectedTemplate.html_issuer_signature_width ?? null) : undefined,
     })
 
     if (result.error) throw new Error(result.error)

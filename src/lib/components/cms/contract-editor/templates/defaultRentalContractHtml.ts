@@ -76,6 +76,54 @@
  *    지금까지 없었다. {{수령일자}}/{{반납일자}}(contract-module.ts, contract-data/+server.ts
  *    formatDateDot()) 신규 추가 + 표를 날짜행/시간행 2행 구조로 복원하고, TOTAL 칸의
  *    {{요금유형}}을 rowspan=2로 두 행에 걸쳐 표시(원본의 "Total Usage Time" 병합과 동일 위치).
+ *
+ * ⚠️ 2026-09-07 발견·수정(5차, 발행자 서명·직인 이미지 삽입/제거 기능 신설) — 이전(4차까지)엔
+ *    "대표이사" 도장을 원본처럼 텍스트로만 유지하고, flow/spreadsheet 모드처럼 셀 단위로
+ *    이미지를 삽입할 편집 캔버스가 html형엔 없다는 이유로 이미지 삽입 자체를 보류했었다.
+ *    Stephen 재지시: "스프레드시트/워드 문서 편집에서의 서명(직인) 삽입 기능을 HTML형에도
+ *    동일하게 넣어라." 재검토 결과 이 도장은 계약서마다 달라지지 않는 회사 고정 이미지라
+ *    "매번 셀을 골라 삽입"할 필요가 없고, **템플릿 단위로 1개 이미지 URL만 저장**하면
+ *    충분함을 확인 — 이 접근이 오히려 flow/spreadsheet보다 단순하다.
+ *    구현: `<!--ISSUER_SIGNATURE-->` HTML 주석 마커를 "대표이사" 셀에 추가(REPEAT 마커와
+ *    동일한 "주석으로 위치만 표시" 방식). `contract_templates.html_issuer_signature_url`
+ *    (Migration #450)에 관리자가 CMS "서명/직인 삽입" 팝오버(flow/spreadsheet 모드의
+ *    GET /api/cms/signature-assets 재사용 — 완전히 동일한 자산 목록·완전히 동일한 엔드포인트)
+ *    로 고른 이미지 URL을 저장하면, `applyIssuerSignatureMarker()`(contract-substitution.ts)
+ *    가 발행 시점에 마커를 실제 `<img>`로 치환한다. 미지정 시 마커는 빈 문자열로 제거되고
+ *    "한광익 (인)" 텍스트만 그대로 남아(4차까지의 동작과 완전히 하위호환).
+ *
+ * ⚠️ 2026-09-07 발견·수정(6차, 서명·직인 이미지 크기조절 기능 추가) — Stephen이 스프레드시트형
+ *    편집기(ContractSpreadsheetEditor.svelte)의 이미지 크기조절 툴바(소(100)/중(200)/대(400)
+ *    프리셋 + 커스텀 px 입력 + 삭제)를 HTML형에도 동일하게 반영하라고 재지시. 위치 이동
+ *    (offsetX/offsetY)은 HTML형에 적용 대상이 없음(셀 좌표가 아니라 고정 텍스트 흐름 안의
+ *    인라인 요소) — 너비 조절만 이식. `contract_templates.html_issuer_signature_width`
+ *    (Migration #451, INTEGER, 20~1200 클램프·미지정 시 기본 90px)를 추가해
+ *    `applyIssuerSignatureMarker(html, url, width)`가 `<img style="width:{width}px">`로
+ *    생성하도록 확장. `.issuer-sig-overlay`의 고정 max-height/max-width는 제거(스프레드시트
+ *    쪽 `img.style.maxWidth='none'`과 동일 원칙 — 인라인 width가 유일한 크기 결정자).
+ *
+ * ⚠️ 2026-09-07 발견·수정(7차, 서명·직인 이미지를 표 맨 위 레이어로 오버레이) — 6차까지는
+ *    이미지가 "한광익 (인)" 텍스트 뒤에 인라인으로 이어붙어(display:inline-block) 셀 폭을
+ *    밀어내는 방식이었다. Stephen 지시: 실제 도장처럼 표 서식 위에 겹쳐 보이는 최상위
+ *    레이어로 노출할 것. `.issuer-sig-overlay`를 `position:absolute`로 전환하고 그 부모
+ *    셀에 `.sig-host-cell`(position:relative) 클래스를 추가해 셀 중앙에 겹쳐 뜨도록
+ *    구성(z-index:5, pointer-events:none — 클릭·선택이 아래 텍스트를 그대로 통과).
+ *
+ * ⚠️ 2026-09-07 발견·수정(8차, 계약서발행일·지점옵션 배선 + 특이사항 재사용) —
+ *    "html 계약양식 전역 변수 정보 동기 재검증" 요청으로 발견된 배선 공백 2건 반영:
+ *    ① 최상단 "(계약서 발행일시: {{수령일시}})"를 `{{계약서발행일}}`(contracts.created_at
+ *    기준)로 교체 — 레이블-변수 불일치 해소. ② "구분 → 대여지점" 값 셀의 하드코딩
+ *    `&nbsp;` → `{{지점옵션}}`(수령/반납 지점명)으로 교체. 두 변수 모두 CS2654 C2
+ *    (같은 날 별도 세션)가 contract-data/+server.ts·ContractSubstitutionData에 이미
+ *    추가해뒀던 것을 이 템플릿에 마저 연결한 것.
+ *    ③ 정산내역 "특이사항" 값 셀의 하드코딩 `&nbsp;` → `<!--SPECIAL_NOTES-->` 마커로
+ *    교체(Stephen 확정: "기존 특약 조항 패널 재사용"). ContractFieldPanel.svelte "특약"
+ *    탭에 이미 있는 항목명/내용 입력을 새 필드 신설 없이 그대로 재사용 —
+ *    applySpecialNotesMarker()(contract-substitution.ts)가 "key: value" 쌍을 <br/>로
+ *    이어붙여 채운다. 이 데이터는 /contract/[token] 서명 화면 맨 아래 "특약 조항"
+ *    섹션(모드 무관 공용 렌더링, 기존 그대로 유지)에도 별도로 계속 표시된다 — 이 마커
+ *    추가는 그 표시를 대체하는 게 아니라 정산내역 표 안에도 같은 데이터를 인라인으로
+ *    보여주는 것을 추가한 것.
  */
 
 export const DEFAULT_RENTAL_CONTRACT_HTML = `
@@ -100,6 +148,8 @@ export const DEFAULT_RENTAL_CONTRACT_HTML = `
   .contract-wrap .sign-block { flex: 1; border: 1px solid #333; padding: 16px 12px; min-height: 100px; }
   .contract-wrap .sign-block .label { font-weight: bold; margin-bottom: 8px; }
   .contract-wrap .sign-block .value { color: #333; }
+  .contract-wrap .sig-host-cell { position: relative; }
+  .contract-wrap .issuer-sig-overlay { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); max-width: none; z-index: 5; pointer-events: none; }
   @media print {
     .contract-wrap { font-size: 11px; padding: 20px 15px; }
   }
@@ -107,7 +157,7 @@ export const DEFAULT_RENTAL_CONTRACT_HTML = `
 <div class="contract-wrap">
 
   <h1 class="contract-title">임 대 차 계 약 서</h1>
-  <p class="issue-date">(계약서 발행일시: {{수령일시}})</p>
+  <p class="issue-date">(계약서 발행일시: {{계약서발행일}})</p>
 
   <!-- 임대인 정보 (고정) -->
   <table>
@@ -117,7 +167,7 @@ export const DEFAULT_RENTAL_CONTRACT_HTML = `
         <td class="label-cell">사업자등록번호</td>
         <td>372-81-03554</td>
         <td class="label-cell">대표이사</td>
-        <td>한광익 (인)</td>
+        <td class="sig-host-cell">한광익 (인)<!--ISSUER_SIGNATURE--></td>
       </tr>
       <tr>
         <td class="label-cell">상호명</td>
@@ -207,7 +257,7 @@ export const DEFAULT_RENTAL_CONTRACT_HTML = `
         <td class="label-cell">정상 대여가 총액</td>
         <td style="text-align:right">{{기본대여요금}}</td>
         <td class="label-cell" rowspan="4">특이사항</td>
-        <td colspan="2" rowspan="4">&nbsp;</td>
+        <td colspan="2" rowspan="4"><!--SPECIAL_NOTES--></td>
       </tr>
       <tr>
         <td class="label-cell">할인 적용</td>
@@ -226,7 +276,7 @@ export const DEFAULT_RENTAL_CONTRACT_HTML = `
         <td style="text-align:right">{{배송비}}</td>
         <td class="label-cell" rowspan="3">구분</td>
         <td class="label-cell">대여지점</td>
-        <td>&nbsp;</td>
+        <td>{{지점옵션}}</td>
       </tr>
       <tr class="final-row">
         <td class="label-cell" rowspan="2">최종 결제 금액</td>

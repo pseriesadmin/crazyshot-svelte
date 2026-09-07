@@ -43,6 +43,15 @@ export interface ApplyTemplateOptions {
    * contracts 테이블의 html_document에 저장됨.
    */
   htmlDocument?: string
+  /**
+   * HTML 고정 템플릿의 발행자 서명·직인 이미지 URL (html 모드 전용, Migration #450).
+   * 발행 시점 스냅샷으로 contracts.html_issuer_signature_url에 그대로 복사 저장 —
+   * 렌더링 자체는 htmlDocument 문자열 안에 이미 <img>로 구워져 있으므로 이 값은 감사·
+   * 참고 용도(렌더링에는 쓰이지 않음).
+   */
+  htmlIssuerSignatureUrl?: string | null
+  /** HTML 고정 템플릿의 발행자 서명·직인 이미지 너비(px, Migration #451). 렌더링은 htmlDocument에 이미 구워져 있어 감사·참고 용도. */
+  htmlIssuerSignatureWidth?: number | null
 }
 
 export type ApplyTemplateResult =
@@ -86,6 +95,8 @@ export async function applyContractTemplate(
         ...(opts.canvasDocument != null      ? { canvas_document:        opts.canvasDocument }      : {}),
         ...(opts.spreadsheetDocument != null ? { spreadsheet_document:   opts.spreadsheetDocument } : {}),
         ...(opts.htmlDocument != null        ? { html_document:          opts.htmlDocument }        : {}),
+        ...(opts.htmlIssuerSignatureUrl !== undefined ? { html_issuer_signature_url: opts.htmlIssuerSignatureUrl } : {}),
+        ...(opts.htmlIssuerSignatureWidth !== undefined ? { html_issuer_signature_width: opts.htmlIssuerSignatureWidth } : {}),
       }),
     }
   )

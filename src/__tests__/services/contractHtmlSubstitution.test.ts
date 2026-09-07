@@ -219,3 +219,82 @@ describe('substituteHtmlDocument', () => {
     expect(escapeHtml('a & b')).toBe('a &amp; b')
   })
 })
+
+// ─────────────────────────────────────────────────────────────────────────────
+// applySpecialNotesMarker — 정산내역 "특이사항" 마커 (2026-09-07 신설, "특약 조항" 재사용)
+// ─────────────────────────────────────────────────────────────────────────────
+describe('applySpecialNotesMarker', () => {
+  it('특약 조항이 1개면 "key: value" 형태로 마커를 대체한다', async () => {
+    const { applySpecialNotesMarker } = await import('$lib/utils/contract-substitution.js')
+    const html = '<td><!--SPECIAL_NOTES--></td>'
+    const result = applySpecialNotesMarker(html, [{ key: '비고', value: '파손 없음' }])
+    expect(result).toBe('<td>비고: 파손 없음</td>')
+  })
+
+  it('특약 조항이 여러 개면 <br/>로 이어붙인다', async () => {
+    const { applySpecialNotesMarker } = await import('$lib/utils/contract-substitution.js')
+    const html = '<!--SPECIAL_NOTES-->'
+    const result = applySpecialNotesMarker(html, [
+      { key: 'A', value: '1' },
+      { key: 'B', value: '2' },
+    ])
+    expect(result).toBe('A: 1<br/>B: 2')
+  })
+
+  it('키가 빈 문자열인 항목은 제외한다', async () => {
+    const { applySpecialNotesMarker } = await import('$lib/utils/contract-substitution.js')
+    const html = '<!--SPECIAL_NOTES-->'
+    const result = applySpecialNotesMarker(html, [
+      { key: '', value: '무시됨' },
+      { key: '유효', value: '값' },
+    ])
+    expect(result).toBe('유효: 값')
+  })
+
+  it('빈 배열/null/undefined면 &nbsp;로 대체(기존 하드코딩 빈칸과 시각적으로 동일)', async () => {
+    const { applySpecialNotesMarker } = await import('$lib/utils/contract-substitution.js')
+    const html = '<!--SPECIAL_NOTES-->'
+    expect(applySpecialNotesMarker(html, [])).toBe('&nbsp;')
+    expect(applySpecialNotesMarker(html, null)).toBe('&nbsp;')
+    expect(applySpecialNotesMarker(html, undefined)).toBe('&nbsp;')
+  })
+
+  it('key/value 모두 XSS 이스케이프 처리된다', async () => {
+    const { applySpecialNotesMarker } = await import('$lib/utils/contract-substitution.js')
+    const html = '<!--SPECIAL_NOTES-->'
+    const result = applySpecialNotesMarker(html, [{ key: '<b>k</b>', value: '<script>alert(1)</script>' }])
+    expect(result).not.toContain('<script>')
+    expect(result).toContain('&lt;script&gt;')
+  })
+})
+
+// ─────────────────────────────────────────────────────────────────────────────
+// applyIssuerSignatureMarker — 발행자 서명·직인 마커 (2026-09-07 회귀 커버리지 보강)
+// ─────────────────────────────────────────────────────────────────────────────
+describe('applyIssuerSignatureMarker', () => {
+  it('URL 미지정 시 마커를 빈 문자열로 제거한다', async () => {
+    const { applyIssuerSignatureMarker } = await import('$lib/utils/contract-substitution.js')
+    expect(applyIssuerSignatureMarker('<td><!--ISSUER_SIGNATURE--></td>', null)).toBe('<td></td>')
+  })
+
+  it('http(s) URL이면 <img> 태그로 치환하고 기본 너비 90px을 적용한다', async () => {
+    const { applyIssuerSignatureMarker } = await import('$lib/utils/contract-substitution.js')
+    const result = applyIssuerSignatureMarker('<!--ISSUER_SIGNATURE-->', 'https://example.com/seal.png')
+    expect(result).toContain('<img')
+    expect(result).toContain('width:90px')
+  })
+
+  it('javascript: 스킴은 차단되어 마커가 제거된다 (XSS 방어)', async () => {
+    const { applyIssuerSignatureMarker } = await import('$lib/utils/contract-substitution.js')
+    const result = applyIssuerSignatureMarker('<!--ISSUER_SIGNATURE-->', 'javascript:alert(1)')
+    expect(result).not.toContain('<img')
+  })
+
+  it('width는 20~1200 범위로 클램프된다', async () => {
+    const { applyIssuerSignatureMarker } = await import('$lib/utils/contract-substitution.js')
+    const tooSmall = applyIssuerSignatureMarker('<!--ISSUER_SIGNATURE-->', 'https://example.com/seal.png', 5)
+    const tooBig = applyIssuerSignatureMarker('<!--ISSUER_SIGNATURE-->', 'https://example.com/seal.png', 5000)
+    expect(tooSmall).toContain('width:20px')
+    expect(tooBig).toContain('width:1200px')
+  })
+})

@@ -54,6 +54,16 @@ async function validateCanvasAssetIds(
   return { ok: true }
 }
 
+// html형 발행자 서명·직인 이미지 너비(Migration #451) — ContractSpreadsheetEditor.svelte
+// 크기조절 툴바와 동일한 20~1200 클램프. 빈 값/파싱 실패는 null(=applyIssuerSignatureMarker
+// 기본값 90px 적용)로 처리 — 필수 입력이 아니므로 에러로 막지 않는다.
+function parseIssuerSignatureWidth(raw: string | null): number | null {
+  if (!raw) return null
+  const n = Number(raw)
+  if (!Number.isFinite(n) || n <= 0) return null
+  return Math.min(1200, Math.max(20, Math.round(n)))
+}
+
 export type { ContractTemplate, ContractTemplateSummary }
 
 export const load: PageServerLoad = async ({ parent, url }) => {
@@ -74,7 +84,7 @@ export const load: PageServerLoad = async ({ parent, url }) => {
   if (selectedId) {
     const { data } = await admin
       .from('contract_templates')
-      .select('id, title, content_blocks, specifications, status, requires_issuer_signature, authoring_mode, canvas_document, spreadsheet_document, created_at, updated_at')
+      .select('id, title, content_blocks, specifications, status, requires_issuer_signature, authoring_mode, canvas_document, spreadsheet_document, html_issuer_signature_url, html_issuer_signature_width, created_at, updated_at')
       .eq('id', selectedId)
       .is('deleted_at', null)
       .maybeSingle()
@@ -104,6 +114,8 @@ export const actions: Actions = {
     const canvasDocumentRaw        = form.get('canvas_document') as string | null
     const spreadsheetDocumentRaw   = form.get('spreadsheet_document') as string | null
     const htmlDocumentRaw          = form.get('html_document') as string | null
+    const htmlIssuerSigUrlRaw      = (form.get('html_issuer_signature_url') as string | null)?.trim() || ''
+    const htmlIssuerSigWidth       = parseIssuerSignatureWidth(form.get('html_issuer_signature_width') as string | null)
     const specifications           = form.get('specifications') as string | null
     const requiresIssuerSignature  = form.get('requires_issuer_signature') === 'true'
     const authoringMode            = (form.get('authoring_mode') as string | null)?.trim() || 'flow'
@@ -141,6 +153,10 @@ export const actions: Actions = {
       }
       parsedHtml = htmlDocumentRaw
     }
+    // html 모드 발행자 서명·직인 이미지 URL(Migration #450) — http(s) 절대 URL 또는 빈 값만 허용
+    if (htmlIssuerSigUrlRaw && !/^https?:\/\//i.test(htmlIssuerSigUrlRaw)) {
+      return fail(400, { error: 'html_issuer_signature_url은 http(s) URL이어야 합니다.' })
+    }
 
     // EC-3 + issuer-image assetId 존재 검증 (있을 때만)
     if (parsedCanvas) {
@@ -162,6 +178,10 @@ export const actions: Actions = {
     if (parsedCanvas !== null) insertPayload.canvas_document = parsedCanvas
     if (parsedSpreadsheet !== null) insertPayload.spreadsheet_document = parsedSpreadsheet
     if (parsedHtml !== null) insertPayload.html_document = parsedHtml
+    if (authoringMode === 'html') {
+      insertPayload.html_issuer_signature_url   = htmlIssuerSigUrlRaw || null
+      insertPayload.html_issuer_signature_width = htmlIssuerSigUrlRaw ? htmlIssuerSigWidth : null
+    }
 
     const { data, error } = await admin
       .from('contract_templates')
@@ -189,6 +209,8 @@ export const actions: Actions = {
     const canvasDocumentRaw        = form.get('canvas_document') as string | null
     const spreadsheetDocumentRaw   = form.get('spreadsheet_document') as string | null
     const htmlDocumentRaw          = form.get('html_document') as string | null
+    const htmlIssuerSigUrlRaw      = (form.get('html_issuer_signature_url') as string | null)?.trim() || ''
+    const htmlIssuerSigWidth       = parseIssuerSignatureWidth(form.get('html_issuer_signature_width') as string | null)
     const specifications           = form.get('specifications') as string | null
     const requiresIssuerSignature  = form.get('requires_issuer_signature') === 'true'
     const authoringMode            = (form.get('authoring_mode') as string | null)?.trim() || 'flow'
@@ -248,6 +270,10 @@ export const actions: Actions = {
       }
       parsedHtml = htmlDocumentRaw
     }
+    // html 모드 발행자 서명·직인 이미지 URL(Migration #450) — http(s) 절대 URL 또는 빈 값만 허용
+    if (htmlIssuerSigUrlRaw && !/^https?:\/\//i.test(htmlIssuerSigUrlRaw)) {
+      return fail(400, { error: 'html_issuer_signature_url은 http(s) URL이어야 합니다.' })
+    }
 
     // EC-3 + issuer-image assetId 존재 검증 (있을 때만)
     if (parsedCanvas) {
@@ -269,6 +295,10 @@ export const actions: Actions = {
     if (parsedCanvas !== null) updatePayload.canvas_document = parsedCanvas
     if (parsedSpreadsheet !== null) updatePayload.spreadsheet_document = parsedSpreadsheet
     if (parsedHtml !== null) updatePayload.html_document = parsedHtml
+    if (authoringMode === 'html') {
+      updatePayload.html_issuer_signature_url   = htmlIssuerSigUrlRaw || null
+      updatePayload.html_issuer_signature_width = htmlIssuerSigUrlRaw ? htmlIssuerSigWidth : null
+    }
 
     const { error } = await admin
       .from('contract_templates')
