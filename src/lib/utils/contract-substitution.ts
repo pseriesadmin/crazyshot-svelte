@@ -237,6 +237,70 @@ export function substituteVariables(
 
 const REPEAT_MARKER_RE = /<!--REPEAT:상품목록-->([\s\S]*?)<!--\/REPEAT-->/g
 
+// 발행자(대표이사) 서명·직인 이미지 마커(Migration #450) — <!--REPEAT-->와 동일하게 HTML
+// 주석으로 지정해 원본 마크업을 깨지 않는다. 값은 contract_templates.html_issuer_signature_url
+// (관리자가 CMS "서명/직인 삽입" 팝오버로 선택 — cms_signature_assets.image_url 그대로 복사).
+// http(s) 절대 URL만 허용(스킴 인젝션 방지, spreadsheetRender.ts SAFE_IMAGE_URL과 동일 원칙).
+const ISSUER_SIGNATURE_MARKER = '<!--ISSUER_SIGNATURE-->'
+const SAFE_SIGNATURE_URL = /^https?:\/\//i
+
+/** 스프레드시트형 이미지 크기조절 툴바(ContractSpreadsheetEditor.svelte)와 동일한 클램프 범위·기본값 */
+const ISSUER_SIGNATURE_MIN_WIDTH = 20
+const ISSUER_SIGNATURE_MAX_WIDTH = 1200
+const ISSUER_SIGNATURE_DEFAULT_WIDTH = 90
+
+/**
+ * 발행자 서명·직인 이미지 마커를 실제 <img> 태그(또는 미지정 시 빈 문자열)로 치환한다.
+ * {{변수명}} 치환과 완전히 분리된 별도 패스 — ContractTemplatePanel.svelte의 관리자 편집
+ * 미리보기(변수 미치환 상태)에서도 독립적으로 호출해 서명 삽입 결과만 즉시 확인할 수 있다.
+ * url은 관리자가 CMS에서 선택한 값(고객 입력 아님)이지만, 속성 인젝션 방지를 위해 그래도
+ * escapeHtml()로 감싼다.
+ *
+ * width(px)는 스프레드시트형 크기조절 툴바(소(100)/중(200)/대(400) + 커스텀 입력)와 동일한
+ * 20~1200 범위로 클램프한다 — 위치(offsetX/offsetY) 개념은 HTML형에 없음(셀 좌표가 아니라
+ * 고정 텍스트 흐름 안의 인라인 요소이므로 드래그 이동이 성립하지 않음).
+ */
+export function applyIssuerSignatureMarker(
+  html: string,
+  imageUrl: string | null | undefined,
+  width?: number | null,
+): string {
+  if (!imageUrl || !SAFE_SIGNATURE_URL.test(imageUrl)) {
+    return html.split(ISSUER_SIGNATURE_MARKER).join('')
+  }
+  const safeWidth = Math.min(
+    ISSUER_SIGNATURE_MAX_WIDTH,
+    Math.max(ISSUER_SIGNATURE_MIN_WIDTH, width && width > 0 ? Math.round(width) : ISSUER_SIGNATURE_DEFAULT_WIDTH),
+  )
+  const replacement = `<img src="${escapeHtml(imageUrl)}" alt="발행자 직인" class="issuer-sig-overlay" style="width:${safeWidth}px" />`
+  return html.split(ISSUER_SIGNATURE_MARKER).join(replacement)
+}
+
+// 정산내역 "특이사항" 마커(2026-09-07 신설) — <!--ISSUER_SIGNATURE-->와 동일하게 HTML 주석으로
+// 지정해 {{}} 변수 치환·findHtmlUnresolvedVariables 사전검증과 완전히 분리한다. 값은 새 필드를
+// 만들지 않고 기존 "특약 조항" 패널(ContractFieldPanel.svelte 특약 탭, contracts.specifications)
+// 을 그대로 재사용한다 — Stephen 확정: "기존 특약 조항 패널 재사용". 참고: 이 데이터는 원래
+// /contract/[token] 서명 화면 맨 아래에 "특약 조항"이라는 별도 섹션으로도 항상 표시되는데(그
+// 화면의 공용 렌더링, 모드 무관), 이 마커는 그와 별개로 정산내역 표 안의 "특이사항" 칸에도
+// 같은 데이터를 인라인으로 보여주기 위한 것 — 하나를 없애고 다른 하나로 대체하는 것이 아니다.
+const SPECIAL_NOTES_MARKER = '<!--SPECIAL_NOTES-->'
+
+/**
+ * "특약 조항"(specifications) 목록을 "key: value"쌍을 <br/>로 이어붙인 텍스트로 합쳐
+ * 정산내역 "특이사항" 마커에 채운다. 빈 배열/키 없는 항목은 제외 — 전부 없으면 &nbsp;(빈 칸
+ * 유지, 기존 하드코딩 동작과 시각적으로 동일).
+ */
+export function applySpecialNotesMarker(
+  html: string,
+  specifications: { key: string; value: string }[] | null | undefined,
+): string {
+  const rows = (specifications ?? []).filter((s) => s.key?.trim())
+  const replacement = rows.length === 0
+    ? '&nbsp;'
+    : rows.map((s) => `${escapeHtml(s.key)}: ${escapeHtml(s.value)}`).join('<br/>')
+  return html.split(SPECIAL_NOTES_MARKER).join(replacement)
+}
+
 /**
  * HTML형 계약서의 스칼라 변수 치환 (XSS 이스케이프 적용).
  * @internal
@@ -338,13 +402,28 @@ export function findUnresolvedVariables(content: unknown): string[] {
  * 중복 제거된 목록으로 반환한다. 저장/발송 전에 호출해 발송을 막는 용도(클라이언트 측
  * 사전 검증) — substituteHtmlDocument 자체의 반환 시그니처는 기존 호출부·테스트(HT-1~7)
  * 보호를 위해 변경하지 않는다.
+ *
+ * ⚠️ 2026-09-07 발견·수정 — <!--REPEAT:상품목록--> 반복영역 내부의 변수(NO./상품명/
+ * 상품코드/수량/금액/비고)는 ContractSubstitutionData의 최상위 키가 아니라
+ * ContractLineItem(배열 각 항목)의 필드다. substituteHtmlDocument()는 이 영역을
+ * applyHtmlItemSubstitution()으로 별도 처리(1순위 item 필드 → 2순위 스칼라 폴백 →
+ * 그래도 없으면 빈 문자열)하므로 실제 치환 시 잔존 `{{}}` 텍스트가 절대 남지 않는데,
+ * 이 사전검증 함수는 반복영역도 최상위 스칼라 검사 로직을 그대로 적용해 `data.금액`·
+ * `data.비고`(ContractSubstitutionData에 존재하지 않는 키)를 "누락"으로 오탐했다
+ * (상품명/상품코드/수량은 마침 최상위에도 동명의 하위호환 필드가 있어 우연히 통과됨).
+ * 그 결과 실사용 중 정상적으로 작성된 계약서도 "금액, 비고 항목이 채워지지 않았다"며
+ * 발송이 막히는 실사용 버그로 이어졌다(Stephen 제보) — 반복영역 내부는 사전검증 대상에서
+ * 제외(반복영역은 substituteHtmlDocument의 자체 폴백 로직이 항상 안전하게 처리함).
  */
 export function findHtmlUnresolvedVariables(
   html: string,
   data: ContractSubstitutionData,
 ): string[] {
+  // 반복영역 내부 변수는 ContractLineItem 필드 기준으로 별도 처리되어 항상 안전하게
+  // 치환되므로(위 주석 참고), 최상위 스칼라 검사 대상에서 완전히 제외한다.
+  const withoutRepeat = html.replace(REPEAT_MARKER_RE, '')
   const found = new Set<string>()
-  for (const match of html.matchAll(RESIDUAL_VAR_RE)) {
+  for (const match of withoutRepeat.matchAll(RESIDUAL_VAR_RE)) {
     const key = match[1].trim()
     if (key === 'NO.' || key === 'NO') continue // 반복영역 순번은 항상 치환됨
     if (typeof data[key as keyof ContractSubstitutionData] !== 'string') found.add(key)

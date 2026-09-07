@@ -32,6 +32,206 @@ GATE E: ✅ 통과 — 커밋은 Stephen 직접 실행 대기. (1차·2차 검�
 
 ---
 
+## NOW — CMS 예약목록 정밀검증 3건 수정 + HOLD 정책 전면 개편 (2026-09-07, 구현 완료·GATE E 검수 대기)
+
+### 발견 경위
+
+Stephen이 `/cms/reservation?selected=117`에서 4가지 문제를 보고: ① 계약서탭 양식 오류
+② 대여정보 내 대여일수 오류(당일 방문 12시간 대여가 "0일"로 표시) ③ 방문 방식 시간정보
+오류 ④ 계약서탭 콘솔 500 에러(`GET /api/cms/reservations/117/contract-data`). 조사 중
+③은 별건(같은 날 아침 커밋 배포 이전 데이터 확인 필요 없음, ②와 동일 근본원인으로 판명)으로
+합류됐고, 이어서 Stephen이 HOLD(예약신청완료) 재고점유 정책 자체를 전면 개편하라고 추가 지시.
+
+### 1) 계약서탭 500 에러 — `pickup_point_id`/`return_point_id` 컬럼 누락
+
+`contract-data/+server.ts`가 조회하는 두 컬럼이 Stage·Production 어디에도 실제로 존재하지
+않았음(최초 스키마 마이그레이션 #10에 정의는 돼 있었으나 한 번도 실제 반영된 적 없었던 것으로
+추정 — Explore 조사로 DROP 이력 없음 확인). 오늘 아침 커밋(`cc8ee6d`, CS2654 C2 지점옵션
+기능)이 이 컬럼 조회 코드만 추가하고 마이그레이션은 누락했던 것이 원인.
+
+- `supabase/migrations/20260907020000_452_rental_reservations_pickup_point_columns.sql`
+  (신규 컬럼 추가) — **Stage·Production 적용 완료**
+- `src/lib/types/database.ts` — 타입 보완
+- 브라우저 직접 검증: `GET /api/cms/reservations/12487/contract-data → 200 OK` 확인,
+  계약서 양식 미리보기 모달 정상 렌더링 확인(Stage 테스트 예약으로 재현)
+
+### 2) 대여일수 "0일" 표시 오류
+
+`rental_reservations.rental_days`가 `GENERATED ALWAYS AS (end_date - start_date)` 단순
+캘린더 일수차 컬럼이라, 방문(비배송) 당일 12시간 이내 대여를 "0일"로 표시. Stephen 확정
+규칙: "12시간 초과 시 1일, 12시간 이내 시 12시간으로 표시" — 이미 존재하던
+`cartRentalFee.ts`의 `calcRentalMinutes`/`calcRentalPeriodParts`(12시간 블록 올림 산식)를
+CMS 표시에도 재사용.
+
+- `src/lib/server/rentalDaysLabel.ts`(신규) — `is_delivery_type` 배치조회 + 블록산식으로
+  `rental_days_label` 계산
+- 호출부 4곳: `cms/reservation`·`cms/rentals`·`cms/mobile/rentals` `+page.server.ts`,
+  `api/cms/reservations/[id]/detail/+server.ts`
+- 표시부 3곳: `RentalDetailPanel.svelte`, `cms/rentals`·`cms/mobile/rentals` `+page.svelte`
+- DB 마이그레이션 불필요(기존 컬럼만 조회). 브라우저 직접 검증: "대여일수: 12시간" 정상
+  표시 확인(당일 방문 10:00~12:00 케이스)
+
+### 3) HOLD 정책 전면 개편 (Stephen 지시, 기존 정책 의도적 반전)
+
+기존(Migration #285→394→431): 생성 후 30분(계약 발송 시 GREATEST(created_at, sent_at)
+리셋) 자동만료. Stephen 신규 확정: **고객 예약신청완료(hold) 건은 타이머 자체가 없다 —
+전자계약 발행(발송), 고객 본인 예약취소, 관리자 예약거부 중 하나가 실행되기 전까지 재고점유
+무기한 유지.** 계약 발송 시점에만 30분 타이머가 시작된다.
+
+- `supabase/migrations/20260907030000_453_release_reservation_hold_contract_trigger_only.sql`
+  — `release_reservation_hold()` WHERE절에서 `created_at` 기반 폴백 완전 제거, 계약
+  `sent_at` 존재 시에만 그 시각 기준 30분 판정(SQL 3치논리로 계약 미발송 hold는 자동 제외)
+  — **Stage·Production 적용 완료**
+- `supabase/migrations/20260907040000_454_send_rental_chat_notification_reservation_id.sql`
+  — 채팅카드 action_payload에 `reservation_id` 추가(모든 notify_type 공통) —
+  **Stage·Production 적용 완료**
+- `src/lib/components/chat/ActionCard.svelte` — `reservationHoldExpiredLive` 라이브 상태
+  체크 추가(`returnRemindBlocked`와 동일 패턴), `status IN ('expired','cancelled')`일 때만
+  "기한 만료" 표시(고객취소·관리자거부 둘 다 `'cancelled'`로 수렴함을 조사로 확인)
+- `src/routes/api/chat/messages/[id]/execute-action/+server.ts` — 조사 중 발견한 갭(서버측
+  클릭 재검증이 reservation_hold에 대해 무력했던 부분) 함께 보강
+- 관리자 거부·고객 본인 취소는 기존 `update_reservation_status(...,'cancelled')` 경로가
+  이미 즉시 전이시키므로 별도 코드 변경 불필요(조사로 확인)
+- TDD 재작성: `holdExpiration.test.ts`(5케이스 정책반전 반영) ·
+  `holdExpirationContractTimer.test.ts`(EC-5a 반전 + order_items 연결 보강, 기존에
+  order_items 연결 없이도 우연히 통과하던 검증 공백 함께 해소) ·
+  `paymentContractOrderRedesign.test.ts`(F-6 첫 케이스 반전) — **29/29 GREEN**(Stage 실DB
+  통합테스트)
+- 문서 갱신: `service-operations.md` §10, `rental-lifecycle.md` HOLD 섹션 전면 재작성
+
+### 스코프 외 — 조사만 하고 코드 변경 안 함 (보고 완료)
+
+- 취소된 예약(CS2609028, id=111)의 대여정보 "-" 표시 — 장바구니 담기 후 대여기간 선택 전
+  삭제된 케이스로 DB값 자체가 NULL, 렌더링 버그 아님(전수조사 결과 상태기반 분기 없음 확인)
+- `/cms/products?selected=2af56415-...` "SONY PXW-Z90" 재고 표시 — 코드 버그 아니라 Stage DB에
+  동일 이름 상품이 중복 등록(재고 8개짜리·1개짜리 각 1건)돼 있고 옵션상품 연결 3건이 전부
+  1개짜리를 가리키는 데이터 문제. Stephen이 직접 정리하기로 함(Production엔 이 상품 자체가
+  없어 Stage 전용 이슈).
+- `CustomerDetailPanel.svelte`(`/cms/customers`)의 동일 클래스 `rental_days` 원시값 표시 —
+  별도 화면·별도 데이터소스라 이번 요청 범위 밖, 보고만 함
+
+### 검증 상태
+
+`npm run check` 신규 에러 0건(기존 무관 `vite.config.ts` 에러 1건만 잔존) · 관련 vitest
+29/29 GREEN · 인접 예약 회귀(`createHoldReservationWithShipment`·`reservation.test.ts`)
+무회귀 확인 · 브라우저 직접 검증 2건(계약서탭 200 OK·대여일수 "12시간") 완료.
+
+### @sp3-qa-agent 검수 결과 (2026-09-07) — 조건부 통과
+
+```
+규칙 정합성·기술부채·시범오픈 기준(S2) 전부 재확인(테스트 재실행 포함) — 코드 자체를
+다시 고쳐야 할 결함 없음. 유일한 지적: Migration #452·#453에 ROLLBACK 주석 블록 누락
+(이 저장소의 확립된 컨벤션, #394·#431은 포함돼 있었음) → 즉시 반영 완료(문서 주석뿐,
+DB 재적용 불필요).
+
+참고(비차단, 이번 세션 결함 아님): release_reservation_hold()의 order_items 자기조인
+한계(TASK.md 별도 CRITICAL 블록에 이미 등재·GATE B 대기 중)가 이번 정책 반전으로 hold
+만료의 유일한 트리거가 됨 — 실패 방향이 "조기 오만료"에서 "영구 미만료(재고 과다점유)"로
+완화됐으나, 다음 세션에서 그 CRITICAL 항목 우선순위 재검토 권장.
+Production DB 적용은 이 QA 서브에이전트에 DB 접근 도구가 없어 독립 재검증은 못 함(Stage는
+vitest 재실행으로 직접 재확인) — 커밋 전 DRIFT_CHECK_PROCEDURE.md 절차 1·2·4 권장.
+```
+
+**GATE E — 조건부 통과, 지적사항 반영 완료.** git 커밋은 Stephen 직접 실행 대기.
+
+---
+
+## NOW — 🔴 CRITICAL: `hooks.server.ts` 세션검증에서 만료된 리프레시 토큰이 미처리 예외로 전파되어 `/cart` 등에서 500 에러 발생 (2026-09-07 발견, GATE B 승인 대기)
+
+### 발견 경위
+
+Stephen 요청("상품상세정보 금액·장바구니·내정보의 대여정보 화면의 로컬-실서버 UI/UX 간극 정밀검증,
+production 정상화에 집중")에 따라 실서버(Vercel `crazyshot-svelte` 프로젝트, team `pseries`)의
+`get_runtime_errors`(최근 7일)를 직접 조회하는 과정에서 발견. Claude Browser로 로컬·실서버를
+직접 비교하는 방식은 두 차례 오탐(엉뚱한 도메인 조사, 세션 상태 불일치로 인한 착시)을 낸 뒤
+폐기하고, Vercel 실서버 텔레메트리 직접 조회로 방법을 전환해 확보한 근거임(misidentifications.md
+등재 검토 대상 — 두 차례의 오탐 경위는 이 세션의 대화 기록 참고).
+
+### 재현(Vercel `get_runtime_errors` 직접 조회로 확인, 최근 7일 데이터)
+
+```
+AuthApiError: Invalid Refresh Token: Refresh Token Not Found
+count=10  users=3  영향 라우트: /cart, /, /cms, /cms/products
+first=2026-07-02T01:52:18.000Z  last=2026-09-05T07:53:41.000Z
+(일회성 아님 — 2개월간 반복 발생 중인 상시 결함)
+
+스택트레이스(발췌):
+  at handleError (@supabase/auth-js/dist/main/lib/fetch.js:84:11)
+  at async _handleRequest (fetch.js:127:9)
+  at async _request (fetch.js:109:18)
+  at async GoTrueClient.js:3910:24
+```
+
+### 근거 — `src/hooks.server.ts:32-39` 직접 확인
+
+```ts
+const getSessionAndUser = async () => {
+  const { data: { session }, error } = await event.locals.supabase.auth.getSession()
+  if (error || !session) return { session: null, user: null }
+  const { data: { user }, error: userError } = await event.locals.supabase.auth.getUser()
+  if (userError || !user) return { session: null, user: null }
+  return { session, user }
+}
+```
+
+이 함수는 `getSession()`/`getUser()`가 정상적으로 `{data, error}` 형태로 반환하는 경우만
+처리한다. 그런데 실제 에러의 스택트레이스(GoTrueClient.js 내부에서 발생)로 볼 때, 리프레시
+토큰이 만료·무효화된 특정 상황에서 Supabase 클라이언트가 `{data, error}`를 반환하지 않고
+예외를 던진다. 이 함수엔 `try/catch`가 없어 예외가 그대로 위로 전파되고, `hooks.server.ts`
+최상단(6-54행)의 catch는 `console.error` 로그만 남기고 다시 throw하므로 **최종적으로
+사용자에게 500 에러 페이지가 뜬다** — "재로그인 필요" 같은 정상적 안내가 아니라 완전한
+에러 화면.
+
+**로컬에서 재현이 잘 안 되는 이유**: 로컬 개발 세션은 대부분 로그인한 지 얼마 안 된 짧은
+세션이라 리프레시 토큰 만료 상황 자체가 잘 발생하지 않는다. 실서버는 실사용자가 며칠~몇 주
+로그인 상태를 유지하다 보니 이 상황이 실제로 발생한다 — "로컬-실서버 간극"으로 느껴졌던
+현상의 실체 중 하나.
+
+### 영향 범위
+
+```
+- 확인된 영향 라우트: /cart(요청 3개 화면 중 하나), /(홈), /cms, /cms/products
+- 리프레시 토큰이 만료·무효화된 상태로 재방문하는 모든 로그인 사용자가 대상 —
+  회원 여부와 무관하게 앱 전역에 영향(hooks.server.ts는 모든 요청에서 실행됨)
+- 장바구니(/cart)는 비회원도 이용 가능한 화면인데, 회원으로 로그인했다가 토큰이 만료된
+  상태로 재방문하면 비회원처럼 안내되는 대신 500 에러로 완전히 막힘
+```
+
+### 다음 단계 (GATE B 필요 — 아직 승인 대기, 구현 착수 안 함)
+
+TDD 강제 도메인(인증 키워드 해당) + `src/hooks.server.ts`는 core-rules.md "Frozen 파일 목록"
+등재 파일이라 변경 시 CRITICAL 게이트 필수. 제안 수정(getSessionAndUser 전체를 try/catch로
+감싸 예외 시 `{session:null, user:null}` 반환 — 이미 있는 "정상 실패" 처리와 동일하게 취급):
+
+```ts
+const getSessionAndUser = async () => {
+  try {
+    const { data: { session }, error } = await event.locals.supabase.auth.getSession()
+    if (error || !session) return { session: null, user: null }
+    const { data: { user }, error: userError } = await event.locals.supabase.auth.getUser()
+    if (userError || !user) return { session: null, user: null }
+    return { session, user }
+  } catch {
+    return { session: null, user: null }
+  }
+}
+```
+
+Stephen 서비스 의도 언어 GATE B 질문 예정 문구(초안): "로그인하고 오래 접속을 안 하다가 다시
+사이트에 들어오면, 장바구니를 포함한 여러 화면에서 완전히 에러 화면이 뜨는 경우가 실제
+사용자 3명에게서 반복 확인됐습니다. 이걸 고치면 그런 경우 로그인이 풀린 것처럼만 처리되고
+화면은 정상적으로 뜹니다. 진행해도 될까요?"
+
+### 부가 발견 (이번 스코프 밖, 별도 처리 필요 — 등록만 해둠)
+
+`/api/chat/message`에서 `ANTHROPIC_OAUTH_TOKEN` 환경변수 값이 실제 토큰이 아니라 curl 명령어
+문자열이 그대로 들어가 있어(`"curl https://api.anthropic.com/... -H 'Authorization: Bearer
+$ANTHROPIC_OAUTH_TOKEN'"` 형태) 채팅 AI 응답 파싱이 실패 중(2026-08-16~09-02, 4회). 별개로
+Anthropic API 크레딧 잔액 부족 에러도 1건 확인(2026-09-02). 이번 아젠다(상품상세·장바구니·
+대여정보) 스코프 밖이라 새 CRITICAL로 등록하지 않았음 — 필요 시 별도 요청.
+
+---
+
 ## NOW — 🔴 CRITICAL: `release_reservation_hold()` D-1 타이머가 order_items 미연결 예약에서 발송시각을 무시하는 결함 (2026-09-07 발견, GATE B 승인 대기)
 
 ### 발견 경위
@@ -1580,6 +1780,43 @@ GATE E: ✅ 통과 — git commit은 Stephen 직접 실행 대기.
 
 git commit은 Stephen 직접 실행 대기.
 
+### 후속16 — 옵션상품 수량 "+" 비활성 원인 진단 + Stage 데이터 정리 (2026-09-06, 같은 세션, 🔴 CRITICAL 도메인)
+
+Stephen 신고(`<launch-selected-element>`): 옵션상품(Manfrotto 055) 수량 `+` 버튼이 눌리지
+않음("옵션상품 추가 안되는 원인 찾아! 재고는 8개 그대로 점유하지 않은 상태야").
+
+```
+진단(Stage DB ezyvffjvuwmtuhpxdjrw 직접 조회, 코드 버그 아님 확인):
+  ① 실제 등록 재고는 두 상품(SONY PXW-Z90 본상품·Manfrotto 055 옵션) 전부 자식 1개뿐
+     (Stephen이 언급한 "8개"와는 불일치 — 확인 결과 실물 재고 자체가 1개).
+  ② get_available_stock_counts RPC는 "날짜 무관 — 비종결 상태(hold/confirmed/shipped/
+     in_use/return_requested) 예약이 하나라도 걸려있으면 그 자식은 점유 중"으로 계산하도록
+     설계돼 있음(2026-09-02 Stephen 확정 정책, service-operations.md 재고배지 절 — 정밀한
+     기간별 재계산은 하지 않음). 코드 버그 아니라 기존 확정 설계.
+  ③ 근본 원인: 2026-07-27~28에 생성된 테스트 예약 7건(두 상품의 유일한 자식 각각에 물려
+     있음, 전부 status='confirmed', 대여기간은 이미 다 지난 7~8월 날짜, 전부 동일 테스트
+     계정)이 한 번도 반납완료(returned/completed) 또는 취소 처리되지 않고 'confirmed'
+     상태로 방치돼 있었음 — ②의 날짜 무관 설계상 이 예약들이 영구히 "점유 중"으로 집계돼
+     available_count=0이 되고, 프론트의 stockCapFor()가 그 값을 그대로 max=0에 반영해
+     수량 + 버튼이 비활성화됨.
+
+Stephen 확인(AskUserQuestion) 후 조치: 위 7건(id 22,23,24,25,68,69,31)을
+update_reservation_status(id, 'cancelled') RPC로 개별 종결 처리(H-01 원칙 준수 — 직접
+DML 금지, RPC 경유). 코드 변경 없음 — 순수 Stage 데이터 정리.
+```
+
+### 검증 (후속16)
+
+```
+✅ get_available_stock_counts 재호출 — 두 상품 전부 available_count 0→1로 정상 회복
+✅ Claude Browser 실측 — 옵션(Manfrotto 055) qty-input max 속성 "0"→"1"로 변경 확인,
+   수량 증가 버튼 disabled=false 확인
+✅ Claude Browser 실클릭 — "+" 버튼 클릭 시 수량 0→1 정상 증가 확인(실제 기능 동작 검증)
+```
+
+이 항목은 코드 수정이 아니라 Stage DB 데이터 정리이므로 git commit 대상 없음(코드 diff
+없음). Production DB는 전혀 접촉하지 않음.
+
 ---
 
 ## DONE — 🟡 BOUNDARY: 장바구니 옵션상품 카드에 "필수"/"최소 1개 선택"/"배송대여 불가" 배지 미노출 수정 (2026-09-05, 이 세션)
@@ -2258,6 +2495,386 @@ GATE E 판정: 통과 ✅ (수정 필요 0건)
   #443 원문 대조로 직접 확인 — ③은 set_reservation_shipment_method RPC가 구조적으로
   차단해 실도달 불가함을 재확인했고, 코드 로직 자체는 그 DB 제약에 기대지 않고 대칭
   구현돼 있어 향후 제약이 완화돼도 안전함
+
+git add/commit은 Stephen 직접 실행 대기.
+```
+
+### 6차 추가 수정 — 발행자(대표이사) 서명·직인 삽입/제거 기능 신설 (2026-09-07, 같은 세션)
+
+```
+계기: Stephen이 CMS "서명/직인 이미지 등록"(cms_signature_assets 전역 등록)을 사용한 뒤
+"적용됐다"는 성공 토스트만 뜨고 계약서 어디에도 실제로 노출되지 않는다고 오류 제보. 조사
+결과 그 버튼은 전역 자산 라이브러리 등록만 할 뿐, "이 계약서에 실제로 붙이는" 별도 단계
+(contract_issuer_signatures + issuer-sign API + SealAssetPicker.svelte)가 이미 코드로는
+존재하지만 CMS 어느 화면에도 연결돼 있지 않은 고아 상태(Explore 서브에이전트로 전수 확인 —
+RentalContractViewer.svelte에도 참조 0건)임을 발견. Stephen 재지시: "스프레드시트/워드
+문서 편집에서의 서명(직인) 삽입 기능을 HTML형에도 동일하게 넣어라."
+
+재검토 결과 대표이사 도장은 계약서마다 달라지지 않는 회사 고정 이미지라 flow/spreadsheet
+처럼 "셀 위치를 골라 삽입"할 필요가 없고 "템플릿당 이미지 1개"로 충분함을 확인 — 오히려
+flow/spreadsheet보다 단순한 모델. 기존 issuer-sign/SealAssetPicker(고아 코드, contract별
+저장) 대신 contract_templates 단위로 저장하는 새 경로를 만들었다(고아 코드는 건드리지 않음
+— 별도 정리 필요 시 후속 세션).
+
+✅ 구현:
+  - Migration #450(Stage 적용 완료): contract_templates.html_issuer_signature_url TEXT,
+    contracts.html_issuer_signature_url TEXT(발행 시점 스냅샷 복사) 신설
+  - contract-substitution.ts: `<!--ISSUER_SIGNATURE-->` HTML 주석 마커 +
+    applyIssuerSignatureMarker(html, url) 신규 export — {{}} 변수 치환과 완전히 분리된
+    독립 패스(관리자 편집 미리보기에서도 변수 미치환 상태로 단독 호출 가능). http(s) 절대
+    URL만 허용(그 외는 마커 제거만) — javascript: 등 스킴 인젝션 차단
+  - defaultRentalContractHtml.ts: "대표이사" 셀에 마커 추가, 미지정 시 기존처럼
+    "한광익 (인)" 텍스트만 남아 1~5차까지의 동작과 완전히 하위호환
+  - ContractTemplatePanel.svelte: "발행자(대표이사) 서명·직인" 행 신설 — flow/spreadsheet
+    모드의 "서명/직인 삽입" 팝오버(ContractDocumentEditor.svelte)와 완전히 동일한
+    GET /api/cms/signature-assets 엔드포인트·자산 목록을 재사용, 클릭 시 삽입/제거.
+    라이브 미리보기에도 applyIssuerSignatureMarker 즉시 반영
+  - contracts/+page.server.ts(create/update), contracts/[id]/content/+server.ts(PATCH):
+    html_issuer_signature_url 폼/바디 필드 읽기 + http(s) URL 검증 + 저장
+  - contract-apply-template.ts, ContractTemplatePreviewModal.svelte: 발행(발송) 시점에
+    applyIssuerSignatureMarker → substituteHtmlDocument 순서로 합성해 실제 <img> 태그가
+    구워진 최종 html_document를 저장(고객 화면은 재처리 없이 그대로 렌더링)
+  - .claude/rules-ref/contract.md 파일 인덱스에 Migration #450 반영 예정(다음 문서 정리)
+
+✅ 실화면 검증(로컬 CMS, "[테스트] HTML형 발행발송 검증용" 템플릿):
+  - "서명/직인 삽입" 클릭 → 기존 cms_signature_assets 4건 팝오버 정상 표시(스프레드시트
+    모드와 동일 목록) → 1건 선택 → 미리보기에 <img class="issuer-sig-overlay"> 즉시 반영
+    (DOM 직접 조회로 src 정확히 일치 확인) → "수정 저장" → DB 직접 조회로
+    contract_templates.html_issuer_signature_url 영구 저장 확인
+  - 제거 버튼 동작(상태 null 처리) 코드 확인
+
+⚠️ 발견(내 작업과 무관, 동시 진행 중인 다른 세션 소관): 새 hold 예약으로 실제 "발행" 끝까지
+  테스트하려 했으나 contract-data API가 500 에러("column rental_reservations.
+  pickup_point_id does not exist")를 반환해 차단됨. 코드를 확인해보니 이 파일에 "CS2654
+  C2 — 지점옵션" 관련 코드(pickup_point_id/return_point_id 조회)가 내가 작성하지 않은
+  상태로 이미 추가돼 있었다 — 동시에 이 파일을 편집 중인 별도 세션이 관련 스테이지
+  마이그레이션을 아직 적용하지 않은 것으로 보인다. 내 5차 변경분(isPickupDelivery/
+  isReturnDelivery)은 그 코드 안에 그대로 보존돼 있음을 확인(clobber 없음). 이 결함은
+  내 6차 작업 범위 밖이라 직접 수정하지 않음 — 그 세션이 자신의 마이그레이션을 적용하면
+  자연히 해소될 것으로 판단.
+  → 이 라이브 차단 때문에 "발행→발송→고객 서명페이지" 전체 e2e는 이번 6차에서 미완료.
+    대신 순수 함수 레벨(node/tsx)로 실제 발행 시점과 동일한 조합 순서
+    (applyIssuerSignatureMarker → substituteHtmlDocument)를 재현해 검증 완료:
+    이미지 URL 있음 → <img src="..."> 정확히 생성 + "한광익 (인)" 텍스트 유지 + 미치환
+    변수 0건 / URL 없음 → 마커만 깨끗이 제거(기존 동작과 동일) / javascript: 스킴 →
+    img 생성 차단(XSS 방어 확인).
+
+검증: npm run check 신규 에러 0건(기존 vite.config.ts 1건만 유지), 관련 vitest 4개 파일
+113/113 GREEN.
+
+git add/commit은 Stephen 직접 실행 대기. sp3-qa-agent 재검수 요청 예정.
+```
+
+### 7차 추가 수정 — 서명·직인 크기조절 툴바 이식 + 이미지를 표 최상위 레이어로 오버레이 (2026-09-07, 같은 세션)
+
+```
+계기 ①: Stephen이 3개 UI 요소(스프레드시트형 이미지 크기조절 팝오버, 그 결과로 폭이
+조절된 <img class="cse-cell-image">, 6차에서 만든 나의 단순 <img class="issuer-sig-
+overlay">)를 직접 선택해 "첫째+둘째 영역 기능을 셋째 영역에 그대로 반영해!!!" 지시 —
+6차는 URL 삽입/제거만 있고 스프레드시트형에 이미 있는 소(100)/중(200)/대(400) 프리셋+
+커스텀 px 입력 크기조절 기능이 빠져 있었음.
+
+계기 ②(같은 turn, 별도 지시): "직인(서명) 이미지를 표양식 맨 위 레이어로 겹치게 노출
+수정해. 직인(서명) 이미지 선택 시 설정 바 UI 그대로 반영해: 지금 캔버스 툴바에 노출되는
+방식을 멋대로 구현하지마!" — 6차 구현은 이미지가 "한광익 (인)" 텍스트 뒤에 인라인으로
+이어붙어(display:inline-block) 셀 폭을 밀어내는 방식이었는데, 실제 도장처럼 표 위에
+겹쳐 보여야 한다는 지적 + 크기조절 UI를 임의로 새로 디자인하지 말고
+ContractSpreadsheetEditor.svelte의 실제 팝오버(색상·배치·버튼 순서)를 그대로 가져오라는
+재확인.
+
+✅ 구현:
+  - Migration #451(Stage 적용 완료): contract_templates.html_issuer_signature_width
+    INTEGER, contracts.html_issuer_signature_width INTEGER(발행 시점 스냅샷) 신설.
+    20~1200 클램프, 미지정 시 기본 90px.
+  - contract-substitution.ts: applyIssuerSignatureMarker(html, url, width?)로 확장 —
+    서버측 20~1200 클램프 재검증 후 <img style="width:{px}px">로 생성.
+  - defaultRentalContractHtml.ts:
+    · `.issuer-sig-overlay`를 display:inline-block → position:absolute(top/left:50%,
+      transform:translate(-50%,-50%), z-index:5, pointer-events:none)로 전환.
+    · 마커를 감싼 <td>에 `.sig-host-cell`(position:relative) 클래스 추가 — 이 두 클래스
+      조합으로 도장 이미지가 "한광익 (인)" 텍스트 위에 정확히 겹쳐 뜨는 최상위 레이어가
+      됨(스프레드시트형 renderCellValue()가 셀에 position:relative를, wrap에
+      position:absolute+중앙정렬을 주는 것과 동일 원리).
+  - ContractTemplatePanel.svelte: 6차의 가로 나열 버튼(.html-sig-resize-group 등, 보라색
+    테마)을 전부 폐기하고, ContractSpreadsheetEditor.svelte의 실제 팝오버를 그대로
+    이식한 새 마크업/CSS로 교체:
+    · `.html-sig-thumb-wrap`(position:relative) 안에 미리보기 썸네일 + `.html-sig-
+      toolbar`(position:absolute, bottom:calc(100% + 4px), left:50%, translateX(-50%),
+      배경#fff/테두리#ECEBF4/radius 8px/box-shadow 0 4px 16px rgba(16,11,50,.12),
+      z-index:10) — 썸네일 바로 위에 뜨는 floating 팝오버로 배치 전환.
+    · 버튼 스타일 `.html-sig-tbtn`(투명 배경, hover 시 #ECEBF4, 텍스트 #100B32,
+      font-size 11px, radius 6px) + 구분선 `.html-sig-tsep`(1px×16px, #ECEBF4) +
+      너비입력 `.html-sig-tinput`(56×24px, 테두리 #ECEBF4) — 전부 renderCellValue()의
+      mkOverlayToolbarBtn()/mkOverlayToolbarSep() 인라인 스타일 값을 그대로 CSS 클래스로 전사.
+    · "제거" 텍스트 버튼(.btn-sig-cancel) 삭제 → 스프레드시트형과 동일하게 "✕" 기호 버튼
+      (`.html-sig-tbtn--danger`, color:#FF3535)으로 교체, 툴바 안에 통합.
+    · 너비입력 커밋 트리거도 스프레드시트형과 동일하게 Enter키+blur 두 가지로 통일
+      (기존 onchange 단일 트리거에서 변경).
+  - 나머지 5개 파일(contract-template.ts, contract-templates/+server.ts, contracts/
+    +page.server.ts, content/+server.ts, contract-apply-template.ts,
+    ContractTemplatePreviewModal.svelte)은 html_issuer_signature_width를 URL과 동일한
+    패턴으로 select/검증/저장/발행 경로 전체에 배선(6차의 url 배선과 나란히 병렬 추가).
+
+✅ 실화면 검증(로컬 CMS, "[테스트] HTML형 발행발송 검증용" 템플릿, 뷰포트 1600px):
+  - 서명 이미지 삽입 후 썸네일 위에 스프레드시트형과 동일한 색상·배치의 플로팅 툴바
+    노출 확인(스크린샷 대조).
+  - 대(400) 클릭 → DOM 직접 조회로 `.issuer-sig-overlay` style="width:400px" 즉시 반영
+    확인 + 스크린샷으로 도장이 "임대인 정보" 표 전체를 뒤덮으며 겹쳐지는 것을 육안 확인
+    (표 뒤가 아니라 표 위에 뜨는 레이어임을 명확히 확인).
+  - 소(100) 재클릭 → "수정 저장" → DB 직접 조회(SQL)로
+    `html_issuer_signature_width=100` 영구 저장 확인.
+  - javascript_tool로 `.sig-host-cell`(position:relative)·`.issuer-sig-overlay`
+    (position:absolute, z-index:5, transform translate(-45px,-45.05px) = 90px 이미지의
+    절반 = 셀 정중앙 정렬)의 computedStyle을 직접 조회해 오버레이 좌표계산이 의도대로
+    동작함을 수치로 재확인.
+
+검증: npm run check 신규 에러 0건(기존 vite.config.ts 1건만 유지, 이 세션에서 건드린
+파일 전부 경고 0건). contractHtmlSubstitution.test.ts 13/13 GREEN(width 인자 추가가
+기존 URL-only 테스트 케이스를 깨지 않음 확인).
+
+git add/commit은 Stephen 직접 실행 대기. sp3-qa-agent 재검수 요청 예정.
+```
+
+### 7차 후속 수정 ① — sp3-qa-agent 검수로 발견된 발행 경로 width 누락 회귀 수정 (2026-09-07, 같은 세션)
+
+```
+7차 완료 직후 요청한 sp3-qa-agent 재검수에서 ⚠️ 수정 필요 판정 — 6차에서 이미 잡았어야
+했던 결함이 그대로 남아있었음이 발견됨: ContractTemplatePreviewModal.svelte의
+applySelectedTemplate()(실제 "발행/발송" 경로)에서 applyIssuerSignatureMarker() 호출에
+width 인자가 빠져 있었고, applyContractTemplate({...}) 호출에도 htmlIssuerSignatureWidth가
+전달되지 않고 있었다. 그 결과 편집기 미리보기(ContractTemplatePanel.svelte)에서는
+설정한 크기가 정상 반영되는데, 실제 발송되는 계약서(contracts.html_document에 구워지는
+최종 <img> 태그)는 항상 기본값 90px로 고정되는 실사용 회귀였다 — 지금까지의 실화면
+검증이 전부 템플릿 편집 화면 저장 경로만 확인했고 발행 경로는 검증하지 않아 미발견 상태로
+남아있었음(원인: 컨텍스트 압축 전 진행 중이던 작업이 이 파일의 두 번째 호출부까지
+마치기 전에 사용자의 새 지시 2건이 들어와 우선 처리하면서 누락).
+
+수정: applySelectedTemplate() 내 applyIssuerSignatureMarker() 호출에 3번째 인자
+(selectedTemplate.html_issuer_signature_width) 추가 + applyContractTemplate({...}) 호출에
+htmlIssuerSignatureWidth: isHtml ? (selectedTemplate.html_issuer_signature_width ?? null) :
+undefined 추가(기존 htmlIssuerSignatureUrl과 동일 패턴).
+
+검증: npm run check 해당 파일 신규 에러 0건(기존 2건 경고만 유지) — 이제 두 호출부
+(라이브 미리보기 line ~122, 실제 발행 line ~283) 모두 width를 동일하게 전달함을 grep으로
+재확인.
+```
+
+### 7차 후속 수정 ② — 크기조절 툴바를 상단 행에서 "문서 안 실제 도장 이미지 클릭 시 그 위" 방식으로 재배치 (2026-09-07, 같은 세션)
+
+```
+Stephen이 3개 UI 요소(직인이 오버레이된 표 셀, 상단 행의 작은 미리보기+크기조절 툴바)를
+직접 선택해 "설정바가 문서양식 내 직인(서명) 이미지 선택 시 위에 위치해야해. -자꾸
+요구하지 않은 짓을 해?" 지적 — 7차 1회차 구현은 크기조절 툴바를 상단 "발행자(대표이사)
+서명·직인" 행의 작은 미리보기 썸네일 옆에 붙여뒀는데, 이는 실제 문서 미리보기
+(.html-preview-doc) 안에 렌더링된 진짜 도장 이미지와는 별개 위치라 "이미지를 선택하면
+그 위에 툴바가 뜬다"는 ContractSpreadsheetEditor.svelte의 실제 UX(이미지 자체를 클릭 →
+그 자리 위에 플로팅)와 달랐다.
+
+수정: 상단 행은 라벨+작은 정적 미리보기+안내문구("아래 문서 안의 도장 이미지를 클릭하면
+크기를 조절할 수 있습니다")+제거 버튼으로 단순화(크기조절 UI 완전히 제거). 대신
+.html-preview-doc(position:relative로 전환) 안에 {@html previewHtml}로 렌더링된 실제
+<img class="issuer-sig-overlay">에 직접 클릭 리스너를 붙여(DOM 재생성마다 $effect가
+재바인딩) 클릭 시 그 이미지의 실측 좌표(getBoundingClientRect) 바로 위에 동일한
+크기조절 툴바(소/중/대+너비입력+✕삭제)를 절대좌표로 띄운다(positionDocSigToolbar()).
+이미지 위쪽 공간이 부족하면(overflow:auto 컨테이너 상단 경계에 잘림 — 큰 이미지+스크롤
+위치 조합) 자동으로 이미지 아래쪽으로 전환하는 방어 로직(docSigToolbarBelow, 42px
+clearance 판정)도 추가 — 순수 "위에만 고정"하면 극단적으로 큰 이미지에서 툴바가
+컨테이너 밖으로 잘려 조작 불가능해지는 문제를 방지.
+
+실화면 검증(로컬 CMS, 뷰포트 1600px):
+  - 도장 이미지(100px) 클릭 → 그 이미지 상단 중앙 8px 위에 정확히 정렬된 툴바 노출
+    확인(getBoundingClientRect 수치로 gap=8px, 수평중심 일치 확인).
+  - 대(400) 클릭 → 이미지가 표 전체를 뒤덮으며 커짐 + 툴바가 below 모드로 자동 전환됨을
+    DOM 클래스(html-sig-toolbar--below)로 확인.
+  - 소(100) 재선택 후 "수정 저장" → DB 직접 조회로 html_issuer_signature_width=100 영구
+    반영 재확인.
+
+검증: npm run check 신규 에러 0건. contractHtmlSubstitution.test.ts 13/13 GREEN(로직
+무변경 확인).
+
+git add/commit은 Stephen 직접 실행 대기.
+```
+
+### 7차 후속 검증 — HTML 계약양식 전역 변수 정보 동기(파싱) 재검증 (2026-09-07, 같은 세션, 읽기전용)
+
+```
+Stephen 요청: "html 계약양식 전역의 변수 정보 동기(파싱) 정상 여부 재검증." 코드 수정 없이
+읽기전용 검증만 수행.
+
+✅ 정상 확인:
+  - defaultRentalContractHtml.ts에서 실제 사용 중인 {{}} 변수 23개(NO./고객이름/금액/
+    기본대여요금/반납일시/반납일자/반납형태/배송비/비고/상품명/상품코드/수량/수령일시/
+    수령일자/수령형태/연락처/요금유형/이메일/주소/차감포인트/최종합계/할인금액/할인차감)
+    전부 ContractSubstitutionData 또는 ContractLineItem(REPEAT 전용)에 대응 키 존재 확인.
+  - substituteHtmlDocument()의 REPEAT 처리(1순위 item 필드 → 2순위 스칼라 폴백) +
+    findHtmlUnresolvedVariables() 발송전 가드(ContractTemplatePreviewModal.svelte send())
+    가 정상 배선돼 있음을 코드로 재확인.
+  - 관련 vitest 3개 파일 45/45 GREEN(contractHtmlSubstitution·contractUnresolvedVariables·
+    contractDataLineItems).
+  - 실화면 라이브 검증(로컬 CMS, 실제 예약 CS26094933 — 결제완료·동일주문 Sony FX6-12 2건
+    묶음): "계약서 양식 적용 & 발송" 모달에서 HTML형 템플릿 미리보기 전체 텍스트 추출 →
+    잔존 `{{...}}` 원문 0건(모든 변수가 값 또는 '-'로 치환 완료). REPEAT 영역에서 동일
+    주문 묶음 수량 dedup 로직(actualQty, 2026-09-03 수정분)이 실데이터로 "수량=2" 정확히
+    반영됨도 확인. 발송 없이 "취소"로 종료(사이드이펙트 없음).
+
+⚠️ 발견(파싱 실패 아님 — 템플릿 저작 배선 공백, 코드 수정 없이 보고만):
+  1. 최상단 `<p class="issue-date">(계약서 발행일시: {{수령일시}})</p>` — 레이블은 "계약서
+     발행일시"인데 실제 치환 변수는 {{수령일시}}(고객 픽업 시각)로 되어 있어 의미가 어긋남.
+     같은 날 다른 세션(CS2654 C2)이 정확히 이 목적의 `{{계약서발행일}}`(contracts.
+     created_at)을 이미 ContractSubstitutionData·contract-data/+server.ts에 추가했으나,
+     이 HTML 템플릿의 해당 자리는 아직 그 변수로 교체되지 않음(1차 라운드부터 존재하던
+     원래 배선 그대로).
+  2. 정산내역 "구분 → 대여지점" 값 셀이 `&nbsp;`(하드코딩 공백)로 남아있음 — 같은 CS2654
+     C2가 추가한 `{{지점옵션}}`(수령/반납 지점명, contract-data/+server.ts에서 이미 정상
+     계산됨)이 이 자리에 연결되지 않은 상태.
+  3. CS2654 C2가 추가한 나머지 3개(총 정상 대여가·총사용시간·할인반영금액)는 이 HTML
+     템플릿 어디에도 대응 셀이 없음 — 스프레드시트형 전용으로 추가된 것인지, 이 템플릿에도
+     반영이 필요한지 불명확.
+
+판단: 위 3건은 "파싱 동기화 오류"가 아니라 "템플릿에 아직 연결 안 된 신규 변수" 성격이고,
+현재 다른 세션이 CS2654 C2(계약변수 관련) 작업을 진행 중인 것으로 보여 이 파일을 직접
+수정하면 그 세션 작업과 충돌할 위험이 있다 — 요청이 "재검증"이었으므로 수정 없이 발견
+사실만 보고. 반영이 필요하면 Stephen 확인 후 별도 진행.
+```
+
+### 8차 — 위 재검증에서 발견된 1·2번 반영 + 발송 실패 CRITICAL 버그 수정 + 추가 3건 진단 (2026-09-07, 같은 세션)
+
+```
+Stephen 지시: "1번, 2번 반영해주고 추가로 다음을 확인해." (7차 후속 검증이 보고한 배선
+공백 2건을 실제 반영 + 3개 신규 증상 조사 요청)
+
+✅ 반영 완료 — 1·2번 (defaultRentalContractHtml.ts):
+  1. `<p class="issue-date">(계약서 발행일시: {{수령일시}})</p>` → `{{계약서발행일}}`로 교체
+     (레이블-변수 불일치 해소, contracts.created_at 기준 실제 발행일 표시).
+  2. 정산내역 "구분 → 대여지점" 값 셀의 하드코딩 `&nbsp;` → `{{지점옵션}}`으로 교체
+     (수령/반납 지점명 실데이터 연결).
+
+✅ CRITICAL 버그 수정 — "채팅으로 발송" 클릭 시 "계약서에 아직 채워지지 않은 항목이
+있어 발송할 수 없습니다: 금액, 비고" 오탐으로 발송 자체가 불가능하던 결함
+(contract-substitution.ts findHtmlUnresolvedVariables()):
+  원인: `<!--REPEAT:상품목록-->` 반복영역 내부 변수(NO./상품명/상품코드/수량/금액/비고)는
+  ContractSubstitutionData의 최상위 키가 아니라 ContractLineItem(배열 항목)의 필드다.
+  실제 치환(substituteHtmlDocument)은 이를 알고 항목별로 안전하게 처리(1순위 item 필드 →
+  2순위 스칼라 폴백 → 빈 문자열)하는데, 발송 전 사전검증 함수(findHtmlUnresolvedVariables)는
+  반복영역도 최상위 스칼라 기준으로 그대로 검사해 `data.금액`·`data.비고`(애초에
+  ContractSubstitutionData에 없는 키)를 "누락"으로 오판했다. 상품명/상품코드/수량은
+  우연히 최상위에도 동명의 하위호환 스칼라 필드가 있어 통과됐을 뿐, 금액·비고는 최상위
+  동명 필드가 없어 매번 오탐 → 정상적으로 작성된 계약서도 항상 발송 차단되는 실사용
+  CRITICAL 버그였음.
+  수정: REPEAT 영역을 사전검증 스캔 대상에서 완전히 제외(반복영역은 실제 치환 시
+  substituteHtmlDocument가 항상 안전하게 처리하므로 별도 사전검증이 애초에 불필요).
+  회귀 테스트 2건 추가(contractUnresolvedVariables.test.ts) — REPEAT 내부 금액·비고
+  미존재 시 오탐 안 함 / REPEAT 밖 진짜 미해결 변수는 여전히 정상 검출.
+
+✅ 검증: npm run check 신규 에러 0건. 관련 vitest 3개 파일 47/47 GREEN(회귀 2건 포함).
+실데이터 기반 임시 검증(실제 계약 템플릿 html_document + 실제 contract-data API 응답을
+그대로 사용, 검증 후 파일 삭제)으로 findHtmlUnresolvedVariables 빈 배열 반환 +
+계약서발행일·지점옵션 정상 치환 + 잔존 {{}} 0건 재확인.
+
+🔍 진단 완료 — 추가 3건(코드 수정 없음, 설계 확인 필요해 Stephen에게 질문):
+  1. "예약자 연락처·주소 연동 안됨" — 실제 원인은 파이프라인 결함이 아니라 두 가지 혼동/
+     데이터 부재였음:
+     (a) Stephen이 선택한 스크린샷 경로(`div.editor-layout > ... > div.contract-wrap`)는
+         계약서 "양식 편집" 화면 자체의 미리보기(ContractTemplatePanel.svelte)다 — 이
+         화면은 특정 예약과 연결되지 않은 "양식 원본"만 보여주므로 {{연락처}}/{{주소}}가
+         항상 원문 그대로 보이는 게 정상 동작이다(실제 치환은 예약별 "발행" 화면
+         ContractTemplatePreviewModal.svelte에서만 일어남).
+     (b) 처음 검증에 썼던 예약(CS26094933)은 tdd- 테스트 계정이라 phone/full_name이
+         DB상 실제로 NULL — '-' 표시가 맞는 동작. 실제 전화번호·주소가 있는 실계정
+         (이기성/mublues@gmail.com, reservation id=11750)으로 `/api/cms/reservations/
+         11750/contract-data`를 직접 호출해 재확인한 결과 연락처="01048602303",
+         주소="경기 성남시 분당구 서판교로 32 323-12"로 **정상 연동됨**을 실측 확인 —
+         파이프라인 자체는 정상.
+  2. "대여제품의 Amount 금액이 반영이 안됨" — 버그 아님, 2026-08-28 확정된 기존 정책
+     (contractLineItems.ts "금액 정책 Q5 확정" 주석) 그대로 동작 중: 메인상품 행의 금액은
+     항상 '-'(현재 per-reservation 분리 금액 데이터가 없어 의도적으로 공란), 옵션상품
+     행만 unit_price×qty로 실금액 표시. Stephen이 이 기존 정책 자체를 바꾸고 싶어하는
+     것으로 보여 계산 방식(예: 주문 총액을 항목별로 어떻게 배분할지)을 먼저 확인해야
+     구현 가능 — 임의로 계산식을 만들지 않고 질문으로 확인 예정.
+  3. "특이사항 칸에 내용 추가 불가" — 버그 아님, 애초에 이 셀은 2차 수정(2026-09-05)부터
+     `&nbsp;` 하드코딩 고정칸이었고(주석: "특이사항(비고, 데이터 미연동—빈 칸)"),
+     ContractSubstitutionData에도 대응 필드 자체가 없다. 즉 "연동이 끊긴 기존 기능"이
+     아니라 "애초에 만들어진 적 없는 신규 기능" — 어떤 입력 방식을 원하는지(기존 "특약
+     조항" 우측 패널 재사용 vs 이 셀 전용 별도 입력) 확인 필요.
+
+git add/commit은 Stephen 직접 실행 대기.
+```
+
+### 9차 — Amount(금액) price_rules 연동 구현 (2026-09-07, 같은 세션, Stephen 확인 후 진행)
+
+```
+8차 진단 항목 2번에 대해 Stephen 확인: "그 상품의 실제 대여요금(price_rules) 표시" 방식
+확정. (특이사항 항목은 "기존 특약 조항 패널 재사용" 확정 — 별도 조사 후 후속 라운드에서
+구현 예정, 이 라운드는 Amount만 반영.)
+
+✅ 구현 — 메인상품 행 금액을 항상 '-'로 두던 기존 Q5 정책(2026-08-28)을 개정:
+  - `src/lib/utils/contractLineItems.ts`:
+    · `ReservationMainProduct`에 `unit_price?: number | null` 필드 추가.
+    · `buildLineItems()` — 그룹화 시 `amountSum`(누적 합계)·`hasAnyPrice`(가격 발견 여부)를
+      함께 추적. 그룹 내 최소 1건이라도 가격을 찾으면 `formatKrw(amountSum)`으로 표시,
+      단 하나도 못 찾으면 기존처럼 '-' 유지(하위호환 — unit_price 미전달 시 동작 무변경).
+    · 같은 상품 여러 건 그룹화 시 각 예약의 실제 unit_price를 개별 합산(단가가 서로
+      달라도 정확히 반영 — 프리셋 단가 하나를 곱하지 않음).
+  - `src/routes/api/cms/reservations/[id]/contract-data/+server.ts`:
+    · 초기 병렬조회 배치에 `ownPriceRes` 추가 — 단독 예약(주문 없음) 경로 전용, 기준
+      예약의 (product_id, duration_type) 조합으로 `price_rules.price` 단건 조회
+      (duration_type이 없으면 조회 스킵).
+    · 주문 묶음 경로(siblingRows) — `duration_type` 컬럼을 select에 추가하고, 그
+      productIdSet 전체에 대해 `price_rules`를 배치 조회(N+1 방지) 후
+      `product_id|duration_type` 복합키 Map으로 매핑 — 같은 상품이라도 reservation마다
+      duration_type이 다를 수 있어 상품 단위가 아닌 (상품,기간) 조합 단위로 조회.
+    · 두 경로 모두 `mainProduct`에 `unit_price` 필드를 채워 buildLineItems로 전달.
+
+✅ 실측 검증: 실제 예약(id=11749, CS26094247, duration_type='24h')으로
+  `/api/cms/reservations/11749/contract-data` 직접 호출 → 금액이 기존 '-'에서
+  "30,000원"(해당 상품의 24h price_rules 실제 단가)으로 정상 반영 확인. duration_type이
+  NULL인 다른 예약(id=11750)은 의도한 대로 여전히 '-' 유지(가격체계에 없는 조합이라
+  못 찾는 게 정상 — 버그 아님, 데이터 자체가 없는 케이스).
+  회귀 테스트 5건 추가(contractDataLineItems.test.ts) — unit_price 있음/없음/null/
+  동일상품 합산/서로 다른 단가 합산 케이스 커버. 기존 22개 테스트 전부 무변경 통과
+  (하위호환 확인).
+
+✅ 검증: npm run check 신규 에러 0건. 관련 vitest 3개 파일 52/52 GREEN.
+
+git add/commit은 Stephen 직접 실행 대기.
+```
+
+### 10차 — "특이사항" 칸에 기존 "특약 조항" 패널 재사용 구현 (2026-09-07, 같은 세션, Stephen 확인 후 진행)
+
+```
+8차 진단 항목 3번에 대해 Stephen 확인: "기존 특약 조항 패널 재사용". 구현 전 조사(Explore
+서브에이전트) 결과: specifications는 현재 어느 모드(flow/canvas/spreadsheet)에서도 문서
+본문 안에 인라인으로 삽입되지 않고, /contract/[token] 서명 화면 맨 아래에 모드 무관 공용
+"특약 조항" 섹션으로만 항상 별도 표시됨(`+page.svelte` 552-564행). 이번 구현은 그 기존
+표시를 대체하는 게 아니라, 정산내역 표 안 "특이사항" 칸에도 같은 데이터를 추가로 인라인
+표시하는 것 — 새 입력 필드·새 DB 컬럼 없이 기존 ContractFieldPanel.svelte "특약" 탭
+입력만 재사용.
+
+✅ 구현:
+  - `contract-substitution.ts`: `<!--SPECIAL_NOTES-->` HTML 주석 마커(REPEAT·ISSUER_SIGNATURE와
+    동일 컨벤션) + `applySpecialNotesMarker(html, specifications)` 신규 export. specifications
+    배열을 "key: value" 쌍으로 `<br/>` 연결(빈 키 제외, XSS escapeHtml 적용, 전부 없으면
+    `&nbsp;` — 기존 하드코딩 빈칸과 시각적으로 동일 유지). {{}} 변수 치환·
+    findHtmlUnresolvedVariables 사전검증과 완전히 분리된 독립 패스(ISSUER_SIGNATURE와 동일 원칙).
+  - `defaultRentalContractHtml.ts`: 정산내역 "특이사항" 값 셀의 하드코딩 `&nbsp;` →
+    `<!--SPECIAL_NOTES-->` 마커로 교체.
+  - `ContractTemplatePanel.svelte`: `previewHtml`에 `applySpecialNotesMarker(..., specs)`
+    체이닝 — 편집 화면에서 특약 입력 즉시 "특이사항" 칸 미리보기 반영.
+  - `ContractTemplatePreviewModal.svelte`: 라이브 미리보기(`previewHtmlDocument`)·실제
+    발행 경로(`applySelectedTemplate()`) 두 곳 모두 `applyIssuerSignatureMarker` →
+    `applySpecialNotesMarker` → `substituteHtmlDocument` 순서로 체이닝(URL 배선 때와
+    동일하게 두 호출부 누락 없이 처음부터 함께 반영 — 9차 이전 라운드에서 발생했던
+    "한쪽만 반영" 회귀 재발 방지).
+
+✅ 실측 검증(로컬 CMS, "[테스트] HTML형 발행발송 검증용" 템플릿): 우측 "특약" 탭에
+  항목명="특이사항"/내용="렌즈 스크래치 있음" 입력 → `.html-preview-doc` 안 "특이사항" 셀에
+  "특이사항: 렌즈 스크래치 있음" 즉시 반영 확인(DOM 텍스트 직접 조회). 저장은 하지 않고
+  페이지 이동으로 테스트 입력 폐기(템플릿 오염 방지).
+  회귀 테스트 9건 추가(contractHtmlSubstitution.test.ts) — applySpecialNotesMarker 5건
+  (단일/복수/빈키제외/빈배열·null·undefined/XSS) + applyIssuerSignatureMarker 4건(그동안
+  단위테스트가 전혀 없었던 함수 — URL없음/정상삽입/javascript:차단/width클램프).
+
+✅ 검증: npm run check 신규 에러 0건(기존 경고 2건만 유지). 관련 vitest 3개 파일 61/61 GREEN.
 
 git add/commit은 Stephen 직접 실행 대기.
 ```

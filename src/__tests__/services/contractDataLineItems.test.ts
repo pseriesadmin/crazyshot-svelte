@@ -35,6 +35,7 @@ import type { ContractSubstitutionData, ContractLineItem } from '$lib/types/cont
 interface MainProduct {
   name: string
   product_code: string | null
+  unit_price?: number | null
 }
 
 interface OptionProduct {
@@ -284,6 +285,49 @@ describe('buildLineItems — 동일 메인상품 여러 건 그룹화', () => {
     expect(result).toHaveLength(2)
     expect(result[0].수량).toBe('1')
     expect(result[1].수량).toBe('1')
+  })
+})
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 13. 메인상품 금액 = price_rules 실제 대여요금 (2026-09-07 Stephen 확정 — Q5 정책 개정)
+// ─────────────────────────────────────────────────────────────────────────────
+describe('buildLineItems — 메인상품 금액(price_rules 기반, 2026-09-07 개정)', () => {
+  it('unit_price가 있으면 원화 포맷으로 표시된다', () => {
+    const result = buildLineItems([
+      makeReservation({ name: '소니 FX3', product_code: 'CSLED001', unit_price: 48000 })
+    ])
+    expect(result[0].금액).toBe('48,000원')
+  })
+
+  it('같은 상품 2건 그룹화 시 각 예약의 unit_price를 합산한다', () => {
+    const result = buildLineItems([
+      makeReservation({ name: '소니 FX3', product_code: 'CSLED001', unit_price: 48000 }),
+      makeReservation({ name: '소니 FX3', product_code: 'CSLED001', unit_price: 48000 }),
+    ])
+    expect(result[0].수량).toBe('2')
+    expect(result[0].금액).toBe('96,000원')
+  })
+
+  it('unit_price가 서로 다른 동일상품 예약도 실제 개별 금액 그대로 합산한다', () => {
+    const result = buildLineItems([
+      makeReservation({ name: '소니 FX3', product_code: 'CSLED001', unit_price: 48000 }),
+      makeReservation({ name: '소니 FX3', product_code: 'CSLED001', unit_price: 30000 }),
+    ])
+    expect(result[0].금액).toBe('78,000원')
+  })
+
+  it('unit_price가 null이면(가격 없음) 기존처럼 "-"로 표시된다', () => {
+    const result = buildLineItems([
+      makeReservation({ name: '소니 FX3', product_code: 'CSLED001', unit_price: null })
+    ])
+    expect(result[0].금액).toBe('-')
+  })
+
+  it('unit_price 필드 자체가 없으면(undefined, 하위호환) "-"로 표시된다', () => {
+    const result = buildLineItems([
+      makeReservation({ name: '소니 FX3', product_code: 'CSLED001' })
+    ])
+    expect(result[0].금액).toBe('-')
   })
 })
 

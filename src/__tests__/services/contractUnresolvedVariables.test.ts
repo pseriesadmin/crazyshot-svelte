@@ -70,4 +70,22 @@ describe('findHtmlUnresolvedVariables — html 모드 원본 템플릿 사전검
     const html = '{{할인반영금액}} ... {{할인반영금액}}'
     expect(findHtmlUnresolvedVariables(html, baseData)).toEqual(['할인반영금액'])
   })
+
+  it('REPEAT 반복영역 내부의 ContractLineItem 전용 필드(금액·비고)는 최상위 스칼라 데이터에 없어도 오탐하지 않는다 (2026-09-07 실사용 버그 회귀)', () => {
+    const html =
+      '<!--REPEAT:상품목록-->' +
+      '<tr><td>{{NO.}}</td><td>{{상품명}}</td><td>{{금액}}</td><td>{{비고}}</td></tr>' +
+      '<!--/REPEAT-->' +
+      '<p>{{고객이름}}</p>'
+    // baseData에는 금액·비고 키 자체가 없다 — REPEAT 내부는 ContractLineItem이 별도 처리하므로
+    // 사전검증 대상에서 제외되어야 하고, 반복영역 밖의 {{고객이름}}만 정상 검사 대상이다.
+    expect(findHtmlUnresolvedVariables(html, baseData)).toEqual([])
+  })
+
+  it('REPEAT 반복영역 밖에 있는 미해결 변수는 반복영역 스킵과 무관하게 여전히 잡힌다', () => {
+    const html =
+      '<!--REPEAT:상품목록--><tr><td>{{금액}}</td></tr><!--/REPEAT-->' +
+      '<p>{{계약서발행일}}</p>'
+    expect(findHtmlUnresolvedVariables(html, baseData)).toEqual(['계약서발행일'])
+  })
 })

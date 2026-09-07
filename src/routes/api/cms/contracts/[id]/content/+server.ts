@@ -37,7 +37,7 @@ export const GET: RequestHandler = async ({ params, locals, url }) => {
 
   const { data, error } = await admin
     .from('contracts')
-    .select('title, content_blocks, specifications, authoring_mode, canvas_document, spreadsheet_document, html_document')
+    .select('title, content_blocks, specifications, authoring_mode, canvas_document, spreadsheet_document, html_document, html_issuer_signature_url, html_issuer_signature_width')
     .eq('id', contractId)
     .maybeSingle()
 
@@ -77,6 +77,8 @@ export const PATCH: RequestHandler = async ({ params, locals, request }) => {
     canvas_document?: unknown
     spreadsheet_document?: unknown
     html_document?: unknown
+    html_issuer_signature_url?: string | null
+    html_issuer_signature_width?: number | null
   }
   try {
     body = await request.json() as typeof body
@@ -172,6 +174,22 @@ export const PATCH: RequestHandler = async ({ params, locals, request }) => {
       return json({ error: 'html_document는 비어있지 않은 문자열이어야 합니다.' }, { status: 400 })
     }
     updatePayload.html_document = body.html_document
+  }
+  if ('html_issuer_signature_url' in body) {
+    const url = body.html_issuer_signature_url
+    // http(s) 절대 URL 또는 null만 허용 — contract-substitution.ts SAFE_SIGNATURE_URL과 동일 원칙
+    if (url != null && !/^https?:\/\//i.test(url)) {
+      return json({ error: 'html_issuer_signature_url은 http(s) URL이어야 합니다.' }, { status: 400 })
+    }
+    updatePayload.html_issuer_signature_url = url ?? null
+  }
+  if ('html_issuer_signature_width' in body) {
+    const width = body.html_issuer_signature_width
+    // Migration #451 — 20~1200 클램프(contract-substitution.ts applyIssuerSignatureMarker와 동일 범위)
+    if (width != null && (!Number.isFinite(width) || width < 20 || width > 1200)) {
+      return json({ error: 'html_issuer_signature_width는 20~1200 사이여야 합니다.' }, { status: 400 })
+    }
+    updatePayload.html_issuer_signature_width = width ?? null
   }
 
   const { error } = await admin
