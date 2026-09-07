@@ -1,6 +1,270 @@
 # GSD_LOG.md — 크레이지샷 실행 이력
 # 형식: [YYYY-MM-DD HH:MM] 타입 | 타스크명 | 파일 | 소요 | 결과
 
+[2026-09-07] 🔴CRITICAL | /payment/success/dev GNB !important leak 근본수정 — 위 "element-picker 연쇄 수정" 항목 ⑥⑦ 후속, sp3-qa-agent 검수로 발견 | src/routes/+layout.svelte, src/routes/payment/success/dev/+page.svelte | 라이브 재현+수정 확인
+  ⚠️ 재분류: 이 라우트는 "dev 전용 미리보기"가 아니라 cart/+page.svelte의 실제 체크아웃
+  제출 완료 시 goto('/payment/success/dev?...')로 도달하는 **실사용자 프로덕션 화면**임
+  (sp3-qa-agent 지적, 위 항목의 "TASK.md 미등재 dev 라우트" 분류는 부정확했음 — 라우트명의
+  "dev"는 과거 프로토타이핑 잔재).
+
+  버그: 이전 수정(위 항목 ⑥⑦)이 전역 GNB(GNB.svelte)를 이 페이지 scoped
+  `:global(.gnb-mobile-wrap/.gnb-desktop-wrap){display:none!important}`로 숨겼는데,
+  기존 선례(members/+layout.svelte 등)는 전부 +layout.svelte(하위 트리 지속 마운트)에
+  적용한 반면 이번엔 +page.svelte(단일 리프)에 적용 — SvelteKit이 SPA 클라이언트 네비게이션
+  시 이전 페이지의 컴파일된 CSS 청크를 언로드하지 않아, 이 화면을 거쳐 다른 화면으로
+  이동하면 GNB가 계속 숨겨진 채로 남는 회귀 위험이 있었음.
+
+  라이브 재현(로컬 5174, mobile 375px + PC 1280px 둘 다):
+    ① /payment/success/dev 하드로드 → window.__navMarker 세팅 → "확인" 버튼 실클릭
+       (SvelteKit goto('/cart') 실제 트리거)
+    ② /cart 도착 후 __navMarker 생존 확인(진짜 SPA 전환, 하드리로드 아님)
+    ③ /cart에 class="gnb-mobile-wrap"(모바일)/"gnb-desktop-wrap"(PC) 테스트용 div를
+       주입 → 수정 전 상태에서 display:none 확인(leak 재현 성공)
+    ④ 대조군: /cart 하드 리로드 후 동일 테스트 → display:block(정상) — leak이 SPA
+       네비게이션 특유의 문제임을 확정
+
+  수정: CSS 오버라이드 삭제 + root +layout.svelte의 GNB 렌더링 조건(63행)에
+  `!page.url.pathname.startsWith('/payment')` 추가 — /cart·/account와 동일한 방식으로
+  이 화면에서 애초에 GNB.svelte 자체가 마운트되지 않도록 구조적으로 해결
+  (/payment 하위엔 success/dev만 존재, 다른 라우트 영향 없음 확인).
+
+  수정 후 재검증: /payment/success/dev에서 querySelector('.gnb-mobile-wrap'/'.gnb-desktop-wrap')
+  자체가 null(DOM에 존재하지 않음, 단순 CSS 숨김이 아님) 확인 → 동일 SPA 전환 재현 절차
+  반복 → /cart에서 두 프로브 전부 display:block(leak 해소) 확인 → 홈("/") GNB 표시
+  회귀 없음 확인 → 페이지 자체 PC/모바일 스크린샷 재확인(변경 없음) → svelte-check
+  신규 에러 0건(기존 vite.config.ts 1건 무관).
+
+[2026-09-06(dev미리보기)] 🟢ROUTINE | /payment/success/dev 화면 element-picker 연쇄 수정(TASK.md 미등재 아젠다, 이 세션'만') | src/routes/payment/success/dev/+page.svelte | 이 세션 실적으로만 귀속
+  Stephen이 launch-selected-element로 요소를 직접 선택해 준 연쇄 지시 — 별도 하네스
+  아젠다 없이 즉시 반영, 매 수정마다 Claude Browser로 실측(getBoundingClientRect/
+  getComputedStyle) 검증:
+    ① 모바일 아이콘·폰트 2단계 축소(icon-box 70→48px, title-text htitle-24L→body-16L),
+       PC는 media query로 원복
+    ② 모바일 전용 전역 GNB(.gnb-mobile-wrap) 숨김(!important, scoped 규칙 명시도 우회)
+    ③ .gnb-wrap 상단 패딩 40→16px(SubGnb.svelte 표준값) + .page-root 중복 padding-top
+       28→0(모바일), PC는 28px 복원 — 이중 여백 결함 해소
+    ④ 아이콘 border-radius를 고정 25px→calc(25*48/70)로 비율 보존(원형 왜곡 버그 수정),
+       PC 미디어쿼리에 25px 명시 복원 누락 방지
+    ⑤ gnb-title 텍스트 "신청완료"→"예약신청완료"
+    ⑥ PC(≥768px)에서 전역 메인 GNB(.gnb-desktop-wrap)가 이 화면 자체 헤더 위에 함께
+       뜨던 결함 발견 — Stephen 지적("메인 gnb가 아닌 서브 gnb가 노출되어야 정상") 반영해
+       .gnb-desktop-wrap을 이 화면 전용으로 숨김
+    ⑦ ⑥의 1차 수정이 이 화면의 모바일 알약(.gnb-wrap)을 그대로 PC로 늘린 잘못된 방식이었음
+       — Stephen 재지적("메인 gnb가 아닌 서브 gnb") 받고 front-uiux.md §13-2 sub-gnb_navi_b
+       표준(Back Pill)으로 전면 교체(header.sub-gnb-b 신설, 641px 분기)
+    ⑧ ⑦ 적용 직후 부모(.page-root)가 align-items:center라 stretch가 안 돼 알약이 화면
+       중앙에 쪼그라들어 뜨는 결함 발견 → .sub-gnb-b에 width:100% 추가로 해소
+    ⑨ Stephen이 참조 스크린샷으로 "가로폭 100%"(Back~타이틀이 좌우 끝까지 벌어진 형태)를
+       명시적으로 요구 — front-uiux.md §13-2 문서 텍스트의 기본값(max-width:460px)이 아니라
+       cart/+page.svelte 실제 코드가 좁은 PC~태블릿 구간(≤1024px)에서 이미 써온
+       max-width:none/flex:1 1 auto 값으로 최종 확정(문서 텍스트와 실제 소스 정본이
+       괴리돼 있었음 — 처음엔 문서 텍스트만 보고 460px로 잘못 적용했다가 재지적받아 정정)
+  최종 실측(PC 1280px 기준): .sub-gnb-b 풀폭, .sub-gnb-b-pill left:40→right:989(949px,
+  좌우 40px 패딩만 남기고 전체폭) 확인. 모바일(375px)은 전 단계에서 매번 회귀없음
+  재확인(.gnb-wrap 그대로 유지, .sub-gnb-b display:none).
+  ⚠️ 이 파일은 TASK.md에 등재된 NOW/DONE 블록이 없는 dev 전용 미리보기 라우트 — 정식
+  하네스 아젠다가 아니므로 이 로그로만 기록, TASK.md에는 별도 항목 생성하지 않음.
+
+[2026-09-06(후속)] 🟡BOUNDARY | 상품상세 옵션상품 카드(.option-item) 썸네일 이미지 누락 수정 — 카트(.option-subcard-img) 스타일·PC(150px/30px)·모바일(86.4px/21.6px) 치수 그대로 이식 | src/routes/products/[id]/+page.svelte | GATE E 통과(비차단 권고 1건: #EDEDF2 하드코딩은 cart 기존패턴 이식, 책임 아님)
+[2026-09-06(후속2)] 🟡BOUNDARY | .option-bottom-row PC 전용 row 오버라이드 제거 — 썸네일 추가로 정보열 폭이 줄어 수량 UI가 카드 우측 바깥으로 밀려나던 오버플로 해소, 전 breakpoint column 고정(가격 위/수량 아래) | src/routes/products/[id]/+page.svelte | GATE E 통과(비차단 권고 1건: 320~360px 극소폭 잔여 오버플로 가능성, 실기기 확인 권장)
+[2026-09-06(후속3)] 🟡BOUNDARY | 320~360px 실측 결과 오버플로 실제 재현 확인 → 근본 재구조화: .option-item을 .option-top-row(썸네일+라벨)+.option-bottom-row(가격+수량, 카드 전체폭) 2행으로 분리, .option-info 클래스 제거 | src/routes/products/[id]/+page.svelte | GATE E 통과(비차단 참고 2건 누적: PC 여백 트레이드오프·#EDEDF2 하드코딩, 둘 다 기승인·책임아님)
+[2026-09-06(후속4)] 🟡BOUNDARY | 옵션 대여요금(.option-dual-price) 모바일 폰트 한 단계 확대 — label/unit 10px→var(--text-m-script-12)(12px), num 12px→14px, cart .dual-price-row--opt 2026-08-18 동일수정 그대로 이식 | src/routes/products/[id]/+page.svelte | GATE E 통과(비차단 권고 없음)
+[2026-09-06(후속5)] 🟡BOUNDARY | 가격+수량 행을 썸네일 그룹(.option-info)으로 재통합 + 명칭/배지 행간 4px→10px — cart .option-subcard-info의 "폭 부족 시 정보열 전체 줄바꿈"(flex-wrap+min-width:200px) 반응형 기법을 처음 이식해 오버플로 재발 없이 통합 | src/routes/products/[id]/+page.svelte | GATE E 통과(QA 과정에서 후속4 QA블록이 후속5 뒤에 잘못 배치돼 있던 TASK.md 문서순서 오류 발견·정정)
+[2026-09-06(후속6)] 🟡BOUNDARY | 옵션상품 썸네일 20% 축소 — 모바일 86.4px→69.12px(radius 21.6→17.28), PC 150px→120px(radius 30→24) | src/routes/products/[id]/+page.svelte | ✅ Claude Browser 실측 69.12/17.28px 확인, svelte-check 신규 에러 0건
+[2026-09-06(후속7)] 🟡BOUNDARY | 옵션명(.option-label) 모바일 폰트 한 단계 확대 — var(--text-m-script-14B)→var(--text-m-body-16B), cart .option-subcard-name 2026-08-18 동일수정 이식 | src/routes/products/[id]/+page.svelte | ✅ Claude Browser 실측 16px/700 확인, svelte-check 신규 에러 0건
+[2026-09-06(후속8)] 🟡BOUNDARY | 옵션상품 썸네일 모바일 전용 10% 재확대 — 69.12px→76.032px(radius 17.28→19.008), PC(120px) 변경 없음 | src/routes/products/[id]/+page.svelte | GATE E 통과(후속6/7/8 일괄 검수, 비차단 권고 없음)
+[2026-09-06(후속9)] 🟡BOUNDARY | .option-item align-items: center→flex-start — 정보열(이름+배지+가격+수량)이 길어지며 썸네일이 수직 중앙에 떠보이던 것을 상단 정렬로 수정 | src/routes/products/[id]/+page.svelte | GATE E 통과(비차단 권고 없음)
+[2026-09-06(후속10)] 🟡BOUNDARY | 옵션 아코디언 헤더 "더보기" 텍스트 → 원형 옵션개수 배지(.options-count-badge)로 교체 — PC 15px/모바일 12px, background var(--cs-text-dark) + color var(--cs-white) | src/routes/products/[id]/+page.svelte | GATE E 통과(참고: account/rental/+page.svelte openCancelConfirm 에러는 타 세션 소관, 이 파일과 무관 확인)
+[2026-09-06(후속11)] 🟡BOUNDARY | 옵션개수 배지 재확대(모바일 12→20px, PC 15→30px) + .options-more-btn gap 6→12px(배지-쉐브론 여백 2배) | src/routes/products/[id]/+page.svelte | ✅ Claude Browser PC(30px)/모바일(20px)/gap(12px) 실측 확인, svelte-check 신규 에러 0건
+[2026-09-06(후속12)] 🟡BOUNDARY | 옵션개수 배지 폰트 raw px→var(--text-m/pc-script-12) 토큰 적용 + 배경 var(--cs-text-dark)→var(--cs-surface-gray)(옅은 그레이) + 판단 보정: 폰트색 --cs-white→--cs-text-dark(배경 밝아지며 가독성 붕괴 방지, 지시 외 최소 보정) | src/routes/products/[id]/+page.svelte | GATE E 통과(WCAG 대비 계산으로 폰트색 보정 판단 타당성 재검증 — 9.0:1 vs 1.08:1)
+[2026-09-06(후속13)] 🟡BOUNDARY | Stephen 반려로 배경 var(--cs-surface-gray)→var(--cs-text-dark), 폰트색 var(--cs-text-dark)→var(--cs-white) 원복 + 폰트 script-12→script-14B/body-14(한 단계 더 확대) — 요청 없는 색상변경(GATE 0 위반) 교훈 기록 | src/routes/products/[id]/+page.svelte | ✅ Claude Browser 실측 원복값 확인, svelte-check 신규 에러 0건
+[2026-09-06(후속14)] 🟡BOUNDARY | 아코디언 토글 대상을 .options-header 전체→.options-more-btn(배지)로 이관 + 쉐브론 svg·CSS 완전 삭제 + 배지 1.5배 확대(모바일 20→30px, PC 30→45px, PC는 결과적으로 44px 터치타겟 충족) | src/routes/products/[id]/+page.svelte | GATE E 통과(비차단 권고 2건: 모바일 30px 터치타겟 미달·aria-label 부재, 둘 다 신규 회귀 아님)
+[2026-09-06(후속15)] 🟡BOUNDARY | 배지 배경 var(--cs-text-dark)→var(--cs-text-mid)(#666666, 한 단계 더 옅은 그레이) — 후속12에서 반려된 --cs-surface-gray 재시도 아닌 절제된 조정, 화이트 폰트 대비 5.7:1 유지 | src/routes/products/[id]/+page.svelte | GATE E 통과(비차단 권고 없음, 요청 외 속성 변경 없음 확인)
+
+[2026-09-06 00:09] 🔴TDD  | hold 재발행 Work 3c — cart/+page.svelte hold 변경감지+재발행루프 삽입 | src/routes/cart/+page.svelte | 세션 연속 | 🔴RED(Migration 448 Stage 미적용) — 기존 52 tests 회귀없음(cartLineGrouping·cartRentalFee passed)
+[2026-09-06 00:18] 🔴TDD  | hold 재발행 TDD GREEN+REFACTOR — Migration 448 Stage 적용 완료 후 EC-1/EC-2/EC-3 3/3 GREEN, 테스트 중복 INSERT 누락 정리(REFACTOR), svelte-check 신규 에러 0건, 기존 cart 52건 회귀없음 | src/__tests__/services/checkoutReissueReservation.test.ts | 9분 | GATE C:승인
+[2026-09-06 00:20] ⚡GSD  | GATE E — sp3-qa-agent 검수 통과. 보안·회귀·TDD 전 항목 PASS. 비차단 권고 1건(window.confirm → confirm-toast 후속 교체 권고). TASK.md DONE 갱신 완료 | (검수 전용) | 2분 | GATE E:통과
+[2026-09-06(스코프 재확인)] 확인 | "이 세션'만'" 범위 재정밀 검증 — src/routes/cart/+page.svelte 신규 diff 1건 발견 | (코드변경 없음, 스코프 확인 전용) | 타 세션 소관 확인
+  Stephen이 "현재 세션'만'의 하네스 기록"을 재차 요청 — 공유 파일(cart/+page.svelte)의
+  diff를 hunk 단위로 재대조한 결과, 직전 기록 시점 이후 새 hunk 1건(라인 ~1145,
+  pickupVisibleTabs/returnVisibleTabsFor 주석 정정: "2026-09-05 주석 정정 — 실제 동작과
+  어긋나 있던 서술 수정") 발견. 내용 확인 결과 순수 주석(문서) 수정이며 로직 변경 없음 —
+  이 세션이 이번 대화에서 직접 작성한 기억이 없어 동시 진행 중인 다른 세션의 기여로 판단,
+  이 세션 실적으로 귀속하지 않음(스코프 규율 준수). 기능 변경이 아니므로 기존 GATE E
+  판정(2026-09-06 최종 승인)에는 영향 없음 — 재검수 불필요.
+  이 세션이 실제로 만든 cart/+page.svelte 변경은 기존 기록 그대로: hasDeliveryDisabledOption
+  파생값(라인 1116~1129 부근) + deliveryTabs 필터 1줄 + 옵션 배지 마크업·CSS(라인 2004~/
+  2106~/3152~ 부근) — 이 범위만 이 세션 소관으로 유지.
+
+[2026-09-06(후속)] 검증 | 상품상세+장바구니 전역 라이브 브라우저 실증 테스트(로컬 Stage vs 실서버) | (코드변경 없음, 검증 전용) | ✅ 전부 통과
+  Stephen 지시: "브라우저 직접 사용 테스트 허용" 명시적 승인 하에 Claude Browser로
+  localhost(Stage DB, 이번 세션 수정 반영)와 실서버(crazyshot-svelte.vercel.app, 배포 전
+  상태) 비교 검증 진행.
+  로컬(localhost:5174, SONY PXW-Z90 상품) 실제 클릭 기반 검증:
+    ① 옵션(Sony FX6-12) 카드 — 필수/최소1개선택/배송대여불가 배지 + Day 23,000원/12H
+       53,000원 이중가격 정상 노출(PC·모바일 텍스트 추출로 확인) — 12H가격 결함 수정 확인
+    ② 모바일(375px) 스크린샷 직접 촬영 — 가격행 위/수량 스테퍼 아래로 세로 재배치 확정
+       반영 확인 — 모바일 레이아웃 결함 수정 확인
+    ③ "예약신청" 버튼 실클릭 → 이전에 OPTION_STOCK_EXCEEDED 400이 나던 지점에서 에러
+       없이 /cart로 정상 전환 확인 — CRITICAL 옵션수량 자기합산 버그 수정 라이브 확인
+    ④ 장바구니에서 Sony FX6-12 옵션에 동일 배지+이중가격 노출, 수량이 정확히 1(합산되지
+       않음) 확인 — 카트 배지 신규기능 확인
+    ⑤ "대여예약옵션" 패널 확장 → 수령방식 목록에서 "크레이지샷배송 대여"만 제외되고
+       방문대여/퀵배송 대여는 유지됨 확인 — 카트 배송방식 원천차단 기능(is_delivery_type
+       기준) 정상 작동 확인
+  실서버(crazyshot-svelte.vercel.app) 읽기전용 점검(실 고객 DB라 예약신청 미실행):
+    - 실제 등록 상품(SONY A7S3, CANON EOS R6 Mark II) 확인 — 현재 실서버 카탈로그엔
+      옵션상품이 설정된 상품 자체가 없어 옵션가격표시 방식 직접 대조는 불가(데이터 상태,
+      버그 아님)
+    - 콘솔 에러 없음, 기존 배포분(예: "최신 등록 상품"/Newly Added Products 라벨) 정상
+      노출 확인 — 배포 전 상태가 안정적으로 유지되고 있음만 확인
+  부수사항: 테스트 과정에서 Stage DB에 실제 예약 1건(draft→hold 전환) 생성됨 — 테스트
+  목적의 정상적인 부산물, 실서버 데이터는 전혀 미접촉.
+  종합: 이번 세션 수정 4건(옵션12H가격·모바일배치·카트배지+배송제한·CRITICAL재고합산버그)
+  전부 실클릭 기반으로 정상 작동 실증 완료.
+  GATE E 최종(2026-09-06, @sp3-qa-agent): TASK.md·GSD_LOG.md 문서와 git diff 전수 재대조
+  일치 확인 / OPTION_STOCK_EXCEEDED 인과관계를 Migration 428(완전교체+자기제외)·371
+  (existing_options=canonical 자신)로 재실증, 라이브검증 서술("qty=1 정확 표시")과 코드
+  동작 논리적 부합 확인 / 카트 배송제한이 수령·반납 양쪽에 일관 적용됨(deliveryTabs 공유
+  소스) 확인 / svelte-check 신규 에러 0건, vitest 63/63 GREEN(cartLineGrouping·
+  cartRentalFee·cartMethodSelection), check-rpc-error-handling 위반 0건 — 전부 통과,
+  최종 승인.
+  미완료: git commit(Stephen 직접 실행 필요).
+
+[2026-09-06] 🔴CRITICAL | 예약신청→장바구니 전환 시 OPTION_STOCK_EXCEEDED 결함 수정 — 옵션수량 자기자신과 합산 제출 버그 | src/routes/products/[id]/+page.svelte | ✅ 수정 완료(GATE E 검수 대기)
+  Stephen 신고: 상품상세 예약신청→장바구니 전환 시 콘솔에 `set_reservation_options` 400
+  (OPTION_STOCK_EXCEEDED) 에러 발생. "완벽하게 수정했다면서 왜 오류가 나는지" 자기반성 후
+  원인 파악 요구.
+  자기반성: git diff HEAD로 재확인한 결과 이 버그는 이번 세션의 최근 작업(옵션 12H가격·
+  모바일레이아웃·카트배송제한)과 무관 — 2026-08-28 "동일 부모상품 중복담기 병합" 기능
+  이후 이미 실서버에 배포돼 있던 기존 결함. 다만 옵션 관련 코드를 여러 차례 다루면서도
+  미리 못 잡은 것은 검증 부족.
+  근본원인(DB 직접조회로 실증): products/[id]/+page.svelte가 `set_reservation_options`
+  호출 전 `mergeReservationOptions(existingGroup.existing_options, selectedOptions)`로
+  기존값+신규값을 합산 제출했는데, `existing_options`는 `find_matching_cart_reservation_
+  group`이 바로 그 targetCanonicalId "자기 자신"의 행에서 조회해온 값이었다. 그런데
+  `set_reservation_options` RPC는 호출마다 그 행의 옵션을 DELETE+INSERT로 완전 교체하므로,
+  서버가 이미 통째로 갈아엎는 값을 클라이언트가 미리 두 번 합산해 보낸 자기 자신과의
+  중복합산 버그 — 재방문/재제출할 때마다 저장 수량이 배수로 누적됨. 실제 옵션상품
+  98f44cf6-...의 실재고 4대 중 확정예약 2대 점유로 가용 2대인데, 화면에서 매번 qty=2를
+  선택해도 기존 draft에 이미 저장된 2 + 신규 2 = 4로 합산 제출돼 초과 판정된 것을 Stage
+  DB 직접 조회(reservation_options·product_option_links 카운트)로 재현·확정.
+  수정: products/[id]/+page.svelte draft·hold 두 경로 전부 `mergeReservationOptions` 호출
+  제거 — `selectedOptions`(화면에 표시되는 사용자의 현재 총 의도 수량)를 그대로 제출하도록
+  변경(RPC의 완전교체 시맨틱과 일치). 이제 안 쓰이는 `mergeReservationOptions` import 제거.
+  검증: svelte-check 신규 에러 0건(기존 무관 에러 1건만 잔존).
+  GATE E(2026-09-06, @sp3-qa-agent): RPC 완전교체 시맨틱(Migration 428)·existing_options
+  출처가 자기 자신 행(Migration 371)임을 마이그레이션 파일로 재확인 / selectedOptions가
+  매번 optionItems 전체 스냅샷이라 부분갱신 회귀 없음(오히려 "선택 해제한 옵션이 영구
+  보존되던" 별도 결함도 함께 해소됨) / mergeReservationOptions 삭제가 이 파일 import
+  1곳에만 국한(cartLineGrouping.ts 등 다른 사용처 무변경) / draft·hold 두 경로 모두
+  일관 수정 확인 — 전부 통과. 비차단 권고: 이미 배수로 부풀려진 draft/hold 행이 결제
+  확정 전 남아있는지 확인 요청 → Stage DB 직접 재조회 결과 draft 10379(qty=2)만 존재하며
+  이미 정상값(2)으로 남아있음 확인(RPC가 예외를 던진 시점엔 DELETE+INSERT 자체가 실행되기
+  전이라 오염된 값이 애초에 저장된 적 없음) — 데이터 정리 불필요, 코드 수정만으로 완결.
+  미완료: git commit(Stephen 직접 실행 필요).
+
+[2026-09-05(3차후속)] 🟢ROUTINE | 상품상세 옵션카드 모바일 반응형 — 가격/수량 세로 재배치(PC 가로배치 오적용 결함 수정) | src/routes/products/[id]/+page.svelte | ✅ 수정 완료
+  Stephen 지적: `.option-bottom-row`(대여요금 이중가격 + 수량 UI)가 PC 전용 가로배치
+  (space-between)를 반응형 분기 없이 모바일에도 그대로 적용해, 좁은 카드 폭에서 수량 UI가
+  눌려 일그러지는 버그. 대여요금 UI 아래로 수량 UI를 세로 재배치할 것.
+  조사: cart(/cart) 옵션서브카드도 과거(2026-08-24·26) 유사한 좁은폭 결함을 겪었으나 그
+  쪽은 가로 유지 + 가격 자체 wrap 허용(price-unit-group)으로 해결한 사례 — 이번 건은
+  전체폭 카드 컨텍스트가 달라(cart는 좁은 가로스크롤 썸네일 목록 안, 이쪽은 풀폭 카드) 직접
+  재사용 가능한 기존 패턴이 아님을 확인 후 이 파일 자체에 모바일 전용 column 분기 신설로
+  결정(AGENTS.md 신설 체크(2026-09-05) 준수 — 기존 패턴 확인을 먼저 거침).
+  수정: `.option-bottom-row` 기본(모바일)을 `flex-direction: column`으로, `@media
+  (min-width:641px)`에서만 기존 `flex-direction: row; justify-content: space-between`
+  복원 — PC 레이아웃 완전 무변경, 모바일만 가격행 위/수량행 아래로 분리.
+  검증: svelte-check 신규 에러 0건(기존 무관 에러 1건만 잔존).
+  미완료: git commit(Stephen 직접 실행 필요).
+
+[2026-09-05(재후속)] 🟢ROUTINE | 상품상세 옵션 이중가격 스타일을 카트(.dual-price-row--opt) 값 그대로 이식(색상·구조 정정) | src/routes/products/[id]/+page.svelte | ✅ 수정 완료
+  Stephen 지적: 직전 수정(옵션 12H 가격 UI 신설)에서 색상(회색 --cs-text-mid/--cs-text-dark)과
+  구조(price-unit-group 없이 구분자를 단독 형제로 배치)를 임의로 새로 만든 것에 대해 "왜 AI가
+  멋대로 UI를 대충 만드는지" 지적 — 카트(/cart) 옵션카드가 이미 확정된 정본 스타일
+  (.dual-price-row--opt)을 갖고 있는데 그걸 그대로 이식하지 않고 이 페이지 자체 관례라며
+  새 팔레트를 만든 것이 문제였음(2026-09-05 앞선 GSD 항목에서 "이 파일 자체 관례에 맞춤"이라고
+  기록한 판단 자체가 오판이었음 — 기존 정본이 있으면 그걸 그대로 재사용하는 게 맞고, 새 관례를
+  만드는 게 아니었음).
+  수정: 마크업에 `.option-price-group`(구분자+두번째 단위를 하나로 묶어 wrap 시 "/"가 혼자
+  남지 않게 하는 카트의 구조) 추가, CSS를 카트의 최종 계산값 그대로 이식 — 색상
+  var(--cs-red-badge)(회색 대신), 폰트크기 모바일 12px(금액)/10px(라벨·단위) · PC
+  13px(금액)/11px(라벨·단위), price-unit gap 모바일 2px/PC 4px. 클래스명은 이 페이지의
+  기존 `.option-*` 접두사 네이밍은 유지하되(카트의 `.price-*` 그대로 가져오면 이 파일의
+  다른 `.price-*`(본상품 가격, .price-row 스코프)와 충돌 위험), 계산된 스타일 값 자체는
+  전부 동일하게 일치시킴.
+  검증: svelte-check 신규 에러 0건, 신규 클래스 unused-selector 경고 없음(전부 실사용 확인).
+  미완료: git commit(Stephen 직접 실행 필요).
+
+[2026-09-05(후속)] 🟡BOUNDARY | 상품상세 옵션상품 카드 12H 요금 UI 누락 결함 수정 | src/lib/types/database.ts, src/routes/products/[id]/+page.server.ts, src/routes/products/[id]/+page.svelte | ✅ 수정 완료(GATE E 검수 대기)
+  Stephen 지적: 상품상세 옵션상품 카드 목록에 요금(Day/12H) UI가 누락돼 있는 매우 심각한
+  오류를 왜 발견 못했는지 분석 요구. 장바구니 옵션상품 카드는 정상 노출 중이라고 대조 제시.
+  원인 분석(정직하게 인정): `ProductOptionLinkRow`/`get_product_option_links` RPC는 애초에
+  `price_24h`만 반환하고 `price_12h` 자체가 없어, 상품상세 옵션 카드(`.option-bottom-row`)는
+  처음부터 "Day/12H" 이중가격이 아니라 단일 가격(`{fmt(opt.price)}원`, 레이블도 없이)만
+  표시하도록 만들어져 있었다 — 장바구니는 별도로 `price_rules`를 직접 조회해 12H가를
+  보강하는 로직(2026-09-03 도입)이 있었지만 상품상세에는 그 보강이 한 번도 이식되지 않은
+  것. 직전 세션 작업들(옵션 배지·배송제한 조사)이 전부 "수량 검증 로직"·"배송방식 필터링"
+  쪽 코드만 들여다봤을 뿐, 옵션 카드의 가격 표시 마크업 자체를 직접 읽어본 적이 없어서
+  놓쳤다 — 표시 UI 검증(실제 화면 스크린샷 대조)을 생략하고 로직 검증에만 집중한 것이
+  근본 원인.
+  수정: 장바구니와 동일한 패턴(RPC/스키마 변경 없이 price_rules 별도 조회 후 병합)으로
+  1) database.ts ProductOptionLinkRow에 price_12h 필드 추가
+  2) +page.server.ts에서 optionLinks 조회 직후 price_rules(duration_type='12h')를
+     option_product_id 기준 추가 조회해 병합
+  3) +page.svelte buildOptionItems에 price12h 매핑 추가, 옵션 카드 템플릿을 단일가격→
+     "Day X원 / 12H Y원" 이중가격(레이블 포함)으로 교체, 이 페이지 기존 메인상품 가격
+     표시(.price-row)와 동일한 서브클래스 네이밍 관례(.price-unit/.price-period-label 등)를
+     참고해 옵션 전용 축소판(.option-dual-price/.option-price-label/.option-price-sep)
+     신설(카트의 클래스명을 그대로 가져오지 않고 이 파일 자체 관례에 맞춤).
+  검증: svelte-check 신규 에러 0건(기존 무관 에러 1건만 잔존). 순수 표시 추가라 예약
+  금액 계산(unit_price 제출값)은 무변경 — opt.price(24h) 그대로 사용, 12H는 표시 전용.
+  GATE E(2026-09-05, @sp3-qa-agent): RPC/스키마 변경 없음 확인 / 12h price_rules 미등록
+  시 24h로 정상 폴백(null원 노출 없음) 확인 / 예약 제출 unit_price 무변경(전체 파일
+  검색으로 price12h가 계산·제출 로직 어디에도 관여 안 함) 확인 / 카트와 조회조건 표면상
+  다르나(is_active/deleted_at 명시 여부) price_rules RLS가 이미 동일 조건을 강제해
+  결과는 동일함 확인 / N+1 없음(배치 조회) / CSS 클래스명 충돌 없음 — 전부 통과, 블로킹
+  이슈 0건. 참고사항(비차단): 같은 파일에 남아있던 이전 태스크의 토스트문구 변경(368행)이
+  이번 diff와 함께 커밋될 것이라는 점을 인지할 것 — 이미 별도로 문서화된 변경이라 문제
+  아님.
+  미완료: git commit(Stephen 직접 실행 필요).
+
+[2026-09-05] 🟡BOUNDARY | 옵션상품 "최소1개선택+배송대여불가" 예약신청 액션값 조사 + 토스트문구 수정 + 카트 배송방식 원천차단 구현 | src/routes/products/[id]/+page.svelte, src/lib/utils/cartLineGrouping.ts, src/routes/cart/+page.server.ts, src/routes/cart/+page.svelte, src/__tests__/services/cartLineGrouping.test.ts | ✅ 수정 완료(GATE E 검수 대기)
+  Stephen 지시: 상품상세 옵션상품 중 '최소 1개 이상 선택 + 배송 대여 불가' 배지 조합(예:
+  Sony FX6-12)이 있을 때 예약신청 시 실제 액션값을 조사할 것.
+  1. 옵션상품 1개 이상 미선택 시 경고 토스트 호출: "옵션상품 수량을 확인하세요."
+  2. 옵션상품 배송대여 불가 경우 장바구니 대여설정 시 배송 선택 자체가 불가능해야 함.
+  조사 결과:
+  ① 상품상세 handleReserve의 min_select_required 그룹 전체 미선택 시 토스트가 기존
+     "최소 1개 이상의 옵션상품을 선택하세요."로 문구 불일치 — Stephen 지정 문구로 교체.
+     (is_required 단독 미선택 토스트 "필수 옵션상품을 선택하세요."는 별개 검증이라 무변경)
+  ② 배송대여 불가 옵션 충돌 검증은 기존에도 존재했으나(handleReserve, DELIVERY_METHOD_KEYS
+     교집합 검사) "선택 자체를 막는" 사전 차단이 아니라 "선택 후 제출 시점 에러 토스트"였고,
+     그마저 날짜 미선택 draft 경로(대여방식 선택 UI 자체가 off)에서는 아예 검사되지 않아
+     체크아웃(장바구니) 단계로 넘어감. 그런데 장바구니 자체는 reservation_options에
+     delivery_rental_disabled 플래그가 전혀 저장/조회되지 않아(원본은 product_option_links에만
+     존재, 확정 시 스냅샷 안 됨) 배송방식 탭 계산(deliveryTabs)이 이 조건을 전혀 몰랐음 —
+     장바구니 단계에서는 배송 옵션이 그냥 정상적으로 선택 가능한 상태였던 진짜 공백.
+  수정:
+  - products/[id]/+page.svelte: 토스트 문구를 "옵션상품 수량을 확인하세요."로 교체.
+  - cartLineGrouping.ts: CartLineItemOption에 deliveryRentalDisabled 필드 추가.
+    imageUrl/unitPrice12h와 동일한 "표시·판정 전용, mergeReservationOptions 비대상"
+    패턴으로 groupCartLineItems에 계산·복원 로직 추가.
+  - cart/+page.server.ts: optionsByReservation 구성 시 product_option_links를
+    option_product_id 기준 추가 조회해 delivery_rental_disabled를 채움(하나라도 true면
+    true — OR 판정, 동일 옵션상품이 여러 부모링크에 걸친 edge case까지 보수적으로 안전).
+  - cart/+page.svelte: hasDeliveryDisabledOption 파생값(체크됨+미삭제 항목의 옵션 중
+    delivery_rental_disabled && qty>0 존재 여부) 신설, deliveryTabs 계산에 필터 추가 —
+    해당 조건이면 배송(is_delivery_type) 방식 자체가 탭 목록에서 제외됨(수령·반납 양쪽
+    다 이 목록을 공유하므로 자동으로 함께 차단).
+  - cartLineGrouping.test.ts: 신규 필드로 기존 옵션 픽스처 6곳 타입에러 발생 → 전부
+    deliveryRentalDisabled:false 추가해 정합.
+  검증: svelte-check 신규 에러 0건(기존 무관 에러 1건만 잔존). vitest —
+  cartLineGrouping.test.ts 12/12, cartRentalFee.test.ts+cartMethodSelection.test.ts
+  50/50 전부 GREEN(회귀 없음, Guard 9 M3 연관도메인 재확인 권고 준수).
+  미완료: git commit(Stephen 직접 실행 필요).
+
 [2026-09-04(후속13)] 🟡BOUNDARY | 반납방법 자동동기화(copyToReturn) stuck-true 결함 수정
   (@harness-executor 위임) |
   수정: src/routes/cart/+page.svelte bulkHandleMethod(470~480행) — `wasLocked =

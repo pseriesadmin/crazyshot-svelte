@@ -104,8 +104,8 @@ front/cms 어느 쪽 작업이든 에러는 4단계로 분류해 대응한다:
 ```
 front 고객의 채팅 세션 상태(진행중/대기/종료)는 cms 상담 목록의 탭 분류 기준이 된다.
 대기·종료 상태에서 새 메시지가 도착하면(고객이든 관리자든) 무조건 진행중으로 전환되고,
-대기 재진입은 오직 1시간 무응답 자동전환(cron)으로만 일어난다 — cms에서 수동으로 대기 상태로
-되돌리는 액션은 없다.
+대기 재진입은 auto_pending_inactive_sessions RPC(3시간 무응답 자동전환, cron)와 관리자의 수동
+"대기 전환" 버튼(2026-08-12 GATE B 승인 완료, chat.md §17-1 정본) 두 경로로 일어난다.
 ```
 → 상세: `chat.md` §2(세션 관리 정책) · §3(상태 머신)
 
@@ -192,7 +192,7 @@ restore.sql`(release_reservation_hold RPC) · `rental-lifecycle.md` "전체 상�
 적용 직후 cron이 1분 이내 첫 실행돼 방치돼 있던 hold 29건이 실제로 expired 전환됨을
 직접 SQL 조회로 확인(`status='hold'` 잔여 0건).
 
-✅ **D-1 조건 정정(2026-08-31, Migration 394 — Stage DB 적용 완료)**:
+✅ **D-1 조건 정정(2026-08-31, Migration 394 — Stage+Production 둘 다 적용 완료)**:
   Migration 324의 D-1("계약 발송됐으면 NOT EXISTS로 영구 제외")이 §9 게이팅 도입 이후
   "계약 발송된 미서명 hold가 영구히 재고를 점유"하는 결함을 유발한다는 점이 전역감사에서
   발견됐다. Migration 394로 D-1을 **GREATEST(created_at, sent_at) 기준 타이머 리셋** 방식으로
@@ -200,7 +200,9 @@ restore.sql`(release_reservation_hold RPC) · `rental-lifecycle.md` "전체 상�
   다시 리셋된다. D-3(payment_confirmed_at IS NOT NULL, 결제완료 예외)은 변경 없이 유지.
   마이그레이션 파일: `supabase/migrations/20260901050000_394_hold_expiration_d1_greatest_timer.sql`
   Stage(ezyvffjvuwmtuhpxdjrw) 적용 완료, TDD EC-5a/5b/5c 4/4 GREEN 확인 완료(2026-08-31).
-  Production(vnbpmvxruyciuuaermyh) 미적용 — Stephen 승인 후 별도 적용.
+  Production(vnbpmvxruyciuuaermyh)도 적용 완료 — 2026-09-06 `release_reservation_hold()`
+  함수 정의를 DB에서 직접 조회해 `GREATEST(...,sent_at)` 존재를 재확인함(과거 "Production
+  미적용" 문구는 이후 어느 세션에서 적용이 진행된 뒤 갱신되지 않고 남아있던 스테일 서술).
 
 ---
 
@@ -517,6 +519,20 @@ session이나 그 어떤 채팅 RPC도 "관리자 전용"을 보장해줄 수 �
 
 ---
 
+## 18. CMS 대여관리 설정(`/cms/set/rental`) ↔ 장바구니 대여옵션 연동 (2026-09-05 명문화)
+
+```
+CMS 대여관리 설정 화면의 15개 이상 항목(대여방식 플래그 3종·배송료·배송료 우대설정·휴무일
+제어·필수 동의문 등)이 각각 장바구니의 어떤 판정 로직을 거쳐 어떤 제한·계산을 만들고
+최종 예약신청 RPC에 어떤 값으로 저장되는지는 이 문서가 아니라 별도 인덱스 문서가 정본이다
+— 같은 대여방식 플래그(is_bulk_delivery/is_courier_dependent/is_delivery_type)를 둘러싼
+설계가 최근 며칠 새 5차례 뒤집히며 실사용 회귀를 유발한 이력에 대응해 신설됨.
+```
+→ 상세: `.claude/rules-ref/rental-cms-settings.md`(CMS 설정 전체 인벤토리 + 인과사슬 표) ·
+`.claude/rules-ref/rental-fee-policy.md`(요금 산식 정본)
+
+---
+
 ## GATE C 확인 항목 (front-cms 연동 변경 시)
 
 ```
@@ -559,7 +575,7 @@ session이나 그 어떤 채팅 RPC도 "관리자 전용"을 보장해줄 수 �
 
 ---
 
-*service-operations.md v1.5 | Harness Flow v3.2 | 2026-08-17 신설 — chat.md·contract.md·
+*service-operations.md v1.6 | Harness Flow v3.2 | 2026-08-17 신설 — chat.md·contract.md·
 payment.md·rental-lifecycle.md·products.md·security-auth.md에 흩어진 front-cms 상호운영
 원칙을 인덱스로 통합. 세부 내용은 각 원본 문서가 정본, 이 문서는 포인터만 유지. | 2026-08-17
 §9 추가 — 예약승인(confirmed) 게이팅 설계 확정(구현 대기) 반영. | 2026-08-18 §9를 "구현·
@@ -598,4 +614,12 @@ GREEN. 랜딩 UX(채번내역 목록 클릭 시 이동 대상)는 Stephen 피드
 마이그레이션 365~370·373, TDD 24/24 GREEN, Stage 적용 완료·Production 미적용) |
 2026-09-02 §17 신설 — "관리자 전용" 알림을 chat_messages에 넣으면 안 되는 이유(고객과 세션
 공유) 명문화, Migration 328(빠른문의 신규등록 알림)의 고객세션 오노출 결함을 사례로 기록 +
-Migration 425로 해소 + GATE C 체크리스트 1건 추가*
+Migration 425로 해소 + GATE C 체크리스트 1건 추가 | 2026-09-05 §18 신설 — CMS 대여관리
+설정(`/cms/set/rental`) ↔ 장바구니 대여옵션 연동 인덱스를 `rental-cms-settings.md`로
+포인터 추가(대여방식 플래그 3종을 둘러싼 설계가 최근 5차례 뒤집히며 실사용 회귀를 유발한
+이력 대응) | 2026-09-06 §10 D-1 조건 정정 항목 갱신 — "Production 미적용"은 스테일 서술이었고,
+`release_reservation_hold()` 함수 정의 DB 직접 조회로 Stage·Production 둘 다 Migration 394가
+이미 적용돼 있음을 재확인. | 2026-09-06(같은 날 후속) §7 대기 재진입 서술 정정 — "오직 1시간
+무응답 자동전환으로만 일어난다, 수동 액션 없음"은 스테일 서술이었고, 실제로는 3시간(migration
+226)이 맞으며 2026-08-12 GATE B 승인된 관리자 수동 "대기 전환" 버튼(chat.md §17-1)도 이미
+존재하는 두 번째 경로임을 CMS 전역 정밀검증 v6에서 발견해 정정.*
