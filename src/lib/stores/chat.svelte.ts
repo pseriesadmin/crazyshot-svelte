@@ -136,6 +136,12 @@ export function resetUnreadCount(): void {
   chatStore.unreadCount = 0
 }
 
+// 서버에서 조회한 실제 미읽음 건수로 배지를 복원(페이지 재진입·로그인 시 1회) — 이후
+// 도착하는 새 메시지는 계속 pushMessage()의 += 1로 누적된다.
+export function setUnreadCount(count: number): void {
+  chatStore.unreadCount = count
+}
+
 // 새 메시지 도착 시 세션 목록의 마지막 메시지 미리보기 갱신 + 최신순 재정렬(맨 위로)
 export function applyIncomingMessagePreview(message: ChatMessage): void {
   const idx = chatStore.sessions.findIndex((s) => s.id === message.session_id)

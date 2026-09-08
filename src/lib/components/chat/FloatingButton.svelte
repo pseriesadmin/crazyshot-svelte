@@ -5,8 +5,8 @@
 
   import ChatBottomSheet from './ChatBottomSheet.svelte'
   import ChatIcon from '$lib/components/common/ChatIcon.svelte'
-  import { chatStore, toggleChat, resetUnreadCount, pushMessage, setActiveSession } from '$lib/stores/chat.svelte'
-  import { subscribeToChatMessages, loadUserSession } from '$lib/services/chatService'
+  import { chatStore, toggleChat, resetUnreadCount, setUnreadCount, pushMessage, setActiveSession } from '$lib/stores/chat.svelte'
+  import { subscribeToChatMessages, loadUserSession, getUnreadCount } from '$lib/services/chatService'
   import { supabase } from '$lib/services/supabase'
 
   interface Props {
@@ -56,6 +56,12 @@
   // 기존 채팅 세션을 찾아 activeSessionId를 복구한다.
   // $effect 내부에서 비동기 콜백(.then) 안의 읽기는 추적되지 않아
   // 이 effect는 마운트 시 단 한 번만 실행된다.
+  //
+  // 2026-09-08 결함 수정: 세션 복구 시 activeSessionId만 채우고 unreadCount는 항상 0으로
+  // 시작해, 재진입·로그인 직후엔 이미 도착해 있던 미읽음 메시지가 있어도 배지(레드닷·ripple)
+  // 가 뜨지 않고 "새로 도착하는 메시지"만 기다리는 상태였다(chatStore.unreadCount는
+  // pushMessage()의 실시간 += 1로만 증가). 세션을 찾은 즉시 실제 미읽음 건수를 조회해
+  // 복원 — 그 이후 도착하는 메시지는 그대로 pushMessage()가 계속 누적한다.
   $effect(() => {
     supabase.auth.getSession().then(({ data: { session: authSession } }) => {
       if (!authSession) return          // 미인증 → 복구 불가
@@ -70,6 +76,7 @@
         // Realtime INSERT가 발생 → 이미 구독 중이면 알림 수신 가능
         if (session && !chatStore.activeSessionId) {
           setActiveSession(session.id)
+          getUnreadCount(session.id).then(setUnreadCount)
         }
       })
     })
@@ -112,9 +119,11 @@
       <!-- 커스텀 채팅 아이콘 (Stephen 확정 디자인) — 공통 컴포넌트(common/ChatIcon.svelte) 사용 -->
       <ChatIcon size={70} />
 
-      <!-- 레드 원점 — 미읽음 메시지 도착 시 우측 상단 -->
+      <!-- 미읽음 수량 배지 — 우측 상단 겹침 레이어(2026-09-08: 빈 점(red-dot) → 실제
+           건수 숫자 배지로 교체, badgeLabel은 이전부터 계산돼 있었으나 렌더링되지 않던
+           죽은 값이었음) -->
       {#if unreadCount > 0 && !isOpen}
-        <span class="red-dot" aria-hidden="true"></span>
+        <span class="unread-badge" aria-hidden="true">{badgeLabel}</span>
       {/if}
     </button>
   </div>
@@ -166,26 +175,37 @@
     .fab-btn :global(svg) { width: 40px; height: 40px; }
   }
 
-  /* ── 레드 원점 — 우측 상단 ── */
-  .red-dot {
+  /* ── 미읽음 수량 배지 — 우측 상단 겹침 레이어 ── */
+  .unread-badge {
     position: absolute;
-    top: 1px;
-    right: 1px;
-    width: 11px;
-    height: 11px;
-    border-radius: 50%;
+    top: -3px;
+    right: -3px;
+    min-width: 22px;
+    height: 22px;
+    padding: 0 5px;
+    border-radius: var(--radius-full, 999px);
     background: var(--cs-red-badge, #FF3535);
+    color: var(--cs-white, #fff);
     border: 2px solid var(--cs-white, #fff);
+    font-size: 11px;
+    font-weight: 700;
+    line-height: 18px;
+    text-align: center;
     pointer-events: none;
+    z-index: 1;
   }
 
   @media (min-width: 640px) {
-    /* PC: 아이콘 40px 기준 위치 조정 */
-    .red-dot {
-      top: -1px;
-      right: -1px;
-      width: 10px;
-      height: 10px;
+    /* PC: 아이콘 40px 기준 위치·크기 축소 */
+    .unread-badge {
+      top: -5px;
+      right: -5px;
+      min-width: 18px;
+      height: 18px;
+      padding: 0 4px;
+      border-width: 1.5px;
+      font-size: 10px;
+      line-height: 15px;
     }
   }
 

@@ -200,6 +200,25 @@ export async function markMessagesRead(
   return { error: (error as { message?: string } | null)?.message ?? null }
 }
 
+// 고객 재진입/로그인 시 미읽음 배지 복원용 — markMessagesRead와 동일한 기본 발신자
+// 집합(상대방 메시지만)을 count 쿼리로 뒤집어 조회한다(2026-09-08 결함 수정: 페이지
+// 새로고침·재로그인 시 unreadCount가 0으로 초기화된 채 실제 도착 메시지를 기다려야만
+// 배지가 뜨던 문제 — 마운트 시 이 함수로 기존 미읽음 건수를 즉시 복원한다).
+export async function getUnreadCount(
+  sessionId: string,
+  senderTypes: ('user' | 'admin' | 'ai')[] = ['admin', 'ai']
+): Promise<number> {
+  const { count, error } = await supabase
+    .from('chat_messages')
+    .select('*', { count: 'exact', head: true })
+    .eq('session_id', sessionId)
+    .eq('is_read', false)
+    .in('sender_type', senderTypes)
+
+  if (error) return 0
+  return count ?? 0
+}
+
 // ──────────────────────────────────────────────
 // Realtime 구독 — PRD.1.7.6
 // ──────────────────────────────────────────────

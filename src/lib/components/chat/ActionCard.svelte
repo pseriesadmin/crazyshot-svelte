@@ -3,6 +3,7 @@
   // Figma node: 2497:8761 (product card with CTA), 2497:8702
 
   import type { ActionPayload, CtaModalRequest } from '$lib/types/chat'
+  import { csToast } from '$lib/utils/toast'
 
   interface Props {
     payload: ActionPayload
@@ -48,7 +49,13 @@
   }
 
   // CS-A2: 서버측 재검증 실패 시 에러 메시지 표시
-  let serverExpiredError = $state(false)
+  // 2026-09-08 수정(QA 관찰사항): 예전엔 단순 boolean이라 execute-action이 410을 반환하면
+  // 무조건 "기한 만료"로만 표시됐다 — 실제로는 reservation_hold의 410이 "만료"뿐 아니라
+  // "취소"(고객 본인 취소·관리자 거부) 사유로도 발생하는데, 클릭 시점의 서버 응답
+  // (가장 최신·정확한 신호)이 라이브체크(reservationHoldStatusLive, 주기적이라 뒤처질 수
+  // 있음)보다 먼저 도착하면 실제로는 "취소됨"인 카드가 영구히 "기한 만료"로 고착됐다.
+  // 서버가 돌려주는 code('expired'|'cancelled')를 그대로 보관해 같은 구분을 반영한다.
+  let serverBlockedReason = $state<'expired' | 'cancelled' | null>(null)
 
   // 상품 이미지 URL — product_image는 Cloudinary public_id 또는 Supabase Storage 전체 URL
   // 둘 다 올 수 있음(products.image_urls 저장 형식이 실제로 Storage 전체 URL이라 ProductHero.svelte와
@@ -105,6 +112,38 @@
     }
   }
 
+  // 2026-09-08(Stephen 지시) — 아래 세 라이브체크는 전부 "마운트 시 1회만 확인하고 다시
+  // 재검증하지 않는" 동일한 구조적 약점이 있었다: 카드가 생성된 직후(예: 전자계약 콘텐츠
+  // 저장이 채 끝나기 전) 그 찰나에 체크가 돌면, 이후 실제 상태가 정상으로 바뀌어도 브라우저
+  // 새로고침 전까지 "기한 만료"가 그대로 고착되는 실사용 결함으로 이어졌다(전자계약 발송
+  // 직후 "기한 만료" 오표시 사례로 발견). 재검증 트리거 2종을 추가:
+  //   ① 탭이 다시 보이거나(visibilitychange) 창이 포커스를 되찾을 때(focus) 즉시 재검증
+  //   ② 그래도 여전히 "차단/만료"로 나오면 2초 뒤 1회만 더 재확인(무한 폴링 아님) —
+  //      탭을 벗어나지 않고 화면을 계속 보고 있는 경우까지 새로고침 없이 스스로 회복시킨다.
+  let revalidateTick = $state(0)
+
+  $effect(() => {
+    function revalidate() {
+      if (document.visibilityState === 'visible') revalidateTick++
+    }
+    document.addEventListener('visibilitychange', revalidate)
+    window.addEventListener('focus', revalidate)
+    return () => {
+      document.removeEventListener('visibilitychange', revalidate)
+      window.removeEventListener('focus', revalidate)
+    }
+  })
+
+  async function fetchJsonSafe<T>(url: string): Promise<T | null> {
+    try {
+      const res = await fetch(url)
+      if (!res.ok) return null
+      return (await res.json()) as T
+    } catch {
+      return null
+    }
+  }
+
   // Stephen 확정(2026-08-15): return_remind CTA는 예약의 "현재" 상태에 따라 동작이 갈림 —
   // 예정(in_use·return_requested)=등록화면 / 지난(returned·completed)=목록화면(둘 다 같은
   // /account/rental/[id]/history 라우트, 그 페이지 안에서 status로 모드 분기) / 취소·이상
@@ -113,17 +152,22 @@
   let returnRemindBlocked = $state(false)
 
   $effect(() => {
+    revalidateTick // 탭 재활성화 시 재실행되도록 의존성 등록
     if (payload.type !== 'return_remind' || !ctaUrl) { returnRemindBlocked = false; return }
     const match = ctaUrl.match(/\/account\/rental\/(\d+)\/history/)
     if (!match) { returnRemindBlocked = false; return }
     let cancelled = false
-    fetch(`/api/chat/reservation-status/${match[1]}`)
-      .then((r) => (r.ok ? r.json() : null))
-      .then((data: { status: string } | null) => {
+    const url = `/api/chat/reservation-status/${match[1]}`
+    ;(async () => {
+      for (let attempt = 0; attempt < 2 && !cancelled; attempt++) {
+        const data = await fetchJsonSafe<{ status: string }>(url)
         if (cancelled) return
-        returnRemindBlocked = data ? ['cancelled', 'damage_claimed'].includes(data.status) : false
-      })
-      .catch(() => { if (!cancelled) returnRemindBlocked = false })
+        const blocked = data ? ['cancelled', 'damage_claimed'].includes(data.status) : false
+        returnRemindBlocked = blocked
+        if (!blocked || attempt === 1) return
+        await new Promise((r) => setTimeout(r, 2000))
+      }
+    })()
     return () => { cancelled = true }
   })
 
@@ -131,26 +175,38 @@
   // 발송 시점엔 만료 여부를 알 수 없다(전자계약 발송 전까지 hold 자체에 타이머가 없음 —
   // service-operations.md §10). 그래서 send_rental_chat_notification이 이 타입엔 is_expired/
   // expires_at을 채워준 적이 없고, 대신 매 렌더 시 실제 예약 상태를 가볍게 조회해 판단한다
-  // (returnRemindBlocked와 동일 패턴 재사용). "기간 만료" 표시는 세 경우에만 나타나야 한다:
-  // ① 전자계약 발송 후 미서명 상태로 30분 경과(status='expired'), ② 고객 본인 예약취소,
-  // ③ 관리자 예약거부 — ②③은 DB상 구분되지 않고 둘 다 status='cancelled'로 수렴한다.
-  let reservationHoldExpiredLive = $state(false)
+  // (returnRemindBlocked와 동일 패턴 재사용). 이 카드가 더 이상 유효하지 않은 경우는 두
+  // 갈래로 나뉜다: ① 전자계약 발송 후 미서명 상태로 30분 경과(status='expired') → "기한
+  // 만료" ② 고객 본인 예약취소 또는 관리자 예약거부(둘 다 DB상 status='cancelled'로
+  // 수렴, 액터 구분 컬럼 없음) → "취소됨". 2026-09-08(이전 세션) 이전에는 ①②를 구분 없이
+  // 전부 "기한 만료"로 표시해, 스스로 취소한 예약도 마치 시간이 초과된 것처럼 보이는
+  // 라벨 오표시가 있었다 — status 값 자체를 보관해 둘을 구분한다.
+  let reservationHoldStatusLive = $state<'expired' | 'cancelled' | null>(null)
 
   $effect(() => {
+    revalidateTick
     if (payload.type !== 'reservation_hold' || !payload.reservation_id) {
-      reservationHoldExpiredLive = false
+      reservationHoldStatusLive = null
       return
     }
     let cancelled = false
-    fetch(`/api/chat/reservation-status/${payload.reservation_id}`)
-      .then((r) => (r.ok ? r.json() : null))
-      .then((data: { status: string } | null) => {
+    const url = `/api/chat/reservation-status/${payload.reservation_id}`
+    ;(async () => {
+      for (let attempt = 0; attempt < 2 && !cancelled; attempt++) {
+        const data = await fetchJsonSafe<{ status: string }>(url)
         if (cancelled) return
-        reservationHoldExpiredLive = data ? ['expired', 'cancelled'].includes(data.status) : false
-      })
-      .catch(() => { if (!cancelled) reservationHoldExpiredLive = false })
+        const status = data?.status
+        const terminal = status === 'expired' || status === 'cancelled' ? status : null
+        reservationHoldStatusLive = terminal
+        if (!terminal || attempt === 1) return
+        await new Promise((r) => setTimeout(r, 2000))
+      }
+    })()
     return () => { cancelled = true }
   })
+
+  let reservationHoldExpiredLive = $derived(reservationHoldStatusLive === 'expired')
+  let reservationHoldCancelledLive = $derived(reservationHoldStatusLive === 'cancelled')
 
   // 전자계약 발행취소 반영(2026-09-07 신규) — 관리자가 "발행 취소"(서명완료건 포함,
   // cancel_issued_contract RPC)를 실행하면 이 두 카드 타입("전자계약서명" 요청 카드와
@@ -160,19 +216,24 @@
   let contractCancelledLive = $state(false)
 
   $effect(() => {
+    revalidateTick
     const isContractCard = payload.type === 'contract_link' || payload.type === 'contract_signed'
     if (!isContractCard || !payload.contract_id) {
       contractCancelledLive = false
       return
     }
     let cancelled = false
-    fetch(`/api/chat/contract-status/${payload.contract_id}`)
-      .then((r) => (r.ok ? r.json() : null))
-      .then((data: { cancelled: boolean } | null) => {
+    const url = `/api/chat/contract-status/${payload.contract_id}`
+    ;(async () => {
+      for (let attempt = 0; attempt < 2 && !cancelled; attempt++) {
+        const data = await fetchJsonSafe<{ cancelled: boolean }>(url)
         if (cancelled) return
-        contractCancelledLive = data?.cancelled === true
-      })
-      .catch(() => { if (!cancelled) contractCancelledLive = false })
+        const isCancelled = data?.cancelled === true
+        contractCancelledLive = isCancelled
+        if (!isCancelled || attempt === 1) return
+        await new Promise((r) => setTimeout(r, 2000))
+      }
+    })()
     return () => { cancelled = true }
   })
 
@@ -215,7 +276,7 @@
   // CS-A2: 서버측 만료 재검증 후 CTA 실행
   async function handleCta(): Promise<void> {
     if (ctaDisabled) return
-    serverExpiredError = false
+    serverBlockedReason = null
 
     // 관리자(CMS) 화면은 새 창을 열지 않고 레이어 모달로 미리보기 — 팝업 제스처 소비 트릭 불필요.
     // 고객 화면은 기존 새 창 동작 그대로 유지.
@@ -229,26 +290,38 @@
     }
 
     // messageId가 있으면 서버에 만료 여부 재확인 (클라이언트 시계 신뢰 X)
+    // 2026-09-08 수정: 410(진짜 만료) 외의 실패(403 권한거부·500 등)까지 전부 "기한 만료"로
+    // 표시하던 결함 발견 — 계약발행 관리자가 아닌 다른 CMS 관리자가 같은 카드를 클릭하면
+    // execute-action이 403을 반환하는데, 이걸 그대로 "기한 만료"로 오인 표시하고 있었다
+    // (근본 원인인 403 자체는 execute-action/+server.ts의 cms_role 체크 누락을 수정해 해소—
+    // 이 쪽은 방어적으로 에러 종류를 구분해 남겨둔다: 410만 영구적인 "기한 만료" 상태로
+    // 전환하고, 그 외 실패는 토스트 안내만 하고 버튼은 다시 시도 가능하게 유지).
     if (messageId) {
       try {
         const res = await fetch(`/api/chat/messages/${messageId}/execute-action`, {
           method: 'POST',
         })
         if (res.status === 410) {
-          // 서버가 만료 확인 → 로컬 상태 갱신 후 중단
-          serverExpiredError = true
+          // 서버가 만료/취소 확인 → 로컬 상태 갱신 후 중단. code가 'cancelled'면 "취소됨",
+          // 그 외(기본값 'expired' 포함)는 "기한 만료"로 표시 — reservation_hold 타입만
+          // execute-action이 code를 구분해 보내주고, 그 외 타입(계약 등)은 항상 'expired'다.
+          const body = await res.json().catch(() => ({}))
+          const code = (body as { code?: string }).code
+          serverBlockedReason = code === 'cancelled' ? 'cancelled' : 'expired'
           pendingWindow?.close()
           return
         }
         if (!res.ok) {
-          // 네트워크 ��류 등 — 진행 불가로 처리
-          serverExpiredError = true
+          // 410이 아닌 실패(403 권한거부·500 등) — "기한 만료"로 오인 표시하지 않고
+          // 실제 사유를 토스트로 안내, 버튼은 재시도 가능한 상태로 유지
+          const body = await res.json().catch(() => ({}))
+          csToast.error((body as { error?: string }).error ?? '처리 중 오류가 발생했습니다. 잠시 후 다시 시도해주세요.')
           pendingWindow?.close()
           return
         }
       } catch {
-        // fetch 자체 ���패 — 진행 불가
-        serverExpiredError = true
+        // fetch 자체 실패(네트워크 등) — 재시도 가능한 상태로 안내만
+        csToast.error('네트워크 오류로 처리하지 못했습니다. 잠시 후 다시 시도해주세요.')
         pendingWindow?.close()
         return
       }
@@ -297,19 +370,55 @@
   }
 
   // 만료 여부 (PAYMENT_REQUEST_CARD: expires_at 체크 + reservation_hold/contract_link/
-  // contract_signed: 라이브 상태 체크)
+  // contract_signed: 라이브 상태 체크 + 클릭 시점 서버 재검증)
+  // ⚠️ contractCancelledLive는 여기서 제외했다 — "계약 발행취소"는 시간초과가 아니라
+  // 별도 사유(아래 isContractCancelled)라 "기한 만료"에 합류시키지 않는다(2026-09-08).
   let isExpired = $derived(
     payload.is_expired === true ||
     (payload.expires_at ? new Date(payload.expires_at) < new Date() : false) ||
     reservationHoldExpiredLive ||
-    contractCancelledLive
+    serverBlockedReason === 'expired'
+  )
+
+  // 예약 자체가 취소된 경우(고객 본인 취소·관리자 거부) — isExpired와 별개 상태로 분리
+  // 유지해, "기한 만료"(시간초과)와 다른 라벨("취소됨")로 표시한다(2026-09-08). 라이브체크
+  // (reservationHoldCancelledLive, 재검증 트리거 발생 시에만 갱신)와 클릭 시점 서버 응답
+  // (serverBlockedReason, 가장 최신·정확한 신호) 둘 중 하나라도 취소를 가리키면 반영한다 —
+  // 라이브체크가 아직 못 따라잡은 찰나에 클릭해도 서버 응답이 즉시 정확한 라벨을 준다.
+  // payload.type 가드 필수 — serverBlockedReason='cancelled'는 reservation_hold·계약카드
+  // 양쪽에서 다 나올 수 있어 타입으로 구분하지 않으면 서로 다른 카드에 엉뚱한 라벨이 샌다.
+  let isReservationCancelled = $derived(
+    payload.type === 'reservation_hold' &&
+    (reservationHoldCancelledLive || serverBlockedReason === 'cancelled')
+  )
+
+  // 계약(contract_link/contract_signed) 발행취소 — "기한 만료"·"취소됨" 둘 다 아닌
+  // "발행취소" 전용 라벨(2026-09-08, Stephen 지시). 계약카드는 현재 이 사유 하나만
+  // 존재한다(서명링크 30일 만료는 채팅카드 쪽에서 아직 체크하지 않음 — §후속 검토 대상).
+  let isContractCancelled = $derived(
+    (payload.type === 'contract_link' || payload.type === 'contract_signed') &&
+    (contractCancelledLive || serverBlockedReason === 'cancelled')
+  )
+
+  let isBlocked = $derived(isExpired || isReservationCancelled || isContractCancelled)
+  let blockedLabel = $derived(
+    isExpired ? '기한 만료' : isReservationCancelled ? '취소됨' : isContractCancelled ? '발행취소' : '기한 만료'
+  )
+  let blockedAriaLabel = $derived(
+    isExpired
+      ? '기한 만료된 액션'
+      : isReservationCancelled
+      ? '취소된 액션'
+      : isContractCancelled
+      ? '발행취소된 액션'
+      : '기한 만료된 액션'
   )
 
   // pending 상태: 고객 화면에선 CTA 비활성 / 관리자 화면엔 승인·거절 버튼으로 대체
-  let ctaDisabled = $derived(isExpired || serverExpiredError || returnRemindBlocked || isCouponPending || isCouponRejected)
+  let ctaDisabled = $derived(isBlocked || returnRemindBlocked || isCouponPending || isCouponRejected)
 </script>
 
-<div class="action-card" class:expired={isExpired || serverExpiredError}>
+<div class="action-card" class:expired={isBlocked}>
   <!-- GSD-17: product_link 전용 렌더링 (썸네일+상품명+가격+상세보기 링크) -->
   {#if payload.type === 'product_link'}
     <div class="product-link-card">
@@ -430,9 +539,9 @@
             class="cta-btn cta-btn--{ctaColor}"
             onclick={handleCta}
             disabled={ctaDisabled}
-            aria-label={isExpired || serverExpiredError ? '기한 만료된 액션' : ctaLabel}
+            aria-label={isBlocked ? blockedAriaLabel : ctaLabel}
           >
-            {isExpired || serverExpiredError ? '기한 만료' : ctaLabel}
+            {isBlocked ? blockedLabel : ctaLabel}
           </button>
         {/if}
       </div>
@@ -492,15 +601,15 @@
           onclick={handleCta}
           disabled={ctaDisabled}
         >
-          {isExpired || serverExpiredError ? '기한 만료' : ctaLabel}
+          {isBlocked ? blockedLabel : ctaLabel}
         </button>
       {/if}
     </div>
   {/if}
 
-  <!-- 만료 오버레이 -->
-  {#if isExpired}
-    <div class="expired-overlay" aria-hidden="true">기한 만료</div>
+  <!-- 만료(또는 취소·발행취소) 오버레이 -->
+  {#if isBlocked}
+    <div class="expired-overlay" aria-hidden="true">{blockedLabel}</div>
   {/if}
 </div>
 
