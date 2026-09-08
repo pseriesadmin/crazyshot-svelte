@@ -106,11 +106,15 @@
   let canEditProducts = $derived(
     !isRentalView && row.status === 'hold' && !row.payment_confirmed_at
   )
-  // canReassignProductCode — hold 또는 계약완료(confirmed) + 운송장 미등록 상태일 때 상품코드 재배정 허용
+  // canReassignProductCode — hold 또는 계약완료(confirmed) 상태일 때 상품코드 재배정 허용
+  // (2026-09-08 확장: 운송장 등록 여부와 무관 — confirmed는 실물이 아직 반출 전이라 QR 불일치 위험 없음, Stephen 확정)
+  // ⛔ 2026-09-08 후속 수정(RSV-REASSIGN-1): !isRentalView 게이트가 남아있어 이 확장이 실질적으로
+  // 도달 불가능한 상태였다 — confirmed 상태 예약은 /cms/reservation 목록에서 애초에 제외되고
+  // (RENTAL_VIEW_STATUSES), 유일하게 confirmed 예약을 열람·관리하는 화면인 /cms/rentals는
+  // isRentalView=true로 고정돼 있어 canReassignProductCode가 항상 false였다. hold는 /cms/rentals
+  // 목록에 노출되지 않으므로(RENTAL_STATUSES 필터) 이 조건 제거가 hold 쪽 동작에는 영향 없음.
   let canReassignProductCode = $derived(
-    !isRentalView &&
-    (row.status === 'hold' ||
-      (row.status === 'confirmed' && !row.tracking_number))
+    row.status === 'hold' || row.status === 'confirmed'
   )
   let showLockerPasswordField = $derived(
     canManagePaymentAndLocker &&
@@ -343,7 +347,8 @@
     pickupMethod:    string | null
     returnMethod:    string | null
     paymentConfirmedAt: string | null  // 2026-09-03: 유닛별 편집가능 판정용
-    trackingNumber:     string | null  // 2026-09-03: 유닛별 재배정가능 판정용
+    trackingNumber:     string | null  // 2026-09-03 도입, Migration 465(2026-09-08)로 재배정가능
+    // 판정에서 더 이상 쓰이지 않게 됨(confirmed는 운송장 등록 여부 무관 허용) — 표시용 필드로만 유지
     productName:     string
     productCode:     string | null
     productCategory: string | null
@@ -397,7 +402,8 @@
     reservationId:   number          // Stage 4: 삭제/재배정 API 호출용
     parentProductId: string | null   // Stage 4: 동일 그룹 여부 판단용
     paymentConfirmedAt: string | null  // 2026-09-03: 유닛별 편집가능 판정용
-    trackingNumber:     string | null  // 2026-09-03: 유닛별 재배정가능 판정용
+    trackingNumber:     string | null  // 2026-09-03 도입, Migration 465(2026-09-08)로 재배정가능
+    // 판정에서 더 이상 쓰이지 않게 됨(confirmed는 운송장 등록 여부 무관 허용) — 표시용 필드로만 유지
   }
 
   // "상품 정보" 섹션 반복 렌더링용 — 현재 선택된 상품(row) + 같은 주문의 형제 상품(rentalSiblings)을
@@ -435,7 +441,7 @@
   function canReassignUnit(unit: ProductInfoItem): boolean {
     if (!canReassignProductCode) return false
     if (!unit.isSibling) return true
-    return unit.status === 'hold' || (unit.status === 'confirmed' && !unit.trackingNumber)
+    return unit.status === 'hold' || unit.status === 'confirmed'
   }
 
   interface ProductGroupView {
@@ -1753,9 +1759,17 @@
               isSubmitting = true
               return async ({ result, update }) => {
                 isSubmitting = false
-                if (result.type === 'success') { csToast.success('예약이 승인되었습니다.'); onstatuschange?.(); onrefresh() }
+                if (result.type === 'success') csToast.success('예약이 승인되었습니다.')
                 else csToast.error('처리 중 오류가 발생했습니다.')
+                // RSV-NAV-1(2026-09-08): update()(내부적으로 invalidateAll 수행)가 완전히
+                // 끝난 뒤에만 onstatuschange?.()(closePanel의 goto())를 실행 — 예전엔 이 둘이
+                // 동시에(순서 보장 없이) 발화해 CMS 레이아웃의 전체화면 로딩 오버레이
+                // (isNavigating, +layout.svelte)가 풀리지 않는 "무한로딩" 현상을 유발했다.
+                // 서버 처리·DB 반영 자체는 항상 정상 완료돼 있었고(새로고침 시 결과 반영 확인),
+                // 순수 클라이언트 네비게이션 경합 문제였다 — 중복 호출이던 onrefresh()는 제거
+                // (update()가 이미 동일하게 invalidateAll을 수행하므로 불필요).
                 await update()
+                if (result.type === 'success') onstatuschange?.()
               }
             }}
           >
@@ -1769,9 +1783,11 @@
               isSubmitting = true
               return async ({ result, update }) => {
                 isSubmitting = false
-                if (result.type === 'success') { csToast.success('예약이 거부되었습니다.'); onstatuschange?.(); onrefresh() }
+                if (result.type === 'success') csToast.success('예약이 거부되었습니다.')
                 else csToast.error('처리 중 오류가 발생했습니다.')
+                // RSV-NAV-1 — 위 승인하기와 동일 수정(순서 보장 + onrefresh 중복 제거)
                 await update()
+                if (result.type === 'success') onstatuschange?.()
               }
             }}
           >
@@ -1819,12 +1835,13 @@
                   if ((result.data as Record<string, unknown> | undefined)?.dhero_cancel_failed) {
                     csToast.warning('배송사 측 취소에 실패했습니다. 실물 배송을 별도로 확인하세요.')
                   }
-                  onstatuschange?.()
-                  onrefresh()
                 } else {
                   csToast.error('처리 중 오류가 발생했습니다.')
                 }
+                // RSV-NAV-1(2026-09-08) — update() 완료 후에만 onstatuschange?.() 실행(순서
+                // 보장) + 중복이던 onrefresh() 제거. 위 승인하기/거부 버튼과 동일 수정 사유.
                 await update()
+                if (result.type === 'success') onstatuschange?.()
               }
             }}
           >
@@ -1849,12 +1866,13 @@
                 isSubmitting = false
                 if (result.type === 'success') {
                   csToast.success('파손 신고 접수로 처리되었습니다.')
-                  onstatuschange?.()
-                  onrefresh()
                 } else {
                   csToast.error('처리 중 오류가 발생했습니다.')
                 }
+                // RSV-NAV-1(2026-09-08) — update() 완료 후에만 onstatuschange?.() 실행(순서
+                // 보장) + 중복이던 onrefresh() 제거. 위 승인하기/거부/예약취소 버튼과 동일 수정 사유.
                 await update()
+                if (result.type === 'success') onstatuschange?.()
               }
             }}
           >

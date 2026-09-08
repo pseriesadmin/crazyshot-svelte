@@ -145,8 +145,12 @@ export const actions: Actions = {
 
     // 예약 승인 채팅 알림 + 고객 푸시 — 공용 헬퍼로 통합 (NTF-C2 수정, 2026-08-31)
     // mode='hold'(같은 주문의 다른 상품 미승인)이면 채팅·푸시 둘 다 보류 — service-operations.md §4/§15
-    const notifyPlan = await resolveApprovalNotifyPlan(admin, reservationId)
-    await sendApprovalNotifications(admin, reservationId, notifyPlan)
+    // fail-soft(2026-09-08 수정) — updateStatus 액션과 동일한 무한로딩 결함 방지(예약 id 139
+    // 사례). 상태전이는 이미 위에서 성공했으므로 알림 실패가 "승인하기" 버튼 응답을 막으면 안 됨.
+    try {
+      const notifyPlan = await resolveApprovalNotifyPlan(admin, reservationId)
+      await sendApprovalNotifications(admin, reservationId, notifyPlan)
+    } catch { /* 승인 알림 발송 실패는 무시 */ }
     return { ok: true }
   },
 
@@ -200,14 +204,22 @@ export const actions: Actions = {
       cancelled:        'reservation_cancelled',
       damage_claimed:   'damage_claimed',
     }
+    // fail-soft(2026-09-08 수정) — 이 블록이 예외를 던지면 상태전이(이미 위에서 성공)는
+    // DB에 반영됐음에도 액션 응답 직렬화가 깨져 클라이언트 use:enhance 콜백이 끝내 호출되지
+    // 않고 "거부"/"예약 취소" 등 버튼이 무한로딩에 빠지는 결함이 실사용 중 발견됨(reservation
+    // id 139) — log_rental_action(위 173행)과 동일한 fail-soft 원칙을 적용해 해소.
     const notifyType = AUTO_NOTIFY[newStatus]
     if (notifyType) {
-      await admin.rpc('send_rental_chat_notification', {
-        p_reservation_id: reservationId,
-        p_notify_type: notifyType,
-      })
+      try {
+        await admin.rpc('send_rental_chat_notification', {
+          p_reservation_id: reservationId,
+          p_notify_type: notifyType,
+        })
+      } catch { /* 채팅 알림 발송 실패는 무시 */ }
       // 상태 전환 푸시 알림 병행 발송 (채팅과 독립 — 실패해도 위 처리에 영향 없음)
-      await sendReservationLifecyclePush(admin, reservationId, notifyType)
+      try {
+        await sendReservationLifecyclePush(admin, reservationId, notifyType)
+      } catch { /* 푸시 알림 발송 실패는 무시 */ }
     }
 
     // ── 두발히어로 fail-soft 트리거 ─────────────────────────────────────────
