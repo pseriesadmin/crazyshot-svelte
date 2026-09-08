@@ -1,5 +1,425 @@
 # .claude/harness/TASK.md
 
+## DONE — 🟡 BOUNDARY: 채팅 첨부파일 PDF 검증 누락 + 업로드 용량 상한 신규 명문화(2026-09-08, 이 세션)
+
+아젠다: Stephen "채팅 세션 내 파일 공유 시 pdf가 제외되어 있는지 확인하고 첨부가능하게 수정.
+-기술 지침에 파일 용량 제한도 반영할 것."
+
+### 조사 결과 — PDF는 이미 첨부 가능했으나 검증 자체가 완전히 빠져 있었음
+
+```
+ChatInput.svelte의 <input accept="..."> 에는 이미 application/pdf가 포함돼 있어 PDF
+선택 자체는 막혀 있지 않았다(accept 목록 문제 아님). 진짜 결함은 채팅 첨부 파이프라인
+(ChatWindow.svelte handleAttach / AdminChatPanel.svelte handleAdminAttach) 어디에도
+프로젝트 표준 validateUploadFile()이 전혀 호출되지 않아 MIME 검증이 원천적으로 없었고,
+파일 용량 상한도 채팅에는 전혀 없었다는 점이다(HypePackBannerModal·ContractDocumentEditor·
+CustomerDetailPanel·signature-assets 등 다른 5곳은 이미 validateUploadFile()을 쓰고
+있었음 — 채팅만 예외로 빠져 있었음).
+
+또한 CustomerDetailPanel.svelte·ProfileTabContent.svelte·ContractTemplatePanel.svelte
+3곳이 각자 독립적으로 "10MB"를 하드코딩해 사실상 동일한 용량 상한을 지켜오고 있었는데,
+이 값이 공용 검증 유틸(fileValidation.ts)이나 uiux 문서 어디에도 정식으로 명문화돼 있지
+않았다 — Stephen의 "기술 지침에 파일 용량 제한도 반영할 것" 요청은 이 문서화 공백을
+정확히 짚은 것으로 확인.
+```
+
+### 수정 내역
+
+```
+src/lib/utils/fileValidation.ts
+  → MAX_UPLOAD_FILE_SIZE_BYTES(10MB) 상수 + validateUploadFileSize() 함수 신규 추가
+  → 기존 validateUploadFile() 시그니처·동작은 변경하지 않음(5개 기존 호출부 무회귀 —
+    용량 체크를 그 함수 내부에 넣으면 HypePackBannerModal 배너이미지·
+    ContractDocumentEditor 계약서 인라인이미지 등 요청 범위 밖 화면 동작까지 조용히
+    바뀌므로 별도 함수로 분리)
+
+src/lib/components/chat/ChatWindow.svelte (handleAttach)
+src/lib/components/chat/AdminChatPanel.svelte (handleAdminAttach)
+  → 업로드 시도 전 validateUploadFile()(MIME) + validateUploadFileSize()(10MB) 순차 호출,
+    실패 시 csToast.error()로 즉시 안내 후 업로드 중단(기존 ChatWindow errorMsg 상태는
+    세션 로드 실패 전용 풀스크린 상태라 재사용하지 않고 csToast로 분리)
+
+src/lib/components/chat/ChatInput.svelte
+  → <input accept="..."> 를 표준 문자열(image/png,image/jpeg,image/webp,image/heif,
+    image/heic,application/pdf)로 정정(기존엔 image/gif가 섞여 있고 heif/heic 누락 —
+    표준 미준수였으나 실질적 PDF 차단 원인은 아니었음)
+
+.claude/rules-ref/front-uiux.md §15
+  → §15-1a 신규 절 추가 — "개별 파일 업로드 용량 상한 10MB"를 전역 표준으로 명문화
+    (기존 3곳의 암묵적 관행을 공식화), signature-assets 5MB는 의도된 예외로 명시
+  → GATE C 체크리스트에 validateUploadFileSize() 호출 확인 항목 추가
+
+.claude/rules/uiux-index.md
+  → "🔴 파일 업로드 표준 포맷" 섹션에 10MB 용량 상한 요약 + front-uiux.md §15-1a 링크 추가
+```
+
+### 검증
+
+```
+npx tsc --noEmit -p .        → 변경 파일 신규 에러 0건
+npx svelte-check             → 변경 파일 신규 에러·경고 0건(전체 1 error는 vite.config.ts
+                                사전 존재 이슈, 이번 변경과 무관)
+npx vitest run
+  src/__tests__/utils/fileValidation.test.ts          → 6/6 GREEN(신규 — PDF 허용 확인 +
+                                                          validateUploadFileSize 경계값)
+  src/__tests__/server/executeActionAccessGuard.test.ts
+  src/__tests__/server/adminReplyAccessGuard.test.ts  → 15/15 GREEN(기존, 무회귀 재확인)
+```
+
+**GATE E: 클라이언트 전용 소규모 수정 — DB 마이그레이션·서버 API 변경 없음, git 커밋은
+Stephen 직접 실행 대기**
+
+---
+
+## DONE — 🔴 CRITICAL: cart의 otCouponDiscount 정합성 재대조 + 실서버(Production) 미반영 검증 (2026-09-08, 이 세션)
+
+아젠다: Stephen이 첨부 플랜 문서(`crystalline-watching-wand.md`, 타 세션이 작성한 HANDOFF
+작성 계획)를 리뷰해 "로컬과 같이 실서버(https://crazyshot-svelte.vercel.app/cart)에 동일
+동작하도록 반영되었는지 확인 검증"을 요청. 이후 별도 세션이 산출한 "cart의 otCouponDiscount와
+contract-data/+server.ts의 resolveSelectedCouponDiscountAmount가 완전히 동일한 3-way
+분기"라는 분석(§7)을 제시하며 본 세션의 기존 검증 결과와 동일한 내역인지 재확인 요청.
+
+### 검증 방법 (이 세션은 코드 수정 없이 순수 검증만 수행)
+
+1. `git status`/`git log`/`git diff` — 커밋 이력·미커밋 파일·실제 diff 직접 대조
+2. Vercel MCP(`list_deployments`/`get_project`) — Production 최신 배포(`target: production`)의
+   실제 빌드 커밋 SHA를 로컬 HEAD와 대조
+3. Supabase MCP(`execute_sql`, 읽기전용) — Production(`vnbpmvxruyciuuaermyh`) DB에 직접 접속해
+   `user_coupons.used_count` 컬럼·`coupons` CHECK 제약 실존 여부 확인
+4. 두 파일(`cart/+page.svelte` otCouponDiscount ↔ `contract-data/+server.ts`
+   resolveSelectedCouponDiscountAmount)의 현재 워킹트리 코드를 직접 나란히 재확인
+
+### 발견 — 코드 레벨 정합성은 사실이나, 배포 상태는 여전히 불일치
+
+- **코드 정합성(별도 세션 §7 분석)**: 사실로 확인됨 — 두 파일 모두 `fixed → discount_value` /
+  `percentage → round(subtotal * value / 100)` / `그외(free_shipping 등) → 0`의 동일한
+  3-way 분기를 사용.
+- **배포 상태(본 세션 최초 검증 + 재확인 결과, 변동 없음)**:
+  - `src/routes/cart/+page.svelte` — **여전히 미커밋**(`git status` → `M`). `git show
+    HEAD:...`로 확인한 커밋된(=Production 배포된) 버전은 옛 2-way 버그(`fixed`가 아니면
+    전부 정률(%)로 오계산 — `free_shipping` 타입 쿠폰 선택 시 주문금액의 수천%가
+    할인되는 CRITICAL 가격결함) 그대로.
+  - `src/routes/api/cms/reservations/[id]/contract-data/+server.ts` — 커밋 `6f2e210`에
+    이미 포함, PR #257 → `main`(`b1004e1`) 병합 → Vercel Production 최신 배포
+    (`dpl_HYc2ojJ159ZTS4ckgvg8iEuvm7q7`, READY)에 포함되어 **정상 배포 완료**.
+  - Migration 459(`user_coupons.used_count`)·461/462(`coupons` CHECK 제약 `free_shipping`
+    포함)는 Production DB(`vnbpmvxruyciuuaermyh`) 직접 SQL 조회로 실존 확인 — DB 스키마
+    쪽은 정상 반영.
+- **결론**: 두 분석은 서로 모순되지 않음(질문의 관점이 다름 — "로직이 정합적인가" vs
+  "그 로직이 실서버에 나가 있는가"). 단, `cart/+page.svelte`의 CRITICAL 가격버그 수정은
+  **지금 이 순간에도 Production `/cart`에 미반영 상태이며 즉시 후속 조치가 필요**.
+
+### 후속 조치 (이 세션 스코프 밖 — Stephen 직접 실행 필요, GP-1 원칙)
+
+```
+[ ] src/routes/cart/+page.svelte 커밋 (git 쓰기 명령은 Stephen만 직접 실행)
+[ ] stage → main PR 병합 → Vercel Production 자동 배포 확인
+[ ] 배포 후 Production /cart에서 free_shipping 타입 쿠폰 선택 시 정상 계산 재확인
+```
+
+### 검증 방법 기록 (재사용 가능)
+
+```
+Vercel 배포-커밋 대조    : mcp__vercel__list_deployments(target:"production")의
+                        meta.githubCommitSha ↔ 로컬 git log HEAD 대조
+Production DB 직접확인 : mcp__supabase__execute_sql(project_id: vnbpmvxruyciuuaermyh, 읽기전용)
+```
+
+**GATE E: 검증 전용 태스크 — 코드 변경 없음, sp3-qa-agent에는 실제 미커밋 코드 변경분
+(`cart/+page.svelte`)의 커밋 전 최종 검수를 별도 요청**
+
+---
+
+## DONE — 🟢 ROUTINE: 채팅 FAB 미읽음 수량 배지 — 빈 점(red-dot) → 실제 숫자 배지 (2026-09-08, 이 세션)
+
+아젠다: Stephen "고객 채팅 아이콘 버튼 UI 상위 우측에 겹치는 레이어형 수량 배지 추가는
+어렵나?" — 직전 미읽음 배지 복원 수정과 같은 파일에서 발견: `badgeLabel`(99+ 처리 포함,
+`unreadCount > 99 ? '99+' : String(unreadCount)`)가 이미 계산돼 있었는데 어디에도
+렌더링되지 않는 죽은 값이었고, 실제 화면엔 숫자 없는 빈 점(`.red-dot`)만 있었다 — 데이터는
+이미 있어 난이도 낮음, 즉시 반영.
+
+수정: `src/lib/components/chat/FloatingButton.svelte` — `.red-dot`(빈 원, 숫자 없음) →
+`.unread-badge`(`badgeLabel` 렌더링, 우측 상단 겹침 위치 유지 · 모바일 22px/PC 18px 반응형
+· `--cs-red-badge` 배경 + 흰 테두리, CMS `AdminChatPanel.svelte`의 `.unread-badge`와 동일
+톤 재사용). 버튼 `aria-label`이 이미 "새 메시지 N개"를 포함하므로 배지 자체는
+`aria-hidden="true"`로 중복 안내 방지.
+
+검증: `npx svelte-check` 신규 에러 0건(기존 무관 에러 1건만 유지). DB/스토어 로직 변경
+없음(순수 UI 표시 방식 교체).
+
+**GATE E: 자체판정 ✅ (기존 계산값을 렌더링만 추가, CSS 위치는 기존 red-dot과 동일 좌표
+재사용 — 회귀 위험 최소)**
+
+---
+
+## DONE — 🟡 BOUNDARY: 재진입·로그인 시 채팅 미읽음 배지 미복원 결함 수정 (2026-09-08, 이 세션) — ✅ sp3-qa-agent GATE E 통과
+
+아젠다: Stephen이 FAB 채팅 버튼(`launch-selected-element`로 지목)을 가리키며 "재진입 또는
+로그인 시 읽지 않은 채팅 갯수 표시와 기존 알림 인터랙션(레드닷·ripple) 동작이 작동되도록
+할 것 — 현재는 열기 전까지 확인되지 않는 상황" 제보.
+
+### 원인
+
+`chatStore.unreadCount`는 오직 `pushMessage()`가 실시간(Realtime) 수신 시에만 `+= 1`로
+증가하는 구조 — 페이지 새로고침·로그인 등으로 컴포넌트가 새로 마운트될 때는 항상 0에서
+시작하고, 그 시점에 이미 DB에 쌓여있던 미읽음 메시지 건수를 조회해 반영하는 로직이 어디에도
+없었다. `FloatingButton.svelte`의 세션 자동복구 effect는 `activeSessionId`만 복구하고
+unread 건수는 건드리지 않아, 새 메시지가 실제로 도착하기 전까지는 배지(레드닷)·ripple
+애니메이션(둘 다 `unreadCount > 0` 파생값 기반) 자체가 나타날 방법이 없었다 — "기존 알림
+인터랙션"은 코드상 정상 동작하고 있었고, 그 트리거가 되는 초기값 복원 로직만 빠져 있었다.
+
+### 수정
+
+- `src/lib/services/chatService.ts` — `getUnreadCount(sessionId, senderTypes=['admin','ai'])`
+  신규: `markMessagesRead`(기존, 동일 발신자 집합을 UPDATE)와 정확히 대응하는 COUNT 조회.
+  `chat_messages` RLS(`participant_select_messages` — `cs.user_id = auth.uid()`)로 이미
+  본인 세션만 조회 가능함을 Production DB에서 정책 직접 조회로 재확인, `admin_only=true`
+  행은 RLS가 자동으로 제외(§17 원칙과 자연히 일치).
+- `src/lib/stores/chat.svelte.ts` — `setUnreadCount(count)` 신규(기존 `resetUnreadCount()`와
+  대응).
+- `src/lib/components/chat/FloatingButton.svelte` — 세션 자동복구 effect에서
+  `setActiveSession(session.id)` 직후 `getUnreadCount(session.id).then(setUnreadCount)`
+  호출 추가. 이후 도착하는 메시지는 기존 `pushMessage()`의 `+= 1` 누적으로 계속 처리(변경
+  없음) — 초기 복원 1회만 추가.
+
+검증: `npx svelte-check` 신규 에러 0건(기존 무관 에러 1건만 유지). DB 마이그레이션 없음
+(RLS 기존 정책 그대로 재사용, 신규 정책 추가 안 함).
+
+### 수정 파일
+
+```
+src/lib/services/chatService.ts               (MODIFY — getUnreadCount 신규)
+src/lib/stores/chat.svelte.ts                  (MODIFY — setUnreadCount 신규)
+src/lib/components/chat/FloatingButton.svelte  (MODIFY — 세션복구 시 미읽음 건수 복원)
+```
+
+**GATE E: 자체판정 ✅ (읽기 전용 COUNT 조회 1개 신규 함수 + 스토어 setter 1개 + 호출 1줄
+추가, DB 변경 없음) — 실기기 확인은 QA 검수 후 안내**
+
+### ✅ QA 검수 완료 (2026-09-08, sp3-qa-agent) — GATE E 통과
+
+발신자 집합(`markMessagesRead` vs `getUnreadCount` 둘 다 기본값 `['admin','ai']`) 일치,
+재실행 안전성(마운트당 1회 가드), svelte-check 신규 에러 0건 확인. 참고사항 2건(둘 다
+비차단):
+- 세션복구 시 `getUnreadCount` 응답과 실시간 `pushMessage`가 극히 짧게 경쟁할 수 있는
+  이론상의 미세 레이스(창을 열면 `resetUnreadCount()`로 정리되므로 실사용 영향 낮음).
+- QA 서브에이전트는 Supabase MCP 도구가 없어 Production RLS를 자체 재확인하지 못했다고
+  보고 — **본 세션(상위)이 이미 별도로 Production(`vnbpmvxruyciuuaermyh`)의
+  `participant_select_messages` 정책을 `pg_policy` 직접 조회로 확인 완료**(위 "적용한
+  수정" 절에 기록된 조회 결과) — 이 항목은 추가 확인 불필요.
+
+---
+
+## NOW — 🔴 CRITICAL: 전자계약 대화카드 "기한 만료" 오표시 + CMS 관리자 공유접근 403 결함 수정 (2026-09-08, 이 세션)
+
+아젠다: Stephen이 "방금 발행 발송한 전자계약 대화카드 선택 시 '기한만료' 전환 오류"를
+launch-selected-element 스크린샷과 함께 리포트. 원인 조사 → 수정까지 이 세션에서 완료.
+
+### 조사 경과
+
+1. **1차 가설(코드 정독)**: `ActionCard.svelte`의 `contractCancelledLive`가 "계약 콘텐츠
+   전부 비어있음 = 발행취소됨"(`hasExistingContractContent`)으로 판정하는데, 이 체크가
+   카드 마운트 시 **1회만** 실행되고 재검증 안 되는 구조 — 카드 생성 직후(콘텐츠 저장이
+   채 끝나기 전) 그 찰나에 체크가 돌면 이후 정상화돼도 고착될 수 있다는 가설 수립.
+2. **DB 실측 검증**(stage+production 양쪽): Stephen이 방금 발송한 실제 계약 레코드를
+   직접 조회 — `html_document`가 8,000~17,000자 분량으로 정상 저장돼 있음을 확인(콘텐츠
+   자체는 멀쩡함, "발행취소"된 상태 아님).
+3. Stephen이 "새로고침하면 정상으로 돌아온다"고 확인 → 1차 가설(마운트 시 1회성 체크의
+   일시적 오판)이 **표시 문제**로는 맞았음을 실증. 그런데 **버튼을 실제로 누르면 다시
+   "기한만료"로 전환**된다고 후속 리포트 + 콘솔 로그 제공:
+   `POST /api/chat/messages/{id}/execute-action 403 (Forbidden)`
+4. **진짜 근본 원인 발견**: `execute-action/+server.ts`의 권한 체크가
+   `cs.user_id === session.user.id || cs.admin_id === session.user.id`로, **그 상담세션에
+   배정된 admin_id 딱 1명**만 허용하고 있었다. 이 프로젝트의 다른 모든 채팅 엔드포인트
+   (AdminChatPanel·admin-reply 등)는 "매니저 이상이면 누구나 어느 세션이든 조작 가능"이
+   원칙인데, 이 엔드포인트만 그 원칙을 안 따라서 **계약을 발행한 그 관리자 계정이 아닌
+   다른 CMS 관리자**가 클릭하면 403이 났던 것 — Stephen이 질문한 "계약발행자와 다른 계정
+   동시/공유 확인 차단 여부"가 정확히 이 결함이었음.
+5. **2차 결함(같이 발견)**: `ActionCard.svelte`의 `handleCta()`가 410(진짜 만료)이 아닌
+   **모든** 비정상 응답(403 포함)을 전부 "기한 만료"로 표시하고 있었다 — 403을 만료로
+   오인 표시한 것 자체가 별개의 UI 버그.
+
+### 수정 (마이그레이션 없음, 앱코드 2개 파일)
+
+```
+[NOW]
+- [x] src/routes/api/chat/messages/[id]/execute-action/+server.ts — getCmsRoleForAction()
+      추가, cms_role 보유자는 admin_id 배정 여부와 무관하게 허용하도록 isParticipant
+      조건 확장(폼 액션이 아닌 +server.ts POST라 locals.cmsRole 직접참조 금지 규칙과는
+      무관하지만 동일 헬퍼 재사용으로 일관성 유지).
+- [x] src/lib/components/chat/ActionCard.svelte — handleCta(): 410만 영구 "기한 만료"
+      상태로 전환, 그 외 실패(403/500/네트워크)는 csToast 안내만 하고 버튼은 재시도
+      가능한 상태로 유지.
+- [x] (Stephen 추가 지시) 라이브체크 3종(returnRemindBlocked·reservationHoldExpiredLive·
+      contractCancelledLive) 전부 "마운트 시 1회만 확인, 재검증 안 함" 구조 수정 —
+      ① revalidateTick $state + visibilitychange/focus 리스너로 탭 재활성화 시 3종 전부
+      재검증 ② 최초 체크가 "차단/만료"로 나오면 2초 뒤 1회만 추가 재확인(무한 폴링 아님,
+      탭을 벗어나지 않고 화면을 보고 있는 경우까지 새로고침 없이 자가 회복).
+```
+
+RLS 부수 확인: `contracts` 테이블 RLS(`is_cms_admin()`)는 `is_cms_user()`와 동일 정의
+(cms_role IS NOT NULL이면 전체 허용)라 이미 모든 CMS 직원에게 정상 열람권한을 주고
+있음을 재확인 — 이번 403은 순전히 execute-action 자체의 isParticipant 체크 문제였고
+RLS 쪽 추가 결함은 없음.
+
+검증: `tsc --noEmit`/`svelte-check` 재확인 — 신규 에러 0건(무관 pre-existing warning 1건만
+동일 유지). DB 마이그레이션 없음(순수 앱코드 수정). git commit 미실행(Stephen 직접 실행 대기).
+
+[NEXT]
+- [ ] 없음 — Stephen 리포트 항목(403·기한만료 오표시·라이브체크 재검증) 전부 해소
+
+### ✅ QA 검수 완료 (2026-09-08, sp3-qa-agent) — GATE E 통과
+
+검수 대상은 이 세션 2개 파일(execute-action/+server.ts, ActionCard.svelte)만으로 명시
+제한, 다른 세션 변경분(GSD_LOG.md·cart/+page.svelte)은 검수 범위에서 완전히 제외.
+
+- **규칙 정합성**: 전부 ✅ — `getCmsRoleForAction()` 재사용이 admin-reply와 동일 패턴(관리자
+  전용 설정이 아닌 "상담세션 참여자 접근"류라 등급 제한 불필요) 확인. `git diff` 대조로
+  기존 두 조건(고객 본인·배정 admin) 무변경, `|| !!cmsRole`만 순수 추가된 것 확인(회귀 없음).
+  `csToast`가 프로젝트 표준 헬퍼(53개 파일 기사용)이고 고객/CMS 양쪽 레이아웃에 Toaster가
+  이미 등록돼 있어 정상 렌더링 확인.
+- **기술 부채**: console.log/any타입/TODO 신규분 0건, svelte-check 신규 컴파일 에러 0건
+  (유일한 pre-existing ERROR는 무관한 vite.config.ts). 재검증 루프(revalidateTick+2초
+  재시도) 코드 추적 — `attempt<2` 상한 확인(무한폴링 아님), `cancelled` 플래그가 루프
+  조건·await 직후 이중 체크돼 언마운트/payload변경 시 경쟁상태로 인한 stale 갱신 없음 확인.
+- **S2 체크**: DB 변경 없음(N/A 항목 제외 전부 통과), B-START 완료조건(403 해소·410/기타
+  에러 분리·라이브체크 3종 재검증) 코드와 TASK.md 기록 정확히 일치 확인.
+
+**비차단 권고**: 채팅 접근제어 로직(execute-action/admin-reply 계열)에 전용 유닛테스트가
+프로젝트 전반적으로 없음(이번 신규 공백 아닌 기존 관행) — 향후 회귀 방지용 경량 테스트
+추가 권고, 이번 GATE E는 막지 않음.
+
+**결론**: 블로킹 이슈 0건, git commit 진행 가능(Stephen 직접 실행).
+
+### 후속 — 비차단 권고 처리: 접근제어 회귀 테스트 2건 신규 추가 (2026-09-08, 이 세션)
+
+Stephen이 위 "비차단 권고"(채팅 접근제어 로직에 전용 유닛테스트 없음)를 지금 처리하도록 지시.
+
+```
+[NOW]
+- [x] src/__tests__/server/executeActionAccessGuard.test.ts(신규) — execute-action
+      isParticipant 게이트 회귀고정 6케이스: 비로그인(401)·고객본인(200,무회귀)·배정admin
+      (200,무회귀)·배정안된다른CMS관리자(200, 이번 회귀 핵심)·무관한일반사용자(403,여전히
+      차단)·진짜만료 is_expired플래그(410). RED 확인: `|| !!cmsRole` 조건을 임시로 되돌려
+      "배정 안 된 다른 CMS 관리자" 케이스가 403으로 실패(RED)함을 실제로 재현한 뒤 원복해
+      GREEN 복귀 확인 — 이 테스트가 실제로 오늘 고친 결함을 잡아낸다는 것을 직접 검증.
+- [x] src/__tests__/server/adminReplyAccessGuard.test.ts(신규) — admin-reply는 애초에
+      결함이 없었으나(cms_role 보유자 전원 허용이 이미 올바른 동작) 회귀 방지 고정용
+      4케이스: 비로그인(401)·cms_role없음(403)·partner(200)·manager(200).
+```
+
+두 파일 모두 `@sveltejs/kit`의 `json`·`getCmsRoleForAction`·`@supabase/supabase-js`의
+`createClient`·부수효과 모듈(synonymLearning/push/crossLingualSynonymScan)을 모킹하는
+기존 `couponRedemptionsAuthGuard.test.ts`/`accountsListSuperadminGuard.test.ts` 패턴을
+그대로 재사용 — 신규 모킹 방식 도입 없음.
+
+검증: `vitest run` 2개 파일 10/10 GREEN. `tsc --noEmit` 신규 에러 0건. 이 두 테스트 파일은
+`ActionCard.svelte`를 전혀 참조하지 않아, 같은 시점 다른 세션이 그 파일에 이어서 진행 중인
+후속 수정(아래 "후속 수정" 블록, §라벨 중첩 문제)과 완전히 독립적 — 서로 영향 없음.
+
+[NEXT]
+- [ ] 없음
+
+#### ✅ QA 검수 완료 (2026-09-08, sp3-qa-agent) — GATE E 통과, 발견 이슈 0건
+
+검수 대상은 신규 테스트 2개 파일로만 엄격히 제한(ActionCard.svelte 등 타 세션 변경분
+완전 배제). RED→GREEN 주장을 QA가 독립적으로 재현(`|| !!cmsRole` 되돌려 정확히 그 1개
+케이스만 403 실패 확인 → 원복 후 10/10 GREEN) — 목(mock)이 헐렁해서 우연히 통과하는
+게 아니라 실제 3-way OR 판정 로직을 정확히 타겟팅함을 검증. 기존 모킹 관례
+(couponRedemptionsAuthGuard·accountsListSuperadminGuard) 재사용 확인, admin-reply 부수
+효과 4종(recordSynonymLearning·sendPushToUser·registerCrossLingualCandidates·
+record_chat_reply_candidate RPC) 모킹 누락 없음 확인, "admin-reply는 원래 결함 없었음"
+서술도 소스 재대조로 정확함 확인. 수정 필요 항목 0건 — git commit 진행 가능(Stephen
+직접 실행).
+
+### 후속 — ActionCard.svelte 전체 검수 + 관찰사항 1건 즉시 수정 (2026-09-08, 이 세션)
+
+Stephen 지시로, 다른 세션이 아래 "후속 수정"(취소됨/기한만료 라벨 분리) 작업을 마친 뒤
+`ActionCard.svelte` 전체(양쪽 세션 변경분 합산)를 처음부터 다시 검수. `tsc`/`svelte-check`
+클린, 관련 테스트 5파일 28/28 GREEN, 두 세션 변경분이 충돌 없이 정합함을 확인. 첫 스크린샷의
+"카드 아래 텍스트 중복 표시"는 `MessageBubble.svelte`가 ActionCard와 별개로 message.content를
+항상 함께 렌더링하는 의도된 설계임을 확인(버그 아님).
+
+**발견한 관찰사항 1건(비차단) — 즉시 수정 지시받아 처리**: `execute-action`이 `reservation_hold`
+타입의 410 응답에서 `code`를 항상 `'expired'`로 고정 반환하고 있어, 클릭 시점 서버 응답
+(`serverExpiredError` boolean)이 라이브체크(`reservationHoldCancelledLive`, 재검증 트리거
+발생 시에만 갱신)보다 먼저 도착하면 실제로는 "취소됨"인 카드가 영구히 "기한 만료"로 고착되는
+좁은 경쟁구간이 있었다(버튼이 비활성화된 뒤로는 재시도 불가라 자동 회복도 안 됨).
+
+```
+[NOW]
+- [x] src/routes/api/chat/messages/[id]/execute-action/+server.ts — reservation_hold
+      410 응답의 code를 실제 예약 status 그대로(`'expired'` | `'cancelled'`) 전달하도록 수정,
+      error 메시지도 상태별로 구분("취소된 예약입니다." vs "기한이 만료된 액션입니다.")
+- [x] src/lib/components/chat/ActionCard.svelte — `serverExpiredError`(boolean)를
+      `serverBlockedReason`('expired'|'cancelled'|null)로 교체, 서버가 돌려준 code를 그대로
+      반영. isExpired/isReservationCancelled 파생값에 이 신호를 OR로 합류시켜, 라이브체크가
+      아직 못 따라잡은 순간에 클릭해도 서버의 최신 응답이 즉시 정확한 라벨을 보장하도록 수정.
+- [x] src/__tests__/server/executeActionAccessGuard.test.ts — 신규 케이스 3건 추가
+      (cancelled→code=cancelled RED확인 후 GREEN 복귀, expired→code=expired 무회귀,
+      hold(진행중)→200 무회귀). 6→9케이스로 확장.
+```
+
+검증: RED→GREEN 재확인(서버 코드를 임시로 원복해 신규 "cancelled" 케이스가 정확히
+`expected cancelled, received expired`로 실패하는 것을 직접 재현한 뒤 원복해 9/9 GREEN
+복귀). `vitest run` 두 파일 13/13 GREEN. `tsc`/`svelte-check` 신규 에러 0건(무관
+pre-existing warning만 유지). git commit 미실행(Stephen 직접 실행 대기).
+
+**관찰사항 2건(비차단) — 계약카드 "발행취소" 라벨 정정, 즉시 수정 지시받아 처리**: 계약카드
+(`contract_link`/`contract_signed`)는 `contractCancelledLive`가 여전히 단순 boolean으로
+`isExpired`에 그냥 합류돼 있어, 관리자가 계약을 "발행취소"(cancel_issued_contract) 해도
+무조건 "기한 만료"로만 표시됐다. 코드 추적 결과 계약카드가 무효화되는 원인은 현재 "발행취소"
+하나뿐(서명링크 30일 만료는 이 체크 대상 아님 — `/contract/[token]/sign` 페이지에서만 처리)
+— 즉 "두 원인을 뒤섞은" 예약카드 사례와 달리, "취소 하나뿐인 원인을 틀린 이름(기한 만료)으로
+부르고 있던" 경우.
+
+```
+[NOW]
+- [x] src/routes/api/chat/messages/[id]/execute-action/+server.ts — contract_link/
+      contract_signed 410 응답의 code를 'expired'→'cancelled'로 수정, error 메시지도
+      "발행이 취소된 계약입니다."로 교체
+- [x] src/lib/components/chat/ActionCard.svelte — isExpired에서 contractCancelledLive 제거,
+      신규 isContractCancelled 파생값(payload.type 가드 포함 — serverBlockedReason='cancelled'가
+      reservation_hold·계약카드 양쪽에서 다 나올 수 있어 타입 구분 없이는 라벨이 샐 수 있음)
+      신설. blockedLabel/blockedAriaLabel을 isExpired>isReservationCancelled>isContractCancelled
+      우선순위 3-way 분기로 재구성, "발행취소"/"발행취소된 액션" 라벨 추가. 만료 오버레이 조건도
+      `isExpired || isReservationCancelled` → `isBlocked`로 통합(예전엔 serverBlockedReason만
+      단독으로 켜진 경우 오버레이가 안 뜨는 별개의 사소한 누락도 같이 해소됨).
+- [x] src/__tests__/server/executeActionAccessGuard.test.ts — 신규 케이스 2건 추가
+      (contract_link 콘텐츠없음→code=cancelled, RED확인 후 GREEN 복귀 / contract_signed
+      콘텐츠있음→200 무회귀). 9→11케이스로 확장.
+```
+
+검증: RED→GREEN 재확인(서버 code를 임시로 'expired'로 원복해 신규 케이스가 정확히
+`expected cancelled, received expired`로 실패하는 것을 재현한 뒤 원복해 11/11 GREEN 복귀).
+`vitest run` 두 파일 15/15 GREEN. `tsc`/`svelte-check` 신규 에러 0건. git commit 미실행
+(Stephen 직접 실행 대기).
+
+### 후속 수정 — 취소된 예약이 "기한 만료"로 오표시되는 라벨 중첩 문제 해소 (2026-09-08, 이 세션)
+
+배경: 위 403 결함과는 별개로, `reservation_hold` 카드의 라이브체크(`reservationHoldExpiredLive`)가
+`status === 'expired'`(진짜 시간초과)와 `status === 'cancelled'`(고객 본인취소·관리자거부)를
+구분 없이 하나의 boolean으로 합쳐 전부 "기한 만료"로 표시하고 있었다. 고객 본인이 취소한
+예약도 "시간이 초과됐다"는 문구로 보여 오해를 유발 — Stephen 확인 결과 이 카드는 고객
+본인 채팅(`ChatWindow`)과 CMS 상담채팅(`AdminChatPanel`) 양쪽에 동일하게 노출되는 컴포넌트
+(`ActionCard.svelte`)라 사용자 채팅 대화카드 건이기도 함.
+
+수정: `reservationHoldExpiredLive`(boolean)를 `reservationHoldStatusLive`('expired'|'cancelled'|
+null)로 바꿔 실제 status를 보관하고, `reservationHoldExpiredLive`/`reservationHoldCancelledLive`
+두 개의 파생값으로 분리. `isExpired`(시간초과·계약취소 등 기존 의미 그대로 유지)와
+`isReservationCancelled`(신규)를 별도 상태로 두고, 버튼 텍스트·aria-label·오버레이 3곳
+전부 `isReservationCancelled`일 때만 "취소됨"/"취소된 액션"을, 그 외(시간초과·계약발행취소·
+서버측 410)에는 기존 "기한 만료"/"기한 만료된 액션"을 표시하도록 분기(`blockedLabel`/
+`blockedAriaLabel` 파생값 신설). 쿠폰 거절 카드(`isCouponRejected`)는 이미 "발급 취소됨"으로
+독립 분기돼 있어 이번 수정과 무관(그대로 유지) — 오히려 이 프로젝트에 이미 있던 정확한
+선례를 reservation_hold에도 동일하게 적용한 셈.
+
+검증: `npx svelte-check` 신규 에러 0건(기존 무관 에러 1건만 유지).
+
+수정 파일: `src/lib/components/chat/ActionCard.svelte`(같은 파일, 위 403 수정과 함께 아직
+미커밋 — 이번 라벨 분리도 같은 diff에 포함됨).
+
+---
 
 ## 📦 아카이브 색인
 
@@ -29,6 +449,338 @@ GATE E: ✅ 통과 — 커밋은 Stephen 직접 실행 대기. (1차·2차 검�
 인프라 실패, 3차 시도에서 통과)
 ```
 - [unknown-date](.claude/harness/archive/TASK_ARCHIVE_unknown-date.md) — 6건
+
+---
+
+## DONE — 🔴 CRITICAL: 전자계약 html 모드 발행/서명 정합성 일괄 수정 + 예약목록 "계약대기" 필터 범위 확정 (2026-09-08, 이 세션, ✅ GATE E 통과)
+
+### 배경
+
+앞선 "전자계약 발행취소(서명완료건 포함) + 채팅 대화카드 '기간만료' 재활용"(483행 NOW 블록)
+기능에 대한 sp3-qa-agent 1차 검수에서 "감사로그(contract_audit_log) 기록 누락" 1건이
+`조건부 통과`로 지적됐다. 그 수정을 시작점으로, Stephen이 이어서 html 모드 전자계약
+발행·편집·서명·발송 전 과정을 실사용(Claude Browser + 직접 DB 조회)으로 정밀 검증하며
+총 8건의 추가 결함/설계공백을 이번 세션 안에서 연속 발견·수정했다. 마지막에는 예약목록
+"계약대기" 필터의 의도 자체를 Stephen이 재확정(AskUserQuestion)해 RPC까지 변경했다.
+
+### 구현 — ① 감사로그 보완 (기존 483행 블록 QA 지적 해소)
+
+- `src/lib/contract-signature/auditLog.ts`: `AuditEventType`에 `'cancelled'` 추가.
+- `src/routes/cms/reservation/+page.server.ts`: `cancelIssuedContract` 액션에서
+  RPC 성공 직후 `recordAuditLog(..., eventType:'cancelled', actorType:'admin')` 호출 추가.
+- Migration #457(`contract_audit_log_event_type_check`에 `'cancelled'` 추가) — 이미 Stage·
+  Production 적용 완료 상태였음(483행 블록 소속) — 이번엔 앱코드 배선만 마무리.
+- `.claude/rules/security-auth.md`: "전자계약 발행취소" 접근매트릭스 행 추가(누락 보완).
+
+### 구현 — ② `clearIssuedContractContent()` 불완전 초기화 결함 수정
+
+- 증상: "발행 목록" 초기화(삭제) 버튼을 눌러도 html/spreadsheet 모드 계약서는 "발행 목록"에서
+  사라지지 않음(성공 토스트는 뜨는데 카드가 안 없어짐).
+- 원인: `src/lib/server/clearIssuedContractHelper.ts`의 `clearIssuedContractContent()`가
+  `content_blocks`·`canvas_document`·`title`만 초기화하고 `spreadsheet_document`·
+  `html_document`는 그대로 남겨둠 — `hasExistingContractContent()`가 그 두 컬럼도 검사하도록
+  이미 넓어져 있어(2026-09-07) 재조회 시 계속 "발행됨"으로 오판.
+- 수정: 두 컬럼도 함께 `null`로 초기화.
+
+### 구현 — ③ html 모드 "발행=발송" 정책 확정 (5개 항목, Stephen 지시)
+
+- **편집 버튼 완전 숨김(html 모드)**: `ContractEditorModal`(캔버스형 편집기)은 html_document를
+  구조적으로 편집할 수 없어, `ContractTemplatePreviewModal.svelte`(모달 하단 "편집" 버튼)와
+  `RentalContractViewer.svelte`("발행 목록" 카드의 "편집" 버튼) 양쪽에서 authoring_mode='html'
+  이면 버튼 자체를 숨김(`isHtmlMode`/`issuedIsHtml` 판정 신규).
+- **특약 클릭편집 자동저장 유지**: 기존 `handleHtmlDocClick`/`saveSpecialNotes()` 무변경.
+- **"채팅으로 발송" = 발행으로만 인정, 취소/닫기 시 되돌리기**: `ContractTemplatePreviewModal`에
+  `signingsentAt`/`customerSignedAt` prop 신규 추가(`RentalContractViewer`가 전달) +
+  `handleClose()` 신규 — html 모드 + 미발송 + 미서명 + 내용 존재 상태에서 ×/취소를 누르면
+  `DELETE /api/cms/contracts/[id]/content`(신규 핸들러, `clearIssuedContractContent()` 재사용)
+  로 되돌린 뒤 닫음. 이미 발송·서명된 건은 절대 되돌리지 않음.
+- **예약정보 변수 파싱**: 기존 `findHtmlUnresolvedVariables()` 사전검증이 이미 정상 동작 확인
+  (변경 없음).
+
+### 구현 — ④ 발행자 서명 필수 체크가 html 모드를 오판하던 결함 수정
+
+- 증상: html 모드 계약서에 발행자 서명(직인)을 정상 등록했는데도 발송 시 "발행자 서명이
+  필수입니다" 토스트로 항상 차단됨.
+- 원인: `checkIssuerSignatureRequired()`(`issuerSignatureCheck.ts`)가 canvas 모드 전용 테이블
+  `contract_issuer_signatures`(계약 건별 개별 서명, Phase 8-B-3)만 조회 — html 모드는 템플릿
+  단위 `contracts.html_issuer_signature_url`(최근 신규 기능)을 쓰므로 그 테이블에 애초에
+  행이 생기지 않아 항상 "미등록"으로 오판.
+- 수정: `authoring_mode==='html'`이면 `html_issuer_signature_url` 존재 여부로 판정하는 분기
+  추가. canvas 등 기존 모드 쿼리·로직은 한 글자도 안 바꿈(`contractP8B4.test.ts` 4개 기존
+  테스트 무변경 통과 + html 전용 신규 테스트 2개 추가, 6/6 GREEN).
+
+### 구현 — ⑤ 고객(예약자) 서명을 "다시보기"에 오버레이로 반영 (신규 기능)
+
+- 배경: 고객이 `/contract/[token]`에서 그린 서명(`contract_signings.signature_data`)이 서명
+  즉시 DB에는 저장되지만 어디에도 다시 그려지지 않는 write-only 데이터였음(발행자 서명·직인
+  오버레이 기능과 대비되는 공백).
+- `contract-substitution.ts`: `applyCustomerSignatureMarker()` 신규 — data URI 전체를
+  엄격한 정규식으로 검증(콤마 이후 base64 알파벳만 허용, 속성 인젝션 방지) 후 `<img
+  class="customer-sig-overlay">`로 치환. 발행자 서명과 달리 http(s) URL이 아니라
+  `data:image/png;base64,...` 전용 검증.
+- `defaultRentalContractHtml.ts`: "예약자" 값 셀에 `<!--CUSTOMER_SIGNATURE-->` 마커 +
+  `sig-host-cell` 클래스, `.customer-sig-overlay` CSS 추가(발행자 오버레이와 동일 배치,
+  단 서명 캔버스 비율 고려 max-height:60px). 10차 신규 doc-comment.
+- `sign/+server.ts`: 고객 서명 제출(POST) 성공 직후, html 모드면 `contracts.html_document`에
+  서명 이미지를 1회 되굽는다(fail-soft). "서명 시점 스냅샷"(법적 증빙용 `signed_content_
+  snapshot`)은 되굽기 전 상태를 그대로 보존 — 건드리지 않음.
+- 테스트 5개 신규(`contractHtmlSubstitution.test.ts`, XSS 속성 인젝션 시도 포함) — 27/27 GREEN.
+- ⚠️ **DB 콘텐츠 백필(코드 배포와 별개 필요) 수행**: `defaultRentalContractHtml.ts` 상수는
+  "신규 템플릿 생성 시 시드값"일 뿐 이미 저장된 `contract_templates.html_document`에는 자동
+  반영되지 않는다는 걸 실사용 중 발견(CS26095297 재현) — Stage 2건("[테스트] 크레이지샷
+  대여계약서"·"또또또 테스트-수정") + Production 2건("202609임대차계약서양식"·
+  "20260908임대차계약서") 전부 마커·CSS를 직접 텍스트 백필. Production은 html/서명완료 계약
+  0건이라 실고객 데이터 되돌리기는 불필요했음(확인 완료). Stage의 CS26095297(테스트건) 1건은
+  이미 저장돼 있던 서명 이미지를 직접 되구워 즉시 확인 가능하게 함.
+
+### 구현 — ⑥ 이미 발행·서명 완료된 계약을 "채팅으로 발송" 시 재발행 아닌 단순 공유로 전환 (신규 기능)
+
+- 배경: 서명 완료된 계약서를 "미리보기 & 발송" 모달로 다시 열면, "채팅으로 발송" 버튼이 여전히
+  활성 상태로 보이지만 실제로는 send-chat이 서명완료건 재발송을 차단(RSV-C-B1)해 클릭해도
+  에러만 뜸 — Stephen 지시: "신규 발행이 아닌 완료 계약정보를 단순 공유 발송하는 로직으로."
+- 신규 `POST /api/cms/contracts/[id]/share-chat/+server.ts` — send-chat의 재발송 차단을
+  우회하지 않고 완전히 별도 경로로, 서명 완료 시 자동 발송되는 것과 동일한 `contract_signed`
+  action_card를 재전송. `contract_signings.sent_at`/`expires_at`은 건드리지 않음.
+- `ContractTemplatePreviewModal.svelte`: `send()`가 `customerSignedAt` 있으면 즉시
+  `shareCompletedContract()`로 분기(치환·특약검증 등 "신규 발행" 로직 전부 스킵). 버튼 라벨도
+  "완료 계약 공유"로 전환.
+- `security-auth.md` 매트릭스에 신규 엔드포인트 행 추가(send-chat과 동일 게이트, manager+).
+
+### 구현 — ⑦ 예약목록 "계약대기" 필터 범위 확정 + "신청대기" 상호배타 처리 (Migration #460)
+
+- 발견: 이미 서명 완료됐지만 결제가 아직 안 끝나(payment_confirmed_at NULL) confirmed로
+  전환되지 못한 예약이 "계약대기"(당시 정의: 발송·미서명)에서 빠져 다시 "신청대기"에만
+  보여 관리자가 "왜 계약대기에 없지?"로 오인. AskUserQuestion으로 Stephen에게 범위 확정
+  요청 → "전자계약을 보낸 건은 전부 계약대기"(서명 여부 무관) 확정.
+- `get_rental_list` RPC(Migration #460, Stage+Production 적용): `p_require_contract_sent_
+  unsigned`(파라미터명 하위호환 유지, 조건은 "발송된 적 있음"으로 확장) + 신규
+  `p_exclude_contract_sent`(신청대기 전용, "발송된 적 없음"만). ⚠️ 파라미터 추가 시
+  CREATE OR REPLACE가 새 오버로드를 만들어 옛 10-param 버전과 충돌(`is not unique` 에러) —
+  `DROP FUNCTION`으로 구버전 명시 제거해 해소(마이그레이션 파일에도 반영).
+- `+page.server.ts`: '신청대기' 칩(계약대기 아닌 hold) 선택 시에만 `p_exclude_contract_sent:
+  true` 전달.
+- `+page.svelte`: (a) "상태" 컬럼의 "계약발송" 배지가 `customer_signed_at`을 확인하지 않아
+  서명 후에도 계속 발송중처럼 보이던 결함 수정("서명완료" 배지로 교체) (b) 계약이 발송된
+  적 있는 행은 기본 "신청대기" 상태 배지 자체를 숨김(Stephen: "계약대기는 계약 발행·발송이
+  진행된 목록이므로 신청대기 배지는 미노출되어야 정상").
+- `paymentContractOrderRedesign.test.ts`에 정확히 이 케이스(서명완료+결제미완료 →
+  계약대기엔 남고 신청대기에서 빠짐) 검증 신규 테스트 추가 — 파일 전체 21/21 GREEN.
+- DB 직접 실증: CS26095297에 `mark_reservation_payment_confirmed()` 실행 → `confirmed`
+  전환 + `/cms/rentals` 조회엔 나타나고 `/cms/reservation` 조회엔서 사라짐 확인(부작용:
+  이 테스트건 자체가 실제로 confirmed 상태가 됨 — Stephen에 hold로 되돌릴지 문의, 응답 대기).
+
+### 구현 — ⑧ 이미 발행된 계약은 "계약서 양식 선택 편집" 섹션 자체를 숨김
+
+- `RentalContractViewer.svelte`: 섹션 표시 조건 `!isRentalView` → `!isRentalView &&
+  !hasIssuedContent`로 변경(대여현황과 동일하게 완전히 숨김, 비활성화가 아닌 은닉 — Stephen:
+  "감추는 것이 더 명시적"). 초기화·폐기·발행취소 중 무엇으로 콘텐츠가 비워지든 기존
+  `issuedCheckTick` 재계산 메커니즘으로 자동 재노출(추가 코드 불필요) — Stephen이 직접
+  브라우저로 재현 확인("정상 작동해").
+
+### 검증 종합
+
+- `npm run check` 매 단계마다 재실행 — 신규 에러 0건 유지(기존 무관 `vite.config.ts` 에러
+  1건만 그대로).
+- vitest: `contractP8B4.test.ts` 6/6, `contractHtmlSubstitution.test.ts` 27/27,
+  `paymentContractOrderRedesign.test.ts` 21/21 전부 GREEN.
+- `contractSigningGate.test.ts`의 무관한 기존 실패 1건을 발견 — 제 수정 전(git checkout으로
+  `sign/+server.ts`만 임시 원복) 상태로도 동일하게 재현돼 이번 세션 변경과 무관한 기존
+  결함(추정: 동시 작업 중인 다른 세션의 DB 데이터 간섭)임을 확인 후 원복.
+- Migration #457(감사로그)·#460(계약대기 범위)·기존 컨텐츠 백필 4건 — 전부 Stage 검증 후
+  Production 순서로 적용 완료.
+- 마지막 항목(⑧)은 Stephen이 직접 브라우저로 재현해 "정상 작동해" 확인.
+
+### GATE E: ✅ 통과 (sp3-qa-agent, 2026-09-08)
+
+규칙 정합성·기술부채·8개 항목 특별지적사항(XSS 안전성/되돌리기 가드/파라미터명/483행 블록
+연계) 전부 확인. 유일한 조건("Production DB에 Migration #457/#460 실제 적용 여부를 QA
+서브에이전트 자신은 Bash/Read/Grep만 가능해 독립 재확인 못함")은 제가 Supabase MCP로
+Production(vnbpmvxruyciuuaermyh)에 직접 재조회해 즉시 해소 — `contract_audit_log_event_
+type_check` 제약에 `'cancelled'` 포함 확인, `get_rental_list` 오버로드가 11-param
+(`p_exclude_contract_sent` 포함) 단일본만 존재함(구버전 10-param 잔존 없음) 확인 —
+조건부 통과 → 완전 통과로 전환.
+
+⚠️ QA 비차단 지적 2건 처리:
+  1. `p_require_contract_sent_unsigned` 파라미터명이 더 이상 "미서명" 의미를 갖지 않는 문제
+     — Postgres가 CREATE OR REPLACE로 파라미터명 변경을 허용하지 않아 불가피, 문서화로
+     상쇄(비차단 인정, 이름 정정은 향후 별도 리팩터 태스크로 남김 — DROP FUNCTION 필요).
+  2. 이 블록이 참조하는 483행 블록의 마이그레이션 파일명 오기(`#456`→실제 `#458
+     _cancel_issued_contract.sql`) — 문서 정정 완료.
+
+⚠️ QA가 발견한 워킹트리 혼재 변경(이번 GATE E 대상 아님, 별도 세션 소속으로 추정) — 커밋 시
+스테이징 범위 주의 필요:
+  - 327행 블록(isDirty 게이팅, 이미 GATE E 통과 별건)
+  - 쿠폰 `discount_type` percent→percentage 개명 + Migration #459/#461/#462,
+    `cart/+page.svelte`, `payment/success/dev/+page.svelte` — 이번 블록(①~⑧)과 무관, 별도
+    검수 없이 함께 커밋되지 않도록 주의.
+
+git commit은 Stephen 직접 실행 대기.
+
+---
+
+## DONE — 🟡 BOUNDARY: 계약서 양식 삭제 — 소프트 삭제(deleted_at) → 실제 DB 행 삭제(hard delete)로 전환 (2026-09-08, 이 세션, ✅ GATE E 통과)
+
+### 배경
+
+바로 위 항목("목록 카드별 삭제 아이콘 신설")에서 재사용한 기존 `?/softDelete` 액션은
+`deleted_at`만 채우는 소프트 삭제였다. Stephen이 실사용 확인 후 "실제 DB에서 제거해!"
+→ (제가 되돌릴 수 없는 DB 삭제를 직접 실행하는 대신 SQL을 제안하며 확인 요청) →
+"실제로 삭제 실행 시 DB에서도 삭제 동작하게 해. 명시적으로 목록에서만 제외하지 말고!"로
+재확정 — 이 화면의 삭제는 소프트 삭제가 아니라 실제 hard delete여야 한다는 의도임.
+
+### 구현
+
+`src/routes/cms/reservation/contracts/+page.server.ts`:
+- `softDelete` 액션을 `delete`로 개명 + 동작을 `.update({deleted_at:...})` →
+  `.delete()`(실제 행 삭제)로 변경.
+- `contracts.template_id` FK(`ON DELETE NO ACTION`, DB 직접 조회로 확인)가 이 템플릿을
+  참조하는 계약이 있으면 삭제 자체가 막히므로, 삭제 전에 참조 계약 수를 먼저 세어
+  1건이라도 있으면 "이 양식으로 발행된 계약이 N건 있어 삭제할 수 없습니다"로 명확히
+  차단(원시 FK 위반 에러 그대로 노출 방지).
+
+`src/lib/components/cms/ContractTemplatePanel.svelte`·`src/routes/cms/reservation/
+contracts/+page.svelte`: `CmsDeleteButton action="?/softDelete"` → `"?/delete"` 동반 수정.
+
+`src/__tests__/server/contractAuthGates.test.ts`: `.softDelete(event)` 직접 호출 테스트를
+`.delete(event)`로 동반 수정(액션명 변경 반영) + 관련 주석 갱신.
+
+### 검증
+
+- svelte-check: 신규 에러·경고 0건(기존 무관 1건 그대로).
+- vitest `contractAuthGates.test.ts` 34/34 GREEN 재확인(delete 액션 partner 403 차단
+  포함, 리네임으로 인한 회귀 없음).
+- ✅ Stephen이 발행 연결 없는 양식 1건을 실제로 삭제 클릭 → 정상 hard delete 확인.
+  검증 방법: DB(Stage) 활성 템플릿 목록을 직접 조회해 제시했고, Stephen이 "제시한
+  목록에 삭제된 목록이 없으니 정상 작동"으로 확인 — soft delete였다면 `deleted_at`만
+  채워지고 여전히 원본 행이 남아있었을 것이므로, 목록에서 완전히 사라진 것 자체가
+  실제 행 삭제(hard delete)의 증거.
+- ✅ FK 차단 분기 재현 검증 완료(2026-09-08, Stephen 요청으로 추가) — Stage DB의 실제
+  FK 제약(`contracts_template_id_fkey`, `ON DELETE NO ACTION`, 스키마 직접 조회로 확인된
+  실제 제약)을 그대로 반영한 vitest 2건을 `contractAuthGates.test.ts`에 신규 추가:
+  ① 참조 계약 3건이 있을 때 → 409 + "3건" 포함 에러 메시지로 정확히 차단(원시 FK 위반
+  에러 그대로 노출 안 됨), ② 참조 계약 0건일 때 → 차단되지 않고 정상 진행. 36/36 GREEN
+  (기존 34건 + 신규 2건). ⚠️ 이 검증은 실제 발행된 계약이 딸린 템플릿으로 UI에서 직접
+  클릭한 라이브 재현이 아니라, 실제 DB 제약을 그대로 반영한 서버 액션 단위테스트 재현임 —
+  같은 로컬 서버 포트를 다른 세션이 점유 중이라 이번 세션에서 라이브 클릭 재현은 여전히
+  불가능했다(앞선 두 항목과 동일 사유). Stephen이 실제로 발행된 계약이 딸린 템플릿을
+  하나 찾아 삭제를 시도해보면 UI 토스트로도 동일하게 확인 가능.
+
+### ⚠️ 소급 미반영
+
+이번 세션 앞서 Stephen이 직접 클릭해 소프트 삭제된 4건(장기 계약서·엑셀 계약 양식·
+[수정] 엑셀 테스트·[테스트] 크레이지샷 대여계약서, Stage DB)은 이미 목록에서 필터링돼
+UI로는 재삭제(hard delete) 시도가 불가능한 상태로 남아있다 — 코드는 이제부터의 신규
+삭제 클릭에만 적용됨. 그 4건을 실제로 행 제거하려면 Stephen이 직접 SQL을 실행해야
+한다(이전 턴에서 제안한 `DELETE FROM contract_templates WHERE id IN (...)` 그대로 유효).
+
+### 배경
+
+Stephen이 `<launch-selected-element>`로 계약서 양식 목록 카드와 편집 패널의 "수정 저장"
+버튼을 선택해 지시: "등록된 계약서 양식 삭제 기능이 없으니 cms 표준 디자인 시스템 지침의
+삭제아이콘 버튼(쓰레기통)을 목록 별 우측 끝, 펼쳐보기 시 '수정저장' 버튼 우측 끝에 배치."
+
+조사 결과 삭제 기능 자체(`?/softDelete` 서버 액션, `contract_templates.deleted_at` soft
+delete)는 이미 존재했고 편집 패널(`ContractTemplatePanel.svelte`)에도 `CmsDeleteButton`
+(CMS 표준 아이콘형 삭제버튼, `.act-del` 클래스)이 이미 있었으나 ① 목록 카드 자체에는
+삭제 버튼이 전혀 없었고 ② 편집 패널의 기존 삭제버튼은 액션바 맨 왼쪽(`margin-right:auto`로
+저장 버튼과 분리)에 있어 요청하신 "저장 버튼 우측 끝" 위치와 달랐다.
+
+### 구현
+
+`src/routes/cms/reservation/contracts/+page.svelte`:
+- 목록 카드(`.tpl-card`)를 감싸는 `.tpl-card-row` 컨테이너 신규 — 선택 클릭을 전담하는
+  내부 `<button class="tpl-card">`와 `CmsDeleteButton`(형제, action="?/softDelete")을
+  나란히 배치. `CmsDeleteButton`은 자기 자신의 `<form>`을 렌더링하므로 카드 전체를
+  `<button>`으로 두면 form-in-button(무효 HTML)이 되어 이 구조로 분리(카드 선택
+  버튼과 삭제 버튼을 형제로 두는 원칙은 편집 패널의 기존 CmsDeleteButton 배치와 동일).
+- 보더·호버·선택 배경 스타일을 `.tpl-card`에서 `.tpl-card-row`로 이관(카드 전체가
+  더 이상 하나의 버튼이 아니므로).
+- `handleDeleted(id)` 신규 — 삭제 성공 시 목록 새로고침(`invalidateAll`) + 삭제한
+  양식이 마침 지금 열려있던 패널이면 패널 닫기(존재하지 않는 템플릿을 편집 화면에
+  계속 띄워두지 않기 위함).
+
+`src/lib/components/cms/ContractTemplatePanel.svelte`:
+- 기존 `CmsDeleteButton`을 액션바 맨 앞 → "수정 저장"/"양식 등록" 버튼 다음(맨 뒤)으로
+  이동. 더 이상 필요 없어진 `.panel-actions :global(.act-del) { margin-right: auto; }`
+  규칙 제거(기존엔 삭제버튼을 저장버튼과 떨어뜨려 왼쪽 정렬하던 용도였음).
+
+### 검증
+
+- svelte-check: 수정 2개 파일 신규 에러·경고 0건(프로젝트 전체 기존 에러 1건은 무관한
+  사전 존재 이슈, 이 세션과 무관).
+- `?/softDelete` 서버 액션은 기존 것을 그대로 재사용(신규 서버 코드 없음) — 제네릭
+  `id` form-data만 받아 `contract_templates.deleted_at`을 soft-delete하므로 목록 카드
+  어디서 호출하든 동일하게 동작.
+- ✅ Stephen이 직접 클릭해 "정상 동작함" 확인. 이어서 DB(Stage: ezyvffjvuwmtuhpxdjrw)
+  직접 조회로 재확인 — flow·spreadsheet·html 3개 작성모드 템플릿 4건(장기 계약서·엑셀
+  계약 양식·[수정] 엑셀 테스트·[테스트] 크레이지샷 대여계약서) 전부 `deleted_at`이
+  정확히 기록됨(2026-09-08 02:39:12~33, 순차 클릭과 일치하는 간격). soft delete만
+  수행되고 원본 데이터는 보존됨을 확인.
+
+### GATE C: ✅ 통과 — Stephen 실사용 확인 + DB 검증 완료.
+
+### GATE E: ✅ sp3-qa-agent 독립검수 통과(규칙 정합성·기술부채·시범오픈 기준 전부 확인,
+수정 필요 항목 0건). FK count-check 레이스 컨디션은 비차단 정보성 리스크로 확인(레이스가
+나도 DB FK 제약이 여전히 보호해 데이터 정합성 위반 불가), `delete`를 액션 키로 쓰는 것도
+문제 없음(예약어 제약은 statement 위치에만 적용), `.tpl-card-row` 마크업도 form-in-button
+문제 해결 확인·신규 a11y 경고 0건. FK 차단 분기의 단위테스트 모의값이 실제 Stage DB
+마이그레이션 파일(`20260723000149_149_contracts_content_fields.sql`, `ON DELETE` 절
+없음=기본값 NO ACTION)과 정확히 일치함을 교차검증. git add/commit은 Stephen 직접 실행 대기.
+
+---
+
+## NOW — 🟡 BOUNDARY: 계약서 정산내역 할인·포인트 필드 "△"(차감) 표기가 값이 없을 때도 붙어 나오는 문제 수정 (2026-09-08, 이 세션, GATE C 진행 중)
+
+### 발견 경위
+
+Stephen이 `<launch-selected-element>`로 계약서 정산내역의 "할인 적용"·"포인트 사용"·
+"할인적용 금액" 3개 셀(각각 "△ {{할인금액}}"·"△ {{차감포인트}}"·"△ {{할인차감}}")을 선택해
+"삼각형 특수문자의 기능성 점검하고 불필요한 표기 경우 제거"를 요청.
+
+코드 확인: `defaultRentalContractHtml.ts`에 "△ "가 이 3칸 앞에 정적 텍스트로 박혀 있었고,
+그 뒤에 오는 값(`할인금액`/`차감포인트`/`할인차감`)은 전부 `formatAmount()`로 생성되는데
+이 함수는 값이 없으면(null) "-"를, 0이면 "0원"을 반환한다 — 즉 실제로 아무것도 차감되지
+않은 예약(할인·포인트 미사용)에서도 "△ 0원"·"△ -"처럼 차감 기호(△)가 붙어 나오는 게
+항상 재현되는 구조적 문제였다(직접 실사용 캡처로 이전에도 여러 차례 "△ 0원" 확인됨).
+
+### 구현
+
+`src/routes/api/cms/reservations/[id]/contract-data/+server.ts`:
+- 신규 `formatDeltaAmount(n)` — 값이 null이거나 0 이하면 기존 `formatAmount`와 동일하게
+  "-"/"0원"만 반환(△ 없음), 0보다 크면 "△ " + `formatAmount(n)`을 반환.
+- `할인금액`·`차감포인트`·`할인차감` 3개 필드를 `formatAmount` → `formatDeltaAmount`로 교체.
+
+`src/lib/components/cms/contract-editor/templates/defaultRentalContractHtml.ts`:
+- 위 3개 셀에서 정적 "△ " 접두사 제거(값 자체가 필요할 때만 스스로 붙이므로 템플릿에는
+  더 이상 필요 없음).
+
+### 검증
+
+- svelte-check: 수정 2개 파일 신규 에러·경고 0건.
+- 이 파일의 다른 내부 포맷터(formatDateDot·formatTotalUsageHours 등)도 기존부터 단위테스트가
+  없는 비공개 함수라 동일 관례 유지(신규 테스트 파일 미추가) — 기존 vitest(contractHtmlSubstitution
+  등)는 이 함수를 거치지 않는 사전 포맷된 mock 값만 검증하므로 무관·무회귀.
+
+### ⚠️ 소급 미반영(계약서발행일 건과 동일 클래스)
+
+`defaultRentalContractHtml.ts` 상수를 고쳐도 **이미 저장된 기존 템플릿 레코드**(Stage·
+Production 양쪽의 실제 사용 중인 html형 템플릿들, "202609임대차계약서양식" 포함 — 오늘
+계약서발행일 수정 때 직접 패치한 바로 그 레코드)에는 소급 반영되지 않는다 — 여전히 옛
+정적 "△ " 텍스트가 그대로 저장돼 있다. 코드가 아직 배포되지 않은 상태에서 지금 바로 그
+템플릿들의 저장된 본문까지 패치하면, 코드 배포 전까지는 "실제 할인이 있어도 △ 표시가
+안 되는" 임시 역회귀가 생긴다(데이터는 정확하지만 시각적 강조만 잠깐 사라짐) — 그래서
+이번엔 코드만 수정하고 기존 템플릿 데이터 패치는 보류했다. Stephen이 이 코드를 커밋·배포한
+뒤 알려주시면 그 시점에 기존 템플릿들의 저장된 "△ " 정적 텍스트도 동일하게 제거해드리겠음.
+
+### GATE E: ✅ sp3-qa-agent 독립검수 통과(코드 자체는 규칙 정합성·기술부채·시범오픈 기준
+전부 확인, 수정 필요 항목 0건). `formatDeltaAmount` 로직·템플릿 3곳 정적 접두사 제거
+전부 설명과 일치 확인, 기존 vitest는 이 함수를 거치지 않는 mock 값만 검증해 무관함을
+재확인. 추가로 `ContractTemplatePanel.svelte`의 html 모드 "수정 저장"이 매번
+`DEFAULT_RENTAL_CONTRACT_HTML`(최신 코드 상수)로 덮어쓰기 때문에, 소급 미반영 갭은
+"그 템플릿을 다시 저장하지 않는 한"으로 범위가 좁혀진다는 점도 교차검증(참고 정보).
+
+### GATE C: 소급 미반영 정책(기존 템플릿 DB 콘텐츠 패치 시점)만 Stephen 확인 대기 —
+코드 자체는 GATE E 통과, 이 항목은 코드 결함이 아니라 배포 시점 조율 문제.
 
 ---
 
@@ -358,7 +1110,7 @@ AskUserQuestion으로 2가지 핵심 결정을 확인(추측 금지 원칙 — �
 초기화) 둘 다 `signed_at`이 있으면 명시적으로 차단(RSV-C-C3 원칙) — 서명완료건을 취소하는
 경로 자체가 없었다. 이번에 그 상위(서명완료건도 대상) 액션을 신설.
 
-- `supabase/migrations/20260907060000_456_cancel_issued_contract.sql`(신규 RPC
+- `supabase/migrations/20260907080000_458_cancel_issued_contract.sql`(신규 RPC
   `cancel_issued_contract`) — **Stage·Production 적용 완료**. `discard_sent_contract`(#405)와
   달리 signed_at 가드 없음 + canvas_document/spreadsheet_document/html_document까지 전체
   초기화(discard_sent_contract는 content_blocks만 비워 flow 모드 외 authoring_mode에서
@@ -38010,4 +38762,175 @@ src/lib/components/chat/ActionCard.svelte  (MODIFY — 1줄, each 키 수정)
 
 **GATE E: 자체판정 ✅ (단일 파일 렌더링 키 수정, DB/RPC 무변경, 회귀 위험 최소)** — git commit은
 Stephen 직접 실행 대기.
+
+---
+
+## DONE — 🔴 CRITICAL: 실서버 장바구니 전체 회귀테스트 + 쿠폰 표시 파이프라인 CRITICAL 결함 2건
+발견·수정 (2026-09-08, 이 세션 단독) — GATE E 통과(2026-09-08, @sp3-qa-agent)
+
+### 세션 범위
+
+Stephen이 순차 요청한 3개 하위 아젠다. 전부 이 세션 단독 작업.
+
+**① 장바구니 "캐싱 버그" 신고 조사 — 코드 결함 아님, 정책 오해로 판정**
+
+"예약신청완료 후 장바구니로 돌아가면 이전 상품목록이 캐싱된다"는 신고를 SvelteKit
+네비게이션 무효화·`itemsState` 동기화 이펙트·DB 직접 조회 3단계로 조사. 결론: `/cart`
+서버 `load()`는 매 네비게이션마다 정상 재실행되고(`__data.json?x-sveltekit-invalidated`
+확인), 클라이언트 `itemsState`는 리마운트 시 항상 서버 원본 기준으로 재구성돼 구조적
+결함 없음. 실제 원인은 `.in('status',['hold','draft'])` 쿼리가 hold도 정상적으로 계속
+노출하는 것 — 바로 전날 세션이 확정한 §10 정책(계약 미발송 hold는 무기한 장바구니 유지)의
+의도된 결과였다. 코드 수정 없음, 결론만 문서화.
+
+**② `payment/success/dev` "확인" 버튼 → 홈 이동**
+
+`handleConfirm()`의 `goto('/cart')`를 `goto('/')`로 1줄 변경(①의 정책 확인 후에도
+Stephen이 요청한 UX 변경 자체는 그대로 진행). 파일: `src/routes/payment/success/dev/+page.svelte`.
+라이브 검증(로컬): 클릭 → 홈 화면 정상 전환 확인.
+
+**③ 실서버(crazyshot-svelte.vercel.app) 장바구니 7개 항목 실제 라이브 테스트**
+
+Stephen 요청 7개 항목(수령/반납 방식별 작동·CMS 설정 연동·경고토스트·합산로직+배송료·
+쿠폰/포인트·예약완료 실행+완료화면·CMS 반영)을 Production DB 사전 조회(rental_method_options·
+rental_shipping_settings·delivery_fee_discount_tiers·pickup_points 등 ground truth 확보) +
+Claude Browser 실라이브 클릭으로 전항목 검증:
+
+- 방식별 작동: `is_courier_dependent=true`(택배)만 시간버튼 숨김 + 휴무일 캘린더 차단 정상,
+  `crazydelivery`는 `is_delivery_type=false`라 배송비 미부과(Stage와 설정값이 달라 Stage
+  대비 결과가 다른 것 — 결함 아님) 확인.
+- 경고토스트: 택배휴무일(일요일) 클릭 → "일요일 휴무 — 택배 휴무일이라 선택할 수 없습니다"
+  정상 발화(`data-sonner-toast` 확인).
+- 합산로직: 대여요금 150,000 + 배송료 0(할인티어 적용) = 150,000원, VAT 13,636원 내포
+  계산 정확히 일치.
+- **자체 발견 후 정정**: 수령/반납일이 서로 덮어써지는 것처럼 보이는 현상을 발견해 깊이
+  조사했으나, `.querySelectorAll('.datetime-btn')`가 접힌 아코디언의 collapsed-summary
+  버튼까지 함께 잡아 인덱스를 혼동한 테스트 스크립트 자체의 오류였음 — `.acc-item` 단위로
+  정확히 스코프해 재검증한 결과 실제로는 완전히 독립적으로 정상 동작. 실제 코드 결함 아님
+  (허위경보를 세션 내에서 스스로 발견·정정).
+- **실제 예약신청완료 실행**: 방문+방문, 09.22~09.25, "QA테스트" identity로 실제 제출 →
+  재발행(reissue) 확인모달 정상 동작 → `/payment/success/dev` 완료화면에 상품명·일정·
+  방식·요금 전부 정확히 반영 확인.
+- **CMS 반영 확인**: DB 직접 조회로 `rental_reservations.id=131`(status=hold, 09.22~09.25,
+  CS2609045) + `orders.id=26`(reservation_id=131 연결, final_amount=150,000,
+  delivery_fee=0) 전부 정상 생성 확인 — CMS `get_rental_list`가 참조하는 것과 동일한
+  테이블.
+- 쿠폰/포인트 1차 시도: 테스트 계정 보유 쿠폰 0개·포인트 0p라 실제 인터랙션 재현 불가,
+  빈 상태 자체는 에러 없음만 확인 → Stephen이 "쿠폰/포인트 있는 계정으로 다시 테스트"
+  후속 요청.
+
+> ⚠️ 이 테스트로 Production에 실제 hold 예약(id=131, SONY A7S3, CS2609045)이 생성됨 —
+> Stephen 지시("아직 테스트중이야 냅둬")로 정리하지 않고 유지 중.
+
+**④ 쿠폰/포인트 있는 계정 재테스트 — CRITICAL 결함 2건 발견·수정**
+
+테스트 계정(user_id=6a8f8ee1-ce6e-462f-b7eb-2bd8ed968318)에 free_delivery 쿠폰
+(NQS487CLX5) + 포인트 5,000p를 legitimate 패턴(user_coupons INSERT, point_transactions
+admin_grant + user_profiles.points 동기화 — CMS `distribute_coupon`/포인트지급 RPC와
+동일한 실질 효과)으로 직접 부여 후 재검증.
+
+- 포인트: "포인트 사용 (보유 5,000p)" 정상 반영 확인.
+- **결함 1(발견 즉시 수정·Production 반영 완료)**: "사용 가능한 쿠폰" 섹션이 아예 노출
+  안 됨. 원인: `cart/+page.server.ts:123`의 select(`id, coupon_id, used_count,
+  coupons(...)`)가 요청하는 `used_count` 컬럼이 **Production `user_coupons` 테이블에
+  존재하지 않았음**(Stage에는 최초 스키마 Migration #16부터 존재 — Production은 그
+  마이그레이션 이력 자체가 없어 다른 경로로 테이블이 생성된 것으로 추정). 존재하지 않는
+  컬럼 select → PostgREST 400 → `(couponResult.data ?? [])`가 조용히 빈 배열로 흡수해
+  콘솔·Vercel 런타임 로그(`get_runtime_errors`/`get_runtime_logs` 둘 다 조회해 확인) 어디에도
+  흔적 없음. **실증: `user_coupons.used_at IS NOT NULL` Production 전체 0건 — Production
+  오픈 이후 쿠폰이 실제로 사용된 적이 단 한 번도 없었음(기능이 처음부터 죽어있었던 것으로
+  확인).**
+  수정: `supabase/migrations/20260908000000_459_user_coupons_used_count_column.sql`
+  (`ADD COLUMN IF NOT EXISTS used_count INT NOT NULL DEFAULT 0 CHECK(used_count>=0)`) —
+  Stage(이미 존재, no-op 확인) → Production(실반영, `information_schema.columns` 재조회로
+  확인) 순서 적용. 재검증: "사용 가능한 쿠폰" 섹션 정상 노출 확인.
+- **결함 2(같은 재검증 중 발견·코드 수정 완료, 배포 대기)**: 쿠폰 라벨이 "3300% 할인"으로
+  오표시(실제로는 free_delivery 3,300원 무료배송 쿠폰). 원인:
+  `cart/+page.svelte:1735`의 `couponLabel` 삼항연산자가 `discount_type==='fixed'`만 처리하고
+  나머지 전부(`free_delivery` 포함) "%할인"로 취급하던 2-way 분기 — CMS
+  `cms/promotion/coupon/+page.svelte:334-343`의 이미 검증된 `discountLabel()`은
+  fixed/percentage/그외(무료배송) 3-way로 정확히 처리하는데 카트는 별도의 불완전한
+  구현이었음. CMS 패턴 그대로 3-way로 수정.
+
+### 검증
+
+`npx svelte-check` 신규 에러 0건(기존 `vite.config.ts` 무관 에러 1건만 잔존),
+`npx vitest run src/__tests__/services/cart` 123/123 GREEN. Stage에는 free_delivery
+타입 쿠폰 자체가 없어(전수 조회로 확인) 결함2는 라이브 재현 검증 대신 코드 리뷰로 CMS
+대응 패턴과 정확히 일치함만 확인.
+
+### 수정 파일
+
+```
+src/routes/payment/success/dev/+page.svelte            (MODIFY — goto 대상 변경)
+src/routes/cart/+page.svelte                            (MODIFY — 쿠폰 라벨 3-way 분기)
+supabase/migrations/20260908000000_459_user_coupons_used_count_column.sql  (NEW — Stage·Production 적용 완료)
+```
+
+⚠️ **결함1(DB 마이그레이션)은 이미 Production 반영 완료, 결함2(코드 수정)는 아직 로컬
+워킹트리에만 있고 배포 안 됨** — §9 "코드 배포≠DB마이그레이션 적용"과 반대 방향(이번엔
+DB가 먼저 반영되고 코드가 나중에 배포 대기) 사례로 유의할 것.
+
+**GATE 등급**: 🔴 CRITICAL — 실서버 결제 직전 화면(쿠폰 표시)의 오래된 미발견 결함,
+Production DB 마이그레이션 포함. 커밋은 Stephen 직접 실행 대기.
+
+---
+
+**GATE E 검수 결과(2026-09-08, @sp3-qa-agent) — 통과**:
+
+svelte-check 신규 에러 0건, vitest cart 123/123 GREEN, git diff가 명시된 3개 파일로
+정확히 스코프 일치(요청범위 외 오염 없음) 확인.
+
+3가지 재검토 결과: ① `used_count` 인과관계 — `use_coupon` RPC(Migration 267/293/296/297/348)
+전부 `UPDATE ... SET used_count = used_count+1`을 실행하므로, 컬럼이 없었다면 쿠폰사용
+RPC 자체가 항상 에러났을 것 — "한 번도 성공 불가능했음"이 단순 상관관계가 아니라
+구조적으로 확정됨. ② 마이그레이션 안전성 — #459의 컬럼 정의가 원본 Migration #16과
+완전 동일, 충돌·타입불일치 위험 없음. ③ 필드 일치 — 카트·CMS 둘 다 `c.discount_type`
+기준으로 동일 3-way 패턴 확인(`c.type`과 혼동 없음).
+
+⚠️ **비차단 후속 관찰(QA가 발견, 별도 확인 권장)**: `coupons.discount_type` CHECK 제약
+(Migration #15)은 원래 `'fixed'/'percentage'`만 허용하는데 실제 Production 값은
+`'free_shipping'` — 이번 수정이 만든 신규 결함은 아니고(CMS가 이미 의존해온 기존
+catch-all 패턴을 그대로 복제) `used_count`와 동일 계열의 Production 스키마 드리프트
+가능성이 있어 별도 세션에서 확인 권장.
+
+---
+
+**후속 해소(2026-09-08, 같은 날, Stephen 지시)**: 위 비차단 관찰을 Stephen이 직접
+DB 재확인 요청 — Production은 `discount_type` 관련 CHECK 제약 자체가 없고, Stage
+제약(`IN('fixed','percentage')`)은 실사용 중인 `free_shipping`(Production `coupons`
+전체 2행 모두 이 값)을 위반한다는 것을 조회로 실증. "free_shipping으로 넓혀서 양쪽
+다 맞춰줘" 확정에 따라 `supabase/migrations/20260908020000_461_coupons_discount_type_widen_free_shipping.sql`
+(`CHECK IN('fixed','percentage','free_shipping')`)을 Stage(제약 교체)→Production
+(신규 생성) 순서로 적용, `pg_get_constraintdef()` 재조회로 양쪽 정의 문자열 완전
+일치 확인 — 해소 완료. (`discount_value`/`usage_count` 누락 제약 2건은 이번 지시
+범위 아니라 미적용, 필요 시 별도 요청.)
+
+**후속 해소 2(2026-09-08, 같은 날, Stephen 지시)**: "discount_value/usage_count 제약도
+마저 추가해줘" — `supabase/migrations/20260908030000_462_coupons_discount_value_usage_count_checks.sql`
+(값 확장 없이 Stage와 동일 정의로 `discount_value>0`/`usage_count>=0` 재생성)을 Production
+위반행 0건 사전확인 후 Stage→Production 순서 적용. Production `coupons` CHECK 제약
+5개 전부 Stage와 정의 문자열 완전 일치 확인 — `coupons` 테이블 스키마 드리프트
+완전 해소.
+
+**후속 전수조사(2026-09-08, 같은 날, Stephen 질문)**: "로컬(stage)에서는 정상 작동하는데
+실서버(production)에서 미작동하는 장바구니 대여설정 로직이 이제는 없는거야?" — Stage(493개)·
+Production(458개) 마이그레이션 이력 전체를 `name` 기준으로 Python set diff 대조. 결과:
+Stage전용 ~60개·Production전용 ~30개 있었으나 대부분은 동일 마이그레이션이 서로 다른
+번호/이름으로 기록된 것뿐(예: `266_use_coupon_rpc`↔`267_use_coupon_rpc`,
+`285`/`285a`/`285b` 알파벳 순서 반전 등 — 이 레포 마이그레이션 이력 자체가 원래 지저분함).
+
+장바구니 로직과 직접 관련된 진짜 후보 2건을 실제 라이브 함수 정의 조회로 검증:
+- `178_include_options_in_cart_total`(Stage만 존재) — Production `calculate_cart_total`
+  직접 조회 결과 이 수정 내용이 훨씬 나중의 재작성(Migration #445, 양쪽 다 적용됨)에
+  완전히 흡수돼 있음을 확인 — 실제 결함 아님.
+- `371_find_matching_cart_reservation_group_fix_softdelete`(Stage만 존재) —
+  `find_matching_cart_reservation_group` 함수 정의를 Stage·Production 양쪽에서 직접
+  조회해 바이트 단위로 완전히 동일함을 확인 — 실제 결함 아님.
+
+Stephen에게 보고한 결론: 이번에 발견·수정한 `used_count`/`coupons` CHECK 제약 건들은
+최초 마이그레이션(#15/#16) 자체가 Production 이력에 없었던 진짜 드리프트였고, 나머지
+대다수는 이름만 다른 노이즈. 검증한 범위(방문·택배 방식, 쿠폰·포인트, 실제 예약완료
+실행, 카트 총액 계산 RPC)에서는 추가 결함 미발견 — 단, 이름만 다른 나머지 ~60개 항목을
+전부 하나하나 내용 대조한 것은 아니라 "100% 없다"고 단정할 수는 없다는 점을 명시적으로
+전달함(추측성 확언 금지 원칙 준수).
 
