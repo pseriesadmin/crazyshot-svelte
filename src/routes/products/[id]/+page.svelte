@@ -135,7 +135,7 @@
 
   function incrementQty() {
     if (qty >= mainStockCap) {
-      showToast('예약 가능한 재고가 없습니다.');
+      csToast.warning('예약 가능한 재고가 없습니다.');
       return;
     }
     qty = clampReservationQty(qty + 1);
@@ -144,7 +144,7 @@
   function incrementOptionQty(opt: (typeof optionItems)[number]) {
     const cap = stockCapFor(opt.id);
     if (opt.qty >= cap) {
-      showToast('예약 가능한 재고가 없습니다.');
+      csToast.warning('예약 가능한 재고가 없습니다.');
       return;
     }
     opt.qty += 1;
@@ -169,26 +169,13 @@
     if (args) void handleReserve(args);
   }
 
-  // ── Toast
-  let toastMsg = $state('');
-  let toastVisible = $state(false);
-  let toastAction = $state<{ label: string; onClick: () => void } | null>(null);
-  let toastTimer: ReturnType<typeof setTimeout> | null = null;
-  function showToast(msg: string, action?: { label: string; onClick: () => void }) {
-    toastMsg = msg;
-    toastAction = action ?? null;
-    toastVisible = true;
-    if (toastTimer) clearTimeout(toastTimer);
-    toastTimer = setTimeout(() => { toastVisible = false; toastAction = null; }, action ? 6000 : 2800);
-  }
-
   // ── Quick Inquiry
   let qaText = $state('');
   let qaSubmitting = $state(false);
   async function handleQaSubmit() {
     if (!qaText.trim() || qaSubmitting) return;
     if (!session) {
-      showToast('로그인 후 이용해주세요.');
+      csToast.warning('로그인 후 이용해주세요.');
       return;
     }
     qaSubmitting = true;
@@ -205,11 +192,9 @@
       });
       if (error) throw error;
       qaText = '';
-      // 완료알림은 프론트 표준 토스트 컴포넌트(csToast) 재활용 — 이 페이지 자체 구현
-      // toast-msg(showToast)는 실패/안내 메시지 등 기존 용도로 그대로 유지.
       csToast.success('문의가 등록되었습니다.');
     } catch {
-      showToast('문의 등록에 실패했습니다. 다시 시도해주세요.');
+      csToast.error('문의 등록에 실패했습니다. 다시 시도해주세요.');
     } finally {
       qaSubmitting = false;
     }
@@ -243,8 +228,6 @@
     selectedPeriodId = '';
     activeTab = 'info';
     qaText = '';
-    toastVisible = false;
-    toastAction = null;
   });
 
   function scrollToSection(key: 'info' | 'review' | 'qa'): void {
@@ -289,7 +272,7 @@
   let isSubmittingReview = $state(false);
 
   function requireLoginForReview() {
-    showToast('로그인 후 이용해주세요.');
+    csToast.warning('로그인 후 이용해주세요.');
   }
 
   async function submitReview() {
@@ -299,7 +282,7 @@
       return;
     }
     if (!reviewText.trim()) {
-      showToast('내용을 입력해주세요.');
+      csToast.warning('내용을 입력해주세요.');
       return;
     }
     isSubmittingReview = true;
@@ -325,12 +308,10 @@
         ...reviews,
       ];
       reviewText = '';
-      // 등록알림은 프론트 표준 토스트 컴포넌트(csToast) 재활용 — 실패/안내 메시지는
-      // 이 페이지 자체 toast-msg(showToast) 그대로 유지.
       csToast.success('후기가 등록되었습니다.');
     } catch (err) {
       const msg = err instanceof Error ? err.message : '후기 등록에 실패했습니다.';
-      showToast(msg);
+      csToast.error(msg);
     } finally {
       isSubmittingReview = false;
     }
@@ -346,24 +327,22 @@
     // 대여 방식 미선택 (선택 가능한 방식이 있는 상품에 한해 필수) — 날짜가 있는 경우에만
     // (draft 경로는 대여방식 선택 UI 자체가 off라 e.methodId가 항상 비어있음 — 체크아웃에서 선택)
     if (e.startDate && data.rentalMethods.length > 0 && !e.methodId) {
-      showToast('대여 방식을 선택해주세요.');
+      csToast.warning('대여 방식을 선택해주세요.');
       return;
     }
 
     // 필수 옵션 미선택 — 재고 부족으로 qty가 0인 경우(2026-09-03 수정)와 단순 미선택을 구분해 안내
     const outOfStockRequired = optionItems.find((o) => o.is_required && o.qty === 0 && stockCapFor(o.id) === 0);
     if (outOfStockRequired) {
-      showToast('필수 옵션 상품의 재고가 부족해 예약할 수 없습니다.');
+      csToast.warning('필수 옵션 상품의 재고가 부족해 예약할 수 없습니다.');
       return;
     }
     if (optionItems.some((o) => o.is_required && o.qty === 0)) {
-      showToast('필수 옵션상품을 선택하세요.');
+      csToast.warning('필수 옵션상품을 선택하세요.');
       return;
     }
 
     // 최소 1개 선택 필수 그룹 — 그룹 내 전부 미선택
-    // 표준 토스트 헬퍼(csToast) 사용 — 이 페이지의 showToast()는 비표준 커스텀 구현이라
-    // 이 경고에는 쓰지 않는다(2026-09-06 지적, uiux-index.md 표준 토스트 헬퍼 지침).
     const minSelectGroup = optionItems.filter((o) => o.min_select_required);
     if (minSelectGroup.length > 0 && !minSelectGroup.some((o) => o.qty > 0)) {
       csToast.warning('옵션상품의 조건을 확인하세요.');
@@ -376,7 +355,7 @@
     const selectedMethod = data.rentalMethods.find((m) => m.id === e.methodId);
     const isDeliveryMethod = !!selectedMethod?.method_key && DELIVERY_METHOD_KEYS.has(selectedMethod.method_key);
     if (isDeliveryMethod && optionItems.some((o) => o.delivery_rental_disabled && o.qty > 0)) {
-      showToast('선택한 옵션상품은 배송이 불가능합니다.');
+      csToast.warning('선택한 옵션상품은 배송이 불가능합니다.');
       return;
     }
 
@@ -392,7 +371,7 @@
         const twoDaysLater = new Date(nowTime.getFullYear(), nowTime.getMonth(), nowTime.getDate() + 2);
         const startDateOnly = new Date(`${e.startDate}T00:00:00`);
         if (startDateOnly < twoDaysLater) {
-          showToast('택배 대여는 대여일 2일 전 예약 가능합니다.');
+          csToast.warning('택배 대여는 대여일 2일 전 예약 가능합니다.');
           return;
         }
       } else {
@@ -401,7 +380,7 @@
           const startDateTime = new Date(`${e.startDate}T${String(e.startHour).padStart(2, '0')}:${String(e.startMin).padStart(2, '0')}:00`);
           const threeHoursLater = new Date(nowTime.getTime() + 3 * 60 * 60 * 1000);
           if (startDateTime < threeHoursLater) {
-            showToast('당일 대여는 대여시간 기준 3시간 전 방문만 가능합니다.');
+            csToast.warning('당일 대여는 대여시간 기준 3시간 전 방문만 가능합니다.');
             return;
           }
         }
@@ -413,8 +392,8 @@
     // 가입이 끝나면 지금 이 인자(e) 그대로 handleReserve()를 재호출해 예약을 이어서 진행한다.
     const { data: { session: currentSession } } = await supabase.auth.getSession();
     if (!isRealMemberSession(currentSession)) {
-      showToast('크레이지샷 로그인 또는 5초 가입만 진행해주세요', {
-        label: '확인',
+      csToast.warning('크레이지샷 로그인 또는 5초 가입만 진행해주세요', {
+        actionLabel: '확인',
         onClick: () => openAuthGateModal(e),
       });
       return;
@@ -433,8 +412,8 @@
     const hasVerifiedDoc = !!(verifyRow as { identity_doc_url: string | null; foreign_doc_url: string | null } | null)?.identity_doc_url
       || !!(verifyRow as { identity_doc_url: string | null; foreign_doc_url: string | null } | null)?.foreign_doc_url;
     if (!hasVerifiedDoc) {
-      showToast('내정보(개인정보)에서 본인증명정보를 등록(확인)해주세요.', {
-        label: '확인',
+      csToast.warning('내정보(개인정보)에서 본인증명정보를 등록(확인)해주세요.', {
+        actionLabel: '확인',
         onClick: () => {
           const returnTo = encodeURIComponent(window.location.pathname + window.location.search);
           goto(`/account/profile?tab=profile&returnTo=${returnTo}`);
@@ -502,7 +481,7 @@
 
         const outcome = await createMultiUnitReservation(qty, { createUnit: createDraftUnit, cancelUnit });
         if (!outcome.success) {
-          showToast(outcome.errorMessage ?? '예약을 생성할 수 없습니다.');
+          csToast.error(outcome.errorMessage ?? '예약을 생성할 수 없습니다.');
           return;
         }
 
@@ -535,7 +514,7 @@
           if (optionsError) {
             console.error('[products/[id]] set_reservation_options (draft) 저장 실패:', optionsError);
             const msg = (optionsError as { message?: string })?.message ?? '';
-            showToast(
+            csToast.error(
               msg.includes('OPTION_STOCK_EXCEEDED')
                 ? '옵션상품 재고가 부족해 저장하지 못했습니다. 수량을 확인해 주세요.'
                 : '선택한 옵션상품 저장에 실패했습니다. 체크아웃에서 다시 확인해 주세요.'
@@ -568,7 +547,7 @@
 
         const outcome = await createMultiUnitReservation(qty, { createUnit: createHoldUnit, cancelUnit });
         if (!outcome.success) {
-          showToast(outcome.errorMessage ?? '예약 가능한 장비가 없습니다.');
+          csToast.error(outcome.errorMessage ?? '예약 가능한 장비가 없습니다.');
           return;
         }
 
@@ -606,7 +585,7 @@
           if (optionsError) {
             console.error('[products/[id]] set_reservation_options 저장 실패:', optionsError);
             const msg = (optionsError as { message?: string })?.message ?? '';
-            showToast(
+            csToast.error(
               msg.includes('OPTION_STOCK_EXCEEDED')
                 ? '옵션상품 재고가 부족해 저장하지 못했습니다. 수량을 확인해 주세요.'
                 : '선택한 옵션상품 저장에 실패했습니다. 체크아웃에서 다시 확인해 주세요.'
@@ -630,7 +609,7 @@
           });
           if (shipError) {
             console.error('[products/[id]] set_reservation_shipment_method 저장 실패:', shipError);
-            showToast('수령/반납 방식 저장에 실패했습니다. 체크아웃에서 다시 확인해 주세요.');
+            csToast.error('수령/반납 방식 저장에 실패했습니다. 체크아웃에서 다시 확인해 주세요.');
           }
 
           const { error: durationError } = await (supabase.rpc as unknown as DurationRpcFn)('set_reservation_duration', {
@@ -639,7 +618,7 @@
           });
           if (durationError) {
             console.error('[products/[id]] set_reservation_duration 저장 실패:', durationError);
-            showToast('대여기간 정보 저장에 실패했습니다. 체크아웃에서 다시 확인해 주세요.');
+            csToast.error('대여기간 정보 저장에 실패했습니다. 체크아웃에서 다시 확인해 주세요.');
           }
 
           // 예약신청(hold) 채팅 알림 발송 — fire-and-forget. 기존 그룹 멤버는 담을 당시 이미
@@ -655,7 +634,7 @@
         goto('/cart');
       }
     } catch {
-      showToast('예약 중 오류가 발생했습니다.');
+      csToast.error('예약 중 오류가 발생했습니다.');
     } finally {
       isReserving = false;
     }
@@ -772,7 +751,7 @@
                       onchange={() => {
                         const cap = stockCapFor(opt.id);
                         if (opt.qty > cap) {
-                          showToast('예약 가능한 재고가 없습니다.');
+                          csToast.warning('예약 가능한 재고가 없습니다.');
                           opt.qty = cap;
                         } else if (opt.qty < 0) {
                           opt.qty = 0;
@@ -864,7 +843,7 @@
                 onchange={() => {
                   const clamped = clampReservationQty(qty);
                   if (clamped > mainStockCap) {
-                    showToast('예약 가능한 재고가 없습니다.');
+                    csToast.warning('예약 가능한 재고가 없습니다.');
                     qty = mainStockCap;
                   } else {
                     qty = clamped;
@@ -907,7 +886,7 @@
           mode="product"
           onreserve={handleReserve}
           onchange={handleCalChange}
-          chatCallback={() => showToast('준비중입니다.')}
+          chatCallback={() => csToast.info('준비중입니다.')}
           wished={wishedSet.has(product.id)}
           onwishtoggle={data.isLoggedIn ? () => handleWishToggle(product.id) : undefined}
         />
@@ -934,7 +913,7 @@
         mode="product"
         onreserve={handleReserve}
         onchange={handleCalChange}
-        chatCallback={() => showToast('준비중입니다.')}
+        chatCallback={() => csToast.info('준비중입니다.')}
         wished={wishedSet.has(product.id)}
         onwishtoggle={data.isLoggedIn ? () => handleWishToggle(product.id) : undefined}
       />
@@ -1202,22 +1181,6 @@
     </div>
   </div>
 </section>
-
-<!-- Toast -->
-{#if toastVisible}
-  <div class="toast-msg" class:has-action={!!toastAction} role="status" aria-live="polite">
-    <span>{toastMsg}</span>
-    {#if toastAction}
-      <button
-        type="button"
-        class="toast-action-btn"
-        onclick={() => { toastAction?.onClick(); toastVisible = false; toastAction = null; }}
-      >
-        {toastAction.label}
-      </button>
-    {/if}
-  </div>
-{/if}
 
 <SignUpModal
   open={showAuthModal}
@@ -2298,41 +2261,4 @@
     flex-shrink: 0;
   }
 
-  /* ── Toast */
-  .toast-msg {
-    position: fixed;
-    bottom: 24px;
-    left: 50%;
-    transform: translateX(-50%);
-    background: var(--cs-purple-light);
-    color: white;
-    padding: 14px 28px;
-    border-radius: 30px;
-    z-index: 9999;
-    font: var(--text-m-script-14B);
-    white-space: nowrap;
-    pointer-events: none;
-  }
-  .toast-msg.has-action {
-    display: flex;
-    align-items: center;
-    gap: 14px;
-    white-space: normal;
-    pointer-events: auto;
-    max-width: calc(100vw - 40px);
-  }
-  .toast-action-btn {
-    background: rgba(255, 255, 255, 0.16);
-    color: white;
-    border: none;
-    border-radius: 22px;
-    padding: 0 18px;
-    height: 44px;
-    min-height: 44px;
-    font: var(--text-m-script-14B);
-    font-weight: 700;
-    flex-shrink: 0;
-    cursor: pointer;
-  }
-  .toast-action-btn:hover { background: rgba(255, 255, 255, 0.28); }
 </style>

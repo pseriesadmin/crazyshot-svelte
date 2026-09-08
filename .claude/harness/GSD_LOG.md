@@ -1,6 +1,194 @@
 # GSD_LOG.md — 크레이지샷 실행 이력
 # 형식: [YYYY-MM-DD HH:MM] 타입 | 타스크명 | 파일 | 소요 | 결과
 
+[2026-09-08(이 세션'만')] 신규 | '파일등록' UI 컴포넌트 디자인시스템 등록 + 외국인증명 업로드 콤보체크박스→슬롯형 재구성 + CMS 파일라벨 메타매핑 | .claude/rules-ref/front-uiux.md(§22 신설), src/lib/components/members/profile/ProfileTabContent.svelte, src/lib/components/cms/CustomerDetailPanel.svelte | ✅ 완료(svelte-check 신규에러 0건) — DB/RPC/마이그레이션 변경 없음. 본인증명(identity) 섹션은 순서보장이 없어 의도적으로 미변경(front-uiux.md §22-7). git commit은 Stephen 직접 실행.
+
+[2026-09-08(같은 날 후속, 이 세션'만')] 신규 | 본인증명(identity)도 슬롯형으로 전환 + CMS 파일라벨 메타매핑 + 중복마크업/미사용CSS 정리 | src/lib/components/members/profile/ProfileTabContent.svelte, src/lib/components/cms/CustomerDetailPanel.svelte, .claude/rules-ref/front-uiux.md(§22-4 스테일 서술 정정) | ✅ 완료(svelte-check 신규에러 0건, unused-CSS 0건) — 5종 중 1개 이상만 채우면 등록 가능하도록 검증조건 조정(외국인증명은 전부필수와 차이). showIdentityForm true/false 완전동일 중복마크업 통합. DB/RPC/마이그레이션 변경 없음. git commit은 Stephen 직접 실행.
+
+[2026-09-08(같은 날 3차 후속, 이 세션'만')] 수정 | '파일등록' 슬롯 UI 마무리 다듬기 3건(중복라벨 제거·모바일 1열 직렬배열·포맷안내 섹션당1회 통합) | src/lib/components/members/profile/ProfileTabContent.svelte, .claude/rules-ref/front-uiux.md(§22 구조도·CSS·예제 동기화) | ✅ 완료(svelte-check 신규에러 0건, unused-CSS 0건) — PC(≥768px) 2열/모바일 1열 미디어쿼리 1개로 공용컴포넌트라 양쪽 다 커버(Stephen PC반응형 확인 완료). DB/RPC/마이그레이션 변경 없음. git commit은 Stephen 직접 실행.
+
+[2026-09-09(GATE E, 이 세션'만')] 검증 | 위 3건(중복라벨 제거·모바일 1열·안내문구 통합) @sp3-qa-agent 검수 | src/lib/components/members/profile/ProfileTabContent.svelte, .claude/rules-ref/front-uiux.md | ✅ 통과 — CRITICAL/HIGH 결함 없음, 슬롯형 핵심 로직(순서보장·CMS 라벨매핑) 무변경 확인. 1차 시도는 에이전트 stall(600s 무응답)로 실패해 재시도 후 정상 완료.
+
+[2026-09-08(otCouponDiscount 실서버반영 검증, 이 세션'만')] 검증 | cart otCouponDiscount 로컬↔실서버 정합성 재대조 + QA게이트 + Stage·Production 배포 확인 | src/routes/cart/+page.svelte, .claude/harness/TASK.md | ✅ Stage·Production 배포완료 확인
+
+  Stephen 요청: 첨부 플랜 문서(HANDOFF 작성 계획) 리뷰 후 "로컬과 같이 실서버
+  (crazyshot-svelte.vercel.app/cart)에 동일 동작하도록 반영되었는지 확인 검증" —
+  이 세션은 코드를 직접 작성하지 않고 검증·QA게이트·배포확인만 수행.
+
+  ① 최초 검증(코드 미반영 발견): git status/log/diff + Vercel MCP(list_deployments로
+  Production 최신 배포의 실제 빌드 커밋 SHA 대조) + Supabase MCP(execute_sql로
+  Production `vnbpmvxruyciuuaermyh` DB 직접 조회)를 교차 사용 — `cart/+page.svelte`의
+  otCouponDiscount 3-way 분기 수정이 당시 **미커밋 상태**(워킹트리에만 존재, origin/stage
+  push 안 됨)라 Production에 전혀 반영되지 않았음을 확인. 반면 동일 계열 수정이 이미
+  적용된 `contract-data/+server.ts`(커밋 6f2e210)는 정상 배포 확인. Migration 459/461/462
+  (쿠폰 관련 DB 스키마)는 Production DB 직접 조회로 이미 반영 확인.
+
+  ② 별도 병렬 세션이 산출한 "cart otCouponDiscount와 contract-data의
+  resolveSelectedCouponDiscountAmount가 완전히 동일한 3-way 분기"라는 분석(§7)을
+  Stephen이 제시하며 본 세션 검증 결과와 동일한 내역인지 재확인 요청 — 두 파일을
+  실제로 열어 나란히 재대조한 결과 로직 자체는 사실로 확인. 다만 "로직 정합성"과
+  "배포 여부"는 서로 다른 질문이며, cart 쪽은 여전히 미커밋임을 재확인해 상충이 아님을
+  정리(`.claude/harness/TASK.md` 최상단에 CRITICAL 등급 검증 기록 추가).
+
+  ③ sp3-qa-agent 독립 검수(GATE E) — 미커밋 diff만 범위 지정해 검토 요청: 3-way 분기
+  정확성(coupons_discount_type_check와 문자열 일치), otMaxPoints/otTotal 등 하위
+  파생값 회귀 위험 없음, contract-data/+server.ts와 완전 동일 로직, discount_type
+  사용처 2곳(계산부·라벨부) 외 누락 없음, svelte-check 신규 에러 0건·cart vitest
+  123/123 GREEN — **GATE E 통과, 수정 필요 항목 없음** 판정.
+
+  ④ Stephen이 QA 통과 확인 후 직접 커밋(`a49ab2e`, cart/+page.svelte 단독) → push →
+  PR #258(stage→main) 병합(`f4145c8`). Vercel MCP로 재조회해 최종 배포 확인:
+  - Stage 프리뷰: `dpl_31SE7vMATJQaS9AC3D8PeiJEK7HV`(commit a49ab2e) — READY
+  - Production: `dpl_5Fw3KQc74PUHEoCcX7TCtRjM72Nt`(commit f4145c8, target: production) — READY
+  - `get_project` 재조회로 프로젝트의 `latestDeployment`가 이 Production 배포를
+    정확히 가리킴을 확인 — crazyshot-svelte.vercel.app/cart가 현재 이 커밋을 서빙 중.
+
+  이 세션은 위 ①~④ 전 과정에서 코드를 전혀 수정하지 않았음(순수 git/Vercel/Supabase
+  직접 조회 기반 검증 + 하네스 기록 + QA 게이트 호출만 수행) — 실제 코드 수정 자체의
+  귀속은 위 라인 17 `[2026-09-08] otCouponDiscount — free_shipping 쿠폰이...` 항목
+  (타 세션 실적)을 그대로 따름.
+
+[2026-09-08(같은 날 후속)] 🔴CRITICAL | contract-data 엔드포인트의 쿠폰 할인 재현 계산도 동일 패턴으로 수정(otCouponDiscount 복제 코드) | src/routes/api/cms/reservations/[id]/contract-data/+server.ts | 코드리뷰+기존 테스트 회귀확인
+  Stephen 요청: "contract-data/+server.ts도 같은 방식으로 수정해줘" — 직전 cart/+page.svelte
+  otCouponDiscount 수정 시 발견한 "cart와 동일 계산식"이라 주석 붙은 복제 코드
+  (resolveSelectedCouponDiscountAmount 함수, 계약서 발행 시점 쿠폰할인액 재현용)에도
+  동일한 fixed/percentage 2-way 오류가 있었음 — 같은 3-way 분기(fixed/percentage/
+  그외→0)로 수정.
+
+  ⚠️ 이 파일은 다른 병렬 세션이 전자계약(contract) 기능을 현재 작업 중인 파일(git
+  status M)이라 그 세션의 dev서버와 충돌 방지를 위해 브라우저 라이브 재현은
+  생략 — npx svelte-check 신규 에러 0건, 관련 테스트(contractAuthGates.test.ts)
+  36/36 GREEN(회귀 없음)으로 검증. 로직은 cart/+page.svelte의 이미 라이브 검증된
+  수정과 완전히 동일한 3-way 분기라 코드 리뷰만으로 정합성 확인.
+
+[2026-09-08] 🔴CRITICAL | otCouponDiscount — free_shipping 쿠폰이 정률(%) 할인으로 오계산돼 주문 전액 무료화 가능하던 가격결함 발견·수정 | src/routes/cart/+page.svelte | 라이브 재현·수정·재검증
+  세션 전역 미커밋 파일 대조("순서오류" 검증) 도중 다른 세션의 uncommitted 파일
+  (`api/cms/reservations/[id]/contract-data/+server.ts`)이 "cart/+page.svelte
+  otCouponDiscount와 동일 계산식"이라 주석 단 코드를 발견 → 원본 확인 결과 실제로
+  discount_type이 'fixed'가 아니면 전부 정률(%)로 계산하는 2-way 분기였음
+  (`Math.round(otSubtotal * discount_value / 100)`). free_shipping 타입 쿠폰의
+  discount_value(3300 = 원 단위 금액)가 이 분기를 타면 주문금액의 3300%가 할인액으로
+  계산돼 otTotal이 0으로 클램프 — 주문 전체가 사실상 무료가 되는 심각한 가격결함이었다.
+
+  cartShippingFee.ts의 isFreeDeliveryCouponBlocked() 문서 주석(Stephen 확정,
+  2026-09-01)에 이미 "free_delivery 쿠폰이 실제로 배송료를 할인하는 계산 로직은
+  스코프 밖 — otCouponDiscount는 여전히 상품금액에만 적용된다"는 기존 결정이 명시돼
+  있어, 그 결정을 그대로 따라 discount_type이 fixed/percentage가 아니면 상품금액
+  할인 기여를 0으로 처리하는 3-way 분기로 수정(배송료에 쿠폰 효과를 실제 반영하는
+  신규 로직은 이번 스코프 밖 — 기존 결정 유지).
+
+  이 결함은 바로 앞서 고친 user_coupons.used_count 결함과 인과관계가 있다 —
+  그 결함 때문에 쿠폰 섹션 자체가 안 보여 지금까지 아무도 이 경로를 밟을 수
+  없었는데, used_count 수정으로 쿠폰이 실제로 선택 가능해지면서 이 잠재 결함이
+  실사용 가능한 상태로 노출됐다(배송료 우대설정이 이미 적용 중인 장바구니에서는
+  여전히 선택 자체가 차단되므로 대여요금 소계가 할인티어 임계값 미만인 경우에만
+  트리거 가능).
+
+  라이브 재현·수정 검증(Stage 로컬 dev서버, 실제 free_shipping 테스트 쿠폰 임시
+  발급): 수정 전 로직대로면 45,000원 소계에서 1,485,000원 "할인"이 계산돼
+  합계요금 0원이 됐을 상황 → 수정 후 실제 선택 시 합계요금 45,000원 그대로 유지
+  확인(무료배송 쿠폰이 상품금액에 아무 영향 없음 — 의도된 현재 스코프대로 동작).
+  회귀 확인: 기존 fixed 타입 쿠폰(5,000원 할인) 선택 시 정상적으로 -5,000원 반영
+  확인(변경 없음). percentage 분기는 코드상 완전히 동일한 수식을 명시적 조건으로만
+  분리한 것이라 로직 변경 없음(만료된 테스트 쿠폰이라 라이브 재현은 생략, 코드
+  리뷰로 확인). svelte-check 신규 에러 0건, cart vitest 123/123 GREEN. 테스트용
+  임시 쿠폰(QA-FREESHIP-TEST)·부여 이력 정리 완료.
+
+[2026-09-08] 🟡BOUNDARY | coupons.discount_type CHECK 제약 'free_shipping' 포함하도록 확장(Stage·Production 통일) | supabase/migrations/20260908020000_461_coupons_discount_type_widen_free_shipping.sql | DB 직접 조회 실증
+  sp3-qa-agent가 이전 검수(#459/③ 쿠폰라벨 수정)에서 비차단 관찰로 지적한
+  "Production `coupons_discount_type_check` 제약 자체가 없고, Stage 제약(fixed/
+  percentage만 허용)은 실사용 중인 free_shipping 값을 애초에 빠뜨리고 있다"는 발견을
+  Stephen이 직접 재확인 요청 — DB 직접 조회로 실증:
+  - Production: coupons 테이블에 discount_type 관련 CHECK 제약 자체가 부재 확인
+    (code_mode 관련 2개만 존재).
+  - Stage: coupons_discount_type_check가 IN('fixed','percentage')로 정의돼 있으나
+    Production 실데이터(coupons 전체 2행 모두 discount_type='free_shipping')는 이
+    조건을 위반 — CMS discountLabel()·카트 couponLabel() 둘 다 "fixed도 percentage도
+    아니면 무료배송"으로 이미 free_shipping을 정상 값으로 취급 중이라, 원 제약(#15)
+    자체가 설계 공백이었던 것으로 판정.
+
+  Stephen 확정: "free_shipping으로 넓혀서 양쪽 다 맞춰줘" — Migration #461
+  (DROP CONSTRAINT IF EXISTS → CHECK IN('fixed','percentage','free_shipping')로
+  재생성, Stage 교체·Production 신규생성 양쪽 동일 SQL로 안전 적용) 작성 후 Stage→
+  Production 순서 적용. 적용 후 두 환경 pg_get_constraintdef() 결과 문자 그대로 일치
+  확인.
+
+  범위 외 미적용(discount_value>0/usage_count>=0 제약도 Production에 없으나 이번
+  요청 범위 아님 — Stephen이 명시적으로 discount_type만 지시).
+
+[2026-09-08(같은 날 후속)] 🟢ROUTINE | coupons.discount_value/usage_count CHECK 제약 Production 누락분 추가(Stage·Production 통일) | supabase/migrations/20260908030000_462_coupons_discount_value_usage_count_checks.sql | DB 직접 조회 실증
+  Stephen 요청 "discount_value/usage_count 제약도 마저 추가해줘" — #461 조사 중 함께
+  발견했던 나머지 2개 누락 제약 처리. 적용 전 Production 위반행 재확인(discount_value>0
+  위반 0건, usage_count>=0 위반 0건) → discount_type처럼 값 확장 없이 Stage와 동일한
+  정의 그대로 DROP CONSTRAINT IF EXISTS → 재생성으로 Stage→Production 순서 적용.
+  적용 후 Production `coupons` 테이블 CHECK 제약 5개(code_mode 2개 + discount_type +
+  discount_value + usage_count) 전부 Stage와 정의 문자열 동일 확인 — coupons 테이블
+  스키마 드리프트 완전 해소.
+
+[2026-09-08] 🔴CRITICAL | user_coupons.used_count 컬럼 Production 누락 결함 발견·수정 + 쿠폰 라벨 표시 결함 수정 | supabase/migrations/20260908000000_459_user_coupons_used_count_column.sql, src/routes/cart/+page.svelte | 실서버 라이브 테스트 중 발견·즉시 수정·재검증
+  Stephen 요청("쿠폰/포인트 있는 계정으로 다시 테스트해줘")에 따라 테스트 계정(user_id
+  6a8f8ee1...)에 free_delivery 쿠폰(NQS487CLX5) + 포인트 5,000p를 legitimate 패턴
+  (user_coupons INSERT, point_transactions admin_grant + user_profiles.points 동기화)으로
+  직접 부여 후 실서버 /cart 재검증.
+
+  ① 포인트: 정상 반영("포인트 사용 (보유 5,000p)") 확인.
+  ② 쿠폰: "사용 가능한 쿠폰" 섹션 자체가 노출되지 않음 — 원인 추적 결과
+  cart/+page.server.ts:123의 select(`id, coupon_id, used_count, coupons(...)`)가 요청하는
+  `used_count` 컬럼이 Production `user_coupons` 테이블에 아예 존재하지 않았음(Stage에는
+  최초 스키마 Migration #16부터 존재 — Production은 그 마이그레이션 이력 자체가 없어 다른
+  경로로 테이블이 생성된 것으로 추정). 존재하지 않는 컬럼 select → PostgREST 400 에러 →
+  `(couponResult.data ?? [])`가 조용히 빈 배열로 흡수해 콘솔·Vercel 런타임 로그 어디에도
+  흔적을 남기지 않음. 실증: `user_coupons.used_at IS NOT NULL` Production 전체 0건 —
+  Production 오픈 이후 쿠폰이 실제로 사용된 이력 자체가 없었음(기능이 한 번도 정상
+  작동한 적 없었던 것으로 확인).
+
+  Stephen 승인 후 Migration #459(`ADD COLUMN IF NOT EXISTS used_count`) 작성 →
+  Stage(이미 존재, no-op 확인) → Production(실제 반영) 순서로 적용. 재검증: "사용 가능한
+  쿠폰" 섹션 정상 노출 확인.
+
+  ③ 재검증 중 2차 결함 발견: 쿠폰 라벨이 "3300% 할인"으로 잘못 표시됨 —
+  cart/+page.svelte:1735의 `couponLabel` 삼항연산자가 `discount_type==='fixed'`만 처리하고
+  나머지는 전부 "%할인"로 처리(free_delivery 타입도 포함) — CMS
+  `cms/promotion/coupon/+page.svelte:334-343`의 이미 검증된 `discountLabel()` 함수는
+  fixed/percentage/그외(무료배송) 3-way로 정확히 처리하는데, 카트는 별도로 작성된
+  불완전한 2-way 버전이었음. CMS 패턴과 동일한 3-way 분기로 즉시 수정.
+
+  검증: svelte-check 신규 에러 0건(vite.config.ts 기존 무관 에러 1건만 잔존), cart vitest
+  123/123 GREEN. Stage에는 free_delivery 타입 쿠폰 자체가 없어(전수 조회로 확인) 라이브
+  재현 검증은 못함 — 코드 리뷰로 CMS 대응 패턴과 정확히 일치함만 확인.
+
+  ⚠️ **이 라벨 수정은 아직 코드(로컬 워킹트리)에만 있고 Production에 배포되지 않음** —
+  DB 마이그레이션(①②)은 이미 Production 반영 완료, 코드 수정(③)은 커밋·배포 별도 필요
+  (§9 "코드 배포≠DB마이그레이션 적용"과 반대 방향 — 이번엔 DB가 먼저, 코드가 나중).
+
+[2026-09-08] 🟡BOUNDARY | payment/success/dev "확인" 버튼 이동 대상 변경 — /cart → /(홈) | src/routes/payment/success/dev/+page.svelte | 라이브 검증
+  Stephen 신고: "확인" 버튼 클릭 시 /cart로 이동하는데, 그 경로에서 이전 상품목록이
+  캐싱되는 버그 현상 발생. 근본 원인 조사 없이 요청 그대로 이동 대상만 홈으로 변경
+  (범위 외 원인규명·리팩터링 착수 안 함 — 요청 명시 사항만 처리).
+
+  handleConfirm() 내부 goto('/cart') → goto('/')로 1줄 교체.
+
+  라이브 검증: 로컬 dev서버에서 /payment/success/dev 진입 → "확인" 버튼 클릭 →
+  window.location.href가 http://localhost:5177/로 전환, 홈 화면(배너·테마그룹·상품
+  큐레이션) 정상 렌더링 확인. svelte-check 신규 에러 0건(기존 vite.config.ts 무관
+  에러 1건만 잔존).
+
+[2026-09-08] 🔴CRITICAL | Production 마이그레이션 455·456 적용 확인(Stephen 직접 적용) | supabase(vnbpmvxruyciuuaermyh) | DB 직접 조회 실증
+  Stephen이 "455, 456 프로덕션 적용 진행했으니 확인해" 요청 — sp3-qa-agent가 전날 지적한
+  배포순서 리스크(NOT NULL 제약 해제 마이그레이션 없이 코드만 배포되면 신규등록 실패)
+  해소 여부를 Supabase MCP로 Production DB 직접 재조회해 검증.
+
+  확인 결과: list_migrations에 products_allowed_method_ids_empty_to_null(20260907230302)·
+  products_allowed_pickup_ids_empty_to_null(20260907230314) 적용 이력 존재. 스키마 조회로
+  allowed_method_ids/allowed_pickup_ids 둘 다 is_nullable=YES 전환 확인(NOT NULL 해제).
+  데이터 조회로 두 컬럼 모두 잔존 빈배열({}) 0건, NULL 정정 각 335건(전체 443행) 확인 —
+  전량 정정 완료.
+
+  참고(비차단): 적용본의 마이그레이션 버전 타임스탬프·이름이 로컬 저장소 파일
+  (20260907050000_455_.../20260907060000_456_...)과 정확히 일치하지 않음(대시보드/MCP로
+  이름만 다르게 별도 적용된 것으로 추정) — 기능적으로는 동일 SQL 반영 확인됐으나 향후
+  supabase db diff 동기화 시 참고 필요. TASK.md 해당 NOW 블록을 DONE으로 전환.
+
 [2026-09-07(같은 날 7차 후속)] 🟢ROUTINE | 방문지점 콤보버튼 스타일 전용화 — 짧은 라벨용 .combo-btn 재사용 대신 직렬 목록(1행1버튼, 점명+주소 인라인, 상하패딩 30% 축소) 전용 스타일로 교체 | src/routes/cart/+page.svelte | 라이브 검증
   Stephen 재요청: 방금 만든 방문지점 콤보버튼이 방식선택용 .combo-btn(짧은 라벨 가로배열)을
   그대로 재사용해 지점명만 보이고 주소는 선택 후에만 하단에 별도 표시되던 것을,
