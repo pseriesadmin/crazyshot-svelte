@@ -1460,15 +1460,26 @@
     }
   }
 
-  // 쿠폰 할인 합산
+  // 쿠폰 할인 합산 — discount_type 3-way(fixed/percentage/그외)로 정확히 분기.
+  // ⚠️ 2026-09-08 수정: 기존엔 'fixed'가 아니면 전부 "정률(%)"로 취급해
+  // Math.round(otSubtotal * discount_value / 100)을 계산했는데, free_shipping 타입
+  // 쿠폰(discount_value가 원 단위 금액, 예: 3300)이 이 분기를 타면 주문금액의 3300%가
+  // 할인액으로 계산돼 otTotal이 0으로 클램프되는(사실상 전액 무료) 심각한 가격결함이었다.
+  // cartShippingFee.ts의 isFreeDeliveryCouponBlocked() 문서 주석(Stephen 확정,
+  // 2026-09-01)에 명시된 대로 "free_delivery 쿠폰이 실제로 배송료를 할인하는 계산 로직은
+  // 스코프 밖 — otCouponDiscount는 여전히 상품금액에만 적용된다"는 기존 결정을 그대로
+  // 따라, free_shipping(및 그 외 미정의 타입)은 상품금액 할인에 기여하지 않도록(0) 수정 —
+  // 배송료 자체에 쿠폰 효과를 반영하는 신규 로직은 이번 수정 범위가 아니다(기존 결정 유지).
   const otCouponDiscount = $derived(
     sdCoupons
       .filter((uc) => otSelectedCouponIds.has(uc.id) && uc.coupons !== null)
       .reduce((sum, uc) => {
         const c = uc.coupons!
-        return sum + (c.discount_type === 'fixed'
-          ? c.discount_value
-          : Math.round(otSubtotal * c.discount_value / 100))
+        const amount =
+          c.discount_type === 'fixed' ? c.discount_value :
+          c.discount_type === 'percentage' ? Math.round(otSubtotal * c.discount_value / 100) :
+          0
+        return sum + amount
       }, 0)
   )
 
