@@ -64,6 +64,16 @@ function parseIssuerSignatureWidth(raw: string | null): number | null {
   return Math.min(1200, Math.max(20, Math.round(n)))
 }
 
+// html형 발행자 서명·직인 이미지 위치 이동(드래그) 오프셋(px, Migration #463) —
+// contract-substitution.ts ISSUER_SIGNATURE_OFFSET_LIMIT과 동일 범위로 클램프. 빈 값/파싱
+// 실패는 0(중앙, 기존과 동일)으로 처리 — 필수 입력이 아니므로 에러로 막지 않는다.
+function parseIssuerSignatureOffset(raw: string | null): number {
+  if (!raw) return 0
+  const n = Number(raw)
+  if (!Number.isFinite(n)) return 0
+  return Math.min(2000, Math.max(-2000, Math.round(n)))
+}
+
 export type { ContractTemplate, ContractTemplateSummary }
 
 export const load: PageServerLoad = async ({ parent, url }) => {
@@ -84,7 +94,7 @@ export const load: PageServerLoad = async ({ parent, url }) => {
   if (selectedId) {
     const { data } = await admin
       .from('contract_templates')
-      .select('id, title, content_blocks, specifications, status, requires_issuer_signature, authoring_mode, canvas_document, spreadsheet_document, html_issuer_signature_url, html_issuer_signature_width, created_at, updated_at')
+      .select('id, title, content_blocks, specifications, status, requires_issuer_signature, authoring_mode, canvas_document, spreadsheet_document, html_issuer_signature_url, html_issuer_signature_width, html_issuer_signature_offset_x, html_issuer_signature_offset_y, contract_terms_text, privacy_terms_text, created_at, updated_at')
       .eq('id', selectedId)
       .is('deleted_at', null)
       .maybeSingle()
@@ -116,6 +126,10 @@ export const actions: Actions = {
     const htmlDocumentRaw          = form.get('html_document') as string | null
     const htmlIssuerSigUrlRaw      = (form.get('html_issuer_signature_url') as string | null)?.trim() || ''
     const htmlIssuerSigWidth       = parseIssuerSignatureWidth(form.get('html_issuer_signature_width') as string | null)
+    const htmlIssuerSigOffsetX     = parseIssuerSignatureOffset(form.get('html_issuer_signature_offset_x') as string | null)
+    const htmlIssuerSigOffsetY     = parseIssuerSignatureOffset(form.get('html_issuer_signature_offset_y') as string | null)
+    const htmlContractTermsTextRaw = (form.get('html_contract_terms_text') as string | null) ?? ''
+    const htmlPrivacyTermsTextRaw  = (form.get('html_privacy_terms_text') as string | null) ?? ''
     const specifications           = form.get('specifications') as string | null
     const requiresIssuerSignature  = form.get('requires_issuer_signature') === 'true'
     const authoringMode            = (form.get('authoring_mode') as string | null)?.trim() || 'flow'
@@ -181,6 +195,11 @@ export const actions: Actions = {
     if (authoringMode === 'html') {
       insertPayload.html_issuer_signature_url   = htmlIssuerSigUrlRaw || null
       insertPayload.html_issuer_signature_width = htmlIssuerSigUrlRaw ? htmlIssuerSigWidth : null
+      insertPayload.html_issuer_signature_offset_x = htmlIssuerSigUrlRaw ? htmlIssuerSigOffsetX : null
+      insertPayload.html_issuer_signature_offset_y = htmlIssuerSigUrlRaw ? htmlIssuerSigOffsetY : null
+      // Migration #464 — 서명 이미지 유무와 무관하게 항상 저장(빈 값이면 기본 문구 사용, null 처리)
+      insertPayload.contract_terms_text = htmlContractTermsTextRaw.trim() || null
+      insertPayload.privacy_terms_text  = htmlPrivacyTermsTextRaw.trim() || null
     }
 
     const { data, error } = await admin
@@ -211,6 +230,10 @@ export const actions: Actions = {
     const htmlDocumentRaw          = form.get('html_document') as string | null
     const htmlIssuerSigUrlRaw      = (form.get('html_issuer_signature_url') as string | null)?.trim() || ''
     const htmlIssuerSigWidth       = parseIssuerSignatureWidth(form.get('html_issuer_signature_width') as string | null)
+    const htmlIssuerSigOffsetX     = parseIssuerSignatureOffset(form.get('html_issuer_signature_offset_x') as string | null)
+    const htmlIssuerSigOffsetY     = parseIssuerSignatureOffset(form.get('html_issuer_signature_offset_y') as string | null)
+    const htmlContractTermsTextRaw = (form.get('html_contract_terms_text') as string | null) ?? ''
+    const htmlPrivacyTermsTextRaw  = (form.get('html_privacy_terms_text') as string | null) ?? ''
     const specifications           = form.get('specifications') as string | null
     const requiresIssuerSignature  = form.get('requires_issuer_signature') === 'true'
     const authoringMode            = (form.get('authoring_mode') as string | null)?.trim() || 'flow'
@@ -298,6 +321,11 @@ export const actions: Actions = {
     if (authoringMode === 'html') {
       updatePayload.html_issuer_signature_url   = htmlIssuerSigUrlRaw || null
       updatePayload.html_issuer_signature_width = htmlIssuerSigUrlRaw ? htmlIssuerSigWidth : null
+      updatePayload.html_issuer_signature_offset_x = htmlIssuerSigUrlRaw ? htmlIssuerSigOffsetX : null
+      updatePayload.html_issuer_signature_offset_y = htmlIssuerSigUrlRaw ? htmlIssuerSigOffsetY : null
+      // Migration #464 — 서명 이미지 유무와 무관하게 항상 저장(빈 값이면 기본 문구 사용, null 처리)
+      updatePayload.contract_terms_text = htmlContractTermsTextRaw.trim() || null
+      updatePayload.privacy_terms_text  = htmlPrivacyTermsTextRaw.trim() || null
     }
 
     const { error } = await admin

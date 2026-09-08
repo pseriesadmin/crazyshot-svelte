@@ -297,6 +297,25 @@ describe('applyIssuerSignatureMarker', () => {
     expect(tooSmall).toContain('width:20px')
     expect(tooBig).toContain('width:1200px')
   })
+
+  // 위치 이동(드래그) 오프셋 — Migration #463(2026-09-08, 6차 결정 반전)
+  it('offsetX/Y 미지정 시 기본 중앙 위치(오프셋 0)로 렌더링된다 — 하위호환', async () => {
+    const { applyIssuerSignatureMarker } = await import('$lib/utils/contract-substitution.js')
+    const result = applyIssuerSignatureMarker('<!--ISSUER_SIGNATURE-->', 'https://example.com/seal.png', 90)
+    expect(result).toContain('translate(calc(-50% + 0px), calc(-50% + 0px))')
+  })
+
+  it('offsetX/Y를 지정하면 그 값만큼 기본 중앙 위치에서 이동한 transform이 생성된다', async () => {
+    const { applyIssuerSignatureMarker } = await import('$lib/utils/contract-substitution.js')
+    const result = applyIssuerSignatureMarker('<!--ISSUER_SIGNATURE-->', 'https://example.com/seal.png', 90, 120, -45)
+    expect(result).toContain('translate(calc(-50% + 120px), calc(-50% + -45px))')
+  })
+
+  it('offsetX/Y는 -2000~2000 범위로 클램프된다 (레이아웃 이탈 방지 안전장치)', async () => {
+    const { applyIssuerSignatureMarker } = await import('$lib/utils/contract-substitution.js')
+    const tooFar = applyIssuerSignatureMarker('<!--ISSUER_SIGNATURE-->', 'https://example.com/seal.png', 90, 999999, -999999)
+    expect(tooFar).toContain('translate(calc(-50% + 2000px), calc(-50% + -2000px))')
+  })
 })
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -335,5 +354,88 @@ describe('applyCustomerSignatureMarker', () => {
     const { applyCustomerSignatureMarker } = await import('$lib/utils/contract-substitution.js')
     const html = '<td>(인)이기성</td>'
     expect(applyCustomerSignatureMarker(html, 'data:image/png;base64,AAAA')).toBe(html)
+  })
+})
+
+// ─────────────────────────────────────────────────────────────────────────────
+// applyDocumentQrMarker — 문서 진위확인 QR 마커 (2026-09-08 신설)
+// ─────────────────────────────────────────────────────────────────────────────
+describe('applyDocumentQrMarker', () => {
+  it('QR 데이터 미지정 시 마커를 빈 문자열로 제거한다', async () => {
+    const { applyDocumentQrMarker } = await import('$lib/utils/contract-substitution.js')
+    expect(applyDocumentQrMarker('<div><!--DOCUMENT_QR--></div>', null)).toBe('<div></div>')
+  })
+
+  it('유효한 data:image/png base64 문자열이면 <img> 태그로 치환한다', async () => {
+    const { applyDocumentQrMarker } = await import('$lib/utils/contract-substitution.js')
+    const dataUrl = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAAB'
+    const result = applyDocumentQrMarker('<!--DOCUMENT_QR-->', dataUrl)
+    expect(result).toContain('<img')
+    expect(result).toContain('doc-verify-qr')
+    expect(result).toContain(dataUrl)
+  })
+
+  it('data URI 접두사가 아니면(http URL 등) 차단되어 마커가 제거된다', async () => {
+    const { applyDocumentQrMarker } = await import('$lib/utils/contract-substitution.js')
+    const result = applyDocumentQrMarker('<!--DOCUMENT_QR-->', 'https://example.com/x.png')
+    expect(result).not.toContain('<img')
+  })
+
+  it('접두사만 맞고 콤마 뒤에 임의 문자열이 섞여 있으면(속성 인젝션 시도) 차단된다', async () => {
+    const { applyDocumentQrMarker } = await import('$lib/utils/contract-substitution.js')
+    const malicious = 'data:image/png;base64,AAAA" onerror="alert(1)'
+    const result = applyDocumentQrMarker('<!--DOCUMENT_QR-->', malicious)
+    expect(result).not.toContain('<img')
+    expect(result).not.toContain('onerror')
+  })
+
+  it('마커가 없는 원문은 그대로 반환한다(레거시 계약 무영향)', async () => {
+    const { applyDocumentQrMarker } = await import('$lib/utils/contract-substitution.js')
+    const html = '<p>(계약서 발행일시: 2026.09.08)</p>'
+    expect(applyDocumentQrMarker(html, 'data:image/png;base64,AAAA')).toBe(html)
+  })
+})
+
+// ─────────────────────────────────────────────────────────────────────────────
+// applyContractTermsMarker / applyPrivacyTermsMarker — 계약조항·개인정보동의 문단
+// 단순 텍스트 편집(Migration #464, 2026-09-08 신설)
+// ─────────────────────────────────────────────────────────────────────────────
+describe('applyContractTermsMarker / applyPrivacyTermsMarker', () => {
+  it('텍스트 미지정(null) 시 기본 문구가 사용된다 — 하위호환', async () => {
+    const { applyContractTermsMarker, DEFAULT_CONTRACT_TERMS_TEXT } = await import('$lib/utils/contract-substitution.js')
+    const result = applyContractTermsMarker('<div><!--CONTRACT_TERMS--></div>', null)
+    expect(result).toContain('<p>')
+    expect(result).toContain(DEFAULT_CONTRACT_TERMS_TEXT.split('\n\n')[0])
+  })
+
+  it('빈 문자열도 기본 문구로 대체된다', async () => {
+    const { applyPrivacyTermsMarker } = await import('$lib/utils/contract-substitution.js')
+    const result = applyPrivacyTermsMarker('<div><!--PRIVACY_TERMS--></div>', '   ')
+    expect(result).toContain('[신원 검증]')
+  })
+
+  it('빈 줄로 구분된 문단이 각각 <p> 태그로 분리된다', async () => {
+    const { applyContractTermsMarker } = await import('$lib/utils/contract-substitution.js')
+    const result = applyContractTermsMarker('<!--CONTRACT_TERMS-->', '첫째 문단입니다.\n\n둘째 문단입니다.')
+    expect(result).toBe('<p>첫째 문단입니다.</p><p>둘째 문단입니다.</p>')
+  })
+
+  it('문단 맨 앞 "[라벨]"은 자동으로 <strong>처리된다', async () => {
+    const { applyPrivacyTermsMarker } = await import('$lib/utils/contract-substitution.js')
+    const result = applyPrivacyTermsMarker('<!--PRIVACY_TERMS-->', '[보안 관리]내용입니다.')
+    expect(result).toBe('<p><strong>[보안 관리]</strong>내용입니다.</p>')
+  })
+
+  it('텍스트는 escapeHtml로 이스케이프된다 (XSS 방어)', async () => {
+    const { applyContractTermsMarker } = await import('$lib/utils/contract-substitution.js')
+    const result = applyContractTermsMarker('<!--CONTRACT_TERMS-->', '<script>alert(1)</script>')
+    expect(result).not.toContain('<script>')
+    expect(result).toContain('&lt;script&gt;')
+  })
+
+  it('마커가 없는 원문은 그대로 반환한다', async () => {
+    const { applyContractTermsMarker } = await import('$lib/utils/contract-substitution.js')
+    const html = '<div>다른 내용</div>'
+    expect(applyContractTermsMarker(html, '아무 텍스트')).toBe(html)
   })
 })

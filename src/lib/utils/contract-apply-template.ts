@@ -52,6 +52,12 @@ export interface ApplyTemplateOptions {
   htmlIssuerSignatureUrl?: string | null
   /** HTML 고정 템플릿의 발행자 서명·직인 이미지 너비(px, Migration #451). 렌더링은 htmlDocument에 이미 구워져 있어 감사·참고 용도. */
   htmlIssuerSignatureWidth?: number | null
+  /**
+   * HTML 고정 템플릿의 발행자 서명·직인 이미지 위치 이동 오프셋(px, Migration #463).
+   * width와 동일하게 렌더링은 htmlDocument에 이미 구워져 있어 감사·참고 용도.
+   */
+  htmlIssuerSignatureOffsetX?: number | null
+  htmlIssuerSignatureOffsetY?: number | null
 }
 
 export type ApplyTemplateResult =
@@ -97,6 +103,8 @@ export async function applyContractTemplate(
         ...(opts.htmlDocument != null        ? { html_document:          opts.htmlDocument }        : {}),
         ...(opts.htmlIssuerSignatureUrl !== undefined ? { html_issuer_signature_url: opts.htmlIssuerSignatureUrl } : {}),
         ...(opts.htmlIssuerSignatureWidth !== undefined ? { html_issuer_signature_width: opts.htmlIssuerSignatureWidth } : {}),
+        ...(opts.htmlIssuerSignatureOffsetX !== undefined ? { html_issuer_signature_offset_x: opts.htmlIssuerSignatureOffsetX } : {}),
+        ...(opts.htmlIssuerSignatureOffsetY !== undefined ? { html_issuer_signature_offset_y: opts.htmlIssuerSignatureOffsetY } : {}),
       }),
     }
   )

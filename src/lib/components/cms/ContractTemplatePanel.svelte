@@ -19,7 +19,7 @@
   import { isTiptapDocBlock, isCanvasDocument, hasSignatureField, isSpreadsheetDocument, isHtmlDocument } from '$lib/types/contract-document'
   import type { TiptapDocBlock, MergeFieldAttrs, CanvasDocument, ContractCanvasPayload, SpreadsheetDocument } from '$lib/types/contract-document'
   import { DEFAULT_RENTAL_CONTRACT_HTML } from '$lib/components/cms/contract-editor/templates/defaultRentalContractHtml'
-  import { applyIssuerSignatureMarker, applySpecialNotesMarker } from '$lib/utils/contract-substitution'
+  import { applyIssuerSignatureMarker, applySpecialNotesMarker, applyContractTermsMarker, applyPrivacyTermsMarker } from '$lib/utils/contract-substitution'
   import type { ContractTemplate } from '$lib/types/contract-template'
   import type { JSONContent } from '@tiptap/core'
 
@@ -83,7 +83,13 @@
   // html 모드 발행자 서명·직인 이미지 URL/너비(Migration #450/#451) — $effect 동기화는 위 Pattern 1과 동일
   let htmlIssuerSignatureUrl   = $state<string | null>(null)
   let htmlIssuerSignatureWidth = $state<number | null>(null)
+  // 위치 이동(드래그) 오프셋(px, Migration #463) — 기본 중앙 위치 대비 델타값. 0/null = 중앙(기존과 동일)
+  let htmlIssuerSignatureOffsetX = $state<number>(0)
+  let htmlIssuerSignatureOffsetY = $state<number>(0)
   const HTML_SIG_DEFAULT_WIDTH = 90
+  // "계약 및 인수 확인"·"개인정보동의" 문단 텍스트(Migration #464) — 빈 문자열 = 기본 문구 사용
+  let htmlContractTermsText = $state<string>('')
+  let htmlPrivacyTermsText  = $state<string>('')
 
   // --------------------------------------------------------------------------
   // isDirty 판정 — spreadsheet 모드 "수정 저장" 버튼 활성/비활성 (2026-08-28 Stephen 요청)
@@ -106,6 +112,10 @@
   let flowContentDirty            = $state(false)
   let origHtmlIssuerSignatureUrl: string | null   = null
   let origHtmlIssuerSignatureWidth: number | null = null
+  let origHtmlIssuerSignatureOffsetX = 0
+  let origHtmlIssuerSignatureOffsetY = 0
+  let origHtmlContractTermsText = ''
+  let origHtmlPrivacyTermsText  = ''
 
   $effect(() => {
     // ⛔ 반드시 로컬 상수에 먼저 계산해두고 그 값을 $state에 대입 + origXxx 스냅샷
@@ -123,9 +133,14 @@
     const nextAuthoringMode = template
       ? ((template.authoring_mode as 'flow' | 'canvas' | 'spreadsheet' | 'html') ?? 'flow')
       : null
-    // html 모드 발행자 서명·직인 이미지 URL/너비(Migration #450/#451) — 템플릿 로드 시 동기화
+    // html 모드 발행자 서명·직인 이미지 URL/너비/위치(Migration #450/#451/#463) — 템플릿 로드 시 동기화
     const nextHtmlIssuerSignatureUrl   = template?.html_issuer_signature_url ?? null
     const nextHtmlIssuerSignatureWidth = template?.html_issuer_signature_width ?? null
+    const nextHtmlIssuerSignatureOffsetX = template?.html_issuer_signature_offset_x ?? 0
+    const nextHtmlIssuerSignatureOffsetY = template?.html_issuer_signature_offset_y ?? 0
+    // "계약 및 인수 확인"·"개인정보동의" 문단 텍스트(Migration #464) — 템플릿 로드 시 동기화
+    const nextHtmlContractTermsText = template?.contract_terms_text ?? ''
+    const nextHtmlPrivacyTermsText  = template?.privacy_terms_text ?? ''
 
     specs                     = nextSpecs
     title                     = nextTitle
@@ -133,6 +148,10 @@
     authoringMode             = nextAuthoringMode
     htmlIssuerSignatureUrl    = nextHtmlIssuerSignatureUrl
     htmlIssuerSignatureWidth  = nextHtmlIssuerSignatureWidth
+    htmlIssuerSignatureOffsetX = nextHtmlIssuerSignatureOffsetX
+    htmlIssuerSignatureOffsetY = nextHtmlIssuerSignatureOffsetY
+    htmlContractTermsText     = nextHtmlContractTermsText
+    htmlPrivacyTermsText      = nextHtmlPrivacyTermsText
 
     // isDirty 비교 기준 스냅샷 갱신 + 그리드/문서 변경 플래그 초기화(양식 전환·재로드 시점)
     origTitle                   = nextTitle
@@ -140,6 +159,10 @@
     origRequiresIssuerSignature = nextRequiresIssuerSignature
     origHtmlIssuerSignatureUrl  = nextHtmlIssuerSignatureUrl
     origHtmlIssuerSignatureWidth = nextHtmlIssuerSignatureWidth
+    origHtmlIssuerSignatureOffsetX = nextHtmlIssuerSignatureOffsetX
+    origHtmlIssuerSignatureOffsetY = nextHtmlIssuerSignatureOffsetY
+    origHtmlContractTermsText   = nextHtmlContractTermsText
+    origHtmlPrivacyTermsText    = nextHtmlPrivacyTermsText
     spreadsheetContentDirty     = false
     flowContentDirty            = false
   })
@@ -159,7 +182,11 @@
     (authoringMode === 'flow' && flowContentDirty) ||
     (authoringMode === 'html' && (
       htmlIssuerSignatureUrl !== origHtmlIssuerSignatureUrl ||
-      htmlIssuerSignatureWidth !== origHtmlIssuerSignatureWidth
+      htmlIssuerSignatureWidth !== origHtmlIssuerSignatureWidth ||
+      htmlIssuerSignatureOffsetX !== origHtmlIssuerSignatureOffsetX ||
+      htmlIssuerSignatureOffsetY !== origHtmlIssuerSignatureOffsetY ||
+      htmlContractTermsText !== origHtmlContractTermsText ||
+      htmlPrivacyTermsText !== origHtmlPrivacyTermsText
     ))
   )
 
@@ -320,12 +347,15 @@
   function selectHtmlSigAsset(asset: HtmlSigAsset) {
     htmlIssuerSignatureUrl   = asset.image_url
     htmlIssuerSignatureWidth = HTML_SIG_DEFAULT_WIDTH
+    // 새 이미지를 고르면 항상 기본 중앙 위치에서 다시 시작(2026-09-08, Migration #463)
+    htmlIssuerSignatureOffsetX = 0
+    htmlIssuerSignatureOffsetY = 0
     showHtmlSigPicker = false
   }
 
   // 크기조절 툴바(ContractSpreadsheetEditor.svelte 소(100)/중(200)/대(400)+커스텀 입력과
-  // 동일 인터랙션 — 위치 이동은 HTML형에 해당 없음) — 서버측 20~1200 클램프는
-  // applyIssuerSignatureMarker()가 재검증하므로 여기서는 UX 편의 목적만
+  // 동일 인터랙션) — 서버측 20~1200 클램프는 applyIssuerSignatureMarker()가 재검증하므로
+  // 여기서는 UX 편의 목적만
   function setHtmlSigWidth(px: number) {
     if (!Number.isFinite(px) || px <= 0) return
     htmlIssuerSignatureWidth = Math.min(1200, Math.max(20, Math.round(px)))
@@ -334,6 +364,8 @@
   function removeHtmlSigAsset() {
     htmlIssuerSignatureUrl   = null
     htmlIssuerSignatureWidth = null
+    htmlIssuerSignatureOffsetX = 0
+    htmlIssuerSignatureOffsetY = 0
   }
 
   // 팝오버 외부 클릭 시 닫기 (ContractDocumentEditor.svelte 동일 패턴)
@@ -367,9 +399,21 @@
   let docSigToolbarBelow = $state(false)
 
   const previewHtml = $derived(
-    applySpecialNotesMarker(
-      applyIssuerSignatureMarker(DEFAULT_RENTAL_CONTRACT_HTML, htmlIssuerSignatureUrl, htmlIssuerSignatureWidth),
-      specs,
+    applyPrivacyTermsMarker(
+      applyContractTermsMarker(
+        applySpecialNotesMarker(
+          applyIssuerSignatureMarker(
+            DEFAULT_RENTAL_CONTRACT_HTML,
+            htmlIssuerSignatureUrl,
+            htmlIssuerSignatureWidth,
+            htmlIssuerSignatureOffsetX,
+            htmlIssuerSignatureOffsetY,
+          ),
+          specs,
+        ),
+        htmlContractTermsText,
+      ),
+      htmlPrivacyTermsText,
     )
   )
 
@@ -388,27 +432,110 @@
     }
   }
 
+  // 위치 이동(드래그) 오프셋 클램프 — contract-substitution.ts ISSUER_SIGNATURE_OFFSET_LIMIT과 동일 범위(UX 편의 목적, 서버가 최종 재검증)
+  const HTML_SIG_OFFSET_LIMIT = 2000
+  function clampSigOffset(v: number): number {
+    return Math.min(HTML_SIG_OFFSET_LIMIT, Math.max(-HTML_SIG_OFFSET_LIMIT, Math.round(v)))
+  }
+
   $effect(() => {
     void previewHtml // {@html} 재생성 시마다 새 <img> 엘리먼트를 다시 찾아 리스너 재바인딩
     const container = htmlPreviewDocEl
-    const img = container?.querySelector<HTMLImageElement>('.issuer-sig-overlay')
-    if (!container || !img) {
+    const imgEl = container?.querySelector<HTMLImageElement>('.issuer-sig-overlay')
+    if (!container || !imgEl) {
       showDocSigToolbar = false
       return
     }
+    // TS는 중첩 클로저(onPointerDown 등) 안에서 위 null 가드로 좁혀진 타입을 유지하지
+    // 못한다(narrowing이 함수 경계를 넘지 못함) — 재대입되지 않는 별도 const로 다시 잡아
+    // 클로저 안에서도 non-null로 취급되게 한다.
+    const img: HTMLImageElement = imgEl
     // 고객·서명 화면에서는 pointer-events:none(클릭 통과)이 기본이지만, 이 편집 패널의
     // 미리보기에서만 인라인 스타일로 재활성화 — 다른 렌더링 지점(고객 서명 페이지 등)에는
     // 영향 없음(그쪽은 이 컴포넌트를 거치지 않음).
-    img.style.cursor = 'pointer'
+    img.style.cursor = 'grab'
     img.style.pointerEvents = 'auto'
+    img.style.userSelect = 'none'
+    img.style.touchAction = 'none'
+
+    // ------------------------------------------------------------------------
+    // 위치 이동(드래그) 인터랙션(Migration #463, 2026-09-08) — "직인이 표 칸 중앙에 고정돼
+    // 원하는 위치로 옮길 수 없다"는 실사용 피드백에 따라 신규 추가. 기존 클릭→크기조절
+    // 툴바 토글 기능(onImgClick)은 그대로 유지하고, "움직임 없는 클릭"과 "드래그"를
+    // 구분해 드래그 종료 시에는 툴바를 열고 닫지 않는다.
+    //
+    // 매 mousemove마다 $state(htmlIssuerSignatureOffsetX/Y)를 갱신하면 {@html previewHtml}가
+    // 통째로 재생성돼(img 노드 자체가 매 프레임 교체) 끊김이 생긴다 — 드래그 중에는 DOM에
+    // 직접 transform만 적용해 60fps로 부드럽게 움직이고, 손을 뗀 시점(pointerup)에만 최종
+    // 값을 $state에 커밋해 1회만 재생성되도록 분리했다.
+    // ------------------------------------------------------------------------
+    let isDragging       = false
+    let dragMoved         = false
+    let dragStartX        = 0
+    let dragStartY        = 0
+    let dragStartOffsetX  = 0
+    let dragStartOffsetY  = 0
+    const DRAG_MOVE_THRESHOLD = 4 // 이 값 미만 이동은 "클릭"으로 간주(토글 유지)
+
     function onImgClick(e: MouseEvent): void {
       e.stopPropagation()
+      if (dragMoved) { dragMoved = false; return } // 방금 드래그 종료 직후의 합성 click 이벤트는 토글 무시
       showDocSigToolbar = !showDocSigToolbar
       if (showDocSigToolbar) positionDocSigToolbar()
     }
+
+    function onPointerDown(e: PointerEvent): void {
+      if (e.button !== 0) return
+      e.preventDefault()
+      e.stopPropagation()
+      isDragging      = true
+      dragMoved        = false
+      dragStartX       = e.clientX
+      dragStartY       = e.clientY
+      dragStartOffsetX = htmlIssuerSignatureOffsetX
+      dragStartOffsetY = htmlIssuerSignatureOffsetY
+      img.style.cursor = 'grabbing'
+      img.setPointerCapture(e.pointerId)
+    }
+
+    function onPointerMove(e: PointerEvent): void {
+      if (!isDragging) return
+      const dx = e.clientX - dragStartX
+      const dy = e.clientY - dragStartY
+      if (!dragMoved && (Math.abs(dx) > DRAG_MOVE_THRESHOLD || Math.abs(dy) > DRAG_MOVE_THRESHOLD)) dragMoved = true
+      if (!dragMoved) return
+      const nx = clampSigOffset(dragStartOffsetX + dx)
+      const ny = clampSigOffset(dragStartOffsetY + dy)
+      img.style.transform = `translate(calc(-50% + ${nx}px), calc(-50% + ${ny}px))`
+      if (showDocSigToolbar) positionDocSigToolbar()
+    }
+
+    function onPointerUp(e: PointerEvent): void {
+      if (!isDragging) return
+      isDragging = false
+      img.style.cursor = 'grab'
+      try { img.releasePointerCapture(e.pointerId) } catch { /* 이미 해제된 경우 무시 */ }
+      if (dragMoved) {
+        const dx = e.clientX - dragStartX
+        const dy = e.clientY - dragStartY
+        // previewHtml 재파생(§ $derived 위)이 동일한 최종값으로 img를 다시 그려주므로
+        // 여기서 별도로 DOM을 되돌리지 않아도 값이 어긋나지 않는다.
+        htmlIssuerSignatureOffsetX = clampSigOffset(dragStartOffsetX + dx)
+        htmlIssuerSignatureOffsetY = clampSigOffset(dragStartOffsetY + dy)
+      }
+    }
+
     img.addEventListener('click', onImgClick)
+    img.addEventListener('pointerdown', onPointerDown)
+    window.addEventListener('pointermove', onPointerMove)
+    window.addEventListener('pointerup', onPointerUp)
     if (showDocSigToolbar) positionDocSigToolbar()
-    return () => img.removeEventListener('click', onImgClick)
+    return () => {
+      img.removeEventListener('click', onImgClick)
+      img.removeEventListener('pointerdown', onPointerDown)
+      window.removeEventListener('pointermove', onPointerMove)
+      window.removeEventListener('pointerup', onPointerUp)
+    }
   })
 
   // 문서 밖 클릭 시 툴바 닫기
@@ -845,6 +972,10 @@
         <input type="hidden" name="html_document" value={DEFAULT_RENTAL_CONTRACT_HTML} />
         <input type="hidden" name="html_issuer_signature_url" value={htmlIssuerSignatureUrl ?? ''} />
         <input type="hidden" name="html_issuer_signature_width" value={htmlIssuerSignatureWidth ?? ''} />
+        <input type="hidden" name="html_issuer_signature_offset_x" value={htmlIssuerSignatureOffsetX} />
+        <input type="hidden" name="html_issuer_signature_offset_y" value={htmlIssuerSignatureOffsetY} />
+        <input type="hidden" name="html_contract_terms_text" value={htmlContractTermsText} />
+        <input type="hidden" name="html_privacy_terms_text" value={htmlPrivacyTermsText} />
         <div class="html-preview-wrap">
           <div class="html-preview-label">
             <span>HTML 고정 서식 미리보기</span>
@@ -865,7 +996,7 @@
                 alt="발행자 서명/직인 미리보기"
                 class="html-sig-preview"
               />
-              <span class="html-sig-hint">아래 문서 안의 도장 이미지를 클릭하면 크기를 조절할 수 있습니다.</span>
+              <span class="html-sig-hint">아래 문서 안의 도장 이미지를 클릭하면 크기를 조절할 수 있고, 마우스로 끌어 원하는 위치로 옮길 수 있습니다.</span>
               <button type="button" class="btn-sig-cancel" onclick={removeHtmlSigAsset} aria-label="발행자 서명·직인 이미지 삭제">제거</button>
             {:else}
               <button
@@ -919,7 +1050,7 @@
                 class:html-sig-toolbar--below={docSigToolbarBelow}
                 style="top:{docSigToolbarPos.top}px; left:{docSigToolbarPos.left}px;"
                 role="group"
-                aria-label="서명·직인 이미지 크기 조절"
+                aria-label="서명·직인 이미지 크기·위치 조절"
               >
                 <button type="button" class="html-sig-tbtn" title="너비 100px" onclick={() => setHtmlSigWidth(100)}>소(100)</button>
                 <button type="button" class="html-sig-tbtn" title="너비 200px" onclick={() => setHtmlSigWidth(200)}>중(200)</button>
@@ -937,6 +1068,16 @@
                   aria-label="서명·직인 이미지 너비(px)"
                 />
                 <span class="html-sig-tsep"></span>
+                <!-- 위치 초기화(Migration #463, 2026-09-08 신규) — 문서 안 이미지를 직접 드래그해
+                     이동한 뒤, 기본 중앙 위치로 손쉽게 되돌릴 수 있는 탈출구. -->
+                <button
+                  type="button"
+                  class="html-sig-tbtn"
+                  title="가운데로 되돌리기"
+                  onclick={() => { htmlIssuerSignatureOffsetX = 0; htmlIssuerSignatureOffsetY = 0 }}
+                  aria-label="발행자 서명·직인 이미지 위치 초기화"
+                >위치 초기화</button>
+                <span class="html-sig-tsep"></span>
                 <button type="button" class="html-sig-tbtn html-sig-tbtn--danger" title="이미지 삭제" onclick={() => { removeHtmlSigAsset(); showDocSigToolbar = false }} aria-label="발행자 서명·직인 이미지 삭제">✕</button>
               </div>
             {/if}
@@ -948,6 +1089,10 @@
             htmlMode={true}
             specifications={specs}
             onSpecsChange={(s: { key: string; value: string }[]) => { specs = s }}
+            contractTermsText={htmlContractTermsText}
+            onContractTermsChange={(v: string) => { htmlContractTermsText = v }}
+            privacyTermsText={htmlPrivacyTermsText}
+            onPrivacyTermsChange={(v: string) => { htmlPrivacyTermsText = v }}
           />
         </div>
       {:else}

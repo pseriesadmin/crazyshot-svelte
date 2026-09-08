@@ -30,6 +30,7 @@
    */
 
   import type { MergeFieldAttrs } from '$lib/types/contract-document'
+  import { DEFAULT_CONTRACT_TERMS_TEXT, DEFAULT_PRIVACY_TERMS_TEXT } from '$lib/utils/contract-substitution'
 
   interface SpecRow {
     key: string
@@ -45,28 +46,50 @@
     onSpecsChange: (specs: SpecRow[]) => void
     /**
      * HTML형 고정 서식 모드.
-     * true일 때: 변수 삽입 탭(계약자/상품/결제)을 숨기고 특약 탭만 노출.
+     * true일 때: 변수 삽입 탭(계약자/상품/결제)을 숨기고 특약·계약조항·개인정보동의 탭만 노출.
      * HTML형은 모든 변수가 발행 시점에 자동 치환되므로 관리자가 직접 삽입할 필요가 없다.
      */
     htmlMode?: boolean
+    /**
+     * HTML형 전용(Migration #464, 2026-09-08 신규) — "계약 및 인수 확인"·"개인정보동의"
+     * 섹션 문단 텍스트(쌍방향). htmlMode=false일 때는 사용되지 않음(옵셔널).
+     */
+    contractTermsText?: string
+    onContractTermsChange?: (text: string) => void
+    privacyTermsText?: string
+    onPrivacyTermsChange?: (text: string) => void
   }
 
-  let { onInsertField, specifications, onSpecsChange, htmlMode = false }: Props = $props()
+  let {
+    onInsertField, specifications, onSpecsChange, htmlMode = false,
+    contractTermsText = '', onContractTermsChange, privacyTermsText = '', onPrivacyTermsChange,
+  }: Props = $props()
 
   // --------------------------------------------------------------------------
   // 탭 정의
   // --------------------------------------------------------------------------
-  type TabKey = '계약자정보' | '상품정보' | '결제정보' | '특약'
+  type TabKey = '계약자정보' | '상품정보' | '결제정보' | '특약' | '계약조항' | '개인정보동의'
 
   const ALL_TABS: { key: TabKey; label: string }[] = [
-    { key: '계약자정보', label: '계약자' },
-    { key: '상품정보',   label: '상품' },
-    { key: '결제정보',   label: '결제' },
-    { key: '특약',       label: '특약' },
+    { key: '계약자정보',   label: '계약자' },
+    { key: '상품정보',     label: '상품' },
+    { key: '결제정보',     label: '결제' },
+    { key: '특약',         label: '특약' },
+    { key: '계약조항',     label: '계약조항' },
+    { key: '개인정보동의', label: '개인정보' },
   ]
 
-  // HTML 모드에서는 특약 탭만 노출 (변수 삽입 탭은 불필요 — 자동 치환됨)
-  const TABS = $derived(htmlMode ? ALL_TABS.filter(t => t.key === '특약') : ALL_TABS)
+  const HTML_TAB_KEYS: TabKey[] = ['특약', '계약조항', '개인정보동의']
+  // html 모드 전용 탭 중 '특약'만 non-html 모드(flow)에서도 계속 노출됨(기존 동작 유지) —
+  // '계약조항'·'개인정보동의'는 html 고정 서식 전용 섹션이라 flow 모드에는 대응 위치가 없음.
+  const HTML_ONLY_TAB_KEYS: TabKey[] = ['계약조항', '개인정보동의']
+
+  // HTML 모드: 특약·계약조항·개인정보동의 탭만 노출 / 그 외 모드: 기존 4탭 그대로
+  const TABS = $derived(
+    htmlMode
+      ? ALL_TABS.filter(t => HTML_TAB_KEYS.includes(t.key))
+      : ALL_TABS.filter(t => !HTML_ONLY_TAB_KEYS.includes(t.key))
+  )
 
   // HTML 모드 진입 시 activeTab을 항상 '특약'으로 초기화
   let activeTab = $state<TabKey>(htmlMode ? '특약' : '계약자정보')
@@ -78,7 +101,7 @@
   // 변수 카탈로그 (ContractSubstitutionData 21개 스칼라 변수 중 UI 노출분)
   // NOTE: 수량은 실제 예약 건수 반영(2026-09-03 정정 — 과거 '항상 1' 하드코딩은 폐기)
   // --------------------------------------------------------------------------
-  const FIELD_GROUPS: Record<Exclude<TabKey, '특약'>, MergeFieldAttrs[]> = {
+  const FIELD_GROUPS: Record<Exclude<TabKey, '특약' | '계약조항' | '개인정보동의'>, MergeFieldAttrs[]> = {
     계약자정보: [
       { variable: '고객이름', label: '고객이름' },
       { variable: '연락처',   label: '연락처' },
@@ -143,24 +166,7 @@
 
   <!-- 탭 콘텐츠 -->
   <div class="cfp-body">
-    {#if activeTab !== '특약'}
-      <!-- 변수 칩 목록 -->
-      <p class="cfp-hint">클릭하면 커서 위치에 변수가 삽입됩니다.</p>
-      <div class="cfp-chips">
-        {#each FIELD_GROUPS[activeTab] as field (field.variable)}
-          <button
-            type="button"
-            class="cfp-chip"
-            onmousedown={(e) => { e.preventDefault(); e.stopPropagation() }}
-            onclick={() => onInsertField(field)}
-            title={`{{${field.variable}}} 삽입`}
-          >
-            <span class="chip-label">{field.label}</span>
-            <span class="chip-var">{`{{${field.variable}}}`}</span>
-          </button>
-        {/each}
-      </div>
-    {:else}
+    {#if activeTab === '특약'}
       <!-- 특약 조항 key-value 관리 (P3-2) -->
       <p class="cfp-hint">특약은 관리자가 직접 입력하는 고정 텍스트입니다.</p>
       <div class="spec-list">
@@ -191,6 +197,48 @@
         {/each}
       </div>
       <button type="button" class="add-row-btn" onclick={addSpec}>+ 항목 추가</button>
+    {:else if activeTab === '계약조항' || activeTab === '개인정보동의'}
+      <!-- "계약 및 인수 확인"·"개인정보동의" 문단 단순 텍스트 편집(Migration #464, 2026-09-08 신규) -->
+      <p class="cfp-hint">
+        빈 줄로 문단을 나눕니다. 문단 맨 앞을 <code>[라벨]</code> 형태로 쓰면 그 부분만 굵게
+        표시됩니다. 비워두면 기본 문구가 그대로 사용됩니다.
+      </p>
+      <textarea
+        class="cfp-terms-textarea"
+        placeholder={activeTab === '계약조항' ? DEFAULT_CONTRACT_TERMS_TEXT : DEFAULT_PRIVACY_TERMS_TEXT}
+        value={activeTab === '계약조항' ? contractTermsText : privacyTermsText}
+        oninput={(e) => {
+          const v = (e.target as HTMLTextAreaElement).value
+          if (activeTab === '계약조항') onContractTermsChange?.(v)
+          else onPrivacyTermsChange?.(v)
+        }}
+        aria-label={activeTab === '계약조항' ? '계약 및 인수 확인 문단 텍스트' : '개인정보동의 문단 텍스트'}
+      ></textarea>
+      <button
+        type="button"
+        class="add-row-btn"
+        onclick={() => {
+          if (activeTab === '계약조항') onContractTermsChange?.('')
+          else onPrivacyTermsChange?.('')
+        }}
+      >기본 문구로 되돌리기</button>
+    {:else}
+      <!-- 변수 칩 목록 -->
+      <p class="cfp-hint">클릭하면 커서 위치에 변수가 삽입됩니다.</p>
+      <div class="cfp-chips">
+        {#each FIELD_GROUPS[activeTab] as field (field.variable)}
+          <button
+            type="button"
+            class="cfp-chip"
+            onmousedown={(e) => { e.preventDefault(); e.stopPropagation() }}
+            onclick={() => onInsertField(field)}
+            title={`{{${field.variable}}} 삽입`}
+          >
+            <span class="chip-label">{field.label}</span>
+            <span class="chip-var">{`{{${field.variable}}}`}</span>
+          </button>
+        {/each}
+      </div>
     {/if}
   </div>
 </div>
@@ -351,5 +399,28 @@
   .add-row-btn:hover {
     border-color: var(--cs-purple, #3B2F8A);
     color: var(--cs-purple, #3B2F8A);
+  }
+
+  /* 계약조항·개인정보동의 단순 텍스트 편집(Migration #464) */
+  .cfp-terms-textarea {
+    flex: 1;
+    min-height: 220px;
+    padding: 8px 10px;
+    border: 1px solid #DDDDDD;
+    border-radius: var(--cms-radius-sm, 8px);
+    font: var(--text-pc-script-12, 12px);
+    line-height: 1.6;
+    color: var(--cs-text, #100B32);
+    outline: none;
+    resize: vertical;
+    box-sizing: border-box;
+    width: 100%;
+  }
+  .cfp-terms-textarea:focus { border-color: var(--cs-purple, #3B2F8A); }
+  .cfp-hint code {
+    padding: 1px 4px;
+    background: var(--cs-surface-gray, #f6f6f6);
+    border-radius: 4px;
+    font-family: monospace;
   }
 </style>
