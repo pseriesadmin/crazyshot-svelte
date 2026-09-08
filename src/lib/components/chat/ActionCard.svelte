@@ -380,7 +380,11 @@
              상품별 개별 카드 대신 하나의 카드 안에 항목 목록으로 표시 -->
         {#if payload.items && payload.items.length > 1}
           <ul class="items-list">
-            {#each payload.items as it (it.reservation_no)}
+            <!-- 예약코드(reservation_no)는 2026-08-31 Migration 400부터 "주문 단위"로 통일되어,
+                 같은 주문에 묶인 항목들이 전부 동일한 값을 공유한다(products.md·TASK.md 참고) —
+                 더 이상 항목별 고유키가 아니므로 인덱스를 섞어 키 충돌을 방지한다
+                 (2026-09-08, 실사용 중 each_key_duplicate 크래시로 발견). -->
+            {#each payload.items as it, idx (`${it.reservation_no}-${idx}`)}
               <li class="items-list-row">
                 <span class="items-list-name">{it.product_name}</span>
                 <span class="items-list-no">{it.reservation_no}</span>

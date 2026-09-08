@@ -32,6 +32,233 @@ GATE E: ✅ 통과 — 커밋은 Stephen 직접 실행 대기. (1차·2차 검�
 
 ---
 
+## DONE — 🟡 BOUNDARY: 계약서 양식 편집 화면 "수정 저장" 버튼에 변경감지(isDirty) 게이팅 적용 — flow/html 모드 (2026-09-08, 이 세션, ✅ GATE E 통과)
+
+### 배경
+
+Stephen이 `/cms/reservation/contracts` 양식 편집 화면의 "수정 저장" 버튼을 선택해 지시:
+"변경된 내용 없으면 비활성 로직 반영. 다른 계약서 편집 UI와 동일." — 이 화면의 spreadsheet
+모드는 이미 2026-08-28에 이 게이팅(isSpreadsheetDirty)이 적용돼 있었으나, flow(TipTap
+문서형)·html(고정 서식형) 모드는 그 규칙이 누락돼 양식 선택 즉시 항상 활성 상태였음.
+
+### 구현
+
+`src/lib/components/cms/contract-editor/ContractDocumentEditor.svelte`:
+- TipTap 에디터는 내부 상태가 Svelte 리액티비티 밖이라(그리드형 에디터와 동일한 제약)
+  기존 ContractSpreadsheetEditor의 onchange 콜백 패턴을 그대로 재사용 — 신규 onchange
+  prop 추가 + createEditor 설정에 onUpdate 콜백으로 연결.
+
+`src/lib/components/cms/ContractTemplatePanel.svelte`:
+- 기존 isSpreadsheetDirty(제목·특약조항·서명필수여부 스냅샷 비교) 패턴을 그대로 확장.
+- flowContentDirty 신규 상태값(ContractDocumentEditor onchange로 세팅) + html 모드 전용
+  발행자 서명·직인 URL/너비 스냅샷(origHtmlIssuerSignatureUrl/Width) 추가.
+- isFlowOrHtmlDirty 신규 파생값 — 공통(제목·특약·서명필수) + 모드별(flow는
+  flowContentDirty, html은 서명·직인 URL/너비 변경 여부)을 합산.
+- flow/html 공용 "수정 저장" 버튼에 `disabled={saving || (!!template && !isFlowOrHtmlDirty)}`
+  적용(spreadsheet 버튼과 완전히 동일한 게이팅 문법) — 신규 양식 등록은 기존처럼 게이팅 제외.
+
+### 검증
+
+- svelte-check: 수정 3개 파일 신규 에러·경고 0건(프로젝트 전체 기존 에러 1건은 무관한
+  vite.config.ts 타입 이슈, 이 세션 이전부터 존재).
+- ContractDocumentEditor의 다른 유일한 호출부(ContractEditorModal.svelte)는 onchange를
+  안 넘기므로(옵셔널 prop) 영향 없음 — 그쪽 "편집" 화면은 이번 게이팅 대상이 아님.
+- ⚠️ 브라우저 실측 미완료 — 같은 로컬 서버 포트를 다른 세션이 동시 점유 중이라(이전 항목과
+  동일 사유) 이번 세션에서 직접 클릭 재현은 못함. 코드 검토(spreadsheet 게이팅과 완전히
+  동일한 패턴 재사용 확인)로만 검증.
+
+### GATE E: ✅ sp3-qa-agent 독립검수 통과(규칙 정합성·기술부채·시범오픈 기준 전부 확인, 수정
+필요 항목 0건). isSpreadsheetDirty와 동일 문법 재사용 확인, 2026-08-28 $effect 무한루프
+재발 패턴 아님을 코드로 재확인, ContractDocumentEditor 유일한 다른 호출부(ContractEditorModal)
+무영향 확인. ⚠️ 비차단 — 브라우저 실측은 동시 세션의 로컬 서버 포트 점유로 이번 세션에서
+미완료(고지된 갭, 은폐 아님) — 다른 세션 종료 후 flow·html 템플릿 로드 직후 저장버튼
+비활성 확인 + 내용 수정 시 활성화 확인 권장. git add/commit은 Stephen 직접 실행 대기.
+
+---
+
+## DONE — 🟡 BOUNDARY: 계약서 특약 클릭편집 모달을 "발행 전 미리보기"(template 모드)까지 확장 (2026-09-08, 이 세션, ✅ GATE E 통과)
+
+### 발견 경위
+
+Stephen이 `<launch-selected-element>`로 계약서 미리보기의 특이사항 셀(`.cs-special-notes-cell`,
+"보증금 무료: 보증금 무료 적용")을 선택해 "어제 여기 특약작성 모달 기능 구현한 거 어디갔어?"로
+문의. 어제(2026-09-07, 커밋 115622e) 구현된 클릭편집 모달(`ContractTemplatePreviewModal.svelte`
+`handleHtmlDocClick`/`saveSpecialNotes`)이 코드·배포 상 그대로 존재함을 git log·Vercel
+배포이력으로 먼저 확인 — "사라진" 게 아니라 **처음부터 `contentMode === 'existing'`(이미
+발행된 계약을 다시 열어볼 때)에서만 동작하도록 스코프된 설계**였다.
+
+로컬 dev(Stage DB 연결) 재현으로 확정: 신규 예약(CS26095297) → 계약서 탭 → "발행" 클릭 직후의
+첫 미리보기는 `contentMode === 'template'`(아직 계약 미저장) 상태인데, 이 상태에서도 특이사항
+셀에는 **선택된 템플릿 자체의 특약조항**(`applySpecialNotesMarker` 렌더링)이 그대로 보여 클릭
+가능한 것처럼 보이지만, 실제로 클릭하면 `handleHtmlDocClick`이 `contentMode !== 'existing'`
+가드에 막혀 아무 반응이 없었다(직접 클릭 재현으로 모달이 안 열림을 확인). "발행 전/후 미리보기가
+겉보기엔 똑같은데 한쪽만 클릭이 되는" UX 트랩 — 버그라기보단 사양 자체가 애매했던 것.
+
+Stephen 확정(AskUserQuestion): "template 모드에도 클릭편집 확장" — 시각적 구분 대신 기능 자체를
+넓히는 방향.
+
+### 구현
+
+`src/lib/components/cms/ContractTemplatePreviewModal.svelte`:
+- `applySelectedTemplate()`를 `specsOverride?: SpecRow[]` 파라미터를 받도록 확장 + 반환값을
+  `string` → `{ contractId, htmlDocument }` 객체로 변경(호출부 `send()`/`handleEditClick()`
+  동반 수정). `contractId` 인자로 넘기던 것도 prop 대신 신규 `effectiveContractId`(아래) 사용.
+- `localContractId`($state) + `effectiveContractId`($derived = `localContractId ?? contractId`)
+  신규 — template 모드에서 특약 저장으로 계약이 방금 새로 발행돼도 `contractId` prop 자체는
+  부모가 리렌더링해줘야 갱신되므로, 모달이 열려있는 동안은 이 값으로 즉시 이어서 동작(발송
+  버튼 등)하도록 함.
+- `handleHtmlDocClick`: `contentMode !== 'existing'` 가드 제거, `viewOnly`만 유지 —
+  template/existing 둘 다 클릭 시 모달 오픈. 프리필 소스도 모드별로 분기
+  (`existingSpecifications` vs `selectedTemplate.specifications`).
+- `saveSpecialNotes()`: existing 분기는 기존 그대로(PATCH만). template 분기 신규 —
+  `applySelectedTemplate(filtered)`로 "편집" 버튼과 동일한 발행 경로(init-contract+PATCH)를
+  즉시 실행하며 사용자가 방금 입력한 특약을 그 발행 내용에 바로 반영, 성공 시
+  `contentMode = 'existing'`로 전환 + `onapplied` 콜백 호출.
+- Props에 `onapplied?: (contractId: string) => void` 신규 — template 모드에서 계약이 방금
+  발행됐을 때 호출부(RentalContractViewer)가 "발행 목록" 표시 상태를 재확인하도록 알림
+  (`onEdit`의 `issuedCheckTick++` 패턴과 동일, 단 모달은 닫지 않음).
+- 클릭 가능 커서/hover 스타일(`html-doc-editable` 클래스) 조건도 `!viewOnly && contentMode
+  === 'existing'` → `!viewOnly`로 확장(시각적 단서도 함께 맞춤).
+
+`src/lib/components/cms/RentalContractViewer.svelte`:
+- `<ContractTemplatePreviewModal>`에 `onapplied={() => { issuedCheckTick++; onrefresh() }}`
+  콜백 신규 연결.
+
+### 검증
+
+- `npx svelte-check`: 수정한 두 파일 신규 에러 0건(프로젝트 전체 기존 에러 1건은
+  `vite.config.ts`의 vitest 타입 불일치 — 이 세션과 무관한 사전 존재 이슈).
+- 관련 vitest 5개 파일(`contractHtmlSubstitution`·`contractContentMode`·
+  `contractCanvasPublishFix`·`contractUnresolvedVariables`·`contractDataLineItems`) 106/106
+  GREEN 재확인 — `applySpecialNotesMarker`/`updateSpecialNotesInHtml` 등 실제 치환 로직은
+  이번 변경에서 손대지 않았으므로 무회귀.
+- ⚠️ **브라우저 실측 미완료**: 같은 로컬 서버 포트(5173~5175)를 다른 세션이 동시에 점유 중이라
+  (`localhost:52756` 프록시가 실제로는 그 세션의 서버로 잘못 연결됨) 이번 세션에서 직접 클릭
+  재현까지는 못했다 — 코드 검토(handleEditClick/applySelectedTemplate와 동일 패턴 재사용
+  확인)와 정적 검증(svelte-check·vitest)으로만 확인. Stephen이 실제 화면에서 신규 예약의
+  "발행" 첫 미리보기 → 특이사항 셀 클릭 → 모달 오픈 → 저장 → 셀에 즉시 반영 + "발행 목록"
+  전환까지 한 번 직접 확인 권장.
+
+### GATE E: ✅ sp3-qa-agent 독립검수 통과(규칙 정합성·기술부채·시범오픈 기준 전부 확인, 수정
+필요 항목 0건). applySelectedTemplate() 시그니처 변경의 두 기존 호출부(send/handleEditClick)
+정상 반영, effectiveContractId가 applyContractTemplate의 init-contract 분기와 정합됨을
+소스 추적으로 재확인, html-doc-editable 클래스 완화가 안전함(template 모드에서
+selectedTemplate 없이는 렌더 자체가 안 됨)을 확인. 동시 세션이 추가한 handleClose
+되돌리기 로직이 이 세션의 effectiveContractId/onapplied를 재사용하는 연동 지점 1건을
+정보성으로 기록(결함 아님, 병합 시 함께 인지 권고). ⚠️ 비차단 — 브라우저 실측은 동시
+세션의 로컬 서버 포트 점유로 이번 세션에서 미완료(고지된 갭, 은폐 아님) — 다른 세션
+종료 후 신규 예약 발행 첫 미리보기에서 특약 클릭→저장→"발행 목록" 전환 확인 권장.
+git add/commit은 Stephen 직접 실행 대기.
+
+---
+
+## NOW — 🟡 BOUNDARY: 실서버(Production) 예약 테스트로 HTML 계약서 발행·작성·발송 흐름 검증 + 신규 결함 3건 발견 (2026-09-08, 이 세션, GATE B 승인 대기)
+
+### 배경
+
+Stephen 지시: "실서버(crazyshot-svelte.vercel.app/cms/reservation) 예약 테스트 진행해서 html 계약서
+발행 작성 발송 로직 정상작동을 확인해." 이번 세션 앞부분에서 수정한 HTML 계약서 항목들
+(연락처·주소·Amount 미반영, 특이사항 미편집, "채팅으로 발송" 시 금액·비고 오탐 차단 CRITICAL
+버그)이 실제 Production에서 정상 동작하는지 코드 검토가 아닌 실사용 흐름으로 재검증하기 위함.
+
+Claude Browser(mcp__Claude_Browser__*)는 CLAUDE.md 기본 금지 규칙이 있어, 이 작업 1회에
+한해 Stephen이 명시적으로 사용을 허용(AskUserQuestion 승인) — 완료 후 다시 기본값(금지)으로
+복귀. 실서버는 프로덕션 DB(vnbpmvxruyciuuaermyh)라 신규 테스트용 예약을 직접 생성하되
+"채팅으로 발송"(실제 고객 알림 트리거) 클릭은 스킵하기로 사전 합의.
+
+### 검증 절차
+
+1. Claude Browser로 실서버 로그인 세션(기존 로그인 상태) 확인 → `/products/sony-a7s3-2608`
+   등 상품 4종을 장바구니에 담아 방문수령/방문반납, 2026-09-11~09-12(24H) 조건으로
+   `예약신청완료` 처리 — 예약코드 CS2609021, 주문 ORD-20260907-00005(4건 묶음).
+2. `/cms/reservation`에서 해당 예약 진입 → "계약서" 탭 → "발행" → HTML 템플릿
+   (`202609임대차계약서양식`) 선택 시 뜨는 실시간 치환 미리보기를 직접 검사.
+3. `/cms/reservation/contracts`에서 그 템플릿의 "특약" 패널에 테스트 항목을 입력해
+   특이사항 셀 실시간 반영 여부 확인(저장은 하지 않고 원복 — 실 템플릿 오염 방지).
+4. Supabase MCP(`execute_sql`, project `vnbpmvxruyciuuaermyh`)로 `rental_reservations`·
+   `contracts` 테이블을 직접 조회해 브라우저 관찰과 DB 실제값을 교차검증.
+5. 검증 종료 후 CMS "거부" 액션(4건 각각)으로 테스트 예약 전부 `status='cancelled'`
+   전환 — 원시 DML 없이 표준 RPC 경유로 정리(DB 직접 확인 완료).
+
+### 검증 결과 — 이번 세션 수정분 5건 전부 정상 동작 확인
+
+```
+① 연락처(01048602303)·주소(경기 성남시 분당구 고기로 216 323-12) — 계약서 미리보기에 정상 반영
+② Amount(금액) — 4개 라인아이템 각각 실제 price_rules 기반 금액(25,000/50,000/25,000/50,000원)
+   으로 정상 표시(하드코딩 '-' 문제 해결 확인)
+③ 특이사항 — 템플릿 "특약" 패널에 항목 입력 시 미리보기에 "항목명: 내용" 형식으로 즉시 반영
+   (applySpecialNotesMarker 정상 동작)
+④ CRITICAL 버그(발송 항상 차단) — 4개 라인아이템 묶음 주문에서도 "금액, 비고 미해결" 오탐
+   없이 미리보기 정상 생성(REPEAT 블록 오탐 수정 확인) — 단 "채팅으로 발송" 실클릭은
+   사전 합의에 따라 스킵
+⑤ 예약 생성 흐름(장바구니→체크아웃→hold) 자체도 정상 동작 확인(부수 검증)
+```
+
+### 신규 발견 결함 — 이번 세션 스코프 밖, 미수정 상태로 기록만
+
+```
+1. [수정완료, 2026-09-08] 계약서발행일 필드 오표시 — 계약서 상단 "(계약서 발행일시: ...)" 자리에 실제 발행
+   날짜(YYYY.MM.DD 형태 기대)가 아니라 "10:00"(=이 예약의 수령시간과 동일 값)이 표시됨.
+   코드 확인: src/routes/api/cms/reservations/[id]/contract-data/+server.ts:431
+   `계약서발행일: formatDateDot(contractRes.data?.created_at ?? null)` — contractRes는
+   contracts 테이블에서 해당 reservation_id의 최신 계약을 조회(431행 주변, CS2654 C2).
+   ⚠️ DB 직접 조회로 재확인: 이 예약들은 계약 미생성 시점(브라우저에서 최초 "발행" 클릭 직후,
+   contracts 테이블에 해당 reservation_id 행이 아직 없던 시점)에도 이미 "10:00"이 표시됐음
+   — formatDateDot(null)은 '-'를 반환해야 하므로 이 시점의 실제 원인은 미확정. 이 필드
+   (계약서발행일·지점옵션·총사용시간 등 CS2654 C2 계열)는 이번 세션이 아닌 다른(동시) 세션이
+   구현한 부분이라 이번 세션에서 직접 수정하지 않음 — 재현 절차와 증거만 기록.
+   재현: 신규 예약 생성 → CMS 계약서 탭 → "발행" 클릭 → 미리보기 상단 발행일시 확인.
+
+   후속 규명(같은 날, 같은 세션): contract-data 엔드포인트 코드 자체는 정상이었다(직접
+   raw fetch로 재확인 — 계약 미생성 시 정확히 대시(-) 반환, 생성 후에는 정확한 연월일
+   형식 반환). 진짜 원인은 Production contract_templates의 "202609임대차계약서양식"
+   레코드(id 2d0c18ff로 시작, 8차 변수배선 수정보다 먼저 생성된 레코드)의 저장된 본문이
+   여전히 옛 변수명(수령일시)을 그대로 담고 있었던 것 — 기본 템플릿 상수 코드를 고쳐도
+   이미 저장된 기존 템플릿 레코드에는 소급 반영되지 않기 때문(의도된 동작). 그 예약의
+   실제 수령시간이 정확히 치환된 결과가 "발행일시"처럼 보인 것뿐이었다. 지점옵션(대여지점
+   셀)도 같은 이유로 옛 빈 셀 그대로 남아있던 동일 계열 결함이었다.
+   조치: 그 템플릿 레코드 1건의 저장된 본문을 정밀 문자열 치환으로 직접 수정(SQL UPDATE,
+   유일 매치 확인 후 실행) — 발행일시 줄의 옛 변수명만 새 변수명으로 교체(대여·반납시간
+   표의 정당한 기존 변수 용례는 그대로 유지), 대여지점 셀의 빈 값도 새 변수로 교체.
+   Stage의 동명 계열 html형 템플릿 2건은 이미 처음부터 정상이었음(전수 확인 완료, 조치
+   불필요). 신규 예약(CS2609045)으로 재현 테스트 — 수정 후 발행일시·지점 둘 다 올바르게
+   대시(-)로 표시됨을 확인(둘 다 아직 미확정 상태이므로 정상).
+   ⚠️ 소급 미반영: 이 템플릿으로 그 전에 이미 발행된 계약(CS2609041 등)은 발행 시점에
+   이미 옛 텍스트로 구워져 저장됐으므로 이번 수정과 무관하게 그대로 남음 — 과거 발행분
+   교정은 별도 판단 필요, 이번 조치는 향후 신규 발행분에만 적용됨.
+
+2. "발행" 모달의 "양식 선택" 목록에 동일 템플릿("202609임대차계약서양식")이 중복 노출됨 —
+   `/cms/reservation/contracts`에서 직접 확인 시 실제 템플릿은 202609임대차계약서양식(HTML형)·
+   202608임대차계약서양식(스프레드시트형) 2건뿐인데, 발행 모달의 드롭다운/목록에는
+   202609임대차계약서양식이 2번 중복 표시됨. UI 목록 조회/렌더링 쪽 경미한 결함으로 추정.
+
+3. 이미 발행된 계약을 CMS "편집"(리치텍스트/tiptap 에디터, contracts.specifications 직접
+   수정 경로)으로 열어 "특약" 탭에 항목 추가 후 "저장"하면 — DB 확인 결과
+   `contracts.specifications` 컬럼(JSONB)에는 정상 저장되나(`[{"key":"테스트특약","value":"..."}]`
+   확인됨), 실제로 저장된 `contracts.html_document`(길이 7640자, 실제 발송될 본문)에는 그
+   특약 내용이 전혀 반영되지 않고 특이사항 셀이 빈 값(`&nbsp;`)으로 굳어 있음 — 즉 이 경로로
+   저장하면 관리자가 입력한 특약이 실제 발송 문서에 누락될 수 있음. 이 "편집" 경로(계약 인스턴스
+   단위 편집)는 이번 세션이 손댄 "템플릿 단위 특약조항 패널"(§ 위 검증결과 ③, 정상 동작 확인)과
+   서로 다른 기존 코드 경로로 보이며, 이번 세션에서 직접 수정하지 않음 — 재현 절차와 증거만 기록.
+   재현: 기발행 계약 → 계약서 탭 → "편집" → "특약" 탭에 항목 입력 → "저장" → "발행"에서
+   "미리보기 & 발송" 재확인 시 특이사항 셀이 비어있음.
+```
+
+### 테스트 데이터 정리
+
+검증에 사용한 테스트 예약 4건(SONY A7S3·Canon RF 24-70mm·CANON EOS R6 Mark II·
+Canon RF 50mm 1.4VCM, 예약코드 CS2609021)은 CMS "거부" 액션으로 전부 `status='cancelled'`
+전환 완료(DB 직접 확인). 테스트 중 생성된 contracts 행 1건(id ba2be6c1-...)은 취소된
+예약에 연결된 채로 남아있음(원시 DELETE 미실행 — H-01 직접 DML 금지 원칙 준수, 데이터
+자체는 무해).
+
+### GATE E: 아직 검수 요청 전 — 위 결함 3건은 수정 작업이 아니라 "발견·기록"만 완료된
+상태이므로 이 블록 자체는 QA 검수 대상이 아님. 결함 1·3(계약서발행일 오표시, 편집 경로
+특약 미반영)은 실사용에 영향 가능성이 있어 후속 세션에서 별도 GATE B 승인 후 조사·수정
+권장. 결함 2(양식목록 중복 표시)는 경미한 UI 이슈.
+
+---
+
 ## DONE — 🔴 CRITICAL: 전자계약 서명완료 후 결제화면 쿠폰·포인트를 재선택 가능한 편집 UI → 장바구니 선택값 읽기 전용 표시로 전환 (2026-09-07, 이 세션, ✅ GATE E 통과)
 
 ### 발견 경위
@@ -37601,8 +37828,9 @@ DELETE+INSERT로 완전 교체하므로, 서버가 이미 통째로 갈아엎는
 
 ---
 
-## NOW — 🔴 CRITICAL: `/payment/success/dev` GNB 격리 + 장바구니 대여설정 검증로직 정밀화 +
-방문지점 콤보버튼 UI 신규 (2026-09-07, 이 세션) — 구현 완료·GATE E 검수 대기
+## DONE — 🔴 CRITICAL: `/payment/success/dev` GNB 격리 + 장바구니 대여설정 검증로직 정밀화 +
+방문지점 콤보버튼 UI 신규 (2026-09-07, 이 세션) — GATE E 통과(2026-09-08, @sp3-qa-agent) +
+Production 마이그레이션 455·456 적용 완료(2026-09-08, Stephen 직접 적용·DB 실증 확인)
 
 **세션 범위**: 이 세션에서 Stephen이 순차적으로 요청한 서로 다른 6개 하위 아젠다 묶음.
 각 항목의 라이브 검증 상세는 `.claude/harness/GSD_LOG.md` 2026-09-07 날짜 항목들(1차~10차
@@ -37687,4 +37915,99 @@ DELETE+INSERT로 완전 교체하므로, 서버가 이미 통째로 갈아엎는
 **GATE 등급**: 🔴 CRITICAL — 결제 직전 제출 게이팅 로직(③⑥) + Production 미적용 DB
 마이그레이션 2건(④) 포함. 커밋은 Stephen 직접 실행 대기, 마이그레이션 455·456 Production
 적용도 별도 승인 대기(둘 다 반복 요청했으나 아직 미답변).
+
+---
+
+**GATE E 검수 결과(2026-09-08, @sp3-qa-agent) — 조건부 통과**:
+
+코드 정합성 — courierRestricted/datesSet 분리(`cart/+page.svelte:814-827`), pickupPointsSet
+통합(`845-857`,`883`), allowed_method_ids/allowed_pickup_ids `.length>0` 가드 대칭 적용
+(`1207`,`1382`), GNB 제외 패턴(`+layout.svelte:63`) 모두 정확·일관. svelte-check 신규
+에러 0건, vitest cart 123/123 GREEN, RPC 에러처리 정적분석 위반 0건(이 세션 diff 기준),
+요청범위 외 오염 없음.
+
+⚠️ **차단급 발견(이번 검수에서 신규 지적)**: Migration #125가 `allowed_method_ids`/
+`allowed_pickup_ids`를 `NOT NULL DEFAULT '{}'`로 정의했는데, 이번 세션 코드
+(`cms/products/+page.server.ts:995,1001,1007`, `new/+page.server.ts:172-189,288-289`)는
+미선택 시 `null`을 저장하도록 바뀌었다. Migration #455·#456(`DROP NOT NULL`)이
+Production에 적용되기 전 이 코드만 먼저 Production에 배포되면, 방식/지점을 하나도
+선택하지 않고 저장하는 모든 신규등록·수정이 NOT NULL 제약 위반으로 즉시 실패한다
+(service-operations.md §9 "코드 배포≠DB마이그레이션 적용" 사고와 동일 패턴 — DB 직접
+조회로 Production NOT NULL 제약 실재 재확인함). **main 병합/Production 배포 시
+455·456을 코드 배포보다 먼저(또는 동시에) 적용할 것 — 순서를 어기면 §9와 동일한 실사고
+재발 위험.**
+
+결론: 코드 자체는 GATE E 나머지 기준 전부 충족(커밋 가능 수준). git status 확인 결과
+이미 Stephen이 직접 커밋 완료(fce1a7a/115622e/3f6026b/8eed069) — 이번 QA는 사후 검증.
+남은 조건은 Production 마이그레이션 455·456 적용 순서 준수뿐.
+
+---
+
+**Production 마이그레이션 455·456 적용 완료 확인(2026-09-08)**: Stephen이 직접 Production
+(vnbpmvxruyciuuaermyh)에 적용 완료. Supabase MCP로 DB 직접 재조회해 실증:
+- `list_migrations` — `products_allowed_method_ids_empty_to_null`(20260907230302),
+  `products_allowed_pickup_ids_empty_to_null`(20260907230314) 두 건 모두 이력에 존재.
+- 스키마: `allowed_method_ids`/`allowed_pickup_ids` 둘 다 `is_nullable='YES'`로 전환 확인
+  (NOT NULL 제약 해제).
+- 데이터: 두 컬럼 모두 잔존 `{}`(빈 배열) 0건, `NULL`로 정정된 행 각 335건(전체 443행 중)
+  — 전량 정정 확인.
+
+⚠️ 참고(비차단): 적용된 마이그레이션의 버전 타임스탬프(20260907230302/14)가 로컬 저장소
+파일의 타임스탬프(20260907050000_455_.../20260907060000_456_...)와 다르고, 파일명 번호
+접두사(455_/456_)도 적용본 이름에는 없음 — Supabase 대시보드/MCP에서 이름만으로 별도
+적용된 것으로 보인다. 기능적으로는 동일 SQL이 반영돼 문제 없으나(위 실증으로 확인),
+로컬 `supabase/migrations/` 파일과 Production 마이그레이션 이력의 버전 문자열이 정확히
+일치하진 않는다는 점은 향후 `supabase db diff`/마이그레이션 동기화 작업 시 참고할 것.
+
+배포순서 리스크 해소 — 이 태스크 블록 최종 완료 처리.
+
+---
+
+## DONE — 🔴 CRITICAL: 통합 예약 카드(items 배열) each_key_duplicate 크래시 수정 (2026-09-08, 이 세션)
+
+아젠다: Stephen이 전자계약 확인 대화카드 발행테스트 직후 고객채팅 무한로딩 + 콘솔 에러
+제보(`each_key_duplicate — Keyed each block has duplicate key 'CS26095153' at indexes 0 and 1`,
+`ActionCard.svelte:382`).
+
+### 근본 원인
+
+`ActionCard.svelte`의 통합(배치) 예약카드 렌더링(`{#if payload.items && payload.items.length > 1}`)이
+`{#each payload.items as it (it.reservation_no)}`로 `reservation_no`를 항목별 고유키로 가정하고
+있었다. 그런데 2026-08-31 Migration 400("예약코드 주문단위 통일")부터 `reservation_code`는
+더 이상 예약(reservation) 단위가 아니라 **주문(order) 단위**로 통일되어, 같은 주문에 묶인
+서로 다른 상품 예약 2건 이상이 전부 동일한 `reservation_code`를 공유한다(설계 의도대로 —
+버그 아님). `send_rental_chat_notification_batch` RPC(hold_expired·reservation_approval
+배치알림 공용)가 이 값을 그대로 `items[].reservation_no`에 실어 보내면서, Svelte keyed-each가
+"동일 세션의 실제로 다른 두 상품인데 키만 같음"을 중복으로 간주해 전체 렌더 트리가 크래시 —
+`ChatBottomSheet` 최상위까지 예외가 전파돼 고객 채팅창 전체가 무한로딩 상태로 멈췄다.
+
+DB 조회로 실제 크래시를 유발한 원본 데이터 확인(Stage `ezyvffjvuwmtuhpxdjrw`,
+`chat_messages.id=67a8fb01-...`): `items: [{product_name:"Canon RF 24-70mm F2.8L",
+reservation_no:"CS26095153",...}, {product_name:"Creator SET01 Sony FX3 + ...",
+reservation_no:"CS26095153",...}]` — 서로 다른 상품 2건이 동일 예약코드 공유(의도된 설계),
+Production 조회 결과는 0건(같은 세션 재현 데이터가 아직 없었을 뿐 — 조건(주문 1건에 2개
+이상 상품) 자체는 Production에도 동일하게 존재해 언제든 재현 가능한 잠재 결함이었음).
+
+### 수정
+
+`src/lib/components/chat/ActionCard.svelte` — each 키를 `` `${it.reservation_no}-${idx}` ``로
+변경(index 결합)해 항목 수만큼 항상 고유한 키를 보장. DB·RPC·마이그레이션 변경 없음(순수
+클라이언트 렌더링 키 수정) — Migration 400의 "예약코드 주문단위 통일" 설계 자체는 올바르므로
+되돌리지 않고, 그 설계를 반영하지 못했던 프론트 쪽 가정만 수정.
+
+영향 범위 재확인: `grep`으로 프로젝트 전체에서 `payload.items`를 `reservation_no` 기준으로
+렌더링/키잉하는 지점이 이 한 곳뿐임을 확인 — 추가 수정 지점 없음.
+
+### 검증
+
+`npx svelte-check` 신규 에러 0건(기존 무관 에러 1건만 유지).
+
+### 수정 파일
+
+```
+src/lib/components/chat/ActionCard.svelte  (MODIFY — 1줄, each 키 수정)
+```
+
+**GATE E: 자체판정 ✅ (단일 파일 렌더링 키 수정, DB/RPC 무변경, 회귀 위험 최소)** — git commit은
+Stephen 직접 실행 대기.
 
