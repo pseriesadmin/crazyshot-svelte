@@ -210,6 +210,48 @@
    */
   let closing = $state(false)
 
+  /** 계약서 문서 영역(.doc-page) DOM 참조 — 출력 시 이 노드만 복제해 인쇄 전용 루트로 옮긴다. */
+  let docPageEl: HTMLDivElement | undefined = $state()
+
+  const PRINT_ROOT_ID = 'cs-contract-print-root'
+
+  /**
+   * 계약서 미리보기 출력 — 기본 브라우저 인쇄 기능 연동.
+   *
+   * ⛔ 2026-09-08 최초 구현(@media print로 .modal-overlay 자손만 visibility 노출)은 실사용
+   * 중 전체 페이지(GNB·예약목록·상세패널까지) 그대로 인쇄되는 결함으로 발견됨 — 이 모달이
+   * document.body에 포탈되지 않고 CMS 페이지 트리 안에 그대로 중첩돼 있어, .modal-overlay의
+   * 조상 요소들(GNB·목록 등)에도 개별적으로 visibility:hidden을 걸어야 하는데 그 조상들이
+   * 페이지 전체 높이만큼 레이아웃 공간을 계속 차지해(visibility는 display와 달리 박스 크기를
+   * 없애지 않음) 빈 페이지가 섞여 나오거나, 브라우저에 따라 position:fixed 요소가 인쇄 시
+   * 여러 페이지에 걸쳐 정상적으로 흐르지 않는 문제가 있었다.
+   * → 대신 .doc-page 노드를 통째로 복제해 document.body의 직계 자식(인쇄 전용 루트)으로
+   *   옮긴 뒤 인쇄한다 — 이러면 "body의 나머지 직계 자식은 전부 숨긴다"는 단 하나의 전역
+   *   규칙만으로 충분하고(깊이와 무관), 복제 노드는 정상 문서 흐름에 새로 편입되어 여러
+   *   페이지로 자연스럽게 흐른다. 복제본은 원본과 동일한 클래스(Svelte 스코프 클래스 포함)를
+   *   그대로 갖고 있어 이 컴포넌트의 @media print 스타일이 그대로 적용된다.
+   */
+  function handlePrint() {
+    if (!docPageEl) { window.print(); return }
+
+    document.getElementById(PRINT_ROOT_ID)?.remove()
+
+    const printRoot = document.createElement('div')
+    printRoot.id = PRINT_ROOT_ID
+    printRoot.appendChild(docPageEl.cloneNode(true))
+    document.body.appendChild(printRoot)
+
+    const cleanup = () => {
+      printRoot.remove()
+      window.removeEventListener('afterprint', cleanup)
+    }
+    window.addEventListener('afterprint', cleanup)
+    // afterprint 미지원/인쇄취소 등으로 이벤트가 안 오는 경우를 대비한 안전망
+    setTimeout(cleanup, 60_000)
+
+    window.print()
+  }
+
   async function handleClose() {
     if (closing) return
     const shouldRevert =
@@ -636,7 +678,7 @@
 </script>
 
 <div class="modal-overlay" role="dialog" aria-modal="true" aria-label={viewOnly ? '계약서 보기' : '계약서 양식 선택 및 발송'}>
-  <div class="modal-wrap">
+  <div class="modal-wrap" class:modal-wrap-viewonly={viewOnly}>
     <!-- 헤더 -->
     <div class="modal-header">
       <span class="modal-title">{viewOnly ? '계약서 보기' : '계약서 양식 적용 & 발송'}</span>
@@ -703,7 +745,7 @@
             </div>
           {/if}
           {#if showPreview}
-            <div class="doc-page">
+            <div class="doc-page" class:doc-page-html={!!previewHtmlDocument} bind:this={docPageEl}>
               <div
                 class="preview-title"
                 class:preview-title-existing={contentMode === 'existing'}
@@ -765,6 +807,9 @@
       <!-- 푸터 -->
       <div class="modal-footer">
         <button type="button" class="btn-cancel" onclick={handleClose} disabled={closing}>{viewOnly ? '닫기' : (closing ? '되돌리는 중...' : '취소')}</button>
+        {#if showPreview}
+          <button type="button" class="btn-print" onclick={handlePrint}>출력</button>
+        {/if}
         {#if !viewOnly}
           {#if onEdit && !isHtmlMode}
             <button
@@ -828,13 +873,26 @@
   .modal-wrap {
     background: var(--cs-white);
     border-radius: var(--cms-radius-sm);
-    width: 960px;
+    /* 2026-09-08 — 960px → 1100px. html형 계약서 본문(.contract-wrap max-width:794px)이
+       .tpl-list(220px 고정) + .preview-pane 좌우 padding(24px×2=48px)을 뺀 나머지 공간에서
+       눌려 보이던 문제(요청 스크린샷 — "미리보기 창이 A4보다 좁게 눌려 보임") 해결.
+       960 - 220 - 48 ≈ 692px < 794px가 실제 원인이었음 — 최소 1062px(220+48+794) 이상
+       필요해 여유를 두고 1100px로 확장(아래 .doc-page-html 이중여백 제거와 함께 적용). */
+    width: 1100px;
     max-width: 100%;
     max-height: calc(100vh - 48px);
     display: flex;
     flex-direction: column;
     overflow: hidden;
     box-shadow: 0 8px 40px rgba(0, 0, 0, 0.18);
+  }
+
+  /* viewOnly(계약서 보기)는 좌측 양식목록(.tpl-list)이 없어 미리보기(.preview-pane)만
+     표시되므로, 960px 고정폭 대신 A4 문서 폭(.doc-page max-width:210mm≈794px)
+     + preview-pane 좌우 padding(24px×2)에 맞춘 폭으로 조정 — 문서 주위 불필요한
+     여백을 줄여 실제 A4 비율에 가깝게 보이도록 함. */
+  .modal-wrap-viewonly {
+    width: 866px;
   }
 
   /* 헤더 */
@@ -1017,6 +1075,7 @@
   .preview-pane {
     flex: 1;
     overflow-y: auto;
+    overflow-x: auto; /* 2026-09-08 — 폭 확장 후에도 예상보다 넓은 문서가 있을 때 잘리지 않고 스크롤되는 안전장치 */
     display: flex;
     flex-direction: column;
     background: var(--cs-surface-gray);
@@ -1041,6 +1100,16 @@
     padding: 20mm;
     box-sizing: border-box;
     position: relative; /* overlay 이미지 absolute 배치 기준점 */
+  }
+  /* 2026-09-08 — html형 전용 이중여백 제거. defaultRentalContractHtml.ts의 .contract-wrap이
+     이미 완결된 A4 페이지 여백(40px/30px)을 자체적으로 갖고 있어, 이 .doc-page의 20mm
+     패딩이 그 위에 다시 더해지면서 실제 내용이 794px보다 훨씬 좁게 눌려 보이는 원인이었다
+     (20mm×2 + .contract-wrap 자체 패딩이 이중으로 공간을 잠식). 상단만 20mm 유지(제목
+     .preview-title이 문서 위에 자연스러운 여백을 갖도록) — 좌우/하단은 .contract-wrap이
+     전담하도록 0으로. flow/spreadsheet/canvas 모드는 자체 페이지 여백이 없어 기존
+     .doc-page 패딩 그대로 유지(이 클래스는 previewHtmlDocument가 있을 때만 적용됨). */
+  .doc-page-html {
+    padding: 20mm 0 0;
   }
   .preview-title {
     padding: 0 0 18px;
@@ -1209,6 +1278,21 @@
   .btn-edit:disabled { opacity: 0.5; cursor: not-allowed; }
   .btn-edit:hover { background: var(--cs-purple-op10); }
 
+  .btn-print {
+    height: 34px;
+    padding: 0 16px;
+    border: 1px solid var(--cs-purple);
+    border-radius: var(--cms-radius-sm);
+    background: transparent;
+    color: var(--cs-purple);
+    font: var(--text-pc-body-14);
+    font-weight: 700;
+    cursor: pointer;
+    transition: background 0.1s;
+    white-space: nowrap;
+  }
+  .btn-print:hover { background: var(--cs-purple-op10); }
+
   .btn-send {
     height: 34px;
     padding: 0 20px;
@@ -1260,5 +1344,23 @@
     min-height: 240px;
     padding: 16px 20px;
     overflow-y: auto;
+  }
+
+  /* 출력 — handlePrint()가 .doc-page를 복제해 #cs-contract-print-root(body 직계 자식)로
+     옮긴 뒤 인쇄한다. body의 나머지 직계 자식(GNB·페이지 전체 트리)을 전부 숨기는 단 하나의
+     전역 규칙만으로 "문서만 인쇄"가 완성된다 — 이 모달이 페이지 트리 안에 중첩돼 있어도
+     무관(2026-09-08, 전체 페이지가 함께 인쇄되던 결함 수정 — handlePrint() 주석 참고). */
+  @media print {
+    :global(body > *:not(#cs-contract-print-root)) {
+      display: none !important;
+    }
+    :global(#cs-contract-print-root) {
+      display: block !important;
+    }
+    :global(#cs-contract-print-root .doc-page) {
+      box-shadow: none;
+      max-width: 100%;
+      margin: 0;
+    }
   }
 </style>

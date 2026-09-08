@@ -277,6 +277,41 @@ QA의 구조적 검증 범위 밖이었음). 값 셀은 다른 금액 행과 동
 **최종 판정**: ✅ GATE E 통과 — 조건부 사유 해소 + 후속 발견 결함 2건까지 전부 수정·
 재검증 완료.
 
+**3차 후속(같은 날, ContractTemplatePanel 캔버스 편집 UX 개선 — 데이터/템플릿 콘텐츠
+무변경, DB 소급 반영 대상 아님)**: Stephen이 계속해서 `<launch-selected-element>`로
+`ContractTemplatePanel.svelte`의 html모드 편집 화면 자체(발행된 계약서가 아니라 CMS
+템플릿 편집 캔버스)를 지적:
+  1. `.html-preview-label`("HTML 고정 서식 미리보기" 타이틀 + 안내문구) — 순수 정적
+     텍스트로 상호작용 요소가 없고 동일 안내가 우측 `ContractFieldPanel` 각 탭 힌트에
+     이미 있어 중복 판정 → 제거(관련 CSS `.html-preview-label`/`.html-preview-hint`도
+     함께 제거)해 `.html-preview-doc` 캔버스 세로공간 확보.
+  2. `.html-sig-row`(발행자 서명·직인 미리보기 썸네일+힌트+"제거" 버튼) — "둘째 선택영역
+     (문서 안 도장 이미지 `.issuer-sig-overlay`)과 같이, 이미 삽입된 직인 UI 선택 시
+     캔버스 상단 popup 레이어로 노출되는 형태로 수정해서 캔버스 영역 세로폭을 확보할 것
+     - 이미지 선택 해제 시 사라질 것" 지시 → 서명이 이미 등록된 상태의 미리보기/힌트/
+     제거 UI를 `.html-sig-row`에서 분리해 신규 `.html-sig-canvas-popup`으로 이관,
+     `.html-preview-doc` 최상단에 `position:sticky`로 배치하고 기존 `showDocSigToolbar`
+     상태(문서 안 도장 이미지 클릭 시 true, 다른 곳 클릭 시 false — 크기조절 툴바와 동일
+     신호)에 연동해 노출/해제. 아직 서명이 없어 캔버스 안에 클릭할 이미지 자체가 없는
+     최초 등록 단계(라벨+"서명/직인 삽입" 버튼+자산 목록 팝오버)는 `.html-sig-row`에
+     그대로 유지(제거 시 최초 등록 경로 자체가 사라지므로 대상에서 제외) — 기존 고유
+     기능(리사이즈 소/중/대/직접입력, 드래그 이동, 삭제, 클릭 토글, 위치 초기화) 전부
+     무변경 보존.
+  svelte-check 신규 에러 0건(사전 존재하던 `vite.config.ts` 무관 에러 1건만 잔존),
+  `contractHtmlSubstitution.test.ts`+`contractDataLineItems.test.ts` 72개 재실행 GREEN.
+  html_document 콘텐츠·데이터 계산 로직은 전혀 건드리지 않아 Production DB 소급 반영
+  대상 아님(순수 `ContractTemplatePanel.svelte` 컴포넌트 UI/CSS 전용 변경).
+
+**4차 후속(같은 날)**: Stephen이 `<launch-selected-element>` 2건으로 "'서명 & 직인
+이미지 등록' 버튼 UI만을 구현된 로직 그대로 '발행자 서명·직인 필수' 토글 행 레이아웃
+내부로 이동 재배치할 것" 지시. `field-row--sig-upload` 행의 `{:else}` 분기에 있던
+등록 버튼(`openSigUpload` 핸들러·aria-label·class 전부 동일)을 그 행에서 제거하고
+`field-row--toggle` 행 안(`toggle-hint` 앞, `!sigUploadFile`일 때만 노출하는 기존 조건
+그대로)으로 이동 + `margin-left:auto`로 토글 행 첫 줄 오른쪽 끝에 배치. `field-row--
+sig-upload` 행에는 힌트 텍스트("PNG · JPEG · GIF · 최대 5MB")와 파일 선택 후 확인/취소
+UI만 남음(로직 무변경). svelte-check 신규 에러 0건, 기존 경고 수(404건) 그대로 유지
+확인 — 순수 마크업 위치 이동이라 vitest 대상 아님(로직·데이터 무변경).
+
 ---
 
 ## DONE — 🔴 CRITICAL: RentalDetailPanel "거부"/"승인하기" 버튼 무한로딩 결함 수정(2026-09-08, 이 세션)
