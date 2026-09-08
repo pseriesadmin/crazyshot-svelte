@@ -42,6 +42,15 @@
     onSave?: (payload: ContractDocumentPayload) => Promise<void>
     /** 편집 비활성화 여부 */
     readonly?: boolean
+    /**
+     * 문서 내용이 바뀔 때마다 호출된다(2026-09-08 신규) — ContractSpreadsheetEditor의
+     * onchange와 동일한 목적: TipTap 문서는 ProseMirror 내부 상태라 Svelte 리액티비티
+     * 밖에 있으므로, 호출부(ContractTemplatePanel)가 "수정 저장" 버튼의 isDirty 판정에
+     * 쓸 별도 플래그를 이 콜백으로 직접 세운다. 최초 로드 시 1회 호출되는 것은 무해 —
+     * 호출부가 로드 직후 dirty 플래그를 매번 초기화하므로(spreadsheetContentDirty와
+     * 동일 패턴) 오탐으로 이어지지 않는다.
+     */
+    onchange?: () => void
   }
 
   let {
@@ -52,6 +61,7 @@
     templateId = null,
     onSave,
     readonly = false,
+    onchange,
   }: Props = $props()
 
   // --------------------------------------------------------------------------
@@ -445,6 +455,8 @@
       ({ type: 'doc', content: [{ type: 'paragraph' }] } as JSONContent)
     ),
     editable: untrack(() => !readonly),
+    // ContractSpreadsheetEditor onchange와 동일 목적 — isDirty 판정용(위 Props 주석 참고)
+    onUpdate: () => onchange?.(),
   })
 
   onDestroy(() => {

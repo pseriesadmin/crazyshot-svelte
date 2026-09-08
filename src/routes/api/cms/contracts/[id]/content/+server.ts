@@ -7,6 +7,7 @@ import { getCmsRoleForAction } from '$lib/server/getCmsRoleForAction'
 import { hasSettingsAccess } from '$lib/utils/cmsPermissions'
 import { isCanvasDocument, hasSignatureField, isSpreadsheetDocument, isHtmlDocument } from '$lib/types/contract-document'
 import { isContractIssueBlocked } from '$lib/utils/contractIssueGuard'
+import { clearIssuedContractContent } from '$lib/server/clearIssuedContractHelper'
 
 export const GET: RequestHandler = async ({ params, locals, url }) => {
   const cmsRole = await getCmsRoleForAction(locals)
@@ -198,5 +199,29 @@ export const PATCH: RequestHandler = async ({ params, locals, request }) => {
     .eq('id', contractId)
 
   if (error) return json({ error: error.message }, { status: 500 })
+  return json({ ok: true })
+}
+
+/**
+ * 계약서 콘텐츠 초기화(2026-09-08 신규) — clearIssuedContractContent() 재사용.
+ *
+ * html 모드 "발행=발송" 정책의 되돌리기 전용 진입점(ContractTemplatePreviewModal
+ * handleClose() 참고) — 특약 클릭편집으로 미리 저장된 초안을 "채팅으로 발송" 없이
+ * 취소/닫기했을 때, content_blocks·canvas_document·spreadsheet_document·html_document·
+ * title을 전부 비워 "발행 안 됨" 상태로 되돌린다. 이미 발송(sent_at)·서명(signed_at)된
+ * 계약서는 clearIssuedContractContent() 내부 가드가 그대로 거부한다(discardSentContract/
+ * cancelIssuedContract 전용 영역 — 여기서 우회하지 않음).
+ */
+export const DELETE: RequestHandler = async ({ params, locals }) => {
+  const cmsRole = await getCmsRoleForAction(locals)
+  if (!cmsRole || !hasSettingsAccess(cmsRole)) {
+    return json({ error: '권한 없음' }, { status: 403 })
+  }
+
+  const admin      = createClient(PUBLIC_SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
+  const contractId = params.id as string
+
+  const result = await clearIssuedContractContent(contractId, admin)
+  if (!result.ok) return json({ error: result.error }, { status: result.httpStatus })
   return json({ ok: true })
 }

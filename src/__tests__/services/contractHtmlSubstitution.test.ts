@@ -298,3 +298,42 @@ describe('applyIssuerSignatureMarker', () => {
     expect(tooBig).toContain('width:1200px')
   })
 })
+
+// ─────────────────────────────────────────────────────────────────────────────
+// applyCustomerSignatureMarker — 고객(예약자) 서명 마커 (2026-09-08 신설)
+// ─────────────────────────────────────────────────────────────────────────────
+describe('applyCustomerSignatureMarker', () => {
+  it('서명 데이터 미지정 시 마커를 빈 문자열로 제거한다', async () => {
+    const { applyCustomerSignatureMarker } = await import('$lib/utils/contract-substitution.js')
+    expect(applyCustomerSignatureMarker('<td><!--CUSTOMER_SIGNATURE--></td>', null)).toBe('<td></td>')
+  })
+
+  it('유효한 data:image/png base64 문자열이면 <img> 태그로 치환한다', async () => {
+    const { applyCustomerSignatureMarker } = await import('$lib/utils/contract-substitution.js')
+    const dataUrl = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAAB'
+    const result = applyCustomerSignatureMarker('<!--CUSTOMER_SIGNATURE-->', dataUrl)
+    expect(result).toContain('<img')
+    expect(result).toContain('customer-sig-overlay')
+    expect(result).toContain(dataUrl)
+  })
+
+  it('data URI 접두사가 아니면(http URL 등) 차단되어 마커가 제거된다', async () => {
+    const { applyCustomerSignatureMarker } = await import('$lib/utils/contract-substitution.js')
+    const result = applyCustomerSignatureMarker('<!--CUSTOMER_SIGNATURE-->', 'https://example.com/x.png')
+    expect(result).not.toContain('<img')
+  })
+
+  it('접두사만 맞고 콤마 뒤에 임의 문자열이 섞여 있으면(속성 인젝션 시도) 차단된다', async () => {
+    const { applyCustomerSignatureMarker } = await import('$lib/utils/contract-substitution.js')
+    const malicious = 'data:image/png;base64,AAAA" onerror="alert(1)'
+    const result = applyCustomerSignatureMarker('<!--CUSTOMER_SIGNATURE-->', malicious)
+    expect(result).not.toContain('<img')
+    expect(result).not.toContain('onerror')
+  })
+
+  it('마커가 없는 원문은 그대로 반환한다(레거시 계약 무영향)', async () => {
+    const { applyCustomerSignatureMarker } = await import('$lib/utils/contract-substitution.js')
+    const html = '<td>(인)이기성</td>'
+    expect(applyCustomerSignatureMarker(html, 'data:image/png;base64,AAAA')).toBe(html)
+  })
+})

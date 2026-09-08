@@ -94,6 +94,8 @@ hasSettingsAccess(role) → getRoleLevel(role) >= 50
 | 대여 현황 | `/cms/rentals` | ✅ 세션만 | ✅ | ✅ |
 | 상품 이력관리 | `/cms/rental/history` | ✅ 세션만 | ✅ | ✅ |
 | 계약서 양식·발행·발송 | `/cms/reservation/contracts` (load/create/update/softDelete=4곳), `/api/cms/reservations/[id]/init-contract`(1), `/api/cms/reservations/[id]/contract-data`(1), `/api/cms/contracts/[id]/content` GET+PATCH(2), `/api/cms/contracts/[id]/send-chat`(1) — 5개 파일·9곳 게이트 | ❌ | ✅ | ✅ |
+| 전자계약 발행취소(서명완료건 포함, 2026-09-07) | `/cms/reservation` → `cancelIssuedContract` — `discardSentContract`(미서명 발송건 전용)와 동일 게이트 기준 | ❌ | ✅ | ✅ |
+| 완료 전자계약 정보 채팅 재공유(2026-09-08) | `/api/cms/contracts/[id]/share-chat` — `send-chat`과 동일 게이트 기준(서명 완료건만 대상, 재발행·재발송 아님) | ❌ | ✅ | ✅ |
 | 관리자 서명·직인 자산 관리 | `/cms/set/signature` | ❌ | ✅ | ✅ |
 | 대여 설정 | `/cms/set/rental` | ✅ 세션만 | ✅ | ✅ |
 | 고객 관리 | `/cms/customers` | ❌ | ✅ | ✅ |

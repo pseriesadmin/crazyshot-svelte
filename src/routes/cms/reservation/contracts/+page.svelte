@@ -3,6 +3,7 @@
   import { page } from '$app/stores'
   import ContractTemplatePanel from '$lib/components/cms/ContractTemplatePanel.svelte'
   import CmsPagination from '$lib/components/cms/CmsPagination.svelte'
+  import CmsDeleteButton from '$lib/components/cms/CmsDeleteButton.svelte'
   import type { PageData } from './$types'
 
   interface Props { data: PageData }
@@ -74,6 +75,13 @@
     }
   }
 
+  // 목록 카드 우측 삭제 아이콘 버튼 전용(2026-09-08 신규) — 지금 열려있는 패널이 방금 삭제한
+  // 그 양식이었으면 패널을 닫는다(존재하지 않는 템플릿을 계속 편집 화면에 띄워두지 않기 위함).
+  async function handleDeleted(deletedId: string) {
+    await invalidateAll()
+    if (data.selectedId === deletedId) closePanel()
+  }
+
   function formatDate(dt: string): string {
     return dt.slice(0, 10)
   }
@@ -135,23 +143,36 @@
         {:else}
           {#each pagedTemplates as tpl (tpl.id)}
             {@const isSelected = !isNewMode && data.selectedId === tpl.id}
-            <button
-              type="button"
-              class="tpl-card"
-              class:selected={isSelected}
-              onclick={() => selectTemplate(tpl.id)}
-            >
-              <span class="tpl-title">{tpl.title}</span>
-              <div class="tpl-meta">
-                <span class="status-badge" class:archived={tpl.status === 'archived'}>
-                  {STATUS_LABEL[tpl.status] ?? tpl.status}
-                </span>
-                <span class="mode-badge" class:spreadsheet={(tpl.authoring_mode ?? 'flow') === 'spreadsheet'} class:canvas={tpl.authoring_mode === 'canvas'} class:html={tpl.authoring_mode === 'html'}>
-                  {modeLabel(tpl.authoring_mode)}
-                </span>
-                <span class="tpl-date">{formatDate(tpl.created_at)}</span>
-              </div>
-            </button>
+            <!-- 삭제 아이콘 버튼(CmsDeleteButton)은 자기 자신의 <form>을 렌더링하므로
+                 카드 전체를 <button>으로 두면 form-in-button(무효 HTML)이 된다 —
+                 선택 클릭은 내부 <button class="tpl-card">가 전담하고, 삭제 버튼은
+                 그 형제(sibling)로 행 오른쪽 끝에 배치(2026-09-08, ContractTemplatePanel.svelte
+                 panel-actions의 CmsDeleteButton 형제배치 원칙과 동일). -->
+            <div class="tpl-card-row" class:selected={isSelected}>
+              <button
+                type="button"
+                class="tpl-card"
+                onclick={() => selectTemplate(tpl.id)}
+              >
+                <span class="tpl-title">{tpl.title}</span>
+                <div class="tpl-meta">
+                  <span class="status-badge" class:archived={tpl.status === 'archived'}>
+                    {STATUS_LABEL[tpl.status] ?? tpl.status}
+                  </span>
+                  <span class="mode-badge" class:spreadsheet={(tpl.authoring_mode ?? 'flow') === 'spreadsheet'} class:canvas={tpl.authoring_mode === 'canvas'} class:html={tpl.authoring_mode === 'html'}>
+                    {modeLabel(tpl.authoring_mode)}
+                  </span>
+                  <span class="tpl-date">{formatDate(tpl.created_at)}</span>
+                </div>
+              </button>
+              <CmsDeleteButton
+                action="?/delete"
+                id={tpl.id}
+                warnMessage="한번 더 클릭 시 이 양식이 삭제됩니다."
+                successMessage="양식이 삭제되었습니다."
+                onsuccess={() => handleDeleted(tpl.id)}
+              />
+            </div>
           {/each}
         {/if}
       </div>
@@ -298,22 +319,37 @@
     padding: 8px 0;
   }
 
+  /* 카드 행 컨테이너(2026-09-08 신규) — 선택용 .tpl-card 버튼 + 삭제 아이콘 버튼을
+     형제로 감싼다. 보더·호버·선택 배경은 전부 이 행 단위로 옮겨왔다(예전엔 .tpl-card
+     자신이 <button> 전체였을 때 가지고 있던 스타일). */
+  .tpl-card-row {
+    display: flex;
+    align-items: stretch;
+    border-bottom: 1px solid var(--cs-lilac);
+    transition: background 0.1s;
+  }
+  .tpl-card-row:last-child { border-bottom: none; }
+  .tpl-card-row:hover      { background: var(--cs-surface-gray); }
+  .tpl-card-row.selected   { background: var(--cs-purple-op10); }
+
   .tpl-card {
     display: flex;
     flex-direction: column;
     gap: 6px;
-    width: 100%;
+    flex: 1;
+    min-width: 0;
     padding: 12px 14px;
     border: none;
-    border-bottom: 1px solid var(--cs-lilac);
     background: transparent;
     text-align: left;
     cursor: pointer;
-    transition: background 0.1s;
   }
-  .tpl-card:last-child { border-bottom: none; }
-  .tpl-card:hover    { background: var(--cs-surface-gray); }
-  .tpl-card.selected { background: var(--cs-purple-op10); }
+  /* CmsDeleteButton(.act-del) — 행 오른쪽 끝에 세로 중앙 정렬 */
+  .tpl-card-row :global(.act-del) {
+    flex-shrink: 0;
+    align-self: center;
+    margin-right: 10px;
+  }
 
   .tpl-title {
     font: var(--text-pc-body-14);

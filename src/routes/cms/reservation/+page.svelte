@@ -242,13 +242,29 @@
                 aria-label="{row.customer_name} 예약 상세 보기"
               >
                 <td>
-                  <span class="status-badge" style="background:{st.bg};color:{st.color}">
-                    {STATUS_LABEL[row.status] ?? row.status}
-                  </span>
+                  <!-- 2026-09-08 수정: '계약대기'는 "전자계약 발행·발송이 진행된 예약목록"이라
+                       확정됐다(get_rental_list p_require_contract_sent_unsigned — 서명 여부
+                       무관, 발송 여부만 확인). 그 목록에 해당하는 행(발송된 적 있음)에서는
+                       원래 상태값인 "신청대기" 배지를 더 이상 노출하지 않는다 — 계약 진행
+                       배지(서명완료/계약발송) 하나만 보여준다. 신청대기 목록 쪽은 애초에
+                       p_exclude_contract_sent=true로 이런 행이 걸러지므로 영향 없음. -->
+                  {#if !(row.status === 'hold' && row.signing_sent_at)}
+                    <span class="status-badge" style="background:{st.bg};color:{st.color}">
+                      {STATUS_LABEL[row.status] ?? row.status}
+                    </span>
+                  {/if}
                   {#if row.status === 'hold' && row.payment_confirmed_at}
                     <span class="status-badge" style="background:rgba(245,158,11,0.12);color:var(--cs-warning);margin-left:4px;">결제완료</span>
                   {/if}
-                  {#if row.status === 'hold' && row.signing_sent_at}
+                  {#if row.status === 'hold' && row.customer_signed_at}
+                    <!-- 2026-09-08 수정: 서명 완료 후에도 "계약발송" 배지가 그대로 남아있던
+                         결함 — customer_signed_at을 확인하지 않아 "계약대기"(발송·미서명)
+                         필터에서는 이미 빠졌는데도(get_rental_list p_require_contract_sent_
+                         unsigned) 이 배지만 계속 발송 상태로 보여 관리자가 "왜 계약대기
+                         목록에 없지?"라고 오인하게 했다. 우측 "계약" 컬럼(contractBadge())과
+                         동일한 판정 기준으로 통일. -->
+                    <span class="status-badge" style="background:rgba(56,142,60,0.12);color:var(--cs-success);margin-left:4px;">서명완료</span>
+                  {:else if row.status === 'hold' && row.signing_sent_at}
                     <span class="status-badge" style="background:rgba(14,165,233,0.12);color:var(--cs-info);margin-left:4px;">계약발송</span>
                   {/if}
                 </td>

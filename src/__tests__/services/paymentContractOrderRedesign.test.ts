@@ -478,6 +478,59 @@ describe('Phase E: CMS 배지·필터 정합성 검증', () => {
     expect(row?.signing_sent_at).not.toBeNull();
   });
 
+  it('E-1b(2026-09-08 신규): 서명완료됐지만 결제 미완료(hold 유지)인 예약은 계약대기에 계속 포함되고 신청대기에서는 제외된다', async () => {
+    const userId = await createEphemeralUser();
+    cleanups.push(() => deleteEphemeralUser(userId));
+
+    const reservationId = await createReservation(userId, 'hold');
+    cleanups.push(async () => {
+      await admin.from('rental_reservations').delete().eq('id', reservationId);
+    });
+
+    const { contractId, signingId, token } = await createSentContract(userId, reservationId);
+    cleanups.push(async () => {
+      await admin.from('contract_signings').delete().eq('id', signingId);
+      await admin.from('contracts').delete().eq('id', contractId);
+    });
+
+    // 결제는 하지 않고 서명만 완료 — try_confirm_reservation_order의 AND 조건 중 결제 쪽이
+    // 충족되지 않아 hold를 그대로 유지한다(서명 자체는 정상 성공).
+    const signRes = await callSign(token);
+    expect(signRes.status).toBe(200);
+
+    const { data: reservationAfterSign } = await admin
+      .from('rental_reservations')
+      .select('status')
+      .eq('id', reservationId)
+      .maybeSingle();
+    expect(reservationAfterSign?.status).toBe('hold');
+
+    // '계약대기' 칩과 동일 호출 — 서명 완료 여부와 무관하게 "발송된 적 있음"만으로 포함돼야 함
+    const { data: pendingRows, error: pendingErr } = await admin.rpc('get_rental_list', {
+      p_status: 'hold',
+      p_page: 1,
+      p_per_page: 100,
+      p_exclude_statuses: ['confirmed', 'shipped', 'in_use', 'return_requested', 'returned', 'completed', 'damage_claimed', 'draft'],
+      p_require_contract_sent_unsigned: true,
+    });
+    expect(pendingErr).toBeNull();
+    const pendingRow = (pendingRows ?? []).find((r: { reservation_id: number }) => r.reservation_id === reservationId) as
+      { reservation_id: number; customer_signed_at: string | null } | undefined;
+    expect(pendingRow).toBeDefined();
+    expect(pendingRow?.customer_signed_at).not.toBeNull();
+
+    // '신청대기' 칩과 동일 호출(p_exclude_contract_sent=true) — 전자계약을 이미 보낸 예약이므로 제외돼야 함
+    const { data: holdOnlyRows, error: holdOnlyErr } = await admin.rpc('get_rental_list', {
+      p_status: 'hold',
+      p_page: 1,
+      p_per_page: 100,
+      p_exclude_statuses: ['confirmed', 'shipped', 'in_use', 'return_requested', 'returned', 'completed', 'damage_claimed', 'draft'],
+      p_exclude_contract_sent: true,
+    });
+    expect(holdOnlyErr).toBeNull();
+    expect((holdOnlyRows ?? []).some((r: { reservation_id: number }) => r.reservation_id === reservationId)).toBe(false);
+  });
+
   it('E-2: 서명+결제(3단계) 완료로 confirmed 전환된 예약이 /cms/rentals "계약완료" 칩 조회(p_status=confirmed)에 정확히 포함된다', async () => {
     const userId = await createEphemeralUser();
     cleanups.push(() => deleteEphemeralUser(userId));

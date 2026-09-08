@@ -276,6 +276,37 @@ export function applyIssuerSignatureMarker(
   return html.split(ISSUER_SIGNATURE_MARKER).join(replacement)
 }
 
+// 예약자(고객) 서명 마커(2026-09-08 신설) — <!--ISSUER_SIGNATURE-->와 동일한 "주석으로
+// 위치만 표시" 방식이지만, 값의 출처와 치환 시점이 다르다:
+//   · 발행자 서명은 발행 시점(applySelectedTemplate)에 이미 알 수 있어 그때 1회 치환된다.
+//   · 고객 서명은 발행 시점엔 존재하지 않는다(고객이 아직 서명 전) — 이 마커는 issuance
+//     시점엔 그대로 보존되고, 고객이 실제로 서명을 제출한 시점(POST /api/contracts/
+//     [token]/sign)에만 1회 호출돼 contracts.html_document에 되구워 넣어진다.
+// 값은 고객이 /contract/[token]에서 그린 서명(SignatureCanvas.toDataURL('image/png'))이라
+// 항상 "data:image/png;base64,..." 형태 — http(s) URL이 아니므로 SAFE_SIGNATURE_URL과는
+// 별도의 data URI 전용 화이트리스트로 검증한다(콤마 이후 구간까지 base64 알파벳만 허용 —
+// 접두사만 검사하면 그 뒤에 임의 문자열을 붙여 속성 인젝션이 가능해짐).
+const CUSTOMER_SIGNATURE_MARKER = '<!--CUSTOMER_SIGNATURE-->'
+const SAFE_SIGNATURE_DATA_URL = /^data:image\/(?:png|jpeg|webp);base64,[A-Za-z0-9+/]+=*$/
+
+/**
+ * 고객(예약자) 서명 마커를 실제 <img>(또는 미지정·검증 실패 시 빈 문자열)로 치환한다.
+ * 발행자 서명과 달리 클라이언트가 제출한 값(공개 서명 링크, 인증 없는 요청)이라
+ * SAFE_SIGNATURE_DATA_URL 정규식으로 형식을 엄격히 검증한 뒤에도 escapeHtml()로 한 번 더
+ * 감싄다(base64 알파벳엔 이스케이프 대상 문자가 없어 결과는 동일하지만, 발행자 서명 함수와
+ * 동일한 방어 관행을 유지 — 나중에 형식이 바뀌어도 안전).
+ */
+export function applyCustomerSignatureMarker(
+  html: string,
+  signatureDataUrl: string | null | undefined,
+): string {
+  if (!signatureDataUrl || !SAFE_SIGNATURE_DATA_URL.test(signatureDataUrl)) {
+    return html.split(CUSTOMER_SIGNATURE_MARKER).join('')
+  }
+  const replacement = `<img src="${escapeHtml(signatureDataUrl)}" alt="예약자 서명" class="customer-sig-overlay" />`
+  return html.split(CUSTOMER_SIGNATURE_MARKER).join(replacement)
+}
+
 // 정산내역 "특이사항" 마커(2026-09-07 신설) — <!--ISSUER_SIGNATURE-->와 동일하게 HTML 주석으로
 // 지정해 {{}} 변수 치환·findHtmlUnresolvedVariables 사전검증과 완전히 분리한다. 값은 새 필드를
 // 만들지 않고 기존 "특약 조항" 패널(ContractFieldPanel.svelte 특약 탭, contracts.specifications)

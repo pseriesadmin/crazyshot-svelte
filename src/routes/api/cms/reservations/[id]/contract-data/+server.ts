@@ -30,6 +30,16 @@ function formatAmount(n: number | null | undefined): string {
   return n.toLocaleString('ko-KR') + '원'
 }
 
+// 2026-09-08 신규 — 할인금액·차감포인트·할인차감(정산내역의 "차감" 성격 3개 필드) 전용.
+// defaultRentalContractHtml.ts가 예전엔 이 3칸 앞에 "△ " 접두사를 정적 텍스트로 박아뒀는데,
+// 실제 차감액이 0이거나 없는(null) 예약에서도 "△ 0원"/"△ -"처럼 차감이 없는데 차감 기호가
+// 붙어 보이는 문제가 있었다(Stephen 실사용 중 발견). 값이 실제로 0보다 클 때만 "△ "를
+// 값 자체에 붙이도록 이관 — 0이거나 null이면 기존 formatAmount와 동일하게 표시.
+function formatDeltaAmount(n: number | null | undefined): string {
+  if (n == null || n <= 0) return formatAmount(n)
+  return '△ ' + formatAmount(n)
+}
+
 // rental_reservations.start_date/end_date("YYYY-MM-DD") → 원본 엑셀 표기("YYYY.MM.DD")
 function formatDateDot(d: string | null | undefined): string {
   if (!d) return '-'
@@ -104,10 +114,16 @@ async function resolveSelectedCouponDiscountAmount(
   const coupon = (data as { coupons: { discount_type: string; discount_value: number } | null } | null)?.coupons
   if (!coupon) return null
 
-  // cart/+page.svelte otCouponDiscount와 동일 계산식(fixed=정액 / 그 외=정률, subtotal 기준)
-  return coupon.discount_type === 'fixed'
-    ? coupon.discount_value
-    : Math.round(orderSubtotal * coupon.discount_value / 100)
+  // cart/+page.svelte otCouponDiscount와 동일 계산식(fixed/percentage/그외 3-way).
+  // ⚠️ 2026-09-08 수정: 기존엔 'fixed'가 아니면 전부 정률(%)로 계산해, free_shipping
+  // 타입 쿠폰(discount_value가 원 단위 금액)이 이 분기를 타면 주문금액의 수천%가
+  // 할인액으로 계산되는 결함이 원본(cart/+page.svelte otCouponDiscount)에 있었다 —
+  // 그쪽 수정과 동일하게 fixed/percentage가 아니면 0으로 처리(free_delivery 쿠폰의
+  // 실제 배송료 할인 적용은 cartShippingFee.ts isFreeDeliveryCouponBlocked() 문서
+  // 주석에 명시된 기존 결정대로 스코프 밖 유지).
+  if (coupon.discount_type === 'fixed') return coupon.discount_value
+  if (coupon.discount_type === 'percentage') return Math.round(orderSubtotal * coupon.discount_value / 100)
+  return 0
 }
 
 export const GET: RequestHandler = async ({ params, locals }) => {
@@ -417,13 +433,13 @@ export const GET: RequestHandler = async ({ params, locals }) => {
     반납일시:     isReturnDelivery ? '-' : (res.return_time ?? '-'),
     반납일자:     formatDateDot(res.end_date),
     기본대여요금: formatAmount(orderData?.total_amount),
-    할인금액:     formatAmount(orderData?.discount_amount),
+    할인금액:     formatDeltaAmount(orderData?.discount_amount),
     배송비:       formatAmount(orderData?.delivery_fee),
     부가세:       formatAmount(orderData?.tax_amount),
     최종합계:     formatAmount(orderData?.final_amount),
     요금유형:     res.duration_type ? (DURATION_TYPE_LABELS[res.duration_type] ?? res.duration_type) : '-',
-    할인차감:     formatAmount(couponDiscountAmount),
-    차감포인트:   formatAmount(orderData?.selected_points),
+    할인차감:     formatDeltaAmount(couponDiscountAmount),
+    차감포인트:   formatDeltaAmount(orderData?.selected_points),
     구성품:       formatComponentsText(productRes.data?.components),
     // 신규: 주문 전체 상품 목록 (반복 영역 전용)
     상품목록: buildLineItems(lineItemReservations),

@@ -1,6 +1,7 @@
 <script lang="ts">
   import { browser } from '$app/environment'
   import { hasExistingContractContent } from '$lib/utils/contract-content-mode'
+  import { isHtmlDocument } from '$lib/types/contract-document'
   import { isContractIssueBlocked } from '$lib/utils/contractIssueGuard'
   import ContractEditorModal from '$lib/components/cms/ContractEditorModal.svelte'
   import ContractTemplatePreviewModal from '$lib/components/cms/ContractTemplatePreviewModal.svelte'
@@ -72,18 +73,19 @@
   let previewTemplateId     = $state<string | null>(null)
   let hasIssuedContent      = $state(false)
   let issuedContractTitle   = $state<string | null>(null)
+  let issuedIsHtml          = $state(false)
   let issuedCheckTick       = $state(0)
 
   // 발행 목록: contractId 변경 또는 issuedCheckTick 갱신 시 발행 여부 재확인
   $effect(() => {
     void issuedCheckTick
-    if (!browser || !contractId) { hasIssuedContent = false; issuedContractTitle = null; return }
+    if (!browser || !contractId) { hasIssuedContent = false; issuedContractTitle = null; issuedIsHtml = false; return }
     const cid = contractId
     let alive = true
     ;(async () => {
       try {
         const r = await fetch(`/api/cms/contracts/${cid}/content`)
-        if (!r.ok) { if (alive) { hasIssuedContent = false; issuedContractTitle = null }; return }
+        if (!r.ok) { if (alive) { hasIssuedContent = false; issuedContractTitle = null; issuedIsHtml = false }; return }
         const data = await r.json() as {
           content_blocks?: unknown
           canvas_document?: unknown
@@ -100,6 +102,9 @@
         // authoring_mode='html' 계약은 발행 여부와 무관하게 항상 "미발행"으로 오판됐다.
         hasIssuedContent    = hasExistingContractContent(data.content_blocks, data.canvas_document, data.spreadsheet_document, data.html_document)
         issuedContractTitle = data.title ?? null
+        // html 모드는 ContractEditorModal(캔버스형 편집기)로 편집이 구조적으로 불가능해
+        // "편집" 버튼 자체를 숨긴다(2026-09-08 신규 — 특약 클릭편집만 유일한 수정 경로).
+        issuedIsHtml        = isHtmlDocument(data.html_document)
       } catch {
         if (alive) hasIssuedContent = false
       }
@@ -185,8 +190,15 @@
     </div>
   {/if}
 
-  <!-- 계약서 양식 목록 (예약현황 전용 — 대여현황에서는 발행 자체를 숨김) -->
-  {#if !isRentalView}
+  <!-- 계약서 양식 목록 (예약현황 전용 — 대여현황에서는 발행 자체를 숨김).
+       2026-09-08 추가: 이미 발행된 내용이 있으면(hasIssuedContent) 이 섹션도 함께 숨긴다 —
+       "발행" 버튼을 비활성화만 하는 대신 완전히 감춰 중복 발행 시도 자체를 차단한다(Stephen
+       지시 — 감추는 쪽이 비활성화보다 명시적). 아래 "발행 목록" 카드의 초기화(clearIssuedContract)
+       ·폐기(discardSentContract)·발행취소(cancelIssuedContract) 중 어느 것으로든 콘텐츠가
+       비워지면 issuedCheckTick이 올라가 hasIssuedContent가 다시 false로 재계산되므로, 이
+       섹션은 별도 코드 없이 자동으로 다시 나타나 재발행이 가능해진다(대여현황과 동일한
+       "발행 없음 = 섹션 노출" 패턴). -->
+  {#if !isRentalView && !hasIssuedContent}
     <div class="tpl-section">
       <div class="tpl-section-head">
         <span class="tpl-section-title">계약서 양식 선택 편집</span>
@@ -212,7 +224,7 @@
         <div class="tpl-card">
           <span class="tpl-card-title">{issuedContractTitle || '발행된 계약서'}</span>
           <div class="tpl-card-actions">
-            {#if !isRentalView && !signingsentAt && !customerSignedAt}
+            {#if !isRentalView && !signingsentAt && !customerSignedAt && !issuedIsHtml}
               <button
                 class="btn-tpl-edit"
                 onclick={() => { editorOpen = true; editorContractId = contractId }}
@@ -325,10 +337,19 @@
   <ContractTemplatePreviewModal
     {contractId}
     {reservationId}
+    {signingsentAt}
+    {customerSignedAt}
     initialTemplateId={previewTemplateId}
     viewOnly={isRentalView}
     onclose={() => { previewTemplateId = null }}
     onsent={() => { previewTemplateId = null; onrefresh() }}
+    onapplied={() => {
+      // template 모드 특약 클릭편집으로 방금 새로 발행됐을 수 있음(2026-09-08 신규) —
+      // 모달은 계속 열어둔 채(onEdit/onsent와 달리 previewTemplateId를 null로 만들지 않음)
+      // "발행 목록" 표시 상태만 재확인. 위 onEdit 콜백의 issuedCheckTick++ 패턴과 동일.
+      issuedCheckTick++
+      onrefresh()
+    }}
     onEdit={(!isRentalView && !signingsentAt && !customerSignedAt)
       ? (editedContractId) => {
           previewTemplateId = null
