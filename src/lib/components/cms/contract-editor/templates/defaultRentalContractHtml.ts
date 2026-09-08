@@ -154,6 +154,76 @@
  *    두 오버레이가 서로 영향을 주지 않게 했다. 이 마커는 신규로 발행되는 계약서부터만
  *    적용되며, 이 변경 이전에 이미 발행·서명 완료된 계약서는 마커 자체가 없어 조용히
  *    미노출된다(9차와 동일 원칙 — 레거시 계약 회귀 아님).
+ *
+ * ⛔ 2026-09-08 발견·수정(11차, 발행자 직인 위치 이동/드래그 지원 — 6차 결정 전면 반전) —
+ *    6차 주석은 "위치 이동(offsetX/offsetY)은 HTML형에 적용 대상이 없음(셀 좌표가 아니라
+ *    고정 텍스트 흐름 안의 인라인 요소)"이라고 명시했었으나, 실사용 중 "직인이 표 셀
+ *    중앙에 고정돼 원하는 위치로 옮길 수 없다"는 Stephen 피드백에 따라 이 결정을 뒤집었다.
+ *    `.issuer-sig-overlay`가 7차에서 이미 `position:absolute`(부모 `.sig-host-cell`
+ *    기준)로 전환돼 있었고 문서 내 어떤 조상에도 overflow:hidden이 없다는 점을 활용해,
+ *    DOM 구조(마커의 셀 안 위치)는 그대로 두고 `transform: translate(calc(-50% +
+ *    {offsetX}px), calc(-50% + {offsetY}px))`로 기본 중앙 위치 대비 델타만 추가하는
+ *    방식으로 구현 — 셀 밖으로도 자유롭게 이동한 것처럼 보이게 하는 데 별도 레이어
+ *    분리가 필요 없었다. `contract_templates.html_issuer_signature_offset_x/y`
+ *    (Migration #463, INTEGER, 기본 NULL=0=중앙)를 추가해 `applyIssuerSignatureMarker
+ *    (html, url, width, offsetX, offsetY)`로 확장. 드래그 UI는
+ *    `ContractTemplatePanel.svelte`(pointerdown/move/up, 드래그 중엔 DOM에 직접
+ *    transform만 적용해 60fps 유지 + 손을 뗀 시점에만 $state 커밋)에 구현.
+ *
+ * ⚠️ 2026-09-08 발견·수정(12차, 발행자·예약자 서명 셀 텍스트 중앙정렬) — `.sig-host-cell`은
+ *    도장 이미지(`.issuer-sig-overlay`/`.customer-sig-overlay`)만 `position:absolute`로
+ *    셀 중앙에 겹쳐 뜨도록 돼 있었고, 그 밑에 깔린 텍스트("한광익 (인)"/"{{고객이름}} (인)")는
+ *    `text-align` 지정이 없어 기본값(좌측 정렬)으로 남아 있었다 — 이미지는 중앙, 텍스트는
+ *    좌측이라 서로 어긋나 보인다는 Stephen 실사용 피드백에 따라 `.sig-host-cell`에
+ *    `text-align: center`를 추가해 텍스트도 이미지와 같은 중앙 기준으로 맞췄다. 이미지
+ *    쪽은 `position:absolute`라 `text-align`의 영향을 받지 않으므로(11차 드래그 오프셋
+ *    로직과 무관하게 그대로 유지), 텍스트 정렬만 독립적으로 바뀐다.
+ *
+ * ⚠️ 2026-09-08 발견·수정(13차, 문서 전체 셀 기본 정렬을 중앙으로 통일) — 12차가
+ *    `.sig-host-cell` 1곳만 중앙정렬했는데, Stephen이 문서 전체(임대인/임차인 정보·
+ *    정산내역·구분/대여지점/픽업방법/반납방법 등)의 라벨 셀·일반 값 셀 수십 곳을 한 번에
+ *    선택해 "셀 중앙에 정렬"을 재지시 — 개별 셀마다 클래스를 추가하는 대신 기본 셀
+ *    규칙(`.contract-wrap td, .contract-wrap th`) 자체에 `text-align: center`를
+ *    추가해 전 셀 기본값을 통일했다. 금액류 셀({{기본대여요금}} 등)은 이미 인라인
+ *    `style="text-align:right"`가 개별로 박혀 있어 인라인 스타일이 항상 클래스 기본값보다
+ *    우선 적용되므로 이번 변경과 무관하게 그대로 우측정렬 유지(회귀 없음).
+ *
+ * ⛔ 2026-09-08 발견·수정(14차, "계약 및 인수 확인"·"개인정보동의" 문단 관리자 편집 지원) —
+ *    이 두 섹션은 지금까지 코드에 하드코딩된 `<p>` 문단 나열이라 관리자가 CMS에서 전혀
+ *    수정할 수 없었다(특약과 달리). Stephen 요청으로 각 섹션의 `<p>` 나열을
+ *    `<!--CONTRACT_TERMS-->`/`<!--PRIVACY_TERMS-->` 마커로 교체 —
+ *    `applyContractTermsMarker()`/`applyPrivacyTermsMarker()`(contract-substitution.ts)가
+ *    `contract_templates.contract_terms_text`/`privacy_terms_text`(Migration #464, 빈 줄로
+ *    문단 구분하는 일반 텍스트, 문단 맨 앞 "[라벨]"은 자동 굵게)를 실제 `<p>` 태그로 되구워
+ *    치환한다. 값이 NULL(미커스터마이즈)이면 지금까지의 기본 문구를 그대로 사용해 하위호환.
+ *    편집 UI는 `ContractFieldPanel.svelte`에 '계약조항'·'개인정보동의' 탭 신설(기존 '특약'
+ *    탭과 동일하게 htmlMode 전용). `contracts` 테이블에는 별도 컬럼을 두지 않음 — 발행
+ *    시점에 이미 html_document 문자열에 완전히 구워지므로 감사용 스냅샷이 불필요(특약처럼
+ *    사후 클릭편집 기능을 만드는 것은 이번 요청 범위 밖).
+ *
+ * ⚠️ 2026-09-08 발견·수정(15차, 문서 진위확인 QR 삽입) — Stephen 지시: 인쇄된 계약서를
+ *    스캔해 원본 여부를 즉시 판별할 수 있도록, 최상단 "임대차 계약서" 제목 아래 발행일시
+ *    문구 우측에 QR코드 이미지를 배치. products.md §2-4의 "QR=순수 텍스트, 링크 아님"
+ *    정책과 달리 이 QR은 의도적으로 **링크형**(고객 서명/확인 페이지 `/contract/[token]`)
+ *    으로 확정했다 — 스캔 즉시 그 계약서의 실제 온라인 사본을 열어 판별을 끝내는 것이
+ *    목적이라, 문자열만 담는 방식은 "결국 관리자가 그 값으로 다시 조회해야 함"이라
+ *    목적에 부합하지 않는다는 판단(AskUserQuestion으로 Stephen 확정).
+ *    발행 시점(applySelectedTemplate)엔 아직 서명 토큰이 존재하지 않아(contract_signings
+ *    행 자체가 send-chat 시점에 생성됨) 다른 발행자 서명 마커들과 달리 이 마커
+ *    (`<!--DOCUMENT_QR-->`)는 issuance 시점엔 보존되고, "채팅으로 발송" 실행 시점
+ *    (POST /api/cms/contracts/[id]/send-chat)에 토큰이 확정된 직후 서버가
+ *    `QRCode.toDataURL()`로 QR 이미지를 직접 생성해 `applyDocumentQrMarker()`
+ *    (contract-substitution.ts)로 되구워 넣는다 — 고객 서명 마커(10차)와 동일한
+ *    "발행 시점엔 마커만 남겨두고, 값이 실제로 확정되는 시점에 되굽는다" 패턴.
+ *    재발송(기존 토큰 재사용) 시에도 동일 로직이 재실행되지만 토큰이 그대로라 QR 내용도
+ *    동일 — 멱등. 이 마커는 신규로 발행되는 계약서부터만 적용되며, 이전에 이미
+ *    발행·발송된 계약서는 마커 자체가 없어 조용히 미노출된다(10차~14차와 동일 원칙).
+ *
+ * ⚠️ 2026-09-08 발견·수정(16차, "특이사항" 셀 좌측정렬) — 13차에서 전 셀 기본 정렬을
+ *    `text-align: center`로 통일하면서, 여러 줄 자유 서술 텍스트가 들어가는 "특이사항"
+ *    (`cs-special-notes-cell`, 특약 조항 값) 셀도 함께 가운데 정렬돼 읽기 불편해졌다.
+ *    이 셀만 `.cs-special-notes-cell { text-align: left; }`로 개별 재정렬(다른 셀의
+ *    가운데 정렬 기본값은 그대로 유지).
  */
 
 export const DEFAULT_RENTAL_CONTRACT_HTML = `
@@ -163,7 +233,7 @@ export const DEFAULT_RENTAL_CONTRACT_HTML = `
   .contract-wrap h1.contract-title { text-align: center; font-size: 22px; font-weight: bold; letter-spacing: 6px; margin-bottom: 24px; }
   .contract-wrap .issue-date { text-align: center; font-size: 11px; color: #444; margin-bottom: 28px; }
   .contract-wrap table { width: 100%; border-collapse: collapse; margin-bottom: 14px; }
-  .contract-wrap td, .contract-wrap th { border: 1px solid #333; padding: 6px 8px; vertical-align: middle; font-size: 11.5px; }
+  .contract-wrap td, .contract-wrap th { border: 1px solid #333; padding: 6px 8px; vertical-align: middle; text-align: center; font-size: 11.5px; }
   .contract-wrap th { background: #f0f0f0; font-weight: bold; text-align: center; }
   .contract-wrap .label-cell { background: #f5f5f5; font-weight: bold; white-space: nowrap; width: 100px; }
   .contract-wrap .section-header { margin: 18px 0 6px; }
@@ -178,9 +248,13 @@ export const DEFAULT_RENTAL_CONTRACT_HTML = `
   .contract-wrap .sign-block { flex: 1; border: 1px solid #333; padding: 16px 12px; min-height: 100px; }
   .contract-wrap .sign-block .label { font-weight: bold; margin-bottom: 8px; }
   .contract-wrap .sign-block .value { color: #333; }
-  .contract-wrap .sig-host-cell { position: relative; }
+  .contract-wrap .sig-host-cell { position: relative; text-align: center; }
   .contract-wrap .issuer-sig-overlay { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); max-width: none; z-index: 5; pointer-events: none; }
   .contract-wrap .customer-sig-overlay { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); max-width: none; z-index: 5; pointer-events: none; max-height: 60px; }
+  .contract-wrap .cs-special-notes-cell { text-align: left; }
+  .contract-wrap .issue-date-row { display: flex; align-items: center; justify-content: center; gap: 8px; margin-bottom: 28px; }
+  .contract-wrap .issue-date-row .issue-date { margin-bottom: 0; }
+  .contract-wrap .doc-verify-qr { display: block; width: 50px; height: 50px; }
   @media print {
     .contract-wrap { font-size: 11px; padding: 20px 15px; }
   }
@@ -188,7 +262,9 @@ export const DEFAULT_RENTAL_CONTRACT_HTML = `
 <div class="contract-wrap">
 
   <h1 class="contract-title">임 대 차 계 약 서</h1>
-  <p class="issue-date">(계약서 발행일시: {{계약서발행일}})</p>
+  <div class="issue-date-row">
+    <p class="issue-date">(계약서 발행일시: {{계약서발행일}})</p><!--DOCUMENT_QR-->
+  </div>
 
   <!-- 임대인 정보 (고정) -->
   <table>
@@ -219,7 +295,7 @@ export const DEFAULT_RENTAL_CONTRACT_HTML = `
         <td class="label-cell">연락처</td>
         <td>{{연락처}}</td>
         <td class="label-cell">예약자</td>
-        <td class="sig-host-cell">(인){{고객이름}}<!--CUSTOMER_SIGNATURE--></td>
+        <td class="sig-host-cell">{{고객이름}} (인)<!--CUSTOMER_SIGNATURE--></td>
       </tr>
       <tr>
         <td class="label-cell">주소</td>
@@ -287,7 +363,7 @@ export const DEFAULT_RENTAL_CONTRACT_HTML = `
       <tr>
         <td class="label-cell">정상 대여가 총액</td>
         <td style="text-align:right">{{기본대여요금}}</td>
-        <td class="label-cell" rowspan="4">특이사항</td>
+        <td class="label-cell" rowspan="4">특약사항</td>
         <td class="cs-special-notes-cell" colspan="2" rowspan="4"><!--SPECIAL_NOTES--></td>
       </tr>
       <!-- 2026-09-08 수정 — "△"(차감 표시) 접두사를 이 정적 템플릿 텍스트에서 제거하고
@@ -329,25 +405,11 @@ export const DEFAULT_RENTAL_CONTRACT_HTML = `
 
   <!-- 계약 및 인수 확인 -->
   <table class="section-header"><tbody><tr><td>▣계약 및 인수 확인</td></tr></tbody></table>
-  <div class="terms">
-    <p>제반사고 및 사용상의 취급 부주의로 인한 장비손상에 대하여 배상의 책임을 집니다.</p>
-    <p>상품정보를 이상 없이 인수받았기에 아래와 같이 서명 날인합니다</p>
-    <p>※촬영(대여)전 크레이지샷 매장 내에서 구성품 확인,작동 이상유무 확인,테스트 촬영을 꼭 하시기 바랍니다.</p>
-    <p>※구성품 확인,작동 이상유무 확인,테스트 촬영을 하지 않았을 경우 본 촬영에 들어가 발생되는 모든 상황에 대해 크레이지샷은 책임을 지지 않습니다.</p>
-    <p><strong>[비대면 인도 및 검수]</strong>회사는 장비의 정상 작동 여부를 확인한 후 택배 또는 퀵서비스로 발송하며,고객은 장비 수령 즉시 구성품 및 상태를 확인해야 합니다.</p>
-    <p><strong>[하자 통보 의무]</strong>장비에 결함이 있거나 구성품이 누락된 경우,고객은 수령 후[3시간]이내에 사진 또는 영상과 함께 회사에 통보해야 합니다.</p>
-    <p><strong>[인도 완료 의제]</strong>위 기한 내에 별도의 이의제기가 없는 경우,고객이 장비를 이상 없는 상태로 인도받은 것으로 간주하며 이후 발생하는 모든 파손 및 기능 불능에 대한 책임은 고객에게 귀속됩니다.</p>
-    <p><strong>[배송 중 사고]</strong>배송 과정에서 발생한 파손은 운송업체의 책임 규정에 따르되,고객이 수령 후 즉시 신고하지 않아 운송업체에 책임을 물을 수 없게 된 경우 그 손해는 고객이 배상합니다.</p>
-    <p>기타 계약조건은 당사 홈페이지(www.crazyshot.kr)의 이용약관을 참조하여 주십시오.</p>
-  </div>
+  <div class="terms"><!--CONTRACT_TERMS--></div>
 
   <!-- 개인정보동의 -->
   <table class="section-header"><tbody><tr><td>▣개인정보동의</td></tr></tbody></table>
-  <div class="terms">
-    <p><strong>[신원 검증]</strong>고가 장비 대여 시 본인 확인을 위해 신분증 및3개월 이내 등본 사본을 제출하며,위조 시 즉시 형사 고발됩니다.</p>
-    <p><strong>[보안 관리]</strong>제출 서류는 암호화된 독립 저장소에 보관하며,정상 반납12개월 후 파기하되 분쟁 시에는 해결 시까지 보관합니다.</p>
-    <p><strong>[법적 대응]</strong>장비 미반납·연락 두절 시 수집된 정보를 바탕으로 횡령 및 사기죄 고소를 진행하며,관련 정보를 수사기관에 제공합니다.</p>
-  </div>
+  <div class="terms"><!--PRIVACY_TERMS--></div>
 
 </div>
 `.trim()

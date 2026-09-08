@@ -162,7 +162,7 @@ export const GET: RequestHandler = async ({ params, locals }) => {
   const pointIds = [res.pickup_point_id, res.return_point_id].filter((v): v is string => !!v)
 
   // ── 2. 병렬 조회: 기본 예약의 스칼라 필드용 데이터 ────────────────────────
-  const [productRes, userRes, orderItemRes, methodOptsRes, addrRes, pointRes, contractRes, ownPriceRes] = await Promise.all([
+  const [productRes, userRes, orderItemRes, methodOptsRes, addrRes, pointRes, ownPriceRes] = await Promise.all([
     admin.from('products').select('name, product_code, components').eq('id', res.product_id).maybeSingle(),
     admin.from('user_profiles').select('full_name, phone, email').eq('id', res.user_id).maybeSingle(),
     admin.from('order_items').select('order_id').eq('reservation_id', reservationId).maybeSingle(),
@@ -184,14 +184,6 @@ export const GET: RequestHandler = async ({ params, locals }) => {
     pointIds.length > 0
       ? admin.from('pickup_points').select('id, name').in('id', pointIds)
       : Promise.resolve({ data: [] as { id: string; name: string }[], error: null }),
-    // CS2654 C2 — 계약서발행일(이 예약의 최신 계약 발행 시각)
-    admin.from('contracts')
-      .select('created_at')
-      .eq('reservation_id', reservationId)
-      .is('deleted_at', null)
-      .order('created_at', { ascending: false })
-      .limit(1)
-      .maybeSingle(),
     // 대여 장비내역 Amount(금액) — 기준 예약(단독 예약 경로 전용) 실제 대여요금(price_rules).
     // 주문 묶음 경로(siblingRows)는 아래 §3에서 reservation별 duration_type이 서로 다를 수
     // 있어 별도 배치 조회로 처리 — 이 쿼리는 orderId가 없는 단독 예약일 때만 사용된다.
@@ -444,7 +436,13 @@ export const GET: RequestHandler = async ({ params, locals }) => {
     // 신규: 주문 전체 상품 목록 (반복 영역 전용)
     상품목록: buildLineItems(lineItemReservations),
     // CS2654 C2 — 대응데이터 없던 6개 중 5개 신규 반영(이용기간금액은 의도적 보류)
-    계약서발행일: formatDateDot(contractRes.data?.created_at ?? null),
+    // 2026-09-08 수정: 기존엔 "이 예약에 이미 존재하는 계약서의 created_at"을 DB에서
+    // 조회했는데, 최초 발행(신규 계약 생성) 시점엔 이 API가 호출되는 순간(발행 모달을 여는
+    // 시점) 아직 contracts 행 자체가 생성되기 전이라 조회 결과가 항상 없어 "-"로만 채워지는
+    // 구조적 버그였다(재발송 등 이미 계약이 존재하는 극히 일부 경로에서만 정상 날짜가
+    // 보였음). "발행일"의 의미상 원하는 값은 어차피 "지금(발행 시점)"이므로, DB 조회 없이
+    // 현재 시각을 바로 사용하도록 변경 — 최초 발행 시에도 항상 정상적으로 오늘 날짜가 채워짐.
+    계약서발행일: formatDateDot(new Date().toISOString()),
     지점옵션:     branchName ?? '-',
     '총 정상 대여가': formatAmount(orderData?.total_amount),
     총사용시간:   formatTotalUsageHours(

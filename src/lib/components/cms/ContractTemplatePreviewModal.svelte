@@ -1,6 +1,6 @@
 <script lang="ts">
   import { csToast } from '$lib/utils/toast'
-  import { substituteVariables, substituteSpreadsheetDocument, substituteHtmlDocument, findHtmlUnresolvedVariables, applyIssuerSignatureMarker, applySpecialNotesMarker, updateSpecialNotesInHtml, type AnyContentBlock } from '$lib/utils/contract-substitution'
+  import { substituteVariables, substituteSpreadsheetDocument, substituteHtmlDocument, findHtmlUnresolvedVariables, applyIssuerSignatureMarker, applySpecialNotesMarker, updateSpecialNotesInHtml, applyContractTermsMarker, applyPrivacyTermsMarker, type AnyContentBlock } from '$lib/utils/contract-substitution'
   import { applyContractTemplate } from '$lib/utils/contract-apply-template'
   import { hasExistingContractContent } from '$lib/utils/contract-content-mode'
   import { isTiptapDocBlock, isSpreadsheetDocument, isHtmlDocument } from '$lib/types/contract-document'
@@ -30,6 +30,12 @@
     html_issuer_signature_url?: string | null
     /** html 모드 전용: 발행자 서명·직인 이미지 너비(px, Migration #451) */
     html_issuer_signature_width?: number | null
+    /** html 모드 전용: 발행자 서명·직인 이미지의 기본 중앙 위치 대비 이동 오프셋(px, Migration #463) */
+    html_issuer_signature_offset_x?: number | null
+    html_issuer_signature_offset_y?: number | null
+    /** html 모드 전용: "계약 및 인수 확인"·"개인정보동의" 섹션 문단 텍스트(Migration #464) */
+    contract_terms_text?: string | null
+    privacy_terms_text?: string | null
   }
 
   interface Props {
@@ -151,9 +157,13 @@
                 selectedTemplate.html_document as string,
                 selectedTemplate.html_issuer_signature_url,
                 selectedTemplate.html_issuer_signature_width,
+                selectedTemplate.html_issuer_signature_offset_x,
+                selectedTemplate.html_issuer_signature_offset_y,
               )
               const withNotes = applySpecialNotesMarker(withSig, selectedTemplate.specifications)
-              return subData ? substituteHtmlDocument(withNotes, subData) : withNotes
+              const withContractTerms = applyContractTermsMarker(withNotes, selectedTemplate.contract_terms_text)
+              const withPrivacyTerms  = applyPrivacyTermsMarker(withContractTerms, selectedTemplate.privacy_terms_text)
+              return subData ? substituteHtmlDocument(withPrivacyTerms, subData) : withPrivacyTerms
             })()
           : null)
   )
@@ -378,13 +388,21 @@
     const substitutedHtmlDocument =
       isHtml && isHtmlDocument(selectedTemplate.html_document)
         ? substituteHtmlDocument(
-            applySpecialNotesMarker(
-              applyIssuerSignatureMarker(
-                selectedTemplate.html_document as string,
-                selectedTemplate.html_issuer_signature_url,
-                selectedTemplate.html_issuer_signature_width,
+            applyPrivacyTermsMarker(
+              applyContractTermsMarker(
+                applySpecialNotesMarker(
+                  applyIssuerSignatureMarker(
+                    selectedTemplate.html_document as string,
+                    selectedTemplate.html_issuer_signature_url,
+                    selectedTemplate.html_issuer_signature_width,
+                    selectedTemplate.html_issuer_signature_offset_x,
+                    selectedTemplate.html_issuer_signature_offset_y,
+                  ),
+                  specs,
+                ),
+                selectedTemplate.contract_terms_text,
               ),
-              specs,
+              selectedTemplate.privacy_terms_text,
             ),
             subData,
           )
@@ -403,6 +421,8 @@
       htmlDocument:        substitutedHtmlDocument,
       htmlIssuerSignatureUrl:   isHtml ? (selectedTemplate.html_issuer_signature_url ?? null)   : undefined,
       htmlIssuerSignatureWidth: isHtml ? (selectedTemplate.html_issuer_signature_width ?? null) : undefined,
+      htmlIssuerSignatureOffsetX: isHtml ? (selectedTemplate.html_issuer_signature_offset_x ?? null) : undefined,
+      htmlIssuerSignatureOffsetY: isHtml ? (selectedTemplate.html_issuer_signature_offset_y ?? null) : undefined,
     })
 
     if (result.error) throw new Error(result.error)

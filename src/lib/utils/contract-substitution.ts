@@ -250,6 +250,14 @@ const ISSUER_SIGNATURE_MAX_WIDTH = 1200
 const ISSUER_SIGNATURE_DEFAULT_WIDTH = 90
 
 /**
+ * 위치 이동(드래그) 오프셋(px) 허용 범위(Migration #463, 2026-09-08) — 문서 전체 어디로든
+ * 옮길 수 있어야 하므로 매우 넓게 잡되(§ Stephen "문서 전체 어디든 자유 이동" 확정),
+ * 비정상적으로 큰 값이 실수로 저장돼 인쇄 레이아웃을 완전히 벗어나는 사고를 막기 위한
+ * 최소한의 안전장치로만 클램프한다.
+ */
+const ISSUER_SIGNATURE_OFFSET_LIMIT = 2000
+
+/**
  * 발행자 서명·직인 이미지 마커를 실제 <img> 태그(또는 미지정 시 빈 문자열)로 치환한다.
  * {{변수명}} 치환과 완전히 분리된 별도 패스 — ContractTemplatePanel.svelte의 관리자 편집
  * 미리보기(변수 미치환 상태)에서도 독립적으로 호출해 서명 삽입 결과만 즉시 확인할 수 있다.
@@ -257,13 +265,21 @@ const ISSUER_SIGNATURE_DEFAULT_WIDTH = 90
  * escapeHtml()로 감싼다.
  *
  * width(px)는 스프레드시트형 크기조절 툴바(소(100)/중(200)/대(400) + 커스텀 입력)와 동일한
- * 20~1200 범위로 클램프한다 — 위치(offsetX/offsetY) 개념은 HTML형에 없음(셀 좌표가 아니라
- * 고정 텍스트 흐름 안의 인라인 요소이므로 드래그 이동이 성립하지 않음).
+ * 20~1200 범위로 클램프한다.
+ *
+ * offsetX/offsetY(px, Migration #463)는 이미지의 기본 중앙 위치(top:50%, left:50%,
+ * translate(-50%,-50%)) 대비 이동 델타값이다 — 둘 다 미지정(또는 0)이면 기존과 완전히
+ * 동일하게 셀 중앙에 표시되어 하위호환된다. `.sig-host-cell`(position:relative)이 이미
+ * 이 이미지의 위치 기준점이고 그 조상 어디에도 overflow:hidden이 없으므로, translate에
+ * 큰 오프셋을 더하는 것만으로 문서 전체 어디로든 자유롭게 이동한 것처럼 보이게 할 수 있다
+ * (DOM 구조 자체는 그대로 유지 — 별도 레이어로 옮길 필요 없음).
  */
 export function applyIssuerSignatureMarker(
   html: string,
   imageUrl: string | null | undefined,
   width?: number | null,
+  offsetX?: number | null,
+  offsetY?: number | null,
 ): string {
   if (!imageUrl || !SAFE_SIGNATURE_URL.test(imageUrl)) {
     return html.split(ISSUER_SIGNATURE_MARKER).join('')
@@ -272,7 +288,12 @@ export function applyIssuerSignatureMarker(
     ISSUER_SIGNATURE_MAX_WIDTH,
     Math.max(ISSUER_SIGNATURE_MIN_WIDTH, width && width > 0 ? Math.round(width) : ISSUER_SIGNATURE_DEFAULT_WIDTH),
   )
-  const replacement = `<img src="${escapeHtml(imageUrl)}" alt="발행자 직인" class="issuer-sig-overlay" style="width:${safeWidth}px" />`
+  const clampOffset = (v?: number | null): number =>
+    Number.isFinite(v) ? Math.min(ISSUER_SIGNATURE_OFFSET_LIMIT, Math.max(-ISSUER_SIGNATURE_OFFSET_LIMIT, Math.round(v as number))) : 0
+  const safeOffsetX = clampOffset(offsetX)
+  const safeOffsetY = clampOffset(offsetY)
+  const transform = `translate(calc(-50% + ${safeOffsetX}px), calc(-50% + ${safeOffsetY}px))`
+  const replacement = `<img src="${escapeHtml(imageUrl)}" alt="발행자 직인" class="issuer-sig-overlay" style="width:${safeWidth}px; transform:${transform}" />`
   return html.split(ISSUER_SIGNATURE_MARKER).join(replacement)
 }
 
@@ -305,6 +326,30 @@ export function applyCustomerSignatureMarker(
   }
   const replacement = `<img src="${escapeHtml(signatureDataUrl)}" alt="예약자 서명" class="customer-sig-overlay" />`
   return html.split(CUSTOMER_SIGNATURE_MARKER).join(replacement)
+}
+
+// 문서 진위확인 QR 마커(2026-09-08 신설) — 인쇄된 계약서를 스캔하면 그 계약서의 실제 온라인
+// 사본(서명 링크/확인 페이지, /contract/[token])으로 바로 연결돼 원본 여부를 즉시 판별할 수
+// 있게 한다(Stephen 확정 — products.md §2-4의 "QR=텍스트, 링크 아님" 정책과 달리, 이 QR은
+// 의도적으로 링크형이다: 스캔 즉시 확인이 목적이므로 문자열만 담는 방식은 부적합).
+// 값은 서버가 send-chat 시점에 생성한 data:image/png;base64 QR 이미지 — 고객 서명과 동일한
+// 검증 정책(SAFE_SIGNATURE_DATA_URL, 콤마 이후 base64 알파벳만 허용)을 그대로 재사용한다.
+const DOCUMENT_QR_MARKER = '<!--DOCUMENT_QR-->'
+
+/**
+ * 문서 진위확인 QR 마커를 실제 <img>(또는 미지정·검증 실패 시 빈 문자열)로 치환한다.
+ * send-chat 시점에 서버가 QRCode.toDataURL()로 직접 생성한 값이라 사용자 입력은 아니지만,
+ * 다른 base64 이미지 마커와 동일한 방어 관행(형식 검증 + escapeHtml)을 유지한다.
+ */
+export function applyDocumentQrMarker(
+  html: string,
+  qrDataUrl: string | null | undefined,
+): string {
+  if (!qrDataUrl || !SAFE_SIGNATURE_DATA_URL.test(qrDataUrl)) {
+    return html.split(DOCUMENT_QR_MARKER).join('')
+  }
+  const replacement = `<img src="${escapeHtml(qrDataUrl)}" alt="계약서 진위확인 QR" class="doc-verify-qr" />`
+  return html.split(DOCUMENT_QR_MARKER).join(replacement)
 }
 
 // 정산내역 "특이사항" 마커(2026-09-07 신설) — <!--ISSUER_SIGNATURE-->와 동일하게 HTML 주석으로
@@ -361,6 +406,81 @@ export function updateSpecialNotesInHtml(
 ): string {
   if (!SPECIAL_NOTES_CELL_REGEX.test(html)) return html
   return html.replace(SPECIAL_NOTES_CELL_REGEX, `$1${formatSpecialNotesText(specifications)}$3`)
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// "계약 및 인수 확인"·"개인정보동의" 마커(Migration #464, 2026-09-08 신설) — 지금까지
+// defaultRentalContractHtml.ts에 <p> 문단으로 하드코딩돼 있어 관리자가 전혀 수정할 수
+// 없던 두 섹션을 편집 가능하게 전환. 값은 contract_templates.contract_terms_text/
+// privacy_terms_text(빈 줄로 문단 구분한 일반 텍스트) — NULL(미커스터마이즈)이면 지금까지의
+// 기본 문구를 그대로 사용해 하위호환. 문단 맨 앞이 "[라벨]" 형태면 그 대괄호 부분만 자동으로
+// <strong>처리한다 — 기존 하드코딩 문단의 <strong>[라벨]</strong>내용 관례를 그대로 재현.
+// ─────────────────────────────────────────────────────────────────────────────
+
+const CONTRACT_TERMS_MARKER = '<!--CONTRACT_TERMS-->'
+const PRIVACY_TERMS_MARKER  = '<!--PRIVACY_TERMS-->'
+
+export const DEFAULT_CONTRACT_TERMS_TEXT =
+`제반사고 및 사용상의 취급 부주의로 인한 장비손상에 대하여 배상의 책임을 집니다.
+
+상품정보를 이상 없이 인수받았기에 아래와 같이 서명 날인합니다
+
+※촬영(대여)전 크레이지샷 매장 내에서 구성품 확인,작동 이상유무 확인,테스트 촬영을 꼭 하시기 바랍니다.
+
+※구성품 확인,작동 이상유무 확인,테스트 촬영을 하지 않았을 경우 본 촬영에 들어가 발생되는 모든 상황에 대해 크레이지샷은 책임을 지지 않습니다.
+
+[비대면 인도 및 검수]회사는 장비의 정상 작동 여부를 확인한 후 택배 또는 퀵서비스로 발송하며,고객은 장비 수령 즉시 구성품 및 상태를 확인해야 합니다.
+
+[하자 통보 의무]장비에 결함이 있거나 구성품이 누락된 경우,고객은 수령 후[3시간]이내에 사진 또는 영상과 함께 회사에 통보해야 합니다.
+
+[인도 완료 의제]위 기한 내에 별도의 이의제기가 없는 경우,고객이 장비를 이상 없는 상태로 인도받은 것으로 간주하며 이후 발생하는 모든 파손 및 기능 불능에 대한 책임은 고객에게 귀속됩니다.
+
+[배송 중 사고]배송 과정에서 발생한 파손은 운송업체의 책임 규정에 따르되,고객이 수령 후 즉시 신고하지 않아 운송업체에 책임을 물을 수 없게 된 경우 그 손해는 고객이 배상합니다.
+
+기타 계약조건은 당사 홈페이지(www.crazyshot.kr)의 이용약관을 참조하여 주십시오.`
+
+export const DEFAULT_PRIVACY_TERMS_TEXT =
+`[신원 검증]고가 장비 대여 시 본인 확인을 위해 신분증 및3개월 이내 등본 사본을 제출하며,위조 시 즉시 형사 고발됩니다.
+
+[보안 관리]제출 서류는 암호화된 독립 저장소에 보관하며,정상 반납12개월 후 파기하되 분쟁 시에는 해결 시까지 보관합니다.
+
+[법적 대응]장비 미반납·연락 두절 시 수집된 정보를 바탕으로 횡령 및 사기죄 고소를 진행하며,관련 정보를 수사기관에 제공합니다.`
+
+/**
+ * 빈 줄(연속 개행 1개 이상)로 문단을 나눈 일반 텍스트를 <p> 태그 목록으로 렌더링한다.
+ * 문단 맨 앞이 "[라벨]" 형태면 그 부분만 <strong>으로 감싼다(기존 하드코딩 관례 재현).
+ * escapeHtml()을 먼저 적용한 뒤 그 결과 문자열에서 대괄호 패턴을 찾으므로 XSS 안전.
+ * @internal
+ */
+function renderTermsParagraphsHtml(text: string): string {
+  return text
+    .split(/\n{2,}/)
+    .map((p) => p.trim())
+    .filter(Boolean)
+    .map((p) => {
+      const escaped = escapeHtml(p).replace(/\n/g, '<br/>')
+      const m = escaped.match(/^(\[[^\]]+\])([\s\S]*)$/)
+      return m ? `<p><strong>${m[1]}</strong>${m[2]}</p>` : `<p>${escaped}</p>`
+    })
+    .join('')
+}
+
+/** "계약 및 인수 확인" 마커를 문단 텍스트(또는 미지정 시 기본 문구)로 치환한다. */
+export function applyContractTermsMarker(
+  html: string,
+  text: string | null | undefined,
+): string {
+  const body = renderTermsParagraphsHtml(text && text.trim() ? text : DEFAULT_CONTRACT_TERMS_TEXT)
+  return html.split(CONTRACT_TERMS_MARKER).join(body)
+}
+
+/** "개인정보동의" 마커를 문단 텍스트(또는 미지정 시 기본 문구)로 치환한다. */
+export function applyPrivacyTermsMarker(
+  html: string,
+  text: string | null | undefined,
+): string {
+  const body = renderTermsParagraphsHtml(text && text.trim() ? text : DEFAULT_PRIVACY_TERMS_TEXT)
+  return html.split(PRIVACY_TERMS_MARKER).join(body)
 }
 
 /**

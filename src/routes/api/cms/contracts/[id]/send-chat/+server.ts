@@ -9,7 +9,7 @@ import { recordAuditLog } from '$lib/contract-signature/auditLog'
 import { checkIssuerSignatureRequired } from '$lib/contract-signature/issuerSignatureCheck'
 import { sendPushToUser } from '$lib/server/push'
 import { isContractIssueBlocked } from '$lib/utils/contractIssueGuard'
-import { findUnresolvedVariables } from '$lib/utils/contract-substitution'
+import { findUnresolvedVariables, applyDocumentQrMarker } from '$lib/utils/contract-substitution'
 
 export const POST: RequestHandler = async ({ params, locals, url }) => {
   const cmsRole = await getCmsRoleForAction(locals)
@@ -24,7 +24,7 @@ export const POST: RequestHandler = async ({ params, locals, url }) => {
   // 계약서 조회 → user_id 확인
   const { data: contract, error: contractErr } = await admin
     .from('contracts')
-    .select('id, user_id, reservation_id, content_blocks, spreadsheet_document, html_document')
+    .select('id, user_id, reservation_id, content_blocks, spreadsheet_document, html_document, authoring_mode')
     .eq('id', contractId)
     .maybeSingle()
 
@@ -121,6 +121,29 @@ export const POST: RequestHandler = async ({ params, locals, url }) => {
   }
 
   const signingUrl = `${url.origin}/contract/${token}`
+
+  // 2026-09-08: 문서 진위확인 QR 되굽기 — html 모드에서만 의미 있음(다른 모드는
+  // <!--DOCUMENT_QR--> 마커 자체가 없어 no-op). 발행 시점엔 토큰이 없어 마커를 그대로
+  // 둔 채 보존해뒀다가, 토큰이 확정되는 이 시점(최초 발송·재발송 공통)에 QR을 생성해
+  // html_document에 되구워 넣는다 — 실패해도 발송 자체는 막지 않는 fail-soft.
+  if (contract.authoring_mode === 'html' && typeof contract.html_document === 'string') {
+    try {
+      const QRCode = (await import('qrcode')).default
+      const qrDataUrl = await QRCode.toDataURL(signingUrl, { width: 200, margin: 1 })
+      const bakedHtml = applyDocumentQrMarker(contract.html_document, qrDataUrl)
+      if (bakedHtml !== contract.html_document) {
+        await admin
+          .from('contracts')
+          .update({ html_document: bakedHtml })
+          .eq('id', contractId)
+      }
+    } catch (e) {
+      console.error(
+        '[contracts/send-chat] applyDocumentQrMarker 되굽기 실패(fail-soft):',
+        e instanceof Error ? e.message : e,
+      )
+    }
+  }
 
   // 채팅 세션 탐색/생성 — 공용 헬퍼로 통합(Migration 282, find_or_create_general_chat_session).
   // 과거엔 이 파일이 context_type 필터 없이(= 'general' 세션과 무관한 엉뚱한 세션과 뒤섞임)

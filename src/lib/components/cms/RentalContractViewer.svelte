@@ -75,13 +75,23 @@
   let issuedContractTitle   = $state<string | null>(null)
   let issuedIsHtml          = $state(false)
   let issuedCheckTick       = $state(0)
+  // 2026-09-08 신규 — hasIssuedContent는 비동기 조회로 채워지는데 초기값이 false라, 조회가
+  // 끝나기 전까지는 "발행 안 됨" 취급되어 이미 발행된 계약에서도 "계약서 양식 선택 편집"
+  // 섹션(발행 버튼)이 잠깐 잘못 노출되는 깜빡임이 있었다(실사용 중 발견). 조회 진행 중에는
+  // 두 섹션(발행 버튼 / 발행 목록) 모두 숨겨 그 틈을 없앤다.
+  let contentCheckLoading  = $state(false)
 
   // 발행 목록: contractId 변경 또는 issuedCheckTick 갱신 시 발행 여부 재확인
   $effect(() => {
     void issuedCheckTick
-    if (!browser || !contractId) { hasIssuedContent = false; issuedContractTitle = null; issuedIsHtml = false; return }
+    if (!browser || !contractId) {
+      hasIssuedContent = false; issuedContractTitle = null; issuedIsHtml = false
+      contentCheckLoading = false
+      return
+    }
     const cid = contractId
     let alive = true
+    contentCheckLoading = true
     ;(async () => {
       try {
         const r = await fetch(`/api/cms/contracts/${cid}/content`)
@@ -107,6 +117,8 @@
         issuedIsHtml        = isHtmlDocument(data.html_document)
       } catch {
         if (alive) hasIssuedContent = false
+      } finally {
+        if (alive) contentCheckLoading = false
       }
     })()
     return () => { alive = false }
@@ -198,7 +210,7 @@
        비워지면 issuedCheckTick이 올라가 hasIssuedContent가 다시 false로 재계산되므로, 이
        섹션은 별도 코드 없이 자동으로 다시 나타나 재발행이 가능해진다(대여현황과 동일한
        "발행 없음 = 섹션 노출" 패턴). -->
-  {#if !isRentalView && !hasIssuedContent}
+  {#if !isRentalView && !contentCheckLoading && !hasIssuedContent}
     <div class="tpl-section">
       <div class="tpl-section-head">
         <span class="tpl-section-title">계약서 양식 선택 편집</span>
@@ -222,7 +234,10 @@
       </div>
       <div class="tpl-list">
         <div class="tpl-card">
-          <span class="tpl-card-title">{issuedContractTitle || '발행된 계약서'}</span>
+          <!-- 2026-09-08 수정: "발행된 계약서"라는 일반 문구 대신 이 예약의 실제 상품명(+품번)을
+               명시적으로 노출 — 여러 예약을 오가며 확인할 때 어느 계약서인지 한눈에 구분되도록 함
+               (Stephen 지시, 계약문서 내 상품명 표기와 동일한 정보를 카드 제목에도 노출). -->
+          <span class="tpl-card-title">{productName}{productCode ? ` ${productCode}` : ''}</span>
           <div class="tpl-card-actions">
             {#if !isRentalView && !signingsentAt && !customerSignedAt && !issuedIsHtml}
               <button
@@ -232,13 +247,16 @@
                 편집
               </button>
             {/if}
+            <!-- 2026-09-08 수정: 취소·만료 예약도 "발송"만 막고 "열람"은 항상 허용 —
+                 이전엔 issueBlocked 예약이면 버튼 자체가 비활성화돼 이미 발행된 계약
+                 내용조차 다시 볼 수 없었다(Stephen 지시로 열람 허용). 아래 모달 호출부의
+                 viewOnly={isRentalView || issueBlocked}가 실제 편집·발송 기능은 계속
+                 차단한다 — 이 버튼은 더 이상 disabled 처리하지 않는다. -->
             <button
               class="btn-tpl-preview"
-              disabled={!isRentalView && issueBlocked}
-              title={(!isRentalView && issueBlocked) ? `${issueBlockedLabel} 예약은 계약서를 발송할 수 없습니다.` : undefined}
               onclick={() => { previewTemplateId = '' }}
             >
-              {isRentalView || customerSignedAt ? '보기' : '미리보기 & 발송'}
+              {isRentalView || customerSignedAt || issueBlocked ? '보기' : '미리보기 & 발송'}
             </button>
             {#if !isRentalView && !signingsentAt && !customerSignedAt}
               <span class="tpl-card-del-gap"></span>
@@ -260,6 +278,17 @@
               >
                 {isResending ? '발송 중...' : '재발송'}
               </button>
+              <!-- 2026-09-08 이관 — 기존엔 카드 바깥 .contract-actions에 별도로 떨어져 있던
+                   "서명 링크 확인" 버튼을 발행 목록 카드 액션 행 안으로 이동(레이아웃 통일감,
+                   Stephen 지시). 노출 조건(signingUrl 존재 + 미서명)은 원래와 동일 — 위치만 이동. -->
+              {#if signingUrl}
+                <a
+                  href={signingUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  class="btn-tpl-resend"
+                >서명 링크 확인 ↗</a>
+              {/if}
               <!-- Stage 5 (EC-6): 폐기 — 서명 링크 만료 + 콘텐츠 초기화 (manager 이상 서버단 게이트) -->
               <span class="tpl-card-del-gap"></span>
               <CmsDeleteButton
@@ -313,15 +342,10 @@
         class="btn-secondary"
       >PDF 다운로드</a>
     {/if}
-
-    {#if !isRentalView && signingUrl && !customerSignedAt}
-      <a
-        href={signingUrl}
-        target="_blank"
-        rel="noopener noreferrer"
-        class="btn-secondary"
-      >서명 링크 확인 ↗</a>
-    {/if}
+    <!-- 2026-09-08: "서명 링크 확인" 버튼은 "발행 목록" 카드의 액션 행 안으로 이관됐다
+         (레이아웃 통일감). 여기 남아있던 원본을 지우지 않아 "발송됨+미서명" 상태에서
+         동일 링크가 카드 안/밖 두 곳에 중복 렌더링되던 결함을 sp3-qa-agent가 발견 —
+         이관이 아니라 복제가 돼 있었음. 이 블록에서 완전히 제거해 카드 쪽 1곳만 남김. -->
   </div>
 </div>
 
@@ -340,7 +364,7 @@
     {signingsentAt}
     {customerSignedAt}
     initialTemplateId={previewTemplateId}
-    viewOnly={isRentalView}
+    viewOnly={isRentalView || issueBlocked}
     onclose={() => { previewTemplateId = null }}
     onsent={() => { previewTemplateId = null; onrefresh() }}
     onapplied={() => {

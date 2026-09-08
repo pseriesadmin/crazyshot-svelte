@@ -570,16 +570,24 @@
     if (forceCopy) {
       if (!bulkTime) bulkTime = '12:00'
       if (!bulkReturnTime) bulkReturnTime = '13:00'
+    } else if (isDeliveryTypeMethod(v)) {
+      // 2026-09-08(Stephen 확정) — 수령이 배송(is_delivery_type)이면, 반납이 요청 A로
+      // 강제고정(forceCopy)되지 않는 조합(방문·퀵 등 §case②)이어도 반납일 전체가 하루로
+      // 청구되어(rental-fee-policy.md §1 ②, calcRentalMinutes deliveryLocked 분기) 반납
+      // 시간은 무의미하다 — 저장값 자체를 24:00으로 강제해 예약정보에 그대로 반영한다.
+      bulkReturnTime = '24:00'
     }
     applyBulkToItems()
   }
   function bulkHandleReturnMethod(v: DeliveryMethod) {
     // 수령방식이 배송으로 잠긴 상태에서는 반납방식 독립 변경 차단(요청 A)
     if (isDeliveryLocked(bulkOpts.rentalMethod)) return
-    // 2026-09-07 수정 — 반납방식만 변경하는 것이므로 수령 leg(bulkDate/bulkTime)는 절대
-    // 건드리지 않고, 반납 leg도 날짜(bulkReturnDate)는 보존한 채 시간만 재설정 대상으로
-    // 좁힌다(위 resetReturnTimeForMethodChange 정의부 주석 참고).
-    if (v !== bulkOpts.returnMethod && bulkReturnTime) {
+    // 2026-09-08(Stephen 확정) — 수령이 배송(is_delivery_type)이면 반납방식이 무엇으로
+    // 바뀌든(방문↔퀵 등) 반납시간은 항상 24:00 고정 — "초기화" 대상이 아니라 확정값이므로
+    // resetReturnTimeForMethodChange()(토스트 안내 포함)를 타지 않고 바로 재확정한다.
+    if (isDeliveryTypeMethod(bulkOpts.rentalMethod)) {
+      bulkReturnTime = '24:00'
+    } else if (v !== bulkOpts.returnMethod && bulkReturnTime) {
       resetReturnTimeForMethodChange()
     }
     bulkOpts = { ...bulkOpts, returnMethod: v }
@@ -2589,6 +2597,11 @@
   <!-- 휴무일 캘린더 제한 전용 판정(RSC-B3) — 위 locked(요청 A)와 별개 플래그이므로 독립 계산 -->
   {@const courierRestricted = isCourierDependent(props.method)}
   {@const returnComboLocked = props.type === 'return' && locked}
+  <!-- 2026-09-08(Stephen 확정) — 수령이 배송(is_delivery_type)이면 반납이 요청 A로
+       강제고정(locked)되지 않는 조합(방문·퀵 등, §case②)이어도 반납일 전체가 하루로
+       청구되어 반납 시간 선택은 무의미하다 — 반납 leg 한정으로 시간선택을 잠그고 24:00
+       고정 표시(저장값 강제는 bulkHandleMethod/bulkHandleReturnMethod에서 처리). -->
+  {@const returnTimeForcedByDelivery = props.type === 'return' && !locked && isDeliveryTypeMethod(bulkOpts.rentalMethod)}
   <!-- 대여 제한옵션 "반납 배송선택 제한"(CMS) leg-aware 반영(2026-09-01 최초, 2026-09-04
        판정기준을 is_delivery_type으로 분리·교체) — 수령(rental) leg은 이 토글과 무관하게
        항상 전체 목록, 반납(return) leg만 수령이 배송(is_delivery_type)이 아닐 때
@@ -2648,7 +2661,23 @@
                 <span class="datetime-btn-label">{props.selectedDate ? displayDate(props.selectedDate) : dateLabel}</span>
               </div>
             </button>
-            {#if !locked && !courierRestricted}
+            {#if returnTimeForcedByDelivery}
+              <!-- 2026-09-08(Stephen 확정) — 수령이 배송(is_delivery_type)이면 반납일 전체가
+                   하루로 청구되므로(rental-fee-policy.md §1 ②) 반납 시간 선택은 의미가 없다.
+                   해당 leg만 시간선택을 잠그고 24:00 고정 표시(클릭 불가). -->
+              <div
+                class="datetime-btn datetime-btn-mid datetime-btn-time-selected datetime-btn-fixed"
+                aria-disabled="true"
+                title="수령이 배송 방식이면 반납일 전체가 대여일로 청구되어 시간 선택이 필요하지 않습니다."
+              >
+                <div class="datetime-btn-left">
+                  <svg width="23" height="23" viewBox="0 0 22.5 22.5" fill="none">
+                    <path d="M11.25 0C13.69 0 15.95 0.78 17.8 2.1L19 0.5C19.41 -0.05 20.2 -0.16 20.75 0.25C21.3 0.66 21.41 1.45 21 2L19.66 3.78C21.43 5.77 22.5 8.38 22.5 11.25C22.5 17.46 17.46 22.5 11.25 22.5C5.04 22.5 0 17.46 0 11.25C0 8.33 1.11 5.68 2.93 3.68L1.55 2.06C1.1 1.54 1.16 0.75 1.69 0.3C2.21 -0.15 3 -0.09 3.45 0.44L4.81 2.03C6.63 0.75 8.85 0 11.25 0ZM11 5C10.31 5 9.75 5.56 9.75 6.25V12.17C9.75 12.64 10.01 13.07 10.42 13.28L14.42 15.36C15.04 15.68 15.79 15.44 16.11 14.83C16.43 14.21 16.19 13.46 15.58 13.14L12.25 11.41V6.25C12.25 5.56 11.69 5 11 5Z" fill="var(--cs-white)"/>
+                  </svg>
+                  <span class="datetime-btn-label">24:00</span>
+                </div>
+              </div>
+            {:else if !locked && !courierRestricted}
               <!-- 2026-09-07 재확정(Stephen): 배송(locked)·택배의존(courierRestricted,
                    예: 크레이지샷배송) 방식은 시간선택 UI 자체를 숨기는 것이 의도된 정책이다
                    — 한때 이 courierRestricted 조건을 제거했으나(datesSet이 시간을 필수로
@@ -3997,6 +4026,9 @@
     transition: filter 0.2s;
   }
   .datetime-btn:hover { filter: brightness(1.1); }
+  /* 2026-09-08 — 수령=배송 시 반납 시간이 24:00으로 고정 표시되는 비인터랙티브 버튼(div) */
+  .datetime-btn-fixed { cursor: default; }
+  .datetime-btn-fixed:hover { filter: none; }
   .datetime-btn-dark { background: var(--cs-text-dark); }
   .datetime-btn-mid { background: var(--cs-text-mid); }
   /* 날짜/시간 선택 즉시 배경 전환(2026-09-03, Stephen 확정) — purple-80/60 토큰 */
