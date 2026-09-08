@@ -180,18 +180,21 @@
             <span class="date-divider-badge">{formatDateDivider(message.created_at)}</span>
           </div>
         {/if}
-        <MessageBubble
-          {message}
-          isOwn={currentUserId === 'admin'
-            ? message.sender_type === 'admin'
-            : message.sender_type === 'user'}
-          {isAdmin}
-          {onaction}
-          {ondelete}
-          {onbookmark}
-          {oncouponapprove}
-          {onctamodal}
-        />
+        <!-- id 앵커: 2026-09-08 북마크 "메시지로 이동" 기능이 scrollIntoView 대상으로 사용 -->
+        <div id="msg-{message.id}">
+          <MessageBubble
+            {message}
+            isOwn={currentUserId === 'admin'
+              ? message.sender_type === 'admin'
+              : message.sender_type === 'user'}
+            {isAdmin}
+            {onaction}
+            {ondelete}
+            {onbookmark}
+            {oncouponapprove}
+            {onctamodal}
+          />
+        </div>
       {/each}
     </div>
   {/if}

@@ -57,6 +57,7 @@
   const STATUS_KO: Record<string, string> = {
     hold: '신청대기', confirmed: '계약완료', shipped: '반출중', in_use: '대여중',
     return_requested: '반납중', returned: '반납완료', completed: '완료', cancelled: '취소', expired: '만료',
+    damage_claimed: '파손신고',
   }
 
   const GRADE_LABEL: Record<string, string> = {
@@ -332,7 +333,8 @@
   .status-returned,
   .status-completed        { background: rgba(16,11,50,0.06); color: var(--cs-text-mid); }
   .status-cancelled,
-  .status-expired          { background: rgba(255,53,53,0.08); color: var(--cs-red-badge); }
+  .status-expired,
+  .status-damage_claimed   { background: rgba(255,53,53,0.08); color: var(--cs-red-badge); }
 
   .cdp-reserve-product {
     font: 400 11px/1.4 'Noto Sans KR', sans-serif;

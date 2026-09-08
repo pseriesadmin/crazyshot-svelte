@@ -213,6 +213,8 @@
 
   // GSD-12: 북마크 뷰 토글
   let showBookmarks = $state(false)
+  // 2026-09-08: 북마크 패널이 열려 있는 동안 새 북마크 추가 시 목록 즉시 재조회용 트리거
+  let bookmarkRefreshToken = $state(0)
 
   // 대화카드 CTA 레이어 모달 — 최상위(.admin-panel 형제)에서 렌더링해야 position:fixed가
   // 메시지 트리 조상에 갇히지 않는다(ui-mobile.md "CSS transform + position:fixed 충돌" 참고).
@@ -663,6 +665,9 @@
   }
 
   // GSD-12: 북마크 토글 — API 호출 + 로컬 메시지 배열 is_bookmarked 동기화
+  // 2026-09-08(버튼 재점검): bookmarkRefreshToken 증가 — 북마크 패널(BookmarkListView)이
+  // 열려 있는 동안 새로 북마크해도 그 목록은 sessionId 변경 시에만 재조회하는 자체
+  // $effect라 즉시 반영되지 않던 결함 수정(패널을 닫았다 다시 열어야만 보이던 문제).
   async function handleBookmark(messageId: string): Promise<void> {
     if (!selectedSessionId) return
     const res = await fetch(`/api/chat/messages/${messageId}/bookmark`, {
@@ -675,21 +680,50 @@
       messages = messages.map((m) =>
         m.id === messageId ? { ...m, is_bookmarked: !(m.is_bookmarked ?? false) } : m
       )
+      bookmarkRefreshToken++
     }
   }
 
+  // 2026-09-08(버튼 재점검): 북마크 목록 항목 클릭 → 해당 메시지로 스크롤 이동.
+  // Stephen 확정: 현재 로드된 범위(messages)에만 있으면 이동, 없으면(아직 페이지네이션으로
+  // 안 불러온 오래된 메시지) 안내만 — 자동 추가로드는 이번 스코프에서 하지 않는다.
+  // "중요 카드만 보기" 필터가 켜져 있으면 대상 메시지가 DOM에 없을 수 있어 먼저 해제한다.
+  function handleBookmarkSelect(messageId: string): void {
+    const exists = messages.some((m) => m.id === messageId)
+    if (!exists) {
+      csToast.info('이 메시지는 현재 화면에 로드돼 있지 않습니다. 위로 스크롤해 더 불러온 뒤 다시 시도해주세요.')
+      return
+    }
+    if (showImportantOnly) showImportantOnly = false
+    requestAnimationFrame(() => {
+      document.getElementById(`msg-${messageId}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+    })
+  }
+
   // GSD-8: 세션 자동응답 수동/자동 전환
+  // 2026-09-08(버튼 재점검, Stephen 지시): 기존엔 fetch 성공/실패와 무관하게 무조건
+  // sessionManualMode·로컬 스토어를 낙관적으로 갱신했다 — PATCH가 401/500 등으로 실패해도
+  // 버튼은 "수동"으로 전환된 것처럼 보이지만 실제 DB(chat_sessions.manual_mode)는 그대로라,
+  // 자동응답이 여전히 나가는데 관리자는 꺼졌다고 오인하는 위험이 있었다. 서버 응답(res.ok)을
+  // 확인한 뒤에만 로컬 상태를 반영하도록 수정.
   async function handleToggleManualMode(): Promise<void> {
     if (!selectedSessionId) return
+    const sid = selectedSessionId
     const newVal = !sessionManualMode
-    sessionManualMode = newVal
-    await fetch(`/api/chat/sessions/${selectedSessionId}/manual-mode`, {
+    const res = await fetch(`/api/chat/sessions/${sid}/manual-mode`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ manual_mode: newVal }),
-    }).catch(() => {})
-    // 로컬 스토어에 manual_mode 즉시 반영
-    const updated = chatStore.sessions.find((s) => s.id === selectedSessionId)
+    }).catch(() => null)
+
+    if (!res || !res.ok) {
+      csToast.error('자동응답 모드 전환에 실패했습니다.')
+      return
+    }
+
+    sessionManualMode = newVal
+    // 로컬 스토어에 manual_mode 반영
+    const updated = chatStore.sessions.find((s) => s.id === sid)
     if (updated) upsertSession({ ...updated, manual_mode: newVal })
   }
 
@@ -1125,7 +1159,7 @@
             onclick={handleToggleManualMode}
             title={sessionManualMode ? '수동모드 ON — 자동응답 꺼짐' : '자동모드 — 클릭 시 수동전환'}
             aria-pressed={sessionManualMode}
-          >{sessionManualMode ? '수동' : '자동'}</button>
+          >{sessionManualMode ? '수동 대화' : '자동 대화'}</button>
 
           <!-- GSD-7: 중요 카드만 보기 -->
           <button
@@ -1134,7 +1168,7 @@
             onclick={() => { showImportantOnly = !showImportantOnly }}
             title={showImportantOnly ? '전체 메시지 보기' : '중요 카드만 보기'}
             aria-pressed={showImportantOnly}
-          >중요</button>
+          >알림 보기</button>
 
           <!-- GSD-12: 북마크 목록 토글 -->
           <button
@@ -1143,7 +1177,7 @@
             onclick={() => { showBookmarks = !showBookmarks }}
             title={showBookmarks ? '북마크 닫기' : '북마크 목록'}
             aria-pressed={showBookmarks}
-          >북마크</button>
+          >북마크 보기</button>
 
           <!-- GSD-1/2: 상태 세그먼트 컨트롤 -->
           {#if selectedSession?.status !== 'open'}
@@ -1151,14 +1185,14 @@
               class="toolbar-btn toolbar-btn--status"
               onclick={() => handleSessionStatusChange('open')}
               title="진행중으로 전환"
-            >진행중 전환</button>
+            >진행중탭 이동</button>
           {/if}
           {#if selectedSession?.status === 'open'}
             <button
               class="toolbar-btn toolbar-btn--status"
               onclick={() => handleSessionStatusChange('pending')}
               title="대기로 전환"
-            >대기 전환</button>
+            >대기탭 이동</button>
           {/if}
         </div>
 
@@ -1169,6 +1203,8 @@
         <div class="bookmark-pane">
           <BookmarkListView
             sessionId={selectedSessionId}
+            refreshToken={bookmarkRefreshToken}
+            onselect={(messageId) => handleBookmarkSelect(messageId)}
             onclose={() => { showBookmarks = false }}
           />
         </div>
