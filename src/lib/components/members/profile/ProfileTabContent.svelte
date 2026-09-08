@@ -392,20 +392,27 @@
     { value: 'other',         label: '기타' },
   ] as const
 
-  const MAX_IDENTITY_FILES = 5
   const IDENTITY_MAX_FILE_SIZE = 10 * 1024 * 1024 // 10MB — CMS 표준 기술 지침(개별 파일 업로드 용량)과 동일
+
+  // front-uiux.md §22-5 "슬롯형" 표준 — 외국인증명과 동일 원칙. 다만 본인증명은 5종 전부가
+  // 필수는 아니라("어떤 신분증을 갖고 있는지"는 사람마다 다름) 최소 1개 슬롯만 채우면 등록
+  // 가능 — 슬롯을 채우는 것 자체가 곧 그 유형의 선택이므로 별도 체크박스 선택 단계가 없다.
+  const IDENTITY_ALL_TYPE_LABELS: Record<string, string> = Object.fromEntries(
+    IDENTITY_TYPES.map(t => [t.value, t.label]),
+  )
 
   let identityDocUrls    = $state<string[]>(profile?.identity_doc_url ?? [])
   let identityVerifiedAt = $state(profile?.identity_verified_at ?? null)
   let identityType       = $state<string[]>(profile?.identity_type ?? [])
   let showIdentityForm   = $state(false)
-  let identityFiles      = $state<File[]>([])
-  let identityPreviews   = $state<(string | null)[]>([])   // null = PDF(썸네일 없음)
-  let identitySelTypes   = $state<string[]>(['student'])
+  let identitySlotFiles    = $state<Record<string, File>>({})
+  let identitySlotPreviews = $state<Record<string, string | null>>({})   // null = PDF(썸네일 없음)
+  let identityDragOverSlot = $state<string | null>(null)
   let isUploadingId      = $state(false)
   let identityError      = $state('')
-  let identityDragOver   = $state(false)
   let isDeletingIdentity = $state(false)
+
+  const identityFilledCount = $derived(IDENTITY_TYPES.filter(t => identitySlotFiles[t.value]).length)
 
   $effect(() => {
     identityDocUrls    = profile?.identity_doc_url     ?? []
@@ -413,75 +420,78 @@
     identityType       = profile?.identity_type        ?? []
   })
 
-  function toggleIdentitySelType(value: string) {
-    identitySelTypes = identitySelTypes.includes(value)
-      ? identitySelTypes.filter(v => v !== value)
-      : [...identitySelTypes, value]
+  function identityDocLabelAt(i: number): string {
+    const t = profile?.identity_type?.[i]
+    return t ? (IDENTITY_ALL_TYPE_LABELS[t] ?? `파일 ${i + 1}`) : `파일 ${i + 1}`
   }
 
-  function addIdentityFiles(files: FileList | File[]) {
+  function resetIdentitySlots(): void {
+    identitySlotFiles    = {}
+    identitySlotPreviews = {}
+    identityDragOverSlot = null
+    identityError        = ''
+  }
+
+  function setIdentitySlotFile(typeValue: string, file: File): void {
     identityError = ''
-    const room = MAX_IDENTITY_FILES - identityFiles.length
-    if (room <= 0) { identityError = `최대 ${MAX_IDENTITY_FILES}개까지 등록할 수 있어요.`; return }
-    const accepted: File[] = []
-    for (const file of Array.from(files)) {
-      if (accepted.length >= room) break
-      const result = validateUploadFile(file)
-      if (!result.ok) { identityError = result.error ?? ''; continue }
-      if (file.size > IDENTITY_MAX_FILE_SIZE) { identityError = '파일 크기는 10MB 이하여야 합니다.'; continue }
-      accepted.push(file)
-    }
-    if (accepted.length === 0) return
-    identityFiles    = [...identityFiles, ...accepted]
-    identityPreviews = [
-      ...identityPreviews,
-      ...accepted.map(f => f.type === 'application/pdf' ? null : URL.createObjectURL(f)),
-    ]
+    const result = validateUploadFile(file)
+    if (!result.ok) { identityError = result.error ?? ''; return }
+    if (file.size > IDENTITY_MAX_FILE_SIZE) { identityError = '파일 크기는 10MB 이하여야 합니다.'; return }
+    identitySlotFiles    = { ...identitySlotFiles, [typeValue]: file }
+    identitySlotPreviews = { ...identitySlotPreviews, [typeValue]: file.type === 'application/pdf' ? null : URL.createObjectURL(file) }
   }
 
-  function handleIdentityFileChange(e: Event) {
+  function handleIdentitySlotFileChange(e: Event, typeValue: string): void {
     const input = e.target as HTMLInputElement
-    if (input.files && input.files.length > 0) addIdentityFiles(input.files)
+    if (input.files && input.files[0]) setIdentitySlotFile(typeValue, input.files[0])
     input.value = ''
   }
 
-  function removeIdentityFile(index: number) {
-    identityFiles    = identityFiles.filter((_, i) => i !== index)
-    identityPreviews = identityPreviews.filter((_, i) => i !== index)
+  function removeIdentitySlotFile(typeValue: string): void {
+    const restFiles = { ...identitySlotFiles }
+    const restPreviews = { ...identitySlotPreviews }
+    delete restFiles[typeValue]
+    delete restPreviews[typeValue]
+    identitySlotFiles    = restFiles
+    identitySlotPreviews = restPreviews
   }
 
-  function handleIdentityDragOver(e: DragEvent) {
+  function handleIdentitySlotDragOver(e: DragEvent, typeValue: string): void {
     e.preventDefault()
-    identityDragOver = true
+    identityDragOverSlot = typeValue
   }
 
-  function handleIdentityDragLeave() {
-    identityDragOver = false
+  function handleIdentitySlotDragLeave(typeValue: string): void {
+    if (identityDragOverSlot === typeValue) identityDragOverSlot = null
   }
 
-  function handleIdentityDrop(e: DragEvent) {
+  function handleIdentitySlotDrop(e: DragEvent, typeValue: string): void {
     e.preventDefault()
-    identityDragOver = false
-    if (e.dataTransfer?.files?.length) addIdentityFiles(e.dataTransfer.files)
+    identityDragOverSlot = null
+    const file = e.dataTransfer?.files?.[0]
+    if (file) setIdentitySlotFile(typeValue, file)
   }
 
   async function uploadIdentityDoc() {
-    if (identityFiles.length === 0) return
-    if (identitySelTypes.length === 0) { identityError = '증명 유형을 1개 이상 선택해 주세요.'; return }
+    if (identityFilledCount === 0) { identityError = '증명서를 1개 이상 등록해 주세요.'; return }
     isUploadingId = true
     identityError = ''
     const fd = new FormData()
     fd.set('type', 'identity')
-    for (const f of identityFiles) fd.append('file', f)
-    for (const t of identitySelTypes) fd.append('identity_type', t)
+    // front-uiux.md §22-5 — 같은 루프 안에서 file/type을 함께 append해 순서를 보장한다
+    for (const t of IDENTITY_TYPES) {
+      const f = identitySlotFiles[t.value]
+      if (!f) continue
+      fd.append('file', f)
+      fd.append('identity_type', t.value)
+    }
     try {
       const res  = await fetch('/api/profile/upload-doc', { method: 'POST', body: fd })
       const data = await res.json() as { ok: boolean; docUrls?: string[]; error?: string }
       if (!data.ok) { identityError = data.error ?? '업로드 실패'; return }
       csToast.success('본인증명이 등록되었습니다.')
       showIdentityForm = false
-      identityFiles     = []
-      identityPreviews  = []
+      resetIdentitySlots()
       await invalidateAll()
     } catch { identityError = '네트워크 오류가 발생했습니다.' }
     finally  { isUploadingId = false }
@@ -496,9 +506,7 @@
       actionLabel: '확인',
       onClick: () => {
         showIdentityForm = true
-        identitySelTypes = identityType.length > 0 ? identityType : ['student']
-        identityFiles    = []
-        identityPreviews = []
+        resetIdentitySlots()
       },
     })
   }
@@ -567,126 +575,118 @@
     { value: 'long',  label: '장기체류(90일 이상)' },
   ] as const
 
-  const MAX_FOREIGN_FILES = 4
   const FOREIGN_MAX_FILE_SIZE = 10 * 1024 * 1024 // 10MB — 본인증명과 동일 기준
+
+  // front-uiux.md §22-5 "슬롯형" 표준 — 문서 종류별 드롭존을 각각 독립 배치하고,
+  // 파일↔유형을 드롭존 자체로 1:1 고정한다(선택배열+파일배열을 별도 관리하지 않음).
+  const FOREIGN_ALL_TYPE_LABELS: Record<string, string> = Object.fromEntries(
+    [...FOREIGN_SHORT_TYPES, ...FOREIGN_LONG_TYPES].map(t => [t.value, t.label]),
+  )
 
   let foreignDocUrls    = $state<string[]>(profile?.foreign_doc_urls ?? (profile?.foreign_doc_url ? [profile.foreign_doc_url] : []))
   let foreignVerifiedAt = $state(profile?.foreign_verified_at ?? null)
   let showForeignForm   = $state(false)
   let foreignStayType   = $state<'short' | 'long'>((profile?.foreign_stay_type as 'short' | 'long' | null) ?? 'short')
-  let foreignSelTypes   = $state<string[]>([])
-  let foreignFiles      = $state<File[]>([])
-  let foreignPreviews   = $state<(string | null)[]>([])   // null = PDF(썸네일 없음)
+  let foreignSlotFiles    = $state<Record<string, File>>({})
+  let foreignSlotPreviews = $state<Record<string, string | null>>({})   // null = PDF(썸네일 없음)
+  let foreignDragOverSlot = $state<string | null>(null)
   let isUploadingForeign = $state(false)
   let foreignError      = $state('')
-  let foreignDragOver   = $state(false)
   let isDeletingForeign  = $state(false)
 
   const currentForeignTypes = $derived(foreignStayType === 'short' ? FOREIGN_SHORT_TYPES : FOREIGN_LONG_TYPES)
+  const foreignFilledCount  = $derived(currentForeignTypes.filter(t => foreignSlotFiles[t.value]).length)
 
   $effect(() => {
     foreignDocUrls    = profile?.foreign_doc_urls ?? (profile?.foreign_doc_url ? [profile.foreign_doc_url] : [])
     foreignVerifiedAt = profile?.foreign_verified_at ?? null
   })
 
+  function foreignDocLabelAt(i: number): string {
+    const t = profile?.foreign_type?.[i]
+    return t ? (FOREIGN_ALL_TYPE_LABELS[t] ?? `파일 ${i + 1}`) : `파일 ${i + 1}`
+  }
+
+  function resetForeignSlots(): void {
+    foreignSlotFiles    = {}
+    foreignSlotPreviews = {}
+    foreignDragOverSlot = null
+    foreignError        = ''
+  }
+
   function selectForeignStayType(value: 'short' | 'long') {
     if (foreignStayType === value) return
     foreignStayType = value
-    foreignSelTypes = []
-    foreignFiles    = []
-    foreignPreviews = []
-    foreignError    = ''
+    resetForeignSlots()
   }
 
-  function toggleForeignSelType(value: string) {
-    foreignSelTypes = foreignSelTypes.includes(value)
-      ? foreignSelTypes.filter(v => v !== value)
-      : [...foreignSelTypes, value]
-  }
-
-  // 선택한 증명 종류 수만큼 파일이 등록되지 않았을 때 안내 — 파일 추가/제거 직후에만 호출
-  // (유형 선택 직후 매번 뜨면 아직 파일을 추가하기도 전에 불필요하게 나가므로 제외, 본인증명과 동일 원칙)
-  function warnIfForeignFileShortfall() {
-    if (foreignSelTypes.length > 0 && foreignFiles.length > 0 && foreignFiles.length < foreignSelTypes.length) {
-      csToast.warning('선택된 증명서 모두 등록 부탁드립니다.')
-    }
-  }
-
-  function addForeignFiles(files: FileList | File[]) {
+  function setForeignSlotFile(typeValue: string, file: File): void {
     foreignError = ''
-    const room = MAX_FOREIGN_FILES - foreignFiles.length
-    if (room <= 0) { foreignError = `최대 ${MAX_FOREIGN_FILES}개까지 등록할 수 있어요.`; return }
-    const accepted: File[] = []
-    for (const file of Array.from(files)) {
-      if (accepted.length >= room) break
-      const result = validateUploadFile(file)
-      if (!result.ok) { foreignError = result.error ?? ''; continue }
-      if (file.size > FOREIGN_MAX_FILE_SIZE) { foreignError = '파일 크기는 10MB 이하여야 합니다.'; continue }
-      accepted.push(file)
-    }
-    if (accepted.length === 0) return
-    foreignFiles    = [...foreignFiles, ...accepted]
-    foreignPreviews = [
-      ...foreignPreviews,
-      ...accepted.map(f => f.type === 'application/pdf' ? null : URL.createObjectURL(f)),
-    ]
-    warnIfForeignFileShortfall()
+    const result = validateUploadFile(file)
+    if (!result.ok) { foreignError = result.error ?? ''; return }
+    if (file.size > FOREIGN_MAX_FILE_SIZE) { foreignError = '파일 크기는 10MB 이하여야 합니다.'; return }
+    foreignSlotFiles    = { ...foreignSlotFiles, [typeValue]: file }
+    foreignSlotPreviews = { ...foreignSlotPreviews, [typeValue]: file.type === 'application/pdf' ? null : URL.createObjectURL(file) }
   }
 
-  function handleForeignFileChange(e: Event) {
+  function handleForeignSlotFileChange(e: Event, typeValue: string): void {
     const input = e.target as HTMLInputElement
-    if (input.files && input.files.length > 0) addForeignFiles(input.files)
+    if (input.files && input.files[0]) setForeignSlotFile(typeValue, input.files[0])
     input.value = ''
   }
 
-  function removeForeignFile(index: number) {
-    foreignFiles    = foreignFiles.filter((_, i) => i !== index)
-    foreignPreviews = foreignPreviews.filter((_, i) => i !== index)
-    warnIfForeignFileShortfall()
+  function removeForeignSlotFile(typeValue: string): void {
+    const restFiles = { ...foreignSlotFiles }
+    const restPreviews = { ...foreignSlotPreviews }
+    delete restFiles[typeValue]
+    delete restPreviews[typeValue]
+    foreignSlotFiles    = restFiles
+    foreignSlotPreviews = restPreviews
   }
 
-  function handleForeignDragOver(e: DragEvent) {
+  function handleForeignSlotDragOver(e: DragEvent, typeValue: string): void {
     e.preventDefault()
-    foreignDragOver = true
+    foreignDragOverSlot = typeValue
   }
 
-  function handleForeignDragLeave() {
-    foreignDragOver = false
+  function handleForeignSlotDragLeave(typeValue: string): void {
+    if (foreignDragOverSlot === typeValue) foreignDragOverSlot = null
   }
 
-  function handleForeignDrop(e: DragEvent) {
+  function handleForeignSlotDrop(e: DragEvent, typeValue: string): void {
     e.preventDefault()
-    foreignDragOver = false
-    if (e.dataTransfer?.files?.length) addForeignFiles(e.dataTransfer.files)
+    foreignDragOverSlot = null
+    const file = e.dataTransfer?.files?.[0]
+    if (file) setForeignSlotFile(typeValue, file)
   }
 
   async function uploadForeignDoc() {
-    if (foreignFiles.length === 0) return
-    if (foreignSelTypes.length < currentForeignTypes.length) {
-      csToast.warning('모든 증명서를 선택해주세요.')
-      return
-    }
-    if (foreignFiles.length < foreignSelTypes.length) {
-      csToast.warning('선택된 증명서 모두 등록 부탁드립니다.')
+    const missing = currentForeignTypes.filter(t => !foreignSlotFiles[t.value])
+    if (missing.length > 0) {
+      foreignError = `${missing.map(t => t.label).join(', ')} 파일을 모두 등록해 주세요.`
       return
     }
     isUploadingForeign = true
     foreignError = ''
     const fd = new FormData()
     fd.set('type', 'foreign')
-    for (const f of foreignFiles) fd.append('file', f)
-    for (const t of foreignSelTypes) fd.append('foreign_type', t)
+    // front-uiux.md §22-5 — 같은 루프 안에서 file/type을 함께 append해 순서를 보장한다
+    for (const t of currentForeignTypes) {
+      const f = foreignSlotFiles[t.value]
+      if (!f) continue
+      fd.append('file', f)
+      fd.append('foreign_type', t.value)
+    }
     fd.set('foreign_stay_type', foreignStayType)
     try {
       const res  = await fetch('/api/profile/upload-doc', { method: 'POST', body: fd })
       const data = await res.json() as { ok: boolean; docUrls?: string[]; error?: string }
       // 본인증명과 동일 원칙 — 반환된 docUrls 개수가 제출 파일 개수와 정확히 일치할 때만 완료 처리
-      const isConsistent = data.ok && Array.isArray(data.docUrls) && data.docUrls.length === foreignFiles.length
+      const isConsistent = data.ok && Array.isArray(data.docUrls) && data.docUrls.length === currentForeignTypes.length
       if (!isConsistent) { foreignError = data.error ?? '등록 처리가 정확히 반영되지 않았습니다. 다시 시도해주세요.'; return }
       csToast.success('외국인증명이 등록되었습니다.')
       showForeignForm = false
-      foreignFiles    = []
-      foreignPreviews = []
+      resetForeignSlots()
       await invalidateAll()
     } catch { foreignError = '네트워크 오류가 발생했습니다.' }
     finally  { isUploadingForeign = false }
@@ -702,9 +702,7 @@
       onClick: () => {
         showForeignForm = true
         foreignStayType = (profile?.foreign_stay_type as 'short' | 'long' | null) ?? 'short'
-        foreignSelTypes = profile?.foreign_type ?? []
-        foreignFiles    = []
-        foreignPreviews = []
+        resetForeignSlots()
       },
     })
   }
@@ -1138,7 +1136,10 @@
 
       {#if activeDocTab === 'identity'}
         <div class="doc-section-head">
-          <p class="doc-subtitle">신원 확인용 증명서를 등록하세요</p>
+          <div class="doc-section-head-text">
+            <p class="doc-subtitle">신원 확인용 증명서를 등록하세요</p>
+            <p class="doc-file-hint">PNG · JPEG · WebP · HEIF · PDF · 개별 10MB 이하</p>
+          </div>
           {#if identityDocUrls.length > 0 && !showIdentityForm}
             <button class="btn-doc-re" onclick={requestIdentityReRegister}>재등록</button>
           {/if}
@@ -1168,135 +1169,60 @@
                   <span class="doc-file-list-icon" aria-hidden="true">
                     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
                   </span>
-                  <span class="doc-file-list-name">파일 {i + 1}</span>
+                  <span class="doc-file-list-name">{identityDocLabelAt(i)}</span>
                   <button type="button" class="btn-doc-view" onclick={() => openIdentityDoc(url)}>보기</button>
                 </li>
               {/each}
             </ul>
           </div>
-        {:else if showIdentityForm}
-          <!-- 업로드 폼 -->
-          <div class="doc-upload-wrap">
-            <!-- 증명 유형 선택 (다중 선택 가능) -->
-            <div class="doc-type-row">
-              {#each IDENTITY_TYPES as t}
-                <button
-                  type="button"
-                  class="btn-doc-type"
-                  class:active={identitySelTypes.includes(t.value)}
-                  onclick={() => toggleIdentitySelType(t.value)}
-                >{t.label}</button>
-              {/each}
-            </div>
-
-            <!-- 파일 선택 (드래그앤드롭 + 다중 선택, 최대 5개) -->
-            <label
-              class="doc-file-label"
-              class:drag-over={identityDragOver}
-              aria-disabled={isUploadingId}
-              ondragover={handleIdentityDragOver}
-              ondragleave={handleIdentityDragLeave}
-              ondrop={handleIdentityDrop}
-            >
-              <input
-                type="file"
-                class="sr-only"
-                multiple
-                disabled={isUploadingId}
-                accept="image/png,image/jpeg,image/webp,image/heif,image/heic,application/pdf"
-                onchange={handleIdentityFileChange}
-              />
-              <span class="doc-file-btn">
-                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><polyline points="16 16 12 12 8 16"/><line x1="12" y1="12" x2="12" y2="21"/><path d="M20.39 18.39A5 5 0 0 0 18 9h-1.26A8 8 0 1 0 3 16.3"/></svg>
-                <span>파일 선택 또는 드래그</span>
-                <span class="doc-file-hint">PNG · JPEG · WebP · HEIF · PDF · 최대 {MAX_IDENTITY_FILES}개 · 개별 10MB 이하</span>
-              </span>
-            </label>
-
-            {#if identityFiles.length > 0}
-              <div class="doc-file-grid">
-                {#each identityFiles as file, i}
-                  <div class="doc-file-item">
-                    {#if identityPreviews[i]}
-                      <img src={identityPreviews[i]} alt="미리보기" class="doc-img-preview" />
-                    {:else}
-                      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
-                      <span class="doc-file-name">{file.name}</span>
-                    {/if}
-                    <button type="button" class="doc-file-remove" disabled={isUploadingId} onclick={() => removeIdentityFile(i)} aria-label="파일 제거">✕</button>
-                  </div>
-                {/each}
-                <span class="doc-file-count">{identityFiles.length}/{MAX_IDENTITY_FILES}</span>
-              </div>
-            {/if}
-
-            {#if identityError}
-              <p class="doc-error" role="alert">{identityError}</p>
-            {/if}
-
-            <div class="doc-upload-btns">
-              <button
-                type="button"
-                class="btn-doc-upload"
-                onclick={uploadIdentityDoc}
-                disabled={isUploadingId || identityFiles.length === 0 || identitySelTypes.length === 0}
-              >{isUploadingId ? '업로드 중...' : '등록하기'}</button>
-            </div>
-          </div>
         {:else}
-          <!-- 미등록 상태 -->
+          <!-- 업로드 폼 (미등록 / 재등록 공통) — front-uiux.md §22-5 슬롯형 표준.
+               showIdentityForm true(재등록)와 미등록 상태가 동일한 폼이라 하나로 통합. -->
           <div class="doc-upload-wrap">
-            <div class="doc-type-row">
-              {#each IDENTITY_TYPES as t}
-                <button
-                  type="button"
-                  class="btn-doc-type"
-                  class:active={identitySelTypes.includes(t.value)}
-                  onclick={() => toggleIdentitySelType(t.value)}
-                >{t.label}</button>
+            <div class="doc-slot-grid">
+              {#each IDENTITY_TYPES as t (t.value)}
+                <div class="doc-slot">
+                  <label
+                    class="doc-file-label"
+                    class:drag-over={identityDragOverSlot === t.value}
+                    aria-disabled={isUploadingId}
+                    ondragover={(e) => handleIdentitySlotDragOver(e, t.value)}
+                    ondragleave={() => handleIdentitySlotDragLeave(t.value)}
+                    ondrop={(e) => handleIdentitySlotDrop(e, t.value)}
+                  >
+                    <input
+                      type="file"
+                      class="sr-only"
+                      disabled={isUploadingId}
+                      accept="image/png,image/jpeg,image/webp,image/heif,image/heic,application/pdf"
+                      onchange={(e) => handleIdentitySlotFileChange(e, t.value)}
+                    />
+                    {#if identitySlotFiles[t.value]}
+                      <span class="doc-file-btn doc-file-btn-filled">
+                        {#if identitySlotPreviews[t.value]}
+                          <img src={identitySlotPreviews[t.value]} alt="미리보기" class="doc-img-preview" />
+                        {:else}
+                          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+                        {/if}
+                        <span class="doc-file-name">{identitySlotFiles[t.value]?.name}</span>
+                        <button
+                          type="button"
+                          class="doc-file-remove"
+                          disabled={isUploadingId}
+                          onclick={(e) => { e.preventDefault(); removeIdentitySlotFile(t.value) }}
+                          aria-label="파일 제거"
+                        >✕</button>
+                      </span>
+                    {:else}
+                      <span class="doc-file-btn">
+                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><polyline points="16 16 12 12 8 16"/><line x1="12" y1="12" x2="12" y2="21"/><path d="M20.39 18.39A5 5 0 0 0 18 9h-1.26A8 8 0 1 0 3 16.3"/></svg>
+                        <span>{t.label}</span>
+                      </span>
+                    {/if}
+                  </label>
+                </div>
               {/each}
             </div>
-
-            <!-- 파일 선택 (드래그앤드롭 + 다중 선택, 최대 5개) -->
-            <label
-              class="doc-file-label"
-              class:drag-over={identityDragOver}
-              aria-disabled={isUploadingId}
-              ondragover={handleIdentityDragOver}
-              ondragleave={handleIdentityDragLeave}
-              ondrop={handleIdentityDrop}
-            >
-              <input
-                type="file"
-                class="sr-only"
-                multiple
-                disabled={isUploadingId}
-                accept="image/png,image/jpeg,image/webp,image/heif,image/heic,application/pdf"
-                onchange={handleIdentityFileChange}
-              />
-              <span class="doc-file-btn">
-                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><polyline points="16 16 12 12 8 16"/><line x1="12" y1="12" x2="12" y2="21"/><path d="M20.39 18.39A5 5 0 0 0 18 9h-1.26A8 8 0 1 0 3 16.3"/></svg>
-                <span>파일 선택 또는 드래그</span>
-                <span class="doc-file-hint">PNG · JPEG · WebP · HEIF · PDF · 최대 {MAX_IDENTITY_FILES}개 · 개별 10MB 이하</span>
-              </span>
-            </label>
-
-            {#if identityFiles.length > 0}
-              <div class="doc-file-grid">
-                {#each identityFiles as file, i}
-                  <div class="doc-file-item">
-                    {#if identityPreviews[i]}
-                      <img src={identityPreviews[i]} alt="미리보기" class="doc-img-preview" />
-                    {:else}
-                      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
-                      <span class="doc-file-name">{file.name}</span>
-                    {/if}
-                    <button type="button" class="doc-file-remove" disabled={isUploadingId} onclick={() => removeIdentityFile(i)} aria-label="파일 제거">✕</button>
-                  </div>
-                {/each}
-                <span class="doc-file-count">{identityFiles.length}/{MAX_IDENTITY_FILES}</span>
-              </div>
-            {/if}
 
             {#if identityError}
               <p class="doc-error" role="alert">{identityError}</p>
@@ -1307,14 +1233,17 @@
                 type="button"
                 class="btn-doc-upload"
                 onclick={uploadIdentityDoc}
-                disabled={isUploadingId || identityFiles.length === 0 || identitySelTypes.length === 0}
+                disabled={isUploadingId || identityFilledCount === 0}
               >{isUploadingId ? '업로드 중...' : '등록하기'}</button>
             </div>
           </div>
         {/if}
       {:else}
         <div class="doc-section-head">
-          <p class="doc-subtitle">여권 또는 외국인등록증을 등록하세요</p>
+          <div class="doc-section-head-text">
+            <p class="doc-subtitle">여권 또는 외국인등록증을 등록하세요</p>
+            <p class="doc-file-hint">PNG · JPEG · WebP · HEIF · PDF · 개별 10MB 이하</p>
+          </div>
           {#if foreignDocUrls.length > 0 && !showForeignForm}
             <button class="btn-doc-re" onclick={requestForeignReRegister}>재등록</button>
           {/if}
@@ -1344,7 +1273,7 @@
                   <span class="doc-file-list-icon" aria-hidden="true">
                     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
                   </span>
-                  <span class="doc-file-list-name">파일 {i + 1}</span>
+                  <span class="doc-file-list-name">{foreignDocLabelAt(i)}</span>
                   <button type="button" class="btn-doc-view" onclick={() => openForeignDoc(url)}>보기</button>
                 </li>
               {/each}
@@ -1374,58 +1303,52 @@
               {/each}
             </div>
 
-            <!-- 증명서 콤보 버튼 (체류기간별 필수 증명서 — 본인증명과 동일한 콤보 버튼 스타일) -->
-            <div class="doc-type-row">
-              {#each currentForeignTypes as t}
-                <button
-                  type="button"
-                  class="btn-doc-type"
-                  class:active={foreignSelTypes.includes(t.value)}
-                  onclick={() => toggleForeignSelType(t.value)}
-                >{t.label}</button>
+            <!-- 문서 종류별 "파일등록" 슬롯 — front-uiux.md §22-5 표준(드롭존 1개 = 문서 1종,
+                 순서 보장으로 파일↔유형 메타정보가 항상 1:1 매핑됨) -->
+            <div class="doc-slot-grid">
+              {#each currentForeignTypes as t (t.value)}
+                <div class="doc-slot">
+                  <label
+                    class="doc-file-label"
+                    class:drag-over={foreignDragOverSlot === t.value}
+                    aria-disabled={isUploadingForeign}
+                    ondragover={(e) => handleForeignSlotDragOver(e, t.value)}
+                    ondragleave={() => handleForeignSlotDragLeave(t.value)}
+                    ondrop={(e) => handleForeignSlotDrop(e, t.value)}
+                  >
+                    <input
+                      type="file"
+                      class="sr-only"
+                      disabled={isUploadingForeign}
+                      accept="image/png,image/jpeg,image/webp,image/heif,image/heic,application/pdf"
+                      onchange={(e) => handleForeignSlotFileChange(e, t.value)}
+                    />
+                    {#if foreignSlotFiles[t.value]}
+                      <span class="doc-file-btn doc-file-btn-filled">
+                        {#if foreignSlotPreviews[t.value]}
+                          <img src={foreignSlotPreviews[t.value]} alt="미리보기" class="doc-img-preview" />
+                        {:else}
+                          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+                        {/if}
+                        <span class="doc-file-name">{foreignSlotFiles[t.value]?.name}</span>
+                        <button
+                          type="button"
+                          class="doc-file-remove"
+                          disabled={isUploadingForeign}
+                          onclick={(e) => { e.preventDefault(); removeForeignSlotFile(t.value) }}
+                          aria-label="파일 제거"
+                        >✕</button>
+                      </span>
+                    {:else}
+                      <span class="doc-file-btn">
+                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><polyline points="16 16 12 12 8 16"/><line x1="12" y1="12" x2="12" y2="21"/><path d="M20.39 18.39A5 5 0 0 0 18 9h-1.26A8 8 0 1 0 3 16.3"/></svg>
+                        <span>{t.label}</span>
+                      </span>
+                    {/if}
+                  </label>
+                </div>
               {/each}
             </div>
-
-            <!-- 파일 선택 (드래그앤드롭 + 다중 선택, 최대 4개) -->
-            <label
-              class="doc-file-label"
-              class:drag-over={foreignDragOver}
-              aria-disabled={isUploadingForeign}
-              ondragover={handleForeignDragOver}
-              ondragleave={handleForeignDragLeave}
-              ondrop={handleForeignDrop}
-            >
-              <input
-                type="file"
-                class="sr-only"
-                multiple
-                disabled={isUploadingForeign}
-                accept="image/png,image/jpeg,image/webp,image/heif,image/heic,application/pdf"
-                onchange={handleForeignFileChange}
-              />
-              <span class="doc-file-btn">
-                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><polyline points="16 16 12 12 8 16"/><line x1="12" y1="12" x2="12" y2="21"/><path d="M20.39 18.39A5 5 0 0 0 18 9h-1.26A8 8 0 1 0 3 16.3"/></svg>
-                <span>파일 선택 또는 드래그</span>
-                <span class="doc-file-hint">PNG · JPEG · WebP · HEIF · PDF · 최대 {MAX_FOREIGN_FILES}개 · 개별 10MB 이하</span>
-              </span>
-            </label>
-
-            {#if foreignFiles.length > 0}
-              <div class="doc-file-grid">
-                {#each foreignFiles as file, i}
-                  <div class="doc-file-item">
-                    {#if foreignPreviews[i]}
-                      <img src={foreignPreviews[i]} alt="미리보기" class="doc-img-preview" />
-                    {:else}
-                      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
-                      <span class="doc-file-name">{file.name}</span>
-                    {/if}
-                    <button type="button" class="doc-file-remove" disabled={isUploadingForeign} onclick={() => removeForeignFile(i)} aria-label="파일 제거">✕</button>
-                  </div>
-                {/each}
-                <span class="doc-file-count">{foreignFiles.length}/{MAX_FOREIGN_FILES}</span>
-              </div>
-            {/if}
 
             {#if foreignError}
               <p class="doc-error" role="alert">{foreignError}</p>
@@ -1436,7 +1359,7 @@
                 type="button"
                 class="btn-doc-upload"
                 onclick={uploadForeignDoc}
-                disabled={isUploadingForeign || foreignFiles.length === 0 || foreignFiles.length < foreignSelTypes.length}
+                disabled={isUploadingForeign || foreignFilledCount < currentForeignTypes.length}
               >{isUploadingForeign ? '업로드 중...' : '등록하기'}</button>
             </div>
           </div>
@@ -2123,6 +2046,11 @@
     justify-content: space-between;
     gap: 12px;
   }
+  .doc-section-head-text {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
   .doc-subtitle {
     font-family: 'Noto Sans KR', sans-serif;
     font-weight: 400;
@@ -2333,32 +2261,6 @@
     gap: 12px;
   }
 
-  /* 증명 유형 선택 pill 버튼 행 */
-  .doc-type-row {
-    display: flex;
-    gap: 8px;
-    flex-wrap: wrap;
-  }
-  .btn-doc-type {
-    height: 34px;
-    padding: 0 16px;
-    background: #f6f6f6;
-    border: 1.5px solid transparent;
-    border-radius: 30px;
-    font-family: 'Noto Sans KR', sans-serif;
-    font-weight: 600;
-    font-size: 13px;
-    color: #888;
-    cursor: pointer;
-    transition: all 0.15s;
-    white-space: nowrap;
-  }
-  .btn-doc-type:hover { background: #ECEBF4; color: #3B2F8A; }
-  .btn-doc-type.active {
-    background: #3B2F8A;
-    border-color: #3B2F8A;
-    color: white;
-  }
 
   /* 파일 선택 영역 */
   .doc-file-label { cursor: pointer; display: block; }
@@ -2411,35 +2313,29 @@
     object-fit: contain;
   }
 
-  /* 다중 파일 미리보기 그리드 (본인증명, 최대 5개) */
-  .doc-file-grid {
-    display: flex;
-    flex-wrap: wrap;
-    align-items: center;
-    gap: 8px;
+  /* 본인증명·외국인증명 — 문서 종류별 "파일등록" 슬롯 그리드 (front-uiux.md §22-5 표준)
+     모바일: 1열 직렬 배열 / PC(≥768px): 2열 그리드로 확장 */
+  .doc-slot-grid {
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 12px;
   }
-  .doc-file-item {
+  .doc-file-btn-filled {
     position: relative;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
-    gap: 2px;
-    width: 64px;
-    height: 64px;
+    flex-direction: row;
+    gap: 8px;
+    min-height: 100px;
+    padding: 12px 32px 12px 12px;
+    border-style: solid;
+    border-color: #e0dff0;
     background: #f6f6f6;
-    border: 1px solid #e0dff0;
-    border-radius: 12px;
-    overflow: hidden;
-    padding: 4px;
+    color: #444;
+    text-align: left;
   }
-  .doc-file-item .doc-img-preview {
-    max-height: 100%;
-    height: 100%;
-    width: 100%;
-    object-fit: cover;
-    border-radius: 8px;
-  }
+  .doc-file-btn-filled .doc-img-preview { max-height: 64px; }
+  .doc-file-btn-filled .doc-file-name { font-size: 12px; color: #444; }
+  .doc-file-btn-filled .doc-file-remove { position: absolute; top: 8px; right: 8px; }
+
   .doc-file-name {
     font-size: 9px;
     color: #888;
@@ -2467,12 +2363,6 @@
     cursor: pointer;
   }
   .doc-file-remove:hover { background: #CF0000; }
-  .doc-file-count {
-    font-family: 'Noto Sans KR', sans-serif;
-    font-size: 12px;
-    color: #aaa;
-    white-space: nowrap;
-  }
 
   /* 오류 메시지 */
   .doc-error {
@@ -2524,9 +2414,9 @@
 
   /* PC 반응형 */
   @media (min-width: 768px) {
-    .doc-type-row { flex-wrap: nowrap; }
     .btn-doc-upload { height: 50px; }
     .btn-doc-cancel { height: 50px; }
+    .doc-slot-grid { grid-template-columns: repeat(2, 1fr); }
   }
 
   /* ── 아바타 업로드 모달 */

@@ -447,15 +447,17 @@
     bulkDate = seedSource.rentalDate
     bulkReturnDate = seedSource.returnDate
     // 시딩 소스 상품의 기존 저장값으로 시간도 함께 시딩(2026-09-01 — 방식만 시딩하고 시간은
-    // 항상 빈 값으로 열리던 결함. 특히 저장된 방식이 이미 배송(is_bulk_delivery)이면
+    // 항상 빈 값으로 열리던 결함. 특히 저장된 방식이 이미 배송(is_delivery_type)이면
     // 시간선택 버튼 자체가 안 보여 사용자가 채울 방법이 없어 datesSet이 영구 미충족
-    // 상태로 고정됐었다 — bulkHandleMethod의 자동채움과 동일한 기본값(12:00/13:00)으로
-    // 방어).
+    // 상태로 고정됐었다 — bulkHandleMethod의 자동채움과 동일한 기본값으로 방어).
+    // 2026-09-09(Stephen 확정) — 판정기준을 is_bulk_delivery(isDeliveryLocked)에서
+    // is_delivery_type(isDeliveryTypeMethod)로 교체 + 기본값을 의미없는 더미(12:00/13:00)
+    // 에서 실제 청구기준과 일치하는 00:00/24:00으로 교체(bulkHandleMethod와 동일 원칙).
     bulkTime = seedSource.rentalTime
     bulkReturnTime = seedSource.returnTime
-    if (isDeliveryLocked(seedSource.opts.rentalMethod)) {
-      if (!bulkTime) bulkTime = '12:00'
-      if (!bulkReturnTime) bulkReturnTime = '13:00'
+    if (isDeliveryTypeMethod(seedSource.opts.rentalMethod)) {
+      if (!bulkTime) bulkTime = '00:00'
+      if (!bulkReturnTime) bulkReturnTime = '24:00'
       // ⛔ 2026-09-02 QA 발견·Stephen 확정: 여기서 applyBulkToItems()를 호출하면 사용자가
       // 통합설정 패널을 건드리기도 전에, 마운트하는 것만으로 다른 상품(itemsState의 2번째
       // 이후 항목)이 개별적으로 갖고 있던 자기 자신의 수령방식·시간까지 첫 상품 값으로
@@ -560,21 +562,16 @@
       ...(forceCopy || bulkOpts.copyToReturn ? { returnMethod: v } : {}),
       ...(forceCopy ? { copyToReturn: true } : wasLocked ? { copyToReturn: false } : {}),
     }
-    // 배송(is_bulk_delivery) 방식은 시간선택 버튼 자체가 화면에서 사라지므로(요청 A,
-    // RentalForm snippet의 `{#if !locked}`), 사용자가 시간을 입력할 방법이 없어 datesSet이
-    // 영원히 미충족 상태로 고정되는 결함이 있었다(2026-09-01 실사용 발견 — "예약신청완료"
-    // 버튼이 배송방식 선택 시 영구 비활성). 상품상세 CalendarTimePicker.svelte가 이미 쓰고
-    // 있는 기본값(시작 12:00 / 종료 13:00, startHour=$bindable(12)·endHour=$bindable(13))을
-    // 그대로 재사용해, 아직 시간이 비어있는 경우에만 자동 채운다(사용자가 이미 넣은 값은
-    // 덮어쓰지 않음).
-    if (forceCopy) {
-      if (!bulkTime) bulkTime = '12:00'
-      if (!bulkReturnTime) bulkReturnTime = '13:00'
-    } else if (isDeliveryTypeMethod(v)) {
-      // 2026-09-08(Stephen 확정) — 수령이 배송(is_delivery_type)이면, 반납이 요청 A로
-      // 강제고정(forceCopy)되지 않는 조합(방문·퀵 등 §case②)이어도 반납일 전체가 하루로
-      // 청구되어(rental-fee-policy.md §1 ②, calcRentalMinutes deliveryLocked 분기) 반납
-      // 시간은 무의미하다 — 저장값 자체를 24:00으로 강제해 예약정보에 그대로 반영한다.
+    // 2026-09-09(Stephen 확정, §case①·② 통합) — 수령이 배송(is_delivery_type)이면 반납이
+    // 요청 A로 강제고정(forceCopy)됐는지와 무관하게, 반납방식이 무엇이든(배송 재선택 포함)
+    // "대여일 00:00 ~ 반납일 24:00"(rental-fee-policy.md §1 ①·②·§3) 표준값을 예약정보에
+    // 그대로 기록한다. 화면(장바구니)에서 수령 시간선택 UI를 가리는 것(RentalForm snippet의
+    // courierRestricted 게이팅, §3 요구사항 — 절대 건드리지 않음)과는 별개로, 저장값 자체가
+    // 비어있으면(NULL) CMS RentalDetailPanel "수령/반납 일시"에 시간이 아예 표시되지 않는
+    // 결함으로 이어졌다(2026-09-09 발견) — 과거의 12:00/13:00 더미값(2026-09-01 도입, 의미
+    // 없는 임시값이었음)을 폐기하고 실제 청구 기준과 일치하는 00:00/24:00으로 대체한다.
+    if (isDeliveryTypeMethod(v)) {
+      bulkTime = '00:00'
       bulkReturnTime = '24:00'
     }
     applyBulkToItems()
@@ -582,7 +579,7 @@
   function bulkHandleReturnMethod(v: DeliveryMethod) {
     // 수령방식이 배송으로 잠긴 상태에서는 반납방식 독립 변경 차단(요청 A)
     if (isDeliveryLocked(bulkOpts.rentalMethod)) return
-    // 2026-09-08(Stephen 확정) — 수령이 배송(is_delivery_type)이면 반납방식이 무엇으로
+    // 2026-09-08/09(Stephen 확정) — 수령이 배송(is_delivery_type)이면 반납방식이 무엇으로
     // 바뀌든(방문↔퀵 등) 반납시간은 항상 24:00 고정 — "초기화" 대상이 아니라 확정값이므로
     // resetReturnTimeForMethodChange()(토스트 안내 포함)를 타지 않고 바로 재확정한다.
     if (isDeliveryTypeMethod(bulkOpts.rentalMethod)) {
@@ -693,7 +690,7 @@
   // ── 서버 데이터 추출 (PageData는 +page.ts 기준이므로 server 필드는 캐스트 필요)
   // datesSet 등 canProceed 조건이 라인아이템 목록을 참조하므로 Footer 섹션보다 앞에 선언
   type ProductRow = { id: string; name: string; category: string; brand: string | null; slug: string; image_urls: string[]; is_active: boolean; shipping_round_trip?: boolean | null; shipping_delivery?: boolean | null; shipping_return?: boolean | null; sale_only?: boolean | null; sale_price?: number | null }
-  type UserCouponExt = { id: string; coupon_id: string; coupons: { id: string; code: string; type: string; discount_type: string; discount_value: number; description: string | null; valid_until: string } | null }
+  type UserCouponExt = { id: string; coupon_id: string; coupons: { id: string; code: string; type: string; discount_type: string; discount_value: number; display_name: string | null; valid_until: string } | null }
   type PriceRuleExt = { price12h: number | null; price24h: number | null; deposit: number | null }
   type CartLineItemOption = { optionProductId: string | null; name: string; qty: number; unitPrice: number; unitPrice12h: number | null; imageUrl: string | null; deliveryRentalDisabled: boolean; isRequired: boolean; minSelectRequired: boolean }
   type CartLineItem = { reservationId: string; productId: string | null; product: ProductRow | null; price12h: number | null; price24h: number | null; deposit: number | null; startDate: string; endDate: string; pickupMethod: string | null; returnMethod: string | null; pickupTime: string | null; returnTime: string | null; durationType: string | null; options: CartLineItemOption[]; status: string }
@@ -1751,7 +1748,7 @@
               <span class="section-sub-label">사용 가능한 쿠폰</span>
               {#each sdCoupons.filter(uc => uc.coupons !== null) as uc (uc.id)}
                 {@const c = uc.coupons!}
-                {@const couponLabel = c.description ?? (
+                {@const couponLabel = c.display_name ?? (
                   c.discount_type === 'fixed' ? `${c.discount_value.toLocaleString('ko-KR')}원 할인` :
                   c.discount_type === 'percentage' ? `${c.discount_value}% 할인` :
                   '무료배송'
