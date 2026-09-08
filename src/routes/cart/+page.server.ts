@@ -122,7 +122,7 @@ export const load: PageServerLoad = async ({ locals }) => {
       .from('user_coupons')
       .select(`id, coupon_id, used_count,
         coupons(
-          id, code, type, discount_type, discount_value, description,
+          id, code, type, discount_type, discount_value, display_name,
           is_active, deleted_at, valid_from, valid_until,
           user_grade_required, usage_limit, usage_count, total_usage_limit,
           is_first_rental_only, is_student_only, is_subscription_only, is_walk_in_only,
@@ -617,7 +617,7 @@ interface UserCouponRow {
     type:                string
     discount_type:       string
     discount_value:      number
-    description:         string | null
+    display_name:        string | null
     valid_until:         string | null
     min_purchase_amount: number
     min_rental_amount:   number
@@ -632,7 +632,7 @@ interface RawCouponFields {
   type:                 string
   discount_type:        string
   discount_value:       number
-  description:          string | null
+  display_name:         string | null
   is_active:            boolean
   deleted_at:           string | null
   valid_from:           string | null

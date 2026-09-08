@@ -19,7 +19,7 @@ interface RawCoupon {
   code: string | null
   discount_type: string
   discount_value: number
-  description: string | null
+  display_name: string | null
   valid_until: string | null
   min_purchase_amount: number | null
 }
@@ -39,7 +39,7 @@ export async function loadUserCoupons(
   // 쿠폰의 조인 결과를 null로 감추므로, 응답에 포함된 행은 항상 현재 유효기간 내 쿠폰이다.
   const { data } = await supabase
     .from('user_coupons')
-    .select('id, used_at, redeemed_code, coupons(code, discount_type, discount_value, description, valid_until, min_purchase_amount)')
+    .select('id, used_at, redeemed_code, coupons(code, discount_type, discount_value, display_name, valid_until, min_purchase_amount)')
     .eq('user_id', userId)
     .order('created_at', { ascending: false })
 
@@ -47,7 +47,7 @@ export async function loadUserCoupons(
     .filter(row => row.coupons !== null)
     .map(row => {
       const c = row.coupons as RawCoupon
-      const label = c.description
+      const label = c.display_name
         ?? (c.discount_type === 'fixed'
           ? `${c.discount_value.toLocaleString('ko-KR')}원 할인`
           : `${c.discount_value}% 할인`)
