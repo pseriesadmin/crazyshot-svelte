@@ -38,6 +38,18 @@ export interface ContractTemplate {
    * html 모드 전용: 발행자 서명·직인 이미지 너비(px, Migration #451). NULL이면 기본값(90px).
    */
   html_issuer_signature_width?: number | null
+  /**
+   * html 모드 전용: 발행자 서명·직인 이미지의 기본 중앙 위치 대비 가로/세로 이동 오프셋
+   * (px, Migration #463). NULL이면 0(중앙) — 드래그로 옮기지 않은 기존 템플릿과 하위호환.
+   */
+  html_issuer_signature_offset_x?: number | null
+  html_issuer_signature_offset_y?: number | null
+  /**
+   * html 모드 전용: "계약 및 인수 확인"·"개인정보동의" 섹션 문단 텍스트(Migration #464).
+   * 빈 줄로 문단 구분, 문단 맨 앞 "[라벨]"은 자동 굵게. NULL이면 기본 문구 사용.
+   */
+  contract_terms_text?: string | null
+  privacy_terms_text?: string | null
 }
 
 export type ContractTemplateSummary = Pick<ContractTemplate, 'id' | 'title' | 'status' | 'created_at' | 'authoring_mode'>
