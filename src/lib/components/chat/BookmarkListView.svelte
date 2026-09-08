@@ -14,18 +14,22 @@
 
   interface Props {
     sessionId: string | null
+    /** 2026-09-08: 이 값이 바뀌면(같은 sessionId여도) 목록을 재조회한다 — 패널이 열린 채
+     * 새 북마크가 추가돼도 즉시 반영되도록 부모(AdminChatPanel)가 북마크 성공 시마다 증가시킴 */
+    refreshToken?: number
     /** 북마크 항목 클릭 시 — 해당 메시지 ID와 세션 ID를 전달 */
     onselect?: (messageId: string, sessionId: string) => void
     onclose?: () => void
   }
 
-  let { sessionId, onselect, onclose }: Props = $props()
+  let { sessionId, refreshToken = 0, onselect, onclose }: Props = $props()
 
   let bookmarks = $state<BookmarkItem[]>([])
   let isLoading = $state(false)
 
-  // sessionId가 바뀌면 북마크 재조회
+  // sessionId 또는 refreshToken이 바뀌면 북마크 재조회
   $effect(() => {
+    void refreshToken
     if (!sessionId) { bookmarks = []; return }
     isLoading = true
     bookmarks = []
