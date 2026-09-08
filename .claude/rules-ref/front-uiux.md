@@ -2767,6 +2767,273 @@ name 속성 기반 네이티브 폼(CMS, use:enhance)에서는 별도 바인딩 
 
 ---
 
+## 22. '파일등록' UI 컴포넌트 — 표준 드롭존/슬롯 패턴 ★★★ (2026-09-08 등록)
+
+> 🔴 **AI 에이전트 필수:** "파일등록 UI", "파일등록 UI 배치" 언급 시 → 재도출 없이 아래
+> 규격·스타일값을 즉시 적용한다. 원본 소스: `ProfileTabContent.svelte`(본인증명·외국인증명
+> 업로드 영역, `.doc-file-btn`/`.doc-file-label`/`.doc-upload-wrap`) — 이 문서가 정본이며
+> 컴포넌트 자체는 아직 공용 `.svelte` 파일로 분리돼 있지 않다(각 화면에서 아래 클래스명·
+> 마크업 구조를 그대로 이식해 사용). 파일 포맷·용량·MIME 검증 정책은 §15가 정본 — 이 절은
+> **시각적 위젯 규격**만 다룬다(중복 관리 안 함).
+
+### 22-1. 구조 (드롭존 1개 = "파일등록" 1개)
+
+```
+label.doc-file-label (클릭 가능 전체 영역 + 드래그앤드롭 타겟)
+  input[type=file].sr-only (숨김 실제 입력)
+  span.doc-file-btn (시각적 드롭존 박스)
+    svg (업로드 아이콘, 20×20)
+    span (기본 문구 "파일 선택 또는 드래그")
+    span.doc-file-hint (허용 포맷·용량 안내, 12px)
+```
+
+- 미선택 상태: 아이콘 + "파일 선택 또는 드래그" + 안내 문구 3단 세로 배치
+- 드래그오버 상태: `label.drag-over .doc-file-btn` — 보더·배경·텍스트 컬러가 hover와 동일하게 전환
+- 비활성 상태: `label[aria-disabled='true']` — `pointer-events: none; opacity: 0.5`
+
+### 22-2. CSS 표준값 (원본 그대로 — 임의 변형 금지)
+
+```css
+.doc-upload-wrap { display: flex; flex-direction: column; gap: 12px; }
+
+.doc-file-label { cursor: pointer; display: block; }
+.doc-file-label[aria-disabled='true'] { pointer-events: none; opacity: 0.5; }
+
+.doc-file-btn {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  width: 100%;
+  min-height: 100px;
+  background: #f6f6f6;
+  border: 2px dashed #d0ceea;
+  border-radius: 20px;
+  padding: 16px;
+  font-family: 'Noto Sans KR', sans-serif;
+  font-size: 14px;
+  color: #888;
+  transition: border-color 0.15s, background 0.15s;
+  cursor: pointer;
+  text-align: center;
+}
+.doc-file-btn:hover { border-color: #3B2F8A; background: #f0eff8; color: #3B2F8A; }
+.doc-file-label.drag-over .doc-file-btn {
+  border-color: #3B2F8A;
+  background: #f0eff8;
+  color: #3B2F8A;
+}
+.doc-file-hint { font-size: 12px; color: #bbb; letter-spacing: -0.3px; }
+```
+
+업로드 아이콘(SVG, 20×20, `viewBox="0 0 24 24"`, `stroke="currentColor"` `stroke-width="2"`):
+
+```svelte
+<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+  <polyline points="16 16 12 12 8 16"/>
+  <line x1="12" y1="12" x2="12" y2="21"/>
+  <path d="M20.39 18.39A5 5 0 0 0 18 9h-1.26A8 8 0 1 0 3 16.3"/>
+</svg>
+```
+
+### 22-3. 선택 완료(파일 채워짐) 상태 — 파일명 노출 필수
+
+파일이 선택되면 드롭존 기본 문구를 그대로 두지 않고, 그 파일의 **이름을 반드시 노출**한다
+(빈 드롭존과 채워진 드롭존을 텍스트만으로도 구분 가능해야 함). 공유 드롭존(다중파일, 아래
+22-4)에서는 별도 그리드로, 슬롯형(1드롭존 1파일, 아래 22-5)에서는 드롭존 내부 텍스트 자체를
+교체한다.
+
+```css
+.doc-file-name {
+  font-size: 9px;
+  color: #888;
+  line-height: 1.2;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 100%;
+}
+.doc-file-remove {
+  position: absolute;
+  top: 2px; right: 2px;
+  display: flex; align-items: center; justify-content: center;
+  width: 18px; height: 18px;
+  background: rgba(16,11,50,0.65);
+  color: white;
+  border: none;
+  border-radius: 50%;
+  font-size: 10px;
+  line-height: 1;
+  cursor: pointer;
+}
+.doc-file-remove:hover { background: #CF0000; }
+```
+
+### 22-4. 변형 A — 공유 드롭존 다중 파일 (자유 개수 선택, 유형 사전확정 없음)
+
+드롭존 1개로 여러 파일을 받고, 선택된 파일들을 드롭존 아래 별도 그리드(썸네일 64×64
+카드)로 나열하는 패턴. 파일 개수만 필요하고 "이 파일이 정확히 어떤 문서인지"까지는
+1:1로 확정할 필요가 없는 경우 사용.
+
+⚠️ 2026-09-08 기준 이 코드베이스의 실제 사용처는 없다(본인증명·외국인증명 모두 22-5
+슬롯형으로 전환 완료) — 아래 CSS는 향후 "유형 사전확정이 없는" 신규 화면을 위한 참고
+스펙으로만 남겨둔다. 문서 종류가 조금이라도 사전에 특정 가능하면 이 변형을 쓰지 말고
+22-5(슬롯형)를 사용할 것.
+
+```css
+.doc-file-grid { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.doc-file-item {
+  position: relative;
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 2px;
+  width: 64px; height: 64px;
+  background: #f6f6f6;
+  border: 1px solid #e0dff0;
+  border-radius: 12px;
+  overflow: hidden;
+  padding: 4px;
+}
+.doc-file-item .doc-img-preview { max-height: 100%; height: 100%; width: 100%; object-fit: cover; border-radius: 8px; }
+.doc-file-count { font-family: 'Noto Sans KR', sans-serif; font-size: 12px; color: #aaa; white-space: nowrap; }
+```
+
+⚠️ 이 변형은 파일↔유형 매핑이 "선택 체크박스 배열"과 "파일 배열"이라는 서로 독립된 두
+목록의 **입력 순서**에만 의존한다 — 사용자가 실수로 다른 순서로 올리면 매핑이 어긋난다.
+**여러 파일이 각각 정해진 문서 종류를 대표해야 하는 경우(예: 외국인증명처럼 "이 파일 =
+여권사진면" 식으로 신원이 고정된 서류 세트) 이 변형을 쓰지 말고 반드시 22-5(슬롯형)를
+사용할 것.**
+
+### 22-5. 변형 B — 슬롯형(고정 유형별 드롭존 N개, 1드롭존 1파일) ★ 신규 표준
+
+문서 종류가 미리 정해진 세트(예: 외국인증명의 단기체류 4종·장기체류 4종)일 때는, 그
+개수만큼 **"파일등록" 드롭존을 각각 독립적으로 N개 배치**하고 각 드롭존을 그 문서 종류
+이름으로 라벨링한다. 사용자가 여러 파일을 올리는 순서에 의존하지 않고, 애초에 "이 드롭존
+= 이 문서 종류"로 고정되므로 파일과 메타정보(문서 종류 키워드)가 항상 정확히 1:1로
+매핑된다 — 이 매핑이 그대로 서버 제출(`FormData`)·DB 저장·CMS 표시까지 이어진다.
+
+```
+div.doc-slot-grid (드롭존 N개를 담는 컨테이너, 반응형 그리드)
+  div.doc-slot × N (문서 종류 1개당 1개)
+    label.doc-file-label (22-1과 동일 구조, input은 multiple 없이 단일 파일만)
+      span.doc-file-btn (비어있으면 문서 종류명 문구, 채워지면 파일명+제거버튼으로 내용
+        교체 — 드롭존 자체가 곧 라벨이므로 드롭존 밖에 별도 라벨 텍스트를 중복 배치하지
+        않는다, 2026-09-08 Stephen 지적으로 중복 라벨 제거 확정)
+```
+
+모바일: 1열 직렬 배열(세로 나열) / PC(≥768px): 2열 그리드로 확장.
+
+```css
+.doc-slot-grid {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 12px;
+}
+@media (min-width: 768px) {
+  .doc-slot-grid { grid-template-columns: repeat(2, 1fr); }
+}
+```
+
+제출 시 순서 보장 원칙(⛔ 절대 원칙): 슬롯 목록을 순회하며 그 순회 순서 그대로 파일과
+유형을 같은 인덱스에 append 한다 — 별도 선택 배열과 파일 배열을 따로 관리해 나중에
+합치지 않는다.
+
+```typescript
+// ✅ 올바른 패턴 — 같은 for 루프 안에서 file과 type을 항상 함께 append(순서 보장)
+for (const t of currentTypes) {
+  const file = slotFiles[t.value]
+  if (!file) continue
+  fd.append('file', file)
+  fd.append('doc_type', t.value)   // 서버는 이 배열을 doc_url과 동일 인덱스로 저장
+}
+
+// ❌ 금지 — 선택된 유형 배열과 파일 배열을 독립적으로 관리(순서 어긋날 위험, 22-4의 함정)
+for (const t of selectedTypes) fd.append('doc_type', t)
+for (const f of files) fd.append('file', f)
+```
+
+### 22-6. 표준 사용 패턴 (Svelte 5)
+
+```svelte
+<div class="doc-slot-grid">
+  {#each currentTypes as t (t.value)}
+    <div class="doc-slot">
+      <label
+        class="doc-file-label"
+        class:drag-over={dragOverSlot === t.value}
+        aria-disabled={isUploading}
+        ondragover={(e) => handleSlotDragOver(e, t.value)}
+        ondragleave={() => handleSlotDragLeave(t.value)}
+        ondrop={(e) => handleSlotDrop(e, t.value)}
+      >
+        <input
+          type="file"
+          class="sr-only"
+          disabled={isUploading}
+          accept="image/png,image/jpeg,image/webp,image/heif,image/heic,application/pdf"
+          onchange={(e) => handleSlotFileChange(e, t.value)}
+        />
+        {#if slotFiles[t.value]}
+          <span class="doc-file-btn doc-file-btn-filled">
+            <span class="doc-file-name">{slotFiles[t.value]?.name}</span>
+            <button type="button" class="doc-file-remove" onclick={(e) => { e.preventDefault(); removeSlotFile(t.value) }} aria-label="파일 제거">✕</button>
+          </span>
+        {:else}
+          <span class="doc-file-btn">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><polyline points="16 16 12 12 8 16"/><line x1="12" y1="12" x2="12" y2="21"/><path d="M20.39 18.39A5 5 0 0 0 18 9h-1.26A8 8 0 1 0 3 16.3"/></svg>
+            <span>{t.label}</span>
+          </span>
+        {/if}
+      </label>
+    </div>
+  {/each}
+</div>
+```
+
+⚠️ **허용 포맷·용량 안내(`.doc-file-hint`) 배치(2026-09-08 확정)**: 슬롯형은 드롭존이
+N개로 늘어나므로, 22-1의 단일 드롭존과 달리 안내 문구를 슬롯마다 반복 배치하지 않는다
+— 모든 슬롯이 같은 포맷·용량 제한을 공유하므로 섹션 헤더(`.doc-section-head`) 쪽에 **한
+번만** 배치한다(Stephen 지적으로 슬롯별 중복 노출을 제거).
+
+```svelte
+<div class="doc-section-head">
+  <div class="doc-section-head-text">
+    <p class="doc-subtitle">신원 확인용 증명서를 등록하세요</p>
+    <p class="doc-file-hint">PNG · JPEG · WebP · HEIF · PDF · 개별 10MB 이하</p>
+  </div>
+  <!-- 재등록 버튼 등 -->
+</div>
+```
+
+```css
+.doc-section-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+.doc-section-head-text { display: flex; flex-direction: column; gap: 4px; }
+```
+
+### 22-7. 다운스트림 메타정보 노출 원칙
+
+슬롯형(22-5)으로 제출된 문서는 서버 저장 시 `doc_url[i]`와 `doc_type[i]`가 항상 같은
+인덱스로 짝지어진다는 보장이 있으므로, 이를 소비하는 모든 화면(마이페이지 등록완료
+목록, CMS 상세 패널의 파일 목록 등)은 "파일 1" 같은 인덱스 기반 제네릭 라벨 대신
+**그 인덱스의 실제 문서 종류 라벨**을 노출해야 한다. 반대로 22-4(공유 드롭존, 순서
+비보장) 방식으로 저장된 문서는 이 매핑이 신뢰할 수 없으므로 제네릭 라벨을 유지한다 —
+매핑 신뢰도가 없는 구간에 실제 유형명을 노출하면 잘못된 라벨을 확정적으로 보여주는
+꼴이 되어 22-4 방식보다 더 나쁘다.
+
+### GATE C 확인 항목
+
+```
+[ ] 문서 종류가 사전에 고정된 세트인가? → 슬롯형(22-5) 사용, 공유 드롭존(22-4) 금지
+[ ] 슬롯형 제출 시 파일 배열과 유형 배열을 같은 for 루프에서 함께 append했는가?(순서 보장)
+[ ] 드롭존 CSS값(min-height 100px, dashed #d0ceea, radius 20px 등)을 22-2 그대로 사용했는가?
+[ ] 파일 선택 완료 시 드롭존 텍스트가 파일명으로 교체(또는 그리드 노출)되는가?
+[ ] 다운스트림(마이페이지·CMS 등) 표시가 순서 보장된 데이터에서만 실제 유형 라벨을
+    쓰고, 순서 비보장 데이터는 제네릭 라벨("파일 N")을 유지하는가?(22-7)
+[ ] §15(파일 업로드 표준 정책) MIME·용량 검증을 슬롯 단위로도 동일하게 적용했는가?
+```
+
+---
+
 *front-uiux.md | 사용자(USER) 화면 표준 디자인 시스템 | Harness Flow v3.2*
 *소스: crazyshot-Front_design-system.json (2026-07-10)*
 *2026-08-26 §18 추가 — `/account` 마이페이지 섹션 타이틀 PC(`--text-pc-title-18`)/모바일
@@ -2781,3 +3048,9 @@ name 속성 기반 네이티브 폼(CMS, use:enhance)에서는 별도 바인딩 
 향후 신규 로그인류 폼에 자동 반영되도록 트리거 명령으로 문서화(글자수 제한은 이 시점까지
 어느 로그인 폼에도 없었음을 확인 후 Stephen 승인으로 함께 신설: 이메일 254 / 비밀번호 72)*
 *대응 CMS 문서: cms-uiux.md (절대 혼용 금지)*
+*2026-09-08 §22 추가 — '파일등록' UI 컴포넌트(드롭존) 규격 공식 등록. 원본 소스는
+`ProfileTabContent.svelte`의 `.doc-file-btn`/`.doc-upload-wrap`. 공유 드롭존(다중파일,
+순서 비보장) 변형 A와 슬롯형(문서 종류별 드롭존 N개, 순서 보장) 변형 B를 구분해
+문서화 — 외국인증명(단기/장기 체류 4종 세트)처럼 문서 종류가 고정된 경우 변형 B를
+표준으로 강제하고, 그 순서 보장을 이용해 CMS 등 다운스트림에 실제 문서 종류 라벨을
+노출하는 원칙(§22-7)을 함께 명문화.*

@@ -1,5 +1,216 @@
 # .claude/harness/TASK.md
 
+## DONE — 🟢 ROUTINE: 이력관리(/cms/rental/history) 화면 관련 결함 점검(2026-09-09, 이 세션) — 결함 없음 확인
+
+아젠다: 앞서 이 세션에서 수정한 RentalDetailPanel "거부/승인하기 무한로딩"(onstatuschange·
+onrefresh·update() 3중 네비게이션 경합)·"재고 품번 재배정 isRentalView 게이트" 두 결함과
+같은 클래스의 문제가 `/cms/rental/history`(이력관리) 화면에도 있는지 Stephen이 점검 요청.
+
+### 점검 결과 — 코드 구조상 두 결함 클래스 모두 성립 불가, 수정 불필요
+
+```
+1. 이 화면(`+page.svelte`)은 RentalDetailPanel이 아니라 ProductDetailPanel.svelte
+   (tabs=['history'])를 사용 — use:enhance 폼 액션 자체가 없고 selectProduct/closePanel이
+   순수 goto()만 사용(onstatuschange/onrefresh류 병렬 트리거 부재) → 네비게이션 경합
+   무한로딩 클래스 자체가 구조적으로 성립 불가.
+2. 이력 등록/수정/삭제(saveHistoryRecord·deleteHistoryRecord, ProductDetailPanel.svelte
+   861~901행)는 전부 단순 fetch()+try/catch/finally로 로딩 플래그를 항상 정상 해제.
+3. /api/cms/product-history(GET/POST/PUT/DELETE)는 요청당 RPC 호출 1건씩만 실행 —
+   RentalDetailPanel 결함의 근본원인이었던 "여러 순차 await 중 나중 것이 실패하면 이미
+   성공한 앞단 처리 응답까지 막히는" 연쇄호출 구조 자체가 없음.
+4. isRentalView류 화면분기 게이트 자체가 없음(단일 컨텍스트) — 권한 체크는 세션 존재
+   여부만(+page.server.ts:11-12)이며, 이는 security-auth.md에 이미 "products 상세패널
+   이력 탭과 동일 정책(partner도 세션만으로 허용)"으로 확정·기록된 의도된 설계.
+```
+
+**결론**: 코드 변경 없음(순수 점검 태스크) — GATE E 대상 아님(수정 자체가 없어 회귀검증 불요).
+
+**sp3-qa-agent 독립검수**: "결함 없음" 결론도 재검증 없이 신뢰하지 않는다는 원칙에 따라
+위 4가지 근거를 코드·security-auth.md 매트릭스와 하나하나 직접 대조 — 4건 전부 사실과
+일치함을 확인(false negative 없음). 부가 관찰 1건(`deleteHistoryRecord`에 중복클릭 방지용
+로딩 플래그 없음 — 무한로딩과 무관한 기존 저위험 갭, 이번 점검 대상 밖) 외 차단 사유 없음.
+**최종 판정: ✅ GATE E 통과**
+
+---
+
+## DONE — 🔴 CRITICAL: 쿠폰 발행관리(/cms/promotion/coupon) UX 개선 7건 + 근본원인 DB 결함 2건 수정 (2026-09-09, 이 세션, ✅ GATE E 통과)
+
+### 배경
+
+Stephen이 쿠폰 생성폼 스크린샷 7장으로 문제 7건 제기 → Plan Mode로 전환해 병렬 Explore
+에이전트(현재 폼 상태·DB 스키마/RPC 실측·SuggestPicker/CalendarGrid 현재 코드) 3회 재검증
+후 승인받은 플랜대로 구현. 구현 후 Stephen이 완성된 화면을 실사용하며
+`<launch-selected-element>` 다수로 세부 UI 조정을 추가 지시(레이아웃 재배치·불필요 요소
+제거·목록 페이지네이션 레이아웃 통일·천단위 콤마 등) — 전부 같은 세션 내 후속 지시.
+
+### 항목별 원인·수정
+
+```
+① "쿠폰이름" 필드 부재 — display_name 컬럼 신설(설명은 관리자 메모로 역할 재분배)
+② "컬럼오류" 토스트 — ⚠️ 최초 가설(valid_from/valid_until NOT NULL)은 Stage DB 직접
+   조회로 틀렸음이 확인됨(이미 nullable). 실제 원인 2건, Postgres 실제 INSERT로 재현·확정:
+   (a) coupons.usage_limit이 NOT NULL인데 생성폼에 대응 필드가 없어 매번 NULL을 넣으려다
+       실패 — 검증기간 선택과 무관하게 모든 생성 시도가 항상 실패하던 상태였음
+   (b) "쿠폰유형" TYPE_OPTIONS의 'fixed'/'percent'가 coupon_type_enum에 실재하지 않는 값
+       (할인방식 옵션과 혼동돼 잘못 들어감, 실제 누락값은 'all'/'first_purchase') — 유형을
+       안 바꾸고 제출하면 즉시 enum 에러
+③ SuggestPicker "지워야 목록 열림" — minChars=0 죽은코드 자체가 아니라, 마운트 시 이미
+   선택라벨로 프리필된 상태에서 그 텍스트로 필터링되는 게 근본원인 — hasUserTyped 플래그로
+   "아직 편집 안 한 프리필 상태"만 별도 판정해 전체목록 노출(공유 컴포넌트 수정)
+④ 코드 프리뷰가 자유입력창처럼 보임 — sequenced 모드일 때 readonly 배지 스타일로 전환
+⑤ 전용조건/결합옵션 토글 스위치 세로나열 → CMS 표준 .s-chip 콤보버튼(cms-uiux.md §7-12-B,
+   cms/set/rental·cms/set/push와 동일 스타일, 로컬 CSS 복제 관례 그대로 따름)
+⑥ 날짜피커 연/월 빠른이동 — CalendarGrid.svelte(공유 컴포넌트, CMS+프론트 대여일정·생년월일
+   전부 사용)에 순수 추가 기능으로 "년"/"월" 팝오버 추가, 기존 prevMonth/nextMonth·Props
+   계약 무변경
+⑦ 발행 목록/생성 화면 분리 — /cms/products/new 관례를 따라 /cms/promotion/coupon/new
+   신규 라우트 생성, 인라인 폼 완전 이전, 생성 성공 시 목록으로 redirect
+```
+
+### 후속 UI 조정(같은 세션, Stephen 실사용 확인으로 반복 지시)
+
+```
+- "쿠폰이름"/"관리자메모" 필드를 전용 래퍼(.display-info-section/.display-info-grid)로
+  그룹화 → "기본 정보" 타이틀 위로 재배치(입력항목 기능구조상 정합) + 구분 여백 추가
+  (border-bottom 구분선은 이후 지시로 제거, margin만 유지)
+- "분류 선택 및 검색" 중복 안내문(.field-hint) 제거 — SuggestPicker 자체 placeholder로 충분
+- .form-actions 구분선(border-top) 제거
+- 발행관리 탭 목록에 CmsPagination(top+bottom) 추가 — 고객목록(/cms/customers) 화면과
+  레이아웃 통일. data.coupons는 사용량 리포트 탭의 코드매칭 조회가 탭 무관 전체목록에
+  의존하므로 그대로 유지, 화면표시만 클라이언트에서 30개씩 슬라이스(서버 재조회 없음)
+- 상단 "← 목록으로" 링크 제거 — 하단 "취소" 버튼이 이미 동일 URL로 연결돼 중복이었음
+- "할인값"/"최소 렌탈 금액" 필드에 천단위 콤마 표시 추가 — type="number"은 콤마 표시가
+  안 돼 text+inputmode="numeric"으로 전환(cms/products/new·cms/set/rental 등 기존 CMS
+  폼과 동일 관례), 실제 제출값은 옆 hidden input(raw 숫자)이 담당. 프로젝트 전체에
+  공용 컴포넌트/유틸이 없어 각 폼이 개별 구현하는 기존 관례를 그대로 따름(신규 공용
+  유틸 추출은 이번 요청 범위 밖)
+- "표시 정보" 타이틀행 우측에 CMS 표준 close-red 취소 버튼(✕, cms-uiux.md §0-10-A
+  rep-close-btn 재사용 — 28×28px·✕ 문자·hover 시 --cs-red-badge, SVG 아이콘 신설 금지
+  원칙 준수) 추가 — 클릭 시 취소하고 목록으로 이동(상단에서 제거한 "← 목록으로"와
+  동일 목적지, 위치만 타이틀행으로 이동)
+```
+
+### 구현 파일
+
+```
+신규
+  src/routes/cms/promotion/coupon/new/+page.server.ts   — load()+create 액션(신규 라우트)
+  src/routes/cms/promotion/coupon/new/+page.svelte       — 생성폼 전체(①②④⑤ 반영)
+  supabase/migrations/20260908100000_466_coupons_display_name_column.sql
+  supabase/migrations/20260908110000_467_coupons_usage_limit_nullable.sql
+  supabase/migrations/20260908120000_468_cms_create_coupon_display_name.sql
+    (29-param cms_create_coupon 재생성 — 기존 28-param DROP FUNCTION 후 CREATE,
+    오버로드 중복 방지)
+
+수정
+  src/routes/cms/promotion/coupon/+page.svelte     — 인라인 폼 제거+링크 교체, typeLabel()
+    enum 정정, CmsPagination 추가, 죽은 CSS(.fs-title/.form-grid/.field-hint 등) 정리
+  src/routes/cms/promotion/coupon/+page.server.ts  — createCoupon 액션 제거, 생성폼 전용
+    load() 쿼리(categoryOptions/mappingGroups/mappingItems/taxonomyCodes) 제거
+  src/lib/server/account/loadUserCoupons.ts        — 라벨 산출 description→display_name
+  src/routes/cart/+page.server.ts, +page.svelte    — 동일(display_name)
+  src/lib/components/common/SuggestPicker.svelte   — hasUserTyped 플래그(공유 컴포넌트)
+  src/lib/components/common/CalendarGrid.svelte    — 연/월 빠른이동 팝오버(공유 컴포넌트),
+    .cal-title 미사용 CSS 정리(QA 지적 반영)
+```
+
+### DB 적용 상태
+
+✅ Stage(ezyvffjvuwmtuhpxdjrw)·Production(vnbpmvxruyciuuaermyh) 양쪽 3개 마이그레이션
+전부 적용 완료(Stephen "Production 마이그레이션 적용 실행" 명시 확인 후 진행) + QA 지적에
+따라 메인 세션에서 양쪽 DB 독립 재조회로 재확인: `cms_create_coupon` 오버로드 정확히
+1개(pronargs=29), `coupons.display_name`/`usage_limit` 둘 다 is_nullable='YES' — Stage·
+Production 동일하게 확인(project_id 재확인 후 조회).
+
+### 검증
+
+```
+npm run check        → 이 세션이 건드린 파일 전부 신규 에러 0건(사전 무관 vite.config.ts
+                        에러 1건만 있음, 손대지 않음)
+npx vitest run src/__tests__/services/couponLazySequencing.test.ts → 13/13 GREEN
+Stage DB 직접 INSERT 재현 테스트로 ②(a)(b) 두 결함 모두 재현 후 수정 확인
+```
+
+### QA — @sp3-qa-agent 검수 결과(2026-09-09)
+
+```
+🟡 조건부 통과 → 아래 3건 조치 후 ✅ GATE E 통과로 확정.
+
+검수 1(규칙 정합성) 통과 · 검수 2(기술부채: console.log/any/svelte-check) 통과
+검수 3(시범오픈 기준) 통과 — RLS·결제·비밀키 영향 없음(N/A 항목 다수)
+
+핵심 확인 사항(전부 통과):
+- cms_create_coupon TS payload 29필드 ↔ SQL 29-param 이름 완전 일치(diff 0건),
+  DROP 대상 시그니처도 실제 이전 라이브 시그니처(28-param)와 정확히 일치
+- usage_limit NOT NULL 제거가 use_coupon 등 다른 RPC 로직과 무충돌(grep으로 미참조 확인)
+- TYPE_OPTIONS 12개 = 실제 coupon_type_enum 12개 완전 일치
+- SuggestPicker hasUserTyped — minChars>0 사용처 전체코드베이스에 0건, 회귀 위험 없음
+- CalendarGrid Props 계약(value/onselect/disablePast/minDate/rangeStart 등) 완전 무변경
+- 라우트 분리 후 목록 쪽 createCoupon 액션·생성폼 전용 load() 쿼리 완전 제거 확인
+- cart 2개 파일 diff 중 display_name 관련은 정확히 2곳뿐, 다른 세션 작업과 혼재 없음
+
+발견·조치 완료:
+1. CalendarGrid.svelte — 마크업 교체 후 미사용 .cal-title CSS 5줄 → 제거 완료
+2. Migration 468 주석 "27→28-param" 서술 오차(실제 28→29-param, 기능은 정확) → 정정 완료
+3. Stage/Production DB 실반영 여부(서브에이전트는 Supabase MCP 미보유로 직접확인 불가)
+   → 메인 세션이 양쪽 project_id로 SQL 직접 재조회해 확인 완료(위 "DB 적용 상태" 참고)
+```
+
+git commit은 Stephen 직접 실행 가능.
+
+---
+
+## DONE — 🔴 CRITICAL: 수령=배송 예약정보 00:00/24:00 등록 + 🟡 BOUNDARY: 상품상세 토스트 표준화(2026-09-09, 이 세션)
+
+### ① cart/+page.svelte — "수령=배송" 예약정보에 00:00/24:00 실제 등록 (CRITICAL)
+
+아젠다: Stephen이 CMS `RentalDetailPanel` "대여정보" 탭의 수령/반납 "날짜 & 시간" 항목을
+launch-selected-element로 지목 — "수령 배송+반납(어떤 옵션이든)" 조합에서 예약정보에
+`00:00`(수령)/`24:00`(반납)이 실제로 등록되도록 요청. 직전 세션에서 이미 반납(방문 등)
+leg의 UI 고정표시(24:00)는 처리했으나, **실제 저장값**(특히 수령 leg)이 여전히 비어
+있어(NULL) CMS 화면에 시간이 아예 안 보이는 문제였음.
+
+- `RentalDetailPanel.svelte`의 표시 코드(`row.pickup_time ? ' ' + row.pickup_time : ''`)는
+  이미 값이 있으면 보여주도록 구현돼 있었음 — CMS 쪽 수정 불필요, 원인은 순수 데이터 문제.
+- `bulkHandleMethod()` — 기존 "요청 A(is_bulk_delivery) 전용 12:00/13:00 더미값" 분기를
+  폐기하고, `isDeliveryTypeMethod(v)` 기준(반납방식·요청A 여부 무관)으로 `bulkTime='00:00'`
+  /`bulkReturnTime='24:00'`을 통합 설정하도록 재작성.
+- 카트 재진입 시딩 로직(기존 저장값 복원 지점)도 동일하게 `isDeliveryLocked`→
+  `isDeliveryTypeMethod`, `12:00/13:00`→`00:00/24:00`로 교체.
+- 장바구니 UI의 "수령 배송 시 시간선택 숨김"(courierRestricted 게이팅)은 요구사항 3에 따라
+  전혀 건드리지 않음 — 저장값만 정합화.
+- 요금계산(`calcRentalMinutes`/서버 RPC) deliveryLocked 분기는 애초에 시간값을 안 읽으므로
+  무영향(직전 QA에서 이미 실증된 것과 동일 원칙).
+
+### ② products/[id]/+page.svelte — 상품상세 페이지 토스트를 표준(csToast)으로 전면 교체 (BOUNDARY)
+
+아젠다: Stephen이 launch-selected-element로 상품상세 페이지의 "본인증명정보 등록 안내"
+토스트를 지목 — front 표준 디자인 시스템 토스트(csToast)와 다르다는 의혹 제기 → 검증 요청
+→ 실제로 페이지 자체 구현(`showToast`/`.toast-msg`, 2026-09-06에 이미 1곳만 부분전환된 채
+방치됐던 비표준 커스텀 컴포넌트)임을 코드 대조로 확인·보고 → 전체 표준화 지시 받아 진행.
+
+- `showToast()` 호출 26곳 전부 `csToast`로 전환(경고 17·에러 8·정보 1쌍) — 메시지 성격별
+  `.warning`/`.error`/`.info` 분류, 액션버튼 2곳(`{label,onClick}`→`{actionLabel,onClick}`)
+  시그니처 매핑.
+- 레거시 `toastMsg`/`toastVisible`/`toastAction`/`toastTimer` state, `showToast()` 함수,
+  SPA 재진입 리셋 코드, `{#if toastVisible}` 마크업, `.toast-msg`/`.toast-msg.has-action`/
+  `.toast-action-btn` CSS 전부 제거(순수 삭제, net -74줄).
+
+### 검증(공통)
+
+`npx svelte-check` 신규 에러 0건(vite.config.ts 기존·무관 에러 1건만 유지), 이번 변경으로
+인한 신규 경고 0건(CSS·마크업 동시 제거로 unused-selector 경고도 미발생). 두 파일 다
+git commit 미실행(Stephen 직접 실행 대기) — sp3-qa-agent 검수 요청.
+
+⚠️ `src/routes/cart/+page.svelte`는 이번 세션 외에도 다른 병렬 세션이 동시에 편집 중
+(`coupons.display_name` 컬럼 관련 hunk 1곳 혼재 확인, `git diff` 직접 대조로 스코프
+분리 완료) — 이번 기록·QA 요청 범위에서 명시적으로 제외.
+
+**GATE E: 자체판정 ✅ (①은 요금계산 무영향 재확인 완료, ②는 표시전용 컴포넌트 교체 —
+sp3-qa-agent 독립검수 요청)**
+
+---
+
 ## QA — @sp3-qa-agent 검수 결과(2026-09-08, 이 세션 미커밋분 4개 파일 일괄)
 
 아래 "헤더 툴바 라벨 직관화"·"damage_claimed 라벨 누락 수정"·"헤더 툴바 4버튼 재점검+수정"
@@ -312,6 +523,94 @@ sig-upload` 행에는 힌트 텍스트("PNG · JPEG · GIF · 최대 5MB")와 �
 UI만 남음(로직 무변경). svelte-check 신규 에러 0건, 기존 경고 수(404건) 그대로 유지
 확인 — 순수 마크업 위치 이동이라 vitest 대상 아님(로직·데이터 무변경).
 
+**5차 후속(같은 날)**: Stephen이 `<launch-selected-element>` 2건("발행자 서명·직인
+필수" 토글 행의 `.toggle-hint` 정적 안내문 / `.html-sig-row` 전체)으로 "불필요한 레이아웃
+요소로 판정되면 제거해서 캔버스 영역 세로폭을 확보할 것" 재지시. 판정 결과 둘 다 제거:
+  1. `.toggle-hint`("이 양식으로 계약을 발행할 때... 필수로 만듭니다") — 바로 왼쪽
+     `toggle-label`이 이미 상태별 동일 의미를 동적으로 보여줘(`필수 (서명·직인 없으면
+     발송 차단)` 등) 순수 중복 정보였음 → 마크업+CSS(`.toggle-hint`) 함께 제거, 토글
+     행이 한 줄로 압축됨.
+  2. `.html-sig-row`(발행자(대표이사) 서명·직인 행) — 4차 후속(popup 이관) 이후 서명이
+     이미 등록된 상태에선 정적 힌트 문구 한 줄만 남아있었는데, 그 문구가 이미
+     `.html-sig-canvas-popup`의 힌트("마우스로 끌어 위치를 옮기거나...")와 내용이
+     겹치는 중복 정보로 판정 → 이 행 자체를 `!htmlIssuerSignatureUrl`(서명 미등록
+     상태)일 때만 렌더링하도록 변경, 서명 등록 후에는 행 전체(패딩·보더 포함)가
+     사라져 `.html-preview-doc` 캔버스 세로공간 추가 확보. 최초 등록 단계(라벨+
+     "서명/직인 삽입" 버튼+자산 목록 팝오버)는 그대로 유지 — 등록 경로 보존.
+     `.html-sig-hint` CSS는 캔버스 팝업 쪽에서도 재사용 중이라 클래스 자체는 유지.
+  svelte-check 신규 에러 0건, 경고 수(404건) 그대로 — unused CSS 경고 없음(제거된
+  `.toggle-hint`는 CSS도 함께 삭제, `.html-sig-hint`는 다른 곳에서 계속 사용 중이라
+  유지). 관련 vitest 72개 재실행 GREEN(로직 무변경이라 참고용 재확인).
+
+**6차 후속(같은 날, 결함 수정)**: Stephen이 `<launch-selected-element>` 2건(`.issuer-
+sig-overlay` 도장 이미지 / `.html-sig-canvas-popup`)으로 "직인(서명) 이미지 선택상태에서
+이외 레이아웃에서 클릭 선택 해제되게 할 것 - 동시에 둘째 영역 노출도 감출 것" 지적.
+원인: 기존 "문서 밖 클릭 시 툴바 닫기" `$effect`가 `.html-preview-doc`(계약서 문서
+전체를 담은 스크롤 컨테이너) **밖**을 클릭했을 때만 해제하도록 판정 범위가 너무
+넓었다 — 도장 이미지가 아닌 같은 문서 안의 다른 영역(계약서 본문 텍스트 등)을 클릭해도
+`.html-preview-doc` 안이라 해제되지 않던 결함. 수정: 판정 기준을 "이미지 자신(
+`.issuer-sig-overlay`)·크기조절 툴바(`docSigToolbarEl` 신규 참조)·캔버스 popup(
+`htmlSigCanvasPopupEl` 신규 참조) 중 하나에 포함되는가"로 좁히고, 그 셋 어디에도
+포함되지 않는 클릭이면 무조건 `showDocSigToolbar = false` 처리하도록 변경 — 문서 안
+다른 영역, 우측 특약 패널, 토글/버튼 등 레이아웃 전체가 해제 대상이 됨. "둘째 영역
+(캔버스 popup) 노출 감춤"은 `{#if showDocSigToolbar && htmlIssuerSignatureUrl}` 조건이
+이미 같은 상태를 공유해 자동으로 함께 사라짐(별도 처리 불필요, 요구사항 자동 충족).
+svelte-check 신규 에러 0건, 경고 수(404건) 그대로. 관련 vitest 72개 재실행 GREEN
+(로직 무변경 참고용).
+
+**7차 후속(같은 날, 5차 후속 부작용 수정)**: Stephen이 `<launch-selected-element>`로
+"서명 & 직인 이미지 등록" 버튼(토글 행)을 선택하며 "이미 등록된 직인(서명) 이미지
+목록 선택 모달을 복원해 - 제거된 '서명/직인 삽입' 버튼 UI를 복원하고 선택위치로
+재배열해" 지시. 원인: 5차 후속에서 `.html-sig-row` 전체를 `!htmlIssuerSignatureUrl`
+(서명 미등록) 상태에만 렌더링하도록 좁히면서, "이미 등록된 서명·직인 자산 목록에서
+골라 삽입"하는 `openHtmlSigPicker`/`showHtmlSigPicker` 버튼+팝오버가 서명이 이미
+설정된 일반 상태(실사용 중 대부분의 상태)에서는 호출할 방법 자체가 없어져 사실상
+제거된 것과 같아졌던 부작용. 수정: 해당 버튼+팝오버(로직 무변경 —
+openHtmlSigPicker/showHtmlSigPicker/htmlSigAssets/selectHtmlSigAsset 전부 그대로
+재사용)를 `htmlIssuerSignatureUrl` 여부와 무관하게 항상 노출로 복원하고, 위 "서명 &
+직인 이미지 등록" 버튼 바로 옆(Stephen이 선택한 위치, `field-row--toggle` 안)으로
+재배치 — 신규 `.html-sig-picker-inline` wrapper(position:relative, 팝오버 위치 기준)로
+이동. 콘텐츠가 없어진 옛 `.html-sig-row` 블록·CSS는 함께 제거(중복 `htmlSigPickerEl`
+바인딩 충돌 방지). svelte-check 신규 에러 0건, 경고 수(404건) 그대로 — unused CSS
+경고 없음. 관련 vitest 72개 재실행 GREEN(로직 무변경 참고용).
+
+**8차 후속(같은 날)**: Stephen이 `<launch-selected-element>`로 `.field-row.field-row--
+sig-upload` 행(4차 후속으로 등록 버튼이 빠진 뒤 파일 미선택 상태에서 라벨 "서명·직인
+이미지"+힌트 "PNG · JPEG · GIF · 최대 5MB"만 남아있던 행)을 지적, "불필요 요소판정 시
+제거" 지시. 판정: 상호작용 요소가 전혀 없는 순수 안내 문구 한 줄뿐이라 제거 대상으로
+판정 → 행 자체를 `sigUploadFile`(파일 선택 후)에만 렌더링하도록 변경, 파일 미선택
+상태에서는 행 전체(패딩·보더 포함)가 사라져 세로공간 확보. 파일 선택 후 필요한
+유형선택(서명/직인 라디오)+등록/취소 확인 UI는 로직 그대로 유지(업로드 확정 경로라
+제외 대상 아님). 이제 쓰이지 않게 된 `.sig-upload-hint` CSS도 함께 제거. svelte-check
+신규 에러 0건, 경고 수(404건) 그대로 — unused CSS 경고 없음. 관련 vitest 72개 재실행
+GREEN(로직 무변경 참고용).
+
+### GATE E 최종 처리(3차~8차 후속 전체) — sp3-qa-agent 검수 완료 (2026-09-09, 메인 세션)
+
+sp3-qa-agent에 `ContractTemplatePanel.svelte`의 3차~8차 후속 6건 전체를 검수 요청(1차
+호출은 stall로 실패 → 재실행해 완료). 판정: **✅ GATE E 통과**.
+
+- 요청범위 외 수정 0건(diff 전체 RPC/fetch/`.from(` 패턴 grep으로 데이터·템플릿 로직
+  무변경 확인), frozen 파일 미해당, Svelte 5 문법·any 타입·console.log·TODO 위반 0건.
+- `svelte-check` 재실행: `ContractTemplatePanel.svelte` 관련 에러·경고 0건(유일한 전체
+  에러는 세션 이전부터 있던 무관한 `vite.config.ts` 1건).
+- `htmlSigPickerEl`/`docSigToolbarEl`/`htmlSigCanvasPopupEl` 3개 ref 각각 정확히 1곳에서만
+  바인딩, 중복 없음. `.html-sig-hint` CSS는 정의 1곳·사용 1곳(캔버스 popup)으로 정상 재사용.
+- 6차 후속 결함수정 로직 검증: `onImgClick`이 `e.stopPropagation()`으로 이미지 클릭의
+  document 버블링 자체를 차단 — `img?.contains(target)` 체크는 방어적 이중 안전장치일
+  뿐 충돌 없음.
+- `contractHtmlSubstitution.test.ts` + `contractDataLineItems.test.ts` 재실행 72/72 GREEN.
+- 리사이즈·드래그 이동·삭제(제거 버튼 2곳)·클릭 토글 등 기존 핸들러 함수 시그니처는
+  이번 세션 내내 무변경 재사용(마크업 위치만 이동) 확인.
+- 경미 사항(비블로킹): `.html-sig-canvas-popup { background: #fff }` 하드코딩 1건 —
+  같은 파일 내 기존 3곳(`.html-preview-doc` 등)도 동일 관행이라 이번 세션이 새로 만든
+  패턴 아님, 수정 불필요 판정.
+- Production DB 마이그레이션·`html_document` 동기화 불필요 판단 — 이번 diff가
+  `defaultRentalContractHtml.ts`/`contract-data/+server.ts` 등 데이터·템플릿 파일을
+  전혀 포함하지 않음을 확인해 타당.
+
+수정 필요 항목 없음.
+
 ---
 
 ## DONE — 🔴 CRITICAL: RentalDetailPanel "거부"/"승인하기" 버튼 무한로딩 결함 수정(2026-09-08, 이 세션)
@@ -462,6 +761,50 @@ npx vitest run src/__tests__/services/reservation.test.ts
 `cms_reassign_reservation_product_code`를 Production(vnbpmvxruyciuuaermyh)에서 직접
 `pg_get_functiondef`로 조회해 `v_status = 'hold' OR v_status = 'confirmed'` 게이트가
 정확히 반영돼 있음을 이미 확인해뒀으므로 — 이 권고사항은 해소됨(추가 조회 불필요).
+
+### 커밋·배포·Production 실브라우저 검증 (2026-09-08~09, 현재 세션)
+
+**커밋**: `89b26ab` — RentalDetailPanel.svelte(재배정 isRentalView 게이트 제거 + 4버튼
+네비게이션 경합 수정) + `+page.server.ts`(다른 세션의 fail-soft try/catch) +
+ContractTemplatePreviewModal.svelte(출력+A4) + TASK.md. Stephen이 `stage` 브랜치에
+직접 커밋·푸시(AI git 쓰기 금지 원칙에 따라 실행은 Stephen 본인).
+
+**배포 확인(Vercel MCP)**: `stage` 푸시 → Stage 배포 `dpl_C8uGoGq1CAxaP6VMz5xQiTZgh454`
+READY. PR #264(`stage`→`main`) 머지 → Production 배포 `dpl_H7LVQMXFEHL9nVK3A98VXFxKWR1t`
+최초 BUILDING → 재조회 READY 전환 확인, `crazyshot-svelte.vercel.app` alias 정상 연결.
+배포 직후 10분간 런타임 에러 0건.
+
+**Production 실브라우저 검증(Claude Browser, Stephen "Claude Browser 실행" 명시 요청으로
+진행 — 이미 로그인된 CMS 관리자·고객 세션 재사용, 자격정보 직접 입력 없음)**:
+
+```
+① 재배정 버튼 — /cms/rentals 예약 115(SONY A7S3, CS2609032)
+   - "상품코드 재배정" 버튼 노출 확인(수정 전엔 이 화면에서 렌더링 자체가 안 됐음)
+   - 클릭 → 재고 선택 드롭다운 정상 오픈(대체 재고 4건 조회)
+   - CSCRMRL0020001 → CSCRMRL0020002 재배정 실행 → 성공 토스트 + DB 반영 확인
+   - 검증 목적 변경이었으므로 CSCRMRL0020001로 재배정해 원복 + DB 재확인 완료
+
+② 거부 버튼 — Production에 신청대기(hold) 예약이 0건이라 실제 고객 체크아웃 플로우로
+   테스트용 예약을 신규 생성(SONY A7S3, /account 로그인된 고객 세션 "이기성" 재사용,
+   방문수령/방문반납, 2026-09-12~13) → id=142, 예약코드 CS2609059, status='hold' 확정
+   - /cms/reservation?selected=142 → "거부" 클릭
+   - 즉시 "예약이 거부되었습니다" 토스트 표시, 무한로딩 없음
+   - 패널 자동 닫힘 + 신청대기 목록에서 즉시 사라짐(자동 새로고침 정상)
+   - DB 대조: status='cancelled' 정확히 반영 확인
+   - Stephen 지시로 테스트 예약 142는 정리하지 않고 그대로 유지(감사 추적용)
+```
+
+**최종 결론**: 코드·타입체크·회귀테스트·QA 검수에 이어, Production 실제 화면에서 두 버튼
+모두 클릭 기준으로 정상 동작함을 확인 완료 — "무한로딩" 결함이 완전히 해소됐음을 실증.
+
+**sp3-qa-agent 최종 재검수(2026-09-09)**: 커밋 89b26ab의 실제 diff가 위 두 GATE E 판정
+내용(isRentalView 게이트 제거, onstatuschange 순서고정+onrefresh 중복제거)과 정확히
+일치함을 재확인, TASK.md 배포·Production 검증 기록도 앞선 코드검수와 내적으로 일관됨을
+확인. svelte-check 신규 에러 0건, vitest 4파일 95/95 GREEN(7 skip 기존과 동일). Vercel/
+Supabase MCP 미보유로 배포상태·DB값 직접 재조회는 못했으나(비차단 한계로 명시) 이미
+기록된 이전 세션의 직접 조회 결과와 diff가 부합해 판정에 영향 없음.
+
+**최종 판정: ✅ GATE E 통과**
 
 ---
 
@@ -40415,5 +40758,49 @@ UI는 "체크박스 콤보 4개 + 공유 드롭존 1개(다중선택)" 구조라
 `identity_type`/`identity_doc_url` 배열을 순서 보장된 상태로 채워 넣기만 함). 
 `npx svelte-check` — 대상 파일 신규 에러 0건, unused-CSS-selector 경고 0건(제거 대상
 클래스들 모두 정상 제거 확인).
+
+**git commit은 Stephen 직접 실행.**
+
+---
+
+## NOW — '파일등록' 슬롯 UI 마무리 다듬기 3건 (2026-09-08, 같은 날 3차 후속, 이 세션 단독 수행)
+
+> 앞선 두 NOW 블록(외국인증명 슬롯형 전환, 본인증명 슬롯형 전환)이 QA 통과한 뒤,
+> Stephen이 실제 화면을 보고 지적한 잔여 UI 디테일 3건을 이어서 처리. 전부
+> `src/lib/components/members/profile/ProfileTabContent.svelte` + `.claude/rules-ref/
+> front-uiux.md`(§22) 범위 내 — 새 파일·DB/RPC 변경 없음.
+
+1. **슬롯 라벨 중복 제거**: `<launch-selected-element>`로 지목된 4개
+   `p.doc-slot-label`("여권사진면" 등)이 그 아래 드롭존 내부 텍스트(`<span>{t.label}</span>`,
+   직전 세션에서 이미 반영됨)와 완전히 같은 문구를 중복 노출하고 있어 "불필요 중복요소"로
+   지적 — `.doc-slot-label` `<p>` 마크업 자체를 identity/foreign 양쪽에서 제거하고, 이제
+   미사용이 된 `.doc-slot-label` CSS도 함께 삭제.
+2. **모바일 반응형 직렬 배열**: "선택영역 목록 정렬을 모바일 반응형에서는 직렬 배열
+   적용" 지시 — `.doc-slot-grid`를 모바일 기본 1열(`grid-template-columns: 1fr`)로
+   바꾸고, 기존 2열 그리드는 `@media (min-width: 768px)` PC 전용으로 이동. 이 컴포넌트는
+   PC·모바일 공용(별도 PC 파일 없음)이라 이 미디어쿼리 하나로 양쪽 다 커버됨 — Stephen이
+   이후 "PC반응형도 동일하게 맞춰진 것을 확인했음"으로 확인.
+3. **포맷/용량 안내 문구 슬롯당 반복 → 섹션당 1회로 통합**: "첫째 선택영역(각 슬롯의
+   `.doc-file-hint` 'PNG · JPEG · WebP · HEIF · PDF · 개별 10MB 이하') 텍스트를 빼서
+   둘째 선택영역(`.doc-section-head`, 상단 안내문구+재등록버튼 행) 레이아웃으로 이동해
+   배치" 지시 — 슬롯 N개마다 반복되던 안내문을 각 탭(본인증명/외국인증명) 상단에 딱 1번만
+   노출하도록 이동. `.doc-section-head`를 `.doc-section-head-text`(subtitle+hint 세로
+   스택) + 재등록 버튼 2단 구성으로 재구조화, 신규 CSS 클래스 1개(`.doc-section-head-text`)
+   추가.
+
+모든 항목을 `front-uiux.md` §22(파일등록 UI 컴포넌트) 문서에도 동기화 반영(구조 다이어그램·
+CSS 스펙·표준 사용 패턴 예제 갱신) — 문서와 실제 구현이 divergence 없이 일치하는 상태 유지.
+
+**검증**: `npx svelte-check` — 대상 파일 신규 에러 0건, unused-CSS-selector 경고 0건.
+DB/RPC/마이그레이션 변경 없음.
+
+**GATE E 검수 결과(2026-09-09, @sp3-qa-agent) — 통과**: 3건 모두 CRITICAL/HIGH 결함 없음.
+① `.doc-slot-label` 마크업·CSS 완전 삭제(grep 0건) + 드롭존 내부 라벨은 정상 보존 확인.
+② `.doc-slot-grid` 반응형 캐스케이드 정상(모바일 1열 기본값 → PC 768px↑ 2열 override),
+`ProfileTabContent.svelte`가 PC·모바일 겸용 단일 컴포넌트임을 재확인. ③ 안내문구가
+`.doc-section-head-text`로 섹션당 1회만 노출되며 재등록 버튼과의 flex 배치 그대로 유지,
+identity/foreign 양쪽 동일 적용 확인. `front-uiux.md` §22 문서 동기화 확인. 기존 슬롯형
+핵심 로직(순서보장 append 루프, CMS 라벨 매핑)은 이번 diff에서 무변경 — 순수 레이아웃
+조정으로 확인됨.
 
 **git commit은 Stephen 직접 실행.**

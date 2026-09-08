@@ -87,11 +87,13 @@
   }
 
   function prevMonth() {
+    showYearPicker = false; showMonthPicker = false
     if (viewMonth === 0) { viewMonth = 11; viewYear -= 1 }
     else viewMonth -= 1
   }
 
   function nextMonth() {
+    showYearPicker = false; showMonthPicker = false
     if (viewMonth === 11) { viewMonth = 0; viewYear += 1 }
     else viewMonth += 1
   }
@@ -101,6 +103,53 @@
     const beforeMin = minDate ? iso < minDate : false
     return beforeToday || beforeMin
   }
+
+  // ── 연/월 빠른 이동(항목 6, 순수 추가) ─────────────────────────────────────────
+  // 헤더의 "{viewYear}년 {MONTHS[viewMonth]}" 단일 span을 "년"/"월" 두 버튼으로 분리해
+  // 각각 클릭 시 연도·월 목록 팝오버를 노출한다. 기존 prevMonth()/nextMonth() 및
+  // value/minDate/rangeStart/rangeEnd/onselect 등 날짜 선택 계약은 전혀 변경하지 않음.
+  let showYearPicker = $state(false)
+  let showMonthPicker = $state(false)
+
+  const todayIso = fmtDate(today.getFullYear(), today.getMonth(), today.getDate())
+  // disablePast/minDate 중 더 제한적인 쪽을 유효 최소일로 취급 — 연/월 목록의 과거 항목
+  // 비활성 판정에 재사용(캘린더 그리드의 day-level 판정과 동일한 두 조건을 그대로 반영)
+  const effectiveMinIso = $derived(
+    disablePast
+      ? (minDate && minDate > todayIso ? minDate : todayIso)
+      : minDate
+  )
+
+  function isYearDisabled(y: number): boolean {
+    if (!effectiveMinIso) return false
+    return y < parseInt(effectiveMinIso.slice(0, 4))
+  }
+
+  function isMonthDisabled(y: number, m: number): boolean {
+    if (!effectiveMinIso) return false
+    const minY = parseInt(effectiveMinIso.slice(0, 4))
+    const minM = parseInt(effectiveMinIso.slice(5, 7)) - 1
+    return y < minY || (y === minY && m < minM)
+  }
+
+  // 항상 현재 보고 있는 연도(viewYear)를 중심으로 -5~+5년 노출
+  const yearRange = $derived(Array.from({ length: 11 }, (_, i) => viewYear - 5 + i))
+
+  function toggleYearPicker() { showMonthPicker = false; showYearPicker = !showYearPicker }
+  function toggleMonthPicker() { showYearPicker = false; showMonthPicker = !showMonthPicker }
+
+  function pickYear(y: number) {
+    if (isYearDisabled(y)) return
+    viewYear = y
+    showYearPicker = false
+  }
+
+  function pickMonth(m: number) {
+    if (isMonthDisabled(viewYear, m)) return
+    viewMonth = m
+    showMonthPicker = false
+  }
+  // ────────────────────────────────────────────────────────────────────────────
 </script>
 
 <div class="cal-root">
@@ -124,7 +173,26 @@
     <button class="cal-nav" onclick={prevMonth} aria-label="이전 달">
       <svg width="8" height="14" viewBox="0 0 8 14" fill="none"><path d="M7 1L1 7L7 13" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"/></svg>
     </button>
-    <span class="cal-title">{viewYear}년 {MONTHS[viewMonth]}</span>
+    <div class="cal-title-group">
+      <button type="button" class="cal-title-btn" onclick={toggleYearPicker}>{viewYear}년</button>
+      <button type="button" class="cal-title-btn" onclick={toggleMonthPicker}>{MONTHS[viewMonth]}</button>
+      {#if showYearPicker}
+        <div class="cal-quick-picker cal-quick-picker-year" role="listbox" aria-label="연도 선택">
+          {#each yearRange as y (y)}
+            <button type="button" class="cal-quick-item" class:cal-quick-item-active={y === viewYear}
+              disabled={isYearDisabled(y)} onclick={() => pickYear(y)}>{y}</button>
+          {/each}
+        </div>
+      {/if}
+      {#if showMonthPicker}
+        <div class="cal-quick-picker cal-quick-picker-month" role="listbox" aria-label="월 선택">
+          {#each MONTHS as label, m (m)}
+            <button type="button" class="cal-quick-item" class:cal-quick-item-active={m === viewMonth}
+              disabled={isMonthDisabled(viewYear, m)} onclick={() => pickMonth(m)}>{label}</button>
+          {/each}
+        </div>
+      {/if}
+    </div>
     <button class="cal-nav" onclick={nextMonth} aria-label="다음 달">
       <svg width="8" height="14" viewBox="0 0 8 14" fill="none"><path d="M1 1L7 7L1 13" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"/></svg>
     </button>
@@ -195,10 +263,57 @@
   }
   .cal-nav:hover { background: var(--cs-lilac); }
 
-  .cal-title {
+  /* 연/월 빠른 이동(항목 6) — 기존 .cal-title(단일 span, 현재 마크업에서 제거됨) 스타일을
+     그대로 물려받는 두 버튼 */
+  .cal-title-group {
+    position: relative;
+    display: flex;
+    gap: 4px;
+  }
+  .cal-title-btn {
+    background: none;
+    border: none;
+    cursor: pointer;
+    padding: 2px 4px;
+    border-radius: 6px;
     font: var(--text-pc-title-16);
     color: var(--cs-text);
+    transition: background 0.15s;
   }
+  .cal-title-btn:hover { background: var(--cs-lilac); }
+
+  .cal-quick-picker {
+    position: absolute;
+    top: calc(100% + 4px);
+    left: 0;
+    z-index: 30;
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 2px;
+    max-height: 220px;
+    overflow-y: auto;
+    padding: 6px;
+    background: var(--cs-white);
+    border: 1.5px solid rgba(59, 47, 138, 0.2);
+    border-radius: var(--radius-sm);
+    box-shadow: 0 8px 24px rgba(16, 11, 50, 0.12);
+  }
+  .cal-quick-picker-month { grid-template-columns: repeat(4, 1fr); }
+
+  .cal-quick-item {
+    background: none;
+    border: none;
+    cursor: pointer;
+    padding: 8px 10px;
+    border-radius: 6px;
+    font: var(--text-pc-body-14);
+    color: var(--cs-text);
+    white-space: nowrap;
+    transition: background 0.12s;
+  }
+  .cal-quick-item:hover:not(:disabled) { background: var(--cs-lilac); }
+  .cal-quick-item-active { background: var(--cs-purple); color: var(--cs-white); font-weight: 700; }
+  .cal-quick-item:disabled { color: var(--cs-text-placeholder); cursor: not-allowed; }
 
   /* 범위 요약 핀(2026-08-18) — Airbnb류 "체크인/체크아웃" 헤더 패턴. 종료일 미확정 구간은
      핀을 강조색으로 채워 "지금 이 값을 고르는 중"임을 명시적으로 안내 */

@@ -1,125 +1,168 @@
 # 세션 핸드오프 문서
-생성일: 2026-09-05
-이전 세션 기간: 2026-09-04 ~ 2026-09-05 (단일 세션)
-작업 범위: 장바구니 수령/반납 방식 미선택 처리 + 요금계산 정합화 CRITICAL 다수 수정 +
-  CMS 대여관리 설정 ↔ 장바구니 연동관계 문서화
+생성일: 2026-09-08
+갱신: 2026-09-08(후속 검증 세션) — 아래 "미해결 질문"(cart↔contract-data 쿠폰할인 정합성)
+      해소 + 병행 진행 중이던 free_shipping 쿠폰 세션의 otCouponDiscount 수정
+      커밋·Stage/Production 배포 완료까지 확인(§8 신규 추가)
+작업 범위: 전자계약(HTML/스프레드시트) CMS 관리 화면 개선 7건 + 실서버(Production) 검증 +
+          커밋/Vercel 배포 확인 — "대여관리" 세션(별도, GATE E 통과)과 함께 한 커밋으로 배포됨
+          + [후속] cart otCouponDiscount 실서버 반영 검증·QA게이트·배포확인(별도 세션)
 
 ---
 
-## 완료된 작업 (DONE)
+## 완료된 작업 (DONE) — 이 세션 몫
 
-- [x] 카트 수령/반납 방식 콤보바 최초진입 시 '방문' 오선택 표시 제거 | TDD |
-  `defaultOptions()` 기본값을 'visit' 강제세팅 → null(완전 미선택)로 전환.
-  `$lib/utils/cartMethodSelection.ts` 신설(toDeliveryMethod/isMethodSelectionValid 순수함수
-  추출). 진짜 근본원인은 `create_draft_reservation` RPC의 INSERT 하드코딩('visit','visit')
-  이었음 — Migration #442로 NULL,NULL 교체, Stage+Production 적용 + 레거시 draft 행 정리.
-  sp3-qa-agent GATE E 통과.
-- [x] 방식 미선택 상태에서 날짜/시간 버튼 클릭 시 경고 토스트 | BOUNDARY |
-  '수령(반납) 형태를 선택해주세요.' — 미선택이면 달력 오픈 자체를 막음.
-- [x] 수령/반납 방식 재변경 시 기존 날짜·시간 미초기화 → 총 금액 합산 오류 수정 | CRITICAL |
-  `applyBulkToItems()`가 "빈 값이면 기존값 유지"하는 병합 로직이라 방식만 바꿔선 실제로
-  안 지워지던 문제 — `resetDateTimeForMethodChange()` 신설(bulk*+itemsState 직접 초기화)
-  + 안내 토스트 '수령(반납) 일시 정보가 초기화되었습니다.'
-- [x] `is_bulk_delivery`/`is_delivery_type` 상호배타 가드 제거 — "요청 A" 회귀 수정 | CRITICAL |
-  실서버 조사 중 Production `visit`/`quick`이 `is_bulk_delivery=true`로 잘못 설정돼 있어
-  시간선택이 오락가락하던 것 발견·수정. 근본적으로는 "반납 배송선택 제한"(`is_delivery_type`)
-  과 "요청 A"(`is_bulk_delivery`)가 같은 방식에 동시에 필요한데 RPC 상호배타 가드(Migration
-  #441)가 막고 있었음 — Stephen 확정 후 Migration #444로 가드 제거, Stage+Production 적용.
-- [x] "총 대여기간" 표시가 체크된 상품 수만큼 배수로 합산되는 오류 수정 | TDD/CRITICAL |
-  `otTotalMinutes`이 `itemsState.reduce()`로 전 상품 기간을 단순 합산 → 상품 N개 체크 시
-  N배로 부풀려지던 버그. `computeCartTotalMinutes()`(개수를 파라미터로 받지 않는 시그니처)
-  신설로 구조적 차단. 실서버 재현·수정 후 재검증까지 완료(코드는 미배포 상태이므로 배포
-  전까지 실서버엔 여전히 재현됨 — 아래 "NOW" 참고).
-- [x] 장바구니 옵션상품 카드 "필수"/"최소 1개 선택"/"배송대여 불가" 배지 미노출 수정 | BOUNDARY |
-  서버 select·타입정의·마크업 3단계 전부에서 누락돼 있던 것을 products/[id] 페이지의 기존
-  구현을 그대로 이식해 해소. 본상품 카드는 데이터 모델상 이 개념이 없어 제외.
-- [x] `ProductOptionLink` 타입에 `min_select_required` 필드 누락 수정 | ROUTINE |
-  QA 비차단 권고 반영.
-- [x] CMS 대여관리 설정 ↔ 장바구니 연동관계 문서화 | GSD |
-  `.claude/rules-ref/rental-cms-settings.md` 신설(CMS 설정 전체 인벤토리 + 인과사슬 표 +
-  최종 RPC 저장값 표) + CLAUDE.md 참조표 등록 + service-operations.md §18 포인터 추가.
+1. **실서버(Production) 예약 테스트로 HTML 계약서 발행·작성·발송 흐름 검증**
+   Claude Browser를 이 작업 1회에 한해 명시적으로 허용받아(CLAUDE.md 기본 금지 규칙의
+   예외 조건 ②) 신규 테스트 예약 생성 → 계약서 탭 → 발행 → 미리보기까지 직접 클릭
+   재현. 세션 기존 수정분(연락처·주소·금액·특이사항·CRITICAL REPEAT 발송차단 버그)이
+   실제 정상 동작함을 확인 + 신규 결함 3건 발견(아래 ②③④).
 
-주요 변경 파일:
-- `src/routes/cart/+page.svelte`: 방식선택 null 허용, 날짜·시간 초기화, 총기간 계산 재설계
-- `src/routes/cart/+page.server.ts`: 옵션 배지 필드 select 추가
-- `src/lib/utils/cartMethodSelection.ts`(신규), `cartRentalFee.ts`, `cartLineGrouping.ts`,
-  `cartShippingFee.ts`(참조만, 무변경)
-- `src/lib/types/database.ts`: `ProductOptionLink.min_select_required` 추가
-- `src/routes/cms/set/rental/+page.svelte`: 두 플래그 칩의 `disabled` 상호배타 속성 제거
-- `supabase/migrations/20260904020000_442_create_draft_reservation_no_default_method.sql`,
-  `20260904040000_444_rental_method_flags_allow_coexist.sql` (둘 다 Stage+Production 적용됨)
-- `.claude/rules-ref/rental-cms-settings.md`(신규), `CLAUDE.md`, `.claude/rules/service-operations.md`
+2. **계약서발행일 필드 오표시 — 원인 규명·수정**
+   원인: 코드 버그가 아니라 Production `contract_templates`의 특정 템플릿 레코드
+   (`202609임대차계약서양식`)가 8차 변수배선 수정보다 먼저 생성돼, 저장된 본문에
+   여전히 옛 플레이스홀더(`{{수령일시}}`)를 담고 있었던 것 — 기본 템플릿 상수를 고쳐도
+   이미 저장된 기존 템플릿 행에는 소급 반영 안 됨(의도된 동작). Production DB에서 해당
+   템플릿의 저장된 본문을 정밀 문자열 치환으로 직접 수정(SQL UPDATE, 유일 매치 확인 후
+   실행) — `{{수령일시}}`→`{{계약서발행일}}`, 대여지점 셀도 `{{지점옵션}}`으로 교체.
+   Stage 쪽 동일 계열 템플릿은 이미 정상이라 조치 불필요.
 
-sp3-qa-agent GATE E 통과 이력: 위 항목 전부(2회 스트림 정체로 재시도 필요했던 건 재시도 후 통과).
+3. **계약서 특약 클릭편집 모달을 "발행 전 미리보기"(template 모드)까지 확장**
+   기존엔 이미 발행된 계약(existing 모드)에서만 특이사항 셀 클릭편집이 동작 —
+   template 모드(발행 전 미리보기)에서도 똑같이 보이는데 클릭이 안 돼 혼란 유발.
+   `localContractId`/`effectiveContractId` 도입 + `applySelectedTemplate()`에
+   `specsOverride` 파라미터 추가해 template 모드에서도 클릭 시 즉시 발행
+   (init-contract+PATCH) 후 existing 모드로 전환하도록 확장.
+
+4. **계약서 양식 편집 화면 "수정 저장" 버튼에 변경감지(isDirty) 게이팅 적용(flow/html)**
+   기존 spreadsheet 모드 전용이던 isDirty 게이팅을 flow(TipTap)/html 모드까지 확장 —
+   `ContractDocumentEditor.svelte`에 `onchange` 콜백 신규 추가(TipTap `onUpdate` 연결).
+
+5. **정산내역 할인·포인트 필드 "△"(차감) 표기 조건부화**
+   `formatDeltaAmount()` 신규 — 값이 0 이하/null이면 △ 없이, 0보다 크면 "△ " 접두.
+   템플릿의 정적 "△ " 텍스트 3곳 제거(할인 적용/포인트 사용/할인적용 금액).
+
+6. **계약서 양식 삭제 — 소프트 삭제 → 실제 DB 행 삭제(hard delete)로 전환**
+   Stephen 명시적 확정("목록에서만 제외 말고 실제 DB에서도 삭제되게 하라"). `softDelete`
+   액션을 `delete`로 개명 + 실제 `.delete()`로 변경. `contracts.template_id` FK
+   (`ON DELETE NO ACTION`)가 참조하는 계약이 있으면 사전에 count-check로 409 차단
+   (원시 FK 에러 노출 방지). 목록 카드마다 삭제 아이콘 버튼(`CmsDeleteButton`) 신규 배치
+   + 편집 패널 삭제버튼을 "수정 저장" 버튼 우측으로 재배치.
+
+7. **계약서 미리보기 할인차감 계산식의 정률(%) 오판 버그 수정**
+   `contract-data/+server.ts`의 `resolveSelectedCouponDiscountAmount()`가
+   `discount_type==='fixed'`가 아니면 전부 정률(%)로 계산하던 옛 버그(cart/+page.svelte
+   `otCouponDiscount`의 원본 버그와 동일 계열)를 그대로 복제하고 있던 걸 발견·수정 —
+   fixed/percentage 외 타입(예: free_shipping)은 0으로 처리. **디스플레이 전용 필드임을
+   직접 확인**(`orderData?.final_amount`나 Toss 결제·환불 로직 어디에도 이 값이 흘러
+   들어가지 않음 — 실제 청구액과 무관, CMS 계약서 미리보기 표시값만 영향).
+
+### 커밋·배포
+
+- 커밋 `6f2e210`(stage) — 위 7건(이 세션) + "대여관리" 세션의 html 모드 전자계약
+  발행/서명 정합성 8건을 하나의 커밋으로 통합(Stephen 직접 실행).
+- Stage 배포: `dpl_8hqjNVHUXf2R23ueYjnZpbRWpcms` — **READY** 확인.
+- Production 배포: PR #257 자동 병합(`b1004e1`) → `dpl_HYc2ojJ159ZTS4ckgvg8iEuvm7q7`
+  — **READY** 확인(Vercel MCP `list_deployments`로 직접 조회, 두 배포 모두 정상).
+
+### 주요 변경 파일(이 세션 몫)
+
+- `src/lib/components/cms/ContractTemplatePanel.svelte` — isDirty 게이팅 + 삭제버튼 재배치
+- `src/lib/components/cms/contract-editor/ContractDocumentEditor.svelte` — onchange prop 신규
+- `src/routes/api/cms/reservations/[id]/contract-data/+server.ts` — formatDeltaAmount +
+  쿠폰할인 계산 버그 수정
+- `src/routes/cms/reservation/contracts/+page.svelte` — 목록 삭제 아이콘 신규
+- `src/routes/cms/reservation/contracts/+page.server.ts` — delete 액션(hard delete+FK체크)
+- `src/__tests__/server/contractAuthGates.test.ts` — delete 액션 리네임 + FK 차단 분기
+  단위테스트 2건 신규(36/36 GREEN)
+- `src/lib/components/cms/ContractTemplatePreviewModal.svelte` /
+  `src/lib/components/cms/RentalContractViewer.svelte` /
+  `src/lib/components/cms/contract-editor/templates/defaultRentalContractHtml.ts` —
+  **이 세션과 "대여관리" 세션이 같은 파일을 함께 수정**(특약 클릭편집 template모드
+  확장은 이 세션, 그 외 html 모드 발행/서명 정합성 8건은 대여관리 세션 — 커밋 시점엔
+  둘 다 GATE E 통과 상태라 문제없이 함께 포함됨)
+
+---
+
+## 완료된 작업 (DONE) — §8. 후속 검증 세션 몫 (2026-09-08, 이 HANDOFF과는 별도 세션)
+
+8. **cart otCouponDiscount 실서버(Production) 반영 검증 + QA게이트 + 배포확인**
+   위 "참고 — 병행 진행 중이던 다른 세션(쿠폰 free_shipping)"과 "미해결 질문"에서
+   남겨둔 대로, 별도 세션이 `cart/+page.svelte`의 `otCouponDiscount` 3-way 분기
+   수정을 완료했으나 **미커밋 상태로 방치**돼 있던 것을 후속 세션이 발견 — git/Vercel/
+   Supabase 직접 조회로 "로컬엔 있으나 Production에는 없음"을 실증한 뒤, sp3-qa-agent
+   독립 검수(GATE E 통과, 회귀 없음·`contract-data/+server.ts`와 완전 동일 로직 확인)를
+   거쳐 Stephen이 직접 커밋(`a49ab2e`, cart/+page.svelte 단독)·push·PR #258(stage→main)
+   병합(`f4145c8`) — Vercel 재조회로 **Stage(`dpl_31SE7vMATJQaS9AC3D8PeiJEK7HV`)·
+   Production(`dpl_5Fw3KQc74PUHEoCcX7TCtRjM72Nt`) 둘 다 READY 배포 완료** 최종 확인.
+   → 아래 "미해결 질문"·"참고 — 병행 진행 중이던 다른 세션" 두 항목 모두 이걸로 해소됨.
 
 ---
 
 ## 진행 중 / 남은 작업
 
-### NOW (즉시 재개할 것)
-- [ ] git commit / PR / main 머지 / Vercel 배포 | 없음(전부 Stephen 직접 실행 대기) |
-  → 현재 상태: 이번 세션 코드 수정 전부가 로컬 uncommitted 상태. 실서버는 여전히 커밋
-    `9035876`(PR #244) 기준으로 동작 중.
-  → 다음 단계: Stephen이 커밋·PR·머지 진행 후, 재배포된 실서버에서 "총 대여기간 배수합산"
-    등이 실제로 해소됐는지 재검증(이 세션에서 이미 검증 방법은 확립돼 있음 — 실제 카트
-    상품 2개 체크/1개 체크 시 기간이 동일하게 유지되는지 대조).
+### NOW
+- 없음 — 이 세션이 맡은 7건 + 후속 검증 세션의 §8 모두 커밋·Stage/Production 배포
+  확인까지 완료.
 
-### NEXT
-- [ ] hold 예약의 "대여예약옵션" 통합패널 변경 미저장 갭 재현·확정 (아래 "미해결 질문" 참고)
+### 참고 — 병행 진행 중이던 다른 세션(이 세션 담당 아님) — ✅ 후속 세션에서 완료·배포 확인됨
 
-### BLOCKED
-- 없음
+- **쿠폰(free_shipping) 세션**: `cart/+page.svelte`의 `otCouponDiscount` 계산식이
+  동일 계열 버그(정액이 아니면 전부 정률로 계산 → free_shipping 쿠폰 선택 시 사실상
+  전액 무료가 되는 CRITICAL 가격결함)를 고치는 중이었음. 1차 커밋(`06f8de4`,
+  Stage+Production 적용 완료)은 라벨 표시 수정 + `coupons` 스키마 통일(discount_type에
+  `free_shipping` 정식 포함하도록 CHECK 제약 확장). 계산식 자체(`otCouponDiscount`)의
+  근본 수정은 이 핸드오프 작성 시점엔 "진행 중"으로 보였으나, 실제로는 **코드는 이미
+  작성돼 있었고 커밋만 누락된 상태**였음 — 위 §8에서 발견·QA·커밋·배포까지 전부 완료
+  (커밋 `a49ab2e`, Stage·Production 배포 READY 확인).
 
 ---
 
 ## 반드시 주의할 점
 
-1. **`applyBulkToItems()`가 RPC를 호출하지 않는다**(`cart/+page.svelte:620-635`, 코드 주석
-   "sync_cart_dates() RPC — TASK-D 연동 시 호출 예정", 2026-07-23 TASK-D 완료 당시부터 남은
-   미완결 스텁으로 추정) — 이미 `status='hold'`인 예약행의 수령/반납 방식·날짜를 통합패널
-   에서 바꿔도 그 변경을 저장하는 RPC가 제출 흐름 어디에도 없다(제출 루프는 draft 그룹에만
-   `saveShipmentMethod`/`set_reservation_duration` 호출). 화면 표시금액과 서버 정본 금액이
-   갈릴 수 있는 잠재 리스크 — 다음 세션에서 재현 후 처리 여부 판단 필요.
-2. `rental_method_options`에 CMS 화면에서 조회·수정 경로가 없는 orphan 컬럼 4종
-   (`fee_amount`/`fee_description`/`deadline_time`/`is_free_for_top_grade`) 존재 —
-   `fee_amount`는 전부 0인데 `fee_description`엔 "3,500원" 등 문구가 있어 값 불일치.
-3. Stage/Production의 `rental_method_options` 구성(방식 종류·개수·플래그 조합)이 상당히
-   다르다 — 설정을 실험하기 전 반드시 어느 DB에 연결된 상태인지 재확인할 것.
-4. `/cms/set/rental` 액션 20개 중 `syncHolidaysNow` 1개만 manager+ 권한 검사, 나머지 19개는
-   세션 존재만 확인 — partner 등급도 요금·플래그·우대설정 등 대부분을 변경할 수 있는 상태
-   (별도 보안 이슈로 취급할지 Stephen 판단 필요, 이번 세션에서 코드 수정 안 함).
-5. `is_bulk_delivery`(요청 A)/`is_courier_dependent`(휴무일)/`is_delivery_type`(반납제한)는
-   서로 완전히 독립적인 목적의 플래그다 — 하나를 고칠 때 절대 혼동하지 말 것(오늘까지 이
-   3개를 둘러싼 설계가 5차례 뒤집힌 이력 있음, `.claude/rules-ref/rental-cms-settings.md`
-   참고).
+1. **템플릿 DB 콘텐츠는 코드 수정과 별개로 소급 패치가 필요할 수 있음** — §2(계약서발행일)
+   패턴 참고. 새로 발견되는 오래된 템플릿에서 비슷한 "저장된 본문이 최신 코드 상수와
+   다름" 증상이 있으면 같은 방식(정밀 문자열 치환)으로 처리.
+2. **contract-data/+server.ts의 쿠폰할인 필드(§7)는 display-only임을 이미 확인** —
+   실제 청구·환불 로직(use_coupon RPC, pay-mock/pay-result)은 이번 세션에서 조사하지
+   않았음(중단 지시). 그 경로의 안전성이 궁금하면 별도로 조사 필요.
+3. **Claude Browser(mcp__Claude_Browser__*)는 기본 금지** — 이번 세션에서 실서버
+   예약 테스트 1건에 한해 명시적으로 허용받아 사용 후 종료. 다음 세션은 다시 기본값
+   (금지)으로 복귀 — 별도 요청 없이 자율적으로 켜지 말 것.
+4. **git add/commit/push는 Stephen 직접 실행 전용** — 이 세션 내내 텍스트 제안만
+   하고 실행하지 않는 원칙을 지켰음. 다음 세션도 동일하게.
+5. **공유 워킹트리에서 여러 세션이 동시에 같은 파일을 수정하는 상황이 실제로 자주
+   발생함** — 파일 수정 전 `git diff -- <file>`로 이미 다른 세션의 변경이 섞여있는지
+   먼저 확인하는 습관 유지할 것(이번 세션에서 `ContractTemplatePreviewModal.svelte`
+   등 3개 파일이 실제로 혼재됐었음).
 
 ---
 
 ## 중요 결정 사항 (이번 세션에서 Stephen이 결정한 것)
 
-- `is_bulk_delivery`/`is_delivery_type` 두 플래그를 같은 방식에 동시 허용(구조적 해결,
-  Migration #444로 RPC 상호배타 가드 제거) — "권장" 옵션 선택.
-- Production `visit`/`quick`의 `is_bulk_delivery` 오류값 즉시 교정 승인.
-- "총 대여기간"은 상품 개수와 무관하게 항상 "선택한 1개 기간"이어야 한다는 설계 확정.
-- 장바구니 방식 재변경 시 기존 날짜·시간을 초기화 + 안내 토스트 노출 방식으로 확정(문구까지
-  직접 지정: '수령(반납) 일시 정보가 초기화되었습니다.').
+- **계약서 양식 삭제는 소프트 삭제가 아니라 실제 hard delete** — "목록에서만 제외
+  하지 말고 실제로 DB에서도 삭제되게 하라"고 두 차례에 걸쳐 명시적으로 확정.
+- **특약 클릭편집은 template 모드까지 기능 확장**(시각적 구분에 그치지 않고).
+- **쿠폰/free_shipping 결함 조사는 이 세션에서 중단** — "다른 세션에서 진행하니
+  여기서는 중지해."
 
 ---
 
-## 미해결 질문
+## 미해결 질문 — ✅ 후속 세션에서 해소됨 (2026-09-08)
 
-- hold 예약의 통합패널 변경사항(수령/반납 방식·날짜·시간)을 실제로 서버에 저장해야 하는가,
-  아니면 현재처럼 "제출 전 로컬 미리보기 전용"으로 두는 게 의도된 설계인가? → 다음 세션에서
-  실제 재현(hold 상태 예약을 담고 통합패널에서 방식을 바꾼 뒤 새로고침해 값이 유지되는지,
-  또는 제출 후 DB에 반영되는지 직접 확인)부터 시작해서 Stephen에게 의도를 확인할 것.
+- ~~cart/+page.svelte(다른 세션 담당)의 `otCouponDiscount` 최종 수정본과
+  contract-data/+server.ts(§7, 이 세션 담당)의 동일 로직이 정확히 같은 분기 조건을
+  쓰는지~~ → **해소**: 두 파일을 직접 나란히 대조한 결과 `fixed → discount_value` /
+  `percentage → round(subtotal*value/100)` / `그외 → 0`으로 완전히 동일한 3-way 분기
+  확인. 단, 대조 시점에 `cart/+page.svelte` 쪽이 **미커밋 상태**였다는 것이 이 질문과
+  별개로 새로 드러난 사실이었고, 이후 sp3-qa-agent GATE E 통과 → 커밋(`a49ab2e`) →
+  Stage·Production 배포(READY)까지 완료해 실서버에도 반영됨을 확인(§8 참고).
 
 ---
 
 ## 새 세션 시작 명령
 
-아래를 새 채팅에 붙여넣으세요:
+이 핸드오프 시점 기준 이 세션이 맡았던 작업 + 후속 검증 세션의 §8까지 전부 완료·
+배포됐습니다(위 "미해결 질문" 항목도 해소). 이어서 진행할 새 아젠다가 있다면 아래처럼
+시작하세요:
 
-```
-HANDOFF.md 읽고 이어서 진행해줘.
-B-START: git commit·배포 진행 여부 확인 후, hold 예약 통합패널 변경 미저장 갭 재현·조사부터.
-```
+B-START: (Stephen이 지정하는 다음 아젠다)

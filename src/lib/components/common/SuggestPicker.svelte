@@ -76,6 +76,12 @@
   let suggestOpen = $state(false)
   let suggestIdx = $state(-1)
   let isFocused = $state(false)
+  // 프리필된 선택값(마운트 시 선택된 옵션 라벨 등)이 그대로 필터 키워드로 쓰여
+  // "포커스만으론 목록이 안 열리고 지워야만 열리는" 버그 방지용 — 실제 키보드 입력
+  // (handleNativeInput)에서만 true로 전환하고, 프로그램적으로 query가 채워질 때는
+  // (선택 동기화·옵션 선택) false로 유지해 refreshSuggestions()가 그 텍스트를 필터로
+  // 쓰지 않게 한다
+  let hasUserTyped = $state(false)
 
   const listboxId = $derived(`${id}-suggest-list`)
 
@@ -90,7 +96,9 @@
   }
 
   function refreshSuggestions(): void {
-    const kw = query.trim()
+    // hasUserTyped가 false면(마운트 시 프리필된 선택 라벨을 아직 고치지 않은 상태)
+    // 그 텍스트를 필터 키워드로 쓰지 않고 빈 키워드로 취급 — 포커스만으로 전체 목록 노출
+    const kw = hasUserTyped ? query.trim() : ''
     // next를 먼저 계산 후 한번에 할당 — suggestions 쓰고 바로 읽으면
     // Svelte 5 $effect가 suggestions를 의존성으로 추적 → effect 재실행 무한 루프
     let next: SuggestPickerOption[]
@@ -115,10 +123,12 @@
   function syncQueryFromSelection(): void {
     if (!selectedId) {
       if (!isFocused) query = ''
+      hasUserTyped = false
       return
     }
     const selected = options.find((o) => o.id === selectedId)
     if (selected) query = selected.label
+    hasUserTyped = false
   }
 
   $effect(() => {
@@ -132,6 +142,7 @@
   })
 
   function handleNativeInput(e: Event): void {
+    hasUserTyped = true
     query = (e.currentTarget as HTMLInputElement).value
     const exact = options.find((o) => o.label === query.trim())
     if (!exact) selectedId = null
@@ -151,6 +162,9 @@
       selectedId = option.id
       query = option.label
     }
+    // 선택도 프로그램적 채움이므로 미입력 상태로 취급 — 재포커스 시 이 라벨로 좁혀지지 않고
+    // 전체 목록이 열리도록 함(hasUserTyped=true였다면 방금 검색으로 좁혀 찾은 것이므로 그대로 둠)
+    hasUserTyped = false
     // closeSuggest()가 아니라 드롭다운만 닫는다 — 옵션 클릭 시 onmousedown에서
     // preventDefault로 실제 DOM 포커스는 입력창에 그대로 남아있는데, closeSuggest()는
     // isFocused까지 강제로 false로 만들어버려 "실제 포커스 상태"와 어긋난다. 그 결과
