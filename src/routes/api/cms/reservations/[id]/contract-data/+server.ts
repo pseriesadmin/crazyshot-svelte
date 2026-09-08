@@ -6,16 +6,9 @@ import type { RequestHandler } from './$types'
 import type { ContractSubstitutionData } from '$lib/types/contract-module'
 import { getCmsRoleForAction } from '$lib/server/getCmsRoleForAction'
 import { hasSettingsAccess } from '$lib/utils/cmsPermissions'
-import { buildLineItems } from '$lib/utils/contractLineItems'
+import { buildLineItems, formatComponentsText } from '$lib/utils/contractLineItems'
 import type { ReservationForLineItems } from '$lib/utils/contractLineItems'
-
-const PICKUP_LABELS: Record<string, string> = {
-  crazydelivery: '크레이지샷 배송',
-  quick:         '당일퀵 배송',
-  locker:        '무인 보관함',
-  visit:         '본점 방문수령',
-  epost:         '택배',
-}
+import { calcRentalMinutes, calcRentalPeriodParts } from '$lib/utils/cartRentalFee'
 
 // cart/+page.svelte DUR_TYPES · ProductDetailPanel.svelte "24시간(1일)" 표기 관례와 동일
 const DURATION_TYPE_LABELS: Record<string, string> = {
@@ -63,24 +56,6 @@ function formatTotalUsageHours(
   const diffHours = Math.round((end.getTime() - start.getTime()) / (1000 * 60 * 60))
   if (diffHours <= 0) return '-'
   return `${diffHours}시간`
-}
-
-const COMPONENTS_TEXT_MAX = 50
-
-// products.components(key-value JSONB, ProductDetailPanel.svelte "구성품" 탭 — products.md
-// §4-1) → "key: value, key: value" 텍스트로 합친 뒤 50자(전체 문자 기준) 초과 시 말줄임.
-// products/[id]/+page.svelte의 productComponents 파생(Object.entries + 빈 키 제외)과
-// 동일한 필터링 규칙 재사용.
-function formatComponentsText(raw: unknown): string {
-  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return '-'
-  const entries = Object.entries(raw as Record<string, unknown>).filter(([k]) => k.trim())
-  if (entries.length === 0) return '-'
-  const joined = entries
-    .map(([k, v]) => (typeof v === 'string' && v.trim() ? `${k}: ${v}` : k))
-    .join(', ')
-  return joined.length > COMPONENTS_TEXT_MAX
-    ? joined.slice(0, COMPONENTS_TEXT_MAX) + '...'
-    : joined
 }
 
 // ⛔ 2026-08-31(같은 날 정정) — 최초 구현은 payment_transactions(coupon_discount·point_amount,
@@ -166,9 +141,15 @@ export const GET: RequestHandler = async ({ params, locals }) => {
     admin.from('products').select('name, product_code, components').eq('id', res.product_id).maybeSingle(),
     admin.from('user_profiles').select('full_name, phone, email').eq('id', res.user_id).maybeSingle(),
     admin.from('order_items').select('order_id').eq('reservation_id', reservationId).maybeSingle(),
+    // 2026-09-08 — is_delivery_type 배송여부 판정과 함께 name(한글 라벨)도 같은 쿼리로
+    // 조회한다. 기존엔 이 파일 전용 하드코딩 PICKUP_LABELS 맵을 별도로 썼는데, 그 맵의 키가
+    // 실제 DB method_key(delivery/locker/quick/visit)와 어긋나(맵은 crazydelivery/epost
+    // 등 다른 값) 배송 방식이 한글로 치환되지 않고 원본 코드값("delivery")이 그대로
+    // 고객에게 노출되는 결함이 있었다(Stephen 실사용 중 발견) — DB의 name 컬럼을 유일한
+    // 소스로 삼아 이원화 자체를 제거.
     methodKeys.length > 0
-      ? admin.from('rental_method_options').select('method_key, is_delivery_type').in('method_key', methodKeys)
-      : Promise.resolve({ data: [] as { method_key: string; is_delivery_type: boolean | null }[], error: null }),
+      ? admin.from('rental_method_options').select('method_key, is_delivery_type, name').in('method_key', methodKeys)
+      : Promise.resolve({ data: [] as { method_key: string; is_delivery_type: boolean | null; name: string | null }[], error: null }),
     // ⚠️ 2026-09-03(Migration 434): 이 조회는 이제 "정본"이 아니라 하위호환 폴백 전용이다 —
     // rental_reservations.pickup_address_road/detail(예약신청완료 시점 스냅샷)가 있으면
     // 그걸 우선 쓰고, 이 쿼리는 그 컬럼 신설 이전에 생성된 예약(res.pickup_address_road가
@@ -242,16 +223,17 @@ export const GET: RequestHandler = async ({ params, locals }) => {
         ...new Set((siblingRows ?? []).map(r => r.product_id as string).filter(Boolean)),
       ]
 
-      // 메인상품 일괄 조회 (N+1 방지)
+      // 메인상품 일괄 조회 (N+1 방지) — components(구성품, 2026-09-08 추가): "대여 장비내역"
+      // {{비고}} 채움용(contractLineItems.ts formatComponentsText 재사용)
       const { data: productRows } = productIdSet.length > 0
-        ? await admin.from('products').select('id, name, product_code').in('id', productIdSet)
+        ? await admin.from('products').select('id, name, product_code, components').in('id', productIdSet)
         : { data: [] }
 
-      const productMap: Record<string, { name: string; product_code: string | null }> =
+      const productMap: Record<string, { name: string; product_code: string | null; components: unknown }> =
         Object.fromEntries(
           (productRows ?? []).map(p => [
             p.id as string,
-            { name: p.name as string, product_code: p.product_code as string | null },
+            { name: p.name as string, product_code: p.product_code as string | null, components: p.components },
           ])
         )
 
@@ -287,11 +269,14 @@ export const GET: RequestHandler = async ({ params, locals }) => {
       ]
 
       const { data: optionProductRows } = optionProductIds.length > 0
-        ? await admin.from('products').select('id, product_code').in('id', optionProductIds)
+        ? await admin.from('products').select('id, product_code, components').in('id', optionProductIds)
         : { data: [] }
 
       const optionCodeMap: Record<string, string | null> = Object.fromEntries(
         (optionProductRows ?? []).map(p => [p.id as string, p.product_code as string | null])
+      )
+      const optionComponentsMap: Record<string, unknown> = Object.fromEntries(
+        (optionProductRows ?? []).map(p => [p.id as string, p.components])
       )
 
       // reservation_id → options 맵
@@ -305,7 +290,7 @@ export const GET: RequestHandler = async ({ params, locals }) => {
       // ReservationForLineItems 배열 구성
       lineItemReservations = (siblingRows ?? []).map(row => {
         const pid = row.product_id as string
-        const prod = productMap[pid] ?? { name: '-', product_code: null }
+        const prod = productMap[pid] ?? { name: '-', product_code: null, components: null }
         const unitPrice = priceMap.get(`${pid}|${row.duration_type}`) ?? null
         const opts = (optionsByResId[row.id as number] ?? []).map(o => ({
           option_name:  o.option_name as string,
@@ -313,6 +298,9 @@ export const GET: RequestHandler = async ({ params, locals }) => {
           unit_price:   o.unit_price as number,
           product_code: o.option_product_id
             ? (optionCodeMap[o.option_product_id as string] ?? null)
+            : null,
+          components: o.option_product_id
+            ? (optionComponentsMap[o.option_product_id as string] ?? null)
             : null,
         }))
         return { mainProduct: { ...prod, unit_price: unitPrice }, options: opts }
@@ -335,11 +323,14 @@ export const GET: RequestHandler = async ({ params, locals }) => {
     ]
 
     const { data: soloOptProductRows } = soloOptProductIds.length > 0
-      ? await admin.from('products').select('id, product_code').in('id', soloOptProductIds)
+      ? await admin.from('products').select('id, product_code, components').in('id', soloOptProductIds)
       : { data: [] }
 
     const soloCodeMap: Record<string, string | null> = Object.fromEntries(
       (soloOptProductRows ?? []).map(p => [p.id as string, p.product_code as string | null])
+    )
+    const soloComponentsMap: Record<string, unknown> = Object.fromEntries(
+      (soloOptProductRows ?? []).map(p => [p.id as string, p.components])
     )
 
     lineItemReservations = [
@@ -348,6 +339,7 @@ export const GET: RequestHandler = async ({ params, locals }) => {
           name:         productRes.data?.name ?? '-',
           product_code: productRes.data?.product_code ?? null,
           unit_price:   ownPriceRes.data?.price ?? null,
+          components:   productRes.data?.components ?? null,
         },
         options: (soloOptions ?? []).map(o => ({
           option_name:  o.option_name as string,
@@ -355,6 +347,9 @@ export const GET: RequestHandler = async ({ params, locals }) => {
           unit_price:   o.unit_price as number,
           product_code: o.option_product_id
             ? (soloCodeMap[o.option_product_id as string] ?? null)
+            : null,
+          components: o.option_product_id
+            ? (soloComponentsMap[o.option_product_id as string] ?? null)
             : null,
         })),
       },
@@ -401,12 +396,40 @@ export const GET: RequestHandler = async ({ params, locals }) => {
   const isPickupDelivery = res.pickup_method ? (deliveryTypeByMethod.get(res.pickup_method) ?? false) : false
   const isReturnDelivery = res.return_method ? (deliveryTypeByMethod.get(res.return_method) ?? false) : false
 
-  // CS2654 C2 — 지점옵션: 수령 지점 우선, 없으면 반납 지점
+  // 2026-09-08 — 수령형태/반납형태 한글 라벨 소스(위 methodOptsRes 쿼리 참고 주석)
+  const methodNameMap = new Map(
+    (methodOptsRes.data ?? []).map((m) => [m.method_key, m.name]),
+  )
+  const pickupMethodLabel = res.pickup_method ? (methodNameMap.get(res.pickup_method) ?? res.pickup_method) : '-'
+  const returnMethodLabel = res.return_method ? (methodNameMap.get(res.return_method) ?? res.return_method) : '-'
+
+  // CS2654 C2 — 지점옵션: 수령 지점 우선, 없으면 반납 지점 (하위호환 유지 — 제거하지 않음)
   const pointNameMap = new Map((pointRes.data ?? []).map((p) => [p.id, p.name]))
   const branchName =
     (res.pickup_point_id ? pointNameMap.get(res.pickup_point_id) : undefined) ??
     (res.return_point_id ? pointNameMap.get(res.return_point_id) : undefined) ??
     null
+
+  // 2026-09-08 — "구분" 섹션 수령방법지점/반납방법지점: 위 지점옵션과 달리 수령/반납 각
+  // leg의 지점을 독립적으로 구분(pickup_point_id만 / return_point_id만). 지점이 없는
+  // 방식(배송 등)은 방식명만 노출.
+  const pickupBranchName = res.pickup_point_id ? (pointNameMap.get(res.pickup_point_id) ?? null) : null
+  const returnBranchName = res.return_point_id ? (pointNameMap.get(res.return_point_id) ?? null) : null
+  const pickupMethodBranch = pickupMethodLabel === '-'
+    ? '-'
+    : (pickupBranchName ? `${pickupMethodLabel} (${pickupBranchName})` : pickupMethodLabel)
+  const returnMethodBranch = returnMethodLabel === '-'
+    ? '-'
+    : (returnBranchName ? `${returnMethodLabel} (${returnBranchName})` : returnMethodLabel)
+
+  // 2026-09-08 — 대여일수: RentalDetailPanel.svelte·rentalDaysLabel.ts attachRentalDaysLabel()과
+  // 완전히 동일한 산식 재사용(cartRentalFee.ts). deliveryLocked는 원본 함수와 동일하게
+  // pickup_method 기준만 사용(반납 방식은 반영하지 않음 — 산식 일치를 위해 그대로 따름).
+  const rentalMinutes = calcRentalMinutes(res.start_date, res.end_date, res.pickup_time, res.return_time, isPickupDelivery)
+  const rentalPeriodParts = calcRentalPeriodParts(rentalMinutes)
+  const rentalDaysLabel = rentalPeriodParts.length > 0
+    ? rentalPeriodParts.map(p => `${p.num}${p.unit}`).join(' ')
+    : '-'
 
   const data: ContractSubstitutionData = {
     // 기존 16개 스칼라 필드 (하위호환 — 기준 reservationId 기반)
@@ -418,10 +441,10 @@ export const GET: RequestHandler = async ({ params, locals }) => {
     상품코드:     productRes.data?.product_code ?? '-',
     상품명:       productRes.data?.name ?? '-',
     수량:         String(actualQty),
-    수령형태:     res.pickup_method ? (PICKUP_LABELS[res.pickup_method] ?? res.pickup_method) : '-',
+    수령형태:     pickupMethodLabel,
     수령일시:     isPickupDelivery ? '-' : (res.pickup_time ?? '-'),
     수령일자:     formatDateDot(res.start_date),
-    반납형태:     res.return_method ? (PICKUP_LABELS[res.return_method] ?? res.return_method) : '-',
+    반납형태:     returnMethodLabel,
     반납일시:     isReturnDelivery ? '-' : (res.return_time ?? '-'),
     반납일자:     formatDateDot(res.end_date),
     기본대여요금: formatAmount(orderData?.total_amount),
@@ -445,6 +468,11 @@ export const GET: RequestHandler = async ({ params, locals }) => {
     계약서발행일: formatDateDot(new Date().toISOString()),
     지점옵션:     branchName ?? '-',
     '총 정상 대여가': formatAmount(orderData?.total_amount),
+    // 2026-09-08 신규 — "구분" 섹션 수령방법/반납방법 값(방식+지점 통합 표기)
+    수령방법지점: pickupMethodBranch,
+    반납방법지점: returnMethodBranch,
+    // 2026-09-08 신규 — "대여 및 반납시간" 표 TOTAL 칸(실제 대여일수, RentalDetailPanel과 동일 산식)
+    대여일수:     rentalDaysLabel,
     총사용시간:   formatTotalUsageHours(
       res.start_date,
       isPickupDelivery ? null : res.pickup_time,

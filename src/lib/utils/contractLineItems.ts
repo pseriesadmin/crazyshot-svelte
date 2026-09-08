@@ -34,6 +34,26 @@
 
 import type { ContractLineItem } from '$lib/types/contract-module'
 
+const COMPONENTS_TEXT_MAX = 50
+
+// products.components(key-value JSONB, ProductDetailPanel.svelte "구성품" 탭 — products.md
+// §4-1) → "key: value, key: value" 텍스트로 합친 뒤 50자(전체 문자 기준) 초과 시 말줄임.
+// products/[id]/+page.svelte의 productComponents 파생(Object.entries + 빈 키 제외)과 동일한
+// 필터링 규칙 재사용. 2026-09-08 — contract-data/+server.ts의 스칼라 {{구성품}} 전용
+// 헬퍼였던 것을 이 파일로 이관 + export: "대여 장비내역" 반복영역의 {{비고}}에도 동일
+// 로직으로 각 상품(메인·옵션)의 구성품 정보를 채우기 위함(로직 이원화 방지).
+export function formatComponentsText(raw: unknown): string {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return '-'
+  const entries = Object.entries(raw as Record<string, unknown>).filter(([k]) => k.trim())
+  if (entries.length === 0) return '-'
+  const joined = entries
+    .map(([k, v]) => (typeof v === 'string' && v.trim() ? `${k}: ${v}` : k))
+    .join(', ')
+  return joined.length > COMPONENTS_TEXT_MAX
+    ? joined.slice(0, COMPONENTS_TEXT_MAX) + '...'
+    : joined
+}
+
 /**
  * 단일 reservation의 메인상품 정보.
  * contract-data API가 DB에서 조회한 후 buildLineItems에 전달하는 형태.
@@ -46,6 +66,8 @@ export interface ReservationMainProduct {
    * null이면 해당 조합의 활성 price_rules를 찾지 못한 경우 — 금액 칸은 '-'로 표시.
    */
   unit_price?: number | null
+  /** products.components(구성품 JSONB, 2026-09-08 신설) — "대여 장비내역"의 {{비고}} 채움용 */
+  components?: unknown
 }
 
 /**
@@ -57,6 +79,8 @@ export interface ReservationOption {
   unit_price: number
   /** products.product_code — 부모 상품이면 정책상 null (products.md §2-1) */
   product_code: string | null
+  /** 옵션상품의 products.components(구성품 JSONB, 2026-09-08 신설) */
+  components?: unknown
 }
 
 /**
@@ -100,6 +124,8 @@ export function buildLineItems(reservations: ReservationForLineItems[]): Contrac
     amountSum: number
     hasAnyPrice: boolean
     options: ReservationOption[]
+    /** 그룹의 첫 reservation에서 채움 — 같은 상품이므로 그룹 내 값이 동일 */
+    components?: unknown
   }
 
   // 메인상품을 (이름+품번) 식별키로 그룹화 — 같은 상품의 reservation은 건수·금액을 누적하고
@@ -111,7 +137,7 @@ export function buildLineItems(reservations: ReservationForLineItems[]): Contrac
     const key = `${r.mainProduct.name} ${r.mainProduct.product_code ?? ''}`
     let group = groups.get(key)
     if (!group) {
-      group = { name: r.mainProduct.name, product_code: r.mainProduct.product_code, count: 0, amountSum: 0, hasAnyPrice: false, options: [] }
+      group = { name: r.mainProduct.name, product_code: r.mainProduct.product_code, count: 0, amountSum: 0, hasAnyPrice: false, options: [], components: r.mainProduct.components }
       groups.set(key, group)
       groupOrder.push(key)
     }
@@ -132,6 +158,7 @@ export function buildLineItems(reservations: ReservationForLineItems[]): Contrac
       상품명: group.name,
       수량: String(group.count),
       금액: group.hasAnyPrice ? formatKrw(group.amountSum) : '-',
+      비고: formatComponentsText(group.components),
     }
     if (group.product_code) {
       mainItem.상품코드 = group.product_code
@@ -144,6 +171,7 @@ export function buildLineItems(reservations: ReservationForLineItems[]): Contrac
         상품명: opt.option_name,
         수량: String(opt.qty),
         금액: formatKrw(opt.unit_price * opt.qty),
+        비고: formatComponentsText(opt.components),
       }
       if (opt.product_code) {
         optItem.상품코드 = opt.product_code

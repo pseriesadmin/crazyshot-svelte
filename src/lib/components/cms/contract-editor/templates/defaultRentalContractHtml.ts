@@ -224,6 +224,38 @@
  *    (`cs-special-notes-cell`, 특약 조항 값) 셀도 함께 가운데 정렬돼 읽기 불편해졌다.
  *    이 셀만 `.cs-special-notes-cell { text-align: left; }`로 개별 재정렬(다른 셀의
  *    가운데 정렬 기본값은 그대로 유지).
+ *
+ * ⚠️ 2026-09-08 발견·수정(17차, "구분" 섹션 재구성 + TOTAL 칸 실 대여일수 반영) —
+ *    Stephen이 실제 발행된 계약서를 검토하며 지적한 12개 항목 중 템플릿 구조 변경분:
+ *    ① "대여 및 반납시간" 표 TOTAL 칸(rowspan=2)을 `{{요금유형}}`(대여기간 구분 라벨,
+ *    예: "24시간(1일)")에서 `{{대여일수}}`(실제 계산된 대여일수, 예: "1일"·"1일 12시간")로
+ *    교체 — RentalDetailPanel.svelte가 이미 쓰는 산식(cartRentalFee.ts calcRentalMinutes/
+ *    calcRentalPeriodParts)을 contract-data/+server.ts가 그대로 재사용해 새 변수로 계산
+ *    (Stephen 지시: "RentalDetailPanel 대여일수 값 재사용"). `요금유형` 필드 자체는
+ *    제거하지 않고 그대로 유지(다른 참조처 하위호환).
+ *    ② "정산내역" 표 "구분" 블록 재구성: "대여지점"(`{{지점옵션}}`) 행을 완전히 제거하고,
+ *    그 정보를 "수령방법"/"반납방법" 값 자체에 흡수 — `{{수령형태}}`/`{{반납형태}}`
+ *    (방식명 단독) 대신 `{{수령방법지점}}`/`{{반납방법지점}}`(방식명 + 지점이 있을 때만
+ *    " (지점명)" 병기, contract-data/+server.ts 신규 계산)으로 값 셀 교체. "구분" rowspan을
+ *    3→2로 줄여 "수령방법"/"반납방법" 2행만 span하도록 이동. "배송비" 행의 남는 3칸
+ *    처리는 두 차례 시행착오를 거쳤다: 1차 시도(colspan="4"를 "배송비" 값 셀 자체에 부여)는
+ *    값이 표 오른쪽 끝까지 넓게 퍼져 바로 위 특약사항(rowspan=4) 블록과 시각적으로 이어져
+ *    보이는 결함이 있었고, 2차 시도(값 셀은 좁게 두고 별도의 빈 채움 셀 `<td colspan="3">`
+ *    로만 나머지를 채움)는 그 빈 셀 자체가 "특약사항"·"구분" 사이에 목적 없는 흰 공백으로
+ *    남아 여전히 어색해 보였다(둘 다 Stephen 실사용 화면 캡처로 발견). 최종 확정: 별도
+ *    채움 셀을 아예 없애고, 그 자리를 특약사항 블록의 rowspan을 4→5로 한 칸 더 늘려
+ *    "배송비" 행까지 자연스럽게 흡수하도록 함(`.label-cell`·`.cs-special-notes-cell`
+ *    양쪽 다 rowspan="5"로 동시 확장) — 특약사항은 원래도 자유 서술 여러 줄 텍스트가
+ *    들어가는 영역이라 한 행 더 길어져도 위화감이 없고, 별도의 빈 셀이 완전히 사라져
+ *    표 전체가 5열 그리드로 빈틈없이 채워진다. "픽업방법"
+ *    라벨도 "수령방법"으로 개명. `{{지점옵션}}`·`수령형태`·`반납형태` 필드 자체는 여전히
+ *    타입에 남아있으나(하위호환, "필드 절대 제거 금지" 원칙) 이 템플릿에서는 더 이상
+ *    참조하지 않음.
+ *    ③ (템플릿 구조 변경은 아니지만 같은 세션 작업) "대여 장비내역" `{{비고}}`에
+ *    상품 구성품(products.components) 정보를 채우고, 동일 상품 중복 예약을 한 줄로
+ *    통합하는 기능(2026-08-28)·수령/반납 방식 한글 라벨(rental_method_options.name 직접
+ *    사용으로 전환)·배송 시 시간정보 미노출은 전부 기존 동작이 이미 올바르거나(코드 조사로
+ *    확인) 데이터 계산만 손댄 부분이라 이 템플릿 파일 자체의 마커·구조는 변경 없음.
  */
 
 export const DEFAULT_RENTAL_CONTRACT_HTML = `
@@ -322,7 +354,7 @@ export const DEFAULT_RENTAL_CONTRACT_HTML = `
       <tr>
         <td style="text-align:center">{{수령일자}}</td>
         <td style="text-align:center">{{반납일자}}</td>
-        <td style="text-align:center" rowspan="2">{{요금유형}}</td>
+        <td style="text-align:center" rowspan="2">{{대여일수}}</td>
       </tr>
       <tr>
         <td style="text-align:center">{{수령일시}}</td>
@@ -363,8 +395,8 @@ export const DEFAULT_RENTAL_CONTRACT_HTML = `
       <tr>
         <td class="label-cell">정상 대여가 총액</td>
         <td style="text-align:right">{{기본대여요금}}</td>
-        <td class="label-cell" rowspan="4">특약사항</td>
-        <td class="cs-special-notes-cell" colspan="2" rowspan="4"><!--SPECIAL_NOTES--></td>
+        <td class="label-cell" rowspan="5">특약사항</td>
+        <td class="cs-special-notes-cell" colspan="2" rowspan="5"><!--SPECIAL_NOTES--></td>
       </tr>
       <!-- 2026-09-08 수정 — "△"(차감 표시) 접두사를 이 정적 템플릿 텍스트에서 제거하고
            formatDeltaAmount()(contract-data/+server.ts)가 실제 값이 0보다 클 때만 값
@@ -386,19 +418,17 @@ export const DEFAULT_RENTAL_CONTRACT_HTML = `
       <tr>
         <td class="label-cell">배송비</td>
         <td style="text-align:right">{{배송비}}</td>
-        <td class="label-cell" rowspan="3">구분</td>
-        <td class="label-cell">대여지점</td>
-        <td>{{지점옵션}}</td>
       </tr>
       <tr class="final-row">
         <td class="label-cell" rowspan="2">최종 결제 금액</td>
         <td style="text-align:right; font-size: 13px;" rowspan="2">{{최종합계}} (▣VAT포함)</td>
-        <td class="label-cell">픽업방법</td>
-        <td>{{수령형태}}</td>
+        <td class="label-cell" rowspan="2">구분</td>
+        <td class="label-cell">수령방법</td>
+        <td>{{수령방법지점}}</td>
       </tr>
       <tr>
         <td class="label-cell">반납방법</td>
-        <td>{{반납형태}}</td>
+        <td>{{반납방법지점}}</td>
       </tr>
     </tbody>
   </table>

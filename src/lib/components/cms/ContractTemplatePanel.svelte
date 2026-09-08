@@ -391,6 +391,11 @@
   // 때마다 이 effect가 다시 돌아 최신 img에 리스너를 재바인딩한다.
   // --------------------------------------------------------------------------
   let htmlPreviewDocEl: HTMLDivElement | null = $state(null)
+  // 2026-09-08(6차 후속) — 아래 "문서 밖 클릭 시 툴바 닫기" $effect에서 크기조절 툴바·
+  // 캔버스 상단 popup 클릭은 선택 해제 대상에서 제외하기 위한 참조(그 외 레이아웃 클릭은
+  // 전부 해제 대상).
+  let docSigToolbarEl: HTMLDivElement | null = $state(null)
+  let htmlSigCanvasPopupEl: HTMLDivElement | null = $state(null)
   let showDocSigToolbar  = $state(false)
   let docSigToolbarPos   = $state({ top: 0, left: 0 })
   // 이미지가 크거나 스크롤 위치상 이미지 위쪽 공간이 부족하면(overflow:auto 컨테이너 경계
@@ -538,14 +543,23 @@
     }
   })
 
-  // 문서 밖 클릭 시 툴바 닫기
+  // 이미지 선택 해제 — 이미지 자신·크기조절 툴바·캔버스 상단 popup을 제외한 나머지
+  // 레이아웃(문서 내 다른 영역 포함, 우측 특약 패널 등 문서 밖 영역도 포함) 클릭 시
+  // 선택 해제. 2026-09-08(6차 후속) — Stephen 지적: 기존에는 ".html-preview-doc 밖"
+  // 클릭에만 반응해, 같은 문서 안에서 도장 이미지가 아닌 다른 영역(계약서 본문 등)을
+  // 클릭해도 선택이 풀리지 않던 결함이 있었다 — 판정 범위를 "이미지·툴바·popup 자신"
+  // 으로 좁히고 그 "밖"은 전부 해제 대상으로 넓혔다. showDocSigToolbar가 false가 되면
+  // 캔버스 popup(.html-sig-canvas-popup, {#if showDocSigToolbar && htmlIssuerSignatureUrl})도
+  // 조건이 함께 꺼지므로 자동으로 감춰진다(별도 처리 불필요).
   $effect(() => {
     if (!showDocSigToolbar) return
     function onDocClick(e: MouseEvent) {
-      const el = htmlPreviewDocEl
-      if (el && !el.contains(e.target as Node)) {
-        showDocSigToolbar = false
-      }
+      const target = e.target as Node
+      const img = htmlPreviewDocEl?.querySelector<HTMLImageElement>('.issuer-sig-overlay')
+      if (img?.contains(target)) return // 이미지 자신 클릭은 onImgClick이 토글 처리
+      if (docSigToolbarEl?.contains(target)) return // 크기조절 툴바 조작 중 닫히지 않도록 제외
+      if (htmlSigCanvasPopupEl?.contains(target)) return // 캔버스 popup(제거 버튼 등) 조작 중 제외
+      showDocSigToolbar = false
     }
     document.addEventListener('click', onDocClick)
     return () => document.removeEventListener('click', onDocClick)
@@ -830,11 +844,75 @@
           {requiresIssuerSignature ? '필수 (서명·직인 없으면 발송 차단)' : '선택 (서명·직인 없어도 발송 가능)'}
         </span>
       </div>
-      <span class="toggle-hint">이 양식으로 계약을 발행할 때 관리자(발행자) 서명 또는 직인 첨부를 필수로 만듭니다.</span>
+      <!-- 2026-09-08 후속 — Stephen 지시: "'서명 & 직인 이미지 등록' 버튼 UI만을 구현된
+           로직 그대로 이 토글 행 레이아웃 내부로 이동 재배치할 것". 아래 field-row--sig-upload
+           행에 있던 등록 버튼(openSigUpload 핸들러 그대로)을 이 행 안으로 옮겨 같은 줄에
+           배치 — 파일 선택 전(!sigUploadFile)에만 노출하는 기존 조건도 그대로 유지. -->
+      {#if !sigUploadFile}
+        <button
+          type="button"
+          class="btn-sig-upload btn-sig-upload--toggle-row"
+          onclick={openSigUpload}
+          aria-label="서명·직인 이미지 파일 선택"
+        >서명 & 직인 이미지 등록</button>
+      {/if}
+      <!-- 2026-09-08(7차 후속) — Stephen 지적: 5차 후속에서 .html-sig-row 전체를
+           !htmlIssuerSignatureUrl(서명 미등록) 상태에만 렌더링하도록 좁히면서, "이미
+           등록된 서명·직인 자산 목록에서 골라 삽입"하는 서명/직인 삽입 버튼+팝오버가
+           서명이 이미 설정된 일반 상태에서는 아예 호출할 수 없게 돼버렸다(=사실상
+           제거된 것과 동일) — Stephen "이미 등록된 직인(서명) 이미지 목록 선택 모달을
+           복원해 - 제거된 '서명/직인 삽입' 버튼 UI를 복원하고 선택위치로 재배열해"
+           지시로 htmlIssuerSignatureUrl 여부와 무관하게 항상 노출로 복원 + 위 "서명 &
+           직인 이미지 등록" 버튼 바로 옆(Stephen이 선택한 위치)으로 재배치. 로직
+           (openHtmlSigPicker/showHtmlSigPicker/htmlSigAssets/selectHtmlSigAsset)은
+           변경 없이 그대로 재사용 — 팝오버 위치 기준(position:relative)만 이 인라인
+           wrapper(.html-sig-picker-inline)로 이관. -->
+      <div class="html-sig-picker-inline" bind:this={htmlSigPickerEl}>
+        <button
+          type="button"
+          class="btn-sig-upload"
+          class:active={showHtmlSigPicker}
+          onclick={openHtmlSigPicker}
+          aria-expanded={showHtmlSigPicker}
+          aria-haspopup="listbox"
+          aria-label="발행자 서명·직인 삽입"
+        >서명/직인 삽입</button>
+        {#if showHtmlSigPicker}
+          <div class="html-sig-popover" role="listbox" aria-label="서명/직인 자산 목록">
+            {#if htmlSigLoading}
+              <div class="html-sig-info">불러오는 중...</div>
+            {:else if htmlSigAssets.length === 0}
+              <div class="html-sig-info">
+                등록된 서명·직인이 없습니다.<br />위 '서명 &amp; 직인 이미지 등록' 버튼으로 먼저 등록하세요.
+              </div>
+            {:else}
+              <div class="html-sig-list">
+                {#each htmlSigAssets as asset (asset.id)}
+                  <button
+                    type="button"
+                    class="html-sig-item"
+                    role="option"
+                    aria-selected={false}
+                    onclick={() => selectHtmlSigAsset(asset)}
+                    aria-label="{asset.asset_type === 'signature' ? '서명' : '직인'} 삽입{asset.label ? ': ' + asset.label : ''}"
+                  >
+                    <img src={asset.image_url} alt="{asset.asset_type === 'signature' ? '서명' : '직인'} 미리보기" class="html-sig-thumb" />
+                    <span class="html-sig-item-label">{asset.label ?? (asset.asset_type === 'signature' ? '서명' : '직인')}</span>
+                  </button>
+                {/each}
+              </div>
+            {/if}
+          </div>
+        {/if}
+      </div>
+      <!-- 2026-09-08 후속 제거 — 기존 .toggle-hint("이 양식으로 계약을 발행할 때...
+           필수로 만듭니다")는 바로 왼쪽 toggle-label이 이미 상태별로 동일 의미를
+           동적으로 보여주고 있어(예: "필수 (서명·직인 없으면 발송 차단)") 순수 중복
+           정보였다 — Stephen "불필요한 레이아웃 요소로 판정되면 제거해서 캔버스 영역
+           세로폭을 확보할 것" 지시에 따라 판정·제거(관련 CSS .toggle-hint도 함께 제거). -->
       <input type="hidden" name="requires_issuer_signature" value={requiresIssuerSignature.toString()} />
     </div>
 
-    <!-- 서명 & 직인 이미지 등록 — 토글 행 바로 아래 -->
     <!-- gif 허용은 이 input에만: 전역 fileValidation.ts 수정 금지 -->
     <input
       bind:this={sigUploadInputEl}
@@ -845,10 +923,16 @@
       aria-hidden="true"
       tabindex="-1"
     />
-    <div class="field-row field-row--sig-upload">
-      <span class="f-label">서명·직인 이미지</span>
-      {#if sigUploadFile}
-        <!-- 파일 선택됨 → 유형 선택 + 확인/취소 -->
+    <!-- 2026-09-08(8차 후속) — Stephen 지적: 4차 후속(등록 버튼 이동)으로 이 행에
+         파일 미선택 시 라벨+힌트("PNG · JPEG · GIF · 최대 5MB") 텍스트만 남아있던
+         구간을 "불필요 요소판정 시 제거" 지시. 상호작용 요소가 전혀 없는 순수 안내
+         문구 한 줄뿐이라 판정 결과 제거 — 행 자체를 파일 선택 후(sigUploadFile 있을
+         때)에만 렌더링하도록 변경해 파일 미선택 상태에서는 이 행 전체(패딩·보더 포함)가
+         사라져 세로공간을 확보한다. 파일 선택 후 필요한 유형선택(서명/직인)+등록/취소
+         UI는 로직 그대로 유지(사라지면 업로드 확정 경로 자체가 없어지므로 제외 대상 아님). -->
+    {#if sigUploadFile}
+      <div class="field-row field-row--sig-upload">
+        <span class="f-label">서명·직인 이미지</span>
         <div class="sig-upload-confirm">
           <span class="sig-file-name" title={sigUploadFile.name}>{sigUploadFile.name}</span>
           <div class="sig-type-picker" role="group" aria-label="자산 유형 선택">
@@ -888,16 +972,8 @@
             aria-label="취소"
           >취소</button>
         </div>
-      {:else}
-        <button
-          type="button"
-          class="btn-sig-upload"
-          onclick={openSigUpload}
-          aria-label="서명·직인 이미지 파일 선택"
-        >서명 & 직인 이미지 등록</button>
-        <span class="sig-upload-hint">PNG · JPEG · GIF · 최대 5MB</span>
-      {/if}
-    </div>
+      </div>
+    {/if}
 
     <!-- 에디터 영역 — 모드별 분기 -->
     <div class="editor-layout">
@@ -977,68 +1053,43 @@
         <input type="hidden" name="html_contract_terms_text" value={htmlContractTermsText} />
         <input type="hidden" name="html_privacy_terms_text" value={htmlPrivacyTermsText} />
         <div class="html-preview-wrap">
-          <div class="html-preview-label">
-            <span>HTML 고정 서식 미리보기</span>
-            <span class="html-preview-hint">이 서식은 편집할 수 없습니다. 특약 조항만 우측 패널에서 입력하세요.</span>
-          </div>
+          <!-- 2026-09-08 제거 — "HTML 고정 서식 미리보기" 라벨 + 안내 문구(.html-preview-label)는
+               순수 정적 텍스트로 상호작용 요소가 전혀 없고, 동일한 안내("특약은 관리자가 직접
+               입력하는 고정 텍스트입니다" 등)가 우측 ContractFieldPanel 각 탭 힌트에 이미
+               있어 중복이었다. Stephen 지시: "불필요한 레이아웃 요소로 판정되면 제거해서
+               캔버스 영역 세로폭을 확보할 것" — 판정 결과 제거, 그만큼 .html-preview-doc
+               캔버스 세로 공간 확보(관련 CSS .html-preview-label/.html-preview-hint도 함께 제거). -->
 
-          <!-- 발행자(대표이사) 서명·직인 삽입/제거 — flow/spreadsheet 모드의 "서명/직인 삽입"
-               팝오버와 동일한 자산 목록을 재사용한다. 크기조절 툴바는 이 행이 아니라 아래
-               .html-preview-doc 안에 실제로 렌더링된 도장 이미지를 클릭했을 때 그 이미지 바로
-               위에 뜬다(ContractSpreadsheetEditor.svelte 방식과 동일 — "이미지를 선택하면
-               그 자리에 툴바가 뜬다") — Stephen 지시: "설정바가 문서양식 내 직인(서명) 이미지
-               선택 시 위에 위치해야해". -->
-          <div class="html-sig-row" bind:this={htmlSigPickerEl}>
-            <span class="f-label">발행자(대표이사) 서명·직인</span>
-            {#if htmlIssuerSignatureUrl}
-              <img
-                src={htmlIssuerSignatureUrl}
-                alt="발행자 서명/직인 미리보기"
-                class="html-sig-preview"
-              />
-              <span class="html-sig-hint">아래 문서 안의 도장 이미지를 클릭하면 크기를 조절할 수 있고, 마우스로 끌어 원하는 위치로 옮길 수 있습니다.</span>
-              <button type="button" class="btn-sig-cancel" onclick={removeHtmlSigAsset} aria-label="발행자 서명·직인 이미지 삭제">제거</button>
-            {:else}
-              <button
-                type="button"
-                class="btn-sig-upload"
-                class:active={showHtmlSigPicker}
-                onclick={openHtmlSigPicker}
-                aria-expanded={showHtmlSigPicker}
-                aria-haspopup="listbox"
-                aria-label="발행자 서명·직인 삽입"
-              >서명/직인 삽입</button>
-            {/if}
-            {#if showHtmlSigPicker}
-              <div class="html-sig-popover" role="listbox" aria-label="서명/직인 자산 목록">
-                {#if htmlSigLoading}
-                  <div class="html-sig-info">불러오는 중...</div>
-                {:else if htmlSigAssets.length === 0}
-                  <div class="html-sig-info">
-                    등록된 서명·직인이 없습니다.<br />위 '서명 &amp; 직인 이미지 등록' 버튼으로 먼저 등록하세요.
-                  </div>
-                {:else}
-                  <div class="html-sig-list">
-                    {#each htmlSigAssets as asset (asset.id)}
-                      <button
-                        type="button"
-                        class="html-sig-item"
-                        role="option"
-                        aria-selected={false}
-                        onclick={() => selectHtmlSigAsset(asset)}
-                        aria-label="{asset.asset_type === 'signature' ? '서명' : '직인'} 삽입{asset.label ? ': ' + asset.label : ''}"
-                      >
-                        <img src={asset.image_url} alt="{asset.asset_type === 'signature' ? '서명' : '직인'} 미리보기" class="html-sig-thumb" />
-                        <span class="html-sig-item-label">{asset.label ?? (asset.asset_type === 'signature' ? '서명' : '직인')}</span>
-                      </button>
-                    {/each}
-                  </div>
-                {/if}
-              </div>
-            {/if}
-          </div>
+          <!-- 발행자(대표이사) 서명·직인 삽입/제거 UI(2026-09-08, 3차 후속) — 서명이 이미
+               등록된 상태의 미리보기/힌트/제거 UI는 .html-sig-canvas-popup(아래
+               .html-preview-doc 안, showDocSigToolbar 연동)으로, "서명/직인 삽입"
+               버튼+팝오버(기존 자산 목록에서 선택)는 위 발행자 서명·직인 필수 토글
+               행(.html-sig-picker-inline)으로 각각 이관 완료(7차 후속) — 이 위치에는
+               더 이상 별도 행이 없다. -->
 
           <div class="html-preview-doc" bind:this={htmlPreviewDocEl}>
+            {#if showDocSigToolbar && htmlIssuerSignatureUrl}
+              <!-- 캔버스 상단 popup(2026-09-08, Migration #463 후속) — position:sticky로
+                   .html-preview-doc 스크롤 컨테이너 상단에 고정. {@html previewHtml}보다
+                   먼저(DOM 최상단) 렌더링해야 sticky의 기준 위치가 스크롤 0에서 시작한다
+                   (아래에 두면 문서 콘텐츠 높이만큼 내려간 지점에서만 고정되기 시작함).
+                   showDocSigToolbar가 false로 바뀌면(다른 곳 클릭 등) 즉시 사라진다. -->
+              <div class="html-sig-canvas-popup" bind:this={htmlSigCanvasPopupEl}>
+                <span class="f-label">발행자(대표이사) 서명·직인</span>
+                <img
+                  src={htmlIssuerSignatureUrl}
+                  alt="발행자 서명/직인 미리보기"
+                  class="html-sig-preview"
+                />
+                <span class="html-sig-hint">마우스로 끌어 위치를 옮기거나, 아래 크기조절 툴바로 크기를 바꿀 수 있습니다.</span>
+                <button
+                  type="button"
+                  class="btn-sig-cancel"
+                  onclick={() => { removeHtmlSigAsset(); showDocSigToolbar = false }}
+                  aria-label="발행자 서명·직인 이미지 삭제"
+                >제거</button>
+              </div>
+            {/if}
             {@html previewHtml}
             {#if showDocSigToolbar}
               <!-- ContractSpreadsheetEditor.svelte renderCellValue()의 플로팅 툴바(소/중/대
@@ -1051,6 +1102,7 @@
                 style="top:{docSigToolbarPos.top}px; left:{docSigToolbarPos.left}px;"
                 role="group"
                 aria-label="서명·직인 이미지 크기·위치 조절"
+                bind:this={docSigToolbarEl}
               >
                 <button type="button" class="html-sig-tbtn" title="너비 100px" onclick={() => setHtmlSigWidth(100)}>소(100)</button>
                 <button type="button" class="html-sig-tbtn" title="너비 200px" onclick={() => setHtmlSigWidth(200)}>중(200)</button>
@@ -1323,12 +1375,12 @@
     font: var(--text-pc-body-14);
     color: var(--cs-text);
   }
-  .toggle-hint {
-    flex-basis: 100%;
-    padding-left: calc(68px + 18px); /* f-label 너비 + gap 보정 */
-    font: var(--text-pc-script-12);
-    color: var(--cs-text-mid);
-    line-height: 1.4;
+  /* .toggle-hint(2026-09-08 제거) — toggle-label이 이미 상태별 동일 의미를 동적으로
+     보여줘 순수 중복이던 정적 안내문. 캔버스 세로공간 확보를 위해 마크업+CSS 함께 제거. */
+  /* 2026-09-08 — "서명 & 직인 이미지 등록" 버튼을 이 토글 행에 배치 +
+     margin-left:auto로 행 오른쪽 끝에 정렬. */
+  .btn-sig-upload--toggle-row {
+    margin-left: auto;
   }
 
   /* 2단 레이아웃 */
@@ -1432,10 +1484,6 @@
   .btn-sig-upload:hover {
     background: rgba(59, 47, 138, 0.06);
     border-color: var(--cs-purple);
-  }
-  .sig-upload-hint {
-    font: var(--text-pc-script-12);
-    color: var(--cs-text-mid);
   }
   .sig-upload-confirm {
     display: flex;
@@ -1590,23 +1638,6 @@
     border: 1px solid var(--cs-lilac);
     border-radius: var(--cms-radius-sm);
   }
-  .html-preview-label {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    padding: 8px 12px;
-    background: var(--cs-surface-gray);
-    border-bottom: 1px solid var(--cs-lilac);
-    font: var(--text-pc-body-14);
-    font-weight: 600;
-    color: var(--cs-text);
-    flex-shrink: 0;
-  }
-  .html-preview-hint {
-    font: var(--text-pc-script-12);
-    color: var(--cs-text-mid);
-    font-weight: 400;
-  }
   .html-preview-doc {
     position: relative; /* 도장 이미지 클릭 시 뜨는 .html-sig-toolbar의 위치 기준점 */
     flex: 1;
@@ -1615,20 +1646,16 @@
     background: #fff;
   }
 
-  /* 발행자 서명·직인 삽입 행(Migration #450) — ContractDocumentEditor.svelte .cde-sig-* 와
-     동일한 시각 언어(팝오버 위치·썸네일 크기·색상)를 재사용해 flow/spreadsheet 모드와
-     일관되게 유지한다. */
-  .html-sig-row {
+  /* "서명/직인 삽입" 버튼+팝오버(기존 자산 목록에서 선택)의 인라인 위치 기준 wrapper
+     (2026-09-08, 7차 후속) — 발행자 서명·직인 필수 토글 행(.field-row--toggle) 안에
+     "서명 & 직인 이미지 등록" 버튼 바로 옆에 배치된다. 과거 .html-sig-row(전용 행)는
+     레이아웃 세로공간 확보를 위해 제거되고, 그 팝오버 위치 기준(position:relative)
+     역할만 이 인라인 wrapper로 이관됨. */
+  .html-sig-picker-inline {
     position: relative;
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    padding: 8px 12px;
-    border-bottom: 1px solid var(--cs-lilac);
-    background: var(--cs-white, #fff);
     flex-shrink: 0;
   }
-  /* 발행자 서명·직인 미리보기 썸네일(위 행) */
+  /* 발행자 서명·직인 미리보기 썸네일(캔버스 상단 popup, 아래 .html-sig-canvas-popup) */
   .html-sig-preview {
     display: block;
     max-height: 48px;
@@ -1643,6 +1670,24 @@
   .html-sig-hint {
     font: var(--text-pc-script-12);
     color: var(--cs-text-mid);
+  }
+  /* 캔버스 상단 popup(2026-09-08) — 서명이 이미 등록된 상태의 미리보기·힌트·제거 UI를
+     .html-sig-row에서 이곳으로 이관. .html-preview-doc(overflow:auto) 스크롤 컨테이너
+     안에서 position:sticky로 상단 고정 — showDocSigToolbar(문서 안 도장 이미지 선택 상태)와
+     연동해 노출/해제된다. */
+  .html-sig-canvas-popup {
+    position: sticky;
+    top: 8px;
+    z-index: 25;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin: 0 0 12px;
+    padding: 8px 12px;
+    background: #fff;
+    border: 1px solid var(--cs-lilac);
+    border-radius: var(--cms-radius-sm);
+    box-shadow: 0 4px 16px rgba(16, 11, 50, 0.12);
   }
   /* 문서 안 도장 이미지를 클릭했을 때 뜨는 플로팅 크기조절 툴바 — ContractSpreadsheetEditor.svelte
      renderCellValue()의 인라인 style 툴바(소/중/대 프리셋+구분선+너비입력+구분선+✕삭제,
