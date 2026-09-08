@@ -36,6 +36,7 @@ interface MainProduct {
   name: string
   product_code: string | null
   unit_price?: number | null
+  components?: unknown
 }
 
 interface OptionProduct {
@@ -43,6 +44,7 @@ interface OptionProduct {
   qty: number
   unit_price: number
   product_code: string | null
+  components?: unknown
 }
 
 function makeReservation(
@@ -432,5 +434,45 @@ describe('buildLineItems — 메인상품 금액 기본값', () => {
       makeReservation({ name: '소니 FX3', product_code: 'CSLED001' })
     ])
     expect(result[0].금액).toBe('-')
+  })
+})
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 12. 비고 필드 — products.components(구성품) 반영 (2026-09-08 신설)
+// ─────────────────────────────────────────────────────────────────────────────
+describe('buildLineItems — 비고(구성품) 반영', () => {
+  it('메인상품에 components가 없으면 비고는 "-"이다', () => {
+    const result = buildLineItems([
+      makeReservation({ name: '소니 FX3', product_code: 'CSLED001' })
+    ])
+    expect(result[0].비고).toBe('-')
+  })
+
+  it('메인상품 components가 있으면 formatComponentsText 형식으로 비고에 채워진다', () => {
+    const result = buildLineItems([
+      makeReservation({ name: '소니 FX3', product_code: 'CSLED001', components: { 배터리: '2개', 충전기: '1개' } })
+    ])
+    expect(result[0].비고).toBe('배터리: 2개, 충전기: 1개')
+  })
+
+  it('옵션상품도 자신의 components로 독립적으로 비고가 채워진다', () => {
+    const result = buildLineItems([
+      makeReservation(
+        { name: '캐논 R5', product_code: 'CSCAN001' },
+        [{ option_name: '메모리카드', qty: 2, unit_price: 5000, product_code: null, components: { 용량: '128GB' } }]
+      )
+    ])
+    expect(result[0].비고).toBe('-') // 메인상품(캐논 R5)은 components 없음
+    expect(result[1].비고).toBe('용량: 128GB') // 옵션(메모리카드)은 자신의 components 반영
+  })
+
+  it('같은 상품을 여러 건 예약해 그룹화돼도(수량 합산) 비고는 그룹의 대표값(첫 reservation) 기준이다', () => {
+    const result = buildLineItems([
+      makeReservation({ name: '소니 FX3', product_code: 'CSLED001', components: { 배터리: '2개' } }),
+      makeReservation({ name: '소니 FX3', product_code: 'CSLED001', components: { 배터리: '2개' } }),
+    ])
+    expect(result).toHaveLength(1)
+    expect(result[0].수량).toBe('2')
+    expect(result[0].비고).toBe('배터리: 2개')
   })
 })

@@ -645,6 +645,15 @@
     return types.map(t => IDENTITY_TYPE_LABELS[t] ?? '증명서').join(', ')
   }
 
+  // front-uiux.md §22-5/§22-7 — 본인증명도 슬롯형(문서 종류별 독립 드롭존)으로 전환되어
+  // identity_type[i]가 identity_doc_url[i]와 항상 같은 인덱스로 짝지어진다(순서 보장) —
+  // 그 실제 문서 종류 라벨을 노출한다.
+  function identityFileLabelAt(r: CustomerRow, i: number): string {
+    const t = r.identity_type?.[i]
+    if (t) return IDENTITY_TYPE_LABELS[t] ?? '증명서'
+    return (r.identity_doc_url?.length ?? 0) > 1 ? `파일 ${i + 1}` : '파일'
+  }
+
   // foreign_doc_urls가 없는 레거시 등록자는 foreign_doc_url(첫 파일만 담은 하위호환 스칼라)로
   // 1개짜리 배열을 만들어 동일하게 목록 렌더링(계정 화면 ProfileTabContent.svelte와 동일 원칙)
   function foreignDocList(r: CustomerRow): string[] {
@@ -670,6 +679,16 @@
       ? r.foreign_type.map(t => FOREIGN_TYPE_LABELS[t] ?? '증명서').join(', ')
       : '외국인증명'
     return stay ? `${stay} · ${types}` : types
+  }
+
+  // front-uiux.md §22-5/§22-7 — 외국인증명은 "슬롯형" 업로드(문서 종류별 드롭존 1개 =
+  // 파일 1개)로 제출돼 foreign_type[i]가 항상 foreignDocList(row)[i]와 같은 인덱스로
+  // 짝지어진다(순서 보장) — 그 실제 문서 종류 라벨을 노출한다. 본인증명(identity)도
+  // 슬롯형으로 전환되어 동일 원리로 identityFileLabelAt()이 실제 라벨을 노출한다(아래).
+  function foreignFileLabelAt(r: CustomerRow, i: number): string {
+    const t = r.foreign_type?.[i]
+    if (t) return FOREIGN_TYPE_LABELS[t] ?? '증명서'
+    return foreignDocList(r).length > 1 ? `파일 ${i + 1}` : '파일'
   }
 
   let identityDocUrl   = $state<string | null>(null)
@@ -984,7 +1003,7 @@
           <div class="doc-file-list">
             {#each row.identity_doc_url as url, i (`${i}:${url}`)}
               <div class="doc-file-row">
-                <span class="doc-file-label">{row.identity_doc_url.length > 1 ? `파일 ${i + 1}` : '파일'}</span>
+                <span class="doc-file-label">{identityFileLabelAt(row, i)}</span>
                 <button type="button" class="btn-file-view" onclick={() => openIdentityDoc(url, '본인증명 문서')}>보기</button>
                 <button
                   type="button"
@@ -1067,7 +1086,7 @@
           <div class="doc-file-list">
             {#each foreignDocList(row) as url, i (`${i}:${url}`)}
               <div class="doc-file-row">
-                <span class="doc-file-label">{foreignDocList(row).length > 1 ? `파일 ${i + 1}` : '파일'}</span>
+                <span class="doc-file-label">{foreignFileLabelAt(row, i)}</span>
                 <button type="button" class="btn-file-view" onclick={() => openIdentityDoc(url, '외국인증명 문서')}>보기</button>
                 <button
                   type="button"

@@ -803,7 +803,9 @@ describe('⑥ cms_reassign_reservation_product_code — 게이트 매트릭스',
     expect((await getReservation(resId))?.product_id).toBe(childB);
   });
 
-  it('status=confirmed AND tracking_number 존재하면 차단된다', async () => {
+  // Migration 465(2026-09-08): confirmed는 운송장 등록 여부와 무관하게 재배정 가능해야 한다
+  // — confirmed는 실물이 아직 반출 전 단계라 QR 불일치 위험이 없다는 Stephen 확정에 따른 확장.
+  it('status=confirmed AND tracking_number 존재해도 재배정 가능하다(Migration 465 확장)', async () => {
     const parent = await createParentProduct('REASSIGN-CONF-TRACK');
     const childA = await createChildUnit(parent, 'REASSIGN-CONF-TRACK-A');
     const childB = await createChildUnit(parent, 'REASSIGN-CONF-TRACK-B');
@@ -820,14 +822,11 @@ describe('⑥ cms_reassign_reservation_product_code — 게이트 매트릭스',
       p_reservation_id: resId,
       p_new_unit_id: childB,
     });
-    expect(result.success).toBe(false);
-    expect(result.error_message).toBe(
-      '운송장 등록 후 또는 대여 진행 중인 예약은 재고를 재배정할 수 없습니다.'
-    );
-    expect((await getReservation(resId))?.product_id).toBe(childA);
+    expect(result.success).toBe(true);
+    expect((await getReservation(resId))?.product_id).toBe(childB);
   });
 
-  it('status=in_use 등 그 외 상태면 차단된다', async () => {
+  it('status=in_use 등 반출 이후 상태면 차단된다', async () => {
     const parent = await createParentProduct('REASSIGN-INUSE');
     const childA = await createChildUnit(parent, 'REASSIGN-INUSE-A');
     const childB = await createChildUnit(parent, 'REASSIGN-INUSE-B');
@@ -844,13 +843,13 @@ describe('⑥ cms_reassign_reservation_product_code — 게이트 매트릭스',
     });
     expect(result.success).toBe(false);
     expect(result.error_message).toBe(
-      '운송장 등록 후 또는 대여 진행 중인 예약은 재고를 재배정할 수 없습니다.'
+      '반출 이후(대여 진행 중) 예약은 재고를 재배정할 수 없습니다.'
     );
   });
 
-  // Migration 429(2026-09-03): 'expired'/'cancelled'는 위 "운송장 등록 후 또는 대여 진행 중"
+  // Migration 429(2026-09-03): 'expired'/'cancelled'는 위 "반출 이후(대여 진행 중)"
   // 문구가 아니라 각자 구분된 메시지를 반환해야 한다 — 실사용 중 발견된 혼동(만료를 마치
-  // "대여 진행 중"처럼 안내)을 방지.
+  // "대여 진행 중"처럼 안내)을 방지. (메시지 문구는 Migration 465에서 갱신됨)
   it('status=expired면 "만료" 메시지로 차단된다(대여 진행 중 문구 아님)', async () => {
     const parent = await createParentProduct('REASSIGN-EXPIRED');
     const childA = await createChildUnit(parent, 'REASSIGN-EXPIRED-A');
