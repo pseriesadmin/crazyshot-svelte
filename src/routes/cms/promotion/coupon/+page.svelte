@@ -208,7 +208,7 @@
   // A-4: SuggestPicker 정적 옵션 (select 대체)
   const DISCOUNT_TYPE_OPTIONS: SuggestPickerOption[] = [
     { id: 'fixed',         label: '정액 (원)' },
-    { id: 'percent',       label: '정률 (%)' },
+    { id: 'percentage',    label: '정률 (%)' },
     { id: 'free_shipping', label: '무료배송' },
   ]
   const TYPE_OPTIONS: SuggestPickerOption[] = [
@@ -565,7 +565,7 @@
               <input id="fc-dval" name="discount_value" type="number" min="0"
                 class="f-input" bind:value={f_discount_value} />
             </div>
-            {#if f_discount_type === 'percent'}
+            {#if f_discount_type === 'percentage'}
               <div class="form-field">
                 <label for="fc-maxd">최대 할인 한도 (원, 0=무제한)</label>
                 <input id="fc-maxd" name="max_discount_amount" type="number" min="0"

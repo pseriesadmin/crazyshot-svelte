@@ -1732,7 +1732,11 @@
               <span class="section-sub-label">사용 가능한 쿠폰</span>
               {#each sdCoupons.filter(uc => uc.coupons !== null) as uc (uc.id)}
                 {@const c = uc.coupons!}
-                {@const couponLabel = c.description ?? (c.discount_type === 'fixed' ? `${c.discount_value.toLocaleString('ko-KR')}원 할인` : `${c.discount_value}% 할인`)}
+                {@const couponLabel = c.description ?? (
+                  c.discount_type === 'fixed' ? `${c.discount_value.toLocaleString('ko-KR')}원 할인` :
+                  c.discount_type === 'percentage' ? `${c.discount_value}% 할인` :
+                  '무료배송'
+                )}
                 {@const isBlocked = otBlockedCouponIds.has(uc.id)}
                 {@render CouponRow({
                   label: couponLabel,

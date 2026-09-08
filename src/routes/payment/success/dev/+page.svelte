@@ -9,7 +9,7 @@
   }
 
   function handleConfirm() {
-    goto('/cart')
+    goto('/')
   }
 </script>
 
