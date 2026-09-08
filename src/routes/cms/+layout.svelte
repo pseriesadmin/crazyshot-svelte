@@ -7,6 +7,8 @@
   import { hasSettingsAccess } from '$lib/utils/cmsPermissions'
   import { unregisterCurrentPushToken } from '$lib/utils/push'
   import { CMS_MENUS } from '$lib/constants/cmsMenus'
+  import { subscribeToAllMessages } from '$lib/services/chatService'
+  import type { ChatMessage } from '$lib/types/chat'
   import type { LayoutData } from './$types'
 
   interface Props {
@@ -47,6 +49,22 @@
       url.searchParams.delete('notice')
       history.replaceState(history.state, '', url.toString())
     }
+  })
+
+  // 2026-09-08(Stephen 지시): CMS 다른 메뉴 화면을 보고 있는 동안에도 새 고객 채팅이
+  // 도착하면 토스트로 알린다 — /cms/chat 화면 안에서는 AdminChatPanel.svelte 자체의
+  // subscribeToAllMessages(목록 미리보기 갱신 + flashSession 점멸)로 이미 눈에 보이므로
+  // 중복 알림을 피하기 위해 그 경로에서는 토스트를 띄우지 않는다. sender_type='user'만
+  // 필터 — 관리자 본인 답장·시스템 자동응답(캔드매칭·RPC 알림카드 등)은 sender_type='admin'
+  // 이라 이 토스트 대상이 아니다(관리자 스스로의 발신을 자기 알림으로 다시 받지 않도록).
+  $effect(() => {
+    if (!data.cmsRole) return
+    const unsub = subscribeToAllMessages((message: ChatMessage) => {
+      if (message.sender_type !== 'user') return
+      if (page.url.pathname.startsWith('/cms/chat')) return
+      csToast.info('새로운 채팅이 수신되었습니다.')
+    })
+    return unsub
   })
 
   let manualLogout = false

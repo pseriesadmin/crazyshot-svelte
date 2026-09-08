@@ -1833,6 +1833,36 @@
             <button type="submit" class="btn-cancel" disabled={isSubmitting}>예약 취소</button>
           </form>
         {/if}
+
+        <!-- 파손 신고 접수 처리 — 2026-09-08(Stephen 확정): 고객 채팅에서 "파손" 캔드응답
+             매칭 시 "파손신고접수" 카드가 자동 발송되지만, 예약의 실제 status는 관리자가
+             그 대화 내용을 확인한 뒤 여기서 직접 전환한다(키워드 매칭만으로 자동 종료 금지).
+             확정~반납접수(실물이 고객에게 나가있는) 단계에서만 노출 — hold는 파손이
+             성립할 수 없어 제외. reservation·rentals 두 화면 모두에서 노출(isRentalView 무관). -->
+        {#if ['confirmed', 'shipped', 'in_use', 'return_requested'].includes(row.status)}
+          <form
+            method="POST"
+            action="/cms/reservation?/updateStatus"
+            use:enhance={() => {
+              isSubmitting = true
+              return async ({ result, update }) => {
+                isSubmitting = false
+                if (result.type === 'success') {
+                  csToast.success('파손 신고 접수로 처리되었습니다.')
+                  onstatuschange?.()
+                  onrefresh()
+                } else {
+                  csToast.error('처리 중 오류가 발생했습니다.')
+                }
+                await update()
+              }
+            }}
+          >
+            <input type="hidden" name="reservation_id" value={row.reservation_id} />
+            <input type="hidden" name="status" value="damage_claimed" />
+            <button type="submit" class="btn-cancel" disabled={isSubmitting}>파손 신고 접수 처리</button>
+          </form>
+        {/if}
       </div>
 
       <!-- 채팅 알림 발송 -->

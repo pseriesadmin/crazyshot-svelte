@@ -20,6 +20,8 @@
   import { chatStore, pushMessage, setMessages, prependMessages, setActiveSession, removeMessage, markMessageRead } from '$lib/stores/chat.svelte'
   import { supabase } from '$lib/services/supabase'
   import type { ChatSession, ActionPayload } from '$lib/types/chat'
+  import { validateUploadFile, validateUploadFileSize } from '$lib/utils/fileValidation'
+  import { csToast } from '$lib/utils/toast'
 
   interface Props {
     /** 로그인 사용자 정보 (비로그인 시 'test-user') */
@@ -224,6 +226,19 @@
   // ── 파일 업로드 ──
   async function handleAttach(file: File) {
     if (!session || isUploading) return
+
+    // front-uiux.md §15-3·§15-1a 표준 — 업로드 시도 전 MIME·용량 클라이언트 검증(2026-09-08)
+    const typeCheck = validateUploadFile(file)
+    if (!typeCheck.ok) {
+      csToast.error(typeCheck.error ?? '허용되지 않는 파일 형식입니다.')
+      return
+    }
+    const sizeCheck = validateUploadFileSize(file)
+    if (!sizeCheck.ok) {
+      csToast.error(sizeCheck.error ?? '파일 크기가 너무 큽니다.')
+      return
+    }
+
     isUploading = true
 
     const ext = file.name.split('.').pop() ?? 'bin'

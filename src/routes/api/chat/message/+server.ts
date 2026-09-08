@@ -224,6 +224,36 @@ export const POST: RequestHandler = async ({ request, locals }) => {
                 })
             }
 
+            // 2026-09-08(Stephen 지시): '파손' 캔드응답이 매칭되면 자동응답 텍스트와 별개로
+            // "파손신고접수" 액션카드를 이어서 발송한다 — 고객은 이 카드 아래로 파손 내용을
+            // 일반 채팅처럼 계속 입력하면 되고(별도 메모창 없음), 예약의 실제 status를
+            // damage_claimed로 전환하는 것은 관리자가 이 대화를 확인한 뒤 CMS에서 직접
+            // 처리한다(자동전환 아님 — 키워드 매칭만으로 예약을 종료상태로 보내는 위험 방지).
+            // 카드가 붙을 예약은 hold를 제외한 활성 대여(확정~반납접수) 중 가장 최근 건 —
+            // 아직 실물을 받지 않은 hold 단계는 파손이 성립할 수 없어 제외한다.
+            if (match.category === 'damage') {
+              try {
+                const { data: activeReservation } = await admin
+                  .from('rental_reservations')
+                  .select('id')
+                  .eq('user_id', session.user.id)
+                  .in('status', ['confirmed', 'shipped', 'in_use', 'return_requested'])
+                  .order('created_at', { ascending: false })
+                  .limit(1)
+                  .maybeSingle()
+
+                if (activeReservation) {
+                  await admin.rpc('send_rental_chat_notification', {
+                    p_reservation_id: (activeReservation as { id: number }).id,
+                    p_notify_type: 'damage_claimed',
+                  })
+                }
+              } catch (err) {
+                // fail-soft: 카드 발송 실패가 이미 저장된 캔드 자동응답 반환을 막으면 안 됨
+                console.error('[chat/message] 파손신고접수 카드 발송 실패(fail-soft):', err)
+              }
+            }
+
             // 고객 브라우저 푸시 — 캔드매칭 자동응답도 관리자 수동답장과 동일하게 발송
             // (2026-08-19 전역감사로 발견된 공백 보완, service-operations.md §15)
             await sendPushToUser(session.user.id, 'canned_auto_reply', {

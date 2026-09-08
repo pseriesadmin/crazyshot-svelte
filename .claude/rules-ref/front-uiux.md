@@ -2126,6 +2126,43 @@ hover/선택: background var(--cs-purple-op10)
 ⛔ 포맷 리스트는 이 정책이 정본 — 개별 화면에서 임의 확장 금지
 ```
 
+### 15-1a. 개별 파일 업로드 용량 상한 (전역 표준, 2026-09-08 명문화)
+
+```
+개별 파일 1건당 최대 10MB (MAX_UPLOAD_FILE_SIZE_BYTES, $lib/utils/fileValidation.ts)
+
+⚠️ 이 값은 신규 확정이 아니라, 이미 CustomerDetailPanel.svelte(신분증)·
+ContractTemplatePanel.svelte(계약서 가져오기)·ProfileTabContent.svelte(신분증)가 각자
+독립적으로 "10MB"를 하드코딩해 사실상 지켜오던 값을 이 문서와 공용 유틸에 정식으로
+고정한 것이다 — 공용 검증 유틸(validateUploadFile)이나 이 문서 어디에도 명문화돼 있지
+않아 신규 화면(채팅 첨부 등)에서 용량 체크 자체가 누락되는 결함으로 이어졌었다
+(2026-09-08, 채팅 첨부 파일 검증 부재 발견·해소).
+
+예외: 서명·직인 자산(signature-assets)은 별도로 5MB를 사용 — 이미지 규격이 훨씬 작은
+자산 특성상 의도된 별개 값이며 이 10MB 표준의 예외로 유지한다(변경 금지).
+```
+
+```typescript
+// $lib/utils/fileValidation.ts — validateUploadFile()과 별도 함수(시그니처 변경 없음,
+// 기존 5개 호출부의 동작을 바꾸지 않기 위해 용량 체크는 분리된 함수로 제공)
+export const MAX_UPLOAD_FILE_SIZE_BYTES = 10 * 1024 * 1024 // 10MB
+
+export function validateUploadFileSize(
+  file: File,
+  maxBytes: number = MAX_UPLOAD_FILE_SIZE_BYTES,
+): { ok: boolean; error?: string } {
+  if (file.size > maxBytes) {
+    return { ok: false, error: '파일 크기는 10MB 이하여야 합니다.' }
+  }
+  return { ok: true }
+}
+```
+
+```
+✅ 신규 파일 업로드 화면은 validateUploadFile()(MIME) + validateUploadFileSize()(용량)를
+   반드시 함께 호출한다 — 둘 다 통과해야 업로드 진행.
+```
+
 ### 15-2. HTML `<input accept>` 표준값
 
 ```html
@@ -2209,6 +2246,7 @@ export const actions = {
 ```
 [ ] <input accept="..."> 에 5종 MIME 타입 전부 포함?
 [ ] 클라이언트 validateUploadFile() 호출?
+[ ] 클라이언트 validateUploadFileSize() 호출(10MB 상한, §15-1a)?
 [ ] 서버사이드 MIME 재검증 존재?
 [ ] 오류 메시지 role="alert" + --cs-error 색상?
 [ ] 허용 외 포맷 업로드 시 업로드 차단 확인?
