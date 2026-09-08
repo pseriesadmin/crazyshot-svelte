@@ -24,7 +24,10 @@ export interface ContractLineItem {
   수량: string
   /** 금액 포맷 문자열 (메인='-', 옵션=unit_price×qty+'원') */
   금액: string
-  /** 비고 — 현재 비어있음, 향후 확장용 */
+  /**
+   * 비고(2026-09-08 신규 반영) — 그 상품의 products.components(구성품)를
+   * contractLineItems.ts formatComponentsText()로 포맷한 값. 구성품이 없으면 '-'.
+   */
   비고?: string
 }
 
@@ -102,4 +105,24 @@ export interface ContractSubstitutionData {
   // 이용기간금액: Stephen 확정(2026-09-07) — "나중에 사용할 수도 있는 항목으로 남겨놓아도
   // 문제 없을 경우 '추후 재사용 예정' 주석 기록" — 현재 미구현, 코드 추가 없음(의도적 보류).
   // 기본대여요금과 개념이 겹칠 가능성이 있어 별도 계산 없이 보류 상태 유지.
+
+  // ── 신규: "구분" 섹션 수령/반납 방법+지점 통합 표기 (2026-09-08) ──────────────
+  /**
+   * "방식명 (지점명)" 형태 — 지점이 없는 방식(배송 등)은 방식명만. `지점옵션`(수령 지점
+   * 우선, 없으면 반납 지점 — 방향 구분 없는 단일값)과 달리 이 필드는 pickup_point_id만
+   * 사용해 수령 leg 전용으로 계산한다. `수령형태`(방식명 단독)는 그대로 유지 — 다른
+   * 참조처(ContractFieldPanel 칩 등) 하위호환을 위해 값을 덮어쓰지 않고 신규 필드로 추가.
+   */
+  수령방법지점?: string
+  /** 반납 leg 전용 — return_point_id만 사용. 계산 방식은 `수령방법지점`과 동일(대칭). */
+  반납방법지점?: string
+  // ── 신규: 실제 대여일수 (2026-09-08, RentalDetailPanel과 동일 산식 재사용) ─────
+  /**
+   * "1일"·"12시간"·"1일 12시간" 형태 — cartRentalFee.ts의 calcRentalMinutes()+
+   * calcRentalPeriodParts()로 계산(RentalDetailPanel.svelte·rentalDaysLabel.ts의
+   * attachRentalDaysLabel()과 완전히 동일한 산식, 새 계산식을 만들지 않고 재사용).
+   * 배송형(is_delivery_type) 방식이어도 "1day 강제청구" 산식으로 실제 값이 나온다는 점이
+   * `총사용시간`(배송 시 '-')과 다르다 — 의도된 차이(원시 경과시간 vs 청구 기준 일수).
+   */
+  대여일수?: string
 }
