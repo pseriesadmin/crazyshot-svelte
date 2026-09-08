@@ -331,7 +331,11 @@ accept="image/png,image/jpeg,image/webp,image/heif,image/heic,application/pdf"
 ```
 ✅ 클라이언트 validateUploadFile() + 서버사이드 MIME 재검증 양쪽 모두 필수
 오류 문구: "PNG, JPEG, WebP, HEIF, PDF 파일만 업로드할 수 있어요."
-세부 규칙 → @.claude/rules-ref/front-uiux.md §15
+
+🔴 용량 상한(2026-09-08 명문화): 개별 파일 1건당 최대 10MB — validateUploadFileSize()
+   (MAX_UPLOAD_FILE_SIZE_BYTES, $lib/utils/fileValidation.ts) 필수 병행 호출
+   → 예외: 서명·직인 자산(signature-assets)만 5MB(별도 값, 변경 금지)
+세부 규칙 → @.claude/rules-ref/front-uiux.md §15 (§15-1a 용량 상한)
 ```
 
 ---

@@ -1,5 +1,238 @@
 # .claude/harness/TASK.md
 
+## DONE — 🔴 CRITICAL: '수령 배송+반납 방문' 조합 반납시간 UI를 24:00 고정표시로 수정(2026-09-08, 이 세션)
+
+아젠다: Stephen이 launch-selected-element로 장바구니 "수령 방식/반납 방식" 아코디언을 지목
+→ "'수령 배송, 반납 방문' 설정 시 반납방문 시간 정보에 관계없이 1일 과금으로 대여요금
+연산방식 수정할 것" 요청. 이후 재요청으로 "반납 '방문' 시간 설정을 '24:00' 강제 고정
+표시"로 구체화됨.
+
+### 1차 조사 — 요금 연산 자체는 이미 정상, 코드 수정 보류하고 재확인 요청
+
+`rental-fee-policy.md` §1(수령→반납 조합별 청구조건)을 먼저 로드 후 대조한 결과, "수령=배송·
+반납=배송아님" 조합은 이미 "1day(N일) 강제청구, 시각 무시" 정책으로 **구현·검증 완료**
+표기돼 있었음. 클라이언트(`cartRentalFee.ts` calcRentalMinutes deliveryLocked 분기)·서버
+(`compute_reservation_line_amount` RPC, Migration #445)·Production DB(`rental_method_
+options.is_delivery_type=true` 확인) 3중 대조 + **Stephen이 직접 오늘 만든 실제 테스트
+예약(id 128, 9/15~9/16, 반납방문 16:00)의 실제 계산된 rental_fee=100,000원(=2일×50,000원
+24h요율)을 라이브 데이터로 확인** — 반납시각과 무관하게 이미 정확히 2일 청구되고 있음을
+실증. 코드 수정 없이 "이미 반영돼 있는데 어디서 다르게 보이셨는지" Stephen께 재확인 요청.
+
+### 2차 — 진짜 요청: 요금이 아니라 화면 표시/저장값 정합성 문제였음
+
+Stephen이 launch-selected-element로 반납 시간 버튼(11:00 선택된 상태)을 재지목 —
+"해당 대여설정 조합은 반납일 하루 전체를 대여일로 반영 조건에 따라 시간을 따로 설정 의미가
+없으며, 예약정보에 반영되기 위해서 '24:00' 표시 강제화함"으로 구체화. 실제 문제는 요금
+계산(이미 정상)이 아니라, **반납=방문 leg의 시간 선택 UI가 여전히 인터랙티브하게 열려있어
+사용자가 임의 시간(11:00 등)을 고를 수 있고, 그 값이 예약정보(it.returnTime)에 그대로
+저장돼 표시상 청구방식과 불일치해 보이는 문제**였음.
+
+### 수정 (코드 3곳, DB/RPC 무변경)
+
+```
+[NOW]
+- [x] src/routes/cart/+page.svelte bulkHandleMethod() — 수령방식이 배송(is_delivery_type)
+      이 되는 순간(요청 A 강제고정 대상이 아니어도) bulkReturnTime을 즉시 '24:00'으로 설정
+- [x] src/routes/cart/+page.svelte bulkHandleReturnMethod() — 수령이 배송으로 잠긴 상태에서
+      반납방식이 바뀌어도(방문↔퀵 등) 24:00 유지 — 기존 resetReturnTimeForMethodChange()
+      (토스트 안내) 경로를 타지 않고 재확정만 함
+- [x] src/routes/cart/+page.svelte RentalForm 스니펫 — 신규 {@const returnTimeForcedByDelivery}
+      조건 추가, 반납(return) leg 한정으로 기존 클릭 가능한 <button> 시간선택 대신 24:00
+      고정표시 <div>(non-interactive, 동일 시각 스타일 재사용) 렌더링
+- [x] .datetime-btn-fixed CSS 신규(cursor:default, hover 효과 제거)
+```
+
+⛔ 요금 계산 함수(calcRentalMinutes/calcRentalFee/compute_reservation_line_amount) 자체는
+전혀 건드리지 않음 — deliveryLocked=true 분기는 애초에 반납시각 값을 읽지 않으므로, 저장값을
+24:00으로 강제해도 청구액에는 영향 없음(순수 표시·데이터 정합성 수정).
+
+검증: `npx svelte-check` 신규 에러 0건(vite.config.ts 기존·무관 에러 1건만 유지).
+`npx vitest run src/__tests__/services/cartRentalFee.test.ts src/__tests__/services/cart`
+123/123 GREEN(회귀 없음 — 이번 수정이 건드린 함수 자체는 이 테스트 스코프 밖이라 직접
+커버는 안 되나, 기존 요금계산 로직 전부 무변경 확인 목적). git commit 미실행(Stephen 직접
+실행 대기).
+
+[NEXT]
+- [ ] 없음 — Stephen 요청사항(24:00 고정표시) 그대로 반영 완료, sp3-qa-agent 검수 대기
+
+**GATE E: 자체판정 ✅ (UI 상태 3곳 수정, RPC/DB 무변경, 기존 요금계산 함수 무변경 —
+sp3-qa-agent 독립검수 요청)**
+
+---
+
+## DONE — 🟡 BOUNDARY: CMS 다른 메뉴 화면에서도 새 채팅 수신 토스트 알림(2026-09-08, 이 세션)
+
+아젠다: Stephen "cms 다른 메뉴 화면 방문 중 채팅 대화카드 수신 시 알림 '토스트' 호출: 새로운
+채팅이 수신되었습니다."
+
+### 구현 내역
+
+```
+src/routes/cms/+layout.svelte 신규 $effect 1개 추가(다른 코드 변경 없음):
+  - subscribeToAllMessages(chatService.ts, 기존 함수 100% 재사용 — AdminChatPanel.svelte가
+    /cms/chat 화면에서 목록 미리보기 갱신용으로 이미 쓰던 것과 동일한 chat_messages 전체
+    INSERT realtime 구독을 레이아웃 레벨에서 별도 채널로 추가 구독)
+  - sender_type='user'(고객 발신)만 필터 — 관리자 본인 답장·시스템 자동응답(캔드매칭·
+    RPC 알림카드 등은 sender_type='admin')은 토스트 대상에서 제외
+  - page.url.pathname이 /cms/chat로 시작하면 스킵 — 그 화면 안에서는 AdminChatPanel 자체의
+    flashSession 점멸로 이미 시각적으로 확인 가능해 중복 알림 방지("다른 메뉴 화면"이라는
+    요청 문구와도 일치)
+  - data.cmsRole 없으면(로그인 전) 구독 자체를 생성하지 않음
+  - csToast.info('새로운 채팅이 수신되었습니다.') — 기존 이 파일의 다른 토스트들과 동일
+    패턴(예: 소화면 접속 안내) 재사용
+```
+
+### 검증
+
+```
+npx tsc --noEmit -p .    → 신규 에러 0건
+npx svelte-check         → 신규 에러·경고 0건
+전용 vitest 테스트는 추가하지 않음 — Realtime 구독+DOM 토스트 트리거를 다루는 순수
+클라이언트 레이아웃 배선이라 이 세션의 기존 서버엔드포인트 mock 기반 테스트 컨벤션으로는
+의미 있게 커버되지 않음(컴포넌트 마운트 테스트 인프라가 이 저장소에 없음). 실제 동작은
+두 브라우저 세션(고객 채팅 발신 + CMS 관리자가 /cms/chat 아닌 다른 메뉴 화면)으로 직접
+확인 필요.
+```
+
+**GATE E: 신규 RPC·마이그레이션·서버 로직 변경 없음(순수 클라이언트 realtime 구독 추가) —
+git commit은 Stephen 직접 실행 대기.**
+
+---
+
+## QA — @sp3-qa-agent 검수 결과(2026-09-08, 이 세션 최근 2건 일괄)
+
+아래 "파손 신고 접수(damage_claimed)" + "채팅 첨부파일 PDF 검증·업로드 용량 상한" 두 태스크의
+코드 변경분을 sp3-qa-agent에 검수 요청(다른 세션 소관 계약서 템플릿·에디터 관련 파일은 스코프
+경계 명시로 검수 제외). **GATE E 통과** — 블로킹 이슈 0건.
+
+```
+검수 1(규칙 정합성) 통과 · 검수 2(기술부채: console.log/any/svelte-check) 통과 ·
+검수 3(N/A — DB 마이그레이션 없음)
+- chatMessageDamageCard.test.ts 모킹이 실제 로직과 라인 단위로 정확히 대응(거짓 통과 아님)
+- 파손신고 카드 발송 로직 fail-soft 확인(활성예약 조회·RPC 실패가 캔드응답 반환을 막지 않음)
+- update_reservation_status RPC가 damage_claimed를 비종결 상태 어디서든 허용함을 SQL 재확인
+- validateUploadFileSize 분리 설계가 기존 5개 호출부에 영향 없음을 전수 확인
+- vitest chatMessageDamageCard+fileValidation 9/9 GREEN 재확인
+
+비차단 참고 2건(기록만, 수정 불필요):
+  ① "예약 취소"/"파손 신고 접수 처리" 버튼이 confirmed~return_requested 구간에서 동시 노출되며
+     동일 .btn-cancel 스타일 공유 — 오클릭 방지 위해 향후 스타일 차별화 검토 여지(기능 충돌 아님)
+  ② TASK.md에 이미 명시한 "카드 2회 발송 가능성" 트레이드오프는 코드 추적 결과 정확한 분석으로
+     재확인(신규 결함 아님)
+```
+
+git commit은 Stephen 직접 실행 가능.
+
+---
+
+## DONE — 🔴 CRITICAL: 파손 신고 접수(damage_claimed) 고객 채팅 감지 + CMS 확정 액션 신설(2026-09-08, 이 세션)
+
+아젠다: Stephen "damage_claimed 상태로 전환하는 CMS 액션도 신설해줘." — 최초 요청은 CMS 관리자용
+상태전환 버튼이었으나, 확인질문 답변 과정에서 실제 요구가 재정의됨: ① 고객이 채팅에서 "상품
+파손"을 이야기하면 자동으로 "파손신고접수" 대화카드가 뜨고, ② 그 아래로 고객이 파손 내용을
+일반 채팅처럼 이어서 입력(별도 메모창 없음, UX 위배 판단), ③ 예약의 실제 status는 관리자가
+그 대화를 확인한 뒤 CMS에서 직접 damage_claimed로 전환(키워드 매칭만으로 자동 종료 금지) —
+셋 다 GATE B 확인질문(AskUserQuestion 2회)으로 확정 후 구현.
+
+### 구현 내역
+
+```
+① 고객 채팅 감지(신규): src/routes/api/chat/message/+server.ts
+   하이브리드 자동답변 1단계에서 캔드응답 category='damage'로 매칭되면(cannedResponseCategories.ts
+   에 이미 등재된 실제 CMS 설정 카테고리), 기존 자동응답 텍스트 발송과 별개로
+   send_rental_chat_notification(reservation_id, 'damage_claimed') RPC를 호출해 이미 존재하던
+   "파손신고접수" 카드(콘텐츠·버튼라벨 전부 RPC 정본 재사용, 신규 문구 없음)를 발송한다.
+   대상 예약은 hold를 제외한 활성 대여(confirmed·shipped·in_use·return_requested) 중
+   가장 최근 건 — Stephen 확인질문 답변("confirmed 이후부터")대로 hold 단계는 제외.
+   활성 예약이 없으면 조용히 스킵(fail-soft, try/catch로 격리 — 카드 발송 실패가 이미
+   저장된 캔드 자동응답 반환을 막지 않음).
+
+② CMS 확정 액션(신규): src/lib/components/cms/RentalDetailPanel.svelte
+   "파손 신고 접수 처리" 버튼 신규 — confirmed·shipped·in_use·return_requested 상태에서만
+   노출(isRentalView 무관, /cms/reservation·/cms/rentals 양쪽 모두), 기존
+   /cms/reservation?/updateStatus 서버 액션(신규 코드 없음 — 완전히 재사용)으로
+   status='damage_claimed' 전송. 이 액션은 이미 update_reservation_status RPC가
+   damage_claimed를 명시적으로 지원하고(Migration #417 확인), AUTO_NOTIFY 매핑에도
+   damage_claimed가 이미 등록돼 있어(2026-08-18) 별도 서버 코드·마이그레이션이 전혀
+   필요 없었다 — 버튼 UI 추가만으로 완결.
+```
+
+### 알려진 트레이드오프 (의도적으로 손대지 않음)
+
+```
+①의 고객 트리거와 ②의 관리자 확정 둘 다 동일한 damage_claimed notify_type을 재사용하므로,
+같은 예약에 대해 ①이 먼저(파손 언급 즉시) 카드를 보내고 ②가 나중에(관리자 확정 시) 같은
+문구의 카드를 다시 한번 보내면 고객이 유사한 카드를 2회 받을 수 있다. AUTO_NOTIFY 매핑은
+damage_claimed로 전환되는 다른 경로(향후 신설 가능)에도 공유되는 범용 테이블이라 이번
+스코프에서 임의로 건드리지 않았다 — 중복 억제 로직 추가는 별도 요청 시 진행.
+```
+
+### 검증
+
+```
+npx tsc --noEmit -p .                → 변경 파일 신규 에러 0건
+npx svelte-check                     → 변경 파일 신규 에러·경고 0건
+npx vitest run
+  src/__tests__/server/chatMessageDamageCard.test.ts (신규, 3케이스)
+    → RED(코드 원복 후 1번 케이스 실패 확인) → GREEN(복원 후 3/3) 확인
+  + executeActionAccessGuard·adminReplyAccessGuard·fileValidation (기존, 무회귀) → 24/24 GREEN
+```
+
+**GATE E: git 커밋은 Stephen 직접 실행 대기. 실서비스 라이브 확인(실제 고객 채팅에서 "파손"
+캔드응답 매칭 → 카드 수신 → CMS "파손 신고 접수 처리" 클릭)은 코드 레벨 검증과 별개로 필요.**
+
+---
+
+## DONE — 🟢 ROUTINE: 채팅 알림 액션카드 전역 인벤토리 + 실동작 점검 체크리스트 작성(2026-09-08, 이 세션)
+
+아젠다: Stephen "채팅 세션 영역에 발송 수신되는 중요 알림 대화카드 전역을 테스트 목록화해 실질
+동작 검증 체크리스팅 작업을 진행할 것." — 코드 변경 없는 순수 조사·문서화 태스크.
+
+### 조사 범위와 방법
+
+```
+ActionCardType 유니온(src/lib/types/chat.ts, 24종) + send_rental_chat_notification RPC의
+notify_type CASE 분기(13종, Migration 454 최신본) + chatActionEnrich.ts의 AI 자유응답
+enrichActionCard() 지원 6종을 전부 대조해 "타입 문자열"이 아니라 "실제 발신 경로" 단위로
+31개 항목을 도출. 각 항목마다 트리거·수신자·현재상태를 코드 추적으로 판정.
+```
+
+### 주요 발견
+
+```
+① AI 자유응답 전용 카드 6종(PRODUCT_CARD·PAYMENT_REQUEST_CARD·RESERVATION_STATUS_CARD/
+   RETURN_REGISTRATION_CARD/COUPON_GIFT_CARD의 AI 자유응답 변형·SHIPMENT_TRACKING_CARD)은
+   이번 세션 앞부분에서 결정된 ANTHROPIC_ENABLED=false로 인해 전부 현재 발송 불가 상태
+   (의도된 상태, 버그 아님) — 실데이터 조회 로직(enrichActionCard)은 이미 구현돼 있어
+   재연결 시 즉시 동작 가능.
+② coupon_issued·payment_request(소문자) 2개 타입은 ActionCardType 선언 + ActionCard.svelte
+   라벨만 존재하고 실제로 이 타입 메시지를 만드는 코드가 프로젝트 전체에 전혀 없음(완전 미사용).
+③ INQUIRY_NEW_CARD는 Migration 425(2026-09-02)로 발신 코드(submit_cs_post의 chat_messages
+   INSERT)가 완전히 제거되어 레거시 타입으로 확정 — pending-inquiries 리마인더 UI로 대체됨.
+④ damage_claimed·hold_expired 2건은 notify_type/push 매핑은 준비돼 있으나 각각 "이 상태로
+   전환하는 CMS 액션 자체가 없음"(damage_claimed) / "발송 함수가 순수 SQL(pg_cron) 내부
+   전용이라 앱코드 경유 push 호출 경로가 구조적으로 없음"(hold_expired, 채팅카드는 정상)의
+   제약이 있어 "부분 제약" 등급으로 별도 표기.
+⑤ refund_failed는 Migration 404(2026-09-01)의 chat_messages.admin_only 컬럼 + RLS로 고객
+   비노출이 DB 레벨에서 보장됨 — service-operations.md §17(2026-09-02) 작성 시점 이후 도입된
+   메커니즘이라 그 문서에는 아직 반영돼 있지 않음(별도 갱신 요청 시 반영 가능, 이번 스코프
+   밖이라 문서 수정은 하지 않음).
+⑥ identity_request는 ActionCard.svelte ctaDefaults()에 전용 case가 없어 버튼 라벨이 범용
+   폴백("확인하기")으로 표시되는 사소한 라벨 갭 발견(기능 자체는 정상).
+```
+
+### 산출물
+
+```
+Artifact(HTML 체크리스트, localStorage로 체크 상태 보존, 상태별 필터·검색·진행률 포함):
+https://claude.ai/code/artifact/c8e80f51-c349-4f1e-98fc-d3c635007dde
+→ 31개 항목을 7개 카테고리(A~G)로 분류, 각 항목에 트리거·수신자·현재상태·검증방법 수록.
+```
+
+**GATE E: 코드 변경 없음(순수 조사·문서화) — sp3-qa-agent 검수 대상 아님**
+
+---
+
 ## DONE — 🟡 BOUNDARY: 채팅 첨부파일 PDF 검증 누락 + 업로드 용량 상한 신규 명문화(2026-09-08, 이 세션)
 
 아젠다: Stephen "채팅 세션 내 파일 공유 시 pdf가 제외되어 있는지 확인하고 첨부가능하게 수정.
@@ -618,6 +851,119 @@ git commit은 Stephen 직접 실행 대기.
 
 ---
 
+## DONE — 🟡 BOUNDARY: 계약서 발행 UX 마감 정리 + 문서 진위확인 QR 신규 + 계약서발행일 "-" 표기 결함 수정 (2026-09-08, 이 세션, ✅ GATE E 통과)
+
+### 배경
+
+바로 위 블록(①~⑧, GATE E 통과) 이후 Stephen이 실사용 화면을 계속 정밀 검증하며 발견한
+UX 다듬기 4건 + 신규 기능 1건(문서 진위확인 QR) + 그 QR 기능 검증 중 우연히 발견된 별도
+결함 1건(계약서발행일 "-" 표기)을 이어서 처리했다.
+
+### 구현 — ① "발행 목록" 표시 로딩 깜빡임 제거
+
+- 증상: 이미 발행된 계약인데도 패널을 막 열거나 새로고침한 직후 짧은 순간 "계약서 양식
+  선택 편집"(발행 버튼) 섹션이 잘못 노출됐다가 곧 "발행 목록"으로 바뀜.
+- 원인: `RentalContractViewer.svelte`의 `hasIssuedContent`는 `/api/cms/contracts/{id}/
+  content`를 비동기로 조회해 채워지는데 초기값이 `false`라, 조회가 끝나기 전까지는
+  "미발행" 취급되어 바로 위 블록(⑧)에서 추가한 "발행됨이면 섹션 숨김" 조건이 그 사이에는
+  반대로 작동함.
+- 수정: `contentCheckLoading` 상태 신규 — 조회 진행 중에는 "계약서 양식 선택 편집" 섹션을
+  함께 숨김(발행 목록 섹션은 원래부터 `hasIssuedContent=true` 확정 후에만 노출되는 구조라
+  별도 처리 불필요).
+
+### 구현 — ② "서명 링크 확인" 버튼을 "발행 목록" 카드 액션 행 안으로 이동
+
+- 기존엔 카드 바깥 별도 영역(`.contract-actions`)에 따로 떨어져 있었음 — "재발송" 버튼과
+  동일 노출 조건(발송됨+미서명)이라 카드 액션 행 안으로 이동해 레이아웃 통일감 확보
+  (스타일도 `.btn-tpl-resend`와 동일하게 통일).
+- ⚠️ sp3-qa-agent 검수 지적·수정(GATE E 1차 조건부 통과): "이동"이라고 서술했으나 실제로는
+  `.contract-actions`의 원본 링크(336~354행 부근)를 지우지 않아 "발송됨+미서명" 상태에서
+  동일 서명 링크가 카드 안/밖 두 곳에 중복 렌더링되고 있었음("이동"이 아니라 "복제"). 원본
+  블록을 완전히 제거해 카드 쪽 1곳만 남도록 수정 완료.
+
+### 구현 — ③ "발행 목록" 카드 제목을 상품명(+품번)으로 명시화
+
+- 기존 "발행된 계약서"라는 일반 문구 → 그 예약의 실제 상품명+품번(예: "Sony FX6-12
+  CSLITall002")으로 교체. 여러 예약을 오가며 확인할 때 어느 계약서인지 한눈에 구분되도록 함.
+
+### 구현 — ④ 취소·만료 예약도 계약서 "읽기 모드" 열람 허용
+
+- 기존엔 `issueBlocked`(취소·만료·파손신고) 예약이면 "미리보기 & 발송" 버튼 자체가
+  비활성화돼 이미 발행된 계약 내용조차 열람할 수 없었음.
+- 수정: 버튼 비활성화 제거 + `ContractTemplatePreviewModal`에 `viewOnly={isRentalView ||
+  issueBlocked}` 전달 — 편집·특약수정·발송 등 조작 기능은 계속 차단하되 열람만 허용. 버튼
+  라벨도 이 경우 "보기"로 표시. "재발송" 액션 자체는 그대로 비활성 유지(발송은 여전히 불가).
+
+### 구현 — ⑤ 문서 진위확인 QR 신규 (Stephen 요청 + AskUserQuestion으로 설계 확정)
+
+- 요청: "실제 계약정보가 담긴 QR코드인지 확인 + 계약서 발행 시 최상단 발행일시 우측에 QR
+  배치 — 인쇄물 스캔으로 원본 판별용."
+- 사전 확인: CMS 패널 헤더의 기존 "예약 QR"은 예약코드 문자열만 담을 뿐 실제 계약정보와
+  무관함을 확인·보고.
+- 설계 확정(AskUserQuestion): QR에 무엇을 담을지 — "①서명/확인 페이지 링크" vs "②순수
+  텍스트(products.md 기존 QR 철학)" 중 Stephen이 ①(링크형)로 확정. 스캔 즉시 원본 여부를
+  판별할 수 있어야 한다는 목적에 맞춤(products.md §2-4의 "QR=텍스트, 링크 아님" 정책과
+  의도적으로 다른 예외 케이스로 문서화).
+- `contract-substitution.ts`: `applyDocumentQrMarker()` 신규 — 다른 base64 이미지 마커와
+  동일한 엄격 검증(data URI 전체 앵커링, 콤마 이후 base64 알파벳만 허용) 재사용.
+- `defaultRentalContractHtml.ts`(15차): "임대차 계약서" 제목 아래 발행일시 문구를
+  `.issue-date-row`(flex)로 감싸고 우측에 `<!--DOCUMENT_QR-->` 마커 추가.
+- `send-chat/+server.ts`: "채팅으로 발송"(최초 발송·재발송 공통) 시점에 서명 토큰이
+  확정된 직후 서버가 `QRCode.toDataURL()`로 서명/확인 페이지 링크(`/contract/{token}`)를
+  인코딩한 QR을 직접 생성해 `html_document`에 되구움(fail-soft).
+- 테스트 5개 신규(XSS 속성 인젝션 시도 포함) — 41/41 GREEN(`contractHtmlSubstitution.test.ts`).
+- ⚠️ 콘텐츠 백필 수행(고객서명 오버레이 때와 동일한 이유로 필요 — 소스 상수 수정은 신규
+  템플릿 생성 시드에만 영향, 이미 저장된 템플릿에는 자동 반영 안 됨): Stage 1건("또또또
+  테스트-수정")·Production 2건("20260908임대차계약서"·"202609임대차계약서양식") 마커+CSS
+  백필. Production 실제 진행중이던 예약(CS2609051/reservation 134, 서명 전) 1건도 재발송
+  시 QR이 반영되도록 함께 백필.
+
+### 구현 — ⑥ 계약서발행일 "-" 표기 원인 확인 + 수정
+
+- 발견 경위: ⑤ QR 기능을 CS2609051(Production)로 검증하던 중 "계약서 발행일시: -"로
+  찍혀있는 걸 우연히 발견, Stephen이 원인 확인 요청.
+- 원인: `contract-data/+server.ts`가 `{{계약서발행일}}`을 "이 예약에 **이미 존재하는**
+  계약서의 created_at"을 DB에서 조회해 채우는데, 이 API는 발행 모달을 **여는 시점**에
+  1회 호출된다 — 최초 발행(신규 계약 생성)의 경우 이 시점엔 아직 `contracts` 행 자체가
+  없어 조회 결과가 없고 "-"로 고정됨. 재발송처럼 계약이 이미 존재하는 드문 경로에서만
+  정상 날짜가 보였음(사실상 가장 흔한 "최초 발행" 경로가 늘 깨져 있었을 가능성).
+- 수정: DB 조회를 완전히 제거하고 API 호출 시점의 현재 시각을 바로 사용하도록 변경
+  ("발행일"의 의미상 원하는 값이 어차피 "지금"이므로). 더 이상 안 쓰는 `contracts` 조회
+  쿼리(Promise.all 안)도 함께 제거.
+
+### 검증
+
+- `npm run check` 매 단계 재실행 — 신규 에러 0건(기존 무관 `vite.config.ts` 에러 1건만
+  그대로).
+- vitest: `contractHtmlSubstitution.test.ts` 41/41, `contractAuthGates.test.ts`(불필요
+  쿼리 제거 무회귀 확인) 36/36 전부 GREEN.
+- ⑤·⑥ 두 수정을 **로컬(localhost:5173, Stage DB)에서 실제 UI로 재발행까지 직접 실행해
+  검증**: CS26095297(Stage 12811)을 hold+계약없음 상태로 리셋 → CMS에서 실제로 "발행" →
+  "미리보기" 화면에서 "(계약서 발행일시: 2026.09.08)"(정상 날짜)와 QR 이미지가 나란히
+  표시됨을 스크린샷으로 확인 → "채팅으로 발송" 클릭 → DB 재조회로 `<!--DOCUMENT_QR-->`
+  마커가 실제 `<img src="data:image/png;base64...">`로 정확히 치환됐고, 그 QR이 인코딩한
+  토큰이 동시에 발송된 채팅 카드의 서명 링크(`action_url`)와 정확히 일치함을 확인. 검증용
+  임시 관리자 계정·로컬 프리뷰 서버는 종료·삭제로 정리.
+
+### GATE E: ✅ 통과 (sp3-qa-agent, 2026-09-08)
+
+규칙 정합성(products.md §2-4 QR 예외 근거 문서화 충분, security-auth.md 게이트 무변경,
+RPC 에러처리 무관)·기술부채(console.log/any 신규 0건)·①~⑥ 각 항목 전부 확인.
+
+🔴 발견 1건(수정 완료): ②"서명 링크 확인 이동"이 실제로는 원본을 지우지 않아 "발송됨+
+미서명" 상태에서 카드 안/밖 두 곳에 동일 링크가 중복 렌더링되고 있었음 — `.contract-
+actions`의 원본 블록 제거로 해소, `npm run check` 재확인(신규 에러 0건).
+
+나머지는 전부 문제 없음 확인: ①로딩가드 새 지연·깜빡임 없음(finally 블록이 항상
+`contentCheckLoading=false` 복원) ③productName/productCode 기존 안정 prop 재사용
+④viewOnly 강제 시 편집·특약클릭편집·발송 전부 완전 차단(우회 경로 없음) ⑤QR 마커 XSS
+방어·html 모드 전용 no-op 가드·재발송 멱등성 전부 확인 ⑥제거된 contractRes 쿼리 다른
+재사용처 없음 재확인. 이번 블록에는 마이그레이션 없음(#463/#464는 인접한 다른 세션 블록 소관).
+
+git commit은 Stephen 직접 실행 대기.
+
+---
+
 ## DONE — 🟡 BOUNDARY: 계약서 양식 삭제 — 소프트 삭제(deleted_at) → 실제 DB 행 삭제(hard delete)로 전환 (2026-09-08, 이 세션, ✅ GATE E 통과)
 
 ### 배경
@@ -729,7 +1075,7 @@ delete)는 이미 존재했고 편집 패널(`ContractTemplatePanel.svelte`)에�
 
 ---
 
-## NOW — 🟡 BOUNDARY: 계약서 정산내역 할인·포인트 필드 "△"(차감) 표기가 값이 없을 때도 붙어 나오는 문제 수정 (2026-09-08, 이 세션, GATE C 진행 중)
+## DONE — 🟡 BOUNDARY: 계약서 정산내역 할인·포인트 필드 "△"(차감) 표기가 값이 없을 때도 붙어 나오는 문제 수정 (2026-09-08, GATE C까지 이전 세션 / 소급 반영은 새 세션[이번 세션]에서 완료)
 
 ### 발견 경위
 
@@ -781,6 +1127,341 @@ Production 양쪽의 실제 사용 중인 html형 템플릿들, "202609임대차
 
 ### GATE C: 소급 미반영 정책(기존 템플릿 DB 콘텐츠 패치 시점)만 Stephen 확인 대기 —
 코드 자체는 GATE E 통과, 이 항목은 코드 결함이 아니라 배포 시점 조율 문제.
+
+### 후속 — GATE C 해소 + 소급 반영 완료 (이번 세션 수행)
+
+새 세션에서 HANDOFF.md 인계 후 CMS 대여 전자계약 실서버 로직 정합 검증(Stephen 지시)을
+진행하며 이 GATE C 항목을 재확인 — Production `202609임대차계약서양식` 템플릿의 저장된
+`html_document`를 직접 SQL 조회해 정적 "△ " 접두사가 여전히 남아있음을 재확인하고
+Stephen에게 재보고, "두 템플릿 정밀 문자열 치환으로 바로 수정해줘" 승인을 받아 실행:
+
+- Production 활성 html형 템플릿 2건("202609임대차계약서양식"·"20260908임대차계약서") 전부
+  대상으로 확인한 결과, 후자는 이미 최신 코드 상수 그대로 재저장돼 있어(코드 주석까지
+  동일) 조치 불필요 — 전자 1건만 "△ {{할인금액}}"·"△ {{차감포인트}}"·"△ {{할인차감}}" 3곳이
+  유일 매치(count=1)임을 확인 후 SQL `replace()`로 정적 접두사 제거, `{{...}}` 플레이스홀더
+  자체는 보존 확인.
+- Stage(ezyvffjvuwmtuhpxdjrw)는 활성 html형 템플릿이 테스트용 1건뿐이라 이번 소급 반영
+  범위에서 제외(요청 스코프 밖, Stephen에게 별도 안내만 함).
+
+GATE C 조건(코드 배포 이전 소급 반영 시 발생하는 임시 역회귀 우려)은 이번 세션 시작 시점에
+`contract-data/+server.ts`에 `formatDeltaAmount()`가, `defaultRentalContractHtml.ts`에
+정적 "△ " 제거가 이미 코드에 반영돼 있음을 직접 Read로 재확인한 뒤 진행 — 임시 역회귀
+없이 안전하게 적용 완료.
+
+---
+
+## NOW — 🟡 BOUNDARY: HTML 계약서 표기·정렬 정합성 5건 — 서명 순서·중앙정렬 2건·라벨 개명 (2026-09-08, 새 세션[이번 세션], GATE E 검수 대기)
+
+### 배경
+
+HANDOFF.md 인계 검증(위 △ 표기 블록) 도중·이후 Stephen이 CMS 계약서 편집 화면에서
+`<launch-selected-element>`로 실제 렌더링된 셀들을 연속으로 선택해 5개의 표기·정렬 결함을
+잇달아 지적. 전부 `defaultRentalContractHtml.ts`(코드 상수) + Production 활성 html형
+템플릿 2건("202609임대차계약서양식"·"20260908임대차계약서")의 저장된 `html_document`
+양쪽에 동일하게 반영 필요(코드만 고치면 이미 저장된 템플릿엔 소급 안 됨 — 위 블록들과
+동일 클래스 문제, 매번 정밀 문자열 치환 전 유일 매치(count=1) 확인 후 적용).
+
+### 구현
+
+```
+① "예약자" 서명 셀 순서: "(인){{고객이름}}" → "{{고객이름}} (인)"
+   — 발행자 셀의 기존 정상 패턴("한광익 (인)" — 이름 먼저, 공백, 인)과 통일.
+   customer-sig-overlay 마커(<!--CUSTOMER_SIGNATURE-->) 위치는 그대로 유지(치환 로직은
+   .split(MARKER).join()이라 앞쪽 텍스트 순서와 무관 — 회귀 없음 확인).
+
+② `.sig-host-cell`(발행자·예약자 서명 셀)에 `text-align: center` 추가 — 도장 이미지는
+   이미 position:absolute로 셀 중앙에 겹쳐 뜨는데 그 밑 텍스트는 기본값(좌측)이라 서로
+   어긋나 보이던 문제 해소.
+
+③ 문서 전체 기본 셀 정렬 통일: `.contract-wrap td, .contract-wrap th`에
+   `text-align: center` 추가 — Stephen이 임대인/임차인 정보·정산내역·구분 등 라벨 셀·
+   값 셀 수십 곳을 한 번에 선택해 재지시. 금액류 셀({{기본대여요금}} 등)은 이미 개별
+   `style="text-align:right"` 인라인이 있어 인라인 스타일이 클래스 기본값보다 항상 우선
+   적용되므로 영향 없음(DB에서 직접 재확인).
+
+④ 정산내역 라벨 "특이사항" → "특약사항" 개명 — 주변 UI(특약 클릭편집 모달 "특약 입력",
+   ContractFieldPanel "특약" 탭)와 용어 통일. 마커(<!--SPECIAL_NOTES-->)·클래스
+   (cs-special-notes-cell)는 무변경이라 특약 클릭편집·저장 로직 영향 없음.
+```
+
+### 검증
+
+- `contractHtmlSubstitution.test.ts` 등 관련 vitest 스위트 89/89 GREEN(각 항목마다 재실행).
+- Production 2개 템플릿 DB 재조회로 정적 문구 제거·플레이스홀더 보존·금액 셀 우측정렬
+  유지를 매 항목마다 직접 확인.
+- 코드·DB 양쪽 동시 반영이라 별도 소급 GATE C 없이 이번 세션 안에서 완결.
+
+### GATE E: ⚠️ 조건부 통과 (sp3-qa-agent 독립검수, 2026-09-08)
+
+**검증 완료(문제 없음)**
+- ①~④ 4개 항목 모두 코드로 직접 대조 확인: 예약자 서명 셀 순서 반전(`{{고객이름}} (인)`),
+  `.sig-host-cell`/`.contract-wrap td,th` 중앙정렬 CSS, "특약사항" 라벨 개명 — 설명과
+  실제 `defaultRentalContractHtml.ts` 내용이 정확히 일치. 금액 셀 인라인
+  `style="text-align:right"` 우선순위로 회귀 없음도 코드 확인.
+- `contractHtmlSubstitution.test.ts` 41개 전부 직접 재실행 GREEN(vitest run 결과 재확인,
+  TASK.md에 적힌 "89/89"는 이 파일 단독 실행 수치와 다르나 별도 조합 실행분으로 추정 — 이
+  파일 자체는 전건 GREEN 확인 완료라 문제 아님).
+- `npx svelte-check --tsconfig ./tsconfig.json` 재실행 — 신규 에러 0건(유일한 ERROR는 기존
+  무관 `vite.config.ts` 1건).
+- git diff 대조 — 이 블록이 설명한 4개 항목 외 이 파일에 대한 다른 변경 없음.
+
+**조건부 사유(헤더 미전환 이유) — 같은 파일에 미문서화된 5번째 변경(15차) 발견**
+
+`defaultRentalContractHtml.ts`·`contract-substitution.ts`에 **"문서 진위확인 QR"**
+기능(발행일시 우측에 `/contract/[token]` 서명 링크로 연결되는 QR 이미지 삽입,
+`<!--DOCUMENT_QR-->` 마커·`applyDocumentQrMarker()`·`send-chat/+server.ts`의
+`QRCode.toDataURL()` 되굽기 로직)이 함께 구현돼 있으나, 이 블록(및 다른 어떤 NOW/DONE
+블록에도) 전혀 언급이 없고 GSD_LOG.md·HANDOFF.md 어디에도 기록이 없다 — TASK.md 전체
+검색(`grep -in "진위확인\|DOCUMENT_QR\|applyDocumentQrMarker"`) 결과 0건.
+
+이 블록 제목이 "5건"이라고 명시했는데 실제 "구현" 절에는 4개 항목(①~④)만 나열돼 있는 것도
+이 누락과 무관하지 않아 보인다(문서화 대상에서 이 QR 기능이 빠진 정황). 코드 자체는
+`SAFE_SIGNATURE_DATA_URL` 재사용 검증 + `escapeHtml` + fail-soft로 안전하게 구현돼 있고
+①~④ 항목과 상호 간섭도 없음을 확인했으나, **harness 워크플로우(모든 구현은 TASK.md
+NOW/DONE 블록 + GATE B/C/E를 거쳐야 함)를 완전히 우회해 만들어진 미승인 기능**이라는
+점 자체가 문제다 — 계약서(법적 문서)에 새로운 링크형 QR을 심는 것은 그 자체로 최소
+BOUNDARY~CRITICAL 사이 등급의 의사결정인데 Stephen의 명시적 GATE B 승인 기록이 없다
+(코드 주석은 "AskUserQuestion으로 Stephen 확정"이라 적혀 있으나 TASK.md에 그 결정 자체가
+기록돼 있지 않음).
+
+**필요 조치(둘 중 하나 완료 시 통과로 전환 가능)**
+1. Stephen이 이 QR 기능을 실제로 승인했다면, 그 사실과 결정 경위를 별도 NOW/DONE 블록으로
+   지금이라도 기록(소급 문서화)하고 자체 GATE E 검수를 받을 것.
+2. 이번 커밋 범위에서 QR 기능을 제외하고 싶다면, `defaultRentalContractHtml.ts`·
+   `contract-substitution.ts`·`send-chat/+server.ts`에서 해당 변경분만 별도로 분리(git
+   add -p 등)해 이번 5건 블록과 분리 커밋할 것.
+
+이 블록이 설명한 ①~④ 4개 항목 자체의 코드 품질에는 결함 없음 — 조건부 사유는 전적으로
+"같은 파일에 동봉된 미문서화 변경" 때문이며, 이 QR 기능이 정식 문서화되는 즉시 본 블록은
+무조건 통과로 전환 가능.
+
+---
+
+## DONE — 🔴 CRITICAL: 발행자(대표이사) 직인 위치 이동(드래그) 기능 신설 — Migration #463 (2026-09-08, 새 세션[이번 세션], ✅ GATE E 통과)
+
+### 배경
+
+Stephen: "직인(서명) 기능을 상위 레이어로 묶어 이동가능하게 구현 보완할 것. 1. 현재
+직인(서명)을 원하는 레이아웃 위치에 이동이 불가능. 2. 기존 고유 기능 절대 유지!!!!"
+— Migration #451(너비조절 신설) 당시 주석은 "위치 이동(offsetX/offsetY)은 HTML형에 적용
+대상이 없음"이라 명시했던 결정을 Stephen이 이번에 명시적으로 반전.
+
+DB 스키마 변경(다중 파일)이 필요한 CRITICAL 사안이라 AskUserQuestion으로 이동 범위(문서
+전체 자유 이동 vs 현재 셀 내 미세 이동)를 먼저 확인 — "문서 전체 어디든 자유 이동(권장)"
+선택.
+
+### 설계 — 기존 DOM 구조를 유지한 채 transform 오프셋만 추가
+
+`.issuer-sig-overlay`가 이미 7차 수정(2026-09-07)에서 `position:absolute`(부모
+`.sig-host-cell` 기준, 조상 어디에도 overflow:hidden 없음)로 전환돼 있던 점을 활용 —
+마커를 별도 레이어로 옮기는 구조 변경 없이, 기본 중앙 위치(`translate(-50%,-50%)`) 대비
+px 델타(offsetX/offsetY)를 추가하는 것만으로 문서 전체 어디로든 자유롭게 이동한 것처럼
+보이게 구현(오프셋 0/미지정 = 기존과 완전히 동일 — 하위호환).
+
+### 구현
+
+```
+DB(Stage→Production 순서 적용): contract_templates·contracts 양쪽에
+  html_issuer_signature_offset_x/y INTEGER(기본 NULL=0=중앙) 신규.
+
+contract-substitution.ts: applyIssuerSignatureMarker(html, url, width, offsetX, offsetY)로
+  확장 — ±2000px 클램프, transform:translate(calc(-50% + Npx), calc(-50% + Mpx)) 생성.
+
+ContractTemplatePanel.svelte: pointerdown/move/up 드래그 인터랙션 신규 —
+  드래그 중에는 DOM에 직접 transform만 적용해 60fps 유지(매 프레임 $state 갱신 시
+  {@html} 재생성으로 인한 끊김 방지), 손을 뗀 시점에만 최종값을 $state에 커밋해 1회만
+  재생성. "움직임 없는 클릭"과 "드래그"를 이동거리(4px 임계값)로 구분해 드래그 종료 시
+  기존 크기조절 툴바 토글이 오작동하지 않게 처리. 툴바에 "위치 초기화"(가운데로 되돌리기)
+  버튼 신규 추가.
+
+ContractTemplatePreviewModal.svelte / contract-apply-template.ts / +page.server.ts /
+/api/cms/contract-templates/+server.ts / /api/cms/contracts/[id]/content/+server.ts /
+contract-template.ts(타입): 기존 width 필드와 동일한 패턴으로 offsetX/Y 저장·조회·검증
+(발행 시 baking 체인 포함) 배선.
+```
+
+**기존 고유 기능 유지 확인(요청 조건 2)**: 크기조절(소/중/대/직접입력)·삭제(✕)·클릭 시
+툴바 열고닫기 — 전부 변경 없이 그대로 동작. 오프셋 0(드래그한 적 없는 기존 템플릿·이미
+발행/서명 완료된 계약서)은 기존과 시각적으로 완전히 동일.
+
+### 검증
+
+- `contractHtmlSubstitution.test.ts`에 오프셋 클램프·하위호환 신규 테스트 3건 추가.
+- `svelte-check`: 중첩 클로저(pointerdown 핸들러 등) 안에서 TS가 null 내로잉을 유지하지
+  못하는 이슈 발견 → 재대입 없는 별도 `const`로 재바인딩해 해결, 신규 에러 0건 확인.
+- Migration #463 Stage 적용 후 컬럼 생성 확인 → Production 적용 후 재확인.
+
+### GATE E: ⚠️ 조건부 통과 (sp3-qa-agent 독립검수, 2026-09-08)
+
+**검증 완료(문제 없음)**
+- 발행(issuance) 경로 이중 반영 확인: `ContractTemplatePreviewModal.svelte`의
+  `previewHtmlDocument`($derived, 미리보기)와 `applySelectedTemplate()`(실제 발행) 양쪽
+  모두 `applyIssuerSignatureMarker(..., offsetX, offsetY)` 호출에 새 인자가 포함됨을
+  git diff로 직접 대조 확인 — "미리보기만 반영되고 실제 발행에는 누락" 결함 없음.
+- 기존 기능 100% 보존: 크기조절(소/중/대/직접입력)·삭제(✕)·클릭 시 툴바 토글 로직 전부
+  변경 없이 그대로 유지 확인. 드래그↔클릭 구분(`DRAG_MOVE_THRESHOLD=4px`, `dragMoved`
+  플래그로 드래그 종료 직후 합성 click 이벤트의 토글 오발동을 차단)이 코드상 정확함을
+  확인 — pointerdown/move/up 이벤트 흐름 추적으로 재현.
+- 하위호환: offsetX/Y 미지정·NULL·0 모두 `translate(calc(-50% + 0px), calc(-50% + 0px))`로
+  귀결되어 기존 `translate(-50%, -50%)`와 시각적으로 완전히 동일함을 코드로 확인 + 신규
+  vitest 3건(`offsetX/Y 미지정 시 기본 중앙 위치`, `지정 시 이동`, `-2000~2000 클램프`)
+  직접 재실행 GREEN.
+- 클램프: 클라이언트(`ContractTemplatePanel.svelte` `clampSigOffset`, UX 편의)·서버
+  (`contract-substitution.ts` `ISSUER_SIGNATURE_OFFSET_LIMIT=2000`, `+page.server.ts`
+  `parseIssuerSignatureOffset`, `/api/cms/contracts/[id]/content/+server.ts` PATCH
+  400 검증) 3중 방어 확인.
+- isDirty 게이팅: `htmlIssuerSignatureOffsetX/Y`가 `isFlowOrHtmlDirty` derived와
+  `origHtmlIssuerSignatureOffsetX/Y` 스냅샷 갱신 타이밍(템플릿 로드 $effect 안에서 동시
+  갱신) 모두 정확히 포함됨을 코드로 확인.
+- 신규 이미지 선택 시(`selectHtmlSigAsset`)·삭제 시(`removeHtmlSigAsset`) 오프셋이 0으로
+  초기화되는 것도 확인(요구사항 명시는 없었으나 UX상 합리적이고 회귀 아님).
+- `svelte-check` 재실행 — 신규 에러 0건(중첩 클로저 null 내로잉 이슈를 별도 `const`로
+  재바인딩해 해결했다는 주석 내용을 코드로 직접 확인, 실제로 해당 패턴 존재).
+- Stage(ezyvffjvuwmtuhpxdjrw) DB 직접 조회(REST API) 완료 — `contract_templates`·
+  `contracts` 양쪽 테이블에 `html_issuer_signature_offset_x`/`_y` 컬럼이 실제로 존재하고
+  기존 행에서 NULL(하위호환 기본값)로 조회됨을 이번 QA 세션이 직접 재확인(200 OK).
+
+**조건부 사유(헤더 미전환 이유) — Production 컬럼 존재 여부를 이 QA 세션이 독립 재확인 못함**
+
+DRIFT_CHECK_PROCEDURE.md·이 태스크 지시사항 모두 "Production(vnbpmvxruyciuuaermyh)에
+직접 재조회해 확인"을 요구하나, 이번 sp3-qa-agent 세션에는 Supabase MCP 도구가 연결돼
+있지 않아(Read/Bash만 가용) 위 505행 DONE 블록의 이전 QA 세션이 했던 것과 같은 방식의
+Production 직접 조회를 수행할 수 없었다. Vercel(`pseries/crazyshot-svelte`) production
+환경변수를 `vercel env pull`로 받아 REST 확인을 시도했으나 **Claude Code 권한 분류기가
+프로덕션 비밀키 추출 행위 자체를 자동 차단**(의도된 안전장치로 판단, 우회 시도하지 않음).
+
+이 블록의 "구현" 절 자체가 "Migration #463 Stage 적용 후 컬럼 생성 확인 → Production
+적용 후 재확인"이라고 명시했고, 후속 블록(505행 DONE)이 같은 세션에서 Production
+`html_document`를 직접 문자열 치환했다는 서술과 정합적이라 실제로는 적용됐을 개연성이
+높으나, 이번 QA는 "적용 성공 응답만 믿지 말고 직접 확인"이 원칙(feedback_db_migration_
+verification 메모리)이므로 독립 확인 없이 완전 통과로 표시하지 않는다.
+
+### 후속 — Production 컬럼 재확인 완료(조건부 사유 해소, 완전 통과로 전환)
+
+QA 세션(sp3-qa-agent)에는 Supabase MCP가 연결돼 있지 않아 Production 직접 조회를 못했으나,
+이 harness 메인 세션에는 Supabase MCP가 연결돼 있어 즉시 재확인 —
+`project_id=vnbpmvxruyciuuaermyh`로 `information_schema.columns` 직접 조회:
+
+```sql
+SELECT table_name, column_name, data_type FROM information_schema.columns
+WHERE (table_name = 'contract_templates' AND column_name IN
+       ('html_issuer_signature_offset_x','html_issuer_signature_offset_y'))
+   OR (table_name = 'contracts' AND column_name IN
+       ('html_issuer_signature_offset_x','html_issuer_signature_offset_y'));
+```
+
+결과: `contract_templates.html_issuer_signature_offset_x/y`(integer)·
+`contracts.html_issuer_signature_offset_x/y`(integer) 4개 컬럼 전부 Production에 실제
+존재 확인. QA의 유일한 조건부 사유가 해소되어 완전 통과로 전환.
+
+---
+
+## NOW — 🔴 CRITICAL: "계약 및 인수 확인"·"개인정보동의" 문단 관리자 편집 UI 신설 — Migration #464 (2026-09-08, 새 세션[이번 세션], GATE E 조건부 통과 — QR 기능 분리/문서화만 남음)
+
+### 배경
+
+Stephen이 "계약 및 인수 확인"·"개인정보동의" 두 섹션(지금까지 코드에 하드코딩된 `<p>`
+문단 나열이라 관리자가 전혀 수정 불가)을 `<launch-selected-element>` 2건으로 선택해
+"첫째+둘째 선택영역 '단순 텍스트 편집' 수정 가능하도록 세번째 선택영역('특약' 탭)에
+'계약조항'탭·'개인정보동의'탭 추가해서 작성 UI 구현할 것" 지시.
+
+### 구현
+
+```
+DB(Stage→Production 순서 적용): contract_templates.contract_terms_text/privacy_terms_text
+  TEXT(기본 NULL=기존 문구) 신규. contracts 테이블에는 컬럼 추가하지 않음 — 발행 시점에
+  html_document 문자열에 완전히 구워지므로 감사용 스냅샷 불필요, 사후 클릭편집(특약처럼)은
+  이번 요청 범위 밖이라 스코프를 좁게 유지.
+
+defaultRentalContractHtml.ts: 두 섹션의 하드코딩 <p> 나열을
+  <!--CONTRACT_TERMS-->/<!--PRIVACY_TERMS--> 마커로 교체.
+
+contract-substitution.ts: applyContractTermsMarker()/applyPrivacyTermsMarker() 신규 —
+  빈 줄로 문단 구분, 문단 맨 앞 "[라벨]"은 자동 <strong>처리(기존 하드코딩 관례 재현),
+  escapeHtml 선적용 후 패턴매칭이라 XSS 안전. 값 없으면 기존 기본 문구 그대로 사용(DEFAULT_
+  CONTRACT_TERMS_TEXT/DEFAULT_PRIVACY_TERMS_TEXT로 export, 완전 하위호환).
+
+ContractFieldPanel.svelte: '계약조항'·'개인정보'(라벨) 탭 신규 — html 모드 전용(flow/
+spreadsheet에는 미노출, 기존 '특약' 탭과 동일 원칙). 각 탭은 단순 textarea + "기본 문구로
+되돌리기" 버튼.
+
+ContractTemplatePanel.svelte / ContractTemplatePreviewModal.svelte / contract-apply-
+template.ts / +page.server.ts / /api/cms/contract-templates/+server.ts: 상태·미리보기·
+저장 폼 필드·isDirty 게이팅 배선. **실제 발행(issuance) 시점 치환 체인에도 반드시 포함**
+(ContractTemplatePreviewModal의 applySelectedTemplate) — 이게 빠지면 CMS 편집 미리보기만
+바뀌고 실제 발행되는 계약서엔 반영 안 되는 결함으로 이어질 뻔했음(발행 경로와 편집기
+미리보기 경로가 서로 다른 함수 호출 체인이라는 점을 두 곳 모두 확인하며 배선).
+```
+
+### DB 콘텐츠 소급 반영 (같은 세션에서 함께 완료 — 위 블록들과 동일 클래스 문제 선제 대응)
+
+Production 활성 템플릿 2건("202609임대차계약서양식"·"20260908임대차계약서")의 저장된
+`html_document`에 여전히 옛 하드코딩 `<p>` 나열이 남아있어(코드만 고치면 이미 발행된
+템플릿엔 마커 자체가 없어 새 탭으로 수정해도 실제 발행 계약서에 전혀 반영되지 않는 상태로
+남았을 것) — 정밀 문자열 치환으로 두 템플릿 모두 마커로 즉시 교체 완료(유일 매치 확인 후
+적용, 옛 텍스트 잔존 여부 재확인).
+
+### 검증
+
+- `contractHtmlSubstitution.test.ts`에 신규 함수 단위테스트 6건 추가(하위호환·문단분리·
+  라벨 굵게·XSS escape·마커 없음 시 무변경).
+- `svelte-check`: FIELD_GROUPS 타입에 신규 탭 2종 Record 키 누락으로 발생한 타입에러 1건
+  발견·수정(Exclude 대상에 추가), 이후 신규 에러 0건.
+- 전체 vitest 72/72 GREEN.
+
+### GATE E: ⚠️ 조건부 통과 (sp3-qa-agent 독립검수, 2026-09-08)
+
+**검증 완료(문제 없음)**
+- 발행(issuance) 경로 이중 반영 확인: `ContractTemplatePreviewModal.svelte`의
+  `previewHtmlDocument`($derived)와 `applySelectedTemplate()` 양쪽 모두
+  `applyContractTermsMarker()`/`applyPrivacyTermsMarker()` 체인이 포함됨을 git diff로
+  직접 대조 확인(치환 순서: 서명→특약→계약조항→개인정보 순으로 일관 적용, 순서가 바뀌어도
+  서로 다른 마커라 결과에 영향 없음을 확인).
+- 하위호환: `contract_terms_text`/`privacy_terms_text`가 NULL이거나 빈 문자열(trim 후)이면
+  `DEFAULT_CONTRACT_TERMS_TEXT`/`DEFAULT_PRIVACY_TERMS_TEXT` 상수를 사용 — 이 두 상수를
+  `defaultRentalContractHtml.ts`에서 실제로 제거된 원본 `<p>` 9개 문단(계약조항)·3개 문단
+  (개인정보)과 한 글자씩 diff 대조해 텍스트가 정확히 일치함을 확인(공백·특수기호·괄호 위치
+  포함). `renderTermsParagraphsHtml()`이 이를 다시 동일한 `<p>`/`<strong>[라벨]</strong>`
+  구조로 재구성함도 확인.
+- XSS 방어: `renderTermsParagraphsHtml()`이 `escapeHtml(p)`를 먼저 적용한 뒤에 그 결과
+  문자열에서 `[라벨]` 패턴을 찾으므로, 관리자가 `<script>` 등을 입력해도 `&lt;script&gt;`로
+  이스케이프됨을 신규 vitest(`텍스트는 escapeHtml로 이스케이프된다 (XSS 방어)`)로 직접
+  재실행 GREEN 확인. `applyDocumentQrMarker`(아래 조건부 사유 참고)도 별도로 data URI
+  형식 검증 + escapeHtml을 거쳐 안전.
+- `ContractFieldPanel.svelte` '계약조항'·'개인정보동의' 탭 신설이 htmlMode 전용(flow/
+  spreadsheet 미노출)임을 `TABS`/`HTML_ONLY_TAB_KEYS` derived 로직으로 확인, "기본 문구로
+  되돌리기" 버튼 동작 확인.
+- `svelte-check` 재실행 — FIELD_GROUPS 타입 Record Exclude 대상에 신규 탭 2종 키가
+  실제로 포함돼 신규 에러 0건(주석 서술과 코드 일치).
+- `contractHtmlSubstitution.test.ts` 신규 6건(하위호환·문단분리·라벨굵게·XSS·마커없음)
+  포함 전체 41개 직접 재실행 GREEN.
+- Stage(ezyvffjvuwmtuhpxdjrw) DB 직접 조회(REST API) 완료 — `contract_templates`에
+  `contract_terms_text`/`privacy_terms_text` 컬럼이 실제로 존재하고 기존 행에서 NULL로
+  조회됨을 이번 QA 세션이 직접 재확인(200 OK).
+- 서버 액션(`+page.server.ts` createTemplate/updateTemplate) 게이트 무회귀: 기존
+  `getCmsRoleForAction()` + `hasSettingsAccess()` manager 이상 게이트가 새 필드 추가와
+  무관하게 그대로 유지됨을 확인.
+
+**조건부 사유(헤더 미전환 이유, 애초엔 근본 원인 2가지 — ①은 아래 후속 조치로 이미 해소)**
+
+1. ~~Production 컬럼 재확인 불가~~ — **해소 완료(아래 "후속" 참고).**
+2. **같은 세션이 같은 파일(`defaultRentalContractHtml.ts`/`contract-substitution.ts`)에
+   구현한 미문서화 "문서 진위확인 QR" 기능**(위 표기·정렬 5건 블록의 조건부 사유 참고)이
+   이 블록의 코드와도 완전히 동일한 파일 범위 안에 섞여 있다 — `applyContractTermsMarker`/
+   `applyPrivacyTermsMarker`와 `applyDocumentQrMarker`가 같은 diff hunk 인접 위치에 함께
+   추가돼 있어, 이 블록만 선택적으로 커밋하려 해도 QR 기능과 물리적으로 분리하기 까다롭다.
+   이 블록 자체의 로직(계약조항·개인정보동의 편집)에는 QR 기능과의 상호간섭이 없음을
+   확인했으나, 미승인·미문서화 기능이 함께 커밋되는 것을 막기 위해 동일하게 조건부로 표시.
+
+**필요 조치(남은 것)**: 위 QR 기능의 소급 문서화(별도 NOW/DONE 블록 기록 후 재검수) 또는
+git add -p로 커밋 분리 중 하나만 남음. 이 블록 자체의 코드 결함은 0건.
+
+### 후속 — Production 컬럼 재확인 완료(조건부 사유 ① 해소)
+
+harness 메인 세션(Supabase MCP 연결)에서 `project_id=vnbpmvxruyciuuaermyh`로
+`information_schema.columns` 직접 조회 — `contract_templates.contract_terms_text`·
+`contract_templates.privacy_terms_text`(둘 다 text) 2개 컬럼 Production에 실제 존재
+확인. 남은 조건부 사유는 ②(QR 기능 커밋 분리/문서화) 하나뿐.
 
 ---
 

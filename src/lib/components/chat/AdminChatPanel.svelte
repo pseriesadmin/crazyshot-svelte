@@ -25,6 +25,8 @@
   import { chatStore } from '$lib/stores/chat.svelte'
   import { supabase } from '$lib/services/supabase'
   import type { ChatSession, ChatMessage, ChatSessionStatus, CsRecord, ActionPayload, CtaModalRequest } from '$lib/types/chat'
+  import { validateUploadFile, validateUploadFileSize } from '$lib/utils/fileValidation'
+  import { csToast } from '$lib/utils/toast'
 
   // 로컬 타입 정의 (routes 크로스-임포트 금지 원칙) — /api/cms/customers/[userId]/summary 응답 형태
   interface CustomerSummary {
@@ -822,6 +824,19 @@
 
   async function handleAdminAttach(file: File): Promise<void> {
     if (!selectedSessionId || isUploading) return
+
+    // front-uiux.md §15-3·§15-1a 표준 — 업로드 시도 전 MIME·용량 클라이언트 검증(2026-09-08)
+    const typeCheck = validateUploadFile(file)
+    if (!typeCheck.ok) {
+      csToast.error(typeCheck.error ?? '허용되지 않는 파일 형식입니다.')
+      return
+    }
+    const sizeCheck = validateUploadFileSize(file)
+    if (!sizeCheck.ok) {
+      csToast.error(sizeCheck.error ?? '파일 크기가 너무 큽니다.')
+      return
+    }
+
     isUploading = true
     try {
       const ext = file.name.split('.').pop() ?? 'bin'
