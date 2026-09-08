@@ -1,0 +1,17 @@
+-- 쿠폰 발행관리 개선 항목 2: "발행 시 컬럼오류 토스트" 실제 원인 수정
+--
+-- Stage DB 직접 조회로 확인한 근본 원인(2026-09-08) — 애초 가설이었던 valid_from/
+-- valid_until NOT NULL 문제는 이미 다른 시점에 nullable로 완화되어 있어 실재하지 않았다.
+-- 실제 원인은 coupons.usage_limit이 NOT NULL DEFAULT 1인데, 쿠폰 생성 폼에는 이
+-- 컬럼에 대응하는 입력 필드가 애초에 없어(폼은 per_user_limit·total_usage_limit만
+-- 받음) cms_create_coupon이 매번 p_usage_limit=NULL을 그대로 INSERT하려다
+-- "null value in column \"usage_limit\" violates not-null constraint" 예외가
+-- 발생하고, 그 Postgres 원문 에러가 그대로 토스트에 노출되고 있었다(재현 확인 완료).
+--
+-- Production DB 조회 결과 이 컬럼은 이미 nullable 상태였다(Stage와의 드리프트) —
+-- 이 마이그레이션은 Stage를 Production과 동일한 상태로 맞추는 것이며, Production에
+-- 적용해도 이미 nullable이라 안전하게 no-op으로 끝난다(DROP NOT NULL은 이미 nullable인
+-- 컬럼에 실행해도 에러 없이 성공). usage_limit은 use_coupon RPC에서 실제로 사용/검증되지
+-- 않는 컬럼이라(집계·표시용, 목록 화면에서 이미 `usage_limit ?? '∞'`로 NULL=무제한
+-- 취급) nullable 완화가 기존 로직과 충돌하지 않는다.
+ALTER TABLE public.coupons ALTER COLUMN usage_limit DROP NOT NULL;
