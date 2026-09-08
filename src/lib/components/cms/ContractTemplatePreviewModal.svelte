@@ -53,9 +53,26 @@
      * 조회(contract-data, manager 이상 게이트)를 호출하지 않아 그 게이트와 무관하게 동작한다.
      */
     viewOnly?: boolean
+    /**
+     * template 모드에서 특약 클릭편집으로 계약이 방금 새로 발행(init-contract+PATCH)됐을 때
+     * 호출된다(2026-09-08 신규) — 모달은 계속 열려있는 채로 existing 모드로 전환되므로,
+     * 이 모달을 닫기 전까지는 호출부(RentalContractViewer)의 contractId prop이 갱신되지
+     * 않는다. onEdit의 issuedCheckTick++ 패턴과 동일하게 "발행 목록" 표시 상태만 재확인시킨다.
+     */
+    onapplied?: (contractId: string) => void
+    /**
+     * 이미 발송(sent_at)·서명(signed_at)됐는지 여부(2026-09-08 신규) — html 모드 "발행=발송"
+     * 정책의 되돌리기 가드로만 쓰인다. 미전달 시 항상 false로 간주(발송 전이라고 가정) —
+     * AdminChatPanel의 viewOnly 열람 용도처럼 되돌리기 자체가 필요 없는 호출부는 생략 가능.
+     */
+    signingsentAt?:    string | null
+    customerSignedAt?: string | null
   }
 
-  let { contractId, reservationId, initialTemplateId = null, onclose, onsent, onEdit, viewOnly = false }: Props = $props()
+  let {
+    contractId, reservationId, initialTemplateId = null, onclose, onsent, onEdit, onapplied,
+    viewOnly = false, signingsentAt = null, customerSignedAt = null,
+  }: Props = $props()
 
   let templates      = $state<TemplateSummary[]>([])
   let selectedId     = $state<string | null>(null)
@@ -64,6 +81,11 @@
   let sending        = $state(false)
   let applyingForEdit = $state(false)
   let error          = $state<string | null>(null)
+  // template 모드에서 특약 클릭편집으로 계약이 새로 발행되면 그 결과 id를 여기 보관한다 —
+  // contractId prop 자체는 부모가 다시 렌더링해줘야 갱신되므로(2026-09-08), 이 모달이 열려
+  // 있는 동안은 이 값을 우선 사용한다.
+  let localContractId = $state<string | null>(null)
+  const effectiveContractId = $derived(localContractId ?? contractId)
 
   // ── 편집 내용 보존 관련 상태 ─────────────────────────────────────────────────
   // existing 모드: DB에 저장된 content_blocks 그대로 발송 (PATCH 없음, 편집 내용 보존)
@@ -153,6 +175,58 @@
     overwriteWarning ||
     (contentMode === 'template' && !selectedTemplate)
   )
+
+  /**
+   * html 모드(authoring_mode='html') 여부(2026-09-08 신규).
+   * html 계약서는 구조적으로 ContractEditorModal(캔버스형 편집기)에서 편집이 불가능하므로
+   * — "편집" 버튼 자체를 숨기고, 특약 클릭편집(handleHtmlDocClick)만 유일한 수정 경로로 남긴다.
+   */
+  const isHtmlMode = $derived(
+    contentMode === 'existing'
+      ? isHtmlDocument(existingHtmlDocument)
+      : selectedTemplate?.authoring_mode === 'html'
+  )
+
+  /**
+   * "발행" = "채팅으로 발송" 실행으로만 인정한다(2026-09-08, Stephen 확정) — html 모드는
+   * "편집" 버튼이 없어 특약 클릭편집(saveSpecialNotes)이 유일한 사전 저장 경로인데, 그
+   * 저장은 미리보기 목적상 즉시 DB에 반영된다(§ saveSpecialNotes 참고, item 2 — 이 자동저장
+   * 자체는 유지). 그런데 그 상태에서 "채팅으로 발송"을 누르지 않고 취소/닫기하면, 아직
+   * 고객에게 보내지도 않은 초안이 "발행 목록"에 그대로 남아 마치 발행된 것처럼 보이는
+   * 문제가 있었다(§ RentalContractViewer "발행 목록" 표시조건은 content 존재 여부만 봄).
+   * → html 모드 + 미발송(signingsentAt 없음) + 미서명(customerSignedAt 없음) 상태에서
+   *   취소/닫기하면, 지금까지 저장된 내용을 되돌려(DELETE) "발행 안 됨" 상태로 복원한다.
+   *   이미 발송·서명된 계약(재발송/보기 목적으로 다시 연 경우)은 절대 되돌리지 않는다.
+   */
+  let closing = $state(false)
+
+  async function handleClose() {
+    if (closing) return
+    const shouldRevert =
+      !viewOnly &&
+      isHtmlMode &&
+      !signingsentAt &&
+      !customerSignedAt &&
+      contentMode === 'existing' &&
+      hasExistingContent &&
+      !!effectiveContractId
+
+    if (!shouldRevert) {
+      onclose()
+      return
+    }
+
+    closing = true
+    try {
+      await fetch(`/api/cms/contracts/${effectiveContractId}/content`, { method: 'DELETE' })
+    } catch {
+      // fail-soft — 되돌리기 실패해도 모달 닫기 자체는 막지 않음(다음 진입 시 재확인 가능)
+    } finally {
+      closing = false
+      onapplied?.(effectiveContractId!) // "발행 목록" 표시 상태 재확인(issuedCheckTick 트리거)
+      onclose()
+    }
+  }
 
   async function loadData() {
     loading = true
@@ -275,13 +349,20 @@
    * send()의 template 분기와 handleEditClick()이 동일 로직을 공유 — 발송 전 "편집"
    * 진입 시에도 미리보기에서 본 내용이 실제로 저장돼 있어야 하기 때문(§ handleEditClick 참고).
    * 실패 시 throw — 호출부에서 각자의 컨텍스트에 맞는 메시지로 처리.
+   *
+   * @param specsOverride 지정 시 selectedTemplate.specifications 대신 이 값을 저장·치환에 사용한다
+   *   (2026-09-08 신규 — template 모드 특약 클릭편집에서, 사용자가 방금 입력한 값을 템플릿의
+   *   기존 저장값 대신 즉시 반영하기 위함. saveSpecialNotes() 전용, 다른 호출부는 미지정).
    */
-  async function applySelectedTemplate(): Promise<string> {
+  async function applySelectedTemplate(
+    specsOverride?: SpecRow[],
+  ): Promise<{ contractId: string; htmlDocument?: string }> {
     if (!selectedTemplate || !subData) throw new Error('양식을 선택해 주세요.')
 
     const isCanvas      = selectedTemplate.authoring_mode === 'canvas'
     const isSpreadsheet = selectedTemplate.authoring_mode === 'spreadsheet'
     const isHtml        = selectedTemplate.authoring_mode === 'html'
+    const specs         = specsOverride ?? (selectedTemplate.specifications ?? [])
     // canvas / spreadsheet / html 모드는 content_blocks가 빈 배열 — substituteVariables 적용 불필요.
     // canvas는 렌더 시점(/contract/[token])에 필드 바인딩으로 치환되지만, spreadsheet/html는
     // 텍스트 어디든 {{변수}} 등장 가능이라 apply-time 치환을 수행해 저장한다.
@@ -303,18 +384,18 @@
                 selectedTemplate.html_issuer_signature_url,
                 selectedTemplate.html_issuer_signature_width,
               ),
-              selectedTemplate.specifications,
+              specs,
             ),
             subData,
           )
         : undefined
 
     const result = await applyContractTemplate({
-      contractId,
+      contractId: effectiveContractId,
       reservationId,
       title:               selectedTemplate.title,
       contentBlocks:       substitutedBlocks,
-      specifications:      selectedTemplate.specifications ?? [],
+      specifications:      specs,
       templateId:          selectedTemplate.id,
       authoring_mode:      isSpreadsheet ? 'spreadsheet' : isCanvas ? 'canvas' : isHtml ? 'html' : 'flow',
       canvasDocument:      isCanvas      ? selectedTemplate.canvas_document      : undefined,
@@ -326,13 +407,48 @@
 
     if (result.error) throw new Error(result.error)
     if (!result.contractId) throw new Error('계약서 생성에 실패했습니다.')
-    return result.contractId
+    return { contractId: result.contractId, htmlDocument: substitutedHtmlDocument }
+  }
+
+  /**
+   * 이미 서명 완료된 계약서는 "신규 발행/재발송"이 아니라 완료된 계약정보를 채팅으로
+   * 단순 재공유한다(2026-09-08 Stephen 지시). send-chat은 서명 완료건을 재발송 불가로
+   * 명시 차단하므로(RSV-C-B1) — 그 차단을 우회하는 게 아니라, 애초에 다른 목적(공유)의
+   * 별도 엔드포인트로 처리한다. 치환·특약 검증 등 "신규 발행" 전용 로직은 전혀 거치지
+   * 않는다 — 이미 확정된 서명 내용을 건드릴 이유가 없기 때문.
+   */
+  async function shareCompletedContract() {
+    if (!effectiveContractId) {
+      csToast.error('계약서 정보를 찾을 수 없습니다.')
+      return
+    }
+    sending = true
+    try {
+      const res = await fetch(`/api/cms/contracts/${effectiveContractId}/share-chat`, {
+        method: 'POST',
+      })
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}))
+        throw new Error((body as { error?: string }).error ?? '공유 실패')
+      }
+      csToast.success('완료된 계약서 정보를 채팅으로 공유했습니다.')
+      onsent()
+    } catch (e) {
+      csToast.error(e instanceof Error ? e.message : '공유에 실패했습니다.')
+    } finally {
+      sending = false
+    }
   }
 
   async function send() {
+    if (customerSignedAt) {
+      await shareCompletedContract()
+      return
+    }
+
     // 사전 가드
     if (contentMode === 'template' && (!selectedTemplate || !subData)) return
-    if (contentMode === 'existing' && !contractId) {
+    if (contentMode === 'existing' && !effectiveContractId) {
       csToast.error('계약서 정보를 찾을 수 없습니다.')
       return
     }
@@ -355,15 +471,17 @@
 
     sending = true
     try {
-      let targetContractId = contractId
+      let targetContractId = effectiveContractId
 
       if (contentMode === 'existing') {
         // ── existing 경로: 편집 내용 보존 ──────────────────────────────────────
         // applySelectedTemplate() 호출 없음 → PATCH 없음 → 편집 내용 안전
-        // targetContractId는 위에서 이미 contractId로 설정됨(existing 진입 시점에 항상 non-null)
+        // targetContractId는 위에서 이미 effectiveContractId로 설정됨(existing 진입 시점에
+        // 항상 non-null — 처음부터 existing이었거나, template 모드 특약 클릭편집으로 방금
+        // localContractId가 채워졌거나 둘 중 하나)
       } else {
         // ── template 경로: 양식 치환 + PATCH 저장 + 발송 (기존 동작) ───────────
-        targetContractId = await applySelectedTemplate()
+        targetContractId = (await applySelectedTemplate()).contractId
       }
 
       const sendRes = await fetch(`/api/cms/contracts/${targetContractId}/send-chat`, {
@@ -402,7 +520,7 @@
     if (!onEdit) return
 
     if (contentMode === 'existing') {
-      onEdit(contractId ?? undefined)
+      onEdit(effectiveContractId ?? undefined)
       return
     }
 
@@ -413,7 +531,7 @@
 
     applyingForEdit = true
     try {
-      const appliedContractId = await applySelectedTemplate()
+      const { contractId: appliedContractId } = await applySelectedTemplate()
       onEdit(appliedContractId)
     } catch (e) {
       csToast.error(e instanceof Error ? e.message : '편집 화면으로 이동하지 못했습니다.')
@@ -422,19 +540,29 @@
     }
   }
 
-  // ── 특약 클릭 편집 (2026-09-07 신규, "계약 발행 보기" 화면 전용) ─────────────
-  // viewOnly가 아닌 existing 모드에서만 노출 — template 모드(발행 전 양식 선택 미리보기)는
-  // 이미 좌측 양식목록+"편집" 버튼으로 특약을 포함한 전체 내용을 고칠 수 있어 스코프 외.
+  // ── 특약 클릭 편집 (2026-09-07 신규 "계약 발행 보기"(existing) 전용 → 2026-09-08 template
+  // 모드까지 확장) ───────────────────────────────────────────────────────────────
+  // 최초 구현은 existing 모드에서만 클릭이 동작했다 — template 모드(발행 전 양식 선택
+  // 미리보기)에도 특약 조항이 그대로(선택된 템플릿의 저장값) 보이는데 클릭해도 반응이
+  // 없어, 발행 전/후 미리보기가 겉보기엔 똑같은데 한쪽만 동작하는 혼란을 유발했다(Stephen
+  // 실사용 중 발견, "특약작성 모달 기능 어디갔어" 문의). template 모드는 아직 이 예약
+  // 전용 계약(contracts 행)이 없을 수 있으므로, 저장 시점에 applySelectedTemplate()로
+  // 즉시 발행(init-contract+PATCH)한 뒤 contentMode를 'existing'으로 전환한다 — "편집"
+  // 버튼을 눌러 진입하는 것과 동일한 발행 경로를 재사용, 별도 저장 로직 이원화 없음.
   let specialNotesModalOpen = $state(false)
   let editingSpecs          = $state<SpecRow[]>([])
   let savingSpecialNotes    = $state(false)
 
   function handleHtmlDocClick(e: MouseEvent) {
-    if (viewOnly || contentMode !== 'existing') return
+    if (viewOnly) return
+    if (contentMode === 'template' && !selectedTemplate) return
     const cell = (e.target as HTMLElement).closest('.cs-special-notes-cell')
     if (!cell) return
-    editingSpecs = existingSpecifications.length > 0
-      ? existingSpecifications.map((s) => ({ ...s }))
+    const currentSpecs = contentMode === 'existing'
+      ? existingSpecifications
+      : (selectedTemplate?.specifications ?? [])
+    editingSpecs = currentSpecs.length > 0
+      ? currentSpecs.map((s) => ({ ...s }))
       : [{ key: '', value: '' }]
     specialNotesModalOpen = true
   }
@@ -444,22 +572,37 @@
   }
 
   async function saveSpecialNotes() {
-    if (!contractId || !isHtmlDocument(existingHtmlDocument)) return
     savingSpecialNotes = true
     try {
       const filtered = editingSpecs.filter((s) => s.key.trim())
-      const newHtml = updateSpecialNotesInHtml(existingHtmlDocument as string, filtered)
-      const res = await fetch(`/api/cms/contracts/${contractId}/content`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ content_blocks: [], specifications: filtered, html_document: newHtml }),
-      })
-      if (!res.ok) {
-        const body = await res.json().catch(() => ({}))
-        throw new Error((body as { error?: string }).error ?? '저장에 실패했습니다.')
+
+      if (contentMode === 'existing') {
+        if (!effectiveContractId || !isHtmlDocument(existingHtmlDocument)) return
+        const newHtml = updateSpecialNotesInHtml(existingHtmlDocument as string, filtered)
+        const res = await fetch(`/api/cms/contracts/${effectiveContractId}/content`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ content_blocks: [], specifications: filtered, html_document: newHtml }),
+        })
+        if (!res.ok) {
+          const body = await res.json().catch(() => ({}))
+          throw new Error((body as { error?: string }).error ?? '저장에 실패했습니다.')
+        }
+        existingHtmlDocument = newHtml
+        existingSpecifications = filtered
+      } else {
+        // template 모드 — 지금 미리보고 있는 양식을 이 예약의 계약으로 즉시 발행하면서,
+        // 방금 입력한 특약(filtered)을 그 발행 내용에 바로 반영한다.
+        const applied = await applySelectedTemplate(filtered)
+        if (!applied.htmlDocument) throw new Error('저장에 실패했습니다.')
+        localContractId = applied.contractId
+        existingHtmlDocument = applied.htmlDocument
+        existingSpecifications = filtered
+        hasExistingContent = true
+        contentMode = 'existing'
+        onapplied?.(applied.contractId)
       }
-      existingHtmlDocument = newHtml
-      existingSpecifications = filtered
+
       csToast.success('특약 내용이 저장되었습니다.')
       specialNotesModalOpen = false
     } catch (e) {
@@ -477,7 +620,7 @@
     <!-- 헤더 -->
     <div class="modal-header">
       <span class="modal-title">{viewOnly ? '계약서 보기' : '계약서 양식 적용 & 발송'}</span>
-      <button type="button" class="close-btn" onclick={onclose} aria-label="닫기">✕</button>
+      <button type="button" class="close-btn" onclick={handleClose} disabled={closing} aria-label="닫기">✕</button>
     </div>
 
     {#if loading}
@@ -579,10 +722,11 @@
                 {/if}
                 {#if previewHtmlDocument}
                   <!-- html형: 변수 치환된 고정 HTML 서식을 그대로 렌더링.
-                       특약 셀(.cs-special-notes-cell) 클릭 편집은 발행 보기(existing)에서만 -->
+                       특약 셀(.cs-special-notes-cell) 클릭 편집은 viewOnly만 아니면 template/
+                       existing 모드 둘 다 동작(2026-09-08 확장, saveSpecialNotes() 참고) -->
                   <div
                     class="preview-block html-contract-doc"
-                    class:html-doc-editable={!viewOnly && contentMode === 'existing'}
+                    class:html-doc-editable={!viewOnly}
                     onclick={handleHtmlDocClick}
                   >
                     {@html previewHtmlDocument}
@@ -600,9 +744,9 @@
 
       <!-- 푸터 -->
       <div class="modal-footer">
-        <button type="button" class="btn-cancel" onclick={onclose}>{viewOnly ? '닫기' : '취소'}</button>
+        <button type="button" class="btn-cancel" onclick={handleClose} disabled={closing}>{viewOnly ? '닫기' : (closing ? '되돌리는 중...' : '취소')}</button>
         {#if !viewOnly}
-          {#if onEdit}
+          {#if onEdit && !isHtmlMode}
             <button
               type="button"
               class="btn-edit"
@@ -616,7 +760,7 @@
             onclick={send}
             disabled={sendDisabled}
           >
-            {sending ? '발송 중...' : '채팅으로 발송'}
+            {sending ? (customerSignedAt ? '공유 중...' : '발송 중...') : (customerSignedAt ? '완료 계약 공유' : '채팅으로 발송')}
           </button>
         {/if}
       </div>

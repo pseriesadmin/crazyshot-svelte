@@ -4,6 +4,7 @@ import { PUBLIC_SUPABASE_URL } from '$env/static/public'
 import { json } from '@sveltejs/kit'
 import { sendPushToAdmins, sendPushToUser } from '$lib/server/push'
 import { computeContentHash } from '$lib/contract-signature/contentHash'
+import { applyCustomerSignatureMarker } from '$lib/utils/contract-substitution'
 import { recordAuditLog } from '$lib/contract-signature/auditLog'
 import { resolveApprovalNotifyPlan } from '$lib/server/reservationApprovalNotify'
 import { sendApprovalNotifications } from '$lib/server/sendApprovalNotifications'
@@ -50,6 +51,11 @@ export const POST: RequestHandler = async ({ params, request, getClientAddress }
   // 실제 내용과 무관하게 고정되던 결함이 있었음 — 스냅샷 도입으로 함께 해소.
   let contentHash: string | null = null
   let signedContentSnapshot: Record<string, unknown> | null = null
+  // 2026-09-08: 서명 이미지를 html_document에 되굽는 용도로 authoring_mode/html_document를
+  // 아래에서 재사용한다 — signedContentSnapshot은 "서명 제출 당시 고객이 실제로 본 내용"을
+  // 얼려야 하므로 절대 이 되굽기 결과로 덮어쓰지 않는다(별도 UPDATE로 contracts.html_document만 갱신).
+  let contractAuthoringMode: string | null = null
+  let contractHtmlDocument: string | null   = null
   if (signing.contract_id) {
     const { data: contractContent } = await admin
       .from('contracts')
@@ -59,6 +65,8 @@ export const POST: RequestHandler = async ({ params, request, getClientAddress }
     if (contractContent) {
       signedContentSnapshot = contractContent
       contentHash = await computeContentHash(contractContent)
+      contractAuthoringMode = (contractContent.authoring_mode as string | null) ?? null
+      contractHtmlDocument  = (contractContent.html_document as string | null) ?? null
     }
   }
 
@@ -78,6 +86,33 @@ export const POST: RequestHandler = async ({ params, request, getClientAddress }
 
   if (updateErr) {
     return json({ error: '서명 처리에 실패했습니다.' }, { status: 500 })
+  }
+
+  // 2026-09-08: 고객 서명 이미지를 html_document에 되굽기 — html 모드에서만 의미 있음
+  // (다른 모드는 <!--CUSTOMER_SIGNATURE--> 마커 자체가 없어 split().join()이 원문 그대로
+  // 반환한다). fail-soft — 실패해도 서명 자체(signed_at)는 이미 위에서 정상 저장됐으므로
+  // 여기서 에러를 반환하지 않는다(재조회 시 서명 이미지 없이 텍스트만 보이는 것으로 조용히
+  // 대체될 뿐, 서명 처리 자체를 막지 않는다).
+  if (
+    signing.contract_id &&
+    signatureData &&
+    contractAuthoringMode === 'html' &&
+    contractHtmlDocument
+  ) {
+    try {
+      const bakedHtml = applyCustomerSignatureMarker(contractHtmlDocument, signatureData)
+      if (bakedHtml !== contractHtmlDocument) {
+        await admin
+          .from('contracts')
+          .update({ html_document: bakedHtml })
+          .eq('id', signing.contract_id)
+      }
+    } catch (e) {
+      console.error(
+        '[contracts/sign] applyCustomerSignatureMarker 되굽기 실패(fail-soft):',
+        e instanceof Error ? e.message : e,
+      )
+    }
   }
 
   // P8A-3: 감사로그 — signed 이벤트 기록 (silent fail — 주 흐름 차단 금지)

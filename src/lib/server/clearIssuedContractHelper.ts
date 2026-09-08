@@ -43,10 +43,12 @@ export async function clearIssuedContractContent(
   const { error } = await admin
     .from('contracts')
     .update({
-      content_blocks:  [],
-      canvas_document: null,   // canvas 계약의 orphan 데이터 방지 — authoring_mode는 다음 발행 시 재설정됨
-      title:           null,
-      updated_at:      new Date().toISOString(),
+      content_blocks:      [],
+      canvas_document:     null,   // canvas 계약의 orphan 데이터 방지 — authoring_mode는 다음 발행 시 재설정됨
+      spreadsheet_document: null,  // spreadsheet 계약도 동일 — 2026-09-08 추가(누락 발견)
+      html_document:        null,  // html 계약도 동일 — 2026-09-08 추가(누락 발견)
+      title:                null,
+      updated_at:           new Date().toISOString(),
     })
     .eq('id', contractId)
 

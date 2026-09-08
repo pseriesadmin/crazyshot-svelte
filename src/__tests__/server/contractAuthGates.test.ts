@@ -5,7 +5,8 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
  *
  * 대상:
  *   1. /cms/reservation/contracts load() 진입 게이트 (P7-1)
- *   2. /cms/reservation/contracts create/update/softDelete (P7-2)
+ *   2. /cms/reservation/contracts create/update/delete (P7-2) — delete는 2026-09-08부터
+ *      실제 hard delete(과거 이름 softDelete에서 변경, 동작도 함께 변경)
  *   3. /api/cms/reservations/[id]/init-contract (P7-3)
  *   4. /api/cms/reservations/[id]/contract-data (P7-3)
  *   5. /api/cms/contracts/[id]/content GET/PATCH (P7-4)
@@ -70,6 +71,12 @@ let nextMaybeSingleResult: { data: unknown; error: unknown } | null = null;
 // 케이스(스냅샷 우선 반환)를 위해 추가했다 — 기존 테스트는 이 맵을 설정하지 않으므로 영향 없음.
 let nextMaybeSingleByTable: Record<string, { data: unknown; error: unknown }> = {};
 
+// delete 액션의 FK 차단 분기(2026-09-08 신규) 검증용 — `.select('id', {count:'exact',
+// head:true})` 패턴은 .maybeSingle()을 거치지 않고 체인 자체를 await하므로(위 92-94행
+// thenable 폴백), 테이블별로 원하는 count 값을 지정할 수 있게 별도 맵으로 노출한다.
+// 지정 안 된 테이블은 count: null(=0건 취급, 기존 테스트 전부 영향 없음).
+let nextCountByTable: Record<string, number | null> = {};
+
 function makeAdminStub() {
   const fns = ['select','insert','update','delete','eq','in','is','not','order','limit','single','maybeSingle'];
   return {
@@ -89,8 +96,8 @@ function makeAdminStub() {
       // 처럼 order() 뒤에 더 체이닝되는 경우(2026-08-21, content/+server.ts GET이 서명완료건
       // 스냅샷 조회에 이 패턴을 추가하며 필요해짐 — order()가 Promise를 즉시 반환해버리면
       // 그 뒤의 .limit()이 "not a function"으로 죽는다).
-      (chain as Record<string, unknown>).then = (resolve: (v: { data: unknown[]; error: null }) => void) =>
-        resolve({ data: [], error: null });
+      (chain as Record<string, unknown>).then = (resolve: (v: { data: unknown[]; error: null; count?: number | null }) => void) =>
+        resolve({ data: [], error: null, count: nextCountByTable[table] ?? null });
       return chain;
     }),
     auth: { admin: {} },
@@ -185,9 +192,9 @@ describe('[P7-1] /cms/reservation/contracts — load() 진입 게이트', () => 
   });
 });
 
-// ── P7-2: create/update/softDelete 액션 게이트 ────────────────────────────────
+// ── P7-2: create/update/delete 액션 게이트 ────────────────────────────────────
 
-describe('[P7-2] /cms/reservation/contracts — create/update/softDelete 403 for partner', () => {
+describe('[P7-2] /cms/reservation/contracts — create/update/delete 403 for partner', () => {
   beforeEach(() => { vi.clearAllMocks(); });
 
   it('RED: partner가 create 호출 시 403 반환', async () => {
@@ -228,14 +235,47 @@ describe('[P7-2] /cms/reservation/contracts — create/update/softDelete 403 for
     expect(result).toMatchObject({ status: 403 });
   });
 
-  it('RED: partner가 softDelete 호출 시 403 반환', async () => {
+  it('RED: partner가 delete 호출 시 403 반환', async () => {
     mockGetCmsRoleForAction.mockResolvedValue('partner');
     const event = {
       request: makeRequest({ id: 'template-id' }),
       locals: makeLocals('partner'),
     };
-    const result = await (contractsActions as Record<string, (e: unknown) => Promise<unknown>>).softDelete(event);
+    const result = await (contractsActions as Record<string, (e: unknown) => Promise<unknown>>).delete(event);
     expect(result).toMatchObject({ status: 403 });
+  });
+});
+
+// ── delete 액션 — FK 차단 분기 (2026-09-08 신규, Stephen 요청으로 재현 검증) ──────────
+// contracts.template_id FK(ON DELETE NO ACTION, DB 직접 조회로 확인된 실제 제약)가
+// 이 템플릿을 참조하는 계약이 있으면 삭제 자체를 막는다 — 원시 FK 위반 에러를 그대로
+// 노출하는 대신, 삭제 전에 참조 계약 수를 먼저 세어 사람이 이해할 수 있는 메시지(409)로
+// 차단하는지 검증한다. 참조 계약이 없을 때는 정상적으로 삭제가 진행되는지도 함께 확인.
+describe('[delete FK 차단] /cms/reservation/contracts — 발행된 계약이 딸린 템플릿 삭제 차단', () => {
+  beforeEach(() => { vi.clearAllMocks(); nextCountByTable = {}; });
+
+  it('RED: 참조하는 계약이 있으면 409로 차단하고 삭제를 시도하지 않는다', async () => {
+    mockGetCmsRoleForAction.mockResolvedValue('manager');
+    nextCountByTable = { contracts: 3 };
+    const event = {
+      request: makeRequest({ id: 'template-with-contracts' }),
+      locals: makeLocals('manager'),
+    };
+    const result = await (contractsActions as Record<string, (e: unknown) => Promise<unknown>>).delete(event);
+    expect(result).toMatchObject({ status: 409 });
+    expect((result as { data: { error: string } }).data.error).toContain('3건');
+  });
+
+  it('GREEN: 참조하는 계약이 없으면(0건) 409로 차단되지 않는다', async () => {
+    mockGetCmsRoleForAction.mockResolvedValue('manager');
+    nextCountByTable = { contracts: 0 };
+    const event = {
+      request: makeRequest({ id: 'template-without-contracts' }),
+      locals: makeLocals('manager'),
+    };
+    const result = await (contractsActions as Record<string, (e: unknown) => Promise<unknown>>).delete(event);
+    expect((result as { status?: number }).status).not.toBe(409);
+    expect((result as { status?: number }).status).not.toBe(403);
   });
 });
 

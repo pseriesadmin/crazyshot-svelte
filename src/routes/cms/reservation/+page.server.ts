@@ -84,9 +84,15 @@ export const load: PageServerLoad = async ({ parent, url }) => {
   const page     = parseInt(url.searchParams.get('page') ?? '1', 10)
   const selectedParam = url.searchParams.get('selected')
   const selectedId    = selectedParam ? parseInt(selectedParam, 10) : null
-  // '계약대기' 필터칩(2026-08-20) — status='hold' 중 전자계약이 발송됐지만 아직 서명되지
-  // 않은 건만 골라내는 별도 차원의 조건. status와 독립적인 파라미터라 URL도 별도로 관리.
+  // '계약대기' 필터칩(2026-08-20 신설 → 2026-09-08 범위 확정) — status='hold' 중 전자계약이
+  // 발송된 적이 있는 건 전부(서명 여부 무관, Stephen 확정) 골라내는 별도 차원의 조건.
+  // status와 독립적인 파라미터라 URL도 별도로 관리.
   const contractPending = url.searchParams.get('contract_pending') === '1'
+  // '신청대기' 칩(2026-09-08 신설) — 위 '계약대기'와 상호배타적인 파티션이 되도록, 전자계약을
+  // 아예 보낸 적 없는 hold 예약만 남긴다. '신청대기' 칩이 선택된 경우에만 적용(전체·취소 등
+  // 다른 칩에는 영향 없음) — 서명은 끝났지만 결제가 아직 안 된 예약이 '계약대기'에서 빠져
+  // 다시 '신청대기'에만 보이던 오인 문제 해소(service-operations.md 관련 논의 참고).
+  const isReservationPendingTab = status === 'hold' && !contractPending
 
   // confirmed 이후 상태는 /cms/rentals에서 관리 → 예약 목록에서 제외
   // draft(날짜 미정 임시예약)도 제외 — 고객이 체크아웃에서 날짜를 입력해 hold로 승격해야 관리자에게 노출됨(Default-Exclude)
@@ -104,6 +110,7 @@ export const load: PageServerLoad = async ({ parent, url }) => {
     p_per_page:                        30,
     p_exclude_statuses:                RENTAL_VIEW_STATUSES,
     p_require_contract_sent_unsigned:  contractPending || null,
+    p_exclude_contract_sent:           isReservationPendingTab || null,
   })
 
   if (error) console.error('[cms/reservation] get_rental_list error:', error.message)

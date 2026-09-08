@@ -170,6 +170,91 @@ describe('발행자 서명 필수 플래그 검증 — P8B-4', () => {
     expect(result.blocked).toBe(false);
   });
 
+  it('html 모드 + requires_issuer_signature=true + html_issuer_signature_url 없음 → 차단 (2026-09-08 회귀 방지)', async () => {
+    const { checkIssuerSignatureRequired } = await import(
+      '../../lib/contract-signature/issuerSignatureCheck.js'
+    );
+
+    const mockAdmin = {
+      from: vi.fn().mockImplementation((table: string) => {
+        if (table === 'contracts') {
+          return {
+            select: vi.fn().mockReturnThis(),
+            eq: vi.fn().mockReturnThis(),
+            maybeSingle: vi.fn().mockResolvedValue({
+              data: { template_id: 'tmpl-html', authoring_mode: 'html', html_issuer_signature_url: null },
+            }),
+          };
+        }
+        if (table === 'contract_templates') {
+          return {
+            select: vi.fn().mockReturnThis(),
+            eq: vi.fn().mockReturnThis(),
+            maybeSingle: vi.fn().mockResolvedValue({
+              data: { requires_issuer_signature: true },
+            }),
+          };
+        }
+        // html 모드는 contract_issuer_signatures를 조회하지 않아야 한다 — 호출되면 즉시 실패시켜
+        // "html 모드가 여전히 구(canvas 전용) 테이블을 보고 있지 않은가"를 함께 검증한다.
+        if (table === 'contract_issuer_signatures') {
+          throw new Error('html 모드는 contract_issuer_signatures를 조회하면 안 됩니다');
+        }
+        return {};
+      }),
+    };
+
+    const result = await checkIssuerSignatureRequired(
+      mockAdmin as unknown as Parameters<typeof checkIssuerSignatureRequired>[0],
+      'contract-html-1',
+    );
+    expect(result.blocked).toBe(true);
+    expect(result.reason).toContain('발행자');
+  });
+
+  it('html 모드 + requires_issuer_signature=true + html_issuer_signature_url 있음 → 통과 (2026-09-08 회귀 방지)', async () => {
+    const { checkIssuerSignatureRequired } = await import(
+      '../../lib/contract-signature/issuerSignatureCheck.js'
+    );
+
+    const mockAdmin = {
+      from: vi.fn().mockImplementation((table: string) => {
+        if (table === 'contracts') {
+          return {
+            select: vi.fn().mockReturnThis(),
+            eq: vi.fn().mockReturnThis(),
+            maybeSingle: vi.fn().mockResolvedValue({
+              data: {
+                template_id: 'tmpl-html',
+                authoring_mode: 'html',
+                html_issuer_signature_url: 'https://cdn.example.com/sig.png',
+              },
+            }),
+          };
+        }
+        if (table === 'contract_templates') {
+          return {
+            select: vi.fn().mockReturnThis(),
+            eq: vi.fn().mockReturnThis(),
+            maybeSingle: vi.fn().mockResolvedValue({
+              data: { requires_issuer_signature: true },
+            }),
+          };
+        }
+        if (table === 'contract_issuer_signatures') {
+          throw new Error('html 모드는 contract_issuer_signatures를 조회하면 안 됩니다');
+        }
+        return {};
+      }),
+    };
+
+    const result = await checkIssuerSignatureRequired(
+      mockAdmin as unknown as Parameters<typeof checkIssuerSignatureRequired>[0],
+      'contract-html-2',
+    );
+    expect(result.blocked).toBe(false);
+  });
+
   it('template_id가 없는 계약(템플릿 없음)은 필수 체크 스킵 — 통과', async () => {
     const { checkIssuerSignatureRequired } = await import(
       '../../lib/contract-signature/issuerSignatureCheck.js'

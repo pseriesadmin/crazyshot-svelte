@@ -98,6 +98,14 @@
   let origSpecsJson               = '[]'
   let origRequiresIssuerSignature = false
   let spreadsheetContentDirty     = $state(false)
+  // flow(TipTap)/html 모드 "수정 저장" 버튼도 spreadsheet와 동일하게 게이팅한다(2026-09-08,
+  // Stephen "다른 계약서 편집 UI와 동일" 요청 — 위 spreadsheet 전용 isDirty 판정을 그대로 확장).
+  // flow: TipTap 문서도 그리드처럼 Svelte 리액티비티 밖이라 ContractDocumentEditor의 신규
+  // onchange 콜백으로 별도 플래그. html: html_document 자체는 상수(변경 불가)라 발행자
+  // 서명·직인 URL/너비만 스냅샷 비교 대상.
+  let flowContentDirty            = $state(false)
+  let origHtmlIssuerSignatureUrl: string | null   = null
+  let origHtmlIssuerSignatureWidth: number | null = null
 
   $effect(() => {
     // ⛔ 반드시 로컬 상수에 먼저 계산해두고 그 값을 $state에 대입 + origXxx 스냅샷
@@ -126,11 +134,14 @@
     htmlIssuerSignatureUrl    = nextHtmlIssuerSignatureUrl
     htmlIssuerSignatureWidth  = nextHtmlIssuerSignatureWidth
 
-    // isDirty 비교 기준 스냅샷 갱신 + 그리드 변경 플래그 초기화(양식 전환·재로드 시점)
+    // isDirty 비교 기준 스냅샷 갱신 + 그리드/문서 변경 플래그 초기화(양식 전환·재로드 시점)
     origTitle                   = nextTitle
     origSpecsJson               = JSON.stringify(nextSpecs)
     origRequiresIssuerSignature = nextRequiresIssuerSignature
+    origHtmlIssuerSignatureUrl  = nextHtmlIssuerSignatureUrl
+    origHtmlIssuerSignatureWidth = nextHtmlIssuerSignatureWidth
     spreadsheetContentDirty     = false
+    flowContentDirty            = false
   })
 
   const isSpreadsheetDirty = $derived(
@@ -138,6 +149,18 @@
     JSON.stringify(specs) !== origSpecsJson ||
     requiresIssuerSignature !== origRequiresIssuerSignature ||
     spreadsheetContentDirty
+  )
+
+  // flow/html 모드 공용 isDirty — authoringMode에 따라 그 모드만의 콘텐츠 비교를 더한다.
+  const isFlowOrHtmlDirty = $derived(
+    title !== origTitle ||
+    JSON.stringify(specs) !== origSpecsJson ||
+    requiresIssuerSignature !== origRequiresIssuerSignature ||
+    (authoringMode === 'flow' && flowContentDirty) ||
+    (authoringMode === 'html' && (
+      htmlIssuerSignatureUrl !== origHtmlIssuerSignatureUrl ||
+      htmlIssuerSignatureWidth !== origHtmlIssuerSignatureWidth
+    ))
   )
 
   /** canvas 모드 초기 문서 — template의 canvas_document를 파싱 */
@@ -935,6 +958,7 @@
               bind:this={editorRef}
               initialContent={docInit.initialContent}
               initialHtml={docInit.initialHtml}
+              onchange={() => { flowContentDirty = true }}
             />
           {/key}
         </div>
@@ -964,15 +988,6 @@
     제출한다(HTML5 표준 기능) — 동작은 이전과 동일, 마크업 구조만 중첩을 없앴다.
   -->
   <div class="panel-actions">
-    {#if template}
-      <CmsDeleteButton
-        action="?/softDelete"
-        id={template.id}
-        warnMessage="한번 더 클릭 시 이 양식이 삭제됩니다."
-        successMessage="양식이 삭제되었습니다."
-        onsuccess={() => { onsaved?.('') }}
-      />
-    {/if}
     {#if authoringMode === 'canvas'}
       <!-- canvas 모드: 에디터 내 저장 버튼 사용 — 외부 저장 버튼 숨김 -->
       <span class="canvas-save-hint">저장은 캔버스 에디터 내 저장 버튼을 사용하세요.</span>
@@ -993,10 +1008,28 @@
         {saving ? '저장 중...' : template ? '수정 저장' : '양식 등록'}
       </button>
     {:else if authoringMode !== null}
-      <!-- flow 모드: 일반 저장 버튼 — form="tpl-form"으로 폼 밖에서도 정상 제출 -->
-      <button type="submit" form="tpl-form" class="btn-action" disabled={saving}>
+      <!--
+        flow/html 모드: 일반 저장 버튼 — form="tpl-form"으로 폼 밖에서도 정상 제출.
+        기존 양식 수정("수정 저장")은 isFlowOrHtmlDirty(실제 변경 감지)가 true일 때만
+        활성화 — spreadsheet 모드와 동일 원칙(2026-09-08, "다른 계약서 편집 UI와 동일"
+        요청). 신규 양식 등록("양식 등록")은 비교 대상 원본이 없어 게이팅 제외.
+      -->
+      <button type="submit" form="tpl-form" class="btn-action" disabled={saving || (!!template && !isFlowOrHtmlDirty)}>
         {saving ? '저장 중...' : template ? '수정 저장' : '양식 등록'}
       </button>
+    {/if}
+    {#if template}
+      <!-- 삭제 아이콘 버튼 — "수정 저장"/"양식 등록" 버튼 우측 끝에 배치(2026-09-08,
+           CMS 표준 아이콘형 삭제버튼 위치 요청). 이전엔 이 액션바 맨 왼쪽에 있었다
+           (margin-right:auto로 저장 버튼과 분리돼 있어 위치가 낯설다는 지적) — 지금은
+           저장 버튼 다음 순서로 옮기고 그 스타일 규칙을 제거했다. -->
+      <CmsDeleteButton
+        action="?/delete"
+        id={template.id}
+        warnMessage="한번 더 클릭 시 이 양식이 삭제됩니다."
+        successMessage="양식이 삭제되었습니다."
+        onsuccess={() => { onsaved?.('') }}
+      />
     {/if}
   </div>
 </div>
@@ -1213,7 +1246,6 @@
     border-top: 1px solid var(--cs-lilac);
     flex-shrink: 0;
   }
-  .panel-actions :global(.act-del) { margin-right: auto; }
 
   .btn-action {
     height: 34px;

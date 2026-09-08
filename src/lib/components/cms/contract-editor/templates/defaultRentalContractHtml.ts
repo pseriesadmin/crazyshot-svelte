@@ -135,6 +135,25 @@
  *    이 클래스는 신규로 발행되는 계약서부터만 적용되며, 이 변경 이전에 이미 발행된 계약서의
  *    저장된 html_document에는 없어 그 화면에서는 클릭 편집이 노출되지 않는다(레거시 계약은
  *    조용히 미노출 — 회귀 아님, 기존에도 없던 기능).
+ *
+ * ⚠️ 2026-09-08 발견·수정(10차, 고객(예약자) 서명 이미지를 다시보기에 반영) — 2차 수정 당시엔
+ *    "고객 실시간 서명은 SignatureCanvas가 이미 담당하니 이 HTML 블록과 무관"이라 판단해
+ *    "(인){{고객이름}}"을 순수 텍스트로 유지했다. 그런데 그 SignatureCanvas가 캡처한 서명
+ *    이미지(contract_signings.signature_data)는 서명 제출 즉시 DB에는 저장되지만 어디에도
+ *    다시 그려지지 않는 write-only 데이터였다 — 서명 완료 후 계약서를 다시 열어봐도(관리자
+ *    "보기"든 고객 본인 재조회든) 고객 서명은 흔적도 없이 "(인)이기성" 텍스트만 그대로
+ *    보였다(Stephen 실사용 중 발견). 발행자 서명·직인(7차)과 동일하게 표 서식 위에 겹쳐
+ *    보이는 오버레이로 노출하되, 발행 시점엔 아직 서명이 존재하지 않으므로 마커
+ *    (`<!--CUSTOMER_SIGNATURE-->`)는 "예약자" 값 셀에 심어두기만 하고, 고객이 실제로
+ *    서명을 제출하는 시점(POST /api/contracts/[token]/sign)에 1회 `applyCustomerSignatureMarker()`
+ *    (contract-substitution.ts)로 되구워 contracts.html_document에 저장한다 — 그 이후의
+ *    모든 재조회(관리자 미리보기·고객 재조회)는 이미 이미지가 구워진 html_document를 그대로
+ *    보여주므로 별도 런타임 합성 로직이 필요 없다. 발행자 셀과 같은 `.sig-host-cell`
+ *    (position:relative)을 재사용하고, `.customer-sig-overlay`는 `.issuer-sig-overlay`와
+ *    동일한 배치(중앙 겹침·z-index:5·pointer-events:none)를 별도 클래스명으로 독립 정의해
+ *    두 오버레이가 서로 영향을 주지 않게 했다. 이 마커는 신규로 발행되는 계약서부터만
+ *    적용되며, 이 변경 이전에 이미 발행·서명 완료된 계약서는 마커 자체가 없어 조용히
+ *    미노출된다(9차와 동일 원칙 — 레거시 계약 회귀 아님).
  */
 
 export const DEFAULT_RENTAL_CONTRACT_HTML = `
@@ -161,6 +180,7 @@ export const DEFAULT_RENTAL_CONTRACT_HTML = `
   .contract-wrap .sign-block .value { color: #333; }
   .contract-wrap .sig-host-cell { position: relative; }
   .contract-wrap .issuer-sig-overlay { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); max-width: none; z-index: 5; pointer-events: none; }
+  .contract-wrap .customer-sig-overlay { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); max-width: none; z-index: 5; pointer-events: none; max-height: 60px; }
   @media print {
     .contract-wrap { font-size: 11px; padding: 20px 15px; }
   }
@@ -199,7 +219,7 @@ export const DEFAULT_RENTAL_CONTRACT_HTML = `
         <td class="label-cell">연락처</td>
         <td>{{연락처}}</td>
         <td class="label-cell">예약자</td>
-        <td>(인){{고객이름}}</td>
+        <td class="sig-host-cell">(인){{고객이름}}<!--CUSTOMER_SIGNATURE--></td>
       </tr>
       <tr>
         <td class="label-cell">주소</td>
@@ -270,17 +290,22 @@ export const DEFAULT_RENTAL_CONTRACT_HTML = `
         <td class="label-cell" rowspan="4">특이사항</td>
         <td class="cs-special-notes-cell" colspan="2" rowspan="4"><!--SPECIAL_NOTES--></td>
       </tr>
+      <!-- 2026-09-08 수정 — "△"(차감 표시) 접두사를 이 정적 템플릿 텍스트에서 제거하고
+           formatDeltaAmount()(contract-data/+server.ts)가 실제 값이 0보다 클 때만 값
+           자체에 붙이도록 이관했다. 정적으로 박아두면 할인·포인트가 전혀 없는(0원/-)
+           예약에서도 "△ 0원"/"△ -"처럼 실제로 차감된 게 없는데 차감 기호가 붙어
+           보이는 문제가 있었다(Stephen 실사용 중 발견). -->
       <tr>
         <td class="label-cell">할인 적용</td>
-        <td style="text-align:right">△ {{할인금액}}</td>
+        <td style="text-align:right">{{할인금액}}</td>
       </tr>
       <tr>
         <td class="label-cell">포인트 사용</td>
-        <td style="text-align:right">△ {{차감포인트}}</td>
+        <td style="text-align:right">{{차감포인트}}</td>
       </tr>
       <tr>
         <td class="label-cell">할인적용 금액</td>
-        <td style="text-align:right">△ {{할인차감}}</td>
+        <td style="text-align:right">{{할인차감}}</td>
       </tr>
       <tr>
         <td class="label-cell">배송비</td>

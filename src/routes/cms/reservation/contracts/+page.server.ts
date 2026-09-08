@@ -310,7 +310,16 @@ export const actions: Actions = {
     return { ok: true }
   },
 
-  softDelete: async ({ request, locals }) => {
+  // 2026-09-08(Stephen 확정, 명시적 요청): "목록에서만 제외하지 말고 실제 DB에서도
+  // 삭제되게 하라" — 이 화면의 삭제는 다른 대부분의 CMS 화면(products.md §1 등)과 달리
+  // 의도적으로 소프트 삭제(deleted_at)가 아니라 실제 행 삭제(hard delete)다. 액션명도
+  // 그 의미를 정확히 반영하도록 softDelete → delete로 변경(호출부 ContractTemplatePanel.
+  // svelte·+page.svelte 동반 수정).
+  //
+  // contracts.template_id FK(ON DELETE NO ACTION)가 이 템플릿을 참조하는 계약이 있으면
+  // 삭제 자체를 막으므로, 원시 FK 위반 에러를 그대로 노출하지 않도록 삭제 전에 먼저
+  // 참조 계약 수를 확인해 이해 가능한 메시지로 차단한다.
+  delete: async ({ request, locals }) => {
     const { session } = await locals.safeGetSession()
     if (!session) return fail(401, { error: '인증 필요' })
     const cmsRole = await getCmsRoleForAction(locals)
@@ -323,9 +332,19 @@ export const actions: Actions = {
 
     if (!id) return fail(400, { error: 'ID가 없습니다.' })
 
+    const { count, error: countErr } = await admin
+      .from('contracts')
+      .select('id', { count: 'exact', head: true })
+      .eq('template_id', id)
+
+    if (countErr) return fail(500, { error: countErr.message })
+    if ((count ?? 0) > 0) {
+      return fail(409, { error: `이 양식으로 발행된 계약이 ${count}건 있어 삭제할 수 없습니다.` })
+    }
+
     const { error } = await admin
       .from('contract_templates')
-      .update({ deleted_at: new Date().toISOString() })
+      .delete()
       .eq('id', id)
 
     if (error) return fail(500, { error: error.message })
