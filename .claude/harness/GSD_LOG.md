@@ -1,6 +1,11 @@
 # GSD_LOG.md — 크레이지샷 실행 이력
 # 형식: [YYYY-MM-DD HH:MM] 타입 | 타스크명 | 파일 | 소요 | 결과
 
+[2026-09-09(이 세션'만')] 🔴CRITICAL | 상품상세 Day(24H) 가격이 CMS price_rules 수정을 무시하고 레거시 base_price_daily를 우선 표시하던 결함 수정(Sony FX6-12: 120,000→70,000 정상화) — attachPrices()·popularProducts 우선순위 반전(price_rules 있으면 항상 우선, 없을 때만 legacy 폴백), Stephen 확인 후 적용 | src/routes/products/[id]/+page.server.ts | GATE E 통과(sp3-qa-agent 독립검수 — Stage DB 수치 수동재계산으로 반전 방향 재확인, 레거시전용 상품 11건 회귀없음 확인)
+[2026-09-09(후속)] 확인 | Production 동일 결함 데이터 존재 여부 긴급 점검 — Production DB 부모상품 46개 전수 대조 결과 base_price_daily 비정상값 0건, 실제 고객 피해 없음 확인(코드 미배포 상태라 잠재위험은 유지) | (코드변경 없음, DB 조회 전용) | ✅ 긴급대응 불필요 확인 — sp3-qa-agent는 Supabase MCP 툴셋 부재로 재검증 불가 정직보고, 이 세션이 직접 서로 다른 쿼리 형태로 2회 재현해 0건 확정
+[2026-09-09(같은 날 3차 세션, 이 세션'만')] 🔴CRITICAL | 위와 동일한 legacy 우선순위 결함이 상품상세 1곳만 고쳐지고 남아있던 4개 화면(헤더슬라이드·메인그리드·MD추천/홈/하입팩배너·하입팩테마상세)에 동일 패턴으로 확산 수정 — Manfrotto 055가 헤더슬라이드(20,000원)와 상품상세(35,000원)에서 다르게 보이는 걸 Stephen이 라이브 UI로 지적해 발견, attachPrices()와 동일한 우선순위(price_rules 있으면 항상 우선)로 반전 | src/routes/products/+page.server.ts(mergePrice), src/routes/+page.server.ts(withDualPrice), src/routes/hype-pack/+page.server.ts(3곳), src/routes/hype-pack/theme/[id]/+page.server.ts | ✅ GATE E 통과(sp3-qa-agent 독립검수 — 4개 파일 diff 전수대조로 attachPrices()와 동치 확인, 파일별 null/0 폴백 타입 보존 확인, 신규 svelte-check 에러 0건). production `__data.json`을 devalue로 직접 디코딩해 그리드 16개+상세 7개 교차확인(코드 결함 패턴은 동일했으나 확인 범위 내 가시적 피해 없음) — 실서버 404 콘솔에러 별건 진단(구버전 클라이언트 자동복구, 코드결함 아님)도 같은 세션에서 함께 수행. DB/RPC/마이그레이션 변경 없음. git commit은 Stephen 직접 실행.
+
+
 [2026-09-08(이 세션'만')] 신규 | '파일등록' UI 컴포넌트 디자인시스템 등록 + 외국인증명 업로드 콤보체크박스→슬롯형 재구성 + CMS 파일라벨 메타매핑 | .claude/rules-ref/front-uiux.md(§22 신설), src/lib/components/members/profile/ProfileTabContent.svelte, src/lib/components/cms/CustomerDetailPanel.svelte | ✅ 완료(svelte-check 신규에러 0건) — DB/RPC/마이그레이션 변경 없음. 본인증명(identity) 섹션은 순서보장이 없어 의도적으로 미변경(front-uiux.md §22-7). git commit은 Stephen 직접 실행.
 
 [2026-09-08(같은 날 후속, 이 세션'만')] 신규 | 본인증명(identity)도 슬롯형으로 전환 + CMS 파일라벨 메타매핑 + 중복마크업/미사용CSS 정리 | src/lib/components/members/profile/ProfileTabContent.svelte, src/lib/components/cms/CustomerDetailPanel.svelte, .claude/rules-ref/front-uiux.md(§22-4 스테일 서술 정정) | ✅ 완료(svelte-check 신규에러 0건, unused-CSS 0건) — 5종 중 1개 이상만 채우면 등록 가능하도록 검증조건 조정(외국인증명은 전부필수와 차이). showIdentityForm true/false 완전동일 중복마크업 통합. DB/RPC/마이그레이션 변경 없음. git commit은 Stephen 직접 실행.
@@ -8176,3 +8181,11 @@ Stephen 직접 실행 필요
   루트만 선별교체" 절차를 문서화해 향후 재회귀에도 자동 대응 가능하게 설계. 문서만 수정, 코드
   변경 없음. account/profile 100vh 회귀 자체는 아직 미수정(요청범위 밖, Stephen 확인 대기).
   git commit 미실행.
+
+[2026-09-09(이 세션'만')] 수정 | /account/rental 예약신청취소 버튼 비활성화 + 채팅카드 단독진입 시 PC 이동수단 부재 버그 수정 | src/routes/account/rental/+page.svelte, src/lib/components/account/PcRentalPanel.svelte | ✅ 완료(svelte-check 신규에러 0건, vitest canCancel 7/7 GREEN) — canCancel=false 시 버튼 disabled+툴팁, [id]페이지와 동일한 인라인 .btn-back 신설(SubGnb mobileOnly라 PC에서 유일한 이동수단). /account/cancel도 동일 갭 발견했으나 범위 밖이라 미수정. DB/RPC 변경 없음. git commit은 Stephen 직접 실행.
+
+[2026-09-09(GATE E, 이 세션'만')] 검증 | 위 예약신청취소 버튼 비활성화 + /account/rental PC 뒤로가기 신설 @sp3-qa-agent 검수 | src/routes/account/rental/+page.svelte, src/lib/components/account/PcRentalPanel.svelte | ✅ 통과 — CRITICAL/HIGH 결함 없음, 스코프 정합·근본원인 분석·44px 터치타겟·disabled 동작 전부 확인. 참고: 이 작업과 무관한 타세션 pending 파일(contract-editor 템플릿, Migration #469) 존재 확인 — 커밋 시 실수로 섞이지 않게 Stephen 확인 필요.
+
+[2026-09-09(같은 날 후속, 이 세션'만')] 수정 | /account/cancel도 동일하게 PC 뒤로가기 버튼 신설 | src/routes/account/cancel/+page.svelte | ✅ 완료(svelte-check 신규에러 0건) — /account/rental과 동일한 인라인 .btn-back 패턴 재사용(코드 동일). 취소버튼 비활성화는 해당없음(읽기전용 목록). DB/RPC 변경 없음. git commit은 Stephen 직접 실행.
+
+[2026-09-09(GATE E, 같은 날 후속, 이 세션'만')] 검증 | /account/cancel PC 뒤로가기 신설 @sp3-qa-agent 검수 | src/routes/account/cancel/+page.svelte | ✅ 통과 — CRITICAL/HIGH 결함 없음, 스코프 1파일 격리 확인·코드 100% /account/rental과 동일 이식 확인·읽기전용 판단 타당·svelte-check 0건.

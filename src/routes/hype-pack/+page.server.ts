@@ -139,6 +139,9 @@ export const load: PageServerLoad = async ({ locals }) => {
         const prod = prodMap.get(item.product_id)
         const fallbackImage = prod?.image_urls?.[0] ?? null
         const legacyDaily = prod?.base_price_daily ?? 0
+        // 2026-09-09: CMS 가격정책(price_rules) 우선 — products/[id]/+page.server.ts
+        // attachPrices()와 동일한 우선순위 수정(동일 버그 패턴).
+        const rule24h = price24hMap[item.product_id]
         return {
           product_id:       item.product_id,
           subtitle:         item.subtitle,
@@ -148,26 +151,27 @@ export const load: PageServerLoad = async ({ locals }) => {
           image_url:        fallbackImage,
           pc_image_url:     item.pc_image_url ?? fallbackImage,
           mobile_image_url: item.mobile_image_url ?? fallbackImage,
-          price24h: legacyDaily > 0 ? legacyDaily : (price24hMap[item.product_id] ?? null),
+          price24h: rule24h != null ? rule24h : (legacyDaily > 0 ? legacyDaily : null),
           price12h: price12hMap[item.product_id] ?? null,
         }
       })
       .filter((i) => i.name)
   }
 
-  // 테마그룹 상품에도 동일하게 12h/24h 가격 부착(구독형 legacy base_price_daily 우선)
+  // 테마그룹 상품에도 동일하게 12h/24h 가격 부착
+  // 2026-09-09: CMS 가격정책(price_rules) 우선 — 동일 버그 패턴 수정
   const enrichedThemeGroups: ThemeGroupWithProducts[] = themeGroups.map((g) => ({
     ...g,
     products: g.products.map((p) => ({
       ...p,
-      base_price_daily: p.base_price_daily > 0 ? p.base_price_daily : (price24hMap[p.id] ?? 0),
+      base_price_daily: price24hMap[p.id] ?? (p.base_price_daily > 0 ? p.base_price_daily : 0),
     })),
   }))
   const enrichedThemeGroupsAdmin: ThemeGroupAdmin[] = themeGroupsAdmin.map((g) => ({
     ...g,
     products: g.products.map((p) => ({
       ...p,
-      base_price_daily: p.base_price_daily > 0 ? p.base_price_daily : (price24hMap[p.id] ?? 0),
+      base_price_daily: price24hMap[p.id] ?? (p.base_price_daily > 0 ? p.base_price_daily : 0),
     })),
   }))
 
