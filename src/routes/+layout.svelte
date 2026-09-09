@@ -56,7 +56,20 @@
 {#if !page.url.pathname.startsWith('/cms')}
 	<IosAddToHomeScreenBanner />
 	<!-- 표준 토스트(csToast, $lib/utils/toast) 렌더러 — /cms는 자체 Toaster 등록됨(cms/+layout.svelte) -->
-	<Toaster position="bottom-center" richColors closeButton />
+	<!-- 2026-09-09(Stephen 신고 "대여설정 미입력 스크롤 경고 토스트가 안 뜬다" 재조사) —
+	     토스트 자체는 정상 발화하고 있었으나(z-index 999999999로 항상 최상단), 기본
+	     offset(하단 24px)이 /cart 전용 fixed CTA 푸터(.cart-footer, 데스크톱 ~101px·
+	     모바일은 세로 스택+세이프에어리어로 더 큼)와 같은 하단 영역에 겹쳐 렌더링되어
+	     버튼에 가려 보이거나 매우 좁게만 보이는 시각적 결함이었음(실브라우저 스크롤 —
+	     rootMargin 샘플링 이슈와 별개의 원인). /cart에서만 offset을 푸터 높이보다 크게
+	     올려 겹침 해소 — 다른 화면의 토스트 위치는 변경 없음. -->
+	<Toaster
+		position="bottom-center"
+		richColors
+		closeButton
+		offset={page.url.pathname.startsWith('/cart') ? { bottom: 140 } : undefined}
+		mobileOffset={page.url.pathname.startsWith('/cart') ? { bottom: 170 } : undefined}
+	/>
 {/if}
 
 <div class="min-h-screen flex flex-col">

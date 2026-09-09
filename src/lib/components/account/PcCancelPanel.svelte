@@ -124,7 +124,9 @@
 
   .cancel-card {
     background: var(--cs-white);
-    border-radius: var(--radius-2xl);
+    /* front-uiux.md §4 카드 반경 대/중 2단 체계 — 730px 폭 좁은 패널 안 리스트 카드라
+       "중(medium)" 등급(PC 30px)으로 축소, "대(large)"(50px)는 최상위 컨테이너 전용 */
+    border-radius: var(--radius-xl);
     padding: 20px 24px;
     display: flex;
     flex-direction: column;

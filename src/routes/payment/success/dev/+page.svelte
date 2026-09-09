@@ -110,25 +110,43 @@
               <span class="detail-value">{fmt(item.price)} 원</span>
             </div>
           {/if}
-
-          {#if item.options && item.options.length > 0}
-            <div class="detail-row detail-row--option">
-              <span class="detail-label">포함 옵션</span>
-              <span class="detail-value detail-value--options">
-                {#each item.options as opt (opt.name)}
-                  <span class="option-chip">{opt.name} {opt.qty}개</span>
-                {/each}
-              </span>
-            </div>
-          {/if}
         </div>
 
       </div>
+
+      <!-- 옵션상품 — 본상품 카드와 완전히 동일한 구조(order-product 헤더 + order-detail
+           행)로 렌더링(2026-09-09). "수량"·"대여요금" 각각 본상품의 detail-row와 동일한
+           라벨-값 형식·무게로 독립된 행에 표시 — 한 행에 합쳐 표기하지 않음. -->
+      {#if item.options && item.options.length > 0}
+        {#each item.options as opt (opt.name)}
+          <div class="order-card">
+            <div class="order-product">
+              <p class="product-name">{opt.name} <span class="option-tag">(옵션)</span></p>
+            </div>
+            <div class="order-detail">
+              <div class="detail-row">
+                <span class="detail-label">수량</span>
+                <span class="detail-value">{opt.qty}개</span>
+              </div>
+              {#if opt.price}
+                <div class="detail-row">
+                  <span class="detail-label">대여요금</span>
+                  <span class="detail-value">{fmt(opt.price)} 원</span>
+                </div>
+              {/if}
+            </div>
+          </div>
+        {/each}
+      {/if}
     {/each}
 
     <!-- ── 예약 요금 분해 카드 ── -->
     <!-- 2026-08-21(Phase B): "결제 내역"→"예약 내역"으로 개명 — 이 시점엔 아직 결제가
-         발생하지 않았다(쿠폰/포인트 선택·소진도 3단계로 이동해 여기선 항상 미적용). -->
+         발생하지 않았다(실제 소진은 3단계/계약서명). 단 쿠폰/포인트 "선택"은 2026-08-24
+         장바구니 UI 복원 이후 amount(결제 예정 금액)에 이미 반영돼 있으므로, 그 근거를
+         이 카드에서도 cart Order Total 섹션과 동일한 항목·순서·표기로 함께 보여준다
+         (2026-09-09 — 항목 누락으로 "대여요금+배송료≠결제예정금액"이 설명 없이 보이던
+         결함 수정). -->
     <div class="order-card">
       <div class="order-product">
         <p class="product-name">예약 내역</p>
@@ -149,6 +167,13 @@
           </div>
         {/if}
 
+        {#if data.couponDiscount > 0}
+          <div class="detail-row">
+            <span class="detail-label">쿠폰 할인</span>
+            <span class="detail-value detail-value--discount">−{fmt(data.couponDiscount)} 원</span>
+          </div>
+        {/if}
+
         {#if data.deliveryFee > 0}
           <div class="detail-row">
             <span class="detail-label">배송요금</span>
@@ -162,11 +187,24 @@
         {/if}
 
         {#if data.vat > 0}
+          <!-- cart Order Total 섹션(src/routes/cart/+page.svelte)과 동일한 "포함가 역산"
+               표기 — 별도 가산 항목이 아니라 위 대여요금에 이미 포함된 금액이므로 괄호로
+               표시(합산에 포함되지 않음을 명시). "18,182 원" 형태로만 단독 노출되면
+               "더해야 할 금액"으로 오인될 수 있어 2026-09-09 수정. -->
           <div class="detail-row">
-            <span class="detail-label">부가세 (10%)</span>
-            <span class="detail-value">{fmt(data.vat)} 원</span>
+            <span class="detail-label">부가세 (10%, 포함)</span>
+            <span class="detail-value">({fmt(data.vat)}원)</span>
           </div>
         {/if}
+
+        <div class="detail-row">
+          <span class="detail-label">포인트 사용</span>
+          <span
+            class="detail-value"
+            class:detail-value--points-off={data.pointsUsed === 0}
+            class:detail-value--points-on={data.pointsUsed > 0}
+          >{fmt(data.pointsUsed)} point</span>
+        </div>
 
         <div class="price-divider"></div>
 
@@ -414,6 +452,13 @@
     line-height: 2;
     margin: 0;
   }
+  /* 옵션상품 카드 헤더 — 본상품과 동일한 product-name 안에서 이름 우측에 구분용 태그만
+     추가(2026-09-09). 카드 구조·굵기는 본상품과 동일하게 유지, 이 태그만 옅게 처리. */
+  .option-tag {
+    font: var(--text-m-script-14B);
+    color: var(--cs-text-light);
+    font-weight: 400;
+  }
 
   /* 상세 */
   .order-detail {
@@ -433,9 +478,6 @@
   }
   .detail-row--total {
     padding-top: 4px;
-  }
-  .detail-row--option {
-    align-items: flex-start;
   }
   .detail-label {
     font: var(--text-m-script-14B);
@@ -458,31 +500,14 @@
   }
   .detail-value--discount { color: var(--cs-error, #e53e3e); }
   .detail-value--free     { color: var(--cs-purple); font: var(--text-m-script-14B); line-height: 2; }
+  /* 포인트 사용 — 미사용(0)은 옅은 회색, 사용(N)은 짙은 회색으로 상태 구분(2026-09-09) */
+  .detail-value--points-off { color: var(--cs-text-light); }
+  .detail-value--points-on  { color: var(--cs-text-dark); }
   .detail-value--total    {
     font: var(--text-m-title-18B);
     color: var(--cs-purple-dark);
     letter-spacing: -0.3px;
   }
-  .detail-value--options {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 6px;
-    justify-content: flex-end;
-    line-height: 1;
-    padding-top: 6px;
-  }
-  .option-chip {
-    display: inline-block;
-    font: var(--text-m-script-12);
-    font-size: 11px;
-    font-weight: 700;
-    color: var(--cs-purple);
-    background: var(--cs-purple-op10);
-    border-radius: var(--radius-full);
-    padding: 3px 10px;
-    white-space: nowrap;
-  }
-
   .price-divider {
     width: 100%;
     height: 1px;
