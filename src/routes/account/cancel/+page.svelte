@@ -134,11 +134,16 @@
 
   .cancel-card {
     background: var(--cs-white);
-    border-radius: var(--radius-2xl);
+    border-radius: var(--radius-2xl);   /* PC: 50px */
     padding: 20px;
     display: flex;
     flex-direction: column;
     gap: 10px;
+  }
+
+  /* front-uiux.md §4 카드 반경 대/중 2단 체계 — 대(large) Mobile 30px(하드코딩, 전용 변수 없음) */
+  @media (max-width: 640px) {
+    .cancel-card { border-radius: 30px; }
   }
 
   .card-head {
