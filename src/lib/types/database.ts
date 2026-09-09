@@ -286,6 +286,8 @@ export interface Order {
   order_key: string;                   // 표시용 주문코드 (예: ORD-20260820-00001)
   total_amount: number;
   discount_amount: number | null;
+  /** 쿠폰 할인액(2026-09-09 신설) — create_reservation_order RPC가 계산·저장, final_amount 산식에 반영됨 */
+  coupon_discount_amount: number | null;
   tax_amount: number | null;
   final_amount: number;
   status: string | null;
