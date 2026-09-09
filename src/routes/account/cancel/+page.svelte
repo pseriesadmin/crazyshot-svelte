@@ -1,6 +1,7 @@
 <script lang="ts">
   import SubGnb from '$lib/components/common/SubGnb.svelte'
   import BottomTabBar from '$lib/components/common/BottomTabBar.svelte'
+  import { goto } from '$app/navigation'
   import type { PageData } from './$types'
   import type { MyCancel } from './+page.server'
 
@@ -18,6 +19,16 @@
   <SubGnb title="취소·반품" mobileOnly />
 
   <div class="content">
+
+    <!-- 뒤로가기 — SubGnb가 PC에서는 렌더링되지 않아(mobileOnly) 채팅 대화카드 등으로
+         이 화면에 새 탭/직접 진입 시 PC에서 이동 수단이 전혀 없던 문제 방지
+         (/account/rental/+page.svelte와 동일 수정, 2026-09-09) -->
+    <button type="button" class="btn-back" onclick={() => goto('/account')}>
+      <svg width="8" height="14" viewBox="0 0 8 14" fill="none" aria-hidden="true">
+        <path d="M7 1L1 7L7 13" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+      </svg>
+      마이페이지
+    </button>
 
     {#if data.cancels.length === 0}
       <div class="empty-state">
@@ -73,6 +84,25 @@
     width: 100%;
     box-sizing: border-box;
   }
+
+  /* 뒤로가기 — /account/rental/+page.svelte와 동일 스펙(SubGnb mobileOnly라
+     PC에서는 이 버튼이 유일한 이동 수단) */
+  .btn-back {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    background: none;
+    border: none;
+    padding: 0;
+    cursor: pointer;
+    color: var(--cs-text-mid);
+    font-family: 'Noto Sans KR', sans-serif;
+    font-size: 13px;
+    font-weight: 700;
+    min-height: 44px;
+    min-width: 44px;
+  }
+  .btn-back:hover { color: var(--cs-purple); }
 
   /* 빈 상태 */
   .empty-state {

@@ -194,6 +194,8 @@
               <button
                 type="button"
                 class="card-actions-btn danger"
+                disabled={!rental.canCancel}
+                title={rental.canCancel ? undefined : '방문 수령 6시간 전부터는 취소가 제한됩니다. 채팅으로 문의해주세요.'}
                 onclick={() => openCancelModal(rental)}
               >
                 예약신청 취소
@@ -450,6 +452,15 @@
   }
   .card-actions-btn.danger:hover  { background: rgba(255,53,53,0.06); }
   .card-actions-btn.danger:active { background: rgba(255,53,53,0.12); }
+  .card-actions-btn:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+    background: var(--cs-white);
+    border-color: #ddd;
+    color: #999;
+  }
+  .card-actions-btn.danger:disabled:hover,
+  .card-actions-btn.danger:disabled:active { background: var(--cs-white); }
 
   /* 예약신청취소 모달 (Figma 기준: --cs-purple-dark top + --cs-dark bottom + --radius-2xl) */
   .cancel-modal-backdrop {
