@@ -37,12 +37,17 @@ async function attachPrices(
 	const rule24h = ruleArr.find((r) => r.duration_type === '24h');
 	const rule12h = ruleArr.find((r) => r.duration_type === '12h');
 
+	// 2026-09-09: CMS 가격정책(price_rules)이 항상 우선 — price_rules 24h 행이 있으면
+	// 그 값을 쓰고, 아예 없는 상품(price_rules 미설정 레거시)만 옛 base_price_daily로
+	// 폴백한다. 과거엔 반대(legacy > 0이면 무조건 legacy 우선)였는데, CMS에서 가격을
+	// 수정해도 legacy 값이 남아있는 상품(예: Sony FX6-12)은 화면에 영원히 반영되지
+	// 않는 결함이었음(Stephen 발견·확정).
 	const legacyDaily = product.base_price_daily;
 	const legacyNum = legacyDaily != null && legacyDaily !== '' ? Number(legacyDaily) : 0;
 	const base_price_daily =
-		legacyNum > 0
-			? legacyNum
-			: rule24h?.price != null ? Number(rule24h.price) : 0;
+		rule24h?.price != null
+			? Number(rule24h.price)
+			: legacyNum;
 
 	return {
 		...product,
@@ -280,7 +285,8 @@ export const load: PageServerLoad = async ({ params, locals }) => {
 
 		const popRows = (popRaw ?? []) as Array<{ id: string; name: string; slug: string | null; image_urls: string[]; base_price_daily: number }>;
 
-		// base_price_daily=0인 상품은 price_rules 24H 룰로 폴백
+		// 2026-09-09: price_rules 24h가 있으면 항상 우선(CMS 값), 없는 상품만 legacy 폴백
+		// (attachPrices()와 동일한 우선순위 수정 — 동일 버그 패턴)
 		const popIds = popRows.map((p) => p.id);
 		const pop24hMap: Record<string, number> = {};
 		if (popIds.length > 0) {
@@ -298,12 +304,13 @@ export const load: PageServerLoad = async ({ params, locals }) => {
 
 		popularProducts = popRows.map((p) => {
 			const legacy = p.base_price_daily ?? 0;
+			const rule24h = pop24hMap[p.id];
 			return {
 				id:       p.id,
 				name:     p.name,
 				slug:     p.slug,
 				imageUrl: p.image_urls?.[0] ?? null,
-				price24h: legacy > 0 ? legacy : (pop24hMap[p.id] ?? 0),
+				price24h: rule24h != null ? rule24h : legacy,
 				category: row.category as string,
 			};
 		});
