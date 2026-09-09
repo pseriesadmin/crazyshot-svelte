@@ -256,6 +256,17 @@
  *    통합하는 기능(2026-08-28)·수령/반납 방식 한글 라벨(rental_method_options.name 직접
  *    사용으로 전환)·배송 시 시간정보 미노출은 전부 기존 동작이 이미 올바르거나(코드 조사로
  *    확인) 데이터 계산만 손댄 부분이라 이 템플릿 파일 자체의 마커·구조는 변경 없음.
+ *
+ * 2026-09-09 "정산내역" 표 컬럼폭 조정 — 특약사항 입력 공간 확보(Stephen 지시: "정상대여가
+ *    총액~최종 결제 금액 변수값 영역 가로 공간을 좁혀 특약공간 변수값 영역 가로폭을 그만큼
+ *    넓힐 것"). `.contract-wrap`의 실제 콘텐츠 폭(max-width:794px - padding 30px*2 =
+ *    734px)을 기준으로, 금액 값 칸(정상 대여가 총액~최종 결제 금액, 6개 셀) 각각에
+ *    `width:150px`를 명시해 좁히고, 특약사항 값 셀(`cs-special-notes-cell`, colspan="2")에
+ *    `width:384px`를 명시해 그만큼 넓혔다(라벨 칸 2개 × 100px + 150px + 384px = 734px,
+ *    합이 정확히 일치하도록 역산). 컬럼 수·rowspan/colspan 구조 자체는 무변경 — 폭
+ *    수치만 조정. "구분" 블록의 수령방법/반납방법 값 칸(col5)은 별도 width 지정 없이
+ *    특약사항 값 칸(col4+col5 합산 384px) 안에서 자동 배분되도록 유지(수령방법 라벨
+ *    칸이 여전히 100px로 col4를 고정하므로 col5 ≈ 284px로 자연 계산됨).
  */
 
 export const DEFAULT_RENTAL_CONTRACT_HTML = `
@@ -393,35 +404,39 @@ export const DEFAULT_RENTAL_CONTRACT_HTML = `
   <table>
     <tbody>
       <tr>
-        <td class="label-cell">정상 대여가 총액</td>
-        <td style="text-align:right">{{기본대여요금}}</td>
+        <td class="label-cell">정상 대여요금</td>
+        <td style="text-align:right; width:150px">{{기본대여요금}}</td>
         <td class="label-cell" rowspan="5">특약사항</td>
-        <td class="cs-special-notes-cell" colspan="2" rowspan="5"><!--SPECIAL_NOTES--></td>
+        <td class="cs-special-notes-cell" colspan="2" rowspan="5" style="width:384px"><!--SPECIAL_NOTES--></td>
       </tr>
       <!-- 2026-09-08 수정 — "△"(차감 표시) 접두사를 이 정적 템플릿 텍스트에서 제거하고
            formatDeltaAmount()(contract-data/+server.ts)가 실제 값이 0보다 클 때만 값
            자체에 붙이도록 이관했다. 정적으로 박아두면 할인·포인트가 전혀 없는(0원/-)
            예약에서도 "△ 0원"/"△ -"처럼 실제로 차감된 게 없는데 차감 기호가 붙어
            보이는 문제가 있었다(Stephen 실사용 중 발견). -->
+      <!-- 2026-09-09 수정(Stephen 지시) — "할인 적용" 행은 등급할인(할인금액)이 아니라
+           쿠폰 할인(할인차감)을 표시하도록 값을 이동 + 라벨을 "할인쿠폰 적용"으로 변경.
+           "할인적용 금액" 행(라벨 유지)은 부가세(포함가 역산, contract-data/+server.ts
+           formatVatAmount)로 교체 — 안내용 표시일 뿐 최종합계 산식에는 가산하지 않음. -->
       <tr>
-        <td class="label-cell">할인 적용</td>
-        <td style="text-align:right">{{할인금액}}</td>
+        <td class="label-cell">할인쿠폰 적용</td>
+        <td style="text-align:right; width:150px">{{할인차감}}</td>
       </tr>
       <tr>
         <td class="label-cell">포인트 사용</td>
-        <td style="text-align:right">{{차감포인트}}</td>
+        <td style="text-align:right; width:150px">{{차감포인트}}</td>
       </tr>
       <tr>
-        <td class="label-cell">할인적용 금액</td>
-        <td style="text-align:right">{{할인차감}}</td>
+        <td class="label-cell">부가세</td>
+        <td style="text-align:right; width:150px">{{부가세}}</td>
       </tr>
       <tr>
         <td class="label-cell">배송비</td>
-        <td style="text-align:right">{{배송비}}</td>
+        <td style="text-align:right; width:150px">{{배송비}}</td>
       </tr>
       <tr class="final-row">
-        <td class="label-cell" rowspan="2">최종 결제 금액</td>
-        <td style="text-align:right; font-size: 13px;" rowspan="2">{{최종합계}} (▣VAT포함)</td>
+        <td class="label-cell" rowspan="2">최종 결제요금</td>
+        <td style="text-align:right; font-size: 13px; width:150px" rowspan="2">{{최종합계}} (▣VAT포함)</td>
         <td class="label-cell" rowspan="2">구분</td>
         <td class="label-cell">수령방법</td>
         <td>{{수령방법지점}}</td>

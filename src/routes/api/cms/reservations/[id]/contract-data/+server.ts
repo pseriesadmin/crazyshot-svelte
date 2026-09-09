@@ -1,4 +1,4 @@
-import { createClient, type SupabaseClient } from '@supabase/supabase-js'
+import { createClient } from '@supabase/supabase-js'
 import { SUPABASE_SERVICE_ROLE_KEY } from '$env/static/private'
 import { PUBLIC_SUPABASE_URL } from '$env/static/public'
 import { json } from '@sveltejs/kit'
@@ -33,6 +33,18 @@ function formatDeltaAmount(n: number | null | undefined): string {
   return '△ ' + formatAmount(n)
 }
 
+// 2026-09-09 신규 — 부가세(VAT) 전용. cart/+page.svelte otVat과 동일한 "포함가 역산" 표시
+// 관례(`(${금액}원)`, PriceRow label "부가세 (10%, 포함)")를 그대로 재사용한다. orders.
+// tax_amount는 항상 0으로 저장돼(주문 생성 RPC가 별도 부가세 계산을 하지 않음 — 대여요금
+// 자체가 이미 부가세 포함가라는 전제) 실질적으로 쓸 수 없는 값이라, 이 컬럼을 읽는 대신
+// "기본대여요금 - 등급할인"(=부가세 포함 순대여가, cart의 otNetBeforeVat과 동일 산식)에서
+// 10/110을 역산해 "이 안에 부가세가 얼마 포함돼 있었는지"만 안내용으로 표시한다(합계 계산에
+// 더하지 않음 — 이미 포함돼 있으므로 이중과세 방지).
+function formatVatAmount(netBeforeVat: number): string {
+  const vat = Math.round(netBeforeVat - netBeforeVat / 1.1)
+  return `(${vat.toLocaleString('ko-KR')}원)`
+}
+
 // rental_reservations.start_date/end_date("YYYY-MM-DD") → 원본 엑셀 표기("YYYY.MM.DD")
 function formatDateDot(d: string | null | undefined): string {
   if (!d) return '-'
@@ -58,48 +70,17 @@ function formatTotalUsageHours(
   return `${diffHours}시간`
 }
 
-// ⛔ 2026-08-31(같은 날 정정) — 최초 구현은 payment_transactions(coupon_discount·point_amount,
-// 결제 확정 시점 기록)를 소스로 썼으나 이는 완전히 잘못된 시점 설계였다(Stephen 지적으로
-// 발견): 계약서는 "예약신청완료"(장바구니 체크아웃, create_reservation_order 실행) 이후
-// 관리자가 "계약 발행"하는 시점에 이미 생성·발송되고, 실제 PG 결제(Toss)는 그보다 한참
-// 뒤(rental-lifecycle.md 목표 흐름 3단계 — 계약 서명 이후 /contract/[token]/pay-mock·
-// pay-result 경유)에나 일어난다. 즉 계약 발행 시점에는 payment_transactions 행 자체가
-// 아직 존재하지 않는 게 정상 케이스이므로, 그 테이블을 소스로 쓰면 이 두 변수는 사실상
-// 모든 계약서에서 영구히 '-'로만 표시된다 — 완전한 설계 오류였다.
-//
-// ✅ 올바른 소스: 쿠폰·포인트는 "예약신청완료"(장바구니 체크아웃) 시점에 이미
-// orders.selected_coupon_id / orders.selected_points로 확정·저장된다(create_reservation_
-// order RPC). 단, 그 시점에 실제 "몇 원 할인인지"(쿠폰 discount_type/discount_value 기반
-// 계산값)는 서버에 저장되지 않고 cart/+page.svelte에서 미리보기 목적으로만 클라이언트
-// 계산됐다가 버려진다(otCouponDiscount — 소스 계산식과 완전히 동일하게 이 파일에서 재현).
-// 포인트는 orders.selected_points가 이미 원화 1:1 정수값이라 별도 계산 불필요.
-async function resolveSelectedCouponDiscountAmount(
-  admin: SupabaseClient,
-  selectedCouponId: string | null,
-  orderSubtotal: number,
-): Promise<number | null> {
-  if (!selectedCouponId) return null
-
-  const { data } = await admin
-    .from('user_coupons')
-    .select('coupons(discount_type, discount_value)')
-    .eq('id', selectedCouponId)
-    .maybeSingle()
-
-  const coupon = (data as { coupons: { discount_type: string; discount_value: number } | null } | null)?.coupons
-  if (!coupon) return null
-
-  // cart/+page.svelte otCouponDiscount와 동일 계산식(fixed/percentage/그외 3-way).
-  // ⚠️ 2026-09-08 수정: 기존엔 'fixed'가 아니면 전부 정률(%)로 계산해, free_shipping
-  // 타입 쿠폰(discount_value가 원 단위 금액)이 이 분기를 타면 주문금액의 수천%가
-  // 할인액으로 계산되는 결함이 원본(cart/+page.svelte otCouponDiscount)에 있었다 —
-  // 그쪽 수정과 동일하게 fixed/percentage가 아니면 0으로 처리(free_delivery 쿠폰의
-  // 실제 배송료 할인 적용은 cartShippingFee.ts isFreeDeliveryCouponBlocked() 문서
-  // 주석에 명시된 기존 결정대로 스코프 밖 유지).
-  if (coupon.discount_type === 'fixed') return coupon.discount_value
-  if (coupon.discount_type === 'percentage') return Math.round(orderSubtotal * coupon.discount_value / 100)
-  return 0
-}
+// ⛔ 2026-09-09 정정(Stephen 지시) — 이전까지는 이 엔드포인트가 쿠폰 할인액을 매번
+// 즉석에서 재계산했다(discount_type/discount_value 기반, 아래 옛 구현 참고). 그런데
+// orders.final_amount는 정작 이 재계산 결과를 전혀 반영하지 않고 등급할인만 반영된 채
+// 저장돼 있어(create_reservation_order RPC의 원 설계 결함), "정산내역 각 줄을 더해도
+// 최종 결제 금액이 안 맞는" 자기모순이 발생했다 — 계약서 표시 레이어가 자체 계산식을
+// 갖는 것 자체가 잘못된 설계(Stephen: "합산 요금 출처는 시스템에서 가져와야지 전자계약
+// 자체에서 계산식을 돌리면 안 된다")였다.
+// ✅ 수정: create_reservation_order RPC가 쿠폰 할인을 실제로 계산해
+// orders.coupon_discount_amount에 저장하고 final_amount 산식에도 반영하도록 변경 —
+// 이 엔드포인트는 더 이상 재계산하지 않고 그 저장값을 그대로 읽기만 한다(아래 orderData
+// 조회의 coupon_discount_amount 컬럼).
 
 export const GET: RequestHandler = async ({ params, locals }) => {
   const cmsRole = await getCmsRoleForAction(locals)
@@ -183,13 +164,14 @@ export const GET: RequestHandler = async ({ params, locals }) => {
     total_amount: number | null; discount_amount: number | null; tax_amount: number | null
     delivery_fee: number | null; final_amount: number | null
     selected_coupon_id: string | null; selected_points: number | null
+    coupon_discount_amount: number | null
   } | null = null
   const orderId = orderItemRes.data?.order_id as string | number | null ?? null
 
   if (orderId) {
     const { data: o } = await admin
       .from('orders')
-      .select('total_amount, discount_amount, tax_amount, delivery_fee, final_amount, selected_coupon_id, selected_points')
+      .select('total_amount, discount_amount, tax_amount, delivery_fee, final_amount, selected_coupon_id, selected_points, coupon_discount_amount')
       .eq('id', orderId)
       .maybeSingle()
     orderData = o
@@ -356,12 +338,9 @@ export const GET: RequestHandler = async ({ params, locals }) => {
     ]
   }
 
-  // ── 3-1. 쿠폰·포인트 차감 내역 ("예약신청완료" 시점 orders.selected_* 기준) ─────
-  const couponDiscountAmount = await resolveSelectedCouponDiscountAmount(
-    admin,
-    orderData?.selected_coupon_id ?? null,
-    orderData?.total_amount ?? 0,
-  )
+  // ── 3-1. 쿠폰 할인 내역 — create_reservation_order RPC가 이미 계산·저장해둔 값을
+  // 그대로 읽는다(위 2026-09-09 정정 주석 참고, 이 엔드포인트는 재계산하지 않음).
+  const couponDiscountAmount = orderData?.selected_coupon_id ? (orderData?.coupon_discount_amount ?? null) : null
 
   // ⛔ 2026-09-03 정정 — 기존 스칼라 {{수량}}은 "항상 1" 하드코딩이었다(P3-3, "거짓
   // 다중수량 선택지 없이 일반 변수 칩으로만 제공"). Stephen 지적: 이건 오류이며, 반복영역
@@ -386,10 +365,15 @@ export const GET: RequestHandler = async ({ params, locals }) => {
     : ''
   const addrStr = snapshotAddr || fallbackAddr || '-'
 
-  // rental-fee-policy.md §2 — is_delivery_type=true인 방식은 pickup_time/return_time이
-  // 실제 고객이 고른 시각이 아니므로(1day 강제청구, 시간선택 UI 자체가 무의미) 계약서에
-  // 노출하지 않는다. 방식이 rental_method_options에 없으면(레거시·설정 누락) 배송이
-  // 아닌 것으로 간주해 시각을 그대로 노출(데이터를 임의로 숨기지 않는 안전한 기본값).
+  // ⛔ 2026-09-09 정책 반전(Stephen 확정) — 과거(~2026-09-08)엔 is_delivery_type=true인
+  // 방식의 pickup_time/return_time이 대체로 NULL이거나 의미 없는 더미값이라 계약서에
+  // "-"로 숨겼었다. 그런데 cart/+page.svelte bulkHandleMethod()가 "수령=배송이면 반납방식
+  // 무관하게 00:00/24:00을 실제로 기록한다"로 바뀌면서(§163행 TASK.md 기록), 이 값은 이제
+  // "이 예약이 대여일 00:00~반납일 24:00(=종일) 단위로 청구된다"는 의미를 실제로 담은
+  // 정상값이 됐다 — 더 이상 숨길 이유가 없고, 오히려 노출하는 쪽이 정합이다(Stephen 확정,
+  // "시간값이 노출되는게 정합임"). isPickupDelivery/isReturnDelivery는 아래
+  // calcRentalMinutes() 대여일수 산식에는 계속 필요해 변수 자체는 유지하되, 수령일시/
+  // 반납일시 표시값에서는 더 이상 이 두 플래그로 강제 은닉하지 않는다.
   const deliveryTypeByMethod = new Map(
     (methodOptsRes.data ?? []).map((m) => [m.method_key, m.is_delivery_type === true]),
   )
@@ -442,15 +426,17 @@ export const GET: RequestHandler = async ({ params, locals }) => {
     상품명:       productRes.data?.name ?? '-',
     수량:         String(actualQty),
     수령형태:     pickupMethodLabel,
-    수령일시:     isPickupDelivery ? '-' : (res.pickup_time ?? '-'),
+    수령일시:     res.pickup_time ?? '-',
     수령일자:     formatDateDot(res.start_date),
     반납형태:     returnMethodLabel,
-    반납일시:     isReturnDelivery ? '-' : (res.return_time ?? '-'),
+    반납일시:     res.return_time ?? '-',
     반납일자:     formatDateDot(res.end_date),
     기본대여요금: formatAmount(orderData?.total_amount),
     할인금액:     formatDeltaAmount(orderData?.discount_amount),
     배송비:       formatAmount(orderData?.delivery_fee),
-    부가세:       formatAmount(orderData?.tax_amount),
+    // 2026-09-09 — "포함가 역산" 표시로 전환(위 formatVatAmount 주석 참고). 등급할인까지만
+    // 반영한 순대여가(할인쿠폰·포인트는 부가세 계산 기준에서 제외 — cart otNetBeforeVat과 동일)
+    부가세:       formatVatAmount((orderData?.total_amount ?? 0) - (orderData?.discount_amount ?? 0)),
     최종합계:     formatAmount(orderData?.final_amount),
     요금유형:     res.duration_type ? (DURATION_TYPE_LABELS[res.duration_type] ?? res.duration_type) : '-',
     할인차감:     formatDeltaAmount(couponDiscountAmount),

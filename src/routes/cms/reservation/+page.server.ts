@@ -47,8 +47,19 @@ export interface RentalListRow {
   order_key:         string | null
   order_amount:      number | null
   discount_amount:   number | null
+  /** 쿠폰 할인액(Migration #471) — orders.coupon_discount_amount, create_reservation_order RPC가
+      계산·저장. discount_amount(등급할인)와 별도 컬럼 — 결제정보 탭 "쿠폰 할인" 행 전용 */
+  coupon_discount_amount: number | null
+  /** 할인 전 원가(Migration #472) — orders.total_amount. "정산내역" 섹션 "기본 대여요금" 전용 */
+  total_amount:      number | null
+  /** 결제 시 차감된 포인트(Migration #472) — orders.selected_points. "정산내역" 섹션 "포인트 사용" 전용 */
+  selected_points:   number | null
   tax_amount:        number | null
   delivery_fee:      number | null
+  /** orders.delivery_fee(Migration #473) — 위 delivery_fee(payment_transactions 최근 거래 기준)와
+      달리 final_amount 산식에 실제로 반영된 배송비. 결제 전(hold 등) 예약도 값이 채워짐 —
+      "정산내역" 섹션 "배송비" 전용(위 delivery_fee와 혼용 금지, 합계 정합이 깨짐) */
+  order_delivery_fee: number | null
   payment_status:    string | null
   contract_id:       string | null
   contract_status:   string | null
@@ -101,13 +112,25 @@ export const load: PageServerLoad = async ({ parent, url }) => {
   // "총 N건"·페이지 수가 실제 표시 목록과 어긋남, migration 201 참고)
   const RENTAL_VIEW_STATUSES = ['confirmed', 'shipped', 'in_use', 'return_requested', 'returned', 'completed', 'damage_claimed', 'draft']
 
+  // '취소' 칩(2026-09-09 확장, Stephen 지시) — HOLD 30분 자동만료(release_reservation_hold,
+  // service-operations.md §10)로 만료된 예약은 status='expired'로 전환되는데, 이 화면에
+  // 'expired' 전용 탭이 없어 어느 필터에서도 조회할 수 없는 사각지대였다(만료 badge/라벨은
+  // 이미 있었음 — STATUS_LABEL.expired, rental-lifecycle.md RSV-A-B1 — 표시만 되고 목록
+  // 진입 경로가 없던 상태). 관리자 입장에서 "취소"와 "만료"는 둘 다 "이 예약은 더 이상
+  // 진행되지 않는다"는 같은 성격이라, '취소' 칩을 status='cancelled' 단일값이 아니라
+  // ['cancelled','expired'] 두 상태를 함께 보여주도록 확장한다 — 각 행 자체의 상태 배지는
+  // STATUS_LABEL로 여전히 "취소"/"만료됨"으로 구분 표시되므로 두 상태를 섞어도 구분이 안
+  // 되는 문제는 없다.
+  const isCancelledTab = status === 'cancelled'
+
   const { data: rows, error } = await admin.rpc('get_rental_list', {
-    p_status:                          status   || null,
+    p_status:                          (status && !isCancelledTab) ? status : null,
     p_search:                          escapeLikePattern(search) || null,
     p_date_from:                       dateFrom || null,
     p_date_to:                         dateTo   || null,
     p_page:                            page,
     p_per_page:                        30,
+    p_include_statuses:                isCancelledTab ? ['cancelled', 'expired'] : null,
     p_exclude_statuses:                RENTAL_VIEW_STATUSES,
     p_require_contract_sent_unsigned:  contractPending || null,
     p_exclude_contract_sent:           isReservationPendingTab || null,
