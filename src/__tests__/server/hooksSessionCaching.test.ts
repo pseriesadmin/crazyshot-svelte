@@ -171,4 +171,49 @@ describe('hooks.server.ts — safeGetSession() 요청 스코프 캐싱', () => {
     expect(getSessionMock).toHaveBeenCalledTimes(1)
     expect(getUserMock).toHaveBeenCalledTimes(1)
   })
+
+  // CMS 전역 전수검증(2026-09-09) CRITICAL 후속 — getSession()/getUser()가 {data,error}
+  // 형태가 아니라 예외(throw)를 던지는 경우(리프레시 토큰 완전 무효화, 네트워크 타임아웃 등).
+  // 수정 전에는 getSessionAndUser()에 try/catch가 없어 예외가 그대로 위로 전파되고,
+  // hooks.server.ts 최상단 catch(6-53행)가 로그만 남기고 다시 throw해 최종적으로
+  // 사용자에게 500 에러 화면이 뜬다 — Vercel get_runtime_errors로 실사용자 3명, /cart·/·
+  // /cms·/cms/products·/cms/reservation 등에서 반복 확인됨.
+  it('⑥ getUser()가 예외를 던져도 safeGetSession()은 reject하지 않고 {session:null,user:null}로 안전 처리된다', async () => {
+    getSessionMock.mockResolvedValue({ data: { session: SESSION }, error: null })
+    getUserMock.mockRejectedValue(new Error('TypeError: fetch failed'))
+
+    const event = makeEvent()
+    const response = await handleFn({
+      event,
+      resolve: async () => {
+        const r = await event.locals.safeGetSession!()
+        expect(r).toEqual({ session: null, user: null })
+        return new Response('ok')
+      },
+    })
+
+    expect(response).toBeInstanceOf(Response)
+  })
+
+  it('⑦ getSession() 자체가 예외를 던져도(리프레시 토큰 완전 무효화 등) safeGetSession()은 reject하지 않는다', async () => {
+    getSessionMock.mockRejectedValue(
+      Object.assign(new Error('Invalid Refresh Token: Refresh Token Not Found'), {
+        __isAuthError: true,
+        status: 400,
+        code: 'refresh_token_not_found',
+      }),
+    )
+
+    const event = makeEvent()
+    const response = await handleFn({
+      event,
+      resolve: async () => {
+        const r = await event.locals.safeGetSession!()
+        expect(r).toEqual({ session: null, user: null })
+        return new Response('ok')
+      },
+    })
+
+    expect(response).toBeInstanceOf(Response)
+  })
 })

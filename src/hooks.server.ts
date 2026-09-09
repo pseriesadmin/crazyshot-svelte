@@ -30,12 +30,21 @@ export const handle: Handle = async ({ event, resolve }) => {
     // 문제를 해소 — Promise 자체를 캐싱해 동시 호출도 하나의 네트워크 왕복만 발생시킨다.
     // (실서버 CMS·사용자 화면 전역 심각한 로딩 지연 원인 규명 결과, 2026-09-02)
     const getSessionAndUser = async () => {
-      const { data: { session }, error } = await event.locals.supabase.auth.getSession()
-      if (error || !session) return { session: null, user: null }
-      // JWT 재검증으로 조작된 토큰 차단
-      const { data: { user }, error: userError } = await event.locals.supabase.auth.getUser()
-      if (userError || !user) return { session: null, user: null }
-      return { session, user }
+      try {
+        const { data: { session }, error } = await event.locals.supabase.auth.getSession()
+        if (error || !session) return { session: null, user: null }
+        // JWT 재검증으로 조작된 토큰 차단
+        const { data: { user }, error: userError } = await event.locals.supabase.auth.getUser()
+        if (userError || !user) return { session: null, user: null }
+        return { session, user }
+      } catch (sessionErr) {
+        // getSession()/getUser()가 {data,error} 형태가 아니라 예외를 던지는 경우
+        // (리프레시 토큰 완전 무효화, Auth 서버 네트워크 타임아웃 등) — 예외가 그대로
+        // 전파되면 앱 전역(/cart, CMS 전체 등)이 500 에러로 막힌다. 로그인이 풀린
+        // 상태와 동일하게 안전 처리한다(CMS 전역 전수검증 2026-09-09).
+        console.error('[CRAZYSHOT SESSION CHECK ERROR]', sessionErr)
+        return { session: null, user: null }
+      }
     }
     let sessionPromise: ReturnType<typeof getSessionAndUser> | null = null
     event.locals.safeGetSession = () => {
