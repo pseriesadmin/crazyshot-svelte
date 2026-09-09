@@ -50,9 +50,11 @@ export const load: PageServerLoad = async ({ locals, params }) => {
     }
   }
 
+  // 2026-09-09: CMS 가격정책(price_rules) 우선 — products/[id]/+page.server.ts attachPrices()와
+  // 동일한 우선순위 수정(동일 버그 패턴).
   const products: ThemeGroupProductCard[] = group.products.map((p) => ({
     ...p,
-    price24h: p.base_price_daily > 0 ? p.base_price_daily : (price24hMap[p.id] ?? null),
+    price24h: price24hMap[p.id] ?? (p.base_price_daily > 0 ? p.base_price_daily : null),
     price12h: price12hMap[p.id] ?? null,
   }))
 

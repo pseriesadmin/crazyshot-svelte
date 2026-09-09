@@ -145,10 +145,13 @@ export const load: PageServerLoad = async ({ locals, url }) => {
     }
   }
 
+  // 2026-09-09: CMS 가격정책(price_rules)이 항상 우선 — price_rules 24h 값이 있으면 그 값을
+  // 쓰고, price_rules 자체가 없는 상품(레거시 미설정)만 옛 base_price_daily로 폴백한다.
+  // products/[id]/+page.server.ts attachPrices()와 동일한 우선순위 수정(동일 버그 패턴).
   const mergePrice = (cards: ProductCard[]): ProductCard[] =>
     cards.map((c) => {
-      const legacyDaily = c.base_price_daily
-      const price_24h = legacyDaily > 0 ? legacyDaily : (price24hMap[c.id] ?? null)
+      const rule24h = price24hMap[c.id]
+      const price_24h = rule24h != null ? rule24h : (c.base_price_daily > 0 ? c.base_price_daily : null)
       return { ...c, price_12h: price12hMap[c.id] ?? null, price_24h }
     })
 

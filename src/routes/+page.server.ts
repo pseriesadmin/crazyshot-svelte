@@ -335,7 +335,10 @@ export const load: PageServerLoad = async ({ locals }) => {
   }
 
   // ── 표준 상품슬라이드(prod-card) Day/12H 이중가격 — Figma node 600:862 스펙 반영 ──
-  // price_24h(Day)는 legacy base_price_daily 우선(기존 mergePrice 패턴과 동일), price_12h는 price_rules 전용
+  // 2026-09-09: CMS 가격정책(price_rules)이 항상 우선 — price_rules 24h 값이 있으면 그 값을
+  // 쓰고, price_rules 자체가 없는 상품(레거시 미설정)만 옛 base_price_daily로 폴백한다.
+  // products/[id]/+page.server.ts attachPrices()와 동일한 우선순위 수정(동일 버그 패턴).
+  // price_12h는 기존과 동일하게 price_rules 전용.
   const themeProductIdsForPrice = themeGroupsAdmin.length > 0
     ? themeGroupsAdmin.flatMap((g) => g.products.map((p) => p.id))
     : themeGroups.flatMap((g) => g.products.map((p) => p.id))
@@ -364,7 +367,7 @@ export const load: PageServerLoad = async ({ locals }) => {
   const withDualPrice = <T extends { id: string; base_price_daily: number }>(p: T) => ({
     ...p,
     price_12h: price12hMap[p.id] ?? null,
-    price_24h: p.base_price_daily > 0 ? p.base_price_daily : (price24hMap[p.id] ?? null),
+    price_24h: price24hMap[p.id] ?? (p.base_price_daily > 0 ? p.base_price_daily : null),
   })
   for (const g of themeGroups) g.products = g.products.map(withDualPrice)
   for (const g of themeGroupsAdmin) g.products = g.products.map(withDualPrice)
