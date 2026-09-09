@@ -224,6 +224,54 @@ describe('release_reservation_hold — D-1(계약발송 타이머, 유일한 시
     expect(await getStatus(reservationId)).toBe('hold')
   })
 
+  // ── EC-6(CMS 전역 전수검증 2026-09-09) — self-join 자기매칭 결함 ───────────────
+  // 장바구니 체크아웃 제출(create_reservation_order) 전에는 order_items 연결이 없는 게
+  // 정상이다(service-operations.md §4) — 그 상태에서도 계약서는 발송 가능하다
+  // (rental-lifecycle.md "hold 포함 모든 상태에서 계약서 발송 가능"). D-1 서브쿼리가
+  // "형제 예약을 찾는" self-join(oi1.reservation_id = rr.id)에 의존하는데, order_items가
+  // 아예 없으면 이 예약 자기 자신의 계약 발송 사실조차 찾지 못해 타이머가 영원히
+  // 시작되지 않던 결함(EC-5b/EC-5b-edge는 linkToOrder를 호출해 이 결함을 우회하고
+  // 있었음 — 그래서 지금까지 발견되지 않았다).
+  it('EC-6: order_items 미연결(체크아웃 제출 전) + 계약서 발송 1시간 전 → self-join이 자기 자신을 찾아 정상 expired 전환된다', async () => {
+    const userId = await createEphemeralUser()
+    cleanups.push(() => deleteEphemeralUser(userId))
+
+    const twoHoursAgo = new Date(Date.now() - 120 * 60 * 1000)
+    const oneHourAgo  = new Date(Date.now() -  60 * 60 * 1000)
+
+    const reservationId = await createHoldReservation(userId, twoHoursAgo)
+    cleanups.push(async () => {
+      await admin.from('rental_reservations').delete().eq('id', reservationId)
+    })
+
+    // linkToOrder() 호출 없음 — 장바구니 체크아웃 제출 전 상태를 그대로 재현
+    await createContractWithSigning(reservationId, userId, oneHourAgo)
+
+    await admin.rpc('release_reservation_hold', {})
+
+    expect(await getStatus(reservationId)).toBe('expired')
+  })
+
+  // ── EC-6-edge(회귀): order_items 미연결 + 계약서 발송 15분 전 → 30분 이내 → 생존 ──
+  it('EC-6-edge: order_items 미연결 + 계약서 발송 15분 전 → 30분 이내라 hold 유지(회귀)', async () => {
+    const userId = await createEphemeralUser()
+    cleanups.push(() => deleteEphemeralUser(userId))
+
+    const fortyMinAgo   = new Date(Date.now() - 40 * 60 * 1000)
+    const fifteenMinAgo = new Date(Date.now() - 15 * 60 * 1000)
+
+    const reservationId = await createHoldReservation(userId, fortyMinAgo)
+    cleanups.push(async () => {
+      await admin.from('rental_reservations').delete().eq('id', reservationId)
+    })
+
+    await createContractWithSigning(reservationId, userId, fifteenMinAgo)
+
+    await admin.rpc('release_reservation_hold', {})
+
+    expect(await getStatus(reservationId)).toBe('hold')
+  })
+
   // ── EC-5c: D-3 불변 — payment_confirmed_at IS NOT NULL → 계약과 무관하게 보호 ─
   it('EC-5c: payment_confirmed_at 설정된 hold → D-3 예외로 만료 안 됨', async () => {
     const userId = await createEphemeralUser()
