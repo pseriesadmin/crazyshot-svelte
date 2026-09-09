@@ -156,7 +156,7 @@
         <input
           class="search-in"
           type="search"
-          placeholder="고객명·이메일·상품명·상품코드"
+          placeholder="고객명·이메일·상품명·상품코드·예약코드"
           bind:value={searchInput}
           onkeydown={(e) => e.key === 'Enter' && applyFilters()}
         />
