@@ -861,6 +861,18 @@
   // canProceed: 6가지 조건 모두 충족
   const canProceed = $derived(hasItems && datesSet && pickupPointsSet && deadlineOk && identityOk && agreed)
 
+  // "정보 미입력" 경고 토스트 전용 — 고객 정보(이름/이메일/휴대번호) 미기재 감지(2026-09-09,
+  // Stephen 확인). ⚠️ canProceed에는 포함하지 않음(스코프 확정: 경고 토스트만 우선 추가 —
+  // 이 필드들이 실제로 서버 어디에도 저장되지 않는 별도 이슈가 있어 제출 자체를 막는 건
+  // 이번 작업 범위 밖). rentalForm(수령 방식 아코디언)만 검사 — 고객 정보는 한 사람 기준이라
+  // returnForm 쪽 중복 입력까지 요구하면 불필요한 이중 입력 요구가 됨.
+  const customerInfoSet = $derived(
+    itemsState.every(it => {
+      if (it.deleted || !it.checked) return true
+      return it.rentalForm.name !== '' && it.rentalForm.email !== '' && it.rentalForm.phone !== ''
+    })
+  )
+
   // 완료 버튼 문구 — 2026-08-18: 장바구니 접근이 회원 전용으로 고정되어 비회원 분기 제거
   const confirmLabel = '예약신청완료'
 
@@ -879,17 +891,25 @@
 
   // 금액(약정 요금) 레이아웃 진입 감지 — 대여설정(수령·반납 날짜·시간)이 미완성인 채로
   // 금액 영역까지 스크롤하면 경고 토스트로 안내(footerSentinel과 동일 IntersectionObserver 패턴)
+  //
+  // ⛔ 2026-09-09(Stephen 신고 — PC·모바일 반응형 공통 "작동이 오락가락함") 원인·수정:
+  // 센티널(.price-section-sentinel)이 1px에 rootMargin 미지정 상태라, 브라우저의 교차판정
+  // 샘플링(보통 rAF 주기)이 빠른 스크롤(특히 모바일 플릭 관성 스크롤) 중 이 1px 구간을
+  // 프레임 사이로 완전히 건너뛰어 isIntersecting=true가 단 한 번도 샘플링되지 않는 경우가
+  // 실사용에서 발생 — "가끔 뜨고 가끔 안 뜨는" 증상의 원인. rootMargin으로 판정 영역 자체를
+  // 넓혀(실제 DOM 높이·레이아웃은 무변경 — 순수 IntersectionObserver 계산 마진) 빠른
+  // 스크롤에도 반드시 한 번 이상 샘플링되도록 방어.
   let priceSectionSentinel = $state<HTMLDivElement | null>(null)
   $effect(() => {
     const sentinel = priceSectionSentinel
     if (!sentinel) return
     const observer = new IntersectionObserver(
       ([entry]) => {
-        if (entry.isIntersecting && hasItems && (!datesSet || !pickupPointsSet)) {
+        if (entry.isIntersecting && hasItems && (!datesSet || !pickupPointsSet || !customerInfoSet)) {
           csToast.warning('대여예약정보를 모두 확인해 주세요.')
         }
       },
-      { threshold: 0 }
+      { threshold: 0, rootMargin: '150px 0px 150px 0px' }
     )
     observer.observe(sentinel)
     return () => observer.disconnect()
@@ -1002,29 +1022,34 @@
   // null) 블록 가산을 적용할 근거가 없으므로 기존(#436 이전)처럼 flat(unit_price × qty)로
   // 폴백한다 — 없는 값을 추정해서 채우지 않는다.
   // 판매전용(구매) 상품은 "대여기간" 개념이 없으므로 기존처럼 flat 유지(Migration #436과 정합).
+  // 옵션 1건의 최종 청구금액(수량 반영) — itemOptionsAmount의 reduce 본문을 단건용으로 추출
+  // (2026-09-09: 예약신청완료 화면에 옵션별 요금을 표시하기 위해 신설 — 계산 로직은 완전히 동일).
+  function itemOptionFee(
+    line: CartLineGroup | undefined,
+    it: { rentalDate: string; returnDate: string; rentalTime: string; returnTime: string; opts: { rentalMethod: DeliveryMethod | null } },
+    o: { unitPrice: number; unitPrice12h: number | null; qty: number },
+  ): number {
+    if (!line) return 0
+    if (line.durationType === 'purchase' || o.unitPrice12h == null) {
+      return o.unitPrice * o.qty
+    }
+    const fee = calcRentalFee({
+      startDate: it.rentalDate,
+      endDate: it.returnDate,
+      pickupTime: it.rentalTime,
+      returnTime: it.returnTime,
+      dailyPrice: o.unitPrice,
+      halfDayPrice: o.unitPrice12h,
+      deliveryLocked: isDeliveryTypeMethod(it.opts.rentalMethod),
+    })
+    return fee * o.qty
+  }
   function itemOptionsAmount(
     line: CartLineGroup | undefined,
     it: { rentalDate: string; returnDate: string; rentalTime: string; returnTime: string; opts: { rentalMethod: DeliveryMethod | null } },
   ): number {
     if (!line) return 0
-    if (line.durationType === 'purchase') {
-      return line.options.reduce((s, o) => s + o.unitPrice * o.qty, 0)
-    }
-    return line.options.reduce((s, o) => {
-      if (o.unitPrice12h == null) {
-        return s + o.unitPrice * o.qty
-      }
-      const fee = calcRentalFee({
-        startDate: it.rentalDate,
-        endDate: it.returnDate,
-        pickupTime: it.rentalTime,
-        returnTime: it.returnTime,
-        dailyPrice: o.unitPrice,
-        halfDayPrice: o.unitPrice12h,
-        deliveryLocked: isDeliveryTypeMethod(it.opts.rentalMethod),
-      })
-      return s + fee * o.qty
-    }, 0)
+    return line.options.reduce((s, o) => s + itemOptionFee(line, it, o), 0)
   }
 
   // ── 등급별 할인율
@@ -1136,6 +1161,10 @@
     // 변수 정본 소스. 기본주소 자동채움이든 직접입력이든 그 순간 폼에 있는 값 그대로 전달.
     pickupAddressRoad?: string,
     pickupAddressDetail?: string,
+    // 2026-09-09(Stephen 확정, 실제 결함 수정): 수령·반납 "요청 사항"이 UI에는 있으나
+    // 어떤 RPC에도 전달되지 않아 저장이 안 되던 것을 수정 — Migration 476.
+    pickupRequestNote?: string,
+    returnRequestNote?: string,
   ): Promise<{ success: boolean; errorMessage: string | null }> {
     if (!resId) return { success: true, errorMessage: null }
     const { error } = await (supabase.rpc as unknown as RpcFn)('set_reservation_shipment_method', {
@@ -1146,6 +1175,8 @@
       p_return_time:           returnTime || null,
       p_pickup_address_road:   pickupAddressRoad || null,
       p_pickup_address_detail: pickupAddressDetail || null,
+      p_pickup_request_note:   pickupRequestNote || null,
+      p_return_request_note:   returnRequestNote || null,
     })
     return { success: !error, errorMessage: error?.message ?? null }
   }
@@ -2066,7 +2097,7 @@
                     return
                   }
                   // 수령·반납 방식 저장 (기존 saveShipmentMethod 재사용) + 수령 주소 스냅샷(Migration 434)
-                  const shipmentResultCo = await saveShipmentMethod(reservationId, pickupMethodCo, returnMethodCo, it.rentalTime, it.returnTime, it.rentalForm.addr, it.rentalForm.addrDetail)
+                  const shipmentResultCo = await saveShipmentMethod(reservationId, pickupMethodCo, returnMethodCo, it.rentalTime, it.returnTime, it.rentalForm.addr, it.rentalForm.addrDetail, it.rentalForm.notes, it.returnForm.notes)
                   if (!shipmentResultCo.success) {
                     csToast.error(shipmentResultCo.errorMessage ?? '수령/반납 방식 저장에 실패했습니다. 방식을 다시 선택해주세요.')
                     return
@@ -2132,19 +2163,31 @@
                   pickupMethod: deliveryLabelOrRaw(it.opts.rentalMethod),
                   returnMethod: deliveryLabelOrRaw(it.opts.returnMethod),
                   price: itemRentalFee(line, it) * Math.max(line?.qty ?? 1, 1),
-                  options: (line?.options ?? []).map(o => ({ name: o.name, qty: o.qty })),
+                  options: (line?.options ?? []).map(o => ({
+                    name: o.name,
+                    qty: o.qty,
+                    price: itemOptionFee(line, it, o),
+                  })),
                 }
               })
             // 신청완료 화면(/payment/success/dev)은 이제 "결제완료"가 아니라 "예약신청 완료"
-            // 안내로 통일 사용 — 쿠폰/포인트는 3단계로 이동해 이 시점엔 항상 미적용(0)이므로
-            // couponDiscount/pointsUsed/paymentMethod 파라미터는 더 이상 보내지 않는다.
+            // 안내로 통일 사용 — 실제 소진(use_coupon/use_points)은 여전히 3단계(계약서명)에서만
+            // 일어나지만, 쿠폰/포인트 "선택" UI는 2026-08-24(Stephen 재확정)에 장바구니로
+            // 복원되어 otTotal(=amount) 계산에 이미 반영되고 있다(위 otCouponDiscount·
+            // otPointsUsed 참고) — "이 시점엔 항상 미적용(0)"이라는 과거 서술은 그 복원 이후
+            // 갱신되지 않은 stale 코멘트였다(2026-09-09 발견·수정). amount는 이미 이 두 값을
+            // 차감한 결과인데 정작 couponDiscount/pointsUsed 파라미터를 보내지 않아, 신청완료
+            // 화면에 "대여요금+배송료 ≠ 결제예정금액"인 이유가 전혀 표시되지 않는 표시 결함으로
+            // 이어졌다 — paymentMethod는 여전히 3단계 이후에나 확정되는 값이라 미포함 유지.
             const params = new URLSearchParams({
               items:              JSON.stringify(activeItems),
               amount:             String(otTotal),
               subtotal:           String(otSubtotal),
               membershipDiscount: String(otMembershipDiscount),
+              couponDiscount:     String(otCouponDiscount),
               deliveryFee:        String(otDeliveryFee),
               vat:                String(otVat),
+              pointsUsed:         String(otPointsUsed),
               confirmedAt,
             })
             await goto(`/payment/success/dev?${params.toString()}`)

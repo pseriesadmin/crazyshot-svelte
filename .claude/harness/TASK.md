@@ -1,5 +1,141 @@
 # .claude/harness/TASK.md
 
+## DONE — 🔴 CRITICAL: 장바구니 "요청 사항" 미저장 결함 수정 + 오버로드 모호성 함정 해소 (2026-09-09, 이 세션, ✅ GATE E 통과 — sp3-qa-agent 검수 완료, git commit만 Stephen 대기)
+
+### sp3-qa-agent 최종 GATE E 검수 결과 (2026-09-09)
+
+```
+✅ 조건부 통과 → 후속조치 완료로 정식 통과 전환. 오버로드 모호성 해소는 마이그레이션
+   히스토리 전체(147→171→434→443→476) 추적 + 실호출부 4곳(products/[id], chat/
+   return-method, cart, create_hold_reservation_with_shipment 내부 positional 호출)
+   전수 대조 + createHoldReservationWithShipment.test.ts 5/5 GREEN 재확인으로 독립
+   재검증 완료 — 실제 해소됨.
+⚠️ 검수 중 신규 발견(TASK.md 미기재였던 것): DROP FUNCTION 후 CREATE로 만들어진 9-param
+   함수가 이 프로젝트의 ALTER DEFAULT PRIVILEGES(신규 함수 anon 자동부여 설정)로 인해
+   Migration 262가 명시적으로 잠갔던 anon 실행권한을 조용히 다시 얻은 회귀 — 실피해
+   위험은 낮음(auth.uid() NULL 가드로 0-row 방어)이나 심층방어 원칙 위반.
+✅ 즉시 후속 수정 완료 — Migration 477(REVOKE FROM PUBLIC,anon + GRANT TO authenticated,
+   service_role)을 Stage+Production 양쪽 적용. curl 재검증: anon 호출이 204(0-row 성공)
+   → 401 permission denied로 정상 차단 전환 확인(양쪽 DB 동일). 회귀테스트 재실행
+   5/5 GREEN 유지 확인(authenticated 경로 무영향).
+```
+
+### 배경
+
+앞선 "정보 미입력 경고 토스트" 조사 과정에서 발견: 장바구니 "고객 정보"(이름/이메일/
+휴대번호)·"방문지점"이 서버에 저장 안 되는 것처럼 보였으나 Stephen 확인 결과 둘 다
+설계상 문제 없음(회원가입 정보 재사용 / 방문 시 목록에서 값을 가져오는 구조). 다만
+**"요청 사항"(공동현관 출입번호 등, 수령·반납 leg별 독립 입력)만은 실제 결함** —
+`set_reservation_shipment_method` RPC 어디에도 이 값을 받는 파라미터가 없어
+`rental_reservations`에 전혀 저장되지 않았음. Stephen 지시로 컬럼 구현.
+
+### 변경 파일
+
+```
+supabase/migrations/20260909070000_476_rental_reservations_request_note_columns.sql
+  — rental_reservations.pickup_request_note/return_request_note 컬럼 신설
+  — set_reservation_shipment_method에 p_pickup_request_note/p_return_request_note
+    trailing 파라미터 추가(DEFAULT NULL)
+src/routes/cart/+page.svelte
+  — saveShipmentMethod() 시그니처에 pickupRequestNote/returnRequestNote 파라미터 추가
+  — 호출부에서 it.rentalForm.notes/it.returnForm.notes 전달
+```
+
+### ⚠️ 적용 중 발견한 별도 함정(즉시 수정) — PostgREST 오버로드 모호성
+
+"입력 파라미터에 trailing default 추가는 CREATE OR REPLACE만으로 충분하다"는 가정이
+틀렸음을 실제 적용 중 발견 — PostgreSQL이 파라미터 목록이 늘어나면 기존 함수를
+교체하지 않고 새 오버로드를 만든다(RETURNS TABLE 컬럼 변경 케이스만 이 문제가 있는 게
+아니었음, get_rental_list류와 동일 함정이 입력 파라미터 확장에도 적용됨). 그 결과
+3-param(레거시)·7-param(구버전)·9-param(신규) 오버로드 3개가 공존하게 되어, 5개
+파라미터만 넘기는 기존 호출부(products/[id]/+page.svelte, api/chat/return-method/
+[id]/+server.ts)가 PGRST203(모호성) 에러를 낼 위험이 즉시 발생 — Migration #434의
+5→7-param 확장 때도 동일 이유로 DROP FUNCTION을 먼저 실행했던 선례를 그대로 따라
+7-param 오버로드를 명시적으로 DROP해 3-param+9-param 2개로 정리, PostgREST에 curl로
+직접 재현·재검증 완료.
+
+### 검증 완료
+
+```
+✅ npm run check — 신규 에러 0건
+✅ npx vitest run createHoldReservationWithShipment.test.ts — 5/5 GREEN
+✅ Stage(ezyvffjvuwmtuhpxdjrw) 적용 — 컬럼 존재·오버로드 2개(3-param+9-param) 확인
+✅ Production(vnbpmvxruyciuuaermyh) 적용 — 동일 확인
+✅ 양쪽 DB 모두 PostgREST REST API에 curl 직접 호출로 재검증:
+   - 5-param 호출(기존 호출부 패턴) → 204(정상, 모호성 없음)
+   - 9-param 호출(신규 cart 호출 패턴) → 204(정상)
+✅ 3-param(레거시) 오버로드는 정확히 3개만 넘기는 신규 호출과는 여전히 모호성 여지가
+   있음을 마이그레이션 파일에 명문화(현재 실호출부 중 해당 패턴 없음 확인됨) — 향후
+   이 RPC에 새 호출을 추가할 때는 반드시 5개 이상 파라미터 명시 필요
+```
+
+### 남은 작업
+
+```
+- git commit은 Stephen 직접 실행(세션 규칙상 AI 자율 커밋 금지)
+```
+
+---
+
+## DONE — 🟡 BOUNDARY: 장바구니 "정보 미입력" 경고 토스트 결함 2건 수정 (2026-09-09, 이 세션, ✅ GATE E 통과 — sp3-qa-agent 검수 완료, git commit만 Stephen 대기)
+
+### sp3-qa-agent 최종 GATE E 검수 결과 (2026-09-09)
+
+```
+✅ 통과 — +layout.svelte offset이 svelte-sonner 정식 prop(Offset 타입) 사용 확인,
+   /cart 전용 조건부 적용으로 다른 화면 무영향 확인. customerInfoSet이 경고 토스트
+   조건에만 추가되고 canProceed(제출 버튼 게이팅)에는 미포함됨을 diff로 직접 재확인 —
+   TASK.md 서술과 정확히 일치. 요청범위 외 수정 없음.
+```
+
+### 배경
+
+Stephen이 "대여설정 미입력 스크롤 경고 토스트가 왜 자꾸 작동하지 않냐"고 신고. 조사 결과
+두 가지 독립적 결함 발견:
+
+① **토스트가 /cart 하단 고정 CTA 버튼("예약신청완료")과 겹쳐 렌더링됨** — 토스트 자체는
+   z-index(999999999)로 정상 발화하고 있었으나(이전 세션이 수정한 IntersectionObserver
+   rootMargin 샘플링 이슈와는 별개 원인), 기본 offset(하단 24px)이 /cart 전용 fixed
+   CTA 푸터(.cart-footer, 데스크톱 ~101px·모바일은 세로 스택+세이프에어리어로 더 큼)
+   위치와 겹쳐 버튼에 가려 보이거나 매우 좁게만 보였음. localhost 실제 세션에서
+   getBoundingClientRect로 직접 재현·확인.
+
+② **"정보 미입력" 경고가 고객정보(이름/이메일/휴대번호) 미입력은 감지하지 못함** —
+   Stephen 확인 요청으로 실사용 스크린샷(수령/반납 방식·날짜·시간·방문지점 전부 채워진
+   상태) 재조사 중, `datesSet`/`pickupPointsSet` 조건이 고객정보 완성도를 아예 검사하지
+   않는다는 스코프 공백을 발견. Stephen 확정: "고객정보 미입력도 포함(경고 토스트만 —
+   canProceed/제출버튼 게이팅은 별건)".
+
+### 변경 파일
+
+```
+src/routes/+layout.svelte
+  — 전역 <Toaster>에 /cart 전용 offset 추가(다른 화면은 기본값 유지):
+    offset={pathname.startsWith('/cart') ? {bottom:140} : undefined}
+    mobileOffset={pathname.startsWith('/cart') ? {bottom:170} : undefined}
+src/routes/cart/+page.svelte
+  — customerInfoSet 파생값 신설(it.rentalForm.name/email/phone 완성도, 아이템별)
+  — 경고 토스트 조건에 || !customerInfoSet 추가(canProceed는 미변경 — 스코프 확정대로
+    경고 토스트 전용)
+```
+
+### 검증 완료 (이 세션)
+
+```
+✅ localhost 실제 cart 세션(공유 dev 서버)에서 직접 재현 → 수정 전/후 스크린샷 대조
+   (수정 전: 토스트가 CTA 버튼과 겹쳐 거의 안 보임 → 수정 후: 버튼 위로 명확히 분리)
+✅ npm run check — 신규 에러 0건(기존 vite.config.ts 무관 에러 1건만 유지)
+```
+
+### 남은 작업
+
+```
+- git commit은 Stephen 직접 실행(세션 규칙상 AI 자율 커밋 금지)
+- sp3-qa-agent 독립검수 대기(이번 요청으로 진행)
+```
+
+---
+
 ## DONE — 🔴 CRITICAL: CMS 결제정보 탭 "정산내역" 섹션 신설 + Production 적용 (2026-09-09, 이 세션+후속 세션, ✅ GATE E 통과 — sp3-qa-agent 검수 완료, git commit만 Stephen 대기)
 
 ### 배경
@@ -198,7 +334,7 @@ TypeScript/Svelte:
 
 ---
 
-## DONE — 🟡 BOUNDARY: 전자계약 HTML 양식 발행모달 소스코드 드리프트 근본 해소 (2026-09-09, 이 세션)
+## DONE — 🟡 BOUNDARY: 전자계약 HTML 양식 발행모달 소스코드 드리프트 근본 해소 (2026-09-09, 이 세션, ✅ GATE E 통과 — sp3-qa-agent 검수 완료, git commit만 Stephen 대기)
 
 ### 배경
 
@@ -227,6 +363,10 @@ src/routes/api/cms/contract-templates/+server.ts — authoring_mode='html' 행�
 ```
 ✅ npx svelte-check — 신규 에러 0건
 ✅ npx vitest run contractCanvasPublishFix.test.ts — 23/23 GREEN
+✅ sp3-qa-agent 독립 검수 완료 — authoring_mode='html' 행만 덮어쓰고 다른 모드·다른 컬럼
+   (html_issuer_signature_*, contract_terms_text 등)은 DB 값 그대로 통과시켜 부작용 없음을
+   코드로 재확인. contracts.html_document(발행 완료 개별 문서)는 이 API가 다루지 않아 무관함도
+   재확인. CONFIRMED.
 ```
 
 기존 `contracts.html_document`(이미 발행·서명 완료된 계약 개별 문서)는 건드리지 않음 —
@@ -234,7 +374,7 @@ src/routes/api/cms/contract-templates/+server.ts — authoring_mode='html' 행�
 
 ---
 
-## DONE — 🟡 BOUNDARY: 서명-API 취소예약 가드 + '취소' 탭에 '만료' 통합 (2026-09-09, 이 세션)
+## DONE — 🟡 BOUNDARY: 서명-API 취소예약 가드 + '취소' 탭에 '만료' 통합 (2026-09-09, 이 세션, ✅ GATE E 통과 — sp3-qa-agent 검수 완료, git commit만 Stephen 대기)
 
 ### 배경 1 — 서명 API 갭
 
@@ -253,6 +393,12 @@ src/routes/api/contracts/[token]/sign/+server.ts — 서명 접수 직전 예약
 기존 중복 조회(뒤쪽 contract.reservation_id)를 앞으로 옮겨 재사용하도록 리팩터.
 ✅ contractSign.test.ts 5/5 GREEN. contractSigningGate.test.ts 1건 실패는 원본 파일로도
 동일하게 재현되는 기존 결함(무관, git stash로 확인) — 이번 변경과 무관.
+✅ sp3-qa-agent 독립 검수 완료 — sed 일괄치환으로 리팩터한 부분을 특히 정밀검증: 옛
+   contract.reservation_id/contract?.reservation_id 참조 잔존 0건(grep 재확인),
+   signReservationId 선언은 함수 스코프 최상단 1곳뿐(중복선언 없음), 취소가드가 서명
+   저장(update) 이전·signed_at/expires_at 체크 이후에 정확히 위치. 이후 블록(hold→confirmed
+   재시도·채팅카드·푸시) 전부 동일 변수를 일관되게 재사용. contractSign.test.ts +
+   contractCanvasPublishFix.test.ts 재실행 28/28 GREEN. CONFIRMED.
 ```
 
 ### 배경 2 — HOLD 30분 자동만료 실사용 검증 + '취소' 탭 사각지대 발견
@@ -272,6 +418,22 @@ get_rental_list를 p_status='cancelled' 단일값 대신 p_include_statuses=['ca
 호출하도록 확장. 각 행의 상태 배지는 기존 STATUS_LABEL로 "취소"/"만료됨" 그대로 구분 표시됨.
 ✅ get_rental_list 직접 재조회로 13951(expired)이 이제 이 필터에 포함됨을 확인.
 ✅ svelte-check 신규 에러 0건.
+✅ sp3-qa-agent 독립 검수 완료 — p_include_statuses 파라미터는 이번에 새로 만든 게 아니라
+   Migration #201(2026-08-07)부터 이미 get_rental_list RPC 시그니처에 존재해온 기존
+   파라미터 재사용임을 마이그레이션 이력으로 확인(신규 마이그레이션 불필요, 맞는 판단).
+   isCancelledTab 분기(p_status=null + p_include_statuses=['cancelled','expired']) 로직
+   정확. Stage DB 직접 RPC 재호출로 cancelled/expired 혼합 반환(13951 포함) 재확인. CONFIRMED.
+```
+
+### 미해결 — "전자계약 발행 안 했는데 계약이 이미 존재" 의문(조사 중단, 코드 변경 없음)
+
+```
+같은 검증 과정 중 Stephen이 reservation_id 13951에 대해 "전자계약 발행도 안 했다"고
+지적 — 실제로 contracts/contract_signings에 발송 완료 상태의 계약 행이 존재해 원인
+불명이었음. CMS "예약현황" URL의 `contract_pending=1` 파라미터가 페이지 로드 시 계약을
+자동 발행시키는지 조사를 시작했으나(src/routes/cms/reservation/+page.server.ts:101,
++page.svelte:88-105에서 이 파라미터 사용처까지만 확인) Stephen의 후속 지시(HOLD 30분
+자동만료 검증으로 전환)로 조사가 중단됨 — 코드 원인 미확정, 수정 없음. 재개 필요.
 ```
 
 ---
@@ -1057,6 +1219,22 @@ QR삽입(15차)·서명오프셋(11차)·계약조항 마커(14차) 등이 섞�
   #471, 다른 세션 소유)는 이번 반영 범위 밖 — 그 마이그레이션은 다른 세션이 자체
   검증 후 별도로 Stage→Production 적용할 사항이며, 이번 세션은 `contract_templates.
   html_document`(템플릿 텍스트) 동기화만 담당.
+
+### GATE E 최종 처리(9차~10차 후속) — sp3-qa-agent 검수 완료 (2026-09-09, 메인 세션)
+
+sp3-qa-agent에 9차(폭 조정)·10차(라벨 3건) 후속을 검수 요청. 판정: 코드 diff·734px
+계산·컬럼구조 무변경·vitest 72/72 GREEN·svelte-check 신규 에러 0건은 전부 확인,
+"다른 세션 소유 변경분(할인쿠폰/부가세 변수 재배선)과 이번 세션 보고 범위(라벨
+텍스트만)를 명확히 구분해 판정" 항목도 통과 — 유일한 조건부 사유는 서브에이전트가
+Supabase MCP 접근 권한이 없어 Production `contract_templates` 실측 재확인을 못 했다는 것.
+
+**조건부 사유 해소**: 메인 세션(Supabase MCP 연결)이 Production(vnbpmvxruyciuuaermyh)
+`contract_templates` 2건(`2d0c18ff-...`, `b5624b6b-...`)을 직접 재조회 —
+`width:150px` 정확히 6회, `width:384px` 정확히 1회, 신규 라벨 4곳("정상 대여요금"·
+"할인쿠폰 적용"·"부가세"·"최종 결제요금") 각 1회(두 템플릿 동일 위치, byte-identical
+6902자), 옛 라벨 4곳 전부 0회 확인. QA의 유일한 조건부 사유 해소.
+
+**최종 판정**: ✅ GATE E 통과.
 
 ---
 
@@ -41645,5 +41823,40 @@ Production `.env.local` 미연결(설계상 의도, CLAUDE.md)이라 raw DB 직�
 실측(Manfrotto 055 price_rules 24h=35000)으로 수정 로직이 정확히 그 값을 반환함을 코드
 검토로 확인 — 이 세션 동안 다른 세션이 dev 서버를 점유 중이라 브라우저 실측 대신 DB 실측
 + production `__data.json` 실측으로 대체. DB/RPC/마이그레이션 변경 없음.
+
+**git commit은 Stephen 직접 실행.**
+
+---
+
+## NOW — 취소·반품 카드 반경 표준 정합화 (2026-09-09, 이 세션 단독 수행)
+
+> ⚠️ 바로 위 "CMS 가격정책(price_rules) 우선순위 결함" 블록은 이 세션이 아니라 병행 세션이
+> 같은 TASK.md에 이어 붙인 별개 작업이다. 이 블록은 그 이전에 이 세션이 완료한 `/account/rental`
+> 취소버튼 비활성화·PC 뒤로가기 신설(위 GATE E 통과 기록 완료) 작업의 후속으로, Stephen이
+> 실제 화면(모바일 `/account/cancel`, PC `PcCancelPanel`)을 직접 확인하며 지시한 카드 반경
+> 수정 2건이다.
+
+**요청 1**: "취소(localhost:5174/account/cancel) 목록을 확인해서 카드 bg 라운드를 표준
+디자인 시스템 지침에 따라 PC와 mobile 반응형에 맞춰 수정해" — `src/routes/account/cancel/
++page.svelte`의 `.cancel-card`가 `border-radius: var(--radius-2xl)`(50px) 고정값만 있고
+모바일 오버라이드가 없던 것을, 같은 화면군 `.rental-card`(`/account/rental`)가 이미 올바르게
+적용해 둔 front-uiux.md §4 "카드 반경 대/중 2단 체계"(대(large): PC 50px / Mobile 30px)와
+대조해 누락됐던 `@media (max-width: 640px) { .cancel-card { border-radius: 30px } }`를 추가.
+
+**요청 2**: Stephen이 이어서 PC 화면 스크린샷(`<launch-selected-element>`, DOM 경로
+`div.pc-right > div.pc-panel-wrap > div.panel`)을 제시하며 "PC는 왜 조정하지 않았지?
+라운드값을 더 줄여야해!" — 요청 1은 `/account/cancel` 독립 라우트(모바일 퍼스트 공용
+파일)만 수정했을 뿐, `/account` 마이페이지에 임베드되는 **별도의 PC 전용 패널 파일**
+(`src/lib/components/account/PcCancelPanel.svelte`)은 그 시점엔 손대지 않은 상태였음이
+확인됨 — 이 파일도 동일하게 `--radius-2xl`(50px, "대(large)" 등급)을 쓰고 있었는데, 730px
+폭의 좁은 패널 안 리스트 카드에는 과하다는 Stephen 판단에 따라 디자인 시스템의 "중(medium)"
+등급 값(`--radius-xl`, 30px)으로 축소.
+
+⚠️ 형제 패널 `PcRentalPanel.svelte`의 `.rental-card`도 여전히 50px을 쓰고 있어 지금은
+시각적으로 어긋난 상태 — Stephen에게 함께 맞출지 물어봤으나 이 턴에서는 별도 확답 없이
+다음 지시(하네스 기록+QA)로 넘어감. **이 세션은 `.rental-card`를 임의로 함께 수정하지
+않았다** — 요구범위 외 수정 절대 금지 원칙(CLAUDE.md).
+
+**검증**: `npx svelte-check` — 대상 2개 파일 신규 에러 0건. DB/RPC/마이그레이션 변경 없음.
 
 **git commit은 Stephen 직접 실행.**

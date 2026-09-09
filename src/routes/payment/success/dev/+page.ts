@@ -10,7 +10,7 @@ export interface SuccessItem {
   endDate: string
   pickupMethod: string
   returnMethod: string
-  options: Array<{ name: string; qty: number }>
+  options: Array<{ name: string; qty: number; price?: number }>
   price: number
 }
 

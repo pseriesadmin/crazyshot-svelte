@@ -95,6 +95,8 @@ export interface ActionPayload {
   // reservation_approval 통합 카드(Migration 275) — 체크아웃 배치로 2건 이상 동시 승인 시
   // 상품별 개별 카드 대신 하나의 카드 안에 항목 목록으로 표시(items.length > 1일 때만 사용)
   items?: Array<{ reservation_no: string; product_name: string; return_deadline?: string }>
+  // reservation_hold 카드 전용(Migration 471) — 함께 예약된 옵션상품(reservation_options)
+  options?: Array<{ name: string; qty: number }>
   // 만료 처리
   is_expired?: boolean
   // 자동답변 전용

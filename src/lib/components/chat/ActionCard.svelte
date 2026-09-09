@@ -510,6 +510,11 @@
           {#if payload.rental_period}
             <p class="rental-period">{payload.rental_period}</p>
           {/if}
+          {#if payload.options && payload.options.length > 0}
+            <p class="options-info">
+              포함 옵션 {payload.options.map((o) => `${o.name} ${o.qty}개`).join(', ')}
+            </p>
+          {/if}
         {/if}
         {#if payload.product_price}
           <p class="product-price">{payload.product_price.toLocaleString()}원/일</p>
@@ -711,7 +716,8 @@
   .product-price,
   .discount-label,
   .tracking-info,
-  .return-deadline {
+  .return-deadline,
+  .options-info {
     font: 400 12px/1.5 'Noto Sans KR', sans-serif;
     color: var(--cs-text-dark);
     margin: 0;
