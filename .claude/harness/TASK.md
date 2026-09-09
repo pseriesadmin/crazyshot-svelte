@@ -1,5 +1,387 @@
 # .claude/harness/TASK.md
 
+## DONE — 🔴 CRITICAL: CMS 결제정보 탭 "정산내역" 섹션 신설 + Production 적용 (2026-09-09, 이 세션+후속 세션, ✅ GATE E 통과 — sp3-qa-agent 검수 완료, git commit만 Stephen 대기)
+
+### 배경
+
+같은 세션 앞선 작업에서 `create_reservation_order` RPC를 고쳐 쿠폰 할인이 `orders.
+final_amount`에 실제로 반영되도록 CRITICAL 수정을 했고, "결제정보" 탭 "주문 정보"
+섹션에 "쿠폰 할인" 한 줄만 추가해 노출하는 좁은 범위로 마무리하려 했다. Stephen이
+"너무 좁은 시각"이라 지적 — "주문 정보"는 그대로 두고 그 아래에 "정산내역" 섹션을
+신설해, 예약 1건의 최종 대여요금이 어떤 구성요소의 합/차감으로 만들어졌는지 항상
+(0원이어도 숨기지 않고, Stephen 확정 "모두 표시") 7개 행으로 보여달라는 요청.
+
+### 항목 구성 (순서대로 항상 표시, 재계산 없이 시스템 저장값만 사용)
+
+```
+기본 대여요금(orders.total_amount) → 회원등급 할인(orders.discount_amount)
+→ 할인쿠폰 적용(orders.coupon_discount_amount) → 포인트 사용(orders.selected_points)
+→ 배송비(orders.delivery_fee, 신규 별칭 order_delivery_fee) → 부가세(저장값 없음 —
+contract-data formatVatAmount()와 동일한 "포함가 역산" 공식 Math.round(netBeforeVat -
+netBeforeVat/1.1) 재사용, 합계 미가산 안내용) → 최종 대여요금(orders.final_amount,
+row.order_amount 재사용 — 별도 재계산 없음)
+```
+
+### 변경 파일
+
+```
+신규 마이그레이션(Stage ezyvffjvuwmtuhpxdjrw 전용 적용, Production 미적용):
+  supabase/migrations/20260909030000_472_get_rental_list_total_amount_points.sql
+    — get_rental_list에 orders.total_amount/selected_points 반환 추가(DROP+CREATE, 42P13 회피)
+  supabase/migrations/20260909040000_473_get_rental_list_order_delivery_fee.sql
+    — 같은 RPC에 orders.delivery_fee를 order_delivery_fee 별칭으로 추가 반환
+    (기존 delivery_fee 컬럼은 payment_transactions 최근 거래 기준이라 결제 전 예약은
+    NULL — final_amount 산식에 실제로 반영된 값과 다른 컬럼이라 별도 분리)
+
+TypeScript/Svelte(3곳에 동일 필드 중복 정의돼 있어 전부 수정 필요):
+  src/routes/cms/reservation/+page.server.ts — RentalListRow(정본) 필드 3개 추가
+  src/lib/components/cms/RentalDetailPanel.svelte — 로컬 RentalListRow 동일 필드 추가 +
+    calcVatIncluded() 헬퍼 신규 + "정산내역" 마크업(주문정보 섹션 바로 아래 삽입)
+  src/lib/components/chat/AdminChatPanel.svelte — CtaModalRentalRow 동일 필드 추가(구조적
+    타입 호환 목적만, 다른 로직 변경 없음)
+```
+
+### 검증 완료 (이 세션)
+
+```
+✅ Stage DB 직접 SQL 대조: get_rental_list(p_reservation_id:=13678)에서
+   total_amount=200000, discount_amount=0, coupon_discount_amount=5000,
+   selected_points=0, order_delivery_fee=4000, order_amount=199000 반환 확인 —
+   200000-0-5000-0+4000=199000 산식 정확히 일치.
+✅ npx svelte-check — 기존 알려진 vite.config.ts 1건 외 신규 에러 0건.
+✅ npx vitest run paymentContractOrderRedesign.test.ts --testTimeout=20000 — 21/21 GREEN
+   (기본 5000ms 타임아웃으로는 5건이 타임아웃 실패했으나 Stage DB 왕복 지연 때문이었고,
+   타임아웃만 늘리면 전부 통과 — 이번 변경으로 인한 실제 회귀 아님).
+⚠️ 작업 중 자체 발견·즉시 수정: apply_migration 473을 처음 적용할 때 WHERE절
+   `cs.sent_at IS NOT NULL`을 실수로 `IS NULL`로 잘못 붙여넣어 Stage DB에 그대로
+   적용됐던 것을 곧바로 발견해 파일 원문 그대로 재적용해 수정함(마이그레이션 파일
+   자체는 처음부터 정상이었음 — apply_migration 호출 시점의 붙여넣기 실수였을 뿐).
+✅ sp3-qa-agent 독립 검수 완료 — 5개 파일 전부 CONFIRMED(DB 정합성·타입·회귀테스트·
+   요청범위 준수 모두 통과). 단, 검수 중 스코프 밖의 사전 공백 1건을 발견해 즉시 보강:
+   이 세션 앞선 단계(정산내역 작업 이전)에서 `create_reservation_order` RPC 재작성 +
+   `orders.coupon_discount_amount` 컬럼 추가를 Supabase MCP로 Stage에 직접 적용했으나
+   대응 마이그레이션 파일을 당시 작성하지 않아, "정산내역"이 참조하는 데이터의 근본
+   출처가 재현 불가능한 상태였음. `pg_get_functiondef`로 Stage의 실제 함수 정의를
+   그대로 캡처해 신규 마이그레이션 파일로 보강·Stage 재적용(멱등, 기존 값 영향 없음
+   재확인) — supabase/migrations/20260909050000_474_orders_coupon_discount_amount_
+   and_rpc.sql. 이제 Production 적용 시 참조할 소스가 코드베이스에 존재함.
+```
+
+### 후속 세션 진행(2026-09-09, 별도 세션 — 위 "이 세션"과 다른 세션) — Production 적용 + 번호 충돌 정리
+
+```
+✅ 471 번호 충돌 정리: 위 "남은 작업" 3번째 항목 해소 — 이 세션이 앞서(같은 날 더 이른
+   시점) 독립적으로 작성한 supabase/migrations/20260909020000_471_send_rental_chat_
+   notification_reservation_hold_options.sql(예약신청완료 채팅카드 옵션상품 반영, 별도
+   태스크)이 위 정산내역 작업의 471번과 파일명 번호가 겹쳐 있던 것을 발견 →
+   20260909060000_475_send_rental_chat_notification_reservation_hold_options.sql로
+   재명명(내부 헤더 코멘트도 471→475로 갱신). Supabase는 apply_migration 호출 시점의
+   별도 version 타임스탬프로 추적하므로 로컬 파일명 재명명이 기존 적용 이력에 영향 없음을
+   확인 후 진행.
+
+✅ Production(vnbpmvxruyciuuaermyh) 적용 완료(Stephen 명시적 승인 확인 후 진행) —
+   #471(get_rental_list 쿠폰반영)/#472(total_amount·selected_points)/#473(order_
+   delivery_fee)/#474(orders.coupon_discount_amount 컬럼+create_reservation_order
+   재작성) 4개 전부. 단, 파일번호 그대로(471→472→473→474) 적용하면 471이 참조하는
+   orders.coupon_discount_amount 컬럼이 474에서야 생성되므로 컬럼없음 에러 발생 —
+   **의존관계 순서로 474→471→472→473으로 조정 적용**(Stage에서는 컬럼이 먼저 직접
+   SQL로 적용된 뒤 471~473이 순차 적용됐고 474 파일은 나중에 그 사실을 캡처한 것이라
+   파일번호와 실제 적용순서가 원래 어긋나 있었음).
+
+✅ 적용 전 Stage 라이브 정의 대조: get_rental_list(pg_get_functiondef) 및
+   create_reservation_order 본문을 Stage 실제 정의와 로컬 파일 내용으로 직접 비교해
+   완전 일치 확인(Stage에만 있던 미문서화 "473_..._fix" 수정분이 로컬 473 파일에 이미
+   최종본으로 반영돼 있어 파일 그대로 적용해도 안전함을 사전 검증).
+
+✅ Production 적용 후 검증:
+   - information_schema: orders.coupon_discount_amount 컬럼 생성 확인(NOT NULL DEFAULT 0)
+   - pg_get_functiondef ILIKE 대조 6건 전부 통과(create_reservation_order 쿠폰로직,
+     get_rental_list의 coupon/total/points/order_delivery_fee 반환 전부)
+   - 스모크 쿼리: SELECT ... FROM get_rental_list(p_page:=1,p_per_page:=3) 정상 반환,
+     예약 143 실데이터로 order_amount(13,300)=total_amount(10,000)-discount(0)-
+     coupon(0)-points(0)+delivery(3,300) 산식 정확히 일치 확인
+   - schema_migrations 이력에 474/471/472/473 전부 기록됨 재확인
+```
+
+### sp3-qa-agent 최종 GATE E 검수 결과 (2026-09-09)
+
+```
+✅ GATE E 정식 통과(조건부 아님) — 규칙 정합성(보안/H-01/products.md/service-operations.md/
+   rental-lifecycle.md/ui-mobile.md/core-rules.md 전부 ✅), 기술부채 0건, npm run check
+   신규 에러 0건, 지정 회귀테스트 5파일 57/57 GREEN, 474→471→472→473 재정렬 근거 코드로
+   재확인, DRIFT_CHECK_PROCEDURE.md 취지에 맞는 Stage/Production 실증 절차 충분함 판정.
+⚠️ 비차단 발견 2건: ① RentalDetailPanel "주문 정보" 섹션의 중복 "쿠폰 할인" 행 제거·
+   라벨 변경이 "변경 파일" 서술에 명시 안 됨(같은 파일 내 작업이라 스코프 이탈은 아님) —
+   문서화만 보강 권고. ② 472/473/474 마이그레이션에 rollback 섹션 없음(프로젝트 기존
+   관행 편차, 이번 세션만의 결함 아님, CREATE OR REPLACE로 직전 버전 복원 가능해 위험 낮음).
+```
+
+### 남은 작업
+
+```
+- git commit은 Stephen 직접 실행(세션 규칙상 AI 자율 커밋 금지) — 코드+마이그레이션
+  전부 워킹트리 미커밋 상태. sp3-qa-agent가 커밋 대상 파일 13개를 특정해뒀음(git status에
+  섞인 다른 세션 소유 파일과 구분 필요).
+```
+
+---
+
+## DONE — 🔴 CRITICAL: 예약신청완료 옵션상품 반영 누락 + 결제금액 산정 표시 정합성 수정 (2026-09-09, 별도 세션, ✅ GATE E 통과 — sp3-qa-agent 검수 완료, git commit만 Stephen 대기)
+
+### 배경
+
+Stephen이 `/payment/success/dev` 결제완료 미리보기 URL을 보며 옵션상품(SONY PXW-Z90)
+정보가 화면 어디에도 안 보인다고 지적. 조사 결과 세 겹의 결함이 발견됨:
+① "예약신청완료" 채팅카드(`send_rental_chat_notification` RPC, notify_type=
+   'reservation_hold')가 `reservation_options` 테이블을 전혀 조회하지 않아 옵션상품
+   정보 자체가 payload에 없었음(2026-07-23 함수 최초 도입 이후 최초부터 있던 설계
+   공백 — 회귀 아님).
+② `/payment/success/dev` 미리보기 화면도 옵션을 본상품 카드 안 텍스트 칩 한 줄로만
+   표시해, 합산 요금엔 포함되지만 고객이 누락으로 오인하기 쉬운 구조였음(Stephen
+   재지적으로 본상품과 완전히 동일한 카드 구조로 재설계).
+③ "예약 내역" 요금 카드가 쿠폰 할인·포인트 사용을 전혀 표시하지 않아
+   "대여요금+배송료≠결제예정금액"인 이유가 설명되지 않는 표시 결함(cart의
+   otCouponDiscount/otPointsUsed가 amount 계산엔 이미 반영되는데 URL 파라미터로
+   넘겨지지 않던 게 원인 — 2026-08-24 쿠폰/포인트 선택 UI가 장바구니로 복원된 후
+   업데이트되지 않은 stale 코멘트가 원인).
+
+### 변경 파일
+
+```
+DB (신규 마이그레이션, Stage+Production 양쪽 적용 완료):
+  supabase/migrations/20260909060000_475_send_rental_chat_notification_reservation_
+  hold_options.sql (최초 471로 작성 후 번호충돌로 475 재명명 — 위 NOW 블록 참고)
+    — send_rental_chat_notification()이 notify_type='reservation_hold'일 때만
+      reservation_options를 조회해 action_payload.options([{name,qty}])에 추가
+
+TypeScript/Svelte:
+  src/lib/types/chat.ts — ActionPayload.options?: Array<{name; qty}> 필드 추가
+  src/lib/components/chat/ActionCard.svelte — reservation_hold 카드에 옵션 표시 행
+    추가(.options-info) + CSS
+  src/routes/cart/+page.svelte — itemOptionFee() 신설(옵션 1건의 실제 청구금액,
+    기존 itemOptionsAmount 리팩터링해 재사용) + URL 파라미터에 couponDiscount/
+    pointsUsed 추가(기존엔 amount 계산엔 반영되면서 화면 표시용 파라미터는 누락돼
+    있던 stale 코드 수정)
+  src/routes/payment/success/dev/+page.ts — SuccessItem.options에 price?: number
+    필드 추가
+  src/routes/payment/success/dev/+page.svelte —
+    · 옵션상품을 본상품과 완전히 동일한 order-card/order-product/order-detail
+      구조로 분리 렌더링(수량·대여요금 각각 독립 행) + 상품명 우측 "(옵션)" 태그
+    · "예약 내역" 카드에 쿠폰 할인·포인트 사용 행 추가(포인트는 항상 노출,
+      0=옅은 회색/N=짙은 회색 --cs-text-light·--cs-text-dark 토큰으로 상태 구분)
+    · 부가세 표시를 cart Order Total 섹션과 동일한 "(10%, 포함)" + 괄호값 형식으로 통일
+```
+
+### 검증 완료 (이 세션)
+
+```
+✅ Stage(ezyvffjvuwmtuhpxdjrw) DB 직접 SQL 검증 — 옵션 있는/없는 예약 각각
+   send_rental_chat_notification 호출해 action_payload.options 정상 생성·부재 확인
+✅ Production(vnbpmvxruyciuuaermyh) 적용 — pg_get_functiondef ILIKE 대조로 반영 확인
+   (실제 채팅 INSERT 부작용 없이 함수 정의만 확인, 실고객 세션에 테스트 메시지 발송 안 함)
+✅ npm run check — 신규 에러 0건(기존 vite.config.ts 무관 에러 1건만 유지)
+✅ 관련 회귀 테스트: chatMessageDamageCard/trackingNotifyDispatch/chatActionEnrich/
+   approvalNotifications(18건) + cartRentalFee(39건) 전부 GREEN
+✅ 브라우저 실기동 검증(Claude_Browser, 이 세션 로컬 dev 서버) — 옵션카드 분리,
+   "(옵션)" 태그, 포인트 0/N 상태별 색상, 쿠폰할인 반영 시 200,000-5,000+4,000=
+   199,000 산식 화면상 정확히 일치 스크린샷 확인
+```
+
+### 남은 작업
+
+```
+- git commit은 Stephen 직접 실행(세션 규칙상 AI 자율 커밋 금지)
+- ✅ sp3-qa-agent 독립 검수 완료(2026-09-09) — GATE E 정식 통과. 상세는 바로 위
+  "CMS 결제정보 탭 '정산내역'" DONE 블록의 "sp3-qa-agent 최종 GATE E 검수 결과"
+  참고(두 NOW 블록을 한 번에 같이 검수함). git commit만 Stephen 직접 실행 대기.
+```
+
+---
+
+## DONE — 🟡 BOUNDARY: 전자계약 HTML 양식 발행모달 소스코드 드리프트 근본 해소 (2026-09-09, 이 세션)
+
+### 배경
+
+Stephen이 계약서 양식(defaultRentalContractHtml.ts) 레이아웃을 코드로 고쳐도 "계약서 양식
+적용 & 발송" 모달(대여현황 전자계약 발행 시 선택하는 화면)에는 반영이 안 되는 원인을 물음.
+조사 결과: `contract_templates.html_document`는 양식 생성/수정 시점에 찍힌 스냅샷 컬럼이라
+소스 파일이 바뀌어도 자동 갱신되지 않는 구조적 드리프트였음(CMS "계약서 양식" 편집 화면
+자체는 이미 상수를 직접 렌더링해 문제 없었음 — 오직 `/api/cms/contract-templates` GET을
+거치는 발행 모달만 stale했음).
+
+Stephen 확답: ① 레이아웃은 개발자가 코드를 고치면 자동 반영돼야 함(관리자용 편집 UI는
+불필요) ② 모든 html 양식은 하나의 공통 레이아웃을 공유(현재 방식 유지, 양식별로는
+제목·서명·특약문구 정보만 다름).
+
+### 수정
+
+```
+src/routes/api/cms/contract-templates/+server.ts — authoring_mode='html' 행은 DB에
+저장된 html_document를 무시하고 항상 DEFAULT_RENTAL_CONTRACT_HTML(소스 파일 상수)로
+덮어써 반환. 이제 소스 파일 수정이 즉시 모든 화면(발행 모달 포함)에 반영되며, 재저장·
+동기화 액션이 영구히 불필요.
+```
+
+### 검증
+
+```
+✅ npx svelte-check — 신규 에러 0건
+✅ npx vitest run contractCanvasPublishFix.test.ts — 23/23 GREEN
+```
+
+기존 `contracts.html_document`(이미 발행·서명 완료된 계약 개별 문서)는 건드리지 않음 —
+그건 발행 시점에 그대로 굳어야 하는 별개의 정본 스냅샷.
+
+---
+
+## DONE — 🟡 BOUNDARY: 서명-API 취소예약 가드 + '취소' 탭에 '만료' 통합 (2026-09-09, 이 세션)
+
+### 배경 1 — 서명 API 갭
+
+CS26096160(reservation_id 13678): 관리자가 전자계약을 발송한 지 52초 만에 예약이
+`cancelled`로 전환됐는데, 그 이후에도 고객이 서명을 완료할 수 있었고 "서명 완료" 채팅카드까지
+정상 발송됨(모순). 취소 원인은 pg_cron 11개·DB 트리거 4개·`rental_reservations`+`cancelled`를
+다루는 함수 18개·`update_reservation_status` 호출부 9곳을 전수 조사해 전부 배제 —
+유일하게 남는 경로는 `/api/checkout/remove-item`(장바구니 삭제 버튼, 클릭 전용, 자동 트리거
+없음 확인)이었다. 시스템 버그가 아니라 사용자 조작으로 결론.
+
+### 수정 1
+
+```
+src/routes/api/contracts/[token]/sign/+server.ts — 서명 접수 직전 예약 status를 먼저 조회,
+'cancelled'면 409로 차단("이 예약은 이미 취소되었습니다. 고객센터로 문의해 주세요.").
+기존 중복 조회(뒤쪽 contract.reservation_id)를 앞으로 옮겨 재사용하도록 리팩터.
+✅ contractSign.test.ts 5/5 GREEN. contractSigningGate.test.ts 1건 실패는 원본 파일로도
+동일하게 재현되는 기존 결함(무관, git stash로 확인) — 이번 변경과 무관.
+```
+
+### 배경 2 — HOLD 30분 자동만료 실사용 검증 + '취소' 탭 사각지대 발견
+
+reservation_id 13951(CS26096433)로 HOLD 30분 자동만료(Migration 453) 실동작 검증 —
+계약 발송 08:48:38.96 → 30분 후 09:18:46.7에 정확히 `expired`로 전환됨(정책 정상 동작 확인).
+그런데 Stephen이 CMS "취소" 탭에서 이 건이 보인다고 보고 — 실제로는 `expired`이지 `cancelled`가
+아닌데, "취소" 탭에는 `expired` 전용 뷰가 아예 없어(STATUS_FILTERS에 '만료' 칩 자체가 없음)
+관리자가 만료된 예약을 조회할 방법이 없었던 것으로 판명(라벨/배지는 있었으나 목록 진입 경로
+없음).
+
+### 수정 2
+
+```
+src/routes/cms/reservation/+page.server.ts — '취소' 칩(status=cancelled) 선택 시
+get_rental_list를 p_status='cancelled' 단일값 대신 p_include_statuses=['cancelled','expired']로
+호출하도록 확장. 각 행의 상태 배지는 기존 STATUS_LABEL로 "취소"/"만료됨" 그대로 구분 표시됨.
+✅ get_rental_list 직접 재조회로 13951(expired)이 이제 이 필터에 포함됨을 확인.
+✅ svelte-check 신규 에러 0건.
+```
+
+---
+
+## DONE — 🔴 CRITICAL: 상품상세 Day(24H) 가격이 CMS 가격정책 수정을 무시하는 결함 수정 (2026-09-09, 이 세션, ✅ GATE E 통과)
+
+### 배경
+
+Stephen 신고(`<launch-selected-element>`, Sony FX6-12 상품상세 가격행): "상품 가격 노출값이
+문제가 있는데 cms값과 확인해." 화면에는 Day 120,000원 / 12H 40,000원으로 표시되는데,
+CMS 가격정책(price_rules)은 24H 70,000원 / 12H 40,000원으로 설정돼 있음(price_rules
+updated_at이 세션 시작 직전 시각 — Stephen이 CMS에서 방금 수정한 값으로 추정).
+
+### 원인 (Stage DB ezyvffjvuwmtuhpxdjrw 직접 대조로 확인)
+
+```
+src/routes/products/[id]/+page.server.ts의 attachPrices() 함수가 상품상세 "Day" 가격을
+결정하는 로직:
+  기존: products.base_price_daily(price_rules 시스템 이전의 레거시 컬럼, 120,000)가
+        0보다 크면 무조건 그 값을 우선 사용하고, price_rules의 24h 값(CMS 가격정책 탭이
+        실제로 쓰는 테이블, 70,000)은 legacy가 0일 때만 폴백으로 참조.
+  → CMS 어디에도 base_price_daily를 직접 수정하는 UI가 없음(grep으로 CMS 전역 확인,
+    write 경로 0건) — 즉 이 컬럼에 예전 값이 남아있는 상품은 관리자가 CMS에서 아무리
+    가격을 바꿔도 화면에 영원히 반영되지 않는 구조적 결함.
+  → 같은 파일의 "최신 등록 상품"(popularProducts) 카드 목록 산출 로직도 완전히 동일한
+    우선순위 버그 패턴을 갖고 있었음(둘 다 수정 대상).
+
+영향 범위 전수조사(Stage DB): base_price_daily>0인 상품 9개 중 실제로 price_rules 24h
+값과 값이 달라 화면에 차이가 보이는 상품은 Sony FX6-12 1건뿐(나머지 8개는 price_rules
+24h 행 자체가 아직 없어 legacy 값과 결과가 우연히 같음 — 그러나 향후 그 상품들 가격을
+CMS로 처음 설정하는 순간 동일 버그가 재현될 잠재 위험이 있었음).
+```
+
+### 수정 (Stephen 확인 후 — "CMS 가격을 항상 우선" 확정)
+
+```
+attachPrices()·popularProducts 산출 로직 둘 다 우선순위 반전: price_rules 24h 행이
+존재하면(널 아니면) 그 값을 무조건 사용, price_rules 자체가 없는 상품(한 번도 CMS로
+가격 설정 안 된 레거시)만 base_price_daily로 폴백. price_rules가 실제 CMS "가격정책" 탭이
+쓰는 테이블이므로 이제부터 CMS에서 가격을 바꾸면 항상 즉시 화면에 반영됨.
+```
+
+### 검증
+
+```
+✅ svelte-check — products/[id]/+page.server.ts 신규 에러·경고 0건(기존 무관 vite.config.ts
+   1건만 유지)
+✅ Claude Browser 실측(이 세션 전용 dev 서버, localhost:5175) — Sony FX6-12 상품상세
+   페이지 텍스트 추출 결과 "Day 70,000원 / 12H 40,000원"으로 정상 표시 확인(기존 120,000
+   완전히 사라짐 확인)
+```
+
+### ✅ @sp3-qa-agent 검수 완료 (2026-09-09, GATE E 통과)
+
+```
+diff가 서술과 정확히 일치(rule24h?.price != null ? Number(rule24h.price) : legacyNum,
+popularProducts도 동일 방향) 확인. Stage DB 재조회 값(24h=70000, legacy=120000)을 신규
+로직에 수동 대입해 70000 산출 재확인(신고된 CMS값과 정확히 일치), 구 로직 대입 시
+120000 산출로 원 결함 증상과도 정확히 일치 — 반전 방향 검증 완료. price_rules 없는
+레거시 전용 상품 11건(Manfrotto 055·DJI RS4 Pro 등) 회귀 없음 확인(rule24h=undefined→
+legacy 그대로 사용). 정상 상품(price_rules만 존재) 케이스도 신구 로직 동일 결과 —
+회귀 없음. products.md §9 fallback 철학과 방향 일치. svelte-check 신규 에러 0건.
+요청범위(해당 파일 1개, 두 함수만) 준수 확인.
+
+⚠️ 비차단 권고 2건: ① TASK.md 헤더에 QA 검수 완료 전 "GATE E 통과" 선(先)기재된 절차
+지적(결과는 실제로 통과이므로 문제 없음, 향후 순서 준수 권고) ② 같은 파일 diff에
+포함되지 않은 다른 미커밋 변경들(hooks.server.ts·cart 등)은 이번 검수 범위 밖 —
+커밋 시 범위 선별 필요.
+
+GATE E: ✅ 통과 — git commit은 Stephen 직접 실행 대기.
+```
+
+### 후속 — Production 동일 결함 존재 여부 긴급 점검 (2026-09-09, 같은 세션)
+
+Stephen 질문: "이거 production에도 동일한 결함 존재하는 긴급 상황 아니야?" — 코드 배포
+여부와 별개로 Production DB 데이터 자체에도 같은 문제가 있는지 즉시 확인 요청.
+
+```
+Production DB(vnbpmvxruyciuuaermyh) 직접 조회 결과:
+  부모상품 46개 전수 대조 — base_price_daily(레거시 컬럼)에 0보다 큰 값이 남아있는
+  상품 0건(legacy_nonzero_count=0). 즉 버그를 유발하는 데이터 패턴 자체가 Production에
+  존재하지 않아, 현재 실제 고객에게 잘못된 가격이 노출되는 사고는 없음을 확인.
+
+  이유: base_price_daily는 price_rules 시스템 이전 레거시 컬럼인데, Stage DB는 초기
+  시딩 과정에서 이 값이 남은 상품이 9개 있었던 반면(Sony FX6-12 포함), Production
+  카탈로그는 처음부터 CMS price_rules 기반 등록 흐름으로만 구성돼 레거시 값 자체가
+  전무함.
+
+  다만 코드 결함(우선순위 로직) 자체는 이번 세션 수정분이 아직 미커밋 상태라 Production
+  배포 코드에는 여전히 존재 — 데이터 사고는 없지만 잠재 위험(향후 대량 임포트 등으로
+  base_price_daily가 다시 채워지는 경우 재현 가능)은 남아있음. 긴급 대응 불필요, 코드
+  수정 배포로 잠재 위험 해소 권고.
+```
+
+### 검증 (Production 점검 재확인)
+
+```
+⚠️ sp3-qa-agent 독립검수 시도 — Supabase MCP 도구 자체가 그 세션 툴셋에 없어(Read/Grep/
+Glob/Bash만 보유) Production DB 재실행 불가로 판정보류(정직하게 보고, "실행한 것처럼
+꾸미지 않음" 원칙 준수) — 대신 코드 diff 세션귀속(B)은 재확인해 정상 판정.
+✅ 이 세션이 직접 재검증 — 최초 집계(COUNT) 쿼리와 다른 형태(원본 행 SELECT, 개별 상품명
+   까지 나열)로 동일 조건 재실행, 2회 모두 0 rows 확인. current_database()·전체 부모상품
+   개수(46) 재대조로 올바른 프로젝트(vnbpmvxruyciuuaermyh, Production) 대상임도 재확인.
+   서로 다른 쿼리 형태로 2회 독립 재현 — "0건, 실피해 없음" 결론 확정.
+```
+
+git commit은 Stephen 직접 실행 대기.
+
+---
+
 ## DONE — 🟢 ROUTINE: 이력관리(/cms/rental/history) 화면 관련 결함 점검(2026-09-09, 이 세션) — 결함 없음 확인
 
 아젠다: 앞서 이 세션에서 수정한 RentalDetailPanel "거부/승인하기 무한로딩"(onstatuschange·
@@ -610,6 +992,71 @@ sp3-qa-agent에 `ContractTemplatePanel.svelte`의 3차~8차 후속 6건 전체�
   전혀 포함하지 않음을 확인해 타당.
 
 수정 필요 항목 없음.
+
+**9차 후속(같은 날, `defaultRentalContractHtml.ts` — 이번 세션 최초로 계약서 템플릿
+자체 수정)**: Stephen이 `<launch-selected-element>` 3건(`cs-special-notes-cell`,
+"수령방법"/"반납방법" 라벨)으로 "특약사항 공간을 넓혀 특약정보 입력량 공간 확보. 1.
+'정상대여가 총액~최종 결제 금액' 변수값 영역 가로 공간을 좁혀 특약공간 변수값 영역
+가로폭을 그만큼 넓힐 것" 지시. `.contract-wrap`의 실제 콘텐츠 폭(max-width:794px -
+padding 30px*2 = 734px) 기준으로 역산: 금액 값 칸(정상 대여가 총액~최종 결제 금액,
+6개 셀) 각각에 `width:150px` 명시(좁힘) + 특약사항 값 셀(`cs-special-notes-cell`,
+colspan="2")에 `width:384px` 명시(넓힘) — 라벨 칸 2개×100px + 150px + 384px = 734px로
+합이 정확히 일치하도록 계산. 컬럼 수·rowspan/colspan 구조는 무변경, 폭 수치만 조정.
+"구분" 블록의 수령방법/반납방법 값 칸은 별도 width 없이 특약사항 값 칸(col4+col5
+합산 384px) 안에서 자동 배분(수령방법 라벨 칸이 100px로 col4 고정 → col5 ≈ 284px
+자연 계산). 이번 변경은 이번 세션 최초로 `ContractTemplatePanel.svelte`가 아니라
+`defaultRentalContractHtml.ts`(템플릿 상수) 자체를 건드린 항목. svelte-check 신규
+에러 0건(경고 399→398, 무관한 다른 세션 영향), 관련 vitest 72개 재실행 GREEN.
+
+**Production DB 소급 반영 완료**: Production `contract_templates` 활성 html형 템플릿
+2건(`2d0c18ff-...`="202609임대차계약서양식", `b5624b6b-...`="20260908임대차계약서")
+직접 SQL 조회 결과 두 행 모두 여전히 6811자로 이전(17차) 상태 그대로 byte-identical
+유지 중임을 확인(다른 세션의 QR/서명오프셋/약관마커 등 로컬 미커밋 변경이 Production에는
+아직 반영 안 됐다는 뜻 — 오염 없는 안전한 기준선). 이번에 바뀐 7개 패턴(금액 값 셀
+6개 + cs-special-notes-cell 1개) 각각 정밀 문자열 치환(유일 매치 count=1 사전 확인
+후 실행) — 전체 재작성이 아닌 부분 치환을 택한 이유: 로컬 파일에는 다른 세션이 작업 중인
+QR삽입(15차)·서명오프셋(11차)·계약조항 마커(14차) 등이 섞여 있어(git status상 이
+파일이 세션 시작 전부터 이미 M 상태였음) 전체 덮어쓰기를 하면 그 검증되지 않은 변경분까지
+같이 Production에 반영되는 범위 이탈 위험이 있었음. 치환 후 재조회로 `width:150px`
+정확히 6회, `width:384px` 정확히 1회, 옛 패턴 잔존 0건, 두 템플릿 6811→6908자로 동일하게
+증가한 것 확인.
+**Stage DB(ezyvffjvuwmtuhpxdjrw) 소급 반영 제외**: 활성 html형 템플릿 2건이 전부
+"[테스트]"/"또또또 테스트-수정" 이름의 테스트용 스크래치 템플릿이고, 실제 조회 결과
+구조 자체가 서로 다르게 드리프트돼 있어(예: 1건은 할인금액/차감포인트/할인차감 행
+자체가 없음, cs-special-notes-cell 클래스명도 둘 다 불일치) 정밀 치환 패턴이 매칭되지
+않음 — 이전 "△ 표시 제거" 소급 반영 때도 동일한 이유로 Stage는 제외한 전례(TASK.md
+2026-09-08 기록, "Stage는 활성 html형 템플릿이 테스트용 1건뿐이라 소급 반영 범위에서
+제외") 그대로 따름.
+
+**10차 후속(같은 날, 라벨 3건 정정 — 다른 세션의 진행 중인 변수 재배선과 정합)**:
+다른 세션이 같은 "정산내역" 표에서 "할인 적용"→"할인쿠폰 적용"(값을 `{{할인차감}}`으로
+이동) + "할인적용 금액" 행 값을 `{{부가세}}`로 교체하는 작업을 진행 중임을 `git diff`로
+확인·Stephen에게 보고한 직후, Stephen이 `<launch-selected-element>` 3건으로 남은
+라벨 불일치를 지적:
+  1. "할인적용 금액" → "부가세"(값이 이미 `{{부가세}}`로 바뀌어 있어 라벨만 뒤늦게 맞춤)
+  2. "최종 결제 금액" → "최종 결제요금"
+  3. "정상 대여가 총액" → "정상 대여요금"
+전부 라벨 텍스트만 교체(변수 바인딩·rowspan/colspan 구조 무변경). grep으로 옛 라벨
+문자열이 테스트 코드에 하드코딩돼 있지 않음을 확인(변경 코멘트 주석에만 남음, 회귀
+위험 없음). svelte-check 신규 에러 0건, 관련 vitest 72개 재실행 GREEN.
+**Production DB 소급 반영 완료(2026-09-09, Stephen "이번 세션 소급 반영할 건이 있으면
+진행해" 승인 후 실행)**: `git status`/`git diff` 재확인 결과 `contract-data/+server.ts`가
+직전 확인 시점과 diff 100줄로 변동 없어(다른 세션 작업이 최소한 그 사이엔 정지 상태)
+진행 — Production 활성 html형 템플릿 2건을 재조회해 9차 후속(폭 조정) 이후 아직
+반영 안 된 옛 라벨 4곳이 여전히 정확히 1회씩 남아있음을 먼저 확인한 뒤, 4개 패턴
+정밀 문자열 치환 실행:
+  - `정상 대여가 총액` → `정상 대여요금`
+  - `할인 적용`+`{{할인금액}}` 행 → `할인쿠폰 적용`+`{{할인차감}}` 행(라벨+값 한 블록으로
+    묶어 치환 — `{{할인차감}}`이 다른 행에도 등장해 값만 단독 치환 시 모호해질 수 있어
+    라벨과 함께 블록 단위로 치환)
+  - `할인적용 금액`+`{{할인차감}}` 행 → `부가세`+`{{부가세}}` 행(동일 이유로 블록 단위)
+  - `최종 결제 금액` → `최종 결제요금`
+  치환 후 재조회로 신규 라벨 4곳 각 1회, 옛 라벨 4곳 전부 0회, 두 템플릿 byte-identical
+  (6908→6902자, 문자수 감소분 -6 사전 계산과 정확히 일치) 확인.
+  ⚠️ `contract-data/+server.ts`의 `orders.coupon_discount_amount` 컬럼 참조(Migration
+  #471, 다른 세션 소유)는 이번 반영 범위 밖 — 그 마이그레이션은 다른 세션이 자체
+  검증 후 별도로 Stage→Production 적용할 사항이며, 이번 세션은 `contract_templates.
+  html_document`(템플릿 텍스트) 동기화만 담당.
 
 ---
 
@@ -3008,7 +3455,34 @@ vitest 재실행으로 직접 재확인) — 커밋 전 DRIFT_CHECK_PROCEDURE.md
 
 ---
 
-## NOW — 🔴 CRITICAL: `hooks.server.ts` 세션검증에서 만료된 리프레시 토큰이 미처리 예외로 전파되어 `/cart` 등에서 500 에러 발생 (2026-09-07 발견, GATE B 승인 대기)
+## 세션 스코프 명시 (2026-09-09, 이 세션에서 완료한 CRITICAL 2건 — A·B)
+
+> ⚠️ `git status` 기준 현재 작업트리에는 이 세션과 무관한 dirty 파일이 다수 섞여 있다
+> (다른 병렬 세션/Stephen이 진행 중인 별개 작업). 아래는 **이 세션이 실제로 만든 변경만**
+> 정확히 구분한 목록이다 — QA·git 커밋 스코프는 반드시 이 목록만 기준으로 할 것.
+
+```
+✅ 이 세션의 변경 (A: admin_invite_tokens RLS + B: hooks.server.ts 예외처리, 총 5개 파일)
+  - supabase/migrations/20260909000000_469_admin_invite_tokens_service_role_only.sql (신규)
+  - src/__tests__/services/adminInviteTokensRlsGuard.test.ts (신규)
+  - src/hooks.server.ts (수정)
+  - src/__tests__/server/hooksSessionCaching.test.ts (수정)
+  - .claude/harness/TASK.md (수정 — 이 문서 자체, A·B 두 블록 NOW→DONE 전환 기록)
+
+❌ 이 세션과 무관(다른 세션/Stephen 진행 중 — 손대지 않음, 검수·커밋 스코프 제외)
+  - .claude/harness/GSD_LOG.md
+  - src/lib/components/cms/contract-editor/templates/defaultRentalContractHtml.ts
+  - src/routes/api/cms/reservations/[id]/contract-data/+server.ts
+  - src/routes/cart/+page.svelte
+```
+
+A(admin_invite_tokens)·B(hooks.server.ts) 두 건 모두 위쪽 각 DONE 블록에서 개별 GATE E를
+이미 통과했다(각각 3개 파일 스코프로 별도 검수 완료). 아래는 두 건을 하나로 묶어 세션
+전체 관점에서 다시 한 번 통합 재검수한 결과.
+
+---
+
+## DONE — 🔴 CRITICAL: `hooks.server.ts` 세션검증에서 만료된 리프레시 토큰이 미처리 예외로 전파되어 `/cart` 등에서 500 에러 발생 (2026-09-07 발견 → 2026-09-09 GATE B 승인·구현 완료)
 
 ### 발견 경위
 
@@ -3069,6 +3543,34 @@ const getSessionAndUser = async () => {
   상태로 재방문하면 비회원처럼 안내되는 대신 500 에러로 완전히 막힘
 ```
 
+### 추가 확인 (2026-09-09, CMS 전역 전수검증 세션 — 라이브 재현 + CMS 영향범위 구체화)
+
+```
+① 로컬 dev 서버 로그(preview_logs)에서 CMS 화면 탐색 중 동일 코드경로가 실시간으로
+   재현됨 — 이번엔 "Invalid Refresh Token"이 아니라 Supabase Auth(도쿄 리전) 네트워크
+   타임아웃(TypeError: fetch failed, cause: AggregateError [ETIMEDOUT])이 트리거였음.
+   스택트레이스가 정확히 동일한 취약 지점을 가리킴:
+     getSessionAndUser(hooks.server.ts:36) → getCmsRoleForAction → GET 실패
+   영향받은 CMS API 5개(RentalDetailPanel이 병렬 호출):
+     /api/cms/reservations/[id]/dhero
+     /api/cms/reservations/[id]/tracking
+     /api/cms/reservations/[id]/rental-siblings
+     /api/cms/reservations/[id]/options
+     /api/cms/reservations/[id]/order-siblings
+   → **"트리거 원인이 무엇이든(리프레시 토큰 무효화든 네트워크 타임아웃이든) getSession()/
+   getUser()가 예외를 던지면 항상 이 취약점이 발동한다"는 것을 독립적인 두 번째 트리거로
+   재확인** — 원래 수정안(try/catch로 감싸기)이 두 트리거 모두를 정확히 커버함.
+② CMS 설정/계정 담당 서브에이전트가 별도로 구체화: `/cms/*` 요청은 `/cms/login` 제외 전부
+   `cms/+layout.server.ts`의 `locals.safeGetSession()`을 거치므로, 관리자가 리프레시 토큰
+   무효화 상태(다른 기기 재로그인 등)로 재방문하면 "재로그인 필요" 안내 없이 로그인 화면을
+   제외한 CMS 전 라우트(대시보드·계정관리·코드설정·설정 등)가 500으로 막힌다 — 예상 범위가
+   /cart 등 4개 라우트에서 "CMS 전역"으로 확장됨.
+③ (재검증, 같은 날 후속) `get_runtime_errors`를 다시 조회 — count가 10→12, 영향 라우트가
+   4개→5개(`/cms/reservation` 추가 확인)로 늘었고 last-seen도 2026-09-05→09-07로 갱신됨.
+   같은 결함이 지금도 계속 발생 중인 활성 상태(스테일 아님)라는 뜻 — 코드는 여전히
+   미수정 상태(try/catch 없음) 재확인.
+```
+
 ### 다음 단계 (GATE B 필요 — 아직 승인 대기, 구현 착수 안 함)
 
 TDD 강제 도메인(인증 키워드 해당) + `src/hooks.server.ts`는 core-rules.md "Frozen 파일 목록"
@@ -3094,6 +3596,35 @@ Stephen 서비스 의도 언어 GATE B 질문 예정 문구(초안): "로그인�
 사용자 3명에게서 반복 확인됐습니다. 이걸 고치면 그런 경우 로그인이 풀린 것처럼만 처리되고
 화면은 정상적으로 뜹니다. 진행해도 될까요?"
 
+### ✅ 구현 완료 (2026-09-09, GATE B 승인 → TDD RED/GREEN → 전체 회귀 확인)
+
+```
+GATE B 승인("진행(추천)") → TDD RED 확인 → 수정 → GREEN 확인 → 전체 서버 테스트
+스위트 회귀 확인.
+
+1. RED — src/__tests__/server/hooksSessionCaching.test.ts(기존 파일 확장, 동일한
+   getSession/getUser mock 패턴 재사용)에 신규 테스트 2건 추가:
+   ⑥ getUser()가 예외(TypeError: fetch failed)를 던지는 경우
+   ⑦ getSession()이 예외(AuthApiError: Invalid Refresh Token)를 던지는 경우
+   → 수정 전 둘 다 예외가 그대로 handle() 밖으로 전파돼 FAIL(취약점 재현 성공,
+   기존 5개 캐싱 테스트는 그대로 PASS 유지 확인).
+2. 수정 — src/hooks.server.ts(Frozen 파일, CRITICAL 게이트 적용) getSessionAndUser()
+   전체를 try/catch로 감싸 예외 시 `{session:null, user:null}`을 반환하도록 변경
+   (기존 "정상 실패"(error 필드) 처리와 동일하게 취급 — 원안 그대로 적용, 로그만
+   `[CRAZYSHOT SESSION CHECK ERROR]`로 별도 태그).
+3. GREEN — 동일 테스트 재실행: 7/7 PASS.
+4. 회귀 — `npx vitest run src/__tests__/server/` 전체(50개 파일, 459개 테스트) 재실행:
+   전부 PASS, 신규 실패 0건. `npx svelte-check` 재실행: 신규 에러 0건(기존 vite.config.ts
+   무관 경고 1건만 그대로 존재).
+5. Guard 9(인증 변경 → M2 예약/M3 결제/M4 회원 영향 가능) 안내에 따라
+   `src/__tests__/services/` 전체도 백그라운드로 회귀 실행 중(라이브 Stage DB 통합
+   테스트 다수 포함돼 120초 이상 소요) — 결과는 완료 알림으로 별도 확인.
+```
+
+DB 마이그레이션이 없는 순수 애플리케이션 코드 수정이라 Stage/Production DB 적용 절차
+자체가 해당 없음(Vercel 배포만으로 반영). GATE E(`@sp3-qa-agent`)·git commit(Stephen
+직접)은 아직 진행 전 — 다음 단계로 남김.
+
 ### 부가 발견 (이번 스코프 밖, 별도 처리 필요 — 등록만 해둠)
 
 `/api/chat/message`에서 `ANTHROPIC_OAUTH_TOKEN` 환경변수 값이 실제 토큰이 아니라 curl 명령어
@@ -3104,78 +3635,257 @@ Anthropic API 크레딧 잔액 부족 에러도 1건 확인(2026-09-02). 이번 
 
 ---
 
-## NOW — 🔴 CRITICAL: `release_reservation_hold()` D-1 타이머가 order_items 미연결 예약에서 발송시각을 무시하는 결함 (2026-09-07 발견, GATE B 승인 대기)
+## DONE — 🔴 CRITICAL(보안·최우선): `admin_invite_tokens` RLS가 partner 등급까지 전체 CRUD 허용 — 신규 관리자 계정 하이재킹(권한상승) 가능 (2026-09-09 발견 → 같은 날 GATE B/C 승인·구현·Stage+Production 적용 완료)
 
 ### 발견 경위
 
-CMS 전역 정밀검증 v6 CRITICAL 6건 보완 세션(바로 아래 DONE(GATE E 통과) 블록) 완료 후, 전체
-회귀 스윕 중 이 세션 변경과 무관하게 실패 중인 기존 테스트 5건을 Stephen 지시로 상세 조사하는
-과정에서 발견됨(수정한 적 없는 기존 RPC의 라이브 동작 결함).
+Stephen 지시("CMS 전역 http://localhost:5174/cms/ 전수 검증, 수정하지 말고 CRITICAL 목록만
+정리")에 따라 병렬 정적분석 서브에이전트 4개(상담/예약, 대여/상품, 고객/프로모션,
+설정/계정)를 launch — 설정/계정 담당 에이전트가 발견. **이번 CMS 전수검증에서 나온 항목 중
+유일하게 순수 신규(기존 v6 감사·이후 어떤 세션도 언급한 적 없음)이며, 성격상 가장 심각함
+(권한상승/계정탈취) — 최우선으로 다룰 것을 권장.**
 
-### 재현(라이브 테스트로 재현성 확인, 100% 재현)
-
-```
-src/__tests__/services/holdExpirationContractTimer.test.ts
-  "EC-5b-edge: 계약서 발송 15분 전 → sent_at 기준 30분 이내 → hold 유지" — FAIL
-  (기대: hold 유지 / 실제: expired로 전환됨)
-
-src/__tests__/services/paymentContractOrderRedesign.test.ts
-  "F-6 GREEN: D-1 — 계약이 발송된(sent_at) hold는 30분이 지나도 expired 처리되지 않는다" — FAIL
-  "F-7 GREEN: 서명 완료(계약발송 hold, 생성 31분 경과) → 크론 실행(만료 안 됨) → pay-mock 호출
-   → 정상 confirmed 전환" — FAIL(위와 동일 원인으로 사전조건에서 이미 expired 전환됨)
-```
-
-### 근거 — Stage(ezyvffjvuwmtuhpxdjrw) 라이브 `release_reservation_hold()` 함수 직접 조회
+### 근거 — `supabase/migrations/20260627000034_34_admin_cms_rls.sql:27-34` (2026-06-27 최초
+등록 이후 지금까지 한 번도 수정된 적 없음, grep 전수 확인)
 
 ```sql
-GREATEST(
-  rr.created_at,
-  COALESCE(
-    (
-      SELECT MAX(cs.sent_at)
-      FROM public.contracts c
-      JOIN public.contract_signings cs ON cs.contract_id = c.id
-      WHERE cs.sent_at IS NOT NULL
-        AND c.reservation_id IN (
-          SELECT oi2.reservation_id
-          FROM public.order_items oi1
-          JOIN public.order_items oi2 ON oi2.order_id = oi1.order_id
-          WHERE oi1.reservation_id = rr.id   -- ⚠️ 이 예약 자신이 order_items에 있어야만 매칭
-        )
-      ),
-    rr.created_at
-  )
-) < NOW() - INTERVAL '30 minutes'
+CREATE POLICY "admin_manage_tokens" ON admin_invite_tokens
+  FOR ALL USING (
+    EXISTS (SELECT 1 FROM user_profiles up WHERE up.id = auth.uid() AND up.cms_role IS NOT NULL)
+  );
 ```
 
-이 예약(`rr.id`) 본인의 계약 발송시각을 찾을 때조차 "이 예약이 `order_items`에 이미 연결돼
-있어야만" 서브쿼리가 매칭된다(자기 자신을 "형제" 관계로 찾는 self-join 구조). 그런데
-`rental-lifecycle.md`는 "hold(신청대기) 포함 모든 상태에서 계약서 발송 가능"이라고 명시하고,
-`order_items` 연결은 장바구니 체크아웃 제출 시점(`create_reservation_order`)에만 생성되는
-별개 이벤트다(service-operations.md §4 — "이 지점이 주문 연결이 생성되는 유일한 지점"). 즉
-**"장바구니 체크아웃이 아직 완료되지 않은(또는 그 경로를 거치지 않는) hold 예약에 관리자가
-계약을 먼저 발송한 경우", 그 발송시각이 D-1 타이머 리셋 계산에서 완전히 무시되고 순수
-created_at 기준으로만 만료 판정된다** — service-operations.md §10에 문서화된 "계약 발송
-시점부터 새로 30분을 부여한다"는 정책이 이 경로에서는 지켜지지 않는다.
+`cms_role IS NOT NULL`이면 **등급 무관(partner 포함) 전체 CRUD(SELECT/INSERT/UPDATE/DELETE)
+허용**. 같은 마이그레이션의 `cms_login_otps`는 `FOR ALL USING (false)`(service_role 전용)로
+올바르게 잠겨 있어, 설계자가 "민감 테이블은 잠가야 한다"는 원칙 자체는 알고 있었으나
+`admin_invite_tokens`에는 적용하지 않은 것으로 보인다.
 
-### 영향 범위 (실사용 가능성 — 다음 세션에서 추가 확인 필요)
+### 재현조건
 
 ```
-- order_items 연결 전에 계약이 발송될 수 있는 실제 CMS 워크플로우가 있는지 확인 필요
-  (예: 관리자가 상품상세 즉시예약 등 카트를 거치지 않는 경로로 생성된 hold에 계약을
-  먼저 보내는 경우, 또는 카트 체크아웃 제출이 아직 안 끝난 상태에서 계약을 미리 발송하는
-  드문 운영 순서)
-- 영향받으면: 고객이 계약서를 받고 서명을 준비하는 도중에도 재고가 30분 뒤 자동 해제되어
-  hold_expired 처리될 수 있음 — service-operations.md §10이 막으려던 바로 그 상황("계약서명을
-  하지 않는 고객의 예약이 재고를 무기한 점유"의 반대 극단 — 서명 준비 중인 정상 고객의 재고를
-  부당하게 회수)이 재발
+1. 이미 로그인된 partner(최하위 등급) CMS 계정이 브라우저 콘솔에서
+   supabase.from('admin_invite_tokens').select('*') 직접 호출(src/lib/services/supabase.ts의
+   createBrowserClient가 쿠키기반 세션 그대로 사용, anon key로 PostgREST 직접 도달).
+2. RLS가 "호출자 자신이 아무 cms_role이나 갖고 있는가"만 검사하므로 partner도 100% 통과 —
+   아직 used_at이 없는 모든 활성 초대 토큰(manager/superadmin 신규계정용 포함)이 그대로 노출.
+3. 유출된 토큰으로 /cms/login?invite=<token> → setPassword 액션
+   (src/routes/cms/login/+page.server.ts:113-163, 세션·권한 체크 전혀 없음)을 먼저 호출해
+   그 신규 superadmin 계정의 비밀번호를 공격자가 선점 — 정상 관리자가 초대 링크를 열기
+   전에 계정을 완전히 탈취 가능. FOR ALL이라 UPDATE/DELETE로 토큰 무효화·온보딩 방해도 가능.
+```
+
+### 영향 범위
+
+```
+partner → manager/superadmin 권한상승 경로가 정확히 성립. /cms/accounts createAccount
+액션(src/routes/cms/accounts/+page.server.ts:92-99)이 신규 관리자 계정 생성 시마다
+cms_create_invite_token으로 발급하는 토큰이 이 테이블의 유일한 보호막인데, 토큰 자체의
+무작위성(24바이트)은 RLS로 목록 조회가 가능하면 무의미해짐. 앱 코드(+page.server.ts)는
+전부 service_role 클라이언트로만 이 테이블을 다뤄 정상 동작하지만, RLS는 앱 코드와 무관하게
+PostgREST를 통해 직접 노출되는 별도 공격면.
+```
+
+### 재검증(같은 날 후속) — Stage·Production 라이브 대조 + 현재 노출 데이터 상태
+
+```
+1. RLS 정책을 pg_policies에서 Stage(ezyvffjvuwmtuhpxdjrw)·Production(vnbpmvxruyciuuaermyh)
+   양쪽 직접 재조회 — 두 환경 모두 FOR ALL, roles={public}, with_check 없음, 조건은
+   "호출자의 cms_role IS NOT NULL"과 완전히 동일한 의미(Stage는 is_cms_user() 래퍼 경유,
+   Production은 동일 조건이 인라인으로 풀려있음 — 표현만 다르고 판정 로직은 동일함을
+   is_cms_user() 함수 본문 직접 조회로 재확인). 두 환경 모두 relrowsecurity=true인데도
+   정책 자체가 느슨해 RLS가 사실상 무력화된 상태 — "한쪽만 취약"이 아니라 완전 동일하게
+   양쪽 다 취약함을 라이브로 재확인.
+2. setPassword 액션(src/routes/cms/login/+page.server.ts:113-163) 코드 재확인 —
+   service_role 클라이언트로 토큰을 조회하고, 유효성(미사용+미만료)만 확인하면 그 즉시
+   해당 계정 비밀번호를 설정할 수 있음. 호출자의 세션·cms_role을 전혀 검사하지 않는다는
+   최초 서술이 정확함(설계상 "초대 링크 자체가 곧 자격증명"이라 세션 체크가 없는 것은
+   정상이나, 그 자격증명이 RLS로 새어나가는 것이 문제의 핵심이라는 원 진단도 재확인).
+3. Production `admin_invite_tokens`에서 미사용(used_at IS NULL) 토큰을 직접 조회한 결과
+   현재 1건뿐이고, 그 토큰의 expires_at(2026-07-31)이 오늘(2026-09-09) 기준 이미 만료됨
+   (created_by도 NULL) — **지금 이 순간 실제로 가로챌 수 있는 활성 초대 토큰은 없다.**
+   즉 당장 악용 가능한 살아있는 피해자는 없지만, 구조적 결함 자체(다음 신규 관리자 초대
+   발송 시점부터 다시 노출)는 전혀 해소되지 않은 상태 — 긴급도는 "당장 위험"이 아니라
+   "다음 신규 관리자 초대 전에 반드시 막아야 함"으로 정확히 재규정.
 ```
 
 ### 다음 단계 (GATE B 필요 — 아직 승인 대기, 구현 착수 안 함)
 
-TDD 강제 도메인(HOLD·재고 키워드 해당). 실사용 재현 가능성 확인 후 수정 방향(예: 서브쿼리를
-"형제 관계 OR 자기 자신 직접 매칭"으로 변경 — `c.reservation_id = rr.id OR c.reservation_id IN (...)`)
-을 설계해 Stephen에게 서비스 의도 언어로 GATE B 질문 예정.
+TDD 강제 도메인(보안·권한 키워드). 제안 수정(`cms_login_otps`와 동일 패턴 — 앱 코드는 이미
+전부 service_role 경유라 회귀 없음):
+```sql
+DROP POLICY "admin_manage_tokens" ON admin_invite_tokens;
+CREATE POLICY "admin_invite_tokens_service_role_only" ON admin_invite_tokens
+  FOR ALL USING (false);
+```
+GATE B 질문 초안: "새로운 관리자 계정을 초대할 때 발급되는 초대코드 목록을, 원래는 초대받은
+당사자와 시스템만 볼 수 있어야 하는데, 지금은 등급이 낮은 관리자 계정도 전부 조회·수정할 수
+있는 상태입니다. 악용하면 아직 비밀번호를 안 정한 새 관리자(슈퍼관리자 포함) 계정을
+가로챌 수 있습니다. 시스템만 접근하도록 막아도 될까요? (기존 초대 발송 기능은 전혀
+영향받지 않습니다)"
+
+### ✅ 구현 완료 (2026-09-09, GATE B/C 승인 → TDD RED/GREEN → Stage+Production 적용)
+
+```
+GATE B 승인("진행(추천)") → TDD RED 확인 →
+  신규 마이그레이션 469 Stage 적용 → GREEN 확인 → GATE C 재확인("적용(추천)") →
+  동일 마이그레이션 Production 적용 → 양쪽 DRIFT_CHECK(정책 정의 완전 일치) 완료.
+
+1. RED — src/__tests__/services/adminInviteTokensRlsGuard.test.ts(신규, Stage 라이브
+   통합테스트, accountWithdrawalPhone.test.ts와 동일 패턴 — ephemeral 유저 생성 →
+   anon key로 실제 로그인 → RLS 그대로 통과):
+   ① partner 세션이 남의 대기중 초대토큰을 SELECT → 실제로 조회됨(FAIL, 취약점 재현 성공)
+   ② partner 세션이 그 토큰을 UPDATE(used_by 선점)까지 성공(FAIL, 하이재킹 재현 성공)
+   ③ service_role 조회는 항상 정상(PASS, 회귀 기준선)
+2. 수정 — supabase/migrations/20260909000000_469_admin_invite_tokens_service_role_only.sql
+   (신규 파일, 기존 마이그레이션 미수정) — `admin_manage_tokens` DROP →
+   `admin_invite_tokens_service_role_only` FOR ALL USING (false)로 교체(cms_login_otps와
+   동일 패턴). 앱 코드(cms/login, cms/accounts) 무변경 — 전부 service_role 경유라 회귀 없음.
+3. GREEN — Stage(ezyvffjvuwmtuhpxdjrw) 적용 후 재실행: 3/3 PASS(①②가 빈 결과/미반영으로
+   전환, ③ 회귀 유지).
+4. Production(vnbpmvxruyciuuaermyh) 동일 마이그레이션 적용 후, 양쪽 pg_policies를 직접
+   재조회해 정책명·qual('false')·roles가 완전히 일치함을 DRIFT_CHECK로 확인.
+5. `npx svelte-check` 전체 재실행 — 신규 파일로 인한 신규 에러 0건(기존에도 있던
+   vite.config.ts 무관 경고 1건만 그대로 존재, 이번 변경과 무관함을 확인).
+```
+
+GATE E(`@sp3-qa-agent` 독립검수) 및 git commit(Stephen 직접, GP-1)은 아직 진행 전 —
+다음 단계로 남김.
+
+### 참고 — PLAUSIBLE 등급(CRITICAL로 등재 안 함, 방어선 공백만 기록)
+
+상담/예약 담당 서브에이전트가 별도 발견: html 모드 계약서를 "기존 내용 그대로 재발송"
+(existing 모드) 경로에는 `findHtmlUnresolvedVariables` 사전검증이 없고
+(`ContractTemplatePreviewModal.svelte:511-532`, 주석상 "편집 내용 보존" 의도로 의도적
+생략), 서버측 `send-chat/+server.ts`의 `findUnresolvedVariables`도 `html_document`는
+스캔 대상에서 명시적으로 제외한다. CS2654(spreadsheet 모드)와 같은 사고 클래스가 html
+모드의 "편집 후 재발송" 경로에서 이론상 재현 가능하나, **현재 CMS UI에 html_document를
+직접 편집할 수 있는 화면 자체가 없어(`ContractEditorModal.svelte`에 'html' 편집 분기
+없음, 항상 고정 상수 `DEFAULT_RENTAL_CONTRACT_HTML`로만 저장) 실제 도달 경로가 없다** —
+CRITICAL로 등재하지 않고, "향후 html_document 편집 UI를 추가할 때는 이 검증도 반드시 세트로
+넣을 것"이라는 방어선 메모로만 남긴다.
+
+---
+
+## DONE — 🔴 CRITICAL: `release_reservation_hold()` order_items 자기조인 결함 — HOLD 정책 반전(Migration #453) 이후 "영구 미만료"로 실패방향 악화 (2026-09-07 최초발견 → 2026-09-09 GATE B/C 승인·구현·Stage+Production 적용 완료)
+
+### ⚠️ 2026-09-09 업데이트 — 이 항목의 전제 자체가 바뀌었음(코드 재작성 안 함, 상태만 갱신)
+
+최초 발견 시점(09-07) 이후 **Stephen이 HOLD 만료 정책 자체를 의도적으로 반전**시켰다(위쪽
+"HOLD 정책 전면 개편" DONE 블록, Migration #453): "고객 예약신청완료(hold) 건은 타이머 자체가
+없다 — 전자계약 발행(발송), 고객 본인 예약취소, 관리자 예약거부 중 하나가 실행되기 전까지
+재고점유 무기한 유지. 계약 발송 시점에만 30분 타이머가 시작된다." 이에 따라 `created_at` 기반
+폴백이 `release_reservation_hold()`에서 완전히 제거됐다(아래 근거의 SQL은 09-07 시점 GREATEST
+버전 — 현재 라이브 정의와는 다름, 최신 정의는 Migration #453 참조).
+
+**이 항목이 지적하는 self-join 결함 자체는 그대로 남아있고, 정책 반전으로 실패 방향이
+바뀌었다**: 예전(GREATEST+COALESCE 폴백)에는 self-join이 매칭 실패하면 `created_at` 단독
+기준으로 "조기 오만료"됐지만, 지금은 self-join 매칭 실패 시 "계약이 발송된 적 없는 것"과
+동일하게 취급돼 **타이머 자체가 영원히 시작되지 않는다 — 재고가 무기한 점유된다.**
+`@sp3-qa-agent`가 Migration #453 GATE E 검수(09-07, 위쪽 블록 참고) 중 이 항목을 독립적으로
+다시 발견해 "실패 방향이 조기오만료→영구미만료로 완화됐으나 다음 세션에서 우선순위 재검토
+권장"이라고 명시했고, 이번 CMS 전역 전수검증(Stephen 지시, 09-09) 중 별도로 launch한
+Explore 서브에이전트가 세 번째로 독립 재확인함 — **총 3회(최초 발견·QA·이번 서브에이전트)
+독립 확인.**
+
+### 재현조건 (이번 서브에이전트가 코드 3곳 대조로 구체화 — 09-07 시점엔 "확인 필요"였던 항목)
+
+```
+1. 고객이 상품을 장바구니에 담아 hold 예약이 생성되지만 아직 체크아웃 제출을 완료하지
+   않은 상태 — 이 시점 order_items에 이 예약 행이 없음.
+2. 관리자가 계약서 탭에서 전자계약을 발행·발송 — init-contract 엔드포인트
+   (src/routes/api/cms/reservations/[id]/init-contract/+server.ts:41-58)는 order_items
+   부재를 전혀 차단하지 않고 `sameOrderReservationIds = [reservationId]`로 정상 진행해
+   계약 발행을 허용함(rental-lifecycle.md "hold 포함 모든 상태에서 계약서 발송 가능"과
+   일치하는 정상 동작이지만, 바로 이 조합이 문제를 유발).
+3. `release_reservation_hold()`의 self-join(`oi1.reservation_id = rr.id`)이 매칭 대상이
+   없어 이 hold의 계약 발송 사실 자체를 영원히 인지하지 못함 → 신정책(계약발송이 유일한
+   타이머 시작 트리거) 하에서 이 hold는 **영구히 만료 판정 대상에서 제외**된다.
+```
+
+### 원인 (변경 없음, 09-07 근거 그대로 유효)
+
+```sql
+-- self-join 부분(Migration #453 최신본에도 이 구조는 그대로 유지됨)
+c.reservation_id IN (
+  SELECT oi2.reservation_id
+  FROM order_items oi1 JOIN order_items oi2 ON oi2.order_id = oi1.order_id
+  WHERE oi1.reservation_id = rr.id   -- 이 예약 자신이 order_items에 있어야만 매칭
+)
+```
+`order_items` 연결은 장바구니 체크아웃 제출 시점(`create_reservation_order`)에만 생성되는
+별개 이벤트(service-operations.md §4). self-join은 "형제 예약"을 찾기 위한 구조인데, 그
+매칭 조건이 "자기 자신도 이미 order_items에 있어야 함"을 암묵적으로 전제해, order_items가
+아직 없는 예약은 자기 자신의 계약조차 못 찾는다.
+
+### 영향 범위 (업데이트 — 3중 확인으로 리스크 등급 유지, 방향만 재평가)
+
+```
+- 재고 점유 관점: "조기 오만료"(고객이 서명 준비 중인데 재고가 부당 회수)보다 "영구
+  미만료"(재고가 계속 잠겨 다른 고객이 그 기간 예약 불가)가 즉각적인 고객 불만은 적지만,
+  운영 관점에서는 재고 회전율을 갉아먹는 형태로 조용히 누적되는 문제 — 발견이 더 늦어질
+  수 있어 오히려 방치 위험이 큼(QA의 "우선순위 재검토 권장" 근거).
+- service-operations.md §10 원래 취지("계약서명을 하지 않는 고객의 예약이 재고를
+  무기한 점유하는 것을 막는다")가 이 경로에서 정확히 무력화됨.
+```
+
+### 재검증(같은 날 후속) — Stage·Production 라이브 함수정의 재대조
+
+```
+pg_get_functiondef로 Stage(ezyvffjvuwmtuhpxdjrw)·Production(vnbpmvxruyciuuaermyh) 양쪽
+release_reservation_hold() 본문을 다시 조회 — 두 환경의 함수 정의가 글자 하나까지 완전히
+동일하며, self-join 서브쿼리(`oi1.reservation_id = rr.id` 조건)도 그대로 남아있음을
+재확인. Migration #453이 두 환경 모두에 이미 적용 완료 상태이고(문서상 "적용완료"
+서술이 스테일이 아님), 이 결함도 지금 이 순간 Stage·Production 둘 다에서 동일하게
+살아있는 현재진행형 결함임을 라이브로 재확인 — "과거 발견 당시엔 맞았는데 지금은
+다르다" 같은 시차 문제 없음.
+```
+
+### 다음 단계 (GATE B 필요 — 3회 독립확인으로 근거는 이미 충분, Stephen 승인만 대기)
+
+TDD 강제 도메인(HOLD·재고 키워드). 수정 방향(변경 없음): self-join 서브쿼리를
+"형제 관계 OR 자기 자신 직접 매칭"으로 확장 — `c.reservation_id = rr.id OR c.reservation_id IN (...)`.
+GATE B 질문 초안: "카트에 담기만 하고 아직 결제 전 단계인 예약에, 관리자가 계약서를 먼저
+보내는 특수한 경우 — 계약을 보냈는데도 시스템이 그걸 인식 못 해서 재고가 계속 묶여있는
+채로 방치될 수 있는 상태입니다. 실제로 자주 발생하는 순서는 아니지만, 한번 발생하면
+관리자가 알아채기 전까지 그 재고를 다른 고객에게 못 파는 상태가 계속됩니다. 고쳐도 될까요?"
+
+### GATE B 승인 경위 (2026-09-09 — Stephen 이견 제기 → 코드 근거로 재해명 → 승인)
+
+```
+Stephen이 최초 GATE B 질문에 "장바구니에 머물러 있는데 계약서를 먼저 보내는 조합은
+해킹이 아니면 불가능한 것 아니냐"는 이견을 제기 → create_hold_reservation RPC를
+라이브로 직접 열어 "예약 자체(및 예약코드)는 INSERT 시점에 이미 실존하고, order_items는
+완전히 별개의 나중 단계(체크아웃 제출)에서만 생성된다"는 것을 코드+실데이터로 재해명 →
+Stephen이 "설명이 복잡하다"며 단계별 재설명 요청 → 1~3단계(예약 생성 → 체크아웃 미제출 →
+관리자 계약 선발송)는 전부 정상 동작이고, 4단계(만료판정 self-join이 자기 자신을 못 찾음)만
+결함이라는 구조로 재설명 → Stephen 확정: "4단계 문제는 확실한 결함이니 진행" → 진행(추천) 승인.
+```
+
+### ✅ 구현 완료 (2026-09-09, GATE B/C 승인 → TDD RED/GREEN → Stage+Production 적용)
+
+```
+1. RED — src/__tests__/services/holdExpirationContractTimer.test.ts(기존 파일 확장,
+   holdExpiration.test.ts와 동일한 Stage 라이브 통합테스트 패턴) 신규 2건 추가:
+   EC-6: order_items 미연결(체크아웃 제출 전) + 계약 발송 1시간 전 → expired 기대
+     → 수정 전 FAIL(실제로 hold 그대로 유지 — 결함 재현 성공)
+   EC-6-edge: order_items 미연결 + 계약 발송 15분 전(30분 이내) → hold 유지 기대(회귀용) → PASS
+   기존 EC-5a/b/b-edge/c(4건)는 무변경으로 그대로 GREEN 유지.
+2. 수정 — supabase/migrations/20260909010000_470_release_reservation_hold_self_match.sql
+   (신규 파일, 기존 마이그레이션 미수정) — self-join 서브쿼리에
+   `c.reservation_id = rr.id OR c.reservation_id IN (...)`로 자기 자신 직접 매칭 추가.
+   그 외 함수 본문(만료처리 UPDATE·알림 발송 루프)은 전혀 변경 없음.
+3. GREEN — Stage(ezyvffjvuwmtuhpxdjrw) 적용 후 재실행: holdExpirationContractTimer.test.ts
+   + holdExpiration.test.ts 합계 11/11 PASS.
+4. Guard 9(예약 변경 → M3 결제 도메인 영향 가능) 안내에 따라 paymentContractOrderRedesign.
+   test.ts + payment.test.ts(총 28개) 별도 실행 — 전부 PASS. (참고: 이 두 파일을 서비스
+   전체 스위트와 함께 동시 실행하면 Stage DB 부하로 5초 타임아웃 다발 발생 — 본 수정과
+   무관한 기존 테스트 인프라 이슈임을 개별 실행으로 교차확인.)
+5. Production(vnbpmvxruyciuuaermyh) 적용 후, 양쪽 함수 정의를 `pg_get_functiondef`+md5
+   해시로 직접 대조 — 완전히 동일한 해시(`3118ea165fefb70fe74d0afb738bf1b1`) 확인(DRIFT_CHECK).
+6. `npx svelte-check` 재실행 — 신규 에러 0건(기존 vite.config.ts 무관 에러 1건만 존재).
+```
+
+GATE E(`@sp3-qa-agent`)·git commit(Stephen 직접)은 아직 진행 전 — 다음 단계로 남김.
 
 ---
 
@@ -40802,5 +41512,138 @@ DB/RPC/마이그레이션 변경 없음.
 identity/foreign 양쪽 동일 적용 확인. `front-uiux.md` §22 문서 동기화 확인. 기존 슬롯형
 핵심 로직(순서보장 append 루프, CMS 라벨 매핑)은 이번 diff에서 무변경 — 순수 레이아웃
 조정으로 확인됨.
+
+**git commit은 Stephen 직접 실행.**
+
+---
+
+## NOW — /account/rental 예약신청취소 버튼 비활성화 + 채팅카드发 단독진입 GNB 이탈 버그 (2026-09-09, 이 세션 단독 수행)
+
+**요청(Stephen)**: (1) 고객 대여목록(`/account/rental`) 카드의 "예약신청취소" 버튼이
+취소 불가한 건에서도 정상 클릭 가능한 것처럼 보이다가 클릭하면 "취소 불가" 경고 모달만
+뜨는 문제 — 버튼 자체를 비활성화할 것. (2) 채팅 대화카드의 예약취소 관련 버튼 클릭 시
+"단독 대여목록 화면"(`/account/rental`)으로 랜딩되는데, 이 화면이 PC·모바일 공통 GNB
+구격에서 벗어나 있다는 버그 해결.
+
+**조사 결과 (2)**: 루트 레이아웃(`src/routes/+layout.svelte`)이 `/account/*` 전체에서
+공용 GNB를 의도적으로 제외하는 것은 확정된 기존 설계(수개월간 유지, 이번 세션만의
+발견 아님)라 이걸 되돌리는 건 범위 밖 — 실제 원인은 다른 데 있었다. PC 사용자는
+평소 "대여" 콘텐츠를 `/account/+page.svelte`에 임베드된 `PcRentalPanel`로만 보고
+`/account/rental` URL을 직접 방문할 일이 없는데, 채팅 대화카드(`ActionCard.svelte`
+`handleCta()`)는 `window.open(ctaUrl, '_blank')`로 항상 새 탭에서 이 URL을 직접 연다
+— `<SubGnb title="대여" mobileOnly />`가 PC SubGnb를 의도적으로 숨기고 있어(다른
+"임베드 전용" 라우트와 동일 패턴), 새 탭으로 단독 진입한 PC 사용자는 최상단 GNB도
+SubGnb도 전혀 없이 카드 목록만 덩그러니 보게 된다 — 이게 실제 "GNB 구격 이탈" 버그.
+같은 구조를 쓰는 `/account/rental/[id]/+page.svelte`(예약 상세)는 이미 SubGnb와
+별개로 콘텐츠 내부에 항상 렌더링되는 인라인 `.btn-back`("대여 목록") 버튼을 갖고 있어
+PC에서도 이동 수단이 있는데, 목록 페이지(`/account/rental`)에만 이 인라인 버튼이
+없었던 것이 근본 원인.
+
+**적용한 수정** (DB/RPC/마이그레이션 변경 없음 — 클라이언트 UI만):
+1. `src/routes/account/rental/+page.svelte`·`src/lib/components/account/PcRentalPanel.svelte`
+   양쪽 "예약신청 취소" 버튼에 `disabled={!rental.canCancel}` + `title` 툴팁(방문 6시간
+   제한 안내) 추가, `.card-actions-btn:disabled` CSS 신설(회색조, cursor:not-allowed).
+   `canCancelReservation()`(순수함수, 무변경) 반환값을 이제 버튼 활성 상태에도 반영.
+2. `/account/rental/+page.svelte`에 `[id]` 상세 페이지와 동일한 인라인 `.btn-back`
+   ("마이페이지", `goto('/account')`) 버튼을 콘텐츠 최상단에 신설 — SubGnb가 PC에서
+   숨겨져 있어도 이 버튼이 항상 렌더링돼 PC 단독 진입 시에도 이동 수단 확보.
+
+**참고(범위 밖, 확인만)**: `/account/cancel/+page.svelte`(취소·반품 목록)도 동일하게
+`SubGnb mobileOnly` + 인라인 back 버튼 부재라는 같은 구조적 갭을 갖고 있음을 발견했으나,
+이번 요청 범위(`/account/rental`)가 아니라 손대지 않음 — 필요 시 별도 요청 요망.
+
+**검증**: `npx svelte-check` 대상 파일 신규 에러 0건. `npx vitest run -t canCancel` 7/7
+GREEN(canCancelReservation 순수함수 자체는 무변경이라 회귀 없음 확인).
+
+**git commit은 Stephen 직접 실행.**
+
+---
+
+## NOW — /account/cancel도 동일하게 PC 뒤로가기 버튼 신설 (2026-09-09, 같은 날 후속, 이 세션 단독 수행)
+
+**요청(Stephen)**: "/account/cancel도 동일하게 수정해줘" — 직전 `/account/rental`에 적용한
+인라인 `.btn-back`(PC 이동수단 확보) 수정을 `/account/cancel`(취소·반품 목록)에도 동일
+적용. 이 화면은 이미 취소된 예약만 읽기전용으로 나열하는 화면이라 "예약신청취소 버튼
+비활성화"(수정 1)는 해당 사항 없음 — GNB/뒤로가기 이슈(수정 2)만 적용.
+
+**적용**: `src/routes/account/cancel/+page.svelte`에 `goto` import 추가 +
+`/account/rental`과 동일한 인라인 `.btn-back`("마이페이지", `goto('/account')`) 버튼·CSS를
+콘텐츠 최상단에 신설(코드 100% 동일 패턴 재사용).
+
+**검증**: `npx svelte-check` 신규 에러 0건. DB/RPC/마이그레이션 변경 없음.
+
+**git commit은 Stephen 직접 실행.**
+
+---
+
+## NOW — CMS 가격정책(price_rules) vs 레거시(base_price_daily) 우선순위 결함 — 4개 화면 확산 수정 (2026-09-09, 이 세션 단독 수행) ✅ 완료
+
+[CONTEXT BRIDGE]
+plan_source: Stephen 라이브 UI 지적 2건이 하나의 근본원인으로 수렴 — ①실서버 `/products`
+  콘솔 404 에러 원인 확인 요청(순수 진단, 코드 수정 없음) → ②같은 상품(Manfrotto 055)이
+  `/products` 헤더 슬라이드(20,000원)와 상품상세(35,000원)에서 다르게 보이는 문제 발견,
+  "분명히 오늘 수정했어"(직전 세션 커밋 `d787b6a` 참고) → 그 커밋이 상품상세 1개 파일에만
+  적용되고 동일 버그 패턴이 남은 다른 화면들을 놓쳤음을 코드 전수 검색으로 확인.
+핵심제약: 요청 범위(`mergePrice()` + Stephen이 "동일하게 반영해"로 확장 승인한 동일 패턴
+  파일들)만 수정 — 코드 전수검색으로 추가 발견된 동일 패턴 중 이번에 승인받지 않은 것은
+  없음(전부 이번 세션 내 명시적으로 반영 지시받음).
+TDD도메인: 없음 — 순수 가격 표시 우선순위 로직 수정(GSD, 결제·예약·보안 무관, 단순 read 경로).
+절대금지: 이번 세션 git status에 다른 세션이 수정 중인 파일(hooks.server.ts·
+  RentalDetailPanel.svelte·ActionCard.svelte 등 다수)이 섞여 있음 — 그중 어느 것도
+  이 세션에서 건드리지 않았음(git diff로 대조 확인 후 기록).
+
+---
+
+### 진단 ① — 실서버 `/products` 콘솔 404 에러 (코드 수정 없음, 순수 진단)
+
+`GET .../_app/immutable/nodes/74.CO2Gjcg4.js 404` + `Failed to fetch dynamically imported
+module` — curl로 production 직접 실측한 결과, 신고된 해시(`74.CO2Gjcg4.js`, entry
+`app.BiNY7GQN.js`)는 **현재 배포본에 존재하지 않는 옛 빌드 산출물**임을 확인(현재 배포본의
+실제 entry는 `app.BzzKzQNM.js`, 라우트 노드는 `78.xxx`로 완전히 다름). 새 배포가 올라간
+사이 이미 열려있던 브라우저 탭이 옛 해시 청크를 동적 import하려다 발생하는 흔한 "구버전
+클라이언트" 현상 — `src/hooks.client.ts` 자체가 프로젝트에 없어(커스텀 에러 핸들러 없음)
+SvelteKit(`@sveltejs/kit ^2.61.1`) 기본 내장 복구 로직(청크 로드 실패 시 자동 새로고침)에
+의존하는 정상 동작. **코드 결함 아님 — 수정 없음.**
+
+### 진단·수정 ② — price_rules(CMS) vs base_price_daily(레거시) 우선순위 결함, 4개 화면 확산
+
+**근본원인**: `products.base_price_daily`는 `price_rules`(12h/24h/월간 분리 관리) 도입 이전
+단일 일일요금 컬럼. `price_rules` 도입 후 기존값이 지워지지 않고 그대로 남았고, CMS
+가격정책 탭(`updateSection: pricing`)은 `price_rules`만 쓰고 `base_price_daily`는 절대
+갱신하지 않는다(코드 전수 검색 — 이 컬럼에 쓰기가 일어나는 CMS 저장 경로 없음 확인) — 즉
+`price_rules`가 있는 상품의 `base_price_daily`는 영구 박제된 옛 값. 직전 세션 커밋
+`d787b6a`가 `products/[id]/+page.server.ts`(상품상세) 하나만 "price_rules 있으면 항상
+우선, 없는 상품만 legacy 폴백"으로 우선순위를 반전시켰는데, 동일 버그 패턴이 아래 4개
+파일에 그대로 남아있어 상품상세만 고쳐지고 나머지 화면은 옛 값을 계속 표시하고 있었다.
+
+**실측(Stage DB, Manfrotto 055)**: `base_price_daily=20000` vs `price_rules(24h)=35000` —
+실제 괴리 확인.
+
+**수정 파일 4곳** (전부 동일 패턴: `rule24h != null ? rule24h : (legacy > 0 ? legacy : null/0)`
+로 반전, `attachPrices()`와 동일 우선순위):
+1. `src/routes/products/+page.server.ts` — `mergePrice()` (heroProducts·gridProducts·
+   mdProducts 3곳 전부 공유하는 헬퍼라 한 곳 수정으로 3개 화면 동시 해소 — 헤더 슬라이드·
+   메인 그리드·MD추천 픽)
+2. `src/routes/+page.server.ts` — `withDualPrice()` (홈 화면 테마그룹·카테고리별 상품·MD픽)
+3. `src/routes/hype-pack/+page.server.ts` — 3곳(배너 `enrichedItems`, `enrichedThemeGroups`,
+   `enrichedThemeGroupsAdmin`)
+4. `src/routes/hype-pack/theme/[id]/+page.server.ts` — 테마그룹 상세 `products` 매핑
+
+**Production 실측 검증** (Stephen 요청 — production도 동일 결함 내재 여부 확인):
+Production `.env.local` 미연결(설계상 의도, CLAUDE.md)이라 raw DB 직접조회는 불가 —
+대신 로컬 `devalue` 패키지로 실서버 SvelteKit `__data.json`(load() 원본 반환값)을 직접
+디코딩해 `base_price_daily`와 `price_24h`를 필드 단위로 정밀 대조(HTML 파싱은 `pc-card`가
+`href` 없는 `role=button` 구조라 신뢰 불가 판정 후 폐기). 메인 그리드 16개 상품 전수 +
+그중 7개는 상품상세 데이터까지 교차확인 — **전부 일치, 현재 시점 화면 오표시 사례 없음**.
+"Manfrotto 055"는 production 검색 결과에 없어 Stage 전용 테스트 데이터로 판단.
+결론: **코드 결함 패턴은 production에도 동일하게 존재했으나(이번 수정 전 기준), 지금까지
+확인한 범위의 실데이터에는 legacy/price_rules 값이 갈라지는 사례가 없어 화면에 드러난
+피해는 발견되지 않음** — 전수조사는 아니라 완전 배제는 아니지만, 향후 CMS 가격 수정 시
+재발할 잠재 위험은 이번 수정으로 해소.
+
+**검증**: 매 파일 수정 후 `npx svelte-check` 신규 에러 0건(4개 파일 전부 확인). Stage DB
+실측(Manfrotto 055 price_rules 24h=35000)으로 수정 로직이 정확히 그 값을 반환함을 코드
+검토로 확인 — 이 세션 동안 다른 세션이 dev 서버를 점유 중이라 브라우저 실측 대신 DB 실측
++ production `__data.json` 실측으로 대체. DB/RPC/마이그레이션 변경 없음.
 
 **git commit은 Stephen 직접 실행.**
