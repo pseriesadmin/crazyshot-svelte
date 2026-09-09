@@ -31,6 +31,35 @@ export const POST: RequestHandler = async ({ params, request, getClientAddress }
     return json({ error: '서명 링크가 만료되었습니다. 업체에 재발송을 요청해 주세요.' }, { status: 410 })
   }
 
+  // 2026-09-09(Stephen 지시) — 서명 접수 전 예약 상태를 먼저 확인한다. 계약 발송 이후에도
+  // 예약이 취소(cancelled)될 수 있는 경로가 여럿 있는데(장바구니에서 삭제·고객 셀프취소·
+  // 관리자 거부 등), 이 확인이 없으면 이미 취소된 예약에도 서명이 그대로 접수되는 모순이
+  // 발생한다(실사용 중 발견 — CS26096160/reservation_id 13678: 계약 발송 52초 후 예약이
+  // 취소됐는데, 그 후에도 고객이 서명을 완료하고 "서명 완료" 채팅카드까지 발송됨). 아래에서
+  // 조회한 reservation_id는 서명 완료 후처리(hold→confirmed 재시도 등)에서도 그대로 재사용해
+  // 동일 조회를 중복하지 않는다.
+  let signReservationId: number | null = null
+  if (signing.contract_id) {
+    const { data: contractForGate } = await admin
+      .from('contracts')
+      .select('reservation_id')
+      .eq('id', signing.contract_id)
+      .maybeSingle()
+    signReservationId = contractForGate?.reservation_id ?? null
+
+    if (signReservationId != null) {
+      const { data: reservationForGate } = await admin
+        .from('rental_reservations')
+        .select('status')
+        .eq('id', signReservationId)
+        .maybeSingle()
+
+      if (reservationForGate?.status === 'cancelled') {
+        return json({ error: '이 예약은 이미 취소되었습니다. 고객센터로 문의해 주세요.' }, { status: 409 })
+      }
+    }
+  }
+
   let signatureData: string | null = null
   let strokeCount: number | null   = null
 
@@ -127,20 +156,14 @@ export const POST: RequestHandler = async ({ params, request, getClientAddress }
   }
 
   if (signing.contract_id) {
-    const { data: contract } = await admin
-      .from('contracts')
-      .select('reservation_id')
-      .eq('id', signing.contract_id)
-      .maybeSingle()
-
-    if (contract?.reservation_id) {
+    if (signReservationId != null) {
       // H-01: 예약 상태 변경은 반드시 RPC 경유. update_reservation_status RPC는 이전 상태
       // 가드가 없으므로, 직접 DML이 갖고 있던 .eq('status','shipped') 가드를 보존하기 위해
       // RPC 호출 전 현재 상태를 먼저 조회해 shipped일 때만 in_use로 전환한다.
       const { data: currentReservation } = await admin
         .from('rental_reservations')
         .select('status')
-        .eq('id', contract.reservation_id)
+        .eq('id', signReservationId)
         .maybeSingle()
 
       // 계약서 서명 완료 게이팅(Migration 284): hold 상태 예약은 결제완료(payment_confirmed_at)
@@ -153,26 +176,26 @@ export const POST: RequestHandler = async ({ params, request, getClientAddress }
       // 전체를 함께 재시도한다(단일 예약 주문이면 자기 자신만 처리해 무회귀).
       if (currentReservation?.status === 'hold') {
         const { data: justConfirmedIds, error: confirmOrderErr } = await admin.rpc('try_confirm_reservation_order', {
-          p_reservation_id: contract.reservation_id,
+          p_reservation_id: signReservationId,
         })
         if (confirmOrderErr) {
           // 서명 자체는 위에서 이미 정상 저장됨(signed_at) — 이 RPC 실패는 confirmed 자동전환
           // 시도가 조용히 안 됐다는 뜻이라, 로그로 남겨야 나중에 "결제+서명 다 됐는데 왜
           // hold에 머물러 있나"를 추적할 수 있다(try_confirm_reservation_order는 멱등이라
           // 이후 다른 트리거로 재시도돼도 안전).
-          console.error('[contracts/sign] try_confirm_reservation_order 실패:', confirmOrderErr.message, { reservationId: contract.reservation_id })
+          console.error('[contracts/sign] try_confirm_reservation_order 실패:', confirmOrderErr.message, { reservationId: signReservationId })
         }
         if (((justConfirmedIds ?? []) as number[]).length > 0) {
           // 채팅 알림 + 고객 푸시 — 공용 헬퍼로 통합 (NTF-C2/NTF-C3 수정, 2026-08-31)
           // mode='hold' 시 채팅·푸시 둘 다 보류. 기존에는 채팅만 있고 reservation_approval
           // 푸시 호출이 완전히 없어 서명완료 자동승인 시 고객이 푸시를 받지 못하던 NTF-C3
           // 공백을 이 헬퍼 적용으로 해소한다 — service-operations.md §4/§15
-          const notifyPlan = await resolveApprovalNotifyPlan(admin, contract.reservation_id)
-          await sendApprovalNotifications(admin, contract.reservation_id, notifyPlan)
+          const notifyPlan = await resolveApprovalNotifyPlan(admin, signReservationId)
+          await sendApprovalNotifications(admin, signReservationId, notifyPlan)
         }
       } else if (currentReservation?.status === 'shipped') {
         await admin.rpc('update_reservation_status', {
-          p_reservation_id: contract.reservation_id,
+          p_reservation_id: signReservationId,
           p_new_status:     'in_use',
         })
       }
@@ -181,7 +204,7 @@ export const POST: RequestHandler = async ({ params, request, getClientAddress }
         admin
           .from('rental_reservations')
           .select('reservation_code, status')
-          .eq('id', contract.reservation_id)
+          .eq('id', signReservationId)
           .maybeSingle(),
         signing.user_id
           ? admin
@@ -211,7 +234,7 @@ export const POST: RequestHandler = async ({ params, request, getClientAddress }
         // 검증으로 재현·확인).
         const { data: chatSessionId, error: signChatErr } = await admin.rpc('find_or_create_general_chat_session', {
           p_user_id:        signing.user_id,
-          p_reservation_id: contract.reservation_id,
+          p_reservation_id: signReservationId,
         })
         if (signChatErr) {
           console.error('[contracts/sign] find_or_create_general_chat_session 실패(fail-soft):', signChatErr.message)
@@ -236,10 +259,10 @@ export const POST: RequestHandler = async ({ params, request, getClientAddress }
                 // contract_id를 조회해) 이 카드도 "기한 만료" 처리되도록 하기 위함
                 // (기존엔 reservation_id만 있어 contract 단위 취소를 감지할 수단이 없었음).
                 contract_id:  signing.contract_id ?? undefined,
-                reservation_id: contract.reservation_id != null ? String(contract.reservation_id) : undefined,
+                reservation_id: signReservationId != null ? String(signReservationId) : undefined,
                 reservation_no: reservationCode ?? undefined,
                 button_label: '전자계약완료',
-                action_url:   `/account/rental/${contract.reservation_id}/contract`,
+                action_url:   `/account/rental/${signReservationId}/contract`,
               },
             })
 
@@ -257,7 +280,7 @@ export const POST: RequestHandler = async ({ params, request, getClientAddress }
       await sendPushToAdmins('contract_signed', {
         title: '전자계약 서명이 완료됐어요',
         body: `${fullName ? `${fullName}님이 ` : ''}${reservationCode ? `${reservationCode} ` : ''}계약서에 서명했어요.`,
-        link: `${cmsPath}?selected=${contract.reservation_id}`,
+        link: `${cmsPath}?selected=${signReservationId}`,
       })
     }
   }

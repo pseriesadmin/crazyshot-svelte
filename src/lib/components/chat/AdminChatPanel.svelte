@@ -90,6 +90,10 @@
     order_key: string | null
     order_amount: number | null
     discount_amount: number | null
+    coupon_discount_amount: number | null
+    total_amount: number | null
+    selected_points: number | null
+    order_delivery_fee: number | null
     tax_amount: number | null
     payment_status: string | null
     contract_id: string | null

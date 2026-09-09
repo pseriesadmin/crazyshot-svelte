@@ -44,6 +44,15 @@
     order_key:         string | null
     order_amount:      number | null
     discount_amount:   number | null
+    /** 쿠폰 할인액(Migration #471) — discount_amount(등급할인)와 별도, "주문 정보" 섹션 "쿠폰 할인" 행 전용 */
+    coupon_discount_amount: number | null
+    /** 할인 전 원가(Migration #472) — orders.total_amount. "정산내역" 섹션 "기본 대여요금" 전용 */
+    total_amount:      number | null
+    /** 결제 시 차감된 포인트(Migration #472) — orders.selected_points. "정산내역" 섹션 "포인트 사용" 전용 */
+    selected_points:   number | null
+    /** orders.delivery_fee(Migration #473) — final_amount 산식에 실제로 반영된 배송비(결제 전
+        예약도 값이 채워짐). "정산내역" 섹션 "배송비" 전용 */
+    order_delivery_fee: number | null
     tax_amount:        number | null
     payment_status:    string | null
     contract_id:       string | null
@@ -808,6 +817,12 @@
   function formatAmount(n: number | null): string {
     if (n == null) return '-'
     return n.toLocaleString('ko-KR') + '원'
+  }
+
+  // contract-data/+server.ts formatVatAmount()와 동일한 "포함가 역산" 공식 재사용 —
+  // 이미 부가세가 포함된 가격에서 안내용으로만 얼마가 포함돼 있었는지 역산(합계에 더하지 않음).
+  function calcVatIncluded(netBeforeVat: number): number {
+    return Math.round(netBeforeVat - netBeforeVat / 1.1)
   }
 
   function gradeLabel(g: string): string { return g?.toUpperCase() ?? '-' }
@@ -1978,18 +1993,56 @@
           </span>
         </div>
         <div class="info-row">
-          <span class="info-label">기본 이용요금</span>
+          <span class="info-label">결제금액</span>
           <span class="info-value fw-bold">{formatAmount(row.order_amount)}</span>
         </div>
-        {#if row.discount_amount != null && row.discount_amount > 0}
-          <div class="info-row">
-            <span class="info-label">주문 할인</span>
-            <span class="info-value amount-discount">-{formatAmount(row.discount_amount)}</span>
-          </div>
-        {/if}
+        <!-- 2026-09-09(Stephen 지적) — 아래 "정산내역" 섹션의 "회원등급 할인"·"할인쿠폰 적용"
+             행과 완전히 중복되는 영역이라 제거함(이전엔 이 자리에 "주문 할인"·"쿠폰 할인"
+             2개 행이 있었음). -->
         <div class="info-row">
           <span class="info-label">결제 상태</span>
           <span class="info-value">{row.payment_status ? (PAYMENT_STATUS_LABELS[row.payment_status] ?? row.payment_status) : '-'}</span>
+        </div>
+      </div>
+
+      <!-- 2026-09-09(Stephen 지적) — "주문 정보"만으로는 최종금액이 어떻게 구성됐는지(기본요금
+           대비 어떤 항목이 얼마씩 차감/가산됐는지) 전혀 설명이 안 됨. 별도 "정산내역" 섹션을
+           신설해 기본 대여요금부터 최종 대여요금까지 전 구성요소를 항상 표시(Stephen 확정
+           "모두 표시" — 값이 0이어도 숨기지 않음). 최종 대여요금은 재계산하지 않고 위 "주문
+           정보"와 동일한 row.order_amount(=orders.final_amount, RPC가 이미 전부 반영해 저장한
+           값)를 그대로 재사용 — "합산 요금 출처는 시스템에서 가져와야 한다"는 원칙 그대로. -->
+      <div class="section-title">정산내역</div>
+      <div class="info-section">
+        <div class="info-row">
+          <span class="info-label">기본 대여요금</span>
+          <span class="info-value">{formatAmount(row.total_amount ?? 0)}</span>
+        </div>
+        <div class="info-row">
+          <span class="info-label">회원등급 할인</span>
+          <span class="info-value amount-discount">-{formatAmount(row.discount_amount ?? 0)}</span>
+        </div>
+        <div class="info-row">
+          <span class="info-label">할인쿠폰 적용</span>
+          <span class="info-value amount-discount">-{formatAmount(row.coupon_discount_amount ?? 0)}</span>
+        </div>
+        <div class="info-row">
+          <span class="info-label">포인트 사용</span>
+          <span class="info-value amount-discount">-{formatAmount(row.selected_points ?? 0)}</span>
+        </div>
+        <div class="info-row">
+          <span class="info-label">배송비</span>
+          <span class="info-value">+{formatAmount(row.order_delivery_fee ?? 0)}</span>
+        </div>
+        <div class="info-row">
+          <span class="info-label">부가세</span>
+          <span class="info-value">
+            {formatAmount(calcVatIncluded((row.total_amount ?? 0) - (row.discount_amount ?? 0)))}
+            <span class="info-note">포함</span>
+          </span>
+        </div>
+        <div class="info-row highlight-row">
+          <span class="info-label">최종 대여요금</span>
+          <span class="info-value fw-bold">{formatAmount(row.order_amount)}</span>
         </div>
       </div>
 
