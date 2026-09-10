@@ -439,3 +439,57 @@ describe('applyContractTermsMarker / applyPrivacyTermsMarker', () => {
     expect(applyContractTermsMarker(html, '아무 텍스트')).toBe(html)
   })
 })
+
+// ─────────────────────────────────────────────────────────────────────────────
+// updateContractTermsInHtml / updatePrivacyTermsInHtml — 예약별 1회성 계약조항·개인정보동의
+// 재교체(Migration #478, 2026-09-10 신설). updateSpecialNotesInHtml(특약)과 동일 원리 —
+// 마커는 발행 시점에 이미 사라졌으므로 defaultRentalContractHtml.ts가 굽는 고정 앵커 클래스
+// (cs-contract-terms-cell/cs-privacy-terms-cell)로 셀 내용만 재교체한다.
+// ─────────────────────────────────────────────────────────────────────────────
+describe('updateContractTermsInHtml / updatePrivacyTermsInHtml', () => {
+  it('발행 시 마커가 이미 치환된 문서에서 계약조항 셀 내용만 교체한다', async () => {
+    const { applyContractTermsMarker, updateContractTermsInHtml } = await import('$lib/utils/contract-substitution.js')
+    const issued = applyContractTermsMarker(
+      '<div class="terms cs-contract-terms-cell"><!--CONTRACT_TERMS--></div>',
+      null,
+    )
+    const edited = updateContractTermsInHtml(issued, '새로운 계약조항 문단입니다.')
+    expect(edited).toBe('<div class="terms cs-contract-terms-cell"><p>새로운 계약조항 문단입니다.</p></div>')
+  })
+
+  it('발행 시 마커가 이미 치환된 문서에서 개인정보동의 셀 내용만 교체한다', async () => {
+    const { applyPrivacyTermsMarker, updatePrivacyTermsInHtml } = await import('$lib/utils/contract-substitution.js')
+    const issued = applyPrivacyTermsMarker(
+      '<div class="terms cs-privacy-terms-cell"><!--PRIVACY_TERMS--></div>',
+      null,
+    )
+    const edited = updatePrivacyTermsInHtml(issued, '새로운 개인정보 문단입니다.')
+    expect(edited).toBe('<div class="terms cs-privacy-terms-cell"><p>새로운 개인정보 문단입니다.</p></div>')
+  })
+
+  it('계약조항 재교체는 개인정보동의 셀을 건드리지 않는다(두 셀이 공존하는 실제 문서 형태)', async () => {
+    const { updateContractTermsInHtml } = await import('$lib/utils/contract-substitution.js')
+    const html =
+      '<div class="terms cs-contract-terms-cell"><p>원본 계약조항</p></div>' +
+      '<div class="terms cs-privacy-terms-cell"><p>원본 개인정보</p></div>'
+    const edited = updateContractTermsInHtml(html, '수정된 계약조항')
+    expect(edited).toBe(
+      '<div class="terms cs-contract-terms-cell"><p>수정된 계약조항</p></div>' +
+      '<div class="terms cs-privacy-terms-cell"><p>원본 개인정보</p></div>',
+    )
+  })
+
+  it('빈 문자열/공백만 전달하면 기본 문구로 되돌아간다("기본 문구로 되돌리기")', async () => {
+    const { updateContractTermsInHtml, DEFAULT_CONTRACT_TERMS_TEXT } = await import('$lib/utils/contract-substitution.js')
+    const html = '<div class="terms cs-contract-terms-cell"><p>커스텀 문구</p></div>'
+    const edited = updateContractTermsInHtml(html, '   ')
+    expect(edited).toContain(DEFAULT_CONTRACT_TERMS_TEXT.split('\n\n')[0])
+  })
+
+  it('앵커 클래스가 없는(2026-09-10 이전 발행) 레거시 문서는 그대로 반환한다', async () => {
+    const { updateContractTermsInHtml, updatePrivacyTermsInHtml } = await import('$lib/utils/contract-substitution.js')
+    const legacyHtml = '<div class="terms"><p>레거시 계약조항(앵커 클래스 없음)</p></div>'
+    expect(updateContractTermsInHtml(legacyHtml, '새 문구')).toBe(legacyHtml)
+    expect(updatePrivacyTermsInHtml(legacyHtml, '새 문구')).toBe(legacyHtml)
+  })
+})

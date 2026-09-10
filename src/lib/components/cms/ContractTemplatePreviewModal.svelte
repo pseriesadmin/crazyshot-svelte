@@ -1,6 +1,6 @@
 <script lang="ts">
   import { csToast } from '$lib/utils/toast'
-  import { substituteVariables, substituteSpreadsheetDocument, substituteHtmlDocument, findHtmlUnresolvedVariables, applyIssuerSignatureMarker, applySpecialNotesMarker, updateSpecialNotesInHtml, applyContractTermsMarker, applyPrivacyTermsMarker, type AnyContentBlock } from '$lib/utils/contract-substitution'
+  import { substituteVariables, substituteSpreadsheetDocument, substituteHtmlDocument, findHtmlUnresolvedVariables, applyIssuerSignatureMarker, applySpecialNotesMarker, updateSpecialNotesInHtml, applyContractTermsMarker, applyPrivacyTermsMarker, updateContractTermsInHtml, updatePrivacyTermsInHtml, type AnyContentBlock } from '$lib/utils/contract-substitution'
   import { applyContractTemplate } from '$lib/utils/contract-apply-template'
   import { hasExistingContractContent } from '$lib/utils/contract-content-mode'
   import { isTiptapDocBlock, isSpreadsheetDocument, isHtmlDocument } from '$lib/types/contract-document'
@@ -106,6 +106,11 @@
   // 발행된 계약의 구조화된 특약 배열 — "계약 발행 보기" 특약 클릭편집 모달을 채우는 데만 쓰임
   // (표시 자체는 이미 existingHtmlDocument에 구운 텍스트로 baked돼 있음, 2026-09-07 신규)
   let existingSpecifications       = $state<SpecRow[]>([])
+  // 예약별 1회성 "계약조항"·"개인정보동의" 원문(Migration #478) — existingSpecifications와
+  // 동일 목적: "계약 발행 보기" 클릭편집 모달을 채우는 데만 쓰임(표시 자체는 이미
+  // existingHtmlDocument에 구운 텍스트로 baked돼 있음).
+  let existingContractTermsText    = $state('')
+  let existingPrivacyTermsText     = $state('')
   let hasExistingContent = $state(false)
   // viewOnly는 항상 existing 취급 — 양식 선택 자체가 UI에서 제거되므로 template 모드로 빠질 일이 없음
   let contentMode        = $state<'existing' | 'template'>(viewOnly ? 'existing' : 'template')
@@ -315,8 +320,13 @@
               html_document?: unknown
               authoring_mode?: string
               specifications?: SpecRow[]
+              contract_terms_text?: string | null
+              privacy_terms_text?: string | null
             }
             existingSpecifications = contentData.specifications ?? []
+            // Migration #478 — 예약별 1회성 계약조항/개인정보동의 원문(특약과 동일 패턴)
+            existingContractTermsText = contentData.contract_terms_text ?? ''
+            existingPrivacyTermsText  = contentData.privacy_terms_text ?? ''
             // ⚠️ 2026-09-07 순서 수정: hasExistingContractContent()가 html_document까지 함께
             // 검사하도록 넓어진 뒤로는(위 4번째 인자), authoring_mode='html'/'spreadsheet'인
             // 계약도 이 첫 분기 조건을 그대로 통과해버려 existingHtmlDocument/
@@ -408,13 +418,20 @@
    */
   async function applySelectedTemplate(
     specsOverride?: SpecRow[],
+    // Migration #478 — 예약별 1회성 계약조항/개인정보동의 override(template 모드에서 클릭편집
+    // 즉시발행 시 사용). undefined면 템플릿 기본값 사용, null/문자열이면 그 값으로 override —
+    // specsOverride와 동일한 "미지정 시 템플릿값 폴백" 원칙.
+    contractTermsOverride?: string | null,
+    privacyTermsOverride?: string | null,
   ): Promise<{ contractId: string; htmlDocument?: string }> {
     if (!selectedTemplate || !subData) throw new Error('양식을 선택해 주세요.')
 
     const isCanvas      = selectedTemplate.authoring_mode === 'canvas'
     const isSpreadsheet = selectedTemplate.authoring_mode === 'spreadsheet'
-    const isHtml        = selectedTemplate.authoring_mode === 'html'
-    const specs         = specsOverride ?? (selectedTemplate.specifications ?? [])
+    const isHtml         = selectedTemplate.authoring_mode === 'html'
+    const specs           = specsOverride ?? (selectedTemplate.specifications ?? [])
+    const contractTerms    = contractTermsOverride !== undefined ? contractTermsOverride : selectedTemplate.contract_terms_text
+    const privacyTerms     = privacyTermsOverride  !== undefined ? privacyTermsOverride  : selectedTemplate.privacy_terms_text
     // canvas / spreadsheet / html 모드는 content_blocks가 빈 배열 — substituteVariables 적용 불필요.
     // canvas는 렌더 시점(/contract/[token])에 필드 바인딩으로 치환되지만, spreadsheet/html는
     // 텍스트 어디든 {{변수}} 등장 가능이라 apply-time 치환을 수행해 저장한다.
@@ -442,9 +459,9 @@
                   ),
                   specs,
                 ),
-                selectedTemplate.contract_terms_text,
+                contractTerms,
               ),
-              selectedTemplate.privacy_terms_text,
+              privacyTerms,
             ),
             subData,
           )
@@ -465,6 +482,8 @@
       htmlIssuerSignatureWidth: isHtml ? (selectedTemplate.html_issuer_signature_width ?? null) : undefined,
       htmlIssuerSignatureOffsetX: isHtml ? (selectedTemplate.html_issuer_signature_offset_x ?? null) : undefined,
       htmlIssuerSignatureOffsetY: isHtml ? (selectedTemplate.html_issuer_signature_offset_y ?? null) : undefined,
+      contractTermsText: isHtml ? (contractTerms ?? null) : undefined,
+      privacyTermsText:  isHtml ? (privacyTerms  ?? null) : undefined,
     })
 
     if (result.error) throw new Error(result.error)
@@ -614,18 +633,38 @@
   let specialNotesModalOpen = $state(false)
   let editingSpecs          = $state<SpecRow[]>([])
   let savingSpecialNotes    = $state(false)
+  // Migration #478 — 계약조항/개인정보동의 예약별 1회성 편집. 특약과 완전히 같은 모달·같은
+  // 저장 버튼을 공유(ContractFieldPanel이 htmlMode=true일 때 이미 세 탭을 함께 보여주므로,
+  // 별도 모달을 새로 만들지 않고 이 하나에 3개 필드를 함께 담아 저장한다).
+  let editingContractTerms  = $state('')
+  let editingPrivacyTerms   = $state('')
+  // 모달을 여는 순간 어느 영역을 클릭했는지에 따라 랜딩할 탭(요구사항 1·2) — 열린 뒤에는
+  // admin이 자유롭게 다른 탭으로 전환해 나머지 두 필드도 함께 편집할 수 있다(특약과 동일 UX).
+  let termsInitialTab: '특약' | '계약조항' | '개인정보동의' = $state('특약')
 
   function handleHtmlDocClick(e: MouseEvent) {
     if (viewOnly) return
     if (contentMode === 'template' && !selectedTemplate) return
-    const cell = (e.target as HTMLElement).closest('.cs-special-notes-cell')
-    if (!cell) return
+    const target = e.target as HTMLElement
+    const specialCell  = target.closest('.cs-special-notes-cell')
+    const contractCell = target.closest('.cs-contract-terms-cell')
+    const privacyCell  = target.closest('.cs-privacy-terms-cell')
+    if (!specialCell && !contractCell && !privacyCell) return
+
     const currentSpecs = contentMode === 'existing'
       ? existingSpecifications
       : (selectedTemplate?.specifications ?? [])
     editingSpecs = currentSpecs.length > 0
       ? currentSpecs.map((s) => ({ ...s }))
       : [{ key: '', value: '' }]
+    editingContractTerms = contentMode === 'existing'
+      ? existingContractTermsText
+      : (selectedTemplate?.contract_terms_text ?? '')
+    editingPrivacyTerms = contentMode === 'existing'
+      ? existingPrivacyTermsText
+      : (selectedTemplate?.privacy_terms_text ?? '')
+
+    termsInitialTab = specialCell ? '특약' : contractCell ? '계약조항' : '개인정보동의'
     specialNotesModalOpen = true
   }
 
@@ -637,14 +676,22 @@
     savingSpecialNotes = true
     try {
       const filtered = editingSpecs.filter((s) => s.key.trim())
+      // 빈 문자열은 "커스터마이즈 해제"(템플릿/기본 문구로 되돌림) — null로 저장·치환
+      const contractTermsValue = editingContractTerms.trim() || null
+      const privacyTermsValue  = editingPrivacyTerms.trim()  || null
 
       if (contentMode === 'existing') {
         if (!effectiveContractId || !isHtmlDocument(existingHtmlDocument)) return
-        const newHtml = updateSpecialNotesInHtml(existingHtmlDocument as string, filtered)
+        let newHtml = updateSpecialNotesInHtml(existingHtmlDocument as string, filtered)
+        newHtml = updateContractTermsInHtml(newHtml, contractTermsValue)
+        newHtml = updatePrivacyTermsInHtml(newHtml, privacyTermsValue)
         const res = await fetch(`/api/cms/contracts/${effectiveContractId}/content`, {
           method: 'PATCH',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ content_blocks: [], specifications: filtered, html_document: newHtml }),
+          body: JSON.stringify({
+            content_blocks: [], specifications: filtered, html_document: newHtml,
+            contract_terms_text: contractTermsValue, privacy_terms_text: privacyTermsValue,
+          }),
         })
         if (!res.ok) {
           const body = await res.json().catch(() => ({}))
@@ -652,20 +699,26 @@
         }
         existingHtmlDocument = newHtml
         existingSpecifications = filtered
+        existingContractTermsText = contractTermsValue ?? ''
+        existingPrivacyTermsText  = privacyTermsValue ?? ''
       } else {
         // template 모드 — 지금 미리보고 있는 양식을 이 예약의 계약으로 즉시 발행하면서,
-        // 방금 입력한 특약(filtered)을 그 발행 내용에 바로 반영한다.
-        const applied = await applySelectedTemplate(filtered)
+        // 방금 입력한 특약·계약조항·개인정보동의를 그 발행 내용에 바로 반영한다. 이 override는
+        // applyContractTemplate()를 거쳐 contracts(예약별 1행)에만 저장되고 selectedTemplate이
+        // 가리키는 contract_templates(공유 양식) 행은 전혀 건드리지 않는다(요구사항 4).
+        const applied = await applySelectedTemplate(filtered, contractTermsValue, privacyTermsValue)
         if (!applied.htmlDocument) throw new Error('저장에 실패했습니다.')
         localContractId = applied.contractId
         existingHtmlDocument = applied.htmlDocument
         existingSpecifications = filtered
+        existingContractTermsText = contractTermsValue ?? ''
+        existingPrivacyTermsText  = privacyTermsValue ?? ''
         hasExistingContent = true
         contentMode = 'existing'
         onapplied?.(applied.contractId)
       }
 
-      csToast.success('특약 내용이 저장되었습니다.')
+      csToast.success('내용이 저장되었습니다.')
       specialNotesModalOpen = false
     } catch (e) {
       csToast.error(e instanceof Error ? e.message : '저장에 실패했습니다.')
@@ -784,8 +837,11 @@
                 {/if}
                 {#if previewHtmlDocument}
                   <!-- html형: 변수 치환된 고정 HTML 서식을 그대로 렌더링.
-                       특약 셀(.cs-special-notes-cell) 클릭 편집은 viewOnly만 아니면 template/
-                       existing 모드 둘 다 동작(2026-09-08 확장, saveSpecialNotes() 참고) -->
+                       특약(.cs-special-notes-cell)·계약조항(.cs-contract-terms-cell)·
+                       개인정보동의(.cs-privacy-terms-cell) 3개 셀 클릭 편집은 viewOnly만
+                       아니면 template/existing 모드 둘 다 동작(2026-09-08 특약 최초 도입,
+                       2026-09-10 계약조항·개인정보동의로 확장 — Migration #478,
+                       saveSpecialNotes() 참고) -->
                   <div
                     class="preview-block html-contract-doc"
                     class:html-doc-editable={!viewOnly}
@@ -834,10 +890,10 @@
 </div>
 
 {#if specialNotesModalOpen}
-  <div class="modal-overlay special-notes-overlay" role="dialog" aria-modal="true" aria-label="특약 입력">
+  <div class="modal-overlay special-notes-overlay" role="dialog" aria-modal="true" aria-label="계약 문구 편집">
     <div class="special-notes-modal">
       <div class="modal-header">
-        <span class="modal-title">특약 입력</span>
+        <span class="modal-title">계약 문구 편집</span>
         <button type="button" class="close-btn" onclick={closeSpecialNotesModal} aria-label="닫기">✕</button>
       </div>
       <div class="special-notes-body">
@@ -846,6 +902,11 @@
           specifications={editingSpecs}
           onSpecsChange={(s) => { editingSpecs = s }}
           onInsertField={() => {}}
+          contractTermsText={editingContractTerms}
+          onContractTermsChange={(t) => { editingContractTerms = t }}
+          privacyTermsText={editingPrivacyTerms}
+          onPrivacyTermsChange={(t) => { editingPrivacyTerms = t }}
+          initialTab={termsInitialTab}
         />
       </div>
       <div class="modal-footer">
@@ -1314,13 +1375,19 @@
     margin-right: auto;
   }
 
-  /* 특약 클릭 편집 — 발행 보기(existing)에서만 커서·hover로 클릭 가능함을 표시.
-     .cs-special-notes-cell은 defaultRentalContractHtml.ts가 굽는 고정 앵커 클래스명. */
-  .html-doc-editable :global(.cs-special-notes-cell) {
+  /* 특약·계약조항·개인정보동의 클릭 편집 — 커서·hover로 클릭 가능함을 표시.
+     .cs-special-notes-cell/.cs-contract-terms-cell/.cs-privacy-terms-cell은
+     defaultRentalContractHtml.ts가 굽는 고정 앵커 클래스명(2026-09-10, Migration #478로
+     후자 2개 추가). */
+  .html-doc-editable :global(.cs-special-notes-cell),
+  .html-doc-editable :global(.cs-contract-terms-cell),
+  .html-doc-editable :global(.cs-privacy-terms-cell) {
     cursor: pointer;
     transition: background-color 0.12s;
   }
-  .html-doc-editable :global(.cs-special-notes-cell:hover) {
+  .html-doc-editable :global(.cs-special-notes-cell:hover),
+  .html-doc-editable :global(.cs-contract-terms-cell:hover),
+  .html-doc-editable :global(.cs-privacy-terms-cell:hover) {
     background-color: rgba(59, 47, 138, 0.08);
   }
 

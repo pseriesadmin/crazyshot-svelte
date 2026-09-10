@@ -450,11 +450,11 @@ export const DEFAULT_RENTAL_CONTRACT_HTML = `
 
   <!-- 계약 및 인수 확인 -->
   <table class="section-header"><tbody><tr><td>▣계약 및 인수 확인</td></tr></tbody></table>
-  <div class="terms"><!--CONTRACT_TERMS--></div>
+  <div class="terms cs-contract-terms-cell"><!--CONTRACT_TERMS--></div>
 
   <!-- 개인정보동의 -->
   <table class="section-header"><tbody><tr><td>▣개인정보동의</td></tr></tbody></table>
-  <div class="terms"><!--PRIVACY_TERMS--></div>
+  <div class="terms cs-privacy-terms-cell"><!--PRIVACY_TERMS--></div>
 
 </div>
 `.trim()

@@ -483,6 +483,41 @@ export function applyPrivacyTermsMarker(
   return html.split(PRIVACY_TERMS_MARKER).join(body)
 }
 
+// 2026-09-10 신규 — 예약별 1회성 "계약조항"·"개인정보동의" 클릭편집(Migration #478,
+// contracts.contract_terms_text/privacy_terms_text) 전용. 특약의 updateSpecialNotesInHtml()과
+// 완전히 동일한 이유·동일 패턴: 발행 시점에 이미 <!--CONTRACT_TERMS-->/<!--PRIVACY_TERMS-->
+// 마커가 치환된 뒤라 applyContractTermsMarker()/applyPrivacyTermsMarker()를 그대로 재사용할
+// 수 없음 — defaultRentalContractHtml.ts의 `<div class="terms cs-contract-terms-cell">`/
+// `<div class="terms cs-privacy-terms-cell">`를 앵커로 다시 찾아 내용만 교체한다.
+// renderTermsParagraphsHtml()이 만드는 <p> 태그들은 중첩 <div>가 없으므로 non-greedy
+// 매칭으로 안전하게 이 div 내용만 교체 가능(특약 셀과 동일 안전성 근거).
+const CONTRACT_TERMS_CELL_REGEX = /(<div class="terms cs-contract-terms-cell">)([\s\S]*?)(<\/div>)/
+const PRIVACY_TERMS_CELL_REGEX  = /(<div class="terms cs-privacy-terms-cell">)([\s\S]*?)(<\/div>)/
+
+/**
+ * 이미 발행된(=마커가 이미 치환된) html_document에서 "계약 및 인수 확인" 영역만 재교체한다.
+ * 이 클래스가 없는(2026-09-10 이전에 발행된) 레거시 계약서는 아무 효과 없이 원본을 그대로
+ * 반환한다(레거시 계약은 클릭편집 UI 자체가 노출되지 않으므로 이 함수가 호출될 일도 없음).
+ */
+export function updateContractTermsInHtml(
+  html: string,
+  text: string | null | undefined,
+): string {
+  if (!CONTRACT_TERMS_CELL_REGEX.test(html)) return html
+  const body = renderTermsParagraphsHtml(text && text.trim() ? text : DEFAULT_CONTRACT_TERMS_TEXT)
+  return html.replace(CONTRACT_TERMS_CELL_REGEX, `$1${body}$3`)
+}
+
+/** 이미 발행된 html_document에서 "개인정보동의" 영역만 재교체한다(위 함수와 동일 원리). */
+export function updatePrivacyTermsInHtml(
+  html: string,
+  text: string | null | undefined,
+): string {
+  if (!PRIVACY_TERMS_CELL_REGEX.test(html)) return html
+  const body = renderTermsParagraphsHtml(text && text.trim() ? text : DEFAULT_PRIVACY_TERMS_TEXT)
+  return html.replace(PRIVACY_TERMS_CELL_REGEX, `$1${body}$3`)
+}
+
 /**
  * HTML형 계약서의 스칼라 변수 치환 (XSS 이스케이프 적용).
  * @internal

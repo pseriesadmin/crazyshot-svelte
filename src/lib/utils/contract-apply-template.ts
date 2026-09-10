@@ -58,6 +58,13 @@ export interface ApplyTemplateOptions {
    */
   htmlIssuerSignatureOffsetX?: number | null
   htmlIssuerSignatureOffsetY?: number | null
+  /**
+   * 예약별 1회성 "계약조항"·"개인정보동의" 원문 텍스트(html 모드 전용, Migration #478).
+   * 특약(specifications)과 동일하게 변수 치환 없이 원문 그대로 저장 — 미지정(undefined)이면
+   * 기존 값 보존, null이면 "커스터마이즈 해제"(템플릿 기본 문구로 되돌림).
+   */
+  contractTermsText?: string | null
+  privacyTermsText?: string | null
 }
 
 export type ApplyTemplateResult =
@@ -105,6 +112,8 @@ export async function applyContractTemplate(
         ...(opts.htmlIssuerSignatureWidth !== undefined ? { html_issuer_signature_width: opts.htmlIssuerSignatureWidth } : {}),
         ...(opts.htmlIssuerSignatureOffsetX !== undefined ? { html_issuer_signature_offset_x: opts.htmlIssuerSignatureOffsetX } : {}),
         ...(opts.htmlIssuerSignatureOffsetY !== undefined ? { html_issuer_signature_offset_y: opts.htmlIssuerSignatureOffsetY } : {}),
+        ...(opts.contractTermsText !== undefined ? { contract_terms_text: opts.contractTermsText } : {}),
+        ...(opts.privacyTermsText !== undefined  ? { privacy_terms_text:  opts.privacyTermsText }  : {}),
       }),
     }
   )
