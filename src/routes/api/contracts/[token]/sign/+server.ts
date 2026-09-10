@@ -8,6 +8,7 @@ import { applyCustomerSignatureMarker } from '$lib/utils/contract-substitution'
 import { recordAuditLog } from '$lib/contract-signature/auditLog'
 import { resolveApprovalNotifyPlan } from '$lib/server/reservationApprovalNotify'
 import { sendApprovalNotifications } from '$lib/server/sendApprovalNotifications'
+import { isContractIssueBlocked } from '$lib/utils/contractIssueGuard'
 import type { RequestHandler } from './$types'
 
 export const POST: RequestHandler = async ({ params, request, getClientAddress }) => {
@@ -38,6 +39,12 @@ export const POST: RequestHandler = async ({ params, request, getClientAddress }
   // 취소됐는데, 그 후에도 고객이 서명을 완료하고 "서명 완료" 채팅카드까지 발송됨). 아래에서
   // 조회한 reservation_id는 서명 완료 후처리(hold→confirmed 재시도 등)에서도 그대로 재사용해
   // 동일 조회를 중복하지 않는다.
+  //
+  // 2026-09-10 보완 — 'cancelled'만 보던 위 가드는 HOLD 30분 자동만료(status='expired',
+  // service-operations.md §10)를 놓쳤다. 계약 발송 후 미서명 상태로 30분이 지나 예약이
+  // 이미 expired(재고 해제)로 전환된 뒤에도 고객이 서명 페이지를 계속 열어두고 있었다면
+  // 그대로 서명이 접수될 수 있었다 — send-chat/content(PATCH)가 이미 쓰는 공용 판정
+  // isContractIssueBlocked()(cancelled·expired·damage_claimed)로 교체해 동일 기준을 적용한다.
   let signReservationId: number | null = null
   if (signing.contract_id) {
     const { data: contractForGate } = await admin
@@ -54,8 +61,8 @@ export const POST: RequestHandler = async ({ params, request, getClientAddress }
         .eq('id', signReservationId)
         .maybeSingle()
 
-      if (reservationForGate?.status === 'cancelled') {
-        return json({ error: '이 예약은 이미 취소되었습니다. 고객센터로 문의해 주세요.' }, { status: 409 })
+      if (isContractIssueBlocked(reservationForGate?.status)) {
+        return json({ error: '이 예약은 이미 취소되었거나 만료되었습니다. 고객센터로 문의해 주세요.' }, { status: 409 })
       }
     }
   }

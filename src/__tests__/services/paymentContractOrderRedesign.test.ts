@@ -626,6 +626,57 @@ describe('EC-1: 서명 완료 후 결제 전 상태로 /contract/[token]에 재�
   });
 });
 
+// ── EC-4: 미서명 상태 + 예약 상태가 이미 종료(expired/cancelled)된 경우 —
+//    /contract/[token] 재접속 시 /contract/expired로 리다이렉트(isContractIssueBlocked) ──
+describe('EC-4: 미서명 + 예약 종료(expired/cancelled) 상태로 /contract/[token] 재접속', () => {
+  it('GREEN: status=expired인 예약은 서명 전이라도 /contract/expired로 redirect된다(계약링크 30일 만료와 무관)', async () => {
+    const userId = await createEphemeralUser();
+    cleanups.push(() => deleteEphemeralUser(userId));
+
+    const reservationId = await createReservation(userId, 'expired');
+    cleanups.push(async () => {
+      await admin.from('rental_reservations').delete().eq('id', reservationId);
+    });
+
+    // createSentContract는 sent_at만 채우고 expires_at(30일)은 미래로 남겨둔다 —
+    // 아래 redirect가 계약링크 만료가 아니라 오직 isContractIssueBlocked(예약 상태)
+    // 분기로만 트리거되는지를 정확히 겨냥한다.
+    const { contractId, signingId, token } = await createSentContract(userId, reservationId);
+    cleanups.push(async () => {
+      await admin.from('contract_signings').delete().eq('id', signingId);
+      await admin.from('contracts').delete().eq('id', contractId);
+    });
+
+    await expect(
+      (contractPageLoad as (e: unknown) => Promise<unknown>)(
+        { params: { token } } as unknown as Parameters<typeof contractPageLoad>[0],
+      ),
+    ).rejects.toMatchObject({ status: 302, location: '/contract/expired' });
+  });
+
+  it('회귀 방지: status=cancelled인 예약도 서명 전이라면 /contract/expired로 redirect된다', async () => {
+    const userId = await createEphemeralUser();
+    cleanups.push(() => deleteEphemeralUser(userId));
+
+    const reservationId = await createReservation(userId, 'cancelled');
+    cleanups.push(async () => {
+      await admin.from('rental_reservations').delete().eq('id', reservationId);
+    });
+
+    const { contractId, signingId, token } = await createSentContract(userId, reservationId);
+    cleanups.push(async () => {
+      await admin.from('contract_signings').delete().eq('id', signingId);
+      await admin.from('contracts').delete().eq('id', contractId);
+    });
+
+    await expect(
+      (contractPageLoad as (e: unknown) => Promise<unknown>)(
+        { params: { token } } as unknown as Parameters<typeof contractPageLoad>[0],
+      ),
+    ).rejects.toMatchObject({ status: 302, location: '/contract/expired' });
+  });
+});
+
 // ── EC-3: 이미 confirmed(관리자 우회 승인)된 예약에 pay-mock 재접근 — no-op ─────
 describe('EC-3: 관리자 수동 승인 후 고객이 뒤늦게 결제(mock) 페이지 재접근', () => {
   it('GREEN: 이미 confirmed인 예약에 pay-mock을 호출해도 안전하게 no-op 처리된다(중복승인 방지)', async () => {

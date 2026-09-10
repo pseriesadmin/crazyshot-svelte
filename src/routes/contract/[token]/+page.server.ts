@@ -4,6 +4,7 @@ import { PUBLIC_SUPABASE_URL } from '$env/static/public'
 import { error, redirect } from '@sveltejs/kit'
 import { recordAuditLog } from '$lib/contract-signature/auditLog'
 import { isCouponEligible } from '$lib/server/coupons/couponEligibility'
+import { isContractIssueBlocked } from '$lib/utils/contractIssueGuard'
 import type { PageServerLoad } from './$types'
 
 export const load: PageServerLoad = async ({ params }) => {
@@ -68,7 +69,14 @@ export const load: PageServerLoad = async ({ params }) => {
       throw redirect(302, '/contract/signed')
     }
     // else: 서명완료 + 결제대기(hold) — 아래로 계속 진행해 결제 단계를 그대로 보여준다
-  } else if (signing.expires_at && new Date(signing.expires_at) < new Date()) {
+  } else if (
+    (signing.expires_at && new Date(signing.expires_at) < new Date()) ||
+    // 2026-09-10 보완 — 서명링크 자체의 30일 만료(expires_at)와는 별개로, HOLD 30분
+    // 자동만료(status='expired', service-operations.md §10)·취소(cancelled)로 예약이
+    // 이미 종료된 뒤에도 서명 페이지가 그대로 열려 서명을 계속 접수할 수 있었다 —
+    // send-chat/content(PATCH)·sign(POST)과 동일 기준(isContractIssueBlocked)으로 통일.
+    isContractIssueBlocked(signedReservationStatus)
+  ) {
     throw redirect(302, '/contract/expired')
   }
 
