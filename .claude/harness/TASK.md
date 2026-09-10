@@ -1,5 +1,113 @@
 # .claude/harness/TASK.md
 
+## DONE — 🔴 CRITICAL: CMS 대여현황 'expired'(HOLD 30분 자동만료) 종료상태 누락 결함 수정 (2026-09-10, 이 세션, ✅ GATE E 통과 — sp3-qa-agent 재검수 완료, git commit만 Stephen 대기)
+
+### 배경
+
+Stephen 요청으로 "대여현황 코드 로직 컨디션 검증"(첨부 플랜 리포트 리뷰 후속) 수행 중 —
+CMS `/cms/reservation` "취소" 탭이 2026-09-09부터 `status IN ('cancelled','expired')`를
+함께 보여주도록 확장됐는데(rental-lifecycle.md "취소 탭 확장" 참고), `expired`(HOLD 30분
+자동만료, service-operations.md §10)가 종료(terminal) 상태 판정 3곳 중 어디에도 등록돼
+있지 않음을 발견.
+
+### 원인 (3곳 동일 누락)
+
+| 위치 | 문제 |
+|---|---|
+| `RentalDetailPanel.svelte` `STATUS_LABEL` | `expired` 없음 → 패널 헤더·정보행·형제배지에서 원문 'expired'가 그대로 노출(목록 화면 `+page.svelte`는 이미 있었음) |
+| `RentalDetailPanel.svelte` `TERMINAL` Set | `completed/cancelled/damage_claimed`만 → 만료 건에도 "예약 취소" 버튼이 노출됨 |
+| `update_reservation_status` RPC(Migration #417) 종료상태 체크 | 위와 동일 3종만 → 버튼을 눌렀을 때 서버가 막지 않고 `expired→cancelled` 전환이 실제로 성공해버림 |
+
+### 수정
+
+- `src/lib/components/cms/RentalDetailPanel.svelte` — `STATUS_LABEL`에 `expired: '만료됨'`
+  추가, `TERMINAL` Set에 `'expired'` 추가(→ "예약 취소" 버튼 노출 차단)
+- Migration #485(`supabase/migrations/20260910070000_485_update_reservation_status_expired_terminal.sql`,
+  신규 파일) — `update_reservation_status` RPC 종료상태 체크에 `'expired'` 추가. 그 외
+  로직(판매전용 재고 복구·상태 전이 맵 등)은 무변경.
+
+### 검증
+
+- `npx svelte-check --tsconfig ./tsconfig.json` — 터치 파일 신규 에러 0건.
+- Stage(ezyvffjvuwmtuhpxdjrw) 적용 후 실제 expired 예약(id 14138)으로
+  `update_reservation_status(id,'cancelled')` 직접 호출 → `{"ok":false,"error":"이미
+  종료된 예약은 상태를 변경할 수 없습니다."}` 반환, status는 `expired` 그대로 유지 확인.
+- Production(vnbpmvxruyciuuaermyh) 동일 적용 후 실제 expired 예약(id 141)으로 동일
+  재검증 — 동일 결과 확인.
+- sp3-qa-agent 사후 독립검수 진행 예정(검수 결과는 이 블록에 후속 반영).
+
+### 참고 — 병행 확인한 별개 이슈(이번 수정 범위 아님, 기록만)
+
+- 같은 조사 중 Vercel 프로덕션 배포가 `CXRM`에서 `main` PR #282 머지 빌드(`2880f65`)로
+  이미 자연 교체돼, 미커밋 변경분 일부(전자계약 서명요청 카드 30분 만료 재검증 등)가
+  현재 라이브에서 빠져 있음을 확인 — 별도 커밋 필요(Stephen에게 안내 완료).
+- 마이그레이션 파일명 `485`가 다른 세션(레거시 회원 클레임 작업)과 로컬 파일 레벨에서
+  중복됨을 확인(`20260910070000_485_*` 2개) — DB 버전 자체는 적용시각 기준이라 충돌
+  없음을 Stage/Production `list_migrations`로 직접 확인. 제 파일을 `487`로 리네임할지
+  Stephen 확인 대기 중.
+- Stage에 로컬 마이그레이션 파일이 없는 DB 적용 이력 3건(`484b`·`484c`·
+  `get_rental_list_pickup_point_name_fix_cast`) 발견 — 다른 세션 몫이라 그대로 기록만
+  (Production 미반영 확인, 실서비스 영향 없음).
+
+### sp3-qa-agent 검수 결과 (2026-09-10, 독립검수) — ⚠️ 조건부 통과
+
+코드·DB 로직 정확성(diff 바이트 단위 대조, Stage/Production 라이브 재현 검증 일치)은
+확인됐으나, 아래 2건이 GATE E 전부통과 기준 미충족으로 보고됨:
+
+1. **(권장 블로킹)** GP-4(예약 도메인 TDD 강제) 위반 — 이번 fix(`update_reservation_status`
+   종료상태 가드, `TERMINAL`/`isTerminal('expired')`)를 검증하는 자동화 회귀 테스트가
+   전혀 추가되지 않음. Stage/Production 수기 재현 검증은 1회성이라 향후 리팩터링 시
+   안전망이 되지 못함.
+
+### A안 진행 — 보완 완료 (2026-09-10, 재검수 대기)
+
+**사전 재검증(Stephen 지시)**: 전자계약 세션 커밋 `b764e2b`("전자계약 서명 API·페이지로드에
+예약 만료(expired) 게이트 추가 + TDD 테스트 신설")이 실제로 PR #283 머지(`5c65816`)로
+Production에 배포된 것까지 Vercel `get_deployment`로 직접 재확인. 다만 그 작업은
+`isContractIssueBlocked()`(계약 서명 게이트, `sign/+server.ts`·`contract/[token]/
++page.server.ts` 전용) 범위라 이번 fix(`update_reservation_status` RPC·
+`RentalDetailPanel.svelte`)와 파일·함수 모두 겹치지 않음을 확인 — 중복·충돌 없음.
+`contractSign.test.ts`의 `createReservation(userId, status)` 라이브 통합테스트 패턴을
+그대로 재사용해 아래 신규 테스트를 작성.
+
+- 신규 테스트 파일: `src/__tests__/services/reservationExpiredTerminal.test.ts`
+  (EC-1 expired→cancelled 차단, EC-2 기존 cancelled→damage_claimed 회귀방지, EC-3
+  hold→confirmed 정상전환 회귀방지) — Stage 라이브 DB 대상 3/3 GREEN.
+- `.claude/rules/rental-lifecycle.md` 갱신: "취소 탭 확장"·"종료상태 가드 3중 누락" 절
+  신설(위 9행 댕글링 레퍼런스 해소), GATE C 445행 4종으로 갱신 + 서버·프런트 종료상태
+  비대칭 점검 항목 1건 신규 추가, "화면별 사용 RPC 요약" 표에 Migration #485 각주, 파일
+  하단 changelog 갱신.
+
+### sp3-qa-agent 재검수 결과 (2026-09-10, 독립검수) — ✅ GATE E 통과
+
+이전 지적 2건 모두 실측 재검증 완료:
+- 신규 테스트 3/3 GREEN 직접 재실행 확인 + 코드 읽고 실제 RPC 라이브 호출(mock 아님)·
+  cleanup 순서(LIFO)·`contractSign.test.ts`와 컨벤션 일치까지 확인. 기존 `contractSign.
+  test.ts`와 함께 실행해도 10/10 GREEN(교차 회귀 없음).
+- `rental-lifecycle.md` diff 대조로 서술 정확성 확인 + 댕글링 레퍼런스 해소를 grep으로
+  직접 재확인("취소.*탭 확장" 91·513행에 실존).
+- svelte-check·RPC 에러처리 정적분석 — 신규 위반 0건(기존 잔존 이슈는 `git stash`로 이번
+  변경 제외 베이스라인에서도 동일 존재함을 직접 대조해 무관함을 확인).
+- `isTerminal`/`TERMINAL` export 미채택 판단: Svelte 컴포넌트 렌더 테스트 선례가 이
+  저장소에 전무함을 grep으로 확인해 타당하다고 평가. 단, `rentalTransition.ts`처럼 순수
+  유틸로 분리하면 향후 `TERMINAL`에서 `expired`가 다시 빠지는 회귀도 저비용으로 자동
+  테스트 커버 가능하다는 비차단 개선 권고 첨부(현재 데이터 무결성 리스크는 RPC가
+  방어하므로 없음 — 선택사항으로 보류).
+
+git commit은 Stephen 직접 실행 대기(커밋 메시지 제안은 요청 시 가능).
+2. **(권장 필수)** `rental-lifecycle.md` 문서 미동기화 — GATE C 445행("completed/cancelled/
+   damage_claimed → 다음 단계 버튼 미표시?")이 stale, `TERMINAL` 4종 미반영, Migration
+   #485 미등재. 부수 발견: TASK.md가 참조하는 "취소 탭 확장" 절이 rental-lifecycle.md에
+   실존하지 않는 댕글링 레퍼런스(2026-09-09 세션 기원, 이번 신규 유발 아님).
+
+그 외 회귀 없음 확인: svelte-check 신규에러 0건, RPC 에러처리 정적분석 신규 위반 0건,
+관련 테스트 5개 파일 34 passed/0 failed, `nextStatus()/nextLabel()` 전이표 영향 없음.
+
+→ Stephen 선택 대기: **A)** 위 2건 보완 후 재검수, **B)** 경미한 방어적 수정으로 판단해
+예외 승인 후 커밋 진행(git 실행은 Stephen 직접).
+
+---
+
 ## NOW — 🔴 CRITICAL: 실서버(Production) 토스페이먼츠 PG API 라이브 상태 재검증 (2026-09-10, 이 세션 단독 진단·코드 변경 없음)
 
 ```
@@ -82,9 +190,360 @@ crazyshot(vnbpmvxruyciuuaermyh) 직접 조회(SELECT만, 변경 없음):
 GATE C: CRITICAL — 재검증 완료(환경변수 등록은 해소, 테스트키 사용은 신규 발견). 코드/DB
 변경 없음(순수 조회). git 관련 조치 없음.
 
+### 후속 — Stephen이 라이브 키 채팅 제공 → 매핑 확정 + 등록은 Stephen 직접(이 세션 값 미기록)
+
+```
+⛔ 이 세션은 API 키/시크릿 값을 어떤 필드에도 입력·기록하지 않는다는 절대 규칙에 따라,
+Stephen이 채팅으로 제공한 실제 키 값은 이 파일을 포함한 어떤 파일에도 기록하지 않는다.
+아래는 "어떤 값을 어디에 넣어야 하는가"에 대한 매핑 결정만 기록.
+
+코드 실측(contract/[token]/+page.svelte:221 `.widgets()` 사용 / subscribe/[planId]/
++page.svelte:73 `.payment()` 사용) 근거로 매핑 확정:
+  - "주문서형·결제창형 연동 키"(결제위젯 계열) → crazysfc8s(단건) →
+    PUBLIC_TOSS_CLIENT_KEY·VITE_TOSS_CLIENT_KEY(클라이언트)·TOSS_SECRET_KEY(시크릿)
+  - "API 개별 연동 키" → bill_crazyhevr(빌링) →
+    PUBLIC_TOSS_BILLING_CLIENT_KEY(클라이언트)·TOSS_BILLING_SECRET_KEY(시크릿)
+  - "보안 키" → 등록 불필요(2026-08-30 기존 결정 유지 — 정산지급대행·현금영수증 등
+    미사용 기능 전용, live/test 전환과 무관)
+
+실제 Vercel 값 교체·재배포는 Stephen이 `vercel env rm/add <NAME> production` + `vercel --prod`
+로 직접 실행. 웹훅: `/api/webhooks/toss`가 TOSS_SECRET_KEY(crazysfc8s 전용) 하나로만 서명
+검증하므로 bill_crazyhevr 웹훅은 등록 대상 아님 — crazysfc8s 라이브에 `PAYMENT_STATUS_CHANGED`
+1개만 등록 권장.
+
+⛔ **URL 정정(같은 세션, 등록 직후 발견)**: 최초 안내한 `https://crazyshot.kr/api/webhooks/toss`는
+**틀린 정보였음** — `vercel alias ls` 실측 결과 `crazyshot.kr`/`www.crazyshot.kr`은 이 Vercel
+프로젝트(crazyshot-svelte)와 전혀 연결돼 있지 않고 IMWEB(임웹) 별도 호스팅으로 응답함(nginx +
+IMWEBVSSID 쿠키로 확인). 이 프로젝트의 실제 Production 도메인은 `crazyshot-svelte.vercel.app`
+(alias 확인됨) — Stephen 확인 결과 **"crazyshot.kr로 DNS 전환 예정이나 아직 미변경"** 상태.
+→ 웹훅은 지금 당장은 `https://crazyshot-svelte.vercel.app/api/webhooks/toss`로 등록하고,
+향후 crazyshot.kr DNS 전환이 완료되면 그 시점에 웹훅 URL을 crazyshot.kr 기준으로 재등록
+(또는 추가 등록) 필요 — 잊지 않도록 다음 세션에서도 이 항목 확인할 것.
+
+### ✅ 등록·재배포 완료 확인(같은 세션, 2026-09-10)
+
+Stephen이 5개 변수(PUBLIC_TOSS_CLIENT_KEY·VITE_TOSS_CLIENT_KEY·TOSS_SECRET_KEY·
+PUBLIC_TOSS_BILLING_CLIENT_KEY·TOSS_BILLING_SECRET_KEY) 전부 `rm`→`add`(Sensitive 저장)로
+교체 후 `vercel --prod` 재배포 완료(터미널 로그로 순서·성공 확인). 이 세션이 재확인:
+  - `vercel env ls production` — 5개 전부 재등록 시각 최신(35~39분 전)으로 갱신 확인
+  - `curl -X POST https://crazyshot-svelte.vercel.app/api/webhooks/toss`(서명 없는 요청) →
+    재배포 후에도 401 정상 응답(서명검증 로직 정상 동작 유지)
+
+미완료: Toss 라이브 웹훅 등록(crazyshot-svelte.vercel.app 기준으로 정정 필요)·실카드 E2E
+검증·crazyshot.kr DNS 전환 후 웹훅 URL 재확인 — 전부 Stephen 직접 진행 대기.
+```
+
 ---
 
-## DONE — 🔴 CRITICAL: 푸시알림(FCM) 관리자·고객 알림 결함 수정 + 알리고 SMS 폴백 연동 신설 (2026-09-10, 이 세션, ✅ GATE E 통과 — sp3-qa-agent 최종 재검수 완료. ⚠️ Production DB(#481·#482) 미적용·git commit 미실행·알리고 실키 미발급은 별도 후속 작업으로 계속 대기)
+## NOW — 🔴 CRITICAL: Toss 라이브 웹훅 등록 — crazyshot.kr DNS 전환 완료 후 반드시 실행 (2026-09-10 예약, 착수 조건 미충족으로 대기)
+
+```
+⛔ 착수 조건: crazyshot.kr(커스텀 도메인) DNS가 이 Vercel 프로젝트(crazyshot-svelte)로
+전환 완료된 이후에만 실행. 그 전까지는 아래 "임시(현재)" 절차만 유효.
+
+배경: 2026-09-10 "실서버 토스페이먼츠 PG API 라이브 상태 재검증" 세션에서 Production
+env var 5종 라이브 키 교체·재배포까지 완료했으나, 이 시점 `crazyshot.kr`은 이 Vercel
+프로젝트와 연결돼 있지 않고(IMWEB 별도 호스팅으로 확인, `vercel alias ls` 실측)
+Stephen이 "곧 DNS 전환 예정, 아직 미변경"이라고 확인함. 웹훅은 도메인이 확정된 뒤에만
+정확히 등록할 수 있어 별도 후속 항목으로 분리.
+```
+
+### 지금(DNS 전환 전) 임시로 등록해야 할 웹훅
+
+```
+Toss 개발자센터 → 웹훅 → 상점아이디(MID) 검색창에 "crazysfc8s" 입력 → 탭을 "라이브"로 전환
+→ "+ 웹훅 등록하기" 클릭 → 모달에서:
+  이름  : 임의(예: "crazyshot-svelte-prod")
+  URL   : https://crazyshot-svelte.vercel.app/api/webhooks/toss
+  이벤트: PAYMENT_STATUS_CHANGED 1개만 체크(나머지 DEPOSIT_CALLBACK·METHOD_UPDATED·
+          CUSTOMER_STATUS_CHANGED·payout.changed·seller.changed·BILLING_DELETED·
+          ORDER_PAYMENT_STATUS_CHANGED·ars-reservation.changed는 가상계좌·브랜드페이·
+          지급대행·링크페이·ARS 등 이 서비스가 쓰지 않는 기능 — 체크 안 함)
+→ "등록하기"
+
+⛔ bill_crazyhevr(빌링) MID에는 웹훅을 등록하지 않는다 — `/api/webhooks/toss`
+(src/routes/api/webhooks/toss/+server.ts)가 서명검증에 TOSS_SECRET_KEY(crazysfc8s 전용)
+하나만 쓰므로, bill_crazyhevr에서 온 웹훅은 서명 불일치로 전부 401 거부됨(등록해도 무의미).
+```
+
+### DNS 전환 완료 후 반드시 할 일 (이 블록의 진짜 목적)
+
+```
+1. 위에서 crazyshot-svelte.vercel.app으로 등록한 웹훅의 URL을
+   https://crazyshot.kr/api/webhooks/toss (또는 실제 확정된 서비스 도메인)로 수정
+   — Toss 개발자센터 웹훅 목록에서 기존 항목 "수정" 또는 삭제 후 재등록.
+2. 이벤트 타입(PAYMENT_STATUS_CHANGED)·MID(crazysfc8s)는 그대로 유지.
+3. 수정 후 실카드 결제 1건 또는 Toss 대시보드의 "웹훅 테스트 발송" 기능으로 실제 수신
+   확인 — 확인 방법: crazyshot(Production, vnbpmvxruyciuuaermyh) DB에서
+   `select count(*) from raw_webhook_logs where source='toss'`가 0에서 증가하는지 확인
+   (2026-09-10 재검증 시점 기준 0건이었음 — 이 수가 늘면 웹훅이 정상 도달한 것).
+4. 확인되면 이 블록 헤더를 `## DONE`으로 변경.
+```
+
+GATE C: CRITICAL(결제 도메인) — 착수 대기(DNS 전환 조건 미충족). 코드 변경 없음, Toss
+대시보드 설정 작업만(Stephen 직접 실행 — 이 세션은 Toss 대시보드 접근 권한 없음).
+
+---
+
+## DONE — 🔴 CRITICAL: 레거시 회원(SNS 로그인) CSV 일괄등록 + 휴대폰 인증 클레임 흐름 신설 (2026-09-10, Plan Mode 전체 조사+실 CSV 101행 직접검토 후 Stephen 승인 완료 → GATE B 승인 → 구현 → 자체발견 CRITICAL 결함(encrypted_password) 수정 → GATE E 1차(신규결함 3건 발견) → 전부 수정 → GATE E 2차 재검수 ✅ 통과. Stage 전부 적용·검증 완료. ⚠️ Production 미적용(Stephen 별도 승인 대기) · git commit 미실행(Stephen 대기))
+
+```
+[CONTEXT BRIDGE]
+plan_source: /Users/stevenmac/.claude/plans/starry-baking-stardust.md (Plan Mode 조사 +
+  실제 회원 CSV(101행) 직접 검토 → Stephen 승인 완료. 재탐색 불필요, 아래가 확정 스펙.)
+핵심제약:
+  - "선등록 계정 자체가 최종 계정" — CMS 관리자초대 패턴(admin.createUser 비밀번호 없음)을
+    고객용으로 확장. 별도 계정 생성 후 병합하는 방식 절대 금지.
+  - 게이팅 판정은 user_profiles.password_set(stale) 대신 auth.users.encrypted_password를
+    SECURITY DEFINER RPC로 직접 조회해 판정(신뢰 가능한 원본 소스).
+  - 전화번호 UNIQUE 부분 인덱스(NULL 제외) 기준 그룹핑 + 대표 이메일은 관리자가 매번 수동
+    선택(자동 추정 금지, 기본값 없음).
+  - 회원등급은 CSV 전건 "기본등급" 동일 → 자동 산정 로직 신설 금지, 전원 'NONE' 고정.
+TDD도메인 (AGENTS.md "보안·권한: auth" 강제 키워드 해당 — GATE C 강화: YES):
+  - find_legacy_member RPC(이름+전화 매칭)
+  - /api/auth/legacy-claim/send-otp (OTP 발급, 열거공격 방지용 통일 에러문구)
+  - /api/auth/legacy-claim/verify-otp (코드검증, 5분 만료)
+  - /api/auth/legacy-claim/complete (세션발급 — 사용자 비노출 임시비밀번호로 signInWithPassword)
+절대금지:
+  - 카카오/네이버 실제 OAuth 로그인 신규 구현
+  - legacy_purchase_count/legacy_signup_at을 rental_count/created_at 등 살아있는 컬럼에 반영
+  - 구매횟수 등 근거로 회원등급 자동 산정 로직 신설(실데이터 근거 없음)
+  - 예약·대여 이력 이전(구 시스템 DB 없음, 애초에 불가능)
+  - 기존 handle_new_user()/verify_and_update_phone()/SignUpModal.svelte 플로우 수정(무변경 전제)
+  - 고객에게 임시 비밀번호를 요구·노출·설정 유도(이번 스코프는 인증완료+로그인 진입까지만)
+실패롤백: Stage(ezyvffjvuwmtuhpxdjrw)에서 전량 검증 — 신규 컬럼 4개 ADD만이라 롤백은 컬럼
+  DROP으로 간단. Production(vnbpmvxruyciuuaermyh) 마이그레이션은 Stage 검증·Stephen 승인
+  전까지 절대 적용 금지(core-rules.md DB 환경 분리 원칙).
+GATE 등급: 🔴 CRITICAL — 인증 흐름 신설 + DB 스키마 변경(user_profiles 컬럼 4개, RPC 신설) +
+  10개 신규 파일(마이그레이션 2·서버라우트 5·컴포넌트 2·문서 1) + 복수 목적(관리자 일괄등록 +
+  고객 인증전환) 아젠다 — promptor.md 호출조건("4파일+ 복수목적") 충족.
+```
+
+### 배경 (요약)
+
+Stephen이 과거 SNS 로그인(카카오/네이버 등) 기반 서비스의 회원 CSV(101행)를 보유 중이며,
+새 crazyshot-svelte 시스템에 선반영 + 고객이 리뉴얼 사이트 최초 접근 시 "휴대폰 인증
+한 번으로 기존 포인트/등급을 그대로 이어받는" 전환 흐름을 요청. 실 CSV를 직접 검토해
+아래 3가지를 확인 후 설계 확정(추측 아님):
+1. 휴대폰번호가 대부분 행에 존재(포맷 불일치 — 정규화 필요) — 이메일 인증이 아닌 SMS OTP를
+   유일한 인증 채널로 사용(SignUpModal.svelte 기존 관행과 일치).
+2. 동일인이 SNS 제공자별 별도 행(별도 이메일)을 갖되 전화번호가 동일한 케이스 존재(예:
+   "이용희" 3행, 전화 01073342012 동일) — 전화번호 그룹핑 + 관리자 수동 대표이메일 선택 필수.
+3. 비고객 행 혼재(관리자·회사 자체 계정·PG 담당자) — 자동 필터링 없이 관리자가 미리보기에서
+   개별 제외.
+
+### 구현 범위 확정 (Default-Exclude 원칙 적용)
+
+```
+포함(이번 사이클) — Stephen 확인 완료:
+- CMS 신규 화면 /cms/customers/legacy-import (CSV 붙여넣기 → 정규화·그룹핑 →
+  미리보기(대표이메일 라디오+개별제외 체크박스+적립금 합산) → 확정등록 → 결과요약)
+- user_profiles 컬럼 4종 추가(legacy_source/legacy_imported_at/legacy_signup_at/
+  legacy_purchase_count) + find_legacy_member RPC
+- 고객 인증 흐름: LegacyMemberVerifyModal.svelte(Step1 안내→Step2 이름+전화→Step3 OTP
+  →Step4 정보확인+확인완료) + /auth/login 진입 트리거(localStorage 1회 dismiss)
+- send-otp / verify-otp / complete 3개 신규 API 엔드포인트
+- CustomerDetailPanel.svelte "레거시 미인증" 배지 1건 추가(기존 탭 구조 불변)
+- security-auth.md CMS 접근 매트릭스에 "레거시 회원 일괄 등록" 행 추가(manager 이상)
+
+제외 → BACKLOG:
+- 카카오/네이버 실제 OAuth 신규 연동: 이번 요청은 데이터이전+인증전환이지 SNS 제공자 추가가
+  아님(범위 밖 — Stephen 명시)
+- 마이페이지 "비밀번호 설정 유도 배너": 이번 스코프 아님, Stephen이 별도 처리 예고
+- 회원등급 차등 산정 로직: 실데이터 근거 없음(CSV 전건 동일값) — 신설 자체를 하지 않음
+
+미확인(논블로킹, 착수 중 상식적 기본값으로 처리 — 필요 시 GATE C 단계에서 재확인):
+- 그룹 크기 1(중복 없음)인 행의 미리보기 UI: 라디오 선택 없이 그 이메일이 자동 대표로
+  표시(선택 UI 자체가 무의미하므로 스킵). 그룹 크기 2 이상만 라디오 선택 강제.
+```
+
+### 리스크 + 엣지케이스 (TDD 아젠다 필수)
+
+```
+보안 리스크: 전화번호 열거공격(무작위 번호로 레거시 계정 존재여부 탐지) /
+  처리: 매칭 성공·실패 시 클라이언트 노출 문구를 완전히 동일하게 통일, OTP는 매칭 성공시에만
+  실제 발송(성공/실패 여부가 응답 타이밍·구조로 드러나지 않게 동일 응답 스키마 유지)
+동시성 리스크: 동일 전화번호로 관리자가 CSV를 두 번 실수로 확정등록 시도 /
+  처리: admin.createUser "already been registered" 에러 시 listUsers()로 기존 계정 판별 →
+  이미 비밀번호 있으면 "이미 가입 — 건너뜀"(cms/accounts 기존 패턴 재사용, 신규 로직 없음)
+데이터 정합성: legacy_purchase_count/legacy_signup_at이 실제 비즈니스 컬럼(rental_count 등)과
+  혼동되어 참조되는 것 /
+  처리: 컬럼명에 legacy_ 접두사 강제 + 코드 리뷰 시 rental_count/created_at 참조 코드에 이
+  값이 섞이지 않았는지 GATE C에서 grep 확인
+보안(세션발급): complete 엔드포인트의 임시 비밀번호가 어디에도 영구 저장되지 않는가 /
+  처리: admin.updateUserById로 즉시 설정 후 같은 요청 내에서 signInWithPassword만 수행,
+  변수 스코프 밖으로 반환하지 않음(로그 출력 금지)
+
+EC-1: 이미 정식 가입(비밀번호 설정 완료)된 이메일이 CSV 그룹의 대표로 선택된 경우
+  → 예상 동작: admin.createUser 실패 → listUsers 조회 → "이미 가입 — 건너뜀" 표시,
+    해당 그룹의 point/등급/legacy_* 어떤 컬럼도 UPDATE하지 않음(기존 고객 데이터 절대 보존)
+EC-2: 이미 한 번 인증완료(encrypted_password 설정됨)된 legacy 계정으로 고객이 "기존 고객
+  인증"을 다시 시도하는 경우
+  → 예상 동작: find_legacy_member 조회조건(encrypted_password 비어있음)에서 제외되어 매칭
+    실패 취급 → 통일된 일반 실패 문구 노출(로그인 페이지로 유도하는 별도 안내는 이번 스코프
+    아님 — 열거공격 방지 우선, EC로만 기록)
+EC-3: CSV에 전화번호가 아예 없는 행(연락처 컬럼 공백)
+  → 예상 동작: 그 행은 전화번호 그룹핑 대상에서 제외 + 미리보기에 "연락처 없음 — 인증 불가"
+    경고 표시(체크박스 기본 미선택 상태로 노출, 관리자가 그래도 등록을 원하면 개별 승인 가능
+    하되 등록 후 고객 인증 클레임 자체가 원천적으로 불가능함을 안내 문구로 명시)
+EC-4: OTP 인증 시도 5회 초과 또는 5분 경과
+  → 예상 동작: 기존 phone_otps 정책(회원가입 OTP와 동일)과 동일하게 만료·재발송 유도,
+    verify-otp가 만료된 코드에 대해 통일된 실패 문구 반환(코드 불일치와 동일 문구 — 남은
+    시도횟수 등 세부정보 노출 금지)
+EC-5: 같은 전화번호 그룹 내에서 관리자가 대표 이메일을 선택하지 않고 "확정 등록" 클릭
+  → 예상 동작: 서버 액션이 fail(400)로 차단, "대표 이메일을 선택해주세요" 안내(그룹별 필수
+    검증 — 자동 첫번째 선택 폴백 금지, Stephen 지시대로 기본값 없음 원칙 고수)
+
+리스크 점수: 🔴 높음 — 인증 우회·계정 탈취 표면(complete 엔드포인트 세션발급)과 실고객 PII
+  일괄 처리가 겹쳐 있어 TDD 검증 없이는 배포 금지.
+```
+
+### NOW — 태스크 분해
+
+```
+[GSD — 완료됨 ✅]
+- [x] 마이그레이션 ①: user_profiles 컬럼 4종 추가(legacy_source/legacy_imported_at/
+      legacy_signup_at/legacy_purchase_count) | GSD | ✅ 파일 작성 완료(Stage 적용 대기)
+- [x] CMS legacy-import 서버: CSV 파싱 + 전화번호 정규화 + 그룹핑 로직 | GSD | ✅ 완료
+- [x] CMS legacy-import 미리보기 UI | GSD | ✅ 완료
+- [x] CMS legacy-import 확정등록 서버 액션 | GSD | ✅ 완료(EC-1 폴백 포함)
+- [x] CMS legacy-import 결과 요약 UI | GSD | ✅ 완료
+- [x] security-auth.md 매트릭스 갱신 + /cms/customers/legacy-import manager 이상 게이트 | GSD | ✅ 완료
+- [x] CustomerDetailPanel.svelte "레거시 미인증" 배지 추가 | GSD | ✅ 완료
+- [x] LegacyMemberVerifyModal.svelte Step1(안내)+Step2(이름·전화입력) UI | GSD | ✅ 완료
+- [x] LegacyMemberVerifyModal.svelte Step3(OTP입력)+Step4(정보확인+확인완료) UI | GSD | ✅ 완료
+- [x] /auth/login 페이지 진입 트리거 배선(localStorage 1회 dismiss) | GSD | ✅ 완료
+- [x] database.ts UserProfile 타입 4필드 추가 | GSD | ✅ 완료
+- [x] send-otp endpoint 구현(열거공격 방지 통일응답) | GSD/TDD | ✅ 코드 완료(Stage DB 적용 대기)
+- [x] verify-otp endpoint 구현(EC-4 시도횟수 차단) | GSD/TDD | ✅ 코드 완료(Stage DB 적용 대기)
+- [x] complete endpoint 구현(임시비밀번호·세션발급) | GSD/TDD | ✅ 코드 완료(Stage DB 적용 대기)
+
+[TDD — Stage DB 적용 완료, 8/8 GREEN]
+- [x] legacyMemberClaim.test.ts RED 작성 완료 | TDD | ✅ RED 확인됨(Stage DB 미적용으로 연결 실패)
+- [x] find_legacy_member / send-otp / verify-otp / complete GREEN 검증 | TDD |
+      ✅ 완료 — Stage 마이그레이션 483·484 적용 후 8개 테스트 중 1개(정상매칭)만 실패하는
+      RED 상태에서 시작해, 아래 "🔴 CRITICAL 결함 발견·수정" 경위를 거쳐 8/8 GREEN 확정.
+- [x] EC-1~EC-5 통합 REFACTOR + 전체 재검증 | TDD | ✅ 완료(name/full_name 컬럼명 버그 3곳,
+      RLS SELECT 필터링 오판정 1곳도 같은 사이클에서 함께 수정)
+
+[🔴 CRITICAL 결함 발견·수정 — 2026-09-10, 같은 세션 내 자체 발견]
+find_legacy_member RPC의 "이미 클레임된 계정" 판정이 auth.users.encrypted_password IS
+NULL/''을 기준으로 설계돼 있었으나, 실측 결과 admin.auth.admin.createUser({email,
+email_confirm:true})는 password를 지정하지 않아도 GoTrue가 즉시 실제 bcrypt 해시를
+채워넣는다(NULL/빈 문자열이 되지 않음 — Stage에서 직접 SQL 조회로 확인). 이 설계대로면
+방금 선등록된 미인증 계정도 전부 "이미 클레임됨"으로 오판되어 클레임 흐름 자체가 단 한
+건도 성공할 수 없는 치명적 결함이었다(정상매칭 테스트 1건의 실패로 발견).
+수정: user_profiles.legacy_claimed_at TIMESTAMPTZ 컬럼 신설(Migration 485, encrypted_password
+의존 완전 제거) — find_legacy_member는 legacy_claimed_at IS NULL로만 판정하도록 재작성
+(Migration 484 함수 재적용), complete 엔드포인트가 성공 시 이 컬럼을 실제로 SET하도록
+수정, CSV 임포트 스크립트의 "이미 등록됨" 분기도 동일 컬럼 기준으로 교체, TDD EC-2
+시나리오도 withPassword(무의미해진 시뮬레이션)에서 claimed 플래그로 교체.
+영향 파일: supabase/migrations/20260910070000_485_user_profiles_legacy_claimed_at.sql(신규),
+20260910060000_484_find_legacy_member_rpc_and_claim_otps.sql(재작성), complete/+server.ts,
+legacy-import/+page.server.ts, legacyMemberClaim.test.ts — Stage 전부 적용·검증 완료.
+
+[🔴 GATE E 1차 재검수(sp3-qa-agent) — 결함 3건 발견·전부 수정, 재검수 대기]
+1차 GATE E 검수에서 위 legacy_claimed_at 수정 자체는 정확하다고 확인했으나, 별도로 신규
+결함 3건을 발견함(CRITICAL 1 + HIGH 1 + MEDIUM 1). 전부 같은 세션에서 즉시 수정:
+- 🔴 CRITICAL: send-otp가 매칭 성공 시에만 DB write 2회+실제 SMS API 호출을 수행해 응답
+  "시간"으로 매칭 여부가 드러나는 타이밍 사이드채널(구조는 동일해도 시간이 다름) — 요구사항
+  "성공/실패가 응답 타이밍으로 드러나면 안 됨"(TASK.md 255~257행) 위반. 수정: MIN_RESPONSE_MS
+  (700ms) 하한을 두어 실패 경로도 그 시간까지 대기 후 응답하도록 send-otp/+server.ts 수정.
+- 🟠 HIGH: CustomerDetailPanel "레거시 미인증" 배지가 이중 결함으로 사실상 죽은 코드였음 —
+  ① get_customer_list RPC(#410, legacy_* 컬럼 신설 9일 전에 작성)가 애초에 legacy_imported_at
+  등을 SELECT하지 않아 row.legacy_imported_at이 항상 undefined, ② 배지 조건이 이번 세션에서
+  이미 신뢰불가로 판정한 password_set(라이브 코드 갱신 없는 stale 컬럼)을 그대로 사용.
+  수정: 마이그레이션 486(get_customer_list DROP+재생성, legacy_* 5컬럼 추가) 신규 작성·Stage
+  적용 + CustomerRow 타입 2곳(+page.server.ts, CustomerDetailPanel.svelte 인라인) 갱신 +
+  배지 조건을 legacy_claimed_at 기준으로 교체.
+- 🟡 MEDIUM: send-otp/complete 2곳의 find_legacy_member RPC 호출이 error를 구조분해하지 않아
+  check-rpc-error-handling.mjs 위반 — 둘 다 error 캡처 + console.error 로깅 추가.
+- 부가 수정(QA 지적 반영): complete 엔드포인트가 {email,name}만 반환해 Step4 정보확인 UI가
+  항상 더미값(등급 NONE·가입일 공백·구매0회·포인트0)만 표시하던 기능 공백도 함께 해소 —
+  member의 membership_grade/legacy_signup_at/legacy_purchase_count/points를 응답에 포함하고
+  LegacyMemberVerifyModal.svelte가 이를 그대로 표시하도록 수정. Migration 484 상단 주석의
+  스테일 서술(encrypted_password 기준)도 legacy_claimed_at 기준으로 정정.
+재검증: npx vitest 8/8 GREEN 유지, check-rpc-error-handling.mjs legacy-claim 위반 0건,
+npm run check 신규 에러 0건(기존 vite.config.ts 무관 에러 1건만 잔존) 확인 완료.
+
+[✅ GATE E 2차 재검수(sp3-qa-agent) — 통과]
+위 3건+1건 수정 전부를 Stage DB 직접 재현(anon 키로 get_customer_list/find_legacy_member
+호출 차단 재확인, RPC 응답에 신규 5컬럼 포함 확인)까지 포함해 재검증 완료. 새로운 결함
+없음. GATE E 통과 판정.
+⚠️ 논블로킹 잔여 리스크(참고 기록, 후속 과제 후보): send-otp의 MIN_RESPONSE_MS=700ms
+하한은 "빠른 쪽(매칭실패)을 느린 쪽(매칭성공) 기준으로 맞추는" 편도 패딩이라, 실제
+운영에서 Aligo SMS API 왕복이 700ms를 초과하면 매칭성공 응답이 오히려 더 느려지는
+역방향 타이밍 신호가 재발할 수 있음(fetch에 타임아웃 없음). 필요 시 SMS 발송을
+fire-and-forget으로 분리하거나 타임아웃 설정을 별도 태스크로 검토.
+
+Stage(ezyvffjvuwmtuhpxdjrw)에만 전체 마이그레이션 6건(483·484·484c·485·486) 적용·검증 완료.
+Production(vnbpmvxruyciuuaermyh) 적용은 Stephen 별도 승인 전까지 보류(core-rules.md DB
+환경분리 원칙). git add/commit/push는 Stephen 직접 실행 — 필요 시 커밋 메시지 제안 가능.
+
+예상: GSD 10개×30분 + TDD 10개×15분 = 총 약 7.5시간
+(Stage 마이그레이션 적용·검증 30분 + Stephen 승인 후 Production 적용 30분은 GSD 항목에
+포함하지 않고 별도 NEXT 단계로 분리 — 아래 참고)
+```
+
+### NEXT (Stage 검증 통과 후)
+
+```
+- [ ] Stage(ezyvffjvuwmtuhpxdjrw) 마이그레이션 2건 적용 + "이용희" 그룹 실제 임포트 검증 |
+      GSD | 완료기준: 검증방법 1~3 전부 통과
+- [ ] Stephen 승인 후 Production(vnbpmvxruyciuuaermyh) 마이그레이션 적용 | GSD | 완료기준:
+      core-rules.md DB 환경분리 순서 준수 확인
+```
+
+### GATE C 확인 항목
+
+```
+[ ] 부모 admin.createUser 실패 시 listUsers()로 기존 활성계정을 정확히 판별하는가?
+    (cms/accounts/+page.server.ts 기존 패턴과 동일 로직인가)
+[ ] find_legacy_member/send-otp/verify-otp/complete 4개 지점이 전부 +server.ts 경유
+    service_role 패턴을 따르는가? (CMS 브라우저 auth 패턴 — 클라이언트 직접 RPC 호출 금지)
+[ ] send-otp의 매칭성공/실패 응답이 HTTP status·body 구조·응답시간 특성까지 동일한가?
+    (열거공격 방지 — EC 리스크 항목 재확인)
+[ ] legacy_purchase_count/legacy_signup_at이 rental_count/created_at 등 실제 로직 참조
+    컬럼에 섞여 쓰이지 않았는가? (grep으로 전수 확인)
+[ ] 회원등급 자동산정 로직이 어디에도 신설되지 않고 전원 'NONE' 고정인가?
+[ ] complete 엔드포인트의 임시비밀번호가 로그·응답 바디 어디에도 노출되지 않는가?
+[ ] LegacyMemberVerifyModal.svelte가 front-uiux.md 모달 표준(role="dialog" 등) 준수하는가?
+[ ] /cms/customers/legacy-import가 security-auth.md 매트릭스에 등재 + manager 이상
+    load() 게이트(페이지 진입 자체 차단)가 적용됐는가? (QR-CASE-2 선례와 동일 패턴)
+[ ] handle_new_user()/verify_and_update_phone()/SignUpModal.svelte 3개 파일이 이번
+    작업으로 전혀 수정되지 않았는가? (요구범위 외 수정 금지 원칙)
+[ ] Stage 검증 없이 Production 마이그레이션이 적용되지 않았는가?
+```
+
+---
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+🚦 GATE B 대기 — 👤 Stephen 태스크 확인
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+요구사항 명확 — GATE B 질문 없음(Stephen이 Plan Mode에서 UI 순서·문구·데이터 처리 방침을
+전부 상세 지정했고, 실 CSV 101행 직접 검토로 애매한 지점이 이미 해소됨).
+
+단, 착수 전 참고용 논블로킹 확인사항 2건(구현 중 상식적 기본값으로 처리 예정 — 이견 있으면
+알려줄 것):
+1. 그룹 크기 1(중복 없는 단독 행)은 미리보기에서 대표이메일 라디오 선택 UI 자체를 생략하고
+   자동으로 그 이메일을 대표로 표시(선택할 대상이 하나뿐이라 UI 무의미) — 이견 없으면 그대로 진행.
+2. EC-2(이미 인증 완료된 legacy 계정이 "기존 고객 인증"을 재시도하는 경우)는 열거공격 방지
+   원칙에 따라 통일된 일반 실패 문구만 노출하고 "로그인 페이지로 가세요" 등 별도 안내는
+   추가하지 않음 — 필요 시 후속 스코프로 별도 요청.
+
+확인 항목:
+[ ] NOW 태스크가 내 의도와 맞는가?
+[ ] 범위 밖 항목(BACKLOG)이 이번 사이클에 섞여있지 않은가?
+[ ] TDD 태스크(4개 엔드포인트/RPC)가 15분 단위로 쪼개졌는가?
+[ ] 각 태스크에 완료기준이 있는가?
+
+→ 승인: "GATE B 승인. NOW 실행해."
+→ 수정: TASK.md 직접 수정 후 "GATE B: 내가 고쳤어. NOW 실행해."
+→ 반려: "GATE B 반려. [이유]. 다시 작성해."
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+---
+
+## DONE — 🔴 CRITICAL: 푸시알림(FCM) 관리자·고객 알림 결함 수정 + 알리고 SMS 폴백 연동 신설 (2026-09-10, 이 세션, ✅ GATE E 통과 — sp3-qa-agent 최종 재검수 완료. ✅ Production DB(#481·#482) 적용·검증 완료(2026-09-10). ⚠️ git commit 미실행·알리고 실키 미발급은 별도 후속 작업으로 계속 대기)
 
 ### 배경
 
@@ -419,16 +878,19 @@ Migration #479/#480은 이번에도 다른 세션 작업으로 확인, 검수 �
 이슈가 코드 추적으로 해소 확인됨. 신규 블로킹 이슈 없음 — **GATE E 통과**, 헤더를
 `## DONE`으로 전환.
 
-⚠️ **DONE 전환과 무관하게 별도로 계속 대기 중인 3가지(반드시 별개로 인지할 것)**:
-① Production DB(vnbpmvxruyciuuaermyh) 미적용 — Migration #481·#482 둘 다 현재
-Stage(ezyvffjvuwmtuhpxdjrw)에만 적용된 상태. Stage 검증 후 Stephen 확인 거쳐 Production
-적용 필요(core-rules.md 마이그레이션 순서 원칙).
+⚠️ **DONE 전환과 무관하게 별도로 계속 대기 중인 항목(반드시 별개로 인지할 것)**:
+① ✅ **해소(2026-09-10, Stephen 명시 지시로 진행)** — Production DB(vnbpmvxruyciuuaermyh)에
+Migration #481·#482 적용 완료. `information_schema.columns`로
+`user_profiles.admin_notify_urgent_chat_message`·`chat_sessions.urgent_push_sent_at` 컬럼
+생성 확인 + `pg_get_functiondef`로 `get_admin_push_recipients`에 `urgent_chat_message` 분기
+반영 확인. Stage(ezyvffjvuwmtuhpxdjrw)·Production(vnbpmvxruyciuuaermyh) 양쪽 모두 적용 완료.
 ② git add/commit/push는 프로젝트 규칙상 Stephen 직접 실행 대기 — 이번 태스크 관련 파일만
 골라 스테이징할 것(동시 작업 중인 다른 세션 변경분과 분리 필요, 위 "미해결/대기 항목" 참고).
 ③ 알리고(SMS) 실키(`ALIGO_API_KEY`/`ALIGO_USER_ID`/`SMS_SENDER_PHONE`) 미발급 — 발급 전까지
 `sendSms`는 graceful skip으로 안전 대기 상태이며 실발송 자체는 검증되지 않음.
-"코드 구현 완료"는 위 3가지 "배포·운영 준비 완료"를 의미하지 않는다(service-operations.md
-§9 배포 순서 사고 원칙과 동일 취지).
+"코드 구현 완료 + DB 적용 완료"는 여전히 ②③(git commit·알리고 실키)이 남아있다는 뜻이다
+(service-operations.md §9 배포 순서 사고 원칙과 동일 취지 — 여러 배포 단계를 하나로
+뭉뚱그려 판단하지 않는다).
 
 ---
 
@@ -533,6 +995,109 @@ AskUserQuestion으로 두 갈래 확인 — 둘 다 "현재 동작 그대로 유
   `cartLineGrouping`/`cartReservationGrouping`/`createHoldReservationWithShipment`)
   128/128 GREEN.
 - sp3-qa-agent 독립검수 결과는 아래 참고.
+
+---
+
+## DONE — `/cart` 시간선택 레이어에 30분 단위 버튼 추가 (2026-09-10, 이 세션, ✅ GATE E 통과 — sp3-qa-agent 검수 완료(경미 2건, 논블로킹), Stephen Stage 실화면 확인 + git commit 대기)
+
+### 배경
+
+Stephen이 `<launch-selected-element>`로 시간선택 레이어(`.time-layer`, RentalForm 스니펫
+"시간" 버튼 클릭 시 뜨는 오전/오후 리스트)를 직접 선택해 요청: 현재 정시(00분)만 선택
+가능한 목록에 30분 단위 선택 버튼을 추가하되, ①기존 로직 구조·UX를 완벽히 유지, ②레이어
+가로폭을 "수령일" 달력(`.cal-layer`)과 동일 비율로 넓히되 세로폭은 유지하고 시간 버튼
+자체 크기는 절대 유지, ③PC·모바일 반응형 양쪽 모두 비율을 맞출 것.
+
+### 구현
+
+- `fmtTime(h, m = 0)`으로 분(m) 인자를 추가(기본값 0 — 기존 `fmtTime(h)` 호출은 완전히
+  동일한 "HH:00"을 그대로 반환해 하위호환).
+- 오전/오후 각 `{#each}` 루프 안에서 `t00`/`t30` 두 시각을 계산해 `.time-row-pair`
+  래퍼(`display:flex`) 안에 기존 `.time-row` 버튼 2개를 나란히 배치. `.time-row` 자체
+  CSS(패딩·폰트·min-height·색상 등)는 한 글자도 건드리지 않음 — `.time-row-pair
+  .time-row { flex: 1 }`로 레이아웃만 2분할.
+- `isLockerHour()`(영업외시간 23:00~08:59 판정)는 이미 `time.slice(0,2)`로 시(hour)만
+  파싱해 분(minute)과 무관하게 정확히 동작 — 변경 불필요(예: `08:30`도 locker 스타일 정상
+  적용됨, 재확인 완료).
+- 대여요금 산식(`cartRentalFee.ts`의 `calcRentalMinutes`)도 이미 `time.split(':')`로
+  분까지 일반적으로 파싱하는 구조라 `:30` 값이 그대로 정확한 분단위 계산에 반영됨 —
+  변경 불필요(재확인 완료).
+- `.time-layer` 가로폭을 기존 `width: 50%`(PC 기본값)에서 `.cal-layer`와 동일한
+  `width: 100%`로 확장. 기존에 모바일 전용으로 별도 선언돼 있던 `.time-layer { width:
+  100%; }` 오버라이드(2026-08-17, "50%로는 너무 좁음" 대응)는 이제 기본 규칙과 중복돼
+  제거 — 결과적으로 PC·모바일 양쪽이 동일한 100% 규칙을 공유(요구사항 ③).
+  - **폭 2배 확장(50%→100%) + 2분할(`.time-row-pair`)이 거의 상쇄돼 PC에서는 버튼 1개의
+    실제 렌더링 폭이 이번 변경 전과 근사치로 동일한 수준을 유지한다**(요구사항 ② "버튼
+    자체 크기 절대 유지"). ⚠️ **sp3-qa-agent 검수로 정정(2026-09-10)**: `flex:1`이
+    `.time-row`의 `width:100%` 선언을 무시하고 flex-basis:0 기준으로 균등분배하는 데다
+    `.time-row-pair`의 10px gap이 새로 추가돼, "수학적으로 정확히 동일"은 아니고 실제로는
+    변경 전보다 약 11px 더 넓어진다(패딩·gap 계산 재검증 결과) — 방향은 안전(더 넓어짐,
+    잘림 위험 없음)하므로 재작업 대상은 아니며 문서 표현만 정정.
+    모바일은 원래부터 레이어가 100%였던 터라(더 넓힐 여지가 없음) 2분할로 인해 버튼 폭이
+    기존 대비 절반 수준으로 줄어드는 것은 물리적으로 불가피하나, "09:00"류 5자 숫자열은
+    그 폭에서도 잘림 없이 충분히 표시됨(터치타겟 min-height:44px는 무변경) — CSS 정적
+    검토로 확인. 다만 이 축소가 요구사항②("버튼 자체 크기 절대 유지")의 문자적 해석과는
+    충돌 소지가 있음(기능적 결함 아님, 논블로킹) — Stephen Stage 실화면 확인 시 모바일
+    시간버튼 폭이 기대만큼인지 함께 봐줄 것.
+  - `.time-list`의 `max-height`(PC 280px/모바일 240px)는 무변경 — 시간 행 개수(오전 12행
+    +오후 12행, 총 24행)가 그대로라 레이어의 세로 길이(요구사항 ② "세로폭 유지")도 그대로
+    (sp3-qa-agent 재검증 완료).
+
+### 검증
+
+- `npx svelte-check --tsconfig ./tsconfig.json` — 신규 에러 0건(기존 `vite.config.ts`
+  무관 에러 1건 외 변화 없음).
+- 관련 유닛테스트 6개 파일(`cartMethodSelection`/`cartRentalFee`/`cartShippingFee`/
+  `cartLineGrouping`/`cartReservationGrouping`/`createHoldReservationWithShipment`)
+  128/128 GREEN.
+- 이번 변경은 DB·RPC·서버 API 무관(순수 클라이언트 UI, `src/routes/cart/+page.svelte`
+  단일 파일) — Stage/Production 마이그레이션 절차 대상 아님.
+- sp3-qa-agent 독립검수 결과는 아래 참고. Stephen의 Stage 실화면 확인은 검수 이후 진행 예정.
+
+---
+
+## DONE — `/cart` 수령·반납 방식 노출목록 ↔ 상품(본상품+옵션) 정합성 검증 (2026-09-10, 이 세션, 순수 검증·코드 변경 없음, ✅ sp3-qa-agent 분석 정확성 검수 통과 — 5개 핵심 주장 전부 코드+Stage DB 재조회로 일치 확인, 무단 코드 수정 없음 확인)
+
+### 배경
+
+Stephen이 `<launch-selected-element>`로 수령방식 콤보(`.delivery-combo`, 방문대여/
+크레이지샷배송 대여만 노출)와 상품목록(Sony FX6-12 + 필수옵션 SONY PXW-Z90)을 각각
+선택해 요청 — 미노출 방식(퀵배송·무인보관함)이 이 상품 구성과 정합한지 검증, 반납방식도
+동일하게 검토.
+
+### 검증 결과 — 정합함(결함 없음)
+
+- **수령**: `computeAllowedMethodIds(cartProductRows)`(`+page.svelte:1255`)는 **본상품의
+  `allowed_method_ids`만** 교집합 계산 — 옵션상품은 이 계산에 전혀 포함되지 않음. Stage
+  실측: Sony FX6-12(본상품) `allowed_method_ids = [visit, crazydelivery]` — 화면 노출과
+  정확히 일치, 퀵배송·무인보관함 미노출은 admin 설정 그대로.
+- **옵션은 `delivery_rental_disabled`(`product_option_links`)라는 별도의 단순 boolean만
+  본다** — 옵션 자신이 독립 상품으로서 갖는 `allowed_method_ids`는 조회조차 하지 않음
+  (`+page.server.ts:351-360`). 실측: Sony FX6-12↔SONY PXW-Z90 옵션 링크는
+  `delivery_rental_disabled=false` — 크레이지샷배송 미차단과 일치.
+- **반납**: `computeReturnVisibleTabs`(`cartShippingFee.ts:161`)가 수령방식이
+  `is_delivery_type`이 아닐 때(현재 '방문대여') 배송계열 방식을 반납탭에서 추가 제외 —
+  `rental-fee-policy.md` §1 조건③과 일치.
+
+### Stephen 확정 — 향후 설계 원칙 (기록만, 착수 안 함)
+
+이번 검증 중 발견한 "옵션의 `allowed_method_ids`는 조회되지 않는다"는 사실에 대해 Stephen이
+아래를 **의도된 설계로 명시 확정**:
+
+1. **옵션상품은 본상품의 대여방식 허용목록을 그대로 따라야 정합함** — 옵션으로 등록된
+   상품이 (다른 화면에서는) 독립 부모상품으로도 존재해 자기 자신의 `allowed_method_ids`를
+   가질 수 있지만, "옵션으로 붙어있는 동안"에는 그 값을 배제해야 한다. 즉 현재 구현
+   (`delivery_rental_disabled` boolean만 사용, 옵션 자신의 `allowed_method_ids` 무시)은
+   버그가 아니라 정확히 의도된 동작.
+2. **옵션상품별 배송수단 세분화 제한 기능**(예: "이 옵션은 퀵배송만 안 되고 크레이지샷배송은
+   됨" 같은 방식별 개별 차단)을 향후 구현할 경우, 본상품의 `allowed_method_ids`(방식 자체의
+   허용/차단)와 옵션의 세분화 제한이 **동시에 걸릴 때 우선순위·교집합 규칙이 모호해질 위험**이
+   있다는 점을 Stephen이 지적 — 예를 들어 본상품이 이미 크레이지샷배송만 허용하는데 옵션이
+   "퀵배송만 차단"을 걸면 실질적으로 아무 효과가 없어 설정 의도와 실제 동작이 어긋나 보일 수
+   있음. 이런 충돌 케이스의 처리 규칙을 먼저 설계하지 않고 세분화 기능부터 만들면 안 됨.
+
+**BACKLOG 등록**: "옵션상품별 배송수단 세분화 제한" 기능은 위 1·2 원칙이 먼저 정리된 뒤에만
+착수 — 현재는 추가 검토·설계·구현 전부 불필요(Stephen 확정, 이번 세션 미착수).
 
 ---
 
@@ -881,6 +1446,121 @@ parent_product_id가 있으면 부모의 components를, 없으면 자기 자신�
 `npx svelte-check --tsconfig ./tsconfig.json` — 두 파일 신규 에러/경고 0건(기존
 무관 경고 1건은 다른 위치). `executeActionAccessGuard.test.ts` 11개 재실행 GREEN.
 DB 마이그레이션 없음(순수 애플리케이션 로직 변경, 기존 컬럼·엔드포인트 재사용).
+
+### 후속 수정 — 서명 API·페이지로드 자체에도 예약 만료(expired) 게이트 추가 (2026-09-10, 신규 세션)
+
+위 "수정" 절의 ②·③ 결정("서명 제출 엔드포인트는 건드리지 않고 채팅카드 버튼만
+비활성화한다 — 버튼을 못 누르니 제출 시점 차단은 불필요")은 고객이 채팅카드를
+거치지 않고 **이미 열려 있던 서명 페이지(`/contract/[token]`, 새로고침 전)나 직접
+링크·북마크로 접근하는 경로**는 막지 못하는 잔여 갭을 그대로 남겼다. 핸드오프
+리포트(`.claude/plan/세션 수정 히스토리 리포트(2026-09-10).md`) 검토 후 이 지점을
+Stephen에게 재확인 — "계약 발송 후 30분 내 미서명 시 만료되어야 하고, 이후 해당
+링크는 세상에 존재하지 않는 것처럼 폐기되어야 한다"는 목표를 재확정받아 아래 2개
+지점에 실제 서버측 게이트를 추가했다(라인 1807 DONE 블록의 "서명 API 갭" 수정이
+`'cancelled'`만 보고 `'expired'`를 놓친 것과 정확히 대칭되는 잔여 결함).
+
+```
+src/routes/api/contracts/[token]/sign/+server.ts — 예약상태 체크를
+reservationForGate?.status === 'cancelled' 단독 비교에서 send-chat/content(PATCH)가
+이미 쓰는 공용 판정 isContractIssueBlocked()(cancelled·expired·damage_claimed)로 교체.
+에러 메시지도 "취소되었거나 만료되었습니다"로 함께 갱신.
+
+src/routes/contract/[token]/+page.server.ts — 페이지 load()의 미서명 분기 리다이렉트
+조건에 signing.expires_at(30일) 체크와 OR로 isContractIssueBlocked(signedReservationStatus)
+추가 — 예약이 이미 expired/cancelled면 서명링크(30일) 자체는 안 지났어도 곧바로
+/contract/expired로 리다이렉트.
+```
+
+✅ `npm run check`(svelte-check) — 두 파일 신규 에러·경고 0건(기존 무관 에러 1건은
+`vite.config.ts`, 이번 변경과 무관).
+✅ `contractSign.test.ts` 5/5 GREEN(Stage DB 라이브 통합테스트).
+✅ `contractSigningGate.test.ts` 6/7 GREEN — 실패 1건("묶음주문 서명완료 통합알림
+카드 1건" 카운트 불일치)은 `git stash`로 원본(수정 전) 코드에서도 동일하게
+재현됨을 직접 대조 확인한 **기존 결함, 이번 변경과 무관**.
+⚠️ TDD 신규 테스트 미작성(expired 케이스 전용) — 기존 `contractSign.test.ts`가
+cancelled 케이스만 커버하고 expired 케이스에 대한 단위/통합 테스트가 없음. 이
+공백은 sp3-qa-agent 검수에서 별도 확인 필요.
+
+### GATE E 1차 검수 — sp3-qa-agent, ⚠️ 보류(TDD 테스트 공백)
+
+코드 자체(가드 로직·회귀·컴파일·범위)는 전부 PASS. 단 이 변경이 AGENTS.md TDD 강제
+도메인(예약 상태 게이팅)인데 신규 `expired` 분기 2곳을 검증하는 자동화 테스트가
+0건이라 GATE E 보류 판정(AGENTS.md GP-4 "TDD 도메인 테스트 없이 구현 금지" 위반 상태).
+참고용 지적(비블로킹) 1건도 별도 확인: `contractIssueGuard.ts`의 "damage_claimed는
+confirmed 이후에만 도달 가능" 주석이 `update_reservation_status` RPC(Migration 187)
+실제 구현과 다름(hold 포함 모든 non-terminal 상태에서 RPC 레벨 전환 자체는 허용됨,
+단 현재 CMS에 hold 상태에서 이를 트리거하는 UI 경로가 없어 실사용 버그로는 미발현).
+
+### TDD 테스트 신설 — sp2-tdd-agents 위임, ✅ 완료
+
+위 보류 사유를 해소하기 위해 sp2-tdd-agents에 테스트 신설만 위임(구현 코드 3개 파일
+—sign/+server.ts·+page.server.ts·contractIssueGuard.ts—은 절대 수정 금지 조건으로
+위임, 실제로 수정 없음 확인).
+
+```
+src/__tests__/services/contractSign.test.ts
+  — describe('예약 만료(expired) 게이트 — isContractIssueBlocked') 신설
+  · status='expired' 예약 서명 시도 → 409 + error에 "만료" 포함 +
+    contract_signings.signed_at이 여전히 null인지 DB 재조회로 확인
+  · (회귀방지) status='cancelled'도 동일 패턴으로 409 확인
+
+src/__tests__/services/paymentContractOrderRedesign.test.ts
+  — describe('EC-4: 미서명 + 예약 종료(expired/cancelled) 상태로 /contract/[token] 재접속') 신설
+  · status='expired' + 미서명(signing.expires_at은 미래로 남김, 즉 30일 만료가 아니라
+    이번에 추가한 isContractIssueBlocked 분기가 트리거되는 것을 정확히 겨냥) →
+    contractPageLoad 호출이 {status:302, location:'/contract/expired'}로 리다이렉트되는지 확인
+  · (회귀방지) status='cancelled'도 동일 리다이렉트 확인
+```
+
+✅ `npx vitest run src/__tests__/services/contractSign.test.ts
+src/__tests__/services/paymentContractOrderRedesign.test.ts` — 2 Test Files, **30/30 GREEN**
+(기존 26개 + 신규 4개, 기존 테스트 무회귀 확인).
+✅ 수정 파일은 테스트 파일 2개뿐 — 구현 코드 3개 파일은 git status상 이미 이전
+단계에서 modified 상태였을 뿐 이번 TDD 위임 작업으로 추가 변경 없음.
+
+git commit만 Stephen 대기(다른 파일들과 섞이지 않도록 아래 4개 파일만 개별
+스테이징 권장 — sign/+server.ts, contract/[token]/+page.server.ts,
+contractSign.test.ts, paymentContractOrderRedesign.test.ts).
+sp3-qa-agent 최종 재검수는 별도 진행 예정.
+
+### GATE E 최종 재검수 — sp3-qa-agent, ✅ 통과
+
+1차 보류 사유(TDD 테스트 공백) 해소 여부를 독립 재검증. 신규 테스트 4건을 직접
+열람해 거짓양성 여부 확인(특히 EC-4 테스트가 `signing.expires_at`을 실제로 미래값
+—`createSentContract()`가 `expires_at`을 지정하지 않아 Migration 146 기본값
+`now()+30일`이 적용됨—으로 남겨, 구 `expires_at` 만료 분기가 아니라 신규
+`isContractIssueBlocked` 분기만으로 리다이렉트가 트리거됨을 코드로 확인 — 거짓양성
+아님). `npx vitest run`으로 30/30 GREEN 직접 재실행 확인(`--reporter=verbose`로
+신규 4건 실행 포함 대조). Stage DB에 테스트 잔존 데이터 0건(ephemeral user·근접
+날짜 예약 전부 정리됨) 확인. 구현 코드 3개 파일이 TDD 위임 구간에서 무변경임을
+`git diff`로 재확인. 비블로킹 지적(`contractIssueGuard.ts` damage_claimed 주석
+부정확) 1건은 그대로 기록만 유지 — 후속 선택사항, GATE E 통과에 지장 없음.
+
+**✅ GATE E 최종 통과 — git commit만 Stephen 대기.**
+
+### 배포 반영 확인 — Stephen 커밋·푸시 완료, Stage·Production 양쪽 READY (2026-09-10)
+
+Stephen이 위 4개 파일(sign/+server.ts·contract/[token]/+page.server.ts·
+contractSign.test.ts·paymentContractOrderRedesign.test.ts)을 커밋(`b764e2b`)·푸시
+완료. Vercel MCP(vercel:deployment-expert)로 실제 배포 결과를 직접 조회해 확인:
+
+```
+Stage(preview)   — b764e2b 배포: READY (2026-09-10 18:10:51 KST)
+Production(main) — PR #283 머지(5c65816, 내용=b764e2b) 배포: READY (2026-09-10 18:12:32 KST)
+```
+
+같은 조회에서 직전 커밋 2건(a7a7fdd·0516afd)도 stage/production 양쪽 배포 전부
+READY로 함께 확인됨(별도 세션 작업분, 참고용). Production 런타임 에러(최근 24h)는
+`favicon.ico` 404 1건뿐 — 무해, 실질 장애 없음.
+
+⚠️ 참고(별건, 이번 작업 무관): `a7a7fdd` 배포 이력에서 정상 PR 머지 경로 외에
+`target=production`·`githubCommitRef=stage`·`gitDirty=1`로 표시되는 배포가 하나
+더 발견됨(16:30 KST, 결과는 READY) — PR 머지를 거치지 않고 stage 브랜치에서 CLI로
+직접 production 배포된 흔적으로 보임. 결과 자체는 정상이라 문제는 없으나 "PR 머지 =
+production 배포" 통상 흐름과 다른 경로가 한 번 섞였다는 점만 기록.
+
+**이 태스크 완전 종료 — 코드 구현·TDD 테스트·GATE E·git commit·push·Stage/Production
+배포 확인까지 전 단계 완료.**
 
 ---
 

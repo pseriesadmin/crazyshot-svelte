@@ -71,6 +71,9 @@
     dhero_return_book_id?: string | null
     dhero_synced_at?:      string | null
     tracking_number?:      string | null
+    /** 방문 지점명(Migration #480) — "수령방식"/"반납방식" 표시 시 "방식명 (지점명)"으로 조합 */
+    pickup_point_name?:    string | null
+    return_point_name?:    string | null
   }
 
   interface PaymentDetail {
@@ -744,6 +747,11 @@
     pending: '접수', hold: '신청대기', confirmed: '계약완료',
     shipped: '배송중', in_use: '대여중', return_requested: '반납요청',
     returned: '반납완료', completed: '완료', cancelled: '취소', damage_claimed: '파손신고',
+    // expired(HOLD 30분 자동만료) — 2026-09-10 추가. /cms/reservation '취소' 탭이
+    // status IN ('cancelled','expired')를 함께 보여주는데(2026-09-09), 목록 화면
+    // (+page.svelte STATUS_LABEL)에는 이미 있었으나 이 패널 자체 맵에는 누락돼 있어
+    // 상세 패널에서만 원문 'expired'가 그대로 노출되던 결함.
+    expired: '만료됨',
   }
 
   const PICKUP_LABELS: Record<string, string> = {
@@ -774,7 +782,11 @@
     failed:            '결제실패',
   }
 
-  const TERMINAL = new Set(['completed', 'cancelled', 'damage_claimed'])
+  // expired(HOLD 30분 자동만료) 추가(2026-09-10) — 누락 시 이미 죽은(재고 해제된)
+  // 예약에 "예약 취소" 버튼이 그대로 노출되고, 클릭하면 update_reservation_status RPC가
+  // (자체 종료상태 체크에도 expired가 빠져 있어) expired→cancelled 전환을 실제로
+  // 허용해버리는 결함으로 이어졌다 — RPC 쪽도 Migration #485로 동일하게 보강.
+  const TERMINAL = new Set(['completed', 'cancelled', 'damage_claimed', 'expired'])
 
   // §9 게이팅 완료 후 승인이력 표시 대상 상태 (rental-lifecycle.md 전체 상태 머신 기준)
   const APPROVAL_HISTORY_STATUSES = new Set([
@@ -1553,7 +1565,9 @@
       <div class="info-section">
         <div class="info-row">
           <span class="info-label">수령방식</span>
-          <span class="info-value">{row.pickup_method ? (PICKUP_LABELS[row.pickup_method] ?? row.pickup_method) : '-'}</span>
+          <!-- 방문 지점명(Migration #480, 2026-09-10) — "방식명 (지점명)" 형태로 병기.
+               contract-data/+server.ts의 {{수령방법지점}} 조합 형식과 동일하게 통일 -->
+          <span class="info-value">{row.pickup_method ? (PICKUP_LABELS[row.pickup_method] ?? row.pickup_method) : '-'}{row.pickup_point_name ? ` (${row.pickup_point_name})` : ''}</span>
         </div>
         <div class="info-row">
           <span class="info-label">수령 일시</span>
@@ -1561,7 +1575,7 @@
         </div>
         <div class="info-row">
           <span class="info-label">반납방식</span>
-          <span class="info-value">{row.return_method ? (PICKUP_LABELS[row.return_method] ?? row.return_method) : '-'}</span>
+          <span class="info-value">{row.return_method ? (PICKUP_LABELS[row.return_method] ?? row.return_method) : '-'}{row.return_point_name ? ` (${row.return_point_name})` : ''}</span>
         </div>
         <div class="info-row">
           <span class="info-label">반납 일시</span>

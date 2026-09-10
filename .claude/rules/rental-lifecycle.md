@@ -88,6 +88,21 @@ expired (만료됨)
   → 이 전환 자체가 재고 해제 (별도 해제 로직 없음 — service-operations.md §10)
   → /cms/reservation 목록에서 "만료됨" 필터로 조회 가능
   → STATUS_LABEL이 2026-08-31 이전에는 없어 목록에서 status 원문(expired)이 그대로 노출됐음 — RSV-A-B1로 수정
+  → "취소" 탭 확장(2026-09-09): `/cms/reservation` "취소" 필터가 `status IN
+    ('cancelled','expired')` 둘 다 함께 조회하도록 확장됨(`+page.server.ts` isCancelledTab →
+    `p_include_statuses: ['cancelled','expired']`) — `cancelled`와 `expired`는 "더 이상
+    진행되지 않는 예약"이라는 점에서 관리자 관점에 같은 탭에 묶이지만, 각 행 자체의 배지는
+    STATUS_LABEL로 여전히 "취소"/"만료됨"으로 구분 표시된다.
+  → ⛔ 종료(terminal) 상태 가드 3중 누락 결함(2026-09-10, Migration #485로 수정): 위 탭
+    확장으로 `expired` 예약이 CMS 상세 패널(`RentalDetailPanel.svelte`)에 열람될 수 있게
+    됐는데, 아래 3곳이 전부 `expired`를 종료상태로 인식하지 못하고 있었다 —
+    ① `RentalDetailPanel.svelte` `STATUS_LABEL`(원문 'expired' 그대로 노출),
+    ② 같은 파일 `TERMINAL` Set(완료/취소/파손신고만 인식 → "예약 취소" 버튼이 만료 건에도
+    노출됨), ③ `update_reservation_status` RPC(Migration #417)의 자체 종료상태 체크(위와
+    동일 3종만 → 버튼을 눌렀을 때 서버도 막지 않고 `expired→cancelled` 전환이 실제로
+    성공해버림). 셋 다 `expired` 추가로 수정(Migration #485,
+    `reservationExpiredTerminal.test.ts` TDD 3건 GREEN, Stage·Production 적용·실제
+    expired 예약으로 재현검증 완료).
 ```
 
 > ⚠️ hold가 "장바구니 담기 상태"와 "결제 완료 대기 상태" 둘 다를 의미함.
@@ -355,7 +370,7 @@ cancelled / damage_claimed → 취소 UI (✕ 아이콘 + 빨간 텍스트)
 
 | 동작 | RPC | 호출 위치 |
 |---|---|---|
-| 상태 변경 (라이프사이클·예약) | `update_reservation_status` | `/cms/reservation?/updateStatus` (절대 URL 고정) |
+| 상태 변경 (라이프사이클·예약) | `update_reservation_status` | `/cms/reservation?/updateStatus` (절대 URL 고정) — 종료상태 가드는 `completed/cancelled/damage_claimed/expired` 4종(Migration #485, 2026-09-10) |
 | 예약 승인 | `approve_reservation` | `/cms/reservation?/approveReservation` |
 | 채팅 알림 | `send_rental_chat_notification` | `/cms/rentals?/sendChatNotify` |
 | 액션 로그 기록 | `log_rental_action` | 현장 출고·반납 처리 시 |
@@ -442,7 +457,9 @@ CTA 새 창 열기 수정          : src/lib/components/chat/ActionCard.svelte (
 [ ] in_use + 기타 return → return_requested 경유?
 [ ] /cms/rentals에서 hold/pending 행이 목록에 노출되지 않음?
 [ ] isRentalView=true 시 승인/거부/예약취소 버튼 완전 숨김?
-[ ] completed/cancelled/damage_claimed → 다음 단계 버튼 미표시?
+[ ] completed/cancelled/damage_claimed/expired → 다음 단계 버튼 미표시?
+    (RentalDetailPanel.svelte TERMINAL Set 4종 — expired 누락 시 만료 건에도 "예약 취소"
+    버튼이 노출됨, 2026-09-10 Migration #485로 해소된 결함 재발 방지용 체크)
 [ ] log_rental_action visit_pickup → in_use (shipped 아님)?
 [ ] 스텝퍼 completed 상태 → returned 스텝에 done 처리?
 [ ] 스텝퍼 cancelled/damage_claimed → 취소 UI 표시?
@@ -467,6 +484,10 @@ CTA 새 창 열기 수정          : src/lib/components/chat/ActionCard.svelte (
 [ ] D-1 타이머 리셋 관련 변경 시(Migration 394) — D-3(payment_confirmed_at IS NOT NULL)
     조건을 건드리지 않았는가? GREATEST(created_at, sent_at) 기준이 "계약 미발송 hold"에서도
     created_at 단독으로 정확히 계산되는가?
+[ ] 종료(terminal) 상태 분류를 프런트(TERMINAL Set 등) 한쪽에서만 넓히고 서버측 RPC
+    (update_reservation_status의 v_current_status 종료상태 체크)를 함께 넓히지 않았는가?
+    (2026-09-10 — expired 3중 누락 결함이 정확히 이 비대칭 때문에 발생. 반대도 마찬가지:
+    RPC만 막고 버튼은 그대로 노출되면 관리자가 클릭해도 항상 실패하는 혼란스러운 UX가 됨)
 [ ] 고객의 탈퇴 신청 차단 조건을 바꿀 때(대여 상태 머신 변경 포함) — hold·confirmed·
     shipped·in_use·return_requested 상태가 모두 "진행중 대여" 범위에 포함돼 있는지 확인했는가?
     (service-operations.md §16 — 탈퇴 신청 시 RPC 레벨 차단 대상 상태)
@@ -487,4 +508,9 @@ GATE B 승인된 관리자 수동 "대기 전환" 버튼(chat.md §17-1)이라�
 존재해 "오직"이 더 이상 사실이 아니었음을 CMS 전역 정밀검증 v6에서 발견해 정정. | 2026-09-07
 HOLD 만료 정책 전면 반전(Migration 453, Stephen 확정) — "생성 후 30분(계약 발송 시 GREATEST
 리셋)"을 폐기하고 "계약 미발송 hold는 타이머 없음, 계약 발송 시각 기준으로만 30분"으로 교체.
-Stage·Production 적용 완료, TDD 29/29 GREEN.*
+Stage·Production 적용 완료, TDD 29/29 GREEN. | 2026-09-10 "expired" 종료(terminal) 상태
+가드 3중 누락 결함(RentalDetailPanel.svelte STATUS_LABEL·TERMINAL Set + update_reservation_
+status RPC 자체 종료상태 체크) 발견·수정(Migration #485) — 2026-09-09 "취소" 탭 확장으로
+CMS 상세 패널에서 expired 예약을 열람할 수 있게 되면서 노출된 결함. `reservationExpiredTerminal.
+test.ts` TDD 3건 신설, Stage·Production 적용 + 실제 expired 예약으로 재현검증 완료. GATE C에
+서버·프런트 종료상태 비대칭 점검 항목 1건 추가.*
