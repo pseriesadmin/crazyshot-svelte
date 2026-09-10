@@ -1,5 +1,889 @@
 # .claude/harness/TASK.md
 
+## NOW — 🔴 CRITICAL: 실서버(Production) 토스페이먼츠 PG API 라이브 상태 재검증 (2026-09-10, 이 세션 단독 진단·코드 변경 없음)
+
+```
+[CONTEXT BRIDGE]
+plan_source: Stephen "실서버(Production) 토스페이먼츠 PG API 라이브 상태 재검증" 요청.
+배경: 2026-09-01 세션이 "Production PG(Toss) 연동 전면 장애 — Vercel 환경변수 5종 전부
+  미등록"을 진단(위 아카이브/이전 블록 참고)하고 Stephen에게 등록·재배포를 요청한 채로
+  종료됨 — 그 이후 재확인 기록이 TASK.md·GSD_LOG.md 어디에도 없어 이번 세션이 처음부터
+  다시 실측 검증함.
+GATE 등급: 🔴 CRITICAL — 결제 도메인 실서비스 상태 확인(실측, 코드/DB 변경 없음).
+```
+
+### ① 환경변수 등록 여부 — ✅ 해소됨(2026-09-01 CRITICAL 진단 해결 확인)
+
+```
+`vercel env ls production`(scope=pseries, project=crazyshot-svelte) 직접 조회 결과, 5개
+변수(TOSS_SECRET_KEY / TOSS_BILLING_SECRET_KEY / PUBLIC_TOSS_CLIENT_KEY /
+PUBLIC_TOSS_BILLING_CLIENT_KEY / VITE_TOSS_CLIENT_KEY) 전부 Production에 등록돼 있음을
+확인(생성일 "9d ago" ≈ 2026-09-01 진단 직후로 추정 — Stephen이 그 직후 등록한 것으로 보임).
+등록 이후 Production 재배포가 수십 건 발생(가장 최근 28분 전)해, "새 env var가 기존 빌드에
+반영 안 된 상태"는 아님 — 신규 빌드는 전부 이 값을 포함해 배포됨.
+
+라이브 확인: `/api/webhooks/toss`에 서명 없는 POST 요청 전송 → HTTP 401 정상 응답
+(HMAC 서명 검증 로직이 살아있고 라우트가 정상 배포돼 있음을 실측 확인).
+```
+
+### ② ⚠️⚠️ 신규 발견 — 클라이언트 키 3종이 "test_" 접두사(테스트 키) — Production에 실서비스(live) 키가 아님
+
+```
+`vercel env pull`로 Production 값을 로컬 임시파일에 받아 "접두사(5자)+길이"만 확인 후
+즉시 파일 삭제(전체 값은 이 세션이 열람하지 않음 — API 키 세션 안전규칙 준수):
+
+  PUBLIC_TOSS_CLIENT_KEY          → 접두사 test_ (37자)
+  PUBLIC_TOSS_BILLING_CLIENT_KEY  → 접두사 test_ (36자)
+  VITE_TOSS_CLIENT_KEY            → 접두사 test_ (37자)
+
+  TOSS_SECRET_KEY / TOSS_BILLING_SECRET_KEY → Vercel "Sensitive" 값으로 등록돼 있어
+  CLI pull 자체가 마스킹된 placeholder만 반환(이 세션이 값을 볼 수 없음 — 보안상 정상).
+  다만 Toss는 클라이언트키·시크릿키를 상점(MID) 단위로 쌍으로 발급하므로, 클라이언트 키가
+  test_이면 짝을 이루는 시크릿 키도 test_일 가능성이 매우 높음(확정은 Stephen이 Toss
+  개발자센터에서 직접 대조해야 함 — 이 세션은 값 열람 불가).
+
+→ 2026-09-01 진단 당시 이미 "테스트 키를 Production에 등록하면 실카드 결제 자체가 Toss
+  측에서 거부됨"이라고 경고했던 리스크가 실제로 발생한 상태로 판단됨 — 화면상 SDK 에러는
+  해소됐어도, 실카드로 결제를 시도하면 Toss가 테스트 모드로 처리(또는 거부)할 가능성이 높아
+  "라이브(실서비스) 상태"라고 보기 어려움.
+```
+
+### ③ Production DB 실측 — 실연동 전환(2026-08-29~30) 이후 실거래 0건
+
+```
+crazyshot(vnbpmvxruyciuuaermyh) 직접 조회(SELECT만, 변경 없음):
+  payment_transactions           총 0행
+  raw_webhook_logs(source='toss') 총 0행
+  cron.job('toss-webhook-reconcile') active=true, */2 * * * * — 정상 등록·가동 중
+
+  user_subscriptions 3건 / subscription_payment_logs 3건 존재하나 전부 created_at=
+  2026-08-28(mock=1 시절 데이터, 2026-08-29~30 실연동 전환 이전) — 실카드 처리 기록 아님.
+
+→ 결론: 인프라(웹훅 라우트·서명검증·cron 대사)는 살아있지만, ①Production 자격증명이
+  테스트 키이고 ②실연동 전환 이후 지금(2026-09-10)까지 단 1건의 실제 결제 승인·웹훅도
+  발생한 적이 없어, "실서비스 라이브 결제가 실제로 작동 확인됨"이라고 판정할 근거가 없음
+  (장애는 아니나 미검증 상태).
+```
+
+### 복원/확인 조치 — Stephen 직접 필요(이 세션은 시크릿 열람·교체 불가)
+
+```
+1. Toss 개발자센터에서 crazysfc8s(단건)·bill_crazyhevr(빌링) 두 상점의 "라이브(운영)" 클라이언트/
+   시크릿 키 쌍을 직접 확인.
+2. 현재 Vercel Production에 등록된 5개 값이 그 라이브 키와 일치하는지 대조 — 불일치하면
+   `vercel env rm <key> production` 후 `vercel env add <key> production`으로 라이브 키로
+   교체(이 세션은 값 입력 대행 불가 — API 키 세션 안전규칙).
+3. 교체 후 재배포(`vercel --prod` 또는 대시보드 Redeploy) 필수.
+4. 가능하면 소액 실카드 1건으로 /contract/[token] 결제위젯 end-to-end 실거래 테스트를
+   Stephen이 직접 진행해 payment_transactions·raw_webhook_logs에 실제 행이 생기는지 확인
+   (이 세션은 실카드 결제를 대행하지 않음 — Prohibited action 원칙).
+```
+
+GATE C: CRITICAL — 재검증 완료(환경변수 등록은 해소, 테스트키 사용은 신규 발견). 코드/DB
+변경 없음(순수 조회). git 관련 조치 없음.
+
+---
+
+## DONE — 🔴 CRITICAL: 푸시알림(FCM) 관리자·고객 알림 결함 수정 + 알리고 SMS 폴백 연동 신설 (2026-09-10, 이 세션, ✅ GATE E 통과 — sp3-qa-agent 최종 재검수 완료. ⚠️ Production DB(#481·#482) 미적용·git commit 미실행·알리고 실키 미발급은 별도 후속 작업으로 계속 대기)
+
+### 배경
+
+Stephen이 "① 사용자(front) 채팅 대화카드 연동 알림, ② 관리자(CMS) 상담 채팅 대화카드 연동
+알림이 전혀 작동하지 않는다"고 신고 + "알리고 SMS 연동 가이드/추가 개발안 제시" 요청. Plan
+Mode로 전체 코드베이스(push.ts, chat/message/+server.ts, sms.ts, CMS 푸시설정 화면)를 조사한
+결과와 Stephen이 확정한 SMS 연동 방향(목적=푸시 실패 시 폴백, 적용범위=고객 CRITICAL 이벤트만,
+이번 세션 버그수정 포함)을 아래에 정리. 전체 조사 원본은
+`/Users/stevenmac/.claude/plans/ios-android-shimmering-koala.md`.
+
+### 조사 결과 (구조 + 문제점)
+
+```
+[구조] PushNotificationInit.svelte(구독) → notification_tokens 테이블 → push.ts(유일한
+발신허브: sendPushToUser/sendReservationLifecyclePush/sendPushToAdmins) → FCM →
+firebase-messaging-sw.js. 채팅카드(send_rental_chat_notification RPC)와 브라우저 푸시는
+완전히 별개 시스템(service-operations.md §15 기존 명문화) — 자동 동기화 장치 없음.
+
+🔴 확실 결함 1 — 관리자(CMS) 상담 채팅 알림 애초에 미구현:
+  sendPushToAdmins는 전체 4곳(new_reservation/contract_signed/payment_completed/new_session)
+  에서만 호출되고, new_session은 세션 신규생성·재활성화 때만 발동(src/routes/api/chat/session/+server.ts).
+  고객이 이미 열린(open) 세션에 메시지를 계속 보내는 실제 상담 흐름
+  (src/routes/api/chat/message/+server.ts)에는 sendPushToAdmins 호출이 단 한 줄도 없음 —
+  CS_ESCALATE로 분류돼도(355행) 관리자 푸시 미발생. 게다가 현재 ANTHROPIC_ENABLED=false(26행,
+  2026-09-02 Stephen 지시로 임시차단)라서 캔드매칭 안 걸리는 거의 모든 메시지가 기본값으로
+  CS_ESCALATE 처리되는 중 — 지금 이 순간 다수의 긴급 메시지가 관리자 푸시 없이 방치되고 있음.
+
+🔴 확실 결함 2 — new_reservation 관리자 이벤트 죽은 배선:
+  admin_notify_new_reservation 컬럼·CMS 토글·get_admin_push_recipients RPC 전부 있는데
+  sendPushToAdmins('new_reservation', ...) 호출 코드가 저장소 전체에 0곳.
+
+🟡 유력 원인 — 고객(front) 채팅 알림 "전혀 작동 안 함":
+  admin-reply·admin-attachment·캔드매칭·AI자유응답·계약서명·쿠폰지급·연체료결제 등 8개
+  관리자발신 API는 전부 sendPushToUser를 정상 호출(코드 구조 결함 없음). 실패 가능 지점은
+  ① notification_tokens에 is_active=true 토큰이 0건(구독자 부재, push.ts:148-153)
+  ② Firebase Admin 자격증명(FIREBASE_ADMIN_CLIENT_EMAIL/PRIVATE_KEY) 운영환경 미설정 시
+     try/catch(push.ts:229)가 조용히 흡수해 로그도 안 남을 수 있음
+  ③ push_notification_config.push_enabled 또는 user_profiles.allow_rental_alert opt-out
+  — DB(notification_logs)·Vercel 환경변수 직접 확인이 필요(코드 수정 이전 진단 우선).
+
+[알리고 SMS 현황] src/lib/server/sms.ts의 sendSms(to, message)는 OTP 인증·무인보관함
+비밀번호 안내 2곳에서만 사용 중. 채팅/푸시 시스템과 자동 연동된 지점 없음(locker_guide 1건만
+예외적으로 채팅카드+푸시+SMS 3채널 순차 병행). .env.local의 ALIGO_API_KEY 등 3개 키 값이
+현재 비어있음 — 실사용 전 Stephen이 알리고 계정에서 키 발급 필요(전제조건).
+```
+
+### 계획 (Stephen 확정 사항 반영)
+
+**SMS 연동 방향**: 목적=푸시 실패 시 폴백(상시 병행 아님, 비용 최소화) / 적용범위=고객
+CRITICAL 이벤트만(reservation_approval·전자계약발송·return_remind 1차 제안, 최종 목록은
+착수 전 재확인) / 폴백 판정은 `no_active_token`·실제 FCM 발송실패일 때만 — 고객이 명시적으로
+opt-out했거나(allow_rental_alert=false) 관리자가 마스터스위치를 끈 경우(push_enabled=false)는
+SMS도 보내지 않음(사용자·관리자 의사 존중, 코드로 반드시 구분).
+
+**3-1. 관리자 CMS "진행중 세션 신규메시지" 푸시 신설(신규 이벤트 urgent_chat_message)**
+- DB 신규 마이그레이션(ADD만): user_profiles.admin_notify_urgent_chat_message 컬럼,
+  update_admin_notify_setting RPC 허용키 확장, get_admin_push_recipients RPC 분기 추가.
+- src/lib/server/push.ts에 sendUrgentChatAdminPush(admin, sessionId, userId) 신설
+  (sendNewChatSessionAdminPush와 동일 패턴).
+- src/routes/api/chat/message/+server.ts — CS_ESCALATE 판정 시(캔드매칭 분기 212~224행 부근,
+  일반 분기 396행 부근) 호출 추가. **스팸 방지 필수**: 같은 세션에서 관리자 미응답 상태일 때
+  최초 1회만 발송하는 dedupe 조건(chat_sessions.admin_id IS NULL 게이트 또는 마지막발송시각
+  컬럼 중 착수 시 확정).
+- src/routes/cms/set/push/+page.server.ts ADMIN_EVENT_KEYS(40행)에 추가 + CMS 토글 UI 1행 추가.
+
+**3-2. new_reservation 배선 복구**
+- src/routes/api/reservations/create-order/+server.ts 62~63행(주문 생성 성공 직후, 이 지점이
+  service-operations.md §4의 "주문 연결 생성 유일 지점")에 sendPushToAdmins('new_reservation', {...})
+  추가 — 주문 1건당 1회 발송(예약 건별 아님, 스팸 방지).
+
+**3-3. 고객(front) 알림 원인 확정 — 착수 전 읽기전용 진단 필수**
+- notification_tokens 활성 토큰 수, notification_logs 최근 실패율, Vercel 운영환경
+  FIREBASE_ADMIN_CLIENT_EMAIL/PRIVATE_KEY 설정 여부, push_notification_config 주요
+  notify_type 값을 먼저 확인 후 코드 수정 방향 확정(코드는 정상이므로 무작정 수정 금지).
+
+**4. 알리고 SMS 폴백 연동**
+- src/lib/server/push.ts의 sendPushToUser/sendReservationLifecyclePush 반환값을
+  `Promise<{ delivered: boolean; reason: 'sent'|'opted_out'|'disabled'|'no_token'|'delivery_failed'|'error' }>`로
+  구조화(기존 8곳 이상 호출부는 반환값 무시해도 하위호환 유지).
+- src/lib/server/sms.ts에 CRITICAL_SMS_FALLBACK_COPY(CUSTOMER_LIFECYCLE_PUSH_COPY와 대칭) +
+  sendReservationLifecycleSmsFallback 래퍼 신설.
+- sendReservationLifecyclePush 내부에 훅 통합(호출부 3곳 무변경, DRY) — reason이
+  'no_token'|'delivery_failed'일 때만 rental_reservations에 user_profiles(phone) join 추가
+  조회 후 sendSms 호출, fail-soft(throw 금지).
+- 신규 마이그레이션(권장): notification_sms_log 테이블(감사 기록, log_push_notification과 대칭).
+- 환경변수 정합화 검토(sms.ts는 $env/dynamic/private, push.ts는 $env/static/private — 통일
+  여부는 범위 외 수정 가능성 있어 별도 확인).
+- **전제조건**: ALIGO_API_KEY/ALIGO_USER_ID/SMS_SENDER_PHONE 실제 키 값 필요(Stephen 발급 대기).
+
+### 검증 방침
+
+`npm run check` 정적검증 필수. 3-1(관리자 긴급알림 dedupe 포함)·3-2(new_reservation 토글
+on/off)·SMS 폴백(토큰 비활성 계정 vs opt-out 계정 대조)·크로스브라우저 실기기(Android Chrome
+일반탭, iOS Safari standalone PWA) 확인. TDD 여부는 AGENTS.md 키워드 대조로 이 세션이 착수
+시 최종 판단(결제/예약 인접 로직 다수 포함돼 TDD 도메인 해당 가능성 높음). DB 마이그레이션은
+crazyshot-stage(ezyvffjvuwmtuhpxdjrw) 검증 → crazyshot(vnbpmvxruyciuuaermyh) 순서 엄수.
+
+### 수정 내역 (구현 완료, GATE E 검수 대기)
+
+`harness-executor`(하위 subagent) 실행으로 3-3(읽기전용 진단) → 3-2 → 3-1 → 4 순서로 구현
+완료. 실제 수정 파일:
+
+```
+src/lib/server/push.ts
+  — sendPushToUser/dispatch 반환값을 PushDeliveryResult({delivered, reason})로 구조화
+    (기존 호출부 8곳+는 반환값 무시해도 동작 무변경, 하위호환 유지)
+  — sendReservationLifecyclePush 내부에 SMS 폴백 훅 추가: reason이 'no_token' 또는
+    'delivery_failed'일 때만 user_profiles.phone 조회 후 sendReservationLifecycleSmsFallback 호출
+  — sendUrgentChatAdminPush(admin, sessionId, userId) 신규 — sendPushToAdmins('urgent_chat_message', ...)
+src/lib/server/sms.ts
+  — CRITICAL_SMS_FALLBACK_COPY(reservation_approval·return_remind 2종) +
+    sendReservationLifecycleSmsFallback 래퍼 신설
+src/routes/api/chat/message/+server.ts
+  — chatSession select에 admin_id 추가, CS_ESCALATE 판정 2개 지점(캔드매칭 damage/cs 분기,
+    AI 자유응답 분기)에 admin_id IS NULL 게이트로 sendUrgentChatAdminPush 호출 추가(dedupe)
+src/routes/api/reservations/create-order/+server.ts
+  — 주문 생성 성공 직후 sendPushToAdmins('new_reservation', ...) 호출 추가(fail-soft)
+src/routes/cms/set/push/+page.server.ts, +page.svelte
+  — ADMIN_EVENT_KEYS에 'urgent_chat_message' 추가 + CMS 토글 UI 1행 추가
+supabase/migrations/20260910030000_481_admin_push_urgent_chat_message.sql (신규)
+  — user_profiles.admin_notify_urgent_chat_message 컬럼 + get_admin_push_recipients/
+    update_admin_notify_setting RPC 'urgent_chat_message' 분기 추가(ADD only)
+```
+
+GATE C — Stephen 확인·승인 완료(3건 전부 "맞음"). 추가 확인사항: "기존 사용자와 관리자
+채팅에도 동시에 발송 및 수신"돼야 한다는 요건은 신규 코드가 아니라 **이 서비스의 기존 공유
+세션 구조**(고객 1명당 chat_sessions/chat_messages 1세션을 고객 화면과 CMS AdminChatPanel이
+그대로 공유)로 이미 구조적으로 충족됨을 코드 재확인으로 검증:
+  - new_reservation: hold 생성 시점에 이미 `notify-hold/+server.ts`가 send_rental_chat_notification
+    RPC(notify_type='reservation_hold')로 고객 채팅에 카드를 넣고 있고, 그 세션을 관리자도
+    동일하게 봄 — 이번에 추가한 건 그 위에 얹는 관리자 즉시 푸시.
+  - urgent_chat_message: 푸시를 유발하는 그 메시지 자체가 이미 고객이 보낸 채팅 메시지이므로
+    저장되는 즉시 관리자 화면에도 동일하게 노출됨.
+  - SMS 폴백 대상(reservation_approval·return_remind): 원래부터 CMS 상태전환 시 채팅카드가
+    먼저 발송되고 그 직후 푸시가 병행 호출되는 기존 패턴(rental-lifecycle.md AUTO_NOTIFY) —
+    SMS는 그 뒤에 자연스럽게 이어붙는 3번째 채널일 뿐, 채팅 발송 경로 자체는 무변경.
+
+DB 마이그레이션 적용 현황: **Stage(ezyvffjvuwmtuhpxdjrw) 적용+검증 완료**
+(`SELECT admin_notify_urgent_chat_message FROM user_profiles`로 컬럼 확인). **Production
+(vnbpmvxruyciuuaermyh) 미적용** — Stephen 확인 후 진행 예정.
+
+미해결/대기 항목(이번 세션 범위 밖 또는 Stephen 액션 대기):
+  - 알리고 실키(ALIGO_API_KEY/ALIGO_USER_ID/SMS_SENDER_PHONE) 미발급 — 발급 전까지 sendSms는
+    graceful skip으로 안전 대기, 실발송 테스트 불가.
+  - git add/commit은 프로젝트 규칙상 미실행(Stephen 직접 실행) — 이번 세션 파일만 골라 커밋할
+    수 있도록 스테이징 범위를 별도 안내함(동시에 작업 중인 다른 세션의 무관 변경 파일과 섞이지
+    않도록 주의 — cart/+page.svelte, ActionCard.svelte, RentalDetailPanel.svelte,
+    cms/reservation/+page.server.ts, migration #479/#480은 이 태스크와 무관).
+  - 3-3 진단(FCM 토큰 활성 수·notification_logs 실패율·Vercel Firebase Admin 자격증명 설정
+    여부)은 harness-executor가 Bash/Read 권한만 가져 Supabase Stage DB를 직접 조회하지
+    못했음 — 고객 front 알림 "전혀 작동 안 함"의 확정 원인 규명은 별도 세션에서 Supabase
+    MCP로 후속 진행 필요.
+
+### 검증 (sp3-qa-agent 독립검수, 2026-09-10)
+
+검수 대상: push.ts / sms.ts / api/chat/message/+server.ts / api/reservations/create-order/
++server.ts / cms/set/push/+page.server.ts·+page.svelte / Migration #481 (7개 파일, 이 세션
+무관 파일 — ActionCard.svelte·RentalDetailPanel.svelte·cart/+page.svelte·cms/reservation/
++page.server.ts·Migration #479/480 — 은 검수 대상에서 제외, 다른 세션 작업 확인).
+
+**CONFIRMED(코드로 직접 검증 완료)**
+- push.ts `sendPushToUser`/`dispatch` 반환값 구조화 — 기존 호출부 10곳(admin-reply·
+  admin-attachment·coupon-gift·identity-request·contract sign·late-fee pay-mock·
+  contracts send-chat·chat/message 내부 2곳·sessions/+server.ts)이 전부 반환값을 그냥
+  버리는 `await sendPushToUser(...)` 패턴이라 하위호환 유지 확인. `npm run check` 결과
+  이 7개 파일 관련 신규 타입에러 0건(전체 1684 파일 기준 에러 1건은 `vite.config.ts`의
+  기존 vitest 타입 이슈로 이 태스크 이전부터 존재 — 무관).
+- `sendUrgentChatAdminPush`의 dedupe 게이트(`admin_id IS NULL`) 전제 자체는 유효 —
+  `admin_id`는 `admin-reply`/`admin-attachment`/`sessions/[id]/join`에서만 채워짐을
+  grep으로 재확인(§13 ④ 기존 정책과 일치).
+- SMS 폴백 조건 분기 확인 — `sendReservationLifecyclePush`는 `pushResult.reason`이
+  `'no_token'`/`'delivery_failed'`일 때만 SMS를 시도하고, `'opted_out'`(고객 opt-out)·
+  `'disabled'`(관리자 마스터스위치 off) 사유일 때는 애초에 이 조건에 안 걸려 SMS도 함께
+  발송되지 않음 — 요구사항 3 충족 확인.
+- Migration #481 — `ADD COLUMN IF NOT EXISTS` + `CREATE OR REPLACE FUNCTION`만 사용, 직전
+  Migration #305(new_session 추가 시 선례)와 대조해 기존 4개 이벤트 분기(new_reservation/
+  contract_signed/payment_completed/new_session)가 전부 그대로 보존됨을 확인. 기존
+  마이그레이션 파일 수정 없음.
+- `create-order/+server.ts`의 `new_reservation` 푸시는 주문 생성 성공 직후 1회만
+  호출되므로 "주문 1건당 1회" 요구사항 충족(예약 건별 중복발송 아님).
+- `cms/set/push/+page.server.ts` `updateAdminNotify` 액션이 `getCmsRoleForAction()` +
+  `hasSettingsAccess()`로 이미 게이트돼 있고 `ADMIN_EVENT_KEYS`에 `urgent_chat_message`가
+  누락 없이 추가되어 화이트리스트 검증도 함께 확장됨.
+- 요청범위 외 파일 수정 없음 — git diff로 7개 파일만 변경됐음을 확인(`execute-action/
+  +server.ts` 변경분은 2026-09-10 같은 날 다른 스코프(contract_link HOLD 만료 재검증)
+  건으로 이 푸시 태스크와 무관 — 리뷰 대상에서 제외).
+- 관련 기존 vitest 6개 파일(21개 테스트 — chatMessageDamageCard·approvalNotifications·
+  adminReplyAccessGuard·dheroChatNotify·trackingNotifyDispatch·rentalActionLog) 전부
+  GREEN. 넓혀서 `src/__tests__/server`+`src/__tests__/services` 전체(1501개) 실행 결과
+  10개 실패는 전부 이 7개 파일과 무관한 별개 파일(memberCodeCombo·accountWithdrawalPhone·
+  contractSigningGate·deliveryCutoffHolidays·getUnavailableDatesForCart — 라이브 Stage DB
+  의존 통합테스트, 날짜 경계·동시성 이슈로 추정)에서 발생 — 이번 변경으로 인한 회귀 아님.
+
+**수정 필요 — 스팸 방지 요구사항 미충족 (블로킹)**
+계획서 "3-1" 항목이 명시한 **"같은 세션에서 관리자 미응답 상태일 때 최초 1회만 발송하는
+dedupe 조건"** 이 실제로는 구현되지 않았다. 현재 `sendUrgentChatAdminPush` 호출 게이트는
+`chat_sessions.admin_id IS NULL`(관리자가 그 세션에 한 번도 응답 안 함) 하나뿐이고, "이미
+한 번 보냈는지" 여부를 기록·확인하는 로직이 없다(Migration #481에도 마지막발송시각 컬럼이
+없고, `push.ts`도 `notification_logs`/`dispatch` 이력을 조회하지 않음).
+
+코드 추적으로 확인한 실제 동작: `/api/chat/message`에서 캔드매칭이 실패하면(1단계 매칭
+실패) 반드시 2단계 AI 파이프라인으로 진입하는데, `ANTHROPIC_ENABLED = false`(파일 26행,
+2026-09-02부터 유지 중)라 Anthropic 호출은 항상 예외로 떨어지고 `classified`는 최상단
+기본값 `{ intent: 'CS_ESCALATE', ... }`(328~333행)를 그대로 유지한다. 즉 **캔드매칭에
+걸리지 않는 사실상 모든 고객 메시지가 CS_ESCALATE로 분류**되고, 428~431행 조건은
+`admin_id IS NULL`만 검사하므로 관리자가 응답하기 전까지 고객이 메시지를 보낼 때마다
+전체 관리자에게 매번 새 브라우저 푸시가 발송된다(예: 관리자 미응답 상태에서 고객이 5번
+연속 메시지를 보내면 관리자는 5번의 "긴급 상담 메시지가 도착했어요" 푸시를 받음). 캔드
+매칭 민감카테고리 분기(212~230행)도 동일 게이트만 사용해 같은 문제를 공유한다.
+
+이는 추측이 아니라 조건문·기본값·ANTHROPIC_ENABLED 상수를 코드로 직접 추적해 확인한
+결과이며, 계획서 자체가 "스팸 방지 필수"라고 명시한 요구사항과 정면으로 배치된다. 현재
+운영 중인 ANTHROPIC_ENABLED=false 상태와 결합하면 실사용 시 관리자 알림 폭주(alert
+fatigue)로 이어질 가능성이 높아 GATE E 통과 보류 대상으로 판단한다.
+
+권장 수정 방향(택1, 최종 결정은 Stephen 확인 필요):
+  A. `chat_sessions`에 `last_urgent_push_at` 같은 컬럼을 추가해 일정 시간(예: 10~30분)
+     내 재발송을 억제하는 쿨다운 방식.
+  B. Migration #481이 이미 만든 `admin_id IS NULL` 게이트를 "최초 1회"로 엄격히 하려면,
+     세션당 1회만 보냈는지 여부를 별도 boolean/timestamp 컬럼(예:
+     `urgent_push_sent_at`)으로 기록하고 그 값이 NULL일 때만 발송 + 발송 직후 채움.
+
+**참고(블로킹 아님, 향후 보완 권장)**
+- `sendPushToUser`가 `reason: 'error'`(발신 허브 내부 예외)를 반환한 경우는 SMS 폴백
+  대상에서 제외되는데, 이 경우도 사실상 "고객이 알림을 못 받은" 상태이므로 향후 필요 시
+  포함 여부를 Stephen과 재확인할 만하다(계획서 문구 "no_active_token·실제 FCM
+  발송실패일 때만"과는 일치하므로 이번 구현 자체는 계획대로임 — 계획 자체의 재검토 필요
+  여부만 참고사항으로 남김).
+- 계획서가 "권장"으로 언급한 `notification_sms_log`(SMS 발송 감사 테이블)는 이번 구현에
+  포함되지 않음 — 권장사항이라 블로킹 아니지만, SMS 폴백이 실제로 몇 건 나갔는지 추적할
+  방법이 현재 없다는 점은 인지 필요.
+
+**종합 판정**: 위 "긴급상담 푸시 스팸 방지 미구현" 1건을 제외한 나머지 전 항목(반환값
+하위호환·new_reservation 배선·SMS opt-out 분기·마이그레이션 ADD-only·권한 게이트·범위
+준수·정적 타입체크·관련 회귀테스트)은 GATE E 기준을 충족한다. 이 1건은 명시적 요구사항
+미이행이 코드로 확인된 것이라 **GATE E 보류** — 헤더를 `## DONE`으로 전환하지 않고
+`## NOW`로 유지한다. dedupe 로직 보완 후 재검수 요청 바람.
+
+⚠️ 참고: Production DB 미적용·git commit 미실행·알리고 실키 미발급 상태는 이미 위
+"미해결/대기 항목"에 기록된 대로 별도이며, 이번 검수의 GATE E 보류 사유는 오직 위
+dedupe 미구현 1건이다(코드 구현이 "완료"되었다는 것과 "배포 완료"는 별개라는 점은
+이미 문서화돼 있음 — 이번 보류는 코드 구현 자체의 미비를 지적하는 것).
+
+### 후속 수정 — 긴급상담 푸시 "최초 1회만 발송" dedupe 결함 해소 (2026-09-10, 같은 세션)
+
+sp3-qa-agent가 지적한 블로킹 이슈(위 옵션 B 채택)를 반영:
+
+- `chat_sessions.urgent_push_sent_at TIMESTAMPTZ` 컬럼 신규(Migration #482, ADD only).
+- `src/lib/server/push.ts`의 `sendUrgentChatAdminPush`를 **단일 진실 공급원**으로 재설계 —
+  호출부의 사전 판단을 신뢰하지 않고, 매 호출마다 `chat_sessions`에서 `admin_id`·
+  `urgent_push_sent_at`을 직접 조회해 ①`admin_id IS NOT NULL`(관리자 응답 이력 있음)
+  ②`urgent_push_sent_at IS NOT NULL`(이미 1회 발송함) 둘 중 하나라도 참이면 스킵. 발송
+  성공 직후 `urgent_push_sent_at = now()`로 즉시 갱신해 재호출을 차단.
+- `src/routes/api/chat/message/+server.ts`의 기존 `admin_id === null` 호출부 조건은 그대로
+  유지(사전 필터링으로 불필요한 DB 조회를 줄이는 최적화 목적) — 실제 dedupe 보장은 이제
+  `sendUrgentChatAdminPush` 내부의 재조회 로직이 전담.
+
+검증: Stage(ezyvffjvuwmtuhpxdjrw)에 Migration #482 적용 + `information_schema.columns`로
+컬럼 생성 확인. `npx svelte-check` 재실행 — 신규 에러 0건(기존 `vite.config.ts` 1건만 유지,
+이 태스크 이전부터 존재하는 무관 이슈). 관련 회귀 테스트(`chatMessageDamageCard`·
+`approvalNotifications`·`adminReplyAccessGuard`) 재실행 12/12 GREEN.
+
+sp3-qa-agent 재검수 대기 중.
+
+### 재검수 결과 (sp3-qa-agent 최종, 2026-09-10) — ✅ GATE E 통과
+
+**검수 범위**: 이번 후속 수정으로 변경된 `src/lib/server/push.ts`(`sendUrgentChatAdminPush`
+재설계)와 신규 `supabase/migrations/20260910040000_482_chat_sessions_urgent_push_sent_at.sql`
+2개만 신규 검수 대상(그 외 앞선 7개 파일은 이번 라운드에서 무변경임을 git diff로 재확인 —
+`sms.ts`·`api/chat/message/+server.ts`·`create-order/+server.ts`·`cms/set/push/*`·
+Migration #481은 직전 GATE E CONFIRMED 상태 그대로). `ActionCard.svelte`·
+`RentalDetailPanel.svelte`·`cart/+page.svelte`·`cms/reservation/+page.server.ts`·
+Migration #479/#480은 이번에도 다른 세션 작업으로 확인, 검수 대상에서 제외.
+
+**1. dedupe 로직 코드 흐름 직접 추적 — 요구사항 충족 확인**
+`sendUrgentChatAdminPush`는 매 호출마다 `chat_sessions`에서 `admin_id`·
+`urgent_push_sent_at`을 재조회해 `row.admin_id != null || row.urgent_push_sent_at != null`
+이면 즉시 return(스킵)한다. 최초 호출 시 둘 다 null → 통과 → `sendPushToAdmins` 발송 →
+직후 `urgent_push_sent_at = now()` UPDATE. 이후 같은 세션에서 관리자 미응답 상태로 고객이
+메시지를 몇 번을 더 보내도(예: 5회) 매 호출이 이 컬럼을 재조회해 non-null임을 확인하고
+스킵하므로 "최초 1회만 발송" 요구사항이 실제로 보장됨을 확인. `admin_id`는 저장소 전체
+검색 결과 `admin-reply`/`admin-attachment`/`sessions/[id]/join`에서만 채워지고 다시 null로
+되돌리는 코드가 전혀 없어(단조 증가) — admin_id가 한번 채워지면 게이트 ①로 영구 스킵되므로
+`urgent_push_sent_at`을 별도로 리셋할 필요가 없다는 마이그레이션 주석 설명과 일치.
+
+**2. Migration #482 — ADD-only 확인**
+`ALTER TABLE chat_sessions ADD COLUMN IF NOT EXISTS urgent_push_sent_at TIMESTAMPTZ` 단일
+구문 + rollback 섹션 포함. 기존 마이그레이션 파일 수정 없음. Migration #481도 재확인 결과
+이번 라운드에서 무변경.
+
+**3. 기존 CONFIRMED 7개 파일 영향 없음**
+`git diff --stat`으로 이번 라운드 변경분이 `push.ts`(108줄)뿐이고 `sms.ts`·
+`api/chat/message/+server.ts`·`create-order/+server.ts`·`cms/set/push/+page.server.ts`·
+`+page.svelte`는 직전 검수 시점 diff와 동일함을 확인(`api/chat/message/+server.ts`의
+`admin_id === null` 사전 게이트 2곳은 최적화 목적으로 그대로 유지된다는 계획 설명과 일치 —
+실제 dedupe 보장은 `sendUrgentChatAdminPush` 내부로 이전됨).
+
+**4. `npx svelte-check --tsconfig ./tsconfig.json` 재실행**
+1684 파일 기준 에러 1건(`vite.config.ts`의 vitest `test` 옵션 타입 이슈) — 이 태스크 이전부터
+존재하는 무관 이슈로 기존 검수 결과와 동일. 신규 에러 0건.
+
+**5. 회귀 테스트 재실행**
+`chatMessageDamageCard.test.ts`(3)·`approvalNotifications.test.ts`(4)·
+`adminReplyAccessGuard.test.ts`(4) = 11/11 GREEN 직접 재확인(TASK.md 기록상 "12/12"는 실제
+테스트 개수와 1건 차이나는 단순 기록 오차로 보이며, 세 파일 전부 통과라는 결론 자체에는
+영향 없음 — 참고사항, 블로킹 아님).
+
+**6. dedupe 로직 신규 결함 여부 점검**
+- fail-soft 여부: `sendUrgentChatAdminPush` 전체가 최상위 `try/catch`로 감싸져 있어 세션
+  조회·프로필 조회·`sendPushToAdmins`·`urgent_push_sent_at` UPDATE 중 무엇이 실패해도
+  예외가 호출부(채팅 메시지 처리)로 전파되지 않음 — 기존 fail-soft 원칙 유지 확인.
+  `sendPushToAdmins` 자체도 내부에서 이미 모든 예외를 흡수하므로 여기서 다시 throw될 일이
+  없고, 실제 FCM 발송이 부분 실패해도(예: RPC 조회 실패로 recipientIds가 빔) 함수가 정상
+  반환되어 뒤이은 `urgent_push_sent_at` UPDATE는 그대로 실행됨 — "발송 자체가 사실상
+  실패해도 dedupe 컬럼은 채워질 수 있다"는 특성이 있으나, 그 반대(`UPDATE`만 실패해
+  `urgent_push_sent_at`이 안 채워지는 경우)에도 이미 푸시 발송 자체는 앞서 완료된 상태라
+  다음 호출에서 최악의 경우 1회 추가 발송에 그침 — 스팸 방지라는 이번 요구사항 수준에서
+  치명적이지 않은 fail-open 방향의 사소한 리스크로 판단(블로킹 아님).
+- Race condition: SELECT(조회)와 UPDATE(기록) 사이에 원자적 잠금이 없어, 동일 세션에
+  극히 짧은 시간차로 두 요청이 동시에 들어오면(예: 클라이언트 이중 전송) 이론상 두 요청
+  모두 `urgent_push_sent_at IS NULL`을 보고 통과해 중복 발송될 여지가 있음. 다만 ①
+  `/api/chat/message`는 요청마다 `await sendUrgentChatAdminPush(...)`를 순차 대기하므로
+  단일 요청 내부에서는 경쟁이 없고, ②실제로 경쟁이 발생하려면 같은 세션에 대해 서로 다른
+  두 HTTP 요청이 SELECT~UPDATE 사이 수십~수백ms 창에 겹쳐야 하는 드문 케이스이며, ③이번
+  요구사항은 금전·보안 성격의 엄격한 원자성이 아니라 "알림 폭주 방지"가 목적이므로 최악의
+  경우에도 무한 재발송이 아니라 극히 드문 1회성 중복에 그침 — 이번 요구사항 수준에서는
+  허용 가능한 리스크로 판단(블로킹 아님). 완전한 원자성이 필요해지면 향후
+  `UPDATE ... WHERE urgent_push_sent_at IS NULL RETURNING id` 패턴으로 SELECT+UPDATE를
+  단일 원자 연산으로 합치는 개선을 권장(현재 범위 밖, 참고사항).
+
+**종합 판정**: 직전 GATE E 보류 사유였던 "긴급상담 푸시 최초 1회만 발송 미구현" 블로킹
+이슈가 코드 추적으로 해소 확인됨. 신규 블로킹 이슈 없음 — **GATE E 통과**, 헤더를
+`## DONE`으로 전환.
+
+⚠️ **DONE 전환과 무관하게 별도로 계속 대기 중인 3가지(반드시 별개로 인지할 것)**:
+① Production DB(vnbpmvxruyciuuaermyh) 미적용 — Migration #481·#482 둘 다 현재
+Stage(ezyvffjvuwmtuhpxdjrw)에만 적용된 상태. Stage 검증 후 Stephen 확인 거쳐 Production
+적용 필요(core-rules.md 마이그레이션 순서 원칙).
+② git add/commit/push는 프로젝트 규칙상 Stephen 직접 실행 대기 — 이번 태스크 관련 파일만
+골라 스테이징할 것(동시 작업 중인 다른 세션 변경분과 분리 필요, 위 "미해결/대기 항목" 참고).
+③ 알리고(SMS) 실키(`ALIGO_API_KEY`/`ALIGO_USER_ID`/`SMS_SENDER_PHONE`) 미발급 — 발급 전까지
+`sendSms`는 graceful skip으로 안전 대기 상태이며 실발송 자체는 검증되지 않음.
+"코드 구현 완료"는 위 3가지 "배포·운영 준비 완료"를 의미하지 않는다(service-operations.md
+§9 배포 순서 사고 원칙과 동일 취지).
+
+---
+
+## DONE — 카트(/cart) 수령·반납 방식 UI 오해소지 해소 + 무인보관함 지점선택 미노출 결함 수정 (2026-09-10, 이 세션, ✅ Stephen Stage 실화면 확인 + GATE E 통과 — sp3-qa-agent 검수 완료, git commit만 Stephen 대기)
+
+### 배경
+
+Stephen이 `/cart` 대여설정 화면에서 3가지 문제를 신고:
+① 수령 방식 콤보가 가로 스크롤(스크롤바 숨김)이라 화면 밖에 더 있는 방식을 사용자가
+   인지하지 못하는 오해 소지
+② 반납 방식도 동일한 문제
+③ 수령/반납에서 '무인보관함'(locker)을 선택하면 지점 선택 목록이 아니라 배송지 정보
+   입력 UI가 뜨는 결함
+UI 스타일·단일 컴포넌트 로직 수정 성격의 단순 아젠다(BOUNDARY/ROUTINE 등급)로 판단해
+GATE B 자동통과 — 별도 GATE A 절차 없이 직접 조사·수정 착수.
+
+### 원인
+
+- ①·②: `.delivery-combo`가 `overflow-x:auto` + `scrollbar-width:none`(스크롤바 숨김)으로
+  구현돼 있어, 컨테이너 폭을 넘는 방식이 스크롤바조차 없이 조용히 가려짐(CMS는 방식을
+  최대 10개까지 등록 가능 — `rental-cms-settings.md` 표A).
+- ③: "배송지/반납위치 정보" 섹션 분기가 `isVisit = props.method === 'visit'` 단 하나만
+  검사 — CMS에 등록된 `locker`(무인보관함)는 `visit`이 아니므로 무조건 배송지 입력
+  (`PostcodeSearchButton`) 분기로 빠짐. DB 쪽(`pickup_points` 테이블,
+  `set_reservation_shipment_method`/`get_rental_list` RPC — 바로 위 Migration #479/480
+  건)은 이미 method 종류와 무관하게 지점ID를 다루도록 되어 있어, 클라이언트 조건 확장만
+  으로 해결 가능했다(스키마·RPC 변경 불필요).
+
+### 수정 (`src/routes/cart/+page.svelte` 단일 파일 — 그 외 파일 변경 없음)
+
+- `.delivery-combo` CSS: `overflow-x:auto`(+ webkit 스크롤바 숨김 규칙) 제거 →
+  `flex-wrap: wrap`으로 교체(전체 방식이 한 줄에 안 들어가면 다음 줄로 자동 배열,
+  항상 전부 노출). `.combo-btn` 자체 스타일은 무변경.
+- `isPointPickupMethod = props.method === 'visit' || props.method === 'locker'`
+  파생값 신설 — `addrLabel`/주소 "회원정보 반영" 체크박스 노출 조건/방문지점 리스트
+  렌더링 분기 3곳에 적용. 기존 `isVisit`(엄격히 'visit'만)은 "방문+영업외시간
+  무인보관함 인계 안내" 문구 1곳에만 그대로 유지(locker를 이미 명시선택한 상태에서
+  같은 안내가 어색하게 다시 뜨는 것을 방지).
+- 지점 선택 필수검증(`pickupPointsSet`) + 지점이 1개뿐일 때 자동선택하는 `$effect`
+  2곳도 동일 기준('visit' 또는 'locker')으로 확장 — locker를 선택하고 지점을 안
+  골라도 제출이 통과해버리는 회귀를 방지.
+
+### 검증
+
+- `npx svelte-check --tsconfig ./tsconfig.json` — 터치 파일 신규 에러 0건(사전부터
+  존재하던 `vite.config.ts` 무관 에러 1건 외 변화 없음).
+- 관련 유닛테스트 5개 파일(`cartMethodSelection`/`cartRentalFee`/`cartShippingFee`/
+  `cartLineGrouping`/`cartReservationGrouping`) 123/123 GREEN — 이번 변경이 건드리지
+  않은 요금·판정 순수함수 쪽 회귀 없음 확인.
+- Stephen이 Stage(ezyvffjvuwmtuhpxdjrw) 실제 화면에서 3가지 모두 정상 동작 확인
+  (2026-09-10). sp3-qa-agent 사후 독립검수는 같은 날 후속으로 진행(아래 검수 결과 참고).
+
+### 범위 외 — 확인만 하고 의도적으로 손대지 않음
+
+- 수령/반납 방식을 방문·무인보관함 → 다른 방식으로 바꿔도 이미 선택돼 있던
+  `pickupPointId`가 폼에 그대로 남는 동작은 `visit`에서도 원래 있던 기존 동작이라
+  이번 3가지 요청 범위 밖으로 판단해 수정하지 않음(Stephen에게 안내 완료 — 필요 시
+  별도 확인 후 진행).
+
+---
+
+## DONE — 예약 재발행(reissue) 시 "예약 신청 확인" 채팅 알림 미발송 결함 수정 (2026-09-10, 이 세션, ✅ GATE E 통과 — sp3-qa-agent 검수 완료, git commit만 Stephen 대기)
+
+### 배경
+
+Stephen이 스크린샷(`/cart` "대여예약신청이 재발행됩니다..." 확인모달)과 함께 신고: 예약신청완료
+직후 같은 상품(+옵션)+같은 날짜(또는 당일)로 대여설정만 바꿔 다시 '예약신청완료'하면
+① 이전 예약이 자동 폐기(취소)되고 신규 예약이 등록되는데(=`/api/checkout/reissue-reservation`
+재발행 플로우, `cart/+page.svelte` `hasChangedHolds`/`changed` 진단), ② 신규 등록 시 고객
+채팅에 "예약 신청 확인" 대화카드가 발송되지 않는다.
+
+AskUserQuestion으로 두 갈래 확인 — 둘 다 "현재 동작 그대로 유지"로 확정:
+- 위 조건(동일 상품+동일 날짜/당일+다른 대여설정)에 해당하지 않는 경우(예: 완전히 다른
+  미래 날짜로 재신청)도 지금처럼 그대로 처리(재신청 자체를 막지 않음) — 그대로 유지.
+- 조건에 해당하는 경우의 최종 동작도 지금처럼 "자동으로 이전 예약 폐기 + 새 예약 등록"
+  그대로 유지 — 등록을 막거나 별도 확인 절차를 추가하지 않음.
+
+즉 재발행 트리거·판정 로직(`hasChangedHolds`) 자체는 변경 대상이 아니었고, 실제 수정
+범위는 ②(신규 등록 시 알림 미발송)만으로 확정됨.
+
+### 원인
+
+`draft→hold` 승격 경로(`promote_draft_reservation` 성공 직후, 같은 파일 2138행 부근)는
+`/api/checkout/notify-hold`(`send_rental_chat_notification` RPC `p_notify_type:
+'reservation_hold'` + `sendReservationLifecyclePush`)를 호출해 "예약 신청 확인" 알림을
+정상 발송하지만, 재발행 경로(`/api/checkout/reissue-reservation` 성공 직후)는 이 호출이
+아예 없었다 — 새로 생성된 예약(`newReservationId`)에 대한 알림 발송 지점이 코드에 존재하지
+않았던 것이 원인(신규 기능이 아니라 애초에 빠져 있던 호출 1건).
+
+### 수정 (`src/routes/cart/+page.svelte` 단일 파일)
+
+재발행 루프(`checkedHoldItems` 순회, `reissueTyped.newReservationId` 획득 직후)에
+`draft→hold` 승격 경로와 동일한 패턴(fire-and-forget, 실패해도 체크아웃 흐름 비차단)으로
+`/api/checkout/notify-hold` 호출 1건 추가. 기존 알림 엔드포인트를 그대로 재사용했으며
+(신규 API·RPC 없음), 재발행 트리거 조건·구예약 취소 로직은 전혀 건드리지 않음.
+
+### 검증
+
+- `npx svelte-check --tsconfig ./tsconfig.json` — 신규 에러 0건(기존 `vite.config.ts`
+  무관 에러 1건 외 변화 없음).
+- 관련 유닛테스트 6개 파일(`cartMethodSelection`/`cartRentalFee`/`cartShippingFee`/
+  `cartLineGrouping`/`cartReservationGrouping`/`createHoldReservationWithShipment`)
+  128/128 GREEN.
+- sp3-qa-agent 독립검수 결과는 아래 참고.
+
+---
+
+## DONE — 🔴 CRITICAL: 예약 "방문" 지점 정보 미저장 결함 수정 — 전자계약·CMS 대여정보 동시 반영 (2026-09-10, 이 세션)
+
+### 배경
+
+전자계약 "구분" 섹션에서 `{{수령방법지점}}`/`{{반납방법지점}}`이 "방문" 방식이어도
+지점명 없이 방식명만 표시되는 문제를 Stephen이 지적. 조사 결과 `contract-data/
++server.ts`의 "방식명 (지점명)" 조합 로직 자체는 정상이었고, 소스 컬럼인
+`rental_reservations.pickup_point_id`/`return_point_id`(Migration #452, 2026-09-07)가
+항상 NULL이었던 것이 근본 원인 — 그 마이그레이션 주석에 "예약 생성/수정 시 이 값을
+채워 넣는 경로는 별도 스코프"라고 명시돼 있었고, 실제로 채워 넣는 코드가 끝내
+작성되지 않은 상태였다.
+
+Stephen에게 "어제(2026-09-09) Migration #476 주석의 '방문지점은 목록에서 선택해
+값을 가져오는 구조라 별도 저장 불필요'와 상충되지 않냐" 확인 요청 → Stephen 정정:
+그 주석은 "지점 선택 UI가 콤보버튼 방식(직접 텍스트입력이 아님)"이라는 의미였을 뿐,
+저장 자체가 불필요하다는 뜻이 아니었음. 진행 방향 확정(Stephen 3가지 추가 지시):
+① 예약신청완료 시 저장 ② 같은 값을 CMS `RentalDetailPanel` "대여정보" 탭에도 반영
+③ 전자계약 발행 시에도 동일 반영.
+
+### 수정
+
+**신규 마이그레이션(Stage → Production 순서 적용, 둘 다 적용 완료)**
+- `20260910010000_479_set_reservation_shipment_method_pickup_point.sql` —
+  `set_reservation_shipment_method`에 `p_pickup_point_id`/`p_return_point_id`(uuid,
+  trailing DEFAULT NULL) 추가. Migration #476이 문서화한 함정(파라미터 추가 시
+  PostgREST가 새 오버로드를 만들어 기존 5-param/9-param 실호출과 모호성 충돌)을
+  피하기 위해 9-param 오버로드를 명시적으로 DROP 후 11-param으로 CREATE. 지점은
+  pickup_time/return_time과 동일하게 방식-종속 필드라 COALESCE가 아니라 직접 SET
+  (수령/반납 방식이 방문이 아니게 바뀌면 지점도 함께 비워짐).
+- `20260910020000_480_get_rental_list_pickup_point_name.sql` — `get_rental_list`에
+  `pickup_points`를 LEFT JOIN 2회(pp1/pp2) 추가해 `pickup_point_name`/
+  `return_point_name` 반환 컬럼 신설. ⚠️ **Stage 실행 테스트 중 실제 버그 발견·즉시
+  수정**: `pickup_points.name`이 `varchar(100)`인데 RETURNS TABLE엔 `text`로 선언해
+  42804(반환타입 불일치) 런타임 에러 — `pp1.name::TEXT`/`pp2.name::TEXT` 캐스팅으로
+  해소(같은 함수의 `product_code::TEXT`/`token::TEXT`와 동일 기존 패턴 재사용).
+  Production 적용 전 Stage에서 이 결함을 미리 잡아 Production에는 처음부터 수정된
+  버전만 반영됨.
+
+**클라이언트**
+- `src/routes/cart/+page.svelte` — `saveShipmentMethod()`에 `pickupPointId`/
+  `returnPointId` 파라미터 추가 + RPC 호출에 `p_pickup_point_id`/`p_return_point_id`
+  전달. 유일한 호출부(예약신청완료 루프)에서 `it.rentalForm.pickupPointId`/
+  `it.returnForm.pickupPointId`(2026-09-07 기존 콤보버튼 UI 상태) 그대로 전달.
+- `src/routes/cms/reservation/+page.server.ts`(`RentalListRow` SSOT 타입) +
+  `src/lib/components/cms/RentalDetailPanel.svelte`(자체 로컬 타입 별도 선언분) —
+  `pickup_point_name`/`return_point_name` 필드 추가.
+- `RentalDetailPanel.svelte` "대여정보" 탭 "수령방식"/"반납방식" 표시를
+  `"방식명 (지점명)"` 형태로 조합(전자계약 `{{수령방법지점}}`과 동일 포맷으로 통일).
+  PICKUP_LABELS 하드코딩 맵(기존에 별도로 알려진 다른 이슈)은 이번 스코프에서
+  건드리지 않음.
+
+### 검증
+
+- `npx svelte-check --tsconfig ./tsconfig.json` — 터치한 3개 파일 신규 에러/경고 0건.
+- `createHoldReservationWithShipment.test.ts` 5/5 GREEN.
+- Stage 라이브 SQL 검증: 실제 예약(id 13951, visit/visit)에 임시로 지점ID를 채운 뒤
+  `get_rental_list(p_reservation_id:=13951)` 호출 → `pickup_point_name`/
+  `return_point_name` 둘 다 "본점" 정상 반환 확인(검증 직후 NULL로 원복, 실데이터
+  오염 없음). `set_reservation_shipment_method` 직접 호출로 신규 파라미터 포함 실행
+  시 문법·타입 에러 없음도 별도 확인(auth.uid() 불일치로 실제 UPDATE는 적용 안 됨 —
+  의도된 서버사이드 소유권 가드 정상 동작 확인).
+- Production: 함수 오버로드 목록 재조회로 Stage와 동일한 시그니처(3-param 레거시 +
+  11-param 신규, get_rental_list 단일 오버로드) 확인 + `get_rental_list(p_per_page:=1)`
+  1회 호출로 런타임 에러 없음(캐스팅 수정이 정상 반영됐음) 확인.
+
+### 후속 — 기존 예약 소급 반영 (2026-09-10, Stephen 요청)
+
+기존에 이미 생성된 "방문" 예약은 애초에 지점을 저장한 적이 없어(이번 결함 자체가
+그 원인) 자동 반영되지 않는다고 안내하자, Stephen이 소급 반영을 요청.
+
+**근거(추측 아님, 데이터로 확인)**: `products.allowed_pickup_ids`(부모 상품의 방문
+가능 지점 목록)를 전수 조회한 결과, Production 109개 부모 상품 전부가 정확히
+1개(또는 0개)의 지점만 허용 — **2개 이상 허용하는 상품이 단 하나도 없었다**(Stage도
+동일). 즉 "여러 지점 중 선택"(2026-09-07 콤보버튼 UI) 상황 자체가 지금까지 실제로
+발생한 적이 없어, 각 예약이 어느 지점이었는지는 그 예약 상품의 허용 지점이 정확히
+1개일 때 **모호성 없이 확정** 가능하다(추론이 아니라 유일한 가능값 역산) — 허용
+지점이 0개(NULL, 주로 `[QA-TEST]` 등 미설정 테스트 상품)인 예약만 확정 불가로 남김.
+
+**실행(Stage 검증 → Production, 둘 다 완료)**: 예약의 `product_id`(자식/재고단위)를
+`parent_product_id`로 부모까지 타고 올라가(products.md §2-1 부모/자식 구조) 그
+부모의 `allowed_pickup_ids`가 정확히 1개일 때만 그 지점ID로 `pickup_point_id`/
+`return_point_id`를 채우는 UPDATE 2건(수령/반납 leg 각각 독립) 실행 — 실행 전 반드시
+COUNT로 대상 건수를 먼저 확인한 뒤 실행.
+  - Stage: pickup 21건·return 23건 반영, 재조회로 backfillable 잔여 0건 확인.
+  - Production: pickup 59건·return 69건 반영, 재조회로 backfillable 잔여 0건 확인 +
+    실제 반영된 예약(id=1) `get_rental_list` 재조회로 `pickup_point_name`/
+    `return_point_name` 둘 다 "본점" 정상 반환 최종 확인.
+  - 확정 불가로 남긴 건(Production 7건 — 전부 `[QA-TEST]` 계열 미설정 테스트 상품)은
+    임의로 채우지 않고 NULL 유지 — 근거 없는 값 기입 금지 원칙.
+
+이 백필은 스키마 변경이 아닌 1회성 데이터 보정이라 별도 마이그레이션 파일을 만들지
+않음(Migration 479/480과 달리 재실행 가능성이 없는 일회성 UPDATE).
+
+---
+
+## DONE — 🔴 CRITICAL: "계약조항"·"개인정보동의" 예약별 1회성 클릭편집 신설 (2026-09-10, 이 세션, ✅ GATE E 통과 — sp3-qa-agent 검수 완료, git commit만 Stephen 대기)
+
+### 배경
+
+Stephen 요청 5개 조건: ①"계약조항" 영역 클릭 시 모달이 '계약조항' 탭으로 랜딩 ②"개인정보"
+영역 클릭 시 '개인정보' 탭으로 랜딩 ③기존 "특약" 클릭편집과 유사한 UX 구조 ④이 수정값은
+"특정 전자계약 발행 시 일회성 적용"되며 기본 양식(공유 템플릿)에는 영향을 주지 않아야 함
+⑤서명+결제 완료 후 다시 봐도 그대로 남아있어야 함("박제").
+
+조사 결과(Explore 에이전트 위임): `ContractFieldPanel.svelte`에 특약/계약조항/개인정보동의
+3탭 UI 자체는 이미 존재했으나, htmlMode 진입 시 무조건 '특약' 탭으로 강제 랜딩되고
+`initialTab` 같은 랜딩 제어 prop이 없었음. 계약조항/개인정보동의 텍스트는 Migration #464로
+`contract_templates`(공유 양식)에만 저장 가능했고, 그 마이그레이션 주석에 "사후 클릭편집
+기능은 이번 요청 범위 밖"이라 명시적으로 스코프 밖으로 남겨져 있었음 — `contracts`(예약별
+1행) 쪽엔 대응 컬럼도, 클릭 앵커도, PATCH 화이트리스트도 전혀 없어 요구사항 ④(일회성·
+템플릿 미영향)를 만족할 방법이 아예 없었음. 서명 후 프리즈(⑤)는 `signed_content_snapshot`이
+`html_document` 문자열을 통째로 얼리는 기존 구조가 이미 안전하게 보장 — 별도 로직 불필요,
+값을 발행 시점에 이 문자열에 정확히 굽기만 하면 됨.
+
+### 설계 — 특약(specifications)과 완전히 동일한 패턴 재사용
+
+```
+특약도 계약조항/개인정보동의와 같은 모달(ContractFieldPanel, htmlMode=true)에서 이미 탭
+형태로 함께 노출되고 있었으므로, 별도 모달을 새로 만들지 않고 기존 "특약 입력" 모달을
+"계약 문구 편집"으로 확장 — 3개 필드를 한 모달·한 저장 버튼으로 함께 편집·저장한다.
+클릭한 영역에 따라 랜딩 탭만 다르고(initialTab), 모달이 열리면 admin은 자유롭게 다른
+탭으로 전환해 나머지 두 필드도 함께 고칠 수 있다(특약과 동일 UX, 요구사항 3).
+```
+
+### 변경 파일
+
+```
+신규 마이그레이션(Stage ezyvffjvuwmtuhpxdjrw 전용 적용, Production 미적용):
+  supabase/migrations/20260910000000_478_contracts_per_contract_terms_privacy_text.sql
+    — contracts.contract_terms_text/privacy_terms_text 신설(TEXT, nullable). 특약
+    (contracts.specifications)과 동일하게 예약별 1행에 저장 — contract_templates(공유
+    양식)는 전혀 건드리지 않음(요구사항 4 핵심).
+
+src/lib/components/cms/contract-editor/templates/defaultRentalContractHtml.ts —
+  "계약 및 인수 확인"·"개인정보동의" 감싸는 <div class="terms">에 각각 cs-contract-terms-cell/
+  cs-privacy-terms-cell 앵커 클래스 추가(기존 terms 클래스는 유지, 시각 변화 없음). 이
+  파일은 오늘 세션 앞선 수정(계약서 양식 발행모달 드리프트 해소)으로 이미 소스=실제 반영
+  구조라 별도 마이그레이션 없이 모든 화면에 즉시 반영됨.
+
+src/lib/utils/contract-substitution.ts — updateContractTermsInHtml()/updatePrivacyTermsInHtml()
+  신규(updateSpecialNotesInHtml과 완전히 동일한 이유·패턴: 마커는 발행 시점에 이미
+  치환·소멸했으므로 위 앵커 클래스로 재교체). 정규식 기반, 중첩 <div> 없어 non-greedy
+  매칭 안전(특약 셀과 동일 안전성 근거).
+
+src/lib/utils/contract-apply-template.ts — ApplyTemplateOptions에 contractTermsText/
+  privacyTermsText 추가, PATCH 본문에 조건부 포함(미지정 시 기존 값 보존).
+
+src/routes/api/cms/contracts/[id]/content/+server.ts — GET select에 두 컬럼 추가, PATCH
+  body 타입·화이트리스트에 두 필드 추가(미지정 필드는 보존, null 전송은 "기본 문구로
+  되돌리기"로 해석 — 기존 다른 nullable 필드들과 동일 패턴).
+
+src/lib/components/cms/contract-editor/ContractFieldPanel.svelte — initialTab?: TabKey
+  prop 신규(htmlMode 강제 '특약' 랜딩 로직을 initialTab ?? '특약'으로 변경, 미지정 시
+  기존 동작 100% 동일 — 다른 호출부(ContractTemplatePanel.svelte 등) 무영향).
+
+src/lib/components/cms/ContractTemplatePreviewModal.svelte — 이번 작업의 핵심:
+  ① existingContractTermsText/existingPrivacyTermsText state 신규(existingSpecifications와
+     동일 목적, loadData()에서 GET content 응답으로 채움)
+  ② handleHtmlDocClick()을 3개 앵커 클래스(.cs-special-notes-cell/.cs-contract-terms-cell/
+     .cs-privacy-terms-cell) 전부 감지하도록 확장 — 어느 걸 클릭했는지에 따라
+     termsInitialTab만 다르게 설정, 3개 편집 버퍼는 항상 모두 현재값으로 프리필
+  ③ saveSpecialNotes()를 3개 필드 동시 저장으로 확장 — existing 모드는
+     updateContractTermsInHtml/updatePrivacyTermsInHtml로 html_document 재교체 후 PATCH,
+     template 모드는 applySelectedTemplate()에 override 전달해 "즉시 발행+커스텀 문구
+     반영"을 한 번에 처리(특약의 기존 두 갈래 분기와 완전히 동일 구조)
+  ④ applySelectedTemplate()에 contractTermsOverride/privacyTermsOverride 파라미터 추가
+     (미지정 시 selectedTemplate 값 폴백 — specsOverride와 동일 원칙), applyContractTemplate
+     호출에 두 값 전달
+  ⑤ 서브모달 렌더 블록에 4개 prop(contractTermsText/onContractTermsChange/
+     privacyTermsText/onPrivacyTermsChange) + initialTab={termsInitialTab} 배선(기존엔
+     이 4개 prop이 아예 전달 안 돼 계약조항/개인정보동의 탭에 입력해도 no-op이었음)
+  ⑥ 클릭 가능 hover CSS(.html-doc-editable :global(...)) 2개 앵커 클래스로 확장
+
+src/__tests__/services/contractHtmlSubstitution.test.ts — updateContractTermsInHtml/
+  updatePrivacyTermsInHtml 신규 테스트 5건(재교체 정상동작·인접 셀 비침범·기본문구 복귀·
+  레거시 문서 무효과).
+```
+
+### 요구사항 5개 충족 여부
+
+```
+① 계약조항 클릭 → '계약조항' 탭 랜딩: handleHtmlDocClick의 termsInitialTab='계약조항' 분기 ✅
+② 개인정보 클릭 → '개인정보동의' 탭 랜딩: 동일 함수 termsInitialTab='개인정보동의' 분기 ✅
+③ 특약과 유사 UX: 별도 모달 신설이 아니라 기존 특약 모달 자체를 확장 재사용(요구사항 이상 충족) ✅
+④ 일회성·템플릿 미영향: contracts 전용 신규 컬럼(Migration #478)만 사용, contract_templates
+  UPDATE 경로 전혀 미접촉 — applySelectedTemplate()의 override 파라미터도 selectedTemplate
+  객체 자체는 읽기만 하고 쓰지 않음 ✅
+⑤ 서명·결제 완료 후 박제: 별도 구현 불필요 — 기존 signed_content_snapshot이 발행 시점
+  html_document(커스텀 문구가 이미 구워진 상태)를 그대로 얼리는 구조를 그대로 활용 ✅
+```
+
+### 검증
+
+```
+✅ Stage DB 직접 적용·재조회 — contracts.contract_terms_text/privacy_terms_text 컬럼
+   생성 확인(TEXT, nullable, default null).
+✅ npx svelte-check — 신규 에러 0건(기존 vite.config.ts 1건만 유지).
+✅ npx vitest run contractHtmlSubstitution.test.ts — 46/46 GREEN(신규 5건 포함).
+✅ npx vitest run contractAuthGates.test.ts contractDataLineItems.test.ts — 67/67 GREEN
+   (content/+server.ts 재수정에 대한 회귀 없음 확인).
+```
+
+### sp3-qa-agent 독립 검수 결과
+
+```
+✅ CONFIRMED — 요구사항 ④(템플릿 미영향)를 가장 중점적으로 재검증: contract_templates에
+   대한 쓰기 호출이 코드 전체에 0건(grep 전수 확인), selectedTemplate이 읽기전용 파생값
+   ($derived, 재할당 코드 없음)임을 확인 — 이중 검증으로 CONFIRMED.
+✅ 요구사항 ①②(탭 랜딩) — handleHtmlDocClick의 3개 앵커 구분 + ContractFieldPanel
+   initialTab 반영 경로 전부 코드로 재확인.
+✅ 정규식 안전성 — 두 셀이 공백 없이 바로 인접한 최악 케이스까지 신규 테스트로 실증됨을 재확인.
+✅ 하위호환 — ContractTemplatePanel.svelte 등 initialTab 미전달 호출부는 기존과 동일하게
+   항상 '특약' 랜딩 확인.
+✅ 요구사항 ⑤(서명 후 프리즈) — 이번 세션 변경 파일 목록에 서명 제출 엔드포인트가 전혀
+   없음을 확인, signed_content_snapshot 로직 무손상.
+✅ svelte-check 신규 에러 0건, vitest 113/113 GREEN(재실행) 확인.
+✅ 요청범위 준수 — 8개 파일 diff 전부 문서화된 변경만 포함, git status에 섞인 다른 항목은
+   전부 이 세션의 별도 완료 태스크에 속함을 확인.
+⚠️ 그 QA 세션엔 Supabase MCP가 없어 DB 컬럼 재실증만 생략됐었음 → 메인 세션에서 즉시 재조회
+   완료: contracts.contract_terms_text/privacy_terms_text 둘 다 text/nullable/default
+   null로 정상 생성 확인. 미이행 항목 없음.
+```
+
+### Production 적용 완료 (2026-09-10, 같은 날 후속)
+
+```
+✅ Migration #478 Production(vnbpmvxruyciuuaermyh) 적용 완료 — Stephen 요청으로 진행.
+   적용 직전 실측: 이 커밋(3ca295d)이 이미 PR #280로 Production에 배포돼 있었는데(코드는
+   contract_terms_text/privacy_terms_text 컬럼을 이미 참조), 정작 Production DB에는 이
+   컬럼이 없는 상태였음(재확인: information_schema.columns 조회 결과 0건) — service-
+   operations.md §9와 동일 클래스의 "코드 배포 ≠ DB 마이그레이션 적용" 위험이 실제로
+   발생해 있었던 것을 발견 즉시 해소. 적용 후 재조회로 컬럼 생성 확인(text/nullable/
+   default null, Stage와 동일).
+```
+
+### 남은 작업
+
+```
+- git commit은 Stephen 직접 실행
+```
+
+---
+
+## DONE — 🟡 BOUNDARY: 전자계약 "대여 장비내역" 비고(구성품) 부모 미해석 결함 수정 (2026-09-10, 이 세션, ✅ GATE E 통과 — sp3-qa-agent 검수 완료)
+
+### 배경
+
+Stephen이 CMS에서 이 상품(Creator SET01 Sony FX3 + DJI RS3 Mini + Rode Wireless GO II,
+품번 CSHYPall00002)의 "구성품"을 부모 상품에 등록한 뒤 계약서를 재발행했는데도 "대여
+장비내역" 비고 칸이 계속 "-"로 표시된다고 보고. Stage DB 직접 대조로 확인: 구성품은
+정확히 부모(`5b8c9d4e-...`)에만 저장됐고 자식(`ed714303-...`, 실제 재고단위)은
+`components = null`. products.md §4-1 "구성품은 부모 전용 편집 항목"이라는 설계상
+자식은 애초에 독립된 구성품 값을 가지지 않는데(가격정책과 달리 부모→자식 자동 동기화
+트리거도 없음), `contract-data/+server.ts`의 구성품 조회 4곳 전부가 예약의
+`product_id`(항상 자식 id)로 직접 조회하고 있어 — 재발행을 몇 번 반복해도 영원히 도달
+불가능한 값을 조회하는 구조적 결함이었다(스냅샷 드리프트 문제가 아니라 애초에 잘못된
+id로 조회하는 코드 버그).
+
+### 수정
+
+```
+src/routes/api/cms/reservations/[id]/contract-data/+server.ts — 로컬 헬퍼
+resolveComponentsMap() 신규 추가(admin 클로저 캡처, 모듈 최상위로 분리 시 SupabaseClient
+제네릭 타입 불일치 에러 발생해 GET 핸들러 내부 지역함수로 유지). id에
+parent_product_id가 있으면 부모의 components를, 없으면 자기 자신의 값을 쓰도록 통일.
+적용 지점 4곳: ① 단독예약 메인상품(mainComponentsResolved) ② 주문묶음 메인상품 배치조회
+(productMap) ③ 주문묶음 옵션상품(optionComponentsMap) ④ 단독예약 옵션상품
+(soloComponentsMap) — 전부 조회 쿼리에 parent_product_id 컬럼 추가 후 동일 헬퍼로 해석.
+```
+
+### 검증
+
+```
+✅ SQL 직접 대조 — child→parent LEFT JOIN 시뮬레이션 결과 resolved_components =
+   {"테스트":"테스트테스트"}(부모에 등록한 실제값)로 정확히 해석됨 확인.
+✅ npx svelte-check — 최초 시도(admin을 파라미터로 받는 모듈 최상위 함수)에서 신규 에러
+   6건 발생(SupabaseClient 제네릭 타입 불일치) → GET 핸들러 내부 클로저로 리팩터해 해소,
+   재검증 결과 신규 에러 0건(기존 vite.config.ts 1건만 유지).
+✅ npx vitest run contractDataLineItems.test.ts contractAuthGates.test.ts — 67/67 GREEN.
+✅ sp3-qa-agent 독립 검수 완료 — 4개 지점 전수 교체 확인(grep으로 옛 직접참조 잔존 0건),
+   클로저 캡처 설계가 실제로 타입 불일치를 회피함을 코드로 재확인, svelte-check·vitest
+   재실행 모두 동일 결과. 요청범위 준수(이 파일 diff에 구성품 로직 외 변경 없음) 확인.
+   CONFIRMED, 수정 필요 항목 없음.
+```
+
+---
+
+## DONE — 🔴 CRITICAL: 전자계약 미서명 링크 30분 만료 시 채팅카드 재진입 차단 (2026-09-10, 이 세션)
+
+### 배경
+
+이전 턴에서 `/cms/reservation/contracts` 전역 버그 탐지 중 발견한 잔여 결함(다른
+세션이 어제 커밋 `74ac084`에서 "취소된 예약 서명 접수" 결함을 고치며 추가한 가드가
+`status === 'cancelled'`만 확인하고 `'expired'`는 놓친 것)을 보고했고, Stephen이 수정
+방향을 4가지로 명확히 확정:
+  1. 미서명·미결제 상태 발행 링크의 실질 유효기간은 최대 30분(예약 HOLD 자체 타이머
+     기준)이 맞다 — `contract_signings.expires_at`(30일)과는 별개 개념으로 정합.
+  2. 30분 경과 시 "재진입 차단"은 서명 제출 엔드포인트가 아니라 **채팅 대화카드
+     버튼을 '기한 만료' 표시 + 비활성 전환**하는 방식으로 한다 — 고객 채팅카드·CMS
+     관리자 채팅카드 양쪽 다.
+  3. 이렇게(카드 단계에서) 차단하면 서명 제출 시점에 별도 에러 메시지를 새로 던질
+     필요 없음 — 애초에 그 버튼을 누를 수 없으므로.
+  4. 서명+결제 모두 완료된 링크는 여전히 최대 30일 유효로 남아야 함(재확인 요청).
+
+### 조사 결과
+
+- `contract_signings.expires_at`은 발송 시 30일로 설정되며, 예약 HOLD의 30분 자동만료
+  (`release_reservation_hold`, service-operations.md §10, sent_at 기준)와는 전혀 다른
+  독립 타이머 — 미서명 상태에서 30분이 30일보다 항상 먼저 도래해 사실상 30일 값은
+  이 시나리오에서 의미가 없음(1번 확정과 일치).
+- 채팅 액션카드 `contract_link`(서명요청)는 기존에 "발행취소"(관리자가 콘텐츠를
+  비운 경우, `contractCancelledLive`)만 라이브 체크하고 있었고, `reservation_hold`
+  카드가 이미 갖고 있던 예약상태(expired/cancelled) 라이브 체크(`reservationHoldStatusLive`,
+  `/api/chat/reservation-status/[id]`)는 재사용하지 않고 있었다 — 코드에 "§후속 검토
+  대상"으로 이미 이 공백이 주석으로 남아 있었음.
+- `/contract/[token]/+page.server.ts` 확인 결과: 서명이 이미 완료된 링크는
+  `expires_at` 체크를 아예 건너뛰도록(`signing.signed_at`이면 만료 검사 자체를 생략)
+  이미 구현돼 있어 4번 요구사항은 기존 코드로 이미 충족 — 별도 수정 불필요, 확인만.
+
+### 수정
+
+- `src/lib/components/chat/ActionCard.svelte` — `reservationHoldStatusLive`를 채우는
+  라이브 재조회 `$effect`의 트리거 조건을 `payload.type === 'reservation_hold'`
+  단독에서 `'reservation_hold' || 'contract_link'`로 확장. `isExpired` 파생값이
+  `reservationHoldExpiredLive`를 타입 구분 없이 이미 반영하고 있어 이 한 곳만
+  넓히면 `contract_link` 카드도 예약이 `expired`가 되는 즉시 "기한 만료" 라벨 +
+  버튼 비활성으로 전환된다(고객 ChatWindow·CMS AdminChatPanel이 이 컴포넌트를
+  공유하므로 양쪽 동시 반영, 탭 재활성화 시 재검증되는 기존 `revalidateTick`
+  메커니즘도 그대로 적용됨). "취소"(고객 자진취소·관리자 거부) 판정은 의도적으로
+  제외 — `isReservationCancelled`는 `reservation_hold` 전용으로 남겨 계약카드의
+  기존 "발행취소" 라벨과 혼동되지 않게 함.
+- `src/routes/api/chat/messages/[id]/execute-action/+server.ts` — 클릭 시점 서버
+  재검증(경쟁 상황 대비, `reservation_hold`가 이미 갖고 있던 것과 동일 원칙)에
+  `contract_link` + `payload.reservation_id` 조합을 신규 분기로 추가, **`expired`만**
+  체크(410 반환) — `cancelled`는 의도적으로 제외해 기존 "발행취소" 코드 경로와
+  라벨이 뒤섞이지 않게 함. 예약 자체의 명시적 취소는 기존대로
+  `/api/contracts/[token]/sign`이 제출 시점에 별도로 차단(이번 변경과 무관, 무수정).
+- `ActionCard.svelte`의 스테일 주석("서명링크 30일 만료는 채팅카드 쪽에서 아직
+  체크하지 않음 — §후속 검토 대상")을 실제 현재 구조를 설명하도록 갱신.
+
+### 검증
+
+`npx svelte-check --tsconfig ./tsconfig.json` — 두 파일 신규 에러/경고 0건(기존
+무관 경고 1건은 다른 위치). `executeActionAccessGuard.test.ts` 11개 재실행 GREEN.
+DB 마이그레이션 없음(순수 애플리케이션 로직 변경, 기존 컬럼·엔드포인트 재사용).
+
+---
+
 ## DONE — 🟡 BOUNDARY: 계약조항·개인정보동의 텍스트 편집 UX 결함 수정 (2026-09-10, 이 세션)
 
 ### 배경

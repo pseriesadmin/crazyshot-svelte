@@ -21,7 +21,7 @@ import { loadSynonymGroups } from '$lib/server/synonymLearning'
 import { enrichActionCard } from '$lib/server/chatActionEnrich'
 import type { EnrichContext } from '$lib/server/chatActionEnrich'
 import { registerCrossLingualCandidates } from '$lib/server/crossLingualSynonymScan'
-import { sendPushToUser } from '$lib/server/push'
+import { sendPushToUser, sendUrgentChatAdminPush } from '$lib/server/push'
 
 const ANTHROPIC_ENABLED = false
 const anthropic = new Anthropic({ apiKey: ANTHROPIC_API_KEY })
@@ -89,7 +89,7 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 
   const { data: chatSession } = await db
     .from('chat_sessions')
-    .select('user_id, status, context_type, context_id, manual_mode')
+    .select('user_id, status, context_type, context_id, manual_mode, admin_id')
     .eq('id', body.session_id)
     .single()
 
@@ -222,6 +222,11 @@ export const POST: RequestHandler = async ({ request, locals }) => {
                     category: match.category,
                   },
                 })
+              // 3-1: 긴급상담 관리자 푸시 — 실제 관리자가 아직 응답하지 않은 세션에만 발송
+              // (admin_id IS NULL = 자동응답만 있고 인간 관리자가 한 번도 답장하지 않은 세션)
+              if ((chatSession as { admin_id?: string | null }).admin_id === null) {
+                await sendUrgentChatAdminPush(admin, body.session_id, session.user.id)
+              }
             }
 
             // 2026-09-08(Stephen 지시): '파손' 캔드응답이 매칭되면 자동응답 텍스트와 별개로
@@ -415,6 +420,14 @@ export const POST: RequestHandler = async ({ request, locals }) => {
       .from('chat_sessions')
       .update({ updated_at: new Date().toISOString() })
       .eq('id', body.session_id)
+  }
+
+  // 3-1: 긴급상담 관리자 푸시 — AI 의도분류 결과가 CS_ESCALATE이고 아직 실제 관리자가
+  // 응답하지 않은 세션(admin_id IS NULL)에서만 발송 (fail-soft, sendUrgentChatAdminPush
+  // 내부 try/catch로 예외 흡수 — 이 푸시 실패가 채팅 응답 자체에 영향 없음)
+  if (classified.intent === 'CS_ESCALATE' && admin &&
+      (chatSession as { admin_id?: string | null }).admin_id === null) {
+    await sendUrgentChatAdminPush(admin, body.session_id, session.user.id)
   }
 
   // 고객 브라우저 푸시 — AI 자유응답도 캔드매칭·관리자 수동답장과 동일하게 발송
