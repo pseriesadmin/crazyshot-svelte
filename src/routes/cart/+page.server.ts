@@ -194,7 +194,28 @@ export const load: PageServerLoad = async ({ locals }) => {
     return true
   })
 
-  const rawReservations = (cartResult.data ?? []) as ReservationRow[]
+  const rawReservationsUnfiltered = (cartResult.data ?? []) as ReservationRow[]
+
+  // 2026-09-10 결함 수정: "예약신청완료" 제출 후에도 rental_reservations.status는 여전히
+  // 'hold'로 남는다(rental-lifecycle.md — 계약서명+결제가 둘 다 끝나야 confirmed로 전환,
+  // hold가 "장바구니 담기"와 "제출완료·계약대기" 두 상태를 모두 가리키는 알려진 설계
+  // 공백). status만으로 카트 노출 여부를 걸러 이미 제출 완료된 예약까지 계속 재노출되던
+  // 버그 — 제출 시점(create-order API → create_reservation_order RPC)에 생성되는
+  // order_items 연결 여부로 "이미 제출됨"을 구분해 제외한다. 제출 완료 건의 수정은
+  // /account/rental/[id]("예약신청수정" 버튼)에서만 하는 것이 정규 경로 — 카트는 "아직
+  // 제출 전" hold/draft만 보여준다.
+  let rawReservations = rawReservationsUnfiltered
+  if (rawReservationsUnfiltered.length > 0) {
+    const { data: linkedOrderItems } = await supabase
+      .from('order_items')
+      .select('reservation_id')
+      .in('reservation_id', rawReservationsUnfiltered.map(r => r.id))
+    const alreadySubmittedIds = new Set(
+      ((linkedOrderItems ?? []) as Array<{ reservation_id: number | string }>)
+        .map(row => String(row.reservation_id))
+    )
+    rawReservations = rawReservationsUnfiltered.filter(r => !alreadySubmittedIds.has(String(r.id)))
+  }
   // id는 Stage DB bigint이지만 CalculateCartTotalArgs는 string[] — String() 변환으로 호환
   const reservationIds  = rawReservations.map(r => String(r.id))
 

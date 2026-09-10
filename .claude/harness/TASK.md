@@ -1,5 +1,131 @@
 # .claude/harness/TASK.md
 
+## DONE — 🟡 BOUNDARY: 계약조항·개인정보동의 텍스트 편집 UX 결함 수정 (2026-09-10, 이 세션)
+
+### 배경
+
+Stephen이 `<launch-selected-element>`(계약서 양식 편집 화면 `ContractFieldPanel.svelte`
+"계약조항"/"개인정보" 탭 버튼 2건)로 커밋 f8e70fc(실제로는 이 기능이 구현된 커밋인
+fbfd31c "feat(contract): 발행자 서명·직인 위치이동 UI 연동 + 계약·개인정보동의 문단
+관리자편집 반영 + 필드패널·발행API 전반 보완", 2026-09-08 — Stephen이 지목한 해시는
+같은 이름의 기능을 담지 않은 8/13 커밋이라 실제 대상 커밋을 재확인 후 진행)의 구현
+기능 재점검을 요청. 지적: "텍스트 영역 오픈 시 노출 텍스트를 실제 바로 수정 저장할 수
+있게 할 것, 현재는 새로 쓰는 텍스트로 덮어 수정되는 UX 비정상 흐름."
+
+### 원인
+
+`ContractFieldPanel.svelte`의 계약조항/개인정보동의 textarea가 값이 비어있을 때
+(관리자가 아직 커스터마이즈하지 않은 기본 상태) `DEFAULT_CONTRACT_TERMS_TEXT`/
+`DEFAULT_PRIVACY_TERMS_TEXT`를 **placeholder(회색 힌트 텍스트)로만** 보여주고 있었다
+— textarea의 실제 `value`는 계속 빈 문자열이었다. 관리자 입장에서는 화면에 기본
+문구가 이미 쓰여있는 것처럼 보여 "이 문구를 고쳐 쓴다"고 생각하고 타이핑을 시작하지만,
+실제로는 빈 값 위에 새로 입력한 글자만 그대로 담기고 원래 문구는 애초에 값으로 들어간
+적이 없어 마치 통째로 사라진 것처럼 보이는 결함이었다.
+
+### 수정
+
+`src/lib/components/cms/contract-editor/ContractFieldPanel.svelte` — textarea의
+`value`를 `contractTermsText || DEFAULT_CONTRACT_TERMS_TEXT`(개인정보동의도 동일
+패턴)로 변경해, 값이 비어있으면 placeholder 대신 기본 문구 자체를 실제 편집 가능한
+값으로 채워 넣도록 수정. 관리자가 그 문구를 클릭해 바로 고쳐 쓰면 `oninput`이 즉시
+그 편집 결과를 부모 상태로 올린다. 아무 편집 없이 탭만 이동하면 부모 상태는 여전히
+빈 문자열로 유지되므로 "비워두면(=편집 없이 두면) 기본 문구가 그대로 사용됨" 저장
+시맨틱(`applyContractTermsMarker`/`applyPrivacyTermsMarker`의 null 폴백)은 전혀
+변경되지 않았다 — 편집 UX만 고쳤을 뿐 데이터 계약은 무변경. 안내 문구도 "비워두면
+기본 문구가 그대로 사용됩니다" → "전부 지우고 저장하면 기본 문구로 되돌아갑니다"로
+갱신해 새 동작을 정확히 설명하도록 함. "기본 문구로 되돌리기" 버튼(`onclick`이 값을
+`''`로 리셋)은 무변경 — 리셋 후에도 textarea는 새 폴백 로직으로 기본 문구를 다시
+채워 보여줘 정상 동작.
+
+### 검증
+
+`npx svelte-check --tsconfig ./tsconfig.json` — `ContractFieldPanel.svelte` 신규
+에러/경고 0건(기존 무관 경고 1건은 이 파일의 다른 위치, 이번 수정과 무관). 관련
+`contractHtmlSubstitution.test.ts` 41개 재실행 GREEN(로직 무변경 확인용). 이번 변경은
+컴포넌트 UI 전용이라 데이터/템플릿 콘텐츠를 건드리지 않아 Production DB 소급 반영
+대상 아님.
+
+---
+
+## DONE — 🔴 CRITICAL: 장바구니 경고 토스트 방식누락 + 예약신청완료 후 재노출 결함 수정 (2026-09-10, 이 세션, ✅ GATE E 통과 — sp3-qa-agent 검수 완료, git commit만 Stephen 대기)
+
+### sp3-qa-agent 최종 GATE E 검수 결과 (2026-09-10)
+
+```
+✅ 통과 — 두 결함 서술·구현·검증 정확히 일치, 요청범위 외 수정 없음, 신규 기술부채 없음.
+✅ 결함①(methodSelectionValid): readyToSubmit 게이팅과 동일 소스 사용 확인, 선언순서
+   무관(IntersectionObserver 콜백 내부 참조라 TDZ 문제 없음을 npm run check로 실증).
+✅ 결함②(order_items 필터) 핵심 위험(반대방향 회귀 — 미제출 예약을 실수로 숨김) 반증:
+   order_items에 INSERT하는 지점은 create_reservation_order(카트 제출)·
+   cms_add_reservation_product_unit(CMS 관리자 편입) 단 2곳뿐이며 둘 다 status='hold'를
+   사전조건으로 강제 — draft 상태는 어느 경로로도 order_items에 연결될 수 없어 오탐
+   제외 가능성 없음을 마이그레이션 전수 검색으로 확인.
+✅ order_items RLS(본인 소유만 SELECT)가 locals.supabase(세션 클라이언트)로 정상
+   동작해 필터가 프로덕션에서 조용히 no-op되는 위험도 없음을 확인.
+✅ 필터 적용 후 모든 하위 파생값이 필터링된 rawReservations만 참조함을 grep 전수
+   확인 — 미필터 원본값 재사용 지점 없음.
+⚠️ 비차단 참고: 주석 문구 1건("canProceed에는 이미 포함"이 실제로는 readyToSubmit
+   기준) — 기능 무관, 즉시 정정 완료.
+```
+
+### 배경
+
+같은 세션에서 실사용 중 발견된 장바구니 결함 2건을 연이어 수정.
+
+① Stephen이 "반납 방법 아코디언을 펼치지 않으면 '대여설정 미등록' 경고 토스트가
+   호출되지 않는다"고 신고. 조사 결과 아코디언 펼침 여부와는 무관 — 경고 토스트
+   조건식(`datesSet`/`pickupPointsSet`/`customerInfoSet`)이 "수령/반납 **방식**
+   자체가 미선택인지"를 전혀 검사하지 않고 있었음(날짜·시간이 이미 채워져 있으면
+   방식만 미선택이어도 조건이 전부 충족돼 경고가 조용히 누락됨). 제출 버튼 게이팅
+   (`readyToSubmit = canProceed && methodSelectionValid`)에는 이미 `methodSelectionValid`가
+   포함돼 있었는데 경고 토스트만 이 파생값을 빠뜨리고 있던 스코프 공백.
+
+② Stephen이 "예약신청 완료 후 다시 장바구니 진입 시 이전 예약상품 목록이 그대로
+   노출된다"고 신고. 원인: "예약신청완료" 제출 후에도 `rental_reservations.status`는
+   여전히 `hold`로 남는다(rental-lifecycle.md 문서화된 기존 설계 공백 — 계약서명+결제가
+   둘 다 끝나야 `confirmed`로 전환). 장바구니 조회 쿼리가 `status IN ('hold','draft')`
+   만으로 노출 여부를 판단해, "아직 미제출" hold와 "제출완료·계약대기 중" hold를
+   전혀 구분하지 못하고 있었음.
+
+### 변경 파일
+
+```
+src/routes/cart/+page.svelte
+  — 경고 토스트 조건에 || !methodSelectionValid 추가(제출 게이팅과 판정기준 일치)
+src/routes/cart/+page.server.ts
+  — rental_reservations 조회 직후 order_items.reservation_id 연결 여부를 추가 조회해
+    이미 제출 완료된(order_items 연결된) hold 예약을 카트 노출 목록에서 제외
+```
+
+### 검증 완료 (이 세션)
+
+```
+✅ npm run check — 두 파일 신규 에러 0건(기존 vite.config.ts 무관 에러 1건만 유지)
+✅ ②는 Stage(ezyvffjvuwmtuhpxdjrw) 실데이터로 직접 재현·검증 — 예약 id 14138
+   (status='hold', order_items 연결 있음)이 정확히 버그 재현 사례임을 SQL로 확인,
+   신규 필터 로직이 이 건을 올바르게 제외함을 재확인
+✅ 관련 회귀 테스트: cartLineGrouping.test.ts 전체 GREEN(②와 무관한 로직이나 같은
+   파일 영역 회귀 없음 확인 목적). deliveryCutoffHolidays.test.ts 1건 실패는 휴무일
+   픽스처 생성 관련 기존 환경 이슈로 이번 변경과 무관함을 확인(별도 파일·별도 로직)
+```
+
+### DB 마이그레이션 여부
+
+```
+②는 order_items/rental_reservations 기존 테이블·컬럼만 조회하는 순수 애플리케이션
+코드 변경 — 신규 스키마·RPC 없음. Stage/Production 별도 마이그레이션 적용 대상 아님,
+git 커밋·배포로 양쪽에 동일하게 반영됨.
+```
+
+### 남은 작업
+
+```
+- git commit은 Stephen 직접 실행(세션 규칙상 AI 자율 커밋 금지)
+- sp3-qa-agent 독립검수 대기(이번 요청으로 진행)
+```
+
+---
+
 ## DONE — 🔴 CRITICAL: 장바구니 "요청 사항" 미저장 결함 수정 + 오버로드 모호성 함정 해소 (2026-09-09, 이 세션, ✅ GATE E 통과 — sp3-qa-agent 검수 완료, git commit만 Stephen 대기)
 
 ### sp3-qa-agent 최종 GATE E 검수 결과 (2026-09-09)
@@ -425,15 +551,56 @@ get_rental_list를 p_status='cancelled' 단일값 대신 p_include_statuses=['ca
    정확. Stage DB 직접 RPC 재호출로 cancelled/expired 혼합 반환(13951 포함) 재확인. CONFIRMED.
 ```
 
-### 미해결 — "전자계약 발행 안 했는데 계약이 이미 존재" 의문(조사 중단, 코드 변경 없음)
+### 해결됨 — "전자계약 발행 안 했는데 계약이 이미 존재" 의문(코드 변경 없음, 시스템 결함 아님으로 결론)
 
 ```
-같은 검증 과정 중 Stephen이 reservation_id 13951에 대해 "전자계약 발행도 안 했다"고
-지적 — 실제로 contracts/contract_signings에 발송 완료 상태의 계약 행이 존재해 원인
-불명이었음. CMS "예약현황" URL의 `contract_pending=1` 파라미터가 페이지 로드 시 계약을
-자동 발행시키는지 조사를 시작했으나(src/routes/cms/reservation/+page.server.ts:101,
-+page.svelte:88-105에서 이 파라미터 사용처까지만 확인) Stephen의 후속 지시(HOLD 30분
-자동만료 검증으로 전환)로 조사가 중단됨 — 코드 원인 미확정, 수정 없음. 재개 필요.
+Stephen이 reservation_id 13951에 대해 "전자계약 발행도 안 했다"고 지적 — 실제로
+contracts/contract_signings에 발송 완료 상태의 계약 행이 존재해 원인 불명이었음.
+`contract_pending=1` URL 파라미터는 get_rental_list 조회 필터(p_require_contract_sent_
+unsigned)로만 쓰일 뿐 계약을 생성/발송하는 코드가 아님을 재확인 — 이 이론은 배제.
+
+`contract_audit_log`를 이 계약(0844f399-8ac3-44c2-8ab4-dacf451f5635)으로 직접 조회해
+근본 원인 확정: event_type='sent', actor_type='admin', actor_id가 이 예약의 고객
+user_id와 완전히 동일(6c80778c-28de-4b00-b1ab-fa9c9d07089f, 이기성/mublues@gmail.com).
+user_profiles 조회 결과 이 계정의 cms_role='manager' — 즉 이 테스트 계정이 "고객"(예약
+생성)과 "CMS 관리자"(계약 발송) 양쪽 역할을 동시에 갖고 있어, 실제로 이 계정으로 CMS에
+로그인해 발송 액션을 정상 실행한 기록이 감사로그에 남아있었음. 자동 발행 메커니즘은
+어디에도 없음 — 시스템 결함 아님, 코드 수정 불필요.
+✅ sp3-qa-agent 독립 검수 완료 — contract_audit_log/user_profiles 직접 재조회로 일치 확인,
+   rental_reservations.user_id·contracts.reservation_id 연결까지 추가 대조. CONFIRMED.
+```
+
+### DONE — 🟢 ROUTINE: "예약현황/계약대기" 승인·거부·결제확인 게이팅 로직 실사용 검증(코드 변경 없음, 결함 없음 확인)
+
+```
+Stephen 질문: "계약대기"(hold + 계약발송, 서명완료)에 머무는 이유가 PG결제 미확인 때문이
+맞는지, ①결제확인 시 대여현황 이동 ②"승인하기"는 결제·서명 무관하게 즉시 대여현황 이동
+③"거부"는 서명 여부 무관하게 즉시 취소 목록 이동 — 3가지 로직이 실제로 그렇게 동작하는지
+코드로 확인 요청.
+
+RPC 3개(try_confirm_reservation/mark_reservation_payment_confirmed/update_reservation_
+status)를 pg_get_functiondef로 직접 열람 + RentalDetailPanel.svelte 버튼 3개의 form
+action(승인하기→approveReservation, 거부→updateStatus+status=cancelled)을 grep으로
+대조해 전부 확인:
+① 전제 맞음 — try_confirm_reservation이 status='hold' AND payment_confirmed_at NOT NULL
+   AND 서명완료 3조건 전부 충족해야만 confirmed 전환(하나라도 미충족이면 hold 유지).
+② mark_reservation_payment_confirmed가 payment_confirmed_at 기록 직후 같은 트랜잭션에서
+   try_confirm_reservation을 즉시 재호출 — 서명이 이미 끝나 있었다면 그 자리에서 confirmed
+   전환·대여현황 이동. 단, 이 RPC는 현재 pay-mock/confirm-mock(테스트용) 엔드포인트에서만
+   호출됨 — 실제 토스 결제 연동은 CLAUDE.md 기재대로 별도 이슈로 여전히 미완료 상태.
+③ "승인하기"(approveReservation 액션)는 게이팅을 전혀 거치지 않고 update_reservation_
+   status(...,'confirmed')를 직접 호출 — service-operations.md §9의 "관리자 재량 우회
+   경로"와 정확히 일치, 결제·서명 무관하게 즉시 confirmed·대여현황 이동.
+④ "거부"(updateStatus+status=cancelled)가 호출하는 update_reservation_status RPC 본문에
+   contract_signings를 조회하는 코드가 아예 없음 — 서명 여부와 무관하게 무조건 cancelled
+   전환. 오늘 확장한 "취소" 탭(cancelled+expired)에도 정상 포함됨.
+
+결함 없음 — 3가지 로직 전부 설계·문서(rental-lifecycle.md, service-operations.md §9)와
+일치하게 동작.
+✅ sp3-qa-agent 독립 검수 완료 — RPC 3개 최신 마이그레이션 정의(#284/#397/#398/#416/#417,
+   이후 재정의 없음) 및 버튼 form action 전부 재확인, mark_reservation_payment_confirmed의
+   실제 호출처가 pay-mock/confirm-mock 뿐임도 grep으로 재확인. 이 조사 구간 자체의 코드
+   변경은 0건임도 git diff로 별도 확인. CONFIRMED.
 ```
 
 ---

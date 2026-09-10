@@ -905,7 +905,16 @@
     if (!sentinel) return
     const observer = new IntersectionObserver(
       ([entry]) => {
-        if (entry.isIntersecting && hasItems && (!datesSet || !pickupPointsSet || !customerInfoSet)) {
+        // 2026-09-10(Stephen 신고 "반납 방법 아코디언을 펼치지 않으면 경고가 안 뜬다" 재조사)
+        // 원인·수정: 아코디언 펼침 여부와는 무관 — 수령/반납 "방식"(rentalMethod/
+        // returnMethod) 자체가 미선택인 경우를 이 조건이 전혀 검사하지 않고 있었다.
+        // datesSet은 방식에 따라 "시간 입력이 필요한지"만 판정할 뿐 방식 자체의 null
+        // 여부는 보지 않고, pickupPointsSet도 마찬가지(방문 방식일 때만 지점 필요) —
+        // 그래서 날짜·시간이 이미 채워져 있는데 방식만 미선택인 경우(제출 버튼은
+        // methodSelectionValid로 정상 차단되지만) 경고 토스트만 조용히 누락됐다.
+        // readyToSubmit(canProceed && methodSelectionValid)에는 이미 포함돼 있으므로
+        // 여기도 동일하게 추가 — 제출 게이팅과 경고 토스트 판정 기준을 일치시킴.
+        if (entry.isIntersecting && hasItems && (!datesSet || !pickupPointsSet || !customerInfoSet || !methodSelectionValid)) {
           csToast.warning('대여예약정보를 모두 확인해 주세요.')
         }
       },
