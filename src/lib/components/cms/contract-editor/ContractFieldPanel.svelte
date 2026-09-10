@@ -58,11 +58,18 @@
     onContractTermsChange?: (text: string) => void
     privacyTermsText?: string
     onPrivacyTermsChange?: (text: string) => void
+    /**
+     * htmlMode 전용(2026-09-10 신규) — 모달이 열릴 때 어느 탭에 랜딩할지 호출부가 지정.
+     * 미지정 시 기존 동작(항상 '특약') 그대로 유지 — 특약 클릭편집 등 기존 호출부는
+     * 변경 없이 그대로 동작한다.
+     */
+    initialTab?: TabKey
   }
 
   let {
     onInsertField, specifications, onSpecsChange, htmlMode = false,
     contractTermsText = '', onContractTermsChange, privacyTermsText = '', onPrivacyTermsChange,
+    initialTab,
   }: Props = $props()
 
   // --------------------------------------------------------------------------
@@ -91,10 +98,10 @@
       : ALL_TABS.filter(t => !HTML_ONLY_TAB_KEYS.includes(t.key))
   )
 
-  // HTML 모드 진입 시 activeTab을 항상 '특약'으로 초기화
-  let activeTab = $state<TabKey>(htmlMode ? '특약' : '계약자정보')
+  // HTML 모드 진입 시 activeTab을 initialTab(지정 시) 또는 '특약'으로 초기화
+  let activeTab = $state<TabKey>(htmlMode ? (initialTab ?? '특약') : '계약자정보')
   $effect(() => {
-    if (htmlMode) activeTab = '특약'
+    if (htmlMode) activeTab = initialTab ?? '특약'
   })
 
   // --------------------------------------------------------------------------
@@ -198,15 +205,26 @@
       </div>
       <button type="button" class="add-row-btn" onclick={addSpec}>+ 항목 추가</button>
     {:else if activeTab === '계약조항' || activeTab === '개인정보동의'}
-      <!-- "계약 및 인수 확인"·"개인정보동의" 문단 단순 텍스트 편집(Migration #464, 2026-09-08 신규) -->
+      <!-- "계약 및 인수 확인"·"개인정보동의" 문단 단순 텍스트 편집(Migration #464, 2026-09-08 신규)
+           2026-09-10 결함 수정 — 값이 비어있을 때 기본 문구를 placeholder(회색 힌트)로만
+           보여주고 실제 textarea value는 계속 빈 문자열이었다. 그 결과 관리자가 "화면에 보이는
+           기본 문구를 그대로 고쳐 쓴다"고 생각하고 타이핑을 시작하면, 실제로는 빈 값 위에
+           새로 입력한 내용만 담기고 원래 문구는 애초에 값으로 들어간 적이 없어 그대로
+           사라지는 것처럼 보이는 비정상 흐름이었다(Stephen 실사용 중 발견 — "노출 텍스트를
+           바로 수정 저장할 수 있게 해야 하는데 새로 쓰는 텍스트로 덮어써진다"). 수정: 값이
+           비어있으면 placeholder 대신 기본 문구 자체를 textarea의 실제 값으로 채워 넣어
+           관리자가 그 문구를 직접 편집할 수 있게 한다 — 편집하지 않고 그대로 두면(수정 없이
+           탭 이동) 부모 상태는 여전히 빈 문자열이라 "비워두면 기본 문구 사용" 저장 시맨틱
+           자체는 그대로 유지된다(기존 GATE C 검증 계약 무변경). -->
       <p class="cfp-hint">
         빈 줄로 문단을 나눕니다. 문단 맨 앞을 <code>[라벨]</code> 형태로 쓰면 그 부분만 굵게
-        표시됩니다. 비워두면 기본 문구가 그대로 사용됩니다.
+        표시됩니다. 전부 지우고 저장하면 기본 문구로 되돌아갑니다.
       </p>
       <textarea
         class="cfp-terms-textarea"
-        placeholder={activeTab === '계약조항' ? DEFAULT_CONTRACT_TERMS_TEXT : DEFAULT_PRIVACY_TERMS_TEXT}
-        value={activeTab === '계약조항' ? contractTermsText : privacyTermsText}
+        value={activeTab === '계약조항'
+          ? (contractTermsText || DEFAULT_CONTRACT_TERMS_TEXT)
+          : (privacyTermsText || DEFAULT_PRIVACY_TERMS_TEXT)}
         oninput={(e) => {
           const v = (e.target as HTMLTextAreaElement).value
           if (activeTab === '계약조항') onContractTermsChange?.(v)

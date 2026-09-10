@@ -18,6 +18,7 @@ const DURATION_TYPE_LABELS: Record<string, string> = {
   'monthly': '월간',
 }
 
+
 function formatAmount(n: number | null | undefined): string {
   if (n == null) return '-'
   return n.toLocaleString('ko-KR') + '원'
@@ -96,6 +97,34 @@ export const GET: RequestHandler = async ({ params, locals }) => {
 
   const admin = createClient(PUBLIC_SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
 
+  // 2026-09-10 신규 — components(구성품)는 products.md §4-1에 명시된 "부모 전용" 편집 항목이라
+  // 자식(재고단위)은 자체 값을 절대 갖지 않는다(가격정책처럼 부모→자식 자동 동기화 트리거도
+  // 없음). 그런데 이 파일의 components 조회 4곳이 전부 예약의 product_id(항상 자식 id)로
+  // 직접 조회하고 있어, 부모에 구성품을 등록해도 계약서엔 영원히 "-"만 표시되는 구조적 결함이
+  // 있었다(Stephen 실사용 중 발견 — Creator SET01, 부모 등록 후 재발행해도 미반영). 조회
+  // 대상 id에 parent_product_id가 있으면 그 부모의 components를, 없으면(그 자체가 이미
+  // 부모이거나 부모 개념이 없는 경우) 자기 자신의 값을 사용하도록 통일한다. admin을 클로저로
+  // 캡처(모듈 최상위 함수로 분리 시 SupabaseClient 제네릭 타입 불일치 에러 발생 — 로컬 함수로
+  // 유지해 admin의 실제 추론 타입을 그대로 사용).
+  async function resolveComponentsMap(
+    rows: { id: string; parent_product_id: string | null; components?: unknown }[],
+  ): Promise<Record<string, unknown>> {
+    const parentIds = [...new Set(
+      rows.map(r => r.parent_product_id).filter((v): v is string => !!v)
+    )]
+    const parentComponents: Record<string, unknown> = {}
+    if (parentIds.length > 0) {
+      const { data } = await admin.from('products').select('id, components').in('id', parentIds)
+      for (const p of data ?? []) parentComponents[p.id as string] = p.components
+    }
+    return Object.fromEntries(
+      rows.map(r => [
+        r.id,
+        r.parent_product_id ? (parentComponents[r.parent_product_id] ?? null) : (r.components ?? null),
+      ])
+    )
+  }
+
   // ── 1. 기본 예약 정보 조회 (16개 스칼라 필드의 기준 reservation) ────────────
   const { data: res, error: resErr } = await admin
     .from('rental_reservations')
@@ -119,7 +148,7 @@ export const GET: RequestHandler = async ({ params, locals }) => {
 
   // ── 2. 병렬 조회: 기본 예약의 스칼라 필드용 데이터 ────────────────────────
   const [productRes, userRes, orderItemRes, methodOptsRes, addrRes, pointRes, ownPriceRes] = await Promise.all([
-    admin.from('products').select('name, product_code, components').eq('id', res.product_id).maybeSingle(),
+    admin.from('products').select('name, product_code, components, parent_product_id').eq('id', res.product_id).maybeSingle(),
     admin.from('user_profiles').select('full_name, phone, email').eq('id', res.user_id).maybeSingle(),
     admin.from('order_items').select('order_id').eq('reservation_id', reservationId).maybeSingle(),
     // 2026-09-08 — is_delivery_type 배송여부 판정과 함께 name(한글 라벨)도 같은 쿼리로
@@ -159,6 +188,14 @@ export const GET: RequestHandler = async ({ params, locals }) => {
           .maybeSingle()
       : Promise.resolve({ data: null as { price: number } | null, error: null }),
   ])
+
+  // 기준 예약(단독/주문묶음 공용) 메인상품 구성품 — 부모 해석 적용(위 resolveComponentsMap 참고)
+  const mainComponentsMap = await resolveComponentsMap([{
+    id: res.product_id as string,
+    parent_product_id: (productRes.data?.parent_product_id as string | null) ?? null,
+    components: productRes.data?.components,
+  }])
+  const mainComponentsResolved = mainComponentsMap[res.product_id as string] ?? null
 
   let orderData: {
     total_amount: number | null; discount_amount: number | null; tax_amount: number | null
@@ -208,14 +245,27 @@ export const GET: RequestHandler = async ({ params, locals }) => {
       // 메인상품 일괄 조회 (N+1 방지) — components(구성품, 2026-09-08 추가): "대여 장비내역"
       // {{비고}} 채움용(contractLineItems.ts formatComponentsText 재사용)
       const { data: productRows } = productIdSet.length > 0
-        ? await admin.from('products').select('id, name, product_code, components').in('id', productIdSet)
+        ? await admin.from('products').select('id, name, product_code, components, parent_product_id').in('id', productIdSet)
         : { data: [] }
+
+      // 구성품은 부모 전용 항목이라 부모 해석 필요(resolveComponentsMap 참고)
+      const resolvedMainComponentsMap = await resolveComponentsMap(
+        (productRows ?? []).map(p => ({
+          id: p.id as string,
+          parent_product_id: p.parent_product_id as string | null,
+          components: p.components,
+        })),
+      )
 
       const productMap: Record<string, { name: string; product_code: string | null; components: unknown }> =
         Object.fromEntries(
           (productRows ?? []).map(p => [
             p.id as string,
-            { name: p.name as string, product_code: p.product_code as string | null, components: p.components },
+            {
+              name: p.name as string,
+              product_code: p.product_code as string | null,
+              components: resolvedMainComponentsMap[p.id as string] ?? null,
+            },
           ])
         )
 
@@ -251,14 +301,18 @@ export const GET: RequestHandler = async ({ params, locals }) => {
       ]
 
       const { data: optionProductRows } = optionProductIds.length > 0
-        ? await admin.from('products').select('id, product_code, components').in('id', optionProductIds)
+        ? await admin.from('products').select('id, product_code, components, parent_product_id').in('id', optionProductIds)
         : { data: [] }
 
       const optionCodeMap: Record<string, string | null> = Object.fromEntries(
         (optionProductRows ?? []).map(p => [p.id as string, p.product_code as string | null])
       )
-      const optionComponentsMap: Record<string, unknown> = Object.fromEntries(
-        (optionProductRows ?? []).map(p => [p.id as string, p.components])
+      const optionComponentsMap = await resolveComponentsMap(
+        (optionProductRows ?? []).map(p => ({
+          id: p.id as string,
+          parent_product_id: p.parent_product_id as string | null,
+          components: p.components,
+        })),
       )
 
       // reservation_id → options 맵
@@ -305,14 +359,18 @@ export const GET: RequestHandler = async ({ params, locals }) => {
     ]
 
     const { data: soloOptProductRows } = soloOptProductIds.length > 0
-      ? await admin.from('products').select('id, product_code, components').in('id', soloOptProductIds)
+      ? await admin.from('products').select('id, product_code, components, parent_product_id').in('id', soloOptProductIds)
       : { data: [] }
 
     const soloCodeMap: Record<string, string | null> = Object.fromEntries(
       (soloOptProductRows ?? []).map(p => [p.id as string, p.product_code as string | null])
     )
-    const soloComponentsMap: Record<string, unknown> = Object.fromEntries(
-      (soloOptProductRows ?? []).map(p => [p.id as string, p.components])
+    const soloComponentsMap = await resolveComponentsMap(
+      (soloOptProductRows ?? []).map(p => ({
+        id: p.id as string,
+        parent_product_id: p.parent_product_id as string | null,
+        components: p.components,
+      })),
     )
 
     lineItemReservations = [
@@ -321,7 +379,7 @@ export const GET: RequestHandler = async ({ params, locals }) => {
           name:         productRes.data?.name ?? '-',
           product_code: productRes.data?.product_code ?? null,
           unit_price:   ownPriceRes.data?.price ?? null,
-          components:   productRes.data?.components ?? null,
+          components:   mainComponentsResolved,
         },
         options: (soloOptions ?? []).map(o => ({
           option_name:  o.option_name as string,
@@ -441,7 +499,7 @@ export const GET: RequestHandler = async ({ params, locals }) => {
     요금유형:     res.duration_type ? (DURATION_TYPE_LABELS[res.duration_type] ?? res.duration_type) : '-',
     할인차감:     formatDeltaAmount(couponDiscountAmount),
     차감포인트:   formatDeltaAmount(orderData?.selected_points),
-    구성품:       formatComponentsText(productRes.data?.components),
+    구성품:       formatComponentsText(mainComponentsResolved),
     // 신규: 주문 전체 상품 목록 (반복 영역 전용)
     상품목록: buildLineItems(lineItemReservations),
     // CS2654 C2 — 대응데이터 없던 6개 중 5개 신규 반영(이용기간금액은 의도적 보류)

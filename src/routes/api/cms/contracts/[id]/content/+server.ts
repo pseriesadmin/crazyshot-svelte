@@ -38,7 +38,7 @@ export const GET: RequestHandler = async ({ params, locals, url }) => {
 
   const { data, error } = await admin
     .from('contracts')
-    .select('title, content_blocks, specifications, authoring_mode, canvas_document, spreadsheet_document, html_document, html_issuer_signature_url, html_issuer_signature_width, html_issuer_signature_offset_x, html_issuer_signature_offset_y')
+    .select('title, content_blocks, specifications, authoring_mode, canvas_document, spreadsheet_document, html_document, html_issuer_signature_url, html_issuer_signature_width, html_issuer_signature_offset_x, html_issuer_signature_offset_y, contract_terms_text, privacy_terms_text')
     .eq('id', contractId)
     .maybeSingle()
 
@@ -82,6 +82,8 @@ export const PATCH: RequestHandler = async ({ params, locals, request }) => {
     html_issuer_signature_width?: number | null
     html_issuer_signature_offset_x?: number | null
     html_issuer_signature_offset_y?: number | null
+    contract_terms_text?: string | null
+    privacy_terms_text?: string | null
   }
   try {
     body = await request.json() as typeof body
@@ -208,6 +210,14 @@ export const PATCH: RequestHandler = async ({ params, locals, request }) => {
       return json({ error: 'html_issuer_signature_offset_y는 -2000~2000 사이여야 합니다.' }, { status: 400 })
     }
     updatePayload.html_issuer_signature_offset_y = offsetY ?? null
+  }
+  // Migration #478 — 예약별 1회성 "계약조항"·"개인정보동의" 원문(특약 specifications와
+  // 동일 성격). 미지정 필드는 기존 값 보존, null 전송 시 "기본 문구로 되돌리기"로 해석.
+  if ('contract_terms_text' in body) {
+    updatePayload.contract_terms_text = body.contract_terms_text ?? null
+  }
+  if ('privacy_terms_text' in body) {
+    updatePayload.privacy_terms_text = body.privacy_terms_text ?? null
   }
 
   const { error } = await admin
