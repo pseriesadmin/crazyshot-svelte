@@ -296,6 +296,64 @@ describe('BL-CHAT-B4(서명): 채팅 세션 재사용 정책 — 알림 유실 �
   });
 });
 
+describe('예약 만료(expired) 게이트 — isContractIssueBlocked', () => {
+  it('RED→GREEN: status=expired 예약은 서명이 409로 차단되고 signed_at이 채워지지 않는다', async () => {
+    const userId = await createEphemeralUser();
+    cleanups.push(() => deleteEphemeralUser(userId));
+
+    const reservationId = await createReservation(userId, 'expired');
+    cleanups.push(async () => {
+      await admin.from('rental_reservations').delete().eq('id', reservationId);
+    });
+
+    const { contractId, signingId, token } = await createContractWithSigning(userId, reservationId);
+    cleanups.push(async () => {
+      await admin.from('contract_signings').delete().eq('id', signingId);
+      await admin.from('contracts').delete().eq('id', contractId);
+    });
+
+    const { status, body } = await callSign(token);
+
+    expect(status).toBe(409);
+    expect(body.error).toEqual(expect.stringContaining('만료'));
+
+    const { data: signing } = await admin
+      .from('contract_signings')
+      .select('signed_at')
+      .eq('id', signingId)
+      .single();
+    expect(signing?.signed_at).toBeNull();
+  });
+
+  it('회귀 방지: status=cancelled 예약도 서명이 409로 차단된다', async () => {
+    const userId = await createEphemeralUser();
+    cleanups.push(() => deleteEphemeralUser(userId));
+
+    const reservationId = await createReservation(userId, 'cancelled');
+    cleanups.push(async () => {
+      await admin.from('rental_reservations').delete().eq('id', reservationId);
+    });
+
+    const { contractId, signingId, token } = await createContractWithSigning(userId, reservationId);
+    cleanups.push(async () => {
+      await admin.from('contract_signings').delete().eq('id', signingId);
+      await admin.from('contracts').delete().eq('id', contractId);
+    });
+
+    const { status, body } = await callSign(token);
+
+    expect(status).toBe(409);
+    expect(body.error).toEqual(expect.stringContaining('취소'));
+
+    const { data: signing } = await admin
+      .from('contract_signings')
+      .select('signed_at')
+      .eq('id', signingId)
+      .single();
+    expect(signing?.signed_at).toBeNull();
+  });
+});
+
 afterAll(async () => {
   // 개별 afterEach에서 대부분 정리되지만, 마지막 안전망으로 남은 항목은 없는지만 확인
 });
