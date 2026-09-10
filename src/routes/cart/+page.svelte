@@ -503,8 +503,10 @@
     openCalId = null;
   }
 
-  function fmtTime(h: number): string {
-    return `${String(h).padStart(2, '0')}:00`;
+  // 2026-09-10(Stephen 확정) — 30분 단위 선택 버튼 추가를 위해 분(m) 인자 도입.
+  // 기본값 0이라 기존 호출부(fmtTime(h))는 완전히 동일한 "HH:00"을 그대로 반환한다.
+  function fmtTime(h: number, m: number = 0): string {
+    return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
   }
 
   // 시간선택 노출 범위 — 24시간 전체로 확대(2026-08-20, Stephen 확정).
@@ -847,11 +849,14 @@
   // 통과한다. 지점이 0개(등록된 지점 없음)면 애초에 선택할 방법이 없으므로 필수에서 제외
   // — visitPickupPoints는 아래(§) 선언되지만 $derived 콜백은 컴포넌트 초기화가 끝난
   // 뒤에야 실제로 평가되므로 선언 순서와 무관하게 참조 가능(다른 $derived들도 동일 패턴).
+  // 2026-09-10(Stephen 확정): '무인보관함'(locker)도 방문(visit)과 동일하게 실물 지점을
+  // 골라야 하므로(RentalForm 스니펫의 isPointPickupMethod와 동일 기준) 지점 필수 판정도
+  // 함께 확장한다 — visit만 검사하면 locker 선택 시 지점을 안 골라도 제출이 통과해버린다.
   const pickupPointsSet = $derived(
     itemsState.every(it => {
       if (it.deleted || !it.checked) return true
-      const pickupPointNeeded = it.opts.rentalMethod === 'visit' && visitPickupPoints.length > 0
-      const returnPointNeeded = it.opts.returnMethod === 'visit' && visitPickupPoints.length > 0
+      const pickupPointNeeded = (it.opts.rentalMethod === 'visit' || it.opts.rentalMethod === 'locker') && visitPickupPoints.length > 0
+      const returnPointNeeded = (it.opts.returnMethod === 'visit' || it.opts.returnMethod === 'locker') && visitPickupPoints.length > 0
       return (!pickupPointNeeded || it.rentalForm.pickupPointId !== '') &&
         (!returnPointNeeded || it.returnForm.pickupPointId !== '')
     })
@@ -1174,6 +1179,13 @@
     // 어떤 RPC에도 전달되지 않아 저장이 안 되던 것을 수정 — Migration 476.
     pickupRequestNote?: string,
     returnRequestNote?: string,
+    // 2026-09-10(Stephen 확정, 실제 결함 수정): "방문" 선택 시 지점 콤보버튼(pickupPointId,
+    // 2026-09-07 신규 UI)으로 고른 값이 이 RPC에 전달되지 않아 rental_reservations.
+    // pickup_point_id/return_point_id(Migration #452)가 항상 NULL로 남고, 그 결과
+    // 전자계약 {{수령방법지점}}/{{반납방법지점}}·CMS RentalDetailPanel "수령방식"/
+    // "반납방식"에 지점명이 붙지 않던 결함을 수정 — Migration 479.
+    pickupPointId?: string,
+    returnPointId?: string,
   ): Promise<{ success: boolean; errorMessage: string | null }> {
     if (!resId) return { success: true, errorMessage: null }
     const { error } = await (supabase.rpc as unknown as RpcFn)('set_reservation_shipment_method', {
@@ -1186,6 +1198,8 @@
       p_pickup_address_detail: pickupAddressDetail || null,
       p_pickup_request_note:   pickupRequestNote || null,
       p_return_request_note:   returnRequestNote || null,
+      p_pickup_point_id:       pickupPointId || null,
+      p_return_point_id:       returnPointId || null,
     })
     return { success: !error, errorMessage: error?.message ?? null }
   }
@@ -1443,13 +1457,15 @@
   // 2026-09-07(Stephen 요청) — 방문 지점이 정확히 1개뿐이면 사용자가 굳이 콤보버튼을
   // 클릭하지 않아도 자동 선택. 수령·반납 leg 각각 독립 판단(그 leg의 방식이 'visit'이고
   // 아직 미선택 상태일 때만) — 2개 이상이면 자동 선택하지 않고 사용자가 직접 고르게 둔다.
+  // 2026-09-10(Stephen 확정) — '무인보관함'(locker)도 동일한 지점 목록·인터랙션을 공유하므로
+  // (RentalForm 스니펫 isPointPickupMethod와 동일 기준) 자동선택 대상에 함께 포함한다.
   $effect(() => {
     if (visitPickupPoints.length !== 1) return
     const onlyPoint = visitPickupPoints[0]
-    if (bulkOpts.rentalMethod === 'visit' && !bulkRentalForm.pickupPointId) {
+    if ((bulkOpts.rentalMethod === 'visit' || bulkOpts.rentalMethod === 'locker') && !bulkRentalForm.pickupPointId) {
       bulkRentalForm = { ...bulkRentalForm, pickupPointId: onlyPoint.id }
     }
-    if (bulkOpts.returnMethod === 'visit' && !bulkReturnForm.pickupPointId) {
+    if ((bulkOpts.returnMethod === 'visit' || bulkOpts.returnMethod === 'locker') && !bulkReturnForm.pickupPointId) {
       bulkReturnForm = { ...bulkReturnForm, pickupPointId: onlyPoint.id }
     }
   })
@@ -2019,6 +2035,15 @@
                   return
                 }
                 newReservationIds.push(String(reissueTyped.newReservationId))
+                // 2026-09-10(Stephen 확정) — 재발행으로 신규 등록된 예약도 draft→hold 승격
+                // (위 promote_draft_reservation 분기, notify-hold 호출 참고)과 동일하게
+                // "예약 신청 확인"(reservation_hold) 채팅 알림을 발송해야 한다 — 기존엔 구
+                // 예약을 취소만 하고 신규 예약에 대한 알림이 전혀 발송되지 않던 결함.
+                fetch('/api/checkout/notify-hold', {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ reservationId: reissueTyped.newReservationId }),
+                }).catch(() => {})
               }
               // itemsState의 해당 그룹 reservationIds를 신규 값으로 교체
               itemsState = itemsState.map(s =>
@@ -2106,7 +2131,8 @@
                     return
                   }
                   // 수령·반납 방식 저장 (기존 saveShipmentMethod 재사용) + 수령 주소 스냅샷(Migration 434)
-                  const shipmentResultCo = await saveShipmentMethod(reservationId, pickupMethodCo, returnMethodCo, it.rentalTime, it.returnTime, it.rentalForm.addr, it.rentalForm.addrDetail, it.rentalForm.notes, it.returnForm.notes)
+                  // + 방문지점(Migration 479) — rentalForm/returnForm 각 leg의 pickupPointId 그대로 전달
+                  const shipmentResultCo = await saveShipmentMethod(reservationId, pickupMethodCo, returnMethodCo, it.rentalTime, it.returnTime, it.rentalForm.addr, it.rentalForm.addrDetail, it.rentalForm.notes, it.returnForm.notes, it.rentalForm.pickupPointId, it.returnForm.pickupPointId)
                   if (!shipmentResultCo.success) {
                     csToast.error(shipmentResultCo.errorMessage ?? '수령/반납 방식 저장에 실패했습니다. 방식을 다시 선택해주세요.')
                     return
@@ -2638,7 +2664,13 @@
   {@const dateLabel = props.type === 'rental' ? '수령일' : '반납일'}
   {@const timeLabel = '시간'}
   {@const isVisit = props.method === 'visit'}
-  {@const addrLabel = isVisit ? '방문지점 정보' : (props.type === 'rental' ? '배송지 정보' : '반납위치 지정정보')}
+  <!-- 2026-09-10(Stephen 확정, 실제 결함 수정): '무인보관함'(locker)도 방문(visit)과 마찬가지로
+       실물 지점을 직접 방문해야 하는 방식이라 배송지 입력이 아니라 방문지점 선택 UI를 그대로
+       재사용해야 한다 — 별도 지점 데이터가 없으므로 기존 visitPickupPoints/pickupPointId
+       인터랙션을 그대로 공유한다. isVisit(엄격히 'visit'만)은 방문+영업외시간 무인보관함
+       인계 안내문(아래 form-note-locker)에서만 계속 그대로 쓰이므로 별도 변수로 분리한다. -->
+  {@const isPointPickupMethod = props.method === 'visit' || props.method === 'locker'}
+  {@const addrLabel = isPointPickupMethod ? '방문지점 정보' : (props.type === 'rental' ? '배송지 정보' : '반납위치 지정정보')}
   {@const isCalOpen = openCalId === props.calId}
   {@const isTimeOpen = openTimeId === props.timeId}
   <!-- 배송(delivery/crazydelivery) 잠금 상태(요청 A) — 시간선택 숨김 + 반납leg 콤보 잠금 기준 -->
@@ -2792,31 +2824,58 @@
                 <div class="time-section">
                   <span class="time-section-label">오전</span>
                   {#each TIME_AM_HOURS as h}
-                    {@const t = fmtTime(h)}
-                    {@const isSel = props.selectedTime === t}
-                    {@const isLocker = isLockerHour(t)}
-                    <button
-                      class="time-row"
-                      class:time-row-locker={isLocker}
-                      class:time-row-sel={isSel && !isLocker}
-                      class:time-row-locker-sel={isSel && isLocker}
-                      onclick={() => { props.onTimeChange(t); openTimeId = null; }}
-                    >{t}</button>
+                    <!-- 2026-09-10(Stephen 확정) — 정시(00분) 버튼 옆에 30분 버튼을 나란히
+                         배치. 시간(행) 개수·순서·오전/오후 구획 등 기존 구조는 그대로 두고,
+                         한 행 안에서만 좌우로 늘렸다(.time-row-pair, 아래 CSS 참고). -->
+                    {@const t00 = fmtTime(h)}
+                    {@const t30 = fmtTime(h, 30)}
+                    {@const isSel00 = props.selectedTime === t00}
+                    {@const isSel30 = props.selectedTime === t30}
+                    {@const isLocker00 = isLockerHour(t00)}
+                    {@const isLocker30 = isLockerHour(t30)}
+                    <div class="time-row-pair">
+                      <button
+                        class="time-row"
+                        class:time-row-locker={isLocker00}
+                        class:time-row-sel={isSel00 && !isLocker00}
+                        class:time-row-locker-sel={isSel00 && isLocker00}
+                        onclick={() => { props.onTimeChange(t00); openTimeId = null; }}
+                      >{t00}</button>
+                      <button
+                        class="time-row"
+                        class:time-row-locker={isLocker30}
+                        class:time-row-sel={isSel30 && !isLocker30}
+                        class:time-row-locker-sel={isSel30 && isLocker30}
+                        onclick={() => { props.onTimeChange(t30); openTimeId = null; }}
+                      >{t30}</button>
+                    </div>
                   {/each}
                 </div>
                 <div class="time-section">
                   <span class="time-section-label">오후</span>
                   {#each TIME_PM_HOURS as h}
-                    {@const t = fmtTime(h)}
-                    {@const isSel = props.selectedTime === t}
-                    {@const isLocker = isLockerHour(t)}
-                    <button
-                      class="time-row"
-                      class:time-row-locker={isLocker}
-                      class:time-row-sel={isSel && !isLocker}
-                      class:time-row-locker-sel={isSel && isLocker}
-                      onclick={() => { props.onTimeChange(t); openTimeId = null; }}
-                    >{t}</button>
+                    {@const t00 = fmtTime(h)}
+                    {@const t30 = fmtTime(h, 30)}
+                    {@const isSel00 = props.selectedTime === t00}
+                    {@const isSel30 = props.selectedTime === t30}
+                    {@const isLocker00 = isLockerHour(t00)}
+                    {@const isLocker30 = isLockerHour(t30)}
+                    <div class="time-row-pair">
+                      <button
+                        class="time-row"
+                        class:time-row-locker={isLocker00}
+                        class:time-row-sel={isSel00 && !isLocker00}
+                        class:time-row-locker-sel={isSel00 && isLocker00}
+                        onclick={() => { props.onTimeChange(t00); openTimeId = null; }}
+                      >{t00}</button>
+                      <button
+                        class="time-row"
+                        class:time-row-locker={isLocker30}
+                        class:time-row-sel={isSel30 && !isLocker30}
+                        class:time-row-locker-sel={isSel30 && isLocker30}
+                        onclick={() => { props.onTimeChange(t30); openTimeId = null; }}
+                      >{t30}</button>
+                    </div>
                   {/each}
                 </div>
               </div>
@@ -2875,7 +2934,7 @@
     <div class="form-section">
       <div class="form-section-header">
         <span class="form-section-label">{addrLabel}</span>
-        {#if !isVisit}
+        {#if !isPointPickupMethod}
           <label class="form-check-label" class:form-check-label-disabled={!props.hasUserAddress}>
             <button
               class="checkbox-btn checkbox-btn-terms"
@@ -2902,7 +2961,7 @@
           </label>
         {/if}
       </div>
-      {#if isVisit}
+      {#if isPointPickupMethod}
         <!-- 방문대여/방문반납 선택 시 배송지 입력 대신 실제 방문 지점 정보로 대체(2026-08-17)
              — 2026-09-07(Stephen 요청): 지점이 여러 개면 콤보버튼으로 직접 선택 가능하게
              변경(기존엔 전부 텍스트로만 나열, 선택 자체가 불가능했음). 1개면 자동 선택
@@ -2912,7 +2971,10 @@
              다건 가로배열 전용)를 그대로 재사용했던 걸 전용 스타일로 교체: 각 지점을
              가로로 긴 버튼 1개당 1행(직렬 목록)으로 쌓고, 그 버튼 안에 점명+주소를 함께
              표시(선택 전에도 주소가 바로 보임 — 이전엔 선택 후에만 별도로 아래 표시).
-             버튼 상하 패딩은 표준 .combo-btn(9px)의 70%(6px)로 축소. -->
+             버튼 상하 패딩은 표준 .combo-btn(9px)의 70%(6px)로 축소.
+             2026-09-10(Stephen 확정) — '무인보관함'(locker)도 실물 지점을 방문해야 하는
+             방식이라 '배송지 정보 입력' 대신 이 방문지점 선택 UI를 그대로 공유한다(별도
+             지점 데이터 모델이 없음 — CMS `pickup_points`가 유일한 지점 소스). -->
         <div class="visit-info">
           {#if props.pickupPoints && props.pickupPoints.length > 0}
             <div class="pickup-point-list">
@@ -3972,16 +4034,15 @@
     opacity: 0.7;
   }
 
-  /* 5탭 배송 방식 선택기 */
+  /* 5탭 배송 방식 선택기 — 2026-09-10(Stephen 확정): 가로 스크롤(overflow-x:auto)은
+     스크롤바를 숨긴 채로 넘치는 항목을 감춰, 화면에 안 보이는 방식이 있다는 걸 사용자가
+     인지하지 못하는 오해 소지가 있었다 — flex-wrap으로 교체해 전체 방식을 한 화면에
+     병렬 배열(필요 시 다음 줄로 자동 줄바꿈)해 항상 전부 노출한다. */
   .delivery-combo {
     display: flex;
+    flex-wrap: wrap;
     gap: 6px;
-    overflow-x: auto;
-    padding-bottom: 2px;
-    -webkit-overflow-scrolling: touch;
-    scrollbar-width: none;
   }
-  .delivery-combo::-webkit-scrollbar { display: none; }
   .combo-btn {
     display: flex;
     align-items: center;
@@ -4128,7 +4189,13 @@
     border-radius: 20px;
     padding: 16px;
     box-shadow: 0 8px 30px rgba(16,11,50,0.15);
-    width: 50%;
+    /* 2026-09-10(Stephen 확정) — 30분 단위 버튼을 정시 버튼과 한 행에 나란히 배치하기
+       위해, 기존 50%(.cal-layer의 절반 폭)에서 .cal-layer와 동일한 100%로 확장한다.
+       세로폭(각 .time-list의 max-height)은 변경하지 않음 — 아래 .time-row-pair가 이
+       넓어진 폭을 2분할해 쓰므로 시간 행 개수(=세로 길이)는 그대로 유지된다.
+       PC·모바일 공용 규칙이라 기존에 모바일 전용이었던 width:100% 오버라이드는
+       불필요해져 제거함(아래 @media (max-width:640px) 블록 참고). */
+    width: 100%;
     box-sizing: border-box;
   }
   /* 시간 선택 — 오전/오후 구획 세로 스크롤 리스트(2026-08-17, B안 채택).
@@ -4176,6 +4243,17 @@
     color: var(--cs-text-dark);
     cursor: pointer;
     transition: background 0.15s;
+  }
+  /* 2026-09-10(Stephen 확정) — 정시(00분)·30분 버튼을 한 행에 나란히 배치하는 래퍼.
+     .time-row 자체 규칙(패딩·폰트·min-height 등)은 전혀 건드리지 않는다 — 레이어 폭이
+     위에서 2배(50%→100%)로 넓어진 만큼 이 래퍼가 2분할해서 쓰므로, 버튼 1개의 실제
+     렌더링 크기(폭 포함)는 이번 변경 전과 동일하게 유지된다. */
+  .time-row-pair {
+    display: flex;
+    gap: 10px;
+  }
+  .time-row-pair .time-row {
+    flex: 1;
   }
   .time-row:hover { background: var(--cs-purple-op10); }
   .time-row-sel { background: var(--cs-purple) !important; color: var(--cs-white) !important; font-weight: 700; }
@@ -4807,9 +4885,8 @@
     /* 2026-09-03(Stephen 확정) — 모바일에서 한 단계 큰 토큰으로 상향(16px Bold→18px Bold,
        PC 기본값과 동일해짐). 수령/반납 양쪽 버튼이 이 클래스를 공유해 함께 적용됨. */
     .datetime-btn-label { font: var(--text-m-title-18B); letter-spacing: -0.5px; }
-    /* 모바일: 시간선택 리스트는 50%(PC 기준)로는 너무 좁아 전체폭 확보(가독성 개선,
-       2026-08-17) — 날짜/시간 팝업은 한 번에 하나만 열리므로 폭 겹침 없음 */
-    .time-layer { width: 100%; }
+    /* 모바일 전용 세로폭·폰트 축소 — .time-layer 자체 폭(100%)은 2026-09-10부터 PC와
+       공용 규칙(기본 .time-layer 선언부)으로 통일돼 여기서 별도로 재선언하지 않는다. */
     .time-list { max-height: 240px; }
     .time-row { font: var(--text-m-script-14B); }
     .total-gray-section { padding: 20px; }
