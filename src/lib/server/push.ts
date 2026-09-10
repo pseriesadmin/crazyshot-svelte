@@ -8,11 +8,21 @@ import { cert, getApps, initializeApp, type App } from 'firebase-admin/app'
 import { getMessaging } from 'firebase-admin/messaging'
 import type { Database, NotificationToken, PushNotificationConfig } from '$lib/types/database'
 import { callTypedRpc } from '$lib/utils/rpc'
+import { sendReservationLifecycleSmsFallback } from './sms'
 
 export interface PushPayload {
   title: string
   body: string
   link?: string
+}
+
+/**
+ * sendPushToUser 반환 결과 — 호출부에서 SMS 폴백 등 후속 처리에 활용한다.
+ * 기존 호출부는 반환값을 무시해도 동작에 영향 없음(backward compatible).
+ */
+export type PushDeliveryResult = {
+  delivered: boolean
+  reason: 'sent' | 'opted_out' | 'disabled' | 'no_token' | 'delivery_failed' | 'error'
 }
 
 // 고객 라이프사이클 푸시 문구 — 기존 send_rental_chat_notification RPC(Migration 150/170/174)의
@@ -134,8 +144,14 @@ async function logResult(
 }
 
 // 대상 사용자들에게 실제 발신 + 만료 토큰 정리 + 결과 로깅 (내부 전용)
-async function dispatch(userIds: string[], type: string, payload: PushPayload): Promise<void> {
-  if (userIds.length === 0) return
+// 반환값: sentToUserIds(실제 FCM 전달 성공 uid 집합) + hadTokens(토큰 존재 여부)
+// hadTokens=false이면 no_token, hadTokens=true&미포함이면 delivery_failed로 구분 가능.
+async function dispatch(
+  userIds: string[],
+  type: string,
+  payload: PushPayload,
+): Promise<{ sentToUserIds: Set<string>; hadTokens: boolean }> {
+  if (userIds.length === 0) return { sentToUserIds: new Set(), hadTokens: false }
   const supabase = getServiceClient()
 
   const { data: tokenRows, error: tokenError } = await supabase
@@ -149,7 +165,7 @@ async function dispatch(userIds: string[], type: string, payload: PushPayload): 
     for (const userId of userIds) {
       await logResult(supabase, userId, type, payload, 'skipped', tokenError ? 'token_query_error' : 'no_active_token')
     }
-    return
+    return { sentToUserIds: new Set(), hadTokens: false }
   }
 
   const messaging = getMessaging(getFirebaseApp())
@@ -195,14 +211,21 @@ async function dispatch(userIds: string[], type: string, payload: PushPayload): 
       await logResult(supabase, userId, type, payload, 'skipped', 'no_active_token')
     }
   }
+
+  return { sentToUserIds: sentUserIds, hadTokens: true }
 }
 
 /**
  * 고객 1명에게 푸시 발송 — push_notification_config 마스터 스위치 +
  * 고객 opt-in(allow_rental_alert/allow_benefit_alert) 확인 후 발송.
  * 실패해도 절대 throw하지 않음(채팅 알림 발송과 완전히 독립적으로 동작).
+ * 반환값(PushDeliveryResult)으로 SMS 폴백 등 후속 처리 가능 — 기존 호출부는 무시해도 됨.
  */
-export async function sendPushToUser(userId: string, notifyType: string, payload: PushPayload): Promise<void> {
+export async function sendPushToUser(
+  userId: string,
+  notifyType: string,
+  payload: PushPayload,
+): Promise<PushDeliveryResult> {
   try {
     const supabase = getServiceClient()
 
@@ -213,7 +236,7 @@ export async function sendPushToUser(userId: string, notifyType: string, payload
       .returns<Pick<PushNotificationConfig, 'push_enabled' | 'category'>[]>()
       .maybeSingle()
 
-    if (config && config.push_enabled === false) return
+    if (config && config.push_enabled === false) return { delivered: false, reason: 'disabled' }
 
     const optInColumn = config?.category === 'customer_marketing' ? 'allow_benefit_alert' : 'allow_rental_alert'
     const { data: profile } = await supabase
@@ -223,11 +246,14 @@ export async function sendPushToUser(userId: string, notifyType: string, payload
       .returns<Record<string, boolean>[]>()
       .maybeSingle()
 
-    if (profile && profile[optInColumn] === false) return
+    if (profile && profile[optInColumn] === false) return { delivered: false, reason: 'opted_out' }
 
-    await dispatch([userId], notifyType, payload)
+    const { sentToUserIds, hadTokens } = await dispatch([userId], notifyType, payload)
+    if (sentToUserIds.has(userId)) return { delivered: true, reason: 'sent' }
+    return { delivered: false, reason: hadTokens ? 'delivery_failed' : 'no_token' }
   } catch {
     // 발신 허브 오류는 호출부로 전파하지 않음
+    return { delivered: false, reason: 'error' }
   }
 }
 
@@ -257,11 +283,26 @@ export async function sendReservationLifecyclePush(
     const productsField = row.products
     const productName = (Array.isArray(productsField) ? productsField[0]?.name : productsField?.name) ?? '상품'
 
-    await sendPushToUser(row.user_id, notifyType, {
+    const pushResult = await sendPushToUser(row.user_id, notifyType, {
       title: copy.title,
       body: copy.body(productName),
       link: '/account/rental',
     })
+
+    // SMS 폴백: 푸시 미수신(토큰 없음 또는 전달 실패) + 크리티컬 이벤트(reservation_approval·
+    // return_remind)일 때만 고객 휴대폰으로 SMS 보조 발송.
+    // ALIGO_API_KEY 미설정 시 sendSms 내부에서 graceful skip되므로 조건 분기 불필요.
+    if (!pushResult.delivered && (pushResult.reason === 'no_token' || pushResult.reason === 'delivery_failed')) {
+      const { data: userProfile } = await admin
+        .from('user_profiles')
+        .select('phone')
+        .eq('id', row.user_id)
+        .maybeSingle()
+      const phone = (userProfile as { phone?: string | null } | null)?.phone
+      if (phone) {
+        await sendReservationLifecycleSmsFallback(phone, productName, notifyType)
+      }
+    }
   } catch {
     // 예약 정보 조회 실패 등 — 호출부(채팅 발송)로 전파하지 않음
   }
@@ -342,5 +383,56 @@ export async function sendNewChatSessionAdminPush(
     })
   } catch {
     // 조회 실패 등 — 세션 생성 자체는 이미 성공 처리된 상태이므로 전파하지 않음
+  }
+}
+
+/**
+ * 긴급상담(CS_ESCALATE) 관리자 푸시 — /api/chat/message에서 AI 의도분류 결과가
+ * CS_ESCALATE일 때 (캔드매칭 SENSITIVE_CANNED_CATEGORIES 포함) 호출한다.
+ * 중복방지(2단계, sp3-qa-agent GATE E 검수로 발견된 공백 보완 — 2026-09-10):
+ *   ① admin_id IS NOT NULL — 실제 관리자가 그 세션에 한 번이라도 응답한 적 있으면 영구 스킵
+ *   ② urgent_push_sent_at IS NOT NULL — 관리자 미응답 상태에서 이미 1회 발송했으면 스킵
+ *      (같은 세션에서 관리자 응답 전까지 고객이 메시지를 여러 번 보내도 최초 1회만 발송)
+ * 두 컬럼 모두 이 함수가 매 호출마다 DB에서 직접 조회해 판정한다(호출부의 판단을 신뢰하지
+ * 않음 — 단일 진실 공급원). 발송 성공 시 urgent_push_sent_at을 즉시 채워 이후 재호출을 차단.
+ * 실패해도 절대 throw하지 않는다(채팅 메시지 발송 자체는 이미 완료된 상태).
+ * Migration #481(admin_notify_urgent_chat_message 컬럼 등) + #482(urgent_push_sent_at
+ * 컬럼) 적용 필요.
+ */
+export async function sendUrgentChatAdminPush(
+  admin: SupabaseClient,
+  sessionId: string,
+  userId: string,
+): Promise<void> {
+  try {
+    const { data: sessionRow } = await admin
+      .from('chat_sessions')
+      .select('admin_id, urgent_push_sent_at')
+      .eq('id', sessionId)
+      .maybeSingle()
+
+    const row = sessionRow as { admin_id?: string | null; urgent_push_sent_at?: string | null } | null
+    if (!row || row.admin_id != null || row.urgent_push_sent_at != null) return
+
+    const { data: profile } = await admin
+      .from('user_profiles')
+      .select('full_name')
+      .eq('id', userId)
+      .maybeSingle()
+
+    const customerName = (profile as { full_name?: string } | null)?.full_name ?? '고객'
+
+    await sendPushToAdmins('urgent_chat_message', {
+      title: '긴급 상담 메시지가 도착했어요',
+      body: `${customerName}님이 상담을 요청했어요.`,
+      link: `/cms/chat?session=${sessionId}`,
+    })
+
+    await admin
+      .from('chat_sessions')
+      .update({ urgent_push_sent_at: new Date().toISOString() })
+      .eq('id', sessionId)
+  } catch {
+    // 조회 실패 등 — 채팅 메시지 발송 자체는 이미 성공 처리된 상태이므로 전파하지 않음
   }
 }

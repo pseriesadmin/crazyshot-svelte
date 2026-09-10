@@ -2,6 +2,7 @@ import { json } from '@sveltejs/kit'
 import { createClient } from '@supabase/supabase-js'
 import { env } from '$env/dynamic/private'
 import { getSupabaseUrl } from '$lib/env/supabasePublic'
+import { sendPushToAdmins } from '$lib/server/push'
 import type { RequestHandler } from './$types'
 
 // 예약 신청(hold) 시점 주문(orders/order_items) 연결 — Migration 280 create_reservation_order.
@@ -60,5 +61,23 @@ export const POST: RequestHandler = async ({ locals, request }) => {
   }
 
   const order = data?.[0] ?? null
+
+  // 3-2: 신규 예약 관리자 푸시 복구 (fail-soft — 실패해도 예약 신청 결과에 영향 없음)
+  try {
+    const { data: profile } = await admin
+      .from('user_profiles')
+      .select('full_name')
+      .eq('id', session.user.id)
+      .maybeSingle()
+    const customerName = (profile as { full_name?: string } | null)?.full_name ?? '고객'
+    await sendPushToAdmins('new_reservation', {
+      title: '새 예약 신청이 들어왔어요',
+      body: `${customerName}님이 ${reservationIds.length}건 예약 신청을 했어요.`,
+      link: '/cms/reservation',
+    })
+  } catch {
+    // 관리자 푸시 실패는 무시
+  }
+
   return json({ orderId: order?.order_id ?? null, orderKey: order?.order_key ?? null })
 }

@@ -46,6 +46,7 @@
     { key: 'contract_signed', label: '전자서명', field: 'admin_notify_contract_signed' as const },
     { key: 'payment_completed', label: '결제완료', field: 'admin_notify_payment_completed' as const },
     { key: 'new_session', label: '신규상담', field: 'admin_notify_new_session' as const },
+    { key: 'urgent_chat_message', label: '긴급상담', field: 'admin_notify_urgent_chat_message' as const },
   ] as const
 
   let togglingAdminCell = $state<string | null>(null)
