@@ -28,6 +28,32 @@ export const POST: RequestHandler = async ({ request, locals }) => {
   // service_role 클라이언트로 phone_otps 삽입 (RLS bypass)
   const admin = createClient(PUBLIC_SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
 
+  // 서버측 재발송 최소 간격 — 아직 유효한(만료 전) 미인증 OTP가 있으면 재발송 차단.
+  // 클라이언트 카운트다운(5분, ProfileTabContent.svelte startCountdown())과 동일 기준을
+  // 서버에서도 강제 — API를 직접 호출해 우회하는 SMS 스팸/과금 남용 방지.
+  const { data: activeOtp, error: activeOtpErr } = await admin
+    .from('phone_otps')
+    .select('expires_at')
+    .eq('user_id', session.user.id)
+    .eq('phone', phone)
+    .is('verified_at', null)
+    .gt('expires_at', new Date().toISOString())
+    .order('created_at', { ascending: false })
+    .limit(1)
+    .maybeSingle()
+
+  // 조회 실패 시 재발송 제한만 건너뛰고 정상 발송은 계속 진행(fail-open) — 이 조회는
+  // 과금 남용 방지용 보조 체크일 뿐, 실패했다고 정상 사용자의 발송 자체를 막을 이유는 없다.
+  if (activeOtpErr) console.error('[send-otp] active-otp check error:', activeOtpErr)
+
+  if (activeOtp) {
+    const remainingSec = Math.max(1, Math.ceil((new Date((activeOtp as { expires_at: string }).expires_at).getTime() - Date.now()) / 1000))
+    return json(
+      { ok: false, error: `이미 발송된 인증번호가 있어요. ${remainingSec}초 후 다시 시도해 주세요.` },
+      { status: 429 },
+    )
+  }
+
   // 기존 미인증 OTP 만료 처리 (동일 user+phone)
   await admin
     .from('phone_otps')
