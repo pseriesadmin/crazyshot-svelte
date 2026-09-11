@@ -32,6 +32,11 @@ export interface RentalListRow {
   return_method:     string | null
   pickup_time:       string | null
   return_time:       string | null
+  /** 방문 지점명(Migration #480) — rental_reservations.pickup_point_id/return_point_id
+      (Migration #479로 실제 저장 시작)를 pickup_points와 조인한 값. 지점이 없는 방식
+      (배송 등)은 NULL — "수령방식"/"반납방식" 표시 시 "방식명 (지점명)" 형태로 조합 */
+  pickup_point_name: string | null
+  return_point_name: string | null
   user_id:           string
   customer_name:     string
   customer_email:    string
