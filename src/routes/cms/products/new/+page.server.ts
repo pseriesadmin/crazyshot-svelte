@@ -441,11 +441,15 @@ export const actions: Actions = {
       if (optionsErr) regWarnings.push('options')
     }
 
-    // 재고 1개 자동 생성 (자식 상품 — create_hold_reservation 기준)
-    const { error: invError } = await admin.rpc('auto_create_inventory_for_product', { p_product_id: product.id })
-    if (invError) regWarnings.push('inv')
-
     // BND-11: 임시 업로드 이미지를 실제 product_id 폴더로 이관
+    // ⛔ 2026-09-11 순서 수정 — 이 블록은 반드시 "재고 1개 자동 생성"보다 먼저 실행돼야 한다.
+    // auto_create_inventory_for_product(Migration #193)는 호출 시점의 부모 image_urls를
+    // 그대로 복사해 자식 행을 만드는데, 예전엔 이 이관 블록이 그 뒤에 실행되면서 부모
+    // image_urls만 갱신하고(.eq('id', product.id)) 이미 생성된 자식에는 반영되지 않아,
+    // 이미지가 있는 신규 상품마다 자동 생성되는 "기본 재고"(§2-3, 확정 정책) 자식이 예외
+    // 없이 temp 경로를 영구히 물고 있는 결함으로 이어졌다(Production 실측 42건 확인).
+    // 이관을 먼저 끝내 부모 image_urls를 실제 경로로 갱신한 뒤 재고를 생성하면, 자식이
+    // 복사해가는 값도 처음부터 정상 경로가 된다.
     const tempId = (form.get('temp_id') as string | null)?.trim()
     if (tempId && image_urls.length > 0) {
       const BUCKET = 'product-images'
@@ -490,6 +494,12 @@ export const actions: Actions = {
         await admin.from('products').update({ image_urls: movedUrls }).eq('id', product.id)
       }
     }
+
+    // 재고 1개 자동 생성 (자식 상품 — create_hold_reservation 기준)
+    // 위 BND-11 이관 블록 이후에 실행해야 이 RPC가 복사해가는 부모 image_urls가
+    // 이미 정상 경로로 갱신된 상태다(순서 수정 사유는 위 BND-11 주석 참고).
+    const { error: invError } = await admin.rpc('auto_create_inventory_for_product', { p_product_id: product.id })
+    if (invError) regWarnings.push('inv')
 
     // §C-2: 이중언어 병기 패턴 학습 훅 (fire-and-forget — 등록 흐름 블록 금지)
     // content_blocks(상품설명)도 포함 — updateSection('content') 경로와 스캔 범위 일치
