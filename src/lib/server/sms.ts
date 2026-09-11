@@ -1,36 +1,35 @@
 import { env } from '$env/dynamic/private'
+import { SolapiMessageService } from 'solapi'
 
-// SMS 발송: Aligo REST API (multipart/form-data)
+// SMS 발송: Solapi SDK (HMAC 서명 인증 — IP 등록 불필요, Vercel 서버리스에 최적)
 // env 미설정 시 SMS 미전송 (graceful skip) — api/profile/send-otp에서 이동(2026-08-20,
 // 무인보관함 안내 발송과 공유하기 위해 메시지 본문을 인자로 받는 범용 형태로 일반화).
+// 2026-09-10: Aligo(IP 화이트리스트 필수) → Solapi(HMAC 인증, IP 제약 없음)로 전면 교체.
 export async function sendSms(to: string, message: string): Promise<void> {
-  const apiKey      = env.ALIGO_API_KEY
-  const userId      = env.ALIGO_USER_ID
+  const apiKey      = env.SOLAPI_API_KEY
+  const apiSecret   = env.SOLAPI_API_SECRET
   const senderPhone = env.SMS_SENDER_PHONE
 
-  if (!apiKey || !userId || !senderPhone) {
+  // 키 미설정 시 graceful skip — 로컬 개발 중 OTP 발송 경로가 에러 없이 통과되도록 보장
+  if (!apiKey || !apiSecret || !senderPhone) {
     return
   }
 
-  const form = new FormData()
-  form.append('key',      apiKey)
-  form.append('user_id',  userId)
-  form.append('sender',   senderPhone)
-  form.append('receiver', to)
-  form.append('msg',      message)
+  const service = new SolapiMessageService(apiKey, apiSecret)
 
-  const res = await fetch('https://apis.aligo.in/send/', {
-    method: 'POST',
-    body: form,
+  // 수신번호·발신번호 양쪽 모두 하이픈 제거 필수 (Solapi 공식 예제 명시 요건)
+  const toClean   = to.replace(/-/g, '')
+  const fromClean = senderPhone.replace(/-/g, '')
+
+  const res = await service.send({
+    to:   toClean,
+    from: fromClean,
+    text: message,
   })
 
-  if (!res.ok) {
-    throw new Error(`Aligo HTTP 오류: ${res.status}`)
-  }
-
-  const data = await res.json() as { result_code: number; message: string }
-  if (data.result_code !== 1) {
-    throw new Error(`SMS 발송 실패: ${data.message} (code ${data.result_code})`)
+  if (res.failedMessageList.length > 0) {
+    const first = res.failedMessageList[0]
+    throw new Error(`SMS 발송 실패: ${JSON.stringify(first)}`)
   }
 }
 
@@ -49,7 +48,7 @@ const CRITICAL_SMS_FALLBACK_COPY: Record<string, (productName: string) => string
  * (no_token: 토큰 미등록 / delivery_failed: FCM 전달 실패)에 보조 SMS를 발송한다.
  * 발송 대상: reservation_approval, return_remind (크리티컬 2종만)
  * 실패해도 절대 throw하지 않음 — 호출부(push.ts)의 흐름에 영향을 주지 않기 위해.
- * ALIGO_API_KEY 미설정 시 sendSms 내부에서 graceful skip됨.
+ * SOLAPI_API_KEY/SOLAPI_API_SECRET 미설정 시 sendSms 내부에서 graceful skip됨.
  */
 export async function sendReservationLifecycleSmsFallback(
   phone: string,
