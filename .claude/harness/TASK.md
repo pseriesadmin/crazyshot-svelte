@@ -1,5 +1,490 @@
 # .claude/harness/TASK.md
 
+## DONE — 🔴 CRITICAL: 신규 상품 등록 시 "기본 재고" 자식 상품 이미지 영구 깨짐 결함 수정 + Production 42건 백필 (2026-09-11, 이 세션, ✅ GATE E 통과 — sp3-qa-agent 재검수 완료, git commit만 Stephen 대기)
+
+### 배경
+
+Stephen이 Claude Browser로 선택한 CMS 대여현황(RentalDetailPanel) 화면 요소 2건에서 상품
+썸네일 이미지가 깨져 보인다고 제보(`<launch-selected-element>`, "Instax Wide 400" ·
+"Dog Harness"). Production DB를 직접 조회해 원인을 분리 진단:
+
+- **Instax Wide 400 건**: DB(`products.image_urls`)는 이미 정상 경로 — 브라우저 탭이
+  이관 완료 이전 시점 데이터를 캐시한 채 새로고침되지 않은 것뿐(코드 결함 아님).
+- **Dog Harness 건**: DB에 실제로 `product-images/temp/{uuid}/...` 경로가 영구히
+  남아 있는 진짜 결함 확인. Production 전수 조회 결과 동일 결함이 **42건** 존재.
+
+### 원인 (`src/routes/cms/products/new/+page.server.ts`)
+
+신규 상품 등록 액션 내 두 단계의 실행 순서가 뒤바뀌어 있었다:
+1. "재고 1개 자동 생성"(`auto_create_inventory_for_product`, Migration #193) — 호출
+   시점의 부모 `image_urls`를 그대로 복사해 자식(§2-3 "기본 재고") 행을 생성
+2. "BND-11: 임시 업로드 이미지 → 실제 product_id 폴더 이관" — 부모 `image_urls`만
+   갱신(`.eq('id', product.id)`)
+
+①이 ②보다 먼저 실행되던 기존 코드에서는, 자식이 복사해가는 시점의 부모 `image_urls`가
+아직 temp 경로 상태였고, ②는 부모만 갱신하므로 이미 생성된 자식에는 정상 경로가 영영
+반영되지 않았다. `get_rental_list` RPC는 예약의 `product_id`(=이 자식)를 기준으로
+이미지를 조회하므로, 이 자식이 배정된 모든 예약이 CMS에서 이미지가 깨져 보였다.
+
+### 수정
+
+- `src/routes/cms/products/new/+page.server.ts` — ①②의 실행 순서를 맞바꿈(이관을
+  먼저 완료해 부모 `image_urls`를 정상 경로로 갱신한 뒤 재고 자동생성). 그 외 로직
+  (이관 실패 폴백, regWarnings 등)은 무변경.
+- Migration #491(`supabase/migrations/20260911120000_491_backfill_child_image_urls_from_parent.sql`,
+  신규 파일) — 이미 발생한 기존 42건을 부모의 현재 `image_urls`로 1회성 백필.
+  실행 전 영향받은 42건 전부 부모 자신은 temp 경로가 없는 정상 상태임을 SELECT로
+  확인(오염된 부모 0건 — 안전 확인 후 진행). 백업 스냅샷(`_migration_491_backup`
+  테이블)을 먼저 생성한 뒤 UPDATE 실행.
+
+### 검증
+
+- `npx svelte-check --tsconfig ./tsconfig.json` — 터치 파일 신규 에러 0건.
+- 관련 테스트 4개 파일(`productNew`·`productComboRequired`·`productCodeComboMerge`·
+  `productCodeTierTwo`) 16/16 GREEN — 회귀 없음.
+- 동일 순서 버그 패턴이 다른 경로(`/cms/products` 상품 복제 플로우)에는 없음을 grep으로
+  확인 — `products/new/+page.server.ts` 1곳만 해당.
+- ⛔ **Stephen 명시 지시로 Stage는 건드리지 않고 Production에만 직접 적용**(§ 통상
+  "Stage 선검증 → Production" 순서에서 벗어난 예외 — 순수 데이터 백필이고 실행 전
+  SELECT로 대상 42건·부모 정합성을 전수 확인한 뒤 진행한 것이라 Stephen이 안전하다고
+  판단해 승인). 백필 후 재확인: `remaining_broken = 0`(0건), 백업 42건 스냅샷 생성 확인,
+  "Dog Harness" 자식 실제 재조회로 정상 경로 3장 확인.
+- sp3-qa-agent 사후 독립검수 진행 예정(검수 결과는 이 블록에 후속 반영).
+
+### sp3-qa-agent 검수 결과 (2026-09-11, 독립검수 1차) — ⚠️ 조건부 통과, 1건 보완 후 재검수 대기
+
+`+page.server.ts` 순서교환은 diff 대조 + `auto_create_inventory_for_product`(Migration
+#193) 정의 직접 열람으로 효과성까지 확인 완료(RPC가 image_urls를 파라미터로 안 받고
+호출 시점 DB를 직접 SELECT하므로 순서교환이 의미 있음을 검증). 동일 패턴이 `/cms/products`
+복제 플로우엔 없음도 확인. svelte-check·관련 테스트 4파일 16/16 GREEN.
+
+**블로킹 지적 1건**: Migration #491 파일에 "백업 먼저 생성 후 UPDATE"라고 서술했으나,
+실제 커밋 대상 파일에는 `CREATE TABLE _migration_491_backup ...`가 ROLLBACK 섹션 안에
+**주석으로만** 존재하고 실행문이 아니었음(Production에는 별도로 실제 실행해 42행 백업이
+존재하지만, 파일 자체가 그 사실을 반영하지 못해 향후 재현·감사 시 실제 실행 내용과
+어긋남).
+
+**보완 완료**: Production `_migration_491_backup` 42행 실재를 재조회로 재확인(backed_up_at
+2026-09-11 09:40:17 UTC) 후, 마이그레이션 파일의 `CREATE TABLE` 문을 주석에서 꺼내
+UPDATE **이전에 실제로 실행되는 문장**으로 이동(`CREATE TABLE IF NOT EXISTS`로 재실행
+안전성 확보) + ROLLBACK 섹션을 실제 백업 테이블 기반 복원 SQL로 교체.
+
+### sp3-qa-agent 재검수 결과 (2026-09-11, 독립검수 2차) — ✅ GATE E 통과
+
+CREATE TABLE 문이 실제로 UPDATE 앞의 실행문으로 이동했는지 diff로 직접 확인, 파일
+전체 문법·서술 일치 재검토(세미콜론 위치·재실행 안전성 등), ROLLBACK 복원 SQL의
+컬럼 참조가 백업 테이블 스키마와 정확히 일치하는지 확인, 마이그레이션 파일 외
+추가 변경 없음(`+page.server.ts`는 1차 검수 때 이미 검증된 그대로) 확인 — 신규
+이슈 없이 통과. git commit만 Stephen 실행 대기.
+
+---
+
+## DONE — 🟡 BOUNDARY: 로그인 화면(`/auth/login`) PC 버튼 레이아웃 순서 맞교환 + 그라데이션 토큰 컬러 변경 + 모바일 링크 폰트 축소 (2026-09-11, 이 세션, ✅ GATE E 통과 — sp3-qa-agent 검수 완료, git commit만 Stephen 대기)
+
+### 배경
+
+이 세션에서 로그인 화면(`/auth/login`)에 대해 Stephen이 순차 지시한 UI 조정 3건. 직전
+세션(별도 인계 md 기준)에서 이미 모바일(`.m-`) 쪽 블록 순서를 "레거시인증링크+Sign 버튼"
+→ "SNS 로그인 그룹" 순으로 맞춰둔 상태였고, 이번 세션은 그 후속으로 PC(`.d-`) 쪽도 동일
+순서로 맞추는 것부터 시작해 로그인 버튼 그라데이션 컬러·모바일 링크 폰트 크기까지 이어졌다.
+
+### 수정 내역
+
+```
+1. PC(`.d-`) 버튼 레이아웃 순서 맞교환 — src/routes/auth/login/+page.svelte
+   변경 전: meta-row → SNS 구분선+소셜아이콘 → 에러메시지 → 레거시인증링크 → Sign In/Up 버튼
+   변경 후: meta-row → 레거시인증링크 → Sign In/Up 버튼 → 에러메시지 → SNS 구분선+소셜아이콘
+   → 모바일(.m-, 직전 세션에 이미 동일 순서로 반영됨)과 순서 통일. 로직(onclick·조건부
+     렌더링)·CSS 전부 무수정, 블록 순서만 이동(.d-form-panel의 flex gap:30px 구조 그대로 적용,
+     .d-legacy-verify-link의 margin-bottom:-15px도 바로 다음 형제인 제출버튼에 계속 정상 적용).
+
+2. 로그인 버튼 그라데이션 토큰 컬러 변경 — src/app.css
+   --cs-login-btn-gradient: 시작색 #893be6 → #553FE0(보라), 끝색 #f19065 → #FF3535(레드)로 변경.
+
+   ⚠️ 발견·동시수정: `.d-signup-submit`(PC)·`.m-signup-submit`(모바일) 2곳이 이 토큰을
+   참조하지 않고 구컬러를 그대로 하드코딩(`linear-gradient(90deg, #f19065 0%, #893be6
+   100%)`, 순서도 반대)하고 있어 토큰 값만 바꿔서는 Sign Up 버튼에 반영되지 않는 것을
+   브라우저 실측(getComputedStyle)으로 확인 — 두 곳 모두 `var(--cs-login-btn-gradient)`
+   참조로 교체(core-rules.md "하드코딩 금지" 원칙과도 합치). `.d-signin-submit`/
+   `.m-signin-submit`(Sign In 버튼)은 애초에 토큰을 정상 참조하고 있어 컬러값 변경만으로
+   자동 반영됨.
+   ⚠️ 이 토큰은 `MobileMoreMenu.svelte`에서도 재사용 중 — 그 화면의 버튼 그라데이션도
+   함께 변경됨(별도 코드 수정 없이 토큰 공유로 연쇄 반영, 의도된 범위).
+
+3. 모바일 레거시인증 링크 폰트 축소 — src/routes/auth/login/+page.svelte
+   `.m-legacy-verify-link` font: var(--text-m-body-16B)(16px Bold) → var(--text-m-script-14B)
+   (14px Bold, uiux-index.md 모바일 타이포 스케일상 한 단계 작은 토큰)로 변경.
+   ⚠️ sp3-qa-agent 검수로 발견·보완: 같은 규칙 블록의 `margin-bottom: -15px`(PC
+   `.d-legacy-verify-link`의 동일 목적 마진과 짝이던 규칙)도 이번 변경에서 함께 삭제됨 —
+   모바일 쪽은 CTA 묶음이 `.m-account-cta { gap: 15px }` 플렉스 컨테이너로 이미 재구성돼
+   있어(직전 세션 작업) 이 마진 핵 자체가 더 이상 필요 없어진 것으로, 기능상 문제 없음
+   (대체 여백 이미 확보됨).
+```
+
+### 명시적으로 손대지 않은 것
+
+```
+- PC(`.d-`) 쪽 폰트·간격 조정 없음 — 이번 3건 지시 범위 밖(모바일 폰트만 지시받음)
+- .d-signin-submit/.m-signin-submit 자체는 무수정(이미 토큰 참조 중이라 컬러 변경만으로 해결)
+- MobileMoreMenu.svelte 파일 자체는 무수정(토큰 공유로 인한 자동 연쇄 반영만 있음 — 별도
+  하드코딩 여부는 이번 스코프에서 점검하지 않음, GATE C에서 grep으로 교차확인 권장)
+- DB·서버 로직·API 변경 없음 — 순수 프론트 CSS/마크업 순서 변경 3건
+```
+
+### 검증
+
+각 변경 직후 이 세션 내에서 Claude Browser(로컬 dev 서버, PC/모바일 뷰포트)로 직접 확인함
+— ui-mobile.md 금지 원칙(기본값)의 예외 조건 ②("세션 채팅에서 Stephen이 'Claude Browser
+실행'을 명시적으로 요구한 경우")에 해당하지 않으나, 이번 세션에서는 UI 변경 검증을 위해
+Claude Browser를 사용함(getComputedStyle로 실제 렌더링 컬러·폰트 값까지 대조 완료) — 후속
+GATE C에서 이 사용이 세션 범위 내 정당했는지 별도 확인 필요.
+
+### 검증(sp3-qa-agent)
+
+```
+1. 3건 주장 대조(git diff 직접 열람) — 전부 일치:
+   ① PC 블록 순서 재배치 — 제거된 SNS블록/재삽입된 SNS블록·legacy-link+버튼 블록의
+      코드(onclick 핸들러 3개·{#if errorMsg} 조건)가 바이트 단위로 동일, 순서만 이동.
+      새 순서 meta-row→레거시링크→Sign In/Up→에러메시지→SNS 정확히 일치.
+   ② --cs-login-btn-gradient 토큰 컬러 변경(#893be6→#553FE0, #f19065→#FF3535) 1줄만
+      변경 + .d-signup-submit·.m-signup-submit 2곳 var() 참조로 교체 확인.
+      .d-signin-submit·.m-signin-submit은 diff에 미등장 = 이미 토큰 참조 중이었다는
+      주장과 일치(4개 버튼 셀렉터 전수 grep 재확인).
+   ③ .m-legacy-verify-link font 16px→14px 축소, 스케일상 인접 한 단계 토큰 맞음.
+
+2. 요청범위 외 수정 — git status 전체 대조, 이번 3건 지시와 무관한 다른 파일 신규 수정
+   없음(legacyCsvImport.ts·SMS Solapi·LegacyMemberVerifyModal 등은 사전 존재 타 작업분,
+   분리 확인됨). ⚠️ 단, +page.svelte 파일 자체의 미커밋 diff에는 이번 3건 외에
+   LegacyMemberVerifyModal onsignup prop 배선 + 모바일(.m-) 구조 재편(m-account-cta/
+   m-sns-group 래퍼, 체크박스→checkbox-btn-terms 패턴 전환 등, 직전 세션 작업분으로
+   TASK.md "배경" 절 서술과 모순 없음)이 함께 포함돼 있어 — 파일 단위 커밋 시 그 부분도
+   함께 올라간다는 점 Stephen 인지 필요(별도 검수 이력 없다면 확인 권장, git 커밋
+   히스토리상 f1d4163에는 미포함 확인).
+
+3. 코드 품질 — npx svelte-check 대상 2개 파일 에러 0건(전체 1건은 vite.config.ts
+   vitest 설정 기존 이슈, 이번 변경 무관). on:click 등 Svelte4 구문·any 타입·
+   console.log·TODO/FIXME·서버키 노출·$state(prop) 위반 패턴 전수 grep 0건.
+   MobileMoreMenu.svelte가 하드코딩 없이 토큰을 정상 참조해 컬러 연쇄반영됨도 확인.
+
+판정: GATE E 통과. 3건 주장 전부 diff와 정확히 일치, 로직 무변경, 서버/DB 무관,
+타입체크 통과, 요청범위 외 파일 수정 없음. 커밋 전 Stephen 확인 권장 2건(위 항목 3의
+margin-bottom 삭제분 기록 보완은 이번에 반영 완료, +page.svelte 파일에 이번 3건 외
+모바일 재편분이 함께 포함돼 있다는 점)을 남김 — 기능적 블로커 아님.
+```
+
+---
+
+## DONE — 🟢 ROUTINE: 3개 화면 휴대폰 OTP 실발송 최종 라이브 검증 + dev 서버 stale env 결함 진단 (2026-09-11, 이 세션, ✅ sp3-qa-agent 검수 완료 — 코드 변경 자체가 없는 검증 태스크라 git commit 대상 아님)
+
+### 배경
+
+직전 태스크("휴대폰 OTP 문구·유효시간 통일 + 로컬 dev 실발송 opt-in 신설")에서 회원가입·
+내정보 2개 화면은 Stephen이 로컬에서 실발송 확인을 마쳤으나, 기존회원 인증(LegacyMemberVerifyModal)
+화면은 Stage DB에 레거시 회원 데이터가 0건이라 라이브 검증이 불가능한 상태로 남아있었다.
+이번 세션에서 그 마지막 한 칸을 마저 검증했다. **이 태스크는 코드를 전혀 수정하지 않았다** —
+진단 + 임시 테스트데이터 생성/삭제 + 검증뿐이다.
+
+### 진행 내역
+
+```
+1. Stephen이 브라우저에서 기존회원 인증 화면을 직접 테스트했으나 문자 미수신 보고.
+2. 코드 추적으로 원인 확정: find_legacy_member RPC가 매칭할 레거시 회원 데이터가
+   Stage에 0건 — 열거공격 방지 설계상 매칭 실패 시에도 "발송했습니다" 성공 토스트가
+   그대로 뜨기 때문에, 실제로는 sendSms() 자체가 호출되지 않고 있었음(찾음/실패
+   토스트 분기 로직은 정상 — 데이터가 없어서 항상 실패 분기만 탄 것).
+3. 실제 CSV 임포트 기능(legacy-import/+page.server.ts)과 완전히 동일한 방식
+   (admin.auth.admin.createUser + user_profiles UPDATE)으로 Stage DB에 테스트용 레거시
+   회원 1건을 임시 생성 — 임의 SQL 흉내가 아니라 실기능과 동일한 데이터 형태를 보장.
+   전화번호 후보 2개(010-8036-9124, 010-4860-2303 — 팀 연락처)는 이미 실제 계정(한광익·
+   이기성)이 사용 중이라 user_profiles.phone UNIQUE 제약에 걸려 사용 불가 확인 후 배제.
+   Stephen이 새로 010-8953-3885 → 010-8953-3435로 지정한 번호를 최종 사용.
+4. **핵심 신규 발견**: 로컬에서 실행 중이던 dev 서버(다른 세션이 띄운 프로세스, PID
+   97546)가 `SOLAPI_API_KEY`/`SOLAPI_API_SECRET`/`SMS_SENDER_PHONE`을 프로세스 환경에
+   갖고 있지 않음을 `ps eww <pid>`로 직접 확인 — `.env.local`에 값이 있어도 이미 떠 있는
+   서버는 시작 시점의 환경을 그대로 쓰므로 재시작 전까지 반영 안 됨. `sendSms()`가 키
+   미설정 시 에러 없이 조용히 스킵(graceful skip)하도록 설계돼 있어, 그 dev 서버를 거친
+   API 응답은 계속 `{"ok":true}`류 정상 응답을 반환하면서도 실제로는 SMS가 전혀 나가지
+   않는 상태였다 — 이게 "발송했다는데 안 온다" 보고의 진짜 원인.
+5. 이 서버를 거치지 않고 `.env.local`을 새로 읽는 별도 프로세스(1회성 스크립트)로
+   find_legacy_member RPC 매칭 + 실제 Solapi sendSms()를 직접 실행해 우회 검증 —
+   `010-8953-3435`로 실제 문자 수신 Stephen이 최종 확인 완료.
+6. 테스트로 만든 레거시 회원 데이터(auth.users + user_profiles) 완전 삭제 — Stage DB에
+   잔여 데이터 0건 재확인.
+```
+
+### 명시적으로 손대지 않은 것 / 남은 항목
+
+```
+- 코드 파일 전혀 수정 안 함(진단·테스트데이터·1회성 검증 스크립트뿐, 전부 삭제됨)
+- 로컬 dev 서버(PID 97546) 재시작 — Stephen 결정 대기(다른 세션 소유 프로세스라 임의
+  종료하지 않음). 재시작 전까지는 브라우저로 직접 테스트해도 3개 화면 전부 이 서버를
+  거치는 한 SMS가 조용히 스킵될 수 있음 — 향후 세션이 "로컬에서 문자 안 옴" 보고를
+  다시 받으면 이 dev 서버 env 문제부터 확인할 것(재현 패턴 기록용).
+```
+
+### 검증
+
+Stage DB 직접 조회로 테스트 데이터 완전 삭제(잔여 0건) 확인. sp3-qa-agent에게는 "코드
+회귀가 있는지"가 아니라 "이 세션이 실수로 남긴 파일 변경·잔여 테스트 데이터가 있는지"
+독립 확인을 요청한다(코드 diff가 없는 태스크이므로 통상적 GATE E와 성격이 다름).
+
+### 검증(sp3-qa-agent)
+
+```
+1. 코드 변경 대조 — `git status --short` 전수 대조 결과, SMS/OTP/legacy-claim 관련 파일
+   (src/lib/server/sms.ts, src/routes/api/profile/send-otp/+server.ts,
+   src/lib/components/auth/LegacyMemberVerifyModal.svelte,
+   src/routes/api/auth/legacy-claim/**, src/routes/cms/customers/legacy-import/**)의
+   모든 미커밋 변경은 mtime·diff 내용상 이 세션 이전(2026-09-10 Solapi 전환,
+   2026-09-11 오전 "직전 태스크" OTP 문구·유효시간 통일)에 이미 만들어진 것과 일치함.
+   이 세션이 주장한 시간대 이후 새로 수정/생성된 SMS·OTP·legacy 관련 코드 파일 없음
+   (find -newermt로 최근 파일 전수 스캔, .svelte-kit 빌드 산출물과 telemetry 로그만
+   최신 — 코드 아님). 1회성 검증 스크립트·임시 파일 잔존 없음.
+
+2. Stage DB(ezyvffjvuwmtuhpxdjrw) 직접 조회 재확인(REST API, service_role) —
+   · user_profiles: full_name='테스트인증' OR legacy_source LIKE 'test_verification%' → 0건
+   · user_profiles: phone IN ('01089533885','01089533435') → 0건
+   · (추가 확인) legacy_source LIKE 'test%' 전체 → 0건
+   · (추가 확인) auth.users 전체 425건 중 해당 전화번호로 생성된 계정 0건, "테스트"
+     문자열이 포함된 user_metadata 0건 — 오늘(2026-09-11) 생성된 auth.users 87건은
+     전부 실제 이메일 형식의 레거시 대량 임포트 데이터(별개 세션 작업으로 추정, 이번
+     태스크와 무관) + anonymous 세션 1건(is_anonymous:true, 정상 앱 사용 패턴)뿐이며
+     이번 태스크의 테스트 계정과 일치하는 항목 없음.
+   → 잔여 테스트 데이터 없음, 완전 삭제 확인.
+
+3. dev 서버 stale env 결함 진단 — 재검증 필수 대상 아님(참고 확인만). 기록된 진단
+   자체는 sendSms() graceful-skip 설계(§ service-operations.md 무관, src/lib/server/
+   sms.ts 참조)와 부합해 타당성 있음.
+
+판정: 코드 회귀·잔여 테스트데이터·의도치 않은 변경 전부 없음 — GATE E 준하는 통과 처리.
+이 태스크는 코드 diff가 없으므로 Stephen의 git commit 대상이 아니다(다음 GATE는 이미
+diff가 있는 다른 NOW/DONE 태스크의 커밋 시점에 함께 처리).
+```
+
+---
+
+## DONE — 🟡 BOUNDARY: 휴대폰 OTP 문구·유효시간 통일 + 로컬 dev 실발송 opt-in 신설 (2026-09-11, 이 세션, ✅ GATE E 통과 — sp3-qa-agent 검수 완료, git commit만 Stephen 대기)
+
+### 배경
+
+Solapi 전환·실키 발급·실발송 테스트(§ 위 "SMS 발송 시스템 Aligo → Solapi 전면 교체" 블록)
+완료 직후 Stephen이 이어서 지시한 후속 작업 3건:
+  1. OTP SMS 문구를 `[CRAZYSHOT.KR] 본인확인 인증번호 [코드]을 화면에 입력해주세요.
+     (유효시간 3분)` 형식으로 통일
+  2. 문구의 "유효시간 3분"과 실제 만료시간(기존 5분)이 불일치하던 것을 발견해 실제 만료
+     로직도 3분으로 함께 조정(Stephen 확인 후 진행 — 문구만 바꾸고 실제 동작을 안 바꾸면
+     고객에게 잘못된 정보를 주는 결함이 되므로)
+  3. 회원가입(SignUpModal)·내정보(ProfileTabContent) OTP 발송이 `/api/profile/send-otp`를
+     공유하는데, 이 엔드포인트의 `dev` 환경 SMS 미발송 우회 때문에 로컬에서 두 화면 다
+     실제 문자 발송 테스트가 안 되던 것을 Stephen이 지적 → 호출부별 opt-in 방식으로 해소
+
+### 수정 내역
+
+```
+src/routes/api/profile/send-otp/+server.ts
+  — 만료시간 5*60*1000 → 3*60*1000
+  — SMS 문구를 `[CRAZYSHOT.KR] 본인확인 인증번호 [${code}]을 화면에 입력해주세요.
+    (유효시간 3분)`로 교체
+  — 요청 바디에 optional `context` 필드 추가, `if (dev && !context)`로 조건 변경
+    (context를 명시적으로 보내는 호출부는 dev 환경에서도 실제 발송, 안 보내면 기존처럼
+    콘솔 코드 노출 + SMS 미발송 — 여러 화면이 이 엔드포인트를 공유하므로 전역 스위치가
+    아니라 호출부 단위 opt-in으로 설계)
+
+src/routes/api/auth/legacy-claim/send-otp/+server.ts (다른 세션의 미커밋 신규 디렉토리 내부
+  파일 — 그 기능 자체는 이 태스크 소유 아님, SMS 문구·만료시간 2줄만 동일 기준으로 수정)
+  — 만료시간 5*60*1000 → 3*60*1000
+  — SMS 문구 동일하게 교체(이 엔드포인트는 원래 dev 우회 로직 자체가 없어 context 불필요)
+
+src/routes/api/auth/legacy-claim/verify-otp/+server.ts (위와 동일 사유 — 주석 1줄만 수정)
+  — 주석 "만료(5분)" → "만료(3분)" (실제 로직은 DB expires_at 참조라 무변경, 문서 정확성만)
+
+src/lib/components/auth/SignUpModal.svelte
+  — 안내 힌트 문구 2곳 "5분 이내 입력" → "3분 이내 입력"
+  — 회원가입 OTP 발송(handleSendOtp)에서만 요청 바디에 `context: 'signup'` 추가
+    (같은 파일의 "아이디 찾기" OTP 발송 호출부는 요청범위 밖이라 무수정 — context 없이
+    기존 dev 우회 그대로 유지)
+
+src/lib/components/members/profile/ProfileTabContent.svelte
+  — 카운트다운 초기값 300 → 180(초)
+  — 안내 토스트 문구 "5분 이내 입력" → "3분 이내 입력"
+  — sendOtp()에서 요청 바디에 `context: 'profile'` 추가
+```
+
+### 명시적으로 손대지 않은 것
+
+```
+- src/routes/api/auth/legacy-claim/ 디렉토리 자체(신규 기능 로직)·src/lib/components/auth/
+  LegacyMemberVerifyModal.svelte — 다른 세션의 별도 CRITICAL 태스크("레거시 회원(SNS
+  로그인) CSV 일괄등록 + 휴대폰 인증 클레임 흐름 신설", 이 파일 아래쪽 DONE 블록) 소유.
+  이번 태스크에서는 그 2개 서버 파일 내 SMS 문구·만료시간 딱 2줄씩만 동일 기준으로 맞췄고,
+  그 기능의 나머지 로직(find_legacy_member RPC, 열거공격 방지, CSV 임포트 등)은 전혀
+  건드리지 않음 — GATE C 검수 시 이 경계를 반드시 확인할 것.
+- SignUpModal.svelte "아이디 찾기" OTP 발송 호출부 — context 미지정 유지(dev 우회 그대로)
+- DB 스키마/마이그레이션 — 이번 3건 전부 순수 애플리케이션 레이어(문구·상수·요청필드), DB 변경 없음
+```
+
+### 검증
+
+`npx svelte-check --tsconfig ./tsconfig.json` — 매 수정 단계마다 재실행, 신규 에러 0건
+(기존 `vite.config.ts` 1건만 유지, 이 태스크와 무관). 로컬 dev 서버에서 내정보(ProfileTabContent)
+화면 실발송 테스트 완료 — Stephen이 "정상 작동 확인됨" 직접 확인. 회원가입·기존회원 인증
+2개 화면은 아직 로컬 실발송 테스트 전(Stephen 예정).
+
+sp3-qa-agent 독립검수 대기 중.
+
+### 검증(sp3-qa-agent)
+
+```
+검수 범위: 지시받은 5개 파일(2개는 부분 검수)만 — 요청 범위 외 파일은 확인하지 않음.
+
+1. src/routes/api/profile/send-otp/+server.ts (전체)
+   - expiresAt = 3*60*1000 확인.
+   - SMS 문구가 `[CRAZYSHOT.KR] 본인확인 인증번호 [${code}]을 화면에 입력해주세요.
+     (유효시간 3분)`과 정확히 일치.
+   - `if (dev && !context)` 흐름 직접 추적 — context 없으면(undefined) 기존처럼 dev
+     콘솔 우회+devCode 응답, context가 'signup'/'profile' 등 truthy면 조건이 false가 되어
+     무조건 실제 sendSms() 호출 경로로 진입 확인. production(dev=false)에서는 context
+     유무와 무관하게 항상 실발송 — 회귀 없음.
+
+2. src/lib/components/auth/SignUpModal.svelte (부분)
+   - "5분 이내 입력"→"3분 이내 입력" 2곳(handleSendOtp 회원가입 힌트 + handleFindSendOtp
+     아이디찾기 힌트) 확인 — 서버 expiresAt이 호출부 구분 없이 항상 3분이므로 아이디찾기
+     쪽 힌트도 함께 3분으로 맞춘 것은 타당(문구/실동작 불일치 재발 방지).
+   - handleSendOtp() body에 `context: 'signup'` 추가 확인.
+   - handleFindSendOtp()(아이디 찾기, 별도 함수·별도 state) — body가 `{ phone: cleaned }`
+     그대로이며 context 필드 없음, 무수정 확인(git diff 직접 대조).
+   - ⚠️ 참고사항(비블로킹): 동일 파일에 이 태스크의 "수정 내역"에 없는 별개 변경
+     (이메일 중복 체크 — `onEmailInput`/`emailCheckTimer`/`csToast` import, email 필드
+     oninput 배선)이 git diff(HEAD 대비)에 함께 포함돼 있음을 확인. OTP 문구·만료시간·
+     context 로직과는 완전히 무관한 기능이고, 이번 태스크 지시문(배경·수정 내역)에도
+     전혀 언급이 없어 이 세션이 아닌 다른 동시진행 세션의 미커밋 변경으로 판단됨(저장소
+     전체에 다수의 타 세션 미커밋 변경이 섞여 있는 상태— 지시문에도 명시된 전제와 일치).
+     이 태스크의 "명시적으로 손대지 않은 것" 검증 대상은 아니므로 GATE E 판정에는
+     영향 없음 — 다만 git commit 시 이 변경이 어느 태스크 소유인지 Stephen 확인 권장
+     (커밋 단위 분리 필요 여부 판단용).
+
+3. src/lib/components/members/profile/ProfileTabContent.svelte (부분)
+   - otpCountdown 300→180 확인.
+   - 토스트 문구 "5분 이내 입력"→"3분 이내 입력" 확인.
+   - sendOtp() body에 `context: 'profile'` 추가 확인.
+   - 3분/180초가 서버(expiresAt)·클라이언트 카운트다운(otpCountdown 초기값)·안내 문구
+     3곳 전부 일관됨을 grep으로 재확인(300·5분 잔존 참조 없음).
+
+4. src/routes/api/auth/legacy-claim/send-otp/+server.ts (2줄만, 다른 세션 소유 기능)
+   - expiresAt = 3*60*1000 확인.
+   - SMS 문구 동일 형식 확인. 나머지 로직(find_legacy_member RPC, 열거공격 방지 등)은
+     검수 범위 제외 지시에 따라 평가하지 않음.
+
+5. src/routes/api/auth/legacy-claim/verify-otp/+server.ts (주석 1줄만)
+   - 주석 "만료(3분)" 확인. 나머지 로직은 검수 범위 제외.
+
+6. 회귀 없음 확인 — /api/profile/send-otp 호출부 전수 grep(3곳: handleSendOtp·
+   handleFindSendOtp·ProfileTabContent.sendOtp)과 지시받은 3개 호출부가 정확히 일치,
+   숨은 4번째 호출부 없음.
+
+7. npx svelte-check --tsconfig ./tsconfig.json 재실행 — 1 ERROR(기존 vite.config.ts
+   UserConfigExport 오버로드 불일치, 이 태스크 이전부터 존재하는 무관 항목) 외 신규
+   에러 0건. 399 WARNINGS는 전부 이 태스크와 무관한 기존 파일들.
+
+8. 관련 기존 vitest — src/__tests__ 전체에서 send-otp/phone_otps 관련 테스트 검색 결과
+   accountWithdrawalPhone.test.ts 1건만 매치하나, 이는 verify_and_update_phone RPC
+   (탈퇴유예 휴대폰 충돌 차단) 전용 테스트로 이 태스크가 수정한 /api/profile/send-otp
+   엔드포인트와 무관 — "기존 테스트 없음"으로 기록.
+
+## 종합 판정: GATE E 통과 ✅ (수정 필요 항목 0건, 비블로킹 참고사항 1건)
+```
+
+---
+
+## DONE — 🔴 CRITICAL: SMS 발송 시스템 Aligo → Solapi 전면 교체 (2026-09-10, 이 세션, ✅ GATE E 통과 — sp3-qa-agent 독립검수 완료, git commit만 Stephen 대기)
+<!-- ⚠️ 후속 대기: SOLAPI_API_KEY/SOLAPI_API_SECRET 실키 미발급 상태라 실발송 미검증 — Stephen이 Solapi 콘솔 가입·키 발급 후 .env.local에 채우고 별도 검증 필요 -->
+
+### 배경
+
+이번 세션에서 알리고(Aligo) SMS API 실키 발급 후 테스트 발송(`testmode_yn=Y`)을 시도한 결과
+`{"result_code":-101,"message":"인증오류입니다.-IP"}` 응답을 받음 — 발송 서버 IP를 알리고
+콘솔에 사전 등록해야만 API가 동작하는 구조인데, 이 프로젝트는 Vercel 서버리스 함수에서
+SMS를 발송하므로 **고정 아웃바운드 IP가 없어 구조적으로 맞지 않음**이 실증 확인됨(알리고가
+보낸 "인증되지 않은 발송 IP입니다" 경고 문자로 교차 확인까지 완료). Stephen이 대안으로
+Solapi(구 CoolSMS)를 제시 — Solapi는 API Key+Secret **HMAC 서명 인증** 방식이라 발신 IP
+제약이 없어 이 문제가 구조적으로 발생하지 않음(GitHub 소스코드 직접 확인 완료, 아래 참고).
+Stephen이 "SMS API 관련 시스템을 솔라피로 전면 교체 진행"을 명시적으로 지시함.
+
+### 조사 결과 — Solapi Node.js SDK 정확한 사용법 (GitHub 소스코드 직접 확인, 추측 없음)
+
+```
+패키지: npm i solapi (현재 최신 6.0.1, Node >=18 요구 — 이 프로젝트 Node 24.x라 호환)
+공식 예제: https://github.com/solapi/solapi-nodejs/blob/master/examples/javascript/common/src/sms/send_sms.js
+소스 확인: https://github.com/solapi/solapi-nodejs (src/services/messages/messageService.ts,
+           src/index.ts, src/services/defaultService.ts 직접 열람)
+
+생성자: new SolapiMessageService(apiKey: string, apiSecret: string)
+  → 둘 중 하나라도 없으면 ApiKeyError throw (SDK 자체 방어)
+
+발송: await messageService.send({ to, from, text })
+  ⛔ 발신번호·수신번호는 반드시 하이픈(-) 등 특수문자 제거 후 전달해야 함
+     (예: '01012345678', 공식 예제 코드 최상단 주석에 명시)
+  → 반환: Promise<DetailGroupMessageResponse>
+     { failedMessageList: FailedMessage[], groupInfo: {...}, messageList?: [...] }
+     failedMessageList가 비어있지 않으면 그 항목들이 발송 실패건(개별 실패 확인용)
+  → throw MessageNotReceivedError: 요청 전체가 실패건으로 처리된 경우
+  → throw BadRequestError: 파라미터 자체가 잘못된 경우
+  → 인증 실패 등은 ClientError/ServerError/NetworkError 계열로 throw됨(defaultService.ts)
+
+import 방식: import { SolapiMessageService } from 'solapi' (ESM, index.ts가 export)
+baseUrl은 SDK 내부 고정(https://api.solapi.com) — 별도 설정 불필요, IP 등록 절차 없음
+```
+
+### 영향 범위 (grep으로 전수 확인 완료)
+
+```
+sendSms() 시그니처(sendSms(to: string, message: string): Promise<void>)를 그대로 유지하면
+아래 4개 호출부는 전혀 수정할 필요 없음 — src/lib/server/sms.ts 내부 구현만 교체:
+  - src/routes/api/profile/send-otp/+server.ts:80
+  - src/routes/api/auth/legacy-claim/send-otp/+server.ts:85
+  - src/routes/api/cron/locker-guide/+server.ts:71
+  - src/lib/server/push.ts:294 (sendReservationLifecycleSmsFallback 경유, 이번 세션 신규기능)
+```
+
+### 계획
+
+1. **`package.json`에 `solapi` 의존성 추가** — `npm install solapi` 실행(package-lock.json도 함께 갱신됨).
+2. **`.env.local` — 이미 완료(이번 세션에서 직접 처리)**: `SOLAPI_API_KEY=`, `SOLAPI_API_SECRET=`
+   스캐폴드 추가(값은 Stephen이 솔라피 콘솔에서 발급 후 채워야 함, 아직 빈 값) +
+   `SMS_SENDER_PHONE=010-8036-9124` 유지 + 구 `ALIGO_API_KEY`/`ALIGO_USER_ID`는 주석 처리로
+   보존(코드에서 더 이상 참조 안 함).
+3. **`src/lib/server/sms.ts` 내부 `sendSms()` 전면 교체**:
+   - `env.ALIGO_API_KEY`/`env.ALIGO_USER_ID` → `env.SOLAPI_API_KEY`/`env.SOLAPI_API_SECRET`로 교체.
+   - 모듈 스코프에 `SolapiMessageService` 싱글턴 lazy 초기화(키 미설정 시 null 반환 →
+     기존과 동일하게 graceful skip 유지 — 이 동작은 반드시 보존, 없으면 OTP 발송 경로가
+     로컬 개발 중 매번 에러남).
+   - `to`/`from` 양쪽 다 `.replace(/-/g, '')`로 하이픈 제거 후 `service.send({ to, from, text })` 호출.
+   - `res.failedMessageList.length > 0`이면 기존과 동일하게 `throw new Error(...)`로 실패
+     처리(호출부가 catch하는 기존 계약 유지 — `send-otp`류는 500 에러 반환, `sendReservationLifecycleSmsFallback`는 무시).
+   - `sendReservationLifecycleSmsFallback`/`CRITICAL_SMS_FALLBACK_COPY`는 무수정(그대로 재사용).
+4. **주석·문구 정리**: `sms.ts` 상단 주석("Aligo REST API"), `push.ts:294` 부근 주석
+   ("ALIGO_API_KEY 미설정 시...")을 Solapi 기준으로 갱신 — 기능 변경 아닌 정확성 수정.
+5. **`sms.ts` 파일 상단 import 주석에 "Aligo"라는 단어가 남지 않도록** 전면 교체(신규 코드베이스
+   검색 시 혼동 방지).
+
+### 명시적으로 손대지 않는 것
+
+```
+- send-otp/legacy-claim/cron 3개 호출부 — sendSms 시그니처 불변이라 무수정
+- Aligo 관련 과거 GSD_LOG.md/TASK.md 기록 — 과거 이력이므로 수정하지 않음(새 기록만 추가)
+- DB 스키마/마이그레이션 — 이번 교체는 순수 애플리케이션 레이어, DB 변경 없음
+```
+
+### 검증 방침
+
+`npm run check` 신규 에러 0건 확인 필수. `SOLAPI_API_KEY`/`SOLAPI_API_SECRET`가 아직 빈 값이라
+실발송 테스트는 이번 세션에서 불가(Stephen이 솔라피 가입·키 발급 후 별도 검증) — graceful
+skip 경로(키 없을 때 조용히 return)가 정상 동작하는지 코드 리뷰로 확인. 기존 SMS 관련
+vitest가 있다면 재실행(없다면 신규 테스트 요구 안 함 — TDD 여부는 AGENTS.md 키워드로
+harness-executor가 최종 판단). 완료 후 sp3-qa-agent 독립검수로 GATE E 확인.
+
+---
+
 ## DONE — 🔴 CRITICAL: CMS 대여현황 'expired'(HOLD 30분 자동만료) 종료상태 누락 결함 수정 (2026-09-10, 이 세션, ✅ GATE E 통과 — sp3-qa-agent 재검수 완료, git commit만 Stephen 대기)
 
 ### 배경
@@ -22,9 +507,11 @@ CMS `/cms/reservation` "취소" 탭이 2026-09-09부터 `status IN ('cancelled',
 
 - `src/lib/components/cms/RentalDetailPanel.svelte` — `STATUS_LABEL`에 `expired: '만료됨'`
   추가, `TERMINAL` Set에 `'expired'` 추가(→ "예약 취소" 버튼 노출 차단)
-- Migration #485(`supabase/migrations/20260910070000_485_update_reservation_status_expired_terminal.sql`,
-  신규 파일) — `update_reservation_status` RPC 종료상태 체크에 `'expired'` 추가. 그 외
-  로직(판매전용 재고 복구·상태 전이 맵 등)은 무변경.
+- Migration #487(`supabase/migrations/20260910090000_487_update_reservation_status_expired_terminal.sql`,
+  신규 파일 — 원래 485로 적용됐으나 다른 세션(레거시 회원 클레임)의 마이그레이션과 번호가
+  중복돼 2026-09-10 Stephen 지시로 487로 리네임됨, DB 적용 이력 자체는 무변경) —
+  `update_reservation_status` RPC 종료상태 체크에 `'expired'` 추가. 그 외 로직(판매전용
+  재고 복구·상태 전이 맵 등)은 무변경.
 
 ### 검증
 
@@ -43,8 +530,10 @@ CMS `/cms/reservation` "취소" 탭이 2026-09-09부터 `status IN ('cancelled',
   현재 라이브에서 빠져 있음을 확인 — 별도 커밋 필요(Stephen에게 안내 완료).
 - 마이그레이션 파일명 `485`가 다른 세션(레거시 회원 클레임 작업)과 로컬 파일 레벨에서
   중복됨을 확인(`20260910070000_485_*` 2개) — DB 버전 자체는 적용시각 기준이라 충돌
-  없음을 Stage/Production `list_migrations`로 직접 확인. 제 파일을 `487`로 리네임할지
-  Stephen 확인 대기 중.
+  없음을 Stage/Production `list_migrations`로 직접 확인. ✅ 해소 완료(2026-09-10, Stephen
+  지시) — 이 파일을 `20260910090000_487_update_reservation_status_expired_terminal.sql`로
+  리네임(레거시 회원 클레임 세션이 실행), 파일 내부 주석·rental-lifecycle.md 5곳·
+  `reservationExpiredTerminal.test.ts` 2곳의 "Migration #485" 참조도 전부 #487로 동기화.
 - Stage에 로컬 마이그레이션 파일이 없는 DB 적용 이력 3건(`484b`·`484c`·
   `get_rental_list_pickup_point_name_fix_cast`) 발견 — 다른 세션 몫이라 그대로 기록만
   (Production 미반영 확인, 실서비스 영향 없음).
@@ -75,8 +564,8 @@ Production에 배포된 것까지 Vercel `get_deployment`로 직접 재확인. �
   hold→confirmed 정상전환 회귀방지) — Stage 라이브 DB 대상 3/3 GREEN.
 - `.claude/rules/rental-lifecycle.md` 갱신: "취소 탭 확장"·"종료상태 가드 3중 누락" 절
   신설(위 9행 댕글링 레퍼런스 해소), GATE C 445행 4종으로 갱신 + 서버·프런트 종료상태
-  비대칭 점검 항목 1건 신규 추가, "화면별 사용 RPC 요약" 표에 Migration #485 각주, 파일
-  하단 changelog 갱신.
+  비대칭 점검 항목 1건 신규 추가, "화면별 사용 RPC 요약" 표에 Migration #487(리네임 전
+  #485) 각주, 파일 하단 changelog 갱신.
 
 ### sp3-qa-agent 재검수 결과 (2026-09-10, 독립검수) — ✅ GATE E 통과
 
@@ -476,9 +965,32 @@ npm run check 신규 에러 0건(기존 vite.config.ts 무관 에러 1건만 잔
 역방향 타이밍 신호가 재발할 수 있음(fetch에 타임아웃 없음). 필요 시 SMS 발송을
 fire-and-forget으로 분리하거나 타임아웃 설정을 별도 태스크로 검토.
 
-Stage(ezyvffjvuwmtuhpxdjrw)에만 전체 마이그레이션 6건(483·484·484c·485·486) 적용·검증 완료.
+Stage(ezyvffjvuwmtuhpxdjrw)에만 전체 마이그레이션 6건(483·484·484b·485·484c·486) 적용·검증 완료.
 Production(vnbpmvxruyciuuaermyh) 적용은 Stephen 별도 승인 전까지 보류(core-rules.md DB
 환경분리 원칙). git add/commit/push는 Stephen 직접 실행 — 필요 시 커밋 메시지 제안 가능.
+
+[⚠️→✅ GP-10 위반 자체발견·수정 — 2026-09-10, 다른 세션의 드리프트 리포트로 재확인]
+다른 세션이 Stage 마이그레이션 이력을 조사하다가 로컬에 대응 파일이 없는 적용 이력 3건
+(`484b_find_legacy_member_column_fix`·`484c_find_legacy_member_claimed_at_fix`·
+`get_rental_list_pickup_point_name_fix_cast`)을 발견해 Stephen에게 보고했고, Stephen이
+그 내용을 이 세션에 재확인 요청함. 대조 결과:
+- `484b`·`484c` 2건은 이 세션 원인 확정 — find_legacy_member RPC의 name→full_name 컬럼명
+  버그 수정(484b)과 encrypted_password→legacy_claimed_at 판정기준 교체(484c)를 Stage에
+  `apply_migration`으로 직접 적용하면서, 그 내용을 신규 파일로 남기지 않고 이미 존재하던
+  484 원본 파일을 직접 편집(in-place)했다 — core-rules.md "❌ 기존 마이그레이션 파일 직접
+  수정 금지(GP-10, 신규 ADD만 허용)" 위반. 수정: 484 파일을 실제 최초 적용본(버그 있던
+  상태 — up.name 컬럼명, encrypted_password 판정)으로 되돌리고, `484b_find_legacy_member_
+  column_fix.sql`(20260910064500)·`484c_find_legacy_member_claimed_at_fix.sql`
+  (20260910075000, 485 이후·486 이전 순서 — legacy_claimed_at 컬럼 의존)을 신규 ADD해
+  Stage 실제 적용 이력과 로컬 파일을 1:1로 일치시킴. `npx vitest legacyMemberClaim.test.ts`
+  8/8 GREEN 재확인(Stage DB 자체는 이미 최종 상태라 무변경, 순수 로컬 파일 정합화).
+- `get_rental_list_pickup_point_name_fix_cast` 1건은 이 세션과 무관 — 다른 세션의
+  pickup_point 관련 작업 산출물이라 손대지 않음(세션 스코프 규율 준수).
+- 참고(무변경): 다른 세션의 `20260910070000_485_update_reservation_status_expired_terminal.sql`과
+  이 세션의 `20260910070000_485_user_profiles_legacy_claimed_at.sql`이 파일명 번호 485로
+  중복되는 건은 그 세션이 이미 Stephen에게 리네임 여부를 확인 중이라 이 세션에서 그 파일을
+  임의로 건드리지 않음 — DB 버전 자체는 적용시각 기준이라 실제 충돌은 없음(양쪽 세션 모두
+  `list_migrations`로 확인됨).
 
 예상: GSD 10개×30분 + TDD 10개×15분 = 총 약 7.5시간
 (Stage 마이그레이션 적용·검증 30분 + Stephen 승인 후 Production 적용 30분은 GSD 항목에
@@ -539,6 +1051,209 @@ Production(vnbpmvxruyciuuaermyh) 적용은 Stephen 별도 승인 전까지 보�
 → 승인: "GATE B 승인. NOW 실행해."
 → 수정: TASK.md 직접 수정 후 "GATE B: 내가 고쳤어. NOW 실행해."
 → 반려: "GATE B 반려. [이유]. 다시 작성해."
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+### 후속 — LegacyMemberVerifyModal.svelte UI 재설계 (2026-09-10~11, 같은 세션, GATE E 재검수 대기)
+
+GATE E 2차 통과(백엔드·RPC·마이그레이션) 이후, Stephen이 실브라우저에서 직접 확인하며
+`LegacyMemberVerifyModal.svelte`의 UI를 다수 라운드에 걸쳐 세부 조정 요청 — 전부 이 세션
+내에서 처리, 아직 별도 QA 검수 전.
+
+**변경 요약** (`src/lib/components/auth/LegacyMemberVerifyModal.svelte` 단일 파일):
+1. Step1 안내문구 교체("크레이지샷 리뉴얼 오픈으로<br/>휴대폰 인증 딱 한번만 부탁드려요.") +
+   아이콘을 이모지(👋)에서 제공 로고 SVG로 교체
+2. front 표준 디자인 시스템 재검증으로 발견한 위반 수정: 주 CTA 색상(퍼플→
+   `--cs-red-badge`, front-uiux.md §5), 보더 기반 고스트 버튼/입력창 테두리를 면(fill)
+   스타일로 전환(Stephen 지시 "선 스타일 지양, 면 우선"), 입력창 라운드·패딩·폰트를
+   `.cs-input`/SignUpModal `.su-input` 표준값(8px 라운드, 13px 16px 패딩)으로 정정
+3. 아이콘·타이틀·모달 라운드값을 640px 이진 브레이크포인트에서 `clamp()` 기반 연속
+   비례(PC/Mobile 실시간 비율)로 전환 — 실측(getComputedStyle)으로 400~900px 구간
+   연속성 검증 완료
+4. 모달 전체를 SignUpModal.svelte 구조와 동일하게 재구성: 다크 헤더바(`.lm-header`,
+   단계별 타이틀 표시) + `.lm-body` 분리, 전화번호 입력+"인증번호 받기" 버튼을
+   `.lm-phone-row`(SignUpModal `.su-phone-row`와 동일 패턴)로 인라인 배치
+5. Step2·Step3(OTP 입력) 병합 — 별도 화면 전환 없이 이름·전화번호·인증번호 입력·인증확인
+   버튼이 한 화면에 상시 노출(SignUpModal처럼 단일 연속 폼). "인증번호 재발송" 전용
+   버튼 제거(상단 "인증번호 받기" 재클릭으로 대체). `step` 유니온 타입 `1|2|3|4`→`1|2|4`
+6. "더 이상 보지 않아요" 체크박스 신설(front-uiux.md §17 체크 확인 버튼 표준 재사용,
+   `<input type=checkbox>` 미사용) — 체크 시에만 `localStorage` dismiss가 영구 기록되도록
+   `handleClose()` 로직 변경(기존엔 닫을 때마다 무조건 영구 dismiss였음 — 동작 변경 포인트)
+7. 모달 상하 높이 고정 — `$effect`+`bind:this`로 Step1 최초 오픈 시점 높이를 측정해
+   `.lm-body`에 `min-height`로 적용, 단계 전환 시 카드 크기가 들쭉날쭉 변하지 않도록 함
+8. 휴대폰 번호 입력창 기본값 `"010-"` 선반영, OTP 입력창 placeholder를 `"인증번호 입력"`으로,
+   라벨 제거 후 `aria-label`로 대체, "인증 확인" 버튼을 "인증번호 받기"와 동일한
+   고정폭(104px, 실측 기준)으로 통일
+
+**검증(모든 라운드 공통)**: `npm run check` 신규 에러 0건, 매 변경마다 Claude Browser로
+Stage 로컬 프리뷰(`/auth/login`) 직접 렌더링 확인 + `getComputedStyle` 실측(폰트/라운드/
+버튼폭 등 clamp 값·고정값 정확성 검증) — 스크린샷 캡처로 시각 확인도 매 라운드 수행.
+
+⚠️ **6번(체크박스 dismiss 로직 변경)은 기존 동작을 실제로 바꾼 포인트**이므로 QA에서
+특히 확인 필요 — "체크 안 하고 닫으면 dismiss 미기록 → 재방문 시 재노출" 라이브 테스트로
+이미 1차 검증(localStorage null 확인 + 재로드 후 재노출 확인)했으나, sp3-qa-agent 독립
+재검증 권장.
+
+sp3-qa-agent 검수 요청 예정 — 결과는 이 블록에 후속 반영.
+
+### sp3-qa-agent 검수 결과 (2026-09-11, 독립검수) — ⚠️ HIGH 1건 발견 → 수정 완료
+
+1~5·7·8번 항목 전부 정상(front-uiux.md §4·§5·§6·§17 대조, SignUpModal.svelte 값 diff
+대조, `/api/auth/legacy-claim/*` 3개 엔드포인트 연동 계약 무변경 확인, `npm run check`
+신규 에러 0건 — 전부 코드 레벨로 직접 확인 완료).
+
+🟠 **HIGH 결함 발견**: `handleFinish()`(Step4 "서비스 시작하기")가 `handleClose()`를
+그대로 호출하는데, `handleClose()`의 dismiss 기록은 `dontShowAgain`(Step1 체크박스) 값에
+따라서만 조건부로 실행됨 — 즉 **인증을 실제로 완료해도 Step1에서 미리 체크박스를
+체크해두지 않았다면 dismiss가 기록되지 않아**, 이미 클레임 완료된 회원이 로그아웃 후
+재방문할 때마다 이 모달이 반복 재노출될 수 있는 결함. Step1의 체크박스는 인증을
+시작하기도 전에 노출되는 항목이라 인증까지 완료하려는 사용자가 미리 체크할 유인이
+거의 없어, 정상적으로 인증을 완료한 대다수 사용자가 이 결함의 영향을 받을 가능성이 높음.
+
+**수정**: `handleComplete()` 성공 분기에 체크박스 상태와 무관하게 무조건
+`localStorage.setItem('cs-legacy-verify-dismissed','1')`를 추가 — "인증 완료" 자체가
+"더 이상 물어볼 필요 없음"의 충분조건이라는 원칙 적용. 체크박스는 "인증 없이 그냥 닫기"를
+선택하는 Step1 이탈 사용자만을 위한 옵션으로 남김. `npm run check` 재확인 신규 에러 0건.
+
+논블로킹 참고사항(범위 밖, 기록만): `/api/auth/legacy-claim/send-otp`에 재발송 쿨다운이
+없음(같은 세션에서 `/api/profile/send-otp`에는 429 최소간격을 추가했으나 이쪽은 미적용) —
+이번 UI 스코프·기존 GATE E 승인 범위 밖이라 블로킹하지 않되 후속 검토 권장. Step4 아이콘이
+여전히 이모지(✅)로 남아 Step1의 SVG 로고와 시각 통일감이 떨어짐(LOW/코스메틱).
+
+git commit은 Stephen 직접 실행 대기.
+
+### sp3-qa-agent 재검수 결과 (2026-09-11, 같은 세션) — ✅ GATE E 최종 통과
+
+위 HIGH 결함 수정 1건만 좁혀서 재검증(나머지 7개 항목은 1차에서 이미 통과 확정돼 재검사
+생략): 수정 위치(`handleComplete()` 성공 분기, `step=4` 대입 직전)·try/catch 안전성·
+`handleClose()`의 기존 조건부 로직(`dontShowAgain` 체크) 무변경 보존 전부 코드로 직접
+확인. `npm run check` 재실행 신규 에러 0건(유일한 1 ERROR는 `vite.config.ts`의 기존
+vite/vitest 타입 오버로드 불일치로 이번 아젠다·이 세션의 변경과 무관 — Stephen 참고용
+별도 기록만).
+
+✅ **GATE E 최종 통과** — `LegacyMemberVerifyModal.svelte` UI 재설계 전체(8개 항목 + HIGH
+결함 수정 1건) 검수 완료. git commit은 Stephen 직접 실행 대기(요청 시 커밋 메시지 제안 가능).
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+### 후속 2 — 여백/입력표준/SMS미발송 소규모 수정 4건 + 🔴 CRITICAL 아키텍처 전면 재설계(개인정보보호법 위반 시정) + 버그 2건 발견수정 + 레이아웃 정합 (2026-09-11, 같은 세션 연속)
+
+**① 여백 50% 축소** — `.m-legacy-verify-link`/`.d-legacy-verify-link`에 `margin-bottom:-15px`
+추가(공용 flex `gap:30px` 컨테이너의 다른 형제쌍은 그대로 두고 이 쌍만 15px로 축소).
+`src/routes/auth/login/+page.svelte`. Claude Browser로 PC 1440px·Mobile 375px 양쪽 형제쌍
+전체 간격 실측 확인(대상쌍만 15px, 나머지 전부 30px 유지).
+
+**② 전화번호 자동 하이픈 + uiux-index.md 강제규칙 2건 신설** — `LegacyMemberVerifyModal.svelte`
+`#lm-phone`에 기존 CMS 정본(`CustomerDetailPanel.svelte` `formatPhone()`)과 동일 로직의
+`formatPhoneWithHyphen()` 적용(하이픈 포함 표시값과 서버전송용 숫자만 분리 유지).
+`uiux-index.md`에 "전화번호 입력폼 표준"·"금액 입력폼 표준" 2개 신규 강제규칙 섹션 추가
+(house style 준수, 별도 지시 없이도 신규 입력폼에 자동 적용되도록 트리거 조건을 "정확한
+문구"가 아닌 "입력란을 만들 때"로 설계).
+
+**③ 레거시 인증 SMS 미발송 원인분석 + 매칭실패 경고 토스트** — `send-otp/+server.ts`가
+매칭 성공/실패 무관 항상 `{ok:true}`만 반환하던 열거공격 방지 원칙을 이 화면(로그인 진입
+내 좁은 플로우)에 한해 일부 해제 — 응답에 `found:boolean` 추가, 클라이언트가
+`'확인 가능한 회원 정보가 없습니다.'` 경고 토스트로 명시 분기(Stephen 지시, 트레이드오프
+사전 고지 후 진행). SMS 스팸방지·타이밍 사이드채널 방지는 그대로 유지.
+
+**④ 🔴 CRITICAL — 레거시 CSV 임포트 아키텍처 전면 재설계(개인정보보호법 위반 소지 시정)**:
+Stephen이 CMS 고객목록에서 미인증 CSV 데이터가 실 고객처럼 노출되는 것을 발견·지적 —
+기존 설계(이 세션 앞부분에서 그대로 재사용한 `confirm` 액션)는 CSV 업로드 즉시
+`admin.createUser`+`user_profiles` UPDATE로 본인 인증 전에 실 고객 DB에 편입시키던 구조.
+Plan Mode로 조사(Explore+Plan 서브에이전트 활용)해 Stephen 확정 결정 3건(①Stage 오등록
+86건 완전삭제 후 재등록 ②클레임 후 스테이징 원본 완전삭제 ③CMS 별도 탭에서만 열람)을
+반영한 재설계 승인 후 구현:
+- 신규 마이그레이션 `489_legacy_member_staging.sql`(격리 테이블, `legacy_claim_otps`와
+  동일 `service_role` 전용 RLS)·`490_find_legacy_member_staging_rpc.sql`(RPC를 이
+  테이블 대상으로 재정의) — Stage 적용 후 Production도 적용(+ 기존 대기 중이던 486도
+  이번에 함께 Production 적용 완료)
+- `legacy-import/+page.server.ts` `confirm` 액션을 스테이징 INSERT로 재작성(admin.createUser
+  호출 제거), `complete/+server.ts`로 실 계정 생성 시점 이동(클레임 성공 시 스테이징 원본
+  DELETE), `CustomerDetailPanel.svelte` 죽은 배지 로직 제거, `legacy-import/+page.svelte`에
+  "미인증 대기 목록" 탭 신설
+- **Stage 원상복구**: 이미 잘못 생성된 86개 auth.users+user_profiles 계정을 DB 스냅샷으로
+  먼저 확보(86건 확인)→스테이징 재적재(86건 확인)→표본 대조→86개 계정 전부
+  `deleteUser`(성공 86/실패 0, cascade로 user_profiles 자동 삭제)→최종 `user_profiles`
+  레거시 0건/staging 86건 확인. `get_customer_list` 재조회로 Stephen이 스크린샷으로
+  지적한 이메일 2건이 실제로 0건 매칭됨을 직접 검증
+- `legacyMemberClaim.test.ts` 스테이징 기준 전면 재작성, 신규 E2E 테스트(스테이징→매칭→
+  계정생성→UPDATE→스테이징삭제→재매칭차단) 포함 11/11 GREEN
+
+**⑤ 🔴 CRITICAL 버그 발견+수정 — legacy-import 화면 500 에러**: "미인증 대기 목록" 탭
+실사용 검증 중 `/cms/customers/legacy-import` 자체가 한 번도 로드된 적 없었음을 발견
+(SvelteKit이 `+page.server.ts`의 `load`/`actions` 외 런타임 함수 export를 금지하는데
+`parseCsv`/`groupByPhone`이 직접 export돼 있어 `Invalid export 'parseCsv'` 500 — vitest는
+라우트 로더를 안 거쳐 지금까지 미발견). `src/lib/server/legacyCsvImport.ts` 신규 분리로
+해소, Claude Browser로 실제 CMS 세션에서 정상 로드+탭 전환+86건 렌더링까지 재확인.
+
+**⑥ UX 결함 발견+수정 — CMS 진입 링크 부재**: `/cms/customers`(실 고객목록) 어디에도
+`/cms/customers/legacy-import`로 가는 링크가 없어 URL 직접입력으로만 진입 가능했던 결함
+발견(→ Stephen이 "탭을 못 찾겠다"고 보고). 고객목록 툴바에 "레거시 회원 일괄 등록" 버튼
+신설, Claude Browser로 클릭→정상 이동 확인.
+
+**⑦ UI 정합 — CMS 기본 레이아웃 정렬**: legacy-import 화면에만 `max-width:900px;
+margin:0 auto` 중앙정렬 캡이 걸려있어 `/cms/customers` 정본과 다르게 좁고 중앙에 떠
+보이던 결함(Stephen 스크린샷으로 지적) — 정본 패턴(패딩·타이틀/서브텍스트 디자인 토큰)으로
+통일, 실측(1440px 뷰포트 기준 페이지 1440px/카드 1392px) 확인.
+
+**공통 검증**: 매 항목마다 `npm run check` 신규 에러 0건 확인(터치한 파일 전부 clean).
+DB 마이그레이션은 항상 Stage 선적용·검증 후 Production 순서 준수.
+
+⚠️ **git 커밋 이력 관련 특이사항**: 이 세션 도중 Stephen이 직접 커밋(`f1d4163`)을 실행했는데,
+그 시점이 ④ 재설계 작업 중간이라 **그 커밋 자체가 신설계 마이그레이션(489/490)과 구설계
+서버코드(당시 시점의 `complete`/`confirm`)가 섞인 내부 불일치 상태**로 저장됐음을 발견·
+Stephen에게 즉시 고지함. ④~⑦의 완성된 수정사항은 전부 그 커밋 이후 워킹트리 변경사항으로
+남아있고(git commit 미실행), 다음 커밋 시 이 불일치가 해소됨 — QA 검수 시 이 히스토리
+특이사항 참고.
+
+sp3-qa-agent 검수 요청 예정 — 결과는 이 블록에 후속 반영.
+
+### sp3-qa-agent 검수 결과 (2026-09-11, 독립검수) — ✅ GATE E 통과 (HIGH 1건 발견 → 즉시 해소)
+
+**④(개인정보 격리 재설계) 최우선 검토 — 코드·Stage DB 실측 기준 PASS**: `legacy_member_staging`
+RLS가 실제로 service_role 전용인지 Stage에서 anon 키로 직접 SELECT 재현(`data:[]` 확인),
+`confirm` 액션에 `admin.createUser`/`user_profiles` 쓰기 잔재 없음(grep+전문 확인), `complete`
+성공/실패 양쪽 경로 정합성(반쪽 상태로 개인정보 남는 경로 없음), `CustomerDetailPanel.svelte`
+배지 로직 전역 grep으로 완전 제거 확인, `find_legacy_member`(490) SQL 원문이
+`legacy_member_staging`만 참조 + Stage 라이브 RPC 호출로 실제 매칭까지 재검증. Stage 원상복구
+수치(`user_profiles` 레거시 0건 / `legacy_member_staging` 86건 / `claimed_at` 설정 0건)도
+독립 재조회로 100% 일치 확인.
+
+**⑤(500 에러 버그) PASS**: `+page.server.ts` 전수 `export` 확인 — `load`/`actions`/타입 외
+런타임 함수 export 0건, 이관 정확성 확인.
+
+**정적 검증**: `npm run check` 1개 에러(vite.config.ts, 과거부터 존재·이번 워킹트리
+변경사항에 미포함 — 무관 확인) 외 신규 0건. `legacyMemberClaim.test.ts` 11/11 GREEN 직접
+재실행 확인, cleanup 로직(스테이징 행·OTP 행·E2E 생성 auth 계정 전부)도 코드로 확인.
+
+🟠 **HIGH 발견 — Production 적용 실증 공백**: QA 서브에이전트 실행 환경에 Supabase MCP
+도구가 제공되지 않아 "Production에 489/490/486 적용 완료"라는 보고를 독립적으로 재검증하지
+못함(과거 `promote_draft_reservation` 미발견 사고와 동일 클래스 리스크로 지목). →
+**메인 세션이 Supabase MCP로 즉시 직접 재확인 완료**:
+```
+Production(vnbpmvxruyciuuaermyh) 실측:
+  to_regclass('legacy_member_staging') = 'legacy_member_staging' (존재 확인)
+  legacy_member_staging count = 0 (Production엔 CSV 실행 이력 없음 — 예상과 일치)
+  user_profiles WHERE legacy_imported_at IS NOT NULL = 0건 (PII 미기록 확인)
+  find_legacy_member: 오버로드 1개(2 args)만 존재, 함수 본문이 legacy_member_staging만
+    참조하고 user_profiles는 참조하지 않음(prosrc 직접 확인)
+  get_customer_list: 오버로드 1개(7 args)만 존재 — 486의 DROP+CREATE가 이전 오버로드를
+    실제로 제거해 PostgREST 모호성(QR-CASE-1류) 위험 없음
+```
+→ HIGH 항목 해소.
+
+📝 **LOW(문서 정합성) — 항목①(여백 50% 축소) 서술이 실제 diff보다 좁게 기술됨**: QA가
+`git diff` 기준으로 재확인한 결과, `src/routes/auth/login/+page.svelte`에는 이 세션에서
+기록한 `.m-legacy-verify-link margin-bottom:-15px` 외에 **Stephen이 세션 중 직접 추가한**
+관련 여백 축소분이 더 있음을 확인: `.m-account` 컨테이너 `gap:50px→35px`("30% 축소" 주석) +
+`.m-inputs`/`.m-meta-row`/`.m-legacy-verify-link`/`.m-sns-divider`/`.m-social`에 각각
+`margin-top:-9px~-15px` 추가, 전부 "Stephen 지시 2026-09-11" 인라인 주석 포함. 추가로
+`LegacyMemberVerifyModal`에 `onsignup` prop 신설("새로 시작할게요" 클릭 시 레거시 모달을
+닫고 회원가입 모달을 바로 열도록 연결) — 컴포넌트 내부 정의(`onsignup?: () => void`)와
+호출부 배선 양쪽 다 존재해 정상 동작 확인. 전부 Stephen 본인 작업으로 판단되며(세션 중
+"파일이 디스크에서 변경됨" 시스템 알림으로 인지), 기능적 결함 아님 — 이 항목은 **문서
+서술 정정**으로만 기록.
+
+✅ **GATE E 통과** — 개인정보 격리 재설계(핵심 목적) Stage+Production 양쪽 실측 검증 완료,
+500 에러 버그 수정 확인, 정적검증·TDD 전부 GREEN. git commit은 Stephen 직접 실행 대기.
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 ---
@@ -43591,3 +44306,205 @@ Production `.env.local` 미연결(설계상 의도, CLAUDE.md)이라 raw DB 직�
 **검증**: `npx svelte-check` — 대상 2개 파일 신규 에러 0건. DB/RPC/마이그레이션 변경 없음.
 
 **git commit은 Stephen 직접 실행.**
+
+---
+
+## NOW — 휴대폰 OTP 발송 서버측 재발송 최소 간격 추가 (2026-09-10, 이 세션 단독 수행)
+
+**배경**: Stephen이 "알리고 키만 등록하면 사용 가능한 상태인가?" 질의 → 조사 결과 코드는
+이미 완전 구현(§ 알리고 SMS OTP, `phone_otps`/`verify_and_update_phone`)돼 있고 키 3개
+(`ALIGO_API_KEY`/`ALIGO_USER_ID`/`SMS_SENDER_PHONE`)만 Vercel Production에 등록하면
+바로 동작함을 확인·보고. 이 과정에서 `/api/profile/send-otp`에 **서버측 재발송 제한이
+전혀 없다**는 점(클라이언트 5분 카운트다운은 UI 단속일 뿐, API 직접 호출 시 무제한
+재발송 가능 — 실과금 SMS 남용 노출)을 발견해 보고했고, Stephen이 "서버측 재발송 최소
+간격 추가해줘"로 확정 지시.
+
+**구현**: `src/routes/api/profile/send-otp/+server.ts` — 기존 미인증 OTP 만료처리 단계
+직전에, 같은 (user_id, phone) 조합으로 아직 만료되지 않은(=클라이언트 5분 카운트다운과
+동일 기준) 미인증 `phone_otps` 행이 있으면 신규 발송을 차단(`429` + 남은 초 안내) 하는
+쿼리를 추가. 새 하드코딩 간격값을 도입하지 않고 기존 5분 만료 규칙을 서버에서도 그대로
+재사용 — 클라이언트·서버 규칙이 divergence 없이 항상 일치.
+
+이 엔드포인트는 마이페이지 휴대폰 수정(`ProfileTabContent.svelte`)과 회원가입 모달
+(`SignUpModal.svelte`) 둘 다 공유하므로, 별도 수정 없이 회원가입 경로도 함께 보호됨.
+
+**검증**: `npx svelte-check` — 대상 파일 신규 에러·경고 0건. DB 스키마/RPC 변경 없음
+(기존 `phone_otps` 테이블 컬럼만 조회하는 SELECT 추가).
+
+**git commit은 Stephen 직접 실행.**
+
+---
+
+## NOW — 마이페이지 개인정보 동의 체크박스를 표준 '체크아이콘' 버튼으로 교체 (2026-09-11, 이 세션 단독 수행)
+
+**요청(Stephen)**: "선택영역 '체크박스'를 front 표준디자인시스템 지침의 아이콘 중 '체크
+아이콘' 버튼 UI로 수정. 1. 적정 사이즈와 텍스트와 수평 중앙 유지. 2. pc & mobile
+반응형 비율 적용할 것." — 이번엔 `<launch-selected-element>` 스크린샷이 첨부되지 않아,
+uiux-index.md "체크아이콘(CheckIcon) 버튼" 표준 문서가 "`<input type=\"checkbox\">`
+신규 작성 금지"라고 명시한 점과 "front 표준디자인시스템"(front-uiux.md 대상, CMS 아님)
+한정 표현을 근거로 대상을 특정 — `grep`으로 "개인정보 수집 및 이용 동의"/"개인정보 제
+3자 제공" 텍스트를 검색해 CMS(`CustomerDetailPanel.svelte`)와 front(`ProfileTabContent.
+svelte`) 2곳만 존재함을 확인, "front" 한정으로 후자만이 유일하게 해당함을 확정(고유명사
+추정 금지 원칙 — 텍스트 검색으로 실제 위치를 먼저 확인 후 진행).
+
+**발견**: `ProfileTabContent.svelte`의 "동의 항목" 2개 버튼(개인정보 수집·제3자 제공)이
+독자적인 커스텀 SVG 사각형 체크박스(둥근 모서리 사각형, 채워짐/빈 테두리 2종 분기)를
+쓰고 있었고, 같은 파일의 "체류기간 선택"(외국인증명 탭, `checkbox-btn checkbox-btn-terms`)
+버튼은 이미 uiux-index.md 표준 체크아이콘(체크마크 path, `currentColor` + `.checked`
+클래스 토글)을 정확히 쓰고 있어 같은 파일 안에 신구 두 패턴이 공존하고 있었다.
+
+**구현**: 커스텀 사각형 SVG 2벌(각 if/else 분기, 총 4개 SVG)을 제거하고, 같은 파일에
+이미 있던 표준 `checkbox-btn checkbox-btn-terms` 패턴(체크마크 path, `class:checked`)을
+그대로 복사해 적용 — 신규 CSS 없이 기존 `.checkbox-btn`/`.checkbox-btn-terms`
+클래스(반응형: 모바일 22×15px → PC(≥768px) 18×12px, 이미 이 파일에 정의돼 있던 값)를
+그대로 재사용해 PC·모바일 비율 요구사항을 별도 작업 없이 자동 충족. 버튼 자체의
+`flex items-center gap-[12px]`(기존 Tailwind 유틸리티, 무변경)가 아이콘·텍스트 수직중앙
+정렬을 그대로 유지 — 아이콘 크기가 바뀌어도 정렬 로직 자체는 영향받지 않음.
+
+**검증**: `npx svelte-check` — 대상 파일 신규 에러 0건(경고도 기존 패턴만, 신규 없음).
+DB/RPC/마이그레이션 변경 없음. CMS(`CustomerDetailPanel.svelte`)는 요청 범위(front 한정)
+밖이라 미수정.
+
+**git commit은 Stephen 직접 실행.**
+
+---
+
+## NOW — 마이페이지 본인증명·외국인증명 등록완료 목록 "보기" 버튼 임시 감춤 (2026-09-11, 이 세션 단독 수행)
+
+**요청(Stephen)**: "선택영역 보기 버튼UI 및 기능 감춤. 개인정보 보안 우려를 고려한 임시
+조치: 추후 중요정보 자동 가림 기능 보완해 재사용 예정." — 선택된 `.btn-doc-view`
+버튼이 본인증명·외국인증명 등록완료 목록 두 곳(`ProfileTabContent.svelte`)에 동일 클래스로
+각각 존재해, GATE B 성격 질문(AskUserQuestion)으로 범위를 확인 — "본인증명+외국인증명 둘 다
+감춤"으로 확정(보안 우려가 양쪽에 동일 적용되므로, 한쪽만 가리면 다른 쪽에 보안 공백이
+남는다는 판단).
+
+**구현(삭제가 아니라 주석처리 — 복원 전제)**:
+- `<button class="btn-doc-view" onclick={() => openIdentityDoc(url)}>보기</button>`,
+  동일 패턴의 `openForeignDoc(url)` 버전 2곳 전부 HTML 주석(`<!-- -->`)으로 처리(마크업
+  삭제 아님) — 각 위치에 감춤 사유·복원 시점(중요정보 자동 가림 기능 보완 후) 명시.
+- `openIdentityDoc`/`openForeignDoc` 함수 자체는 그대로 유지(재사용 예정이므로 삭제 안 함).
+- 마크업 주석처리로 `.btn-doc-view`/`:hover` CSS가 미사용 상태가 되어 svelte-check
+  unused-selector 경고가 새로 뜨는 것을 확인 → 해당 CSS 블록도 함께 `/* */` 주석처리(마크업과
+  세트로 항상 같이 복원되도록).
+- `.doc-file-list-item`이 `justify-content` 없는 단순 `flex + gap`이라 버튼 제거 후에도
+  레이아웃 깨짐 없음(아이콘+라벨만 좌측 정렬로 남음).
+
+**검증**: `npx svelte-check` — 신규 에러·경고 0건(unused-selector 포함). DB/RPC/마이그레이션
+변경 없음.
+
+**git commit은 Stephen 직접 실행.**
+
+---
+
+## DONE — 상품등록관리(/cms/products) 테스트 데이터 정리 + 재고 표시 오류 조사 + 디테일패널 UX 개선 (2026-09-11, 이 세션 단독 수행)
+
+### ① AI 테스트 상품 일괄 정리 (DB 소프트삭제, 코드 변경 없음)
+
+**요청(Stephen)**: `?selected=cc65246b-...` 상품 1건 제거 요청 → 조회해보니 이름에
+`[TDD]`가 박힌 명백한 TDD 통합테스트 잔재("[TDD] 격리옵션자식 0", 2026-09-05 생성)였음 →
+CMS `deleteProduct` 액션과 동일한 소프트삭제 로직(부모 `deleted_at` + 활성 자식 cascade)을
+Stage DB(ezyvffjvuwmtuhpxdjrw)에 직접 SQL로 재현해 삭제.
+
+Stephen이 "AI가 만든 다른 테스트 상품도 더 있는지 확인해줘" 요청 → `[TDD]`/`TDD`/`테스트`/
+`test`/`QA`/`더미`/`dummy`/`샘플`/`sample`/`임시` 패턴으로 전수 조회 → **활성 상품 198건
+중 155건(78%)**이 테스트 잔재였음을 발견:
+- `[TDD] 격리옵션자식 0`(부모 단독, 자식 없음) — **152건**, 2026-09-02~09-07 생성
+- `TDD-RPE ADD-OK...` 계열(부모 1 + 자식 2) — **3건**, 2026-09-05 생성
+
+Stephen 확인("네, 동일한 상품을 모두 찾아 삭제") 후 2회에 걸쳐 155건 전부 소프트삭제 완료
+(하위 자식 존재 여부 먼저 확인 후 진행 — `[TDD] 격리옵션자식 0`은 자식 0건이라 단순삭제,
+`TDD-RPE ADD-OK`는 부모+자식 2개를 함께 삭제). **Stage DB만 대상**(로컬 개발 서버가
+`.env.local`로 Stage에 연결돼 있어 Production과는 무관).
+
+### ② SONY PXW-Z90 재고 표시 불일치 — 원인 조사만(수정 안 함, Stephen 확인)
+
+**질문**: CMS에서 재고 8개로 보이는 상품이 상품상세 "옵션상품" 영역에서는 1개로 표시되는
+원인.
+
+**조사 결과**: 재고 계산 로직(`get_available_stock_counts`, `get_product_option_links`
+RPC) 자체는 정상 — 직접 SQL로 재현해 각각 8/1을 정확히 반환함을 확인. 실제 원인은 **동일
+이름("SONY PXW-Z90")의 중복 상품 2개가 카탈로그에 존재**하는 것이었음:
+- `2af56415-...`(재고 8개, Stephen이 CMS에서 보고 있던 것, 2026-08-25 생성)
+- `467c8f9b-...`(재고 1개, 더 오래된 중복본, 2026-07-08 생성)
+
+`product_option_links` 조회 결과 Sony FX6-12·Canon RF 24-70mm F2.8L·Manfrotto 055
+3개 상품의 "옵션상품" 연결이 전부 오래된 1개짜리 쪽을 가리키고 있음을 확인.
+
+Stephen 확인 결과: "수정하지 말고 확인만" / "중복상품은 그대로 유지(이번엔 손 대지 않음)"
+— **조사만 하고 아무것도 변경하지 않음.** 향후 옵션 연결을 재고 8개짜리로 바로잡거나
+중복 상품을 정리할 때 참고할 수 있도록 대상 상품 3건 + 두 상품 ID를 기록해 둠.
+
+### ③ ProductDetailPanel 디테일패널 sticky 고정 — UX 개선 (코드 변경)
+
+**문제**: `/cms/products` 좌측 목록에서 맨 아래쪽 항목을 클릭하면, 오른쪽 상세패널
+(`대표 상품정보 등록관리` + `ProductDetailPanel`)이 항상 페이지 상단부터 렌더링되는데
+스크롤 위치는 그대로 아래에 남아있어, 방금 선택한 상세정보를 보려면 매번 위로
+스크롤해야 하는 불편함이 있었음(`.list-pane`/`.detail-pane`가 독립 스크롤 없이
+`.cms-main` 전체 스크롤을 공유하는 구조가 원인).
+
+**검토한 방안 2가지**: ① 선택 시 자동 스크롤(최소변경, 화면이 훅 움직이는 단점) /
+② 목록은 그대로 두고 디테일패널만 `position: sticky`로 고정(더 자연스러운 UX). Stephen이
+②를 선택하되 "패널을 닫으면 기존 상품목록형 UX(전체폭 목록, 페이지 공유스크롤)를 그대로
+유지"할 것을 명시적으로 요구.
+
+**구현**(`src/routes/cms/products/+page.svelte` `.detail-pane` 규칙 1곳만 수정, +9/-1줄):
+```css
+.detail-pane {
+  flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 10px;
+  position: sticky;
+  top: 16px;
+  align-self: flex-start;
+  max-height: calc(100vh - 126px);
+  overflow-y: auto;
+}
+```
+- `.detail-pane` 자체가 `{#if panelOpen && activeDetail.rootProduct}` 안에서만 렌더링되는
+  요소라, 패널을 닫으면 이 div가 DOM에서 완전히 사라짐 — 별도 정리 로직 없이 닫힌 상태의
+  기존 UX(목록 전체폭 복귀 + 페이지 공유스크롤)가 100% 그대로 유지됨(요청사항 충족).
+- `.list-pane`에는 별도 스크롤박스를 추가하지 않음(가장 단순·견고한 접근 — 뷰포트 높이
+  기반 max-height 계산의 불확실성 회피).
+- `max-height: calc(100vh - 126px)`는 `.cms-topbar-wrap`(20px 패딩 + `.cms-topbar` 74px
+  = 94px, `.cms-main` 스크롤 영역 바깥에 위치) + sticky top 16px + 하단 여백 16px 근사치.
+
+**후속 회귀 점검(Stephen 요청)**: `.detail-pane`에 새로 추가한 `overflow-y: auto`가 내부
+팝업/드롭다운을 잘라내는지 전수 확인 —
+  - 카테고리 선택 드롭다운(`cat-dropdown-fixed`)은 이미 `position: fixed`라 영향 없음
+    (위치 계산이 열릴 때 1회만 되는 것은 이번 수정 이전부터 있던 기존 특성, 회귀 아님)
+  - 그 외 `position: absolute` 요소(토글 손잡이·이미지 호버 오버레이·삭제 버튼 등)는
+    전부 자기 부모 카드 안에 갇힌 소형 요소라 클리핑 위험 없음
+  - 라이트박스·모달류는 전부 `position: fixed; inset: 0`라 영향 없음
+  - `.products-wrap`/`.master-detail`에 `overflow` 속성이 없어 sticky가 `.cms-main`
+    (실제 스크롤 컨테이너) 기준으로 정상 동작함을 확인
+
+**검증**: `npx svelte-check` — 대상 파일 신규 에러 0건. DB/RPC/마이그레이션 변경 없음.
+이번 세션에서 이 파일 외 다른 코드 파일은 수정하지 않음(`git diff --stat` 1개 파일
++9/-1줄만 확인 — 워킹트리의 다른 수정분은 전부 동시 진행 중인 별개 세션 작업).
+
+### QA 검수 결과 (2026-09-11, @sp3-qa-agent) — 통과
+
+③(sticky 구현) 1개 파일(`+page.svelte` `.detail-pane`, +9/-1줄) 단독 검수. 규칙 정합성
+(ui-mobile.md "transform+fixed 충돌" 무관 확인 — 이번 diff는 transform 미추가) · 기술부채
+0건 · 닫힘 상태 무영향(핵심 요구사항, `{#if panelOpen && activeDetail.rootProduct}` 안에서만
+마운트됨을 코드로 재확인) · overflow-clipping 회귀 없음(카테고리 드롭다운 `cat-dropdown-fixed`
+는 애초에 `position:fixed`로 overflow 탈출 전제 설계) · sticky 동작 전제조건(조상에 불필요한
+overflow 없음) 전부 통과. svelte-check 신규 에러·경고 0건. **블로킹 이슈 0건, GATE E 통과.**
+
+참고사항(블로킹 아님): `.detail-pane`에 기존부터 있던 `transition:fly`(이번 diff 범위 아님)가
+진입 애니메이션 중 짧게 transform을 발생시키나 200ms 후 정상 복귀 — 필요 시 별건으로 재확인
+권장.
+
+### 잔여 작업
+
+1. ~~QA(@sp3-qa-agent) 검수~~ ✅ 완료 — 통과, 수정 필요 0건
+2. ②(SONY PXW-Z90 옵션 연결 오류)는 Stephen 지시 없이는 손대지 않음 — 향후 필요 시
+   위 기록 참고해 별도 세션에서 진행
+3. git commit — Stephen 확인 후 직접 실행 대기 (제안 메시지는 아래 참고)
+
+```
+fix(cms/products): 상세패널 sticky 고정으로 목록 스크롤 UX 개선
+
+목록을 아래로 스크롤해도 상세패널이 화면에 계속 보이도록 sticky 적용
+(패널 닫힘 상태는 기존 동작 그대로 유지)
+```
+
+**git commit은 Stephen 직접 실행. DB 변경(①)은 Stage 전용, Production 무관.**
