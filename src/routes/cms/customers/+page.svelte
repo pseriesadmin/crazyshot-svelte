@@ -181,6 +181,7 @@
     </div>
 
     <div class="toolbar-right">
+      <a href="/cms/customers/legacy-import" class="btn-secondary legacy-import-link">레거시 회원 일괄 등록</a>
       <span class="count-badge">총 {data.totalCount ?? 0}명</span>
     </div>
   </div>
@@ -321,6 +322,11 @@
     justify-content: space-between;
     gap: 12px;
     flex-wrap: wrap;
+  }
+  .toolbar-right {
+    display: flex;
+    align-items: center;
+    gap: 10px;
   }
   .toolbar-left {
     display: flex;

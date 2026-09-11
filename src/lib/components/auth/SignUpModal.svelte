@@ -1,6 +1,7 @@
 <script lang="ts">
   import { performSignUp, performSignIn } from '$lib/stores/auth'
   import { supabase, rpc } from '$lib/services/supabase'
+  import { csToast } from '$lib/utils/toast'
 
   type Mode = 'login' | 'signup' | 'find-email' | 'reset-pw'
 
@@ -30,7 +31,7 @@
   let email = $state('')
   let password = $state('')
   let passwordConfirm = $state('')
-  let phone = $state('')           // 형식: 01012345678
+  let phone = $state('010-')        // 형식: 010-0000-0000
   let verifyCode = $state('')
   let showPassword = $state(false)
   let showPasswordConfirm = $state(false)
@@ -38,6 +39,55 @@
   // ── 단계 상태 ──
   type Step = 'form' | 'verify'
   let step = $state<Step>('form')
+
+  // ── 전화번호 자동 하이픈 ──
+  function formatPhoneWithHyphen(raw: string): string {
+    const digits = raw.replace(/[^0-9]/g, '')
+    if (digits.length <= 3) return digits
+    if (digits.length <= 7) return `${digits.slice(0, 3)}-${digits.slice(3)}`
+    if (digits.length <= 11) return `${digits.slice(0, 3)}-${digits.slice(3, 7)}-${digits.slice(7)}`
+    return `${digits.slice(0, 3)}-${digits.slice(3, 7)}-${digits.slice(7, 11)}`
+  }
+
+  // ── 이메일 중복 체크 ──
+  const EMAIL_MAX_LENGTH = 254
+  let emailCheckTimer: ReturnType<typeof setTimeout> | null = null
+  let emailKoreanWarned = false
+  let emailAvailable = $state(false)
+  let emailDuplicate = $state(false)
+
+  function onEmailInput(e: Event) {
+    const el = e.currentTarget as HTMLInputElement
+    // 한글(비ASCII) 차단 — 로그인 화면과 동일 패턴
+    const filtered = el.value.replace(/[^\x00-\x7F]/g, '')
+    if (el.value !== filtered) {
+      el.value = filtered; email = filtered
+      if (!emailKoreanWarned) {
+        emailKoreanWarned = true
+        csToast.warning('영문(숫자) 메일 형식으로 입력하세요.')
+        setTimeout(() => { emailKoreanWarned = false }, 3000)
+      }
+    }
+    emailAvailable = false
+    emailDuplicate = false
+    const val = el.value
+    if (emailCheckTimer) { clearTimeout(emailCheckTimer); emailCheckTimer = null }
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(val)) return
+    emailCheckTimer = setTimeout(async () => {
+      const { data } = await supabase.rpc('check_email_registered', { p_email: val } as never)
+      if (data) {
+        csToast.warning('이미 가입한 아이디입니다.')
+        emailAvailable = false
+        emailDuplicate = true
+      } else {
+        csToast.success('등록 가능한 아이디입니다.')
+        emailAvailable = true
+        emailDuplicate = false
+      }
+    }, 600)
+  }
+
+  const canProceed = $derived(emailAvailable && !!password && !!passwordConfirm)
 
   // ── 로딩·에러 ──
   let isLoading = $state(false)
@@ -84,6 +134,8 @@
     resetEmail = ''
     isResetting = false
     resetSent = false
+    emailAvailable = false
+    emailDuplicate = false
   }
 
   // ── 로그인 제출 ──
@@ -154,7 +206,7 @@
     return true
   }
 
-  // ── 전화 인증번호 발송 (알리고 SMS 실연동 — /account/profile 휴대폰 인증과 동일 API 재사용) ──
+  // ── 전화 인증번호 발송 (Solapi SMS 실연동 — /account/profile 휴대폰 인증과 동일 API 재사용) ──
   async function handleSendOtp() {
     errorMsg = null
     const cleaned = phone.replace(/\D/g, '')
@@ -164,15 +216,29 @@
     }
     isSendingOtp = true
     try {
+      // 휴대폰 번호 중복 조회
+      const { data: existing } = await supabase
+        .from('user_profiles')
+        .select('id')
+        .eq('phone', cleaned)
+        .maybeSingle()
+      if (existing) {
+        csToast.warning('이미 가입된 휴대폰 번호입니다.')
+        return
+      }
+
       const ready = await ensureSignupSession()
       if (!ready) {
         errorMsg = '인증 세션 생성에 실패했습니다. 잠시 후 다시 시도해주세요.'
         return
       }
+      // context: 'signup' — 서버가 이 값을 보고 dev 환경 SMS 미발송 우회를 건너뛴다
+      // (Stephen 지시, 2026-09-11: 회원가입 화면은 로컬에서도 실제 문자 발송 검증 필요).
+      // /account/profile 등 이 필드를 안 보내는 다른 호출부는 기존 dev 우회 그대로 유지.
       const res = await fetch('/api/profile/send-otp', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ phone: cleaned }),
+        body: JSON.stringify({ phone: cleaned, context: 'signup' }),
       })
       const data = await res.json() as { ok: boolean; error?: string; devCode?: string }
       if (!data.ok) {
@@ -180,6 +246,7 @@
         return
       }
       otpSent = true
+      csToast.success('인증번호가 발송됐습니다.')
       // 개발 환경 바이패스: 서버가 devCode를 내려주면 자동 입력
       if (data.devCode) verifyCode = data.devCode
     } catch {
@@ -465,15 +532,17 @@
               id="su-email"
               class="su-input"
               type="email"
+              maxlength={EMAIL_MAX_LENGTH}
               placeholder="사용할 메일 아이디를 입력하세요."
               bind:value={email}
               autocomplete="email"
+              oninput={onEmailInput}
             />
           </div>
 
           <!-- 비밀번호 -->
           <div class="su-field">
-            <div class="su-input-wrap">
+            <div class="su-input-wrap" onclick={() => { if (emailDuplicate) csToast.warning('이미 가입한 아이디입니다.') }}>
               <input
                 id="su-pw"
                 class="su-input"
@@ -481,11 +550,13 @@
                 placeholder="비밀번호 6자 이상 입력하세요."
                 bind:value={password}
                 autocomplete="new-password"
+                disabled={!emailAvailable}
               />
               <button
                 class="su-eye"
                 type="button"
-                onclick={() => showPassword = !showPassword}
+                disabled={!emailAvailable}
+                onclick={(e) => { e.stopPropagation(); if (emailAvailable) showPassword = !showPassword }}
                 aria-label={showPassword ? '비밀번호 숨기기' : '비밀번호 표시'}
               >
                 {#if showPassword}
@@ -507,7 +578,7 @@
 
           <!-- 비밀번호 확인 -->
           <div class="su-field">
-            <div class="su-input-wrap">
+            <div class="su-input-wrap" onclick={() => { if (emailDuplicate) csToast.warning('이미 가입한 아이디입니다.') }}>
               <input
                 id="su-pw2"
                 class="su-input"
@@ -515,11 +586,13 @@
                 placeholder="비밀번호를 한 번 더 입력하세요"
                 bind:value={passwordConfirm}
                 autocomplete="new-password"
+                disabled={!emailAvailable}
               />
               <button
                 class="su-eye"
                 type="button"
-                onclick={() => showPasswordConfirm = !showPasswordConfirm}
+                disabled={!emailAvailable}
+                onclick={(e) => { e.stopPropagation(); if (emailAvailable) showPasswordConfirm = !showPasswordConfirm }}
                 aria-label={showPasswordConfirm ? '비밀번호 숨기기' : '비밀번호 표시'}
               >
                 {#if showPasswordConfirm}
@@ -544,7 +617,7 @@
           <p class="su-error" role="alert">{errorMsg}</p>
         {/if}
 
-        <button class="su-cta" type="button" onclick={handleNextStep}>
+        <button class="su-cta" type="button" onclick={handleNextStep} disabled={!canProceed}>
           다음 단계 →
         </button>
 
@@ -565,9 +638,9 @@
                 id="su-phone"
                 class="su-input su-phone-input"
                 type="tel"
-                placeholder="01012345678"
-                bind:value={phone}
-                maxlength={11}
+                placeholder="010-0000-0000"
+                value={phone}
+                oninput={(e) => { phone = formatPhoneWithHyphen((e.currentTarget as HTMLInputElement).value); (e.currentTarget as HTMLInputElement).value = phone }}
               />
               <button
                 class="su-otp-btn"
@@ -585,7 +658,7 @@
               </button>
             </div>
             {#if otpSent}
-              <p class="su-otp-hint">📱 인증번호가 발송되었습니다. (5분 이내 입력)</p>
+              <p class="su-otp-hint">📱 인증번호가 발송되었습니다. (3분 이내 입력)</p>
             {/if}
           </div>
 
@@ -661,7 +734,7 @@
                 </button>
               </div>
               {#if findOtpSent}
-                <p class="su-otp-hint">📱 인증번호가 발송되었습니다. (5분 이내 입력)</p>
+                <p class="su-otp-hint">📱 인증번호가 발송되었습니다. (3분 이내 입력)</p>
               {/if}
             </div>
             {#if findOtpSent}
@@ -855,7 +928,8 @@
   }
   .su-input:focus { outline: 2px solid var(--cs-purple); outline-offset: -2px; }
   .su-input::placeholder { color: var(--cs-text-light); }
-  .su-input:disabled { opacity: 0.5; cursor: not-allowed; }
+  .su-input:disabled { opacity: 0.5; cursor: not-allowed; pointer-events: none; }
+  .su-input-wrap { cursor: default; }
 
   /* 인풋 + 눈 버튼 래퍼 */
   .su-input-wrap {
@@ -939,7 +1013,7 @@
     transition: background 0.15s;
   }
   .su-cta:hover:not(:disabled) { background: var(--cs-red); }
-  .su-cta:disabled { background: #B0ABCC; cursor: not-allowed; }
+  .su-cta:disabled { background: var(--cs-chat-in-bg); cursor: not-allowed; }
   .su-cta-flex { flex: 1; width: auto; }
 
   /* 로그인 기억하기 — /auth/login .d-remember와 동일 레이아웃(체크박스+라벨) */

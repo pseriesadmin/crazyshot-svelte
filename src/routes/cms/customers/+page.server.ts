@@ -39,6 +39,11 @@ export interface CustomerRow {
   withdrawal_status: string
   withdrawal_requested_at: string | null
   withdrawal_purge_at: string | null
+  legacy_imported_at: string | null
+  legacy_claimed_at: string | null
+  legacy_source: string | null
+  legacy_signup_at: string | null
+  legacy_purchase_count: number | null
 }
 
 export const load: PageServerLoad = async ({ parent, url }) => {

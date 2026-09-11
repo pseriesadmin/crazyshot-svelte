@@ -6,6 +6,8 @@
   import MobileMoreMenu from '$lib/components/common/MobileMoreMenu.svelte'
   import SignUpModal from '$lib/components/auth/SignUpModal.svelte'
   import LoginBannerModal from '$lib/components/auth/LoginBannerModal.svelte'
+  import LegacyMemberVerifyModal from '$lib/components/auth/LegacyMemberVerifyModal.svelte'
+  import { browser } from '$app/environment'
   import { csToast } from '$lib/utils/toast'
   import type { PageData } from './$types'
 
@@ -33,6 +35,19 @@
     }
   })
   let showLoginBannerModal = $state(false)
+
+  // 레거시 회원 인증 모달 — 1회성 dismiss (localStorage)
+  // ⚠️ 키 버전업(-v2, 2026-09-11) — 이 세션 초반 "닫으면 무조건 dismiss 기록" 로직이
+  // "체크박스 선택 시에만 기록"으로 바뀌기 전에 이미 브라우저에 저장된 구버전 플래그가
+  // 새 로직 적용 후에도 그대로 남아 모달이 기본 노출되지 않는 원인이었음 — 키 이름을
+  // 바꿔 과거에 저장된 값을 무효화(원인 분석 결과 반영).
+  const LEGACY_DISMISS_KEY = 'cs-legacy-verify-dismissed-v2'
+  let showLegacyVerifyModal = $state(false)
+  $effect(() => {
+    if (!browser) return
+    const dismissed = localStorage.getItem(LEGACY_DISMISS_KEY)
+    if (!dismissed) showLegacyVerifyModal = true
+  })
 
   // 이메일+비밀번호 모두 입력 시 Sign In 모드, 아니면 Sign Up 모드
   let isSignInMode = $derived(email.trim().length > 0 && password.length > 0)
@@ -223,6 +238,47 @@
             </button>
           </div>
 
+          <!-- 기존 고객 인증 유도 링크(레거시 회원 클레임 모달 호출, Stephen 지시 2026-09-11) -->
+          <button type="button" class="d-legacy-verify-link" onclick={() => showLegacyVerifyModal = true}>
+            기존 고객님 인증하고 가실께요!
+          </button>
+
+          <!-- Sign Up / Sign In 전환 버튼 -->
+          {#if isSignInMode}
+            <!-- 이메일+비밀번호 입력 완료 → Sign In 버튼 -->
+            <button
+              class="d-signin-submit"
+              onclick={handleSignIn}
+              disabled={isLoading}
+              aria-busy={isLoading}
+            >
+              {isLoading ? '로그인 중...' : 'Sign In'}
+              {#if !isLoading}
+                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                  <path d="M14.43 18.82C14.24 18.82 14.05 18.75 13.9 18.6C13.61 18.31 13.61 17.83 13.9 17.54L19.44 12L13.9 6.46C13.61 6.17 13.61 5.69 13.9 5.4C14.19 5.11 14.67 5.11 14.96 5.4L21.03 11.47C21.32 11.76 21.32 12.24 21.03 12.53L14.96 18.6C14.81 18.75 14.62 18.82 14.43 18.82Z" fill="white"/>
+                  <path d="M20.33 12.75H3.5C3.09 12.75 2.75 12.41 2.75 12C2.75 11.59 3.09 11.25 3.5 11.25H20.33C20.74 11.25 21.08 11.59 21.08 12C21.08 12.41 20.74 12.75 20.33 12.75Z" fill="white"/>
+                </svg>
+              {/if}
+            </button>
+          {:else}
+            <!-- 기본 상태 → Sign Up 버튼 -->
+            <button
+              class="d-signup-submit"
+              onclick={() => { modalInitialMode = 'signup'; showSignUpModal = true }}
+              type="button"
+            >
+              Sign Up
+              <svg width="24" height="24" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                <path d="M12 5V19M5 12H19" stroke="white" stroke-width="2.5" stroke-linecap="round"/>
+              </svg>
+            </button>
+          {/if}
+
+          <!-- 에러 메시지 -->
+          {#if errorMsg}
+            <p class="d-error" role="alert">{errorMsg}</p>
+          {/if}
+
           <!-- SNS 구분선 -->
           <div class="d-sns-divider">
             <span class="d-divider-label">or sign in with</span>
@@ -258,42 +314,6 @@
               </svg>
             </button>
           </div>
-
-          <!-- 에러 메시지 -->
-          {#if errorMsg}
-            <p class="d-error" role="alert">{errorMsg}</p>
-          {/if}
-
-          <!-- Sign Up / Sign In 전환 버튼 -->
-          {#if isSignInMode}
-            <!-- 이메일+비밀번호 입력 완료 → Sign In 버튼 -->
-            <button
-              class="d-signin-submit"
-              onclick={handleSignIn}
-              disabled={isLoading}
-              aria-busy={isLoading}
-            >
-              {isLoading ? '로그인 중...' : 'Sign In'}
-              {#if !isLoading}
-                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-                  <path d="M14.43 18.82C14.24 18.82 14.05 18.75 13.9 18.6C13.61 18.31 13.61 17.83 13.9 17.54L19.44 12L13.9 6.46C13.61 6.17 13.61 5.69 13.9 5.4C14.19 5.11 14.67 5.11 14.96 5.4L21.03 11.47C21.32 11.76 21.32 12.24 21.03 12.53L14.96 18.6C14.81 18.75 14.62 18.82 14.43 18.82Z" fill="white"/>
-                  <path d="M20.33 12.75H3.5C3.09 12.75 2.75 12.41 2.75 12C2.75 11.59 3.09 11.25 3.5 11.25H20.33C20.74 11.25 21.08 11.59 21.08 12C21.08 12.41 20.74 12.75 20.33 12.75Z" fill="white"/>
-                </svg>
-              {/if}
-            </button>
-          {:else}
-            <!-- 기본 상태 → Sign Up 버튼 -->
-            <button
-              class="d-signup-submit"
-              onclick={() => { modalInitialMode = 'signup'; showSignUpModal = true }}
-              type="button"
-            >
-              Sign Up
-              <svg width="24" height="24" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-                <path d="M12 5V19M5 12H19" stroke="white" stroke-width="2.5" stroke-linecap="round"/>
-              </svg>
-            </button>
-          {/if}
         </div>
       </div>
     </div>
@@ -315,6 +335,13 @@
 {#if showLoginBannerModal}
   <LoginBannerModal onclose={() => showLoginBannerModal = false} />
 {/if}
+
+<!-- 레거시 회원 인증 모달 (최초 방문 1회) -->
+<LegacyMemberVerifyModal
+  bind:open={showLegacyVerifyModal}
+  onclose={() => showLegacyVerifyModal = false}
+  onsignup={() => { showLegacyVerifyModal = false; modalInitialMode = 'signup'; showSignUpModal = true }}
+/>
 
 
 <!-- ═══════════════════════════════════════════════
@@ -470,25 +497,68 @@
 
       <!-- Remember me + Forgot -->
       <div class="m-meta-row">
-        <label class="m-remember">
-          <input
-            type="checkbox"
-            class="m-checkbox-input"
-            bind:checked={rememberMe}
-          />
-          <span class="m-checkbox-box" aria-hidden="true">
-            {#if rememberMe}
-              <svg width="14" height="10" viewBox="0 0 14 10" fill="none" aria-hidden="true">
-                <path d="M1 5L5 9L13 1" stroke="var(--cs-purple)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
-              </svg>
-            {/if}
-          </span>
+        <div class="m-remember">
+          <button
+            type="button"
+            class="checkbox-btn checkbox-btn-terms"
+            class:checked={rememberMe}
+            onclick={() => rememberMe = !rememberMe}
+            aria-label="로그인 상태 유지"
+          >
+            <svg width="18" height="12" viewBox="0 0 18 12" fill="none" aria-hidden="true">
+              <path d="M14.788 0.40847C15.5937 -0.206503 16.7506 -0.123176 17.4589 0.632103C18.2144 1.4379 18.1729 2.70376 17.3671 3.45925L17.3622 3.46413C17.3585 3.46759 17.3528 3.47297 17.3456 3.47976C17.3311 3.49333 17.3101 3.51407 17.2821 3.54031C17.2261 3.59279 17.1437 3.66974 17.039 3.76784C16.8294 3.96413 16.5289 4.24474 16.1669 4.58327C15.4428 5.26035 14.4707 6.169 13.4774 7.09304C12.4848 8.01654 11.4689 8.95836 10.6591 9.70144C9.90326 10.3949 9.21125 11.0229 8.954 11.219C8.38484 11.6526 7.64783 12.0001 6.7831 12.0003C5.89707 12.0003 5.14509 11.6357 4.57217 11.138C4.258 10.865 3.25694 9.9462 2.37197 9.13015C1.92122 8.71451 1.48885 8.31388 1.16885 8.01785C1.0088 7.86979 0.875998 7.74749 0.78408 7.66238C0.738281 7.61997 0.702073 7.58638 0.677634 7.56374C0.665704 7.55269 0.656551 7.54415 0.650291 7.53835C0.647126 7.53542 0.644094 7.53301 0.642478 7.53152L0.641502 7.52956H0.640525C-0.169647 6.77877 -0.217693 5.51259 0.533103 4.70242C1.28393 3.89251 2.55017 3.84526 3.36025 4.59597L3.36123 4.59792C3.3628 4.59938 3.36592 4.60089 3.36904 4.60378C3.37524 4.60953 3.38439 4.61807 3.39638 4.62917C3.42067 4.65167 3.45618 4.68551 3.50185 4.72781C3.59333 4.81251 3.72524 4.93384 3.88467 5.08132C4.2037 5.37646 4.63512 5.77493 5.08388 6.18874C5.73477 6.78894 6.40077 7.39812 6.82217 7.78054C6.86093 7.74604 6.90358 7.70918 6.94814 7.66921C7.21008 7.43424 7.55408 7.12113 7.954 6.75417C8.7536 6.02049 9.76226 5.0859 10.7528 4.16433C11.7428 3.24336 12.7128 2.33711 13.4354 1.6614C13.7965 1.32374 14.0957 1.04357 14.3046 0.847923C14.409 0.750147 14.491 0.67359 14.5468 0.621361C14.5745 0.595342 14.5959 0.575239 14.6103 0.56179C14.6174 0.555065 14.6232 0.549566 14.6269 0.546165L14.6317 0.541282L14.788 0.40847Z" fill="currentColor"/>
+            </svg>
+          </button>
           <span class="m-remember-label">Remember me</span>
-        </label>
+        </div>
         <button type="button" class="m-forgot" onclick={() => { modalInitialMode = 'reset-pw'; showSignUpModal = true }}>
           Forgot password?
         </button>
       </div>
+
+      <!-- 기존 고객 인증 유도 링크 + 회원가입/로그인 버튼 묶음 -->
+      <div class="m-account-cta">
+        <button type="button" class="m-legacy-verify-link" onclick={() => showLegacyVerifyModal = true}>
+          기존 고객님 인증하고 가실께요!
+        </button>
+
+        <!-- Sign Up / Sign In 전환 버튼 -->
+        {#if isSignInMode}
+          <button
+            class="m-signin-submit"
+            onclick={handleSignIn}
+            disabled={isLoading}
+            aria-busy={isLoading}
+          >
+            {isLoading ? '로그인 중...' : 'Sign In'}
+            {#if !isLoading}
+              <svg width="24" height="24" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                <path d="M14.43 18.82C14.24 18.82 14.05 18.75 13.9 18.6C13.61 18.31 13.61 17.83 13.9 17.54L19.44 12L13.9 6.46C13.61 6.17 13.61 5.69 13.9 5.4C14.19 5.11 14.67 5.11 14.96 5.4L21.03 11.47C21.32 11.76 21.32 12.24 21.03 12.53L14.96 18.6C14.81 18.75 14.62 18.82 14.43 18.82Z" fill="white"/>
+                <path d="M20.33 12.75H3.5C3.09 12.75 2.75 12.41 2.75 12C2.75 11.59 3.09 11.25 3.5 11.25H20.33C20.74 11.25 21.08 11.59 21.08 12C21.08 12.41 20.74 12.75 20.33 12.75Z" fill="white"/>
+              </svg>
+            {/if}
+          </button>
+        {:else}
+          <button
+            class="m-signup-submit"
+            onclick={() => { modalInitialMode = 'signup'; showSignUpModal = true }}
+            type="button"
+          >
+            Sign Up
+            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+              <path d="M12 5V19M5 12H19" stroke="white" stroke-width="2.5" stroke-linecap="round"/>
+            </svg>
+          </button>
+        {/if}
+      </div>
+
+      <!-- 에러 메시지 -->
+      {#if errorMsg}
+        <p class="m-error" role="alert">{errorMsg}</p>
+      {/if}
+
+      <!-- SNS 로그인 그룹 -->
+      <div class="m-sns-group">
 
       <!-- SNS 구분선 -->
       <div class="m-sns-divider">
@@ -523,39 +593,7 @@
         </button>
       </div>
 
-      <!-- 에러 메시지 -->
-      {#if errorMsg}
-        <p class="m-error" role="alert">{errorMsg}</p>
-      {/if}
-
-      <!-- Sign Up / Sign In 전환 버튼 -->
-      {#if isSignInMode}
-        <button
-          class="m-signin-submit"
-          onclick={handleSignIn}
-          disabled={isLoading}
-          aria-busy={isLoading}
-        >
-          {isLoading ? '로그인 중...' : 'Sign In'}
-          {#if !isLoading}
-            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-              <path d="M14.43 18.82C14.24 18.82 14.05 18.75 13.9 18.6C13.61 18.31 13.61 17.83 13.9 17.54L19.44 12L13.9 6.46C13.61 6.17 13.61 5.69 13.9 5.4C14.19 5.11 14.67 5.11 14.96 5.4L21.03 11.47C21.32 11.76 21.32 12.24 21.03 12.53L14.96 18.6C14.81 18.75 14.62 18.82 14.43 18.82Z" fill="white"/>
-              <path d="M20.33 12.75H3.5C3.09 12.75 2.75 12.41 2.75 12C2.75 11.59 3.09 11.25 3.5 11.25H20.33C20.74 11.25 21.08 11.59 21.08 12C21.08 12.41 20.74 12.75 20.33 12.75Z" fill="white"/>
-            </svg>
-          {/if}
-        </button>
-      {:else}
-        <button
-          class="m-signup-submit"
-          onclick={() => { modalInitialMode = 'signup'; showSignUpModal = true }}
-          type="button"
-        >
-          Sign Up
-          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-            <path d="M12 5V19M5 12H19" stroke="white" stroke-width="2.5" stroke-linecap="round"/>
-          </svg>
-        </button>
-      {/if}
+      </div><!-- /.m-sns-group -->
     </div>
   </div>
 </div>
@@ -814,6 +852,23 @@
     white-space: nowrap;
     min-height: 44px;
   }
+  /* 기존 고객 인증 유도 링크 — purple-80(#3B2F8A) + PC body_com_14B(Stephen 지시, 2026-09-11) */
+  .d-legacy-verify-link {
+    background: var(--cs-purple-op10);  /* purple-10% — 버튼 UI로 뚜렷이 노출(모바일 .m-legacy-verify-link와 동일 처리) */
+    border: none;
+    border-radius: var(--radius-xl);
+    cursor: pointer;
+    font: var(--text-pc-body-14);
+    color: var(--cs-purple);
+    padding: 12px 20px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    text-align: center;
+    width: 100%;
+    min-height: 44px;
+    margin-bottom: -15px; /* .d-form-panel gap(30px) 대비 이 링크~다음 버튼 간격만 50% 축소(Stephen 지시, 2026-09-11) */
+  }
 
   /* SNS 구분선 */
   .d-sns-divider {
@@ -970,7 +1025,7 @@
     padding: 85px 25px 60px;
     display: flex;
     flex-direction: column;
-    gap: 50px;
+    gap: 35px; /* 30% 축소 (50px → 35px, Stephen 지시 2026-09-11) */
   }
   .m-welcome {
     height: 168px;
@@ -1054,6 +1109,7 @@
     display: flex;
     flex-direction: column;
     gap: 20px;
+    margin-top: -9px; /* 30% 여백 축소 (Stephen 지시, 2026-09-11) */
   }
   .m-input-field {
     background: var(--cs-white);
@@ -1099,29 +1155,20 @@
   .m-meta-row {
     display: flex;
     align-items: center;
-    gap: 30px;
+    justify-content: space-between;
+    margin-top: -22px;
   }
   .m-remember {
     display: flex;
     align-items: center;
     gap: 7px;
-    cursor: pointer;
-    user-select: none;
   }
-  .m-checkbox-input { position: absolute; opacity: 0; width: 0; height: 0; }
-  .m-checkbox-box {
-    width: 24px;
-    height: 24px;
-    background: var(--cs-white);
-    border-radius: 6px;
-    flex-shrink: 0;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-  }
+  .checkbox-btn { background: none; border: none; padding: 0; cursor: pointer; flex-shrink: 0; display: flex; align-items: center; }
+  .checkbox-btn-terms { color: var(--cs-purple-op10); }
+  .checkbox-btn-terms.checked { color: var(--cs-purple); }
+  .checkbox-btn-terms svg { width: 18px; height: 12px; }
   .m-remember-label {
-    font-family: var(--font-kr);
-    font-size: 12px;
+    font: var(--text-m-script-14B);
     color: var(--cs-text-light);
     white-space: nowrap;
   }
@@ -1129,15 +1176,41 @@
     background: none;
     border: none;
     cursor: pointer;
-    font-family: var(--font-kr);
-    font-size: 12px;
+    font: var(--text-m-script-14B);
     color: var(--cs-red);
     padding: 0;
     white-space: nowrap;
     min-height: 44px;
   }
+  /* 기존 고객 인증 유도 링크 + CTA 버튼 묶음 */
+  .m-account-cta {
+    display: flex;
+    flex-direction: column;
+    gap: 15px;
+  }
+  /* 기존 고객 인증 유도 링크 — purple-80(#3B2F8A) + Mobile body_com_16B(Stephen 지시, 2026-09-11) */
+  .m-legacy-verify-link {
+    background: var(--cs-purple-op10);  /* purple-10% — 버튼 UI로 뚜렷이 노출 */
+    border: none;
+    border-radius: var(--radius-xl);
+    cursor: pointer;
+    font: var(--text-m-script-14B);
+    color: var(--cs-purple);
+    padding: 12px 20px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    text-align: center;
+    width: 100%;
+    min-height: 44px;
+  }
 
   /* 모바일 SNS */
+  .m-sns-group {
+    display: flex;
+    flex-direction: column;
+    gap: 20px;
+  }
   .m-sns-divider {
     display: flex;
     align-items: center;
@@ -1202,7 +1275,7 @@
 
   /* PC Sign Up 버튼 (기본 노출) */
   .d-signup-submit {
-    background: linear-gradient(90deg, #f19065 0%, #893be6 100%);
+    background: var(--cs-login-btn-gradient);
     border: none;
     border-radius: var(--radius-full);
     height: 56px;
@@ -1242,7 +1315,7 @@
 
   /* 모바일 Sign Up 버튼 (기본 노출) */
   .m-signup-submit {
-    background: linear-gradient(90deg, #f19065 0%, #893be6 100%);
+    background: var(--cs-login-btn-gradient);
     border: none;
     border-radius: var(--radius-full);
     height: 56px;
