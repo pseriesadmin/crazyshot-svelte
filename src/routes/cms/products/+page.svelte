@@ -1144,13 +1144,21 @@
     color: var(--cs-text-light);
   }
 
-  /* 상세 패널 */
+  /* 상세 패널 — 목록을 아래로 스크롤해도 항상 화면에 보이도록 sticky 고정
+     (이 div 자체가 {#if panelOpen && activeDetail.rootProduct} 안에서만 렌더링되므로
+     패널이 닫힌 상태에는 전혀 영향 없음 — .list-pane은 별도 스크롤박스 없이 기존 그대로
+     .cms-main 전체 스크롤을 공유한다) */
   .detail-pane {
     flex: 1;
     min-width: 0;
     display: flex;
     flex-direction: column;
     gap: 10px;
+    position: sticky;
+    top: 16px;
+    align-self: flex-start;
+    max-height: calc(100vh - 126px);
+    overflow-y: auto;
   }
 
   /* 대표 상품정보 섹션 */
