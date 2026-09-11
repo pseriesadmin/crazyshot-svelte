@@ -183,9 +183,21 @@
   // 라벨 오표시가 있었다 — status 값 자체를 보관해 둘을 구분한다.
   let reservationHoldStatusLive = $state<'expired' | 'cancelled' | null>(null)
 
+  // 2026-09-10(Stephen 지시) — contract_link(전자계약서명 요청) 카드도 예약 HOLD 30분
+  // 만료 타이머의 영향을 그대로 받는다: 계약 발송 후 미서명·미결제 상태로 30분이 지나면
+  // release_reservation_hold()가 예약을 status='expired'로 전환한다(service-operations.md
+  // §10). 반면 서명 링크 자체의 contract_signings.expires_at은 30일로 훨씬 길어 그 값만
+  // 보고는 이 30분 만료를 감지할 수 없다 — reservation_hold와 동일한 라이브 재조회를
+  // 그대로 재사용해 예약이 expired가 되면 이 카드도 "기한 만료"로 표시+버튼 비활성 전환한다
+  // (isExpired 파생값이 아래 reservationHoldExpiredLive를 타입 구분 없이 그대로 반영하므로
+  // 추가 배선 불필요). "취소"(고객 자진취소·관리자 거부) 판정은 이번 스코프에서 제외 —
+  // isReservationCancelled는 여전히 reservation_hold 전용으로 남겨, 계약카드의 기존
+  // "발행취소"(isContractCancelled, 관리자 명시적 액션) 라벨과 혼동되지 않게 한다. 이
+  // 컴포넌트는 고객 ChatWindow와 CMS AdminChatPanel 양쪽이 공유하므로 별도 반영 불필요.
   $effect(() => {
     revalidateTick
-    if (payload.type !== 'reservation_hold' || !payload.reservation_id) {
+    const isReservationTimedCard = payload.type === 'reservation_hold' || payload.type === 'contract_link'
+    if (!isReservationTimedCard || !payload.reservation_id) {
       reservationHoldStatusLive = null
       return
     }
@@ -393,8 +405,13 @@
   )
 
   // 계약(contract_link/contract_signed) 발행취소 — "기한 만료"·"취소됨" 둘 다 아닌
-  // "발행취소" 전용 라벨(2026-09-08, Stephen 지시). 계약카드는 현재 이 사유 하나만
-  // 존재한다(서명링크 30일 만료는 채팅카드 쪽에서 아직 체크하지 않음 — §후속 검토 대상).
+  // "발행취소" 전용 라벨(2026-09-08, Stephen 지시). 2026-09-10 갱신 — contract_link의
+  // "기한 만료"는 이 변수가 아니라 위 isExpired(reservationHoldExpiredLive 확장분,
+  // 예약 HOLD 30분 만료 기준)가 담당하게 됐다. contract_signings.expires_at(서명링크
+  // 자체의 30일 유효기간)은 여전히 이 카드에서 체크 대상이 아니다 — 미서명 상태에서는
+  // 실질적으로 30분(예약 만료)이 30일보다 항상 먼저 도래해 무의미하고, 서명 완료 후에는
+  // /contract/[token] 페이지 자체가 expires_at 체크를 건너뛰므로(만료 걱정 없이 재조회
+  // 가능) 어느 경우에도 별도로 확인할 필요가 없다(Stephen 확인).
   let isContractCancelled = $derived(
     (payload.type === 'contract_link' || payload.type === 'contract_signed') &&
     (contractCancelledLive || serverBlockedReason === 'cancelled')

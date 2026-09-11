@@ -5,7 +5,8 @@ import { PUBLIC_SUPABASE_URL } from '$env/static/public';
 
 /**
  * update_reservation_status RPC — 'expired'(HOLD 30분 자동만료) 종료상태 가드 (TDD)
- * Migration #485(20260910070000_485_update_reservation_status_expired_terminal.sql)
+ * Migration #487(20260910090000_487_update_reservation_status_expired_terminal.sql —
+ *   원래 485로 적용됐으나 다른 세션의 마이그레이션과 번호 중복돼 487로 리네임됨, 2026-09-10)
  *
  * 결함: v_current_status 종료상태 체크가 completed/cancelled/damage_claimed만 보고
  *   expired를 빠뜨려, 이미 만료된 예약도 update_reservation_status(id,'cancelled')로
@@ -89,7 +90,7 @@ afterEach(async () => {
   }
 });
 
-describe("update_reservation_status — 'expired' 종료상태 가드 (Migration #485)", () => {
+describe("update_reservation_status — 'expired' 종료상태 가드 (Migration #487)", () => {
   it('EC-1 GREEN: status=expired 예약은 cancelled로 전환 요청해도 ok:false + status가 expired로 그대로 유지된다', async () => {
     const userId = await createEphemeralUser();
     cleanups.push(() => deleteEphemeralUser(userId));

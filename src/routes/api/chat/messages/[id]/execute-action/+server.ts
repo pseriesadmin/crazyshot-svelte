@@ -106,6 +106,31 @@ export const POST: RequestHandler = async ({ params, locals }) => {
     }
   }
 
+  // 2026-09-10(Stephen 지시) — contract_link 카드도 예약 HOLD 30분 만료 타이머의 영향을
+  // 받는다(계약 발송 후 미서명·미결제 상태로 30분 경과 시 release_reservation_hold()가
+  // 예약을 status='expired'로 전환 — service-operations.md §10). ActionCard.svelte의
+  // 라이브 체크(reservationHoldStatusLive 확장)와 동일한 판정을 클릭 시점에도 재검증한다
+  // (경쟁 상황 대비 — 위 reservation_hold 블록과 동일 목적). "취소"(cancelled)는 이번
+  // 스코프에서 의도적으로 제외 — 이 코드를 그대로 반환하면 아래 "발행취소" 블록의
+  // cancelled 코드와 뒤섞여 실제로는 예약 자진취소/거부인데 "발행취소"로 오표시될 수
+  // 있다(라벨 충돌 방지, 위 reservation_hold 블록과 달리 이 타입은 자체 취소 사유 체계
+  // (isContractCancelled)를 이미 갖고 있음). 예약 취소 자체는 서명 제출 시점에
+  // /api/contracts/[token]/sign이 별도로 차단한다(기존 유지, 이번 변경과 무관).
+  if (payload.type === 'contract_link' && payload.reservation_id) {
+    const { data: reservation } = await db
+      .from('rental_reservations')
+      .select('status')
+      .eq('id', payload.reservation_id)
+      .maybeSingle()
+
+    if (reservation?.status === 'expired') {
+      return json(
+        { error: '기한이 만료된 액션입니다.', code: 'expired' },
+        { status: 410 },
+      )
+    }
+  }
+
   // 전자계약 발행취소 반영(2026-09-07) — contract_link(서명요청)/contract_signed(서명완료
   // 확인) 카드는 is_expired/expires_at을 채운 적이 없으므로, 관리자가 발행을 취소
   // (cancel_issued_contract RPC로 콘텐츠 전체 초기화)했는지 클릭 시점에도 재확인한다
