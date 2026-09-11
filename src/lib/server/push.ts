@@ -290,8 +290,8 @@ export async function sendReservationLifecyclePush(
     })
 
     // SMS 폴백: 푸시 미수신(토큰 없음 또는 전달 실패) + 크리티컬 이벤트(reservation_approval·
-    // return_remind)일 때만 고객 휴대폰으로 SMS 보조 발송.
-    // ALIGO_API_KEY 미설정 시 sendSms 내부에서 graceful skip되므로 조건 분기 불필요.
+    // return_remind)일 때만 고객 휴대폰으로 SMS 보조 발송 (Solapi HMAC 인증).
+    // SOLAPI_API_KEY/SOLAPI_API_SECRET 미설정 시 sendSms 내부에서 graceful skip되므로 조건 분기 불필요.
     if (!pushResult.delivered && (pushResult.reason === 'no_token' || pushResult.reason === 'delivery_failed')) {
       const { data: userProfile } = await admin
         .from('user_profiles')

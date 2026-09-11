@@ -94,6 +94,7 @@
     "minisearch": "^7.2.0",
     "pdfjs-dist": "^4.10.38",
     "qrcode": "^1.5.4",
+    "solapi": "^6.0.1",
     "svelte-sonner": "^1.1.1",
     "svelte-tiptap": "^3.0.1",
     "tesseract.js": "^7.0.0",

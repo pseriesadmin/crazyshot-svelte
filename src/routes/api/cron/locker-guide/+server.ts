@@ -21,7 +21,7 @@ interface ClaimedLockerGuide {
 // 방문대여/방문반납 + 영업외시간(23:00~08:59) 조합 예약 중 수령·반납시각이 1시간 이내로
 // 임박한 건을 claim_reservations_due_for_locker_guide로 원자적으로 선점한 뒤, 채팅카드
 // (send_rental_chat_notification RPC) + 브라우저 푸시(sendReservationLifecyclePush) +
-// 알리고 SMS(sendSms)를 순차 발송한다. pg_net 등 DB→외부HTTP 경로가 이 프로젝트에 없어
+// Solapi SMS(sendSms)를 순차 발송한다. pg_net 등 DB→외부HTTP 경로가 이 프로젝트에 없어
 // (service-operations.md §15와 동일한 구조적 제약) subscription-billing과 같은 앱코드
 // 경유 Vercel Cron 패턴을 재사용한다.
 export const GET: RequestHandler = async ({ request }) => {
