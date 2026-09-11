@@ -1088,22 +1088,18 @@
         <!-- 동의 항목 -->
         <div class="flex flex-col gap-[20px] w-full">
           <button class="flex items-center gap-[12px] w-full text-left consent-btn" onclick={() => { check1 = !check1; saveConsent('allow_privacy_consent', check1) }}>
-            <span class="shrink-0">
-              {#if check1}
-                <svg fill="none" viewBox="0 0 20 20" width="20" height="20"><rect fill="#444444" height="20" rx="5" width="20" /><path d="M3 10.7143L7.2 15L17 5" stroke="white" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" /></svg>
-              {:else}
-                <svg fill="none" viewBox="0 0 20 20" width="20" height="20"><rect fill="white" height="18" rx="4" width="18" x="1" y="1" /><rect height="18" rx="4" stroke="#AAAAAA" stroke-width="2" width="18" x="1" y="1" /></svg>
-              {/if}
+            <span class="checkbox-btn checkbox-btn-terms" class:checked={check1} aria-hidden="true">
+              <svg width="18" height="12" viewBox="0 0 18 12" fill="none">
+                <path d="M14.788 0.40847C15.5937 -0.206503 16.7506 -0.123176 17.4589 0.632103C18.2144 1.4379 18.1729 2.70376 17.3671 3.45925L17.3622 3.46413C17.3585 3.46759 17.3528 3.47297 17.3456 3.47976C17.3311 3.49333 17.3101 3.51407 17.2821 3.54031C17.2261 3.59279 17.1437 3.66974 17.039 3.76784C16.8294 3.96413 16.5289 4.24474 16.1669 4.58327C15.4428 5.26035 14.4707 6.169 13.4774 7.09304C12.4848 8.01654 11.4689 8.95836 10.6591 9.70144C9.90326 10.3949 9.21125 11.0229 8.954 11.219C8.38484 11.6526 7.64783 12.0001 6.7831 12.0003C5.89707 12.0003 5.14509 11.6357 4.57217 11.138C4.258 10.865 3.25694 9.9462 2.37197 9.13015C1.92122 8.71451 1.48885 8.31388 1.16885 8.01785C1.0088 7.86979 0.875998 7.74749 0.78408 7.66238C0.738281 7.61997 0.702073 7.58638 0.677634 7.56374C0.665704 7.55269 0.656551 7.54415 0.650291 7.53835C0.647126 7.53542 0.644094 7.53301 0.642478 7.53152L0.641502 7.52956H0.640525C-0.169647 6.77877 -0.217693 5.51259 0.533103 4.70242C1.28393 3.89251 2.55017 3.84526 3.36025 4.59597L3.36123 4.59792C3.3628 4.59938 3.36592 4.60089 3.36904 4.60378C3.37524 4.60953 3.38439 4.61807 3.39638 4.62917C3.42067 4.65167 3.45618 4.68551 3.50185 4.72781C3.59333 4.81251 3.72524 4.93384 3.88467 5.08132C4.2037 5.37646 4.63512 5.77493 5.08388 6.18874C5.73477 6.78894 6.40077 7.39812 6.82217 7.78054C6.86093 7.74604 6.90358 7.70918 6.94814 7.66921C7.21008 7.43424 7.55408 7.12113 7.954 6.75417C8.7536 6.02049 9.76226 5.0859 10.7528 4.16433C11.7428 3.24336 12.7128 2.33711 13.4354 1.6614C13.7965 1.32374 14.0957 1.04357 14.3046 0.847923C14.409 0.750147 14.491 0.67359 14.5468 0.621361C14.5745 0.595342 14.5959 0.575239 14.6103 0.56179C14.6174 0.555065 14.6232 0.549566 14.6269 0.546165L14.6317 0.541282L14.788 0.40847Z" fill="currentColor" />
+              </svg>
             </span>
             <span class="font-['Noto_Sans_KR',sans-serif] font-medium text-[14px] text-[#444] tracking-[-0.5px] leading-[1.6]">[옵션] 개인정보 수집 및 이용 동의 (보기)</span>
           </button>
           <button class="flex items-center gap-[12px] w-full text-left consent-btn" onclick={() => { check2 = !check2; saveConsent('allow_third_party_consent', check2) }}>
-            <span class="shrink-0">
-              {#if check2}
-                <svg fill="none" viewBox="0 0 20 20" width="20" height="20"><rect fill="#444444" height="20" rx="5" width="20" /><path d="M3 10.7143L7.2 15L17 5" stroke="white" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" /></svg>
-              {:else}
-                <svg fill="none" viewBox="0 0 20 20" width="20" height="20"><rect fill="white" height="18" rx="4" width="18" x="1" y="1" /><rect height="18" rx="4" stroke="#AAAAAA" stroke-width="2" width="18" x="1" y="1" /></svg>
-              {/if}
+            <span class="checkbox-btn checkbox-btn-terms" class:checked={check2} aria-hidden="true">
+              <svg width="18" height="12" viewBox="0 0 18 12" fill="none">
+                <path d="M14.788 0.40847C15.5937 -0.206503 16.7506 -0.123176 17.4589 0.632103C18.2144 1.4379 18.1729 2.70376 17.3671 3.45925L17.3622 3.46413C17.3585 3.46759 17.3528 3.47297 17.3456 3.47976C17.3311 3.49333 17.3101 3.51407 17.2821 3.54031C17.2261 3.59279 17.1437 3.66974 17.039 3.76784C16.8294 3.96413 16.5289 4.24474 16.1669 4.58327C15.4428 5.26035 14.4707 6.169 13.4774 7.09304C12.4848 8.01654 11.4689 8.95836 10.6591 9.70144C9.90326 10.3949 9.21125 11.0229 8.954 11.219C8.38484 11.6526 7.64783 12.0001 6.7831 12.0003C5.89707 12.0003 5.14509 11.6357 4.57217 11.138C4.258 10.865 3.25694 9.9462 2.37197 9.13015C1.92122 8.71451 1.48885 8.31388 1.16885 8.01785C1.0088 7.86979 0.875998 7.74749 0.78408 7.66238C0.738281 7.61997 0.702073 7.58638 0.677634 7.56374C0.665704 7.55269 0.656551 7.54415 0.650291 7.53835C0.647126 7.53542 0.644094 7.53301 0.642478 7.53152L0.641502 7.52956H0.640525C-0.169647 6.77877 -0.217693 5.51259 0.533103 4.70242C1.28393 3.89251 2.55017 3.84526 3.36025 4.59597L3.36123 4.59792C3.3628 4.59938 3.36592 4.60089 3.36904 4.60378C3.37524 4.60953 3.38439 4.61807 3.39638 4.62917C3.42067 4.65167 3.45618 4.68551 3.50185 4.72781C3.59333 4.81251 3.72524 4.93384 3.88467 5.08132C4.2037 5.37646 4.63512 5.77493 5.08388 6.18874C5.73477 6.78894 6.40077 7.39812 6.82217 7.78054C6.86093 7.74604 6.90358 7.70918 6.94814 7.66921C7.21008 7.43424 7.55408 7.12113 7.954 6.75417C8.7536 6.02049 9.76226 5.0859 10.7528 4.16433C11.7428 3.24336 12.7128 2.33711 13.4354 1.6614C13.7965 1.32374 14.0957 1.04357 14.3046 0.847923C14.409 0.750147 14.491 0.67359 14.5468 0.621361C14.5745 0.595342 14.5959 0.575239 14.6103 0.56179C14.6174 0.555065 14.6232 0.549566 14.6269 0.546165L14.6317 0.541282L14.788 0.40847Z" fill="currentColor" />
+              </svg>
             </span>
             <span class="font-['Noto_Sans_KR',sans-serif] font-medium text-[14px] text-[#444] tracking-[-0.5px] leading-[1.6]">[옵션] 개인정보 제 3자 제공 (보기)</span>
           </button>
@@ -1172,7 +1168,10 @@
                     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
                   </span>
                   <span class="doc-file-list-name">{identityDocLabelAt(i)}</span>
-                  <button type="button" class="btn-doc-view" onclick={() => openIdentityDoc(url)}>보기</button>
+                  <!-- "보기" 버튼 임시 감춤(2026-09-11, Stephen 지시) — 개인정보(신분증 이미지)
+                       노출 보안 우려. 추후 중요정보 자동 가림(마스킹) 기능 보완 후
+                       openIdentityDoc(url) 그대로 재사용해 복원 예정 — 함수는 유지. -->
+                  <!-- <button type="button" class="btn-doc-view" onclick={() => openIdentityDoc(url)}>보기</button> -->
                 </li>
               {/each}
             </ul>
@@ -1276,7 +1275,10 @@
                     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
                   </span>
                   <span class="doc-file-list-name">{foreignDocLabelAt(i)}</span>
-                  <button type="button" class="btn-doc-view" onclick={() => openForeignDoc(url)}>보기</button>
+                  <!-- "보기" 버튼 임시 감춤(2026-09-11, Stephen 지시) — 개인정보(신분증 이미지)
+                       노출 보안 우려. 추후 중요정보 자동 가림(마스킹) 기능 보완 후
+                       openForeignDoc(url) 그대로 재사용해 복원 예정 — 함수는 유지. -->
+                  <!-- <button type="button" class="btn-doc-view" onclick={() => openForeignDoc(url)}>보기</button> -->
                 </li>
               {/each}
             </ul>
@@ -2140,6 +2142,10 @@
   @media (min-width: 768px) {
     .checkbox-btn-terms svg { width: 18px; height: 12px; }
   }
+  /* 동의 항목 체크아이콘 전용 광학보정 — 체크마크 하단 꼭짓점 1개로 모이는 형태라
+     flex 중앙정렬만으로는 텍스트보다 시각적으로 살짝 위로 떠 보임(다른 checkbox-btn-terms
+     사용처인 "체류기간 선택" 버튼은 별도 레이아웃이라 영향 없도록 .consent-btn으로 한정) */
+  .consent-btn .checkbox-btn-terms { transform: translateY(2px); }
 
   /* 등록 완료 상태 — 파일 목록형 */
   .doc-registered {
@@ -2207,6 +2213,9 @@
     color: #666;
     flex: 1;
   }
+  /* "보기" 버튼(.btn-doc-view) 임시 감춤(2026-09-11) — 마크업도 함께 주석 처리돼
+     현재 미사용 상태. 중요정보 자동 가림 기능 보완 후 마크업과 함께 복원 예정. */
+  /*
   .btn-doc-view {
     flex-shrink: 0;
     height: 32px;
@@ -2223,6 +2232,7 @@
     white-space: nowrap;
   }
   .btn-doc-view:hover { background: #3B2F8A; color: white; }
+  */
   .btn-doc-re {
     flex-shrink: 0;
     background: none;
