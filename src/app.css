@@ -80,7 +80,7 @@
   /* ── UI 상태 컬러 ── */
   --cs-disabled-button:    #B0ABCC;  /* 버튼 disabled (purple-pale 파생) */
   --cs-disabled-toggle:    #d0d0d8;  /* 토글 off 상태 */
-  --cs-login-btn-gradient: linear-gradient(90deg, #893be6 12.593%, #f19065 114.44%); /* 로그인 버튼 그라디언트 */
+  --cs-login-btn-gradient: linear-gradient(90deg, #553FE0 12.593%, #FF3535 114.44%); /* 로그인 버튼 그라디언트 */
 
   /* ── 폰트 패밀리 ── */
   --font-kr:          'Noto Sans KR', 'Apple SD Gothic Neo', 'Malgun Gothic', sans-serif;

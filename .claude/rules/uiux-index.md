@@ -415,6 +415,102 @@ accept="image/png,image/jpeg,image/webp,image/heif,image/heic,application/pdf"
 
 ---
 
+## 🔴 전화번호 입력폼 표준 — 자동 하이픈(-) + "010-" 기본값 ★★★ (2026-09-11 확정)
+
+> **AI 에이전트 필수:** 휴대폰·전화번호 입력란을 신규로 만들거나 기존 입력란을 수정할 때
+> → Stephen이 "자동 하이픈"을 별도로 언급하지 않아도 아래 로직을 무조건 세트로 적용한다.
+> (발견 경위: `LegacyMemberVerifyModal.svelte` `#lm-phone`이 숫자만 저장하고 하이픈 없이
+> 그대로 렌더링돼 "01048602303"처럼 표시되던 결함 — CMS·마이페이지 쪽에는 이미 표준 패턴이
+> 존재했는데 인증류 화면(로그인·회원가입·레거시인증)에만 적용이 빠져있었음)
+
+```typescript
+// ① 자동 하이픈 포맷 — CustomerDetailPanel.svelte formatPhone()과 100% 동일 로직
+//    (AddressTabContent.svelte·ProfileTabContent.svelte·cms/set/rental/+page.svelte
+//    전부 이 패턴 재사용 중 — 신규 작성 시 반드시 이 함수를 그대로 복사할 것, 변형 금지)
+function formatPhoneWithHyphen(raw: string): string {
+  const digits = raw.replace(/[^0-9]/g, '')
+  if (digits.length <= 3) return digits
+  if (digits.length <= 7) return `${digits.slice(0, 3)}-${digits.slice(3)}`
+  if (digits.length <= 11) return `${digits.slice(0, 3)}-${digits.slice(3, 7)}-${digits.slice(7)}`
+  return `${digits.slice(0, 3)}-${digits.slice(3, 7)}-${digits.slice(7, 11)}`
+  // ⚠️ 11자리 초과분은 여기서 잘림 — 별도 HTML maxlength 속성 불필요(오히려 하이픈
+  //    포함 글자수와 순수 자릿수 기준이 달라 충돌 위험 — maxlength 속성 추가 금지)
+}
+
+// ② input 바인딩 — value는 하이픈 포함 표시값을 그대로 $state에 저장
+oninput={(e) => { phoneInput = formatPhoneWithHyphen(e.target.value); e.target.value = phoneInput }}
+value={phoneInput}
+```
+
+```
+③ "010-" 기본값: 휴대폰 입력 $state 초기값을 빈 문자열이 아니라 '010-'로 설정해
+   국내 010 번호 입력을 유도한다(placeholder가 아니라 실제 value로 — 사용자가 바로
+   뒤 숫자만 이어 타이핑하면 됨).
+   예) let phoneInput = $state('010-')
+
+④ 서버 전송·정규식 검증(/^01[0-9]\d{7,8}$/ 등)은 하이픈 제거 후 순수 숫자로만 수행 —
+   화면 표시값(하이픈 포함)과 전송값(하이픈 없음)을 분리하는 정규화 함수를 별도로 둔다.
+   예) function normalizePhone(raw: string) { return raw.replace(/[^0-9]/g, '') }
+   → 표시용(①)과 전송용(④) 두 함수를 절대 하나로 합치지 않는다(합치면 입력 중 커서
+     위치에 하이픈이 안 남아 표시가 깨짐).
+
+적용 현황(2026-09-11 기준): CustomerDetailPanel.svelte·AddressTabContent.svelte·
+  ProfileTabContent.svelte·cms/set/rental/+page.svelte(기존 구현) +
+  LegacyMemberVerifyModal.svelte(2026-09-11 신규 적용)
+⚠️ 미적용 상태로 남아있는 곳(신규 작업 시 함께 발견하면 이 규칙으로 통일 검토):
+  SignUpModal.svelte(`#phone`, type=tel 숫자만) · cms/accounts/+page.svelte(oninput
+  핸들러 자체 없음, placeholder만 010-0000-0000)
+```
+
+---
+
+## 🔴 금액 입력폼 표준 — 천단위 콤마(,) 실시간 반영 ★★★ (2026-09-11 확정)
+
+> **AI 에이전트 필수:** 가격·보증금·연체료·할인금액 등 금액을 입력받는 텍스트 입력란을
+> 신규로 만들거나 수정할 때 → Stephen이 "천단위" 언급 없이 "가격 입력폼", "금액 입력란"
+> 등만 요청해도 아래 로직을 무조건 적용한다. (이미 CMS 가격정책·쿠폰·대여설정 폼에서
+> 광범위하게 쓰이던 기존 관행이었으나 uiux-index.md에 강제규칙으로 명문화된 적이 없어
+> 신규 폼마다 매번 재확인이 필요했음 — 2026-09-11 명문화)
+
+```typescript
+// ProductDetailPanel.svelte handlePriceInput()과 100% 동일 로직 — IME(한글 조합) 안전판 포함
+// Svelte oninput의 Event에는 isComposing이 없어 타입가드로 우회(core-rules.md
+// "as unknown as T 캐스팅 금지" 준수)
+function isComposingEvent(e: Event): boolean {
+  return 'isComposing' in e && Boolean((e as unknown as { isComposing?: boolean }).isComposing)
+}
+
+function handleAmountInput(raw: string, isComposing = false): string {
+  if (isComposing) return /* 조합 중에는 값 변경 보류 */
+  const digits = raw.replace(/[^0-9]/g, '')
+  if (!digits) return ''
+  return parseInt(digits, 10).toLocaleString('ko-KR')  // ← 천단위 콤마
+}
+```
+
+```svelte
+<!-- input 바인딩 — oninput + oncompositionend 세트 필수(한글 IME 중 필터링 무효화 방지) -->
+<input
+  value={localPricing.price_24h}
+  oninput={(e) => localPricing.price_24h = handleAmountInput(e.currentTarget.value, isComposingEvent(e))}
+  oncompositionend={(e) => localPricing.price_24h = handleAmountInput(e.currentTarget.value)}
+/>
+```
+
+```
+서버 전송 시: 콤마 포함 문자열이 아니라 반드시 .replace(/[^0-9]/g, '')로 숫자만 추출해
+  RPC/API에 전달한다(콤마 포함 문자열을 그대로 숫자 컬럼에 넣으면 실패 또는 문자열 캐스팅 사고).
+
+적용 현황(기존 관행 확인): ProductDetailPanel.svelte(가격정책 탭, 정본) ·
+  cms/products/new/+page.svelte · cms/set/rental/+page.svelte(왕복/배송/반납 배송료) ·
+  cms/promotion/coupon/new/+page.svelte(할인금액·최소대여금액) ·
+  cms/subscriptions/new/+page.svelte(월 구독료)
+⚠️ 위는 전부 CMS 화면 — USER(front) 화면에 금액 "입력" 폼이 신규로 생기면(현재는 결제
+  금액이 전부 계산값 표시일 뿐 직접입력 폼이 없음) 이 표준을 동일하게 적용할 것.
+```
+
+---
+
 ## 전체 정본 로드 조건
 
 ```
