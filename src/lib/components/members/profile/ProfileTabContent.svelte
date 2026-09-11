@@ -217,7 +217,7 @@
   }
 
   function startCountdown() {
-    otpCountdown = 300
+    otpCountdown = 180
     if (countdownTimer) clearInterval(countdownTimer)
     countdownTimer = setInterval(() => {
       otpCountdown -= 1
@@ -234,11 +234,13 @@
     if (!/^010\d{8}$/.test(rawPhone)) { csToast.error('올바른 휴대폰 번호를 입력해 주세요.'); return }
     otpSending = true
     try {
-      const res  = await fetch('/api/profile/send-otp', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ phone: rawPhone }) })
+      // context: 'profile' — 서버가 dev 환경 SMS 미발송 우회를 건너뛰고 실제 발송하도록 함
+      // (Stephen 지시, 2026-09-11: 내정보 화면도 로컬에서 실제 문자 발송 검증 필요)
+      const res  = await fetch('/api/profile/send-otp', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ phone: rawPhone, context: 'profile' }) })
       const data = await res.json() as { ok: boolean; error?: string }
       if (!data.ok) { csToast.error(data.error ?? 'SMS 발송 실패'); return }
       otpSent = true; otpCode = ''; startCountdown()
-      csToast.success('인증번호가 발송되었습니다. (5분 이내 입력)')
+      csToast.success('인증번호가 발송되었습니다. (3분 이내 입력)')
     } catch { csToast.error('네트워크 오류가 발생했습니다.') }
     finally  { otpSending = false }
   }
