@@ -379,6 +379,12 @@ export interface UserProfile {
   withdrawal_requested_at?: string | null;
   withdrawal_purge_at?: string | null;
   withdrawal_purged_at?: string | null;
+  // 레거시 회원(SNS 로그인) 선등록 컬럼 (Migration 483)
+  legacy_source?: string | null;           // 'kakao' | 'naver' | 'csv'
+  legacy_imported_at?: string | null;      // CMS 일괄 등록 시각
+  legacy_signup_at?: string | null;        // 원 서비스 가입일 (CSV 원본)
+  legacy_purchase_count?: number | null;   // 원 서비스 구매횟수 (rental_count와 별개)
+  legacy_claimed_at?: string | null;       // 인증 클레임 완료 시각 (Migration 485, NULL=미인증)
 }
 
 export type UserProfileInsert = Omit<UserProfile, 'id' | 'grade' | 'created_at' | 'updated_at'> & {
