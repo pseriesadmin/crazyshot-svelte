@@ -403,6 +403,12 @@
     IDENTITY_TYPES.map(t => [t.value, t.label]),
   )
 
+  // 업로드 성공 후 invalidateAll()로 목록 길이가 바뀌면(등록목록 증가 + 병합슬롯 감소 등)
+  // 그 위 콘텐츠 높이가 변해 브라우저가 기존 scrollY를 유지 못 하고 강제 보정 스크롤을 일으켜
+  // "업로드했더니 화면이 다른 곳으로 튕기는(리다이렉트처럼 보이는)" 체감 결함이 된다
+  // (2026-09-14 Stephen 리포트) — 이 카드 자체를 뷰포트에 계속 붙잡아 두어 방지.
+  let docCardEl: HTMLDivElement | undefined = $state()
+
   let identityDocUrls    = $state<string[]>(profile?.identity_doc_url ?? [])
   let identityVerifiedAt = $state(profile?.identity_verified_at ?? null)
   let identityType       = $state<string[]>(profile?.identity_type ?? [])
@@ -425,6 +431,10 @@
   function identityDocLabelAt(i: number): string {
     const t = profile?.identity_type?.[i]
     return t ? (IDENTITY_ALL_TYPE_LABELS[t] ?? `파일 ${i + 1}`) : `파일 ${i + 1}`
+  }
+
+  function identityDocTypeAt(i: number): string | null {
+    return profile?.identity_type?.[i] ?? null
   }
 
   function resetIdentitySlots(): void {
@@ -490,12 +500,21 @@
     try {
       const res  = await fetch('/api/profile/upload-doc', { method: 'POST', body: fd })
       const data = await res.json() as { ok: boolean; docUrls?: string[]; error?: string }
-      if (!data.ok) { identityError = data.error ?? '업로드 실패'; return }
+      if (!data.ok) {
+        identityError = data.error ?? '업로드 실패'
+        csToast.error(identityError)
+        return
+      }
       csToast.success('본인증명이 등록되었습니다.')
       showIdentityForm = false
       resetIdentitySlots()
       await invalidateAll()
-    } catch { identityError = '네트워크 오류가 발생했습니다.' }
+      await tick()
+      docCardEl?.scrollIntoView({ block: 'nearest' })
+    } catch {
+      identityError = '네트워크 오류가 발생했습니다.'
+      csToast.error(identityError)
+    }
     finally  { isUploadingId = false }
   }
 
@@ -513,8 +532,99 @@
     })
   }
 
+  /* ── 본인증명 "개별 수정 / 추가 등록" 병합(merge) 업로드 — 등록완료 카드를 통째로
+     초기화하는 재등록과 달리, 이미 등록된 다른 유형은 그대로 두고 이번에 고른 유형만
+     upsert한다(서버 /api/profile/upload-doc의 merge=true 처리, RPC·스키마 변경 없음).
+     identitySingleEditType===null → "추가 등록"(미등록 유형 전체) / 값 있음 → "개별 수정"(그 유형 1개)
+     2026-09-14 Stephen 지시: 별도 "등록하기" 버튼 없이 슬롯에 파일을 선택하는 즉시 그
+     1개 파일만 곧바로 업로드·반영한다(버튼 클릭 대기 없음 — 슬롯당 즉시 1건 제출). */
+  let identitySingleEditType    = $state<string | null>(null)
+  let identityMergeDragOverSlot = $state<string | null>(null)
+  let isMergingIdentity         = $state(false)
+  let identityMergeUploadingType = $state<string | null>(null)
+
+  const identityUnregisteredTypes = $derived(IDENTITY_TYPES.filter(t => !identityType.includes(t.value)))
+  const identityMergeTargetTypes  = $derived(
+    identitySingleEditType
+      ? IDENTITY_TYPES.filter(t => t.value === identitySingleEditType)
+      : identityUnregisteredTypes,
+  )
+  // 본인증명 문서를 바꾸는 작업(개별수정 업로드/삭제/전체삭제) 중 하나라도 진행 중이면
+  // 나머지 전부를 잠근다 — 서로 다른 두 mutating 요청이 동시에 같은 배열을 읽고 쓰면
+  // 나중에 도착한 응답이 앞선 변경을 조용히 덮어쓰는 race가 가능하기 때문(RPC에 낙관적
+  // 잠금이 없어 클라이언트에서 직렬화, 2026-09-14 QA 지적으로 추가).
+  const identityDocsBusy = $derived(isDeletingIdentity || isMergingIdentity)
+
+  function startIdentitySingleEdit(typeValue: string): void {
+    if (identityDocsBusy) return
+    identitySingleEditType = typeValue
+  }
+
+  function cancelIdentityMergeEdit(): void {
+    identitySingleEditType = null
+  }
+
+  async function autoSubmitIdentityMergeFile(typeValue: string, file: File): Promise<void> {
+    // 드래그앤드롭 경로는 disabled 속성이 아니라 label의 aria-disabled+pointer-events:none
+    // CSS에만 의존해 클릭을 막고 있어(2026-09-14 QA 지적) — 그 CSS 셀렉터가 향후 리팩터링돼도
+    // 안전하도록 여기서도 명시적으로 재확인한다(방어적 이중 장치, 버튼 경로는 이미 disabled로 보호됨).
+    if (identityDocsBusy) return
+    const result = validateUploadFile(file)
+    if (!result.ok) { csToast.error(result.error ?? '파일 형식 오류'); return }
+    if (file.size > IDENTITY_MAX_FILE_SIZE) { csToast.error('파일 크기는 10MB 이하여야 합니다.'); return }
+    isMergingIdentity           = true
+    identityMergeUploadingType  = typeValue
+    // 업로드 중 사용자가 다른 유형 "수정"으로 전환해도(양쪽 다 잠겨있어 실제로는 불가능하지만
+    // 방어적으로) 그 사이 새로 연 패널을 이 요청이 실수로 닫아버리지 않도록 시작 시점 스냅샷
+    const editTypeAtStart = identitySingleEditType
+    const wasSingleEdit    = Boolean(editTypeAtStart)
+    const fd = new FormData()
+    fd.set('type', 'identity')
+    fd.set('merge', 'true')
+    fd.append('file', file)
+    fd.append('identity_type', typeValue)
+    try {
+      const res  = await fetch('/api/profile/upload-doc', { method: 'POST', body: fd })
+      const data = await res.json() as { ok: boolean; error?: string }
+      if (!data.ok) { csToast.error(data.error ?? '업로드 실패'); return }
+      csToast.success(wasSingleEdit ? '수정되었습니다.' : '추가 등록되었습니다.')
+      if (identitySingleEditType === editTypeAtStart) cancelIdentityMergeEdit()
+      await invalidateAll()
+      await tick()
+      docCardEl?.scrollIntoView({ block: 'nearest' })
+    } catch {
+      csToast.error('네트워크 오류가 발생했습니다.')
+    } finally {
+      isMergingIdentity          = false
+      identityMergeUploadingType = null
+    }
+  }
+
+  function handleIdentityMergeSlotFileChange(e: Event, typeValue: string): void {
+    const input = e.target as HTMLInputElement
+    const file  = input.files?.[0]
+    input.value = ''
+    if (file) void autoSubmitIdentityMergeFile(typeValue, file)
+  }
+
+  function handleIdentityMergeSlotDragOver(e: DragEvent, typeValue: string): void {
+    e.preventDefault()
+    identityMergeDragOverSlot = typeValue
+  }
+
+  function handleIdentityMergeSlotDragLeave(typeValue: string): void {
+    if (identityMergeDragOverSlot === typeValue) identityMergeDragOverSlot = null
+  }
+
+  function handleIdentityMergeSlotDrop(e: DragEvent, typeValue: string): void {
+    e.preventDefault()
+    identityMergeDragOverSlot = null
+    const file = e.dataTransfer?.files?.[0]
+    if (file) void autoSubmitIdentityMergeFile(typeValue, file)
+  }
+
   async function deleteIdentityDoc() {
-    if (isDeletingIdentity) return
+    if (identityDocsBusy) return
     isDeletingIdentity = true
     try {
       const res  = await fetch('/api/profile/delete-doc', {
@@ -540,6 +650,39 @@
     csToast.warning('본인증명을 완전히 삭제합니다.', {
       actionLabel: '확인',
       onClick: () => { void deleteIdentityDoc() },
+    })
+  }
+
+  // 등록완료 목록 내 개별 항목 삭제(2026-09-14 신규) — RPC/스키마 변경 없이 신규 서버
+  // 엔드포인트(/api/profile/delete-doc-item)에서 남은 (url,type) 짝만 계산해 기존
+  // update_user_doc_url(부분 삭제)/delete_user_doc(마지막 1개 삭제 시 전체 초기화)에 위임한다.
+  async function deleteDocItem(type: 'identity' | 'foreign', docType: string): Promise<void> {
+    try {
+      const res  = await fetch('/api/profile/delete-doc-item', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ type, docType }),
+      })
+      const data = await res.json() as { ok: boolean; error?: string }
+      if (!data.ok) { csToast.error(data.error ?? '삭제에 실패했습니다.'); return }
+      csToast.success('삭제되었습니다.')
+      await invalidateAll()
+      await tick()
+      docCardEl?.scrollIntoView({ block: 'nearest' })
+    } catch {
+      csToast.error('네트워크 오류가 발생했습니다.')
+    }
+  }
+
+  function requestIdentityDocDelete(docType: string, label: string): void {
+    if (identityDocsBusy) return
+    csToast.warning(`'${label}' 항목을 삭제합니다.`, {
+      actionLabel: '확인',
+      onClick: () => {
+        if (identityDocsBusy) return // 토스트 확인 전 사이에 다른 변경이 시작됐으면 재차 차단
+        isDeletingIdentity = true
+        void deleteDocItem('identity', docType).finally(() => { isDeletingIdentity = false })
+      },
     })
   }
 
@@ -587,21 +730,18 @@
 
   let foreignDocUrls    = $state<string[]>(profile?.foreign_doc_urls ?? (profile?.foreign_doc_url ? [profile.foreign_doc_url] : []))
   let foreignVerifiedAt = $state(profile?.foreign_verified_at ?? null)
+  let foreignTypeList   = $state<string[]>(profile?.foreign_type ?? [])
   let showForeignForm   = $state(false)
   let foreignStayType   = $state<'short' | 'long'>((profile?.foreign_stay_type as 'short' | 'long' | null) ?? 'short')
-  let foreignSlotFiles    = $state<Record<string, File>>({})
-  let foreignSlotPreviews = $state<Record<string, string | null>>({})   // null = PDF(썸네일 없음)
-  let foreignDragOverSlot = $state<string | null>(null)
-  let isUploadingForeign = $state(false)
-  let foreignError      = $state('')
   let isDeletingForeign  = $state(false)
 
   const currentForeignTypes = $derived(foreignStayType === 'short' ? FOREIGN_SHORT_TYPES : FOREIGN_LONG_TYPES)
-  const foreignFilledCount  = $derived(currentForeignTypes.filter(t => foreignSlotFiles[t.value]).length)
 
   $effect(() => {
     foreignDocUrls    = profile?.foreign_doc_urls ?? (profile?.foreign_doc_url ? [profile.foreign_doc_url] : [])
     foreignVerifiedAt = profile?.foreign_verified_at ?? null
+    foreignTypeList   = profile?.foreign_type ?? []
+    foreignStayType   = (profile?.foreign_stay_type as 'short' | 'long' | null) ?? 'short'
   })
 
   function foreignDocLabelAt(i: number): string {
@@ -609,89 +749,13 @@
     return t ? (FOREIGN_ALL_TYPE_LABELS[t] ?? `파일 ${i + 1}`) : `파일 ${i + 1}`
   }
 
-  function resetForeignSlots(): void {
-    foreignSlotFiles    = {}
-    foreignSlotPreviews = {}
-    foreignDragOverSlot = null
-    foreignError        = ''
+  function foreignDocTypeAt(i: number): string | null {
+    return profile?.foreign_type?.[i] ?? null
   }
 
   function selectForeignStayType(value: 'short' | 'long') {
     if (foreignStayType === value) return
     foreignStayType = value
-    resetForeignSlots()
-  }
-
-  function setForeignSlotFile(typeValue: string, file: File): void {
-    foreignError = ''
-    const result = validateUploadFile(file)
-    if (!result.ok) { foreignError = result.error ?? ''; return }
-    if (file.size > FOREIGN_MAX_FILE_SIZE) { foreignError = '파일 크기는 10MB 이하여야 합니다.'; return }
-    foreignSlotFiles    = { ...foreignSlotFiles, [typeValue]: file }
-    foreignSlotPreviews = { ...foreignSlotPreviews, [typeValue]: file.type === 'application/pdf' ? null : URL.createObjectURL(file) }
-  }
-
-  function handleForeignSlotFileChange(e: Event, typeValue: string): void {
-    const input = e.target as HTMLInputElement
-    if (input.files && input.files[0]) setForeignSlotFile(typeValue, input.files[0])
-    input.value = ''
-  }
-
-  function removeForeignSlotFile(typeValue: string): void {
-    const restFiles = { ...foreignSlotFiles }
-    const restPreviews = { ...foreignSlotPreviews }
-    delete restFiles[typeValue]
-    delete restPreviews[typeValue]
-    foreignSlotFiles    = restFiles
-    foreignSlotPreviews = restPreviews
-  }
-
-  function handleForeignSlotDragOver(e: DragEvent, typeValue: string): void {
-    e.preventDefault()
-    foreignDragOverSlot = typeValue
-  }
-
-  function handleForeignSlotDragLeave(typeValue: string): void {
-    if (foreignDragOverSlot === typeValue) foreignDragOverSlot = null
-  }
-
-  function handleForeignSlotDrop(e: DragEvent, typeValue: string): void {
-    e.preventDefault()
-    foreignDragOverSlot = null
-    const file = e.dataTransfer?.files?.[0]
-    if (file) setForeignSlotFile(typeValue, file)
-  }
-
-  async function uploadForeignDoc() {
-    const missing = currentForeignTypes.filter(t => !foreignSlotFiles[t.value])
-    if (missing.length > 0) {
-      foreignError = `${missing.map(t => t.label).join(', ')} 파일을 모두 등록해 주세요.`
-      return
-    }
-    isUploadingForeign = true
-    foreignError = ''
-    const fd = new FormData()
-    fd.set('type', 'foreign')
-    // front-uiux.md §22-5 — 같은 루프 안에서 file/type을 함께 append해 순서를 보장한다
-    for (const t of currentForeignTypes) {
-      const f = foreignSlotFiles[t.value]
-      if (!f) continue
-      fd.append('file', f)
-      fd.append('foreign_type', t.value)
-    }
-    fd.set('foreign_stay_type', foreignStayType)
-    try {
-      const res  = await fetch('/api/profile/upload-doc', { method: 'POST', body: fd })
-      const data = await res.json() as { ok: boolean; docUrls?: string[]; error?: string }
-      // 본인증명과 동일 원칙 — 반환된 docUrls 개수가 제출 파일 개수와 정확히 일치할 때만 완료 처리
-      const isConsistent = data.ok && Array.isArray(data.docUrls) && data.docUrls.length === currentForeignTypes.length
-      if (!isConsistent) { foreignError = data.error ?? '등록 처리가 정확히 반영되지 않았습니다. 다시 시도해주세요.'; return }
-      csToast.success('외국인증명이 등록되었습니다.')
-      showForeignForm = false
-      resetForeignSlots()
-      await invalidateAll()
-    } catch { foreignError = '네트워크 오류가 발생했습니다.' }
-    finally  { isUploadingForeign = false }
   }
 
   function openForeignDoc(url: string) {
@@ -699,18 +763,30 @@
   }
 
   function requestForeignReRegister() {
-    csToast.warning('기존 정보를 삭제합니다.', {
-      actionLabel: '확인',
-      onClick: () => {
-        showForeignForm = true
-        foreignStayType = (profile?.foreign_stay_type as 'short' | 'long' | null) ?? 'short'
-        resetForeignSlots()
-      },
-    })
+    // 슬롯별 자동 병합 제출로 통합된 이후(2026-09-14) — 선택한 슬롯만 그 자리에서 즉시
+    // 교체될 뿐, 나머지 유형은 그대로 보존되므로 "기존 정보 전체 삭제" 경고는 더 이상
+    // 사실과 다르다. 문구를 실제 동작에 맞게 정정.
+    if (foreignDocsBusy) return
+    showForeignForm = true
+    foreignStayType = (profile?.foreign_stay_type as 'short' | 'long' | null) ?? 'short'
+  }
+
+  // "재등록" 진입 취소(2026-09-14 QA 지적으로 추가) — 확인 없이 즉시 슬롯이 열리는 대신,
+  // 등록완료 상태로 돌아갈 수 있는 명시적 출구를 마련(오클릭 시 되돌릴 방법이 없던 결함 방지).
+  // 등록된 문서가 아예 없는 최초등록 상태에서는 돌아갈 곳이 없으므로 노출하지 않는다.
+  function cancelForeignReRegister(): void {
+    if (foreignDocsBusy) return
+    showForeignForm = false
+    // requestForeignReRegister()와 대칭으로 체류기간도 실제 등록값으로 되돌린다(2026-09-14
+    // QA 지적) — 안 그러면 재등록 폼에서 라디오만 바꾸고 제출 없이 취소해도 foreignStayType
+    // 오염이 남아, 이후 "추가 등록"이 잘못된 콤보 기준으로 슬롯을 노출하고 passport_photo처럼
+    // 단기/장기에 공통된 유형만 있는 경우 §22-5 정합성 가드(staleTypes)까지 우회해 실제
+    // 등록 문서 구성과 foreign_stay_type이 불일치하는 데이터가 DB에 반영될 수 있었다.
+    foreignStayType = (profile?.foreign_stay_type as 'short' | 'long' | null) ?? 'short'
   }
 
   async function deleteForeignDoc() {
-    if (isDeletingForeign) return
+    if (foreignDocsBusy) return
     isDeletingForeign = true
     try {
       const res  = await fetch('/api/profile/delete-doc', {
@@ -736,6 +812,107 @@
       actionLabel: '확인',
       onClick: () => { void deleteForeignDoc() },
     })
+  }
+
+  function requestForeignDocDelete(docType: string, label: string): void {
+    if (foreignDocsBusy) return
+    csToast.warning(`'${label}' 항목을 삭제합니다.`, {
+      actionLabel: '확인',
+      onClick: () => {
+        if (foreignDocsBusy) return // 토스트 확인 전 사이에 다른 변경이 시작됐으면 재차 차단
+        isDeletingForeign = true
+        void deleteDocItem('foreign', docType).finally(() => { isDeletingForeign = false })
+      },
+    })
+  }
+
+  // 외국인증명 등록완료 목록의 개별 "수정"(2026-09-14 신규) — 본인증명 병합업로드와 동일
+  // 원리: 이미 등록된 다른 유형은 그대로 두고 이번에 고른 1개 유형만 upsert(서버
+  // /api/profile/upload-doc의 merge=true를 foreign까지 확장, RPC·스키마 변경 없음).
+  let foreignSingleEditType     = $state<string | null>(null)
+  let foreignMergeUploadingType = $state<string | null>(null)
+  let isMergingForeign          = $state(false)
+  // 본인증명과 동일 원칙(identityDocsBusy 참고) — 외국인증명 문서를 바꾸는 작업 중
+  // 하나라도 진행 중이면 나머지 전부를 잠가 동시 mutating 요청의 lost-update race를 방지.
+  const foreignDocsBusy = $derived(isDeletingForeign || isMergingForeign)
+  // 콤보(4종) 중 개별 삭제로 일부가 빠질 수 있게 된 이후(2026-09-14 개별삭제 신설) —
+  // 본인증명의 identityUnregisteredTypes와 동일 원칙으로 "현재 콤보 기준 미등록 유형"을
+  // 계산해 아래 병합 슬롯 그리드가 "추가 등록"까지 다시 노출하도록 함(전에는 개별 "수정"
+  // 1슬롯만 있어 삭제로 빠진 유형을 되돌릴 방법이 UI에 없었음 — Stephen 리포트로 발견).
+  const foreignUnregisteredTypes = $derived(currentForeignTypes.filter(t => !foreignTypeList.includes(t.value)))
+  const foreignMergeTargetTypes  = $derived(
+    foreignSingleEditType
+      ? currentForeignTypes.filter(t => t.value === foreignSingleEditType)
+      : foreignUnregisteredTypes,
+  )
+
+  function startForeignSingleEdit(typeValue: string): void {
+    if (foreignDocsBusy) return
+    foreignSingleEditType = typeValue
+  }
+
+  function cancelForeignMergeEdit(): void {
+    foreignSingleEditType = null
+  }
+
+  async function autoSubmitForeignMergeFile(typeValue: string, file: File): Promise<void> {
+    // 본인증명과 동일한 방어적 이중 장치(identityDocsBusy 가드 참고) — 현재는 이 슬롯에
+    // 드래그앤드롭 핸들러가 없어 disabled 속성만으로 충분히 막히지만, 향후 추가될 경우를
+    // 대비해 함수 진입점에서도 명시적으로 재확인한다.
+    if (foreignDocsBusy) return
+    // 체류기간 전환 중 부분제출 방지(2026-09-14 QA 지적) — 단기/장기 유형 목록에 겹치는
+    // 값(passport_photo)이 있어, 반대 체류기간으로 등록된 기존 문서가 남아있는 상태에서
+    // 현재 선택된 체류기간 기준으로 병합 제출하면 최대개수 가드를 우회한 채
+    // foreign_stay_type과 실제 등록 문서 구성이 조용히 불일치하게 될 수 있었다. 기존
+    // 등록 유형 중 현재 선택된 체류기간 콤보에 속하지 않는 것이 하나라도 있으면 제출 자체를
+    // 차단 — 사용자가 먼저 개별삭제로 정리하도록 유도(데이터 정합성 우선).
+    const staleTypes = foreignTypeList.filter(existing => !currentForeignTypes.some(ct => ct.value === existing))
+    if (staleTypes.length > 0) {
+      csToast.error('체류기간을 변경하려면 기존에 등록된 문서를 먼저 모두 삭제해 주세요.')
+      return
+    }
+    const result = validateUploadFile(file)
+    if (!result.ok) { csToast.error(result.error ?? '파일 형식 오류'); return }
+    if (file.size > FOREIGN_MAX_FILE_SIZE) { csToast.error('파일 크기는 10MB 이하여야 합니다.'); return }
+    isMergingForeign           = true
+    foreignMergeUploadingType  = typeValue
+    // 업로드 중 다른 유형 "수정"으로 전환돼도(양쪽 다 잠겨있어 실제로는 불가능하지만 방어적으로)
+    // 그 사이 새로 연 패널을 이 요청이 실수로 닫아버리지 않도록 시작 시점 스냅샷
+    const editTypeAtStart = foreignSingleEditType
+    const wasSingleEdit    = Boolean(editTypeAtStart)
+    const fd = new FormData()
+    fd.set('type', 'foreign')
+    fd.set('merge', 'true')
+    fd.append('file', file)
+    fd.append('foreign_type', typeValue)
+    // 최초등록/재등록(콤보가 아직 없거나 다시 채우는 중) 슬롯도 이 함수 하나로 통합했으므로
+    // (2026-09-14 Stephen 지시 — 본인증명처럼 파일 선택 즉시 자동 등록) 첫 등록 시점엔
+    // DB에 foreign_stay_type이 아직 없어 RPC의 COALESCE만으로는 채워지지 않는다 — 항상
+    // 현재 선택된 체류기간을 함께 전송해 명시적으로 반영한다.
+    fd.set('foreign_stay_type', foreignStayType)
+    try {
+      const res  = await fetch('/api/profile/upload-doc', { method: 'POST', body: fd })
+      const data = await res.json() as { ok: boolean; error?: string }
+      if (!data.ok) { csToast.error(data.error ?? '업로드 실패'); return }
+      csToast.success(wasSingleEdit ? '수정되었습니다.' : '등록되었습니다.')
+      if (foreignSingleEditType === editTypeAtStart) cancelForeignMergeEdit()
+      showForeignForm = false // 최초등록/재등록 슬롯에서 호출된 경우 등록완료 화면으로 전환
+      await invalidateAll()
+      await tick()
+      docCardEl?.scrollIntoView({ block: 'nearest' })
+    } catch {
+      csToast.error('네트워크 오류가 발생했습니다.')
+    } finally {
+      isMergingForeign          = false
+      foreignMergeUploadingType = null
+    }
+  }
+
+  function handleForeignMergeSlotFileChange(e: Event, typeValue: string): void {
+    const input = e.target as HTMLInputElement
+    const file  = input.files?.[0]
+    input.value = ''
+    if (file) void autoSubmitForeignMergeFile(typeValue, file)
   }
 
   /* ── 아바타(프로필 사진) 업로드 */
@@ -1111,7 +1288,7 @@
   </div>
 
   <!-- 본인 증명 · 외국인 증명 탭 섹션 (이번 세션 신규 — 탭 UI 재구성) -->
-  <div class="doc-card">
+  <div class="doc-card" bind:this={docCardEl}>
     <div class="doc-card-inner">
       <div class="doc-tab-nav" role="tablist" aria-label="증명서 탭">
         <button
@@ -1154,7 +1331,7 @@
               <button
                 type="button"
                 class="btn-doc-delete"
-                disabled={isDeletingIdentity}
+                disabled={identityDocsBusy}
                 onclick={requestIdentityDelete}
                 aria-label="본인증명 삭제"
               >
@@ -1163,6 +1340,7 @@
             </div>
             <ul class="doc-file-list">
               {#each identityDocUrls as url, i}
+                {@const docType = identityDocTypeAt(i)}
                 <li class="doc-file-list-item">
                   <span class="doc-file-list-icon" aria-hidden="true">
                     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
@@ -1172,10 +1350,66 @@
                        노출 보안 우려. 추후 중요정보 자동 가림(마스킹) 기능 보완 후
                        openIdentityDoc(url) 그대로 재사용해 복원 예정 — 함수는 유지. -->
                   <!-- <button type="button" class="btn-doc-view" onclick={() => openIdentityDoc(url)}>보기</button> -->
+                  {#if docType}
+                    <div class="doc-file-list-actions">
+                      <button type="button" class="btn-doc-edit-chip" disabled={identityDocsBusy} onclick={() => startIdentitySingleEdit(docType)}>수정</button>
+                      <button
+                        type="button"
+                        class="btn-doc-delete"
+                        disabled={identityDocsBusy}
+                        onclick={() => requestIdentityDocDelete(docType, identityDocLabelAt(i))}
+                        aria-label="{identityDocLabelAt(i)} 삭제"
+                      >
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3,6 5,6 21,6"/><path d="M19,6l-1,14H6L5,6"/><path d="M10,11v6M14,11v6"/><path d="M9,6V4h6v2"/></svg>
+                      </button>
+                    </div>
+                  {/if}
                 </li>
               {/each}
             </ul>
           </div>
+
+          {#if identityUnregisteredTypes.length > 0 || identitySingleEditType}
+            <!-- 개별 수정(특정 유형 1개 재업로드) / 추가 등록(미등록 유형) 병합 업로드 —
+                 등록완료 카드는 그대로 두고 upsert만(서버 merge=true, 다른 유형 보존) -->
+            <div class="doc-upload-wrap doc-merge-wrap">
+              {#if identitySingleEditType}
+                <div class="doc-merge-head">
+                  <button type="button" class="btn-doc-re" disabled={identityDocsBusy} onclick={cancelIdentityMergeEdit}>취소</button>
+                </div>
+              {/if}
+              <div class="doc-slot-grid">
+                {#each identityMergeTargetTypes as t (t.value)}
+                  <div class="doc-slot">
+                    <label
+                      class="doc-file-label"
+                      class:drag-over={identityMergeDragOverSlot === t.value}
+                      aria-disabled={identityDocsBusy}
+                      ondragover={(e) => handleIdentityMergeSlotDragOver(e, t.value)}
+                      ondragleave={() => handleIdentityMergeSlotDragLeave(t.value)}
+                      ondrop={(e) => handleIdentityMergeSlotDrop(e, t.value)}
+                    >
+                      <input
+                        type="file"
+                        class="sr-only"
+                        disabled={identityDocsBusy}
+                        accept="image/png,image/jpeg,image/webp,image/heif,image/heic,application/pdf"
+                        onchange={(e) => handleIdentityMergeSlotFileChange(e, t.value)}
+                      />
+                      <span class="doc-file-btn">
+                        {#if identityMergeUploadingType === t.value}
+                          <span>업로드 중...</span>
+                        {:else}
+                          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><polyline points="16 16 12 12 8 16"/><line x1="12" y1="12" x2="12" y2="21"/><path d="M20.39 18.39A5 5 0 0 0 18 9h-1.26A8 8 0 1 0 3 16.3"/></svg>
+                          <span>{t.label}</span>
+                        {/if}
+                      </span>
+                    </label>
+                  </div>
+                {/each}
+              </div>
+            </div>
+          {/if}
         {:else}
           <!-- 업로드 폼 (미등록 / 재등록 공통) — front-uiux.md §22-5 슬롯형 표준.
                showIdentityForm true(재등록)와 미등록 상태가 동일한 폼이라 하나로 통합. -->
@@ -1261,7 +1495,7 @@
               <button
                 type="button"
                 class="btn-doc-delete"
-                disabled={isDeletingForeign}
+                disabled={foreignDocsBusy}
                 onclick={requestForeignDelete}
                 aria-label="외국인증명 삭제"
               >
@@ -1270,6 +1504,7 @@
             </div>
             <ul class="doc-file-list">
               {#each foreignDocUrls as url, i}
+                {@const docType = foreignDocTypeAt(i)}
                 <li class="doc-file-list-item">
                   <span class="doc-file-list-icon" aria-hidden="true">
                     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
@@ -1279,13 +1514,70 @@
                        노출 보안 우려. 추후 중요정보 자동 가림(마스킹) 기능 보완 후
                        openForeignDoc(url) 그대로 재사용해 복원 예정 — 함수는 유지. -->
                   <!-- <button type="button" class="btn-doc-view" onclick={() => openForeignDoc(url)}>보기</button> -->
+                  {#if docType}
+                    <div class="doc-file-list-actions">
+                      <button type="button" class="btn-doc-edit-chip" disabled={foreignDocsBusy} onclick={() => startForeignSingleEdit(docType)}>수정</button>
+                      <button
+                        type="button"
+                        class="btn-doc-delete"
+                        disabled={foreignDocsBusy}
+                        onclick={() => requestForeignDocDelete(docType, foreignDocLabelAt(i))}
+                        aria-label="{foreignDocLabelAt(i)} 삭제"
+                      >
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3,6 5,6 21,6"/><path d="M19,6l-1,14H6L5,6"/><path d="M10,11v6M14,11v6"/><path d="M9,6V4h6v2"/></svg>
+                      </button>
+                    </div>
+                  {/if}
                 </li>
               {/each}
             </ul>
           </div>
+
+          {#if foreignSingleEditType || foreignUnregisteredTypes.length > 0}
+            <!-- 외국인증명 개별 수정(그 유형 1개) / 추가 등록(개별삭제로 콤보에서 빠진
+                 유형 되돌리기, 2026-09-14 신설 — 개별삭제 도입으로 콤보가 깨질 수 있게
+                 됐는데 되돌릴 UI가 없던 결함, Stephen 리포트로 발견) — 본인증명 병합업로드와
+                 동일 원리(버튼 없는 자동제출) -->
+            <div class="doc-upload-wrap doc-merge-wrap">
+              {#if foreignSingleEditType}
+                <div class="doc-merge-head">
+                  <button type="button" class="btn-doc-re" disabled={foreignDocsBusy} onclick={cancelForeignMergeEdit}>취소</button>
+                </div>
+              {/if}
+              <div class="doc-slot-grid">
+                {#each foreignMergeTargetTypes as t (t.value)}
+                  <div class="doc-slot">
+                    <label class="doc-file-label" aria-disabled={foreignDocsBusy}>
+                      <input
+                        type="file"
+                        class="sr-only"
+                        disabled={foreignDocsBusy}
+                        accept="image/png,image/jpeg,image/webp,image/heif,image/heic,application/pdf"
+                        onchange={(e) => handleForeignMergeSlotFileChange(e, t.value)}
+                      />
+                      <span class="doc-file-btn">
+                        {#if foreignMergeUploadingType === t.value}
+                          <span>업로드 중...</span>
+                        {:else}
+                          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><polyline points="16 16 12 12 8 16"/><line x1="12" y1="12" x2="12" y2="21"/><path d="M20.39 18.39A5 5 0 0 0 18 9h-1.26A8 8 0 1 0 3 16.3"/></svg>
+                          <span>{t.label}</span>
+                        {/if}
+                      </span>
+                    </label>
+                  </div>
+                {/each}
+              </div>
+            </div>
+          {/if}
         {:else}
           <!-- 업로드 폼 (미등록 / 재등록) -->
           <div class="doc-upload-wrap">
+            {#if foreignDocUrls.length > 0}
+              <!-- "재등록" 진입 취소 — 등록된 문서가 있을 때만(되돌아갈 곳이 있을 때만) 노출 -->
+              <div class="doc-merge-head">
+                <button type="button" class="btn-doc-re" disabled={foreignDocsBusy} onclick={cancelForeignReRegister}>취소</button>
+              </div>
+            {/if}
             <!-- 체류기간 하위 선택 탭 (단일 선택) -->
             <div class="foreign-stay-select" role="radiogroup" aria-label="체류 기간 선택">
               {#each FOREIGN_STAY_OPTIONS as opt}
@@ -1295,6 +1587,7 @@
                   class:active={foreignStayType === opt.value}
                   role="radio"
                   aria-checked={foreignStayType === opt.value}
+                  disabled={foreignDocsBusy}
                   onclick={() => selectForeignStayType(opt.value)}
                 >
                   <span class="checkbox-btn checkbox-btn-terms" class:checked={foreignStayType === opt.value} aria-hidden="true">
@@ -1308,63 +1601,32 @@
             </div>
 
             <!-- 문서 종류별 "파일등록" 슬롯 — front-uiux.md §22-5 표준(드롭존 1개 = 문서 1종,
-                 순서 보장으로 파일↔유형 메타정보가 항상 1:1 매핑됨) -->
+                 순서 보장으로 파일↔유형 메타정보가 항상 1:1 매핑됨). 2026-09-14 Stephen 지시로
+                 본인증명과 동일하게 버튼·수동제출 없이 파일 선택 즉시 그 1건만 자동 병합
+                 등록(autoSubmitForeignMergeFile, merge=true) — 최초등록도 기존 콤보없음 상태에
+                 대한 병합과 동일하게 동작해 안전(§22-5 "전부 함께 필수" 제약은 폐기). -->
             <div class="doc-slot-grid">
               {#each currentForeignTypes as t (t.value)}
                 <div class="doc-slot">
-                  <label
-                    class="doc-file-label"
-                    class:drag-over={foreignDragOverSlot === t.value}
-                    aria-disabled={isUploadingForeign}
-                    ondragover={(e) => handleForeignSlotDragOver(e, t.value)}
-                    ondragleave={() => handleForeignSlotDragLeave(t.value)}
-                    ondrop={(e) => handleForeignSlotDrop(e, t.value)}
-                  >
+                  <label class="doc-file-label" aria-disabled={foreignDocsBusy}>
                     <input
                       type="file"
                       class="sr-only"
-                      disabled={isUploadingForeign}
+                      disabled={foreignDocsBusy}
                       accept="image/png,image/jpeg,image/webp,image/heif,image/heic,application/pdf"
-                      onchange={(e) => handleForeignSlotFileChange(e, t.value)}
+                      onchange={(e) => handleForeignMergeSlotFileChange(e, t.value)}
                     />
-                    {#if foreignSlotFiles[t.value]}
-                      <span class="doc-file-btn doc-file-btn-filled">
-                        {#if foreignSlotPreviews[t.value]}
-                          <img src={foreignSlotPreviews[t.value]} alt="미리보기" class="doc-img-preview" />
-                        {:else}
-                          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
-                        {/if}
-                        <span class="doc-file-name">{foreignSlotFiles[t.value]?.name}</span>
-                        <button
-                          type="button"
-                          class="doc-file-remove"
-                          disabled={isUploadingForeign}
-                          onclick={(e) => { e.preventDefault(); removeForeignSlotFile(t.value) }}
-                          aria-label="파일 제거"
-                        >✕</button>
-                      </span>
-                    {:else}
-                      <span class="doc-file-btn">
+                    <span class="doc-file-btn">
+                      {#if foreignMergeUploadingType === t.value}
+                        <span>업로드 중...</span>
+                      {:else}
                         <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><polyline points="16 16 12 12 8 16"/><line x1="12" y1="12" x2="12" y2="21"/><path d="M20.39 18.39A5 5 0 0 0 18 9h-1.26A8 8 0 1 0 3 16.3"/></svg>
                         <span>{t.label}</span>
-                      </span>
-                    {/if}
+                      {/if}
+                    </span>
                   </label>
                 </div>
               {/each}
-            </div>
-
-            {#if foreignError}
-              <p class="doc-error" role="alert">{foreignError}</p>
-            {/if}
-
-            <div class="doc-upload-btns">
-              <button
-                type="button"
-                class="btn-doc-upload"
-                onclick={uploadForeignDoc}
-                disabled={isUploadingForeign || foreignFilledCount < currentForeignTypes.length}
-              >{isUploadingForeign ? '업로드 중...' : '등록하기'}</button>
             </div>
           </div>
         {/if}
@@ -2119,6 +2381,8 @@
     border-color: var(--cs-purple);
     background: #F5F4FA;
   }
+  .foreign-stay-row:disabled { opacity: 0.5; cursor: not-allowed; }
+  .foreign-stay-row:disabled:not(.active):hover { border-color: #DCDCDC; background: #fff; }
   .foreign-stay-row.active {
     border-color: var(--cs-purple);
     background: var(--cs-purple);
@@ -2184,6 +2448,12 @@
     flex-shrink: 0;
     color: #888;
   }
+  .doc-file-list-actions {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-shrink: 0;
+  }
   .doc-file-list-name {
     flex: 1;
     min-width: 0;
@@ -2247,6 +2517,27 @@
     white-space: nowrap;
   }
   .btn-doc-re:hover { color: #666; }
+  /* 등록완료 목록 행별 "수정" 칩 — .doc-type-badge와 동일 형태(24px/radius-full)를 재사용하되
+     톤만 purple-on-op10(보조 액션)으로 구분해 카드 헤더의 유형 배지(purple-on-white)와
+     시각적으로 경쟁하지 않도록 함 (2026-09-14, Stephen 선택: "눈에 띄는 칩/버튼 형태") */
+  .btn-doc-edit-chip {
+    flex-shrink: 0;
+    display: inline-flex;
+    align-items: center;
+    height: 24px;
+    padding: 0 12px;
+    background: var(--cs-purple-op10);
+    color: var(--cs-purple);
+    border: none;
+    border-radius: 99px;
+    font-family: 'Noto Sans KR', sans-serif;
+    font-weight: 700;
+    font-size: 12px;
+    cursor: pointer;
+    white-space: nowrap;
+    transition: background 0.12s, color 0.12s;
+  }
+  .btn-doc-edit-chip:hover { background: var(--cs-purple-pale); }
   /* members/profile/AddressTabContent.svelte .btn-delete와 동일 패턴(front 표준) — 배송지
      삭제 버튼과 같은 톤(투명 배경·회색 아이콘·hover 시 레드 강조)으로 통일 */
   .btn-doc-delete {
@@ -2272,6 +2563,10 @@
     flex-direction: column;
     gap: 12px;
   }
+  /* 등록완료 카드 아래 "개별 수정 / 추가 등록" 병합 업로드 영역 —
+     제목 텍스트(.doc-merge-title)와 구분선(border-top)은 불필요 요소로 제거됨(2026-09-14) */
+  .doc-merge-wrap { margin-top: 16px; padding-top: 16px; }
+  .doc-merge-head { display: flex; align-items: center; justify-content: flex-end; gap: 12px; }
 
 
   /* 파일 선택 영역 */
@@ -2295,11 +2590,11 @@
     justify-content: center;
     gap: 6px;
     width: 100%;
-    min-height: 100px;
+    min-height: 76px;
     background: #f6f6f6;
     border: 2px dashed #d0ceea;
     border-radius: 20px;
-    padding: 16px;
+    padding: 10px 16px;
     font-family: 'Noto Sans KR', sans-serif;
     font-size: 14px;
     color: #888;
@@ -2429,6 +2724,7 @@
     .btn-doc-upload { height: 50px; }
     .btn-doc-cancel { height: 50px; }
     .doc-slot-grid { grid-template-columns: repeat(2, 1fr); }
+    .doc-file-btn { padding: 16px; min-height: 100px; }
   }
 
   /* ── 아바타 업로드 모달 */

@@ -1,5 +1,175 @@
 # .claude/harness/TASK.md
 
+## DONE — 사용자 화면(front) UI 전역 정밀검증 + GATE B 승인 4건 수정 완료 (2026-09-14, 이 세션 단독 수행)
+
+### 아젠다
+
+Stephen 지시: "사용자 화면(http://localhost:5173/) UI 전역 코드 구문 및 백오피스 연동성
+검증 — ① 단락된 부분 ② 코드 오류 구문 ③ PC/모바일 반응형 미구현 레이아웃". 정적분석
+(svelte-check) + 서브에이전트 2개(단락 지점, 반응형 커버리지) + Claude Browser 라이브
+검증(명시 허용받음)으로 조사 후, 재검수(결과 동일 확인) → GATE B 4건 승인 → 구현.
+
+### GATE B 승인 4건 + 구현 내역
+
+**① 깨진 링크·누락 탭타이틀(진행 승인)**
+```
+- /login(존재 안 함) → /auth/login 3곳 수정: FeaturesTable.svelte, subscribe/success/
+  +page.server.ts, subscribe/[planId]/+page.server.ts
+- products/[id]/+page.svelte Shotlog 카드: /crazylog/{id}(쓰기전용, 오류) →
+  /crazylog/view/{id}(읽기전용, 정상)
+- products/+page.svelte 품절 시 임시카드 하드코딩 href="/products/9"(존재 안 함) →
+  "/products" 2곳
+- <svelte:head><title> 부재 16개 파일 전수 추가(products/cart/hype-pack/account/auth
+  login 등, products/[id]는 상품명 반영 동적 타이틀)
+```
+
+**② $state(prop) 반응성 버그(진행 승인, 재검증 중요 정정 사항 있음)**
+```
+⚠️ 승인 당시 "63+3건 전부 미반영 버그"로 보고했으나, 실제 코드 정밀 재확인 결과 대부분은
+이미 core-rules.md 승인패턴($state+$effect 재동기화, 또는 {#if}/{#key} 재마운트 보장)이
+정확히 적용돼 있던 상태였고, svelte-check가 $state 초기화 라인 자체를 그 앞뒤 맥락과
+무관하게 무조건 경고하는 컴파일러 한계로 인한 "이미 정상인데도 뜨는" 경고였음(정정 보고).
+실제 미반영 버그로 확인·수정한 것은 3건뿐:
+  1. src/routes/+page.svelte — sliderEl/themeTabsEl/mThemeTabsEl(bind:this 대상)이
+     $state 없이 선언돼 non_reactive_update 경고 — $state()로 전환.
+  2. src/lib/components/members/profile/ProfileTabContent.svelte — foreignStayType만
+     외국인증명 재동기화 $effect에서 누락(같은 블록의 foreignDocUrls 등은 이미 포함돼
+     있었음) — 누락분 추가.
+  3. src/routes/crazylog/view/[slug]/+page.svelte — post/YOUTUBE_VIDEO_ID(const, 미반영)
+     → $derived 전환, comments($state, 재동기화 없음) → $effect 추가. 같은 라우트 내
+     다른 글로 클라이언트 네비게이션 시 이전 글 내용이 남아있을 수 있던 버그.
+나머지(CalendarGrid·SignUpModal·HelpHeroBgModal·MembersHeroBannerModal·WishlistScroll·
+MessageBubble·각종 CMS 배너/설정 모달 등)는 전부 코드 대조로 "이미 정상" 확인, 수정 없음.
+```
+
+**③ 마이페이지 PC 반응형 누락(진행 승인)**
+```
+CouponTabContent/LogTabContent/ReviewTabContent(md:max-w-[640px] md:mx-auto 추가) +
+AddressTabContent(@media (min-width:768px) 폭 제한) — 모바일 전용 단일열 레이아웃이 PC
+우측 패널(account/+page.svelte .pc-right)에서 좌우로 늘어지던 문제 해소. 데이터/기능
+로직 변경 없음, 모바일 뷰(375px) 무회귀 확인.
+```
+
+**④ 미사용 컴포넌트 정리(진행 승인 — "향후 사용 예정" 주석 있는 것은 보호, 광범위 검증 후 제거)**
+```
+전수 cross-reference grep(전체 src, 여러 라운드 재확인)로 완전 고립된 23개 파일만 제거:
+  cart/{RentalOptions,Payment,ProductCard,Buttons,Pricing}.svelte(5, 구프로토타입 —
+    실제 /cart는 전부 인라인 구현)
+  common/admin/{AdminModalShell,AdminEditButton}.svelte(2, 유일 소비자였던 아래 트리
+    제거 후 함께 고립 확인)
+  home/admin/{HomeAdminPanel,HomeHighlightModal,HomePickProductModal}.svelte(3, 자체
+    주석에 "Phase 2 이후 미사용" 자기진단 있음)
+  hype-pack/admin/*(5, 전체 폴더 — 실제 페이지는 동명이인 파일을 admin/ 없는 상위
+    폴더에서 사용 중이라 이 폴더 전체가 완전 병렬 사장 트리)
+  crazylog/admin/{CrazylogAdminPanel,CrazylogWbModal,CrazylogHeadPostsModal}.svelte(3 —
+    ⚠️ 같은 폴더의 CrazylogBannerModal/CrazylogKeywordModal은 실사용 중이라 보호, 그 2개는
+    건드리지 않음)
+  help/admin/{HelpAdminPanel,HelpHeroModal,HelpFaqModal}.svelte(3 — ⚠️ 같은 폴더
+    HelpHeroBgModal은 실사용 중이라 보호)
+  products/admin/ProductsAdminPanel.svelte(1 — 자식 모달 4개는 전부 실사용 중이라 보호,
+    래퍼만 제거)
+  products/SearchProductCard.svelte(1)
+
+보호(삭제 안 함): common/Arrow02Icon.svelte — 현재 사용처는 없으나 uiux-index.md가
+"랜딩·상세이동 화살표 단독 표준" 컴포넌트로 명시적으로 지정해둔 디자인 시스템 표준
+컴포넌트라 "향후 사용 예정" 취지에 해당 — 보호.
+```
+
+### 검증
+```
+svelte-check 배치별 재실행 — 신규 에러 0건(vite.config.ts 기존 무관 에러 1건만 계속 존재).
+Claude Browser로 /cart(PC 2단 레이아웃)·/products/[id]·/help·/members·/account(PC 대시보드
+쿠폰·배송지 탭)·/ (홈 슬라이더) 등 라이브 재확인, 콘솔에러 신규 0건(서비스워커 등록
+1건은 자동화 브라우저 샌드박스 특유 현상으로 판단, 낮은 확신도로 별도 조치 없음).
+npx vitest run src/__tests__/server/ — 459건 중 457 PASS, 2건 실패는 dheroUpdateStatusTrigger.
+test.ts(다른 병렬 세션이 진행 중인 CMS 예약변경 작업과 관련, 이번 변경과 무관 확인).
+git commit은 Stephen 직접 실행 대기.
+```
+
+## NOW — 🔴 CRITICAL: CMS 예약변경/예약취소 헤더 버튼 + 재고구성 편집 결함 수정 (2026-09-14, 이 세션, GATE B 승인됨)
+
+### 배경
+
+Stephen이 `RentalDetailPanel.svelte` 헤더 영역에 '예약변경'·'예약취소' 버튼 신설을 요청.
+조사 중 핵심 전제 확인: **하나의 예약 코드 = 여러 `rental_reservations` 행 = 항상 하나의
+예약 건으로 취급**. 기존 "예약 취소" 버튼이 단일 `reservation_id`만 처리해 형제 행을
+방치하는 버그(주문 전체 취소가 안 됨)도 함께 수정.
+
+### 설계 요약 (플랜: `/Users/stevenmac/.claude/plans/launch-selected-element-element-tag-div-lexical-wand.md`)
+
+**Priority A**:
+1. 신규 RPC `revert_reservation_order_to_hold` — hold 되돌리기 + 결제취소 + 계약 sent_at 리셋(cron 회귀 방지)
+2. `updateStatus` 액션 확장(order-wide cancel) + 신규 `changeReservation` 액션
+3. `payment_transactions.pg_cancelled_at` 신규 컬럼
+4. `send_rental_chat_notification` — `payment_cancelled_reissue` notify_type 추가
+5. `RentalDetailPanel.svelte` 헤더 버튼 추가 + "환불 처리" 버튼 제거
+
+**Priority B**:
+6. `sync_order_after_composition_change` RPC + `cms_add_reservation_product_unit` / `cms_remove_reservation_product_unit` 결함 수정
+
+### 마이그레이션 순서
+
+```
+#492 — revert_reservation_order_to_hold RPC (Stage → Production)
+#493 — payment_transactions.pg_cancelled_at 컬럼 (Stage → Production)
+#494 — send_rental_chat_notification payment_cancelled_reissue 추가 (Stage → Production)
+#496 — sync_order_after_composition_change + cms_add/remove 수정 (Stage → Production)
+   ⚠️ 2026-09-14 번호 정정: #495는 이 세션과 별도로 동시 진행 중이던 "본인증명·외국인증명
+   개별 삭제/수정" 태스크가 이미 선점·적용 완료(foreign_verified_at 콤보완성 조건부 기록,
+   Migration #495_foreign_verified_at_combo_complete_only.sql, Stage+Production 적용됨) —
+   충돌 방지를 위해 이 태스크의 계획 번호를 #495→#496으로 정정(@sp3-qa-agent 지적으로 발견,
+   실제 적용 전 단계라 파일 충돌은 발생하지 않았음).
+```
+
+### TDD 도메인 — 3개 테스트 파일 (모두 신규)
+
+```
+1. src/__tests__/services/revertReservationOrderToHold.test.ts
+   - EC-1: 형제 2개 이상 주문 → 전부 hold + payment_confirmed_at NULL + contract_signings 리셋
+   - EC-2: 형제 중 cancelled인 것은 건드리지 않음
+   - EC-3: cron 회귀 — 리셋 직후 release_reservation_hold() 호출해도 hold 유지(가장 중요)
+   - EC-4: 단건(형제 없음) 주문도 정상 동작
+
+2. src/__tests__/services/updateStatusOrderWideCancel.test.ts
+   - EC-1: 형제 2개 주문 "예약취소" → 전부 cancelled + 전액환불 + 계약 status=cancelled
+   - EC-2: 미결제 hold "거부" → 형제 전체 cancelled, 환불·계약취소는 스킵
+   - EC-3: 권한별 분기(매니저 이상만 환불·계약취소, 그 외는 상태전환만)
+
+3. src/__tests__/services/syncOrderAfterCompositionChange.test.ts
+   - EC-1: "+ 추가" 후 신규 행 reservation_code = 형제와 동일
+   - EC-2: 총액이 compute_reservation_line_amount 결과를 반영해 재계산
+   - EC-3: "✕ 삭제" 후 총액이 줄어듦
+   - EC-4: 쿠폰·포인트·배송비 보존 재계산
+```
+
+### 진행 상태
+
+- [x] TASK.md 등록
+- [x] RED-1: revertReservationOrderToHold.test.ts 작성 (4/4 GREEN, Migration #492 Stage 적용 완료)
+- [x] Migration #492: revert_reservation_order_to_hold RPC (Stage 적용 완료)
+- [x] GREEN-1: 테스트 통과 (4/4 GREEN)
+- [x] RED-2: updateStatusOrderWideCancel.test.ts 작성 (2 FAIL / 1 PASS — EC-1 contracts.status 미갱신, EC-2 PAYMENT_NOT_FOUND 형제 미취소)
+- [x] Migration #493: pg_cancelled_at 컬럼 (Stage 적용 완료, 2026-09-14)
+- [x] Migration #494: payment_cancelled_reissue notify_type (Stage 적용 완료, 2026-09-14)
+- [x] tossPaymentCancel.ts 신규 헬퍼 + changeReservation 액션 + updateStatus 확장 (이전 서브세션 완료)
+- [x] GREEN-2: updateStatusOrderWideCancel.test.ts 3/3 GREEN (Migration #496 포함, 2026-09-14)
+- [x] RED-3: syncOrderAfterCompositionChange.test.ts 작성 (이전 서브세션 완료)
+- [x] Migration #497: sync_order_after_composition_change + cms_add/remove 수정 (Stage 적용 완료, 2026-09-14)
+- [x] GREEN-3: syncOrderAfterCompositionChange.test.ts 4/4 GREEN (2026-09-14)
+- [x] RentalDetailPanel.svelte 클라이언트 변경 (§5 완료):
+      - 헤더 `panel-header-actions` — '예약변경'(changeReservation)·'예약취소'(updateStatus+cancelled) 버튼 신설
+      - 노출조건: canManagePaymentAndLocker(manager+) && !isTerminal && status !== 'hold'
+      - 결제정보 탭 '취소 환불시간' 행 신설 (pg_cancelled_at 있을 때만)
+      - '환불 처리' 버튼·handleRefund() 완전 제거
+      - 본문 action-section의 단독 '예약 취소' 블록 제거
+- [x] 전체 테스트 12/12 GREEN (revertReservationOrderToHold 4+updateStatusOrderWideCancel 4+syncOrderAfterCompositionChange 4, 2026-09-14)
+- [x] svelte-check: 에러 1건 (vite.config.ts — vitest 설정 타입, 이번 작업과 무관한 기존 문제)
+- [ ] Stage 수동검증 3가지(형제주문 예약변경 전체hold+전액취소 / 1~2분 내 expired 미발생 / 재고구성 편집 후 총액 정확성) — Stephen 또는 QA 담당자 직접 CMS 화면 조작 필요
+- [ ] Production(`vnbpmvxruyciuuaermyh`) 마이그레이션 적용 — Stage 수동검증 완료 후
+- [ ] sp3-qa-agent GATE E
+
+---
+
 ## DONE — 🔴 CRITICAL: 신규 상품 등록 시 "기본 재고" 자식 상품 이미지 영구 깨짐 결함 수정 + Production 42건 백필 (2026-09-11, 이 세션, ✅ GATE E 통과 — sp3-qa-agent 재검수 완료, git commit만 Stephen 대기)
 
 ### 배경
@@ -594,6 +764,131 @@ git commit은 Stephen 직접 실행 대기(커밋 메시지 제안은 요청 시
 
 → Stephen 선택 대기: **A)** 위 2건 보완 후 재검수, **B)** 경미한 방어적 수정으로 판단해
 예외 승인 후 커밋 진행(git 실행은 Stephen 직접).
+
+---
+
+## NOW — 🔴 CRITICAL(신규 발견, 코드 결함): 웹훅 서명 검증 로직이 Toss 실제 사양과 불일치 — 심사 통과 여부와 무관하게 웹훅 안전망 상시 작동불가 (2026-09-14, Stephen 질문에 답하며 Toss 공식 문서 직접 조사로 발견)
+
+```
+[CONTEXT BRIDGE]
+plan_source: Stephen이 "심사가 통과된 상태라면 지금 설정 그대로 결제 테스트 시 정상 결제가
+  되는지" 질문 → 답변 조사 중 Toss 공식 문서(docs.tosspayments.com/reference/using-api/
+  webhook-events)를 WebFetch로 직접 확인하며 발견. 코드 수정은 아직 안 함(발견·보고만,
+  Stephen 지시 대기).
+GATE 등급: 🔴 CRITICAL — 결제 도메인, 웹훅 안전망(대사 처리) 전체가 대상.
+```
+
+### 확인된 사실 (Toss 공식 문서 원문 인용, docs.tosspayments.com/reference/using-api/webhook-events)
+
+```
+"tosspayments-webhook-signature - payout.changed, seller.changed 웹훅 헤더에만
+  포함되는 웹훅 서명입니다."
+"{WEBHOOK_PAYLOAD}:{tosspayments-webhook-transmission-time} 값을 보안 키로
+  HMAC SHA-256 해싱하세요."
+"웹훅 헤더에서 v1: 뒤에 오는 2개의 값을 모두 base64로 디코딩하세요."
+```
+
+즉:
+  1. 서명 헤더는 `payout.changed`·`seller.changed` 이벤트에만 포함됨 —
+     우리가 등록 권장한 `PAYMENT_STATUS_CHANGED`(TASK.md 위 블록, 2026-09-10)에는
+     Toss가 애초에 서명을 보내지 않는다.
+  2. 헤더 이름도 다름: Toss `tosspayments-webhook-signature` vs 코드
+     `src/routes/api/webhooks/toss/+server.ts:39`의 `toss-payments-signature`.
+  3. HMAC 원문도 다름: Toss는 `{payload}:{transmission-time}` 결합 문자열, 코드는
+     `rawBody` 단독 해싱(`+server.ts:14-28` verifyTossSignature).
+  4. 서명에 쓰는 키는 시크릿 키가 아니라 별도 "보안 키"(`/guides/v2/payouts#보안-키`
+     문서에 링크됨) — payment.md·TASK.md의 2026-08-30 결정("보안 키는 정산지급대행
+     전용이라 불필요")은 이 맥락에서는 정확했음(payout.changed/seller.changed는
+     실제로 안 쓰는 이벤트이므로).
+
+### 실제 영향
+
+```
+현재 핸들러(+server.ts:19,42)는 `if (!signature) return false` → 401 반환 구조라,
+서명이 아예 없는 PAYMENT_STATUS_CHANGED 웹훅은 Toss 가맹점 심사 통과 여부와 무관하게
+100% 401로 거부된다 — raw_webhook_logs에 영원히 기록 안 됨, process_pending_toss_
+webhooks(2분 cron) 안전망은 대사할 데이터 자체가 없어 사실상 죽은 상태.
+
+⚠️ 이건 "결제 성공 자체"는 막지 않는다 — payment.md에 이미 문서화된 대로 실제 결제확정은
+/contract/[token]/pay-result가 Toss confirm API를 동기 직접 호출 + RPC 갱신하는 구조라
+웹훅과 무관하다. 영향받는 건 안전망(고객이 결제 후 정상 리다이렉트되지 않는 이탈 케이스를
+잡아주는 대사 로직)뿐 — 이런 케이스는 지금 그대로면 영구히 미탐지·미교정됨.
+```
+
+### 조치 방향(코드 수정 필요, Stephen 지시 대기 — 아직 미착수)
+
+```
+옵션 A: PAYMENT_STATUS_CHANGED처럼 서명이 없는 이벤트 타입은 서명 검증을 스킵하고
+  raw_webhook_logs에 그대로 기록(신뢰 확보는 process_pending_toss_webhooks가 Toss
+  결제조회 API로 payload의 orderId·paymentKey를 재조회해 대조하는 방식으로 보완 —
+  Toss도 서명 없는 이벤트는 "결제 API로 재조회해 신뢰성 확보" 패턴을 권장하는 것으로
+  보임, 명시적 가이드 문장은 이번 조사에서 못 찾음 — 문의 필요할 수 있음).
+옵션 B: payout.changed/seller.changed 웹훅도 함께 등록해 그쪽은 정식 서명검증(헤더명
+  tosspayments-webhook-signature·payload:time 결합·보안 키)을 별도 구현하고,
+  PAYMENT_STATUS_CHANGED는 옵션 A와 동일하게 처리.
+→ 둘 다 코드 변경(+server.ts) 필요 — 이 세션은 아직 수정하지 않음, Stephen 확인 후 진행.
+```
+
+GATE C: CRITICAL — 발견·문서화 완료, 코드 수정 미착수(Stephen 지시 대기). git 조치 없음.
+
+---
+
+## NOW — 🔴🔴 CRITICAL(진짜 근본원인 확정): Toss 가맹점(crazysfc8s·bill_crazyhevr) 심사 미완료 — 코드/설정 문제 아님 (2026-09-14, Stephen 제공 Toss 콘솔 캡처로 확정)
+
+```
+[CONTEXT BRIDGE]
+plan_source: Stephen이 "실서버 결제 연동 로직 확인해" 재요청 → 4일간(2026-09-10~14) 실거래 0건
+  지속 확인 후, Stephen이 Toss 개발자센터 콘솔 캡처 2장을 직접 제공해 근본원인이 밝혀짐.
+GATE 등급: 🔴 CRITICAL — 결제 도메인, 외부(Toss) 의존 이슈로 코드 수정 불가능한 종류.
+```
+
+### 확정된 근본원인 — 아래 NOW 블록(2026-09-10)의 "미검증 상태" 진단을 대체
+
+```
+Toss 개발자센터 콘솔(Stephen 제공 캡처) 확인 결과:
+
+  MID              용도(코드 매핑)                    Toss 계약 상태
+  crazysfc8s       단건결제(.widgets(), 계약서명결제)   심사중 ⚠️
+  bill_crazyhevr   정기결제/빌링(.payment())            심사중 ⚠️
+  link_crazy5vdb   (코드 미사용)                        계약완료
+  crazyswpjb       (코드 미사용)                        심사중
+
+crazysfc8s의 "API 개별 연동 키" 섹션(라이브 탭)에 Toss가 직접 표시한 경고:
+  "계약이 완료되지 않은 상점은 라이브 환경에서 결제를 할 수 없어요. 계약 전 결제
+  테스트를 원하시면 '테스트 키'로 연동해주세요."
+
+→ 이 서비스가 실결제에 쓰는 두 MID(crazysfc8s·bill_crazyhevr) 모두 Toss 가맹점 심사가
+  끝나지 않은 상태 — Vercel에 올바른 라이브 키를 등록하고 웹훅·서명검증·코드 로직이
+  전부 정상이어도, Toss 서버 자체가 API 호출 단계에서 결제를 거부한다(가맹점 심사 미완료
+  라이브 요청 자체를 차단하는 Toss 측 정책). 2026-09-10~14 payment_transactions·
+  raw_webhook_logs가 4일 내내 0건이었던 것은 이 때문일 가능성이 매우 높음 — 코드·
+  Vercel 설정 문제가 아니라 이 외부 승인 절차가 유일한 남은 블로커.
+```
+
+### 이전 진단과의 관계 (2026-09-10 블록 폐기 아님 — 여전히 유효, 다만 원인 규명이 완성됨)
+
+```
+2026-09-10 블록의 ①(env var 등록 해소)·③(DB 실거래 0건) 관찰 자체는 그대로 유효하다 —
+다만 "왜 0건인가"에 대한 결론이 "미검증 상태(장애 아님)"에서 "Toss 가맹점 심사
+미완료로 인해 구조적으로 라이브 결제가 불가능한 상태"로 명확해졌다. 즉 지난 세션이
+제안한 "실카드 E2E 테스트"·"위젯 마운트 확인" 등은 심사가 완료되기 전까지는 시도해도
+Toss 측에서 거부될 가능성이 높아 우선순위가 낮아짐 — 심사 완료가 선행 조건.
+```
+
+### 다음 조치 — Stephen 직접 필요(코드로 해결 불가)
+
+```
+1. Toss 개발자센터 또는 담당 영업 채널을 통해 crazysfc8s·bill_crazyhevr 두 상점의 심사
+   진행 상황을 확인·독촉.
+2. 심사에 필요한 서류(사업자등록증·통장사본·대표자 신분증 등, Toss가 요구하는 항목)가
+   누락되지 않았는지 콘솔에서 직접 확인.
+3. 심사 완료("계약완료") 확인 후에만 지난 세션들이 준비해둔 나머지 절차(라이브 웹훅
+   등록·crazyshot.kr DNS 전환·실카드 E2E 테스트)를 이어서 진행 — 순서상 이게 먼저.
+4. 심사 완료 후 재검증 요청 시, 이 세션이 실제 라이브 결제(소액) 성공 여부를
+   payment_transactions·raw_webhook_logs INSERT 발생으로 즉시 확인 가능.
+```
+
+GATE C: CRITICAL — 근본원인 확정(외부 Toss 심사 이슈, 코드/DB 변경 없음). git 관련 조치 없음.
 
 ---
 
@@ -44508,3 +44803,496 @@ fix(cms/products): 상세패널 sticky 고정으로 목록 스크롤 UX 개선
 ```
 
 **git commit은 Stephen 직접 실행. DB 변경(①)은 Stage 전용, Production 무관.**
+
+---
+
+## NOW — 마이페이지 본인증명 개별 파일 수정 + 추가 등록(병합 업로드) 신설 (2026-09-14, 이 세션 단독 수행)
+
+**요청(Stephen)**: "1. 등록된 본인 증명정보파일 목록 UI 내 우측 끝에 개별 수정 버튼 UI 배치:
+기존 업로드 파일 재업로드 수정 기능. 2. 미등록 증명파일 업로드 카드 UI를 등록완료 카드
+아래에 노출배치: 추가 등록가능하게 UI 노출할 것."
+
+**핵심 기술 문제(사전 검토로 확인)**: `update_user_doc_url` RPC(Migration #360)의 identity
+분기는 `identity_doc_url = p_doc_url`로 배열을 통째로 덮어쓴다 — 기존 "재등록" 흐름은
+이 전체교체 특성에 맞게 설계돼 있었다(전부 새로 고름). 그런데 이번 요청 2가지("개별
+수정"·"추가 등록")는 정반대로 **다른 유형은 그대로 두고 이번에 고른 유형만 바꿔야** 하므로,
+그대로 구현하면 매번 나머지 등록분이 통째로 사라지는 데이터 유실 버그가 된다.
+
+**해결 — RPC/스키마 변경 없이 엔드포인트에서 병합 계산**: `/api/profile/upload-doc/+server.ts`에
+`merge`(identity 전용) 플래그를 추가 — merge=true일 때 기존 `identity_doc_url`/`identity_type`을
+함께 조회해 (url,type) 짝으로 복원한 뒤, "이번 제출 유형"과 겹치는 기존 짝만 교체 대상으로
+분리하고 나머지는 그대로 보존 → 보존분+신규분을 합친 "최종 배열"을 RPC에 그대로 넘긴다(RPC
+자체는 여전히 단순 대입이지만, 이미 합쳐진 배열을 받으므로 결과적으로 upsert처럼 동작).
+스토리지 정리(`oldPaths` 삭제)도 "실제 교체된 것"만 대상으로 좁혀 보존 파일이 삭제되지
+않도록 별도 처리. 비병합(foreign 전체, identity 재등록) 경로는 코드·동작 전혀 무변경.
+
+**클라이언트(`ProfileTabContent.svelte`)**:
+- 등록완료 목록(`doc-file-list`) 각 행 우측에 "수정" 버튼 추가(`identityDocTypeAt(i)`로
+  그 행의 유형값을 얻어 `startIdentitySingleEdit(type)` 호출) — 요청 1.
+- 등록완료 카드(`.doc-registered`) 바로 아래에 새 "병합 업로드" 영역(`doc-merge-wrap`) 신설
+  — 기본은 "추가 증명서 등록"(아직 등록 안 된 유형 전체 슬롯 노출), 특정 행 "수정" 클릭 시
+  "OO 재업로드"로 전환(그 유형 1개 슬롯만 노출 + 취소 버튼) — 요청 2 + 요청 1의 실제 업로드
+  UI. 슬롯 UI는 기존 §22-5 슬롯형 컴포넌트를 그대로 재사용(신규 CSS 최소화 — 헤더/구분선만
+  추가).
+- 제출은 `submitIdentityMerge()` — `merge=true`로 서버에 위임, 응답 성공 시 `invalidateAll()`로
+  등록완료 카드·목록 자동 갱신.
+
+**검증**: `npx svelte-check` — 대상 2개 파일 신규 에러·경고 0건. DB/RPC/마이그레이션 변경 없음
+(순수 엔드포인트 로직 확장). 외국인증명(foreign) 섹션은 요청 범위 밖이라 전혀 미수정.
+
+**git commit은 Stephen 직접 실행.**
+
+---
+
+## DONE — 본인증명 "수정" 버튼 칩 UI + "추가 등록" 부분제출 불가 버그 수정 (2026-09-14, 이 세션 단독 수행)
+
+**요청(Stephen)**: 1. 등록완료 목록 행별 "수정" 버튼 UI 변경(GATE B 질문 — "눈에 띄는
+칩/버튼 형태로 변경" 선택). 2. "파일 업로드 등록 이후 '본인증명정보' 목록으로 배치되어야
+정상: 현재 이 상태에서 더 이상 변동이 없는 오류" — 선택요소가 `doc-upload-wrap`(병합
+업로드 슬롯 내부)에서 파일 선택 직후 상태로 멈춰있고 목록에 반영이 안 되는 버그 리포트.
+
+**버그 근본원인(코드 분석으로 확정)**: `submitIdentityMerge()`의 제출 가드가 "추가 등록"
+모드(미등록 유형 전체가 target)에서 **열린 슬롯을 전부 채워야만** 제출 버튼이 활성화되도록
+돼 있었다(`identityMergeTargetTypes.some(t => !filled)`) — 본인증명은 §22-5 설계원칙상
+"5종 전부가 필수는 아니라 최소 1개 슬롯만 채우면 등록 가능"인데, 이 가드만 정반대로 "전부"를
+요구해 슬롯 1개만 올리고 제출을 눌러도(또는 버튼이 비활성 상태라 클릭조차 안 먹혀) 아무
+반응이 없는 것처럼 보였다 — 서버 전송 루프 자체는 이미 채워진 것만 append하므로 부분제출은
+원래도 안전했고, 가드만 어긋나 있었다.
+
+**수정**:
+- `submitIdentityMerge()`: "전부 채워야 제출" → "1개 이상 채우면 제출"로 완화, 실제 전송도
+  채워진 슬롯만 대상으로 명확화(`filled` 배열).
+- 제출 버튼 `disabled` 조건도 동일하게 `.every(no file)`로 완화(개별 수정 모드는 target이
+  항상 1개라 동작 변화 없음).
+- 부수 개선: 실패 시(`data.ok===false`, 네트워크 오류) 기존엔 작은 인라인 빨간 텍스트만
+  표시되고 토스트가 없어 "성공/실패 구분이 안 되는" 것도 이번 버그 체감의 한 원인이었음
+  (`csToast.error` 추가, `uploadIdentityDoc`/`submitIdentityMerge` 둘 다) — foreign 경로는
+  요청 범위 밖이라 미수정.
+- "수정" 버튼(등록완료 목록 행별): 기존 `.btn-doc-re`(재등록·취소와 공유하는 회색 밑줄
+  텍스트링크)에서 분리해 신규 전용 클래스 `.btn-doc-edit-chip` 부여 — 같은 카드에 이미 있는
+  `.doc-type-badge`(24px·radius-full) 형태를 재사용하되 톤만 `--cs-purple-op10` 배경
+  +`--cs-purple` 텍스트(보조 액션)로 구분해 카드 헤더의 유형 배지(purple-on-white)와
+  경쟁하지 않도록 함. `.btn-doc-re` 자체는 무변경(재등록·취소·외국인재등록 3곳 그대로 유지).
+
+**검증**: `npx svelte-check` — 변경 전후 전체 에러(1건, 무관한 사전 vite.config.ts 이슈)·
+경고(403건) 개수 동일, 신규 발생 0건. `--cs-purple-op10`/`--cs-purple-pale` 토큰이
+`src/app.css`에 실재함을 grep으로 확인. DB/RPC/마이그레이션 변경 없음(순수 클라이언트
+로직+CSS).
+
+**GATE E (@sp3-qa-agent, 2026-09-14, 데이터 무결성 CONFIRMED 기준) — ✅ 통과**: 3개 시나리오
+(부분채움 성공/개별수정 무변경/0채움 방어) 전부 코드 추적으로 확인. 서버(`+server.ts`)가
+제출 개수를 고정 가정하지 않고 `keptPairs`로 미교체 기존 유형을 index-paired 그대로 보존함을
+재확인 — 데이터 유실 경로 없음. `.btn-doc-re`(재등록×2·병합취소×1)는 무변경, `.btn-doc-edit-chip`
+CSS 토큰 실재·중복/고아 셀렉터 없음, `onclick` 배선 불변, 토스트는 기존 인라인 에러에 추가만
+되고 성공경로 무변경 확인. LOW 1건(비블로킹): `.btn-doc-edit-chip` 24px가 44px 터치타겟
+기준 미달이나 같은 행의 기존 `.doc-type-badge`(24px)·`.btn-doc-delete`(28px)와 동일한
+기존 로컬 관례 재사용이라 신규 일탈 아님. 수정 필요 항목 없음.
+(QA 범위 외 관찰: `git status`상 남아있는 마이그레이션 파일 삭제(485)는 이번 리뷰 대상과
+무관 — Stephen 별도 확인 필요.)
+
+**git commit은 Stephen 직접 실행.**
+
+---
+
+## DONE — 본인증명·외국인증명 파일등록 "버튼 없는 자동 등록" 전환 (2026-09-14, 이 세션 단독 수행)
+
+**요청(Stephen)**: 직전 수정("추가 등록" 부분제출 허용)에도 여전히 "파일 업로드 후 목록에
+반영 안 됨"이 재현된다는 리포트 + "그 잘못된 수정 때문에 업로드 시 리다이렉팅 버그가 생겼다"는
+추가 리포트. 이어서 "1. 그냥 파일 등록 시 자동으로 등록시킴과 동시에 등록완료 목록에 반영해.
+2. 외국인증명 기존 파일등록 로직에도 '등록하기' 버튼 제거."
+
+**Claude Browser 실사용 재현(조건 ① 충족 — 사용자가 이미 열어둔 브라우저 세션에서 선택요소가
+전달됨)**: 동일 세션(`localhost:5173`)에서 직접 재현 시도 —
+1. "추가 등록하기" 버튼 클릭 → API 200 OK, `docUrls` 3건 반환, 등록완료 목록도 정상 3→4건
+   갱신 확인(URL 무변경, 리다이렉트 없음). 즉 직전 수정 자체는 코드상 정상 동작 — 다만
+   Stephen이 리포트한 시점엔 HMR 전환 과도기 상태였을 가능성이 높음(콘솔에 과거 `docCardEl
+   is not defined`/`identityMergeFiles is not defined` ReferenceError 이력이 남아있었으나
+   완전 새로고침 후 재현 안 됨 — 편집 중간 상태의 잔존 로그로 판단).
+2. `invalidateAll()` 이후 카드 높이가 줄어들며(병합 슬롯 감소) 스크롤 위치가 브라우저에 의해
+   보정되는 현상을 실측(스크롤 62px 이동) — 실제 URL 리다이렉트는 아니었으나 "다른 화면으로
+   튕기는 것처럼" 체감될 수 있는 원인으로 확인. `docCardEl` bind:this + `scrollIntoView({block:
+   'nearest'})`로 이미 완화 조치가 되어 있었음(직전 턴에 추가).
+
+**근본 해결(요청대로 버튼 자체를 제거)**: 재현이 100% 안정적이지 않은 상태에서 계속
+"부분제출 가드"류 미세조정을 반복하기보다, Stephen 지시대로 버튼·수동제출 개념 자체를
+없애 구조적으로 이 클래스의 버그가 재발할 수 없게 했다.
+- **본인증명 "추가 등록"/"개별 수정"**(`identityMergeFiles`/`identityMergePreviews`/
+  `submitIdentityMerge`/"추가 등록하기"·"수정하기" 버튼 전부 제거): 슬롯에 파일을 선택하는
+  즉시 `autoSubmitIdentityMergeFile(type, file)`이 그 1건만 곧바로 병합 업로드하고 성공 시
+  자동으로 목록에 반영(`invalidateAll()`+`scrollIntoView`). 슬롯 로컬 스테이징(선택 후 제거
+  가능한 미리보기) 개념 자체가 사라짐 — 업로드 중엔 해당 슬롯에 "업로드 중..." 표시.
+- **외국인증명**(`uploadForeignDoc`/"등록하기" 버튼 제거, 기존 "콤보 전체 필수" 검증 로직은
+  무변경 유지): `setForeignSlotFile`에서 슬롯을 채울 때마다 `currentForeignTypes.every(...)`로
+  마지막 슬롯인지 확인해 조건 충족 시 기존 `uploadForeignDoc()`을 자동 호출 — "전부 함께
+  제출" 원칙(§22-5)은 그대로, 트리거만 버튼 클릭에서 마지막 슬롯 채움으로 이동.
+- 양쪽 모두 실패 시 `csToast.error` 추가(기존엔 인라인 텍스트뿐이라 무반응처럼 보였음).
+
+**검증**: `npx svelte-check` 신규 에러·경고 0건(잔존 참조 없음, `foreignFilledCount` 등
+불필요해진 파생값도 함께 정리). Claude Browser로 동일 세션에서 실제 재현: 본인증명 나머지
+2개 유형(운전면허증·기타)을 파일 선택만으로 버튼 없이 순차 자동등록 → 목록 4→5건 정상
+반영(5종 전부 등록 시 병합 섹션 자체가 사라지는 것도 확인) / 외국인증명 4종 콤보를 3개만
+채웠을 때 요청 미발생(정상) → 4번째 채우자 자동으로 요청 발생·200 OK·목록 반영까지 확인,
+두 경우 모두 URL 무변경(리다이렉트 없음) 재확인.
+
+⚠️ **테스트 데이터 고지**: 위 실사용 재현 과정에서 Stage DB(ezyvffjvuwmtuhpxdjrw) 테스트
+계정(mublues@gmail.com)에 합성 테스트 파일(학생증·운전면허증·기타·외국인증명 4종)이 실제로
+등록됨 — Stage 전용이며 Production 영향 없음. 정리가 필요하면 말씀해 주세요(개별 유형 삭제
+API가 없어 "재등록"으로 전체 재업로드하거나 직접 SQL 정리 중 원하는 방식 확인 필요).
+
+**GATE E (@sp3-qa-agent, 2026-09-14, 데이터 무결성 CONFIRMED 기준) — ✅ 통과**: 단일
+(type,file) 페어 전송 확인(전체 배열 아님), 서버 `keptPairs`/`replacedUrls` 재확인으로
+단일 파일 제출이어도 기존 등록분 손실 없음 확인. 삭제 대상 식별자(identityMergeFiles 등
+7개) 전체 재검색 — 잔여 참조 0건. 외국인 auto-trigger가 로컬 즉시계산 `nextFiles` 기준이라
+off-by-one 없음. `uploadIdentityDoc()`(재등록 전체교체 플로우)은 요청 범위 밖이라 무변경
+재확인. svelte-check 신규 에러·경고 0건. LOW 권고 1건(비블로킹, 기록용): 슬롯별 독립
+요청으로 전환되며 "서로 다른 슬롯의 파일 다이얼로그를 미리 동시에 열어둔 뒤 교차 선택"하는
+극히 드문 시나리오에서 이론적 레이스가 새로 도입됐으나, `isMergingIdentity` 공유 disable
+바인딩이 일반적 순차 상호작용에서는 확실히 차단하며 실사용 발생 가능성은 매우 낮음 —
+필요 시 서버측 낙관적 락 추가는 별도 태스크로 검토 권장.
+
+**git commit은 Stephen 직접 실행.**
+
+---
+
+## DONE — 본인증명·외국인증명 등록완료 목록 개별 삭제 + 외국인증명 개별 수정 신설 (2026-09-14, 이 세션 단독 수행)
+
+**요청(Stephen)**: "1. 선택영역 목록별 삭제 가능하도록 목록 내 '수정' 버튼 UI 우측 '삭제'
+아이콘 버튼 UI 배치: 표준 디자인 시스템 지침 중 삭제 아이콘 지침 반영. 2. 둘째 선택영역
+'외국인 증명' 등록 목록에도 동일하게 '수정, 삭제' 버튼 UI 적용."
+
+**표준 재사용(front-uiux.md에 별도 절 없음 — 이 파일 자체 기존 관행이 front 표준)**: 삭제
+아이콘은 이 파일에 이미 존재하는 `.btn-doc-delete`(28×28px, transparent, `#bbb` → hover
+`#ff3535`/`rgba(255,53,53,0.08)`, `AddressTabContent.svelte` `.btn-delete`와 동일 — 코드
+주석에 이미 "front 표준"으로 명시됨)를 그대로 재사용, 새 클래스 발명 없음. "수정" 옆에
+`.doc-file-list-actions`(flex, gap:6px) 래퍼로 나란히 배치.
+
+**신규 서버 기능 — 개별 항목 삭제(`/api/profile/delete-doc-item`, RPC/스키마 변경 없음)**:
+기존 `identity_doc_url`+`identity_type`(또는 `foreign_doc_urls`+`foreign_type`)을 조회해
+삭제 대상 유형의 인덱스를 찾아 그 짝만 제외한 "남은 배열"을 계산 →
+① 1개 이상 남으면 기존 `update_user_doc_url`(merge 패턴과 동일 원리)로 부분 반영,
+② 마지막 1개 삭제 시(남은 배열 0개)는 `update_user_doc_url`이 빈 배열을 거부하므로 대신
+기존 `delete_user_doc`(전체 초기화, verified_at 등 연관 컬럼까지 정리)으로 위임. 스토리지
+파일도 DB 반영 후에만 best-effort 삭제.
+
+**외국인증명 개별 "수정" 신설 — `/api/profile/upload-doc`의 merge 모드를 identity 전용에서
+foreign까지 확장**: 기존 로직(`existingIdentityTypes`→`existingTypeValues`, `docColumn`+
+`typeColumn` 파라미터화)을 제네릭하게 리팩터링해 동일 코드 경로로 양쪽 다 처리. identity
+전용이던 고아 항목 fallback('other')은 그대로 보존하되 foreign은 'other'가 유효한 enum이
+아니므로(CHECK 위반 위험) fallback 없이 건너뛰도록 분기(실사용 경로 아님, 방어적).
+클라이언트: `foreignSingleEditType`/`autoSubmitForeignMergeFile`/single-slot merge-wrap
+UI를 identity 병합업로드와 동일 패턴으로 신설(버튼 없는 자동제출 그대로 적용).
+
+**검증**: `npx svelte-check` 신규 에러·경고 0건(전후 동일 1 error/403 warnings). Claude
+Browser 동일 세션 실사용 검증 — 본인증명 "학생증" 개별삭제(5→4건, 삭제된 유형이 "추가
+증명서 등록" 슬롯으로 다시 노출되는 것까지 확인) / 외국인증명 "여권사진면" 개별수정(콤보
+4건 유지, 순서만 재배치되는 병합 특성 확인) / 외국인증명 "입국 E-Ticket" 개별삭제(4→3건)
+전부 정상 동작, URL 무변경(리다이렉트 없음) 재확인.
+
+**GATE E 1차(@sp3-qa-agent, 2026-09-14) — ⚠️ 재검수 필요**: CRITICAL/HIGH 없음(데이터
+유실·보안·권한 문제 없음, A/B/C 핵심 로직은 현재 UI 경로 내에서 전부 안전 확인됨). MEDIUM
+3건: ①터치타겟(`.btn-doc-edit-chip` 24px < 44px, ui-mobile.md GATE C) ②액션 간 동시성
+미보호(수정/삭제/전체삭제가 서로를 막지 않아 lost-update race 가능) ③외국인증명 Migration
+#360 이전 레거시(`foreign_type=NULL`) 계정 대상 오펀 드롭 시 Storage 영구 고아파일 위험
+(현재 UI로는 도달 불가, 서버 자체 방어 없음).
+
+**후속 수정(이 세션 즉시 반영)**:
+- ②(필수) — `identityDocsBusy`/`foreignDocsBusy` `$derived` 신설(각각
+  `isDeleting*||isMerging*`)해 "수정 시작"·"삭제 요청"·"병합취소"·전체삭제 버튼과 병합
+  슬롯 input을 전부 이 단일 플래그로 통일 게이팅 — 한 시점에 해당 문서유형의 mutating
+  작업 1건만 진행 가능하도록 클라이언트에서 직렬화. `autoSubmitIdentityMergeFile`/
+  `autoSubmitForeignMergeFile`에 시작시점 `editTypeAtStart` 스냅샷 추가해, 요청 완료 시
+  그 사이 사용자가 다른 유형으로 전환하지 않았을 때만 패널을 닫도록(방어적 이중장치).
+  삭제 확인 토스트의 onClick에도 재확인 가드 추가(토스트 대기 중 다른 작업 시작 방지).
+- ③(권고, 낮은위험) — `upload-doc/+server.ts` 병합 계산에서 타입 정보 없는 고아 항목을
+  DB엔 보존하지 않되(기존과 동일) `oldUrlsToDelete`에 포함시켜 Storage에서라도 정리되도록
+  수정(이전엔 완전히 누락되어 Storage에 영구 고아로 남았음).
+- ①(보류) — `.btn-doc-edit-chip`/`.btn-doc-delete` 시각 크기는 유지. 두 버튼이 한 행에
+  6px 간격으로 나란히 배치돼 있어, 각각을 44×44px 히트존으로 단순 확대하면 두 히트존이
+  크게 겹쳐 "수정"을 누르려다 파괴적 액션인 "삭제"를 오폭할 위험이 생김(반대도 마찬가지) —
+  이 트레이드오프는 QA 리포트도 "비개발자 의사결정 영역"으로 명시. 이미 이 파일 전반에
+  24~28px 칩(`.doc-type-badge`·`.btn-addr-edit`·기존 `.btn-doc-delete`)이 동일 관례로
+  쓰이고 있어 그대로 유지 — Stephen이 오폭 위험을 감수하고 확대를 원하면 별도 지시 필요.
+
+**검증(재수정 후)**: `npx svelte-check` 신규 에러·경고 0건(전후 동일). Claude Browser로
+게이팅 동작 재확인 시도(요청이 로컬 dev 서버에서 매우 빨리 완료돼 "진행 중" 순간의 DOM
+비활성 상태를 브라우저 자동화로 직접 캡처하지는 못했음 — 코드 검토로 `isMergingIdentity=
+true`가 fetch 호출 전 동기적으로 먼저 설정됨과 각 버튼의 `disabled={identityDocsBusy}`
+바인딩을 직접 확인). 데이터 무결성은 재확인(단일수정 후 배열 개수 그대로 유지 등).
+
+**GATE E 2차(@sp3-qa-agent 재검수, 2026-09-14) — ✅ 조건부 통과(Conditionally passes)**:
+CRITICAL/HIGH 없음. ②동시성 게이팅·③오펀드롭 방어 둘 다 코드 추적으로 정확히 해소됨을
+재확인($derived 선언 순서 정상, 모든 identity/foreign 문서 mutating UI 요소가 예외 없이
+통합 플래그 사용, 초기등록 폼의 독립 플래그와 혼선 없음). 부가 발견(LOW, 비블로킹) — 본인증명
+병합 슬롯의 드래그앤드롭 경로가 `disabled` 속성이 아니라 `aria-disabled` CSS(`pointer-events:
+none`)에만 의존해 우연히 막히고 있던 것을 지적 → 즉시 `autoSubmitIdentityMergeFile`/
+`autoSubmitForeignMergeFile` 함수 진입점에 명시적 `identityDocsBusy`/`foreignDocsBusy` 재확인
+가드 추가로 방어적 이중장치 보강(추가 수정, 재-재검수 불필요 수준의 경미한 하드닝). 서버측
+낙관적 잠금 부재(다중 탭/기기 동시편집)는 이번 클라이언트 전용 완화의 알려진 잔여 리스크로
+명시(결제/예약 등 CRITICAL 도메인이 아닌 자기서비스 신분증 업로드라 허용 가능한 수준으로 QA
+판단). ①터치타겟 항목은 "문서화 후 Stephen 위임"이 정당한 해소로 QA 동의하되, 44px를
+만족하면서도 오폭 위험이 없는 대안(예: "⋮" 더보기 메뉴로 수정/삭제를 묶어 44px 단일
+버튼화)도 함께 제시하도록 권고 — Stephen에게 두 선택지(①현재 크기 유지 ②더보기 메뉴
+통합)로 질문한 결과 **"현재 크기 유지(권장)"로 확정**(2026-09-14). 코드 변경 없음 — GATE E
+전 항목 최종 종결.
+
+**git commit은 Stephen 직접 실행.**
+
+---
+
+## DONE — 외국인증명 콤보 개별삭제 후 "추가 등록"(미등록 슬롯) 노출 누락 결함 수정 (2026-09-14, 이 세션 단독 수행)
+
+**요청(Stephen)**: 외국인증명 목록에서 "입국 E-Ticket"이 등록완료 목록에서 빠져있는데
+(직전 QA 실사용 테스트 중 개별삭제로 제거됐던 상태), 미등록 항목을 다시 등록할 업로드
+카드 UI 자체가 노출되지 않는 원인 분석 요청 — "미등록 목록 업로드 카드 UI도 노출되어
+있어야 정상임."
+
+**근본원인**: 이번 세션에서 외국인증명 개별 삭제/개별 수정 기능을 신설하면서, 외국인증명의
+병합(merge) 슬롯 UI를 identity의 "개별 수정(단일 유형)" 절반만 이식하고 identity가 원래
+가진 "추가 등록(미등록 유형 전체)" 절반은 이식하지 않았음 — 즉 `identitySingleEditType`
+쪽만 대응하는 `foreignSingleEditType`을 만들었을 뿐, `identityUnregisteredTypes`에 대응하는
+"현재 콤보 기준 미등록 유형" 개념 자체가 외국인증명 쪽엔 없었다. 그 결과 개별삭제로 콤보에서
+1개가 빠지면(4개 중 3개만 등록) 그 빈 자리를 채울 업로드 슬롯이 UI 어디에도 없어 "재등록"
+(전체 재업로드) 외엔 되돌릴 방법이 없는 결함이었다 — 이번 세션에서 개별삭제 기능을 만들며
+새로 발생시킨 설계공백.
+
+**수정**: `foreignTypeList`(현재 등록된 유형 배열, `profile?.foreign_type` 기준 `$effect`
+동기화 — identity의 `identityType`과 동일 패턴) 신설 + `foreignUnregisteredTypes`
+(identity의 `identityUnregisteredTypes`와 동일 원리, "현재 콤보 기준 미등록 유형") +
+`foreignMergeTargetTypes`(identity의 `identityMergeTargetTypes`와 동일 — 개별수정 모드면
+그 1개, 아니면 미등록 유형 전체) 3종 파생값 신설. 병합 슬롯 UI를 identity와 동일하게
+`{#each foreignMergeTargetTypes as t}` 반복 렌더링으로 전환(기존엔 `foreignSingleEditType`
+1개만 고정 렌더링). 섹션 노출 조건도 `{#if foreignSingleEditType || foreignUnregisteredTypes.
+length > 0}`로 확장. 서버(`upload-doc/+server.ts`)·삭제 엔드포인트는 이미 제네릭하게
+구현돼 있어 무변경 — 순수 클라이언트 UI 갭 메우기.
+
+**Svelte 5 선언순서 버그 자가발견·즉시수정**: 최초 구현 시 `foreignMergeTargetTypes`를
+`foreignSingleEditType`보다 앞선 위치(line 748 부근)에 배치했다가, `$derived` 초기값
+계산 시점에 아직 선언되지 않은 `let` 변수를 참조해 컴포넌트 마운트 시 즉시 ReferenceError가
+나는 것을 직접 발견 — identity 섹션의 기존 순서(target-types 파생값은 반드시
+`identitySingleEditType` 선언 "이후"에 위치)와 동일하게 재배치해 해결.
+
+**검증**: `npx svelte-check` — 신규 에러 0건, 경고는 403→404(신규 `foreignTypeList` state가
+같은 파일에 이미 존재하는 `identityDocUrls`/`foreignDocUrls` 등과 동일한 "state_referenced_
+locally" 경고 패턴을 그대로 하나 더 발생시킴 — `$effect`로 즉시 재동기화되는 기존 패턴과
+동일해 회귀 아님). Claude Browser 재현: "입국 E-Ticket" 미등록 슬롯이 "추가 증명서 등록"
+섹션에 정상 노출 → 파일 선택 즉시 버튼 없이 자동등록 → 4/4 전체 등록 완료, 등록완료 목록
+정상 반영, "추가 증명서 등록" 섹션 자동 소멸(전부 등록됨) 확인. URL 무변경.
+
+**GATE E (@sp3-qa-agent, 2026-09-14) — ✅ 통과**: 6개 검증항목 전부 CONFIRMED — 선언순서
+정확(`foreignTypeList`<`currentForeignTypes`<`foreignSingleEditType`<`foreignUnregisteredTypes`
+<`foreignMergeTargetTypes`, 동일 버그클래스 재발 없음 재확인), "추가 등록" 부분제출 정상(전체
+필수 아님), "개별 수정" 무회귀, 섹션 가시성/재등록폼과의 상호배타 정상, `foreignStayType`이
+$effect로 재동기화되지 않는데도 삭제/병합 경로가 항상 `p_foreign_stay_type: null`을 넘겨
+RPC의 COALESCE로 실제 DB값이 변하지 않아 드리프트 없음(우연한 안전장치, 향후 이 경로에
+실제 stay_type 값을 넘기게 되면 재확인 필요하다고 QA가 명시). svelte-check 신규 경고 정확히
+1건(예상과 일치, `foreignTypeList` 초기화 — 기존 패턴과 동일). MEDIUM 비블로킹 1건(기존과
+동일한 터치타겟 논의 — 이미 Stephen이 "현재 크기 유지"로 확정한 사안과 같은 클래스).
+
+**git commit은 Stephen 직접 실행.**
+
+---
+
+## DONE — 병합업로드 섹션 "추가 증명서 등록" 제목 + 구분선 제거 (2026-09-14, 이 세션 단독 수행)
+
+**요청(Stephen)**: 선택영역(`.doc-merge-title` — "추가 증명서 등록"/"OO 재업로드" 제목)과
+그 위 "선"(`.doc-merge-wrap`의 `border-top`)을 불필요 요소로 제거. GATE B 질문 — 두 클래스가
+본인증명·외국인증명 병합업로드 섹션에서 동일하게 공유되는 구조라(이번 세션에서 외국인증명을
+본인증명과 동일 구조로 신설했기 때문) 범위를 물었고 **"둘 다 제거(일관성 유지)"로 확정**.
+
+**수정**: `.doc-merge-title` `<p>` 엘리먼트를 본인증명·외국인증명 양쪽 마크업에서 제거.
+`.doc-merge-wrap`의 `border-top: 1px solid #ECEBF4` 제거(간격은 유지 — margin-top/
+padding-top 그대로). `.doc-merge-head`는 "개별 수정" 모드의 "취소" 버튼만 담을 때
+`justify-content: space-between`(제목과 버튼을 양끝 정렬하던 목적)이 더 이상 의미가 없어져
+`flex-end`로 변경(취소 버튼이 기존과 동일하게 우측 정렬 유지). "추가 등록" 모드(제목 없이
+슬롯만)에서는 `.doc-merge-head` 자체를 렌더링하지 않도록 `{#if identitySingleEditType}`/
+`{#if foreignSingleEditType}` 조건부로 전환. 이제 사용하지 않는 `.doc-merge-title` CSS
+규칙 삭제.
+
+**검증**: `npx svelte-check` — 신규 에러 0건, 경고 총 개수 동일(404, 삭제한 CSS가 unused
+selector로 잡히지 않음 확인 — 마크업도 함께 제거했으므로 애초에 미스매치 없음). Claude
+Browser로 본인증명·외국인증명 양쪽 탭 스크린샷 확인 — 제목 텍스트·구분선 모두 사라지고
+업로드 슬롯이 등록완료 목록 바로 아래 여백만 두고 노출됨.
+
+**GATE E (@sp3-qa-agent, 2026-09-14) — ✅ 통과**: 6개 검증항목 전부 확인 — 취소버튼 위치·
+동작 유지, `.doc-merge-title` 잔존 참조 0건, `.doc-merge-head` 내부 다른 요소 누락 없음,
+`.doc-slot-grid` 무조건 렌더 유지, svelte-check unused-selector 경고 없음, 순수 UI/CSS
+변경으로 상태·RPC·제출 로직 전혀 미수정 확인. CRITICAL/HIGH/MEDIUM/LOW 없음.
+(QA 범위 외 참고: 같은 파일에 이번 세션 이전 작업분 커밋 대기 중 — 이번 리뷰 대상과 무관.)
+
+**git commit은 Stephen 직접 실행.**
+
+---
+
+## NOW — 외국인증명 최초등록/재등록도 "버튼 없는 자동 등록"으로 통합 (2026-09-14, 이 세션 단독 수행)
+
+**요청(Stephen)**: 외국인증명 최초등록 화면(체류기간 선택 + 4슬롯, 아직 아무 것도 등록 안 된
+상태)에 파일 1개를 선택해도 "자동 목록 등록" 인터랙션이 동작하지 않는다는 리포트 —
+"본인증명처럼 업로드 카드에 파일 등록 시 자동 목록 등록이 되야 해!!!!"
+
+**배경(왜 이전에 안 됐는지)**: 이번 세션에서 외국인증명에 이미 두 차례 "버튼 없는 자동
+등록"을 적용했으나(① "등록하기" 버튼 제거 + 콤보 4개 전부 채워지면 자동제출, ② 등록완료
+후의 "추가 등록"/"개별 수정" 병합 슬롯), ①은 여전히 **"4개 전부 채워야" 자동제출되는
+"전체 콤보 필수"** 제약이 남아있어 슬롯 1개만 선택하면 아무 반응이 없었다 — 본인증명의
+"파일 1개 선택 = 그 1개만 즉시 등록"과는 본질적으로 다른 동작이었다. Stephen이 이번에
+이 제약 자체를 폐기하도록 명시적으로 지시.
+
+**수정 — 최초등록/재등록 폼을 병합(merge) 자동제출 패턴으로 완전 통합**:
+- `autoSubmitForeignMergeFile`에 `foreign_stay_type`을 매 요청마다 명시적으로 포함하도록
+  변경(기존엔 RPC의 COALESCE로 기존값 보존에 의존 — 최초등록 시점엔 DB에 기존값 자체가
+  없어 COALESCE만으론 채워지지 않으므로 명시적 전송 필수). 성공 시 `showForeignForm = false`
+  추가(최초등록/재등록 슬롯에서 호출된 경우 즉시 "등록완료" 화면으로 전환).
+- 최초등록/재등록 폼의 슬롯 마크업·트리거를 병합 슬롯과 완전히 동일한 패턴으로 교체
+  (`handleForeignMergeSlotFileChange` 재사용) — 로컬 스테이징(선택 후 제거 가능한 미리보기)
+  개념 자체를 제거, 파일 선택 즉시 그 1건만 자동 병합 제출.
+- 이제 불필요해진 구코드 전부 제거: `foreignSlotFiles`/`foreignSlotPreviews`/
+  `foreignDragOverSlot`/`isUploadingForeign`/`foreignError`/`resetForeignSlots`/
+  `setForeignSlotFile`/`handleForeignSlotFileChange`(구버전)/`removeForeignSlotFile`/
+  `handleForeignSlotDragOver`/`handleForeignSlotDragLeave`/`handleForeignSlotDrop`/
+  `uploadForeignDoc`(콤보 일괄제출 함수) — 전부 병합 함수 하나로 대체됐으므로 삭제.
+- `requestForeignReRegister()` 확인 토스트("기존 정보를 삭제합니다") 제거 — 이제 "재등록"을
+  눌러도 즉시 아무것도 삭제되지 않고(슬롯이 열릴 뿐), 실제로 파일을 선택한 슬롯만 그 자리에서
+  개별 교체되므로 기존 "전체 삭제" 경고 문구가 더 이상 사실과 맞지 않아 문구째로 제거(다른
+  유형은 그대로 보존됨 — 개별 수정과 동일 안전성).
+
+**⚠️ 알려진 한계(신규 도입, 문서화 후 보류)**: 이미 특정 체류기간(예: 단기)으로 콤보가
+등록된 상태에서 "재등록"을 누른 뒤 체류기간을 다른 쪽(장기)으로 전환해 그 슬롯에 파일을
+채우면, 병합 로직상 반대 체류기간의 기존 항목이 자동으로 정리되지 않는다(예전 배치제출
+방식은 전체교체라 이 경우 자동 정리됐음 — 이번 통합으로 상실된 안전장치). 다만 완전히
+방치되는 것은 아니다 — 기존 항목(최대 4개) + 새 체류기간 항목이 합쳐지면 서버의
+`MAX_FOREIGN_FILES(4)` 초과 체크가 걸려 "최대 4개까지 등록할 수 있어요" 에러로 자동
+차단되므로(데이터 침묵 오염 없음, 명확한 에러로 안내), 사용자는 반대 체류기간의 기존
+항목을 먼저 개별삭제해야 한다는 사실을 에러로 알게 된다 — 완벽한 UX는 아니나 데이터
+무결성은 안전. 필요 시 "체류기간 전환 시 자동 안내/정리" 별도 개선 검토 가능.
+
+**검증**: `npx svelte-check` — 신규 에러 0건, 경고 총 개수 동일(404). 삭제한 식별자 전체
+재검색으로 잔여 참조 0건 확인. Claude Browser 실사용 검증(Stage DB 직접 SQL 조회로 최종
+데이터까지 확인):
+1. 기존 등록된 외국인증명(1건)에서 "재등록" 클릭 → 확인 토스트 없이 즉시 슬롯 노출 →
+   1개 슬롯만 파일 선택 → 자동 등록 → 등록완료 화면 전환 확인(나머지 3개는 "추가 등록"에).
+2. 전체 삭제로 완전 첫 등록 상태 재현 → 슬롯 1개만 파일 선택 → 자동 등록 →
+   `SELECT foreign_stay_type, foreign_type, foreign_doc_urls FROM user_profiles`로 DB
+   직접 조회해 `foreign_stay_type:"long"`이 정확히 저장됐음을 실측 확인(COALESCE만으론
+   불가능했던 부분 — 명시적 전송이 실제로 필요했음을 검증).
+
+**git commit은 Stephen 직접 실행.**
+
+---
+
+## DONE — 외국인증명 자동등록 통합 @sp3-qa-agent 검수 후속수정 3건 + HIGH DB 마이그레이션 (2026-09-14, 이 세션 단독 수행)
+
+**QA 1차 검수 결과(⚠️ 수정 후 재검수 필요)**: HIGH 1건 + MEDIUM 3건 발견.
+
+**즉시 수정(클라이언트, 3건)**:
+- MEDIUM: 단기/장기 체류기간 라디오가 `foreignDocsBusy`로 잠기지 않아 업로드 진행 중에도
+  전환 가능하던 결함 → `disabled={foreignDocsBusy}` 추가 + `:disabled` 스타일(`.active`
+  상태와 충돌하지 않도록 `:not(.active)` 스코프).
+- MEDIUM: 확인 토스트 제거 후 최초등록/재등록 폼에 취소·닫기 수단이 전혀 없던 결함 →
+  등록된 문서가 있을 때만(되돌아갈 곳이 있을 때만) "취소" 버튼 노출(`cancelForeignReRegister`).
+- MEDIUM: 체류기간 전환 중 부분제출 시(`passport_photo`처럼 단기/장기 유형 목록에 겹치는
+  값 존재) 4개 상한 가드를 우회한 채 `foreign_stay_type`과 실제 등록 문서 구성이 조용히
+  불일치하게 되는 경로 발견 → `autoSubmitForeignMergeFile`에 사전 가드 추가: 현재 등록된
+  유형 중 현재 선택된 체류기간 콤보에 속하지 않는 게 하나라도 있으면 제출 자체를 차단하고
+  "기존 문서를 먼저 삭제해 주세요" 안내. Claude Browser + Stage DB 직접조회로 정확히
+  이 시나리오를 재현해 요청이 아예 발생하지 않음(DB 무변경) 확인.
+
+**HIGH 수정(DB 마이그레이션, Stage+Production 적용 완료)**: `update_user_doc_url` RPC의
+foreign 분기가 문서 개수와 무관하게 매 호출마다 무조건 `foreign_verified_at = NOW()`를
+기록하고 있어, 이번 세션에서 외국인증명을 "1개씩 즉시 등록"으로 바꾼 뒤로는 4종 중 1개만
+등록해도 CMS 상담패널(`chat/CustomerDetailPanel.svelte`)에 "완료"로 잘못 표시되는 회귀가
+있었음(컴플라이언스 성격 — 외국인 신분확인 완료 여부 오표시). Stephen 확인 후 즉시
+마이그레이션 적용 — `foreign_verified_at`을 "제출 배열 길이가 4(콤보 완성)일 때만 NOW(),
+미달이면 NULL로 비움"으로 변경(부수 효과: 개별삭제로 4→3이 되면 자동으로 NULL 복귀 —
+"완료" 배지가 항상 실제 상태와 일치하게 됨, 이전엔 삭제해도 예전 시각이 남아있던 것도 함께
+해소). identity 분기는 무변경.
+- 마이그레이션 파일: `supabase/migrations/20260914030000_495_foreign_verified_at_combo_complete_only.sql`
+- Stage(ezyvffjvuwmtuhpxdjrw) 적용 확인: `pg_get_functiondef` 조회로 새 CASE 문 반영 확인.
+- Production(vnbpmvxruyciuuaermyh) 적용 확인: 동일 방식으로 반영 확인.
+- Stage 실사용 검증: 2/4 등록 시점 `foreign_verified_at IS NULL` 실측(SQL 직접조회) →
+  4/4 완성 시점 정확히 타임스탬프 기록 실측 확인.
+
+**검증**: `npx svelte-check` 신규 에러 0건, 경고 총 개수 동일(404). Claude Browser +
+Stage DB 직접조회로 3개 클라이언트 수정 + 1개 DB 수정 전부 실사용 재현·검증 완료.
+
+**git commit은 Stephen 직접 실행. DB 마이그레이션(Migration #495)은 Stage·Production 이미
+반영 완료 — git commit과 별개로 이미 라이브 적용됨(Supabase 마이그레이션은 코드 커밋과
+무관하게 이 세션에서 직접 적용, 서비스 운영 규칙상 정상 — RPC 로직 자체만 바뀌고 스키마
+변경은 없어 애플리케이션 코드 배포 여부와 독립적으로 항상 이전보다 정확한 동작만 함).**
+
+**GATE E 2차(@sp3-qa-agent 재검수) — ⚠️ 재검수 필요 → 즉시 수정**: 위 3건 MEDIUM+1건 HIGH는
+전부 정확히 해소됨을 재확인했으나(선언순서·소스순서 특이도까지 코드 추적으로 검증), 이번
+수정 자체가 만든 **신규 MEDIUM 1건**을 발견 — `cancelForeignReRegister()`가
+`requestForeignReRegister()`와 비대칭으로 `foreignStayType`을 리셋하지 않아, "재등록 진입
+→ 라디오만 바꿈 → 제출 없이 취소" 경로로 `foreignStayType` 오염이 남고, 실제 등록 문서가
+`passport_photo` 1건뿐인(단기/장기 공통 유형) 상태에서는 이 오염이 항목4 가드(staleTypes)
+까지 우회해 DB에 체류기간-문서 불일치가 반영될 수 있는 경로를 재현 확인. **즉시 수정**:
+`cancelForeignReRegister()`에도 `requestForeignReRegister()`와 동일하게
+`foreignStayType`을 `profile.foreign_stay_type` 기준으로 리셋하는 코드 추가. Stage에서
+정확히 QA가 지목한 시나리오(long+passport_photo만 등록 → 재등록 → 단기 전환 → 취소)로
+재현·수정 확인 — 취소 후 "추가 등록" 섹션이 올바르게 장기 콤보 기준 남은 슬롯(외국인등록증
+앞면/뒷면/외국인사실증명서)을 보여줌을 실측 확인(수정 전이었다면 단기 슬롯이 잘못
+노출됐을 것).
+
+**QA의 추가 지적사항 처리**:
+- Production Migration #495 적용 여부: 이 QA 서브에이전트는 Supabase MCP 도구가 없어
+  독립검증 불가했다고 보고 — 그러나 메인 세션은 이미 `execute_sql`로 Production
+  (vnbpmvxruyciuuaermyh) 직접 조회해 `pg_get_functiondef`에 새 CASE 문이 반영됐음을
+  기존에 실측 확인 완료(위 "HIGH 수정" 절 참고). 서브에이전트 도구 한계일 뿐 실제 미확인
+  상태 아님.
+- TASK.md 상단 "CMS 예약변경/취소" CRITICAL 태스크가 계획 중이던 Migration 번호 `#495`가
+  이 세션이 이미 선점한 번호와 충돌 — 그 태스크의 계획 번호를 `#496`으로 정정(아직 미적용
+  단계라 실제 DB 충돌은 없었음, 문서 정정만).
+- `/api/cms/upload-doc/+server.ts`(CMS 관리자 응급 단일파일 재등록, RPC 미경유 직접
+  update)에 동일 클래스의 `foreign_verified_at` 무조건 세팅 결함이 남아있음을 발견 —
+  이번 세션 범위 밖(요청받지 않은 별도 파일)이라 직접 수정하지 않고 `spawn_task`로 후속
+  작업 카드 등록(task_d37d0806).
+
+**검증**: `npx svelte-check` 신규 에러·경고 0건(전후 동일 1 error/404 warnings).
+
+**GATE E 3차(@sp3-qa-agent 최종 재검수) — ✅ PASS**: `cancelForeignReRegister`/
+`requestForeignReRegister` 대칭성 확인, QA 지목 재현 시나리오(long+passport_photo만 등록
+→ 재등록 → 단기 전환 → 취소) 코드 재추적으로 완전 해소 확인, 적대적 재탐색으로도 동일
+클래스 잔여 결함 없음 확인. 이로써 외국인증명 자동등록 통합 feature arc(버튼 제거 자동
+등록·개별 삭제/수정·콤보 복구·HIGH DB 마이그레이션·MEDIUM 4건) 전체 GATE E 최종 통과.
+
+**git commit은 Stephen 직접 실행.**
+
+---
+
+## DONE — `.doc-file-btn` 모바일 상하 폭(패딩) 축소, PC 반응형 보존 (2026-09-14, 이 세션 단독 수행)
+
+**요청(Stephen)**: "선택영역 모바일 반응형의 본인증명파일 등록 버튼 UI '상하' 폭을 줄일 것:
+패딩값이 존재하면 줄일 것. 1. pc반응형은 기존 그대로 보존할것." (선택영역: 미등록 슬롯
+`<span class="doc-file-btn">` — 예시로 "학생증" 슬롯이 스크린샷에 표시됨)
+
+**공유 클래스 스코프 확인**: `.doc-file-btn`은 단일 정의(PC/모바일 분기 없음, 지금까지)로
+본인증명 메인 업로드·본인증명 병합(개별수정/추가등록) 업로드·외국인증명 업로드 3곳
+(front-uiux.md §22 "파일등록 UI 컴포넌트" 표준 컴포넌트, `doc-slot-grid > doc-slot >
+doc-file-label > span.doc-file-btn`)이 전부 공유한다. 요청 문구·선택요소는 본인증명
+기준이었으나, 클래스를 분기하면 §22 표준 컴포넌트의 시각 일관성이 깨지므로(같은 UI를 두
+섹션이 다르게 보이게 됨) 이 CSS 변경은 3곳 전체(본인증명 2곳 + 외국인증명 1곳)에 동일하게
+적용됨 — 셋 다 이 요청과 무관한 별도 로직·데이터 변경은 없음, 순수 시각적 축소.
+
+**구현**: 이 파일에 이미 존재하는 `.doc-slot-grid`(모바일 1열→PC 2열)와 동일한 "모바일
+베이스값 + 별도 `@media (min-width: 768px)` 블록에서 PC값 복원" 패턴을 그대로 재사용.
+- 모바일(베이스) `.doc-file-btn`: `padding: 16px` → `padding: 10px 16px`,
+  `min-height: 100px` → `min-height: 76px` (패딩만 줄이면 `min-height`가 여전히
+  100px 바닥값으로 작용해 육안상 변화가 없어, 상하 부피 축소 체감을 위해 함께 조정 —
+  요청 문구 "패딩값이 존재하면 줄일 것"의 취지를 실제로 구현하기 위한 부수 조정, Stephen에게
+  응답으로 투명하게 설명).
+- PC(`@media (min-width: 768px)`, 기존 `.doc-slot-grid` 2열 전환과 같은 블록에 추가):
+  `.doc-file-btn { padding: 16px; min-height: 100px; }` — 기존 값 그대로 복원해 요청 1
+  ("PC반응형은 기존 그대로 보존") 충족.
+
+**검증**: `npx svelte-check` — 대상 파일 신규 에러·경고 0건(기존 vite.config.ts vitest
+타입 에러 1건은 무관한 사전 존재 이슈). DB/RPC/마이그레이션 변경 없음(순수 CSS).
+
+**GATE E (@sp3-qa-agent, 2026-09-14) — ✅ 통과**: PC(≥768px) override가 소스 순서·
+동일 specificity상 확실히 우선 적용돼 원본값(padding:16px, min-height:100px) 완전 보존
+재확인. 공유 클래스 3곳(본인증명 메인·개별수정/추가등록 병합·외국인증명) 동일 적용은
+의도된 설계로 부작용 없음 확인. `.doc-file-btn-filled`(등록완료 카드)는 별도 클래스라
+100px 그대로 유지, 회귀 없음. min-height는 하한선이라 콘텐츠 클리핑 구조적으로 불가능,
+44px 터치타겟 기준 충분히 충족(76px). svelte-check 신규 에러·경고 0건. 수정 필요 항목 없음.
+(QA 범위 외 관찰: 같은 파일에 커밋 대기 중인 별건 diff(본인증명 병합업로드 기능 등)는
+이번 CSS 요청과 무관해 검수 대상에서 제외 — 이미 별도 GATE E로 기록된 건.)
+
+**git commit은 Stephen 직접 실행.**
