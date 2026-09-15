@@ -9,7 +9,7 @@
   import { supabase } from '$lib/services/supabase';
   import { csToast } from '$lib/utils/toast';
   import { isLockerHour } from '$lib/utils/lockerTimeRange';
-  import { calcShippingFee, calcShippingDiscountRate, isFreeDeliveryCouponBlocked, computeReturnVisibleTabs, type ShippingFeeItem, type DeliveryFeeDiscountTier, type DiscountConditionItem } from '$lib/utils/cartShippingFee';
+  import { calcShippingFee, calcShippingDiscountRate, applyShippingDiscount, isRoundTripShippingFee, isFreeDeliveryCouponBlocked, computeReturnVisibleTabs, type ShippingFeeItem, type DeliveryFeeDiscountTier, type DiscountConditionItem } from '$lib/utils/cartShippingFee';
   import { calcRentalDays, calcRentalFee, calcRentalPeriodParts, computeCartTotalMinutes } from '$lib/utils/cartRentalFee';
   import { toDeliveryMethod, isMethodSelectionValid } from '$lib/utils/cartMethodSelection';
   import {
@@ -1141,6 +1141,20 @@
     }, 0)
   )
 
+  // otSaleOnlySubtotal: otRentalOnlySubtotal의 반대(판매전용상품만 합산) — 2026-09-15
+  // Stephen 확정. "판매상품 구매"가 유일한 조건인 배송료 우대설정 티어는 대여상품 소계가
+  // 아니라 이 값(판매상품 구매액 자체)으로 금액 문턱을 판정해야, "판매상품 5만원 이상 구매 시
+  // 무료배송" 같은 CMS 문구와 실제 동작이 일치한다(calcShippingDiscountRate 참고).
+  const otSaleOnlySubtotal = $derived(
+    itemsState.reduce((sum, it) => {
+      if (it.deleted || !it.checked) return sum
+      const line = groupsById.get(it.id)
+      const product = line?.product as ProductRow & { sale_only?: boolean | null } | undefined
+      if (!product?.sale_only) return sum
+      return sum + (itemRentalFee(line, it) + itemOptionsAmount(line, it)) * Math.max(line?.qty ?? 1, 1)
+    }, 0)
+  )
+
   // 배송비 할인조건(calcShippingDiscountRate)은 "총 대여기간" 표시(§2026-09-03 12시간 블록
   // 재설계)와 무관한 별도 소비처 — 기존 달력일수 기준(calcRentalDays) 그대로 유지.
   const checkedDiscountItems = $derived<DiscountConditionItem[]>(
@@ -1157,6 +1171,7 @@
       (data.discountTiers as DeliveryFeeDiscountTier[] | undefined) ?? [],
       otRentalOnlySubtotal,
       checkedDiscountItems,
+      otSaleOnlySubtotal,
     )
   )
 
@@ -1357,8 +1372,14 @@
   // 2026-08-30: rental_method_options.fee_amount(방식별 기본배송비) 경로는 CMS에 입력 UI
   // 자체가 없어 항상 0으로 방치돼 있던 죽은 코드였음(감사 RSC-C3) — 배송비는 전부
   // rental_shipping_settings(왕복/배송/반납요금) + 배송료 우대설정으로만 계산하도록 정리.
+  //
+  // otIsRoundTripShipping: 지금 청구될 배송비가 왕복(수령·반납 둘 다 배송)인지 — "50% 할인"은
+  // 왕복요금에만 적용되고 편도(배송만/반납만)요금에는 적용되지 않는다(Stephen 확정,
+  // 2026-09-15). "무료"(discount_rate=1)는 요금 종류 무관하게 항상 적용된다.
+  // applyShippingDiscount()가 이 구분을 판정한다(cartShippingFee.ts 참고).
+  const otIsRoundTripShipping = $derived(isRoundTripShippingFee(checkedShippingItems))
   const otDeliveryFee = $derived(
-    Math.round(otShippingFee * (1 - otShippingDiscountRate))
+    applyShippingDiscount(otShippingFee, otShippingDiscountRate, otIsRoundTripShipping)
   )
 
   // 택배 휴무일 캘린더 제어(2026-08-24) — 마스터 토글 OFF면 서버가 이미 빈 배열을 내려줌
@@ -1621,6 +1642,10 @@
     return n === 0 ? '0' : n.toLocaleString('ko-KR')
   }
 </script>
+
+<svelte:head>
+  <title>장바구니 — CRAZYSHOT</title>
+</svelte:head>
 
 <!-- ══ 공통 Sub GNB (PC + 모바일) ══ -->
 <SubGnb title="Cart" mobileOnly />

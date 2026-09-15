@@ -39,7 +39,7 @@
 | 배송 반납 허용 지정 | `rental_method_options.is_delivery_type` (Migration #440, 2026-09-04 라벨정정) | `s-chip` 토글 (L611-636) | 이 방식이 **수령이 아닐 때** 반납 콤보 목록에서 제외 | Migration #444로 `is_bulk_delivery`와 동시 ON 허용(과거 상호배타 가드 제거) |
 | 배송 설정 — 요금 3종 | `rental_shipping_settings.enable_round_trip/round_trip_fee`, `.enable_delivery/delivery_fee`, `.enable_return/return_fee` | `s-chip`+숫자입력, blur 자동저장 (L410-493) | 배송대여 왕복/편도/반납 요금(원). 싱글톤 1행 | Stage: 왕복 8,000 / 배송 4,000 / 반납 4,000 (전부 활성) |
 | 배송 안내문 | `rental_shipping_settings.shipping_guide` | textarea+저장버튼 (L497-522) | 고객노출 배송 안내 문구 | — |
-| 배송료 우대설정 | `delivery_fee_discount_tiers.min_rental_amount/condition_types[]/discount_rate/is_active` | 금액입력+조건 다중선택(AND)+우대옵션 단일선택, 최대 5개 (L642-752) | 대여금액·조건 충족 시 배송비 할인. 다중매칭 시 최유리 1개만(스태킹 없음) | `long_term_rental`/`sale_only_purchase`/`rental_item` 3종 조건 |
+| 배송료 우대설정 | `delivery_fee_discount_tiers.min_rental_amount/condition_types[]/discount_rate/is_active` | 금액입력+조건 다중선택(AND)+우대옵션 단일선택, 최대 5개 (L642-752) | 대여금액·조건 충족 시 배송비 할인. 다중매칭 시 최유리 1개만(스태킹 없음) | `long_term_rental`/`sale_only_purchase`/`rental_item` 3종 조건. 우대옵션 중 `기본왕복배송요금`(discount_rate=0)은 2026-09-15 Stephen 확정으로 신규 등록 비활성화(픽커 disabled + 서버단 차단) — `calcShippingDiscountRate()`의 `best` 초기값이 0이라 등록해도 실질 효과가 전혀 없었기 때문. 기존 데이터·라벨 매핑은 제거하지 않음(호환 유지) |
 | 휴무일 제어 옵션 | `delivery_cutoff_settings.enable_prev_day_check`(마스터)/`.enable_fixed_holidays`/`.enable_manual_holidays` | `s-chip` 3종, 마스터 off 시 하위 disabled (L772-796) | 택배 수령·반납 캘린더 휴무일 기반 제한 마스터+하위 스위치 | Stage: 3개 전부 false(배포 후 미사용 기본값) |
 | 법정공휴일(읽기전용) | `public_holidays`(`holiday_type='national'`) | 읽기전용 리스트+"지금 동기화" 버튼(공공데이터포털 API) | 자동 동기화 국가 공휴일 | CMS에서 개별 삭제 불가 |
 | 임시 휴무일 관리 | `public_holidays`(`holiday_type='manual'`) | 날짜+사유 입력, 개별 삭제 가능 | 관리자 수동 등록 임시 휴무일 | — |
@@ -66,7 +66,7 @@
 | `rental_method_options.is_courier_dependent` | `isCourierDependent(m)` — `cart/+page.svelte:104-106` | 캘린더 휴무일 차단(`CalendarGrid.isDateDisabled`, `courierClosedMap` 대조). `is_bulk_delivery`와 독립이지만 시간선택 숨김 조건에도 함께 관여 |
 | `rental_method_options.is_delivery_type` | `isDeliveryTypeMethod(m)`(`+page.svelte:97-99`) + `computeReturnVisibleTabs()`(`cartShippingFee.ts:161-171`) | 반납 콤보 목록 필터링(수령이 이 방식이 아닐 때만 제외) + `calcRentalFee`의 `deliveryLocked` 12h블록 우회 판정 + `calcShippingFee` 입력값(pickupIsDelivery/returnIsDelivery, `cart/+page.svelte:982-983` — 2026-09-06부터, 위 `is_bulk_delivery` 행 참고)(**요금 관련 판정은 전부 `is_bulk_delivery`가 아니라 이 플래그 기준** — `rental-fee-policy.md` §2 참고) |
 | `rental_shipping_settings.{enable_round_trip,round_trip_fee,enable_delivery,delivery_fee,enable_return,return_fee}` | `calcShippingFee()` — `cartShippingFee.ts:40-65` | 3-way 배타 규칙으로 왕복/배송/반납 요금 중 최대 1개 산출 → `otShippingFee` |
-| `delivery_fee_discount_tiers.{min_rental_amount,condition_types,discount_rate}` | `calcShippingDiscountRate()` — `cartShippingFee.ts:100-124` | `otShippingDiscountRate` → `otDeliveryFee = round(otShippingFee × (1-rate))` |
+| `delivery_fee_discount_tiers.{min_rental_amount,condition_types,discount_rate}` | `calcShippingDiscountRate()` + `applyShippingDiscount()`/`isRoundTripShippingFee()` — `cartShippingFee.ts` | `otShippingDiscountRate` → `otDeliveryFee = applyShippingDiscount(otShippingFee, otShippingDiscountRate, otIsRoundTripShipping)`. 금액 문턱 기준: `condition_types`가 `sale_only_purchase` 단독인 티어만 `otSaleOnlySubtotal`(판매전용상품 구매액), 그 외(단독 long_term_rental·rental_item, 또는 sale_only_purchase가 다른 조건과 조합된 경우)는 전부 `otRentalOnlySubtotal`(대여상품 소계) — 2026-09-15 Stephen 확정, 판매상품만 구매하고 대여상품이 0원이면 "판매상품 구매" 조건 티어가 절대 매칭 안 되던 회귀 수정. ⚠️ 할인율 적용 범위(2026-09-15 후속 확정): `discount_rate=1`(무료)은 왕복·편도(배송/반납) 요금 종류 무관하게 항상 적용되지만, `discount_rate<1`(예: 50% 할인)은 **왕복요금(수령·반납 둘 다 배송)일 때만** 적용되고 편도요금에는 미적용(정가 그대로 청구) — `isRoundTripShippingFee(checkedShippingItems)`로 판정 |
 | `rental_consent_items.{content,is_active,display_order}` | `agreed` 파생 — `cart/+page.svelte:729-733` | 등록된 항목 전부 개별 체크해야 `canProceed`/`readyToSubmit=true`, 미충족 시 제출 버튼 비활성 |
 | `rental_period_options.*` | 없음(카트 미소비, grep 0건) | 없음 — 상품상세 정보성 칩 표시 외 아무 영향 없음 |
 
@@ -134,7 +134,7 @@
 
 ---
 
-*rental-cms-settings.md v1.2 | Harness Flow v3.2 | 2026-09-05 신설 — CMS 대여관리 설정
+*rental-cms-settings.md v1.5 | Harness Flow v3.2 | 2026-09-05 신설 — CMS 대여관리 설정
 15개 이상 항목에 대한 공식 문서 공백을 해소하기 위해 작성(같은 플래그를 둘러싼 설계가
 최근 5일 새 5차례 뒤집히며 최소 2건의 실사용 회귀를 유발한 이력 대응). | 2026-09-06
 표A·표B 정정 — `calcShippingFee`(왕복/배송/반납요금) 판정 기준이 `is_bulk_delivery`에서
@@ -143,4 +143,14 @@
 갱신 이전 세션에서 완료·검증됨). | 2026-09-06(같은 날 후속) "알려진 갭" 첫 항목을
 ✅ 해소 완료로 정정 — hold 예약 통합패널 미저장 문제가 이 문서 작성 이후 별도 세션의
 "예약신청 확인/수정 진입경로 신설" 태스크(GATE E 통과)로 이미 해소돼 있었음(단, 원래
-예상됐던 sync_cart_dates() RPC 직접갱신이 아니라 재발행(reissue) 방식으로 구현됨).*
+예상됐던 sync_cart_dates() RPC 직접갱신이 아니라 재발행(reissue) 방식으로 구현됨). | 2026-09-15
+표B 정정 — `calcShippingDiscountRate()`에 `sale_only_purchase` 단독 조건 티어 전용 금액기준
+(`otSaleOnlySubtotal`, 4번째 인자) 추가 — 대여상품 없이 판매상품만 구매하면 "판매상품 구매"
+조건 티어가 절대 매칭될 수 없던 회귀(대여상품 소계=0으로 항상 문턱 미달) 수정. | 2026-09-15
+(같은 날 후속) 표A 정정 — "기본왕복배송요금"(discount_rate=0) 우대옵션 신규 등록을 CMS
+픽커(disabled 처리)와 서버 액션(addDiscountTier) 양쪽에서 비활성화(제거는 아님, Stephen
+지시) — best 초기값(0)을 절대 넘어설 수 없어 등록해도 실질 효과가 없던 죽은 옵션이었음. |
+2026-09-15(같은 날 3차 후속) 표B 정정 — Stephen 지시로 할인율 적용 범위를 요금 종류별로
+분리: "무료"(1)는 왕복·편도 무관 항상 적용, "50% 할인"(<1)은 왕복요금에만 적용되고 편도
+요금은 미적용(정가 청구)으로 확정. `applyShippingDiscount()`/`isRoundTripShippingFee()`
+신설(cartShippingFee.ts), `otDeliveryFee` 계산식 교체.*

@@ -64,6 +64,32 @@ export function calcShippingFee(settings: ShippingSettings | null, items: Shippi
   return 0
 }
 
+/**
+ * 체크된 아이템 기준으로 지금 청구될 배송비가 "왕복"(수령·반납 둘 다 배송)인지 판정한다.
+ * calcShippingFee() 내부의 왕복 판정과 완전히 동일한 조건(anyPickupDelivery && anyReturnDelivery)을
+ * 재사용 — applyShippingDiscount()가 "50% 할인은 왕복요금에만 적용"을 판정할 때 쓴다.
+ */
+export function isRoundTripShippingFee(items: ShippingFeeItem[]): boolean {
+  return items.some((it) => it.pickupIsDelivery) && items.some((it) => it.returnIsDelivery)
+}
+
+/**
+ * 배송료 우대설정 할인율을 실제 배송비에 적용한다(Stephen 확정, 2026-09-15).
+ *   - discount_rate=1(무료)  → 요금 종류(왕복/편도) 무관하게 항상 전액 적용
+ *   - discount_rate<1(예: 50% 할인) → 왕복요금(isRoundTrip=true)일 때만 적용, 편도(배송·반납)
+ *     요금에는 적용되지 않는다(그 경우 할인율을 0으로 취급 — 정가 그대로 청구)
+ * discount_rate=0(기본왕복배송요금, 신규 등록은 비활성화됨)은 어느 경우든 결과가 0이라
+ * 이 분기와 무관하게 항상 동일한 결과(전액 청구)를 낸다.
+ */
+export function applyShippingDiscount(
+  shippingFee: number,
+  discountRate: number,
+  isRoundTrip: boolean,
+): number {
+  const effectiveRate = discountRate >= 1 ? discountRate : (isRoundTrip ? discountRate : 0)
+  return Math.round(shippingFee * (1 - effectiveRate))
+}
+
 // 배송료 우대설정 — CMS에서 등록한 "대여금액 임계값 + 조건" 조합(최대 5개)이 만족되면
 // 배송비(왕복+배송+반납 합계)에 할인율을 적용한다(Stephen 확정, 2026-08-29).
 //
@@ -96,11 +122,21 @@ export interface DiscountConditionItem {
  * 전달한다 — Q2=a(전면 교체, 2026-09-01 Stephen 확정): 모든 티어의 금액 비교 기준이
  * 대여상품만의 합계로 통일됨. otSubtotal(전체 합계) 대신 이 값을 쓰므로 기존 티어
  * (long_term_rental·sale_only_purchase 단독)도 대여상품 금액 기준으로 판정된다.
+ *
+ * ⚠️ 예외(2026-09-15 후속, Stephen 확정): 위 Q2=a는 "판매상품 구매(sale_only_purchase)가
+ * 유일한 조건"인 티어에는 더 이상 적용하지 않는다 — 그런 티어는 대여상품을 전혀 담지 않고
+ * 판매상품만 구매해도 조건("판매상품 구매") 자체는 충족되는데, 금액 문턱은 대여상품 소계만
+ * 봐서 절대 만족될 수 없는 모순이 있었다(대여상품 없이 판매상품 50만원을 사도 0원 취급).
+ * `saleOnlySubtotal`(네 번째 인자, 판매전용상품 구매액 합계)을 새로 받아 이 경우에만 기준을
+ * 교체한다 — 그 외(long_term_rental·rental_item 단독, 또는 sale_only_purchase가 다른 조건과
+ * 함께 선택된 조합)는 기존 그대로 대여상품 소계 기준을 유지한다. 기존 호출부(테스트 포함)와의
+ * 하위호환을 위해 생략 시 rentalOnlySubtotal과 동일하게 기본값 처리한다.
  */
 export function calcShippingDiscountRate(
   tiers: DeliveryFeeDiscountTier[],
   rentalOnlySubtotal: number,
   items: DiscountConditionItem[],
+  saleOnlySubtotal: number = rentalOnlySubtotal,
 ): number {
   if (!tiers.length || items.length === 0) return 0
 
@@ -115,8 +151,11 @@ export function calcShippingDiscountRate(
 
   let best = 0
   for (const tier of tiers) {
-    if (rentalOnlySubtotal < tier.min_rental_amount) continue
     if (!tier.condition_types.length) continue
+    const isSaleOnlySoleCondition =
+      tier.condition_types.length === 1 && tier.condition_types[0] === 'sale_only_purchase'
+    const amountBasis = isSaleOnlySoleCondition ? saleOnlySubtotal : rentalOnlySubtotal
+    if (amountBasis < tier.min_rental_amount) continue
     const conditionMet = tier.condition_types.every((ct) => conditionSatisfied[ct])
     if (conditionMet && tier.discount_rate > best) best = tier.discount_rate
   }

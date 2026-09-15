@@ -15,7 +15,7 @@
  */
 
 import { describe, it, expect } from 'vitest'
-import { calcShippingFee, calcShippingDiscountRate, isFreeDeliveryCouponBlocked, computeReturnVisibleTabs, type DeliveryFeeDiscountTier, type DiscountConditionItem, type DeliveryTypeMethod } from '$lib/utils/cartShippingFee'
+import { calcShippingFee, calcShippingDiscountRate, applyShippingDiscount, isRoundTripShippingFee, isFreeDeliveryCouponBlocked, computeReturnVisibleTabs, type DeliveryFeeDiscountTier, type DiscountConditionItem, type DeliveryTypeMethod } from '$lib/utils/cartShippingFee'
 
 // ── 주의: DeliveryFeeDiscountTier.condition_types에 'rental_item'이 추가돼야 아래 테스트가 GREEN
 // (현재 미추가 상태 = RED)
@@ -353,6 +353,136 @@ describe('calcShippingDiscountRate — 배송료 우대설정 최유리 조합 �
     const tiers = [makeTier({ min_rental_amount: 0, condition_types: ['rental_item', 'long_term_rental'], discount_rate: 1 })]
     const items = [makeDiscountItem({ rentalDays: 2, saleOnlyPurchase: false })]
     expect(calcShippingDiscountRate(tiers, 0, items)).toBe(0)
+  })
+
+  // ── 판매상품 구매(sale_only_purchase) 단독 조건 — 금액기준을 판매상품 구매액으로 분리
+  // (2026-09-15 Stephen 확정, 4번째 인자 saleOnlySubtotal 신설) ─────────────────────
+  describe('sale_only_purchase 단독 조건 — 금액기준 분리(saleOnlySubtotal)', () => {
+    it('판매상품만 구매(대여상품 0원)해도 판매상품 구매액이 문턱을 넘으면 매칭된다 ' +
+      '(회귀 수정 — 종전엔 대여상품 소계=0이라 항상 미적용이었음)', () => {
+      const tiers = [makeTier({ min_rental_amount: 50000, condition_types: ['sale_only_purchase'], discount_rate: 1 })]
+      const items = [makeDiscountItem({ saleOnlyPurchase: true })]
+      // rentalOnlySubtotal=0(대여상품 없음), saleOnlySubtotal=300000(판매상품 구매액)
+      expect(calcShippingDiscountRate(tiers, 0, items, 300000)).toBe(1)
+    })
+
+    it('판매상품 구매액이 문턱 미달이면 대여상품 소계가 아무리 커도 미적용', () => {
+      const tiers = [makeTier({ min_rental_amount: 50000, condition_types: ['sale_only_purchase'], discount_rate: 1 })]
+      const items = [makeDiscountItem({ saleOnlyPurchase: true })]
+      // saleOnlySubtotal=10000(문턱 미달) — rentalOnlySubtotal이 커도 sale_only_purchase
+      // 단독 조건에는 영향 없음
+      expect(calcShippingDiscountRate(tiers, 999999, items, 10000)).toBe(0)
+    })
+
+    it('saleOnlySubtotal 생략(하위호환) 시 rentalOnlySubtotal과 동일값으로 기본 처리된다', () => {
+      const tiers = [makeTier({ min_rental_amount: 50000, condition_types: ['sale_only_purchase'], discount_rate: 1 })]
+      const items = [makeDiscountItem({ saleOnlyPurchase: true })]
+      expect(calcShippingDiscountRate(tiers, 60000, items)).toBe(1)
+      expect(calcShippingDiscountRate(tiers, 40000, items)).toBe(0)
+    })
+
+    it('sale_only_purchase가 다른 조건과 조합된 티어는 기존대로 대여상품 소계(rentalOnlySubtotal) ' +
+      '기준을 그대로 유지한다(단독 조건일 때만 분리 적용)', () => {
+      const tiers = [makeTier({ min_rental_amount: 100000, condition_types: ['sale_only_purchase', 'rental_item'], discount_rate: 1 })]
+      const items = [makeDiscountItem({ saleOnlyPurchase: true }), makeDiscountItem({ saleOnlyPurchase: false })]
+      // rentalOnlySubtotal=100000(문턱 충족) — saleOnlySubtotal은 1원이어도 조합 조건에는 영향 없음
+      expect(calcShippingDiscountRate(tiers, 100000, items, 1)).toBe(1)
+      // rentalOnlySubtotal=99999(문턱 미달) — saleOnlySubtotal이 아무리 커도 이 조합엔 무관
+      expect(calcShippingDiscountRate(tiers, 99999, items, 999999)).toBe(0)
+    })
+  })
+})
+
+// ════════════════════════════════════════════════════════════════════
+// isRoundTripShippingFee / applyShippingDiscount — 통합 시나리오
+// otDeliveryFee = applyShippingDiscount(calcShippingFee(...), calcShippingDiscountRate(...), isRoundTripShippingFee(...))
+// (cart/+page.svelte 동일 계산) 검증.
+//
+// Stephen 확정(2026-09-15):
+//   - "무료"(discount_rate=1)는 요금 종류(왕복/편도) 무관하게 항상 적용된다.
+//   - "50% 할인"(discount_rate<1)은 왕복요금(수령·반납 둘 다 배송)일 때만 적용되고,
+//     편도(배송만 또는 반납만) 요금에는 적용되지 않는다(정가 그대로 청구).
+// ════════════════════════════════════════════════════════════════════
+describe('applyShippingDiscount — "무료"는 요금 종류 무관, "50% 할인"은 왕복요금 전용', () => {
+  const FREE_TIER = [makeTier({ min_rental_amount: 0, condition_types: ['rental_item'], discount_rate: 1 })]
+  const HALF_TIER = [makeTier({ min_rental_amount: 0, condition_types: ['rental_item'], discount_rate: 0.5 })]
+  const items = [makeDiscountItem({ saleOnlyPurchase: false })]
+
+  describe('"무료"(discount_rate=1) — 왕복/편도 전부에 동일하게 적용', () => {
+    it('① 수령·반납 둘 다 배송(왕복요금) — 0원', () => {
+      const shippingItems = [makeItem({ pickupIsDelivery: true, returnIsDelivery: true })]
+      const shippingFee = calcShippingFee(SHIPPING_ON, shippingItems)
+      expect(shippingFee).toBe(5000)
+      const rate = calcShippingDiscountRate(FREE_TIER, 0, items)
+      expect(applyShippingDiscount(shippingFee, rate, isRoundTripShippingFee(shippingItems))).toBe(0)
+    })
+
+    it('② 수령만 배송(편도-배송요금) — 0원', () => {
+      const shippingItems = [makeItem({ pickupIsDelivery: true, returnIsDelivery: false })]
+      const shippingFee = calcShippingFee(SHIPPING_ON, shippingItems)
+      expect(shippingFee).toBe(3000)
+      const rate = calcShippingDiscountRate(FREE_TIER, 0, items)
+      expect(applyShippingDiscount(shippingFee, rate, isRoundTripShippingFee(shippingItems))).toBe(0)
+    })
+
+    it('③ 반납만 배송(편도-반납요금) — 0원', () => {
+      const shippingItems = [makeItem({ pickupIsDelivery: false, returnIsDelivery: true })]
+      const shippingFee = calcShippingFee(SHIPPING_ON, shippingItems)
+      expect(shippingFee).toBe(2000)
+      const rate = calcShippingDiscountRate(FREE_TIER, 0, items)
+      expect(applyShippingDiscount(shippingFee, rate, isRoundTripShippingFee(shippingItems))).toBe(0)
+    })
+  })
+
+  describe('"50% 할인"(discount_rate=0.5) — 왕복요금에만 적용, 편도요금은 미적용(정가)', () => {
+    it('① 수령·반납 둘 다 배송(왕복요금) — 정확히 절반 할인된다', () => {
+      const shippingItems = [makeItem({ pickupIsDelivery: true, returnIsDelivery: true })]
+      const shippingFee = calcShippingFee(SHIPPING_ON, shippingItems)
+      expect(shippingFee).toBe(5000)
+      const rate = calcShippingDiscountRate(HALF_TIER, 0, items)
+      expect(applyShippingDiscount(shippingFee, rate, isRoundTripShippingFee(shippingItems))).toBe(2500)
+    })
+
+    it('② 수령만 배송(편도-배송요금) — 미적용, 정가(3000원) 그대로 청구', () => {
+      const shippingItems = [makeItem({ pickupIsDelivery: true, returnIsDelivery: false })]
+      const shippingFee = calcShippingFee(SHIPPING_ON, shippingItems)
+      expect(shippingFee).toBe(3000)
+      const rate = calcShippingDiscountRate(HALF_TIER, 0, items)
+      expect(applyShippingDiscount(shippingFee, rate, isRoundTripShippingFee(shippingItems))).toBe(3000)
+    })
+
+    it('③ 반납만 배송(편도-반납요금) — 미적용, 정가(2000원) 그대로 청구', () => {
+      const shippingItems = [makeItem({ pickupIsDelivery: false, returnIsDelivery: true })]
+      const shippingFee = calcShippingFee(SHIPPING_ON, shippingItems)
+      expect(shippingFee).toBe(2000)
+      const rate = calcShippingDiscountRate(HALF_TIER, 0, items)
+      expect(applyShippingDiscount(shippingFee, rate, isRoundTripShippingFee(shippingItems))).toBe(2000)
+    })
+  })
+})
+
+describe('isRoundTripShippingFee', () => {
+  it('수령·반납 둘 다 배송 → true', () => {
+    expect(isRoundTripShippingFee([makeItem({ pickupIsDelivery: true, returnIsDelivery: true })])).toBe(true)
+  })
+  it('수령만 배송 → false', () => {
+    expect(isRoundTripShippingFee([makeItem({ pickupIsDelivery: true, returnIsDelivery: false })])).toBe(false)
+  })
+  it('반납만 배송 → false', () => {
+    expect(isRoundTripShippingFee([makeItem({ pickupIsDelivery: false, returnIsDelivery: true })])).toBe(false)
+  })
+  it('둘 다 배송 아님 → false', () => {
+    expect(isRoundTripShippingFee([makeItem({ pickupIsDelivery: false, returnIsDelivery: false })])).toBe(false)
+  })
+  it('여러 아이템 중 하나는 수령=배송, 다른 하나는 반납=배송(서로 다른 아이템) → 카트 전체 기준 true', () => {
+    const shippingItems = [
+      makeItem({ pickupIsDelivery: true, returnIsDelivery: false }),
+      makeItem({ pickupIsDelivery: false, returnIsDelivery: true }),
+    ]
+    expect(isRoundTripShippingFee(shippingItems)).toBe(true)
+  })
+  it('빈 배열 → false', () => {
+    expect(isRoundTripShippingFee([])).toBe(false)
   })
 })
 

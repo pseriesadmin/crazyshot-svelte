@@ -119,7 +119,7 @@ hasSettingsAccess(role) → getRoleLevel(role) >= 50
 | 계정 삭제 | `/cms/accounts/list` → `delete` | ❌ | ✅(대상이 partner/manager일 때만 — 대상이 superadmin이면 차단) | ✅ |
 | 관리자 등급(cms_role) 변경 | `/cms/accounts/list` → `updateRole` | ❌ | ❌(대상이 superadmin이거나 승격 대상이 superadmin이면 차단) | ✅ |
 | superadmin 계정 신규 생성 | `/cms/accounts` → `createAccount` (newAccountRole='superadmin') | ❌ | ❌ | ✅ |
-| 메뉴별 세부 접근권한 설정 | `/api/cms/accounts/[id]/menu-permissions` PUT | ❌ | ✅(대상이 partner/manager일 때만 — 대상이 superadmin이면 requireAccountMutationAccess로 차단. 대상이 superadmin이 아니어도 슈퍼마스터가 OFF로 잠근 항목을 ON으로 되돌리는 것은 불가 — 아래 참고) | ✅ |
+| 메뉴별 세부 접근권한 설정 | `/api/cms/accounts/[id]/menu-permissions` PUT | ❌ | ✅(대상이 partner/manager일 때만 — 대상이 superadmin이면 requireAccountMutationAccess로 차단. 대상이 superadmin이 아니어도 슈퍼마스터가 OFF로 잠근 항목을 ON으로 되돌리는 것은 불가 — 아래 참고) | ✅(자기 자신 대상 포함 — EC-5 self-service 차단의 유일한 예외, 2026-09-15 후속) |
 | 중복 로그인 허용 토글 | `/cms/accounts/list` → `toggleConcurrent` | ❌ | ✅ | ✅ |
 | 세션 제한 토글 | `/cms/accounts/list` → `toggleSession` | ❌ | ✅ | ✅ |
 | 접속로그 조회 | `/api/cms/accounts/[id]/login-logs` — 본인 계정 또는 manager+ | ❌(타인 조회) | ✅(본인·타인 모두) | ✅ |
@@ -176,6 +176,28 @@ hasSettingsAccess(role) → getRoleLevel(role) >= 50
 > allowed=true(켜기)·allowed=false(끄기) 요청 둘 다 이 가드를 거친다(끄기 자체가 공격
 > 시나리오였으므로 allowed 값과 무관하게 항상 검사). GET(열람)은 대상 무관 조회이므로 영향
 > 없음. 회귀 테스트 2건 추가(`cmsMenuPermissionsApi.test.ts`).
+>
+> ⚠️ **EC-5 예외 신설(2026-09-15 후속, Stephen 지시)**: "자기 자신을 대상으로 하는 메뉴권한
+> 변경 차단"(EC-5)이 슈퍼마스터에게도 예외 없이 적용돼, 다른 슈퍼마스터가 존재하지 않는 한
+> 슈퍼마스터 본인이 스스로의 권한을 절대 되돌릴 수 없는 데드락이 실제로 발생했다(매니저가
+> 유일한 슈퍼마스터 계정의 `consulting.chat` 권한을 OFF로 차단해둔 상태에서, 그 계정 본인도
+> 자기 자신을 대상으로 할 수 없어 아무도 못 푸는 상태로 확인됨). PUT 핸들러의 EC-5 조건에
+> `cmsRole !== 'superadmin'`을 추가해, **슈퍼마스터만** 자기 자신을 대상으로 한 메뉴권한
+> 변경도 허용하도록 예외 처리했다 — manager는 이 차단이 그대로 유지된다(실수로 스스로를
+> 잠그는 사고 방지 목적 자체는 manager에게는 여전히 유효). 슈퍼마스터가 자신에게 걸린
+> "슈퍼마스터 잠금"(§ 위 단락)도 자기 자신이 그 잠금을 건 당사자이므로 자동으로 통과한다.
+> 회귀 테스트 1건 추가(`cmsMenuPermissionsApi.test.ts`).
+>
+> ⚠️ **검사 순서 수정(2026-09-15 4차 후속, 실사용 중 발견)**: 위 EC-5 예외를 추가한 뒤에도,
+> **매니저**가 "본인" 계정의 슈퍼마스터-잠금 항목을 켜려는 경우엔 여전히 문제가 남아 있었다 —
+> EC-5(자기 자신 대상 차단)가 슈퍼마스터 잠금 검사보다 먼저 실행돼서, 실제 사유(슈퍼마스터가
+> 잠갔다)가 EC-5의 뭉뚱그린 메시지("자기 자신의 메뉴 권한은 변경할 수 없습니다")에 가려져
+> "슈퍼마스터 권한 계정에 문의하세요."라는 더 정확한 안내에 절대 도달하지 못했다. PUT
+> 핸들러의 검사 순서를 바꿔 슈퍼마스터 잠금 검사(allowed=true 요청에 한함)를 EC-5보다 먼저
+> 수행하도록 했다 — 대상이 자기 자신이든 아니든, 실제로 걸리는 사유가 슈퍼마스터 잠금이면
+> 그 구체적 사유를 항상 우선 반환하고, 잠금 대상이 아닐 때만 EC-5의 일반 차단으로 넘어간다.
+> 회귀 테스트 1건 추가(`cmsMenuPermissionsApi.test.ts`), 기존 3건은 저장 RPC 미호출
+> 검증 방식으로 갱신(조회 RPC는 이제 거부 경로에서도 호출되므로).
 >
 > ⚠️ **후속 발견(2026-08-26, QA Stage 9)**: 위 수정 당시 `updatePhone` 액션 1곳만 옛
 > `requireSuperadmin()` 호출이 그대로 남아 있어(다른 5개 액션 + `updateName`은 이미
@@ -401,4 +423,10 @@ GNB가 계정별 메뉴권한 오버라이드까지 반영해 서브메뉴 전�
 전용 안내 메시지) 신규 추가. | 2026-09-15(같은 날 후속) CRITICAL 수정 — 위 API에 대상이
 superadmin이면 호출자도 진짜 superadmin이어야 하는 `requireAccountMutationAccess()` 게이트가
 처음부터 빠져 있어 매니저가 슈퍼마스터 계정의 메뉴 접근을 몰래 차단할 수 있던 공백 발견·해소
-(다른 계정관리 액션과 동일 기준으로 통일), 회귀 테스트 2건 추가.*
+(다른 계정관리 액션과 동일 기준으로 통일), 회귀 테스트 2건 추가. | 2026-09-15(같은 날 3차 후속)
+EC-5(자기 자신 대상 메뉴권한 변경 차단)에 슈퍼마스터 예외 추가 — 실사용 중 발견된 데드락(매니저가
+유일한 슈퍼마스터의 권한을 OFF해둔 상태에서 본인도 되돌릴 방법이 없던 상태)을 계기로, 슈퍼마스터만
+자기 자신을 대상으로 한 메뉴권한 변경도 허용(manager는 그대로 차단 유지), 회귀 테스트 1건 추가. |
+2026-09-15(같은 날 4차 후속) 실사용 중 발견 — 매니저가 "본인" 계정의 슈퍼마스터-잠금 항목을
+켜려 할 때 EC-5 검사가 슈퍼마스터 잠금 검사보다 먼저 실행돼 실제 사유가 가려지던 순서 문제
+수정(잠금 검사를 EC-5보다 먼저 수행하도록 재배치), 회귀 테스트 1건 추가·기존 3건 갱신.*

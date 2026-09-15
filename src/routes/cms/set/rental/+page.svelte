@@ -165,6 +165,11 @@
     { value: 'sale_only_purchase', label: '판매상품 구매' },
     { value: 'rental_item', label: '대여상품' },
   ] as const satisfies { value: 'long_term_rental' | 'sale_only_purchase' | 'rental_item'; label: string }[]
+  // '기본왕복배송요금'(discount_rate=0)은 2026-09-15 Stephen 확정으로 비활성화됨 — 이 값은
+  // 곧 "할인 없음"과 동일해서, calcShippingDiscountRate()의 best(초기값 0)를 절대 넘어설 수
+  // 없어 등록해도 실질 효과가 전혀 없는 죽은 옵션이었다(cartShippingFee.ts 참고). 목록·기존
+  // 등록 데이터는 그대로 남기되(제거 금지, Stephen 지시) 신규 선택만 막는다 — 아래 렌더링에서
+  // `value === 'base'`인 항목만 disabled 처리.
   const TIER_DISCOUNT_OPTIONS = [
     { value: 'free', label: '무료' },
     { value: 'half', label: '50% 할인' },
@@ -719,6 +724,15 @@
                     type="button"
                     class="mk-chip"
                     class:mk-chip--on={tierDiscount === opt.value}
+                    class:mk-chip--used={opt.value === 'base'}
+                    disabled={opt.value === 'base'}
+                    title={
+                      opt.value === 'base'
+                        ? '실질 할인 효과가 없어 선택할 수 없습니다(0% 할인과 동일)'
+                        : opt.value === 'half'
+                          ? '왕복배송료(수령·반납 둘 다 배송)에만 적용됩니다 — 편도(배송만/반납만)요금에는 적용되지 않습니다'
+                          : undefined
+                    }
                     onclick={() => { tierDiscount = tierDiscount === opt.value ? '' : opt.value }}
                   >{opt.label}</button>
                 {/each}

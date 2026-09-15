@@ -1,5 +1,189 @@
 # .claude/harness/TASK.md
 
+## DONE — 🔴 CRITICAL: 메뉴권한 EC-5 검사순서 수정 + 배송료 우대설정 3건 재검증·수정 (2026-09-15, 이 세션'만', ✅ GATE E 통과 — sp3-qa-agent 검수 완료, git commit만 Stephen 대기)
+
+### 아젠다
+
+1. (이전 CMS 계정관리 세션 후속) Stephen 실사용 중 발견: 매니저가 "본인" 계정의 슈퍼마스터-잠금
+   메뉴권한 항목을 켜려 하면 "슈퍼마스터 권한 계정에 문의하세요."가 아니라 뭉뚱그린 자기자신
+   차단 메시지("본인의 선택할 수 없다...")가 노출됨 — 실제 사유가 가려지는 버그.
+2. 배송료 우대설정(`delivery_fee_discount_tiers`) 로직을 실제 등록된 티어 조합으로 재검증
+   요청받아 3가지 실사용 정책을 확정·구현:
+   - "판매상품 구매" 단독조건 티어의 금액기준을 판매상품 구매액으로 분리(§2-a 해소)
+   - "기본왕복배송요금"(discount_rate=0) 옵션은 실질 효과가 없으므로 신규 등록 비활성화
+     (제거는 하지 말 것 — 기존 데이터 호환)
+   - "무료"는 요금 종류(왕복/편도) 무관 항상 적용, "50% 할인"은 왕복요금에만 적용·편도요금은
+     미적용(정가 청구)으로 차등화
+
+### ① EC-5 검사 순서 수정
+
+```
+원인: /api/cms/accounts/[id]/menu-permissions PUT에서 EC-5(자기 자신 대상 차단)가 슈퍼마스터
+     잠금 검사보다 먼저 실행됨 — 매니저가 본인 계정의 슈퍼마스터-잠금 항목을 켜려 하면
+     실제 사유에 도달하지 못하고 EC-5의 일반 메시지로만 막힘.
+수정: 검사 순서를 바꿔 슈퍼마스터 잠금 검사(allowed=true 요청에 한함)를 EC-5보다 먼저
+     수행하도록 재배치 — 대상이 자기 자신이든 아니든, 실제로 걸리는 사유가 슈퍼마스터
+     잠금이면 그 구체적 사유를 항상 우선 반환.
+파일: src/routes/api/cms/accounts/[id]/menu-permissions/+server.ts
+테스트: src/__tests__/server/cmsMenuPermissionsApi.test.ts — 재현 시나리오 신규 1건 추가,
+       순서변경으로 영향받은 기존 3건(저장 RPC 미호출 검증 방식으로) 갱신. 20/20 GREEN.
+```
+
+### ② 배송료 우대설정 3건
+
+```
+1. "판매상품 구매" 단독조건 금액기준 분리
+   - calcShippingDiscountRate()에 4번째 인자 saleOnlySubtotal 신설 — condition_types가
+     sale_only_purchase 단독인 티어만 이 값(판매전용상품 구매액)으로 문턱 판정, 그 외는
+     기존대로 otRentalOnlySubtotal(대여상품 소계) 유지.
+   - cart/+page.svelte: otSaleOnlySubtotal 파생값 신설(otRentalOnlySubtotal의 반대 필터) +
+     호출부 전달.
+   - 결과: 판매상품만 구매(대여상품 0원)해도 "판매상품 구매 5만원 이상" 티어가 정상 매칭됨.
+
+2. "기본왕복배송요금"(discount_rate=0) 신규 등록 비활성화
+   - cms/set/rental/+page.svelte: 우대옵션 칩 중 'base' 값만 disabled + 안내 툴팁.
+   - cms/set/rental/+page.server.ts: addDiscountTier 액션에도 서버단 차단(클라이언트
+     우회 방지) — discountKey==='base'면 fail(400).
+   - 기존 DISCOUNT_RATE_MAP·라벨 매핑은 제거하지 않음(기존 등록 데이터 호환 유지, Stephen 지시).
+
+3. "무료"/"50% 할인" 요금 종류별 차등 적용
+   - cartShippingFee.ts에 isRoundTripShippingFee()·applyShippingDiscount() 신설.
+   - discount_rate=1(무료): 왕복·편도(배송/반납) 요금 종류 무관 항상 전액 적용.
+   - discount_rate<1(50% 등): 왕복요금(수령·반납 둘 다 배송)일 때만 적용, 편도요금은
+     미적용(정가 그대로 청구) — Stephen 확정.
+   - cart/+page.svelte: otIsRoundTripShipping 파생값 신설 + otDeliveryFee 계산식을
+     applyShippingDiscount(otShippingFee, otShippingDiscountRate, otIsRoundTripShipping)로 교체.
+   - cms/set/rental/+page.svelte: "50% 할인" 칩에 "왕복배송료에만 적용됩니다" 안내 툴팁 추가.
+```
+
+**변경 파일**
+```
+src/routes/api/cms/accounts/[id]/menu-permissions/+server.ts — EC-5/슈퍼마스터잠금 검사순서 교체
+src/__tests__/server/cmsMenuPermissionsApi.test.ts — 순서변경 회귀테스트
+src/lib/utils/cartShippingFee.ts — saleOnlySubtotal 4번째 인자, isRoundTripShippingFee,
+  applyShippingDiscount 신설
+src/routes/cart/+page.svelte — otSaleOnlySubtotal·otIsRoundTripShipping 파생값,
+  otDeliveryFee 계산식 교체
+src/__tests__/services/cartShippingFee.test.ts — sale_only 금액기준·왕복전용할인 테스트 신규
+src/routes/cms/set/rental/+page.svelte — 'base' 옵션 disabled + 툴팁 2종
+src/routes/cms/set/rental/+page.server.ts — addDiscountTier 서버단 'base' 차단
+.claude/rules/security-auth.md — EC-5 순서 수정 기록
+.claude/rules-ref/rental-cms-settings.md — 표A·표B 3건 갱신(v1.5)
+```
+
+### 검증
+
+```
+npx vitest run src/__tests__/server/cmsMenuPermissionsApi.test.ts
+  src/__tests__/server/cmsLayoutMenuPermissionOverlay.test.ts
+  src/__tests__/server/accountsListSuperadminGuard.test.ts
+  src/__tests__/services/cmsMenus.test.ts
+  src/__tests__/services/cartShippingFee.test.ts
+  — 전부 GREEN(20+6+... /cartShippingFee 69개 포함).
+npm run check(svelte-check) — 신규 에러 0건(무관한 기존 vite.config.ts 에러 1건만 매 실행
+  동일 유지).
+git commit은 Stephen 직접 실행 대기.
+```
+
+### @sp3-qa-agent 검수 결과 — GATE E 통과 ✅
+
+```
+검수범위를 이 세션이 실제로 건드린 9개 파일로 명시 한정해 git diff -- <9개 파일>로 스코프
+고정 확인 후 검수(다른 세션 동시작업 오염 배제).
+
+라인 단위 확인:
+· EC-5/슈퍼마스터잠금 검사 순서 — 현재 순서: ①슈퍼마스터 잠금 검사(allowed=true 한정) →
+  ②EC-5 자기자신 차단(슈퍼마스터 예외) → ③requireAccountMutationAccess(대상 슈퍼마스터
+  보호) → ④Q6 role 상한선. 4가지 경로(매니저-자기자신+잠금/매니저-자기자신+비잠금/매니저→
+  다른슈퍼마스터 allowed=false 공격경로/슈퍼마스터-자기자신)를 전부 수기 대조 — 순서 변경은
+  "어떤 메시지가 먼저 뜨는가"만 바꿀 뿐, 이전에 막혀있던 어떤 경로도 새로 뚫리지 않음을 확인
+  (원 CRITICAL 방어인 requireAccountMutationAccess는 무조건 도달하는 경로에 그대로 남아있음).
+  회귀테스트 포함 20/20 GREEN 재실행 확인.
+· calcShippingDiscountRate saleOnlySubtotal 분기 — condition_types가 정확히
+  ['sale_only_purchase']일 때만 적용, 조합조건(sale_only_purchase+rental_item 등)은
+  rentalOnlySubtotal 유지 — 조합조건 테스트 케이스로 재확인.
+· isRoundTripShippingFee가 calcShippingFee 내부 왕복판정과 동일한 조건
+  (anyPickupDelivery && anyReturnDelivery)을 사용 — 드리프트 위험 없음.
+· applyShippingDiscount — discount_rate>=1 무조건 적용, <1이면 왕복 게이트 정확. 무료/50%×
+  왕복/편도-배송/편도-반납 6개 시나리오 테스트로 커버. 69/69 GREEN 재실행 확인.
+· 'base' 옵션 비활성화 — 클라이언트(disabled)+서버(addDiscountTier) 양쪽 독립 차단,
+  DISCOUNT_RATE_MAP·라벨 매핑 무삭제(Stephen 지시 그대로 준수) 확인.
+· npm run check 재실행 — 신규 에러 0건. check-rpc-error-handling.mjs 재실행 — 전체 3건 중
+  menu-permissions/+server.ts 1건은 HEAD(이 세션 편집 이전)에도 이미 있던 기존 위반이
+  단순히 코드 블록 이동으로 같이 옮겨간 것임을 git show로 확인 — 이 세션이 새로 만든
+  위반 아님(GATE E 비차단, 별도 정리 과제로만 남김).
+· core-rules.md "요청범위 외 수정 금지" 위반 없음 — cart/+page.svelte diff에 섞여있던
+  <svelte:head> 타이틀 훅은 이 세션 작업이 아니라 이미 GATE E 승인된 다른 세션
+  ("사용자 화면 UI 전역 정밀검증", 2026-09-14)의 미커밋 변경이 같은 파일에 우연히 함께
+  잡힌 것으로 TASK.md 대조 확인 — 되돌릴 필요 없음.
+
+종합 판정: GATE E 통과 — 커밋 가능.
+```
+
+---
+
+## DONE — CMS 상단바 "Sign Out" 텍스트버튼 → 아바타 아이콘+내정보 드롭다운 교체 + 본인계정 상세랜딩 (2026-09-15, 이 세션 단독 수행)
+
+### 아젠다
+
+Stephen이 Claude Browser로 CMS 상단바의 `logout-btn`("Sign Out" 빨간 필 버튼) 요소를 직접
+선택(`<launch-selected-element>`)해 지시 — ① 사용자(front) 화면 GNB 아바타 아이콘 구조를
+그대로 반영해 배치 수정 ② 클릭 시 CMS 모바일 레이아웃의 "내 정보" 모달을 응용한 드롭다운
+(원형 아바타·배지·이름·아이디·접속일자·Sign Out)으로 표시 ③ 모든 관리권한 계정(superadmin/
+manager/partner) 동일 적용. 후속 지시 2건: 드롭다운 폭 20% 확장, 드롭다운 내 큰 아바타
+클릭 시 계정관리 목록에서 본인 상세패널(기본정보 탭 기본값)로 랜딩(단, manager 이상만 —
+partner는 `/cms/accounts/list` 자체가 접근 권한 밖이라 GATE B로 재확인 후 제외 확정).
+
+### 구현 내역 (4개 파일)
+
+```
+1. src/lib/server/cmsProfile.ts — fetchCmsProfileByAuthId가 cms_role뿐 아니라
+   full_name도 함께 조회하도록 확장(select 별칭 name:full_name — accounts/list의 기존
+   매핑 관례와 동일). 반환 타입에 name 필드 추가(기존 호출부 전부 하위호환, 추가만).
+2. src/routes/cms/+layout.server.ts — load() 반환값에 cmsName: profile.name 추가.
+3. src/routes/cms/+layout.svelte —
+   - topbar-right의 "Sign Out" 텍스트버튼을 원형 아바타 아이콘 버튼(topbar-avatar-btn,
+     front GNB .gnb-avatar-btn-initial과 동일 이니셜 원형 구조)으로 교체.
+   - 클릭 시 드롭다운(profile-dropdown) 표시 — cms/mobile/+layout.svelte의 기존 "내 정보"
+     모달 레이아웃(원형 아바타·role-tag 배지·이메일·접속일자·로그아웃 버튼)을 그대로 응용,
+     이름(profile-name) 한 줄 추가. 폭 312px(최초 260px에서 Stephen 지시로 20% 확장).
+   - 드롭다운 내 큰 아바타(profile-avatar-lg) — hasSettingsAccess(manager 이상)일 때만
+     버튼으로 렌더링, 클릭 시 /cms/accounts/list?selected={본인 세션 user.id}로 이동
+     (goToMyAccountDetail). partner는 동일 자리에 클릭 불가능한 순수 div로 렌더링 —
+     /cms/accounts는 ROUTE_MIN_ROLE(cmsPermissions.ts)상 manager 이상만 접근 가능해
+     partner가 시도하면 access_denied로 튕기므로, 권한 경계를 넓히지 않고 UI에서부터
+     막음(GATE B 확인: "manager/superadmin만 적용" 승인).
+   - handleLogout()·manualLogout 등 기존 로그아웃 로직은 전혀 변경 없이 그대로 재사용.
+4. src/routes/cms/accounts/list/+page.svelte — selectedId 초기값을
+   page.url.searchParams.get('selected')로 읽도록 변경(기존엔 항상 null) — URL
+   ?selected={id} 진입 시 해당 계정 상세패널이 자동으로 열림. AccountDetailPanel의
+   initialTab은 별도 전달 없이 기존 기본값('info'=기본정보 탭)을 그대로 사용 — 요구사항
+   "기본정보 탭 랜딩"과 이미 일치해 추가 배선 불필요.
+```
+
+### 검증
+
+```
+svelte-check 매 단계 재실행 — 신규 에러 0건(기존 vite.config.ts 무관 에러 1건만 유지).
+fetchCmsProfileByAuthId 호출부 회귀 테스트 5개 파일 62건 전부 재실행 PASS(select 컬럼
+추가가 목 기반 테스트에 영향 없음 확인).
+Claude Browser 라이브 검증 — Supabase Admin API로 임시 매니저·파트너 계정을 각각 생성해
+직접 로그인 테스트 후 즉시 삭제(코드베이스의 기존 TDD ephemeral-user 패턴과 동일 방식):
+  · superadmin 세션: 아바타 클릭 → 드롭다운 정상 표시 → 큰 아바타 클릭 →
+    /cms/accounts/list로 이동 + 본인 행(이기성) 상세패널이 기본정보 탭으로 자동 오픈됨 확인.
+  · 임시 manager 계정: 드롭다운 이름·배지·이메일·접속일자 정상 표시 확인.
+  · 임시 partner 계정: 드롭다운은 동일하게 표시되나 큰 아바타가 클릭 불가능한 순수 div로
+    렌더링됨(class list에 profile-avatar-clickable 없음, tagName DIV) 확인 — 접근권한
+    경계 밖으로 새지 않음을 코드 레벨로 재확인.
+  · 바깥 클릭 시 드롭다운 닫힘, Sign Out 버튼 정상 로그아웃 확인.
+검증에 사용한 임시 계정 2개는 Supabase Admin API로 즉시 삭제 완료, 임시 스크립트 파일도
+전부 제거(git status에 잔존 없음 확인).
+```
+
+GATE E(`@sp3-qa-agent`)는 아직 진행 전 — Stephen 지시로 다음 단계 진행.
+
+---
+
 ## DONE — GNB 아바타 아이콘 20% 축소(PC·모바일) + 모바일 바텀탭바 터치·호버 버블 인터랙션 추가 (2026-09-15, 이 세션'만', ✅ GATE E 통과 — sp3-qa-agent 검수 완료, git commit만 Stephen 대기)
 
 ### 아젠다
@@ -802,6 +986,60 @@ svelte-check: 신규 에러 0건 (기존 vite.config.ts 1건은 무관)
 **Stage(`ezyvffjvuwmtuhpxdjrw`) 적용 완료 마이그레이션**: #492·#493·#494·#496·#497·#499 (6건)
 **Production(`vnbpmvxruyciuuaermyh`)**: 미적용 — Stephen 실사용 수동검증 후 별도 적용 예정
 **git 커밋**: 아직 없음 — Stephen 직접 실행 대기
+
+### 4차 후속 — `/cms/rentals` 대여현황 화면 CRITICAL 결함 해소 (2026-09-15, 이 세션)
+
+**배경**: 직전 sp3-qa-agent 3차 검수 GATE E 통과 직후 추가 CRITICAL 지적 —
+`/cms/rentals`(대여현황) 화면에서도 '예약변경'·'예약취소' 버튼이 노출·작동하여, 이미
+출고/대여중/반납 처리된 예약(`shipped`·`in_use`·`return_requested`·`returned`)을 실수로
+되돌리거나 취소하는 것이 가능했다. Stephen이 "화면 자체를 숨기지 말고, 상태별
+비활성화 + 계정별 세부권한 + 서버측 강제"로 해결 방향을 확정.
+
+#### 수정 내역
+
+**1. 상태 기반 버튼 비활성화** — `src/lib/components/cms/RentalDetailPanel.svelte`
+- `RESERVATION_CHANGE_CANCEL_LOCKED_STATUSES = new Set(['shipped', 'in_use', 'return_requested', 'returned'])` 신설
+- '예약변경'·'예약취소' 버튼 `disabled` 조건에 이 상태 체크 추가 + 사유 설명 `title` 속성 추가
+- `completed`/`cancelled`/`damage_claimed`/`expired`(기존 `isTerminal()`로 이미 버튼 숨김)와 `hold`는 기존 로직 그대로 커버 — 추가 불필요
+- "대여기간 경과"(연체) 시간 기반 조건은 Stephen 명시적 보류(추후 별도 처리)
+
+**2. 계정별 세부 권한 토글 신설 — `rental.change_cancel`** — `src/lib/constants/cmsMenus.ts`
+- `CmsSubMenuDef.href`를 optional로 변경, "대여" 그룹에 `rental.change_cancel`(라벨 "예약변경 및 취소", `requiresSettingsAccess: true`) 항목 신설
+- `roleAllowsMenuByDefault`/`hasMenuAccess` 함수가 href 없는(비라우트) 메뉴 키도 올바르게 판정하도록 수정
+- `/cms/set/admin` 계정 상세 "권한설정" 탭의 "대여" 그룹에 ON/OFF 토글 자동 노출(SSOT 기반 렌더링, 별도 UI 코드 불필요)
+- `src/routes/cms/rentals/+page.server.ts`, `src/routes/cms/reservation/+page.server.ts` `load()`에서 `cms_menu_permissions` 오버라이드를 조회해 `canChangeOrCancelReservation` boolean 계산 → `+page.svelte` → `RentalDetailPanel` prop 전달. false이면 버튼 `disabled`
+
+**3. 서버측 강제 (보안 공백 해소, CRITICAL)** — `src/routes/cms/reservation/+page.server.ts`
+- `changeReservation`, `updateStatus` manager 분기 양쪽에 `hasMenuAccess(cmsRole, menuOverrides, 'rental.change_cancel')` AND 조건 추가(역할 게이트 통과 후 계정별 세부권한 재검증). 권한 없으면 `fail(403, { message: '이 계정은 예약변경·취소 권한이 없습니다.' })`
+- `updateStatus` partner 폴백 경로(형제 전체 상태전환만)는 이 세부권한과 무관하게 그대로 유지(애초에 매니저 전용 기능이 아님)
+
+**4. 부수 수정 — dhero API 불필요 요청 제거** — `src/lib/components/cms/RentalDetailPanel.svelte`
+- 두발히어로(dhero) 정보 조회 `$effect`가 계정 등급 무관 무조건 실행 → 파트너 계정에서 매번 403 콘솔 오류 발생하던 것 발견
+- `canManagePaymentAndLocker`(매니저 이상) 체크를 `$effect` 최상단에 추가 — 매니저 이상에서만 요청(dhero API 자체는 원래부터 매니저 이상 전용으로 정상 동작 중이었음, 클라이언트의 불필요한 요청만 제거)
+
+#### 변경 파일
+
+```
+src/lib/components/cms/RentalDetailPanel.svelte — RESERVATION_CHANGE_CANCEL_LOCKED_STATUSES 신설,
+  disabled 조건 추가, dhero $effect 불필요 요청 제거
+src/lib/constants/cmsMenus.ts — CmsSubMenuDef.href optional 변경,
+  rental.change_cancel 항목 신설, hasMenuAccess 비라우트 메뉴 판정 수정
+src/routes/cms/rentals/+page.server.ts — load()에 canChangeOrCancelReservation 추가
+src/routes/cms/reservation/+page.server.ts — load()에 canChangeOrCancelReservation 추가
+  + changeReservation·updateStatus 서버 세부권한 강제(fail 403)
+```
+
+#### 검증
+
+```
+src/__tests__/services/cmsMenus.test.ts: rental.change_cancel 서버 액션 권한 체크 정합성
+  신규 6건 포함, 57/57 GREEN (상위 세션이 직접 재실행해 재확인 완료)
+npx svelte-check: 신규 에러 0건 (기존 vite.config.ts 1건만 무관 기존 문제,
+  상위 세션이 직접 재실행해 재확인 완료)
+```
+
+**현황**: Stage 수동검증 + Production 마이그레이션 + git commit 여전히 Stephen 직접 실행 대기
+**다음 단계**: sp3-qa-agent 재검수(4차) → GATE E 통과 → Stephen git commit → Production 마이그레이션 적용
 
 ---
 

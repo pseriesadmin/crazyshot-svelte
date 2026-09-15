@@ -574,7 +574,16 @@ export const actions: Actions = {
     ) {
       return fail(400, { error: '조건을 선택하세요.' })
     }
+    // 'base'(기본왕복배송요금, discount_rate=0)는 2026-09-15 Stephen 확정으로 비활성화됨 —
+    // best(calcShippingDiscountRate 초기값 0)를 절대 넘어설 수 없어 등록해도 실질 할인
+    // 효과가 전혀 없는 죽은 옵션이었다. 맵 항목 자체는 제거하지 않는다(Stephen 지시 — 기존
+    // DB에 이미 저장된 discount_rate=0 티어를 그대로 조회·표시하는 화면들과의 호환 유지
+    // 목적, +page.svelte TIER_DISCOUNT_LABELS/list-row 표시 참고) — 신규 등록만 서버단에서도
+    // 차단한다(클라이언트 disabled 버튼 우회 방지).
     const DISCOUNT_RATE_MAP: Record<string, number> = { free: 1, half: 0.5, base: 0 }
+    if (discountKey === 'base') {
+      return fail(400, { error: '이 우대옵션은 실질 할인 효과가 없어 더 이상 등록할 수 없습니다.' })
+    }
     const discountRate = DISCOUNT_RATE_MAP[discountKey]
     if (discountRate === undefined) return fail(400, { error: '우대옵션을 선택하세요.' })
     if (count >= 5) return fail(400, { error: '배송료 우대설정은 최대 5개까지 등록할 수 있습니다.' })
