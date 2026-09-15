@@ -292,6 +292,7 @@
             isRentalView={true}
             stepFilter={['confirmed', 'shipped', 'in_use', 'return_requested', 'returned']}
             cmsRole={data.cmsRole}
+            canChangeOrCancelReservation={data.canChangeOrCancelReservation}
           />
         {/key}
       </div>
