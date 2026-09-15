@@ -10,6 +10,12 @@
 //   직접 fetch될 수 있어 locals.cmsRole이 비어있을 수 있다(security-auth.md "form action에서
 //   locals.cmsRole 직접 사용 절대 금지" 규칙과 동일 이유).
 // - EC-5: 자기 자신을 대상(target)으로 하는 변경은 self-service 경로로 간주해 차단한다.
+//   단, 슈퍼마스터 본인은 예외(2026-09-15 후속) — 자신을 되돌려줄 상위 관리자가 없어
+//   자기 자신을 막으면 데드락이 생기므로, "본인 설정도 슈퍼마스터는 자유롭게 조정 가능"
+//   원칙에 따라 제외한다. manager는 이 차단이 그대로 유지된다.
+//   ⛔ 검사 순서 주의(2026-09-15 3차 후속): 슈퍼마스터 잠금 검사가 EC-5보다 먼저 실행돼야
+//   한다 — 순서가 바뀌면 매니저가 "본인" 계정의 슈퍼마스터-잠금 항목을 켜려 할 때 실제
+//   사유(슈퍼마스터가 잠갔다)가 EC-5의 뭉뚱그린 메시지에 가려져 절대 노출되지 않는다.
 // - 대상이 슈퍼마스터(superadmin)면 requireAccountMutationAccess()로 호출자도 실제
 //   슈퍼마스터여야만 통과한다(2026-09-15 추가 — 누락돼 있던 CRITICAL 공백, 계정목록의 다른
 //   관리 액션과 동일 게이트로 통일). PUT 전용 — GET(열람)은 계정 상세패널의 다른 탭 열람과
@@ -82,18 +88,6 @@ export const PUT: RequestHandler = async ({ locals, params, request }) => {
   const targetUserId = params.id
   if (!targetUserId) return json({ error: '잘못된 요청입니다.' }, { status: 400 })
 
-  // EC-5: 자기 자신에게 메뉴권한을 부여/변경하는 self-service 경로 차단
-  if (targetUserId === session.user.id) {
-    return json({ error: '자기 자신의 메뉴 권한은 변경할 수 없습니다.' }, { status: 403 })
-  }
-
-  // 대상 계정이 슈퍼마스터(superadmin)이면 호출자도 실제 슈퍼마스터여야 통과 — 계정목록의
-  // 다른 관리 액션(updateRole/toggleSuspend/delete 등)과 동일한 requireAccountMutationAccess
-  // 게이트를 여기에도 적용한다. 이 게이트가 없으면 매니저가 슈퍼마스터 계정의 메뉴 접근을
-  // 몰래 차단할 수 있었다(2026-09-15 발견 → 즉시 수정, Stephen 확인).
-  const accessErr = await requireAccountMutationAccess(locals, admin, targetUserId)
-  if (accessErr) return json({ error: accessErr }, { status: 403 })
-
   const body = (await request.json().catch(() => null)) as
     | { menu_key?: unknown; allowed?: unknown }
     | null
@@ -107,25 +101,14 @@ export const PUT: RequestHandler = async ({ locals, params, request }) => {
     return json({ error: '올바르지 않은 요청입니다.' }, { status: 400 })
   }
 
-  // Q6 확정: 메뉴권한은 role 허용범위를 절대 넘어설 수 없다(좁히기 전용) — 대상 계정의
-  // 실제 cms_role 기준으로 이 메뉴에 애초에 접근 불가능하면 allowed=true 저장 요청 자체를
-  // 거부한다. allowed=false(차단, 즉 좁히기)는 이 제약이 필요 없으므로 대상 role 조회를
-  // 생략한다.
+  // 슈퍼마스터 잠금(2026-09-15, Stephen 지시)을 EC-5(자기 자신 대상 차단)보다 먼저 검사한다.
+  // 순서가 바뀌면 실제 사유(슈퍼마스터가 잠갔다)가 자기 자신 차단의 뭉뚱그린 메시지에
+  // 가려지는 문제가 있었다 — 매니저가 "본인" 계정의 슈퍼마스터-잠금 항목을 켜려 하면
+  // EC-5가 먼저 걸려 "자기 자신의 메뉴 권한은 변경할 수 없습니다"만 보이고, 정작 진짜
+  // 이유("슈퍼마스터 권한 계정에 문의하세요")는 절대 도달하지 못했다(2026-09-15 3차 후속
+  // 실사용 중 발견·수정). 대상이 자기 자신이든 아니든, allowed=true 요청이 걸리는 실제
+  // 사유가 슈퍼마스터 잠금이라면 그 구체적 사유를 항상 우선 반환한다.
   if (allowed) {
-    const targetProfile = await fetchCmsProfileByAuthId(admin, targetUserId)
-    if (!roleAllowsMenuByDefault(targetProfile?.cms_role ?? '', menuKey)) {
-      return json(
-        { error: '이 계정의 등급으로는 접근할 수 없는 메뉴입니다.' },
-        { status: 400 }
-      )
-    }
-
-    // 슈퍼마스터 잠금(2026-09-15, Stephen 지시): 슈퍼마스터가 직접 이 메뉴를 OFF로
-    // 전환해 둔 상태라면, 그 항목을 다시 ON으로 되돌리는 것은 슈퍼마스터 계정만 할 수
-    // 있다 — 매니저가 시도하면 거부하고 클라이언트가 그대로 토스트로 보여줄 안내
-    // 문구를 반환한다. "누가 껐는가"는 마지막으로 저장한 updated_by의 현재 등급으로
-    // 판단한다(별도 컬럼 없이 기존 스키마만으로 판정 — 그 사람이 이후 강등/승격되면
-    // 판정도 함께 달라지는 것은 의도된 동작).
     const { data: existingRows } = await admin.rpc('cms_get_menu_permissions', {
       p_user_id: targetUserId,
     })
@@ -137,6 +120,40 @@ export const PUT: RequestHandler = async ({ locals, params, request }) => {
       if (lockerProfile?.cms_role === 'superadmin' && cmsRole !== 'superadmin') {
         return json({ error: '슈퍼마스터 권한 계정에 문의하세요.' }, { status: 403 })
       }
+    }
+  }
+
+  // EC-5: 자기 자신에게 메뉴권한을 부여/변경하는 self-service 경로 차단 — 단, 슈퍼마스터
+  // 본인은 예외다(Stephen 지시, 2026-09-15 후속 — "슈퍼마스터는 본인 설정도 자유롭게 직접
+  // 조정할 수 있어야 한다"). 실수로 스스로를 잠그는 사고 방지 목적의 이 가드는 manager에게는
+  // 그대로 유지하되, 슈퍼마스터에게는 애초에 그 방지 목적이 성립하지 않는다 — 슈퍼마스터는
+  // 이 계정 목록에서 유일하게 자기 자신을 되돌려줄 다른 상위 관리자가 없는 존재이므로, 자기
+  // 자신을 막아버리면 아무도 풀어줄 수 없는 데드락이 생긴다(실제로 이 상태가 한 계정에서
+  // 재현됨 — 다른 매니저가 이 계정의 채팅 권한을 꺼둔 뒤, 정작 그 계정 본인은 자신의
+  // 권한을 스스로 되돌릴 방법이 없었음). 위 슈퍼마스터 잠금 검사를 통과했다면(잠금 대상이
+  // 아니었다면) 이 시점에 도달한다.
+  if (targetUserId === session.user.id && cmsRole !== 'superadmin') {
+    return json({ error: '자기 자신의 메뉴 권한은 변경할 수 없습니다.' }, { status: 403 })
+  }
+
+  // 대상 계정이 슈퍼마스터(superadmin)이면 호출자도 실제 슈퍼마스터여야 통과 — 계정목록의
+  // 다른 관리 액션(updateRole/toggleSuspend/delete 등)과 동일한 requireAccountMutationAccess
+  // 게이트를 여기에도 적용한다. 이 게이트가 없으면 매니저가 슈퍼마스터 계정의 메뉴 접근을
+  // 몰래 차단할 수 있었다(2026-09-15 발견 → 즉시 수정, Stephen 확인).
+  const accessErr = await requireAccountMutationAccess(locals, admin, targetUserId)
+  if (accessErr) return json({ error: accessErr }, { status: 403 })
+
+  // Q6 확정: 메뉴권한은 role 허용범위를 절대 넘어설 수 없다(좁히기 전용) — 대상 계정의
+  // 실제 cms_role 기준으로 이 메뉴에 애초에 접근 불가능하면 allowed=true 저장 요청 자체를
+  // 거부한다. allowed=false(차단, 즉 좁히기)는 이 제약이 필요 없으므로 대상 role 조회를
+  // 생략한다.
+  if (allowed) {
+    const targetProfile = await fetchCmsProfileByAuthId(admin, targetUserId)
+    if (!roleAllowsMenuByDefault(targetProfile?.cms_role ?? '', menuKey)) {
+      return json(
+        { error: '이 계정의 등급으로는 접근할 수 없는 메뉴입니다.' },
+        { status: 400 }
+      )
     }
   }
 

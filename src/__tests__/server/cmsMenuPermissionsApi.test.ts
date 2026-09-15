@@ -8,7 +8,8 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
  * 아직 CRUD API/RPC가 없다. 이 API가 그 저장·집행 계층이다.
  *
  * EC-5: manager 등급 관리자가 메뉴권한 API를 직접 호출해 "자기 자신"에게 권한을 부여/변경하는
- *       self-service 경로 차단.
+ *       self-service 경로 차단. 단, 슈퍼마스터 본인은 예외(2026-09-15 후속, Stephen 지시) —
+ *       되돌려줄 다른 상위 관리자가 없어 자기 자신을 막으면 데드락이 생기기 때문.
  * Q6 신규: partner 대상으로 role상 roleAllowsMenuByDefault()(hasRouteAccess/hasSettingsAccess
  *       조합)가 false인 메뉴에 allowed=true를 넣으려는 요청은 서버가 거부한다 —
  *       "메뉴권한이 role 허용범위를 절대 넘어설 수 없다"는 불변조건.
@@ -152,12 +153,51 @@ describe('PUT /api/cms/accounts/[id]/menu-permissions', () => {
     expect(mockRpc).not.toHaveBeenCalled();
   });
 
-  it('EC-5: 자기 자신을 대상으로 하면 403을 반환하고 RPC를 호출하지 않는다', async () => {
+  it('EC-5: manager가 자기 자신을 대상으로 하면 403을 반환하고 저장 RPC는 호출하지 않는다 ' +
+    '(슈퍼마스터 잠금 여부를 먼저 조회하므로 cms_get_menu_permissions 조회 자체는 일어난다 — ' +
+    '2026-09-15 3차 후속, 검사 순서 변경)', async () => {
     const result = (await PUT(
       makeEventPUT('manager', ACTOR_ID, { menu_key: 'products.list', allowed: true })
     )) as unknown as ApiResult;
     expect(result.status).toBe(403);
-    expect(mockRpc).not.toHaveBeenCalled();
+    expect(mockRpc).not.toHaveBeenCalledWith('cms_set_menu_permission', expect.anything());
+  });
+
+  it('EC-5 예외(2026-09-15 후속, Stephen 지시): 슈퍼마스터는 자기 자신의 메뉴 권한을 ' +
+    '직접 자유롭게 변경할 수 있다 — 되돌려줄 다른 상위 관리자가 없어 자기 자신을 막으면 ' +
+    '데드락이 생기기 때문', async () => {
+    mockProfileRoles({ [ACTOR_ID]: 'superadmin' });
+    const result = (await PUT(
+      makeEventPUT('superadmin', ACTOR_ID, { menu_key: 'products.list', allowed: true })
+    )) as unknown as ApiResult;
+    expect(result.status).toBe(200);
+    expect(mockRpc).toHaveBeenCalledWith('cms_set_menu_permission', {
+      p_target_user_id: ACTOR_ID,
+      p_menu_key: 'products.list',
+      p_allowed: true,
+      p_actor_id: ACTOR_ID,
+    });
+  });
+
+  it('검사 순서 수정(2026-09-15 3차 후속, 실사용 중 발견): 매니저가 "본인" 계정의 슈퍼마스터-잠금 ' +
+    '항목을 켜려 하면 EC-5의 뭉뚱그린 메시지가 아니라 "슈퍼마스터 권한 계정에 문의하세요."가 ' +
+    '반환된다 — 대상이 자기 자신이어도 실제 사유가 슈퍼마스터 잠금이면 그 사유를 그대로 보여줘야 함', async () => {
+    mockProfileRoles({ [ACTOR_ID]: 'manager', 'other-superadmin-uid': 'superadmin' });
+    mockRpc.mockImplementation(async (fn: string) => {
+      if (fn === 'cms_get_menu_permissions') {
+        return {
+          data: [{ menu_key: 'settings.push', allowed: false, updated_at: '2026-09-15T00:00:00Z', updated_by: 'other-superadmin-uid' }],
+          error: null,
+        };
+      }
+      return { data: null, error: null };
+    });
+    const result = (await PUT(
+      makeEventPUT('manager', ACTOR_ID, { menu_key: 'settings.push', allowed: true })
+    )) as unknown as ApiResult;
+    expect(result.status).toBe(403);
+    expect((result.data as { error?: string }).error).toBe('슈퍼마스터 권한 계정에 문의하세요.');
+    expect(mockRpc).not.toHaveBeenCalledWith('cms_set_menu_permission', expect.anything());
   });
 
   it('CRITICAL(2026-09-15 발견·수정): manager가 대상이 superadmin인 계정의 메뉴 권한을 ' +
@@ -185,12 +225,13 @@ describe('PUT /api/cms/accounts/[id]/menu-permissions', () => {
     });
   });
 
-  it('Q6: partner 대상으로 role상 접근 불가능한 메뉴(settings.admin)에 allowed=true 시도 시 400으로 거부하고 RPC를 호출하지 않는다', async () => {
+  it('Q6: partner 대상으로 role상 접근 불가능한 메뉴(settings.admin)에 allowed=true 시도 시 ' +
+    '400으로 거부하고 저장 RPC는 호출하지 않는다', async () => {
     const result = (await PUT(
       makeEventPUT('manager', 'target-partner-uid', { menu_key: 'settings.admin', allowed: true })
     )) as unknown as ApiResult;
     expect(result.status).toBe(400);
-    expect(mockRpc).not.toHaveBeenCalled();
+    expect(mockRpc).not.toHaveBeenCalledWith('cms_set_menu_permission', expect.anything());
   });
 
   it('narrowing(allowed=false)은 role 상한선(Q6) 체크 없이 항상 허용된다 — 단, 대상이 ' +
@@ -214,7 +255,7 @@ describe('PUT /api/cms/accounts/[id]/menu-permissions', () => {
       makeEventPUT('manager', 'target-partner-uid', { menu_key: 'customers.membership', allowed: true })
     )) as unknown as ApiResult;
     expect(result.status).toBe(400);
-    expect(mockRpc).not.toHaveBeenCalled();
+    expect(mockRpc).not.toHaveBeenCalledWith('cms_set_menu_permission', expect.anything());
   });
 
   it('role 허용범위 내 allowed=true는 정상 저장된다(role 상한선을 넘지 않는 경우)', async () => {
