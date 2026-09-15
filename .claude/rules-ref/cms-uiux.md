@@ -151,6 +151,7 @@
 |---|---|---|---|---|---|---|---|
 | `ctaPrimary` | CTA 기본 — 저장·등록·반영·발송 | **44px** | `--crazy-shot-purple-100` `#100B32` / hover `--crazy-shot-purple-80` `#3B2F8A` | **15px** (`--radius-md`) | 0 30px | label-lg 14px/700 | white |
 | `ctaSecondary` | CTA 보조 (검색) | **44px** | white | **15px** (`--radius-md`) | 0 30px | label-lg 14px/700 | primary-800 `#201857` |
+| `ctaPrimaryPurple` | CTA 대형 — 퍼플 계열(Detail Panel 헤더 인라인 액션, 예: RentalDetailPanel "예약변경") | **44px** | `--cs-purple` `#3B2F8A` / hover `--cs-purple-dark` `#201857` | **15px** (`--radius-md`) | 0 20px | label-lg 14px/700 | white |
 | `actionSave` | 액션 소형 — 저장·등록·반영·발송 | **34px** | `--crazy-shot-purple-100` `#100B32` / hover `--crazy-shot-purple-80` `#3B2F8A` | lg **10px** | 10px 20px | label-sm 12px/700 | white |
 | `danger` | 위험 (삭제) | **40px** | danger-50 `#FFCFCF` | base **8px** | 0 20px | label-lg 14px/700 | danger-500 `#FF3535` |
 | `categoryChipActive` | 카테고리 칩 활성 | **30px** | primary-800 `#201857` | base **8px** | 8px 14px | body-xs 12px/400 | white |
@@ -160,8 +161,12 @@
 | `badgeCategory` | 카테고리 뱃지 소형 | **22px** | purpleTint-100 `#ECEBF4` | lg **10px** | 5px 10px | meta 10px/400 | primary-800 `#201857` |
 | `badgeStock` | 재고 뱃지 | **22px** | gray-250 `#F3F4F6` | base **8px** | 5px 10px | meta 10px/400 | gray-600 `#666666` |
 | `toggleStatusTag` | 노출 상태 태그 | **23px** | purpleTint-100 `#ECEBF4` | 2xl **20px** | 5px 10px | caption 11px/700 | gray-600 `#666666` |
-| `closeCircle` | 닫기 원형 버튼 | **24×24** | purpleTint-100 `#ECEBF4` | **12px** (원형) | 0 | — 12px/700 | gray-600 |
+| ~~`closeCircle`~~ | ⛔ JSON 원본 스펙(24×24 원형·purpleTint 배경) — 실제 코드 어디에도 존재하지 않는 값, 아래 실측 2종(§0-10-A)으로 대체(2026-09-14) | — | — | — | — | — | — |
 | `toggleSwitch` | 토글 스위치 ON | **36×20** | primary-600 `#3B2F8A` | lg **10px** | 2px | — | — |
+
+**⚠️ 44px 대형 CTA는 색상 계열 2종이 공존한다(2026-09-14 확정)** — 컨텍스트에 맞는 쪽을 선택할 것:
+- `ctaPrimary`(다크네이비 계열, `#100B32`/호버 `#3B2F8A`) — 페이지 최상단 CTA(등록·저장) 기본값
+- `ctaPrimaryPurple`(퍼플 계열, `--cs-purple`/호버 `--cs-purple-dark`) — Detail Panel **헤더 인라인** 액션 버튼 전용(패널 자체가 이미 퍼플 톤 헤더를 쓰는 문맥에서 CTA가 더 자연스럽게 녹아들도록). 두 색상을 같은 화면에서 임의로 혼용하지 말 것 — 헤더 인라인 위치면 `ctaPrimaryPurple`, 그 외 표준 CTA 위치면 `ctaPrimary`.
 
 **ctaSecondary (보조 버튼) 추가 스펙:**
 - border: `search` — `#201857` 1px solid
@@ -178,11 +183,19 @@ toggleSwitch : ON 색 primary-600(#3B2F8A) / 크기 36×20 / radius lg(10px)
 
 ---
 
-### 0-10-A. 패널 닫기 버튼 표준 (`.close-btn`) — 공식 명칭 `close-red`(강조닫기버튼) ★
+### 0-10-A. 패널 닫기 버튼 표준 — 강조(`close-red`) + 일반(`close-normal`) 2종 (2026-09-14 2종 확정) ★
+
+> ⛔ JSON `standardButtons`의 `closeCircle`(24×24 원형·purpleTint 배경) 항목은 실제 코드 어디에도
+> 존재하지 않는 값이었다 — 실측 결과 닫기 버튼은 항상 28×28px에 `✕` 문자를 쓰며, hover 색만
+> 다른 2종(강조/일반)이 실제로 존재한다. `closeCircle`은 폐기하고 아래 2종을 정본으로 삼는다.
+
+#### A-1. 강조(`close-red`)
 
 > **아이콘 라이브러리 공식 등록명**: `close-red` (강조닫기버튼) — hover 시 레드(`--cs-red-badge`)로
 > 강조되는 것이 식별 특징
-> "close-red 적용해"/"강조닫기버튼 등록해" 언급 시 이 섹션의 스펙을 즉시 적용한다.
+> "close-red 적용해"/"강조닫기버튼 등록해"/"닫기 버튼 반영해"/"닫기 아이콘 반영해" 언급 시
+> 이 섹션의 스펙을 즉시 적용한다(2026-09-14 트리거 문구 확장 — CLAUDE.md 상위 규칙과
+> 별개로 이 문서 자체만으로도 자연스러운 표현에서 트리거되도록 보강).
 > 정본 컴포넌트: `ProductDetailPanel.svelte` → 모든 CMS Detail Panel의 닫기 버튼 표준
 > 클래스명은 화면마다 `.close-btn`/`.rep-close-btn` 등으로 다를 수 있으나, 아래 스펙과
 > 일치하면 전부 `close-red` 동일 컴포넌트로 취급한다(2026-08-07 라이브러리 등록).
@@ -255,6 +268,194 @@ toggleSwitch : ON 색 primary-600(#3B2F8A) / 크기 36×20 / radius lg(10px)
 - `ProductDetailPanel.svelte` (정본)
 - `_AutoMappingTab.svelte` (코드조합 Detail Panel)
 - CMS 내 Detail Panel을 가진 모든 화면
+
+#### A-2. 일반(`close-normal`)
+
+> hover 시 색이 바뀌지 않고 무채색 배경만 옅게 채워지는 것이 식별 특징 — 파손·환불처럼
+> 이미 다른 강조색(빨강)을 쓰는 액션 버튼이 헤더에 함께 있어 닫기 버튼까지 레드로 강조하면
+> 시선이 분산되는 화면에 사용. "닫기 버튼 반영해" 요청 시 기본값은 A-1(close-red)이며,
+> 이 A-2는 화면에 이미 다른 레드 강조 요소가 있어 명시적으로 요청되거나 기존 코드가
+> 이 패턴인 경우에만 유지한다.
+> 정본 컴포넌트: `RentalDetailPanel.svelte`
+
+**스펙**
+
+| 항목 | 값 |
+|---|---|
+| 크기 | 28×28px |
+| 배경 | transparent |
+| 텍스트 | `✕` (문자, SVG 아이콘 금지) |
+| 색상 | `var(--cs-text-mid)` |
+| 반경 | `6px` (하드코딩 — 기존 토큰과 불일치, §0-10-A-2 참고) |
+| hover BG | `var(--cs-surface-gray)` |
+| hover 색상 | 변경 없음(텍스트 색 고정) |
+| 위치 | `margin-left: auto` |
+
+> ⚠️ 반경 `6px`은 `--radius-sm`(8px)·`--cms-radius-sm`(10px) 어느 토큰과도 일치하지 않는
+> 하드코딩값이다(실측 코드 그대로 기록 — core-rules.md "하드코딩 금지" 원칙과는 별개로,
+> 이미 존재하는 값을 있는 그대로 문서화한 것). 토큰으로 정리가 필요하다고 판단되면
+> 별도로 Stephen에게 확인 후 진행할 것 — 이 문서 갱신만으로 코드를 임의 변경하지 않는다.
+
+**표준 CSS (컴포넌트 scoped)**
+
+```css
+.close-btn {
+  width: 28px; height: 28px;
+  display: flex; align-items: center; justify-content: center;
+  border: none; background: none;
+  cursor: pointer;
+  font-size: 14px; color: var(--cs-text-mid);
+  border-radius: 6px;
+  transition: background 0.12s;
+}
+.close-btn:hover { background: var(--cs-surface-gray); }
+```
+
+**적용 화면**
+
+- `RentalDetailPanel.svelte` (정본 — `/cms/reservation`·`/cms/rentals` 공용)
+
+---
+
+### 0-10-C. 초소형 라운드 버튼형 — 소규모 항목 독립 실행 버튼 ★ (2026-09-14 등록)
+
+> **공식 등록명**: `초소형 라운드 버튼형`
+> 소규모 항목(예약 상품코드·태그·칩 등 인라인 항목)의 독립 실행(삭제·저장·수정·재배정 등)에
+> 쓰이는 초소형 pill 버튼. 목록 행·칩 옆에 인라인으로 붙어 단독 액션을 실행하는 UI.
+>
+> **트리거 문구**: "초소형 라운드 버튼형 적용해" / "초소형 버튼 적용해" / "소규모 항목 독립 실행 버튼" 언급 시 이 섹션 스펙을 즉시 적용한다(추측·재설계 금지).
+>
+> 정본 구현: `RentalDetailPanel.svelte` `.btn-reassign-small` (상품코드 재배정 버튼)
+
+**스펙**
+
+| 항목 | 값 |
+|---|---|
+| `border-radius` | `var(--radius-full)` (99px, pill형) |
+| `background` (기본) | `var(--cs-surface-gray)` (#F6F6F6) |
+| `color` (기본) | `var(--cs-text-mid)` (#666666) |
+| `border` | none (outline/border 절대 금지) |
+| `font-size` | 11px |
+| `font-weight` | 600 |
+| `padding` (상하) | 5px |
+| `padding` (좌우) | 10px |
+| `white-space` | nowrap |
+| `flex-shrink` | 0 |
+| hover `background` | `var(--cs-text-mid)` (#666666) |
+| hover `color` | `var(--cs-white)` (#FFFFFF) |
+| transition | `background 0.15s, color 0.15s` |
+
+**호버 컬러 반전 원칙**: 기본 bg↔폰트 컬러 토큰을 그대로 뒤바꿔 반영 — 다른 색상 추가 금지.
+
+**표준 CSS 패턴**
+
+```css
+.btn-reassign-small {
+  flex-shrink: 0;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 5px 10px;
+  border: none;
+  border-radius: var(--radius-full);
+  background: var(--cs-surface-gray);
+  color: var(--cs-text-mid);
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 0.15s, color 0.15s;
+}
+.btn-reassign-small:hover {
+  background: var(--cs-text-mid);
+  color: var(--cs-white);
+}
+```
+
+**적용 규칙**
+
+```
+⛔ border/outline 추가 금지
+⛔ box-shadow 추가 금지
+⛔ 호버 시 BG 외 효과(outline·shadow) 추가 금지
+✅ 항상 border: none
+✅ pill형(radius-full) 고정
+✅ 상하 패딩(5px) 반드시 포함
+✅ 좌우 패딩(10px) 반드시 포함
+✅ 클래스명은 화면마다 달라도 스펙이 위와 일치하면 동일 컴포넌트로 취급
+```
+
+---
+
+### 0-10-B. 삭제 안전장치 토스트 표준 — 공식 명칭 `삭제 안전 토스트` ★ (2026-09-14)
+
+> **모듈 공식 등록명**: `삭제 안전 토스트`(= `삭제 안전장치 토스트`) — 1차 클릭은 실제 삭제
+> 대신 경고 토스트만 띄우고 제출을 무장(cancel)하며, 그 상태에서 2차 클릭이 들어와야
+> 비로소 실제 삭제 서버 액션을 제출하는 2단계 확인 패턴.
+>
+> "삭제 안전장치 토스트 반영해"/"삭제 안전 토스트 반영해"/"삭제 안전 토스트 컴포넌트
+> 반영해" 등 요구 단어가 다양하더라도 "삭제 안전(장치) 토스트"라는 핵심 어구가 들어가면
+> 즉시 이 섹션의 모듈을 그대로 적용한다(추측·재설계 금지 — 아래 정본 모듈 재사용).
+>
+> 정본 모듈: `src/lib/utils/deleteSafetyToast.svelte.ts` (Svelte 5 rune 재사용 상태
+> 팩토리 — `.svelte.ts` 확장자 필수, 일반 `.ts`는 `$state` 사용 불가)
+> 정본 적용처: `ProductDetailPanel.svelte` "상품 삭제" 푸터
+
+**스펙**
+
+| 항목 | 값 |
+|---|---|
+| 1차 클릭 | 실제 제출 안 함(`cancel()`) + `csToast.warning(경고문구)` + 무장 상태 진입 |
+| 2차 클릭(무장 상태에서) | 실제 서버 액션 제출 → 성공 시 `csToast.success` + `onSuccess` 콜백 / 실패 시 `csToast.error` |
+| 버튼 텍스트 | 평상시 "삭제"류 문구 → 무장 상태 "한번 더 누르면 삭제됩니다" → 처리중 "삭제 중..." |
+| 버튼 스타일 | `.btn-danger` 기본, 무장 상태에 `.btn-danger--pending` 추가(배경 `--cs-red`로 강조) |
+| 기본 경고문구 | `'한번 더 누르면 삭제됩니다.'` (옵션으로 재정의 가능) |
+
+**표준 코드 패턴**
+
+```ts
+// $lib/utils/deleteSafetyToast.svelte.ts 사용법
+import { createDeleteSafetyToast } from '$lib/utils/deleteSafetyToast.svelte'
+
+const deleteSafety = createDeleteSafetyToast({
+  successMessage: '상품이 삭제됐습니다.', // 선택, 기본값 있음
+  onSuccess: onclose,                     // 선택 — 성공 후 패널 닫기 등
+})
+```
+
+```svelte
+<form method="POST" action="?/deleteX" use:enhance={deleteSafety.handleSubmit}>
+  <button
+    type="submit"
+    class="btn-danger"
+    class:btn-danger--pending={deleteSafety.pending}
+    disabled={deleteSafety.isDeleting}
+  >{deleteSafety.isDeleting ? '삭제 중...' : deleteSafety.pending ? '한번 더 누르면 삭제됩니다' : '삭제'}</button>
+</form>
+```
+
+```css
+/* .btn-danger / .btn-danger--pending — 화면마다 scoped CSS로 복제(공용 전역 클래스 아님,
+   ProductDetailPanel.svelte 4152-4168행 정본을 그대로 복사) */
+.btn-danger { /* 기본 상태 스타일 — 정본 파일 참고 */ }
+.btn-danger:hover { background: var(--cs-red); }
+.btn-danger:disabled { opacity: 0.6; cursor: not-allowed; }
+.btn-danger--pending { background: var(--cs-red); }
+```
+
+**적용 규칙**
+
+```
+✅ 상태·핸들러 로직은 반드시 createDeleteSafetyToast()를 import해 재사용 — 화면마다
+   deletePending/isDeleting/handleDelete류를 새로 만들지 않는다(중복 구현 금지)
+✅ 버튼 CSS(.btn-danger/.btn-danger--pending)는 close-red와 동일하게 화면별 scoped
+   복제 허용(정본 파일 값 그대로 복사, 임의 팔레트 창작 금지)
+✅ onSuccess 콜백으로 화면별 후처리(패널 닫기·목록 갱신 등) 연결
+❌ 1차 클릭에서 바로 삭제 제출 금지 — 반드시 무장 단계를 거칠 것
+❌ 경고/성공/실패 토스트를 csToast 대신 다른 방식(alert 등)으로 구현 금지
+```
+
+**적용 화면**
+
+- `ProductDetailPanel.svelte` "상품정보 삭제" (정본)
+- 향후 CMS 내 파괴적 삭제 액션에 동일 패턴 필요 시 전부 이 모듈 재사용
 
 ---
 
@@ -488,6 +689,62 @@ display: block으로 변경 시:
 [ ] .panel-body가 display: block? (flex 금지)
 [ ] 패널 내 자식 섹션이 overflow: hidden이면 panel-body는 반드시 block
 ```
+
+---
+
+### ⛔ DetailPanel 레이아웃 표준 (2026-09-14 확정)
+
+> 모든 DetailPanel(RentalDetailPanel·ProductDetailPanel·CustomerDetailPanel 등)에 일괄 적용되는
+> 내부 여백 표준값. 기존값을 2배로 확대해 시각적 호흡을 개선한 정책이다.
+
+| 항목 | 기존값 | **표준값** | 적용 대상 |
+|---|---|---|---|
+| 탭메뉴 바(`.panel-tabs`) 자체 상하 패딩 | 0px | **16px** (좌우 8px 유지) | 모든 DetailPanel `.panel-tabs` — `padding: 16px 8px` |
+| 탭메뉴 ↔ 목록 상단 여백 | 16px | **32px** | 모든 DetailPanel `.panel-body` 첫 번째 섹션 `margin-top` |
+| 빠른문의 카드 간 여백 | 6px | **12px** | 빠른문의(CustomerDetailPanel 등) 목록 카드 `gap` |
+| 구독카드 카드 간 여백(여러 건) | 10px | **20px** | 구독카드 목록(여러 건 표시 시) `gap` |
+
+```css
+/* ✅ 탭메뉴 바 자체 상하 패딩 신설 (2026-09-14 후속 확정) — 좌우 8px는 기존 유지 */
+.panel-tabs {
+  padding: 16px 8px;  /* 기존 0px → 좌우 패딩(8px)과 동일 단위를 2배 적용해 신설 */
+}
+
+/* ✅ 탭메뉴 ↔ 목록 상단 여백 표준 (spacing-4xl: 32px) */
+.panel-body > .section:first-child,
+.panel-body > *:first-child {
+  margin-top: 32px;  /* spacing-4xl — 기존 16px(spacing-lg)에서 2배 확대 */
+}
+
+/* ✅ 빠른문의 카드 간 여백 (spacing-base: 12px) */
+.inquiry-list,
+.quick-inquiry-list {
+  gap: 12px;  /* spacing-base — 기존 6px(spacing-xs)에서 2배 확대 */
+}
+
+/* ✅ 구독카드 여러 건 카드 간 여백 */
+.subscription-card-list {
+  gap: 20px;  /* 기존 10px(spacing-md)에서 2배 확대 */
+}
+```
+
+#### GATE C 확인 항목 (DetailPanel 여백 표준)
+
+```
+[ ] 모든 DetailPanel .panel-tabs 상하 패딩이 16px(좌우 8px 유지)인가? (기존 0px 사용 금지)
+[ ] 모든 DetailPanel .panel-body 첫 번째 섹션 상단 여백이 32px인가? (기존 16px 사용 금지)
+[ ] 빠른문의 카드 목록 gap이 12px인가? (기존 6px 사용 금지)
+[ ] 구독카드 여러 건 표시 시 gap이 20px인가? (기존 10px 사용 금지)
+```
+
+> ⚠️ **적용 현황(2026-09-14 기준)**: 탭메뉴↔목록 32px는 `CustomerDetailPanel.svelte`(구독이력·
+> 포인트이력·상품대여이력·블랙리스트·빠른문의 5개 탭)와 `RentalDetailPanel.svelte`(대여정보·
+> 고객정보·결제정보·계약서 4개 탭, `.panel-body`가 탭 전체가 공유하는 단일 컨테이너라 padding-top
+> 한 곳만 16px→32px 수정으로 4개 탭 전부 일괄 반영됨) 두 파일에 적용·실측 완료. `.panel-tabs`
+> 자체 상하패딩(16px)은 `CustomerDetailPanel.svelte`·`RentalDetailPanel.svelte`(2026-09-14 탭
+> 레이아웃 그룹 정리 시 함께 반영) 2곳 적용 완료. `ProductDetailPanel.svelte`
+> 등 나머지 DetailPanel에는 둘 다 아직 미적용 — 해당 화면 작업 시 이 표를 기준으로 함께 반영할 것
+> (요청 없이 선제적으로 다른 파일을 수정하지 않음, 요청범위 외 수정 금지 원칙).
 
 ---
 

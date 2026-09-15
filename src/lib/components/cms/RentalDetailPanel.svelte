@@ -85,6 +85,7 @@
     point_amount:           number | null
     coupon_discount:        number | null
     confirmed_at:           string | null
+    pg_cancelled_at:        string | null   // PG 실제 취소 처리 시각 (Migration #493)
     toss_response:          Record<string, unknown> | null
     status:                 string | null   // 'done' | 'cancelled' | null
     refund_failed_at:       string | null   // RSV-B-C1: Toss취소 성공 후 RPC 실패 시 기록
@@ -106,8 +107,11 @@
     /** 예약 단계 상태 변경(승인·거부·취소) 완료 시 호출 — /cms/reservation에서 closePanel에 연결.
         /cms/rentals에서는 미사용(isRentalView=true일 때 undefined가 기본값). */
     onstatuschange?: () => void
+    /** rental.change_cancel 메뉴권한 허용 여부(per-account 오버레이 반영).
+     *  미지정(undefined) = 기본 허용(true)으로 동작 — 기존 동작 무회귀 보장. */
+    canChangeOrCancelReservation?: boolean
   }
-  let { row, onclose, onrefresh, stepFilter, isRentalView = false, enableQrVerify = false, cmsRole = null, initialTab, onstatuschange }: Props = $props()
+  let { row, onclose, onrefresh, stepFilter, isRentalView = false, enableQrVerify = false, cmsRole = null, initialTab, onstatuschange, canChangeOrCancelReservation = true }: Props = $props()
 
   // RSV-B-B3: 이 derived는 "환불 처리" + "보관함 비밀번호" 두 기능 모두의 권한 게이트이므로
   // canManagePaymentAndLocker 대신 실제 역할을 반영한 이름으로 변경.
@@ -198,44 +202,13 @@
   let activeTab   = $state<'rental' | 'customer' | 'payment' | 'contract'>(initialTab ?? 'rental')
   let isSubmitting = $state(false)
 
-  // 환불 처리 상태 (결제정보 탭 PUT /api/cms/reservations/[id]/payment)
-  let isRefunding = $state(false)
-  let refundError = $state<string | null>(null)
+  // 헤더 버튼 이중확인 — ProductDetailPanel.svelte handleDeleteProduct 패턴
+  // 1차 클릭: cancel()로 제출 차단 + 토스트 경고(무장) / 2차 클릭: 실제 폼 제출
+  let changePending = $state(false)
+  let isChanging    = $state(false)
 
-  async function handleRefund(): Promise<void> {
-    // RSV-B-B1: 환불 확인 다이얼로그에 실결제 금액 포함 — 관리자가 어떤 금액을 환불하는지 명확히 인지하도록.
-    const amountStr = paymentDetail?.paid_amount != null
-      ? `환불 금액: ${paymentDetail.paid_amount.toLocaleString('ko-KR')}원\n`
-      : ''
-    // 환불 사유 입력 (prompt — 새 모달 컴포넌트 신설 없이 가장 가벼운 CMS 인라인 패턴)
-    const reason = window.prompt('환불 사유를 입력해 주세요.\n(비워 두면 "관리자 환불"로 기록됩니다.)', '')
-    if (reason === null) return   // 취소 버튼: 환불 중단
-    const cancelReason = reason.trim() || '관리자 환불'
-    if (!window.confirm(`전액 환불하시겠습니까?\n${amountStr}사유: ${cancelReason}\n\n이 작업은 취소할 수 없습니다.`)) return
-    isRefunding = true
-    refundError = null
-    try {
-      const res = await fetch(`/api/cms/reservations/${row.reservation_id}/payment`, {
-        method:  'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body:    JSON.stringify({ cancelReason }),
-      })
-      const data = await res.json() as { ok?: boolean; error?: string; cancelledIds?: number[] }
-      if (!res.ok || !data.ok) {
-        refundError = data.error ?? '환불 처리에 실패했습니다.'
-      } else {
-        csToast.success('환불이 완료되었습니다.')
-        // RSV-B-B2: 결제 정보 캐시 무효화 — 다음 결제정보 탭 진입 시 새 데이터 로드
-        fetchedForId = null
-        paymentDetail = null
-        onrefresh()
-      }
-    } catch {
-      refundError = '네트워크 오류가 발생했습니다. 다시 시도해 주세요.'
-    } finally {
-      isRefunding = false
-    }
-  }
+  let cancelPending  = $state(false)
+  let isCancelling   = $state(false)
 
   let fetchedForId    = $state<number | null>(null)
   let paymentDetail   = $state<PaymentDetail | null>(null)
@@ -788,6 +761,12 @@
   // 허용해버리는 결함으로 이어졌다 — RPC 쪽도 Migration #485로 동일하게 보강.
   const TERMINAL = new Set(['completed', 'cancelled', 'damage_claimed', 'expired'])
 
+  /** 이미 출고·대여중·반납 처리 중인 예약건은 예약변경/예약취소가 불가한 상태 집합.
+   *  return_requested: 반납 접수 후 이동 중이므로 결제 취소 위험 동일 수준으로 포함. */
+  const RESERVATION_CHANGE_CANCEL_LOCKED_STATUSES = new Set([
+    'shipped', 'in_use', 'return_requested', 'returned',
+  ])
+
   // §9 게이팅 완료 후 승인이력 표시 대상 상태 (rental-lifecycle.md 전체 상태 머신 기준)
   const APPROVAL_HISTORY_STATUSES = new Set([
     'confirmed', 'shipped', 'in_use', 'return_requested', 'returned', 'completed', 'damage_claimed',
@@ -1015,6 +994,7 @@
 
   $effect(() => {
     if (activeTab !== 'rental') return
+    if (!canManagePaymentAndLocker) return  // dhero API는 매니저 이상 전용(403) — 파트너는 요청 자체를 생략
     if (dheroLoading) return
     if (dheroFetchedForId === row.reservation_id) return
 
@@ -1213,11 +1193,94 @@
         <span class="payment-contract-badge">결제완료 · 계약대기</span>
       {/if}
     </div>
-    <div class="reservation-qr-wrap reservation-qr-wrap--header">
-      <canvas bind:this={reservationQrCanvasEl} width="44" height="44" aria-label="예약 QR 코드"></canvas>
-      <button class="qr-dl-btn" onclick={downloadReservationQR} title="QR PNG 다운로드" type="button">↓ QR 저장</button>
+    <div class="panel-header-actions">
+      {#if canManagePaymentAndLocker && !isTerminal(row.status) && row.status !== 'hold'}
+        <!-- 예약변경: hold(미결제)+계약 리셋 — 전액취소 후 재조정 가능하게 -->
+        <form
+          method="POST"
+          action="/cms/reservation?/changeReservation"
+          use:enhance={({ cancel }) => {
+            if (!changePending) {
+              changePending = true
+              csToast.warning('한번 더 누르면 예약이 신청대기 상태로 되돌아가고 결제가 취소됩니다.')
+              cancel()
+              return
+            }
+            isChanging = true
+            isSubmitting = true
+            return async ({ result, update }) => {
+              isChanging = false
+              isSubmitting = false
+              changePending = false
+              if (result.type === 'success') csToast.success('예약이 신청대기로 변경됐습니다. 고객에게 안내가 발송됩니다.')
+              else csToast.error('처리 중 오류가 발생했습니다.')
+              await update()
+              if (result.type === 'success') onstatuschange?.()
+            }
+          }}
+        >
+          <input type="hidden" name="reservation_id" value={row.reservation_id} />
+          <button
+            type="submit"
+            class="btn-header-action"
+            disabled={isChanging || RESERVATION_CHANGE_CANCEL_LOCKED_STATUSES.has(row.status) || !canChangeOrCancelReservation}
+            title={RESERVATION_CHANGE_CANCEL_LOCKED_STATUSES.has(row.status)
+              ? '출고 이후 상태에서는 예약변경이 불가합니다'
+              : !canChangeOrCancelReservation
+                ? '예약변경 및 취소 권한이 없습니다'
+                : undefined}
+          >{isChanging ? '처리 중...' : '예약변경'}</button>
+        </form>
+        <!-- 예약취소: 형제 전체 취소 + 전액환불 (updateStatus cancelled 분기) -->
+        <form
+          method="POST"
+          action="/cms/reservation?/updateStatus"
+          use:enhance={({ cancel }) => {
+            if (!cancelPending) {
+              cancelPending = true
+              csToast.warning('한번 더 누르면 예약이 취소되고 결제금액이 전액 환불됩니다.')
+              cancel()
+              return
+            }
+            isCancelling = true
+            isSubmitting = true
+            return async ({ result, update }) => {
+              isCancelling = false
+              isSubmitting = false
+              cancelPending = false
+              if (result.type === 'success') {
+                csToast.success('예약이 취소됐습니다.')
+                if ((result.data as Record<string, unknown> | undefined)?.dhero_cancel_failed) {
+                  csToast.warning('배송사 측 취소에 실패했습니다. 실물 배송을 별도로 확인하세요.')
+                }
+              } else {
+                csToast.error('처리 중 오류가 발생했습니다.')
+              }
+              await update()
+              if (result.type === 'success') onstatuschange?.()
+            }
+          }}
+        >
+          <input type="hidden" name="reservation_id" value={row.reservation_id} />
+          <input type="hidden" name="status" value="cancelled" />
+          <button
+            type="submit"
+            class="btn-header-action btn-header-action--danger"
+            disabled={isCancelling || RESERVATION_CHANGE_CANCEL_LOCKED_STATUSES.has(row.status) || !canChangeOrCancelReservation}
+            title={RESERVATION_CHANGE_CANCEL_LOCKED_STATUSES.has(row.status)
+              ? '출고 이후 상태에서는 예약취소가 불가합니다'
+              : !canChangeOrCancelReservation
+                ? '예약변경 및 취소 권한이 없습니다'
+                : undefined}
+          >{isCancelling ? '처리 중...' : '예약취소'}</button>
+        </form>
+      {/if}
+      <div class="reservation-qr-wrap">
+        <canvas bind:this={reservationQrCanvasEl} width="44" height="44" aria-label="예약 QR 코드"></canvas>
+        <button class="qr-dl-btn" onclick={downloadReservationQR} title="QR PNG 다운로드" type="button">↓ QR 저장</button>
+      </div>
+      <button class="close-btn" onclick={onclose} aria-label="패널 닫기">✕</button>
     </div>
-    <button class="close-btn" onclick={onclose} aria-label="패널 닫기">✕</button>
   </div>
 
   <!-- 탭 -->
@@ -1732,7 +1795,17 @@
         {/if}
       {:else}
         <!-- ── 일반 수동 운송장 입력 뷰 (quick/epost/locker/visit 등) ────── -->
-        <div class="section-title">운송장 정보</div>
+        <div class="section-title-row">
+          <span class="section-title">운송장 정보</span>
+          <div class="section-title-btns">
+            <button
+              type="button"
+              class="btn-tracking-save btn-tracking-save--sm"
+              onclick={saveTracking}
+              disabled={trackingSaving}
+            >{trackingSaving ? '저장 중...' : '운송장 저장'}</button>
+          </div>
+        </div>
         {#if trackingLoading}
           <div class="loading-box">운송장 정보 조회 중...</div>
         {:else}
@@ -1756,18 +1829,11 @@
               />
             </div>
           </div>
-          <div class="tracking-action-row">
-            <button
-              class="btn-tracking-save"
-              onclick={saveTracking}
-              disabled={trackingSaving}
-            >
-              {trackingSaving ? '저장 중...' : '운송장 저장'}
-            </button>
-            {#if trackingError}
+          {#if trackingError}
+            <div class="tracking-action-row">
               <span class="tracking-error-msg">{trackingError}</span>
-            {/if}
-          </div>
+            </div>
+          {/if}
         {/if}
       {/if}
 
@@ -1848,38 +1914,6 @@
           </form>
         {/if}
 
-        <!-- 예약 취소 — reservation 뷰 전용 (대여 현황에서는 별도 처리 플로우) -->
-        {#if !isTerminal(row.status) && row.status !== 'hold' && !isRentalView}
-          <form
-            method="POST"
-            action="/cms/reservation?/updateStatus"
-            use:enhance={() => {
-              isSubmitting = true
-              return async ({ result, update }) => {
-                isSubmitting = false
-                if (result.type === 'success') {
-                  csToast.success('예약이 취소되었습니다.')
-                  // MEDIUM-1 수정 (2026-08-25): dhero_cancel_failed 플래그 읽어 경고 노출
-                  // 수동 "배송 취소" 버튼(cancelDheroDelivery)과 동일 문구 사용
-                  if ((result.data as Record<string, unknown> | undefined)?.dhero_cancel_failed) {
-                    csToast.warning('배송사 측 취소에 실패했습니다. 실물 배송을 별도로 확인하세요.')
-                  }
-                } else {
-                  csToast.error('처리 중 오류가 발생했습니다.')
-                }
-                // RSV-NAV-1(2026-09-08) — update() 완료 후에만 onstatuschange?.() 실행(순서
-                // 보장) + 중복이던 onrefresh() 제거. 위 승인하기/거부 버튼과 동일 수정 사유.
-                await update()
-                if (result.type === 'success') onstatuschange?.()
-              }
-            }}
-          >
-            <input type="hidden" name="reservation_id" value={row.reservation_id} />
-            <input type="hidden" name="status" value="cancelled" />
-            <button type="submit" class="btn-cancel" disabled={isSubmitting}>예약 취소</button>
-          </form>
-        {/if}
-
         <!-- 파손 신고 접수 처리 — 2026-09-08(Stephen 확정): 고객 채팅에서 "파손" 캔드응답
              매칭 시 "파손신고접수" 카드가 자동 발송되지만, 예약의 실제 status는 관리자가
              그 대화 내용을 확인한 뒤 여기서 직접 전환한다(키워드 매칭만으로 자동 종료 금지).
@@ -1910,11 +1944,9 @@
             <button type="submit" class="btn-cancel" disabled={isSubmitting}>파손 신고 접수 처리</button>
           </form>
         {/if}
-      </div>
 
-      <!-- 채팅 알림 발송 -->
-      {#if notifyType && row.status !== 'cancelled' && row.status !== 'damage_claimed'}
-        <div class="notify-section">
+        <!-- 채팅 알림 발송 — action-section과 한 행으로 병렬 정렬(2026-09-14) -->
+        {#if notifyType && row.status !== 'cancelled' && row.status !== 'damage_claimed'}
           <form
             method="POST"
             action="/cms/rentals?/sendChatNotify"
@@ -1949,8 +1981,8 @@
               {chatNotifyLabel(notifyType)}
             </button>
           </form>
-        </div>
-      {/if}
+        {/if}
+      </div>
       </div>
     {/if}
 
@@ -2156,30 +2188,14 @@
             <span class="info-label">결제 승인시간</span>
             <span class="info-value">{formatDateTime(paymentDetail.confirmed_at)}</span>
           </div>
+          {#if paymentDetail.pg_cancelled_at}
+            <div class="info-row">
+              <span class="info-label">취소 환불시간</span>
+              <span class="info-value">{formatDateTime(paymentDetail.pg_cancelled_at)}</span>
+            </div>
+          {/if}
         </div>
       {/if}
-
-      <div class="action-section">
-        {#if canManagePaymentAndLocker && paymentDetail?.status === 'done' && row.status !== 'cancelled'}
-          <!-- manager 이상 + payment done + 예약 미취소 상태에서만 활성 환불 버튼 -->
-          <button
-            class="btn-action btn-action--danger"
-            disabled={isRefunding}
-            onclick={handleRefund}
-          >
-            {isRefunding ? '환불 처리 중...' : '환불 처리'}
-          </button>
-          {#if refundError}
-            <p class="refund-error" role="alert">{refundError}</p>
-          {/if}
-        {:else if paymentDetail?.status === 'cancelled' || row.status === 'cancelled'}
-          <button class="btn-action" disabled title="이미 취소된 예약입니다">환불 처리 (취소됨)</button>
-        {:else if !canManagePaymentAndLocker && paymentDetail?.status === 'done'}
-          <button class="btn-action" disabled title="매니저 이상 권한이 필요합니다">환불 처리</button>
-        {:else}
-          <button class="btn-action" disabled title="결제 정보 없음">환불 처리</button>
-        {/if}
-      </div>
     {/if}
 
     <!-- ─── Tab 4: 계약서 ─── -->
@@ -2294,6 +2310,37 @@
     background: rgba(245,158,11,0.12);
     color: var(--cs-warning);
   }
+  /* 헤더 액션 그룹 — 예약변경·예약취소·QR·닫기 묶음 */
+  .panel-header-actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-left: auto;
+  }
+
+  /* 삭제 안전장치 토스트 표준(cms-uiux.md §0-10-B) — 전역 클래스가 아니라 화면마다
+     ProductDetailPanel.svelte .btn-danger 정본을 그대로 복사하는 scoped 스타일.
+     예약변경은 동일 구조의 퍼플 버전으로 짝을 맞춤(같은 헤더 버튼 그룹 내 크기 통일). */
+  .btn-header-action {
+    height: 44px;
+    padding: 0 20px;
+    background: var(--cs-purple);
+    color: var(--cs-white);
+    border: none;
+    border-radius: var(--radius-md);
+    font: var(--text-pc-body-14);
+    white-space: nowrap;
+    cursor: pointer;
+    transition: background 0.12s;
+  }
+  .btn-header-action:hover:not(:disabled) { background: var(--cs-purple-dark); }
+  .btn-header-action:disabled { opacity: 0.6; cursor: not-allowed; }
+
+  .btn-header-action--danger {
+    background: var(--cs-red-badge);
+  }
+  .btn-header-action--danger:hover:not(:disabled) { background: var(--cs-red); }
+
   .close-btn {
     width: 28px; height: 28px;
     display: flex; align-items: center; justify-content: center;
@@ -2308,6 +2355,7 @@
   /* 탭 */
   .panel-tabs {
     display: flex;
+    padding: 16px 8px;
     border-bottom: 1px solid var(--cs-lilac);
     flex-shrink: 0;
   }
@@ -2332,7 +2380,7 @@
     flex: 1;
     min-height: 0;
     overflow-y: auto;
-    padding: 16px 20px 20px;
+    padding: 32px 20px 20px;
     display: block;
   }
   .panel-body > * + * {
@@ -2427,22 +2475,24 @@
     cursor: not-allowed;
   }
 
+  /* 초소형 라운드 버튼형 — cms-uiux.md §0-10-C 정본(.btn-reassign-small) 그대로.
+     호버 컬러 반전 원칙: 기본 bg↔폰트 컬러 토큰을 그대로 뒤바꿈, 다른 색상 추가 금지 */
   .btn-reassign-small {
     flex-shrink: 0;
     font-size: 11px;
     font-weight: 600;
-    padding: 3px 8px;
-    border: 1px solid var(--cs-text-mid);
-    border-radius: var(--radius-xl);
-    background: transparent;
+    padding: 5px 10px;
+    border: none;
+    border-radius: var(--radius-full);
+    background: var(--cs-surface-gray);
     color: var(--cs-text-mid);
     cursor: pointer;
     white-space: nowrap;
-    transition: border-color 0.15s, color 0.15s;
+    transition: background 0.15s, color 0.15s;
   }
   .btn-reassign-small:hover {
-    border-color: var(--cs-purple);
-    color: var(--cs-purple);
+    background: var(--cs-text-mid);
+    color: var(--cs-white);
   }
 
   .reassign-row {
@@ -2597,7 +2647,7 @@
     transition: color 0.12s, background 0.12s;
   }
   .reservation-qr-wrap .qr-dl-btn:hover { background: var(--cs-lilac); color: var(--cs-purple); }
-  .reservation-qr-wrap--header { margin-left: auto; margin-right: 12px; }
+  /* reservation-qr-wrap--header: 헤더 내 panel-header-actions 그룹으로 이동 — 별도 modifier 불필요 */
 
   .info-label {
     flex: 0 0 96px;
@@ -2708,7 +2758,7 @@
     display: flex;
     gap: 8px;
     flex-wrap: wrap;
-    margin-top: 4px;
+    margin-top: 32px; /* spacing-4xl — cms-uiux.md DetailPanel 레이아웃 표준과 동일 값 */
   }
   .order-batch-note {
     flex-basis: 100%;
@@ -2760,7 +2810,7 @@
   .btn-action--danger             { background: var(--cs-error); }
   .btn-action--danger:hover       { background: var(--cs-red-badge); }
   .btn-action--danger:disabled    { background: var(--cs-disabled-button); cursor: not-allowed; }
-  .refund-error { font-size: 12px; color: var(--cs-error); margin: 6px 0 0; }
+  /* refund-error: handleRefund() 제거로 더 이상 사용 안 됨 — 삭제 */
   /* RSV-B-C1 환불실패 배지 */
   .refund-failed-banner {
     display: flex;
@@ -2850,22 +2900,45 @@
     gap: 10px;
     margin-top: 4px;
   }
+  /* cms-uiux.md §0-10 actionSave(액션 소형 — 저장·등록·반영·발송) 컬러값 적용 —
+     기존 아웃라인+회색채움 조합을 채움형(면 우선)으로 교체 */
   .btn-tracking-save {
     display: inline-flex;
     align-items: center;
     height: 34px;
     padding: 0 16px;
-    background: var(--cs-surface-gray);
-    color: var(--cs-purple);
-    border: 1px solid var(--cs-purple);
+    background: var(--crazy-shot-purple-100);
+    color: var(--cs-white);
+    border: none;
     border-radius: var(--cms-radius-sm);
     font: var(--text-pc-script-12);
     font-weight: 700;
     cursor: pointer;
     transition: background 0.12s;
   }
-  .btn-tracking-save:hover    { background: rgba(59,47,138,0.08); }
+  .btn-tracking-save:hover:not(:disabled)    { background: var(--crazy-shot-purple-80); }
   .btn-tracking-save:disabled { opacity: 0.5; cursor: not-allowed; }
+
+  /* 제목행(.section-title-btns)에 놓인 인스턴스 전용 초소형 라운드형 모디파이어
+     — .btn-reassign-small과 동일 스케일(11px/3px 8px/pill). 무인보관함 섹션의
+     기존 .btn-tracking-save(34px, .tracking-action-row)는 이 클래스가 없어 영향 없음 */
+  /* cms-uiux.md §0-10-C 초소형 라운드 버튼형 정본 그대로(.btn-reassign-small과 동일 스펙) —
+     호버 컬러 반전 원칙: 기본 bg↔폰트 컬러 토큰을 그대로 뒤바꿈, 다른 색상 추가 금지 */
+  .btn-tracking-save.btn-tracking-save--sm {
+    display: inline-flex;
+    height: auto;
+    padding: 5px 10px;
+    font-size: 11px;
+    font-weight: 600;
+    line-height: 1.4;
+    border-radius: var(--radius-full);
+    background: var(--cs-surface-gray);
+    color: var(--cs-text-mid);
+  }
+  .btn-tracking-save.btn-tracking-save--sm:hover:not(:disabled) {
+    background: var(--cs-text-mid);
+    color: var(--cs-white);
+  }
   .tracking-error-msg {
     font: var(--text-pc-script-12);
     color: var(--cs-error, #ef4444);
@@ -2960,12 +3033,7 @@
   .btn-dhero-cancel:disabled { opacity: 0.5; cursor: not-allowed; }
   .mono { font-family: 'Courier New', monospace; font-size: 12px; letter-spacing: 0.02em; }
 
-  /* 채팅 알림 섹션 */
-  .notify-section {
-    margin-top: 4px;
-    padding-top: 4px;
-    border-top: 1px dashed var(--cs-lilac);
-  }
+  /* 채팅 알림 버튼 — action-section 안에서 다른 상태 버튼들과 한 행으로 병렬 정렬 */
   .btn-notify {
     display: inline-flex;
     align-items: center;

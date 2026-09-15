@@ -1,5 +1,304 @@
 # .claude/harness/TASK.md
 
+## NOW — 🔴 CRITICAL: CMS 계정관리(`/cms/accounts/list`) 권한설정 검증 + 파트너 접근범위 재조정 + 슈퍼마스터 보호 공백 수정 (2026-09-15, 이 세션'만')
+
+### 아젠다
+
+Stephen 지시(1차): `/cms/accounts/list` "권한설정" 탭 콤보버튼 UI/로직 검증 — ① 슈퍼관리자
+접근 전용 화면이 맞는지 ② 파트너별 권한 설정이 정상 작동하는지 ③ 접근 제한 헛점 여부.
+
+Stephen 지시(2차, launch-selected-element로 파트너 계정 권한설정 화면 스크린샷 제공): 실제
+파트너 접근범위 5건 재조정 지시 — 대여관리 완전차단, 고객목록 열람 허용, 프로모션 메뉴 숨김,
+On/Off·완전차단 메뉴 우회로 전부 차단, 슈퍼마스터가 OFF로 잠근 항목은 슈퍼마스터만 다시 ON 가능.
+
+Stephen 지시(3차): 1차 검증에서 발견한 CRITICAL 공백("매니저가 마스터 계정의 메뉴 접근을 몰래
+차단할 수 있음")도 마저 수정.
+
+### 1차 — 검증 결과(코드 수정 전, 순수 조사)
+
+```
+① 슈퍼관리자 전용 화면 아님 — 페이지 자체는 manager+ 누구나 접근, "메뉴 접근 권한"(각 메뉴
+   On/Off 콤보버튼) 섹션도 매니저가 그대로 조작 가능("관리자 레벨" 전환 버튼만 화면상
+   슈퍼관리자에게만 노출).
+② 파트너별 권한설정 자체 로직은 정상 — role 상한선을 넘는 메뉴는 흐리게 비활성화(토글 불가),
+   role상 허용된 메뉴만 계정별로 좁혀서 끌 수 있음(Q6 "좁히기 전용" 정책 그대로 작동 확인).
+③ CRITICAL 헛점 발견: `/api/cms/accounts/[id]/menu-permissions` PUT이 대상(target) 계정이
+   슈퍼마스터인지 확인하는 게이트가 없어, 매니저가 슈퍼마스터 계정의 메뉴 접근을 OFF로
+   차단할 수 있었고 그 차단이 +layout.server.ts를 통해 슈퍼마스터 본인의 실제 CMS
+   내비게이션에도 그대로 적용됨(다른 계정관리 액션은 전부 이 방어가 있었는데 이 API만 누락).
+```
+
+### 2차 — 파트너 접근범위 재조정 3건 + 우회로 차단 + 슈퍼마스터 잠금 (코드 수정)
+
+```
+1. 대여관리(settings.rental) 완전 차단
+   - cmsMenus.ts에 requiresSettingsAccess:true 추가 → 파트너는 role 기본값 단계에서 차단
+     (GNB 메뉴 숨김 + +layout.server.ts 라우트 차단, 자동으로 함께 적용됨).
+   - src/routes/cms/set/rental/+page.server.ts 액션 23개 전부(과거엔 syncHolidaysNow 1곳만
+     게이트 있었음)에 hasSettingsAccess(manager+) 가드 신설 — 화면이 막혀도 액션에 직접
+     POST로 우회하는 경로를 닫음.
+
+2. 고객목록(customers.list) 열람 허용
+   - cmsMenus.ts에서 requiresSettingsAccess 제거 → role 기본값을 파트너도 허용으로 전환,
+     계정별 권한설정(On/Off)으로 개별 조정 가능.
+   - src/routes/cms/customers/+page.server.ts load()를 hasSettingsAccess 단독 판정에서
+     hasMenuAccess(role+오버라이드) 기준으로 교체. 블랙리스트·회원정보수정·점수조정·
+     포인트지급·구독취소·삭제 등 실제 데이터 변경 액션은 원래부터 있던 hasSettingsAccess
+     게이트 그대로 유지(열람만 허용, 편집은 여전히 manager+).
+
+3. 프로모션 대메뉴 숨김 + 우회로 차단(GNB가 계정별 오버라이드까지 반영)
+   - src/routes/cms/+layout.server.ts: 메뉴권한 오버라이드를 경로 매칭 여부와 무관하게 항상
+     조회해 menuPermissionOverrides로 반환(과거엔 현재 경로가 매칭될 때만 조회).
+   - src/routes/cms/+layout.svelte: GNB 필터링을 "role만 보던" 방식에서 hasMenuAccess(role+
+     오버라이드) 기준으로 교체 + 서브메뉴가 0개인 대메뉴는 자체적으로 숨김(예: 파트너에게
+     서브메뉴가 전부 차단된 프로모션·설정 대메뉴가 빈 탭으로 남지 않음).
+
+4. 슈퍼마스터 잠금
+   - src/routes/api/cms/accounts/[id]/menu-permissions/+server.ts PUT: 어떤 메뉴를 ON으로
+     되돌리려는 요청이 오면 그 메뉴를 마지막으로 OFF로 저장한 사람(updated_by)의 현재
+     cms_role을 조회 — 그 사람이 슈퍼마스터인데 지금 요청자가 슈퍼마스터가 아니면 403 +
+     "슈퍼마스터 권한 계정에 문의하세요." 반환. 매니저가 끈 항목은 다른 매니저가 자유롭게
+     되돌릴 수 있음(잠금 대상은 슈퍼마스터가 끈 항목뿐). 별도 컬럼 없이 기존 스키마
+     (updated_by + 현재 cms_role 조회)만으로 판정.
+```
+
+### 3차 — CRITICAL 수정: 대상이 슈퍼마스터인 메뉴권한 요청 차단
+
+```
+src/routes/api/cms/accounts/[id]/menu-permissions/+server.ts PUT 앞단에 다른 계정관리
+액션(updateName/updatePhone/toggleSuspend/delete/updateRole/toggleConcurrent/toggleSession)과
+동일한 requireAccountMutationAccess() 게이트 추가 — 대상 계정이 superadmin이면 호출자도 실제
+superadmin이어야 통과. allowed=true(켜기)·allowed=false(끄기) 요청 둘 다 이 가드를 거침(끄기
+자체가 공격 시나리오였으므로 allowed 값과 무관하게 항상 검사). GET(열람)은 대상 무관 조회라
+영향 없음.
+```
+
+**변경 파일 (이 세션 전체)**
+```
+src/lib/constants/cmsMenus.ts — settings.rental에 requiresSettingsAccess 추가,
+  customers.list에서 제거
+src/routes/cms/+layout.server.ts — 메뉴권한 오버라이드 무조건 조회 + menuPermissionOverrides
+  반환
+src/routes/cms/+layout.svelte — GNB 필터링을 hasMenuAccess(role+오버라이드) 기준으로 교체,
+  서브메뉴 0개 대메뉴 자동 숨김
+src/routes/cms/customers/+page.server.ts — load() 게이트를 hasMenuAccess(customers.list)로
+  교체(액션들은 무변경)
+src/routes/cms/set/rental/+page.server.ts — 액션 23개에 hasSettingsAccess 가드 신설
+src/routes/api/cms/accounts/[id]/menu-permissions/+server.ts — 슈퍼마스터 잠금 로직 +
+  requireAccountMutationAccess 가드 추가
+.claude/rules/security-auth.md — 위 정책 변경 전부 매트릭스·주석 갱신(v4.1→v4.2)
+src/__tests__/services/cmsMenus.test.ts — 파트너 접근범위 재조정 3건 회귀 테스트 추가/수정
+src/__tests__/server/cmsMenuPermissionsApi.test.ts — 슈퍼마스터 잠금 3건 + CRITICAL 가드 2건
+  회귀 테스트 추가, 기존 mock을 target/caller 구분 가능하도록 재설계
+src/__tests__/server/cmsLayoutMenuPermissionOverlay.test.ts — 무조건 오버라이드 조회로 인한
+  기존 테스트 1건 업데이트
+```
+
+### 검증
+
+```
+관련 자동 테스트 5개 파일·101개 전부 통과(cmsMenus/cmsMenuPermissionsApi/
+cmsLayoutMenuPermissionOverlay/accountsListSuperadminGuard/cmsAdminAuditLog).
+npm run check(svelte-check) — 신규 에러 0건(무관한 기존 vite.config.ts 에러 1건만 매 실행
+동일하게 유지).
+전체 vitest 1회 실행 시 무관한 20개 실패 발견 → git stash로 이 세션 변경분만 잠시 제거하고
+재실행해도 동일하게 실패하는 것을 확인(이 세션 변경과 무관한 기존 이슈, 손대지 않음).
+Claude Browser 라이브검증 미실시 — 이 폴더에서 다른 세션의 dev 서버가 이미 실행 중이라
+충돌 회피(Stephen에게 직접 파트너 계정으로 화면 확인 요청함).
+git commit은 Stephen 직접 실행 대기.
+
+⚠️ 작업 중 다른 세션이 동일 파일들을 동시에 수정하고 있는 정황 발견(git diff에 이 세션이
+작성하지 않은 코드가 함께 나타남 — 예: customers/+page.server.ts의 grantCustomerPoints
+액션). 이 세션이 만든 변경분은 Edit 도구의 앵커 매칭 + 테스트 재실행으로 온전함을 재확인함.
+```
+
+## DONE — 홈 화면(모바일) DB 연동 검증 + 크레이지로그 콘텐츠 카드 UI 실데이터 반영 (2026-09-12~15, 이 세션'만')
+
+### 아젠다
+
+Stephen 지시(1차): 초기화면 레이아웃의 DB 관리 설정연동 로직 검증 — ① 히어로배너·테마상품
+설정·추천상품 설정·카테고리 상품 설정 ② 하단 도움말이 `/cms/chat/qna`에서 가장 많이 선택된
+값을 반영하는지 ③ 모바일 반응형 중간 콘텐츠 영역이 `/crazylog` 메뉴의 콘텐츠 카드 목록 UI를
+반영하지 않는 원인분석·해결.
+
+Stephen 지시(2차, launch-selected-element 스크린샷 대조 제공): 1차 조치로 만든 모바일
+크레이지로그 관련 카드 2곳(§③)의 UI를 `/crazylog` 메인 페이지에 이미 존재하는 실제 카드
+컴포넌트 구조로 교체 반영.
+
+### ①·② 검증 결과 — 코드 수정 없음 (Supabase MCP로 production DB 직접 조회·검증)
+
+```
+① 히어로배너·테마상품·추천상품·카테고리상품
+  - RLS 정책(cms_settings/banners/home_theme_groups public read 화이트리스트)·RPC 존재+
+    anon GRANT(get_home_theme_groups_with_products 등 5종)·CMS 저장모달(HomeBannerModal 등)
+    ↔ 로더(src/routes/+page.server.ts) 조회 키/테이블 전부 정합 확인 — 읽기/쓰기 경로 자체는
+    정상.
+  - ⚠️ 발견된 데이터 정합성 이슈(코드 수정 안 함, Stephen 확인 대기): product_page_md_picks·
+    home_category_products(camera)에 등록된 상품 4종이 이후 상품관리에서 소프트삭제됨 →
+    get_products_by_ids가 삭제상품을 걸러내면서 production 홈 화면에서 "추천상품"·
+    "카테고리상품(camera)" 두 섹션이 고객에게 조용히 빈 상태로 보임(관리자에게만 "설정하세요"
+    버튼 노출, 고객 안내 없음). 로직 버그가 아니라 "상품 삭제 시 홈 큐레이션 참조 자동정리
+    장치가 없다"는 공백 — 재노출하려면 CMS에서 재설정 필요.
+  - 히어로배너·테마상품: production엔 등록된 배너·테마그룹이 0건(폴백 샘플 노출 중 — 미등록
+    상태일 뿐 결함 아님). Stage(ezyvffjvuwmtuhpxdjrw)엔 테마그룹 5건 정상 등록·렌더링 확인.
+
+② 하단 도움말 — /cms/chat/qna 최다선택 반영
+  - 정상 확인. canned_responses.usage_count가 (a)관리자가 채팅에서 빠른답변 선택 시,
+    (b)AI가 자동매칭할 때 두 지점에서 증가 — 홈/`/help`/`/cms/chat/qna` 세 화면 모두 동일
+    `usage_count DESC, title ASC` 정렬 공유. RLS(`cr_read`, public SELECT) 확인.
+```
+
+### ③ 원인분석 + 해결 — 코드 수정함
+
+```
+원인: "더 다양한 로그 둘러보기"(모바일 홈 하단) 섹션이 완전 하드코딩 더미 배열(ARTICLES —
+가짜 이미지·가짜 작성자명·가짜 상대시각)이었고 실제 /crazylog 게시물과 전혀 연결돼 있지
+않았음. 카드 UI도 /crazylog 실제 카드 컴포넌트와 무관한 자체 스타일.
+
+1차 조치: user_posts(is_public=true AND status='published', RLS 확인됨) 실데이터 연동 +
+/crazylog/list 카드 UI 스타일(썸네일·로그타입 태그·제목·상대시각·작성자) 적용.
+
+2차 조치(Stephen 2차 지시 반영, 1차 스타일을 대체):
+  - 홈 "요즘 크레이지로그!" 섹션(m-blog-section) — 기존 카드 나열을
+    src/routes/crazylog/+page.svelte의 실제 m-carousel/m-card 가로 슬라이드 구조(배경이미지+
+    카테고리 헤더바[더보기 버튼]+하단 그라디언트 타이틀+인디케이터 점)를 그대로 반영. 카테고리
+    헤더 색상은 기존 data.crazylogPosts의 catBg(LOG_TYPE_COLORS/SLOT_FALLBACK_COLORS)값
+    그대로 사용 — 3슬롯 분리 없이 단일 슬라이드로 구성.
+  - "더 다양한 로그 둘러보기" 섹션(m-articles-section) — 1차에서 만든 카드 UI를 다시 걷어내고
+    /crazylog "K-Trend Log" 섹션의 m-article-card 구조(배경 전체이미지+그라디언트 오버레이+
+    하단정렬 날짜·제목·본문미리보기)로 교체. desc 필드 신설(extractFirstText 로직을
+    /crazylog/+page.server.ts에서 이식), 대상 UI에 없는 작성자·로그타입 필드는 제거.
+```
+
+**변경 파일 (이 세션 전체 — 이 2개 파일 외 다른 파일은 건드리지 않음)**
+```
+src/routes/+page.server.ts — recentLogPosts 쿼리 신설(user_posts 최신 5건, desc 추출 포함)
+src/routes/+page.svelte — ARTICLES 하드코딩 제거, m-blog-section을 캐러셀 구조로 교체,
+  m-articles-section을 K-Trend Log 카드 구조로 교체, 관련 CSS 전면 교체
+```
+
+### 검증
+
+```
+npx svelte-check — 신규 에러 0건(무관한 기존 vite.config.ts 에러 1건만 매 실행 동일하게 유지).
+Claude Browser 라이브검증은 미실시(기본값 금지 정책 — Stephen이 launch-selected-element로
+직접 스크린샷·DOM 대조를 제공해 그 결과를 근거로 2차 조치 반영).
+git commit은 Stephen 직접 실행 대기.
+```
+
+### @sp3-qa-agent 검수 결과 — GATE E 통과 ✅
+
+```
+검수범위를 이 2개 파일(+page.server.ts, +page.svelte)로 명시 한정해 git diff -- <두 파일>로
+스코프 고정 확인 후 검수. RLS(user_posts_select) 부합·보안·N+1 없음·CSS 토큰 재사용·
+/crazylog 원본 구조 복제 충실도 전부 통과 판정. 유일한 지적(<a> 안 <button> 중첩)도
+/crazylog 원본 자체의 기존 패턴을 그대로 복제한 것이라 이번 세션의 신규 결함 아님으로 판정.
+
+⚠️ QA가 "범위 외 수정 2건"(svelte:head 타이틀 중복, sliderEl/themeTabsEl/mThemeTabsEl
+$state 전환)을 이 diff에서 함께 발견해 지적했으나, git diff 특성상 아직 커밋되지 않은
+다른 세션의 변경까지 같은 파일 diff에 섞여 보인 것으로 확인됨 — 두 항목 모두 이 세션이
+아니라 위 "사용자 화면(front) UI 전역 정밀검증"(2026-09-14 DONE, GATE B 승인 완료) 세션이
+만든 변경(해당 DONE 블록 ①·② 항목과 정확히 일치). 이 세션에서 새로 만든 변경이 아니므로
+되돌릴 필요 없음 — 혼선 방지를 위해 기록.
+```
+
+## DONE — CMS 고객상세(CustomerDetailPanel) 카드목록 디자인시스템 표준화 + 닫기버튼 정정 + 알림/동의 연동 재검증 (2026-09-14~15, 이 세션'만')
+
+### 배경
+
+Stephen이 `<launch-selected-element>`로 CustomerDetailPanel.svelte의 여러 영역(본인증명 파일
+목록·상품대여이력/구독이력/빠른문의 카드목록·포인트이력/블랙리스트 탭·패널 헤더 닫기버튼·
+알림설정/개인정보동의 섹션)을 순차 선택하며 "cms 표준 디자인 시스템 지침 반영" 계열 요청을
+반복 — 매 요청마다 실제 코드 Read → 지침값 대조 → 필요 시 cms-uiux.md 자체를 갱신하는 흐름으로 처리.
+
+### 구현 내역 (요청 순서대로)
+
+**1. 본인증명 파일 목록(`.doc-file-list`/`.doc-file-row`) 정렬 표준화**
+- 각 행에 `.audit-row`와 동일한 옅은 회색(`--cs-surface-gray`) 배경 + `--radius-sm` 적용
+- 문서명은 좌측 고정, "보기"+다운로드 아이콘은 `.btn-file-view`에 `margin-left:auto`로 우측 끝 정렬
+
+**2. 카드목록 3종(`.rental-card`/`.chat-card`/`.sub-card`) — outline 제거 + hover 색상 표준화**
+- 1차: 보라색 테두리(`border: 1px solid var(--cs-lilac)`) 완전 제거, hover를 border-color·
+  box-shadow 대신 배경색 전환(`--cs-surface-gray`)으로 교체 — 3개 클래스 동일 패턴 적용
+- `.sub-card.sub-active`(구독 활성 표시)도 보더 대신 `--cs-purple-op10` 배경 채움으로 전환
+- 2차(Stephen 재지시): 기본(미선택) 배경을 `--cs-surface-gray`, hover 배경을 `--cs-lilac`
+  ("purple-5")로 재조정 — "가장 옅은 회색" 후보가 지침 문서상 `neutral-gray-100`(#F7F7FA,
+  app.css에 실제 변수 없음)과 `--cs-surface-gray`(#F6F6F6, 실존 변수) 두 갈래였는데, 실제
+  코드에 존재하는 변수만 쓴다는 원칙으로 후자 채택(하드코딩 회피)
+
+**3. 카드목록 간 여백 2배 + 탭메뉴↔목록 상단여백 32px 표준 확립**
+- `.inquiry-tab-section` gap 6→12px, `.sub-card + .sub-card` margin-top 10px 신설(총 20px)
+- `.rental-tab-section` gap 6→12px + margin-top 16px 신설(상품대여이력 탭 — 최초 표준화 때
+  빠져있던 것을 Stephen이 재선택해 지적, 추가 반영)
+- 포인트이력 탭: 크레이지스코어 탭과 공유하는 `.adjust-section`을 직접 건드리지 않고
+  `.points-adjust-section` 스코프 클래스를 신설해 margin-top:16px만 추가(크레이지스코어 탭
+  무영향 확인)
+- 블랙리스트 탭: `.bl-tab-section`(단독 사용 확인)에 margin-top:16px 직접 추가
+- 결과: 구독이력·포인트이력·상품대여이력·블랙리스트·빠른문의 5개 탭 전부 탭메뉴↔목록
+  32px(panel-body 16px + 각 탭 wrapper margin-top 16px)로 통일, 브라우저 실측 전부 확인
+
+**4. `.panel-tabs`(탭바 자체) 상하 패딩 신설**
+- 기존 0px(좌우만 8px) → 상하 16px 신설(같은 요소의 기존 좌우 8px과 동일 단위를 2배 적용해
+  기준값 확정) — Stephen이 "2배 추가"의 기준을 명확히 지정하지 않아 AskUserQuestion으로
+  3가지 후보(①탭바 자체 신설 ②헤더↔탭바 간격 신설 ③32px 재차 2배)를 제시해 확인받음
+
+**5. `cms-uiux.md` "DetailPanel 레이아웃 표준" 절 문서화**
+- 위 3·4번 표준값을 표/CSS 예시/GATE C 체크리스트 3곳에 전부 등록 + "적용현황" 각주로
+  실제 반영 파일(CustomerDetailPanel.svelte·RentalDetailPanel.svelte) 명시
+
+**6. `RentalDetailPanel.svelte`에도 32px 표준 확장 반영**
+- 이 파일은 4개 탭(대여정보·고객정보·결제정보·계약서)이 `.panel-body` 하나를 공유하는
+  구조라 padding-top 한 줄(16px→32px)만 수정해 4개 탭 전부 일괄 반영됨(CustomerDetailPanel의
+  탭별 개별 스코프클래스 방식과 다른 더 단순한 해법)
+- PostToolUse 훅이 "예약 도메인→결제(M3) 영향" 회귀테스트 권고를 띄웠으나 순수 CSS padding
+  숫자값 변경(로직·RPC 무변경)이라 결제 회귀 스위트 실행은 생략(근거 GSD_LOG에 명시)
+
+**7. 패널 헤더 닫기버튼(`.close-btn`) `close-red` 표준 정정**
+- 기존(회색 원형+보라 hover+`aria-label="닫기"`) → 표준(투명 배경·`--radius-sm`·
+  `--cs-text-light`·hover 시 연빨강 배경+빨강 텍스트·`aria-label="패널 닫기"`)으로 교체
+- ⚠️ **자체발견·즉시수정한 부작용**: 표준 스펙의 `margin-left: auto`를 그대로 복사했는데,
+  이 헤더는 이미 QR코드 wrap(`.member-qr-wrap--header`)이 자체 `margin-left:auto`로 우측
+  정렬 중이었음 — flex 컨테이너에 auto-margin 2개가 생기며 QR 블록 위치가 미묘하게
+  밀리는 회귀를 Stephen이 스크린샷으로 지적("왜 이 영역을 다 수정했지, 오버엔지니어링
+  하지마") → close-btn의 margin-left:auto만 제거해 원위치 복원, 나머지(이름·이메일·QR)는
+  애초에 코드 자체를 건드리지 않았음을 확인·설명
+
+**8. 알림설정·개인정보동의 표시값 ↔ 실제 사용자 화면 로직 연동 재검증 (코드 변경 없음)**
+- CMS(`/cms/customers/profile-settings` GET, `.eq('id', userId)`)와 USER 화면
+  (`NotificationTabContent.svelte`→`update_notification_settings` RPC,
+  `ProfileTabContent.svelte`→`update_user_consent` RPC, 둘 다 `WHERE user_id = auth.uid()`)
+  이 동일 테이블 `user_profiles`의 동일 4개 컬럼(`allow_rental_alert`/`allow_benefit_alert`/
+  `allow_privacy_consent`/`allow_third_party_consent`)을 공유함을 코드로 확인
+- Stage에서 `request.jwt.claims`로 `auth.uid()`를 시뮬레이션해 실제 RPC 2종을 직접 호출 →
+  거부/미동의 2건을 허용/동의로 전환 → CMS 새로고침 시 정확히 반영되고 나머지 2건은
+  교차오염 없이 그대로 유지되는 것을 실측 확인 → 검증 후 원래 값으로 복원
+
+### GATE C 체크리스트
+
+```
+[x] 요청 범위 외 파일(다른 DetailPanel·다른 탭) 무단 수정 없음 — RentalDetailPanel은 명시
+    요청 받은 뒤에만 확장 반영
+[x] 공유 클래스(.adjust-section 등) 직접 수정 대신 스코프 클래스 신설로 타 탭 무영향 확인
+[x] CSS 색상값 전부 하드코딩 없이 기존 실존 변수(--cs-surface-gray/--cs-lilac/--cs-purple-op10)만 사용
+[x] close-btn 표준 적용 시 발생한 margin-left:auto 부작용 자체발견 즉시 수정, 사과 및 원인 설명
+[x] 알림/동의 연동 검증은 실제 RPC 라이브 호출로 재현, 검증 후 원상복구
+[x] svelte-check 매 변경 후 재실행 — 신규 에러 0건(기존 vite.config.ts 1건은 무관, 계속 확인됨)
+[x] cms-uiux.md "DetailPanel 레이아웃 표준" 절 실측값과 100% 일치 재대조 완료
+```
+
+### 검증
+
+```
+svelte-check: 매 변경 단계마다 재실행 — 신규 에러 0건 유지
+Claude Browser: <launch-selected-element> 활성 세션 조건(CLAUDE.md ①) 하에 매 변경 실측
+  (getComputedStyle/getBoundingClientRect/실제 hover)으로 값 확인, 스크린샷 병행
+Stage DB(ezyvffjvuwmtuhpxdjrw): 알림/동의 RPC 라이브 호출 검증 + 즉시 원복
+```
+
+**git commit**: 아직 없음 — Stephen 직접 실행 대기
+
+---
+
 ## DONE — 사용자 화면(front) UI 전역 정밀검증 + GATE B 승인 4건 수정 완료 (2026-09-14, 이 세션 단독 수행)
 
 ### 아젠다
@@ -167,6 +466,135 @@ Stephen이 `RentalDetailPanel.svelte` 헤더 영역에 '예약변경'·'예약�
 - [ ] Stage 수동검증 3가지(형제주문 예약변경 전체hold+전액취소 / 1~2분 내 expired 미발생 / 재고구성 편집 후 총액 정확성) — Stephen 또는 QA 담당자 직접 CMS 화면 조작 필요
 - [ ] Production(`vnbpmvxruyciuuaermyh`) 마이그레이션 적용 — Stage 수동검증 완료 후
 - [ ] sp3-qa-agent GATE E
+
+### sp3-qa-agent GATE E 1차 반려 — 결함 3건 수정 중 (2026-09-14 후속 서브세션)
+
+**반려 항목 3건 + 권고 1건 (전부 처리 완료, Migration #499 Stage 적용 대기)**
+
+#### Defect 1 (CRITICAL) — updateStatus cancelled 분기: cancel_reservation_payment RPC만 호출하고 Toss API 미호출
+- **수정 완료**: `src/routes/cms/reservation/+page.server.ts`
+  - `cancelled` 분기 전체 재작성 (구 340번대 라인)
+  - manager/superadmin(`hasSettingsAccess`) 경로: payment_key 2단계 조회 → `tossPaymentCancel()` 먼저 호출 → 성공 시 `pg_cancelled_at` 기록 → `cancel_reservation_payment` RPC 호출
+  - PAYMENT_NOT_FOUND(hold 거부) 경로: Toss API 건너뛰고 RPC만 호출 (기존 동작 유지)
+
+#### Defect 2 (HIGH) — cancelled 분기: hasSettingsAccess 게이트 부재로 partner도 환불+계약취소 가능
+- **수정 완료**: 동일 파일
+  - `hasSettingsAccess(cmsRole)` = true → 전체 Toss+RPC 경로
+  - `hasSettingsAccess(cmsRole)` = false(partner) → `update_reservation_status` 상태전환만 (환불·계약취소 없음)
+  - `cancelledSiblingIds` 변수를 분기 앞에 선언해 AUTO_NOTIFY 배치알림 블록에서 재사용
+
+#### 권고(알림 배치) — cancelled 시 단일 reservationId에만 알림 발송
+- **수정 완료**: `send_rental_chat_notification_batch` 사용으로 `cancelledSiblingIds.length > 1` 시 배치 발송
+
+#### Defect 3 (HIGH) — revert_reservation_order_to_hold step 4: terminal 형제의 contract_signings.sent_at 미리셋 → 만료 위험
+- **신규 마이그레이션 작성 완료**: `supabase/migrations/20260914070000_499_revert_reservation_order_to_hold_cron_fix.sql`
+  - `CREATE OR REPLACE FUNCTION` — 기존 #492 직접 수정 금지 원칙 준수
+  - `v_all_order_ids BIGINT[]` 추가 (terminal 포함 전체 order 형제)
+  - step 3(rental_reservations UPDATE)은 `v_target_ids` 유지 (비terminal만)
+  - step 4(contract_signings sent_at/signed_at/expires_at=NULL, token 갱신)은 `v_all_order_ids` 사용
+  - **Stage 적용 대기**: project_id `ezyvffjvuwmtuhpxdjrw` — 상위 세션(Supabase MCP)이 적용 필요
+
+#### TDD 보강
+- `revertReservationOrderToHold.test.ts` — EC-5 추가: terminal 형제(old sent_at) + revert 후 release_reservation_hold() 호출 → hold 유지 검증
+  - **현재 RED** (예상): Migration #499 Stage 미적용 상태 — 적용 후 GREEN 전환됨
+- `updateStatusOrderWideCancel.test.ts` — EC-4 추가: partner 경로 시뮬레이션 → update_reservation_status만 → contracts.status=active 유지, payment_transactions=done 유지
+  - **GREEN** 확인됨
+
+#### 현재 검증 상태 (2026-09-14 기준)
+```
+revertReservationOrderToHold.test.ts : 4 PASS / 1 FAIL (EC-5 — Migration #499 대기)
+updateStatusOrderWideCancel.test.ts  : 4 PASS (EC-1~EC-4 전부 GREEN)
+syncOrderAfterCompositionChange.test.ts: 4 PASS (변경 없음)
+svelte-check: 에러 0건(이 작업 기인) + 기존 vite.config.ts 1건(무관)
+```
+
+**최종 검증 완료 (2026-09-14 Migration #499 Stage 적용 후)**:
+```
+revertReservationOrderToHold.test.ts : 5/5 PASS ✅ (EC-1~EC-5 전부 GREEN)
+updateStatusOrderWideCancel.test.ts  : 4/4 PASS ✅ (EC-1~EC-4 회귀 없음)
+syncOrderAfterCompositionChange.test.ts: 4/4 PASS ✅ (회귀 없음)
+svelte-check: 에러 0건(이 작업 기인) + 기존 vite.config.ts 1건(무관, 기존 문제)
+총 테스트 13건 전부 GREEN, 회귀 없음.
+```
+
+**Stage 최종 적용 마이그레이션 전체 목록**: #492·#493·#494·#496·#497·#499 (6건)
+**Production(`vnbpmvxruyciuuaermyh`)**: 여전히 미적용 — Stage 수동검증 + sp3-qa-agent 재검수 통과 후 적용 예정
+**git 커밋**: 아직 없음 — Stephen 직접 실행 대기
+
+**다음 단계**: sp3-qa-agent 재검수 → GATE E 통과 → Stephen git commit → Production 마이그레이션 적용
+
+### sp3-qa-agent 2차 재검수 신규 결함 2건 수정 (2026-09-14 후속)
+
+Stephen 확정: 결함 A(필수)·결함 B(권고) 둘 다 지금 수정. 1차 검수 통과분(Defect 1·2·3 + 이중확인 토스트) 건드리지 않음.
+
+**Defect A (필수 — 취소 환불시간 항상 비어있음)**
+- 원인: `findOrderPaymentTransaction()` `selectCols`에 `pg_cancelled_at` 미포함 → API가 이 필드를 반환 안 함 → `RentalDetailPanel.svelte`의 "취소 환불시간" 행이 항상 `undefined`
+- 수정: `src/routes/api/cms/reservations/[id]/payment/+server.ts` → `selectCols` 마지막에 `pg_cancelled_at` 추가 (1줄 수정, DB 마이그레이션 불필요 — 컬럼은 Migration #493으로 이미 존재)
+
+**Defect B (권고 — 결제 무결성: RPC 재시도+fail-soft 패턴 누락)**
+- 원인: `changeReservation` 액션의 `revert_reservation_order_to_hold` RPC, `updateStatus` cancelled manager 경로의 `cancel_reservation_payment` RPC 둘 다 1회만 호출 — Toss 취소 성공 후 RPC 실패 시 결제는 환불됐는데 DB가 hold/active로 남는 정합성 결함
+- 수정:
+  - **신규 파일** `src/lib/server/rpcRetryWithFailSoftLog.ts` — 기존 PUT 핸들러의 재시도+fail-soft 패턴(3회 재시도 + DB fail 기록 + 관리자 push + admin_only 채팅카드)을 제네릭 헬퍼로 추출
+  - `src/routes/api/cms/reservations/[id]/payment/+server.ts` PUT 핸들러 — 기존 ~100줄 인라인 블록을 헬퍼 호출 ~25줄로 교체
+  - `src/routes/cms/reservation/+page.server.ts` — import 추가 + `changeReservation` revert 블록 교체 + `updateStatus` cancel 블록 교체
+  - **신규 테스트** `src/__tests__/services/rpcRetryWithFailSoftLog.test.ts` — TC-1~TC-4 4/4 GREEN
+
+**검증 결과**
+```
+svelte-check: 신규 에러 0건 (기존 vite.config.ts 1건은 무관, 기존 문제)
+rpcRetryWithFailSoftLog.test.ts : 4/4 GREEN
+approvalNotifications.test.ts   : 관련 테스트 GREEN (회귀 없음)
+holdExpiration.test.ts          : GREEN (회귀 없음)
+```
+
+### sp3-qa-agent 3차 재검수 GATE E 통과 (2026-09-14, 이 세션 최종)
+
+#### UI 최종 정합 — `src/lib/components/cms/RentalDetailPanel.svelte` (Stephen 실화면 피드백 다회 반영)
+
+**헤더 버튼 스타일 + 이중확인 안전장치**
+- `.btn-header-action`(퍼플 채움, '예약변경') / `.btn-header-action--danger`(레드 채움, '예약취소') — 44px, `--radius-md`(15px), scoped 로컬 클래스, outline/border 없음
+- 이중확인 패턴 — `ProductDetailPanel.svelte` `deletePending`/`isDeleting` + `use:enhance cancel()` 게이팅 패턴 그대로 재현:
+  - `changePending`/`isChanging` → 1차 클릭: `cancel()` 제출 차단 + `csToast.warning('한 번 더 클릭하면 예약이 변경됩니다')`, 2차 클릭: 실제 changeReservation 제출
+  - `cancelPending`/`isCancelling` → 1차 클릭: `cancel()` 제출 차단 + `csToast.warning('한 번 더 클릭하면 예약이 취소됩니다')`, 2차 클릭: 실제 updateStatus cancelled 제출
+  - 타이머 없음 (두 번째 클릭이 올 때까지 pending 유지)
+- 노출조건: `canManagePaymentAndLocker(manager+)` && `!isTerminal` && `status !== 'hold'`
+
+**기존 UI 정리**
+- 본문 action-section 단독 '예약 취소' 블록 완전 제거 (헤더 버튼으로 대체)
+- 결제정보 탭 '취소 환불시간' 행 신설 (`pg_cancelled_at` 있을 때만 노출)
+- '환불 처리' 버튼 + `handleRefund()` 함수 완전 제거
+
+**버튼 레이아웃 표준 정합 (`cms-uiux.md §0-10-C` 기준)**
+- "재배정" 버튼(`.btn-reassign-small`) — `--cs-surface-gray` 배경 + `--cs-text-mid` 텍스트, 호버 시 배경↔텍스트 반전, `--radius-full`(pill), border 없음
+- "운송장 저장" 버튼(`.btn-tracking-save--sm`) — 동일 스펙, 위치를 "운송장 정보" 제목 우측(`.section-title-row`/`.section-title-btns` 패턴)으로 재배치
+- "반출 알림 발송" 버튼을 별도 `.notify-section`에서 `.action-section` 행으로 병합 (방문 출고 처리·파손 신고 접수 처리·반출 알림 발송 3버튼 한 행 정렬)
+- `.action-section` 상단 여백 4px → 32px (`spacing-4xl`, DetailPanel 레이아웃 표준 통일)
+- `.panel-tabs` 탭바 상하 패딩 16px 8px 신설 (`CustomerDetailPanel.svelte`와 동일 표준, 이 파일만 미반영이었던 것 해소)
+
+**동반 정정 — `src/lib/components/cms/ProductDetailPanel.svelte`**
+- "상품정보 삭제" 버튼 반경 `--radius-xl`(30px) → `--radius-md`(15px) 정정 (§0-10 44px CTA 브래킷 기준, `RentalDetailPanel` 헤더 버튼과 일치)
+
+#### 지침 문서 — `.claude/rules-ref/cms-uiux.md` 갱신
+
+- §0-10에 `ctaPrimaryPurple` 패턴 신규 등록: 44px 대형 CTA 퍼플 계열, Detail Panel 헤더 인라인 전용, `--radius-md`(15px), `--cs-purple` 채움, `#fff` 텍스트, hover `--cs-purple-dark`
+- `closeCircle`(24×24 원형, 존재하지 않는 값) 폐기 표시
+- §0-10-A를 강조형(`close-red`, A-1: 28×28, ✕ 문자, hover `--cs-red-badge`)와 일반형(`close-normal`, A-2: 24×24, ✕ 문자, 6px 반경 하드코딩, `RentalDetailPanel` 실제값 기반) 2종으로 재구성
+- (§0-10-C "초소형 라운드 버튼형"은 이미 등록돼 있던 것을 이번 세션이 발견해 정확히 적용만 함, 신설 아님)
+
+#### GATE E 최종 검증 결과 (3차 QA, 통과)
+
+```
+revertReservationOrderToHold.test.ts     : 5/5 GREEN (EC-1~EC-5)
+updateStatusOrderWideCancel.test.ts      : 4/4 GREEN (EC-1~EC-4)
+syncOrderAfterCompositionChange.test.ts  : 4/4 GREEN (EC-1~EC-4)
+rpcRetryWithFailSoftLog.test.ts          : 4/4 GREEN (TC-1~TC-4)
+총 TDD 17건 전부 GREEN, 회귀 없음.
+svelte-check: 신규 에러 0건 (기존 vite.config.ts 1건은 무관)
+```
+
+**Stage(`ezyvffjvuwmtuhpxdjrw`) 적용 완료 마이그레이션**: #492·#493·#494·#496·#497·#499 (6건)
+**Production(`vnbpmvxruyciuuaermyh`)**: 미적용 — Stephen 실사용 수동검증 후 별도 적용 예정
+**git 커밋**: 아직 없음 — Stephen 직접 실행 대기
 
 ---
 
@@ -45294,5 +45722,235 @@ doc-file-label > span.doc-file-btn`)이 전부 공유한다. 요청 문구·선�
 44px 터치타겟 기준 충분히 충족(76px). svelte-check 신규 에러·경고 0건. 수정 필요 항목 없음.
 (QA 범위 외 관찰: 같은 파일에 커밋 대기 중인 별건 diff(본인증명 병합업로드 기능 등)는
 이번 CSS 요청과 무관해 검수 대상에서 제외 — 이미 별도 GATE E로 기록된 건.)
+
+**git commit은 Stephen 직접 실행.**
+
+---
+
+## DONE — CMS 고객상세 "포인트이력" 탭 신설 (2026-09-14, Stephen 지시, Plan Mode 조사+설계 승인 후 구현)
+
+### 배경
+
+CMS `/cms/customers` 고객상세 패널에 이미 있는 "구독이력" 탭과 동일한 패턴으로 "포인트이력"
+탭을 신설 요청. 요구사항: ①구독이력과 동일한 적립/사용 누적목록 ②배지(적립/사용)+금액+
+발생년월일시분+출처, 사용 건은 해당 대여로 연결 ③탭 상단에 포인트 추가(숫자+사유+버튼)
+인라인 등록 UI ④CMS 표준 디자인 시스템에 없는 요소 반영 절대 금지 ⑤하네스 플로 등록.
+
+Plan Mode로 3개 Explore 에이전트(기존 구독이력 탭 패턴 / 포인트 백엔드 인프라 / CMS
+디자인시스템 표준) + 1개 Plan 에이전트로 조사·설계 → Stephen 승인 후 구현.
+
+### 조사 결과 — 신규 구현 최소화(전부 기존 자산 재사용)
+
+- **DB 테이블 신규 불필요**: `point_transactions`(Migration 46)가 이미 건별 적립/사용
+  이력 테이블로 존재.
+- **RPC 신규 불필요**: `admin_grant_points`(Migration 51, `/cms/promotion/point` 화면이
+  이미 사용 중)를 그대로 재사용.
+- **디자인 신규 불필요**: `.badge`/`.badge-active`/`.badge-error`(cms-uiux.md §7-6,
+  `/cms/promotion/point`에서 이미 적립/사용 구분에 사용 중), `.audit-list`/`.audit-row`·
+  `.adjust-row`/`.f-input`/`.btn-primary`(CustomerDetailPanel.svelte 자신의 크레이지스코어
+  탭에 이미 존재) 전부 그대로 재사용 — 요구사항 ④ 충족.
+- **선결 발견(신규 마이그레이션 필요 판정)**: `use_points` RPC(Migration 303)가 결제 시점
+  포인트 사용 이력을 기록하면서 `ref_id`(어느 주문에서 썼는지)를 파라미터로 받고도 저장
+  시 항상 NULL로 하드코딩하던 실제 코드 버그 발견 — "사용 내역 → 대여 연결" 요구사항②가
+  이 결함 때문에 작동 불가능한 상태였음. 기존 3개 실사용 호출부(confirm-mock/pay-mock/
+  pay-result)는 이미 올바른 값을 넘기고 있어 RPC 내부 INSERT 한 줄만 격리 수정.
+  (참고: 함께 검토했던 `confirm_payment_and_update_reservation`은 Migration 396으로
+  이미 DROP된 고아 함수로 확인돼 수정 대상에서 제외 — Migration 378 계열로 대체됨.)
+- **N:1 구조 한계**: 주문 1건이 여러 대여를 포함할 수 있어(order_id N:1), "사용" 내역을
+  정확히 대여 1건에 특정할 수는 없음(쿠폰 사용내역 화면 Migration 301 선례와 동일한
+  구조적 한계) — "사용" 행의 링크는 정확한 대여 1건이 아니라 그 고객의 "상품대여이력"
+  탭으로 전환하는 방식으로 구현(요구사항②의 취지 충족, 기술적으로 실현 가능한 형태).
+
+### 구현
+
+- **`supabase/migrations/20260914060000_498_use_points_ref_id_fix.sql`**(신규): `use_points`
+  RPC의 `INSERT` 문 마지막 값을 `NULL` 고정 → `p_order_id::text` 조건부 저장으로 수정.
+  파라미터 시그니처·반환형·REVOKE/GRANT 전부 Migration 303과 동일 유지(`CREATE OR REPLACE`,
+  기존 ACL 보존). Stage 적용 후 라이브 통합테스트로 실제 `ref_id` 저장 확인(p_order_id
+  있으면 저장/없으면 여전히 NULL, 기존 동작 무회귀) → Production도 적용, 양쪽 SQL 직접
+  재조회로 함수 본문 수정 반영 확인.
+- **`src/routes/cms/customers/points/+server.ts`**(신규): 기존 `rentals/+server.ts`와
+  동일 구조 — 고객 ID 변환(`user_profiles.id` → `auth.users.id`, `point_transactions.user_id`가
+  실제 인증 ID를 참조하기 때문) 후 이력 조회.
+- **`src/routes/cms/customers/+page.server.ts`**: `grantCustomerPoints` 액션 신설 —
+  `admin_grant_points` RPC 호출. ⚠️ 구현 중 발견: 이 RPC는 내부에서 `auth.uid()`로
+  관리자 권한 검사 + `admin_id` 기록을 하므로 이 파일의 다른 액션(`adjustScore` 등)이
+  쓰는 service_role 관리자 클라이언트로 호출하면 `auth.uid()`가 NULL이 돼 실패함 —
+  `/cms/promotion/point`의 기존 `grantPoints` 액션과 동일하게 `locals.supabase`(사용자
+  세션 유지)로 호출하도록 구현(RPC마다 내부 인가방식이 다름을 확인 후 반영).
+- **`src/lib/components/cms/CustomerDetailPanel.svelte`**: `CustomerTabKey`/`VALID_TABS`에
+  `'points'` 추가(구독이력 다음 순서), `PointTx` 타입, 지연로딩 상태(`pointsLoaded`/
+  `loadingPoints`)+`loadPoints()`(기존 탭들과 동일 패턴), 금액 입력폼 표준
+  (`handleAmountInput`/`isComposingEvent`, uiux-index.md 확정규칙), `pointSourceLabel`/
+  `formatDateTime`(발생년월일시분 — 기존 `formatDate`는 날짜만이라 신규 함수 추가) 헬퍼,
+  새 탭 버튼+탭 콘텐츠(상단 포인트추가 인라인 폼 + 하단 이력목록, 기존 크레이지스코어 탭의
+  `.adjust-row`/`.audit-row` 패턴 그대로 재사용), `.badge`/`.badge-active`/`.badge-error`
+  CSS 이식(Svelte scoped CSS라 참조만으론 안 되고 클래스 자체 복사 필요).
+
+### 검증
+
+- `npm run check`: 터치한 4개 파일(CustomerDetailPanel.svelte, points/+server.ts,
+  customers/+page.server.ts, 신규 마이그레이션) 신규 에러·경고 0건(기존 vite.config.ts
+  1건은 무관한 사전 존재 이슈, 세션 내내 동일).
+- Stage 라이브 통합테스트(일회성, 실행 후 삭제): `use_points` 수정 검증 —
+  `p_order_id` 있으면 `ref_id`에 저장/없으면 기존과 동일하게 NULL, GREEN.
+- Claude Browser로 실제 CMS 세션 E2E 실측: 고객상세 → 포인트이력 탭 진입 → "포인트 추가"
+  폼에 12,345 입력 시 천단위 콤마 자동 포맷(`12,345`) 확인 → 제출 → 목록에 즉시
+  "적립/+12,345P/입력한 사유/2026.09.14 17:30"(배지+금액+사유+년월일시분 전부) 반영 확인,
+  성공 토스트 확인 → 기본정보 탭 전환 시 포인트 잔액도 실시간 갱신 확인(추가 5,000 합산해
+  17,345P로 정확히 반영 — `invalidateAll()` 추가로 해소한 부분, 최초 구현엔 없었으나
+  자체 검증 중 발견해 즉시 보완).
+
+### GATE C 체크리스트
+
+```
+[x] 디자인시스템 준수 — 전부 기존 표준 재사용, 신규 CSS 클래스/패턴 발명 없음
+[x] 금액 입력폼 표준(천단위 콤마) 적용 확인(실측)
+[x] ID공간 정합성 — 조회 경로(user_profiles.id→auth.users.id 변환)와 지급 경로
+    (admin_grant_points, 변환 불필요) 구분 정확히 구현
+[x] admin_grant_points 호출 시 locals.supabase 사용(auth.uid() 의존성 확인 후 수정)
+[x] use_points ref_id 수정 — 기존 3개 호출부 무변경, Stage 라이브테스트로 회귀 없음 확인
+[x] npm run check 클린
+[x] Stage 선적용·검증 → Production 적용 순서 준수
+```
+
+git commit은 Stephen 직접 실행.
+
+---
+
+## DONE — CMS `/cms/products` 상세패널 UX 개선 4건 + close-red 트리거 문구 확장 (2026-09-14~15, 이 세션 단독 수행)
+
+### 배경
+
+이전 "상품등록관리(/cms/products) 테스트 데이터 정리 + 재고 표시 오류 조사 + 디테일패널
+UX 개선"(DONE, 2026-09-11) 이후 같은 세션에서 이어서 진행한 소규모 UI 개선 4건 + 문서
+트리거 문구 확장 1건. 요청마다 개별적으로 반영했으나 TASK.md 기록이 지연돼 있었음 —
+이번에 Stephen 요청으로 일괄 기록 후 QA 진행.
+
+### ① close-red(§0-10-A) 닫기버튼 트리거 문구 확장 (문서만)
+
+**요청**: 선택영역(`.rep-close-btn`) UI가 `cms-uiux.md` §0-10-A(close-red) 스펙과 정확히
+일치하는지 확인 + "닫기 버튼 반영해"라고만 말해도 이 스펙이 바로 트리거되는지 검토 요청.
+
+**확인 결과**: 스펙(28×28px, `✕` 문자, hover 시 `--cs-red-badge`) 100% 일치 확인.
+
+**반영**: Stephen 승인 후 `.claude/rules-ref/cms-uiux.md` §0-10-A 트리거 문구에 "닫기 버튼
+반영해"/"닫기 아이콘 반영해" 2개를 추가(기존 "close-red 적용해"/"강조닫기버튼 등록해"에
+이어 등록). 코드 변경 없음, 문서만 수정.
+
+### ② 삭제 안전 토스트(§0-10-B) 모듈화 — 신규 공식 등록
+
+**요청**: "다음 삭제 안전장치 경고토스트를 모듈화해서 '삭제 안전 토스트' 컴포넌트 반영을
+요구시 그대로 반영할 것. 요구 단어는 다양할 수 있으나 '삭제 안전장치 토스트 or 삭제 안전
+토스트'로 요구 시 충분히 알아 듣고 반영할 것."
+
+**구현**:
+- `src/lib/utils/deleteSafetyToast.svelte.ts`(신규) — `ProductDetailPanel.svelte`에 있던
+  "1차 클릭: 경고 토스트+제출 무장 / 2차 클릭: 실제 삭제 제출" 로직을
+  `createDeleteSafetyToast()` 팩토리 함수로 모듈화(Svelte 5 rune을 쓰는 재사용 상태라
+  `.svelte.ts` 확장자 필수 — 일반 `.ts`는 `$state` 사용 불가).
+- `src/lib/components/cms/ProductDetailPanel.svelte` — 기존 인라인 `deletePending`/
+  `isDeleting`/`handleDeleteProduct` 전부 제거, 위 모듈의
+  `createDeleteSafetyToast({ successMessage: '상품이 삭제됐습니다.', onSuccess: onclose })`
+  호출로 교체. 삭제 버튼 폼(`use:enhance`)·문구 분기는 기존과 동일하게 유지.
+- `.claude/rules-ref/cms-uiux.md` §0-10-B 신설 — 공식 명칭·트리거 문구·스펙표·표준 코드
+  패턴(모듈 import + 폼 바인딩)·적용 규칙을 문서에 정식 등록(향후 "삭제 안전(장치) 토스트"
+  요청 시 재설계 없이 이 모듈을 즉시 재사용하도록).
+
+**검증**: `npx svelte-check` — 두 파일 신규 에러 0건.
+
+### ③ 대표 상품정보 카드(`.rep-section`) 아웃라인 제거 — 면(fill) 우선 원칙
+
+**요청**: "표준 디자인 시스템 지침에 따라 아웃라인 스타일 제거" (선택영역: `.rep-header`/
+`.rep-section` — 선택 시 보라색 보더가 카드 전체를 감싸던 상태 스크린샷 첨부).
+
+**구현**(`src/routes/cms/products/+page.svelte`):
+- `.rep-section`에서 `border: 1.5px solid transparent`·`transition: border-color` 제거.
+- `.rep-section--open { border-color: var(--cs-purple) }` 규칙 삭제, 대신
+  `.rep-section--open .rep-header { background: rgba(59,47,138,0.05) }`(헤더 영역 배경
+  틴트)로 대체 — 카드 전체 보더 대신 헤더 영역 면(fill)으로만 선택 상태를 표시(persistent
+  memory "보더보다 면 우선" 원칙 — 콘텐츠 영역 침범 없이 헤더에만 옅게 색을 채움).
+
+### ④ 상품 카드 목록 호버 색상 — 선택 상태와 명확히 구분
+
+**요청**: "카드 목록 호버(마우스 오버) 시 bg컬러토큰을 조금 더 짙게(그레이 컬러톤 계열)
+반영. 호버 시 선택여부가 불분명!!"
+
+**원인**: 기존 호버 배경(`--cs-lilac`)이 페이지 배경색과 완전히 동일해 호버 시 사실상
+표시가 안 됐고, 남아있는 미세한 차이도 선택 상태(`rgba(59,47,138,0.06)`, 옅은 보라)와
+구분이 잘 안 됐음.
+
+**구현**(`src/routes/cms/products/+page.svelte`): `.product-card:hover` 배경을
+`--cs-lilac` → `--cs-border`(그레이 계열, CMS 타 화면 호버 배경으로 이미 선례 있는 토큰)로
+교체. `.selected`는 보라 계열 그대로 유지 — CSS 소스 순서(`.selected` 규칙이 `:hover` 규칙
+보다 뒤에 위치, 동일 specificity)로 선택+호버가 동시에 걸려도 보라색(선택 상태)이 항상
+우선 적용됨을 확인(`!important` 불필요).
+
+### ⑤ ProductDetailPanel 카드 전환 시 깜빡임(닫힘→재오픈처럼 보이는 현상) 수정 — PANEL-SWITCH-1
+
+**요청**: "선택영역 기존 카드 목록 실행해 'ProductDetailPanel' 열린 상태에서 다른카드목록
+선택 시 기존 'ProductDetailPanel'이 닫히고 열리지 않게 할 것. 해당 상태에서 바로 다음
+카드목록의 'ProductDetailPanel' 이 열리게 할 것."
+
+**원인**: 패널이 열린 상태에서 다른 카드를 클릭하면, 새 상품 상세를 서버에서 가져오는
+짧은 순간 동안 `overrideDetail`이 `'loading'`으로 바뀌면서 `activeDetail.rootProduct`가
+일시적으로 `null`이 됐음 — `{#if panelOpen && activeDetail.rootProduct}`로 감싸진
+상세패널 전체가 그 순간 DOM에서 unmount(`transition:fly` 닫힘 애니메이션 재생)됐다가
+fetch가 끝나면 다시 mount(열림 애니메이션 재생)되어, 눈에 보일 정도로 "패널이 닫혔다가
+다시 열리는" 것처럼 보였음.
+
+**구현**(`src/routes/cms/products/+page.svelte`):
+- `overrideDetail` 상태 타입에서 `'loading'` 값 제거(`SelectedProductDetail | 'loading' |
+  null` → `SelectedProductDetail | null`).
+- 새 상품 클릭 시 `overrideDetail`을 즉시 비우지 않고 이전 상품 상세를 그대로 유지한 채
+  `fetchedForId`만 먼저 갱신 — fetch가 끝나면 조용히 새 상품 데이터로 교체.
+- `activeDetail` 파생값도 `'loading'` 분기 제거, `overrideDetail ?? EMPTY_DETAIL`로 단순화.
+- 결과: 상세패널이 열린 상태를 그대로 유지한 채(unmount 없이) 새로 선택한 카드의 정보로
+  바로 전환됨(요청사항 "바로 다음 카드목록의 패널이 열리게" 충족). 여러 카드를 빠르게
+  연속 클릭했을 때 오래된 fetch 응답이 최신 선택을 덮어쓰지 않도록 하는 기존
+  `fetchedForId` 일치 여부 가드는 그대로 유지 — 실서버처럼 응답 순서가 들쭉날쭉해도
+  안전.
+
+**검증**: `npx svelte-check` — 대상 파일 신규 에러·경고 0건(기존 `vite.config.ts` 무관 오류
+1건만 전후 동일하게 존재). DB/RPC/마이그레이션 변경 없음(순수 화면 로직).
+
+### 세션 범위 확인 (`git diff --stat` 파일 단위 대조)
+
+이 세션이 실제로 건드린 구간만 정확히 특정: `.claude/rules-ref/cms-uiux.md`(①②에 해당하는
+§0-10-A 트리거 문구 1줄 + §0-10-B 섹션 전체만), `src/lib/components/cms/ProductDetailPanel.svelte`
+(②의 import·상태·delete-footer 폼 구간만), `src/routes/cms/products/+page.svelte`(③④⑤
+전체), `src/lib/utils/deleteSafetyToast.svelte.ts`(신규 파일, ②). 같은 파일에 동시 진행
+중인 다른 세션의 diff(예: `cms-uiux.md`의 close-normal(A-2)/초소형 라운드 버튼형(§0-10-C)/
+DetailPanel 레이아웃 표준 섹션, `ProductDetailPanel.svelte`의 `.btn-danger` 반경(`--radius-xl`
+→ `--radius-md`) 조정 등)는 이 세션이 작성한 내용이 아니므로 이번 기록·검수 대상에서 제외.
+
+### QA 검수 결과 (2026-09-15, @sp3-qa-agent) — 통과
+
+①~⑤ 전부 요청 의도대로 구현 확인. 규칙 정합성(core-rules.md `$state(prop)` 금지·
+uiux-index.md "보더보다 면 우선") 통과, 기술부채 0건, `npx svelte-check` 재실행 신규
+에러·경고 0건(기존 `vite.config.ts` 무관 오류 1건만 전후 동일). PANEL-SWITCH-1은 레이스
+컨디션(카드 A 클릭 → B 클릭 → A 응답이 더 늦게 도착) 시나리오까지 코드 추적으로 검증해
+`fetchedForId` 가드가 최신 선택만 반영함을 확인, 에러(404 등) 경로도 `closePanel()`까지
+회귀 없이 유지됨을 확인. 범위 외 파일(다른 세션이 동시 진행 중인 `cms-uiux.md` A-2/
+§0-10-C/DetailPanel 레이아웃 표준, `ProductDetailPanel.svelte` `.btn-danger` 반경 변경 등)
+은 검수 대상에서 정확히 제외됨. **블로킹 이슈 0건, GATE E 통과.**
+
+비차단 참고(QA 지적, 즉시 반영 완료): `cms-uiux.md` §0-10-B 표준 코드 패턴 주석의
+`ProductDetailPanel.svelte` 정본 줄번호가 `handleDeleteProduct` 제거로 `4172-4188` →
+`4152-4168`로 밀렸던 것을 실제 코드 대조 후 정정.
+
+### 잔여 작업
+
+1. ~~QA(@sp3-qa-agent) 검수~~ ✅ 완료 — 통과, 블로킹 이슈 0건
+2. git commit — Stephen 확인 후 직접 실행 대기(아래 제안 메시지 참고)
+
+```
+fix(cms/products): 상세패널 전환 깜빡임 수정 + 삭제 안전 토스트 모듈화 + UI 정리
+
+- 카드 전환 시 상세패널이 닫혔다 다시 열리는 것처럼 보이던 현상 수정(PANEL-SWITCH-1)
+- 상품 삭제 2단계 확인 로직을 재사용 모듈(deleteSafetyToast)로 분리, cms-uiux.md §0-10-B 등록
+- 대표 상품정보 카드 아웃라인 제거(보더 대신 헤더 배경 틴트) + 카드 호버 색상 명확화
+- close-red 닫기버튼 트리거 문구 확장(cms-uiux.md §0-10-A)
+```
 
 **git commit은 Stephen 직접 실행.**
