@@ -4,6 +4,7 @@ import { getSupabaseUrl } from '$lib/env/supabasePublic'
 import { createClient } from '@supabase/supabase-js'
 import { hasSettingsAccess } from '$lib/utils/cmsPermissions'
 import { getCmsRoleForAction } from '$lib/server/getCmsRoleForAction'
+import { hasMenuAccess } from '$lib/constants/cmsMenus'
 import type { Actions, PageServerLoad } from './$types'
 
 export interface CustomerRow {
@@ -47,8 +48,15 @@ export interface CustomerRow {
 }
 
 export const load: PageServerLoad = async ({ parent, url }) => {
-  const { cmsRole } = await parent()
-  if (!hasSettingsAccess(cmsRole ?? '')) throw redirect(303, '/cms?notice=access_denied')
+  const { cmsRole, menuPermissionOverrides } = await parent()
+  // 고객목록(customers.list) 열람은 파트너도 계정별 권한설정으로 허용될 수 있다 —
+  // hasSettingsAccess(manager+) 단독 판정 대신 hasMenuAccess(role+오버라이드)로 통일해
+  // +layout.server.ts의 GNB/라우트 가드와 동일 기준을 유지한다. 블랙리스트·회원정보수정·
+  // 점수조정·포인트지급·삭제 등 나머지 액션은 여전히 아래 actions에서 hasSettingsAccess로
+  // 별도 보호된다(파트너는 목록 열람만 가능, 편집·삭제는 그대로 차단).
+  if (!hasMenuAccess(cmsRole ?? '', menuPermissionOverrides, 'customers.list')) {
+    throw redirect(303, '/cms?notice=access_denied')
+  }
 
   const serviceRoleKey = env.SUPABASE_SERVICE_ROLE_KEY
   if (!serviceRoleKey) {
@@ -229,6 +237,44 @@ export const actions: Actions = {
     const result = data as { ok: boolean; old_score?: number; new_score?: number; error?: string } | null
     if (!result?.ok) return fail(400, { ok: false, error: result?.error ?? error?.message ?? '조정 실패' })
     return { ok: true, old_score: result.old_score, new_score: result.new_score }
+  },
+
+  // 포인트이력 탭 "포인트 추가" — 기존 admin_grant_points RPC 재사용(/cms/promotion/point
+  // 화면의 grantPoints 액션과 동일 RPC, 신규 로직 없음). p_user_id는 admin_grant_points가
+  // user_profiles.id로 직접 매칭하므로 변환 없이 그대로 전달(읽기 경로의 rentals/points
+  // +server.ts와 달리 쓰기 경로는 ID 변환이 필요 없음 — 혼동 주의).
+  // ⚠️ 이 RPC는 내부에서 auth.uid()로 is_cms_user() 검사 + admin_id 기록을 하므로
+  // locals.supabase(사용자 세션 유지)를 그대로 써야 함 — service_role 관리자 클라이언트로
+  // 호출하면 auth.uid()가 NULL이 되어 ACCESS_DENIED가 남(promotion/point의 grantPoints
+  // 액션과 동일하게 locals.supabase 사용, 이 파일의 adjustScore/deleteCustomer가 쓰는
+  // service_role 패턴과는 다름 — RPC마다 내부 인가방식이 다르니 혼동 금지).
+  grantCustomerPoints: async ({ request, locals }) => {
+    const { session } = await locals.safeGetSession()
+    if (!session) return fail(403, { ok: false, error: '권한 없음' })
+    const cmsRole = await getCmsRoleForAction(locals)
+    if (!hasSettingsAccess(cmsRole ?? '')) return fail(403, { ok: false, error: '권한 없음' })
+
+    const form = await request.formData()
+    const user_id = String(form.get('user_id') ?? '').trim()
+    // 금액 입력폼 표준(콤마 포함 문자열로 전송됨) — 서버에서 숫자만 추출
+    const amount = Number(String(form.get('amount') ?? '').replace(/[^0-9]/g, ''))
+    const description = String(form.get('description') ?? '').trim()
+
+    if (!user_id) return fail(400, { ok: false, error: '사용자 ID 필수' })
+    if (!amount || amount <= 0) return fail(400, { ok: false, error: '0보다 큰 금액을 입력하세요.' })
+    if (!description) return fail(400, { ok: false, error: '사유(출처) 입력 필수' })
+
+    const db = locals.supabase as unknown as any
+    const { data, error } = await db.rpc('admin_grant_points', {
+      p_user_id: user_id,
+      p_amount: amount,
+      p_type: 'admin_grant',
+      p_description: description,
+    })
+
+    const result = data as { ok: boolean; error?: string; new_balance?: number } | null
+    if (!result?.ok) return fail(400, { ok: false, error: result?.error ?? error?.message ?? '등록 실패' })
+    return { ok: true, new_balance: result.new_balance }
   },
 
   deleteCustomer: async ({ request, locals }) => {

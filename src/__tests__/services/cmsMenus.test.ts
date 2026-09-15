@@ -138,7 +138,6 @@ describe('QA 정밀검수(2026-08-26) 결함③ 수정 — role 기본값 정합
   // requiresSettingsAccess 플래그가 빠져 roleAllowsMenuByDefault('partner', ...)가 잘못
   // true를 반환하던 항목들. partner는 false, manager는 true여야 한다(대조군).
   const menuKeys = [
-    'customers.list',
     'customers.membership',
     'customers.score',
     'customers.inquiry',
@@ -162,5 +161,65 @@ describe('QA 정밀검수(2026-08-26) 결함③ 수정 — role 기본값 정합
 
   it.each(menuKeys)('manager / %s → roleAllowsMenuByDefault는 true여야 한다(정상 허용 대조군)', (menuKey) => {
     expect(roleAllowsMenuByDefault('manager', menuKey)).toBe(true);
+  });
+});
+
+describe('Stephen 지시(2026-09-15) — 파트너 접근범위 재조정 3건', () => {
+  it('고객목록(customers.list)은 파트너도 열람 가능해야 한다(계정별 권한설정으로 On/Off — ' +
+    '단, 블랙리스트·회원정보수정·점수조정·포인트지급·삭제 등 나머지 고객관리 액션은 여전히 manager+ 전용)', () => {
+    expect(roleAllowsMenuByDefault('partner', 'customers.list')).toBe(true);
+    expect(roleAllowsMenuByDefault('manager', 'customers.list')).toBe(true);
+  });
+
+  it('대여관리(settings.rental)는 이제 파트너에게 완전히 차단된다(메뉴 자체를 숨기고 라우트도 차단)', () => {
+    expect(roleAllowsMenuByDefault('partner', 'settings.rental')).toBe(false);
+    expect(roleAllowsMenuByDefault('manager', 'settings.rental')).toBe(true);
+  });
+
+  it('프로모션 대메뉴는 서브메뉴가 전부 role상 차단된 역할(예: 파트너)에게는 GNB에서 숨겨져야 한다 ' +
+    '(hasMenuAccess 기준 서브메뉴 전부 거부 — +layout.svelte가 이 조건으로 대메뉴 자체를 숨긴다)', () => {
+    const promotionSubKeys = CMS_MENUS.find((m) => m.menu_key === 'promotion')!.subMenus.map((s) => s.menu_key);
+    expect(promotionSubKeys.length).toBeGreaterThan(0);
+    for (const key of promotionSubKeys) {
+      expect(hasMenuAccess('partner', [], key)).toBe(false);
+    }
+  });
+});
+
+describe('rental.change_cancel — 서버 액션 권한 체크 정합성 (2026-09-15)', () => {
+  // changeReservation·updateStatus(cancelled 분기) 두 폼 액션이 hasSettingsAccess 역할 게이트
+  // 통과 후 추가로 이 hasMenuAccess 결과를 사용해 403을 반환한다.
+  // 핵심: manager+는 기본적으로 허용되지만, cms_menu_permissions 오버레이로 개별 차단 가능.
+
+  it('manager는 오버라이드가 없으면 rental.change_cancel에 기본 접근 허용된다', () => {
+    expect(hasMenuAccess('manager', [], 'rental.change_cancel')).toBe(true);
+  });
+
+  it('superadmin은 오버라이드 없이 rental.change_cancel에 접근 허용된다', () => {
+    expect(hasMenuAccess('superadmin', [], 'rental.change_cancel')).toBe(true);
+  });
+
+  it('partner는 requiresSettingsAccess 플래그로 role 수준에서 rental.change_cancel이 차단된다', () => {
+    // partner는 hasSettingsAccess()=false라 changeReservation/updateStatus 액션의
+    // 첫 번째 게이트(역할 체크)에서 이미 막히지만, hasMenuAccess도 동일하게 false여야 함
+    expect(hasMenuAccess('partner', [], 'rental.change_cancel')).toBe(false);
+  });
+
+  it('manager에게 allowed=false 오버라이드가 있으면 rental.change_cancel이 차단된다 — ' +
+    '이것이 서버 액션이 fail(403)을 반환하는 정확한 조건이다', () => {
+    const overrides = [{ menu_key: 'rental.change_cancel', allowed: false }];
+    expect(hasMenuAccess('manager', overrides, 'rental.change_cancel')).toBe(false);
+    // superadmin도 동일하게 차단됨
+    expect(hasMenuAccess('superadmin', overrides, 'rental.change_cancel')).toBe(false);
+  });
+
+  it('다른 menu_key의 차단 오버라이드는 rental.change_cancel에 영향을 주지 않는다', () => {
+    const overrides = [{ menu_key: 'rental.reservation', allowed: false }];
+    expect(hasMenuAccess('manager', overrides, 'rental.change_cancel')).toBe(true);
+  });
+
+  it('allowed=true 오버라이드는 partner에게 rental.change_cancel을 열어주지 않는다(좁히기 전용)', () => {
+    const overrides = [{ menu_key: 'rental.change_cancel', allowed: true }];
+    expect(hasMenuAccess('partner', overrides, 'rental.change_cancel')).toBe(false);
   });
 });

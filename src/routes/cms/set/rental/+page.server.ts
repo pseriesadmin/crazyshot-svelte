@@ -161,6 +161,8 @@ export const actions: Actions = {
   addPeriod: async ({ request, locals }) => {
     const { session } = await locals.safeGetSession()
     if (!session) return fail(401, { error: '인증 필요' })
+    const cmsRole = await getCmsRoleForAction(locals)
+    if (!hasSettingsAccess(cmsRole ?? '')) return fail(403, { error: '권한 없음' })
     const data = await request.formData()
     const name = (data.get('name') as string | null)?.trim() ?? ''
     const count = parseInt(data.get('count') as string, 10)
@@ -180,6 +182,8 @@ export const actions: Actions = {
   deletePeriod: async ({ request, locals }) => {
     const { session } = await locals.safeGetSession()
     if (!session) return fail(401, { error: '인증 필요' })
+    const cmsRole = await getCmsRoleForAction(locals)
+    if (!hasSettingsAccess(cmsRole ?? '')) return fail(403, { error: '권한 없음' })
     const data = await request.formData()
     const id = data.get('id') as string
     const { data: inUse } = await untypedRpc(locals.supabase, 'check_rental_period_option_in_use', { p_id: id })
@@ -192,6 +196,8 @@ export const actions: Actions = {
   reorderPeriods: async ({ request, locals }) => {
     const { session } = await locals.safeGetSession()
     if (!session) return fail(401, { error: '인증 필요' })
+    const cmsRole = await getCmsRoleForAction(locals)
+    if (!hasSettingsAccess(cmsRole ?? '')) return fail(403, { error: '권한 없음' })
     const data = await request.formData()
     const raw = data.get('ids')
     if (!raw) return fail(400, { error: 'ids required' })
@@ -205,6 +211,8 @@ export const actions: Actions = {
   addMethod: async ({ request, locals }) => {
     const { session } = await locals.safeGetSession()
     if (!session) return fail(401, { error: '인증 필요' })
+    const cmsRole = await getCmsRoleForAction(locals)
+    if (!hasSettingsAccess(cmsRole ?? '')) return fail(403, { error: '권한 없음' })
     const data = await request.formData()
     const name = (data.get('name') as string | null)?.trim() ?? ''
     const count = parseInt(data.get('count') as string, 10)
@@ -230,6 +238,8 @@ export const actions: Actions = {
   deleteMethod: async ({ request, locals }) => {
     const { session } = await locals.safeGetSession()
     if (!session) return fail(401, { error: '인증 필요' })
+    const cmsRole = await getCmsRoleForAction(locals)
+    if (!hasSettingsAccess(cmsRole ?? '')) return fail(403, { error: '권한 없음' })
     const data = await request.formData()
     const id = data.get('id') as string
     const { data: inUse } = await untypedRpc(locals.supabase, 'check_rental_method_option_in_use', { p_id: id })
@@ -242,6 +252,8 @@ export const actions: Actions = {
   reorderMethods: async ({ request, locals }) => {
     const { session } = await locals.safeGetSession()
     if (!session) return fail(401, { error: '인증 필요' })
+    const cmsRole = await getCmsRoleForAction(locals)
+    if (!hasSettingsAccess(cmsRole ?? '')) return fail(403, { error: '권한 없음' })
     const data = await request.formData()
     const raw = data.get('ids')
     if (!raw) return fail(400, { error: 'ids required' })
@@ -255,6 +267,8 @@ export const actions: Actions = {
   toggleBulkDelivery: async ({ request, locals }) => {
     const { session } = await locals.safeGetSession()
     if (!session) return fail(401, { error: '인증 필요' })
+    const cmsRole = await getCmsRoleForAction(locals)
+    if (!hasSettingsAccess(cmsRole ?? '')) return fail(403, { error: '권한 없음' })
     const data = await request.formData()
     const id = data.get('id') as string
     const { error } = await untypedRpc(locals.supabase, 'toggle_rental_method_bulk_delivery', { p_id: id })
@@ -267,6 +281,8 @@ export const actions: Actions = {
   toggleCourierDependent: async ({ request, locals }) => {
     const { session } = await locals.safeGetSession()
     if (!session) return fail(401, { error: '인증 필요' })
+    const cmsRole = await getCmsRoleForAction(locals)
+    if (!hasSettingsAccess(cmsRole ?? '')) return fail(403, { error: '권한 없음' })
     const data = await request.formData()
     const id = data.get('id') as string
     const { error } = await untypedRpc(locals.supabase, 'toggle_rental_method_courier_dependent', { p_id: id })
@@ -280,6 +296,8 @@ export const actions: Actions = {
   toggleDeliveryType: async ({ request, locals }) => {
     const { session } = await locals.safeGetSession()
     if (!session) return fail(401, { error: '인증 필요' })
+    const cmsRole = await getCmsRoleForAction(locals)
+    if (!hasSettingsAccess(cmsRole ?? '')) return fail(403, { error: '권한 없음' })
     const data = await request.formData()
     const id = data.get('id') as string
     const { error } = await untypedRpc(locals.supabase, 'toggle_rental_method_delivery_type', { p_id: id })
@@ -291,6 +309,8 @@ export const actions: Actions = {
   addBranch: async ({ request, locals }) => {
     const { session } = await locals.safeGetSession()
     if (!session) return fail(401, { error: '인증 필요' })
+    const cmsRole = await getCmsRoleForAction(locals)
+    if (!hasSettingsAccess(cmsRole ?? '')) return fail(403, { error: '권한 없음' })
     const data = await request.formData()
     const name = (data.get('name') as string | null)?.trim() ?? ''
     const count = parseInt(data.get('count') as string, 10)
@@ -312,6 +332,8 @@ export const actions: Actions = {
   updateBranch: async ({ request, locals }) => {
     const { session } = await locals.safeGetSession()
     if (!session) return fail(401, { error: '인증 필요' })
+    const cmsRole = await getCmsRoleForAction(locals)
+    if (!hasSettingsAccess(cmsRole ?? '')) return fail(403, { error: '권한 없음' })
     const data = await request.formData()
     const id = data.get('id') as string
     const name = (data.get('name') as string | null)?.trim() ?? ''
@@ -336,6 +358,8 @@ export const actions: Actions = {
   deleteBranch: async ({ request, locals }) => {
     const { session } = await locals.safeGetSession()
     if (!session) return fail(401, { error: '인증 필요' })
+    const cmsRole = await getCmsRoleForAction(locals)
+    if (!hasSettingsAccess(cmsRole ?? '')) return fail(403, { error: '권한 없음' })
     const data = await request.formData()
     const id = data.get('id') as string
     const { data: inUse } = await untypedRpc(locals.supabase, 'check_pickup_point_in_use', { p_id: id })
@@ -349,6 +373,8 @@ export const actions: Actions = {
   saveShipping: async ({ request, locals }) => {
     const { session } = await locals.safeGetSession()
     if (!session) return fail(401, { error: '인증 필요' })
+    const cmsRole = await getCmsRoleForAction(locals)
+    if (!hasSettingsAccess(cmsRole ?? '')) return fail(403, { error: '권한 없음' })
     const data = await request.formData()
 
     const enableRoundTrip = data.get('enable_round_trip') === 'true'
@@ -384,6 +410,8 @@ export const actions: Actions = {
   saveCutoffSettings: async ({ request, locals }) => {
     const { session } = await locals.safeGetSession()
     if (!session) return fail(401, { error: '인증 필요' })
+    const cmsRole = await getCmsRoleForAction(locals)
+    if (!hasSettingsAccess(cmsRole ?? '')) return fail(403, { error: '권한 없음' })
     const data = await request.formData()
 
     const enablePrevDayCheck = data.get('enable_prev_day_check') === 'true'
@@ -402,6 +430,8 @@ export const actions: Actions = {
   addManualHoliday: async ({ request, locals }) => {
     const { session } = await locals.safeGetSession()
     if (!session) return fail(401, { error: '인증 필요' })
+    const cmsRole = await getCmsRoleForAction(locals)
+    if (!hasSettingsAccess(cmsRole ?? '')) return fail(403, { error: '권한 없음' })
     const data = await request.formData()
     const date = (data.get('date') as string | null) ?? ''
     const note = (data.get('note') as string | null)?.trim() ?? ''
@@ -421,6 +451,8 @@ export const actions: Actions = {
   deleteManualHoliday: async ({ request, locals }) => {
     const { session } = await locals.safeGetSession()
     if (!session) return fail(401, { error: '인증 필요' })
+    const cmsRole = await getCmsRoleForAction(locals)
+    if (!hasSettingsAccess(cmsRole ?? '')) return fail(403, { error: '권한 없음' })
     const data = await request.formData()
     const id = data.get('id') as string
     const { error } = await untypedRpc(locals.supabase, 'delete_manual_holiday', { p_id: id })
@@ -451,6 +483,8 @@ export const actions: Actions = {
   saveGuide: async ({ request, locals }) => {
     const { session } = await locals.safeGetSession()
     if (!session) return fail(401, { error: '인증 필요' })
+    const cmsRole = await getCmsRoleForAction(locals)
+    if (!hasSettingsAccess(cmsRole ?? '')) return fail(403, { error: '권한 없음' })
     const data = await request.formData()
     const guideText = (data.get('guide_text') as string | null) ?? ''
 
@@ -467,6 +501,8 @@ export const actions: Actions = {
   addConsent: async ({ request, locals }) => {
     const { session } = await locals.safeGetSession()
     if (!session) return fail(401, { error: '인증 필요' })
+    const cmsRole = await getCmsRoleForAction(locals)
+    if (!hasSettingsAccess(cmsRole ?? '')) return fail(403, { error: '권한 없음' })
     const data = await request.formData()
     const content = (data.get('content') as string | null)?.trim() ?? ''
     const count = parseInt(data.get('count') as string, 10)
@@ -487,6 +523,8 @@ export const actions: Actions = {
   deleteConsent: async ({ request, locals }) => {
     const { session } = await locals.safeGetSession()
     if (!session) return fail(401, { error: '인증 필요' })
+    const cmsRole = await getCmsRoleForAction(locals)
+    if (!hasSettingsAccess(cmsRole ?? '')) return fail(403, { error: '권한 없음' })
     const data = await request.formData()
     const id = data.get('id') as string
     const { error } = await untypedRpc(locals.supabase, 'delete_rental_consent_item', { p_id: id })
@@ -497,6 +535,8 @@ export const actions: Actions = {
   reorderConsents: async ({ request, locals }) => {
     const { session } = await locals.safeGetSession()
     if (!session) return fail(401, { error: '인증 필요' })
+    const cmsRole = await getCmsRoleForAction(locals)
+    if (!hasSettingsAccess(cmsRole ?? '')) return fail(403, { error: '권한 없음' })
     const data = await request.formData()
     const raw = data.get('ids')
     if (!raw) return fail(400, { error: 'ids required' })
@@ -510,6 +550,8 @@ export const actions: Actions = {
   addDiscountTier: async ({ request, locals }) => {
     const { session } = await locals.safeGetSession()
     if (!session) return fail(401, { error: '인증 필요' })
+    const cmsRole = await getCmsRoleForAction(locals)
+    if (!hasSettingsAccess(cmsRole ?? '')) return fail(403, { error: '권한 없음' })
     const data = await request.formData()
     const amountRaw = (data.get('min_rental_amount') as string | null) ?? ''
     const amount = amountRaw !== '' ? parseInt(amountRaw, 10) : NaN
@@ -550,6 +592,8 @@ export const actions: Actions = {
   deleteDiscountTier: async ({ request, locals }) => {
     const { session } = await locals.safeGetSession()
     if (!session) return fail(401, { error: '인증 필요' })
+    const cmsRole = await getCmsRoleForAction(locals)
+    if (!hasSettingsAccess(cmsRole ?? '')) return fail(403, { error: '권한 없음' })
     const data = await request.formData()
     const id = data.get('id') as string
     const { error } = await untypedRpc(locals.supabase, 'delete_delivery_fee_discount_tier', { p_id: id })

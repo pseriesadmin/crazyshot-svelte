@@ -1,6 +1,6 @@
 # .claude/harness/TASK.md
 
-## NOW — 🔴 CRITICAL: CMS 계정관리(`/cms/accounts/list`) 권한설정 검증 + 파트너 접근범위 재조정 + 슈퍼마스터 보호 공백 수정 (2026-09-15, 이 세션'만')
+## DONE — 🔴 CRITICAL: CMS 계정관리(`/cms/accounts/list`) 권한설정 검증 + 파트너 접근범위 재조정 + 슈퍼마스터 보호 공백 수정 (2026-09-15, 이 세션'만', ✅ GATE E 통과 — sp3-qa-agent 검수 완료, git commit만 Stephen 대기)
 
 ### 아젠다
 
@@ -110,6 +110,81 @@ git commit은 Stephen 직접 실행 대기.
 ⚠️ 작업 중 다른 세션이 동일 파일들을 동시에 수정하고 있는 정황 발견(git diff에 이 세션이
 작성하지 않은 코드가 함께 나타남 — 예: customers/+page.server.ts의 grantCustomerPoints
 액션). 이 세션이 만든 변경분은 Edit 도구의 앵커 매칭 + 테스트 재실행으로 온전함을 재확인함.
+```
+
+### @sp3-qa-agent 검수 결과 — GATE E 통과 ✅
+
+```
+검수범위를 이 세션이 실제로 건드린 10개 파일로 명시 한정해 git diff -- <10개 파일>로 스코프
+고정 확인 후 검수(다른 세션 동시작업 오염을 배제하기 위함).
+
+라인 단위 확인 결과:
+· requireAccountMutationAccess() 배치 위치·순서(EC-5 자기자신차단 → CRITICAL 게이트 →
+  Q6 좁히기전용 → 슈퍼마스터 잠금) 정확 — allowed=true/false 둘 다 예외 없이 통과.
+· cms/set/rental/+page.server.ts 23개 액션 전수 대조 — 가드 23곳 1회씩만 삽입, 중복 없음,
+  syncHolidaysNow(기존 유일 게이트)는 무변경 유지.
+· cms/customers/+page.server.ts — load()만 hasMenuAccess로 교체, 데이터 변경 액션 6개는
+  전부 기존 hasSettingsAccess 그대로 유지("열람만 허용, 편집은 manager+" 요구사항과 일치).
+· +layout.server.ts/+layout.svelte GNB 리팩터 — dashboard(href만 있음)·href 없는 대메뉴·
+  href 없는 서브메뉴(rental.change_cancel) 각 분기 전부 엣지케이스 오류 없음.
+· 테스트 설계(mockProfileRoles 헬퍼의 target/caller 구분) 로직과 정확히 일치 확인.
+· 재실행: 지정 5개 파일 107/107 PASS(세션 기록 101건과 근소한 차이는 다른 세션의 동시
+  cmsMenus.ts 편집분 혼입 때문 — 기능적 문제 아님, 아래 참고).
+· npx svelte-check — 신규 에러 0건 재확인.
+· core-rules.md "요청범위 외 수정 금지" 등 도메인 규칙 위반 없음. RLS/직접 DML 없음(전부
+  기존 RPC 경유).
+
+⚠️ QA가 추가로 발견(GATE E 비차단, 경미): cmsMenus.ts의 실제 diff에 이 세션이 보고한 2건
+외에 다른 세션이 만든 것으로 보이는 변경 3건(CmsSubMenuDef.href optional화, 신규 메뉴
+'rental.change_cancel' 항목, href-less 항목 처리 분기)이 섞여 있음 — 이 세션이 작성하지
+않았고 위 "서버 액션 보안 공백: rental.change_cancel..." 세션(같은 파일, 아래 별도 NOW
+블록)의 변경과 명명이 정확히 일치. 이 세션의 로직·테스트와 충돌하거나 깨뜨리지 않음(재확인
+완료) — 커밋 시점에 두 세션의 cmsMenus.ts/security-auth.md/customers 변경을 함께
+검토·병합해야 함을 Stephen께 알림.
+
+종합 판정: 이 세션이 실제로 작성한 코드는 설계·구현·테스트·문서 전부 정확·일관, 보안 관점
+지적사항 없음 — GATE E 통과.
+```
+
+---
+
+## NOW — 서버 액션 보안 공백: rental.change_cancel 계정별 권한 미집행 수정 (2026-09-15)
+
+### 아젠다
+
+Stephen 지시: CMS 예약현황 서버 액션(`changeReservation`, `updateStatus` cancelled 분기)에서
+`rental.change_cancel` 메뉴 권한이 클라이언트 버튼 disabled만 막고 서버 액션 자체는 체크하지
+않아, DevTools로 버튼을 활성화하면 권한 없는 매니저도 예약 변경·취소가 가능한 보안 공백을 수정.
+
+TDD 필수(예약·보안 도메인). `updateStatus`의 partner 폴백 경로는 이번 범위 밖.
+
+### 구현
+
+```
+src/routes/cms/reservation/+page.server.ts — 두 곳에 hasMenuAccess 체크 추가
+  1. changeReservation 액션: admin 클라이언트 생성 직후, formData 파싱 전에
+     cms_menu_permissions 조회 → hasMenuAccess(cmsRole, overrides, 'rental.change_cancel')
+     → false이면 fail(403, { message: '이 계정은 예약변경·취소 권한이 없습니다.' })
+  2. updateStatus 액션 — hasSettingsAccess(cmsRole) 분기(manager+) 진입 직후,
+     payment_key 조회 전에 동일한 3줄 패턴으로 추가.
+  partner/else 분기는 변경 없음(role 게이트에서 이미 차단).
+
+src/__tests__/services/cmsMenus.test.ts — 6개 TDD 케이스 신규 추가
+  describe('rental.change_cancel — 서버 액션 권한 체크 정합성 (2026-09-15)')
+  · manager 오버라이드 없음 → 허용
+  · superadmin 오버라이드 없음 → 허용
+  · partner → role 레벨 차단(requiresSettingsAccess)
+  · manager/superadmin + allowed=false 오버라이드 → 차단(서버 fail(403) 트리거 조건)
+  · 다른 menu_key 차단은 rental.change_cancel에 영향 없음
+  · partner + allowed=true 오버라이드 → 여전히 차단(좁히기 전용 불변)
+```
+
+### 검증
+
+```
+npx svelte-check — 신규 에러 0건(무관한 기존 vite.config.ts 에러 1건만 유지).
+npx vitest run src/__tests__/services/cmsMenus.test.ts — 57/57 PASS (신규 6개 포함).
+git commit은 Stephen 직접 실행 대기.
 ```
 
 ## DONE — 홈 화면(모바일) DB 연동 검증 + 크레이지로그 콘텐츠 카드 UI 실데이터 반영 (2026-09-12~15, 이 세션'만')
