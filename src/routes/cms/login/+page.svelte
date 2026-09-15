@@ -15,6 +15,35 @@
   let newPasswordKoreanWarned = false  // 새 비밀번호(초대링크 설정) 한글 경고 중복 방지
   let confirmPasswordKoreanWarned = false // 비밀번호 확인(초대링크 설정) 한글 경고 중복 방지
 
+  // ── 비밀번호 재설정("복구") 링크 진입 상태 (2026-09-15 신설, SignUpModal 단계형 UI 구조 참고) ──
+  type RecoverStep = 'email' | 'phone' | 'phone-otp' | 'password'
+  let recoverStep = $state<RecoverStep>((data.recoverStep as RecoverStep) ?? 'email')
+  let recoverBusy = $state(false)
+  let recoverError = $state<string | null>(null)
+  let recoverEmail = $state('')
+  let recoverEmailKoreanWarned = false
+  let recoverPhone = $state('010-')
+  let recoverOtpCode = $state('')
+  let recoverOtpSent = $state(false)
+  let recoverOtpResendLocked = $state(false)
+  let recoverPassword = $state('')
+  let recoverConfirm = $state('')
+  let recoverNewPwKoreanWarned = false
+  let recoverConfirmPwKoreanWarned = false
+
+  function formatRecoveryPhone(raw: string): string {
+    const digits = raw.replace(/[^0-9]/g, '')
+    if (digits.length <= 3) return digits
+    if (digits.length <= 7) return `${digits.slice(0, 3)}-${digits.slice(3)}`
+    if (digits.length <= 11) return `${digits.slice(0, 3)}-${digits.slice(3, 7)}-${digits.slice(7)}`
+    return `${digits.slice(0, 3)}-${digits.slice(3, 7)}-${digits.slice(7, 11)}`
+  }
+
+  function startRecoveryOtpCooldown(): void {
+    recoverOtpResendLocked = true
+    setTimeout(() => { recoverOtpResendLocked = false }, 60_000)
+  }
+
   // 실시간 시각
   let now = $state(new Date())
   $effect(() => {
@@ -81,11 +110,254 @@
       </svg>
     </div>
 
-    {#if result?.error}
+    {#if result?.error && !data.recoverStatus}
       <p class="error-msg" role="alert">{result.error}</p>
     {/if}
 
-    {#if data.logoutType === 'expired'}
+    {#if data.recoverStatus === 'invalid'}
+      <!-- 비밀번호 재설정 링크 — 만료·사용됨·차단됨·존재하지 않음 -->
+      <p class="error-msg" role="alert">{data.recoverError ?? '유효하지 않거나 만료된 링크입니다.'}</p>
+      <a href="/cms/login" class="cta-btn expired-btn">로그인으로 돌아가기</a>
+
+    {:else if data.recoverStatus === 'valid'}
+      <!-- 비밀번호 재설정 링크 — 본인확인(이메일·휴대폰 OTP) 후 새 비밀번호 설정 -->
+      <p class="invite-greeting">비밀번호 재설정을 위해 본인확인을 진행해 주세요.</p>
+
+      {#if recoverError}
+        <p class="error-msg" role="alert">{recoverError}</p>
+      {/if}
+
+      {#if recoverStep === 'email'}
+        <form
+          method="POST"
+          action="?/verifyRecoveryEmail"
+          class="login-form"
+          use:enhance={() => {
+            recoverBusy = true
+            recoverError = null
+            return async ({ result: r }) => {
+              recoverBusy = false
+              if (r.type === 'failure') {
+                recoverError = (r.data as { error?: string })?.error ?? '본인확인에 실패했습니다.'
+              } else if (r.type === 'success') {
+                recoverStep = 'phone'
+              } else if (r.type === 'error') {
+                recoverError = '처리 중 오류가 발생했습니다.'
+              }
+            }
+          }}
+        >
+          <input type="hidden" name="token" value={data.recoverToken} />
+          <label class="field-label" for="recover-email">등록된 계정 이메일</label>
+          <input
+            id="recover-email"
+            name="email"
+            type="email"
+            class="f-input"
+            maxlength={254}
+            placeholder="admin@crazyshot.kr"
+            autocomplete="email"
+            bind:value={recoverEmail}
+            oninput={(e) => {
+              const el = e.currentTarget as HTMLInputElement
+              const filtered = el.value.replace(/[^\x00-\x7F]/g, '')
+              if (el.value !== filtered) {
+                el.value = filtered; recoverEmail = filtered
+                if (!recoverEmailKoreanWarned) {
+                  recoverEmailKoreanWarned = true
+                  csToast.warning('영문(숫자) 메일 형식으로 입력하세요.')
+                  setTimeout(() => { recoverEmailKoreanWarned = false }, 3000)
+                }
+              }
+            }}
+            required
+          />
+          <button class="cta-btn" type="submit" disabled={recoverBusy}>
+            {recoverBusy ? '확인 중...' : '다음'}
+          </button>
+        </form>
+
+      {:else if recoverStep === 'phone'}
+        <form
+          method="POST"
+          action="?/sendRecoveryPhoneOtp"
+          class="login-form"
+          use:enhance={() => {
+            recoverBusy = true
+            recoverError = null
+            return async ({ result: r }) => {
+              recoverBusy = false
+              if (r.type === 'failure') {
+                recoverError = (r.data as { error?: string })?.error ?? '인증번호 발송에 실패했습니다.'
+              } else if (r.type === 'success') {
+                recoverOtpSent = true
+                recoverStep = 'phone-otp'
+                startRecoveryOtpCooldown()
+                csToast.success('인증번호가 발송됐습니다.')
+              } else if (r.type === 'error') {
+                recoverError = '처리 중 오류가 발생했습니다.'
+              }
+            }
+          }}
+        >
+          <input type="hidden" name="token" value={data.recoverToken} />
+          <label class="field-label" for="recover-phone">등록된 휴대폰 번호</label>
+          <input
+            id="recover-phone"
+            name="phone"
+            type="tel"
+            class="f-input"
+            placeholder="010-0000-0000"
+            autocomplete="tel"
+            value={recoverPhone}
+            oninput={(e) => {
+              const el = e.currentTarget as HTMLInputElement
+              recoverPhone = formatRecoveryPhone(el.value)
+              el.value = recoverPhone
+            }}
+            required
+          />
+          <button class="cta-btn" type="submit" disabled={recoverBusy}>
+            {recoverBusy ? '발송 중...' : '인증번호 받기'}
+          </button>
+        </form>
+
+      {:else if recoverStep === 'phone-otp'}
+        <form
+          method="POST"
+          action="?/verifyRecoveryPhoneOtp"
+          class="login-form"
+          use:enhance={() => {
+            recoverBusy = true
+            recoverError = null
+            return async ({ result: r }) => {
+              recoverBusy = false
+              if (r.type === 'failure') {
+                recoverError = (r.data as { error?: string })?.error ?? '인증번호가 올바르지 않습니다.'
+              } else if (r.type === 'success') {
+                recoverStep = 'password'
+              } else if (r.type === 'error') {
+                recoverError = '처리 중 오류가 발생했습니다.'
+              }
+            }
+          }}
+        >
+          <input type="hidden" name="token" value={data.recoverToken} />
+          <label class="field-label" for="recover-otp">인증번호</label>
+          <input
+            id="recover-otp"
+            name="code"
+            type="text"
+            inputmode="numeric"
+            class="f-input"
+            maxlength={6}
+            placeholder="6자리 숫자"
+            bind:value={recoverOtpCode}
+            required
+          />
+          <button class="cta-btn" type="submit" disabled={recoverBusy}>
+            {recoverBusy ? '확인 중...' : '인증번호 확인'}
+          </button>
+        </form>
+        <form
+          method="POST"
+          action="?/sendRecoveryPhoneOtp"
+          use:enhance={() => {
+            recoverBusy = true
+            recoverError = null
+            return async ({ result: r }) => {
+              recoverBusy = false
+              if (r.type === 'failure') {
+                recoverError = (r.data as { error?: string })?.error ?? '인증번호 재발송에 실패했습니다.'
+              } else if (r.type === 'success') {
+                startRecoveryOtpCooldown()
+                csToast.success('인증번호가 재발송됐습니다.')
+              }
+            }
+          }}
+        >
+          <input type="hidden" name="token" value={data.recoverToken} />
+          <input type="hidden" name="phone" value={recoverPhone} />
+          <button type="submit" class="resend-link-btn" disabled={recoverBusy || recoverOtpResendLocked}>
+            {recoverOtpResendLocked ? '잠시 후 재발송 가능' : '인증번호 재발송'}
+          </button>
+        </form>
+
+      {:else if recoverStep === 'password'}
+        <form
+          method="POST"
+          action="?/setRecoveryPassword"
+          class="login-form"
+          use:enhance={() => {
+            recoverBusy = true
+            recoverError = null
+            return async ({ result: r, update }) => {
+              if (r.type === 'redirect') { await update(); return }
+              recoverBusy = false
+              if (r.type === 'failure') {
+                recoverError = (r.data as { error?: string })?.error ?? '비밀번호 설정에 실패했습니다.'
+              } else if (r.type === 'error') {
+                recoverError = '처리 중 오류가 발생했습니다.'
+              }
+            }
+          }}
+        >
+          <input type="hidden" name="token" value={data.recoverToken} />
+          <label class="field-label" for="recover-password">새 비밀번호</label>
+          <input
+            id="recover-password"
+            name="password"
+            type="password"
+            class="f-input"
+            maxlength={72}
+            placeholder="8자 이상 입력"
+            autocomplete="new-password"
+            bind:value={recoverPassword}
+            oninput={(e) => {
+              const el = e.currentTarget as HTMLInputElement
+              const filtered = el.value.replace(/[^\x00-\x7F]/g, '')
+              if (el.value !== filtered) {
+                el.value = filtered; recoverPassword = filtered
+                if (!recoverNewPwKoreanWarned) {
+                  recoverNewPwKoreanWarned = true
+                  csToast.warning('영문(숫자)으로 입력하세요.')
+                  setTimeout(() => { recoverNewPwKoreanWarned = false }, 3000)
+                }
+              }
+            }}
+            required
+          />
+          <label class="field-label" for="recover-confirm">비밀번호 확인</label>
+          <input
+            id="recover-confirm"
+            name="confirm"
+            type="password"
+            class="f-input"
+            maxlength={72}
+            placeholder="비밀번호 재입력"
+            autocomplete="new-password"
+            bind:value={recoverConfirm}
+            oninput={(e) => {
+              const el = e.currentTarget as HTMLInputElement
+              const filtered = el.value.replace(/[^\x00-\x7F]/g, '')
+              if (el.value !== filtered) {
+                el.value = filtered; recoverConfirm = filtered
+                if (!recoverConfirmPwKoreanWarned) {
+                  recoverConfirmPwKoreanWarned = true
+                  csToast.warning('영문(숫자)으로 입력하세요.')
+                  setTimeout(() => { recoverConfirmPwKoreanWarned = false }, 3000)
+                }
+              }
+            }}
+            required
+          />
+          <button class="cta-btn" type="submit" disabled={recoverBusy}>
+            {recoverBusy ? '설정 중...' : '비밀번호 설정 및 로그인'}
+          </button>
+        </form>
+      {/if}
+
+    {:else if data.logoutType === 'expired'}
       <!-- 세션 만료 자동 로그아웃 완료 화면 -->
       <div class="expired-body">
         <p class="expired-msg">세션 제한으로 자동 로그아웃되었습니다.</p>
@@ -456,4 +728,18 @@
     width: 100%;
     margin-top: 8px;
   }
+
+  /* 비밀번호 재설정("복구") 링크 — OTP 재발송 */
+  .resend-link-btn {
+    background: none;
+    border: none;
+    color: var(--cs-purple);
+    font: var(--text-pc-script-12);
+    text-decoration: underline;
+    cursor: pointer;
+    padding: 0;
+    margin: -8px auto 0;
+    display: block;
+  }
+  .resend-link-btn:disabled { color: var(--cs-text-placeholder); cursor: not-allowed; text-decoration: none; }
 </style>

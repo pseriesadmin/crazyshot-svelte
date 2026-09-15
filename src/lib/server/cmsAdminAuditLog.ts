@@ -12,6 +12,8 @@ export type CmsAdminAuditActionType =
   | 'concurrent_login_change'
   | 'session_limit_change'
   | 'name_change'
+  | 'password_recovery_issued'
+  | 'password_recovery_completed'
 
 export interface CmsAdminAuditLogEntry {
   actorId: string | null

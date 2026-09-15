@@ -263,6 +263,56 @@ export const actions: Actions = {
     return { success: true }
   },
 
+  // ── 비밀번호 재설정 링크 발급 (2026-09-15 신설) ───────
+  // admin_invite_tokens(신규 계정 최초 설정용, 본인확인 없음)를 비밀번호 분실 복구에
+  // 재사용하면 링크 유출 시 계정 탈취로 이어지는 취약점이 된다 — 별도 전용 테이블
+  // (admin_password_recovery_tokens, 이메일+휴대폰 OTP 2단계 본인확인 필수, 30분 고정
+  // 만료)로 분리했다. 발급 권한은 다른 계정 관리 액션과 동일하게
+  // requireAccountMutationAccess로 통일(대상이 superadmin이면 호출자도 진짜
+  // superadmin이어야 함).
+  issueRecoveryLink: async ({ request, locals }) => {
+    const admin = makeAdmin()
+    if (!admin) return fail(500, { error: '서버 설정 오류입니다.' })
+
+    const { session } = await locals.safeGetSession()
+    if (!session) return fail(401, { error: '인증이 필요합니다.' })
+
+    const form = await request.formData()
+    const userId = (form.get('user_id') as string | null)?.trim()
+    if (!userId) return fail(400, { error: '잘못된 요청입니다.' })
+
+    const accessErr = await requireAccountMutationAccess(locals, admin, userId)
+    if (accessErr) return fail(403, { error: accessErr })
+
+    // 이 계정에 남아있는 미사용 링크는 신규 발급과 동시에 무효화(동시에 여러 유효
+    // 링크가 떠도는 것 방지 — 유출 경로를 하나로 줄임)
+    await admin
+      .from('admin_password_recovery_tokens')
+      .update({ locked_at: new Date().toISOString() })
+      .eq('target_user_id', userId)
+      .is('used_at', null)
+      .is('locked_at', null)
+
+    const { data: inserted, error } = await admin
+      .from('admin_password_recovery_tokens')
+      .insert({ target_user_id: userId, issued_by: session.user.id })
+      .select('token, expires_at')
+      .single()
+    if (error || !inserted) return fail(500, { error: '링크 발급에 실패했습니다.' })
+
+    await insertCmsAdminAuditLog(admin, {
+      actorId: session.user.id,
+      actionType: 'password_recovery_issued',
+      targetUserId: userId,
+    })
+
+    return {
+      success: true,
+      recoveryToken: (inserted as { token: string; expires_at: string }).token,
+      recoveryExpiresAt: (inserted as { token: string; expires_at: string }).expires_at,
+    }
+  },
+
   // ── 삭제 ─────────────────────────────────────────────
   delete: async ({ request, locals }) => {
     const admin = makeAdmin()

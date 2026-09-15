@@ -1,6 +1,11 @@
 # GSD_LOG.md — 크레이지샷 실행 이력
 # 형식: [YYYY-MM-DD HH:MM] 타입 | 타스크명 | 파일 | 소요 | 결과
 
+[2026-09-15(같은 세션, GATE E 검수 후속)] ✅검증 | sp3-qa-agent GATE E 검수 — A~G 7항목 중 D(무차별대입 방어)에서 MEDIUM 결함 발견: sendRecoveryPhoneOtp 재발송마다 otp_attempts가 0으로 리셋돼 5회 잠금이 재발송 반복으로 무력화됨(클라이언트 60초 쿨다운은 직접 POST로 우회 가능) → 즉시 수정(재발송 시 리셋 제거 + 5회 도달 시 재발송 자체도 즉시 잠금) → Stage 실측 재검증(오입력4회→재발송→attempts 유지 확인→5번째 오입력→locked_at 기록→잠금 후 재발송 직접POST도 차단 확인) | src/routes/cms/login/+page.server.ts | svelte-check 신규에러 0건, 나머지 A/B/C/E/F/G는 결함 없음 확인 | ✅ GATE E 최종 통과, git commit은 Stephen 직접 실행 대기
+[2026-09-15(이 세션'만')] 🔴CRITICAL | CMS 관리자 계정 비밀번호 재설정 링크 신설(이메일+휴대폰 OTP 2단계 본인확인, 30분 만료, 무차별대입 5회 잠금) — 본인확인 없는 admin_invite_tokens를 계정복구에 재사용하던 보안취약점 발견·해소, 로컬 dev SMS 우회 실수 Stephen 지적 후 즉시 제거, UI 3회 피드백 반영(모달 제거→즉시발급 단순화→단일 레이아웃 병합) | supabase/migrations/20260915040000_504_admin_password_recovery_tokens.sql(신규), src/lib/server/cmsAdminAuditLog.ts, src/routes/cms/accounts/list/+page.server.ts, src/lib/components/cms/AccountDetailPanel.svelte, src/routes/cms/login/+page.server.ts, src/routes/cms/login/+page.svelte | svelte-check 신규에러 0건 + Stage 실브라우저 E2E(이메일·휴대폰·OTP 불일치거부/일치통과, 실제 Solapi 호출 성공, 자동로그인·비밀번호영속성·링크1회성·권한불변·감사로그 전부 실측 확인, SMS 실수신만 테스트폰 부재로 미확인) + Stage·Production 마이그레이션 적용 완료 + Production 유출 초대링크 즉시 무효화 | GATE C: 대기(sp3-qa-agent GATE E 검수 요청)
+
+[2026-09-15(이 세션'만')] 🟡BOUNDARY | /products PC 헤더 슬라이더 부드러운 슬라이드 전환 신설 — 즉시컷 전환(배열 슬라이스 재렌더)을 svelte/transition fly 기반 in/out 슬라이드로 교체, .d-slider-cards absolute+inset:0 전환으로 페이지 겹침 배치 | src/routes/products/+page.svelte | svelte-check 신규 에러 0건, DOM 좌표·트랜지션 파라미터 실측 확인 — 다만 애니메이션 체감 확인은 도구환경 한계(패널 hidden 시 RAF 정지)로 Stephen 직접 확인 요망
+
 [2026-09-14(이 세션)] 🟢ROUTINE | bds 약어 명칭 통일 — CLAUDE.md + uiux-index.md | CLAUDE.md · .claude/rules/uiux-index.md | 버튼 로드 항목에 `cms bds`/`front bds` 약어 정의 추가 + 섹션별 참조 로드 표에 bds 약어 병기 + uiux-index.md 환경분리 테이블 상단에 bds 약어 정의 박스 신설 | GATE C: 자동(ROUTINE — 도메인 규칙 문서 추가)
 [2026-09-14(이 세션)] 🟢ROUTINE | cms-uiux.md DetailPanel 레이아웃 표준화 규칙 등록 | .claude/rules-ref/cms-uiux.md | §1 목록+패널 구조 섹션 하단에 "DetailPanel 레이아웃 표준(2026-09-14 확정)" 절 신설 — ①탭메뉴↔목록 상단 여백 16px→32px ②빠른문의 카드간 gap 6px→12px ③구독카드 여러 건 gap 10px→20px (전 DetailPanel 일괄 적용) | GATE C: 자동(ROUTINE — 도메인 규칙 문서 추가)
 
