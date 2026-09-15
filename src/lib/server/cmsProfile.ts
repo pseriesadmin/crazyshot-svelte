@@ -2,6 +2,7 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 
 export type CmsProfileRow = {
   cms_role: string | null
+  name: string | null
 }
 
 /**
@@ -13,9 +14,10 @@ export async function fetchCmsProfileByAuthId(
   admin: SupabaseClient,
   authUserId: string,
 ): Promise<CmsProfileRow | null> {
+  // full_name 컬럼을 name으로 alias — cms/accounts/list/+page.server.ts와 동일 매핑 관례
   const byId = await admin
     .from('user_profiles')
-    .select('cms_role')
+    .select('cms_role, name:full_name')
     .eq('id', authUserId)
     .maybeSingle()
 
@@ -23,7 +25,7 @@ export async function fetchCmsProfileByAuthId(
 
   const byUserId = await admin
     .from('user_profiles')
-    .select('cms_role')
+    .select('cms_role, name:full_name')
     .eq('user_id', authUserId)
     .maybeSingle()
 
