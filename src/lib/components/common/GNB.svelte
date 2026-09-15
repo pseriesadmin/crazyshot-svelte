@@ -221,7 +221,7 @@
         </button>
       {:else}
         <a href="/auth/login" class="gnb-avatar-btn" aria-label="내 계정">
-          <svg xmlns="http://www.w3.org/2000/svg" width="40" height="40" viewBox="0 0 40 40" fill="none" aria-hidden="true">
+          <svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 40 40" fill="none" aria-hidden="true">
             <path d="M0 20C0 5 5 0 20 0C35 0 40 5 40 20C40 35 35 40 20 40C5 40 0 35 0 20Z" fill="#C1BBEC"/>
             <path d="M19.719 20.3828C22.3245 20.3828 24.514 21.136 26.0706 22.5039C27.6372 23.8808 28.4689 25.802 28.469 27.9229C28.469 28.6132 27.9094 29.1729 27.219 29.1729C26.5286 29.1729 25.969 28.6132 25.969 27.9229C25.9689 26.4832 25.419 25.2597 24.4202 24.3818C23.4109 23.4949 21.8503 22.8828 19.719 22.8828C17.5878 22.8828 16.0271 23.4947 15.0178 24.3818C14.0189 25.2599 13.469 26.484 13.469 27.9238C13.4688 28.614 12.9093 29.1738 12.219 29.1738C11.5287 29.1738 10.9692 28.614 10.969 27.9238C10.969 25.8029 11.8006 23.881 13.3674 22.5039C14.9239 21.1359 17.1134 20.3828 19.719 20.3828ZM19.719 9.67578C22.383 9.67584 24.5217 11.8145 24.5217 14.4785C24.5216 17.1424 22.3829 19.2812 19.719 19.2812C17.0551 19.2812 14.9164 17.1424 14.9163 14.4785C14.9163 11.8145 17.055 9.67585 19.719 9.67578ZM19.719 12.1758C18.4357 12.1758 17.4163 13.1952 17.4163 14.4785C17.4164 15.7617 18.4358 16.7812 19.719 16.7812C21.0022 16.7812 22.0216 15.7617 22.0217 14.4785C22.0217 13.1952 21.0023 12.1758 19.719 12.1758Z" fill="white"/>
           </svg>
@@ -342,14 +342,14 @@
     display: flex;
     align-items: center;
     justify-content: center;
-    width: clamp(50px, 6.5vw, 70px);
-    height: clamp(50px, 6.5vw, 70px);
+    width: clamp(40px, 5.2vw, 56px);
+    height: clamp(40px, 5.2vw, 56px);
     border-radius: 50%;
     overflow: hidden;
     background: var(--cs-purple-pale);
     color: var(--cs-dark);
     font-family: var(--font-en-display);
-    font-size: clamp(18px, 2vw, 26px);
+    font-size: clamp(14.4px, 1.6vw, 20.8px);
     font-weight: 700;
     border: none;
     cursor: pointer;
@@ -418,10 +418,10 @@
     display: flex;
     align-items: center;
     justify-content: center;
-    width: 40px;
-    height: 40px;
-    min-width: 40px;
-    min-height: 40px;
+    width: 32px;
+    height: 32px;
+    min-width: 32px;
+    min-height: 32px;
     text-decoration: none;
     flex-shrink: 0;
     opacity: 0.85;
@@ -436,7 +436,7 @@
     border: none;
     color: var(--cs-dark);
     font-family: var(--font-en-display);
-    font-size: 18px;
+    font-size: 14.4px;
     font-weight: 700;
     cursor: pointer;
     text-transform: uppercase;

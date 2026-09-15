@@ -2245,6 +2245,18 @@
     animation: tab-bubble 0.65s cubic-bezier(0.36, 0.07, 0.19, 0.97) forwards;
   }
 
+  /* 터치·호버 인터랙션 — 지금 짚고 있는 탭임을 짧은 버블 무빙으로 표현.
+     클릭 시 발동하는 tab-bubble(선택 확정 튐)과는 별개로, 누르고 있는/마우스 오버 중인
+     동안만 살짝 위로 부풀어 오른 상태를 유지하다 손을 떼면 원위치 — 스프링 바운스 표준
+     cubic-bezier(0.34, 1.28, 0.64, 1)(FloatingBar 확정값과 동일 곡선) 재사용, 짧게 0.24s. */
+  .m-tab-item svg {
+    transition: transform 0.24s cubic-bezier(0.34, 1.28, 0.64, 1);
+  }
+  .m-tab-item:hover svg,
+  .m-tab-item:active svg {
+    transform: translateY(-3px) scale(1.1);
+  }
+
   /* ── CMS 편집 링크 버튼 (isCms=true 시 섹션 상단 노출) ── */
   .cms-section-link {
     display: inline-flex;

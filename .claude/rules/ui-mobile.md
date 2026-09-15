@@ -230,15 +230,24 @@ pickup     : 19:00 마감 표시
 
 ### 모바일 아바타 버튼 확정값
 
+> ⚠️ **2026-09-15 갱신**: Stephen 지시로 아바타 아이콘 영역을 PC·모바일 반응형 모두 20%
+> 축소(GNB.svelte `.gnb-avatar-btn`/`.gnb-avatar-btn-initial`, PC `.gnb-avatar-initial` 동시
+> 반영). 축소 후 32px는 일반 인터랙티브 요소 최소 터치타겟(44px) 기준보다 작다 — 아바타
+> 버튼은 이미 40px 시점부터 이 기준의 의도적 예외였고, 이번 축소로 그 예외 폭이 넓어진
+> 것뿐이라 별도 조치 없이 그대로 승인된 값으로 확정한다.
+
 | 속성 | 값 | 비고 |
 |---|---|---|
-| width / height | **40px** | 터치타겟 최소값 |
+| width / height | **32px** | 20% 축소 적용(구 40px) — 터치타겟 44px 기준의 의도적 예외 |
 | border-radius | **50%** | 완전 원형 |
 | background | **rgba(85, 63, 224, 0.60)** | --cs-purple-light 60% 불투명 |
 | 이니셜 컬러 | **#ffffff** | 흰색 고정 |
-| font-size | **18px** | Bold, uppercase |
+| font-size | **14.4px** | 20% 축소 적용(구 18px), Bold, uppercase |
 
 > 아바타 BG 60% 투명도: GNB 다크 배경이 옅게 비춰 경계면 자연스럽게 혼합.
+> PC(`GNB.svelte` `.gnb-avatar-initial`) 대응값: width/height `clamp(40px, 5.2vw, 56px)`(구
+> `clamp(50px, 6.5vw, 70px)`), font-size `clamp(14.4px, 1.6vw, 20.8px)`(구 `clamp(18px, 2vw, 26px)`)
+> — 동일 20% 비율로 동시 축소.
 
 ```css
 /* ✅ 모바일 GNB 필수 패턴 */
