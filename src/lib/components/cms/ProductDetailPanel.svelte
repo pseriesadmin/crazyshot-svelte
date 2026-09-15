@@ -4,6 +4,7 @@
   import type { ActionResult } from '@sveltejs/kit'
   import { resizeProductImage } from '$lib/utils/imageResize'
   import { csToast } from '$lib/utils/toast'
+  import { createDeleteSafetyToast } from '$lib/utils/deleteSafetyToast.svelte'
   import { baseCodeDisplay } from '$lib/utils/baseCodeDisplay'
   import { supabase } from '$lib/services/supabase'
   import CmsContentEditor from '$lib/components/cms/CmsContentEditor.svelte'
@@ -1216,9 +1217,8 @@
       : (tabsFilter ? ALL_TABS.filter(t => tabsFilter.includes(t.key)) : ALL_TABS)
   )
 
-  // ─── 상품 삭제 ───────────────────────────────────────────────
-  let deletePending = $state(false)
-  let isDeleting = $state(false)
+  // ─── 상품 삭제 (삭제 안전 토스트 — $lib/utils/deleteSafetyToast.svelte.ts, cms-uiux.md §0-10-B 정본) ──
+  const deleteSafety = createDeleteSafetyToast({ successMessage: '상품이 삭제됐습니다.', onSuccess: onclose })
 
   // ─── 상품 복제 (빠른 재고 등록) ───────────────────────────────
   let showCloneModal = $state(false)
@@ -1314,26 +1314,6 @@
     }
   }
 
-  // 1차 클릭: 토스트 경고 후 제출 취소(무장) / 2차 클릭: 실제 삭제 제출
-  function handleDeleteProduct({ cancel }: { cancel: () => void }) {
-    if (!deletePending) {
-      deletePending = true
-      csToast.warning('한번 더 누르면 삭제됩니다.')
-      cancel()
-      return
-    }
-    isDeleting = true
-    return async ({ result }: { result: ActionResult }) => {
-      isDeleting = false
-      deletePending = false
-      if (result.type === 'success') {
-        csToast.success('상품이 삭제됐습니다.')
-        onclose()
-      } else {
-        csToast.error('삭제에 실패했습니다.')
-      }
-    }
-  }
 </script>
 
 <div class="panel-wrap">
@@ -2497,18 +2477,18 @@
 
   </div>
 
-  <!-- 상품 삭제 푸터 (흰 카드 안 최하단) — 1차 클릭: 토스트 경고, 2차 클릭: 실제 삭제 -->
+  <!-- 상품 삭제 푸터 (흰 카드 안 최하단) — 삭제 안전 토스트(cms-uiux.md §0-10-B) 적용 -->
   <!-- tabs 제한 화면(이력관리 전용 등)에서는 상품 관리 액션 노출 안 함 -->
   {#if !tabsFilter}
   <div class="delete-footer">
-    <form method="POST" action="?/deleteProduct" use:enhance={handleDeleteProduct}>
+    <form method="POST" action="?/deleteProduct" use:enhance={deleteSafety.handleSubmit}>
       <input type="hidden" name="product_id" value={product.id} />
       <button
         type="submit"
         class="btn-danger"
-        class:btn-danger--pending={deletePending}
-        disabled={isDeleting}
-      >{isDeleting ? '삭제 중...' : deletePending ? '한번 더 누르면 삭제됩니다' : '상품정보 삭제'}</button>
+        class:btn-danger--pending={deleteSafety.pending}
+        disabled={deleteSafety.isDeleting}
+      >{deleteSafety.isDeleting ? '삭제 중...' : deleteSafety.pending ? '한번 더 누르면 삭제됩니다' : '상품정보 삭제'}</button>
     </form>
   </div>
   {/if}
