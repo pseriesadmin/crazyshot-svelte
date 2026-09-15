@@ -185,6 +185,59 @@ export const load: PageServerLoad = async ({ locals }) => {
     }
   }
 
+  // ── 1-A-2. 모바일 "더 다양한 로그 둘러보기" — 실제 크레이지로그 최신글 연동 ──────────
+  // 기존엔 ARTICLES 하드코딩 더미(가짜 이미지·가짜 작성자·가짜 시각)였음 — user_posts(공개+
+  // 게시됨) 소스로 교체. user_posts_select RLS가 "is_public=true AND status='published'"를
+  // anon에게 허용하므로 서비스키 없이 조회 가능. 카드 UI는 /crazylog "K-Trend Log" 섹션
+  // (m-article-card: bg 이미지+그라디언트 오버레이+날짜·제목·본문 미리보기)과 동일 구조를
+  // 반영 — 그 섹션의 필드 구성(날짜·제목·desc, 작성자·로그타입 태그 없음)을 그대로 따른다.
+  type RecentLogPostRow = {
+    id: string
+    title: string
+    content_blocks: unknown
+    created_at: string
+  }
+
+  function extractFirstLogImageUrl(blocks: unknown): string | null {
+    if (!Array.isArray(blocks)) return null
+    for (const block of blocks) {
+      const b = block as Record<string, unknown>
+      if (b.type === 'image' && Array.isArray(b.images) && b.images.length > 0) {
+        const img = b.images[0] as { url?: string }
+        if (img.url) return img.url
+      }
+    }
+    return null
+  }
+
+  // /crazylog/+page.server.ts extractFirstText()와 동일 로직 — 본문 첫 텍스트 블록 미리보기
+  function extractFirstLogText(blocks: unknown): string {
+    if (!Array.isArray(blocks)) return ''
+    for (const block of blocks) {
+      const b = block as Record<string, unknown>
+      if (b.type === 'text' && typeof b.html === 'string') {
+        return b.html.replace(/<[^>]*>/g, '').trim().slice(0, 120)
+      }
+    }
+    return ''
+  }
+
+  const { data: recentLogRaw } = await locals.supabase
+    .from('user_posts')
+    .select('id, title, content_blocks, created_at')
+    .eq('status', 'published')
+    .eq('is_public', true)
+    .order('created_at', { ascending: false })
+    .limit(5)
+
+  const recentLogPosts = ((recentLogRaw ?? []) as RecentLogPostRow[]).map((p) => ({
+    id:        p.id,
+    img:       extractFirstLogImageUrl(p.content_blocks),
+    title:     p.title,
+    createdAt: p.created_at,
+    desc:      extractFirstLogText(p.content_blocks) || null,
+  }))
+
   // ── 1-B. 헬프 FAQ 상위 5개 ──────────────────────────────────────────
   // canned_responses: cr_read 정책 (FOR SELECT USING (true)) → anon 가능
   const { data: faqRaw } = await locals.supabase
@@ -375,7 +428,7 @@ export const load: PageServerLoad = async ({ locals }) => {
   mdProducts = mdProducts.map(withDualPrice)
 
   return {
-    bannerMap, isCms, categories, crazylogPosts, topFaqs, faqHeroBgUrl,
+    bannerMap, isCms, categories, crazylogPosts, recentLogPosts, topFaqs, faqHeroBgUrl,
     heroBannerRowsRaw, heroBannerSettings, themeGroups, themeGroupsAdmin,
     homeCategoryProductsRaw, categoryProducts, categoryPageSettings, keywordsPageSettings,
     mdPicksRaw, mdProducts,

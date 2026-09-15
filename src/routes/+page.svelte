@@ -89,13 +89,20 @@
 
   // BLOG_M 제거 — data.crazylogPosts(DB 동기화)로 교체됨 (Phase 1-A)
 
-  const ARTICLES = [
-    { img:'/home/mobile/a041a1560d8516c08629c076091801ef2ef3fe34.png', title:'[사용기] SONY FE 24-105  가볍게 고퀄 영상을 바로 만들어주다',        time:'1시간 전', by:'홍기동' },
-    { img:'/home/mobile/455e92ba5b2dcda7fa62337bc295967c20058311.png', title:'액션캠의 왕좌를 되찾으러 돌아왔다. GoPro HERO13 Black',               time:'2시간 전', by:'유말자' },
-    { img:'/home/mobile/47137b587edb5eb5ebfc464c2a2f5938298af14e.png', title:'휴대용 디자인으로 이동 중에도 미디어 카드에 쉽게 접근 가능',          time:'2시간 전', by:'유말자' },
-    { img:'/home/mobile/c9f1af1a9f27653ad1ae0ba6fbbfd599009ec5ce.png', title:'onn. 52인치 삼각대, 컴팩트 카메라, 스마트폰 및 GoPro 액션 카메라용', time:'2시간 전', by:'유말자' },
-    { img:'/home/mobile/a0b11155daf1d451a0b118540da1168c113db2b8.png', title:'K-트레일로그를 남기는 멋진 일은 우리들에게 즐거움의 폭증이다!!',      time:'2시간 전', by:'유말자' },
-  ]
+  // ARTICLES 하드코딩 제거 — data.recentLogPosts(DB 동기화, /crazylog/list와 동일 소스)로 교체됨
+
+  // /crazylog/list relativeTime()과 동일 로직 — "더 다양한 로그 둘러보기" 카드 시각 표시용
+  function logRelativeTime(iso: string): string {
+    const diff = Date.now() - new Date(iso).getTime()
+    const mins  = Math.floor(diff / 60000)
+    const hours = Math.floor(diff / 3600000)
+    const days  = Math.floor(diff / 86400000)
+    if (mins  <  1) return '방금 전'
+    if (hours <  1) return `${mins}분 전`
+    if (days  <  1) return `${hours}시간 전`
+    if (days  < 30) return `${days}일 전`
+    return new Date(iso).toLocaleDateString('ko-KR')
+  }
 
   // FAQ_DESKTOP / FAQ_MOBILE 제거 — data.topFaqs(DB 동기화, canned_responses 상위5)로 교체됨 (Phase 1-B)
 
@@ -177,19 +184,19 @@
     setTimeout(() => { poppingTab = null }, 700)
   }
 
-  let sliderEl: { scrollBy: (opts: { left: number; behavior: 'smooth' | 'instant' | 'auto' }) => void } | undefined
+  let sliderEl: { scrollBy: (opts: { left: number; behavior: 'smooth' | 'instant' | 'auto' }) => void } | undefined = $state()
   function scrollSlider(dir: 'left' | 'right') {
     sliderEl?.scrollBy({ left: dir === 'right' ? 330 : -330, behavior: 'smooth' })
   }
 
   // 취향직격 테마 원형탭(PC) — 최대 3개만 노출, 나머지는 슬라이드로 이동
-  let themeTabsEl: { scrollBy: (opts: { left: number; behavior: 'smooth' | 'instant' | 'auto' }) => void } | undefined
+  let themeTabsEl: { scrollBy: (opts: { left: number; behavior: 'smooth' | 'instant' | 'auto' }) => void } | undefined = $state()
   function scrollThemeTabs(dir: 'left' | 'right') {
     themeTabsEl?.scrollBy({ left: dir === 'right' ? 210 : -210, behavior: 'smooth' })
   }
 
   // 취향직격 테마 원형탭(Mobile) — PC와 동일 구조(activeThemeId 공유, 3개 초과 시 화살표)
-  let mThemeTabsEl: { scrollBy: (opts: { left: number; behavior: 'smooth' | 'instant' | 'auto' }) => void } | undefined
+  let mThemeTabsEl: { scrollBy: (opts: { left: number; behavior: 'smooth' | 'instant' | 'auto' }) => void } | undefined = $state()
   function scrollMThemeTabs(dir: 'left' | 'right') {
     mThemeTabsEl?.scrollBy({ left: dir === 'right' ? 165 : -165, behavior: 'smooth' })
   }
@@ -208,6 +215,10 @@
     { id: 'My',   label: 'My'   },
   ]
 </script>
+
+<svelte:head>
+  <title>CRAZYSHOT — 비대면 AI 검수 렌탈 플랫폼</title>
+</svelte:head>
 
 <!-- ═══════════════════════════════════════════════════════════════
      DESKTOP (md↑)
@@ -806,46 +817,74 @@
     {#if data.isCms}
       <a href="/crazylog" class="cms-section-link cms-section-link--light" aria-label="크레이지로그 설정 페이지로 이동">✦ 크레이지로그 설정</a>
     {/if}
-    <div class="m-blog-cards">
-      {#each data.crazylogPosts as post}
-        <div class="m-blog-card">
-          {#if post.img}
-            <img src={post.img} alt={post.title} class="m-blog-img"/>
-          {/if}
-          <div class="m-blog-header" style="background:{post.catBg}">
-            <span class="blog-cat-label">{post.cat}</span>
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M9 18l6-6-6-6" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
-          </div>
-          <div class="m-blog-footer">
-            <p class="m-blog-title">{post.title}</p>
-            {#if post.desc}<p class="m-blog-desc">{post.desc}</p>{/if}
-          </div>
-        </div>
-      {/each}
-    </div>
+    <!-- /crazylog(m-list) m-carousel/m-card 슬라이드 구조 그대로 반영 — 카테고리 헤더색은
+         기존 data.crazylogPosts의 catBg(§ +page.server.ts LOG_TYPE_COLORS/SLOT_FALLBACK_COLORS)
+         값을 그대로 사용, 3개 슬롯 분리 없이 단일 슬라이드로 구성 -->
+    {#if data.crazylogPosts.length > 0}
+      <div class="m-blog-carousel">
+        {#each data.crazylogPosts as post, ci}
+          <a href={'/crazylog/view/' + post.id} class="m-blog-card">
+            <div class="m-blog-card-bg">
+              {#if post.img}<img src={post.img} alt="" class="m-blog-card-bg-img"/>{/if}
+            </div>
+            <div class="m-blog-card-header" style="background:{post.catBg}">
+              <span class="m-blog-card-category">{post.cat}</span>
+              <button class="m-blog-card-more" aria-label="더보기" type="button">
+                <svg width="22" height="22" viewBox="0 0 22 22" fill="none" aria-hidden="true">
+                  <rect width="22" height="22" rx="7" fill="rgba(225,222,243,0.9)"/>
+                  <path d="M6 11h10M11 6v10" stroke="#553FE0" stroke-width="2.5" stroke-linecap="round"/>
+                </svg>
+              </button>
+            </div>
+            <div class="m-blog-card-script">
+              <div class="m-blog-card-writing">
+                <p class="m-blog-card-title">{post.title}</p>
+                {#if post.desc}<p class="m-blog-card-sub">{post.desc}</p>{/if}
+              </div>
+              {#if data.crazylogPosts.length > 1}
+                <div class="m-blog-card-dots">
+                  {#each data.crazylogPosts as _, di}
+                    <span class="m-dot" class:m-dot-active={di === ci}></span>
+                  {/each}
+                </div>
+              {/if}
+            </div>
+          </a>
+        {/each}
+      </div>
+    {/if}
   </div>
 
-  <!-- ⑤ 아티클 목록 -->
+  <!-- ⑤ 아티클 목록 — /crazylog "K-Trend Log" 섹션(m-article-card: bg 이미지+그라디언트
+       오버레이+날짜·제목·본문 미리보기)과 동일 카드 UI 구조 반영 -->
   <div class="m-section m-articles-section">
-    <div class="m-articles-head">
+    <a href="/crazylog/list" class="m-articles-head">
       <span class="m-articles-heading">더 다양한 로그 둘러보기</span>
       <div class="m-articles-more-btn">
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true">
           <path d="M9 18l6-6-6-6" stroke="{purpleLight}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
         </svg>
       </div>
-    </div>
-    {#each ARTICLES as a}
-      <div class="m-article-card">
-        <div class="m-article-img-wrap">
-          <img src={a.img} alt="" class="m-article-img" aria-hidden="true"/>
-        </div>
-        <div class="m-article-body">
-          <p class="m-article-title">{a.title}</p>
-          <p class="m-article-meta">{a.time}·by {a.by}</p>
-        </div>
-      </div>
-    {/each}
+    </a>
+    {#if data.recentLogPosts && data.recentLogPosts.length > 0}
+      {#each data.recentLogPosts as post}
+        <a href={'/crazylog/view/' + post.id} class="m-article-card" aria-label={post.title}>
+          {#if post.img}
+            <img src={post.img} alt="" class="m-article-card-bg" aria-hidden="true"/>
+          {:else}
+            <div class="m-article-card-bg m-article-card-bg-empty" aria-hidden="true"></div>
+          {/if}
+          <div class="m-article-card-overlay" aria-hidden="true"></div>
+          <div class="m-article-card-content">
+            <span class="m-article-card-date">{logRelativeTime(post.createdAt)}</span>
+            <p class="m-article-card-title">{post.title}</p>
+            {#if post.desc}<p class="m-article-card-desc">{post.desc}</p>{/if}
+          </div>
+        </a>
+      {/each}
+    {:else}
+      <p class="m-articles-empty">아직 등록된 로그가 없습니다.</p>
+    {/if}
   </div>
 
   <!-- ⑥ FAQ -->
@@ -1993,48 +2032,90 @@
     align-items: center;
     gap: 24px;
   }
-  .m-blog-cards {
+  /* /crazylog(m-carousel/m-card) 슬라이드 구조 그대로 반영 */
+  .m-blog-carousel {
     display: flex;
-    flex-wrap: wrap;
-    gap: 32px;
-    justify-content: center;
+    gap: 24px;
+    width: 100%;
+    overflow-x: auto;
+    padding-bottom: 4px;
+    scroll-snap-type: x mandatory;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: none;
   }
+  .m-blog-carousel::-webkit-scrollbar { display: none; }
   .m-blog-card {
     position: relative;
-    overflow: hidden;
-    cursor: pointer;
-    width: 300px; height: 380px;
+    flex-shrink: 0;
+    width: 300px;
+    height: 380px;
+    min-width: 300px;
     border-radius: 30px;
     box-shadow: 4px 4px 0 rgba(39,27,122,0.5);
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    text-decoration: none;
+    scroll-snap-align: start;
     transition: transform 0.15s;
   }
   .m-blog-card:active { transform: scale(0.97); }
-  .m-blog-img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
-  .m-blog-header {
-    position: absolute;
-    top: 0; left: 0; right: 0;
-    z-index: 10;
+  .m-blog-card-bg { position: absolute; inset: 0; overflow: hidden; border-radius: 30px; pointer-events: none; }
+  .m-blog-card-bg-img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+  .m-blog-card-header {
+    position: relative;
+    z-index: 1;
+    flex-shrink: 0;
     display: flex;
     align-items: center;
     justify-content: space-between;
     padding: 20px 24px;
   }
-  .m-blog-footer {
-    position: absolute;
-    bottom: 0; left: 0; right: 0;
-    padding: 24px;
-    background: linear-gradient(to top, rgba(16,11,50,0.85) 0%, transparent 100%);
+  .m-blog-card-category { font-family: var(--font-en-display); font-size: 20px; color: white; }
+  .m-blog-card-more {
+    background: none;
+    border: none;
+    cursor: pointer;
+    padding: 4px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 44px;
+    min-height: 44px;
   }
-  .m-blog-title { font-family: var(--font-kr); font-size: 21px; font-weight: 900; color: white; line-height: 1.4; margin: 0; }
-  .m-blog-desc  { font-family: var(--font-kr); font-size: 16px; font-weight: 700; color: white; margin: 4px 0 0; }
+  .m-blog-card-script {
+    position: relative;
+    z-index: 1;
+    flex: 1 0 0;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    justify-content: space-between;
+    width: 100%;
+  }
+  .m-blog-card-writing {
+    flex-shrink: 0;
+    width: 100%;
+    background: linear-gradient(to top, rgba(16,11,50,0) 0%, rgba(16,11,50,0.6) 40%, #100b32 100%);
+    padding: 20px 24px;
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+  }
+  .m-blog-card-title { font-family: var(--font-kr); font-size: 21px; font-weight: 900; color: white; line-height: 1.4; margin: 0; }
+  .m-blog-card-sub   { font-family: var(--font-kr); font-size: 16px; font-weight: 700; color: white; margin: 0; line-height: 1.5; }
+  .m-blog-card-dots  { flex-shrink: 0; display: flex; align-items: center; gap: 8px; padding: 16px 0; }
+  .m-dot { width: 10px; height: 10px; border-radius: 50%; background: rgba(255,255,255,0.3); transition: all 0.2s; }
+  .m-dot-active { width: 30px; border-radius: 15px; background: rgba(255,255,255,0.6); }
 
-  /* ── MOBILE ARTICLES ── */
+  /* ── MOBILE ARTICLES (실데이터: data.recentLogPosts, /crazylog/list m-post-card와 동일 UI 언어) ── */
   .m-articles-section { gap: 24px; }
   .m-articles-head {
     display: flex;
     align-items: center;
     justify-content: space-between;
     padding: 20px 0;
+    text-decoration: none;
   }
   .m-articles-heading { font-family: var(--font-kr); font-size: 20px; font-weight: 700; color: var(--cs-dark); }
   .m-articles-more-btn {
@@ -2043,19 +2124,68 @@
     background: #e1def3;
     display: flex; align-items: center; justify-content: center;
   }
+  /* /crazylog "K-Trend Log" 섹션(m-article-card) 카드 UI 그대로 반영 —
+     bg 이미지 + 그라디언트 오버레이 + 하단 정렬 텍스트(날짜·제목·본문 미리보기) */
   .m-article-card {
-    background: white;
+    position: relative;
+    display: block;
+    width: 100%;
+    height: 264px;
     border-radius: 30px;
     overflow: hidden;
-    cursor: pointer;
+    text-decoration: none;
     transition: transform 0.15s;
   }
   .m-article-card:active { transform: scale(0.98); }
-  .m-article-img-wrap { height: 150px; position: relative; }
-  .m-article-img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
-  .m-article-body { padding: 20px 28px; }
-  .m-article-title { font-family: var(--font-kr); font-size: 17px; font-weight: 700; color: #444; line-height: 1.5; margin: 0; }
-  .m-article-meta  { font-family: var(--font-kr); font-size: 12px; font-weight: 500; color: #666; margin: 4px 0 0; }
+  .m-article-card-bg {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    pointer-events: none;
+  }
+  .m-article-card-bg-empty { background: var(--cs-dark); }
+  .m-article-card-overlay {
+    position: absolute;
+    inset: 0;
+    background: linear-gradient(
+      to top,
+      rgba(16, 11, 50, 0.82) 0%,
+      rgba(16, 11, 50, 0.30) 60%,
+      rgba(16, 11, 50, 0.05) 100%
+    );
+  }
+  .m-article-card-content {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    flex-direction: column;
+    justify-content: flex-end;
+    padding: 18px 22px 28px;
+    gap: 4px;
+  }
+  .m-article-card-date { font: var(--text-m-script-12); color: rgba(255, 255, 255, 0.65); letter-spacing: 0.2px; }
+  .m-article-card-title {
+    font: var(--text-m-ad-kr-20);
+    color: #ffffff;
+    margin: 0;
+    line-height: 1.4;
+    letter-spacing: -0.3px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .m-article-card-desc {
+    font: var(--text-m-script-14B);
+    color: rgba(255, 255, 255, 0.70);
+    margin: 0;
+    line-height: 1.5;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .m-articles-empty { font-family: var(--font-kr); font-size: 14px; color: var(--cs-text-light); text-align: center; padding: 24px 0; margin: 0; }
 
   /* ── MOBILE FAQ ── */
   .m-faq-section { gap: 24px; }
