@@ -38,7 +38,7 @@
     }
   }
 
-  let overrideDetail = $state<SelectedProductDetail | 'loading' | null>(null)
+  let overrideDetail = $state<SelectedProductDetail | null>(null)
   let fetchedForId = $state<string | null>(null)
 
   // page.state에 selectedId 키가 있으면 shallow-routing으로 전환된 선택(클라이언트 소스),
@@ -62,7 +62,12 @@
       fetchedForId = null
       return
     }
-    overrideDetail = 'loading'
+    // PANEL-SWITCH-1: 패널이 열린 상태에서 다른 카드를 선택했을 때, overrideDetail을 즉시
+    // 비우지 않는다 — 비우면 activeDetail.rootProduct가 잠깐 null이 되어 detail-pane
+    // {#if} 블록이 통째로 unmount(닫힘 트랜지션)됐다가 fetch 완료 시 다시 mount(열림
+    // 트랜지션)되는 깜빡임이 생긴다("패널이 닫혔다가 다시 열리는" 것처럼 보이는 원인).
+    // fetch가 끝날 때까지 이전 상품의 detail을 그대로 유지한 채 fetchedForId만 먼저
+    // 갱신 — 완료되면 조용히 다음 상품 데이터로 교체되어 패널이 계속 열린 채로 전환된다.
     fetchedForId = id
     fetch(`/cms/products/${id}/detail`)
       .then((r) => {
@@ -87,7 +92,7 @@
   const activeDetail = $derived<SelectedProductDetail>(
     activeSelectedId === data.selectedId
       ? extractServerDetail(data)
-      : (overrideDetail === 'loading' || overrideDetail === null ? EMPTY_DETAIL : overrideDetail)
+      : (overrideDetail ?? EMPTY_DETAIL)
   )
 
   const CATEGORIES = $derived([
@@ -968,7 +973,9 @@
     flex-shrink: 0;
     overflow: hidden;
   }
-  .product-card:hover { background: var(--cs-lilac); }
+  /* 호버는 그레이 계열(--cs-border)로 선택 상태(보라 계열)와 명확히 구분 —
+     기존 --cs-lilac은 페이지 배경색과 동일해 호버 시 사실상 표시가 안 됐음 */
+  .product-card:hover { background: var(--cs-border); }
   .product-card.selected { background: rgba(59,47,138,0.06); }
 
   /* 카드 클릭 영역 */
@@ -1166,9 +1173,7 @@
     position: relative;
     background: var(--cs-white);
     border-radius: var(--cms-radius-md);
-    border: 1.5px solid transparent;
     overflow: hidden;
-    transition: border-color 0.15s;
     flex-shrink: 0;
   }
   .rep-close-btn {
@@ -1184,9 +1189,8 @@
     transition: background 0.12s, color 0.12s;
   }
   .rep-close-btn:hover { background: rgba(255,53,53,0.08); color: var(--cs-red-badge); }
-  .rep-section--open {
-    border-color: var(--cs-purple);
-  }
+  /* 표준 디자인 지침(보더보다 면 우선) — 카드 전체 아웃라인 대신 헤더 배경 틴트로 대체 */
+  .rep-section--open .rep-header { background: rgba(59,47,138,0.05); }
   .rep-header {
     width: 100%;
     display: flex;

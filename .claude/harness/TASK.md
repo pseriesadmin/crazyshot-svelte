@@ -1,5 +1,137 @@
 # .claude/harness/TASK.md
 
+## DONE — GNB 아바타 아이콘 20% 축소(PC·모바일) + 모바일 바텀탭바 터치·호버 버블 인터랙션 추가 (2026-09-15, 이 세션'만', ✅ GATE E 통과 — sp3-qa-agent 검수 완료, git commit만 Stephen 대기)
+
+### 아젠다
+
+Stephen이 launch-selected-element로 실제 화면 요소를 지정해 2건 요청:
+  ① GNB 우측 아바타 아이콘(로그인 시 이니셜 원형 버튼) 영역을 PC·모바일 반응형 비율 모두
+     20%씩 축소.
+  ② 홈 화면 모바일 바텀탭바(More/All/Home/Cart/My) 아이콘에, 터치(모바일)·마우스오버(PC
+     미리보기) 시 짧게 위로 부풀어 오르는 버블 느낌의 인터랙션 추가 — 부담스럽지 않은 짧은
+     시간, "지금 짚고 있는 메뉴"를 시각적으로 표현.
+
+### ① GNB 아바타 20% 축소 — 수정 파일
+
+```
+src/lib/components/common/GNB.svelte
+  PC(.gnb-avatar-initial) width/height: clamp(50px,6.5vw,70px) → clamp(40px,5.2vw,56px)
+                          font-size:    clamp(18px,2vw,26px)   → clamp(14.4px,1.6vw,20.8px)
+  모바일(.gnb-avatar-btn) width/height/min-width/min-height: 40px → 32px
+  모바일(.gnb-avatar-btn-initial) font-size: 18px → 14.4px
+  비로그인 상태 로그인 아이콘 <svg>: width/height 40→32 (viewBox "0 0 40 40" 유지 — 비율 그대로 축소)
+
+.claude/rules/ui-mobile.md
+  "모바일 아바타 버튼 확정값" 표 갱신(40px→32px, 18px→14.4px) + PC 대응값 병기 + 32px가
+  일반 터치타겟(44px) 기준의 의도적 예외임을 명문화(2026-09-15 갱신 각주).
+```
+
+### ② 바텀탭바 터치·호버 버블 인터랙션 — 수정 파일
+
+```
+src/routes/+page.svelte (m-tab-bar/m-tab-item — 홈 화면 전용 인라인 구현, common/BottomTabBar.svelte 아님)
+  .m-tab-item svg { transition: transform 0.24s cubic-bezier(0.34, 1.28, 0.64, 1); }
+  .m-tab-item:hover svg, .m-tab-item:active svg { transform: translateY(-3px) scale(1.1); }
+  — 기존 클릭 시 발동하는 tab-bubble(선택 확정 튐) 키프레임과는 별개 레이어로 추가, 손을
+  떼면 자동 원복. cubic-bezier(0.34, 1.28, 0.64, 1)는 FloatingBar 스프링 바운스 확정값
+  (ui-mobile.md)과 동일 곡선을 재사용 — 신규 easing 임의 창작 없음.
+```
+
+### 검증
+
+```
+npx svelte-check — 신규 에러 0건(무관한 기존 vite.config.ts 에러 1건만 유지), 두 파일 모두
+  신규 unused-selector 경고 없음(선택자 전부 실사용 확인).
+Claude Browser 라이브검증은 미실시(기본값 금지 정책) — Stephen이 launch-selected-element로
+  직접 요소를 지정해 대조.
+git commit은 Stephen 직접 실행 대기.
+@sp3-qa-agent 검수 대기 중.
+```
+
+## DONE — 상품삭제 시 홈 큐레이션 참조 자동정리 로직 추가 + 기존 죽은 참조 1회성 청소 (2026-09-15, 이 세션'만', ✅ GATE E 통과 — sp3-qa-agent 검수 완료, git commit만 Stephen 대기)
+
+### 배경
+
+바로 앞 아젠다(홈 화면 DB 연동 검증)에서 발견한 후속 조치: 관리자가 상품을 삭제해도
+그 상품이 등록돼 있던 추천상품(product_page_md_picks)·카테고리 상품 큐레이션
+(home_category_products)·취향직격 테마그룹(home_theme_groups) 설정에서는 참조가 자동으로
+빠지지 않아, 홈 화면 해당 섹션이 고객에게 조용히 비어보이는 문제가 있었다. Stephen 확인
+질문 2가지에 대한 답변을 반영해 진행:
+  ① 지금 이미 죽어있는 참조도 같이 청소 — 예
+  ② "삭제" 범위 — 실제 삭제(soft-delete)만 대상, 재고소진으로 노출만 꺼지는 경우는 제외
+
+### 구현 내역
+
+**신규 파일**
+```
+src/lib/server/removeProductFromHomeCuration.ts — 추천상품·카테고리상품·취향직격 테마그룹
+  3곳에서 삭제된 상품 id만 골라 제거. upsert_product_page_setting/cms_update_theme_group
+  기존 RPC 재사용(신규 RPC 없음). RPC 응답의 error를 매번 확인해 실패 시 throw
+  (check-rpc-error-handling.mjs 정적분석 위반 0건 확인).
+```
+
+**수정 파일**
+```
+src/routes/cms/products/+page.server.ts — deleteProduct 액션의 "부모 상품 자체 삭제" 분기
+  (parentId가 없는 else 블록, = 실제 삭제 케이스)에만 removeProductFromHomeCuration 호출 연결.
+  is_cms_user() 검사를 통과해야 하므로 service_role(admin)이 아니라 세션 클라이언트
+  (locals.supabase)로 호출. try/catch로 감싸 fail-soft — 정리가 실패해도 상품 삭제 자체는
+  롤백하지 않음(console.error만 남김).
+  ⚠️ 재고 소진으로 부모 is_active만 꺼지는 분기(if (parentId) 블록)에는 연결하지 않음 —
+  Stephen 확인 ②에 따라 "실제 삭제"만 대상.
+```
+
+**신규 마이그레이션 (1회성 데이터 청소, Migration #500)**
+```
+supabase/migrations/20260915000000_500_home_curation_dead_product_refs_cleanup.sql
+  — 위 코드 수정 이전에 이미 죽어있던 참조만 EXISTS 조건으로 골라 제거(살아있는 참조는
+  전혀 건드리지 않음). Migration #491 백업테이블 선례와 동일 패턴으로 _migration_500_backup_
+  settings / _migration_500_backup_theme_groups 생성 후 UPDATE, 롤백 SQL 주석 포함.
+
+적용 전 실측 → 적용 후 재확인(둘 다 0건 잔존 확인):
+  Stage(ezyvffjvuwmtuhpxdjrw)      — home_category_products(camera) 1건 제거, 다른 상품 2개는 유지
+  Production(vnbpmvxruyciuuaermyh) — product_page_md_picks 3건 + home_category_products(camera)
+    1건 제거(둘 다 이제 빈 배열 — 참조하던 상품 전부가 죽어있었던 것으로 확인됨)
+  home_theme_groups는 양쪽 다 죽은 참조 0건(안전망으로 UPDATE 문은 포함, no-op)
+  적용 순서: Stage 적용·검증 완료 → Production 적용·검증 완료(마이그레이션 순서 규칙 준수)
+```
+
+### 검증
+
+```
+npx svelte-check — 신규 에러 0건(무관한 기존 vite.config.ts 에러 1건만 유지).
+node scripts/check-rpc-error-handling.mjs — 신규 파일 위반 0건(기존 무관 파일 3건은
+  이 세션과 무관, 손대지 않음).
+git commit은 Stephen 직접 실행 대기.
+```
+
+### @sp3-qa-agent 검수 결과 — GATE E 통과 ✅
+
+```
+검수범위를 신규 2개 파일 + deleteProduct 액션 수정분(단일 hunk, 9줄 추가)으로 명시 한정.
+스키마 대조(product_page_md_picks/home_category_products/home_theme_groups.product_ids 구조,
+Migration #118·#325·#322 정의부) 전부 일치 확인. deleteProduct의 if(parentId)(재고소진
+is_active off) vs else(부모 자체 실제 삭제) 두 분기 중 정확히 else에만 연결됨을 코드 대조로
+재확인 — Stephen 확인 ②(실제 삭제만 대상) 정확히 지켜짐. locals.supabase(세션 클라이언트)를
+써야 하는 이유(is_cms_user() auth.uid() 기반 SECURITY DEFINER)도 정의부 대조로 검증.
+Migration #500은 Migration #491 백업테이블 선례와 패턴 일치 + EXISTS 가드로 살아있는 참조를
+구조적으로 건드릴 수 없음 + 재실행해도 안전(멱등) 확인. 범위 외 파일 수정 없음.
+
+참고(블로킹 아님): removeProductFromHomeCuration 내부 3개 최초 조회(.select())는 error를
+구조분해하지 않으나, 해당 테이블/키는 CMS 세션에 항상 열려있는 공개읽기라 실패 가능성
+낮고 실패해도 fail-open(정리 스킵)이라 낮은 리스크로 판단 — 수정 필수 아님.
+```
+
+### 검증
+
+```
+npx svelte-check — 신규 에러 0건(무관한 기존 vite.config.ts 에러 1건만 유지).
+node scripts/check-rpc-error-handling.mjs — 신규 파일 위반 0건(기존 무관 파일 3건은
+  이 세션과 무관, 손대지 않음).
+git commit은 Stephen 직접 실행 대기.
+@sp3-qa-agent 검수 대기 중.
+```
+
 ## DONE — 🔴 CRITICAL: CMS 계정관리(`/cms/accounts/list`) 권한설정 검증 + 파트너 접근범위 재조정 + 슈퍼마스터 보호 공백 수정 (2026-09-15, 이 세션'만', ✅ GATE E 통과 — sp3-qa-agent 검수 완료, git commit만 Stephen 대기)
 
 ### 아젠다
