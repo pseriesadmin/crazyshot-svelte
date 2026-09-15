@@ -334,6 +334,7 @@
             onstatuschange={closePanel}
             stepFilter={['hold', 'confirmed']}
             cmsRole={data.cmsRole}
+            canChangeOrCancelReservation={data.canChangeOrCancelReservation}
           />
         {/key}
       </div>

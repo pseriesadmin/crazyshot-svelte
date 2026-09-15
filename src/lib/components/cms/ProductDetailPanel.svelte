@@ -4157,7 +4157,7 @@
     background: var(--cs-red-badge);
     color: var(--cs-white);
     border: none;
-    border-radius: var(--radius-xl);
+    border-radius: var(--radius-md);
     font: var(--text-pc-body-14);
     white-space: nowrap;
     cursor: pointer;

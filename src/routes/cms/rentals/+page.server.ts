@@ -8,12 +8,13 @@ import { hasSettingsAccess } from '$lib/utils/cmsPermissions'
 import { sendReservationLifecyclePush } from '$lib/server/push'
 import { clearIssuedContractContent } from '$lib/server/clearIssuedContractHelper'
 import { attachRentalDaysLabel } from '$lib/server/rentalDaysLabel'
+import { hasMenuAccess, type CmsMenuPermissionOverride } from '$lib/constants/cmsMenus'
 
 import type { RentalListRow } from '../reservation/+page.server'
 export type { RentalListRow }
 
 export const load: PageServerLoad = async ({ parent, url }) => {
-  const { cmsRole } = await parent()
+  const { cmsRole, session } = await parent()
   if (!cmsRole) throw redirect(303, '/cms/login')
 
   const admin  = createClient(PUBLIC_SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
@@ -49,7 +50,18 @@ export const load: PageServerLoad = async ({ parent, url }) => {
   const totalCount = rentals[0]?.total_count ?? 0
   const totalPages = Math.max(1, Math.ceil(totalCount / 30))
 
-  return { rentals, totalCount, totalPages, status, search, page, selectedId, cmsRole }
+  // rental.change_cancel per-account 권한 판정
+  let canChangeOrCancelReservation = true
+  if (session?.user.id) {
+    const { data: permData } = await admin
+      .from('cms_menu_permissions')
+      .select('menu_key, allowed')
+      .eq('user_id', session.user.id)
+    const menuOverrides = (permData ?? []) as CmsMenuPermissionOverride[]
+    canChangeOrCancelReservation = hasMenuAccess(cmsRole, menuOverrides, 'rental.change_cancel')
+  }
+
+  return { rentals, totalCount, totalPages, status, search, page, selectedId, cmsRole, canChangeOrCancelReservation }
 }
 
 export const actions: Actions = {

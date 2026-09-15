@@ -8,6 +8,7 @@ import { getCmsRoleForAction } from '$lib/server/getCmsRoleForAction'
 import { hasSettingsAccess } from '$lib/utils/cmsPermissions'
 import { sendReservationLifecyclePush } from '$lib/server/push'
 import { cancelDelivery, DheroApiError } from '$lib/server/dhero'
+import { rpcRetryWithFailSoftLog } from '$lib/server/rpcRetryWithFailSoftLog'
 
 // 2026-08-31(CRITICAL 수정): confirm_order_payment_and_update_reservations(Migration 378)는
 // 주문당 payment_transactions 1행만 대표 예약에 연결한다. 이 예약(params.id) 자신이 대표가
@@ -31,7 +32,8 @@ async function findOrderPaymentTransaction(
     toss_response,
     status,
     refund_failed_at,
-    refund_failure_reason
+    refund_failure_reason,
+    pg_cancelled_at
   `
 
   const { data: direct, error: directErr } = await admin
@@ -145,110 +147,32 @@ export const PUT: RequestHandler = async ({ params, locals, request }) => {
     return json({ error: `[${code}] ${message}` }, { status: 400 })
   }
 
-  // 3. DB 상태 갱신 — cancel_reservation_payment RPC
+  // 3. DB 상태 갱신 — cancel_reservation_payment RPC (rpcRetryWithFailSoftLog: 3회 재시도 + fail-soft)
   // RSV-B-C1 (GATE B Q1 확정): Toss 취소는 이미 완료됐으므로 RPC만 최대 3회 재시도.
-  // rpcErr(네트워크·타임아웃)이나 result.success:false(DB 레벨 실패) 모두 재시도 대상.
-  const MAX_RPC_ATTEMPTS = 3
-  const RPC_RETRY_DELAY_MS = 600
   type CancelResult = { success: boolean; payment_key?: string; cancelled_reservation_ids?: number[]; error?: string; error_code?: string }
 
-  let rpcResult: CancelResult | null = null
-  let lastRpcErr: { message: string } | null = null
-
-  for (let attempt = 0; attempt < MAX_RPC_ATTEMPTS; attempt++) {
-    if (attempt > 0) {
-      await new Promise<void>((r) => setTimeout(r, RPC_RETRY_DELAY_MS))
-    }
-    const { data, error } = await admin.rpc('cancel_reservation_payment', {
+  const { rpcResult, failed: rpcFailed, failureReason } = await rpcRetryWithFailSoftLog<CancelResult>({
+    admin,
+    rpcName: 'cancel_reservation_payment',
+    rpcParams: {
       p_reservation_id: reservationId,
       p_admin_id:       session.user.id,
       p_cancel_reason:  cancelReason,
-    })
-    if (error) {
-      lastRpcErr = error as { message: string }
-      continue
-    }
-    const r = data as CancelResult | null
-    if (!r || r.success === false) {
-      lastRpcErr = { message: r?.error ?? 'RPC returned success:false' }
-      continue
-    }
-    rpcResult = r
-    lastRpcErr = null
-    break
-  }
+    },
+    isSuccess: (r) => r !== null && r.success !== false,
+    paymentKey,
+    reservationId,
+    contextLabel: '관리자 환불',
+  })
 
-  // 재시도 전부 실패 시: DB 실패 기록 + 관리자 알림 + 500 반환
-  if (!rpcResult || lastRpcErr) {
-    const failureReason = lastRpcErr?.message ?? '알 수 없는 오류'
-    // ② 실패 사실 DB 기록 (fail-soft — 기록 실패가 응답을 막으면 안 됨)
-    try {
-      await admin
-        .from('payment_transactions')
-        .update({
-          refund_failed_at:      new Date().toISOString(),
-          refund_failure_reason: failureReason,
-        })
-        .eq('payment_key', paymentKey)
-    } catch (dbErr) {
-      console.error('[refund/rpc-fail] DB 실패기록 오류(fail-soft):', dbErr instanceof Error ? dbErr.message : dbErr)
-    }
-    // ③ 관리자 알림 (fail-soft)
-    try {
-      const { sendPushToAdmins } = await import('$lib/server/push')
-      await sendPushToAdmins('payment_completed', {
-        title: '환불 처리 실패 — 확인 필요',
-        body: `예약 #${reservationId}: Toss 취소는 완료됐으나 DB 반영에 실패했습니다. Toss 콘솔에서 직접 확인해주세요.`,
-        link: `/cms/reservation?selected=${reservationId}`,
-      })
-    } catch (pushErr) {
-      console.error('[refund/rpc-fail] 관리자 알림 오류(fail-soft):', pushErr instanceof Error ? pushErr.message : pushErr)
-    }
-    // ④ 관리자 전용 채팅 카드 삽입 (fail-soft, service-operations.md §11 공용 RPC 경유)
-    // admin_only=true: 고객 채팅에는 미노출, 관리자 채팅 패널에서만 확인 가능
-    try {
-      // 이 예약의 user_id 조회
-      const { data: rvForChat } = await admin
-        .from('rental_reservations')
-        .select('user_id')
-        .eq('id', reservationId)
-        .maybeSingle()
-      const chatUserId = (rvForChat as { user_id?: string | null } | null)?.user_id
-      if (chatUserId) {
-        const { data: chatSessionId, error: chatSessionErr } = await admin.rpc('find_or_create_general_chat_session', {
-          p_user_id: chatUserId,
-          p_reservation_id: reservationId,
-        })
-        if (chatSessionErr) {
-          console.error('[refund/rpc-fail] find_or_create_general_chat_session 실패(fail-soft):', chatSessionErr.message)
-        }
-        if (chatSessionId) {
-          await admin.from('chat_messages').insert({
-            session_id:   chatSessionId,
-            sender_type:  'admin',
-            message_type: 'action_card',
-            content:      'PG 환불실패 정보를 확인하세요.',
-            admin_only:   true,
-            action_payload: {
-              type:           'refund_failed',
-              reservation_id: String(reservationId),
-              action_url:     `/cms/reservation?selected=${reservationId}`,
-              button_label:   '환불실패확인',
-            },
-          })
-        }
-      }
-    } catch (chatErr) {
-      console.error('[refund/rpc-fail] 관리자 채팅카드 삽입 오류(fail-soft):', chatErr instanceof Error ? chatErr.message : chatErr)
-    }
+  if (rpcFailed) {
     return json(
       { error: `DB 반영 실패: ${failureReason}. Toss 취소는 이미 완료됐습니다 — Toss 콘솔에서 직접 확인해주세요.` },
       { status: 500 },
     )
   }
 
-  const result = rpcResult
-  const cancelledIds: number[] = result?.cancelled_reservation_ids ?? []
+  const cancelledIds: number[] = rpcResult?.cancelled_reservation_ids ?? []
 
   // 4. 취소된 예약 각각에 알림·두발히어로 취소 — fail-soft (환불 자체는 이미 완료)
   for (const rsvId of cancelledIds) {

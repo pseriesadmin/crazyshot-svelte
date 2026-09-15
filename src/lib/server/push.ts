@@ -95,6 +95,13 @@ const CUSTOMER_LIFECYCLE_PUSH_COPY: Record<string, { title: string; body: (produ
     title: '운송장 번호가 등록됐어요',
     body: (p) => `${p} 운송장 번호가 등록됐어요. 채팅에서 배송 정보를 확인해주세요.`,
   },
+  // Migration #494: 예약변경 — 결제취소 후 hold 재진입 안내.
+  // 채팅카드(send_rental_chat_notification 'payment_cancelled_reissue')와 쌍을 이루는 브라우저 푸시.
+  // service-operations.md §15 동기화 원칙.
+  payment_cancelled_reissue: {
+    title: '예약변경이 진행됩니다',
+    body: (p) => `${p} 기존 결제가 취소됐어요. 잠시 후 새 계약서가 발송됩니다.`,
+  },
 }
 
 const CHUNK_SIZE = 500
@@ -179,6 +186,10 @@ async function dispatch(
     const result = await messaging.sendEachForMulticast({
       tokens: chunk,
       webpush: {
+        // Urgency: high — 절전모드·유휴 서비스워커 상황에서도 브라우저 푸시 서비스가
+        // 우선 깨워 전달하도록 요청(RFC 8030). 미지정 시 기본값(normal)이라 배터리 절약
+        // 상태에서 전달이 지연될 수 있음(2026-09-15 Stephen 실사용 중 6~10초 지연 보고로 추가).
+        headers: { Urgency: 'high' },
         notification: { title: payload.title, body: payload.body },
         fcmOptions: payload.link ? { link: payload.link } : undefined,
       },

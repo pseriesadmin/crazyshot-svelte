@@ -12,10 +12,13 @@ import { recordAuditLog } from '$lib/contract-signature/auditLog'
 import { resolveApprovalNotifyPlan } from '$lib/server/reservationApprovalNotify'
 import { createDelivery, cancelDelivery, registerReturn, DheroApiError, DHERO_STATUS_LABEL } from '$lib/server/dhero'
 import { escapeLikePattern } from '$lib/server/escapeLikePattern'
+import { hasMenuAccess, type CmsMenuPermissionOverride } from '$lib/constants/cmsMenus'
 import { isBulkDeliveryMethod } from '$lib/server/isBulkDeliveryMethod'
 import { getReservationForDhero } from '$lib/server/getReservationForDhero'
 import { awardRentalCompletePoints } from '$lib/server/awardRentalCompletePoints'
 import { attachRentalDaysLabel } from '$lib/server/rentalDaysLabel'
+import { tossPaymentCancel } from '$lib/server/tossPaymentCancel'
+import { rpcRetryWithFailSoftLog } from '$lib/server/rpcRetryWithFailSoftLog'
 
 export interface RentalListRow {
   reservation_id:    number
@@ -85,7 +88,7 @@ export interface RentalListRow {
 }
 
 export const load: PageServerLoad = async ({ parent, url }) => {
-  const { cmsRole } = await parent()
+  const { cmsRole, session } = await parent()
   if (!cmsRole) throw redirect(303, '/cms/login')
 
   const admin = createClient(PUBLIC_SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
@@ -148,7 +151,18 @@ export const load: PageServerLoad = async ({ parent, url }) => {
   const totalCount = rentals[0]?.total_count ?? 0
   const totalPages = Math.max(1, Math.ceil(totalCount / 30))
 
-  return { rentals, totalCount, totalPages, status, search, dateFrom, dateTo, page, selectedId, cmsRole, contractPending }
+  // rental.change_cancel per-account 권한 판정
+  let canChangeOrCancelReservation = true
+  if (session?.user.id) {
+    const { data: permData } = await admin
+      .from('cms_menu_permissions')
+      .select('menu_key, allowed')
+      .eq('user_id', session.user.id)
+    const menuOverrides = (permData ?? []) as CmsMenuPermissionOverride[]
+    canChangeOrCancelReservation = hasMenuAccess(cmsRole, menuOverrides, 'rental.change_cancel')
+  }
+
+  return { rentals, totalCount, totalPages, status, search, dateFrom, dateTo, page, selectedId, cmsRole, contractPending, canChangeOrCancelReservation }
 }
 
 export const actions: Actions = {
@@ -182,6 +196,140 @@ export const actions: Actions = {
     return { ok: true }
   },
 
+  // 플랜 §3: 예약변경 — Toss 결제 취소 → revert_reservation_order_to_hold
+  // manager+ 게이트, fail-soft 알림 포함
+  changeReservation: async ({ request, locals }) => {
+    const { session } = await locals.safeGetSession()
+    if (!session) return fail(401, { message: '인증 필요' })
+    const cmsRole = await getCmsRoleForAction(locals)
+    if (!cmsRole || !hasSettingsAccess(cmsRole)) return fail(403, { message: '권한 없음' })
+
+    const admin = createClient(PUBLIC_SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
+
+    // rental.change_cancel 세부 권한 체크 — hasSettingsAccess(역할 게이트) 통과 후 추가 검증
+    // 계정 오버레이(cms_menu_permissions)로 manager 계정이 이 기능을 개별 차단할 수 있음
+    // (security-auth.md "메뉴별 세부 접근권한" 참고)
+    const { data: permDataCC } = await admin
+      .from('cms_menu_permissions')
+      .select('menu_key, allowed')
+      .eq('user_id', session.user.id)
+    const menuOverridesCC = (permDataCC ?? []) as CmsMenuPermissionOverride[]
+    if (!hasMenuAccess(cmsRole, menuOverridesCC, 'rental.change_cancel')) {
+      return fail(403, { message: '이 계정은 예약변경·취소 권한이 없습니다.' })
+    }
+
+    const data  = await request.formData()
+    const reservationId = Number(data.get('reservation_id'))
+    if (!reservationId) return fail(400, { message: '예약 ID가 없습니다.' })
+
+    // 1. payment_key 조회 — 형제 예약인 경우 order_items 경유
+    let paymentKey: string | null = null
+    const { data: ptDirect } = await admin
+      .from('payment_transactions')
+      .select('payment_key, status')
+      .eq('reservation_id', reservationId)
+      .eq('status', 'done')
+      .maybeSingle()
+    paymentKey = (ptDirect as { payment_key?: string | null } | null)?.payment_key ?? null
+
+    if (!paymentKey) {
+      const { data: orderItem } = await admin
+        .from('order_items')
+        .select('order_id')
+        .eq('reservation_id', reservationId)
+        .maybeSingle()
+      const orderId = (orderItem as { order_id?: number | null } | null)?.order_id
+      if (orderId != null) {
+        const { data: siblingItems } = await admin
+          .from('order_items')
+          .select('reservation_id')
+          .eq('order_id', orderId)
+        const siblingIds = ((siblingItems ?? []) as { reservation_id: number | null }[])
+          .map((r) => r.reservation_id)
+          .filter((v): v is number => v != null)
+        if (siblingIds.length > 0) {
+          const { data: sibPt } = await admin
+            .from('payment_transactions')
+            .select('payment_key, status')
+            .in('reservation_id', siblingIds)
+            .eq('status', 'done')
+            .maybeSingle()
+          paymentKey = (sibPt as { payment_key?: string | null } | null)?.payment_key ?? null
+        }
+      }
+    }
+
+    if (!paymentKey) return fail(404, { message: '결제 정보를 찾을 수 없습니다.' })
+
+    // 2. Toss 결제 취소
+    const tossResult = await tossPaymentCancel(paymentKey, '예약변경 - 결제 재진행')
+    if (!tossResult.ok) return fail(400, { message: tossResult.error ?? '결제 취소에 실패했습니다.' })
+
+    // 3. DB: 예약 hold로 되돌리기 (rpcRetryWithFailSoftLog: 3회 재시도 + fail-soft)
+    type RevertResult = { ok: boolean; error?: string }
+    const { rpcResult: rv, failed: revertFailed, failureReason: revertFailReason } = await rpcRetryWithFailSoftLog<RevertResult>({
+      admin,
+      rpcName: 'revert_reservation_order_to_hold',
+      rpcParams: { p_reservation_id: reservationId, p_admin_id: session.user.id },
+      isSuccess: (r) => r !== null && r.ok === true,
+      paymentKey,
+      reservationId,
+      contextLabel: '예약변경 DB 반영',
+    })
+    if (revertFailed) {
+      return fail(500, { message: `DB 반영 실패: ${revertFailReason}. Toss 취소는 이미 완료됐습니다.` })
+    }
+    if (!rv?.ok) return fail(400, { message: rv?.error ?? '예약 변경 처리 실패' })
+
+    // 4. pg_cancelled_at 기록 — fail-soft
+    if (tossResult.pgCancelledAt) {
+      try {
+        await admin
+          .from('payment_transactions')
+          .update({ pg_cancelled_at: tossResult.pgCancelledAt })
+          .eq('payment_key', paymentKey)
+      } catch { /* fail-soft */ }
+    }
+
+    // 5. 같은 주문의 모든 예약 ID 수집 (알림용) — revert RPC는 reverted_reservation_ids를 반환하지 않음
+    let allReservationIds: number[] = [reservationId]
+    try {
+      const { data: orderItemForNotify } = await admin
+        .from('order_items')
+        .select('order_id')
+        .eq('reservation_id', reservationId)
+        .maybeSingle()
+      const orderIdForNotify = (orderItemForNotify as { order_id?: number | null } | null)?.order_id
+      if (orderIdForNotify != null) {
+        const { data: sibItems } = await admin
+          .from('order_items')
+          .select('reservation_id')
+          .eq('order_id', orderIdForNotify)
+        const sibIds = ((sibItems ?? []) as { reservation_id: number | null }[])
+          .map((r) => r.reservation_id)
+          .filter((v): v is number => v != null)
+        if (sibIds.length > 0) allReservationIds = sibIds
+      }
+    } catch { /* fail-soft */ }
+
+    // 6. 채팅 알림 발송 — fail-soft
+    try {
+      await admin.rpc('send_rental_chat_notification_batch', {
+        p_reservation_ids: allReservationIds,
+        p_notify_type:     'payment_cancelled_reissue',
+      })
+    } catch { /* fail-soft */ }
+
+    // 7. 푸시 알림 발송 — fail-soft (각 예약별 독립)
+    for (const rid of allReservationIds) {
+      try {
+        await sendReservationLifecyclePush(admin, rid, 'payment_cancelled_reissue')
+      } catch { /* fail-soft */ }
+    }
+
+    return { ok: true }
+  },
+
   updateStatus: async ({ request, locals }) => {
     const { session } = await locals.safeGetSession()
     if (!session) return fail(401, { message: '인증 필요' })
@@ -193,14 +341,181 @@ export const actions: Actions = {
     const reservationId = Number(data.get('reservation_id'))
     const newStatus     = data.get('status') as string
 
-    const { data: result, error } = await admin.rpc('update_reservation_status', {
-      p_reservation_id: reservationId,
-      p_new_status:     newStatus,
-    })
+    // cancelled 분기 — Defect 1·2 수정 (2026-09-14)
+    // Defect 1: 이전 코드는 cancel_reservation_payment(순수 SQL RPC)만 호출해
+    //   Toss 실결제 취소가 누락됨. 결제가 있으면 반드시 Toss API 먼저 호출 후 RPC.
+    //   결제 없는 경우(PAYMENT_NOT_FOUND)는 Toss 건너뛰고 RPC 직행.
+    // Defect 2: hasSettingsAccess 게이트 누락 — partner도 전액 환불+계약 취소 가능한 상태였음.
+    //   manager/superadmin: Toss + cancel_reservation_payment (환불+형제+계약 일괄 취소)
+    //   partner:            update_reservation_status만 (상태 전환 전용, 환불·계약 취소 없음)
+    let cancelledSiblingIds: number[] = []
+    if (newStatus === 'cancelled') {
+      if (hasSettingsAccess(cmsRole)) {
+        // ── manager/superadmin 경로: Toss 환불 → cancel_reservation_payment ──
 
-    if (error) return fail(500, { message: error.message })
-    const res = result as { ok: boolean; error?: string } | null
-    if (!res?.ok) return fail(400, { message: res?.error ?? '처리 실패' })
+        // rental.change_cancel 세부 권한 체크 — 역할 게이트(manager+) 통과 후 계정 오버레이 검증
+        const { data: permDataUS } = await admin
+          .from('cms_menu_permissions')
+          .select('menu_key, allowed')
+          .eq('user_id', session.user.id)
+        const menuOverridesUS = (permDataUS ?? []) as CmsMenuPermissionOverride[]
+        if (!hasMenuAccess(cmsRole, menuOverridesUS, 'rental.change_cancel')) {
+          return fail(403, { message: '이 계정은 예약변경·취소 권한이 없습니다.' })
+        }
+
+        // 1. payment_key 조회 (changeReservation 액션과 동일한 2단계 패턴)
+        let paymentKey: string | null = null
+        const { data: ptDirect } = await admin
+          .from('payment_transactions')
+          .select('payment_key, status')
+          .eq('reservation_id', reservationId)
+          .eq('status', 'done')
+          .maybeSingle()
+        paymentKey = (ptDirect as { payment_key?: string | null } | null)?.payment_key ?? null
+
+        if (!paymentKey) {
+          const { data: orderItem } = await admin
+            .from('order_items')
+            .select('order_id')
+            .eq('reservation_id', reservationId)
+            .maybeSingle()
+          const orderId = (orderItem as { order_id?: number | null } | null)?.order_id
+          if (orderId != null) {
+            const { data: siblingItems } = await admin
+              .from('order_items')
+              .select('reservation_id')
+              .eq('order_id', orderId)
+            const siblingIds = ((siblingItems ?? []) as { reservation_id: number | null }[])
+              .map((r) => r.reservation_id)
+              .filter((v): v is number => v != null)
+            if (siblingIds.length > 0) {
+              const { data: sibPt } = await admin
+                .from('payment_transactions')
+                .select('payment_key, status')
+                .in('reservation_id', siblingIds)
+                .eq('status', 'done')
+                .maybeSingle()
+              paymentKey = (sibPt as { payment_key?: string | null } | null)?.payment_key ?? null
+            }
+          }
+        }
+
+        // 2. 결제 있는 경우: Toss 취소 먼저 → 성공 후 RPC
+        //    결제 없는 경우: Toss 건너뛰고 RPC 직행 (cancel_reservation_payment가 PAYMENT_NOT_FOUND 처리)
+        let pgCancelledAt: string | undefined
+        if (paymentKey) {
+          const tossResult = await tossPaymentCancel(paymentKey, '관리자 예약 취소')
+          if (!tossResult.ok) return fail(400, { message: tossResult.error ?? '결제 취소에 실패했습니다.' })
+          pgCancelledAt = tossResult.pgCancelledAt
+
+          // pg_cancelled_at 기록 — fail-soft (payment_transactions.cancelled_at은 RPC가 기록,
+          // pg_cancelled_at(PG 실제 취소 시각)만 보강)
+          if (pgCancelledAt) {
+            try {
+              await admin
+                .from('payment_transactions')
+                .update({ pg_cancelled_at: pgCancelledAt })
+                .eq('payment_key', paymentKey)
+            } catch { /* fail-soft */ }
+          }
+        }
+
+        // 3. cancel_reservation_payment RPC (rpcRetryWithFailSoftLog: 3회 재시도 + fail-soft)
+        type CrResult = { success: boolean; error?: string; cancelled_reservation_ids?: number[] }
+        const { rpcResult: cr, failed: cancelFailed, failureReason: cancelFailReason } = await rpcRetryWithFailSoftLog<CrResult>({
+          admin,
+          rpcName: 'cancel_reservation_payment',
+          rpcParams: {
+            p_reservation_id: reservationId,
+            p_admin_id:       session.user.id,
+            p_cancel_reason:  '관리자 예약 취소',
+          },
+          isSuccess: (r) => r !== null && (r.success !== false || r.error === 'PAYMENT_NOT_FOUND'),
+          paymentKey,
+          reservationId,
+          contextLabel: '관리자 예약취소 DB 반영',
+        })
+        if (cancelFailed) {
+          return fail(500, { message: `DB 반영 실패: ${cancelFailReason}. Toss 취소는 이미 완료됐습니다.` })
+        }
+        if (!cr) return fail(500, { message: '예약 취소 처리 실패' })
+
+        // 4. 취소된 형제 예약 ID 수집 (배치 알림용)
+        //    EC-1(결제 있음): cancelled_reservation_ids 반환
+        //    EC-2(PAYMENT_NOT_FOUND): 반환 없음 → order_items 조회로 별도 수집
+        if (cr.success && cr.cancelled_reservation_ids?.length) {
+          cancelledSiblingIds = cr.cancelled_reservation_ids
+        } else {
+          // PAYMENT_NOT_FOUND 또는 단건 — order_items에서 형제 수집
+          try {
+            const { data: oiForBatch } = await admin
+              .from('order_items')
+              .select('order_id')
+              .eq('reservation_id', reservationId)
+              .maybeSingle()
+            const batchOrderId = (oiForBatch as { order_id?: number | null } | null)?.order_id
+            if (batchOrderId != null) {
+              const { data: batchSibs } = await admin
+                .from('order_items')
+                .select('reservation_id')
+                .eq('order_id', batchOrderId)
+              cancelledSiblingIds = ((batchSibs ?? []) as { reservation_id: number | null }[])
+                .map((r) => r.reservation_id)
+                .filter((v): v is number => v != null)
+            }
+          } catch { /* fail-soft */ }
+          if (!cancelledSiblingIds.length) cancelledSiblingIds = [reservationId]
+        }
+
+      } else {
+        // ── partner 경로: 상태 전환만 (환불·계약 취소 없음) ──
+        // order_items에서 형제 예약 전체를 수집해 각각 update_reservation_status 호출
+        let siblingIds: number[] = [reservationId]
+        try {
+          const { data: oiRow } = await admin
+            .from('order_items')
+            .select('order_id')
+            .eq('reservation_id', reservationId)
+            .maybeSingle()
+          const oiOrderId = (oiRow as { order_id?: number | null } | null)?.order_id
+          if (oiOrderId != null) {
+            const { data: siblings } = await admin
+              .from('order_items')
+              .select('reservation_id')
+              .eq('order_id', oiOrderId)
+            const mapped = ((siblings ?? []) as { reservation_id: number | null }[])
+              .map((r) => r.reservation_id)
+              .filter((v): v is number => v != null)
+            if (mapped.length > 0) siblingIds = mapped
+          }
+        } catch { /* fail-soft — 최소한 self는 처리 */ }
+
+        for (const rid of siblingIds) {
+          const { data: statusResult, error: statusError } = await admin.rpc('update_reservation_status', {
+            p_reservation_id: rid,
+            p_new_status:     'cancelled',
+          })
+          if (statusError) {
+            // 요청 예약만 hard fail, 이미 terminal인 형제는 graceful skip
+            if (rid === reservationId) return fail(500, { message: statusError.message })
+            continue
+          }
+          const sr = statusResult as { ok: boolean; error?: string } | null
+          if (!sr?.ok && rid === reservationId) {
+            return fail(400, { message: sr?.error ?? '예약 취소 처리 실패' })
+          }
+        }
+        cancelledSiblingIds = siblingIds
+      }
+    } else {
+      const { data: result, error } = await admin.rpc('update_reservation_status', {
+        p_reservation_id: reservationId,
+        p_new_status:     newStatus,
+      })
+      if (error) return fail(500, { message: error.message })
+      const res = result as { ok: boolean; error?: string } | null
+      if (!res?.ok) return fail(400, { message: res?.error ?? '처리 실패' })
+    }
 
     // 대여 액션 로그 기록 — 실패해도 메인 처리에 영향 없음 (fail-soft)
     // note='manual'로 수동 CMS 조작임을 표시 (QR 경로 note='qr_scan'과 구분 — EC-4)
@@ -238,11 +553,20 @@ export const actions: Actions = {
     // id 139) — log_rental_action(위 173행)과 동일한 fail-soft 원칙을 적용해 해소.
     const notifyType = AUTO_NOTIFY[newStatus]
     if (notifyType) {
+      // cancelled + 형제 예약 2개 이상: send_rental_chat_notification_batch로 일괄 발송
+      // 그 외: 단건 send_rental_chat_notification
       try {
-        await admin.rpc('send_rental_chat_notification', {
-          p_reservation_id: reservationId,
-          p_notify_type: notifyType,
-        })
+        if (newStatus === 'cancelled' && cancelledSiblingIds.length > 1) {
+          await admin.rpc('send_rental_chat_notification_batch', {
+            p_reservation_ids: cancelledSiblingIds,
+            p_notify_type:     notifyType,
+          })
+        } else {
+          await admin.rpc('send_rental_chat_notification', {
+            p_reservation_id: reservationId,
+            p_notify_type: notifyType,
+          })
+        }
       } catch { /* 채팅 알림 발송 실패는 무시 */ }
       // 상태 전환 푸시 알림 병행 발송 (채팅과 독립 — 실패해도 위 처리에 영향 없음)
       try {
