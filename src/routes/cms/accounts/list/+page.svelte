@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { page } from '$app/state'
   import type { PageData } from './$types'
   import type { AccountRow } from './+page.server'
   import AccountDetailPanel from '$lib/components/cms/AccountDetailPanel.svelte'
@@ -9,8 +10,10 @@
 
   let { data }: Props = $props()
 
-  // 선택된 계정 ID — null이면 패널 닫힘
-  let selectedId = $state<string | null>(null)
+  // 선택된 계정 ID — null이면 패널 닫힘. CMS 상단바 "내 정보" 드롭다운의 아바타 클릭 시
+  // ?selected={본인 계정 id}로 진입해 본인 상세패널이 바로 열리도록(기본정보 탭은
+  // AccountDetailPanel의 기본값) URL 쿼리에서 초기값을 읽는다.
+  let selectedId = $state<string | null>(page.url.searchParams.get('selected'))
 
   // 선택된 계정 데이터 — invalidateAll 후 자동 갱신
   let selectedAccount = $derived<AccountRow | null>(

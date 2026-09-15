@@ -6,6 +6,7 @@
   import { csToast } from '$lib/utils/toast'
   import { unregisterCurrentPushToken } from '$lib/utils/push'
   import { CMS_MENUS, hasMenuAccess } from '$lib/constants/cmsMenus'
+  import { hasSettingsAccess } from '$lib/utils/cmsPermissions'
   import { subscribeToAllMessages } from '$lib/services/chatService'
   import type { ChatMessage } from '$lib/types/chat'
   import type { LayoutData } from './$types'
@@ -74,6 +75,42 @@
     await supabase.auth.signOut()
     const t = encodeURIComponent(new Date().toISOString())
     goto(`/cms/login?logout=manual&t=${t}`)
+  }
+
+  // ── 우측 상단 아바타 → 내 정보 드롭다운 (2026-09-15) ──────────────────────
+  // 사용자(front) GNB 아바타 아이콘 구조(이니셜 원형 버튼)를 그대로 반영하고,
+  // 클릭 시 열리는 내용은 cms/mobile/+layout.svelte의 "내 정보" 모달 레이아웃
+  // (원형 아바타·역할배지·이름·아이디·접속일자·로그아웃 버튼)을 응용해 드롭다운으로 배치.
+  // 모든 관리권한(superadmin/manager/partner) 계정 동일 — role별 분기 없음.
+  let showProfileMenu = $state(false)
+
+  const userInitial = $derived((data.session?.user?.email?.[0] ?? '?').toUpperCase())
+
+  function roleLabel(role: string | null | undefined): string {
+    if (role === 'superadmin') return '슈퍼관리자'
+    if (role === 'manager') return '매니저'
+    if (role === 'partner') return '파트너'
+    return role ?? '-'
+  }
+
+  function formatDateTime(iso: string | null | undefined): string {
+    if (!iso) return '-'
+    const d = new Date(iso)
+    if (Number.isNaN(d.getTime())) return '-'
+    return d.toLocaleString('ko-KR', {
+      year: 'numeric', month: '2-digit', day: '2-digit',
+      hour: '2-digit', minute: '2-digit',
+    })
+  }
+
+  // 아바타(큰 원형) 클릭 → 계정관리 목록에서 본인 계정 상세패널(기본정보 탭, 기본값)로 랜딩.
+  // /cms/accounts/list는 manager 이상만 접근 가능(security-auth.md 접근 매트릭스) — partner는
+  // 이 화면 자체에 진입 권한이 없어 아바타를 눌러도 이동하지 않고 그대로 드롭다운만 유지한다
+  // (Stephen 확정 — partner 접근권한 확장은 이번 스코프에서 제외).
+  function goToMyAccountDetail(): void {
+    if (!data.session?.user?.id) return
+    showProfileMenu = false
+    goto(`/cms/accounts/list?selected=${data.session.user.id}`)
   }
 
   // 세션 만료 감지 (활성 중 token refresh 실패 시)
@@ -205,8 +242,47 @@
               >{menu.label}</a>
             {/each}
           </nav>
-          <!-- 로그아웃 버튼 (Figma Sign In 스타일 — 빨간 필) -->
-          <button class="logout-btn" onclick={handleLogout}>Sign Out</button>
+          <!-- 내 정보 아바타 버튼 — 클릭 시 프로필 드롭다운(아바타·배지·이름·아이디·접속일자·로그아웃) -->
+          <div class="topbar-profile">
+            <button
+              type="button"
+              class="topbar-avatar-btn"
+              onclick={() => (showProfileMenu = !showProfileMenu)}
+              aria-label="내 정보"
+              aria-expanded={showProfileMenu}
+              title="내 정보"
+            >{userInitial}</button>
+
+            {#if showProfileMenu}
+              <div
+                class="profile-dropdown-backdrop"
+                onclick={() => (showProfileMenu = false)}
+                role="presentation"
+              ></div>
+              <div class="profile-dropdown" role="dialog" aria-modal="true" aria-label="내 정보">
+                {#if hasSettingsAccess(data.cmsRole ?? '')}
+                  <button
+                    type="button"
+                    class="profile-avatar-lg profile-avatar-clickable"
+                    onclick={goToMyAccountDetail}
+                    aria-label="내 계정 상세정보(기본정보 탭)로 이동"
+                  >{userInitial}</button>
+                {:else}
+                  <div class="profile-avatar-lg" aria-hidden="true">{userInitial}</div>
+                {/if}
+                <p class="profile-name">{data.cmsName || '이름 없음'}</p>
+                <span class="role-tag role-{data.cmsRole}">{roleLabel(data.cmsRole)}</span>
+                <p class="profile-email">{data.session?.user?.email ?? '-'}</p>
+
+                <div class="profile-info-row">
+                  <span class="profile-info-label">접속일자</span>
+                  <span class="profile-info-value">{formatDateTime(data.session?.user?.last_sign_in_at)}</span>
+                </div>
+
+                <button type="button" class="profile-logout-btn" onclick={handleLogout}>Sign Out</button>
+              </div>
+            {/if}
+          </div>
         </div>
       </header>
     </div>
@@ -382,25 +458,130 @@
   .top-tab:hover  { color: rgba(255, 255, 255, 0.85); }
   .top-tab.active { color: var(--cs-white); }
 
-  /* ─── 로그아웃 버튼 (Figma Sign In 스타일 — 빨간 필) ─── */
-  .logout-btn {
-    background: var(--cs-red-badge);   /* #FF3535 */
-    border: none;
-    border-radius: var(--radius-lg);   /* 20px — Figma bt radius */
-    color: var(--cs-white);
-    font: var(--text-pc-menu-en-20);   /* Tilt Warp 20px — Figma pc-menu_en_20 */
-    padding: 0;
-    width: 130px;
-    height: 54px;
-    cursor: pointer;
-    white-space: nowrap;
+  /* ─── 내 정보 아바타 버튼 + 드롭다운 (2026-09-15) ───
+     아바타 원형 버튼: front GNB(.gnb-avatar-btn-initial) 이니셜 원형 구조 재사용.
+     드롭다운 내부 레이아웃: cms/mobile/+layout.svelte "내 정보" 모달(.profile-*) 그대로 응용. */
+  .topbar-profile {
+    position: relative;
     flex-shrink: 0;
+  }
+
+  .topbar-avatar-btn {
+    width: 44px;
+    height: 44px;
+    min-width: 44px;
+    min-height: 44px;
+    border-radius: 50%;
+    background: rgba(85, 63, 224, 0.60);
+    color: var(--cs-white);
+    border: none;
+    font-family: var(--font-en-display);
+    font-size: 18px;
+    font-weight: 700;
+    text-transform: uppercase;
+    cursor: pointer;
     display: flex;
     align-items: center;
     justify-content: center;
+    transition: filter 0.15s;
+  }
+  .topbar-avatar-btn:hover { filter: brightness(0.92); }
+
+  .profile-dropdown-backdrop {
+    position: fixed;
+    inset: 0;
+    z-index: 200;
+    background: transparent;
+  }
+
+  .profile-dropdown {
+    position: absolute;
+    top: calc(100% + 12px);
+    right: 0;
+    z-index: 201;
+    width: 312px;
+    background: var(--cs-white);
+    border-radius: var(--cms-radius-lg);
+    box-shadow: 0 12px 32px rgba(16, 11, 50, 0.20);
+    padding: 28px 24px 24px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    text-align: center;
+  }
+
+  .profile-avatar-lg {
+    width: 56px;
+    height: 56px;
+    border: none;
+    border-radius: var(--radius-full);
+    background: var(--cs-purple-pale);
+    color: var(--cs-dark);
+    font-family: var(--font-en-display);
+    font-size: 22px;
+    font-weight: 700;
+    text-transform: uppercase;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    margin-bottom: 12px;
+  }
+  .profile-avatar-clickable {
+    cursor: pointer;
+    transition: filter 0.15s;
+  }
+  .profile-avatar-clickable:hover { filter: brightness(0.94); }
+
+  .profile-name {
+    font: var(--text-pc-title-16);
+    color: var(--cs-text);
+    margin: 0 0 6px;
+  }
+
+  .profile-email {
+    font: var(--text-pc-script-12);
+    color: var(--cs-text-mid);
+    margin: 0 0 10px;
+    word-break: break-all;
+  }
+
+  .role-tag {
+    display: inline-block;
+    font: var(--text-pc-script-12);
+    font-weight: 700;
+    padding: 4px 12px;
+    border-radius: var(--radius-full);
+    margin-bottom: 10px;
+  }
+  .role-tag.role-superadmin { background: rgba(59,47,138,0.12); color: var(--cs-purple); }
+  .role-tag.role-manager    { background: rgba(16,11,50,0.07);  color: var(--cs-text-dark); }
+  .role-tag.role-partner    { background: rgba(255,69,0,0.08);  color: var(--cs-orange); }
+
+  .profile-info-row {
+    width: 100%;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 12px 14px;
+    background: var(--cs-surface-gray);
+    border-radius: var(--cms-radius-sm);
+    margin-bottom: 20px;
+  }
+  .profile-info-label { font: var(--text-pc-script-12); color: var(--cs-text-mid); }
+  .profile-info-value { font: var(--text-pc-body-14); color: var(--cs-text); }
+
+  .profile-logout-btn {
+    width: 100%;
+    height: 44px;
+    background: var(--cs-red-badge);
+    color: var(--cs-white);
+    border: none;
+    border-radius: var(--radius-lg);
+    font-weight: 700;
+    cursor: pointer;
     transition: opacity 0.15s;
   }
-  .logout-btn:hover { opacity: 0.85; }
+  .profile-logout-btn:hover { opacity: 0.85; }
 
   /* ─── 서브 탭바 — 중앙 정렬 ─── */
   .cms-subtabbar {

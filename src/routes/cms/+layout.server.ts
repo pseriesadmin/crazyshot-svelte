@@ -94,5 +94,5 @@ export const load: LayoutServerLoad = async ({ locals, url, cookies }) => {
   }
 
   locals.cmsRole = role
-  return { session, cmsRole: role, menuPermissionOverrides: overrides }
+  return { session, cmsRole: role, cmsName: profile.name, menuPermissionOverrides: overrides }
 }
