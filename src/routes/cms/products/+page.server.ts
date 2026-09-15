@@ -15,6 +15,7 @@ import { loadSelectedProductDetail, type RentalStatusBucket, type SelectedProduc
 import { buildComboCategoryCode, getRootCode } from '$lib/utils/comboCategoryCode'
 import { getCmsRoleForAction } from '$lib/server/getCmsRoleForAction'
 import { hasSettingsAccess } from '$lib/utils/cmsPermissions'
+import { removeProductFromHomeCuration } from '$lib/server/removeProductFromHomeCuration'
 
 // rental_period_options / rental_method_options 는 database.ts 미등록 — 우회 헬퍼
 function untypedFrom(sb: SupabaseClient, table: string) {
@@ -1072,6 +1073,16 @@ export const actions: Actions = {
         .update({ deleted_at: now })
         .eq('parent_product_id', productId)
         .is('deleted_at', null)
+
+      // 홈 큐레이션(추천상품·카테고리 상품·취향직격 테마그룹) 참조 자동정리 —
+      // 부모(=고객 화면에 노출되는 유일한 단위) 삭제 시에만 대상. is_cms_user() 검사를
+      // 통과해야 하므로 service_role(admin)이 아니라 세션 클라이언트(locals.supabase)로
+      // 호출한다. fail-soft — 실패해도 상품 삭제 자체는 이미 완료된 상태라 롤백하지 않음.
+      try {
+        await removeProductFromHomeCuration(locals.supabase, productId)
+      } catch (curationErr) {
+        console.error('[deleteProduct] 홈 큐레이션 참조 정리 실패:', curationErr)
+      }
     }
 
     invalidateProductSearchCache() // 상품 삭제 → 검색 인덱스 즉시 무효화
