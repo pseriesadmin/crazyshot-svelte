@@ -1,6 +1,617 @@
 # .claude/harness/TASK.md
 
-## DONE — 🔴 CRITICAL: 메뉴권한 EC-5 검사순서 수정 + 배송료 우대설정 3건 재검증·수정 (2026-09-15, 이 세션'만', ✅ GATE E 통과 — sp3-qa-agent 검수 완료, git commit만 Stephen 대기)
+## DONE — 🟢 ROUTINE: 생년월일 캘린더 연/월 선택 UX 재설계 + 본인증명 자동등록 누락 수정 (2026-09-15, 이 세션'만', ✅ GATE E 통과 — sp3-qa-agent 검수 완료(권장 정리 1건: 죽은 CSS 셀렉터 7개 → 즉시 정리 완료), git commit만 Stephen 대기)
+
+### 배경
+
+Stephen이 마이페이지(`/account/profile`) 생년월일 입력 시 연도 선택 UX가 불편하다고
+지적 — 이 세션에서 여러 방향(±5년 그리드 확장, 좌우 스와이프 페이징, 가로 스크롤 스트립,
+10년 단위 전체화면 전환 등)을 반복 시도했고, 그중 한 시도(`.cal-grid`에 직접 min-height를
+준 것)가 실제 날짜 그리드를 깨뜨리는 회귀(토요일 열이 흰 배경 밖으로 넘침)로 이어져
+Stephen이 "기존 달력 로직·UI를 건드리지 말라"고 명확히 지적함 — 원인을 실측으로 특정 후
+그리드 컨테이너가 아닌 별도 래퍼로 옮겨 해소. 최종적으로 Stephen이 첨부한 참고 이미지
+스타일(MUI류 원형 강조)을 기준으로 연도·월 선택 레이어를 동일한 언어로 재설계.
+
+같은 세션에서 Stephen이 별도로 "실서버(production)에 본인증명 '등록하기' 버튼이 남아있다"고
+리포트 — 조사 결과 프로덕션이 구버전이라서가 아니라(`git merge-base`로 로컬 HEAD와
+`origin/main`이 동일 커밋임을 확인), 과거 세션이 외국인증명은 "파일 선택 즉시 자동 등록"으로
+이미 전환했지만 본인증명의 "최초 등록" 경로만 그 개편에서 누락돼 옛 버튼 방식이 그대로
+남아있던 것으로 확인됨 — 외국인증명과 동일한 패턴으로 통일.
+
+### 구현 내용
+
+**1) CalendarGrid.svelte — 연/월 선택 레이어 재설계**
+```
+- 작은 팝업(floating popup) 방식을 버리고 날짜 그리드(.cal-grid)와 같은 자리를 차지하는
+  방식으로 전환(showYearPicker/showMonthPicker 조건부 렌더링, .cal-date-area 공통 래퍼로
+  전환 시 달력 모달 높이 불변 보장)
+- 연도: today 기준 -100년~+30년 목록을 4행 그리드로 배치해 좌우 스크롤로 탐색
+  (grid-auto-flow:column), 열기 시 현재 연도가 자동으로 화면 중앙에 오도록 스크롤
+- 월: 4열×3행 고정 그리드(12개월 고정이라 스크롤 불필요) — 연도와 동일한 시각 언어로 통일
+- 선택값: 원형 강조(지름 58px, --cs-purple-light) / 비선택: 그레이 톤(--cs-text-mid) +
+  폰트 굵기 500(선택값만 700, 크기는 16px)
+- 좌우 스크롤 중에만 옅은 화살표(‹ ›)가 부드럽게 나타났다가(스크롤 시작) 사라지는
+  (150ms 무입력 후) 페이드 인터랙션
+- 🐛 세션 중 발견·수정한 회귀: `.cal-grid`(날짜 그리드) 컨테이너에 직접 min-height를 준
+  시도가 CSS Grid의 auto 행 stretch와 aspect-ratio:1 상호작용으로 날짜 셀 폭까지 그리드
+  밖으로 넘치는 결함을 유발함을 실측(getBoundingClientRect)으로 원인 특정 — `.cal-grid`
+  자체는 완전히 원상복구하고, 높이 고정 책임은 별도 `.cal-date-area` 래퍼로 이전해 해소
+- 스타일 정리: 팝업 테두리(border) 제거, 그림자만으로 면 분리(보더보다 면 우선 원칙),
+  라운드 확대
+```
+
+**2) ProfileTabContent.svelte — 본인증명 "최초 등록" 자동등록 누락 수정**
+```
+- "등록하기" 버튼 + 그 버튼이 쓰던 배치 일괄제출 로직(uploadIdentityDoc 등 미사용
+  함수·상태 10개) 전부 제거
+- 외국인증명이 이미 쓰고 있던 병합 자동제출 함수(autoSubmitIdentityMergeFile,
+  merge=true)를 본인증명 최초 등록 슬롯에도 재사용 — 파일을 선택하는 즉시 그 1건만
+  자동 업로드(버튼 클릭 불필요)
+- "재등록" 확인 토스트("기존 정보를 삭제합니다") 제거 — 실제로는 선택한 유형만 교체되고
+  나머지는 보존되므로 사실과 다른 문구였음(외국인증명 쪽에 이미 있던 동일 정정 사례를
+  본인증명에도 동일하게 적용)
+- cancelIdentityReRegister() 신규 — 외국인증명과 대칭으로 "취소" 출구 추가
+```
+
+### 파일 변경 목록
+
+```
+수정: src/lib/components/common/CalendarGrid.svelte (+323/-, 순수 프론트엔드 UI —
+  props/이벤트 계약value/onselect/disablePast/minDate/rangeStart 등 변경 없음, 장바구니·
+  CMS 등 기존 호출부 영향 없음)
+수정: src/lib/components/members/profile/ProfileTabContent.svelte (+172/-214, 서버 API
+  엔드포인트(/api/profile/upload-doc) 기존 그대로 재사용 — RPC·스키마 변경 없음)
+```
+
+### 검증 (이 세션이 직접 실행, 로컬 dev 서버 + 실브라우저)
+
+```
+✅ svelte-check: 두 파일 전부 신규 에러 0건(기존 vite.config.ts 무관 에러 1건만 잔존)
+✅ 연도 레이어: 좌우 스크롤 동작·열기 시 현재 연도 자동 스크롤·클릭 선택 시 팝업 닫힘
+  전부 실측(scrollLeft, getBoundingClientRect) 확인
+✅ 회귀 재현·해소: 토요일 열 오버플로우(x=789→837, 그리드 경계 787.5 초과)를 실측으로
+  재현 확인 후 수정, 재실측으로 정상 범위(x=746→787.5) 복귀 확인
+✅ 달력 모달 높이 불변: 날짜뷰·연도뷰·월뷰 전환 시 calendar-panel 높이가 383px로 3뷰
+  모두 동일(diff=0)함을 실측 확인 — PC·모바일(375px) 둘 다 확인
+✅ 본인증명 자동등록: 미등록 테스트 계정(mublues@gmail.com)에 실제 파일을 선택해 버튼
+  없이 즉시 업로드 → 등록완료 화면 자동 전환됨을 실측 확인. "재등록"→"취소" 왕복도 정상
+  확인
+✅ 테스트 중 일시적으로 바뀐 생년월일 값은 전부 원래 값(2026년 6월 9일)으로 복구 완료
+```
+
+### GATE E 검수 결과 (sp3-qa-agent, 이 세션의 이번 수정분만 스코프)
+
+```
+✅ PASS — 규칙 정합성(공통 보안·core-rules $state(prop) 금지·터치타겟 44px·CSS 변수·
+  Svelte 5 문법·요청범위 외 수정 금지) 전부 통과. `.cal-grid` 원본 규칙이 diff에서 완전히
+  무변경임을 재대조 확인, CalendarGrid의 다른 호출부(CmsDatePicker.svelte, cart/+page.svelte)
+  prop 계약도 영향 없음 확인. 본인증명 자동제출의 동시성 가드(identityDocsBusy)·서버
+  merge=true 분기(기존 유형 보존 로직)까지 직접 대조해 "재등록 확인창 제거"가 안전함을
+  코드로 검증.
+⚠️ 권장 정리 1건(비블로킹, 즉시 반영 완료): ProfileTabContent.svelte 옛 미리보기/제거 UI
+  마크업 삭제로 고아가 된 CSS 셀렉터 7개(.doc-img-preview, .doc-file-btn-filled 등) —
+  svelte-check css_unused_selector 경고로 확인, 삭제 완료.
+```
+
+GATE E 통과 — git commit은 Stephen 직접 실행 대기.
+
+---
+
+## DONE — 🔴 CRITICAL: CMS 관리자 계정 "비밀번호 재설정 링크" 신설 — 이메일+휴대폰 OTP 2단계 본인확인 (2026-09-15, 이 세션'만', ✅ GATE E 통과 — sp3-qa-agent 검수 완료(1건 MEDIUM 발견→즉시수정→재검증), git commit만 Stephen 대기)
+
+### 배경 — 보안 취약점 발견 및 즉시 조치
+
+Stephen이 rattaf@hanmail.net(Production superadmin) 비밀번호 분실 복구를 요청 → 이 세션이
+기존 `cms_create_invite_token` RPC(신규 계정 최초 설정용, **본인확인 절차 없음**)를 그대로
+재사용해 초대링크를 발급했으나, Stephen이 "링크만 있으면 누구나 슈퍼마스터로 로그인 가능한
+매우 취약한 구조"라고 직접 지적 — 실제로 정확한 취약점이었음(본인확인 없는 링크 유출 시
+계정 탈취 가능, 대상이 슈퍼마스터일 경우 파급력 최대).
+
+### 구현 내용
+
+```
+1. admin_invite_tokens(본인확인 없음, 7일 만료)와 완전히 분리된 신규 테이블
+   admin_password_recovery_tokens 신설 — email_verified_at/phone_verified_at/otp_code/
+   otp_expires_at/otp_attempts/match_attempts/locked_at 보유, 30분 고정 만료.
+   → 이메일 일치 → 휴대폰 일치 + OTP 인증 → 둘 다 통과해야 비밀번호 설정 가능.
+   → 이메일·휴대폰 불일치 5회 또는 OTP 오입력 5회 시 링크 자체 잠금(무차별 대입 방지).
+
+2. 발급 권한: 계정목록(/cms/accounts/list) "비밀번호 변경" 항목 → 본인 계정이면 기존
+   자가변경 모달 그대로, 타 계정이면 "링크 발급" 버튼 → requireAccountMutationAccess
+   재사용(대상이 superadmin이면 호출자도 진짜 superadmin이어야 통과, 그 외엔 manager 이상)
+   — 이 프로젝트의 기존 계정관리 액션들과 동일 기준으로 통일, 별도 판단 로직 신규작성 없음.
+
+3. UI 반복 피드백 3회로 최종 형태 확정:
+   ① 최초 모달(overlay) 방식 → "새 모달 필요 없음" 피드백으로 인라인 패널로 전환
+   ② 확인 문구+별도 제출 버튼 2단계 → "나머지 UI 불필요" 피드백으로 버튼 클릭 즉시 발급 +
+      링크 표시줄만 노출로 단순화(hidden form + requestSubmit())
+   ③ 버튼 행과 발급 결과가 별도 박스로 분리 → "하나의 레이아웃으로 묶을 것" 피드백으로
+      단일 wrapper(.pw-recovery-wrap)로 병합, 발급 전엔 다른 toggle-group과 동일하게
+      배경 없이 보이고 발급 시에만 전체가 하나의 카드로 확장.
+
+4. ⛔ 실사고 수정: 최초 구현 시 로컬 dev 환경에서 SMS 미발송 우회(devCode 콘솔출력) 로직을
+   /api/profile/send-otp의 일반 패턴을 그대로 복사해 넣었으나, 이 프로젝트에는 이미
+   "회원가입·내정보 편집처럼 본인확인이 핵심인 화면은 로컬에서도 예외 없이 실제 SMS 발송"
+   이라는 Stephen 2026-09-11 확정 정책이 있었음(코드 주석에 명시) — 관리자 계정 복구는 그
+   부류의 최상급 사례인데 이를 확인하지 않고 일반 우회 패턴을 넣은 것은 이 세션의 실수.
+   Stephen 지적 즉시 dev 우회 분기 완전 제거(sendRecoveryPhoneOtp), 로컬·실서비스 구분 없이
+   항상 실제 Solapi SMS만 발송하도록 수정 완료.
+
+5. 후속 조치: 이 세션이 Phase 10에서 rattaf@hanmail.net에 발급했던 무제한(본인확인 없는)
+   admin_invite_tokens 토큰(70349bd5c5fd8a764bb26b1e3121d3946447e9e6c26a3aaa)을
+   Production에서 used_at 처리로 즉시 무효화 완료.
+```
+
+### 파일 변경 목록
+
+```
+신규: supabase/migrations/20260915040000_504_admin_password_recovery_tokens.sql
+  — admin_password_recovery_tokens 테이블 + cms_admin_audit_log CHECK 제약에
+    password_recovery_issued/password_recovery_completed 2종 추가. Stage·Production
+    양쪽 apply_migration 적용 완료(정보스키마 조회로 컬럼 존재 확인).
+수정: src/lib/server/cmsAdminAuditLog.ts — CmsAdminAuditActionType 유니온 2종 추가
+수정: src/routes/cms/accounts/list/+page.server.ts — issueRecoveryLink 액션 신설
+수정: src/lib/components/cms/AccountDetailPanel.svelte — canIssueRecoveryLink 파생값,
+  버튼 분기(본인=자가변경 모달 유지/타계정=링크발급), 병합 인라인 패널(.pw-recovery-wrap),
+  pw-modal-wrap 폭 360→432px(+20%, 기존 세션 관행 비율), pw-submit-btn width:100% 보강
+  (중첩 form 구조에서 flex-stretch가 적용 안 되던 실결함 수정)
+수정: src/routes/cms/login/+page.server.ts — ?recover= 토큰 load 분기 + verifyRecoveryEmail/
+  sendRecoveryPhoneOtp/verifyRecoveryPhoneOtp/setRecoveryPassword 4개 액션 신설,
+  dev 우회 분기 제거(사후 수정)
+수정: src/routes/cms/login/+page.svelte — recover 단계형 UI(email→phone→phone-otp→password,
+  SignUpModal 단계 구조 참고) + devCode 관련 클라이언트 코드 제거(사후 수정)
+```
+
+### 검증 (이 세션이 직접 실행, Stage DB + 실브라우저)
+
+```
+✅ svelte-check: 터치한 5개 파일 전부 신규 에러 0건(기존 vite.config.ts 무관 에러 1건만 잔존)
+✅ 권한 게이트: manager 캐릭터로 manager 대상 계정 → 버튼 활성 확인 / manager 캐릭터로
+   superadmin 대상 계정 → 버튼 비활성 + 안내문구 확인(requireAccountMutationAccess 그대로
+   재사용돼 대상이 superadmin이면 차단되는 것 실측 확인)
+✅ 본인확인 로직: 등록 이메일 불일치→거부 / 일치→통과, 등록 휴대폰 불일치→거부 / 일치→
+   실제 Solapi sendSms() 호출 성공(서버 로그 에러 0건) / OTP 오입력→거부 / 정답(Stage DB
+   직접조회로 획득, 실제 수신은 테스트폰 부재로 미확인 — 아래 한계 참고)→통과
+✅ 비밀번호 설정: 설정 즉시 대상 계정으로 자동 로그인(auth.users.last_sign_in_at이 그 계정
+   기준으로 정확한 시각에 갱신됨을 DB로 직접 확인) → /cms 랜딩
+✅ 비밀번호 영속성: 설정한 새 비밀번호로 로그아웃 후 재로그인 정상 성공(세션 아티팩트가
+   아니라 실제 DB 반영임을 재확인)
+✅ 링크 1회성: 사용 완료된 링크 재접속 시 "이미 사용된 링크입니다" 차단 확인
+✅ 권한 불변: 재설정 후 대상 계정의 cms_role 변경 없음(manager 유지) 확인
+✅ 감사로그: password_recovery_issued(발급 시)·password_recovery_completed(완료 시) 둘 다
+   정확한 target_user_id로 기록됨을 cms_admin_audit_log 직접 조회로 확인
+✅ 병합 레이아웃: 발급 전엔 배경 없는 일반 행 / 발급 시 버튼행+링크박스가 하나의 카드로
+   확장 / 재클릭 시 카드 배경까지 함께 접힘 — 3가지 상태 전부 실측(getComputedStyle) 확인
+✅ 테스트 계정 전부 정리 완료(임시 관리자 계정·미사용 recovery 토큰 삭제, tdd-verify-%
+   패턴 잔존 0건 재확인)
+
+⚠️ 알려진 한계: 실제 SMS가 물리적 휴대폰에 도달하는지는 테스트 수신 기기가 없어 이 세션
+   에서 직접 확인 불가 — Solapi API 호출 자체가 에러 없이 성공한 것까지만 확인됨. Stephen
+   또는 실제 대상자가 본인 번호로 1회 실수신 확인 권장.
+⚠️ Stephen이 본인 테스트 중 발급한 실계정("이용희") 대상 recovery 토큰 1건이 미사용
+   상태로 DB에 남아있음 — 이 세션이 만든 것이 아니라 임의 무효화하지 않고 보고만 함.
+```
+
+### GATE E — sp3-qa-agent 검수 결과 (2026-09-15, 1건 발견 → 즉시수정 → 재검증 완료)
+
+```
+A. 권한 게이트(requireAccountMutationAccess 우회 경로) — 확인함, 결함 없음
+B. dev 우회 재발 여부 — 확인함, 재발 없음(grep 0건)
+C. 본인확인 단계 건너뛰기 우회 가능성 — 확인함, 서버가 매 액션마다 email_verified_at·
+   phone_verified_at을 DB 재조회로 재검증해 우회 불가
+D. ⚠️ 무차별대입 방어 — MEDIUM 결함 발견: sendRecoveryPhoneOtp가 재발송할 때마다
+   otp_attempts를 0으로 리셋해, "5회 오입력 시 링크 잠금" 설계가 재발송 반복만으로
+   무력화됨(클라이언트 60초 쿨다운은 ?/sendRecoveryPhoneOtp 직접 POST로 우회 가능,
+   서버측 제한 없었음). → 즉시 수정: 재발송 시 otp_attempts 리셋 제거 + 이미 5회
+   도달한 토큰은 재발송 시점에도 즉시 잠금 처리하는 방어 추가
+   (src/routes/cms/login/+page.server.ts:298-315).
+   ✅ 재검증(Stage 실측): 오입력 4회 → 재발송(새 코드 발급, otp_attempts는 4 유지 확인) →
+   5번째 오입력 → locked_at 즉시 기록 확인 → 잠금 후 추가 재발송 시도는 "보안을 위해 이
+   링크는 차단되었습니다" 즉시 차단 확인(hidden form 없이 직접 POST로도 우회 불가 확인).
+E. 링크 만료(30분)·1회성(used_at) — 확인함, 4개 액션 전부 loadValidRecoveryToken으로 일관 적용
+F. 토큰 유출 표면(URL 생성 방식·테이블 RLS) — 확인함, anon SELECT/INSERT 전부 Stage
+   실측으로 차단 확인(admin_invite_tokens와 동일 patttern)
+G. 감사로그 CHECK 제약 실제 반영 여부 — 확인함, Stage 실측(허용값 201·임의값 400 재현)
+
+기술부채(console.log·any·TODO) 0건 / check-rpc-error-handling.mjs 위반 0건(이 기능은
+.rpc() 미사용) / svelte-check 신규 에러 0건 / 테스트 계정 잔존 0건 재확인.
+```
+
+✅ **최종 GATE E 통과** — D 결함 수정분까지 포함해 전체 재검증 완료. git commit은
+Stephen 직접 실행 대기.
+
+---
+
+## DONE — 🔴 CRITICAL: 휴무일 자동연장 요금 로직 — 고립된 worktree 병합 + Stage 부작용 정합화 (2026-09-15, 이 세션'만', ✅ GATE E 통과 — sp3-qa-agent 검수 완료(1차 FAIL→긴급수정→검증), git commit만 Stephen 대기)
+
+### 배경 (검증 완료, 이 세션에서 직접 SQL·DB·브라우저로 재현)
+
+Stephen 신고(`<launch-selected-element>`, `/cms/set/rental` "휴무일 제어 옵션"): "최근 휴무일
+걸친 대여 옵션 로직 구현했는데 미작동중."
+
+정밀검증 결과:
+```
+1. "휴무일 포함 배송 연장 요금 로직"(계획서: /Users/stevenmac/.claude/plans/
+   cheerful-nibbling-emerson.md, Stephen Plan Mode 승인 완료)이 별도 세션이 만든 격리된
+   git worktree(.claude/worktrees/agent-a02b1ad185045b896, 브랜치
+   worktree-agent-a02b1ad185045b896, base=36d0304 — 현재 stage HEAD보다 수십 커밋 뒤처짐)
+   안에만 미커밋 상태로 존재 — 화면 코드(cart/+page.svelte, cartRentalFee.ts,
+   CalendarGrid.svelte)가 stage 브랜치엔 단 한 줄도 없음. 그래서 CMS 토글을 아무리 켜도
+   눈에 보이는 변화가 없음(당연한 결과).
+
+2. 🔴 그런데 그 세션은 DB 마이그레이션(#492~#498, is_courier_holiday·
+   compute_holiday_extended_period 신규함수 + create_hold_reservation·
+   create_hold_reservation_with_shipment·promote_draft_reservation·
+   compute_reservation_line_amount 파라미터/반환값 확장)을 Stage(ezyvffjvuwmtuhpxdjrw)
+   DB에 이미 직접 적용해뒀다 — 화면 코드 없이 DB만 반쯤 살아있는 상태.
+
+3. 🔴 그 결과 지금 이 순간 Stage에서 실사용 경로(수량 +버튼 재사용, 예약 재발행
+   /api/checkout/reissue-reservation) 둘 다 이미 존재하던 create_hold_reservation_with_
+   shipment RPC를 통해 실제 pickup/return method를 넘기고 있는데, 이 RPC가 이제 내부에서
+   compute_holiday_extended_period를 호출해 "반납일 다음날이 휴무일이면 반납일을 자동으로
+   민다" — 화면엔 여전히 구(舊) "당일 기준 차단" 로직만 있어 이 케이스를 막지 못한다.
+   → SQL 직접 재현 확인: 2026-09-19(토, 크레이지샷배송 반납 자체는 화면상 선택 가능)를
+     compute_holiday_extended_period(...,'crazydelivery','crazydelivery')로 계산하면
+     effective_end_date가 2026-09-20(일)로 조용히 밀림(return_extra_days=1). 화면은
+     "9/19 반납"이라 계속 보여주는데 DB엔 "9/20 반납"으로 저장 — 안내 토스트도 없음
+     (그 안내문구는 병합 안 된 코드에만 존재).
+   → 영향 범위: "크레이지샷배송"(is_courier_dependent=true인 유일한 방식, Stage 기준)을
+     쓰는 예약 중 수량변경·재발행 경로를 타는 모든 건.
+
+4. 🔴 금액 쪽: 이 연장요금(무료1일+나머지 50%)을 최종 결제금액에 합산하는
+   create_reservation_order 로직(worktree #499, Stage 적용 완료·검증 이력 있었음)이
+   **이틀 뒤(2026-09-14) 완전히 무관한 다른 세션의 마이그레이션
+   (20260914050000_497_sync_order_after_composition_change.sql, sync_order_after_
+   composition_change 신설과 함께 create_reservation_order를 CREATE OR REPLACE)**로
+   흔적도 없이 덮어써짐 — 지금 Stage의 create_reservation_order 실제 정의를 직접 조회해
+   holiday_extra_fee 관련 코드가 전혀 없음을 확인. 두 세션이 같은 함수를 서로 모른 채
+   순차로 갈아엎은 전형적인 교차세션 오염 사례(session_scope_discipline 메모리 참고).
+   → 결과: 연장이 발생해도(③) 그 요금이 지금은 청구되지 않음(과소청구 방향).
+
+5. ✅ Production(vnbpmvxruyciuuaermyh) 직접 조회로 완전 무관함 확인 — 관련 함수·컬럼
+   전무. 이번 사안은 Stage 전용.
+```
+
+### 확정 방향 (Stephen 지시, 2026-09-15): "수정을 해야지!!! 기존 정상 구현되는 로직을
+보존하며 안전하게 플랜을 짜!"
+
+→ **되돌리기(②)가 아니라 마저 완성(①)** — 단, worktree는 2026-09-12 시점 stage에서
+분기된 낡은 기준이라, 그 이후 stage에 쌓인 정상 동작 중인 변경사항(revert_reservation_
+order_to_hold, sync_order_after_composition_change, cancel_reservation_payment_v2,
+use_points_ref_id_fix 등)을 절대 되돌리지 않도록 **worktree 코드를 그대로 복사하지 않고
+현재 stage 최신본 위에 수동으로 재통합**하는 것이 이 플랜의 핵심 안전장치다.
+
+### 실행 계획 (Phase — 각 Phase 종료 시 GATE C, 전체 완료 후 GATE E)
+
+```
+✅ Phase 0 완료(2026-09-15) — Stephen 승인으로 rental_method_options에서 crazydelivery의
+   is_courier_dependent를 즉시 false로 전환(Stage 직접 UPDATE), Phase 2 프론트엔드 이식
+   완료 후 다시 true로 복원 완료(아래 Phase 3 실브라우저 검증도 복원된 상태에서 수행).
+
+✅ Phase 1 완료(2026-09-15) — 신규 마이그레이션 2건 작성 + Stage 적용 완료:
+  · supabase/migrations/20260915010000_501_holiday_extension_reintegration.sql
+    — 컬럼 3종 + is_courier_holiday + compute_holiday_extended_period +
+    create_hold_reservation/create_hold_reservation_with_shipment/promote_draft_reservation
+    확장 + compute_reservation_line_amount(4번째 컬럼 holiday_extra_fee) 전부 Stage 라이브
+    정의를 pg_get_functiondef로 그대로 추출해 기록(순수 역커밋, 전부 CREATE OR REPLACE라
+    재적용해도 안전 — 실제로 apply_migration 재실행해 무오류 확인).
+  · supabase/migrations/20260915020000_502_sync_order_holiday_extra_fee.sql — ⚠️ 원 계획
+    (#499)과 다르게 create_reservation_order가 아니라 **sync_order_after_composition_change**
+    (create_reservation_order·cms_add_reservation_product_unit·
+    cms_remove_reservation_product_unit 3곳이 공유하는, 2026-09-14 리팩터링된 최종금액
+    계산 정본)에 holiday_extra_fee 집계를 재통합 — worktree 원안을 그대로 되살리면 9/14
+    리팩터링이 되돌아가는 회귀였기 때문에 최신 구조 위에 새로 이식. 집계는 "그 주문의
+    order_items 전체를 매번 재조회"(부분갱신 유실 방지, worktree #501 QA 교훈 반영).
+    Stage apply_migration 성공 확인.
+  · calculate_cart_total — 정정: compute_reservation_line_amount를 호출하긴 하나
+    holiday_extra_fee를 반영하지 않는 것은 맞음. 다만 이 RPC 결과(calcTotal/calcDiscount/
+    calcFinal/depositTotal)는 cart/+page.svelte:716 주석에 "dead prop"으로 명시돼 있고 grep
+    전수 확인 결과 실제 렌더링·검증 어디에도 쓰이지 않는 죽은 값 — 화면에 노출되지 않으므로
+    이번 스코프에서 변경 불필요(실제 결제금액은 create_reservation_order→sync_order_after_
+    composition_change 경로가 전담).
+
+✅ Phase 2 완료(2026-09-15) — worktree diff를 현재 stage 최신 파일 위에 라인 단위로 수동
+   재적용(자동 merge 미사용, 충돌 지점 전부 직접 대조):
+  2-1. src/lib/utils/cartRentalFee.ts — calcHolidayExtension/calcHolidayExtraFee 순수 추가
+       함수 이식(base 시점과 현재 stage 파일 끝부분이 동일해 충돌 없음).
+  2-2. src/lib/components/common/CalendarGrid.svelte — highlightDates prop(옵션, 미전달 시
+       기존 동작 100% 동일) + adjHoliday 표시 로직 + CSS 1개 클래스 추가. 오늘 다른 세션이
+       같은 파일의 "연도 스크롤 피커" 영역을 계속 다듬고 있었으나(파일별도 영역, 무충돌)
+       하위 알림으로 확인 — 내 변경분(highlightDates 등)은 그대로 보존됨.
+  2-3. src/routes/cart/+page.svelte — itemHolidayExtension() 신설(itemRentalFee/
+       itemOptionFee가 "이미 확장된" 구간 기준으로 계산하도록 배선) + otHolidayExtraFee
+       파생값(otMaxPoints/otTotal에 반영) + Order Total "휴무일 연장요금" 조건부 라인 +
+       promote_draft_reservation 호출에 실제 pickup/return method 전달 추가(기존 NULL
+       호출 → draft 승격 경로도 연장 판정 동작) + RentalForm 캘린더: courierRestricted
+       하드 차단 제거 → holidayHighlightDates 시각 안내 + onselect 시 자동조정 안내
+       토스트로 교체, 반납측 판정기준 당일→다음날(+1) 통일 + "+휴무일 포함" 배지.
+  2-4. src/routes/payment/success/dev/+page.svelte, +page.ts — holidayExtraFee 파라미터
+       파싱 + 조건부 표시줄 추가.
+  npm run check — 신규 에러 0건(기존 vite.config.ts 무관 에러 1건만 그대로 유지) 확인.
+
+✅ Phase 3 완료(2026-09-15) — 테스트 + 실브라우저 검증:
+  3-1. src/__tests__/services/holidayExtensionFee.test.ts(23개 신규) 이식 → 전부 GREEN.
+  3-2. 회귀 스위트 전체 재실행 — cartRentalFee/cartShippingFee/deliveryCutoffHolidays(149개),
+       createHoldReservationWithShipment/checkoutReissueReservation/
+       revertReservationOrderToHold/reservation/reservationCodeOrderWide/
+       paymentContractOrderRedesign/cmsReservationPaymentSiblingFallback/
+       tossPaymentGroupRpc/payment(79개 통과 + 7개 기존 skip) — 전부 GREEN, 회귀 0건.
+       ⚠️ getUnavailableDatesForCart.test.ts 5건 실패 발견했으나 원인 격리 확인 완료 —
+       이번 변경과 무관한 사전 존재 결함(고정 fixture 상품 SONY PXW-Z90의 유일한 활성
+       자식이 2026-09-07에 이미 소프트삭제되어 그 이후로 계속 깨져 있던 테스트, 오늘
+       세션과 무관). 범위 외 수정 금지 원칙에 따라 직접 고치지 않고 별도 백그라운드
+       작업으로 분리(task_92b852a3).
+  3-3. Stage 실브라우저 재현 검증(로그인 세션으로 직접) — is_courier_dependent를 다시
+       true로 복원한 뒤 크레이지샷배송 hold(수령 9/17·반납 9/19(토), 임시 테스트 데이터,
+       검증 직후 삭제 완료)를 장바구니에서 열어:
+       ① 반납일 콤보에 "2026.09.19 +휴무일 포함" 배지 정상 노출
+       ② 캘린더에서 9/20(일)이 보라색 하이라이트 + "휴무일 — 무료로 대여기간에
+          포함됩니다" 툴팁 정상 표시(선택 차단은 되지 않음 — 클릭 가능 확인)
+       ③ 9/19를 다시 선택 시 "휴무일로 인해 실제 반납일이 2026.09.20로 자동
+          조정됩니다..." 안내 토스트 정상 발송
+       ④ 대여요금 미리보기가 fullFee(4일치 280,000)-daily(70,000)=210,000으로 정확히
+          연장일 1일 무료 반영(N=1이라 "휴무일 연장요금" 라인은 조건부 미표시 — 설계대로)
+       DB 레벨 별도 시뮬레이션(order 2709, 실제 주문 1건으로 임시 N=3 셋업→원복)으로
+       holiday_extra_fee=70,000, final_amount=280,000→350,000 정확히 가산 후 완전 원복
+       확인 — sync_order_after_composition_change 재통합(Migration 502) 정상 동작 검증.
+
+✅ Phase 4 완료(2026-09-15) — 문서화 + sp3-qa-agent 독립검수:
+  4-1. rental-fee-policy.md(v1.1→v1.2, §5 신설) / rental-cms-settings.md(v1.5→v1.6, 표B·
+       표C 정정) 갱신 완료 — worktree 초안을 그대로 쓰지 않고 §5 "최종금액 합산 지점"
+       절을 sync_order_after_composition_change 기준으로 다시 씀(create_reservation_order
+       직접수정 금지 명문화 포함).
+
+  4-2. sp3-qa-agent 1차 검수 — ⛔ GATE E FAIL 판정, 🔴 CRITICAL 1건 실사고 발견:
+       Migration #501의 `DROP FUNCTION IF EXISTS compute_reservation_line_amount(bigint)`가
+       (반환타입 변경 때문에 4번째 컬럼 추가 목적으로 넣은 것) 인자 시그니처가 그대로라
+       실제로 기존 객체를 삭제했고, 그 함수엔 원래 걸려 있던 service_role 전용 하드닝
+       (Migration #251b·#263 — 과거 anon이 남의 예약 금액을 조회할 수 있었던 동일 클래스
+       결함 재발 방지용)이 DROP과 함께 사라져 새로 만들어진 함수가 이 프로젝트 스키마의
+       기본 권한(PUBLIC+anon+authenticated 자동 EXECUTE)을 그대로 물려받았다. sp3-qa-agent가
+       Stage에 실제 anon key로 직접 호출해 재현(POST .../rpc/compute_reservation_line_amount
+       {"p_reservation_id":15818} → 200 OK, 타인 예약의 rental_fee/deposit/holiday_extra_fee
+       그대로 반환됨) — **8일간 방치된 문제와 별개로, 이번 세션의 마이그레이션 작성
+       실수로 새로 뚫린 CRITICAL 보안 구멍**.
+       → **즉시 긴급 수정**: Migration #503(`20260915030000_503_compute_reservation_line_
+       amount_grant_fix.sql`)으로 `REVOKE ALL ... FROM PUBLIC, anon, authenticated; GRANT
+       ... TO service_role;` 재적용, Stage `information_schema.routine_privileges` 직접
+       조회로 PUBLIC/anon 완전 제거 확인. 같은 마이그레이션에서 DROP+CREATE된 나머지 2개
+       함수(create_hold_reservation/promote_draft_reservation)는 인자 시그니처가 이미
+       8일 전에 5-param으로 바뀌어 있어 내 DROP 대상(3-param)이 애초에 존재하지 않는
+       no-op이었고 CREATE OR REPLACE가 기존 8일치 ACL을 그대로 보존했음을 확인(회귀
+       아님) — 다만 sp3-qa-agent MEDIUM 권고에 따라 향후 재발 방지 차원에서 두 함수의
+       "의도된" 권한(create_hold_reservation: anon+authenticated 허용 / promote_draft_
+       reservation: authenticated 전용, anon 불허)도 같은 마이그레이션에서 명시적으로
+       재고정. 긴급수정 후 관련 회귀 테스트(createHoldReservationWithShipment·
+       checkoutReissueReservation·reservation·paymentContractOrderRedesign·
+       holidayExtensionFee, 58개+7 skip) 재실행 — 전부 GREEN, REVOKE로 인한 부작용 없음.
+       ⚠️ **교훈**: 반환 타입만 바뀌는 함수도 인자 시그니처가 동일하면 `DROP FUNCTION`이
+       실제로 기존 객체(및 ACL)를 삭제한다 — "그냥 컬럼 하나 추가하는 것"이라고 안일하게
+       접근하지 말고, DROP+CREATE가 필요한 모든 함수는 재생성 직후 반드시 REVOKE/GRANT를
+       명시적으로 재적용할 것(이번 세션에 이미 아는 원칙이었으나 4개 함수 중 1개에서
+       실수로 누락함).
+       그 외 지적사항(🟡 MEDIUM, 범위 외 파일 혼재 — CalendarGrid.svelte의 연도피커
+       영역은 다른 세션이 같은 파일에 병행 작업 중이던 별개 변경분, page-title/대시보드/
+       포인트 기능 등도 이 세션이 건드리지 않은 기존 dirty 상태 — 커밋 시 분리 필요.
+       🟢 LOW, calcHolidayExtension의 UTC/로컬 타임존 라운드트립은 KST 사용자 기준
+       무해 확인됨, 서버가 항상 정본이라 데이터 무결성 영향 없음)는 커밋 제안 시 반영.
+
+  4-2-재검증 — 위 CRITICAL 긴급수정 반영 후 GATE E 통과로 판정(sp3-qa-agent가 지적한
+       유일한 blocking 항목이 해소됨, 나머지는 커밋 범위 조정으로 충분).
+
+  4-3. git commit은 Stephen 직접 실행 — 이번 세션이 실제로 건드린 파일만 정확히 골라
+       다음 답변에서 정렬 목록 + 커밋 메시지 제안 예정(CalendarGrid.svelte는 이 세션의
+       hunk만 분리 대상).
+
+Phase 5 (별도 승인 필요, 이번 스코프 밖) — Production 적용
+  Stage 검증 완료 후 별도로 Stephen 승인 받고 진행. 이번 계획엔 포함하지 않음.
+```
+
+### 작업 후 정리(옵션, Stephen 확인 필요)
+
+```
+병합 완료 후 .claude/worktrees/agent-a02b1ad185045b896 worktree/브랜치 정리 여부는
+git 이력 삭제와 연결되는 작업이라 Stephen 직접 확인 후 별도 처리(이번 GATE B 대상 아님).
+```
+
+---
+
+## DONE — 🟡 BOUNDARY: 상품목록(/products) PC 헤더 슬라이더 부드러운 슬라이드 전환 신설 (2026-09-15, 이 세션'만')
+
+### 아젠다
+
+Stephen 신고(`<launch-selected-element>`, `/products` 상단 헤더 카드 슬라이더): "PC반응형에서
+부드러운 슬라이드 기능이 미구현 상태임. 모바일 반응형에서는 정상 구현."
+
+### 원인
+
+```
+src/routes/products/+page.svelte — 모바일 슬라이더(.m-slider-track)는 네이티브 가로 스크롤
+(overflow-x:auto + scroll-snap-type)을 써서 브라우저가 자체적으로 부드럽게 스크롤·스냅
+처리해주는 반면, PC 슬라이더(.d-slider-cards)는 "다음/이전" 클릭 시 보여줄 카드 3~4개를
+배열에서 다시 슬라이스해 {#each}를 완전히 새로 그리는 방식이라 전환 애니메이션 자체가
+전혀 없었음(즉시 컷 전환). 휠·스와이프 핸들러(onDSliderWheel/onDSliderTouchStart)도 전부
+같은 즉시전환 함수(dPrev/dNext)를 호출.
+```
+
+### 수정
+
+```
+Svelte 표준 트랜지션(svelte/transition의 fly — 이 코드베이스에서 이미 cart 등 여러 화면이
+쓰는 기존 패턴 재사용, 새 라이브러리 도입 없음)을 적용:
+  - dDirection($state, 1=다음/-1=이전) 신설 — dPrev/dNext/점(dot) 클릭 시 방향 기록
+  - .d-slider-cards를 {#key dPage}로 감싸 페이지 전환 시 in:fly(진행방향에서 슬라이드
+    인)/out:fly(반대방향으로 슬라이드 아웃) 적용, duration 300ms
+  - .d-slider-cards를 position:absolute+inset:0으로 전환(이전 페이지 카드와 새 페이지
+    카드가 전환 중 같은 자리에 겹쳐 있어야 좌우로 스치는 모양이 남— 일반 흐름이면 세로로
+    밀려 어긋남), 부모 .d-slider-relative에 고정 height:580px 부여(.d-feat-card 고정
+    높이와 동일값 — absolute 자식만으로는 부모가 높이를 못 정하므로 명시 이관)
+```
+
+### 검증
+
+```
+✅ npx svelte-check — 해당 파일 신규 에러·경고 0건(기존 무관 vite.config.ts 1건만 유지,
+   line 16/306 기존 경고 2건은 이번 변경과 무관한 사전 존재 항목)
+✅ Claude Browser DOM 실측 — 클릭 시 두 페이지(.d-slider-cards)가 동일 rect(x=20~1260,
+   y=425.6, width=1240, height=580)에 정확히 겹쳐 배치됨 확인(레이아웃 밀림 없음), 진입
+   카드에 요청한 fly 파라미터(opacity:0→1, transform: translateX(80px)→0) 그대로 적용됨
+   확인, 페이지 콘텐츠(상품명)도 정확히 전환됨 확인
+⚠️ 애니메이션이 실제로 부드럽게 재생되는 최종 화면은 이 세션에서 눈으로 확인하지 못함 —
+   Claude Browser 미리보기 패널이 사용자 화면에 표시되지 않은(hidden) 상태에서는
+   브라우저가 탭을 백그라운드로 취급해 CSS/JS 애니메이션 프레임(requestAnimationFrame)
+   자체를 멈춰버리는 도구 환경 한계 때문(실제 사용자가 눈으로 보는 상황에서는 발생하지
+   않는 문제 — 여러 방식으로 재현 시도했으나 이 세션에서는 패널을 강제로 화면에 띄울
+   방법이 없었음). 구조·좌표·트랜지션 파라미터는 전부 의도대로 정확히 동작함을 확인했으나,
+   "부드럽게 보이는지"라는 체감 확인은 Stephen이 직접 화면에서 한 번 눌러보고 확인 요망.
+```
+
+git commit은 Stephen 직접 실행 대기.
+
+---
+
+## DONE — 🟢 ROUTINE: 빠른답변 CTA(canned_cta) 카드 관리자 클릭 미작동 수정(2026-09-15, 이 세션'만')
+
+### 아젠다
+
+Stephen이 launch-selected-element로 `/cms/chat/qna` "새 빠른답변" 등록화면(액션 카드 CTA
+섹션)을 지목해 "선택영역 새답변 등록 화면 전역 기능 로직 정합성 검증 — 특히 액션카드 기능이
+제대로 동작하는지" 요청. 등록폼→저장 API→DB 컬럼→채팅 매칭→렌더링→클릭까지 전 구간을 코드로
+추적 검증 후, "요구범위 내로 안전하게 수정 진행해" 지시로 수정까지 완료.
+
+### 발견 — 관리자 본인 클릭 시에만 CTA 링크가 안 열림
+
+```
+등록폼(CannedResponsePanel.svelte) → POST/PATCH /api/cms/canned-responses →
+canned_responses.image_url/cta_label/cta_url 저장 → message/+server.ts 캔드매칭 시
+canned_cta 타입 action_payload로 변환 → 고객이 클릭하면 정상적으로 cta_url 새 탭 오픈.
+
+BUT: 관리자가 CMS 채팅화면에서 같은 카드를 클릭하면 ActionCard.svelte의 handleCta()가
+카드 타입별 관리자 전용 모달 분기(예약정보·계약서·쿠폰·빠른문의 등)를 거치는데,
+canned_cta는 그 목록 어디에도 없어 마지막 catch-all(resolveAdminReservationContext)로
+떨어짐 — 이 카드엔 reservation_id/reservation_no/late_fee_id가 전혀 없으므로 항상
+"관리 화면 정보 없음" 빈 모달만 뜨고 실제 cta_url은 영원히 열리지 않음(고객 클릭과
+동작이 다름). 다른 관리자용 카드(예약·계약 등)는 원래 고객 개인정보 페이지로 새지 않게
+의도적으로 이렇게 막아둔 것이지만, canned_cta는 관리자 본인이 직접 입력한 임의 링크라
+그 안전장치가 적용될 이유가 없는 케이스였음.
+```
+
+### 수정 내역
+
+```
+src/lib/components/chat/ActionCard.svelte (+22/-3, 2곳 + QA 권고 반영 보강 1건)
+  ① 팝업 차단 방지용 "클릭 즉시 빈 탭 먼저 열기" 트릭의 적용 조건을
+     (!isAdmin) → (!isAdmin || payload.type === 'canned_cta')로 확장
+  ② 관리자 전용 모달 분기 맨 앞에 canned_cta 케이스 추가 — 고객과 동일하게 cta_url을
+     새 탭으로 바로 염(pendingWindow 있으면 그쪽으로, 없으면 window.open 폴백)
+  다른 카드 타입(예약·계약·쿠폰·빠른문의 등)의 기존 모달 분기는 전혀 건드리지 않음
+  — canned_cta 1개 타입만 예외로 분리.
+
+  [sp3-qa-agent 검수 후 권고 반영] canned_cta의 cta_url은 관리자가 직접 입력하는 임의의
+  외부 링크(다른 카드류의 항상-자사-내부-경로 전제와 다름)라 reverse tabnabbing 방지를
+  위해 3개 window.open 호출 중 canned_cta 경로에 해당하는 2곳에 보강 적용:
+    - pendingWindow 사전오픈: window.open('','_blank') 뒤 pendingWindow.opener = null
+      (③번째 인자 'noopener'는 반환값 자체를 null로 만들어 나중에 .location.href로
+      목적지를 넣는 이 용도에 쓸 수 없어 이 방식으로 우회)
+    - canned_cta 전용 폴백(pendingWindow 없을 때): window.open(ctaUrl,'_blank','noopener')
+      (반환값을 안 쓰므로 noopener 인자 그대로 사용 가능)
+  QA가 함께 지적한 기존(pre-existing) 고객 경로 공용 폴백(line ~398, 다른 모든 카드
+  타입도 함께 쓰는 코드)은 이번 canned_cta 버그 수정 범위 밖이라 의도적으로 손대지
+  않음 — QA도 "권고사항, GATE E 통과와 무관"으로 명시.
+```
+
+### 검증
+
+```
+npx tsc --noEmit -p .    → 신규 에러 0건
+npx svelte-check         → 신규 에러·경고 0건(기존 무관 경고만 그대로)
+ActionCard.svelte는 클릭 동작을 다루는 컴포넌트라 이 저장소에 대응하는 자동 테스트가
+없음(서버 로직 위주 테스트 컨벤션) — 실제 CMS 채팅화면에서 CTA 설정된 빠른답변을
+관리자 본인이 클릭해 새 탭이 열리는지 직접 확인 필요.
+```
+
+**GATE E: 순수 클라이언트 클릭 라우팅 수정(신규 RPC·서버 로직·DB 변경 없음, 기존 카드
+타입 로직 무변경) — git commit은 Stephen 직접 실행 대기.**
+
+---
+
+## DONE — 🟡 BOUNDARY: 채팅 푸시(FCM) 상호 발송수신 재검증 + 관리자 수신 지연(6~10초) 우선순위 헤더 추가 (2026-09-15, 이 세션'만', ✅ GATE E 통과 — sp3-qa-agent 검수 완료, git commit만 Stephen 대기)
+
+### 아젠다
+
+1. Stephen 요청: "현재 로컬에서 채팅 푸시가 상호 발송수신되는지 재검증해." — 고객↔관리자
+   양방향(urgent_chat_message·admin_chat_reply) 실제 발송/수신 여부를 Stage DB
+   notification_logs·chat_sessions·notification_tokens 직접 조회로 실시간 재검증(코드
+   수정 없음, 순수 검증).
+2. 재검증 도중 Stephen이 "PC/모바일 브라우저에서 허용 시 정상 수신되는지" 의심 제기 →
+   클라이언트 등록 플로우(PushNotificationInit.svelte·firebase-messaging-sw.js) 조사 +
+   실제 도메인 curl 실측으로 "www.crazyshot.kr은 아직 이 프로젝트로 DNS 미연결(구
+   IMWEB 서빙 중)이라 그 주소에서는 등록 자체가 불가, localhost/stage/vercel.app은
+   정상"이라는 별개 원인을 발견·보고(코드 문제 아님, 도메인 컷오버 이슈 — 기존
+   TASK.md 2026-09-10 Toss 웹훅 건과 동일 원인 재확인).
+3. Stephen이 "관리자 CMS 채팅 FCM이 6~10초 늦게 온다(고객 상담 시작 알림)"고 실사용 보고 →
+   DB 타임스탬프 대조로 원인 조사. 최초 가설("동일 세션에 중복 발송 버그")은 실제로는
+   서로 다른 고객 2명이 6초 간격으로 각자 상담을 시작한 것으로 확인돼 기각(스스로 정정
+   보고). 실제 원인은 FCM 발송 시 배송 우선순위(Urgency 헤더) 미지정 — 기본값(normal)이라
+   수신측 절전모드·유휴 서비스워커 상황에서 지연 가능성 있음을 확인, Stephen 승인 받고 수정.
+
+### 변경 내용
+
+```
+파일: src/lib/server/push.ts
+위치: dispatch() 내부 messaging.sendEachForMulticast() 호출의 webpush 옵션
+변경: webpush.headers = { Urgency: 'high' } 추가(RFC 8030 WebPush 표준 헤더)
+효과: 이 함수를 거치는 모든 푸시(신규상담·긴급상담·답장·예약 라이프사이클·계약 등 전종류)에
+     공통 적용 — 브라우저 푸시 서비스가 절전/유휴 상태에서도 우선 전달하도록 요청.
+범위: 이 한 줄(헤더 추가)만 변경. 같은 파일에 동시에 존재하는 payment_cancelled_reissue
+     CUSTOMER_LIFECYCLE_PUSH_COPY 엔트리는 이 세션이 작성한 것이 아님(다른 동시 세션 작업 —
+     git diff에 함께 보이지만 이 NOW 블록의 변경 범위에서 제외).
+```
+
+**변경 파일**
+```
+src/lib/server/push.ts — dispatch() webpush.headers.Urgency='high' 추가 (1개소)
+```
+
+### 검증
+
+```
+- 코드 수정 전: notification_logs/chat_sessions/notification_tokens Stage DB 실측으로
+  양방향(고객→관리자 urgent_chat_message, 관리자→고객 admin_chat_reply) 실제 발송 성공(status=
+  'sent') 다수 확인 — 실시간 라이브 테스트(로컬 dev server, PID 확인) 기준.
+- Urgency 헤더는 firebase-admin WebpushConfig.headers 타입(node_modules 내 .d.ts) 확인 후
+  적용 — 타입 에러 없음.
+- FCM 배송 지연 자체는 구글/브라우저/기기 측 요인이 섞여있어 "100% 해소"를 코드로 증명할 수
+  없는 항목 — 체감 개선 여부는 Stephen 차기 실사용 테스트로 재확인 예정(아래 sp3 검수는
+  이번 변경이 기존 발송 로직·테스트를 깨지 않았는지 여부만 확인).
+- 이 세션은 harness-executor/sp2-tdd-agents를 거치지 않고 Stephen과의 대화 중 직접 진단→
+  승인→1줄 수정으로 처리됨(TDD 도메인 아님 — 설정값 추가, 신규 로직/분기 없음).
+```
+
+### @sp3-qa-agent 검수 결과 — GATE E 통과 ✅
+
+```
+검수범위를 이 세션이 실제로 건드린 단 1개 파일(src/lib/server/push.ts)·1개소(Urgency 헤더)로
+명시 한정 — git diff -- src/lib/server/push.ts로 스코프 고정 확인 후 검수(같은 파일에 동시
+존재하는 다른 세션의 payment_cancelled_reissue 엔트리는 검수 범위에서 명시 제외).
+
+- 정확성: firebase-admin WebpushConfig.headers 타입(node_modules .d.ts 직접 확인)과 정확히
+  일치, notification/fcmOptions와 독립된 형제 필드 — 오타·타입 불일치 없음.
+- 부작용/회귀: staleTokens 판정·logResult 로깅·deactivate_push_tokens RPC 등 이후 로직은
+  result.responses만 참조해 페이로드 형태와 무관, 호출부(sendPushToUser 등)도 webpush 옵션을
+  직접 다루지 않아 영향 없음.
+- 테스트: dispatch() 전용 단위테스트 없음(push.ts 참조 테스트 15개 중 webpush 페이로드 구조를
+  assert하는 테스트 0건) — 대표 3개 파일(trackingNotifyDispatch·approvalNotifications·
+  chatMessageDamageCard) 실행, 9/9 GREEN, 회귀 없음. 설정값 1개 추가로 신규 분기 없어 TDD
+  도메인 대상 아님(AGENTS.md 기준).
+- 타입체크: svelte-check push.ts 관련 에러 0건.
+- 범위 준수: 이 세션이 push.ts 외 다른 파일을 건드린 흔적 없음(요청범위 외 수정 금지 준수).
+
+GATE E: 규칙 정합성/기술부채/시범오픈 기준 전부 통과. 수정 필요 항목 없음.
+git add/commit은 Stephen 직접 실행 대기 — 커밋 시 이 세션 diff(Urgency 헤더)만 스테이징,
+payment_cancelled_reissue는 그 작업 세션이 별도 커밋하도록 분리 권장.
+```
+
 
 ### 아젠다
 
