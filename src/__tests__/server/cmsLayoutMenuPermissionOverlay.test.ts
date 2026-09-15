@@ -94,11 +94,18 @@ describe('CMS +layout.server.ts — 메뉴권한 오버레이(Stage 3, Q6 좁히
     ).rejects.toMatchObject({ status: 303, location: '/cms?notice=access_denied' });
   });
 
-  it('CMS_MENUS에 등록되지 않은 경로는 메뉴권한 오버라이드 조회를 건너뛰고 role 결과만 따른다', async () => {
+  it('CMS_MENUS에 등록되지 않은 경로는 오버라이드로 인한 거부 없이 role 결과만 따른다 ' +
+    '(2026-09-15 변경: 오버라이드 조회 자체는 GNB 필터링을 위해 항상 수행되나, 경로 매칭이 ' +
+    '없으면 그 결과로 리다이렉트 판단은 하지 않는다 — 조회 스킵 → "항상 조회 + 판단만 스킵"으로 전환)', async () => {
     mockOverridesData = [{ menu_key: 'dashboard', allowed: false }]; // 무관한 오버라이드
     const result = await load(makeEvent({ pathname: '/cms/mobile', role: 'partner' }));
-    expect(result).toMatchObject({ cmsRole: 'partner' });
-    expect(mockSelect).not.toHaveBeenCalled();
+    expect(result).toMatchObject({ cmsRole: 'partner', menuPermissionOverrides: mockOverridesData });
+  });
+
+  it('오버라이드 조회 결과는 GNB 필터링을 위해 항상 반환값(menuPermissionOverrides)에 담긴다', async () => {
+    mockOverridesData = [{ menu_key: 'products.list', allowed: false }];
+    const result = await load(makeEvent({ pathname: '/cms/reservation', role: 'manager' }));
+    expect(result).toMatchObject({ cmsRole: 'manager', menuPermissionOverrides: mockOverridesData });
   });
 
   it('메뉴권한 조회 실패(DB 에러) 시 방어적으로 오버라이드 없음 취급 — CMS 로그인이 막히지 않는다', async () => {

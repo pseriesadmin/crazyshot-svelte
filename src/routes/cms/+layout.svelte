@@ -4,9 +4,8 @@
   import { supabase } from '$lib/services/supabase'
   import { Toaster } from 'svelte-sonner'
   import { csToast } from '$lib/utils/toast'
-  import { hasSettingsAccess } from '$lib/utils/cmsPermissions'
   import { unregisterCurrentPushToken } from '$lib/utils/push'
-  import { CMS_MENUS } from '$lib/constants/cmsMenus'
+  import { CMS_MENUS, hasMenuAccess } from '$lib/constants/cmsMenus'
   import { subscribeToAllMessages } from '$lib/services/chatService'
   import type { ChatMessage } from '$lib/types/chat'
   import type { LayoutData } from './$types'
@@ -93,21 +92,32 @@
 
   // 메뉴 목록 출처는 $lib/constants/cmsMenus.ts CMS_MENUS(SSOT)로 통일됨 — 신규 "메뉴별
   // 세부 접근권한" UI(cms_menu_permissions)도 동일 상수를 재사용한다(2026-08-25 이관,
-  // .claude/harness/TASK.md Stage 1). 각 메뉴의 requiresSettingsAccess 플래그로 기존과
-  // 동일한 hasSettingsAccess(manager+) 노출 조건을 그대로 재현 — 내용·순서 변경 없음.
+  // .claude/harness/TASK.md Stage 1).
   //
-  // $derived 필수: use:enhance 로그인 후 data.cmsRole 갱신 시 subMenus 재계산
+  // hasMenuAccess()로 판정 — role 기본 허용(requiresSettingsAccess)뿐 아니라 계정별
+  // 권한설정 오버라이드(+layout.server.ts가 조회한 menuPermissionOverrides)까지 함께
+  // 반영한다. 예전에는 role만 보고 노출 여부를 정해, 특정 계정만 차단된 메뉴도 GNB에는
+  // 그대로 보이고 클릭해야만 접근거부로 튕기는 "죽은 링크"가 남았다 — 이제 그 계정은
+  // 애초에 링크 자체가 보이지 않는다.
+  //
+  // 서브메뉴가 전부 걸러진 대메뉴(예: 파트너에게 프로모션 하위 항목이 하나도 없는 경우)는
+  // 눌러도 갈 곳 없는 빈 탭이 되므로 대메뉴 자체를 숨긴다 — 대메뉴에 자체 href가 있으면
+  // (예: 대시보드) 그 href 접근권한으로, 없으면 서브메뉴가 1개 이상 남았는지로 판단한다.
+  //
+  // $derived 필수: use:enhance 로그인 후 data.cmsRole/menuPermissionOverrides 갱신 시 재계산
   let mainMenus = $derived<MainMenu[]>(
-    CMS_MENUS.filter((main) => !main.requiresSettingsAccess || hasSettingsAccess(data.cmsRole ?? '')).map(
-      (main) => ({
-        id: main.id,
-        label: main.label,
-        href: main.href,
-        subMenus: main.subMenus
-          .filter((sub) => !sub.requiresSettingsAccess || hasSettingsAccess(data.cmsRole ?? ''))
-          .map((sub) => ({ label: sub.label, href: sub.href })),
-      }),
-    ),
+    CMS_MENUS.flatMap((main) => {
+      const subMenus = main.subMenus
+        .filter((sub) => !!sub.href && hasMenuAccess(data.cmsRole ?? '', data.menuPermissionOverrides, sub.menu_key))
+        .map((sub) => ({ label: sub.label, href: sub.href as string }))
+
+      const mainAccessible = main.href
+        ? hasMenuAccess(data.cmsRole ?? '', data.menuPermissionOverrides, main.menu_key)
+        : subMenus.length > 0
+
+      if (!mainAccessible) return []
+      return [{ id: main.id, label: main.label, href: main.href, subMenus }]
+    }),
   )
 
   function resolveActiveMenuId(pathname: string): string {

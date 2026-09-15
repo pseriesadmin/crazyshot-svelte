@@ -16,7 +16,9 @@ import { hasRouteAccess, hasSettingsAccess } from '$lib/utils/cmsPermissions'
 export interface CmsSubMenuDef {
   menu_key: string
   label: string
-  href: string
+  /** 라우트 경로. 비라우트(기능 단위) 권한 항목은 생략 가능 — findCmsMenuKeyForPath가
+   *  href 없는 항목을 건너뛰므로 GNB 메뉴 렌더링·라우트 접근 판정에 영향 없음. */
+  href?: string
   requiresSettingsAccess?: boolean
 }
 
@@ -56,6 +58,10 @@ export const CMS_MENUS: CmsMainMenuDef[] = [
       { menu_key: 'rental.reservation', label: '예약대여현황', href: '/cms/reservation' },
       { menu_key: 'rental.history', label: '이력관리', href: '/cms/rental/history' },
       { menu_key: 'rental.contracts', label: '계약서양식', href: '/cms/reservation/contracts', requiresSettingsAccess: true },
+      /** 비라우트 기능 권한: 예약변경·예약취소 버튼 접근 제어.
+       *  requiresSettingsAccess:true → 기본 허용 대상 = manager 이상.
+       *  per-account allowed:false 레코드로 추가 차단 가능(좁히기 전용). */
+      { menu_key: 'rental.change_cancel', label: '예약변경 및 취소', requiresSettingsAccess: true },
     ],
   },
   {
@@ -82,7 +88,7 @@ export const CMS_MENUS: CmsMainMenuDef[] = [
     menu_key: 'customers',
     label: '고객',
     subMenus: [
-      { menu_key: 'customers.list', label: '고객목록', href: '/cms/customers', requiresSettingsAccess: true },
+      { menu_key: 'customers.list', label: '고객목록', href: '/cms/customers' },
       { menu_key: 'customers.membership', label: '멤버십', href: '/cms/customers/membership', requiresSettingsAccess: true },
       { menu_key: 'customers.score', label: '스코어', href: '/cms/customers/score', requiresSettingsAccess: true },
       { menu_key: 'customers.inquiry', label: '빠른문의', href: '/cms/customers/inquiry', requiresSettingsAccess: true },
@@ -109,7 +115,7 @@ export const CMS_MENUS: CmsMainMenuDef[] = [
     label: '설정',
     subMenus: [
       { menu_key: 'settings.code', label: '코드설정', href: '/cms/codes', requiresSettingsAccess: true },
-      { menu_key: 'settings.rental', label: '대여관리', href: '/cms/set/rental' },
+      { menu_key: 'settings.rental', label: '대여관리', href: '/cms/set/rental', requiresSettingsAccess: true },
       { menu_key: 'settings.push', label: '푸시알림', href: '/cms/set/push', requiresSettingsAccess: true },
       { menu_key: 'settings.admin', label: '관리정보', href: '/cms/set/admin', requiresSettingsAccess: true },
     ],
@@ -186,7 +192,14 @@ export interface CmsMenuPermissionOverride {
  */
 export function roleAllowsMenuByDefault(role: string, menuKey: string): boolean {
   const menu = findCmsMenuByKey(menuKey)
-  if (!menu || !menu.href) return false
+  if (!menu) return false
+
+  // 비라우트 기능 권한 (href 없음): requiresSettingsAccess 플래그로 역할 판정
+  if (!menu.href) {
+    if (menu.requiresSettingsAccess) return hasSettingsAccess(role)
+    return true // requiresSettingsAccess 없는 비라우트 항목 = 전체 CMS 역할 허용
+  }
+
   if (menu.requiresSettingsAccess && !hasSettingsAccess(role)) return false
   return hasRouteAccess(role, menu.href)
 }
@@ -205,7 +218,9 @@ export function hasMenuAccess(
   menuKey: string,
 ): boolean {
   const menu = findCmsMenuByKey(menuKey)
-  if (!menu || !menu.href) return false
+  if (!menu) return false
+  // 비라우트 기능 권한(href 없음)도 오버레이 판정 적용 — findCmsMenuKeyForPath는
+  // href 없는 항목을 건너뛰므로 +layout.server.ts의 라우트 접근 게이트와 충돌 없음.
 
   const override = (menuOverrides ?? []).find((o) => o.menu_key === menuKey)
   if (override && override.allowed === false) return false

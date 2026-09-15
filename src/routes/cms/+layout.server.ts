@@ -82,14 +82,17 @@ export const load: LayoutServerLoad = async ({ locals, url, cookies }) => {
   // 오버레이는 항상 "좁히기"로만 작동하며 위 hasRouteAccess() 판정을 절대 무력화하지 않는다.
   // CMS_MENUS에 아직 등록되지 않은 경로(예: /cms/accounts, /cms/mobile)는 findCmsMenuKeyForPath가
   // null을 반환해 이 오버레이를 건너뛰고 기존 role 전용 가드만 적용된다(무회귀).
+  //
+  // overrides는 경로 매칭 여부와 무관하게 항상 조회한다 — GNB(+layout.svelte)가 동일 값을
+  // 그대로 재사용해 "role은 허용하지만 이 계정만 차단된" 메뉴를 내비게이션에서도 감춰야
+  // 하기 때문(그렇지 않으면 눌러도 튕겨나가는 죽은 링크가 그대로 노출되는 우회로가 남는다).
+  const overrides = await fetchMenuPermissionOverrides(session.user.id)
+
   const menuKey = findCmsMenuKeyForPath(url.pathname)
-  if (menuKey) {
-    const overrides = await fetchMenuPermissionOverrides(session.user.id)
-    if (!hasMenuAccess(role, overrides, menuKey)) {
-      throw redirect(303, '/cms?notice=access_denied')
-    }
+  if (menuKey && !hasMenuAccess(role, overrides, menuKey)) {
+    throw redirect(303, '/cms?notice=access_denied')
   }
 
   locals.cmsRole = role
-  return { session, cmsRole: role }
+  return { session, cmsRole: role, menuPermissionOverrides: overrides }
 }

@@ -97,8 +97,10 @@ hasSettingsAccess(role) → getRoleLevel(role) >= 50
 | 전자계약 발행취소(서명완료건 포함, 2026-09-07) | `/cms/reservation` → `cancelIssuedContract` — `discardSentContract`(미서명 발송건 전용)와 동일 게이트 기준 | ❌ | ✅ | ✅ |
 | 완료 전자계약 정보 채팅 재공유(2026-09-08) | `/api/cms/contracts/[id]/share-chat` — `send-chat`과 동일 게이트 기준(서명 완료건만 대상, 재발행·재발송 아님) | ❌ | ✅ | ✅ |
 | 관리자 서명·직인 자산 관리 | `/cms/set/signature` | ❌ | ✅ | ✅ |
-| 대여 설정 | `/cms/set/rental` | ✅ 세션만 | ✅ | ✅ |
-| 고객 관리 | `/cms/customers` | ❌ | ✅ | ✅ |
+| 대여 설정 | `/cms/set/rental` | ❌(2026-09-15 확정, 아래 참고) | ✅ | ✅ |
+| 고객 관리(열람) | `/cms/customers` | ✅ 계정별 권한설정으로 On/Off(2026-09-15 확정, 기본값 허용) | ✅ | ✅ |
+| 고객 관리(편집·삭제·블랙리스트·점수·포인트) | `/cms/customers` → `toggleBlacklist`·`cancelSubscription`·`updateCustomerInfo`·`adjustScore`·`grantCustomerPoints`·`deleteCustomer` | ❌ | ✅ | ✅ |
+| 레거시 회원 일괄 등록 | `/cms/customers/legacy-import` | ❌ | ✅ | ✅ |
 | 구독 관리 | `/cms/subscriptions`, `/cms/subscriptions/new` | ❌ | ✅ | ✅ |
 | 프로모션 배너 | `/cms/promotion/ad` | ❌ | ✅ | ✅ |
 | 프로모션 쿠폰 | `/cms/promotion/coupon` | ❌ | ✅ | ✅ |
@@ -117,7 +119,7 @@ hasSettingsAccess(role) → getRoleLevel(role) >= 50
 | 계정 삭제 | `/cms/accounts/list` → `delete` | ❌ | ✅(대상이 partner/manager일 때만 — 대상이 superadmin이면 차단) | ✅ |
 | 관리자 등급(cms_role) 변경 | `/cms/accounts/list` → `updateRole` | ❌ | ❌(대상이 superadmin이거나 승격 대상이 superadmin이면 차단) | ✅ |
 | superadmin 계정 신규 생성 | `/cms/accounts` → `createAccount` (newAccountRole='superadmin') | ❌ | ❌ | ✅ |
-| 메뉴별 세부 접근권한 설정 | `/api/cms/accounts/[id]/menu-permissions` PUT | ❌ | ✅ | ✅ |
+| 메뉴별 세부 접근권한 설정 | `/api/cms/accounts/[id]/menu-permissions` PUT | ❌ | ✅(대상이 partner/manager일 때만 — 대상이 superadmin이면 requireAccountMutationAccess로 차단. 대상이 superadmin이 아니어도 슈퍼마스터가 OFF로 잠근 항목을 ON으로 되돌리는 것은 불가 — 아래 참고) | ✅ |
 | 중복 로그인 허용 토글 | `/cms/accounts/list` → `toggleConcurrent` | ❌ | ✅ | ✅ |
 | 세션 제한 토글 | `/cms/accounts/list` → `toggleSession` | ❌ | ✅ | ✅ |
 | 접속로그 조회 | `/api/cms/accounts/[id]/login-logs` — 본인 계정 또는 manager+ | ❌(타인 조회) | ✅(본인·타인 모두) | ✅ |
@@ -133,6 +135,47 @@ hasSettingsAccess(role) → getRoleLevel(role) >= 50
 > manager가 "partner/manager 대상"만 조작 가능한 이유: `requireAccountMutationAccess()`가
 > 대상 계정의 cms_role을 실시간으로 확인해, 대상이 superadmin이면 manager 호출자를 차단한다.
 > 기존 `requireSuperadmin()`이 실제로는 manager+ 수준만 검사하던 구현 버그(2026-08-26 발견·수정).
+>
+> ⚠️ **파트너 접근범위 재조정 3건(2026-09-15, Stephen 지시)**:
+>   - **대여 설정(`/cms/set/rental`) 완전 차단**: `cmsMenus.ts`의 `settings.rental`에
+>     `requiresSettingsAccess: true`를 추가해 파트너를 role 기본값 단계에서 차단(GNB 메뉴 자체가
+>     숨겨짐, 라우트 직접 접근도 `+layout.server.ts`가 차단). 이 화면의 `+page.server.ts`
+>     액션(대여기간·대여방식·지점·배송설정·휴무일캘린더·이용안내·필수동의문·배송료우대설정 등
+>     23개 전체)에도 `hasSettingsAccess(manager+)` 게이트를 새로 추가해, 페이지가 막혀도
+>     액션에 직접 POST로 우회하는 경로를 함께 닫았다(과거엔 `syncHolidaysNow` 1곳만 게이트가
+>     있었음).
+>   - **고객목록(`customers.list`) 열람 허용**: `requiresSettingsAccess` 플래그를 제거해
+>     role 기본값을 파트너도 허용으로 전환 — 관리자가 계정별 권한설정(On/Off)으로 개별 파트너의
+>     열람 권한을 조정할 수 있다. 블랙리스트·회원정보수정·점수조정·포인트지급·구독취소·삭제 등
+>     실제 데이터를 바꾸는 액션은 전부 그대로 `hasSettingsAccess(manager+)` 게이트가 유지되므로
+>     "열람만 가능, 편집은 불가"라는 요구가 그대로 지켜진다.
+>   - **GNB가 계정별 권한설정 오버라이드까지 반영**: `+layout.server.ts`가 메뉴권한 오버라이드를
+>     경로 매칭 여부와 무관하게 항상 조회해 `+layout.svelte`로 넘기고, GNB(`mainMenus`)가
+>     `hasMenuAccess()`(role + 오버라이드)로 대메뉴·서브메뉴를 필터링한다. 이전에는 role만 보고
+>     GNB를 그렸기 때문에 (a) 계정별로 차단된 메뉴도 링크는 그대로 보이다가 클릭해야만 접근거부로
+>     튕기는 죽은 링크 문제, (b) 서브메뉴가 전부 role상 차단된 대메뉴(예: 파트너에게 프로모션)도
+>     빈 탭으로 계속 노출되는 문제가 있었다 — 이제 서브메뉴가 하나도 안 보이는 대메뉴는 GNB에서
+>     자체적으로 숨겨진다.
+>   - **슈퍼마스터 잠금**: `/api/cms/accounts/[id]/menu-permissions` PUT이 어떤 메뉴를
+>     ON으로 되돌리려는 요청을 받으면, 그 메뉴를 마지막으로 OFF로 저장한 사람(`updated_by`)의
+>     **현재** 등급을 조회한다 — 그 사람이 슈퍼마스터라면 지금 요청한 사람이 슈퍼마스터가 아닌 한
+>     403과 함께 "슈퍼마스터 권한 계정에 문의하세요." 메시지를 반환한다(매니저가 끈 항목은
+>     이 제약 없이 다른 매니저가 자유롭게 되돌릴 수 있음 — 잠금 대상은 슈퍼마스터가 끈 항목뿐).
+>     별도 컬럼 없이 기존 스키마(`updated_by` + 현재 `cms_role` 조회)만으로 판정하므로, 그
+>     사람이 이후 강등·승격되면 판정도 함께 달라진다(의도된 동작).
+>
+> ⚠️ **CRITICAL 발견·수정(2026-09-15)**: `/api/cms/accounts/[id]/menu-permissions` PUT은
+> 계정목록의 다른 관리 액션(`updateName`·`updatePhone`·`toggleSuspend`·`delete`·`updateRole`·
+> `toggleConcurrent`·`toggleSession`)과 달리 대상(target) 계정이 슈퍼마스터인지 확인하는
+> `requireAccountMutationAccess()` 게이트가 처음부터 빠져 있었다 — 그 결과 매니저가 슈퍼마스터
+> 계정을 대상으로 이 API를 직접 호출해 메뉴 접근을 OFF로 차단할 수 있었고(§13 "긴급 배지"류의
+> UI 숨김과 달리 서버가 실제로 막지 않았음), 그 차단이 `+layout.server.ts`의 메뉴권한 오버레이를
+> 통해 슈퍼마스터 본인의 실제 CMS 내비게이션에도 그대로 적용돼(오버레이는 role과 무관하게 항상
+> 검사됨) 매니저가 슈퍼마스터의 화면 접근을 몰래 제한할 수 있는 상태였다. PUT 핸들러 앞단에
+> `requireAccountMutationAccess()`를 추가해 다른 계정관리 액션과 동일한 기준으로 통일했다 —
+> allowed=true(켜기)·allowed=false(끄기) 요청 둘 다 이 가드를 거친다(끄기 자체가 공격
+> 시나리오였으므로 allowed 값과 무관하게 항상 검사). GET(열람)은 대상 무관 조회이므로 영향
+> 없음. 회귀 테스트 2건 추가(`cmsMenuPermissionsApi.test.ts`).
 >
 > ⚠️ **후속 발견(2026-08-26, QA Stage 9)**: 위 수정 당시 `updatePhone` 액션 1곳만 옛
 > `requireSuperadmin()` 호출이 그대로 남아 있어(다른 5개 액션 + `updateName`은 이미
@@ -344,9 +387,18 @@ function verifyTossSignature(body: unknown, signature: string | null): boolean {
 
 ---
 
-*security-auth.md v4.1 | Harness Flow v3.2 | 보안·인증·RLS·CMS 역할 | 2026-08-XX /cms/codes 20개 액션 전부 manager 이상(19개) + superadmin(transferCode) 게이트로 통일(QR-CASE-2), load() 페이지 진입 게이트 추가로 partner UI 노출 갭 해소 | 2026-08-11 Phase 7 — 전자계약 양식·발행·발송 5개 파일·9곳 manager 이상 게이트 확정 적용(P7-1~5), 접근 매트릭스 갱신(11개→5파일9곳으로 정정) | 2026-08-13 tiptap-doc 렌더링 회귀 수정(CRITICAL) | 2026-08-24 CMS 전역 정밀검증 v3 STAGE 6·3 반영 — 서명·직인 자산 관리 행의 스테일 "(P8B-2, 미구현)" 주석 제거(실제로는 구현·매트릭스 그대로 유효함을 코드 재확인), 구독 관리(`/cms/subscriptions`) 행 신규 추가(그동안 매트릭스에 아예 없던 신규 메뉴 문서 공백 해소) | 2026-08-25 상품 코드 재반영(`reassignCodeSeries`) 행 신규 추가(products.md §2-11, QA 지적으로 매트릭스 누락 해소) | 2026-08-26 계정 상세 관리 행 10개 신규 추가(계정 조회·수정·정지·삭제·등급변경·superadmin생성·메뉴권한·접속로그 각 행, requireTrueSuperadmin/requireNotLastSuperadmin 원칙 명문화) + "메뉴별 세부 접근권한(계정 오버레이 모델)" 신규 절 추가(cms_menu_permissions·좁히기 전용·집행 위치·API·감사 연동) + "CMS 관리자 감사로그 및 접속로그" 신규 절 추가(cms_login_logs 목적/캡처/RLS/가공표시, cms_admin_audit_log 목적/append-only/8종 이벤트/fail-soft 헬퍼) + GATE C 계정관리·메뉴권한·접속로그·감사로그 관련 9개 체크항목 추가 | 2026-08-26(같은 날 후속, QA Stage 9 블로킹 수정) "계정 이름·휴대번호 수정" 1행을 "계정 이름 수정"/"계정 휴대번호 수정" 2행으로 분리 — `updatePhone` 액션에만 옛 `requireSuperadmin()`이 남아있던 게이트 누락을 `requireAccountMutationAccess()`로 교체해 해소, 회귀 테스트 3건 추가 | 2026-08-26(같은 날 3차 후속) `/cms/rental/history` 행
+*security-auth.md v4.2 | Harness Flow v3.2 | 보안·인증·RLS·CMS 역할 | 2026-08-XX /cms/codes 20개 액션 전부 manager 이상(19개) + superadmin(transferCode) 게이트로 통일(QR-CASE-2), load() 페이지 진입 게이트 추가로 partner UI 노출 갭 해소 | 2026-08-11 Phase 7 — 전자계약 양식·발행·발송 5개 파일·9곳 manager 이상 게이트 확정 적용(P7-1~5), 접근 매트릭스 갱신(11개→5파일9곳으로 정정) | 2026-08-13 tiptap-doc 렌더링 회귀 수정(CRITICAL) | 2026-08-24 CMS 전역 정밀검증 v3 STAGE 6·3 반영 — 서명·직인 자산 관리 행의 스테일 "(P8B-2, 미구현)" 주석 제거(실제로는 구현·매트릭스 그대로 유효함을 코드 재확인), 구독 관리(`/cms/subscriptions`) 행 신규 추가(그동안 매트릭스에 아예 없던 신규 메뉴 문서 공백 해소) | 2026-08-25 상품 코드 재반영(`reassignCodeSeries`) 행 신규 추가(products.md §2-11, QA 지적으로 매트릭스 누락 해소) | 2026-08-26 계정 상세 관리 행 10개 신규 추가(계정 조회·수정·정지·삭제·등급변경·superadmin생성·메뉴권한·접속로그 각 행, requireTrueSuperadmin/requireNotLastSuperadmin 원칙 명문화) + "메뉴별 세부 접근권한(계정 오버레이 모델)" 신규 절 추가(cms_menu_permissions·좁히기 전용·집행 위치·API·감사 연동) + "CMS 관리자 감사로그 및 접속로그" 신규 절 추가(cms_login_logs 목적/캡처/RLS/가공표시, cms_admin_audit_log 목적/append-only/8종 이벤트/fail-soft 헬퍼) + GATE C 계정관리·메뉴권한·접속로그·감사로그 관련 9개 체크항목 추가 | 2026-08-26(같은 날 후속, QA Stage 9 블로킹 수정) "계정 이름·휴대번호 수정" 1행을 "계정 이름 수정"/"계정 휴대번호 수정" 2행으로 분리 — `updatePhone` 액션에만 옛 `requireSuperadmin()`이 남아있던 게이트 누락을 `requireAccountMutationAccess()`로 교체해 해소, 회귀 테스트 3건 추가 | 2026-08-26(같은 날 3차 후속) `/cms/rental/history` 행
 신규 추가 — 계정관리 아젠다 Stage 0 조사 중 이 화면에 role 가드 자체가 없고 매트릭스에도
 미등재였음이 발견됨(로그인만 되어 있으면 partner도 접근 가능한 상태). 이 화면은
 `/cms/products` 상세패널 '이력' 탭과 동일 데이터(`product_history_records`)를 공유하므로
 `/cms/products`가 이미 partner에게 세션만으로 허용하는 것과 동일 정책으로 확정(Stephen
-확인) — 코드 변경 없음, 매트릭스 등재로 공백만 해소 | 2026-08-31 두발히어로 배송 API 행 신규 추가 — dhero 4개 핸들러(GET·POST·cancel PUT·return POST)가 세션 체크만 있고 등급 체크 없어 partner도 호출 가능하던 공백을 RSV-B-B6으로 `hasSettingsAccess(manager+)` 추가 + 매트릭스 등재*
+확인) — 코드 변경 없음, 매트릭스 등재로 공백만 해소 | 2026-08-31 두발히어로 배송 API 행 신규 추가 — dhero 4개 핸들러(GET·POST·cancel PUT·return POST)가 세션 체크만 있고 등급 체크 없어 partner도 호출 가능하던 공백을 RSV-B-B6으로 `hasSettingsAccess(manager+)` 추가 + 매트릭스 등재 | 2026-09-15 Stephen 지시로 파트너 접근범위 3건 재조정 — 대여 설정(`/cms/set/rental`)을
+role 기본값 단계에서 완전 차단(GNB 숨김+라우트 차단+액션 23곳 게이트 신설) / 고객목록
+(`customers.list`) 열람은 파트너 기본 허용으로 전환(편집·삭제 액션은 그대로 manager+ 유지) /
+GNB가 계정별 메뉴권한 오버라이드까지 반영해 서브메뉴 전부 차단된 대메뉴를 자동으로 숨기도록
+`+layout.server.ts`·`+layout.svelte` 리팩터. `/api/cms/accounts/[id]/menu-permissions` PUT에
+"슈퍼마스터 잠금"(슈퍼마스터가 OFF로 저장한 항목은 슈퍼마스터만 다시 ON 가능, 매니저 시도 시
+전용 안내 메시지) 신규 추가. | 2026-09-15(같은 날 후속) CRITICAL 수정 — 위 API에 대상이
+superadmin이면 호출자도 진짜 superadmin이어야 하는 `requireAccountMutationAccess()` 게이트가
+처음부터 빠져 있어 매니저가 슈퍼마스터 계정의 메뉴 접근을 몰래 차단할 수 있던 공백 발견·해소
+(다른 계정관리 액션과 동일 기준으로 통일), 회귀 테스트 2건 추가.*
