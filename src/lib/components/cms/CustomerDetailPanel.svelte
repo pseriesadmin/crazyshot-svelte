@@ -63,6 +63,17 @@
     billed_at: string
   }
 
+  interface PointTx {
+    id: string
+    type: string              // 'earn' | 'use' | 'expire' | 'admin_grant' | 'admin_deduct'
+    amount: number             // 부호 포함(적립 +, 사용/차감 -)
+    balance_after: number
+    description: string | null
+    ref_type: string | null
+    ref_id: string | null
+    created_at: string
+  }
+
   interface AuditEntry {
     id: string
     old_score: number
@@ -72,7 +83,7 @@
     created_at: string
   }
 
-  type CustomerTabKey = 'info' | 'score' | 'subscription' | 'rental' | 'blacklist' | 'inquiry'
+  type CustomerTabKey = 'info' | 'score' | 'subscription' | 'points' | 'rental' | 'blacklist' | 'inquiry'
 
   interface Props {
     row: CustomerRow
@@ -81,7 +92,7 @@
   }
   let { row, onclose, initialTab = null }: Props = $props()
 
-  const VALID_TABS: CustomerTabKey[] = ['info', 'score', 'subscription', 'rental', 'blacklist', 'inquiry']
+  const VALID_TABS: CustomerTabKey[] = ['info', 'score', 'subscription', 'points', 'rental', 'blacklist', 'inquiry']
   function resolveInitialTab(tab: string | null): CustomerTabKey {
     return VALID_TABS.includes(tab as CustomerTabKey) ? (tab as CustomerTabKey) : 'info'
   }
@@ -195,6 +206,9 @@
   let subscriptionsLoaded = $state(false)
   let auditLoaded = $state(false)
   let rentalsLoaded = $state(false)
+  let points = $state<PointTx[]>([])
+  let loadingPoints = $state(false)
+  let pointsLoaded = $state(false)
 
   // 스코어 탭 폼 상태
   let adjustDelta = $state(0)
@@ -218,9 +232,17 @@
   let paymentsBySubId = $state<Record<string, SubscriptionPaymentLog[]>>({})
   let loadingPaymentsSubId = $state<string | null>(null)
 
+  // 포인트이력 탭 — 포인트 추가 폼 상태
+  let grantAmount = $state('')   // 천단위 콤마 포맷 문자열(금액 입력폼 표준)
+  let grantReason = $state('')
+  let isGrantingPoints = $state(false)
+
   $effect(() => {
     if (activeTab === 'subscription' && !subscriptionsLoaded && !loadingSubscriptions) {
       loadSubscriptions()
+    }
+    if (activeTab === 'points' && !pointsLoaded && !loadingPoints) {
+      loadPoints()
     }
     if (activeTab === 'score' && !auditLoaded && !loadingAudit) {
       loadAuditLog()
@@ -257,6 +279,48 @@
       subscriptionsLoaded = true
       loadingSubscriptions = false
     }
+  }
+
+  async function loadPoints() {
+    loadingPoints = true
+    try {
+      const res = await fetch(`/cms/customers/points?userId=${encodeURIComponent(row.user_id)}`)
+      if (res.ok) points = await res.json() as PointTx[]
+    } finally {
+      pointsLoaded = true
+      loadingPoints = false
+    }
+  }
+
+  // 금액 입력폼 표준(uiux-index.md "🔴 금액 입력폼 표준") — IME 안전 + 천단위 콤마
+  function isComposingEvent(e: Event): boolean {
+    return 'isComposing' in e && Boolean((e as unknown as { isComposing?: boolean }).isComposing)
+  }
+  function handleAmountInput(raw: string, isComposing = false): string {
+    if (isComposing) return grantAmount
+    const digits = raw.replace(/[^0-9]/g, '')
+    if (!digits) return ''
+    return parseInt(digits, 10).toLocaleString('ko-KR')
+  }
+
+  function pointSourceLabel(tx: PointTx): string {
+    if (tx.description) return tx.description
+    if (tx.ref_type === 'rental_complete') return '대여완료 적립'
+    if (tx.ref_type === 'order') return '주문 결제 시 사용'
+    if (tx.ref_type === 'coupon') return '쿠폰 관련'
+    return '-'
+  }
+
+  function formatDateTime(dt: string | null): string {
+    if (!dt) return '-'
+    const d = new Date(dt)
+    if (Number.isNaN(d.getTime())) return '-'
+    const y = d.getFullYear()
+    const mm = String(d.getMonth() + 1).padStart(2, '0')
+    const dd = String(d.getDate()).padStart(2, '0')
+    const hh = String(d.getHours()).padStart(2, '0')
+    const min = String(d.getMinutes()).padStart(2, '0')
+    return `${y}.${mm}.${dd} ${hh}:${min}`
   }
 
   async function togglePaymentHistory(subscriptionId: string) {
@@ -882,7 +946,7 @@
         <button class="qr-dl-btn" onclick={downloadMemberQR} title="QR PNG 다운로드" type="button">↓ QR 저장</button>
       </div>
     {/if}
-    <button class="close-btn" onclick={onclose} aria-label="닫기">✕</button>
+    <button class="close-btn" onclick={onclose} aria-label="패널 닫기">✕</button>
   </div>
 
   <!-- 탭 -->
@@ -902,6 +966,11 @@
       class:active={activeTab === 'subscription'}
       onclick={() => (activeTab = 'subscription')}
     >구독이력</button>
+    <button
+      class="panel-tab"
+      class:active={activeTab === 'points'}
+      onclick={() => (activeTab = 'points')}
+    >포인트이력</button>
     <button
       class="panel-tab"
       class:active={activeTab === 'rental'}
@@ -1576,6 +1645,91 @@
       {/if}
     {/if}
 
+    <!-- 포인트이력 탭 -->
+    {#if activeTab === 'points'}
+      <div class="adjust-section points-adjust-section">
+        <form
+          method="POST"
+          action="/cms/customers?/grantCustomerPoints"
+          use:enhance={() => {
+            isGrantingPoints = true
+            return async ({ result }) => {
+              isGrantingPoints = false
+              if (result.type === 'success') {
+                csToast.success('포인트가 등록되었습니다.')
+                grantAmount = ''
+                grantReason = ''
+                pointsLoaded = false
+                loadPoints()
+                await invalidateAll()  // 기본정보 탭의 포인트 잔액(row.points) 갱신
+              } else if (result.type === 'failure') {
+                csToast.error((result.data as { error?: string })?.error ?? '등록 실패')
+              }
+            }
+          }}
+          class="adjust-form"
+        >
+          <input type="hidden" name="user_id" value={row.user_id} />
+          <div class="adjust-row">
+            <input
+              id="grant-amount"
+              type="text"
+              inputmode="numeric"
+              name="amount"
+              class="f-input grant-amount-input"
+              aria-label="포인트"
+              value={grantAmount}
+              oninput={(e) => grantAmount = handleAmountInput(e.currentTarget.value, isComposingEvent(e))}
+              oncompositionend={(e) => grantAmount = handleAmountInput(e.currentTarget.value)}
+              placeholder="포인트"
+              required
+            />
+            <input
+              id="grant-reason"
+              type="text"
+              name="description"
+              class="f-input grant-reason-input"
+              aria-label="사유(출처)"
+              placeholder="사유(출처)"
+              bind:value={grantReason}
+              required
+            />
+            <button
+              type="submit"
+              class="btn-primary grant-submit-btn"
+              aria-label="포인트 추가"
+              disabled={isGrantingPoints || !grantAmount || !grantReason.trim()}
+            >
+              {isGrantingPoints ? '···' : '+'}
+            </button>
+          </div>
+        </form>
+      </div>
+
+      {#if loadingPoints}
+        <div class="loading-text">로딩 중...</div>
+      {:else if points.length === 0}
+        <div class="no-data">포인트 이력이 없습니다.</div>
+      {:else}
+        <div class="audit-list points-audit-list">
+          {#each points as tx (tx.id)}
+            {@const isEarn = tx.amount > 0}
+            <div class="audit-row">
+              <span class="badge {isEarn ? 'badge-active' : 'badge-error'}">{isEarn ? '적립' : '사용'}</span>
+              <span class="audit-scores">{isEarn ? '+' : ''}{tx.amount.toLocaleString('ko-KR')}P</span>
+              <span class="audit-reason">{pointSourceLabel(tx)}</span>
+              <span class="audit-date">{formatDateTime(tx.created_at)}</span>
+              {#if !isEarn}
+                <button type="button" class="sub-payment-toggle" onclick={() => (activeTab = 'rental')}>
+                  대여목록 보기 →
+                </button>
+              {/if}
+            </div>
+          {/each}
+        </div>
+      {/if}
+    {/if}
+
     <!-- 상품대여이력 탭 -->
     {#if activeTab === 'rental'}
       <div class="rental-tab-section">
@@ -1907,19 +2061,20 @@
   .member-qr-wrap .qr-dl-btn:hover { background: var(--cs-lilac); color: var(--cs-purple); }
   .member-qr-wrap--header { margin-left: auto; margin-right: 12px; }
   .close-btn {
-    width: 28px; height: 28px;
+    flex-shrink: 0;
+    width: 28px; height: 28px; min-height: 28px;
     display: flex; align-items: center; justify-content: center;
-    background: var(--cs-surface-gray); border: none; border-radius: 50%;
-    color: var(--cs-text-mid); font-size: 12px; cursor: pointer;
-    transition: background 0.12s;
+    background: transparent; border: none; border-radius: var(--radius-sm);
+    color: var(--cs-text-light); font-size: 14px; cursor: pointer;
+    transition: background 0.12s, color 0.12s;
   }
-  .close-btn:hover { background: rgba(59,47,138,0.08); }
+  .close-btn:hover { background: rgba(255,53,53,0.08); color: var(--cs-red-badge); }
 
   /* 탭 */
   .panel-tabs {
     display: flex;
     gap: 0;
-    padding: 0 8px;
+    padding: 16px 8px;
     border-bottom: 1px solid #ECEBF4;
     flex-shrink: 0;
   }
@@ -1982,6 +2137,16 @@
   .grade-easy  { background: rgba(14,165,233,0.12);  color: var(--cs-info); }
   .grade-pop   { background: rgba(59,47,138,0.10);   color: var(--cs-purple); }
   .grade-crazy { background: rgba(255,69,0,0.12);    color: var(--cs-orange); }
+
+  /* 이중상태 배지(cms-uiux.md §7-6 표준) — /cms/promotion/point에서 적립/사용 구분에
+     쓰는 것과 동일 패턴. Svelte scoped CSS라 이식(신규 발명 아님). */
+  .badge {
+    display: inline-flex; align-items: center;
+    padding: 2px 8px; border-radius: var(--radius-sm);
+    font: var(--text-pc-script-12); white-space: nowrap; line-height: 1.6;
+  }
+  .badge-active { background: rgba(16,185,129,0.12); color: var(--cs-success-light); }
+  .badge-error  { background: rgba(255,53,53,0.10);  color: var(--cs-red-badge); }
   /* 인증분류(일반/학생/구독) — 위 grade-none/easy/pop/crazy(구독 탭 플랜 티어)와는 별개 */
   .grade-general    { background: var(--cs-surface-gray); color: var(--cs-text-mid); }
   .grade-student    { background: rgba(14,165,233,0.12);  color: var(--cs-info); }
@@ -2043,6 +2208,9 @@
 
   /* 수동 조정 */
   .adjust-section { display: flex; flex-direction: column; gap: 10px; }
+  /* 포인트이력 탭 전용 — 크레이지스코어 탭(.adjust-section 원본)은 그대로 두고 탭메뉴↔목록
+     상단 여백만 다른 카드목록 탭과 동일한 32px(panel-body 16px + 16px)로 통일 */
+  .points-adjust-section { margin-top: 16px; }
   .adjust-form { display: flex; flex-direction: column; gap: 8px; }
   .adjust-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
   .delta-wrap { display: flex; align-items: center; gap: 4px; }
@@ -2056,6 +2224,15 @@
 
   /* 감사 로그 */
   .audit-list { display: flex; flex-direction: column; gap: 6px; }
+  /* 포인트이력 탭 전용 — 크레이지스코어 탭(.audit-list 원본)은 그대로 두고 이 목록만
+     행간 여백 3배(6px→18px) 확대(Stephen 지시, 2026-09-14) */
+  .points-audit-list {
+    gap: 18px;
+    /* 포인트 추가 폼(.adjust-section) ↔ 목록 간 여백 — 공용 .panel-body gap:10px는 다른
+       탭과 공유라 그대로 두고, 이 목록에만 margin-top 추가. 2026-09-14 100% 확대 요청
+       2회 누적: 10px(기본) → 20px(1차, +10px) → 40px(2차, +30px) */
+    margin-top: 30px;
+  }
   .audit-row {
     display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
     padding: 6px 10px; background: var(--cs-surface-gray); border-radius: var(--radius-sm);
@@ -2068,12 +2245,17 @@
   .audit-date { color: var(--cs-text-light); flex-shrink: 0; }
 
   /* 구독 */
-  .subscription-notice { margin-bottom: 4px; }
+  .subscription-notice { margin-top: 16px; margin-bottom: 4px; }
   .sub-card {
-    border: 1px solid #ECEBF4; border-radius: var(--cms-radius-sm);
+    border-radius: var(--cms-radius-sm);
+    background: var(--cs-surface-gray);
     padding: 12px 14px; display: flex; flex-direction: column; gap: 6px;
+    transition: background 0.15s;
   }
-  .sub-card.sub-active { border-color: var(--cs-purple); }
+  .sub-card:hover { background: var(--cs-lilac); }
+  .sub-card.sub-active { background: var(--cs-purple-op10); }
+  .sub-card.sub-active:hover { background: var(--cs-purple-op10); }
+  .sub-card + .sub-card { margin-top: 10px; }
   .sub-row { display: flex; align-items: center; gap: 8px; }
   .sub-tier { }
   .sub-plan-link {
@@ -2116,6 +2298,13 @@
     cursor: pointer; transition: background 0.12s; white-space: nowrap;
   }
   .btn-primary:hover    { background: var(--cs-purple-hover); }
+  /* 포인트 추가 버튼 — 정사각 아이콘형(기존 .btn-primary 배경색 토큰 유지, 텍스트 대신 '+').
+     전역 .cms-shell .btn-primary(padding:0 30px 등)가 동일 명시도라 소스순서로 이겨버려서
+     .adjust-row 안에서만 적용되도록 컨텍스트 셀렉터로 명시도를 올림(!important 대신). */
+  .adjust-row .grant-submit-btn {
+    width: 44px; padding: 0; justify-content: center;
+    border-radius: var(--radius-sm); font-size: 20px; font-weight: 700; line-height: 1;
+  }
   .btn-primary:disabled { background: var(--cs-disabled-button); cursor: not-allowed; }
 
   .btn-secondary {
@@ -2167,6 +2356,10 @@
     box-sizing: border-box; resize: vertical;
   }
   .f-input:focus { outline: 2px solid var(--cs-purple); outline-offset: -2px; }
+  /* 포인트 추가 — 목록 행(.audit-row)과 동일하게 한 줄 병렬 배치(adjust-row 재사용).
+     .f-input의 width:100%보다 뒤에 와야 폭 지정이 실제로 적용됨(동일 명시도 순서 문제). */
+  .grant-amount-input { width: 110px; flex-shrink: 0; }
+  .grant-reason-input { flex: 1; min-width: 120px; }
 
   /* 공통 */
   .loading-text { font: var(--text-pc-script-12); color: var(--cs-text-light); padding: 12px 0; }
@@ -2236,6 +2429,7 @@
     cursor: pointer;
     white-space: nowrap;
     flex-shrink: 0;
+    margin-left: auto;
   }
   .btn-file-view:disabled { opacity: 0.35; cursor: not-allowed; }
   .btn-file-view:not(:disabled):hover { background: rgba(59,47,138,0.12); }
@@ -2262,7 +2456,10 @@
     gap: 4px;
     padding: 4px 0 8px;
   }
-  .doc-file-row { display: flex; align-items: center; gap: 8px; }
+  .doc-file-row {
+    display: flex; align-items: center; gap: 8px;
+    padding: 6px 10px; background: var(--cs-surface-gray); border-radius: var(--radius-sm);
+  }
   .doc-file-label {
     font: var(--text-pc-script-12);
     color: var(--cs-text-light);
@@ -2687,7 +2884,7 @@
   }
 
   /* 블랙리스트 탭 */
-  .bl-tab-section { display: flex; flex-direction: column; gap: 12px; }
+  .bl-tab-section { display: flex; flex-direction: column; gap: 12px; margin-top: 16px; }
 
   .bl-status-banner {
     display: flex;
@@ -2776,7 +2973,7 @@
   }
 
   /* 빠른문의 탭 */
-  .inquiry-tab-section { display: flex; flex-direction: column; gap: 6px; }
+  .inquiry-tab-section { display: flex; flex-direction: column; gap: 12px; margin-top: 16px; }
   .inq-loading, .inq-empty {
     font-family: 'Noto Sans KR', sans-serif;
     font-size: 13px;
@@ -2915,19 +3112,17 @@
   }
 
   /* 상품대여이력 탭 */
-  .rental-tab-section { display: flex; flex-direction: column; gap: 6px; }
+  .rental-tab-section { display: flex; flex-direction: column; gap: 12px; margin-top: 16px; }
   .rental-card {
     display: block;
     text-decoration: none;
-    border: 1px solid var(--cs-lilac);
     border-radius: var(--radius-sm);
-    background: var(--cs-white);
+    background: var(--cs-surface-gray);
     padding: 10px 14px;
-    transition: border-color 0.15s, box-shadow 0.15s;
+    transition: background 0.15s;
   }
   .rental-card:hover {
-    border-color: var(--cs-purple);
-    box-shadow: 0 2px 8px rgba(59,47,138,0.08);
+    background: var(--cs-lilac);
   }
   .rental-card-top {
     display: flex;
@@ -2972,15 +3167,13 @@
   .chat-card {
     display: block;
     text-decoration: none;
-    border: 1px solid var(--cs-lilac);
     border-radius: var(--radius-sm);
-    background: var(--cs-white);
+    background: var(--cs-surface-gray);
     padding: 10px 14px;
-    transition: border-color 0.15s, box-shadow 0.15s;
+    transition: background 0.15s;
   }
   .chat-card:hover {
-    border-color: var(--cs-purple);
-    box-shadow: 0 2px 8px rgba(59,47,138,0.08);
+    background: var(--cs-lilac);
   }
   .chat-card-top {
     display: flex;
