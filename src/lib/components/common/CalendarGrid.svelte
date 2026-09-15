@@ -22,6 +22,10 @@
     // isDateDisabled로 막힌 날짜를 클릭 시도했을 때 호출(2026-08-25) — past 날짜 클릭은
     // 대상 아님(기존 그대로 완전 비활성). 미전달 시 막힌 날짜는 기존처럼 순수 disabled만 유지
     onDisabledClick?: (iso: string) => void
+    // 휴무일 포함 배송 자동연장 미리보기 하이라이트(2026-09-12) — 선택 불가(disabled) 판정과
+    // 완전히 분리된 순수 시각 표시 전용. 미전달 시(기존 모든 호출부) 동작 100% 동일 —
+    // 하위호환 유지. 클릭·선택 가능 여부에는 전혀 관여하지 않는다(isDateDisabled와 무관).
+    highlightDates?: Set<string>
   }
 
   let {
@@ -35,6 +39,7 @@
     rangeEndLabel = '종료일',
     isDateDisabled,
     onDisabledClick,
+    highlightDates,
   }: Props = $props()
 
   // 종료일 대기 중(rangeStart는 있고 rangeEnd는 아직 없음) hover한 날짜를 임시 종료일처럼
@@ -132,10 +137,39 @@
     return y < minY || (y === minY && m < minM)
   }
 
-  // 항상 현재 보고 있는 연도(viewYear)를 중심으로 -5~+5년 노출
-  const yearRange = $derived(Array.from({ length: 11 }, (_, i) => viewYear - 5 + i))
+  // 연도 목록 — MUI 스타일 참고(2026-09-15, Stephen 첨부 이미지): 4행 그리드에 today
+  // 기준 -100년~+30년을 채워 넣고, 팝업 폭 안에서 좌우로 스크롤해 더 먼 연도를 탐색한다.
+  // 선택된 연도만 채워진 원으로 강조 — 나머지는 평범한 텍스트(거리별 색상 단계는 두지
+  // 않고, 스크롤 컨테이너 자체의 좌우 mask-image 페이드로 "더 있음"을 암시).
+  const YEAR_LIST_PAST = 100
+  const YEAR_LIST_FUTURE = 30
+  const allYears = Array.from(
+    { length: YEAR_LIST_PAST + YEAR_LIST_FUTURE + 1 },
+    (_, i) => today.getFullYear() - YEAR_LIST_PAST + i,
+  )
 
-  function toggleYearPicker() { showMonthPicker = false; showYearPicker = !showYearPicker }
+  let yearScrollEl = $state<HTMLDivElement | null>(null)
+  // 좌우로 슬라이드(스크롤)하는 동안에만 옅은 화살표를 부드럽게 노출 — 평소엔 숨겨뒀다가
+  // 스크롤 이벤트가 발생하는 즉시 나타나고, 150ms 이상 스크롤이 없으면 다시 사라짐
+  let isYearScrolling = $state(false)
+  let yearScrollIdleTimer: ReturnType<typeof setTimeout> | null = null
+
+  function onYearScroll() {
+    isYearScrolling = true
+    if (yearScrollIdleTimer) clearTimeout(yearScrollIdleTimer)
+    yearScrollIdleTimer = setTimeout(() => { isYearScrolling = false }, 150)
+  }
+
+  function toggleYearPicker() {
+    showMonthPicker = false
+    showYearPicker = !showYearPicker
+    if (showYearPicker) {
+      requestAnimationFrame(() => {
+        yearScrollEl?.querySelector('.cal-quick-item-active')
+          ?.scrollIntoView({ inline: 'center', block: 'nearest' })
+      })
+    }
+  }
   function toggleMonthPicker() { showYearPicker = false; showMonthPicker = !showMonthPicker }
 
   function pickYear(y: number) {
@@ -176,69 +210,96 @@
     <div class="cal-title-group">
       <button type="button" class="cal-title-btn" onclick={toggleYearPicker}>{viewYear}년</button>
       <button type="button" class="cal-title-btn" onclick={toggleMonthPicker}>{MONTHS[viewMonth]}</button>
-      {#if showYearPicker}
-        <div class="cal-quick-picker cal-quick-picker-year" role="listbox" aria-label="연도 선택">
-          {#each yearRange as y (y)}
-            <button type="button" class="cal-quick-item" class:cal-quick-item-active={y === viewYear}
-              disabled={isYearDisabled(y)} onclick={() => pickYear(y)}>{y}</button>
-          {/each}
-        </div>
-      {/if}
-      {#if showMonthPicker}
-        <div class="cal-quick-picker cal-quick-picker-month" role="listbox" aria-label="월 선택">
-          {#each MONTHS as label, m (m)}
-            <button type="button" class="cal-quick-item" class:cal-quick-item-active={m === viewMonth}
-              disabled={isMonthDisabled(viewYear, m)} onclick={() => pickMonth(m)}>{label}</button>
-          {/each}
-        </div>
-      {/if}
     </div>
     <button class="cal-nav" onclick={nextMonth} aria-label="다음 달">
       <svg width="8" height="14" viewBox="0 0 8 14" fill="none"><path d="M1 1L7 7L1 13" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"/></svg>
     </button>
   </div>
 
-  <div class="cal-grid">
-    {#each DAYS as d, i}
-      <span class="cal-dow" class:cal-dow-sun={i===0} class:cal-dow-sat={i===6}>{d}</span>
-    {/each}
-    {#each calDays(viewYear, viewMonth) as day}
-      {#if day === null}
-        <span></span>
-      {:else}
-        {@const iso = fmtDate(viewYear, viewMonth, day)}
-        {@const past = isPastDay(iso)}
-        {@const holidayDisabled = !past && (isDateDisabled?.(iso) ?? false)}
-        {@const sel = value === iso}
-        {@const dow = new Date(iso).getDay()}
-        {@const previewEnd = rangeEnd || (rangeStart && hoverIso && hoverIso >= rangeStart ? hoverIso : '')}
-        {@const isRangeStart = rangeStart !== '' && rangeStart === iso}
-        {@const isRangeEnd = previewEnd !== '' && previewEnd === iso}
-        {@const isInRange = rangeStart !== '' && previewEnd !== '' && iso > rangeStart && iso < previewEnd}
-        <button
-          class="cal-day"
-          class:cal-day-sel={sel}
-          class:cal-day-past={past}
-          class:cal-day-holiday={holidayDisabled}
-          class:cal-day-sun={dow === 0}
-          class:cal-day-sat={dow === 6}
-          class:cal-day-range-start={isRangeStart}
-          class:cal-day-range-end={isRangeEnd}
-          class:cal-day-in-range={isInRange}
-          disabled={past}
-          aria-disabled={holidayDisabled}
-          title={holidayDisabled ? '선택할 수 없는 날짜입니다' : undefined}
-          onclick={() => holidayDisabled ? onDisabledClick?.(iso) : onselect(iso)}
-          onmouseenter={() => { hoverIso = iso }}
-          onmouseleave={() => { hoverIso = null }}
-        >{day}</button>
-      {/if}
-    {/each}
+  <!-- 연도 레이어 전환 시 달력 모달 높이가 줄어들지 않도록 이 바깥 래퍼에만 min-height를
+       둔다 — .cal-grid(그리드 컨테이너) 자체에 min-height를 주면 auto 행이 늘어난 공간만큼
+       늘어나 stretch되고, aspect-ratio:1인 .cal-day가 그 늘어난 높이를 따라 폭까지 함께
+       커져 그리드 밖으로 넘치는 결함이 있었다(2026-09-15 실측으로 원인 확인·수정 —
+       .cal-grid의 grid-template-columns/gap 등 기존 로직은 전혀 변경하지 않음). -->
+  <div class="cal-date-area">
+  {#if showYearPicker}
+    <div class="cal-year-panel">
+      <div
+        class="cal-year-scroll-h"
+        role="listbox"
+        tabindex="-1"
+        aria-label="연도 선택 — 좌우로 스크롤하면 다른 연도로 이동합니다"
+        bind:this={yearScrollEl}
+        onscroll={onYearScroll}
+      >
+        {#each allYears as y (y)}
+          <button type="button" class="cal-quick-item cal-year-item" class:cal-quick-item-active={y === viewYear}
+            disabled={isYearDisabled(y)} onclick={() => pickYear(y)}>{y}</button>
+        {/each}
+      </div>
+      <div class="cal-scroll-edge cal-scroll-edge-left" class:cal-scroll-edge-visible={isYearScrolling} aria-hidden="true">‹</div>
+      <div class="cal-scroll-edge cal-scroll-edge-right" class:cal-scroll-edge-visible={isYearScrolling} aria-hidden="true">›</div>
+    </div>
+  {:else if showMonthPicker}
+    <div class="cal-month-grid" role="listbox" aria-label="월 선택">
+      {#each MONTHS as label, m (m)}
+        <button type="button" class="cal-quick-item cal-month-item" class:cal-quick-item-active={m === viewMonth}
+          disabled={isMonthDisabled(viewYear, m)} onclick={() => pickMonth(m)}>{label}</button>
+      {/each}
+    </div>
+  {:else}
+    <div class="cal-grid">
+      {#each DAYS as d, i}
+        <span class="cal-dow" class:cal-dow-sun={i===0} class:cal-dow-sat={i===6}>{d}</span>
+      {/each}
+      {#each calDays(viewYear, viewMonth) as day}
+        {#if day === null}
+          <span></span>
+        {:else}
+          {@const iso = fmtDate(viewYear, viewMonth, day)}
+          {@const past = isPastDay(iso)}
+          {@const holidayDisabled = !past && (isDateDisabled?.(iso) ?? false)}
+          {@const sel = value === iso}
+          {@const dow = new Date(iso).getDay()}
+          {@const previewEnd = rangeEnd || (rangeStart && hoverIso && hoverIso >= rangeStart ? hoverIso : '')}
+          {@const isRangeStart = rangeStart !== '' && rangeStart === iso}
+          {@const isRangeEnd = previewEnd !== '' && previewEnd === iso}
+          {@const isInRange = rangeStart !== '' && previewEnd !== '' && iso > rangeStart && iso < previewEnd}
+          {@const adjHoliday = !sel && (highlightDates?.has(iso) ?? false)}
+          <button
+            class="cal-day"
+            class:cal-day-sel={sel}
+            class:cal-day-past={past}
+            class:cal-day-holiday={holidayDisabled}
+            class:cal-day-adj-holiday={adjHoliday}
+            class:cal-day-sun={dow === 0}
+            class:cal-day-sat={dow === 6}
+            class:cal-day-range-start={isRangeStart}
+            class:cal-day-range-end={isRangeEnd}
+            class:cal-day-in-range={isInRange}
+            disabled={past}
+            aria-disabled={holidayDisabled}
+            title={holidayDisabled ? '선택할 수 없는 날짜입니다' : (adjHoliday ? '휴무일 — 무료로 대여기간에 포함됩니다' : undefined)}
+            onclick={() => holidayDisabled ? onDisabledClick?.(iso) : onselect(iso)}
+            onmouseenter={() => { hoverIso = iso }}
+            onmouseleave={() => { hoverIso = null }}
+          >{day}</button>
+        {/if}
+      {/each}
+    </div>
+  {/if}
   </div>
 </div>
 
 <style>
   .cal-root { width: 100%; }
+
+  /* 날짜 그리드(.cal-grid) ↔ 연도 레이어(.cal-year-panel) 전환 시 달력 모달 높이가 흔들리지
+     않도록 하는 순수 블록 래퍼. 292px는 이 컴포넌트가 실제로 그리는 날짜 그리드 최대
+     케이스(6주 표기 달, 7행×7열=49셀) 실측값 — .cal-grid 자체에는 절대 높이 제약을 주지
+     않는다(그리드 컨테이너에 직접 주면 auto 행이 stretch되어 aspect-ratio:1인 .cal-day
+     폭까지 함께 커지는 결함이 있었음, 2026-09-15). */
+  .cal-date-area { min-height: 292px; }
 
   .cal-header {
     display: flex;
@@ -282,24 +343,6 @@
   }
   .cal-title-btn:hover { background: var(--cs-lilac); }
 
-  .cal-quick-picker {
-    position: absolute;
-    top: calc(100% + 4px);
-    left: 0;
-    z-index: 30;
-    display: grid;
-    grid-template-columns: repeat(3, 1fr);
-    gap: 2px;
-    max-height: 220px;
-    overflow-y: auto;
-    padding: 6px;
-    background: var(--cs-white);
-    border: 1.5px solid rgba(59, 47, 138, 0.2);
-    border-radius: var(--radius-sm);
-    box-shadow: 0 8px 24px rgba(16, 11, 50, 0.12);
-  }
-  .cal-quick-picker-month { grid-template-columns: repeat(4, 1fr); }
-
   .cal-quick-item {
     background: none;
     border: none;
@@ -314,6 +357,129 @@
   .cal-quick-item:hover:not(:disabled) { background: var(--cs-lilac); }
   .cal-quick-item-active { background: var(--cs-purple); color: var(--cs-white); font-weight: 700; }
   .cal-quick-item:disabled { color: var(--cs-text-placeholder); cursor: not-allowed; }
+
+  /* 연도 목록 — MUI 연도선택 참고(2026-09-15 첨부 이미지) + 날짜 그리드(.cal-grid)와 같은
+     자리·크기를 차지하도록 확대(2026-09-15 후속: "작아서 모바일에서 쓰기 힘들다" 피드백).
+     팝업으로 띄우지 않고 .cal-grid와 형제 요소로 조건부 렌더링해 정확히 같은 폭을 차지한다.
+     높이(292px)는 이 컴포넌트가 실제로 그리는 날짜 그리드의 최대 케이스(6주 표기 달,
+     7행×7열=49셀 실측값)에 맞춘 값 — 어떤 달에서 열든 연도 레이어 전환 시 달력 모달의
+     상하 크기가 줄어들지 않도록 날짜 그리드 쪽 높이를 절대 초과하지 않는 하한선으로 고정
+     (2026-09-15 "달력 상하폭을 줄이지 말라" 피드백 대응). */
+  .cal-year-panel {
+    position: relative;
+    overflow: hidden;
+  }
+  .cal-year-scroll-h {
+    display: grid;
+    grid-auto-flow: column;
+    /* 4열×3행(월 레이어와 동일 비율, 2026-09-15) — 한 화면에 4열이 온전히 보이도록
+       grid-auto-columns도 월 레이어 컬럼 폭에 맞춰 재계산, 나머지는 좌우 스크롤로 탐색 */
+    grid-template-rows: repeat(3, 1fr);
+    grid-auto-columns: 52px;
+    height: 292px;
+    gap: 14px;
+    overflow-x: auto;
+    padding: 20px 24px;
+    scrollbar-width: none;
+    /* 좌우 끝이 배경으로 옅게 사라지도록 마스킹 — "더 스크롤할 수 있다"는 암시 */
+    -webkit-mask-image: linear-gradient(to right, transparent, black 10%, black 90%, transparent);
+    mask-image: linear-gradient(to right, transparent, black 10%, black 90%, transparent);
+  }
+  .cal-year-scroll-h::-webkit-scrollbar { display: none; }
+
+  /* 연도 항목은 날짜 영역만큼 커진 자리에 맞춰 터치 타겟을 44px 이상으로 확대, 4x4 배열에
+     상하좌우 여백(위 gap·padding)을 넉넉히 둠. 기본 굵기는 날짜 그리드(.cal-day, 500)와
+     맞춰 가볍게 — 선택값(cal-quick-item-active)만 굵게+원형으로 강조(첨부 이미지 스타일).
+     이전에는 본문용 --text-pc-body-14(무게 700)를 그대로 써서 큰 원형 버튼 안 숫자가
+     불필요하게 두꺼워 보였음(2026-09-15 "폰트가 촌스럽다" 피드백 — font-family 자체는
+     앱 전역 토큰(--font-kr, Noto Sans KR)과 동일함을 실측 확인, 무게만 조정) */
+  .cal-year-item {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0;
+    min-height: 44px;
+    font-size: 16px;
+    font-weight: 500;
+    line-height: 1;
+  }
+  /* 선택되지 않은 연도만 그레이 톤으로 — 선택된 연도(.cal-quick-item-active)는 원형 보라
+     배경 위 흰 글자를 그대로 유지해야 하므로 :not()으로 분리(클래스 2개 특이성으로 순서와
+     무관하게 항상 이 규칙이 이김) */
+  .cal-year-item:not(.cal-quick-item-active) { color: var(--cs-text-mid); }
+  .cal-year-scroll-h .cal-quick-item-active {
+    border-radius: 50%;
+    width: 58px;
+    height: 58px;
+    justify-self: center;
+    align-self: center;
+    /* 첨부 이미지 피드백(2026-09-15) — 진한 --cs-purple 대신 한 단계 옅은 purple-60%
+       토큰으로 원 배경을 교체(흰 글자 대비는 유지). 월 목록의 사각형 강조(.cal-quick-item-
+       active 기본값)는 그대로 --cs-purple 유지 — 이 선택자로만 연도 원형에 한정 적용 */
+    background: var(--cs-purple-light);
+  }
+
+  /* 좌우 슬라이드(스크롤) 중에만 부드럽게 나타나는 옅은 화살표(2026-09-15) — 평소엔
+     opacity:0으로 숨어있다가 스크롤 이벤트가 발생하는 동안 fade-in, 스크롤이 멈추고
+     150ms 지나면 다시 fade-out(onYearScroll 참고) */
+  .cal-scroll-edge {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    width: 30px;
+    display: flex;
+    align-items: center;
+    font-size: 18px;
+    font-weight: 700;
+    color: var(--cs-text-mid);
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.3s ease;
+  }
+  .cal-scroll-edge-visible { opacity: 1; }
+  .cal-scroll-edge-left {
+    left: 0;
+    justify-content: flex-start;
+    padding-left: 6px;
+    background: linear-gradient(to right, var(--cs-white) 45%, rgba(255, 255, 255, 0));
+  }
+  .cal-scroll-edge-right {
+    right: 0;
+    justify-content: flex-end;
+    padding-right: 6px;
+    background: linear-gradient(to left, var(--cs-white) 45%, rgba(255, 255, 255, 0));
+  }
+
+  /* 월 선택 — 연도 레이어와 동일한 언어로 통일(2026-09-15): 날짜 그리드(.cal-grid)와 같은
+     자리를 차지(.cal-date-area가 292px 하한선을 공유), 4열×3행 고정 12개라 스크롤은 필요
+     없음. 선택값은 연도와 동일한 크기·색의 원형(purple-light) 강조, 나머지는 그레이 톤. */
+  .cal-month-grid {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    grid-template-rows: repeat(3, 1fr);
+    height: 292px;
+    gap: 14px;
+    padding: 20px 24px;
+  }
+  .cal-month-item {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0;
+    min-height: 44px;
+    font-size: 16px;
+    font-weight: 500;
+    line-height: 1;
+  }
+  .cal-month-item:not(.cal-quick-item-active) { color: var(--cs-text-mid); }
+  .cal-month-grid .cal-quick-item-active {
+    border-radius: 50%;
+    width: 58px;
+    height: 58px;
+    justify-self: center;
+    align-self: center;
+    background: var(--cs-purple-light);
+  }
 
   /* 범위 요약 핀(2026-08-18) — Airbnb류 "체크인/체크아웃" 헤더 패턴. 종료일 미확정 구간은
      핀을 강조색으로 채워 "지금 이 값을 고르는 중"임을 명시적으로 안내 */
@@ -411,6 +577,17 @@
   .cal-day-holiday { color: var(--cs-text-placeholder); cursor: not-allowed; text-decoration: line-through; }
   .cal-day-sun:not(.cal-day-past) { color: var(--cs-red-badge); }
   .cal-day-sat:not(.cal-day-past) { color: var(--cs-purple); }
+
+  /* 휴무일 포함 배송 자동연장 미리보기 하이라이트(2026-09-12) — 선택 불가(cal-day-holiday)와
+     완전히 다른 개념: 차단이 아니라 "현재 선택한 날짜 때문에 무료로 대여기간에 포함되는
+     휴무일"을 원형 배경으로 안내. cal-day-sel(!important)이 있으면 항상 그쪽이 우선하도록
+     class 자체를 !sel일 때만 부여함(above 마크업) — 여기서는 단순 배경색만 정의. */
+  .cal-day-adj-holiday {
+    background: var(--cs-purple-light);
+    color: var(--cs-white);
+    font-weight: 700;
+  }
+  .cal-day-adj-holiday:hover:not(:disabled) { background: var(--cs-purple-light); }
 
   /* 대여~반납 기간 범위 밴드(2026-08-17, 2026-08-18 전면 재작업)
      — 시작·끝은 채워진 원, 사이 날짜는 연속된 배경 밴드.

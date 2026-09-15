@@ -413,14 +413,7 @@
   let identityVerifiedAt = $state(profile?.identity_verified_at ?? null)
   let identityType       = $state<string[]>(profile?.identity_type ?? [])
   let showIdentityForm   = $state(false)
-  let identitySlotFiles    = $state<Record<string, File>>({})
-  let identitySlotPreviews = $state<Record<string, string | null>>({})   // null = PDF(썸네일 없음)
-  let identityDragOverSlot = $state<string | null>(null)
-  let isUploadingId      = $state(false)
-  let identityError      = $state('')
   let isDeletingIdentity = $state(false)
-
-  const identityFilledCount = $derived(IDENTITY_TYPES.filter(t => identitySlotFiles[t.value]).length)
 
   $effect(() => {
     identityDocUrls    = profile?.identity_doc_url     ?? []
@@ -437,99 +430,22 @@
     return profile?.identity_type?.[i] ?? null
   }
 
-  function resetIdentitySlots(): void {
-    identitySlotFiles    = {}
-    identitySlotPreviews = {}
-    identityDragOverSlot = null
-    identityError        = ''
-  }
-
-  function setIdentitySlotFile(typeValue: string, file: File): void {
-    identityError = ''
-    const result = validateUploadFile(file)
-    if (!result.ok) { identityError = result.error ?? ''; return }
-    if (file.size > IDENTITY_MAX_FILE_SIZE) { identityError = '파일 크기는 10MB 이하여야 합니다.'; return }
-    identitySlotFiles    = { ...identitySlotFiles, [typeValue]: file }
-    identitySlotPreviews = { ...identitySlotPreviews, [typeValue]: file.type === 'application/pdf' ? null : URL.createObjectURL(file) }
-  }
-
-  function handleIdentitySlotFileChange(e: Event, typeValue: string): void {
-    const input = e.target as HTMLInputElement
-    if (input.files && input.files[0]) setIdentitySlotFile(typeValue, input.files[0])
-    input.value = ''
-  }
-
-  function removeIdentitySlotFile(typeValue: string): void {
-    const restFiles = { ...identitySlotFiles }
-    const restPreviews = { ...identitySlotPreviews }
-    delete restFiles[typeValue]
-    delete restPreviews[typeValue]
-    identitySlotFiles    = restFiles
-    identitySlotPreviews = restPreviews
-  }
-
-  function handleIdentitySlotDragOver(e: DragEvent, typeValue: string): void {
-    e.preventDefault()
-    identityDragOverSlot = typeValue
-  }
-
-  function handleIdentitySlotDragLeave(typeValue: string): void {
-    if (identityDragOverSlot === typeValue) identityDragOverSlot = null
-  }
-
-  function handleIdentitySlotDrop(e: DragEvent, typeValue: string): void {
-    e.preventDefault()
-    identityDragOverSlot = null
-    const file = e.dataTransfer?.files?.[0]
-    if (file) setIdentitySlotFile(typeValue, file)
-  }
-
-  async function uploadIdentityDoc() {
-    if (identityFilledCount === 0) { identityError = '증명서를 1개 이상 등록해 주세요.'; return }
-    isUploadingId = true
-    identityError = ''
-    const fd = new FormData()
-    fd.set('type', 'identity')
-    // front-uiux.md §22-5 — 같은 루프 안에서 file/type을 함께 append해 순서를 보장한다
-    for (const t of IDENTITY_TYPES) {
-      const f = identitySlotFiles[t.value]
-      if (!f) continue
-      fd.append('file', f)
-      fd.append('identity_type', t.value)
-    }
-    try {
-      const res  = await fetch('/api/profile/upload-doc', { method: 'POST', body: fd })
-      const data = await res.json() as { ok: boolean; docUrls?: string[]; error?: string }
-      if (!data.ok) {
-        identityError = data.error ?? '업로드 실패'
-        csToast.error(identityError)
-        return
-      }
-      csToast.success('본인증명이 등록되었습니다.')
-      showIdentityForm = false
-      resetIdentitySlots()
-      await invalidateAll()
-      await tick()
-      docCardEl?.scrollIntoView({ block: 'nearest' })
-    } catch {
-      identityError = '네트워크 오류가 발생했습니다.'
-      csToast.error(identityError)
-    }
-    finally  { isUploadingId = false }
-  }
-
   function openIdentityDoc(url: string) {
     window.open(url, '_blank', 'noopener,noreferrer')
   }
 
-  function requestIdentityReRegister() {
-    csToast.warning('기존 정보를 삭제합니다.', {
-      actionLabel: '확인',
-      onClick: () => {
-        showIdentityForm = true
-        resetIdentitySlots()
-      },
-    })
+  // 외국인증명과 동일한 원칙으로 통일(2026-09-15) — 슬롯별 자동 병합 제출로 전환된 이후
+  // "재등록"을 눌러도 선택한 슬롯만 그 자리에서 즉시 교체될 뿐 나머지 유형은 보존되므로
+  // "기존 정보를 삭제합니다" 확인창은 더 이상 사실과 맞지 않는다(requestForeignReRegister
+  // 참고) — 문서를 열어보고 다시 닫을 수 있도록 cancelIdentityReRegister도 대칭으로 추가.
+  function requestIdentityReRegister(): void {
+    if (identityDocsBusy) return
+    showIdentityForm = true
+  }
+
+  function cancelIdentityReRegister(): void {
+    if (identityDocsBusy) return
+    showIdentityForm = false
   }
 
   /* ── 본인증명 "개별 수정 / 추가 등록" 병합(merge) 업로드 — 등록완료 카드를 통째로
@@ -589,6 +505,7 @@
       if (!data.ok) { csToast.error(data.error ?? '업로드 실패'); return }
       csToast.success(wasSingleEdit ? '수정되었습니다.' : '추가 등록되었습니다.')
       if (identitySingleEditType === editTypeAtStart) cancelIdentityMergeEdit()
+      showIdentityForm = false // 최초등록/재등록 슬롯에서 호출된 경우 등록완료 화면으로 전환(foreign과 동일 원칙)
       await invalidateAll()
       await tick()
       docCardEl?.scrollIntoView({ block: 'nearest' })
@@ -1411,65 +1328,38 @@
             </div>
           {/if}
         {:else}
-          <!-- 업로드 폼 (미등록 / 재등록 공통) — front-uiux.md §22-5 슬롯형 표준.
-               showIdentityForm true(재등록)와 미등록 상태가 동일한 폼이라 하나로 통합. -->
+          <!-- 업로드 폼 (미등록 / 재등록) — 외국인증명과 동일 원칙(버튼 없는 자동 병합
+               제출, 2026-09-15). 최초등록도 콤보없음 상태에 대한 병합과 동일하게 동작해
+               안전(autoSubmitIdentityMergeFile merge=true — foreign 쪽 선례 참고). -->
           <div class="doc-upload-wrap">
+            {#if identityDocUrls.length > 0}
+              <!-- "재등록" 진입 취소 — 등록된 문서가 있을 때만(되돌아갈 곳이 있을 때만) 노출 -->
+              <div class="doc-merge-head">
+                <button type="button" class="btn-doc-re" disabled={identityDocsBusy} onclick={cancelIdentityReRegister}>취소</button>
+              </div>
+            {/if}
             <div class="doc-slot-grid">
               {#each IDENTITY_TYPES as t (t.value)}
                 <div class="doc-slot">
-                  <label
-                    class="doc-file-label"
-                    class:drag-over={identityDragOverSlot === t.value}
-                    aria-disabled={isUploadingId}
-                    ondragover={(e) => handleIdentitySlotDragOver(e, t.value)}
-                    ondragleave={() => handleIdentitySlotDragLeave(t.value)}
-                    ondrop={(e) => handleIdentitySlotDrop(e, t.value)}
-                  >
+                  <label class="doc-file-label" aria-disabled={identityDocsBusy}>
                     <input
                       type="file"
                       class="sr-only"
-                      disabled={isUploadingId}
+                      disabled={identityDocsBusy}
                       accept="image/png,image/jpeg,image/webp,image/heif,image/heic,application/pdf"
-                      onchange={(e) => handleIdentitySlotFileChange(e, t.value)}
+                      onchange={(e) => handleIdentityMergeSlotFileChange(e, t.value)}
                     />
-                    {#if identitySlotFiles[t.value]}
-                      <span class="doc-file-btn doc-file-btn-filled">
-                        {#if identitySlotPreviews[t.value]}
-                          <img src={identitySlotPreviews[t.value]} alt="미리보기" class="doc-img-preview" />
-                        {:else}
-                          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
-                        {/if}
-                        <span class="doc-file-name">{identitySlotFiles[t.value]?.name}</span>
-                        <button
-                          type="button"
-                          class="doc-file-remove"
-                          disabled={isUploadingId}
-                          onclick={(e) => { e.preventDefault(); removeIdentitySlotFile(t.value) }}
-                          aria-label="파일 제거"
-                        >✕</button>
-                      </span>
-                    {:else}
-                      <span class="doc-file-btn">
+                    <span class="doc-file-btn">
+                      {#if identityMergeUploadingType === t.value}
+                        <span>업로드 중...</span>
+                      {:else}
                         <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><polyline points="16 16 12 12 8 16"/><line x1="12" y1="12" x2="12" y2="21"/><path d="M20.39 18.39A5 5 0 0 0 18 9h-1.26A8 8 0 1 0 3 16.3"/></svg>
                         <span>{t.label}</span>
-                      </span>
-                    {/if}
+                      {/if}
+                    </span>
                   </label>
                 </div>
               {/each}
-            </div>
-
-            {#if identityError}
-              <p class="doc-error" role="alert">{identityError}</p>
-            {/if}
-
-            <div class="doc-upload-btns">
-              <button
-                type="button"
-                class="btn-doc-upload"
-                onclick={uploadIdentityDoc}
-                disabled={isUploadingId || identityFilledCount === 0}
-              >{isUploadingId ? '업로드 중...' : '등록하기'}</button>
             </div>
           </div>
         {/if}
@@ -2613,13 +2503,6 @@
     color: #bbb;
     letter-spacing: -0.3px;
   }
-  .doc-img-preview {
-    max-height: 80px;
-    max-width: 100%;
-    border-radius: 10px;
-    object-fit: contain;
-  }
-
   /* 본인증명·외국인증명 — 문서 종류별 "파일등록" 슬롯 그리드 (front-uiux.md §22-5 표준)
      모바일: 1열 직렬 배열 / PC(≥768px): 2열 그리드로 확장 */
   .doc-slot-grid {
@@ -2627,49 +2510,6 @@
     grid-template-columns: 1fr;
     gap: 12px;
   }
-  .doc-file-btn-filled {
-    position: relative;
-    flex-direction: row;
-    gap: 8px;
-    min-height: 100px;
-    padding: 12px 32px 12px 12px;
-    border-style: solid;
-    border-color: #e0dff0;
-    background: #f6f6f6;
-    color: #444;
-    text-align: left;
-  }
-  .doc-file-btn-filled .doc-img-preview { max-height: 64px; }
-  .doc-file-btn-filled .doc-file-name { font-size: 12px; color: #444; }
-  .doc-file-btn-filled .doc-file-remove { position: absolute; top: 8px; right: 8px; }
-
-  .doc-file-name {
-    font-size: 9px;
-    color: #888;
-    line-height: 1.2;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    max-width: 100%;
-  }
-  .doc-file-remove {
-    position: absolute;
-    top: 2px;
-    right: 2px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    width: 18px;
-    height: 18px;
-    background: rgba(16,11,50,0.65);
-    color: white;
-    border: none;
-    border-radius: 50%;
-    font-size: 10px;
-    line-height: 1;
-    cursor: pointer;
-  }
-  .doc-file-remove:hover { background: #CF0000; }
 
   /* 오류 메시지 */
   .doc-error {
