@@ -292,13 +292,23 @@
 
     // 관리자(CMS) 화면은 새 창을 열지 않고 레이어 모달로 미리보기 — 팝업 제스처 소비 트릭 불필요.
     // 고객 화면은 기존 새 창 동작 그대로 유지.
+    // 2026-09-15(검증 지시로 발견·수정): canned_cta(빠른답변 CTA)만은 예외 — 예약·계약 등
+    // 다른 관리자용 카드와 달리 고객 개인정보 페이지가 아니라 관리자 본인이 직접 입력한
+    // 임의의 외부 링크라 "레이어 모달로 미리보기" 대상이 아니다(모달에 띄울 CMS 화면 자체가
+    // 없음). 관리자가 클릭해도 고객과 동일하게 그 링크가 새 탭으로 열려야 하므로, 팝업 차단
+    // 방지용 사전 오픈 트릭도 고객 경로와 동일하게 적용한다.
     let pendingWindow: Window | null = null
-    if (ctaUrl && !isAdmin) {
+    if (ctaUrl && (!isAdmin || payload.type === 'canned_cta')) {
       // 팝업 차단 방지(products.md QR-AUTO-1과 동일 패턴): await fetch 이후 window.open을
       // 호출하면 사용자 제스처 유효기간이 끝나 브라우저가 조용히 차단한다 — 클릭 직후(await 이전)
       // 빈 창을 먼저 열어 제스처를 소비해두고, 검증이 끝나면 그 창의 위치만 바꾼다.
-      // ctaUrl은 항상 자사 내부 경로라 noopener 없이 열어도 탭내빙 위험이 없음.
+      // 대부분의 ctaUrl은 자사 내부 경로지만 canned_cta는 관리자가 직접 입력한 임의의 외부
+      // 링크일 수 있어(2026-09-15 sp3-qa-agent 권고) 새 탭의 opener를 끊어 reverse
+      // tabnabbing을 막는다 — window.open()의 'noopener' 세 번째 인자는 반환값 자체를
+      // null로 만들어 이 pendingWindow 참조(나중에 .location.href로 실제 목적지를 넣는
+      // 용도)가 무효화되므로 쓸 수 없다. 대신 연 뒤 .opener = null로 동일한 효과만 얻는다.
       pendingWindow = window.open('', '_blank')
+      if (pendingWindow) pendingWindow.opener = null
     }
 
     // messageId가 있으면 서버에 만료 여부 재확인 (클라이언트 시계 신뢰 X)
@@ -344,7 +354,16 @@
       if (isAdmin) {
         // 카드 타입별로 모달에 마운트할 컴포넌트가 다르다 — 전부 null이어도 모달은 연다
         // ("관리 화면 정보 없음" 상태를 보여주기 위함, 고객 페이지로 조용히 폴백하지 않음).
-        if (payload.type === 'INQUIRY_REPLY_CARD') {
+        //
+        // 2026-09-15(검증 지시로 발견·수정): canned_cta는 위 원칙의 예외 — 관리 화면에
+        // 띄울 CMS 컴포넌트 자체가 없는 "관리자가 직접 입력한 임의 링크"라, 여기서 걸러지지
+        // 않으면 아래 else 분기로 떨어져 무조건 "관리 화면 정보 없음"만 뜨고 실제 링크는
+        // 영원히 열리지 않았다(고객 클릭 시 정상 동작과 비교해 발견). 예약 카드류와 달리
+        // 고객 개인정보 페이지로 새는 것도 아니므로 고객과 동일하게 새 탭으로 연다.
+        if (payload.type === 'canned_cta') {
+          if (pendingWindow) pendingWindow.location.href = ctaUrl
+          else window.open(ctaUrl, '_blank', 'noopener')
+        } else if (payload.type === 'INQUIRY_REPLY_CARD') {
           onctamodal?.({ kind: 'inquiry', title: ctaLabel })
         } else if (payload.type === 'COUPON_GIFT_CARD' || payload.type === 'coupon_issued') {
           onctamodal?.({ kind: 'coupon', title: ctaLabel })
