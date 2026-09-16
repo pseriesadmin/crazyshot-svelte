@@ -1,168 +1,228 @@
 # 세션 핸드오프 문서
-생성일: 2026-09-08
-갱신: 2026-09-08(후속 검증 세션) — 아래 "미해결 질문"(cart↔contract-data 쿠폰할인 정합성)
-      해소 + 병행 진행 중이던 free_shipping 쿠폰 세션의 otCouponDiscount 수정
-      커밋·Stage/Production 배포 완료까지 확인(§8 신규 추가)
-작업 범위: 전자계약(HTML/스프레드시트) CMS 관리 화면 개선 7건 + 실서버(Production) 검증 +
-          커밋/Vercel 배포 확인 — "대여관리" 세션(별도, GATE E 통과)과 함께 한 커밋으로 배포됨
-          + [후속] cart otCouponDiscount 실서버 반영 검증·QA게이트·배포확인(별도 세션)
+생성일: 2026-09-16
+이전 세션 기간: 2026-09-15 ~ 2026-09-16 (긴 연속 대화, 여러 아젠다 순차 처리)
+작업 범위: (1) CMS 휴무일 옵션↔장바구니 정합성 검증 및 "휴무일 포함 배송 자동연장 요금"
+          기능의 고립 worktree 병합·보안 긴급수정, (2) CMS 배송료 우대설정 UI 레이아웃 그룹화,
+          (3) 장바구니 달력 휴무일 색상 재설계 + CMS 안내 스크립트 신설 — **계획(Plan Mode)만
+          완료, 코드 구현은 미착수**(단, Plan Mode 종료 후 **다른 세션/Stephen이 계획서의
+          "PART A(CMS)"만 실제로 구현·Stage 적용 완료**한 상태로 확인됨 — 상세 §3 참고)
+
+⚠️ **이 문서를 읽는 새 세션에 가장 중요한 사실 하나**: 아래 3개 아젠다 중 (3)번은 이
+세션에서 코드를 작성하지 않았다(Plan Mode였고, 사용자가 ExitPlanMode를 두 번 거부함).
+그런데 대화 종료 시점에 git 워킹트리를 직접 대조한 결과, (3)번 계획서의 "PART A(CMS
+안내 스크립트 입력폼 + DB 컬럼 + RPC)" 부분이 **이미 구현되어 Stage DB에도 적용까지
+완료된 상태**로 발견됐다 — 이 세션이 한 것이 아니라 다른 세션(또는 Stephen 직접)이 계획
+파일(`/Users/stevenmac/.claude/plans/wobbly-cuddling-marble.md`)을 읽고 실행한 것으로
+추정된다. **"PART B"(달력 색상 재설계 + 카트 화면 안내문 노출)는 어디에도 구현되지 않은
+상태** — 이것이 다음 세션이 이어받을 가장 명확한 다음 작업이다.
 
 ---
 
-## 완료된 작업 (DONE) — 이 세션 몫
+## 완료된 작업 (DONE) — 이 세션이 직접 수행
 
-1. **실서버(Production) 예약 테스트로 HTML 계약서 발행·작성·발송 흐름 검증**
-   Claude Browser를 이 작업 1회에 한해 명시적으로 허용받아(CLAUDE.md 기본 금지 규칙의
-   예외 조건 ②) 신규 테스트 예약 생성 → 계약서 탭 → 발행 → 미리보기까지 직접 클릭
-   재현. 세션 기존 수정분(연락처·주소·금액·특이사항·CRITICAL REPEAT 발송차단 버그)이
-   실제 정상 동작함을 확인 + 신규 결함 3건 발견(아래 ②③④).
+### 1. "휴무일 포함 배송 자동연장 요금" 로직 — 고립 worktree 병합 + CRITICAL 보안 긴급수정
 
-2. **계약서발행일 필드 오표시 — 원인 규명·수정**
-   원인: 코드 버그가 아니라 Production `contract_templates`의 특정 템플릿 레코드
-   (`202609임대차계약서양식`)가 8차 변수배선 수정보다 먼저 생성돼, 저장된 본문에
-   여전히 옛 플레이스홀더(`{{수령일시}}`)를 담고 있었던 것 — 기본 템플릿 상수를 고쳐도
-   이미 저장된 기존 템플릿 행에는 소급 반영 안 됨(의도된 동작). Production DB에서 해당
-   템플릿의 저장된 본문을 정밀 문자열 치환으로 직접 수정(SQL UPDATE, 유일 매치 확인 후
-   실행) — `{{수령일시}}`→`{{계약서발행일}}`, 대여지점 셀도 `{{지점옵션}}`으로 교체.
-   Stage 쪽 동일 계열 템플릿은 이미 정상이라 조치 불필요.
+**배경**: Stephen이 `/cms/set/rental` "휴무일 제어 옵션"을 CMS에서 선택 영역으로 지정하며
+"최근 휴무일 걸친 대여 옵션 로직 구현했는데 미작동중"이라 신고. 조사 결과, 이 기능(2026-09-12
+설계, 계획서 `cheerful-nibbling-emerson.md`)이 **격리된 git worktree**
+(`.claude/worktrees/agent-a02b1ad185045b896`)에만 화면 코드로 존재하고, DB 마이그레이션만
+Stage에 이미 적용된 "반쪽 배포" 상태로 8일간 방치돼 있었음을 발견 — 그 사이 실사용 경로에서
+반납일이 화면 몰래 조용히 밀리는 부작용이 이미 발생 중이었음.
 
-3. **계약서 특약 클릭편집 모달을 "발행 전 미리보기"(template 모드)까지 확장**
-   기존엔 이미 발행된 계약(existing 모드)에서만 특이사항 셀 클릭편집이 동작 —
-   template 모드(발행 전 미리보기)에서도 똑같이 보이는데 클릭이 안 돼 혼란 유발.
-   `localContractId`/`effectiveContractId` 도입 + `applySelectedTemplate()`에
-   `specsOverride` 파라미터 추가해 template 모드에서도 클릭 시 즉시 발행
-   (init-contract+PATCH) 후 existing 모드로 전환하도록 확장.
+**조치**: Stephen 지시("기존 정상 구현되는 로직을 보존하며 안전하게")에 따라 worktree
+코드를 그대로 복사하지 않고, 그 사이(9/14) stage에 쌓인 다른 세션의 리팩터링
+(`sync_order_after_composition_change` 공용화 등)을 되돌리지 않도록 **현재 stage 최신본
+위에 수동으로 재통합**.
 
-4. **계약서 양식 편집 화면 "수정 저장" 버튼에 변경감지(isDirty) 게이팅 적용(flow/html)**
-   기존 spreadsheet 모드 전용이던 isDirty 게이팅을 flow(TipTap)/html 모드까지 확장 —
-   `ContractDocumentEditor.svelte`에 `onchange` 콜백 신규 추가(TipTap `onUpdate` 연결).
+**변경 파일**:
+- `supabase/migrations/20260915010000_501_holiday_extension_reintegration.sql` (신규) —
+  8일간 DB에만 살아있던 `is_courier_holiday`/`compute_holiday_extended_period`/
+  `create_hold_reservation`류/`compute_reservation_line_amount`를 그대로 역커밋
+- `supabase/migrations/20260915020000_502_sync_order_holiday_extra_fee.sql` (신규) —
+  원 설계(create_reservation_order 직접 가산)를 그대로 되살리지 않고, 9/14 리팩터링된
+  `sync_order_after_composition_change`(3개 호출부 공유) 위에 `holiday_extra_fee` 집계를
+  새로 재통합
+- `src/lib/utils/cartRentalFee.ts` — `calcHolidayExtension`/`calcHolidayExtraFee` 순수함수
+  신설(무료1일+나머지 50% 공식)
+- `src/lib/components/common/CalendarGrid.svelte` — `highlightDates` prop + `adjHoliday`
+  하이라이트(옅은 퍼플) 추가 — **✅ 이미 git에 커밋됨**(아래 §2 참고, 다른 세션의 커밋에
+  우연히 함께 포함됨, 충돌 없이 정상 보존 확인됨)
+- `src/routes/cart/+page.svelte` — `itemHolidayExtension`/`otHolidayExtraFee` 신설,
+  `promote_draft_reservation` 호출에 실제 pickup/return method 전달 추가, 캘린더
+  "차단→자동조정 안내" 교체, "휴무일 연장요금" 라인 추가 등
+- `src/routes/payment/success/dev/+page.svelte`, `+page.ts` — `holidayExtraFee` 표시 반영
+- `src/__tests__/services/holidayExtensionFee.test.ts` (신규, 23개 테스트)
+- `.claude/rules-ref/rental-fee-policy.md`(§5 신설, v1.1→v1.2), `.claude/rules-ref/rental-cms-settings.md`
+  (표B/표C 정정, v1.5→v1.6)
 
-5. **정산내역 할인·포인트 필드 "△"(차감) 표기 조건부화**
-   `formatDeltaAmount()` 신규 — 값이 0 이하/null이면 △ 없이, 0보다 크면 "△ " 접두.
-   템플릿의 정적 "△ " 텍스트 3곳 제거(할인 적용/포인트 사용/할인적용 금액).
+**🔴 CRITICAL 발견·긴급수정(sp3-qa-agent 1차 검수)**: Migration #501에서
+`compute_reservation_line_amount`를 반환타입 변경 때문에 `DROP FUNCTION`+`CREATE OR REPLACE`
+했는데, 인자 시그니처가 그대로였던 탓에 DROP이 실제로 기존 객체(및 그 위에 걸려있던
+service_role 전용 하드닝)를 삭제해버려, **비로그인 상태(anon key)로 남의 예약 금액을
+그대로 조회할 수 있는 구멍이 Stage에 잠깐 열렸다.** sp3-qa-agent가 실제 anon key로 직접
+호출해 재현 확인 → 즉시 `supabase/migrations/20260915030000_503_compute_reservation_line_amount_grant_fix.sql`
+로 권한 재적용 + Stage에서 재조회로 anon/PUBLIC 완전 제거 확인 + 관련 회귀 테스트 재실행.
+**교훈(다음 세션도 반드시 지킬 것)**: 반환 타입만 바뀌는 함수도 인자 시그니처가 동일하면
+`DROP FUNCTION`이 실제로 기존 객체·권한을 삭제한다 — DROP+CREATE가 필요한 모든 함수는
+재생성 직후 반드시 REVOKE/GRANT를 명시적으로 재적용하고 `information_schema.routine_privileges`로
+직접 재확인할 것.
 
-6. **계약서 양식 삭제 — 소프트 삭제 → 실제 DB 행 삭제(hard delete)로 전환**
-   Stephen 명시적 확정("목록에서만 제외 말고 실제 DB에서도 삭제되게 하라"). `softDelete`
-   액션을 `delete`로 개명 + 실제 `.delete()`로 변경. `contracts.template_id` FK
-   (`ON DELETE NO ACTION`)가 참조하는 계약이 있으면 사전에 count-check로 409 차단
-   (원시 FK 에러 노출 방지). 목록 카드마다 삭제 아이콘 버튼(`CmsDeleteButton`) 신규 배치
-   + 편집 패널 삭제버튼을 "수정 저장" 버튼 우측으로 재배치.
+**검증**: 회귀 스위트(cartRentalFee/cartShippingFee/deliveryCutoffHolidays 149개 +
+createHoldReservationWithShipment/checkoutReissueReservation/reservation/
+paymentContractOrderRedesign 등 79개+7 skip) 전부 GREEN, 실브라우저(로그인 세션) +
+DB 직접 시뮬레이션으로 종단 검증 완료. **Production은 무관(관련 함수·컬럼 전무 확인)**
+— 이번 사안 전부 Stage 전용.
 
-7. **계약서 미리보기 할인차감 계산식의 정률(%) 오판 버그 수정**
-   `contract-data/+server.ts`의 `resolveSelectedCouponDiscountAmount()`가
-   `discount_type==='fixed'`가 아니면 전부 정률(%)로 계산하던 옛 버그(cart/+page.svelte
-   `otCouponDiscount`의 원본 버그와 동일 계열)를 그대로 복제하고 있던 걸 발견·수정 —
-   fixed/percentage 외 타입(예: free_shipping)은 0으로 처리. **디스플레이 전용 필드임을
-   직접 확인**(`orderData?.final_amount`나 Toss 결제·환불 로직 어디에도 이 값이 흘러
-   들어가지 않음 — 실제 청구액과 무관, CMS 계약서 미리보기 표시값만 영향).
-
-### 커밋·배포
-
-- 커밋 `6f2e210`(stage) — 위 7건(이 세션) + "대여관리" 세션의 html 모드 전자계약
-  발행/서명 정합성 8건을 하나의 커밋으로 통합(Stephen 직접 실행).
-- Stage 배포: `dpl_8hqjNVHUXf2R23ueYjnZpbRWpcms` — **READY** 확인.
-- Production 배포: PR #257 자동 병합(`b1004e1`) → `dpl_HYc2ojJ159ZTS4ckgvg8iEuvm7q7`
-  — **READY** 확인(Vercel MCP `list_deployments`로 직접 조회, 두 배포 모두 정상).
-
-### 주요 변경 파일(이 세션 몫)
-
-- `src/lib/components/cms/ContractTemplatePanel.svelte` — isDirty 게이팅 + 삭제버튼 재배치
-- `src/lib/components/cms/contract-editor/ContractDocumentEditor.svelte` — onchange prop 신규
-- `src/routes/api/cms/reservations/[id]/contract-data/+server.ts` — formatDeltaAmount +
-  쿠폰할인 계산 버그 수정
-- `src/routes/cms/reservation/contracts/+page.svelte` — 목록 삭제 아이콘 신규
-- `src/routes/cms/reservation/contracts/+page.server.ts` — delete 액션(hard delete+FK체크)
-- `src/__tests__/server/contractAuthGates.test.ts` — delete 액션 리네임 + FK 차단 분기
-  단위테스트 2건 신규(36/36 GREEN)
-- `src/lib/components/cms/ContractTemplatePreviewModal.svelte` /
-  `src/lib/components/cms/RentalContractViewer.svelte` /
-  `src/lib/components/cms/contract-editor/templates/defaultRentalContractHtml.ts` —
-  **이 세션과 "대여관리" 세션이 같은 파일을 함께 수정**(특약 클릭편집 template모드
-  확장은 이 세션, 그 외 html 모드 발행/서명 정합성 8건은 대여관리 세션 — 커밋 시점엔
-  둘 다 GATE E 통과 상태라 문제없이 함께 포함됨)
+**⚠️ 현재 git 상태**: 위 코드 변경 중 `CalendarGrid.svelte`만 다른 세션의 커밋
+(`45f71f4`, 아래 §2)에 우연히 함께 포함되어 **이미 커밋됨**. 나머지(`cartRentalFee.ts`,
+`cart/+page.svelte`, `payment/success/dev/*`, 마이그레이션 3건, 테스트 파일, 문서 2건)는
+**아직 커밋되지 않은 상태**(git status에 M/?? 로 남아있음) — Stephen 직접 커밋 대기 중.
 
 ---
 
-## 완료된 작업 (DONE) — §8. 후속 검증 세션 몫 (2026-09-08, 이 HANDOFF과는 별도 세션)
+### 2. CMS "배송료 우대설정" UI 레이아웃 그룹화
 
-8. **cart otCouponDiscount 실서버(Production) 반영 검증 + QA게이트 + 배포확인**
-   위 "참고 — 병행 진행 중이던 다른 세션(쿠폰 free_shipping)"과 "미해결 질문"에서
-   남겨둔 대로, 별도 세션이 `cart/+page.svelte`의 `otCouponDiscount` 3-way 분기
-   수정을 완료했으나 **미커밋 상태로 방치**돼 있던 것을 후속 세션이 발견 — git/Vercel/
-   Supabase 직접 조회로 "로컬엔 있으나 Production에는 없음"을 실증한 뒤, sp3-qa-agent
-   독립 검수(GATE E 통과, 회귀 없음·`contract-data/+server.ts`와 완전 동일 로직 확인)를
-   거쳐 Stephen이 직접 커밋(`a49ab2e`, cart/+page.svelte 단독)·push·PR #258(stage→main)
-   병합(`f4145c8`) — Vercel 재조회로 **Stage(`dpl_31SE7vMATJQaS9AC3D8PeiJEK7HV`)·
-   Production(`dpl_5Fw3KQc74PUHEoCcX7TCtRjM72Nt`) 둘 다 READY 배포 완료** 최종 확인.
-   → 아래 "미해결 질문"·"참고 — 병행 진행 중이던 다른 세션" 두 항목 모두 이걸로 해소됨.
+`/cms/set/rental` "배송료 우대설정" 섹션의 입력폼(추가 UI)과 등록된 목록을 하나의
+`<div class="discount-tier-block">`로 그룹화 — 같은 파일 안에 이미 있던 "임시 휴무일 관리"
+섹션의 `.holiday-block` 패턴을 그대로 재사용, 신규 CSS 없이 구조적으로만 그룹화. 변경 파일:
+`src/routes/cms/set/rental/+page.svelte`. `npx svelte-check` 에러 없음 확인, 실브라우저
+DOM 구조 확인 완료.
+
+**현재 상태**: 아직 커밋되지 않음(같은 파일 안에 아래 §3의 "PART A" 구현과 함께 섞여 있음,
+diff 상 구분은 가능 — git diff로 두 변경 hunk가 명확히 분리돼 있음).
 
 ---
 
-## 진행 중 / 남은 작업
+## 계획만 완료, 코드 미착수 (Plan Mode) — 그러나 일부는 다른 경로로 이미 구현됨
 
-### NOW
-- 없음 — 이 세션이 맡은 7건 + 후속 검증 세션의 §8 모두 커밋·Stage/Production 배포
-  확인까지 완료.
+### 3. 장바구니 달력 "배송 휴무일" 색상 재설계 + CMS 안내 스크립트 신설
 
-### 참고 — 병행 진행 중이던 다른 세션(이 세션 담당 아님) — ✅ 후속 세션에서 완료·배포 확인됨
+Stephen 요청 3단계(구체적 날짜 예시로 색상 규칙을 직접 검증받음, `AskUserQuestion` 2라운드
+진행) 끝에 Plan Mode로 **PART A(CMS) / PART B(Front, 색상재설계+안내문 노출)** 로 분리한
+상세 계획서를 작성 — **계획서 원본**: `/Users/stevenmac/.claude/plans/wobbly-cuddling-marble.md`
+(다음 세션에서 필요 시 그대로 참고 가능, 아래 §확정된 색상 규칙에 전문 요약).
 
-- **쿠폰(free_shipping) 세션**: `cart/+page.svelte`의 `otCouponDiscount` 계산식이
-  동일 계열 버그(정액이 아니면 전부 정률로 계산 → free_shipping 쿠폰 선택 시 사실상
-  전액 무료가 되는 CRITICAL 가격결함)를 고치는 중이었음. 1차 커밋(`06f8de4`,
-  Stage+Production 적용 완료)은 라벨 표시 수정 + `coupons` 스키마 통일(discount_type에
-  `free_shipping` 정식 포함하도록 CHECK 제약 확장). 계산식 자체(`otCouponDiscount`)의
-  근본 수정은 이 핸드오프 작성 시점엔 "진행 중"으로 보였으나, 실제로는 **코드는 이미
-  작성돼 있었고 커밋만 누락된 상태**였음 — 위 §8에서 발견·QA·커밋·배포까지 전부 완료
-  (커밋 `a49ab2e`, Stage·Production 배포 READY 확인).
+`ExitPlanMode`를 두 번 호출했으나 **Stephen이 두 번 다 거부**(구체적 반려 사유는 채팅에
+명시되지 않음 — 다음 세션에서 방향을 다시 확인할 필요가 있을 수 있음). 이 세션은 그 이후
+plan 파일 수정 외 어떤 실제 코드도 작성하지 않았다.
+
+**그런데 git 워킹트리를 직접 대조한 결과(이 핸드오프 작성 중 발견)**:
+```
+✅ 계획서 "PART A"(CMS 쪽)만 이미 구현되어 있고 Stage DB에도 적용 완료 확인:
+   - supabase/migrations/20260916000000_505_delivery_cutoff_holiday_guide_text.sql
+     (신규 파일, 계획서 SQL과 거의 동일 — REVOKE/GRANT 하드닝까지 정확히 포함됨,
+     Stage에 이미 apply_migration 완료 확인: information_schema.routine_privileges
+     조회로 anon/PUBLIC 없이 authenticated/service_role만 있음을 직접 재확인)
+   - src/routes/cms/set/rental/+page.server.ts — DeliveryCutoffSettings 인터페이스에
+     holiday_guide_text 추가, load() select 확장, saveCutoffSettings 액션 확장
+   - src/routes/cms/set/rental/+page.svelte — "휴무일 제어 옵션" 섹션에
+     "배송 휴무일 안내 스크립트" textarea 신규 추가(shipping_guide와 동일 패턴 재사용)
+
+❌ 계획서 "PART B"는 어디에도 구현되지 않음(grep으로 직접 확인 — 전무):
+   - PART B-1(달력 색상 재설계: CalendarGrid.svelte의 warnSelected/cal-day-warn,
+     cart/+page.svelte의 경계일 계산) — 미착수
+   - PART B-2(카트 화면에서 holidayGuideText를 달력 하단에 노출) — 미착수
+     → 즉 지금 CMS에서 안내문을 입력·저장해도 카트 화면 어디에도 아직 표시되지 않는다
+       (§3의 "누가 구현했는지" 세션 자체가 PART B까지는 진행하지 않은 것으로 추정)
+```
+
+이 상태는 지난 세션의 "worktree 방치" 사고와 **동일한 클래스의 잠재 위험**이다 — DB/CMS
+쪽만 살아있고 프론트가 안 따라온 반쪽 배포. 단, 이번엔 아직 실사용 피해로 이어질 요소가
+없다(CMS 텍스트가 저장은 되지만 아무 곳에서도 읽지 않을 뿐, 잘못된 값이 은밀히 적용되는
+부작용은 없음) — 그래도 방치하지 말고 다음 세션에서 PART B를 마저 구현하거나, Stephen이
+PART A만으로 충분하다고 판단하면 계획을 축소 확정할 것.
+
+### 확정된 색상 규칙 (계획서 원문 요약 — Stephen이 구체적 날짜로 직접 검증)
+
+```
+H = 실제 휴무일. 수령 선택일 P=H+1(전날이 H), 반납 선택일 R=H-1(다음날이 H).
+① 선택일(P 또는 R) 자체 → 중간 레드(--cs-red-badge)
+② 흡수 구간을 지나 처음 만나는 정상 영업일(effectiveStart-1 / effectiveEnd+1, 연속
+   휴무일수와 무관하게 항상 딱 하루) → 옅은 퍼플(--cs-purple-light, 기존 cal-day-adj-holiday 재사용)
+③ H(휴무일 자체, 연속이면 그 전체 구간) → 색상 없음
+```
+
+**⛔ 핵심 구조적 함정(계획서에 상세 기록, 구현 시 반드시 먼저 읽을 것)**: 카트 달력에서
+"선택된 날짜" 원형 배경은 `.cal-day-sel`이 아니라 `.cal-day-range-start`/`.cal-day-range-end`의
+`::after` 가상요소가 그린다(카트가 항상 `selectedDate`와 `rangeStart`/`rangeEnd`를 동일값으로
+넘기기 때문). `.cal-day-sel`만 오버라이드하면 카트 화면에서 시각적으로 아무 효과가 없다 —
+반드시 `.cal-day-warn.cal-day-range-start::after`/`.cal-day-warn.cal-day-range-end::after`
+형태로 두 레이어 모두 오버라이드해야 한다. 계획서 원문에 정확한 CSS·코드 전문이 있음.
+
+---
+
+## 다음 세션이 즉시 이어받을 것 (NOW)
+
+- [ ] **Stephen에게 먼저 확인**: `/Users/stevenmac/.claude/plans/wobbly-cuddling-marble.md`의
+  PART B(색상 재설계 + 카트 안내문 노출)를 마저 구현할지, 아니면 이미 구현된 PART A만으로
+  이번 아젠다를 종료할지 방향 재확인. (지난 ExitPlanMode 2회 거부 사유가 채팅에 명시적으로
+  남아있지 않아, 방향이 바뀌었을 가능성도 있음 — 계획 자체를 재검토해야 할 수도 있음)
+- [ ] 위에서 "구현 진행"으로 확정되면: 계획서 PART B-1(CalendarGrid.svelte `warnSelected`
+  prop + `cal-day-warn` CSS + cart/+page.svelte 경계일 계산)부터 착수 — B-1은 B-2와
+  독립적으로 지금 바로 시작 가능
+- [ ] B-2(카트 안내문 노출)는 B-1과 별개로 진행 가능 — PART A(CMS)가 이미 완료돼 있으므로
+  `cart/+page.server.ts` load()에 `holiday_guide_text` 조회만 추가하면 바로 이어갈 수 있음
+- [ ] §1(holiday-extension merge)·§2(discount-tier-block)·§3의 PART A 구현분 전부가 아직
+  **git commit 미완료** 상태 — 다음 세션 시작 시 "이 세션'만'의 수정 파일" 요청이 들어오면
+  이 핸드오프의 파일 목록을 기준으로 정확히 골라 제안할 것(git status에는 다른 세션들의
+  무관한 변경 파일도 다수 섞여 있음, 아래 "반드시 주의할 점" 참고)
 
 ---
 
 ## 반드시 주의할 점
 
-1. **템플릿 DB 콘텐츠는 코드 수정과 별개로 소급 패치가 필요할 수 있음** — §2(계약서발행일)
-   패턴 참고. 새로 발견되는 오래된 템플릿에서 비슷한 "저장된 본문이 최신 코드 상수와
-   다름" 증상이 있으면 같은 방식(정밀 문자열 치환)으로 처리.
-2. **contract-data/+server.ts의 쿠폰할인 필드(§7)는 display-only임을 이미 확인** —
-   실제 청구·환불 로직(use_coupon RPC, pay-mock/pay-result)은 이번 세션에서 조사하지
-   않았음(중단 지시). 그 경로의 안전성이 궁금하면 별도로 조사 필요.
-3. **Claude Browser(mcp__Claude_Browser__*)는 기본 금지** — 이번 세션에서 실서버
-   예약 테스트 1건에 한해 명시적으로 허용받아 사용 후 종료. 다음 세션은 다시 기본값
-   (금지)으로 복귀 — 별도 요청 없이 자율적으로 켜지 말 것.
-4. **git add/commit/push는 Stephen 직접 실행 전용** — 이 세션 내내 텍스트 제안만
-   하고 실행하지 않는 원칙을 지켰음. 다음 세션도 동일하게.
-5. **공유 워킹트리에서 여러 세션이 동시에 같은 파일을 수정하는 상황이 실제로 자주
-   발생함** — 파일 수정 전 `git diff -- <file>`로 이미 다른 세션의 변경이 섞여있는지
-   먼저 확인하는 습관 유지할 것(이번 세션에서 `ContractTemplatePreviewModal.svelte`
-   등 3개 파일이 실제로 혼재됐었음).
+1. **git status에 이 세션과 무관한 파일이 다수 섞여 있다** — `ActionCard.svelte`,
+   `CmsDashboardConsultCards.svelte`, `CmsDashboardGantt.svelte`, `FeaturesTable.svelte`,
+   `AddressTabContent.svelte`, `CouponTabContent.svelte`, `LogTabContent.svelte`,
+   `ReviewTabContent.svelte`, `account/*`, `auth/login`, `chat/+page.svelte`, `crazylog/*`,
+   `hype-pack`, `products/*`, `subscribe/*` 등은 **이 세션이 만든 변경이 아니다**(대화 시작
+   시점부터 이미 dirty 상태였음 — 다른 병행 세션들의 작업). 커밋 제안 시 이 파일들을 섞지
+   말 것.
+2. **DROP FUNCTION + 인자시그니처 동일 = 기존 권한 삭제**(위 §1 CRITICAL 교훈) — 이 패턴을
+   또 만나면 반드시 REVOKE/GRANT 명시적 재적용 + 직접 재조회 확인.
+3. **다중 세션 동시 작업이 이 리포지토리의 상시 상태다** — CalendarGrid.svelte가 이 세션
+   작업 중에도 다른 세션에 의해 실시간으로 바뀌는 것을 직접 목격함(연/월 선택 UX 재설계,
+   커밋 `45f71f4`). 파일 수정 전 최신 상태를 다시 읽고, 겹치지 않는 영역인지 확인할 것.
+4. **PART A(CMS)가 이미 Stage DB에 적용되어 있다는 것을 모르고 마이그레이션을 중복 생성하지
+   말 것** — `delivery_cutoff_settings.holiday_guide_text` 컬럼과 4-param
+   `upsert_delivery_cutoff_settings`는 이미 존재한다(`information_schema`로 직접 확인 완료).
+5. Production은 이번 세션의 어떤 작업과도 무관 — 전부 Stage(`ezyvffjvuwmtuhpxdjrw`) 전용.
 
 ---
 
 ## 중요 결정 사항 (이번 세션에서 Stephen이 결정한 것)
 
-- **계약서 양식 삭제는 소프트 삭제가 아니라 실제 hard delete** — "목록에서만 제외
-  하지 말고 실제로 DB에서도 삭제되게 하라"고 두 차례에 걸쳐 명시적으로 확정.
-- **특약 클릭편집은 template 모드까지 기능 확장**(시각적 구분에 그치지 않고).
-- **쿠폰/free_shipping 결함 조사는 이 세션에서 중단** — "다른 세션에서 진행하니
-  여기서는 중지해."
+- 휴무일 자동연장 기능: "되돌리기"가 아니라 "마저 완성" — 단, worktree 코드를 그대로 복사하지
+  않고 현재 stage 최신본 위에 안전하게 재통합할 것.
+- 작업 중 임시로 CMS "휴무일 제한 방식"(is_courier_dependent) 토글을 잠깐 꺼뒀다가 작업 완료
+  후 원복(현재는 정상적으로 ON 상태로 복원됨, 확인 완료).
+- 달력 색상 재설계: 선택일=레드, 경계일 1개=퍼플(구체적 날짜 예시 3라운드로 직접 검증) — 이
+  규칙 자체는 확정됐으나, 실제 구현 여부(진행/보류)는 다음 세션에서 재확인 필요.
 
 ---
 
-## 미해결 질문 — ✅ 후속 세션에서 해소됨 (2026-09-08)
+## 미해결 질문 (더 이전 세션부터 계속 이월되고 있음 — 아직 아무도 답하지 않음)
 
-- ~~cart/+page.svelte(다른 세션 담당)의 `otCouponDiscount` 최종 수정본과
-  contract-data/+server.ts(§7, 이 세션 담당)의 동일 로직이 정확히 같은 분기 조건을
-  쓰는지~~ → **해소**: 두 파일을 직접 나란히 대조한 결과 `fixed → discount_value` /
-  `percentage → round(subtotal*value/100)` / `그외 → 0`으로 완전히 동일한 3-way 분기
-  확인. 단, 대조 시점에 `cart/+page.svelte` 쪽이 **미커밋 상태**였다는 것이 이 질문과
-  별개로 새로 드러난 사실이었고, 이후 sp3-qa-agent GATE E 통과 → 커밋(`a49ab2e`) →
-  Stage·Production 배포(READY)까지 완료해 실서버에도 반영됨을 확인(§8 참고).
+- `toggleSuspend`(`cms/accounts/list/+page.server.ts`)에 `delete`와 동일한 자기 자신
+  대상 차단 패턴이 없음 — 관리자가 실수로 자기 계정을 정지시키면 로그인 자체가 막히는
+  더 심각한 상황. 추가 여부 Stephen 확인 대기(여러 세션째 이월 중).
+- 배송료 우대설정 §2-b: "3일 이상 장기대여" 조건과 실제 12시간 블록 청구 단위 간의 일수
+  불일치 — 보고만 됨, 미수정.
+- §2-d: 최종 주문·결제 금액(배송비·할인 포함)이 client 계산값을 그대로 신뢰하며 서버측
+  독립 재검증이 없는 구조 — 이전 감사에서 가장 심각한 발견으로 보고됐으나 아직 미착수.
 
 ---
 
 ## 새 세션 시작 명령
 
-이 핸드오프 시점 기준 이 세션이 맡았던 작업 + 후속 검증 세션의 §8까지 전부 완료·
-배포됐습니다(위 "미해결 질문" 항목도 해소). 이어서 진행할 새 아젠다가 있다면 아래처럼
-시작하세요:
+아래를 새 채팅에 붙여넣으세요:
 
-B-START: (Stephen이 지정하는 다음 아젠다)
+```
+.claude/harness/HANDOFF.md 읽고 이어서 진행해줘.
+B-START: /Users/stevenmac/.claude/plans/wobbly-cuddling-marble.md의 PART B(달력 색상
+재설계 + 카트 안내문 노출)를 진행할지 Stephen에게 먼저 확인 후, 승인되면 PART B-1부터 구현.
+```
+
+---
+
+*HANDOFF.md 생성 2026-09-16 | Harness Flow v3.2 | 이 문서는 다음 세션이 최우선으로 확인함*

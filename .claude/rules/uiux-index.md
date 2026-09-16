@@ -5,10 +5,13 @@
 
 ## ⛔ 환경 분리 (절대 원칙)
 
-| 화면 | 정본 파일 | 로드 명령 |
+> 📌 **bds 약어 (2026-09-14)**: `cms bds` → `@.claude/rules-ref/cms-uiux.md` 즉시 로드 / `front bds` → `@.claude/rules-ref/front-uiux.md` 즉시 로드
+> `bds` = 표준 디자인 시스템 지침(Design System). 프롬프트에 `cms bds` 또는 `front bds`가 포함되면 해당 파일을 즉시 Read하고 작업에 반영할 것.
+
+| 화면 | 정본 파일 | 로드 명령 (bds 약어) |
 |---|---|---|
-| 사용자(USER) `/routes/` | `front-uiux.md` | `@.claude/rules-ref/front-uiux.md` |
-| 관리자(CMS) `/routes/cms/` | `cms-uiux.md` | `@.claude/rules-ref/cms-uiux.md` |
+| 사용자(USER) `/routes/` | `front-uiux.md` | `@.claude/rules-ref/front-uiux.md` (`front bds`) |
+| 관리자(CMS) `/routes/cms/` | `cms-uiux.md` | `@.claude/rules-ref/cms-uiux.md` (`cms bds`) |
 
 > 두 파일의 토큰을 절대 혼용하지 않는다. 같은 색상값이라도 역할이 다르다.
 

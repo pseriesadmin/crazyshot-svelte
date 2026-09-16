@@ -43,6 +43,26 @@
 실패 패턴 대조 포함) → 구현 후 즉시 재대조. 세션 시작 시 1회 확인으로 끝내지 말고, **매
 태스크마다** 반복 적용한다 — 이게 재작업 라운드와 토큰 낭비를 줄이는 핵심 장치다.
 
+⛔ **버튼·아이콘 작업 전 필수 도메인 규칙 선(先) 로드 (2026-09-14 강제화)**
+  - 📌 **bds 약어 (2026-09-14)**: `cms bds` = `@.claude/rules-ref/cms-uiux.md` 전체 즉시 로드 / `front bds` = `@.claude/rules-ref/front-uiux.md` 전체 즉시 로드
+  - USER 화면 버튼 신규 작성·수정 → `front bds` (`@.claude/rules-ref/front-uiux.md §5`) 즉시 로드
+  - CMS 화면 버튼 신규 작성·수정 → `cms bds` (`@.claude/rules-ref/cms-uiux.md §0-10`) 즉시 로드
+  - ❌ 버튼에 outline/border 추가 금지 — Ghost 버튼(`cs-btn-ghost`)만 예외
+  - ❌ 호버는 BG 색상 변경만 — outline·box-shadow 추가 절대 금지
+  - ❌ 리스트·아코디언 화살표 인라인 SVG 신규 작성 금지 → `ChevronIcon`(`$lib/components/common/ChevronIcon.svelte`) 사용
+  - ❌ 랜딩·이동 버튼 화살표 인라인 SVG 신규 작성 금지 → `Arrow02Icon`(`$lib/components/common/Arrow02Icon.svelte`) 사용
+  - ❌ 닫기 버튼에 SVG 아이콘 작성 금지 → ✕ 문자(`close-red`) 사용
+  - ⛔ **지침 파일을 실제로 Read(읽기)해야 함 — 기억·추론 값으로 작업 절대 금지**
+  - ⛔ **지침이 불확실하면 자의적 판단 금지 — 발견한 지침 후보를 전부 나열하고 Stephen에게 질문 후 진행**
+    예) "버튼 반경이 30px(front)인지 15px(CMS)인지 확실하지 않습니다. 어느 쪽을 적용할까요?"
+
+⛔ **UI 작업 의무 5단계 (버튼·아이콘 포함 모든 UI 작업, 2026-09-14 강제화)**
+  1. **화면 판별** — USER(`/routes/`) 인지 CMS(`/routes/cms/`) 인지 먼저 확인
+  2. **지침 파일 즉시 Read** — 해당 파일 섹션을 실제로 열어 읽기 (캐시·기억 값 사용 금지)
+  3. **지침에서 값 복사** — Read한 파일에서 직접 복사, 추론·재구성 금지
+  4. **불확실 항목 목록화** — 애매한 항목은 구현 전 Stephen에게 명시적으로 질문
+  5. **구현 후 지침 재대조** — 완성된 코드를 지침과 항목별로 대조 확인
+
 ---
 
 ## 현재 진행 상태
@@ -200,8 +220,8 @@ Class D (보안 위반) → 즉시 중단
 | CMS 대여관리 설정 ↔ 장바구니 연동 | `@.claude/rules-ref/rental-cms-settings.md` | `/cms/set/rental` 설정 화면 또는 장바구니 대여옵션(수령/반납 방식·배송료·휴무일·동의문 등) 로직 작업 시 |
 | 채팅 시스템 (PRD.1.7) | `@.claude/rules-ref/chat.md` | 채팅·세션·Realtime 작업 시 |
 | 자연어검색엔진 (NLSearch) | `@.claude/rules-ref/nlsearch.md` | NLSearch·자연어검색·상품검색 매칭·상담매칭·동의어학습 작업 시 |
-| CMS 화면 퍼블리싱 | `@.claude/rules-ref/cms-uiux.md` | CMS 컴포넌트·레이아웃 작업 시 |
-| 사용자 화면 퍼블리싱 | `@.claude/rules-ref/front-uiux.md` | USER 화면 UI 작업 시 |
+| CMS 화면 퍼블리싱 | `@.claude/rules-ref/cms-uiux.md` (`cms bds`) | CMS 컴포넌트·레이아웃 작업 시 |
+| 사용자 화면 퍼블리싱 | `@.claude/rules-ref/front-uiux.md` (`front bds`) | USER 화면 UI 작업 시 |
 | 공통 디자인 토큰 | `@.claude/rules-ref/uiux.md` | CSS 변수·토큰 확인 시 |
 | Figma → 코드 변환 | `@.claude/rules-ref/figma-publishing.md` | Figma 퍼블리싱 작업 시 |
 | Plannode JSON 수정 | `@.claude/rules-ref/plannode-update.md` | plannode-tree.json 작업 시 |

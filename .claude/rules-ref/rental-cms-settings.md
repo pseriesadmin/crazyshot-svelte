@@ -40,7 +40,7 @@
 | 배송 설정 — 요금 3종 | `rental_shipping_settings.enable_round_trip/round_trip_fee`, `.enable_delivery/delivery_fee`, `.enable_return/return_fee` | `s-chip`+숫자입력, blur 자동저장 (L410-493) | 배송대여 왕복/편도/반납 요금(원). 싱글톤 1행 | Stage: 왕복 8,000 / 배송 4,000 / 반납 4,000 (전부 활성) |
 | 배송 안내문 | `rental_shipping_settings.shipping_guide` | textarea+저장버튼 (L497-522) | 고객노출 배송 안내 문구 | — |
 | 배송료 우대설정 | `delivery_fee_discount_tiers.min_rental_amount/condition_types[]/discount_rate/is_active` | 금액입력+조건 다중선택(AND)+우대옵션 단일선택, 최대 5개 (L642-752) | 대여금액·조건 충족 시 배송비 할인. 다중매칭 시 최유리 1개만(스태킹 없음) | `long_term_rental`/`sale_only_purchase`/`rental_item` 3종 조건. 우대옵션 중 `기본왕복배송요금`(discount_rate=0)은 2026-09-15 Stephen 확정으로 신규 등록 비활성화(픽커 disabled + 서버단 차단) — `calcShippingDiscountRate()`의 `best` 초기값이 0이라 등록해도 실질 효과가 전혀 없었기 때문. 기존 데이터·라벨 매핑은 제거하지 않음(호환 유지) |
-| 휴무일 제어 옵션 | `delivery_cutoff_settings.enable_prev_day_check`(마스터)/`.enable_fixed_holidays`/`.enable_manual_holidays` | `s-chip` 3종, 마스터 off 시 하위 disabled (L772-796) | 택배 수령·반납 캘린더 휴무일 기반 제한 마스터+하위 스위치 | Stage: 3개 전부 false(배포 후 미사용 기본값) |
+| 휴무일 제어 옵션 | `delivery_cutoff_settings.enable_prev_day_check`(마스터)/`.enable_fixed_holidays`/`.enable_manual_holidays`/`.holiday_guide_text`(Migration #505, 2026-09-16) | `s-chip` 3종 + 안내문 textarea(200자, `shipping_guide`와 동일 저장버튼 패턴) (L772-833) | 택배 수령·반납 캘린더 휴무일 기반 제한 마스터+하위 스위치 + 자동연장 발생 시 `/cart` 달력 하단에 노출될 안내 문구(RPC `upsert_delivery_cutoff_settings` 4-param, 구 3-param 오버로드는 DROP됨) | Stage: 토글 3개 전부 false(배포 후 미사용 기본값), `holiday_guide_text` 기본값 `''`. ✅ `/cart` 쪽 실제 노출(B-2)도 2026-09-16(같은 날 후속) 구현·검증 완료 — `cart/+page.server.ts` load()가 독립 조회해 `holidayGuideText`로 전달, `cart/+page.svelte`가 달력이 열려있고 자동연장이 발동된 동안만 `.form-note`로 노출 |
 | 법정공휴일(읽기전용) | `public_holidays`(`holiday_type='national'`) | 읽기전용 리스트+"지금 동기화" 버튼(공공데이터포털 API) | 자동 동기화 국가 공휴일 | CMS에서 개별 삭제 불가 |
 | 임시 휴무일 관리 | `public_holidays`(`holiday_type='manual'`) | 날짜+사유 입력, 개별 삭제 가능 | 관리자 수동 등록 임시 휴무일 | — |
 | 지점 정보 등록 | `pickup_points.name/address/phone/contact_person/is_active` | 텍스트입력+추가(최대 20개), 아코디언 편집 (L968-1077) | 방문수령 지점 정보(고객 노출용) | — |
@@ -63,7 +63,7 @@
 | CMS 설정(테이블.컬럼) | 판정 함수 (file:line) | 장바구니 화면 효과 |
 |---|---|---|
 | `rental_method_options.is_bulk_delivery` | `isDeliveryLocked(m)` — `cart/+page.svelte:84-86` | ① 시간선택 버튼 숨김(`RentalForm` `{#if !locked && !courierRestricted}`) ② 반납방식 강제복사+잠금(`bulkHandleMethod`/`bulkHandleReturnMethod`) ③ 반납 콤보 UI `disabled`+회색 처리(`returnComboLocked`) — ⚠️ 2026-09-06 이전에는 ④ `calcShippingFee` 입력값(pickupIsDelivery/returnIsDelivery)도 이 플래그 기준이었으나, `is_bulk_delivery=false`인 실배송 방식을 선택해도 배송비가 0원으로 계산되는 CRITICAL 결함이 발견돼 `is_delivery_type` 기준으로 교체됨(아래 행 참고) — 이 플래그는 더 이상 배송비 계산에 관여하지 않음 |
-| `rental_method_options.is_courier_dependent` | `isCourierDependent(m)` — `cart/+page.svelte:104-106` | 캘린더 휴무일 차단(`CalendarGrid.isDateDisabled`, `courierClosedMap` 대조). `is_bulk_delivery`와 독립이지만 시간선택 숨김 조건에도 함께 관여 |
+| `rental_method_options.is_courier_dependent` | `isCourierDependent(m)` — `cart/+page.svelte:104-106` | ⛔ 2026-09-12부터 캘린더 **차단**이 아니라 **자동 연장**으로 교체됨(`calcHolidayExtension()`, `cartRentalFee.ts`) — 수령일 전날/반납일 다음날이 휴무일이면 선택은 그대로 허용. 2026-09-16 색상 재설계: 선택된 날짜(자동연장을 유발한 날) = 레드(`--cs-red-badge`, `CalendarGrid.svelte` 신규 `warnSelected` prop) · 구간 밖 첫 정상 영업일(경계 하루) = 퍼플(`--cs-purple-light`, `highlightDates`) · 흡수되는 휴무일 자체 = 무색. `is_bulk_delivery`와 독립이지만 시간선택 숨김 조건에도 함께 관여. 요금 효과는 `otHolidayExtraFee`(휴무일 연장요금, `rental-fee-policy.md` §5 정본) — 한쪽/양쪽 연장일수 합산(N) 기준 하루 무료+나머지 50%(이 요금 산식 자체는 2026-09-16 색상 재설계로 전혀 변경되지 않음) |
 | `rental_method_options.is_delivery_type` | `isDeliveryTypeMethod(m)`(`+page.svelte:97-99`) + `computeReturnVisibleTabs()`(`cartShippingFee.ts:161-171`) | 반납 콤보 목록 필터링(수령이 이 방식이 아닐 때만 제외) + `calcRentalFee`의 `deliveryLocked` 12h블록 우회 판정 + `calcShippingFee` 입력값(pickupIsDelivery/returnIsDelivery, `cart/+page.svelte:982-983` — 2026-09-06부터, 위 `is_bulk_delivery` 행 참고)(**요금 관련 판정은 전부 `is_bulk_delivery`가 아니라 이 플래그 기준** — `rental-fee-policy.md` §2 참고) |
 | `rental_shipping_settings.{enable_round_trip,round_trip_fee,enable_delivery,delivery_fee,enable_return,return_fee}` | `calcShippingFee()` — `cartShippingFee.ts:40-65` | 3-way 배타 규칙으로 왕복/배송/반납 요금 중 최대 1개 산출 → `otShippingFee` |
 | `delivery_fee_discount_tiers.{min_rental_amount,condition_types,discount_rate}` | `calcShippingDiscountRate()` + `applyShippingDiscount()`/`isRoundTripShippingFee()` — `cartShippingFee.ts` | `otShippingDiscountRate` → `otDeliveryFee = applyShippingDiscount(otShippingFee, otShippingDiscountRate, otIsRoundTripShipping)`. 금액 문턱 기준: `condition_types`가 `sale_only_purchase` 단독인 티어만 `otSaleOnlySubtotal`(판매전용상품 구매액), 그 외(단독 long_term_rental·rental_item, 또는 sale_only_purchase가 다른 조건과 조합된 경우)는 전부 `otRentalOnlySubtotal`(대여상품 소계) — 2026-09-15 Stephen 확정, 판매상품만 구매하고 대여상품이 0원이면 "판매상품 구매" 조건 티어가 절대 매칭 안 되던 회귀 수정. ⚠️ 할인율 적용 범위(2026-09-15 후속 확정): `discount_rate=1`(무료)은 왕복·편도(배송/반납) 요금 종류 무관하게 항상 적용되지만, `discount_rate<1`(예: 50% 할인)은 **왕복요금(수령·반납 둘 다 배송)일 때만** 적용되고 편도요금에는 미적용(정가 그대로 청구) — `isRoundTripShippingFee(checkedShippingItems)`로 판정 |
@@ -78,7 +78,7 @@
 
 | 순서 | RPC | 저장되는 값 |
 |---|---|---|
-| 1 | `promote_draft_reservation(p_reservation_id, p_start_date, p_end_date)` — draft 그룹만 대상 | `rental_reservations.product_id`(재고유닛 배정)·`start_date`·`end_date`·`status='hold'` |
+| 1 | `promote_draft_reservation(p_reservation_id, p_start_date, p_end_date, p_pickup_method, p_return_method)` — draft 그룹만 대상. 2026-09-12 Migration #497(2026-09-15 재통합 #501)로 뒤 2개 파라미터(DEFAULT NULL) 추가 — NOT NULL 전달 시 재고 배정 전에 `compute_holiday_extended_period`로 연장을 먼저 계산해 이미 확장된 날짜로 배정(재고 이중배정 방지, `rental-fee-policy.md` §5) | `rental_reservations.product_id`(재고유닛 배정)·`start_date`·`end_date`·`status='hold'`·`pickup_holiday_extra_days`/`return_holiday_extra_days`(연장 반영 시) |
 | 2 | `set_reservation_shipment_method(...)` (via `saveShipmentMethod()`) | `pickup_method`/`return_method`/`pickup_time`/`return_time`/`pickup_address_road`/`pickup_address_detail`. 서버 최종가드: 반납만 배송(`is_delivery_type`) 방식이면 예외 |
 | 3 | `set_reservation_duration(p_reservation_id, p_duration_type)` | `duration_type` (status='hold' 조건부) |
 | 4 | `POST /api/checkout/notify-hold` | DB 저장 없음(채팅 알림 side-effect) |
@@ -134,7 +134,7 @@
 
 ---
 
-*rental-cms-settings.md v1.5 | Harness Flow v3.2 | 2026-09-05 신설 — CMS 대여관리 설정
+*rental-cms-settings.md v1.8 | Harness Flow v3.2 | 2026-09-05 신설 — CMS 대여관리 설정
 15개 이상 항목에 대한 공식 문서 공백을 해소하기 위해 작성(같은 플래그를 둘러싼 설계가
 최근 5일 새 5차례 뒤집히며 최소 2건의 실사용 회귀를 유발한 이력 대응). | 2026-09-06
 표A·표B 정정 — `calcShippingFee`(왕복/배송/반납요금) 판정 기준이 `is_bulk_delivery`에서
@@ -153,4 +153,22 @@
 2026-09-15(같은 날 3차 후속) 표B 정정 — Stephen 지시로 할인율 적용 범위를 요금 종류별로
 분리: "무료"(1)는 왕복·편도 무관 항상 적용, "50% 할인"(<1)은 왕복요금에만 적용되고 편도
 요금은 미적용(정가 청구)으로 확정. `applyShippingDiscount()`/`isRoundTripShippingFee()`
-신설(cartShippingFee.ts), `otDeliveryFee` 계산식 교체.*
+신설(cartShippingFee.ts), `otDeliveryFee` 계산식 교체. | 2026-09-15(같은 날 4차 후속,
+CRITICAL) — "휴무일 포함 배송 연장 요금 로직"(2026-09-12 별도 세션 설계, 계획서:
+cheerful-nibbling-emerson.md)이 DB(Migration #492~500)만 Stage에 적용된 채 화면 코드가
+격리된 git worktree에 방치돼 있던 드리프트를 발견·병합. 표B `is_courier_dependent` 행을
+"차단"에서 "자동 연장"으로 정정, 표C `promote_draft_reservation` 행에 신규 파라미터
+반영. 산식·이중할인 방지·재고 이중배정 방지 상세는 `rental-fee-policy.md` §5가 정본. |
+2026-09-16 표A "휴무일 제어 옵션" 행 정정 — `delivery_cutoff_settings.holiday_guide_text`
+컬럼 신설(Migration #505, `shipping_guide`와 동일 패턴) + `upsert_delivery_cutoff_settings`
+RPC를 4-param으로 재정의(구 3-param 오버로드 DROP, REVOKE/GRANT 재하드닝 적용, Stage
+검증 완료). 이 안내문을 `/cart` 달력 하단에 실제로 노출하는 작업(장바구니 화면 쪽)은
+CMS/front 세션 분리 원칙에 따라 별도 세션에서 진행 — 이 시점엔 CMS 저장 기능만 구현·검증
+완료 상태. | 2026-09-16(같은 날 후속, front 세션) 계획서 `wobbly-cuddling-marble.md` PART B
+전체 구현 완료 — 표B `is_courier_dependent` 행을 색상 재설계(선택일=레드·경계일 1개=퍼플·
+휴무일 자체=무색)로 갱신, 표A "휴무일 제어 옵션" 행의 "front 별도 세션 진행 예정" 각주를
+완료로 정정. `CalendarGrid.svelte`에 `warnSelected` prop 신설 + `highlightDates` 의미를
+"흡수되는 모든 날짜"에서 "경계 하루"로 변경. 요금 계산 로직(`rental-fee-policy.md` §5)은
+단 한 줄도 무변경. Stage 실데이터(추석 9/24~26)로 라이브 검증 완료 — 선택 9/25 → 25=레드·
+24=무색(휴무일 자체)·23=퍼플(경계일) 확인. 상세는 `rental-fee-policy.md` §5 2026-09-16
+후속 절이 정본.*

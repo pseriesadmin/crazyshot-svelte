@@ -190,6 +190,110 @@ products.md §2-4(QR 콘텐츠 정책)에 카테고리 병기 정책 반영 필�
 
 ---
 
+## DONE — 🟡 BOUNDARY: 장바구니 달력 "배송 휴무일" PART B(front) 후속 UI 다듬기 + 아코디언 접힘요약 정합화 (2026-09-16, 이 세션'만', ✅ GATE E 통과 — sp3-qa-agent 독립검수 완료(BLOCKING/MEDIUM 0건, LOW 3건 — 전부 주석 정확성 이슈로 기능 영향 없음), git commit만 Stephen 대기)
+
+### 배경
+
+아래 "장바구니 달력 '배송 휴무일' 색상 재설계 + CMS 안내 스크립트 신설 PART B(front)"
+DONE 블록(같은 날짜, 이전 세션)에서 구현한 기능을, Stephen이 실제 화면 스크린샷을 계속
+공유하며 세부 UX/디자인 토큰을 반복 피드백한 후속 세션. 신규 기능 추가가 아니라 기존
+구현의 색상·폰트·구조 다듬기 + 그 과정에서 발견된 실제 로직 결함 1건 수정.
+
+### 구현
+
+```
+src/lib/components/common/CalendarGrid.svelte
+  1. 모바일·PC 반응형 달력 높이 불일치 버그 수정 — .cal-date-area의 고정 292px(min-height)를
+     실측 기반 measureCalGrid 액션(ResizeObserver로 현재 렌더링 폭의 실제 셀 크기 측정)이
+     계산하는 --cal-min-h CSS 변수로 교체. 모바일에서 날짜 아래 남던 빈 공간 결함 해소.
+  2. cal-day-adj-holiday(휴무일 흡수 경계일 하이라이트) 색상 — Stephen 반복 피드백
+     끝에 배경을 purple-60(--cs-purple-light) → purple-20(--cs-purple-pale) →
+     purple-10(--cs-purple-op10)으로 최종 확정. 배경이 충분히 밝아져 흰 글자 강제
+     (!important) 없이도 요일별 자연색이 그대로 읽혀 색상 충돌 버그 자체가 구조적으로
+     해소됨. 호버 시에만 purple-60 배경 + 흰 글자(!important)로 진해지는 반응 유지.
+  3. 대여~반납 기간 범위 밴드(.cal-day-in-range::before 등) — 배경 purple-10 →
+     purple-5(--cs-lilac)로 낮춤(Stephen 지적: 원형 배경보다 밴드가 더 진해 보임).
+     상하 여백을 3px 인셋에서 0(원형 배경 .cal-day-range-start/end::after의 inset:0과
+     동일)으로 맞춰, 밴드 상하폭이 원형보다 6px 작아 보이던 결함 수정.
+
+src/routes/cart/+page.svelte
+  4. onselect의 csToast.info(...) 안내 토스트 제거 — 2026-09-12 계획서(cheerful-
+     nibbling-emerson.md)에 명시돼 있던 기능이었으나, PART B에서 신설된 상시 안내문
+     (.cal-holiday-guide-note)과 정보가 완전히 중복되어 안내 방식을 상시 안내문
+     하나로 통일(Stephen 지적으로 발견 — "AI 자의적 추가"는 아니었음을 계획서 대조로
+     확인 후 제거 진행).
+  5. .cal-holiday-guide-note — 배경 --cs-lilac(무채색) → red-5(--cs-red-xlight), 글자
+     하드코딩 #AAAAAA → red-100(--cs-red)로 전환("독특한 배송 유형이라 강조 노출 필요"
+     — Stephen 지시). 모바일 폰트도 --text-m-script-12(14px→12px 한 단계 축소)로 조정.
+  6. .acc-value(대여/반납 방법 아코디언 선택값 라벨) 모바일 폰트 — --text-m-title-18B →
+     --text-m-body-16B(선택완료 값) 로 조정하는 과정에서 "미선택" 안내 텍스트까지 같이
+     줄어드는 게 확인돼, .acc-value-unset 전용 규칙(--text-m-script-14B, 14px)으로
+     분리 — 선택완료 값(16px)과 미선택 안내(14px) 크기를 최종적으로 구분.
+  7. .footer-terms-text(약관동의 문구) 모바일 폰트 --text-m-body-16B → --text-m-script-14B
+     축소 + 그 체크아이콘을 텍스트 축소 비율에 맞춰 10% 축소(.footer-terms .checkbox-btn-
+     terms svg만 한정 — 아이템카드/동의항목 체크박스 등 다른 사용처는 전역 규칙 그대로
+     영향 없음).
+  8. .delivery-combo(수령/반납 방식 토글 버튼 행)에 justify-content:center 추가 — 바로
+     아래 항상 가운데 정렬인 .delivery-deadline("15:00 마감") 배지와 정렬 기준 통일.
+  9. 모바일 상품카드(OrderCard 스니펫)의 사각형 체크박스(checkbox-svg)를 PC
+     .item-card-check와 동일한 곡선 체크 아이콘 + 색상 로직(checkbox-btn-terms —
+     미선택 purple-op10/선택 purple, CSS color 전환)으로 통일, 크기는 PC(18×12px)의
+     110%(19.8×13.2px)로 지정(.card-top-row .checkbox-btn-terms svg). 아이콘이
+     작아진 만큼 버튼 패딩을 10px→16px로 늘려 44×44px 최소 터치타겟 유지. 더 이상
+     쓰이지 않는 .checkbox-svg 전역 규칙 2곳(기본 20px + 모바일 확대 24px) 정리.
+  10. "+휴무일 포함" 배지 — 기존엔 아코디언이 "열려있을 때"(RentalForm)만 보이고
+      "접혀서 요약으로 표시될 때"(datetime-wrap.acc-collapsed-summary)는 사라지던
+      구조적 공백을 발견 — collapsedHolidayExtraDays() 공용 함수를 신설해 아코디언
+      상단 통합요약 바(수령/반납 각 1곳) + "대여 방법"·"반납 방법" 개별 아코디언 접힘
+      요약 바(각 1곳) 총 4곳 전부에 동일 배지 로직 적용, 열림/접힘 상태 무관하게
+      일관 노출되도록 정합화.
+  11. 수령·반납 모두 배송(택배의존 포함)일 때 시간선택 UI 자체를 숨기는 기존 정책
+      (2026-09-07 확정, RentalForm 내 courierRestricted/locked 체크)을 위 4곳 접힘
+      요약 바에도 동일 적용. 이 과정에서 실제 로직 결함 1건 발견·수정: returnTimeForcedByDelivery
+      조건("수령이 배송이면 반납 시간 24:00 고정 표시")이 반납 자체가 택배의존
+      (courierRestricted)인지는 확인하지 않아, "수령=배송, 반납=크레이지샷배송"
+      조합에서 "반납도 배송이니 시간 UI 완전히 숨김" 규칙보다 "24:00 고정 표시"가
+      잘못 우선 적용되던 버그 — !courierRestricted 조건을 추가해 우선순위를 바로잡음
+      (RentalForm 원본 + 접힘요약 2곳 전부 동일 수정, Stephen이 실제 화면에서 재검증
+      요청해 발견됨).
+```
+
+### 검증
+
+```
+npm run check(svelte-check) — 항목별 수정마다 실행, 매번 신규 에러 0건·경고 수 원상태
+(402건, 무관한 기존 항목들) 유지 확인.
+실브라우저(Claude Browser, PC 1280px + 모바일 375~390px) — 각 항목마다 getComputedStyle/
+CSSOM 직접 조회로 배경색·글자색·폰트크기·아이콘 크기 실측값을 토큰 기대값과 대조 확인,
+"+휴무일 포함" 배지·시간 UI 숨김은 실제 예약옵션 흐름(방법 선택→날짜 선택→아코디언
+접기/펴기)으로 재현해 확인.
+```
+
+### sp3-qa-agent 독립검수 결과 (2026-09-16)
+
+```
+✅ GATE E 통과 — 위 구현 11개 항목 전부 코드에 정확히 반영됨 확인(git stash 전/후
+대조로 npm run check 신규 에러·경고 0건도 재확인), 44×44px 터치타겟(아이콘 19.8~13.2px
++ 패딩 16px×2 = 45.2~51.8px) 검산 통과, 디자인 토큰 전부 app.css 정본 등재값 확인,
+BLOCKING/MEDIUM 0건.
+
+LOW 3건(전부 주석 정확성 문제, 기능 영향 없음 — 다음 세션이 참고):
+  1. cart/+page.svelte:3016 부근 — "csToast.info 그대로 유지" 주석이 실제로는 이미
+     제거된 상태와 모순(2989행 근처 주석·실코드는 정확히 "제거함"으로 기술) — 향후
+     세션이 이 주석만 보고 토스트가 남아있다고 오판할 수 있어 정리 권장.
+  2. cart/+page.svelte:5166-5167 — ".acc-value-unset이 .acc-value보다 특이성이
+     높아서" 우선 적용된다는 주석 설명이 부정확(실제론 두 셀렉터 특이성 동일, 후행
+     선언 순서로 이김) — 동작은 정상이나 근거 설명만 수정 필요.
+  3. cart/+page.svelte:3499-3501 — PC .item-card-check 관련 기존(이번 세션 이전)
+     주석이 이미 폐기된 "checkbox-svg 20px" 표현을 그대로 남기고 있음(이번 diff
+     범위 밖, 참고용 보고).
+정보성: git 상태에 supabase/migrations/20260910070000_485_*.sql 삭제(D)가 남아있음
+  — 이번 두 파일과 무관하나 core-rules.md GP-10(마이그레이션 파일 삭제 금지) 원칙상
+  다른 세션 잔여물인지 별도 확인 권장(이번 GATE E 판정과는 무관).
+```
+
+---
+
 ## DONE — return_remind 반납일 당일 알림 SMS 동시발송 + 배치처리 안전화 (2026-09-16, ✅ GATE E 통과 3차 검수 — Stage #506·#507 양쪽 적용 완료, Production 미적용·git commit 대기)
 
 ### 배경
@@ -325,6 +429,133 @@ sp3-qa-agent가 `/api/cron/return-remind`(Migration #506)에서 구조적 결함
 
 Stage(ezyvffjvuwmtuhpxdjrw) → Production(vnbpmvxruyciuuaermyh) 순서.
 파일: supabase/migrations/20260916020000_507_get_return_remind_targets_p_limit.sql
+
+---
+
+## DONE — 🔴 CRITICAL: "배송 휴무일 안내 스크립트" PART A(CMS) 구현 기록 보완 + 장바구니 안내문 미노출 결함 수정 (2026-09-16, 이 세션'만', ✅ GATE E 통과 — sp3-qa-agent 독립검수 완료(블로킹 0건), git commit만 Stephen 대기)
+
+### 배경
+
+계획 파일: `/Users/stevenmac/.claude/plans/wobbly-cuddling-marble.md`. 이 세션이 실제로 수행한
+작업 3건을 TASK.md에 처음으로 기록한다(①은 세션 당시 TASK.md 갱신 절차 없이 직접 실행돼
+지금까지 미기록 상태였음 — 뒤이은 PART B(front) 블록(바로 아래, 2026-09-16, 다른 세션)이
+"PART A는 별도 세션에서 이미 구현 완료"라고 정확히 참조한 그 산출물이 바로 이 세션의 작업이다).
+
+### ① PART A(CMS) 구현 — `/cms/set/rental` "휴무일 제어 옵션" 안내문 신설
+
+```
+신규 마이그레이션: supabase/migrations/20260916000000_505_delivery_cutoff_holiday_guide_text.sql
+  - delivery_cutoff_settings.holiday_guide_text VARCHAR(200) NOT NULL DEFAULT '' 컬럼 추가
+  - upsert_delivery_cutoff_settings RPC를 3-param→4-param(p_holiday_guide_text DEFAULT '')으로
+    재정의, 구 3-param 오버로드 DROP, REVOKE ALL FROM PUBLIC,anon + GRANT TO authenticated
+    재하드닝(2026-09-15 compute_reservation_line_amount 하드닝 누락 사고 재발 방지 원칙 준수)
+  - Stage(ezyvffjvuwmtuhpxdjrw) 적용 완료, 3종 검증쿼리(권한/오버로드 1개/기본값 '') 전부 통과
+
+src/routes/cms/set/rental/+page.server.ts
+  DeliveryCutoffSettings 인터페이스에 holiday_guide_text 추가, load() select 목록 추가,
+  saveCutoffSettings 액션에 holidayGuideText 파싱+200자 서버검증(fail 400)+RPC 파라미터
+  추가(.trim() 미사용 — shipping_guide 기존 패턴과 대조해 동일하게 맞춤)
+
+src/routes/cms/set/rental/+page.svelte
+  holidayGuideText/holidayGuideCount/holidayGuideIsDirty $state·$derived 추가, resync $effect
+  반영, saveCutoffSettings 폼 안(3개 s-chip 토글 아래 · hidden input 위)에 textarea+글자수
+  카운터+저장버튼 마크업 추가 — 기존 .textarea-wrap/.guide-textarea/.char-count/.btn-save
+  클래스 재사용(신규 CSS 없음)
+
+.claude/rules-ref/rental-cms-settings.md 표A "휴무일 제어 옵션" 행 갱신 + 변경이력 각주(v1.7)
+```
+
+sp3-qa-agent 1차 독립검수 GATE E 통과(결함 0건) — `.trim()` 일치, RPC 하드닝, 권한게이트
+유지, 마크업 위치, 범위 외 파일 미접촉 전부 확인.
+
+### ② PART B(front, 다른 세션) 완료 후 재검증 중 발견한 CRITICAL 결함 — 안내문 실노출 실패
+
+PART B(front) 세션이 구현한 카트 안내문 노출부(`{#if isCalOpen && holidayExtraDays > 0 &&
+sd.holidayGuideText}<p class="form-note">...`)를 재검증하는 과정에서, Stephen이 "달력 모달
+레이아웃 내부가 아닌 별도 레이아웃"으로 요청했던 위치 지정이 지켜지지 않았을 뿐 아니라,
+**구조적으로 이 안내문이 화면에 한 번도 노출될 수 없는 상태**임을 발견했다:
+
+```
+원인: .cal-layer(달력 팝업)는 position:absolute라 일반 흐름에 높이를 남기지 않는다.
+     안내문 <p>는 그 형제 요소로 일반 흐름에 배치돼 있어, 결국 "달력 버튼 바로 아래"라는
+     팝업이 뜨는 것과 정확히 같은 위치에 놓인다. 팝업의 z-index(100)가 더 높아 안내문이
+     있어야 할 자리를 완전히 덮어버리고, 안내문 자신도 isCalOpen(달력이 열린 상태)에서만
+     보이는 조건이라 — 정확히 팝업에 가려지는 그 순간에만 나타나려 하는 셈이라 결과적으로
+     사용자에게 전혀 보이지 않았다.
+```
+
+**수정** (`src/routes/cart/+page.svelte`) — ⚠️ 이 세션이 최초 작성한 버전(`calLayerEl`
+단일 `$state` + `bind:this` + `$effect`+`ResizeObserver`, 무채색 톤)은 이후 병행 진행된
+다른 세션이 두 차례 더 다듬어 아래 최종본으로 교체했다(같은 결함을 겨냥한 동일 방향
+수정이라 대체됐을 뿐 충돌은 아님 — sp3-qa-agent가 최종본 기준으로 재검수·GATE E 통과):
+```
+- calLayerHeights = $state<Record<string, number>>({}) — calId를 키로 하는 Record로 설계
+  (이 세션의 단일 공유변수안보다 더 안전 — 수령/반납 두 leg가 동시에 열릴 수 없다는 전제가
+  깨지더라도 서로 다른 leg의 높이가 섞일 위험이 원천 차단됨)
+- measureCalLayer(node, calId) — bind:this+$effect 대신 Svelte 액션(use:) 패턴으로 교체.
+  CalendarGrid.svelte의 기존 measureCalGrid 액션과 동일 구조를 재사용한 코드베이스 기존
+  관용구. ResizeObserver로 .cal-layer 실제 렌더링 높이를 calId별 실측, destroy()에서
+  ro.disconnect()
+- .cal-layer div에 use:measureCalLayer={props.calId} 부착
+- 안내문 .cal-holiday-guide-note(position:absolute) — top: calc(100% + 8px +
+  {calLayerHeights[props.calId] ?? 0}px + 12px)로 팝업 바로 아래 완전 별도 위치에 배치
+- 후속 결함 2건 추가 발견·수정: ① 안내문이 무배경(transparent)이라 뒤따르는 "요청 사항"
+  섹션 글자와 겹쳐 보이던 문제 → 불투명 배경 추가로 해소 ② Stephen 지적("휴무일 포함
+  배송은 독특한 배송 유형이라 강조 노출 필요")에 따라 무채색(#AAAAAA) 톤을 레드 강조 톤
+  (background: var(--cs-red-xlight) / color: var(--cs-red), 둘 다 front-uiux.md 정본 토큰)
+  으로 교체 + 모바일 640px 이하 폰트를 --text-m-script-12로 한 단계 낮춤
+```
+
+### ③ 부수 검증 — "배송 안내문"과 "휴무일 안내문" 혼선 의심 확인 (코드 변경 없음)
+
+Stephen이 CMS 화면에서 두 안내문(`shipping_guide`/`holiday_guide_text`)이 같은 문구를 담고
+있는 것을 보고 코드 결합 오류를 의심 — `$state` 변수·DB 테이블·RPC·저장 액션 4개 축 전부
+완전히 독립돼 있음을 코드 재확인 + Stage DB 직접 조회로 재확인. 두 필드가 우연히 같은
+문구("모든 배송료는 선결제되며...")를 담고 있던 것은 코드 결합이 아니라 테스트 중 동일
+문구를 각각 따로 입력한 데이터 문제였음을 확정(구조적 결함 아님, 조치 불필요).
+
+### 검증
+
+```
+npm run check — 신규 에러 0건(전체 1 ERROR는 vite.config.ts 사전 존재 이슈, 무관)
+npx vitest run cartRentalFee/cartShippingFee/holidayExtensionFee/createHoldReservationWithShipment
+  — 136/136 GREEN(②는 순수 위치·스타일 조정이라 요금로직 무영향, sp3-qa-agent 재실행으로도 재확인)
+Stage DB 직접 조회(delivery_cutoff_settings 스키마·RLS·현재값, public_holidays 동기화 데이터
+  30건, rental_method_options.is_courier_dependent 설정) — PART A 산출물이 front 연동에
+  실사용 가능한 상태임을 실측 확인(별도 A-6 절로 계획 파일에도 기록)
+sp3-qa-agent GATE E(②, 최종본 기준) — 동시-오픈(두 leg 달력이 동시에 열려 calLayerHeights
+  키가 섞일 가능성) "없음"으로 명확히 결론(openCalId 단일값 구조 + calId-keyed Record라
+  이중 안전), use: 액션 패턴이 CalendarGrid.svelte 기존 관용구와 동일해 안전, cleanup
+  정상(destroy()에서 ro.disconnect(), {#if isCalOpen} 블록이 닫힐 때 결정적으로 호출),
+  z-index(90 vs .cal-layer 100) 역전 문제 없음(top 오프셋으로 이미 비겹침 보장), CSS
+  수치(calc(100% + 8px + 실측높이 + 12px)) 재검산 정상, 변경 파일 cart/+page.svelte
+  1개로 범위 준수 확인. 블로킹 결함 0건.
+⚠️ Stephen이 이미 실제 화면 스타일 피드백(레드 강조 톤 교체 지적)을 다른 병행 세션에
+  전달·반영한 것으로 diff상 확인됨 — 이 세션이 별도로 요청한 육안 확인은 이 피드백으로
+  갈음된 것으로 판단(중복 요청 불필요).
+```
+
+### 문서
+
+```
+/Users/stevenmac/.claude/plans/wobbly-cuddling-marble.md — "A-6. 구현 완료 보고" 절 신설
+  (front 세션이 참고할 실제 반영 상태: .trim() 미사용 확정, Stage 데이터 상태, RLS 주의사항)
+.claude/rules-ref/rental-cms-settings.md 표A 갱신(위 ① 참고, v1.7)
+```
+
+### Stephen 확인 필요 (다음 단계)
+
+```
+1. git commit — cms/set/rental/+page.server.ts·+page.svelte·Migration #505·
+   rental-cms-settings.md(① 관련분) + cart/+page.svelte(② 관련분, 최종본) — Stephen 직접
+   실행 대기
+2. Production(vnbpmvxruyciuuaermyh) — Migration #505 아직 Stage만 적용, Production 반영은
+   front 전체 완료 확인 후 Stephen 판단 대기
+3. 현재 delivery_cutoff_settings.holiday_guide_text 실값이 "모든 배송료는 선결제되며..."
+   (배송 안내문과 동일한 테스트 문구)로 남아있음 — 실제 휴무일 안내 문구로 교체 필요(③ 참고)
+4. (QA 정보성 권고, 비차단) 코드 주석에 2026-09-17(작업일보다 하루 앞선 날짜) 오기가
+   남아있음 — 기능 영향 없음, 후속 정리 시 정정 권장
+```
 
 ---
 

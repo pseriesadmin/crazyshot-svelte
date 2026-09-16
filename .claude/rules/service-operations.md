@@ -545,6 +545,37 @@ CMS 대여관리 설정 화면의 15개 이상 항목(대여방식 플래그 3�
 
 ---
 
+## 19. SMS 발송 제공사 — Aligo → Solapi 전면 교체 (2026-09-10 결정, 2026-09-11 실키 발급 완료)
+
+```
+배경: 알리고(Aligo)는 발송 서버 IP를 콘솔에 사전 등록해야만 API 인증이 통과되는 구조
+(테스트 발송으로 result_code -101 "인증오류입니다.-IP" 실증 확인, 2026-09-10) — 이 프로젝트는
+Vercel 서버리스 함수에서 SMS를 발송하므로 고정 아웃바운드 IP가 없어 구조적으로 맞지 않았음.
+Solapi(구 CoolSMS)는 API Key+Secret HMAC 서명 인증 방식이라 발신 IP가 인증 요소가 아니며,
+콘솔의 IP 제한 기능도 "모든 IP 허용"(CIDR 0.0.0.0/0)을 선택하면 완전히 무력화할 수 있다
+(제한이 선택사항이지 필수가 아님 — 알리고와의 결정적 차이, 캡처로 실물 화면 확인 완료).
+
+구현: src/lib/server/sms.ts가 solapi npm 패키지(SolapiMessageService)로 전면 교체됨.
+sendSms(to, message) 시그니처는 이전과 완전히 동일하게 유지돼 호출부(profile/send-otp,
+auth/legacy-claim/send-otp, cron/locker-guide, push.ts의 SMS 폴백) 전부 무수정으로
+자동 반영됨. sp3-qa-agent GATE E 통과(graceful skip 보존·하이픈 제거·호출부 무수정 검증완료).
+
+환경변수(값은 .env.local·Vercel 프로젝트 환경변수에만 존재 — 이 문서를 포함한 어떤
+문서에도 API Key/Secret 실값을 기록하지 않는다, git에 커밋되는 파일이므로 유출 위험):
+  SOLAPI_API_KEY / SOLAPI_API_SECRET / SMS_SENDER_PHONE(발신번호, Solapi 콘솔에 사전등록 필요)
+
+⛔ Solapi 콘솔에서 API Key를 신규·재발급할 때 반드시 "CIDR 설정"을 "모든 IP 허용"
+(0.0.0.0/0)으로 선택할 것 — 화면 기본값(현재 접속 중인 브라우저 IP만 자동 등록)을 그대로
+두면 알리고와 동일한 IP 인증 실패가 재발한다. 만료기간은 "만료일 없음"으로 설정
+(2026-09-11, Stephen 확인) — 보안상 주기적 재발급이 필요해지면 재검토.
+
+폐기: ALIGO_API_KEY/ALIGO_USER_ID 환경변수 및 관련 코드는 완전히 제거됨(코드베이스 전체
+재검색 결과 기능 코드 참조 0건, 주석 2곳도 Solapi 기준으로 정정 완료).
+```
+→ 상세: `.claude/harness/TASK.md`의 "SMS 발송 시스템 Aligo → Solapi 전면 교체" 블록(2026-09-10)
+
+---
+
 ## GATE C 확인 항목 (front-cms 연동 변경 시)
 
 ```
@@ -583,11 +614,15 @@ CMS 대여관리 설정 화면의 15개 이상 항목(대여방식 플래그 3�
 [ ] "관리자만 봐야 하는" 새 알림을 추가한다면(§17) — chat_messages/chat_sessions에 넣지
     않았는가? (그 세션의 소유 고객에게도 항상 함께 노출됨) sendPushToAdmins 또는 CMS 전용
     UI 리마인더 중 하나를 사용했는가?
+[ ] Solapi API Key를 신규·재발급했다면(§19) — CIDR을 0.0.0.0/0(모든 IP 허용)으로
+    설정했는가? (기본값인 "현재 접속 IP만 등록"을 그대로 두면 Vercel에서 인증 실패 재발)
+[ ] SOLAPI_API_KEY/SOLAPI_API_SECRET 실값을 어떤 문서(.md)에도 기록하지 않았는가?
+    (.env.local·Vercel 환경변수 전용 — 이 문서는 git에 커밋되는 파일)
 ```
 
 ---
 
-*service-operations.md v1.6 | Harness Flow v3.2 | 2026-08-17 신설 — chat.md·contract.md·
+*service-operations.md v1.7 | Harness Flow v3.2 | 2026-08-17 신설 — chat.md·contract.md·
 payment.md·rental-lifecycle.md·products.md·security-auth.md에 흩어진 front-cms 상호운영
 원칙을 인덱스로 통합. 세부 내용은 각 원본 문서가 정본, 이 문서는 포인터만 유지. | 2026-08-17
 §9 추가 — 예약승인(confirmed) 게이팅 설계 확정(구현 대기) 반영. | 2026-08-18 §9를 "구현·
@@ -640,4 +675,9 @@ GREATEST 리셋)"을 폐기하고 "전자계약 발송 시점에만 30분 타이
 유지"로 교체. `send_rental_chat_notification`(Migration 454)에 `reservation_id` 추가 +
 `ActionCard.svelte`·`execute-action/+server.ts`에 실시간 상태 재검증 추가해 "예약신청완료"
 채팅카드의 "기간 만료" 표시도 동일 정책에 맞춰 동기화. Stage·Production 둘 다 적용,
-관련 TDD 3개 파일 29/29 GREEN.*
+관련 TDD 3개 파일 29/29 GREEN. | 2026-09-10~11 §19 신설 — SMS 제공사 Aligo → Solapi 전면
+교체(알리고 발송서버 IP 화이트리스트 필수가 Vercel 서버리스 아웃바운드 IP 비고정과 구조적
+충돌, `-101 인증오류-IP` 실증 확인 후 결정). Solapi는 IP 제한이 선택사항(CIDR 0.0.0.0/0
+"모든 IP 허용"으로 무력화 가능)이라는 점이 알리고와의 핵심 차이 + 신규 키 발급 시 반드시
+"모든 IP 허용" 선택해야 함을 GATE C에 명문화. sp3-qa-agent GATE E 통과, 실키는
+.env.local·Vercel 환경변수에만 존재(문서 미기록 원칙 명시).*

@@ -155,6 +155,170 @@ CMS 판정설정 화면    : src/routes/cms/set/rental/+page.svelte, +page.serve
 
 ---
 
+## 5. 휴무일 포함 배송 연장 요금 (2026-09-12 설계, 2026-09-15 병합·재통합)
+
+```
+대상: is_courier_dependent=true(§2의 is_delivery_type/is_bulk_delivery와는 완전히 별개
+      플래그 — "휴무일 제한 방식" 용도로만 쓰이던 기존 플래그를 그대로 재사용)인 방식으로
+      수령/반납을 선택했을 때, 택배기사가 실제로 반출/회수하는 기준일(수령일 전날 / 반납일
+      다음날)이 휴무일이면 예약 자체를 막는 대신 그 날을 자동으로 건너뛰어 수령/반납일을
+      연장한다.
+```
+
+⚠️ **병합 경위(2026-09-15)**: 이 기능은 2026-09-12 별도 세션이 설계·구현했으나 화면 코드가
+격리된 git worktree에만 존재하고 stage 브랜치에 병합되지 않은 채, DB 마이그레이션만 Stage에
+적용된 "반쪽 배포" 상태로 8일간 방치돼 있었다(2026-09-15 CMS 휴무일 옵션 정밀검증 중 발견 —
+그 사이 실사용 경로에서 반납일이 조용히 밀리는 부작용이 이미 발생 중이었음). 2026-09-15
+세션이 worktree 코드를 stage 최신본 위에 수동 재통합해 병합 완료.
+
+### 연장 판정 기준일 (양쪽 leg 통일)
+
+```
+수령(pickup) leg : 수령일 전날부터 역방향으로 휴무일을 건너뛴다
+반납(return) leg : 반납일 "다음날"부터 순방향으로 휴무일을 건너뛴다
+  ⛔ 과거(이 기능 이전)에는 반납측 판정 기준이 "반납일 당일"이었다(캘린더 차단 로직 기준)
+  — Stephen 확정으로 다음날(+1) 기준으로 통일됨. 기존 캘린더 차단 코드도 함께 교체
+  (cart/+page.svelte isDateDisabled/onDisabledClick)했으므로 신규/기존 구분 없이 전부
+  다음날(+1) 기준 하나만 존재한다.
+
+연속 휴무일(연휴 등): 첫 영업일이 나올 때까지 전부 건너뛴다(안전판: 최대 14회 반복 후
+  강제 중단).
+```
+
+### 요금 공식 — 한쪽/양쪽 구분 없이 단일 규칙 (Stephen 3차 최종 확정)
+
+```
+N = pickup_holiday_extra_days + return_holiday_extra_days (수령측+반납측 연장일수 합산)
+
+holiday_extra_fee = GREATEST(N - 1, 0) × daily요율 × 0.5
+
+즉: 연장일수 전체(N, 한쪽이든 양쪽이든 구분 없음) 중 딱 하루만 무료, 나머지(N-1)일은
+각각 하루요금의 50%씩 부과. N=0(연장 없음)→0 / N=1→0(그 하루는 무료로 끝) / N=3→2일×daily×0.5
+
+⛔ 한쪽/양쪽을 구분하는 분기 코드를 추가하면 안 된다 — 이 단일 공식이 최종본이다.
+```
+
+### 이중할인 방지 — delivery_fee와 완전히 동일한 패턴
+
+```
+holiday_extra_fee는 rental_fee(쿠폰·회원등급 % 할인 대상)에서 분리된 별도 값으로 계산되어,
+할인 계산 기준(v_total)에는 절대 포함되지 않고 v_final 계산 맨 끝(할인·포인트 차감 이후)에
+delivery_fee와 나란히 가산된다 — "이미 확정된 고정금액"이라 할인이 중복 적용되지 않는다.
+```
+
+### 재고 이중배정 방지 — create_hold_reservation 시점에 이미 확장된 날짜로 배정
+
+```
+create_hold_reservation/promote_draft_reservation에 p_pickup_method/p_return_method
+(DEFAULT NULL) 파라미터를 추가해, 방식이 NOT NULL로 전달되면 재고 가용성 체크 이전에
+먼저 compute_holiday_extended_period로 연장일을 계산하고 이미 확장된 날짜 범위로 재고를
+잠근다(FOR UPDATE SKIP LOCKED 대상 자체가 연장 반영 후 범위). NULL이면 완전히 기존 동작
+그대로(하위호환) — set_reservation_shipment_method는 start_date/end_date를 건드리지
+않으므로 이후 방식이 확정되는 별도 호출과 충돌하지 않는다.
+```
+
+### ⚠️ 최종금액 합산 지점 — create_reservation_order가 아니라 sync_order_after_composition_change
+
+```
+2026-09-12 원설계는 create_reservation_order 내부에서 holiday_extra_fee를 직접 누적·가산
+했으나, 2026-09-14 완전히 무관한 다른 세션(Migration #497)이 그 최종금액 계산(v_total/
+v_discount/v_coupon_discount/v_final 산출 + orders UPDATE) 전체를 create_reservation_order
+밖으로 빼내 sync_order_after_composition_change 공용 함수로 리팩터링했다 — create_
+reservation_order·cms_add_reservation_product_unit·cms_remove_reservation_product_unit
+3곳이 전부 이 함수를 공유한다. 2026-09-15 병합 시 원설계를 그대로 되살리면 9/14 리팩터링이
+되돌아가는 회귀였으므로, holiday_extra_fee 집계를 sync_order_after_composition_change
+쪽에 새로 재통합했다(Migration #502) — 이 덕분에 create_reservation_order뿐 아니라 CMS
+예약 구성 변경(상품 추가/제거) 경로에서도 자동으로 함께 반영된다.
+
+집계 방식: v_total과 동일하게 "그 주문에 연결된 order_items 전체를 매번 재조회"해
+compute_reservation_line_amount(oi.reservation_id).holiday_extra_fee를 합산(부분 재호출 시
+유실 방지 — 개별 RPC 호출마다 새로 계산·누적하는 방식은 재발행 등으로 일부 예약만 남는
+경우 기존 연결 예약의 연장요금을 덮어써 유실시키는 결함으로 이어지므로 금지).
+
+⚠️ create_reservation_order에 새 holiday_extra_fee 관련 로직을 직접 추가하지 말 것 —
+그 함수는 이미 sync_order_after_composition_change를 호출해 위임하므로, 수정이 필요하면
+반드시 sync_order_after_composition_change 쪽을 고칠 것(정본 단일화 원칙).
+```
+
+### 구현 파일 참조
+
+```
+신규 컬럼  : rental_reservations.pickup_holiday_extra_days/return_holiday_extra_days,
+             orders.holiday_extra_fee
+신규 SQL 함수 : is_courier_holiday(date) — courierClosedDates.ts와 동일 로직
+               compute_holiday_extended_period(start, end, pickup_method, return_method)
+RPC 변경   : create_hold_reservation·promote_draft_reservation(파라미터 확장, DROP+CREATE)·
+             create_hold_reservation_with_shipment(1줄 전달)·
+             compute_reservation_line_amount(4번째 컬럼 holiday_extra_fee 추가)·
+             sync_order_after_composition_change(holiday_extra_fee 집계+가산 — 위 절 참고,
+               create_reservation_order 자체는 무변경)
+             ⚠️ calculate_cart_total(Migration 251)은 이번 변경 대상 아님 — compute_
+               reservation_line_amount의 4번째 컬럼(holiday_extra_fee)을 구조분해하지
+               않고 rental_fee/options_fee/deposit 3개만 사용하며, 그 결과값(calcTotal 등)
+               자체도 cart/+page.svelte에서 렌더링되지 않는 dead prop이다 — "당연히
+               연동됐을 것"이라고 오판하지 말 것
+클라이언트 : src/lib/utils/cartRentalFee.ts
+             calcHolidayExtension(startDate, endDate, pickupCourierDependent,
+               returnCourierDependent, closedDatesSet) — 서버 compute_holiday_extended_
+               period와 동일 워크 로직
+             calcHolidayExtraFee(pickupExtraDays, returnExtraDays, dailyPrice) — 서버
+               free/50% 공식 그대로 미러링
+             src/routes/cart/+page.svelte — itemHolidayExtension/otHolidayExtraFee,
+               isDateDisabled/onDisabledClick(차단 제거+자동조정 안내로 교체)
+             src/lib/components/common/CalendarGrid.svelte — highlightDates prop(순수
+               시각 하이라이트, 선택 가능 여부와 무관) + warnSelected prop(2026-09-16 신설,
+               아래 참고)
+의도적 제외 : 옵션상품(reservation_options)에는 이 특례 미적용(본상품만) ·
+             create_checkout_order(레거시 confirm-mock 경로) — 실제 fetch 호출부가
+             코드베이스에 전혀 없어 체크아웃 흐름에서 도달 불가능함을 확인, 반영 불필요
+마이그레이션 : supabase/migrations/20260915010000_501_holiday_extension_reintegration.sql
+             (컬럼·is_courier_holiday·compute_holiday_extended_period·create_hold_
+             reservation류·compute_reservation_line_amount — 8일간 DB에만 살아있던
+             정의를 그대로 역커밋),
+             supabase/migrations/20260915020000_502_sync_order_holiday_extra_fee.sql
+             (sync_order_after_composition_change 재통합, 신규 로직)
+```
+
+### 2026-09-16 후속 — 달력 색상 재설계 + CMS 안내 스크립트 (계획서 `wobbly-cuddling-marble.md`)
+
+⛔ 이 절은 **순수 프론트 시각 로직 + CMS 안내문 신설**만 다룬다 — 위 요금 계산(무료 1일+
+나머지 50% 할인, `calcHolidayExtraFee`/`compute_reservation_line_amount`/
+`sync_order_after_composition_change`)은 단 한 줄도 무변경.
+
+```
+색상 규칙(Stephen 확정): 선택일(수령/반납 중 자동연장을 유발한 날짜) = 레드
+  (--cs-red-badge) · 구간 밖 첫 정상 영업일(경계 하루) = 퍼플(--cs-purple-light) ·
+  흡수되는 휴무일 자체(연속이어도 전체) = 무색(색상 배경 없음)
+
+CalendarGrid.svelte 변경:
+  highlightDates prop의 의미가 "흡수되는 모든 날짜"에서 "경계 하루(구간 밖 첫 정상
+    영업일)"로 변경됨 — 호출부는 항상 최대 1개 날짜만 담아 전달
+  warnSelected?: boolean 신규 prop(미전달 시 기존 호출부 전부 동작 100% 불변) — true면
+    선택된 날짜(cal-day-sel)를 레드로 오버라이드. .cal-day-sel과 .cal-day-range-start/
+    end::after 두 레이어를 모두 오버라이드해야 카트 화면에서 실제로 보인다(카트의
+    RentalForm 두 호출부는 selectedDate를 항상 rangeStart/rangeEnd와 동일 값으로 전달하므로
+    선택된 날짜 칸은 항상 cal-day-sel + cal-day-range-start/end가 동시에 적용됨)
+
+cart/+page.svelte RentalForm 스니펫: holidayHighlightDates 계산을 "연장일수만큼 반복
+  addDays"에서 "addDays(effectiveStart, -1)(수령) / addDays(effectiveEnd, +1)(반납) 딱
+  1개"로 교체 + warnSelected = holidayExtraDays > 0 신규 추가. calcHolidayExtension의
+  while 루프가 "휴무 아님"을 확인한 그 즉시 break하므로 이 경계일 계산은 연장일수(N)가
+  몇 일이든 별도 분기 없이 항상 정확하다(증명: calcHolidayExtension 주석 참고).
+
+CMS 안내 스크립트 신설(delivery_cutoff_settings.holiday_guide_text, Migration #505):
+  /cms/set/rental "휴무일 제어 옵션" 섹션에 shipping_guide와 동일 패턴의 textarea 추가
+  (200자, upsert_delivery_cutoff_settings RPC 4-param 확장 — 구 3-param DROP + REVOKE/
+  GRANT 재하드닝 필수, §GATE C 참고). cart/+page.server.ts load()가 rentalGuideText와
+  동일 패턴으로 독립 조회해 holidayGuideText로 전달 — loadCourierClosedDates()(휴무일 Set
+  계산 전용 유틸)의 책임 밖이라 그 함수에 합치지 않음. cart/+page.svelte는 달력이 열려있고
+  (isCalOpen) 자동연장이 발동된(holidayExtraDays>0) 동안에만 .form-note로 노출(기존
+  onselect의 csToast.info(...) 이벤트성 토스트와 공존 — 대체 아님).
+
+마이그레이션: supabase/migrations/20260916000000_505_delivery_cutoff_holiday_guide_text.sql
+```
+
+---
+
 ## GATE C 확인 항목 (이 영역 코드 수정 시)
 
 ```
@@ -176,15 +340,52 @@ CMS 판정설정 화면    : src/routes/cms/set/rental/+page.svelte, +page.serve
     독립 조회, 12h요율 없으면 flat 폴백 — §3 참고)
 [ ] Stage(ezyvffjvuwmtuhpxdjrw) 먼저 적용·검증 후 Production(vnbpmvxruyciuuaermyh) 적용
     순서를 지켰는가?
+[ ] 휴무일 연장 요금(§5) 수정 시 — holiday_extra_fee 계산에 한쪽/양쪽 구분 분기를
+    추가하지 않았는가? (N=전체 연장일수 합산 기준 단일 공식만 존재해야 함)
+[ ] holiday_extra_fee가 v_total(할인 계산 기준)에 섞여 들어가지 않았는가? (delivery_fee와
+    동일하게 할인·포인트 차감 이후에만 가산)
+[ ] create_hold_reservation/promote_draft_reservation에 p_pickup_method/p_return_method를
+    NULL로 호출하는 기존 경로가 여전히 기존 동작 그대로인가? (하위호환 필수)
+[ ] 반납측 휴무일 판정 기준일이 "반납일 당일"이 아니라 "반납일 다음날(+1)"로 캘린더 UX·
+    연장 로직 양쪽 모두 통일돼 있는가?
+[ ] holiday_extra_fee 관련 수정이 필요할 때 create_reservation_order를 직접 고치지 않고
+    sync_order_after_composition_change(정본)를 고쳤는가? (§5 "최종금액 합산 지점" 참고 —
+    9/14 리팩터링 이후 3개 호출부가 이 함수를 공유하므로 create_reservation_order를 다시
+    건드리면 사일로 로직이 재발한다)
+[ ] 격리된 git worktree/다른 세션에서 DB에 직접 적용한 마이그레이션이 있다면, 그 화면
+    코드가 실제로 stage 브랜치에 병합돼 있는지 확인했는가? ("DB엔 있는데 코드엔 없는"
+    드리프트가 이번 사안의 근본 원인이었다)
+[ ] (2026-09-16) CalendarGrid.svelte에 새 prop을 추가할 때 기본값을 지정해 미전달 시
+    기존 호출부(CmsDatePicker.svelte·ProfileTabContent.svelte) 동작이 100% 불변인가?
+[ ] warnSelected 관련 CSS를 수정할 때 .cal-day-sel뿐 아니라 .cal-day-range-start/
+    end::after도 함께 오버라이드했는가? (카트 화면은 selectedDate가 항상 rangeStart/
+    rangeEnd와 동일값이라 실제로 그려지는 건 ::after 원 — .cal-day-sel만 고치면
+    시각적으로 아무 효과가 없다)
+[ ] highlightDates에 "흡수되는 모든 날짜"가 아니라 "경계 하루"만 담기는가? (구현이 여러
+    날짜를 담도록 되돌아가면 안 됨 — set.add() 호출이 정확히 1회여야 함)
+[ ] delivery_cutoff_settings.holiday_guide_text 관련 RPC를 DROP+CREATE했다면 REVOKE ALL
+    FROM PUBLIC, anon + GRANT TO authenticated 재하드닝을 빠뜨리지 않았는가? (2026-09-15
+    CRITICAL 실사고 재발 방지 원칙 — 새로 생성된 함수 객체는 구버전의 권한 하드닝 이력을
+    전혀 물려받지 못한다)
 ```
 
 ---
 
-*rental-fee-policy.md v1.1 | Harness Flow v3.2 | 2026-09-04 신설 — 4가지 수령→반납 조합별
+*rental-fee-policy.md v1.3 | Harness Flow v3.2 | 2026-09-04 신설 — 4가지 수령→반납 조합별
 금액 검증 세션(Migration #440~445) 산출물을 정책 문서로 정리. is_bulk_delivery/
 is_delivery_type 혼동이 실제 CRITICAL 결함으로 이어졌던 이력을 재발방지 목적으로
 명문화(§2 박스). | 2026-09-06 §4·GATE C 정정 — `calcShippingFee`(배송비) 판정기준이
 `is_bulk_delivery`에서 `is_delivery_type`으로 교체된 것을 반영(`is_bulk_delivery=false`인
 실배송 방식 선택 시 배송비가 0원으로 계산되던 CRITICAL 결함 수정에 따른 문서 갱신 — 코드
 수정 자체는 이 문서 갱신 이전 세션에서 완료·GATE E 검수 통과·`rental-cms-settings.md`
-동시 정정 완료됨).*
+동시 정정 완료됨). | 2026-09-15 §5 신설 — 휴무일 포함 배송 연장 요금 로직(2026-09-12
+별도 세션 설계) 병합 반영. 화면 코드가 격리된 git worktree에만 존재하고 DB 마이그레이션만
+Stage에 적용된 8일간의 드리프트를 발견·해소, worktree 원설계(create_reservation_order
+직접 가산)가 9/14 무관한 세션의 리팩터링(sync_order_after_composition_change 공용화)에
+덮여 사라진 것을 확인해 정본 위치를 sync_order_after_composition_change로 재조정.
+Migration #501·#502로 병합, GATE C 6건 추가. | 2026-09-16 §5 후속 절 추가 — 달력 색상
+재설계(선택일=레드·경계일 1개=퍼플·휴무일 자체=무색, `CalendarGrid.svelte` `warnSelected`
+prop 신설 + `highlightDates` 의미 변경) + CMS 안내 스크립트 신설
+(`delivery_cutoff_settings.holiday_guide_text`, Migration #505). 요금 계산 로직은 단 한
+줄도 무변경 — 계획서 `wobbly-cuddling-marble.md` PART A(CMS)+PART B(front) 전체 반영,
+Stage 실데이터(추석 9/24~26)로 라이브 검증 완료(선택 9/25→25=레드·24=무색·23=퍼플 확인).*
