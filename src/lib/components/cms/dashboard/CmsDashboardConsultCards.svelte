@@ -40,8 +40,14 @@
     return `${Math.floor(diff / 86_400_000)}일 전`
   }
 
+  // AdminChatPanel.svelte sessionLabel()과 동일 패턴 — user_name이 서버에서 항상 ''(빈 문자열,
+  // null 아님)로 내려오므로 ??(nullish) 대신 truthy 체크 필수. ??를 쓰면 ''가 "값 있음"으로
+  // 처리돼 user_handle/'익명' 대체가 절대 발동하지 않아 이름이 빈칸으로 표시됨(2026-09-15
+  // Stephen이 실화면에서 발견).
   function displayName(session: ChatSession): string {
-    return session.user_name ?? session.user_handle ?? '익명'
+    if (session.user_name) return session.user_name
+    if (session.user_handle) return session.user_handle
+    return '익명'
   }
 
   function openSession(id: string): void {

@@ -32,7 +32,7 @@
     if (!$isAuthenticated) {
       csToast.info('로그인 후 구독하기를 이용하실 수 있습니다.', {
         actionLabel: '확인',
-        onClick: () => goto(`/login?returnTo=/subscribe/${planId}`),
+        onClick: () => goto(`/auth/login?returnTo=/subscribe/${planId}`),
       })
       return
     }

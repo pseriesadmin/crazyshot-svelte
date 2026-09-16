@@ -303,6 +303,15 @@
     width: 100%;
   }
 
+  /* PC(≥768px) — 마이페이지 우측 패널(.pc-right, account/+page.svelte)에서 렌더링될 때
+     모바일 전용 단일열 레이아웃이 넓은 폭 그대로 좌우로 늘어지지 않도록 폭 제한 */
+  @media (min-width: 768px) {
+    .address-wrap {
+      max-width: 640px;
+      margin: 0 auto;
+    }
+  }
+
   .address-card {
     background: white;
     border-radius: 30px 30px 0 0;
