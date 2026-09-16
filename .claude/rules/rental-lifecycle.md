@@ -93,14 +93,14 @@ expired (만료됨)
     `p_include_statuses: ['cancelled','expired']`) — `cancelled`와 `expired`는 "더 이상
     진행되지 않는 예약"이라는 점에서 관리자 관점에 같은 탭에 묶이지만, 각 행 자체의 배지는
     STATUS_LABEL로 여전히 "취소"/"만료됨"으로 구분 표시된다.
-  → ⛔ 종료(terminal) 상태 가드 3중 누락 결함(2026-09-10, Migration #485로 수정): 위 탭
+  → ⛔ 종료(terminal) 상태 가드 3중 누락 결함(2026-09-10, Migration #487로 수정): 위 탭
     확장으로 `expired` 예약이 CMS 상세 패널(`RentalDetailPanel.svelte`)에 열람될 수 있게
     됐는데, 아래 3곳이 전부 `expired`를 종료상태로 인식하지 못하고 있었다 —
     ① `RentalDetailPanel.svelte` `STATUS_LABEL`(원문 'expired' 그대로 노출),
     ② 같은 파일 `TERMINAL` Set(완료/취소/파손신고만 인식 → "예약 취소" 버튼이 만료 건에도
     노출됨), ③ `update_reservation_status` RPC(Migration #417)의 자체 종료상태 체크(위와
     동일 3종만 → 버튼을 눌렀을 때 서버도 막지 않고 `expired→cancelled` 전환이 실제로
-    성공해버림). 셋 다 `expired` 추가로 수정(Migration #485,
+    성공해버림). 셋 다 `expired` 추가로 수정(Migration #487,
     `reservationExpiredTerminal.test.ts` TDD 3건 GREEN, Stage·Production 적용·실제
     expired 예약으로 재현검증 완료).
 ```
@@ -322,9 +322,13 @@ cancelled / damage_claimed → 취소 UI (✕ 아이콘 + 빨간 텍스트)
 
 > `cancelled`, `damage_claimed` 상태에서는 채팅 알림 버튼 미표시.
 > `in_use` 진입 시 자동으로는 `rental_confirm`(대여확인)만 발송되고,
-> `return_remind`(반납예정)는 **반납일 당일 09:00 pg_cron(`auto-return-remind`)이 자동 발송**(Migration 256)
-> 하며, 관리자가 이 표의 수동 버튼으로 언제든 재발송도 가능하다.
+> `return_remind`(반납예정)는 **반납일 당일 KST 09:00 Vercel Cron(`/api/cron/return-remind`,
+> `get_return_remind_targets(p_limit)` RPC + SMS·푸시 동시발송)이 단독 자동 발송**한다 —
+> Migration 506+507로 기존 pg_cron(`auto-return-remind`, Migration 256, 채팅카드 단독 발송)이
+> 해제됐다. 관리자가 이 표의 수동 버튼으로 언제든 재발송도 가능하다.
 > 자동발송 중복 방지: `action_payload->>'action_url'`이 오늘 날짜에 이미 발송된 세션은 스킵.
+> 배치 처리: BATCH_SIZE=100 × MAX_BATCHES=5(최대 500건/실행) — `locker-guide` Cron과 동일한
+> 다중 배치 루프 패턴(Migration 507에서 `p_limit` 파라미터 추가로 배치 누락 결함 수정).
 
 ### `return_remind` 알림 내 고객 반납이력 등록 CTA (2026-08-15 신규)
 
@@ -370,7 +374,7 @@ cancelled / damage_claimed → 취소 UI (✕ 아이콘 + 빨간 텍스트)
 
 | 동작 | RPC | 호출 위치 |
 |---|---|---|
-| 상태 변경 (라이프사이클·예약) | `update_reservation_status` | `/cms/reservation?/updateStatus` (절대 URL 고정) — 종료상태 가드는 `completed/cancelled/damage_claimed/expired` 4종(Migration #485, 2026-09-10) |
+| 상태 변경 (라이프사이클·예약) | `update_reservation_status` | `/cms/reservation?/updateStatus` (절대 URL 고정) — 종료상태 가드는 `completed/cancelled/damage_claimed/expired` 4종(Migration #487, 2026-09-10) |
 | 예약 승인 | `approve_reservation` | `/cms/reservation?/approveReservation` |
 | 채팅 알림 | `send_rental_chat_notification` | `/cms/rentals?/sendChatNotify` |
 | 액션 로그 기록 | `log_rental_action` | 현장 출고·반납 처리 시 |
@@ -459,7 +463,7 @@ CTA 새 창 열기 수정          : src/lib/components/chat/ActionCard.svelte (
 [ ] isRentalView=true 시 승인/거부/예약취소 버튼 완전 숨김?
 [ ] completed/cancelled/damage_claimed/expired → 다음 단계 버튼 미표시?
     (RentalDetailPanel.svelte TERMINAL Set 4종 — expired 누락 시 만료 건에도 "예약 취소"
-    버튼이 노출됨, 2026-09-10 Migration #485로 해소된 결함 재발 방지용 체크)
+    버튼이 노출됨, 2026-09-10 Migration #487로 해소된 결함 재발 방지용 체크)
 [ ] log_rental_action visit_pickup → in_use (shipped 아님)?
 [ ] 스텝퍼 completed 상태 → returned 스텝에 done 처리?
 [ ] 스텝퍼 cancelled/damage_claimed → 취소 UI 표시?
@@ -510,7 +514,7 @@ HOLD 만료 정책 전면 반전(Migration 453, Stephen 확정) — "생성 후 
 리셋)"을 폐기하고 "계약 미발송 hold는 타이머 없음, 계약 발송 시각 기준으로만 30분"으로 교체.
 Stage·Production 적용 완료, TDD 29/29 GREEN. | 2026-09-10 "expired" 종료(terminal) 상태
 가드 3중 누락 결함(RentalDetailPanel.svelte STATUS_LABEL·TERMINAL Set + update_reservation_
-status RPC 자체 종료상태 체크) 발견·수정(Migration #485) — 2026-09-09 "취소" 탭 확장으로
+status RPC 자체 종료상태 체크) 발견·수정(Migration #487) — 2026-09-09 "취소" 탭 확장으로
 CMS 상세 패널에서 expired 예약을 열람할 수 있게 되면서 노출된 결함. `reservationExpiredTerminal.
 test.ts` TDD 3건 신설, Stage·Production 적용 + 실제 expired 예약으로 재현검증 완료. GATE C에
 서버·프런트 종료상태 비대칭 점검 항목 1건 추가.*

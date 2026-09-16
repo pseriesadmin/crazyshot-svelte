@@ -1,5 +1,427 @@
 # .claude/harness/TASK.md
 
+## NOW — 🔴 CRITICAL: CMS QR 코드 시스템 통합 모듈화 (2026-09-16, promptor 등록, GATE B 대기 — 착수 금지)
+
+### GATE 등급: 🔴 CRITICAL — 서비스 의도 확인 필수
+
+```
+사유: 6개 파일(상품 상세·상품 일괄인쇄·예약·계약서명·회원관리자용·회원고객앱용) 동시 변경 +
+상품 QR에 담기는 정보(payload) 포맷 자체를 변경(하위호환 유지 포함) — CLAUDE.md 기준
+"결제·예약·보안 / 다중 파일·DB 변경" CRITICAL 분류에 해당.
+DB 마이그레이션: 없음(테이블/컬럼 스키마 변경 아님, QR에 인코딩되는 텍스트 포맷 변경일 뿐).
+GATE B 승인 전까지 harness-executor 착수 금지.
+```
+
+### 배경
+
+Stephen이 사전 검증 완료한 플랜(`~/.claude/plans/qr-serialized-meerkat.md`)을 그대로 실행
+요청. 현재 CMS 전역에 QR 발행 로직이 6곳에 개별 복붙돼 있음(상품 상세/일괄인쇄, 예약,
+계약서명, 회원 관리자용/고객앱용) — 통합된 발행 체계 부재, 상품 품번코드에 카테고리 값
+미포함, 생성 규격이 지점마다 제각각(44~220px)이라 300x300 PNG 인쇄 표준이 지켜지지 않음.
+6곳을 하나의 중앙 모듈로 통합 + 상품 QR에 카테고리 값 추가 + 생성 규격 PNG 300x300 통일.
+**기존 UI 배치·다운로드 버튼 위치는 전부 그대로 유지**, 내부 로직만 공용화.
+
+### Stage 0 — promptor 사전 재검증 결과 (2026-09-16, 코드 직접 Read로 확인)
+
+```
+✅ products.category — NOT NULL ENUM 맞음(null 분기 불필요, 코드 재확인 완료)
+✅ MemberQrModal.svelte — src/lib/components/account/MemberQrModal.svelte (메인 레포 경로) —
+   같은 SvelteKit 앱 $lib 공유, 신규 모듈 재사용 가능. ⚠️ .claude/worktrees/
+   agent-a02b1ad185045b896/ 하위에도 동일 파일명이 존재하나 이는 별도 워크트리 산출물이므로
+   대상 아님 — 반드시 메인 레포 경로(src/lib/components/account/MemberQrModal.svelte)만 수정.
+✅ 현재 QR 렌더링 폭 실측 확인(플랜 수치와 일치):
+   ProductDetailPanel.svelte renderQR = 88px / RentalDetailPanel.svelte renderReservationQR = 44px /
+   CustomerDetailPanel.svelte renderMemberQR = 44px / MemberQrModal.svelte = 220px /
+   cms/products/+page.svelte printSelectedQR(일괄인쇄) = 160px /
+   send-chat/+server.ts(계약서명 링크) = 200px
+✅ .qr-wrap/.reservation-qr-wrap/.member-qr-wrap canvas CSS — width/height 없음(border-radius·
+   border만 존재) 확인됨 — canvas 픽셀버퍼를 300으로 올리면 CSS 표시크기 고정이 반드시 필요
+   (플랜의 "CSS width/height 명시 추가 필수" 전제 그대로 유효).
+✅ qrProductId.ts 현재 함수 — extractProductId/extractMemberCode/isProductMatch 3개 존재,
+   플랜이 명시한 확장 대상과 일치. extractMemberCode는 `/qr/member/{code}` 경로형 고정이라
+   extractProductId와 겹치지 않음(플랜 서술과 일치).
+✅ rentalQrTransition.ts의 processRentalQrTransition() — 그대로 재사용 가능한 구조 확인
+   (update_reservation_status RPC + AUTO_NOTIFY 매핑 + fail-soft 로그/이력 기록 패턴).
+✅ escapeLikePattern.ts — 존재 확인, 신규 예약코드 스캔 라우트의 ilike 조회에 그대로 재사용 가능.
+✅ cms/mobile/+page.svelte — 현재 extractProductId/extractMemberCode 2개를 순차 호출하는
+   구조 확인(라인 89~96) — identifyQrPayload() 단일 호출로 통합하는 플랜의 전제와 일치.
+
+⚠️ 불일치 발견 — reservation_code 실제 포맷은 플랜의 추정과 다름:
+   플랜은 extractReservationCode 정규식을 `/^CZ-\d{8}-\d{5}$/i`로 제시했으나, 실제
+   cms_settings.reservation_code_format(Migration #42) 기본값은
+   `{"prefix":"CS","date_format":"YYMM","seq_digits":3,...}` 형태로 preview 예시가
+   `"CS-CAM-ML-2607-001"`(카테고리 코드 포함, 하이픈 다수, "CZ-"로 시작하지 않음)이다.
+   RentalDetailPanel.svelte의 reservationCode()도 `row.reservation_code ??
+   'CZ-'+reservation_id.padStart(5,'0')`처럼 두 가지 형태가 혼재할 수 있음을 시사한다.
+   → **harness-executor는 extractReservationCode 정규식을 플랜 원문 그대로 하드코딩하지
+     말고, 실제 DB의 reservation_code 값 샘플(Stage DB 직접 조회 권장) 또는
+     reservation_code_format 설정을 재확인해 정규식을 그에 맞게 조정할 것.** 그 외
+     플랜 항목은 전부 코드와 일치 확인됨.
+```
+
+### Phase 1 — 신규 중앙 모듈 3개 (`src/lib/utils/`)
+
+```
+qrIssue.ts (신규):
+  QR_CANVAS_SIZE = 300
+  buildProductQrPayload(productCode, category) → `${productCode}|${category}` (상품 QR만
+    카테고리 포함 — 다른 5곳 payload는 무변경)
+  renderQrToCanvas(canvas, payload, opts?) — QRCode.toCanvas 래핑, width:300 기본
+  buildQrDataUrl(payload, opts?) — QRCode.toDataURL 래핑(서버·일괄인쇄용, 순수함수)
+  downloadQrWithLabel(canvas, label, filename) — 기존 3곳(상품/예약/회원-CMS) 복붙 라벨합성
+    로직을 그대로 추출(동작 무변경, 재작성 금지)
+  ⚠️ DOM 의존 함수(renderQrToCanvas/downloadQrWithLabel)와 서버 겸용 순수 함수
+    (buildQrDataUrl/buildProductQrPayload)를 파일 내 주석으로 명확히 구분 — send-chat/
+    +server.ts는 순수 함수만 import.
+
+qrProductId.ts (기존 파일 확장, 하위호환 유지):
+  extractProductId(raw) — 기존 로직 + `|` 있으면 첫 `|` 앞부분만 반환(신버전 파싱 추가),
+    `|` 없는 구버전 원문·URL 패턴은 기존 분기 그대로 통과
+  extractReservationCode(raw) — 신설(정규식은 위 Stage 0 불일치 항목 참고, 실측 후 확정)
+  identifyQrPayload(raw) — 신설, product/member/reservation/unknown 통합 판별기
+    (cms/mobile/+page.svelte가 이 함수 하나만 호출하도록 통합)
+
+qrPrinter.ts (신규) — 블루투스 프린터 "사전준비" 전용, 실제 통신 미구현:
+  type QrPrintJobStatus = 'idle'|'connecting'|'ready'|'printing'|'error'
+  interface QrPrintJob { payload; label?; pngDataUrl? }
+  interface QrPrinterCapability { supported; reason? }
+  detectBluetoothPrinterSupport() — navigator.bluetooth 존재 체크만
+  ⛔ UI 버튼 추가 금지(동작 안 하는 버튼은 "미완성 UI 금지" 원칙 위반) — 타입/판별 함수만.
+```
+
+### Phase 2 — QR 생성 6곳 교체 (payload는 상품만 변경, 나머지 5곳은 기존 payload 유지)
+
+```
+1. src/lib/components/cms/ProductDetailPanel.svelte
+   renderQR/downloadQR → qrIssue.ts 모듈 함수 호출
+   payload = buildProductQrPayload(product.product_code, product.category)
+   canvas buffer 300 + .qr-wrap canvas CSS에 width:88px;height:88px 명시 추가(표시크기 불변)
+
+2. src/routes/cms/products/+page.svelte (printSelectedQR, 일괄인쇄)
+   buildQrDataUrl(buildProductQrPayload(...), {width:300})로 교체(기존 160→300)
+   인쇄 HTML 레이아웃은 CSS로 이미지 표시크기 그대로 유지
+
+3. src/lib/components/cms/RentalDetailPanel.svelte
+   renderReservationQR/downloadReservationQR → 모듈 함수, payload 무변경(예약코드)
+   canvas buffer 300 + .reservation-qr-wrap canvas CSS width:44px;height:44px 추가
+
+4. src/routes/api/cms/contracts/[id]/send-chat/+server.ts
+   buildQrDataUrl(signingUrl, {width:300})로 교체(200→300), 서버측이라 CSS 이슈 없음,
+   fail-soft 유지
+
+5. src/lib/components/cms/CustomerDetailPanel.svelte
+   renderMemberQR/downloadMemberQR → 모듈 함수, payload 무변경
+   canvas buffer 300 + .member-qr-wrap canvas CSS width:44px;height:44px 추가
+
+6. src/lib/components/account/MemberQrModal.svelte (메인 레포 경로 — 워크트리 사본 아님)
+   모듈 함수로 교체, canvas buffer 300, 기존 220px 표시 유지되도록 CSS 확인·필요시 명시
+```
+
+### Phase 3 — 모바일 스캔 통합
+
+```
+src/routes/cms/mobile/+page.svelte:
+  extractProductId+extractMemberCode 개별 순차호출(현재 라인 89~96) → identifyQrPayload()
+  단일 호출로 라우팅 교체
+
+신규 라우트 src/routes/cms/mobile/qr/reservation/[code]/+page.server.ts:
+  reservation_code를 ilike + escapeLikePattern(기존 관례)으로 조회 → 그 예약의 product_id로
+  기존 /cms/mobile/qr/[product_id] 화면으로 즉시 redirect(신규 UI 제작 없음, 기존 상품
+  착지화면 재사용). 반출입 액션은 processRentalQrTransition()(rentalQrTransition.ts) 그대로
+  재사용 — 신규 구현 없음.
+
+src/routes/qr/[entity]/[id]/+server.ts(레거시 URL 스캔) — 이번 스코프에서 변경 안 함
+  (product/reservation 이미 지원 중, 회귀 위험만 있어 손대지 않음).
+```
+
+### 실행 순서 (필수 — 순서 위반 시 스캔 회귀 위험)
+
+```
+1. qrProductId.ts 확장(파싱 로직) — 반드시 상품 payload 변경(Phase 2 #1)도 같은 커밋/배포
+   단위로 포함(따로 배포 시 그 사이 스캔 전부 깨짐)
+2. qrIssue.ts, qrPrinter.ts 신설
+3. 생성 지점 6곳 교체(Phase 2 순서대로)
+4. 모바일 스캔 통합(Phase 3)
+```
+
+### 재사용할 기존 함수/패턴 (신규 작성 금지 대상)
+
+```
+canvasLetterbox.ts — 순수함수 분리 패턴 그대로 모방
+qrProductId.ts의 isProductMatch() — 무변경 재사용
+rentalQrTransition.ts의 processRentalQrTransition() — 신규 라우트에서 재사용, 새로 만들지 않음
+escapeLikePattern.ts — 신규 라우트 ilike 조회에 재사용(products.md QR-CASE-1 원칙과 동일)
+다운로드 라벨 합성 로직(3곳 복붙 코드) — 그대로 옮기기만 함(재작성 금지)
+```
+
+### 검증 방법 (GATE C)
+
+```
+[ ] npx svelte-check — 신규/수정 파일 전부 신규 에러 0건
+[ ] 유닛테스트 신규: qrProductId.test.ts에 구버전 원문(예: CSCRDSL0010000)/신버전
+    (CSCRDSL0010000|lens)/URL(/qr/product/{uuid})/예약코드(실측 포맷 기준)/회원코드 5종
+    파싱 케이스 추가
+[ ] Claude Browser 실브라우저 검증(CLAUDE.md 조건 ② — Stephen에게 명시적 허용 요청 후 진행):
+    - 상품 상세 QR이 화면상 88px로 그대로 보이는지, 다운로드 PNG가 실제 300x300인지
+      (Image.naturalWidth/Height 확인)
+    - 예약/회원 QR도 동일하게 44px 표시 + 300px 다운로드 확인
+    - 신버전 QR(품번|카테고리)을 /cms/mobile 스캔 로직에 텍스트로 직접 넣어
+      identifyQrPayload() → 상품 매칭까지 재현
+    - 예약코드로 신규 라우트 진입 시 기존 상품 착지화면으로 정상 redirect되는지 확인
+[ ] 구버전 QR 하위호환 회귀: 이미 발급된 순수 품번코드 텍스트로 스캔 재현 → 정상 매칭 확인
+[ ] 상품 QR payload 변경(#1)과 파싱 로직 확장이 동일 배포 단위에 포함됐는가?(순서 위반 금지)
+[ ] 6곳 전부 표시 크기(88/44/44/220px)가 CSS로 고정되어 canvas 버퍼 300 확대 후에도
+    화면상 커지지 않는가?
+```
+
+### 문서 갱신 대상 (구현 완료 후)
+
+```
+products.md §2-4(QR 콘텐츠 정책)에 카테고리 병기 정책 반영 필요 — 구현 시 §2-4 갱신
+```
+
+### Stephen 확인 필요 — GATE B (착수 승인 대기)
+
+```
+1. GATE B 승인 전까지 harness-executor 착수 금지.
+2. 승인 시 문구: "GATE B 승인. NOW 실행해." / 수정 시: TASK.md 직접 수정 후 "GATE B: 내가
+   고쳤어. NOW 실행해." / 반려 시: "GATE B 반려. [이유]. 다시 작성해."
+```
+
+---
+
+## DONE — return_remind 반납일 당일 알림 SMS 동시발송 + 배치처리 안전화 (2026-09-16, ✅ GATE E 통과 3차 검수 — Stage #506·#507 양쪽 적용 완료, Production 미적용·git commit 대기)
+
+### 배경
+
+Stephen이 `/cms/reservation` 출고·반납 프로세스 검증을 요청. 조사 결과 `return_remind`(반납일
+당일 알림)가 순수 SQL pg_cron(`auto-return-remind`, 09:00 KST)으로 채팅카드만 발송하고 SMS·
+브라우저 푸시가 미발송 상태임을 확인. Stephen 지시: "발송 시각 09:00 유지, SMS 동시발송 추가"
++ "구현 직후 재검수해서 프로세스 구멍을 다시 찾아라, 특히 두발히어로 연동성".
+
+### Migration #506 — 원본 구현 (pg_cron 해제 + Vercel Cron 신설)
+
+```
+파일: supabase/migrations/20260916010000_506_return_remind_vercel_cron_migration.sql
+적용: Stage(ezyvffjvuwmtuhpxdjrw) 완료
+
+- 기존 auto-return-remind pg_cron 해제(cron.unschedule) — 순수 SQL은 앱코드의 SMS·푸시
+  발송 함수를 호출할 경로가 없는 구조적 한계(service-operations.md §15) 때문
+- get_return_remind_targets() RPC 신설(당초 무인자 — 2차 수정 #507에서 p_limit 추가)
+```
+
+```
+신규: src/routes/api/cron/return-remind/+server.ts
+KST 09:00, vercel.json에 "0 0 * * *" 등록(기존 locker-guide/dhero-sync 패턴 동일)
+
+get_return_remind_targets() 조회 → 예약별 3가지 동시 발송:
+  ① 채팅카드(send_rental_chat_notification)
+  ② SMS 직접 발송(sendSms) — pg_cron에서 구조적으로 불가했던 경로, 이번 신규 추가
+  ③ 브라우저 푸시(sendReservationLifecyclePush)
+CRON_SECRET Bearer 인증 — 기존 locker-guide/dhero-sync 패턴 재사용
+```
+
+### 1차 QA 발견·수정 — SMS 중복발송 결함
+
+```
+증상: 직접 SMS(②)와 브라우저 푸시 내부 fallback SMS(③)가 동시에 걸려 FCM 토큰 없는
+     고객(iOS Safari 등)이 문자를 2통 받는 결함.
+수정 파일: src/lib/server/push.ts
+  sendReservationLifecyclePush에 options?: { skipSmsFallback?: boolean } 파라미터 추가.
+  - 신규 크론만 skipSmsFallback: true 전달 → 중복 제거
+  - 기존 수동 "반납 예정 알림 💬" 버튼 등 기존 14개 호출부는 옵션 미전달 → fallback 포함
+    기존 동작 완전 보존 (전체 호출부 grep 대조 확인, 회귀 없음)
+```
+
+### 2차 QA 발견·수정 — 배치처리 상한 결함 (Migration #507)
+
+```
+파일: supabase/migrations/20260916020000_507_get_return_remind_targets_p_limit.sql
+적용: Stage(ezyvffjvuwmtuhpxdjrw) 완료
+
+원인: BATCH_SIZE=100 하드캡 + 초과분 무기록 드롭 방식 → 대상 101건 이상 시 101번째부터
+     그날 알림 영구 누락(원본 pg_cron은 무제한 순회였으므로 이번 전환으로 생긴 기능 축소).
+
+수정:
+  - get_return_remind_targets() 무인자 오버로드 DROP
+  - p_limit INT DEFAULT 100 파라미터 신버전 신설
+  - dedup 원리: 채팅카드 발송 직후 다음 배치 조회 시 NOT EXISTS 조건으로 자동 제외
+    (locker-guide claim 선점과 동일 효과)
+
+src/routes/api/cron/return-remind/+server.ts 재작성:
+  BATCH_SIZE=100 × MAX_BATCHES=5(최대 500건/실행) 다중 배치 루프
+  subscription-billing/locker-guide 정본 패턴 그대로 재현
+```
+
+### 두발히어로(dhero) 연동 재검증
+
+```
+git diff로 dhero-sync/dheroAutoAdvance.ts/출고·반납 dhero 자동송출 로직 전부 무변경 확인.
+두 크론(dhero-sync 10분 간격, return-remind 1일 1회) 간 경합 없음 확인.
+```
+
+### 테스트
+
+```
+src/__tests__/services/returnRemindSms.test.ts
+  기존 8개 + 배치 루프 검증 5개 추가(150건 2배치·100건 정확·50건 즉시종료·MAX_BATCHES
+  상한·0건) → 13/13 GREEN
+```
+
+### 문서 갱신
+
+```
+.claude/rules/rental-lifecycle.md
+  return_remind 서술을 "반납일 당일 09:00 pg_cron(auto-return-remind)" →
+  "KST 09:00 Vercel Cron(/api/cron/return-remind) + BATCH_SIZE=100/MAX_BATCHES=5 배치루프"로
+  정정. rental-lifecycle.md return_remind 절 반영 완료.
+```
+
+### QA 이력 (3차)
+
+```
+1차 QA: SMS 중복발송 지적 → push.ts skipSmsFallback 파라미터 추가로 수정
+2차 QA: 배치처리 상한 지적 → Migration #507 + 배치루프 재작성으로 수정
+3차(최종) QA: GATE E 최종 통과 판정
+```
+
+### 마이그레이션 적용 상태
+
+```
+Stage(ezyvffjvuwmtuhpxdjrw): Migration #506·#507 양쪽 적용 완료
+Production(vnbpmvxruyciuuaermyh): 미적용 — Stephen 실사용 수동검증 후 별도 적용 예정
+```
+
+---
+
+## DONE — return-remind Vercel Cron 배치 누락 결함 수정 (2026-09-16, sp3-qa-agent 지시, ✅ 수정 완료 — Migration #507 Stage 적용 완료, 테스트 13/13 GREEN. 부분 기록 — 전체 경위는 위쪽 종합 블록 "return_remind 반납일 당일 알림 SMS 동시발송 + 배치처리 안전화" 참고)
+
+### 배경
+
+sp3-qa-agent가 `/api/cron/return-remind`(Migration #506)에서 구조적 결함 발견: 대상이 100건 초과 시
+101번째부터 채팅카드·SMS·푸시 전혀 발송되지 않고 영구 누락되는 결함(console.warn + slice(0,100)).
+
+### 수정 내용
+
+```
+1. supabase/migrations/20260916020000_507_get_return_remind_targets_p_limit.sql
+   get_return_remind_targets() 무인수 오버로드 DROP + p_limit INT DEFAULT 100 파라미터 포함 신버전.
+   dedup 원리: 채팅카드(③) 발송 직후 다음 배치 조회 시 NOT EXISTS 조건에 걸려 자동 제외됨
+   — locker-guide claim 선점과 동일한 효과.
+
+2. src/routes/api/cron/return-remind/+server.ts
+   BATCH_SIZE=100 × MAX_BATCHES=5(최대 500건/실행) 다중 배치 루프로 재작성.
+   locker-guide/subscription-billing 정본 패턴 그대로 재현.
+
+3. src/__tests__/services/returnRemindSms.test.ts
+   배치 루프 단위 테스트 5개 추가(150건 2배치·100건 정확·50건 즉시종료·MAX_BATCHES 상한·0건).
+   기존 8개 포함 총 13/13 GREEN.
+
+4. .claude/rules/rental-lifecycle.md
+   "반납일 당일 09:00 pg_cron" → "KST 09:00 Vercel Cron + BATCH_SIZE/MAX_BATCHES 명기"로 정정.
+```
+
+### 마이그레이션 적용 대상
+
+Stage(ezyvffjvuwmtuhpxdjrw) → Production(vnbpmvxruyciuuaermyh) 순서.
+파일: supabase/migrations/20260916020000_507_get_return_remind_targets_p_limit.sql
+
+---
+
+## DONE — 🔴 CRITICAL: 장바구니 달력 "배송 휴무일" 색상 재설계 + CMS 안내 스크립트 신설 PART B(front) (2026-09-16, 이 세션, ✅ GATE E 통과 — sp3-qa-agent 독립검수 완료(블로킹 0건, 정보성 노트 3건), Stage 실데이터 라이브 검증 완료, git commit만 Stephen 대기)
+
+### 배경
+
+계획 파일: `/Users/stevenmac/.claude/plans/wobbly-cuddling-marble.md`. Stephen 지시:
+"front '/cart' 대여 설정 달력 로직 개발 영역 리뷰 및 개발 적용 실행" — ① CMS(/cms/set/rental)
+쪽 구현 정보 반영 ② 기존 휴무일 로직 제외 영역의 UI/기능 보호(연결 로직은 안전하게 수정)
+③ 하네스 플로 시스템 호출. PART A(CMS)는 별도 세션에서 이미 구현·Stage 적용·GATE E 통과
+완료 상태(계획서 A-6절)였고, 이 세션은 PART B(front, `/cart`)만 구현.
+
+세션 시작 시 cwd가 이전 worktree(`agent-a02b1ad185045b896`)에서 main repo(stage 브랜치)로
+전환돼 있었음 — PART A(CMS) 코드가 이미 main repo에 존재함을 확인(다른 세션이 병합해둔
+상태), PART B는 미착수 상태였음을 grep으로 확인 후 착수.
+
+### 확정된 색상 규칙 (Stephen 구체적 날짜 예시로 검증된 계획서 그대로 구현)
+
+```
+선택일(자동연장을 유발한 수령/반납일) = 레드(--cs-red-badge)
+구간 밖 첫 정상 영업일(경계 하루) = 퍼플(--cs-purple-light)
+흡수되는 휴무일 자체(연속이어도 전체) = 무색(색상 배경 없음)
+```
+
+### 구현
+
+```
+src/lib/components/common/CalendarGrid.svelte
+  신규 선택적 prop warnSelected?: boolean(기본값 false, 미전달 시 기존 호출부 100% 불변) —
+  선택된 날짜(cal-day-sel)를 레드로 오버라이드. .cal-day-sel뿐 아니라 .cal-day-range-start/
+  end::after(카트 화면에서 실제로 그려지는 원)까지 함께 오버라이드해야 시각 효과가 남 —
+  계획서가 미리 지적한 "핵심 구조적 함정"을 그대로 반영.
+
+src/routes/cart/+page.svelte
+  holidayHighlightDates 계산을 "연장일수만큼 반복 addDays"(여러 날짜)에서
+  "addDays(effectiveStart,-1)(수령)/addDays(effectiveEnd,+1)(반납) 딱 1개"로 교체.
+  calcHolidayExtension의 while 루프가 "휴무 아님"을 확인한 즉시 break하므로 이 계산은
+  연장일수(N)가 몇 일이든 별도 분기 없이 항상 정확(계획서 B-1-5 불변식 증명 그대로).
+  warnSelected = holidayExtraDays > 0 신규 추가, CalendarGrid 호출부에 전달.
+  isCalOpen 달력 레이어 직후에 CMS 안내 스크립트 조건부 노출 블록 추가(홀리데이 연장 발동 +
+  달력 열림 동안만, 기존 .form-note 클래스 재사용) — 기존 csToast.info(...) 토스트와 공존.
+
+src/routes/cart/+page.server.ts
+  load()에 delivery_cutoff_settings.holiday_guide_text 독립 조회 추가(rentalGuideText와
+  동일 패턴) → holidayGuideText로 반환.
+
+요금 계산 로직(calcHolidayExtraFee/compute_reservation_line_amount/
+sync_order_after_composition_change) — 단 한 줄도 무변경(계획서 절대 원칙, sp3-qa-agent가
+git diff 전체 대조로 재확인).
+```
+
+### 검증
+
+```
+npx vitest run — holidayExtensionFee/cartRentalFee/cartShippingFee/cartMethodSelection/
+  cartLineGrouping 155/155 GREEN
+npx svelte-check — 신규 에러 0건(전체 1 ERROR는 vite.config.ts 사전 존재 이슈, git diff
+  무변경 확인)
+Stage(ezyvffjvuwmtuhpxdjrw) 라이브 브라우저 검증 — 실계정(신원확인 미등록으로 정상
+  예약신청 플로우가 막혀 있어) 임시 hold 예약을 SQL로 직접 INSERT해 우회, 크레이지샷배송+
+  9/25(추석 다음날) 선택 → 25=레드+정확한 툴팁, 24(추석 당일)=무색, 23(경계일)=퍼플+정확한
+  툴팁, "+휴무일 포함" 배지·CMS 안내문 전부 스크린샷으로 시각 확인. 검증 후 테스트
+  예약(id=15891) DELETE + holiday_guide_text 원복('') — sp3-qa-agent 권장에 따라 재조회로
+  정리 완료 재확인(2차 스팟체크).
+sp3-qa-agent GATE E — CmsDatePicker.svelte/ProfileTabContent.svelte(CalendarGrid 다른
+  호출부 2곳) 회귀 없음 확인, delivery_cutoff_settings RLS 비로그인 조회 안전성 확인,
+  CSS 특이도 분석 정상 확인. 블로킹 결함 0건 — 정보성 노트 3건(모두 비차단): ① 검수 요청
+  시 CMS 파일 목록 누락(내용 자체는 안전 확인됨) ② courierClosedMap.reason 데드코드
+  가능성(기능 영향 없음) ③ 무관한 Migration #485 삭제 상태 인지 권고.
+```
+
+### 문서
+
+```
+.claude/rules-ref/rental-fee-policy.md §5 "2026-09-16 후속" 절 신설(색상 규칙·CalendarGrid
+  변경·CMS 안내 스크립트) + GATE C 4건 추가 + v1.3
+.claude/rules-ref/rental-cms-settings.md 표A "휴무일 제어 옵션"·표B is_courier_dependent
+  행 갱신("front 별도 세션 진행 예정" → 완료로 정정) + v1.8
+```
+
+### Stephen 확인 필요 (다음 단계)
+
+```
+1. git commit — CalendarGrid.svelte·cart/+page.svelte·cart/+page.server.ts·
+   rental-fee-policy.md·rental-cms-settings.md(이번 세션 PART B分) — PART A(CMS) 관련
+   파일(cms/set/rental/+page.server.ts·+page.svelte·Migration #505)은 별도 세션 산출물이나
+   여전히 미커밋 상태이므로 함께 커밋해도 무방, Stephen 직접 실행 대기
+2. Production(vnbpmvxruyciuuaermyh) 미적용 — PART A의 Migration #505도 Stage만 적용된
+   상태(계획서 A-6). PART B(이번 세션)는 순수 프론트 코드 변경 + 기존 컬럼 읽기뿐이라
+   별도 DB 반영 불필요, Migration #505 하나만 Production 반영 대상
+3. (QA 정보성 노트, 비차단) Migration #485가 작업트리에서 삭제 상태로 남아있음 — 이번
+   세션과 무관하나 core-rules.md "마이그레이션 ADD만 허용" 원칙 관련 인지 권고
+```
+
+---
+
 ## DONE — 🟢 ROUTINE: 생년월일 캘린더 연/월 선택 UX 재설계 + 본인증명 자동등록 누락 수정 (2026-09-15, 이 세션'만', ✅ GATE E 통과 — sp3-qa-agent 검수 완료(권장 정리 1건: 죽은 CSS 셀렉터 7개 → 즉시 정리 완료), git commit만 Stephen 대기)
 
 ### 배경
