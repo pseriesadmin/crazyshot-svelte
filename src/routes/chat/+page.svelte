@@ -8,6 +8,10 @@
   let { data }: { data: PageData } = $props()
 </script>
 
+<svelte:head>
+  <title>채팅 — CRAZYSHOT</title>
+</svelte:head>
+
 <div class="chat-page">
   <ChatWindow
     userId={data.userId}

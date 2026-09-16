@@ -140,6 +140,10 @@
   }
 </script>
 
+<svelte:head>
+  <title>크레이지로그 목록 — CRAZYSHOT</title>
+</svelte:head>
+
 <!-- ══════════════════════════════════════════════════════════════
      Crazylog 목록 리스트 — 퍼블리싱 소스: Publish Crazylog list Design/App.tsx
 ══════════════════════════════════════════════════════════════ -->

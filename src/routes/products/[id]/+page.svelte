@@ -673,7 +673,12 @@
     return entries.length > 0 ? entries as [string, string][] : null;
   });
 
+  const pageTitle = $derived(product?.name ? `${product.name} — CRAZYSHOT` : '상품상세 — CRAZYSHOT');
 </script>
+
+<svelte:head>
+  <title>{pageTitle}</title>
+</svelte:head>
 
 <!-- ① Hero (PC sub-GNB는 ProductHero 내부에서 hero overlay 배치) -->
 <ProductHero imageUrls={imageUrls} category={product.category ?? 'camera'} categoryLabel={data.categoryLabel} productName={product.name} categories={data.categories} />
@@ -1058,7 +1063,7 @@
         <p class="shotlog-empty">등록된 Shotlog가 없습니다.</p>
       {:else}
         {#each shotlogs as post (post.id)}
-          <a href="/crazylog/{post.id}" class="shotlog-card" aria-label={post.title}>
+          <a href="/crazylog/view/{post.id}" class="shotlog-card" aria-label={post.title}>
             <!-- 모바일: 이미지 상단 -->
             <div class="shotlog-img-mobile" aria-hidden="true">
               {#if post.img}

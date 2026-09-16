@@ -64,6 +64,10 @@
 
 </script>
 
+<svelte:head>
+  <title>하입팩 — CRAZYSHOT</title>
+</svelte:head>
+
 <!-- ─── MOBILE BODY ────────────────────────────────────────────────── -->
 <div class="m-body">
 
