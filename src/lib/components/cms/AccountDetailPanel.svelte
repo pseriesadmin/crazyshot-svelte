@@ -52,16 +52,54 @@
   /** 호출자가 마스터(superadmin)인지 여부 — 역할 변경 콤보버튼 활성 판정 */
   let callerIsSuperadmin = $derived(callerRole === 'superadmin')
   /** 호출자가 지금 보고 있는 계정이 본인 계정인지 — "비밀번호 변경" 레이아웃은 항상 노출되나
-      실행 버튼은 본인 계정에서만 활성화 */
+      실행 버튼은 본인 계정(자기 비밀번호 직접 변경) 또는 관리 권한이 있는 계정(재설정
+      링크 발급)에서만 활성화 */
   let isOwnAccount = $derived(!!callerId && row.id === callerId)
+  /** 다른 계정의 비밀번호 재설정 링크를 발급할 권한이 있는지 — 서버측
+      requireAccountMutationAccess와 동일 기준을 클라이언트에서 미리 반영(UI 판단용,
+      최종 검증은 서버가 항상 재수행) — 대상이 superadmin이면 호출자도 진짜
+      superadmin이어야 함, 그 외에는 manager 이상. */
+  let canIssueRecoveryLink = $derived(
+    !isOwnAccount &&
+    (callerIsSuperadmin || (callerRole === 'manager' && row.cms_role !== 'superadmin'))
+  )
 
-  // ── 비밀번호 변경 모달 상태 ─────────────────────────────────
+  // ── 비밀번호 변경 모달 상태 (본인 계정) ──────────────────────
   let showChangePwModal = $state(false)
   let changingPw = $state(false)
   let changePwError = $state<string | null>(null)
   let currentPasswordKoreanWarned = false
   let newPasswordKoreanWarned = false
   let confirmPasswordKoreanWarned = false
+
+  // ── 비밀번호 재설정 링크 발급 인라인 패널 상태 (타 계정, 2026-09-15 신설) ───
+  // 별도 모달(overlay)·확인 단계 없이 "링크 발급" 버튼 클릭 즉시 발급 → 링크 표시줄만 노출.
+  let showRecoveryModal = $state(false)
+  let issuingRecovery = $state(false)
+  let recoveryError = $state<string | null>(null)
+  let recoveryLink = $state<string | null>(null)
+  let recoveryFormEl: HTMLFormElement | undefined = $state()
+
+  function handleRecoveryButtonClick(): void {
+    if (showRecoveryModal) {
+      showRecoveryModal = false
+      recoveryError = null
+      recoveryLink = null
+      return
+    }
+    showRecoveryModal = true
+    recoveryFormEl?.requestSubmit()
+  }
+
+  async function copyRecoveryLink(): Promise<void> {
+    if (!recoveryLink) return
+    try {
+      await navigator.clipboard.writeText(recoveryLink)
+      csToast.success('링크가 복사되었습니다.')
+    } catch {
+      csToast.warning('복사에 실패했습니다. 링크를 직접 선택해 복사해주세요.')
+    }
+  }
 
   const VALID_TABS: AccountTabKey[] = ['info', 'permissions', 'logs']
   function resolveInitialTab(tab: string | null): AccountTabKey {
@@ -464,21 +502,89 @@
           {/if}
         </div>
 
-        <!-- 비밀번호 변경 (레이아웃은 항상 노출, 실행 버튼만 본인 계정에서만 활성화) -->
-        <div class="toggle-group">
-          <div class="toggle-info">
-            <span class="toggle-label">비밀번호 변경</span>
-            <span class="toggle-desc">
-              {isOwnAccount ? '본인 계정의 로그인 비밀번호를 변경합니다' : '본인 계정에서만 변경할 수 있습니다'}
-            </span>
+        <!-- 비밀번호 변경 (레이아웃은 항상 노출) — 본인 계정은 직접 변경,
+             타 계정은 관리 권한이 있을 때만 재설정 링크 발급(2026-09-15).
+             버튼 행 + 발급 결과를 하나의 레이아웃으로 묶음(showRecoveryModal 시 카드형으로 확장). -->
+        <div class="pw-recovery-wrap" class:pw-recovery-open={showRecoveryModal}>
+          <div class="toggle-group">
+            <div class="toggle-info">
+              <span class="toggle-label">비밀번호 변경</span>
+              <span class="toggle-desc">
+                {#if isOwnAccount}
+                  본인 계정의 로그인 비밀번호를 변경합니다
+                {:else if canIssueRecoveryLink}
+                  비밀번호를 분실한 경우 본인확인(이메일·휴대폰 인증) 후 새 비밀번호를 설정할 수 있는 링크를 발급합니다 (30분간 유효)
+                {:else}
+                  비밀번호 재설정 링크 발급 권한이 없습니다
+                {/if}
+              </span>
+            </div>
+            {#if isOwnAccount}
+              <button
+                type="button"
+                class="combo-btn"
+                onclick={() => { showChangePwModal = true; changePwError = null }}
+              >변경</button>
+            {:else}
+              <button
+                type="button"
+                class="combo-btn"
+                disabled={!canIssueRecoveryLink || issuingRecovery}
+                title={canIssueRecoveryLink ? undefined : '매니저 이상 권한이 필요합니다(마스터 계정은 마스터만 가능)'}
+                onclick={handleRecoveryButtonClick}
+              >{issuingRecovery ? '발급 중...' : '링크 발급'}</button>
+            {/if}
           </div>
-          <button
-            type="button"
-            class="combo-btn"
-            disabled={!isOwnAccount}
-            title={isOwnAccount ? undefined : '본인 계정에서만 변경할 수 있습니다'}
-            onclick={() => { showChangePwModal = true; changePwError = null }}
-          >변경</button>
+
+          <!-- 링크 발급 폼 — 화면에 그리지 않고 버튼 클릭 시 바로 제출(확인 단계 없음) -->
+          <form
+            bind:this={recoveryFormEl}
+            method="POST"
+            action="?/issueRecoveryLink"
+            hidden
+            use:enhance={() => {
+              issuingRecovery = true
+              recoveryError = null
+              return async ({ result }: { result: ActionResult }) => {
+                issuingRecovery = false
+                if (result.type === 'failure') {
+                  recoveryError = (result.data as { error?: string })?.error ?? '링크 발급에 실패했습니다.'
+                } else if (result.type === 'success') {
+                  const token = (result.data as { recoveryToken?: string })?.recoveryToken
+                  if (token) {
+                    recoveryLink = `${window.location.origin}/cms/login?recover=${token}`
+                  } else {
+                    recoveryError = '링크 발급에 실패했습니다.'
+                  }
+                } else if (result.type === 'error') {
+                  recoveryError = '링크 발급 중 오류가 발생했습니다.'
+                }
+              }
+            }}
+          >
+            <input type="hidden" name="user_id" value={row.id} />
+          </form>
+
+          <!-- 발급 결과 — 확인문구·안내문 없이 결과만(2026-09-15) -->
+          {#if showRecoveryModal}
+            <div class="recovery-result">
+              {#if recoveryError}
+                <p class="pw-error" role="alert">{recoveryError}</p>
+              {/if}
+              {#if recoveryLink}
+                <div class="recovery-link-box">
+                  <input
+                    class="recovery-link-input"
+                    type="text"
+                    readonly
+                    value={recoveryLink}
+                    onclick={(e) => (e.currentTarget as HTMLInputElement).select()}
+                  />
+                  <button type="button" class="recovery-copy-btn" onclick={copyRecoveryLink}>복사</button>
+                </div>
+              {/if}
+            </div>
+          {/if}
         </div>
 
         <!-- 구분선 -->
@@ -1442,7 +1548,7 @@
   .pw-modal-wrap {
     background: var(--cs-white);
     border-radius: var(--cms-radius-sm);
-    width: 360px;
+    width: 432px;
     max-width: 100%;
     box-shadow: 0 8px 40px rgba(0, 0, 0, 0.18);
   }
@@ -1472,11 +1578,13 @@
     margin: 0 0 4px;
   }
   .pw-submit-btn {
+    width: 100%;
     height: 40px;
     margin-top: 16px;
     background: var(--cs-purple);
     border: none;
     border-radius: var(--cms-radius-md);
+    box-sizing: border-box;
     color: #fff;
     font: var(--text-pc-body-14);
     font-weight: 700;
@@ -1485,4 +1593,51 @@
   }
   .pw-submit-btn:hover:not(:disabled) { opacity: 0.85; }
   .pw-submit-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+  /* ── 비밀번호 재설정 링크 발급 — 버튼 행 + 발급 결과를 하나의 레이아웃으로 묶음
+     (모달 없음, 2026-09-15). 기본 상태는 다른 toggle-group과 동일하게 보이고,
+     결과가 펼쳐지면(.pw-recovery-open) 전체가 하나의 카드로 확장된다. ── */
+  .pw-recovery-wrap.pw-recovery-open {
+    background: var(--cs-surface-gray);
+    border-radius: var(--cms-radius-sm);
+    padding: 14px 16px 16px;
+    margin-bottom: 16px;
+  }
+  .pw-recovery-wrap.pw-recovery-open .toggle-group {
+    margin-bottom: 12px;
+  }
+  .recovery-result {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+  .recovery-link-box {
+    display: flex;
+    gap: 6px;
+  }
+  .recovery-link-input {
+    flex: 1;
+    min-width: 0;
+    height: 36px;
+    font: var(--text-pc-script-12);
+    color: var(--cs-text);
+    background: var(--cs-surface-gray);
+    border: 1px solid rgba(16,11,50,0.12);
+    border-radius: var(--cms-radius-sm);
+    padding: 0 10px;
+  }
+  .recovery-copy-btn {
+    flex-shrink: 0;
+    height: 36px;
+    padding: 0 14px;
+    background: var(--cs-purple);
+    color: #fff;
+    border: none;
+    border-radius: var(--cms-radius-sm);
+    font: var(--text-pc-script-12);
+    font-weight: 700;
+    cursor: pointer;
+    transition: opacity 0.12s;
+  }
+  .recovery-copy-btn:hover { opacity: 0.85; }
 </style>
