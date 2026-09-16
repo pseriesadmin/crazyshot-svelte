@@ -1328,7 +1328,10 @@
   }
   .m-prod-card {
     width: calc(50% - 5px);
-    min-width: 155px;
+    /* min-width 제거(2026-09-16) — 155px 최소폭이 좁은 화면(가용폭 320px 미만)에서
+       2장 나열에 필요한 320px(155×2+gap10)보다 작아 자동 줄바꿈(1열)을 유발하던 결함.
+       calc(50% - 5px)는 그 자체로 항상 정확히 2열이 되는 값이라 min-width 없이도
+       카드가 과도하게 작아지지 않음(container 폭에 정비례). */
     text-decoration: none;
     display: flex;
     flex-direction: column;
