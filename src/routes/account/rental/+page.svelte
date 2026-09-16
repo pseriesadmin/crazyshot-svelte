@@ -1,6 +1,5 @@
 <script lang="ts">
   import SubGnb from '$lib/components/common/SubGnb.svelte'
-  import BottomTabBar from '$lib/components/common/BottomTabBar.svelte'
   import RentalJourneyStepper from '$lib/components/common/RentalJourneyStepper.svelte'
   import ChatIcon from '$lib/components/common/ChatIcon.svelte'
   import FloatingButton from '$lib/components/chat/FloatingButton.svelte'
@@ -150,6 +149,10 @@
         <p class="empty-sub">아직 진행 중인 대여가 없어요.</p>
       </div>
     {:else}
+      <div class="list-header">
+        <p class="list-title">전체 대여 목록</p>
+        <span class="list-count">{data.rentals.length}건</span>
+      </div>
       <div class="list-wrap">
         {#each data.rentals as rental (rental.id)}
           {@const st = STATUS_STYLE[rental.status] ?? STATUS_STYLE['hold']}
@@ -237,8 +240,6 @@
 
   </div>
 
-  <BottomTabBar />
-
   <!-- 이 화면(/account)은 루트 레이아웃에서 FloatingBar가 제외되어 있어, 카드별 채팅
        버튼이 여는 공통 플로팅 채팅 모달(바텀시트)을 이 페이지에서 직접 마운트한다. -->
   <FloatingButton userId={chatUserId} userName={chatUserName} userHandle={chatUserHandle} hideFab />
@@ -313,7 +314,8 @@
     display: flex;
     flex-direction: column;
     gap: 12px;
-    padding: 70px 20px 100px;
+    /* 모바일: top 여백 50% 축소(70px → 35px) */
+    padding: 35px 20px 100px;
     max-width: 600px;
     margin: 0 auto;
     width: 100%;
@@ -321,9 +323,11 @@
   }
 
   /* 뒤로가기 — /account/rental/[id]/+page.svelte와 동일 스펙(SubGnb mobileOnly라
-     PC에서는 이 버튼이 유일한 이동 수단) */
+     PC에서는 이 버튼이 유일한 이동 수단).
+     모바일에서는 SubGnb 자체 뒤로가기 화살표와 중복이라 숨김 처리(PC 전용으로 전환) —
+     "전체 대여 목록" 헤더 신설로 중복 노출이 눈에 띄어 제거 요청됨. */
   .btn-back {
-    display: inline-flex;
+    display: none;
     align-items: center;
     gap: 6px;
     background: none;
@@ -364,8 +368,31 @@
     margin: 0;
   }
 
-  /* 카드 */
-  .list-wrap { display: flex; flex-direction: column; gap: 27px; }
+  /* 목록 타이틀 + 수량 — 모바일 전용(뒤로가기 바로 아래).
+     좌측 타이틀 / 우측 수량 배치로 복원(중앙정렬 시도는 되돌림) +
+     카드 목록과의 간격: 25px(2026-09-17 확정) */
+  .list-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    width: 100%;
+    margin-bottom: 25px;
+  }
+  .list-title {
+    font: var(--text-m-body-16B);
+    color: var(--cs-text);
+    margin: 0;
+  }
+  .list-count {
+    font-family: var(--font-kr);
+    font-size: 16px;
+    font-weight: 500;
+    color: var(--cs-text-mid);
+  }
+
+  /* 카드 — 모바일: 카드 간 여백 30px(2026-09-17, sp3-qa-agent GATE E M-2: 주석 수치가
+     실제 적용값과 달랐던 것을 정정 — 27px→40.5px는 스테일 서술, 실제 확정값은 30px) */
+  .list-wrap { display: flex; flex-direction: column; gap: 30px; }
 
   .rental-card {
     background: var(--cs-white);
@@ -671,6 +698,17 @@
     .content {
       padding: 100px 40px 60px;
       max-width: 720px;
+    }
+    /* 이번 요청은 모바일 반응형 한정 — PC는 기존 그대로 유지 */
+    .list-header {
+      display: none;
+    }
+    .list-wrap {
+      gap: 27px;
+    }
+    /* PC는 SubGnb가 렌더링되지 않아(mobileOnly) 이 버튼이 유일한 뒤로가기 수단 — 그대로 노출 */
+    .btn-back {
+      display: inline-flex;
     }
   }
 </style>

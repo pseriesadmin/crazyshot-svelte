@@ -1,5 +1,100 @@
 # .claude/harness/TASK.md
 
+## DONE — 🟢 ROUTINE: 마이페이지(/account) 취소·대여·빠른문의 리스트 UI 세부 다듬기 (2026-09-17, 이 세션'만', ✅ GATE E 통과 — sp3-qa-agent 검수 완료, git commit만 Stephen 대기)
+
+### 배경
+
+Stephen의 다수 세부 UI 피드백(모바일 `/account/cancel` 바텀탭 노출 버그, 리스트 헤더 신설·정렬,
+PC `/account` 우측 패널(대여·취소·빠른문의) 뒤로가기 버튼 중복 제거, 카드 배지·화살표 수직정렬,
+카드 라운드·패딩·여백 표준화 등)를 라운드 단위로 순차 반영.
+
+### 구현 내용
+
+```
+[모바일 /account/cancel]
+- BottomTabBar 불필요 노출 버그 수정(잘못 이식된 import/렌더 제거)
+- "전체 취소 목록" + 수량 리스트헤더 신설, 좌/우 배치 확정(중앙정렬 시도 후 원복)
+- 모바일 폰트 2단계 축소(--text-m-htitle-24B → --text-m-body-16B)
+- 상단 SubGnb와 중복되는 "‹ 마이페이지" 뒤로가기 버튼 모바일만 숨김(PC는 SubGnb가
+  mobileOnly라 그대로 유지 — 유일한 이동 수단)
+- SubGnb 타이틀 "취소·반품" → "취소"로 축약
+- 카드 목록 상단 여백 70px→35px, 헤더~목록 간격 25px, 카드 간 간격 12px→24px(모바일)
+- "취소" 상태배지를 card-head 행이 아닌 카드 bg 전체 높이 기준 수직 중앙정렬로 변경
+
+[모바일 /account/rental]
+- 리스트헤더~카드 목록 간격 24px→25px
+
+[/account 메인 사이드메뉴]
+- rentalMenuItems 라벨 '취소·반품' → '취소' (PC·모바일 공용 데이터소스라 양쪽 동시 반영)
+
+[PC 우측 패널 3종 — PcRentalPanel / PcCancelPanel / PcInquiryPanel]
+- "‹ 돌아가기" 버튼 전부 제거(좌측 사이드 메뉴가 이미 이동 수단 제공, 패널 내 중복이었음)
+- 카드 목록 간 여백 표준화: 대여 12→24px, 취소 12→25px, 빠른문의 8→12→25px
+- 상태배지(+빠른문의는 화살표 포함)를 card-head 행이 아닌 카드 bg 전체 높이 기준
+  수직 중앙정렬로 변경(펼침 시 본문이 추가돼도 카드 전체 높이 중앙 유지)
+- 패널 타이틀 영역 좌우 6px 들여쓰기 여백 추가(3개 패널 공통)
+- 카드 라운드값을 front-uiux.md §4 "카드 반경 대/중 2단 체계" 기준 중(medium) 등급
+  --radius-xl(30px)로 3개 패널 통일(대여 기존 50px, 빠른문의 기존 20px 하드코딩에서 정정)
+- 빠른문의 카드 내 상하 패딩 50% 증가(14→21px), 좌우 기준 여백을 취소 카드와 동일한
+  24px로 통일(기존 18px 기준값 + 겹침방지 예약폭 재계산)
+```
+
+### 파일 변경 목록
+
+```
+src/routes/account/cancel/+page.svelte
+src/routes/account/rental/+page.svelte
+src/routes/account/+page.svelte
+src/lib/components/account/PcRentalPanel.svelte
+src/lib/components/account/PcCancelPanel.svelte
+src/lib/components/account/PcInquiryPanel.svelte
+```
+
+### 검증
+
+```
+- npx svelte-check: 신규 에러 0건(기존 무관 경고만 잔존)
+- Claude Browser로 모바일(375px)·PC(1280px) 양쪽 실측 스크린샷·computed style 대조 완료
+  (padding/margin/gap/border-radius 수치, 배지·화살표 위치, 뒤로가기 버튼 노출 여부 등)
+```
+
+### GATE E 결과
+
+```
+✅ 1차 검수(sp3-qa-agent) — BLOCKING 1건 + MEDIUM 2건 + LOW 3건 발견:
+  B-1(BLOCKING) PcInquiryPanel.svelte — position:relative가 .post-card(카드 전체)에
+    걸려 있어, 카드 펼침(isOpen) 시 .post-body가 형제로 추가돼 카드 높이가 늘어나면서
+    top:50% 기준 status-chip·chevron이 펼쳐진 답변 내용 위로 밀려 겹치는 결함
+    → 수정: position:relative를 .post-card에서 status-chip/chevron의 실제 부모인
+      .post-head(button)로 이동. 카드를 펼쳐도 배지·화살표가 헤더 행에 고정되는 것을
+      좌표(chipWithinHead: true)로 재확인.
+  M-1(MEDIUM) account/cancel과 account/rental의 뒤로가기 버튼 숨김·상단패딩 축소 기준이
+    각각 max-width:640px / min-width:768px로 달라 641~767px 구간에서 두 화면 동작이
+    어긋남 → cancel 쪽을 max-width:767px로 통일(768px 경계로 일치).
+  M-2(MEDIUM) account/rental .list-wrap 주석("27px→40.5px")이 실제 적용값(30px)과
+    불일치 → 주석을 실제값 기준으로 정정(기능 변경 없음).
+  L-1(LOW) 카드 우측 absolute 배지의 겹침방지 여백이 근소하게 부족(cancel 64px→72px,
+    PcCancelPanel 70px→78px로 확대).
+  L-2(LOW) 취소 목록은 "N건", 대여 목록은 "N"(단위 없음)으로 표기 불일치 → rental도
+    "N건"으로 통일.
+  L-3(LOW, 의도적 미조치) PcRentalPanel/PcCancelPanel/PcInquiryPanel의 onback prop이
+    "돌아가기" 버튼 제거 후에도 인터페이스에 남아있음 — 컴파일·런타임 문제 없음(부모가
+    여전히 값을 전달 중, tsconfig에 noUnusedLocals 없음) 확인, 후속 정리 과제로 보류.
+
+✅ 2차 재검수(sp3-qa-agent, 수정 반영 후) — 5개 수정사항(B-1·M-1·M-2·L-1·L-2) 전부
+  PASS, 신규 회귀·범위이탈 없음 확인.
+
+⚠️ 1차 검수 중 발견된 참고사항(이번 6개 파일 검수범위 밖, 조치 안 함): account/+page.svelte의
+  "최근 예약" 블록이 이번 세션에서 이미 별도로 변경된 src/lib/components/common/
+  RentalJourneyStepper.svelte(productName prop 추가)·src/routes/account/+page.server.ts
+  (최근예약 1개월 필터)·src/lib/components/account/RentalStatRow.svelte(flex→grid 개편)에
+  의존하고 있어, 이번 커밋에 이 3개 파일도 함께 포함하지 않으면 account/+page.svelte가
+  깨질 수 있음 — git add 시 반드시 이 3개 파일도 함께 스테이징할 것(이미 같은 세션의
+  미커밋 변경분이며 svelte-check 통과 확인됨, 별도 GATE E 정식 검수는 미실시).
+```
+
+---
+
 ## NOW — 🔴 CRITICAL: CMS QR 코드 시스템 통합 모듈화 (2026-09-16, promptor 등록, GATE B 대기 — 착수 금지)
 
 ### GATE 등급: 🔴 CRITICAL — 서비스 의도 확인 필수
@@ -187,6 +282,256 @@ products.md §2-4(QR 콘텐츠 정책)에 카테고리 병기 정책 반영 필�
 2. 승인 시 문구: "GATE B 승인. NOW 실행해." / 수정 시: TASK.md 직접 수정 후 "GATE B: 내가
    고쳤어. NOW 실행해." / 반려 시: "GATE B 반려. [이유]. 다시 작성해."
 ```
+
+---
+
+## DONE — 🟡 BOUNDARY: 마이페이지 대여목록(/account/rental)·빠른문의(/account/inquiry) 모바일 UI 후속 다듬기 + 클래스명 충돌 결함 수정 (2026-09-17, 이 세션'만', ✅ GATE E 통과 — sp3-qa-agent 독립검수 완료, git commit만 Stephen 대기)
+
+### 배경
+
+```
+앞선 "마이페이지 최근 대여현황 UI 개선" 작업 이후, Stephen이 launch-selected-element로
+/account/rental·/account/inquiry 두 화면을 이어서 세부 조정(여백·패딩·폰트·라운드값 등
+20여 차례의 소규모 지시)했다. 이 블록은 그 이후 세션'만'의 추가 변경 사항을 기록한다.
+```
+
+### /account/rental 추가 변경
+
+```
+- "전체 대여 목록" + 수량 헤더 신설(.list-header) — 좌측 타이틀(--text-m-body-16B, 한
+  단계 큰 폰트토큰)/우측 수량, 중앙정렬 시도 후 좌우배치로 최종 복원
+- 상단 "← 마이페이지" 버튼(.btn-back) 모바일에서 숨김 — 이미 SubGnb 자체 뒤로가기
+  화살표가 있어 중복이었음. PC는 SubGnb가 mobileOnly라 이 버튼이 유일한 이동 수단이라
+  그대로 노출 유지
+- .content top 여백 70px → 35px(모바일), PC(100px) 불변
+- 카드 간 여백(.list-wrap gap) 27px → 30px(모바일 최종값), PC(27px) 불변
+- 헤더↔카드목록 간격: 현재 파일 기준 margin-bottom 25px(모바일) — ⚠️ 이 파일은 다른
+  세션이 동시에 PcRentalPanel.svelte 분리 작업을 진행 중이라(git status로 확인), 이
+  세션이 직접 넣은 값(24px)과 실제 파일값(25px)이 1px 어긋나 있음을 발견 — 동시편집
+  경합 가능성이 있어 Stephen 확인 필요(기능적 문제는 아니고 단순 1px 오차)
+```
+
+### /account/inquiry 추가 변경
+
+```
+- "문의 목록" 타이틀 신설(.section-title) — "새 문의 작성 +" 버튼과 좌우 나란히 배치
+  (모바일 전용), PC는 버튼 단독 우측정렬 기존 그대로
+- 하단 바텀탭바(BottomTabBar) 제거 — /account/rental과 동일 사유(SubGnb 뒤로가기와 중복)
+- SubGnb 타이틀 "빠른 문의" → "빠른문의"(띄어쓰기 제거)
+- 카드 간 여백(.list-wrap gap) 8px → 30px(모바일 최종값), PC(8px) 불변
+- 카드 헤더(.post-head) 패딩 14px 16px → 21.84px 19.2px(모바일, 순차 30%+20% 증가),
+  PC(14px 16px) 불변. 상태칩·화살표 수직 중앙정렬로 변경(align-items: flex-start →
+  center), PC는 flex-start 유지
+- 상태칩(.status-chip) 패딩 3px 10px → 6.084px 15px(모바일, 여러 차례 증감 후 최종값),
+  라운드 30px(--radius-xl) 유지 확정, 폰트 11px Bold(하드코딩) → 12px Medium
+  (--text-m-script-12, 한 단계 작은 토큰), PC는 원래 값(3px 10px·11px Bold) 그대로
+- 카드(.post-card) 라운드 20px(하드코딩, 표준 아님) → 30px(모바일, front-uiux.md §4
+  "카드(대) Mobile" 표준값 반영), PC는 기존 20px 그대로(요청 범위 밖이라 표준화하지 않음)
+- 배지를 제목 블록 위로 재배치(좌우 배치 → 상하 배치) — 신규 .post-head-body 래퍼 도입
+
+⛔ 실사고 발견·즉시수정: 배지 재배치용 신규 래퍼에 처음 ".post-body"라는 클래스명을
+붙였는데, 같은 파일에 이미 "펼침 내용"(문의 상세 펼쳤을 때 나오는 영역) 전용
+.post-body(border-top 구분선 포함)가 존재해 이름이 충돌 — 카드 상단에 의도치 않은
+구분선이 노출됐고(Stephen이 스크린샷으로 지적해 발견), PC 미디어쿼리 오버라이드까지
+같은 이름을 썼던 탓에 펼침 내용의 레이아웃이 PC에서 세로→가로로 깨질 뻔한 잠재 결함도
+함께 존재했다. 신규 래퍼를 .post-head-body로 즉시 개명해 완전히 분리, 원래 .post-body
+(펼침 내용)는 무변경으로 보존 — 재현 검증 완료(상단 구분선 사라짐 확인).
+```
+
+### 검증
+
+```
+npx svelte-check — 두 파일 신규 에러 0건(전체 프로젝트 기존 vite.config.ts 에러 1건은
+무관). 매 단계 로컬 dev 서버(localhost:5177 등, 세션 내내 포트 변동)로 모바일(375px)·
+PC(1400px) 양쪽 라이브 스크린샷 + computed style(getComputedStyle) 수치 검증 — 이번
+블록에 기록된 모든 최종값은 실측으로 재확인됨.
+```
+
+### GATE E — sp3-qa-agent 독립검수 결과(2026-09-17)
+
+```
+검수 대상: 이 세션이 수정한 7개 파일(RentalStatRow.svelte·RentalJourneyStepper.svelte·
+account/+page.server.ts·account/+page.svelte·account/inquiry/+page.svelte·
+account/rental/+page.svelte·products/+page.svelte) — 병렬 세션의 PcCancelPanel.svelte·
+PcInquiryPanel.svelte·PcRentalPanel.svelte·account/cancel/+page.svelte는 범위 제외.
+
+검수 1(규칙 정합성)·검수 2(기술부채) 전부 통과, 검수 3(시범오픈 기준)은 결제/DB 무관이라
+해당없음. 지정 확인 4건:
+  ① .post-body vs .post-head-body 클래스 분리 — ✅ 완전 분리 확인, 펼침내용 원본 무변경
+  ② 모바일 값의 PC 미디어쿼리 명시적 원복 — ✅ 대부분 확인, LOW 1건(아래)
+  ③ account/rental .list-header margin-bottom 1px 불일치 — ✅ TASK.md 기록과 실제 파일
+    일치 확인(25px), 병렬 세션발 다른 혼입 흔적은 없음
+  ④ RentalJourneyStepper 구조변경의 타 화면(RentalDetailPanel·PcRentalPanel·
+    account/rental/[id]) 회귀 여부 — ✅ 회귀 없음(4곳 모두 productName prop 미전달로
+    기존과 동일 동작, 내부 셀렉터를 :global로 오버라이드하는 외부 코드 없음)
+
+⚠️ LOW 1건(즉시 수정 완료): RentalStatRow.svelte 원본 마크업이
+`class="flex gap-[10px] items-start ..."`였는데, 이번 세션 리팩터링 중 `.stat-row`를
+named class로 분리하면서 `items-start`(align-items: flex-start)가 어느 미디어쿼리에도
+옮겨지지 않고 누락됨 — PC(≥768px, display:flex) 기준 align-items가 기본값(stretch)으로
+바뀌어 있었음. `@media (min-width:768px) { .stat-row { align-items: flex-start; } }`
+추가로 원본과 동일하게 복원, npx svelte-check 재확인 완료.
+
+종합 판정: GATE E 진행 가능 ✅ (BLOCKING 0건, MEDIUM 0건, LOW 1건 — 발견 즉시 수정 완료)
+```
+
+**git commit은 Stephen 직접 실행 대기.**
+
+---
+
+## DONE — 🟢 ROUTINE: 상품목록(/products) 모바일 2×N 그리드 직렬배열 결함 수정 (2026-09-16, 이 세션'만')
+
+### 배경
+
+```
+Stephen이 launch-selected-element로 Best Pick 모바일 상품 그리드(.m-prod-grid)를 지목,
+"일부 모바일 해상도에서 직렬 배열(1열)만 되는 버그" 지적 — 항상 2×N 병렬 배열이어야 함.
+```
+
+### 원인·수정
+
+```
+src/routes/products/+page.svelte
+  .m-prod-card에 min-width: 155px 고정값이 있어, 카드 2개+gap 합이 155px×2+gap을
+  넘는 좁은 모바일 폭에서 flex-wrap이 강제로 다음 줄로 밀어내며 1열(직렬)로 무너짐.
+  → min-width: 155px 제거. width는 이미 %기반 계산값(calc(50% - Npx))으로 충분히
+    보장되어 별도 min-width 안전값이 필요 없었음.
+```
+
+### 검증
+
+```
+npx svelte-check — 대상 파일 신규 에러 0건.
+⚠️ 브라우저 라이브 검증 미완료 — 작업 시점 dev 서버 포트 라우팅 문제(다른 세션이
+5173~5177 점유, Browser 도구 프록시 포트 불일치)로 실화면 확인 실패. CSS 산술 추론 +
+svelte-check로만 확인한 상태로 남아있음 — 다음 세션에서 여유가 되면 실화면 재확인 권장.
+```
+
+**git commit은 Stephen 직접 실행 대기.**
+
+---
+
+## DONE — 🟡 BOUNDARY: 마이페이지(/account) 최근 대여현황 UI 개선 — 통계박스 2×2 재배열 + 최근예약 스텝퍼 UI 다듬기 (2026-09-16~17, 이 세션'만', ✅ GATE E 통과 — sp3-qa-agent 독립검수 완료(BLOCKING/MEDIUM 0건), git commit만 Stephen 대기)
+
+### 배경
+
+```
+Stephen이 launch-selected-element로 마이페이지(/account) 모바일 화면의 4개 통계박스
+("대여중/배송중/대여종료/취소·반품")와 "최근 예약 진행 상태" 스텝퍼 영역을 지목,
+여러 차례에 걸쳐 세부 UI를 이어서 다듬음(2×2 배열 → 여백 조정 → 라벨 좌우병렬 →
+숫자박스 확대 → 우측고정 → 라벨 텍스트 축약 → 스텝퍼 패딩·스크롤바·페이드 →
+상품명 위치 재배치 → 헤더 폰트토큰 교체까지 단일 흐름으로 순차 진행).
+
+중간에 "다시 확인해줘, 전혀 수정되어 보이지 않아" 피드백 발생 — 실제 코드 결함
+(RentalStatRow.svelte 미디어쿼리 기준값이 1024px로 잘못 설정되어 있었는데, 페이지
+실제 브레이크포인트는 768px — 인라인 HTML 주석이 "< 1024px"로 스테일하게 남아있던 걸
+그대로 믿고 잘못 적용한 게 원인)를 재확인 과정에서 발견·수정.
+```
+
+### 수정 내역
+
+```
+src/lib/components/account/RentalStatRow.svelte
+  - PC 전환 미디어쿼리 기준값 1024px → 768px 정정(account/+page.svelte 실제
+    .mobile-layout/.pc-layout 토글 기준과 일치, 인라인 주석 스테일 문제였음)
+  - .stat-row: 모바일 기본을 1행4칸 flex → 2×2 grid(gap 15px)로 전환,
+    PC(≥768px)는 기존 1행4칸 flex 그대로 유지
+  - .stat-body(라벨+숫자 그룹): 모바일 상하배치(flex-col) → 좌우병렬(flex-row) +
+    width:100%+justify-between(라벨 좌측 고정·숫자 우측 끝 고정, 기존엔 그룹 전체가
+    중앙정렬만 되어 비고정이었음). PC는 기존 상하배치+중앙정렬 유지
+  - .stat-count-box: 45×45px 정사각형 → 가로폭 90px(2배) 고정, 모바일·PC 공통 반영
+
+src/routes/account/+page.svelte (mobile+PC 블록 각각, 공유 rentalStats 배열은 1곳)
+  - rentalStats 라벨: '대여종료'→'반납', '취소·반품'→'취소'
+  - "최근 3개월 동안 0건의 대여정보가 있어요." 캡션 문구 제거(모바일 블록만)
+  - stat-row ↔ "최근 예약" 사이 margin-top: 모바일 12→18→36px / PC 12→24px
+    (요청받은 순서대로 1.5배 → 그 값의 2배 순차 반영, 최종 모바일 36px·PC 24px)
+  - "최근 예약 진행 상태" → "최근 예약" 텍스트 축약 + 폰트토큰 정정: 하드코딩
+    text-[12px](모바일·PC 동일값 — 반응형 미분리 버그)를 모바일
+    var(--text-m-script-14B) / PC var(--text-pc-body-14)로 각각 정식 토큰 교체
+  - 상품명(product_name) 문단을 스텝퍼 바깥 별도 <p>에서 RentalJourneyStepper의
+    신규 productName prop으로 이동(모바일 → PC 순으로 동일 구조 통일)
+
+src/lib/components/common/RentalJourneyStepper.svelte (CMS·PC대여목록 등 4개 화면과
+  공유하는 컴포넌트 — 아래 변경 전부 optional prop 또는 마스크만 추가해 기존 4개
+  사용처는 무영향)
+  - 구조 분리: 기존 단일 div(배경+패딩+스크롤 동시 처리) → 외곽 박스(.journey-stepper,
+    배경·라운드·패딩만) + 내부 스크롤 컨테이너(.stepper-scroll, flex·overflow-x·마스크)
+    2단 구조로 재구성 — 좌우 페이드 마스크가 박스 배경까지 침범하지 않도록 분리
+  - 모바일 좌우 패딩 14px → 22px(상하 22px와 통일)
+  - 스크롤바 시각적 숨김(scrollbar-width:none + -webkit-scrollbar 숨김) — overflow-x:auto
+    자체는 유지되어 터치 스와이프 스크롤은 계속 동작
+  - 모바일 전용 좌우 끝 알파 그라데이션 마스크(mask-image, 24px 페이드존) 추가 —
+    PC(≥768px)는 mask-image:none으로 명시 반전(요청 범위 밖 유지)
+  - 신규 optional prop `productName?: string` — 지정 시 박스 내부 상단좌측에 상품명
+    표시, 미지정 시 기존과 동일(미노출) → RentalDetailPanel.svelte·PcRentalPanel.svelte·
+    account/rental/+page.svelte·account/rental/[id]/+page.svelte 4개 기존 사용처는
+    prop을 넘기지 않아 무영향
+
+src/routes/account/+page.server.ts (이번 세션 이전 턴에서 이미 반영, 함께 기록)
+  - recentRentalRes 쿼리에 created_at 추가
+  - recentRental: 생성 후 1개월 초과 시 null 반환 → "최근 예약" 섹션 자체 미노출
+    (1개월 넘은 예약이 계속 "최근"으로 남는 것 방지)
+```
+
+### 검증
+
+```
+npx svelte-check — 대상 파일(RentalStatRow.svelte·RentalJourneyStepper.svelte·
+account/+page.svelte) 신규 에러 0건(전체 프로젝트 기존 vite.config.ts 에러 1건은
+이 작업과 무관한 사전 존재 이슈).
+grep 검사 — console.log 0건 / any 타입 0건 / TODO·FIXME 0건 / Svelte4 on: 이벤트
+문법 0건 / export let 0건 / writable store import 0건.
+로컬 dev 서버(localhost:5173)로 매 단계 모바일(375px)·PC(1280px) 뷰포트 라이브
+스크린샷 검증 — 2×2 배열·좌우고정·숫자박스 확대·라벨 변경·페이드마스크·상품명
+재배치·폰트토큰 전부 실화면에서 반영 확인.
+```
+
+**git commit은 Stephen 직접 실행 대기.**
+
+---
+
+## QA — @qa.md 검수 결과(2026-09-17, 이 세션 미커밋분 5개 파일 일괄 — 위 두 DONE 태스크)
+
+```
+대상 파일: src/routes/products/+page.svelte · src/lib/components/account/RentalStatRow.svelte ·
+src/lib/components/common/RentalJourneyStepper.svelte · src/routes/account/+page.svelte ·
+src/routes/account/+page.server.ts
+
+검수 1(규칙 정합성):
+  □ 서버 키 클라이언트 노출 없음 — 해당 5개 파일 모두 UI/쿼리 select 범위만 변경, 신규
+    env import 없음. 통과.
+  □ SQL Injection 없음 — +page.server.ts는 기존 supabase 쿼리빌더(.select/.eq/.order)만
+    사용, 원시 SQL 문자열 조립 없음. 통과.
+  □ RLS 우회 없음 — recentRentalRes 쿼리는 기존 .eq('user_id', session.user.id) 그대로,
+    이번 변경은 select 컬럼(created_at) 추가와 반환값 후처리(1개월 게이트)뿐. 통과.
+  □ 터치 타겟 44px — 이번 변경분은 텍스트·박스 크기 조정뿐, 인터랙티브 요소(버튼 등)
+    신규 추가 없음 → 해당 없음.
+  □ CSS Variables — RentalJourneyStepper.svelte 신규 CSS는 기존 --cs-* 토큰 재사용
+    (var(--cs-surface-gray)·var(--cs-text) 등). RentalStatRow.svelte·계정 페이지의
+    Tailwind 임의값 하드코딩(bg-[#e1def3] 등)은 이 두 파일의 기존 Figma-이식 관행이며
+    이번 세션에서 새로 도입한 하드코딩은 없음(추가 규칙 예외 아님, 기존 패턴 그대로 재사용).
+
+검수 2(기술부채):
+  □ console.log 0건 / any 타입 0건 / TODO·FIXME 0건 (grep 재확인)
+  □ TypeScript: npx svelte-check 대상 파일 신규 에러 0건
+  □ Svelte5 패턴: on:click 등 Svelte4 문법 0건 / export let 0건 / writable store 0건
+  □ 성능: N+1 쿼리 신규 없음(기존 Promise.all 병렬조회 구조 그대로, select 컬럼 1개 추가뿐)
+  □ 접근성: RentalJourneyStepper 구조 분리(외곽 box + .stepper-scroll) 후에도
+    role="list"/role="listitem"/aria-label="대여 여정"이 실제 목록을 감싸는
+    .stepper-scroll에 정확히 유지됨(구조 변경 시 흔한 ARIA 계층 이탈 없음, 코드로 확인)
+
+검수 3(시범오픈 기준 S2):
+  □ 결제·DB 마이그레이션·웹훅 항목 — 해당 없음(순수 UI 변경, RPC/스키마 변경 없음)
+  □ RLS 고객 격리 — 위 검수1에서 이미 확인, 변경 없음
+
+종합 판정: GATE E 진행 가능 ✅ (수정 필요 항목 0건)
+비블로킹 참고: products.svelte 그리드 수정은 이 세션 dev서버 포트 문제로 브라우저
+라이브 검증을 못 했던 항목 — 코드·svelte-check 기준으로는 문제없으나 실화면 재확인이
+아직 안 된 상태임을 인지하고 있을 것.
+```
+
+**GATE E 통과 — Stephen, 커밋 메시지 제안해줘 요청 시 제안 가능. git add/commit/push는 Stephen 직접 실행.**
 
 ---
 

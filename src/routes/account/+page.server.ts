@@ -60,7 +60,7 @@ export const load: PageServerLoad = async ({ locals, depends }) => {
     ),
     locals.supabase
       .from('rental_reservations')
-      .select('id, status, reservation_code, start_date, end_date, product_id, products(name, category)')
+      .select('id, status, reservation_code, start_date, end_date, created_at, product_id, products(name, category)')
       .eq('user_id', session.user.id)
       .order('created_at', { ascending: false })
       .limit(1)
@@ -146,6 +146,14 @@ export const load: PageServerLoad = async ({ locals, depends }) => {
     recentRental: (() => {
       const r = recentRentalRes.data as Record<string, unknown> | null
       if (!r) return null
+      // "최근 예약 진행 상태" 섹션은 그 예약이 1개월 이내 생성된 경우에만 노출한다
+      // (1개월 넘은 오래된 예약이 계속 "최근"으로 표시되는 걸 방지 — Stephen 확정)
+      const createdAt = r.created_at as string | null
+      if (createdAt) {
+        const oneMonthAgo = new Date()
+        oneMonthAgo.setMonth(oneMonthAgo.getMonth() - 1)
+        if (new Date(createdAt) < oneMonthAgo) return null
+      }
       const product = r.products as { name: string; category: string } | null
       return {
         id:               r.id as number,
