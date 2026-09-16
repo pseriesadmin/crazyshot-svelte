@@ -1,5 +1,6 @@
 <script lang="ts">
   import { goto } from '$app/navigation'
+  import { fly } from 'svelte/transition'
   import type { PageData } from './$types'
   import type { ProductCard } from './+page.server'
   import BottomTabBar from '$lib/components/common/BottomTabBar.svelte'
@@ -122,8 +123,13 @@
     data.heroProducts.slice(dPage * dPerPage, dPage * dPerPage + dPerPage)
   )
 
-  function dPrev() { if (dPage > 0) dPage-- }
-  function dNext() { if (dPage < D_MAX_PAGE) dPage++ }
+  // PC 슬라이더 부드러운 슬라이드 방향(2026-09-15, Stephen 지적 — PC 반응형만 페이지
+  // 전환이 즉시 컷 전환돼 모바일(native scroll-snap)과 달리 슬라이드 느낌이 없던 결함).
+  // dPage가 바뀔 때마다 {#key dPage}로 감싼 카드 묶음이 전부 새로 마운트되므로, 이 값으로
+  // 진행 방향에 맞는 쪽에서 fly로 들어오게 한다(다음=오른쪽에서, 이전=왼쪽에서).
+  let dDirection = $state<1 | -1>(1)
+  function dPrev() { if (dPage > 0) { dDirection = -1; dPage-- } }
+  function dNext() { if (dPage < D_MAX_PAGE) { dDirection = 1; dPage++ } }
 
   // ── 휠·스와이프 네비게이션 ────────────────────────────────────────────
   let wheelCooldown = false
@@ -167,6 +173,10 @@
   // ── 관리자 모달 ───────────────────────────────────────────────────────
   let activeModal = $state<'categories' | 'hero' | 'grid' | 'md_picks' | null>(null)
 </script>
+
+<svelte:head>
+  <title>상품 전체보기 — CRAZYSHOT</title>
+</svelte:head>
 
 <div class="products-page">
 
@@ -311,8 +321,15 @@
         </button>
 
         <!-- Cards -->
-        <div class="d-slider-cards" class:slider-empty={data.heroProducts.length === 0} style="--dpp:{dPerPage}">
-          {#each visibleDesktopSlides as prod, i (dPage * dPerPage + i)}
+        {#key dPage}
+        <div
+          class="d-slider-cards"
+          class:slider-empty={data.heroProducts.length === 0}
+          style="--dpp:{dPerPage}"
+          in:fly={{ x: dDirection * 80, duration: 300 }}
+          out:fly={{ x: dDirection * -80, duration: 300 }}
+        >
+          {#each visibleDesktopSlides as prod, i (prod.id)}
             <a href={productLink(prod)} class="d-feat-card">
               <div class="d-feat-bg"></div>
               <div class="d-feat-img-box">
@@ -348,6 +365,7 @@
             </a>
           {/each}
         </div>
+        {/key}
 
         <!-- Next button -->
         <button
@@ -368,7 +386,7 @@
           <button
             class="d-dot"
             class:active={dPage === i}
-            onclick={() => { dPage = i }}
+            onclick={() => { dDirection = i >= dPage ? 1 : -1; dPage = i }}
             aria-label="슬라이드 페이지 {i + 1}"
           ></button>
         {/each}
@@ -493,7 +511,7 @@
         {/each}
       {:else}
         {#each mobileProducts.slice(0, 6) as prod}
-          <a href="/products/9" class="m-prod-card">
+          <a href="/products" class="m-prod-card">
             <div class="m-prod-img-box">
               <img src={prod.img} alt={prod.name} class="abs-img"
                 style="height:{prod.imgStyle.h};left:{prod.imgStyle.l};top:{prod.imgStyle.t};width:{prod.imgStyle.w}"
@@ -559,7 +577,7 @@
         {/each}
       {:else}
         {#each mobileProducts.slice(6) as prod}
-          <a href="/products/9" class="m-prod-card">
+          <a href="/products" class="m-prod-card">
             <div class="m-prod-img-box">
               <img src={prod.img} alt={prod.name} class="abs-img"
                 style="height:{prod.imgStyle.h};left:{prod.imgStyle.l};top:{prod.imgStyle.t};width:{prod.imgStyle.w}"
@@ -964,6 +982,10 @@
   .d-slider-relative {
     position: relative;
     overflow: hidden;
+    /* 2026-09-15: .d-slider-cards가 절대배치로 바뀌며(아래) 부모 높이를 스스로 정할 수
+       없게 돼 .d-feat-card 고정 높이(580px)를 명시로 이관 — 부모/자식 높이가 항상
+       같이 움직여야 하므로 값을 바꿀 땐 .d-feat-card height도 함께 바꿀 것 */
+    height: 580px;
   }
   .d-slider-cards.slider-empty {
     min-height: 400px;
@@ -996,6 +1018,12 @@
   .d-nav-next { right: 16px; }
 
   .d-slider-cards {
+    /* 2026-09-15: 부드러운 슬라이드 전환(Stephen 지적 — PC만 즉시 컷 전환) 구현을 위해
+       절대배치로 전환 — {#key dPage}의 in/out fly 전환 동안 이전 페이지 카드와 새
+       페이지 카드가 동일 위치에 겹쳐 있어야 좌우로 스치듯 지나가는 모양이 나온다
+       (일반 흐름이면 새/old가 세로로 밀리며 어긋남) */
+    position: absolute;
+    inset: 0;
     display: flex;
     gap: 20px;
   }

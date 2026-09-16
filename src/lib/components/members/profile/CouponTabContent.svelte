@@ -14,7 +14,7 @@
   }
 </script>
 
-<div class="flex flex-col gap-[10px] w-full">
+<div class="flex flex-col gap-[10px] w-full md:max-w-[640px] md:mx-auto">
   <div class="bg-white rounded-tl-[30px] rounded-tr-[30px] w-full">
     <div class="flex flex-col gap-[20px] px-[25px] py-[40px]">
 

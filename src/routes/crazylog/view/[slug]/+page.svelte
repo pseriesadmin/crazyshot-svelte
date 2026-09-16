@@ -7,8 +7,11 @@
   interface Props { data: PageData }
   let { data }: Props = $props()
 
-  const post = data.post
-  const YOUTUBE_VIDEO_ID = post?.youtubeVideoId ?? null
+  // ⚠️ core-rules.md: $state(prop) 초기화 금지 — 이 라우트는 다른 /crazylog/view/[slug]로
+  // SvelteKit 클라이언트 네비게이션(같은 라우트, 다른 slug)이 가능해 컴포넌트가 재마운트되지
+  // 않고 data만 갱신될 수 있다. $derived로 매번 최신 data.post를 반영한다.
+  const post = $derived(data.post)
+  const YOUTUBE_VIDEO_ID = $derived(post?.youtubeVideoId ?? null)
 
   let showModal = $state(false)
   let liked    = $state(false)
@@ -103,6 +106,11 @@
   // ── 댓글 상태 ─────────────────────────────────────────
   type Comment = { id: string; authorName: string; content: string; createdAt: string }
   let comments    = $state<Comment[]>((data.comments ?? []) as Comment[])
+  // ⚠️ core-rules.md: $state(prop) 초기화 금지 — post와 동일한 이유(같은 라우트 내 다른
+  // slug로 재마운트 없이 이동 가능)로 다른 글로 이동 시 댓글목록도 새로 반영되도록 동기화
+  $effect(() => {
+    comments = (data.comments ?? []) as Comment[]
+  })
   let commentText = $state('')
   let commentBusy = $state(false)
   let commentError = $state<string | null>(null)

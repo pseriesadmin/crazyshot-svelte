@@ -25,7 +25,7 @@ interface SubscribePlanRow {
 
 export const load: PageServerLoad = async ({ params, locals }) => {
   const { session } = await locals.safeGetSession()
-  if (!session) throw redirect(303, `/login?returnTo=${encodeURIComponent(`/subscribe/${params.planId}`)}`)
+  if (!session) throw redirect(303, `/auth/login?returnTo=${encodeURIComponent(`/subscribe/${params.planId}`)}`)
 
   const planId = Number(params.planId)
   if (!Number.isFinite(planId)) throw error(404, '구독 상품을 찾을 수 없습니다')

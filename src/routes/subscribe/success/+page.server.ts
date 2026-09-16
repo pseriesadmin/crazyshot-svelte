@@ -7,7 +7,7 @@ import type { PageServerLoad } from './$types'
 
 export const load: PageServerLoad = async ({ url, locals }) => {
   const { session } = await locals.safeGetSession()
-  if (!session) throw redirect(303, '/login')
+  if (!session) throw redirect(303, '/auth/login')
 
   const planId = Number(url.searchParams.get('planId'))
 

@@ -130,10 +130,14 @@
 
   // ── 상태 라벨 / 색상 ─────────────────────────────────────────────────────
   // reservation/+page.svelte:25-49 원문 그대로 복사
+  // expired(만료됨)는 rental-lifecycle.md 2026-08-31 추가분 — reservation/+page.svelte:38,52와
+  // 동일 라벨·색상으로 맞춤(2026-09-15 발견: 이 파일만 이 상태를 몰라 영어 원문 "expired"가
+  // 그대로 노출되고 있었음 — get_rental_list 제외목록(p_exclude_statuses)에 없어 실제로
+  // 화면에 뜨는 상태값인데 매핑만 누락돼 있었음).
   const STATUS_LABEL: Record<string, string> = {
     pending: '접수', hold: '신청대기', confirmed: '계약완료', shipped: '배송중',
     in_use: '대여중', return_requested: '반납요청', returned: '반납완료',
-    completed: '완료', cancelled: '취소', damage_claimed: '파손신고',
+    completed: '완료', cancelled: '취소', damage_claimed: '파손신고', expired: '만료됨',
   }
 
   const STATUS_STYLE: Record<string, { bg: string; color: string }> = {
@@ -147,6 +151,7 @@
     completed:        { bg: 'rgba(102,102,102,0.10)', color: 'var(--cs-text-mid)' },
     cancelled:        { bg: 'rgba(255,53,53,0.10)',   color: 'var(--cs-red-badge)' },
     damage_claimed:   { bg: 'rgba(255,53,53,0.10)',   color: 'var(--cs-red-badge)' },
+    expired:          { bg: 'rgba(102,102,102,0.10)', color: 'var(--cs-text-mid)' },
   }
 
   // ── 연체 판정 ────────────────────────────────────────────────────────────
@@ -167,6 +172,18 @@
     const rect = (e.currentTarget as HTMLElement).getBoundingClientRect()
     anchorRect = { top: rect.top, bottom: rect.bottom, left: rect.left, right: rect.right }
   }
+
+  // 열려 있는 상세 패널을 rowsMap 최신 데이터로 재동기화 — /cms/reservation·/cms/rentals
+  // +page.svelte의 "selectedRow를 data.rentals에서 재조회" $effect와 동일 목적(2026-09-15
+  // 발견: 이 파일만 그 재동기화가 빠져 있었음). onrefresh(refetchCurrentWindow)가
+  // rowsMap.set()으로 새 객체를 넣어도 selectedRow는 클릭 시점의 옛 객체 참조를 그대로 들고
+  // 있어, 패널 안에서 승인·취소·운송장 등록 등을 하고 나면 배경 막대는 갱신되는데 열려 있는
+  // 패널 자체는 닫았다 다시 열기 전까지 이전 상태를 계속 보여주는 결함이 있었음.
+  $effect(() => {
+    if (!selectedRow) return
+    const latest = rowsMap.get(selectedRow.reservation_id)
+    if (latest && latest !== selectedRow) selectedRow = latest
+  })
 
   // 클릭 지점 우측에 기본 노출, 화면 밖으로 넘치면 좌측으로 뒤집고, 상하좌우 뷰포트 안으로 클램프
   // ⚠️ QA 지적(2026-08-13, GATE E 2차 [이슈A]): 세로 클램핑이 top만 고정값(vh-120)으로
@@ -351,7 +368,7 @@
           onclick={(e) => openDetail(row, e)}
         >
           <span class="gantt-product-name" title={row.product_name}>{row.product_name}</span>
-          <span class="gantt-customer-name">{row.customer_name}</span>
+          <span class="gantt-customer-name">{row.customer_name || '이름없음'}</span>
         </button>
 
         <!-- 날짜 그리드 트랙 (relative + CSS 배경으로 격자 표현) -->
