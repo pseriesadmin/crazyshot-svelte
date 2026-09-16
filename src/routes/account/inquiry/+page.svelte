@@ -2,7 +2,6 @@
   import { enhance } from '$app/forms'
   import { invalidateAll } from '$app/navigation'
   import SubGnb from '$lib/components/common/SubGnb.svelte'
-  import BottomTabBar from '$lib/components/common/BottomTabBar.svelte'
   import { csToast } from '$lib/utils/toast'
   import type { PageData, ActionData } from './$types'
   import type { MyPost } from './+page.server'
@@ -69,12 +68,13 @@
 
 <div class="page-wrap">
 
-  <SubGnb title="빠른 문의" noGnbOffset />
+  <SubGnb title="빠른문의" noGnbOffset />
 
   <div class="content">
 
     <!-- 새 문의 작성 버튼 -->
     <div class="new-btn-row">
+      <p class="section-title">문의 목록</p>
       <button class="btn-new" onclick={() => { showForm = !showForm }}>
         {showForm ? '취소' : '새 문의 작성 +'}
       </button>
@@ -147,20 +147,22 @@
               onclick={() => togglePost(post.id)}
               aria-expanded={isOpen}
             >
-              <span
-                class="status-chip"
-                style="background:{st.bg};color:{st.color}"
-              >{STATUS_LABEL[post.status] ?? post.status}</span>
+              <div class="post-head-body">
+                <span
+                  class="status-chip"
+                  style="background:{st.bg};color:{st.color}"
+                >{STATUS_LABEL[post.status] ?? post.status}</span>
 
-              <div class="post-summary">
-                <span class="post-title">{post.title}</span>
-                <span class="post-meta-row">
-                  <span class="post-cat">{CATEGORY_LABEL[post.category] ?? post.category}</span>
-                  <span class="post-date">{formatDate(post.created_at)}</span>
-                  {#if replyCount > 0}
-                    <span class="reply-count-badge">답변 {replyCount}</span>
-                  {/if}
-                </span>
+                <div class="post-summary">
+                  <span class="post-title">{post.title}</span>
+                  <span class="post-meta-row">
+                    <span class="post-cat">{CATEGORY_LABEL[post.category] ?? post.category}</span>
+                    <span class="post-date">{formatDate(post.created_at)}</span>
+                    {#if replyCount > 0}
+                      <span class="reply-count-badge">답변 {replyCount}</span>
+                    {/if}
+                  </span>
+                </div>
               </div>
 
               <span class="chevron-icon" class:rotated={isOpen}>
@@ -211,8 +213,6 @@
     {/if}
 
   </div>
-
-  <BottomTabBar />
 </div>
 
 <style>
@@ -228,7 +228,8 @@
     display: flex;
     flex-direction: column;
     gap: 12px;
-    padding: 70px 20px 100px;
+    /* 모바일: top 여백 35px (account/rental/+page.svelte와 동일 값) */
+    padding: 35px 20px 100px;
     max-width: 600px;
     margin: 0 auto;
     width: 100%;
@@ -236,9 +237,18 @@
   }
 
   /* 새 문의 버튼 */
+  /* 모바일: 목록(list-wrap)과의 간격 25px(기존 .content gap 12px + margin-bottom 13px) +
+     좌측 "문의 목록" 타이틀 추가로 space-between 전환 */
   .new-btn-row {
     display: flex;
-    justify-content: flex-end;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 13px;
+  }
+  .section-title {
+    font: var(--text-m-body-16B);
+    color: var(--cs-text);
+    margin: 0;
   }
   .btn-new {
     height: 40px;
@@ -319,22 +329,26 @@
   .btn-submit:disabled { opacity: 0.6; cursor: not-allowed; }
   .btn-submit:not(:disabled):hover { opacity: 0.85; }
 
-  /* 목록 */
-  .list-wrap { display: flex; flex-direction: column; gap: 8px; }
+  /* 목록 — 모바일: 카드 간 여백 40px */
+  .list-wrap { display: flex; flex-direction: column; gap: 30px; }
 
   .post-card {
     background: #fff;
-    border-radius: 20px;
+    /* 모바일: 표준 디자인 시스템 카드(대) 반경 기준값 적용(front-uiux.md §4, 30px) */
+    border-radius: 30px;
     overflow: hidden;
   }
   .post-card.post-open { box-shadow: 0 2px 12px rgba(59,47,138,0.1); }
 
   .post-head {
     display: flex;
-    align-items: flex-start;
+    /* 모바일: 상태칩·화살표 아이콘을 카드 수직 중앙 기준으로 정렬(기존 상단 정렬 대체) */
+    align-items: center;
     gap: 10px;
     width: 100%;
-    padding: 14px 16px;
+    /* 모바일: 상하 패딩 30% 추가(14px → 18.2px) 후, 카드 전체 패딩(상하·좌우) 20% 추가
+       (18.2px → 21.84px / 16px → 19.2px) */
+    padding: 21.84px 19.2px;
     background: none;
     border: none;
     cursor: pointer;
@@ -344,27 +358,39 @@
   .status-chip {
     display: inline-flex;
     align-items: center;
-    padding: 3px 10px;
+    /* 모바일: 상하 패딩 30%→50%→30% 순차 추가(3px → 3.9px → 5.85px → 7.605px) 후
+       20% 축소(→ 6.084px), 좌우는 15px 유지 */
+    padding: 6.084px 15px;
+    /* 모바일: 표준 디자인 시스템 라운드값 반영(--radius-xl, 30px) */
     border-radius: var(--radius-xl);
-    font-family: 'Noto Sans KR', sans-serif;
-    font-size: 11px;
-    font-weight: 700;
+    /* 모바일: 14px Bold에서 한 단계 작은 폰트토큰으로 조정(→ 12px Medium) */
+    font: var(--text-m-script-12);
     white-space: nowrap;
     flex-shrink: 0;
     margin-top: 2px;
   }
 
-  .post-summary {
+  /* 배지를 제목 블록 위로 재배치 — 기존 좌우 배치(배지|제목블록) 대신 상하로 쌓음.
+     ⚠️ 펼침 본문에 이미 .post-body(border-top 구분선 포함)가 쓰이고 있어
+     이름 충돌 방지를 위해 .post-head-body로 별도 명명 */
+  .post-head-body {
     flex: 1;
     display: flex;
     flex-direction: column;
-    gap: 4px;
+    align-items: flex-start;
+    gap: 8px;
+    min-width: 0;
+  }
+  .post-summary {
+    display: flex;
+    flex-direction: column;
+    /* 모바일: 행간(제목↔메타행 사이) 50% 추가(4px → 6px) */
+    gap: 6px;
     min-width: 0;
   }
   .post-title {
-    font-family: 'Noto Sans KR', sans-serif;
-    font-size: 14px;
-    font-weight: 700;
+    /* 모바일: 한 단계 큰 폰트토큰 적용(14px Bold → 16px Bold) */
+    font: var(--text-m-body-16B);
     color: var(--cs-text);
     overflow: hidden;
     text-overflow: ellipsis;
@@ -512,6 +538,50 @@
     .content {
       padding: 100px 40px 60px;
       max-width: 720px;
+    }
+    /* PC는 카드 반경도 기존 20px 그대로 유지(이번 요청 범위 밖) */
+    .post-card {
+      border-radius: 20px;
+    }
+    /* 이번 요청은 모바일 반응형 한정 — PC는 기존 gap(12px)·버튼 단독 우측정렬 그대로 유지 */
+    .new-btn-row {
+      justify-content: flex-end;
+      margin-bottom: 0;
+    }
+    .section-title {
+      display: none;
+    }
+    /* PC는 카드 간 여백도 기존 8px 그대로 유지 */
+    .list-wrap {
+      gap: 8px;
+    }
+    /* PC는 카드 상하 패딩도 기존 14px 그대로 유지 */
+    .post-head {
+      align-items: flex-start;
+      padding: 14px 16px;
+    }
+    /* PC는 배지 재배치 요청 범위 밖 — 기존처럼 배지·제목블록 좌우 배치 유지 */
+    .post-head-body {
+      flex-direction: row;
+      align-items: flex-start;
+      gap: 10px;
+    }
+    /* PC는 상태칩 상하 패딩도 기존 3px 그대로 유지 */
+    .status-chip {
+      padding: 3px 10px;
+      border-radius: var(--radius-xl);
+      font-family: 'Noto Sans KR', sans-serif;
+      font-size: 11px;
+      font-weight: 700;
+    }
+    /* PC는 행간·제목 폰트도 기존 값 그대로 유지 */
+    .post-summary {
+      gap: 4px;
+    }
+    .post-title {
+      font-family: 'Noto Sans KR', sans-serif;
+      font-size: 14px;
+      font-weight: 700;
     }
   }
 </style>
