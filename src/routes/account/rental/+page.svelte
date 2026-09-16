@@ -125,6 +125,10 @@
   }
 </script>
 
+<svelte:head>
+  <title>대여 내역 — CRAZYSHOT</title>
+</svelte:head>
+
 <div class="page-wrap">
 
   <SubGnb title="대여" mobileOnly />

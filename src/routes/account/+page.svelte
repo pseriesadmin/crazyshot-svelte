@@ -103,6 +103,10 @@
 
 </script>
 
+<svelte:head>
+  <title>마이페이지 — CRAZYSHOT</title>
+</svelte:head>
+
 <div class="page-wrap">
   <div class="page-inner">
 

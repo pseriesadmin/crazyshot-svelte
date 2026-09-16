@@ -93,6 +93,10 @@
 
 </script>
 
+<svelte:head>
+  <title>크레이지로그 — CRAZYSHOT</title>
+</svelte:head>
+
 <!-- ═══════════════════════════════════════
      DESKTOP (min-width: 768px)
      0401Shotlog 기반: What's Buzzing 그리드 + 포스트 목록

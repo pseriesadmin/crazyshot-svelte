@@ -52,6 +52,10 @@
   })
 </script>
 
+<svelte:head>
+  <title>내정보 — CRAZYSHOT</title>
+</svelte:head>
+
 <div class="page-root">
   <!-- Sub GNB (Mobile + PC 공용) -->
   <SubGnb title="내정보" />

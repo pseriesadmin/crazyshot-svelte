@@ -63,6 +63,10 @@
   }
 </script>
 
+<svelte:head>
+  <title>빠른 문의 — CRAZYSHOT</title>
+</svelte:head>
+
 <div class="page-wrap">
 
   <SubGnb title="빠른 문의" noGnbOffset />

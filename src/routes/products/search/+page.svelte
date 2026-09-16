@@ -134,6 +134,10 @@
   }
 </script>
 
+<svelte:head>
+  <title>상품 검색 — CRAZYSHOT</title>
+</svelte:head>
+
 <div class="page-root">
 
   <!-- ── Sub GNB (표준 front 디자인 시스템 GNB-NaviBar) ── -->

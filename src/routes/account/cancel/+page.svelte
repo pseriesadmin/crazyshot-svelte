@@ -14,6 +14,10 @@
   }
 </script>
 
+<svelte:head>
+  <title>취소·반품 — CRAZYSHOT</title>
+</svelte:head>
+
 <div class="page-wrap">
 
   <SubGnb title="취소·반품" mobileOnly />
