@@ -272,11 +272,16 @@ export async function sendPushToUser(
  * 예약 라이프사이클 고객 푸시 — CMS 상태 전환 액션에서 기존 send_rental_chat_notification 호출
  * 직후에 병행 호출한다. 예약 행(user_id·상품명)을 직접 조회하므로 채팅 RPC와 완전히 독립적으로
  * 동작하며, 실패해도 절대 throw하지 않는다(호출부의 채팅 발송 성공 여부에 영향 없음).
+ *
+ * options.skipSmsFallback: true를 전달하면 푸시 미수신(no_token/delivery_failed) 시에도
+ * SMS 폴백을 발송하지 않는다. 호출부에서 이미 SMS를 직접 발송한 경우 중복 방지를 위해 사용.
+ * 미전달 시 기존 동작(폴백 SMS 발송) 그대로 유지 — 기존 호출부(수동 버튼 등) 회귀 없음.
  */
 export async function sendReservationLifecyclePush(
   admin: SupabaseClient,
   reservationId: number,
   notifyType: string,
+  options?: { skipSmsFallback?: boolean },
 ): Promise<void> {
   try {
     const copy = CUSTOMER_LIFECYCLE_PUSH_COPY[notifyType]
@@ -303,7 +308,9 @@ export async function sendReservationLifecyclePush(
     // SMS 폴백: 푸시 미수신(토큰 없음 또는 전달 실패) + 크리티컬 이벤트(reservation_approval·
     // return_remind)일 때만 고객 휴대폰으로 SMS 보조 발송 (Solapi HMAC 인증).
     // SOLAPI_API_KEY/SOLAPI_API_SECRET 미설정 시 sendSms 내부에서 graceful skip되므로 조건 분기 불필요.
-    if (!pushResult.delivered && (pushResult.reason === 'no_token' || pushResult.reason === 'delivery_failed')) {
+    // options.skipSmsFallback: true 시 이 블록 전체를 건너뜀 — 호출부에서 이미 SMS를 직접
+    // 발송한 경우 중복 방지 목적. 기존 호출부(수동 버튼 등)는 옵션 미전달 → 기존 동작 유지.
+    if (!pushResult.delivered && (pushResult.reason === 'no_token' || pushResult.reason === 'delivery_failed') && !options?.skipSmsFallback) {
       const { data: userProfile } = await admin
         .from('user_profiles')
         .select('phone')
