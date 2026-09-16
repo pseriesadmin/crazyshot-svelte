@@ -26,6 +26,11 @@
     // 완전히 분리된 순수 시각 표시 전용. 미전달 시(기존 모든 호출부) 동작 100% 동일 —
     // 하위호환 유지. 클릭·선택 가능 여부에는 전혀 관여하지 않는다(isDateDisabled와 무관).
     highlightDates?: Set<string>
+    // 휴무일 자동연장 트리거 경고 표시(2026-09-16) — 현재 선택된 날짜(value) 자체가
+    // 휴무일 자동조정을 유발할 때만 true. 선택된 날짜에 한해 기본 보라색 원(cal-day-sel /
+    // range-start/end ::after) 대신 빨간색으로 덮어씌운다. 미전달 시(기존 모든 호출부)
+    // 동작 100% 동일 — 하위호환 유지.
+    warnSelected?: boolean
   }
 
   let {
@@ -40,6 +45,7 @@
     isDateDisabled,
     onDisabledClick,
     highlightDates,
+    warnSelected = false,
   }: Props = $props()
 
   // 종료일 대기 중(rangeStart는 있고 rangeEnd는 아직 없음) hover한 날짜를 임시 종료일처럼
@@ -184,6 +190,37 @@
     showMonthPicker = false
   }
   // ────────────────────────────────────────────────────────────────────────────
+
+  // 모바일·PC 반응형 높이 불일치 수정(2026-09-16) — 아래 .cal-date-area의 292px는
+  // "6주 표기 달(7행×7열)" 케이스를 어떤 화면 폭에서 실측한 고정 px 값이었다. 그런데
+  // .cal-day는 aspect-ratio:1 + width:100%라 셀 높이가 컬럼 폭(=화면 폭)에 정비례한다 —
+  // 즉 고정 292px는 그 값을 측정했던 폭에서만 맞고, 컨테이너 폭이 다른 화면(PC↔모바일)
+  // 에서는 실제 그리드 높이가 292px보다 작아져 그 차이만큼 날짜 아래에 빈 공간이 생긴다.
+  // 해결: 현재 렌더링된 요일행 높이(.cal-dow, 폭과 무관한 고정 라인높이)와 날짜칸 높이
+  // (.cal-day, 폭에 비례)를 직접 측정해 "이 폭에서의 6행 최대 높이"를 매번 재계산한다 —
+  // ResizeObserver로 폭이 바뀔 때마다(리사이즈·브레이크포인트 전환) 다시 계산되므로
+  // PC·모바일 어느 폭에서든 실제 그리드 크기와 정확히 일치한다. 측정 전(최초 페인트
+  // 이전)에는 CSS 기본값 292px로 폴백.
+  let gridMinHeight = $state(0)
+
+  function measureCalGrid(node: HTMLElement) {
+    function measure() {
+      const dowEl = node.querySelector<HTMLElement>('.cal-dow')
+      const dayEl = node.querySelector<HTMLElement>('.cal-day')
+      if (!dowEl || !dayEl) return
+      const gridEl = node.querySelector<HTMLElement>('.cal-grid')
+      const rowGap = gridEl ? (parseFloat(getComputedStyle(gridEl).rowGap) || 0) : 0
+      const headerH = dowEl.getBoundingClientRect().height
+      const cellH = dayEl.getBoundingClientRect().height
+      gridMinHeight = headerH + cellH * 6 + rowGap * 6
+    }
+    measure()
+    const ro = new ResizeObserver(measure)
+    ro.observe(node)
+    return {
+      destroy() { ro.disconnect() },
+    }
+  }
 </script>
 
 <div class="cal-root">
@@ -220,8 +257,15 @@
        둔다 — .cal-grid(그리드 컨테이너) 자체에 min-height를 주면 auto 행이 늘어난 공간만큼
        늘어나 stretch되고, aspect-ratio:1인 .cal-day가 그 늘어난 높이를 따라 폭까지 함께
        커져 그리드 밖으로 넘치는 결함이 있었다(2026-09-15 실측으로 원인 확인·수정 —
-       .cal-grid의 grid-template-columns/gap 등 기존 로직은 전혀 변경하지 않음). -->
-  <div class="cal-date-area">
+       .cal-grid의 grid-template-columns/gap 등 기존 로직은 전혀 변경하지 않음).
+       2026-09-16: min-height 값 자체를 고정 292px가 아니라 --cal-min-h CSS 변수로 빼서
+       measureCalGrid가 실측한 "현재 폭 기준 6행 높이"로 채운다(모바일·PC 반응형 불일치
+       수정, 위 script 주석 참고). -->
+  <div
+    class="cal-date-area"
+    use:measureCalGrid
+    style={gridMinHeight ? `--cal-min-h: ${gridMinHeight}px` : undefined}
+  >
   {#if showYearPicker}
     <div class="cal-year-panel">
       <div
@@ -266,12 +310,14 @@
           {@const isRangeEnd = previewEnd !== '' && previewEnd === iso}
           {@const isInRange = rangeStart !== '' && previewEnd !== '' && iso > rangeStart && iso < previewEnd}
           {@const adjHoliday = !sel && (highlightDates?.has(iso) ?? false)}
+          {@const warnSel = sel && warnSelected}
           <button
             class="cal-day"
             class:cal-day-sel={sel}
             class:cal-day-past={past}
             class:cal-day-holiday={holidayDisabled}
             class:cal-day-adj-holiday={adjHoliday}
+            class:cal-day-warn={warnSel}
             class:cal-day-sun={dow === 0}
             class:cal-day-sat={dow === 6}
             class:cal-day-range-start={isRangeStart}
@@ -279,7 +325,12 @@
             class:cal-day-in-range={isInRange}
             disabled={past}
             aria-disabled={holidayDisabled}
-            title={holidayDisabled ? '선택할 수 없는 날짜입니다' : (adjHoliday ? '휴무일 — 무료로 대여기간에 포함됩니다' : undefined)}
+            title={
+              holidayDisabled ? '선택할 수 없는 날짜입니다'
+              : warnSel ? '휴무일로 인해 실제 수령일(반납일)이 자동 조정됩니다'
+              : adjHoliday ? '이 날짜부터 정상 영업일로 복귀합니다'
+              : undefined
+            }
             onclick={() => holidayDisabled ? onDisabledClick?.(iso) : onselect(iso)}
             onmouseenter={() => { hoverIso = iso }}
             onmouseleave={() => { hoverIso = null }}
@@ -295,11 +346,14 @@
   .cal-root { width: 100%; }
 
   /* 날짜 그리드(.cal-grid) ↔ 연도 레이어(.cal-year-panel) 전환 시 달력 모달 높이가 흔들리지
-     않도록 하는 순수 블록 래퍼. 292px는 이 컴포넌트가 실제로 그리는 날짜 그리드 최대
-     케이스(6주 표기 달, 7행×7열=49셀) 실측값 — .cal-grid 자체에는 절대 높이 제약을 주지
-     않는다(그리드 컨테이너에 직접 주면 auto 행이 stretch되어 aspect-ratio:1인 .cal-day
-     폭까지 함께 커지는 결함이 있었음, 2026-09-15). */
-  .cal-date-area { min-height: 292px; }
+     않도록 하는 순수 블록 래퍼. --cal-min-h는 이 컴포넌트가 실제로 그리는 날짜 그리드 최대
+     케이스(6주 표기 달, 7행×7열=49셀)의 높이 — 292px는 JS 측정 전(최초 페인트) 폴백값일
+     뿐이고, 실제 값은 measureCalGrid가 현재 렌더링 폭 기준으로 매번 재계산해 인라인
+     스타일로 덮어쓴다(2026-09-16 — 고정 292px가 모바일·PC 폭 차이를 반영하지 못해 날짜
+     아래 빈 공간이 생기던 결함 수정, 위 script 주석 참고). .cal-grid 자체에는 절대 높이
+     제약을 주지 않는다(그리드 컨테이너에 직접 주면 auto 행이 stretch되어 aspect-ratio:1인
+     .cal-day 폭까지 함께 커지는 결함이 있었음, 2026-09-15). */
+  .cal-date-area { --cal-min-h: 292px; min-height: var(--cal-min-h); }
 
   .cal-header {
     display: flex;
@@ -376,7 +430,7 @@
        grid-auto-columns도 월 레이어 컬럼 폭에 맞춰 재계산, 나머지는 좌우 스크롤로 탐색 */
     grid-template-rows: repeat(3, 1fr);
     grid-auto-columns: 52px;
-    height: 292px;
+    height: var(--cal-min-h, 292px);
     gap: 14px;
     overflow-x: auto;
     padding: 20px 24px;
@@ -457,7 +511,7 @@
     display: grid;
     grid-template-columns: repeat(4, 1fr);
     grid-template-rows: repeat(3, 1fr);
-    height: 292px;
+    height: var(--cal-min-h, 292px);
     gap: 14px;
     padding: 20px 24px;
   }
@@ -581,13 +635,45 @@
   /* 휴무일 포함 배송 자동연장 미리보기 하이라이트(2026-09-12) — 선택 불가(cal-day-holiday)와
      완전히 다른 개념: 차단이 아니라 "현재 선택한 날짜 때문에 무료로 대여기간에 포함되는
      휴무일"을 원형 배경으로 안내. cal-day-sel(!important)이 있으면 항상 그쪽이 우선하도록
-     class 자체를 !sel일 때만 부여함(above 마크업) — 여기서는 단순 배경색만 정의. */
+     class 자체를 !sel일 때만 부여함(above 마크업) — 여기서는 단순 배경색만 정의.
+     2026-09-16 색상 재조정(4차) — Stephen 피드백 "컬러값 자체가 짙다"에 따라 purple-60
+     (`--cs-purple-light`, #553FE0) → purple-20(`--cs-purple-pale`, #C1BBEC) → 이번
+     purple-10(`--cs-purple-op10`, #E1DEF3)까지 단계적으로 낮췄다(둘 다 디자인 시스템
+     정본 토큰, front-uiux.md 컬러 표에 등재됨 — 임의 값 아님). 이 하이라이트는 실제
+     "선택"이 아니라 부수적인 안내(정보성 표시)일 뿐이라 배경이 옅을수록 의도에 맞다.
+     이 톤에서도 글자색을 흰색으로 강제할 필요가 없다 — 배경이 충분히 밝아 요일별 색
+     (토요일 `--cs-purple`, 일요일 `--cs-red-badge`)이나 평일 기본색(`--cs-text-dark`)이
+     그대로도 잘 읽힌다. */
   .cal-day-adj-holiday {
-    background: var(--cs-purple-light);
-    color: var(--cs-white);
+    background: var(--cs-purple-op10);
     font-weight: 700;
   }
-  .cal-day-adj-holiday:hover:not(:disabled) { background: var(--cs-purple-light); }
+  /* 호버 시 일반 규칙(.cal-day:hover:not(:disabled):not(.cal-day-holiday))이 배경을
+     --cs-lilac으로 바꿔버리는 걸 막기 위해 !important 필요(기존과 동일 이유). 호버에서는
+     "진해지는" 반응을 위해 한 단계 더 채도 높은 purple-60(`--cs-purple-light`)으로 전환하는데,
+     이 톤은 평일/주말 기본 글자색과 명도차가 다시 부족해질 수 있어 호버 상태에 한해서만
+     흰 글자를 함께 강제한다(비호버 상태의 color 규칙은 그대로 자연색 유지, 위 참고). */
+  .cal-day-adj-holiday:hover:not(:disabled) {
+    background: var(--cs-purple-light) !important;
+    color: var(--cs-white) !important;
+  }
+
+  /* 휴무일 자동연장 트리거 경고 — 선택된 날짜 자체가 자동조정을 유발할 때 빨간색으로
+     덮어씌움(2026-09-16). .cal-day-sel과 .cal-day-range-start/end::after 두 레이어를
+     모두 오버라이드해야 카트 화면(항상 range-start/end와 동시 적용됨)에서 실제로 보인다 —
+     이 컴포넌트를 사용하는 카트 RentalForm의 두 호출부는 selectedDate를 항상 rangeStart
+     (수령) 또는 rangeEnd(반납)와 동일한 값으로 전달하므로, 선택된 날짜 칸은 항상
+     cal-day-sel과 cal-day-range-start/end가 동시에 적용된다 — .cal-day-sel만 오버라이드
+     하면 실제로 그려지는 ::after 원(.cal-day-range-start/end::after)에는 아무 효과가 없다. */
+  .cal-day-warn {
+    background: var(--cs-red-badge) !important;
+    color: var(--cs-white) !important;
+    font-weight: 700;
+  }
+  .cal-day-warn.cal-day-range-start::after,
+  .cal-day-warn.cal-day-range-end::after {
+    background: var(--cs-red-badge) !important;
+  }
 
   /* 대여~반납 기간 범위 밴드(2026-08-17, 2026-08-18 전면 재작업)
      — 시작·끝은 채워진 원, 사이 날짜는 연속된 배경 밴드.
@@ -603,9 +689,16 @@
   .cal-day-range-end::before {
     content: '';
     position: absolute;
-    top: 3px;
-    bottom: 3px;
-    background: var(--cs-purple-op10);
+    /* 2026-09-16(Stephen 지적) — top/bottom 3px 여백 때문에 밴드 상하폭이 원 채움
+       (.cal-day-range-start/end::after, inset:0 — 셀 전체 높이를 그대로 채움)보다 6px
+       작아 보이던 결함. 원과 동일하게 inset 0으로 맞춰 상하폭을 일치시킴. */
+    top: 0;
+    bottom: 0;
+    /* Stephen 요청(2026-09-16)으로 purple-10(--cs-purple-op10, #E1DEF3) → purple-5
+       (--cs-lilac, #ECEBF4, front-uiux.md 컬러 표 등재 정본 토큰)로 낮춤. 이 밴드는
+       날짜 숫자 뒤에 z-index:-2로 깔리는 순수 배경일 뿐 자체 글자색이 없어(숫자는 요일별
+       색이 별도로 그대로 유지) 명도차 문제와 무관 — 옅게 낮춰도 가독성 영향 없음. */
+    background: var(--cs-lilac);
     z-index: -2;
     /* 2026-08-18: hover로 밴드가 매 셀마다 즉시 나타나던 것을 부드럽게 페이드 — 마우스로
        구간을 훑을 때 끊기지 않고 이어지는 느낌으로 개선(외부 캘린더 기간선택 UX 참고) */

@@ -10,7 +10,7 @@
   import { csToast } from '$lib/utils/toast';
   import { isLockerHour } from '$lib/utils/lockerTimeRange';
   import { calcShippingFee, calcShippingDiscountRate, applyShippingDiscount, isRoundTripShippingFee, isFreeDeliveryCouponBlocked, computeReturnVisibleTabs, type ShippingFeeItem, type DeliveryFeeDiscountTier, type DiscountConditionItem } from '$lib/utils/cartShippingFee';
-  import { calcRentalDays, calcRentalFee, calcRentalPeriodParts, computeCartTotalMinutes } from '$lib/utils/cartRentalFee';
+  import { calcRentalDays, calcRentalFee, calcRentalPeriodParts, computeCartTotalMinutes, calcHolidayExtension, calcHolidayExtraFee } from '$lib/utils/cartRentalFee';
   import { toDeliveryMethod, isMethodSelectionValid } from '$lib/utils/cartMethodSelection';
   import {
     resolveParentProductId,
@@ -493,6 +493,26 @@
   let openCalId = $state<string | null>(null);
   let openTimeId = $state<string | null>(null);
 
+  // 휴무일 안내문 겹침 결함 수정(2026-09-17) — .cal-layer는 position:absolute라 문서
+  // 흐름상 공간을 차지하지 않는다. 안내문(.cal-holiday-guide-note)을 그 뒤에 평범한
+  // 형제 요소로 두면 .cal-layer(z-index:100, 흰 배경)와 정확히 같은 위치에 겹쳐 화면에
+  // 전혀 보이지 않는다(실측 확인된 결함). 달력 팝업의 실제 렌더링 높이(날짜 그리드/연도
+  // 선택/월 선택 화면마다 다름, CalendarGrid.svelte 292px 주석 참고)를 calId별로 직접
+  // 측정해, 안내문을 그 높이만큼 정확히 아래로 절대배치한다.
+  let calLayerHeights = $state<Record<string, number>>({})
+
+  function measureCalLayer(node: HTMLElement, calId: string) {
+    const ro = new ResizeObserver(() => {
+      calLayerHeights[calId] = node.offsetHeight
+    })
+    ro.observe(node)
+    calLayerHeights[calId] = node.offsetHeight
+    return {
+      update(newCalId: string) { calId = newCalId },
+      destroy() { ro.disconnect() },
+    }
+  }
+
   function openCal(id: string, _currentDate: string) {
     openCalId = openCalId === id ? null : id;
     openTimeId = null;
@@ -701,7 +721,7 @@
   // canonicalReservationId가 옵션·방식 저장 기준(=CartItemUiState.id와 동일).
   type CartLineGroup = { groupKey: string; canonicalReservationId: string; reservationIds: string[]; qty: number; productId: string | null; product: ProductRow | null; price12h: number | null; price24h: number | null; deposit: number | null; startDate: string; endDate: string; pickupMethod: string | null; returnMethod: string | null; pickupTime: string | null; returnTime: string | null; durationType: string | null; options: CartLineItemOption[]; status: string }
   type RentalConsentItemRow = { id: string; content: string; display_order: number }
-  type ServerExt = { calcTotal: number; calcDiscount: number; calcFinal: number; depositTotal: number; membershipGrade: string | null; userPoints: number; userCoupons: UserCouponExt[]; cartLineItems: CartLineItem[]; cartLineGroups: CartLineGroup[]; availableStock: Record<string, number>; productPriceRules: Record<string, PriceRuleExt>; hasUserAddress: boolean; rentalGuideText: string; consentItems: RentalConsentItemRow[] }
+  type ServerExt = { calcTotal: number; calcDiscount: number; calcFinal: number; depositTotal: number; membershipGrade: string | null; userPoints: number; userCoupons: UserCouponExt[]; cartLineItems: CartLineItem[]; cartLineGroups: CartLineGroup[]; availableStock: Record<string, number>; productPriceRules: Record<string, PriceRuleExt>; hasUserAddress: boolean; rentalGuideText: string; holidayGuideText: string; consentItems: RentalConsentItemRow[] }
   const sd = $derived(data as unknown as ServerExt)
 
   // 카트 라인아이템 — 항상 실 DB 기준 (게스트도 예약 시 익명 로그인으로 실 세션을 가지므로
@@ -1003,22 +1023,56 @@
   // 계산)가 이미 이 필드를 쓰고 있던 것과 동일 원칙. line.pickupMethod 기준으로는 아직
   // 서버에 저장되지 않은 방금 전환한 배송 선택이 반영되지 않아 "왕복 배송" 화면에서도 여전히
   // 12h 블록 산식이 잘못 적용되는 실사용 버그로 이어졌다.
+  // 휴무일 포함 배송 연장(2026-09-12) — 서버(compute_reservation_line_amount)와 동일하게
+  // "이미 확장된" 날짜 구간(effectiveStart/effectiveEnd)을 기준으로 정상 요금을 먼저 계산한
+  // 뒤, 연장일수만큼 정상요율분을 빼낸다(rental-fee-policy.md 신설 절 참고). 방식이
+  // is_courier_dependent가 아니면 calcHolidayExtension이 자연히 0 연장을 반환해 기존 동작과
+  // 완전히 동일(날짜 미확정 시에도 빈 값 그대로 통과 — calcRentalFee가 0 처리).
+  type HolidayExtCartItem = { rentalDate: string; returnDate: string; opts: { rentalMethod: DeliveryMethod | null; returnMethod: DeliveryMethod | null } }
+  function itemHolidayExtension(it: HolidayExtCartItem) {
+    if (!it.rentalDate || !it.returnDate) {
+      return { effectiveStart: it.rentalDate, effectiveEnd: it.returnDate, pickupExtraDays: 0, returnExtraDays: 0 }
+    }
+    return calcHolidayExtension(
+      it.rentalDate,
+      it.returnDate,
+      isCourierDependent(it.opts.rentalMethod),
+      isCourierDependent(it.opts.returnMethod),
+      courierClosedSet,
+    )
+  }
+  // "+휴무일 포함" 배지 판정(2026-09-16) — RentalForm 스니펫(열린 아코디언) 내부의
+  // holidayExtraDays 계산과 완전히 동일한 단일 날짜 미리보기 로직을 공용 함수로 분리.
+  // 아코디언이 닫혀 collapsed-summary(datetime-wrap acc-collapsed-summary)로 표시될 때도
+  // 열려있을 때와 동일하게 배지가 보이도록, "대여예약옵션" 상단 요약 바 + "대여 방법"·
+  // "반납 방법" 개별 아코디언 요약 바 총 4곳에서 재사용한다(전부 bulkDate/bulkReturnDate
+  // 기준 — RentalForm 내부에서는 props.selectedDate로 계산되는 것과 값 자체는 동일).
+  function collapsedHolidayExtraDays(method: DeliveryMethod | null, date: string, isPickupLeg: boolean): number {
+    if (!isCourierDependent(method) || !date) return 0
+    const preview = isPickupLeg
+      ? calcHolidayExtension(date, date, true, false, courierClosedSet)
+      : calcHolidayExtension(date, date, false, true, courierClosedSet)
+    return isPickupLeg ? preview.pickupExtraDays : preview.returnExtraDays
+  }
   function itemRentalFee(
     line: CartLineGroup | undefined,
-    it: { rentalDate: string; returnDate: string; rentalTime: string; returnTime: string; opts: { rentalMethod: DeliveryMethod | null } },
+    it: { rentalDate: string; returnDate: string; rentalTime: string; returnTime: string; opts: { rentalMethod: DeliveryMethod | null; returnMethod: DeliveryMethod | null } },
   ): number {
     if (line?.durationType === 'purchase') return line.product?.sale_price ?? 0
     const r24 = itemRate24h(line)
     const r12 = itemRate12h(line, r24)
-    return calcRentalFee({
-      startDate: it.rentalDate,
-      endDate: it.returnDate,
+    const ext = itemHolidayExtension(it)
+    const fullFee = calcRentalFee({
+      startDate: ext.effectiveStart,
+      endDate: ext.effectiveEnd,
       pickupTime: it.rentalTime,
       returnTime: it.returnTime,
       dailyPrice: r24,
       halfDayPrice: r12,
       deliveryLocked: isDeliveryTypeMethod(it.opts.rentalMethod),
     })
+    const extensionDays = ext.pickupExtraDays + ext.returnExtraDays
+    return Math.max(fullFee - extensionDays * r24, 0)
   }
   function itemDeposit(line: CartLineGroup | undefined): number {
     if (!line) return 0
@@ -1040,16 +1094,21 @@
   // (2026-09-09: 예약신청완료 화면에 옵션별 요금을 표시하기 위해 신설 — 계산 로직은 완전히 동일).
   function itemOptionFee(
     line: CartLineGroup | undefined,
-    it: { rentalDate: string; returnDate: string; rentalTime: string; returnTime: string; opts: { rentalMethod: DeliveryMethod | null } },
+    it: { rentalDate: string; returnDate: string; rentalTime: string; returnTime: string; opts: { rentalMethod: DeliveryMethod | null; returnMethod: DeliveryMethod | null } },
     o: { unitPrice: number; unitPrice12h: number | null; qty: number },
   ): number {
     if (!line) return 0
     if (line.durationType === 'purchase' || o.unitPrice12h == null) {
       return o.unitPrice * o.qty
     }
+    // 옵션상품은 휴무일 연장 특례(무료/50%) 미적용 — 계획 파일 "의도적으로 제외" 참고.
+    // 다만 연장된 날짜 구간(effectiveStart/effectiveEnd) 자체는 본상품과 동일하게 반영해
+    // 서버(compute_reservation_line_amount)의 v_days/v_has_half와 정확히 일치시킨다
+    // (연장일도 옵션은 정상요율 그대로 청구됨).
+    const ext = itemHolidayExtension(it)
     const fee = calcRentalFee({
-      startDate: it.rentalDate,
-      endDate: it.returnDate,
+      startDate: ext.effectiveStart,
+      endDate: ext.effectiveEnd,
       pickupTime: it.rentalTime,
       returnTime: it.returnTime,
       dailyPrice: o.unitPrice,
@@ -1060,7 +1119,7 @@
   }
   function itemOptionsAmount(
     line: CartLineGroup | undefined,
-    it: { rentalDate: string; returnDate: string; rentalTime: string; returnTime: string; opts: { rentalMethod: DeliveryMethod | null } },
+    it: { rentalDate: string; returnDate: string; rentalTime: string; returnTime: string; opts: { rentalMethod: DeliveryMethod | null; returnMethod: DeliveryMethod | null } },
   ): number {
     if (!line) return 0
     return line.options.reduce((s, o) => s + itemOptionFee(line, it, o), 0)
@@ -1387,6 +1446,24 @@
   const courierClosedMap = $derived(new Map<string, string>(
     ((data.courierClosedDates as { date: string; reason: string }[] | undefined) ?? []).map((h) => [h.date, h.reason])
   ))
+  // 휴무일 포함 배송 연장(2026-09-12) — itemHolidayExtension/calcHolidayExtension이 요구하는
+  // Set<string> 형태. courierClosedMap과 동일한 원본(data.courierClosedDates)에서 파생.
+  const courierClosedSet = $derived(new Set<string>(courierClosedMap.keys()))
+
+  // 휴무일 연장요금 — 체크된 상품(qty 배수 포함) 합산. otSubtotal(할인 계산 기준)에는
+  // 포함시키지 않고 otDeliveryFee와 동일하게 할인 이후 별도로 가산한다(rental-fee-policy.md
+  // 신설 절, 서버 compute_reservation_line_amount/create_reservation_order와 동일 원칙).
+  // 판매전용(sale_only) 상품은 대여기간 개념이 없어 서버와 동일하게 0 처리.
+  const otHolidayExtraFee = $derived(
+    itemsState.reduce((sum, it) => {
+      if (it.deleted || !it.checked) return sum
+      const line = groupsById.get(it.id)
+      if (line?.durationType === 'purchase') return sum
+      const r24 = itemRate24h(line)
+      const ext = itemHolidayExtension(it)
+      return sum + calcHolidayExtraFee(ext.pickupExtraDays, ext.returnExtraDays, r24) * Math.max(line?.qty ?? 1, 1)
+    }, 0)
+  )
 
   // 대여예약옵션 캘린더 ↔ 실제 날짜별 재고 동기화(2026-09-02, Stephen 승인 — "요구사항 1") —
   // 장바구니에 체크된 상품(복수 가능) 중 하나라도 해당 일자에 필요 수량만큼 가용 재고가 없으면
@@ -1574,7 +1651,7 @@
 
   // 포인트 사용 최대값 (보유 포인트 & 결제 금액 중 작은 값) — otVat은 포함가 내역 표시용일
   // 뿐 별도 가산 항목이 아니므로 더하지 않음
-  const otMaxPoints = $derived(Math.min(sdUserPoints, Math.max(0, otNetBeforeVat + otDeliveryFee - otCouponDiscount)))
+  const otMaxPoints = $derived(Math.min(sdUserPoints, Math.max(0, otNetBeforeVat + otDeliveryFee + otHolidayExtraFee - otCouponDiscount)))
 
   // 2026-08-19(정합성 재검수): 포인트 입력 후 쿠폰을 추가/변경하거나 상품·기간을 바꿔
   // otMaxPoints가 줄어들면(예: 쿠폰 적용으로 결제 잔액이 포인트 입력값보다 작아짐) 기존엔
@@ -1586,7 +1663,7 @@
   })
 
   // 합계 (배송비 + 쿠폰 할인 - 포인트 사용) — otNetBeforeVat 자체가 이미 부가세 포함가라 otVat을 더하지 않음
-  const otTotal = $derived(Math.max(0, otNetBeforeVat + otDeliveryFee - otCouponDiscount - otPointsUsed))
+  const otTotal = $derived(Math.max(0, otNetBeforeVat + otDeliveryFee + otHolidayExtraFee - otCouponDiscount - otPointsUsed))
 
   // 보증금 (PRD.1.2.2.1.11) — 체크된(선택된) 상품만 합산
   // 2026-08-28: 그룹 qty만큼 곱하지 않던 기존 결함을 그룹 도입과 함께 수정 — 예약행(재고단위)이
@@ -1763,17 +1840,23 @@
                           <path d="M22.7556 9.59961C23.7375 9.59961 24.5334 10.3955 24.5334 11.3774C24.5334 12.3592 23.7375 13.1552 22.7556 13.1552L8.53339 13.1552C7.55155 13.1552 6.75561 12.3592 6.75562 11.3774C6.75562 10.3955 7.55155 9.59961 8.53339 9.59961L22.7556 9.59961Z" fill="#3B2F8A"/>
                           <path d="M7.11133 18.7162C7.1113 17.4124 7.99206 16.3555 9.07854 16.3555L14.3886 16.3555C15.475 16.3555 16.3558 17.4124 16.3558 18.7162V21.1059C16.3558 22.4097 15.475 23.4666 14.3886 23.4666H9.07862C7.99217 23.4666 7.11143 22.4097 7.11141 21.1059L7.11133 18.7162Z" fill="#3B2F8A"/>
                         </svg>
-                        <span class="datetime-btn-label">{displayDate(bulkDate)}</span>
+                        <span class="datetime-btn-label">{displayDate(bulkDate)}{#if collapsedHolidayExtraDays(bulkOpts.rentalMethod, bulkDate, true) > 0}<span class="datetime-btn-holiday-badge">+휴무일 포함</span>{/if}</span>
                       </div>
                     </button>
-                    <button class="datetime-btn datetime-btn-mid datetime-btn-time-selected" onclick={() => { bulkOpen = true; bulkOpenAcc = 'rental' }}>
-                      <div class="datetime-btn-left">
-                        <svg width="23" height="23" viewBox="0 0 22.5 22.5" fill="none">
-                          <path d="M11.25 0C13.69 0 15.95 0.78 17.8 2.1L19 0.5C19.41 -0.05 20.2 -0.16 20.75 0.25C21.3 0.66 21.41 1.45 21 2L19.66 3.78C21.43 5.77 22.5 8.38 22.5 11.25C22.5 17.46 17.46 22.5 11.25 22.5C5.04 22.5 0 17.46 0 11.25C0 8.33 1.11 5.68 2.93 3.68L1.55 2.06C1.1 1.54 1.16 0.75 1.69 0.3C2.21 -0.15 3 -0.09 3.45 0.44L4.81 2.03C6.63 0.75 8.85 0 11.25 0ZM11 5C10.31 5 9.75 5.56 9.75 6.25V12.17C9.75 12.64 10.01 13.07 10.42 13.28L14.42 15.36C15.04 15.68 15.79 15.44 16.11 14.83C16.43 14.21 16.19 13.46 15.58 13.14L12.25 11.41V6.25C12.25 5.56 11.69 5 11 5Z" fill="var(--cs-white)"/>
-                        </svg>
-                        <span class="datetime-btn-label">{isDeliveryLocked(bulkOpts.rentalMethod) ? '00:00' : bulkTime}</span>
-                      </div>
-                    </button>
+                    {#if !isDeliveryLocked(bulkOpts.rentalMethod) && !isCourierDependent(bulkOpts.rentalMethod)}
+                      <!-- 2026-09-16(Stephen 지시) — 열린 상태(RentalForm)와 동일하게, 배송
+                           (isDeliveryLocked)·택배의존(isCourierDependent) 방식은 시간선택
+                           UI 자체를 숨긴다(2026-09-07 확정 정책, 위 RentalForm 주석 참고를
+                           접힌 요약 바에도 동일 적용). -->
+                      <button class="datetime-btn datetime-btn-mid datetime-btn-time-selected" onclick={() => { bulkOpen = true; bulkOpenAcc = 'rental' }}>
+                        <div class="datetime-btn-left">
+                          <svg width="23" height="23" viewBox="0 0 22.5 22.5" fill="none">
+                            <path d="M11.25 0C13.69 0 15.95 0.78 17.8 2.1L19 0.5C19.41 -0.05 20.2 -0.16 20.75 0.25C21.3 0.66 21.41 1.45 21 2L19.66 3.78C21.43 5.77 22.5 8.38 22.5 11.25C22.5 17.46 17.46 22.5 11.25 22.5C5.04 22.5 0 17.46 0 11.25C0 8.33 1.11 5.68 2.93 3.68L1.55 2.06C1.1 1.54 1.16 0.75 1.69 0.3C2.21 -0.15 3 -0.09 3.45 0.44L4.81 2.03C6.63 0.75 8.85 0 11.25 0ZM11 5C10.31 5 9.75 5.56 9.75 6.25V12.17C9.75 12.64 10.01 13.07 10.42 13.28L14.42 15.36C15.04 15.68 15.79 15.44 16.11 14.83C16.43 14.21 16.19 13.46 15.58 13.14L12.25 11.41V6.25C12.25 5.56 11.69 5 11 5Z" fill="var(--cs-white)"/>
+                          </svg>
+                          <span class="datetime-btn-label">{isDeliveryLocked(bulkOpts.rentalMethod) ? '00:00' : bulkTime}</span>
+                        </div>
+                      </button>
+                    {/if}
                   </div>
                 </div>
                 {#if bulkReturnDate && bulkReturnTime}
@@ -1788,17 +1871,34 @@
                             <path d="M22.7556 9.59961C23.7375 9.59961 24.5334 10.3955 24.5334 11.3774C24.5334 12.3592 23.7375 13.1552 22.7556 13.1552L8.53339 13.1552C7.55155 13.1552 6.75561 12.3592 6.75562 11.3774C6.75562 10.3955 7.55155 9.59961 8.53339 9.59961L22.7556 9.59961Z" fill="#3B2F8A"/>
                             <path d="M7.11133 18.7162C7.1113 17.4124 7.99206 16.3555 9.07854 16.3555L14.3886 16.3555C15.475 16.3555 16.3558 17.4124 16.3558 18.7162V21.1059C16.3558 22.4097 15.475 23.4666 14.3886 23.4666H9.07862C7.99217 23.4666 7.11143 22.4097 7.11141 21.1059L7.11133 18.7162Z" fill="#3B2F8A"/>
                           </svg>
-                          <span class="datetime-btn-label">{displayDate(bulkReturnDate)}</span>
+                          <span class="datetime-btn-label">{displayDate(bulkReturnDate)}{#if collapsedHolidayExtraDays(bulkOpts.returnMethod, bulkReturnDate, false) > 0}<span class="datetime-btn-holiday-badge">+휴무일 포함</span>{/if}</span>
                         </div>
                       </button>
-                      <button class="datetime-btn datetime-btn-mid datetime-btn-time-selected" onclick={() => { bulkOpen = true; bulkOpenAcc = 'return_' }}>
-                        <div class="datetime-btn-left">
-                          <svg width="23" height="23" viewBox="0 0 22.5 22.5" fill="none">
-                            <path d="M11.25 0C13.69 0 15.95 0.78 17.8 2.1L19 0.5C19.41 -0.05 20.2 -0.16 20.75 0.25C21.3 0.66 21.41 1.45 21 2L19.66 3.78C21.43 5.77 22.5 8.38 22.5 11.25C22.5 17.46 17.46 22.5 11.25 22.5C5.04 22.5 0 17.46 0 11.25C0 8.33 1.11 5.68 2.93 3.68L1.55 2.06C1.1 1.54 1.16 0.75 1.69 0.3C2.21 -0.15 3 -0.09 3.45 0.44L4.81 2.03C6.63 0.75 8.85 0 11.25 0ZM11 5C10.31 5 9.75 5.56 9.75 6.25V12.17C9.75 12.64 10.01 13.07 10.42 13.28L14.42 15.36C15.04 15.68 15.79 15.44 16.11 14.83C16.43 14.21 16.19 13.46 15.58 13.14L12.25 11.41V6.25C12.25 5.56 11.69 5 11 5Z" fill="var(--cs-white)"/>
-                          </svg>
-                          <span class="datetime-btn-label">{isDeliveryLocked(bulkOpts.returnMethod) ? '24:00' : bulkReturnTime}</span>
+                      <!-- 2026-09-16(Stephen 지시) — 열린 상태(RentalForm)와 동일한 3분기
+                           정책을 접힌 요약 바에도 적용: ① 수령이 배송(is_delivery_type)이면
+                           반납 시간은 의미 없어 24:00 고정(비활성) 표시만, ② 반납 자체가
+                           배송·택배의존이 아니면 정상 인터랙티브 버튼, ③ 그 외(반납이 배송
+                           또는 택배의존)는 시간 UI 자체를 숨김(원본 정책 그대로, 위 RentalForm
+                           returnTimeForcedByDelivery 주석 참고). -->
+                      {#if !isDeliveryLocked(bulkOpts.returnMethod) && !isCourierDependent(bulkOpts.returnMethod) && isDeliveryTypeMethod(bulkOpts.rentalMethod)}
+                        <div class="datetime-btn datetime-btn-mid datetime-btn-time-selected datetime-btn-fixed" aria-disabled="true" title="수령이 배송 방식이면 반납일 전체가 대여일로 청구되어 시간 선택이 필요하지 않습니다.">
+                          <div class="datetime-btn-left">
+                            <svg width="23" height="23" viewBox="0 0 22.5 22.5" fill="none">
+                              <path d="M11.25 0C13.69 0 15.95 0.78 17.8 2.1L19 0.5C19.41 -0.05 20.2 -0.16 20.75 0.25C21.3 0.66 21.41 1.45 21 2L19.66 3.78C21.43 5.77 22.5 8.38 22.5 11.25C22.5 17.46 17.46 22.5 11.25 22.5C5.04 22.5 0 17.46 0 11.25C0 8.33 1.11 5.68 2.93 3.68L1.55 2.06C1.1 1.54 1.16 0.75 1.69 0.3C2.21 -0.15 3 -0.09 3.45 0.44L4.81 2.03C6.63 0.75 8.85 0 11.25 0ZM11 5C10.31 5 9.75 5.56 9.75 6.25V12.17C9.75 12.64 10.01 13.07 10.42 13.28L14.42 15.36C15.04 15.68 15.79 15.44 16.11 14.83C16.43 14.21 16.19 13.46 15.58 13.14L12.25 11.41V6.25C12.25 5.56 11.69 5 11 5Z" fill="var(--cs-white)"/>
+                            </svg>
+                            <span class="datetime-btn-label">24:00</span>
+                          </div>
                         </div>
-                      </button>
+                      {:else if !isDeliveryLocked(bulkOpts.returnMethod) && !isCourierDependent(bulkOpts.returnMethod)}
+                        <button class="datetime-btn datetime-btn-mid datetime-btn-time-selected" onclick={() => { bulkOpen = true; bulkOpenAcc = 'return_' }}>
+                          <div class="datetime-btn-left">
+                            <svg width="23" height="23" viewBox="0 0 22.5 22.5" fill="none">
+                              <path d="M11.25 0C13.69 0 15.95 0.78 17.8 2.1L19 0.5C19.41 -0.05 20.2 -0.16 20.75 0.25C21.3 0.66 21.41 1.45 21 2L19.66 3.78C21.43 5.77 22.5 8.38 22.5 11.25C22.5 17.46 17.46 22.5 11.25 22.5C5.04 22.5 0 17.46 0 11.25C0 8.33 1.11 5.68 2.93 3.68L1.55 2.06C1.1 1.54 1.16 0.75 1.69 0.3C2.21 -0.15 3 -0.09 3.45 0.44L4.81 2.03C6.63 0.75 8.85 0 11.25 0ZM11 5C10.31 5 9.75 5.56 9.75 6.25V12.17C9.75 12.64 10.01 13.07 10.42 13.28L14.42 15.36C15.04 15.68 15.79 15.44 16.11 14.83C16.43 14.21 16.19 13.46 15.58 13.14L12.25 11.41V6.25C12.25 5.56 11.69 5 11 5Z" fill="var(--cs-white)"/>
+                            </svg>
+                            <span class="datetime-btn-label">{bulkReturnTime}</span>
+                          </div>
+                        </button>
+                      {/if}
                     </div>
                   </div>
                 {/if}
@@ -1902,6 +2002,9 @@
                 {@render PriceRow({ label: '쿠폰 할인', value: `-${fmtKrw(otCouponDiscount)}` })}
               {/if}
               {@render PriceRow({ label: '배송요금', value: pricingReady && otDeliveryFee > 0 ? fmtKrw(otDeliveryFee) : (pricingReady ? '무료' : fmtKrw(0)) })}
+              {#if pricingReady && otHolidayExtraFee > 0}
+                {@render PriceRow({ label: '휴무일 연장요금', value: fmtKrw(otHolidayExtraFee) })}
+              {/if}
               {@render PriceRow({ label: '부가세 (10%, 포함)', value: `(${fmtKrw(pricingReady ? otVat : 0)}원)`, raw: true })}
               {#if pricingReady && otPointsUsed > 0}
                 {@render PriceRow({ label: '포인트 사용', value: `-${fmtKrw(otPointsUsed)}` })}
@@ -2145,10 +2248,16 @@
 
                 // 그룹 내 모든 개별 예약id에 각각 승격/방식/기간을 적용
                 for (const reservationId of it.reservationIds) {
+                  // p_pickup_method/p_return_method(2026-09-12, 휴무일 포함 배송 연장 요금
+                  // 로직) — 서버가 재고 가용성 체크 이전에 휴무일 자동연장을 계산할 수
+                  // 있도록 방식을 함께 전달한다. is_courier_dependent가 아닌 방식이면
+                  // 서버 쪽에서 자연히 0 연장으로 처리되어 기존 동작과 동일.
                   const { data: promoteRows, error: promoteError } = await (supabase.rpc as unknown as PromoteRpcFn)('promote_draft_reservation', {
                     p_reservation_id: Number(reservationId),
                     p_start_date:     it.rentalDate,
                     p_end_date:       it.returnDate,
+                    p_pickup_method:  pickupMethodCo,
+                    p_return_method:  returnMethodCo,
                   })
                   const promoteRow = promoteRows?.[0]
                   if (!promoteRow?.success) {
@@ -2246,6 +2355,7 @@
               membershipDiscount: String(otMembershipDiscount),
               couponDiscount:     String(otCouponDiscount),
               deliveryFee:        String(otDeliveryFee),
+              holidayExtraFee:    String(otHolidayExtraFee),
               vat:                String(otVat),
               pointsUsed:         String(otPointsUsed),
               confirmedAt,
@@ -2332,15 +2442,15 @@
       <div class="order-card-inner">
         <!-- Check & Delete -->
         <div class="card-top-row">
-          <button class="checkbox-btn" onclick={() => updateItem(item.id, { checked: !item.checked })} aria-label="선택">
-            <svg viewBox="0 0 20 20" fill="none" class="checkbox-svg">
-              {#if item.checked}
-                <rect fill="#3B2F8A" height="18" rx="4" width="18" x="1" y="1"/>
-                <path d="M5 10L8.5 13.5L15 6" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
-              {:else}
-                <rect fill="white" height="18" rx="4" width="18" x="1" y="1"/>
-                <rect height="18" rx="4" stroke="#AAAAAA" stroke-width="2" width="18" x="1" y="1"/>
-              {/if}
+          <!-- 2026-09-16(Stephen 지시) — 사각형 체크박스(checkbox-svg)를 PC .item-card-check와
+               동일한 곡선(스우시) 체크 아이콘·색상 로직(checkbox-btn-terms — 미선택
+               --cs-purple-op10 / 선택 --cs-purple, CSS color 전환)으로 통일. 마크업이
+               상태별 분기(if/else) 없이 단일 path + currentColor로 단순해짐. 크기는 PC
+               (18×12px)의 110%(19.8×13.2px)로 아래 .card-top-row .checkbox-btn-terms svg에서
+               지정 — 모바일 전용 카드(OrderCard, PC에는 노출 안 됨)라 별도 미디어쿼리 불필요. -->
+          <button class="checkbox-btn checkbox-btn-terms" class:checked={item.checked} onclick={() => updateItem(item.id, { checked: !item.checked })} aria-label="선택">
+            <svg viewBox="0 0 18 12" fill="none" aria-hidden="true">
+              <path d="M14.788 0.40847C15.5937 -0.206503 16.7506 -0.123176 17.4589 0.632103C18.2144 1.4379 18.1729 2.70376 17.3671 3.45925L17.3622 3.46413C17.3585 3.46759 17.3528 3.47297 17.3456 3.47976C17.3311 3.49333 17.3101 3.51407 17.2821 3.54031C17.2261 3.59279 17.1437 3.66974 17.039 3.76784C16.8294 3.96413 16.5289 4.24474 16.1669 4.58327C15.4428 5.26035 14.4707 6.169 13.4774 7.09304C12.4848 8.01654 11.4689 8.95836 10.6591 9.70144C9.90326 10.3949 9.21125 11.0229 8.954 11.219C8.38484 11.6526 7.64783 12.0001 6.7831 12.0003C5.89707 12.0003 5.14509 11.6357 4.57217 11.138C4.258 10.865 3.25694 9.9462 2.37197 9.13015C1.92122 8.71451 1.48885 8.31388 1.16885 8.01785C1.0088 7.86979 0.875998 7.74749 0.78408 7.66238C0.738281 7.61997 0.702073 7.58638 0.677634 7.56374C0.665704 7.55269 0.656551 7.54415 0.650291 7.53835C0.647126 7.53542 0.644094 7.53301 0.642478 7.53152L0.641502 7.52956H0.640525C-0.169647 6.77877 -0.217693 5.51259 0.533103 4.70242C1.28393 3.89251 2.55017 3.84526 3.36025 4.59597L3.36123 4.59792C3.3628 4.59938 3.36592 4.60089 3.36904 4.60378C3.37524 4.60953 3.38439 4.61807 3.39638 4.62917C3.42067 4.65167 3.45618 4.68551 3.50185 4.72781C3.59333 4.81251 3.72524 4.93384 3.88467 5.08132C4.2037 5.37646 4.63512 5.77493 5.08388 6.18874C5.73477 6.78894 6.40077 7.39812 6.82217 7.78054C6.86093 7.74604 6.90358 7.70918 6.94814 7.66921C7.21008 7.43424 7.55408 7.12113 7.954 6.75417C8.7536 6.02049 9.76226 5.0859 10.7528 4.16433C11.7428 3.24336 12.7128 2.33711 13.4354 1.6614C13.7965 1.32374 14.0957 1.04357 14.3046 0.847923C14.409 0.750147 14.491 0.67359 14.5468 0.621361C14.5745 0.595342 14.5959 0.575239 14.6103 0.56179C14.6174 0.555065 14.6232 0.549566 14.6269 0.546165L14.6317 0.541282L14.788 0.40847Z" fill="currentColor" />
             </svg>
           </button>
           <button class="delete-btn" onclick={() => removeItem(item)} aria-label="삭제">
@@ -2595,17 +2705,21 @@
                   <path d="M22.7556 9.59961C23.7375 9.59961 24.5334 10.3955 24.5334 11.3774C24.5334 12.3592 23.7375 13.1552 22.7556 13.1552L8.53339 13.1552C7.55155 13.1552 6.75561 12.3592 6.75562 11.3774C6.75562 10.3955 7.55155 9.59961 8.53339 9.59961L22.7556 9.59961Z" fill="#3B2F8A"/>
                   <path d="M7.11133 18.7162C7.1113 17.4124 7.99206 16.3555 9.07854 16.3555L14.3886 16.3555C15.475 16.3555 16.3558 17.4124 16.3558 18.7162V21.1059C16.3558 22.4097 15.475 23.4666 14.3886 23.4666H9.07862C7.99217 23.4666 7.11143 22.4097 7.11141 21.1059L7.11133 18.7162Z" fill="#3B2F8A"/>
                 </svg>
-                <span class="datetime-btn-label">{displayDate(bulkDate)}</span>
+                <span class="datetime-btn-label">{displayDate(bulkDate)}{#if collapsedHolidayExtraDays(bulkOpts.rentalMethod, bulkDate, true) > 0}<span class="datetime-btn-holiday-badge">+휴무일 포함</span>{/if}</span>
               </div>
             </button>
-            <button class="datetime-btn datetime-btn-mid datetime-btn-time-selected" onclick={() => bulkOpenAcc = 'rental'}>
-              <div class="datetime-btn-left">
-                <svg width="23" height="23" viewBox="0 0 22.5 22.5" fill="none">
-                  <path d="M11.25 0C13.69 0 15.95 0.78 17.8 2.1L19 0.5C19.41 -0.05 20.2 -0.16 20.75 0.25C21.3 0.66 21.41 1.45 21 2L19.66 3.78C21.43 5.77 22.5 8.38 22.5 11.25C22.5 17.46 17.46 22.5 11.25 22.5C5.04 22.5 0 17.46 0 11.25C0 8.33 1.11 5.68 2.93 3.68L1.55 2.06C1.1 1.54 1.16 0.75 1.69 0.3C2.21 -0.15 3 -0.09 3.45 0.44L4.81 2.03C6.63 0.75 8.85 0 11.25 0ZM11 5C10.31 5 9.75 5.56 9.75 6.25V12.17C9.75 12.64 10.01 13.07 10.42 13.28L14.42 15.36C15.04 15.68 15.79 15.44 16.11 14.83C16.43 14.21 16.19 13.46 15.58 13.14L12.25 11.41V6.25C12.25 5.56 11.69 5 11 5Z" fill="var(--cs-white)"/>
-                </svg>
-                <span class="datetime-btn-label">{isDeliveryLocked(bulkOpts.rentalMethod) ? '00:00' : bulkTime}</span>
-              </div>
-            </button>
+            {#if !isDeliveryLocked(bulkOpts.rentalMethod) && !isCourierDependent(bulkOpts.rentalMethod)}
+              <!-- 2026-09-16(Stephen 지시) — 열린 상태(RentalForm)와 동일하게 배송·택배의존
+                   방식은 시간선택 UI를 숨김(위 bulk-collapsed-group과 동일 정책 적용). -->
+              <button class="datetime-btn datetime-btn-mid datetime-btn-time-selected" onclick={() => bulkOpenAcc = 'rental'}>
+                <div class="datetime-btn-left">
+                  <svg width="23" height="23" viewBox="0 0 22.5 22.5" fill="none">
+                    <path d="M11.25 0C13.69 0 15.95 0.78 17.8 2.1L19 0.5C19.41 -0.05 20.2 -0.16 20.75 0.25C21.3 0.66 21.41 1.45 21 2L19.66 3.78C21.43 5.77 22.5 8.38 22.5 11.25C22.5 17.46 17.46 22.5 11.25 22.5C5.04 22.5 0 17.46 0 11.25C0 8.33 1.11 5.68 2.93 3.68L1.55 2.06C1.1 1.54 1.16 0.75 1.69 0.3C2.21 -0.15 3 -0.09 3.45 0.44L4.81 2.03C6.63 0.75 8.85 0 11.25 0ZM11 5C10.31 5 9.75 5.56 9.75 6.25V12.17C9.75 12.64 10.01 13.07 10.42 13.28L14.42 15.36C15.04 15.68 15.79 15.44 16.11 14.83C16.43 14.21 16.19 13.46 15.58 13.14L12.25 11.41V6.25C12.25 5.56 11.69 5 11 5Z" fill="var(--cs-white)"/>
+                  </svg>
+                  <span class="datetime-btn-label">{isDeliveryLocked(bulkOpts.rentalMethod) ? '00:00' : bulkTime}</span>
+                </div>
+              </button>
+            {/if}
           </div>
         </div>
       {/if}
@@ -2639,17 +2753,30 @@
                   <path d="M22.7556 9.59961C23.7375 9.59961 24.5334 10.3955 24.5334 11.3774C24.5334 12.3592 23.7375 13.1552 22.7556 13.1552L8.53339 13.1552C7.55155 13.1552 6.75561 12.3592 6.75562 11.3774C6.75562 10.3955 7.55155 9.59961 8.53339 9.59961L22.7556 9.59961Z" fill="#3B2F8A"/>
                   <path d="M7.11133 18.7162C7.1113 17.4124 7.99206 16.3555 9.07854 16.3555L14.3886 16.3555C15.475 16.3555 16.3558 17.4124 16.3558 18.7162V21.1059C16.3558 22.4097 15.475 23.4666 14.3886 23.4666H9.07862C7.99217 23.4666 7.11143 22.4097 7.11141 21.1059L7.11133 18.7162Z" fill="#3B2F8A"/>
                 </svg>
-                <span class="datetime-btn-label">{displayDate(bulkReturnDate)}</span>
+                <span class="datetime-btn-label">{displayDate(bulkReturnDate)}{#if collapsedHolidayExtraDays(bulkOpts.returnMethod, bulkReturnDate, false) > 0}<span class="datetime-btn-holiday-badge">+휴무일 포함</span>{/if}</span>
               </div>
             </button>
-            <button class="datetime-btn datetime-btn-mid datetime-btn-time-selected" onclick={() => bulkOpenAcc = 'return_'}>
-              <div class="datetime-btn-left">
-                <svg width="23" height="23" viewBox="0 0 22.5 22.5" fill="none">
-                  <path d="M11.25 0C13.69 0 15.95 0.78 17.8 2.1L19 0.5C19.41 -0.05 20.2 -0.16 20.75 0.25C21.3 0.66 21.41 1.45 21 2L19.66 3.78C21.43 5.77 22.5 8.38 22.5 11.25C22.5 17.46 17.46 22.5 11.25 22.5C5.04 22.5 0 17.46 0 11.25C0 8.33 1.11 5.68 2.93 3.68L1.55 2.06C1.1 1.54 1.16 0.75 1.69 0.3C2.21 -0.15 3 -0.09 3.45 0.44L4.81 2.03C6.63 0.75 8.85 0 11.25 0ZM11 5C10.31 5 9.75 5.56 9.75 6.25V12.17C9.75 12.64 10.01 13.07 10.42 13.28L14.42 15.36C15.04 15.68 15.79 15.44 16.11 14.83C16.43 14.21 16.19 13.46 15.58 13.14L12.25 11.41V6.25C12.25 5.56 11.69 5 11 5Z" fill="var(--cs-white)"/>
-                </svg>
-                <span class="datetime-btn-label">{isDeliveryLocked(bulkOpts.returnMethod) ? '24:00' : bulkReturnTime}</span>
+            <!-- 2026-09-16(Stephen 지시) — 열린 상태(RentalForm)와 동일한 3분기 정책을
+                 접힌 요약 바에도 적용(위 bulk-collapsed-group 반납 시간 블록과 동일 로직). -->
+            {#if !isDeliveryLocked(bulkOpts.returnMethod) && !isCourierDependent(bulkOpts.returnMethod) && isDeliveryTypeMethod(bulkOpts.rentalMethod)}
+              <div class="datetime-btn datetime-btn-mid datetime-btn-time-selected datetime-btn-fixed" aria-disabled="true" title="수령이 배송 방식이면 반납일 전체가 대여일로 청구되어 시간 선택이 필요하지 않습니다.">
+                <div class="datetime-btn-left">
+                  <svg width="23" height="23" viewBox="0 0 22.5 22.5" fill="none">
+                    <path d="M11.25 0C13.69 0 15.95 0.78 17.8 2.1L19 0.5C19.41 -0.05 20.2 -0.16 20.75 0.25C21.3 0.66 21.41 1.45 21 2L19.66 3.78C21.43 5.77 22.5 8.38 22.5 11.25C22.5 17.46 17.46 22.5 11.25 22.5C5.04 22.5 0 17.46 0 11.25C0 8.33 1.11 5.68 2.93 3.68L1.55 2.06C1.1 1.54 1.16 0.75 1.69 0.3C2.21 -0.15 3 -0.09 3.45 0.44L4.81 2.03C6.63 0.75 8.85 0 11.25 0ZM11 5C10.31 5 9.75 5.56 9.75 6.25V12.17C9.75 12.64 10.01 13.07 10.42 13.28L14.42 15.36C15.04 15.68 15.79 15.44 16.11 14.83C16.43 14.21 16.19 13.46 15.58 13.14L12.25 11.41V6.25C12.25 5.56 11.69 5 11 5Z" fill="var(--cs-white)"/>
+                  </svg>
+                  <span class="datetime-btn-label">24:00</span>
+                </div>
               </div>
-            </button>
+            {:else if !isDeliveryLocked(bulkOpts.returnMethod) && !isCourierDependent(bulkOpts.returnMethod)}
+              <button class="datetime-btn datetime-btn-mid datetime-btn-time-selected" onclick={() => bulkOpenAcc = 'return_'}>
+                <div class="datetime-btn-left">
+                  <svg width="23" height="23" viewBox="0 0 22.5 22.5" fill="none">
+                    <path d="M11.25 0C13.69 0 15.95 0.78 17.8 2.1L19 0.5C19.41 -0.05 20.2 -0.16 20.75 0.25C21.3 0.66 21.41 1.45 21 2L19.66 3.78C21.43 5.77 22.5 8.38 22.5 11.25C22.5 17.46 17.46 22.5 11.25 22.5C5.04 22.5 0 17.46 0 11.25C0 8.33 1.11 5.68 2.93 3.68L1.55 2.06C1.1 1.54 1.16 0.75 1.69 0.3C2.21 -0.15 3 -0.09 3.45 0.44L4.81 2.03C6.63 0.75 8.85 0 11.25 0ZM11 5C10.31 5 9.75 5.56 9.75 6.25V12.17C9.75 12.64 10.01 13.07 10.42 13.28L14.42 15.36C15.04 15.68 15.79 15.44 16.11 14.83C16.43 14.21 16.19 13.46 15.58 13.14L12.25 11.41V6.25C12.25 5.56 11.69 5 11 5Z" fill="var(--cs-white)"/>
+                  </svg>
+                  <span class="datetime-btn-label">{bulkReturnTime}</span>
+                </div>
+              </button>
+            {/if}
           </div>
         </div>
       {/if}
@@ -2706,13 +2833,47 @@
   <!-- 2026-09-08(Stephen 확정) — 수령이 배송(is_delivery_type)이면 반납이 요청 A로
        강제고정(locked)되지 않는 조합(방문·퀵 등, §case②)이어도 반납일 전체가 하루로
        청구되어 반납 시간 선택은 무의미하다 — 반납 leg 한정으로 시간선택을 잠그고 24:00
-       고정 표시(저장값 강제는 bulkHandleMethod/bulkHandleReturnMethod에서 처리). -->
-  {@const returnTimeForcedByDelivery = props.type === 'return' && !locked && isDeliveryTypeMethod(bulkOpts.rentalMethod)}
+       고정 표시(저장값 강제는 bulkHandleMethod/bulkHandleReturnMethod에서 처리).
+       2026-09-16(Stephen 재확정) — 원래 조건(!locked)만으로는 "반납 자체가 크레이지샷배송
+       (courierRestricted)"인 경우까지 이 분기가 가로채 24:00 고정 표시를 보여줬는데,
+       이 경우엔 반납도 이미 배송(택배의존)이라 courierRestricted 자체의 "시간선택 UI
+       완전히 숨김" 정책이 우선해야 한다(수령·반납 모두 배송이면 시간 UI 자체가 없어야
+       함). !courierRestricted를 추가해 "반납은 배송이 아닌데 수령만 배송이라 강제되는"
+       원래 의도한 좁은 경우로 범위를 좁힘 — 반납 자체가 courierRestricted면 아래
+       {:else if !locked && !courierRestricted} 분기도 거짓이 되어 자연히 완전히
+       숨겨진다(별도 else 없음). -->
+  {@const returnTimeForcedByDelivery = props.type === 'return' && !locked && !courierRestricted && isDeliveryTypeMethod(bulkOpts.rentalMethod)}
   <!-- 대여 제한옵션 "반납 배송선택 제한"(CMS) leg-aware 반영(2026-09-01 최초, 2026-09-04
        판정기준을 is_delivery_type으로 분리·교체) — 수령(rental) leg은 이 토글과 무관하게
        항상 전체 목록, 반납(return) leg만 수령이 배송(is_delivery_type)이 아닐 때
        (방문·무인함·퀵서비스 전부) 배송 제외(returnVisibleTabsFor 정의부 주석 참고) -->
   {@const visibleTabs = props.type === 'rental' ? pickupVisibleTabs : returnVisibleTabsFor(bulkOpts.rentalMethod)}
+  <!-- 휴무일 포함 배송 자동연장 미리보기(2026-09-12 신설, 2026-09-16 색상 재설계) — 현재
+       선택된 날짜(props.selectedDate) 기준으로 자동연장 발생 여부·연장일수를 계산.
+       courierRestricted가 아니거나 아직 날짜 미선택이면 null(캘린더 시각 변화 없음 —
+       하위호환). -->
+  {@const holidayExtPreview = (courierRestricted && props.selectedDate)
+    ? (props.type === 'rental'
+        ? calcHolidayExtension(props.selectedDate, props.selectedDate, true, false, courierClosedSet)
+        : calcHolidayExtension(props.selectedDate, props.selectedDate, false, true, courierClosedSet))
+    : null}
+  {@const holidayExtraDays = holidayExtPreview ? (props.type === 'rental' ? holidayExtPreview.pickupExtraDays : holidayExtPreview.returnExtraDays) : 0}
+  <!-- 2026-09-16 색상 재설계 — "흡수되는 모든 날짜"가 아니라 "구간 밖 첫 정상 영업일
+       (경계일) 딱 하루"만 하이라이트한다. calcHolidayExtension의 while 루프는 "휴무 아님"을
+       확인한 그 즉시 break하므로, effectiveStart 하루 전(수령)/effectiveEnd 하루 후(반납)는
+       연장일수(N)가 몇 일이든 항상 정확히 그 경계일 하나를 가리킨다(rental-fee-policy.md
+       §5, calcHolidayExtension 주석 참고 — 별도 분기 불필요). 선택된 날짜(warnSelected)는
+       레드로, 이 경계일은 퍼플로 구분한다. -->
+  {@const warnSelected = holidayExtraDays > 0}
+  {@const holidayHighlightDates = (() => {
+    const set = new Set<string>()
+    if (!holidayExtPreview || holidayExtraDays <= 0) return set
+    const boundary = props.type === 'rental'
+      ? addDays(holidayExtPreview.effectiveStart, -1)
+      : addDays(holidayExtPreview.effectiveEnd, 1)
+    set.add(boundary)
+    return set
+  })()}
 
 
   <div class="rental-form">
@@ -2764,7 +2925,10 @@
                   <path d="M22.7556 9.59961C23.7375 9.59961 24.5334 10.3955 24.5334 11.3774C24.5334 12.3592 23.7375 13.1552 22.7556 13.1552L8.53339 13.1552C7.55155 13.1552 6.75561 12.3592 6.75562 11.3774C6.75562 10.3955 7.55155 9.59961 8.53339 9.59961L22.7556 9.59961Z" fill="#3B2F8A"/>
                   <path d="M7.11133 18.7162C7.1113 17.4124 7.99206 16.3555 9.07854 16.3555L14.3886 16.3555C15.475 16.3555 16.3558 17.4124 16.3558 18.7162V21.1059C16.3558 22.4097 15.475 23.4666 14.3886 23.4666H9.07862C7.99217 23.4666 7.11143 22.4097 7.11141 21.1059L7.11133 18.7162Z" fill="#3B2F8A"/>
                 </svg>
-                <span class="datetime-btn-label">{props.selectedDate ? displayDate(props.selectedDate) : dateLabel}</span>
+                <span class="datetime-btn-label">
+                  {props.selectedDate ? displayDate(props.selectedDate) : dateLabel}
+                  {#if holidayExtraDays > 0}<span class="datetime-btn-holiday-badge">+휴무일 포함</span>{/if}
+                </span>
               </div>
             </button>
             {#if returnTimeForcedByDelivery}
@@ -2807,7 +2971,7 @@
 
           <!-- 달력 레이어 -->
           {#if isCalOpen}
-            <div class="cal-layer" transition:slide={{ duration: 200 }}>
+            <div class="cal-layer" transition:slide={{ duration: 200 }} use:measureCalLayer={props.calId}>
               <CalendarGrid
                 value={props.selectedDate}
                 minDate={props.minDate}
@@ -2815,23 +2979,29 @@
                 rangeEnd={props.rangeEnd}
                 rangeStartLabel="수령일"
                 rangeEndLabel="반납일"
-                onselect={(iso) => props.onDateChange(iso)}
+                highlightDates={holidayHighlightDates}
+                warnSelected={warnSelected}
+                onselect={(iso) => {
+                  props.onDateChange(iso)
+                  // 휴무일 포함 배송 연장(2026-09-12) — 과거에는 courierRestricted일 때
+                  // 수령일 전날/반납일 당일이 휴무일이면 날짜 선택 자체를 막았으나, 이번
+                  // 기능의 핵심은 "막기"를 "자동 연장 허용"으로 바꾸는 것이라 차단을 제거.
+                  // 2026-09-16: 날짜 선택 시 매번 뜨던 안내 토스트(csToast.info)는 제거함 —
+                  // 같은 정보를 아래 상시 안내문(.cal-holiday-guide-note, CMS "휴무일 제어
+                  // 옵션" 문구)이 이미 캘린더가 열려있는 동안 계속 보여주고 있어 중복이었다
+                  // (Stephen 지적으로 확인). 토스트 제거 원안 자체는 2026-09-12 계획서
+                  // (cheerful-nibbling-emerson.md)에 명시돼 승인된 기능이라 임의 추가는
+                  // 아니었으나, 이후 추가된 상시 안내문과 정보가 겹치는 게 확인돼 안내
+                  // 방식을 상시 안내문 하나로 통일한다.
+                }}
                 isDateDisabled={(iso: string) => {
-                  if (courierRestricted) {
-                    const closedKey = props.type === 'rental' ? addDays(iso, -1) : iso
-                    if (courierClosedMap.has(closedKey)) return true
-                  }
                   // 요구사항 1(2026-09-02) — 장바구니 체크된 상품 중 하나라도 해당 일자에
-                  // 필요 수량만큼 가용 재고가 없으면 선택 불가로 반영.
+                  // 필요 수량만큼 가용 재고가 없으면 선택 불가로 반영. 휴무일 자체는
+                  // 더 이상 차단 사유가 아님(자동 연장으로 대체, 아래 .cal-holiday-guide-note
+                  // 상시 안내 참고).
                   return props.type === 'rental' ? unavailablePickupDates.has(iso) : unavailableReturnDates.has(iso)
                 }}
                 onDisabledClick={(iso) => {
-                  const closedKey = props.type === 'rental' ? addDays(iso, -1) : iso
-                  if (courierRestricted && courierClosedMap.has(closedKey)) {
-                    const reason = courierClosedMap.get(closedKey)
-                    csToast.error(reason ? `${reason} — 택배 휴무일이라 선택할 수 없습니다.` : '택배 휴무일이라 선택할 수 없습니다.')
-                    return
-                  }
                   const stockUnavailable = props.type === 'rental' ? unavailablePickupDates.has(iso) : unavailableReturnDates.has(iso)
                   if (stockUnavailable) {
                     csToast.error('해당 일자는 장바구니 상품의 재고가 모두 점유되어 예약할 수 없습니다.')
@@ -2839,6 +3009,20 @@
                 }}
               />
             </div>
+          {/if}
+
+          <!-- 배송 휴무일 안내 스크립트(/cms/set/rental "휴무일 제어 옵션" 하위, 2026-09-16
+               신설) — 자동연장이 발동된(warnSelected/holidayExtraDays>0) 상태로 달력이
+               열려있는 동안에만 노출되는 상시 안내. onselect의 csToast.info(...) 이벤트성
+               토스트(무변경, 그대로 유지)와 역할이 달라 대체가 아니라 공존한다.
+               2026-09-17: .cal-layer(달력 팝업)와 정확히 같은 위치에 겹쳐 화면에 전혀
+               보이지 않던 결함 수정 — measureCalLayer로 실측한 팝업 높이만큼 아래로
+               절대배치해 완전히 분리된 영역으로 렌더링(.cal-holiday-guide-note). -->
+          {#if isCalOpen && holidayExtraDays > 0 && sd.holidayGuideText}
+            <p
+              class="cal-holiday-guide-note"
+              style="top: calc(100% + 8px + {calLayerHeights[props.calId] ?? 0}px + 12px)"
+            >{sd.holidayGuideText}</p>
           {/if}
 
           <!-- 시간 선택 레이어 — 오전/오후 구획 세로 리스트(2026-08-17 가독성 개선:
@@ -3481,7 +3665,12 @@
   .checkbox-btn-terms.checked { color: var(--cs-purple); }
   .checkbox-btn-terms svg { width: 22px; height: 15px; }
   @media (min-width: 768px) { .checkbox-btn-terms svg { width: 18px; height: 12px; } }
-  .checkbox-svg { width: 20px; height: 20px; display: block; }
+  /* 2026-09-16(Stephen 지시) — 모바일 상품카드(OrderCard, card-top-row)의 체크박스를
+     PC .item-card-check와 동일한 곡선 아이콘으로 통일하면서, 크기는 PC 값(18×12px)의
+     110%(19.8×13.2px)로 지정 — 위 22×15px(다른 checkbox-btn-terms 사용처의 모바일 기본값)
+     보다 이 컨텍스트 전용값이 더 구체적인 선택자라 우선 적용됨. 이 카드는 모바일에서만
+     렌더링되므로(PC는 .item-card가 대신 노출) 별도 미디어쿼리 불필요. */
+  .card-top-row .checkbox-btn-terms svg { width: 19.8px; height: 13.2px; }
   .delete-btn {
     background: none;
     border: none;
@@ -4066,6 +4255,11 @@
   .delivery-combo {
     display: flex;
     flex-wrap: wrap;
+    /* 2026-09-16(Stephen 지적) — justify-content 기본값(flex-start)이라 방문대여·배송 등
+       콤보 버튼들이 왼쪽에 몰려 오른쪽에 빈 공간이 남았는데, 바로 아래 .delivery-deadline
+       ("15:00 마감")은 width:100%+text-align:center로 항상 가운데 정렬돼 있어 두 UI의
+       수평 정렬 기준이 서로 달라 보였다 — 버튼 행도 가운데 정렬로 맞춤. */
+    justify-content: center;
     gap: 6px;
   }
   .combo-btn {
@@ -4185,6 +4379,19 @@
     text-overflow: ellipsis;
     min-width: 0;
   }
+  /* 휴무일 포함 배송 자동연장 안내 배지(2026-09-12) — 연장일이 없으면 렌더링 자체가
+     안 되므로(조건부) 기존 datetime-btn-label 레이아웃에는 영향 없음. */
+  .datetime-btn-holiday-badge {
+    display: inline-block;
+    margin-left: 6px;
+    padding: 2px 8px;
+    border-radius: var(--radius-full);
+    background: var(--cs-purple-light);
+    font: var(--text-pc-script-12);
+    font-weight: 700;
+    letter-spacing: normal;
+    vertical-align: middle;
+  }
   /* ══ Calendar + Time Layer ══ */
   .datetime-wrap { position: relative; display: flex; flex-direction: column; gap: 0; padding: 30px 0; }
   .cal-layer {
@@ -4202,6 +4409,47 @@
        PC·모바일 공용 규칙(미디어쿼리 분기 없음)이라 양쪽 반응형에 동시 적용됨 */
     width: 100%;
     box-sizing: border-box;
+  }
+
+  /* 배송 휴무일 안내문(2026-09-17) — .cal-layer와 동일한 부모(.datetime-wrap,
+     position:relative)를 기준으로 절대배치. .cal-layer를 평범한 형제 요소로 뒀을 때
+     .cal-layer가 position:absolute라 문서 흐름상 공간을 전혀 차지하지 않아, 이 안내문이
+     .cal-layer(z-index:100, 흰 배경)와 정확히 같은 자리에 겹쳐 화면에 보이지 않던 결함이
+     있었다 — top 인라인 스타일(measureCalLayer로 실측한 팝업 높이 기반)로 항상 팝업
+     바로 아래에 오도록 고정한다.
+     2026-09-17 후속 — 이 안내문 역시 position:absolute라 문서 흐름 공간을 차지하지
+     않아, 배경 없이 두면 뒤이어 오는 "요청 사항" 섹션과 글자가 겹쳐 보이는 결함이
+     실측으로 확인됐다(.cal-layer가 이미 흰 배경으로 같은 구조적 문제를 opaque 배경으로
+     해결해온 것과 동일한 원리) — 불투명 배경(--cs-lilac, 이 파일에서 이미 쓰이는 노트
+     박스 톤과 동일)과 카드형 여백을 추가해 뒤쪽 텍스트가 비치지 않게 한다. */
+  /* 2026-09-16(Stephen 지적) — 휴무일 포함 배송은 일반 안내와 달리 "독특한 배송 유형"이라
+     강조 노출이 필요하다는 판단으로, 무채색 톤(--cs-lilac 배경 + 하드코딩 #AAAAAA 글자)을
+     레드 계열 강조 톤으로 교체. background=red-5(--cs-red-xlight, #FFEAEA) /
+     font-color=red-100(--cs-red, #CF0000) — 둘 다 front-uiux.md 컬러 표 등재 정본 토큰. */
+  .cal-holiday-guide-note {
+    position: absolute;
+    left: 0;
+    right: 0;
+    z-index: 90;
+    margin: 0;
+    background: var(--cs-red-xlight, #FFEAEA);
+    border-radius: var(--radius-md, 15px);
+    padding: 12px 16px;
+    box-sizing: border-box;
+    font-size: 14px;
+    font-weight: 700;
+    color: var(--cs-red, #CF0000);
+    letter-spacing: -0.5px;
+    line-height: 1.6;
+  }
+  /* 2026-09-16(Stephen 지적) — 모바일 반응형에서 폰트 토큰을 한 단계 낮춤. 기존 14px/Bold는
+     모바일 스크립트 스케일의 --text-m-script-14B(레이블 등급)에 해당하고, 한 단계 아래는
+     --text-m-script-12(캡션 등급, 12px/Medium) — 다른 속성(배경·글자색·여백 등)은 그대로
+     유지되고 font(굵기·크기·행간)만 이 토큰으로 교체됨. */
+  @media (max-width: 640px) {
+    .cal-holiday-guide-note {
+      font: var(--text-m-script-12);
+    }
   }
 
   /* ══ Time Layer ══ */
@@ -4891,11 +5139,16 @@
        --text-m-body-16B 16px Bold) */
     .option-subcard-name { font: var(--text-m-body-16B); }
     /* 2026-08-18: card-top-row(모바일 OrderCard 체크박스+삭제)가 PC .item-card-topbar와
-       동일한 checkbox-svg(20px)/delete-btn(14px+padding8px) 공유 클래스를 그대로 써서
-       모바일 반응형 비율이 전혀 반영되지 않던 결함 — ui-mobile.md 최소 터치타겟(44×44px)
-       기준으로 이 컨텍스트만 확대(다른 checkbox-svg/delete-btn 사용처는 영향 없음) */
-    .card-top-row .checkbox-svg { width: 24px; height: 24px; }
-    .card-top-row .checkbox-btn { padding: 10px; }
+       동일한 delete-btn(14px+padding8px) 공유 클래스를 그대로 써서 모바일 반응형 비율이
+       전혀 반영되지 않던 결함 — ui-mobile.md 최소 터치타겟(44×44px) 기준으로 이 컨텍스트만
+       확대(다른 delete-btn 사용처는 영향 없음).
+       2026-09-16(Stephen 지시): 체크박스 아이콘을 사각형(checkbox-svg, 24px 확대값 사용)
+       에서 PC와 동일한 곡선 아이콘(checkbox-btn-terms, 19.8×13.2px — 위 .card-top-row
+       .checkbox-btn-terms svg 참고)으로 교체하면서 checkbox-svg 규칙은 삭제(더 이상 이
+       클래스를 쓰는 마크업이 없음). 아이콘 자체가 작아진 만큼 패딩을 10px → 16px로
+       늘려, 버튼 전체 터치 영역이 여전히 44×44px 이상을 유지하도록 보정
+       (19.8+16×2=51.8px, 13.2+16×2=45.2px — 가로·세로 모두 44px 이상 확보). */
+    .card-top-row .checkbox-btn { padding: 16px; }
     .card-top-row .delete-btn { padding: 14px; }
     .card-top-row .delete-btn svg { width: 16px; height: 16px; }
     .qty-ctrl { gap: 16px; }
@@ -4903,8 +5156,17 @@
     .acc-head { padding: 16px 20px; border-radius: 20px; }
     .acc-label { font-size: 15px; }
     /* 2026-08-19(재조정): 21px가 과했다는 피드백 — 한 단계 작은 토큰(--text-m-title-18B,
-       18px Bold)으로 축소. PC(--text-pc-title-18, 18px Bold)와 완전히 동일한 크기·굵기 */
-    .acc-value { font: var(--text-m-title-18B); }
+       18px Bold)으로 축소. PC(--text-pc-title-18, 18px Bold)와 완전히 동일한 크기·굵기.
+       2026-09-16(Stephen 재지시) — 모바일에서 한 단계 더 낮춤(--text-m-body-16B, 16px
+       Bold). "대여 방법"·"반납 방법" 아코디언 값 라벨(선택완료 값 + 미선택 안내 텍스트
+       전부)이 이 클래스를 공유해 양쪽에 함께 적용됨. PC(--text-pc-title-18, 18px)는
+       변경 없음 — 모바일 전용. */
+    .acc-value { font: var(--text-m-body-16B); }
+    /* 2026-09-16(Stephen 재지시, 분리) — "미선택" 안내 텍스트만 한 단계 더 낮춰
+       --text-m-script-14B(14px Bold)로 별도 분리. .acc-value-unset이 .acc-value보다
+       뒤에 선언돼 있고 특이성도 더 높아(클래스 2개) 이 font 규칙이 우선 적용됨 — 실제
+       선택완료 값(위 .acc-value, 16px)은 영향받지 않음. */
+    .acc-value-unset { font: var(--text-m-script-14B); }
     .acc-body { padding-top: 20px; }
     .datetime-btn { padding: 12px 16px; }
     /* 2026-09-03(Stephen 확정) — 모바일에서 한 단계 큰 토큰으로 상향(16px Bold→18px Bold,
@@ -4923,8 +5185,16 @@
     .footer-terms { flex-shrink: 1; justify-content: center; }
     /* 2026-08-17: 기존 13px는 모바일 타이포 스케일 어디에도 정확히 대응하지 않는
        하드코딩값이었음(script-12/14B 사이) — 한 단계 큰 토큰(--text-m-body-16B,
-       16px Bold)으로 교체, PC 기본값(16px)과도 동일해짐 */
-    .footer-terms-text { font: var(--text-m-body-16B); white-space: normal; }
+       16px Bold)으로 교체, PC 기본값(16px)과도 동일해짐.
+       2026-09-16(Stephen 재지시) — 모바일에서 한 단계 더 낮춤(--text-m-script-14B,
+       14px Bold). 안의 "이용안내" 링크(.terms-guide-link)는 font: inherit라 별도
+       수정 없이 함께 축소됨. PC 기본값(16px)은 변경 없음. */
+    .footer-terms-text { font: var(--text-m-script-14B); white-space: normal; }
+    /* 2026-09-16(Stephen 지시) — 위 텍스트 축소에 비례해 체크아이콘도 10% 축소
+       (22×15px → 19.8×13.5px). .checkbox-btn-terms svg는 아이템 카드 선택·동의항목
+       체크박스 등 이 페이지 곳곳에서 공유되므로, 전역 규칙을 바꾸지 않고 footer 영역
+       (.footer-terms)에만 한정된 선택자로 별도 적용 — 다른 체크박스 크기는 영향 없음. */
+    .footer-terms .checkbox-btn-terms svg { width: 19.8px; height: 13.5px; }
     /* 2026-08-18: 기존 15px 하드코딩값을 한 단계 큰 토큰(--text-m-title-18B, 18px Bold)으로 교체 */
     .footer-cta { flex: none; width: 100%; height: 56px; font: var(--text-m-title-18B); }
     .price-detail-list { padding: 0 10px; }
