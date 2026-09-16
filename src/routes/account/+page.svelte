@@ -63,13 +63,13 @@
   const rentalStats = $derived([
     { label: '대여중',    count: data.rentalStats.active },
     { label: '배송중',    count: data.rentalStats.shipping },
-    { label: '대여종료',  count: data.rentalStats.completed },
-    { label: '취소·반품', count: data.rentalStats.cancelled },
+    { label: '반납',      count: data.rentalStats.completed },
+    { label: '취소',      count: data.rentalStats.cancelled },
   ])
 
   const rentalMenuItems = [
     { label: '대여',      href: '/account/rental',  panel: 'rental' },
-    { label: '취소·반품', href: '/account/cancel',  panel: 'cancel' },
+    { label: '취소',      href: '/account/cancel',  panel: 'cancel' },
     { label: '빠른 문의', href: '/account/inquiry', panel: 'inquiry' },
   ]
 
@@ -130,20 +130,12 @@
               <div class="flex h-[29px] items-center relative shrink-0 w-full">
                 <p class="relative shrink-0 text-[#444] text-center tracking-[-0.3px] whitespace-nowrap" style="font: var(--text-m-title-21);">대여 경험</p>
               </div>
-              <div class="flex items-center relative shrink-0 w-full">
-                <div class="flex flex-col font-['Noto_Sans_KR',sans-serif] font-medium justify-center leading-[0] relative shrink-0 text-[#666] text-[14px] tracking-[-0.5px] whitespace-nowrap">
-                  <p class="leading-[1.6]">최근 3개월 동안 0건의 대여정보가 있어요.</p>
-                </div>
-              </div>
             </div>
             <RentalStatRow stats={rentalStats} />
             {#if data.recentRental}
-              <div class="w-full mt-[12px]">
-                <p class="font-['Noto_Sans_KR',sans-serif] font-medium text-[#444] text-[12px] tracking-[-0.3px] mb-[8px]">최근 예약 진행 상태</p>
-                {#if data.recentRental.product_name}
-                  <p class="font-['Noto_Sans_KR',sans-serif] font-bold text-[#100b32] text-[14px] tracking-[-0.3px] mb-[8px]">{data.recentRental.product_name}</p>
-                {/if}
-                <RentalJourneyStepper status={data.recentRental.status} />
+              <div class="w-full mt-[36px]">
+                <p class="text-[#444] tracking-[-0.3px] mb-[8px]" style="font: var(--text-m-script-14B);">최근 예약</p>
+                <RentalJourneyStepper status={data.recentRental.status} productName={data.recentRental.product_name ?? undefined} />
               </div>
             {/if}
           </div>
@@ -285,12 +277,9 @@
               </div>
               <RentalStatRow stats={rentalStats} />
               {#if data.recentRental}
-                <div class="mt-[12px]">
-                  <p class="font-['Noto_Sans_KR',sans-serif] font-medium text-[#444] text-[12px] tracking-[-0.3px] mb-[8px]">최근 예약 진행 상태</p>
-                  {#if data.recentRental.product_name}
-                    <p class="font-['Noto_Sans_KR',sans-serif] font-bold text-[#100b32] text-[14px] tracking-[-0.3px] mb-[8px]">{data.recentRental.product_name}</p>
-                  {/if}
-                  <RentalJourneyStepper status={data.recentRental.status} />
+                <div class="mt-[24px]">
+                  <p class="text-[#444] tracking-[-0.3px] mb-[8px]" style="font: var(--text-pc-body-14);">최근 예약</p>
+                  <RentalJourneyStepper status={data.recentRental.status} productName={data.recentRental.product_name ?? undefined} />
                 </div>
               {/if}
             </div>

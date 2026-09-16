@@ -23,13 +23,7 @@
 
 <div class="panel">
   <div class="panel-head">
-    <button class="btn-back" onclick={onback}>
-      <svg width="8" height="14" viewBox="0 0 8 14" fill="none">
-        <path d="M7 1L1 7L7 13" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
-      </svg>
-      돌아가기
-    </button>
-    <span class="panel-title">취소·반품</span>
+    <span class="panel-title">취소</span>
   </div>
 
   {#if cancels.length === 0}
@@ -66,27 +60,14 @@
 <style>
   .panel { display: flex; flex-direction: column; gap: 16px; }
 
+  /* 좌우 끝 들여쓰기 느낌(2026-09-17, 약간의 여백 추가) */
   .panel-head {
     display: flex;
     align-items: center;
     gap: 12px;
     margin-bottom: 4px;
+    padding: 0 6px;
   }
-  .btn-back {
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    background: none;
-    border: none;
-    padding: 6px 0;
-    font-family: 'Noto Sans KR', sans-serif;
-    font-size: 13px;
-    font-weight: 500;
-    color: var(--cs-text-mid);
-    cursor: pointer;
-    transition: color 0.15s;
-  }
-  .btn-back:hover { color: var(--cs-purple); }
   .panel-title {
     font-family: 'Noto Sans KR', sans-serif;
     font-size: 18px;
@@ -119,10 +100,11 @@
     margin: 0;
   }
 
-  /* 카드 */
-  .list-wrap { display: flex; flex-direction: column; gap: 12px; }
+  /* 카드 — 카드 간 여백 25px(2026-09-17) */
+  .list-wrap { display: flex; flex-direction: column; gap: 25px; }
 
   .cancel-card {
+    position: relative;
     background: var(--cs-white);
     /* front-uiux.md §4 카드 반경 대/중 2단 체계 — 730px 폭 좁은 패널 안 리스트 카드라
        "중(medium)" 등급(PC 30px)으로 축소, "대(large)"(50px)는 최상위 컨테이너 전용 */
@@ -136,6 +118,9 @@
     display: flex;
     align-items: center;
     justify-content: space-between;
+    /* status-chip이 absolute로 빠지면서 code 텍스트와 겹치지 않도록 우측 여백 확보
+       (2026-09-17, GATE E L-1: 여유폭 부족 지적으로 70px→78px 확대) */
+    padding-right: 78px;
   }
   .code {
     font-family: 'Noto Sans KR', sans-serif;
@@ -144,7 +129,13 @@
     color: var(--cs-text);
     letter-spacing: -0.3px;
   }
+  /* 카드 bg 전체 높이 기준 수직 중앙정렬(2026-09-17) — card-head 행이 아니라 카드
+     전체(padding 20px 24px)를 기준으로 위치 고정 */
   .status-chip {
+    position: absolute;
+    top: 50%;
+    right: 24px;
+    transform: translateY(-50%);
     display: inline-flex;
     align-items: center;
     padding: 3px 12px;

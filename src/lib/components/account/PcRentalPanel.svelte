@@ -125,12 +125,6 @@
 
 <div class="panel">
   <div class="panel-head">
-    <button class="btn-back" onclick={onback}>
-      <svg width="8" height="14" viewBox="0 0 8 14" fill="none">
-        <path d="M7 1L1 7L7 13" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
-      </svg>
-      돌아가기
-    </button>
     <span class="panel-title">대여</span>
   </div>
 
@@ -272,27 +266,14 @@
 <style>
   .panel { display: flex; flex-direction: column; gap: 16px; }
 
+  /* 좌우 끝 들여쓰기 느낌(2026-09-17, 약간의 여백 추가) */
   .panel-head {
     display: flex;
     align-items: center;
     gap: 12px;
     margin-bottom: 4px;
+    padding: 0 6px;
   }
-  .btn-back {
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    background: none;
-    border: none;
-    padding: 6px 0;
-    font-family: 'Noto Sans KR', sans-serif;
-    font-size: 13px;
-    font-weight: 500;
-    color: var(--cs-text-mid);
-    cursor: pointer;
-    transition: color 0.15s;
-  }
-  .btn-back:hover { color: var(--cs-purple); }
   .panel-title {
     font-family: 'Noto Sans KR', sans-serif;
     font-size: 18px;
@@ -325,12 +306,14 @@
     margin: 0;
   }
 
-  /* 카드 */
-  .list-wrap { display: flex; flex-direction: column; gap: 12px; }
+  /* 카드 — 카드 간 여백 100% 추가(2026-09-17, 기존 12px → 24px) */
+  .list-wrap { display: flex; flex-direction: column; gap: 24px; }
 
   .rental-card {
     background: var(--cs-white);
-    border-radius: var(--radius-2xl);
+    /* front-uiux.md §4 카드 반경 대/중 2단 체계 — 730px 폭 좁은 패널 안 리스트 카드라
+       "중(medium)" 등급(PC 30px)으로 축소, "대(large)"(50px)는 최상위 컨테이너 전용 */
+    border-radius: var(--radius-xl);
     padding: 20px 24px;
     display: flex;
     flex-direction: column;
