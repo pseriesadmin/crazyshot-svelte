@@ -186,6 +186,13 @@
           </div>
         {/if}
 
+        {#if data.holidayExtraFee > 0}
+          <div class="detail-row">
+            <span class="detail-label">휴무일 연장요금</span>
+            <span class="detail-value">{fmt(data.holidayExtraFee)} 원</span>
+          </div>
+        {/if}
+
         {#if data.vat > 0}
           <!-- cart Order Total 섹션(src/routes/cart/+page.svelte)과 동일한 "포함가 역산"
                표기 — 별도 가산 항목이 아니라 위 대여요금에 이미 포함된 금액이므로 괄호로

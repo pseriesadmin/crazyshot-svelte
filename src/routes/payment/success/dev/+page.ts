@@ -46,6 +46,7 @@ export const load: PageLoad = ({ url }) => {
     membershipDiscount: Number(url.searchParams.get('membershipDiscount') ?? '0'),
     couponDiscount:     Number(url.searchParams.get('couponDiscount')     ?? '0'),
     deliveryFee:        Number(url.searchParams.get('deliveryFee')        ?? '0'),
+    holidayExtraFee:    Number(url.searchParams.get('holidayExtraFee')    ?? '0'),
     vat:                Number(url.searchParams.get('vat')                ?? '0'),
     pointsUsed:         Number(url.searchParams.get('pointsUsed')         ?? '0'),
     confirmedAt:        url.searchParams.get('confirmedAt')              ?? defaultAt,

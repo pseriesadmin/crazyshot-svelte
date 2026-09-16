@@ -47,6 +47,16 @@ export const load: PageServerLoad = async ({ locals }) => {
     .single()
   const rentalGuideText = (guideData as { guide_text?: string } | null)?.guide_text ?? ''
 
+  // 배송 휴무일 안내 스크립트(/cms/set/rental "휴무일 제어 옵션" 하위, 2026-09-16 신설) —
+  // 자동연장이 발생했을 때 카트 달력 하단에 노출. rentalGuideText와 동일 패턴(세션 불필요,
+  // 독립 조회). loadCourierClosedDates()(휴무일 Set 계산 전용 유틸)의 책임을 넘어서는
+  // 확장이라 그 함수에 합치지 않고 여기서 별도 조회한다(싱글톤 행 조회라 비용 무시 가능).
+  const { data: cutoffGuideData } = await untypedFrom(supabase, 'delivery_cutoff_settings')
+    .select('holiday_guide_text')
+    .limit(1)
+    .single()
+  const holidayGuideText = (cutoffGuideData as { holiday_guide_text?: string } | null)?.holiday_guide_text ?? ''
+
   // 필수 동의문 항목(/cms/set/rental "필수 동의문 항목") — 체크아웃 진행 전 고객이 개별로
   // 확인·체크해야 하는 항목 목록. 세션 불필요, 공개 조회(rentalGuideText와 동일 패턴).
   // 2026-08-30: 등록 UI만 있고 카트/체크아웃 어디서도 조회되지 않던 공백을 감사로 발견해 연결.
@@ -510,6 +520,7 @@ export const load: PageServerLoad = async ({ locals }) => {
     pickupPoints,
     courierClosedDates,
     rentalGuideText,
+    holidayGuideText,
     consentItems,
     shippingSettings,
     discountTiers,

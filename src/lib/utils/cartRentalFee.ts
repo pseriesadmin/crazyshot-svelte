@@ -150,3 +150,73 @@ export function calcRentalPeriodParts(totalMinutes: number): RentalPeriodPart[] 
   if (hasHalfBlock) parts.push({ num: 12, unit: '시간' })
   return parts
 }
+
+/**
+ * 휴무일 포함 배송 연장 요금 계산 — compute_reservation_line_amount RPC(migration 501)와
+ * 동일 산식. 총 연장일수 N = pickupExtraDays + returnExtraDays 중 1일은 무료, 나머지
+ * (N-1)일에 대해 일일요금의 50% 부과.
+ * N=0 → 0원, N=1 → 0원(무료), N=2 → daily*0.5
+ */
+export function calcHolidayExtraFee(
+  pickupExtraDays: number,
+  returnExtraDays: number,
+  dailyPrice: number
+): number {
+  const totalDays = Math.max(0, pickupExtraDays) + Math.max(0, returnExtraDays)
+  return Math.max(totalDays - 1, 0) * dailyPrice * 0.5
+}
+
+/** YYYY-MM-DD 포맷으로 변환 */
+function formatDate(d: Date): string {
+  return d.toISOString().slice(0, 10)
+}
+
+/** dateStr 기준 days 일 후 Date 반환 */
+function addDays(dateStr: string, days: number): Date {
+  const d = new Date(dateStr)
+  d.setDate(d.getDate() + days)
+  return d
+}
+
+/**
+ * 휴무일 포함 시 배송 픽업/반납 날짜 연장 계산 — 서버 compute_holiday_extended_period(migration
+ * 501)와 동일 워크 로직(각 leg 최대 14회 안전판).
+ * - 픽업: closedDatesSet에 픽업일 하루 전이 포함되면 effectiveStart를 앞당김
+ * - 반납: closedDatesSet에 반납일 하루 후가 포함되면 effectiveEnd를 늦춤
+ */
+export function calcHolidayExtension(
+  startDate: string,
+  endDate: string,
+  pickupCourierDependent: boolean,
+  returnCourierDependent: boolean,
+  closedDatesSet: Set<string>
+): { effectiveStart: string; effectiveEnd: string; pickupExtraDays: number; returnExtraDays: number } {
+  let effectiveStart = startDate
+  let effectiveEnd = endDate
+  let pickupExtraDays = 0
+  let returnExtraDays = 0
+
+  if (pickupCourierDependent) {
+    let iterations = 0
+    while (iterations < 14) {
+      const dayBefore = formatDate(addDays(effectiveStart, -1))
+      if (!closedDatesSet.has(dayBefore)) break
+      effectiveStart = dayBefore
+      pickupExtraDays++
+      iterations++
+    }
+  }
+
+  if (returnCourierDependent) {
+    let iterations = 0
+    while (iterations < 14) {
+      const dayAfter = formatDate(addDays(effectiveEnd, 1))
+      if (!closedDatesSet.has(dayAfter)) break
+      effectiveEnd = dayAfter
+      returnExtraDays++
+      iterations++
+    }
+  }
+
+  return { effectiveStart, effectiveEnd, pickupExtraDays, returnExtraDays }
+}
