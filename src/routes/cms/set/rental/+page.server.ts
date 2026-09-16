@@ -77,6 +77,7 @@ export interface DeliveryCutoffSettings {
   enable_prev_day_check: boolean
   enable_fixed_holidays: boolean
   enable_manual_holidays: boolean
+  holiday_guide_text: string
   updated_at: string
 }
 
@@ -126,7 +127,7 @@ export const load: PageServerLoad = async ({ locals }) => {
       .single(),
 
     untypedFrom(supabase, 'delivery_cutoff_settings')
-      .select('enable_prev_day_check, enable_fixed_holidays, enable_manual_holidays, updated_at')
+      .select('enable_prev_day_check, enable_fixed_holidays, enable_manual_holidays, holiday_guide_text, updated_at')
       .limit(1)
       .single(),
 
@@ -417,11 +418,17 @@ export const actions: Actions = {
     const enablePrevDayCheck = data.get('enable_prev_day_check') === 'true'
     const enableFixedHolidays = data.get('enable_fixed_holidays') === 'true'
     const enableManualHolidays = data.get('enable_manual_holidays') === 'true'
+    const holidayGuideText = (data.get('holiday_guide_text') as string | null) ?? ''
+
+    if (holidayGuideText.length > 200) {
+      return fail(400, { error: '배송 휴무일 안내문은 최대 200자까지 입력 가능합니다.' })
+    }
 
     const { error } = await untypedRpc(locals.supabase, 'upsert_delivery_cutoff_settings', {
       p_enable_prev_day_check: enablePrevDayCheck,
       p_enable_fixed_holidays: enableFixedHolidays,
       p_enable_manual_holidays: enableManualHolidays,
+      p_holiday_guide_text: holidayGuideText,
     })
     if (error) return fail(500, { error: error.message })
     return { success: true }

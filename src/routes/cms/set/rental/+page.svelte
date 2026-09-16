@@ -120,6 +120,9 @@
   let enablePrevDayCheck  = $state(data.cutoffSettings?.enable_prev_day_check  ?? false)
   let enableFixedHolidays = $state(data.cutoffSettings?.enable_fixed_holidays  ?? false)
   let enableManualHolidays = $state(data.cutoffSettings?.enable_manual_holidays ?? false)
+  let holidayGuideText = $state(data.cutoffSettings?.holiday_guide_text ?? '')
+  let holidayGuideCount = $derived(holidayGuideText.length)
+  let holidayGuideIsDirty = $derived.by(() => holidayGuideText !== (data.cutoffSettings?.holiday_guide_text ?? ''))
   let cutoffLoading = $state(false)
   let cutoffFormEl = $state<HTMLFormElement | undefined>(undefined)
   let syncLoading = $state(false)
@@ -134,6 +137,7 @@
     enablePrevDayCheck   = data.cutoffSettings?.enable_prev_day_check   ?? false
     enableFixedHolidays  = data.cutoffSettings?.enable_fixed_holidays   ?? false
     enableManualHolidays = data.cutoffSettings?.enable_manual_holidays  ?? false
+    holidayGuideText     = data.cutoffSettings?.holiday_guide_text      ?? ''
   })
 
   // ─── 이용안내 ───
@@ -650,6 +654,7 @@
           <span class="section-badge">{discountTiers.length} / 5</span>
         </div>
 
+        <div class="discount-tier-block">
         <form
           method="POST"
           action="?/addDiscountTier"
@@ -763,6 +768,7 @@
         {:else}
           <p class="empty-hint">등록된 배송료 우대설정이 없습니다.</p>
         {/if}
+        </div>
       </div>
 
       <!-- 택배 휴무일 캘린더 제어 — /cart 수령·반납 캘린더의 휴무 기반 선택 제한 -->
@@ -808,6 +814,29 @@
                 onclick={async () => { enableManualHolidays = !enableManualHolidays; await tick(); cutoffFormEl?.requestSubmit() }}
               >임시 휴무일 반영</button>
             </div>
+          </div>
+
+          <div class="textarea-wrap">
+            <textarea
+              name="holiday_guide_text"
+              class="guide-textarea guide-textarea--has-save-btn"
+              maxlength="200"
+              rows="3"
+              bind:value={holidayGuideText}
+              disabled={cutoffLoading}
+              placeholder="배송 휴무일이 포함된 예약 시 장바구니 달력 하단에 노출될 안내문을 입력하세요. (200자 이내)"
+              aria-label="배송 휴무일 안내 스크립트"
+            ></textarea>
+            <span class="char-count" class:char-count--warn={holidayGuideCount > 180}
+              >{holidayGuideCount} / 200</span
+            >
+            <button
+              type="submit"
+              class="btn-save textarea-save-btn"
+              disabled={cutoffLoading || !holidayGuideIsDirty}
+            >
+              {cutoffLoading ? '저장 중...' : '안내문 저장'}
+            </button>
           </div>
 
           <input type="hidden" name="enable_prev_day_check" value={enablePrevDayCheck ? 'true' : 'false'} />
