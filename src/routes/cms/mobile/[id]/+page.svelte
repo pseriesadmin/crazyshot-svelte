@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { goto } from '$app/navigation'
+  import { goto, invalidateAll } from '$app/navigation'
   import { resizeProductImage } from '$lib/utils/imageResize'
   import OcrScanner from '$lib/components/common/OcrScanner.svelte'
   import type { PageData } from './$types'
@@ -12,6 +12,9 @@
 
   // ── 이미지 탭 ──────────────────────────────────────────
   let imageUrls = $state<string[]>(data.product.image_urls)
+  // $effect: invalidateAll() 후 data.product.image_urls가 갱신되면 imageUrls에 반영
+  // ($state(prop) 초기화 안티패턴 보완 — ui-mobile.md §$state(prop) 절대 금지)
+  $effect(() => { imageUrls = data.product.image_urls })
   let imageUploading = $state(false)
   let imageUploadError = $state<string | null>(null)
   let cameraInputEl = $state<HTMLInputElement | null>(null)
@@ -36,6 +39,7 @@
       })
       if (res.ok) {
         imageUrls = imageUrls.filter((_, i) => i !== idx)
+        await invalidateAll()
       }
     } finally {
       imageDeleting = false
@@ -60,6 +64,7 @@
       }
       const result = await res.json() as { largeUrl: string }
       imageUrls = [...imageUrls, result.largeUrl]
+      await invalidateAll()
       imageUploadError = null
     } catch (e) {
       imageUploadError = e instanceof Error ? e.message : '업로드 실패'

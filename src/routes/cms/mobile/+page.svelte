@@ -2,7 +2,7 @@
   import { goto } from '$app/navigation'
   import { browser } from '$app/environment'
   import { matchesSearch } from '$lib/utils/chosungSearch'
-  import { extractProductId, extractMemberCode } from '$lib/utils/qrProductId'
+  import { identifyQrPayload } from '$lib/utils/qrProductId'
   import { scrollPeek } from '$lib/utils/scrollPeek'
   import ChevronIcon from '$lib/components/common/ChevronIcon.svelte'
   import QrScannerOverlay from '$lib/components/common/QrScannerOverlay.svelte'
@@ -12,6 +12,9 @@
   let { data }: Props = $props()
 
   let searchQuery = $state('')
+  let selectedCategory = $state('all')
+  let visibleCount = $state(10)
+  let sentinel: HTMLDivElement | null = $state(null)
 
   // 정렬·보기 옵션 (목록보기 / 썸네일형 병렬보기)
   // 상품 상세로 이동 후 되돌아오면 이 컴포넌트가 재마운트되며 $state 기본값으로 리셋되므로,
@@ -52,7 +55,9 @@
   })
 
   const filtered = $derived.by(() => {
-    const base = data.products.filter(p => matchesSearch({ name: p.name, product_code: p.product_code }, searchQuery))
+    const base = data.products
+      .filter(p => selectedCategory === 'all' || p.category === selectedCategory)
+      .filter(p => matchesSearch({ name: p.name, product_code: p.product_code }, searchQuery))
     const q = searchQuery.trim()
 
     if (q && nlRankIds && nlRankIds.length > 0) {
@@ -66,6 +71,31 @@
     }
 
     return base.slice().sort((a, b) => sortAsc ? a.name.localeCompare(b.name, 'ko') : b.name.localeCompare(a.name, 'ko'))
+  })
+
+  // filtered에서 visibleCount개만 슬라이스해 DOM에 렌더링 (무한스크롤용)
+  const visibleProducts = $derived(filtered.slice(0, visibleCount))
+
+  // 검색어·카테고리 변경 시 렌더링 개수를 첫 10개로 리셋
+  $effect(() => {
+    void (selectedCategory + searchQuery) // 두 필터를 읽어 의존성으로 등록 — visibleCount 쓰기만 하므로 루프 없음
+    visibleCount = 10
+  })
+
+  // IntersectionObserver: sentinel이 뷰포트에 들어오면 10개씩 추가 렌더링 (cleanup으로 disconnect)
+  $effect(() => {
+    const el = sentinel
+    if (!el || !browser) return
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries[0]?.isIntersecting) {
+          visibleCount = Math.min(visibleCount + 10, filtered.length)
+        }
+      },
+      { rootMargin: '0px 0px 200px 0px' }
+    )
+    observer.observe(el)
+    return () => observer.disconnect()
   })
 
   function toggleSort(): void {
@@ -86,19 +116,46 @@
   let fabPeek = $state(false)
 
   function handleQrDetected(raw: string): boolean {
-    const memberCode = extractMemberCode(raw)
-    if (memberCode) {
-      goto(`/cms/mobile/qr/member/${encodeURIComponent(memberCode)}`)
+    const result = identifyQrPayload(raw)
+    if (result.type === 'member') {
+      goto(`/cms/mobile/qr/member/${encodeURIComponent(result.value)}`)
       return true
     }
-    const id = extractProductId(raw)
-    if (!id) return false
-    goto(`/cms/mobile/qr/${id}`)
-    return true
+    if (result.type === 'reservation') {
+      goto(`/cms/mobile/qr/reservation/${encodeURIComponent(result.value)}`)
+      return true
+    }
+    if (result.type === 'product') {
+      goto(`/cms/mobile/qr/${result.value}`)
+      return true
+    }
+    return false
   }
 </script>
 
 <div class="mob-page">
+  <!-- 카테고리 탭 — PC CMS 상품목록과 동일한 카테고리 값(code_mapping_groups.default_category) 재사용 -->
+  <div class="cat-tabs" role="tablist" aria-label="상품 카테고리">
+    <button
+      role="tab"
+      type="button"
+      aria-selected={selectedCategory === 'all'}
+      class="cat-tab"
+      class:active={selectedCategory === 'all'}
+      onclick={() => (selectedCategory = 'all')}
+    >전체</button>
+    {#each data.categories as cat (cat.value)}
+      <button
+        role="tab"
+        type="button"
+        aria-selected={selectedCategory === cat.value}
+        class="cat-tab"
+        class:active={selectedCategory === cat.value}
+        onclick={() => (selectedCategory = cat.value)}
+      >{cat.label}</button>
+    {/each}
+  </div>
+
   <div class="search-wrap">
     <input
       type="search"
@@ -139,7 +196,7 @@
         title="목록보기"
       >
         <svg xmlns="http://www.w3.org/2000/svg" width="30" height="30" viewBox="0 0 30 30" fill="none" aria-hidden="true">
-          <circle cx="15" cy="15" r="15" fill={viewMode === 'list' ? '#C1BBEC' : '#F6F6F6'}/>
+          <rect x="0" y="0" width="30" height="30" rx="10" fill={viewMode === 'list' ? '#C1BBEC' : '#F6F6F6'}/>
           <path d="M10 12H20.5M10 18.7778H16.5"
             stroke={viewMode === 'list' ? '#3B2F8A' : '#AAAAAA'}
             stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>
@@ -154,7 +211,7 @@
         title="썸네일형 병렬보기"
       >
         <svg xmlns="http://www.w3.org/2000/svg" width="30" height="30" viewBox="0 0 30 30" fill="none" aria-hidden="true">
-          <circle cx="15" cy="15" r="15" fill={viewMode === 'grid' ? '#C1BBEC' : '#F6F6F6'}/>
+          <rect x="0" y="0" width="30" height="30" rx="10" fill={viewMode === 'grid' ? '#C1BBEC' : '#F6F6F6'}/>
           <rect x="6" y="11" width="8" height="8" rx="2.5" fill={viewMode === 'grid' ? '#3B2F8A' : '#AAAAAA'}/>
           <rect x="16" y="11" width="8" height="8" rx="2.5" fill={viewMode === 'grid' ? '#3B2F8A' : '#AAAAAA'}/>
         </svg>
@@ -166,7 +223,7 @@
     <div class="no-data">검색 결과가 없습니다.</div>
   {:else if viewMode === 'grid'}
     <ul class="product-grid" role="list">
-      {#each filtered as product (product.id)}
+      {#each visibleProducts as product (product.id)}
         <li>
           <button
             type="button"
@@ -197,7 +254,7 @@
     </ul>
   {:else}
     <ul class="product-list" role="list">
-      {#each filtered as product (product.id)}
+      {#each visibleProducts as product (product.id)}
         <li>
           <button
             type="button"
@@ -229,6 +286,10 @@
         </li>
       {/each}
     </ul>
+  {/if}
+
+  {#if visibleCount < filtered.length}
+    <div bind:this={sentinel} class="scroll-sentinel" aria-hidden="true">불러오는 중...</div>
   {/if}
 </div>
 
@@ -279,8 +340,35 @@
     background: var(--cs-lilac);
   }
 
+  /* 카테고리 탭 */
+  .cat-tabs {
+    display: flex;
+    gap: 6px;
+    padding: 33px 14px 0;
+    overflow-x: auto;
+    scrollbar-width: none;
+    -webkit-overflow-scrolling: touch;
+  }
+  .cat-tabs::-webkit-scrollbar { display: none; }
+
+  .cat-tab {
+    flex-shrink: 0;
+    padding: 11px 14px;
+    border: none;
+    border-radius: var(--radius-xl);
+    background: var(--cs-white);
+    color: var(--cs-text-mid);
+    font-size: 13px;
+    font-weight: 700;
+    cursor: pointer;
+    min-height: 44px;
+    white-space: nowrap;
+    transition: background 0.12s, color 0.12s;
+  }
+  .cat-tab.active { background: var(--cs-purple); color: var(--cs-white); }
+
   .search-wrap {
-    padding: 33px 14px 14px;
+    padding: 12px 14px 14px;
     background: var(--cs-lilac);
   }
 
@@ -526,4 +614,12 @@
   }
   .qr-fab:hover, .rental-list-fab:hover   { transform: scale(1.06); }
   .qr-fab:active, .rental-list-fab:active { transform: scale(0.96); }
+
+  /* 무한스크롤 sentinel */
+  .scroll-sentinel {
+    padding: 16px 0 80px;
+    text-align: center;
+    font-size: 12px;
+    color: var(--cs-text-light);
+  }
 </style>

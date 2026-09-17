@@ -19,12 +19,36 @@ export const load: PageServerLoad = async ({ params }) => {
 
   const { data: product, error: productError } = await admin
     .from('products')
-    .select('id, name, product_code, category, image_urls, is_active, description')
+    .select('id, name, product_code, category, image_urls, is_active, description, parent_product_id')
     .eq('id', params.id)
     .is('deleted_at', null)
     .single()
 
   if (productError || !product) throw error(404, '상품을 찾을 수 없습니다.')
+
+  // 자식 상품이면 image_urls는 부모 기준으로 조회 (products.md §4-0)
+  // 자식은 정책상 이미지를 갖지 않으므로 부모 image_urls를 대신 공급
+  type RawProduct = {
+    id: string
+    name: string
+    product_code: string | null
+    category: string
+    image_urls: string[] | null
+    is_active: boolean
+    description: string | null
+    parent_product_id: string | null
+  }
+  const raw = product as RawProduct
+  let resolvedImageUrls: string[] = raw.image_urls ?? []
+  if (raw.parent_product_id) {
+    const { data: parentRow } = await admin
+      .from('products')
+      .select('image_urls')
+      .eq('id', raw.parent_product_id)
+      .is('deleted_at', null)
+      .maybeSingle()
+    resolvedImageUrls = (parentRow as { image_urls: string[] } | null)?.image_urls ?? []
+  }
 
   const { data: assets } = await admin
     .from('assets')
@@ -34,7 +58,15 @@ export const load: PageServerLoad = async ({ params }) => {
     .order('created_at', { ascending: true })
 
   return {
-    product: product as {
+    product: {
+      id: raw.id,
+      name: raw.name,
+      product_code: raw.product_code,
+      category: raw.category,
+      image_urls: resolvedImageUrls,
+      is_active: raw.is_active,
+      description: raw.description,
+    } as {
       id: string
       name: string
       product_code: string | null
@@ -44,6 +76,5 @@ export const load: PageServerLoad = async ({ params }) => {
       description: string | null
     },
     assets: (assets ?? []) as Asset[],
-
   }
 }

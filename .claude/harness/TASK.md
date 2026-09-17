@@ -1,5 +1,137 @@
 # .claude/harness/TASK.md
 
+## DONE — 🟡 BOUNDARY: 모바일 CMS 상품 목록 무한스크롤 구현 (2026-09-17, ✅ 완료)
+
+`src/routes/cms/mobile/+page.svelte` 단독 수정.
+
+- `visibleCount = $state(10)`, `sentinel = $state<HTMLDivElement|null>(null)` 추가
+- `visibleProducts = $derived(filtered.slice(0, visibleCount))` — 실렌더링 목록
+- 두 `$effect`: ① `selectedCategory + searchQuery` 변화 시 `visibleCount = 10` 리셋 (루프 없음), ② `IntersectionObserver`로 sentinel 감지 → `visibleCount += 10` (cleanup에서 `disconnect()`)
+- `{#each filtered}` → `{#each visibleProducts}` 두 곳(grid / list) 교체
+- `{#if visibleCount < filtered.length}` 조건부 sentinel div 추가 (mob-page 내 최하단)
+- `rootMargin: '0px 0px 200px 0px'` — 하단 200px 전에 선제 로딩
+- svelte-check 신규 에러 0건 (`cms/mobile/+page.svelte` 경고 0건)
+
+---
+
+## DONE — 🟡 BOUNDARY: "모바일 CMS 기존 결함 2건 수정" 보완사항 2건 (2026-09-17, ✅ 완료)
+
+### 구현 결과
+
+```
+보완 1 — +page.server.ts: parent_product_id SELECT 추가 → 자식이면 부모 image_urls 재조회 (maybeSingle)
+         +page.svelte: invalidateAll import + $effect(() => { imageUrls = data.product.image_urls })
+         업로드/삭제 성공 후 await invalidateAll() 추가 (2곳)
+
+보완 2 — uploadParentResolution.test.ts 전면 재작성:
+         vi.mock('@supabase/supabase-js') + 실제 POST/DELETE import
+         factory 함수(makePostAdmin/makeDeleteAdmin) + fromCallIdx 카운터 패턴
+         FAIL 검증 완료(치환 로직 주석처리 → UP-1/UP-2 FAIL 확인 후 원복)
+         최종 7/7 GREEN
+
+검증: npx svelte-check — 타겟 파일 신규 에러 0건 (vite.config.ts 기존 에러 1건은 사전존재)
+     npx vitest run uploadParentResolution — 7/7 GREEN
+```
+
+### 배경
+
+바로 앞선 DONE 블록 "모바일 CMS 기존 결함 2건 수정"의 sp3-qa-agent GATE E 검수에서
+BLOCKING은 아니지만 Stephen에게 보고해야 할 MEDIUM 2건이 발견됐고, Stephen이 둘 다
+"지금 바로 수정" 선택.
+
+### 보완 1 — 모바일 "상품이미지" 탭이 매번 빈 목록으로 시작하는 문제
+
+```
+증상: 버그2 수정으로 사진은 정확히 부모상품 image_urls에 저장되지만, 모바일 화면
+  src/routes/cms/mobile/[id]/+page.server.ts의 load()가 여전히 스캔된 자식 id
+  기준(params.id)으로 products.image_urls를 조회한다 — 자식 상품은 정책상(products.md
+  §4-0) 실제 이미지를 갖지 않으므로 이 조회는 항상 빈 배열을 반환한다. 그 결과 모바일
+  "상품이미지" 탭은 열 때마다 빈 목록으로 시작하고, 그 세션에서 새로 찍은 사진만
+  로컬 상태(invalidateAll 없이 낙관적 append)로 보인다 — 이미 PC나 이전 세션에서
+  등록된 기존 사진들이 전혀 안 보임.
+
+수정 방향:
+  src/routes/cms/mobile/[id]/+page.server.ts의 load()에서 조회한 상품이 자식이면
+  (parent_product_id IS NOT NULL) 그 부모 id로 image_urls를 다시 조회해 화면에
+  공급할 것 — src/lib/server/products/loadSelectedProductDetail.ts가 이미 PC CMS에서
+  "자식 선택 시에도 image_urls는 항상 부모 기준 조회"를 구현해둔 패턴이 있으니 그
+  로직을 참고해 이식(신규 방식 창작 금지). 업로드/삭제 후에도 화면이 최신 상태를
+  반영하도록 invalidateAll() 호출 여부를 점검해 누락됐으면 추가할 것.
+
+검증(GATE C):
+  [ ] PC CMS에서 미리 등록해둔 부모상품 사진이 있는 상태에서, 그 상품의 자식(재고)을
+      모바일로 스캔해 "상품이미지" 탭을 열면 기존 사진이 즉시 보이는지 확인
+  [ ] 그 상태에서 새 사진을 추가/삭제하면 화면이 즉시 최신 목록으로 갱신되는지 확인
+  [ ] PC CMS ProductDetailPanel 이미지 탭 로직(자식 선택 시 부모 기준 조회) 회귀 없는지 확인
+```
+
+### 보완 2 — 버그2(모바일 이미지→PC 부모상품 반영) 회귀테스트의 실질적 신뢰도 부재
+
+```
+증상: src/__tests__/services/uploadParentResolution.test.ts(7건)가 실제
+  src/routes/api/cms/upload/+server.ts의 POST/DELETE 핸들러를 import·호출하지 않고,
+  같은 치환/필터 로직을 테스트 파일 안에 별도로 복사해 그 사본끼리 비교만 한다 —
+  실제 서버 코드가 나중에 잘못 바뀌어도 이 테스트는 항상 통과해 회귀를 못 잡는다.
+
+수정 방향:
+  +server.ts의 POST/DELETE 핸들러를 실제로 import해서(SvelteKit RequestHandler로 export된
+  POST/DELETE 함수), mock Supabase admin 클라이언트(from/rpc/storage 체이닝을 vi.fn()으로
+  스텁)를 주입해 실제 함수를 호출하는 방식으로 테스트를 재작성할 것 — 같은 파일의 기존
+  7개 케이스(자식→부모 치환 성공/자식 아님/삭제 시 배열 제거 등)를 그대로 유지하되 검증
+  방식만 "사본 비교"에서 "실제 함수 호출 결과 검증"으로 바꿀 것. rentalQrTransition
+  Product Code.test.ts(실제 함수를 import해 호출하는 방식)를 참고 패턴으로 삼을 것.
+
+검증(GATE C):
+  [ ] 재작성된 테스트가 실제 +server.ts의 export된 POST/DELETE를 import하는지 확인
+  [ ] 기존 7개 시나리오(UP-1~3, DEL-1~4)가 전부 동일하게 커버되는지 확인
+  [ ] 의도적으로 +server.ts의 치환 로직을 주석처리해보면(임시) 테스트가 실제로 FAIL하는지
+      1회 확인해 "테스트가 실제로 회귀를 잡아내는지" 검증한 뒤 원복(harness-executor가
+      직접 이 방식으로 자체 검증하고 결과만 보고할 것)
+  [ ] npx svelte-check 신규 에러 0건, npx vitest run 전체 GREEN
+```
+
+### GATE 등급: 🟡 BOUNDARY — 자동 진행
+
+```
+두 항목 모두 이미 완료된 단일 기능(버그2)의 후속 보완이며 결제·예약·보안이 아닌
+단일 서비스 로직/테스트 품질 개선 — CLAUDE.md 기준 BOUNDARY. Stephen이
+AskUserQuestion으로 "둘 다 지금 수정" 이미 확인 완료.
+```
+
+---
+
+## DONE — 🟢 ROUTINE: 모바일 CMS 보기방식 토글 버튼 배경 원형→라운드 사각형(rx=10) 교체 (2026-09-17, ✅ 자동완료 — svelte-check 신규에러 0건)
+
+---
+
+## DONE — 🟡 BOUNDARY: 모바일 CMS 상품검색 카테고리 탭 UI 신규 추가 (2026-09-17, ✅ 자동완료 — svelte-check 신규에러 0건)
+
+### 배경
+
+`src/routes/cms/mobile/+page.svelte` 상품검색 화면에 PC CMS와 동일한 카테고리 소스를 참조하는 탭 UI를 추가.
+
+### 구현 내용
+
+- `+page.server.ts`: `code_mapping_groups`에서 `show_in_product_filter=true` 카테고리를 상품목록과 병렬 로드(`Promise.all`). 탭 값(`value`)은 `default_category`(= `products.category` 비교 키) 직접 사용 — PC 방식(`g.id` UUID)과 달리 클라이언트 필터에 맞게 조정.
+- `+page.svelte`: `selectedCategory = $state('all')` 추가, `filtered` derived를 카테고리+검색 조합 필터로 확장, `.search-wrap` 위에 수평 스크롤 가능한 pill 탭 블록 추가.
+- CSS: `overflow-x: auto` + `flex-shrink: 0` + `scrollbar-width: none` 패턴으로 375px에서 6개+ 탭 수용. 활성 탭 `--cs-purple` / 비활성 `--cs-white`, 반경 `--radius-xl`(30px).
+
+### 수정 파일
+
+- `src/routes/cms/mobile/+page.server.ts`
+- `src/routes/cms/mobile/+page.svelte`
+
+### 검증
+
+- `npx svelte-check`: 신규 에러 0건 (기존 1건 — `vite.config.ts` 오버로드 불일치, 무관)
+- 필터링 방식: 클라이언트 사이드 (PC는 서버 재페치/URL params, 모바일은 전체 로드 후 client filter — 기존 방식 일관성 유지)
+
+### 후속 수정 (2026-09-17 — sp3-qa-agent MEDIUM 지적 반영)
+
+- `.cat-tab` `min-height: 34px` → `44px`, `padding: 6px 14px` → `11px 14px` (ui-mobile.md 인터랙티브 요소 최소 44×44px 기준 준수, `src/routes/cms/mobile/+page.svelte`)
+
+---
+
 ## DONE — 🟢 ROUTINE: 마이페이지(/account) 취소·대여·빠른문의 리스트 UI 세부 다듬기 (2026-09-17, 이 세션'만', ✅ GATE E 통과 — sp3-qa-agent 검수 완료, git commit만 Stephen 대기)
 
 ### 배경
@@ -95,7 +227,160 @@ src/lib/components/account/PcInquiryPanel.svelte
 
 ---
 
-## NOW — 🔴 CRITICAL: CMS QR 코드 시스템 통합 모듈화 (2026-09-16, promptor 등록, GATE B 대기 — 착수 금지)
+## DONE — 🔴 CRITICAL: 모바일 CMS 기존 결함 2건 수정 (2026-09-17, ✅ 구현 완료 · svelte-check 신규 에러 0건 · 테스트 15/15 GREEN · git commit만 Stephen 대기)
+
+### GATE 등급: 🔴 CRITICAL — 서비스 의도 확인 완료
+
+```
+사유: 다중 파일 변경 + 상품 카탈로그 데이터(products.image_urls) 정합성 + 대여 이력 데이터
+정합성 — CLAUDE.md 기준 "다중 파일·DB 변경" CRITICAL 분류.
+GATE B: Stephen이 AskUserQuestion으로 두 건 모두 "지금 수정" 선택 + 상품이미지 기능의
+의도(모바일 촬영 → PC CMS 부모상품 '이미지' 탭 목록에 연동 추가되는 단순 이미지
+등록관리 기능)를 직접 확인해줌 — 승인 완료, harness-executor 착수 가능.
+DB 마이그레이션: 예상 없음(기존 RPC/컬럼 그대로 사용, 호출 시 전달값·조회 대상만 수정).
+```
+
+### 배경 — 두 결함 모두 직전 "CMS QR 코드 시스템 통합 모듈화" 작업과 무관한 기존 결함
+
+바로 앞선 QR 통합 모듈화 작업(GATE E 통과) 완료 후, Stephen이 `/cms/mobile/rentals`와
+`/cms/mobile/[id]` 화면을 실기기 유사 환경(launch-selected-element)에서 직접 확인하며
+발견/질의한 사항을 Explore 에이전트 2회 조사로 근본원인까지 특정 완료.
+
+### 버그 1 — 모바일 예약카드 QR스캔 즉시처리 시 "상품이력" 자동기록 실패
+
+```
+증상: /cms/mobile/rentals 카드별 "QR스캔" 버튼(또는 RentalDetailPanel의 동일 기능)으로
+  스캔 시, 출고/반납 상태전이·채팅알림·포인트적립은 전부 정상 동작하지만 "상품이력"에는
+  아무 것도 기록되지 않는다(화면상 "등록된 이력이 없습니다"로 계속 남음).
+
+근본원인: 이 즉시처리 경로가 스캔값을 파싱한 product_code 문자열(예: "CSCRDSL0010000")을
+  변환 없이 그대로 productId로 API에 실어 보내고, 이게 최종적으로
+  upsert_product_history_record RPC의 p_product_id(UUID 컬럼)에 그대로 전달된다 —
+  product_code는 UUID 형식이 아니므로 이 RPC 호출이 실패하지만, 현재 코드가
+  try/catch로만 감싸고 supabase-js의 { data, error } 응답 중 error 필드를 확인하지 않아
+  실패가 조용히 무시된다.
+
+  반면 /cms/mobile/qr/[product_id]/+page.server.ts의 processQrAction(전역 랜딩화면
+  경유)은 호출 전에 반드시 product_code → products.id(UUID) 변환을 거쳐 정상 동작한다
+  (이미 올바르게 구현된 참고 패턴).
+
+관련 파일:
+  src/lib/server/rentalQrTransition.ts — processRentalQrTransition() 내부,
+    upsert_product_history_record 호출 직전 (공용 처리 함수 — 여기서 고치면
+    rentals 카드 경로·RentalDetailPanel 경로 둘 다 동시에 해결됨)
+  src/routes/api/cms/rental-qr-transition/+server.ts — 위 함수를 호출하는 API
+  src/routes/cms/mobile/rentals/+page.svelte — processCardQrMatch() (line 66-94,
+    productId: scannedId로 API 호출하는 지점)
+  src/lib/components/cms/RentalDetailPanel.svelte — processProductQrMatch() (line 166-201,
+    동일 패턴 중복 보유)
+  참고(이미 정상 구현된 패턴): src/routes/cms/mobile/qr/[product_id]/+page.server.ts
+    line 102-118 (product_code→UUID 변환 로직)
+
+수정 방향:
+  processRentalQrTransition() 내부에서 upsert_product_history_record 호출 직전에,
+  전달받은 productId가 UUID 형식이 아니거나(또는 무조건) products 테이블에서
+  product_code 기준으로 실제 UUID(자식 상품 id)를 조회해 치환한 뒤 RPC에 전달할 것 —
+  /cms/mobile/qr/[product_id]/+page.server.ts의 기존 변환 로직과 동일한 방식 재사용
+  (신규 로직 창작 금지, 기존 패턴 그대로 이식). 한 곳(processRentalQrTransition)만
+  고치면 이 함수를 호출하는 모든 경로가 자동으로 함께 해결됨 — rentals/+page.svelte와
+  RentalDetailPanel.svelte 자체는 productId 전달 방식을 바꿀 필요 없음(이미 product_code
+  텍스트를 넘기고 있고, 변환은 공용 함수 내부에서 흡수).
+  부가: RPC 응답의 error 필드를 실제로 확인해 실패 시 최소한 서버 로그(console.warn 등,
+  fail-soft 원칙은 유지 — 주 처리 흐름을 막지는 않되 무음 실패는 없앨 것)로 남길 것.
+
+검증(GATE C):
+  [ ] 자식(재고) 상품 QR을 rentals 카드 즉시처리 경로로 스캔 → 상태전이 정상 + 상품이력에
+      실제로 1건 INSERT되는지 Stage DB 또는 API 응답으로 확인
+      (get_product_history/get_product_history_multi로 조회)
+  [ ] RentalDetailPanel의 동일 기능도 동일하게 정상 기록되는지 확인
+  [ ] /cms/mobile/qr/[product_id] 경유(플로팅 FAB) 기존 정상 경로가 회귀하지 않았는지 확인
+  [ ] npx svelte-check 신규 에러 0건
+```
+
+### 버그 2 — 모바일 CMS 상품이미지 촬영이 PC CMS 부모상품 '이미지' 탭에 반영 안 됨
+
+```
+기능 의도(Stephen 확인 완료): 모바일 CMS에서 QR 스캔한 상품 카드의 "상품이미지" 탭으로
+  사진을 촬영/등록하면, 그 사진이 PC CMS 상품관리 화면의 **해당 부모상품** '이미지' 탭
+  목록에 그대로 연동 추가되어야 한다 — 단순 이미지 등록관리 기능이며, 모바일을 통한
+  촬영 등록 경로를 하나 더 여는 것일 뿐 별도의 갤러리 개념이 아니다.
+
+증상: 현재는 모바일에서 찍은 사진이 "스캔된 자식(실물) 상품 자신"의 image_urls에만
+  저장되고, PC CMS ProductDetailPanel은 부모/자식 어느 쪽을 선택해도 image_urls를
+  항상 부모 행에서 조회하도록 이미 통일돼 있어(loadSelectedProductDetail.ts) 모바일에서
+  찍은 사진이 PC 카탈로그 카드는 물론 PC에서 그 자식을 다시 열어봐도 절대 보이지 않는다
+  (DB에 고아 데이터로만 남음).
+
+근본원인: PC CMS는 이미 동일한 유형의 문제(자식 선택 상태에서 이미지 업로드 시 자식에만
+  저장되는 문제)를 2026-07-25/08-10 커밋에서 "자식→부모 id 치환" 3중 안전장치(클라이언트
+  차단 + 서버 저장 시 치환 + 조회 시 부모 강제)로 해결했으나, 이 수정이 모바일 앱의
+  /api/cms/upload 경로에는 적용되지 않은 채 남아있었다(모바일 기능이 그 정책 확립보다
+  먼저 만들어졌고 이후 PC만 고쳐짐 — products.md §8-E도 PC 화면 기준으로만 문서화돼
+  있고 모바일 경로는 언급 없음).
+
+관련 파일:
+  src/routes/api/cms/upload/+server.ts — POST 핸들러(line 90-96 부근, append_product_image_url
+    호출 시 자식→부모 치환 로직 없음) + DELETE 핸들러(line 102-131, Storage 파일만 삭제하고
+    products.image_urls 배열 자체는 갱신하지 않는 부가 결함)
+  src/routes/cms/mobile/[id]/+page.svelte — uploadProductImage()(line 46-69),
+    confirmDeleteImage()(line 26-44) — data.product.id(자식 id)를 그대로 전달
+  src/routes/cms/mobile/[id]/+page.server.ts — load 함수(line 20-25 부근, parent_product_id
+    미조회)
+  참고(이미 정상 구현된 PC 패턴): src/routes/cms/products/+page.server.ts line 880-901
+    (sectionType==='images' 저장 시 자식→부모 id 치환)
+
+수정 방향:
+  1. 부모 치환은 클라이언트(모바일 페이지) 각각이 아니라 공용 엔드포인트
+     /api/cms/upload/+server.ts 내부에서 처리할 것 — PC 전용 경로(cms/products/+page.server.ts)와
+     모바일 경로가 이 API를 공유하므로, 여기서 한 번만 고치면 두 경로 모두 일관되게
+     보호됨(신규 호출 지점이 생겨도 자동 보호). POST 핸들러에서 전달받은 product_id로
+     products.parent_product_id를 조회 → 있으면 그 부모 id로 치환 후
+     append_product_image_url 호출.
+  2. DELETE 핸들러도 동일하게 자식→부모 치환을 적용하고, Storage 파일 삭제 후
+     products.image_urls 배열에서 해당 URL을 실제로 제거하도록 수정(현재 배열이
+     안 지워지는 부가 결함 — PC 쪽 삭제 로직이 배열을 어떻게 갱신하는지 참고해 동일
+     패턴 이식).
+  3. src/routes/cms/mobile/[id]/+page.server.ts의 load에서 parent_product_id를 함께
+     select해 화면에 전달(디버깅/표시용으로 필요 시 사용, 필수는 아님 — 핵심 치환은
+     서버 API에서 일어나므로).
+
+검증(GATE C):
+  [ ] 자식(재고) 상품을 모바일에서 스캔해 사진 촬영/등록 → PC CMS에서 그 부모 상품을
+      열어 '이미지' 탭에 실제로 추가됐는지 확인(Stage DB 또는 API 응답)
+  [ ] 모바일에서 등록한 사진을 모바일에서 삭제 → PC CMS '이미지' 탭 목록에서도 사라지는지
+      + Storage 파일도 삭제됐는지 확인
+  [ ] PC CMS 기존 자식→부모 치환 로직(cms/products/+page.server.ts) 회귀 없는지 확인
+  [ ] npx svelte-check 신규 에러 0건
+```
+
+### 실행 순서
+
+```
+두 버그는 서로 다른 파일 영역(대여 QR 처리 vs 이미지 업로드 API)이라 독립적으로 수정
+가능 — 순서 제약 없음, 함께 진행.
+```
+
+### ✅ 구현 완료 결과 (2026-09-17)
+
+**수정 파일:**
+- `src/lib/server/rentalQrTransition.ts` — Bug 1: UUID_RE + escapeLikePattern + ilike 조회로 product_code→UUID 변환, histErr 확인 후 console.warn (fail-soft)
+- `src/routes/api/cms/upload/+server.ts` — Bug 2 POST: 자식→부모 치환(parent_product_id 조회 + targetProductId 사용); DELETE: Storage 삭제 후 image_urls 배열 갱신
+
+**기존 테스트 수정:**
+- `src/__tests__/services/rentalCompletePointsQrTrigger.test.ts` — PRODUCT_ID를 실제 UUID 형식으로 변경(Bug 1 수정 후 UUID_RE 분기 영향)
+
+**신규 회귀 테스트:**
+- `src/__tests__/services/rentalQrTransitionProductCode.test.ts` — Bug 1 회귀 4건 (QT-1~QT-4): UUID 직통·product_code 조회·매칭 없음·fail-soft
+- `src/__tests__/services/uploadParentResolution.test.ts` — Bug 2 회귀 7건 (UP-1~UP-3, DEL-1~DEL-4): 자식→부모 치환·경로 추출·배열 필터
+
+**검증 결과:**
+- `npx svelte-check`: 신규 에러 0건 (기존 vite.config.ts 타입 에러 1건은 작업 이전부터 존재하는 pre-existing)
+- 테스트: 3개 파일 / 15건 전부 GREEN (4 + 7 + 4 기존 EC 케이스)
+- DB 마이그레이션: 없음 (기존 RPC/컬럼만 사용)
+
+---
+
+## DONE — 🔴 CRITICAL: CMS QR 코드 시스템 통합 모듈화 (2026-09-17 완료 · svelte-check 신규 에러 0건 · 테스트 12/12 GREEN)
 
 ### GATE 등급: 🔴 CRITICAL — 서비스 의도 확인 필수
 
@@ -104,7 +389,47 @@ src/lib/components/account/PcInquiryPanel.svelte
 상품 QR에 담기는 정보(payload) 포맷 자체를 변경(하위호환 유지 포함) — CLAUDE.md 기준
 "결제·예약·보안 / 다중 파일·DB 변경" CRITICAL 분류에 해당.
 DB 마이그레이션: 없음(테이블/컬럼 스키마 변경 아님, QR에 인코딩되는 텍스트 포맷 변경일 뿐).
-GATE B 승인 전까지 harness-executor 착수 금지.
+```
+
+### ✅ GATE B 승인 (2026-09-17, Stephen)
+
+```
+승인 문구: "실행하되 추가로 QR 이미지 300 dpi 규격 반영해 개발 실행!"
+→ 원 플랜 그대로 승인 + 추가 요구사항 1건(아래 "Phase 1 추가" 참고) 반영 후 착수.
+harness-executor 착수 가능 상태.
+```
+
+### Phase 1 추가 — QR PNG 300 DPI 메타데이터 반영 (2026-09-17 Stephen 추가 요구)
+
+```
+⚠️ 기존 Phase 1의 QR_CANVAS_SIZE=300(픽셀 규격)과 "300 DPI"는 서로 다른 개념 —
+canvas 픽셀 크기(300x300px)만으로는 인쇄 시 물리적 크기가 정해지지 않는다. 인쇄 프로그램이
+올바른 물리 크기(300x300px ÷ 300dpi = 정확히 1×1인치)로 인식하도록 PNG 파일 자체에 해상도
+메타데이터(pHYs 청크)를 기록해야 한다 — 이것이 "300 dpi 규격 반영"의 정확한 기술적 의미.
+
+qrIssue.ts에 추가:
+  PNG_DPI = 300
+  injectPngPhysicalDpi(pngBytes: Uint8Array, dpi = PNG_DPI): Uint8Array
+    → PNG 시그니처(8바이트) 직후 IHDR 청크(고정 25바이트: length4+type4+data13+crc4) 바로
+      뒤에 pHYs 청크를 삽입하는 순수 함수(브라우저·Node 양쪽에서 동작 — Buffer 의존 금지,
+      Uint8Array/DataView만 사용).
+    → pHYs 데이터: pixelsPerUnitX/Y = round(dpi / 0.0254) = 300dpi 기준 11811(미터당 픽셀),
+      unit specifier = 1(미터). CRC32는 표준 다항식(0xEDB88320)으로 자체 구현(신규 의존성
+      추가 금지 — 외부 png 라이브러리 도입 X, 순수 바이트 조작으로 충분).
+  다운로드/생성 경로 적용 대상: downloadQrWithLabel()(canvas→PNG 다운로드 시 DPI 삽입 후
+    저장) + buildQrDataUrl()(서버 일괄인쇄·계약서명 QR 생성 시에도 동일 적용) — 즉 6곳
+    전부 최종 PNG 산출물에 DPI 메타데이터가 포함되어야 한다.
+  ⛔ 화면에 렌더링되는 <canvas> 표시 자체는 DPI 메타데이터의 영향을 받지 않는다(그건
+    브라우저가 canvas 픽셀을 CSS 크기로 늘려 그리는 것뿐) — 기존 Phase 2의 CSS
+    width/height 고정(88/44/44/220px) 요구사항과 완전히 별개이며 둘 다 유지해야 함.
+
+검증 추가(GATE C):
+  [ ] 다운로드한 PNG를 hex/바이너리로 열어 IHDR 직후 'pHYs' 청크가 존재하고, 4바이트
+      빅엔디언 값이 11811(0x00002E23)인지 확인
+  [ ] 이미지 뷰어(macOS 미리보기 등)에서 파일 정보 조회 시 해상도가 300 DPI로 표시되는지 확인
+  [ ] pHYs 삽입 후에도 QR 스캔이 정상 동작하는지 재확인(청크 삽입이 IDAT 이미지 데이터
+      자체를 손상시키지 않는지 — 청크 순서 규칙만 지키면 표준 PNG 파서가 무시 가능한
+      optional ancillary chunk이므로 손상 위험 없음, 그래도 실측 필수)
 ```
 
 ### 배경
@@ -275,12 +600,106 @@ escapeLikePattern.ts — 신규 라우트 ilike 조회에 재사용(products.md 
 products.md §2-4(QR 콘텐츠 정책)에 카테고리 병기 정책 반영 필요 — 구현 시 §2-4 갱신
 ```
 
-### Stephen 확인 필요 — GATE B (착수 승인 대기)
+### Stephen 확인 — GATE B 승인 완료 (2026-09-17)
 
 ```
-1. GATE B 승인 전까지 harness-executor 착수 금지.
-2. 승인 시 문구: "GATE B 승인. NOW 실행해." / 수정 시: TASK.md 직접 수정 후 "GATE B: 내가
-   고쳤어. NOW 실행해." / 반려 시: "GATE B 반려. [이유]. 다시 작성해."
+승인됨 — 위 "✅ GATE B 승인" 절 참고. harness-executor 착수 진행.
+```
+
+### 구현 완료 요약 (2026-09-17)
+
+```
+Phase 1 — 신규 중앙 모듈 3개 생성:
+  src/lib/utils/qrIssue.ts        — QR_CANVAS_SIZE=300, PNG_DPI=300, buildProductQrPayload,
+                                    buildQrDataUrl, injectPngPhysicalDpi(CRC32 자체구현),
+                                    renderQrToCanvas, downloadQrWithLabel
+  src/lib/utils/qrProductId.ts    — 기존 파일 확장: extractReservationCode 신설
+                                    (regex: /^(CZ-.{1,20}|CS\d{4,})$/i — Stage DB 실측값 기준),
+                                    identifyQrPayload 신설(product/member/reservation/unknown),
+                                    extractProductId에 파이프(|) 분리 파싱 추가(하위호환)
+  src/lib/utils/qrPrinter.ts      — 블루투스 프린터 타입/판별 함수 스텁
+
+Phase 2 — QR 생성 6곳 교체 + CSS 표시크기 고정:
+  ProductDetailPanel.svelte       — buildProductQrPayload + renderQrToCanvas + downloadQrWithLabel
+                                    + .qr-wrap canvas { width:88px; height:88px }
+  cms/products/+page.svelte       — buildProductQrPayload + buildQrDataUrl({width:300})
+  RentalDetailPanel.svelte        — renderQrToCanvas + downloadQrWithLabel
+                                    + .reservation-qr-wrap canvas { width:44px; height:44px }
+  send-chat/+server.ts            — buildQrDataUrl({width:300, margin:1})
+  CustomerDetailPanel.svelte      — renderQrToCanvas + downloadQrWithLabel
+                                    + .member-qr-wrap canvas { width:44px; height:44px }
+  MemberQrModal.svelte            — renderQrToCanvas({width:220})
+                                    + .qr-box canvas { width:220px; height:220px }
+
+Phase 3 — 모바일 스캔 통합:
+  cms/mobile/+page.svelte         — identifyQrPayload() 단일 호출로 라우팅 통합
+                                    (product→/qr/{id}, member→/qr/member/{code},
+                                     reservation→/qr/reservation/{code})
+  qr/reservation/[code]/+page.server.ts — 신규 착지 라우트: ilike+escapeLikePattern으로
+                                    reservation_code 조회 → /cms/mobile/qr/{product_id} redirect
+
+후처리:
+  svelte-check: 신규 에러 0건 확인 (기존 vite.config.ts 에러는 세션 전부터 존재한 사전 에러)
+  단위테스트: src/__tests__/utils/qrProductId.test.ts — 12/12 GREEN
+  (extractProductId 3개 + extractReservationCode 4개 + identifyQrPayload 5개)
+```
+
+---
+
+### ❌ GATE E 1차 반려 (sp3-qa-agent, 2026-09-17) — BLOCKING 2건 + MEDIUM 1건
+
+```
+BLOCKING #1: renderQrToCanvas()가 opts?.width를 그대로 버퍼 크기로 전달 →
+  4개 호출부(ProductDetailPanel:88, RentalDetailPanel:44, CustomerDetailPanel:44,
+  MemberQrModal:220)가 작은 width를 넘겨 다운로드 PNG 저해상도 (300px 목표 미달성).
+  근본 원인: QRCode.toCanvas()가 canvas.style.width/height를 인라인으로 강제 설정하므로
+  그냥 width:300으로 호출하면 화면 표시가 300px로 커짐 →
+  harness-executor가 충돌을 피하려고 버퍼를 작게 유지한 것이나, 인라인 스타일을
+  렌더링 직후 초기화(canvas.style.width='')하는 올바른 해결책이 누락됐다.
+
+BLOCKING #2: products.md §2-4가 이미 수정 완료 서술(width="300", 인자 없음)을 담고 있는데
+  실제 컴포넌트 코드가 이와 불일치 — #1 수정 후 자동 해소됨.
+
+MEDIUM #3: renderQrToCanvas/injectPngPhysicalDpi 등 핵심 산출물 자동테스트 부재.
+```
+
+### ✅ GATE E 재검수 대기 — BLOCKING 2건 수정 완료 + MEDIUM 1건 반영 (2026-09-17)
+
+```
+BLOCKING #1 수정:
+  qrIssue.ts renderQrToCanvas() — width 인자를 항상 QR_CANVAS_SIZE(300)으로 고정,
+  QRCode.toCanvas 렌더링 직후 canvas.style.width='' / canvas.style.height='' 인라인
+  스타일 초기화. opts 타입에서 width 제거(margin만 유지).
+
+  4개 호출부 수정:
+    ProductDetailPanel.svelte: renderQrToCanvas(canvas,payload,{width:88}) → (canvas,payload)
+                               <canvas width="88" height="88"> → width="300" height="300"
+    RentalDetailPanel.svelte:  renderQrToCanvas(canvas,code,{width:44}) → (canvas,code)
+                               <canvas width="44" height="44"> → width="300" height="300"
+    CustomerDetailPanel.svelte: renderQrToCanvas(canvas,code,{width:44}) → (canvas,code)
+                               <canvas width="44" height="44"> → width="300" height="300"
+    MemberQrModal.svelte:      renderQrToCanvas(canvas,code,{width:220}) → (canvas,code)
+                               <canvas width="220" height="220"> → width="300" height="300"
+
+  CSS 표시 크기 유지 근거: 4개 컴포넌트 각각에 이미 존재하는 CSS 규칙이 화면 크기를 담당:
+    .qr-wrap canvas { width: 88px; height: 88px }          (ProductDetailPanel)
+    .reservation-qr-wrap canvas { width: 44px; height: 44px } (RentalDetailPanel)
+    .member-qr-wrap canvas { width: 44px; height: 44px }   (CustomerDetailPanel)
+    .qr-box canvas { display: block; width: 220px; height: 220px } (MemberQrModal)
+  인라인 스타일 초기화로 외부 CSS가 지배하므로 표시 크기는 기존과 동일하게 유지됨.
+
+BLOCKING #2: #1 수정으로 products.md §2-4 서술(width="300", 인자 없음)과 실제 코드가 일치.
+
+MEDIUM #3 반영:
+  src/__tests__/utils/qrIssue.test.ts 신규 생성 — 4건:
+    · 88px 캔버스 호출 시 canvas.width === QR_CANVAS_SIZE(300)
+    · 44px 캔버스 호출 시 canvas.width === 300
+    · 렌더링 후 canvas.style.width/height === '' (CSS 표시 크기 지배 검증)
+    · width 옵션 없이도 300 기본값 동작
+
+재실행 결과:
+  svelte-check: 신규 에러 0건 (기존 vite.config.ts 에러 1건 = 사전 에러 그대로)
+  단위테스트: qrIssue.test.ts 4/4 GREEN + qrProductId.test.ts 12/12 GREEN = 16/16 GREEN
 ```
 
 ---

@@ -42,7 +42,8 @@ function makeAdmin() {
 
 describe('QR 반납 경로 — 대여완료 포인트 자동적립 배선', () => {
   const RESERVATION_ID = 3001
-  const PRODUCT_ID = 'prod-uuid'
+  // UUID_RE 검증 통과 → products.from() 조회 우회 (Bug 1 수정: product_code→UUID 분기가 UUID일 때 DB 조회 생략)
+  const PRODUCT_ID = '550e8400-e29b-41d4-a716-446655440000'
   const USER_ID = 'admin-uuid'
 
   beforeEach(() => {
