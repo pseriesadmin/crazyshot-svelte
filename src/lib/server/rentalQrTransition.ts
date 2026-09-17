@@ -5,6 +5,10 @@
 
 import { sendReservationLifecyclePush } from '$lib/server/push'
 import { awardRentalCompletePoints } from '$lib/server/awardRentalCompletePoints'
+import { escapeLikePattern } from '$lib/server/escapeLikePattern'
+
+// QR-CONTENT-1: UUID vs product_code 판별 (qr/[product_id]/+page.server.ts와 동일 정규식)
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type AnyClient = any
@@ -71,18 +75,38 @@ export async function processRentalQrTransition(
     } catch { /* 포인트 적립 실패는 무시 */ }
   }
 
-  // QR-3: 상품 이력 자동 기록 — 실패해도 메인 처리에 영향 없음
+  // QR-3: 상품 이력 자동 기록 — 실패해도 메인 처리에 영향 없음 (fail-soft)
+  // QR-CONTENT-1: productId가 product_code 텍스트(예: "CSCRDSL0010000")일 수 있으므로
+  // UUID가 아닌 경우 products 테이블에서 실제 UUID를 조회한 뒤 RPC에 전달한다.
+  // QR-CASE-1 준수: .ilike() + escapeLikePattern 사용(year_month='all' 소문자 혼입 대응).
   if (productId) {
     try {
-      const today = new Date().toISOString().slice(0, 10)
-      await admin.rpc('upsert_product_history_record', {
-        p_id: null,
-        p_product_id: productId,
-        p_recorded_date: today,
-        p_images: [],
-        p_user_id: userId,
-      })
-    } catch { /* 이력 기록 실패는 무시 */ }
+      let resolvedProductId = productId
+      if (!UUID_RE.test(productId)) {
+        const { data: pRow } = await admin
+          .from('products')
+          .select('id')
+          .ilike('product_code', escapeLikePattern(productId))
+          .is('deleted_at', null)
+          .maybeSingle()
+        resolvedProductId = (pRow as { id: string } | null)?.id ?? ''
+      }
+      if (resolvedProductId) {
+        const today = new Date().toISOString().slice(0, 10)
+        const { error: histErr } = await admin.rpc('upsert_product_history_record', {
+          p_id: null,
+          p_product_id: resolvedProductId,
+          p_recorded_date: today,
+          p_images: [],
+          p_user_id: userId,
+        })
+        if (histErr) {
+          console.warn('[rentalQrTransition] 상품이력 기록 실패:', histErr.message, '| productId:', resolvedProductId)
+        }
+      }
+    } catch (e) {
+      console.warn('[rentalQrTransition] 상품이력 기록 오류:', e instanceof Error ? e.message : e)
+    }
   }
 
   return { ok: true, newStatus }

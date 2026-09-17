@@ -61,9 +61,25 @@ export const POST: RequestHandler = async ({ request, locals }) => {
   }
 
   const admin = createClient(getSupabaseUrl(), env.SUPABASE_SERVICE_ROLE_KEY ?? '')
+
+  // 자식→부모 치환: 모바일에서 자식(재고 단위) product_id가 전달될 때 부모 기준으로 저장
+  // products.md §4-0: 이미지는 부모 상품이 등록관리 책임. PC CMS의 동일 정책(+page.server.ts
+  // sectionType==='images' 자식→부모 치환)을 공용 업로드 엔드포인트에도 동일하게 적용.
+  let targetProductId = productId
+  if (!productId.includes('/')) {
+    // 이력 업로드 경로({product_id}/history/...)가 아닌 일반 상품 이미지 업로드만 대상
+    const { data: parentCheck } = await admin
+      .from('products')
+      .select('parent_product_id')
+      .eq('id', productId)
+      .maybeSingle()
+    const parentId = (parentCheck as { parent_product_id: string | null } | null)?.parent_product_id
+    if (parentId) targetProductId = parentId
+  }
+
   const baseName = crypto.randomUUID()
-  const thumbPath = `${productId}/thumb_${baseName}.webp`
-  const largePath = `${productId}/large_${baseName}.webp`
+  const thumbPath = `${targetProductId}/thumb_${baseName}.webp`
+  const largePath = `${targetProductId}/large_${baseName}.webp`
 
   const [thumbBuf, largeBuf] = await Promise.all([
     thumbFile.arrayBuffer(),
@@ -87,10 +103,10 @@ export const POST: RequestHandler = async ({ request, locals }) => {
   const thumbUrl = admin.storage.from(BUCKET).getPublicUrl(thumbPath).data.publicUrl
   const largeUrl = admin.storage.from(BUCKET).getPublicUrl(largePath).data.publicUrl
 
-  // 이력 업로드(/history 경로)가 아닌 경우 products.image_urls에 append
+  // 이력 업로드(/history 경로)가 아닌 경우 products.image_urls에 append (부모 기준)
   if (!productId.includes('/')) {
     await admin.rpc('append_product_image_url', {
-      p_product_id: productId,
+      p_product_id: targetProductId,
       p_url: largeUrl,
     })
   }
@@ -119,6 +135,11 @@ export const DELETE: RequestHandler = async ({ request, locals }) => {
   const largePath = largeUrl.slice(prefix.length)
   const thumbPath = largePath.replace('/large_', '/thumb_')
 
+  // Storage 경로 첫 세그먼트 = 이미지가 저장된 product_id (부모 또는 자식)
+  // POST 수정 이후: 부모 id 폴더에 저장됨. 레거시: 자식 id 폴더.
+  // 어느 경우든 largePath의 첫 세그먼트가 실제 image_urls를 보유한 product 행을 가리킨다.
+  const pathProductId = largePath.split('/')[0]
+
   const admin = createClient(getSupabaseUrl(), env.SUPABASE_SERVICE_ROLE_KEY ?? '')
 
   // thumb + large 동시 삭제 (한쪽 실패해도 계속)
@@ -126,6 +147,27 @@ export const DELETE: RequestHandler = async ({ request, locals }) => {
     admin.storage.from(BUCKET).remove([largePath]),
     admin.storage.from(BUCKET).remove([thumbPath]),
   ])
+
+  // products.image_urls 배열에서 해당 URL 제거 (기존에는 Storage 파일만 삭제하고 DB 배열은 갱신 안 해 고아 URL이 남는 결함)
+  if (pathProductId && !pathProductId.includes('/')) {
+    try {
+      const { data: productRow } = await admin
+        .from('products')
+        .select('image_urls')
+        .eq('id', pathProductId)
+        .maybeSingle()
+      const currentUrls = (productRow as { image_urls: string[] } | null)?.image_urls ?? []
+      const updatedUrls = currentUrls.filter(u => u !== largeUrl)
+      if (updatedUrls.length !== currentUrls.length) {
+        await admin
+          .from('products')
+          .update({ image_urls: updatedUrls })
+          .eq('id', pathProductId)
+      }
+    } catch (e) {
+      console.warn('[upload DELETE] image_urls 배열 갱신 실패:', e instanceof Error ? e.message : e)
+    }
+  }
 
   return json({ deleted: true })
 }
