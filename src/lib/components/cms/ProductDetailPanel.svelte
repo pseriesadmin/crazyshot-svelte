@@ -12,6 +12,7 @@
   import CmsSimilarNameInput from '$lib/components/cms/CmsSimilarNameInput.svelte'
   import CmsDragList from '$lib/components/cms/CmsDragList.svelte'
   import { productSearchOrFilter } from '$lib/utils/similarNameSuggest'
+  import { buildProductQrPayload, renderQrToCanvas, downloadQrWithLabel } from '$lib/utils/qrIssue'
 
   interface PriceRule {
     duration_type: string
@@ -400,12 +401,13 @@
     }
   }
 
-  // QR 코드 렌더링 — QR-CONTENT-1: product_code를 QR 콘텐츠로 사용
+  // QR 코드 렌더링 — QR-CONTENT-1: 신버전 payload={product_code}|{category}
   $effect(() => {
-    const qr = product.product_code
+    const code = product.product_code
     const canvas = canvasEl
-    if (!qr || !canvas) return
-    renderQR(canvas, qr)
+    if (!code || !canvas) return
+    const payload = buildProductQrPayload(code, product.category ?? '')
+    renderQrToCanvas(canvas, payload)
   })
 
   // initialTab='history'로 패널 열릴 때 자동 로드
@@ -415,50 +417,10 @@
     }
   })
 
-  async function renderQR(canvas: HTMLCanvasElement, payload: string) {
-    try {
-      const QRCode = (await import('qrcode')).default
-      await QRCode.toCanvas(canvas, payload, {
-        width: 88,
-        margin: 1,
-        color: { dark: '#100B32', light: '#FFFFFF' },
-      })
-    } catch { /* 미설치 시 무시 */ }
-  }
-
   function downloadQR() {
     if (!canvasEl) return
     const code = product.product_code
-    if (!code) {
-      // 품번 없으면 QR만 저장
-      const a = document.createElement('a')
-      a.href = canvasEl.toDataURL('image/png')
-      a.download = `qr-${product.slug}.png`
-      a.click()
-      return
-    }
-    // 품번 텍스트를 QR 아래에 합성해서 저장
-    const qrSize = canvasEl.width
-    const fontSize = 11
-    const padding = 6
-    const textH = fontSize + padding * 2
-    const out = document.createElement('canvas')
-    out.width = qrSize
-    out.height = qrSize + textH
-    const ctx = out.getContext('2d')
-    if (!ctx) return
-    ctx.fillStyle = '#FFFFFF'
-    ctx.fillRect(0, 0, out.width, out.height)
-    ctx.drawImage(canvasEl, 0, 0)
-    ctx.fillStyle = '#100B32'
-    ctx.font = `700 ${fontSize}px "Noto Sans KR", sans-serif`
-    ctx.textAlign = 'center'
-    ctx.textBaseline = 'middle'
-    ctx.fillText(code, qrSize / 2, qrSize + textH / 2)
-    const a = document.createElement('a')
-    a.href = out.toDataURL('image/png')
-    a.download = `qr-${code}.png`
-    a.click()
+    downloadQrWithLabel(canvasEl, code ?? null, `qr-${code ?? product.slug}.png`)
   }
 
   function formatPrice(p: number | null): string {
@@ -1358,7 +1320,7 @@
       <!-- QR-CONTENT-1: product_code를 QR 콘텐츠로 사용 -->
       <div class="qr-wrap">
         {#if product.product_code}
-          <canvas bind:this={canvasEl} width="88" height="88" aria-label="상품 QR 코드"></canvas>
+          <canvas bind:this={canvasEl} width="300" height="300" aria-label="상품 QR 코드"></canvas>
           <button class="qr-dl-btn" onclick={downloadQR} title="QR PNG 다운로드" type="button">↓ QR 저장</button>
         {:else}
           <div class="qr-placeholder" aria-label="품번 발급 후 QR 생성 가능">QR</div>
@@ -2879,7 +2841,7 @@
     align-items: center;
     gap: 4px;
   }
-  .qr-wrap canvas { display: block; border-radius: var(--cms-radius-sm); border: 1px solid var(--cs-surface-gray); }
+  .qr-wrap canvas { display: block; width: 88px; height: 88px; border-radius: var(--cms-radius-sm); border: 1px solid var(--cs-surface-gray); }
   .qr-dl-btn {
     background: transparent; border: none;
     color: var(--cs-text-light); font: var(--text-pc-script-12);

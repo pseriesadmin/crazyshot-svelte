@@ -4,6 +4,7 @@
   import { csToast } from '$lib/utils/toast'
   import { supabase } from '$lib/services/supabase'
   import { validateUploadFile } from '$lib/utils/fileValidation'
+  import { renderQrToCanvas, downloadQrWithLabel } from '$lib/utils/qrIssue'
   // CustomerRow 타입을 인라인으로 정의 (circular import 방지)
   interface CustomerRow {
     user_id: string
@@ -108,44 +109,13 @@
     const canvas = qrCanvasEl
     const code = row.member_code
     if (!canvas || !code) return
-    renderMemberQR(canvas, `/qr/member/${code}`)
+    renderQrToCanvas(canvas, `/qr/member/${code}`)
   })
-
-  async function renderMemberQR(canvas: HTMLCanvasElement, payload: string) {
-    try {
-      const QRCode = (await import('qrcode')).default
-      await QRCode.toCanvas(canvas, payload, {
-        width: 44,
-        margin: 1,
-        color: { dark: '#100B32', light: '#FFFFFF' },
-      })
-    } catch { /* 미설치 시 무시 */ }
-  }
 
   function downloadMemberQR() {
     if (!qrCanvasEl || !row.member_code) return
     const code = row.member_code
-    const qrSize = qrCanvasEl.width
-    const fontSize = 11
-    const padding = 6
-    const textH = fontSize + padding * 2
-    const out = document.createElement('canvas')
-    out.width = qrSize
-    out.height = qrSize + textH
-    const ctx = out.getContext('2d')
-    if (!ctx) return
-    ctx.fillStyle = '#FFFFFF'
-    ctx.fillRect(0, 0, out.width, out.height)
-    ctx.drawImage(qrCanvasEl, 0, 0)
-    ctx.fillStyle = '#100B32'
-    ctx.font = `700 ${fontSize}px "Noto Sans KR", sans-serif`
-    ctx.textAlign = 'center'
-    ctx.textBaseline = 'middle'
-    ctx.fillText(code, qrSize / 2, qrSize + textH / 2)
-    const a = document.createElement('a')
-    a.href = out.toDataURL('image/png')
-    a.download = `member-qr-${code}.png`
-    a.click()
+    downloadQrWithLabel(qrCanvasEl, code, `member-qr-${code}.png`)
   }
 
   interface CsInquiryReply {
@@ -942,7 +912,7 @@
     </div>
     {#if row.member_code}
       <div class="member-qr-wrap member-qr-wrap--header">
-        <canvas bind:this={qrCanvasEl} width="44" height="44" aria-label="회원 QR 코드"></canvas>
+        <canvas bind:this={qrCanvasEl} width="300" height="300" aria-label="회원 QR 코드"></canvas>
         <button class="qr-dl-btn" onclick={downloadMemberQR} title="QR PNG 다운로드" type="button">↓ QR 저장</button>
       </div>
     {/if}
@@ -2051,7 +2021,7 @@
     align-items: center;
     gap: 4px;
   }
-  .member-qr-wrap canvas { display: block; border-radius: var(--cms-radius-sm); border: 1px solid var(--cs-surface-gray); }
+  .member-qr-wrap canvas { display: block; width: 44px; height: 44px; border-radius: var(--cms-radius-sm); border: 1px solid var(--cs-surface-gray); }
   .member-qr-wrap .qr-dl-btn {
     background: transparent; border: none;
     color: var(--cs-text-light); font: var(--text-pc-script-12);

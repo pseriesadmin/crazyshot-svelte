@@ -133,27 +133,42 @@ await admin.rpc('generate_product_code', {
 > 전용이라 `product_code_format`을 직접 편집할 수 있는 CMS 화면은 아직 없다(분리 시점 값으로
 > 고정, 필요 시 별도 관리 화면 신설 검토).
 
-### 2-4. QR 콘텐츠 — URL이 아니라 품번(product_code) 원문
+### 2-4. QR 콘텐츠 — URL이 아니라 품번(product_code) 원문 + 카테고리 병기 (2026-09-17 갱신)
 
 ```
 ❌ 예전 정책(폐기): QR = 'https://crazyshot.kr/qr/product/' || id
-✅ 현재 정책: QR = product.product_code 원문 텍스트 그대로 (링크 아님)
+✅ 현재 정책(신버전): QR = `${product_code}|${category}` (파이프 구분자로 카테고리 병기)
+✅ 구버전 스캔 하위호환: QR = product_code 원문 텍스트만 (파이프 없음 — 기존 인쇄 QR 그대로 동작)
 
 이유(Stephen): "QR 코드 자체 내에 상품품번이 담겨있어야 함. 링크값은 굳이 필요 없음 —
-링크가 변동될 수도 있음."
+링크가 변동될 수도 있음." (원 정책 유지)
+카테고리 추가 이유(2026-09-17): 스캔 시 카테고리 정보를 바로 알 수 있어 반출입 흐름에서
+의사결정이 빨라짐. DB 조회 없이도 상품 계열을 즉시 파악 가능.
+
+파이프 페이로드 정책:
+  · 생성 함수: buildProductQrPayload(productCode, category) → `${productCode}|${category}`
+    (src/lib/utils/qrIssue.ts, 2026-09-17 신설)
+  · 상품 QR 생성 지점 전부(ProductDetailPanel·일괄인쇄·향후 신규 지점 포함)는 이 함수 경유
+  · 예약·회원·계약서명 QR은 payload 포맷 무변경(파이프 미사용)
+
+파싱 하위호환 정책 (extractProductId, src/lib/utils/qrProductId.ts):
+  · 파이프(|) 있음 → 첫 파이프 앞부분만 product_code로 추출 (신버전)
+  · 파이프 없음 → 기존 분기 그대로 통과 (구버전 원문·URL 패턴 모두 정상 동작)
+  ⛔ 구버전 QR 스티커를 재발행할 필요 없음 — 스캔 측에서 투명하게 처리됨
 ```
 
 ```svelte
-<!-- ProductDetailPanel.svelte — renderQR/downloadQR -->
+<!-- ProductDetailPanel.svelte — renderQrToCanvas/downloadQrWithLabel (2026-09-17 이후) -->
 <!-- 자식 패널: {#if isChildProduct} 블록에서만 QR 캔버스 렌더링 -->
 {#if isChildProduct}
   {#if product.product_code}
-    <canvas bind:this={canvasEl} width="88" height="88"></canvas>
+    <canvas bind:this={canvasEl} width="300" height="300"></canvas>  <!-- 버퍼 300×300 -->
     <button onclick={downloadQR}>↓ QR 저장</button>
   {:else}
     <div class="qr-placeholder">QR</div>  <!-- 자식인데 아직 채번 안 됨 -->
   {/if}
 {/if}
+<!-- CSS: .qr-wrap canvas { width:88px; height:88px } — 화면 표시크기는 88px 고정 유지 -->
 ```
 
 > ⛔ **BND-7 폐기(QR-HIDE-1, 2026-08-XX 확정)**: 부모는 실물 재고 단위가 아니므로 QR을 **표시하지
@@ -181,24 +196,35 @@ await admin.rpc('generate_product_code', {
 > 없는) 상품은 이번 수정과 무관 — 기존 마스킹 그대로.
 
 ```typescript
-// QR $effect — product_code 기준
+// QR $effect — buildProductQrPayload 기준 (2026-09-17 이후)
 $effect(() => {
-  const qr = product.product_code
+  const payload = product.product_code
+    ? buildProductQrPayload(product.product_code, product.category)
+    : null
   const canvas = canvasEl
-  if (!qr || !canvas) return
-  renderQR(canvas, qr)
+  if (!payload || !canvas) return
+  renderQrToCanvas(canvas, payload)
 })
 ```
 
-**모바일 스캐너 하위호환**: `src/routes/cms/mobile/+page.svelte`의 `extractProductId()`는
-스캔 원문이 기존 URL 패턴(`.../qr/product/{uuid}`)이면 그 방식대로 파싱하고, 아니면 원문 자체를
-품번으로 취급 — 과거에 인쇄된 URL 기반 QR 스티커도 계속 정상 동작한다.
+**모바일 스캐너 하위호환**: `src/routes/cms/mobile/+page.svelte`의 `identifyQrPayload()`는
+(1) 파이프 포함 신버전(`CSCRDSL0010000|LENS`) → product 타입, product_code 부분만 추출,
+(2) 파이프 없는 구버전 순수 품번(`CSCRDSL0010000`) → product 타입, 원문 그대로,
+(3) 기존 URL 패턴(`.../qr/product/{uuid}`) → product 타입, uuid 추출,
+(4) 예약코드(`CS2609001`, `CZ-xxxxx`) → reservation 타입, 신규 라우트로 라우팅,
+(5) 회원코드(`/qr/member/{code}`) → member 타입으로 각각 판별한다.
 `src/routes/cms/mobile/qr/[product_id]/+page.server.ts`도 파라미터가 UUID 형식이 아니면
 product_code로 재조회하는 폴백을 갖고 있다(`/qr/[entity]/[id]/+server.ts`와 동일 패턴).
 
 > `qr_payload` 컬럼과 그 생성 로직(`https://crazyshot.kr/qr/product/{id}` 형식)은 삭제하지
 > 않고 그대로 유지된다 — 단지 화면에 렌더링/인쇄되는 값이 아닐 뿐이다. `qr_payload` UNIQUE
 > 제약 추가(BND-13)는 이제 불필요 판정(product_code가 이미 UNIQUE 보장).
+
+**PNG 300 DPI 메타데이터 (2026-09-17 추가)**: 다운로드(`downloadQrWithLabel`) 및 서버
+생성(`buildQrDataUrl`) 경로 모두 PNG 출력 시 pHYs 청크를 삽입한다(`injectPngPhysicalDpi`,
+`src/lib/utils/qrIssue.ts`). pHYs 값: 11811 pixels/meter(≈300 DPI), unit=1(metric).
+CRC32는 외부 라이브러리 없이 자체 구현(다항식 0xEDB88320, Uint8Array/DataView 전용 — Node
+Buffer 미사용). 화면 표시 canvas에는 영향 없음(CSS 고정값이 표시 크기를 결정함).
 
 ### 2-5. 코드 이관(`/cms/codes` `transferCode`, superadmin 전용) — 카테고리만 이동, 품번은 절대 불변
 

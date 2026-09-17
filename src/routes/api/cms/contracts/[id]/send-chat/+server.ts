@@ -10,6 +10,7 @@ import { checkIssuerSignatureRequired } from '$lib/contract-signature/issuerSign
 import { sendPushToUser } from '$lib/server/push'
 import { isContractIssueBlocked } from '$lib/utils/contractIssueGuard'
 import { findUnresolvedVariables, applyDocumentQrMarker } from '$lib/utils/contract-substitution'
+import { buildQrDataUrl } from '$lib/utils/qrIssue'
 
 export const POST: RequestHandler = async ({ params, locals, url }) => {
   const cmsRole = await getCmsRoleForAction(locals)
@@ -128,8 +129,7 @@ export const POST: RequestHandler = async ({ params, locals, url }) => {
   // html_document에 되구워 넣는다 — 실패해도 발송 자체는 막지 않는 fail-soft.
   if (contract.authoring_mode === 'html' && typeof contract.html_document === 'string') {
     try {
-      const QRCode = (await import('qrcode')).default
-      const qrDataUrl = await QRCode.toDataURL(signingUrl, { width: 200, margin: 1 })
+      const qrDataUrl = await buildQrDataUrl(signingUrl, { width: 300, margin: 1 })
       const bakedHtml = applyDocumentQrMarker(contract.html_document, qrDataUrl)
       if (bakedHtml !== contract.html_document) {
         await admin

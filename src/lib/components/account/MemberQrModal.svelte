@@ -14,6 +14,8 @@
 
   let { open, memberCode, userName, onclose }: Props = $props()
 
+  import { renderQrToCanvas } from '$lib/utils/qrIssue'
+
   let canvasEl = $state<HTMLCanvasElement | null>(null)
   let dialogEl = $state<HTMLDivElement | null>(null)
 
@@ -24,19 +26,8 @@
   $effect(() => {
     const canvas = canvasEl
     if (!open || !canvas || !memberCode) return
-    renderQR(canvas, `/qr/member/${memberCode}`)
+    renderQrToCanvas(canvas, `/qr/member/${memberCode}`)
   })
-
-  async function renderQR(canvas: HTMLCanvasElement, payload: string) {
-    try {
-      const QRCode = (await import('qrcode')).default
-      await QRCode.toCanvas(canvas, payload, {
-        width: 220,
-        margin: 1,
-        color: { dark: '#100B32', light: '#FFFFFF' },
-      })
-    } catch { /* 미설치 시 무시 */ }
-  }
 
   function handleKeydown(e: KeyboardEvent) {
     if (e.key === 'Escape') onclose()
@@ -68,7 +59,7 @@
 
       {#if memberCode}
         <div class="qr-box">
-          <canvas bind:this={canvasEl} width="220" height="220" aria-label="회원 확인 QR 코드"></canvas>
+          <canvas bind:this={canvasEl} width="300" height="300" aria-label="회원 확인 QR 코드"></canvas>
         </div>
         <p class="member-name">{userName}</p>
         <code class="member-code">{memberCode}</code>
@@ -141,7 +132,7 @@
     border: 1px solid var(--cs-lilac);
     border-radius: var(--radius-lg);
   }
-  .qr-box canvas { display: block; }
+  .qr-box canvas { display: block; width: 220px; height: 220px; }
 
   .member-name { font: var(--text-m-body-16B); color: var(--cs-text); margin: 4px 0 0; }
   .member-code { font: var(--text-m-script-14B); color: var(--cs-text-mid); letter-spacing: 0.02em; }

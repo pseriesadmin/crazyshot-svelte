@@ -11,6 +11,7 @@
   import { csToast } from '$lib/utils/toast'
   import type { SelectedProductDetail } from '$lib/server/products/loadSelectedProductDetail'
   import { baseCodeDisplay } from '$lib/utils/baseCodeDisplay'
+  import { buildProductQrPayload, buildQrDataUrl } from '$lib/utils/qrIssue'
 
   interface Props { data: PageData }
   let { data }: Props = $props()
@@ -320,15 +321,14 @@
       csToast.warning('품번이 발행된 항목을 선택하세요.')
       return
     }
-    const QRCode = (await import('qrcode')).default
+    const parentCategory = activeDetail.rootProduct?.category ?? ''
     const items: Array<{ code: string; dataUrl: string }> = await Promise.all(
       selected.map(async (u: { id: string; product_code: string | null }) => ({
         code: u.product_code!,
-        dataUrl: await QRCode.toDataURL(u.product_code!, {
-          width: 160,
-          margin: 2,
-          color: { dark: '#100B32', light: '#FFFFFF' },
-        }),
+        dataUrl: await buildQrDataUrl(
+          buildProductQrPayload(u.product_code!, parentCategory),
+          { width: 300, margin: 2 },
+        ),
       }))
     )
     const html = `<!DOCTYPE html>
