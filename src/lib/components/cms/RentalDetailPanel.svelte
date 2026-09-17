@@ -13,6 +13,7 @@
   import ReservationProductFinderModal from '$lib/components/cms/ReservationProductFinderModal.svelte'
   import type { FinderSelectedProduct } from '$lib/components/cms/ReservationProductFinderModal.svelte'
   import SuggestPicker from '$lib/components/common/SuggestPicker.svelte'
+  import { renderQrToCanvas, downloadQrWithLabel } from '$lib/utils/qrIssue'
 
   interface RentalListRow {
     reservation_id:    number
@@ -837,44 +838,13 @@
     const canvas = reservationQrCanvasEl
     const code = reservationCode()
     if (!canvas || !code) return
-    renderReservationQR(canvas, code)
+    renderQrToCanvas(canvas, code)
   })
-
-  async function renderReservationQR(canvas: HTMLCanvasElement, payload: string) {
-    try {
-      const QRCode = (await import('qrcode')).default
-      await QRCode.toCanvas(canvas, payload, {
-        width: 44,
-        margin: 1,
-        color: { dark: '#100B32', light: '#FFFFFF' },
-      })
-    } catch { /* 미설치 시 무시 */ }
-  }
 
   function downloadReservationQR() {
     if (!reservationQrCanvasEl) return
     const code = reservationCode()
-    const qrSize = reservationQrCanvasEl.width
-    const fontSize = 11
-    const padding = 6
-    const textH = fontSize + padding * 2
-    const out = document.createElement('canvas')
-    out.width = qrSize
-    out.height = qrSize + textH
-    const ctx = out.getContext('2d')
-    if (!ctx) return
-    ctx.fillStyle = '#FFFFFF'
-    ctx.fillRect(0, 0, out.width, out.height)
-    ctx.drawImage(reservationQrCanvasEl, 0, 0)
-    ctx.fillStyle = '#100B32'
-    ctx.font = `700 ${fontSize}px "Noto Sans KR", sans-serif`
-    ctx.textAlign = 'center'
-    ctx.textBaseline = 'middle'
-    ctx.fillText(code, qrSize / 2, qrSize + textH / 2)
-    const a = document.createElement('a')
-    a.href = out.toDataURL('image/png')
-    a.download = `qr-${code}.png`
-    a.click()
+    downloadQrWithLabel(reservationQrCanvasEl, code, `qr-${code}.png`)
   }
 
   const NOTIFY_TYPE_MAP: Record<string, string> = {
@@ -1276,7 +1246,7 @@
         </form>
       {/if}
       <div class="reservation-qr-wrap">
-        <canvas bind:this={reservationQrCanvasEl} width="44" height="44" aria-label="예약 QR 코드"></canvas>
+        <canvas bind:this={reservationQrCanvasEl} width="300" height="300" aria-label="예약 QR 코드"></canvas>
         <button class="qr-dl-btn" onclick={downloadReservationQR} title="QR PNG 다운로드" type="button">↓ QR 저장</button>
       </div>
       <button class="close-btn" onclick={onclose} aria-label="패널 닫기">✕</button>
@@ -2639,7 +2609,7 @@
     align-items: center;
     gap: 4px;
   }
-  .reservation-qr-wrap canvas { display: block; border-radius: var(--cms-radius-sm); border: 1px solid var(--cs-surface-gray); }
+  .reservation-qr-wrap canvas { display: block; width: 44px; height: 44px; border-radius: var(--cms-radius-sm); border: 1px solid var(--cs-surface-gray); }
   .reservation-qr-wrap .qr-dl-btn {
     background: transparent; border: none;
     color: var(--cs-text-light); font: var(--text-pc-script-12);
