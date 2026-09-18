@@ -420,7 +420,7 @@
   function downloadQR() {
     if (!canvasEl) return
     const code = product.product_code
-    downloadQrWithLabel(canvasEl, code ?? null, `qr-${code ?? product.slug}.png`)
+    downloadQrWithLabel(canvasEl, null, `qr-${code ?? product.slug}.png`)
   }
 
   function formatPrice(p: number | null): string {

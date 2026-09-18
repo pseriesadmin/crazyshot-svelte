@@ -844,7 +844,7 @@
   function downloadReservationQR() {
     if (!reservationQrCanvasEl) return
     const code = reservationCode()
-    downloadQrWithLabel(reservationQrCanvasEl, code, `qr-${code}.png`)
+    downloadQrWithLabel(reservationQrCanvasEl, null, `qr-${code}.png`)
   }
 
   const NOTIFY_TYPE_MAP: Record<string, string> = {
