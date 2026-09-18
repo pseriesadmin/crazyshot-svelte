@@ -1,6 +1,172 @@
 # .claude/harness/TASK.md
 
-## DONE — 🟡 BOUNDARY: 장바구니 달력 "배송 휴무일" 시각 표시 2종 추가 — 숫자 취소선 + 법정공휴일 원형 배경 (2026-09-19, 이 세션'만', GATE E 검수 대기)
+## DONE — 🔴 CRITICAL: set_reservation_shipment_method 휴무일 포함 배송 연장 재계산 누락 결함 수정 (Migration #508, 2026-09-19, 이 세션'만', ✅ GATE E 통과 — sp3-qa-agent 독립검수 완료(BLOCKING 0건, MEDIUM 1건·LOW 3건 — 전부 비차단), git commit만 Stephen 대기)
+
+### 배경
+
+Stephen이 장바구니 약정요금 영역(선택영역)을 보고 "휴무일 포함 예약인데 대여요금에 50%
+연장요금(rental-fee-policy.md §5)이 반영 안 된 것 같다"고 보고 — 요금 연산 로직 검증 요청.
+
+조사(서버 SQL 전문 + Stage DB 실데이터 대조) 결과, 근본 원인 확인:
+```
+상품상세 "예약하기" 흐름은 예약을 먼저 방식(수령/반납) 없이(NULL) create_hold_reservation로
+생성하고, 실제 방식은 그 다음 set_reservation_shipment_method가 별도로 저장한다. 이
+함수가 지금까지 pickup_method/return_method 컬럼만 갱신할 뿐 compute_holiday_extended_
+period를 단 한 번도 재호출하지 않아, pickup_holiday_extra_days/return_holiday_extra_days가
+항상 0으로 남아있었다. 실제 결제금액 정본 compute_reservation_line_amount는 이 두 컬럼만
+그대로 읽어 holiday_extra_fee를 계산하므로, "크레이지배송"(courier-dependent 유일 방식)을
+선택해도 50% 연장요금이 실제로는 단 한 번도 청구된 적이 없었다 — Stage DB에서 해당
+방식을 쓴 최근 예약 15건 전부 이 컬럼이 0임을 실측 확인.
+
+부수 문제(더 심각): create_hold_reservation의 재고잠금(daterange 겹침 조회)도 연장 반영
+범위 기준으로 동작하는데, 방식이 나중에 정해지는 이 흐름에서는 start_date/end_date 자체가
+연장 전(원래 요청) 날짜로 저장돼 그 여분 날짜만큼 재고가 잠기지 않는 상태였다(동일 실물
+재고가 여분 날짜에 이중배정될 수 있는 위험).
+```
+
+Stephen 확인 후(CRITICAL, 서비스 의도 확인 완료) 이번 세션에서 즉시 수정 진행.
+
+### 구현 내용
+
+```
+Migration #508(20260919000000) — set_reservation_shipment_method CREATE OR REPLACE(11-param
+  그대로, DROP 없음 → 기존 GRANT/REVOKE 보존):
+  호출마다 "현재 저장값에서 이전 연장분을 되돌려 원래 요청 날짜 복원 → 새 방식 기준
+  compute_holiday_extended_period 재계산 → start_date/end_date/pickup_holiday_extra_days/
+  return_holiday_extra_days 함께 갱신" — 방식을 여러 번 바꿔도 연장이 누적되지 않음(멱등).
+  재계산된 범위가 넓어지면 같은 실물 재고(product_id)를 쓰는 다른 활성 예약과 겹치는지
+  재확인해(create_hold_reservation과 동일 daterange 겹침 조건) 겹치면 RAISE EXCEPTION으로
+  방식 변경 자체를 차단(이중배정 안전판).
+
+TDD(RED→GREEN): src/__tests__/services/setReservationShipmentMethodHolidayExtension.test.ts
+  신규(Stage 라이브 통합테스트, ephemeral session 패턴) — "월요일 수령"(전날=일요일, 항상
+  휴무)으로 특정 공휴일 데이터에 의존하지 않는 결정적 재현. EC-1(연장 재계산)·EC-2(방식
+  되돌리면 정확히 복구)·EC-3(같은 방식 재호출해도 누적 안 됨)·EC-4(courier-dependent 아닌
+  방식은 연장 없음) 4건 — 수정 전 RED(3건 실패) 확인 후 마이그레이션 적용, GREEN(4/4) 확인.
+
+배포: Stage(ezyvffjvuwmtuhpxdjrw) 적용·TDD 4/4 GREEN 확인 → Production(vnbpmvxruyciuuaermyh)
+  적용(Supabase MCP apply_migration, project_id 매 호출 직접 재확인).
+
+Production 실데이터 영향 확인(Stephen 요청, 2차 확인사항):
+  이미 결제된(payment_confirmed_at NOT NULL) 예약 중 영향받은 건 0건(실손실 없음).
+  결제 전 예약 1건(id=132, 9/23~24 수령/반납 모두 크레이지배송) 발견 — 버그가 살아있던
+  시점에 저장된 값이라 이번 로직 수정만으로는 자동 반영 안 됨(재계산은 방식을 다시
+  지정할 때만 트리거됨). Stephen 확인 후 compute_holiday_extended_period 결과로 해당
+  행을 직접 보정(end_date 09-24→09-27, return_holiday_extra_days 0→3) +
+  연결된 주문(order_id=28)에 sync_order_after_composition_change(28) 재호출로
+  holiday_extra_fee 0→20,000원, final_amount 26,600→46,600원 정상 반영 확인.
+```
+
+### 파일 변경 목록
+
+```
+supabase/migrations/20260919000000_508_set_reservation_shipment_method_holiday_extension_fix.sql (신규)
+src/__tests__/services/setReservationShipmentMethodHolidayExtension.test.ts (신규)
+DB 데이터 보정(코드 아님): Production rental_reservations.id=132, orders.id=28
+```
+
+### 검증
+
+```
+- TDD: setReservationShipmentMethodHolidayExtension.test.ts 4/4 GREEN(마이그레이션 적용 전
+  RED 3건 확인 완료) + 기존 holidayExtensionFee.test.ts(23) ·
+  createHoldReservationWithShipment.test.ts(5) 회귀 없음 — 3개 파일 합계 32/32 GREEN
+- Production 히스토리 점검: 결제완료 건 중 영향 0건, 미결제 1건(id=132) 발견해 직접 보정
+- Stage·Production 양쪽 적용 순서 준수(project_id 매 호출 직접 확인)
+```
+
+### 별도 발견(이번 수정과 무관, 범위 밖 — 후속 확인 필요)
+
+```
+set_reservation_shipment_method에 anon(비로그인) EXECUTE 권한이 남아있음(Stage 확인) —
+Migration #477(REVOKE anon)이 이후 #479의 DROP+CREATE(파라미터 확장)로 초기화된 뒤
+재하드닝이 누락된 것으로 추정(security-auth.md에 반복 기록된 "새 함수 객체는 구버전 권한을
+물려받지 못함" 패턴과 일치). 함수 내부가 auth.uid() 기준으로 대상 행을 걸러 실제 데이터
+위험은 낮으나(비로그인 시 대상 0건), 원칙적으로는 REVOKE 재적용이 필요 — 이번 CRITICAL
+수정 범위 밖이라 손대지 않고 발견만 기록.
+```
+
+### @sp3-qa-agent 검수 결과 — GATE E 통과 ✅ (BLOCKING 0건)
+
+```
+Stage 라이브 재현으로 직접 검증(코드 정독에 그치지 않음):
+  Q1(연장 되돌리기 비대칭 케이스) — (양쪽courier→pickup만) · (pickup만→양쪽courier) 두
+    경로 모두 재현, 최종 결과가 경로 독립적(path-independent)으로 항상 올바르게 수렴함을
+    확인.
+  Q2(이중배정 안전판) — 실제로 경쟁 예약을 만들어 holiday_extension_conflict 예외가
+    정확히 발동하고 대상 행이 완전 무변경(원자적)임을 확인.
+  Q3(anon EXECUTE 권한) — 실측 재확인, 원인도 특정(Migration #477 REVOKE가 9-param
+    대상이었는데 #479가 DROP+CREATE로 11-param 신규 생성하며 초기화·재하드닝 누락,
+    2026-09-10부터 존재 — 이번 #508 CREATE OR REPLACE와 무관, 악화도 없음). 별도 후속
+    REVOKE 마이그레이션 권장(MEDIUM).
+  Q4(동시성) — Promise.all 동시 호출 3회 반복, FOR UPDATE 직렬화 정상 확인.
+  Q5(Production 데이터 보정 부작용) — 트리거·알림 경로 전수 확인 결과 부작용 경로 없음
+    (status 컬럼 무변경이라 AUTO_NOTIFY 미발동). Production 재조회 자격증명 없어 Stephen
+    보고값 신뢰로 마무리(LOW, 방법론적 한계).
+  Q6(TDD 안전성) — 반복 실행으로 충돌·잔존 없음 확인. ephemeral session cleanup 등록
+    타이밍(로그인 성공 이후)이 로그인 실패 극단 케이스에서 정리 누락 가능 — 기존
+    createHoldReservationWithShipment.test.ts와 동일 패턴(LOW, 이번 신규 결함 아님).
+
+MEDIUM 1건 / LOW 3건 전부 비차단:
+  1(MEDIUM) anon EXECUTE 권한 잔존 — 별도 후속 REVOKE 태스크 권장.
+  2(LOW) products/[id]/+page.svelte — set_reservation_shipment_method 실패(신규
+    holiday_extension_conflict 포함)가 체크아웃을 막지 않고 토스트만 띄워, 극히 드문
+    재고충돌 시 방식이 조용히 'visit' 기본값으로 남을 수 있음(금액은 0연장 유지라 과소/
+    과대청구 없음, UX 갭만 — 508 이전부터 있던 기존 패턴).
+  3(LOW) p_return_method 명시적 NULL 전달 시 return_delivery_restricted 검증 스킵되는
+    기존 로직(508 변경분 아님, 참고 기록).
+  4(LOW) Production 데이터 보정 직접 재조회 불가(자격증명 없음) — 코드 레벨 분석으로는
+    안전, Stephen 보고값 신뢰.
+```
+
+---
+
+## DONE — 🟢 ROUTINE: QR 다운로드/인쇄 이미지에서 코드 텍스트 캡션 제거 (2026-09-18, 이 세션'만', ✅ GATE E 통과 — sp3-qa-agent 독립검수 완료, git commit만 Stephen 대기)
+
+### 배경
+Stephen 지시: QR 이미지 하단에 자동으로 붙던 품번코드/예약코드/회원코드 텍스트 라벨을 제거,
+QR 그래픽만 출력되도록 변경. payload(스캔 데이터)·파일명은 무변경.
+
+### 구현 내용
+`downloadQrWithLabel(canvas, label, filename)` 호출 3곳의 label 인자를 `null`로 변경 +
+인쇄용 HTML(`printSelectedQR`)의 `<span class="qr-code">` 캡션 요소 및 `.qr-code` CSS 규칙 제거.
+
+### 수정 파일
+- `src/lib/components/cms/ProductDetailPanel.svelte` — label → null
+- `src/lib/components/cms/RentalDetailPanel.svelte` — label → null
+- `src/lib/components/cms/CustomerDetailPanel.svelte` — label → null
+- `src/routes/cms/products/+page.svelte` — `<span class="qr-code">` + `.qr-code` CSS 제거
+
+### 검증
+`grep -rn "downloadQrWithLabel\|qr-code\b" src/` 전수 확인 — 4곳 이외 추가 대상 없음.
+`npx svelte-check`: 기존 1 ERROR(vite.config.ts vitest 타입 충돌 — 이번 작업 전부터 존재) 동일, 신규 에러 0건.
+
+### sp3-qa-agent 독립검수 결과 (2026-09-18)
+- payload 무변경: `buildProductQrPayload`/`reservationCode()`/`/qr/member/{code}` 3곳 모두
+  `renderQrToCanvas` 호출부가 이번 diff에서 전혀 손대지 않음(git diff로 직접 확인) — 이번
+  수정은 오직 `downloadQrWithLabel`의 2번째 인자(label)에만 국한됨.
+- 파일명 무변경: 3곳 모두 3번째 인자(filename)에 code가 그대로 유지됨(`qr-${code}.png` /
+  `member-qr-${code}.png`).
+- `downloadQrWithLabel(canvas, null, filename)` — `qrIssue.ts` 구현 재확인 결과 `label`이
+  falsy면 `canvas.toDataURL('image/png')`을 그대로 사용하는 else 분기로 정확히 빠짐(라벨
+  합성 코드 미실행), DPI 메타데이터 삽입 로직은 라벨 유무와 무관하게 그대로 유지.
+- `printSelectedQR()`: `<span class="qr-code">` + `.qr-code` CSS 제거 확인, `.qr-item`
+  레이아웃(QR 이미지 표시)·`code` 변수(품번 발행 필터·alt 속성)는 그대로 정상 사용 중 —
+  죽은 코드 없음.
+- 전수 재검색(`grep -rn "downloadQrWithLabel\|qr-code\b" src/`) 결과 위 4곳 외 추가 지점
+  없음 재확인. `MemberQrModal.svelte`·계약서명 QR(`send-chat/+server.ts`)은 애초에
+  `fillText`/라벨 합성 코드 자체가 없어 "대상 아님" 판단이 정확함(전역 `fillText` grep으로
+  교차검증).
+- 이번 세션 이전 QR 통합 모듈화 작업(300×300 canvas 버퍼·DPI 삽입·CSS 표시크기 고정)의
+  핵심 파일 `qrIssue.ts` 자체는 이번 diff에서 완전히 미변경(git diff 0줄) — 회귀 없음.
+- `npx svelte-check` 재실행 — 기존 1 ERROR(vite.config.ts, 무관) 동일 유지, 신규 에러 0건.
+- git diff 범위: 4개 파일, +4/-6 — 요청 범위 정확히 일치, 범위 외 수정 없음.
+
+**종합 판정: GATE E 통과.** BLOCKING/MEDIUM/LOW 이슈 전부 0건.
+
+---
+
+## DONE — 🟡 BOUNDARY: 장바구니 달력 "배송 휴무일" 시각 표시 2종 추가 — 숫자 취소선 + 법정공휴일 원형 배경 (2026-09-19, 이 세션'만', ✅ GATE E 통과 — sp3-qa-agent 검수 완료(BLOCKING 0건, MEDIUM 1건·LOW 1건 — 둘 다 비차단, Stephen 후속처리 여부 확인 대기), git commit만 Stephen 대기)
 
 ### 배경
 
@@ -53,6 +219,22 @@ src/routes/cart/+page.svelte                     — publicHolidaySet 파생 + C
   기존 결함으로 확인(수정 대상 함수와 무관, 범위 외라 손대지 않음)
 - Claude Browser 라이브 검증: 이번 세션 로그인/장바구니 상태 재현이 안 돼 실제 화면
   스크린샷 확인은 못 함 — Stephen 직접 확인 필요
+```
+
+### @sp3-qa-agent 검수 결과 — GATE E 통과 ✅ (BLOCKING 0건)
+
+```
+규칙 정합성·기술부채·로직 정합성(선택/경고 상태와 상호배타 구조 확인, 일요일 자동추가
+순서 보장 유지, publicHolidaySet 파생 원본 일치, 다른 2개 CalendarGrid 호출부 무영향,
+isDateDisabled와 신규 표시 로직 분리 확인) 전부 통과. WCAG 대비 실측까지 수행.
+
+비차단 발견사항 2건(Stephen 판단 후 후속 처리 권장):
+  MEDIUM — 일요일(--cs-red-badge 텍스트) + 법정공휴일 원형배경(--cs-red-xlight, 비-hover)
+    중첩 시 대비 3.13:1로 WCAG AA(4.5:1) 미달(대체공휴일 등 실제 발생 가능 케이스).
+    hover 규칙과 동일 패턴(색상 보정)을 비-hover 상태에도 좁게 적용 권장.
+  LOW — 신규 2개 시각상태(cal-day-delivery-closed / cal-day-public-holiday)에 title
+    툴팁 설명 없음(기존 3개 상태만 title 분기 존재) — 스크린리더 사용자는 표시 이유를
+    알 수 없음.
 ```
 
 ---
