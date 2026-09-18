@@ -31,6 +31,17 @@
     // range-start/end ::after) 대신 빨간색으로 덮어씌운다. 미전달 시(기존 모든 호출부)
     // 동작 100% 동일 — 하위호환 유지.
     warnSelected?: boolean
+    // 배송 휴무일 표시(2026-09-18) — 임시 배송 휴무일 + 공식 공휴일을 합친 날짜 집합.
+    // isDateDisabled(선택 가능 여부)와 완전히 분리된 순수 시각 표시 전용 — 이 날짜도
+    // 여전히 선택 가능(자동연장 정책, service-operations.md §휴무일 참고), 다만 숫자
+    // 가운데 수평선으로 "배송 불가"를 함께 안내한다. 미전달 시(기존 모든 호출부) 동작
+    // 100% 동일 — 하위호환 유지.
+    deliveryClosedDates?: Set<string>
+    // 법정공휴일(자동 동기화) 전용 표시(2026-09-19) — deliveryClosedDates의 부분집합.
+    // 임시 배송휴무일·일요일 자동휴무와 달리 실제 공휴일(예: 추석 연휴)만 원형 배경으로
+    // 별도 강조. deliveryClosedDates의 취소선과 독립적으로 함께 표시됨(둘 다 켜질 수 있음).
+    // 미전달 시(기존 모든 호출부) 동작 100% 동일 — 하위호환 유지.
+    publicHolidayDates?: Set<string>
   }
 
   let {
@@ -46,6 +57,8 @@
     onDisabledClick,
     highlightDates,
     warnSelected = false,
+    deliveryClosedDates,
+    publicHolidayDates,
   }: Props = $props()
 
   // 종료일 대기 중(rangeStart는 있고 rangeEnd는 아직 없음) hover한 날짜를 임시 종료일처럼
@@ -311,6 +324,8 @@
           {@const isInRange = rangeStart !== '' && previewEnd !== '' && iso > rangeStart && iso < previewEnd}
           {@const adjHoliday = !sel && (highlightDates?.has(iso) ?? false)}
           {@const warnSel = sel && warnSelected}
+          {@const deliveryClosed = deliveryClosedDates?.has(iso) ?? false}
+          {@const publicHoliday = !sel && (publicHolidayDates?.has(iso) ?? false)}
           <button
             class="cal-day"
             class:cal-day-sel={sel}
@@ -318,6 +333,8 @@
             class:cal-day-holiday={holidayDisabled}
             class:cal-day-adj-holiday={adjHoliday}
             class:cal-day-warn={warnSel}
+            class:cal-day-delivery-closed={deliveryClosed}
+            class:cal-day-public-holiday={publicHoliday}
             class:cal-day-sun={dow === 0}
             class:cal-day-sat={dow === 6}
             class:cal-day-range-start={isRangeStart}
@@ -673,6 +690,36 @@
   .cal-day-warn.cal-day-range-start::after,
   .cal-day-warn.cal-day-range-end::after {
     background: var(--cs-red-badge) !important;
+  }
+
+  /* 배송 휴무일 표시(2026-09-18) — 임시 배송 휴무일 + 공식 공휴일 공통. 선택/범위/경고
+     등 다른 모든 상태와 독립적으로 겹쳐 표시돼야 하므로 color는 건드리지 않고
+     text-decoration만 추가 — text-decoration-color 기본값(currentcolor)이 그 칸의
+     실제 글자색(선택 시 흰색, 주말 색, 기본색 등)을 자동으로 따라간다. */
+  .cal-day-delivery-closed {
+    text-decoration: line-through;
+    text-decoration-thickness: 1.5px;
+  }
+
+  /* 법정공휴일(자동 동기화) 원형 배경 표시(2026-09-19) — cal-day-delivery-closed(취소선,
+     임시휴무+공휴일+일요일 공통)와 달리 실제 공휴일(public_holidays 'national' 행)만 별도로
+     원형 배경을 얹어 한 번 더 강조. cal-day-adj-holiday(purple 계열 — "경계일" 안내)와
+     겹치지 않도록 별도 톤(red-5, --cs-red-xlight)을 사용 — 이 화면의 .cal-holiday-guide-note가
+     이미 "휴무일=레드" 톤을 쓰고 있어 그 배색 언어를 그대로 재사용(front-uiux.md 정본 토큰,
+     임의 값 아님). cal-day-sel(!important)이 있으면 항상 그쪽이 우선하도록 class 자체를
+     !sel일 때만 부여함(above 마크업). */
+  .cal-day-public-holiday {
+    background: var(--cs-red-xlight);
+  }
+  /* 호버 시 일반 규칙(.cal-day:hover:not(:disabled):not(.cal-day-holiday))이 배경을
+     --cs-lilac으로 바꿔버리는 걸 막기 위해 !important 필요(cal-day-adj-holiday와 동일 이유).
+     호버 배경(red-30, --cs-red-light)은 채도가 있어 요일별 기본색(토요일 purple, 일요일
+     red-badge)과 명도차가 부족해질 수 있으므로 호버 상태에 한해 글자색을 어두운 톤으로
+     고정한다(흰색이 아니라 --cs-text-dark인 이유 — 이 배경은 밝은 파스텔 톤이라 흰 글자는
+     오히려 대비가 낮아짐). */
+  .cal-day-public-holiday:hover:not(:disabled) {
+    background: var(--cs-red-light) !important;
+    color: var(--cs-text-dark) !important;
   }
 
   /* 대여~반납 기간 범위 밴드(2026-08-17, 2026-08-18 전면 재작업)

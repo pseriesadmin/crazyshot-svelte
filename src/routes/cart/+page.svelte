@@ -1449,6 +1449,13 @@
   // 휴무일 포함 배송 연장(2026-09-12) — itemHolidayExtension/calcHolidayExtension이 요구하는
   // Set<string> 형태. courierClosedMap과 동일한 원본(data.courierClosedDates)에서 파생.
   const courierClosedSet = $derived(new Set<string>(courierClosedMap.keys()))
+  // 법정공휴일(자동 동기화) 전용 집합(2026-09-19) — courierClosedSet(임시휴무+공휴일+일요일
+  // 통합)과 달리 실제 public_holidays 'national' 행만 별도로 표시(달력 "공휴일" 원형 마크 전용).
+  const publicHolidaySet = $derived(new Set<string>(
+    ((data.courierClosedDates as { date: string; reason: string; isPublicHoliday?: boolean }[] | undefined) ?? [])
+      .filter((h) => h.isPublicHoliday)
+      .map((h) => h.date)
+  ))
 
   // 휴무일 연장요금 — 체크된 상품(qty 배수 포함) 합산. otSubtotal(할인 계산 기준)에는
   // 포함시키지 않고 otDeliveryFee와 동일하게 할인 이후 별도로 가산한다(rental-fee-policy.md
@@ -2981,6 +2988,8 @@
                 rangeEndLabel="반납일"
                 highlightDates={holidayHighlightDates}
                 warnSelected={warnSelected}
+                deliveryClosedDates={courierClosedSet}
+                publicHolidayDates={publicHolidaySet}
                 onselect={(iso) => {
                   props.onDateChange(iso)
                   // 휴무일 포함 배송 연장(2026-09-12) — 과거에는 courierRestricted일 때
