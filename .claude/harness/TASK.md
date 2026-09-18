@@ -1,5 +1,196 @@
 # .claude/harness/TASK.md
 
+## DONE — 🟡 BOUNDARY: 장바구니 달력 "배송 휴무일" 시각 표시 2종 추가 — 숫자 취소선 + 법정공휴일 원형 배경 (2026-09-19, 이 세션'만', GATE E 검수 대기)
+
+### 배경
+
+Stephen이 선택영역(장바구니 수령/반납 달력) 기준으로 2건을 순차 지시:
+1. "달력 '배송 휴무일' 날짜에 배송 불가 표시: 숫자 가운데 수평 라인 추가할 것. 임시 배송
+   휴무일, 공식 공휴일에도 적용할 것."
+2. (1번 반영 확인 후) "대여관리에 설정한 법정공휴일(자동 동기화)값에 따른 공휴일 날짜에
+   공휴일 bg 원형 마크 표시가 없으니 적용할 것."
+
+두 요청 모두 기존 "휴무일 포함 배송 자동연장" 기능(PART B, 위 과거 DONE 블록들 참고)이
+이미 계산해둔 휴무일 데이터를 화면에 추가로 시각화하는 순수 표시 전용 작업 — 선택
+가능 여부(자동연장 정책)나 요금 계산 로직은 전혀 건드리지 않음.
+
+### 구현 내용
+
+```
+1) 숫자 취소선(cal-day-delivery-closed) — 임시 배송휴무일 + 공식 공휴일 + 일요일 자동휴무
+   전부 대상(courierClosedSet 그대로 재사용, CMS "휴무일 제어 옵션"이 이미 통합해 내려주던
+   목록). text-decoration: line-through, currentcolor 기본값이라 선택/주말/경고 등 다른
+   모든 상태와 색 충돌 없이 자동으로 겹쳐 보임.
+
+2) 법정공휴일 전용 원형 배경(cal-day-public-holiday) — 위 통합 목록 중 실제
+   public_holidays 'national' 행만 별도 표시. 이를 위해 서버 helper
+   loadCourierClosedDates()가 각 날짜에 isPublicHoliday(boolean) 플래그를 함께 내려주도록
+   확장(임시휴무·일요일 자동휴무는 false). cart/+page.svelte에서 이 플래그로만 걸러낸
+   publicHolidaySet을 새로 파생해 CalendarGrid에 전달. 배경색은 red-5(--cs-red-xlight,
+   front-uiux.md 정본 토큰) — 같은 화면의 .cal-holiday-guide-note가 이미 쓰던 "휴무일=레드"
+   배색 언어를 재사용(임의 신규 컬러 없음). 선택된 날짜(cal-day-sel)와 겹치면 항상 선택
+   표시가 우선하도록 !sel 조건에서만 클래스 부여.
+
+두 시각 표시 모두 CalendarGrid.svelte에 새 prop(deliveryClosedDates / publicHolidayDates)
+으로 추가 — 미전달 시(CmsDatePicker·ProfileTabContent 등 다른 2개 호출부) 동작 100%
+동일(하위호환 유지, 요청범위 외 화면 무영향).
+```
+
+### 파일 변경 목록
+
+```
+src/lib/components/common/CalendarGrid.svelte   — prop 2개 신설 + 클래스 2개 + CSS 2블록
+src/lib/server/courierClosedDates.ts             — CourierClosedDate.isPublicHoliday 플래그 추가
+src/routes/cart/+page.svelte                     — publicHolidaySet 파생 + CalendarGrid 호출부 prop 2개 전달
+```
+
+### 검증
+
+```
+- npx svelte-check: 신규 에러 0건(기존 무관 vite.config.ts 에러 1건만 유지, 경고 총량 동일)
+- 기존 회귀 테스트 src/__tests__/services/deliveryCutoffHolidays.test.ts: 18개 중 17개 통과
+  — 유일한 실패(delete_manual_holiday RPC PGRST202)는 이번 변경과 무관한 스테이지 DB측
+  기존 결함으로 확인(수정 대상 함수와 무관, 범위 외라 손대지 않음)
+- Claude Browser 라이브 검증: 이번 세션 로그인/장바구니 상태 재현이 안 돼 실제 화면
+  스크린샷 확인은 못 함 — Stephen 직접 확인 필요
+```
+
+---
+
+## DONE — 🟢 ROUTINE: 본인증명 "최초 등록" 파일업로드 드래그앤드롭 누락 복원 (2026-09-18, 이 세션'만', ✅ GATE E 통과 — sp3-qa-agent 검수 완료, git commit만 Stephen 대기)
+
+### 배경
+
+Stephen이 마이페이지 "본인증명" 탭 최초 등록 화면(학생증·주민등록증 등 슬롯 그리드)에서
+"왜 파일 드래그 기능을 뺐냐"고 질문. 확인 결과 의도적 제거가 아니라, 2026-09-15
+(`45f71f4` 커밋)에서 이 화면을 외국인증명과 동일한 "버튼 없는 자동 병합제출" 방식으로
+리팩터링하면서 옛 드래그 핸들러(`handleIdentitySlotDragOver/Leave/Drop` 등)는 삭제하고
+새 방식(`handleIdentityMergeSlotFileChange`)으로 교체했는데, 같은 리팩터링에서 나란히
+존재하는 형제 블록("일부 유형 추가 등록" 병합 그리드)에는 신규 드래그 핸들러
+(`handleIdentityMergeSlotDragOver/Leave/Drop`)를 정상 연결해놓고 "최초 등록" 블록에는
+누락시킨 것으로 확인됨(git show로 리팩터링 diff 직접 대조 확인).
+
+### 구현 내용
+
+```
+src/lib/components/members/profile/ProfileTabContent.svelte
+  "최초 등록" doc-slot-grid(IDENTITY_TYPES 순회 블록, {:else} 분기)의 <label class="doc-file-label">에
+  이미 존재하던 범용 핸들러(identityMergeDragOverSlot 상태 + handleIdentityMergeSlotDragOver/
+  Leave/Drop 함수 — 형제 블록과 100% 동일 로직, 신규 작성 없음)를 그대로 연결:
+    - class:drag-over={identityMergeDragOverSlot === t.value}
+    - ondragover / ondragleave / ondrop 3개 이벤트 바인딩 추가
+  기능 로직·서버 액션·CSS 변경 없음 — 이미 존재하던 드래그 핸들러를 두 번째 블록에도
+  동일하게 연결한 것뿐(요청범위 외 수정 없음).
+```
+
+### 파일 변경 목록
+
+```
+src/lib/components/members/profile/ProfileTabContent.svelte
+```
+
+### 검증
+
+```
+- npx svelte-check: 신규 에러 0건(기존 무관 warn만 잔존)
+- Claude Browser로 /account/profile 접속 → "재등록" 진입 → 첫 슬롯("학생증")에
+  DragEvent('dragover') 디스패치 → class="doc-file-label ... drag-over" 부여 확인
+  (점선 보라 강조 스크린샷으로도 육안 확인)
+```
+
+### GATE E 결과
+
+```
+✅ sp3-qa-agent 검수 통과 — BLOCKING 0건 / MEDIUM 0건 / LOW 0건
+확인 항목: identityMergeDragOverSlot 상태 공유 안전성(두 형제 블록이 항상 배타적으로만
+  렌더링돼 충돌 없음), handleIdentityMergeSlotDrop→autoSubmitIdentityMergeFile 동작 정합성,
+  드래그드롭의 accept 속성 우회 가능성(클라이언트 validateUploadFile + 서버 MIME 재검증
+  이중 방어로 안전), 범위 준수(단일 파일 7줄 diff, dead CSS 셀렉터 없음), svelte-check
+  대상 파일 신규 에러 0건. 전부 통과.
+```
+
+---
+
+## DONE — front용 BI 활용 지연감지형 로딩 애니메이션 컴포넌트 신설 + 홈 화면 데이터 호출 연동 (2026-09-17~18, 이 세션'만', ✅ GATE E 통과 — sp3-qa-agent 검수 완료, git commit만 Stephen 대기)
+
+### 아젠다
+
+Stephen 지시(1차): front(사용자 화면)용으로 BI(브랜드 로고)를 활용한 로딩 애니메이션
+컴포넌트가 이미 존재하는지 확인 — 없으면 제공받은 SVG로 "데이터 호출 지연 감지형"
+컴포넌트를 신규 구현, PC·모바일 반응형 비율을 각각 다르게 배치.
+
+Stephen 지시(2차): "어디서 볼 수 있어?"(실제 연결된 화면이 아직 없어 확인 요청) →
+Artifact로 실제 컴포넌트와 동일한 타이밍 로직·애니메이션을 재현한 인터랙티브 미리보기를
+제공(코드 변경 없음, 세션 스크래치패드 산출물).
+
+Stephen 지시(3차): 홈 화면(`/`) 데이터 호출 부분에 실제로 연결.
+
+### 조사 결과 — 기존 컴포넌트 존재 여부
+
+```
+Explore 서브에이전트로 전수 확인: front(src/routes/ 중 cms 제외)용 "BI 로고 활용 +
+지연감지형" 로딩 컴포넌트는 없음(src/lib/components/common/ 등 어디에도 Loading·Spinner·
+Loader 이름 패턴 파일 0건). CMS 쪽(cms/+layout.svelte)에 로고 펄스 애니메이션을 쓰는
+"nav-loading-overlay"가 인라인으로 존재하지만 ① CMS 전용 하드코딩(재사용 컴포넌트 아님)
+② 지연감지 로직 없음(즉시 표시) — front 요구사항과는 다름. 신규 구현 확정.
+```
+
+### 구현 내역
+
+**신규 파일**
+```
+src/lib/components/common/LoadingIndicator.svelte
+  - props: loading(필수) / delay=400ms / minDuration=400ms / label
+  - loading=true 후 delay(400ms)가 지나도 여전히 로딩 중일 때만 표시(빠른 응답 시
+    깜빡임 방지) — 표시된 후에는 minDuration(400ms) 이상 유지한 뒤 사라짐(너무 빨리
+    사라지는 깜빡임도 방지)
+  - Stephen이 제공한 SVG(BI 원형 마크, 반경그라디언트+장식 스트로크)를 그대로 삽입,
+    펄스(scale 1↔0.92, opacity 1↔0.6, 1.8s ease-in-out infinite) + 도트 3개 바운스
+    (1.2s ease-in-out infinite, 0.18s 스태거) — CMS nav-loading-overlay와 동일 모션
+    언어 재사용(신규 easing 임의 창작 없음), 색상만 front 팔레트(--cs-red-badge)로 전환
+    (--cs-orange는 front에서 "로고 전용" 제약 토큰이라 장식 요소 사용 금지, uiux-index.md)
+  - 반응형: 모바일 기본 BI 96px/도트 6px, PC(≥768px) BI 150px/도트 8px + 여백 확대
+```
+
+**수정 파일**
+```
+src/routes/+layout.svelte
+  - navigating(from $app/state, 이 프로젝트 기존 page 상태와 동일한 방식) 기반으로
+    "navigating.to?.route.id === '/'"(=홈 화면으로 이동 중)일 때만 LoadingIndicator에
+    loading=true 전달 — 다른 라우트로의 이동에는 관여하지 않음(스코프 최소화)
+  - 홈의 +page.server.ts load()가 배너·테마그룹·크레이지로그·FAQ·MD추천·카테고리
+    큐레이션 등 다건 조회로 지연될 수 있는 지점에 정확히 대응
+```
+
+### 검증
+
+```
+npx svelte-check — 신규 에러 0건(무관한 기존 vite.config.ts 에러 1건만 유지), 두 파일 모두
+  신규 경고 없음(변경 전후 경고 총량 동일).
+Artifact 미리보기(2차 지시 산출물, 코드 아님)는 세션 스크래치패드 파일이라 이 항목의
+  "수정 코드파일" 범위에 포함하지 않음.
+Claude Browser 라이브검증은 미실시(기본값 금지 정책).
+git commit은 Stephen 직접 실행 대기.
+```
+
+### @sp3-qa-agent 검수 결과 — GATE E 통과 ✅
+
+```
+검수범위를 신규 1개 파일 + +layout.svelte 수정분(import 3줄+파생값 1줄+태그 1줄)으로
+명시 한정. 지연감지 타이머(showTimer/hideTimer) 레이스컨디션·언마운트 후 누수 없음을
+3가지 토글 시나리오로 직접 추적 확인. navigating.to?.route.id 사용법이 SvelteKit
+$app/state 타입 선언과 정확히 일치하며, GNB/MobileMoreMenu의 실제 href="/" 경로에서
+정상 발동함을 확인. --cs-orange(로고전용) 대신 --cs-red-badge를 도트에 사용해
+uiux-index.md 규정과 일치. 배경 스크림·펄스·도트 keyframe 수치가 CMS
+nav-loading-overlay와 1:1 동일함을 코드 대조로 확인(신규 임의값 아님). z-index 계층
+(GNB 50 < FloatingBar 200 < LoadingIndicator 9999 < Toaster 999999999) 충돌 없음.
+범위 외 파일 수정 없음.
+
+참고(비차단): LoadingIndicator에 /cms 경로 가드가 없으나 route.id 기준 조건 자체가
+이미 홈으로 좁혀져 있어 현재는 CMS에서 뜰 경로 없음 — IosAddToHomeScreenBanner처럼
+방어적 가드를 추가하면 더 안전하다는 선택적 제안(강제 아님).
+```
+
 ## DONE — 🟡 BOUNDARY: 모바일 CMS 상품 목록 무한스크롤 구현 (2026-09-17, ✅ 완료)
 
 `src/routes/cms/mobile/+page.svelte` 단독 수정.

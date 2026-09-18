@@ -1341,7 +1341,14 @@
             <div class="doc-slot-grid">
               {#each IDENTITY_TYPES as t (t.value)}
                 <div class="doc-slot">
-                  <label class="doc-file-label" aria-disabled={identityDocsBusy}>
+                  <label
+                    class="doc-file-label"
+                    class:drag-over={identityMergeDragOverSlot === t.value}
+                    aria-disabled={identityDocsBusy}
+                    ondragover={(e) => handleIdentityMergeSlotDragOver(e, t.value)}
+                    ondragleave={() => handleIdentityMergeSlotDragLeave(t.value)}
+                    ondrop={(e) => handleIdentityMergeSlotDrop(e, t.value)}
+                  >
                     <input
                       type="file"
                       class="sr-only"
