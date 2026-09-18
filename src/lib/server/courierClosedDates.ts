@@ -3,6 +3,10 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 export interface CourierClosedDate {
   date: string
   reason: string
+  // 실제 public_holidays 'national' 행 여부(2026-09-19) — 임시휴무(manual)·일요일 자동휴무와
+  // 구분해 달력에 "법정공휴일" 전용 원형 배경 마크를 표시하기 위함. 일요일 자동휴무는 같은
+  // enable_fixed_holidays 토글에 묶여있지만 공휴일 자체는 아니므로 false로 남긴다.
+  isPublicHoliday?: boolean
 }
 
 // 택배 휴무일 캘린더 제어 — 마스터 토글 OFF면 조건문 자체를 완전히 스킵(빈 배열 반환).
@@ -30,16 +34,16 @@ export async function loadCourierClosedDates(supabase: SupabaseClient): Promise<
   if (cutoff.enable_fixed_holidays) holidayTypes.push('national')
   if (cutoff.enable_manual_holidays) holidayTypes.push('manual')
 
-  const closed = new Map<string, string>()
+  const closed = new Map<string, { reason: string; isPublicHoliday: boolean }>()
   if (holidayTypes.length > 0) {
     const { data: holidayRows } = await supabase
       .from('public_holidays')
-      .select('date, name')
+      .select('date, name, holiday_type')
       .eq('is_active', true)
       .gte('date', todayIso)
       .in('holiday_type', holidayTypes)
-    for (const h of (holidayRows ?? []) as { date: string; name: string }[]) {
-      closed.set(h.date, h.name)
+    for (const h of (holidayRows ?? []) as { date: string; name: string; holiday_type: 'national' | 'manual' }[]) {
+      closed.set(h.date, { reason: h.name, isPublicHoliday: h.holiday_type === 'national' })
     }
   }
 
@@ -52,10 +56,10 @@ export async function loadCourierClosedDates(supabase: SupabaseClient): Promise<
       d.setDate(start.getDate() + i)
       if (d.getDay() === 0) {
         const iso = d.toISOString().slice(0, 10)
-        if (!closed.has(iso)) closed.set(iso, '일요일 휴무')
+        if (!closed.has(iso)) closed.set(iso, { reason: '일요일 휴무', isPublicHoliday: false })
       }
     }
   }
 
-  return [...closed.entries()].map(([date, reason]) => ({ date, reason }))
+  return [...closed.entries()].map(([date, v]) => ({ date, reason: v.reason, isPublicHoliday: v.isPublicHoliday }))
 }
