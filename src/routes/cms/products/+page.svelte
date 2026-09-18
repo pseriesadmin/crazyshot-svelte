@@ -339,9 +339,8 @@
   <style>
     body { margin: 0; font-family: sans-serif; background: #fff; }
     .qr-grid { display: flex; flex-wrap: wrap; gap: 12px; padding: 16px; }
-    .qr-item { display: flex; flex-direction: column; align-items: center; gap: 4px; border: 1px solid #ddd; padding: 10px; border-radius: 8px; width: 180px; box-sizing: border-box; }
+    .qr-item { display: flex; flex-direction: column; align-items: center; border: 1px solid #ddd; padding: 10px; border-radius: 8px; width: 180px; box-sizing: border-box; }
     .qr-img { width: 160px; height: 160px; display: block; }
-    .qr-code { font-size: 11px; font-weight: 700; color: #100B32; text-align: center; word-break: break-all; }
     @media print { body { margin: 0; } .qr-grid { gap: 8px; padding: 8px; } }
   </style>
 </head>
@@ -350,7 +349,6 @@
     ${items.map(({ code, dataUrl }) => `
       <div class="qr-item">
         <img class="qr-img" src="${dataUrl}" alt="${code}" />
-        <span class="qr-code">${code}</span>
       </div>
     `).join('')}
   </div>

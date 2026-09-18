@@ -115,7 +115,7 @@
   function downloadMemberQR() {
     if (!qrCanvasEl || !row.member_code) return
     const code = row.member_code
-    downloadQrWithLabel(qrCanvasEl, code, `member-qr-${code}.png`)
+    downloadQrWithLabel(qrCanvasEl, null, `member-qr-${code}.png`)
   }
 
   interface CsInquiryReply {
