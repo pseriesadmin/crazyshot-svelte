@@ -3,14 +3,21 @@
 	import { onMount } from 'svelte';
 	import { afterNavigate } from '$app/navigation';
 	import { locale } from 'svelte-i18n';
-	import { page } from '$app/state';
+	import { page, navigating } from '$app/state';
 	import { initializeAuth, subscribeToAuthChanges, authState } from '$lib/stores/auth';
 	import { trackPageView } from '$lib/analytics/behaviorTracker';
 	import FloatingBar from '$lib/components/common/FloatingBar.svelte';
 	import GNB from '$lib/components/common/GNB.svelte';
+	import LoadingIndicator from '$lib/components/common/LoadingIndicator.svelte';
 	import PushNotificationInit from '$lib/components/common/PushNotificationInit.svelte';
 	import IosAddToHomeScreenBanner from '$lib/components/common/IosAddToHomeScreenBanner.svelte';
 	import { Toaster } from 'svelte-sonner';
+
+	// 홈 화면(/) 데이터 호출 지연 감지 로딩 — 다른 화면에서 홈으로 이동할 때, 홈의
+	// +page.server.ts load()(배너·테마그룹·크레이지로그·FAQ·MD추천·카테고리 큐레이션 등
+	// 다건 조회)가 지연되는 경우에만 표시. navigating.to.route.id로 "홈으로 이동 중"만
+	// 판별 — 다른 라우트로의 이동에는 관여하지 않는다.
+	let isLoadingHome = $derived(navigating.to?.route.id === '/');
 
 	let currentLocale = 'ko';
 
@@ -52,6 +59,7 @@
 </script>
 
 <PushNotificationInit />
+<LoadingIndicator loading={isLoadingHome} label="홈 화면 불러오는 중" />
 
 {#if !page.url.pathname.startsWith('/cms')}
 	<IosAddToHomeScreenBanner />
