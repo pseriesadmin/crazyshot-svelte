@@ -1,6 +1,1147 @@
 # .claude/harness/TASK.md
 
-## DONE — 🟢 ROUTINE: "배송 시작일" 원 텍스트색을 과거/휴무 상태와 무관하게 항상 진한 보라(purple-80)로 고정 (2026-09-20, 이 세션'만', UI 스타일 단순 수정 — ✅ 2026-09-21 sp3-qa-agent 독립검수 완료(BLOCKING 0건, MEDIUM 0건, LOW 1건 — rangeStart/rangeEnd 비겹침 보장이 기존 "반납일≥수령일" 불변조건에 의존한다는 정보성 기록, 조치 불요), GATE E 통과, git commit만 Stephen 대기)
+## DONE — 🔴 CRITICAL: 관리자 쿠폰 발행·정산 로직 전면 수정 (2026-09-21, 이 세션'만')
+
+> Stephen 재보고: "장바구니에 노출도 안되고 선택시 조건에 따른 할인 적용도 안됨" +
+> "발행 시도 시 경고 토스트가 뜨고 발행이 불가능했어" — 2건의 서로 다른 증상을 하나의
+> 세션에서 순차적으로 조사·수정·Stage 검증·Production 반영까지 완료.
+
+### 배경·수정 내역
+
+```
+1. 배송비 할인 쿠폰 노출·정산 결함(원 보고)
+   - 원인 A: coupons_discount_value_check(discount_value>0) 제약을 배송비 할인도 예외 없이
+     적용받는데, 등록화면이 0원 그대로 제출 가능했음 → discount_value>0 서버·클라 가드 추가.
+   - 원인 B: 결제 확정 함수(sync_order_after_composition_change)가 discount_type='free_shipping'
+     분기 자체가 없어 항상 0원 처리 + allow_stacking 필드가 어디서도 읽히지 않던 죽은 컬럼
+     → Migration #510(Stage+Production 적용 완료)으로 free_shipping 실제 계산
+     (LEAST(할인값,배송비)) + allow_stacking 게이팅(꺼짐 시 회원등급 할인 배제, 쿠폰 우선)
+     구현.
+   - 결제창(contract/[token]/+page.svelte) 이중차감 결함도 함께 발견·수정 — final_amount가
+     이미 쿠폰·포인트 반영된 값인데 화면에서 한 번 더 빼고 있어 고객이 실제보다 적게
+     결제되던 상태였음(과소청구 방향의 CRITICAL 버그).
+
+2. "재검증" 지시로 발견된 쿠폰 필드 4건 추가 결함(요청 확장, Stephen "전부 지금 수정" 승인)
+   - max_discount_amount(퍼센트 할인 최대한도) — 저장만 되고 정산에서 캡 미적용 → 수정
+   - per_user_limit(1인당 사용 한도) — 어디서도 재검증 안 됨 → use_coupon에 검증 추가
+     (단, user_coupons(user_id,coupon_id) UNIQUE 제약상 실질적으로 1회 초과 도달 불가능한
+     구조적 한계를 발견·Stephen에게 투명 공개, 이번 범위에서는 그 UNIQUE 자체는 미변경)
+   - applicable_categories(적용 카테고리) — type='category' 쿠폰의 카테고리 매칭이 전혀
+     검증 안 됨 → 장바구니/계약서 화면 필터 + use_coupon 최종검증 양쪽에 추가
+   - allow_with_points(포인트 병행 허용) — 어디서도 확인 안 됨 → allow_stacking과 동일한
+     "쿠폰 우선" 원칙으로 정산 시 포인트 배제 게이팅 추가
+   - 사소한 불일치: 배송비 우대설정 중복선택 방지 가드가 coupons.type('free_delivery')을
+     보고 있었는데 실제 계산은 coupons.discount_type('free_shipping')이 기준 → discount_type
+     기준으로 통일(cartShippingFee.ts isFreeDeliveryCouponBlocked)
+   → Migration #511(Stage+Production 적용 완료)로 DB 4건 반영.
+
+3. "발행 시도 시 경고 토스트" 재보고 → 별개의 선행 결함 발견·수정
+   - cms_create_coupon의 INSERT가 coupons.type(coupon_type_enum) 컬럼에 text 파라미터를
+     캐스팅 없이 바인딩해 discount_type·code_mode 등 어떤 값을 넣어도 항상
+     "column "type" is of type coupon_type_enum but expression is of type text" 예외로
+     실패하고 있었음(발행 기능 자체가 완전히 막혀있던 상태) — Migration #512(Stage+
+     Production 적용 완료)로 p_type::public.coupon_type_enum 캐스팅 추가.
+```
+
+### 검증
+
+```
+Stage 실측(직접 SQL, 매번 정리 후 원복):
+  - free_shipping 캡(LEAST) · allow_stacking 게이트 · max_discount_amount 캡 ·
+    allow_with_points 게이트 · applicable_categories 매칭/불일치 · cms_create_coupon
+    5가지 유형(배송비할인/퍼센트+한도/카테고리제한/기타유형/무제한기간) 발행 성공 —
+    전부 실제 값으로 재현·확인, 테스트 데이터 전량 원복 완료.
+자동 테스트: couponLazySequencing.test.ts 13/13 GREEN, cartShippingFee.test.ts 포함 82/82 GREEN
+npm run check: 신규 에러 0건(기존 vite.config.ts 무관 에러 1건만 존재)
+```
+
+### GATE C: 대기(sp3-qa-agent 검수 요청 — Stephen 지시)
+
+```
+수정 파일:
+  supabase/migrations/20260921000000_510_sync_order_coupon_discount_fix.sql(신규)
+  supabase/migrations/20260921010000_511_coupon_unused_fields_enforcement.sql(신규)
+  supabase/migrations/20260921020000_512_cms_create_coupon_type_enum_cast_fix.sql(신규)
+  src/routes/cms/promotion/coupon/new/+page.svelte
+  src/routes/cms/promotion/coupon/new/+page.server.ts
+  src/routes/cart/+page.server.ts
+  src/routes/cart/+page.svelte
+  src/routes/contract/[token]/+page.svelte
+  src/routes/contract/[token]/+page.server.ts
+  src/routes/contract/[token]/pay-result/+page.server.ts
+  src/lib/server/coupons/couponEligibility.ts
+  src/lib/utils/cartShippingFee.ts
+  src/__tests__/services/cartShippingFee.test.ts
+git commit: Stephen 직접 실행 대기
+```
+
+---
+
+## NOW — 🟡 BOUNDARY: 장바구니(cart) 예약 달력 UX — 세로 스크롤/드래그 연속 전환 재설계 (2026-09-21) — ⛔ GATE B 승인 대기
+
+> 생성: promptor(대형 아젠다 분석 에이전트) — Stephen 승인 플랜모드 대화 + Explore 조사 +
+> Plan 설계(opus) 종합 결과를 그대로 태스크로 이관. 실행은 GATE B 승인 후 `@harness-executor`.
+> 등급 판단 근거: 공유 컴포넌트 3곳(CMS·마이페이지·장바구니) 영향 + 결제 연결 화면(장바구니)
+> 포함 다중파일 변경 → CLAUDE.md 기준 최소 🟡 BOUNDARY, 실질적으로는 GATE B 승인 필요.
+
+### [CONTEXT BRIDGE]
+
+```
+plan_source     : Stephen 플랜모드 대화(2026-09-21) + Explore 에이전트 2개 조사 + Plan 에이전트
+                  (opus) 설계 종합 문서 — 별도 plan-output.md 없이 이 TASK.md가 원문 그대로 반영.
+핵심제약        : 공유 컴포넌트(CalendarGrid.svelte) 3개 사용처(CMS/마이페이지/장바구니) 중
+                  어느 하나도 회귀 없이 동시에 새 UX를 반영해야 함. 기존 셀 상태 로직(선택·과거·
+                  휴무일차단·range 3-레이어 스태킹 등)은 "이동/재배치만 허용, 수정 절대 금지".
+TDD도메인       : 순수 로직(calendarWindow.ts — 월 행수 계산·윈도우 구성·오프셋 계산·스크롤
+                  보정값 계산)은 TDD 유닛테스트 대상. 최종 TDD/GSD 분리 판단은 harness-executor.
+절대금지        : ① range 밴드 스태킹 레이어(::before z-index:-2 / ::after z-index:-1) 셀 CSS
+                  수정 ② 새 컨테이너에 transform/contain/content-visibility/isolation/
+                  will-change 부여(스태킹 붕괴 재발) ③ touch-action:none 사용(터치 스크롤 파괴)
+                  ④ 장바구니 maxDate prop 누락(재고 미확인 180일 이후 구간 노출 위험)
+                  ⑤ 기존 3곳 Prop 시그니처(value/onselect/disablePast/minDate/rangeStart/
+                  rangeEnd/rangeStartLabel/rangeEndLabel/isDateDisabled/onDisabledClick/
+                  highlightDates/warnSelected) 변경
+실패롤백        : `continuousScroll?: boolean`(기본 false) 플래그로 신규 엔진을 감싸 구현 —
+                  플래그 꺼짐 상태에서 기존 3곳 100% 동일 동작 유지가 되는 시점까지는 언제든
+                  플래그만 꺼서 구 UX로 즉시 복귀 가능. 최종 정리(플래그 삭제)는 장바구니
+                  활성화까지 전부 검증된 뒤 마지막 단계에서만 수행.
+```
+
+### ⚠️ 현재 git 상태 (혼동 방지용 — 반드시 먼저 확인)
+
+```
+src/lib/components/common/CalendarGrid.svelte는 현재 브랜치(stage)에 이미 미커밋 상태로
+수정되어 있음(이번 태스크가 만든 변경이 아니라 이전 세션의 잔여 작업) — diff는 순수
+타이포그래피 변경(달력 숫자 서체를 --font-en-display(Tilt Warp)로 전환, "월"/"년" 접미사
+제거, PC/모바일 반응형 폰트크기 분리)이며 레이아웃 구조·셀 로직은 전혀 건드리지 않는다.
+이번 태스크(세로 스크롤 재설계)와 코드 레벨 충돌은 없다고 판단되나, 이 폰트 변경을
+"이번 태스크가 되돌려야 할 대상"으로 오인하지 말 것 — 별개 작업이며 그대로 둔다.
+
+아래 3개도 이번 태스크와 무관한 별개 진행 중 작업이므로 건드리지도, 되돌리지도 말 것:
+  - src/lib/components/common/TimePickerGrid.svelte (신규, 미커밋)
+  - static/fonts/D-DINExp-Bold.woff2 / D-DINExp-Italic.woff2 / D-DINExp.woff2 (신규, 미커밋)
+
+기존 TASK.md 상단부(2026-09-21 최근 세션들)에 CalendarGrid.svelte 관련 DONE 블록이 다수
+있으나(폰트·헤더타이틀·연월접미사 제거 등) 전부 완료 처리된 별개 작업이며, 이번 "세로
+스크롤/드래그 재설계"와 주제가 겹치는 미해결 NOW 블록은 확인되지 않았다(promptor 사전
+확인 완료 — 상세는 세션 보고 참고).
+```
+
+### 배경(왜 필요한가)
+
+현재 장바구니 예약(수령일/반납일) 달력은 한 번에 한 달만 보여주고, 다음 달로 가려면
+"다음달" 화살표를 눌러야 한다. 수령일을 이번 달에서 고르고 반납일이 다음 달에 있으면,
+화면 연속성이 끊기고 클릭 횟수가 늘어나는 불편함이 있다 — 이게 이번 재설계의 실제 동기다.
+
+요청 사항(원문 요구 5가지)을 그대로 반영한다:
+1. 목적: 수령일(이번 달) 선택 후 반납일(다음 달) 선택 시 UX 개선.
+2. 세로 스크롤 + 드래그 가능한 미려한 인터랙션.
+3. 기존 내재된 조건 로직(휴무일 강조·범위선택 밴드·비활성 처리 등) 절대 보존.
+4. 이 달력(`CalendarGrid.svelte`)이 시스템 공통 컴포넌트임을 감안.
+5. 실제 구현은 하네스플로 경유.
+
+**Stephen 확정 사항(플랜모드 대화에서 직접 확인):**
+- 적용 범위: 공유 컴포넌트를 쓰는 3곳(장바구니 예약, CMS 일반 날짜입력, 마이페이지
+  생년월일) 전부에 새 UX 적용.
+- "드래그"의 의미: 화면(달력 표면) 자체를 세로로 스크롤/드래그해서 월을 전환하는 것 —
+  시작일→종료일을 손가락으로 이어긋는 "범위 드래그 선택" 제스처가 아니다. 날짜 선택
+  자체는 기존처럼 탭/클릭 유지.
+- 상단 "이전달/다음달" 화살표 버튼: 유지하되 "한 달치 스크롤 이동" 버튼으로 용도만
+  변경(페이지네이션 폐지, 완전 삭제 아님).
+- 실제 구현은 반드시 하네스 플로(`@promptor` → TASK.md → GATE B → `@harness-executor`)
+  경유 — 이 블록이 바로 그 절차의 산출물.
+
+### 대상 컴포넌트 · 현재 동작 (절대 보존 대상)
+
+`src/lib/components/common/CalendarGrid.svelte` (757줄) — 공유 컴포넌트, 사용처 3곳 전부
+grep으로 확인·확정됨(다른 사용처 없음):
+
+| # | 파일 | 쓰는 기능 |
+|---|---|---|
+| 1 | `src/lib/components/cms/CmsDatePicker.svelte:59` | `value`/`onselect`/`disablePast`만 — 최소 기능 |
+| 2 | `src/lib/components/members/profile/ProfileTabContent.svelte:1096-1100` | 위와 동일 + `disablePast={false}` — 생년월일이라 **수십 년 전으로 점프**가 중요 |
+| 3 | `src/routes/cart/+page.svelte`(`RentalForm` 스니펫, leg당 1회씩 2회 렌더) | **전체 기능 사용**: `minDate`/`rangeStart`/`rangeEnd`/`highlightDates`/`warnSelected`/`isDateDisabled`/`onDisabledClick` |
+
+**반드시 그대로 유지해야 하는 로직(수정 절대 금지, 순수 이동/재배치만 허용):**
+- `calDays()`/`isPastDay()`/`fmtDate()` — 순수 함수, `(year,month)`만 받으므로 월별
+  섹션에 그대로 재사용 가능.
+- 날짜 셀(`<button class="cal-day">`) 마크업·클래스·조건 전부: `cal-day-sel`(선택,
+  흰글자+보라 `!important`) / `cal-day-past`(과거, disabled) / `cal-day-holiday`(휴무일
+  차단, 클릭은 되고 `onDisabledClick`만 발동) / `cal-day-sun`/`cal-day-sat`(요일색) /
+  `cal-day-adj-holiday`(휴무일 흡수 경계일 하이라이트, purple-10 배경 — 2026-09-16에
+  4번 색상 조정 끝에 확정된 값, 절대 되돌리지 말 것) / `cal-day-warn`(자동연장 유발 시
+  빨강, `cal-day-sel`과 `::after` 원 둘 다 덮어써야 함) / range 3-레이어(`::before` 밴드
+  `z-index:-2` → `::after` 원 `z-index:-1` → 숫자) — 이 레이어링은 2026-08-18에 실측으로
+  발견·수정된 두 가지 스태킹 버그(자기 배경이 음수 z-index 자식보다 항상 아래 / 인접
+  셀 밴드가 시작·종료 셀을 덮음)를 피하기 위한 것으로, **어떤 새 CSS도 이 셀 레벨 규칙을
+  건드리면 안 됨** — 셀 위쪽(컨테이너) 레이아웃만 바꾼다.
+- `measureCalGrid` 액션(2026-09-16 추가) — 실측 셀 크기 기반 `--cal-min-h` 계산.
+  "하드코딩 대신 실측"이라는 원칙을 확장해서 재사용(아래 설계 개요 참고).
+- `viewYear`/`viewMonth`를 `value`/`minDate` 변경 시 동기화하는 `$effect`(77-85줄) —
+  `core-rules.md`/`ui-mobile.md`에 "올바른 패턴"의 정본 예시로 인용된 코드. 그대로
+  유지하고, 스크롤 앵커 이동만 그 안에 추가.
+- 연/월 빠른이동 오버레이(가로 스크롤+마스크 페이드+`scrollIntoView` 점프, 150ms
+  idle-timer 페이드) — 그대로 유지, 세로 스크롤 설계의 직접적인 참고 원형으로 재사용.
+
+### 설계 개요
+
+**1. 레이아웃 구조**
+
+```
+.cal-root
+├─ .cal-range-summary   (그대로)
+├─ .cal-header          (연/월 버튼 그대로, 화살표는 "한 달 스크롤 이동"으로 용도 변경)
+├─ .cal-dow-header      [신규] 요일 라벨 7개를 그리드 밖으로 분리, 스크롤 영역 위에 고정
+└─ .cal-date-area       height: var(--cal-min-h)  (기존 min-height → 고정 height로 전환)
+   ├─ {#if showYearPicker}  .cal-year-panel      (완전히 그대로)
+   ├─ {:else if showMonthPicker} .cal-month-grid  (완전히 그대로)
+   └─ {:else} .cal-scroll-viewport               [신규]
+        └─ {#each windowMonths as {y,m} (`${y}-${m}`)}   ← 반드시 keyed each
+              .cal-month-section
+              ├─ .cal-month-label (예: "2026년 9월")
+              └─ .cal-grid  ← 기존 날짜 셀 마크업을 {#snippet DayCell(y,m,day)}로
+                              추출해 그대로 재사용 (셀 자체는 1바이트도 안 바뀜)
+```
+
+연/월/일 그리드 3자 중 하나만 보인다는 기존 성질은 그대로 유지한다(모달 높이가 갑자기
+안 변함).
+
+**2. 월 윈도우(가상화) 전략 — 라이브러리 없이 직접 구현**
+
+이 프로젝트엔 드래그·가상스크롤·달력 라이브러리가 전혀 없음(package.json 확인 완료) —
+순수 Pointer/Scroll 이벤트 + CSS로 구현.
+
+- **실측 대신 산술 계산**: `measureCalGrid`가 이미 읽는 셀 높이(`cellH`)·행간(`rowGap`)·
+  요일헤더 높이를 재사용해 `sectionHeight(rows) = labelH + rows*cellH + (rows-1)*rowGap`을
+  계산. `rows`는 `calDays(y,m).length/7`로 렌더 없이 미리 알 수 있는 순수값 — 그래서 각
+  월 섹션을 실제로 마운트하지 않고도 오프셋을 정확히 계산 가능(월별 `ResizeObserver` N개를
+  두는 방식은 프리펜드/프루닝 때마다 순간적으로 어긋난 오프셋이 보여 스크롤이 튀는 부작용이
+  있어 피함).
+- **윈도우 크기**: 앵커 월 기준 앞뒤 2개월(총 5개월)만 항상 마운트 — 빠른 플릭에도
+  마운트가 못 따라가지 않을 정도의 여유.
+- **경계**: 기존 `YEAR_LIST_PAST=100`/`YEAR_LIST_FUTURE=30` 상수를 그대로 재사용해
+  연도피커·세로피드가 "갈 수 있는 범위"에 대해 서로 다른 말을 하지 않게 함.
+- **스크롤 위치 보정**: 위쪽에 월을 붙이거나 뗄 때 발생하는 높이 변화를, `tick()` 이후
+  `scrollTop`을 직접 DOM에 써서(=상태 아님) 보정 — 아래 "드래그 기법"과 동일한 원칙.
+
+**3. 연/월 빠른이동 ↔ 세로 스크롤 공존 (생년월일 케이스의 핵심)**
+
+생년월일처럼 수십 년을 점프해야 하는 화면에서는 "실제로 스크롤해서 이동"이 아니라
+**연/월 피커로 즉시 순간이동(teleport)** 해야 한다:
+- 연/월 피커 자체(가로 스크롤+마스크 페이드+`scrollIntoView`)는 완전히 그대로.
+- `pickYear`/`pickMonth` 선택 시, 스크롤 윈도우를 그 연/월 기준으로 **다시 세팅**(중간
+  수십 년을 실제로 스크롤하지 않음) — `scrollTop`을 `behavior:'auto'`로 즉시 이동.
+- 탭 횟수는 기존과 동일(년→월→끝). 연/월 버튼 자체 위치·모양도 그대로 — 화면별 별도
+  모드 없음.
+
+**4. 스크롤/드래그 인터랙션**
+
+- **네이티브 스크롤이 기반**: `.cal-scroll-viewport`에 `overflow-y:auto`만 줘도 터치
+  드래그(관성·바운스 포함), 휠, 스크롤바, 그리고 **터치에서 스크롤과 탭을 브라우저가
+  알아서 구분**(스크롤로 판정되면 합성 클릭이 자동 취소됨)까지 전부 공짜로 얻는다 —
+  직접 만드는 관성 스크롤은 오히려 iOS 네이티브보다 나쁘다.
+- **데스크톱 마우스 드래그**는 이 프로젝트에 이미 있는 패턴을 그대로 이식:
+  `src/lib/components/cms/ContractTemplatePanel.svelte:466-537`의 "드래그 중엔 `$state`를
+  쓰지 않고 DOM에 직접 `transform`/`scrollTop`만 쓰고, 4px 임계값으로 클릭과 드래그를
+  구분, 손을 뗄 때만 커밋" 기법 — Svelte 5 룬 모드에서 매 프레임 `$state` 갱신 시 생기는
+  끊김을 피하는, 이 코드베이스의 검증된 house pattern.
+  - `pointerdown` 시 `e.pointerType !== 'mouse'`면 그대로 리턴(터치는 절대 가로채지
+    않음) — 이 한 줄이 제일 중요.
+  - 드래그 종료 시 그 위치의 `.cal-day` 클릭이 잘못 발동하지 않도록 캡처 단계 클릭 억제
+    필요(4px 임계값 재사용).
+  - `touch-action:none`은 **절대 금지**(터치 스크롤 자체가 죽음) — `SignatureCanvas.svelte`
+    등 캔버스류만 쓰는 속성.
+- **스크롤 스냅**: v1은 자유 스크롤(스냅 없음) — Airbnb류 "연속된 느낌"의 핵심. 나중에
+  원하면 `scroll-snap-type: y proximity`(이 프로젝트 기존 관례, `mandatory` 아님) 추가 검토.
+- **호버 미리보기 스트로빙 방지**: 스크롤 중 마우스가 고정된 채 셀들이 지나가면
+  `onmouseenter`가 난사됨 — 연도피커에 이미 있는 150ms idle-timer 기법을 그대로 재사용해
+  스크롤 중엔 호버 미리보기를 끔.
+- **가로 3px 밴드 번짐 클리핑 주의**: `overflow-y:auto`를 걸면 `overflow-x`도 강제로
+  clip 계열이 되어, range 밴드의 `-3px` 번짐(`cal-day-in-range::before`)이 맨 왼쪽
+  열에서 잘릴 수 있음 — 뷰포트에 최소 4px 여유 패딩 필요(기존 `.cal-layer padding:20px`
+  안쪽에서 확보 가능).
+- **화살표 버튼**: (사용자 확정) 삭제하지 않고, `scrollBy({top: ±한달높이,
+  behavior:'smooth'})`로 용도 변경.
+
+**5. Prop 계약 — 기존 3곳 무변경 원칙**
+
+`value`/`onselect`/`disablePast`/`minDate`/`rangeStart`/`rangeEnd`/`rangeStartLabel`/
+`rangeEndLabel`/`isDateDisabled`/`onDisabledClick`/`highlightDates`/`warnSelected` —
+**전부 시그니처·동작 무변경**. 어느 월 섹션에서 렌더되든 동일한 셀 로직이 동일한 값을
+받는 구조라 캐치사이트 코드 수정이 필요 없다.
+
+**단, 장바구니(3번 사용처)에 신규 prop 1개 추가 필요 — 선택이 아니라 필수 안전장치:**
+
+```
+maxDate?: string   // 기본값 '' = 기존 동작 그대로. 지정 시 그 이후 월은 cal-day-past로 비활성 표시.
+```
+
+**왜 필수인가**: `src/routes/cart/+page.svelte:1493`에 확인된 사실 — 재고 가용성 조회
+(`get_unavailable_dates_for_cart`)가 **오늘부터 180일까지만** 조회되고(
+`AVAILABILITY_WINDOW_DAYS = 180`), `isDateDisabled`는 그 결과 `Set`의 `.has(iso)`만 본다.
+180일을 넘는 날짜는 "조회된 적이 없어서" 무조건 `false`(=선택 가능)로 보인다. 지금은
+화살표를 6번 넘게 눌러야 그 지점에 닿아서 사실상 아무도 발견 못 하는 결함이지만,
+**세로 스크롤이 생기면 몇 초 플릭 한 번으로 그 지점에 도달** — 재고 미확인 날짜로 실제
+예약이 성립될 수 있는 데이터 정합성 리스크가 새로 노출된다. 장바구니 호출부에
+`maxDate={addDays(todayIso(), AVAILABILITY_WINDOW_DAYS)}`(이미 있는 두 값 재사용)만
+추가하면 해결됨. CMS/생년월일 두 곳은 이 prop을 안 넘기므로 영향 없음.
+
+### 리스크 (8개 항목 — 전부 구현 단계에서 실측 검증 필수)
+
+| 리스크 | 내용 | 대응 |
+|---|---|---|
+| **R1 — 재고 미확인 구간 노출** | 장바구니에서 180일 이후 날짜가 "선택 가능"처럼 보임 | `maxDate` prop 추가 (필수) |
+| **R2 — range 밴드 스태킹 붕괴** | 새 컨테이너에 `transform`/`contain`/`content-visibility`/`isolation`/`opacity`/`will-change`를 걸면 `::before`(-2)/`::after`(-1) 레이어 순서가 깨짐 — 2026-08-18에 이미 한 번 겪은 버그 클래스 | 월 섹션·스크롤뷰포트에 위 속성 절대 금지. 소스텍스트 검증 테스트로 고정(아래 검증) |
+| **R3 — 드래그 종료 시 오선택** | 마우스로 200px 드래그 후 놓으면 그 위치 날짜가 클릭된 것처럼 처리될 위험 | 4px 임계값 + 캡처단계 클릭 억제(ContractTemplatePanel 패턴) |
+| **R4 — 터치 스크롤 파괴** | `touch-action:none`이나 커스텀 터치 핸들러가 네이티브 스크롤을 죽임 | `pointerType!=='mouse'`면 즉시 return, `touch-action:none` 사용 금지 |
+| **R5 — 스크롤 위치 튐** | 월 윈도우 앞쪽에 붙이기/떼기 시 보정 타이밍이 틀리면 한 프레임 튐 | 오프셋 계산·`scrollTop` 보정을 순수함수로 분리해 유닛테스트 |
+| **R6 — cal-day-warn 이중 오버라이드** | `.cal-day-sel`과 `::after` 원 둘 다 빨강이어야 하는데, 리마운트(스크롤 밖→안) 후에도 유지되는지 재검증 필요 | 실브라우저로 스크롤 아웃→인 재확인 |
+| **R7 — 카트 안내문 위치(`measureCalLayer`)** | `src/routes/cart/+page.svelte:502-509,2974,3024`가 달력 팝업 실제 높이를 재서 안내문 위치를 잡음 — 고정 높이 뷰포트로 바뀌면 오히려 안정화되어야 하나 재검증 필요 | 열림 애니메이션 중/후 위치 확인 |
+| **탭 순서 폭증** | 셀 수가 ~35개→~175개로 늘어 키보드 탭 순서 부담 증가(이 컴포넌트는 원래 화살표키 네비게이션이 없음 — 기존에도 없던 기능이라 "회귀"는 아님) | 앵커 월 밖 셀에 `tabindex="-1"` |
+
+### 단계별 진행 순서 (권장)
+
+```
+1. 순수 로직 추출 + 테스트 — src/lib/utils/calendarWindow.ts(월 행수 계산, 윈도우 구성,
+   오프셋 계산, 스크롤 보정값 계산) — DOM 없는 순수함수, vitest로 전부 커버. 컴포넌트는
+   아직 안 건드림 → 회귀 위험 0.
+2. 플래그 뒤에서 엔진 구현 — CalendarGrid.svelte에 continuousScroll?: boolean(기본
+   false) 추가. 요일헤더 분리, DayCell 스니펫 추출, 스크롤뷰포트/드래그레이어 구현,
+   measureCalGrid를 산술 계산으로 확장. 플래그 꺼진 상태에선 기존 3곳 전부 동작 100%
+   동일 — npm run check 그린 확인.
+3. 개발자 검증(장바구니 기준) — 로컬에서만 플래그 켜고 위 리스크 표 전부 실브라우저로
+   대조 확인. 아직 배포 안 함.
+4. 생년월일·CMS 먼저 활성화 — 두 곳은 위험도 낮고(결제 무관) 연/월 순간이동 케이스
+   (생년월일)를 실사용으로 조기 검증하기 좋음.
+5. 장바구니 활성화(maxDate 포함) — 결제 연결된 화면이라 가장 마지막, 가장 신중하게.
+6. 플래그·구(舊) 경로 삭제 — 5번과 같은 스프린트 내 정리(두 렌더링 경로를 영구
+   공존시키지 않음).
+```
+
+### 검증 방법
+
+```
+- 정적: npm run check(svelte-check) 클린, 프로젝트 lint(any 금지 등) 클린.
+- 신규 유닛테스트: calendarWindow.ts의 월별 행수(4/5/6행 경계 월 포함)·윈도우 클램핑·
+  오프셋 왕복 계산.
+- 신규 회귀가드 테스트: 기존 contractSign.test.ts류의 "소스 텍스트 직접 검사" 패턴을
+  재사용해 CalendarGrid.svelte 안에 transform/contain/content-visibility/isolation/
+  touch-action:none이 새로 들어가지 않았는지, z-index:-2/-1/2 선언이 그대로 남아있는지 고정.
+- 실브라우저 수동 검증(3곳 전부, 플래그 on/off 비교):
+  · 셀 상태 매트릭스(선택/과거/휴무차단/요일색/경계일하이라이트/경고빨강/범위밴드)
+    월별·PC·모바일 폭 대조.
+  · 수령 9/28→반납 10/3처럼 월 경계를 넘는 범위 선택 — 헤드라인 시나리오.
+  · 마우스 드래그 후 오선택 안 됨 / 짧은 클릭은 정상 선택됨 / 터치 플릭은 스크롤만
+    되고 선택 안 됨.
+  · 30개월 이상 빠르게 스크롤 후 document.querySelectorAll('.cal-day').length가
+    일정하게 유지되는지(DOM 무한증가 안 함).
+  · 생년월일에서 연→월 순간이동이 즉시 되는지, 340px 좁은 패널에서 높이 계산이 맞는지.
+  · 장바구니에서 오늘+181일 이후 전부 비활성 처리되는지(maxDate 동작).
+  · 640px 브레이크포인트를 스크롤 중에 넘나들 때 앵커 월이 안 튀는지.
+```
+
+### 하네스 플로 반영 (요청 5번)
+
+이 플랜 승인 후 실제 구현은 Claude 네이티브 실행이 아니라 `@promptor` → `TASK.md` 생성
+(분석, 완료) → GATE B → `@harness-executor` 실행 경로를 따른다(AGENTS.md 확정 문구).
+공유 컴포넌트 3곳에 영향을 주는 다중파일 변경이라 CLAUDE.md 등급 기준상 최소 🟡
+BOUNDARY, 실질적으로는 결제 연결 화면(장바구니)까지 포함하므로 GATE B 승인 대상. TDD
+도메인 여부(순수 로직 유닛테스트 부분)는 `@sp2-tdd-agents` 위임 대상이 될 수 있음 —
+최종 판단은 harness-executor.
+
+### GATE B 확인 항목
+
+```
+[ ] NOW 태스크(위 전체 계획)가 Stephen 의도와 맞는가?
+[ ] 범위 밖 항목(TimePickerGrid.svelte·D-DINExp 폰트 3종·CalendarGrid 기존 미커밋
+    폰트 변경)이 이번 태스크에 섞여 들어가지 않았는가?
+[ ] 단계별 진행 순서(1~6단계) 그대로 진행해도 되는가, 아니면 순서 조정이 필요한가?
+[ ] maxDate prop 추가(리스크 R1 대응) 방식에 이견이 없는가?
+[ ] TDD 대상 범위(calendarWindow.ts 순수 로직)에 대한 이견이 없는가?
+```
+
+→ 승인: "GATE B 승인. NOW 실행해."
+→ 수정: TASK.md 직접 수정 후 "GATE B: 내가 고쳤어. NOW 실행해."
+→ 반려: "GATE B 반려. [이유]. 다시 작성해."
+
+---
+
+## DONE — 🟢 ROUTINE: RentalForm 자신의 날짜 bar도 D-DIN Exp Bold로 굵기 통일 (2026-09-21, 이 세션'만' — cart/+page.svelte 1개 파일, UI 스타일 단순 수정 — GATE 등급 원칙상 ROUTINE은 GATE E 대상 아님, Claude Browser 실측으로 자체 검증 완료, git commit만 Stephen 대기)
+
+### 배경
+
+Stephen이 `.rental-form .datetime-btn-label`(아코디언 열림 상태에서 보이는 날짜 bar,
+"대여설정정보"/"반납설정정보" bar)을 선택해 "폰트토큰이 미반영된 것 같다"고 지적. 확인
+결과 D-DIN Exp 패밀리 자체는 정상 적용돼 있었으나 굵기가 500(Regular)에 머물러 있어,
+직전에 Bold(700)로 맞춘 접힘요약 bar(.acc-collapsed-summary)와 나란히 비교하면 상대적으로
+가늘어 보였음. Stephen 질문: "아코디언 접혔을 때 방법 목록과 동일한 UI 아닌가?" —
+설명(날짜 bar vs 방법명 bar, 서로 다른 정보를 보여주는 별개 UI) 후 "그래도 같은 종류의
+bar니 굵기를 통일해야 한다"는 확정 지시.
+
+### 구현 내용
+
+```
+src/routes/cart/+page.svelte:
+  .rental-form .datetime-btn-label에 font-weight: 700 명시 추가(기존 font-family:
+  var(--font-en-d-din)만 있던 규칙에 추가) — .acc-collapsed-summary 쪽과 완전히
+  동일한 D-DIN Exp Bold(700)로 통일. 크기(18px)·PC-모바일 비율은 무변경.
+```
+
+### 파일 변경 목록
+
+```
+src/routes/cart/+page.svelte
+```
+
+### 검증
+
+```
+- Claude Browser 라이브 실측: .rental-form .datetime-btn-label("2026.09.28 +휴무일
+  포함") → fontFamily='"D-DIN Exp", sans-serif', fontWeight=700(수정 전 500),
+  fontSize=18px(불변) 확인.
+- npx svelte-check: 신규 에러 0건 — 수정 전과 동일하게 1 error, 402 warnings
+- npx vitest run holidayExtensionFee.test.ts: 31/31 GREEN(순수 CSS 변경, 회귀 확인용)
+```
+
+---
+
+## DONE — 🟢 ROUTINE: PC 개별 아코디언 접힘요약 bar에도 D-DIN Exp Bold 적용 누락 수정 (2026-09-21, 이 세션'만' — cart/+page.svelte 1개 파일, UI 스타일 단순 수정 — GATE 등급 원칙상 ROUTINE은 GATE E 대상 아님, Claude Browser 실측으로 자체 검증 완료, git commit만 Stephen 대기)
+
+### 배경
+
+직전 태스크에서 `.bulk-collapsed-bar .datetime-btn-label`(모바일 전용 "대여예약옵션"
+패널 전체 접힘 요약)에 D-DIN Exp Bold를 적용했는데, Stephen이 "PC 반응형에서는 여전히
+두텁지 않다"고 재지적 — 확인 결과 PC는 `.bulk-panel` 자체가 `display:none`이라 이
+패널 전체 접힘 요약이 애초에 존재하지 않고, 대신 `.detail-pane` 안에서 "대여 방법"/
+"반납 방법" 아코디언을 **개별로** 접었을 때 나오는 별도의
+`.acc-item > .datetime-wrap.acc-collapsed-summary`가 PC의 실질적 대응 위치였다 —
+이 위치가 스코프에서 빠져 기본 규칙(Tilt Warp/weight 500)에 그대로 머물러 있었음을
+라이브 재현으로 확인.
+
+### 구현 내용
+
+```
+src/routes/cart/+page.svelte:
+  .bulk-collapsed-bar .datetime-btn-label(조상 요소 기준 선택자) →
+  .acc-collapsed-summary .datetime-btn-label(클래스 기준 선택자)로 교체 — 모바일 패널
+  전체 접힘 요약과 PC 개별 아코디언 접힘 요약 둘 다 동일하게 acc-collapsed-summary
+  클래스를 쓰고 있어, 조상 대신 이 클래스를 선택자로 삼으면 두 위치를 한 규칙으로 커버.
+  RentalForm 자신의 열린 상태 bar(.rental-form 쪽, weight 500 유지 규칙)는 이 클래스를
+  갖지 않아 전혀 영향받지 않음 — 완전히 다른 요소 집합이라 특이도 충돌 없음.
+```
+
+### 파일 변경 목록
+
+```
+src/routes/cart/+page.svelte
+```
+
+### 검증
+
+```
+- Claude Browser 라이브 재현(PC 902px, "반납 방법" 아코디언을 열어 "대여 방법" 아코디언이
+  자동으로 자기 자신의 접힘 요약으로 전환되도록 유도):
+  .acc-item > .datetime-wrap.acc-collapsed-summary .datetime-btn-label →
+  fontFamily='"D-DIN Exp", sans-serif', fontWeight=700, fontSize=18px 확인(수정 전
+  Tilt Warp/500이었음). canvas measureText로 700(88.3px) vs 400(85.6px) 폭 차이
+  재확인해 진짜 Bold 글리프 사용 재검증. 스크린샷으로 PC 화면에서도 굵게 보임을 시각 확인.
+  모바일(.bulk-collapsed-bar 경로)도 재확인해 회귀 없음 확인(fontWeight=700 그대로).
+- npx svelte-check: 신규 에러 0건 — 수정 전과 동일하게 1 error, 402 warnings
+- npx vitest run holidayExtensionFee.test.ts: 31/31 GREEN(순수 CSS 선택자 변경,
+  회귀 확인용)
+```
+
+---
+
+## DONE — 🟢 ROUTINE: 접힘요약 bar(수령·반납)에도 D-DIN Exp Bold 확대 적용 (2026-09-21, 이 세션'만' — cart/+page.svelte 1개 파일, UI 스타일 단순 수정 — GATE 등급 원칙상 ROUTINE은 GATE E 대상 아님, Claude Browser 실측으로 자체 검증 완료, git commit만 Stephen 대기)
+
+### 배경
+
+직전 태스크에서 D-DIN Exp를 "대여설정정보/반납설정정보 bar"(.rental-form 안의
+datetime-btn-label)에만 한정 적용했는데, Stephen이 접힘요약 bar(.bulk-collapsed-bar
+안의 "2026.09.28 +휴무일 포함"·"2026.09.29 | 24:00" 등 수령·반납 두 leg 모두)도
+동일하게 적용해달라고 추가 지시 — 이번엔 명시적으로 D-DINExp-Bold.woff2(굵기 700) 지정.
+추가로 "PC & mobile 반응형에 비율로 적용된 게 맞는지" 확인 요청.
+
+### 구현 내용
+
+```
+src/routes/cart/+page.svelte:
+  .rental-form .datetime-btn-label(직전 태스크, weight 500 유지) 규칙 바로 뒤에
+  .bulk-collapsed-bar .datetime-btn-label { font-family: var(--font-en-d-din);
+  font-weight: 700; } 신규 추가 — 접힘요약 bar(수령·반납 모두, .bulk-collapsed-bar 하위
+  전체)에 D-DIN Exp를 Bold(700)로 적용. 두 규칙은 서로 다른 요소 집합(leg 자신의 bar
+  vs 접힘요약 bar)을 대상으로 해 특이도 충돌 없이 독립적으로 공존.
+```
+
+### 파일 변경 목록
+
+```
+src/routes/cart/+page.svelte
+```
+
+### 검증
+
+```
+- Claude Browser 라이브 실측(모바일 378px, 실제로 대여+반납 방법·날짜를 전부 설정해
+  수령·반납 두 collapsed bar를 모두 노출시켜 확인):
+  "2026.09.28 +휴무일 포함"/"2026.09.29"/"24:00" 3개 라벨 전부 fontFamily='"D-DIN Exp",
+  sans-serif', fontWeight=700, fontSize=18px 확인. 스크린샷으로도 두 bar 모두 Bold로
+  렌더링됨을 시각 확인.
+- PC·모바일 반응형 비율 확인(Stephen 질문 2번 답변):
+  · .rental-form .datetime-btn-label(직전 태스크 대상)은 PC(1024px)에서도 동일하게
+    D-DIN Exp/weight500/18px로 확인 — RentalForm snippet이 PC(.detail-pane)·모바일
+    (.bulk-body) 양쪽에서 동일하게 재사용되는 구조라 별도 반응형 분기 없이 자동으로
+    PC·모바일 1:1 비율 유지됨.
+  · .bulk-collapsed-bar(이번 태스크 대상)는 구조적으로 모바일 전용 UI다 — .bulk-panel
+    자체가 PC(min-width:641px)에서 display:none 처리되고, PC는 이 "패널 전체 접힘 요약"
+    UX 자체가 없이 .detail-pane이 항상 펼침 상태로 대체한다(기존 설계, 이번 태스크가
+    새로 만든 제약 아님). 따라서 "PC 반응형 적용"은 이 bar 자체가 PC에 존재하지 않아
+    해당사항 없음 — 실측으로 bulkPanel display:none 재확인.
+- npx svelte-check: 신규 에러 0건 — 수정 전과 동일하게 1 error, 402 warnings
+- npx vitest run holidayExtensionFee.test.ts: 31/31 GREEN(순수 CSS 변경, 회귀 확인용)
+```
+
+---
+
+## DONE — 🟡 BOUNDARY: D-DIN Expanded 웹폰트 신규 등록 + 대여/반납 설정정보 bar 전용 적용 (2026-09-21, 이 세션'만' — app.css·cart/+page.svelte 2개 파일 + 신규 폰트 3개, ✅ sp3-qa-agent GATE E 통과(BLOCKING 0건, MEDIUM 0건, LOW 1건 — 폰트 라이선스 텍스트 파일 미동봉, 기존 SBAggroOTF와 동일한 기존 관행 연장이라 조치 불요), git commit만 Stephen 대기)
+
+### 배경
+
+Stephen이 로컬에서 D-DIN Expanded 웹폰트 파일 3개(Regular/Bold/Italic, .woff2)를 첨부하며
+지시: ① 서버에 신규 패밀리로 등록 ② "대여설정정보 bar"·"반납설정정보 bar"(RentalForm
+snippet 자신의 수령/반납 날짜·시간 버튼 — CalendarGrid/TimePickerGrid/접힘요약 bar와는
+별개로, 이번 세션 초반부터 Tilt Warp를 적용해온 `.datetime-btn-label`과 동일 클래스지만
+"RentalForm 안에서 렌더링되는 것"만 대상)에 동일 사이즈로 적용 ③ PC·모바일 반응형 비율
+유지.
+
+라이선스 확인: SIL Open Font License 1.1(Datto Inc., D-DIN 패밀리) — 임베드·재배포·상업적
+사용 전부 허용되는 라이선스, 저작권 문제 없음.
+
+### 구현 내용
+
+```
+static/fonts/D-DINExp.woff2, D-DINExp-Bold.woff2, D-DINExp-Italic.woff2 (신규 파일 3개)
+  — 기존 SBAggroOTF 웹폰트와 동일하게 static/fonts/ 평면 구조에 배치(기존 컨벤션 그대로).
+
+src/app.css:
+  @font-face 3개 신규 등록(family: 'D-DIN Exp', weight 400/700/400, style normal/normal/
+  italic) — 기존 SB AggroOTF @font-face 블록과 동일한 선언 패턴(font-display: swap 포함).
+  --font-en-d-din: 'D-DIN Exp', sans-serif; 신규 CSS 변수 추가(--font-en-display 등
+  기존 명명 규칙 재사용).
+
+src/routes/cart/+page.svelte:
+  기존 .datetime-btn-label 기본 규칙(Tilt Warp, --font-en-display)은 전혀 건드리지 않고,
+  더 높은 특이도의 신규 규칙 `.rental-form .datetime-btn-label { font-family:
+  var(--font-en-d-din); }`을 추가해 "대여설정정보"/"반납설정정보" bar(.rental-form 안의
+  인스턴스, 수령·반납 두 leg 공용 구조라 자동으로 둘 다 적용됨)에만 한정 적용 — 접힘요약
+  bar(.bulk-collapsed-bar, .rental-form 밖에 위치)는 이 선택자와 매칭되지 않아 기존
+  Tilt Warp 그대로 유지됨. 크기·굵기·줄높이(--text-m-title-18L 유래, 18px/500/160%)는
+  "동일 사이즈" 지시대로 전혀 변경 없음 — PC·모바일 모두 이미 1:1 비율이라 별도 반응형
+  분기 불필요.
+```
+
+### 파일 변경 목록
+
+```
+static/fonts/D-DINExp.woff2 (신규)
+static/fonts/D-DINExp-Bold.woff2 (신규)
+static/fonts/D-DINExp-Italic.woff2 (신규)
+src/app.css
+src/routes/cart/+page.svelte
+```
+
+### 검증
+
+```
+- Claude Browser 라이브 실측(document.fonts로 3개 @font-face 전부 등록 확인 →
+  getComputedStyle로 실제 적용 확인):
+  PC(1024px)·Mobile(390px) .rental-form .datetime-btn-label → 둘 다
+  fontFamily='"D-DIN Exp", sans-serif', fontSize=18px, fontWeight=500(불변) —
+  대여leg·반납leg(.rental-form 인스턴스 2개) 모두 적용 확인.
+  .bulk-collapsed-bar .datetime-btn-label(접힘요약 bar, 범위 밖) → fontFamily=
+  '"Tilt Warp", sans-serif' 그대로 — 영향 없음 확인.
+  스크린샷으로 "2026.09.28"·"14:00" 숫자가 D-DIN Exp로 렌더링됨을 시각 확인.
+- npx svelte-check: 신규 에러 0건 — 수정 전과 동일하게 1 error, 402 warnings
+- npx vitest run holidayExtensionFee.test.ts: 31/31 GREEN(순수 CSS+정적자산 추가,
+  회귀 확인용)
+```
+
+---
+
+## DONE — 🟡 BOUNDARY: 접힘요약 bar 순서를 leg 단위(대여→반납)로 재정렬 — 방법/날짜 그룹 분리 구조 폐기 (2026-09-21, 이 세션'만' — cart/+page.svelte 1개 파일, ✅ sp3-qa-agent GATE E 통과(BLOCKING 0건, MEDIUM 0건, LOW 0건 — 이전 태스크에서 이미 문서화된 케이스 d 엣지케이스는 이번 diff로 신규 발생/악화되지 않음 확인), git commit만 Stephen 대기)
+
+### 배경
+
+Stephen이 "반납 방법 | 미선택" bar와 "2026.09.28 | 03:00" 날짜 bar 두 선택영역을 짚으며
+"반납 방법"이 날짜 bar보다 아래에 와야 정상이라고 지적 — "대여방법이 선(先), 반납방법이
+후(後)"가 항상 유지되는 순서여야 함. 원인: 직전 태스크까지는 "방법 bar 그룹"(대여+반납
+방법 중 아직 안 뜬 것들)을 통째로 먼저 배치하고 그 뒤에 "날짜 bar 그룹"(대여+반납 날짜 중
+뜬 것들)을 배치하는 2단 그룹 구조였다 — 대여leg가 날짜 bar로 이미 대체되고 반납leg는
+아직 방법 bar인 상태에서는, "반납 방법" bar(방법 그룹 소속)가 대여 날짜 bar(날짜 그룹
+소속)보다 먼저 나와버려 leg 순서가 뒤집혀 보였음.
+
+### 구현 내용
+
+```
+src/routes/cart/+page.svelte:
+  "방법 bar 그룹 전체 → 날짜 bar 그룹 전체" 2단 구조를 폐기하고, leg 단위로
+  [그 leg의 방법 bar 또는 날짜 bar] 하나씩을 대여leg 먼저 → 반납leg 나중에 순서대로
+  배치하도록 재구성:
+    {#if !pickupDateBarShown} 대여 방법 bar {/if}
+    {#if pickupDateBarShown} 대여 날짜 bar {/if}
+    {#if !returnDateBarShown} 반납 방법 bar {/if}
+    {#if returnDateBarShown} 반납 날짜 bar {/if}
+  각 조건(pickupDateBarShown/returnDateBarShown, 직전 태스크에서 확정된 정의 그대로
+  무변경)과 날짜 bar 내부 마크업(아이콘·라벨·시간버튼·휴무일배지 등)은 단 한 글자도
+  건드리지 않음 — 오직 배치 순서만 leg 단위로 재정렬.
+```
+
+### 파일 변경 목록
+
+```
+src/routes/cart/+page.svelte
+```
+
+### 검증
+
+```
+- Claude Browser 라이브 재현(모바일 390px):
+  1) 둘 다 미설정 → "대여 방법: 미선택" 먼저, "반납 방법: 미선택" 다음 순서 유지 확인.
+  2) 대여 방법="크레이지샷배송 대여"+수령일 9/28 선택 → 순서 "2026.09.28(대여 날짜 bar)"
+     먼저, "반납 방법: 미선택" 다음 — Stephen이 지적한 역전 현상 해소 확인(bulk-collapsed-
+     bar.innerText로 정확한 렌더 순서 재확인 + 스크린샷 시각 확인).
+- npx svelte-check: 신규 에러 0건 — 수정 전과 동일하게 1 error, 402 warnings
+- npx vitest run holidayExtensionFee.test.ts: 31/31 GREEN(순수 UI 배치 순서 변경,
+  회귀 확인용)
+```
+
+---
+
+## DONE — 🟢 ROUTINE: 접힘요약 방법 bar와 날짜 bar 가로폭 불일치 수정 (2026-09-21, 이 세션'만' — cart/+page.svelte 1개 파일, UI 스타일 단순 수정 — GATE 등급 원칙상 ROUTINE은 GATE E 대상 아님, Claude Browser 실측으로 자체 검증 완료, git commit만 Stephen 대기)
+
+### 배경
+
+Stephen이 "반납 방법 | 미선택" bar(`.bulk-collapsed-methods`)와 "2026.09.28 | 03:30"
+날짜 bar(`.datetime-wrap.acc-collapsed-summary`) 두 선택영역을 나란히 비교해 가로폭이
+서로 다름을 지적. 원인 확인: `.bulk-collapsed-methods`는 직전 태스크에서 좌우 20px로
+맞춰뒀는데, `.datetime-wrap.acc-collapsed-summary`(기본 규칙, 2026-09-03 도입 당시
+`.acc-head` 자체 내장 패딩 30px에 맞춰 정한 값)는 여전히 좌우 30px이라 두 형제 bar의
+실제 콘텐츠 폭이 20px(2×10px)만큼 차이 났음.
+
+### 구현 내용
+
+```
+src/routes/cart/+page.svelte:
+  .datetime-wrap.acc-collapsed-summary 기본 규칙 padding: 0 30px 20px → 0 20px 20px로
+  수정 — 형제 .bulk-collapsed-methods와 동일한 좌우 인셋으로 통일. 더 높은 특이도를 가진
+  `.acc-item > .datetime-wrap.acc-collapsed-summary`(열림 상태에서 개별 "대여 방법"
+  아코디언 자체가 접혔을 때의 요약, 좌우 0px) 규칙은 이번 수정과 무관 — 그대로 유지.
+```
+
+### 파일 변경 목록
+
+```
+src/routes/cart/+page.svelte
+```
+
+### 검증
+
+```
+- Claude Browser 라이브 실측(모바일 390px, 대여 방법="크레이지샷배송 대여"+수령일 9/28
+  선택으로 방법 bar 1개+날짜 bar 1개 동시 노출 상태 재현):
+  .bulk-collapsed-methods 자식(acc-head) childWidth=326px / .datetime-wrap.acc-
+  collapsed-summary 자식(datetime-btns) childWidth=326px — 정확히 일치 확인(수정 전
+  306px였음). 스크린샷으로 두 bar 좌우 끝이 정렬됨을 시각 확인.
+- npx svelte-check: 신규 에러 0건 — 수정 전과 동일하게 1 error, 402 warnings
+- npx vitest run holidayExtensionFee.test.ts: 31/31 GREEN(순수 CSS 변경, 회귀 확인용)
+```
+
+---
+
+## DONE — 🟡 BOUNDARY: 대여/반납 방법 bar와 날짜 bar 동시 중복 노출 결함 수정 — leg별 상호배타 처리 (2026-09-21, 이 세션'만' — cart/+page.svelte 1개 파일, ✅ sp3-qa-agent GATE E 통과(BLOCKING 0건, MEDIUM 0건, LOW 1건 — 수령일 미설정 상태에서 반납일만 먼저 선택 가능한 기존 구조상 엣지케이스, 이번 diff의 신규 회귀 아님, 별건 참고사항), git commit만 Stephen 대기)
+
+### 배경
+
+직전 태스크("대여/반납 방법 bar UI 상시 노출")에서 방법 bar를 항상 노출하도록 구현했는데,
+실사용 중 Stephen이 "대여 방법: 크레이지샷배송 대여" bar와 "2026.09.28" 날짜 bar가
+접힘 상태에서 동시에(중복으로) 노출되는 것을 발견·지적. 요구사항 재해석: 방법 bar는
+"그 leg의 날짜 bar가 아직 뜨지 않는 동안"의 임시 안내용이지, 날짜 bar가 뜨면 방법 bar와
+나란히 상시 공존하는 게 아니다 — 날짜 bar가 표시되는 순간 방법 bar는 "대체"(교체)되어야
+한다.
+
+### 구현 내용
+
+```
+src/routes/cart/+page.svelte:
+  {@const pickupDateBarShown = !!(bulkDate && bulkTime)}
+  {@const returnDateBarShown = pickupDateBarShown && !!(bulkReturnDate && bulkReturnTime)}
+  (반납 날짜 bar가 기존부터 수령 날짜 bar 안에 중첩된 구조라 반납 조건도 수령 조건에
+  종속시킴 — 기존 중첩 구조 자체는 전혀 변경 없음)
+
+  .bulk-collapsed-methods 내부의 "대여 방법"/"반납 방법" 버튼 각각을
+  {#if !pickupDateBarShown}/{#if !returnDateBarShown}로 개별 감싸 그 leg의 날짜 bar가
+  뜨는 순간 해당 방법 bar만 사라지도록 처리(양쪽 다 날짜 bar가 뜨면
+  .bulk-collapsed-methods 컨테이너 자체도 {#if !pickupDateBarShown ||
+  !returnDateBarShown}로 감싸 빈 컨테이너가 남지 않게 함). 날짜 bar 쪽 조건·마크업은
+  이번에도 전혀 손대지 않음(기존 {#if bulkDate && bulkTime}/{#if bulkReturnDate &&
+  bulkReturnTime} 그대로).
+```
+
+### 파일 변경 목록
+
+```
+src/routes/cart/+page.svelte
+```
+
+### 검증
+
+```
+- Claude Browser 라이브 재현·검증(모바일 498px):
+  1) 미설정 초기상태 → "대여 방법: 미선택"/"반납 방법: 미선택" 둘 다 노출(기존 요구사항
+     유지 확인).
+  2) 대여 방법을 "크레이지샷배송 대여"로 설정 + 수령일 9/28 선택 → "대여 방법" bar
+     사라지고 "2026.09.28 +휴무일 포함" 날짜 bar만 남음, "반납 방법: 미선택"은 반납일이
+     아직 없어 그대로 유지됨(스크린샷으로 정확히 재현·해결 확인 — Stephen이 보고한
+     중복 시나리오와 동일 상태에서 방법 bar 1개만 정상적으로 사라짐).
+- npx svelte-check: 신규 에러 0건 — 수정 전과 동일하게 1 error, 402 warnings
+- npx vitest run holidayExtensionFee.test.ts: 31/31 GREEN(순수 UI 조건부 로직 변경,
+  회귀 확인용)
+```
+
+---
+
+## DONE — 🟢 ROUTINE: 수령·반납 방식 콤보 버튼(delivery-combo) 정렬을 좌측으로 재변경 (2026-09-21, 이 세션'만' — cart/+page.svelte 1개 파일, UI 스타일 단순 수정 — GATE 등급 원칙상 ROUTINE은 GATE E 대상 아님, Claude Browser 실측으로 자체 검증 완료, git commit만 Stephen 대기)
+
+### 배경
+
+Stephen이 `.delivery-combo`(방문대여/크레이지샷배송 대여 등 콤보 버튼 그룹)를 선택해
+"PC & mobile 반응형 시 좌측 정렬로 수정할 것" 지시. 2026-09-16에는 바로 아래
+`.delivery-deadline`("15:00 마감", 항상 가운데 정렬)과 정렬 기준을 맞추기 위해 이미 한
+차례 center로 바꾼 이력이 있었음(코드 주석에 기록됨) — 이번 지시로 그 결정을 재반전.
+
+### 구현 내용
+
+```
+src/routes/cart/+page.svelte:
+  .delivery-combo justify-content: center → flex-start(기본값). 이 파일에 PC/모바일
+  분기 미디어쿼리가 없는 단일 규칙이라 양쪽 다 동시 적용됨. .delivery-deadline은 이번
+  지시 범위 밖이라 손대지 않음(계속 가운데 정렬 — 두 요소 정렬 기준이 다시 달라 보일 수
+  있음을 주석에 참고로 남김).
+```
+
+### 파일 변경 목록
+
+```
+src/routes/cart/+page.svelte
+```
+
+### 검증
+
+```
+- Claude Browser 라이브 실측: getComputedStyle(.delivery-combo).justifyContent =
+  "flex-start" 확인 + 스크린샷으로 "방문대여"/"크레이지샷배송 대여" 버튼이 좌측부터
+  배치됨을 시각 확인.
+- npx svelte-check: 신규 에러 0건 — 수정 전과 동일하게 1 error, 402 warnings
+- npx vitest run holidayExtensionFee.test.ts: 31/31 GREEN(순수 CSS 변경, 회귀 확인용)
+```
+
+---
+
+## DONE — 🟢 ROUTINE: bulk-collapsed-methods 좌우 패딩 결함 수정 — acc-head 폭을 열림/닫힘 상태 동일하게 통일 (2026-09-21, 이 세션'만' — cart/+page.svelte 1개 파일, UI 스타일 단순 수정 — GATE 등급 원칙상 ROUTINE은 GATE E 대상 아님, Claude Browser 실측으로 자체 검증 완료, git commit만 Stephen 대기)
+
+### 배경
+
+바로 위 태스크("대여/반납 방법 bar UI 상시 노출")에서 신설한 `.bulk-collapsed-methods`에
+좌우 패딩 30px을 부여했는데, 이는 `.acc-head`(대여/반납 방법 바) 자체의 열림 상태 기준
+(`.bulk-body { padding:16px 20px 30px }`, 좌우 20px)이 아니라 바로 옆의 **다른 컴포넌트**인
+날짜/시간 요약 바(`.datetime-wrap.acc-collapsed-summary`, 좌우 30px)의 값을 잘못 참고해
+생긴 결함 — Stephen이 "열림 상태(대여 방법 acc-head, 20px 기준)"와 "닫힘 상태(방법 요약
+bar, 30px)" 두 스크린샷을 나란히 비교하며 가로폭이 안 맞는 것을 지적해 발견.
+
+### 구현 내용
+
+```
+src/routes/cart/+page.svelte:
+  .bulk-collapsed-methods padding: 0 30px 20px → 0 20px 20px로 수정 — .acc-head가
+  열림 상태(.bulk-body)에서 쓰는 좌우 20px 인셋과 동일하게 통일. .datetime-wrap.
+  acc-collapsed-summary(별도 컴포넌트, 좌우 30px)는 이번 수정 대상 아님 — 그대로 유지.
+```
+
+### 파일 변경 목록
+
+```
+src/routes/cart/+page.svelte
+```
+
+### 검증
+
+```
+- Claude Browser 라이브 실측(getBoundingClientRect, 모바일 389px):
+  열림 상태 .bulk-body .accordions .acc-head width=325px / 닫힘 상태
+  .bulk-collapsed-methods .acc-head width=325px — 정확히 일치 확인(수정 전에는 30px vs
+  20px 패딩 차이로 10px 폭 차이가 있었음).
+- npx svelte-check: 신규 에러 0건 — 수정 전과 동일하게 1 error, 402 warnings
+- npx vitest run holidayExtensionFee.test.ts: 31/31 GREEN(순수 CSS 변경, 회귀 확인용)
+```
+
+---
+
+## DONE — 🟡 BOUNDARY: "대여예약옵션" 모바일 아코디언 접힘 시 대여/반납 방법 bar UI 상시 노출 (2026-09-21, 이 세션'만' — cart/+page.svelte 1개 파일, ✅ sp3-qa-agent GATE E 통과(BLOCKING 0건, MEDIUM 0건, LOW 0건 — 날짜/시간 요약 로직 byte-for-byte 무변경 확인), git commit만 Stephen 대기)
+
+### 배경
+
+Stephen이 Claude Browser로 모바일 "대여예약옵션" 접힘 헤더와 "대여 방법"/"반납 방법"
+acc-head 바 3곳을 선택해 지시: 기존에는 "대여예약옵션" 아코디언이 접혀있을 때 수령/반납
+날짜·시간(bulkDate/bulkTime)이 이미 설정된 경우에만 그 요약 바(bulk-collapsed-bar)가
+보였고, 그마저도 "대여 방법"/"반납 방법" 값 자체는 표시되지 않았다 — 날짜조차 아직
+선택 안 한 초기 상태에서는 "대여예약옵션" 헤더 하나만 덩그러니 보여 사용자가 무엇을
+설정해야 하는지 직관적으로 알기 어려웠다. 지시: ① 값 설정 여부와 무관하게 "대여 방법"/
+"반납 방법" bar UI를 상시 노출 ② 기존 날짜·시간 요약 bar가 조건부(bulkDate && bulkTime)로
+노출되는 로직은 그대로 유지.
+
+### 구현 내용
+
+```
+src/routes/cart/+page.svelte:
+  기존 {#if bulkOpen}...{:else if bulkDate && bulkTime}...{:else}{@render bulkHeadButton()}
+  {/if} 3분기 구조를 {#if bulkOpen}...{:else}...{/if} 2분기로 병합 — "else" 분기가 이제
+  항상 bulk-collapsed-group을 렌더링하며, 그 안에 신규 .bulk-collapsed-methods(대여/반납
+  방법 acc-head 2개, RentalOptionsEditor()의 acc-head와 동일한 마크업·methodLabel()/
+  acc-value-unset 재사용 — 클릭 시 bulkOpen=true + bulkOpenAcc 설정으로 해당 아코디언을
+  열며 이동, 기존 날짜/시간 collapsed 버튼과 동일한 네비게이션 패턴)를 조건 없이 배치.
+  기존 날짜·시간 요약(.datetime-wrap.acc-collapsed-summary)은 그 아래 {#if bulkDate &&
+  bulkTime} 블록으로 그대로 보존 — 조건·마크업 전혀 변경 없음.
+  bulkHeadButton() snippet의 class:bulk-head-closed 조건을 false로 고정 — 이 클래스(닫힘
+  상태 하단 패딩 30px 보정)는 "헤더 단독 노출"(아래에 아무 것도 없음) 케이스 전용이었는데,
+  이제 접힘 상태에도 항상 방법 요약 bar가 뒤따르므로 그 케이스 자체가 소멸함 — true로
+  남기면 헤더와 방법 bar 사이에 불필요한 여백이 생김.
+  신규 CSS .bulk-collapsed-methods(display:flex column, gap:10px, padding:0 30px 20px —
+  형제 .datetime-wrap.acc-collapsed-summary와 동일한 좌우 인셋 30px 통일).
+```
+
+### 파일 변경 목록
+
+```
+src/routes/cart/+page.svelte
+```
+
+### 검증
+
+```
+- Claude Browser 라이브 검증(모바일 390px, 실제 새로고침으로 값 미설정 초기상태 재현):
+  "대여예약옵션" 접힘 시 "대여 방법: 미선택"/"반납 방법: 미선택" bar 2개가 항상 노출됨을
+  스크린샷으로 확인(이전엔 헤더만 보였음). "대여 방법" bar 클릭 → bulkOpen=true 전환 +
+  "대여 방법" 아코디언이 자동으로 펼쳐지며 "수령 방식" 옵션까지 보임을 확인(네비게이션
+  정상 동작).
+- npx svelte-check: 신규 에러 0건 — 수정 전과 동일하게 1 error, 402 warnings
+- npx vitest run holidayExtensionFee.test.ts: 31/31 GREEN(순수 UI 구조 변경이라 직접
+  관련 없음, 회귀 확인용)
+```
+
+---
+
+## DONE — 🟢 ROUTINE: 접힘요약 날짜라벨(datetime-btn-label) 숫자 폰트 굵기 한 단계 완화 (2026-09-21, 이 세션'만' — cart/+page.svelte 1개 파일, UI 스타일 단순 수정 — GATE 등급 원칙상 ROUTINE은 GATE E 대상 아님, Claude Browser 실측으로 자체 검증 완료, git commit만 Stephen 대기)
+
+### 배경
+
+Stephen이 `.datetime-btn-label`("2026.09.28 +휴무일 포함")을 선택해 지시: 앞서 적용한
+--font-en-display(Tilt Warp) 숫자 폰트토큰 계열 중 현재 굵기(700, Bold)보다 한 단계 낮은
+굵기의 형제 토큰이 있으면 그걸로 교체, 없으면 각 폰트 크기별로 한 단계 낮은 굵기의 토큰을
+새로 만들 것.
+
+확인 결과 app.css에 이미 필요한 형제 토큰이 존재 — `--text-m-title-18B`(700 18px/160%)와
+크기·줄높이가 완전히 동일하고 weight만 500인 `--text-m-title-18L`이 같은 계열
+(text-m-title-18*) 이름으로 이미 정의돼 있었음 — 신규 토큰 생성 불필요.
+
+### 구현 내용
+
+```
+src/routes/cart/+page.svelte:
+  .datetime-btn-label 기본 규칙 + @media(max-width:640px) 오버라이드 2곳 모두
+  font: var(--text-m-title-18B) → font: var(--text-m-title-18L)로 교체(font-family:
+  var(--font-en-display) override는 그대로 유지). 크기(18px)·줄높이(160%)·PC-Mobile
+  반응형 1:1 비율은 전혀 변경 없음 — weight만 700→500.
+```
+
+### 파일 변경 목록
+
+```
+src/routes/cart/+page.svelte
+```
+
+### 검증
+
+```
+- Claude Browser 라이브 실측(getComputedStyle, 새로고침 후 재확인):
+  PC(1024px)·Mobile(319px) .datetime-btn-label → 둘 다 fontWeight=500(수정 전 700),
+  fontSize=18px(불변), fontFamily=Tilt Warp(불변) — 반응형 비율 그대로 유지 확인.
+- npx svelte-check: 신규 에러 0건 — 수정 전과 동일하게 1 error, 402 warnings
+- npx vitest run holidayExtensionFee.test.ts: 31/31 GREEN(순수 CSS 변경, 회귀 확인용)
+```
+
+### ⚠️ 후속 발견(2026-09-21, 같은 날) — 사실상 시각적 효과 없음, 원인은 폰트 자체의 구조적 한계
+
+```
+Stephen이 실제 화면에서 "전혀 교체되어 보이지 않음"으로 피드백. 라이브 조사 결과:
+document.fonts 조회 시 'Tilt Warp'는 weight="400" 단 1개 FontFace만 로드됨(app.html의
+Google Fonts import도 `family=Tilt+Warp`로 :wght@ 축 지정이 아예 없음 — Noto Sans KR은
+`:wght@400;500;700;900`으로 명시된 것과 대비). 즉 Tilt Warp는 Google Fonts상 굵기 변형이
+400 하나뿐인 단일 웨이트 폰트라, CSS font-weight를 500/700/900 무엇으로 지정해도 브라우저가
+그릴 수 있는 실제 글리프는 동일한 400 폰트 파일 하나뿐 — 700→500 교체는 코드상으로는
+정확히 반영됐으나(getComputedStyle 확인 완료) 육안상 거의 구분되지 않는다. 라이브 화면에서
+같은 라벨에 400/500(현재값)을 번갈아 적용해 스크린샷 비교했을 때도 시각적 차이 없음을
+직접 확인.
+
+Stephen에게 3가지 대안(① font-weight:400으로 명시 고정 ② 700으로 원복 ③ 다른 다중굵기
+서체로 교체 검토)을 제시했으나 "일단 멈춰"로 보류 지시 — 추가 코드 변경 없이 대기 중.
+현재 코드 상태(500, --text-m-title-18L)는 그대로 유지됨.
+```
+
+---
+
+## DONE — 🟡 BOUNDARY: 시간선택 UI를 TimePickerGrid.svelte 신규 공통 컴포넌트로 분리 + 숫자에 --font-en-display 적용 (2026-09-21, 이 세션'만' — TimePickerGrid.svelte(신규)·cart/+page.svelte 2개 파일, ✅ sp3-qa-agent GATE E 통과(BLOCKING 0건, MEDIUM 0건, LOW 0건), git commit만 Stephen 대기)
+
+### 배경
+
+Stephen이 시간선택 팝업(오전/오후 시간 리스트)의 숫자에도 앞서 날짜·달력에 적용한
+--font-en-display 폰트토큰을 반영해달라고 요청하면서, "혹시 time picker도 CalendarGrid처럼
+공통 컴포넌트화 되어 있는지 확인하고, 안 되어 있으면 컴포넌트화할 것"을 함께 지시. 확인
+결과 시간선택 UI(`.time-layer`/`.time-list`/`.time-row` 등)는 cart/+page.svelte의
+RentalForm snippet 안에 인라인으로만 존재했고(다른 파일에서 재사용된 이력 없음, grep
+결과 cart/+page.svelte 단일 파일에서만 발견), CalendarGrid.svelte 같은 별도 .svelte
+컴포넌트 파일로 분리돼 있지 않았음 — 요청대로 신규 분리.
+
+### 구현 내용
+
+```
+신규 파일 src/lib/components/common/TimePickerGrid.svelte:
+  CalendarGrid.svelte와 동일한 분리 원칙 적용 — 포지셔닝 래퍼(.time-layer, position:
+  absolute·box-shadow·transition:slide)는 CalendarGrid의 .cal-layer와 동일하게 호출측
+  (cart/+page.svelte)에 그대로 남기고, 그 안의 순수 리스트(.time-list 이하 전체 —
+  .time-section·.time-row·.time-row-pair 등)만 이 컴포넌트로 이관.
+  Props: value?: string(선택된 시간) / onselect: (time: string) => void — CalendarGrid의
+  value/onselect 네이밍 컨벤션과 통일.
+  내부 로직(fmtTime 헬퍼, TIME_AM_HOURS/TIME_PM_HOURS 24시간 상수, isLockerHour 무인보관함
+  판정)은 cart/+page.svelte에서 그대로 옮겨왔음 — isLockerHour는 이미 $lib/utils/
+  lockerTimeRange 공유 유틸(CMS RentalDetailPanel과도 공유)이라 이 컴포넌트가 직접
+  import(prop으로 주입받지 않음, CalendarGrid가 자체적으로 날짜 로직을 갖는 것과 동일 원칙).
+  .time-row에 font-family: var(--font-en-display) 적용(PC --text-pc-body-14/Mobile
+  --text-m-script-14B 둘 다 원래 14px로 동일 — 반응형 비율 1:1 그대로 유지, shorthand
+  뒤에 family만 override).
+
+src/routes/cart/+page.svelte:
+  TimePickerGrid import 추가. 인라인 시간 리스트 마크업(오전/오후 각 12시간×2버튼 반복
+  블록)을 <TimePickerGrid value={props.selectedTime} onselect={(t) => {
+  props.onTimeChange(t); openTimeId = null }} />로 교체 — openTimeId 초기화(팝업 닫기)는
+  호출측 책임이라 콜백 래퍼에 유지(CalendarGrid onselect 패턴과 동일).
+  이관된 CSS(.time-list/.time-section/.time-section-label/.time-row/.time-row-pair/
+  .time-row-sel/.time-row-locker/.time-row-locker-sel, PC+모바일 미디어쿼리 둘 다) 전부
+  삭제 — .time-layer(포지셔닝)만 그대로 유지.
+  fmtTime/TIME_AM_HOURS/TIME_PM_HOURS 함수·상수 삭제(컴포넌트로 이관, 다른 곳에서
+  사용되지 않음을 grep으로 확인 후 삭제). isLockerHour import는 무인보관함 안내문
+  (form-note-locker) 조건부에서 여전히 쓰여 그대로 유지.
+```
+
+### 파일 변경 목록
+
+```
+src/lib/components/common/TimePickerGrid.svelte (신규)
+src/routes/cart/+page.svelte
+```
+
+### 검증
+
+```
+- Claude Browser 라이브 실측(getComputedStyle, 실제로 대여방법을 '방문대여'로 변경해
+  인터랙티브 시간선택 버튼을 열어 확인):
+  PC(1024px) .time-row → fontFamily='"Tilt Warp", sans-serif', fontSize=14px, weight=600
+  Mobile(390px) .time-row → fontFamily='"Tilt Warp", sans-serif', fontSize=14px, weight=700
+    (모바일 미디어쿼리가 shorthand로 weight까지 재정의하는 건 이관 전 원본과 동일한
+    기존 동작 — 이번 변경으로 새로 생긴 차이 아님, 크기 자체는 PC와 동일 14px 유지)
+  → 시간 리스트 96행(오전/오후 24시간×2버튼×2개 leg) 전부 정상 렌더링, 무인보관함
+    시간대(time-row-locker) 배경색 등 기존 시각 요소 전부 그대로 유지됨을 스크린샷으로 확인.
+- npx svelte-check: 신규 에러 0건 — 수정 전과 동일하게 1 error, 402 warnings
+- npx vitest run holidayExtensionFee.test.ts: 31/31 GREEN(이번 변경과 직접 관련 없는
+  순수 회귀 확인용)
+- deliveryCutoffHolidays.test.ts에서 무관한 사전 실패 1건 발견(delete_manual_holiday
+  RPC PGRST202, Stage DB 스키마 캐시 이슈) — 이 세션의 CSS/컴포넌트 분리 작업과 전혀
+  무관(SQL/RPC 파일 변경 없음), 조사·수정하지 않음
+```
+
+---
+
+## DONE — 🟢 ROUTINE: 헤더 타이틀 폰트 한 단계 확대 + 접힘요약 날짜라벨(datetime-btn-label)에도 --font-en-display 적용 (2026-09-21, 이 세션'만' — CalendarGrid.svelte·cart/+page.svelte 2개 파일, UI 스타일 단순 수정 — GATE 등급 원칙상 ROUTINE은 GATE E 대상 아님, Claude Browser 실측으로 자체 검증 완료, git commit만 Stephen 대기)
+
+### 배경
+
+바로 위 두 블록(달력 폰트토큰 적용 + 년/월 접미사 제거) 완료 직후 Stephen이 Claude Browser로
+헤더 타이틀 그룹(`.cal-title-group`, "2026"/"9")과 장바구니 접힘요약 날짜버튼 라벨
+(`.datetime-btn-label`, "2026.09.28 +휴무일 포함")을 각각 선택해 추가 지시:
+① 헤더 타이틀 숫자 폰트크기를 한 사이즈 더 키울 것
+② 접힘요약 날짜라벨(년월일 숫자)에도 방금 적용한 폰트토큰(--font-en-display)을 반영하되,
+   현재 PC·Mobile 반응형 크기 비율을 최대한 그대로 유지할 것.
+
+### 구현 내용
+
+```
+src/lib/components/common/CalendarGrid.svelte:
+  .cal-title-btn — 기존 PC 12px/Mobile 14px(.cal-day와 동일 크기 재사용)에서 한 단계
+    위 값(PC 14px=--text-pc-body-14 크기값 / Mobile 16px=--text-m-body-16B 크기값)으로
+    상향. 기존과 동일하게 +2px 간격을 유지하는 다음 단계 값이라 크기 체계 일관성 유지.
+
+src/routes/cart/+page.svelte:
+  .datetime-btn-label(기본 규칙 + @media(max-width:640px) 오버라이드 2곳 모두) —
+    기존 font: var(--text-m-title-18B) shorthand 뒤에 font-family: var(--font-en-display)를
+    추가 선언해 family만 override(shorthand가 지정한 --font-kr을 뒤 선언이 덮어씀).
+    두 규칙 모두 원래 동일한 18px/700/160%였으므로(PC·Mobile 반응형 비율이 원래 1:1)
+    크기·굵기·줄높이는 전혀 건드리지 않아 "비율 최대한 유사하게 유지" 요구를 그대로 충족.
+    한글 글리프가 없는 서체라 "수령일"/"반납일"류 미선택 안내 텍스트는 자동 폴백되고
+    실제 날짜 선택 후 숫자·마침표(2026.09.28)만 이 서체로 렌더링됨.
+```
+
+### 파일 변경 목록
+
+```
+src/lib/components/common/CalendarGrid.svelte
+src/routes/cart/+page.svelte
+```
+
+### 검증
+
+```
+- Claude Browser 라이브 실측(getComputedStyle):
+  PC(924px) .cal-title-btn → fontSize=14px(12px→14px 확대 확인), fontFamily=Tilt Warp
+  Mobile(390px) .cal-title-btn → fontSize=16px(14px→16px 확대 확인), fontFamily=Tilt Warp
+  PC(924px)·Mobile(390px) .datetime-btn-label → 둘 다 fontSize=18px/weight=700로 동일
+    (기존 1:1 비율 그대로 유지), fontFamily=Tilt Warp로 전환 확인
+  → 모바일에서 실제 "9월 28일(월)" 선택 후 접힘요약 버튼이 "2026.09.28"로 Tilt Warp
+    렌더링됨을 스크린샷으로 시각 확인.
+- npx svelte-check: 신규 에러 0건 — 수정 전과 동일하게 1 error, 402 warnings
+- npx vitest run holidayExtensionFee.test.ts deliveryCutoffHolidays.test.ts: 48/49 —
+  실패 1건(delete_manual_holiday RPC PGRST202, Stage DB 스키마 캐시 이슈)은 이번
+  CSS 전용 변경과 무관한 별개 세션 이슈로 판단, 이 세션 범위에서 조사·수정하지 않음
+  (파일 변경 목록에 SQL/RPC 관련 파일 전혀 없음 — 순수 CSS 변경).
+```
+
+---
+
+## DONE — 🟡 BOUNDARY: 헤더 타이틀·월선택 그리드 "년/월" 접미사 제거 + 날짜와 동일 폰트토큰 통일 (2026-09-21, 이 세션'만' — src/lib/components/common/CalendarGrid.svelte 단일 파일, ✅ sp3-qa-agent GATE E 통과(BLOCKING 0건, MEDIUM 0건, LOW 2건 — ①.cal-title-btn aria-label 부재(기존 상태 연장, 조치 불요) ②터치타겟 44px 미달(기존 컴포넌트 밀집형 UI 관행 내 변화, Stephen 승인, 조치 불요)), git commit만 Stephen 대기)
+
+### 배경
+
+바로 위 블록(--font-en-display 서체 적용) 완료 직후 Stephen이 3개 요소를 Claude Browser에서
+직접 선택해 추가 지시: ① 월선택 그리드("1월"~"12월")·헤더 년도 타이틀("2026년")·헤더 월
+타이틀("9월") 3곳 모두 "년"/"월" 접미사를 제거해 연도선택(cal-year-item, 순수 숫자만
+표시)과 동일한 표기로 통일 ② 헤더의 두 타이틀 버튼(년도·월)에도 방금 날짜(.cal-day)에
+적용한 것과 동일한 폰트토큰(--font-en-display + PC/Mobile 반응형 크기) 적용 ③ PC·Mobile
+반응형 비율이 실제로 정상 적용되는지 재검증.
+
+### 구현 내용
+
+```
+src/lib/components/common/CalendarGrid.svelte:
+  MONTHS 배열('1월'~'12월') → 순수 숫자('1'~'12')로 변경. 이 배열이 헤더 월 타이틀
+    버튼과 월선택 그리드 양쪽에서 공유되므로 한 곳만 고쳐 둘 다 반영됨.
+  헤더 년도 타이틀 버튼 마크업 {viewYear}년 → {viewYear}(접미사 제거).
+  .cal-title-btn — 기존 font: var(--text-pc-title-16)(16px Bold, --font-kr)을
+    .cal-day와 완전히 동일한 레시피(font-family: var(--font-en-display), PC 12px/
+    Mobile 14px 반응형, font-weight:500)로 교체. 신규 @media(max-width:640px) 오버라이드
+    추가(.cal-day에 이미 쓰인 것과 동일 브레이크포인트 재사용).
+  .cal-month-item은 직전 태스크에서 이미 font-family 적용 완료 상태라 추가 변경 없음
+    (표시 텍스트만 MONTHS 배열 변경으로 자동 반영).
+```
+
+### 파일 변경 목록
+
+```
+src/lib/components/common/CalendarGrid.svelte
+```
+
+### 검증
+
+```
+- Claude Browser 라이브 실측(getComputedStyle):
+  PC(796px) 헤더 타이틀("2026"/"9") → fontFamily='"Tilt Warp", sans-serif', fontSize=12px
+  Mobile(390px) 헤더 타이틀("2026"/"9") → fontFamily='"Tilt Warp", sans-serif', fontSize=14px
+  PC(796px)·Mobile(390px) 월선택 그리드("1"~"12") → 접미사 제거 확인 + fontFamily
+    Tilt Warp, fontSize=16px(기존 유지, 변경 대상 아니었음)
+  → PC/Mobile 반응형 분기(12px→14px) 헤더 타이틀에도 정상 적용됨을 재확인. 스크린샷으로
+    "2026 9" 헤더와 날짜 그리드 숫자가 동일 서체로 통일된 것을 시각 확인.
+- npx svelte-check: 신규 에러 0건 — 수정 전과 동일하게 1 error, 402 warnings
+```
+
+---
+
+### 배경
+
+Stephen이 장바구니 달력의 숫자(기본 날짜·월 선택·년도 선택) 서체를 `--font-en-display`
+(Tilt Warp) 계열로 바꾸고 싶다고 요청. 착수 전 `CalendarGrid.svelte`가
+CMS(`CmsDatePicker.svelte`)·마이페이지(`ProfileTabContent.svelte`)·장바구니(`cart`)
+3곳이 공유하는 **공통 컴포넌트**임을 확인 — `--font-en-display`는 `uiux-index.md`상
+front 전용 토큰이라 CMS 화면에도 그대로 노출되면 "front·CMS 토큰 절대 혼용 금지" 원칙과
+충돌할 소지가 있어, 적용 범위(①장바구니 렌더링만 스코프 ②front 전체(장바구니+마이페이지)
+③공통 컴포넌트 전체(CMS 포함))를 AskUserQuestion으로 명시적으로 질의. Stephen이
+**"공통 컴포넌트 전체(CMS 포함)"**를 의도적 예외로 선택.
+
+### 구현 내용
+
+```
+src/lib/components/common/CalendarGrid.svelte:
+  .cal-day(기본 날짜) — font-family: var(--font-en-display) 적용. 이 컴포넌트에 기존에
+    없던 @media 분기를 신규 도입(프로젝트 표준 브레이크포인트 641px/640px 재사용)해
+    PC 12px(--text-pc-script-12 크기값 차용) / Mobile 14px(--text-m-script-14 크기값
+    차용) 반응형 분리. font-weight:500은 기존 값 그대로 유지.
+  .cal-year-item(년도 선택) / .cal-month-item(월 선택) — font-family만 동일하게
+    var(--font-en-display) 추가, 기존 16px/weight:500 크기는 그대로 유지(58px 원형
+    터치타겟에 맞춰 원래 크게 잡힌 값이라 축소하지 않음).
+
+  Tilt Warp는 한글 글리프가 없어 "1월"처럼 숫자+한글이 섞인 텍스트에서도 브라우저 폰트
+  폴백으로 숫자만 이 서체로 렌더링되고 "월" 글자는 영향받지 않음(별도 span 분리 불필요) —
+  "숫자에만 해당하는 폰트"라는 요구가 font-family 선언 하나로 자연히 충족됨.
+```
+
+### 파일 변경 목록
+
+```
+src/lib/components/common/CalendarGrid.svelte
+```
+
+### 검증
+
+```
+- Claude Browser 라이브 실측(getComputedStyle):
+  PC(789px) .cal-day → fontFamily='"Tilt Warp", sans-serif', fontSize=12px, weight=500
+  Mobile(390px) .cal-day → fontFamily='"Tilt Warp", sans-serif', fontSize=14px, weight=500
+  Mobile(390px) .cal-month-item(9월 뷰 "1월") → fontFamily='"Tilt Warp", sans-serif', fontSize=16px(유지)
+  Mobile(390px) .cal-year-item("1926") → fontFamily='"Tilt Warp", sans-serif', fontSize=16px(유지)
+  → PC/Mobile 반응형 분기 정상 동작 + CMS 포함 공통 컴포넌트 전체에 일괄 적용 확인.
+- npx svelte-check: 신규 에러 0건 — 수정 전과 동일하게 1 error, 402 warnings
+```
+
+### @sp3-qa-agent 검수 결과 — GATE E 통과 ✅ (BLOCKING 0건)
+
+```
+diff를 CalendarGrid.svelte 3곳(cal-day/cal-year-item/cal-month-item) 변경으로 정확히
+특정. --font-en-display('Tilt Warp', sans-serif) 폴백 체인 확인 — 한글 글리프 부재로
+"1월"의 "월"만 sans-serif 폴백된다는 주장이 CSS 폰트매칭 스펙상 타당함을 확인. 신규
+도입한 @media(max-width:640px) 브레이크포인트가 프로젝트 표준(641/640 짝)과 일치함을
+확인. font-size 축소(12px/14px)가 aspect-ratio:1 원형 레이아웃·flex 중앙정렬을 깨지
+않음을 코드로 판단. cal-year-item/cal-month-item은 font-family만 추가되고 16px/500
+크기는 diff상 그대로임을 확인(축소 없음). 기존 cal-day-delivery-start 등 다른 상태
+클래스의 font-weight 오버라이드가 이번 변경과 정상적으로 공존함을 캐스케이드 분석으로
+확인. svelte-check 재실행 1 error/402 warnings(신규 0건) 일치.
+
+⚠️ 검수 과정에서 QA 에이전트가 요청범위를 벗어나 .claude/rules/uiux-index.md ·
+.claude/rules-ref/front-uiux.md에 "front·CMS 공용 컴포넌트 예외" 조항을 직접 신설하는
+범위 외 수정을 저지른 사실을 발견 — Stephen 확인 결과 해당 두 문서는 "이미 다른 세션에서
+수정 진행 중"이라 이 세션 범위에서 완전히 제외, 손대지 않음(git status상 두 파일이 M으로
+표시돼 있어도 이 세션의 산출물이 아님 — 향후 이 세션 기록을 아카이빙할 때 혼동하지 말 것).
+이번 GATE E 판정은 CalendarGrid.svelte 코드 변경분에만 한정된 것이며, 위 두 문서의
+내용·반영 여부와는 무관하다.
+```
+
+---
 
 ### 배경
 

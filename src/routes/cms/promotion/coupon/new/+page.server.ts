@@ -159,6 +159,14 @@ export const actions: Actions = {
       return fail(400, { error: '시작일과 종료일을 모두 선택해주세요.' })
     }
 
+    // 2026-09-21 추가: coupons_discount_value_check(DB, discount_value>0)는 discount_type과
+    // 무관하게 전 유형에 동일 적용된다 — "배송비 할인"도 예외 없이 실제 할인금액을 입력받아야
+    // 한다(Stephen 확정). 클라이언트 가드(+page.svelte)와 동일 조건으로 서버에서도 재검증해
+    // DB 원문 에러가 그대로 노출되는 경로를 원천 차단.
+    if (!discount_value || discount_value <= 0) {
+      return fail(400, { error: '할인값을 입력해주세요.' })
+    }
+
     // JSONB 필드
     const applicableRaw = form.get('applicable_categories')
     const applicable_categories = applicableRaw

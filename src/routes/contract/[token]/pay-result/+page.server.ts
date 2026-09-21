@@ -116,15 +116,21 @@ export const load: PageServerLoad = async ({ params, url }) => {
 
   if (reservationIds.length === 0) reservationIds.push(reservationId)
 
-  // ── 5. orders 테이블 → 총금액 조회 (쿠폰할인 역산 = total - paid - points) ──
+  // ── 5. orders 테이블 → 총금액·쿠폰할인 조회 ─────────────────────────────────
+  // ⚠️ 2026-09-21 수정: 기존엔 "쿠폰할인 = total - paid - points"로 역산했는데, 이는
+  // 클라이언트(+page.svelte)가 finalAmount(=이미 쿠폰·포인트가 차감된 값)에서 쿠폰할인을
+  // 한 번 더 빼서 결제요청금액(amount)을 만들던 이중차감 버그를 그대로 전제한 계산이었다.
+  // 이중차감을 제거(+page.svelte payTotal=finalAmount 그대로)한 뒤에는 이 역산식이
+  // 더 이상 성립하지 않으므로, sync_order_after_composition_change(Migration 510)가 이미
+  // 정확히 계산해 저장해둔 coupon_discount_amount를 그대로 읽어 쓴다.
   const { data: orderRow } = await admin
     .from('orders')
-    .select('final_amount')
+    .select('final_amount, coupon_discount_amount')
     .eq('id', internalOrderId)
     .maybeSingle()
 
   const totalAmount    = (orderRow as { final_amount?: number | null } | null)?.final_amount ?? amount
-  const couponDiscount = Math.max(0, totalAmount - amount - points)
+  const couponDiscount = (orderRow as { coupon_discount_amount?: number | null } | null)?.coupon_discount_amount ?? 0
 
   // ── 5b. 이중결제 방지 가드 — Toss confirm 전 payment_transactions 존재 확인 ──
   // 동시 재진입(rv.status === 'hold' 체크 통과 직후) 시나리오 방어

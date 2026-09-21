@@ -114,7 +114,7 @@ export const load: PageServerLoad = async ({ locals }) => {
 
   const FIRST_RENTAL_EXCLUDE = ['hold', 'draft', 'cancelled', 'expired'] as const
 
-  const [cartResult, profileResult, couponResult, addressResult, firstRentalResult, studentResult, subscriptionResult] = await Promise.all([
+  const [cartResult, profileResult, couponResult, usedCouponsResult, addressResult, firstRentalResult, studentResult, subscriptionResult] = await Promise.all([
     supabase
       .from('rental_reservations')
       .select('id, product_id, start_date, end_date, status, pickup_method, return_method, pickup_time, return_time, duration_type')
@@ -132,14 +132,24 @@ export const load: PageServerLoad = async ({ locals }) => {
       .from('user_coupons')
       .select(`id, coupon_id, used_count,
         coupons(
-          id, code, type, discount_type, discount_value, display_name,
+          id, code, type, discount_type, discount_value, display_name, allow_stacking,
           is_active, deleted_at, valid_from, valid_until,
           user_grade_required, usage_limit, usage_count, total_usage_limit,
           is_first_rental_only, is_student_only, is_subscription_only, is_walk_in_only,
-          min_purchase_amount, min_rental_amount, min_rental_days
+          min_purchase_amount, min_rental_amount, min_rental_days,
+          per_user_limit, applicable_categories, max_discount_amount, allow_with_points
         )`)
       .eq('user_id', session.user.id)
       .is('used_at', null),
+
+    // 1인당 사용 한도(per_user_limit) 검증용 — 이 사용자가 이미 사용 완료한 쿠폰들을
+    // coupon_id별로 집계(basic 쿼리는 used_at IS NULL만 조회하므로 이미 사용한 건은
+    // 여기서 별도로 가져와야 함, 2026-09-21 추가)
+    supabase
+      .from('user_coupons')
+      .select('coupon_id')
+      .eq('user_id', session.user.id)
+      .not('used_at', 'is', null),
 
     // "회원정보 반영" 체크박스 활성화 판단 + 실제 자동채움용 — 기본 배송지(is_default) 우선,
     // 없으면 등록순 첫 배송지
@@ -490,6 +500,15 @@ export const load: PageServerLoad = async ({ locals }) => {
     : null
   const allWalkIn = cartRsvs.length > 0 ? cartRsvs.every(r => r.pickup_method === 'visit') : null
 
+  // 1인당 사용 한도 검증용 — coupon_id별 이미 사용 완료한 횟수 (2026-09-21 추가)
+  const usedCountByCoupon = new Map<string, number>()
+  for (const row of (usedCouponsResult.data ?? []) as Array<{ coupon_id: string }>) {
+    usedCountByCoupon.set(row.coupon_id, (usedCountByCoupon.get(row.coupon_id) ?? 0) + 1)
+  }
+
+  // 적용 카테고리 검증용 — 카트에 담긴 상품들의 카테고리 목록 (2026-09-21 추가)
+  const cartCategories = [...new Set(serverProducts.map(p => p.category).filter((c): c is string => c != null))]
+
   const filteredCoupons = basicFilteredCoupons.filter(uc => {
     const c = uc.coupons
     if (!c) return false
@@ -502,6 +521,9 @@ export const load: PageServerLoad = async ({ locals }) => {
         is_student_only:      c.is_student_only,
         is_subscription_only: c.is_subscription_only,
         is_walk_in_only:      c.is_walk_in_only,
+        per_user_limit:       c.per_user_limit,
+        type:                 c.type,
+        applicable_categories: c.applicable_categories,
       },
       {
         orderAmount:           calcTotal > 0 ? calcTotal : null,
@@ -510,6 +532,8 @@ export const load: PageServerLoad = async ({ locals }) => {
         isFirstRental,
         isStudent,
         hasActiveSubscription,
+        usedCountForCoupon:    usedCountByCoupon.get(uc.coupon_id) ?? 0,
+        cartCategories,
       },
     )
     return result.ok
@@ -650,10 +674,13 @@ interface UserCouponRow {
     discount_type:       string
     discount_value:      number
     display_name:        string | null
+    allow_stacking:      boolean
     valid_until:         string | null
     min_purchase_amount: number
     min_rental_amount:   number
     min_rental_days:     number
+    max_discount_amount: number | null
+    allow_with_points:   boolean
   } | null
 }
 
@@ -665,6 +692,7 @@ interface RawCouponFields {
   discount_type:        string
   discount_value:       number
   display_name:         string | null
+  allow_stacking:       boolean
   is_active:            boolean
   deleted_at:           string | null
   valid_from:           string | null
@@ -680,6 +708,10 @@ interface RawCouponFields {
   min_purchase_amount:  number
   min_rental_amount:    number
   min_rental_days:      number
+  per_user_limit:       number
+  applicable_categories: string[] | null
+  max_discount_amount:  number | null
+  allow_with_points:    boolean
 }
 interface RawUserCouponRow {
   id:         string

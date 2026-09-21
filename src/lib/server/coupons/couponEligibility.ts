@@ -23,6 +23,12 @@ export interface CouponEligibilityFields {
   is_student_only:      boolean
   is_subscription_only: boolean
   is_walk_in_only:      boolean
+  /** 1인당 사용 한도 (0 또는 미설정 = 무제한) — 2026-09-21 추가 */
+  per_user_limit:       number
+  /** 쿠폰 유형('category'일 때만 applicable_categories가 실제로 게이팅됨) */
+  type:                 string
+  /** 적용 카테고리 제한 (coupons.applicable_categories, JSONB 배열) */
+  applicable_categories: string[] | null
 }
 
 // ── 주문/사용자 컨텍스트 (DB 조회 결과 → 정규화된 값) ───────────────────────
@@ -39,6 +45,10 @@ export interface CouponEligibilityContext {
   isStudent:            boolean
   /** subscriptions.status='active' AND deleted_at IS NULL 존재 여부 */
   hasActiveSubscription: boolean
+  /** 이 사용자가 이 쿠폰(coupon_id)을 이미 몇 번 사용(used_at IS NOT NULL)했는지 — 2026-09-21 추가 */
+  usedCountForCoupon:    number
+  /** 카트/주문에 담긴 상품들의 카테고리 목록 (products.category) — 2026-09-21 추가 */
+  cartCategories:        string[] | null
 }
 
 // ── 순수 함수: 쿠폰 1개 자격 검증 ────────────────────────────────────────────
@@ -104,6 +114,19 @@ export function isCouponEligible(
     return { ok: false, reason: 'SUBSCRIPTION_ONLY' }
   }
 
+  // 1인당 사용 한도 — 이미 이 쿠폰을 per_user_limit번만큼 사용했으면 더 이상 선택 불가
+  if (coupon.per_user_limit > 0 && ctx.usedCountForCoupon >= coupon.per_user_limit) {
+    return { ok: false, reason: 'PER_USER_LIMIT_EXCEEDED' }
+  }
+
+  // 적용 카테고리 — type='category'인 쿠폰만 실제로 카테고리 제한이 걸림
+  if (coupon.type === 'category' && coupon.applicable_categories && coupon.applicable_categories.length > 0) {
+    const hasMatch = !!ctx.cartCategories?.some((cat) => coupon.applicable_categories!.includes(cat))
+    if (!hasMatch) {
+      return { ok: false, reason: 'CATEGORY_NOT_APPLICABLE' }
+    }
+  }
+
   return { ok: true }
 }
 
@@ -115,18 +138,21 @@ export function isCouponEligible(
  * @param userId   검증 대상 사용자 UUID
  * @param orderId  현재 주문 ID (없으면 null — 주문의존 조건은 모두 안전측 실패)
  * @param reservationIds 이미 알고 있는 예약 ID 배열 (orderId 있을 때만 사용)
+ * @param couponId 검증 대상 쿠폰 정의(coupons.id) — per_user_limit 계산에 사용, 없으면 0
  */
 export async function buildCouponEligibilityContext(
   client:           SupabaseClient,
   userId:           string,
   orderId:          number | null,
   reservationIds?:  number[],
+  couponId?:        string,
 ): Promise<CouponEligibilityContext> {
 
   // ── 주문 컨텍스트 (주문의존 조건용) ─────────────────────────────────────
   let orderAmount:          number | null = null
   let minRentalDaysInOrder: number | null = null
   let allWalkIn:            boolean | null = null
+  let cartCategories:       string[] | null = null
 
   if (orderId !== null) {
     // 주문 총액
@@ -151,11 +177,11 @@ export async function buildCouponEligibilityContext(
       const { data: reservations } = await (client as unknown as {
         from: (t: string) => {
           select: (c: string) => {
-            in: (k: string, v: number[]) => Promise<{ data: { start_date: string; end_date: string; pickup_method: string }[] | null }>
+            in: (k: string, v: number[]) => Promise<{ data: { start_date: string; end_date: string; pickup_method: string; product_id: string | null }[] | null }>
           }
         }
       }).from('rental_reservations')
-        .select('start_date, end_date, pickup_method')
+        .select('start_date, end_date, pickup_method, product_id')
         .in('id', rIds)
 
       if (reservations && reservations.length > 0) {
@@ -166,8 +192,38 @@ export async function buildCouponEligibilityContext(
         })
         minRentalDaysInOrder = Math.min(...days)
         allWalkIn = reservations.every((r) => r.pickup_method === 'visit')
+
+        // 적용 카테고리 검증용 — 주문에 담긴 상품들의 category 목록
+        const productIds = [...new Set(reservations.map((r) => r.product_id).filter((id): id is string => id != null))]
+        if (productIds.length > 0) {
+          const { data: productRows } = await (client as unknown as {
+            from: (t: string) => {
+              select: (c: string) => { in: (k: string, v: string[]) => Promise<{ data: { category: string | null }[] | null }> }
+            }
+          }).from('products').select('category').in('id', productIds)
+          cartCategories = [...new Set((productRows ?? []).map((p) => p.category).filter((c): c is string => c != null))]
+        }
       }
     }
+  }
+
+  // 1인당 사용 한도 계산 — 이 사용자가 이 쿠폰(couponId)을 이미 몇 번 사용했는지
+  let usedCountForCoupon = 0
+  if (couponId) {
+    const { data: usedRows } = await (client as unknown as {
+      from: (t: string) => {
+        select: (c: string) => {
+          eq: (k: string, v: string) => {
+            eq: (k: string, v: string) => { not: (k: string, o: string, v: null) => Promise<{ data: unknown[] | null }> }
+          }
+        }
+      }
+    }).from('user_coupons')
+      .select('id')
+      .eq('user_id', userId)
+      .eq('coupon_id', couponId)
+      .not('used_at', 'is', null)
+    usedCountForCoupon = usedRows?.length ?? 0
   }
 
   // ── 사용자 컨텍스트 ─────────────────────────────────────────────────────
@@ -211,5 +267,7 @@ export async function buildCouponEligibilityContext(
     isFirstRental,
     isStudent,
     hasActiveSubscription,
+    usedCountForCoupon,
+    cartCategories,
   }
 }
