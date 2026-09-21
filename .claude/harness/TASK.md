@@ -1,5 +1,527 @@
 # .claude/harness/TASK.md
 
+## DONE — 🟡 BOUNDARY: `deliveryCutoffHolidays.test.ts` — `upsert_delivery_cutoff_settings` 3-arg 호출이 라이브 `holiday_guide_text`를 조용히 지우는 결함 수정(2026-09-21, 이 세션'만')
+
+### 배경
+
+Stephen이 다른(병행) 세션에서 발견·보고만 하고 진행 승인을 못 받았던 결함을 이 세션에서
+직접 코드로 재확인 후 수정. `upsert_delivery_cutoff_settings` RPC(Migration #505)는
+4번째 파라미터 `p_holiday_guide_text`가 `DEFAULT ''`이고 함수 본문이
+`holiday_guide_text = p_holiday_guide_text`로 **기존 값 보존 없이 무조건 덮어쓴다**.
+`deliveryCutoffHolidays.test.ts`의 "manager 이상 CMS 사용자는 저장에 성공하고 값이 그대로
+반영된다" 테스트가 이 RPC를 3개 파라미터로만 호출해(`p_holiday_guide_text` 생략) — 이
+테스트가 라이브 Stage DB(싱글톤 행을 직접 공유, 격리된 테스트 전용 행이 아님)에 대고 돌
+때마다 CMS 관리자가 입력해둔 실제 배송휴무일 안내문구가 빈 문자열로 초기화되는 실사고였다.
+`beforeAll`/`afterAll`이 3개 boolean 토글만 스냅샷·복원하고 `holiday_guide_text`는 애초에
+다루지 않아 자동 복구도 안 됐다.
+
+### 수정
+
+`src/__tests__/services/deliveryCutoffHolidays.test.ts` — `originalCutoffSettings` 스냅샷
+타입·select에 `holiday_guide_text` 추가, 성공 케이스 테스트가 그 스냅샷값을 그대로
+왕복(round-trip) 전달하도록 수정(임의 문자열로 덮어쓰지 않고 저장 성공 자체만 검증) +
+나머지 2개 거부 케이스 호출도 4-param 시그니처로 통일(현재 RPC 실제 시그니처와 일치시켜
+향후 조기반려 로직이 바뀌어도 안전하게).
+
+### 검증
+
+```
+npx vitest run deliveryCutoffHolidays.test.ts → 18개 중 17개 GREEN, 1개 실패
+  (delete_manual_holiday 관련 — PGRST202, git stash로 이 수정 전 상태에서도 동일하게
+  재현되는 무관한 기존 결함임을 확인, 이번 수정과 무관·범위 밖이라 손대지 않음)
+npx vitest run cartRentalFee cartShippingFee holidayExtensionFee createHoldReservationWithShipment
+  → 144/144 GREEN(Guard 9 — 배송/예약 연관 도메인 회귀 확인)
+npx tsc --noEmit → 대상 파일 신규 에러 0건
+Stage(ezyvffjvuwmtuhpxdjrw)·Production(vnbpmvxruyciuuaermyh) 직접 SQL 조회 — 두 환경 모두
+  holiday_guide_text가 이미 정상 안내문구로 채워져 있고 최근(2026-09-21) 갱신된 상태임을
+  확인, 아직 데이터 유실은 발생하지 않은 것으로 보임(참고: Production 컬럼도 이미 존재 —
+  이전 세션 기록의 "Migration #505 Production 미적용"은 스테일 서술이었음, 실제로는 적용
+  완료 상태).
+```
+
+### 잔여 참고사항 (비차단)
+
+```
+delete_manual_holiday PGRST202 실패는 이번 수정과 무관한 별개 결함으로 보이며(이 세션 변경
+전에도 동일 재현), 손대지 않았음 — 필요 시 별도 확인 요청.
+```
+
+git commit은 Stephen 직접 실행 대기.
+
+---
+
+## DONE — 🟡 BOUNDARY: CMS 관리자 "고객 쿠폰함" 팝업에서 unlimited·relative_days 쿠폰 누락 결함 수정(2026-09-21, 이 세션'만', ✅ GATE E 통과 — sp3-qa-agent 독립검수 완료, git commit만 Stephen 대기)
+
+### QA 검수 결과 요약
+
+```
+sp3-qa-agent가 이 세션 소관 2개 파일(엔드포인트+신규테스트)만 독립검수, 다른 세션 작업분은
+전부 제외. 5개 확인요청 항목 전부 직접 재검증:
+  ① migration #512/514/515/520/521 6곳 CASE 조건문 직접 대조 → unlimited·relative_days
+     둘 다 valid_from/valid_until NULL이라는 진단 정확함 확인
+  ② display_name 컬럼 실존 확인(migration #466, 2026-09-08부터 존재)
+  ③ JS 만료판정 로직이 loadUserCoupons.ts와 라인 단위로 동일(주석·포맷만 다름) 확인
+  ④ coupons!inner + is_active/deleted_at SQL 필터·인증 게이트 그대로 유지, 날짜필터만
+     제거됐음을 확인(비활성·삭제 쿠폰 노출 위험 없음)
+  ⑤ RED→GREEN 독립 재현(수정 전 코드로 5/5 전부 실패 → 복원 후 5/5 GREEN)
+tsc·svelte-check 신규 에러 0건 재확인. GATE E 통과, 수정 필요 항목 없음.
+```
+
+### 아젠다
+
+Stephen이 이전 세션이 남긴 핸드오프 메모("CMS 관리자가 상담 채팅에서 고객 정보를 확인할 때
+뜨는 '고객 쿠폰함' 팝업은 이번 방식 쿠폰을 아예 안 보여주는 별도의 오래된 결함이 있습니다 —
+고객용 화면과는 별개의 관리자용 화면")를 전달하며 이번 세션에서 확인·보완 지시.
+
+### 원인
+
+```
+AdminChatPanel.svelte "고객 쿠폰함" CTA 모달은 CouponTabContent.svelte(고객 본인 화면과
+동일 컴포넌트 재사용)를 마운트하지만, 데이터는 별도 관리자 전용 엔드포인트
+GET /api/cms/customers/[id]/coupons에서 온다(고객 화면의 loadUserCoupons.ts와는
+독립적인 service-role 전용 재구현).
+
+이 엔드포인트가 SQL에서 .lte('coupons.valid_from', now)/.gte('coupons.valid_until', now)로
+직접 날짜비교 필터를 걸고 있었는데, validity_type이 'unlimited'(상시)·'relative_days'
+(첫 확인일로부터 N일, 이번 세션 신규기능)인 쿠폰은 valid_from/valid_until 두 컬럼이
+항상 NULL이다(Migration #512/514/515/520/521 — "무제한"·"첫 확인일 기준" 모드는 애초에
+절대 종료일 개념이 없음). NULL과의 부등호 비교는 PostgREST에서 매번 매칭 실패로 평가돼
+이 두 타입 쿠폰이 관리자 팝업에서 통째로 조회 자체가 안 됐다 — relative_days는 이번
+세션 신규기능이라 "새로 생긴 결함"처럼 보이지만, unlimited는 그 이전부터 있었던 동일
+클래스의 오래된 결함이었다(고객 본인 화면은 이미 loadUserCoupons.ts가 SQL 필터 대신
+JS에서 relative_days만 만료 판정하는 방식이라 이 문제가 없었음 — 관리자 전용
+엔드포인트만 구버전 로직이 남아 있었음).
+```
+
+### 수정 내역
+
+```
+src/routes/api/cms/customers/[id]/coupons/+server.ts (+37/-10)
+  - SQL의 valid_from/valid_until 부등호 필터 제거
+  - SELECT에 first_viewed_at(user_coupons)·validity_type·valid_days(coupons) 추가,
+    description → display_name(현재 실제 컬럼명, database.ts 타입 정의는 아직 미반영된
+    구버전이라 실제 스키마 기준으로 사용)으로 교체
+  - loadUserCoupons.ts(고객 본인 화면, 정본)와 동일한 JS 레벨 relative_days 만료 판정
+    로직을 그대로 이식(first_viewed_at + valid_days < now → 목록 제외) — 로직 중복
+    작성 없이 정본 그대로 재사용
+  - validUntil 표시값도 loadUserCoupons.ts와 동일하게 relative_days는
+    first_viewed_at+valid_days로 역산해 반환(절대 종료일이 없는 타입이라 그대로 null을
+    돌려주면 화면에서 "상시"로만 보임 — 실제 남은 기간 표시 필요할 때 이 값 사용)
+
+src/__tests__/server/cmsCustomerCouponsRelativeDays.test.ts (신규 5케이스)
+  - unlimited/relative_days 쿠폰 노출 여부, relative_days 만료 판정, validUntil 역산값,
+    fixed_period(기존 절대기간) 쿠폰 무회귀까지 검증
+```
+
+### 검증
+
+```
+npx tsc --noEmit -p .    → 신규 에러 0건
+npx svelte-check         → 신규 에러·경고 0건
+npx vitest run src/__tests__/server/cmsCustomerCouponsRelativeDays.test.ts
+  → RED(git stash로 수정 전 코드 복원 → 5개 중 3개 실패 확인, 옛 SQL 필터 존재 재현)
+  → GREEN(복원 후 5/5) 확인
+```
+
+**GATE E: 순수 GET 엔드포인트 쿼리·표시로직 수정(DB 스키마·쓰기 RPC 변경 없음, 이미 존재하는
+migration #512~521 스키마·정본 필터링 로직 재사용) — git commit은 Stephen 직접 실행 대기.**
+
+---
+
+## DONE — 🔴 CRITICAL: CMS 대여방식 옵션 "장바구니 노출용 안내문구"(deadline_time) 관리 기능 신설 (2026-09-21, 이 세션'만', ✅ GATE E 통과 — sp3-qa-agent 3+1차 독립검수 완료(4차 최종검수에서 신규 CRITICAL 결함 1건 발견→즉시수정→Stage 실증 재확인), git commit만 Stephen 대기)
+
+### 배경
+
+`/cms/set/rental` "대여 방식 옵션"에서, 각 방식(방문·크레이지샷배송 등)의
+`rental_method_options.deadline_time` 컬럼(예: "19:00 마감")이 `/cart` 장바구니 화면
+(`tab.deadline`)에 이미 그대로 노출되고 있었는데, 이 값을 넣을 CMS 화면이 전혀 없어
+Supabase 콘솔로 직접 넣어야 했던 공백(products.md에 이미 "orphan 컬럼"으로 문서화된 상태)을
+메웠다. Stephen이 여러 차례 실화면 피드백을 주며 UI를 반복 수정했다 — 최종본 기준으로 기록.
+
+### 구현 (반복 수정 경위 순서대로)
+
+```
+① 신규 생성 폼에 안내문구 입력 추가
+   supabase/migrations/20260921030000_513_upsert_rental_method_option_deadline_time.sql
+     — upsert_rental_method_option RPC를 4-param→5-param(p_deadline_time 추가)으로 재정의,
+       구 3-param·4-param 오버로드 DROP(코드베이스 전체에서 호출부가 addMethod 액션 1곳뿐임을
+       확인 후 설계 — PostgREST 모호성(PGRST203) 위험 원천 차단), REVOKE/GRANT 재하드닝.
+       Stage(ezyvffjvuwmtuhpxdjrw) 적용 완료, 오버로드 1개·권한 정상 직접 재확인.
+   +page.server.ts addMethod 액션에 deadline_time 파싱+검증 추가, +page.svelte에
+   "대여방식명" 옆 신규 입력칸 추가(최초 2:1 비율 → Stephen 재지시로 1:2로 반전).
+
+② 기존 목록에도 반영
+   RentalMethodOption 인터페이스 + load() select에 deadline_time 추가, 각 행에 읽기전용
+   배지로 표시(값 없으면 배지 자체 미표시).
+
+③ 기존 값 인라인 수정 기능 신설
+   신규 서버 액션 updateMethodDeadline(+page.server.ts) — 기존 upsert_rental_method_option
+   RPC의 UPDATE 분기(p_id 지정) 재사용. name/display_order는 그 RPC가 무조건 덮어쓰므로
+   (COALESCE 대상 아님) 클라이언트가 그 행의 현재값을 hidden 필드로 재전송.
+
+④ UI 위치 3차 반복(Stephen 재지시로 매번 구조 변경)
+   1차: 배지 클릭 시 그 자리에 좁은 인라인 폼(110px) → 2차: Stephen "목록이 균일하지 않으니
+   아코디언으로" 지시 → 목록 전체 하단에 공용 패널 1개(오인 — Stephen이 원한 건 아니었음)
+   → 3차(최종): Stephen "각 행 바로 아래에" 재지시 → 진짜 행별 아코디언으로 재구현.
+   CmsDragList.svelte(12곳 이상에서 재사용되는 공용 컴포넌트)는 전혀 수정하지 않고, 이
+   목록 전용 클래스(mk-methods-list)로 스코프한 :global(.mk-methods-list .drag-list-item)
+   { flex-wrap: wrap } + 아코디언에 flex-basis:100%를 줘서 그 행의 flex 컨테이너 안에서만
+   줄바꿈되도록 구현(다른 3개 CmsDragList 목록에는 영향 없음). renderItem 스니펫이 복수
+   최상위 엘리먼트(.list-row + 조건부 아코디언)를 반환하는 구조로 변경.
+   QA 권고로 아코디언에 draggable="false" 추가(드래그 재정렬 중 실수 방지).
+
+⑤ 시각적 UX 보강
+   ChevronIcon(uiux-index.md 표준 아코디언 화살표 컴포넌트, 신규 SVG 없음) 배지 우측에 추가
+   — 닫힘=down/열림=up으로 상태 예측 가능하게 표시. 배지 텍스트 말줄임(ellipsis, max-width)
+   적용 후 Stephen 지시로 84px→126px(50% 확대) + 텍스트-아이콘 간격 4px→8px 재조정.
+
+⑥ 입력 제한 완화
+   최초 "20자 이내 한글·영문·숫자만"(공백·콜론 등 특수문자 차단) 정책으로 구현했으나,
+   Stephen이 같은 날 후속 지시로 문자 종류 제한을 전면 해제(20자 길이 제한만 유지) —
+   기존 "19:00 마감" 형식(콜론+공백 포함)도 그대로 재현 가능해짐. 클라이언트 필터 함수를
+   길이 제한 전용으로 단순화 + 서버 액션 2곳(addMethod·updateMethodDeadline) 모두에서
+   문자 종류 정규식 검증 제거.
+
+⑦ (QA 4차 최종검수에서 발견) deadline_time "지우기" 불가 결함 수정
+   supabase/migrations/20260921110000_522_upsert_rental_method_option_deadline_time_clear_fix.sql
+     — Migration #513의 UPDATE 분기가 deadline_time = COALESCE(p_deadline_time,
+       deadline_time)라, 관리자가 안내문구 입력칸을 비우고 저장하면 서버가 NULL을 보내도
+       COALESCE가 무시하고 기존 값을 그대로 유지 — "저장됐습니다" 토스트는 뜨는데 실제로는
+       아무 것도 안 바뀌는 조용한 무동작(silent no-op) CRITICAL 결함이었다(products.md
+       §2-10-④ "필드를 비워 저장=삭제" 기존 관례와도 상충). deadline_time 대입만
+       COALESCE 제거하고 무조건 덮어쓰기로 전환(method_key는 COALESCE 유지가 맞음 —
+       updateMethodDeadline이 그 필드는 "항상 현재값 그대로 재전송"하는 용도라 변경 의도
+       자체가 없음). 시그니처 무변경(CREATE OR REPLACE) + REVOKE/GRANT 재하드닝.
+```
+
+### 검증
+
+```
+npm run check — 매 반복마다 재실행, 신규 에러 0건 유지(전체 1 ERROR는 vite.config.ts
+  사전 존재 이슈, 무관). 최종 401 WARNINGS(제거된 미사용 CSS 클래스 반영).
+sp3-qa-agent 4회 독립검수 —
+  1차: ①③(RPC 오버로드 안전성·name/method_key 유실 위험 없음) GATE E 통과
+  2차: ④ 1차 구조(전체 하단 공용 패널) GATE E 통과했으나 이후 Stephen 재지시로 구조
+    자체가 폐기됨(아래 3차가 실제 최종본)
+  3차: ④ 최종 구조(행별 아코디언, CmsDragList 공용 컴포넌트 무수정 확인·flex-wrap 스코프
+    안전성·Svelte 5 복수 최상위 스니펫 유효성) GATE E 통과, 비차단 권고 1건
+    (draggable="false") 즉시 반영
+  4차(①~⑥ 전체 누적 최종검수, ⑤⑥ 최초 검수): ⑤⑥ 자체는 결함 없음 확인했으나, 전체
+    재검증 과정에서 ③(인라인 수정)의 핵심 시나리오("지우기") 자체가 작동하지 않는 신규
+    CRITICAL 결함 1건 발견 → 종합판정 "조건부 통과, 수정 후 재검수 필요"로 보류
+  ⑦(수정) 재검수: 소스 레벨(SQL 로직·호출부 정규화 경로·수정 범위) 전부 일치 확인했으나
+    이 QA 세션엔 DB 접근 도구가 없어 Stage 실물 조회는 직접 수행하지 못함(도구 제약 명시,
+    "적용 성공 응답만 믿지 말 것" 원칙에 따라 별도 재확인 권고) → harness-executor
+    본 세션이 pg_get_functiondef로 Stage 함수 정의 직접 재조회해 deadline_time =
+    p_deadline_time(COALESCE 없음)·method_key = COALESCE(...)로 정확히 반영된 것,
+    권한(postgres/authenticated/service_role만) 정상인 것 둘 다 실증 확인 완료.
+```
+
+### 문서
+
+```
+이번 TASK.md 항목 자체가 최초 기록(중간 반복 과정은 이 세션 중 별도 기록 없이 진행됐음).
+```
+
+### Stephen 확인 필요 (다음 단계)
+
+```
+1. git commit — Migration #513·#522·+page.server.ts·+page.svelte(이번 세션 대여방식
+   관련분) — Stephen 직접 실행 대기
+2. Production(vnbpmvxruyciuuaermyh) — Migration #513·#522 둘 다 Stage만 적용,
+   Production 미반영(순서상 #513 먼저 적용 후 #522 필수 — #522가 #513을 전제로 함)
+3. 실사용 확인 권장 — 이미 안내문구가 등록된 방식(예: 방문대여 "19:00 마감")의 아코디언을
+   열어 입력칸을 완전히 비우고 저장했을 때 배지 자체가 사라지는지(= "안내문구 추가"
+   placeholder로 되돌아가는지) 육안 확인
+```
+
+---
+
+## DONE — 🔴 CRITICAL: 쿠폰 "첫 확인일로부터 N일" 유효기간(relative_days) 모드 신설 (2026-09-21) — GATE C 통과, GATE E 대기
+
+> 생성: promptor(대형 아젠다 분석 에이전트) — Stephen 사전 작성 플랜(`/Users/stevenmac/.claude/
+> plans/3-shimmying-firefly.md`)을 별도 세션이 코드베이스·Stage(`ezyvffjvuwmtuhpxdjrw`)·
+> Production(`vnbpmvxruyciuuaermyh`) 라이브 DB와 전수 대조 검증 완료한 결과를 그대로 이관.
+> 검증 중 핵심 전제 1건이 사실과 다름을 발견 → Stephen이 해당 부분(Migration #517, RLS
+> 정책 수정)을 스코프에서 제외하고 진행하라고 확정. 재조사 불필요, 아래 내용 그대로 실행.
+
+### [CONTEXT BRIDGE]
+
+```
+plan_source : /Users/stevenmac/.claude/plans/3-shimmying-firefly.md (Stephen 사전 작성) +
+              별도 세션의 Stage/Production 라이브 DB·코드 전수 대조 검증 결과
+핵심제약     : 같은 세션에서 방금 대폭 확장된 cms_update_coupon(현재 22-param, Migration
+              #514/#515)·use_coupon(Migration #511, 드리프트 없음 확인)의 기존 로직(②주문
+              의존/③사용자의존 자격조건/④소진처리)은 1바이트도 건드리지 않고 그 위에
+              "+p_valid_days" 파라미터만 얹어 확장한다. 기존 fixed_period/unlimited
+              모드 쿠폰은 회귀 없이 그대로 동작해야 한다.
+TDD도메인    : 결제·쿠폰 직결 도메인(use_coupon 만료판정 분기, cms_create/update_coupon
+              RPC 시그니처 확장) — GATE C 강화 대상. 최종 TDD/GSD 분리 판단은
+              harness-executor(AGENTS.md 키워드 스캔 기준).
+절대금지     : ① Migration #517(coupons RLS "유효 쿠폰 조회" 정책 수정) 절대 진행 금지 —
+              아래 "스코프 제외" 참고, 전제 자체가 틀렸음이 라이브 DB로 확인됨
+              ② use_coupon RPC의 ②③④ 기존 로직(주문의존/사용자의존 자격조건·소진처리)
+              수정 금지 — 오직 SELECT 컬럼 추가 + 만료판정 분기만 추가
+              ③ cms_create_coupon/cms_update_coupon DROP 시 "마이그레이션 파일 기억"이
+              아니라 반드시 구현 시점 pg_get_function_arguments 라이브 실측으로 정확한
+              기존 시그니처를 재확인 후 DROP(파라미터 개수가 바뀌는 재정의라 CREATE OR
+              REPLACE만으로는 새 오버로드만 추가되고 기존 정의가 잔존함)
+              ④ user_coupons(user_id,coupon_id) UNIQUE 제약 변경 금지(이번 스코프 무관,
+              "첫 확인 시점" 판정의 구조적 무모호성을 이미 보장하는 기존 장치)
+              ⑤ Migration 번호 517은 영구 결번 처리 — 516 다음은 반드시 518부터 이어감
+실패롤백     : 신규 컬럼(user_coupons.first_viewed_at, coupons.valid_days)은 전부 NULL
+              허용 추가 컬럼이라 롤백 시 단순 미사용 상태로 방치 가능. RPC는 DROP+CREATE
+              재정의라 문제 발생 시 직전 마이그레이션 정의로 재적용해 즉시 원복.
+```
+
+### ⛔ 스코프에서 명시 제외 — Migration #517 (RLS 정책 수정) 진행 금지
+
+```
+원래 플랜은 Migration #516(스키마)과 #517(RLS 정책 수정)을 "선행조건" 세트로 묶었으나,
+#517은 이번 태스크에서 완전히 제외한다.
+
+제외 이유: 플랜은 coupons 테이블의 "coupons: 유효 쿠폰 조회" RLS 정책이
+valid_until >= NOW()를 무조건 요구해 valid_until IS NULL인 무제한 쿠폰이 장바구니에서
+원천 차단되는 기존 버그가 있다고 전제했음. 이 전제를 Stage·Production 양쪽 라이브 DB에서
+pg_policies를 직접 조회해 검증한 결과 사실이 아님을 확인함 — 두 환경 모두 현재 정책은
+is_active/deleted_at(+ Stage는 auth.uid() IS NOT NULL)만 검사할 뿐 valid_until/valid_from
+조건이 전혀 없음(마이그레이션 15의 최초 정의와 다르게, 추적되지 않은 채 변경돼 있었고
+Stage·Production끼리도 정책 이름 자체가 다를 만큼 어긋나 있는 별개의 오래된 이슈 —
+이번 기능과 무관하니 이번 태스크에서 손대지 않는다).
+
+즉 RLS는 현재 유효기간을 전혀 걸러내지 않고, 실제 유효기간 판정은 전부 애플리케이션
+코드(cart/+page.server.ts의 basicFilteredCoupons 필터, use_coupon RPC의
+valid_until < now() 체크)가 전담한다 — 그래서 아래 "카트·계약서명 표시 갱신" 항목만으로
+신규 기능이 정상 작동하기에 충분하며, RLS 정책 변경은 불필요·범위 밖이다.
+```
+
+### 기능 요약
+
+쿠폰 시스템(`coupons` 테이블)에 유효기간 방식을 하나 추가한다. 현재는 고정된 절대
+날짜(`valid_until`) 하나만 있는데, "고객이 쿠폰을 처음 확인한 시점(카트 화면 진입
+시점)으로부터 N일 동안 유효"한 개별화된 유효기간 모드(`validity_type = 'relative_days'`)를
+신설한다. 이 모드에서는 같은 쿠폰이라도 고객마다 실제 만료 시점이 다르게 계산된다
+(발급 시점이 아니라 "처음 확인한 시점" 기준 — Stephen이 명시적으로 확정한 기준점).
+
+### 이미 검증 완료된 사실 (재조사 불필요 — 전부 라이브 DB·코드 직접 대조로 확인됨)
+
+```
+- user_coupons 현재 컬럼: id, user_id, coupon_id, issued_at, used_at, used_count,
+  created_at, redeemed_code, order_id — "첫 확인 시점" 컬럼 없음(신설 필요)
+- user_coupons에 UNIQUE(user_id, coupon_id) 제약 존재 — 한 사용자는 같은 쿠폰 정의를
+  평생 1개 인스턴스만 가질 수 있음(구조적으로 이미 보장돼 있어 "첫 확인 시점" 판정에
+  모호함 없음)
+- coupons.valid_from/valid_until 둘 다 이미 nullable(is_nullable='YES'), validity_type은
+  VARCHAR(15) NOT NULL DEFAULT 'fixed_period'이고 CHECK 제약 없음 — 'relative_days'(13자)는
+  길이 제한 안에 들어가고 별도 제약 추가 불필요
+- coupons_discount_type_check CHECK 제약이 discount_type을 'fixed'|'percentage'|
+  'free_shipping'으로 제한 중(이번 기능과 무관하지만 참고)
+- distribute_coupon RPC는 순수 PUSH 방식: INSERT INTO user_coupons ... ON CONFLICT
+  (user_id, coupon_id) DO NOTHING으로 즉시 일괄 지급, 고객이 나중에 "받기"를 누르는
+  클레임(PULL) 개념이 전혀 없음
+- use_coupon RPC 현재 라이브 정의 = supabase/migrations/20260921010000_511_coupon_
+  unused_fields_enforcement.sql과 정확히 일치(드리프트 없음) — 신규 마이그레이션은 이
+  511 정의를 베이스로 삼으면 됨
+- cms_create_coupon RPC 현재 라이브 시그니처 = 정확히 29개 파라미터(pg_get_function_
+  arguments로 직접 확인, 파라미터 이름·순서까지 플랜 서술과 일치)
+- cms_update_coupon RPC는 이 세션 동안 두 차례 더 확장됨(Migration #514, #515) — 현재
+  라이브 시그니처는 22개 파라미터(p_id, p_discount_type, p_discount_value,
+  p_max_discount_amount, p_total_usage_limit, p_user_grade_required, p_validity_type,
+  p_valid_from, p_valid_until, p_display_name, p_description, p_min_purchase_amount,
+  p_min_rental_amount, p_min_rental_days, p_per_user_limit, p_applicable_categories,
+  p_is_first_rental_only, p_is_student_only, p_is_walk_in_only, p_is_subscription_only,
+  p_allow_with_points, p_allow_stacking) — "521" 구현 시 이 최신 22-param을 베이스로
+  +p_valid_days를 추가해야 함(구현 시점에 pg_get_function_arguments로 실제 라이브
+  시그니처를 반드시 재확인 후 DROP할 것 — "마이그레이션 파일 기억"이 아니라 "라이브 DB
+  실측" 기준, 이 프로젝트의 확립된 원칙)
+- cart/+page.svelte의 daysUntilExpiry 함수(줄 1743-1747), UserCouponExt 타입(줄 735),
+  CouponRow 호출부(줄 2046-2048) — 전부 직접 대조 확인, 줄 번호 정확함(다른 세션 작업으로
+  이 파일이 계속 수정되고 있으니 구현 시점에 줄 번호 재확인 권장)
+```
+
+### 대상 파일 · 현재 구조
+
+```
+쿠폰 배포   : distribute_coupon RPC(supabase/migrations/20260818040000_291_coupon_lazy_
+             sequencing_schema.sql:14-74), CMS 액션 src/routes/cms/promotion/coupon/
+             +page.server.ts의 distributeCoupon 액션
+만료 판정   : use_coupon RPC(supabase/migrations/20260921010000_511_coupon_unused_
+             fields_enforcement.sql) — ②③④ 로직 절대 보존
+CMS 등록    : src/routes/cms/promotion/coupon/new/+page.svelte(f_validity_type state) +
+             +page.server.ts(cms_create_coupon 호출)
+CMS 수정    : src/lib/components/cms/CouponDetailPanel.svelte(u_validity_type state 등) +
+             src/routes/cms/promotion/coupon/+page.server.ts(updateCoupon 액션,
+             cms_update_coupon 호출) — 이 파일은 이번 세션에 방금 대폭 확장됐으니(위
+             22-param 참고) 그 최신 구조 위에 이어서 추가할 것
+카트 표시   : src/routes/cart/+page.server.ts(쿠폰 SELECT·basicFilteredCoupons 필터) +
+             src/routes/cart/+page.svelte(UserCouponExt 타입, daysUntilExpiry,
+             CouponRow 호출)
+계약서명    : src/routes/contract/[token]/+page.server.ts — 카트와 동일한 쿠폰 필터
+             로직을 독립 보유. relative_days 계산 로직을 함께 반영하지 않으면 "카트에선
+             보이는데 계약서명 단계에서 사라지는" 불일치가 생김
+```
+
+### 구현 상세
+
+**1. 스키마** (신규 마이그레이션, Stage 먼저 검증 후 Production — 다음 번호는 516부터,
+#517은 건너뛰고 518로 이어감)
+
+```
+516_relative_days_coupon_schema.sql
+  - user_coupons.first_viewed_at TIMESTAMPTZ NULL 추가
+  - 부분 인덱스: user_coupons(user_id) WHERE first_viewed_at IS NULL AND used_at IS NULL
+  - coupons.valid_days INTEGER NULL 추가 + CHECK(valid_days IS NULL OR valid_days > 0)
+  - valid_from/valid_until DROP NOT NULL (이미 nullable로 확인됨 — 방어적 no-op 허용)
+```
+
+**2. "첫 확인" 마킹** — 신규 RPC + 카트 load 훅
+
+```
+518_mark_coupons_first_viewed_rpc.sql
+  - mark_coupons_first_viewed(p_user_id uuid) — SECURITY DEFINER
+  - UPDATE user_coupons SET first_viewed_at = now()
+    WHERE user_id = p_user_id AND first_viewed_at IS NULL AND used_at IS NULL
+  - auth.uid() = p_user_id 자기검증(defense-in-depth) + REVOKE ALL FROM PUBLIC,anon
+    + GRANT TO authenticated (이 프로젝트 필수 하드닝 관례)
+  - 멱등성은 WHERE first_viewed_at IS NULL 자체가 보장(재호출 시 자연 no-op)
+```
+
+`src/routes/cart/+page.server.ts`의 `load()` — 세션 가드 직후, 쿠폰 목록을 조회하는
+`Promise.all(...)`보다 먼저 `await supabase.rpc('mark_coupons_first_viewed', { p_user_id:
+session.user.id })` 호출. 먼저 마킹해야 바로 다음 쿠폰 조회에 갓 채워진 `first_viewed_at`이
+반영되어, "방금 처음 본" 케이스를 화면에서 별도 분기 없이 "N일 전체"로 자연스럽게 보여줄
+수 있다.
+
+**3. 만료 판정 갱신** — `use_coupon` RPC
+
+```
+519_use_coupon_relative_days_expiry.sql
+```
+
+511 원문을 그대로 복사한 뒤(라이브에서 재확인 완료 — 드리프트 없음) 아래 두 지점만 수정
+(시그니처 불변 → GRANT 자동 보존):
+- SELECT 목록에 `uc.first_viewed_at, c.validity_type, c.valid_days` 추가
+- 만료 체크를 분기:
+  - `validity_type = 'relative_days'`: `first_viewed_at IS NOT NULL AND valid_days IS
+    NOT NULL AND (first_viewed_at + valid_days일) < now()` 일 때만 `COUPON_EXPIRED`.
+    `first_viewed_at`이 아직 NULL인 비정상 경로는 무기한 유효로 처리(기존 `unlimited`
+    모드와 동일 취급 — 일관성, YAGNI).
+  - 그 외: 기존 `valid_until < now()` 체크 그대로.
+- ②주문의존 자격조건·③사용자의존 자격조건·④소진처리는 511 원문 그대로 보존.
+
+**4. CMS 등록/수정 폼** — 3번째 유효기간 모드 추가
+
+`validity_type` 라디오에 `relative_days`("발급일로부터 N일까지 사용 가능") 옵션 + 숫자
+입력(`valid_days`) 추가:
+- 신규 등록: `cms/promotion/coupon/new/+page.svelte`(`f_validity_type`/`f_valid_days`
+  state, radio·조건부 입력 UI) + `+page.server.ts`(검증 + `p_valid_days` 페이로드 추가)
+- 발행 후 수정: `CouponDetailPanel.svelte`(`u_validity_type`/`u_valid_days` state, 동일
+  UI 패턴) + `cms/promotion/coupon/+page.server.ts`의 `updateCoupon` 액션
+
+```
+520_cms_create_coupon_relative_days.sql — DROP FUNCTION(라이브에서 재확인한 정확한
+  29-param 시그니처) 후 CREATE OR REPLACE(+p_valid_days 파라미터 추가) + REVOKE/GRANT
+  하드닝. INSERT 시 validity_type IN ('unlimited','relative_days')면 valid_from/
+  valid_until은 NULL로, valid_days는 validity_type='relative_days'일 때만 저장.
+
+521_cms_update_coupon_relative_days.sql — 동일 원칙: 구현 시점에 pg_get_function_
+  arguments로 cms_update_coupon의 실제 라이브 시그니처를 반드시 재확인(이 문서 작성
+  시점 기준 22-param이지만 구현 시점엔 더 바뀌어 있을 수 있음) 후 그 정확한 시그니처로
+  DROP, +p_valid_days 추가해 재생성.
+```
+
+⛔ 두 RPC 모두 파라미터 개수가 바뀌는 재정의라 `CREATE OR REPLACE`만으로는 새 오버로드가
+생길 뿐 기존 정의가 남는다 — 반드시 `DROP FUNCTION IF EXISTS(정확한 기존 시그니처)`를
+먼저 실행(이 세션에서 Migration #512/#514/#515로 이미 반복 검증된 패턴).
+
+타입: `src/lib/types/database.ts`의 `Coupon`에 `validity_type`/`valid_days`,
+`UserCoupon`에 `first_viewed_at` 필드만 추가(기존 필드 누락 문제인 "B-7"은 범위 밖).
+
+**5. 카트(및 계약서명 페이지) 표시 갱신**
+
+`cart/+page.server.ts`:
+- 쿠폰 SELECT에 `first_viewed_at`(user_coupons) + `validity_type`, `valid_days`
+  (coupons) 컬럼 추가
+- `basicFilteredCoupons` 필터에 `relative_days` 분기 추가(만료 판정을 `use_coupon`
+  RPC와 동일한 로직으로 클라이언트단에서도 재현 — 이미 만료된 쿠폰이 선택 가능하게
+  보이면 안 되므로)
+
+`cart/+page.svelte`:
+- `UserCouponExt` 타입에 3개 필드 추가
+- `daysUntilExpiry`를 `validUntil: string` 단일 인자 대신 `uc: UserCouponExt` 전체를
+  받는 모드 인식형으로 교체 — `relative_days`면 `(first_viewed_at ?? now) + valid_days일
+  − now`, 아니면 기존 `valid_until − now` 그대로
+- 호출부(`CouponRow`에 `days:` 넘기는 곳)를 `daysUntilExpiry(uc)`로 변경
+
+`contract/[token]/+page.server.ts`: 동일한 쿠폰 필터 로직을 독립 보유하고 있으므로,
+SELECT에 3개 필드 추가 + 동일 `relative_days` 분기를 반영해 카트-계약서명 두 화면 간
+표시 불일치를 방지(이 화면은 서비스 롤이라 RLS 문제는 없고, "첫 확인" 마킹도 이 화면에서는
+하지 않음 — 카트에서 이미 마킹된 값을 읽기만 함).
+
+### 리스크 (플랜 원문, #517 관련 행 제거)
+
+| 항목 | 내용 |
+|---|---|
+| **"한 번도 카트에 안 들어온 relative_days 쿠폰"** | 무기한 유효로 처리(안전장치 없음, `unlimited`와 동일 취급) — 이후 실사용에서 문제되면 별도 절대 상한 정책을 추가 논의 |
+| **RPC DROP+CREATE** | `cms_create_coupon`/`cms_update_coupon` 둘 다 구현 시점에 라이브 DB에서 `pg_get_function_arguments`로 정확한 현재 시그니처를 재확인해 DROP해야 함(마이그레이션 파일 기억에 의존 금지) |
+| **마이그레이션 번호** | 516 다음 517은 건너뛰고 518부터, 실제 적용일 기준 날짜 프리픽스로 교체 |
+
+### 검증 방법
+
+```
+1. npx svelte-check — 신규 타입 오류 없는지.
+2. Stage DB(ezyvffjvuwmtuhpxdjrw)에 516→518→519→520→521 순서대로 적용 후:
+   - CMS에서 relative_days 모드 쿠폰 신규 등록 → 특정 회원에게 배포(distribute_coupon)
+   - 그 회원으로 로그인 후 /cart 진입 → 쿠폰 목록에 정상 노출 + "N일" 표시가 valid_days
+     전체로 보이는지 확인
+   - DB에서 user_coupons.first_viewed_at이 실제로 채워졌는지 직접 확인(execute_sql)
+   - 같은 쿠폰으로 결제까지 진행해 use_coupon RPC가 정상 통과하는지 확인
+   - valid_days를 지나치도록 first_viewed_at을 수동으로 과거로 돌린 뒤(테스트 전용)
+     재사용 시도 → COUPON_EXPIRED로 정상 거부되는지 확인
+3. 기존 fixed_period/unlimited 모드 쿠폰들이 이번 변경으로 회귀 없이 그대로 동작하는지 확인.
+4. 마이그레이션은 Stage 검증 완료 후에만 Production(vnbpmvxruyciuuaermyh) 적용
+   (core-rules.md DB 환경 분리 순서 준수).
+```
+
+### GATE 등급 판단 근거
+
+```
+쿠폰·결제 직결 도메인(다중 파일·다중 마이그레이션·RPC 시그니처 확장 포함) —
+CLAUDE.md 기준 최소 🔴 CRITICAL. use_coupon 만료판정 로직 변경은 TDD 강제 키워드
+(결제·정합성 관련) 대상 여부를 harness-executor가 AGENTS.md 기준으로 재확인할 것.
+```
+
+### GATE B 확인 항목
+
+```
+[ ] NOW 태스크(위 전체 계획)가 Stephen 의도와 맞는가?
+[ ] Migration #517(RLS 정책 수정)이 스코프에서 제외된 채로 진행되는 것이 맞는가?
+[ ] 마이그레이션 번호 516→518→519→520→521(517 영구 결번) 순서에 이견이 없는가?
+[ ] cms_create_coupon/cms_update_coupon DROP 전 라이브 시그니처 재확인 절차가
+    누락되지 않았는가?
+[ ] "첫 확인 시점" 기준(발급 시점이 아니라 카트 진입 시점)이 여전히 맞는가?
+[ ] use_coupon RPC의 ②③④ 기존 로직 보존 원칙에 이견이 없는가?
+```
+
+→ 승인: "GATE B 승인. NOW 실행해."
+→ 수정: TASK.md 직접 수정 후 "GATE B: 내가 고쳤어. NOW 실행해."
+→ 반려: "GATE B 반려. [이유]. 다시 작성해."
+
+### ✅ GATE B 승인 (2026-09-21, Stephen — 별도 세션의 코드↔플랜 대조검토 결과 보고 후 소급 확인)
+
+```
+이 계획은 실제로는 (다른) 병행 세션이 Migration 516/518/519/520/521 + 관련 코드까지 이미
+구현·Stage 적용을 완료한 상태였으나, TASK.md에는 그 착수를 허가하는 "GATE B 승인" 발언이
+기록돼 있지 않았다 — 이 세션이 sp3-qa-agent로 계획 대 실제 코드를 전수 대조검토한 결과
+(항목 1~8 전부 "구현됨", ②③④ use_coupon 기존 로직 무변경 byte-diff로 확인, Migration
+#517 스코프 제외 준수 확인) 위 "9. GATE B 승인 여부" 항목만 "TASK.md에서 승인 기록을
+찾지 못함"으로 보고됨에 따라, Stephen에게 그 사실 그대로("승인하신 것 맞나요?")를
+질문했고 "GATE B 승인"으로 확인받음. 즉 실행 자체는 이미 끝난 뒤의 소급 승인 기록이며,
+새로 착수할 잔여 작업은 없음(이미 Stage 적용 완료 상태 그대로 유지).
+```
+
+---
+
 ## DONE — 🔴 CRITICAL: 관리자 쿠폰 발행·정산 로직 전면 수정 (2026-09-21, 이 세션'만')
 
 > Stephen 재보고: "장바구니에 노출도 안되고 선택시 조건에 따른 할인 적용도 안됨" +
