@@ -10,7 +10,7 @@
   import { csToast } from '$lib/utils/toast';
   import { isLockerHour } from '$lib/utils/lockerTimeRange';
   import { calcShippingFee, calcShippingDiscountRate, applyShippingDiscount, isRoundTripShippingFee, isFreeDeliveryCouponBlocked, computeReturnVisibleTabs, type ShippingFeeItem, type DeliveryFeeDiscountTier, type DiscountConditionItem } from '$lib/utils/cartShippingFee';
-  import { calcRentalDays, calcRentalFee, calcRentalPeriodParts, computeCartTotalMinutes, calcHolidayExtension, calcHolidayExtraFee } from '$lib/utils/cartRentalFee';
+  import { calcRentalDays, calcRentalFee, calcRentalPeriodParts, computeCartTotalMinutes, calcHolidayExtension, calcHolidayExtraFee, calcOptionsHolidayExtraFee } from '$lib/utils/cartRentalFee';
   import { toDeliveryMethod, isMethodSelectionValid } from '$lib/utils/cartMethodSelection';
   import {
     resolveParentProductId,
@@ -1101,12 +1101,15 @@
     if (line.durationType === 'purchase' || o.unitPrice12h == null) {
       return o.unitPrice * o.qty
     }
-    // 옵션상품은 휴무일 연장 특례(무료/50%) 미적용 — 계획 파일 "의도적으로 제외" 참고.
-    // 다만 연장된 날짜 구간(effectiveStart/effectiveEnd) 자체는 본상품과 동일하게 반영해
-    // 서버(compute_reservation_line_amount)의 v_days/v_has_half와 정확히 일치시킨다
-    // (연장일도 옵션은 정상요율 그대로 청구됨).
+    // 2026-09-19 Stephen 확정 — 옵션상품도 본상품(itemRentalFee)과 동일하게 연장된 날짜
+    // 구간(effectiveStart/effectiveEnd)으로 정상 요금을 먼저 계산한 뒤, 연장일수만큼
+    // 정상요율분을 빼낸다(연장일 자체의 50% 할인요금은 별도로 otHolidayExtraFee에서
+    // calcOptionsHolidayExtraFee로 가산 — 이중할인 방지 원칙상 discount 대상 기준액에서는
+    // 완전히 제외). 과거(migration 501)에는 옵션에 이 특례 자체가 미적용이라 연장일도
+    // 정상가 그대로 청구됐는데, 이게 "심각한 변경정책 미적용 오류"로 지적됨 — 본상품과
+    // 동일한 netting을 적용하도록 교체.
     const ext = itemHolidayExtension(it)
-    const fee = calcRentalFee({
+    const fullFee = calcRentalFee({
       startDate: ext.effectiveStart,
       endDate: ext.effectiveEnd,
       pickupTime: it.rentalTime,
@@ -1115,7 +1118,8 @@
       halfDayPrice: o.unitPrice12h,
       deliveryLocked: isDeliveryTypeMethod(it.opts.rentalMethod),
     })
-    return fee * o.qty
+    const extensionDays = ext.pickupExtraDays + ext.returnExtraDays
+    return Math.max(fullFee - extensionDays * o.unitPrice, 0) * o.qty
   }
   function itemOptionsAmount(
     line: CartLineGroup | undefined,
@@ -1449,18 +1453,13 @@
   // 휴무일 포함 배송 연장(2026-09-12) — itemHolidayExtension/calcHolidayExtension이 요구하는
   // Set<string> 형태. courierClosedMap과 동일한 원본(data.courierClosedDates)에서 파생.
   const courierClosedSet = $derived(new Set<string>(courierClosedMap.keys()))
-  // 법정공휴일(자동 동기화) 전용 집합(2026-09-19) — courierClosedSet(임시휴무+공휴일+일요일
-  // 통합)과 달리 실제 public_holidays 'national' 행만 별도로 표시(달력 "공휴일" 원형 마크 전용).
-  const publicHolidaySet = $derived(new Set<string>(
-    ((data.courierClosedDates as { date: string; reason: string; isPublicHoliday?: boolean }[] | undefined) ?? [])
-      .filter((h) => h.isPublicHoliday)
-      .map((h) => h.date)
-  ))
 
   // 휴무일 연장요금 — 체크된 상품(qty 배수 포함) 합산. otSubtotal(할인 계산 기준)에는
   // 포함시키지 않고 otDeliveryFee와 동일하게 할인 이후 별도로 가산한다(rental-fee-policy.md
   // 신설 절, 서버 compute_reservation_line_amount/create_reservation_order와 동일 원칙).
   // 판매전용(sale_only) 상품은 대여기간 개념이 없어 서버와 동일하게 0 처리.
+  // 2026-09-19 Stephen 확정 — 옵션상품도 무조건 포함해 50% 할인요금을 부과(calcOptionsHolidayExtraFee).
+  // 과거엔 본상품(r24)만 계산했으나, 옵션도 그 옵션 자체의 요율로 동일 연장일수에 대해 계산해 합산한다.
   const otHolidayExtraFee = $derived(
     itemsState.reduce((sum, it) => {
       if (it.deleted || !it.checked) return sum
@@ -1468,7 +1467,9 @@
       if (line?.durationType === 'purchase') return sum
       const r24 = itemRate24h(line)
       const ext = itemHolidayExtension(it)
-      return sum + calcHolidayExtraFee(ext.pickupExtraDays, ext.returnExtraDays, r24) * Math.max(line?.qty ?? 1, 1)
+      const mainExtra = calcHolidayExtraFee(ext.pickupExtraDays, ext.returnExtraDays, r24)
+      const optionsExtra = calcOptionsHolidayExtraFee(ext.pickupExtraDays, ext.returnExtraDays, line?.options ?? [])
+      return sum + (mainExtra + optionsExtra) * Math.max(line?.qty ?? 1, 1)
     }, 0)
   )
 
@@ -2865,22 +2866,49 @@
         : calcHolidayExtension(props.selectedDate, props.selectedDate, false, true, courierClosedSet))
     : null}
   {@const holidayExtraDays = holidayExtPreview ? (props.type === 'rental' ? holidayExtPreview.pickupExtraDays : holidayExtPreview.returnExtraDays) : 0}
-  <!-- 2026-09-16 색상 재설계 — "흡수되는 모든 날짜"가 아니라 "구간 밖 첫 정상 영업일
-       (경계일) 딱 하루"만 하이라이트한다. calcHolidayExtension의 while 루프는 "휴무 아님"을
-       확인한 그 즉시 break하므로, effectiveStart 하루 전(수령)/effectiveEnd 하루 후(반납)는
-       연장일수(N)가 몇 일이든 항상 정확히 그 경계일 하나를 가리킨다(rental-fee-policy.md
-       §5, calcHolidayExtension 주석 참고 — 별도 분기 불필요). 선택된 날짜(warnSelected)는
-       레드로, 이 경계일은 퍼플로 구분한다. -->
-  {@const warnSelected = holidayExtraDays > 0}
-  {@const holidayHighlightDates = (() => {
+  <!-- 2026-09-19 재설계(Stephen 피드백) — 과거(2026-09-16)엔 "구간 밖 첫 정상 영업일(경계일)
+       딱 하루"만 퍼플로 하이라이트했는데, 이 방식은 (a) 실제로 흡수되는 날짜 자체는 전혀
+       표시되지 않고 (b) 선택한 날짜가 무엇이냐에 따라 하이라이트가 나타났다 안 나타났다 해서
+       "사용한 날로 지정된 것처럼" 오인되는 문제가 있었다. warnSelected를 "선택된 날짜 자체가
+       휴무일인가"로 재정의(연장 유발 여부와 무관 — 전후가 모두 영업일인 고립된 휴무일을
+       선택해도 강조해야 함). 흡수 날짜 전체 표시(구 holidayAbsorbedSet)는 2026-09-20
+       아래 pickupAbsorbedSetAll/returnAbsorbedSetAll로 대체됨(다음 주석 참고). -->
+  {@const warnSelected = !!props.selectedDate && courierClosedSet.has(props.selectedDate)}
+  <!-- 2026-09-20(Stephen 피드백) — "반납 방식 설정 내 달력에 '수령 배송 날짜' bg 원형
+       컬러가 미반영" 결함 수정: 종전에는 흡수구간(holidayAbsorbedSet)·배송시작일
+       (deliveryStartDate)이 props.type으로 게이팅돼 있어 각 캘린더 인스턴스가 자기 leg
+       것만 계산했다 — 그 결과 반납 캘린더에는 수령측 배송시작일·흡수구간이, 수령 캘린더에는
+       반납측이 전혀 전달되지 않았다. 두 캘린더 모두 이미 rangeStart/rangeEnd로 "수령일 →
+       반납일" 전체 기간을 함께 보여주므로, 흡수구간·배송시작일(courier가 실제로 배송을
+       시작하는 영업일 — N=0이면 선택일의 하루 전/후, N>0이면 흡수구간 밖 첫 영업일)도
+       현재 열려있는 캘린더가 어느 leg이든 무관하게 양쪽 leg를 항상 계산해 두 캘린더
+       모두에 동일하게 전달한다(outer-scope bulkDate/bulkReturnDate/bulkOpts 직접 참조
+       — props 게이팅 없음). 이 4개 *All 파생값이 구 holidayAbsorbedSet/deliveryStartDate를
+       완전히 대체하므로 그 둘은 제거됨. -->
+  {@const pickupCourierRestrictedAll = isCourierDependent(bulkOpts.rentalMethod)}
+  {@const returnCourierRestrictedAll = isCourierDependent(bulkOpts.returnMethod)}
+  {@const pickupHolidayPreviewAll = (pickupCourierRestrictedAll && bulkDate)
+    ? calcHolidayExtension(bulkDate, bulkDate, true, false, courierClosedSet)
+    : null}
+  {@const returnHolidayPreviewAll = (returnCourierRestrictedAll && bulkReturnDate)
+    ? calcHolidayExtension(bulkReturnDate, bulkReturnDate, false, true, courierClosedSet)
+    : null}
+  {@const pickupAbsorbedSetAll = (() => {
     const set = new Set<string>()
-    if (!holidayExtPreview || holidayExtraDays <= 0) return set
-    const boundary = props.type === 'rental'
-      ? addDays(holidayExtPreview.effectiveStart, -1)
-      : addDays(holidayExtPreview.effectiveEnd, 1)
-    set.add(boundary)
+    if (!pickupHolidayPreviewAll || pickupHolidayPreviewAll.pickupExtraDays <= 0 || !bulkDate) return set
+    let d = pickupHolidayPreviewAll.effectiveStart
+    while (d < bulkDate) { set.add(d); d = addDays(d, 1) }
     return set
   })()}
+  {@const returnAbsorbedSetAll = (() => {
+    const set = new Set<string>()
+    if (!returnHolidayPreviewAll || returnHolidayPreviewAll.returnExtraDays <= 0 || !bulkReturnDate) return set
+    let d = addDays(bulkReturnDate, 1)
+    while (d <= returnHolidayPreviewAll.effectiveEnd) { set.add(d); d = addDays(d, 1) }
+    return set
+  })()}
+  {@const pickupDeliveryStartDateAll = pickupHolidayPreviewAll ? addDays(pickupHolidayPreviewAll.effectiveStart, -1) : undefined}
+  {@const returnDeliveryStartDateAll = returnHolidayPreviewAll ? addDays(returnHolidayPreviewAll.effectiveEnd, 1) : undefined}
 
 
   <div class="rental-form">
@@ -2986,10 +3014,12 @@
                 rangeEnd={props.rangeEnd}
                 rangeStartLabel="수령일"
                 rangeEndLabel="반납일"
-                highlightDates={holidayHighlightDates}
                 warnSelected={warnSelected}
                 deliveryClosedDates={courierClosedSet}
-                publicHolidayDates={publicHolidaySet}
+                pickupAbsorbedDates={pickupAbsorbedSetAll}
+                returnAbsorbedDates={returnAbsorbedSetAll}
+                pickupDeliveryStartDate={pickupDeliveryStartDateAll}
+                returnDeliveryStartDate={returnDeliveryStartDateAll}
                 onselect={(iso) => {
                   props.onDateChange(iso)
                   // 휴무일 포함 배송 연장(2026-09-12) — 과거에는 courierRestricted일 때
@@ -3021,8 +3051,9 @@
           {/if}
 
           <!-- 배송 휴무일 안내 스크립트(/cms/set/rental "휴무일 제어 옵션" 하위, 2026-09-16
-               신설) — 자동연장이 발동된(warnSelected/holidayExtraDays>0) 상태로 달력이
-               열려있는 동안에만 노출되는 상시 안내. onselect의 csToast.info(...) 이벤트성
+               신설) — 자동연장이 발동된(holidayExtraDays>0 — 2026-09-19부터 warnSelected와는
+               별개 조건, 선택된 날짜가 실제로 연장을 유발할 때만) 상태로 달력이 열려있는
+               동안에만 노출되는 상시 안내. onselect의 csToast.info(...) 이벤트성
                토스트(무변경, 그대로 유지)와 역할이 달라 대체가 아니라 공존한다.
                2026-09-17: .cal-layer(달력 팝업)와 정확히 같은 위치에 겹쳐 화면에 전혀
                보이지 않던 결함 수정 — measureCalLayer로 실측한 팝업 높이만큼 아래로

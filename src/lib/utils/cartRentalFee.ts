@@ -152,10 +152,14 @@ export function calcRentalPeriodParts(totalMinutes: number): RentalPeriodPart[] 
 }
 
 /**
- * 휴무일 포함 배송 연장 요금 계산 — compute_reservation_line_amount RPC(migration 501)와
- * 동일 산식. 총 연장일수 N = pickupExtraDays + returnExtraDays 중 1일은 무료, 나머지
- * (N-1)일에 대해 일일요금의 50% 부과.
- * N=0 → 0원, N=1 → 0원(무료), N=2 → daily*0.5
+ * 휴무일 포함 배송 연장 요금 계산 — compute_reservation_line_amount RPC(migration 509)와
+ * 동일 산식. 총 연장일수 N = pickupExtraDays + returnExtraDays 전체에 대해 일일요금의
+ * 50% 부과(2026-09-19 Stephen 확정 — "첫날 무료" 예외 폐기).
+ * N=0 → 0원, N=1 → daily*0.5, N=2 → daily*1.0
+ *
+ * ⛔ 폐기된 과거 공식(2026-09-04 Stephen 3차 최종 확정, migration 501): N 중 1일 무료 +
+ * 나머지(N-1)일만 50% — 2026-09-19 Stephen이 "심각한 변경정책 미적용 오류"로 지적하며
+ * 명시적으로 폐기. 이 함수를 다시 (N-1) 형태로 되돌리지 말 것.
  */
 export function calcHolidayExtraFee(
   pickupExtraDays: number,
@@ -163,7 +167,28 @@ export function calcHolidayExtraFee(
   dailyPrice: number
 ): number {
   const totalDays = Math.max(0, pickupExtraDays) + Math.max(0, returnExtraDays)
-  return Math.max(totalDays - 1, 0) * dailyPrice * 0.5
+  return totalDays * dailyPrice * 0.5
+}
+
+/**
+ * 옵션상품의 휴무일 포함 배송 연장 요금(2026-09-19 신설) — 본상품과 동일한 산식을
+ * 옵션별 자체 요율(unitPrice)에 적용해 합산한다. Stephen 확정: "옵션상품도 무조건
+ * 포함되어 50% 할인 요금이 부과되어야 한다" — 과거(migration 501)에는 옵션에 이 특례가
+ * 아예 미적용이었으나(연장일도 정상가로 청구), 이제 본상품과 동일하게 적용한다.
+ * 12h 요율이 없는 flat 옵션(구매·단가 고정형)은 "일" 단위 개념 자체가 없어 대상에서 제외
+ * (calcRentalFee의 동일 폴백 원칙과 일치).
+ */
+export function calcOptionsHolidayExtraFee(
+  pickupExtraDays: number,
+  returnExtraDays: number,
+  options: { unitPrice: number; unitPrice12h: number | null; qty: number }[]
+): number {
+  const totalDays = Math.max(0, pickupExtraDays) + Math.max(0, returnExtraDays)
+  if (totalDays <= 0) return 0
+  return options.reduce((sum, o) => {
+    if (o.unitPrice12h == null) return sum
+    return sum + totalDays * o.unitPrice * 0.5 * o.qty
+  }, 0)
 }
 
 /** YYYY-MM-DD 포맷으로 변환 */

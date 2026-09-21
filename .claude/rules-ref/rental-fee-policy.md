@@ -185,17 +185,21 @@ CMS 판정설정 화면    : src/routes/cms/set/rental/+page.svelte, +page.serve
   강제 중단).
 ```
 
-### 요금 공식 — 한쪽/양쪽 구분 없이 단일 규칙 (Stephen 3차 최종 확정)
+### 요금 공식 — 한쪽/양쪽 구분 없이 단일 규칙 (2026-09-19 Stephen 재확정 — 아래 §5-2 참고)
 
 ```
+⛔⛔⛔ 이 절의 "N 중 하루 무료" 규칙은 2026-09-19 Stephen이 "심각한 변경정책 미적용
+오류"로 지적하며 완전히 폐기했다(Migration #509). 아래는 폐기된 과거 버전(2026-09-04
+3차 최종 확정) 기록만 남긴 것 — 현재 유효한 공식은 §5-2를 볼 것.
+
 N = pickup_holiday_extra_days + return_holiday_extra_days (수령측+반납측 연장일수 합산)
 
-holiday_extra_fee = GREATEST(N - 1, 0) × daily요율 × 0.5
+holiday_extra_fee = GREATEST(N - 1, 0) × daily요율 × 0.5   ← ⛔ 폐기됨, 되돌리지 말 것
 
 즉: 연장일수 전체(N, 한쪽이든 양쪽이든 구분 없음) 중 딱 하루만 무료, 나머지(N-1)일은
 각각 하루요금의 50%씩 부과. N=0(연장 없음)→0 / N=1→0(그 하루는 무료로 끝) / N=3→2일×daily×0.5
 
-⛔ 한쪽/양쪽을 구분하는 분기 코드를 추가하면 안 된다 — 이 단일 공식이 최종본이다.
+한쪽/양쪽을 구분하는 분기 코드를 추가하면 안 된다는 원칙만은 §5-2에서도 그대로 유지된다.
 ```
 
 ### 이중할인 방지 — delivery_fee와 완전히 동일한 패턴
@@ -240,6 +244,57 @@ compute_reservation_line_amount(oi.reservation_id).holiday_extra_fee를 합산(�
 반드시 sync_order_after_composition_change 쪽을 고칠 것(정본 단일화 원칙).
 ```
 
+### §5-2. 요금 공식 — 2026-09-19 전면 개정판 (현재 유효, Stephen 확정) ⛔ 정본
+
+```
+배경: 실사용 검증 중(장바구니 실제 캡처 화면 분석) Stephen이 2가지를 CRITICAL로 지적·확정:
+  1) "N 중 하루 무료" 예외가 심각한 정책 미적용 오류 — 완전 폐기.
+  2) 옵션상품도 무조건 포함해 50% 할인요금이 부과돼야 함 — 과거엔 옵션에 이 특례
+     자체가 없어(§5 "폐기됨" 표기 참고) 연장일도 정상가 그대로 청구되고 있었음
+     (실제 발견 사례: 본상품 70,000+옵션 30,000, N=1 상황에서 옵션이 연장된 3일치
+     정상가로 청구돼 대여요금이 기대보다 30,000원 더 계산됨).
+
+새 공식(한쪽/양쪽 구분 없는 단일 규칙 원칙은 유지, "첫날 무료"만 삭제):
+
+  N = pickup_holiday_extra_days + return_holiday_extra_days
+
+  본상품 holiday_extra_fee = N × daily(본상품 24h요율) × 0.5
+    N=0→0 / N=1→daily×0.5 / N=3→daily×1.5  (과거 GREATEST(N-1,0) 아님)
+
+  옵션별 holiday_extra_fee = N × unit_price(그 옵션 24h요율) × 0.5 × qty
+    12h요율이 없는 flat 옵션(구매·단가고정형)은 "일" 단위 개념이 없어 제외
+    (rental_fee/options_fee의 넷팅 로직과 동일 폴백 원칙)
+
+  반환값(compute_reservation_line_amount)의 holiday_extra_fee 컬럼 = 본상품분 +
+  옵션 전체 합산분을 하나의 값으로 통합(이중할인 방지 원칙상 둘 다 v_total 밖에서
+  가산돼야 하므로 컬럼을 나눌 이유가 없음 — 클라이언트도 otHolidayExtraFee 하나로 통합)
+
+  rental_fee/options_fee 자체의 넷팅(연장 전 "원래 요청 일수" 기준으로 계산 후
+  extension_days×daily를 빼는 방식)은 무변경 — 옵션도 이번에 처음으로 이 넷팅이
+  적용됨(과거엔 옵션에 넷팅 자체가 없어 연장일도 정상가 그대로 청구되고 있었음).
+
+⛔ "첫날 무료"를 다시 추가하거나(GREATEST(N-1,0) 부활), 옵션을 이 계산에서 다시
+빼는 방향으로 되돌리지 말 것 — 둘 다 2026-09-19 Stephen이 명시적으로 뒤집은 결정이다.
+```
+
+**구현 파일(§5-2 반영)**
+```
+서버 : compute_reservation_line_amount(Migration #509) — v_holiday_extra_fee 산식 교체
+       (GREATEST(N-1,0)→N) + 옵션 넷팅·50% 가산 신규(v_options_holiday_extra_fee)
+클라이언트 : src/lib/utils/cartRentalFee.ts
+  calcHolidayExtraFee — GREATEST(N-1,0)→N으로 교체
+  calcOptionsHolidayExtraFee(신설) — 옵션별 동일 산식(옵션 자체 요율 기준)
+  src/routes/cart/+page.svelte
+    itemOptionFee — 옵션 기본요금도 본상품과 동일하게 연장일수만큼 넷팅하도록 교체
+    otHolidayExtraFee — 본상품분 + calcOptionsHolidayExtraFee(옵션분) 합산
+TDD(RED→GREEN) : src/__tests__/services/holidayExtensionFee.test.ts(기존 EC-HF-*를 새
+  공식으로 갱신 + EC-OPT-* 8건 신규) · src/__tests__/services/holidayExtraFeePolicyReversal.test.ts
+  (신규, Stage 라이브 통합테스트 — compute_reservation_line_amount 자체를 4개 시나리오로 검증)
+Production 데이터 보정 : reservation id=132/order id=28(migration #508 때 이미 보정했던
+  건, 아직 미결제) — 새 공식으로 재동기화(holiday_extra_fee 20,000→30,000, final_amount
+  46,600→56,600), sync_order_after_composition_change(28) 재호출로 반영.
+```
+
 ### 구현 파일 참조
 
 ```
@@ -268,7 +323,8 @@ RPC 변경   : create_hold_reservation·promote_draft_reservation(파라미터 �
              src/lib/components/common/CalendarGrid.svelte — highlightDates prop(순수
                시각 하이라이트, 선택 가능 여부와 무관) + warnSelected prop(2026-09-16 신설,
                아래 참고)
-의도적 제외 : 옵션상품(reservation_options)에는 이 특례 미적용(본상품만) ·
+⛔ 폐기됨(2026-09-19, §5-2 참고) : 옵션상품(reservation_options)에는 이 특례 미적용
+             (본상품만) — 이제는 옵션도 반드시 포함해 계산해야 한다. ·
              create_checkout_order(레거시 confirm-mock 경로) — 실제 fetch 호출부가
              코드베이스에 전혀 없어 체크아웃 흐름에서 도달 불가능함을 확인, 반영 불필요
 마이그레이션 : supabase/migrations/20260915010000_501_holiday_extension_reintegration.sql
@@ -317,6 +373,64 @@ CMS 안내 스크립트 신설(delivery_cutoff_settings.holiday_guide_text, Migr
 마이그레이션: supabase/migrations/20260916000000_505_delivery_cutoff_holiday_guide_text.sql
 ```
 
+### 2026-09-19 후속 — 달력 색상 재설계 2차 (경계 하루 방식 폐기, 흡수 전체 표시로 전환)
+
+⛔ 이 절도 위와 마찬가지로 **순수 프론트 시각 로직만** 다룬다 — 요금 계산 자체는 이 세션에서
+단 한 줄도 무변경(다만 §5 본문의 "휴무일 연장요금" 실제 청구가 `set_reservation_shipment_
+method`의 재계산 누락으로 한 번도 발동한 적이 없던 완전히 별개의 CRITICAL 결함은 같은 시기에
+Migration #508로 수정됨 — 계산 로직 결함이었고 이 절이 다루는 달력 시각 로직과는 무관).
+
+```
+배경: 2026-09-16 "경계 하루만 하이라이트" 설계가 실사용 중 3가지 문제로 이어짐(Stephen
+CS 피드백, 2026-09-19):
+  ① 실제로 흡수되는 날짜(연휴 자체) 자체는 전혀 표시되지 않고, 구간 밖의 "정상 영업일로
+     돌아가는 경계일" 단 하루만 표시돼 "휴무일 며칠이 포함됐는지"를 달력만 보고 알 수 없었음.
+  ② 흡수 취소선(cal-day-delivery-closed, 2026-09-18 신설분)이 "이 날짜는 아예 대여가 안
+     된다"는 인상을 줘 실제로는 선택 가능하다는 사실과 충돌.
+  ③ 경계 하루 계산이 "현재 선택된 날짜" 하나를 기준으로만 동작해, 연휴 중간의 날짜를
+     선택하면(예: 3일 연휴 중 가운데 날) 경계일 계산 자체가 그 날짜 기준으로 다시 이뤄져
+     실제 흡수 범위의 뒤쪽 날짜가 하이라이트에서 누락되는 것처럼 보임("사용한 날로
+     지정된 것처럼" 오인 유발).
+
+색상 규칙 전면 교체(Stephen 확정, 2026-09-19):
+  ⛔ 위 2026-09-16 규칙("선택일=레드·경계 하루=퍼플·흡수일=무색")은 완전히 폐기.
+  · 정적 휴무일(선택되지도 흡수되지도 않은, 달력에 그냥 보이는 휴무일) = 빨간 글자만
+    (일요일과 동일 취급, 원형배경·취소선 전부 없음) — cal-day-delivery-closed
+  · 선택된 날짜 자체가 휴무일 = 진한 빨간 원(cal-day-warn 재사용, 조건만 교체) — 연장을
+    유발하는지 여부와 무관하게 "휴무일을 사용일로 선택"이라는 사실 자체로 판정
+  · 자동연장으로 흡수된 날짜(연속이어도 전체) = 연한 빨간 원, 수령측/반납측 서로 다른 톤
+    (수령측 cal-day-pickup-absorbed = red-5, 반납측 cal-day-return-absorbed = red-30)
+
+CalendarGrid.svelte 변경:
+  highlightDates prop(경계 하루 전용) 완전 삭제, publicHolidayDates prop(2026-09-19 오전
+    세션에서 국경일 전용 원형표시로 신설됐다가 반나절만에 폐기 — 아래 참고) 완전 삭제.
+  pickupAbsorbedDates?: Set<string> / returnAbsorbedDates?: Set<string> 신규 — "실제
+    흡수되는 날짜 전체"(경계 하루가 아님)를 각각 받는다.
+  warnSelected 의미 재정의 — "선택이 연장을 유발하는지"에서 "선택된 날짜 자체가
+    deliveryClosedDates 멤버인지"로 교체(더 넓은 조건 — 전후가 모두 영업일인 고립된
+    휴무일을 선택해도 강조).
+  deliveryClosedDates prop 자체는 유지(임시휴무+공휴일+일요일 통합, 2026-09-18 신설
+    그대로)하되 CSS만 취소선→빨간 글자색(!important 필요 — 토요일 퍼플 규칙이 이 규칙보다
+    specificity가 높아 덮어쓰는 결함이 cal-day-adj-holiday 최초 도입 때와 동일하게 재발할
+    뻔함, 즉시 방지).
+
+cart/+page.svelte RentalForm 스니펫: holidayHighlightDates(경계 하루 1개)를
+  holidayAbsorbedSet(흡수되는 날짜 전체 — 수령측: effectiveStart~선택일 직전 /
+  반납측: 선택일 다음날~effectiveEnd, addDays 루프)로 교체. warnSelected를
+  `courierClosedSet.has(props.selectedDate)`로 재정의.
+
+⛔ 폐기된 중간 설계(같은 날 오전, 반나절만 존재): "법정공휴일(national)만 원형표시,
+  임시휴무·일요일은 표시 안 함"(publicHolidayDates prop, courierClosedDates.ts의
+  isPublicHoliday 플래그) — Stephen이 국경일만 원형으로 강조해달라고 요청해 구현했으나,
+  같은 날 후속 CS 피드백에서 "흡수되는 모든 날짜"(휴무일 종류 무관, 일요일 포함)를
+  표시해야 한다는 것으로 요구사항이 확장돼 완전히 대체됨. isPublicHoliday 필드도 이
+  세션에서 함께 제거(사용처 없는 죽은 데이터가 되므로) — 향후 세션에서 "법정공휴일만
+  따로 표시"류 요청이 다시 들어오면 이 이력을 참고할 것(courierClosedDates.ts git
+  히스토리에 두 버전 다 남아있음).
+
+마이그레이션: 없음(순수 프론트 변경, DB 스키마·RPC 무관)
+```
+
 ---
 
 ## GATE C 확인 항목 (이 영역 코드 수정 시)
@@ -340,8 +454,14 @@ CMS 안내 스크립트 신설(delivery_cutoff_settings.holiday_guide_text, Migr
     독립 조회, 12h요율 없으면 flat 폴백 — §3 참고)
 [ ] Stage(ezyvffjvuwmtuhpxdjrw) 먼저 적용·검증 후 Production(vnbpmvxruyciuuaermyh) 적용
     순서를 지켰는가?
-[ ] 휴무일 연장 요금(§5) 수정 시 — holiday_extra_fee 계산에 한쪽/양쪽 구분 분기를
+[ ] 휴무일 연장 요금(§5-2) 수정 시 — holiday_extra_fee 계산에 한쪽/양쪽 구분 분기를
     추가하지 않았는가? (N=전체 연장일수 합산 기준 단일 공식만 존재해야 함)
+[ ] (2026-09-19부터 폐기) ~~holiday_extra_fee = GREATEST(N-1,0)×daily×0.5(첫날 무료)~~ —
+    이 형태가 다시 보이면 §5-2에서 폐기된 규칙이 되살아난 것. 지금은 N×daily×0.5(예외 없음).
+[ ] (2026-09-19) 옵션상품이 holiday_extra_fee 계산에서 빠지지 않았는가? — 옵션도
+    본상품과 동일하게 (a) 연장일수만큼 정상가에서 넷팅 + (b) 그 연장일수에 옵션 자체
+    요율의 50%를 가산해야 한다(calcOptionsHolidayExtraFee / SQL v_options_holiday_extra_fee).
+    "옵션은 이 특례 미적용"이라는 옛 서술이 다시 나타나면 §5(폐기 표기) 참고해 즉시 의심할 것.
 [ ] holiday_extra_fee가 v_total(할인 계산 기준)에 섞여 들어가지 않았는가? (delivery_fee와
     동일하게 할인·포인트 차감 이후에만 가산)
 [ ] create_hold_reservation/promote_draft_reservation에 p_pickup_method/p_return_method를
@@ -361,17 +481,44 @@ CMS 안내 스크립트 신설(delivery_cutoff_settings.holiday_guide_text, Migr
     end::after도 함께 오버라이드했는가? (카트 화면은 selectedDate가 항상 rangeStart/
     rangeEnd와 동일값이라 실제로 그려지는 건 ::after 원 — .cal-day-sel만 고치면
     시각적으로 아무 효과가 없다)
-[ ] highlightDates에 "흡수되는 모든 날짜"가 아니라 "경계 하루"만 담기는가? (구현이 여러
-    날짜를 담도록 되돌아가면 안 됨 — set.add() 호출이 정확히 1회여야 함)
+[ ] (2026-09-19부터 폐기) ~~highlightDates에 "흡수되는 모든 날짜"가 아니라 "경계 하루"만
+    담기는가~~ — 이 규칙은 2026-09-19 CS 피드백으로 정반대로 뒤집혔다. 지금은 반대로
+    pickupAbsorbedDates/returnAbsorbedDates에 "흡수되는 날짜 전체"가 담겨야 한다(경계
+    하루만 담으면 회귀). highlightDates prop 자체가 삭제됐으므로 이 항목이 다시 보이면
+    옛 prop이 되살아난 것 — 즉시 의심할 것.
 [ ] delivery_cutoff_settings.holiday_guide_text 관련 RPC를 DROP+CREATE했다면 REVOKE ALL
     FROM PUBLIC, anon + GRANT TO authenticated 재하드닝을 빠뜨리지 않았는가? (2026-09-15
     CRITICAL 실사고 재발 방지 원칙 — 새로 생성된 함수 객체는 구버전의 권한 하드닝 이력을
     전혀 물려받지 못한다)
+[ ] (2026-09-19) warnSelected를 "선택이 연장을 유발하는지"로 되돌리지 않았는가? — 지금은
+    "선택된 날짜 자체가 deliveryClosedDates 멤버인지"가 정의다(더 넓은 조건).
+[ ] (2026-09-19) cal-day-delivery-closed의 color 규칙에 !important가 유지되는가? (토요일
+    cal-day-sat:not(.cal-day-past)이 specificity로 이겨 퍼플이 되는 결함 재발 방지)
+[ ] (2026-09-19) pickupAbsorbedDates/returnAbsorbedDates 계산이 "현재 선택된 날짜" 하나만
+    기준으로 방향(수령=역방향/반납=순방향)을 정확히 지키는가? 반대 방향으로 계산하면
+    연휴 중간 날짜 선택 시 뒤쪽 흡수일이 다시 누락되는 2026-09-19 이전 결함이 재발한다.
 ```
 
 ---
 
-*rental-fee-policy.md v1.3 | Harness Flow v3.2 | 2026-09-04 신설 — 4가지 수령→반납 조합별
+*rental-fee-policy.md v1.5 | Harness Flow v3.2 | 2026-09-19(같은 날 후속) §5-2 신설 —
+휴무일 연장요금 공식 전면 개정(Migration #509, Stephen CRITICAL 확정): "N 중 하루 무료"
+예외 완전 폐기(N×daily×0.5로 교체) + 옵션상품도 무조건 포함해 50% 할인요금 부과(과거엔
+특례 자체가 미적용이라 연장일도 정상가 청구). 실사용 캡처 화면 분석으로 발견(본상품+
+옵션 구성 예약에서 대여요금이 기대보다 30,000원 더 계산됨). TDD: holidayExtensionFee.
+test.ts 기존 공식 갱신+EC-OPT-* 8건 신규, holidayExtraFeePolicyReversal.test.ts(Stage
+라이브 통합) 4건 신규 — 전부 GREEN. Stage·Production 적용 완료, Production 미결제
+예약(id=132/order=28, Migration #508 때 이미 보정했던 건) 새 공식으로 재동기화
+(holiday_extra_fee 20,000→30,000). §5 옛 공식·옵션제외 서술은 폐기 표기로 유지(삭제
+안 함 — 회귀 감지용), GATE C 3건 추가. | 2026-09-19 §5 2차 후속 절 추가 — 달력
+색상 재설계 2차(CS 피드백): "경계 하루만 하이라이트"(2026-09-16 설계) 완전 폐기, 실제
+흡수되는 날짜 전체를 수령측/반납측 다른 톤으로 표시하는 방식으로 교체
+(`pickupAbsorbedDates`/`returnAbsorbedDates` 신규, `highlightDates`/`publicHolidayDates`
+prop 삭제, `warnSelected` 의미를 "선택이 연장을 유발하는지"→"선택된 날짜 자체가 휴무일인지"로
+재정의). 같은 CS 신고에서 "휴무일 연장요금 일수가 안 맞는다"는 계산 버그 의심도 제기됐으나
+Production `compute_holiday_extended_period` 직접 SQL 검증으로 계산 자체는 정확함을
+확인 — 실제 원인은 달력이 흡수 전체가 아닌 경계 하루만 표시해 육안 확인 시 일수가 적어
+보인 시각 문제였음(계산 로직 무변경). GATE C 4건 갱신/추가. | 2026-09-04 신설 — 4가지 수령→반납 조합별
 금액 검증 세션(Migration #440~445) 산출물을 정책 문서로 정리. is_bulk_delivery/
 is_delivery_type 혼동이 실제 CRITICAL 결함으로 이어졌던 이력을 재발방지 목적으로
 명문화(§2 박스). | 2026-09-06 §4·GATE C 정정 — `calcShippingFee`(배송비) 판정기준이
