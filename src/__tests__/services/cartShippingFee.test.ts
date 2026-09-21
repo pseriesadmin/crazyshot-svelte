@@ -486,24 +486,24 @@ describe('isRoundTripShippingFee', () => {
   })
 })
 
-// isFreeDeliveryCouponBlocked — 배송료 우대설정 적용 중 free_delivery 쿠폰 상호배타 가드
-// (Stephen 확정, 2026-09-01)
+// isFreeDeliveryCouponBlocked — 배송료 우대설정 적용 중 배송비 할인 쿠폰 상호배타 가드
+// (Stephen 확정, 2026-09-01 / 2026-09-21 기준 컬럼을 type→discount_type로 정정)
 describe('isFreeDeliveryCouponBlocked', () => {
-  it('배송료 우대설정 적용 중(rate>0) + free_delivery 쿠폰 → 차단(true)', () => {
-    expect(isFreeDeliveryCouponBlocked('free_delivery', 1)).toBe(true)
-    expect(isFreeDeliveryCouponBlocked('free_delivery', 0.5)).toBe(true)
+  it('배송료 우대설정 적용 중(rate>0) + free_shipping 쿠폰 → 차단(true)', () => {
+    expect(isFreeDeliveryCouponBlocked('free_shipping', 1)).toBe(true)
+    expect(isFreeDeliveryCouponBlocked('free_shipping', 0.5)).toBe(true)
   })
 
-  it('배송료 우대설정 미적용(rate=0) → free_delivery 쿠폰이어도 차단 안 함(false)', () => {
-    expect(isFreeDeliveryCouponBlocked('free_delivery', 0)).toBe(false)
+  it('배송료 우대설정 미적용(rate=0) → free_shipping 쿠폰이어도 차단 안 함(false)', () => {
+    expect(isFreeDeliveryCouponBlocked('free_shipping', 0)).toBe(false)
   })
 
-  it('free_delivery가 아닌 다른 쿠폰 타입 → 우대설정 적용 여부와 무관하게 차단 안 함(false)', () => {
-    expect(isFreeDeliveryCouponBlocked('all', 1)).toBe(false)
-    expect(isFreeDeliveryCouponBlocked('first_purchase', 1)).toBe(false)
+  it('free_shipping이 아닌 다른 할인 방식 → 우대설정 적용 여부와 무관하게 차단 안 함(false)', () => {
+    expect(isFreeDeliveryCouponBlocked('fixed', 1)).toBe(false)
+    expect(isFreeDeliveryCouponBlocked('percentage', 1)).toBe(false)
   })
 
-  it('타입이 null/undefined → 차단 안 함(false, 방어적 처리)', () => {
+  it('할인 방식이 null/undefined → 차단 안 함(false, 방어적 처리)', () => {
     expect(isFreeDeliveryCouponBlocked(null, 1)).toBe(false)
     expect(isFreeDeliveryCouponBlocked(undefined, 1)).toBe(false)
   })

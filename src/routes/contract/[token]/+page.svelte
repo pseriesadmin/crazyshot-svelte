@@ -45,6 +45,7 @@
   const orderData = $derived(data.orderData as {
     total_amount: number | null
     discount_amount: number | null
+    coupon_discount_amount: number | null
     tax_amount: number | null
     delivery_fee: number | null
     final_amount: number | null
@@ -182,14 +183,13 @@
   let tossWidgets         = $state<TossPaymentWidgets | null>(null)
   let widgetInitError     = $state('')
 
-  const couponDiscount = $derived.by(() => {
-    const uc = userCoupons.find((u) => u.id === selectedCouponId)
-    if (!uc?.coupons) return 0
-    const c = uc.coupons
-    return c.discount_type === 'fixed'
-      ? c.discount_value
-      : Math.round(finalAmount * c.discount_value / 100)
-  })
+  // ⚠️ 2026-09-21 수정: 이 값은 이제 화면 "할인 내역" 표시 전용이다 — 클라이언트에서
+  // discount_type별로 재계산하지 않고 서버(sync_order_after_composition_change,
+  // Migration 510)가 이미 정확히 계산해 finalAmount에 반영·저장해둔
+  // orderData.coupon_discount_amount를 그대로 읽는다. (기존엔 여기서 discount_type을
+  // 'fixed'/그외(정률 취급) 2-way로만 분기해 free_shipping이 잘못 계산됐고, 그 값을
+  // finalAmount에서 한 번 더 빼는 이중차감 버그까지 있었다 — 아래 payTotal 참고)
+  const couponDiscount = $derived(orderData?.coupon_discount_amount ?? 0)
   // 장바구니 선택값 읽기 전용 표시용 라벨(2026-09-07) — 미선택이어도 "없음"으로 항상 표시
   // (블록 자체를 숨기면 "왜 안 보이냐"는 혼란을 유발 — Stephen 지시로 항상 노출로 변경)
   const couponLabel = $derived.by(() => {
@@ -199,13 +199,20 @@
     const c = uc.coupons
     return c.description ?? (c.discount_type === 'fixed' ? `${c.discount_value.toLocaleString('ko-KR')}원 할인` : `${c.discount_value}% 할인`)
   })
-  const maxPoints = $derived(Math.min(userPointsAvail, Math.max(0, finalAmount - couponDiscount)))
+  const maxPoints = $derived(Math.min(userPointsAvail, Math.max(0, finalAmount)))
   // 쿠폰 변경으로 maxPoints가 줄어들면 이미 입력된 포인트를 자동 재클램프
   // (cart/+page.svelte의 동일 정합성 보정 패턴 — 2026-08-19 발견 결함 재발 방지)
   $effect(() => {
     if (pointsUsed > maxPoints) pointsUsed = maxPoints
   })
-  const payTotal = $derived(Math.max(0, finalAmount - couponDiscount - pointsUsed))
+  // ⚠️ 2026-09-21 CRITICAL 수정: finalAmount(orders.final_amount)는 sync_order_after_
+  // composition_change에서 이미 쿠폰 할인·포인트 사용을 전부 차감해 저장한 최종 정산금액이다
+  // (couponDiscount/pointsUsed는 이 화면에서 재선택 가능한 값이 아니라 장바구니에서 고른
+  // 값을 읍기 전용으로 보여주기만 함, L172-179 주석 참고). 기존 코드는 이미 차감된
+  // finalAmount에서 couponDiscount·pointsUsed를 또 한 번 빼는 이중차감 상태였다 — 실제
+  // Toss 결제 요청 금액이 정산해야 할 금액보다 항상 (쿠폰할인+포인트)만큼 적게 청구되고
+  // 있었다. finalAmount를 그대로 결제 요청 금액으로 사용한다.
+  const payTotal = $derived(Math.max(0, finalAmount))
 
   // Toss v2 결제위젯 인스턴스 초기화 — 서명완료+유상결제(payTotal>0) 상태가 되면 1회 마운트.
   // renderPaymentMethods()/renderAgreement()로 결제수단 UI가 실제로 DOM에 렌더링된 뒤에만

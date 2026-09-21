@@ -252,6 +252,15 @@
           cancel()
           return
         }
+        // 2026-09-21 추가: discount_value는 coupons_discount_value_check(DB, discount_value>0)
+        // 제약을 전 discount_type 공통으로 받는다 — "배송비 할인"도 예외 없이 실제 할인금액
+        // (배송비에서 차감할 원 단위 금액)을 입력받아야 한다(Stephen 확정). 0으로 제출하면
+        // DB 제약에 막혀 원문 Postgres 에러가 그대로 토스트에 노출되던 문제를 여기서 선제 차단.
+        if (!f_discount_value || f_discount_value <= 0) {
+          csToast.error('할인값을 입력해주세요.')
+          cancel()
+          return
+        }
         createLoading = true
         return ({ update }) => { createLoading = false; update() }
       }}
@@ -407,7 +416,11 @@
           <input type="hidden" name="discount_type" value={f_discount_type} />
         </div>
         <div class="form-field">
-          <label for="fc-dval">할인값</label>
+          <label for="fc-dval">
+            {f_discount_type === 'percentage' ? '할인값 (%)' :
+             f_discount_type === 'free_shipping' ? '할인값 (배송비에서 차감할 금액, 원)' :
+             '할인값 (원)'}
+          </label>
           <input id="fc-dval" type="text" inputmode="numeric" class="f-input"
             value={f_discount_value.toLocaleString('ko-KR')}
             oninput={(e) => { f_discount_value = parseAmountDigits((e.currentTarget as HTMLInputElement).value) }} />

@@ -164,18 +164,20 @@ export function calcShippingDiscountRate(
 
 /**
  * 배송료 우대설정(calcShippingDiscountRate)이 이미 배송료를 할인/무료화한 카트에서
- * 'free_delivery'(무료배송) 타입 쿠폰을 중복 선택하지 못하도록 막는 상호배타 가드
- * (Stephen 확정, 2026-09-01) — 사용자만 이중 혜택을 보는 결과를 방지.
+ * 배송비 할인 쿠폰(discount_type='free_shipping')을 중복 선택하지 못하도록 막는
+ * 상호배타 가드 (Stephen 확정, 2026-09-01) — 사용자만 이중 혜택을 보는 결과를 방지.
  *
- * ⚠️ free_delivery 쿠폰이 실제로 배송료를 할인하는 계산 로직 자체는 이번 스코프에
- * 포함되지 않는다(현재 시스템에 발급된 free_delivery 쿠폰 0건 — 상호배타 안전장치만
- * 선제 구축, Stephen 확정) — otCouponDiscount는 여전히 상품금액에만 적용된다.
+ * ⚠️ 2026-09-21 수정: 최초 구현 시 coupons.type(마케팅 분류, 'free_delivery')을 기준으로
+ * 판단했으나, 실제 배송비 할인 계산은 coupons.discount_type(할인 방식, 'free_shipping')
+ * 기준으로 동작한다(Migration 510/511) — 서로 다른 컬럼이라 type≠'free_delivery'이면서
+ * discount_type='free_shipping'인 쿠폰은 이 가드를 우회할 수 있었다. 실제 계산 기준
+ * 컬럼(discount_type)으로 통일.
  */
 export function isFreeDeliveryCouponBlocked(
-  couponType: string | null | undefined,
+  couponDiscountType: string | null | undefined,
   shippingDiscountRate: number,
 ): boolean {
-  return couponType === 'free_delivery' && shippingDiscountRate > 0
+  return couponDiscountType === 'free_shipping' && shippingDiscountRate > 0
 }
 
 export interface DeliveryTypeMethod {

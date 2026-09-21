@@ -138,6 +138,7 @@ export const load: PageServerLoad = async ({ params }) => {
   type OrderData = {
     total_amount: number | null
     discount_amount: number | null
+    coupon_discount_amount: number | null
     tax_amount: number | null
     delivery_fee: number | null
     final_amount: number | null
@@ -174,7 +175,7 @@ export const load: PageServerLoad = async ({ params }) => {
       const orderId = (orderItemData as { order_id: string }).order_id
       const { data: o } = await admin
         .from('orders')
-        .select('total_amount, discount_amount, tax_amount, delivery_fee, final_amount, selected_coupon_id, selected_points')
+        .select('total_amount, discount_amount, coupon_discount_amount, tax_amount, delivery_fee, final_amount, selected_coupon_id, selected_points')
         .eq('id', orderId)
         .maybeSingle()
       orderData = o as OrderData | null
@@ -193,6 +194,7 @@ export const load: PageServerLoad = async ({ params }) => {
     coupons: {
       id: string
       code: string | null
+      type: string
       discount_type: string
       discount_value: number
       description: string | null
@@ -212,13 +214,16 @@ export const load: PageServerLoad = async ({ params }) => {
       is_student_only:      boolean
       is_subscription_only: boolean
       is_walk_in_only:      boolean
+      // 2026-09-21 추가: 1인당 사용 한도 + 적용 카테고리
+      per_user_limit:        number
+      applicable_categories: string[] | null
     } | null
   }
   let userCoupons: RawUserCouponRow[] = []
   let userPoints = 0
 
   if (reservation?.user_id) {
-    const [profileResult, couponResult] = await Promise.all([
+    const [profileResult, couponResult, usedCouponsResult] = await Promise.all([
       admin
         .from('user_profiles')
         .select('membership_grade, points')
@@ -228,15 +233,33 @@ export const load: PageServerLoad = async ({ params }) => {
         .from('user_coupons')
         .select(`id, coupon_id, used_count,
           coupons(
-            id, code, discount_type, discount_value, description,
+            id, code, type, discount_type, discount_value, description,
             is_active, deleted_at, valid_from, valid_until,
             user_grade_required, usage_limit, usage_count, total_usage_limit,
             min_purchase_amount, min_rental_amount, min_rental_days,
-            is_first_rental_only, is_student_only, is_subscription_only, is_walk_in_only
+            is_first_rental_only, is_student_only, is_subscription_only, is_walk_in_only,
+            per_user_limit, applicable_categories
           )`)
         .eq('user_id', reservation.user_id)
         .is('used_at', null),
+      // 1인당 사용 한도 검증용 — 이미 사용 완료한 쿠폰들을 coupon_id별로 집계 (2026-09-21 추가)
+      admin
+        .from('user_coupons')
+        .select('coupon_id')
+        .eq('user_id', reservation.user_id)
+        .not('used_at', 'is', null),
     ])
+
+    const usedCountByCoupon = new Map<string, number>()
+    for (const row of (usedCouponsResult.data ?? []) as Array<{ coupon_id: string }>) {
+      usedCountByCoupon.set(row.coupon_id, (usedCountByCoupon.get(row.coupon_id) ?? 0) + 1)
+    }
+
+    // 적용 카테고리 검증용 — 이 계약서에 연결된 예약 1건의 상품 카테고리
+    const reservationProductCategory = (signing.contracts as unknown as {
+      rental_reservations: { products: { category?: string | null } | null } | null
+    } | null)?.rental_reservations?.products?.category ?? null
+    const contractCartCategories = reservationProductCategory ? [reservationProductCategory] : null
 
     const memberGrade = (profileResult.data as { membership_grade?: string | null } | null)?.membership_grade ?? null
     userPoints = (profileResult.data as { points?: number } | null)?.points ?? 0
@@ -304,6 +327,9 @@ export const load: PageServerLoad = async ({ params }) => {
           is_student_only:      c.is_student_only,
           is_subscription_only: c.is_subscription_only,
           is_walk_in_only:      c.is_walk_in_only,
+          per_user_limit:       c.per_user_limit,
+          type:                 c.type,
+          applicable_categories: c.applicable_categories,
         },
         {
           orderAmount:          contractOrderAmount,
@@ -312,6 +338,8 @@ export const load: PageServerLoad = async ({ params }) => {
           isFirstRental:        contractIsFirstRental,
           isStudent:            contractIsStudent,
           hasActiveSubscription: contractHasSubscription,
+          usedCountForCoupon:   usedCountByCoupon.get(uc.coupon_id ?? '') ?? 0,
+          cartCategories:       contractCartCategories,
         },
       ).ok
     })
