@@ -1,5 +1,518 @@
 # .claude/harness/TASK.md
 
+## DONE — 🟢 ROUTINE: "배송 시작일" 원 텍스트색을 과거/휴무 상태와 무관하게 항상 진한 보라(purple-80)로 고정 (2026-09-20, 이 세션'만', UI 스타일 단순 수정 — ✅ 2026-09-21 sp3-qa-agent 독립검수 완료(BLOCKING 0건, MEDIUM 0건, LOW 1건 — rangeStart/rangeEnd 비겹침 보장이 기존 "반납일≥수령일" 불변조건에 의존한다는 정보성 기록, 조치 불요), GATE E 통과, git commit만 Stephen 대기)
+
+### 배경
+
+Stephen이 Claude Browser에서 직접 요소를 선택해(`<launch-selected-element>`) 두 "배송
+시작일" 원(23일 — 다른 leg의 배송시작일이 이 캘린더의 선택가능 범위보다 이전이라
+cal-day-past 동시적용, 29일 — cal-day-past 없음)의 bg 컬러토큰이 둘 다 purple-20이
+맞는지, 23일이 혹시 purple-100(전혀 다른 짙은 네이비 토큰, `--cs-text`/`#100B32`)이
+적용된 건 아닌지 확인을 요청. `getComputedStyle`로 실측한 결과 배경은 두 경우 모두
+동일하게 `rgb(193,187,236)`(purple-pale/purple-20)임을 확인했으나, 글자색이 23일은
+`rgb(182,182,182)`(회색, `.cal-day-past`의 `--cs-text-placeholder`)로 흐리고 29일은
+`rgb(68,68,68)`로 진해 같은 배경인데도 23일이 더 옅어 보이는 시각적 착시가 있었음.
+Stephen이 이를 확인한 뒤 "첫째 선택영역 수령 배송 날짜 컬러토큰값을 원래 진한 값으로
+적용해"로 수정 지시.
+
+### 구현 내용
+
+```
+src/lib/components/common/CalendarGrid.svelte — .cal-day-delivery-start 규칙에
+  color: var(--cs-purple)(purple-80, #3B2F8A) 명시 추가. 기존에는 이 규칙이 배경만
+  지정하고 글자색은 지정하지 않아, 소스 순서상 먼저 정의된 .cal-day-past/.cal-day-holiday의
+  회색 placeholder 색이 그대로 적용되고 있었다(동일 specificity, 이 규칙이 뒤에 있었지만
+  color 속성 자체를 안 다뤄 참여하지 않았음) — 이제 delivery-start 클래스가 자체적으로
+  color를 선언해 소스순서상 우위로 항상 이기도록 함(!important 불필요, cal-day-past/
+  cal-day-holiday보다 뒤에 위치). 과거(cal-day-past)든 아니든 이 날짜는 "실제로 배송이
+  시작되는 정보성 표시"라 선택 가능 여부와 무관하게 항상 진하게 보여야 한다는 의도.
+```
+
+### 파일 변경 목록
+
+```
+src/lib/components/common/CalendarGrid.svelte
+```
+
+### 검증
+
+```
+- Claude Browser 라이브 실측(Stephen이 열어둔 세션, javascript_tool getComputedStyle):
+  수정 전 23일 color=rgb(182,182,182)/29일 color=rgb(68,68,68) (배경은 둘 다
+  rgb(193,187,236) 동일) → 수정 후 둘 다 color=rgb(59,47,138)(#3B2F8A, --cs-purple)로
+  통일, 배경은 그대로 유지됨을 재조회로 확인. 스크린샷으로도 23·29일 모두 진한 보라 숫자로
+  또렷하게 표시됨을 시각 확인.
+- npx svelte-check: 신규 에러 0건 — 수정 전과 동일하게 1 error, 402 warnings
+```
+
+### @sp3-qa-agent 검수 결과 — GATE E 통과 ✅ (BLOCKING 0건)
+
+```
+diff를 .cal-day-delivery-start의 color 한 줄 추가로 정확히 특정(다른 누적 hunk와 분리
+확인). --cs-purple 실값(app.css:36, #3B2F8A=rgb(59,47,138))이 TASK.md 실측값과 정확히
+일치함을 대조. CSS 캐스케이드 소스순서 주장(.cal-day-past/.cal-day-holiday보다 뒤에 위치해
+동일 specificity에서 !important 없이 승리)을 라인 번호 직접 대조로 확인. 호버 상태
+(:hover:not(:disabled), 기존 !important 규칙)가 이번 변경으로 깨지지 않음을 확인.
+cal-day-sel과 구조적으로 동시 적용 불가능(마크업 !sel 조건)함을 확인. 추가로
+.cal-day-sun(specificity 0,2,0, 더 높음)과의 이론적 역전 가능성을 자체 진단했으나
+calcHolidayExtension 정의상 delivery-start 날짜는 구조적으로 일요일이 될 수 없어 실충돌
+불가능함을 코드로 확인(비차단, 진단 정보).
+
+LOW 1건(정보성, 조치 불요): 배송시작일이 rangeStart/rangeEnd와 값이 겹치지 않는다는 보장이
+"반납일 ≥ 수령일" 기존 불변조건에 의존 — 이번 변경의 결함이 아니며 별도 조치 불필요.
+```
+
+---
+
+## DONE — 🟡 BOUNDARY: 장바구니 달력 "배송 시작일"·"흡수구간" 표시를 양쪽 leg 캘린더 모두에 동시 반영 (2026-09-20, 이 세션'만', ✅ GATE E 통과 — sp3-qa-agent 독립검수 완료(BLOCKING 0건, MEDIUM 1건 — 즉시 해소 완료, LOW 1건 — MEDIUM 해소로 자동 소멸), git commit만 Stephen 대기)
+
+### 배경
+
+Stephen 피드백(스크린샷 첨부, 반납 방식 설정 달력): "아, 문제는 반납 방식 설정 내 달력에
+'수령 배송 날짜' bg 원형 컬러가 미반영이 문제였어! -수령 방식 설정 내 수령 배송 날짜에
+bg 원형 컬러는 정상 반영되고 있음." — 바로 앞 두 태스크("배송 시작일 원형 표시 신설",
+"타임존 결함 수정")로 courierClosedSet 자체는 정상화됐으나, 이번 피드백으로 진짜 근본
+원인이 별도로 하나 더 있었음이 드러남.
+
+**근본 원인**: `RentalForm` snippet(cart/+page.svelte)이 pickup 캘린더(`props.type==='rental'`)와
+return 캘린더(`props.type==='return'`) 두 인스턴스로 각각 렌더링되는데, 기존 코드는
+`pickupAbsorbedDates`/`pickupDeliveryStartDate`를 `props.type==='rental'`일 때만,
+`returnAbsorbedDates`/`returnDeliveryStartDate`를 `props.type==='return'`일 때만
+계산해 전달하고 있었다 — 즉 각 캘린더가 "자기 leg 것만" 표시했다. 두 캘린더 모두 이미
+`rangeStart`/`rangeEnd`("수령일 → 반납일" 요약 핀)로 전체 기간을 같이 보여주고 있으므로,
+흡수구간·배송시작일도 마찬가지로 어느 leg 캘린더를 열어도 항상 양쪽 leg 전부를 봐야 한다는
+것이 Stephen의 의도였음.
+
+### 구현 내용
+
+```
+src/routes/cart/+page.svelte (RentalForm snippet 내부, 기존 props.type 게이팅 로직은
+  그대로 두고 — 배지·warnSelected 등 다른 용도로 여전히 필요 — 그 아래에 leg-무관 신규
+  파생값을 추가):
+
+  pickupCourierRestrictedAll = isCourierDependent(bulkOpts.rentalMethod)
+  returnCourierRestrictedAll = isCourierDependent(bulkOpts.returnMethod)
+  pickupHolidayPreviewAll  = outer-scope bulkDate 기준 calcHolidayExtension(.... true, false ..)
+  returnHolidayPreviewAll  = outer-scope bulkReturnDate 기준 calcHolidayExtension(.. false, true ..)
+  pickupAbsorbedSetAll / returnAbsorbedSetAll — 위 두 preview에서 흡수구간 계산
+    (기존 holidayAbsorbedSet과 동일한 while 루프 로직, outer-scope 변수만 다름)
+  pickupDeliveryStartDateAll / returnDeliveryStartDateAll — 각각
+    addDays(effectiveStart,-1) / addDays(effectiveEnd,+1)
+
+  CalendarGrid 호출부(pickup·return 두 인스턴스 공통) — 기존
+    "props.type==='rental' ? X : undefined" 게이팅을 제거하고 위 4개 *All 값을
+    그대로 항상 전달하도록 교체. props.selectedDate/props.type과 무관하게
+    outer-scope bulkDate/bulkReturnDate/bulkOpts만 참조하므로 어느 leg 캘린더를
+    열어도 항상 동일한 값이 두 캘린더 모두에 전달됨.
+
+CalendarGrid.svelte 자체는 무변경 — 이미 pickupAbsorbedDates/returnAbsorbedDates/
+  pickupDeliveryStartDate/returnDeliveryStartDate 4개 prop을 전부 받아 렌더링하는
+  구조였고, 문제는 순전히 cart/+page.svelte가 그 중 절반씩만 채워 넣던 호출측 배선이었음.
+```
+
+### 파일 변경 목록
+
+```
+src/routes/cart/+page.svelte
+```
+
+### 검증
+
+```
+- npx svelte-check: 신규 에러 0건 — 수정 전(git stash 기준)과 동일하게 "1 error, 402
+  warnings"(그 1건은 vite.config.ts 관련 기존 이슈로 이번 변경과 무관)
+- npx vitest run holidayExtensionFee.test.ts deliveryCutoffHolidays.test.ts: 49/49 GREEN
+  (이번 변경은 순수 표시 로직 배선이라 두 파일과 직접 관련 없음 — 회귀 없음 확인용)
+- Claude Browser 라이브 검증: 미실시 — Stephen 직접 화면 확인 요청
+  (수령 캘린더를 열었을 때 반납측 흡수구간/배송시작일이, 반납 캘린더를 열었을 때 수령측이
+  각각 함께 보이는지 확인 필요)
+```
+
+### @sp3-qa-agent 검수 결과 — GATE E 통과 ✅ (BLOCKING 0건)
+
+```
+diff 범위를 정확히 특정(2909~2932행 신규 {@const} 8개 + CalendarGrid prop 배선 교체)해
+이 세션 태스크 외 다른 누적 hunk와 분리 확인. 신규 파생값 전부 outer-scope
+bulkDate/bulkReturnDate/bulkOpts만 참조하고 props를 전혀 참조하지 않음(원인이었던 leg
+게이팅이 실제로 제거됐음을 grep+코드리딩으로 확인) — calcHolidayExtension 인자 순서·
+흡수구간 while 루프 방향·배송시작일 addDays 부호 전부 기존 로직과 논리적으로 동일함을
+개별 대조. bulkDate/bulkReturnDate/bulkOpts가 RentalForm snippet 두 호출부와 정확히
+같은 소스(다른 지역변수 오참조 없음)임을 호출부 대조로 확인. 요금계산·제출검증 로직
+무변경 확인. svelte-check 재실행 1 error/402 warnings(수정 전과 동일, 무관 이슈) +
+회귀 테스트 49/49 GREEN 재확인.
+
+MEDIUM 1건(즉시 해소 완료): 교체 후 남아있던 구버전 파생값 holidayAbsorbedSet(props.type
+게이팅)·deliveryStartDate(props.type 게이팅)가 CalendarGrid 호출부 교체로 인해 완전히
+죽은 코드가 됐는데도 구현 주석에는 "다른 용도로 여전히 사용됨"이라고 잘못 서술돼 있었음
+— grep으로 정의부 외 참조 0건 확인 후 두 {@const} 삭제 + 관련 주석을 실제 상태(4개 *All
+값이 완전히 대체함)에 맞게 정정. 삭제 후 svelte-check(1 error/402 warnings, 신규 0건)·
+회귀 테스트(49/49 GREEN) 재확인 완료 — LOW 1건(leg당 calcHolidayExtension 중복계산)도
+이 정리로 자동 해소됨.
+```
+
+---
+
+## DONE — 🔴 CRITICAL: loadCourierClosedDates 일요일 판정 타임존 결함 수정 (2026-09-20, 이 세션'만', ✅ GATE E 통과 — sp3-qa-agent 독립검수 완료(BLOCKING 0건, LOW 1건·INFO 2건 — 전부 비차단), git commit만 Stephen 대기)
+
+### 배경
+
+바로 위 "배송 시작일" 표시 기능을 Claude Browser로 실제 로컬 개발 화면에서 직접 검증하던
+중(Stephen이 "표시 UI 누락"을 재차 신고 — 같은 문구 반복) 발견. 실제 계산 결과를 라이브로
+확인한 결과, 9/28 수령 선택 시 "+휴무일 포함" 배지 자체가 안 뜨고 흡수일 표시도 전혀
+없었음 — 즉 이번 세션 UI 기능의 버그가 아니라 그 **밑단의 courierClosedSet 자체가
+비어있거나 틀린 날짜를 담고 있었던** 것으로 의심되어 추적.
+
+**근본 원인**: `src/lib/server/courierClosedDates.ts`의 일요일 자동추가 루프가
+`d.getDay()===0`(로컬 타임존 기준)로 판정한 뒤 `d.toISOString().slice(0,10)`(항상 UTC
+기준)으로 날짜 문자열을 만들고 있었다. 로컬 개발 서버의 프로세스 타임존이 Asia/Seoul
+(UTC+9)이라, KST 00:00~09:00 사이의 순간에는 `getDay()`가 이미 "일요일"(KST 기준,
+맞음)로 판정하는데 `toISOString()`은 아직 UTC로 전날(실제로는 토요일)을 가리켜, **실제로는
+토요일인 날짜가 "일요일 휴무"로 하루 앞당겨 잘못 기록**됐다. `/cart/__data.json`을 직접
+fetch해 실측: 실제 일요일 9/27이 courierClosedDates에 전혀 없고, 대신 실존하지 않는
+"일요일"인 9/19·10/10(원래는 9/20·10/11이어야 함)이 기록돼 있었음을 확인.
+
+이 결함 때문에 9/28 수령 시 "day-before=9/27" 조회가 `courierClosedSet.has('9-27')`=false로
+나와 연장 계산이 즉시 0으로 끝나버렸다(실제로는 9/24~27 4일이 흡수돼야 함) — 이번 세션에
+새로 만든 pickupAbsorbedDates/deliveryStartDate 표시 기능 자체는 정상이었으나, 입력값
+(courierClosedSet)이 틀려서 결과도 틀리게 보인 것.
+
+⚠️ **Production 영향 범위**: Vercel 서버리스 런타임은 기본 TZ가 UTC라(로컬 KST 개발 서버와
+다름), `getDay()`와 `toISOString()`이 같은(UTC) 기준으로 self-consistent해 이 구체적인
+증상(날짜 하루 밀림)은 Production에서는 발현되지 않았을 가능성이 높다 — 다만 이건 "운 좋게
+안 터진 것"이지 코드 자체가 안전했던 게 아니므로, 근본 수정이 필요하다고 판단해 즉시 반영.
+실제 결제금액(compute_reservation_line_amount)은 순수 SQL(`EXTRACT(DOW FROM p_date)`)로
+별도 계산되어 이 JS 버그와 무관 — 청구 금액 자체가 잘못 나간 적은 없음(클라이언트 미리보기만
+영향).
+
+### 구현 내용
+
+```
+src/lib/server/courierClosedDates.ts: getDay()와 항상 같은 기준(로컬)으로 날짜 문자열을
+  만드는 toLocalIso() 헬퍼 신설, todayIso·일요일 루프 내 iso 계산 둘 다 교체
+  (toISOString() 완전 제거) — 서버가 어떤 타임존에서 실행되든 self-consistent해짐.
+
+src/__tests__/services/deliveryCutoffHolidays.test.ts: upcomingSunday()/
+  nonSundayDaysFromNow() 두 헬퍼도 동일한 클래스의 결함이 있었음(getDay() 로컬 vs
+  toISOString() UTC 혼용) — 오늘(9/20) 실행 시 "다가오는 일요일" 계산이 실제로 하루 밀려
+  추석 연휴와 우연히 겹치면서 테스트가 실패했던 것(이전 두 태스크에서 "날짜 롤오버로 인한
+  기존 취약성"이라 손대지 않겠다고 기록했던 그 실패 — 실제로는 이 결함이 원인이었음, 취약성
+  판단 정정). 동일하게 로컬 기준으로 통일.
+```
+
+### 파일 변경 목록
+
+```
+src/lib/server/courierClosedDates.ts
+src/__tests__/services/deliveryCutoffHolidays.test.ts
+```
+
+### 검증
+
+```
+- Claude Browser 라이브 검증(로컬 개발 서버, 실제 장바구니 화면) — 수정 전: 9/28 수령
+  선택 시 "+휴무일 포함" 배지 자체가 안 뜸(연장 0으로 오판). 수정 후: 배지 정상 표시 +
+  23일(delivery-start, 퍼플-20)·24~27일(pickup-absorbed, 옅은 빨강)·28일(선택, 진한
+  보라) 전부 의도한 대로 정확히 렌더링됨을 DOM 클래스 직접 조회 + 스크린샷으로 확인.
+- npx vitest deliveryCutoffHolidays.test.ts: 수정 전 1건 실패("일요일 휴무" 기대,
+  "추석" 실제 — 날짜 롤오버 취약성으로 오판했던 바로 그 테스트) → 수정 후 18/18 GREEN.
+- 관련 회귀: holidayExtensionFee.test.ts(31)·holidayExtraFeePolicyReversal.test.ts(4)·
+  setReservationShipmentMethodHolidayExtension.test.ts(4)·
+  createHoldReservationWithShipment.test.ts(5) — 5개 파일 합계 62/62 GREEN
+- npx svelte-check: 신규 에러 0건, 경고 402건 그대로
+```
+
+### @sp3-qa-agent 검수 결과 — GATE E 통과 ✅ (BLOCKING 0건)
+
+```
+근본 원인 진단·수정 정확성을 직접 재현 테스트로 검증(2026-09-27T00:00:00+09:00 →
+getDay=0, toLocalIso=09-27 정확 / 수정 전 toISOString=09-26로 버그 재현 확인).
+Production 영향범위 판단(Vercel 기본 TZ=UTC라 self-consistent, 미발현) — vercel.json·
+코드 전체에 TZ 환경변수 설정이 아예 없음을 재확인해 논리적으로 타당하다고 결론(단, 실제
+Production 런타임을 직접 조회한 건 아니라는 한계는 동일하게 인정). compute_reservation_
+line_amount 무관성 — Migration #501 SQL을 재확인해 is_courier_holiday(순수 SQL
+EXTRACT(DOW))만 참조함을 코드로 재확인, 결제금액 영향 없음 판단 정확.
+
+동일 클래스 결함 전수 grep 결과 1건 추가 발견(정보성, 이번 범위 아님): CalendarGrid.svelte:343
+`new Date(iso).getDay()` — UTC 파싱+로컬 getDay 혼용이나, KST(UTC보다 앞선 타임존)
+환경에서는 구조적으로 발현 안 되는 방향이라 실질 위험 낮음. 향후 이 파일 작업 시
+toLocalIso 패턴 재사용 검토 권고(비차단).
+
+LOW 1건: 제가 보고한 "62/62 GREEN"은 5개 파일 기준이었고, QA가 재실행한 4개 파일
+기준으로는 57/57 — 둘 다 정확한 수치(파일 선택 차이일 뿐, 전부 GREEN)였음을 확인,
+혼동 방지 차원에서 기록.
+```
+
+---
+
+## DONE — 🟡 BOUNDARY: 장바구니 달력 "배송 시작일" 원형 표시 신설 (2026-09-20, 이 세션'만', ✅ GATE E 통과 — sp3-qa-agent 독립검수 완료(BLOCKING 0건, MEDIUM 0건, LOW 1건 — 비차단) + Claude Browser 라이브 검증 완료(courierClosedDates 타임존 결함 수정 후 정상 렌더링 확인, 아래 후속 CRITICAL 블록 참고), git commit만 Stephen 대기)
+
+### 배경
+
+Stephen 피드백: "현재 휴무일이 포함되는 경우와 일반 경우 통틀어 수령 '배송'이 시작되는
+'날짜'와 반납 '배송'이 시작되는 '날짜'에 원형 bg(컬러토큰은 purple-20 정도?) 표시 누락."
+
+해석: 기존에 구현한 pickupAbsorbedDates/returnAbsorbedDates(흡수된 휴무일 자체, 연한
+레드/퍼플-60 원)와는 별개로, "courier가 실제로 배송을 시작하는 영업일"을 휴무일 포함
+여부와 무관하게 **항상** 표시해야 함 — N=0(일반 예약)이면 선택일의 하루 전/후 자체가
+곧 이 날짜이고, N>0(휴무일 포함)이면 흡수 구간 밖 첫 영업일이 이 날짜다. 이는 2026-09-16
+"경계일" 개념과 같은 날짜값이지만, 그때는 이 하나만 표시하고 흡수일 자체를 안 보여줬던
+반면, 지금은 흡수일 마킹(레드/퍼플-60)에 이 마킹(퍼플-20)이 항상 함께 추가되는 것 —
+서로 다른 목적의 별개 레이어.
+
+### 구현 내용
+
+```
+CalendarGrid.svelte: pickupDeliveryStartDate?/returnDeliveryStartDate?(string, 신규
+  prop 2개) — 각 leg calcHolidayExtension의 effectiveStart 하루 전 / effectiveEnd
+  하루 후. 새 CSS 클래스 cal-day-delivery-start — purple-20(--cs-purple-pale) 원형
+  배경, 호버 시 purple-60(--cs-purple-light)+흰글자로 단계 상승(기존 patterns와 동일
+  원칙). 이 날짜는 정의상 항상 "휴무일이 아닌 날"이라 cal-day-delivery-closed와
+  동시발생하지 않아 별도 specificity 보정 불필요. !sel && !pickupAbsorbed &&
+  !returnAbsorbed 가드로 다른 상태와 겹치지 않게 우선순위 처리.
+
+cart/+page.svelte: deliveryStartDate 파생값 신규(holidayExtPreview가 있으면 항상
+  계산 — N=0/N>0 무관하게 항상 존재하는 단일 날짜) + CalendarGrid 호출부에
+  pickupDeliveryStartDate/returnDeliveryStartDate로 leg별 전달.
+```
+
+### 파일 변경 목록
+
+```
+src/lib/components/common/CalendarGrid.svelte
+src/routes/cart/+page.svelte
+```
+
+### 검증
+
+```
+- npx svelte-check: 신규 에러 0건, 경고 402건 그대로
+- 관련 회귀 테스트(holidayExtensionFee.test.ts 31/31, holidayExtraFeePolicyReversal.test.ts
+  4/4) — 이번 변경은 순수 시각 로직이라 이 파일들과 무관, 회귀 없음 확인용으로만 재실행
+- deliveryCutoffHolidays.test.ts 1건 실패는 날짜 롤오버로 인한 기존 테스트 취약성
+  (오늘 날짜가 9/20으로 넘어가며 "다가오는 일요일" 계산이 추석 연휴와 겹침) — 이번
+  변경과 무관, 손대지 않음
+- Claude Browser 라이브 검증: 미실시 — Stephen 직접 화면 확인 필요
+```
+
+### @sp3-qa-agent 검수 결과 — GATE E 통과 ✅ (BLOCKING 0건)
+
+```
+calcHolidayExtension while-루프 break 조건 라인 단위 재확인 — deliveryStartDate가
+cal-day-delivery-closed와 절대 동시발생하지 않는다는 배타성 주장, N=0 케이스 보장
+둘 다 정상 케이스에서 참임을 확인(LOW 1건 — 14일 초과 연속휴무 시 이론상 예외 가능하나
+기존 함수의 기존 사양이라 이번 diff와 무관, 실무 발생 가능성 사실상 0). 다른 2개
+CalendarGrid 호출부 무영향, svelte-check git stash 전후 대조로 신규 에러 0건 재확인,
+관련 테스트 35/35 GREEN 재확인.
+
+해석 리스크는 QA도 "코드 논리는 Stephen 원문과 일치하나, 실제 화면 확인 전까지 완전히
+해소된 건 아님"으로 동일하게 인정 — 특히 수령(purple-pale→red-xlight, 이색 전환)과
+반납(purple-pale→purple-light, 동색 톤변화) 두 leg의 시각적 이어짐이 비대칭이라는
+점을 스크린샷과 함께 Stephen에게 짚어드리길 권장(차단 사유 아님, 주관적 디자인 의견).
+```
+
+---
+
+## DONE — 🔴 CRITICAL: 휴무일 연장요금 정책 전면 개정 — 첫날무료 폐기 + 옵션상품 포함 (Migration #509, 2026-09-19, 이 세션'만', ✅ GATE E 통과 — sp3-qa-agent 독립검수 완료(BLOCKING 0건, MEDIUM 2건·LOW 3건 — 전부 비차단·해소), git commit만 Stephen 대기)
+
+### 배경
+
+Stephen이 Claude 내장 브라우저로 실제 장바구니 화면(수령 9/21·반납 9/22, 본상품
+70,000원+옵션 30,000원, 수령측 1일 연장 N=1)을 캡처해 분석 요청 — "대여요금 230,000원이
+맞는지" 검증. 코드+서버 SQL 직접 대조 결과:
+- 본상품: 정책대로(N=1→첫날 무료) 추가요금 0원 — 정상
+- **옵션상품: N=1이어도 연장된 3일치를 전부 정상가로 청구**(60,000→90,000원, +30,000원)
+  — rental-fee-policy.md §5 "옵션은 이 특례 미적용" 문서와 일치하는 기존 설계였으나,
+  Stephen이 이 결과를 보고 "심각한 변경정책 미적용 오류"로 판정.
+
+Stephen 확정 지시(AskUserQuestion 답변, 3개 조합옵션 중 어느 것도 아닌 자체 결정):
+```
+1. 애초에 모든 배송 휴무일 포함 대여는 일별 50% 할인 정책으로 반영돼야 함
+2. 첫 배송휴무일 하루 무료는 폐기
+3. 옵션상품도 무조건 포함되어 50% 할인 요금이 부과돼야 함
+```
+→ 기존 "N 중 하루 무료, 나머지 50%"(GREATEST(N-1,0)) 공식을 "N 전체 50%"로 교체 +
+  옵션상품도 본상품과 동일 규칙 적용.
+
+### 구현 내용
+
+```
+서버: compute_reservation_line_amount(Migration #509, CREATE OR REPLACE — 파라미터
+  무변경, DROP 없음으로 기존 GRANT 보존)
+  - v_holiday_extra_fee := GREATEST(N-1,0)×daily×0.5 → N×daily×0.5로 교체
+  - 옵션 처리 신규: v_options_fee 계산에 GREATEST(v_days-v_extension_days,0) 넷팅 추가
+    (과거엔 넷팅 자체가 없어 연장일도 정상가) + v_options_holiday_extra_fee(옵션별
+    N×unit_price×0.5×qty, 12h요율 없는 flat 옵션은 제외) 신규 계산해 holiday_extra_fee에
+    합산
+
+클라이언트: src/lib/utils/cartRentalFee.ts
+  - calcHolidayExtraFee: GREATEST(N-1,0)→N으로 교체
+  - calcOptionsHolidayExtraFee 신설(옵션별 동일 공식)
+  src/routes/cart/+page.svelte
+  - itemOptionFee: 옵션 기본요금도 본상품(itemRentalFee)과 동일하게 연장일수만큼 넷팅
+    하도록 교체(과거엔 확장된 범위 그대로 정상가 청구)
+  - otHolidayExtraFee: 본상품분 + calcOptionsHolidayExtraFee(옵션분) 합산으로 확장
+
+TDD: holidayExtensionFee.test.ts 기존 EC-HF-*(12건) 공식 갱신 + EC-OPT-*(8건) 신규 —
+  31/31 GREEN. holidayExtraFeePolicyReversal.test.ts(신규, Stage 라이브 통합, RED 확인
+  후 마이그레이션 적용→GREEN) 4건 — 디버깅 중 테스트 자체의 날짜 헬퍼 실수(원래 요청
+  기간을 2일로 착각, 실제로는 +2일 계산이라 3일이었음)를 발견해 정정.
+
+배포: Stage 적용·검증 → Production 적용(project_id 매 호출 직접 확인).
+
+Production 데이터 재동기화: 미결제 예약 id=132/order=28(Migration #508 때 이미 보정했던
+  건)을 새 공식으로 재계산 — holiday_extra_fee 20,000→30,000원, final_amount
+  46,600→56,600원. sync_order_after_composition_change(28) 재호출로 반영, 여전히 결제
+  전 상태라 실고객 영향 없음.
+
+문서: rental-fee-policy.md §5(옛 공식) 폐기 표기 유지(삭제 안 함, 회귀 감지용) + §5-2
+  신설(현재 유효 공식 정본) + GATE C 3건 추가.
+```
+
+### 파일 변경 목록
+
+```
+supabase/migrations/20260919010000_509_holiday_extra_fee_policy_reversal.sql (신규)
+src/lib/utils/cartRentalFee.ts
+src/routes/cart/+page.svelte
+src/__tests__/services/holidayExtensionFee.test.ts (기존 갱신 + 신규 EC-OPT-*)
+src/__tests__/services/holidayExtraFeePolicyReversal.test.ts (신규)
+.claude/rules-ref/rental-fee-policy.md
+DB 데이터 보정(코드 아님): Production orders.id=28(재동기화, 2차)
+```
+
+### 검증
+
+```
+- TDD: holidayExtensionFee.test.ts 31/31 + holidayExtraFeePolicyReversal.test.ts 4/4
+  (Stage 라이브, 마이그레이션 적용 전 RED 확인 완료) + 기존 회귀
+  setReservationShipmentMethodHolidayExtension.test.ts(4)·
+  createHoldReservationWithShipment.test.ts(5)·deliveryCutoffHolidays.test.ts(18) —
+  5개 파일 합계 62/62 GREEN
+- npx svelte-check: 신규 에러 0건, 경고 402건 그대로
+- Stage·Production 양쪽 적용 순서 준수, Production 재조회로 실제 반영 확인
+```
+
+### @sp3-qa-agent 검수 결과 — GATE E 통과 ✅ (BLOCKING 0건)
+
+```
+서버·클라이언트 공식 라인 단위 대조 + Stage 직접 재현으로 제공 테스트 밖 엣지케이스
+2건 추가 검증: ①서로 다른 요율의 옵션 2개+flat 옵션 혼합(N=1) ②N=2(수령+반납 양쪽 연장)
++ 옵션 — 둘 다 손계산과 정확히 일치 확인. "넷팅 순서 동등성"(클라이언트는 먼저 곱하고
+빼기, 서버는 먼저 빼고 곱하기) 질문에는 "delivery_locked 한정이 아니라 일반적으로 항상
+수학적으로 동일"이라는 더 정확한 근거로 답변(연장은 항상 정수일 단위라 GREATEST 클램프가
+실질적으로 발동하지 않음). 이중할인 방지·GRANT 보존(anon 직접 호출 시 42501 재확인)·
+테스트 자체 수정 재검증 전부 통과.
+
+MEDIUM 2건(비차단) — 이후 제가 Production 직접 재조회로 즉시 해소:
+  M-1: QA 세션은 Stage 전용이라 Production id=132/order=28 재동기화 값을 직접 확인 못함
+    → Production 직접 재조회로 해소: reservation_options 0건(옵션 없음 확인), orders.id=28
+    holiday_extra_fee=30,000/final_amount=56,600/status=pending 전부 보고값과 일치 확인.
+  M-2: 작업트리에 이번 CRITICAL 건과 무관한 미커밋 변경(ProductDPCard.svelte,
+    products/+page.svelte) 혼재 — 다른 세션 작업으로 확인됨, 커밋 시 분리 필요(이 세션
+    파일 목록에 포함 안 시켰으므로 이미 반영됨).
+
+LOW 3건: 전부 참고사항(비차단, 조치 불필요) — 다중옵션·N=2 시나리오를 정식 TDD EC-5/6로
+  편입 권고만 별도 후속 고려사항으로 기록.
+```
+
+---
+
+## DONE — 🟡 BOUNDARY: 장바구니 달력 휴무일 시각 표시 2차 재설계 — 흡수일 전체 표시로 전환 (2026-09-19, 이 세션'만', ✅ GATE E 통과 — sp3-qa-agent 독립검수 완료(BLOCKING 0건, MEDIUM 1건·LOW 1건 — 둘 다 비차단), git commit만 Stephen 대기)
+
+### 배경
+
+Stephen이 CS(고객) 피드백을 전달: "달력은 9월 28일을 선택하면 휴무일 연장요금이 4일이
+되어야 하는데 3일만 잡히고... 23일 하루사용으로 하면 4일이어야 하는데 3일만 적용됩니다"
++ 달력 시각 표시(취소선이 "대여 불가"처럼 보임, 흡수일이 표시 안 됨, 선택 요일에 따라
+나타났다 안나타났다 함, 연휴 중간 날짜 선택 시 뒤쪽 흡수일 누락) 상세 지적.
+
+**계산 로직 자체는 정상임을 먼저 확인**: Production `compute_holiday_extended_period`를
+Stephen이 제시한 정확한 시나리오(9/28 수령, 23일 하루사용)로 직접 SQL 호출해 검증 —
+둘 다 정확히 4일(pickup_extra_days=4 / return_extra_days=4)을 반환함을 확인. 즉 이번
+세션 Migration #508이 고친 "재계산 누락"과는 무관한 완전히 별개 사안이며, 실제 청구
+금액 계산에는 문제가 없음. "3일만 잡힌다"는 인상은 **달력이 흡수되는 날짜 전체가 아니라
+경계일 1개만 표시**하던 2026-09-16 설계 때문에 육안으로 며칠이 포함됐는지 셀 수 없었던
+것이 원인으로 특정됨(예: 9/24~27 4일이 실제로 흡수되는데 달력엔 그중 1일도 안 보이거나
+엉뚱한 경계일 1개만 보임).
+
+### 구현 내용
+
+```
+CalendarGrid.svelte 시각 상태 전면 재설계(계산 로직 무변경):
+  - 정적 휴무일(선택도 흡수도 안 된, 그냥 보이는 휴무일) = 빨간 글자만(일요일과 동일 취급)
+    — 2026-09-18에 넣었던 취소선(cal-day-delivery-closed) 제거, "대여 불가처럼 보인다"는
+    지적 반영. !important 필요(토요일 퍼플 규칙과의 specificity 충돌 방지).
+  - 선택된 날짜 자체가 휴무일 = 진한 빨간 원(cal-day-warn 재사용, 조건을 "연장 유발 여부"
+    →"선택일이 휴무일인지"로 재정의 — 더 넓은 조건)
+  - 자동연장으로 흡수된 날짜 전체(경계일 1개가 아니라 전체) = 수령측(pickupAbsorbedDates,
+    red-5 원형) / 반납측(returnAbsorbedDates) 서로 다른 색 "계열"로 구분. 1차 피드백
+    반영 시엔 반납측도 레드 계열(red-30)이었으나, "둘 다 옅은 레드라 구분이 잘 안 된다,
+    purple-60 정도로" 2차 피드백(같은 날 후속)을 받아 반납측을 purple-60
+    (--cs-purple-light)으로 재조정 — 채도가 높아 흰 글자 강제 필요(cal-day-sel과 동일
+    원칙), cal-day-delivery-closed(빨간 글자)와 흡수일이 항상 동시 적용되므로 색 우선순위
+    안정성을 위해 .cal-day-return-absorbed.cal-day-delivery-closed 복합 셀렉터로 흰 글자를
+    specificity 0,2,0으로 고정
+  - highlightDates/publicHolidayDates prop 완전 삭제(각각 경계일 1개 방식·국경일 전용
+    표시 — 둘 다 이번 설계로 대체돼 사용처 없음)
+
+cart/+page.svelte: holidayHighlightDates(경계일 1개)를 holidayAbsorbedSet(흡수 전체,
+  addDays 루프로 수령측은 역방향/반납측은 순방향 전체 열거)로 교체. warnSelected를
+  courierClosedSet.has(선택일) 기준으로 재정의. publicHolidaySet(하루 전 세션 신설분)
+  및 그 근거였던 courierClosedDates.ts의 isPublicHoliday 플래그 제거(사용처 없어짐 —
+  당일 오전 신설, 오후 CS 피드백으로 반나절만에 대체됨).
+
+rental-fee-policy.md §5 후속 절 갱신 — 2026-09-16 "경계 하루" 규칙 폐기 명시, GATE C
+  4건 갱신(옛 규칙을 다시 구현하면 회귀임을 명문화).
+```
+
+### 파일 변경 목록
+
+```
+src/lib/components/common/CalendarGrid.svelte
+src/routes/cart/+page.svelte
+src/lib/server/courierClosedDates.ts (isPublicHoliday 필드 제거 — 원복)
+.claude/rules-ref/rental-fee-policy.md (§5 후속 절 + GATE C 갱신)
+```
+
+### 검증
+
+```
+- Production compute_holiday_extended_period 직접 SQL 검증(2건 시나리오) — 계산 정확,
+  이번 사안은 순수 시각 버그임을 확인 후 착수
+- npx svelte-check: 신규 에러 0건, 경고 총량 402건 그대로(기존과 동일, 신규 unused
+  selector 없음 — 제거한 prop/CSS가 전부 짝 맞춰 함께 제거됐음을 방증)
+- npx vitest holidayExtensionFee.test.ts(23) + deliveryCutoffHolidays.test.ts(18) = 41/41
+  GREEN(courierClosedDates.ts 원복이 기존 동작과 100% 동일함을 재확인)
+- Claude Browser 라이브 검증: 미실시(이번 세션 접속 불안정) — Stephen 직접 화면 확인 필요
+```
+
+### @sp3-qa-agent 검수 결과 — GATE E 통과 ✅ (BLOCKING 0건)
+
+```
+포인트 1(계산 버그 아님 판단) — Stage DB(.env.local 연결 대상)에서 동일 시나리오를
+  service_role로 직접 재현해 독립 재확인: pickup_extra_days=4, return_extra_days=4 둘 다
+  기대값과 일치. "계산은 정상, 순수 시각 버그였다"는 판단 그대로 확정.
+  (참고: QA 요청 문구에서 method_key를 'delivery'로 잘못 표기했었음 — 실제 값은
+  'crazydelivery'. 영구 문서엔 반영 안 된 구두 오기라 비차단.)
+포인트 2(흡수일 방향 로직) — 수령측 역방향/반납측 순방향 로직을 라인 단위로 확인 +
+  손으로 재계산해 9/24~27 4일 전체가 양쪽 leg 모두 정확히 채워짐을 검증. 연휴 중간
+  날짜(반납=9/25) 선택 시에도 뒤쪽 흡수일(9/26,27)이 정확히 잡힘 — 누락 없음.
+포인트 3(CSS 우선순위) — cal-day-delivery-closed의 !important가 토요일 퍼플 규칙을
+  정상적으로 이김을 캐스케이드 규칙으로 확인. !sel 가드로 선택/흡수 상태 동시발생 없음.
+포인트 4(하위호환) — CmsDatePicker.svelte/ProfileTabContent.svelte 둘 다 삭제된 prop을
+  애초에 쓰지 않았음을 코드로 확인. 전체 grep 결과 잔존 참조 0건.
+포인트 5(문서 정합성) — rental-fee-policy.md §5/GATE C 갱신 내용이 실제 코드와 100% 일치.
+
+MEDIUM 1건(비차단, 권고): holidayAbsorbedSet 계산이 cart/+page.svelte 인라인 IIFE로만
+  존재해 단위테스트 커버리지가 없음 — 같은 영역이 최근 4일간 3차례(경계일→취소선→흡수
+  전체) 설계가 뒤집혔고 매번 CS 피드백으로만 발견됐던 이력이 있어, cartRentalFee.ts에
+  순수함수로 추출 + holidayExtensionFee.test.ts 회귀 테스트 추가를 다음 관련 작업 전
+  권고(이번 배포 차단 사유 아님).
+LOW 1건(참고): QA 요청 문구의 method_key 오기(위 참고) — 조치 불필요.
+```
+
+---
+
 ## DONE — 🔴 CRITICAL: set_reservation_shipment_method 휴무일 포함 배송 연장 재계산 누락 결함 수정 (Migration #508, 2026-09-19, 이 세션'만', ✅ GATE E 통과 — sp3-qa-agent 독립검수 완료(BLOCKING 0건, MEDIUM 1건·LOW 3건 — 전부 비차단), git commit만 Stephen 대기)
 
 ### 배경

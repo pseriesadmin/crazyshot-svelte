@@ -86,22 +86,37 @@ afterAll(async () => {
 
 // 일요일과 겹치면 national/manual 신호가 "일요일 반영" 신호와 뒤섞여 단언이 모호해지므로,
 // 항상 일요일이 아닌 날짜를 반환한다.
+// 2026-09-20 결함 수정 — getDay()(로컬)로 검사하고 toISOString()(UTC)으로 반환하면 서로
+// 다른 날짜를 가리킬 수 있어(위 upcomingSunday 주석 참고) 로컬 기준으로 통일.
 function nonSundayDaysFromNow(n: number): string {
   const d = new Date();
   d.setDate(d.getDate() + n);
   if (d.getDay() === 0) d.setDate(d.getDate() + 1);
-  return d.toISOString().slice(0, 10);
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
 }
 
 // 마스터 토글 ON 상태에서 loadCourierClosedDates가 계산하는 "다가오는 일요일" 중 하나를
 // 동일한 방식(내일부터 최대 7일 이내)으로 계산해 반환 — 실제 로직과 동일 알고리즘이어야
 // 어떤 날짜가 나와도 항상 유효한 기준점이 된다.
+// 2026-09-20 결함 수정 — cand.toISOString().slice(0,10)(UTC 기준)과 cand.getDay()(로컬
+// 기준)를 섞어 쓰면, 로컬 타임존이 UTC가 아닐 때(이 테스트가 실행되는 로컬 개발 환경은
+// Asia/Seoul) 실제로는 토요일인 날짜를 "일요일"로 하루 앞당겨 잘못 계산한다 — 정확히
+// src/lib/server/courierClosedDates.ts에서 실측 발견·수정한 것과 동일한 클래스의 결함.
+// getDay()와 같은 기준(로컬)으로 날짜 문자열을 만들어야 함.
 function upcomingSunday(): string {
   const d = new Date();
   for (let i = 1; i <= 7; i++) {
     const cand = new Date(d);
     cand.setDate(d.getDate() + i);
-    if (cand.getDay() === 0) return cand.toISOString().slice(0, 10);
+    if (cand.getDay() === 0) {
+      const y = cand.getFullYear();
+      const m = String(cand.getMonth() + 1).padStart(2, '0');
+      const day = String(cand.getDate()).padStart(2, '0');
+      return `${y}-${m}-${day}`;
+    }
   }
   throw new Error('upcomingSunday 계산 실패');
 }

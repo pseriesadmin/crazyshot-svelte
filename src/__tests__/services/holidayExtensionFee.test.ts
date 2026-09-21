@@ -2,73 +2,127 @@ import { describe, it, expect } from "vitest"
 import {
   calcHolidayExtension,
   calcHolidayExtraFee,
+  calcOptionsHolidayExtraFee,
 } from "$lib/utils/cartRentalFee"
 
 /**
- * 휴무일 포함 배송 연장 요금 로직 검증(계획 파일:
- * /Users/stevenmac/.claude/plans/cheerful-nibbling-emerson.md)
+ * 휴무일 포함 배송 연장 요금 로직 검증
  *
- * 확정 비즈니스 규칙(Stephen 3차 최종):
+ * 확정 비즈니스 규칙(2026-09-19 Stephen 재확정 — "심각한 변경정책 미적용 오류" 지적 후 개정):
  *   전체 연장일수 N = pickup_extra_days + return_extra_days(합산)
- *   N 중 하루 무료, 나머지(N-1)일은 각각 하루요금의 50%
- *   N=0 → 0 / N=1 → 0(무료) / N=3 → 2×daily×0.5
+ *   N일 전체에 대해 각각 하루요금의 50% 부과("첫날 무료" 예외 완전 폐기)
+ *   N=0 → 0 / N=1 → daily×0.5 / N=3 → daily×1.5
+ *   옵션상품도 동일 규칙 적용(과거엔 미적용이었으나 이번 개정으로 본상품과 통일)
  *   holiday_extra_fee는 쿠폰·회원등급 할인 대상 제외(delivery_fee와 동일 패턴)
  *
+ * ⛔ 폐기된 과거 규칙(2026-09-04 Stephen 3차 최종 확정, 2026-09-19 폐기): N 중 1일 무료 +
+ * 나머지(N-1)일만 50%, 옵션 자체는 특례 미적용(연장일도 정상가). 이 파일의 과거 버전이
+ * 그 규칙을 검증했었음 — 절대 되돌리지 말 것.
+ *
  * calcHolidayExtraFee(pickupExtraDays, returnExtraDays, dailyPrice): number
+ * calcOptionsHolidayExtraFee(pickupExtraDays, returnExtraDays, options): number
  * calcHolidayExtension(startDate, endDate, pickupCourierDependent, returnCourierDependent, closedDatesSet)
  *   returns { effectiveStart, effectiveEnd, pickupExtraDays, returnExtraDays }
  */
 
-describe("calcHolidayExtraFee 연장요금 공식(Stephen 3차 최종)", () => {
+describe("calcHolidayExtraFee 연장요금 공식(2026-09-19 재확정 — 첫날 무료 폐기)", () => {
   const DAILY = 50000
 
   it("EC-HF-1: N=0 (연장 없음) 0원", () => {
     expect(calcHolidayExtraFee(0, 0, DAILY)).toBe(0)
   })
 
-  it("EC-HF-2: N=1 (수령측 1일만 연장) 0원 (1일은 무료)", () => {
-    expect(calcHolidayExtraFee(1, 0, DAILY)).toBe(0)
+  it("EC-HF-2: N=1 (수령측 1일만 연장) daily×0.5 = 25000원 (더 이상 무료 아님)", () => {
+    expect(calcHolidayExtraFee(1, 0, DAILY)).toBe(DAILY * 0.5)
   })
 
-  it("EC-HF-3: N=1 (반납측 1일만 연장) 0원 (1일은 무료)", () => {
-    expect(calcHolidayExtraFee(0, 1, DAILY)).toBe(0)
+  it("EC-HF-3: N=1 (반납측 1일만 연장) daily×0.5", () => {
+    expect(calcHolidayExtraFee(0, 1, DAILY)).toBe(DAILY * 0.5)
   })
 
-  it("EC-HF-4: N=2 (수령1+반납1) 1×daily×0.5 = 25000원", () => {
-    expect(calcHolidayExtraFee(1, 1, DAILY)).toBe(DAILY * 0.5)
+  it("EC-HF-4: N=2 (수령1+반납1) 2×daily×0.5 = 50000원", () => {
+    expect(calcHolidayExtraFee(1, 1, DAILY)).toBe(DAILY * 1)
   })
 
-  it("EC-HF-5: N=2 (수령2+반납0) 1×daily×0.5 (편측 2일도 공식 동일)", () => {
-    expect(calcHolidayExtraFee(2, 0, DAILY)).toBe(DAILY * 0.5)
+  it("EC-HF-5: N=2 (수령2+반납0) 2×daily×0.5 (편측 2일도 공식 동일)", () => {
+    expect(calcHolidayExtraFee(2, 0, DAILY)).toBe(DAILY * 1)
   })
 
-  it("EC-HF-6: N=2 (수령0+반납2) 1×daily×0.5", () => {
-    expect(calcHolidayExtraFee(0, 2, DAILY)).toBe(DAILY * 0.5)
+  it("EC-HF-6: N=2 (수령0+반납2) 2×daily×0.5", () => {
+    expect(calcHolidayExtraFee(0, 2, DAILY)).toBe(DAILY * 1)
   })
 
-  it("EC-HF-7: N=3 (수령3+반납0, 3일 연휴 편측) 2×daily×0.5 = 50000원", () => {
-    expect(calcHolidayExtraFee(3, 0, DAILY)).toBe(DAILY * 1)
+  it("EC-HF-7: N=3 (수령3+반납0, 3일 연휴 편측) 3×daily×0.5 = 75000원", () => {
+    expect(calcHolidayExtraFee(3, 0, DAILY)).toBe(DAILY * 1.5)
   })
 
-  it("EC-HF-8: N=3 (수령1+반납2) 2×daily×0.5 (편측/양측 구분 없음)", () => {
-    expect(calcHolidayExtraFee(1, 2, DAILY)).toBe(DAILY * 1)
+  it("EC-HF-8: N=3 (수령1+반납2) 3×daily×0.5 (편측/양측 구분 없음)", () => {
+    expect(calcHolidayExtraFee(1, 2, DAILY)).toBe(DAILY * 1.5)
   })
 
-  it("EC-HF-9: N=4 (수령2+반납2) 3×daily×0.5 = 75000원", () => {
-    expect(calcHolidayExtraFee(2, 2, DAILY)).toBe(DAILY * 1.5)
+  it("EC-HF-9: N=4 (수령2+반납2) 4×daily×0.5 = 100000원", () => {
+    expect(calcHolidayExtraFee(2, 2, DAILY)).toBe(DAILY * 2)
   })
 
-  it("EC-HF-10: 최대안전값 N=14 (양측 7일씩) 13×daily×0.5", () => {
-    expect(calcHolidayExtraFee(7, 7, DAILY)).toBe(DAILY * 6.5)
+  it("EC-HF-10: 최대안전값 N=14 (양측 7일씩) 14×daily×0.5", () => {
+    expect(calcHolidayExtraFee(7, 7, DAILY)).toBe(DAILY * 7)
   })
 
   it("EC-HF-11: dailyPrice=0 이면 항상 0원 (가격 미설정 상품)", () => {
     expect(calcHolidayExtraFee(5, 3, 0)).toBe(0)
   })
 
-  it("EC-HF-12: GREATEST(N-1,0) 보장 — 음수 입력 방어", () => {
+  it("EC-HF-12: 음수 입력 방어 — 음수는 0으로 취급", () => {
     expect(calcHolidayExtraFee(-1, 0, DAILY)).toBe(0)
     expect(calcHolidayExtraFee(0, -1, DAILY)).toBe(0)
+  })
+})
+
+describe("calcOptionsHolidayExtraFee 옵션상품 연장요금(2026-09-19 신설 — 본상품과 동일 규칙 적용)", () => {
+  it("EC-OPT-1: N=0이면 옵션 개수·요율과 무관하게 0원", () => {
+    const options = [{ unitPrice: 30000, unitPrice12h: 25000, qty: 1 }]
+    expect(calcOptionsHolidayExtraFee(0, 0, options)).toBe(0)
+  })
+
+  it("EC-OPT-2: N=1, 옵션 1개 qty=1 → optionDaily×0.5", () => {
+    const options = [{ unitPrice: 30000, unitPrice12h: 25000, qty: 1 }]
+    expect(calcOptionsHolidayExtraFee(1, 0, options)).toBe(30000 * 0.5)
+  })
+
+  it("EC-OPT-3: N=1, 옵션 1개 qty=2 → optionDaily×0.5×qty", () => {
+    const options = [{ unitPrice: 30000, unitPrice12h: 25000, qty: 2 }]
+    expect(calcOptionsHolidayExtraFee(1, 0, options)).toBe(30000 * 0.5 * 2)
+  })
+
+  it("EC-OPT-4: N=2(수령1+반납1), 옵션 1개 → optionDaily×2×0.5", () => {
+    const options = [{ unitPrice: 30000, unitPrice12h: 25000, qty: 1 }]
+    expect(calcOptionsHolidayExtraFee(1, 1, options)).toBe(30000 * 1)
+  })
+
+  it("EC-OPT-5: 옵션 여러 개 — 각자 자기 요율로 계산 후 합산", () => {
+    const options = [
+      { unitPrice: 30000, unitPrice12h: 25000, qty: 1 },
+      { unitPrice: 10000, unitPrice12h: 8000, qty: 1 },
+    ]
+    // N=1: (30000*0.5) + (10000*0.5) = 20000
+    expect(calcOptionsHolidayExtraFee(1, 0, options)).toBe(15000 + 5000)
+  })
+
+  it("EC-OPT-6: 12h 요율 없는 flat 옵션은 대상에서 제외(0원 기여)", () => {
+    const options = [{ unitPrice: 5000, unitPrice12h: null, qty: 1 }]
+    expect(calcOptionsHolidayExtraFee(2, 0, options)).toBe(0)
+  })
+
+  it("EC-OPT-7: flat 옵션 + 정상 옵션 혼합 — flat은 제외하고 정상 옵션만 계산", () => {
+    const options = [
+      { unitPrice: 5000, unitPrice12h: null, qty: 1 },
+      { unitPrice: 30000, unitPrice12h: 25000, qty: 1 },
+    ]
+    expect(calcOptionsHolidayExtraFee(1, 0, options)).toBe(30000 * 0.5)
+  })
+
+  it("EC-OPT-8: 옵션 배열이 비어있으면 0원", () => {
+    expect(calcOptionsHolidayExtraFee(3, 0, [])).toBe(0)
   })
 })
 
@@ -196,15 +250,15 @@ describe("이중할인 방지 — holiday_extra_fee는 쿠폰·회원등급 할�
   it("EC-DISC-1: 쿠폰이 0원이든 10000원 할인이든 holiday_extra_fee는 동일", () => {
     const feeWithNoCoupon = calcHolidayExtraFee(2, 1, DAILY)
     const feeWithCoupon   = calcHolidayExtraFee(2, 1, DAILY)
-    expect(feeWithNoCoupon).toBe(100000)
+    expect(feeWithNoCoupon).toBe(150000)
     expect(feeWithNoCoupon).toBe(feeWithCoupon)
   })
 
   it("EC-DISC-2: 회원등급 20% 할인이 있어도 holiday_extra_fee는 daily 기준 고정값", () => {
     const N = 3
-    const expected = (N - 1) * DAILY * 0.5
+    const expected = N * DAILY * 0.5
     expect(calcHolidayExtraFee(2, 1, DAILY)).toBe(expected)
-    const wrongIfDiscounted = (N - 1) * DAILY * 0.8 * 0.5
+    const wrongIfDiscounted = N * DAILY * 0.8 * 0.5
     expect(calcHolidayExtraFee(2, 1, DAILY)).not.toBe(wrongIfDiscounted)
   })
 })
