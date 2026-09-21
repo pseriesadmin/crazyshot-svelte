@@ -37,6 +37,11 @@ export interface RentalMethodOption {
   // 동시에 true로 가질 수 없다(toggle RPC 상호배타 가드, Migration #441). 별도 마스터 토글
   // 없음(is_delivery_type=true 존재 자체가 활성화 조건).
   is_delivery_type: boolean
+  // 사용자 장바구니 화면 노출용 안내문구(예: "19시마감") — /cart tab.deadline로 그대로
+  // 노출됨(cart/+page.server.ts 조회, cart/+page.svelte 렌더). CMS 목록에서 배지 클릭 시
+  // 인라인 수정 가능(updateMethodDeadline 액션, 2026-09-21 후속 — 최초엔 읽기 전용이었으나
+  // Stephen 요청으로 기존 항목도 편집 가능하도록 확장).
+  deadline_time: string | null
 }
 
 export interface PickupPoint {
@@ -101,7 +106,7 @@ export const load: PageServerLoad = async ({ locals }) => {
       .order('display_order'),
 
     untypedFrom(supabase, 'rental_method_options')
-      .select('id, name, method_key, display_order, is_active, is_bulk_delivery, is_courier_dependent, is_delivery_type')
+      .select('id, name, method_key, display_order, is_active, is_bulk_delivery, is_courier_dependent, is_delivery_type, deadline_time')
       .is('deleted_at', null)
       .order('display_order'),
 
@@ -218,6 +223,11 @@ export const actions: Actions = {
     const name = (data.get('name') as string | null)?.trim() ?? ''
     const count = parseInt(data.get('count') as string, 10)
     const methodKey = (data.get('method_key') as string | null)?.trim() || null
+    // 사용자 장바구니 화면 노출용 안내문구(deadline_time, 예: "19:00 마감") — 20자 길이
+    // 제한만 서버에서 재검증(클라이언트 검증 우회 방지 원칙). 문자 종류 제한(한글·영문·
+    // 숫자만)은 2026-09-21 같은 날 후속 지시로 해제 — 공백·콜론 등 특수문자 입력 허용.
+    const deadlineTimeRaw = (data.get('deadline_time') as string | null)?.trim() ?? ''
+    const deadlineTime = deadlineTimeRaw || null
 
     if (!name) return fail(400, { error: '대여방식명을 입력해주세요.' })
     // 2026-08-30: method_key 없이 등록되면 카트의 deliveryTabs/isDeliveryLocked가 이 방식을
@@ -225,12 +235,50 @@ export const actions: Actions = {
     // (감사 RSC-B1) — 필수값으로 강제.
     if (!methodKey) return fail(400, { error: '방식 유형을 선택하세요.' })
     if (count >= 10) return fail(400, { error: '대여 방식은 최대 10개까지 등록할 수 있습니다.' })
+    if (deadlineTime && deadlineTime.length > 20) {
+      return fail(400, { error: '안내문구는 최대 20자까지 입력 가능합니다.' })
+    }
 
     const { error } = await untypedRpc(locals.supabase, 'upsert_rental_method_option', {
       p_id: null,
       p_name: name,
       p_display_order: count,
       p_method_key: methodKey,
+      p_deadline_time: deadlineTime,
+    })
+    if (error) return fail(500, { error: error.message })
+    return { success: true }
+  },
+
+  // 기존 대여방식 행의 안내문구(deadline_time) 인라인 수정(2026-09-21, Stephen 요청) —
+  // upsert_rental_method_option UPDATE 분기(p_id 지정)를 재사용. name/display_order는
+  // 이 RPC가 항상 덮어쓰므로(COALESCE 대상 아님) 클라이언트가 그 행의 현재값을 hidden
+  // 필드로 그대로 재전송한다(RentalDetailPanel.svelte 등 다른 인라인 수정 패턴과 동일 원칙).
+  updateMethodDeadline: async ({ request, locals }) => {
+    const { session } = await locals.safeGetSession()
+    if (!session) return fail(401, { error: '인증 필요' })
+    const cmsRole = await getCmsRoleForAction(locals)
+    if (!hasSettingsAccess(cmsRole ?? '')) return fail(403, { error: '권한 없음' })
+    const data = await request.formData()
+    const id = (data.get('id') as string | null) ?? ''
+    const name = (data.get('name') as string | null)?.trim() ?? ''
+    const displayOrder = parseInt(data.get('display_order') as string, 10)
+    const methodKey = (data.get('method_key') as string | null)?.trim() || null
+    const deadlineTimeRaw = (data.get('deadline_time') as string | null)?.trim() ?? ''
+    const deadlineTime = deadlineTimeRaw || null
+
+    if (!id) return fail(400, { error: '잘못된 요청입니다.' })
+    if (!name) return fail(400, { error: '대여방식명이 비어있습니다.' })
+    if (deadlineTime && deadlineTime.length > 20) {
+      return fail(400, { error: '안내문구는 최대 20자까지 입력 가능합니다.' })
+    }
+
+    const { error } = await untypedRpc(locals.supabase, 'upsert_rental_method_option', {
+      p_id: id,
+      p_name: name,
+      p_display_order: displayOrder,
+      p_method_key: methodKey,
+      p_deadline_time: deadlineTime,
     })
     if (error) return fail(500, { error: error.message })
     return { success: true }

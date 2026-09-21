@@ -1,10 +1,12 @@
 <script lang="ts">
   import { tick } from 'svelte'
+  import { slide } from 'svelte/transition'
   import { enhance } from '$app/forms'
   import { invalidateAll } from '$app/navigation'
   import { csToast } from '$lib/utils/toast'
   import CmsDragList from '$lib/components/cms/CmsDragList.svelte'
   import CmsDeleteButton from '$lib/components/cms/CmsDeleteButton.svelte'
+  import ChevronIcon from '$lib/components/common/ChevronIcon.svelte'
   import type { PageData, ActionData } from './$types'
   import type { RentalPeriodOption, RentalMethodOption, PickupPoint, RentalConsentItem, RentalShippingSettings, PublicHolidayRow, DeliveryFeeDiscountTier } from './+page.server'
 
@@ -38,7 +40,40 @@
   let methods = $state<RentalMethodOption[]>(data.methods)
   let methodInput = $state('')
   let methodKey = $state('')
+  let methodDeadlineInput = $state('')
   let methodLoading = $state(false)
+
+  // 기존 대여방식 행의 안내문구(deadline_time) 수정(2026-09-21, Stephen 요청) —
+  // 한 번에 한 행만 편집 가능(openCalId와 동일하게 단일 공유 상태로 충분). 내용 길이가
+  // 방식마다 균일하지 않을 수 있어 인라인 폼 대신 그 행 바로 아래 아코디언으로 노출.
+  let editingDeadlineId = $state<string | null>(null)
+  let editingDeadlineValue = $state('')
+  let deadlineEditLoading = $state(false)
+
+  function startEditDeadline(item: RentalMethodOption) {
+    editingDeadlineId = item.id
+    editingDeadlineValue = item.deadline_time ?? ''
+  }
+
+  function cancelEditDeadline() {
+    editingDeadlineId = null
+    editingDeadlineValue = ''
+  }
+
+  // 아코디언이 열릴 때 입력칸에 포커스 — HTML autofocus 속성은 a11y 린트 경고 대상이라
+  // (a11y_autofocus) 액션으로 동일 동작을 구현(사용자가 배지를 직접 클릭해 연 결과라
+  // 예측 가능한 포커스 이동이라 판단, Escape로 언제든 빠져나올 수 있음).
+  function focusOnMount(node: HTMLElement) {
+    node.focus()
+  }
+
+  // 대여방식별 "사용자 장바구니 화면 노출용 안내문구"(rental_method_options.deadline_time,
+  // 예: "19:00 마감") 길이 제한 — 20자 이내(Stephen 확정, 2026-09-21). 문자 종류 제한
+  // (한글·영문·숫자만)은 2026-09-21 같은 날 후속 지시로 해제됨 — 공백·콜론 등 특수문자
+  // 입력 허용(기존 "19:00 마감" 형식도 그대로 재현 가능해짐). 길이 제한 자체는 유지.
+  function filterMethodDeadlineInput(raw: string): string {
+    return raw.slice(0, 20)
+  }
 
   let usedMethodKeys = $derived(new Set(methods.map((m) => m.method_key).filter(Boolean)))
 
@@ -310,6 +345,7 @@
             if (result.type === 'success') {
               methodInput = ''
               methodKey = ''
+              methodDeadlineInput = ''
               csToast.success('대여 방식이 추가되었습니다.')
               await update()
             } else if (result.type === 'failure') {
@@ -341,12 +377,26 @@
           <input
             type="text"
             name="name"
-            class="add-input"
+            class="add-input add-input--method-name"
             placeholder="대여방식명 입력 (예: 일반 대여)"
             maxlength="50"
             bind:value={methodInput}
             disabled={methodLoading}
             aria-label="대여방식명"
+          />
+          <input
+            type="text"
+            name="deadline_time"
+            class="add-input add-input--method-deadline"
+            placeholder="안내문구 (예: 19시마감, 20자)"
+            maxlength="20"
+            value={methodDeadlineInput}
+            oninput={(e) => {
+              methodDeadlineInput = filterMethodDeadlineInput(e.currentTarget.value)
+              e.currentTarget.value = methodDeadlineInput
+            }}
+            disabled={methodLoading}
+            aria-label="장바구니 노출 안내문구"
           />
           <button
             type="submit"
@@ -363,7 +413,7 @@
           bind:items={methods}
           itemKey={(item) => item.id}
           onreorder={saveMethodOrder}
-          class="drag-list-wrap"
+          class="drag-list-wrap mk-methods-list"
         >
           {#snippet renderItem(item: RentalMethodOption)}
             <div class="list-row">
@@ -371,11 +421,100 @@
               {#if item.method_key}
                 <span class="mk-badge">{METHOD_KEY_LABELS[item.method_key] ?? item.method_key}</span>
               {/if}
+              <!-- 안내문구(deadline_time) 배지 — 내용 길이가 방식마다 제각각일 수 있어
+                   텍스트에 말줄임(ellipsis) 적용(2026-09-21 후속, Stephen 지시). 클릭하면
+                   그 "행 자체" 바로 아래로 아코디언이 펼쳐진다(.mk-methods-list 전용
+                   flex-wrap 오버라이드로 구현). 우측 ChevronIcon으로 펼침/접힘 상태를
+                   예측 가능하게 표시(uiux-index.md 표준 — 아코디언·리스트 화살표는
+                   ChevronIcon 단독 표준, 인라인 SVG 신규 작성 금지) — 닫힘=down(펼칠 수
+                   있음을 암시), 열림=up(접을 수 있음을 암시). -->
+              {#if item.deadline_time}
+                <button
+                  type="button"
+                  class="mk-badge mk-badge--deadline mk-badge--editable"
+                  class:mk-badge--active={editingDeadlineId === item.id}
+                  title={item.deadline_time}
+                  onclick={() => (editingDeadlineId === item.id ? cancelEditDeadline() : startEditDeadline(item))}
+                >
+                  <span class="mk-badge-text">{item.deadline_time}</span>
+                  <ChevronIcon direction={editingDeadlineId === item.id ? 'up' : 'down'} size={7} color="currentColor" />
+                </button>
+              {:else}
+                <button
+                  type="button"
+                  class="mk-badge mk-badge--deadline-empty"
+                  class:mk-badge--active={editingDeadlineId === item.id}
+                  title="클릭하여 안내문구 추가"
+                  onclick={() => (editingDeadlineId === item.id ? cancelEditDeadline() : startEditDeadline(item))}
+                >
+                  <span class="mk-badge-text">안내문구 추가</span>
+                  <ChevronIcon direction={editingDeadlineId === item.id ? 'up' : 'down'} size={7} color="currentColor" />
+                </button>
+              {/if}
               {#if item.is_bulk_delivery}
                 <span class="mk-badge mk-badge--shipping">{shippingBadgeLabel}</span>
               {/if}
               <CmsDeleteButton action="?/deleteMethod" id={item.id} />
             </div>
+            {#if editingDeadlineId === item.id}
+              <!-- 안내문구(deadline_time) 수정 아코디언(2026-09-21, Stephen 지시로 위치
+                   재설계 — 목록 전체 하단이 아니라 "그 행 바로 아래"에 펼쳐져야 함) —
+                   .mk-methods-list 전용 flex-wrap:wrap 오버라이드(아래 :global 규칙) 위에서
+                   flex-basis:100%로 강제 줄바꿈시켜, 같은 .drag-list-item 안에서 .list-row
+                   다음 줄로 내려오도록 만든다. name/method_key/display_order는
+                   upsert_rental_method_option UPDATE 분기가 무조건 덮어쓰므로(COALESCE
+                   대상 아님) 그 방식의 현재값을 hidden으로 그대로 재전송. -->
+              <!-- draggable="false"(QA 권고, 2026-09-21) — 조상 .drag-list-item이
+                   draggable="true"라 이 아코디언 영역에서 마우스를 누른 채 살짝만
+                   움직여도 드래그 재정렬이 시작될 수 있음(인접 행과 높이가 가까워짐) —
+                   저장/취소 버튼 조작 중 의도치 않은 순서변경+자동저장 방지. -->
+              <div class="mk-deadline-accordion" draggable="false" transition:slide={{ duration: 200 }}>
+                <form
+                  method="POST"
+                  action="?/updateMethodDeadline"
+                  class="mk-deadline-edit-form"
+                  use:enhance={() => {
+                    deadlineEditLoading = true
+                    return async ({ result, update }) => {
+                      deadlineEditLoading = false
+                      if (result.type === 'success') {
+                        cancelEditDeadline()
+                        await update()
+                      } else if (result.type === 'failure') {
+                        csToast.error((result.data as { error?: string })?.error ?? '수정에 실패했습니다.')
+                      }
+                    }
+                  }}
+                >
+                  <input type="hidden" name="id" value={item.id} />
+                  <input type="hidden" name="name" value={item.name} />
+                  <input type="hidden" name="display_order" value={item.display_order} />
+                  <input type="hidden" name="method_key" value={item.method_key ?? ''} />
+                  <input
+                    type="text"
+                    name="deadline_time"
+                    class="mk-deadline-edit-input"
+                    value={editingDeadlineValue}
+                    maxlength="20"
+                    placeholder="안내문구 (예: 19시마감, 20자)"
+                    aria-label="안내문구 수정"
+                    disabled={deadlineEditLoading}
+                    use:focusOnMount
+                    onkeydown={(e) => {
+                      if (e.key === 'Escape') { e.preventDefault(); cancelEditDeadline() }
+                    }}
+                    oninput={(e) => {
+                      editingDeadlineValue = filterMethodDeadlineInput(e.currentTarget.value)
+                      e.currentTarget.value = editingDeadlineValue
+                    }}
+                  />
+                  <button type="submit" class="btn-add" disabled={deadlineEditLoading}>
+                    {deadlineEditLoading ? '저장 중...' : '저장'}
+                  </button>
+                  <button type="button" class="mk-deadline-btn mk-deadline-btn--cancel" disabled={deadlineEditLoading} aria-label="취소" title="취소" onclick={cancelEditDeadline}>✕</button>
+                </form>
+              </div>
+            {/if}
           {/snippet}
         </CmsDragList>
       {:else}
@@ -1402,6 +1541,113 @@
     color: var(--cs-text-mid);
   }
 
+  /* 대여방식 목록의 장바구니 노출용 안내문구(deadline_time) 배지(2026-09-21, 이후
+     클릭 시 아코디언 확장으로 재설계) — mk-badge--shipping과 동일 톤 재사용(신규 팔레트
+     도입 없음). <button> 기반이라 브라우저 기본 버튼 스타일 리셋 필요. 우측에 ChevronIcon
+     (펼침/접힘 예측 표시, Stephen 지시)을 함께 배치하기 위해 inline-flex로 전환 — 말줄임은
+     버튼 전체가 아니라 텍스트 span(.mk-badge-text)에만 적용해 아이콘이 잘리지 않게 함. */
+  .mk-badge--deadline {
+    background: var(--cs-surface-gray);
+    color: var(--cs-text-mid);
+  }
+  .mk-badge--editable,
+  .mk-badge--deadline-empty {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    border: none;
+    font: var(--text-pc-script-12);
+    font-weight: 700;
+    cursor: pointer;
+    transition: background 0.1s;
+  }
+  .mk-badge-text {
+    max-width: 126px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .mk-badge--editable:hover {
+    background: var(--cs-purple-op10, rgba(59,47,138,0.1));
+    color: var(--cs-purple);
+  }
+  .mk-badge--deadline-empty {
+    background: transparent;
+    color: var(--cs-text-light, #AAAAAA);
+    border: 1px dashed var(--cs-lilac);
+  }
+  .mk-badge--deadline-empty:hover {
+    border-color: var(--cs-purple);
+    color: var(--cs-purple);
+  }
+  .mk-badge--active {
+    background: var(--cs-purple) !important;
+    color: var(--cs-white) !important;
+    border-color: var(--cs-purple) !important;
+  }
+
+  /* 안내문구 수정 아코디언(2026-09-21, Stephen 재지시로 위치 수정 — 목록 전체 하단이
+     아니라 "그 행 바로 아래"에 펼쳐져야 함) — CmsDragList.svelte의 .drag-list-item은
+     기본 display:flex + flex-wrap:nowrap(공용 컴포넌트, 다른 12곳 이상에서 재사용 중이라
+     직접 수정 금지)이라, 아래 :global 규칙으로 "이 목록(.mk-methods-list)에 한정해서만"
+     flex-wrap:wrap을 켜고, 아코디언 자체는 flex-basis:100%로 강제 줄바꿈시켜 같은
+     .drag-list-item 안에서 .list-row 다음 줄로 내려오게 만든다. flex-wrap:wrap 자체는
+     flex-basis:100% 자식이 없는 한 아무 시각적 영향이 없어 다른 목록(대여기간·동의문)에
+     영향 없음 — 이 목록 전용 클래스로 스코프했으므로 애초에 다른 목록에는 적용되지도 않음. */
+  :global(.mk-methods-list .drag-list-item) {
+    flex-wrap: wrap;
+  }
+  .mk-deadline-accordion {
+    flex-basis: 100%;
+    width: 100%;
+    margin-top: 10px;
+    padding: 14px 16px;
+    background: var(--cs-surface-gray);
+    border-radius: var(--cms-radius-sm);
+    box-sizing: border-box;
+  }
+  .mk-deadline-edit-form {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .mk-deadline-edit-input {
+    flex: 1;
+    height: 40px;
+    padding: 0 12px;
+    border: 1px solid var(--cs-lilac);
+    border-radius: var(--cms-radius-sm);
+    font: var(--text-pc-body-14);
+    color: var(--cs-text);
+    background: var(--cs-white);
+    outline: none;
+  }
+  .mk-deadline-edit-input:focus {
+    border-color: var(--cs-purple);
+  }
+  .mk-deadline-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 32px;
+    height: 32px;
+    padding: 0;
+    border: none;
+    border-radius: var(--radius-sm);
+    background: transparent;
+    cursor: pointer;
+    font-size: 14px;
+    line-height: 1;
+    flex-shrink: 0;
+  }
+  .mk-deadline-btn--cancel {
+    color: var(--cs-text-light, #AAAAAA);
+  }
+  .mk-deadline-btn--cancel:hover {
+    background: rgba(255,53,53,0.08);
+    color: var(--cs-red-badge);
+  }
+
   .add-input {
     flex: 1;
     height: 44px;
@@ -1422,6 +1668,17 @@
 
   .add-input::placeholder {
     color: var(--cs-text-placeholder);
+  }
+
+  /* 대여방식명 입력폭 축소 + 우측에 장바구니 노출용 안내문구(deadline_time) 입력 추가
+     (2026-09-21, Stephen 지시) — 최초엔 방식명 2 : 안내문구 1로 배분했으나, 실화면에서
+     안내문구 입력란이 지나치게 좁아 보인다는 Stephen 피드백에 따라 두 비율을 맞바꿔
+     방식명 1 : 안내문구 2로 재조정(줄인 폭만큼 그대로 안내문구로 이전). */
+  .add-input--method-name {
+    flex: 1;
+  }
+  .add-input--method-deadline {
+    flex: 2;
   }
 
   /* ProductDetailPanel.svelte .btn-save-inline 스타일 토큰 반영(2026-08-24, Stephen 지시) —
