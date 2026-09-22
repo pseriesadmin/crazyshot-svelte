@@ -8,9 +8,18 @@ import { toast } from 'svelte-sonner'
 // ⛔ 하드코딩 색상·반경값 금지(core-rules.md) — 반드시 app.css 정의 토큰(var(--))만 참조
 // PC 기본: min-height:56px / padding:12px 20px (좁음)
 // Mobile(<768px): min-height:60px / padding:15px 30px (넓음) — app.css @media 오버라이드
+//
+// 2026-09-21(Stephen 지시) — justify-content: space-between → flex-start로 변경. 닫기(X)
+// 버튼은 app.css에서 이미 position:absolute로 분리돼 있어 flex 배치와 무관하게 우측 고정을
+// 유지한다(요청 "X 버튼 기존 위치 유지" 그대로 충족). space-between 상태에서는 남은 flex
+// 요소가 아이콘·문구 2개뿐이라, 짧은 문구일수록 아이콘 옆이 아니라 컨테이너 우측 끝으로
+// 밀려 붙어(=닫기 버튼 근처) 좌측 정렬처럼 보이지 않는 문제가 있었다 — flex-start로
+// 바꾸면 아이콘 바로 뒤에서 문구가 시작해 자연스럽게 좌측 정렬된다. PC·모바일이 이 문자열
+// 하나(BASE)를 공통으로 쓰고 있어(치수 차이는 app.css @media에서만 처리) 별도 반응형
+// 분기 없이 양쪽에 동일하게 적용됨.
 const BASE =
   'width:545px; max-width:calc(100vw - 40px); min-height:56px;' +
-  'padding:12px 20px; display:flex; justify-content:space-between; align-items:center;' +
+  'padding:12px 20px; display:flex; justify-content:flex-start; align-items:center;' +
   'border-radius:var(--radius-xl); font-family:"Noto Sans KR",sans-serif; color:#ffffff; box-sizing:border-box;'
 
 const BG_DEFAULT = 'background:var(--cs-purple-dark);'
