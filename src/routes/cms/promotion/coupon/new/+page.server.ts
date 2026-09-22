@@ -39,6 +39,7 @@ interface CmsCreateCouponPayload {
   p_validity_type: string
   p_allow_with_points: boolean
   p_allow_stacking: boolean
+  p_valid_days: number | null
 }
 
 export type CouponCategoryOption = { value: string; label: string }
@@ -159,6 +160,11 @@ export const actions: Actions = {
       return fail(400, { error: '시작일과 종료일을 모두 선택해주세요.' })
     }
 
+    const valid_days = Number(form.get('valid_days') ?? 0) || null
+    if (validity_type === 'relative_days' && (!valid_days || valid_days <= 0)) {
+      return fail(400, { error: '"첫 확인일로부터 N일" 모드는 유효일수(N)를 1 이상 입력해야 합니다.' })
+    }
+
     // 2026-09-21 추가: coupons_discount_value_check(DB, discount_value>0)는 discount_type과
     // 무관하게 전 유형에 동일 적용된다 — "배송비 할인"도 예외 없이 실제 할인금액을 입력받아야
     // 한다(Stephen 확정). 클라이언트 가드(+page.svelte)와 동일 조건으로 서버에서도 재검증해
@@ -177,6 +183,18 @@ export const actions: Actions = {
     const auto_issue_schedule = auto_issue_enabled && scheduleRaw
       ? JSON.parse(String(scheduleRaw))
       : null
+
+    // 2026-09-21 추가: "자동 발행 > 특정 기간 발행" 모드는 시작일/종료일 검증이 클라이언트·
+    // 서버 어디에도 없던 완전한 공백이었다(Stephen 재보고로 발견) — fixed_period/relative_days와
+    // 동일한 선제 차단 패턴 적용. 비워둔 채 제출하면 빈 문자열이 그대로 auto_issue_schedule에
+    // 저장돼, 이후 자동 발행 실행 시점에야 조용히 무동작하거나 예외가 나는 상태를 방지.
+    if (
+      auto_issue_enabled &&
+      auto_issue_schedule?.type === 'period' &&
+      (!auto_issue_schedule.from || !auto_issue_schedule.to)
+    ) {
+      return fail(400, { error: '자동 발행 시작일과 종료일을 모두 선택해주세요.' })
+    }
 
     const distTargetRaw = form.get('distribution_target')
     const distribution_target = distTargetRaw
@@ -229,6 +247,7 @@ export const actions: Actions = {
       p_validity_type:          validity_type,
       p_allow_with_points:      allow_with_points,
       p_allow_stacking:         allow_stacking,
+      p_valid_days:             validity_type === 'relative_days' ? valid_days : null,
     }
 
     // 클라이언트 캐스팅은 기존 관례 유지 (전역 타입 계약 복구는 B-0 범위 밖)

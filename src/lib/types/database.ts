@@ -432,6 +432,8 @@ export interface Coupon {
   is_active: boolean;
   valid_from: string;                  // timestamptz
   valid_until: string;                 // timestamptz
+  validity_type: string;               // 'fixed_period' | 'unlimited' | 'relative_days'
+  valid_days: number | null;           // relative_days 모드: 첫 확인일로부터 유효일수
   description: string | null;
   created_at: string;
   updated_at: string;
@@ -447,6 +449,7 @@ export interface UserCoupon {
   used_count: number;
   redeemed_code: string | null;        // 사용 시점 지연채번 코드 — NULL until use_coupon RPC (B-1)
   order_id: number | null;             // 사용이 속한 주문(orders.id) — CMS 채번내역 랜딩용 (migration 297)
+  first_viewed_at: string | null;      // relative_days 모드: 첫 확인(장바구니 노출) 시각 (migration 516)
   created_at: string;
 }
 

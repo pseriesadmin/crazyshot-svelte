@@ -12,8 +12,10 @@
     // manage에서는 기존 배포 실행 폼을 그대로 유지하고, report에서는 그 자리를
     // '사용 채번 목록'으로 완전히 대체한다(조건부 3번째 탭 추가 방식은 반려됨).
     context: 'manage' | 'report'
+    // 2026-09-21 추가: "적용 카테고리" 편집용 선택지(coupon.type==='category'일 때만 노출)
+    categoryOptions?: { value: string; label: string }[]
   }
-  let { coupon, onclose, context }: Props = $props()
+  let { coupon, onclose, context, categoryOptions = [] }: Props = $props()
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const cc = coupon as any
@@ -73,15 +75,43 @@
   }
 
   // ─ 핵심 정보 수정 ─
+  // 2026-09-21 수정: "전체 발급 한도"는 쿠폰 생성화면(/cms/promotion/coupon/new)에서부터
+  // 줄곧 total_usage_limit 컬럼에 저장돼 왔는데, 이 수정 폼만 잘못된 컬럼(usage_limit)을
+  // 편집·표시하고 있었다 — 그 결과 관리자가 만든 발급 한도가 화면에 전혀 반영되지 않고
+  // 항상 "0 / ∞"로 보이던 결함이었다. usage_limit 컬럼 자체는 다른 목적(장바구니 자격조건
+  // 검증)으로 여전히 쓰이므로 건드리지 않고, 이 폼의 바인딩만 total_usage_limit으로 교정.
   let u_discount_type   = $state<string>(coupon.discount_type)
   let u_discount_value  = $state(coupon.discount_value)
   let u_max_discount    = $state(cc.max_discount_amount ?? 0)
-  let u_usage_limit     = $state(coupon.usage_limit ?? 0)
+  let u_total_usage_limit = $state(cc.total_usage_limit ?? 0)
+  let u_display_name    = $state(cc.display_name ?? '')
   let u_user_grade      = $state(cc.user_grade_required ?? '')
-  let u_validity_type   = $state<'fixed_period' | 'unlimited'>(cc.validity_type ?? 'fixed_period')
+  let u_validity_type   = $state<'fixed_period' | 'unlimited' | 'relative_days'>(cc.validity_type ?? 'fixed_period')
   let u_valid_from      = $state(coupon.valid_from ? coupon.valid_from.substring(0, 10) : '')
   let u_valid_until     = $state(coupon.valid_until ? coupon.valid_until.substring(0, 10) : '')
+  let u_valid_days      = $state<number | null>(cc.valid_days ?? null)
   let updateLoading     = $state(false)
+
+  // 2026-09-21 추가 — 생성화면(/cms/promotion/coupon/new)에는 있으나 이 수정 패널에는 없어
+  // 발행 후 확인·변경이 불가능했던 필드들("4번 지적사항" 구현)
+  let u_description          = $state(cc.description ?? '')
+  let u_min_purchase_amount  = $state(cc.min_purchase_amount ?? 0)
+  let u_min_rental_amount    = $state(cc.min_rental_amount ?? 0)
+  let u_min_rental_days      = $state(cc.min_rental_days ?? 0)
+  let u_per_user_limit       = $state(cc.per_user_limit ?? 1)
+  let u_categories           = $state<string[]>(cc.applicable_categories ?? [])
+  let u_first_rental         = $state(cc.is_first_rental_only === true)
+  let u_student              = $state(cc.is_student_only === true)
+  let u_walk_in              = $state(cc.is_walk_in_only === true)
+  let u_subscription         = $state(cc.is_subscription_only === true)
+  let u_allow_points         = $state(cc.allow_with_points !== false)
+  let u_allow_stacking       = $state(cc.allow_stacking === true)
+
+  function toggleCat(c: string) {
+    u_categories = u_categories.includes(c)
+      ? u_categories.filter((x) => x !== c)
+      : [...u_categories, c]
+  }
 
   // coupon prop 변경 시(invalidateAll 후) 편집 필드 재동기화 — ProductDetailPanel $effect 패턴 동일
   $effect(() => {
@@ -90,11 +120,25 @@
     u_discount_type  = coupon.discount_type
     u_discount_value = coupon.discount_value
     u_max_discount   = ccEff.max_discount_amount ?? 0
-    u_usage_limit    = coupon.usage_limit ?? 0
+    u_total_usage_limit = ccEff.total_usage_limit ?? 0
+    u_display_name   = ccEff.display_name ?? ''
     u_user_grade     = ccEff.user_grade_required ?? ''
     u_validity_type  = ccEff.validity_type ?? 'fixed_period'
     u_valid_from     = coupon.valid_from  ? coupon.valid_from.substring(0, 10)  : ''
     u_valid_until    = coupon.valid_until ? coupon.valid_until.substring(0, 10) : ''
+    u_valid_days     = ccEff.valid_days ?? null
+    u_description         = ccEff.description ?? ''
+    u_min_purchase_amount = ccEff.min_purchase_amount ?? 0
+    u_min_rental_amount   = ccEff.min_rental_amount ?? 0
+    u_min_rental_days     = ccEff.min_rental_days ?? 0
+    u_per_user_limit      = ccEff.per_user_limit ?? 1
+    u_categories          = ccEff.applicable_categories ?? []
+    u_first_rental        = ccEff.is_first_rental_only === true
+    u_student             = ccEff.is_student_only === true
+    u_walk_in             = ccEff.is_walk_in_only === true
+    u_subscription        = ccEff.is_subscription_only === true
+    u_allow_points        = ccEff.allow_with_points !== false
+    u_allow_stacking      = ccEff.allow_stacking === true
   })
 
   // ─ 배포 대상 ─
@@ -140,6 +184,9 @@
     <div class="panel-title-wrap">
       <span class="panel-label">쿠폰</span>
       <span class="panel-id">{codeDisplay(coupon)}</span>
+      {#if cc.display_name}
+        <span class="panel-name">{cc.display_name}</span>
+      {/if}
       <span class="panel-status">{typeLabel(coupon.type)}</span>
     </div>
     <button class="close-btn" onclick={onclose} aria-label="패널 닫기">✕</button>
@@ -171,7 +218,7 @@
       <div class="info-section">
         <div class="info-row">
           <span class="info-label">사용/한도</span>
-          <span class="info-value">{coupon.usage_count} / {coupon.usage_limit ?? '∞'}</span>
+          <span class="info-value">{coupon.usage_count} / {cc.total_usage_limit ?? '∞'}</span>
         </div>
         <div class="info-row">
           <span class="info-label">상태</span>
@@ -181,7 +228,12 @@
 
       <div class="section-title">핵심 정보 수정</div>
       <form method="POST" action="?/updateCoupon"
-        use:enhance={() => {
+        use:enhance={({ cancel }) => {
+          if (!u_discount_value || u_discount_value <= 0) {
+            csToast.error('할인값을 입력해주세요.')
+            cancel()
+            return
+          }
           updateLoading = true
           return async ({ result, update }) => {
             updateLoading = false
@@ -193,10 +245,15 @@
         <input type="hidden" name="id" value={coupon.id} />
         <div class="form-grid">
           <div class="form-field">
+            <label for="uc-dname">쿠폰 이름 (고객 노출)</label>
+            <input id="uc-dname" name="display_name" type="text"
+              class="f-input" bind:value={u_display_name} placeholder="고객 화면에 표시될 이름" />
+          </div>
+          <div class="form-field">
             <label for="uc-dtype">할인 방식</label>
             <select id="uc-dtype" name="discount_type" class="f-input" bind:value={u_discount_type}>
               <option value="fixed">정액 (원)</option>
-              <option value="percent">정률 (%)</option>
+              <option value="percentage">정률 (%)</option>
               <option value="free_shipping">무료배송</option>
             </select>
           </div>
@@ -205,7 +262,7 @@
             <input id="uc-dval" name="discount_value" type="number" min="0"
               class="f-input" bind:value={u_discount_value} />
           </div>
-          {#if u_discount_type === 'percent'}
+          {#if u_discount_type === 'percentage'}
             <div class="form-field">
               <label for="uc-maxd">최대 할인 한도 (원, 0=무제한)</label>
               <input id="uc-maxd" name="max_discount_amount" type="number" min="0"
@@ -214,8 +271,8 @@
           {/if}
           <div class="form-field">
             <label for="uc-tul">전체 발급 한도 (0=무제한)</label>
-            <input id="uc-tul" name="usage_limit" type="number" min="0"
-              class="f-input" bind:value={u_usage_limit} />
+            <input id="uc-tul" name="total_usage_limit" type="number" min="0"
+              class="f-input" bind:value={u_total_usage_limit} />
           </div>
           <div class="form-field">
             <label for="uc-grade">필수 회원 등급 (선택)</label>
@@ -236,6 +293,10 @@
             <input type="radio" name="validity_type" value="unlimited" bind:group={u_validity_type} />
             무제한
           </label>
+          <label class="radio-lbl">
+            <input type="radio" name="validity_type" value="relative_days" bind:group={u_validity_type} />
+            첫 확인일로부터 N일
+          </label>
         </div>
         {#if u_validity_type === 'fixed_period'}
           <div class="form-grid">
@@ -249,6 +310,82 @@
             </div>
           </div>
         {/if}
+        {#if u_validity_type === 'relative_days'}
+          <div class="form-field" style="max-width:200px">
+            <label for="uc-vd">유효일수 (N일)</label>
+            <input id="uc-vd" type="number" name="valid_days" min="1" class="f-input"
+              bind:value={u_valid_days} placeholder="예: 7" />
+          </div>
+        {/if}
+
+        <div class="form-field">
+          <label for="uc-desc">관리자 메모 (고객에게 노출되지 않음)</label>
+          <textarea id="uc-desc" name="description" class="f-input ta" rows="2"
+            bind:value={u_description}></textarea>
+        </div>
+
+        <div class="section-title">사용 조건</div>
+        <div class="form-grid">
+          <div class="form-field">
+            <label for="uc-mpa">최소 구매금액 (원, 0=없음)</label>
+            <input id="uc-mpa" name="min_purchase_amount" type="number" min="0"
+              class="f-input" bind:value={u_min_purchase_amount} />
+          </div>
+          <div class="form-field">
+            <label for="uc-mra">최소 대여금액 (원, 0=없음)</label>
+            <input id="uc-mra" name="min_rental_amount" type="number" min="0"
+              class="f-input" bind:value={u_min_rental_amount} />
+          </div>
+          <div class="form-field">
+            <label for="uc-mrd">최소 대여기간 (일, 0=없음)</label>
+            <input id="uc-mrd" name="min_rental_days" type="number" min="0"
+              class="f-input" bind:value={u_min_rental_days} />
+          </div>
+          <div class="form-field">
+            <label for="uc-pul">1인당 사용 횟수</label>
+            <input id="uc-pul" name="per_user_limit" type="number" min="1"
+              class="f-input" bind:value={u_per_user_limit} />
+          </div>
+        </div>
+
+        {#if cc.type === 'category'}
+          <div class="section-title">적용 카테고리</div>
+          <div class="cat-picker">
+            {#each categoryOptions as cat (cat.value)}
+              <button type="button" class="cat-chip" class:selected={u_categories.includes(cat.value)}
+                onclick={() => toggleCat(cat.value)}>{cat.label}</button>
+            {/each}
+          </div>
+          <input type="hidden" name="applicable_categories"
+            value={u_categories.length ? JSON.stringify(u_categories) : ''} />
+        {/if}
+
+        <div class="section-title">전용 조건</div>
+        <div class="s-chip-group">
+          <button type="button" class="s-chip" class:s-chip--on={u_first_rental}
+            onclick={() => u_first_rental = !u_first_rental}>첫 렌탈 전용</button>
+          <button type="button" class="s-chip" class:s-chip--on={u_student}
+            onclick={() => u_student = !u_student}>학생 인증 계정 전용</button>
+          <button type="button" class="s-chip" class:s-chip--on={u_walk_in}
+            onclick={() => u_walk_in = !u_walk_in}>방문 픽업 전용</button>
+          <button type="button" class="s-chip" class:s-chip--on={u_subscription}
+            onclick={() => u_subscription = !u_subscription}>정기구독 전용</button>
+        </div>
+        <input type="hidden" name="is_first_rental_only" value={String(u_first_rental)} />
+        <input type="hidden" name="is_student_only" value={String(u_student)} />
+        <input type="hidden" name="is_walk_in_only" value={String(u_walk_in)} />
+        <input type="hidden" name="is_subscription_only" value={String(u_subscription)} />
+
+        <div class="section-title">결합 옵션</div>
+        <div class="s-chip-group">
+          <button type="button" class="s-chip" class:s-chip--on={u_allow_points}
+            onclick={() => u_allow_points = !u_allow_points}>포인트 결합 사용 허용</button>
+          <button type="button" class="s-chip" class:s-chip--on={u_allow_stacking}
+            onclick={() => u_allow_stacking = !u_allow_stacking}>쿠폰 중복 사용 허용</button>
+        </div>
+        <input type="hidden" name="allow_with_points" value={String(u_allow_points)} />
+        <input type="hidden" name="allow_stacking" value={String(u_allow_stacking)} />
+
         <div class="panel-actions">
           <button type="submit" class="btn-primary" disabled={updateLoading}>
             {updateLoading ? '저장 중...' : '정보 저장'}
@@ -378,6 +515,7 @@
   .panel-title-wrap { display: flex; align-items: center; gap: 8px; }
   .panel-label { font: var(--text-pc-script-12); color: var(--cs-text-light); }
   .panel-id    { font: var(--text-pc-body-14); font-weight: 700; color: var(--cs-text); letter-spacing: .04em; }
+  .panel-name  { font: var(--text-pc-script-12); color: var(--cs-text-mid); }
   .panel-status {
     display: inline-flex; align-items: center;
     padding: 2px 8px; border-radius: var(--radius-sm);
@@ -455,6 +593,30 @@
   .f-input.ta { resize: vertical; height: auto; }
 
   .panel-actions { display: flex; justify-content: flex-end; }
+
+  /* ─ 2026-09-21 추가: 카테고리 피커 + CMS 표준 콤보버튼(.s-chip, cms-uiux.md §7-12-B) —
+       coupon/new/+page.svelte와 동일 스타일 토큰(공유 컴포넌트가 아니라 각 화면이 로컬
+       CSS로 복제하는 기존 관례) ─ */
+  .cat-picker { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 12px; }
+  .cat-chip {
+    padding: 4px 12px; border-radius: var(--radius-sm);
+    border: 1.5px solid var(--cs-border); background: transparent;
+    font: var(--text-pc-script-12); color: var(--cs-text-mid);
+    cursor: pointer; min-height: 28px; transition: all 0.12s;
+  }
+  .cat-chip.selected { border-color: var(--cs-purple); background: rgba(59,47,138,0.08); color: var(--cs-purple); }
+
+  .s-chip-group { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 4px; }
+  .s-chip {
+    height: 32px; padding: 0 14px;
+    border: 1.5px solid var(--cs-lilac);
+    border-radius: var(--cms-radius-xl, 30px);
+    background: var(--cs-white); color: var(--cs-text-mid);
+    font: var(--text-pc-script-12); font-weight: 600;
+    cursor: pointer; transition: background 0.15s, color 0.15s, border-color 0.15s;
+  }
+  .s-chip--on { background: var(--cs-purple); color: var(--cs-white); border-color: var(--cs-purple); }
+  .s-chip:not(.s-chip--on):hover { border-color: var(--cs-purple); color: var(--cs-purple); }
 
   /* 채번내역 탭 */
   .redemption-list { display: flex; flex-direction: column; gap: 8px; }

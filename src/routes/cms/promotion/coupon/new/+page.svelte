@@ -24,9 +24,10 @@
   let f_min_rental_amount = $state(0)
   let f_min_rental_days   = $state(0)
   let f_user_grade     = $state('')
-  let f_validity_type  = $state<'fixed_period' | 'unlimited'>('fixed_period')
+  let f_validity_type  = $state<'fixed_period' | 'unlimited' | 'relative_days'>('fixed_period')
   let f_valid_from     = $state('')
   let f_valid_until    = $state('')
+  let f_valid_days     = $state<number | null>(null)
   let f_allow_points   = $state(true)
   let f_allow_stacking = $state(false)
   let f_first_rental   = $state(false)
@@ -249,6 +250,22 @@
         // 늦게 발견되므로, 제출 시점에 한 번 더 확인해 UX를 보강)
         if (f_validity_type === 'fixed_period' && (!f_valid_from || !f_valid_until)) {
           csToast.error('시작일과 종료일을 모두 선택해주세요.')
+          cancel()
+          return
+        }
+        // 2026-09-21 추가: "첫 확인일로부터 N일" 모드도 fixed_period와 동일하게 클라이언트
+        // 선제 검증이 빠져있었다(서버 검증만 존재) — 동일 패턴으로 보강.
+        if (f_validity_type === 'relative_days' && (!f_valid_days || f_valid_days <= 0)) {
+          csToast.error('유효일수(N)를 1 이상 입력해주세요.')
+          cancel()
+          return
+        }
+        // 2026-09-21 추가: "자동 발행 > 특정 기간 발행" 모드는 시작일/종료일에 대응하는
+        // 클라이언트·서버 검증이 아예 없던 완전한 공백이었다(Stephen 재보고로 발견) — 쿠폰
+        // 자체 유효기간(fixed_period)과 동일한 가드를 적용. 비워둔 채 제출하면 빈 문자열이
+        // 그대로 auto_issue_schedule에 실려 저장되던 상태를 선제 차단.
+        if (f_auto_issue && f_auto_sched_type === 'period' && (!f_auto_from || !f_auto_to)) {
+          csToast.error('자동 발행 시작일과 종료일을 모두 선택해주세요.')
           cancel()
           return
         }
@@ -536,6 +553,11 @@
             bind:group={f_validity_type} />
           무제한 (만료일 없음)
         </label>
+        <label class="radio-lbl">
+          <input type="radio" name="validity_type" value="relative_days"
+            bind:group={f_validity_type} />
+          첫 확인일로부터 N일
+        </label>
       </div>
       {#if f_validity_type === 'fixed_period'}
         <div class="form-grid">
@@ -547,6 +569,13 @@
             <label for="fc-vu">종료일</label>
             <CmsDatePicker bind:value={f_valid_until} name="valid_until" placeholder="종료일 선택" disablePast={false} />
           </div>
+        </div>
+      {/if}
+      {#if f_validity_type === 'relative_days'}
+        <div class="form-field" style="max-width:200px">
+          <label for="fc-vd">유효일수 (N일)</label>
+          <input id="fc-vd" type="number" name="valid_days" min="1"
+            bind:value={f_valid_days} placeholder="예: 7" />
         </div>
       {/if}
 

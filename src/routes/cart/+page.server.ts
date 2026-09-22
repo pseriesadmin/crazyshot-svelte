@@ -114,6 +114,24 @@ export const load: PageServerLoad = async ({ locals }) => {
 
   const FIRST_RENTAL_EXCLUDE = ['hold', 'draft', 'cancelled', 'expired'] as const
 
+  // relative_days 쿠폰: 장바구니 진입 시 아직 first_viewed_at이 없는 쿠폰에 현재 시각을 기록.
+  // Promise.all보다 먼저 호출해야 이후 SELECT에서 방금 기록된 first_viewed_at을 읽을 수 있다.
+  // 오류가 나도 나머지 흐름을 막지 않는다(fail-soft).
+  // mark_coupons_first_viewed는 Migration #518 신규 RPC — 타입 재생성 전까지 캐스트 사용.
+  // 2026-09-21(긴급 수정) — supabase.rpc(...)가 반환하는 PostgrestFilterBuilder는
+  // .catch 메서드를 직접 노출하지 않아 "supabase.rpc(...).catch is not a function"
+  // TypeError로 /cart 전체가 500 오류를 내고 있었다(사용자 실보고로 발견). 페일소프트
+  // 의도(RPC 실패해도 카트 진입은 막지 않음)는 try/await로 그대로 유지하고, .catch()
+  // 체이닝만 제거.
+  type RpcCallable = (name: string, args: Record<string, string>) => Promise<unknown>
+  try {
+    await (supabase.rpc as unknown as RpcCallable)(
+      'mark_coupons_first_viewed', { p_user_id: session.user.id }
+    )
+  } catch {
+    // fail-soft — RPC(마이그레이션 미적용 등)가 실패해도 나머지 카트 로드 흐름은 계속 진행
+  }
+
   const [cartResult, profileResult, couponResult, usedCouponsResult, addressResult, firstRentalResult, studentResult, subscriptionResult] = await Promise.all([
     supabase
       .from('rental_reservations')
@@ -130,10 +148,10 @@ export const load: PageServerLoad = async ({ locals }) => {
 
     supabase
       .from('user_coupons')
-      .select(`id, coupon_id, used_count,
+      .select(`id, coupon_id, used_count, first_viewed_at,
         coupons(
           id, code, type, discount_type, discount_value, display_name, allow_stacking,
-          is_active, deleted_at, valid_from, valid_until,
+          is_active, deleted_at, valid_from, valid_until, validity_type, valid_days,
           user_grade_required, usage_limit, usage_count, total_usage_limit,
           is_first_rental_only, is_student_only, is_subscription_only, is_walk_in_only,
           min_purchase_amount, min_rental_amount, min_rental_days,
@@ -204,7 +222,17 @@ export const load: PageServerLoad = async ({ locals }) => {
     if (!c.is_active) return false
     if (c.deleted_at) return false
     if (c.valid_from && c.valid_from > now) return false
-    if (c.valid_until && c.valid_until < now) return false
+    // relative_days 만료 체크: first_viewed_at + valid_days < now → 만료
+    // first_viewed_at이 NULL이면 카운트다운 미시작 → 만료 없음(unlimited 취급)
+    if (c.validity_type === 'relative_days') {
+      const fva = uc.first_viewed_at
+      if (fva !== null && c.valid_days !== null) {
+        const expiry = new Date(new Date(fva).getTime() + c.valid_days * 86400_000)
+        if (expiry.toISOString() < now) return false
+      }
+    } else {
+      if (c.valid_until && c.valid_until < now) return false
+    }
     // 등급 조건: user_grade_required가 설정된 쿠폰은 회원 등급 일치 필수
     if (c.user_grade_required && c.user_grade_required !== memberGrade) return false
     // 전체 발급 한도 소진
@@ -697,6 +725,8 @@ interface RawCouponFields {
   deleted_at:           string | null
   valid_from:           string | null
   valid_until:          string | null
+  validity_type:        string
+  valid_days:           number | null
   user_grade_required:  string | null
   usage_limit:          number
   usage_count:          number
@@ -714,10 +744,11 @@ interface RawCouponFields {
   allow_with_points:    boolean
 }
 interface RawUserCouponRow {
-  id:         string
-  coupon_id:  string
-  used_count: number
-  coupons:    RawCouponFields | null
+  id:              string
+  coupon_id:       string
+  used_count:      number
+  first_viewed_at: string | null
+  coupons:         RawCouponFields | null
 }
 
 interface DeliveryOptionRow {

@@ -237,7 +237,7 @@
         <table>
           <thead>
             <tr>
-              <th>코드</th><th>유형</th><th class="col-hide">할인</th>
+              <th>코드</th><th>쿠폰이름</th><th>유형</th><th class="col-hide">할인</th>
               <th class="col-hide">유효기간</th><th>사용/한도</th><th>상태</th><th>관리</th>
             </tr>
           </thead>
@@ -253,16 +253,19 @@
                 aria-label="{codeDisplay(c)} 쿠폰 상세 보기"
               >
                 <td class="td-code">{codeDisplay(c)}</td>
+                <td>{cc.display_name ?? '—'}</td>
                 <td><span class="badge badge-info">{typeLabel(c.type)}</span></td>
+                <td class="col-hide">{discountLabel(c)}</td>
                 <td class="td-date col-hide">
                   {#if cc.validity_type === 'unlimited'}
                     <span class="badge badge-active">무제한</span>
+                  {:else if cc.validity_type === 'relative_days'}
+                    <span class="badge badge-info">첫 확인일+{cc.valid_days ?? '?'}일</span>
                   {:else}
                     {formatDate(c.valid_from)} ~ {formatDate(c.valid_until)}
                   {/if}
                 </td>
-                <td class="col-hide">{discountLabel(c)}</td>
-                <td>{c.usage_count} / {c.usage_limit ?? '∞'}</td>
+                <td>{c.usage_count} / {cc.total_usage_limit ?? '∞'}</td>
                 <td>
                   <form method="POST" action="?/toggleCoupon" use:enhance
                     onclick={(e) => e.stopPropagation()}
@@ -324,7 +327,7 @@
       {#if selectedCouponId != null && selectedCoupon}
         <div class="detail-panel-wrap" transition:fly={{ x: 30, duration: 220 }}>
           {#key selectedCouponId}
-            <CouponDetailPanel coupon={selectedCoupon} onclose={closePanel} context="manage" />
+            <CouponDetailPanel coupon={selectedCoupon} onclose={closePanel} context="manage" categoryOptions={data.categoryOptions} />
           {/key}
         </div>
       {/if}
@@ -388,7 +391,7 @@
       {#if selectedCouponId != null && selectedCoupon}
         <div class="detail-panel-wrap" transition:fly={{ x: 30, duration: 220 }}>
           {#key selectedCouponId}
-            <CouponDetailPanel coupon={selectedCoupon} onclose={closePanel} context="report" />
+            <CouponDetailPanel coupon={selectedCoupon} onclose={closePanel} context="report" categoryOptions={data.categoryOptions} />
           {/key}
         </div>
       {/if}
@@ -409,10 +412,11 @@
         </thead>
         <tbody>
           {#each data.expiringSoon as c}
+            {@const cc = c as unknown as Record<string, unknown>}
             <tr>
               <td class="td-code">{codeDisplay(c)}</td>
               <td><span class="badge badge-info">{typeLabel(c.type)}</span></td>
-              <td>{c.usage_count} / {c.usage_limit ?? '∞'}</td>
+              <td>{c.usage_count} / {cc.total_usage_limit ?? '∞'}</td>
               <td class="td-date">{formatDate(c.valid_until)}</td>
               <td>
                 <button class="btn-ghost sm"

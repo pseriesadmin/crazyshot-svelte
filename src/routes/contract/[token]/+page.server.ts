@@ -191,6 +191,7 @@ export const load: PageServerLoad = async ({ params }) => {
     id: string
     coupon_id: string | null
     used_count: number
+    first_viewed_at: string | null
     coupons: {
       id: string
       code: string | null
@@ -202,6 +203,8 @@ export const load: PageServerLoad = async ({ params }) => {
       deleted_at: string | null
       valid_from: string | null
       valid_until: string | null
+      validity_type: string
+      valid_days: number | null
       user_grade_required: string | null
       usage_limit: number
       usage_count: number
@@ -231,10 +234,10 @@ export const load: PageServerLoad = async ({ params }) => {
         .maybeSingle(),
       admin
         .from('user_coupons')
-        .select(`id, coupon_id, used_count,
+        .select(`id, coupon_id, used_count, first_viewed_at,
           coupons(
             id, code, type, discount_type, discount_value, description,
-            is_active, deleted_at, valid_from, valid_until,
+            is_active, deleted_at, valid_from, valid_until, validity_type, valid_days,
             user_grade_required, usage_limit, usage_count, total_usage_limit,
             min_purchase_amount, min_rental_amount, min_rental_days,
             is_first_rental_only, is_student_only, is_subscription_only, is_walk_in_only,
@@ -272,7 +275,15 @@ export const load: PageServerLoad = async ({ params }) => {
       if (!c.is_active) return false
       if (c.deleted_at) return false
       if (c.valid_from && c.valid_from > now) return false
-      if (c.valid_until && c.valid_until < now) return false
+      if (c.validity_type === 'relative_days') {
+        const fva = uc.first_viewed_at
+        if (fva !== null && c.valid_days !== null) {
+          const expiry = new Date(new Date(fva).getTime() + c.valid_days * 86400_000)
+          if (expiry.toISOString() < now) return false
+        }
+      } else {
+        if (c.valid_until && c.valid_until < now) return false
+      }
       if (c.user_grade_required && c.user_grade_required !== memberGrade) return false
       if (c.total_usage_limit !== null && c.usage_count >= c.total_usage_limit) return false
       if (c.usage_limit > 0 && c.usage_count >= c.usage_limit) return false
