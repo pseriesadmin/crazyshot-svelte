@@ -5,6 +5,7 @@
   import type { PageData } from './$types';
   import SubGnb from '$lib/components/common/SubGnb.svelte';
   import CalendarGrid from '$lib/components/common/CalendarGrid.svelte';
+  import TimePickerGrid from '$lib/components/common/TimePickerGrid.svelte';
   import PostcodeSearchButton from '$lib/components/common/PostcodeSearchButton.svelte';
   import { supabase } from '$lib/services/supabase';
   import { csToast } from '$lib/utils/toast';
@@ -201,6 +202,9 @@
   // pendingDelta는 groupsById(아래쪽 526행 부근)가 참조하므로 그 옆에서 선언된다(TDZ 방지).
   const debounceTimers: Record<string, ReturnType<typeof setTimeout>> = {}
   let pendingQtyKey = $state<string | null>(null)
+  // 옵션상품 수량 변경 디바운스 타이머(2026-09-21, Stephen 지시) — 본상품 qty와 동일한
+  // "클릭 즉시 화면만 갱신 + DEBOUNCE_MS 뒤 한 번만 서버 반영" 패턴을 옵션상품에도 적용.
+  const optionDebounceTimers: Record<string, ReturnType<typeof setTimeout>> = {}
 
   // qtyOverrides와 itemsState.reservationIds를 함께 갱신 — itemsState.reservationIds는
   // 체크아웃·draft승격이 실제로 참조하는 필드라 qtyOverrides만 갱신하면 체크아웃이 구값을
@@ -501,15 +505,35 @@
   // 측정해, 안내문을 그 높이만큼 정확히 아래로 절대배치한다.
   let calLayerHeights = $state<Record<string, number>>({})
 
+  // 2026-09-21(Stephen 지시) — 수령일 달력에서 수령~반납 2클릭 범위선택이 끝나도 더 이상
+  // 자동으로 닫지 않게 되면서(위 bulkHandleDate 참고), 이 팝업을 닫는 유일한 방법이
+  // 필요해졌다 — "달력 레이아웃 밖을 클릭하면 닫힘" 패턴을 이 액션에 추가한다(이미
+  // calId별로 스코프돼 있어 새 상태 없이 여기 추가하는 게 가장 단순함). 달력을 연 바로
+  // 그 클릭 이벤트가 document까지 버블링되며 즉시 재닫힘을 유발하지 않도록, 리스너
+  // 등록을 다음 tick(setTimeout 0)으로 미룬다(흔한 click-outside 구현 패턴).
   function measureCalLayer(node: HTMLElement, calId: string) {
     const ro = new ResizeObserver(() => {
       calLayerHeights[calId] = node.offsetHeight
     })
     ro.observe(node)
     calLayerHeights[calId] = node.offsetHeight
+
+    const handleOutsideClick = (e: MouseEvent) => {
+      if (openCalId !== calId) return
+      if (node.contains(e.target as Node)) return
+      openCalId = null
+    }
+    const registerTimer = setTimeout(() => {
+      document.addEventListener('click', handleOutsideClick)
+    }, 0)
+
     return {
       update(newCalId: string) { calId = newCalId },
-      destroy() { ro.disconnect() },
+      destroy() {
+        ro.disconnect()
+        clearTimeout(registerTimer)
+        document.removeEventListener('click', handleOutsideClick)
+      },
     }
   }
 
@@ -523,18 +547,13 @@
     openCalId = null;
   }
 
-  // 2026-09-10(Stephen 확정) — 30분 단위 선택 버튼 추가를 위해 분(m) 인자 도입.
-  // 기본값 0이라 기존 호출부(fmtTime(h))는 완전히 동일한 "HH:00"을 그대로 반환한다.
-  function fmtTime(h: number, m: number = 0): string {
-    return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
-  }
-
   // 시간선택 노출 범위 — 24시간 전체로 확대(2026-08-20, Stephen 확정).
   // 09:00~22:00=방문배송 정상영업시간 / 23:00~08:00=영업외시간(방문대여 선택 시 무인보관함
   // 인계로 부분 반영 — isLockerHour()는 $lib/utils/lockerTimeRange 공유 유틸(CMS와 동일 로직
   // 재사용, 드리프트 방지). pickup_method/return_method DB 값은 그대로 'visit' 유지.
-  const TIME_AM_HOURS = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11];
-  const TIME_PM_HOURS = [12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23];
+  // 2026-09-21 — fmtTime/TIME_AM_HOURS/TIME_PM_HOURS는 시간선택 UI 자체가
+  // TimePickerGrid.svelte(공통 컴포넌트)로 이관되며 그쪽으로 함께 이동함. isLockerHour는
+  // 아래 무인보관함 안내문(form-note-locker) 조건부에서도 여전히 쓰여 이 파일에 남음.
 
   // ── 통합설정용 핸들러 (bulkOpts/bulkRentalForm/bulkReturnForm 대상 — 개별 아이템 편집 UI는
   // 통합 단일 정책 전환(2026-08-05)으로 제거되어 item 단위 핸들러는 더 이상 필요 없음)
@@ -637,17 +656,56 @@
   //   1클릭(시작 없음, 또는 이미 완성된 범위를 다시 고르는 경우) → 시작일 지정, 달력 유지(열림)
   //   2클릭(시작만 있고 종료 대기 중) → 시작일 이후 날짜면 종료일로 확정, 달력 닫힘
   //                                     시작일 이전 날짜면 시작일을 그 날짜로 교체(다시 대기)
+  // 2026-09-21(Stephen 지시) — 배송(is_delivery_type, 현재는 크레이지샷배송) 방식 선택
+  // 중 배송 리드타임(대여일 2일 전) 미달 날짜를 "수령일"로 선택하면, 기존에는 최종
+  // "예약하기" 제출 시점에야 실패가 드러났다 — 선택 즉시 경고 토스트로 안내한다.
+  // 2026-09-21(같은 날 후속, Stephen 지적) — 최초 구현은 경고만 띄우고 그 무효 날짜를
+  // 그대로 bulkDate로 커밋해버려서 ① 달력에 무효 날짜가 계속 선택된(원형 BG) 상태로
+  // 남고 ② 그 상태에서 새 날짜를 고르면 "새 수령일 재선택"이 아니라 "반납일 확정"으로
+  // 잘못 해석돼(아래 bulkHandleDate의 `bulkDate && !bulkReturnDate` 분기 참고) 무효
+  // 날짜와 새 날짜가 동시에 선택된 것처럼 보이는 결함으로 이어졌다 — 경고와 동시에
+  // 선택 자체를 취소(bulkDate 초기화)해 두 문제를 함께 해소한다.
+  // 기존 draft 그룹 제출 시점 재검증(TWO_DAY_LEADTIME_KEYS_CO, 위쪽 체크아웃 로직)과
+  // 동일한 2일 기준을 재사용하되, 그쪽은 'delivery'/'epost'(레거시 키) 기준이라 현재
+  // 실사용 방식인 'crazydelivery'를 못 잡는다 — 여기서는 데이터 기반 판정
+  // (isDeliveryTypeMethod)을 써서 CMS에서 "배송 반납 허용 지정"이 켜진 방식이면 무엇이든
+  // 자동으로 대응한다.
+  function isDeliveryLeadtimeInvalid(pickupDate: string): boolean {
+    if (!isDeliveryTypeMethod(bulkOpts.rentalMethod)) return false
+    const twoDaysLater = new Date()
+    twoDaysLater.setHours(0, 0, 0, 0)
+    twoDaysLater.setDate(twoDaysLater.getDate() + 2)
+    const startDateOnly = new Date(`${pickupDate}T00:00:00`)
+    return startDateOnly < twoDaysLater
+  }
   function bulkHandleDate(d: string) {
     if (bulkDate && !bulkReturnDate) {
       if (d >= bulkDate) {
         bulkReturnDate = d
         applyBulkToItems()
-        openCalId = null
+        // 2026-09-21(Stephen 지시) — 수령일 달력 하나에서 수령~반납 2클릭 범위선택이
+        // 끝나도 더 이상 자동으로 닫지 않는다. 반납일을 다시 확인·변경하고 싶을 수
+        // 있으므로 열어둔 채 유지 — 닫힘은 이제 달력 레이아웃 바깥을 클릭했을 때만
+        // 일어난다(measureCalLayer 액션의 문서 클릭 리스너 참고).
       } else {
+        if (isDeliveryLeadtimeInvalid(d)) {
+          csToast.error('선택한 수령날짜에 배송이 불가능합니다.')
+          bulkDate = ''
+          bulkReturnDate = ''
+          applyBulkToItems()
+          return
+        }
         bulkDate = d
         applyBulkToItems()
       }
     } else {
+      if (isDeliveryLeadtimeInvalid(d)) {
+        csToast.error('선택한 수령날짜에 배송이 불가능합니다.')
+        bulkDate = ''
+        bulkReturnDate = ''
+        applyBulkToItems()
+        return
+      }
       bulkDate = d
       bulkReturnDate = ''
       applyBulkToItems()
@@ -712,7 +770,7 @@
   // ── 서버 데이터 추출 (PageData는 +page.ts 기준이므로 server 필드는 캐스트 필요)
   // datesSet 등 canProceed 조건이 라인아이템 목록을 참조하므로 Footer 섹션보다 앞에 선언
   type ProductRow = { id: string; name: string; category: string; brand: string | null; slug: string; image_urls: string[]; is_active: boolean; shipping_round_trip?: boolean | null; shipping_delivery?: boolean | null; shipping_return?: boolean | null; sale_only?: boolean | null; sale_price?: number | null }
-  type UserCouponExt = { id: string; coupon_id: string; coupons: { id: string; code: string; type: string; discount_type: string; discount_value: number; display_name: string | null; valid_until: string } | null }
+  type UserCouponExt = { id: string; coupon_id: string; first_viewed_at: string | null; coupons: { id: string; code: string; type: string; discount_type: string; discount_value: number; display_name: string | null; allow_stacking: boolean; valid_until: string; validity_type: string; valid_days: number | null; max_discount_amount: number | null; allow_with_points: boolean } | null }
   type PriceRuleExt = { price12h: number | null; price24h: number | null; deposit: number | null }
   type CartLineItemOption = { optionProductId: string | null; name: string; qty: number; unitPrice: number; unitPrice12h: number | null; imageUrl: string | null; deliveryRentalDisabled: boolean; isRequired: boolean; minSelectRequired: boolean }
   type CartLineItem = { reservationId: string; productId: string | null; product: ProductRow | null; price12h: number | null; price24h: number | null; deposit: number | null; startDate: string; endDate: string; pickupMethod: string | null; returnMethod: string | null; pickupTime: string | null; returnTime: string | null; durationType: string | null; options: CartLineItemOption[]; status: string }
@@ -1145,8 +1203,8 @@
     }, 0)
   )
 
-  // 멤버십 할인 — 등급 할인율을 체크된 소계에 적용
-  const otMembershipDiscount = $derived(Math.round(otSubtotal * otDiscountRate / 100))
+  // 멤버십 할인 — otMembershipDiscount 선언은 otCouponDiscount 이후로 이동됨(쿠폰 중복
+  // 허용 여부를 함께 판정해야 해서 sdCoupons/otSelectedCouponIds 선언 뒤로 옮김, 2026-09-21)
 
   const sdDeliveryOpts = $derived((data.deliveryOptions as Array<{ method_key: string; name: string; is_bulk_delivery: boolean; is_courier_dependent: boolean; is_delivery_type: boolean }> | undefined) ?? [])
 
@@ -1578,13 +1636,16 @@
 
   // 서버 데이터 안전 추출
   const sdCoupons = $derived<UserCouponExt[]>((sd as { userCoupons?: UserCouponExt[] }).userCoupons ?? [])
+  // 2026-09-21(Stephen 지시) — 쿠폰 목록 렌더링/빈 상태 판정 공용. coupons가 null인
+  // 행(조인 실패 등 방어)을 제외한 실제 노출 대상만 남긴다.
+  const eligibleCoupons = $derived(sdCoupons.filter(uc => uc.coupons !== null))
 
   // 배송료 우대설정 적용 중(otShippingDiscountRate>0)이면 free_delivery(무료배송) 쿠폰은
   // 중복 혜택 방지를 위해 선택 불가 — 상호배타 안전장치(Stephen 확정, 2026-09-01).
   const otBlockedCouponIds = $derived<Set<string>>(
     new Set(
       sdCoupons
-        .filter((uc) => isFreeDeliveryCouponBlocked(uc.coupons?.type, otShippingDiscountRate))
+        .filter((uc) => isFreeDeliveryCouponBlocked(uc.coupons?.discount_type, otShippingDiscountRate))
         .map((uc) => uc.id)
     )
   )
@@ -1627,16 +1688,18 @@
     }
   }
 
-  // 쿠폰 할인 합산 — discount_type 3-way(fixed/percentage/그외)로 정확히 분기.
-  // ⚠️ 2026-09-08 수정: 기존엔 'fixed'가 아니면 전부 "정률(%)"로 취급해
-  // Math.round(otSubtotal * discount_value / 100)을 계산했는데, free_shipping 타입
-  // 쿠폰(discount_value가 원 단위 금액, 예: 3300)이 이 분기를 타면 주문금액의 3300%가
-  // 할인액으로 계산돼 otTotal이 0으로 클램프되는(사실상 전액 무료) 심각한 가격결함이었다.
-  // cartShippingFee.ts의 isFreeDeliveryCouponBlocked() 문서 주석(Stephen 확정,
-  // 2026-09-01)에 명시된 대로 "free_delivery 쿠폰이 실제로 배송료를 할인하는 계산 로직은
-  // 스코프 밖 — otCouponDiscount는 여전히 상품금액에만 적용된다"는 기존 결정을 그대로
-  // 따라, free_shipping(및 그 외 미정의 타입)은 상품금액 할인에 기여하지 않도록(0) 수정 —
-  // 배송료 자체에 쿠폰 효과를 반영하는 신규 로직은 이번 수정 범위가 아니다(기존 결정 유지).
+  // 쿠폰 할인 합산 — discount_type 3-way(fixed/percentage/free_shipping)로 정확히 분기.
+  // ⚠️ 2026-09-08 수정 이력: 'fixed'가 아니면 전부 "정률(%)"로 취급하던 결함(free_shipping이
+  // 실수로 정률로 계산돼 전액 무료가 되던 CRITICAL 버그)을 해소하며 free_shipping을 항상
+  // 0으로 고정했었다.
+  // ⚠️ 2026-09-21 재수정(Stephen 확정): 그 "0 고정"이 바로 "배송비 할인 쿠폰을 선택해도
+  // 할인이 전혀 반영 안 된다"는 재보고의 근본 원인이었다. free_shipping 쿠폰의
+  // discount_value는 배송비에서 실제로 깎일 원 단위 금액이므로, 서버(sync_order_after_
+  // composition_change, Migration 510)와 동일하게 LEAST(할인값, 배송비)로 배송비를
+  // 넘지 않게 캡핑해 반영한다 — 상품금액이 아니라 배송비 한도 내에서만 할인.
+  // 2026-09-21 추가: percentage 할인은 "최대 할인 한도"(max_discount_amount)를 초과할 수
+  // 없다 — 서버(sync_order_after_composition_change, Migration 511)와 동일하게 캡핑.
+  // 0 또는 미설정은 무제한을 의미(products.md류 "0=무제한" 표기 관례와 동일).
   const otCouponDiscount = $derived(
     sdCoupons
       .filter((uc) => otSelectedCouponIds.has(uc.id) && uc.coupons !== null)
@@ -1644,10 +1707,36 @@
         const c = uc.coupons!
         const amount =
           c.discount_type === 'fixed' ? c.discount_value :
-          c.discount_type === 'percentage' ? Math.round(otSubtotal * c.discount_value / 100) :
+          c.discount_type === 'percentage' ? (() => {
+            const raw = Math.round(otSubtotal * c.discount_value / 100)
+            return c.max_discount_amount && c.max_discount_amount > 0 ? Math.min(raw, c.max_discount_amount) : raw
+          })() :
+          c.discount_type === 'free_shipping' ? Math.min(c.discount_value, otDeliveryFee) :
           0
         return sum + amount
       }, 0)
+  )
+
+  // 회원등급 할인 — 서버(Migration 510)와 동일 정책: 선택된 쿠폰 중 "중복 사용 허용"이
+  // 꺼진 쿠폰이 하나라도 있으면 회원등급 할인은 배제(고객이 직접 선택한 쿠폰 할인 우선).
+  // otMembershipDiscount는 원래 1145행 부근에 있었으나 sdCoupons/otSelectedCouponIds보다
+  // 먼저 선언돼 있어(TDZ) 참조가 불가능했음 — 이 지점(otCouponDiscount 이후)으로 이동.
+  const otSelectedCouponsAllowStacking = $derived(
+    sdCoupons
+      .filter((uc) => otSelectedCouponIds.has(uc.id) && uc.coupons !== null)
+      .every((uc) => uc.coupons!.allow_stacking === true)
+  )
+  const otMembershipDiscount = $derived(
+    otSelectedCouponsAllowStacking ? Math.round(otSubtotal * otDiscountRate / 100) : 0
+  )
+
+  // 2026-09-21 추가: 선택된 쿠폰 중 "포인트 결합 사용 허용"이 꺼진 쿠폰이 하나라도 있으면
+  // 포인트는 사용할 수 없다(서버 sync_order_after_composition_change, Migration 511과 동일
+  // 정책 — allow_stacking과 동일한 "고객이 선택한 쿠폰 우선" 원칙을 포인트에도 적용).
+  const otSelectedCouponsAllowPoints = $derived(
+    sdCoupons
+      .filter((uc) => otSelectedCouponIds.has(uc.id) && uc.coupons !== null)
+      .every((uc) => uc.coupons!.allow_with_points !== false)
   )
 
   // 할인 후 금액 (부가세 포함가 — 상품 단가 자체에 이미 VAT가 포함돼 있음)
@@ -1659,7 +1748,11 @@
 
   // 포인트 사용 최대값 (보유 포인트 & 결제 금액 중 작은 값) — otVat은 포함가 내역 표시용일
   // 뿐 별도 가산 항목이 아니므로 더하지 않음
-  const otMaxPoints = $derived(Math.min(sdUserPoints, Math.max(0, otNetBeforeVat + otDeliveryFee + otHolidayExtraFee - otCouponDiscount)))
+  const otMaxPoints = $derived(
+    otSelectedCouponsAllowPoints
+      ? Math.min(sdUserPoints, Math.max(0, otNetBeforeVat + otDeliveryFee + otHolidayExtraFee - otCouponDiscount))
+      : 0
+  )
 
   // 2026-08-19(정합성 재검수): 포인트 입력 후 쿠폰을 추가/변경하거나 상품·기간을 바꿔
   // otMaxPoints가 줄어들면(예: 쿠폰 적용으로 결제 잔액이 포인트 입력값보다 작아짐) 기존엔
@@ -1688,7 +1781,18 @@
   const otEarnPoints = $derived(Math.round(otTotal * 0.05))
 
   // 쿠폰 만료까지 남은 일수 (CouponRow "N일 뒤 소멸" 표기용)
-  function daysUntilExpiry(validUntil: string): number {
+  // relative_days 모드: first_viewed_at + valid_days 기준 계산 (first_viewed_at=null이면 0 반환)
+  function daysUntilExpiry(
+    validUntil: string,
+    validityType?: string,
+    firstViewedAt?: string | null,
+    validDays?: number | null,
+  ): number {
+    if (validityType === 'relative_days') {
+      if (!firstViewedAt || !validDays) return 0
+      const expiry = new Date(firstViewedAt).getTime() + validDays * 86400_000
+      return Math.max(0, Math.ceil((expiry - Date.now()) / 86400_000))
+    }
     if (!validUntil) return 0
     const diff = new Date(validUntil).getTime() - Date.now()
     return Math.max(0, Math.ceil(diff / 86400000))
@@ -1813,7 +1917,12 @@
 
         <!-- ── 통합 대여예약옵션 패널 (체크된 상품 1개 이상일 때만 렌더 — 모바일 전용, PC는 detail-pane) -->
         {#snippet bulkHeadButton()}
-          <button class="bulk-head" class:bulk-head-closed={!bulkOpen && !(bulkDate && bulkTime)} onclick={() => bulkOpen = !bulkOpen}>
+          <!-- 2026-09-21 — bulk-head-closed(닫힘 상태 하단 패딩 보정)는 원래 "헤더만 단독
+               노출"(아래에 아무 내용도 없음)일 때만 대칭 패딩을 주기 위한 것이었다. 이제
+               접힘 상태에는 항상 대여/반납 방법 요약 bar(.bulk-collapsed-methods)가 뒤따라
+               "헤더 단독" 케이스 자체가 더 이상 존재하지 않으므로 false로 고정 —
+               true로 남기면 헤더와 바로 아래 방법 bar 사이에 불필요한 간격이 생긴다. -->
+          <button class="bulk-head" class:bulk-head-closed={false} onclick={() => bulkOpen = !bulkOpen}>
             <span class="bulk-head-title">대여예약옵션</span>
             <svg width="11" height="7" viewBox="0 0 12 8" fill="none" aria-hidden="true" class="bulk-chevron"
                  style="transform:{bulkOpen ? 'rotate(180deg)' : 'rotate(0deg)'}">
@@ -1828,15 +1937,49 @@
               <div transition:slide={{ duration: 250 }} class="bulk-body">
                 {@render RentalOptionsEditor()}
               </div>
-            {:else if bulkDate && bulkTime}
+            {:else}
               <!-- 2026-09-03(Stephen 확정) — 아코디언이 접혀도(스크롤 자동접힘·수동접힘 모두)
                    설정된 수령/반납 값을, "대여 방법"/"반납 방법" 아코디언에 이미 쓰는 것과
                    동일한 datetime-wrap 레이아웃 그대로(임의 신규 UI 없이) 노출한다. 헤더+요약
                    바를 하나의 배경 레이아웃으로 묶고(Stephen 확정), 좌우 여백을 명시적으로
-                   확보한다(요약 바가 배경 폭에 100% 붙어보이던 결함 수정). -->
+                   확보한다(요약 바가 배경 폭에 100% 붙어보이던 결함 수정).
+                   2026-09-21(Stephen 지시) — 위 조건(bulkDate && bulkTime)이 거짓이면(아직
+                   아무 값도 선택 안 함) "대여예약옵션" 헤더만 덩그러니 보여 무엇을 설정해야
+                   하는지 직관적이지 않다는 피드백 — "대여 방법"/"반납 방법" bar UI(acc-head와
+                   동일한 컴포넌트, 값 미선택 시 acc-value-unset 톤으로 "미선택" 표시)를 추가.
+                   2026-09-21(같은 날 후속) — 처음엔 방법 bar를 무조건 상시 노출했더니, 해당
+                   leg의 날짜(시간) bar가 이미 표시되는 상태에서도 방법 bar가 함께 남아
+                   "대여 방법: 크레이지샷배송 대여"와 "2026.09.28" 날짜 bar가 동시에 노출되는
+                   중복 문제가 실사용 중 발견됨(Stephen 지적) — 요구사항 재해석: 방법 bar는
+                   "아직 그 leg의 날짜 bar가 뜨지 않는 동안"의 임시 안내용이지, 날짜 bar와
+                   나란히 상시 공존하는 게 아니다. 각 leg별로 그 leg의 날짜 bar 노출조건이
+                   참이 되는 순간 방법 bar는 사라지고 날짜 bar로 "대체"되도록 수정 — 날짜 bar
+                   자체의 노출조건(아래 {#if bulkDate && bulkTime}, 그 안의 {#if
+                   bulkReturnDate && bulkReturnTime})은 기존 그대로 전혀 손대지 않음. -->
+              {@const pickupDateBarShown = !!(bulkDate && bulkTime)}
+              {@const returnDateBarShown = pickupDateBarShown && !!(bulkReturnDate && bulkReturnTime)}
               <div class="bulk-collapsed-group">
                 {@render bulkHeadButton()}
                 <div class="bulk-collapsed-bar">
+                <!-- 2026-09-21(같은 날 3차 후속, Stephen 지적) — 이전 구조는 "방법 bar
+                     그룹"과 "날짜 bar 그룹"을 통째로 나눠 순서대로 배치해, 대여leg는 날짜
+                     bar로 대체되고 반납leg는 아직 방법 bar인 경우 "반납 방법" 미선택 bar가
+                     대여 날짜 bar보다 위에 오는 순서 역전이 생겼다(대여=선行, 반납=後行
+                     원칙 위반) — leg 단위로 [그 leg의 방법 bar 또는 날짜 bar] 하나씩을
+                     대여leg 먼저, 반납leg 나중에 순서대로 배치하도록 재구성. 각 조건
+                     (pickupDateBarShown/returnDateBarShown)과 날짜 bar 내부 마크업 자체는
+                     전혀 변경 없음 — 배치 순서만 leg 단위로 재정렬. -->
+                {#if !pickupDateBarShown}
+                <div class="bulk-collapsed-methods">
+                  <button class="acc-head" onclick={() => { bulkOpen = true; bulkOpenAcc = 'rental' }}>
+                    <span class="acc-label">대여 방법</span>
+                    <div class="acc-head-right">
+                      <span class="acc-value" class:acc-value-unset={!bulkOpts.rentalMethod}>{methodLabel(bulkOpts.rentalMethod)}</span>
+                    </div>
+                  </button>
+                </div>
+                {/if}
+                {#if pickupDateBarShown}
                 <div class="datetime-wrap acc-collapsed-summary">
                   <div class="datetime-btns">
                     <button class="datetime-btn datetime-btn-dark datetime-btn-date-selected" onclick={() => { bulkOpen = true; bulkOpenAcc = 'rental' }}>
@@ -1848,7 +1991,7 @@
                           <path d="M22.7556 9.59961C23.7375 9.59961 24.5334 10.3955 24.5334 11.3774C24.5334 12.3592 23.7375 13.1552 22.7556 13.1552L8.53339 13.1552C7.55155 13.1552 6.75561 12.3592 6.75562 11.3774C6.75562 10.3955 7.55155 9.59961 8.53339 9.59961L22.7556 9.59961Z" fill="#3B2F8A"/>
                           <path d="M7.11133 18.7162C7.1113 17.4124 7.99206 16.3555 9.07854 16.3555L14.3886 16.3555C15.475 16.3555 16.3558 17.4124 16.3558 18.7162V21.1059C16.3558 22.4097 15.475 23.4666 14.3886 23.4666H9.07862C7.99217 23.4666 7.11143 22.4097 7.11141 21.1059L7.11133 18.7162Z" fill="#3B2F8A"/>
                         </svg>
-                        <span class="datetime-btn-label">{displayDate(bulkDate)}{#if collapsedHolidayExtraDays(bulkOpts.rentalMethod, bulkDate, true) > 0}<span class="datetime-btn-holiday-badge">+휴무일 포함</span>{/if}</span>
+                        <span class="datetime-btn-label">{displayDate(bulkDate)}{#if collapsedHolidayExtraDays(bulkOpts.rentalMethod, bulkDate, true) > 0}<span class="datetime-btn-holiday-badge">+휴무일 {collapsedHolidayExtraDays(bulkOpts.rentalMethod, bulkDate, true)}일 포함</span>{/if}</span>
                       </div>
                     </button>
                     {#if !isDeliveryLocked(bulkOpts.rentalMethod) && !isCourierDependent(bulkOpts.rentalMethod)}
@@ -1867,7 +2010,18 @@
                     {/if}
                   </div>
                 </div>
-                {#if bulkReturnDate && bulkReturnTime}
+                {/if}
+                {#if !returnDateBarShown}
+                <div class="bulk-collapsed-methods">
+                  <button class="acc-head" onclick={() => { bulkOpen = true; bulkOpenAcc = 'return_' }}>
+                    <span class="acc-label">반납 방법</span>
+                    <div class="acc-head-right">
+                      <span class="acc-value" class:acc-value-unset={!bulkOpts.returnMethod}>{methodLabel(bulkOpts.returnMethod)}</span>
+                    </div>
+                  </button>
+                </div>
+                {/if}
+                {#if returnDateBarShown}
                   <div class="datetime-wrap acc-collapsed-summary">
                     <div class="datetime-btns">
                       <button class="datetime-btn datetime-btn-dark datetime-btn-date-selected" onclick={() => { bulkOpen = true; bulkOpenAcc = 'return_' }}>
@@ -1879,25 +2033,18 @@
                             <path d="M22.7556 9.59961C23.7375 9.59961 24.5334 10.3955 24.5334 11.3774C24.5334 12.3592 23.7375 13.1552 22.7556 13.1552L8.53339 13.1552C7.55155 13.1552 6.75561 12.3592 6.75562 11.3774C6.75562 10.3955 7.55155 9.59961 8.53339 9.59961L22.7556 9.59961Z" fill="#3B2F8A"/>
                             <path d="M7.11133 18.7162C7.1113 17.4124 7.99206 16.3555 9.07854 16.3555L14.3886 16.3555C15.475 16.3555 16.3558 17.4124 16.3558 18.7162V21.1059C16.3558 22.4097 15.475 23.4666 14.3886 23.4666H9.07862C7.99217 23.4666 7.11143 22.4097 7.11141 21.1059L7.11133 18.7162Z" fill="#3B2F8A"/>
                           </svg>
-                          <span class="datetime-btn-label">{displayDate(bulkReturnDate)}{#if collapsedHolidayExtraDays(bulkOpts.returnMethod, bulkReturnDate, false) > 0}<span class="datetime-btn-holiday-badge">+휴무일 포함</span>{/if}</span>
+                          <span class="datetime-btn-label">{displayDate(bulkReturnDate)}{#if collapsedHolidayExtraDays(bulkOpts.returnMethod, bulkReturnDate, false) > 0}<span class="datetime-btn-holiday-badge">+휴무일 {collapsedHolidayExtraDays(bulkOpts.returnMethod, bulkReturnDate, false)}일 포함</span>{/if}</span>
                         </div>
                       </button>
-                      <!-- 2026-09-16(Stephen 지시) — 열린 상태(RentalForm)와 동일한 3분기
-                           정책을 접힌 요약 바에도 적용: ① 수령이 배송(is_delivery_type)이면
-                           반납 시간은 의미 없어 24:00 고정(비활성) 표시만, ② 반납 자체가
-                           배송·택배의존이 아니면 정상 인터랙티브 버튼, ③ 그 외(반납이 배송
-                           또는 택배의존)는 시간 UI 자체를 숨김(원본 정책 그대로, 위 RentalForm
-                           returnTimeForcedByDelivery 주석 참고). -->
-                      {#if !isDeliveryLocked(bulkOpts.returnMethod) && !isCourierDependent(bulkOpts.returnMethod) && isDeliveryTypeMethod(bulkOpts.rentalMethod)}
-                        <div class="datetime-btn datetime-btn-mid datetime-btn-time-selected datetime-btn-fixed" aria-disabled="true" title="수령이 배송 방식이면 반납일 전체가 대여일로 청구되어 시간 선택이 필요하지 않습니다.">
-                          <div class="datetime-btn-left">
-                            <svg width="23" height="23" viewBox="0 0 22.5 22.5" fill="none">
-                              <path d="M11.25 0C13.69 0 15.95 0.78 17.8 2.1L19 0.5C19.41 -0.05 20.2 -0.16 20.75 0.25C21.3 0.66 21.41 1.45 21 2L19.66 3.78C21.43 5.77 22.5 8.38 22.5 11.25C22.5 17.46 17.46 22.5 11.25 22.5C5.04 22.5 0 17.46 0 11.25C0 8.33 1.11 5.68 2.93 3.68L1.55 2.06C1.1 1.54 1.16 0.75 1.69 0.3C2.21 -0.15 3 -0.09 3.45 0.44L4.81 2.03C6.63 0.75 8.85 0 11.25 0ZM11 5C10.31 5 9.75 5.56 9.75 6.25V12.17C9.75 12.64 10.01 13.07 10.42 13.28L14.42 15.36C15.04 15.68 15.79 15.44 16.11 14.83C16.43 14.21 16.19 13.46 15.58 13.14L12.25 11.41V6.25C12.25 5.56 11.69 5 11 5Z" fill="var(--cs-white)"/>
-                            </svg>
-                            <span class="datetime-btn-label">24:00</span>
-                          </div>
-                        </div>
-                      {:else if !isDeliveryLocked(bulkOpts.returnMethod) && !isCourierDependent(bulkOpts.returnMethod)}
+                      <!-- 2026-09-16(Stephen 지시) — 열린 상태(RentalForm)와 동일한 정책을
+                           접힌 요약 바에도 적용: 반납 자체가 배송·택배의존이 아니면 정상
+                           인터랙티브 버튼, 그 외(반납이 배송 또는 택배의존)는 시간 UI 자체를
+                           숨김.
+                           2026-09-21(Stephen 재지시) — "수령이 배송이면 반납 시간 24:00 고정"
+                           분기를 폐기(위 RentalForm과 동일 이유 — 요금은 그대로 1day 강제청구
+                           유지, UI 잠금만 해제). 이제 반납 leg 자신의 locked/courierRestricted
+                           여부만으로 판정. -->
+                      {#if !isDeliveryLocked(bulkOpts.returnMethod) && !isCourierDependent(bulkOpts.returnMethod)}
                         <button class="datetime-btn datetime-btn-mid datetime-btn-time-selected" onclick={() => { bulkOpen = true; bulkOpenAcc = 'return_' }}>
                           <div class="datetime-btn-left">
                             <svg width="23" height="23" viewBox="0 0 22.5 22.5" fill="none">
@@ -1912,8 +2059,6 @@
                 {/if}
                 </div>
               </div>
-            {:else}
-              {@render bulkHeadButton()}
             {/if}
           </div>
         {/if}
@@ -1932,10 +2077,15 @@
                use_points)은 여전히 3단계(/contract/[token], pay-mock)에서만 일어나고, 여기서
                고른 값은 체크아웃 제출 시 orders.selected_coupon_id/selected_points(Migration
                340)로 저장돼 계약서명 페이지 진입 시 자동으로 미리 선택된다. -->
-          {#if sdCoupons.length > 0}
-            <div class="coupon-section">
-              <span class="section-sub-label">사용 가능한 쿠폰</span>
-              {#each sdCoupons.filter(uc => uc.coupons !== null) as uc (uc.id)}
+          <!-- 2026-09-21(Stephen 지시) — 사용 가능한 쿠폰이 0개일 때 섹션 전체를 숨기던
+               기존 동작을 폐기. "쿠폰 자체가 없는 건지, 화면에 문제가 있어 안 보이는 건지"를
+               고객이 구분할 수 없다는 지적 — 이제 항상 "사용 가능한 쿠폰" 헤더는 노출하고,
+               목록이 비어있을 때만 안내 문구(.coupon-empty, .delivery-combo-empty와 동일
+               스타일 패턴 재사용)로 대체한다. -->
+          <div class="coupon-section">
+            <span class="section-sub-label">사용 가능한 쿠폰</span>
+            {#if eligibleCoupons.length > 0}
+              {#each eligibleCoupons as uc (uc.id)}
                 {@const c = uc.coupons!}
                 {@const couponLabel = c.display_name ?? (
                   c.discount_type === 'fixed' ? `${c.discount_value.toLocaleString('ko-KR')}원 할인` :
@@ -1945,7 +2095,7 @@
                 {@const isBlocked = otBlockedCouponIds.has(uc.id)}
                 {@render CouponRow({
                   label: couponLabel,
-                  days: daysUntilExpiry(c.valid_until),
+                  days: daysUntilExpiry(c.valid_until, c.validity_type, uc.first_viewed_at, c.valid_days),
                   note: isBlocked ? '배송 우대설정 적용 중 — 중복 적용 불가' : undefined,
                   checked: otSelectedCouponIds.has(uc.id),
                   disabled: !pricingReady || isBlocked,
@@ -1956,11 +2106,13 @@
                   },
                 })}
               {/each}
-            </div>
-          {/if}
+            {:else}
+              <p class="coupon-empty">할인 가능한 쿠폰이 없어요</p>
+            {/if}
+          </div>
 
           <div class="points-select-section">
-            <span class="section-sub-label">포인트 사용 (보유 {fmtKrw(sdUserPoints)}p)</span>
+            <span class="section-sub-label">포인트 사용 (보유 <span class="points-balance-num">{fmtKrw(sdUserPoints)}</span>p)</span>
             <div class="points-input-row">
               <input
                 type="number"
@@ -2053,7 +2205,7 @@
           <div class="total-dark-row total-points-row">
             <span class="total-points-label">적립 예정 포인트</span>
             <div class="total-points-val">
-              <span>{fmtKrw(pricingReady ? otEarnPoints : 0)}</span>
+              <span class="total-points-num">{fmtKrw(pricingReady ? otEarnPoints : 0)}</span>
               <span>p</span>
             </div>
           </div>
@@ -2713,7 +2865,7 @@
                   <path d="M22.7556 9.59961C23.7375 9.59961 24.5334 10.3955 24.5334 11.3774C24.5334 12.3592 23.7375 13.1552 22.7556 13.1552L8.53339 13.1552C7.55155 13.1552 6.75561 12.3592 6.75562 11.3774C6.75562 10.3955 7.55155 9.59961 8.53339 9.59961L22.7556 9.59961Z" fill="#3B2F8A"/>
                   <path d="M7.11133 18.7162C7.1113 17.4124 7.99206 16.3555 9.07854 16.3555L14.3886 16.3555C15.475 16.3555 16.3558 17.4124 16.3558 18.7162V21.1059C16.3558 22.4097 15.475 23.4666 14.3886 23.4666H9.07862C7.99217 23.4666 7.11143 22.4097 7.11141 21.1059L7.11133 18.7162Z" fill="#3B2F8A"/>
                 </svg>
-                <span class="datetime-btn-label">{displayDate(bulkDate)}{#if collapsedHolidayExtraDays(bulkOpts.rentalMethod, bulkDate, true) > 0}<span class="datetime-btn-holiday-badge">+휴무일 포함</span>{/if}</span>
+                <span class="datetime-btn-label">{displayDate(bulkDate)}{#if collapsedHolidayExtraDays(bulkOpts.rentalMethod, bulkDate, true) > 0}<span class="datetime-btn-holiday-badge">+휴무일 {collapsedHolidayExtraDays(bulkOpts.rentalMethod, bulkDate, true)}일 포함</span>{/if}</span>
               </div>
             </button>
             {#if !isDeliveryLocked(bulkOpts.rentalMethod) && !isCourierDependent(bulkOpts.rentalMethod)}
@@ -2761,21 +2913,15 @@
                   <path d="M22.7556 9.59961C23.7375 9.59961 24.5334 10.3955 24.5334 11.3774C24.5334 12.3592 23.7375 13.1552 22.7556 13.1552L8.53339 13.1552C7.55155 13.1552 6.75561 12.3592 6.75562 11.3774C6.75562 10.3955 7.55155 9.59961 8.53339 9.59961L22.7556 9.59961Z" fill="#3B2F8A"/>
                   <path d="M7.11133 18.7162C7.1113 17.4124 7.99206 16.3555 9.07854 16.3555L14.3886 16.3555C15.475 16.3555 16.3558 17.4124 16.3558 18.7162V21.1059C16.3558 22.4097 15.475 23.4666 14.3886 23.4666H9.07862C7.99217 23.4666 7.11143 22.4097 7.11141 21.1059L7.11133 18.7162Z" fill="#3B2F8A"/>
                 </svg>
-                <span class="datetime-btn-label">{displayDate(bulkReturnDate)}{#if collapsedHolidayExtraDays(bulkOpts.returnMethod, bulkReturnDate, false) > 0}<span class="datetime-btn-holiday-badge">+휴무일 포함</span>{/if}</span>
+                <span class="datetime-btn-label">{displayDate(bulkReturnDate)}{#if collapsedHolidayExtraDays(bulkOpts.returnMethod, bulkReturnDate, false) > 0}<span class="datetime-btn-holiday-badge">+휴무일 {collapsedHolidayExtraDays(bulkOpts.returnMethod, bulkReturnDate, false)}일 포함</span>{/if}</span>
               </div>
             </button>
-            <!-- 2026-09-16(Stephen 지시) — 열린 상태(RentalForm)와 동일한 3분기 정책을
-                 접힌 요약 바에도 적용(위 bulk-collapsed-group 반납 시간 블록과 동일 로직). -->
-            {#if !isDeliveryLocked(bulkOpts.returnMethod) && !isCourierDependent(bulkOpts.returnMethod) && isDeliveryTypeMethod(bulkOpts.rentalMethod)}
-              <div class="datetime-btn datetime-btn-mid datetime-btn-time-selected datetime-btn-fixed" aria-disabled="true" title="수령이 배송 방식이면 반납일 전체가 대여일로 청구되어 시간 선택이 필요하지 않습니다.">
-                <div class="datetime-btn-left">
-                  <svg width="23" height="23" viewBox="0 0 22.5 22.5" fill="none">
-                    <path d="M11.25 0C13.69 0 15.95 0.78 17.8 2.1L19 0.5C19.41 -0.05 20.2 -0.16 20.75 0.25C21.3 0.66 21.41 1.45 21 2L19.66 3.78C21.43 5.77 22.5 8.38 22.5 11.25C22.5 17.46 17.46 22.5 11.25 22.5C5.04 22.5 0 17.46 0 11.25C0 8.33 1.11 5.68 2.93 3.68L1.55 2.06C1.1 1.54 1.16 0.75 1.69 0.3C2.21 -0.15 3 -0.09 3.45 0.44L4.81 2.03C6.63 0.75 8.85 0 11.25 0ZM11 5C10.31 5 9.75 5.56 9.75 6.25V12.17C9.75 12.64 10.01 13.07 10.42 13.28L14.42 15.36C15.04 15.68 15.79 15.44 16.11 14.83C16.43 14.21 16.19 13.46 15.58 13.14L12.25 11.41V6.25C12.25 5.56 11.69 5 11 5Z" fill="var(--cs-white)"/>
-                  </svg>
-                  <span class="datetime-btn-label">24:00</span>
-                </div>
-              </div>
-            {:else if !isDeliveryLocked(bulkOpts.returnMethod) && !isCourierDependent(bulkOpts.returnMethod)}
+            <!-- 2026-09-16(Stephen 지시) — 열린 상태(RentalForm)와 동일한 정책을 접힌 요약
+                 바에도 적용(위 bulk-collapsed-group 반납 시간 블록과 동일 로직).
+                 2026-09-21(Stephen 재지시) — "수령이 배송이면 반납 시간 24:00 고정" 분기
+                 폐기(위 두 블록과 동일 이유). 반납 leg 자신의 locked/courierRestricted
+                 여부만으로 판정. -->
+            {#if !isDeliveryLocked(bulkOpts.returnMethod) && !isCourierDependent(bulkOpts.returnMethod)}
               <button class="datetime-btn datetime-btn-mid datetime-btn-time-selected" onclick={() => bulkOpenAcc = 'return_'}>
                 <div class="datetime-btn-left">
                   <svg width="23" height="23" viewBox="0 0 22.5 22.5" fill="none">
@@ -2850,7 +2996,6 @@
        원래 의도한 좁은 경우로 범위를 좁힘 — 반납 자체가 courierRestricted면 아래
        {:else if !locked && !courierRestricted} 분기도 거짓이 되어 자연히 완전히
        숨겨진다(별도 else 없음). -->
-  {@const returnTimeForcedByDelivery = props.type === 'return' && !locked && !courierRestricted && isDeliveryTypeMethod(bulkOpts.rentalMethod)}
   <!-- 대여 제한옵션 "반납 배송선택 제한"(CMS) leg-aware 반영(2026-09-01 최초, 2026-09-04
        판정기준을 is_delivery_type으로 분리·교체) — 수령(rental) leg은 이 토글과 무관하게
        항상 전체 목록, 반납(return) leg만 수령이 배송(is_delivery_type)이 아닐 때
@@ -2962,34 +3107,24 @@
                 </svg>
                 <span class="datetime-btn-label">
                   {props.selectedDate ? displayDate(props.selectedDate) : dateLabel}
-                  {#if holidayExtraDays > 0}<span class="datetime-btn-holiday-badge">+휴무일 포함</span>{/if}
+                  {#if holidayExtraDays > 0}<span class="datetime-btn-holiday-badge">+휴무일 {holidayExtraDays}일 포함</span>{/if}
                 </span>
               </div>
             </button>
-            {#if returnTimeForcedByDelivery}
-              <!-- 2026-09-08(Stephen 확정) — 수령이 배송(is_delivery_type)이면 반납일 전체가
-                   하루로 청구되므로(rental-fee-policy.md §1 ②) 반납 시간 선택은 의미가 없다.
-                   해당 leg만 시간선택을 잠그고 24:00 고정 표시(클릭 불가). -->
-              <div
-                class="datetime-btn datetime-btn-mid datetime-btn-time-selected datetime-btn-fixed"
-                aria-disabled="true"
-                title="수령이 배송 방식이면 반납일 전체가 대여일로 청구되어 시간 선택이 필요하지 않습니다."
-              >
-                <div class="datetime-btn-left">
-                  <svg width="23" height="23" viewBox="0 0 22.5 22.5" fill="none">
-                    <path d="M11.25 0C13.69 0 15.95 0.78 17.8 2.1L19 0.5C19.41 -0.05 20.2 -0.16 20.75 0.25C21.3 0.66 21.41 1.45 21 2L19.66 3.78C21.43 5.77 22.5 8.38 22.5 11.25C22.5 17.46 17.46 22.5 11.25 22.5C5.04 22.5 0 17.46 0 11.25C0 8.33 1.11 5.68 2.93 3.68L1.55 2.06C1.1 1.54 1.16 0.75 1.69 0.3C2.21 -0.15 3 -0.09 3.45 0.44L4.81 2.03C6.63 0.75 8.85 0 11.25 0ZM11 5C10.31 5 9.75 5.56 9.75 6.25V12.17C9.75 12.64 10.01 13.07 10.42 13.28L14.42 15.36C15.04 15.68 15.79 15.44 16.11 14.83C16.43 14.21 16.19 13.46 15.58 13.14L12.25 11.41V6.25C12.25 5.56 11.69 5 11 5Z" fill="var(--cs-white)"/>
-                  </svg>
-                  <span class="datetime-btn-label">24:00</span>
-                </div>
-              </div>
-            {:else if !locked && !courierRestricted}
+            {#if !locked && !courierRestricted}
               <!-- 2026-09-07 재확정(Stephen): 배송(locked)·택배의존(courierRestricted,
                    예: 크레이지샷배송) 방식은 시간선택 UI 자체를 숨기는 것이 의도된 정책이다
                    — 한때 이 courierRestricted 조건을 제거했으나(datesSet이 시간을 필수로
                    요구해 제출이 영구 불가능해지는 것으로 오인) Stephen이 명시적으로 정정:
                    UI는 원래대로 복원하고, 대신 datesSet 쪽에서 이 방식일 때 시간을 필수
                    항목에서 제외하도록 수정했다(datesSet 정의부 주석 참고) — 여기는 절대
-                   다시 건드리지 말 것. -->
+                   다시 건드리지 말 것.
+                   2026-09-21(Stephen 재지시) — "수령이 배송이면 반납 시간을 24:00으로 잠금"
+                   정책(구 returnTimeForcedByDelivery 분기, 2026-09-08 도입)을 폐기. 요금
+                   계산(1day 강제청구, rental-fee-policy.md §1 ②)은 시각을 그대로 무시하고
+                   그대로 유지되지만, 고객이 방문 반납 시간을 직접 정해 움직이는 옵션 자체를
+                   막을 이유는 없다는 판단 — 반납 시간 UI는 이제 반납 leg 자신의 locked/
+                   courierRestricted(반납 자체가 배송·택배의존인지)만으로 판정한다. -->
               <button class="datetime-btn datetime-btn-mid" class:datetime-btn-time-selected={!!props.selectedTime} onclick={() => {
                 if (!props.method) { csToast.error('수령(반납) 형태를 선택해주세요.'); return }
                 openTime(props.timeId)
@@ -3065,69 +3200,15 @@
             >{sd.holidayGuideText}</p>
           {/if}
 
-          <!-- 시간 선택 레이어 — 오전/오후 구획 세로 리스트(2026-08-17 가독성 개선:
-               6열 그리드+12px 텍스트가 터치타겟 44px 미만·가독성 저하 지적돼 교체) -->
+          <!-- 시간 선택 레이어(2026-09-21 — 내부 리스트를 TimePickerGrid.svelte 공통
+               컴포넌트로 이관, CalendarGrid/.cal-layer와 동일하게 포지셔닝 래퍼만 호출측에
+               유지) -->
           {#if isTimeOpen && !locked}
             <div class="time-layer" transition:slide={{ duration: 200 }}>
-              <div class="time-list">
-                <div class="time-section">
-                  <span class="time-section-label">오전</span>
-                  {#each TIME_AM_HOURS as h}
-                    <!-- 2026-09-10(Stephen 확정) — 정시(00분) 버튼 옆에 30분 버튼을 나란히
-                         배치. 시간(행) 개수·순서·오전/오후 구획 등 기존 구조는 그대로 두고,
-                         한 행 안에서만 좌우로 늘렸다(.time-row-pair, 아래 CSS 참고). -->
-                    {@const t00 = fmtTime(h)}
-                    {@const t30 = fmtTime(h, 30)}
-                    {@const isSel00 = props.selectedTime === t00}
-                    {@const isSel30 = props.selectedTime === t30}
-                    {@const isLocker00 = isLockerHour(t00)}
-                    {@const isLocker30 = isLockerHour(t30)}
-                    <div class="time-row-pair">
-                      <button
-                        class="time-row"
-                        class:time-row-locker={isLocker00}
-                        class:time-row-sel={isSel00 && !isLocker00}
-                        class:time-row-locker-sel={isSel00 && isLocker00}
-                        onclick={() => { props.onTimeChange(t00); openTimeId = null; }}
-                      >{t00}</button>
-                      <button
-                        class="time-row"
-                        class:time-row-locker={isLocker30}
-                        class:time-row-sel={isSel30 && !isLocker30}
-                        class:time-row-locker-sel={isSel30 && isLocker30}
-                        onclick={() => { props.onTimeChange(t30); openTimeId = null; }}
-                      >{t30}</button>
-                    </div>
-                  {/each}
-                </div>
-                <div class="time-section">
-                  <span class="time-section-label">오후</span>
-                  {#each TIME_PM_HOURS as h}
-                    {@const t00 = fmtTime(h)}
-                    {@const t30 = fmtTime(h, 30)}
-                    {@const isSel00 = props.selectedTime === t00}
-                    {@const isSel30 = props.selectedTime === t30}
-                    {@const isLocker00 = isLockerHour(t00)}
-                    {@const isLocker30 = isLockerHour(t30)}
-                    <div class="time-row-pair">
-                      <button
-                        class="time-row"
-                        class:time-row-locker={isLocker00}
-                        class:time-row-sel={isSel00 && !isLocker00}
-                        class:time-row-locker-sel={isSel00 && isLocker00}
-                        onclick={() => { props.onTimeChange(t00); openTimeId = null; }}
-                      >{t00}</button>
-                      <button
-                        class="time-row"
-                        class:time-row-locker={isLocker30}
-                        class:time-row-sel={isSel30 && !isLocker30}
-                        class:time-row-locker-sel={isSel30 && isLocker30}
-                        onclick={() => { props.onTimeChange(t30); openTimeId = null; }}
-                      >{t30}</button>
-                    </div>
-                  {/each}
-                </div>
-              </div>
+              <TimePickerGrid
+                value={props.selectedTime}
+                onselect={(t) => { props.onTimeChange(t); openTimeId = null; }}
+              />
             </div>
           {/if}
         </div>
@@ -3369,6 +3450,18 @@
     flex-wrap: nowrap;
     box-sizing: border-box;
   }
+  /* 2026-09-21(Stephen 지시) — PC 전용 서브 GNB(sub-gnb_navi_b) 표준 규격 축소 3종.
+     이 컴포넌트는 PC 전용(모바일 display:none)이라 §23의 "모바일 대비 한 단계" 비교
+     대상이 없어, 기존 PC 유일값 자체를 한 단계씩 낮췄다.
+     ① 배경 박스(.sub-gnb-b-pill) 상하 패딩 30% 축소(20px→14px) + min-height도 비례
+        축소(62px→43px, 패딩만 줄이고 min-height를 그대로 두면 높이가 실제로 안 줄어듦)
+     ② 화살표 아이콘(.sub-gnb-b-arrow) 50% 축소(22×18 → 11×9)
+     ③ "Back" 라벨(.sub-gnb-b-back) 한 단계 축소(16px→14px, --text-pc-title-16 →
+        --text-pc-body-14) / "Order items" 타이틀(.sub-gnb-b-title) 한 단계 축소
+        (20px→18px) — 20px짜리 영문메뉴 서체(--font-en-display) 전용 하위 토큰이 없어
+        font-size만 개별 override, family는 기존 shorthand가 이미 지정한 값 그대로 유지.
+     이 페이지(cart)와 payment/success/dev 페이지 둘 다 동일 인라인 패턴을 공유하므로
+     ("페이지 인라인" 컴포넌트, 공유 .svelte 파일 아님) 양쪽에 동일하게 반영. */
   .sub-gnb-b-pill {
     background: rgba(225, 222, 243, 0.4);
     border: none;
@@ -3377,12 +3470,12 @@
     align-items: center;
     justify-content: space-between;
     gap: 16px;
-    padding: 20px 40px;
+    padding: 14px 40px;
     border-radius: 25px;
     width: 100%;
     max-width: none;
     min-width: 0;
-    min-height: 62px;
+    min-height: 43px;
     flex: 1 1 auto;
     box-sizing: border-box;
     color: var(--cs-text);
@@ -3396,17 +3489,18 @@
     min-width: 0;
   }
   .sub-gnb-b-arrow {
-    width: 22px;
-    height: 18px;
+    width: 11px;
+    height: 9px;
     flex-shrink: 0;
   }
   .sub-gnb-b-back {
-    font: var(--text-pc-title-16);
+    font: var(--text-pc-body-14);
     color: var(--cs-text);
     white-space: nowrap;
   }
   .sub-gnb-b-title {
     font: var(--text-pc-menu-en-20);
+    font-size: 18px;
     color: var(--cs-text);
     flex-shrink: 0;
     white-space: nowrap;
@@ -3526,8 +3620,11 @@
        28px 기준 하단 끝이 정확히 콘텐츠 시작선(padding-top 48px)에 닿아 여전히
        겹치지 않음) */
     top: 20px;
-    left: 12px;
-    right: 12px;
+    /* 2026-09-21(Stephen 지시) — PC 전용 카드 상단바(모바일 OrderCard의 .card-top-row와
+       완전히 별개 컴포넌트라 이 규칙 자체가 이미 PC 전용) 좌우 여백 10px 추가 확대
+       (12px → 22px). */
+    left: 22px;
+    right: 22px;
     z-index: 1;
     display: flex;
     align-items: center;
@@ -3905,12 +4002,16 @@
   }
   .opt-qty-arrow:hover:not(:disabled) { background: rgba(0,0,0,0.06); }
   .opt-qty-arrow:disabled { opacity: 0.35; cursor: not-allowed; }
+  /* 2026-09-21(Stephen 지시) — 수량 숫자 전용 서체(D-DIN Exp, 500) 적용 + 폰트 크기를
+     본상품 수량 숫자(.qty-num--optstyle, 13px)와 동일하게 통일(기존 10px에서 확대).
+     패딩·최소폭 등 레이아웃 값은 요청 범위 밖이라 변경하지 않음. */
   .opt-qty-num {
     background: var(--cs-white, #fff);
     border-radius: 10px;
     padding: 7px 5px;
-    font-size: 10px;
-    font-weight: 700;
+    font-size: 13px;
+    font-weight: 500;
+    font-family: var(--font-en-d-din);
     color: var(--cs-text, #100B32);
     letter-spacing: -0.5px;
     line-height: 2;
@@ -4044,12 +4145,18 @@
   }
   .qty-arrow--optstyle:hover:not(:disabled) { background: rgba(0,0,0,0.06); }
   .qty-arrow--optstyle:disabled { opacity: 0.35; cursor: not-allowed; }
+  /* 2026-09-21(Stephen 지시) — 수량 숫자 전용 서체(D-DIN Exp, 500) 적용. 기존
+     font-weight:700 → 500로 함께 조정(요청값 그대로). 이 클래스는 PC ItemListCard
+     축소판(.qty-wrap--sm .qty-num--optstyle, font-size만 10px로 별도 오버라이드)과도
+     공유되므로 서체·굵기 변경이 그쪽에도 동일하게 반영됨(동일한 "수량 숫자" UI이므로 의도된
+     적용). */
   .qty-num--optstyle {
     background: var(--cs-white, #fff);
     border-radius: 13px;
     padding: 9px 7px;
     font-size: 13px;
-    font-weight: 700;
+    font-weight: 500;
+    font-family: var(--font-en-d-din);
     color: var(--cs-text, #100B32);
     letter-spacing: -0.5px;
     line-height: 2;
@@ -4114,12 +4221,21 @@
        아코디언 높이를 넘어서는 부분에서 배경까지 잘려 보이는 문제가 있었음. */
   }
   .rotate-180 { transform: rotate(180deg); }
-  /* 대여 방법 아코디언이 닫혔을 때의 수령일·시간 요약(2026-09-03) — acc-head(padding 30px)와
-     좌우 정렬을 맞추고, 열림 상태의 acc-body(padding-top:30px)와 유사한 간격을 준다.
+  /* 대여 방법 아코디언이 닫혔을 때의 수령일·시간 요약(2026-09-03) — 열림 상태의
+     acc-body(padding-top:30px)와 유사한 간격을 준다.
      ⚠️ 반드시 .datetime-wrap과 결합한 선택자로 유지할 것 — 단일 클래스(.acc-collapsed-summary)만
      쓰면 뒤에 정의된 기존 .datetime-wrap{padding:30px 0} 규칙과 동일 우선순위(0,1,0)라
-     소스 순서상 그 규칙에 좌우 패딩이 덮여 사라지는 결함이 있었다(2026-09-03 발견·수정). */
-  .datetime-wrap.acc-collapsed-summary { padding: 0 30px 20px; }
+     소스 순서상 그 규칙에 좌우 패딩이 덮여 사라지는 결함이 있었다(2026-09-03 발견·수정).
+     2026-09-21(Stephen 지적, 후속 수정) — 좌우 패딩을 원래 30px(.acc-head 자체 내장
+     패딩과 맞추려던 값)에서 20px로 축소. 이 규칙이 실제로 적용되는 두 지점(.bulk-
+     collapsed-bar 직계 자식인 수령/반납 날짜 요약 — line ~1864/1895)이 형제 요소인
+     .bulk-collapsed-methods(대여/반납 방법 bar, 좌우 20px)와 나란히 배치되는데, 서로
+     다른 좌우 패딩(30px vs 20px) 때문에 같은 카드 안에서 두 bar UI의 가로폭이 20px씩
+     차이 나 보이는 결함이 실사용 중 발견됨 — 형제와 동일한 20px로 통일. ⚠️ 이 규칙은
+     `.acc-item > .datetime-wrap.acc-collapsed-summary`(더 높은 특이도, 아래 별도
+     규칙 — 열림 상태에서 개별 "대여 방법" 아코디언 자체가 접혔을 때의 요약, 좌우 0px)에는
+     영향 없음 — 그 경우는 별도 규칙이 항상 우선 적용됨. */
+  .datetime-wrap.acc-collapsed-summary { padding: 0 20px 20px; }
   /* Stephen 확인(2026-09-03) — "대여 방법" 아코디언이 열린 상태의 .datetime-wrap(패딩 없음,
      .form-section-body 폭 그대로 꽉 채움)과 "대여 방법" 아코디언이 닫혔을 때 같은 위치에
      나오는 위 .acc-collapsed-summary(좌우 30px)의 가로폭이 서로 달라 보이는 결함 — .acc-item의
@@ -4295,18 +4411,24 @@
   .delivery-combo {
     display: flex;
     flex-wrap: wrap;
-    /* 2026-09-16(Stephen 지적) — justify-content 기본값(flex-start)이라 방문대여·배송 등
-       콤보 버튼들이 왼쪽에 몰려 오른쪽에 빈 공간이 남았는데, 바로 아래 .delivery-deadline
-       ("15:00 마감")은 width:100%+text-align:center로 항상 가운데 정렬돼 있어 두 UI의
-       수평 정렬 기준이 서로 달라 보였다 — 버튼 행도 가운데 정렬로 맞춤. */
-    justify-content: center;
+    /* 2026-09-21(Stephen 지시, PC·모바일 공통 재확정) — 2026-09-16에는
+       .delivery-deadline("15:00 마감", width:100%+text-align:center)과 정렬 기준을
+       맞추기 위해 center로 바꿨었으나, 이번에 다시 좌측 정렬(flex-start, 기본값)로
+       명시 확정 — .delivery-deadline은 이번 지시 범위 밖이라 그대로 두었고(계속 가운데
+       정렬), 두 요소의 정렬 기준이 다시 달라 보일 수 있음을 참고로 남겨둠. 이 파일에
+       PC/모바일 분기 미디어쿼리가 없어 이 규칙 하나로 양쪽 다 적용됨. */
+    justify-content: flex-start;
     gap: 6px;
   }
   .combo-btn {
     display: flex;
     align-items: center;
     gap: 6px;
-    padding: 9px 16px;
+    /* 2026-09-21(Stephen 지시) — 상하 패딩 20% 축소(9px → 7.2px), 같은 날 재지시로
+       두 차례 더 20%씩 누적 축소(7.2px → 5.76px → 4.608px, 총 3회 누적). 좌우 패딩은
+       변경 없음. 수령방식/반납방식 두 콤보 모두 이 단일 클래스를 공유하므로(DeliveryCombo
+       스니펫, props.method만 다르게 2회 렌더) 이 한 곳만 고치면 양쪽 다 반영됨. */
+    padding: 4.608px 16px;
     border-radius: var(--radius-xl, 30px);
     border: none;
     background: var(--cs-lilac, #ECEBF4);
@@ -4341,9 +4463,15 @@
   }
   .combo-btn-active .combo-label { color: #fff; }
   /* 2026-08-25: PC반응형 전용 — 대여방법 콤보가 중요 선택영역인데 작아 보인다는 피드백으로
-     폰트 한 단계 확대(13px → --text-pc-body-14) + 패딩 30% 확대(9px 16px → 11.7px 20.8px) */
+     폰트 한 단계 확대(13px → --text-pc-body-14) + 패딩 30% 확대(9px 16px → 11.7px 20.8px)
+     2026-09-21(같은 날 후속, Stephen 지시) — PC 폰트를 한 단계(14px→12px) 축소했다가,
+     같은 날 재지시로 다시 한 단계 확대(12px→14px)해 --text-pc-body-14 토큰으로 재적용
+     — 결과적으로 8-25 확정값으로 복귀(weight 700은 토큰 자체 값과 일치, 별도 고정 불필요). */
   @media (min-width: 641px) {
-    .combo-btn { padding: 11.7px 20.8px; }
+    /* 2026-09-21(Stephen 지시) — 상하 패딩 20% 축소(11.7px → 9.36px), 같은 날 재지시로
+       두 차례 더 20%씩 누적 축소(9.36px → 7.488px → 5.9904px, 총 3회 누적). 좌우 패딩은
+       변경 없음. */
+    .combo-btn { padding: 5.9904px 20.8px; }
     .combo-label { font: var(--text-pc-body-14); }
   }
   .delivery-deadline {
@@ -4395,11 +4523,21 @@
     transition: filter 0.2s;
   }
   .datetime-btn:hover { filter: brightness(1.1); }
-  /* 2026-09-08 — 수령=배송 시 반납 시간이 24:00으로 고정 표시되는 비인터랙티브 버튼(div) */
-  .datetime-btn-fixed { cursor: default; }
-  .datetime-btn-fixed:hover { filter: none; }
-  .datetime-btn-dark { background: var(--cs-text-dark); }
-  .datetime-btn-mid { background: var(--cs-text-mid); }
+  /* 2026-09-08 도입 — 2026-09-21 폐기: "수령=배송 시 반납 시간 24:00 고정" 정책이 없어져
+     이 비인터랙티브 버튼 변형(.datetime-btn-fixed)을 쓰는 곳이 더 이상 없다(사용처 3곳
+     전부 위 returnTimeForcedByDelivery 폐기와 함께 제거됨) — 죽은 셀렉터라 삭제. */
+  /* 2026-09-21(Stephen 지시) — 날짜/시간 버튼 가로폭 점유 비율 조정: 기존 .datetime-btn의
+     flex:1(50:50 균등분할)을 이 두 클래스에서 각각 재정의. 최초 65:35(날짜 +30%, 시간
+     -30%)로 적용했으나, 이번엔 반대로 시간 라벨이 말줄임(…) 처리되는 것으로 확인돼
+     60:40으로 재조정(같은 날 후속 지시) — 날짜·시간 둘 다 최대한 온전히 노출되는 지점으로
+     보정. flex-basis는 기존과 동일하게 0%로 유지(내용물 길이와 무관하게 비율만으로 분할).
+     이 클래스 쌍은 대여/반납 콤보 열린 상태(RentalForm 자체 datetime-wrap)와 접힘 요약
+     bar(.acc-collapsed-summary·.bulk-collapsed-bar) 전부가 공유하므로 이 한 곳만 고치면
+     모든 위치에 동일하게 반영된다. PC·모바일 모두 이 값 하나를 공통으로 쓰고 있어(치수
+     차이는 .datetime-btn의 padding @media 오버라이드에서만 처리) 별도 반응형 분기 없이
+     양쪽에 동일하게 적용됨. */
+  .datetime-btn-dark { background: var(--cs-text-dark); flex: 1.2 1 0%; }
+  .datetime-btn-mid { background: var(--cs-text-mid); flex: 0.8 1 0%; }
   /* 날짜/시간 선택 즉시 배경 전환(2026-09-03, Stephen 확정) — purple-80/60 토큰 */
   .datetime-btn-date-selected { background: var(--cs-purple); }
   .datetime-btn-time-selected { background: var(--cs-purple-light); }
@@ -4410,14 +4548,80 @@
     min-width: 0; /* 위 .datetime-btn과 동일 이유 — 부모가 줄어들 때 함께 줄어들 수 있어야 함 */
   }
   .datetime-btn-left svg { flex-shrink: 0; } /* 아이콘은 항상 원래 크기 유지, 줄어드는 건 텍스트만 */
+  /* 2026-09-21(Stephen 지시) — 날짜/시간 숫자(년월일·시분)에 CalendarGrid와 동일한
+     --font-en-display 서체 적용. PC·모바일 둘 다 이미 --text-m-title-18B(18px)로 같은
+     크기를 쓰고 있어(모바일 전용 오버라이드는 아래 @media(max-width:640px) 참고 — 값
+     동일) 반응형 비율이 원래 1:1이었다 — "비율 최대한 유사하게 유지" 지시에 따라 크기·
+     줄높이(160%)는 그대로 두고 font-family만 shorthand 뒤에 재선언해 override(shorthand가
+     이미 지정한 --font-kr을 이 한 줄이 다시 덮어씀). 한글 글리프가 없는 서체라 "날짜를
+     선택해주세요"류 안내 텍스트·요일 등 한글 라벨은 자동으로 폴백되고 숫자·마침표
+     (2026.09.28)만 이 서체로 렌더링됨.
+     2026-09-21(같은 날 후속, Stephen 지시) — Tilt Warp 적용 후 굵기(700, Bold)가 과하다는
+     피드백 — 같은 계열(text-m-title-18*)에 이미 존재하는 한 단계 낮은 굵기 토큰
+     --text-m-title-18L(500, 18px/160%는 18B와 완전히 동일하고 weight만 다름)로 교체.
+     신규 토큰 생성 불필요(app.css에 이미 존재). */
   .datetime-btn-label {
     color: white;
-    font: var(--text-m-title-18B);
+    font: var(--text-m-title-18L);
+    font-family: var(--font-en-display);
     letter-spacing: -0.5px;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
     min-width: 0;
+  }
+  /* 2026-09-21(같은 날 4차 후속, Stephen 지시) — "대여설정정보 bar"·"반납설정정보 bar"
+     (RentalForm snippet 자신의 날짜/시간 버튼 — .rental-form 안의 .datetime-btn-label,
+     수령·반납 두 leg 모두 동일 구조로 공용) 한정으로 신규 자체호스팅 서체 D-DIN
+     Expanded(--font-en-d-din)를 적용. .datetime-btn-label은 이 파일 전역에서
+     공유되는 클래스라(접힘요약 bar .acc-collapsed-summary 쪽도 동일 클래스 사용, 위 기본
+     규칙의 Tilt Warp를 그대로 유지 중) 여기서는 상위 .rental-form로 더 높은 특이도의
+     선택자를 만들어 이 두 bar에만 한정 적용 — 기본 규칙(Tilt Warp)·접힘요약 bar는 전혀
+     영향받지 않음. 사이즈·줄높이는 기존 --text-m-title-18L(18px/160%) 값을 그대로
+     "동일 사이즈"로 유지(Stephen 지시) — PC·모바일 모두 이미 1:1 비율이라 별도 반응형
+     분기 불필요.
+     2026-09-21(같은 날 7차 후속, Stephen 지시) — 처음엔 굵기를 --text-m-title-18L의
+     기존 500 그대로 뒀으나, "이 bar(날짜 정보)와 접힘요약 bar(.acc-collapsed-summary,
+     700 Bold 적용됨)가 같은 종류의 UI인데 왜 굵기가 다르냐"는 지적으로 통일 확정 —
+     명시적으로 font-weight: 700 추가. 이제 .rental-form 쪽과 .acc-collapsed-summary
+     쪽 둘 다 D-DIN Exp Bold(700)로 완전히 동일한 굵기. */
+  .rental-form .datetime-btn-label {
+    font-family: var(--font-en-d-din);
+    font-weight: 700;
+  }
+  /* 2026-09-21(같은 날 8차 후속, Stephen 지시) — PC 반응형 전용 토큰으로 분리해 한 단계
+     작은 크기(--text-pc-title-16, 16px/200%)로 축소. 기존엔 이 요소만을 위한 PC 전용
+     값이 아예 없어 모바일 토큰(--text-m-title-18L, 18px)을 PC에도 그대로 재사용하고
+     있었는데(바로 위 7차 후속 주석 참고), 이 라벨은 "섹션 타이틀"이 아니라 버튼 안의
+     정보 표시 텍스트라 --text-pc-title-16(소형 타이틀/버튼·본문 등급)이 더 적합하다고
+     판단 — 모바일은 기존 18px 그대로 유지(변경 없음). font-family(D-DIN Exp)·
+     font-weight(700)는 위 기본 규칙 값을 그대로 유지하기 위해 font shorthand 대신
+     font-size/line-height만 개별 지정(shorthand를 쓰면 font-family가 var(--font-kr)로
+     되돌아가 버림). */
+  @media (min-width: 641px) {
+    .rental-form .datetime-btn-label {
+      font-size: 16px;
+      line-height: 200%;
+    }
+  }
+  /* 2026-09-21(같은 날 5차 후속, Stephen 지시) — 접힘요약 bar("2026.09.28 +휴무일 포함"·
+     "2026.09.29 | 24:00" 등)도 동일하게 D-DIN Exp 적용 대상으로 확정 — 단 이번엔 Bold
+     (700, D-DINExp-Bold.woff2) 지정. 기본 규칙(--text-m-title-18L, weight 500)의
+     font-weight를 명시적으로 700으로 재정의.
+     2026-09-21(같은 날 6차 후속, Stephen 재지적 — "PC 반응형에서는 여전히 두텁지 않다") —
+     처음엔 `.bulk-collapsed-bar`(모바일 전용 패널 전체 접힘 요약)만 스코프했는데, PC는
+     이 패널 자체가 없고(.bulk-panel display:none) 대신 .detail-pane 안에서 "대여 방법"/
+     "반납 방법" 아코디언을 개별로 접었을 때 나오는 별도의 .acc-item > .datetime-wrap.
+     acc-collapsed-summary가 PC의 실질적 대응 위치였다 — 이 위치는 스코프에서 빠져
+     기본 규칙(Tilt Warp/500)에 머물러 있었음(실사용 중 발견). 두 위치(모바일 패널 전체
+     접힘 요약 + PC 개별 아코디언 접힘 요약) 모두 공통으로 `acc-collapsed-summary`
+     클래스를 쓰므로, 조상 선택자를 `.bulk-collapsed-bar`에서 `.acc-collapsed-summary`
+     클래스 자체로 교체해 두 위치 모두 한 규칙으로 커버 — RentalForm 자신의 열린 상태
+     bar(.rental-form 쪽, 위 규칙, weight 500)는 이 클래스를 갖지 않아 전혀 영향받지
+     않음(특이도 충돌 없이 완전히 다른 요소 집합). */
+  .acc-collapsed-summary .datetime-btn-label {
+    font-family: var(--font-en-d-din);
+    font-weight: 700;
   }
   /* 휴무일 포함 배송 자동연장 안내 배지(2026-09-12) — 연장일이 없으면 렌더링 자체가
      안 되므로(조건부) 기존 datetime-btn-label 레이아웃에는 영향 없음. */
@@ -4511,75 +4715,9 @@
     width: 100%;
     box-sizing: border-box;
   }
-  /* 시간 선택 — 오전/오후 구획 세로 스크롤 리스트(2026-08-17, B안 채택).
-     기존 6열×4행 그리드(셀당 세로 ~28px)는 ui-mobile.md 44×44px 터치타겟 기준 미달 +
-     "00:00" 전체 표기가 12px로 밀집돼 가독성 저하 지적됨(Stephen) — 세로 목록 + 큰
-     행 높이로 교체. 대안(C안: 네이티브 <input type="time"> 또는 커스텀 휠피커)은
-     각각 "기존 브랜드 디자인 언어(보라색 강조·pill 형태)와 이질적" / "스크롤스냅 등
-     구현·크로스브라우저 리스크 큼" 이유로 기각(Stephen 승인) — SuggestPicker와 동일한
-     max-height+overflow-y:auto 스크롤 컨테이너 패턴 재사용. */
-  .time-list {
-    display: flex;
-    flex-direction: column;
-    gap: 10px;
-    max-height: 280px;
-    overflow-y: auto;
-    padding-right: 4px;
-  }
-  .time-section {
-    display: flex;
-    flex-direction: column;
-    gap: 10px;
-  }
-  .time-section-label {
-    display: block;
-    position: sticky;
-    top: 0;
-    z-index: 1;
-    background: var(--cs-white);
-    font: var(--text-m-script-12);
-    font-weight: 700;
-    color: var(--cs-text-light);
-    padding: 6px 4px;
-  }
-  .time-row {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    width: 100%;
-    min-height: 44px;
-    background: var(--cs-surface-gray);
-    border: none;
-    border-radius: 10px;
-    font: var(--text-pc-body-14);
-    font-weight: 600;
-    color: var(--cs-text-dark);
-    cursor: pointer;
-    transition: background 0.15s;
-  }
-  /* 2026-09-10(Stephen 확정) — 정시(00분)·30분 버튼을 한 행에 나란히 배치하는 래퍼.
-     .time-row 자체 규칙(패딩·폰트·min-height 등)은 전혀 건드리지 않는다 — 레이어 폭이
-     위에서 2배(50%→100%)로 넓어진 만큼 이 래퍼가 2분할해서 쓰므로, 버튼 1개의 실제
-     렌더링 크기(폭 포함)는 이번 변경 전과 동일하게 유지된다. */
-  .time-row-pair {
-    display: flex;
-    gap: 10px;
-  }
-  .time-row-pair .time-row {
-    flex: 1;
-  }
-  .time-row:hover { background: var(--cs-purple-op10); }
-  .time-row-sel { background: var(--cs-purple) !important; color: var(--cs-white) !important; font-weight: 700; }
-  /* 영업외시간(23:00~08:59) 구간 — 무인보관함 인계 대상 시간대 시각적 구분(2026-08-20)
-     bg: --cs-red-xlight(red-5%, #FFEAEA) / hover: --cs-chat-in-bg(red-10%, #FFCFCF)
-     — 2026-08-20 Stephen 확정값. 선택 시 아웃라인 강조는 제거(배경·텍스트 색상만으로 구분) */
-  .time-row-locker { background: var(--cs-red-xlight); }
-  .time-row-locker:hover { background: var(--cs-chat-in-bg); }
-  .time-row-locker-sel {
-    background: var(--cs-red-xlight) !important;
-    color: var(--cs-red) !important;
-    font-weight: 700;
-  }
+  /* 2026-09-21 — 시간 리스트 내부 스타일(.time-list/.time-section/.time-row 등)은
+     TimePickerGrid.svelte(공통 컴포넌트, CalendarGrid와 동일 패턴)로 이관됨. 위치 지정
+     (.time-layer, 바로 위)만 CalendarGrid의 .cal-layer와 동일한 이유로 호출측에 유지. */
 
   /* Form inputs */
   .f-input {
@@ -4632,11 +4770,27 @@
   .coupon-note { font-size: 12px; font-weight: 500; color: var(--cs-red-badge); flex-shrink: 0; }
   .coupon-section { display: flex; flex-direction: column; gap: 15px; padding: 20px; }
   .coupon-section .section-sub-label { padding: 0 0 5px; }
+  /* 2026-09-21(Stephen 지시, 같은 날 후속) — 사용 가능한 쿠폰 0개 안내를 텍스트 단독에서
+     그레이 배경 박스로 격상. 목록(.coupon-section, 좌우 패딩 20px) 가로폭에 맞춰
+     box-sizing:border-box + width:100%로 꽉 채움. 배경은 --cs-surface-gray(폼 입력·
+     결제금액 블록에 쓰이는 정본 그레이 토큰), 문구는 --cs-text-light(가장 옅은 힌트
+     톤)로 낮춰 "쿠폰 없음"이 결제 흐름을 방해하지 않는 조용한 안내로 보이게 한다. */
+  .coupon-empty {
+    width: 100%;
+    box-sizing: border-box;
+    text-align: center;
+    font: var(--text-m-script-14B);
+    color: var(--cs-text-light);
+    background: var(--cs-surface-gray);
+    border-radius: var(--radius-md, 15px);
+    padding: 20px 16px;
+    margin: 0;
+  }
 
   /* ══ 포인트 사용 입력(장바구니) ══ */
   .points-select-section { display: flex; flex-direction: column; gap: 15px; padding: 20px; }
   .points-input-row { display: flex; align-items: center; gap: 10px; }
-  .points-input { flex: 1; }
+  .points-input { flex: 1; font-family: var(--font-en-d-din); }
   .points-all-btn {
     flex-shrink: 0;
     background: var(--cs-purple-op10);
@@ -4676,7 +4830,12 @@
     gap: 20px;
   }
   .period-val { display: flex; align-items: center; gap: 10px; }
-  .period-num { font-size: 18px; font-weight: 700; color: #444; letter-spacing: -0.3px; }
+  /* 2026-09-21(Stephen 지시) — Order Total 영역 숫자 전용 서체(D-DIN Exp, 500)를
+     선택된 영역(총 대여기간·대여요금 등 요약금액 표기)의 숫자 span에 적용. 기존
+     font-weight:700 → 500로 함께 조정(요청값 그대로). PC/모바일 동일 값(이 클래스들은
+     기존에도 breakpoint별 font-size 분기가 없어 그대로 양쪽에 적용됨). 총 약정요금
+     다크박스(.total-num/.total-points-num)는 별도로 700 유지 — 아래 해당 규칙 참고. */
+  .period-num { font-size: 18px; font-weight: 500; font-family: var(--font-en-d-din); color: #444; letter-spacing: -0.3px; }
   .period-unit { font-size: 16px; font-weight: 700; color: #AAAAAA; letter-spacing: -0.5px; }
   .price-row {
     display: flex;
@@ -4692,7 +4851,7 @@
   }
   .price-row-large { font-size: 16px; }
   .price-row-right { display: flex; align-items: center; gap: 15px; }
-  .price-row-val { font-size: 16px; font-weight: 700; color: #444; line-height: 1.6; }
+  .price-row-val { font-size: 16px; font-weight: 500; font-family: var(--font-en-d-din); color: #444; line-height: 1.6; }
   .price-row-val-large { }
   .price-row-unit { font-size: 14px; font-weight: 700; color: #AAAAAA; line-height: 2; }
   .price-divider { background: #AAAAAA; height: 1px; width: 100%; margin: 5px 0; }
@@ -4704,7 +4863,7 @@
   }
   .points-label { font-size: 14px; font-weight: 700; line-height: 2; }
   .points-value { display: flex; align-items: center; gap: 15px; padding: 0 20px; }
-  .points-num { font-size: 16px; font-weight: 700; line-height: 1.6; }
+  .points-num { font-size: 16px; font-weight: 500; font-family: var(--font-en-d-din); line-height: 1.6; }
   .points-unit { font-size: 14px; font-weight: 700; line-height: 2; }
 
   /* ══ Order Total ══ */
@@ -4733,6 +4892,14 @@
     font-weight: 500;
     color: #444;
     letter-spacing: -0.5px;
+  }
+  /* 2026-09-21(Stephen 지시) — "포인트 사용 (보유 N,NNNp)" 안내문 중 보유 포인트 숫자만
+     D-DIN Exp 서체(700)로 적용. 문장 전체가 하나의 span이라 숫자만 별도 span으로 감싸
+     이 클래스로 지정 — 나머지 한글·"p" 단위 글자는 부모(.section-sub-label)의 폰트를
+     그대로 유지. PC/모바일 동일 값(이 요소는 breakpoint별 크기 분기가 없음). */
+  .points-balance-num {
+    font-family: var(--font-en-d-din);
+    font-weight: 700;
   }
 
   .total-dark-box {
@@ -4768,7 +4935,12 @@
     gap: 10px;
     font-weight: 700;
   }
-  .total-num { font-size: 18px; color: white; letter-spacing: -0.3px; }
+  /* 2026-09-21(Stephen 지시) — 총 약정요금(다크박스) 숫자 전용 서체(D-DIN Exp, 700)
+     적용 대상: .total-num(총 약정요금 값)·.total-points-num(적립 예정 포인트 값,
+     "p" 단위 span은 제외 — 아래 마크업에서 숫자 span에만 클래스 부여). 기존 font-weight
+     700은 변경 없음(요청값과 이미 동일). PC/모바일 동일 값(이 영역은 기존에도 breakpoint별
+     font-size 분기가 없음). */
+  .total-num { font-size: 18px; color: white; letter-spacing: -0.3px; font-family: var(--font-en-d-din); }
   .total-unit { font-size: 14px; color: white; line-height: 2; }
   .total-points-row { }
   .total-points-label { font-size: 14px; font-weight: 700; color: #C1BBEC; line-height: 2; }
@@ -4782,6 +4954,7 @@
     color: #C1BBEC;
     line-height: 1.6;
   }
+  .total-points-num { font-family: var(--font-en-d-din); }
 
   /* 날짜 미선택 */
   .period-unset {
@@ -4821,7 +4994,8 @@
   }
   .deposit-num {
     font-size: 16px;
-    font-weight: 700;
+    font-weight: 500;
+    font-family: var(--font-en-d-din);
     color: var(--cs-text);
   }
   .deposit-unit {
@@ -5209,13 +5383,13 @@
     .acc-value-unset { font: var(--text-m-script-14B); }
     .acc-body { padding-top: 20px; }
     .datetime-btn { padding: 12px 16px; }
-    /* 2026-09-03(Stephen 확정) — 모바일에서 한 단계 큰 토큰으로 상향(16px Bold→18px Bold,
-       PC 기본값과 동일해짐). 수령/반납 양쪽 버튼이 이 클래스를 공유해 함께 적용됨. */
-    .datetime-btn-label { font: var(--text-m-title-18B); letter-spacing: -0.5px; }
-    /* 모바일 전용 세로폭·폰트 축소 — .time-layer 자체 폭(100%)은 2026-09-10부터 PC와
-       공용 규칙(기본 .time-layer 선언부)으로 통일돼 여기서 별도로 재선언하지 않는다. */
-    .time-list { max-height: 240px; }
-    .time-row { font: var(--text-m-script-14B); }
+    /* 2026-09-03(Stephen 확정) — 모바일에서 한 단계 큰 토큰으로 상향(16px Bold→18px,
+       PC 기본값과 동일한 크기가 됨). 수령/반납 양쪽 버튼이 이 클래스를 공유해 함께 적용됨.
+       2026-09-21(같은 날 후속) — 굵기를 18B(700)→18L(500)로 한 단계 낮춤(위 base 규칙과
+       동일 이유). */
+    .datetime-btn-label { font: var(--text-m-title-18L); font-family: var(--font-en-display); letter-spacing: -0.5px; }
+    /* .time-list/.time-row 모바일 오버라이드는 2026-09-21 TimePickerGrid.svelte
+       이관 시 그쪽 컴포넌트 내부 @media 블록으로 함께 이동함. */
     .total-gray-section { padding: 20px; }
     .total-dark-box { padding: 16px var(--layout-mob-pad); }
     .total-label { font-size: 14px; }
@@ -5249,12 +5423,80 @@
     /* 2026-08-18: 모바일 반응형 — 폰트 한 단계 큰 토큰(하드코딩 12px → --text-m-script-14B
        14px Bold, 기존 font-weight:700과 동일 weight 유지) + BG 패딩 확대(8px 12px → 12px 20px) */
     /* 2026-08-18(후속): 상하 패딩만 20% 축소(12px → 9.6px), 좌우 20px는 유지 */
-    .combo-btn { padding: 9.6px 20px; }
+    /* 2026-09-21(Stephen 지시) — 상하 패딩 20% 축소(9.6px → 7.68px), 같은 날 재지시로
+       두 차례 더 20%씩 누적 축소(7.68px → 6.144px → 4.9152px, 총 3회 누적). 좌우 패딩은
+       변경 없음. */
+    .combo-btn { padding: 4.9152px 20px; }
     .combo-label { font: var(--text-m-script-14B); }
     .f-input { letter-spacing: -0.5px; }
     .copy-label { letter-spacing: -0.5px; }
     .acc-label { letter-spacing: -0.3px; }
     .sub-gnb-b-pill { padding: 12px 20px; border-radius: 18px; min-height: 44px; }
+  }
+
+  /* 2026-09-21(Stephen 지시, PC 반응형 폰트 축소 파일럿) — 장바구니 화면 3개 영역
+     (대여예약옵션 카드·Order Total·하단 약관/CTA)의 PC(≥641px) 전용 폰트 크기 신설.
+     기준: 현재 모바일 반응형 값보다 타이포 등급 한 단계(25→18→16→14→12) 작게 — 이
+     요소들 대부분은 별도 PC 전용 값이 없어(위 max-width:640px 블록만 존재) 모바일과
+     동일한 크기를 PC에도 그대로 쓰고 있었다(대표 사례: .acc-value가 이름은 PC 토큰
+     (--text-pc-title-18)이지만 실제로는 모바일에도 동일 18px가 적용되던 구조). 이건
+     3개 영역 한정 파일럿 적용분 — 문제 없으면 추후 전역 확대 예정(Stephen 지시, 아직
+     결정 전).
+     ⚠️ 제외 대상(이미 "모바일 값 재사용" 문제에 해당하지 않음): .combo-label(이미
+     --text-pc-body-14 전용값 보유) · .rental-form .datetime-btn-label(같은 날 앞선
+     작업으로 이미 16px PC 전용값 적용) · .datetime-btn-holiday-badge/.period-unset
+     (이미 12px 최저 등급이라 더 축소 불가) · .acc-value-unset(부모 상속, 별도 처리
+     보류) · 각 "-unit"류 보조 단위 스팬(원/p/일 등, 숫자·레이블과의 시각적 짝을
+     유지하기 위해 이번 파일럿에서는 제외).
+     각 규칙은 font shorthand 대신 font-size(필요 시 line-height)만 개별 지정해
+     기존 font-family·font-weight·letter-spacing은 그대로 유지한다 — 단, 이미 shorthand
+     토큰(font:)을 쓰던 요소(.acc-value·.delivery-deadline·.footer-terms-text·
+     .footer-cta)는 "한 단계 작은 토큰"으로 shorthand째 교체(그 토큰 자체의 weight를
+     그대로 따름 — 원래 굵기와 다를 수 있음, 특히 .footer-cta는 모바일 900(Black)에서
+     PC는 --text-pc-title-16의 700으로 낮아짐 — 전역 확대 검토 시 재확인 필요). */
+  @media (min-width: 641px) {
+    /* 2026-09-21(Stephen 지시, 같은 블록 후속) — "대여 방법"/"반납 방법" 아코디언 헤더
+       (.acc-head)와 대여/반납 날짜·시간 버튼(.datetime-btn — 열린 상태·접힘요약 bar 공용)
+       배경 박스의 상하 여백을 PC 한정 30% 축소. 좌우 여백은 변경 없음.
+       .acc-head: 30px(전체) → 상하만 21px(30*0.7)로 분리, 좌우 30px 유지.
+       .datetime-btn: 15px(상하) → 10.5px(15*0.7), 좌우 20px 유지. */
+    .acc-head { padding: 21px 30px; }
+    .datetime-btn { padding: 10.5px 20px; }
+
+    /* — 대여예약옵션 카드(.order-card-inner) — */
+    .acc-label { font-size: 14px; }
+    .acc-value { font: var(--text-pc-body-14); }
+    .acc-collapsed-summary .datetime-btn-label { font-size: 16px; line-height: 200%; }
+    .delivery-deadline { font: var(--text-pc-script-12); }
+    .form-section-label { font-size: 14px; }
+    .form-check-label { font-size: 12px; }
+    .f-input { font-size: 12px; }
+    .copy-label { font-size: 12px; }
+
+    /* — Order Total(.cs-section) — */
+    .section-sub-label { font-size: 14px; }
+    .price-period-label { font-size: 14px; }
+    .period-num { font-size: 16px; }
+    .price-row-label { font-size: 12px; }
+    .price-row-large { font-size: 14px; }
+    .price-row-val { font-size: 14px; }
+    .points-label { font-size: 12px; }
+    .points-num { font-size: 14px; }
+    .total-label { font-size: 12px; }
+    .total-num { font-size: 16px; }
+    .total-points-label { font-size: 12px; }
+    .deposit-label { font-size: 12px; }
+    .deposit-num { font-size: 14px; }
+
+    /* — 하단 약관·CTA(.footer-inner) — */
+    .footer-terms-text { font: var(--text-pc-script-12); }
+    .footer-cta { font: var(--text-pc-title-16); }
+
+    /* — 배송 휴무일 안내문(.cal-holiday-guide-note) — 2026-09-21 같은 날 후속 추가.
+       모바일이 이미 12px(--text-m-script-12, 사다리 최저 등급)까지 내려가 있는데 PC는
+       별도 값이 없어 14px(raw) 그대로였음 — §23-3 B 패턴(raw 속성 요소)에 따라 font-size만
+       12px로 낮추고 weight(700)·color·letter-spacing은 기존 그대로 유지. */
+    .cal-holiday-guide-note { font-size: 12px; }
   }
 
   /* ── Pending reservation banner */
@@ -5323,6 +5565,20 @@
   .bulk-collapsed-bar {
     display: flex;
     flex-direction: column;
+  }
+  /* 2026-09-21(Stephen 지시, 같은 날 후속 수정) — "대여 방법"/"반납 방법" bar UI(acc-head
+     재사용, 값 미선택 시에도 상시 노출)를 위한 좌우 여백 래퍼. .acc-head는 이 패널이
+     열렸을 때(.bulk-body { padding:16px 20px 30px }, 좌우 20px) 안에서 렌더링되는 것과
+     "동일 컴포넌트"이므로, 열림/닫힘 상태 전환 시 가로폭이 달라 보이지 않으려면 이
+     컨테이너도 .bulk-body와 동일한 좌우 20px을 써야 한다 — 처음에는 옆의 날짜/시간 요약
+     (.datetime-wrap.acc-collapsed-summary, 좌우 30px — 이건 acc-head가 아니라 별개
+     컴포넌트라 30px가 정상)의 값을 잘못 참고해 30px로 넣었던 결함을 Stephen 지적으로
+     발견·수정(30px→20px). gap은 .accordions(아코디언 열림 상태)와 동일한 10px 유지. */
+  .bulk-collapsed-methods {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    padding: 0 20px 20px;
   }
 
 </style>

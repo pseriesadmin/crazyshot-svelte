@@ -27,6 +27,32 @@
   font-display: swap;
 }
 
+/* 2026-09-21(Stephen 요청) — D-DIN Expanded 웹폰트(SIL OFL 1.1, Datto Inc.) 신규 등록.
+   대여/반납 설정정보 bar(RentalForm 내 datetime-btn-label, 수령·반납 leg 공용)에 적용 —
+   $lib/components/common/CalendarGrid.svelte 등에 쓰이는 --font-en-display(Tilt Warp)와는
+   별개의 신규 영문 패밀리. 3개 웨이트/스타일 전부 등록(Regular/Bold/Italic). */
+@font-face {
+  font-family: 'D-DIN Exp';
+  src: url('/fonts/D-DINExp.woff2') format('woff2');
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'D-DIN Exp';
+  src: url('/fonts/D-DINExp-Bold.woff2') format('woff2');
+  font-weight: 700;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'D-DIN Exp';
+  src: url('/fonts/D-DINExp-Italic.woff2') format('woff2');
+  font-weight: 400;
+  font-style: italic;
+  font-display: swap;
+}
+
 :root {
 
   /* ── 브랜드 컬러 ── */
@@ -87,6 +113,7 @@
   --font-kr-heading:  'SB AggroOTF', 'Noto Sans KR', sans-serif;  /* 한글 헤드라인 */
   --font-en-display:  'Tilt Warp', sans-serif;                     /* 영문 메뉴·서브타이틀 */
   --font-en-condensed:'Config Condensed', sans-serif;              /* 영문 대형 광고 */
+  --font-en-d-din:    'D-DIN Exp', sans-serif;                      /* 대여/반납 설정정보 bar 숫자 전용(2026-09-21) */
 
   /* ── 타이포그래피 스케일 (PC) ── */
   /* format: font-size / line-height, font-weight */

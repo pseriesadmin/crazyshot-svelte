@@ -197,7 +197,8 @@
     display: flex;
     align-items: center;
     gap: 3px;
-    color: var(--cs-text);
+    /* purple-90 컬러토큰 반영 */
+    color: var(--cs-purple-dark);
     letter-spacing: -0.5px;
     flex-wrap: wrap;
   }
@@ -215,6 +216,8 @@
     font-weight: 900;
     line-height: 1;
     font-variant-numeric: tabular-nums;
+    /* purple-60 컬러토큰 반영 */
+    color: var(--cs-purple-light);
   }
   .pc-price-sep {
     font: var(--text-m-script-14B);        /* 14px Bold */
@@ -222,8 +225,10 @@
   }
 
   .pc-name {
-    font: var(--text-m-script-14B);        /* 14px Bold */
-    color: var(--cs-text-mid);
+    /* 볼드 없는 폰트토큰 적용(14px Medium, PC·모바일 동일) */
+    font: var(--text-m-script-14);
+    /* purple-90 컬러토큰 반영 */
+    color: var(--cs-purple-dark);
     letter-spacing: -0.5px;
     line-height: 1;
     margin: 0;
@@ -263,6 +268,7 @@
     .pc-price-label { font: var(--text-pc-body-14); line-height: 1; }     /* 14px Bold */
     .pc-price-num   { font: var(--text-pc-title-18); font-weight: 900; line-height: 1; font-variant-numeric: tabular-nums; } /* 18px Bold */
     .pc-price-sep   { font: var(--text-pc-body-14); line-height: 1; }     /* 14px Bold */
-    .pc-name        { font: var(--text-pc-body-14); letter-spacing: -0.5px; line-height: 1; margin: 0; }
+    /* PC도 동일한 볼드 없는 폰트토큰 사용(요청: PC·모바일 동일 반영) */
+    .pc-name        { font: var(--text-m-script-14); letter-spacing: -0.5px; line-height: 1; margin: 0; }
   }
 </style>

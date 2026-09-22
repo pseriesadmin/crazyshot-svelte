@@ -100,7 +100,10 @@
     return Math.round((new Date(b).getTime() - new Date(a).getTime()) / 86400000)
   }
 
-  const MONTHS = ['1월','2월','3월','4월','5월','6월','7월','8월','9월','10월','11월','12월']
+  // 2026-09-21(Stephen 지시) — "년도 보기"(cal-year-item, 순수 숫자만 표시)와 동일한
+  // 타이포로 통일하기 위해 "월" 접미사 제거. 이 배열은 헤더 타이틀 버튼(line ~285)과
+  // 월 선택 그리드(line ~325) 둘 다에서 공유되므로 한 곳만 고치면 양쪽 다 반영됨.
+  const MONTHS = ['1','2','3','4','5','6','7','8','9','10','11','12']
   const DAYS = ['일','월','화','수','목','금','토']
 
   const today = new Date()
@@ -281,7 +284,7 @@
       <svg width="8" height="14" viewBox="0 0 8 14" fill="none"><path d="M7 1L1 7L7 13" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"/></svg>
     </button>
     <div class="cal-title-group">
-      <button type="button" class="cal-title-btn" onclick={toggleYearPicker}>{viewYear}년</button>
+      <button type="button" class="cal-title-btn" onclick={toggleYearPicker}>{viewYear}</button>
       <button type="button" class="cal-title-btn" onclick={toggleMonthPicker}>{MONTHS[viewMonth]}</button>
     </div>
     <button class="cal-nav" onclick={nextMonth} aria-label="다음 달">
@@ -429,15 +432,31 @@
     display: flex;
     gap: 4px;
   }
+  /* 2026-09-21(Stephen 지시) — "월"/"년" 접미사 제거(년도 보기와 동일한 순수 숫자 표기로
+     통일)에 맞춰, .cal-day에 적용한 것과 완전히 동일한 폰트 토큰(--font-en-display +
+     PC/Mobile 반응형 크기)을 재사용했다가, 같은 날 후속 피드백으로 "한 사이즈 더 키워야
+     함" 지시를 받아 .cal-day(12px/14px)보다 한 단계 큰 값(PC 14px=--text-pc-body-14
+     크기값, Mobile 16px=--text-m-body-16B 크기값)으로 재조정 — 두 토큰 모두 기존
+     12px/14px과 동일하게 +2px 간격을 유지하는 다음 단계 값이라 크기 체계 일관성을 그대로
+     따름. */
   .cal-title-btn {
     background: none;
     border: none;
     cursor: pointer;
     padding: 2px 4px;
     border-radius: 6px;
-    font: var(--text-pc-title-16);
+    font-family: var(--font-en-display);
+    font-size: 14px;
+    line-height: 200%;
+    font-weight: 500;
     color: var(--cs-text);
     transition: background 0.15s;
+  }
+  @media (max-width: 640px) {
+    .cal-title-btn {
+      font-size: 16px;
+      line-height: 160%;
+    }
   }
   .cal-title-btn:hover { background: var(--cs-lilac); }
 
@@ -497,6 +516,7 @@
     justify-content: center;
     padding: 0;
     min-height: 44px;
+    font-family: var(--font-en-display);
     font-size: 16px;
     font-weight: 500;
     line-height: 1;
@@ -565,6 +585,7 @@
     justify-content: center;
     padding: 0;
     min-height: 44px;
+    font-family: var(--font-en-display);
     font-size: 16px;
     font-weight: 500;
     line-height: 1;
@@ -612,8 +633,14 @@
     white-space: nowrap;
   }
   .cal-range-pill-active .cal-range-pill-label { color: rgba(255,255,255,0.7); }
+  /* 2026-09-21(Stephen 지시) — 범위 요약 핀("9월 28일(월)" 등) 숫자 전용 서체(D-DIN Exp)
+     적용. 한글 글리프가 없는 서체라 "월"·"일"·"(월)" 등 한글은 자동으로 기존 폰트로
+     폴백되고 숫자만 이 서체로 렌더링됨(이 컴포넌트 다른 곳에 이미 적용된 것과 동일 원리).
+     PC/모바일이 이 값 하나(font: var(--text-pc-body-14))를 공통으로 쓰고 있어(별도
+     breakpoint 분기 없음) 추가 반응형 분기 없이 양쪽에 동일하게 적용됨. */
   .cal-range-pill-value {
     font: var(--text-pc-body-14);
+    font-family: var(--font-en-d-din);
     font-weight: 700;
     color: var(--cs-text);
     overflow: hidden;
@@ -650,6 +677,20 @@
   .cal-dow-sun { color: var(--cs-red-badge); }
   .cal-dow-sat { color: var(--cs-purple); }
 
+  /* 2026-09-21(Stephen 지시) — 달력 내 숫자(기본 날짜·월 선택·년도 선택) 전용 서체를
+     --font-en-display('Tilt Warp')로 전환. 이 컴포넌트는 CMS(CmsDatePicker.svelte)·
+     마이페이지(ProfileTabContent.svelte)·장바구니(cart) 3곳이 공유하는 공통 컴포넌트라
+     front 전용 토큰을 CMS에도 그대로 노출시키는 원칙 위반 소지가 있음을 사전에 확인·질의
+     했고, Stephen이 "공통 컴포넌트 전체(CMS 포함)"를 명시적으로 선택해 의도적 예외로
+     확정함 — 향후 이 파일을 다시 볼 때 "CMS엔 front 토큰 금지" 원칙과 충돌한다고 오판해
+     되돌리지 말 것. Tilt Warp는 한글 글리프가 없어 폴백(sans-serif)으로 자동 전환되므로
+     "1월"처럼 숫자+한글이 섞인 텍스트도 숫자만 이 서체로 렌더링되고 "월" 글자는 영향받지
+     않는다(브라우저 폰트 폴백 특성) — 별도 span 분리 없이 font-family만으로 "숫자에만"
+     요구사항이 자연히 충족됨. 사이즈는 PC/모바일 반응형으로 분리(이 컴포넌트에 기존에는
+     @media 분기가 전혀 없었음 — 새로 도입, 프로젝트 표준 브레이크포인트인 641px/640px
+     기준 재사용): PC --text-pc-script-12(12px) 크기값 차용, Mobile --text-m-script-14
+     (14px) 크기값 차용 — 두 토큰 모두 요일 헤더(.cal-dow)·기존 인라인 weight:500과
+     정합성이 맞아 선정됨. */
   .cal-day {
     position: relative;
     z-index: 1;
@@ -659,7 +700,9 @@
     width: 100%;
     aspect-ratio: 1;
     border-radius: 50%;
-    font: var(--text-pc-body-14);
+    font-family: var(--font-en-display);
+    font-size: 12px;
+    line-height: 200%;
     font-weight: 500;
     color: var(--cs-text-dark);
     transition: background 0.15s;
@@ -667,6 +710,12 @@
     align-items: center;
     justify-content: center;
     min-height: 32px;
+  }
+  @media (max-width: 640px) {
+    .cal-day {
+      font-size: 14px;
+      line-height: 160%;
+    }
   }
   .cal-day:hover:not(:disabled):not(.cal-day-holiday) { background: var(--cs-lilac); }
   .cal-day-sel { background: var(--cs-purple) !important; color: var(--cs-white) !important; font-weight: 700; }

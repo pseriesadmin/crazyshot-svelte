@@ -19,6 +19,13 @@ CMS 화면     → cms-uiux.md 참조
 같은 색상값이라도 의미와 역할이 다르다. 절대 혼용하지 않는다.
 ```
 
+> ⛔ **예외 — front·CMS 공용 컴포넌트/로직 모듈(2026-09-21 확정, Stephen 승인)**: 위 원칙은
+> **화면 자체**(USER 페이지 vs CMS 페이지)에 적용되는 것이며, **하나의 컴포넌트·로직 모듈
+> 파일을 front·CMS 양쪽이 그대로 재사용하는 경우**는 예외다 — 화면별 이중 분리 유지비용이
+> 커서, 그 파일 내부에서는 front·CMS 토큰을 함께 사용할 수 있다. 판별 기준과 선례
+> (`CalendarGrid.svelte`)는 `uiux-index.md` "⛔ 환경 분리 (절대 원칙)" 절 참고 — 정본은
+> 그쪽이며 이 문서는 중복 관리하지 않는다.
+
 ---
 
 ## 1. 컬러 시스템 (사용자 화면 기준)
@@ -1320,6 +1327,15 @@ hover/선택: background var(--cs-purple-op10)
 
 > **"sub-gnb_navi_b 적용해" 언급 시 → 아래 스펙을 즉시 적용. 모바일 미지원(PC ≥641px 전용).**
 
+> ⚠️ **2026-09-21 확정 — 규격 축소(3종)**: 이 컴포넌트는 PC 전용(모바일 렌더링 자체가
+> 없음)이라 §23(모바일 대비 한 단계 축소) 비교 대상이 없어, 기존 PC 유일값 자체를 Stephen
+> 지시로 직접 한 단계씩 낮췄다 — 아래 값들은 이미 이 최신 기준을 반영한 것이다(예전
+> 20px/62px/22×18 값으로 되돌리지 말 것). `cart/+page.svelte` · `payment/success/dev/
+> +page.svelte`(페이지 인라인 패턴, 공유 컴포넌트 파일 아님) 양쪽 모두 이 값으로 갱신
+> 완료. `sub-gnb_navi_c`(§13-3, `/products/[id]` 전용)는 이 변경 대상에서 제외됐으므로
+> 예전 값(20px/62px/22×18/16px/20px) 그대로 남아있다 — 두 스펙이 당분간 서로 다른 값을
+> 갖는 상태이니 혼동하지 말 것. `/products/[id]`에도 동일 축소를 적용할지는 별도 확인 필요.
+
 #### 개요
 
 | 항목 | 값 |
@@ -1336,9 +1352,9 @@ hover/선택: background var(--cs-purple-op10)
 ```
 [sub-gnb_navi_b]
   └── [.sub-gnb-b-pill]        ← Back pill (뒤로가기 + 현재 페이지명)
-        ├── ← 화살표 SVG (22×18px)
-        ├── "Back" 텍스트 (--text-pc-title-16)
-        └── 페이지명 타이틀 (--text-pc-menu-en-20)   ← 화면별 교체
+        ├── ← 화살표 SVG (11×9px)
+        ├── "Back" 텍스트 (--text-pc-body-14)
+        └── 페이지명 타이틀 (--text-pc-menu-en-20, font-size 18px로 개별 축소)   ← 화면별 교체
 ```
 
 #### 표준 DOM 구조 (Svelte 5)
@@ -1403,12 +1419,13 @@ hover/선택: background var(--cs-purple-op10)
   align-items: center;
   justify-content: space-between;
   gap: 16px;
-  padding: 20px 40px;
+  padding: 14px 40px;                    /* 2026-09-21: 20px → 14px(30% 축소) */
   border-radius: 25px;
   width: 100%;
   max-width: 460px;
   min-width: 0;
-  min-height: 62px;
+  min-height: 43px;                      /* 2026-09-21: 62px → 43px(30% 축소, 패딩 축소가
+                                             실제로 보이려면 최소높이도 함께 낮춰야 함) */
   flex: 0 1 460px;
   box-sizing: border-box;
   color: var(--cs-text);
@@ -1424,19 +1441,24 @@ hover/선택: background var(--cs-purple-op10)
 }
 
 .sub-gnb-b-arrow {
-  width: 22px;
-  height: 18px;
+  width: 11px;                           /* 2026-09-21: 22px → 11px(50% 축소) */
+  height: 9px;                           /* 2026-09-21: 18px → 9px(50% 축소) */
   flex-shrink: 0;
 }
 
 .sub-gnb-b-back {
-  font: var(--text-pc-title-16);         /* 16px Bold */
+  font: var(--text-pc-body-14);          /* 2026-09-21: --text-pc-title-16(16px)에서
+                                             한 단계 축소, 14px Bold */
   color: var(--cs-text);
   white-space: nowrap;
 }
 
 .sub-gnb-b-title {
-  font: var(--text-pc-menu-en-20);       /* 20px — 페이지명 */
+  font: var(--text-pc-menu-en-20);       /* 20px 토큰(패밀리·기본값) 그대로 base로 두고 */
+  font-size: 18px;                       /* 2026-09-21: 20px → 18px 개별 축소(같은 크기의
+                                             전용 하위 토큰이 없어 font-size만 override —
+                                             family는 위 shorthand가 지정한 --font-en-display
+                                             그대로 유지됨) */
   color: var(--cs-text);
   flex-shrink: 0;
   white-space: nowrap;
@@ -1447,8 +1469,8 @@ hover/선택: background var(--cs-purple-op10)
 
 | 요소 | 토큰 | 크기 |
 |---|---|---|
-| Back 텍스트 | `--text-pc-title-16` | 16px Bold |
-| 페이지 타이틀 | `--text-pc-menu-en-20` | 20px |
+| Back 텍스트 | `--text-pc-body-14`(2026-09-21 축소, 구 `--text-pc-title-16`) | 14px Bold |
+| 페이지 타이틀 | `--text-pc-menu-en-20` + `font-size:18px` 개별 override | 18px |
 
 #### 적용 시 필수 확인 (⛔)
 
@@ -3059,6 +3081,110 @@ N개로 늘어나므로, 22-1의 단일 드롭존과 달리 안내 문구를 슬
 
 ---
 
+## 23. PC 반응형 전용 폰트 토큰 다운스케일 표준 ★★★ (2026-09-21 확정)
+
+> **"PC반응형 전용 폰트토큰값 적용해", "PC 폰트토큰 표준 반영해" 언급 시 → 대상 화면에
+> 재도출 없이 아래 절차를 즉시 적용.** 장바구니(`/cart`) 화면 3개 영역(대여예약옵션
+> 카드·Order Total·하단 약관/CTA)에서 파일럿 적용 후 Stephen이 "PC 화면 시각적으로 전혀
+> 문제 없다"고 확정한 표준이다.
+
+### 23-1. 배경 — 왜 이 표준이 필요한가
+
+이 프로젝트의 많은 텍스트 요소는 **PC 전용 폰트 값이 아예 없다.** 대신 `@media (max-width:
+640px)` 안에만 모바일 전용 축소값이 있고, 그 미디어쿼리 밖(=PC를 포함한 기본값)은 모바일과
+동일한 크기를 그냥 재사용한다 — 심지어 토큰 이름이 `--text-pc-*`로 시작해도 실제 계산값이
+모바일과 동일한 경우가 있었다(예: `.acc-value`가 `--text-pc-title-18`을 기본값으로 쓰는데
+정작 모바일에도 같은 18px가 그대로 적용되던 구조). 그 결과 PC 화면에서 일부 텍스트가
+필요 이상으로 커 보이는 현상이 실제로 확인됨(2026-09-21, cart 화면 다수 요소에서 발견·
+확정).
+
+### 23-2. 원칙 — "현재 모바일 값보다 타이포 등급 한 단계 작게"
+
+```
+등급 사다리(위→아래로 한 단계씩): 25 → 18 → 16 → 14 → 12
+```
+
+대상 요소의 **현재 모바일 표시값**(= `@media(max-width:640px)` 오버라이드가 있으면 그 값,
+없으면 기본/공용 규칙값 그대로 — 그게 곧 지금까지 PC에도 적용되던 값)을 확인한 뒤, 그보다
+사다리 한 칸 아래 값을 새 PC 전용 값(`@media(min-width:641px)`)으로 지정한다. 배율 공식이
+아니라 **이미 존재하는 등급 사이를 그대로 한 칸 이동**하는 것 — 새로운 크기를 창작하지 않는다.
+
+### 23-3. 적용 패턴
+
+```css
+/* A) 이미 font: var(--text-*) shorthand 토큰을 쓰는 요소
+      → 한 단계 아래 토큰으로 shorthand째 교체(그 토큰 자체의 weight를 그대로 따름 —
+        원래 굵기와 달라질 수 있음, 23-5 참고) */
+@media (min-width: 641px) {
+  .acc-value { font: var(--text-pc-body-14); }   /* 기존 --text-pc-title-18(18px) → 14px */
+}
+
+/* B) font-size 등 개별 속성만 raw로 쓰는 요소(토큰 미사용)
+      → font-size(필요 시 line-height)만 개별 override, weight·family·letter-spacing은
+        기존 그대로 유지(shorthand로 통째 교체하지 않음) */
+@media (min-width: 641px) {
+  .acc-label { font-size: 14px; }                 /* 기존 15px(raw) → 14px */
+  .form-check-label { font-size: 12px; }           /* 기존 14px(raw) → 12px */
+}
+```
+
+### 23-4. 파일 구조 — 기존 모바일 블록 바로 뒤에 한 블록으로 통합
+
+이 코드베이스는 이미 화면 전체의 `@media (max-width: 640px)` 오버라이드를 파일당 하나의
+큰 블록으로 모아두는 관례가 있다(cart 페이지의 경우 `.acc-label`·`.footer-cta`·
+`.combo-btn` 등 서로 무관한 셀렉터 수십 개가 이미 한 블록 안에 공존). PC 전용 값도 같은
+방식으로 **그 모바일 블록 바로 뒤에 `@media (min-width: 641px) { ... }` 블록 하나로 통합**
+해서 추가한다 — 화면 하나당 PC 전용 오버라이드가 흩어지지 않고 한곳에서 조회 가능하도록.
+
+### 23-5. 예외 — 적용하지 않는 경우
+
+```
+❌ 이미 별도 PC 전용 값이 정확히 설정돼 있는 요소 — 재작업하지 않음
+   (예: .combo-label, §16 콤보 버튼 라벨은 이미 --text-pc-body-14 전용값 보유)
+❌ 이미 12px(사다리 최저 등급)인 요소 — 더 내려갈 등급이 없음
+❌ "원"·"p"·"일"·"개" 등 숫자·레이블에 붙는 극소 단위(unit) 보조 텍스트
+   — 숫자·레이블 본문과 시각적 짝을 이루므로 기본적으로 제외(요청 시에만 포함)
+⚠️ shorthand 토큰 교체(23-3 A) 시 font-weight가 원래 값과 달라질 수 있음 — 특히 CTA
+   버튼처럼 굵기가 강조 요소인 곳은 적용 후 실화면으로 굵기 변화를 확인할 것
+   (실사례: `.footer-cta`가 모바일 900(Black)에서 PC `--text-pc-title-16` 적용 시
+   700(Bold)으로 낮아짐 — 2026-09-21 Stephen 확인 후 문제없음으로 확정)
+```
+
+### 23-6. 참고 구현 — `/cart` 파일럿 전체 반영 내역
+
+`src/routes/cart/+page.svelte`(PC 전용 `@media (min-width: 641px)` 통합 블록, 기존
+모바일 통합 블록 바로 뒤)에 아래 23개 셀렉터가 이 표준으로 반영돼 있다 — 새 화면에 적용할
+때 동일 클래스명이 재사용되는 컴포넌트(`.datetime-wrap`/`.acc-*`/`.price-row-*` 등
+`CalendarGrid`·`RentalForm` 공유 패턴)라면 이미 처리된 것으로 보고 건드리지 않는다.
+
+```
+.acc-label(15→14) · .acc-value(16→14, --text-pc-body-14) ·
+.acc-collapsed-summary .datetime-btn-label(18→16) · .delivery-deadline(14→12,
+--text-pc-script-12) · .form-section-label(16→14) · .form-check-label(14→12) ·
+.f-input(14→12) · .copy-label(14→12) · .section-sub-label(16→14) ·
+.price-period-label(16→14) · .period-num(18→16) · .price-row-label(14→12) ·
+.price-row-large(16→14) · .price-row-val(16→14) · .points-label(14→12) ·
+.points-num(16→14) · .total-label(14→12) · .total-num(18→16) ·
+.total-points-label(14→12) · .deposit-label(14→12) · .deposit-num(16→14) ·
+.footer-terms-text(14→12, --text-pc-script-12) · .footer-cta(18→16,
+--text-pc-title-16)
+```
+
+### GATE C 확인 항목
+
+```
+[ ] 대상 셀렉터의 "현재 모바일 표시값"을 실제로 확인했는가?(max-width:640px 오버라이드
+    유무 먼저 확인 — 없으면 기본 규칙값이 곧 현재 모바일값)
+[ ] 사다리(25→18→16→14→12)에서 정확히 한 칸만 내렸는가?(임의 값 창작 금지)
+[ ] shorthand 토큰 교체 시 함께 바뀌는 weight를 인지하고, CTA·강조 요소는 실화면으로
+    확인했는가?
+[ ] 이미 12px이거나 이미 PC 전용값이 있는 요소를 중복 처리하지 않았는가?(23-5)
+[ ] 단위(원/p/일/개) 보조 텍스트를 임의로 포함하지 않았는가?(요청 시에만)
+[ ] PC 전용 오버라이드를 그 화면의 기존 모바일 통합 블록 바로 뒤 한 곳에 모았는가?(23-4)
+```
+
+---
+
 *front-uiux.md | 사용자(USER) 화면 표준 디자인 시스템 | Harness Flow v3.2*
 *소스: crazyshot-Front_design-system.json (2026-07-10)*
 *2026-08-26 §18 추가 — `/account` 마이페이지 섹션 타이틀 PC(`--text-pc-title-18`)/모바일
@@ -3086,3 +3212,14 @@ N개로 늘어나므로, 22-1의 단일 드롭존과 달리 안내 문구를 슬
 CSS 예제의 Mobile/PC 미디어쿼리 값이 §17 상단 표(Mobile 22×15 기본→PC 18×12 축소)와
 반대 방향으로 뒤바뀌어 있던 기존 오탈자도 함께 정정(표시 방향 불일치 — 실제 앱 CSS와
 GATE C 체크항목은 항상 표 방향이 정본이었음).*
+*2026-09-21 §23 신설 — "PC 반응형 전용 폰트 토큰 다운스케일 표준" 확정. 많은 텍스트
+요소가 PC 전용 값 없이 모바일 값을 그대로 재사용하고 있던 문제를 계기로, "현재 모바일
+값보다 타이포 등급 한 단계(25→18→16→14→12) 작게"라는 일반 원칙을 신설하고 `/cart`
+3개 영역(대여예약옵션 카드·Order Total·하단 약관/CTA) 23개 셀렉터에 파일럿 적용 →
+Stephen 실화면 확인 후 표준으로 확정. `uiux-index.md`에 트리거 인덱스 등록 병행.*
+*2026-09-21(같은 날 후속) §13-2 갱신 — `sub-gnb_navi_b` 규격 축소 3종 확정: 배경 박스
+상하 패딩 30%(20px→14px, min-height도 62px→43px 비례 축소) · 화살표 아이콘 50%(22×18→
+11×9) · 텍스트 폰트 한 단계(Back 16px→14px `--text-pc-body-14`, 페이지 타이틀 20px→18px
+개별 override). `cart/+page.svelte`·`payment/success/dev/+page.svelte` 양쪽 실제 코드에
+먼저 반영된 뒤 문서로 역기록. `sub-gnb_navi_c`(§13-3, 상품상세 전용)는 이번 변경 대상에서
+제외돼 예전 값 그대로 남아있음 — 두 스펙이 당분간 불일치 상태임을 §13-2 본문에 명시.*

@@ -15,6 +15,21 @@
 
 > 두 파일의 토큰을 절대 혼용하지 않는다. 같은 색상값이라도 역할이 다르다.
 
+> ⛔ **예외 — front·CMS 공용 컴포넌트/로직 모듈(2026-09-21 확정, Stephen 승인)**: 위 "절대
+> 혼용 금지"는 **각 화면 자체**(USER 페이지는 front 토큰만, CMS 페이지는 cms 토큰만)에
+> 적용되는 원칙이다. 반면 **하나의 컴포넌트·로직 모듈 파일을 front·CMS 양쪽이 그대로
+> 재사용하는 경우**는 예외다 — 화면별로 이중 분리해 유지하는 비용이 매우 커서, 그 파일
+> 내부에서는 필요에 따라 front·CMS 토큰을 함께 사용할 수 있다.
+> - 선례: `CalendarGrid.svelte`(CMS `CmsDatePicker.svelte` + front `ProfileTabContent.svelte`·
+>   `cart/+page.svelte` 3곳 공용) — front 전용 토큰 `--font-en-display`를 컴포넌트 전체(CMS
+>   포함)에 적용하기로 Stephen이 명시적으로 확정한 사례.
+> - 판별 기준: "이 파일이 front·CMS 양쪽에서 실제로 import되어 재사용되는가?" — 그렇다면
+>   이 예외 대상. 화면 전용 컴포넌트(예: `RentalDetailPanel.svelte`는 CMS 전용, `ProductDPCard.
+>   svelte`는 front 전용)는 예외 대상이 아니며 기존 절대 분리 원칙 그대로 적용.
+> - 이 예외는 "혼용해도 된다"이지 "무조건 혼용하라"가 아니다 — 굳이 섞을 필요가 없으면
+>   기존처럼 화면 성격에 맞는 토큰을 그대로 쓰면 된다. 실제로 다른 화면 성격의 토큰을
+>   끌어와야 새 요구사항을 충족할 때만 이 예외를 적용한다.
+
 ---
 
 ## 컬러 핵심 (화면별 비교)
@@ -149,6 +164,7 @@ Mobile: --text-m-htitle-24B  (24px Black)  제목
 | **ChevronIcon**(`arrow01`) | `$lib/components/common/ChevronIcon.svelte` | `direction`: `right`(기본)/`left`/`up`/`down` | props: `size`(기본 8) · `color`(기본 `#aaaaaa`) — 흰 카드 위 리스트 이동 화살표 표준 |
 | **Arrow02Icon**(`arrow02`) | `$lib/components/common/Arrow02Icon.svelte` | 방향 고정(우측, 직선+화살촉형) | props: `size`(기본 16) · `color`(기본 `currentColor`) — 랜딩·상세이동 버튼용 심플 화살표 표준(2026-08-07, `AdminChatPanel.svelte` `.cs-detail-link` 최초 적용) |
 | **close-red**(강조닫기버튼) | 클래스 `.close-btn`/`.rep-close-btn` (CMS 전용, 컴포넌트 파일 없음) | 배치: `flex`(margin-left:auto) 또는 `absolute`(카드 코너) | cms-uiux.md §0-10-A · 28×28px · `✕` 문자(SVG 금지) · hover 시 `--cs-red-badge` 강조 |
+| **CalendarGrid**(날짜선택 그리드) | `$lib/components/common/CalendarGrid.svelte` | — | CMS `CmsDatePicker.svelte` + front `ProfileTabContent.svelte`·`cart/+page.svelte` 3곳 공용. **환경분리 예외 적용 컴포넌트**(위 "⛔ 환경 분리" 절 예외 참고) — 날짜 숫자 서체에 front 전용 토큰 `--font-en-display` 사용, CMS 포함 전체에 적용됨(Stephen 확정) |
 
 > ⛔ `<select>` 금지 — 드롭다운 목록 선택은 `SuggestPicker` 단독 표준
 > ⛔ 구경로 `CmsSuggestPicker` / `cms-suggest-picker` 신규 작성 금지
@@ -511,6 +527,30 @@ function handleAmountInput(raw: string, isComposing = false): string {
 ⚠️ 위는 전부 CMS 화면 — USER(front) 화면에 금액 "입력" 폼이 신규로 생기면(현재는 결제
   금액이 전부 계산값 표시일 뿐 직접입력 폼이 없음) 이 표준을 동일하게 적용할 것.
 ```
+
+---
+
+## 🔴 PC 반응형 전용 폰트 토큰 다운스케일 — 표준 확정 ★★★ (2026-09-21 확정)
+
+> **"PC반응형 전용 폰트토큰값 적용해" 언급 시 → 대상 화면에 재도출 없이 즉시 적용.**
+> `/cart` 3개 영역(23개 셀렉터) 파일럿 적용 → Stephen 실화면 확인 후 표준 확정.
+
+```
+원칙: 대상 요소의 "현재 모바일 표시값"(max-width:640px 오버라이드 있으면 그 값, 없으면
+  기본/공용 규칙값)을 확인 → 등급 사다리(25→18→16→14→12)에서 정확히 한 칸 아래 값을
+  새 PC 전용 값(min-width:641px)으로 지정. 배율 계산이 아니라 이미 있는 등급 사이를
+  한 칸 이동하는 것.
+
+적용 위치: 그 화면의 기존 모바일 통합 @media(max-width:640px) 블록 바로 뒤에
+  @media(min-width:641px) 블록 하나로 통합(화면당 흩어놓지 않음).
+
+제외: 이미 PC 전용 값이 있는 요소 · 이미 12px(최저 등급) · "원"/"p"/"일" 등 단위
+  보조 텍스트(요청 시에만 포함).
+⚠️ font: var(--text-*) shorthand 토큰째 교체하는 요소는 font-weight도 함께 바뀔 수
+  있음(예: CTA 버튼 900→700) — 강조 요소는 적용 후 실화면 확인 권장.
+```
+
+세부 절차·패턴 코드·GATE C 체크리스트 → `@.claude/rules-ref/front-uiux.md §23`
 
 ---
 

@@ -336,6 +336,8 @@
     flex-wrap: nowrap;
     box-sizing: border-box;
   }
+  /* 2026-09-21(Stephen 지시) — PC 전용 서브 GNB(sub-gnb_navi_b) 표준 규격 축소 3종
+     (cart/+page.svelte와 동일 인라인 패턴이라 동일하게 반영, 그쪽 주석 참고). */
   .sub-gnb-b-pill {
     /* Stephen 지시(2026-09-06): PC반응형 가로폭 100% — front-uiux.md §13-2 문서상
        기본값(max-width:460px)은 cart/+page.svelte 실제 코드의 넓은 화면(>1024px) 케이스
@@ -349,12 +351,12 @@
     align-items: center;
     justify-content: space-between;
     gap: 16px;
-    padding: 20px 40px;
+    padding: 14px 40px;
     border-radius: 25px;
     width: 100%;
     max-width: none;
     min-width: 0;
-    min-height: 62px;
+    min-height: 43px;
     flex: 1 1 auto;
     box-sizing: border-box;
     color: var(--cs-text);
@@ -368,17 +370,18 @@
     min-width: 0;
   }
   .sub-gnb-b-arrow {
-    width: 22px;
-    height: 18px;
+    width: 11px;
+    height: 9px;
     flex-shrink: 0;
   }
   .sub-gnb-b-back {
-    font: var(--text-pc-title-16);
+    font: var(--text-pc-body-14);
     color: var(--cs-text);
     white-space: nowrap;
   }
   .sub-gnb-b-title {
     font: var(--text-pc-menu-en-20);
+    font-size: 18px;
     color: var(--cs-text);
     flex-shrink: 0;
     white-space: nowrap;

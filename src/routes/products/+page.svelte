@@ -158,14 +158,6 @@
   function productLink(p: ProductCard): string {
     return `/products/${p.slug ?? p.id}`
   }
-  function dayPrice(p: ProductCard): string {
-    const d24 = p.price_24h ?? (p.base_price_daily > 0 ? p.base_price_daily : null)
-    const d12 = p.price_12h ?? null
-    const parts: string[] = []
-    if (d24 != null) parts.push(`Day ${formatPrice(d24)}`)
-    if (d12 != null) parts.push(`12H ${formatPrice(d12)}`)
-    return parts.join(' / ') || '–'
-  }
   function productImg(p: ProductCard): string {
     return p.image_urls?.[0] ?? '/images/products/grid-flat.png'
   }
@@ -485,6 +477,8 @@
     <div class="m-prod-grid">
       {#if useDbGrid}
         {#each data.gridProducts.slice(0, 6) as prod}
+          {@const d24 = prod.price_24h ?? (prod.base_price_daily > 0 ? prod.base_price_daily : null)}
+          {@const d12 = prod.price_12h ?? null}
           <a href={productLink(prod)} class="m-prod-card">
             <div class="m-prod-img-box">
               <img src={productImg(prod)} alt={prod.name} class="abs-img"
@@ -504,8 +498,29 @@
               {/if}
             </div>
             <div class="m-prod-info">
+              {#if prod.category}
+                <p class="m-prod-category">{prod.category}</p>
+              {/if}
+              {#if d24 !== null || d12 !== null}
+                <div class="m-prod-price-row">
+                  {#if d24 !== null}
+                    <span class="m-prod-price-group">
+                      <span class="m-prod-price-label">Day</span>
+                      <span class="m-prod-price-num">{formatPrice(d24)}</span>
+                    </span>
+                  {/if}
+                  {#if d24 !== null && d12 !== null}
+                    <span class="m-prod-price-sep">/</span>
+                  {/if}
+                  {#if d12 !== null}
+                    <span class="m-prod-price-group">
+                      <span class="m-prod-price-label">12H</span>
+                      <span class="m-prod-price-num">{formatPrice(d12)}</span>
+                    </span>
+                  {/if}
+                </div>
+              {/if}
               <p class="m-prod-name">{prod.name}</p>
-              <p class="m-prod-price">{dayPrice(prod)}</p>
             </div>
           </a>
         {/each}
@@ -551,6 +566,8 @@
     <div class="m-prod-grid">
       {#if useDbGrid}
         {#each data.gridProducts.slice(6) as prod}
+          {@const d24 = prod.price_24h ?? (prod.base_price_daily > 0 ? prod.base_price_daily : null)}
+          {@const d12 = prod.price_12h ?? null}
           <a href={productLink(prod)} class="m-prod-card">
             <div class="m-prod-img-box">
               <img src={productImg(prod)} alt={prod.name} class="abs-img"
@@ -570,8 +587,29 @@
               {/if}
             </div>
             <div class="m-prod-info">
+              {#if prod.category}
+                <p class="m-prod-category">{prod.category}</p>
+              {/if}
+              {#if d24 !== null || d12 !== null}
+                <div class="m-prod-price-row">
+                  {#if d24 !== null}
+                    <span class="m-prod-price-group">
+                      <span class="m-prod-price-label">Day</span>
+                      <span class="m-prod-price-num">{formatPrice(d24)}</span>
+                    </span>
+                  {/if}
+                  {#if d24 !== null && d12 !== null}
+                    <span class="m-prod-price-sep">/</span>
+                  {/if}
+                  {#if d12 !== null}
+                    <span class="m-prod-price-group">
+                      <span class="m-prod-price-label">12H</span>
+                      <span class="m-prod-price-num">{formatPrice(d12)}</span>
+                    </span>
+                  {/if}
+                </div>
+              {/if}
               <p class="m-prod-name">{prod.name}</p>
-              <p class="m-prod-price">{dayPrice(prod)}</p>
             </div>
           </a>
         {/each}
@@ -1247,7 +1285,8 @@
     display: flex;
     align-items: center;
     gap: 3px;
-    color: var(--cs-text);
+    /* purple-90 컬러토큰 반영(ProductDPCard .pc-price-row와 통일) */
+    color: var(--cs-purple-dark);
     letter-spacing: -0.5px;
     flex-wrap: wrap;
   }
@@ -1258,10 +1297,13 @@
     font-weight: 900;
     line-height: 1;
     font-variant-numeric: tabular-nums;
+    /* purple-60 컬러토큰 반영(ProductDPCard .pc-price-num과 통일) */
+    color: var(--cs-purple-light);
   }
   .mdp-price-sep { font: var(--text-m-script-14B); line-height: 1; }
   .mdp-name {
-    font: var(--text-m-script-14B);
+    /* 볼드 없는 폰트토큰 적용(14px Medium, PC·모바일 동일) */
+    font: var(--text-m-script-14);
     color: var(--cs-text-mid);
     letter-spacing: -0.5px;
     line-height: 1;
@@ -1347,16 +1389,50 @@
     position: relative;
     background: #e1def3;
   }
-  .m-prod-info { padding: 5px 5px 10px; }
-  .m-prod-name {
-    font-family: 'Noto Sans KR', sans-serif;
-    font-weight: 700;
-    font-size: 16px;
-    color: #1d183e;
-    line-height: 1.6;
-    letter-spacing: -0.5px;
-    margin: 0 0 2px;
+  /* Best Pick 카드 내부 정보 구성 — ProductDPCard(.pc-info/.pc-category/.pc-price-row)와
+     동일한 구성(카테고리 배지 → 가격(라벨/숫자 분리) → 상품명)으로 통일(2026-09-18).
+     카드 박스 비율(정사각 이미지)은 기존 그대로 유지, 내부 정보 레이아웃만 맞춤. */
+  .m-prod-info {
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+    padding: 5px 5px 10px;
   }
+  .m-prod-category {
+    font: var(--text-m-script-12);
+    font-weight: 700;
+    color: var(--cs-text-light);
+    line-height: 1;
+    margin: 0;
+  }
+  .m-prod-price-row {
+    display: flex;
+    align-items: center;
+    gap: 3px;
+    color: var(--cs-purple-dark);
+    letter-spacing: -0.5px;
+    flex-wrap: wrap;
+  }
+  .m-prod-price-group { display: flex; align-items: center; gap: 3px; }
+  .m-prod-price-label { font: var(--text-m-script-14B); line-height: 1; }
+  .m-prod-price-num {
+    font: var(--text-m-body-16B);
+    font-weight: 900;
+    line-height: 1;
+    font-variant-numeric: tabular-nums;
+    color: var(--cs-purple-light);
+  }
+  .m-prod-price-sep { font: var(--text-m-script-14B); line-height: 1; }
+  .m-prod-name {
+    /* 볼드 제거 + 한 사이즈 작은 폰트토큰 적용(16px Bold → 14px Medium,
+       .pc-name·.mdp-name과 동일 토큰으로 통일) */
+    font: var(--text-m-script-14);
+    color: #1d183e;
+    letter-spacing: -0.5px;
+    margin: 0;
+  }
+  /* 정적 폴백(mobileProducts, useDbGrid=false) 전용 — 카테고리·분리가격 데이터가 없어
+     기존 한 줄 문자열 표시 그대로 유지 */
   .m-prod-price {
     font-family: 'Noto Sans KR', sans-serif;
     font-weight: 700;
