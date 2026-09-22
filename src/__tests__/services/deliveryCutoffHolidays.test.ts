@@ -54,12 +54,13 @@ let originalCutoffSettings: {
   enable_prev_day_check: boolean;
   enable_fixed_holidays: boolean;
   enable_manual_holidays: boolean;
+  holiday_guide_text: string;
 } | null = null;
 
 beforeAll(async () => {
   const { data } = await admin
     .from('delivery_cutoff_settings')
-    .select('enable_prev_day_check, enable_fixed_holidays, enable_manual_holidays')
+    .select('enable_prev_day_check, enable_fixed_holidays, enable_manual_holidays, holiday_guide_text')
     .limit(1)
     .single();
   originalCutoffSettings = data as typeof originalCutoffSettings;
@@ -355,6 +356,7 @@ describe('[TDD] upsert_delivery_cutoff_settings — 휴무일 제어 토글 3종
       p_enable_prev_day_check: true,
       p_enable_fixed_holidays: true,
       p_enable_manual_holidays: true,
+      p_holiday_guide_text: '',
     });
     expect(error).not.toBeNull();
   });
@@ -367,23 +369,34 @@ describe('[TDD] upsert_delivery_cutoff_settings — 휴무일 제어 토글 3종
       p_enable_prev_day_check: true,
       p_enable_fixed_holidays: true,
       p_enable_manual_holidays: true,
+      p_holiday_guide_text: '',
     });
     expect(error).not.toBeNull();
     expect(error?.message).toContain('CMS 권한');
   });
 
+  // ⚠️ 2026-09-21 수정 — upsert_delivery_cutoff_settings(Migration #505)의 4번째 파라미터
+  // p_holiday_guide_text는 DEFAULT ''이고 함수 내부(holiday_guide_text = p_holiday_guide_text)가
+  // 기존 값 보존 없이 무조건 덮어쓴다. 이 테스트가 3-param으로만 호출하던 구버전은 매 실행마다
+  // CMS 관리자가 입력해둔 실제 안내문구를 조용히 빈 문자열로 지우는 실사고였다(라이브 Stage DB
+  // 싱글톤 행을 그대로 공유하는 테스트라 afterEach/afterAll 복원 대상에도 없었음). beforeAll
+  // 스냅샷값을 그대로 왕복(round-trip) 전달해 라이브 데이터를 보존하면서 저장 성공만 검증한다.
   it('manager 이상 CMS 사용자는 저장에 성공하고 값이 그대로 반영된다', async () => {
     const { client, cleanup } = await createEphemeralSession('manager');
     cleanups.push(cleanup);
+
+    const currentGuideText = originalCutoffSettings?.holiday_guide_text ?? '';
 
     const { data, error } = await rpcCall<{
       enable_prev_day_check: boolean;
       enable_fixed_holidays: boolean;
       enable_manual_holidays: boolean;
+      holiday_guide_text: string;
     }>(client, 'upsert_delivery_cutoff_settings', {
       p_enable_prev_day_check: true,
       p_enable_fixed_holidays: true,
       p_enable_manual_holidays: false,
+      p_holiday_guide_text: currentGuideText,
     });
 
     expect(error).toBeNull();
@@ -391,17 +404,19 @@ describe('[TDD] upsert_delivery_cutoff_settings — 휴무일 제어 토글 3종
       enable_prev_day_check: true,
       enable_fixed_holidays: true,
       enable_manual_holidays: false,
+      holiday_guide_text: currentGuideText,
     });
 
     const { data: row } = await admin
       .from('delivery_cutoff_settings')
-      .select('enable_prev_day_check, enable_fixed_holidays, enable_manual_holidays')
+      .select('enable_prev_day_check, enable_fixed_holidays, enable_manual_holidays, holiday_guide_text')
       .limit(1)
       .single();
     expect(row).toMatchObject({
       enable_prev_day_check: true,
       enable_fixed_holidays: true,
       enable_manual_holidays: false,
+      holiday_guide_text: currentGuideText,
     });
   });
 });

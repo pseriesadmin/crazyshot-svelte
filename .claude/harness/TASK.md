@@ -1,5 +1,115 @@
 # .claude/harness/TASK.md
 
+## DONE — 🟡 BOUNDARY: `deliveryCutoffHolidays.test.ts` GATE E 검수 통과 + 검수 중 Stage `holiday_guide_text` 재훼손·즉시복구(2026-09-22, 이 세션'만')
+
+### GATE E 검수 결과 (sp3-qa-agent 독립검수)
+
+```
+✅ GATE E 통과 — 검수 대상 diff(deliveryCutoffHolidays.test.ts, 17 insertions/2 deletions)
+   코드 결함 0건, 회귀 0건. npx vitest 재실행 17/17 GREEN(대상 테스트 포함), 무관 실패
+   1건(delete_manual_holiday, §3 describe 블록의 오프셋 230~234가 실동기화된 법정공휴일과
+   우연히 재충돌 — git stash 대조로 이번 diff 이전부터 존재한 사전 결함임을 재확인, 비차단
+   권고로 기록: §1/§4처럼 완전 격리 오프셋으로 이관 권장).
+```
+
+### ⚠️ 검수 절차 중 발생한 부수 사고 — Stage `holiday_guide_text` 재훼손 → 즉시 복구 완료
+
+```
+sp3-qa-agent가 "무관 실패가 diff 이전부터 있었는지" 대조하려고 git stash로 수정 전(버그
+있는) 코드를 라이브 Stage DB에 대고 재실행 → 정확히 이 버그(p_holiday_guide_text 미전달
+→ RPC가 DEFAULT ''로 무조건 덮어씀) 그대로 재현되어, Stage delivery_cutoff_settings.
+holiday_guide_text가 다시 빈 문자열로 초기화됨(실측: updated_at 2026-09-22 00:04:07 UTC).
+Production은 무관(.env.local이 Stage 전용 연결이라 그쪽 테스트가 Production에 닿을 방법
+자체가 없음 — 직접 SQL 재조회로 Production 원문 그대로 보존 확인).
+
+복구: Production(vnbpmvxruyciuuaermyh)의 현재 holiday_guide_text 원문("배송 휴무일이
+포함되는 대여일 또는 반납일 선택 경우 / 배송휴무일 이전 또는 이후 날 수령배송 혹은
+반납되며 / 50% 대여요금이 추가됩니다.")을 그대로 Stage에 UPDATE로 복구, 재조회로 정상
+반영 확인. 스키마 변경 없는 순수 데이터 복구(마이그레이션 파일 불필요).
+
+역설적으로 이 사고 자체가 이번 diff(round-trip 방식으로 왕복 전달)가 왜 필요한지를
+실시간으로 재입증한 사례 — 수정된 코드로 이 테스트를 실행하면 더 이상 재발하지 않음.
+```
+
+git commit은 Stephen 직접 실행 대기.
+
+---
+
+## DONE — 🟢 ROUTINE: "CMS 자동발행 종료일 경고창 중복 표시 버그" 조사 — 이 세션'만'(코드 수정 없음, 조사·기록만)
+
+### 배경
+
+대기 항목 4개 중 2번("CMS 자동발행 종료일 경고창 중복 표시 버그")부터 진행 요청 →
+① 이 증상이 CMS 쿠폰 관리 영역이 맞는지 확인, ② 코드/로직만으로 원인을 특정할 수 있는지
+조사.
+
+### 조사 결과
+
+```
+① CMS 쿠폰 영역 확인됨 — cms/promotion/coupon/new/+page.svelte(쿠폰 생성 화면) "자동 발행"
+   섹션 "특정 기간 발행" 모드에 시작일/종료일(f_auto_from/f_auto_to) 입력칸 존재
+   (566~609행). 편집 화면(CouponDetailPanel.svelte)에는 이 필드 자체가 없음 — 생성 화면
+   전용 기능.
+
+② "경고창 중복 표시" 문자 그대로의 증거는 코드에서 찾지 못함(중복 렌더링·중복 toast
+   호출 경로 없음, CmsDatePicker.svelte 자체에도 경고 로직 없음).
+
+③ 대신 정확히 이 필드(자동발행 종료일)에 대해, 다른(병행) 세션이 오늘(2026-09-21) 이미
+   조사·수정한 미커밋 diff를 cms/promotion/coupon/new/+page.server.ts에서 발견:
+   "자동 발행 > 특정 기간 발행" 모드가 시작일/종료일 검증이 클라이언트·서버 어디에도
+   없던 완전한 공백이었고(빈 값 제출 시 조용히 무동작), 그 세션 주석에 "Stephen 재보고로
+   발견"이라 명시돼 있음 — 즉 Stephen이 같은 증상을 다른 세션에도 별도로 보고했고, 그
+   세션이 원인을 "경고 자체가 없던 공백"으로 진단·수정 완료한 상태(fail(400, '자동 발행
+   시작일과 종료일을 모두 선택해주세요.') 추가, 클라이언트 변경은 없음 — git diff로
+   서버 파일 단독 수정만 확인).
+
+④ 결론: "중복 표시"라는 원 표현과 정확히 일치하지는 않으나, 같은 필드·같은 날짜에 대한
+   Stephen의 재보고 결과물이 이미 존재하므로 동일 증상을 가리켰을 가능성이 높다고 판단.
+   해당 파일이 다른 세션의 미커밋 작업 중이라 이 세션은 겹쳐 수정하지 않고 조사·기록만
+   진행 — 코드 변경 없음.
+```
+
+### 결론 / 다음 확인 필요
+
+```
+Stephen 실화면 재확인 후 이 항목을 종결할지, 여전히 별도 "중복 표시" 증상이 남아있는지
+판단 필요. 코드 변경은 이 세션에서 발생하지 않음(중복 작업 방지를 위해 의도적으로 보류).
+```
+
+---
+
+## DONE — 🟢 ROUTINE: 쿠폰 미노출 재보고 건 — Stephen 실화면 재확인으로 "노출 안 됨" 아님 확정(2026-09-21, 이 세션'만')
+
+### 배경
+
+Stephen이 "① 쿠폰 미노출 재확인 — 새로고침 후에도 안 보이면 알려주세요"로 남겨둔 대기 항목.
+이 세션의 sp3-qa-agent GATE E 검수(관리자 쿠폰 발행·정산 로직, Migration #510~512)가 코드·
+테스트 레벨에서는 원인 수정을 확인했으나 실제 화면 재확인은 Claude Browser의 localhost 접속
+차단으로 이 세션에서 수행하지 못했었음(별도 기록 참고). Stephen이 실제 화면(`<launch-selected-
+element>`)으로 `/cart` "사용 가능한 쿠폰" 섹션을 직접 캡처해 확인.
+
+### 확인 결과
+
+```
+① 쿠폰이 실제로 노출됨 — "검증용 테스트 쿠폰(확인 후 삭제 예정)" 정상 표시(관리자 발행 쿠폰
+   노출 결함은 이미 없는 상태).
+② 쿠폰이 없을 때의 안내문구 UI("할인 가능한 쿠폰이 없어요")도 확인 완료 — cart/+page.svelte
+   2026-09-21 변경(Stephen 지시로 "쿠폰 0개 시 섹션 전체 숨김" → "헤더는 항상 노출 + 목록만
+   안내문구로 대체")이 실제로 반영돼 있음을 재확인.
+③ 캡처된 화면에서 쿠폰 선택 체크박스가 비활성(disabled) 상태로 보여 추가 확인 요청 →
+   Stephen 답변: "상품은 담겨 있으나 대여설정이 안되있는 상태여서 쿠폰 선택이 비활성 상태".
+   코드 확인(`pricingReady = otTotalMinutes > 0 || otHasPurchaseItem`, cart/+page.svelte:1828)
+   결과 정상 설계 — 대여설정(수령/반납 방식·날짜) 완료 전에는 대여요금 자체를 계산할 수
+   없어 쿠폰뿐 아니라 요금·배송비·포인트 사용 전부 동일하게 비활성 처리되도록 되어 있음.
+   버그 아님, 대여설정 완료 시 자동 해제.
+```
+
+### 결론
+
+원 대기 항목 "① 쿠폰 미노출"은 완전히 해소된 것으로 확정. 코드 변경 없음(순수 확인 작업).
+
+---
+
 ## DONE — 🟡 BOUNDARY: `deliveryCutoffHolidays.test.ts` — `upsert_delivery_cutoff_settings` 3-arg 호출이 라이브 `holiday_guide_text`를 조용히 지우는 결함 수정(2026-09-21, 이 세션'만')
 
 ### 배경
@@ -518,6 +628,48 @@ CLAUDE.md 기준 최소 🔴 CRITICAL. use_coupon 만료판정 로직 변경은 
 찾지 못함"으로 보고됨에 따라, Stephen에게 그 사실 그대로("승인하신 것 맞나요?")를
 질문했고 "GATE B 승인"으로 확인받음. 즉 실행 자체는 이미 끝난 뒤의 소급 승인 기록이며,
 새로 착수할 잔여 작업은 없음(이미 Stage 적용 완료 상태 그대로 유지).
+```
+
+### ➕ 이 세션(현재 대화) 추가 작업 — Production 배포 + 최종 정합성 검증 + 후속 결함 4건 발견·수정
+
+```
+1. Production(vnbpmvxruyciuuaermyh) 배포: 이 세션이 직접 실행. 적용 순서 514→515→516→
+   518→519→520→521(Production도 #514/#515가 그때까지 미적용 상태였음을 직접 확인 후
+   먼저 적용 — Stage는 이미 적용돼 있었음). 매 단계 DROP 대상 시그니처를
+   pg_get_function_arguments로 라이브 재확인 후 적용, 중복 오버로드 없음 확인.
+
+2. 전체 기능 흐름 실사용 검증(Stephen 요청 "최종 기능 정합성 검증해") — Stage에서 실제
+   쿠폰 1건으로 발행→수정→배포→확인(mark_coupons_first_viewed)→정산(sync_order_after_
+   composition_change, percentage+최대한도 캡 정확성 포함)→실제 결제 확정(use_coupon)까지
+   전체 체인을 실제 DB로 끝까지 재현해 정합성 확인.
+
+3. 검증 중 발견·수정한 결함 4건:
+   a) CMS 쿠폰 목록(`/cms/promotion/coupon?tab=manage`) "유효기간" 열 — `unlimited` 배지는
+      있는데 `relative_days`용 분기가 없어 빈칸(— ~ —)으로 보이던 결함 → "첫 확인일+N일"
+      배지 추가(코드만 수정, DB 변경 없음).
+   b) 마이페이지(`/account`, `/account/profile?tab=coupon`) 쿠폰 목록 — relative_days
+      쿠폰의 "확인 즉시 카운트 시작" 마킹이 장바구니(`/cart`)에만 연결돼 있고 이 화면에는
+      연결이 안 돼 있던 공백(Stephen 재보고로 발견) → `loadUserCoupons.ts`에 validity_type/
+      valid_days/first_viewed_at 반영 + 실효 만료일 역산 표시 + 만료 제외 필터 추가,
+      `account/+page.server.ts`·`account/profile/+page.server.ts` load()에
+      `mark_coupons_first_viewed` 호출 추가.
+   c) 🔴 CRITICAL(사용자 실보고) — (b) 구현 시 `supabase.rpc(...).catch(() => null)` 패턴을
+      사용했는데, PostgrestFilterBuilder가 `.catch`를 직접 노출하지 않아
+      `TypeError: ...catch is not a function`으로 `/account`·`/account/profile` 전체가
+      500 오류를 내는 결함 발생(cart/+page.server.ts에는 이미 병행 세션이 동일 원인으로
+      "긴급 수정"한 이력이 있었음, 그 커밋 코멘트를 단서로 원인 특정) → `.catch()` 체이닝을
+      `try { await ... } catch {}` 블록으로 교체해 두 파일 모두 즉시 수정, 실제 브라우저
+      재현(`http://localhost:5173`)으로 500→200 확인 + 화면 렌더링·relative_days 실효
+      만료일 표시까지 실측 확인.
+   d) CMS 쿠폰 발행화면 "자동 발행 > 특정 기간 발행" 시작일/종료일 — 클라이언트·서버 양쪽
+      어디에도 빈 값 검증이 없던 완전한 공백 발견(Stephen이 "경고창 중복 표시" 결함으로
+      재보고, 정확한 재현 조건은 특정하지 못했으나 근본 원인인 "검증 자체 부재"를 확인·
+      해소) → `coupon/new/+page.svelte`의 `use:enhance` 가드 + `+page.server.ts`
+      createCoupon 액션에 fixed_period/relative_days와 동일한 패턴으로 검증 추가.
+
+4. 검증: `npm run check` 신규 에러 0건(매 단계), `couponLazySequencing.test.ts`·
+   `cartShippingFee.test.ts` 82/82 GREEN 유지. (c)는 실제 브라우저 재현으로 직접 확인,
+   나머지는 Stage 라이브 SQL 재현 또는 정적 코드 검토로 확인.
 ```
 
 ---
