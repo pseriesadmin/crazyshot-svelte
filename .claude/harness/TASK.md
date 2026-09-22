@@ -1,5 +1,34 @@
 # .claude/harness/TASK.md
 
+## DONE — 🟡 BOUNDARY: `cart/+page.svelte` 외 11개 파일 커밋 성사 확인 + GATE E 검수 착수 (2026-09-22, 이 세션'만')
+
+### 배경
+
+이 세션이 다른(병행) 세션들의 미커밋 작업(장바구니 쿠폰 정산 버그 수정·수령/반납 UX 개편·
+sub-gnb_navi_b 축소·PC 반응형 폰트 다운스케일 등, 2026-09-21자)을 발견해 파일 구성을
+분류하고 통합 커밋 메시지 초안을 제안(텍스트 제안만, 실행 없음) → Stephen이 직접 터미널에서
+`git commit`(`886c39d fix(cart): 쿠폰 할인 계산 버그 수정 + 장바구니 UX·UI 전면 정비`)
+실행 완료를 확인.
+
+### 확인 사항
+
+```
+git log --oneline -3 → 886c39d가 HEAD로 정상 반영됨(Author: Stephen Cconzy).
+git status → 제안한 12개 파일 전부 정상 커밋 반영, src/lib/utils/toast.ts만 여전히
+  미커밋(의도적으로 이번 배치에서 제외한 항목, 그대로 잔존).
+```
+
+### 다음 단계 — GATE E 검수 착수
+
+```
+이 commit(886c39d)은 이 세션이 작성한 코드가 아니라 다른 세션들의 산출물을 그대로
+커밋한 것이라 아직 어떤 세션의 GATE E 검수도 거치지 않은 상태 — 하네스 원칙("모든 NOW
+완료 → sp3-qa-agent 자동 호출")에 따라 sp3-qa-agent 독립검수를 백그라운드로 실행(아래
+별도 기록 예정).
+```
+
+---
+
 ## DONE — 🔴 CRITICAL: `/cms/set/rental` 배송요금 0원 표기 결함 — DB 데이터손실 버그 + 화면 순간깜빡임 버그 2건 수정 + 전체 23-RPC 정밀감사 (2026-09-22, 이 세션'만', ✅ GATE E 통과 — sp3-qa-agent 독립검수 완료, git commit만 Stephen 대기)
 
 ### 배경
