@@ -23,6 +23,8 @@ export type UsageReportRow = {
   conversion_pct: number
 }
 
+export type CouponCategoryOption = { value: string; label: string }
+
 export type DistributionRow = {
   id: string
   coupon_id: string
@@ -70,6 +72,20 @@ export const load: PageServerLoad = async ({ parent, locals, url }) => {
     .select('*')
     .is('deleted_at', null)
     .order('created_at', { ascending: false })
+
+  // "적용 카테고리" 편집용 선택지(BND-COUPON-CAT-1) — /cms/promotion/coupon/new와 동일 소스·필터
+  // (2026-09-21 추가: 발행 후 상세패널에서도 적용 카테고리를 확인·수정할 수 있어야 함)
+  const { data: categoryRows } = await admin
+    .from('code_mapping_groups')
+    .select('default_category, name')
+    .not('default_category', 'is', null)
+    .eq('is_active', true)
+    .eq('show_in_product_filter', true)
+    .order('sort_order', { ascending: true })
+  const categoryOptions: CouponCategoryOption[] = (categoryRows ?? []).map((r: { default_category: string; name: string }) => ({
+    value: r.default_category,
+    label: r.name,
+  }))
 
   // 사용량 리포트 (리포트 탭일 때만)
   let usageReport: UsageReportRow[] = []
@@ -121,6 +137,7 @@ export const load: PageServerLoad = async ({ parent, locals, url }) => {
   return {
     tab, stats, selectedId,
     coupons: (coupons ?? []) as Coupon[],
+    categoryOptions,
     usageReport, distributions,
     expiringSoon: (expiringSoon ?? []) as Coupon[],
     expiredCoupons: (expiredCoupons ?? []) as Coupon[],
@@ -142,13 +159,46 @@ export const actions: Actions = {
     const discount_type      = String(form.get('discount_type') ?? 'fixed')
     const discount_value     = Number(form.get('discount_value') ?? 0)
     const max_discount_amount = Number(form.get('max_discount_amount') ?? 0) || null
-    const usage_limit        = Number(form.get('usage_limit') ?? 0) || null
+    // 2026-09-21 수정: "전체 발급 한도"는 생성화면(/cms/promotion/coupon/new)부터 줄곧
+    // total_usage_limit 컬럼 기준이었는데, 이 액션만 잘못된 컬럼(usage_limit)을 갱신하고
+    // 있었다 — usage_limit은 다른 목적(장바구니 자격조건 검증)으로 쓰이는 별개 컬럼이라
+    // 건드리지 않고, 여기서 다루는 필드만 total_usage_limit으로 교정.
+    const total_usage_limit  = Number(form.get('total_usage_limit') ?? 0) || null
+    const display_name       = String(form.get('display_name') ?? '').trim() || null
     const user_grade_required = String(form.get('user_grade_required') ?? '') || null
     const validity_type      = String(form.get('validity_type') ?? 'fixed_period')
     const valid_from         = String(form.get('valid_from') ?? '') || null
     const valid_until        = String(form.get('valid_until') ?? '') || null
 
+    // 2026-09-21 추가(항목 4 — DetailPanel 노출 누락 필드 발행 후 편집 지원):
+    // 생성화면에는 있지만 이 수정 화면에는 없어 발행 후 확인·변경이 불가능했던 필드들
+    const description         = String(form.get('description') ?? '').trim() || null
+    const min_purchase_amount = Number(form.get('min_purchase_amount') ?? 0)
+    const min_rental_amount   = Number(form.get('min_rental_amount') ?? 0)
+    const min_rental_days     = Number(form.get('min_rental_days') ?? 0)
+    const per_user_limit      = Number(form.get('per_user_limit') ?? 1)
+    const applicableRaw       = form.get('applicable_categories')
+    const applicable_categories = applicableRaw ? JSON.parse(String(applicableRaw)) : null
+    const is_first_rental_only = form.get('is_first_rental_only') === 'true'
+    const is_student_only      = form.get('is_student_only') === 'true'
+    const is_walk_in_only      = form.get('is_walk_in_only') === 'true'
+    const is_subscription_only = form.get('is_subscription_only') === 'true'
+    const allow_with_points    = form.get('allow_with_points') !== 'false'
+    const allow_stacking       = form.get('allow_stacking') === 'true'
+    const valid_days           = Number(form.get('valid_days') ?? 0) || null
+
     if (!id) return { ok: false, error: '쿠폰 ID가 없습니다.' }
+
+    if (validity_type === 'relative_days' && (!valid_days || valid_days <= 0)) {
+      return { ok: false, error: '"첫 확인일로부터 N일" 모드는 유효일수(N)를 1 이상 입력해야 합니다.' }
+    }
+
+    // 2026-09-21 추가: coupons_discount_value_check(DB, discount_value>0)는 discount_type과
+    // 무관하게 전 유형에 동일 적용된다(/cms/promotion/coupon/new와 동일 가드, §2026-09-21
+    // 수정 이력 참고) — 0으로 저장 시도 시 원문 Postgres 에러가 노출되는 것을 선제 차단.
+    if (!discount_value || discount_value <= 0) {
+      return { ok: false, error: '할인값을 입력해주세요.' }
+    }
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const db = locals.supabase as unknown as any
@@ -157,11 +207,25 @@ export const actions: Actions = {
       p_discount_type: discount_type,
       p_discount_value: discount_value,
       p_max_discount_amount: max_discount_amount,
-      p_usage_limit: usage_limit,
+      p_total_usage_limit: total_usage_limit,
+      p_display_name: display_name,
       p_user_grade_required: user_grade_required,
       p_validity_type: validity_type,
       p_valid_from: valid_from,
       p_valid_until: valid_until,
+      p_description: description,
+      p_min_purchase_amount: min_purchase_amount,
+      p_min_rental_amount: min_rental_amount,
+      p_min_rental_days: min_rental_days,
+      p_per_user_limit: per_user_limit,
+      p_applicable_categories: applicable_categories,
+      p_is_first_rental_only: is_first_rental_only,
+      p_is_student_only: is_student_only,
+      p_is_walk_in_only: is_walk_in_only,
+      p_is_subscription_only: is_subscription_only,
+      p_allow_with_points: allow_with_points,
+      p_allow_stacking: allow_stacking,
+      p_valid_days: valid_days,
     })
 
     if (error) return { ok: false, error: error.message }

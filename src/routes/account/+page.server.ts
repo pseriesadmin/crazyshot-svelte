@@ -45,6 +45,23 @@ export const load: PageServerLoad = async ({ locals, depends }) => {
   const { session } = await locals.safeGetSession()
   if (!session) throw redirect(303, '/auth/login')
 
+  // relative_days("첫 확인일로부터 N일") 쿠폰: 이 화면에서 쿠폰 목록을 열어보는 시점을
+  // "첫 확인"으로 기록해 유효일수 카운트다운을 시작한다 — account/profile/+page.server.ts
+  // (모바일)와 동일 패턴, 아래 loadUserCoupons 조회보다 먼저 호출. fail-soft.
+  // mark_coupons_first_viewed는 Migration #518 신규 RPC — 타입 재생성 전까지 캐스트 사용.
+  // 2026-09-21(긴급 수정) — supabase.rpc(...)가 반환하는 PostgrestFilterBuilder는 .catch
+  // 메서드를 직접 노출하지 않아 ".catch is not a function" TypeError로 이 화면 전체가
+  // 500 오류를 내고 있었다(cart/+page.server.ts와 동일 결함, 사용자 실보고로 발견).
+  // 페일소프트 의도는 try/await로 유지하고 .catch() 체이닝만 제거.
+  type RpcCallable = (name: string, args: Record<string, string>) => Promise<unknown>
+  try {
+    await (locals.supabase.rpc as unknown as RpcCallable)(
+      'mark_coupons_first_viewed', { p_user_id: session.user.id }
+    )
+  } catch {
+    // fail-soft — RPC 실패해도 나머지 화면 로드는 계속 진행
+  }
+
   const [profileRes, addressRes, statsRes, recentRentalRes, rentalsRes, cancelsRes, inquiriesRes, wishlistRes, coupons] = await Promise.all([
     locals.supabase
       .from('user_profiles')
