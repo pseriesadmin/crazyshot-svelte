@@ -278,7 +278,7 @@
             if (result.type === 'success') {
               periodInput = ''
               csToast.success('대여 기간 조건이 추가되었습니다.')
-              await update()
+              await update({ reset: false })
             } else if (result.type === 'failure') {
               csToast.error((result.data as { error?: string })?.error ?? '추가에 실패했습니다.')
             }
@@ -347,7 +347,7 @@
               methodKey = ''
               methodDeadlineInput = ''
               csToast.success('대여 방식이 추가되었습니다.')
-              await update()
+              await update({ reset: false })
             } else if (result.type === 'failure') {
               csToast.error((result.data as { error?: string })?.error ?? '추가에 실패했습니다.')
             }
@@ -479,7 +479,7 @@
                       deadlineEditLoading = false
                       if (result.type === 'success') {
                         cancelEditDeadline()
-                        await update()
+                        await update({ reset: false })
                       } else if (result.type === 'failure') {
                         csToast.error((result.data as { error?: string })?.error ?? '수정에 실패했습니다.')
                       }
@@ -541,7 +541,7 @@
             shippingLoading = false
             if (result.type === 'success') {
               csToast.success('배송 설정이 저장되었습니다.')
-              await update()
+              await update({ reset: false })
             } else if (result.type === 'failure') {
               csToast.error((result.data as { error?: string })?.error ?? '저장에 실패했습니다.')
             }
@@ -686,7 +686,7 @@
                 use:enhance={() => {
                   return async ({ result, update }) => {
                     if (result.type === 'success') {
-                      await update()
+                      await update({ reset: false })
                     } else if (result.type === 'failure') {
                       csToast.error((result.data as { error?: string })?.error ?? '변경에 실패했습니다.')
                     }
@@ -715,7 +715,7 @@
                 use:enhance={() => {
                   return async ({ result, update }) => {
                     if (result.type === 'success') {
-                      await update()
+                      await update({ reset: false })
                     } else if (result.type === 'failure') {
                       csToast.error((result.data as { error?: string })?.error ?? '변경에 실패했습니다.')
                     }
@@ -767,7 +767,7 @@
                 use:enhance={() => {
                   return async ({ result, update }) => {
                     if (result.type === 'success') {
-                      await update()
+                      await update({ reset: false })
                     } else if (result.type === 'failure') {
                       csToast.error((result.data as { error?: string })?.error ?? '변경에 실패했습니다.')
                     }
@@ -811,7 +811,7 @@
                 tierConditions = []
                 tierDiscount = ''
                 csToast.success('배송료 우대설정이 추가되었습니다.')
-                await update()
+                await update({ reset: false })
               } else if (result.type === 'failure') {
                 csToast.error((result.data as { error?: string })?.error ?? '추가에 실패했습니다.')
               }
@@ -921,7 +921,7 @@
             return async ({ result, update }) => {
               cutoffLoading = false
               if (result.type === 'success') {
-                await update()
+                await update({ reset: false })
               } else if (result.type === 'failure') {
                 csToast.error((result.data as { error?: string })?.error ?? '저장에 실패했습니다.')
               }
@@ -997,7 +997,7 @@
                   if (result.type === 'success') {
                     const d = result.data as { upserted?: number } | undefined
                     csToast.success(`동기화 완료(${d?.upserted ?? 0}건 반영)`)
-                    await update()
+                    await update({ reset: false })
                   } else if (result.type === 'failure') {
                     csToast.error((result.data as { error?: string })?.error ?? '동기화에 실패했습니다.')
                   }
@@ -1046,7 +1046,7 @@
                   csToast.success('임시 휴무일이 추가되었습니다.')
                   manualHolidayDate = ''
                   manualHolidayNote = ''
-                  await update()
+                  await update({ reset: false })
                 } else if (result.type === 'failure') {
                   csToast.error((result.data as { error?: string })?.error ?? '추가에 실패했습니다.')
                 }
@@ -1120,7 +1120,7 @@
             if (result.type === 'success') {
               branchInput = ''
               csToast.success('지점이 추가되었습니다.')
-              await update()
+              await update({ reset: false })
             } else if (result.type === 'failure') {
               csToast.error((result.data as { error?: string })?.error ?? '추가에 실패했습니다.')
             }
@@ -1193,7 +1193,7 @@
                       return async ({ result, update }) => {
                         if (result.type === 'success') {
                           csToast.success('지점 정보가 저장되었습니다.')
-                          await update()
+                          await update({ reset: false })
                         } else if (result.type === 'failure') {
                           csToast.error((result.data as { error?: string })?.error ?? '저장에 실패했습니다.')
                         }
@@ -1279,7 +1279,7 @@
               guideLoading = false
               if (result.type === 'success') {
                 csToast.success('안내문이 저장되었습니다.')
-                await update()
+                await update({ reset: false })
               } else if (result.type === 'failure') {
                 csToast.error((result.data as { error?: string })?.error ?? '저장에 실패했습니다.')
               }
@@ -1331,7 +1331,7 @@
               if (result.type === 'success') {
                 consentInput = ''
                 csToast.success('동의문이 추가되었습니다.')
-                await update()
+                await update({ reset: false })
               } else if (result.type === 'failure') {
                 csToast.error((result.data as { error?: string })?.error ?? '추가에 실패했습니다.')
               }

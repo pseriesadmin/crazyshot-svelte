@@ -1,5 +1,113 @@
 # .claude/harness/TASK.md
 
+## DONE — 🔴 CRITICAL: `/cms/set/rental` 배송요금 0원 표기 결함 — DB 데이터손실 버그 + 화면 순간깜빡임 버그 2건 수정 + 전체 23-RPC 정밀감사 (2026-09-22, 이 세션'만', ✅ GATE E 통과 — sp3-qa-agent 독립검수 완료, git commit만 Stephen 대기)
+
+### 배경
+
+```
+Stephen 신고: "/cms/set/rental" 배송 설정에서 안내문구를 바꿔 저장했더니 왕복요금·배송요금·
+반납요금이 0원으로 표시되고, 사이트(/cart)에는 예전 값이 그대로 남아있음.
+"대여관리(/cms/set/rental) 설정 로직을 전부 정밀 탐색하고 테스트해서 이렇게 숨겨진 오류를
+무조건 찾아. 사용자 장바구니 결제에 핵심 설정이야. 무조건 100% 정합되도록 해!" 지시에 따라
+이 화면이 쓰는 RPC 23개 전체를 감사.
+```
+
+### ① CRITICAL 데이터손실 버그 — `upsert_rental_shipping_settings` (Migration #523)
+
+```
+원인: UPDATE 문이 round_trip_fee = CASE WHEN p_enable_round_trip THEN p_round_trip_fee
+     ELSE NULL END 형태로, "이 요금 사용" 토글이 꺼져 있으면 저장된 금액 자체를 NULL로
+     지워버렸음. 이 화면의 요금 3종·안내문·토글이 폼 하나를 공유해 서로 다른 버튼(요금
+     입력 blur / 토글 클릭 / "안내문 저장")이 전부 같은 폼을 제출하다 보니, 안내문만
+     바꾸려 저장해도 그 순간 토글 상태에 따라 다른 요금이 함께 지워질 수 있었음.
+수정 근거: 실제 요금 계산(cartShippingFee.ts calcShippingFee)은 enable_* 플래그만
+     독립적으로 먼저 확인해 false면 0을 반환 — 저장된 요금 값 자체는 참조하지 않음.
+     즉 "토글 끄면 값을 지운다"는 동작은 실제 계산에 아무 영향이 없으면서 부작용만 있었음.
+수정: CASE...NULL 제거, 항상 값 그대로 저장(shipping_guide와 동일 패턴).
+적용: Stage(ezyvffjvuwmtuhpxdjrw)→Production(vnbpmvxruyciuuaermyh) 순서 적용,
+      각 환경 pg_get_functiondef로 CASE WHEN 제거 확인 + 실데이터 무손상 확인.
+```
+
+### ② 전체 23-RPC 정밀감사 — 동일 결함 패턴 추가 발견 여부 확인
+
+```
+/cms/set/rental이 쓰는 RPC 23개 전체를 pg_get_functiondef로 일괄 조회해 라인 단위 검토.
+동일 "조건부 NULL 지우기" 패턴이 있던 곳은 위 ①(upsert_rental_shipping_settings)과
+별도로 이미 이전 태스크에서 수정된 upsert_rental_method_option(deadline_time COALESCE
+버그, Migration #522) 단 2건뿐 — 나머지 21개는 전부 안전(단순 토글·무조건 덮어쓰기·
+비변경 조회)함을 확인. 회귀 테스트(deliveryCutoffHolidays.test.ts 등) 재실행, 무관
+사전 결함 1건(별건, 이미 별도 트래킹) 제외 전부 GREEN.
+```
+
+### ③ 저장 직후 "0원 순간 깜빡임" 화면 버그 — 클라이언트 렌더링 타이밍 결함
+
+```
+①번 DB 수정 후에도 Stephen이 재보고: "여전히 배송요금 수정 시 자동 저장 되면서 0원으로
+표기 오류중, 새로 고침 시 정상 보이지만 이건 분명한 오류!!!" — DB 값은 이미 정상(새로고침
+하면 맞게 보임)인데, 저장 직후 화면에 잠깐 0원이 번쩍이는 별개의 클라이언트 버그.
+
+원인: SvelteKit use:enhance 콜백에서 update()를 인자 없이 호출하면 기본값이
+     { reset: true }라, invalidateAll() 실행보다 먼저 브라우저 네이티브 form.reset()이
+     실행됨. 이 화면 요금 입력칸은 bind:value가 아니라 value={...}로 Svelte 상태를 직접
+     반영하는 방식이라, 네이티브 reset이 먼저 실행되면 순간 빈칸(placeholder "0")으로
+     보였다가 뒤이어 정상값으로 돌아오는 깜빡임이 발생.
+
+수정: src/routes/cms/set/rental/+page.svelte 전체에서 await update()(인자 없음) 15곳
+     전부를 await update({ reset: false })로 일괄 변경(addPeriod·addMethod·
+     updateMethodDeadline·saveShipping·toggleBulkDelivery·toggleCourierDependent·
+     toggleDeliveryType·addDiscountTier·saveCutoffSettings·syncHolidaysNow·
+     addManualHoliday·addBranch·updateBranch·saveGuide·addConsent).
+
+회귀 검증: "새 항목 추가" 폼 6개(addPeriod·addMethod·addDiscountTier·addManualHoliday·
+     addBranch·addConsent)는 네이티브 reset에 의존해 입력칸을 비웠을 가능성이 있어
+     전부 개별 확인 — 6개 전부 success 분기에서 자신이 전송하는 모든 필드를 수동으로
+     초기화(`inputValue = ''` 등)하고 있어 reset:false로 바뀌어도 회귀 없음. "저장·토글"
+     계열 9개 폼은 애초에 저장 후 값이 유지돼야 정상이라 수동 리셋 로직이 없는 게 맞음.
+```
+
+### GATE E 검수 결과 (sp3-qa-agent 독립검수)
+
+```
+✅ GATE E 통과 — 요청 범위 외 수정 0건(diff 15줄 정확히 update({reset:false})만),
+   console.log/any타입/TODO 0건, npm run check 베이스라인 변화 없음(1 에러/401 경고
+   그대로), 6개 add-폼 수동클리어 로직 전수 확인 완료, 실패(failure) 경로 회귀 없음
+   확인. 발견된 이슈 없음.
+```
+
+### ④ Stephen 재검토 지시("매번 오류 나는 건 정밀검토 안했다는 소리") — 독립 재감사 실행
+
+```
+배경: Stephen이 정상 작동을 확인한 뒤에도 "왜 매번 반복되냐"며 위 ①~③ 수정과 점검 항목
+자체를 재검토하라고 지시. 기존 결론을 그대로 재확인하는 방식이 아니라 아래 2가지를
+새로 실행:
+
+1. RPC 목록 자체를 기억/이전 요약이 아니라 코드에서 grep으로 재도출 →
+   실제로는 "23개"가 아니라 25개였음(+page.server.ts untypedRpc 호출 24개 + +page.svelte
+   경유 holidaySync.ts의 sync_national_holidays 1개, 이전 감사에서 누락됐던 RPC).
+   25개 전부를 Production(vnbpmvxruyciuuaermyh)에서 pg_get_functiondef로 직접 재조회 —
+   신규 발견된 sync_national_holidays 포함 25개 전부 안전 확인(조건부 NULL 지우기 패턴
+   없음). 이전 감사가 "23개"라고 잘못 셌던 것 자체가 이번 재검토로 드러난 절차 허점.
+
+2. 새로운 결함 클래스 추가 점검 — "일부 필드만 담아 보내 나머지가 덮어써지는 위험"
+   (RPC 자체엔 CASE/COALESCE가 없어도, 클라이언트가 폼 일부 값만 보내면 RPC의
+   "무조건 덮어쓰기" 특성상 나머지가 빈 값으로 사라질 수 있는 구조적 위험 — ①번과는
+   다른 각도의 결함 유형). saveShipping(단일 폼 hidden input 전체 반영 확인)·
+   updateBranch(branchForms가 $effect로 서버 최신값에서 매번 재시딩되는 것 확인)·
+   updateMethodDeadline(name/display_order/method_key를 현재값 그대로 hidden 재전송하는
+   것 확인) 등 "무조건 덮어쓰기" RPC를 호출하는 모든 폼을 개별 추적 — 전부 안전, 추가
+   결함 없음.
+
+결론: 추가 결함 발견 없음(현재 상태 정상 작동 재확인과 일치) — 다만 "RPC 23개"라는 이전
+집계 자체가 부정확했던 절차적 허점은 인정·기록. Stephen에게 재발 방지책으로
+scripts/check-rpc-error-handling.mjs(기존 RPC 에러처리 누락 자동감지 스크립트)를
+확장해 "조건부 NULL 지우기" 패턴도 자동 탐지하도록 하는 방안을 제안(Stephen 승인 대기,
+아직 미착수 — 요청범위 외 신규 작업이라 임의 실행 금지 원칙 준수).
+```
+
+git commit은 Stephen 직접 실행 대기.
+
+---
+
 ## DONE — 🟡 BOUNDARY: `deliveryCutoffHolidays.test.ts` GATE E 검수 통과 + 검수 중 Stage `holiday_guide_text` 재훼손·즉시복구(2026-09-22, 이 세션'만')
 
 ### GATE E 검수 결과 (sp3-qa-agent 독립검수)
