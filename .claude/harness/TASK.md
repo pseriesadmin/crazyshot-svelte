@@ -1,5 +1,61 @@
 # .claude/harness/TASK.md
 
+## DONE — 🟡 BOUNDARY: 대여방식 옵션에 "반납방식 노출용 안내문구"(return_deadline_time) 신설 (Migration #524, 2026-09-23, 이 세션'만')
+
+### 배경
+
+```
+Stephen이 CMS "대여방식" 안내문구 인라인 수정 아코디언(선택영역)을 지목하며, 기존
+deadline_time 입력폼(수령방식용)은 유지하고 그 아래에 "반납방식 노출용 안내문" 입력폼을
+하나 더 추가해달라고 요청. 조사 결과 기존 deadline_time은 /cart의 수령(pickup) 탭·반납
+(return) 탭이 deliveryTabs 배열 하나를 그대로 공유해 항상 동일한 문구를 노출하고
+있었음(computeReturnVisibleTabs는 필터링만 할 뿐 deadline 필드를 분리하지 않음) — Stephen이
+기존 필드를 "수령방식 노출용"이라고 명시적으로 지칭한 것 자체가 이 설계 공백을 드러냄.
+```
+
+### 구현
+
+```
+1. Migration #524 — rental_method_options.return_deadline_time TEXT 컬럼 신설 +
+   upsert_rental_method_option RPC를 5-param→6-param(p_return_deadline_time 추가)으로
+   재정의. deadline_time과 동일하게 COALESCE 없이 무조건 덮어쓰기(Migration #522 원칙
+   유지), method_key만 기존대로 COALESCE. 옛 5-param 오버로드 DROP + REVOKE/GRANT
+   하드닝 재적용. Stage(ezyvffjvuwmtuhpxdjrw)→Production(vnbpmvxruyciuuaermyh) 순서
+   적용, 양쪽 다 pg_get_functiondef·컬럼·권한 직접 재조회로 확인 완료.
+2. src/routes/cms/set/rental/+page.server.ts — RentalMethodOption 인터페이스에
+   return_deadline_time 추가, load() select에 컬럼 추가, addMethod(신규 등록 시엔
+   null 명시 전송 — 입력폼 없음, 등록 후 인라인 수정으로 설정)·updateMethodDeadline
+   (두 필드 모두 20자 검증 후 RPC에 전달) 갱신.
+3. src/routes/cms/set/rental/+page.svelte — 아코디언에 "수령방식"/"반납방식" 두 개
+   라벨+입력행을 세로로 배치(기존 가로 1행 폼을 column 레이아웃으로 재구성), 하나의
+   <form>으로 함께 제출(부분필드 전송 위험 방지 — 직전 QA 재검토에서 확인한 "무조건
+   덮어쓰기 RPC는 항상 전체 필드 재전송" 원칙 그대로 적용). editingReturnDeadlineValue
+   상태 신설, startEditDeadline/cancelEditDeadline에서 두 값 함께 seed/clear.
+4. cart/+page.server.ts·+page.svelte — deliveryOptions 조회에 return_deadline_time
+   추가, 반납(return) leg 전용 탭 소스(returnDeliveryTabs)를 신설해 deadline 필드를
+   return_deadline_time에서 가져오도록 분리 — returnVisibleTabsFor가 이제
+   returnDeliveryTabs를 사용(기존 pickupVisibleTabs/deliveryTabs는 deadline_time
+   그대로 유지, 무변경).
+```
+
+### 검증
+
+```
+npm run check — 베이스라인(1 에러/401 경고) 그대로, 신규 에러/경고 0건.
+cartShippingFee.test.ts 69/69 GREEN(computeReturnVisibleTabs 순수함수 자체는 무변경).
+customerSelfCancel.test.ts·createHoldReservationWithShipment.test.ts(rental_method_
+option 참조 테스트) 22/22 GREEN.
+✅ Stephen이 선택영역(<launch-selected-element>)으로 진행 중이던 Claude Browser 세션 컨텍스트
+안에서(CLAUDE.md 조건 ① 충족) /cart 실화면 검증 완료 — "크레이지샷배송 대여" 방식의
+수령 탭엔 "15:00 마감"(deadline_time), 반납 탭엔 "그래그래"(return_deadline_time, Stephen이
+CMS에서 미리 저장해둔 테스트값)가 서로 다르게 노출되는 것 확인. Stephen 본인이 "정상 노출
+확인되었음"으로 최종 확인.
+```
+
+git commit은 Stephen 직접 실행 대기.
+
+---
+
 ## DONE — 🟡 BOUNDARY: `cart/+page.svelte` 외 11개 파일 커밋 성사 확인 + GATE E 검수 착수 (2026-09-22, 이 세션'만')
 
 ### 배경

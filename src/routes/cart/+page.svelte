@@ -1386,7 +1386,7 @@
 
   // 배송 탭 — 카트 상품의 allowed_method_ids 기준으로 rental_method_options 필터링
   interface DeliveryTabMeta { v: DeliveryMethod; label: string; deadline: string }
-  interface DeliveryOptionRow { id: string; method_key: string; name: string; deadline_time: string | null }
+  interface DeliveryOptionRow { id: string; method_key: string; name: string; deadline_time: string | null; return_deadline_time: string | null }
 
   function computeAllowedMethodIds(prods: ProductRow[]): Set<string> | 'all' | 'none' {
     type P = ProductRow & { allowed_method_ids?: string[] | null }
@@ -1440,6 +1440,20 @@
       .filter((o: DeliveryOptionRow) => !hasDeliveryDisabledOption || !isDeliveryTypeMethod(o.method_key as DeliveryMethod))
       .map((o: DeliveryOptionRow) => ({ v: o.method_key as DeliveryMethod, label: o.name, deadline: o.deadline_time ?? '' }))
   );
+  // 반납(return) leg 전용 탭 소스(2026-09-23, Migration #524) — deliveryTabs와 필터 조건은
+  // 완전히 동일하되, deadline 필드만 return_deadline_time(반납방식 노출용 안내문구)에서
+  // 가져온다. 과거엔 pickup/return 두 leg가 deliveryTabs 하나를 그대로 공유해 같은 방식이
+  // 수령이든 반납이든 항상 동일한 안내문구(deadline_time)를 노출했음 — Stephen이 기존
+  // 필드를 명시적으로 "수령방식 노출용"으로 지칭하며 반납방식용 별도 필드를 요청, 이후
+  // computeReturnVisibleTabs(아래 returnVisibleTabsFor)는 이 배열을 필터링만 하므로
+  // deadline 값 자체는 그대로 통과된다.
+  const returnDeliveryTabs = $derived<DeliveryTabMeta[]>(
+    allowedMethodIds === 'none' ? [] :
+    ((data.deliveryOptions as DeliveryOptionRow[] | undefined) ?? [])
+      .filter((o: DeliveryOptionRow) => o.method_key && (allowedMethodIds === 'all' || allowedMethodIds.has(o.id)))
+      .filter((o: DeliveryOptionRow) => !hasDeliveryDisabledOption || !isDeliveryTypeMethod(o.method_key as DeliveryMethod))
+      .map((o: DeliveryOptionRow) => ({ v: o.method_key as DeliveryMethod, label: o.name, deadline: o.return_deadline_time ?? '' }))
+  );
   // "배송 반납 허용 지정"(CMS, rental_method_options.is_delivery_type) — ON으로 지정된 방식을
   // 반납 탭 목록에서 제외한다. "요청 A"(수령=배송 선택 시 반납방식을 자동으로 같은 배송값으로
   // 강제복사, is_bulk_delivery 판정)와는 별개 개념 — 이 목록은 "수령이 배송이 아닐 때"의
@@ -1470,7 +1484,7 @@
   // 일치하지 않는 빈 문자열로 넘긴다 — "미선택 상태는 배송(is_delivery_type)이 아니다"와
   // 동일하게 안전히 처리되는 값(2026-09-04, null 허용 확장).
   function returnVisibleTabsFor(pickupMethod: DeliveryMethod | null): DeliveryTabMeta[] {
-    return computeReturnVisibleTabs(deliveryTabs, sdDeliveryOpts, pickupMethod ?? '')
+    return computeReturnVisibleTabs(returnDeliveryTabs, sdDeliveryOpts, pickupMethod ?? '')
   }
   // 2026-09-04: 신규/드래프트 카트 항목의 로컬 기본 수령·반납 방식은 null(완전 미선택)이다
   // (defaultOptions() 참고 — 과거 'visit' 강제 기본값은 불필요한 전제로 확인돼 폐기됨).
