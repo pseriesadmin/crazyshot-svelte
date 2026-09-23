@@ -73,11 +73,12 @@
   }
 
   // 대여방식별 "사용자 장바구니 화면 노출용 안내문구"(rental_method_options.deadline_time,
-  // 예: "19:00 마감") 길이 제한 — 20자 이내(Stephen 확정, 2026-09-21). 문자 종류 제한
+  // 예: "19:00 마감") 길이 제한 — 30자 이내(Stephen 확정, 2026-09-21 최초 20자 →
+  // 2026-09-23 30자로 상향). 문자 종류 제한
   // (한글·영문·숫자만)은 2026-09-21 같은 날 후속 지시로 해제됨 — 공백·콜론 등 특수문자
   // 입력 허용(기존 "19:00 마감" 형식도 그대로 재현 가능해짐). 길이 제한 자체는 유지.
   function filterMethodDeadlineInput(raw: string): string {
-    return raw.slice(0, 20)
+    return raw.slice(0, 30)
   }
 
   let usedMethodKeys = $derived(new Set(methods.map((m) => m.method_key).filter(Boolean)))
@@ -393,8 +394,8 @@
             type="text"
             name="deadline_time"
             class="add-input add-input--method-deadline"
-            placeholder="안내문구 (예: 19시마감, 20자)"
-            maxlength="20"
+            placeholder="안내문구 (예: 19시마감, 30자)"
+            maxlength="30"
             value={methodDeadlineInput}
             oninput={(e) => {
               methodDeadlineInput = filterMethodDeadlineInput(e.currentTarget.value)
@@ -502,8 +503,8 @@
                       name="deadline_time"
                       class="mk-deadline-edit-input"
                       value={editingDeadlineValue}
-                      maxlength="20"
-                      placeholder="안내문구 (예: 19시마감, 20자)"
+                      maxlength="30"
+                      placeholder="안내문구 (예: 19시마감, 30자)"
                       aria-label="수령방식 안내문구 수정"
                       disabled={deadlineEditLoading}
                       use:focusOnMount
@@ -527,8 +528,8 @@
                       name="return_deadline_time"
                       class="mk-deadline-edit-input"
                       value={editingReturnDeadlineValue}
-                      maxlength="20"
-                      placeholder="안내문구 (예: 19시마감, 20자)"
+                      maxlength="30"
+                      placeholder="안내문구 (예: 19시마감, 30자)"
                       aria-label="반납방식 안내문구 수정"
                       disabled={deadlineEditLoading}
                       onkeydown={(e) => {

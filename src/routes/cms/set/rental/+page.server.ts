@@ -227,9 +227,10 @@ export const actions: Actions = {
     const name = (data.get('name') as string | null)?.trim() ?? ''
     const count = parseInt(data.get('count') as string, 10)
     const methodKey = (data.get('method_key') as string | null)?.trim() || null
-    // 사용자 장바구니 화면 노출용 안내문구(deadline_time, 예: "19:00 마감") — 20자 길이
-    // 제한만 서버에서 재검증(클라이언트 검증 우회 방지 원칙). 문자 종류 제한(한글·영문·
-    // 숫자만)은 2026-09-21 같은 날 후속 지시로 해제 — 공백·콜론 등 특수문자 입력 허용.
+    // 사용자 장바구니 화면 노출용 안내문구(deadline_time, 예: "19:00 마감") — 30자 길이
+    // 제한만 서버에서 재검증(클라이언트 검증 우회 방지 원칙, 2026-09-21 최초 20자 →
+    // 2026-09-23 30자로 상향). 문자 종류 제한(한글·영문·숫자만)은 2026-09-21 같은 날
+    // 후속 지시로 해제 — 공백·콜론 등 특수문자 입력 허용.
     const deadlineTimeRaw = (data.get('deadline_time') as string | null)?.trim() ?? ''
     const deadlineTime = deadlineTimeRaw || null
 
@@ -239,8 +240,8 @@ export const actions: Actions = {
     // (감사 RSC-B1) — 필수값으로 강제.
     if (!methodKey) return fail(400, { error: '방식 유형을 선택하세요.' })
     if (count >= 10) return fail(400, { error: '대여 방식은 최대 10개까지 등록할 수 있습니다.' })
-    if (deadlineTime && deadlineTime.length > 20) {
-      return fail(400, { error: '안내문구는 최대 20자까지 입력 가능합니다.' })
+    if (deadlineTime && deadlineTime.length > 30) {
+      return fail(400, { error: '안내문구는 최대 30자까지 입력 가능합니다.' })
     }
 
     const { error } = await untypedRpc(locals.supabase, 'upsert_rental_method_option', {
@@ -279,11 +280,11 @@ export const actions: Actions = {
 
     if (!id) return fail(400, { error: '잘못된 요청입니다.' })
     if (!name) return fail(400, { error: '대여방식명이 비어있습니다.' })
-    if (deadlineTime && deadlineTime.length > 20) {
-      return fail(400, { error: '수령방식 안내문구는 최대 20자까지 입력 가능합니다.' })
+    if (deadlineTime && deadlineTime.length > 30) {
+      return fail(400, { error: '수령방식 안내문구는 최대 30자까지 입력 가능합니다.' })
     }
-    if (returnDeadlineTime && returnDeadlineTime.length > 20) {
-      return fail(400, { error: '반납방식 안내문구는 최대 20자까지 입력 가능합니다.' })
+    if (returnDeadlineTime && returnDeadlineTime.length > 30) {
+      return fail(400, { error: '반납방식 안내문구는 최대 30자까지 입력 가능합니다.' })
     }
 
     const { error } = await untypedRpc(locals.supabase, 'upsert_rental_method_option', {
