@@ -206,11 +206,13 @@
     { id: 'referral',       label: '추천인' },
     { id: 'event',          label: '이벤트' },
   ]
+  // 2026-09-23(버그 수정, Stephen 지적 2차) — 실제 존재하지 않는 BASIC/PRO 하드코딩을
+  // 1차로 subscription_plans 구독 티어로 고쳤으나 그것도 정답이 아니었다. 진짜 고객
+  // 분류는 CustomerDetailPanel.svelte classificationsOf()의 "일반/학생/구독" 3종
+  // (Migration #528) — data.gradeOptions(coupon/new/+page.server.ts)가 이 고정 목록을 반환.
   const USER_GRADE_OPTIONS: SuggestPickerOption[] = [
     { id: '__all__', label: '전체 회원' },
-    { id: 'BASIC',   label: 'BASIC' },
-    { id: 'PRO',     label: 'PRO' },
-    { id: 'CRAZY',   label: 'CRAZY' },
+    ...(data.gradeOptions as { value: string; label: string }[]).map(g => ({ id: g.value, label: g.label })),
   ]
   // SuggestPicker bind용 nullable state — 초기값은 폼 상태 기본값과 동일한 리터럴로 지정
   let _sel_dtype = $state<string | null>('fixed')    // f_discount_type 초기값과 동일(discount_type enum엔 'fixed' 존재)
@@ -477,13 +479,13 @@
             class="f-input" bind:value={f_total_limit} />
         </div>
         <div class="form-field">
-          <label for="fc-grade">필수 회원 등급 (선택)</label>
+          <label for="fc-grade">필수 회원 분류 (선택)</label>
           <SuggestPicker
             id="fc-grade"
             bind:selectedId={_sel_grade}
             options={USER_GRADE_OPTIONS}
-            placeholder="회원 등급 선택"
-            listLabel="회원 등급"
+            placeholder="회원 분류 선택"
+            listLabel="회원 분류"
             variant="generic"
             minChars={0}
             onselect={(opt) => { f_user_grade = opt.id === '__all__' ? '' : opt.id }}
@@ -634,11 +636,13 @@
             </label>
           </div>
           {#if f_dist_target === 'grade'}
+            <!-- 2026-09-23(버그 수정) — 위 필수 회원 분류와 동일하게 BASIC/PRO 하드코딩
+                 제거, data.gradeOptions(subscription_plans)로 교체. -->
             <select class="f-input" style="max-width:200px;margin-top:6px"
               bind:value={f_dist_grade}>
-              <option value="BASIC">BASIC</option>
-              <option value="PRO">PRO</option>
-              <option value="CRAZY">CRAZY</option>
+              {#each data.gradeOptions as g (g.value)}
+                <option value={g.value}>{g.label}</option>
+              {/each}
             </select>
           {/if}
           <input type="hidden" name="distribution_target" value={distTargetJson} />

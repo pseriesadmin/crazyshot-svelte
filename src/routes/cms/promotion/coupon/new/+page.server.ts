@@ -43,6 +43,7 @@ interface CmsCreateCouponPayload {
 }
 
 export type CouponCategoryOption = { value: string; label: string }
+export type CouponGradeOption = { value: string; label: string }
 
 // A-2: products/new 이식 타입 (쿠폰 코드 조합그룹 선택 UI) — 목록 화면(../+page.server.ts)의
 // 동명 타입과 각자 독립적으로 선언(products/new · products 목록이 이미 이렇게 분리돼 있는
@@ -81,6 +82,16 @@ export const load: PageServerLoad = async ({ parent }) => {
     label: r.name,
   }))
 
+  // 2026-09-23(버그 수정, Stephen 지적 2차) — coupon/+page.server.ts와 동일 결함·동일
+  // 수정(Migration #528 참고). 1차 수정(subscription_plans 구독 티어)도 정답이 아니었고,
+  // 진짜 고객 분류는 CustomerDetailPanel.svelte classificationsOf()의 "일반/학생/구독"
+  // 3종이다 — 그 화면과 동일한 고정 목록을 재사용.
+  const gradeOptions: CouponGradeOption[] = [
+    { value: 'general',    label: '일반' },
+    { value: 'student',    label: '학생' },
+    { value: 'subscriber', label: '구독' },
+  ]
+
   // A-2: 쿠폰 코드 조합그룹·아이템·분류코드 (coupon 전용 분류, products/new 이식)
   // show_in_product_filter는 "상품등록 화면 노출 여부"를 뜻하는 product 전용 설정이라
   // 쿠폰 분류 그룹 필터 조건에는 포함하지 않음(원본 +page.server.ts와 동일 정책)
@@ -115,7 +126,7 @@ export const load: PageServerLoad = async ({ parent }) => {
     }
   }
 
-  return { categoryOptions, mappingGroups, mappingItems, taxonomyCodes }
+  return { categoryOptions, gradeOptions, mappingGroups, mappingItems, taxonomyCodes }
 }
 
 export const actions: Actions = {
