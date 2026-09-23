@@ -398,11 +398,7 @@ export const GET: RequestHandler = async ({ params, locals }) => {
 
   // ── 3-1. 쿠폰 할인 내역 — create_reservation_order RPC가 이미 계산·저장해둔 값을
   // 그대로 읽는다(위 2026-09-09 정정 주석 참고, 이 엔드포인트는 재계산하지 않음).
-  // ⚠️ 2026-09-23 정정 — 다중쿠폰 전환(Migration #531~534) 이후 orders.selected_coupon_id는
-  // 배열 경로에서 항상 NULL로 저장되므로, 이 컬럼을 가드로 쓰면 다중쿠폰 주문의 할인액이
-  // 항상 "없음"으로 잘못 표시된다. coupon_discount_amount 자체가 이미 0/NULL 여부로 할인
-  // 존재 유무를 정확히 나타내므로 selected_coupon_id 가드를 제거하고 이 컬럼만으로 판정한다.
-  const couponDiscountAmount = (orderData?.coupon_discount_amount ?? 0) > 0 ? orderData?.coupon_discount_amount : null
+  const couponDiscountAmount = orderData?.selected_coupon_id ? (orderData?.coupon_discount_amount ?? null) : null
 
   // ⛔ 2026-09-03 정정 — 기존 스칼라 {{수량}}은 "항상 1" 하드코딩이었다(P3-3, "거짓
   // 다중수량 선택지 없이 일반 변수 칩으로만 제공"). Stephen 지적: 이건 오류이며, 반복영역

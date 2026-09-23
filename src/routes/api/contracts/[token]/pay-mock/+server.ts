@@ -5,7 +5,6 @@ import { json } from '@sveltejs/kit'
 import { sendPaymentCompletedAdminPush } from '$lib/server/push'
 import { resolveApprovalNotifyPlan } from '$lib/server/reservationApprovalNotify'
 import { sendApprovalNotifications } from '$lib/server/sendApprovalNotifications'
-import { consumeSelectedCoupons } from '$lib/server/coupons/consumeCoupons'
 import type { RequestHandler } from './$types'
 
 // 3단계(계약서명 완료 후) mock 결제 트리거 — TASK.md "예약 결제·계약서명 순서 재설계"
@@ -68,13 +67,7 @@ export const POST: RequestHandler = async ({ params, request }) => {
   }
 
   const body = await request.json().catch(() => ({}))
-  // 2026-09-23(쿠폰 다중중첩 체크아웃 구조 전환 후속): 장바구니(1단계)가 다중쿠폰을 선택해
-  // orders/order_coupons에 반영해도, 이 3단계 결제확정 엔드포인트가 여전히 단일값
-  // userCouponId만 읽으면 계약서명 페이지가 보낸 나머지 쿠폰이 전혀 소진되지 않는다 —
-  // couponIds 배열로 통일(contract/[token]/+page.svelte가 이제 배열로 전송).
-  const couponIds = Array.isArray(body.couponIds)
-    ? (body.couponIds as unknown[]).filter((v): v is string => typeof v === 'string' && v.length > 0)
-    : []
+  const userCouponId = typeof body.userCouponId === 'string' ? body.userCouponId : null
   const pointsUsed = Number.isFinite(Number(body.pointsUsed)) ? Math.max(0, Math.trunc(Number(body.pointsUsed))) : 0
 
   // 이 예약이 속한 주문(order) — 쿠폰/포인트 소진 연결(migration 297/303)에 사용.
@@ -119,14 +112,22 @@ export const POST: RequestHandler = async ({ params, request }) => {
   let pointsDeducted = 0
   let pointsOk = true
 
-  if (confirmed === true && reservationUserId && couponIds.length > 0) {
-    // 다중쿠폰(all-or-nothing) 소진 — use_coupons(Migration #532) 공용 헬퍼 경유.
-    const result = await consumeSelectedCoupons(admin, reservationUserId, orderId, couponIds)
-    couponUsed = result.couponUsed
-    couponRedeemedCode = result.couponRedeemedCode
-    couponError = result.couponError
-    if (couponError) {
-      console.error('[contracts/pay-mock] use_coupons 거부:', couponError)
+  if (confirmed === true && reservationUserId && userCouponId) {
+    const { data: useResult, error: useErr } = await admin.rpc('use_coupon', {
+      p_user_id:         reservationUserId,
+      p_user_coupon_id:  userCouponId,
+      p_order_id:        orderId,
+    })
+    if (useErr) {
+      console.error('[contracts/pay-mock] use_coupon 실패:', useErr)
+    } else {
+      const result = useResult as { ok: boolean; error?: string; redeemed_code?: string | null } | null
+      couponUsed = result?.ok === true
+      couponRedeemedCode = result?.redeemed_code ?? null
+      if (!couponUsed) {
+        couponError = result?.error ?? null
+        console.error('[contracts/pay-mock] use_coupon 거부:', couponError)
+      }
     }
   }
 

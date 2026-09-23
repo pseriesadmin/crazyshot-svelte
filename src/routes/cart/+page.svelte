@@ -1665,12 +1665,9 @@
   )
   // 카트 구성 변경으로 우대설정이 뒤늦게 적용되며 이미 선택된 free_delivery 쿠폰이 차단
   // 대상이 되면 자동 해제(다음 렌더에 잘못 반영된 값으로 계산되는 것을 방지).
-  // 2026-09-23(Phase 1 다중중첩 체크아웃 구조 전환): 과거엔 선택이 항상 최대 1개뿐이라
-  // "하나라도 차단 대상이면 전체 초기화"가 곧 "그 쿠폰만 해제"와 같았다. 이제 여러 쿠폰을
-  // 동시에 선택할 수 있으므로 차단 대상 쿠폰만 선택 해제하고 나머지 선택은 그대로 유지한다.
   $effect(() => {
     if ([...otSelectedCouponIds].some((id) => otBlockedCouponIds.has(id))) {
-      otSelectedCouponIds = new Set([...otSelectedCouponIds].filter((id) => !otBlockedCouponIds.has(id)))
+      otSelectedCouponIds = new Set()
     }
   })
   const sdUserPoints = $derived<number>((sd as { userPoints?: number }).userPoints ?? 0)
@@ -1717,48 +1714,22 @@
   // 2026-09-21 추가: percentage 할인은 "최대 할인 한도"(max_discount_amount)를 초과할 수
   // 없다 — 서버(sync_order_after_composition_change, Migration 511)와 동일하게 캡핑.
   // 0 또는 미설정은 무제한을 의미(products.md류 "0=무제한" 표기 관례와 동일).
-  //
-  // ⚠️ 2026-09-23 전면 교체(Phase 1 다중중첩 체크아웃 구조 전환, Stephen 확정): 쿠폰을
-  // 여러 장 동시 선택할 수 있게 되며, 기존의 "쿠폰별 독립 합산"(각 percentage 쿠폰이
-  // 매번 전체 otSubtotal 기준으로 계산됨)은 더 이상 정확하지 않다 — 서버(create_reservation_
-  // order/sync_order_after_composition_change, Migration 532~534)와 동일한 순차 산식을
-  // 그대로 재현한다:
-  //   F  = Σ(fixed 쿠폰 discount_value)
-  //   R1 = max(subtotal - F, 0)
-  //   percentage 쿠폰은 coupon_id 오름차순으로 순차 적용: discount_i = min(R_(i-1) *
-  //     rate_i/100, max_discount_amount_i), 매 단계 잔액 갱신 → P = Σdiscount_i
-  //   FS = min(Σ free_shipping discount_value, delivery_fee) — 배송비에만 적용
-  //   coupon_discount_amount = F + P + FS
-  const otCouponDiscount = $derived((() => {
-    const selected = sdCoupons.filter((uc) => otSelectedCouponIds.has(uc.id) && uc.coupons !== null)
-
-    const fixedSum = selected
-      .filter((uc) => uc.coupons!.discount_type === 'fixed')
-      .reduce((sum, uc) => sum + uc.coupons!.discount_value, 0)
-
-    const freeShippingSumRaw = selected
-      .filter((uc) => uc.coupons!.discount_type === 'free_shipping')
-      .reduce((sum, uc) => sum + uc.coupons!.discount_value, 0)
-
-    const percentageCoupons = selected
-      .filter((uc) => uc.coupons!.discount_type === 'percentage')
-      .slice()
-      .sort((a, b) => (a.coupon_id < b.coupon_id ? -1 : a.coupon_id > b.coupon_id ? 1 : 0))
-
-    let runningBalance = Math.max(otSubtotal - fixedSum, 0)
-    let pctSum = 0
-    for (const uc of percentageCoupons) {
-      const c = uc.coupons!
-      let step = Math.round(runningBalance * c.discount_value / 100)
-      if (c.max_discount_amount && c.max_discount_amount > 0) step = Math.min(step, c.max_discount_amount)
-      pctSum += step
-      runningBalance = Math.max(runningBalance - step, 0)
-    }
-
-    const freeShippingCapped = Math.min(freeShippingSumRaw, otDeliveryFee)
-
-    return fixedSum + pctSum + freeShippingCapped
-  })())
+  const otCouponDiscount = $derived(
+    sdCoupons
+      .filter((uc) => otSelectedCouponIds.has(uc.id) && uc.coupons !== null)
+      .reduce((sum, uc) => {
+        const c = uc.coupons!
+        const amount =
+          c.discount_type === 'fixed' ? c.discount_value :
+          c.discount_type === 'percentage' ? (() => {
+            const raw = Math.round(otSubtotal * c.discount_value / 100)
+            return c.max_discount_amount && c.max_discount_amount > 0 ? Math.min(raw, c.max_discount_amount) : raw
+          })() :
+          c.discount_type === 'free_shipping' ? Math.min(c.discount_value, otDeliveryFee) :
+          0
+        return sum + amount
+      }, 0)
+  )
 
   // 회원등급 할인 — 서버(Migration 510)와 동일 정책: 선택된 쿠폰 중 "중복 사용 허용"이
   // 꺼진 쿠폰이 하나라도 있으면 회원등급 할인은 배제(고객이 직접 선택한 쿠폰 할인 우선).
@@ -2144,13 +2115,8 @@
                   disabled: !pricingReady || isBlocked,
                   onToggle: () => {
                     if (!pricingReady || isBlocked) return
-                    // 2026-09-23(Phase 1 다중중첩 체크아웃 구조 전환, Stephen 확정): 라디오
-                    // 강제(단일 선택)를 폐기하고 순수 다중 토글로 전환 — 한 주문에 자격되는
-                    // 쿠폰 전부를 동시에 선택해 사용할 수 있다.
-                    const next = new Set(otSelectedCouponIds)
-                    if (next.has(uc.id)) next.delete(uc.id)
-                    else next.add(uc.id)
-                    otSelectedCouponIds = next
+                    // 중복 쿠폰 적용 불가 — 단일 선택만 허용(계약서명 페이지와 동일 정책)
+                    otSelectedCouponIds = otSelectedCouponIds.has(uc.id) ? new Set() : new Set([uc.id])
                   },
                 })}
               {/each}
@@ -2503,17 +2469,13 @@
             // 2026-08-24: 장바구니에서 고른 쿠폰/포인트도 함께 저장(Migration 340,
             // orders.selected_coupon_id/selected_points) — 계약서명 페이지(/contract/[token])
             // 진입 시 이 값을 다시 읽어 자동으로 미리 선택된 상태로 보여준다.
-            // 2026-09-23(Phase 1 다중중첩 체크아웃 구조 전환): 단일값(couponId) 대신 선택된
-            // 쿠폰 전체를 배열(couponIds)로 전송 — /api/reservations/create-order가
-            // create_reservation_order(Migration 533)의 신규 p_selected_coupon_ids 배열
-            // 파라미터로 그대로 전달한다.
-            const selectedCouponIds = [...otSelectedCouponIds]
+            const selectedCouponId = otSelectedCouponIds.size > 0 ? [...otSelectedCouponIds][0] : null
             const createOrderRes = await fetch('/api/reservations/create-order', {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({
                 reservationIds: checkedIds,
-                couponIds:      selectedCouponIds,
+                couponId:       selectedCouponId,
                 points:         otPointsUsed,
                 // 2026-08-31: 여기서 고객에게 보여준 배송비를 그대로 주문에 합산 —
                 // 실결제 금액이 이 화면의 총액과 정확히 일치하도록 함

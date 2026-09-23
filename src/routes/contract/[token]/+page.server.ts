@@ -146,10 +146,6 @@ export const load: PageServerLoad = async ({ params }) => {
     selected_points: number | null
   }
   let orderData: OrderData | null = null
-  // 2026-09-23(쿠폰 다중중첩 체크아웃 구조 전환 후속): order_coupons(Migration #531) 조회에
-  // 재사용하기 위해 orderId를 바깥 스코프로 끌어올림 — 기존엔 아래 if 블록 내부에서만
-  // 쓰이고 버려지던 지역변수였다.
-  let orderId: string | null = null
 
   if (reservation?.user_id) {
     const { data: addrData } = await admin
@@ -176,7 +172,7 @@ export const load: PageServerLoad = async ({ params }) => {
       .maybeSingle()
 
     if (orderItemData && (orderItemData as { order_id?: string | null }).order_id) {
-      orderId = (orderItemData as { order_id: string }).order_id
+      const orderId = (orderItemData as { order_id: string }).order_id
       const { data: o } = await admin
         .from('orders')
         .select('total_amount, discount_amount, coupon_discount_amount, tax_amount, delivery_fee, final_amount, selected_coupon_id, selected_points')
@@ -360,32 +356,14 @@ export const load: PageServerLoad = async ({ params }) => {
     })
   }
 
-  // 2026-08-24: 장바구니(1단계)에서 고른 쿠폰/포인트를 이 페이지의 초기 선택값으로 반영 —
-  // 카트 제출 이후 쿠폰이 만료/소진되는 등 더 이상 유효하지 않을 수 있어, 위에서 이미
-  // 검증·필터링된 userCoupons 목록에 실제로 남아있는 경우에만 그대로 사용하고, 그렇지
-  // 않으면 미선택으로 되돌린다(무효 쿠폰 미리선택 방지). 포인트도 그사이 잔액이 줄었을 수
-  // 있어 현재 userPoints로 재클램프.
-  //
-  // 2026-09-23(쿠폰 다중중첩 체크아웃 구조 전환 후속): 카트가 다중쿠폰을 선택하면
-  // create_reservation_order(Migration #533)가 orders.selected_coupon_id를 항상 NULL로
-  // 남기고 실제 선택값은 order_coupons(Migration #531)에만 저장한다 — 이 컬럼만 읽으면
-  // 다중쿠폰으로 제출된 주문은 이 화면에서 "선택된 쿠폰 없음"으로 잘못 표시되고, 뒤이은
-  // pay-mock/pay-result 결제확정 시점에도 그 쿠폰들이 전혀 소진되지 않는다(Migration #531
-  // 주석에 명시된 "완전 제거는 후속 세션에서 별도 검토" 대상이 바로 이 화면). order_coupons를
-  // 우선 조회하고, 비어있을 때만(레거시 단일값으로만 만들어진 과거 주문 보호) selected_coupon_id로
-  // 폴백한다.
-  let orderCouponIds: string[] = []
-  if (orderId) {
-    const { data: ocRows } = await admin
-      .from('order_coupons')
-      .select('user_coupon_id')
-      .eq('order_id', orderId)
-    orderCouponIds = ((ocRows ?? []) as { user_coupon_id: string }[]).map((r) => r.user_coupon_id)
-  }
-  const rawPreselectedCouponIds = orderCouponIds.length > 0
-    ? orderCouponIds
-    : (orderData?.selected_coupon_id ? [orderData.selected_coupon_id] : [])
-  const preselectedCouponIds = rawPreselectedCouponIds.filter((id) => userCoupons.some((uc) => uc.id === id))
+  // 2026-08-24: 장바구니(1단계)에서 고른 쿠폰/포인트(orders.selected_coupon_id/selected_points,
+  // Migration 340)를 이 페이지의 초기 선택값으로 반영 — 카트 제출 이후 쿠폰이 만료/소진되는
+  // 등 더 이상 유효하지 않을 수 있어, 위에서 이미 검증·필터링된 userCoupons 목록에 실제로
+  // 남아있는 경우에만 그대로 사용하고, 그렇지 않으면 미선택으로 되돌린다(무효 쿠폰 미리선택
+  // 방지). 포인트도 그사이 잔액이 줄었을 수 있어 현재 userPoints로 재클램프.
+  const preselectedCouponId = (orderData?.selected_coupon_id && userCoupons.some((uc) => uc.id === orderData?.selected_coupon_id))
+    ? orderData.selected_coupon_id
+    : null
   const preselectedPoints = Math.max(0, Math.min(orderData?.selected_points ?? 0, userPoints))
 
   return {
@@ -396,7 +374,7 @@ export const load: PageServerLoad = async ({ params }) => {
     orderData,
     userCoupons,
     userPoints,
-    preselectedCouponIds,
+    preselectedCouponId,
     preselectedPoints,
     // EC-1 방어(위 참고) — 이미 서명된 상태(결제만 남음)로 재진입했음을 +page.svelte에 알려
     // 서명 UI 대신 결제 단계를 바로 렌더링하게 한다.

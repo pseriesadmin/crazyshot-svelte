@@ -13,7 +13,6 @@ import { createClient }      from '@supabase/supabase-js'
 import { sendPaymentCompletedAdminPush } from '$lib/server/push'
 import { resolveApprovalNotifyPlan } from '$lib/server/reservationApprovalNotify'
 import { sendApprovalNotifications } from '$lib/server/sendApprovalNotifications'
-import { consumeSelectedCoupons } from '$lib/server/coupons/consumeCoupons'
 import type { PageServerLoad } from './$types'
 
 const TOSS_CONFIRM_URL = 'https://api.tosspayments.com/v1/payments/confirm'
@@ -28,11 +27,8 @@ export const load: PageServerLoad = async ({ params, url }) => {
   const amount      = Number(url.searchParams.get('amount') ?? '0')
 
   // successUrl에 인코딩해 둔 커스텀 파라미터 (쿠폰·포인트)
-  // 2026-09-23(쿠폰 다중중첩 체크아웃 구조 전환 후속): 반복 쿼리파라미터(couponIds=id1&
-  // couponIds=id2)로 여러 장을 전달 — contract/[token]/+page.svelte의 successUrl 조립부와
-  // 대응(URLSearchParams가 append로 만든 반복 키를 getAll()로 그대로 복원).
-  const couponIds = url.searchParams.getAll('couponIds').filter((v) => v.length > 0)
-  const points    = Number(url.searchParams.get('points') ?? '0')
+  const couponId = url.searchParams.get('couponId') || null   // 빈 문자열 → null
+  const points   = Number(url.searchParams.get('points') ?? '0')
 
   if (!paymentKey || !tossOrderId || !amount) {
     throw redirect(303, `${failBase}&code=MISSING_PARAMS`)
@@ -238,13 +234,13 @@ export const load: PageServerLoad = async ({ params, url }) => {
     }
 
     // 쿠폰/포인트 소진 — 실패는 결제 확정 이후라 롤백 없음(운영팀 수동 확인), 독립 처리
-    // 다중쿠폰(all-or-nothing) 소진 — use_coupons(Migration #532) 공용 헬퍼 경유. 이
-    // fail-soft try/catch 정책(주석 그대로 유지)은 결제 성공에 영향을 주지 않는다는
-    // 기존 원칙과 동일 — consumeSelectedCoupons 내부는 예외를 던지지 않고 에러를
-    // couponError로 반환하므로 이 catch는 admin.rpc 자체의 네트워크 예외 등만 흡수한다.
-    if (couponIds.length > 0) {
+    if (couponId) {
       try {
-        await consumeSelectedCoupons(admin, userId, internalOrderId, couponIds)
+        await admin.rpc('use_coupon', {
+          p_user_id:        userId,
+          p_user_coupon_id: couponId,
+          p_order_id:       internalOrderId,
+        })
       } catch { /* 쿠폰 실패는 결제 성공과 독립 */ }
     }
     if (points > 0) {

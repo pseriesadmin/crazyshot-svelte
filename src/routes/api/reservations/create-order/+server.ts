@@ -25,13 +25,7 @@ export const POST: RequestHandler = async ({ locals, request }) => {
   // 장바구니에서 고른 쿠폰/포인트 — 계약서명 페이지(/contract/[token])가 다시 읽어 미리
   // 선택된 상태로 보여주기 위한 사전선택 캐시(Migration 340). 실제 소진은 여전히 결제
   // 확정 시점(pay-mock)에서만 일어난다.
-  // 2026-09-23(Phase 1 다중중첩 체크아웃 구조 전환, Migration 533): 단일값(couponId) 대신
-  // 배열(couponIds)을 받아 create_reservation_order의 신규 p_selected_coupon_ids 파라미터로
-  // 그대로 전달한다 — 구 단일값 파라미터(p_selected_coupon_id)는 하위호환을 위해 RPC
-  // 시그니처에 그대로 남아있으나 이 엔드포인트는 더 이상 사용하지 않는다.
-  const selectedCouponIds = Array.isArray(body.couponIds)
-    ? (body.couponIds as unknown[]).filter((v): v is string => typeof v === 'string' && v.length > 0)
-    : null
+  const selectedCouponId = typeof body.couponId === 'string' && body.couponId ? body.couponId : null
   const selectedPoints = Number.isFinite(body.points) && body.points > 0 ? Math.floor(body.points) : 0
   // 2026-08-31(Migration 395): 장바구니가 이미 계산해 고객에게 보여준 배송비(등급별 우대할인
   // 반영된 최종값)를 그대로 받아 orders.final_amount에 합산 — 실결제 금액과 장바구니 총액
@@ -48,7 +42,6 @@ export const POST: RequestHandler = async ({ locals, request }) => {
       p_selected_coupon_id: string | null
       p_selected_points: number
       p_delivery_fee: number
-      p_selected_coupon_ids: string[] | null
     }
   ) => Promise<{ data: { order_id: number; order_key: string; final_amount: number }[] | null; error: unknown }>
   const { data, error } = await (admin.rpc as unknown as CreateReservationOrderRpcFn)(
@@ -56,11 +49,9 @@ export const POST: RequestHandler = async ({ locals, request }) => {
     {
       p_user_id: session.user.id,
       p_reservation_ids: reservationIds,
-      // 구 단일값 파라미터는 항상 null로 고정 — 다중쿠폰 배열(p_selected_coupon_ids)만 사용.
-      p_selected_coupon_id: null,
+      p_selected_coupon_id: selectedCouponId,
       p_selected_points: selectedPoints,
       p_delivery_fee: deliveryFee,
-      p_selected_coupon_ids: selectedCouponIds,
     }
   )
 
