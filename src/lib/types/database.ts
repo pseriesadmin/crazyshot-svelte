@@ -360,7 +360,6 @@ export interface UserProfile {
   address: Json | null;                // JSONB
   credit_score: number;               // SMALLINT 0–100
   membership_grade: MembershipGradeEnum;
-  grade: MembershipGradeEnum;          // GENERATED ALWAYS AS (membership_grade) STORED
   is_student: boolean;
   student_verified_at: string | null;
   student_doc_url: string | null;
@@ -387,7 +386,7 @@ export interface UserProfile {
   legacy_claimed_at?: string | null;       // 인증 클레임 완료 시각 (Migration 485, NULL=미인증)
 }
 
-export type UserProfileInsert = Omit<UserProfile, 'id' | 'grade' | 'created_at' | 'updated_at'> & {
+export type UserProfileInsert = Omit<UserProfile, 'id' | 'created_at' | 'updated_at'> & {
   id?: string; created_at?: string; updated_at?: string;
 };
 export type UserProfileUpdate = Partial<Omit<UserProfileInsert, 'user_id'>>;
@@ -430,6 +429,7 @@ export interface Coupon {
   usage_limit: number;
   usage_count: number;
   is_active: boolean;
+  auto_distribute_enabled: boolean;    // 자동배포 활성 여부(관리자 토글) — Migration #527(구 distribution_enabled)
   valid_from: string;                  // timestamptz
   valid_until: string;                 // timestamptz
   validity_type: string;               // 'fixed_period' | 'unlimited' | 'relative_days'
