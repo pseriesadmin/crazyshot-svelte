@@ -171,12 +171,14 @@
   let done      = $state(data.alreadySigned ?? false)
 
   // Phase C — 서명 완료 후 결제(mock) 단계 상태
-  // 2026-08-24: 장바구니(1단계)에서 고른 쿠폰/포인트를 초기값으로 반영(Migration 340,
-  // +page.server.ts가 이미 여전히 유효한 경우에만 preselectedCouponId/preselectedPoints로
-  // 검증해 내려줌). done과 동일한 이유로 $state(prop) 금지 규칙의 예외(토큰 라우트라
-  // 재방문·새로고침 시 항상 새로 마운트됨, L132-135 참고) — 최초 마운트 1회 반영이 곧
-  // 올바른 동작.
-  let selectedCouponId = $state<string | null>(data.preselectedCouponId ?? null)
+  // 2026-08-24: 장바구니(1단계)에서 고른 쿠폰/포인트를 초기값으로 반영(+page.server.ts가
+  // 이미 여전히 유효한 경우에만 preselectedCouponIds/preselectedPoints로 검증해 내려줌).
+  // done과 동일한 이유로 $state(prop) 금지 규칙의 예외(토큰 라우트라 재방문·새로고침 시
+  // 항상 새로 마운트됨, L132-135 참고) — 최초 마운트 1회 반영이 곧 올바른 동작.
+  // 2026-09-23(쿠폰 다중중첩 체크아웃 구조 전환 후속): 단일값(selectedCouponId) 대신
+  // 여러 장을 동시에 담을 수 있는 배열로 전환 — 이 화면은 여전히 읽기 전용 표시만
+  // 담당하며(2026-09-07 확정, 아래 pay-section 주석 참고) 선택 UI를 새로 만들지 않는다.
+  let selectedCouponIds = $state<string[]>(data.preselectedCouponIds ?? [])
   let pointsUsed        = $state(data.preselectedPoints ?? 0)
   let paying             = $state(false)
   let payError            = $state('')
@@ -192,12 +194,18 @@
   const couponDiscount = $derived(orderData?.coupon_discount_amount ?? 0)
   // 장바구니 선택값 읽기 전용 표시용 라벨(2026-09-07) — 미선택이어도 "없음"으로 항상 표시
   // (블록 자체를 숨기면 "왜 안 보이냐"는 혼란을 유발 — Stephen 지시로 항상 노출로 변경)
+  // 2026-09-23(쿠폰 다중중첩 체크아웃 구조 전환 후속): 여러 장이 선택된 경우 ' · '로
+  // 이어붙여 한 줄에 전부 표시(기존 <span class="pay-readonly-value"> 마크업 변경 없음).
   const couponLabel = $derived.by(() => {
-    if (!selectedCouponId) return '없음'
-    const uc = userCoupons.find((u) => u.id === selectedCouponId)
-    if (!uc?.coupons) return '없음'
-    const c = uc.coupons
-    return c.description ?? (c.discount_type === 'fixed' ? `${c.discount_value.toLocaleString('ko-KR')}원 할인` : `${c.discount_value}% 할인`)
+    if (selectedCouponIds.length === 0) return '없음'
+    const labels = selectedCouponIds
+      .map((id) => userCoupons.find((u) => u.id === id))
+      .filter((uc): uc is UserCouponRow & { coupons: NonNullable<UserCouponRow['coupons']> } => !!uc?.coupons)
+      .map((uc) => {
+        const c = uc.coupons
+        return c.description ?? (c.discount_type === 'fixed' ? `${c.discount_value.toLocaleString('ko-KR')}원 할인` : `${c.discount_value}% 할인`)
+      })
+    return labels.length > 0 ? labels.join(' · ') : '없음'
   })
   const maxPoints = $derived(Math.min(userPointsAvail, Math.max(0, finalAmount)))
   // 쿠폰 변경으로 maxPoints가 줄어들면 이미 입력된 포인트를 자동 재클램프
@@ -328,7 +336,10 @@
         const res = await fetch(`/api/contracts/${signing.token}/pay-mock`, {
           method:  'POST',
           headers: { 'Content-Type': 'application/json' },
-          body:    JSON.stringify({ userCouponId: selectedCouponId, pointsUsed }),
+          // 2026-09-23(쿠폰 다중중첩 체크아웃 구조 전환 후속): 단일값(userCouponId) 대신
+          // 선택된 쿠폰 전체를 배열(couponIds)로 전송 — pay-mock이 use_coupons(Migration
+          // #532)로 all-or-nothing 소진 처리한다.
+          body:    JSON.stringify({ couponIds: selectedCouponIds, pointsUsed }),
         })
         if (res.ok) {
           const body = await res.json().catch(() => ({})) as { couponError?: string | null }
@@ -349,7 +360,12 @@
 
         const tossOrderId = `CSHOT-${Date.now()}`
         const origin      = window.location.origin
-        const successUrl  = `${origin}/contract/${signing.token}/pay-result?couponId=${selectedCouponId ?? ''}&points=${pointsUsed}`
+        // 2026-09-23(쿠폰 다중중첩 체크아웃 구조 전환 후속): couponId(단일) → couponIds
+        // 반복 쿼리파라미터(URLSearchParams.append)로 전환 — pay-result/+page.server.ts가
+        // getAll('couponIds')로 그대로 복원한다.
+        const successParams = new URLSearchParams({ points: String(pointsUsed) })
+        for (const id of selectedCouponIds) successParams.append('couponIds', id)
+        const successUrl  = `${origin}/contract/${signing.token}/pay-result?${successParams.toString()}`
         const failUrl     = `${origin}/contract/${signing.token}?payStatus=fail`
 
         await tossWidgets.requestPayment({
@@ -657,8 +673,10 @@
              — 이 화면에서 다시 고르거나 바꾸게 하면 그 선택이 실제 결제금액·쿠폰소진(use_coupon)/
              포인트차감(use_points)의 유일한 입력값이라 장바구니와 다른 값으로 결제가 나갈 위험이
              있다. 편집 UI(체크박스·입력창)는 제거하고 장바구니에서 고른 값만 읽기 전용으로
-             표시한다 — selectedCouponId/pointsUsed 상태·payTotal 계산·실제 결제 요청 로직은
-             전혀 변경하지 않음(값의 출처가 이제 "재선택 불가"가 됐을 뿐, 여전히 preselected 값). -->
+             표시한다 — selectedCouponIds/pointsUsed 상태·payTotal 계산·실제 결제 요청 로직은
+             전혀 변경하지 않음(값의 출처가 이제 "재선택 불가"가 됐을 뿐, 여전히 preselected 값).
+             2026-09-23: 단일값→배열 전환은 값의 "개수"만 바뀐 것 — 읽기전용 원칙 자체는
+             동일하게 유지(새 선택 UI 추가 없음). -->
         <div class="pay-sub-block">
           <span class="pay-sub-label">적용된 쿠폰</span>
           <span class="pay-readonly-value">{couponLabel}</span>

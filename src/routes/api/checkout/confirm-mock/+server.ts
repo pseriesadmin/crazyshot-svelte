@@ -3,6 +3,7 @@ import { createClient } from '@supabase/supabase-js'
 import { env } from '$env/dynamic/private'
 import { getSupabaseUrl } from '$lib/env/supabasePublic'
 import { sendPaymentCompletedAdminPush, sendReservationLifecyclePush } from '$lib/server/push'
+import { consumeSelectedCoupons } from '$lib/server/coupons/consumeCoupons'
 import type { RequestHandler } from './$types'
 
 // PG 미연동 임시 자동 예약승인 (M3 결제 연동 전 시범서비스용)
@@ -18,7 +19,15 @@ export const POST: RequestHandler = async ({ locals, request }) => {
   const requestedIds = Array.isArray(body.reservationIds)
     ? (body.reservationIds as unknown[]).map(Number).filter((n) => Number.isFinite(n))
     : null
-  const userCouponId = typeof body.userCouponId === 'string' ? body.userCouponId : null
+  // 2026-09-23(쿠폰 다중중첩 체크아웃 구조 전환 후속 — 회귀 수정): 이 엔드포인트는 현재
+  // 어떤 화면에서도 실제로 호출되지 않는 레거시 API 경로다(cart는 create-order만 호출,
+  // 실결제 확정은 contracts/[token]/pay-mock·pay-result로 이동됨 — Phase C, 2026-08-21).
+  // 다만 API 표면 자체는 남아있어 필드명·소진 로직을 나머지 두 활성 경로와 동일하게
+  // 다중쿠폰(couponIds 배열) 기준으로 통일한다 — 과거 단일값 userCouponId는 더 이상
+  // 읽지 않는다.
+  const couponIds = Array.isArray(body.couponIds)
+    ? (body.couponIds as unknown[]).filter((v): v is string => typeof v === 'string' && v.length > 0)
+    : []
   // 2026-08-19(재검수): 장바구니에서 선택한 포인트가 화면 표시에만 쓰이고 실제로 차감되지
   // 않던 결함 수정 — Migration 303 use_points RPC로 결제승인 시점에 쿠폰과 동일하게 소진
   const pointsUsed = Number.isFinite(Number(body.pointsUsed)) ? Math.max(0, Math.trunc(Number(body.pointsUsed))) : 0
@@ -100,26 +109,17 @@ export const POST: RequestHandler = async ({ locals, request }) => {
   let couponUsed = false
   let couponRedeemedCode: string | null = null
   let couponError: string | null = null
-  if (userCouponId && confirmedReservations.length > 0) {
-    const { data: useResult, error: useErr } = await admin.rpc('use_coupon', {
-      p_user_id: session.user.id,
-      p_user_coupon_id: userCouponId,
-      // 쿠폰 사용을 이번 체크아웃 주문에 연결(migration 297) — CMS "채번내역" 탭에서
-      // 예약현황/대여현황으로 랜딩하기 위한 유일한 연결고리. create_checkout_order가
-      // 실패해 orderId가 null이면 use_coupon 자체는 정상 진행되고 order_id만 NULL로 남는다.
-      p_order_id: orderId,
-    })
-    if (useErr) {
-      console.error('[checkout/confirm-mock] use_coupon 실패:', useErr)
-    } else {
-      const result = useResult as { ok: boolean; error?: string; redeemed_code?: string | null } | null
-      couponUsed = result?.ok === true
-      // sequenced 모드 쿠폰만 값이 있음(migration 296) — manual 모드는 null, 기존 동작과 동일
-      couponRedeemedCode = result?.redeemed_code ?? null
-      if (!couponUsed) {
-        couponError = result?.error ?? null
-        console.error('[checkout/confirm-mock] use_coupon 거부:', couponError)
-      }
+  if (couponIds.length > 0 && confirmedReservations.length > 0) {
+    // 쿠폰 사용을 이번 체크아웃 주문에 연결(migration 297) — CMS "채번내역" 탭에서
+    // 예약현황/대여현황으로 랜딩하기 위한 유일한 연결고리. create_checkout_order가
+    // 실패해 orderId가 null이면 use_coupons 자체는 정상 진행되고 order_id만 NULL로 남는다.
+    // 다중쿠폰(all-or-nothing) 소진 — use_coupons(Migration #532) 공용 헬퍼 경유.
+    const result = await consumeSelectedCoupons(admin, session.user.id, orderId, couponIds)
+    couponUsed = result.couponUsed
+    couponRedeemedCode = result.couponRedeemedCode
+    couponError = result.couponError
+    if (couponError) {
+      console.error('[checkout/confirm-mock] use_coupons 거부:', couponError)
     }
   }
 
