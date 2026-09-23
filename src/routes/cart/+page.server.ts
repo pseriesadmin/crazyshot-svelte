@@ -19,7 +19,7 @@ export const load: PageServerLoad = async ({ locals }) => {
   // 배송 방식 옵션 — 세션 불필요, 모든 사용자에게 제공
   const { data: deliveryOptionsData } = await supabase
     .from('rental_method_options')
-    .select('id, method_key, name, deadline_time, display_order, is_bulk_delivery, is_courier_dependent, is_delivery_type')
+    .select('id, method_key, name, deadline_time, return_deadline_time, display_order, is_bulk_delivery, is_courier_dependent, is_delivery_type')
     .eq('is_active', true)
     .is('deleted_at', null)
     .order('display_order', { ascending: true })
@@ -756,6 +756,9 @@ interface DeliveryOptionRow {
   method_key:       string
   name:             string
   deadline_time:    string | null
+  // 반납방식 노출용 안내문구 — deadline_time(수령방식용)과 독립된 별도 필드
+  // (Migration #524, 2026-09-23 Stephen 요청).
+  return_deadline_time: string | null
   display_order:    number
   // 배송대여 수령/반납 일괄 지정(2026-08-24) — true인 방식은 /cart에서 반납방식 강제고정+
   // 시간선택 비활성화 대상(cms/set/rental "배송대여 수령/반납 일괄 지정" 콤보로 관리자 토글)

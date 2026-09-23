@@ -48,16 +48,21 @@
   // 방식마다 균일하지 않을 수 있어 인라인 폼 대신 그 행 바로 아래 아코디언으로 노출.
   let editingDeadlineId = $state<string | null>(null)
   let editingDeadlineValue = $state('')
+  // 반납방식 노출용 안내문구(return_deadline_time, Migration #524, 2026-09-23 Stephen 요청) —
+  // 수령방식용(editingDeadlineValue)과 완전히 독립된 값. 같은 아코디언 안에서 함께 편집·저장.
+  let editingReturnDeadlineValue = $state('')
   let deadlineEditLoading = $state(false)
 
   function startEditDeadline(item: RentalMethodOption) {
     editingDeadlineId = item.id
     editingDeadlineValue = item.deadline_time ?? ''
+    editingReturnDeadlineValue = item.return_deadline_time ?? ''
   }
 
   function cancelEditDeadline() {
     editingDeadlineId = null
     editingDeadlineValue = ''
+    editingReturnDeadlineValue = ''
   }
 
   // 아코디언이 열릴 때 입력칸에 포커스 — HTML autofocus 속성은 a11y 린트 경고 대상이라
@@ -490,28 +495,57 @@
                   <input type="hidden" name="name" value={item.name} />
                   <input type="hidden" name="display_order" value={item.display_order} />
                   <input type="hidden" name="method_key" value={item.method_key ?? ''} />
-                  <input
-                    type="text"
-                    name="deadline_time"
-                    class="mk-deadline-edit-input"
-                    value={editingDeadlineValue}
-                    maxlength="20"
-                    placeholder="안내문구 (예: 19시마감, 20자)"
-                    aria-label="안내문구 수정"
-                    disabled={deadlineEditLoading}
-                    use:focusOnMount
-                    onkeydown={(e) => {
-                      if (e.key === 'Escape') { e.preventDefault(); cancelEditDeadline() }
-                    }}
-                    oninput={(e) => {
-                      editingDeadlineValue = filterMethodDeadlineInput(e.currentTarget.value)
-                      e.currentTarget.value = editingDeadlineValue
-                    }}
-                  />
-                  <button type="submit" class="btn-add" disabled={deadlineEditLoading}>
-                    {deadlineEditLoading ? '저장 중...' : '저장'}
-                  </button>
-                  <button type="button" class="mk-deadline-btn mk-deadline-btn--cancel" disabled={deadlineEditLoading} aria-label="취소" title="취소" onclick={cancelEditDeadline}>✕</button>
+                  <div class="mk-deadline-field-row">
+                    <span class="mk-deadline-field-label">수령방식</span>
+                    <input
+                      type="text"
+                      name="deadline_time"
+                      class="mk-deadline-edit-input"
+                      value={editingDeadlineValue}
+                      maxlength="20"
+                      placeholder="안내문구 (예: 19시마감, 20자)"
+                      aria-label="수령방식 안내문구 수정"
+                      disabled={deadlineEditLoading}
+                      use:focusOnMount
+                      onkeydown={(e) => {
+                        if (e.key === 'Escape') { e.preventDefault(); cancelEditDeadline() }
+                      }}
+                      oninput={(e) => {
+                        editingDeadlineValue = filterMethodDeadlineInput(e.currentTarget.value)
+                        e.currentTarget.value = editingDeadlineValue
+                      }}
+                    />
+                  </div>
+                  <!-- 반납방식 노출용 안내문구(return_deadline_time, Migration #524,
+                       2026-09-23 Stephen 요청) — 수령방식 입력행과 완전히 독립된 두 번째
+                       필드. 같은 폼에서 함께 저장(부분필드 전송 위험 방지 — service-
+                       operations.md §18 관례와 동일하게 항상 두 필드 모두 재전송). -->
+                  <div class="mk-deadline-field-row">
+                    <span class="mk-deadline-field-label">반납방식</span>
+                    <input
+                      type="text"
+                      name="return_deadline_time"
+                      class="mk-deadline-edit-input"
+                      value={editingReturnDeadlineValue}
+                      maxlength="20"
+                      placeholder="안내문구 (예: 19시마감, 20자)"
+                      aria-label="반납방식 안내문구 수정"
+                      disabled={deadlineEditLoading}
+                      onkeydown={(e) => {
+                        if (e.key === 'Escape') { e.preventDefault(); cancelEditDeadline() }
+                      }}
+                      oninput={(e) => {
+                        editingReturnDeadlineValue = filterMethodDeadlineInput(e.currentTarget.value)
+                        e.currentTarget.value = editingReturnDeadlineValue
+                      }}
+                    />
+                  </div>
+                  <div class="mk-deadline-actions-row">
+                    <button type="submit" class="btn-add" disabled={deadlineEditLoading}>
+                      {deadlineEditLoading ? '저장 중...' : '저장'}
+                    </button>
+                    <button type="button" class="mk-deadline-btn mk-deadline-btn--cancel" disabled={deadlineEditLoading} aria-label="취소" title="취소" onclick={cancelEditDeadline}>✕</button>
+                  </div>
                 </form>
               </div>
             {/if}
@@ -1608,7 +1642,24 @@
   }
   .mk-deadline-edit-form {
     display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+  .mk-deadline-field-row {
+    display: flex;
     align-items: center;
+    gap: 8px;
+  }
+  .mk-deadline-field-label {
+    flex-shrink: 0;
+    width: 60px;
+    font: var(--text-pc-body-14);
+    font-weight: 700;
+    color: var(--cs-text-mid);
+  }
+  .mk-deadline-actions-row {
+    display: flex;
+    justify-content: flex-end;
     gap: 8px;
   }
   .mk-deadline-edit-input {

@@ -37,11 +37,15 @@ export interface RentalMethodOption {
   // 동시에 true로 가질 수 없다(toggle RPC 상호배타 가드, Migration #441). 별도 마스터 토글
   // 없음(is_delivery_type=true 존재 자체가 활성화 조건).
   is_delivery_type: boolean
-  // 사용자 장바구니 화면 노출용 안내문구(예: "19시마감") — /cart tab.deadline로 그대로
-  // 노출됨(cart/+page.server.ts 조회, cart/+page.svelte 렌더). CMS 목록에서 배지 클릭 시
-  // 인라인 수정 가능(updateMethodDeadline 액션, 2026-09-21 후속 — 최초엔 읽기 전용이었으나
-  // Stephen 요청으로 기존 항목도 편집 가능하도록 확장).
+  // 사용자 장바구니 "수령방식" 화면 노출용 안내문구(예: "19시마감") — /cart 수령 탭에서
+  // tab.deadline로 노출됨(cart/+page.server.ts 조회, cart/+page.svelte 렌더). CMS 목록에서
+  // 배지 클릭 시 인라인 수정 가능(updateMethodDeadline 액션, 2026-09-21 후속 — 최초엔
+  // 읽기 전용이었으나 Stephen 요청으로 기존 항목도 편집 가능하도록 확장).
   deadline_time: string | null
+  // 사용자 장바구니 "반납방식" 화면 노출용 안내문구 — deadline_time과 완전히 독립된
+  // 별도 필드(Migration #524, 2026-09-23 Stephen 요청). 같은 방식이 수령·반납 각각에서
+  // 선택될 때 서로 다른 안내문구를 노출할 수 있도록 분리.
+  return_deadline_time: string | null
 }
 
 export interface PickupPoint {
@@ -106,7 +110,7 @@ export const load: PageServerLoad = async ({ locals }) => {
       .order('display_order'),
 
     untypedFrom(supabase, 'rental_method_options')
-      .select('id, name, method_key, display_order, is_active, is_bulk_delivery, is_courier_dependent, is_delivery_type, deadline_time')
+      .select('id, name, method_key, display_order, is_active, is_bulk_delivery, is_courier_dependent, is_delivery_type, deadline_time, return_deadline_time')
       .is('deleted_at', null)
       .order('display_order'),
 
@@ -245,12 +249,16 @@ export const actions: Actions = {
       p_display_order: count,
       p_method_key: methodKey,
       p_deadline_time: deadlineTime,
+      // 신규 등록 화면에는 반납방식 안내문구 입력란이 없음 — 등록 후 인라인 수정
+      // 아코디언(updateMethodDeadline)에서 추가 설정.
+      p_return_deadline_time: null,
     })
     if (error) return fail(500, { error: error.message })
     return { success: true }
   },
 
-  // 기존 대여방식 행의 안내문구(deadline_time) 인라인 수정(2026-09-21, Stephen 요청) —
+  // 기존 대여방식 행의 안내문구(deadline_time·return_deadline_time) 인라인 수정
+  // (2026-09-21 신설, 2026-09-23 반납방식 안내문구 추가 — Migration #524) —
   // upsert_rental_method_option UPDATE 분기(p_id 지정)를 재사용. name/display_order는
   // 이 RPC가 항상 덮어쓰므로(COALESCE 대상 아님) 클라이언트가 그 행의 현재값을 hidden
   // 필드로 그대로 재전송한다(RentalDetailPanel.svelte 등 다른 인라인 수정 패턴과 동일 원칙).
@@ -266,11 +274,16 @@ export const actions: Actions = {
     const methodKey = (data.get('method_key') as string | null)?.trim() || null
     const deadlineTimeRaw = (data.get('deadline_time') as string | null)?.trim() ?? ''
     const deadlineTime = deadlineTimeRaw || null
+    const returnDeadlineTimeRaw = (data.get('return_deadline_time') as string | null)?.trim() ?? ''
+    const returnDeadlineTime = returnDeadlineTimeRaw || null
 
     if (!id) return fail(400, { error: '잘못된 요청입니다.' })
     if (!name) return fail(400, { error: '대여방식명이 비어있습니다.' })
     if (deadlineTime && deadlineTime.length > 20) {
-      return fail(400, { error: '안내문구는 최대 20자까지 입력 가능합니다.' })
+      return fail(400, { error: '수령방식 안내문구는 최대 20자까지 입력 가능합니다.' })
+    }
+    if (returnDeadlineTime && returnDeadlineTime.length > 20) {
+      return fail(400, { error: '반납방식 안내문구는 최대 20자까지 입력 가능합니다.' })
     }
 
     const { error } = await untypedRpc(locals.supabase, 'upsert_rental_method_option', {
@@ -279,6 +292,7 @@ export const actions: Actions = {
       p_display_order: displayOrder,
       p_method_key: methodKey,
       p_deadline_time: deadlineTime,
+      p_return_deadline_time: returnDeadlineTime,
     })
     if (error) return fail(500, { error: error.message })
     return { success: true }
