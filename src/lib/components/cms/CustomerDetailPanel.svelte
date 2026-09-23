@@ -26,11 +26,13 @@
     identity_type: string[] | null
     identity_doc_url: string[] | null
     identity_verified_at: string | null
+    identity_approved_at?: string | null
     foreign_doc_url: string | null
     foreign_doc_urls: string[] | null
     foreign_type: string[] | null
     foreign_stay_type: string | null
     foreign_verified_at: string | null
+    foreign_approved_at?: string | null
     password_set: boolean
     created_at: string
     total_count: number
@@ -875,6 +877,45 @@
     }
   }
 
+  // ── 본인증명/외국인증명 관리자 승인(Migration #526) ───────────────────
+  // "검토 대기" 판정: 제출은 됐는데(verified_at 있음) 아직 승인 안 됐거나(approved_at 없음)
+  // 승인 이후 재제출됐음(verified_at이 approved_at보다 최신) — 승인 후 재제출 시 자동으로
+  // 다시 이 조건에 걸려 "승인" 버튼이 재노출된다(별도 리셋 로직 불필요).
+  function needsDocApproval(verifiedAt: string | null | undefined, approvedAt: string | null | undefined): boolean {
+    if (!verifiedAt) return false
+    if (!approvedAt) return true
+    return new Date(approvedAt) < new Date(verifiedAt)
+  }
+
+  let approvingIdentity = $state(false)
+  let approvingForeign  = $state(false)
+
+  async function approveDoc(type: 'identity' | 'foreign') {
+    if (type === 'identity') approvingIdentity = true
+    else                     approvingForeign  = true
+
+    try {
+      const res  = await fetch('/api/cms/approve-doc', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ user_id: row.user_id, type }),
+      })
+      const data = await res.json() as { ok: boolean; error?: string }
+
+      if (data.ok) {
+        csToast.success('승인 처리되었습니다.')
+        await invalidateAll()
+      } else {
+        csToast.error(data.error ?? '승인 실패')
+      }
+    } catch {
+      csToast.error('네트워크 오류가 발생했습니다.')
+    } finally {
+      if (type === 'identity') approvingIdentity = false
+      else                     approvingForeign  = false
+    }
+  }
+
   let showMemberTypeModal = $state(false)
   let memberTypeGroups = $state<MemberTypeGroup[]>([])
   let loadingGroups = $state(false)
@@ -1043,6 +1084,16 @@
               onclick={() => reuploadIdentityOpen ? cancelDocUpload('identity') : (reuploadIdentityOpen = true)}
             >{reuploadIdentityOpen ? '취소' : '재등록'}</button>
           {/if}
+          {#if row.identity_doc_url?.length && needsDocApproval(row.identity_verified_at, row.identity_approved_at)}
+            <button
+              type="button"
+              class="btn-approve"
+              disabled={approvingIdentity}
+              onclick={() => approveDoc('identity')}
+            >{approvingIdentity ? '처리 중...' : '승인'}</button>
+          {:else if row.identity_doc_url?.length && row.identity_approved_at}
+            <span class="badge-approved">승인완료</span>
+          {/if}
         </div>
         {#if row.identity_doc_url && row.identity_doc_url.length > 0}
           <div class="doc-file-list">
@@ -1125,6 +1176,16 @@
               class:btn-reupload-cancel={reuploadForeignOpen}
               onclick={() => reuploadForeignOpen ? cancelDocUpload('foreign') : (reuploadForeignOpen = true)}
             >{reuploadForeignOpen ? '취소' : '재등록'}</button>
+          {/if}
+          {#if row.is_foreign && foreignDocList(row).length > 0 && needsDocApproval(row.foreign_verified_at, row.foreign_approved_at)}
+            <button
+              type="button"
+              class="btn-approve"
+              disabled={approvingForeign}
+              onclick={() => approveDoc('foreign')}
+            >{approvingForeign ? '처리 중...' : '승인'}</button>
+          {:else if row.is_foreign && foreignDocList(row).length > 0 && row.foreign_approved_at}
+            <span class="badge-approved">승인완료</span>
           {/if}
         </div>
         {#if foreignDocList(row).length > 0}
@@ -2532,6 +2593,35 @@
     color: var(--cs-red-badge);
   }
   .btn-reupload.btn-reupload-cancel:hover { background: rgba(255,53,53,0.14); }
+
+  /* 본인증명/외국인증명 승인 버튼·완료뱃지(Migration #526) — .btn-reupload 박스모델 재사용 */
+  .btn-approve {
+    height: 22px;
+    padding: 0 8px;
+    background: rgba(16,185,129,0.10);
+    color: var(--cs-success-light);
+    border: none;
+    border-radius: var(--radius-sm);
+    font: var(--text-pc-descript-10);
+    font-weight: 700;
+    cursor: pointer;
+    white-space: nowrap;
+    flex-shrink: 0;
+    transition: background 0.12s;
+  }
+  .btn-approve:hover { background: rgba(16,185,129,0.18); }
+  .btn-approve:disabled { opacity: 0.5; cursor: default; }
+  .badge-approved {
+    display: inline-flex;
+    align-items: center;
+    height: 20px;
+    padding: 0 7px;
+    background: rgba(16,185,129,0.10);
+    color: var(--cs-success-light);
+    border-radius: var(--radius-sm);
+    font: var(--text-pc-script-12);
+    font-weight: 700;
+  }
 
   /* 재업로드 폼 박스 */
   .reupload-box {

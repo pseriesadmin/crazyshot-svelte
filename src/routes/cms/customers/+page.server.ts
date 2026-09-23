@@ -27,11 +27,13 @@ export interface CustomerRow {
   identity_type: string[] | null
   identity_doc_url: string[] | null
   identity_verified_at: string | null
+  identity_approved_at: string | null
   foreign_doc_url: string | null
   foreign_doc_urls: string[] | null
   foreign_type: string[] | null
   foreign_stay_type: string | null
   foreign_verified_at: string | null
+  foreign_approved_at: string | null
   password_set: boolean
   created_at: string
   total_count: number

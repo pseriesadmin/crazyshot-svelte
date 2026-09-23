@@ -166,5 +166,42 @@ export const POST: RequestHandler = async ({ request, locals }) => {
     if (removeError) console.error('[upload-doc] old file cleanup error:', removeError.message)
   }
 
+  // 관리자 검토요청 알림카드(admin_only) — 업로드 성공에는 영향 주지 않는 fail-soft 부가동작
+  // (service-operations.md §11: 세션조회는 find_or_create_general_chat_session RPC만 사용)
+  try {
+    const { data: profileForName } = await admin
+      .from('user_profiles')
+      .select('full_name')
+      .eq('user_id', session.user.id)
+      .maybeSingle()
+    const displayName = (profileForName as { full_name?: string } | null)?.full_name || '고객'
+
+    const { data: chatSessionId, error: sessionRpcErr } = await admin.rpc(
+      'find_or_create_general_chat_session',
+      { p_user_id: session.user.id, p_reservation_id: null },
+    )
+    if (sessionRpcErr) {
+      console.error('[upload-doc] find_or_create_general_chat_session 실패(fail-soft):', sessionRpcErr.message)
+    } else if (chatSessionId) {
+      await admin.from('chat_messages').insert({
+        session_id:     chatSessionId,
+        sender_type:    'user',
+        message_type:   'action_card',
+        content:        `'${displayName}' 회원 본인증명정보 등록 확인 요청`,
+        admin_only:     true,
+        action_payload: {
+          type:          'identity_review_request',
+          doc_type:      type,
+          button_label:  '본인증명정보 등록',
+          action_url:    `/cms/customers?selected=${session.user.id}`,
+        },
+        is_read: false,
+      })
+      await admin.from('chat_sessions').update({ updated_at: new Date().toISOString() }).eq('id', chatSessionId)
+    }
+  } catch (e) {
+    console.error('[upload-doc] identity_review_request 카드 발송 실패(fail-soft):', e instanceof Error ? e.message : e)
+  }
+
   return json({ ok: true, docUrls: finalDocUrls, verifiedAt: new Date().toISOString() })
 }

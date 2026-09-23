@@ -36,6 +36,10 @@ export type ActionCardType =
   | 'INQUIRY_REPLY_CARD'
   // 빠른문의 신규 등록 알림 (관리자 수신) — submit_cs_post RPC(Migration 328)
   | 'INQUIRY_NEW_CARD'
+  // 본인증명/외국인증명 등록 확인요청 (관리자 전용, admin_only=true) — upload-doc(Migration 526)
+  | 'identity_review_request'
+  // 본인증명/외국인증명 관리자 승인 완료 알림 (고객 수신) — cms/approve-doc(Migration 526)
+  | 'identity_approved'
 
 export type ActionCardButtonColor = 'purple' | 'red' | 'green' | 'orange'
 

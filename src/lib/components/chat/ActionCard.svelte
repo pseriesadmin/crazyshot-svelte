@@ -104,6 +104,8 @@
       case 'refund_failed':          return { label: '환불실패확인', color: 'red' }
       case 'INQUIRY_REPLY_CARD':     return { label: '답변 확인하기', color: 'purple' }
       case 'INQUIRY_NEW_CARD':       return { label: '빠른문의 답변등록', color: 'purple' }
+      case 'identity_review_request': return { label: '본인증명정보 등록', color: 'purple' }
+      case 'identity_approved':      return { label: '내 정보 확인하기', color: 'green' }
       // GSD-17: 제품 링크 카드 (관리자 @ 멘션으로 삽입)
       case 'product_link':           return { label: '상품 상세 보기', color: 'purple' }
       // GSD-20: CTA가 있는 자동응답 카드
@@ -376,6 +378,11 @@
             contractId: payload.contract_id,
             reservationId: Number(payload.reservation_id),
           })
+        } else if (payload.type === 'identity_review_request') {
+          // 본인증명/외국인증명 검토요청 — 다른 카드류와 달리 패널 내 모달(onctamodal)이
+          // 아니라 CMS 고객목록 페이지 자체로 실제 이동한다(요구사항 자체가 페이지 이동).
+          const { goto } = await import('$app/navigation')
+          goto(ctaUrl)
         } else {
           const ctx = await resolveAdminReservationContext()
           if (ctx.reservationId != null) {

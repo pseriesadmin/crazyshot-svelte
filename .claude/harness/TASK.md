@@ -1,5 +1,166 @@
 # .claude/harness/TASK.md
 
+## DONE — 🟢 ROUTINE: 대여방식 수령/반납 안내문구 입력 길이 20자→30자 상향 (2026-09-23, 이 세션'만')
+
+```
+Stephen이 CMS 대여방식 인라인 수정 아코디언(수령방식/반납방식 안내문구)을 지목해 입력
+가능 글자수를 30자로 늘려달라고 요청. DB 컬럼(deadline_time·return_deadline_time)이
+TEXT라 별도 마이그레이션 불필요 — 앱 레벨 3곳만 20→30 동기화:
+  1. src/routes/cms/set/rental/+page.svelte — 공유 필터 함수 filterMethodDeadlineInput()
+     slice(0,20)→slice(0,30), 입력 3곳(신규등록 행 1개+수정 아코디언 2개) maxlength·
+     placeholder 동일 변경.
+  2. src/routes/cms/set/rental/+page.server.ts — addMethod·updateMethodDeadline
+     서버측 length>20 검증 3곳을 length>30으로 동기화(클라이언트 우회 방지 원칙 유지).
+npm run check 베이스라인(1에러/401경고) 그대로, 신규 이슈 0건.
+```
+
+git commit은 Stephen 직접 실행 대기.
+
+---
+
+## DONE — 고객 '분류' 배지 오인 여부 검증 + user_profiles.grade(죽은 GENERATED 컬럼) 삭제 (2026-09-23, 이 세션'만')
+
+### 배경
+
+Stephen이 CMS 고객상세의 "분류"(일반/학생/구독) 배지를 `<launch-selected-element>`로 선택하며
+"이 배지가 정책상 존재하지 않는 계정 고정 '등급' 개념을 잘못 쓰고 있는 게 아닌지" 검증을
+요청 — ①계정 자체엔 등급이 없음(추후 구매누적 쿠폰차등은 미구현 예정 사항일 뿐) ②구독은
+등급이 아니라 3개 구독상품 각각의 그룹 소속 ③분류 배지가 고객목록 필터 칩과 같은 기준을
+써야 함, 4가지 전제 조건 제시.
+
+### 조사 결과 (Explore 서브에이전트 2회 실행 후 직접 grep 재검증)
+
+- **분류 배지 판정**: `classificationsOf()` 함수가 `CustomerDetailPanel.svelte`·
+  `cms/customers/+page.svelte` 양쪽에 동일 로직으로 존재 — `is_student`(학생증 인증)와
+  `membership_grade !== 'NONE'`(구독상품 구독중)의 조합 파생값일 뿐, 계정 고정 등급 컬럼을
+  직접 읽지 않음.
+- **필터 칩과의 일치**: 목록 필터 칩(`일반`/`학생`/`구독`)이 `get_customer_list` RPC에
+  전달하는 `p_classifications` WHERE 조건도 동일하게 `is_student`+`membership_grade`
+  기준 — 배지와 필터 사이 불일치 없음 확인.
+- **"등급" 개념 자체**: `membership_grade`는 오직 구독상품(EASY/POP/CRAZY) 구독 상태만
+  나타내며, 구매이력 누적형 계정 등급 같은 별도 개념은 코드베이스 어디에도 없음 — Stephen
+  전제와 정확히 일치, 오인 사항 없음(**수정 불필요로 결론**).
+- **부수 발견**: 조사 중 `user_profiles.grade`(Migration 03,
+  `GENERATED ALWAYS AS (membership_grade) STORED`) 컬럼이 앱 코드 어디에서도 SELECT/참조
+  되지 않는 죽은 컬럼임을 확인(CSS `.grade-*` 클래스명은 `membership_grade` 파생값,
+  `LegacyMemberVerifyModal`의 `grade` 필드는 API 응답 하드코딩 `'NONE'` 문자열로 이
+  GENERATED 컬럼과 무관함을 소스로 확인) — Stephen이 삭제 명시 지시.
+
+### 구현 — 죽은 컬럼 삭제 (Stephen 명시 요청)
+
+- 신규 마이그레이션 `supabase/migrations/20260923200000_535_drop_dead_grade_column.sql`
+  (`DROP COLUMN IF EXISTS grade` — 기존 마이그레이션 파일 직접수정 금지 원칙 준수)
+- `src/lib/types/database.ts` — `UserProfile.grade` 필드 선언 + `UserProfileInsert`의
+  Omit 목록에서 `'grade'` 제거(같은 죽은 컬럼의 타입 정의라 동일 범위로 판단)
+- Stage(`ezyvffjvuwmtuhpxdjrw`) 적용 → 컬럼 소멸 SQL 재확인 → Production
+  (`vnbpmvxruyciuuaermyh`) 동일 적용 → 컬럼 소멸 SQL 재확인, 순서 준수
+
+### GATE C 체크리스트
+
+```
+[x] 기존 마이그레이션 파일을 직접 수정하지 않고 신규 ADD만 했는가?
+[x] 삭제 전 앱 코드 전수 grep으로 실사용 여부 재확인했는가? (CSS class-name 오탐·API 응답
+    필드명 우연 일치 두 경우를 실제 소스까지 열어 배제)
+[x] Stage 먼저 적용·검증 후 Production 적용했는가?
+[x] 타입 정의(database.ts)도 DB 스키마와 함께 정리했는가?
+[x] svelte-check 신규 에러 0건 확인했는가?
+```
+
+### 검증
+
+```
+svelte-check: 신규 에러 0건(기존 vite.config.ts 1건은 무관, 계속 확인됨)
+Stage/Production 둘 다 information_schema.columns 직접 재조회로 컬럼 소멸 확인
+```
+
+**git commit**: 아직 없음 — Stephen 직접 실행 대기
+
+---
+
+## DONE — 🔴 CRITICAL: 본인증명/외국인증명 등록 → 관리자 승인 채팅카드 3단 플로우 (Migration #526, 2026-09-23, 이 세션'만')
+
+### 배경
+
+```
+Stephen 요청(플랜모드 승인 완료, /Users/stevenmac/.claude/plans/effervescent-dancing-kettle.md):
+고객이 /account/profile에서 본인증명/외국인증명 서류를 등록하면 ①관리자 채팅(고객 세션 내
+admin_only 카드)으로 알림 → ②관리자가 카드 클릭 시 /cms/customers?selected=로 이동해 신규
+"승인" 버튼으로 처리 → ③승인 시 고객에게 확인 카드 발송, 3단계 흐름 구현.
+
+핵심 설계(Stephen 확인 완료): admin_only=true(Migration #404, refund_failed와 동일 패턴)
+재사용 — service-operations.md §17의 "관리자 전용은 chat_messages 금지" 원칙보다 하루
+늦게 신설된 admin_only 컬럼이 이미 이 문제를 해결하는 정식 경로로 운영 중임을 확인.
+```
+
+### 구현 (코드 전체 완료 + Stage 마이그레이션 적용 완료, Production 적용 대기)
+
+```
+1. Migration #526(supabase/migrations/20260923020000_526_identity_doc_approval.sql) —
+   user_profiles.identity_approved_at/foreign_approved_at TIMESTAMPTZ 신설(기존
+   *_verified_at은 "제출시각" 의미 그대로 유지, 절대 재정의 안 함) + approve_customer_doc(
+   p_user_id, p_doc_type) RPC 신설(SECURITY DEFINER, service_role 전용, 제출 이력 없으면
+   실패) + get_customer_list DROP+재생성(반환컬럼 2개 추가 — 베이스는 최신본인 Migration
+   #486, #410 아님 — REVOKE ALL FROM PUBLIC/anon/authenticated 재적용까지 정확히 복제해
+   Migration #364 PII노출 재발 방지) + push_notification_config 'identity_approved' 시드.
+   ✅ Stage(ezyvffjvuwmtuhpxdjrw) 적용 완료(2026-09-23, Stephen 지시로 이 세션이 Supabase
+   MCP로 직접 적용) — 적용 직후 컬럼 2개 존재·get_customer_list/approve_customer_doc
+   proacl에 PUBLIC/anon/authenticated 없음(service_role만) 직접 SQL 재조회로 확인,
+   security advisor에 이 마이그레이션 관련 신규 경고 0건, approveDocRpcGuard.test.ts
+   3/3 RED→GREEN 전환 재확인 완료. Production(vnbpmvxruyciuuaermyh) 적용은 아직 대기 —
+   Stephen 승인 후 별도 진행.
+2. src/routes/api/profile/upload-doc/+server.ts — 업로드 성공 후 fail-soft로
+   find_or_create_general_chat_session + admin_only=true 'identity_review_request'
+   카드 발송 추가(§11 준수, cms/upload-doc 관리자 대리등록 경로는 미변경 — 노이즈 방지).
+3. src/routes/api/cms/approve-doc/+server.ts(신규) — getCmsRoleForAction+hasSettingsAccess
+   (manager+) 게이트 → approve_customer_doc RPC → 성공 시 같은 핸들러에서 고객에게
+   'identity_approved' 카드(admin_only 아님) + 푸시 발송.
+4. src/lib/types/chat.ts — ActionCardType에 identity_review_request/identity_approved 추가.
+5. src/lib/components/chat/ActionCard.svelte — ctaDefaults() 2건 + handleCta() isAdmin
+   분기에 identity_review_request 전용 케이스 신설(다른 카드류와 달리 onctamodal이 아닌
+   실제 goto() 페이지이동 — 요구사항 자체가 CMS 고객목록 이동이므로).
+6. src/lib/components/cms/CustomerDetailPanel.svelte — 본인증명/외국인여부 두 info-row에
+   "승인"버튼+"승인완료"뱃지 추가(needsDocApproval() 판정, 기존 .btn-reupload와 동일하게
+   중첩폼 문제로 REST fetch 방식), CustomerRow에 신규 필드 2개.
+7. src/routes/cms/customers/+page.server.ts — CustomerRow에 신규 필드 2개 추가.
+8. 테스트 5개 신설(src/__tests__/services/) — identityReviewRequestChatCard·
+   identityApprovedChatCard(카드 shape/RLS, 마이그레이션 무관 — 이미 GREEN 6/6 확인)·
+   approveDocPermissionGate·uploadDocNotifyFailSoft(mock 기반, 이미 GREEN 7/7 확인)·
+   approveDocRpcGuard(RPC 직접 호출 — Migration #526 Stage 미적용 상태에서는 RED 3/3였으나
+   Stage 적용 후 GREEN 3/3 전환 재확인 완료, refundAdminChatCard.test.ts와 동일한 TDD
+   RED→GREEN 관례).
+9. svelte-check 전수 실행 — 기존 vite.config.ts 무관 에러 1건 외 신규 에러 0건 확인.
+```
+
+### QA 결과 (sp3-qa-agent, 2026-09-23)
+
+```
+GATE C/E 3단계 검수 완료 — §17/§11/security-auth.md 권한게이트·PII노출 방지(Migration #364
+재발 방지)·p_user_id 정합성(handle_new_user 트리거)·admin_only 구분·fail-soft 경계·
+ActionCard.svelte 회귀·중첩폼 회피·CSS 토큰 전부 "이슈 없음" 확인.
+⚠️ 발견·수정 완료(BOUNDARY): uploadDocNotifyFailSoft.test.ts의 mockFrom 타입이 인자 0개로
+   추론돼 npm run check(tsc)에서 신규 에러 1건 발생 — vi.fn((_table?: string) => ...)로
+   정정 + 105행 mockImplementation 파라미터도 optional로 통일해 해소. 재검증: npx tsc
+   --noEmit 클린 확인 + 관련 4개 테스트파일 10/10 GREEN 재확인(회귀 없음).
+GATE E 통과.
+```
+
+### Production 적용 (2026-09-23, Stephen 지시로 이 세션이 Supabase MCP 직접 적용)
+
+```
+✅ Migration #526을 Production(vnbpmvxruyciuuaermyh)에 적용 완료 — 적용 전 fn_exists/
+   new_cols 사전조회로 미적용 상태 확인(배포순서 사고 예방) → 적용 → 사후 재조회로
+   컬럼 2개 존재·backfilled_rows=0(백필 없음)·get_customer_list/approve_customer_doc
+   proacl 둘 다 postgres/service_role만(PUBLIC·anon·authenticated 없음) 확인 →
+   get_customer_list(1,1) 실호출로 39컬럼 정상 반환 확인 → list_migrations로
+   "526_identity_doc_approval"이 최종 목록에 반영됨을 확인. Stage와 Production 상태 일치.
+```
+
+### 남은 작업
+
+```
+⛔ git add/commit/push는 Stephen 직접 실행(커밋 메시지 텍스트 제안은 위 대화 참고).
+```
+
 ## DONE — 🟡 BOUNDARY: 대여방식 옵션에 "반납방식 노출용 안내문구"(return_deadline_time) 신설 (Migration #524, 2026-09-23, 이 세션'만')
 
 ### 배경
@@ -51321,3 +51482,431 @@ fix(cms/products): 상세패널 전환 깜빡임 수정 + 삭제 안전 토스�
 ```
 
 **git commit은 Stephen 직접 실행.**
+
+---
+
+## NOW — 구독 "혜택관리" 5종 실적용 여부 + 프로모션 쿠폰 구독등급 배포 중복 검증 (2026-09-23)
+
+[CONTEXT BRIDGE]
+plan_source: Stephen이 `/cms/subscriptions?selected=448` "혜택관리" 탭을 launch-selected-element로
+지정 후 두 가지 검증 요청 — ① 혜택관리 5종(할인쿠폰·무료배송·무료렌탈·보험면제·적립포인트)이
+실제 로직에 반영되는지 ② 프로모션 쿠폰(/cms/promotion/coupon)의 "구독등급 배포" 옵션이 구독
+자체 할인쿠폰 혜택과 중복 발급되는지.
+수행: Explore 에이전트 2개 병렬 조사(혜택 5종 소비처 전수 grep / 쿠폰 배포 RPC 대조) +
+chargeSubscription.ts·distribute_coupon RPC 최신본(migration 525) 직접 재확인으로 검증.
+CRITICAL 판정 근거: 결제(구독료)의 대가로 고객에게 명시적으로 약속하는 혜택 항목이 실제로는
+전혀 지급되지 않는 서비스 신뢰성 문제 — 코드 변경 없이 조사만 수행(요청이 "검증"이었음).
+
+### 조사 결과
+
+**① 혜택관리 5종 — 전부 "UI만 있고 실행 로직 없음"(죽은 기능)으로 판정**
+- `tier_benefits` 테이블을 참조하는 코드는 전체 저장소에 6곳뿐이며, 그중 CMS 저장(쓰기) 2곳을
+  제외한 나머지(구독 상세페이지·CMS 상세·멤버스 비교표) 3곳은 전부 설정값을 문자열 설명
+  문구로 화면에 "보여주기"만 함(`formatBenefitForDisplay`).
+- 정기 재청구 크론의 실제 결제 처리 함수(`chargeSubscription.ts`)를 직접 grep 재확인 —
+  `tier_benefit`/`coupon`/`point`/`shipping`/`free_rental`/`insurance` 키워드 0건 매치.
+  즉 "매 결제주기 자동 할인쿠폰 발급"이라는 화면 설명 문구와 달리 실제 발급 코드가 없음.
+- 카트 배송비 계산(`cart/+page.server.ts`)은 별도 배송 설정 테이블만 참조, 혜택관리의
+  무료배송 월한도를 전혀 확인하지 않음 — 배송비는 혜택 ON/OFF와 무관하게 그대로 청구됨.
+- 예약 생성 로직·포인트 적립 로직 어디에도 무료렌탈/보험면제/적립포인트를 소비하는 코드 없음.
+
+**② 프로모션 쿠폰 구독등급 배포 — 현재 시점 중복발급 없음(자동발급 자체가 미구현이므로),
+단 향후 리스크 잠재**
+- `/cms/promotion/coupon` 배포 탭에서 "특정 등급"(BASIC/PRO/CRAZY) 선택 시
+  `distribute_coupon` RPC(최신본 migration 525)가 `user_profiles.membership_grade` 기준으로
+  대상자를 뽑아 1회성 수동 배포함(pg_cron 등록 없음 — 관리자가 버튼을 눌러야만 실행).
+- 이 경로와 혜택관리의 DISCOUNT_COUPON은 완전히 분리된 별개 시스템 — 후자가 미구현이라
+  현재는 이중지급이 구조적으로 발생할 수 없음.
+- 다만 향후 DISCOUNT_COUPON을 실제로 구현하면, 프로모션 쿠폰 등급별 배포 화면에 "이 등급은
+  이미 구독 혜택으로 할인쿠폰을 받고 있습니다" 같은 경고·중복확인 로직이 전혀 없어 관리자가
+  실수로 중복 발행할 위험은 남아있음(설계 공백으로 기록만 해둠).
+
+### 다음 조치 — Stephen 확인 대기 (선택 필요, 스코프 큰 CRITICAL 작업)
+
+혜택 5종을 실제로 동작하게 만들려면 각각 서로 다른 시스템(정기결제 크론·카트 배송비 계산·
+예약가격 계산·포인트 적립)에 새 로직을 추가해야 하는 별도의 큰 개발 작업이다 — 이번 NOW
+블록에서는 코드 변경 없이 "검증"만 완료. 어느 범위까지, 어떤 우선순위로 실제 구현에
+착수할지는 Stephen 확인 후 별도 NOW 블록으로 진행.
+
+---
+
+## NOW — CMS 날짜 선택 팝업 결함 수정 + 쿠폰 "신규 배포" 중단/재개 기능 신설 (2026-09-23)
+
+[CONTEXT BRIDGE]
+plan_source: 두 건 모두 Stephen이 launch-selected-element로 화면 요소를 직접 지정하며 순차
+지시. ①CmsDatePicker(쿠폰 만료일 등 CMS 전역 날짜선택 공용 컴포넌트)의 달력 팝업 마지막 줄
+선택 불가 버그 리포트 → 원인 조사 후 수정 → 후속 피드백 2회(여백·스크롤 방식) 반영 →
+"여전히 스크롤 막힘" 재지적으로 진짜 원인(전체화면 backdrop) 재조사·재수정. ②CouponDetailPanel
+"상태" 영역 선택 후 "자동발행 활성/비활성 토글 추가" 요청 → 실행 엔진 부재 발견해 AskUserQuestion
+2회로 정확한 동작범위 합의(관리자의 '신규 배포' 액션만 차단, 이미 배포받은 고객은 영향 없음) →
+구현 → UI 통합 피드백 2회(토글을 '상태' 행에 결합, 목록 상태컬럼도 동기화) 반영 → 최종
+"완벽하게 재검증" 지시로 전체 체인 재검증.
+
+### ① CmsDatePicker 달력 팝업 — 마지막 줄 선택 불가 + 스크롤 차단 결함 수정 (3라운드)
+
+**결함 원인**: `.dp-popup`이 `position:absolute`로 트리거 바로 아래 고정 배치돼, CMS 우측
+슬라이드 패널(`.panel-body`, overflow-y:auto)처럼 스크롤되는 조상 안에서 쓰일 때 그 조상의
+가시 영역 아래로 넘치는 부분이 그대로 잘렸다 — 절대배치 요소는 조상의 scrollHeight를 늘리지
+않아 "더 스크롤해서 본다"는 시도 자체가 불가능했음(실사용 버그 — 말일 근처 날짜 클릭 불가).
+
+**1차 수정**: 트리거 위치를 JS로 측정해 `position:fixed` 뷰포트 기준 배치로 전환 — 아래로
+공간 부족 시 위로 자동 반전(flip-up), 그래도 부족하면 팝업 자체 `max-height`+`overflow-y:auto`
+로 안전망. `visibility:hidden`으로 시작해 위치 계산 후에만 노출해 깜빡임 방지.
+
+**2차 수정**(Stephen 피드백 — 여백 과다·스크롤 시 닫힘): 트리거-팝업 간격 4px→2px 축소.
+스크롤 시 팝업을 닫던 기존 동작을 "스크롤마다 위치 재계산"(트리거를 계속 따라감)으로 교체.
+
+**3차 수정**(Stephen 재지적 — "여전히 스크롤 막힘", 진짜 원인 재조사): 실측 결과(JS로 스크롤
+전후 `scrollTop` 직접 대조) 진짜 원인은 팝업이 열릴 때마다 뷰포트 전체를 덮던
+`.dp-backdrop`(position:fixed, inset:0, 바깥클릭 감지용)이 화면 어디서 휠을 굴려도 스크롤
+신호 자체를 배경으로 전달하지 않고 가로채고 있었음(2차 수정과는 별개의 독립적 결함).
+`.dp-backdrop` 완전 제거 → 대신 `document`에 `pointerdown` 캡처 리스너를 달아 클릭 지점이
+팝업·트리거 바깥일 때만 닫는 방식으로 교체 — 뷰포트를 덮는 요소 자체가 없어져 배경 스크롤을
+전혀 가로채지 않음.
+
+**검증**: 실제 CMS 쿠폰 화면에서 재현(패널 바닥에 붙은 날짜 필드 클릭) → 마지막 줄까지
+전부 보이고 클릭 선택됨. `elementFromPoint`+`scrollTop` 직접 대조로 배경 스크롤 정상 전달
+확인. 스크롤 중 팝업이 트리거를 따라 위치 재계산되는 것도 확인. 5곳(쿠폰·홍보·포인트 등
+CMS 날짜선택 전체)에 공용 컴포넌트라 한 번에 반영.
+
+### ② 쿠폰 목록 "코드" 컬럼 — sequenced 모드 프리뷰 표시 완전화
+
+sequenced(지연채번) 모드 쿠폰의 코드 프리뷰가 `CSUCPED*`처럼 날짜부·순번부를 전부 `*`
+한 글자로 뭉개 표시하던 것을, `coupon/new` 생성화면의 `buildComboPreview()`와 동일 규칙으로
+완전히 풀어 표시(`CSUCPED2026090000` — 날짜부는 현재 연월, 순번부는 실제 자릿수만큼 0패딩)
+하도록 `codeDisplay()`를 확장. 실제 Production 데이터 2건으로 계산값 직접 확인. 쿠폰
+목록·만료관리·사용량리포트 3개 탭이 이 함수 하나를 공유해 전부 동시 반영됨.
+
+### ③ 쿠폰 "신규 배포" 중단/재개 기능 신설 (Migration #525)
+
+**배경**: Stephen이 "자동발행 활성/비활성 토글"을 요청했으나, 조사 결과 `auto_issue_enabled`/
+`auto_issue_schedule`을 실제로 읽어 발행을 집행하는 pg_cron·RPC·Vercel Cron이 프로젝트
+어디에도 없음을 발견(설정만 저장되고 실행 엔진 자체가 없는 죽은 기능) — 그대로 토글을
+만들면 관리자에게 "동작하는 척"하는 오해 유발 기능이 되므로, 구현 전 AskUserQuestion으로
+방향 확인 후, 두 번째 질문으로 정확한 차단 범위(관리자의 '신규 배포' 액션만 차단 vs
+장바구니·마이페이지 목록에서도 숨김)를 Stephen이 직접 선택(전자로 확정)했다.
+
+**구현**:
+- `coupons.distribution_enabled BOOLEAN NOT NULL DEFAULT true` 컬럼 신설
+- `distribute_coupon` RPC(파라미터 개수 불변 — DROP 없이 REPLACE)에 `IF NOT
+  v_coupon.distribution_enabled THEN RETURN 'DISTRIBUTION_PAUSED'` 체크 추가 — 관리자
+  수동 배포(CMS "배포" 탭)와 `approve_pending_coupon_gift`(채팅 쿠폰선물 승인, 내부적으로
+  distribute_coupon 호출)가 이 단일 지점을 공유해 두 경로 모두 자동으로 차단됨
+- `cms_toggle_coupon_distribution(p_id)` 신규 RPC(is_cms_user 게이트 + anon REVOKE, 기존
+  `cms_toggle_coupon`과 동일 권한 패턴) — 토글 전용
+- `is_active`(쿠폰 자체 사용가능 여부)와는 완전히 별개 축 — 이미 배포받은 고객의 장바구니·
+  마이페이지 쿠폰 목록 조회 로직 4곳(cart·account·account/profile·contract)은 이 컬럼을
+  전혀 참조하지 않음(의도적, grep으로 재확인 완료)
+
+**UI 반영**(Stephen 피드백 2회로 최종 형태 확정):
+- 최초: CouponDetailPanel "현황" 섹션에 "신규 배포" 별도 행 추가
+- 1차 피드백: 별도 행을 없애고 기존 "상태" 행 하나로 토글 통합, 텍스트도 "배포 활성"/
+  "배포 중지"로 배포상태를 직접 표현하도록 변경
+- 2차 피드백("선택영역에 상태값 동기화"): 목록 테이블의 기존 "상태" 컬럼(원래 is_active
+  토글)도 동일하게 distribution_enabled 기준으로 전환 — 목록·상세 패널 양쪽이 이제 같은
+  의미의 "상태"를 표시
+
+**부수 발견·수정(재검증 중 발견)**:
+- CouponDetailPanel "배포 실행" 폼이 `result.type==='success'`만 확인하고 실제 응답의
+  `ok` 필드를 확인하지 않아, 배포가 서버에서 진짜로 막혔는데도(DB에 배포 기록 자체가 생성
+  안 됨을 직접 확인) 화면엔 "배포되었습니다." 성공 토스트가 뜨던 기존 버그 발견·수정 —
+  이번 기능의 차단이 실제로 작동하는지 신뢰성 있게 보여주는 데 필수적이라 같이 수정.
+- 원문 에러코드 `DISTRIBUTION_PAUSED`가 그대로 노출되던 2개 지점(CMS 배포 액션 + 채팅
+  쿠폰선물 승인 API)을 사람이 읽을 수 있는 한국어 안내문으로 치환.
+
+**최종 재검증**(Stephen "완벽하게 재검증" 지시): DB 컬럼·양쪽 진입점(수동배포/쿠폰선물승인)
+차단·권한(anon 제외)·성공/실패 양쪽 실제 동작(DB 배포기록 생성 여부까지 대조)·목록↔상세
+패널 동기화·타 쿠폰과의 격리(cross-contamination 없음)·고객 화면 미참조 4곳 재확인까지
+전부 실측 완료. svelte-check 전체 재실행 — 이번 작업 관련 신규 에러 0건(vite.config.ts의
+기존 무관 에러 1건은 그대로 존재, 미수정).
+
+### 상태
+
+Stage(ezyvffjvuwmtuhpxdjrw)에 전부 적용·검증 완료. **Production(vnbpmvxruyciuuaermyh)
+미반영** — Stephen "Production에 반영해!" 지시 대기(이 세션의 기존 패턴과 동일). git commit
+미실행 — Stephen 직접 실행 대기.
+
+수정/신규 파일(이 세션 한정):
+```
+supabase/migrations/20260923010000_525_coupon_distribution_pause.sql (신규)
+src/lib/components/cms/CmsDatePicker.svelte
+src/lib/components/cms/CouponDetailPanel.svelte
+src/lib/types/database.ts
+src/routes/cms/promotion/coupon/+page.server.ts
+src/routes/cms/promotion/coupon/+page.svelte
+src/routes/api/cms/chat/coupon-gift/[messageId]/approve/+server.ts
+```
+
+### GATE E — sp3-qa-agent 검수 완료 (2026-09-23)
+
+**판정: 통과(CRITICAL 결함 없음)**, BOUNDARY 등급 2건 발견 — 그중 1건은 검수 직후 즉시 수정,
+1건은 Stephen 확인 대기로 남김.
+
+## NOW — [마스터플랜] 구독 "혜택관리" 4종 실적용 + 쿠폰 다중중첩 체크아웃 전환 (2026-09-23)
+
+[CONTEXT BRIDGE]
+plan_source: Plan Mode로 상세 설계·승인 완료. 전체 설계 원문은
+`/Users/stevenmac/.claude/plans/ancient-pondering-salamander.md` 참고(6-Phase 구성).
+배경: 구독 혜택관리 5종(할인쿠폰·무료배송·무료렌탈·보험면제·적립포인트)이 전수조사 결과
+전부 CMS 표시용 문구로만 존재하고 실제 로직 미구현임을 확인(위 별도 검증 NOW 블록 참고).
+Stephen 확정 범위: 보험료면제(INSURANCE_WAIVE)는 제외, 적립포인트는 적립+만료 둘 다 포함,
+할인쿠폰은 프로모션 쿠폰과 완전한 다중 중첩 사용을 허용(장바구니 쿠폰 선택을 전체 시스템
+차원에서 라디오→체크박스 다중선택으로 전환, 전체 고객·전체 쿠폰 종류에 영향을 주는
+가장 리스크 큰 변경).
+
+⚠️ **주의**: 이 TASK.md에 병행 기록된 다른(이전) NOW/DONE 블록에서 확인되듯, 쿠폰 시스템
+(`CouponDetailPanel.svelte`, `distribute_coupon`, migration 525 `coupon_distribution_pause`
+등)에 **다른/이전 세션이 최근 동시에 작업**한 흔적이 있음 — Phase 1 착수 전 그 변경사항과
+충돌하지 않는지(특히 `distribution_enabled`·`is_active` 관련 필드) 직접 대조 확인 필수.
+
+우선순위(6-Phase, 순서 고정 — Phase 1이 나머지의 선행조건):
+  Phase 1(선행 필수) 쿠폰 다중중첩 체크아웃 구조 전환 → Phase 2 공용 월간사용량 추적 테이블
+  → Phase 3 할인쿠폰 자동발급 → Phase 4 적립포인트 적립+만료 → Phase 5 무료배송 →
+  Phase 6 무료렌탈(가장 마지막 — 공용 요금계산 RPC 직접 수정으로 회귀 리스크 최대)
+
+TDD도메인 판정: 전 Phase가 결제(쿠폰·포인트)·예약(요금계산) 로직 변경 — AGENTS.md TDD 강제
+키워드 해당. 전부 `@sp2-tdd-agents`에 위임(GSD 아님).
+
+### 현재 착수 — Phase 1: 쿠폰 다중중첩 체크아웃 구조 전환
+
+상세 설계는 plan 파일 "Phase 1" 섹션 그대로 적용:
+- 신설 테이블 `order_coupons`(order_id, user_coupon_id, coupon_id, discount_amount,
+  UNIQUE(order_id, user_coupon_id)) — RLS는 SELECT만 본인 것, 쓰기는 RPC 경유만.
+- `use_coupon` 검증 로직을 내부함수로 추출(기존 시그니처·테스트 불변) + 신규
+  `use_coupons(p_user_id, p_order_id, p_user_coupon_ids UUID[])`(id 오름차순 정렬 후 순차
+  FOR UPDATE 잠금 → all-or-nothing 검증).
+- `create_reservation_order`/`sync_order_after_composition_change`를 배열 파라미터로 확장 +
+  할인 순차산식 반영(고정액 전부 차감 → 정률 순차적용 → 무료배송은 배송비에만 → 하한 0원).
+- `cart/+page.svelte` 쿠폰선택 라디오 강제 해제(순수 다중토글) + `otCouponDiscount` 산식 교체
+  + 제출 시 배열 전송.
+- 마이그레이션 4개 분리 적용(Stage 우선): ①테이블+RLS ②use_coupons RPC ③create_reservation_
+  order 배열화 ④정산 순차산식 — ④까지 Stage 검증 완료 후에만 앱코드 배포.
+
+담당: `@sp2-tdd-agents`(RPC/마이그레이션 TDD) + 이어서 카트 UI 클라이언트 부분은
+`@harness-executor`. Supabase 마이그레이션 적용(stage→production)은 이번 세션(메인)이
+직접 수행(서브에이전트 Supabase MCP 미보유 원칙 유지).
+
+1. **(수정 완료)** `codeDisplay()` sequenced 프리뷰의 순번 자릿수를 `max_sequence` 값의
+   길이로 계산하던 부분 — 실채번 RPC(`generate_user_coupon_redeemed_code`, Migration #292)는
+   `max_sequence`를 상한 체크에만 쓰고 패딩 자릿수는 항상 `seq_digits`만 사용
+   (`LPAD(v_seq::TEXT, v_seq_digits, '0')`)한다는 점을 QA가 지적 — `max_sequence`가 3자리가
+   아닌 코드조합(예: 50, 1500)에서 프리뷰와 실채번 결과가 어긋날 수 있던 결함이라 즉시
+   `seq_digits ?? 3` 단순 사용으로 수정, 재검증 완료.
+2. **(Stephen 확인 완료 — 2026-09-23, 현재 상태 그대로 확정)** 쿠폰 목록·상세패널의 "상태"
+   토글을 `distribution_enabled` 전용으로 통합하면서, 기존 `is_active`(이미 배포된 쿠폰을
+   전면 사용중지시키는 기능 — `use_coupon` RPC가 `is_active=false`면 이미 배포받은 고객도
+   차단함)를 조작할 UI 수단이 완전히 사라졌다는 지적에 대해, Stephen이 "이미 배포된 쿠폰
+   통째로 정지 기능은 필요 없다 — 그 경우 엄청난 CS가 발생할 것"이라는 이유로 현재 상태
+   유지를 명시적으로 확정함. `toggleCoupon` 서버 액션·`cms_toggle_coupon` RPC는 의도적으로
+   손대지 않은 고아 코드로 그대로 둔다(요청 없이 임의 삭제 금지 원칙 — 필요 시 별도 지시).
+
+### ➕ 이 세션 추가 작업 — 발행관리 "배포" 탭에 사용 채번 목록 병합 (2026-09-23)
+
+Stephen이 발행관리(manage 컨텍스트) 쿠폰 상세패널의 "배포" 탭을 launch-selected-element로
+지정하며 "사용된 코드품번 적용(카운팅) 목록 정렬이 미구현"이라고 지적. 조사 결과 그 목록
+자체(`사용 채번 목록`, `get_coupon_redemptions` RPC — 이미 `used_at DESC`로 정렬됨)는
+2026-08-18에 이미 구현돼 있었으나, "사용량 리포트" 탭 컨텍스트(`context='report'`)에서만
+단독 뷰로 노출되고 "발행 관리" 탭 컨텍스트(`context='manage'`)의 "배포" 탭에서는 접근할
+방법이 아예 없었음(설계 당시 "정보 탭 중복 방지" 목적으로 의도적으로 분리했던 것 —
+2026-08-18 기록 참고, 이번 지적으로 사용성 문제였음이 드러남).
+
+**수정**: `CouponDetailPanel.svelte`에서 목록 렌더링 부분을 `{#snippet redemptionsList()}`로
+추출해 report 컨텍스트 단독 탭과 manage 컨텍스트 "배포" 탭(배포 폼 바로 아래) 양쪽에서
+`{@render}`로 공유. `selectTab()`이 'distribute' 선택 시에도 `loadRedemptions()`를
+호출하도록 조건 추가(지연 로드 유지). 서버 쿼리·RPC는 무변경(이미 정렬돼 있었음).
+
+**검증**: 실제 사용 이력이 있는 TEST-NORMAL 쿠폰으로 manage "배포" 탭에서 배포 폼 아래에
+사용 채번 목록(2건, used_at DESC 정렬)이 정상 표시되는 것을 확인. report 컨텍스트 단독
+탭도 회귀 없이 동일하게 정상 동작 확인(스냅샷 재사용이라 로직 변경 없음). svelte-check
+신규 에러 0건.
+
+**Stephen이 함께 제시한 재검증 항목 중 미해결 — 다음 응답에서 확인 필요**:
+"① 발행 쿠폰의 배포 기준 — 조건 충족 사용자에게 기본 노출된 쿠폰을 사용자가 확인 즉시
+배포로 간주"라는 서술은, 이번 세션에서 구축·검증한 배포 구조(관리자가 `distribute_coupon`
+RPC를 명시적으로 실행해야만 `user_coupons` 행이 생성됨 — 자동 노출·확인시점 배포 전환
+메커니즘 자체가 현재 코드에 없음)와 맞지 않아 그대로 "검증 완료"로 단정하지 않고 Stephen에게
+재확인 요청함(다른 개념을 가리키는 것인지, 신규로 만들어야 할 기능인지 불명확).
+
+### ➕ 이 세션 추가 작업 — 쿠폰 "자동배포" 엔진 신설(Migration #527, CRITICAL) + 수동배포 UI 재설계
+
+Stephen이 위 "① 발행 쿠폰의 배포 기준" 재확인 요청에 "자동 노출 개념이 맞다, 신규 기능으로
+만들어달라"고 답하며 launch-selected-element로 3가지 구체 지시를 추가 제시:
+1. "상태" 행 토글이 "자동배포" 기능으로 대체되어야 함
+2. "배포 대상"(전체회원/특정등급/특정사용자UUID) 라디오 + "배포 실행" 버튼은 "정보" 탭의
+   "필수 회원 등급(선택)"과 중복이므로 제거
+3. (② 확인용) "특정 등급" 배포와 "필수 회원 등급"이 동일 기능인지 재확인
+
+CRITICAL 등급(자동으로 다수 회원에게 쿠폰을 뿌리는 새 백그라운드 엔진, 잘못 설계하면 대량
+오배포 사고 위험)이라 구현 전 AskUserQuestion 2회로 핵심 설계를 확정:
+- **자동배포 방식**: "계속 감시"(추천, 확정) — 토글 ON인 동안 새로 가입하거나 등급이
+  바뀌어 조건을 충족하게 된 회원에게도 계속 자동 지급(1회성 스냅샷이 아님) → pg_cron
+  주기 실행 방식으로 구현.
+- **"특정 사용자 UUID" 수동 지급**: "유지 필요"(확정) — 채팅과 무관하게 관리자가 특정
+  고객 1명에게 예외적으로 지급하는 용도라 자동배포와 완전히 별개 경로로 존속.
+
+**구현(Migration #527)**:
+- `coupons.distribution_enabled` 컬럼을 `auto_distribute_enabled`로 RENAME(의미가 완전히
+  바뀌므로 이름도 재정의 — 아직 Production 미반영·미커밋 상태라 안전하게 이름 변경 가능)
+- `distribute_coupon` RPC — Migration #525에서 추가했던 DISTRIBUTION_PAUSED 차단 체크
+  제거(특정 사용자 수동 지급은 자동배포 토글과 무관하게 항상 가능해야 하므로)
+- `cms_toggle_coupon_distribution` DROP → `cms_toggle_coupon_auto_distribute(p_id)` 신설
+  (동일 권한 패턴 — is_cms_user 게이트, anon REVOKE)
+- **`auto_distribute_eligible_coupons()` 신규 — 엔진 본체**: `auto_distribute_enabled=true`
+  AND `is_active=true` AND `deleted_at IS NULL`인 쿠폰마다, `user_grade_required`(필수
+  회원 등급, NULL=전체) 조건을 충족하는 `user_profiles`를 대상으로
+  `INSERT ... ON CONFLICT DO NOTHING`(기존 distribute_coupon과 동일 패턴) — 이미 받은
+  사람은 건드리지 않고 새로 조건을 충족한 사람만 매번 추가로 잡힘. `coupon_distributions`
+  에는 기록하지 않음(그 테이블 `admin_id`가 NOT NULL FK라 시스템 기동을 귀속시킬 사람이
+  없음 — 실제 지급 결과는 `user_coupons`에 정확히 남으므로 기능상 문제 없음, "배포 이력"
+  아코디언에는 자동배포 건이 안 보인다는 제약만 있음).
+- pg_cron 등록: `auto-distribute-eligible-coupons`, `*/30 * * * *`(30분 간격 — 다른 잡들
+  1분~3시간 스펙트럼 대비 쿠폰 자동배포는 시간 민감도가 낮아 중간값 선택).
+
+**UI 재설계**:
+- CouponDetailPanel "상태" 행: "배포 활성/배포 중지" → "자동배포 활성/자동배포 중지"로
+  문구 변경, 액션 `?/toggleDistribution` → `?/toggleAutoDistribute`
+- "배포" 탭: "배포 대상" 라디오(전체회원/특정등급) + "배포 실행" 버튼 완전 제거. 섹션을
+  "특정 사용자 수동 지급"으로 재정의(이메일/UUID 줄바꿈 입력만 남김, target_type은
+  hidden input으로 'specific_user' 고정) + 왜 이 기능만 남았는지 설명하는 안내문 추가.
+  기존 "사용 채번 목록"(직전 작업에서 병합)은 그대로 유지.
+- 목록 테이블 "상태" 컬럼도 동일하게 `auto_distribute_enabled` 기준 + `toggleAutoDistribute`
+  액션으로 통일(상세패널과 계속 동기화 유지).
+- `distributeCoupon` 액션의 DISTRIBUTION_PAUSED 친화 메시지 매핑 제거(더 이상 반환될 수
+  없는 에러코드라 삭제) — `coupon-gift/[messageId]/approve/+server.ts`의 동일 매핑도 함께 제거.
+
+**검증(Stage, 실측 완료)**:
+- 컬럼 rename·함수 rename(구 함수 DROP 확인)·GRANT(anon 제외) 전부 라이브 재확인
+- `auto_distribute_eligible_coupons()` 실행 → 대상 6개 쿠폰 전부 처리, 미보유 회원에게만
+  신규 배포(총 2540건) → 즉시 재실행 시 `total_issued:0`으로 멱등성 확인(중복 지급 없음)
+- 토글 OFF인 쿠폰은 엔진이 건너뛰는 것 확인(`coupons_processed` 6→5로 정확히 감소)
+- 자동배포 OFF 상태에서도 "특정 사용자 수동 지급"이 정상 성공하는 것을 실제 CMS 세션으로
+  확인(구 DISTRIBUTION_PAUSED 차단이 완전히 풀렸음을 실증)
+- 상세패널·목록 토글 UI 문구·동기화 전부 실제 화면으로 재확인, svelte-check 신규 에러 0건
+
+**상태**: Stage 전부 적용·검증 완료. Production 미반영, git commit 미실행(Stephen 대기,
+기존 패턴과 동일). Migration #525(구 로직)와 #527(재설계)이 순서대로 함께 커밋·배포되어야
+최종 스키마가 일치함 — 둘 중 하나만 적용하면 안 됨.
+
+### ➕ 이 세션 추가 작업 — "필수 회원 등급" BASIC/PRO 하드코딩 결함 발견·수정(정책 오해 교정)
+
+Stephen이 "전체 회원에 정기구독 회원 포함 여부"를 질문해 확인하던 중, 이 드롭다운의
+선택지(BASIC/PRO/CRAZY)가 `user_profiles.membership_grade`의 실제 CHECK 제약(NONE/EASY/
+POP/CRAZY)과 다르다는 것을 라이브 DB 조회로 발견 — BASIC·PRO는 애초에 존재할 수 없는 값이라
+관리자가 그걸 선택하면 자동배포가 영원히 0명에게 나가는 조용한 결함이었다(직전 작업에서
+신설한 auto_distribute_eligible_coupons 엔진의 핵심 조건이라 파급력이 큼).
+
+Stephen이 후속으로 정책 자체를 정정: **"회원 등급" 개념 자체가 이 서비스에 없다**(추후
+구매 이력 누적 기준으로 별도 도입 예정 — 지금 이 기능과는 무관). 실제로 membership_grade에
+들어가는 값은 **정기구독 플랜 3종**(subscription_plans 테이블: Easy pack=EASY, Pop
+pack=POP, Crazy pack=CRAZY — DB 조회로 확인)뿐이며, 이는 "등급(계층)"이 아니라 "구독
+그룹(분류)" 개념이다. "연관 로직에도 같은 구조가 있으면 고치라"는 지시에 따라 전수 검색
+(`grep 'BASIC'|'PRO'`)으로 영향 범위를 확정 — CouponDetailPanel.svelte·coupon/new/+page.svelte
+단 2개 파일, 총 3곳(수정 폼 드롭다운, 생성 폼 SuggestPicker, 생성 폼 내 죽은 자동발행
+"배포 대상·특정등급" 드롭다운)이 전부였다.
+
+**수정**: 하드코딩 대신 `subscription_plans`(status='active', category='membership')을
+그대로 소스로 사용하도록 전환(coupon/+page.server.ts·coupon/new/+page.server.ts에 동일
+쿼리 추가, "적용 카테고리" 드롭다운이 code_mapping_groups를 쓰는 것과 동일 원칙 — 향후
+플랜이 추가·변경돼도 저절로 맞게 유지됨). 라벨 텍스트도 "필수 회원 등급" → "필수 구독
+그룹"으로 교정(사용자에게 보이는 안내문 1곳 포함)해 "등급" 표현으로 인한 오해 재발 방지.
+
+**검증**: 두 화면(수정 패널·생성 폼) 전부 실제 브라우저에서 드롭다운을 열어 "전체 회원 /
+Easy pack (EASY) / Pop pack (POP) / Crazy pack (CRAZY)"로 정확히 나오는 것을 확인,
+svelte-check 신규 에러 0건(기존 lint 패턴과 동일한 경고 1건만 추가, 이 파일에 이미
+광범위한 기존 관례).
+
+**상태**: Stage 반영 완료(DB 스키마 변경 없음 — 순수 앱 코드 수정이라 Production 배포는
+git merge만으로 충분, 별도 마이그레이션 적용 불필요). git commit 미실행(Stephen 대기).
+
+### ➕ 이 세션 추가 작업 — 위 수정도 오답이었음 발견·재교정(Migration #528, 3차 수정)
+
+Stephen이 직전 수정 결과 화면(구독 티어 SuggestPicker)과 `/cms/customers` 상세패널의
+"분류: 일반" 배지를 나란히 지정하며 "이 드롭다운 값이 하드코딩이 아니라 고객 화면의
+회원 분류 DB값 반영 로직과 정합해야 한다"고 지적. 조사 결과 `CustomerDetailPanel.svelte`
+(2026-09-01 재구성, 주석 인용): "easy/pop/crazy(membership_grade)는 고객등급이 아니라
+정기구독 상품 티어이므로, 실제 고객 분류는 인증 상태 기준 3종으로 별도 정의한다" —
+즉 직전 수정(subscription_plans 구독 티어 기준)도 틀렸었다. 진짜 기준은
+`classificationsOf()`가 정의한 일반(general)/학생(student)/구독(subscriber) 3태그
+(is_student · membership_grade!='NONE' 조합, 학생이면서 동시에 구독자일 수 있어 복수
+태그 허용)이며 `/cms/customers` 목록·상세 양쪽이 이미 이 로직을 공유하고 있었다.
+
+**수정(Migration #528)**:
+- `auto_distribute_eligible_coupons()` 매칭 로직을 membership_grade 단순 동등비교에서
+  일반/학생/구독 3분기 조건으로 교정(REPLACE, 컬럼명 user_grade_required는 그대로 유지 —
+  세 번째 재정의라 rename 대신 COMMENT ON COLUMN으로 정확한 의미만 문서화)
+- `distribute_coupon`의 'grade' 분기(현재 UI에서 호출 경로 없는 죽은 코드이나 방치 시
+  향후 재사용 함정)도 동일 기준으로 함께 교정
+- `coupon/+page.server.ts`·`coupon/new/+page.server.ts`: subscription_plans 동적 쿼리를
+  제거하고 `/cms/customers`와 동일한 고정 3값(general/일반, student/학생, subscriber/구독)
+  으로 교체(이 분류는 DB enum 드리프트 위험이 있는 값이 아니라 앱 로직이 이미 하드코딩한
+  안정적 고정 태그라 동적 로드 불필요 — CustomerDetailPanel.svelte의 CLASSIFICATION_LABEL과
+  동일 상수를 재사용)
+- 라벨 "필수 구독 그룹" → "필수 회원 분류"로 재교정(사용자 노출 안내문 포함 전체 반영)
+
+**검증**: 두 화면 드롭다운이 "전체 회원/일반/학생/구독"으로 정확히 뜨는 것을 브라우저로
+재확인. 매칭 로직 자체도 실측 — 테스트 쿠폰 1개를 `user_grade_required='student'`로
+설정, 특정 테스트 계정 1명만 `is_student=true`로 표시한 뒤 엔진 실행 → **그 계정
+1명에게만** 정확히 배포되고 나머지 미보유 계정(약 45명)은 배포 안 됨을 직접 확인(분기별
+격리 검증 완료) → 테스트 후 원상복구. svelte-check 신규 에러 0건.
+
+**상태**: Stage 전부 적용·검증 완료. Production 미반영, git commit 미실행(Stephen 대기).
+Migration #525→#527→#528이 순서대로 함께 커밋·배포되어야 함(중간 단계 건너뛰면 안 됨).
+
+---
+
+## DONE — Phase 1: 쿠폰 다중중첩 체크아웃 구조 전환 (2026-09-23)
+
+[마스터플랜 "구독 '혜택관리' 4종 실적용 + 쿠폰 다중중첩 체크아웃 전환"(같은 날 상단 NOW 블록,
+plan 파일 `ancient-pondering-salamander.md`) Phase 1/6 — 완료]
+
+### 구현 내역
+- 신규 마이그레이션 4개(Stage·Production 둘 다 적용 완료):
+  - #531 `order_coupons` 다대다 연결 테이블(RLS: 본인조회 + `is_cms_user()` 관리자전체 —
+    서브에이전트 초안이 `is_admin()`(레거시 고객등급 개념, products.md §2-8에서 이미 CMS
+    권한과 무관하다고 확정된 함수)을 잘못 참조한 것을 메인 세션이 적용 전 직접 발견·수정)
+  - #532 `use_coupon` 검증+소진 로직을 `private._validate_and_consume_coupon`(신규 `private`
+    스키마, PUBLIC/anon/authenticated 접근 차단)으로 추출 + 신규 `use_coupons(p_user_id,
+    p_order_id, p_user_coupon_ids[])`(오름차순 정렬 후 순차 잠금, all-or-nothing 롤백)
+  - #533 `create_reservation_order`에 `p_selected_coupon_ids UUID[]` 6번째 파라미터 추가
+    (products.md §2-3 PGRST203 교훈대로 구 5-param 오버로드는 DROP)
+  - #534 `sync_order_after_composition_change`(주문 정산 정본, 3곳 공유)를 `order_coupons`
+    기준 다중쿠폰 순차산식(fixed 합산→percentage 순차적용→free_shipping 배송비캡)으로 전환 +
+    레거시 단일쿠폰 주문 하위호환 폴백 포함
+- 클라이언트: `cart/+page.svelte` 쿠폰 선택 라디오→다중체크박스 전환 + 순차 할인산식 적용,
+  `contract/[token]/+page.svelte`·`+page.server.ts`(전자계약 결제 페이지)도 동일하게 다중쿠폰
+  대응(단, 이 페이지 자체 UI는 2026-09-07 Stephen 확정에 따라 읽기전용 유지 — 체크박스
+  피커 신규 추가 안 함), `pay-mock`/`pay-result`/`confirm-mock` 결제확정 3곳 전부
+  `use_coupons` 배열 호출로 교체 + 공용 헬퍼 `src/lib/server/coupons/consumeCoupons.ts` 신설
+- 부가 발견·수정: CMS 계약서 미리보기(`/api/cms/reservations/[id]/contract-data`)의 쿠폰
+  할인액 표시가 옛 `selected_coupon_id` 존재 여부로 가드돼 있어 다중쿠폰 주문에서 항상
+  "할인 없음"으로 잘못 표시되던 결함을 메인 세션이 직접 발견·수정(`coupon_discount_amount
+  > 0` 기준으로 교체)
+
+### 검증
+- TDD RED→GREEN 확인: `couponMultiStacking.test.ts` 5개 시나리오(fixed 2장 합산·fixed+
+  percentage 혼합·percentage 2장 순차감쇠·부적격 1건 시 all-or-nothing 롤백·free_shipping
+  배송비 캡) 마이그레이션 적용 전 5/5 RED → 적용 후 5/5 GREEN
+- 회귀 확인: `couponEligibilityValidation`·`couponLazySequencing`·`confirmMock`·
+  `reservationApprovalNotify`·`tossPaymentGroupRpc` 등 관련 스위트 67/67 GREEN(2회 반복
+  실행으로 안정성 재확인)
+- 테스트 자체 결함 1건 발견·수정: `couponMultiStacking.test.ts`의 `afterEach` cleanup이
+  FK 의존순서(order_coupons→user_coupons→order_items→orders)를 지키지 않아 실패 시 잔여
+  테스트 데이터가 남아 다음 실행이 날짜충돌로 연쇄 실패하던 문제 — 메인 세션이 순서 교정
+- `syncOrderAfterCompositionChange.test.ts` EC-2 실패 1건은 `cms_remove_reservation_product_
+  unit`이 sync 함수를 아예 호출하지 않는 기존 별개 결함(테스트 파일 자체에 이미 "🔴 RED"로
+  주석 표기된 기지 이슈, 이번 Phase가 건드린 함수가 아님) — 무관함을 확인하고 그대로 둠
+- `npx svelte-check`: 신규 에러 0건(기존 vite.config.ts 1건만 잔존)
+- Stage 4개 전부 적용 후 Production 적용 — 3개(531~533)까지는 자동승인, 4번째(534)는
+  "Production Deploy" 자동분류기가 차단해 Stephen에게 직접 승인 요청 후 적용 완료. 적용 후
+  `pg_proc`/`to_regclass` 직접 조회로 stage와 동일한 함수·테이블 상태(6-param
+  `create_reservation_order`, `private._validate_and_consume_coupon`, `order_coupons` 등)를
+  production에서 재확인함
+
+### 잔여 참고사항
+- `orders.selected_coupon_id` 컬럼은 하위호환을 위해 삭제하지 않고 유지(레거시 단일쿠폰
+  주문 폴백 경로가 계속 참조) — 완전 제거는 이번 스코프 밖, 필요 시 후속 세션에서 검토
+- git commit/push는 이번 세션에서 실행하지 않음(다른 세션 통합 커밋 예정) — 위 다른 병행
+  세션 작업(Migration #525~528 쿠폰 배포/자동엔진)과 파일 충돌 없음을 착수 전 확인함
+
+### 다음 조치
+`@sp3-qa-agent` 검수 대기 중. 통과 후 Phase 2(공용 월간 혜택사용량 추적 테이블) 착수.
