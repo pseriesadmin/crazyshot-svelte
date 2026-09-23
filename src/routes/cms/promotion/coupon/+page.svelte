@@ -120,13 +120,41 @@
   // ─ 유틸 ─
   // sequenced 모드 쿠폰은 code가 NULL(실제 코드는 고객이 결제로 "사용"하는 순간에만
   // user_coupons.redeemed_code로 개별 채번됨) — 목록·만료 테이블에서 빈 값 대신
-  // code_series 패턴 프리뷰(예: "Z쿠폰코드*")를 보여준다. manual 모드는 code 그대로.
-  function codeDisplay(c: { code: string | null; code_mode?: string; code_series?: { prefix?: string; category_code?: string } | null }): string {
+  // code_series 패턴 프리뷰를 보여준다. manual 모드는 code 그대로.
+  // 2026-09-23(버그 수정) — prefix+category_code까지만 보여주고 나머지(날짜부·순번부)를
+  // 전부 '*' 한 글자로 뭉개던 것을 coupon/new/+page.svelte의 buildComboPreview()와 동일한
+  // 규칙으로 완전히 풀어서 표시하도록 교체. code_series 저장 스키마(generate_user_coupon_
+  // redeemed_code RPC·coupon/new selectCombo()의 codeSeriesPayload와 동일 필드)를 그대로
+  // 재사용 — date_option='yyyymm'이면 현재 연월을, seq_digits만큼 '0'을 채운 "이 계열은
+  // 이런 형식으로 채번됩니다" 예시 형태로 재구성한다(products.md §2-4 QR-LABEL-2와 동일
+  // 원칙 — 실제 채번되지 않은 값이므로 진짜 숫자 대신 0으로 패딩).
+  // 2026-09-23(sp3-qa-agent 검수 후속 수정) — 순번 자릿수를 max_sequence 값의 길이로
+  // 계산했었는데, 실채번 RPC(generate_user_coupon_redeemed_code, Migration #292)는
+  // max_sequence를 상한 체크에만 쓰고 패딩 자릿수는 항상 seq_digits만 본다
+  // (LPAD(v_seq::TEXT, v_seq_digits, '0')) — max_sequence가 3자리가 아닌 코드조합
+  // (예: 50, 1500)에서 프리뷰와 실채번 결과가 어긋나던 결함이라 제거.
+  function codeDisplay(c: {
+    code: string | null
+    code_mode?: string
+    code_series?: {
+      prefix?: string
+      category_code?: string
+      date_option?: string
+      seq_digits?: number
+    } | null
+  }): string {
     if (c.code) return c.code
     if (c.code_mode === 'sequenced' && c.code_series) {
       const prefix = c.code_series.prefix ?? 'CS'
       const cat = c.code_series.category_code ?? ''
-      return `${prefix}${cat}*`
+      const datePart = c.code_series.date_option === 'yyyymm'
+        ? (() => {
+            const now = new Date()
+            return `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, '0')}`
+          })()
+        : ''
+      const seqDigits = c.code_series.seq_digits ?? 3
+      return `${prefix}${cat}${datePart}${'0'.repeat(seqDigits)}`
     }
     return '—'
   }
@@ -267,13 +295,16 @@
                 </td>
                 <td>{c.usage_count} / {cc.total_usage_limit ?? '∞'}</td>
                 <td>
-                  <form method="POST" action="?/toggleCoupon" use:enhance
+                  <!-- 2026-09-23(Stephen 지시) — "상태" 컬럼을 쿠폰 상세 패널과 동일하게
+                       자동배포 상태(auto_distribute_enabled, Migration #527) 기준으로
+                       통일. 쿠폰 자체 사용 가능 여부(is_active) 토글은 더 이상 이 컬럼에서
+                       다루지 않음. -->
+                  <form method="POST" action="?/toggleAutoDistribute" use:enhance
                     onclick={(e) => e.stopPropagation()}
                   >
                     <input type="hidden" name="id" value={c.id} />
-                    <input type="hidden" name="is_active" value={String(c.is_active)} />
-                    <button type="submit" class="tog" class:tog-on={c.is_active}
-                      role="switch" aria-checked={c.is_active} aria-label="활성화 토글">
+                    <button type="submit" class="tog" class:tog-on={cc.auto_distribute_enabled}
+                      role="switch" aria-checked={Boolean(cc.auto_distribute_enabled)} aria-label="자동배포 토글">
                       <span class="tog-thumb"></span>
                     </button>
                   </form>
@@ -327,7 +358,7 @@
       {#if selectedCouponId != null && selectedCoupon}
         <div class="detail-panel-wrap" transition:fly={{ x: 30, duration: 220 }}>
           {#key selectedCouponId}
-            <CouponDetailPanel coupon={selectedCoupon} onclose={closePanel} context="manage" categoryOptions={data.categoryOptions} />
+            <CouponDetailPanel coupon={selectedCoupon} onclose={closePanel} context="manage" categoryOptions={data.categoryOptions} gradeOptions={data.gradeOptions} />
           {/key}
         </div>
       {/if}
@@ -391,7 +422,7 @@
       {#if selectedCouponId != null && selectedCoupon}
         <div class="detail-panel-wrap" transition:fly={{ x: 30, duration: 220 }}>
           {#key selectedCouponId}
-            <CouponDetailPanel coupon={selectedCoupon} onclose={closePanel} context="report" categoryOptions={data.categoryOptions} />
+            <CouponDetailPanel coupon={selectedCoupon} onclose={closePanel} context="report" categoryOptions={data.categoryOptions} gradeOptions={data.gradeOptions} />
           {/key}
         </div>
       {/if}

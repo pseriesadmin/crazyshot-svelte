@@ -24,6 +24,7 @@ export type UsageReportRow = {
 }
 
 export type CouponCategoryOption = { value: string; label: string }
+export type CouponGradeOption = { value: string; label: string }
 
 export type DistributionRow = {
   id: string
@@ -87,6 +88,19 @@ export const load: PageServerLoad = async ({ parent, locals, url }) => {
     label: r.name,
   }))
 
+  // 2026-09-23(버그 수정, Stephen 지적 2차) — 1차 수정(BASIC/PRO → subscription_plans
+  // 구독 티어)도 정답이 아니었다. Stephen이 /cms/customers 상세패널의 "분류" 항목을
+  // 근거로 지적 — 이 서비스의 진짜 고객 분류는 CustomerDetailPanel.svelte
+  // classificationsOf()가 이미 정의해 둔 "일반/학생/구독"(2026-09-01 재구성, subscription
+  // 티어와 무관하게 membership_grade가 NONE이 아니면 전부 "구독"으로 묶임) 3종뿐이다.
+  // 그 화면과 동일한 고정 목록을 그대로 재사용(Migration #528 — auto_distribute_eligible_
+  // coupons의 매칭 로직도 이 기준으로 함께 교정됨).
+  const gradeOptions: CouponGradeOption[] = [
+    { value: 'general',    label: '일반' },
+    { value: 'student',    label: '학생' },
+    { value: 'subscriber', label: '구독' },
+  ]
+
   // 사용량 리포트 (리포트 탭일 때만)
   let usageReport: UsageReportRow[] = []
   if (tab === 'report') {
@@ -138,6 +152,7 @@ export const load: PageServerLoad = async ({ parent, locals, url }) => {
     tab, stats, selectedId,
     coupons: (coupons ?? []) as Coupon[],
     categoryOptions,
+    gradeOptions,
     usageReport, distributions,
     expiringSoon: (expiringSoon ?? []) as Coupon[],
     expiredCoupons: (expiredCoupons ?? []) as Coupon[],
@@ -252,6 +267,28 @@ export const actions: Actions = {
     return { ok: true }
   },
 
+  // 자동배포 활성/중지 토글(Migration #527, 구 distribution_enabled → auto_distribute_
+  // enabled 재설계) — is_active(쿠폰 전체 사용 가능 여부)와는 별개 축. 켜두면 "필수 회원
+  // 등급" 조건을 충족하는 회원에게 pg_cron이 주기적으로 자동 배포한다. "특정 사용자 수동
+  // 지급"(distributeCoupon 액션)과는 완전히 분리된 경로 — 이 토글과 무관하게 항상 가능.
+  toggleAutoDistribute: async ({ request, locals }) => {
+    const { session } = await locals.safeGetSession()
+    if (!session) return { ok: false, error: '인증 필요' }
+    const cmsRole = await getCmsRoleForAction(locals)
+    if (!hasSettingsAccess(cmsRole ?? '')) return { ok: false, error: '권한 없음' }
+    const form = await request.formData()
+    const id = String(form.get('id'))
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const db = locals.supabase as unknown as any
+    const { data, error } = await db.rpc('cms_toggle_coupon_auto_distribute', { p_id: id })
+
+    if (error) return { ok: false, error: error.message }
+    const result = data as { ok: boolean; error?: string } | null
+    if (!result?.ok) return { ok: false, error: result?.error ?? '처리 실패' }
+    return { ok: true }
+  },
+
   deleteCoupon: async ({ request, locals }) => {
     const { session: sess3 } = await locals.safeGetSession()
     if (!sess3) return { ok: false, error: '인증 필요' }
@@ -321,7 +358,10 @@ export const actions: Actions = {
 
     if (error) return { ok: false, error: error.message }
     const result = data as { ok: boolean; issued_count?: number; error?: string } | null
-    if (!result?.ok) return { ok: false, error: result?.error ?? '배포 실패' }
+    // 2026-09-23(재설계) — DISTRIBUTION_PAUSED 체크는 distribute_coupon에서 제거됨
+    // (Migration #527) — "특정 사용자 수동 지급"은 자동배포 토글 상태와 무관하게 항상
+    // 가능해야 하므로. 나머지 에러 코드(COUPON_NOT_FOUND 등)는 원문 그대로 반환.
+    if (!result?.ok) return { ok: false, error: result?.error ?? '지급 실패' }
     return { ok: true, issued_count: result.issued_count }
   },
 
