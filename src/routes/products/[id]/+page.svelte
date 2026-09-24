@@ -6,7 +6,7 @@
   import ProductHero from '$lib/components/products/ProductHero.svelte';
   import CalendarTimePicker from '$lib/components/products/CalendarTimePicker.svelte';
   import ProductDPCard from '$lib/components/products/ProductDPCard.svelte';
-  import type { Tables, ProductOptionLinkRow } from '$lib/types/database';
+  import type { Tables, ProductOptionLinkRow, ProductBundleLinkRow } from '$lib/types/database';
   import type { ContentBlock } from '$lib/types/content-editor';
   import {
     clampReservationQty,
@@ -73,6 +73,7 @@
       product: ProductRow;
       productId: string;
       optionLinks: ProductOptionLinkRow[];
+      bundleLinks: ProductBundleLinkRow[];
       availableStock?: Record<string, number>;
       session: { user: { id: string; email?: string } } | null;
       reviews: ReviewItem[];
@@ -120,6 +121,12 @@
   $effect(() => {
     optionItems = buildOptionItems(data.optionLinks);
   });
+
+  // 결합상품 (Phase 1 — name only, no click navigation)
+  let bundleItems = $state(data.bundleLinks ?? []);
+  $effect(() => {
+    bundleItems = data.bundleLinks ?? [];
+  });
   let optionsOpen = $state(true);
   let hasOptionItems = $derived(optionItems.length > 0);
   let isReserving = $state(false);
@@ -133,9 +140,18 @@
   }
   const mainStockCap = $derived(stockCapFor(product?.id != null ? String(product.id) : ''));
 
+  // 결합상품(Phase 2 P2-4) — 패키지 가용재고는 min(패키지, 각 결합상품)이라, 결합상품 중 하나라도
+  // 가용 0이면 "구성품 재고 부족"으로 안내를 구분한다(메인 재고 부족과 다른 원인 안내).
+  const bundleStockShort = $derived(
+    (data.bundleLinks ?? []).some((b) => (data.availableStock?.[b.bundle_product_id] ?? 0) <= 0),
+  );
+  const mainStockShortMessage = $derived(
+    bundleStockShort ? '구성품 재고가 부족해 예약할 수 없습니다.' : '예약 가능한 재고가 없습니다.',
+  );
+
   function incrementQty() {
     if (qty >= mainStockCap) {
-      csToast.warning('예약 가능한 재고가 없습니다.');
+      csToast.warning(mainStockShortMessage);
       return;
     }
     qty = clampReservationQty(qty + 1);
@@ -687,6 +703,35 @@
 <section class="info-section">
   <div class="info-inner">
 
+    {#snippet bundleSection()}
+    {#if bundleItems.length > 0}
+    <div class="options-section bundle-section">
+      <div class="options-header">
+        <span class="options-title">결합 상품</span>
+        <div class="options-more-btn" role="presentation">
+          <span class="options-count-badge">{bundleItems.length}</span>
+        </div>
+      </div>
+      <div class="options-list">
+        {#each bundleItems as bundle (bundle.bundle_product_id)}
+          <div class="option-item bundle-item">
+            <div class="option-thumb">
+              {#if bundle.image_url}
+                <img src={bundle.image_url} alt={bundle.bundle_name} loading="lazy" />
+              {/if}
+            </div>
+            <div class="option-info">
+              <div class="option-label-row">
+                <p class="option-label">{bundle.bundle_name}</p>
+              </div>
+            </div>
+          </div>
+        {/each}
+      </div>
+    </div>
+    {/if}
+    {/snippet}
+
     {#snippet optionsSection()}
     <div class="options-section">
       <div class="options-header" class:options-header--disabled={!hasOptionItems}>
@@ -848,7 +893,7 @@
                 onchange={() => {
                   const clamped = clampReservationQty(qty);
                   if (clamped > mainStockCap) {
-                    csToast.warning('예약 가능한 재고가 없습니다.');
+                    csToast.warning(mainStockShortMessage);
                     qty = mainStockCap;
                   } else {
                     qty = clamped;
@@ -869,8 +914,16 @@
         </div>
       </div>
 
+      <!-- 결합상품: PC 전용 — 타이틀 카드 바로 아래 (모바일은 아래 options-mobile-slot 내 기존 위치 유지) -->
+      {#if bundleItems.length > 0}
+        <div class="bundle-pc-slot">
+          {@render bundleSection()}
+        </div>
+      {/if}
+
       <!-- Options: mobile stacking position (PC에서는 우측 컬럼으로 이동 — options-mobile-slot 참고) -->
       <div class="options-mobile-slot">
+        {@render bundleSection()}
         {@render optionsSection()}
       </div>
 
@@ -900,7 +953,7 @@
 
     <!-- Right column: PC only -->
     <div class="info-right">
-      <!-- 옵션상품: PC에서는 대여방식·배송정책·예약신청 그룹 상단에 배치 -->
+      <!-- 옵션상품: PC에서는 대여방식·배송정책·예약신청 그룹 상단에 배치 (결합상품은 좌측 title-card 아래) -->
       {@render optionsSection()}
 
       <CalendarTimePicker
@@ -1293,6 +1346,12 @@
   }
   @media (min-width: 641px) {
     .cal-mobile { display: none; }
+  }
+
+  /* 결합상품: PC는 title-card 아래 전용 슬롯, 모바일은 options-mobile-slot 내 기존 위치 */
+  .bundle-pc-slot { display: none; }
+  @media (min-width: 641px) {
+    .bundle-pc-slot { display: block; }
   }
 
   /* 옵션상품: 모바일 전용 위치 — PC(≥641px)에서는 우측 컬럼(info-right)으로 이동 */

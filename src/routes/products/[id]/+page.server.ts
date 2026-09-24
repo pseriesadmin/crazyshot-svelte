@@ -176,6 +176,18 @@ export const load: PageServerLoad = async ({ params, locals }) => {
 		}
 	}
 
+	// 결합상품 링크 조회 (Phase 1 — Migration #544)
+	let bundleLinks: import('$lib/types/database').ProductBundleLinkRow[] = [];
+	if (isUuid(String(row.id))) {
+		const { data: bLinks, error: bLinksError } = await (locals.supabase.rpc as unknown as RpcFn)(
+			'get_product_bundle_links',
+			{ p_product_id: String(row.id) },
+		);
+		if (!bLinksError) {
+			bundleLinks = (bLinks ?? []) as import('$lib/types/database').ProductBundleLinkRow[];
+		}
+	}
+
 	// 옵션상품 12H 요금(2026-09-05) — get_product_option_links RPC가 price_24h만 반환해
 	// 옵션 카드에 12H 가격이 통째로 누락돼 있던 결함 수정. 장바구니(cart/+page.server.ts
 	// optionPrice12hMap)와 동일하게 price_rules를 별도 조회해 병합 — RPC/스키마 변경 없음.
@@ -201,7 +213,13 @@ export const load: PageServerLoad = async ({ params, locals }) => {
 	// 예약이 걸려있지 않은 자식 수만 계산한다(Stephen 확정 — 정밀한 기간별 재계산은 하지 않음).
 	const availableStock: Record<string, number> = {};
 	{
-		const stockProductIds = [String(row.id), ...optionLinks.map((l) => l.option_product_id)];
+		// 결합상품 id도 함께 조회 — 메인(패키지) 가용은 RPC가 이미 min(패키지, 각 결합상품)으로 계산하고,
+		// 화면은 결합상품 쪽 재고 부족 여부만 별도로 알아 안내 문구를 구분한다(Phase 2 P2-4).
+		const stockProductIds = [
+			String(row.id),
+			...optionLinks.map((l) => l.option_product_id),
+			...bundleLinks.map((b) => b.bundle_product_id),
+		];
 		const { data: stockRows, error: stockError } = await (locals.supabase.rpc as unknown as RpcFn)(
 			'get_available_stock_counts',
 			{ p_product_ids: stockProductIds },
@@ -357,6 +375,7 @@ export const load: PageServerLoad = async ({ params, locals }) => {
 		product: enriched,
 		productId: String(row.id),
 		optionLinks,
+		bundleLinks,
 		availableStock,
 		session,
 		reviews,
