@@ -2,6 +2,7 @@
   import { enhance } from '$app/forms'
   import { invalidateAll } from '$app/navigation'
   import { csToast } from '$lib/utils/toast'
+  import CmsDatePicker from '$lib/components/cms/CmsDatePicker.svelte'
   import { supabase } from '$lib/services/supabase'
   import { validateUploadFile } from '$lib/utils/fileValidation'
   import { renderQrToCanvas, downloadQrWithLabel } from '$lib/utils/qrIssue'
@@ -1039,7 +1040,7 @@
         </div>
         <div class="info-row">
           <span class="info-label">생년월일</span>
-          <input class="info-input" type="date" name="birth_date" bind:value={localInfo.birth_date} />
+          <CmsDatePicker bind:value={localInfo.birth_date} name="birth_date" placeholder="생년월일 선택" disablePast={false} />
         </div>
         <div class="info-row">
           <span class="info-label">회원유형</span>
@@ -1247,7 +1248,7 @@
         {/if}
         <div class="info-row">
           <span class="info-label">가입일</span>
-          <input class="info-input" type="date" name="created_at" bind:value={localInfo.created_at_date} />
+          <CmsDatePicker bind:value={localInfo.created_at_date} name="created_at" placeholder="가입일 선택" disablePast={false} />
         </div>
         <div class="info-row">
           <span class="info-label">대여 횟수</span>
@@ -1631,21 +1632,31 @@
                 <span class="sub-tier grade-badge grade-{sub.plan_name.toLowerCase()}">{tierLabel(sub.plan_name)}</span>
               {/if}
               <span class="sub-status status-{sub.status}">{statusLabel(sub.status)}</span>
-              {#if sub.plan_id}
-                <a
-                  class="sub-plan-link"
-                  href="/cms/subscriptions?selected={sub.plan_id}"
-                  target="_blank"
-                  rel="noopener"
-                >구독상품 상세 →</a>
-              {/if}
             </div>
             <div class="sub-meta">
               <span>{formatDate(sub.started_at)} ~ {formatDate(sub.expires_at)}</span>
             </div>
-            <button class="sub-payment-toggle" onclick={() => togglePaymentHistory(sub.id)}>
-              결제내역 {expandedPaymentSubId === sub.id ? '숨기기' : '보기'}
-            </button>
+            {#if sub.plan_id}
+              <a
+                class="sub-plan-link"
+                href="/cms/subscriptions?selected={sub.plan_id}"
+                target="_blank"
+                rel="noopener"
+              >구독상품 상세 →</a>
+            {/if}
+            <div class="sub-footer-row">
+              <button class="sub-payment-toggle" onclick={() => togglePaymentHistory(sub.id)}>
+                결제내역 {expandedPaymentSubId === sub.id ? '숨기기' : '보기'}
+              </button>
+              {#if sub.status === 'active'}
+                <div class="sub-actions">
+                  <button
+                    class="btn-danger"
+                    onclick={() => openCancelModal(sub.id)}
+                  >구독 취소</button>
+                </div>
+              {/if}
+            </div>
             {#if expandedPaymentSubId === sub.id}
               <div class="sub-payment-list">
                 {#if loadingPaymentsSubId === sub.id}
@@ -1661,14 +1672,6 @@
                     </div>
                   {/each}
                 {/if}
-              </div>
-            {/if}
-            {#if sub.status === 'active'}
-              <div class="sub-actions">
-                <button
-                  class="btn-danger"
-                  onclick={() => openCancelModal(sub.id)}
-                >구독 취소</button>
               </div>
             {/if}
           </div>
@@ -2290,7 +2293,7 @@
   .sub-row { display: flex; align-items: center; gap: 8px; }
   .sub-tier { }
   .sub-plan-link {
-    margin-left: auto; font: var(--text-pc-script-12); color: var(--cs-purple);
+    align-self: flex-start; font: var(--text-pc-script-12); color: var(--cs-purple);
     text-decoration: underline; white-space: nowrap;
   }
   .sub-status { font: var(--text-pc-script-12); font-weight: 700; }
@@ -2301,7 +2304,10 @@
   .sub-renew { font: var(--text-pc-descript-10); background: rgba(59,47,138,0.08); color: var(--cs-purple); padding: 2px 6px; border-radius: 4px; }
   .sub-meta { font: var(--text-pc-script-12); color: var(--cs-text-mid); display: flex; gap: 12px; }
   .sub-reason { font: var(--text-pc-descript-10); color: var(--cs-text-mid); background: #F3F4F6; padding: 6px 10px; border-radius: 4px; }
-  .sub-actions { display: flex; gap: 8px; }
+  /* 결제내역 보기(좌) ↔ 구독 취소(우)를 한 행에 수직 중앙 정렬 */
+  .sub-footer-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+  .sub-actions { display: flex; gap: 8px; margin-left: auto; }
+  .sub-footer-row .sub-payment-toggle { align-self: center; }
 
   .sub-payment-toggle {
     align-self: flex-start; border: none; background: none; padding: 0;
@@ -2366,11 +2372,20 @@
   }
   .act-del:hover { background: rgba(255,53,53,0.08); color: var(--cs-red-badge); }
 
-  .act-del-account {
+  /* cms-uiux.md §0-10 danger 규격(40px·radius base 8px·padding 0 20px·14px/700·danger-50 배경/danger-500 글자)
+     + 호버 시 짙은 레드 배경↔흰 글자 반전. .act-del / .act-del:hover와 명시도 충돌을 피하려 복합 셀렉터 사용 */
+  .act-del.act-del-account {
     gap: 6px;
-    padding: 0 12px;
-    font: var(--text-pc-script-12);
+    height: 40px;
+    padding: 0 20px;
+    border-radius: var(--radius-sm);
+    background: var(--cs-chat-in-bg);
+    color: var(--cs-red-badge);
+    font: var(--text-pc-body-14);
+    font-weight: 700;
+    transition: background 0.15s, color 0.15s;
   }
+  .act-del.act-del-account:hover { background: var(--cs-red-badge); color: var(--cs-white); }
 
   .btn-danger {
     display: inline-flex; align-items: center; height: 40px; padding: 0 16px;
@@ -2426,7 +2441,6 @@
     min-width: 0;
   }
   .info-input:focus { outline: 2px solid var(--cs-purple); outline-offset: -2px; }
-  .info-input[type="date"] { cursor: pointer; }
 
   /* 회원유형 선택 버튼 */
   .info-select-btn {
@@ -2595,21 +2609,25 @@
   .btn-reupload.btn-reupload-cancel:hover { background: rgba(255,53,53,0.14); }
 
   /* 본인증명/외국인증명 승인 버튼·완료뱃지(Migration #526) — .btn-reupload 박스모델 재사용 */
+  /* DetailPanel 실행 버튼(cms-uiux.md §0-10-F) — 배지(승인완료 등)와 구분되는 라운드 사각형 버튼 */
   .btn-approve {
-    height: 22px;
-    padding: 0 8px;
-    background: rgba(16,185,129,0.10);
-    color: var(--cs-success-light);
-    border: none;
-    border-radius: var(--radius-sm);
-    font: var(--text-pc-descript-10);
+    margin-left: auto;
+    min-width: 78px;
+    text-align: center;
+    flex-shrink: 0;
+    font-size: 12px;
     font-weight: 700;
+    line-height: 1.4;
+    padding: 8px 14px;
+    border: none;
+    border-radius: var(--cms-radius-sm);
+    background: var(--cs-surface-gray);
+    color: var(--cs-text-mid);
     cursor: pointer;
     white-space: nowrap;
-    flex-shrink: 0;
-    transition: background 0.12s;
+    transition: background 0.15s, color 0.15s;
   }
-  .btn-approve:hover { background: rgba(16,185,129,0.18); }
+  .btn-approve:hover:not(:disabled) { background: var(--cs-text-mid); color: var(--cs-white); }
   .btn-approve:disabled { opacity: 0.5; cursor: default; }
   .badge-approved {
     display: inline-flex;

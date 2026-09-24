@@ -168,6 +168,8 @@
 - `ctaPrimary`(다크네이비 계열, `#100B32`/호버 `#3B2F8A`) — 페이지 최상단 CTA(등록·저장) 기본값
 - `ctaPrimaryPurple`(퍼플 계열, `--cs-purple`/호버 `--cs-purple-dark`) — Detail Panel **헤더 인라인** 액션 버튼 전용(패널 자체가 이미 퍼플 톤 헤더를 쓰는 문맥에서 CTA가 더 자연스럽게 녹아들도록). 두 색상을 같은 화면에서 임의로 혼용하지 말 것 — 헤더 인라인 위치면 `ctaPrimaryPurple`, 그 외 표준 CTA 위치면 `ctaPrimary`.
 
+**⚠️ 짝 CTA 규칙(2026-09-24)**: 승인/거부처럼 같은 행에 나란히 놓이는 CTA 쌍은 색 계열(퍼플 ↔ `--cs-error`)만 다르고 높이·반경·폰트·패딩은 동일해야 한다 — 이 경우 `danger` 행(40px/8px)을 그대로 적용하지 말고 짝이 되는 CTA(`ctaPrimaryPurple` 44px/15px)의 규격에 맞춘다. `danger` 규격은 단독 배치되는 삭제 버튼에 적용.
+
 **ctaSecondary (보조 버튼) 추가 스펙:**
 - border: `search` — `#201857` 1px solid
 
@@ -448,6 +450,9 @@ const deleteSafety = createDeleteSafetyToast({
 ✅ 버튼 CSS(.btn-danger/.btn-danger--pending)는 close-red와 동일하게 화면별 scoped
    복제 허용(정본 파일 값 그대로 복사, 임의 팔레트 창작 금지)
 ✅ onSuccess 콜백으로 화면별 후처리(패널 닫기·목록 갱신 등) 연결
+✅ 삭제 성공 후 목록 재조회(invalidateAll)는 필수 — 패널만 닫고 목록을 그대로 두면 삭제된 카드가
+   남아 클릭 시 상세 조회 실패 토스트가 뜬다(2026-09-24 실결함). 예: onSuccess: async () => {
+   onclose(); await invalidateAll() }
 ❌ 1차 클릭에서 바로 삭제 제출 금지 — 반드시 무장 단계를 거칠 것
 ❌ 경고/성공/실패 토스트를 csToast 대신 다른 방식(alert 등)으로 구현 금지
 ```
@@ -456,6 +461,232 @@ const deleteSafety = createDeleteSafetyToast({
 
 - `ProductDetailPanel.svelte` "상품정보 삭제" (정본)
 - 향후 CMS 내 파괴적 삭제 액션에 동일 패턴 필요 시 전부 이 모듈 재사용
+
+---
+
+### 0-10-D. 섹션 인라인 저장 버튼 — 공식 명칭 `btn-save-inline` ★ (2026-09-23 등록)
+
+> ⚠️ JSON `standardButtons.actionSave`(34px·다크네이비 배경·10px 패딩)와는 **별개의 컴포넌트**다
+> — `actionSave`는 독립적으로 항상 활성 상태인 일반 액션 저장 버튼용이고, 이 `btn-save-inline`은
+> **"변경사항이 있을 때만 활성화"되는 탭/섹션 헤더 전용 저장 버튼**이다. 실측 결과 이 패턴을
+> `actionSave` 스펙과 대조해 "위반"으로 오판한 사례가 있었음(2026-09-23) — 이 항목은 그 혼선을
+> 막기 위해 신설됐다. 두 컴포넌트를 서로의 스펙으로 대체하지 말 것.
+>
+> **공식 등록명**: `섹션 인라인 저장 버튼`(= `btn-save-inline`)
+> "저장 버튼 반영해"/"인라인 저장 버튼 적용해"/"탭 저장 버튼 추가해" 등 요구 시, 그 저장 버튼이
+> **탭/섹션 헤더 우측에 위치하며 폼이 수정되지 않으면 비활성 상태**를 유지해야 하는 문맥이면
+> 즉시 이 섹션 스펙을 적용한다(추측·재설계 금지).
+>
+> 정본 컴포넌트: `ProductDetailPanel.svelte`(각 탭 `.section-header` 저장 버튼, 최초 정착)
+> 동일 패턴 재사용처(2026-09-23 확인): `SubscriptionDetailPanel.svelte`,
+> `src/routes/cms/set/rental/+page.svelte` — 클래스명(`.btn-save-inline`)까지 3개 파일 전부
+> 완전히 동일하게 복제돼 있음.
+
+**위치 — `.section-header` 표준 레이아웃**
+
+```svelte
+<div class="section-header">
+  <span class="section-title">{탭 제목}</span>
+  <button form="{폼id}" type="submit" class="btn-save-inline" class:dirty={isDirty}>저장</button>
+</div>
+```
+```css
+.section-header { display: flex; align-items: center; justify-content: space-between; }
+```
+탭/섹션 헤더 좌측에 `.section-title`, 우측 끝에 이 저장 버튼이 오는 구조 — 별도 `margin-left:
+auto` 불필요(`justify-content: space-between`이 이미 좌우 배치를 담당).
+
+**스펙 — 2단계 상태(비활성 ↔ dirty)**
+
+| 항목 | 비활성(기본, 변경사항 없음) | 활성(`dirty`, 변경사항 있음) |
+|---|---|---|
+| `padding` | 5px 14px | 동일 |
+| `border` | 1.5px solid `var(--cs-border)` | 1.5px solid `var(--cs-purple)` |
+| `border-radius` | `var(--radius-sm)` | 동일 |
+| `background` | transparent | `var(--cs-purple)` |
+| `color` | `var(--cs-text-light)` | `var(--cs-white)` |
+| `font` | `var(--text-pc-script-12)` | 동일 |
+| `cursor` | `not-allowed` | `pointer` |
+| `min-height` | 32px | 동일 |
+| hover | 없음(비활성이라 상호작용 없음) | `opacity: 0.85` (또는 `background: var(--cs-purple-hover)`) |
+
+**표준 CSS (컴포넌트 scoped — 정본 파일 값 그대로 복사, 임의 팔레트 창작 금지)**
+
+```css
+.btn-save-inline {
+  padding: 5px 14px;
+  border: 1.5px solid var(--cs-border);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--cs-text-light);
+  font: var(--text-pc-script-12);
+  cursor: not-allowed;
+  min-height: 32px;
+  transition: background 0.12s, border-color 0.12s, color 0.12s;
+}
+.btn-save-inline.dirty {
+  border-color: var(--cs-purple);
+  background: var(--cs-purple);
+  color: var(--cs-white);
+  cursor: pointer;
+}
+.btn-save-inline.dirty:hover { opacity: 0.85; }
+```
+
+**dirty 판정 원칙**
+
+```
+✅ 폼의 로컬 상태($state)와 서버로부터 받은 원본값(product/plan 등 prop)을 필드별로 비교해
+   isDirty* 파생값($derived)을 만들고, 그 값을 button의 class:dirty에 그대로 바인딩한다
+   (core-rules.md "$state(prop) 초기화 금지" 원칙과 함께 적용 — $effect로 prop 변경 시
+   로컬 상태 재동기화 필수, products.md §3 "토글 후 저장 버튼 오탐 방지" 사례 참고)
+✅ 저장 성공(invalidateAll 등) 후 서버값이 갱신되면 isDirty가 자동으로 false로 돌아와
+   버튼이 다시 비활성 상태로 복귀해야 한다
+❌ isDirty 계산 없이 버튼을 항상 dirty(활성) 고정 상태로 두지 않는다 — "변경사항이 있을 때만
+   활성화"가 이 컴포넌트의 핵심 식별 특징
+```
+
+**적용 규칙**
+
+```
+✅ 클래스명은 화면마다 달라도 위 스펙(비활성 회색 테두리 ↔ dirty 보라 채움)과 일치하면
+   동일 컴포넌트(btn-save-inline)로 취급
+✅ standardButtons.actionSave 스펙(34px/10px 패딩/항상 활성)으로 대체·수정하지 말 것 —
+   서로 다른 용도의 별개 컴포넌트
+✅ 탭/섹션 헤더(.section-header) 우측 끝에 배치
+```
+
+**적용 화면**
+
+- `ProductDetailPanel.svelte` (정본 — 기본정보·옵션상품·가격정책 등 전 탭 공통)
+- `SubscriptionDetailPanel.svelte` (구독 상세패널 전 탭 공통)
+- `src/routes/cms/set/rental/+page.svelte`
+
+---
+
+### 0-10-E. 모달 실행 버튼 사전 차단 + sticky 패널 내 모달 겹침 규칙 ★ (2026-09-24 확정)
+
+**① 실행 버튼 사전 차단(pre-block) 원칙**
+
+```
+정책·필수값 위반은 "실행 이후 서버 응답으로 긴 경고를 띄우는" 방식이 아니라 실행 버튼 클릭 시점에
+클라이언트가 막고 짧은 경고 토스트(csToast.warning)만 띄운다.
+  ✅ 버튼은 회색 비활성(disabled)으로 두지 않고 클릭 가능하게 둔 채, onclick에서
+     e.preventDefault() + csToast.warning(짧은 문구) — 사용자가 왜 막혔는지 바로 알 수 있게
+     (disabled 상태의 버튼은 클릭 자체가 안 되어 사유를 알릴 수 없음)
+  ✅ 서버 검사는 화면 상태가 오래됐을 때를 대비한 안전장치로 반드시 유지(같은 규칙)
+  ✅ 사전 차단 시 모달은 닫지 않는다(사용자가 조합 등을 바꿔 다시 시도 가능)
+  ❌ 사전 차단할 수 있는 위반을 서버 실패 → 모달 닫힘 → 긴 토스트 흐름으로만 처리 금지
+  ❌ disabled 유지 시 사유 미표시 상태로 방치 금지(단, 등록 수량 등 입력 자체가 유효하지 않은
+     경우의 disabled는 허용)
+정본 예: ProductDetailPanel 복제 모달 — 문구 '품번코드 미선택(동일 중복) 오류로 상품 등록할 수 없습니다.'
+정책 근거: products.md §2-13
+```
+
+**② sticky 패널 안의 position:fixed 모달 겹침**
+
+```
+position: sticky 요소는 자체 stacking context를 만들어, 그 안의 position:fixed 모달(z-index 200)이
+패널 바깥 형제(예: 검색 툴바 z-index 30)보다 뒤에 그려지는 겹침 버그가 생긴다
+(/cms/products 상세 패널 sticky 도입 후 실결함).
+  ✅ 패널 안에 모달이 열려 있을 때만 패널 z-index를 툴바 위로 올린다:
+       .detail-pane:has(:global([aria-modal="true"]), :global(.lightbox-backdrop)) { z-index: 100; }
+     → 모달 컴포넌트는 반드시 aria-modal="true"(또는 위 예외 클래스)를 가질 것
+  ❌ 패널 z-index를 상시 상향 금지 — 검색 자동완성 목록(툴바 컨텍스트 안 z-index 40)이 패널
+     뒤로 가려진다
+```
+
+---
+
+### 0-10-F. DetailPanel 실행 버튼 — 행 단위 액션(승인 등) 버튼 ★ (2026-09-24 등록)
+
+> **공식 등록명**: `DetailPanel 실행 버튼`
+> DetailPanel 정보 행(`.info-row`)에서 "승인"처럼 **상태를 바꾸는 단독 실행**을 맡는 버튼.
+> **배지(상태 표시)와 시각적으로 구분되는 것이 목적** — 배지는 작은 틴트 알약/사각 라벨(읽기 전용),
+> 실행 버튼은 더 크고 굵은 회색 채움 라운드 사각형(클릭 가능)으로 규정한다.
+> 트리거 문구: "DetailPanel 실행 버튼 적용해" / "행 실행 버튼 적용해".
+> 정본 구현: `CustomerDetailPanel.svelte` `.btn-approve`(본인증명·외국인증명 승인).
+> §0-10-C(초소형 pill, 목록·칩 옆 인라인)·§0-10-D(변경 시에만 활성화되는 저장 버튼)와는 별개.
+
+| 항목 | 값 |
+|---|---|
+| `border-radius` | `var(--cms-radius-sm)` (10px, 라운드 사각형 — pill 금지) |
+| `background` (기본) | `var(--cs-surface-gray)` |
+| `color` (기본) | `var(--cs-text-mid)` |
+| `border` | none (outline/border 금지) |
+| `font-size` / `font-weight` | 12px / 700 (`line-height: 1.4` 명시 — 토큰의 200%는 높이를 부풀림) |
+| `padding` | 8px 14px |
+| `min-width` | 78px (텍스트 중앙 정렬) |
+| 위치 | 행 우측 끝 — `margin-left: auto` |
+| hover | `background: var(--cs-text-mid)` + `color: var(--cs-white)` (disabled 제외) |
+| disabled | `opacity: 0.5; cursor: default` |
+| transition | `background 0.15s, color 0.15s` |
+
+```css
+.btn-approve {
+  margin-left: auto; min-width: 78px; text-align: center; flex-shrink: 0;
+  font-size: 12px; font-weight: 700; line-height: 1.4; padding: 8px 14px;
+  border: none; border-radius: var(--cms-radius-sm);
+  background: var(--cs-surface-gray); color: var(--cs-text-mid);
+  cursor: pointer; white-space: nowrap; transition: background 0.15s, color 0.15s;
+}
+.btn-approve:hover:not(:disabled) { background: var(--cs-text-mid); color: var(--cs-white); }
+.btn-approve:disabled { opacity: 0.5; cursor: default; }
+```
+
+---
+
+### 0-10-G. DetailPanel 일반 버튼 / 삭제·거부 버튼 — 승인/거부류 대형 CTA (2026-09-24 등록·확정)
+
+> ⛔ **전 메뉴 DetailPanel 공통 표준(2026-09-24 Stephen 확정)**: CMS 각 메뉴의 DetailPanel
+> (Rental·Product·Customer·Subscription 등) 레이아웃 내 주요 버튼은 아래 2종으로 통일한다.
+> - **일반 버튼** = `.btn-primary`("승인하기" 등, 퍼플 채움)
+> - **삭제·거부 버튼** = `.btn-danger-sm`("거부" 등, 레드 채움)
+> 신규 DetailPanel 작성·수정 시 이 값을 그대로 복사하고 임의 변형하지 않는다.
+>
+> **공식 등록명**: `DetailPanel 주요 CTA 버튼`
+> DetailPanel 하단(또는 별도 액션 영역)에서 "승인"/"거부"처럼 예약·대여 상태를 바꾸는
+> **대형 CTA 버튼 쌍**. §0-10-F(행 단위 소형 실행 버튼)와 달리 독립 행에 배치되는 강조 버튼이다.
+> 정본 구현: `RentalDetailPanel.svelte` `.btn-primary`(승인하기) + `.btn-danger-sm`(거부).
+> 트리거 문구: "DetailPanel 승인/거부 버튼 적용해" / "DetailPanel CTA 쌍 적용해".
+
+| 항목 | btn-primary ("승인하기") | btn-danger-sm ("거부") |
+|---|---|---|
+| `background` | `var(--cs-purple)` (#3B2F8A) | `var(--cs-red-badge)` (#FF3535) |
+| `color` | `var(--cs-white)` | `var(--cs-white)` |
+| `height` | 44px | 44px |
+| `padding` | 0 20px | 0 20px |
+| `border-radius` | `var(--radius-md)` (15px) | `var(--radius-md)` (15px) |
+| `font` | `var(--text-pc-body-14)` (14px/700) | `var(--text-pc-body-14)` (14px/700) |
+| `border` | none | none |
+| hover | `var(--cs-purple-hover)` | opacity 0.85 |
+| disabled | `opacity: 0.5; cursor: not-allowed` | `opacity: 0.5; cursor: not-allowed` |
+
+```css
+.btn-primary {
+  height: 44px; padding: 0 20px;
+  background: var(--cs-purple); color: var(--cs-white);
+  border: none; border-radius: var(--radius-md);
+  font: var(--text-pc-body-14); cursor: pointer;
+  transition: background 0.15s;
+}
+.btn-primary:hover:not(:disabled) { background: var(--cs-purple-hover); }
+.btn-primary:disabled { opacity: 0.5; cursor: not-allowed; }
+
+.btn-danger-sm {
+  height: 44px; padding: 0 20px;
+  background: var(--cs-red-badge); color: var(--cs-white);
+  border: none; border-radius: var(--radius-md);
+  font: var(--text-pc-body-14); cursor: pointer;
+  transition: opacity 0.15s;
+}
+.btn-danger-sm:hover:not(:disabled) { opacity: 0.85; }
+.btn-danger-sm:disabled { opacity: 0.5; cursor: not-allowed; }
+```
+
+> ℹ️ 섹션 헤더 인라인 실행 버튼(예: 계약서 탭 "발행")은 `ContractTemplatePreviewModal`의
+> `.btn-send`와 동일 스펙(34px / padding 0 20px / `--cs-purple` / `--cms-radius-sm` /
+> `--text-pc-body-14` 700 / disabled `--cs-disabled-button`)으로 통일한다(`RentalContractViewer.svelte` `.btn-issue`, 2026-09-24).
 
 ---
 
@@ -2076,6 +2307,11 @@ ARIA            : role="navigation" + aria-label / aria-current="page" (현재 �
 [ ] 목록 정렬 기능: Section 7-13 패턴 적용 (sortMode/sortedItems/$derived 구조)?
 [ ] 페이지네이션: CmsPagination 사용 (인라인 구현 금지)? Section 7-14 참조?
 [ ] 드래그 순서 변경: CmsDragList 사용 (인라인 구현 금지)? Section 7-15 참조?
+[ ] ProductDetailPanel 결합상품(bundles) 탭 — 자식 상품 선택 시 탭 자체가 숨겨지는가?
+    (childBlockedSections에 'bundles' 포함, §4-1 products.md 기준 부모 전용 탭)
+[ ] ProductDetailPanel 결합상품 탭이 조건 버튼 3종(필수선택·최소1개선택·배송대여불가)을
+    포함하지 않는가? (옵션상품 탭 bulk-row 섹션은 bundles에서 완전 제외 — GATE B 확정사항)
+[ ] 결합상품 검색 SuggestPicker가 자기자신·자식 상품·이미 추가된 상품을 결과에서 제외하는가?
 
 타이포그래피 (pc-com 토큰 전용)
 [ ] --text-m-* 모바일 토큰 미사용 (금지)?
@@ -2729,3 +2965,5 @@ toggle-thumb: 16×16px 흰 원형 핀 (left:2px → ON 시 translateX(16px))
 *참조: uiux.md (공통 토큰) · ui-mobile.md (Svelte 5 문법) · security-auth.md (인증)*
 *토큰 정본: CMS-Design-System-Tokens.json (product-list 1440×1413, 2026-07-08 추출)*
 *소스 추출: src/routes/cms/ 전체 페이지 실측 + JSON 토큰 병합*
+*2026-09-24 GATE C에 ProductDetailPanel 결합상품(bundles) 탭 3개 체크항목 추가 — 자식 선택 시
+탭 숨김, 조건버튼 3종 제외, SuggestPicker 중복 제외 확인 (products.md §2-14 정책 기반)*

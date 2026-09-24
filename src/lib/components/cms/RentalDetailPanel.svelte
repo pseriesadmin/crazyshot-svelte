@@ -252,6 +252,13 @@
     product_code: string | null
   }
 
+  // 예약 시점에 배정된 결합상품 실물(reservation_bundle_assets, 결합상품 Phase 2) — 조회 전용
+  interface ReservationBundleAsset {
+    id:           number
+    bundle_name:  string
+    product_code: string | null
+  }
+
   interface OrderSibling {
     reservationId:   number
     reservationCode: string | null
@@ -321,6 +328,29 @@
       })
       .catch(() => {
         if (optionsFetchedForId === id) { optionsError = '옵션상품 정보를 불러오지 못했습니다.'; optionsLoading = false }
+      })
+  })
+
+  // 결합상품 배정 실물 — 옵션상품과 동일한 lazy-fetch 패턴. 0개(레거시·일반 상품)면 섹션 미표시.
+  let bundlesFetchedForId = $state<number | null>(null)
+  let bundleAssets         = $state<ReservationBundleAsset[]>([])
+  $effect(() => {
+    if (activeTab !== 'rental') return
+    if (bundlesFetchedForId === row.reservation_id) return
+
+    const id = row.reservation_id
+    bundlesFetchedForId = id
+    bundleAssets = []
+
+    fetch(`/api/cms/reservations/${id}/bundles`)
+      .then(r => r.json())
+      .then(d => {
+        if (bundlesFetchedForId === id) {
+          bundleAssets = Array.isArray(d.bundles) ? d.bundles : []
+        }
+      })
+      .catch(() => {
+        if (bundlesFetchedForId === id) bundleAssets = []
       })
   })
 
@@ -1580,6 +1610,23 @@
         {/if}
       {/if}
 
+      <!-- 결합상품 — 예약 시점에 배정된 실물(장비번호) 표시. 조회 전용, 0개면 섹션 미표시 -->
+      {#if bundleAssets.length > 0}
+        <div class="section-title">결합상품 ({bundleAssets.length}개)</div>
+        {#each bundleAssets as asset (asset.id)}
+          <div class="info-section">
+            <div class="info-row">
+              <span class="info-label">결합상품</span>
+              <span class="info-value fw-bold">{asset.bundle_name}</span>
+            </div>
+            <div class="info-row">
+              <span class="info-label">장비번호</span>
+              <span class="info-value mono">{asset.product_code ?? '미발행'}</span>
+            </div>
+          </div>
+        {/each}
+      {/if}
+
       <!-- 대여 일정 -->
       <div class="section-title">대여 일정</div>
       <div class="info-section">
@@ -1808,7 +1855,7 @@
       {/if}
 
       <!-- 상태 액션 버튼 -->
-      <div class="action-section">
+      <div class="action-section" class:action-section-end={row.status === 'hold' && !isRentalView}>
         <!-- 예약 단계: 승인하기 / 거부 — reservation 뷰 전용 -->
         {#if row.status === 'hold' && !isRentalView}
           {#if orderSiblings.length > 0}
@@ -2371,6 +2418,8 @@
     justify-content: space-between;
   }
   .section-title-row .section-title { padding: 4px 0 2px; }
+  /* 운송장 정보 제목행(저장 버튼 포함)과 아래 입력 박스(.info-section) 사이 분리 여백 — 이 그룹에만 적용 */
+  .rental-shipping-group .section-title-row { margin-bottom: 12px; }
 
   .section-title-btns {
     display: flex;
@@ -2726,6 +2775,7 @@
   /* 액션 섹션 */
   .action-section {
     display: flex;
+    align-items: center;
     gap: 8px;
     flex-wrap: wrap;
     margin-top: 32px; /* spacing-4xl — cms-uiux.md DetailPanel 레이아웃 표준과 동일 값 */
@@ -2742,10 +2792,11 @@
   }
 
   /* 버튼 */
+  /* cms-uiux.md §0-10 ctaPrimaryPurple(44px·radius-md 15px·0 20px·14px/700) — 컬러 토큰은 기존 유지 */
   .btn-primary {
     display: inline-flex;
     align-items: center;
-    height: 36px;
+    height: 44px;
     padding: 0 20px;
     background: var(--cs-purple);
     color: var(--cs-white);
@@ -2758,6 +2809,12 @@
     text-decoration: none;
   }
   .btn-primary:hover    { background: var(--cs-purple-hover); }
+  /* 전역 `.cms-shell .btn-primary`(ctaPrimary 네이비·padding 0 30px)와 명시도가 같아 소스 순서로 밀리므로,
+     기존 퍼플 컬러 토큰·padding 20px을 유지하도록 컨텍스트 셀렉터로 명시도를 올림(!important 미사용) */
+  /* 예약 단계(승인하기/거부) 버튼 그룹만 우측 끝 정렬 — 다른 상태의 액션행은 기존 좌측 정렬 유지 */
+  .action-section.action-section-end { justify-content: flex-end; }
+  .action-section .btn-primary { background: var(--cs-purple); padding: 0 20px; }
+  .action-section .btn-primary:hover:not(:disabled) { background: var(--cs-purple-hover); }
   .btn-primary:disabled { background: var(--cs-disabled-button); cursor: not-allowed; }
 
   .btn-action {
@@ -2811,16 +2868,17 @@
     font-size: 11px;
   }
 
+  /* 승인하기(.btn-primary)와 나란히 놓이는 짝 버튼 — 높이 44px·radius-md 15px·14px/700·0 20px로 승인 버튼과 통일(cms-uiux.md §0-10 짝 CTA 규칙). 컬러 토큰(cs-error 채움/흰 글자)은 유지 */
   .btn-danger-sm {
     display: inline-flex;
     align-items: center;
-    height: 34px;
-    padding: 0 16px;
+    height: 44px;
+    padding: 0 20px;
     background: var(--cs-error);
     color: var(--cs-white);
     border: none;
-    border-radius: var(--cms-radius-sm);
-    font: var(--text-pc-script-12);
+    border-radius: var(--cms-radius-md);
+    font: var(--text-pc-body-14);
     font-weight: 700;
     cursor: pointer;
     transition: opacity 0.12s;
@@ -2889,21 +2947,24 @@
   .btn-tracking-save:hover:not(:disabled)    { background: var(--crazy-shot-purple-80); }
   .btn-tracking-save:disabled { opacity: 0.5; cursor: not-allowed; }
 
-  /* 제목행(.section-title-btns)에 놓인 인스턴스 전용 초소형 라운드형 모디파이어
-     — .btn-reassign-small과 동일 스케일(11px/3px 8px/pill). 무인보관함 섹션의
-     기존 .btn-tracking-save(34px, .tracking-action-row)는 이 클래스가 없어 영향 없음 */
-  /* cms-uiux.md §0-10-C 초소형 라운드 버튼형 정본 그대로(.btn-reassign-small과 동일 스펙) —
-     호버 컬러 반전 원칙: 기본 bg↔폰트 컬러 토큰을 그대로 뒤바꿈, 다른 색상 추가 금지 */
+  /* 제목행(.section-title-btns)에 놓인 인스턴스 전용 모디파이어 — cms-uiux.md §0-10-F
+     DetailPanel 실행 버튼 스펙(라운드 사각형·12px/700·8px 14px·min-width 78px).
+     호버는 기본 bg↔폰트 컬러 반전. 무인보관함 섹션의 기존 .btn-tracking-save(34px,
+     .tracking-action-row)는 이 클래스가 없어 영향 없음 */
   .btn-tracking-save.btn-tracking-save--sm {
     display: inline-flex;
+    justify-content: center;
     height: auto;
-    padding: 5px 10px;
-    font-size: 11px;
-    font-weight: 600;
+    min-width: 78px;
+    padding: 8px 14px;
+    font-size: 12px;
+    font-weight: 700;
     line-height: 1.4;
-    border-radius: var(--radius-full);
+    white-space: nowrap;
+    border-radius: var(--cms-radius-sm);
     background: var(--cs-surface-gray);
     color: var(--cs-text-mid);
+    transition: background 0.15s, color 0.15s;
   }
   .btn-tracking-save.btn-tracking-save--sm:hover:not(:disabled) {
     background: var(--cs-text-mid);
