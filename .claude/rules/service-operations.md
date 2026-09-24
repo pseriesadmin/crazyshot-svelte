@@ -576,6 +576,25 @@ auth/legacy-claim/send-otp, cron/locker-guide, push.ts의 SMS 폴백) 전부 무
 
 ---
 
+## 20. CMS 상품 등록·복제·재고 추가 — 코드품번 제한 정책 (2026-09-24 확정, Stephen)
+
+```
+CMS에서 상품을 새로 만드는 모든 경로(신규 등록·"새 상품으로 복제"·"동일 상품 재고 추가")는 아래
+제한을 서버가 최종 집행한다. 화면(모달)은 같은 규칙을 실행 버튼 클릭 시점에 사전 차단하는
+보조 수단일 뿐이며(cms-uiux.md §0-10-E), 화면 통과가 서버 검사를 대체하지 않는다.
+
+  ① 동일한 부모 코드품번을 가진 부모상품은 존재할 수 없다 — 새 상품 복제는 항상 코드조합을
+     선택해야 하고, 순번1이 없는 1단 조합은 같은 조합·같은 연월의 부모가 이미 있으면 등록 불가.
+  ② 새 상품 복제는 항상 1개씩, 재고 없이(미노출) 등록되며 장치정보·이력을 제외한 모든 정보를
+     복제한다(이미지는 파일 실복사).
+  ③ 동일 상품 재고 추가는 1회 최대 50개, 순번 상한을 넘기는 요청은 하나도 만들지 않고 차단한다.
+  ④ 삭제 성공 즉시 목록에서 제거(재조회)한다.
+```
+→ 상세: `products.md` §2-13(규칙 R1~R9 정본) · §2-11(과거 "동일 표시 허용" 폐기 표기) ·
+`cms-uiux.md` §0-10-B(삭제 안전 토스트 onSuccess)·§0-10-E(사전 차단 토스트·모달 겹침 규칙)
+
+---
+
 ## GATE C 확인 항목 (front-cms 연동 변경 시)
 
 ```
@@ -614,6 +633,8 @@ auth/legacy-claim/send-otp, cron/locker-guide, push.ts의 SMS 폴백) 전부 무
 [ ] "관리자만 봐야 하는" 새 알림을 추가한다면(§17) — chat_messages/chat_sessions에 넣지
     않았는가? (그 세션의 소유 고객에게도 항상 함께 노출됨) sendPushToAdmins 또는 CMS 전용
     UI 리마인더 중 하나를 사용했는가?
+[ ] CMS 상품 등록 경로를 추가·수정했다면(§20) — 동일 부모 코드품번 상품이 생길 수 있는 경로가
+    생기지 않았는가? 복제·재고 추가의 수량/순번 상한 제한이 서버에서 집행되는가?
 [ ] Solapi API Key를 신규·재발급했다면(§19) — CIDR을 0.0.0.0/0(모든 IP 허용)으로
     설정했는가? (기본값인 "현재 접속 IP만 등록"을 그대로 두면 Vercel에서 인증 실패 재발)
 [ ] SOLAPI_API_KEY/SOLAPI_API_SECRET 실값을 어떤 문서(.md)에도 기록하지 않았는가?
@@ -622,7 +643,7 @@ auth/legacy-claim/send-otp, cron/locker-guide, push.ts의 SMS 폴백) 전부 무
 
 ---
 
-*service-operations.md v1.7 | Harness Flow v3.2 | 2026-08-17 신설 — chat.md·contract.md·
+*service-operations.md v1.8 | 2026-09-24 §20 신설 — CMS 상품 등록·복제·재고 추가 코드품번 제한 정책(동일 부모 코드품번 금지·복제 범위·재고 추가 50개/순번 상한 사전 차단, 정본 products.md §2-13) | Harness Flow v3.2 | 2026-08-17 신설 — chat.md·contract.md·
 payment.md·rental-lifecycle.md·products.md·security-auth.md에 흩어진 front-cms 상호운영
 원칙을 인덱스로 통합. 세부 내용은 각 원본 문서가 정본, 이 문서는 포인터만 유지. | 2026-08-17
 §9 추가 — 예약승인(confirmed) 게이팅 설계 확정(구현 대기) 반영. | 2026-08-18 §9를 "구현·
