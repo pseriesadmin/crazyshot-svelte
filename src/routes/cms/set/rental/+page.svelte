@@ -1,10 +1,11 @@
 <script lang="ts">
   import { tick } from 'svelte'
   import { slide } from 'svelte/transition'
-  import { enhance } from '$app/forms'
+  import { enhance, deserialize } from '$app/forms'
   import { invalidateAll } from '$app/navigation'
   import { csToast } from '$lib/utils/toast'
   import CmsDragList from '$lib/components/cms/CmsDragList.svelte'
+  import CmsHolidayCalendar from '$lib/components/cms/CmsHolidayCalendar.svelte'
   import CmsDeleteButton from '$lib/components/cms/CmsDeleteButton.svelte'
   import ChevronIcon from '$lib/components/common/ChevronIcon.svelte'
   import type { PageData, ActionData } from './$types'
@@ -167,9 +168,6 @@
   let cutoffLoading = $state(false)
   let cutoffFormEl = $state<HTMLFormElement | undefined>(undefined)
   let syncLoading = $state(false)
-  let manualHolidayDate = $state('')
-  let manualHolidayNote = $state('')
-  let manualHolidayLoading = $state(false)
 
   let nationalHolidays = $derived<PublicHolidayRow[]>(data.holidays.filter((h) => h.holiday_type === 'national'))
   let manualHolidays = $derived<PublicHolidayRow[]>(data.holidays.filter((h) => h.holiday_type === 'manual'))
@@ -241,6 +239,40 @@
     await invalidateAll()
   }
 
+  // 달력 레이어 모달(CmsHolidayCalendar)의 임시 휴무일 등록·수정 저장(2026-09-24, Stephen 지시) —
+  // 기존 addManualHoliday 액션 재사용 + 신규 updateManualHoliday. 실패 시 레이어에 표시할 오류문구 반환.
+  async function saveManualHoliday(p: { id: string | null; date: string; note: string }): Promise<string | null> {
+    const fd = new FormData()
+    fd.set('date', p.date)
+    fd.set('note', p.note)
+    if (p.id) fd.set('id', p.id)
+    try {
+      const res = await fetch(p.id ? '?/updateManualHoliday' : '?/addManualHoliday', {
+        method: 'POST',
+        body: fd,
+        headers: { 'x-sveltekit-action': 'true' },
+      })
+      const result = deserialize(await res.text())
+      if (result.type === 'success') {
+        csToast.success(p.id ? '임시 휴무일이 수정되었습니다.' : '임시 휴무일이 추가되었습니다.')
+        await invalidateAll()
+        return null
+      }
+      if (result.type === 'failure') return (result.data as { error?: string })?.error ?? '저장에 실패했습니다.'
+      return '저장에 실패했습니다.'
+    } catch {
+      return '네트워크 오류로 저장에 실패했습니다.'
+    }
+  }
+
+  async function saveTierOrder(): Promise<void> {
+    const ids = discountTiers.map((t) => t.id)
+    const fd = new FormData()
+    fd.set('ids', JSON.stringify(ids))
+    await fetch('?/reorderDiscountTiers', { method: 'POST', body: fd })
+    await invalidateAll()
+  }
+
   async function saveMethodOrder(): Promise<void> {
     const ids = methods.map((m) => m.id)
     const fd = new FormData()
@@ -269,7 +301,7 @@
     <section class="setting-section">
       <div class="section-head">
         <h2 class="section-title">대여 기간 제한 옵션</h2>
-        <span class="section-badge">{periods.length} / 10</span>
+        <span class="section-badge section-badge--end">{periods.length} / 10</span>
       </div>
 
       <form
@@ -335,7 +367,7 @@
     <section class="setting-section">
       <div class="section-head">
         <h2 class="section-title">대여 방식 옵션</h2>
-        <span class="section-badge">{methods.length} / 10</span>
+        <span class="section-badge section-badge--end">{methods.length} / 10</span>
       </div>
 
       <form
@@ -678,13 +710,26 @@
 
         <!-- 배송 안내문 (200자) -->
         <div class="subsection shipping-guide-sub shipping-guide-sub--spaced">
-          <div class="subsection-head">
+          <!-- 저장 버튼을 텍스트필드 내부 겹침 배치(2026-08-30)에서 섹션 헤더 우측
+               바깥으로 재배치(2026-09-23, Stephen 지시) — cms-uiux.md §0-10-D
+               "섹션 인라인 저장 버튼(btn-save-inline)" 표준 그대로 적용(정본값 그대로
+               복사, 임의 팔레트 창작 금지). .subsection-head--between은 이 파일의
+               "법정공휴일 자동 동기화" 헤더와 동일한 title-좌/버튼-우 관례 재사용. -->
+          <div class="subsection-head subsection-head--between">
             <h3 class="subsection-title">배송 안내문</h3>
+            <button
+              type="submit"
+              class="btn-save-inline"
+              class:dirty={shippingGuideIsDirty}
+              disabled={shippingLoading || !shippingGuideIsDirty}
+            >
+              {shippingLoading ? '저장 중...' : '안내문 저장'}
+            </button>
           </div>
           <div class="textarea-wrap">
             <textarea
               name="shipping_guide"
-              class="guide-textarea guide-textarea--has-save-btn"
+              class="guide-textarea"
               maxlength="200"
               rows="4"
               bind:value={shippingGuide}
@@ -694,19 +739,17 @@
             <span class="char-count" class:char-count--warn={shippingGuideCount > 180}
               >{shippingGuideCount} / 200</span
             >
-            <button
-              type="submit"
-              class="btn-save textarea-save-btn"
-              disabled={shippingLoading || !shippingGuideIsDirty}
-            >
-              {shippingLoading ? '저장 중...' : '안내문 저장'}
-            </button>
           </div>
         </div>
       </form>
 
       <!-- 대여옵션 일괄적용·제한·휴무일 제어 옵션 통합 레이아웃 -->
       <div class="rental-restriction-group">
+      <!-- 그룹 박스 외부 상단 타이틀(2026-09-24, Stephen 지시) — "배송 안내문" 등과 동일한
+           .subsection-head/.subsection-title 표준 재사용 -->
+      <div class="subsection-head rental-restriction-head">
+        <h3 class="subsection-title">대여 방법 조건 설정</h3>
+      </div>
       <!-- 배송대여 수령/반납 일괄 지정(요청 A) + 대여 제한옵션 — 하나의 카드로 통합 레이아웃
            (2026-08-30, Stephen 지시로 두 sf-row를 단일 div로 병합) -->
       <div class="subsection bulk-delivery-section bulk-delivery-section--group-start">
@@ -832,7 +875,7 @@
         <form
           method="POST"
           action="?/addDiscountTier"
-          class="add-form add-form--method"
+          class="add-form add-form--method add-form--tier"
           use:enhance={({ formData, cancel }) => {
             if (tierAmount === '') { csToast.error('대여금액을 입력하세요.'); cancel(); return }
             if (tierConditions.length === 0) { csToast.error('조건을 선택하세요.'); cancel(); return }
@@ -857,88 +900,94 @@
           <input type="hidden" name="condition_types" value={JSON.stringify(tierConditions)} />
           <input type="hidden" name="discount_rate" value={tierDiscount} />
 
-          <div class="tier-input-row">
-            <div class="fee-input-wrap">
-              <input
-                type="text"
-                inputmode="numeric"
-                class="add-input fee-input"
-                value={tierAmount === '' ? '' : tierAmount.toLocaleString('ko-KR')}
-                placeholder="0"
-                aria-label="대여금액"
-                disabled={tierLoading}
-                oninput={(e) => {
-                  const digits = e.currentTarget.value.replace(/[^0-9]/g, '')
-                  tierAmount = digits ? parseInt(digits, 10) : ''
-                }}
-              />
-              <span class="fee-unit">원 이상</span>
-            </div>
-
-            <div class="mk-select-row">
-              <span class="mk-select-label">조건</span>
-              <!-- 다중선택(독립 토글) — cms-uiux.md §7-12-B .s-chip 표준. 둘 다 선택 시 AND
-                   (두 조건 모두 충족해야 매칭, Stephen 확정 2026-08-29) -->
-              <div class="mk-chips">
-                {#each TIER_CONDITION_OPTIONS as opt}
-                  <button
-                    type="button"
-                    class="s-chip"
-                    class:s-chip--on={tierConditions.includes(opt.value)}
-                    onclick={() => {
-                      tierConditions = tierConditions.includes(opt.value)
-                        ? tierConditions.filter((v) => v !== opt.value)
-                        : [...tierConditions, opt.value]
-                    }}
-                  >{opt.label}</button>
-                {/each}
-              </div>
-            </div>
-
-            <div class="mk-select-row">
-              <span class="mk-select-label">우대옵션</span>
-              <div class="mk-chips">
-                {#each TIER_DISCOUNT_OPTIONS as opt}
-                  <button
-                    type="button"
-                    class="mk-chip"
-                    class:mk-chip--on={tierDiscount === opt.value}
-                    class:mk-chip--used={opt.value === 'base'}
-                    disabled={opt.value === 'base'}
-                    title={
-                      opt.value === 'base'
-                        ? '실질 할인 효과가 없어 선택할 수 없습니다(0% 할인과 동일)'
-                        : opt.value === 'half'
-                          ? '왕복배송료(수령·반납 둘 다 배송)에만 적용됩니다 — 편도(배송만/반납만)요금에는 적용되지 않습니다'
-                          : undefined
-                    }
-                    onclick={() => { tierDiscount = tierDiscount === opt.value ? '' : opt.value }}
-                  >{opt.label}</button>
-                {/each}
-              </div>
-            </div>
-
-            <button
-              type="submit"
-              class="btn-add tier-add-btn"
-              disabled={tierLoading || discountTiers.length >= 5}
-            >
-              {tierLoading ? '추가 중...' : '추가'}
-            </button>
+          <div class="fee-input-wrap">
+            <input
+              type="text"
+              inputmode="numeric"
+              class="add-input fee-input"
+              value={tierAmount === '' ? '' : tierAmount.toLocaleString('ko-KR')}
+              placeholder="0"
+              aria-label="대여금액"
+              disabled={tierLoading}
+              oninput={(e) => {
+                const digits = e.currentTarget.value.replace(/[^0-9]/g, '')
+                tierAmount = digits ? parseInt(digits, 10) : ''
+              }}
+            />
+            <span class="fee-unit">원 이상</span>
           </div>
+
+          <div class="mk-select-row">
+            <span class="mk-select-label">조건</span>
+            <!-- 다중선택(독립 토글) — cms-uiux.md §7-12-B .s-chip 표준. 둘 다 선택 시 AND
+                 (두 조건 모두 충족해야 매칭, Stephen 확정 2026-08-29) -->
+            <div class="mk-chips">
+              {#each TIER_CONDITION_OPTIONS as opt}
+                <button
+                  type="button"
+                  class="s-chip"
+                  class:s-chip--on={tierConditions.includes(opt.value)}
+                  onclick={() => {
+                    tierConditions = tierConditions.includes(opt.value)
+                      ? tierConditions.filter((v) => v !== opt.value)
+                      : [...tierConditions, opt.value]
+                  }}
+                >{opt.label}</button>
+              {/each}
+            </div>
+          </div>
+
+          <div class="mk-select-row">
+            <span class="mk-select-label">우대옵션</span>
+            <div class="mk-chips">
+              {#each TIER_DISCOUNT_OPTIONS as opt}
+                <button
+                  type="button"
+                  class="mk-chip"
+                  class:mk-chip--on={tierDiscount === opt.value}
+                  class:mk-chip--used={opt.value === 'base'}
+                  disabled={opt.value === 'base'}
+                  title={
+                    opt.value === 'base'
+                      ? '실질 할인 효과가 없어 선택할 수 없습니다(0% 할인과 동일)'
+                      : opt.value === 'half'
+                        ? '왕복배송료(수령·반납 둘 다 배송)에만 적용됩니다 — 편도(배송만/반납만)요금에는 적용되지 않습니다'
+                        : undefined
+                  }
+                  onclick={() => { tierDiscount = tierDiscount === opt.value ? '' : opt.value }}
+                >{opt.label}</button>
+              {/each}
+            </div>
+          </div>
+
+          <button
+            type="submit"
+            class="btn-add tier-add-btn"
+            disabled={tierLoading || discountTiers.length >= 5}
+          >
+            {tierLoading ? '추가 중...' : '추가'}
+          </button>
         </form>
 
         {#if discountTiers.length > 0}
-          <div class="drag-list-wrap">
-            {#each discountTiers as tier (tier.id)}
+          <!-- 드래그 이동 핸들(2026-09-24, Stephen 지시) — 다른 목록(대여기간·대여방식·동의문)과
+               동일한 CmsDragList 표준 재사용. 표시 순서 전용(여러 조합 동시 매칭 시 가장
+               유리한 1개만 적용되는 요금 로직에는 영향 없음). -->
+          <CmsDragList
+            bind:items={discountTiers}
+            itemKey={(item) => item.id}
+            onreorder={saveTierOrder}
+            class="drag-list-wrap"
+          >
+            {#snippet renderItem(tier: DeliveryFeeDiscountTier)}
               <div class="list-row">
                 <span class="mk-badge">{tier.min_rental_amount.toLocaleString('ko-KR')}원 이상</span>
                 <span class="list-row-name">{tierConditionsLabel(tier.condition_types)}</span>
                 <span class="mk-badge mk-badge--shipping">{TIER_DISCOUNT_LABELS[tier.discount_rate]}</span>
                 <CmsDeleteButton action="?/deleteDiscountTier" id={tier.id} successMessage="배송료 우대설정이 삭제되었습니다." />
               </div>
-            {/each}
-          </div>
+            {/snippet}
+          </CmsDragList>
         {:else}
           <p class="empty-hint">등록된 배송료 우대설정이 없습니다.</p>
         {/if}
@@ -963,6 +1012,11 @@
             }
           }}
         >
+          <!-- 그룹 상단 별도 타이틀(2026-09-24, Stephen 지시 — 라벨 교체가 아니라 라벨 위에 하나 더) —
+               "배송 안내문"·"대여 방법 조건 설정"과 동일한 .subsection-head/.subsection-title 표준 -->
+          <div class="subsection-head">
+            <h3 class="subsection-title">배송 휴무일 포함 설정</h3>
+          </div>
           <div class="sf-row holiday-toggle-row">
             <span class="sf-label">휴무일 제어 옵션</span>
             <div class="shipping-chips">
@@ -988,29 +1042,37 @@
                 onclick={async () => { enableManualHolidays = !enableManualHolidays; await tick(); cutoffFormEl?.requestSubmit() }}
               >임시 휴무일 반영</button>
             </div>
-          </div>
 
-          <div class="textarea-wrap">
-            <textarea
-              name="holiday_guide_text"
-              class="guide-textarea guide-textarea--has-save-btn"
-              maxlength="200"
-              rows="3"
-              bind:value={holidayGuideText}
-              disabled={cutoffLoading}
-              placeholder="배송 휴무일이 포함된 예약 시 장바구니 달력 하단에 노출될 안내문을 입력하세요. (200자 이내)"
-              aria-label="배송 휴무일 안내 스크립트"
-            ></textarea>
-            <span class="char-count" class:char-count--warn={holidayGuideCount > 180}
-              >{holidayGuideCount} / 200</span
-            >
-            <button
-              type="submit"
-              class="btn-save textarea-save-btn"
-              disabled={cutoffLoading || !holidayGuideIsDirty}
-            >
-              {cutoffLoading ? '저장 중...' : '안내문 저장'}
-            </button>
+            <!-- 저장 버튼을 텍스트필드 내부 겹침 배치에서 섹션 헤더 우측 바깥으로 재배치
+                 (2026-09-23, Stephen 지시 — 위 "배송 안내문" 섹션과 동일 반영). 이 서브섹션은
+                 기존에 제목(h3)이 없었으므로 동일 패턴 적용을 위해 최소 라벨을 신설.
+                 2026-09-24 Stephen 지시로 "휴무일 제어 옵션" 아웃라인 박스 내부 하단(칩 아래)으로 이동. -->
+            <div class="subsection-head subsection-head--between">
+              <h3 class="subsection-title">배송 휴무일 안내문</h3>
+              <button
+                type="submit"
+                class="btn-save-inline"
+                class:dirty={holidayGuideIsDirty}
+                disabled={cutoffLoading || !holidayGuideIsDirty}
+              >
+                {cutoffLoading ? '저장 중...' : '안내문 저장'}
+              </button>
+            </div>
+            <div class="textarea-wrap">
+              <textarea
+                name="holiday_guide_text"
+                class="guide-textarea"
+                maxlength="200"
+                rows="3"
+                bind:value={holidayGuideText}
+                disabled={cutoffLoading}
+                placeholder="배송 휴무일이 포함된 예약 시 장바구니 달력 하단에 노출될 안내문을 입력하세요. (200자 이내)"
+                aria-label="배송 휴무일 안내 스크립트"
+              ></textarea>
+              <span class="char-count" class:char-count--warn={holidayGuideCount > 180}
+                >{holidayGuideCount} / 200</span
+              >
+            </div>
           </div>
 
           <input type="hidden" name="enable_prev_day_check" value={enablePrevDayCheck ? 'true' : 'false'} />
@@ -1047,87 +1109,45 @@
               </button>
             </form>
           </div>
-          {#if nationalHolidays.length > 0}
-            <div class="drag-list-wrap">
-              {#each nationalHolidays as h (h.id)}
-                <div class="list-row" class:list-row-inactive={!h.is_active}>
-                  <span class="mk-badge">{h.date}</span>
-                  <span class="list-row-name">{h.name}</span>
-                  {#if !h.is_active}
-                    <span class="inactive-badge" title="동기화 정정으로 비활성화됨 — /cart 휴무일 판정에서 제외됩니다">비활성</span>
-                  {/if}
-                </div>
-              {/each}
-            </div>
-          {:else}
+          <!-- 목록형 → 달력형(3개월 병렬, 좌우 드래그/화살표 이동) 교체(2026-09-24, Stephen 지시) —
+               읽기 전용 표시라 삭제·수정 기능은 원래부터 없었음. 임시 휴무일도 같은 달력에 함께
+               표시(원형 배지) — 등록·수정은 이 달력의 날짜 더블클릭 레이어, 삭제는 레이어 또는 아래 "임시 휴무일" 목록. -->
+          <!-- 임시 휴무일 등록의 유일한 진입점이므로 휴무일이 0건이어도 항상 표시 -->
+          <CmsHolidayCalendar
+            holidays={data.holidays.map((h) => ({
+              id: h.id,
+              date: h.date,
+              // 임시 휴무일은 사유(note)가 표시명 — name은 최초 등록 시점 값이라 수정 후엔 낡음(QA M-1:
+              // 사유를 비워 저장해도 옛 name으로 되돌아가 보임). name은 쓰지 않고 비었을 때 등록 기본값과 동일한 문구 사용
+              name: h.holiday_type === 'manual' ? (h.note?.trim() || '임시휴무일') : h.name,
+              is_active: h.is_active,
+              type: h.holiday_type,
+            }))}
+            onsave={saveManualHoliday}
+          />
+          {#if nationalHolidays.length === 0}
             <p class="empty-hint">동기화된 법정공휴일이 없습니다. "지금 동기화"를 눌러 최신 데이터를 가져오세요.</p>
           {/if}
         </div>
 
-        <!-- 임시 휴무일 관리(관리자 직접 등록) -->
+        <!-- 임시 휴무일 목록 — 등록·수정은 위 달력에서 날짜 더블클릭(2026-09-24, Stephen 지시로
+             별도 등록 폼은 달력 레이어 모달과 중복이라 제거), 여기서는 목록 확인·삭제 -->
         <div class="holiday-block">
           <div class="subsection-head">
-            <h4 class="subsection-title">임시 휴무일 관리</h4>
+            <h4 class="subsection-title">임시 휴무일</h4>
           </div>
-          <form
-            method="POST"
-            action="?/addManualHoliday"
-            class="add-form"
-            use:enhance={() => {
-              manualHolidayLoading = true
-              return async ({ result, update }) => {
-                manualHolidayLoading = false
-                if (result.type === 'success') {
-                  csToast.success('임시 휴무일이 추가되었습니다.')
-                  manualHolidayDate = ''
-                  manualHolidayNote = ''
-                  await update({ reset: false })
-                } else if (result.type === 'failure') {
-                  csToast.error((result.data as { error?: string })?.error ?? '추가에 실패했습니다.')
-                }
-              }
-            }}
-          >
-            <input
-              type="date"
-              name="date"
-              class="add-input"
-              bind:value={manualHolidayDate}
-              disabled={manualHolidayLoading}
-              aria-label="임시휴무일 날짜"
-              required
-            />
-            <input
-              type="text"
-              name="note"
-              class="add-input"
-              placeholder="사유 입력 (예: 명절 연휴)"
-              maxlength="100"
-              bind:value={manualHolidayNote}
-              disabled={manualHolidayLoading}
-              aria-label="임시휴무일 사유"
-            />
-            <button
-              type="submit"
-              class="btn-add"
-              disabled={manualHolidayLoading || !manualHolidayDate}
-            >
-              {manualHolidayLoading ? '추가 중...' : '추가'}
-            </button>
-          </form>
-
           {#if manualHolidays.length > 0}
             <div class="drag-list-wrap">
               {#each manualHolidays as h (h.id)}
                 <div class="list-row">
                   <span class="mk-badge">{h.date}</span>
-                  <span class="list-row-name">{h.note || h.name}</span>
+                  <span class="list-row-name">{h.note?.trim() || '임시휴무일'}</span>
                   <CmsDeleteButton action="?/deleteManualHoliday" id={h.id} />
                 </div>
               {/each}
             </div>
           {:else}
-            <p class="empty-hint">등록된 임시 휴무일이 없습니다.</p>
+            <p class="empty-hint">등록된 임시 휴무일이 없습니다. 위 달력에서 날짜를 더블클릭해 등록하세요.</p>
           {/if}
         </div>
       </div>
@@ -1140,7 +1160,7 @@
     <section class="setting-section">
       <div class="section-head">
         <h2 class="section-title">지점 정보 등록</h2>
-        <span class="section-badge">{branches.length} / 20</span>
+        <span class="section-badge section-badge--end">{branches.length} / 20</span>
       </div>
 
       <form
@@ -1351,7 +1371,7 @@
       <div class="subsection">
         <div class="subsection-head">
           <h3 class="subsection-title">필수 동의문 항목</h3>
-          <span class="section-badge">{consents.length} / 10</span>
+          <span class="section-badge section-badge--end">{consents.length} / 10</span>
         </div>
 
         <form
@@ -1468,6 +1488,14 @@
     white-space: nowrap;
   }
 
+  /* 개수 배지를 헤더 우측 끝으로 재배치(2026-09-24, Stephen 지시) — 지점 정보 등록·필수 동의문
+     항목 → 같은 날 후속 지시로 대여 기간 제한 옵션·대여 방식 옵션까지 확대(섹션 헤더 개수 배지
+     전부 우측 끝으로 통일). 헤더가 flex라 margin-left:auto로 우측 정렬(배송료 우대설정 행의
+     .sf-row .section-badge와 동일 기법). */
+  .section-badge--end {
+    margin-left: auto;
+  }
+
   /* ─── 추가 폼 ─── */
   .add-form {
     display: flex;
@@ -1475,28 +1503,32 @@
     margin-bottom: 32px;
   }
 
+  /* 대여방식 등록 폼(방식 유형 칩 행 + 이름/안내문구 입력 행)을 하나의 그룹으로 시각
+     구분(2026-09-23, Stephen 지시 — 배경색 없이 아웃라인만). 톤 조정 경위:
+     --cs-border(#E0E0E6, 너무 짙음) → --cs-surface-gray(#F6F6F6, 너무 옅음) →
+     neutral-gray-250(#F3F4F6, "아주 약간 더 짙게") 최종 확정. 이 값은 cms-uiux.md에
+     문서화된 색이지만 CSS 변수 미정의(app.css 1521행 등에서도 동일하게 원문 hex +
+     주석으로 사용하는 기존 관례) — 신규 변수 임의 생성 대신 그 관례를 그대로 따름. */
   .add-form--method {
     flex-direction: column;
     gap: 12px;
-  }
-
-  /* 배송료 우대설정 — 대여금액+조건+우대옵션을 옅은 그레이 박스로 묶어 한 행 정렬
-     (2026-08-29, 낱개 행 stack이 지저분해 보인다는 Stephen 지적으로 카드형 정리) */
-  .tier-input-row {
-    display: flex;
-    align-items: center;
-    flex-wrap: wrap;
-    gap: 24px;
-    background: var(--cs-surface-gray);
+    border: 1px solid #F3F4F6; /* neutral-gray-250 — CSS 변수 미정의 */
     border-radius: var(--cms-radius-sm);
     padding: 16px 20px;
   }
 
-  .tier-input-row .fee-input {
-    background: var(--cs-white);
+  /* 배송료 우대설정 등록 폼 — 대여금액+조건+우대옵션을 한 행으로 정렬. 예전엔 폼 안에
+     .tier-input-row div를 한 겹 더 두었으나(2026-08-29), 폼 자체(.add-form--method)가
+     이미 아웃라인·패딩으로 그룹핑하므로 중복 래퍼를 제거하고(2026-09-24, Stephen 지시)
+     행 레이아웃을 폼 modifier로 이전 — .add-form--method(column)를 row로 되돌림. */
+  .add-form--method.add-form--tier {
+    flex-direction: row;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 24px;
   }
 
-  /* "추가" 버튼을 tier-input-row 우측 끝에 재배치(2026-08-29, Stephen 지시) — 기존
+  /* "추가" 버튼을 행 우측 끝에 재배치(2026-08-29, Stephen 지시) — 기존
      add-form--method(column flex) 하위 단독 자식일 때의 stretch로 인한 전체폭 대신,
      행 안에서는 auto폭 + margin-left:auto로 우측 정렬 */
   .tier-add-btn {
@@ -1760,6 +1792,30 @@
     border-color: var(--cs-purple-hover);
   }
 
+  /* 섹션 인라인 저장 버튼(cms-uiux.md §0-10-D 표준, 2026-09-23 신규 사용처 추가) —
+     "배송 안내문" 섹션 헤더 우측 저장 버튼. 정본(ProductDetailPanel.svelte) 값 그대로
+     복사 — 임의 팔레트 창작 금지. */
+  .btn-save-inline {
+    padding: 5px 14px;
+    border: 1.5px solid var(--cs-border);
+    border-radius: var(--radius-sm);
+    background: transparent;
+    color: var(--cs-text-light);
+    font: var(--text-pc-script-12);
+    cursor: not-allowed;
+    min-height: 32px;
+    transition: background 0.12s, border-color 0.12s, color 0.12s;
+  }
+  .btn-save-inline.dirty {
+    border-color: var(--cs-purple);
+    background: var(--cs-purple);
+    color: var(--cs-white);
+    cursor: pointer;
+  }
+  .btn-save-inline.dirty:hover {
+    opacity: 0.85;
+  }
+
   /* "지금 동기화" 버튼 — 동기화 아이콘 + 텍스트 */
   .btn-sync {
     display: inline-flex;
@@ -1809,19 +1865,24 @@
     white-space: nowrap;
   }
 
-  /* is_active=false 국경일 행 — /cart 휴무일 판정에서 제외되고 있음을 관리자가 즉시
-     알아챌 수 있도록 시각적으로 구분(2026-08-25, 동기화 정정으로 실제 발생 가능한 상태) */
-  .list-row-inactive { opacity: 0.5; }
-  .list-row-inactive .list-row-name { text-decoration: line-through; }
-  .inactive-badge {
-    flex-shrink: 0;
-    font: var(--text-pc-script-12);
-    font-weight: 700;
-    color: var(--cs-error, #d92d20);
-    background: rgba(217, 45, 32, 0.1);
-    border-radius: var(--radius-full, 99px);
-    padding: 2px 10px;
+  /* 배송료 우대설정 목록 행 상하 여백 추가(2026-09-23, Stephen 지시) — 다른 .list-row
+     사용처(대여방식·대여기간·지점·동의문 등)에는 영향 없도록 이 목록에만 스코프.
+     고정 height(44px)를 auto로 풀고 상하 패딩을 줘서 뱃지 2개+삭제 버튼이 있는
+     콘텐츠 양에 맞게 자연스럽게 늘어나도록 함. */
+  .discount-tier-block .list-row {
+    height: auto;
+    padding: 10px 14px;
   }
+
+  /* 배송료 우대설정 목록 행 간 여백 50% 확대(2026-09-23, Stephen 지시) —
+     기본 6px(:global(.drag-list-wrap)) × 1.5 = 9px, 이 목록에만 스코프 */
+  .discount-tier-block :global(.drag-list-wrap) {
+    gap: 9px;
+  }
+
+  /* ⛔ .list-row-inactive·.inactive-badge 삭제(2026-09-24) — 법정공휴일이 달력형
+     (CmsHolidayCalendar)으로 바뀌며 비활성 국경일 구분(흐림+취소선+안내 레이어)은 그
+     컴포넌트 안으로 이전됨. */
 
   .consent-text {
     font: var(--text-pc-body-14);
@@ -2041,11 +2102,44 @@
 
   /* 휴무일 제어 옵션 토글 행과 그 아래 법정공휴일·임시휴무일 목록 사이 여백 2배 —
      기본 .sf-row margin-bottom(24px)의 2배 */
-  .holiday-toggle-row {
+  /* "휴무일 제어 옵션" 라벨 + 칩 그룹(아웃라인 박스)을 좌우 배치가 아니라 상하로 쌓아
+     좌측 정렬(2026-09-23~24, Stephen 지시 — "상하 정렬"이 세로 중앙정렬이 아니라
+     라벨 위/칩 그룹 아래 세로 배치를 뜻했음. 앞선 padding-top 매칭·stretch+center
+     방식은 전부 좌우 배치 전제의 오해였음). */
+  /* .sf-row(파일 뒤쪽 정의, align-items:center·gap:16px)가 같은 우선순위로 뒤에서
+     덮어쓰므로 .sf-row.holiday-toggle-row로 우선순위를 높여야 좌측 정렬이 적용됨 */
+  .sf-row.holiday-toggle-row {
     margin-bottom: 48px;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 12px;
+    /* 아웃라인 박스를 칩 그룹이 아니라 행 전체(라벨+칩)에 적용해 "휴무일 제어 옵션" 라벨이
+       박스 안쪽 상단에 오도록 재배치(2026-09-24, Stephen 지시 — 배경색 없이 아웃라인만,
+       톤은 이 파일의 다른 그룹핑 박스와 동일한 neutral-gray-250, 가로폭은 행이 블록이라 100%) */
+    border: 1px solid #F3F4F6; /* neutral-gray-250 — CSS 변수 미정의 */
+    border-radius: var(--cms-radius-sm);
+    padding: 16px 20px;
   }
 
-  /* "배송료 우대설정" 타이틀과 그 아래 입력폼(tier-input-row) 사이 여백 축소 —
+  /* .sf-label의 flex: 0 0 210px은 가로 배치 전제(폭 210px 고정) — column 방향에서는
+     같은 값이 "높이 210px"로 해석되므로 이 행에서만 콘텐츠 크기로 되돌림 */
+  .holiday-toggle-row .sf-label {
+    flex: 0 0 auto;
+  }
+
+  /* 안내문 헤더(제목+저장 버튼)·텍스트필드가 아웃라인 박스 안쪽으로 이동(2026-09-24, Stephen 지시) —
+     column 컨테이너의 align-items:flex-start로는 콘텐츠 폭만 차지하므로 가로 전체로 늘리고,
+     컨테이너 gap과 이중으로 겹치는 자체 하단 여백은 제거. 칩 그룹과의 구분을 위해 상단만 여백 추가. */
+  .holiday-toggle-row .subsection-head {
+    align-self: stretch;
+    margin: 12px 0 0;
+  }
+  .holiday-toggle-row .textarea-wrap {
+    align-self: stretch;
+    margin-bottom: 0;
+  }
+
+  /* "배송료 우대설정" 타이틀과 그 아래 입력폼(.add-form--tier) 사이 여백 축소 —
      하나의 기능을 설명하는 타이틀이므로 시각적 결합성 확보(2026-08-30, Stephen 지시) —
      기본 .sf-row margin-bottom(24px)의 절반 */
   .discount-tier-title-row {
@@ -2057,6 +2151,11 @@
     align-items: center;
     gap: 10px;
     margin-bottom: 12px;
+  }
+
+  /* "대여 방법 조건 설정" 타이틀 — 이 그룹의 원래 진입부 상단 여백(60px)을 이어받음 */
+  .subsection-head.rental-restriction-head {
+    margin-top: 60px;
   }
 
   .subsection-title {
@@ -2077,6 +2176,14 @@
 
   .holiday-block {
     margin-top: 24px;
+  }
+
+  /* 임시 휴무일 목록 행 상하 패딩 +50%(2026-09-24, Stephen 지시) — 기존 고정 height 44px에서
+     가장 큰 내용(날짜 배지 ≈24px) 기준 실질 상하 여백이 ≈10px였으므로 1.5배인 15px로 부여하고,
+     고정 height는 auto로 풀어 콘텐츠+패딩으로 높이가 정해지게 함 */
+  .holiday-block .list-row {
+    height: auto;
+    padding: 15px 14px;
   }
 
   .holiday-block .drag-list-wrap {
@@ -2128,20 +2235,9 @@
     font-weight: 700;
   }
 
-  /* 배송 안내문 "안내문 저장" 버튼 — 입력폼 외부(guide-actions) 대신 textarea-wrap 내부
-     우측 상단에 배치(2026-08-30, Stephen 지시 — "입력폼 내부 배치가 UX 최선") */
-  .textarea-save-btn {
-    position: absolute;
-    top: 10px;
-    right: 14px;
-  }
-
-  /* 버튼이 textarea 위에 겹치지 않도록 상단 여백 확보(char-count의 하단 여백 확보와
-     동일 원리) — .guide-textarea 공용 클래스는 "공통 대여 안내문" 섹션과 공유하므로
-     이 인스턴스에만 스코프한 modifier로 상단 패딩만 확장 */
-  .guide-textarea--has-save-btn {
-    padding-top: 52px;
-  }
+  /* ⛔ .textarea-save-btn·.guide-textarea--has-save-btn 삭제됨(2026-09-23) — 두 안내문
+     저장 버튼(배송 안내문·배송 휴무일 안내문)이 전부 textarea 내부 겹침 배치에서
+     섹션 헤더 우측(.btn-save-inline)으로 이전되며 더 이상 쓰이지 않게 됨. */
 
   /* ─── 동의문 입력 래퍼 ─── */
   .consent-input-wrap {
@@ -2197,6 +2293,9 @@
     gap: 8px;
     flex-wrap: wrap;
   }
+
+  /* ⛔ .holiday-toggle-row .shipping-chips 아웃라인 삭제(2026-09-24) — 아웃라인은 라벨까지
+     감싸도록 .sf-row.holiday-toggle-row 자체로 이전됨. */
   /* 배송대여 수령/반납 일괄 지정 콤보 — 칩마다 개별 form으로 감싸되 레이아웃엔 영향 없게 */
   .chip-form {
     display: inline-flex;
@@ -2234,11 +2333,16 @@
     cursor: not-allowed;
   }
 
+  /* 왕복·배송·반납 요금 3행을 하나의 그룹으로 시각 구분(2026-09-23, Stephen 지시 —
+     .add-form--method와 톤을 동일하게 맞춤. 조정 경위는 .add-form--method 주석 참고) */
   .fee-grid {
     display: flex;
     flex-direction: column;
     gap: 12px;
     margin-bottom: 28px;
+    border: 1px solid #F3F4F6; /* neutral-gray-250 — CSS 변수 미정의 */
+    border-radius: var(--cms-radius-sm);
+    padding: 16px 20px;
   }
 
   /* 요금 입력(fee-grid) ↔ 배송 안내문 사이 여백 2배 확보(2026-08-30, Stephen 지시 —
@@ -2254,12 +2358,21 @@
   }
 
   /* rental-restriction-group 진입부(첫 카드) 상단 여백 2배 — 기본 .bulk-delivery-section
-     margin-top(30px)의 2배. 이 카드 뒤(배송료 우대설정 등)의 margin-top은 변경하지 않음 */
+     margin-top(30px)의 2배. 이 카드 뒤(배송료 우대설정 등)의 margin-top은 변경하지 않음.
+     그룹핑 아웃라인(2026-09-23, Stephen 지시 — 배경색 없이 아웃라인만, 톤은
+     .add-form--method/.fee-grid와 동일 경위로 확정된 neutral-gray-250)도 이 modifier에
+     한정 적용 — 베이스 .bulk-delivery-section(discount-tier-section 등 다른 블록과
+     공유)에는 적용하지 않음(요청범위 외 확대 방지). */
   .bulk-delivery-section--group-start {
-    margin-top: 60px;
+    /* 상단 60px 여백은 박스 위에 새로 생긴 타이틀(.rental-restriction-head)이 대신
+       가짐(2026-09-24) — 타이틀과 박스가 붙어 보이도록 박스 자체 상단 여백은 0 */
+    margin-top: 0;
     /* 이 카드 ↔ 배송료 우대설정 사이 여백도 2배(같은 날 후속 지시) — 기본 .subsection
        margin-bottom(28px)의 2배 */
     margin-bottom: 56px;
+    border: 1px solid #F3F4F6; /* neutral-gray-250 — CSS 변수 미정의 */
+    border-radius: var(--cms-radius-sm);
+    padding: 16px 20px;
   }
 
   .fee-row {

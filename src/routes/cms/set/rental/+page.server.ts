@@ -15,6 +15,21 @@ function untypedRpc(sb: SupabaseClient, fn: string, args?: Record<string, unknow
   return (sb as unknown as { rpc: (f: string, a?: Record<string, unknown>) => Promise<{ data: unknown; error: { message: string } | null }> }).rpc(fn, args)
 }
 
+// 임시 휴무일 날짜 서버 검증(QA L-3, 2026-09-24) — 형식 YYYY-MM-DD + 실존 날짜 + (옵션) 오늘(KST) 이전 금지.
+// UI(달력)는 이미 과거 날짜를 막지만 조작된 요청·형식 오류가 Postgres 원문 에러로 노출되는 것을 방지.
+// 실존 날짜는 왕복 변환으로 판정 — Date.parse는 2026-02-30 같은 날짜를 NaN이 아닌 값으로 통과시킴(재검수 지적).
+// 수정(update) 시 날짜가 바뀌지 않았다면 과거 검증을 건너뛰어 이미 지난 항목의 사유 수정은 허용(checkPast=false).
+function validateManualHolidayDate(date: string, checkPast = true): string | null {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return '날짜 형식이 올바르지 않습니다.'
+  const parsed = new Date(`${date}T00:00:00Z`)
+  if (Number.isNaN(parsed.getTime()) || parsed.toISOString().slice(0, 10) !== date) return '존재하지 않는 날짜입니다.'
+  if (checkPast) {
+    const todayKst = new Date(Date.now() + 9 * 60 * 60 * 1000).toISOString().slice(0, 10)
+    if (date < todayKst) return '지난 날짜에는 임시 휴무일을 등록할 수 없습니다.'
+  }
+  return null
+}
+
 export interface RentalPeriodOption {
   id: string
   name: string
@@ -148,6 +163,7 @@ export const load: PageServerLoad = async ({ locals }) => {
     untypedFrom(supabase, 'delivery_fee_discount_tiers')
       .select('id, min_rental_amount, condition_types, discount_rate, is_active')
       .is('deleted_at', null)
+      .order('display_order')
       .order('created_at'),
   ])
 
@@ -507,10 +523,46 @@ export const actions: Actions = {
     const note = (data.get('note') as string | null)?.trim() ?? ''
 
     if (!date) return fail(400, { error: '날짜를 선택해주세요.' })
-    if (note.length > 100) return fail(400, { error: '사유는 최대 100자까지 입력 가능합니다.' })
+    const dateError = validateManualHolidayDate(date)
+    if (dateError) return fail(400, { error: dateError })
+    // 사유 길이: 최초 100자 → 2026-09-24 Stephen 지시(달력 더블클릭 등록 모달)로 20자 통일
+    if (note.length > 20) return fail(400, { error: '사유는 최대 20자까지 입력 가능합니다.' })
 
     const { error } = await untypedRpc(locals.supabase, 'upsert_manual_holiday', {
       p_id: null,
+      p_date: date,
+      p_note: note,
+    })
+    if (error) return fail(400, { error: error.message })
+    return { success: true }
+  },
+
+  // 달력 레이어 모달에서 기존 임시 휴무일 편집(2026-09-24) — upsert_manual_holiday UPDATE 분기 재사용
+  updateManualHoliday: async ({ request, locals }) => {
+    const { session } = await locals.safeGetSession()
+    if (!session) return fail(401, { error: '인증 필요' })
+    const cmsRole = await getCmsRoleForAction(locals)
+    if (!hasSettingsAccess(cmsRole ?? '')) return fail(403, { error: '권한 없음' })
+    const data = await request.formData()
+    const id = (data.get('id') as string | null) ?? ''
+    const date = (data.get('date') as string | null) ?? ''
+    const note = (data.get('note') as string | null)?.trim() ?? ''
+
+    if (!id) return fail(400, { error: '잘못된 요청입니다.' })
+    if (!date) return fail(400, { error: '날짜를 선택해주세요.' })
+    // 날짜가 기존과 같으면(사유만 수정) 과거 검증 생략 — 형식·실존 검증은 항상 수행
+    const { data: existingRow } = await untypedFrom(locals.supabase, 'public_holidays')
+      .select('date')
+      .eq('id', id)
+      .eq('holiday_type', 'manual')
+      .maybeSingle()
+    const dateUnchanged = (existingRow as { date: string } | null)?.date === date
+    const dateError = validateManualHolidayDate(date, !dateUnchanged)
+    if (dateError) return fail(400, { error: dateError })
+    if (note.length > 20) return fail(400, { error: '사유는 최대 20자까지 입력 가능합니다.' })
+
+    const { error } = await untypedRpc(locals.supabase, 'upsert_manual_holiday', {
+      p_id: id,
       p_date: date,
       p_note: note,
     })
@@ -664,6 +716,20 @@ export const actions: Actions = {
       p_condition_types: conditionTypes,
       p_discount_rate: discountRate,
     })
+    if (error) return fail(500, { error: error.message })
+    return { success: true }
+  },
+
+  reorderDiscountTiers: async ({ request, locals }) => {
+    const { session } = await locals.safeGetSession()
+    if (!session) return fail(401, { error: '인증 필요' })
+    const cmsRole = await getCmsRoleForAction(locals)
+    if (!hasSettingsAccess(cmsRole ?? '')) return fail(403, { error: '권한 없음' })
+    const data = await request.formData()
+    const raw = data.get('ids')
+    if (!raw) return fail(400, { error: 'ids required' })
+    const ids = JSON.parse(raw as string) as string[]
+    const { error } = await untypedRpc(locals.supabase, 'reorder_delivery_fee_discount_tiers', { p_ids: ids })
     if (error) return fail(500, { error: error.message })
     return { success: true }
   },
