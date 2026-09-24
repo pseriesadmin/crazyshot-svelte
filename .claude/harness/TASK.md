@@ -228,24 +228,24 @@ C안 결합상품마다 0원짜리 예약 행 생성 — 기존 배정 로직 �
 날짜 기준: 메인상품 기준(휴무일 연장 포함 effective 기간)으로 통일 추천(Q-A).
 ```
 
-- [ ] **P2-0 롤백 마이그레이션 초안 + 현행 함수 정의 드리프트 확인** | TDD 준비 | 15분
-- [ ] **P2-1 RED: 재고 연동 시나리오 테스트** | TDD | 15분×2
+- [~] **P2-0 롤백 마이그레이션 초안 + 현행 함수 정의 드리프트 확인** | TDD 준비 | 15분 — 롤백 초안 완료(#547 하단 주석). ⚠️ Stage 라이브 pg_get_functiondef 대조는 TDD Worker에 SQL 실행 도구(MCP)가 없어 미수행 — 메인 세션이 실행 필요
+- [x] **P2-1 RED: 재고 연동 시나리오 테스트** | TDD | 15분×2 — bundleInventoryHold.test.ts 16건 중 14 FAIL·2 PASS(EC-4 비겹침·옵션 무회귀는 원래 통과 대상) 확인
       파일: 신규 `src/__tests__/services/bundleInventoryHold.test.ts`(Stage 라이브)
       EC-1 패키지 hold 시 결합상품 실물 각 1개 배정 / EC-2 결합상품 1종 재고 0 → 패키지 hold 실패,
       메인 실물도 점유 안 됨 / EC-3 결합상품 단독 예약이 패키지 점유 기간과 겹치면 다른 실물 배정·없으면 실패 /
       EC-4 기간 안 겹치면 정상 / EC-5 패키지 취소·만료 → 결합 실물 즉시 가용 / EC-6 draft→hold 승격 경로 동일 /
       EC-7 동시 요청 2건이 마지막 결합 실물 경합 → 1건만 성공
-- [ ] **P2-2 GREEN: 배정 기록표 + hold 2경로 재정의** | TDD | 15분×3
+- [~] **P2-2 GREEN: 배정 기록표 + hold 2경로 재정의** | TDD | 15분×3 — 20260924050000_547_bundle_inventory_hold.sql 작성 완료, Stage 미적용(GREEN 미확인)
       파일: 신규 마이그레이션(#54x) — 기록표(RLS 활성·정책 없음) + create_hold_reservation·
         promote_draft_reservation CREATE OR REPLACE(시그니처 무변경, 501 본문 기반)
-- [ ] **P2-3 GREEN: 가용재고 표시 반영** | TDD | 15분×2
+- [~] **P2-3 GREEN: 가용재고 표시 반영** | TDD | 15분×2 — #547에 포함, Stage 미적용
       get_available_stock_counts에 결합 점유 반영 + 패키지 가용 = min(패키지, 각 결합상품)
-- [ ] **P2-4 상품상세·장바구니 수량 상한 반영** | GSD | 30분
+- [x] **P2-4 상품상세·장바구니 수량 상한 반영** | GSD | 30분 — 상품상세 stock 조회에 결합상품 id 포함 + 구성품 부족 안내 문구 구분(RPC 실패 메시지는 그대로 토스트). 장바구니는 RPC가 min을 반환해 별도 수정 없음
       파일: `products/[id]/+page.server.ts`·`+page.svelte`, `cart/+page.server.ts`(가용재고 조회 대상에 결합상품 포함)
       재고 부족 문구: "구성품 재고가 부족해 예약할 수 없습니다."(Q-B 확정 시)
-- [ ] **P2-5 (Q-D 결과에 따라) 옵션 수량 가드와 결합 점유 교차 반영 여부** | TDD | 15분
-- [ ] **P2-6 계약서 결합 줄을 예약 시점 배정 기록 기준으로 전환(+품번 표기 Q-I)** | TDD | 15분×2
-- [ ] **P2-7 REFACTOR + Stage 적용·TDD GREEN → Production 적용 → 드리프트 실측 대조 + sp3-qa-agent**
+- [x] **P2-5 옵션 수량 가드 무변경 확인** | TDD | 15분 — set_reservation_options 무변경, 회귀 케이스 bundleInventoryHold.test.ts에 포함(Stage GREEN 확인은 #547 적용 후)
+- [x] **P2-6 계약서 결합 줄을 예약 시점 배정 기록 기준으로 전환(+품번 표기 Q-I)** | TDD | 15분×2 — contractLineItems.ts(BundleLink.product_code, 실물 단위 dedupe) + contract-data resolveAssignedBundles(없으면 resolveBundlesMap 폴백). contractDataLineItems 43건 통과. 대여정보 탭 결합상품 섹션(RentalDetailPanel + GET /api/cms/reservations/[id]/bundles) 추가(Q-H)
+- [ ] **P2-7 (Stage 적용·GREEN·권한 실측 대기 — 메인 세션 실행 필요) REFACTOR + Stage 적용·TDD GREEN → Production 적용 → 드리프트 실측 대조 + sp3-qa-agent**
       GATE C: [ ] 이중예약 불가(EC-3·EC-7) [ ] 종결 상태 자동 해제(EC-5) [ ] draft는 점유 안 함
               [ ] 요금·결제 금액 무변경 [ ] 옵션상품 동작 무회귀 [ ] 코드 배포와 DB 적용 둘 다 확인
       지침: rental-lifecycle.md 결합상품 절 확정, products.md §5 "예약 가능 조건"에 결합 점유 추가,
