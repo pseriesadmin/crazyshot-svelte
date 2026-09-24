@@ -7,7 +7,7 @@ import type { ContractSubstitutionData } from '$lib/types/contract-module'
 import { getCmsRoleForAction } from '$lib/server/getCmsRoleForAction'
 import { hasSettingsAccess } from '$lib/utils/cmsPermissions'
 import { buildLineItems, formatComponentsText } from '$lib/utils/contractLineItems'
-import type { ReservationForLineItems } from '$lib/utils/contractLineItems'
+import type { ReservationForLineItems, BundleLink } from '$lib/utils/contractLineItems'
 import { calcRentalMinutes, calcRentalPeriodParts } from '$lib/utils/cartRentalFee'
 
 // cart/+page.svelte DUR_TYPES · ProductDetailPanel.svelte "24시간(1일)" 표기 관례와 동일
@@ -123,6 +123,66 @@ export const GET: RequestHandler = async ({ params, locals }) => {
         r.parent_product_id ? (parentComponents[r.parent_product_id] ?? null) : (r.components ?? null),
       ])
     )
+  }
+
+  // 결합상품(Phase 1, 2026-09-24) — 결합 구성은 부모 상품에만 저장되는데(products.md §2-14)
+  // 예약의 product_id는 항상 자식(재고단위) id라, resolveComponentsMap과 같은 원리로 부모 id로
+  // 해석한 뒤 product_bundle_links를 단일 쿼리로 조회한다(N+1 금지). 반환 키는 입력 rows의 id.
+  async function resolveBundlesMap(
+    rows: { id: string; parent_product_id: string | null }[],
+  ): Promise<Record<string, BundleLink[]>> {
+    const ownerOf = (r: { id: string; parent_product_id: string | null }) => r.parent_product_id ?? r.id
+    const ownerIds = [...new Set(rows.map(ownerOf))]
+    const byOwner: Record<string, BundleLink[]> = {}
+    if (ownerIds.length > 0) {
+      const { data, error: bundleErr } = await admin
+        .from('product_bundle_links')
+        .select('product_id, display_order, bundle:products!product_bundle_links_bundle_product_id_fkey(id, name, components, deleted_at)')
+        .in('product_id', ownerIds)
+        .is('deleted_at', null)
+        .order('display_order', { ascending: true })
+      if (bundleErr) {
+        return byOwner
+      }
+      for (const row of data ?? []) {
+        const b = Array.isArray(row.bundle) ? row.bundle[0] : row.bundle
+        if (!b || b.deleted_at) continue
+        const owner = row.product_id as string
+        ;(byOwner[owner] ??= []).push({
+          bundle_product_id: b.id as string,
+          bundle_name: b.name as string,
+          components: b.components,
+        })
+      }
+    }
+    return Object.fromEntries(rows.map(r => [r.id, byOwner[ownerOf(r)] ?? []]))
+  }
+
+  // 예약 시점 배정 기록(reservation_bundle_assets, Phase 2 P2-6) — 예약별로 실제 배정된 결합
+  // 실물의 품번을 결합 줄 상품코드 칸에 표시한다. 배정 기록이 없는 레거시 예약은 이 맵에 키가
+  // 없어 호출부가 resolveBundlesMap(현재 결합 구성, 이름만)으로 폴백한다. 조회 실패도 같은
+  // 폴백으로 흡수한다(계약서 미리보기를 막지 않음).
+  async function resolveAssignedBundles(reservationIds: number[]): Promise<Record<number, BundleLink[]>> {
+    const byRes: Record<number, BundleLink[]> = {}
+    if (reservationIds.length === 0) return byRes
+    const { data, error: assetErr } = await admin
+      .from('reservation_bundle_assets')
+      .select('id, reservation_id, asset:products!reservation_bundle_assets_asset_product_id_fkey(product_code), bundle:products!reservation_bundle_assets_bundle_product_id_fkey(id, name, components)')
+      .in('reservation_id', reservationIds)
+      .order('id', { ascending: true })
+    if (assetErr) return byRes
+    for (const row of data ?? []) {
+      const b = Array.isArray(row.bundle) ? row.bundle[0] : row.bundle
+      const a = Array.isArray(row.asset) ? row.asset[0] : row.asset
+      if (!b) continue
+      ;(byRes[row.reservation_id as number] ??= []).push({
+        bundle_product_id: b.id as string,
+        bundle_name: b.name as string,
+        components: b.components,
+        product_code: (a?.product_code as string | null | undefined) ?? null,
+      })
+    }
+    return byRes
   }
 
   // ── 1. 기본 예약 정보 조회 (16개 스칼라 필드의 기준 reservation) ────────────
@@ -323,6 +383,16 @@ export const GET: RequestHandler = async ({ params, locals }) => {
         optionsByResId[rid].push(opt)
       }
 
+      // 결합상품 일괄 조회 — 자식 id → 부모 id 해석 후 단일 쿼리(resolveBundlesMap)
+      const bundlesByProductId = await resolveBundlesMap(
+        (productRows ?? []).map(p => ({
+          id: p.id as string,
+          parent_product_id: p.parent_product_id as string | null,
+        })),
+      )
+
+      const assignedBundlesByResId = await resolveAssignedBundles(siblingIds)
+
       // ReservationForLineItems 배열 구성
       lineItemReservations = (siblingRows ?? []).map(row => {
         const pid = row.product_id as string
@@ -339,7 +409,7 @@ export const GET: RequestHandler = async ({ params, locals }) => {
             ? (optionComponentsMap[o.option_product_id as string] ?? null)
             : null,
         }))
-        return { mainProduct: { ...prod, unit_price: unitPrice }, options: opts }
+        return { mainProduct: { ...prod, unit_price: unitPrice }, options: opts, bundles: assignedBundlesByResId[row.id as number] ?? bundlesByProductId[pid] ?? [] }
       })
     }
   } else {
@@ -373,6 +443,16 @@ export const GET: RequestHandler = async ({ params, locals }) => {
       })),
     )
 
+    // 결합상품 조회 — 단독 예약: 자식 id → 부모 id 해석(resolveBundlesMap)
+    const soloPid = res.product_id as string | null
+    const soloAssigned = (await resolveAssignedBundles([reservationId]))[reservationId]
+    const soloBundleLinks: BundleLink[] = soloAssigned ?? (soloPid
+      ? (await resolveBundlesMap([{
+          id: soloPid,
+          parent_product_id: (productRes.data?.parent_product_id as string | null) ?? null,
+        }]))[soloPid] ?? []
+      : [])
+
     lineItemReservations = [
       {
         mainProduct: {
@@ -392,6 +472,7 @@ export const GET: RequestHandler = async ({ params, locals }) => {
             ? (soloComponentsMap[o.option_product_id as string] ?? null)
             : null,
         })),
+        bundles: soloBundleLinks,
       },
     ]
   }

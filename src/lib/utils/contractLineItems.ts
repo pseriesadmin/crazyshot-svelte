@@ -14,9 +14,13 @@
  * 목적: 한 주문(order)에 묶인 모든 reservation의 메인상품(동일상품 그룹화+건수 합산) +
  * 옵션상품(reservation_options)을 평탄화(flatten)한 ContractLineItem[] 배열을 생성한다.
  *
- * 행 구성 순서 (Q1=C안 확정 + 위 그룹화 반영):
- *   [메인상품그룹A(수량=A건수), A그룹에 속한 모든 옵션들, 메인상품그룹B(수량=B건수), ...]
+ * 행 구성 순서 (Q1=C안 확정 + 위 그룹화 반영 + Phase 1 결합상품 삽입):
+ *   [메인상품그룹A(수량=A건수), A그룹 결합상품들(수량·금액='-'), A그룹 옵션들, 메인상품그룹B, ...]
  *   그룹 순서는 서로 다른 상품이 최초로 등장한 순서를 따른다.
+ *   결합상품 행 정책 (Phase 1, 2026-09-24):
+ *   - 수량: '-', 금액: '-'
+ *   - 비고: formatComponentsText(components)
+ *   - 상품코드: 예약 시점 배정 실물의 품번이 있을 때만 표시(Phase 2, Q-I). 배정 기록 없는 레거시 예약은 비움
  *
  * 금액 정책:
  *   - 메인상품 금액(2026-09-07 개정, Stephen 확정 — "그 상품의 실제 대여요금(price_rules)
@@ -71,6 +75,23 @@ export interface ReservationMainProduct {
 }
 
 /**
+ * 결합상품(bundle) 정보 — product_bundle_links 기반 (Phase 1, 2026-09-24).
+ * get_product_bundle_links RPC가 반환하는 행 구조의 계약서 전달용 슬라이스.
+ */
+export interface BundleLink {
+  bundle_product_id: string
+  bundle_name: string
+  /** products.components(구성품 JSONB) — 비고 필드 채움용 */
+  components?: unknown
+  /**
+   * 예약 시점에 배정된 실물(reservation_bundle_assets, Phase 2 P2-6)의 product_code.
+   * 있으면 계약서 상품코드 칸에 표시한다. 배정 기록이 없는 레거시 예약은 undefined/null —
+   * 현재 결합 구성(이름만)으로 폴백하며 상품코드 칸은 비운다.
+   */
+  product_code?: string | null
+}
+
+/**
  * 단일 reservation의 옵션상품 정보 (reservation_options 행 1개).
  */
 export interface ReservationOption {
@@ -89,6 +110,11 @@ export interface ReservationOption {
 export interface ReservationForLineItems {
   mainProduct: ReservationMainProduct
   options: ReservationOption[]
+  /**
+   * 이 메인상품에 연결된 결합상품 목록 (Phase 1, 2026-09-24).
+   * 없거나 빈 배열이면 결합상품 행이 생성되지 않는다(하위호환).
+   */
+  bundles?: BundleLink[]
 }
 
 /**
@@ -126,6 +152,13 @@ export function buildLineItems(reservations: ReservationForLineItems[]): Contrac
     options: ReservationOption[]
     /** 그룹의 첫 reservation에서 채움 — 같은 상품이므로 그룹 내 값이 동일 */
     components?: unknown
+    /**
+     * 결합상품 목록 — 그룹 내 모든 reservation의 bundles를 모으되 중복을 제거한다.
+     * 배정 실물 품번이 있으면 실물 단위(품번)로, 없으면(레거시) 결합상품 단위(id)로 1회만 나열한다
+     * (같은 패키지 2건이면 배정 실물이 서로 다르므로 각 품번이 나열되고, 레거시는 기존처럼 1회).
+     */
+    bundles: BundleLink[]
+    bundleKeys: Set<string>
   }
 
   // 메인상품을 (이름+품번) 식별키로 그룹화 — 같은 상품의 reservation은 건수·금액을 누적하고
@@ -137,7 +170,17 @@ export function buildLineItems(reservations: ReservationForLineItems[]): Contrac
     const key = `${r.mainProduct.name} ${r.mainProduct.product_code ?? ''}`
     let group = groups.get(key)
     if (!group) {
-      group = { name: r.mainProduct.name, product_code: r.mainProduct.product_code, count: 0, amountSum: 0, hasAnyPrice: false, options: [], components: r.mainProduct.components }
+      group = {
+        name: r.mainProduct.name,
+        product_code: r.mainProduct.product_code,
+        count: 0,
+        amountSum: 0,
+        hasAnyPrice: false,
+        options: [],
+        components: r.mainProduct.components,
+        bundles: [],
+        bundleKeys: new Set<string>(),
+      }
       groups.set(key, group)
       groupOrder.push(key)
     }
@@ -147,6 +190,12 @@ export function buildLineItems(reservations: ReservationForLineItems[]): Contrac
       group.hasAnyPrice = true
     }
     group.options.push(...r.options)
+    for (const b of r.bundles ?? []) {
+      const dedupeKey = b.product_code ? `code:${b.product_code}` : `id:${b.bundle_product_id}`
+      if (group.bundleKeys.has(dedupeKey)) continue
+      group.bundleKeys.add(dedupeKey)
+      group.bundles.push(b)
+    }
   }
 
   const items: ContractLineItem[] = []
@@ -165,6 +214,21 @@ export function buildLineItems(reservations: ReservationForLineItems[]): Contrac
     }
     items.push(mainItem)
 
+    // 결합상품 행 — 메인 뒤, 옵션 앞 (Phase 1, 2026-09-24)
+    // 수량·금액 = '-', 비고 = formatComponentsText(components),
+    // 상품코드 = 예약 시점 배정 실물 품번(있을 때만 — Phase 2 P2-6, Q-I)
+    for (const bundle of group.bundles) {
+      const bundleItem: ContractLineItem = {
+        상품명: bundle.bundle_name,
+        수량: '-',
+        금액: '-',
+        비고: formatComponentsText(bundle.components),
+        // 품번 없으면 '' 명시 — 키 부재 시 치환 로직이 최상위 {{상품코드}}(메인 품번)로 폴백함
+        상품코드: bundle.product_code ? bundle.product_code : '',
+      }
+      items.push(bundleItem)
+    }
+
     // 옵션상품 행 (reservation_options 순서 유지 — 옵션 자체는 병합하지 않음)
     for (const opt of group.options) {
       const optItem: ContractLineItem = {
@@ -172,9 +236,8 @@ export function buildLineItems(reservations: ReservationForLineItems[]): Contrac
         수량: String(opt.qty),
         금액: formatKrw(opt.unit_price * opt.qty),
         비고: formatComponentsText(opt.components),
-      }
-      if (opt.product_code) {
-        optItem.상품코드 = opt.product_code
+        // 품번 없으면 '' 명시 — 메인 품번 폴백 방지(결합상품 행과 동일)
+        상품코드: opt.product_code ? opt.product_code : '',
       }
       items.push(optItem)
     }

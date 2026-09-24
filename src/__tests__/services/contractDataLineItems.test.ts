@@ -26,6 +26,7 @@
 
 import { describe, it, expect } from 'vitest'
 import { buildLineItems } from '$lib/utils/contractLineItems'
+import { substituteHtmlDocument } from '$lib/utils/contract-substitution'
 import type { ContractSubstitutionData, ContractLineItem } from '$lib/types/contract-module'
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -356,14 +357,16 @@ describe('buildLineItems — product_code null 처리', () => {
 // 9. 옵션상품 product_code null → 상품코드 필드 없음/undefined
 // ─────────────────────────────────────────────────────────────────────────────
 describe('buildLineItems — 옵션상품 product_code null 처리', () => {
-  it('옵션 product_code가 null이면 상품코드 필드가 없다', () => {
+  // 2026-09-24 갱신: 키 부재(undefined) → 빈 문자열 명시. 키가 없으면 치환 로직이 최상위
+  // {{상품코드}}(메인 품번)로 폴백해 옵션 행에 메인 품번이 잘못 찍히는 결함이 있었다.
+  it('옵션 product_code가 null이면 상품코드는 빈 문자열이다(메인 품번 폴백 방지)', () => {
     const result = buildLineItems([
       makeReservation(
         { name: '소니 FX3', product_code: 'CSLED001' },
         [{ option_name: '메모리카드', qty: 1, unit_price: 5000, product_code: null }]
       )
     ])
-    expect(result[1].상품코드).toBeUndefined()
+    expect(result[1].상품코드).toBe('')
   })
 
   it('옵션 product_code가 있으면 상품코드 필드가 채워진다', () => {
@@ -474,5 +477,247 @@ describe('buildLineItems — 비고(구성품) 반영', () => {
     expect(result).toHaveLength(1)
     expect(result[0].수량).toBe('2')
     expect(result[0].비고).toBe('배터리: 2개')
+  })
+})
+
+// ─────────────────────────────────────────────────────────────────────────────
+// P1-8 결합상품(bundle) 행 삽입 — TDD RED→GREEN→REFACTOR (2026-09-24 Phase 1)
+//
+// 행 구성 순서: 메인상품 → 결합상품 행들 → 옵션상품 행들
+// bundle 행 정책:
+//   - 수량: '-'
+//   - 금액: '-'
+//   - 비고: formatComponentsText(components)
+//   - 상품코드: bundle_product_id를 표시하지 않음(Phase 1 = name only, products.md §2-14)
+// ─────────────────────────────────────────────────────────────────────────────
+
+interface BundleProduct {
+  bundle_product_id: string
+  bundle_name: string
+  components?: unknown
+  product_code?: string | null
+}
+
+function makeReservationWithBundles(
+  mainProduct: MainProduct,
+  bundles: BundleProduct[] = [],
+  options: OptionProduct[] = []
+) {
+  return { mainProduct, bundles, options }
+}
+
+describe('buildLineItems — 결합상품(bundle) 행 삽입 (Phase 1, 2026-09-24)', () => {
+  it('[RED→GREEN] 결합상품이 없으면 기존 동작과 동일하다', () => {
+    const result = buildLineItems([
+      makeReservationWithBundles({ name: '소니 FX3', product_code: 'CSLED001' }, [], [])
+    ])
+    expect(result).toHaveLength(1)
+    expect(result[0].상품명).toBe('소니 FX3')
+  })
+
+  it('[RED→GREEN] 결합상품 1개 — 메인 뒤, 옵션 앞에 삽입된다', () => {
+    const result = buildLineItems([
+      makeReservationWithBundles(
+        { name: '소니 FX3', product_code: 'CSLED001' },
+        [{ bundle_product_id: 'uuid-b1', bundle_name: '50mm 렌즈' }],
+        [{ option_name: '메모리카드', qty: 1, unit_price: 5000, product_code: null }]
+      )
+    ])
+    // 순서: [소니FX3(메인), 50mm 렌즈(결합), 메모리카드(옵션)]
+    expect(result).toHaveLength(3)
+    expect(result[0].상품명).toBe('소니 FX3')
+    expect(result[1].상품명).toBe('50mm 렌즈')
+    expect(result[2].상품명).toBe('메모리카드')
+  })
+
+  it('[RED→GREEN] 결합상품 행의 수량은 "-"이다', () => {
+    const result = buildLineItems([
+      makeReservationWithBundles(
+        { name: '소니 FX3', product_code: 'CSLED001' },
+        [{ bundle_product_id: 'uuid-b1', bundle_name: '50mm 렌즈' }],
+      )
+    ])
+    expect(result[1].수량).toBe('-')
+  })
+
+  it('[RED→GREEN] 결합상품 행의 금액은 "-"이다', () => {
+    const result = buildLineItems([
+      makeReservationWithBundles(
+        { name: '소니 FX3', product_code: 'CSLED001' },
+        [{ bundle_product_id: 'uuid-b1', bundle_name: '50mm 렌즈' }],
+      )
+    ])
+    expect(result[1].금액).toBe('-')
+  })
+
+  // 2026-09-24 갱신: undefined → '' (메인 품번 폴백 방지)
+  it('[RED→GREEN] 결합상품 행에 상품코드는 표시하지 않는다 (Phase 1 = name only, 빈 문자열)', () => {
+    const result = buildLineItems([
+      makeReservationWithBundles(
+        { name: '소니 FX3', product_code: 'CSLED001' },
+        [{ bundle_product_id: 'uuid-b1', bundle_name: '50mm 렌즈' }],
+      )
+    ])
+    expect(result[1].상품코드).toBe('')
+  })
+
+  it('[RED→GREEN] 결합상품 행의 비고 = formatComponentsText(components)', () => {
+    const result = buildLineItems([
+      makeReservationWithBundles(
+        { name: '소니 FX3', product_code: 'CSLED001' },
+        [{ bundle_product_id: 'uuid-b1', bundle_name: '50mm 렌즈', components: { 필터: '77mm' } }],
+      )
+    ])
+    expect(result[1].비고).toBe('필터: 77mm')
+  })
+
+  it('[RED→GREEN] 결합상품 여러 개 — 모두 메인 뒤에 순서대로, 그 다음에 옵션', () => {
+    const result = buildLineItems([
+      makeReservationWithBundles(
+        { name: '소니 FX3', product_code: 'CSLED001' },
+        [
+          { bundle_product_id: 'uuid-b1', bundle_name: '50mm 렌즈' },
+          { bundle_product_id: 'uuid-b2', bundle_name: '85mm 렌즈' },
+        ],
+        [{ option_name: '메모리카드', qty: 2, unit_price: 5000, product_code: null }]
+      )
+    ])
+    // [소니FX3, 50mm렌즈, 85mm렌즈, 메모리카드]
+    expect(result).toHaveLength(4)
+    expect(result[0].상품명).toBe('소니 FX3')
+    expect(result[1].상품명).toBe('50mm 렌즈')
+    expect(result[2].상품명).toBe('85mm 렌즈')
+    expect(result[3].상품명).toBe('메모리카드')
+  })
+
+  it('[RED→GREEN] 동일 메인상품 그룹화 시 — 결합상품은 그룹의 첫 reservation 기준만 사용 (Phase 1, 단순 정책)', () => {
+    // 같은 메인 2건 예약 모두 동일 결합상품을 가지고 있으면 첫 번째 것만 사용
+    const result = buildLineItems([
+      makeReservationWithBundles(
+        { name: '소니 FX3', product_code: 'CSLED001' },
+        [{ bundle_product_id: 'uuid-b1', bundle_name: '50mm 렌즈' }],
+      ),
+      makeReservationWithBundles(
+        { name: '소니 FX3', product_code: 'CSLED001' },
+        [{ bundle_product_id: 'uuid-b1', bundle_name: '50mm 렌즈' }],
+      ),
+    ])
+    // [소니FX3(수량2), 50mm 렌즈]
+    expect(result).toHaveLength(2)
+    expect(result[0].수량).toBe('2')
+    expect(result[1].상품명).toBe('50mm 렌즈')
+    expect(result[1].수량).toBe('-')
+  })
+
+  it('[RED→GREEN] bundles 필드가 없는 기존 reservation 구조도 하위호환된다', () => {
+    // bundles 필드 없이 makeReservation으로 만든 구조도 buildLineItems에 통과됨
+    const result = buildLineItems([
+      makeReservation({ name: '소니 FX3', product_code: 'CSLED001' })
+    ])
+    expect(result).toHaveLength(1)
+    expect(result[0].상품명).toBe('소니 FX3')
+  })
+})
+
+// ─────────────────────────────────────────────────────────────────────────────
+// P2-6 결합상품 배정 실물 품번 표기 (Phase 2, 2026-09-24, Q-I)
+//   - 배정 기록이 있으면 결합 줄 상품코드 = 배정된 실물의 품번
+//   - 같은 패키지 2건 → 배정 실물이 서로 달라 각 품번이 각각 나열된다
+//   - 배정 기록이 없는 레거시(product_code 없음)는 기존처럼 이름만 · 그룹당 1회
+// ─────────────────────────────────────────────────────────────────────────────
+describe('buildLineItems — 결합상품 배정 실물 품번 표기 (Phase 2 P2-6)', () => {
+  it('배정 실물 품번이 있으면 결합 줄 상품코드 칸에 표시된다(수량·금액은 계속 "-")', () => {
+    const result = buildLineItems([
+      makeReservationWithBundles(
+        { name: '패키지', product_code: 'CSPKG001' },
+        [{ bundle_product_id: 'uuid-b1', bundle_name: '50mm 렌즈', product_code: 'CSLNS0007' }],
+      ),
+    ])
+    expect(result).toHaveLength(2)
+    expect(result[1].상품명).toBe('50mm 렌즈')
+    expect(result[1].상품코드).toBe('CSLNS0007')
+    expect(result[1].수량).toBe('-')
+    expect(result[1].금액).toBe('-')
+  })
+
+  it('같은 패키지 2건은 각 예약에 배정된 서로 다른 실물 품번이 모두 나열된다', () => {
+    const result = buildLineItems([
+      makeReservationWithBundles(
+        { name: '패키지', product_code: 'CSPKG001' },
+        [{ bundle_product_id: 'uuid-b1', bundle_name: '50mm 렌즈', product_code: 'CSLNS0007' }],
+      ),
+      makeReservationWithBundles(
+        { name: '패키지', product_code: 'CSPKG001' },
+        [{ bundle_product_id: 'uuid-b1', bundle_name: '50mm 렌즈', product_code: 'CSLNS0008' }],
+      ),
+    ])
+    expect(result.map(r => r.상품코드)).toEqual(['CSPKG001', 'CSLNS0007', 'CSLNS0008'])
+    expect(result[0].수량).toBe('2')
+  })
+
+  it('배정 품번이 없는 레거시 결합 줄은 상품코드가 비고 그룹당 1회만 나열된다', () => {
+    const result = buildLineItems([
+      makeReservationWithBundles({ name: '패키지', product_code: 'CSPKG001' }, [{ bundle_product_id: 'uuid-b1', bundle_name: '50mm 렌즈' }]),
+      makeReservationWithBundles({ name: '패키지', product_code: 'CSPKG001' }, [{ bundle_product_id: 'uuid-b1', bundle_name: '50mm 렌즈' }]),
+    ])
+    expect(result).toHaveLength(2)
+    expect(result[1].상품코드).toBe('')
+  })
+})
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 결함 수정(2026-09-24): 품번 없는 결합/옵션 행에 메인상품 품번이 찍히는 문제
+// ─────────────────────────────────────────────────────────────────────────────
+describe('buildLineItems — 결합/옵션 행 품번 폴백 방지', () => {
+  it('품번 없는 결합상품 행의 상품코드는 빈 문자열이다(undefined 아님)', () => {
+    const result = buildLineItems([
+      makeReservationWithBundles(
+        { name: '패키지', product_code: 'CSMAIN001' },
+        [{ bundle_product_id: 'b1', bundle_name: '50mm 렌즈' }],
+      ),
+    ])
+    expect(result[1].상품코드).toBe('')
+  })
+
+  it('품번 없는 옵션상품 행의 상품코드는 빈 문자열이다(undefined 아님)', () => {
+    const result = buildLineItems([
+      makeReservation(
+        { name: '패키지', product_code: 'CSMAIN001' },
+        [{ option_name: '메모리카드', qty: 1, unit_price: 5000, product_code: null }],
+      ),
+    ])
+    expect(result[1].상품코드).toBe('')
+  })
+
+  it('배정 품번이 있는 결합/옵션 행은 그 품번을 그대로 유지한다(회귀 방지)', () => {
+    const result = buildLineItems([
+      makeReservationWithBundles(
+        { name: '패키지', product_code: 'CSMAIN001' },
+        [{ bundle_product_id: 'b1', bundle_name: '렌즈', product_code: 'CSLNS0007' }],
+        [{ option_name: 'ND필터', qty: 1, unit_price: 3000, product_code: 'CSFLT001' }],
+      ),
+    ])
+    expect(result[1].상품코드).toBe('CSLNS0007')
+    expect(result[2].상품코드).toBe('CSFLT001')
+  })
+
+  it('[통합] HTML 반복행 치환 시 품번 없는 결합/옵션 행 셀에 메인 품번이 새지 않는다', () => {
+    const items = buildLineItems([
+      makeReservationWithBundles(
+        { name: '패키지', product_code: 'CSMAIN001' },
+        [{ bundle_product_id: 'b1', bundle_name: '결합렌즈' }],
+        [{ option_name: '옵션카드', qty: 1, unit_price: 5000, product_code: null }],
+      ),
+    ])
+    const html =
+      '<table><!--REPEAT:상품목록--><tr><td>{{상품명}} {{상품코드}}</td></tr><!--/REPEAT--></table>'
+    const out = substituteHtmlDocument(html, { 상품코드: 'CSMAIN001', 상품목록: items })
+    const rows = out.match(/<tr>.*?<\/tr>/g) ?? []
+    expect(rows).toHaveLength(3)
+    expect(rows[0]).toContain('CSMAIN001')
+    expect(rows[1]).toContain('결합렌즈')
+    expect(rows[1]).not.toContain('CSMAIN001')
+    expect(rows[2]).toContain('옵션카드')
+    expect(rows[2]).not.toContain('CSMAIN001')
   })
 })
