@@ -12,7 +12,7 @@ export interface DeleteSafetyToastOptions {
   /** 2차 클릭 후 서버 액션 실패 시 문구 (기본: '삭제에 실패했습니다.') */
   errorMessage?: string
   /** 서버 액션 성공 시 추가 콜백(예: 패널 닫기·목록 갱신) */
-  onSuccess?: () => void
+  onSuccess?: () => void | Promise<void>
 }
 
 /**

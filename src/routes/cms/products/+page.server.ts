@@ -47,11 +47,60 @@ type ProductsMetadata = {
     group_name: string
     // 기준 코드품번 구조 미리보기 (예: "CSPTN0000000") — /cms/codes node-code-preview와 동일 방식
     code_preview: string
+    // 순번1(부모 순번)이 있는 2단 조합인지 — 없으면(1단) 같은 조합·같은 연월 부모의 코드품번이 항상 동일
+    has_parent_seq: boolean
+    // 1단 조합이면서 이번 연월로 이미 같은 부모 코드품번을 가진 상품이 존재해 복제 등록이 불가한지
+    duplicate_parent_code: boolean
   }>
+  // 카테고리 키(code_mapping_groups.default_category) → 그 카테고리에 속한 코드조합 목록 전체
+  // ("새 상품으로 복제 + 품번(분류코드) 자동 생성" 모달의 필수 선택 목록)
+  categoryComboItemsByCategory: Record<string, ProductsMetadata['partnerComboItems']>
   rentalPeriods: RentalOption[]
   rentalMethods: RentalOption[]
   pickupPoints: PickupPointOption[]
   shippingSettings: ShippingSettingsRow | null
+}
+
+// generate_product_code가 code_series.year_month에 기록하는 값과 동일한 규칙(DB NOW() = UTC)
+function currentYearMonthKey(dateOption: string): string {
+  const now = new Date()
+  const yy = String(now.getUTCFullYear()).slice(2)
+  const mm = String(now.getUTCMonth() + 1).padStart(2, '0')
+  const dd = String(now.getUTCDate()).padStart(2, '0')
+  return dateOption === 'none' ? 'nodate' : dateOption === 'ymd' ? `${yy}${mm}${dd}` : `${yy}${mm}`
+}
+
+// 새 상품 복제 시 Storage 이미지 파일을 새 상품 폴더로 실제 복사한다 — 원본과 같은 파일 주소를
+// 공유하면 한쪽 이미지 삭제(DELETE /api/cms/upload는 Storage 파일을 지움)가 다른 쪽을 깨뜨린다.
+// 외부(Cloudinary 등) 주소는 파일 삭제 대상이 아니므로 그대로 둔다. large 복사 실패분은 제외하고 개수만 반환.
+async function copyProductImages(
+  admin: SupabaseClient,
+  urls: string[],
+  newProductId: string,
+): Promise<{ urls: string[]; failed: number }> {
+  const bucket = 'product-images'
+  const prefix = `${getSupabaseUrl()}/storage/v1/object/public/${bucket}/`
+  const copied: string[] = []
+  let failed = 0
+  for (const url of urls) {
+    if (!url.startsWith(prefix)) {
+      copied.push(url)
+      continue
+    }
+    const srcLarge = url.slice(prefix.length)
+    const base = crypto.randomUUID()
+    const newLarge = `${newProductId}/large_${base}.webp`
+    const newThumb = `${newProductId}/thumb_${base}.webp`
+    const { error: largeErr } = await admin.storage.from(bucket).copy(srcLarge, newLarge)
+    if (largeErr) {
+      failed += 1
+      continue
+    }
+    // 썸네일은 없는 레거시 이미지도 있으므로 실패해도 무시
+    await admin.storage.from(bucket).copy(srcLarge.replace('/large_', '/thumb_'), newThumb)
+    copied.push(admin.storage.from(bucket).getPublicUrl(newLarge).data.publicUrl)
+  }
+  return { urls: copied, failed }
 }
 
 const METADATA_CACHE_TTL_MS = 60_000
@@ -125,6 +174,11 @@ async function loadProductsMetadata(admin: SupabaseClient): Promise<ProductsMeta
   const partnerGroupNameById: Record<string, string> = Object.fromEntries(
     (rawPartnerGroups ?? []).map((g) => [g.id, g.name])
   )
+  // 카테고리 키를 가진 모든 활성 그룹 — 복제 모달 "자동 생성"의 카테고리별 조합코드 목록용
+  const categoryGroupById = new Map(
+    (rawCategoryGroups ?? []).map((g) => [g.id as string, g as { id: string; name: string; default_category: string | null }])
+  )
+  const comboGroupIds = [...new Set([...partnerGroupIds, ...categoryGroupById.keys()])]
 
   // combo_row_id 기준으로 중복 제거한 flat 조합코드 목록 (rawPartnerGroups 의존 → 순차)
   // 기준 코드품번 미리보기(code_preview) 계산용으로 taxonomy_code_id/date_option/
@@ -139,11 +193,11 @@ async function loadProductsMetadata(admin: SupabaseClient): Promise<ProductsMeta
     max_sequence: number | null
     parent_max_sequence: number | null
   }
-  const { data: rawPartnerItems } = partnerGroupIds.length > 0
+  const { data: rawPartnerItems } = comboGroupIds.length > 0
     ? await admin
         .from('code_mapping_items')
         .select('group_id, combo_row_id, combo_name, combo_keywords, taxonomy_code_id, date_option, max_sequence, parent_max_sequence')
-        .in('group_id', partnerGroupIds)
+        .in('group_id', comboGroupIds)
         .order('sort_order', { ascending: true }) as { data: PartnerItemRow[] | null }
     : { data: [] as PartnerItemRow[] }
 
@@ -176,6 +230,30 @@ async function loadProductsMetadata(admin: SupabaseClient): Promise<ProductsMeta
     ...(globalFmtRow?.value && typeof globalFmtRow.value === 'object' ? globalFmtRow.value as Record<string, unknown> : {}),
   } as { prefix?: string; date_format?: string; seq_digits?: number }
 
+  // 1단(순번1 없음) 부모가 이미 쓰고 있는 기준 코드품번 키 — 복제 모달이 동일 중복 조합을 사전 차단하는 데 사용
+  const { data: singleTierParents } = await admin
+    .from('products')
+    .select('code_series')
+    .is('parent_product_id', null)
+    .is('deleted_at', null)
+    .not('code_series', 'is', null)
+  const usedSingleTierKeys = new Set<string>()
+  for (const row of singleTierParents ?? []) {
+    const cs = row.code_series as Record<string, unknown> | null
+    if (cs && !cs.parent_seq_digits) usedSingleTierKeys.add(`${cs.category_code}|${cs.year_month}`)
+  }
+
+  function buildComboFlags(items: Array<{ taxonomy_code_id: string; date_option: string; parent_max_sequence: number | null }>): { has_parent_seq: boolean; duplicate_parent_code: boolean } {
+    const codes = items
+      .map((i) => taxonomyCodeById.get(i.taxonomy_code_id))
+      .filter((c): c is NonNullable<typeof c> => Boolean(c))
+    const lead = items[0]
+    const hasParentSeq = lead?.parent_max_sequence != null
+    if (codes.length === 0 || hasParentSeq) return { has_parent_seq: hasParentSeq, duplicate_parent_code: false }
+    const key = `${buildComboCategoryCode(codes)}|${currentYearMonthKey(lead?.date_option ?? 'ym')}`
+    return { has_parent_seq: false, duplicate_parent_code: usedSingleTierKeys.has(key) }
+  }
+
   function buildPartnerCodePreview(items: Array<{ taxonomy_code_id: string; date_option: string; max_sequence: number | null; parent_max_sequence: number | null }>): string {
     const codes = items
       .map((i) => taxonomyCodeById.get(i.taxonomy_code_id))
@@ -203,12 +281,15 @@ async function loadProductsMetadata(admin: SupabaseClient): Promise<ProductsMeta
     return `${prefix}${catCode}${datePartStr}${seqPlaceholder}`
   }
 
+  const partnerGroupIdSet = new Set(partnerGroupIds)
   const seenComboRows = new Set<string>()
   const partnerComboItems: ProductsMetadata['partnerComboItems'] = []
+  const seenCategoryCombos = new Set<string>()
+  const categoryComboItemsByCategory: ProductsMetadata['categoryComboItemsByCategory'] = {}
   for (const item of rawPartnerItems ?? []) {
-    if (!seenComboRows.has(item.combo_row_id)) {
+    const comboItems = comboRowItemsMap.get(item.combo_row_id) ?? []
+    if (partnerGroupIdSet.has(item.group_id) && !seenComboRows.has(item.combo_row_id)) {
       seenComboRows.add(item.combo_row_id)
-      const comboItems = comboRowItemsMap.get(item.combo_row_id) ?? []
       partnerComboItems.push({
         combo_row_id: item.combo_row_id,
         combo_name: item.combo_name,
@@ -216,6 +297,21 @@ async function loadProductsMetadata(admin: SupabaseClient): Promise<ProductsMeta
         group_id: item.group_id,
         group_name: partnerGroupNameById[item.group_id] ?? '',
         code_preview: buildPartnerCodePreview(comboItems),
+        ...buildComboFlags(comboItems),
+      })
+    }
+    const categoryGroup = categoryGroupById.get(item.group_id)
+    const categoryKey = categoryGroup?.default_category
+    if (categoryGroup && categoryKey && !seenCategoryCombos.has(`${categoryKey}|${item.combo_row_id}`)) {
+      seenCategoryCombos.add(`${categoryKey}|${item.combo_row_id}`)
+      ;(categoryComboItemsByCategory[categoryKey] ??= []).push({
+        combo_row_id: item.combo_row_id,
+        combo_name: item.combo_name,
+        combo_keywords: item.combo_keywords ?? [],
+        group_id: item.group_id,
+        group_name: categoryGroup.name,
+        code_preview: buildPartnerCodePreview(comboItems),
+        ...buildComboFlags(comboItems),
       })
     }
   }
@@ -224,6 +320,7 @@ async function loadProductsMetadata(admin: SupabaseClient): Promise<ProductsMeta
     categories,
     categoryLabels,
     partnerComboItems,
+    categoryComboItemsByCategory,
     rentalPeriods: ((periodsRes as { data: RentalOption[] | null }).data ?? []),
     rentalMethods: ((methodsRes as { data: RentalOption[] | null }).data ?? []),
     pickupPoints: (pickupsRes.data ?? []) as PickupPointOption[],
@@ -261,6 +358,7 @@ export const load: PageServerLoad = async ({ locals, url }) => {
     categories,
     categoryLabels,
     partnerComboItems,
+    categoryComboItemsByCategory,
     rentalPeriods,
     rentalMethods,
     pickupPoints,
@@ -516,6 +614,7 @@ export const load: PageServerLoad = async ({ locals, url }) => {
     rootProduct,
     inventoryList,
     partnerComboItems,
+    categoryComboItemsByCategory,
     rentalPeriods,
     rentalMethods,
     pickupPoints,
@@ -1144,11 +1243,13 @@ export const actions: Actions = {
 
     const form = await request.formData()
     const sourceProductId = form.get('source_product_id') as string | null
-    const count = Math.min(20, Math.max(1, Number(form.get('count')) || 1))
-    const autoCode = form.get('auto_code') !== 'false'
+    const mode = (form.get('mode') as string | null) ?? 'new_product'
+    // 새 상품 복제는 항상 1개(동일 부모 코드품번 상품 중복 금지 정책), 재고 추가는 최대 50개
+    const count = mode === 'add_inventory'
+      ? Math.min(50, Math.max(1, Math.floor(Number(form.get('count'))) || 1))
+      : 1
     const partnerCode = form.get('partner_code') === 'true'
     const partnerComboRowId = (form.get('partner_combo_row_id') as string | null) ?? ''
-    const mode = (form.get('mode') as string | null) ?? 'new_product'
 
     if (!sourceProductId) return fail(400, { error: '원본 상품 ID가 누락됐습니다.' })
 
@@ -1156,7 +1257,7 @@ export const actions: Actions = {
 
     const { data: source, error: sourceError } = await admin
       .from('products')
-      .select('id, category, name, slug, brand, description, product_caption, image_urls, specifications, sale_price, sale_only, option_only, product_code, code_series, parent_product_id, content_blocks, keywords')
+      .select('id, category, name, slug, brand, description, product_caption, image_urls, specifications, sale_price, sale_only, option_only, product_code, code_series, parent_product_id, content_blocks, keywords, components, allowed_period_ids, allowed_method_ids, allowed_pickup_ids, shipping_round_trip, shipping_delivery, shipping_return')
       .eq('id', sourceProductId)
       .is('deleted_at', null)
       .single()
@@ -1178,6 +1279,30 @@ export const actions: Actions = {
       // source가 이미 재고 자식 상품인 경우 루트 ID 사용 (2단계 이상 중첩 방지)
       const srcParentId = (source as Record<string, unknown>).parent_product_id as string | null
       const rootProductId = srcParentId ?? sourceProductId
+
+      // 재고 순번 상한 사전 차단: 남은 순번보다 많이 등록하려 하면 하나도 만들지 않고 막는다
+      // (만든 뒤 상한에 걸리면 품번 없는 재고가 남는 결함 방지 + 번호 소모 방지)
+      const rootSeries = (srcParentId
+        ? (await admin.from('products').select('code_series').eq('id', rootProductId).maybeSingle()).data?.code_series
+        : codeSeries) as Record<string, unknown> | null | undefined
+      const maxSeq = rootSeries && rootSeries.max_sequence != null ? Number(rootSeries.max_sequence) : null
+      if (rootSeries && maxSeq !== null) {
+        const { data: seqRow } = rootSeries.parent_seq_digits
+          ? await admin.from('product_child_sequences_by_parent').select('next_seq').eq('parent_product_id', rootProductId).maybeSingle()
+          : await admin.from('product_code_sequences').select('next_seq')
+              .eq('category_code', rootSeries.category_code as string)
+              .eq('year_month', (rootSeries.year_month as string | null) ?? 'nodate')
+              .maybeSingle()
+        const nextSeq = Number((seqRow as { next_seq?: number } | null)?.next_seq ?? 1)
+        const remaining = maxSeq - (nextSeq - 1)
+        if (remaining < count) {
+          return fail(400, {
+            error: remaining <= 0
+              ? `재고 순번 상한(${maxSeq})에 도달해 재고를 추가할 수 없습니다. 코드설정에서 순번 상한을 늘려주세요.`
+              : `재고 순번 상한(${maxSeq})까지 ${remaining}개만 추가할 수 있어 ${count}개는 등록할 수 없습니다.`,
+          })
+        }
+      }
 
       const { data: sourcePriceRulesInv } = await admin
         .from('price_rules')
@@ -1235,7 +1360,9 @@ export const actions: Actions = {
         if (codeErr) {
           // 순번 상한(max_sequence_exceeded): 재시도 없이 즉시 실패 반환 — 이 부모의 자식을 더 생성할 수 없음
           if (codeErr.message?.includes('max_sequence_exceeded')) {
-            return fail(400, { error: `재고 순번 상한에 도달했습니다. 코드설정에서 해당 조합코드의 순번2(자식) 상한을 늘려주세요.` })
+            // 품번 없는 대여가능 재고가 남지 않도록 방금 만든 재고를 소프트삭제하고 차단
+            await admin.from('products').update({ is_active: false, deleted_at: new Date().toISOString() }).eq('id', newProduct.id)
+            return fail(400, { error: `재고 순번 상한에 도달해 재고를 추가할 수 없습니다. 코드설정에서 해당 조합코드의 순번2(자식) 상한을 늘려주세요.` })
           }
           // products.md §2-3: 모든 재고는 생성과 동시에 품번(QR 콘텐츠)을 반드시 가져야 함 —
           // 일시적 오류(락 경합 등) 대비 1회 재시도 후에도 실패하면 경고로 알림
@@ -1246,7 +1373,8 @@ export const actions: Actions = {
         }
         if (codeErr) {
           if (codeErr.message?.includes('max_sequence_exceeded')) {
-            return fail(400, { error: `재고 순번 상한에 도달했습니다. 코드설정에서 해당 조합코드의 순번2(자식) 상한을 늘려주세요.` })
+            await admin.from('products').update({ is_active: false, deleted_at: new Date().toISOString() }).eq('id', newProduct.id)
+            return fail(400, { error: `재고 순번 상한에 도달해 재고를 추가할 수 없습니다. 코드설정에서 해당 조합코드의 순번2(자식) 상한을 늘려주세요.` })
           }
           invWarnings.push(`${i}번째 재고 품번 발행 실패 (수동 확인 필요)`)
         }
@@ -1299,12 +1427,29 @@ export const actions: Actions = {
     let partnerMaxSequence: number | null = null
     let partnerParentMaxSequence: number | null = null
 
-    if (partnerCode && partnerComboRowId) {
+    // 새 상품 복제는 "새로운 부모상품 등록"이므로 원본과 동일한 코드품번 구조를 그대로 물려받는
+    // 복제(=동일 부모코드품번 상품의 중복 존재)를 허용하지 않는다 — 어느 모드든 코드조합 선택 필수.
+    if (!partnerComboRowId) {
+      return fail(400, { error: '새 상품 복제는 코드조합을 선택해야 등록할 수 있습니다. 코드조합을 선택해주세요.' })
+    }
+
+    {
       // 1. 선택 combo_row의 taxonomy_code_id + 공통 속성 수집
       const { data: comboItems } = await admin
         .from('code_mapping_items')
-        .select('taxonomy_code_id, date_option, max_sequence, parent_max_sequence')
+        .select('group_id, taxonomy_code_id, date_option, max_sequence, parent_max_sequence')
         .eq('combo_row_id', partnerComboRowId)
+
+      // "자동 생성" 모드는 원본 상품의 카테고리에 속한 조합코드만 허용(협력사 모드는 기존대로 무검증)
+      if (!partnerCode) {
+        const comboGroupId = (comboItems?.[0] as { group_id?: string } | undefined)?.group_id
+        const { data: comboGroup } = comboGroupId
+          ? await admin.from('code_mapping_groups').select('default_category').eq('id', comboGroupId).maybeSingle()
+          : { data: null }
+        if (!comboGroup || comboGroup.default_category !== source.category) {
+          return fail(400, { error: '선택한 조합코드가 이 상품의 카테고리에 속하지 않습니다.' })
+        }
+      }
 
       const tcIds = (comboItems ?? []).map((i: { taxonomy_code_id: string }) => i.taxonomy_code_id).filter(Boolean)
 
@@ -1348,12 +1493,41 @@ export const actions: Actions = {
       }
     }
 
+    // 존재하지 않는 조합코드(combo_row_id)면 위 블록이 통째로 건너뛰어지므로 여기서 최종 차단
+    if (!partnerCodeId || !partnerComboCategoryCode) {
+      return fail(400, { error: '선택한 조합코드를 찾을 수 없습니다. 코드설정에서 확인해주세요.' })
+    }
+
+    // 새 부모상품의 기준 코드품번이 기존 부모와 동일해지는 등록 차단(2026-09-24 정책):
+    // 순번1(부모 순번)이 없는 1단 조합은 같은 조합·같은 연월이면 부모 코드품번이 항상 동일해지므로
+    // 이미 그 코드의 부모가 있으면 등록 불가(새 상품 복제는 항상 1개씩 등록).
+    // 순번1이 있는 2단 조합은 부모마다 순번1이 원자적으로 +1되어 항상 서로 다르다.
+    if (partnerParentMaxSequence === null) {
+      const newYearMonth = currentYearMonthKey(partnerDateOption ?? 'ym')
+      const { data: sameCodeParents } = await admin
+        .from('products')
+        .select('id, code_series')
+        .is('parent_product_id', null)
+        .is('deleted_at', null)
+        .contains('code_series', { category_code: partnerComboCategoryCode, year_month: newYearMonth })
+      const hasSameParentCode = (sameCodeParents ?? []).some((row) => {
+        const cs = row.code_series as Record<string, unknown> | null
+        return cs && !cs.parent_seq_digits
+      })
+      if (hasSameParentCode) {
+        return fail(400, { error: '선택한 코드조합은 이미 동일한 부모 코드품번을 가진 상품이 있어 등록할 수 없습니다. 순번1이 있는 코드조합이나 다른 코드조합을 선택해주세요.' })
+      }
+    }
+
     const { data: sourcePriceRules } = await admin
       .from('price_rules')
       .select('duration_type, price, deposit_amount, late_fee_per_hour, damage_fee_percentage')
       .eq('product_id', sourceProductId)
       .eq('is_active', true)
       .is('deleted_at', null)
+
+    // 옵션상품 연결(옵션상품 탭)도 그대로 복제 — get 결과 행(option_product_id 등)을 upsert 입력으로 그대로 사용
+    const { data: sourceOptionLinks } = await admin.rpc('get_product_option_links', { p_product_id: sourceProductId })
 
     const createdIds: string[] = []
     const cloneWarnings: string[] = []
@@ -1383,10 +1557,17 @@ export const actions: Actions = {
           brand: source.brand,
           description: source.description,
           product_caption: source.product_caption,
-          image_urls: source.image_urls,
+          image_urls: [], // 이미지는 아래에서 Storage 파일을 새로 복사한 뒤 채운다(원본과 파일 공유 금지)
           specifications: source.specifications,
           content_blocks: (source as Record<string, unknown>).content_blocks ?? [],
           keywords: (source as Record<string, unknown>).keywords ?? [],
+          components: (source as Record<string, unknown>).components ?? null,
+          allowed_period_ids: (source as Record<string, unknown>).allowed_period_ids ?? [],
+          allowed_method_ids: (source as Record<string, unknown>).allowed_method_ids ?? null,
+          allowed_pickup_ids: (source as Record<string, unknown>).allowed_pickup_ids ?? null,
+          shipping_round_trip: (source as Record<string, unknown>).shipping_round_trip ?? true,
+          shipping_delivery: (source as Record<string, unknown>).shipping_delivery ?? true,
+          shipping_return: (source as Record<string, unknown>).shipping_return ?? true,
           is_active: false, // 신규 부모 복제 상품은 미노출 상태로 시작 (의도된 동작)
           sale_price: source.sale_price,
           sale_only: source.sale_only,
@@ -1399,12 +1580,7 @@ export const actions: Actions = {
         return fail(500, { error: `${i}번째 복제 등록에 실패했습니다.` })
       }
 
-      if (partnerCode) {
-        if (!partnerCodeId || !partnerComboCategoryCode) {
-          return fail(400, {
-            error: `이 카테고리에 선택한 조합코드 하위 분류코드가 등록되지 않았습니다. 코드설정에서 먼저 추가해주세요.`,
-          })
-        }
+      {
         // 버그 수정(2026-08-12): 3-param → 7-param (p_category_code_override = TIER_ORDER 합산 분류코드)
         // new/+page.server.ts(GATE E 통과)와 동일 호출 패턴
         const { error: codeErr } = await admin.rpc('generate_product_code', {
@@ -1430,53 +1606,6 @@ export const actions: Actions = {
             cloneWarnings.push(`${i}번째 복제 품번 발행 실패 (수동 확인 필요)`)
           }
         }
-      } else if (autoCode) {
-        // 버그 수정(2026-08-17): 원본 상품의 code_series(기준 코드품번 구조)를 이어받지 않고
-        // 매번 카테고리 자동 폴백(2-param)만 태워 원본과 무관한 category_code가 나오던 문제.
-        // 원본에 code_series가 있으면(대부분의 현행 상품) 그 category_code를 그대로 override해
-        // 같은 계열로 채번하고, parent_max_sequence가 있으면(2단 계층) 그 상한도 함께 넘겨
-        // 순번1(부모)이 원본 다음 순번으로 자동 증가하도록 한다(예: 원본 CSPHSAM0040000 →
-        // 복제본 CSPHSAM0050000). product_parent_sequences 원자적 채번(migration 222)이라
-        // 동시 복제 요청에도 안전. 원본에 code_series가 없는 레거시 상품은 기존 3-param 폴백 유지.
-        const sourceCodeSeries = (source as Record<string, unknown>).code_series as Record<string, unknown> | null
-        const sourceCategoryCode = sourceCodeSeries?.category_code as string | undefined
-        if (sourceCodeSeries && sourceCategoryCode) {
-          const yearMonth = sourceCodeSeries.year_month as string | undefined
-          const dateOption = !yearMonth || yearMonth === 'nodate'
-            ? 'none'
-            : /^\d{8}$/.test(yearMonth) ? 'ymd' : 'ym'
-          const { error: codeErr } = await admin.rpc('generate_product_code', {
-            p_product_id:              newProduct.id,
-            p_category:                source.category,
-            p_code_id:                 null,
-            p_date_option:             dateOption,
-            p_max_sequence:            (sourceCodeSeries.max_sequence as number | null) ?? null,
-            p_parent_max_sequence:     (sourceCodeSeries.parent_max_sequence as number | null) ?? null,
-            p_category_code_override:  sourceCategoryCode,
-          })
-          if (codeErr) {
-            // BND-BATCH-2와 동일 원리 — 순번 상한 도달은 하드 실패로 응답하지 않음
-            if (codeErr.message?.includes('parent_max_sequence_exceeded')) {
-              cloneWarnings.push(`${i}번째 복제 상품은 생성됐으나 순번1(부모) 상한 도달로 품번이 발급되지 않았습니다 — 코드설정에서 순번1 상한을 늘린 후 상품 상세에서 품번을 재시도해주세요.`)
-              sequenceCapReached = true
-            } else if (codeErr.message?.includes('max_sequence_exceeded')) {
-              cloneWarnings.push(`${i}번째 복제 상품은 생성됐으나 순번2(자식) 상한 도달로 품번이 발급되지 않았습니다 — 코드설정에서 순번2(max_sequence) 상한을 늘린 후 상품 상세에서 품번을 재시도해주세요.`)
-              sequenceCapReached = true
-            } else {
-              cloneWarnings.push(`${i}번째 복제 품번 발행 실패 (수동 확인 필요)`)
-            }
-          }
-        } else {
-          // 원본에 code_series가 없는 레거시 상품 — 기존 카테고리 자동 폴백 그대로 유지
-          // ⚠️ p_code_id를 명시적으로 null 전달 — 생략 시 PostgREST 오버로드 모호성(PGRST203) 발생
-          //    (2026-08-06 실제 curl 테스트로 확인된 라이브 버그, new/+page.server.ts와 동일 원인)
-          const { error: codeErr } = await admin.rpc('generate_product_code', {
-            p_product_id: newProduct.id,
-            p_category: source.category,
-            p_code_id: null,
-          })
-          if (codeErr) cloneWarnings.push(`${i}번째 복제 품번 발행 실패 (수동 확인 필요)`)
-        }
       }
 
       if (sourcePriceRules && sourcePriceRules.length > 0) {
@@ -1493,6 +1622,24 @@ export const actions: Actions = {
         if (priceErr) cloneWarnings.push(`${i}번째 복제 가격정책 복사 실패 (수동 확인 필요)`)
       }
 
+      const sourceImages = ((source as Record<string, unknown>).image_urls as string[] | null) ?? []
+      if (sourceImages.length > 0) {
+        const { urls: copiedUrls, failed: imgFailed } = await copyProductImages(admin, sourceImages, newProduct.id)
+        if (copiedUrls.length > 0) {
+          const { error: imgErr } = await admin.from('products').update({ image_urls: copiedUrls }).eq('id', newProduct.id)
+          if (imgErr) cloneWarnings.push('복제 상품 이미지 저장 실패 (이미지 탭에서 다시 등록해주세요)')
+        }
+        if (imgFailed > 0) cloneWarnings.push(`이미지 ${imgFailed}개 복사 실패 (이미지 탭에서 다시 등록해주세요)`)
+      }
+
+      if (Array.isArray(sourceOptionLinks) && sourceOptionLinks.length > 0) {
+        const { error: optErr } = await admin.rpc('upsert_product_option_links', {
+          p_product_id: newProduct.id,
+          p_option_links: sourceOptionLinks,
+        })
+        if (optErr) cloneWarnings.push('옵션상품 연결 복사 실패 (옵션상품 탭에서 다시 저장해주세요)')
+      }
+
       createdIds.push(newProduct.id)
 
       // BND-BATCH-2: 순번 상한 도달 시 이번(i번째) 항목까지는 정상 처리했으니, 남은 개수는
@@ -1505,6 +1652,7 @@ export const actions: Actions = {
       }
     }
 
+    metadataCache = null // 새 부모가 생겼으니 복제 모달의 동일 중복 판정 캐시를 즉시 무효화
     return {
       success: true,
       cloned: createdIds.length,

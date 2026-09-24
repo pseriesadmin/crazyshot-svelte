@@ -655,6 +655,7 @@
                   initialTab={data.initialTab}
                   inventoryList={activeDetail.inventoryList}
                   partnerComboItems={data.partnerComboItems}
+                  categoryComboMap={data.categoryComboItemsByCategory}
                   rentalPeriods={data.rentalPeriods}
                   rentalMethods={data.rentalMethods}
                   pickupPoints={data.pickupPoints}
@@ -744,6 +745,7 @@
                           initialTab={data.initialTab}
                           inventoryList={activeDetail.inventoryList}
                           partnerComboItems={data.partnerComboItems}
+                  categoryComboMap={data.categoryComboItemsByCategory}
                           rentalPeriods={data.rentalPeriods}
                           rentalMethods={data.rentalMethods}
                           pickupPoints={data.pickupPoints}
@@ -1164,6 +1166,12 @@
     align-self: flex-start;
     max-height: calc(100vh - 126px);
     overflow-y: auto;
+  }
+  /* sticky는 자체 stacking context를 만들어 내부 position:fixed 모달(z-index 200)이 패널 밖 형제인
+     검색 툴바(z-index 30) 뒤로 갇힌다 — 패널 안에 모달·라이트박스가 열려 있을 때만 툴바 위로 올린다
+     (상시 상향하면 검색 자동완성 목록이 패널 뒤로 가려짐) */
+  .detail-pane:has(:global([aria-modal="true"]), :global(.lightbox-backdrop)) {
+    z-index: 100;
   }
 
   /* 대표 상품정보 섹션 */

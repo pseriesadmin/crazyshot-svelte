@@ -121,7 +121,20 @@
       group_id: string
       group_name: string
       code_preview: string
+      has_parent_seq: boolean
+      duplicate_parent_code: boolean
     }>
+    // 카테고리 키(default_category) → 그 카테고리의 코드조합 전체 — "새 상품으로 복제 + 자동 생성"의 필수 선택 목록
+    categoryComboMap?: Record<string, Array<{
+      combo_row_id: string
+      combo_name: string | null
+      combo_keywords: string[]
+      group_id: string
+      group_name: string
+      code_preview: string
+      has_parent_seq: boolean
+      duplicate_parent_code: boolean
+    }>>
     rentalPeriods?: RentalOption[]
     rentalMethods?: RentalOption[]
     pickupPoints?: PickupPointOpt[]
@@ -133,7 +146,7 @@
     oninventorycreated?: (ids: string[], sourceProductId: string) => void
   }
 
-  let { product, priceRules, categories, categoryLabel, initialTab = null, inventoryList = [], partnerComboItems = [], rentalPeriods = [], rentalMethods = [], pickupPoints = [], shippingSettings = null, rentalStatusCounts = null, tabs: tabsFilter, onclose, oninventorycreated }: Props = $props()
+  let { product, priceRules, categories, categoryLabel, initialTab = null, inventoryList = [], partnerComboItems = [], categoryComboMap = {}, rentalPeriods = [], rentalMethods = [], pickupPoints = [], shippingSettings = null, rentalStatusCounts = null, tabs: tabsFilter, onclose, oninventorycreated }: Props = $props()
 
 
   // 카테고리 레이블 맵 (picker용)
@@ -1180,7 +1193,14 @@
   )
 
   // ─── 상품 삭제 (삭제 안전 토스트 — $lib/utils/deleteSafetyToast.svelte.ts, cms-uiux.md §0-10-B 정본) ──
-  const deleteSafety = createDeleteSafetyToast({ successMessage: '상품이 삭제됐습니다.', onSuccess: onclose })
+  // 삭제 성공 시 패널을 닫은 뒤 목록을 재조회해 삭제된 상품이 목록에서 즉시 사라지게 한다
+  const deleteSafety = createDeleteSafetyToast({
+    successMessage: '상품이 삭제됐습니다.',
+    onSuccess: async () => {
+      onclose()
+      await invalidateAll()
+    },
+  })
 
   // ─── 상품 복제 (빠른 재고 등록) ───────────────────────────────
   let showCloneModal = $state(false)
@@ -1189,7 +1209,10 @@
   let cloneAutoCode = $state(true)
   let clonePartnerCode = $state(false)
   let clonePartnerComboRowId = $state('')
+  let cloneAutoComboRowId = $state('')
   let isCloning = $state(false)
+  // 자동 생성 모드에서 선택 가능한 이 상품 카테고리의 코드조합 전체
+  const cloneCategoryCombos = $derived(categoryComboMap[product.category] ?? [])
 
   function openCloneModal(mode: 'new_product' | 'add_inventory' = 'new_product') {
     cloneMode = mode
@@ -1197,11 +1220,23 @@
     cloneAutoCode = mode === 'new_product'
     clonePartnerCode = false
     clonePartnerComboRowId = ''
+    cloneAutoComboRowId = ''
     showCloneModal = true
   }
 
   function closeCloneModal() {
     if (!isCloning) showCloneModal = false
+  }
+
+  // 실행 전 사전 차단: 코드조합 미선택 / 이미 동일한 부모 코드품번 상품 존재
+  const CLONE_BLOCK_MSG = '품번코드 미선택(동일 중복) 오류로 상품 등록할 수 없습니다.'
+  function cloneBlockedByCode(): boolean {
+    if (cloneMode !== 'new_product') return false
+    const rowId = cloneAutoCode ? cloneAutoComboRowId : clonePartnerComboRowId
+    if (!rowId) return true
+    const combo = (cloneAutoCode ? cloneCategoryCombos : partnerComboItems).find((c) => c.combo_row_id === rowId)
+    if (!combo) return true
+    return combo.duplicate_parent_code
   }
 
   function handleCloneProduct() {
@@ -1211,6 +1246,7 @@
     // closure) 이미 다른 상품으로 바뀌어 있을 수 있다 — 반드시 제출 "시작 시점"의 product.id를
     // 지금 이 지역 변수로 고정해 콜백에 넘긴다.
     const sourceProductId = product.id
+    const submittedMode = cloneMode
     return async ({ result }: { result: ActionResult }) => {
       isCloning = false
       if (result.type === 'success') {
@@ -1219,7 +1255,11 @@
         const warnings = data?.warnings ?? []
         showCloneModal = false
         await invalidateAll()  // 성공·실패 양쪽 모두 실제 생성분 목록 반영
-        csToast.success(`재고 ${cloned}개가 등록됐습니다.`)
+        csToast.success(
+          submittedMode === 'new_product'
+            ? '새로운 상품이 등록되었습니다.'
+            : `재고 ${cloned}개가 등록됐습니다.`
+        )
         // BND-BATCH-1: 개별 항목 품번/가격 복사 실패 경고 표시
         for (const warn of warnings) {
           csToast.warning(warn)
@@ -2493,13 +2533,15 @@
             aria-pressed={cloneMode === 'add_inventory'}
           >동일 상품 재고 추가</button>
         </div>
+        <div class="clone-info-group">
         <p class="clone-modal-desc">
           {#if cloneMode === 'add_inventory'}
             동일 상품의 재고를 추가 등록합니다.<br />
             부모 품번 기반의 고유 품번이 자동 발행됩니다.
           {:else}
-            동일 제품으로 재고 일괄 등록합니다.<br />
-            현재 상품의 모든 정보(이미지·가격·사양 포함)를 복제합니다.
+            현재 상품의 정보(기본정보·옵션상품·가격정책·대여정책·상품설명·구성품·이미지·사양)를 복제해
+            새 부모상품 1개를 등록합니다.<br />
+            장치정보·이력·재고는 복제되지 않습니다.
           {/if}
         </p>
         <div class="clone-source-box">
@@ -2518,19 +2560,24 @@
             {/if}
           </div>
         </div>
+        {#if cloneMode === 'add_inventory'}
         <label class="clone-field">
-          <span class="clone-field-label">등록 수량</span>
+          <span class="clone-field-label">등록 수량 (최대 50개)</span>
           <input
             class="f-input clone-count-input"
             type="number"
             min="1"
-            max="20"
+            max="50"
             bind:value={cloneCount}
+            oninput={() => { if (typeof cloneCount === 'number' && cloneCount > 50) cloneCount = 50 }}
             aria-label="등록 수량"
             disabled={isCloning}
           />
         </label>
+        {/if}
+        </div>
         {#if cloneMode === 'new_product'}
+        <div class="clone-code-group">
         <div class="clone-options-row">
           <button
             type="button"
@@ -2553,8 +2600,37 @@
             협력사 품번코드 선택 생성
           </button>
         </div>
+        {#if cloneAutoCode}
+          {#if cloneCategoryCombos.length === 0}
+            <p class="clone-combo-empty">이 카테고리에 등록된 코드조합이 없습니다.<br/>코드설정 &gt; 코드조합에서 이 카테고리의 조합을 먼저 추가해주세요.</p>
+          {:else}
+            <div class="clone-combo-list" role="listbox" aria-label="카테고리 코드조합 선택">
+              {#each cloneCategoryCombos as item (item.combo_row_id)}
+                <button
+                  type="button"
+                  class="clone-combo-row"
+                  class:clone-combo-row--on={cloneAutoComboRowId === item.combo_row_id}
+                  onclick={() => (cloneAutoComboRowId = item.combo_row_id)}
+                  disabled={isCloning}
+                  role="option"
+                  aria-selected={cloneAutoComboRowId === item.combo_row_id}
+                >
+                  <span class="ccr-group">{item.group_name}</span>
+                  <span class="ccr-name">{item.combo_name ?? '(이름 없음)'}</span>
+                  {#if item.combo_keywords && item.combo_keywords.length > 0}
+                    <span class="ccr-tags">
+                      {#each item.combo_keywords as kw}
+                        <span class="ccr-tag">{kw}</span>
+                      {/each}
+                    </span>
+                  {/if}
+                  <span class="ccr-code">{item.code_preview}</span>
+                </button>
+              {/each}
+            </div>
+          {/if}
         {/if}
-        {#if cloneMode === 'new_product' && clonePartnerCode}
+        {#if clonePartnerCode}
           {#if partnerComboItems.length === 0}
             <p class="clone-combo-empty">협력사 전용코드로 지정된 조합코드그룹이 없습니다.<br/>코드설정 &gt; 코드조합에서 그룹을 설정해주세요.</p>
           {:else}
@@ -2584,19 +2660,27 @@
             </div>
           {/if}
         {/if}
+        </div>
+        {/if}
       </div>
       <div class="clone-modal-actions clone-modal-actions--col">
         <form method="POST" action="?/cloneProduct" use:enhance={handleCloneProduct} style="width:100%">
           <input type="hidden" name="source_product_id" value={product.id} />
           <input type="hidden" name="mode" value={cloneMode} />
-          <input type="hidden" name="count" value={cloneCount} />
+          <input type="hidden" name="count" value={cloneMode === 'new_product' ? 1 : cloneCount} />
           <input type="hidden" name="auto_code" value={String(cloneAutoCode)} />
           <input type="hidden" name="partner_code" value={String(clonePartnerCode)} />
-          <input type="hidden" name="partner_combo_row_id" value={clonePartnerComboRowId} />
+          <input type="hidden" name="partner_combo_row_id" value={cloneAutoCode ? cloneAutoComboRowId : clonePartnerComboRowId} />
           <button
             type="submit"
             class="cta-btn cta-btn--wide"
-            disabled={isCloning || cloneCount < 1 || (clonePartnerCode && !clonePartnerComboRowId)}
+            disabled={isCloning || (cloneMode === 'add_inventory' && !(cloneCount >= 1))}
+            onclick={(e) => {
+              if (cloneBlockedByCode()) {
+                e.preventDefault()
+                csToast.warning(CLONE_BLOCK_MSG)
+              }
+            }}
           >
             {isCloning ? '등록 중...' : cloneMode === 'new_product' ? '복제 등록 실행' : '재고 등록 실행'}
           </button>
@@ -3768,10 +3852,17 @@
     margin: 0;
     line-height: 1.6;
   }
+  /* 설명·원본 상품·등록 수량을 하나의 그룹 카드로 묶음 — 면(fill) 위계: 그룹=회색, 내부 요소=흰색 */
+  .clone-info-group {
+    display: flex; flex-direction: column; gap: 12px;
+    padding: 16px;
+    background: var(--cs-surface-gray);
+    border-radius: var(--cms-radius-sm);
+  }
   .clone-source-box {
     display: flex; flex-direction: row; align-items: center; gap: 12px;
     padding: 12px 16px;
-    background: var(--cs-surface-gray);
+    background: var(--cs-white);
     border-radius: var(--cms-radius-sm);
   }
   .clone-source-thumb {
@@ -3810,6 +3901,7 @@
     flex-direction: column; align-items: stretch; gap: 8px;
   }
   .clone-count-input { width: 100px; }
+  .clone-info-group .clone-count-input { background: var(--cs-white); }
   /* ── 조합코드 목록 리스트 ── */
   .clone-combo-empty {
     margin: 0;
@@ -3895,6 +3987,13 @@
     padding: 2px 8px;
     border-radius: var(--radius-sm);
     white-space: nowrap;
+  }
+  /* 품번 생성 방식 토글 + 코드조합 목록을 하나의 그룹 카드로 묶음 (설명·원본·수량 그룹과 동일한 회색 면 위계) */
+  .clone-code-group {
+    display: flex; flex-direction: column; gap: 12px;
+    padding: 16px;
+    background: var(--cs-surface-gray);
+    border-radius: var(--cms-radius-sm);
   }
   .clone-options-row {
     display: flex;

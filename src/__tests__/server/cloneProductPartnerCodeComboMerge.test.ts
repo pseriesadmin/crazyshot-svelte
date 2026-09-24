@@ -72,7 +72,7 @@ function makeFlexChain(data: unknown) {
   const resolved = { data, error: null }
   const chain: Record<string, unknown> = {}
   for (const key of [
-    'select', 'in', 'order', 'limit', 'eq', 'is', 'not', 'neq',
+    'select', 'in', 'order', 'limit', 'eq', 'is', 'not', 'neq', 'contains',
     'insert', 'update', 'upsert', 'single', 'maybeSingle',
   ]) {
     // eslint-disable-next-line security/detect-object-injection -- key는 고정 리터럴 배열 원소, 사용자 입력 아님
@@ -87,7 +87,7 @@ function makeFlexChain(data: unknown) {
 // ── makeTableAwareAdmin: 테이블명 + 호출 순서 기반 스마트 mock ──────────────
 // 버그 수정(2026-08-17) 후 호출 시퀀스(6개 from 호출): products(1)=source lookup,
 //   code_mapping_items(1), product_category_codes(1)=allCodes 단일조회, price_rules(1),
-//   products(2)=slug체크, products(3)=INSERT — mainCode/subCode 조회 제거로 2단계 감소
+//   products(2)=동일 부모코드 존재 확인, products(3)=slug체크, products(4)=INSERT — mainCode/subCode 조회 제거로 2단계 감소
 interface ComboCode { id: string; code: string; depth: number; code_tier: string }
 
 function makeTableAwareAdmin(options: {
@@ -123,8 +123,9 @@ function makeTableAwareAdmin(options: {
 
     if (table === 'products') {
       if (n === 1) return makeFlexChain(FAKE_SOURCE)   // source lookup
-      if (n === 2) return makeFlexChain(null)           // slug check → existing=null → break
-      // n === 3: INSERT
+      if (n === 2) return makeFlexChain([])             // 동일 부모 코드품번 존재 확인(2026-09-24) → 없음
+      if (n === 3) return makeFlexChain(null)           // slug check → existing=null → break
+      // n === 4: INSERT
       return {
         insert: vi.fn().mockReturnValue({
           select: vi.fn().mockReturnValue({

@@ -145,62 +145,64 @@ function makeAddInventoryAdmin(config: AddInventoryStubConfig = {}) {
   return { from: fromFn, rpc: rpcFn, _insertFn: insertFn };
 }
 
-// ── new_product 스텁 팩토리 ──────────────────────────────────────────────────
+// ── new_product 스텁 팩토리 (테이블명 기준 — 코드조합 조회 체인 포함) ─────────
 interface NewProductStubConfig {
   generateProductCodeError?: boolean;
+  comboGroupCategory?: string | null; // 선택한 조합이 속한 그룹의 default_category
+  comboParentMax?: number | null; // 순번1(부모 순번) 상한 — null이면 1단 조합
+  dateOption?: string;
+  existingSameCodeParent?: boolean; // 같은 조합·같은 연월의 1단 부모가 이미 존재
 }
+
+function chain(result: unknown) {
+  const c: Record<string, unknown> = {};
+  for (const m of ['select', 'eq', 'is', 'in', 'order', 'limit', 'contains', 'not']) c[m] = () => c;
+  c.single = () => Promise.resolve(result);
+  c.maybeSingle = () => Promise.resolve(result);
+  c.then = (res: (v: unknown) => unknown, rej?: (e: unknown) => unknown) => Promise.resolve(result).then(res, rej);
+  return c;
+}
+
+const COMBO_ROW_ID = 'combo-row-1';
 
 function makeNewProductAdmin(config: NewProductStubConfig = {}) {
   const insertFn = vi.fn().mockImplementation(() => ({
     select: vi.fn().mockReturnValue({
-      single: vi.fn().mockResolvedValue({
-        data: { id: 'cloned-product-id' },
-        error: null,
-      }),
+      single: vi.fn().mockResolvedValue({ data: { id: 'cloned-product-id' }, error: null }),
     }),
   }));
 
-  const fromFn = vi.fn();
-
-  // Call 1: from('products') — source lookup
-  fromFn.mockReturnValueOnce({
-    select: vi.fn().mockReturnValue({
-      eq: vi.fn().mockReturnValue({
-        is: vi.fn().mockReturnValue({
-          single: vi.fn().mockResolvedValue({
-            data: { ...SOURCE_PRODUCT, product_code: null }, // new_product mode doesn't need product_code
-            error: null,
-          }),
-        }),
-      }),
-    }),
-  });
-
-  // Call 2: from('price_rules') — source price rules (returns empty → INSERT skipped)
-  fromFn.mockReturnValueOnce({
-    select: vi.fn().mockReturnValue({
-      eq: vi.fn().mockReturnValue({
-        eq: vi.fn().mockReturnValue({
-          is: vi.fn().mockResolvedValue({ data: [], error: null }),
-        }),
-      }),
-    }),
-  });
-
-  // Call 3: from('products') — slug uniqueness check (returns null = no conflict)
-  fromFn.mockReturnValueOnce({
-    select: vi.fn().mockReturnValue({
-      eq: vi.fn().mockReturnValue({
-        is: vi.fn().mockReturnValue({
-          maybeSingle: vi.fn().mockResolvedValue({ data: null, error: null }),
-        }),
-      }),
-    }),
-  });
-
-  // Call 4: from('products') — new product INSERT
-  fromFn.mockReturnValueOnce({
-    insert: insertFn,
+  let productsSelectCalls = 0;
+  const fromFn = vi.fn((table: string) => {
+    if (table === 'products') {
+      return {
+        // 첫 select = 원본 조회, 이후 select = slug 중복확인(충돌 없음)
+        // 1번째 select = 원본 조회, 2번째 = 동일 부모코드 존재 확인, 이후 = slug 중복확인(충돌 없음)
+        select: () => {
+          const n = productsSelectCalls++;
+          if (n === 0) return chain({ data: { ...SOURCE_PRODUCT, product_code: null }, error: null });
+          if (n === 1) {
+            return chain({
+              data: config.existingSameCodeParent ? [{ id: 'existing-parent', code_series: { category_code: 'NEW', year_month: 'nodate' } }] : [],
+              error: null,
+            });
+          }
+          return chain({ data: null, error: null });
+        },
+        insert: insertFn,
+      };
+    }
+    if (table === 'price_rules') return { select: () => chain({ data: [], error: null }), insert: vi.fn() };
+    if (table === 'code_mapping_items') {
+      return { select: () => chain({ data: [{ group_id: 'group-1', taxonomy_code_id: 'tc-1', date_option: config.dateOption ?? 'ymd', max_sequence: 9999, parent_max_sequence: config.comboParentMax ?? null }], error: null }) };
+    }
+    if (table === 'code_mapping_groups') {
+      return { select: () => chain({ data: { default_category: config.comboGroupCategory === undefined ? 'camera' : config.comboGroupCategory }, error: null }) };
+    }
+    if (table === 'product_category_codes') {
+      return { select: () => chain({ data: [{ id: 'tc-1', code: 'NEW', code_tier: null, depth: 0 }], error: null }) };
+    }
+    return { select: () => chain({ data: null, error: null }) };
   });
 
   const rpcFn = vi.fn((name: string) => {
@@ -287,11 +289,11 @@ describe('cloneProduct (new_product) — generate_product_code 에러 처리', (
         mode: 'new_product',
         auto_code: 'true',
         partner_code: 'false',
+        partner_combo_row_id: COMBO_ROW_ID,
       }),
       locals: makeLocals(),
     } as Parameters<typeof actions.cloneProduct>[0]);
 
-    // RED: 현재 코드는 에러를 무시하고 { success: true, ... } 만 반환
     const r = result as Record<string, unknown>;
     const hasErrorInfo = r?.status === 500 || r?.warnings || (r?.data as Record<string, unknown>)?.warnings;
     expect(hasErrorInfo).toBeTruthy();
@@ -299,93 +301,12 @@ describe('cloneProduct (new_product) — generate_product_code 에러 처리', (
 });
 
 // ════════════════════════════════════════════════════════════════════════════
-// 버그 수정(2026-08-17): new_product 모드 — 원본 code_series(기준 코드품번) 계승
+// 정책(2026-09-24): 새 상품 복제 = 새로운 부모상품 등록 → 원본과 동일한 코드품번 구조를
+// 그대로 물려받는 복제(동일 부모코드품번 상품 중복 존재)를 차단, 코드조합 선택 필수
 // ════════════════════════════════════════════════════════════════════════════
 
-describe('cloneProduct (new_product) — 원본 code_series 계승 채번', () => {
-  it('[GREEN] 원본에 2단 계층 code_series(parent_max_sequence)가 있으면 동일 category_code로 7-param 호출', async () => {
-    const insertFn = vi.fn().mockImplementation(() => ({
-      select: vi.fn().mockReturnValue({
-        single: vi.fn().mockResolvedValue({ data: { id: 'cloned-product-id' }, error: null }),
-      }),
-    }));
-    const fromFn = vi.fn();
-    // Call 1: source lookup — 2단 계층 code_series 포함(예: 원본 CSPHSAM0040000)
-    fromFn.mockReturnValueOnce({
-      select: vi.fn().mockReturnValue({
-        eq: vi.fn().mockReturnValue({
-          is: vi.fn().mockReturnValue({
-            single: vi.fn().mockResolvedValue({
-              data: {
-                ...SOURCE_PRODUCT,
-                product_code: null,
-                code_series: {
-                  category_code: 'PHSAM',
-                  year_month: 'nodate',
-                  prefix: 'CS',
-                  suffix: '',
-                  seq_digits: 4,
-                  max_sequence: 9999,
-                  parent_seq: 4,
-                  parent_seq_digits: 3,
-                  parent_max_sequence: 999,
-                },
-              },
-              error: null,
-            }),
-          }),
-        }),
-      }),
-    });
-    fromFn.mockReturnValueOnce({
-      select: vi.fn().mockReturnValue({
-        eq: vi.fn().mockReturnValue({
-          eq: vi.fn().mockReturnValue({ is: vi.fn().mockResolvedValue({ data: [], error: null }) }),
-        }),
-      }),
-    });
-    fromFn.mockReturnValueOnce({
-      select: vi.fn().mockReturnValue({
-        eq: vi.fn().mockReturnValue({
-          is: vi.fn().mockReturnValue({ maybeSingle: vi.fn().mockResolvedValue({ data: null, error: null }) }),
-        }),
-      }),
-    });
-    fromFn.mockReturnValueOnce({ insert: insertFn });
-
-    const rpcCalls: Array<{ name: string; params: Record<string, unknown> }> = [];
-    const rpcFn = vi.fn((name: string, params: Record<string, unknown>) => {
-      rpcCalls.push({ name, params });
-      return Promise.resolve({ data: null, error: null });
-    });
-
-    createClientMock.mockReturnValue({ from: fromFn, rpc: rpcFn });
-
-    const result = await actions.cloneProduct({
-      request: makeFormRequest({
-        source_product_id: 'source-product-id',
-        count: '1',
-        mode: 'new_product',
-        auto_code: 'true',
-        partner_code: 'false',
-      }),
-      locals: makeLocals(),
-    } as Parameters<typeof actions.cloneProduct>[0]);
-
-    expect((result as Record<string, unknown>)?.success).toBe(true);
-
-    const codeCall = rpcCalls.find((c) => c.name === 'generate_product_code');
-    expect(codeCall).toBeDefined();
-    expect(codeCall?.params).toMatchObject({
-      p_category_code_override: 'PHSAM',
-      p_parent_max_sequence: 999,
-      p_max_sequence: 9999,
-      p_date_option: 'none',
-      p_code_id: null,
-    });
-  });
-
-  it('[GREEN 회귀] 원본에 code_series가 없는 레거시 상품은 기존 3-param 폴백 그대로 유지', async () => {
+describe('cloneProduct (new_product) — 코드조합 선택 필수', () => {
+  it('[GREEN] 코드조합 미선택(자동 생성 모드) 시 400 차단 — 상품 INSERT·품번 발행 호출 없음', async () => {
     const admin = makeNewProductAdmin();
     createClientMock.mockReturnValue(admin);
 
@@ -400,9 +321,203 @@ describe('cloneProduct (new_product) — 원본 code_series 계승 채번', () =
       locals: makeLocals(),
     } as Parameters<typeof actions.cloneProduct>[0]);
 
+    expect((result as Record<string, unknown>)?.status).toBe(400);
+    expect(admin._insertFn).not.toHaveBeenCalled();
+    expect(admin.rpc).not.toHaveBeenCalledWith('generate_product_code', expect.anything());
+  });
+
+  it('[GREEN] 선택한 조합이 다른 카테고리 소속이면 400 차단(자동 생성 모드)', async () => {
+    const admin = makeNewProductAdmin({ comboGroupCategory: 'lens' });
+    createClientMock.mockReturnValue(admin);
+
+    const result = await actions.cloneProduct({
+      request: makeFormRequest({
+        source_product_id: 'source-product-id',
+        count: '1',
+        mode: 'new_product',
+        auto_code: 'true',
+        partner_code: 'false',
+        partner_combo_row_id: COMBO_ROW_ID,
+      }),
+      locals: makeLocals(),
+    } as Parameters<typeof actions.cloneProduct>[0]);
+
+    expect((result as Record<string, unknown>)?.status).toBe(400);
+    expect(admin._insertFn).not.toHaveBeenCalled();
+  });
+
+  it('[GREEN] 코드조합 선택 시 원본 code_series가 아니라 선택한 조합의 구조로 7-param 발행', async () => {
+    const admin = makeNewProductAdmin();
+    createClientMock.mockReturnValue(admin);
+
+    const result = await actions.cloneProduct({
+      request: makeFormRequest({
+        source_product_id: 'source-product-id',
+        count: '1',
+        mode: 'new_product',
+        auto_code: 'true',
+        partner_code: 'false',
+        partner_combo_row_id: COMBO_ROW_ID,
+      }),
+      locals: makeLocals(),
+    } as Parameters<typeof actions.cloneProduct>[0]);
+
     expect((result as Record<string, unknown>)?.success).toBe(true);
-    // makeNewProductAdmin의 rpcFn은 파라미터 형태와 무관하게 성공 응답 — 호출 자체가
-    // 3-param이든 7-param이든 에러 없이 완주하는지가 핵심(SOURCE_PRODUCT에 code_series 없음)
+    expect(admin.rpc).toHaveBeenCalledWith('generate_product_code', expect.objectContaining({
+      p_category_code_override: 'NEW',
+      p_date_option: 'ymd',
+      p_max_sequence: 9999,
+      p_code_id: 'tc-1',
+    }));
+  });
+
+  it('[GREEN] 같은 조합·같은 연월의 1단 부모가 이미 있으면 400 차단(동일 부모 코드품번 방지)', async () => {
+    const admin = makeNewProductAdmin({ dateOption: 'none', existingSameCodeParent: true });
+    createClientMock.mockReturnValue(admin);
+
+    const result = await actions.cloneProduct({
+      request: makeFormRequest({
+        source_product_id: 'source-product-id',
+        count: '1',
+        mode: 'new_product',
+        auto_code: 'true',
+        partner_code: 'false',
+        partner_combo_row_id: COMBO_ROW_ID,
+      }),
+      locals: makeLocals(),
+    } as Parameters<typeof actions.cloneProduct>[0]);
+
+    expect((result as Record<string, unknown>)?.status).toBe(400);
+    expect(admin._insertFn).not.toHaveBeenCalled();
+  });
+
+  it('[GREEN] 새 상품 복제는 수량을 2로 보내도 항상 1개만 등록(동일 부모 코드품번 중복 방지)', async () => {
+    const admin = makeNewProductAdmin();
+    createClientMock.mockReturnValue(admin);
+
+    const result = await actions.cloneProduct({
+      request: makeFormRequest({
+        source_product_id: 'source-product-id',
+        count: '2',
+        mode: 'new_product',
+        auto_code: 'true',
+        partner_code: 'false',
+        partner_combo_row_id: COMBO_ROW_ID,
+      }),
+      locals: makeLocals(),
+    } as Parameters<typeof actions.cloneProduct>[0]);
+
+    expect((result as Record<string, unknown>)?.cloned).toBe(1);
+    expect(admin._insertFn).toHaveBeenCalledTimes(1);
+  });
+
+  it('[GREEN] 순번1이 있는 2단 조합은 동일 조합이 이미 있어도 통과(부모 순번이 매번 +1)', async () => {
+    const admin = makeNewProductAdmin({ comboParentMax: 999, dateOption: 'none', existingSameCodeParent: true });
+    createClientMock.mockReturnValue(admin);
+
+    const result = await actions.cloneProduct({
+      request: makeFormRequest({
+        source_product_id: 'source-product-id',
+        count: '2',
+        mode: 'new_product',
+        auto_code: 'true',
+        partner_code: 'false',
+        partner_combo_row_id: COMBO_ROW_ID,
+      }),
+      locals: makeLocals(),
+    } as Parameters<typeof actions.cloneProduct>[0]);
+
+    expect((result as Record<string, unknown>)?.success).toBe(true);
+  });
+});
+
+// ════════════════════════════════════════════════════════════════════════════
+// 새 상품 복제 — 장치정보·이력 제외 모든 정보(대여정책·구성품·옵션상품 포함) 복제
+// ════════════════════════════════════════════════════════════════════════════
+
+describe('cloneProduct (new_product) — 전체 정보 복제', () => {
+  it('[GREEN] 대여정책·구성품·배송옵션을 INSERT에 포함하고 옵션상품 연결을 복사한다', async () => {
+    const base = makeNewProductAdmin();
+    const rpcMock = vi.fn((name: string) => {
+      if (name === 'get_product_option_links') {
+        return Promise.resolve({ data: [{ option_product_id: 'opt-1', is_required: true }], error: null });
+      }
+      return Promise.resolve({ data: null, error: null });
+    });
+    const admin = { ...base, rpc: rpcMock };
+    createClientMock.mockReturnValue(admin);
+
+    const result = await actions.cloneProduct({
+      request: makeFormRequest({
+        source_product_id: 'source-product-id',
+        count: '1',
+        mode: 'new_product',
+        auto_code: 'true',
+        partner_code: 'false',
+        partner_combo_row_id: COMBO_ROW_ID,
+      }),
+      locals: makeLocals(),
+    } as Parameters<typeof actions.cloneProduct>[0]);
+
+    expect((result as Record<string, unknown>)?.success).toBe(true);
+    const inserted = admin._insertFn.mock.calls[0]?.[0] as Record<string, unknown>;
+    expect(inserted).toHaveProperty('components');
+    expect(inserted).toHaveProperty('allowed_period_ids');
+    expect(inserted).toHaveProperty('allowed_method_ids');
+    expect(inserted).toHaveProperty('allowed_pickup_ids');
+    expect(inserted).toHaveProperty('shipping_round_trip');
+    expect(admin.rpc).toHaveBeenCalledWith('upsert_product_option_links', {
+      p_product_id: 'cloned-product-id',
+      p_option_links: [{ option_product_id: 'opt-1', is_required: true }],
+    });
+  });
+});
+
+// ════════════════════════════════════════════════════════════════════════════
+// 재고 추가 — 순번 상한 사전 차단 / 등록 수량 최대 50
+// ════════════════════════════════════════════════════════════════════════════
+
+describe('cloneProduct (add_inventory) — 순번 상한 사전 차단', () => {
+  function makeCappedInventoryAdmin(nextSeq: number) {
+    const insertFn = vi.fn();
+    const fromFn = vi.fn((table: string) => {
+      if (table === 'products') {
+        return {
+          select: () => chain({ data: { ...SOURCE_PRODUCT, code_series: { category_code: 'NEW', year_month: 'nodate', max_sequence: 3 } }, error: null }),
+          insert: insertFn,
+        };
+      }
+      if (table === 'product_code_sequences') return { select: () => chain({ data: { next_seq: nextSeq }, error: null }) };
+      return { select: () => chain({ data: [], error: null }) };
+    });
+    return { from: fromFn, rpc: vi.fn(() => Promise.resolve({ data: null, error: null })), _insertFn: insertFn };
+  }
+
+  it('[GREEN] 남은 순번보다 많이 요청하면 재고를 하나도 만들지 않고 400 차단', async () => {
+    const admin = makeCappedInventoryAdmin(3); // 상한 3, 다음 순번 3 → 남은 1개
+    createClientMock.mockReturnValue(admin);
+
+    const result = await actions.cloneProduct({
+      request: makeFormRequest({ source_product_id: 'parent-product-id', count: '2', mode: 'add_inventory' }),
+      locals: makeLocals(),
+    } as Parameters<typeof actions.cloneProduct>[0]);
+
+    expect((result as Record<string, unknown>)?.status).toBe(400);
+    expect(admin._insertFn).not.toHaveBeenCalled();
+  });
+
+  it('[GREEN] 등록 수량은 최대 50개로 제한된다', async () => {
+    const admin = makeCappedInventoryAdmin(1); // 상한 3 → 남은 3개, 60 요청 → 50으로 절삭돼도 3 초과라 차단
+    createClientMock.mockReturnValue(admin);
+
+    const result = await actions.cloneProduct({
+      request: makeFormRequest({ source_product_id: 'parent-product-id', count: '60', mode: 'add_inventory' }),
+      locals: makeLocals(),
+    } as Parameters<typeof actions.cloneProduct>[0]);
+
+    const r = result as { status?: number; data?: { error?: string } };
+    expect(r.status).toBe(400);
+    expect(r.data?.error).toContain('50개는 등록할 수 없습니다');
   });
 });
 
@@ -441,6 +556,7 @@ describe('cloneProduct (new_product) — 정상 동작 (회귀 방지)', () => {
         mode: 'new_product',
         auto_code: 'true',
         partner_code: 'false',
+        partner_combo_row_id: COMBO_ROW_ID,
       }),
       locals: makeLocals(),
     } as Parameters<typeof actions.cloneProduct>[0]);
