@@ -1198,7 +1198,7 @@
       -->
       <button
         type="button"
-        class="btn-action"
+        class="btn-panel-lg"
         disabled={saving || (!!template && !isSpreadsheetDirty)}
         onclick={handleSpreadsheetSave}
       >
@@ -1211,7 +1211,7 @@
         활성화 — spreadsheet 모드와 동일 원칙(2026-09-08, "다른 계약서 편집 UI와 동일"
         요청). 신규 양식 등록("양식 등록")은 비교 대상 원본이 없어 게이팅 제외.
       -->
-      <button type="submit" form="tpl-form" class="btn-action" disabled={saving || (!!template && !isFlowOrHtmlDirty)}>
+      <button type="submit" form="tpl-form" class="btn-panel-lg" disabled={saving || (!!template && !isFlowOrHtmlDirty)}>
         {saving ? '저장 중...' : template ? '수정 저장' : '양식 등록'}
       </button>
     {/if}
@@ -1223,6 +1223,7 @@
       <CmsDeleteButton
         action="?/delete"
         id={template.id}
+        size="lg"
         warnMessage="한번 더 클릭 시 이 양식이 삭제됩니다."
         successMessage="양식이 삭제되었습니다."
         onsuccess={() => { onsaved?.('') }}
@@ -1444,21 +1445,25 @@
     flex-shrink: 0;
   }
 
-  .btn-action {
-    height: 34px;
+  /* DetailPanel 대형 일반 버튼(cms-uiux.md §0-10-G) — 44px / 0 20px / --cms-radius-md / body-14.
+     클래스명을 .btn-action이 아닌 고유명으로 둔 이유: app.css의 전역 `.cms-shell .btn-action`
+     (34px 소형)이 컴포넌트 스코프 규칙보다 우선 적용돼 대형 규격이 덮어써짐. */
+  .btn-panel-lg {
+    display: inline-flex;
+    align-items: center;
+    height: 44px;
     padding: 0 20px;
     background: var(--cs-purple);
     color: var(--cs-white);
     border: none;
-    border-radius: var(--cms-radius-sm);
-    font: var(--text-pc-script-12);
-    font-weight: 700;
+    border-radius: var(--cms-radius-md);
+    font: var(--text-pc-body-14);
     cursor: pointer;
     transition: background 0.12s;
     margin-left: auto;
   }
-  .btn-action:hover    { background: var(--cs-purple-hover); }
-  .btn-action:disabled { background: var(--cs-disabled-button); cursor: not-allowed; }
+  .btn-panel-lg:hover    { background: var(--cs-purple-hover); }
+  .btn-panel-lg:disabled { background: var(--cs-disabled-button); cursor: not-allowed; }
 
   /* 서명·직인 이미지 등록 행 */
   .field-row--sig-upload {
