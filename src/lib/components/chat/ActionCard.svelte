@@ -597,7 +597,12 @@
   {:else}
     <!-- 상품 이미지 없는 단순 카드 (쿠폰 코드 / 연체료 등) -->
     <div class="simple-content">
-      {#if payload.fee_amount !== undefined && payload.hours_late !== undefined}
+      {#if payload.type === 'coupon_duplicate_warning'}
+        <p class="dup-warning-title" role="alert">⚠ 이미 선물한 쿠폰입니다.</p>
+        {#if payload.discount_label}
+          <p class="dup-warning-sub">{payload.discount_label} · 고객에게는 알림이 발송되지 않았습니다.</p>
+        {/if}
+      {:else if payload.fee_amount !== undefined && payload.hours_late !== undefined}
         <!-- 연체료 결제 요청 카드 -->
         <p class="late-fee-title">연체료 결제 요청</p>
         <p class="late-fee-amount">{payload.fee_amount.toLocaleString()}원</p>
@@ -609,7 +614,9 @@
         <p class="coupon-code">{payload.coupon_code}</p>
       {/if}
 
-      {#if isCouponPending && isAdmin}
+      {#if payload.type === 'coupon_duplicate_warning'}
+        <!-- 경고 카드는 안내 전용 — CTA 버튼 없음 -->
+      {:else if isCouponPending && isAdmin}
         <!-- 관리자 화면: pending 상태 → 승인·거절 버튼 -->
         <div class="coupon-approve-row">
           <button
@@ -817,6 +824,19 @@
     padding: 6px 10px;
     border-radius: var(--radius-sm);
     letter-spacing: 1px;
+    margin: 0;
+  }
+
+  /* 쿠폰 재선물 경고 카드 (관리자 전용) */
+  .dup-warning-title {
+    font: 700 14px/1.4 'Noto Sans KR', sans-serif;
+    color: var(--cs-red-badge);
+    margin: 0;
+  }
+
+  .dup-warning-sub {
+    font: 400 12px/1.5 'Noto Sans KR', sans-serif;
+    color: var(--cs-text-mid, #777);
     margin: 0;
   }
 
