@@ -27,6 +27,7 @@ export type ActionCardType =
   | 'contract_link'    // 전자계약 서명 링크 발송 (고객 수신)
   | 'contract_signed'  // 전자계약 서명 완료 알림 (관리자 수신)
   | 'refund_failed'    // 환불 RPC 실패 알림 (관리자 전용, admin_only=true)
+  | 'coupon_duplicate_warning'  // 이미 보유한 쿠폰 재선물 경고 (관리자 전용, admin_only=true)
   // 자동답변 메타데이터 (message_type: 'text', sender_type: 'admin')
   | 'auto_canned_reply'   // 빠른답변 자동매칭 성공 (하이브리드 1단계, AI 호출 전)
   // GSD-17: 관리자 @ 멘션 상품 카드 / GSD-20: 이미지·CTA 있는 자동응답 카드

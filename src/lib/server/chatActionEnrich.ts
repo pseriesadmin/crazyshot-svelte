@@ -390,8 +390,7 @@ async function enrichCouponGiftCard(
   base: ActionPayload,
   admin: SupabaseClient,
 ): Promise<ActionPayload> {
-  // 활성 쿠폰 중 유효기간이 남은 쿠폰 1개 선택 (생성 역순)
-  const now = new Date().toISOString()
+  // 활성 쿠폰 1개 선택 (생성 역순) — 날짜 조건 없음(무제한·발급후N일 쿠폰 포함)
 
   type CouponRow = {
     id: string
@@ -405,8 +404,6 @@ async function enrichCouponGiftCard(
     .select('id, code, discount_type, discount_value')
     .eq('is_active', true)
     .is('deleted_at', null)
-    .lte('valid_from', now)
-    .gte('valid_until', now)
     .order('created_at', { ascending: false })
     .limit(5)
 

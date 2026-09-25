@@ -12,6 +12,7 @@ import type { RequestHandler } from './$types'
 import { getCmsRoleForAction } from '$lib/server/getCmsRoleForAction'
 import { hasSettingsAccess } from '$lib/utils/cmsPermissions'
 import { sendPushToUser } from '$lib/server/push'
+import { isCouponAlreadyOwned, insertDuplicateGiftWarning } from '$lib/server/couponGiftDuplicate'
 
 export const POST: RequestHandler = async ({ request, locals }) => {
   const { session } = await locals.safeGetSession()
@@ -63,8 +64,6 @@ export const POST: RequestHandler = async ({ request, locals }) => {
     .eq('id', couponId)
     .eq('is_active', true)
     .is('deleted_at', null)
-    .lte('valid_from', new Date().toISOString())
-    .gte('valid_until', new Date().toISOString())
     .single()
 
   if (couponErr || !couponRaw) {
@@ -76,6 +75,12 @@ export const POST: RequestHandler = async ({ request, locals }) => {
     coupon.discount_type === 'percentage'
       ? `${coupon.discount_value}% 할인`
       : `${Number(coupon.discount_value).toLocaleString()}원 할인`
+
+  // 이미 보유(사용 포함)한 동일 쿠폰이면 고객 카드·푸시 없이 관리자 전용 경고 카드만 남김
+  if (await isCouponAlreadyOwned(admin, userId, coupon.id)) {
+    const warning = await insertDuplicateGiftWarning(admin, sessionId, discountLabel)
+    return json({ ok: true, duplicate: true, message: warning })
+  }
 
   // distribute_coupon: locals.supabase(관리자 실세션) 필수 — auth.uid() = 관리자 UID
   // Supabase 생성 타입에 이미 정의된 RPC지만 파라미터 타입 불일치 방어
@@ -129,7 +134,9 @@ export const POST: RequestHandler = async ({ request, locals }) => {
     .eq('id', sessionId)
 
   // 고객 브라우저 푸시 (2026-08-19 전역감사로 발견된 공백 보완, service-operations.md §15)
-  await sendPushToUser(userId, 'coupon_gift', {
+  // notify_type은 CMS 푸시알림 화면의 "이벤트·쿠폰 발행"(event_coupon_issued, customer_marketing) 스위치와
+  // 연결 — 마스터 스위치 + 고객 "혜택 알림"(allow_benefit_alert) 수신동의가 함께 적용된다.
+  await sendPushToUser(userId, 'event_coupon_issued', {
     title: '쿠폰이 도착했어요 🎁',
     body: `${discountLabel} 쿠폰을 받으셨어요! 지금 확인해보세요.`,
     link: '/account/profile?tab=coupon',

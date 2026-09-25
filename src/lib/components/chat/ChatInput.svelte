@@ -38,7 +38,7 @@
     description: string | null
     discount_type: string
     discount_value: number
-    valid_until: string
+    valid_until: string | null
   }
 
   interface Props {
@@ -457,12 +457,14 @@
           >
             <div class="coupon-item-main">
               <span class="coupon-discount">{formatCouponDiscount(coupon)}</span>
-              <span class="coupon-code-chip">{coupon.code}</span>
+              {#if coupon.code}<span class="coupon-code-chip">{coupon.code}</span>{/if}
             </div>
             {#if coupon.description}
               <span class="coupon-desc">{coupon.description}</span>
             {/if}
-            <span class="coupon-until">~{new Date(coupon.valid_until).toLocaleDateString('ko-KR', { month: 'short', day: 'numeric' })} 까지</span>
+            {#if coupon.valid_until}
+              <span class="coupon-until">~{new Date(coupon.valid_until).toLocaleDateString('ko-KR', { month: 'short', day: 'numeric' })} 까지</span>
+            {/if}
           </button>
         {/each}
       {/if}

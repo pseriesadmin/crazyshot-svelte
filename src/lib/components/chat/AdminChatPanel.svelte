@@ -141,7 +141,7 @@
     description: string | null
     discount_type: string
     discount_value: number
-    valid_until: string
+    valid_until: string | null
   }
 
   interface Props {
@@ -803,10 +803,20 @@
           }
           return { ...m, action_payload: updated }
         })
+      } else {
+        csToast.error(await couponGiftErrorMessage(res, '쿠폰 처리에 실패했습니다.'))
       }
     } catch {
-      // 실패 시 조용히 무시 — 새로고침으로 서버 상태와 동기화 가능
+      csToast.error('네트워크 오류로 쿠폰을 처리하지 못했습니다. 잠시 후 다시 시도해주세요.')
     }
+  }
+
+  // 쿠폰선물 API 실패 응답 → 관리자 안내 문구 (배포 중단 쿠폰은 전용 문구)
+  async function couponGiftErrorMessage(res: Response, fallback: string): Promise<string> {
+    const body = await res.json().catch(() => null) as { error?: string } | null
+    const raw = body?.error ?? ''
+    if (raw.includes('DISTRIBUTION_PAUSED')) return '이 쿠폰은 신규 배포가 중단된 상태라 발송할 수 없습니다.'
+    return raw || fallback
   }
 
   // 쿠폰선물 2-B: 관리자 직접 발송
@@ -828,7 +838,11 @@
           const already = messages.some((m) => m.id === message.id)
           if (!already) messages = [...messages, message]
         }
+      } else {
+        csToast.error(await couponGiftErrorMessage(res, '쿠폰 발송에 실패했습니다.'))
       }
+    } catch {
+      csToast.error('네트워크 오류로 쿠폰을 발송하지 못했습니다. 잠시 후 다시 시도해주세요.')
     } finally {
       isSending = false
     }
