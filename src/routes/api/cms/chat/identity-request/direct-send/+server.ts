@@ -14,10 +14,68 @@
 import { json } from '@sveltejs/kit'
 import { env } from '$env/dynamic/private'
 import { PUBLIC_SUPABASE_URL } from '$env/static/public'
-import { createClient } from '@supabase/supabase-js'
+import { createClient, type SupabaseClient } from '@supabase/supabase-js'
+import { getSupabaseUrl } from '$lib/env/supabasePublic'
 import type { RequestHandler } from './$types'
 import { getCmsRoleForAction } from '$lib/server/getCmsRoleForAction'
+import { hasSettingsAccess } from '$lib/utils/cmsPermissions'
 import { sendPushToUser } from '$lib/server/push'
+
+const DOC_BUCKET = 'user-documents'
+const DOC_VALID_MONTHS = 6
+
+// 만료(등록일 기준 6개월 경과)한 증명의 등록 목록·승인·스토리지 원본을 삭제하고 삭제한 파일 수를 반환.
+// 미등록·유효·등록일 없음(만료 판정 불가)이면 아무것도 지우지 않고 0을 반환한다. 실패는 카드 발송을
+// 막지 않는다(fail-soft) — 삭제 실패 시 0으로 취급.
+async function deleteExpiredDocs(
+  admin: SupabaseClient,
+  userId: string,
+  docType: 'identity' | 'foreign',
+): Promise<number> {
+  const urlCol = docType === 'identity' ? 'identity_doc_url' : 'foreign_doc_urls'
+  const verifiedCol = `${docType}_verified_at`
+  const { data } = await admin
+    .from('user_profiles')
+    .select(`${urlCol}, ${verifiedCol}`)
+    .eq('user_id', userId)
+    .maybeSingle()
+  const profile = data as Record<string, unknown> | null
+  const raw = profile?.[urlCol]
+  const urls = Array.isArray(raw) ? raw.filter((v): v is string => typeof v === 'string') : []
+  const verifiedAt = profile?.[verifiedCol]
+  if (urls.length === 0 || typeof verifiedAt !== 'string') return 0
+
+  const expiresAt = new Date(verifiedAt)
+  expiresAt.setMonth(expiresAt.getMonth() + DOC_VALID_MONTHS)
+  if (expiresAt.getTime() >= Date.now()) return 0
+
+  const reset = docType === 'identity'
+    ? { identity_doc_url: null, identity_type: null, identity_verified_at: null, identity_approved_at: null }
+    : {
+        foreign_doc_url: null, foreign_doc_urls: null, foreign_type: null, foreign_stay_type: null,
+        foreign_verified_at: null, foreign_approved_at: null, is_foreign: false,
+      }
+  const { error } = await admin
+    .from('user_profiles')
+    .update({ ...reset, updated_at: new Date().toISOString() })
+    .eq('user_id', userId)
+  if (error) {
+    console.error('[identity-request/direct-send] 만료 목록 삭제 실패(fail-soft):', error.message)
+    return 0
+  }
+
+  // DB 초기화가 끝난 뒤에만 스토리지 원본 삭제 — best-effort, 해당 고객 폴더 파일만
+  const prefix = `${getSupabaseUrl()}/storage/v1/object/public/${DOC_BUCKET}/`
+  const paths = urls
+    .filter((u) => u.startsWith(prefix))
+    .map((u) => u.slice(prefix.length))
+    .filter((p) => p.startsWith(`${userId}/`))
+  if (paths.length > 0) {
+    const { error: rmErr } = await admin.storage.from(DOC_BUCKET).remove(paths)
+    if (rmErr) console.error('[identity-request/direct-send] 스토리지 원본 삭제 실패(fail-soft):', rmErr.message)
+  }
+  return urls.length
+}
 
 export const POST: RequestHandler = async ({ request, locals }) => {
   const cmsRole = await getCmsRoleForAction(locals)
@@ -84,6 +142,18 @@ export const POST: RequestHandler = async ({ request, locals }) => {
     return json({ error: '메시지 전송 오류' }, { status: 500 })
   }
 
+  // 카드 저장에 성공한 뒤에만 만료(6개월 경과)한 증명의 등록 목록을 자동 삭제한다 — 삭제는 복구가
+  // 불가능하므로, 카드 INSERT가 실패하면(위 return) 파일이 지워졌는데 고객은 요청을 못 받는 상태가
+  // 되지 않도록 순서를 카드 → 삭제로 둔다(Stephen 2026-09-26 확정, 스토리지 원본까지 삭제).
+  // 만료 판정은 서버가 직접 하므로 유효한(6개월 이내) 증명은 이 API를 직접 호출해도 삭제되지 않는다.
+  // 승인 컬럼도 함께 비운다 — 등록일만 비우고 승인 시각이 남으면 고객 화면이 "승인됨"으로 잠겨
+  // (isIdentityApproved: 등록일 없음 + 승인시각 있음 = 승인) 재등록을 못 하게 된다.
+  // 삭제(복구 불가)는 manager 이상만 — partner는 요청 카드만 발송하고 파일은 삭제되지 않는다
+  // (Stephen 2026-09-26 확정, 승인 취소 API(revoke-doc-approval)와 동일 등급).
+  const deletedDocCount = hasSettingsAccess(cmsRole)
+    ? await deleteExpiredDocs(admin, userId, docType)
+    : 0
+
   await admin
     .from('chat_sessions')
     .update({ updated_at: new Date().toISOString() })
@@ -96,5 +166,5 @@ export const POST: RequestHandler = async ({ request, locals }) => {
     link: '/account/profile?tab=profile',
   })
 
-  return json({ ok: true, message: messageRaw })
+  return json({ ok: true, message: messageRaw, deleted_count: deletedDocCount })
 }
