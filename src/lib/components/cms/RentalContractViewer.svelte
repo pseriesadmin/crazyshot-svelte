@@ -261,6 +261,7 @@
             {#if !isRentalView && !signingsentAt && !customerSignedAt}
               <span class="tpl-card-del-gap"></span>
               <CmsDeleteButton
+                size="lg"
                 action="?/clearIssuedContract"
                 id={contractId!}
                 warnMessage="한번 더 선택 시 이 계약서 내용이 초기화됩니다."
@@ -292,6 +293,7 @@
               <!-- Stage 5 (EC-6): 폐기 — 서명 링크 만료 + 콘텐츠 초기화 (manager 이상 서버단 게이트) -->
               <span class="tpl-card-del-gap"></span>
               <CmsDeleteButton
+                size="lg"
                 action="?/discardSentContract"
                 id={contractId!}
                 warnMessage="한번 더 선택 시 발송된 계약서가 폐기됩니다. 고객의 서명 링크가 만료됩니다."
@@ -308,6 +310,7 @@
                    올려 hasIssuedContent가 false로 재계산되며 자동으로 사라진다. -->
               <span class="tpl-card-del-gap"></span>
               <CmsDeleteButton
+                size="lg"
                 action="?/cancelIssuedContract"
                 id={contractId!}
                 warnMessage="한번 더 선택 시 서명 완료된 전자계약 발행이 취소됩니다. 고객의 서명 내용도 함께 삭제되며 되돌릴 수 없습니다."
@@ -467,20 +470,20 @@
   }
   .btn-issue {
     margin-left: auto;
-    height: 24px;
-    padding: 0 12px;
+    height: 44px;
+    padding: 0 20px;
     background: var(--cs-purple);
     color: var(--cs-white);
     border: none;
-    border-radius: var(--cms-radius-sm);
-    font: var(--text-pc-script-12);
+    border-radius: var(--radius-md);
+    font: var(--text-pc-body-14);
     font-weight: 700;
     cursor: pointer;
     transition: background 0.12s;
     white-space: nowrap;
   }
   .btn-issue:hover    { background: var(--cs-purple-hover); }
-  .btn-issue:disabled { opacity: 0.5; cursor: not-allowed; }
+  .btn-issue:disabled { background: var(--cs-disabled-button); cursor: not-allowed; }
   .tpl-list {
     display: flex;
     flex-direction: column;
@@ -524,20 +527,22 @@
     white-space: nowrap;
   }
   .btn-tpl-edit:hover { background: rgba(59,47,138,0.06); }
+  /* cms-uiux.md §0-10-G DetailPanel 전용 버튼 — 대형 (44px·퍼플 채움·15px) */
   .btn-tpl-preview {
-    height: 28px;
-    padding: 0 12px;
+    display: inline-flex;
+    align-items: center;
+    height: 44px;
+    padding: 0 20px;
     background: var(--cs-purple);
     color: var(--cs-white);
     border: none;
-    border-radius: var(--cms-radius-sm);
-    font: var(--text-pc-script-12);
-    font-weight: 700;
+    border-radius: var(--cms-radius-md);
+    font: var(--text-pc-body-14);
     cursor: pointer;
-    transition: background 0.12s;
+    transition: background 0.15s;
     white-space: nowrap;
   }
-  .btn-tpl-preview:hover { background: var(--cs-purple-hover); }
+  .btn-tpl-preview:hover:not(:disabled) { background: var(--cs-purple-hover); }
   .btn-tpl-preview:disabled { opacity: 0.5; cursor: not-allowed; }
   /* Stage 5 (EC-6): 재발송 버튼 — 아웃라인 스타일 (편집 버튼과 동일 계열) */
   .btn-tpl-resend {

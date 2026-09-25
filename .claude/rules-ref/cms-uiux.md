@@ -598,14 +598,17 @@ position: sticky 요소는 자체 stacking context를 만들어, 그 안의 posi
 
 ---
 
-### 0-10-F. DetailPanel 실행 버튼 — 행 단위 액션(승인 등) 버튼 ★ (2026-09-24 등록)
+### 0-10-F. DetailPanel 전용 버튼 — 소형 (행 단위 실행 버튼) ★ (2026-09-24 등록, 아웃라인 추가 확정)
 
 > **공식 등록명**: `DetailPanel 실행 버튼`
 > DetailPanel 정보 행(`.info-row`)에서 "승인"처럼 **상태를 바꾸는 단독 실행**을 맡는 버튼.
 > **배지(상태 표시)와 시각적으로 구분되는 것이 목적** — 배지는 작은 틴트 알약/사각 라벨(읽기 전용),
 > 실행 버튼은 더 크고 굵은 회색 채움 라운드 사각형(클릭 가능)으로 규정한다.
 > 트리거 문구: "DetailPanel 실행 버튼 적용해" / "행 실행 버튼 적용해".
-> 정본 구현: `CustomerDetailPanel.svelte` `.btn-approve`(본인증명·외국인증명 승인).
+> 정본 구현: `RentalDetailPanel.svelte` `.btn-tracking-save--sm`(운송장 저장, 아웃라인 반영 완료).
+> 동일 규격 적용처: `CustomerDetailPanel.svelte` `.btn-approve`(본인증명·외국인증명 승인, 아웃라인 반영 완료 2026-09-24).
+> 동일 규격 적용처: `RentalDetailPanel.svelte` `.btn-tracking-save--sm`("운송장 정보" 제목행 우측 "운송장 저장" —
+> 제목행(`.section-title-btns`) 안에 놓이므로 `margin-left:auto`는 쓰지 않고, 라벨이 78px보다 길면 min-width 대신 내용폭으로 자연 확장).
 > §0-10-C(초소형 pill, 목록·칩 옆 인라인)·§0-10-D(변경 시에만 활성화되는 저장 버튼)와는 별개.
 
 | 항목 | 값 |
@@ -613,7 +616,7 @@ position: sticky 요소는 자체 stacking context를 만들어, 그 안의 posi
 | `border-radius` | `var(--cms-radius-sm)` (10px, 라운드 사각형 — pill 금지) |
 | `background` (기본) | `var(--cs-surface-gray)` |
 | `color` (기본) | `var(--cs-text-mid)` |
-| `border` | none (outline/border 금지) |
+| `border` | `1px solid var(--cs-text-mid)` — 짙은 그레이 아웃라인(2026-09-24 Stephen 명시 확정, 이 소형 버튼 한정 예외. 기존 "outline 금지" 원칙의 예외) |
 | `font-size` / `font-weight` | 12px / 700 (`line-height: 1.4` 명시 — 토큰의 200%는 높이를 부풀림) |
 | `padding` | 8px 14px |
 | `min-width` | 78px (텍스트 중앙 정렬) |
@@ -626,7 +629,7 @@ position: sticky 요소는 자체 stacking context를 만들어, 그 안의 posi
 .btn-approve {
   margin-left: auto; min-width: 78px; text-align: center; flex-shrink: 0;
   font-size: 12px; font-weight: 700; line-height: 1.4; padding: 8px 14px;
-  border: none; border-radius: var(--cms-radius-sm);
+  border: 1px solid var(--cs-text-mid); border-radius: var(--cms-radius-sm);
   background: var(--cs-surface-gray); color: var(--cs-text-mid);
   cursor: pointer; white-space: nowrap; transition: background 0.15s, color 0.15s;
 }
@@ -636,7 +639,7 @@ position: sticky 요소는 자체 stacking context를 만들어, 그 안의 posi
 
 ---
 
-### 0-10-G. DetailPanel 일반 버튼 / 삭제·거부 버튼 — 승인/거부류 대형 CTA (2026-09-24 등록·확정)
+### 0-10-G. DetailPanel 전용 버튼 — 대형 (일반 버튼 / 삭제·거부 버튼, 승인/거부류 CTA) (2026-09-24 등록·확정)
 
 > ⛔ **전 메뉴 DetailPanel 공통 표준(2026-09-24 Stephen 확정)**: CMS 각 메뉴의 DetailPanel
 > (Rental·Product·Customer·Subscription 등) 레이아웃 내 주요 버튼은 아래 2종으로 통일한다.
@@ -652,11 +655,11 @@ position: sticky 요소는 자체 stacking context를 만들어, 그 안의 posi
 
 | 항목 | btn-primary ("승인하기") | btn-danger-sm ("거부") |
 |---|---|---|
-| `background` | `var(--cs-purple)` (#3B2F8A) | `var(--cs-red-badge)` (#FF3535) |
+| `background` | `var(--cs-purple)` (#3B2F8A) | `var(--cs-error)` (#E53935) — 실코드 기준 정정(2026-09-24, 기존 `--cs-red-badge` 표기는 오기) |
 | `color` | `var(--cs-white)` | `var(--cs-white)` |
 | `height` | 44px | 44px |
 | `padding` | 0 20px | 0 20px |
-| `border-radius` | `var(--radius-md)` (15px) | `var(--radius-md)` (15px) |
+| `border-radius` | `var(--cms-radius-md)` (15px) | `var(--cms-radius-md)` (15px) |
 | `font` | `var(--text-pc-body-14)` (14px/700) | `var(--text-pc-body-14)` (14px/700) |
 | `border` | none | none |
 | hover | `var(--cs-purple-hover)` | opacity 0.85 |
@@ -666,7 +669,7 @@ position: sticky 요소는 자체 stacking context를 만들어, 그 안의 posi
 .btn-primary {
   height: 44px; padding: 0 20px;
   background: var(--cs-purple); color: var(--cs-white);
-  border: none; border-radius: var(--radius-md);
+  border: none; border-radius: var(--cms-radius-md);
   font: var(--text-pc-body-14); cursor: pointer;
   transition: background 0.15s;
 }
@@ -675,8 +678,8 @@ position: sticky 요소는 자체 stacking context를 만들어, 그 안의 posi
 
 .btn-danger-sm {
   height: 44px; padding: 0 20px;
-  background: var(--cs-red-badge); color: var(--cs-white);
-  border: none; border-radius: var(--radius-md);
+  background: var(--cs-error); color: var(--cs-white);
+  border: none; border-radius: var(--cms-radius-md);
   font: var(--text-pc-body-14); cursor: pointer;
   transition: opacity 0.15s;
 }
@@ -684,9 +687,35 @@ position: sticky 요소는 자체 stacking context를 만들어, 그 안의 posi
 .btn-danger-sm:disabled { opacity: 0.5; cursor: not-allowed; }
 ```
 
-> ℹ️ 섹션 헤더 인라인 실행 버튼(예: 계약서 탭 "발행")은 `ContractTemplatePreviewModal`의
-> `.btn-send`와 동일 스펙(34px / padding 0 20px / `--cs-purple` / `--cms-radius-sm` /
-> `--text-pc-body-14` 700 / disabled `--cs-disabled-button`)으로 통일한다(`RentalContractViewer.svelte` `.btn-issue`, 2026-09-24).
+#### 0-10-G-1. 대형 삭제 버튼 표준 (2026-09-24 등록)
+
+> **공식 등록명**: `DetailPanel 대형 삭제 버튼` — `.btn-danger-sm`(거부)과 **동일 규격**의 삭제 전용 변형.
+> 트리거 문구: "DetailPanel 대형 삭제 버튼 적용해".
+> 텍스트형("회원 삭제")과 아이콘 단독형("계약서 초기화 휴지통") 모두 같은 규격을 쓴다.
+
+| 항목 | 값 |
+|---|---|
+| `height` / `padding` | 44px / 0 20px |
+| `background` / `color` | `var(--cs-error)` (#E53935) / `var(--cs-white)` |
+| `border` / `border-radius` | none / `var(--cms-radius-md)` (15px) |
+| `font` | `var(--text-pc-body-14)` (텍스트형만, 14px/700) |
+| 아이콘 | 인라인 휴지통 SVG 12×12 그대로 유지, 텍스트와 `gap: 6px` |
+| hover | `opacity: 0.85` (배경·글자색 유지) |
+| 1차 클릭 대기(pending) | 더 진한 `var(--cs-red)` (#CF0000) — 기본이 레드 채움이라 연한 레드 대기 표시로는 구분 불가 |
+| 배치 | 삭제 섹션 우측 정렬(`justify-content: flex-end`) |
+
+- 아이콘형: 공용 `CmsDeleteButton`에 `size="lg"` 지정(기본값은 기존 소형 아이콘형 유지).
+- 텍스트형 정본: `CustomerDetailPanel.svelte` `.act-del.act-del-account`("회원 삭제").
+- 아이콘형 정본: `RentalContractViewer.svelte`의 `<CmsDeleteButton size="lg">`(초기화·폐기·발행취소).
+- 삭제 동작은 기존 §0-10-B 삭제 안전 토스트 2단계 확인 패턴을 그대로 따른다.
+
+> ℹ️ 섹션 헤더 인라인 실행 버튼(예: 계약서 탭 "발행")은 `RentalContractViewer.svelte` `.btn-issue`
+> 스펙(44px / padding 0 20px / `--cs-purple` / `--radius-md` / `--text-pc-body-14` 700 /
+> disabled `--cs-disabled-button`)을 따른다(2026-09-24).
+>
+> ℹ️ **DetailPanel 하단 실행 버튼 그룹(모달 푸터, 2026-09-24)**: `ContractTemplatePreviewModal`
+> 푸터의 취소·출력·수정·채팅으로 발송 버튼은 **44px / padding 0 20px / `--radius-md`(15px)**로
+> 통일한다(색·보더는 각 버튼 기존값 유지).
 
 ---
 

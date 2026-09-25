@@ -62,6 +62,23 @@
 
 ---
 
+## 🔴 CMS DetailPanel 전용 버튼 3종 — 소형 / 대형 / 대형 삭제 ★★★ (2026-09-24 확정)
+
+> **"DetailPanel 전용 버튼 소형/대형/대형 삭제 적용해" 언급 시 → 재도출 없이 아래 값 즉시 적용.**
+> CMS 전용(USER 화면 무관). 정본·상세 → `cms-uiux.md §0-10-F`(소형) · `§0-10-G`(대형) · `§0-10-G-1`(대형 삭제)
+
+| 구분 | 높이 / 패딩 | 배경 / 글자 | 테두리 / 반경 | 폰트 | hover |
+|---|---|---|---|---|---|
+| **소형** (행 단위 실행 — 저장·추가·승인) | auto / 8px 14px (min-width 78px) | `--cs-surface-gray` / `--cs-text-mid` | 1px `--cs-text-mid` / `--cms-radius-sm` 10px | 12px/700 | 배경 `--cs-text-mid` + 흰 글자 |
+| **대형** (일반 — 승인하기·보기·답변 저장) | 44px / 0 20px | `--cs-purple` / `--cs-white` | none / `--cms-radius-md` 15px | `--text-pc-body-14` | `--cs-purple-hover` |
+| **대형 삭제·거부** (거부·회원 삭제·삭제 아이콘) | 44px / 0 20px | `--cs-error` / `--cs-white` | none / `--cms-radius-md` 15px | `--text-pc-body-14` | opacity 0.85 |
+
+- disabled: 소형·대형 모두 `opacity: 0.5` (대형은 `cursor: not-allowed`, 소형은 `cursor: default`)
+- 대형 삭제 1차 클릭 대기(pending): `--cs-red` 진한 레드. 아이콘형은 공용 `CmsDeleteButton`에 `size="lg"` 지정(기본값은 기존 소형 아이콘형).
+- 소형의 짙은 그레이 아웃라인은 이 소형 버튼 한정 예외(기존 "버튼 outline 금지"의 예외, Stephen 명시 확정).
+
+---
+
 ## 반경 (Border Radius) 핵심
 
 | CSS 변수 | 값 | USER 용도 | CMS 용도 |

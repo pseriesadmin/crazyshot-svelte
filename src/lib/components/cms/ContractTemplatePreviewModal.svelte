@@ -1312,10 +1312,10 @@
     flex-shrink: 0;
   }
   .btn-cancel {
-    height: 34px;
-    padding: 0 16px;
+    height: 44px;
+    padding: 0 20px;
     border: 1px solid #DDDDDD;
-    border-radius: var(--cms-radius-sm);
+    border-radius: var(--radius-md);
     background: var(--cs-surface-gray);
     font: var(--text-pc-body-14);
     cursor: pointer;
@@ -1324,10 +1324,10 @@
   .btn-cancel:hover { background: var(--cs-lilac); }
 
   .btn-edit {
-    height: 34px;
-    padding: 0 16px;
+    height: 44px;
+    padding: 0 20px;
     border: 1px solid var(--cs-purple);
-    border-radius: var(--cms-radius-sm);
+    border-radius: var(--radius-md);
     background: transparent;
     color: var(--cs-purple);
     font: var(--text-pc-body-14);
@@ -1340,10 +1340,10 @@
   .btn-edit:hover { background: var(--cs-purple-op10); }
 
   .btn-print {
-    height: 34px;
-    padding: 0 16px;
+    height: 44px;
+    padding: 0 20px;
     border: 1px solid var(--cs-purple);
-    border-radius: var(--cms-radius-sm);
+    border-radius: var(--radius-md);
     background: transparent;
     color: var(--cs-purple);
     font: var(--text-pc-body-14);
@@ -1355,12 +1355,12 @@
   .btn-print:hover { background: var(--cs-purple-op10); }
 
   .btn-send {
-    height: 34px;
+    height: 44px;
     padding: 0 20px;
     background: var(--cs-purple);
     color: var(--cs-white);
     border: none;
-    border-radius: var(--cms-radius-sm);
+    border-radius: var(--radius-md);
     font: var(--text-pc-body-14);
     font-weight: 700;
     cursor: pointer;

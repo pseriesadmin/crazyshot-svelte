@@ -882,9 +882,9 @@
   .btn-add-spec:hover, .spec-preset-chip:hover { background: rgba(59, 47, 138, 0.08); }
 
   /* ── 혜택관리 ── */
-  .benefit-cards { display: flex; flex-direction: column; gap: 14px; }
-  .benefit-card { border: 1.5px solid var(--cs-surface-gray); border-radius: var(--radius-md); padding: 16px 18px; transition: border-color 0.15s; }
-  .benefit-card.enabled { border-color: var(--cs-purple); }
+  .benefit-cards { display: flex; flex-direction: column; gap: 30px; }
+  .benefit-card { border: 1.5px solid var(--cs-border); border-radius: var(--radius-md); padding: 16px 18px; transition: border-color 0.15s; }
+  .benefit-card.enabled { border-color: var(--cs-border); }
   .benefit-card-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
   .benefit-card-title { font: var(--text-pc-title-16); color: var(--cs-text); font-weight: 700; }
   .benefit-card-desc { margin: 4px 0 0; font: var(--text-pc-script-12); color: var(--cs-text-light); }

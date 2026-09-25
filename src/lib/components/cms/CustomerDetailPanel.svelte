@@ -1458,6 +1458,7 @@
           <button
             type={deleteWarnPending ? 'submit' : 'button'}
             class="act-del act-del-account"
+            class:act-del--pending={deleteWarnPending}
             aria-label="회원 삭제"
             title="회원 삭제"
             onclick={() => {
@@ -2372,20 +2373,21 @@
   }
   .act-del:hover { background: rgba(255,53,53,0.08); color: var(--cs-red-badge); }
 
-  /* cms-uiux.md §0-10 danger 규격(40px·radius base 8px·padding 0 20px·14px/700·danger-50 배경/danger-500 글자)
-     + 호버 시 짙은 레드 배경↔흰 글자 반전. .act-del / .act-del:hover와 명시도 충돌을 피하려 복합 셀렉터 사용 */
+  /* cms-uiux.md §0-10-G DetailPanel 전용 버튼 — 대형 삭제·거부 버튼(44px·--cs-error 채움·15px).
+     .act-del / .act-del:hover와 명시도 충돌을 피하려 복합 셀렉터 사용 */
   .act-del.act-del-account {
     gap: 6px;
-    height: 40px;
+    height: 44px;
     padding: 0 20px;
-    border-radius: var(--radius-sm);
-    background: var(--cs-chat-in-bg);
-    color: var(--cs-red-badge);
+    border-radius: var(--cms-radius-md);
+    background: var(--cs-error);
+    color: var(--cs-white);
     font: var(--text-pc-body-14);
-    font-weight: 700;
-    transition: background 0.15s, color 0.15s;
+    transition: opacity 0.12s;
   }
-  .act-del.act-del-account:hover { background: var(--cs-red-badge); color: var(--cs-white); }
+  .act-del.act-del-account:hover { background: var(--cs-error); color: var(--cs-white); opacity: 0.85; }
+  /* 1차 클릭 대기 — 기본이 레드 채움이라 더 진한 레드로 구분(§0-10-G-1) */
+  .act-del.act-del-account.act-del--pending { background: var(--cs-red); color: var(--cs-white); }
 
   .btn-danger {
     display: inline-flex; align-items: center; height: 40px; padding: 0 16px;
@@ -2619,7 +2621,7 @@
     font-weight: 700;
     line-height: 1.4;
     padding: 8px 14px;
-    border: none;
+    border: 1px solid var(--cs-text-mid);
     border-radius: var(--cms-radius-sm);
     background: var(--cs-surface-gray);
     color: var(--cs-text-mid);

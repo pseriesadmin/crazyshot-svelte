@@ -641,20 +641,21 @@
     cursor: pointer;
     user-select: none;
   }
+  /* cms-uiux.md §0-10-G DetailPanel 전용 버튼 — 대형(.btn-primary 규격) */
   .btn-reply {
-    height: 36px;
+    height: 44px;
     padding: 0 20px;
-    border-radius: var(--radius-md);
+    border-radius: var(--cms-radius-md);
     background: var(--cs-purple);
     color: var(--cs-white);
     border: none;
     font: var(--text-pc-body-14);
-    font-weight: 700;
     cursor: pointer;
     white-space: nowrap;
-    transition: opacity 0.12s;
+    transition: background 0.15s;
   }
-  .btn-reply:hover { opacity: 0.85; }
+  .btn-reply:hover:not(:disabled) { background: var(--cs-purple-hover); }
+  .btn-reply:disabled { opacity: 0.5; cursor: not-allowed; }
 
   /* 상태 변경 */
   .status-change-section {
