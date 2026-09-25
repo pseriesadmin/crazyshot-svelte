@@ -2009,6 +2009,12 @@
         <div class="info-row">
           <span class="info-label">고객명</span>
           <span class="info-value fw-bold">{row.customer_name ?? '-'}</span>
+          <a
+            href="/cms/customers?selected={row.user_id}"
+            target="_blank"
+            rel="noopener noreferrer"
+            class="btn-action"
+          >고객 상세 보기 ↗</a>
         </div>
         <div class="info-row">
           <span class="info-label">이메일</span>
@@ -2033,14 +2039,6 @@
             </div>
           </div>
         </div>
-      </div>
-      <div class="action-section">
-        <a
-          href="/cms/customers?selected={row.user_id}"
-          target="_blank"
-          rel="noopener noreferrer"
-          class="btn-action"
-        >고객 상세 보기 ↗</a>
       </div>
     {/if}
 
@@ -2441,25 +2439,31 @@
   }
 
   /* Stage 4: 상품 편집 UI */
+  /* cms-uiux.md §0-10-F DetailPanel 전용 버튼 — 소형 (라운드 사각형·아웃라인·12px/700) */
   .btn-add-small {
+    display: inline-flex;
+    justify-content: center;
+    align-items: center;
+    min-width: 78px;
     font-size: 12px;
-    font-weight: 600;
-    padding: 4px 10px;
-    border: 1.5px solid var(--cs-purple);
-    border-radius: var(--radius-xl);
-    background: transparent;
-    color: var(--cs-purple);
+    font-weight: 700;
+    line-height: 1.4;
+    padding: 8px 14px;
+    border: 1px solid var(--cs-text-mid);
+    border-radius: var(--cms-radius-sm);
+    background: var(--cs-surface-gray);
+    color: var(--cs-text-mid);
     cursor: pointer;
     white-space: nowrap;
     transition: background 0.15s, color 0.15s;
   }
   .btn-add-small:hover:not(:disabled) {
-    background: var(--cs-purple);
-    color: #fff;
+    background: var(--cs-text-mid);
+    color: var(--cs-white);
   }
   .btn-add-small:disabled {
-    opacity: 0.45;
-    cursor: not-allowed;
+    opacity: 0.5;
+    cursor: default;
   }
 
   .btn-delete-icon {
@@ -2962,6 +2966,7 @@
     line-height: 1.4;
     white-space: nowrap;
     border-radius: var(--cms-radius-sm);
+    border: 1px solid var(--cs-text-mid);
     background: var(--cs-surface-gray);
     color: var(--cs-text-mid);
     transition: background 0.15s, color 0.15s;
