@@ -441,6 +441,18 @@ export const actions: Actions = {
       if (optionsErr) regWarnings.push('options')
     }
 
+    // 결합상품 연결 저장 (Phase 1 — Migration #544)
+    const bundleLinksRaw = (form.get('bundle_links') as string | null) ?? '[]'
+    let bundleLinks: unknown[] = []
+    try { bundleLinks = JSON.parse(bundleLinksRaw) } catch { /* ignore */ }
+    if (Array.isArray(bundleLinks) && bundleLinks.length > 0) {
+      const { error: bundleErr } = await admin.rpc('upsert_product_bundle_links', {
+        p_product_id: product.id,
+        p_bundle_links: bundleLinks,
+      })
+      if (bundleErr) regWarnings.push('bundles')
+    }
+
     // BND-11: 임시 업로드 이미지를 실제 product_id 폴더로 이관
     // ⛔ 2026-09-11 순서 수정 — 이 블록은 반드시 "재고 1개 자동 생성"보다 먼저 실행돼야 한다.
     // auto_create_inventory_for_product(Migration #193)는 호출 시점의 부모 image_urls를

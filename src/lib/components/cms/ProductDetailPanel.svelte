@@ -62,6 +62,8 @@
     content_blocks?: unknown
     keywords?: unknown
     option_links?: unknown
+    bundle_links?: unknown
+    bundleLinksError?: boolean
     allowed_period_ids?: string[]
     allowed_method_ids?: string[]
     allowed_pickup_ids?: string[]
@@ -154,8 +156,8 @@
     Object.fromEntries(categories.map(c => [c.value, c.label]))
   )
 
-  type TabKey = 'basic' | 'options' | 'pricing' | 'rental' | 'content' | 'components' | 'images' | 'specs' | 'history'
-  const validTabs: TabKey[] = ['basic', 'options', 'pricing', 'rental', 'content', 'components', 'images', 'specs', 'history']
+  type TabKey = 'basic' | 'options' | 'bundles' | 'pricing' | 'rental' | 'content' | 'components' | 'images' | 'specs' | 'history'
+  const validTabs: TabKey[] = ['basic', 'options', 'bundles', 'pricing', 'rental', 'content', 'components', 'images', 'specs', 'history']
   // 자식(재고) 상품은 나머지 8개 탭이 부모와 동일한 내용을 읽기전용으로 중복 노출할 뿐이라
   // 실질 정보가 없음 — history 탭으로 고정 진입
   const parsedInitialTab: TabKey = product.parent_product_id
@@ -389,6 +391,7 @@
     localMethodIds = [...(product.allowed_method_ids ?? [])]
     localPickupIds = [...(product.allowed_pickup_ids ?? [])]
     localOptions = parseOptionLinks(product)
+    localBundles = parseBundleLinks(product)
     optionNamesLoaded = false
     // H-1(2026-08-31 감사 발견): 콘텐츠/키워드 재동기화 누락 — {#key activeSelectedId}는
     // "다른 상품 선택"만 방어하고, "같은 상품에서 다른 탭 저장→invalidateAll"은 방어하지
@@ -406,7 +409,8 @@
       (activeTab === 'specs'       && isDirtySpecs)       ||
       (activeTab === 'components'  && isDirtyComponents)  ||
       (activeTab === 'content'     && isDirtyContent)     ||
-      (activeTab === 'options'     && isDirtyOptions)
+      (activeTab === 'options'     && isDirtyOptions)  ||
+      (activeTab === 'bundles'     && isDirtyBundles)
     if (dirty) csToast.warning('변경 정보 저장 확인')
     activeTab = tab
     if (tab === 'history' && !historyLoaded) {
@@ -481,6 +485,7 @@
           activeTab !== 'components' && isDirtyComponents ? '구성품'   : null,
           activeTab !== 'content'    && isDirtyContent    ? '상품설명' : null,
           activeTab !== 'options'    && isDirtyOptions    ? '옵션상품' : null,
+          activeTab !== 'bundles'    && isDirtyBundles    ? '결합상품' : null,
         ].filter(Boolean) as string[]
 
         await invalidateAll()
@@ -1175,9 +1180,136 @@
     }
   }
 
+  // ── 결합상품 (bundle_links) ──────────────────────────────────
+  interface BundleLink {
+    bundle_product_id: string
+    name: string
+    components: Record<string, string> | null
+    image_url: string | null
+  }
+
+  function parseBundleLinks(p: ProductDetail): BundleLink[] {
+    const raw = p.bundle_links
+    if (!raw) return []
+    try {
+      const arr = Array.isArray(raw) ? raw : JSON.parse(raw as string)
+      return (arr as Record<string, unknown>[]).map((l) => ({
+        bundle_product_id: (l.bundle_product_id as string),
+        name: (l.bundle_name as string) ?? (l.name as string) ?? '',
+        components: (l.components as Record<string, string> | null) ?? null,
+        image_url: (l.image_url as string | null)?.replace(/^"|"$/g, '') ?? null,
+      }))
+    } catch { return [] }
+  }
+
+  let localBundles = $state<BundleLink[]>(parseBundleLinks(product))
+  let bundleKeyword = $state('')
+  let showBundleModal = $state(false)
+  let bundleResults = $state<OptionSearchResult[]>([])
+  let bundleSearching = $state(false)
+  let isSavingBundles = $state(false)
+  const isDirtyBundles = $derived.by(() => {
+    const toKey = (bundles: BundleLink[]) =>
+      JSON.stringify(bundles.map((b) => b.bundle_product_id))
+    return toKey(localBundles) !== toKey(parseBundleLinks(product))
+  })
+
+  async function searchBundleProducts() {
+    const kw = bundleKeyword.trim()
+    if (!kw) return
+    bundleSearching = true
+    showBundleModal = true
+    const { data, error: err } = await supabase
+      .from('products')
+      .select<string, ProductSearchRow>('id, name, stock_quantity, image_urls, price_rules(price, duration_type)')
+      .or(productSearchOrFilter(kw))
+      .eq('is_active', true)
+      .is('deleted_at', null)
+      .is('parent_product_id', null)
+      .limit(20)
+    bundleSearching = false
+    if (err) { csToast.error('상품 검색 중 오류가 발생했습니다.'); return }
+    bundleResults = (data ?? []).map((p) => ({
+      id: p.id,
+      name: p.name,
+      stock_quantity: p.stock_quantity ?? 0,
+      image_url: p.image_urls[0] ?? null,
+      price_24h: p.price_rules.find((r) => r.duration_type === '24h')?.price ?? 0,
+    }))
+  }
+
+  function onBundleSuggestSelect() {
+    void searchBundleProducts()
+  }
+
+  function addBundleProduct(item: OptionSearchResult) {
+    if (item.id === product.id) {
+      csToast.warning('자기 자신을 결합상품으로 추가할 수 없습니다.')
+      return
+    }
+    if (localOptions.some((o) => o.option_product_id === item.id)) {
+      csToast.warning('이미 옵션상품으로 추가된 상품입니다.')
+      return
+    }
+    if (localBundles.some((b) => b.bundle_product_id === item.id)) {
+      csToast.info('이미 추가된 상품입니다.')
+      return
+    }
+    localBundles = [
+      ...localBundles,
+      {
+        bundle_product_id: item.id,
+        name: item.name,
+        components: null,
+        image_url: item.image_url,
+      },
+    ]
+    showBundleModal = false
+    bundleKeyword = ''
+    bundleResults = []
+  }
+
+  function removeBundleProduct(id: string) {
+    localBundles = localBundles.filter((b) => b.bundle_product_id !== id)
+  }
+
+  async function saveBundles() {
+    if (isChildProduct) {
+      csToast.warning('대표 상품에서 수정하세요.')
+      return
+    }
+    isSavingBundles = true
+    try {
+      const fd = new FormData()
+      fd.append('product_id', product.id)
+      fd.append('section_type', 'bundles')
+      fd.append('bundle_links', JSON.stringify(
+        localBundles.map((b, i) => ({
+          bundle_product_id: b.bundle_product_id,
+          display_order: i,
+        }))
+      ))
+      const res = await fetch('?/updateSection', { method: 'POST', body: fd })
+      // action의 fail()은 HTTP 200 + type:'failure'로 오므로 res.ok가 아니라 deserialize로 판정
+      // (retryProductCode와 동일 패턴 — 중첩·중복 등 서버 거절 사유를 그대로 안내)
+      const result = deserialize(await res.text()) as { type: string; data?: { error?: string } }
+      if (result.type !== 'success') {
+        csToast.error(result.data?.error ?? '저장에 실패했습니다.')
+        return
+      }
+      await invalidateAll()
+      csToast.success('저장됐습니다.')
+    } catch {
+      csToast.error('저장에 실패했습니다.')
+    } finally {
+      isSavingBundles = false
+    }
+  }
+
   const ALL_TABS: { key: TabKey; label: string }[] = [
     { key: 'basic', label: '기본정보' },
     { key: 'options', label: '옵션상품' },
+    { key: 'bundles', label: '결합상품' },
     { key: 'pricing', label: '가격정책' },
     { key: 'rental', label: '대여정책' },
     { key: 'content', label: '상품설명' },
@@ -1766,6 +1898,131 @@
           </div>
         {:else}
           <p class="no-option-msg">{optionNamesLoaded ? '추가된 옵션상품이 없습니다.' : '로딩 중...'}</p>
+        {/if}
+      </div>
+    {/if}
+
+    <!-- ② 결합상품 -->
+    {#if activeTab === 'bundles'}
+      <div class="section" role="tabpanel" onfocusin={blockChildInputFocus}>
+        <div class="section-header">
+          <span class="section-title">결합상품</span>
+          {#if !isChildProduct}
+          <button type="button" class="btn-save-inline"
+            class:dirty={isDirtyBundles}
+            disabled={!isDirtyBundles || isSavingBundles || !!product.bundleLinksError}
+            onclick={saveBundles}>
+            {isSavingBundles ? '저장 중...' : '저장'}
+          </button>
+          {/if}
+        </div>
+
+        {#if isChildProduct}
+          <div class="child-readonly-notice" role="status">재고 단위 상품입니다. 수정은 <strong>대표 상품</strong>에서 해주세요.</div>
+        {/if}
+
+        {#if product.bundleLinksError}
+          <div class="child-readonly-notice" role="alert">결합상품을 불러오지 못했습니다. 페이지를 새로고침 후 다시 시도해주세요.</div>
+        {/if}
+
+        <p class="section-desc">이 상품을 패키지로 구성할 때 함께 포함되는 결합상품을 상품 DB에서 검색해 추가합니다.</p>
+
+        <!-- 검색 입력폼 -->
+        <div class="option-search-row">
+          <div class="option-search-field">
+            <CmsSimilarNameInput
+              id="bnd-search"
+              bind:value={bundleKeyword}
+              source="product_search"
+              activeOnly={true}
+              excludeId={product.id}
+              placeholder="상품명 또는 키워드 입력 후 검색..."
+              categoryLabels={{}}
+              onselect={onBundleSuggestSelect}
+            >
+              {#snippet field(c)}
+                <input
+                  type="text"
+                  class="opt-search-input"
+                  id={c.id}
+                  placeholder={c.placeholder}
+                  value={c.value}
+                  oninput={c.oninput}
+                  onkeydown={(e) => {
+                    c.onkeydown(e)
+                    if (e.key === 'Enter' && !e.defaultPrevented) {
+                      e.preventDefault()
+                      void searchBundleProducts()
+                    }
+                  }}
+                  onfocus={c.onfocus}
+                  onblur={c.onblur}
+                  aria-label="결합상품 검색"
+                  aria-autocomplete={c.ariaAutocomplete}
+                  aria-expanded={c.ariaExpanded}
+                  aria-controls={c.ariaControls}
+                  autocomplete="off"
+                />
+              {/snippet}
+            </CmsSimilarNameInput>
+          </div>
+          <button type="button" class="btn-opt-search" onclick={searchBundleProducts} disabled={bundleSearching}>
+            {bundleSearching ? '검색 중...' : '검색'}
+          </button>
+        </div>
+
+        <!-- 검색 결과 모달 -->
+        {#if showBundleModal}
+          <div class="option-modal-backdrop" onclick={() => { showBundleModal = false }} role="presentation">
+            <div class="option-modal" role="dialog" aria-modal="true" aria-label="결합상품 검색 결과" onclick={(e) => e.stopPropagation()}>
+              <div class="option-modal-header">
+                <p class="option-modal-title">검색 결과</p>
+                <button type="button" class="option-modal-close" onclick={() => { showBundleModal = false }} aria-label="닫기">✕</button>
+              </div>
+              {#if bundleSearching}
+                <p class="option-modal-empty">검색 중...</p>
+              {:else if bundleResults.length === 0}
+                <p class="option-modal-empty">검색 결과가 없습니다.</p>
+              {:else}
+                <ul class="option-result-list">
+                  {#each bundleResults as item (item.id)}
+                    <li class="option-result-item">
+                      {#if item.image_url}
+                        <img src={item.image_url} alt={item.name} class="option-result-thumb" width="56" height="42" loading="lazy" />
+                      {:else}
+                        <div class="option-result-thumb option-result-thumb--empty">No img</div>
+                      {/if}
+                      <div class="option-result-info">
+                        <p class="option-result-name">{item.name}</p>
+                      </div>
+                      <button type="button" class="btn-add-option" onclick={() => addBundleProduct(item)}>추가</button>
+                    </li>
+                  {/each}
+                </ul>
+              {/if}
+            </div>
+          </div>
+        {/if}
+
+        <!-- 선택된 결합상품 목록 -->
+        {#if localBundles.length > 0}
+          <div class="selected-option-list">
+            {#each localBundles as bnd (bnd.bundle_product_id)}
+              <div class="selected-option-card">
+                {#if bnd.image_url}
+                  <img src={bnd.image_url} alt={bnd.name} class="selected-option-thumb" width="64" height="48" loading="lazy" />
+                {:else}
+                  <div class="selected-option-thumb selected-option-thumb--empty">No img</div>
+                {/if}
+                <div class="selected-option-info">
+                  <p class="selected-option-name">{bnd.name}</p>
+                </div>
+                <button type="button" class="remove-btn" onclick={() => removeBundleProduct(bnd.bundle_product_id)} aria-label="{bnd.name} 결합상품 제거">✕</button>
+              </div>
+            {/each}
+          </div>
+        {:else}
+          <p class="no-option-msg">추가된 결합상품이 없습니다.</p>
         {/if}
       </div>
     {/if}
@@ -3071,7 +3328,8 @@
   /* 탭 */
   .tab-nav {
     display: flex; gap: 2px; padding: 10px 16px 0;
-    justify-content: center;
+    /* 탭 10개 — 폭이 모자라면 탭명 줄바꿈 대신 가로 스크롤(safe: 넘칠 때 왼쪽 탭이 잘리지 않게) */
+    justify-content: safe center; overflow-x: auto;
     border-bottom: 1px solid var(--cs-surface-gray);
     flex-shrink: 0; background: var(--cs-white);
   }
@@ -3079,6 +3337,7 @@
     padding: 8px 16px; border: none; border-bottom: 2px solid transparent;
     background: transparent; color: var(--cs-text-mid);
     font: var(--text-pc-body-14); cursor: pointer; min-height: 40px;
+    white-space: nowrap; flex-shrink: 0;
     transition: color 0.12s, border-color 0.12s; margin-bottom: -1px;
   }
   .tab-btn:hover { color: var(--cs-text); }

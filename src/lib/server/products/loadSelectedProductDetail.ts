@@ -67,6 +67,10 @@ export type SelectedProduct = {
   // category와 매칭되는 코드설정/코드조합 그룹 전체(협력사 전용 여부 무관, partnerComboItems와
   // 달리 필터 없음).
   categoryComboItems: CategoryComboItem[]
+  // 결합상품 연결(product_bundle_links) — Phase 1
+  bundle_links: Array<{ bundle_product_id: string; bundle_product_name: string; bundle_product_image_url: string | null }>
+  // get_product_bundle_links RPC 실패 시 true — ProductDetailPanel이 "결합상품을 불러오지 못했습니다" 표시 및 저장 비활성화
+  bundleLinksError: boolean
 }
 
 export type InventoryUnit = {
@@ -127,8 +131,9 @@ export async function loadSelectedProductDetail(
     const spParentId = (sp as Record<string, unknown>).parent_product_id as string | null
     const policySourceId = spParentId ?? selectedId
 
-    const [{ data: optionLinksData }, { data: priceRules }, parentRowRes] = await Promise.all([
+    const [{ data: optionLinksData }, { data: bundleLinksData, error: bundleLinksErr }, { data: priceRules }, parentRowRes] = await Promise.all([
       admin.rpc('get_product_option_links', { p_product_id: policySourceId }),
+      admin.rpc('get_product_bundle_links', { p_product_id: policySourceId }),
       admin
         .from('price_rules')
         .select('duration_type, price, deposit_amount, late_fee_per_hour, damage_fee_percentage')
@@ -177,6 +182,8 @@ export async function loadSelectedProductDetail(
       shipping_delivery:   (src.shipping_delivery   as boolean) ?? true,
       shipping_return:     (src.shipping_return     as boolean) ?? true,
       option_links:        optionLinksData ?? [],
+      bundle_links:        bundleLinksData ?? [],
+      bundleLinksError:    !!bundleLinksErr,
       content_blocks:      src.content_blocks,
       keywords:            src.keywords,
       components:          src.components,
