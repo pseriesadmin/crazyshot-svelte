@@ -34,6 +34,25 @@ export const POST: RequestHandler = async ({ locals, request }) => {
 
   const admin = createClient(getSupabaseUrl(), env.SUPABASE_SERVICE_ROLE_KEY)
 
+  // 구독 "혜택관리" 무료배송(FREE_SHIPPING) 판정 — 마스터플랜 Phase 5/6(Migration 542).
+  // 배송비 계산 로직(cartShippingFee.ts) 자체는 건드리지 않고, 클라이언트가 이미 계산해
+  // 보낸 deliveryFee 위에 "이 주문에 구독 무료배송 혜택을 적용해도 되는가"만 별도 판정해
+  // 해당되면 0원으로 덮어쓴다. fail-soft — 혜택 판정 실패가 주문 생성 자체를 막지 않는다.
+  let finalDeliveryFee = deliveryFee
+  if (finalDeliveryFee > 0) {
+    try {
+      const { data: shippingResult } = await admin.rpc('apply_subscription_free_shipping', {
+        p_user_id: session.user.id,
+        p_reservation_ids: reservationIds,
+      })
+      if ((shippingResult as { applies?: boolean } | null)?.applies) {
+        finalDeliveryFee = 0
+      }
+    } catch (err) {
+      console.error('[reservations/create-order] apply_subscription_free_shipping 실패:', err)
+    }
+  }
+
   type CreateReservationOrderRpcFn = (
     name: 'create_reservation_order',
     args: {
@@ -51,7 +70,7 @@ export const POST: RequestHandler = async ({ locals, request }) => {
       p_reservation_ids: reservationIds,
       p_selected_coupon_id: selectedCouponId,
       p_selected_points: selectedPoints,
-      p_delivery_fee: deliveryFee,
+      p_delivery_fee: finalDeliveryFee,
     }
   )
 

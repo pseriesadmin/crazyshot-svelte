@@ -59,5 +59,34 @@ export async function chargeSubscription(
   const result = data as { success: boolean; next_status?: string; error?: string }
   if (!result.success) return { success: false, error: result.error }
 
+  if (chargeSucceeded) {
+    // 구독 혜택 "할인쿠폰" 자동발급 — fail-soft(발급 실패가 결제 성공 결과를 되돌리지 않음).
+    // /subscribe/success(최초가입)와 정기청구 크론 양쪽에 자동 적용되는 단일 지점.
+    try {
+      const { error: benefitError } = await admin.rpc('issue_subscription_benefit_coupon', {
+        p_user_subscription_id: userSubscriptionId,
+      })
+      if (benefitError) {
+        console.error('구독 혜택 할인쿠폰 발급 RPC 실패:', benefitError.message)
+      }
+    } catch (err) {
+      console.error('구독 혜택 할인쿠폰 발급 중 예외:', err instanceof Error ? err.message : err)
+    }
+
+    // 구독 혜택 "적립포인트" 자동적립 — 위 쿠폰발급과 독립적으로 각자 fail-soft 처리
+    // (하나가 실패해도 다른 하나·결제결과에 영향 없음).
+    try {
+      const { error: pointsError } = await admin.rpc('award_subscription_points', {
+        p_user_subscription_id: userSubscriptionId,
+        p_amount: amount,
+      })
+      if (pointsError) {
+        console.error('구독 혜택 적립포인트 지급 RPC 실패:', pointsError.message)
+      }
+    } catch (err) {
+      console.error('구독 혜택 적립포인트 지급 중 예외:', err instanceof Error ? err.message : err)
+    }
+  }
+
   return { success: chargeSucceeded, nextStatus: result.next_status }
 }
