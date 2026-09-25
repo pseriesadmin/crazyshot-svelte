@@ -8381,3 +8381,5 @@ Stephen 직접 실행 필요
 | 2026-09-24 | [이 세션 한정] 세션 리뷰 md 작성 + cms-uiux §0-10-F 적용처(운송장 저장 `.btn-tracking-save--sm`) 문구 추가 | `.claude/plan/세션 리뷰 — 레거시회원·고객상세(포인트이력)·DetailPanel UI표준화(2026-09-11~24).md`(신규, 참조 문서·코드 무변경), `.claude/rules-ref/cms-uiux.md`(§0-10-F 정본 구현 아래 적용처 1줄) | 문서 전용 변경, 코드·DB 영향 없음 |
 
 | 2026-09-24 | [이 세션 한정] 상품 화면 PC 반응형: /products 히어로 fly 슬라이드 + /products/[id] 결합목록 title-card 아래 배치 | `src/routes/products/+page.svelte`, `src/routes/products/[id]/+page.svelte` | svelte-check 신규 0건, DB 무변경, QA 검수 대기 |
+| 2026-09-25 | [이 세션 한정] 결합상품 카드 상품명 폰트 한 단계 업 + 상품 카피 노출 | `products/[id]/+page.svelte`, `+page.server.ts`, `database.ts` | svelte-check 신규 0건 |
+| 2026-09-25 | [이 세션 한정] 모바일 결합상품 카드 옵션상품 수준으로 축소(상품명 16B·카피 12px) | `products/[id]/+page.svelte` | svelte-check 신규 0건, QA 검수 대기 |

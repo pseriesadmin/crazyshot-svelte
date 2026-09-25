@@ -186,6 +186,17 @@ export const load: PageServerLoad = async ({ params, locals }) => {
 		if (!bLinksError) {
 			bundleLinks = (bLinks ?? []) as import('$lib/types/database').ProductBundleLinkRow[];
 		}
+		// 결합상품 카드의 '상품 카피' — RPC(#544)는 product_caption을 반환하지 않아 별도 조회(마이그레이션 없이)
+		if (bundleLinks.length > 0) {
+			const { data: capRows } = await locals.supabase
+				.from('products')
+				.select('id, product_caption')
+				.in('id', bundleLinks.map((b) => b.bundle_product_id));
+			const capMap = new Map<string, string | null>(
+				((capRows ?? []) as Array<{ id: string; product_caption: string | null }>).map((r) => [r.id, r.product_caption]),
+			);
+			bundleLinks = bundleLinks.map((b) => ({ ...b, product_caption: capMap.get(b.bundle_product_id) ?? null }));
+		}
 	}
 
 	// 옵션상품 12H 요금(2026-09-05) — get_product_option_links RPC가 price_24h만 반환해
