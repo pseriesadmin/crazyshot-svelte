@@ -37,6 +37,8 @@ const { handle } = await import('../../hooks.server')
 type HandleFn = (input: {
   event: {
     cookies: { getAll: () => unknown[]; set: () => void }
+    request: { method: string }
+    url: URL
     locals: { safeGetSession?: () => Promise<unknown> }
   }
   resolve: (event: unknown, opts?: unknown) => Promise<unknown>
@@ -50,6 +52,8 @@ const USER = { id: 'user-1' }
 function makeEvent() {
   return {
     cookies: { getAll: () => [], set: () => {} },
+    request: { method: 'GET' },
+    url: new URL('https://crazyshot.kr/'),
     locals: {} as { safeGetSession?: () => Promise<unknown> },
   }
 }

@@ -124,6 +124,8 @@ hasSettingsAccess(role) → getRoleLevel(role) >= 50
 | 세션 제한 토글 | `/cms/accounts/list` → `toggleSession` | ❌ | ✅ | ✅ |
 | 접속로그 조회 | `/api/cms/accounts/[id]/login-logs` — 본인 계정 또는 manager+ | ❌(타인 조회) | ✅(본인·타인 모두) | ✅ |
 
+> ℹ️ **최소 보장(2026-09-25)**: 표의 액션에 개별 역할 확인이 없더라도 hooks 중앙 게이트가 /cms/** 변경 요청의 CMS 직원 여부(어떤 cms_role이든)를 보장한다. 등급별(manager 이상 등) 제한은 여전히 액션별 게이트 소관.
+
 > ⚠️ **계정 관리 권한 핵심 원칙 (2026-08-26 확정)**: 모든 "대상이 superadmin인 액션"은
 > `requireTrueSuperadmin()` 전용 게이트를 통과한 호출자(진짜 superadmin)만 실행할 수 있다.
 > `hasSettingsAccess()`(manager 이상, level≥50)로는 이 게이트를 통과할 수 없으며,
@@ -281,6 +283,27 @@ API:
 > `cms_admin_audit_log`는 "언제 누가 어떤 계정 설정을 바꿨는가"(변경 이력).
 > 두 테이블 모두 service_role 전용이므로 +server.ts / +page.server.ts 경유 조회만 허용.
 
+### ⛔ CMS 중앙 게이트 (hooks.server.ts) — /cms/** 변경 요청 (2026-09-25 신설)
+
+```
+폼 액션(POST)은 +layout.server.ts의 CMS 접근 가드를 거치지 않는다 → 로그인만 된 사용자(익명
+고객 포함)가 액션에 직접 POST하면 액션 개별 역할 확인이 없는 경우 service_role로 상품 등을
+변경할 수 있었다(sp3-qa 발견). 이를 막기 위해 src/hooks.server.ts handle()에 중앙 게이트를 둔다.
+
+대상  : 메서드가 GET/HEAD/OPTIONS가 아니고 경로가 /cms 또는 /cms/* 인 요청
+        (경로는 디코딩·이중슬래시 병합·소문자화 후 판정 — 끝슬래시·대소문자·%인코딩 우회 차단)
+예외  : /cms/login, /cms/login/* (로그인 전 액션: login·복구·초대 비밀번호 설정). 그 외 예외 없음
+        (cms 하위에 비로그인 POST 필요 지점 없음 — 전수 grep 확인)
+판정  : 세션 없음 → 401 / 세션 있으나 cms_role 없음 → 403 (JSON {error}) / 어떤 cms_role이든 통과
+        역할 조회는 getCmsRoleForAction(locals.cmsRole 캐시), 조회 예외 시 403(안전측)
+        GET에는 추가 DB 조회 없음
+세부  : partner/manager/superadmin 등급별 게이트는 각 액션이 그대로 담당(중앙 게이트는 "최소
+        CMS 직원 여부"만 보장). 액션에 개별 역할 확인이 없어도 비CMS 사용자는 도달 불가.
+범위  : /api/cms/* 는 hooks 게이트 대상이 아니다 — 각 +server.ts가 자체 게이트를 가져야 한다
+        (/api/cms/upload는 고객 크레이지로그 첨부 'log/' 경로만 비CMS 허용).
+테스트: src/__tests__/security/cmsRoleGate.test.ts · cmsApiRoleGate.test.ts
+```
+
 ### ⛔ form action에서 locals.cmsRole 직접 사용 절대 금지 (2026-07-23)
 
 ```
@@ -405,6 +428,8 @@ function verifyTossSignature(body: unknown, signature: string | null): boolean {
 [ ] [접속로그] 기기·브라우저 컬럼이 parseUserAgent.ts로 가공 표시되는가? (원문 UA 노출 금지)
 [ ] [감사로그] cms_admin_audit_log가 append-only인가? (UPDATE/DELETE 없음)
 [ ] [감사로그] insertCmsAdminAuditLog 헬퍼가 fail-soft로 래핑됐는가? (INSERT 실패 → 주 액션 롤백 안 됨)
+[ ] [중앙 게이트] hooks.server.ts의 /cms/** 변경 요청 게이트가 유지되는가? 예외가 /cms/login뿐인가? (cmsRoleGate.test.ts)
+[ ] [중앙 게이트] 신규 /api/cms/* +server.ts에 자체 세션+CMS 역할 게이트가 있는가? (hooks 게이트는 /api 미적용)
 ```
 
 ---
