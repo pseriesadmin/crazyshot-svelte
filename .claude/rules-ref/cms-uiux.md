@@ -2664,6 +2664,8 @@ export type SuggestPickerVariant = 'category' | 'brand' | 'generic'
 | `listLabel` | `string` | variant 자동 | ARIA listbox 레이블 (미지정 시 variant 기본값) |
 | `oninput` | `(value: string) => void` | — | 입력 변경 콜백 |
 | `onselect` | `(option, previousId) => void` | — | 선택 콜백 |
+| `noFilter` | `boolean` | `false` | `true`: `options`가 이미 외부(비동기 RPC)에서 필터링된 결과 — 내부 로컬 필터 건너뜀 |
+| `clearOnSelect` | `boolean` | `false` | `true`: 선택 즉시 `onselect` 통지 후 입력창을 비움. **"검색→목록에 추가→다시 검색"을 반복하는 UX 전용**(2026-08-26) — 카테고리/등급 선택처럼 고른 값을 입력창에 계속 보여줘야 하는 단일값 선택기(`<select>` 대체용)에는 절대 `true`로 설정 금지 |
 | `field` | `Snippet<[SuggestPickerFieldControl]>` | **필수** | 페이지 `.f-input` input 렌더 스니펫 |
 
 ### 12-4. 표준 사용 예

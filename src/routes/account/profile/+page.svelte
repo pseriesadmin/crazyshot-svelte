@@ -125,7 +125,7 @@
 
 <style>
   .page-root {
-    min-height: 100vh;
+    min-height: 100dvh;
     background: #ecebf4;
     display: flex;
     flex-direction: column;
@@ -205,6 +205,7 @@
   .tab-content {
     width: 100%;
     padding-top: 30px;
+    padding-bottom: 100px;
     display: flex;
     flex-direction: column;
     align-items: center;

@@ -45,11 +45,12 @@
       phone: string | null
       is_student: boolean | null
       is_foreign: boolean | null
-      identity_type: string | null
+      identity_type: string[] | null
       identity_verified_at: string | null
-      identity_doc_url: string | null
+      identity_doc_url: string[] | null
       foreign_verified_at: string | null
       foreign_doc_url: string | null
+      foreign_doc_urls: string[] | null
     }
     subscription: { plan_name: string | null } | null
     reservations: Array<{
@@ -848,6 +849,38 @@
     }
   }
 
+  // 본인증명·외국인증명 등록요청 카드 발송 (CustomerDetailPanel "요청" 버튼, 2026-08-27)
+  let requestingDocType = $state<'identity' | 'foreign' | null>(null)
+
+  async function handleRequestDoc(docType: 'identity' | 'foreign'): Promise<void> {
+    if (!selectedSessionId || requestingDocType) return
+    requestingDocType = docType
+    try {
+      const res = await fetch('/api/cms/chat/identity-request/direct-send', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          session_id: selectedSessionId,
+          doc_type: docType,
+        }),
+      })
+      if (res.ok) {
+        const { message } = await res.json()
+        if (message) {
+          const already = messages.some((m) => m.id === message.id)
+          if (!already) messages = [...messages, message]
+        }
+        csToast.success(`${docType === 'foreign' ? '외국인증명' : '본인증명'} 등록요청을 전송했습니다.`)
+      } else {
+        csToast.error('요청 전송에 실패했습니다.')
+      }
+    } catch {
+      csToast.error('요청 전송에 실패했습니다.')
+    } finally {
+      requestingDocType = null
+    }
+  }
+
   async function handleSend(content: string, cannedResponseId?: string): Promise<void> {
     if (!selectedSessionId || isSending) return
     isSending = true
@@ -1252,6 +1285,8 @@
             detail={customerDetail}
             summary={customerSummary}
             isLoading={customerDetailLoading}
+            onrequestdoc={handleRequestDoc}
+            {requestingDocType}
           />
         </div>
       </div>
