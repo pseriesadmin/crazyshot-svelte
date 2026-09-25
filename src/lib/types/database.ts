@@ -194,6 +194,31 @@ export interface ProductOptionLinkRow {
 export type ProductOptionLinkInsert = Omit<ProductOptionLink, 'id' | 'created_at' | 'updated_at'>;
 
 // ───────────────────────────────────────────────────────────
+// 상품 결합 연결 (product_bundle_links) — Phase 1 (Migration #544)
+export interface ProductBundleLink {
+  id: string;
+  product_id: string;
+  bundle_product_id: string;
+  display_order: number;
+  created_at: string;
+  updated_at: string;
+  deleted_at: string | null;
+}
+
+// get_product_bundle_links RPC 반환 행
+export interface ProductBundleLinkRow {
+  link_id: string;
+  bundle_product_id: string;
+  bundle_name: string;
+  components: Record<string, string> | null;
+  display_order: number;
+  image_url: string | null;
+  product_caption?: string | null;
+}
+
+export type ProductBundleLinkInsert = Omit<ProductBundleLink, 'id' | 'created_at' | 'updated_at'>;
+
+// ───────────────────────────────────────────────────────────
 export interface PickupPoint {
   id: string;                          // UUID PK
   name: string;

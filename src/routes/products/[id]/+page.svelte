@@ -723,6 +723,9 @@
             <div class="option-info">
               <div class="option-label-row">
                 <p class="option-label">{bundle.bundle_name}</p>
+                {#if bundle.product_caption}
+                  <p class="bundle-caption">{bundle.product_caption}</p>
+                {/if}
               </div>
             </div>
           </div>
@@ -1586,6 +1589,20 @@
   @media (min-width: 641px) {
     .option-label { font: var(--text-pc-title-16); }
   }
+  /* 결합상품 카드 전용(2026-09-25, Stephen 지시): PC 기준 상품명 title-18 + 카피(--cs-text-mid).
+     모바일은 옵션상품 카드 수준(썸네일 76.032px·패딩은 .option-item/.option-thumb 공용값,
+     상품명 --text-m-body-16B는 .option-label 기본값)에 맞추고 카피만 --text-m-script-12로
+     한 단계 낮춤(front-uiux.md §14-4 "Mobile = PC 대비 축소" 관례). 옵션상품 카드는 무변경. */
+  .bundle-caption {
+    font: var(--text-m-script-12);
+    color: var(--cs-text-mid);
+    margin: 0;
+  }
+  @media (min-width: 641px) {
+    .bundle-item .option-label { font: var(--text-pc-title-18); line-height: 1.3; }
+    .bundle-caption { font: var(--text-m-script-14); }
+  }
+
   /* 가격(대여요금)행 위 / 수량 UI 아래로 항상 세로 배치(2026-09-06, Stephen 지적 —
      PC 전용 가로배치(space-between)가 옵션 썸네일 추가로 정보열(.option-info) 폭이
      줄어들면서 수량 UI가 카드 배경 우측 바깥으로 밀려나는 오버플로 결함을 유발함.
