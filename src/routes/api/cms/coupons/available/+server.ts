@@ -1,5 +1,5 @@
 // GET /api/cms/coupons/available — 관리자 직접발송용 발급 가능 쿠폰 목록
-// 활성 + 미삭제 쿠폰 반환 — 날짜(유효기간) 조건은 두지 않는다(무제한·발급후N일 쿠폰도 선물 가능)
+// 활성 + 미삭제 쿠폰 반환 — 무제한·발급후N일 쿠폰만 선물 가능(날짜 지정 fixed_period 쿠폰은 선물 차단)
 import { json } from '@sveltejs/kit'
 import { env } from '$env/dynamic/private'
 import { PUBLIC_SUPABASE_URL } from '$env/static/public'
@@ -24,6 +24,7 @@ export const GET: RequestHandler = async ({ locals }) => {
     .select('id, code, description, discount_type, discount_value, max_discount_amount, valid_from, valid_until, usage_limit, usage_count')
     .eq('is_active', true)
     .is('deleted_at', null)
+    .neq('validity_type', 'fixed_period')
     .order('created_at', { ascending: false })
     .limit(50)
 
