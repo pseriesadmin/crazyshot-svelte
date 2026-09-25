@@ -1,5 +1,6 @@
 <script lang="ts">
   import { invalidateAll, goto } from '$app/navigation'
+  import { deserialize } from '$app/forms'
   import { csToast } from '$lib/utils/toast'
   import CmsPagination from '$lib/components/cms/CmsPagination.svelte'
   import type { PageData } from './$types'
@@ -23,6 +24,16 @@
   // ─── 섹션 a·b: 고객 알림 마스터 스위치 ───
   let togglingConfigId = $state<number | null>(null)
 
+  // 서버 액션 응답을 확인해 실패(401/403/400/500)를 성공으로 오인하지 않도록 한다.
+  // 성공 시 null, 실패 시 사용자에게 보일 문구를 반환.
+  async function postAction(action: string, fd: FormData): Promise<string | null> {
+    const res = await fetch(action, { method: 'POST', body: fd, headers: { 'x-sveltekit-action': 'true' } })
+    const result = deserialize(await res.text())
+    if (result.type === 'success') return null
+    if (result.type === 'failure') return (result.data as { message?: string } | undefined)?.message ?? '저장에 실패했습니다.'
+    return '저장에 실패했습니다.'
+  }
+
   async function togglePushConfig(row: PushConfigRow): Promise<void> {
     togglingConfigId = row.id
     const nextEnabled = !row.push_enabled
@@ -30,7 +41,11 @@
     fd.set('notify_type', row.notify_type)
     fd.set('push_enabled', String(nextEnabled))
     try {
-      await fetch('?/updatePushConfig', { method: 'POST', body: fd })
+      const err = await postAction('?/updatePushConfig', fd)
+      if (err) {
+        csToast.error(err)
+        return
+      }
       csToast.success(`'${row.label}' 알림을 ${nextEnabled ? '켰습니다.' : '껐습니다.'}`)
       await invalidateAll()
     } catch {
@@ -51,6 +66,12 @@
 
   let togglingAdminCell = $state<string | null>(null)
 
+  // 마스터(superadmin) 계정의 수신 설정은 실제 superadmin만 변경 가능(서버 게이트와 동일 기준) —
+  // manager에게는 해당 행 토글을 비활성화해 눌러서 오류를 보는 경로를 없앤다.
+  function isAdminRowLocked(row: AdminNotifyRow): boolean {
+    return row.cms_role === 'superadmin' && data.cmsRole !== 'superadmin'
+  }
+
   async function toggleAdminNotify(
     row: AdminNotifyRow,
     eventKey: (typeof ADMIN_EVENTS)[number]['key'],
@@ -64,7 +85,11 @@
     fd.set('event_key', eventKey)
     fd.set('enabled', String(nextEnabled))
     try {
-      await fetch('?/updateAdminNotify', { method: 'POST', body: fd })
+      const err = await postAction('?/updateAdminNotify', fd)
+      if (err) {
+        csToast.error(err)
+        return
+      }
       await invalidateAll()
     } catch {
       csToast.error('저장에 실패했습니다.')
@@ -88,7 +113,11 @@
     { value: 'contract_signed', label: '전자서명(관리자)' },
     { value: 'payment_completed', label: '결제완료(관리자)' },
     { value: 'new_session', label: '신규상담(관리자)' },
+    { value: 'urgent_chat_message', label: '긴급상담(관리자)' },
   ])
+
+  // 로그 "이벤트" 열 한글 표기 — 설정 라벨 + 관리자 이벤트 라벨, 매핑 없으면 원문 코드 그대로
+  const typeLabelMap = $derived(new Map(logTypeOptions.filter((o) => o.value !== 'all').map((o) => [o.value, o.label])))
 
   function applyLogFilter(status: string, type: string, page: number): void {
     const params = new URLSearchParams()
@@ -107,10 +136,11 @@
     return { text: status, cls: 'log-badge--skipped' }
   }
 
+  // 시각은 KST 고정 표기(브라우저 로컬 시간대와 무관, SSR/하이드레이션 일치)
   function formatDateTime(iso: string): string {
-    const d = new Date(iso)
+    const kst = new Date(new Date(iso).getTime() + 9 * 60 * 60 * 1000)
     const pad = (n: number) => String(n).padStart(2, '0')
-    return `${d.getFullYear()}.${pad(d.getMonth() + 1)}.${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`
+    return `${kst.getUTCFullYear()}.${pad(kst.getUTCMonth() + 1)}.${pad(kst.getUTCDate())} ${pad(kst.getUTCHours())}:${pad(kst.getUTCMinutes())}`
   }
 </script>
 
@@ -202,7 +232,8 @@
                         type="button"
                         class="s-chip s-chip--sm"
                         class:s-chip--on={row[evt.field]}
-                        disabled={togglingAdminCell === `${row.id}:${evt.key}`}
+                        disabled={togglingAdminCell === `${row.id}:${evt.key}` || isAdminRowLocked(row)}
+                        title={isAdminRowLocked(row) ? '마스터 계정의 설정은 마스터만 변경할 수 있습니다.' : undefined}
                         onclick={() => toggleAdminNotify(row, evt.key, evt.field)}
                         aria-label="{row.full_name || row.email} {evt.label} 알림 {row[evt.field] ? '끄기' : '켜기'}"
                       >{row[evt.field] ? 'ON' : 'OFF'}</button>
@@ -268,7 +299,7 @@
                 <tr>
                   <td class="log-time">{formatDateTime(log.sent_at)}</td>
                   <td>{log.recipient_name}</td>
-                  <td>{log.type}</td>
+                  <td>{typeLabelMap.get(log.type) ?? log.type}</td>
                   <td><span class="log-badge {meta.cls}">{meta.text}</span></td>
                   <td class="log-body-cell">
                     <span class="log-title">{log.title}</span>
@@ -369,9 +400,10 @@
   }
 
   /* ─── on/off 칩 버튼 (rental 설정 페이지와 동일 컨벤션) ─── */
+  /* cms-uiux.md §0-10-G DetailPanel 전용 버튼 — 대형(44px·padding 0 20px·15px·body-14). OFF 상태는 토글 구분을 위해 기존 흰 배경 유지 */
   .s-chip {
-    height: 36px;
-    padding: 0 18px;
+    height: 44px;
+    padding: 0 20px;
     border: 1px solid var(--cs-lilac);
     border-radius: var(--cms-radius-md);
     background: var(--cs-white);
@@ -385,6 +417,11 @@
     background: var(--cs-purple);
     color: var(--cs-white);
     border-color: var(--cs-purple);
+  }
+
+  .s-chip--on:hover:not(:disabled) {
+    background: var(--cs-purple-hover);
+    border-color: var(--cs-purple-hover);
   }
 
   .s-chip:not(.s-chip--on):hover {
