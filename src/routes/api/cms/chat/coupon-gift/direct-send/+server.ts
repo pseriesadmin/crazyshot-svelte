@@ -64,6 +64,7 @@ export const POST: RequestHandler = async ({ request, locals }) => {
     .eq('id', couponId)
     .eq('is_active', true)
     .is('deleted_at', null)
+    .neq('validity_type', 'fixed_period')
     .single()
 
   if (couponErr || !couponRaw) {

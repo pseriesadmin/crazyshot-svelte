@@ -404,6 +404,7 @@ async function enrichCouponGiftCard(
     .select('id, code, discount_type, discount_value')
     .eq('is_active', true)
     .is('deleted_at', null)
+    .neq('validity_type', 'fixed_period')
     .order('created_at', { ascending: false })
     .limit(5)
 
