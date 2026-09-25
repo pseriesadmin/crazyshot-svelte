@@ -149,6 +149,84 @@
       }))
     )
   }
+
+  // ── 결합상품 (Phase 1 — Migration #544) ──────────────────────
+  interface NewBundleLink {
+    bundle_product_id: string
+    name: string
+    image_url: string | null
+  }
+  let selectedBundles = $state<NewBundleLink[]>([])
+  let bundleKeyword = $state('')
+  let showBundleModal = $state(false)
+  let bundleResults = $state<OptionSearchResult[]>([])
+  let bundleSearching = $state(false)
+
+  async function searchBundleProducts() {
+    const kw = bundleKeyword.trim()
+    if (!kw) return
+    bundleSearching = true
+    showBundleModal = true
+    const { data: rows, error: err } = await supabase
+      .from('products')
+      .select<string, ProductSearchRow>('id, name, stock_quantity, image_urls, price_rules(price, duration_type)')
+      .or(productSearchOrFilter(kw))
+      .eq('is_active', true)
+      .is('deleted_at', null)
+      .is('parent_product_id', null)
+      .limit(20)
+    bundleSearching = false
+    if (err) { csToast.error('상품 검색 중 오류가 발생했습니다.'); return }
+    bundleResults = (rows ?? []).map((p) => ({
+      id: p.id,
+      name: p.name,
+      stock_quantity: p.stock_quantity ?? 0,
+      image_url: p.image_urls[0] ?? null,
+      price_24h: p.price_rules.find((r) => r.duration_type === '24h')?.price ?? 0,
+    }))
+  }
+
+  function onBundleSuggestSelect() {
+    void searchBundleProducts()
+  }
+
+  function addBundleProduct(item: OptionSearchResult) {
+    // 자기 자신 제외
+    // (신규 등록 시점에는 product.id가 없으므로 selectedBundles 중복만 체크)
+    if (selectedBundles.some((b) => b.bundle_product_id === item.id)) {
+      csToast.warning('이미 추가된 상품입니다.')
+      return
+    }
+    // 옵션상품으로 이미 선택된 상품 제외
+    if (selectedOptions.some((o) => o.option_product_id === item.id)) {
+      csToast.warning('이미 옵션상품으로 추가된 상품입니다.')
+      return
+    }
+    selectedBundles = [
+      ...selectedBundles,
+      {
+        bundle_product_id: item.id,
+        name: item.name,
+        image_url: item.image_url,
+      },
+    ]
+    showBundleModal = false
+    bundleKeyword = ''
+    bundleResults = []
+  }
+
+  function removeBundle(id: string) {
+    selectedBundles = selectedBundles.filter((b) => b.bundle_product_id !== id)
+  }
+
+  function serializeBundleLinks(): string {
+    return JSON.stringify(
+      selectedBundles.map((b, i) => ({
+        bundle_product_id: b.bundle_product_id,
+        display_order: i,
+      }))
+    )
+  }
   // ────────────────────────────────────────────────────────────
 
   // ── 조합그룹 / 콤보 선택 ─────────────────────────────────────────────────
@@ -666,6 +744,7 @@
     <input type="hidden" name="is_active" value={isActive.toString()} />
     <input type="hidden" name="option_only" value={optionOnly.toString()} />
     <input type="hidden" name="option_links" value={serializeOptionLinks()} />
+    <input type="hidden" name="bundle_links" value={serializeBundleLinks()} />
     <!-- BND-11: 임시 업로드 폴더 식별자 — 서버에서 temp/{tempId} → {productId} 이관 처리 -->
     <input type="hidden" name="temp_id" value={tempId} />
 
@@ -1190,6 +1269,148 @@
         </div>
       {:else}
         <p class="no-option-msg">추가된 옵션상품이 없습니다.</p>
+      {/if}
+    </section>
+
+    <!-- ③-B 결합상품 -->
+    <section class="form-section">
+      <h2 class="section-title">③-B 결합상품</h2>
+      <p class="section-desc">패키지로 함께 제공되는 결합상품을 상품 DB에서 검색해 추가합니다.</p>
+
+      <!-- 검색 입력폼 -->
+      <div class="option-search-row">
+        <div class="option-search-field">
+          <CmsSimilarNameInput
+            id="bundle-search"
+            bind:value={bundleKeyword}
+            source="product_search"
+            activeOnly={true}
+            placeholder="상품명 또는 키워드 입력 후 검색..."
+            categoryLabels={CATEGORY_LABELS}
+            onselect={onBundleSuggestSelect}
+          >
+            {#snippet field(c)}
+              <input
+                type="text"
+                class="f-input option-search-input"
+                id={c.id}
+                placeholder={c.placeholder}
+                required={c.required}
+                value={c.value}
+                oninput={c.oninput}
+                onkeydown={(e) => {
+                  c.onkeydown(e)
+                  if (e.key === 'Enter' && !e.defaultPrevented) {
+                    e.preventDefault()
+                    void searchBundleProducts()
+                  }
+                }}
+                onfocus={c.onfocus}
+                onblur={c.onblur}
+                aria-label="결합상품 검색"
+                aria-autocomplete={c.ariaAutocomplete}
+                aria-expanded={c.ariaExpanded}
+                aria-controls={c.ariaControls}
+                autocomplete="off"
+              />
+            {/snippet}
+          </CmsSimilarNameInput>
+        </div>
+        <button type="button" class="btn-search" onclick={searchBundleProducts} disabled={bundleSearching}>
+          {bundleSearching ? '검색 중...' : '검색'}
+        </button>
+      </div>
+
+      <!-- 검색 결과 모달 -->
+      {#if showBundleModal}
+        <div
+          class="option-modal-backdrop"
+          onclick={() => { showBundleModal = false }}
+          role="presentation"
+        >
+          <div
+            class="option-modal"
+            role="dialog"
+            aria-modal="true"
+            aria-label="결합상품 검색 결과"
+            onclick={(e) => e.stopPropagation()}
+          >
+            <div class="option-modal-header">
+              <p class="option-modal-title">검색 결과</p>
+              <button
+                type="button"
+                class="option-modal-close"
+                onclick={() => { showBundleModal = false }}
+                aria-label="닫기"
+              >✕</button>
+            </div>
+            {#if bundleSearching}
+              <p class="option-modal-empty">검색 중...</p>
+            {:else if bundleResults.length === 0}
+              <p class="option-modal-empty">검색 결과가 없습니다.</p>
+            {:else}
+              <ul class="option-result-list">
+                {#each bundleResults as item (item.id)}
+                  <li class="option-result-item">
+                    {#if item.image_url}
+                      <img
+                        src={item.image_url}
+                        alt={item.name}
+                        class="option-result-thumb"
+                        width="56"
+                        height="42"
+                        loading="lazy"
+                      />
+                    {:else}
+                      <div class="option-result-thumb option-result-thumb--empty">No img</div>
+                    {/if}
+                    <div class="option-result-info">
+                      <p class="option-result-name">{item.name}</p>
+                    </div>
+                    <button
+                      type="button"
+                      class="btn-add-option"
+                      onclick={() => addBundleProduct(item)}
+                    >추가</button>
+                  </li>
+                {/each}
+              </ul>
+            {/if}
+          </div>
+        </div>
+      {/if}
+
+      <!-- 선택된 결합상품 목록 -->
+      {#if selectedBundles.length > 0}
+        <div class="selected-option-list">
+          {#each selectedBundles as bnd (bnd.bundle_product_id)}
+            <div class="selected-option-card">
+              {#if bnd.image_url}
+                <img
+                  src={bnd.image_url}
+                  alt={bnd.name}
+                  class="selected-option-thumb"
+                  width="64"
+                  height="48"
+                  loading="lazy"
+                />
+              {:else}
+                <div class="selected-option-thumb selected-option-thumb--empty">No img</div>
+              {/if}
+              <div class="selected-option-info">
+                <p class="selected-option-name">{bnd.name}</p>
+              </div>
+              <button
+                type="button"
+                class="remove-btn"
+                onclick={() => removeBundle(bnd.bundle_product_id)}
+                aria-label="{bnd.name} 결합상품 제거"
+              >✕</button>
+            </div>
+          {/each}
+        </div>
+      {:else}
+        <p class="no-option-msg">추가된 결합상품이 없습니다.</p>
       {/if}
     </section>
 

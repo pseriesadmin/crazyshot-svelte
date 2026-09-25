@@ -521,6 +521,74 @@ RPC 필터 4종     : Migration #390~393
 
 ---
 
+### 2-14. 결합상품(bundle) 탭 — CMS '결합상품' 구성 관리 (Phase 1, 2026-09-24 신설)
+
+> ⛔ 부모 상품 전용. 자식(재고) 상품에서는 '결합상품' 탭이 숨겨지고(`childBlockedSections` 포함),
+> 서버(updateSection 'bundles')도 자식 대상 저장을 차단한다.
+
+```
+결합상품 = 이 상품을 대여할 때 함께 구성되는 다른 상품 목록.
+예: "카메라 A" 상품에 결합상품으로 "배터리 그립 B", "렌즈 C"를 등록하면,
+    상품상세(/products/[id]) 화면의 별도 "결합 상품" 목록(썸네일+상품명, 요금·수량 없음)에
+    배터리 그립 B·렌즈 C가 표시되고, 전자계약 상품목록에는 패키지 줄 아래 한 줄씩 나열된다.
+    장바구니에는 결합상품 목록을 표시하지 않는다(Q-J 확정 — Phase 2에서도 미표시).
+    대여요금은 패키지 상품 자신의 가격정책으로만 산정한다(결합상품 요금·수량 미적용).
+
+제약 (upsert_product_bundle_links RPC가 서버에서 집행):
+  ① 자기 자신을 결합상품으로 추가 불가 (BUNDLE_SELF_REF)
+  ② 자식(재고) 상품을 결합상품으로 추가 불가 — 부모 상품만 (BUNDLE_CHILD_PRODUCT)
+  ③ 삭제된(deleted_at IS NOT NULL) 상품 추가 불가 (BUNDLE_DELETED_PRODUCT)
+  ④ 지금 저장하려는 상품 자체가 이미 다른 패키지의 결합상품이면, 그 상품에는 결합상품을
+     등록할 수 없음(BUNDLE_IS_NESTED) — 결합목록을 비우는 저장은 허용.
+     ⚠️ 같은 결합상품을 여러 패키지가 함께 쓰는 것은 허용된다(렌즈 C를 패키지 X·Y 양쪽에 등록 가능).
+  ⑤ 이미 자신이 결합상품 목록을 가진 상품("패키지")은 다른 패키지의 결합상품이 될 수 없음
+     (패키지의 패키지 금지 — BUNDLE_NESTING_FORBIDDEN)
+  ⑥ 이 패키지의 옵션상품(product_option_links)에 이미 연결된 상품은 결합상품으로도 등록 불가
+     — 같은 패키지 내 옵션·결합 중복 차단 (BUNDLE_OPTION_OVERLAP)
+
+계약서 결합상품 행 정책 (Phase 1, 2026-09-24, contract-data/+server.ts):
+  - 메인상품 행 바로 뒤, 옵션상품 행 앞에 삽입
+  - 수량: '-', 금액: '-'
+  - 비고: formatComponentsText(components) — 구성품 JSONB 텍스트화
+  - 상품코드: 예약 시점 배정 실물(reservation_bundle_assets)의 품번을 표시(Phase 2, Q-I).
+    배정 기록이 없는 레거시 예약은 현재 결합 구성(이름만)으로 폴백, 상품코드 칸 비움
+  - Phase 1 + Phase 2 모두 Stage 검증 후 Production에 한꺼번에 적용 (Q-M — Phase 2 Migration #547은
+    Stage 적용 후 Stephen의 Production 오픈 시점 확인 대기)
+
+재고 연동 (Phase 2, 2026-09-24, Migration #547 — A안 실물 단위 배정):
+  - 패키지 hold 생성(create_hold_reservation)·draft→hold 승격(promote_draft_reservation)과 같은
+    트랜잭션에서 결합상품마다 활성 자식(실물) 1개를 배정 → reservation_bundle_assets(예약 1건 ↔ 결합상품별
+    실물 1개). 날짜 기준 = 메인과 동일한 effective 기간(휴무일 연장 포함), FOR UPDATE SKIP LOCKED.
+  - 1종이라도 배정 불가(재고 0·기간 겹침) → 전체 실패·롤백, 메시지 "구성품 재고가 부족해 예약할 수 없습니다."
+  - 결합상품 단독 예약과 상호 차단: 단독 배정 쿼리가 "비종결 예약에 결합 배정된 실물 + 날짜 겹침"을 제외
+  - 해제는 별도 로직 없음 — 예약 status 조인으로 취소·만료·반납·완료 시 자동 해제. draft는 점유 안 함
+  - 삭제된 결합상품/연결은 배정 대상 아님(EC-C). 요금·결제 금액·옵션 수량 가드는 무변경
+  - 가용재고(get_available_stock_counts): 결합 점유 반영 + 패키지 가용 = min(패키지, 각 결합상품)
+  - CMS 예약/대여 상세 '대여정보' 탭에 "결합상품 + 장비번호" 표시(GET /api/cms/reservations/[id]/bundles)
+
+고객 화면(/products/[id]):
+  - 결합상품은 상품명만 노출 (Phase 1 = name only — 상품코드 미표시)
+  - 클릭 시 해당 상품 페이지로 이동하는 링크 없음 (display-only)
+  - 옵션상품 목록 바로 위 별도 "결합 상품" 목록(썸네일+상품명, 요금·수량·필수 배지 없음)
+  - 장바구니(/cart)에서는 결합상품 목록 미표시 (Q-J 확정)
+  - Phase 1 Stage only (Production 반영은 Phase 2와 동시 진행)
+```
+
+구현 파일:
+```
+DB 스키마·RPC    : supabase/migrations/20260924020000_544_product_bundle_links.sql
+타입             : src/lib/types/database.ts (ProductBundleLink / ProductBundleLinkRow / ProductBundleLinkInsert)
+CMS 조회·저장    : src/lib/server/products/loadSelectedProductDetail.ts (get_product_bundle_links)
+                  src/routes/cms/products/+page.server.ts (sectionType='bundles', cloneProduct new_product)
+CMS UI           : src/lib/components/cms/ProductDetailPanel.svelte (bundles 탭 — 옵션탭 바로 뒤)
+신규등록         : src/routes/cms/products/new/+page.server.ts (+new/+page.svelte)
+계약서 반복행    : src/lib/utils/contractLineItems.ts (BundleLink, ReservationForLineItems.bundles)
+                  src/routes/api/cms/reservations/[id]/contract-data/+server.ts
+고객 화면        : src/routes/products/[id]/+page.server.ts (+page.svelte)
+```
+
+---
+
 ## 3. is_active 토글 — 재고 가용성 연동
 
 ```
@@ -594,6 +662,7 @@ $effect(() => {
 | `basic` | 기본정보 | `basic` | 저장 버튼 | name · brand · product_caption · is_active · category | ❌ 부모 전용 |
 | `basic` | (슬러그) | `slug` | 저장 버튼 (별도) | slug (URL 코드) | ❌ 부모 전용 |
 | `options` | 옵션상품 | `options` | 저장 버튼 | option_links (연관상품 JSON) | ❌ 부모 전용 |
+| `bundles` | 결합상품 | `bundles` | 저장 버튼 | bundle_links (product_bundle_links 테이블 — §2-14) | ❌ 부모 전용 |
 | `pricing` | 가격정책 | `pricing` | 저장 버튼 | price_12h · price_24h · price_monthly · deposit · late_fee · damage_fee · sale_price · sale_only | ❌ 부모 전용 |
 | `rental` | 대여정책 | `rental` | 저장 버튼 | allowed_period_ids · allowed_method_ids · allowed_pickup_ids · 배송옵션 | ❌ 부모 전용 |
 | `content` | 상품설명 | `content` | 저장 버튼 | content_blocks · keywords | ❌ 부모 전용 |
@@ -666,7 +735,10 @@ A탭의 미저장 로컬 상태도 함께 서버값으로 조용히 덮어써진
 ③ is_active = true (관리자가 ON 상태로 설정한 자식)
 ④ 요청 기간(start_date ~ end_date)에 활성 예약 없음
    (cancelled · returned · completed · expired 상태는 무시)
+④-2 요청 기간에 "다른 패키지 예약의 결합상품으로 배정된 실물"이 아님 (reservation_bundle_assets +
+   비종결 예약 + 날짜 겹침 — 결합 점유, §2-14 Phase 2 / Migration #547)
 ⑤ FOR UPDATE SKIP LOCKED (동시 예약 충돌 방지)
+⑥ 패키지 상품이면 결합상품마다 위 ①~⑤ 기준의 실물 1개가 함께 배정 가능해야 함(하나라도 없으면 예약 실패)
 → 위 조건 중 가장 먼저 생성된 자식(ORDER BY created_at)에 배정
 ```
 
@@ -986,11 +1058,24 @@ Q5. 선택된 상품(rootId)이 현재 페이지네이션 범위(productIds, 20�
 [ ] 자식 이력 탭 — 등록/수정/삭제가 그 자식에게만 독립적으로 적용되는가?(§4-2)
 [ ] 이력 탭 외 8개 탭 — 자식 선택 시 전부 읽기전용(저장버튼 비노출 + 서버 childBlockedSections
     가드)인가?(§4-1)
+[ ] 결합상품(bundles) 탭 저장 시 자기자신·자식·삭제된 상품·중첩·같은 패키지 옵션과의 중복 차단이
+    upsert_product_bundle_links RPC 레벨에서 6가지 제약(BUNDLE_SELF_REF·BUNDLE_CHILD_PRODUCT·
+    BUNDLE_DELETED_PRODUCT·BUNDLE_NESTING_FORBIDDEN·BUNDLE_IS_NESTED·BUNDLE_OPTION_OVERLAP)으로
+    동작하는가? (§2-14)
+[ ] 자식 상품 선택 시 결합상품 탭이 childBlockedSections 가드로 숨겨지고 서버(updateSection
+    'bundles')도 child_product_blocked로 차단하는가? (§2-14, §4-1)
+[ ] 계약서 결합상품 행이 메인상품 뒤·옵션상품 앞에 삽입되며 수량·금액='-',
+    비고=formatComponentsText(components)로 표시되는가? (§2-14 계약서 정책)
+[ ] Phase 1에서 결합상품 행에 상품코드(상품코드 컬럼)가 노출되지 않는가? (name only — §2-14)
+[ ] 결합상품 새 상품 복제 시 원본 부모의 bundle_links가 새 상품에 복사되는가? 복사 실패 시
+    regWarn 'bundles'로 경고 처리되는가? (§2-14, §2-10①)
+[ ] 재고 추가(add_inventory 모드)에서는 bundle_links를 복사하지 않는가?
+    (자식 상품은 결합상품 개념 없음 — §2-14, §4-1)
 ```
 
 ---
 
-*products.md v2.8 | Harness Flow v3.2 | 2026-08-31 §2-12 신설 — 옵션 상품 전용(option_only)
+*products.md v2.9 | Harness Flow v3.2 | 2026-08-31 §2-12 신설 — 옵션 상품 전용(option_only)
 정책 문서화(전역 코드감사 중 코드 주석이 존재하지 않는 §2-12를 참조하던 공백 발견·해소,
 Migration #389~393, 카탈로그·홈·하이프팩·검색 등 5곳 제외 + 옵션상품 피커는 영향 없음) |
 2026-08-06 품번(product_code) 정책 전면 재설계 —
@@ -1006,4 +1091,6 @@ JSONB 파라미터 이중직렬화 버그 수정, 빠른 재고 등록 QR 자동
 신설 — reassign_product_code_series RPC(Migration #341)로 재고 0개 부모상품의 code_series
 재할당 기능 추가(§2-2 영구고정 정책은 위반 아님 — 실발급 자식 코드만 보호 대상), "코드
 재반영" 버튼을 hasOlderDuplicateCode(후발 중복) 조건으로 재설계해 원본/복제본 양쪽 모두
-노출되던 이전 설계를 대체*
+노출되던 이전 설계를 대체 | 2026-09-24 §2-14 신설 — 결합상품(bundle) 탭 정책(product_bundle_links
+테이블, Migration #544, 6가지 제약, 계약서 행 삽입 정책, Phase 1 name only) + §4-1 탭표 bundles
+행 추가 + GATE C 결합상품 관련 7개 체크항목 추가*

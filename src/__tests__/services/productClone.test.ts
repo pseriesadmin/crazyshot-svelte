@@ -139,6 +139,9 @@ function makeAddInventoryAdmin(config: AddInventoryStubConfig = {}) {
     if (name === 'get_product_option_links') {
       return Promise.resolve({ data: [], error: null });
     }
+    if (name === 'get_product_bundle_links') {
+      return Promise.resolve({ data: [], error: null });
+    }
     return Promise.resolve({ data: null, error: null });
   });
 
@@ -470,6 +473,75 @@ describe('cloneProduct (new_product) — 전체 정보 복제', () => {
       p_product_id: 'cloned-product-id',
       p_option_links: [{ option_product_id: 'opt-1', is_required: true }],
     });
+  });
+
+  it('[GREEN] 결합상품 연결(bundle_links)도 함께 복사한다', async () => {
+    const base = makeNewProductAdmin();
+    const rpcMock = vi.fn((name: string) => {
+      if (name === 'get_product_option_links') {
+        return Promise.resolve({ data: [], error: null });
+      }
+      if (name === 'get_product_bundle_links') {
+        return Promise.resolve({
+          data: [{ bundle_product_id: 'bnd-1', bundle_name: '번들상품A', components: null, display_order: 0, image_url: null }],
+          error: null,
+        });
+      }
+      return Promise.resolve({ data: null, error: null });
+    });
+    const admin = { ...base, rpc: rpcMock };
+    createClientMock.mockReturnValue(admin);
+
+    const result = await actions.cloneProduct({
+      request: makeFormRequest({
+        source_product_id: 'source-product-id',
+        count: '1',
+        mode: 'new_product',
+        auto_code: 'true',
+        partner_code: 'false',
+        partner_combo_row_id: COMBO_ROW_ID,
+      }),
+      locals: makeLocals(),
+    } as Parameters<typeof actions.cloneProduct>[0]);
+
+    expect((result as Record<string, unknown>)?.success).toBe(true);
+    expect(admin.rpc).toHaveBeenCalledWith('upsert_product_bundle_links', {
+      p_product_id: 'cloned-product-id',
+      p_bundle_links: expect.arrayContaining([
+        expect.objectContaining({ bundle_product_id: 'bnd-1' }),
+      ]),
+    });
+  });
+
+  it('[GREEN] 결합상품 연결 복사 실패 시 경고로 처리하고 전체 복제는 성공한다', async () => {
+    const base = makeNewProductAdmin();
+    const rpcMock = vi.fn((name: string) => {
+      if (name === 'get_product_option_links') return Promise.resolve({ data: [], error: null });
+      if (name === 'get_product_bundle_links') {
+        return Promise.resolve({ data: [{ bundle_product_id: 'bnd-2', bundle_name: 'B', components: null, display_order: 0, image_url: null }], error: null });
+      }
+      if (name === 'upsert_product_bundle_links') {
+        return Promise.resolve({ data: null, error: { message: 'BUNDLE_NESTING_FORBIDDEN' } });
+      }
+      return Promise.resolve({ data: null, error: null });
+    });
+    const admin = { ...base, rpc: rpcMock };
+    createClientMock.mockReturnValue(admin);
+
+    const result = await actions.cloneProduct({
+      request: makeFormRequest({
+        source_product_id: 'source-product-id',
+        count: '1',
+        mode: 'new_product',
+        auto_code: 'true',
+        partner_code: 'false',
+        partner_combo_row_id: COMBO_ROW_ID,
+      }),
+      locals: makeLocals(),
+    } as Parameters<typeof actions.cloneProduct>[0]);
+
+    // 복제 자체는 성공(결합상품 실패는 경고 처리)
+    expect((result as Record<string, unknown>)?.success).toBe(true);
   });
 });
 

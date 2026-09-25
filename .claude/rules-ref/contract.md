@@ -647,6 +647,14 @@ DB 컬럼:
     content_blocks/canvas_document/spreadsheet_document 분기로 정확히 폴백하는가?
 [ ] ContractFieldPanel의 htmlMode=true 시 특약(specifications) 탭만 노출되고, 계약자/상품/결제
     변수 칩 탭은 숨겨져 있는가? (HTML 모드에서 변수 칩은 no-op이므로 혼동 방지)
+[ ] 계약서 "대여 장비내역" 반복영역 행 순서가 [메인상품 → 결합상품들 → 옵션상품들] 인가?
+    (Phase 1, 2026-09-24 — buildLineItems, contractLineItems.ts)
+[ ] 결합상품 행의 수량·금액이 '-', 비고가 formatComponentsText(components)인가? (실제 수량·금액 표시
+    절대 금지) 상품코드 칸은 예약 시점 배정 실물(reservation_bundle_assets)의 품번이 있을 때만 표시하고,
+    배정 기록이 없는 레거시 예약은 이름만(코드 비움) 표시하는가? (Phase 2 P2-6, Q-I — contract-data
+    resolveAssignedBundles → 없으면 resolveBundlesMap 폴백)
+[ ] 결합상품 행이 없는 예약(bundle_links 미설정 또는 빈 배열)에서 기존 행 순서가 회귀하지 않는가?
+    (bundles=[] 시 contract line items가 종전과 동일한 [메인→옵션] 순서 유지)
 ```
 
 ---
@@ -670,3 +678,6 @@ prop / GATE C 3개 체크항목 추가 |
 목록 카드 "전자계약 확인" 버튼(새 창) + `contract_signed` action_url이 실제로는 고객 세션에
 꽂히는데도 CMS 전용 경로라 접근 불가했던 미정합 발견·문서화(수정은 다른 세션이 이미
 손대고 있던 파일이라 이번 범위에서 보류).*
+*2026-09-24 결합상품(bundle) 계약서 행 정책 추가 — 반복영역 행 순서 [메인→결합상품들→옵션들],
+결합상품 행 수량·금액='-', 비고=formatComponentsText(components), 상품코드=예약 시점 배정 실물 품번(Phase 2, 배정 기록 없는 레거시는 미표시).
+contract-data/+server.ts N+1-safe 번들 병렬 로드(Promise.all) 반영. GATE C 체크항목 3건 추가.*

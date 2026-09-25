@@ -823,7 +823,7 @@ export const actions: Actions = {
 
     // 재고 단위(자식) 상품은 images 외 모든 section 저장 차단 — 대표(부모) 기준 조회이므로
     // 자식에 저장된 데이터는 고객 화면에 반영되지 않으며 데이터 불일치 사고로 이어짐
-    const childBlockedSections = ['basic', 'slug', 'pricing', 'content', 'components', 'specs', 'options', 'rental']
+    const childBlockedSections = ['basic', 'slug', 'pricing', 'content', 'components', 'specs', 'options', 'bundles', 'rental']
     if (childBlockedSections.includes(sectionType)) {
       const { data: childCheck } = await admin
         .from('products')
@@ -1067,6 +1067,32 @@ export const actions: Actions = {
         })
 
       if (updateError) return fail(500, { error: `옵션상품 수정에 실패했습니다: ${updateError.message}` })
+    }
+
+    if (sectionType === 'bundles') {
+      const cmsRole = await getCmsRoleForAction(locals)
+      if (!cmsRole) return fail(403, { error: '권한 없음' })
+
+      const bundlesStr = form.get('bundle_links') as string | null
+      let bundle_links: unknown[] = []
+      if (bundlesStr) { try { bundle_links = JSON.parse(bundlesStr) } catch { /* ignore */ } }
+
+      const { error: updateError } = await admin
+        .rpc('upsert_product_bundle_links', {
+          p_product_id:    productId,
+          p_bundle_links:  bundle_links,
+        })
+
+      if (updateError) {
+        const msg = updateError.message
+        if (msg.includes('BUNDLE_SELF_REF'))         return fail(400, { error: '자기 자신을 결합상품으로 추가할 수 없습니다.' })
+        if (msg.includes('BUNDLE_CHILD_PRODUCT'))    return fail(400, { error: '재고 단위 상품은 결합상품으로 추가할 수 없습니다.' })
+        if (msg.includes('BUNDLE_DELETED_PRODUCT'))  return fail(400, { error: '삭제된 상품은 결합상품으로 추가할 수 없습니다.' })
+        if (msg.includes('BUNDLE_NESTING_FORBIDDEN')) return fail(400, { error: '이미 결합상품 목록을 가진 상품은 결합상품으로 추가할 수 없습니다.' })
+        if (msg.includes('BUNDLE_IS_NESTED'))        return fail(400, { error: '이 상품은 다른 패키지의 결합상품입니다. 결합상품 탭을 사용할 수 없습니다.' })
+        if (msg.includes('BUNDLE_OPTION_OVERLAP'))   return fail(400, { error: '이미 옵션상품으로 등록된 상품은 결합상품으로 추가할 수 없습니다.' })
+        return fail(500, { error: `결합상품 수정에 실패했습니다: ${msg}` })
+      }
     }
 
     if (sectionType === 'rental') {
@@ -1528,9 +1554,12 @@ export const actions: Actions = {
 
     // 옵션상품 연결(옵션상품 탭)도 그대로 복제 — get 결과 행(option_product_id 등)을 upsert 입력으로 그대로 사용
     const { data: sourceOptionLinks } = await admin.rpc('get_product_option_links', { p_product_id: sourceProductId })
-
     const createdIds: string[] = []
     const cloneWarnings: string[] = []
+
+    // 결합상품 연결(결합상품 탭)도 그대로 복제
+    const { data: sourceBundleLinks, error: bundleFetchErr } = await admin.rpc('get_product_bundle_links', { p_product_id: sourceProductId })
+    if (bundleFetchErr) cloneWarnings.push('결합상품 목록을 불러오지 못해 복사하지 못했습니다 (결합상품 탭에서 다시 저장해주세요)')
     // BND-BATCH-2: 순번 상한 도달 시 이미 생성된 상품(품번 미발급)은 그대로 인정하고,
     // 남은 개수는 더 시도해봤자 동일 사유로 실패하므로 즉시 중단(§2-10③ 배치 부분실패 정책과 동일 원리)
     let sequenceCapReached = false
@@ -1638,6 +1667,14 @@ export const actions: Actions = {
           p_option_links: sourceOptionLinks,
         })
         if (optErr) cloneWarnings.push('옵션상품 연결 복사 실패 (옵션상품 탭에서 다시 저장해주세요)')
+      }
+
+      if (Array.isArray(sourceBundleLinks) && sourceBundleLinks.length > 0) {
+        const { error: bundleErr } = await admin.rpc('upsert_product_bundle_links', {
+          p_product_id:   newProduct.id,
+          p_bundle_links: sourceBundleLinks,
+        })
+        if (bundleErr) cloneWarnings.push('결합상품 연결 복사 실패 (결합상품 탭에서 다시 저장해주세요)')
       }
 
       createdIds.push(newProduct.id)
