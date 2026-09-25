@@ -8,11 +8,13 @@
  */
 import { json, error } from '@sveltejs/kit'
 import { getProductSearchIndex } from '$lib/server/searchEngine/adapters/productSearchIndex'
+import { getCmsRoleForAction } from '$lib/server/getCmsRoleForAction'
 import type { RequestHandler } from './$types'
 
 export const GET: RequestHandler = async ({ url, locals }) => {
   const { session } = await locals.safeGetSession()
   if (!session) throw error(401, '인증 필요')
+  if (!(await getCmsRoleForAction(locals))) throw error(403, '접근 권한이 없습니다.')
 
   const q = (url.searchParams.get('q') ?? '').trim()
   if (!q) return json({ ids: [] })

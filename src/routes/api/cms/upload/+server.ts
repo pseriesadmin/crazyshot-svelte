@@ -17,6 +17,7 @@ import { json, error } from '@sveltejs/kit'
 import { env } from '$env/dynamic/private'
 import { getSupabaseUrl } from '$lib/env/supabasePublic'
 import { createClient } from '@supabase/supabase-js'
+import { getCmsRoleForAction } from '$lib/server/getCmsRoleForAction'
 import type { RequestHandler } from './$types'
 
 const BUCKET = 'product-images'
@@ -28,6 +29,18 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 
   const formData = await request.formData()
   const uploadType = (formData.get('type') as string | null) ?? 'product'
+
+  // 고객 크레이지로그 첨부(product_id='log/...')만 비CMS 허용 — 그 외(상품·자산 라벨)는 CMS 직원 전용
+  // 경로 탈출(`log/../<상품id>`)·쿼리/인코딩 문자가 섞인 값은 log 예외에서 제외(DELETE의 판정과 동일 기준)
+  const rawProductId = ((formData.get('product_id') as string | null)?.trim() ?? '')
+  const isCustomerLogUpload =
+    uploadType !== 'label' &&
+    rawProductId.startsWith('log/') &&
+    !/(^|\/)\.\.(\/|$)/.test(rawProductId) &&
+    !/[?#%\\]/.test(rawProductId)
+  if (!isCustomerLogUpload && !(await getCmsRoleForAction(locals))) {
+    throw error(403, '접근 권한이 없습니다.')
+  }
 
   // ── 자산 라벨 이미지 업로드 (OCR 스캔 사진 전용) ──
   if (uploadType === 'label') {
@@ -133,6 +146,16 @@ export const DELETE: RequestHandler = async ({ request, locals }) => {
   }
 
   const largePath = largeUrl.slice(prefix.length)
+
+  // 고객 크레이지로그 첨부(log/ 경로)만 비CMS 허용 — 상품 이미지 삭제는 CMS 직원 전용.
+  // 판정은 URL 문자열 포함 여부가 아니라 "실제로 삭제할 Storage 경로" 기준이어야 한다 —
+  // includes('/product-images/log/')는 'log/../<상품id>/…'·쿼리·프래그먼트로 우회 가능.
+  const isCustomerLogPath =
+    largePath.startsWith('log/') && !/(^|\/)\.\.(\/|$)/.test(largePath) && !/[?#%\\]/.test(largePath)
+  if (!isCustomerLogPath && !(await getCmsRoleForAction(locals))) {
+    throw error(403, '접근 권한이 없습니다.')
+  }
+
   const thumbPath = largePath.replace('/large_', '/thumb_')
 
   // Storage 경로 첫 세그먼트 = 이미지가 저장된 product_id (부모 또는 자식)
