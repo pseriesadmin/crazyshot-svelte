@@ -25,11 +25,12 @@
       phone: string | null
       is_student: boolean | null
       is_foreign: boolean | null
-      identity_type: string | null
+      identity_type: string[] | null
       identity_verified_at: string | null
-      identity_doc_url: string | null
+      identity_doc_url: string[] | null
       foreign_verified_at: string | null
       foreign_doc_url: string | null
+      foreign_doc_urls: string[] | null
     }
     subscription: {
       plan_name: string | null
@@ -50,9 +51,36 @@
     detail: CustomerDetail | null
     summary?: CustomerSummary | null
     isLoading?: boolean
+    /** 본인증명/외국인증명 미등록·만료 시 노출되는 "요청" 버튼 클릭 콜백 — 실제 발송은
+        AdminChatPanel(부모)이 담당(session_id를 이미 알고 있는 쪽에서 처리) */
+    onrequestdoc?: (docType: 'identity' | 'foreign') => void
+    /** 요청 전송 중인 문서 유형(버튼 비활성화용) — 부모가 관리 */
+    requestingDocType?: 'identity' | 'foreign' | null
   }
 
-  let { detail, summary = null, isLoading = false }: Props = $props()
+  let { detail, summary = null, isLoading = false, onrequestdoc, requestingDocType = null }: Props = $props()
+
+  // 본인증명·외국인증명 — 등록일(verified_at) 기준 6개월 경과 시 자동 만료(Stephen 2026-08-27 확정)
+  const DOC_VALID_MONTHS = 6
+
+  function isDocExpired(verifiedAt: string | null): boolean {
+    if (!verifiedAt) return false
+    const expiresAt = new Date(verifiedAt)
+    expiresAt.setMonth(expiresAt.getMonth() + DOC_VALID_MONTHS)
+    return expiresAt.getTime() < Date.now()
+  }
+
+  type DocStatus = { registered: boolean; expired: boolean; count: number }
+
+  function docStatus(urls: string[] | null | undefined, verifiedAt: string | null): DocStatus {
+    const count = urls?.length ?? 0
+    const registered = count > 0
+    const expired = registered && isDocExpired(verifiedAt)
+    return { registered, expired, count }
+  }
+
+  let identityStatus = $derived(docStatus(detail?.profile.identity_doc_url, detail?.profile.identity_verified_at ?? null))
+  let foreignStatus  = $derived(docStatus(detail?.profile.foreign_doc_urls, detail?.profile.foreign_verified_at ?? null))
 
   const STATUS_KO: Record<string, string> = {
     hold: '신청대기', confirmed: '계약완료', shipped: '반출중', in_use: '대여중',
@@ -130,28 +158,50 @@
         </div>
       </div>
 
-      <!-- 본인 인증 (학생·외국인 중 하나라도 해당될 때만) -->
-      {#if detail?.profile.identity_type === 'student' || detail?.profile.is_foreign}
-        <div class="section-title">본인 인증</div>
-        <div class="info-section">
-          {#if detail?.profile.identity_type === 'student'}
-            <div class="info-row">
-              <span class="info-label">학생인증</span>
-              <span class="info-value">
-                {detail.profile.identity_verified_at ? `완료 (${fmtDate(detail.profile.identity_verified_at)})` : '미완료'}
-              </span>
-            </div>
-          {/if}
-          {#if detail?.profile.is_foreign}
-            <div class="info-row">
-              <span class="info-label">외국인인증</span>
-              <span class="info-value">
-                {detail.profile.foreign_verified_at ? `완료 (${fmtDate(detail.profile.foreign_verified_at)})` : '미완료'}
-              </span>
-            </div>
-          {/if}
+      <!-- 본인증명 · 외국인증명 (파일 등록 목록, 2026-08-27) -->
+      <div class="section-title">본인증명 · 외국인증명</div>
+      <div class="info-section">
+        <div class="info-row">
+          <span class="info-label">본인증명</span>
+          <span class="info-value doc-value">
+            {#if identityStatus.expired}
+              <span class="doc-status doc-expired">만료됨</span>
+            {:else if identityStatus.registered}
+              <span class="doc-status doc-ok">등록완료 ({identityStatus.count}개, {fmtDate(detail?.profile.identity_verified_at ?? null)})</span>
+            {:else}
+              <span class="doc-status doc-none">미등록</span>
+            {/if}
+            {#if !identityStatus.registered || identityStatus.expired}
+              <button
+                type="button"
+                class="doc-request-btn"
+                disabled={requestingDocType === 'identity'}
+                onclick={() => onrequestdoc?.('identity')}
+              >{requestingDocType === 'identity' ? '전송 중...' : '요청'}</button>
+            {/if}
+          </span>
         </div>
-      {/if}
+        <div class="info-row">
+          <span class="info-label">외국인증명</span>
+          <span class="info-value doc-value">
+            {#if foreignStatus.expired}
+              <span class="doc-status doc-expired">만료됨</span>
+            {:else if foreignStatus.registered}
+              <span class="doc-status doc-ok">등록완료 ({foreignStatus.count}개, {fmtDate(detail?.profile.foreign_verified_at ?? null)})</span>
+            {:else}
+              <span class="doc-status doc-none">미등록</span>
+            {/if}
+            {#if !foreignStatus.registered || foreignStatus.expired}
+              <button
+                type="button"
+                class="doc-request-btn"
+                disabled={requestingDocType === 'foreign'}
+                onclick={() => onrequestdoc?.('foreign')}
+              >{requestingDocType === 'foreign' ? '전송 중...' : '요청'}</button>
+            {/if}
+          </span>
+        </div>
+      </div>
 
       <!-- 멤버십 -->
       <div class="section-title">멤버십</div>
@@ -297,6 +347,44 @@
   .cs-score.score-mid      { color: var(--cs-text-mid); }
   .cs-score.score-low      { color: var(--cs-warning); }
   .cs-score.score-critical { color: var(--cs-red-badge); }
+
+  /* 본인증명·외국인증명 상태 + 요청 버튼 */
+  /* 상태 텍스트(좌) + 요청 버튼(우측 끝) 수평 배열 */
+  .doc-value {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 6px;
+  }
+  .doc-status {
+    font: var(--text-pc-script-12);
+    font-weight: 700;
+  }
+  .doc-status.doc-expired { white-space: nowrap; }
+  .doc-status.doc-ok      { color: var(--cs-success-light); }
+  .doc-status.doc-none    { color: var(--cs-text-light); }
+  .doc-status.doc-expired { color: var(--cs-warning); }
+
+  /* cms-uiux.md §0-10-F DetailPanel 전용 버튼 — 소형(행 단위 실행 버튼) */
+  .doc-request-btn {
+    margin-left: auto;
+    min-width: 78px;
+    text-align: center;
+    flex-shrink: 0;
+    font-size: 12px;
+    font-weight: 700;
+    line-height: 1.4;
+    padding: 8px 14px;
+    border: 1px solid var(--cs-text-mid);
+    border-radius: var(--cms-radius-sm);
+    background: var(--cs-surface-gray);
+    color: var(--cs-text-mid);
+    cursor: pointer;
+    white-space: nowrap;
+    transition: background 0.15s, color 0.15s;
+  }
+  .doc-request-btn:hover:not(:disabled) { background: var(--cs-text-mid); color: var(--cs-white); }
+  .doc-request-btn:disabled { opacity: 0.5; cursor: default; }
 
   .cdp-reserve-list {
     list-style: none;
