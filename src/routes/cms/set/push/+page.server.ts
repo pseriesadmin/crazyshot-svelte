@@ -5,6 +5,7 @@ import { redirect, fail } from '@sveltejs/kit'
 import type { Actions, PageServerLoad } from './$types'
 import { getCmsRoleForAction } from '$lib/server/getCmsRoleForAction'
 import { hasSettingsAccess } from '$lib/utils/cmsPermissions'
+import { requireAccountMutationAccess } from '$lib/server/requireTrueSuperadmin'
 
 export interface PushConfigRow {
   id: number
@@ -51,9 +52,11 @@ export const load: PageServerLoad = async ({ parent, url }) => {
 
   const sb = admin()
 
-  const logStatus = url.searchParams.get('log_status') ?? 'all'
+  const rawStatus = url.searchParams.get('log_status') ?? 'all'
+  const logStatus = ['all', 'sent', 'skipped', 'error'].includes(rawStatus) ? rawStatus : 'all'
   const logType = url.searchParams.get('log_type') ?? 'all'
-  const logPage = Math.max(1, parseInt(url.searchParams.get('log_page') ?? '1', 10))
+  const parsedPage = parseInt(url.searchParams.get('log_page') ?? '1', 10)
+  const logPage = Number.isFinite(parsedPage) ? Math.max(1, parsedPage) : 1
 
   let logsQuery = sb
     .from('notification_logs')
@@ -145,6 +148,11 @@ export const actions: Actions = {
     if (!targetUserId || !(ADMIN_EVENT_KEYS as readonly string[]).includes(eventKey)) {
       return fail(400, { message: 'invalid request' })
     }
+
+    // 대상 계정이 superadmin이면 호출자도 실제 superadmin이어야 통과 — 계정관리의 다른 액션·
+    // 메뉴권한 API와 동일한 게이트(manager가 마스터의 알림 수신 설정을 바꾸지 못하도록).
+    const accessErr = await requireAccountMutationAccess(locals, admin(), targetUserId)
+    if (accessErr) return fail(403, { message: accessErr })
 
     const { data: result, error } = await admin().rpc('update_admin_notify_setting', {
       p_target_user_id: targetUserId,
