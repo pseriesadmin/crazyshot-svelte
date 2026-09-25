@@ -864,6 +864,35 @@
     }
   }
 
+  // 본인증명·외국인증명 목록 "재등록": 승인된 상태라면 먼저 승인을 취소(고객 화면의 수정·삭제
+  // 잠금 해제)한 뒤 관리자 업로드 상자를 연다. 미승인이면 승인 취소 호출 없이 상자만 연다.
+  async function toggleDocReupload(type: 'identity' | 'foreign') {
+    const isOpen = type === 'identity' ? reuploadIdentityOpen : reuploadForeignOpen
+    if (isOpen) { cancelDocUpload(type); return }
+    const approvedAt = type === 'identity' ? row.identity_approved_at : row.foreign_approved_at
+    const verifiedAt = type === 'identity' ? row.identity_verified_at : row.foreign_verified_at
+    const isApproved = !!approvedAt && (!verifiedAt ||
+      new Date(approvedAt).getTime() >= new Date(verifiedAt).getTime())
+    if (isApproved) {
+      try {
+        const res  = await fetch('/api/cms/revoke-doc-approval', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ user_id: row.user_id, type }),
+        })
+        const data = await res.json() as { ok: boolean; error?: string }
+        if (!data.ok) { csToast.error(data.error ?? '승인 취소 실패'); return }
+        csToast.success('승인이 취소되었습니다. 고객 화면에서 수정·삭제할 수 있습니다.')
+        await invalidateAll()
+      } catch {
+        csToast.error('네트워크 오류가 발생했습니다.')
+        return
+      }
+    }
+    if (type === 'identity') reuploadIdentityOpen = true
+    else                     reuploadForeignOpen  = true
+  }
+
   function cancelDocUpload(type: 'identity' | 'foreign') {
     if (type === 'identity') {
       reuploadIdentityOpen = false
@@ -1077,12 +1106,12 @@
               {/if}
             </span>
           {/if}
-          {#if !row.identity_doc_url?.length || (row.identity_verified_at && isIdentityExpired(row.identity_verified_at))}
+          {#if !row.identity_doc_url?.length}
             <button
               type="button"
               class="btn-reupload"
               class:btn-reupload-cancel={reuploadIdentityOpen}
-              onclick={() => reuploadIdentityOpen ? cancelDocUpload('identity') : (reuploadIdentityOpen = true)}
+              onclick={() => toggleDocReupload('identity')}
             >{reuploadIdentityOpen ? '취소' : '재등록'}</button>
           {/if}
           {#if row.identity_doc_url?.length && needsDocApproval(row.identity_verified_at, row.identity_approved_at)}
@@ -1111,6 +1140,12 @@
                 >
                   <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
                 </button>
+                <button
+                  type="button"
+                  class="btn-reupload"
+                  class:btn-reupload-cancel={reuploadIdentityOpen}
+                  onclick={() => toggleDocReupload('identity')}
+                >{reuploadIdentityOpen ? '취소' : '재등록'}</button>
               </div>
             {/each}
           </div>
@@ -1170,12 +1205,12 @@
               {/if}
             </span>
           {/if}
-          {#if row.is_foreign && (foreignDocList(row).length === 0 || (row.foreign_verified_at && isIdentityExpired(row.foreign_verified_at)))}
+          {#if row.is_foreign && foreignDocList(row).length === 0}
             <button
               type="button"
               class="btn-reupload"
               class:btn-reupload-cancel={reuploadForeignOpen}
-              onclick={() => reuploadForeignOpen ? cancelDocUpload('foreign') : (reuploadForeignOpen = true)}
+              onclick={() => toggleDocReupload('foreign')}
             >{reuploadForeignOpen ? '취소' : '재등록'}</button>
           {/if}
           {#if row.is_foreign && foreignDocList(row).length > 0 && needsDocApproval(row.foreign_verified_at, row.foreign_approved_at)}
@@ -1204,6 +1239,12 @@
                 >
                   <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
                 </button>
+                <button
+                  type="button"
+                  class="btn-reupload"
+                  class:btn-reupload-cancel={reuploadForeignOpen}
+                  onclick={() => toggleDocReupload('foreign')}
+                >{reuploadForeignOpen ? '취소' : '재등록'}</button>
               </div>
             {/each}
           </div>

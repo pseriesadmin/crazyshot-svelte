@@ -865,12 +865,24 @@
         }),
       })
       if (res.ok) {
-        const { message } = await res.json()
+        const { message, deleted_count } = await res.json() as { message?: (typeof messages)[number]; deleted_count?: number }
         if (message) {
           const already = messages.some((m) => m.id === message.id)
           if (!already) messages = [...messages, message]
         }
-        csToast.success(`${docType === 'foreign' ? '외국인증명' : '본인증명'} 등록요청을 전송했습니다.`)
+        const docLabel = docType === 'foreign' ? '외국인증명' : '본인증명'
+        csToast.success(
+          deleted_count && deleted_count > 0
+            ? `${docLabel} 등록요청을 전송했습니다. (만료된 기존 파일 ${deleted_count}개 삭제)`
+            : `${docLabel} 등록요청을 전송했습니다.`,
+        )
+        // 삭제가 있었으면 고객정보 패널을 다시 조회해 "미등록" 상태를 반영
+        if (deleted_count && deleted_count > 0 && selectedUserId) {
+          fetch(`/api/chat/customers/${selectedUserId}/detail`)
+            .then((r) => r.ok ? r.json() : null)
+            .then((d: { detail: CustomerDetailData | null } | null) => { if (d?.detail) customerDetail = d.detail })
+            .catch(() => {})
+        }
       } else {
         csToast.error('요청 전송에 실패했습니다.')
       }
