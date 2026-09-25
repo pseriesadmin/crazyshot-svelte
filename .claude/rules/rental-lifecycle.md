@@ -429,6 +429,42 @@ RentalDetailPanel.svelte "대여정보" 탭 → "상품 정보" 섹션 바로 �
 
 ---
 
+## 결합상품(product_bundle_links) — Phase 1 + Phase 2 재고 연동 (2026-09-24 확정, Migration #544·#545·#547)
+
+```
+결합상품은 옵션상품(reservation_options)과 다른 개념이다:
+  옵션상품 = 예약 시 선택·담기 가능한 추가 품목 (reservation_options 행, 수량만 기록·날짜 무관)
+  결합상품 = 상품 DB에 사전 등록된 "이 상품과 항상 함께 나가는 구성품" 목록
+             (product_bundle_links 테이블) — Phase 2부터 예약 시 실물 단위로 함께 점유된다
+
+Phase 2 동작 (A안 실물 단위 배정, Migration #547):
+  - 패키지의 hold 생성(create_hold_reservation)·draft→hold 승격(promote_draft_reservation)과 같은
+    트랜잭션에서 결합상품마다 활성 자식 1개를 메인과 동일 기준(휴무일 연장 반영 날짜 겹침 +
+    FOR UPDATE SKIP LOCKED)으로 배정 → reservation_bundle_assets(예약 1건 ↔ 결합상품별 실물 1개)
+  - 1종이라도 없으면 전체 실패·롤백("구성품 재고가 부족해 예약할 수 없습니다.") — 메인 실물도 점유 안 됨
+  - 결합상품 단독 예약과 상호 차단(단독 배정 쿼리가 결합 점유 실물+날짜 겹침 제외)
+  - 종결 상태(cancelled·expired·returned·completed)는 예약 status 조인으로 자동 해제(별도 해제 로직 없음),
+    draft는 점유하지 않는다(승격 시점에 배정)
+  - 요금·결제 금액 무변경(compute_reservation_line_amount 미사용·미변경). 결합상품에는 수량 개념 없음
+    (패키지 1건 = 결합 실물 1세트, 패키지 2대 예약 = 2세트)
+  - 계약서 결합 줄: 배정 기록이 있으면 그 실물 품번을 상품코드 칸에 표시, 없으면(레거시) 이름만
+  - CMS 예약/대여 상세 '대여정보' 탭에 "결합상품 + 장비번호" 섹션(조회 전용)
+  - 가용재고: get_available_stock_counts가 결합 점유 반영 + 패키지 = min(패키지, 각 결합상품)
+  - 고객 화면: 상품상세 재고 부족 시 "구성품 재고가 부족해 예약할 수 없습니다." 안내, 장바구니는
+    결합상품 목록 미표시(가용재고 조회에만 반영)
+
+✅ 해소(Migration 548, 2026-09-24 — Stage 적용·라이브 테스트 통과, Production은 #544→#545→#547→#548 순서로 오픈 시 적용): 수령/반납 방식 변경(set_reservation_shipment_method,
+   Migration 508 휴무일 연장 재계산)으로 기간이 넓어지면 메인 실물뿐 아니라 이 예약에 배정된 결합 실물도
+   (다른 예약의 메인 배정·다른 패키지의 결합 배정과) 겹침을 재확인하고, 겹치면 'bundle_holiday_extension_conflict'
+   예외로 차단·롤백한다(기간이 동일/좁아지면 재검사 없음). 기간 변경 경로는 이 함수와 draft 승격(배정 시점에
+   검사)뿐임을 전수 확인. 테스트: bundleOverlapRecheck.test.ts.
+   반출·반납·QR 스캔은 패키지 단위(결합 실물 개별 스캔은 후속, Q-K).
+```
+
+→ 상세: `products.md §2-14`(결합상품 정책 정본) · `supabase/migrations/20260924020000_544_product_bundle_links.sql` · `supabase/migrations/20260924050000_547_bundle_inventory_hold.sql`
+
+---
+
 ## 구현 파일 참조
 
 ```
