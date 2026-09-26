@@ -411,6 +411,7 @@
 
   let identityDocUrls    = $state<string[]>(profile?.identity_doc_url ?? [])
   let identityVerifiedAt = $state(profile?.identity_verified_at ?? null)
+  let identityApprovedAt = $state(profile?.identity_approved_at ?? null)
   let identityType       = $state<string[]>(profile?.identity_type ?? [])
   let showIdentityForm   = $state(false)
   let isDeletingIdentity = $state(false)
@@ -418,8 +419,16 @@
   $effect(() => {
     identityDocUrls    = profile?.identity_doc_url     ?? []
     identityVerifiedAt = profile?.identity_verified_at ?? null
+    identityApprovedAt = profile?.identity_approved_at ?? null
     identityType       = profile?.identity_type        ?? []
   })
+
+  // 관리자가 승인한 본인증명은 고객이 수정·삭제·재등록할 수 없다(승인 직전까지는 자유롭게 가능).
+  // 승인 판정 = 승인시각이 있고 제출시각 이후(승인 후 재제출되면 다시 검토 대기 — migration #526과
+  // 동일 판정식). 서버(/api/profile/upload-doc·delete-doc·delete-doc-item)도 같은 조건으로 차단한다.
+  const identityApproved = $derived(
+    !!identityApprovedAt && (!identityVerifiedAt || identityApprovedAt >= identityVerifiedAt)
+  )
 
   function identityDocLabelAt(i: number): string {
     const t = profile?.identity_type?.[i]
@@ -647,6 +656,7 @@
 
   let foreignDocUrls    = $state<string[]>(profile?.foreign_doc_urls ?? (profile?.foreign_doc_url ? [profile.foreign_doc_url] : []))
   let foreignVerifiedAt = $state(profile?.foreign_verified_at ?? null)
+  let foreignApprovedAt = $state(profile?.foreign_approved_at ?? null)
   let foreignTypeList   = $state<string[]>(profile?.foreign_type ?? [])
   let showForeignForm   = $state(false)
   let foreignStayType   = $state<'short' | 'long'>((profile?.foreign_stay_type as 'short' | 'long' | null) ?? 'short')
@@ -657,9 +667,15 @@
   $effect(() => {
     foreignDocUrls    = profile?.foreign_doc_urls ?? (profile?.foreign_doc_url ? [profile.foreign_doc_url] : [])
     foreignVerifiedAt = profile?.foreign_verified_at ?? null
+    foreignApprovedAt = profile?.foreign_approved_at ?? null
     foreignTypeList   = profile?.foreign_type ?? []
     foreignStayType   = (profile?.foreign_stay_type as 'short' | 'long' | null) ?? 'short'
   })
+
+  // 관리자 승인된 외국인증명은 수정·삭제·재등록 불가(본인증명과 동일 원칙, 서버도 동일 차단)
+  const foreignApproved = $derived(
+    !!foreignApprovedAt && (!foreignVerifiedAt || foreignApprovedAt >= foreignVerifiedAt)
+  )
 
   function foreignDocLabelAt(i: number): string {
     const t = profile?.foreign_type?.[i]
@@ -1232,7 +1248,7 @@
             <p class="doc-subtitle">신원 확인용 증명서를 등록하세요</p>
             <p class="doc-file-hint">PNG · JPEG · WebP · HEIF · PDF · 개별 10MB 이하</p>
           </div>
-          {#if identityDocUrls.length > 0 && !showIdentityForm}
+          {#if identityDocUrls.length > 0 && !showIdentityForm && !identityApproved}
             <button class="btn-doc-re" onclick={requestIdentityReRegister}>재등록</button>
           {/if}
         </div>
@@ -1245,15 +1261,17 @@
               {#if identityVerifiedAt}
                 <span class="doc-date">{formatDocDate(identityVerifiedAt)}</span>
               {/if}
-              <button
-                type="button"
-                class="btn-doc-delete"
-                disabled={identityDocsBusy}
-                onclick={requestIdentityDelete}
-                aria-label="본인증명 삭제"
-              >
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3,6 5,6 21,6"/><path d="M19,6l-1,14H6L5,6"/><path d="M10,11v6M14,11v6"/><path d="M9,6V4h6v2"/></svg>
-              </button>
+              {#if !identityApproved}
+                <button
+                  type="button"
+                  class="btn-doc-delete"
+                  disabled={identityDocsBusy}
+                  onclick={requestIdentityDelete}
+                  aria-label="본인증명 삭제"
+                >
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3,6 5,6 21,6"/><path d="M19,6l-1,14H6L5,6"/><path d="M10,11v6M14,11v6"/><path d="M9,6V4h6v2"/></svg>
+                </button>
+              {/if}
             </div>
             <ul class="doc-file-list">
               {#each identityDocUrls as url, i}
@@ -1267,7 +1285,7 @@
                        노출 보안 우려. 추후 중요정보 자동 가림(마스킹) 기능 보완 후
                        openIdentityDoc(url) 그대로 재사용해 복원 예정 — 함수는 유지. -->
                   <!-- <button type="button" class="btn-doc-view" onclick={() => openIdentityDoc(url)}>보기</button> -->
-                  {#if docType}
+                  {#if docType && !identityApproved}
                     <div class="doc-file-list-actions">
                       <button type="button" class="btn-doc-edit-chip" disabled={identityDocsBusy} onclick={() => startIdentitySingleEdit(docType)}>수정</button>
                       <button
@@ -1286,7 +1304,7 @@
             </ul>
           </div>
 
-          {#if identityUnregisteredTypes.length > 0 || identitySingleEditType}
+          {#if !identityApproved && (identityUnregisteredTypes.length > 0 || identitySingleEditType)}
             <!-- 개별 수정(특정 유형 1개 재업로드) / 추가 등록(미등록 유형) 병합 업로드 —
                  등록완료 카드는 그대로 두고 upsert만(서버 merge=true, 다른 유형 보존) -->
             <div class="doc-upload-wrap doc-merge-wrap">
@@ -1376,7 +1394,7 @@
             <p class="doc-subtitle">여권 또는 외국인등록증을 등록하세요</p>
             <p class="doc-file-hint">PNG · JPEG · WebP · HEIF · PDF · 개별 10MB 이하</p>
           </div>
-          {#if foreignDocUrls.length > 0 && !showForeignForm}
+          {#if foreignDocUrls.length > 0 && !showForeignForm && !foreignApproved}
             <button class="btn-doc-re" onclick={requestForeignReRegister}>재등록</button>
           {/if}
         </div>
@@ -1389,15 +1407,17 @@
               {#if foreignVerifiedAt}
                 <span class="doc-date">{formatDocDate(foreignVerifiedAt)}</span>
               {/if}
-              <button
-                type="button"
-                class="btn-doc-delete"
-                disabled={foreignDocsBusy}
-                onclick={requestForeignDelete}
-                aria-label="외국인증명 삭제"
-              >
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3,6 5,6 21,6"/><path d="M19,6l-1,14H6L5,6"/><path d="M10,11v6M14,11v6"/><path d="M9,6V4h6v2"/></svg>
-              </button>
+              {#if !foreignApproved}
+                <button
+                  type="button"
+                  class="btn-doc-delete"
+                  disabled={foreignDocsBusy}
+                  onclick={requestForeignDelete}
+                  aria-label="외국인증명 삭제"
+                >
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3,6 5,6 21,6"/><path d="M19,6l-1,14H6L5,6"/><path d="M10,11v6M14,11v6"/><path d="M9,6V4h6v2"/></svg>
+                </button>
+              {/if}
             </div>
             <ul class="doc-file-list">
               {#each foreignDocUrls as url, i}
@@ -1411,7 +1431,7 @@
                        노출 보안 우려. 추후 중요정보 자동 가림(마스킹) 기능 보완 후
                        openForeignDoc(url) 그대로 재사용해 복원 예정 — 함수는 유지. -->
                   <!-- <button type="button" class="btn-doc-view" onclick={() => openForeignDoc(url)}>보기</button> -->
-                  {#if docType}
+                  {#if docType && !foreignApproved}
                     <div class="doc-file-list-actions">
                       <button type="button" class="btn-doc-edit-chip" disabled={foreignDocsBusy} onclick={() => startForeignSingleEdit(docType)}>수정</button>
                       <button
@@ -1430,7 +1450,7 @@
             </ul>
           </div>
 
-          {#if foreignSingleEditType || foreignUnregisteredTypes.length > 0}
+          {#if !foreignApproved && (foreignSingleEditType || foreignUnregisteredTypes.length > 0)}
             <!-- 외국인증명 개별 수정(그 유형 1개) / 추가 등록(개별삭제로 콤보에서 빠진
                  유형 되돌리기, 2026-09-14 신설 — 개별삭제 도입으로 콤보가 깨질 수 있게
                  됐는데 되돌릴 UI가 없던 결함, Stephen 리포트로 발견) — 본인증명 병합업로드와
