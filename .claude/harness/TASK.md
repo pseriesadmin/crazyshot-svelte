@@ -6,6 +6,42 @@
 
 > 📌 BACKLOG 블록은 `BACKLOG.md`로 분리됐다(Default-Exclude — Stephen 명시 승인 시에만 NOW로 이동).
 
+## DONE — 🔴 CRITICAL: 관리자 승인된 본인증명·외국인증명의 고객 "수정·삭제·재등록" UI 숨김 + API·DB RPC 차단 (Migration #550, 2026-09-26, 이 세션'만', 3차 QA 통과, Stage·Production(#550·#551) 적용 완료, git commit만 Stephen 대기)
+
+- **요구**: 관리자가 CMS에서 승인(`identity_approved_at`/`foreign_approved_at`, migration #526)한 증명서는 고객 마이페이지 목록에서 수정·삭제 UI를 감추고 API도 차단. 승인 직전까지는 기존과 동일.
+- **승인 판정**: `*_approved_at` 있고 제출시각(`*_verified_at`) 이후. 승인 후 재제출(제출>승인)이면 다시 검토대기 → 수정 가능(#526 판정식과 동일).
+- **서버 차단**: 신규 `src/lib/server/identityApproval.ts`(`isIdentityApproved(admin,userId,'identity'|'foreign')`) → `/api/profile/upload-doc`·`delete-doc`·`delete-doc-item` 3곳이 승인 시 403 + "관리자가 승인한 증명서는 수정·삭제할 수 없어요.". 관리자 CMS 재등록 API(`/api/cms/upload-doc`)는 무변경.
+- **화면**: `ProfileTabContent.svelte` — `identityApproved`/`foreignApproved` derived. 승인 시 "재등록", 전체 삭제, 항목별 수정·삭제, 추가등록 슬롯 숨김.
+- **데이터 배선**: 모바일 `/account/profile/+page.server.ts` + PC `/account/+page.server.ts`(같은 컴포넌트를 PC는 /account 안에 임베드) 두 곳 모두 `*_approved_at` select·타입 추가. (⚠️ 1차 수정에서 모바일 경로만 반영해 PC 미적용 → Stephen 지적으로 재확인·보완)
+- **테스트**: `src/__tests__/services/identityApprovalLock.test.ts` 12건 GREEN(identity·foreign 양쪽, 경계·null·fail-closed·컬럼분기 포함, 1차 QA M1 반영).
+- **검증**: Stage 테스트계정 `mublues@gmail.com`로 승인 전(수정2·삭제3·재등록 노출)/승인 후(전부 숨김 + 3 API 403) PC(1280)·모바일 확인. 확인 중 승인값을 임시 변경하다 관리자 승인 기록을 덮어써 외국인증명 승인 시각을 재기록(원래 시각은 미상, now로 복구) — 향후 이 계정 승인값은 건드리지 않을 것.
+- **변경 파일**: ProfileTabContent.svelte · account/+page.server.ts · account/profile/+page.server.ts · api/profile/{upload-doc,delete-doc,delete-doc-item}/+server.ts · lib/server/identityApproval.ts(신규) · __tests__/services/identityApprovalLock.test.ts(신규) · supabase/migrations/20260926010000_550_doc_rpc_approved_lock.sql · 20260926020000_551_doc_rpc_clear_approval_on_reset.sql(신규 2건, RPC 우회 차단·데드락 방지)
+- **GATE E(sp3-qa-agent)**: API 가드·판정식·화면 숨김·PC/모바일 데이터 배선은 통과. 발견 → 조치:
+  - L2 조회오류 시 가드가 열리던 것 → fail-closed로 수정(오류 시 차단+로그) ✅
+  - M1 테스트 미흡(foreign 분기·경계·null) → 12건으로 보강, 전부 GREEN ✅
+  - **B1 → 해소(Stephen 승인, 마이그레이션 진행)**: `update_user_doc_url`·`delete_user_doc` RPC가 고객에게 직접 호출 가능해 API 가드를 우회하던 문제. 신규 `supabase/migrations/20260926010000_550_doc_rpc_approved_lock.sql`로 두 RPC 앞머리에 승인 잠금 추가(시그니처·GRANT 유지, ROLLBACK=#495/#360 정의 복원). **Stage(ezyvffjvuwmtuhpxdjrw) 적용·검증 완료**(승인 계정: identity/foreign delete·update 4종 전부 차단, 데이터 무변경 / 미승인 계정: 정상 ok — 둘 다 트랜잭션 롤백 검증). **Production(vnbpmvxruyciuuaermyh) 적용 완료(Stephen 지시, 2026-09-26)** — 적용 전 Prod 기준상태 대조(#495 정의·GRANT·#526 승인컬럼 존재, 미잠금)·적용 후 정의 재조회로 잠금 반영 확인.
+  - L1/L3/L4 경미(UI 표시 한정) — 조치 없음.
+- **M-A → B안 진행(Stephen 결정)**: 신규 `20260926020000_551_doc_rpc_clear_approval_on_reset.sql` — 두 RPC가 `*_verified_at`을 NULL로 비울 때 `*_approved_at`도 함께 NULL(delete_user_doc identity/foreign, update_user_doc_url foreign 4개 미만). 판정식 무변경, #550 파일 무수정(GP-10). **Stage 적용·검증 완료**(관리자 재등록 후 고객 전체삭제 시나리오 롤백 재현: 삭제 성공 + verified/approved 둘 다 NULL → 데드락 해소, 승인 계정 데이터 무변경). **Production 적용 완료(Stephen 지시)** — 적용 전 #550 상태 대조·적용 후 정의 3곳 반영/GRANT 유지 재조회 확인. **3차 GATE E(sp3-qa-agent) 통과**: BLOCKING 0 / MEDIUM 1(기존 데드락 잔존 행 확인 → Stage·Production 조회 결과 0건, 조치 불필요 ✅) / LOW 2(purge_withdrawn_accounts가 approved 미초기화 — purged 계정이라 접근 불가·영향 없음, 후속 정리 가능 / 헤더에 #550 선행 안내 없음). 남은 우회·재발 경로 없음(verified NULL 경로 4곳 전수 확인).
+- **2차 GATE E(sp3-qa-agent)**: BLOCKING 0 / 조건부 통과. #550 본문이 #495·#360과 잠금블록 외 동일, GRANT 보존, 판정식 SQL=TS 일치, 잔존 우회 없음 확인. **MEDIUM M-A(Stephen 판단 대기)**: RPC가 전체삭제·foreign 4개 미만 시 verified_at만 NULL로 비우고 approved_at은 남겨 "verified NULL=승인" 판정과 겹치면 문서 없는 채 잠기는 데드락 가능(관리자 재등록 후 고객 삭제 시나리오, 발생 가능성 낮음, 탈출구=CMS 승인취소). 수정안 (a)판정식을 "verified NULL이면 미승인"으로(SQL+TS 동시) (b)RPC가 verified NULL로 만들 때 approved도 NULL — 신규 마이그레이션 #551 필요(#550 수정 금지 GP-10). LOW: SQL 잠금 라이브 통합테스트 없음 / TS·SQL 판정 이중구현 상호참조 주석 권장.
+
+## DONE — 🟡 BOUNDARY: 증명 목록 행별 '재등록'(승인 취소) + 상담 '요청' 시 만료 증명 자동 삭제 (2026-09-26, 이 세션'만', QA 재검수 대기, git commit만 Stephen 대기)
+
+- **범위**: `cms/CustomerDetailPanel.svelte`(본인증명·외국인증명 파일 목록 행 우측 끝 "재등록", 승인 상태면 먼저 승인 취소 후 관리자 업로드 상자 오픈, 파일 0개일 때만 헤더 버튼 유지), 신규 `api/cms/revoke-doc-approval/+server.ts`(manager+, `*_approved_at`만 NULL), `api/cms/chat/identity-request/direct-send/+server.ts`(요청 카드 발송 시 6개월 경과 증명의 등록목록·승인·스토리지 원본 삭제, 응답 `deleted_count`), `chat/AdminChatPanel.svelte`(삭제 개수 토스트 + 고객정보 재조회).
+- **Stephen 확정 사항**: 재등록 = 승인 취소 + 관리자 업로드 유지 / 승인 단위는 증명 전체(버튼만 행 우측) / 삭제 범위 = 스토리지 원본까지 / **삭제 순서 = 카드 저장 성공 후 삭제**(카드 INSERT 실패 시 미삭제) / **삭제는 manager 이상만**(partner는 카드만 발송, 미삭제).
+- **안전장치**: 만료 판정은 서버가 등록일로 직접(유효·미등록·등록일 NULL은 삭제 안 함), 삭제 시 승인 컬럼도 초기화(고객 화면 "승인됨" 잠금 방지), 스토리지는 해당 고객 폴더만.
+- **테스트**: `__tests__/server/identityDocRequestAndRevoke.test.ts` 8건(만료 삭제/외국인 초기화/유효 미삭제/등록일 NULL·미등록/삭제 순서/partner 미삭제/승인 취소 권한) + 컴포넌트 6건 = 14/14 GREEN. svelte-check 신규 0건(기존 `vite.config.ts` 1건).
+- **실화면 검증(Stage 테스트 계정 `test-doc-expired@crazyshot-test.kr`, 삭제 금지)**: 재등록 버튼 목록 행 우측 끝, 승인 취소 후 DB `identity_approved_at` NULL, 요청 시 본인증명 "만료됨"→"미등록" 및 DB 초기화 확인.
+- **QA 이력**: 1차 sp3-qa-agent 통과(블로킹 0) — 권고 1(삭제 순서)·2(partner 삭제 권한) 반영 후 재검수 요청. 후속 권고: 승인 취소 `cms_admin_audit_log` 기록, 만료 판정 유틸 통합.
+- **알려진 한계**: 등록일 NULL이면 만료 판정 불가(삭제·요청 버튼 미노출), 고객 화면 수정·삭제 노출·푸시 도착 미검증(코드 확인만).
+
+## DONE — 🟢 ROUTINE: 상담(/cms/chat) 고객정보 패널 본인증명·외국인증명 "요청" 버튼 — 만료(6개월)/미등록 노출 + 등록요청 카드 발송 + 수평 정렬 (2026-09-26, 이 세션'만', QA 검수 대기, git commit만 Stephen 대기)
+
+- **범위**: `chat/CustomerDetailPanel.svelte`(등록/미등록/만료 상태 + "요청" 버튼, 상태 글자·버튼 수평 배열·버튼 우측 끝 `.doc-value`), `chat/AdminChatPanel.svelte`(`handleRequestDoc` → `/api/cms/chat/identity-request/direct-send`, 토스트 문구를 문서 유형별 "본인증명/외국인증명 등록요청을 전송했습니다."로 수정), `account/profile/+page.svelte`(100dvh·하단 여백 100px), `cms-uiux.md`(SuggestPicker `noFilter`·`clearOnSelect` 문서 2줄). 요청 버튼 CSS는 cms-uiux §0-10-F 소형 버튼 규격.
+- **신규 테스트**: `src/__tests__/components/chatCustomerDocRequestButton.test.ts`(svelte/server 렌더, 6건 GREEN — 미등록/유효/만료/독립 상태/전송 중/빈 배열).
+- **실화면·DB 검증**: Stage 테스트 계정 `test-doc-expired@crazyshot-test.kr`(비번 `TestDoc!2026`, 등록일 7개월 전, 세션 179fa9e0…) 시드 — **삭제 금지(Stephen 지시)**. /cms/chat에서 본인증명·외국인증명 행 모두 "만료됨"+"요청" 노출, 본인증명 "요청" 클릭 → `chat_messages`에 `identity_request` 액션카드(admin 발신, 대상 고객 세션) INSERT 확인. Migration #363(foreign_doc_urls)은 Stage·Production 적용 확인.
+- **알려진 한계**: ① 등록일(`*_verified_at`)이 NULL이면 만료 판정 불가 → 버튼 미노출(mublues@gmail.com 외국인증명 사례) ② Migration #526 승인 상태(`*_approved_at`) 미반영 — 승인대기도 "등록완료" 표시 ③ 고객 화면 카드 렌더·푸시 도착은 미검증.
+- svelte-check 에러 1건(`vite.config.ts` test 속성, 본 작업 무관). DB 스키마 변경 없음(테스트 시드 데이터만 Stage에 추가).
+
 ## DONE — 🟡 BOUNDARY: 쿠폰 선물 채팅카드·푸시 재검증 후속 — 승인 경로 고객 푸시 + 관리자 실패 안내 (2026-09-25, 이 세션'만', git commit만 Stephen 대기)
 
 - 재검증 발견: ① 기간 없는(무제한·발급후N일) 쿠폰이 선물 목록/직접발송/AI카드에서 누락(NULL 날짜 SQL 필터) — 다른 세션이 `.or(is.null,…)`로 수정 중(미커밋, 이 세션은 리뷰만) ② AI 대기카드 승인 시 고객 푸시 없음 ③ 선물 발송·승인 실패 시 관리자 화면 무반응(배포 중단 쿠폰 포함).
@@ -404,6 +440,11 @@ C안 결합상품마다 0원짜리 예약 행 생성 — 기존 배정 로직 �
 - ✅ 최종 QA(2026-09-25, sp3-qa-agent): **통과, BLOCKING 0·MEDIUM 0**. #548(#508 대비 변수 1개+재검사+ACL뿐, 기준 #547과 일치, 기간 변경 경로 전수 타당, E1·E1b 헛통과 아님) / EC-7 보강(create_hold는 예약코드 채번 카운터 upsert로 직렬화·promote는 미직렬화 — 코드로 확인) / upload POST·DELETE 우회 수정 유효 / 5개 스위트 91/91(Stage 라이브 81초) / 신규 RPC 에러처리 위반 0(create-order 1건은 타 세션 Migration 542 작업).
   LOW(보류): ① #548 재검사가 결합 실물 행을 잠그지 않음(#508 메인 검사와 동일 수준, 후속 FOR UPDATE 검토) ② hooks /cms/login 예외를 `..` 없는 하위 경로로 좁히기(현재 악용 경로 없음) ③ 고객 간 log/ 첨부 소유권 미확인(기존 상태).
   rental-lifecycle.md 결합상품 절 "Stage 적용 전" 문구 정정 완료. Production 오픈 체크리스트: #544→#545→#547→#548 순서(#548은 #547 표에 의존), DRIFT_CHECK 1~4단계 실측 대조, 코드 배포·DB 적용 둘 다 확인, 결합 없는 상품 hold·방식변경 무회귀 확인.
+- ✅ Production(vnbpmvxruyciuuaermyh) DB 마이그레이션 적용(2026-09-25, Stephen 지시): #544→#545→#547→#548 순서 적용. 적용 전 드리프트 대조: 5개 함수 해시가 Stage 적용 전 상태와 정확히 일치·새 표 없음. 적용 후 실측(응답만 믿지 않음): 함수 8종 해시·EXECUTE 권한이 Stage와 완전 일치(assign_bundle_assets=service_role만, upsert=service_role만, promote anon=false), 표 2종 RLS on·정책 0, 기존 상품 91개 재고 계산이 이전 공식과 불일치 0건, 예약 123건 그대로, 결합 연결·배정 0건(신규 기능 미사용 상태). 코드는 DB 하위호환(구 코드 영향 없음) — 신규 코드 배포는 Stephen 커밋·푸시 후 확인 필요(코드 배포≠DB 적용 별개).
+  관찰(Stage와 동일, 미수정): product_bundle_links에 anon/authenticated 테이블 권한(기본 권한)이 남아 있으나 RLS on+정책 0이라 행 접근 불가.
+- ✅ 커밋·푸시·배포 점검(2026-09-25, Stephen 지시, Vercel 프로젝트 crazyshot-svelte prj_K6PEw1WfblRxqqOlaqSep8KeNXxs, 판정 기준=Vercel 배포 상태 READY): Stephen 커밋 3건(5bf622d DB·재고 연동 / 44fc199 CMS 결합상품 탭·3:7 / eedf579 CMS 중앙 역할 게이트) origin/stage 푸시 → main 병합(PR #348·#349·#350). Stage(미리보기) 배포 3건 READY, Production 배포 READY(최신 d35b7c3=PR #350 병합, main HEAD 일치), 이 세션 이전 커밋(d741427·eba8b84·10ee3f7 등)도 전부 READY·실패/취소 없음.
+  Production 배포본 실측: 비로그인 POST /cms/products?/updateSection → 401(중앙 게이트 동작), /cms/login·/ → 200. 배포 후 3시간 런타임 에러 1종(dhero-sync 두발히어로 환경변수 DHERO_API_BASE_URL/DHERO_TOKEN/DHERO_SPOT_CODE 미설정 fail-soft, 9/14부터 지속·이번 변경 무관 — 두발히어로 사용 시 Vercel 환경변수 설정 필요).
+  미확인: 로그인된 CMS 직원 화면에서 결합상품 탭 열림·저장(Production 배포본 기준) 직접 확인 미실시. 결합상품 블록은 Stephen 완료 확인 전이라 헤더 NOW 유지(확인 시 DONE 전환).
 - 별건 등록: task_924af511(CMS 상품 저장 액션 역할 게이트 부재, 🔴 CRITICAL)
 
 ### 리스크
@@ -9747,3 +9788,23 @@ Canon RF 50mm 1.4VCM, 예약코드 CS2609021)은 CMS "거부" 액션으로 전�
   `api/cms/chat/coupon-gift/direct-send/+server.ts`, `lib/server/chatActionEnrich.ts`.
 - 미진행(Stephen 지시로 이번 세션 범위 밖): 문제2(승인 경로 푸시)·3(실패 토스트)·4(중복 발급 알림).
 - svelte-check 신규 에러 없음. git commit 미실행.
+
+### 정정 기록 (2026-09-25) — 쿠폰 선물 조회 3곳 수정은 병행 세션 커밋 `10ee3f7`로 대체됨
+- 이 세션이 적용한 `.or(valid_from.is.null…)` 방식 수정 3건(available·direct-send·chatActionEnrich)은,
+  병행 세션이 같은 3곳의 유효기간 조건을 아예 제거하는 방식으로 재수정해 `10ee3f7`("쿠폰 선물 승인 푸시·
+  실패 안내·재선물 경고 + 기간 없는 쿠폰 선물 허용")에 커밋함 → 이 세션 소유의 미커밋 변경 0건.
+- 따라서 이 항목의 sp3-qa-agent 검수는 검수 대상 diff가 없어 실행하지 않음(병행 세션 커밋은 그 세션 소관).
+  (참고: 유효기간 조건 제거 시 만료 쿠폰도 선물 가능해지는 점은 해당 세션 의도 확인 필요.)
+
+## DONE — 쿠폰 선물 대상에서 날짜 지정(fixed_period) 쿠폰 차단 (2026-09-25, 이 세션 단독)
+- Stephen 지시: 선물할 쿠폰 중 유효기간이 날짜로 지정된 쿠폰은 선물 차단(무제한·발급 후 N일만 허용).
+- 병행 커밋 `10ee3f7`이 유효기간 조건을 전부 제거한 상태에서, 선물 대상 쿠폰 조회 3곳에
+  `.neq('validity_type', 'fixed_period')` 추가: `api/cms/coupons/available`, `api/cms/chat/coupon-gift/direct-send`,
+  `lib/server/chatActionEnrich.ts`(AI 선물 카드). 이미 생성된 대기 카드의 승인 경로는 변경 없음.
+- 미실행: 실화면 선물 테스트·QA·git commit.
+
+### @sp3-qa-agent 검수 결과 (2026-09-25) — 쿠폰 선물 fixed_period 차단: GATE E 통과
+- CRITICAL 없음. 3곳 적용·체인 순서·direct-send `.single()` 흡수 정상, svelte-check 신규 에러 0, console.log/any 0.
+- 조건부 항목(NULL 안전성)은 직접 확인 완료: Stage·Production 모두 `coupons.validity_type` NOT NULL,
+  NULL 행 0건 → `.neq('validity_type','fixed_period')`가 기존 쿠폰을 잘못 제외하지 않음.
+- 보고만(범위 밖): 이미 생성된 대기 카드 승인 경로(`[messageId]/approve`)는 validity_type 미검사.

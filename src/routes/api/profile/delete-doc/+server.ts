@@ -4,6 +4,7 @@ import { env } from '$env/dynamic/private'
 import { createClient } from '@supabase/supabase-js'
 import { getSupabaseUrl } from '$lib/env/supabasePublic'
 import { callTypedRpc } from '$lib/utils/rpc'
+import { isIdentityApproved, IDENTITY_APPROVED_LOCK_MESSAGE } from '$lib/server/identityApproval'
 
 const BUCKET = 'user-documents'
 
@@ -19,6 +20,10 @@ export const POST: RequestHandler = async ({ request, locals }) => {
   if (!serviceRoleKey) return json({ ok: false, error: '서버 설정 오류' }, { status: 500 })
 
   const admin = createClient(getSupabaseUrl(), serviceRoleKey)
+
+  if (await isIdentityApproved(admin, session.user.id, type === 'foreign' ? 'foreign' : 'identity')) {
+    return json({ ok: false, error: IDENTITY_APPROVED_LOCK_MESSAGE }, { status: 403 })
+  }
 
   // 실제 Storage 파일 삭제용 — DB 초기화 전에 기존 URL을 먼저 확보해 둔다
   // foreign은 다중 파일 전체 목록이 foreign_doc_urls에 있으므로 그쪽을 조회(foreign_doc_url은

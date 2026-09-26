@@ -4,6 +4,7 @@ import { env } from '$env/dynamic/private'
 import { createClient } from '@supabase/supabase-js'
 import { getSupabaseUrl } from '$lib/env/supabasePublic'
 import { callTypedRpc } from '$lib/utils/rpc'
+import { isIdentityApproved, IDENTITY_APPROVED_LOCK_MESSAGE } from '$lib/server/identityApproval'
 
 const BUCKET = 'user-documents'
 
@@ -24,6 +25,10 @@ export const POST: RequestHandler = async ({ request, locals }) => {
   if (!serviceRoleKey) return json({ ok: false, error: '서버 설정 오류' }, { status: 500 })
 
   const admin = createClient(getSupabaseUrl(), serviceRoleKey)
+
+  if (await isIdentityApproved(admin, session.user.id, type === 'foreign' ? 'foreign' : 'identity')) {
+    return json({ ok: false, error: IDENTITY_APPROVED_LOCK_MESSAGE }, { status: 403 })
+  }
 
   const urlColumn  = type === 'identity' ? 'identity_doc_url' : 'foreign_doc_urls'
   const typeColumn = type === 'identity' ? 'identity_type'    : 'foreign_type'

@@ -5,6 +5,7 @@ import { createClient } from '@supabase/supabase-js'
 import { getSupabaseUrl } from '$lib/env/supabasePublic'
 import { UPLOAD_ACCEPTED_TYPES, getMimeExtension } from '$lib/utils/fileValidation'
 import { callTypedRpc } from '$lib/utils/rpc'
+import { isIdentityApproved, IDENTITY_APPROVED_LOCK_MESSAGE } from '$lib/server/identityApproval'
 
 const BUCKET = 'user-documents'
 const MAX_SIZE = 10 * 1024 * 1024 // 10MB — CMS 표준 기술 지침(개별 파일 업로드 용량)과 동일
@@ -51,6 +52,10 @@ export const POST: RequestHandler = async ({ request, locals }) => {
   if (!serviceRoleKey) return json({ ok: false, error: '서버 설정 오류' }, { status: 500 })
 
   const admin = createClient(getSupabaseUrl(), serviceRoleKey)
+
+  if (await isIdentityApproved(admin, session.user.id, type === 'foreign' ? 'foreign' : 'identity')) {
+    return json({ ok: false, error: IDENTITY_APPROVED_LOCK_MESSAGE }, { status: 403 })
+  }
 
   // 재등록 시 옛 파일 정리용 — 새 파일 업로드/DB 반영 전에 기존 URL을 미리 확보해 둔다
   // foreign은 다중 파일 전체 목록이 foreign_doc_urls에 있으므로 그쪽을 조회(foreign_doc_url은

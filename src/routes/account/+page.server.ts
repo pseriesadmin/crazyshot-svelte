@@ -26,12 +26,14 @@ interface AccountProfile {
   identity_type: string[] | null
   identity_doc_url: string[] | null
   identity_verified_at: string | null
+  identity_approved_at?: string | null
   is_foreign: boolean
   foreign_doc_url: string | null
   foreign_doc_urls: string[] | null
   foreign_type: string[] | null
   foreign_stay_type: string | null
   foreign_verified_at: string | null
+  foreign_approved_at?: string | null
   created_at: string | null
   cms_role: string | null
   // 탈회 관련
@@ -65,7 +67,7 @@ export const load: PageServerLoad = async ({ locals, depends }) => {
   const [profileRes, addressRes, statsRes, recentRentalRes, rentalsRes, cancelsRes, inquiriesRes, wishlistRes, coupons] = await Promise.all([
     locals.supabase
       .from('user_profiles')
-      .select('id, email, full_name, avatar_url, phone, birth_date, address, member_code, member_type, membership_grade, credit_score, rental_count, points, allow_rental_alert, allow_benefit_alert, allow_privacy_consent, allow_third_party_consent, identity_type, identity_doc_url, identity_verified_at, is_foreign, foreign_doc_url, foreign_doc_urls, foreign_type, foreign_stay_type, foreign_verified_at, created_at, cms_role, withdrawal_status, withdrawal_requested_at, withdrawal_purge_at')
+      .select('id, email, full_name, avatar_url, phone, birth_date, address, member_code, member_type, membership_grade, credit_score, rental_count, points, allow_rental_alert, allow_benefit_alert, allow_privacy_consent, allow_third_party_consent, identity_type, identity_doc_url, identity_verified_at, identity_approved_at, is_foreign, foreign_doc_url, foreign_doc_urls, foreign_type, foreign_stay_type, foreign_verified_at, foreign_approved_at, created_at, cms_role, withdrawal_status, withdrawal_requested_at, withdrawal_purge_at')
       .eq('id', session.user.id)
       .maybeSingle(),
     locals.supabase
