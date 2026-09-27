@@ -104,6 +104,38 @@ export const POST: RequestHandler = async ({ params, request }) => {
     await sendApprovalNotifications(admin, reservationId, notifyPlan)
   }
 
+  // 구독 "혜택관리" 무료배송(FREE_SHIPPING) 소진 — 판정(preview)과 소진(consume) 분리(Migration
+  // 554, 2026-09-27). 청구금액에 대한 0원 반영은 이미 hold 신청 시점(create-order)에
+  // p_consume:false로 미리 판정돼 orders.delivery_fee/final_amount에 반영되어 있다 — 여기서는
+  // "실제로 결제가 확정됐으니 이번 달 사용횟수를 소진해도 되는가"만 p_consume:true로 확정한다
+  // (쿠폰·포인트의 use_coupon/use_points와 동일하게 결제 확정 시점에만 소진). 이 호출이
+  // applies:false(예: hold~결제확정 사이 다른 주문이 월 한도를 먼저 소진)를 반환해도 이미 확정된
+  // 청구액(orders.final_amount)은 되돌리지 않는다 — use_coupon 거부 시 되돌리지 않는 것과 동일한
+  // 기존 원칙(실제 청구가 이미 끝난 뒤에는 금액을 사후 변경하지 않음). fail-soft.
+  if (confirmed === true && reservationUserId && orderId) {
+    try {
+      const { data: orderItemsForShipping } = await admin
+        .from('order_items')
+        .select('reservation_id')
+        .eq('order_id', orderId)
+      const siblingReservationIds = ((orderItemsForShipping ?? []) as { reservation_id: number }[])
+        .map((row) => row.reservation_id)
+
+      if (siblingReservationIds.length > 0) {
+        const { error: shippingErr } = await admin.rpc('apply_subscription_free_shipping', {
+          p_user_id: reservationUserId,
+          p_reservation_ids: siblingReservationIds,
+          p_consume: true,
+        })
+        if (shippingErr) {
+          console.error('[contracts/pay-mock] apply_subscription_free_shipping(consume) 실패:', shippingErr)
+        }
+      }
+    } catch (err) {
+      console.error('[contracts/pay-mock] 구독 무료배송 소진 중 예외:', err instanceof Error ? err.message : err)
+    }
+  }
+
   // 쿠폰/포인트 소진(Phase C-4) — confirm-mock과 동일하게 실제로 confirmed 전환된 경우에만
   // 적용한다(결제만 되고 서명 미완료라 아직 hold인 상태에서는 소진하지 않음).
   let couponUsed = false

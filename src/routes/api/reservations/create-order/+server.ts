@@ -34,22 +34,26 @@ export const POST: RequestHandler = async ({ locals, request }) => {
 
   const admin = createClient(getSupabaseUrl(), env.SUPABASE_SERVICE_ROLE_KEY)
 
-  // 구독 "혜택관리" 무료배송(FREE_SHIPPING) 판정 — 마스터플랜 Phase 5/6(Migration 542).
-  // 배송비 계산 로직(cartShippingFee.ts) 자체는 건드리지 않고, 클라이언트가 이미 계산해
-  // 보낸 deliveryFee 위에 "이 주문에 구독 무료배송 혜택을 적용해도 되는가"만 별도 판정해
-  // 해당되면 0원으로 덮어쓴다. fail-soft — 혜택 판정 실패가 주문 생성 자체를 막지 않는다.
+  // 구독 "혜택관리" 무료배송(FREE_SHIPPING) — 판정(preview)과 소진(consume) 분리(Migration 554,
+  // 2026-09-27). 실제 토스 청구금액은 계약서명 화면에서 이 hold 신청 시점에 기록되는
+  // orders.final_amount를 기준으로 결정되므로, "0원 적용 여부"는 반드시 여기서 미리 반영해야
+  // 한다(그래야 실결제 고객도 청구액에 혜택이 반영됨) — 다만 월 사용횟수는 아직 소진하지
+  // 않는다(p_consume:false). 실제 소진은 결제가 진짜로 확정되는 시점(pay-mock·pay-result)에서만
+  // 일어난다 — 그래야 결제·계약서명 전에 취소·방치된 예약이 월 한도를 낭비시키지 않는다.
+  // fail-soft — 혜택 판정 실패가 주문 생성 자체를 막지 않는다.
   let finalDeliveryFee = deliveryFee
   if (finalDeliveryFee > 0) {
     try {
       const { data: shippingResult } = await admin.rpc('apply_subscription_free_shipping', {
         p_user_id: session.user.id,
         p_reservation_ids: reservationIds,
+        p_consume: false,
       })
       if ((shippingResult as { applies?: boolean } | null)?.applies) {
         finalDeliveryFee = 0
       }
     } catch (err) {
-      console.error('[reservations/create-order] apply_subscription_free_shipping 실패:', err)
+      console.error('[reservations/create-order] apply_subscription_free_shipping(preview) 실패:', err)
     }
   }
 
