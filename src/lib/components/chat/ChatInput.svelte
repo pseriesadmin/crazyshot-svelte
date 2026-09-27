@@ -5,6 +5,7 @@
   import CmsSimilarNameInput from '$lib/components/cms/CmsSimilarNameInput.svelte'
   import type { SimilarNameItem } from '$lib/types/cms-similar-name'
   import { getCategoryLabel } from '$lib/constants/cannedResponseCategories'
+  import { csToast } from '$lib/utils/toast'
 
   // 상품검색 팝업 — 타이핑 중 라이브 제안(SuggestPicker류)은 가벼운 소량만 조회하고,
   // 엔터(하이라이트 없을 때)로 명시적 "더 보기"를 눌러야만 더 큰 목록을 조회한다.
@@ -20,6 +21,7 @@
     category: string | null
     shortcut: string | null
     usage_count: number
+    match_keywords?: string[]
   }
 
   // GSD-17: @ 멘션 상품 검색 결과 타입 (search-suggestions API 응답과 일치)
@@ -35,10 +37,12 @@
   interface CouponItem {
     id: string
     code: string
+    display_name?: string | null
     description: string | null
     discount_type: string
     discount_value: number
     valid_until: string | null
+    already_owned?: boolean
   }
 
   interface Props {
@@ -58,6 +62,8 @@
     onproductmention?: (product: ProductItem) => void
     /** 2-B 쿠폰 직접발송: 쿠폰 선택 시 콜백 */
     oncoupongift?: (coupon: CouponItem) => void
+    /** 쿠폰 목록 조회 시 이미 보유한 쿠폰인지 판별하기 위한 대상 고객 user_id (선택 세션 기준) */
+    targetUserId?: string | null
   }
 
   let {
@@ -69,6 +75,7 @@
     isAdmin = false,
     onproductmention,
     oncoupongift,
+    targetUserId = null,
   }: Props = $props()
 
   let content = $state('')
@@ -109,17 +116,24 @@
   let showCouponPopup = $state(false)
   let couponItems = $state<CouponItem[]>([])
   let couponLoading = $state(false)
+  // 마지막으로 목록을 조회한 대상 고객 — 세션이 바뀌면 already_owned 판정도 다시 조회해야 함
+  // ('unloaded' 센티널로 시작해 targetUserId가 null인 경우도 최초 1회는 반드시 조회하게 함)
+  let couponListLoadedForUserId = $state<string | null>('unloaded')
 
   function openCouponPopup(): void {
     if (showCouponPopup) { showCouponPopup = false; return }
     // 상품검색 팝업은 닫기
     closeProductSearchPopup()
     showCouponPopup = true
-    if (couponItems.length === 0) {
+    if (couponListLoadedForUserId !== targetUserId) {
       couponLoading = true
-      fetch('/api/cms/coupons/available')
+      const qs = targetUserId ? `?user_id=${encodeURIComponent(targetUserId)}` : ''
+      fetch(`/api/cms/coupons/available${qs}`)
         .then((r) => r.ok ? r.json() : [])
-        .then((data: CouponItem[]) => { couponItems = Array.isArray(data) ? data : [] })
+        .then((data: CouponItem[]) => {
+          couponItems = Array.isArray(data) ? data : []
+          couponListLoadedForUserId = targetUserId
+        })
         .catch(() => { couponItems = [] })
         .finally(() => { couponLoading = false })
     }
@@ -138,6 +152,11 @@
   function formatCouponDiscount(item: CouponItem): string {
     if (item.discount_type === 'percentage') return `${item.discount_value}% 할인`
     return `${Number(item.discount_value).toLocaleString()}원 할인`
+  }
+
+  // 고객에게 노출되는 쿠폰명(display_name) 우선 — 없으면 할인율/금액으로 폴백
+  function couponDisplayLabel(item: CouponItem): string {
+    return item.display_name ?? formatCouponDiscount(item)
   }
 
   let canSend = $derived(content.trim().length > 0 && !disabled)
@@ -167,20 +186,29 @@
       // '/' 입력만 → 전체 목록 (사용 순)
       dropdownItems = cannedAll.slice(0, 8)
     } else {
-      // 단축키 prefix 매칭 우선 → title / content 포함 순
+      // 매칭 우선순위: ① 관리자가 등록한 전용 키워드(match_keywords) → ② 단축키(shortcut)
+      // 접두 매칭 → ③ 제목(title) 부분일치. 응답 본문(content) 전체는 더 이상 매칭 대상이
+      // 아니다 — 본문 속 우연한 단어 포함("반납" 등)까지 걸려 무관한 항목이 섞이던 문제 수정.
+      const byKeyword = cannedAll.filter(
+        (c) => (c.match_keywords ?? []).some((k) => k.toLowerCase().includes(query))
+      )
       const byShortcut = cannedAll.filter(
-        (c) => c.shortcut && c.shortcut.toLowerCase().includes('/' + query)
+        (c) => !byKeyword.includes(c) && c.shortcut && c.shortcut.toLowerCase().includes('/' + query)
       )
-      const byText = cannedAll.filter(
+      const byTitle = cannedAll.filter(
         (c) =>
+          !byKeyword.includes(c) &&
           !byShortcut.includes(c) &&
-          (c.title.toLowerCase().includes(query) ||
-           c.content.toLowerCase().includes(query))
+          c.title.toLowerCase().includes(query)
       )
-      dropdownItems = [...byShortcut, ...byText].slice(0, 8)
+      dropdownItems = [...byKeyword, ...byShortcut, ...byTitle].slice(0, 8)
     }
     showDropdown = dropdownItems.length > 0
-    dropdownIdx = -1
+    // 목록이 있으면 항상 첫 항목을 하이라이트해둔다 — 화살표 없이 바로 Enter를 눌러도
+    // (아래 handleKeydown의 dropdownIdx>=0 분기가 동작해) 선택되도록 하기 위함. 이전에는
+    // 항상 -1로 리셋돼, 화면에 보이는 미리보기가 아니라 입력창의 "/검색어" 원문이 그대로
+    // 전송되는 결함이 있었다.
+    dropdownIdx = dropdownItems.length > 0 ? 0 : -1
   })
 
   // GSD-17: @ 멘션 트리거 — 입력 시 300ms 디바운스 후 상품 검색
@@ -222,8 +250,16 @@
     if (!isAdmin) return
     function handleOutside(e: MouseEvent) {
       if (wrapEl && !wrapEl.contains(e.target as Node)) {
+        // '/'·'@' 트리거 문자만 남아있던 입력을 함께 비워야 전송 버튼이 "첨부"로 되돌아온다 —
+        // showDropdown만 끄면 content(예: '/반납')가 그대로 남아 canSend가 계속 참으로 고정됨.
+        if (content.startsWith('/') || content.startsWith('@')) {
+          content = ''
+          pendingCannedId = null
+        }
         showDropdown = false
+        dropdownIdx = -1
         showProductDropdown = false
+        productDropdownIdx = -1
         closeProductSearchPopup()
         closeCouponPopup()
       }
@@ -279,9 +315,10 @@
     showDropdown = false
     dropdownIdx = -1
     // §E SYN-8: 실제 발신 시점에 동의어 학습이 이뤄지도록 출처 ID를 pendingCannedId로 보관
+    // usage_count 집계는 2026-09-28 Stephen 확정으로 "선택(미리보기) 시점"에서 "실제 전송
+    // 성공 시점"으로 이동 — 여기서는 더 이상 /use PATCH를 호출하지 않는다(호출부:
+    // AdminChatPanel.svelte handleSend 성공 분기).
     pendingCannedId = item.id
-    // usage_count 증가는 선택 시점 유지 (이유: API 주석 참조)
-    fetch(`/api/cms/canned-responses/${item.id}/use`, { method: 'PATCH' }).catch(() => {})
     // 포커스 복귀
     textareaEl?.focus()
     resizeTextarea()
@@ -297,6 +334,12 @@
   function handleSend() {
     const text = content.trim()
     if (!text || disabled) return
+    // maxlength(1000)는 네이티브 타이핑만 막을 뿐 selectCanned() 같은 JS 직접대입 경로는
+    // 우회한다 — 전송 직전에도 한 번 더 검증해 서버 400을 조용히 삼키지 않고 안내한다.
+    if (text.length > 1000) {
+      csToast.error('메시지는 1000자를 초과할 수 없습니다.')
+      return
+    }
     // §E SYN-8: 실제 발신 시점에 cannedResponseId 전달 (선택 후 내용 수정 시 이미 null)
     const cannedId = pendingCannedId
     pendingCannedId = null
@@ -307,6 +350,21 @@
   }
 
   function handleKeydown(e: KeyboardEvent) {
+    // '/'·'@' 트리거 문자 자체를 취소하는 Escape는 드롭다운에 검색결과가 있을 때만이 아니라
+    // 항상 동작해야 한다 — 예: '/asdkfj'처럼 매칭되는 빠른답변이 하나도 없으면 showDropdown이
+    // 이미 false라 아래 중첩된 showDropdown 분기 안의 Escape가 실행되지 않고, 입력창에
+    // "/asdkfj"가 그대로 남아 전송 버튼이 계속 "전송"에 고정된 채였다(바깥클릭 핸들러는 이미
+    // 이 조건(content startsWith)만으로 판단해 정상 동작했는데 Escape만 비대칭이었음, 2026-09-28
+    // 정밀 재검증으로 발견). isAdmin 전용 — 일반 사용자 채팅창('/'가 특별한 의미 없음)은 무관.
+    if (isAdmin && e.key === 'Escape' && (content.startsWith('/') || content.startsWith('@'))) {
+      content = ''
+      pendingCannedId = null
+      showDropdown = false
+      dropdownIdx = -1
+      showProductDropdown = false
+      productDropdownIdx = -1
+      return
+    }
     // GSD-17: 상품 드롭다운 키보드 탐색
     if (showProductDropdown && isAdmin) {
       if (e.key === 'ArrowDown') {
@@ -322,11 +380,6 @@
       if (e.key === 'Enter' && productDropdownIdx >= 0) {
         e.preventDefault()
         selectProduct(productDropdownItems[productDropdownIdx])
-        return
-      }
-      if (e.key === 'Escape') {
-        showProductDropdown = false
-        productDropdownIdx = -1
         return
       }
     }
@@ -345,11 +398,6 @@
       if (e.key === 'Enter' && dropdownIdx >= 0) {
         e.preventDefault()
         selectCanned(dropdownItems[dropdownIdx])
-        return
-      }
-      if (e.key === 'Escape') {
-        showDropdown = false
-        dropdownIdx = -1
         return
       }
     }
@@ -450,13 +498,16 @@
         {#each couponItems as coupon (coupon.id)}
           <button
             class="coupon-item"
+            class:coupon-item--disabled={coupon.already_owned}
             type="button"
             role="option"
             aria-selected="false"
-            onmousedown={(e) => { e.preventDefault(); handleCouponSelect(coupon) }}
+            disabled={coupon.already_owned}
+            onmousedown={(e) => { e.preventDefault(); if (!coupon.already_owned) handleCouponSelect(coupon) }}
           >
             <div class="coupon-item-main">
-              <span class="coupon-discount">{formatCouponDiscount(coupon)}</span>
+              <span class="coupon-discount">{couponDisplayLabel(coupon)}</span>
+              {#if coupon.already_owned}<span class="coupon-owned-badge">이미 발급됨</span>{/if}
               {#if coupon.code}<span class="coupon-code-chip">{coupon.code}</span>{/if}
             </div>
             {#if coupon.description}
@@ -964,6 +1015,20 @@
   }
   .coupon-item:last-child { border-bottom: none; }
   .coupon-item:hover { background: var(--cs-lilac, #ECEBF4); }
+  .coupon-item--disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+  .coupon-item--disabled:hover { background: transparent; }
+
+  .coupon-owned-badge {
+    font: 700 10px/1 'Noto Sans KR', sans-serif;
+    color: var(--cs-text-mid, #666666);
+    background: var(--cs-surface-gray, #f6f6f6);
+    border-radius: var(--radius-full, 99px);
+    padding: 2px 8px;
+    white-space: nowrap;
+  }
 
   .coupon-item-main {
     display: flex;

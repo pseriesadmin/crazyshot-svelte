@@ -1,8 +1,7 @@
-// /api/cms/canned-responses/[id]/use — usage_count +1 (선택/자동완성 시점에 카운트)
-// 설계 판단: "전송 시점"이 아닌 "드롭다운에서 항목을 선택한 시점"에 카운트.
-// 이유: 관리자가 항목을 선택한 것 자체가 해당 응답이 유용했음을 나타냄.
-// 내용을 대폭 수정 후 보내더라도 그 시작점으로 이 응답이 기여했으므로 선택 시점 카운트가 더 정확함.
-// 전송 시점 카운트는 "선택 후 편집 → 되돌리기" 같은 엣지케이스에서 over-count 가능성이 있음.
+// /api/cms/canned-responses/[id]/use — usage_count +1
+// 2026-09-28 Stephen 확정: 호출 시점을 "드롭다운에서 항목을 선택한 시점"에서 "실제 전송
+// 성공 시점"으로 변경(과거 결정 번복) — 선택만 하고 편집·취소하거나 팝업만 열어본 경우까지
+// 과다 집계되던 문제 때문. 호출부: AdminChatPanel.svelte handleSend() 성공(res.ok) 분기.
 //
 // §E SYN-8: 동의어 학습은 실제 발신 시점(/api/chat/admin-reply)으로 이동됨.
 import { createClient } from '@supabase/supabase-js'

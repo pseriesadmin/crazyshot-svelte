@@ -176,6 +176,19 @@
         {#if isOwn && ondelete}
           <button class="del-btn" onclick={handleDelete} aria-label="메시지 삭제">✕</button>
         {/if}
+        {#if isAdmin}
+          <button
+            class="bookmark-btn"
+            class:bookmarked
+            onclick={handleBookmark}
+            aria-label={bookmarked ? '북마크 해제' : '북마크 추가'}
+            aria-pressed={bookmarked}
+          >
+            <svg width="13" height="13" viewBox="0 0 24 24" fill={bookmarked ? 'var(--cs-purple)' : 'none'} stroke={bookmarked ? 'var(--cs-purple)' : 'var(--cs-text-light,#aaa)'} stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"/>
+            </svg>
+          </button>
+        {/if}
       </div>
     </div>
   </div>

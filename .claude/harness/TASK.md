@@ -7,6 +7,235 @@
 > 📌 BACKLOG 블록은 `BACKLOG.md`로 분리됐다(Default-Exclude — Stephen 명시 승인 시에만 NOW로 이동).
 
 
+## NOW — 🔴 CRITICAL: 사용자 화면(front) 전역 UI/UX 결함 26건 보완 (2026-09-28)
+
+```
+[CONTEXT BRIDGE]
+plan_source: Plan Mode(3개 병렬 Explore 조사 + Supabase stage/production 실DB 대조)로 근본원인까지
+             확정한 산출물 — 전체 상세는
+             ".claude/plan/사용자 화면 전역 UI 결함 보완 플랜(2026-09-28).md" 참고(항목별 파일:라인,
+             원인, 수정방향, 실행순서(P0~P3), 검증방법 전부 기재됨). 이 NOW 블록은 그 요약이다.
+stephen_확인_완료:
+  - 11번(최대대여일 15일): CMS 신규 설정 항목 추가로 구현(Stephen 승인)
+  - 12번(당일수령 마감): 기존 CMS 마감시각(deadline_time) 설정값 재사용/신설로 구현(Stephen 승인)
+  - 2번(채팅 자동응답 무반응): auto_reply_settings.enabled=true 확인됨(가설 기각) — 캔드매칭
+    파이프라인 자체의 버그만 수정, AI 자유응답 차단(ANTHROPIC_ENABLED=false)은 건드리지 않음(Stephen 승인)
+  - 9·10번(하입팩): 코드 보완 + stage에 테스트용 상품 연결까지 포함, production 실제 큐레이션은
+    Stephen이 CMS에서 직접 진행(Stephen 승인)
+절대금지: git 쓰기 명령 금지(Stephen만) · 요청범위 외 수정 금지 · production DB 미검증 마이그레이션 직접 적용 금지.
+```
+
+### 실행 순서 (플랜 문서의 "실행 순서 제안" 그대로)
+
+```
+P0(먼저): [5] 미노출 상품 노출(search_products RPC is_active 누락) → [4] 쿠폰 표시/적용 불일치+정액쿠폰
+  형변환 버그 → [11] 최대대여일 15일(CMS 신규 컬럼+카트 연동, 신규기능) → [12] 당일수령 마감시각
+  하드코딩(deadlineOk=true) 실판정 연결 → [13] 반납일<수령일 검증 누락+요금0원 → [14] VAT가 쿠폰할인
+  반영 전 금액 기준으로 계산되는 버그
+
+P1: [2] 채팅 캔드매칭 무반응(matchCannedResponse.ts 최소점수 로직 + catch 폴백 삽입 경로 점검, production
+  로그 재현 확인됨) → [9][10] 하입팩 5개 테마그룹 product_ids 0개(코드 방어+stage 테스트연결) +
+  "추천패키지" 카테고리→/hype-pack 리다이렉트 누락 → [6] PC "PACKAGE"→"CATEGORY" 텍스트 → [7] 홈
+  카테고리 아이콘 선택 시 pkg-bar-label 하드코딩("Package") 미전환
+
+P2: [1] FloatingBar peek pointer-events:none 게이팅으로 2회클릭 필요(PC/모바일 공통) → [3] /account
+  프로필 "OOO님"→이메일 표시 전환 + 폰트 2단계 축소 → [16] 카트 .sub-gnb-b sticky top:0 GNB와 겹침 →
+  [17] NotesSection 방문수령에도 배송용 안내문 고정노출 → [18] .item-card-body 전체 클릭영역으로
+  여백클릭 시 배송정보UI 사라짐 → [19] 홈 개발용 문구(운영데이터 재확인 필요, 코드는 정상) → [20] 홈
+  PICK모달 3개제한 재현안됨(재확인 요청) → [21][22] 푸터 8개 링크 전부 href="/" 방치 → 6개 제외 토스트
+  + 3개(개인정보/이용정책/환불규정) 모달+CMS 텍스트필드 신규
+
+P3(재확인/저위험, 재현시에만 수정): [15] 폼 초기화 범위(코드상 재현안됨) · [23] 카테고리 내부코드 노출
+  · [24] 이력없이 후기작성 · [25] 로그인버튼 노출방식 · [26] 로그인후 리다이렉트(redirect/returnTo
+  파라미터 불일치, 다수 호출부 파라미터 누락) · [27] 회원가입 이메일형식오류 토스트 누락 · [28] 검색결과
+  0건 안내 누락(SearchProductGrid else분기 없음)
+```
+
+### 착수 시 필수 확인
+
+```
+- 매 항목 착수 전 AGENTS.md GATE 0(구현전 자가점검 4단계) 재적용.
+- CRITICAL 등급(4·11·12·13·14·2)은 결제/예약 로직에 영향 — 관련 도메인 규칙(rental-lifecycle.md,
+  service-operations.md, rental-fee-policy.md 등) 선(先) 로드 후 착수.
+- 11번 DB 스키마 신설은 stage(ezyvffjvuwmtuhpxdjrw) 검증 → production(vnbpmvxruyciuuaermyh) 순서
+  엄수, project_id 재확인 필수.
+- 2번은 코드 수정 전에 Vercel 런타임 로그로 실제 예외 여부 확인이 선행되어야 함(플랜 문서 [2] 항목 참고).
+- 항목별 완료 시 이 NOW 블록에 완료내역을 누적 기록하고, 전체 완료 시 헤더를 ## DONE으로 전환할 것
+  (완료 판정은 헤더 접두사만 기준 — TASK.md 상단 규칙 참고).
+```
+
+
+## DONE — 🔴 CRITICAL: CMS 상담/채팅(/cms/chat) 결함 10건 보완 (2026-09-28) — ✅ GATE E 통과(sp3-qa-agent 독립검수, BLOCKING 0건 / 비블로킹 참고 2건), git commit만 Stephen 대기
+
+```
+[CONTEXT BRIDGE]
+plan_source: 이전 세션이 실사용 재보고 10건(빠른답변 팝업 안 닫힘·필터링 오작동·Enter 시
+             안 보인 내용 오발송·usage_count 집계 시점·쿠폰 중복선물 UI 미표시·쿠폰명
+             표시·세션목록 admin_only 오노출·1000자 초과 무반응·세션목록 시간표시·북마크
+             이미지 미지원+시간표시·상담메모 버튼 라벨)을 원인분석까지 완료해둔 Plan Mode
+             산출물(learnings/chat_coupon_identity_approval_review_2026-09-28.md에 요약)을
+             그대로 실행. Stephen이 usage_count 집계 시점 변경("선택 시점"→"전송 성공
+             시점")을 명시 승인.
+절대금지: git 쓰기 명령 금지(Stephen만) · 요청범위 외 수정 금지.
+```
+
+### 완료된 수정 (A~F 전부)
+
+```
+A. 빠른답변 팝업 — Escape/바깥클릭 시 content까지 초기화(버튼 "전송" 고정 해소) +
+   필터 dropdownIdx 기본값을 0으로(화살표 없이 Enter만 눌러도 미리보기 그대로 선택,
+   화면에 안 보인 원문이 전송되던 결함 해소) + match_keywords 우선 매칭(본문 전체
+   부분일치 제거) + usage_count 집계를 selectCanned()에서 제거하고 AdminChatPanel
+   handleSend() 성공 분기로 이동(Stephen 확정 사항).
+B. 쿠폰 — /api/cms/coupons/available에 user_id 쿼리파라미터+already_owned 판정 추가,
+   ChatInput 쿠폰 팝업에 이미 보유 쿠폰 비활성화+배지 표시, display_name을 3개 지점
+   (direct-send/+server.ts · chatActionEnrich.ts enrichCouponGiftCard ·
+   approve_pending_coupon_gift RPC)에 COALESCE로 우선 반영.
+C. 1000자 초과 — ChatInput handleSend() 사전 차단(toast) + admin-reply/+server.ts
+   서버측 400 가드 신설(고객용 엔드포인트와 동일 기준) + AdminChatPanel handleSend()에
+   res.ok 실패 분기 신설(그동안 어떤 발신 실패든 조용히 사라지던 문제 전체 해소).
+D. 세션목록 시간표시 — chat_sessions.last_message_at 컬럼 신설(메시지 INSERT 트리거만
+   갱신, 답변모드전환·상태전환 등 관리성 RPC는 무변경) + formatDateTime에 일(day) 추가 +
+   sc-time을 last_message_at 우선 표시 + chat.svelte.ts applyIncomingMessagePreview가
+   last_message_at도 함께 갱신 + admin_only 메시지는 세션목록 미리보기 갱신에서 제외
+   (/api/chat/sessions 쿼리 + 실시간 미리보기 양쪽).
+E. 북마크 — MessageBubble 첨부파일(이미지·파일) 버블에도 북마크 버튼 추가(텍스트 버블만
+   있던 공백 해소) + get_session_bookmarks RPC에 message_created_at 추가(북마크 "체크한
+   시각"이 아니라 원본 메시지 발신 시각을 표시하도록) + BookmarkListView 표시 전환.
+F. 상담메모 저장 버튼 — idle 상태 "+" SVG → "저장" 텍스트로 교체(aria-label은 기존부터
+   정확했음, 화면 텍스트만 수정).
+```
+
+### DB 마이그레이션 3건 — Stage 전부 적용·검증 완료, Production 2/3만 적용됨
+
+```
+supabase/migrations/20260928010000_559_chat_sessions_last_message_at.sql
+  → Stage✅ Production✅ (컬럼·트리거·백필 전부 직접 SQL 재조회로 확인)
+supabase/migrations/20260928020000_560_approve_pending_coupon_gift_display_name.sql
+  → Stage✅ Production❌ — apply_migration 호출이 "Claude Code auto mode classifier"에 의해
+    사유 설명 없이 차단됨(도구 자체 거부, 서버측 오류 아님). 재시도하지 않고 즉시 중단 —
+    가이드가 "동일 결과를 다른 방식으로 우회 시도 금지, 사용자에게 알리고 판단을 맡길 것"을
+    명시. Production의 기존 함수(Migration #293 버전)는 그대로 정상 동작 중이라 서비스에
+    영향 없음(display_name 미반영 상태로 폴백 문구만 계속 사용) — 안전한 미완료 상태.
+    Stephen이 직접 Supabase 대시보드 SQL Editor에서 위 파일을 실행하거나, 재시도 허가를
+    주면 다음 세션에서 이어서 적용 가능.
+supabase/migrations/20260928030000_561_get_session_bookmarks_message_created_at.sql
+  → Stage✅ Production✅ (DROP+재생성 후 반환타입·권한(service_role만 EXECUTE, anon/
+    authenticated REVOKE) 직접 SQL 재조회로 확인)
+```
+
+### 변경 파일
+
+```
+src/lib/components/chat/ChatInput.svelte (팝업 닫힘·필터·usage_count 이동·쿠폰 already_owned
+  배지·display_name·1000자 사전차단)
+src/lib/components/chat/AdminChatPanel.svelte (usage_count PATCH 이동·전송실패 토스트·
+  targetUserId 배선·formatDateTime 일 추가·sc-time last_message_at 우선·"저장" 텍스트)
+src/lib/components/chat/MessageBubble.svelte (첨부파일 버블 북마크 버튼 추가)
+src/lib/components/chat/BookmarkListView.svelte (message_created_at 표시)
+src/lib/stores/chat.svelte.ts (applyIncomingMessagePreview — last_message_at + admin_only 제외)
+src/lib/types/chat.ts (ChatSession.last_message_at · ChatMessage.admin_only 추가)
+src/routes/api/chat/sessions/+server.ts (lastMsgMap admin_only 제외)
+src/routes/api/chat/admin-reply/+server.ts (1000자 서버측 가드)
+src/routes/api/cms/coupons/available/+server.ts (user_id 파라미터 + already_owned + display_name)
+src/routes/api/cms/chat/coupon-gift/direct-send/+server.ts (display_name 우선)
+src/lib/server/chatActionEnrich.ts (enrichCouponGiftCard display_name 우선)
+src/routes/api/cms/canned-responses/[id]/use/+server.ts (주석만 갱신 — 동작 무변경)
+supabase/migrations/20260928010000_559_*.sql · 20260928020000_560_*.sql · 20260928030000_561_*.sql (신규 3건)
+```
+
+### 검증
+
+```
+npx svelte-check --threshold error → 2061 FILES 1 ERRORS(기존 vite.config.ts, 신규 0건)
+Stage DB 직접 SQL 재조회: last_message_at 컬럼·백필 0건 NULL, get_session_bookmarks 신규
+  반환타입·권한, approve_pending_coupon_gift 신규 컬럼 조회 정상 실행 확인(실제 display_name
+  보유 쿠폰 3건 존재 확인).
+Production DB 직접 SQL 재조회: 559·561 적용 확인, 560은 미적용(기존 함수 그대로 안전 동작 확인).
+자동 테스트(vitest) 신설 없음 — 이번 범위는 순수 UI/조회 로직 수정이라 기존 서비스 레벨
+  테스트 스위트에 해당 경로가 없었음(다음 세션에서 회귀 테스트 보강 검토 가능).
+Claude Browser 미사용(CLAUDE.md 기본 금지 원칙 — Stephen 명시 요청 없었음).
+```
+
+### 정밀 재검증(같은 세션, Stephen 요청) — 결과: 1건 추가 발견·수정 + 라이브 테스트 4건 전부 통과
+
+```
+추가 발견·수정: Escape 키 처리의 비대칭 — 바깥클릭 핸들러는 "content가 '/'나 '@'로 시작하면"
+  조건만으로 초기화하는데, Escape 키는 "showDropdown/showProductDropdown이 true일 때"(=매칭
+  항목이 있을 때)만 초기화하도록 중첩돼 있었다. "/asdkfj"처럼 매칭되는 빠른답변이 하나도
+  없으면 showDropdown이 이미 false라 Escape를 눌러도 아무 반응이 없고 입력창에 그대로
+  남아 전송 버튼이 "전송"에 고정된 채였다(A항목 원 수정이 놓친 잔여 케이스). handleKeydown()
+  최상단에 조건 통일된 Escape 분기를 추가하고 중첩 분기의 중복 Escape 처리는 제거해 해소.
+
+라이브 테스트(Stage DB, 전부 BEGIN...ROLLBACK 또는 즉시 정리로 잔존 데이터 0건 확인):
+  ① last_message_at 트리거 — 메시지 INSERT 시 last_message_at이 그 메시지의 created_at과
+     정확히 일치하도록 갱신됨을 확인. 이어서 set_chat_session_status(관리성 RPC) 호출 →
+     updated_at만 바뀌고 last_message_at은 그대로 유지됨을 확인(관리조작과 대화시각 분리 검증).
+  ② admin_only 세션목록 제외 — 동일 세션에 admin_only=false 메시지 뒤에 admin_only=true 경고
+     카드를 추가 INSERT하고 created_at DESC 정렬 결과를 확인 → API 로직(첫 admin_only=true
+     스킵 후 다음 메시지 채택)이 정확히 admin_only=false 메시지를 미리보기로 채택함을 재현.
+  ③ get_session_bookmarks message_created_at — 원본 메시지(3일 전 발신) vs 방금 북마크한
+     시각(created_at)이 신규 컬럼에서 정확히 분리 반환됨을 실측(북마크 체크시각과 발신시각이
+     다른 값으로 각각 나옴).
+  ④ approve_pending_coupon_gift display_name — 실제 auth.uid() 컨텍스트(SET LOCAL
+     request.jwt.claim.sub + role authenticated)로 RPC를 직접 호출해 distribute_coupon까지
+     실행시킨 뒤, chat_messages.action_payload.discount_label이 쿠폰의 discount_type/value
+     계산값이 아니라 display_name("테스트")으로 정확히 저장됨을 확인 후 ROLLBACK.
+
+svelte-check 재실행(Escape 핸들러 리팩터링 이후) — 신규 에러 0건 유지(기존 vite.config.ts 1건만).
+```
+
+### 후속 UI 폴리시(같은 세션, Stephen이 <launch-selected-element>로 직접 지목) — /cms/chat 헤더 2건
+
+```
+G. 상태 배지("진행중"/"대기"/"종료") 원형 붕괴 수정 — `.chat-status`가 `.chat-header-top`
+   (flex, flex-shrink 기본값 1) 안에서 `.chat-user` 텍스트가 길어지면 폭이 눌려 "진행중"이
+   "진행"/"중" 두 줄로 쪼개지고 원형처럼 보이던 결함. `white-space: nowrap` + `flex-shrink: 0`
+   추가로 해소(같은 파일 `.urgent-badge` 등 기존 배지들이 이미 쓰던 패턴과 통일).
+H. 아바타+식별정보(이름·상태배지·이메일·회원코드) 그룹 카드화 — 기존엔 flat하게 나열돼
+   우측 header-toolbar 버튼군과 경계가 불명확했음. `.chat-identity` 래퍼 신설 —
+   round(`--cms-radius-md`, 이 파일 `.session-card`와 통일) + 배경은 헤더 자체 배경
+   (`--cs-purple-op10`)과 다른 계열로 시작했다가 Stephen 피드백 2회로
+   `--cs-purple-pale`(원색, 너무 진함) → `rgba(193,187,236,0.4)`(MessageBubble.svelte
+   `.system-msg`와 동일한 기존 희석 패턴 재사용) → 최종 `rgba(193,187,236,0.25)`(더 옅게)로
+   수렴. `.chat-header`의 기존 `gap:30px`가 카드↔툴바 분리 여백으로 그대로 유지됨.
+```
+
+### 변경 파일 추가분(G·H)
+
+```
+src/lib/components/chat/AdminChatPanel.svelte
+  .chat-status(white-space·flex-shrink 추가) · 템플릿에 .chat-identity 래퍼 신설(.chat-avatar+
+  .chat-header-info 그룹화) · .chat-identity 신규 CSS(rgba(193,187,236,0.25))
+```
+
+svelte-check 매 수정 직후 재실행 — 전부 신규 에러 0건 유지(기존 vite.config.ts 1건만).
+
+### ✅ GATE E 독립검수 결과(2026-09-28, sp3-qa-agent) — 통과, BLOCKING 0건
+
+```
+검수범위: 이 세션'만'의 변경 12개 파일 + 신규 마이그레이션 3건(다른 병렬 세션의 dirty 파일은
+  지시대로 검수 제외). 규칙정합성·기술부채·시범오픈 기준 3단계 전부 수행.
+공통보안·security-auth.md·service-operations.md §17 — 전부 ✅(§17은 오히려 반대방향 —
+  기존 admin_only 카드를 "세션목록 미리보기에서 걸러내는" 보완이라 안전).
+기술부채 — console.log/any/TODO 전부 0건, svelte-check 신규에러 0건,
+  check-rpc-error-handling.mjs 신규 VIOLATION 0건(기존 잔존 5건은 이번 diff 밖 파일).
+요청한 10개 세부 확인 포인트(admin_only 로직·last_message_at 트리거 분리·쿠폰 display_name
+  3곳 일관성·couponGiftDuplicate.ts 정합성·북마크 버튼 배선·Escape 키 충돌 여부·CSS 색상
+  패턴 재사용 근거·마이그레이션 GP-10 준수·권한 재적용·정적분석) 전부 확인 완료.
+
+⚠️ 비블로킹 참고 2건(다음 세션 검토 권장):
+  ① Migration #559 트리거(WHEN절 없음)가 admin_only=true 메시지 삽입 시에도 last_message_at을
+     갱신함 — 세션카드의 "미리보기 문구"(admin_only 제외)와 "시간"(admin_only 포함)이 서로
+     다른 메시지를 가리킬 수 있는 미세 불일치 가능성(이번 요구범위 밖의 추가 발견, 기능
+     장애 아님). 필요 시 트리거를 `WHEN (NEW.admin_only IS NOT TRUE)`로 재정의하는 후속
+     마이그레이션 검토.
+  ② Migration #560(approve_pending_coupon_gift display_name) Production 미적용 — 기존 대로
+     안전 상태 유지, Stephen 재시도 승인 또는 직접 SQL Editor 실행 대기.
+```
+
+---
+
 ## DONE — 🔴 CRITICAL: 쿠폰 7건 수정 Production 재검증(Stephen 실사용 재보고 8건) + 잔여 2건 보완 (2026-09-28) — ✅ GATE E 통과(sp3-qa-agent 독립검수, BLOCKING/MEDIUM 0건), git commit만 Stephen 대기
 
 ```
@@ -10594,6 +10823,37 @@ Migration #554를 Production(vnbpmvxruyciuuaermyh)에 적용. 적용 직전 파�
 
 ### 미실행
 git add/commit — Stephen 별도 지시 대기.
+
+---
+
+## NOW — 구독 무료배송(FREE_SHIPPING) "월 제한 횟수 무제한" 옵션 추가 (2026-09-28)
+
+Stephen이 CMS 구독 상세 "혜택관리" 탭 무료배송 카드의 "월 제한 횟수"가 정책상 무제한이어야
+하는데 숫자로만 제한되어 있다고 지적 → 무제한 옵션 신규 구현.
+
+### 구현 내역
+- `src/lib/utils/subscriptionBenefits.ts` — `BenefitParamField`에 `allowUnlimited?: boolean`
+  추가, FREE_SHIPPING의 `monthly_limit` 필드에 `allowUnlimited: true` 지정. `formatBenefitForDisplay`
+  (`/subscribe/[planId]`·`/members` 고객 화면에서 사용)에 `countLabel()` 헬퍼 추가 —
+  monthly_limit이 null이면 "월 0회"가 아니라 "무제한"으로 표시.
+- `SubscriptionDetailPanel.svelte` — 숫자 입력을 비우면(allowUnlimited 필드에 한해) 0이 아닌
+  null로 저장, placeholder="무제한" 표시. 기존 프로젝트 관례(코드체계 `max_sequence`,
+  `_TreeTab.svelte`의 "비우면 NULL=무제한, placeholder 안내") 그대로 재사용 — 신규 체크박스
+  UI 없음.
+- Migration #562(`apply_subscription_free_shipping` 재정의) — `COALESCE(...,1)` 제거,
+  monthly_limit이 NULL이면 월 한도 체크 자체를 건너뛰도록 수정(과거엔 무제한 의도로 비워도
+  "월 1회 제한"으로 정반대 오동작했음). Stage 적용 완료, Production 미적용.
+
+### 검증
+- 신규 TDD 1건 추가(`subscriptionFreeShippingBenefit.test.ts`) — monthly_limit=null 구독이
+  여러 번 소진해도 MONTHLY_LIMIT_REACHED로 막히지 않음 확인. 전체 13/13 GREEN.
+- `tsc --noEmit`·`eslint` 신규 에러 0건(신규 경고 2건은 같은 파일 기존 `num()` 함수와 동일
+  클래스의 기존 허용 패턴, baseline 대조로 확인).
+- 현재 실제 플랜(Easy/Pop/Crazy pack) 3개 전부 monthly_limit이 명시적으로 2로 설정돼 있어
+  이번 변경으로 기존 동작 변화 없음(2026-09-27 직접 조회 확인분과 동일).
+
+### 미실행
+git add/commit, Migration #562 Production 적용 — Stephen 별도 지시 대기.
 
 ## DONE — CMS 상품패널 "저장 후 다른 상품으로 재랜딩" 버그 조사 + 이미지 8장 상한 서버측 강제 + 연속삭제 경쟁상태 수정 (2026-09-27, 이 세션 단독)
 

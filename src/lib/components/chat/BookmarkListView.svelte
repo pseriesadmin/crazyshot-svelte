@@ -8,6 +8,9 @@
     session_id: string
     note: string | null
     created_at: string
+    // 원본 메시지가 실제로 발신된 시각 — created_at(이 북마크를 "체크한" 시각)과는 다른 값
+    // (Migration 559, get_session_bookmarks 확장). 목록 표시는 이 값을 우선 사용한다.
+    message_created_at: string | null
     message_content: string | null
     message_type: string
   }
@@ -78,7 +81,7 @@
             {#if b.note}
               <span class="blv-note">{b.note}</span>
             {/if}
-            <span class="blv-time">{formatTime(b.created_at)}</span>
+            <span class="blv-time">{formatTime(b.message_created_at ?? b.created_at)}</span>
           </button>
         </li>
       {/each}

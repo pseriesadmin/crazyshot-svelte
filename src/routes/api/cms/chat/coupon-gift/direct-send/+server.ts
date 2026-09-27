@@ -60,7 +60,7 @@ export const POST: RequestHandler = async ({ request, locals }) => {
   // 쿠폰 정보 조회 (service_role)
   const { data: couponRaw, error: couponErr } = await admin
     .from('coupons')
-    .select('id, code, discount_type, discount_value')
+    .select('id, code, display_name, discount_type, discount_value')
     .eq('id', couponId)
     .eq('is_active', true)
     .is('deleted_at', null)
@@ -71,11 +71,12 @@ export const POST: RequestHandler = async ({ request, locals }) => {
     return json({ error: '발급 가능한 쿠폰이 아닙니다.' }, { status: 404 })
   }
 
-  const coupon = couponRaw as { id: string; code: string; discount_type: string; discount_value: number }
+  const coupon = couponRaw as { id: string; code: string; display_name: string | null; discount_type: string; discount_value: number }
   const discountLabel =
-    coupon.discount_type === 'percentage'
+    coupon.display_name ??
+    (coupon.discount_type === 'percentage'
       ? `${coupon.discount_value}% 할인`
-      : `${Number(coupon.discount_value).toLocaleString()}원 할인`
+      : `${Number(coupon.discount_value).toLocaleString()}원 할인`)
 
   // 이미 보유(사용 포함)한 동일 쿠폰이면 고객 카드·푸시 없이 관리자 전용 경고 카드만 남김
   if (await isCouponAlreadyOwned(admin, userId, coupon.id)) {

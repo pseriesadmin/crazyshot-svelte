@@ -395,13 +395,14 @@ async function enrichCouponGiftCard(
   type CouponRow = {
     id: string
     code: string
+    display_name: string | null
     discount_type: string
     discount_value: number
   }
 
   const { data: couponsRaw } = await admin
     .from('coupons')
-    .select('id, code, discount_type, discount_value')
+    .select('id, code, display_name, discount_type, discount_value')
     .eq('is_active', true)
     .is('deleted_at', null)
     .neq('validity_type', 'fixed_period')
@@ -412,9 +413,10 @@ async function enrichCouponGiftCard(
 
   const coupon = couponsRaw[0] as CouponRow
   const discountLabel =
-    coupon.discount_type === 'percentage'
+    coupon.display_name ??
+    (coupon.discount_type === 'percentage'
       ? `${coupon.discount_value}% 할인`
-      : `${Number(coupon.discount_value).toLocaleString()}원 할인`
+      : `${Number(coupon.discount_value).toLocaleString()}원 할인`)
 
   return {
     ...base,

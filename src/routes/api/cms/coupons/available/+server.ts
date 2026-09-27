@@ -7,7 +7,7 @@ import { createClient } from '@supabase/supabase-js'
 import type { RequestHandler } from './$types'
 import { getCmsRoleForAction } from '$lib/server/getCmsRoleForAction'
 
-export const GET: RequestHandler = async ({ locals }) => {
+export const GET: RequestHandler = async ({ locals, url }) => {
   const { session } = await locals.safeGetSession()
   if (!session) return json({ error: '로그인이 필요합니다.' }, { status: 401 })
 
@@ -21,7 +21,7 @@ export const GET: RequestHandler = async ({ locals }) => {
 
   const { data, error } = await admin
     .from('coupons')
-    .select('id, code, description, discount_type, discount_value, max_discount_amount, valid_from, valid_until, usage_limit, usage_count')
+    .select('id, code, display_name, description, discount_type, discount_value, max_discount_amount, valid_from, valid_until, usage_limit, usage_count')
     .eq('is_active', true)
     .is('deleted_at', null)
     .neq('validity_type', 'fixed_period')
@@ -30,5 +30,24 @@ export const GET: RequestHandler = async ({ locals }) => {
 
   if (error) return json({ error: '쿠폰 목록 조회 실패' }, { status: 500 })
 
-  return json(data ?? [])
+  const coupons = data ?? []
+
+  // 대상 고객(user_id)이 지정됐으면 이미 보유(사용 포함)한 쿠폰을 already_owned로 표시 —
+  // 관리자가 재선물을 시도하기 전에 화면에서 먼저 안내하기 위함(서버측 최종 차단은
+  // couponGiftDuplicate.ts가 direct-send/approve 양쪽에서 이미 담당).
+  const targetUserId = url.searchParams.get('user_id')
+  if (!targetUserId || coupons.length === 0) {
+    return json(coupons.map((c) => ({ ...c, already_owned: false })))
+  }
+
+  const couponIds = coupons.map((c) => (c as { id: string }).id)
+  const { data: ownedRaw } = await admin
+    .from('user_coupons')
+    .select('coupon_id')
+    .eq('user_id', targetUserId)
+    .in('coupon_id', couponIds)
+
+  const ownedIds = new Set((ownedRaw as { coupon_id: string }[] ?? []).map((r) => r.coupon_id))
+
+  return json(coupons.map((c) => ({ ...c, already_owned: ownedIds.has((c as { id: string }).id) })))
 }

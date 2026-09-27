@@ -1,6 +1,8 @@
 # GSD_LOG.md — 크레이지샷 실행 이력
 # 형식: [YYYY-MM-DD HH:MM] 타입 | 타스크명 | 파일 | 소요 | 결과
 
+[2026-09-28(이 세션'만')] 🔴CRITICAL | CMS 상담/채팅(/cms/chat) 결함 10건 보완(빠른답변 팝업·필터·usage_count 시점·쿠폰 중복표시·display_name·1000자·세션목록 시간·admin_only 오노출·북마크 이미지+시간·상담메모 버튼) | src/lib/components/chat/ChatInput.svelte·AdminChatPanel.svelte·MessageBubble.svelte·BookmarkListView.svelte, src/lib/stores/chat.svelte.ts, src/lib/types/chat.ts, src/routes/api/chat/sessions/+server.ts·admin-reply/+server.ts, src/routes/api/cms/coupons/available/+server.ts·chat/coupon-gift/direct-send/+server.ts, src/lib/server/chatActionEnrich.ts, supabase/migrations/20260928010000_559_*·20260928020000_560_*·20260928030000_561_*.sql(신규 3건) | svelte-check 신규에러 0건 · Stage 3건 전부 적용+직접SQL 재검증 · Production 559·561 적용 확인, 560은 apply_migration이 auto mode classifier에 사유없이 차단돼 미적용(기존 함수 안전 동작 유지, 서비스 영향 없음) | GATE C: 대기(sp3-qa-agent 검수 요청), git commit 없음
+
 [2026-09-27] 🔴TDD+GSD | 장바구니 구매 예약 옵션 신설 T0~T9 완료 | src/lib/utils/cartPurchaseMode.ts(신규) · src/lib/utils/cartMethodSelection.ts · src/lib/utils/cartShippingFee.ts · src/routes/cart/+page.svelte · src/__tests__/services/cartPurchaseMode.test.ts(신규) · src/__tests__/services/cartMethodSelection.test.ts · src/__tests__/services/cartShippingFee.test.ts | svelte-check 2061 FILES 1 ERRORS(pre-existing, 신규 0건) · vitest 118/118 GREEN | GATE E: 불통과(sp3-qa CRITICAL 3건)
 [2026-09-27] 🔴TDD | 장바구니 구매 예약 옵션 — 배선 C-1/C-2/C-3 수정 | src/routes/cart/+page.svelte(datesSet·methodSelectionValid·checkedShippingItems 3곳) | svelte-check 신규에러 0건(pre-existing 1건 유지) · vitest 118/118 GREEN | 구현 완료 — 재검수 대기
 
