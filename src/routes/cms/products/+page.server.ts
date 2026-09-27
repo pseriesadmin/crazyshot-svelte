@@ -1010,6 +1010,12 @@ export const actions: Actions = {
       }
       image_urls = image_urls.filter(Boolean)
 
+      // 클라이언트(ProductDetailPanel.svelte handleFilesUpload/addByUrl)와 동일한 상한 —
+      // 클라이언트 체크만으로는 API 직접 호출 시 우회 가능해 서버에서도 동일하게 강제
+      if (image_urls.length > 8) {
+        return fail(400, { error: '이미지는 최대 8장까지 등록할 수 있습니다.' })
+      }
+
       // 자식 상품인 경우 부모 ID 기준으로 저장 (카드·목록 썸네일에 반영)
       let imgTargetId = productId
       const { data: imgSelfCheck } = await admin

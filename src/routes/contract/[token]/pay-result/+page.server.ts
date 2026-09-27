@@ -233,6 +233,25 @@ export const load: PageServerLoad = async ({ params, url }) => {
       await sendApprovalNotifications(admin, reservationId, notifyPlan)
     }
 
+    // 구독 "혜택관리" 무료배송(FREE_SHIPPING) 소진 — 판정(preview)과 소진(consume) 분리
+    // (Migration 554, 2026-09-27). 청구금액 0원 반영은 이미 hold 신청 시점(create-order)에
+    // p_consume:false로 미리 판정돼 orders.final_amount(→ 위 5단계에서 읽은 totalAmount, 이번
+    // Toss 결제의 실제 청구액)에 반영되어 있다 — 여기서는 "결제가 실제로 확정됐으니 이번 달
+    // 사용횟수를 소진해도 되는가"만 확정한다. 쿠폰/포인트와 동일하게 실패해도 결제 확정과
+    // 독립(orders.final_amount를 사후 변경하지 않음 — 이미 토스로 청구가 끝난 뒤이기 때문).
+    if (reservationIds.length > 0) {
+      try {
+        const { error: shippingErr } = await admin.rpc('apply_subscription_free_shipping', {
+          p_user_id: userId,
+          p_reservation_ids: reservationIds,
+          p_consume: true,
+        })
+        if (shippingErr) {
+          console.error('[contract/pay-result] apply_subscription_free_shipping(consume) 실패:', shippingErr)
+        }
+      } catch { /* 무료배송 소진 실패도 결제 성공과 독립 */ }
+    }
+
     // 쿠폰/포인트 소진 — 실패는 결제 확정 이후라 롤백 없음(운영팀 수동 확인), 독립 처리
     if (couponId) {
       try {
