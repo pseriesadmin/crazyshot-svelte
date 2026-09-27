@@ -145,6 +145,11 @@
     selectedComboRowId = combo.combo_row_id
   }
 
+  // 이 분류에 코드 조합이 1개 이상 있는데 아직 하나도 고르지 않은 경우 — 등록 차단(§ 상품별
+  // 고유 품번 보장, Stephen 확정). 조합이 아예 없는 분류는 기존과 동일하게 카테고리값만으로
+  // 진행 가능(콤보 미비 분류까지 등록을 막는 건 이번 요구 범위 밖).
+  const comboRequiredButMissing = $derived(combosForGroup.length > 0 && !selectedComboRowId)
+
   let name = $state('')
   let tagline = $state('')
   let monthlyPrice = $state(0)
@@ -239,6 +244,7 @@
           {/snippet}
         </SuggestPicker>
         {#if category}<input type="hidden" name="category" value={category} />{/if}
+        {#if selectedGroupId}<input type="hidden" name="group_id" value={selectedGroupId} />{/if}
         {#if selectedComboRowId}<input type="hidden" name="combo_row_id" value={selectedComboRowId} />{/if}
         <p class="field-guide">
           분류 선택 후 아래 코드 조합을 고르면 그 조합의 분류코드가 품번 구조에 반영됩니다. 등록 시에는
@@ -248,7 +254,10 @@
 
       {#if selectedGroupId}
         <div class="field-row field-row-combo">
-          <div class="field-label">코드 조합</div>
+          <div class="field-label">
+            코드 조합
+            {#if combosForGroup.length > 0}<span class="required">*</span>{/if}
+          </div>
           {#if combosForGroup.length > 0}
             <div class="combo-rows">
               {#each combosForGroup as combo (combo.combo_row_id)}
@@ -267,6 +276,9 @@
                 </button>
               {/each}
             </div>
+            {#if comboRequiredButMissing}
+              <p class="combo-empty combo-required-notice">이 분류는 코드 조합을 반드시 선택해야 등록할 수 있습니다.</p>
+            {/if}
           {:else}
             <p class="combo-empty">이 그룹에 등록된 조합이 없습니다 — 카테고리 값만으로 품번 구조가 계산됩니다.</p>
           {/if}
@@ -479,7 +491,7 @@
       </p>
     </section>
 
-    <button type="submit" class="btn-submit" disabled={isLoading}>
+    <button type="submit" class="btn-submit" disabled={isLoading || comboRequiredButMissing}>
       {isLoading ? '등록 중...' : '구독 상품 등록'}
     </button>
   </form>
@@ -521,6 +533,7 @@
   .combo-row-selected .combo-chip { background: var(--cs-purple); color: var(--cs-white); }
   .combo-sep { color: var(--cs-text-light); font-size: 11px; }
   .combo-empty { font: var(--text-pc-script-12); color: var(--cs-text-light); margin: 4px 0 0; }
+  .combo-required-notice { color: var(--cs-red-badge); }
 
   .f-input {
     background: var(--cs-surface-gray); border: none; border-radius: var(--radius-sm);
