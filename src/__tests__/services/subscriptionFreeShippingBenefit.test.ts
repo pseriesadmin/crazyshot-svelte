@@ -58,6 +58,7 @@ let planDisabled: number // FREE_SHIPPING is_enabled=false
 let planNoBenefit: number // tier_benefits 행 자체 없음
 let planFrequency: number // FREE_SHIPPING enabled, shipping_type='round_trip', monthly_limit=1
 let planPreviewConsume: number // FREE_SHIPPING enabled, shipping_type='round_trip', monthly_limit=1 (p_consume 분리 검증 전용)
+let planUnlimited: number // FREE_SHIPPING enabled, shipping_type='round_trip', monthly_limit=null (무제한, Migration 562)
 
 // 구독(user_subscriptions) — 각 플랜당 1개(userF는 구독 자체를 만들지 않음 — NO_ACTIVE_SUBSCRIPTION 전용)
 let subRoundTrip: number
@@ -66,6 +67,7 @@ let subDisabled: number
 let subNoBenefit: number
 let subFrequency: number
 let subPreviewConsume: number
+let subUnlimited: number
 
 // 예약(rental_reservations) 픽스처 — 각 시나리오별 1건씩
 let rtDeliveryReservationId: number // pickup=crazydelivery, return=crazydelivery (왕복 배송)
@@ -76,6 +78,8 @@ let freqReservationId1: number
 let freqReservationId2: number
 let pcReservationId1: number // p_consume 분리 검증용 — 왕복 배송
 let pcReservationId2: number // p_consume 분리 검증용 — 왕복 배송(별도 묶음, 월한도 초과 확인용)
+let unlimitedReservationId1: number // 무제한 검증용 — 왕복 배송
+let unlimitedReservationId2: number // 무제한 검증용 — 왕복 배송(별도 묶음, 여러 번 소진해도 차단 안 되는지 확인)
 
 // rental_reservations_product_dates_excl(동일 product_id + 겹치는 날짜 범위) 배타 제약을
 // 피하기 위해 픽스처마다 서로 겹치지 않는 날짜 구간을 순차 배정한다(같은 product_id 재사용,
@@ -114,9 +118,9 @@ beforeAll(async () => {
     .from('user_profiles')
     .select('id')
     .order('id', { ascending: true })
-    .limit(7)
-  if (userError || !userRows || userRows.length < 7) {
-    throw new Error('테스트용 user_profiles 픽스처 부족(최소 7건 필요) — 스테이지 DB 상태 확인 필요')
+    .limit(8)
+  if (userError || !userRows || userRows.length < 8) {
+    throw new Error('테스트용 user_profiles 픽스처 부족(최소 8건 필요) — 스테이지 DB 상태 확인 필요')
   }
   testUserIds = (userRows as { id: string }[]).map((r) => r.id)
 
@@ -153,6 +157,8 @@ beforeAll(async () => {
   await insertBenefit(planFrequency, true, { shipping_type: 'round_trip', monthly_limit: 1 })
   planPreviewConsume = await makePlan('PREVIEWCONSUME')
   await insertBenefit(planPreviewConsume, true, { shipping_type: 'round_trip', monthly_limit: 1 })
+  planUnlimited = await makePlan('UNLIMITED')
+  await insertBenefit(planUnlimited, true, { shipping_type: 'round_trip', monthly_limit: null })
 
   const makeSub = async (planId: number, userId: string, suffix: string): Promise<number> => {
     const { data, error } = await adminClient!
@@ -178,6 +184,7 @@ beforeAll(async () => {
   subFrequency = await makeSub(planFrequency, testUserIds[4], 'frequency')
   // testUserIds[5] = userNoSub — 구독을 만들지 않음(NO_ACTIVE_SUBSCRIPTION 전용)
   subPreviewConsume = await makeSub(planPreviewConsume, testUserIds[6], 'previewconsume')
+  subUnlimited = await makeSub(planUnlimited, testUserIds[7], 'unlimited')
 
   rtDeliveryReservationId = await createReservation(testUserIds[0], 'crazydelivery', 'crazydelivery')
   mismatchReservationId = await createReservation(testUserIds[0], 'crazydelivery', 'visit')
@@ -187,6 +194,8 @@ beforeAll(async () => {
   freqReservationId2 = await createReservation(testUserIds[4], 'crazydelivery', 'crazydelivery')
   pcReservationId1 = await createReservation(testUserIds[6], 'crazydelivery', 'crazydelivery')
   pcReservationId2 = await createReservation(testUserIds[6], 'crazydelivery', 'crazydelivery')
+  unlimitedReservationId1 = await createReservation(testUserIds[7], 'crazydelivery', 'crazydelivery')
+  unlimitedReservationId2 = await createReservation(testUserIds[7], 'crazydelivery', 'crazydelivery')
 
   createdReservationIds.push(
     rtDeliveryReservationId,
@@ -196,7 +205,9 @@ beforeAll(async () => {
     freqReservationId1,
     freqReservationId2,
     pcReservationId1,
-    pcReservationId2
+    pcReservationId2,
+    unlimitedReservationId1,
+    unlimitedReservationId2
   )
 })
 
@@ -205,7 +216,7 @@ afterAll(async () => {
 
   // FK 의존 순서: subscription_benefit_usage → rental_reservations →
   // (tier_benefits/user_subscriptions는 서로 무관) → user_subscriptions → subscription_plans
-  const allSubIds = [subRoundTrip, subOneWay, subDisabled, subNoBenefit, subFrequency, subPreviewConsume].filter(Boolean)
+  const allSubIds = [subRoundTrip, subOneWay, subDisabled, subNoBenefit, subFrequency, subPreviewConsume, subUnlimited].filter(Boolean)
   if (allSubIds.length > 0) {
     await adminClient.from('subscription_benefit_usage').delete().in('user_subscription_id', allSubIds)
   }
@@ -215,7 +226,7 @@ afterAll(async () => {
   if (allSubIds.length > 0) {
     await adminClient.from('user_subscriptions').delete().in('id', allSubIds)
   }
-  const allPlanIds = [planRoundTrip, planOneWay, planDisabled, planNoBenefit, planFrequency, planPreviewConsume].filter(Boolean)
+  const allPlanIds = [planRoundTrip, planOneWay, planDisabled, planNoBenefit, planFrequency, planPreviewConsume, planUnlimited].filter(Boolean)
   if (allPlanIds.length > 0) {
     await adminClient.from('tier_benefits').delete().in('plan_id', allPlanIds)
     await adminClient.from('subscription_plans').delete().in('id', allPlanIds)
@@ -423,5 +434,35 @@ describe('apply_subscription_free_shipping — p_consume 판정/소진 분리 (M
       .eq('user_subscription_id', subPreviewConsume)
       .eq('benefit_type', 'FREE_SHIPPING')
     expect((usageRows ?? []).length).toBe(1)
+  })
+})
+
+describe('apply_subscription_free_shipping — monthly_limit=null(무제한) (Migration 562)', () => {
+  it('RED: monthly_limit이 null이면 여러 번 소진해도 MONTHLY_LIMIT_REACHED로 차단되지 않는다', async () => {
+    const first = await adminRpcCall('apply_subscription_free_shipping', {
+      p_user_id: testUserIds[7],
+      p_reservation_ids: [unlimitedReservationId1],
+      p_consume: true,
+    })
+    expect(first.error).toBeNull()
+    expect(first.data?.applies).toBe(true)
+    expect(first.data?.already_applied).not.toBe(true)
+
+    // 다른(별개) 예약묶음 — 무제한이므로 이미 1건 소진했어도 계속 applies:true여야 함
+    const second = await adminRpcCall('apply_subscription_free_shipping', {
+      p_user_id: testUserIds[7],
+      p_reservation_ids: [unlimitedReservationId2],
+      p_consume: true,
+    })
+    expect(second.error).toBeNull()
+    expect(second.data?.applies).toBe(true)
+    expect(second.data?.already_applied).not.toBe(true)
+
+    const { data: usageRows } = await adminClient!
+      .from('subscription_benefit_usage')
+      .select('id')
+      .eq('user_subscription_id', subUnlimited)
+      .eq('benefit_type', 'FREE_SHIPPING')
+    expect((usageRows ?? []).length).toBe(2)
   })
 })

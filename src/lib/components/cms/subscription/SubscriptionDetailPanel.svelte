@@ -109,7 +109,7 @@
   }
 
   // ── 혜택관리 ──────────────────────────────────────────────
-  interface LocalBenefit { benefit_type: BenefitType; is_enabled: boolean; benefit_params: Record<string, number | string | boolean> }
+  interface LocalBenefit { benefit_type: BenefitType; is_enabled: boolean; benefit_params: Record<string, number | string | boolean | null> }
 
   function buildLocalBenefits(): LocalBenefit[] {
     return BENEFIT_TYPES.map((type) => {
@@ -141,7 +141,7 @@
     localBenefits = localBenefits.map((b) => b.benefit_type === type ? { ...b, is_enabled: !b.is_enabled } : b)
   }
 
-  function updateBenefitParam(type: BenefitType, key: string, value: number | string | boolean): void {
+  function updateBenefitParam(type: BenefitType, key: string, value: number | string | boolean | null): void {
     localBenefits = localBenefits.map((b) =>
       b.benefit_type === type ? { ...b, benefit_params: { ...b.benefit_params, [key]: value } } : b
     )
@@ -590,10 +590,16 @@
                               type="text"
                               inputmode="numeric"
                               class="il-input il-input--sm"
+                              placeholder={field.allowUnlimited ? '무제한' : ''}
                               value={(benefit.benefit_params[field.key] as number) ? (benefit.benefit_params[field.key] as number).toLocaleString('ko-KR') : ''}
                               oninput={(e) => {
                                 const digits = (e.currentTarget as HTMLInputElement).value.replace(/[^0-9]/g, '')
-                                updateBenefitParam(benefit.benefit_type, field.key, digits ? parseInt(digits, 10) : 0)
+                                if (!digits) {
+                                  // allowUnlimited 필드는 비우면 null(무제한)로 저장, 아니면 기존과 동일하게 0
+                                  updateBenefitParam(benefit.benefit_type, field.key, field.allowUnlimited ? null : 0)
+                                } else {
+                                  updateBenefitParam(benefit.benefit_type, field.key, parseInt(digits, 10))
+                                }
                               }}
                             />
                             {#if field.unit}<span class="benefit-field-unit">{field.unit}</span>{/if}

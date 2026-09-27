@@ -20,6 +20,8 @@ export interface BenefitParamField {
   unit?: string
   options?: { value: string; label: string }[]
   defaultValue: number | string | boolean
+  /** true면 입력값을 비워 null로 저장할 수 있고, 그 null은 "무제한"으로 취급된다(월 제한 횟수 등). */
+  allowUnlimited?: boolean
 }
 
 export interface BenefitTypeDef {
@@ -45,7 +47,7 @@ export const BENEFIT_DEFS: Record<BenefitType, BenefitTypeDef> = {
     label: '무료배송',
     description: '월 한도 내 왕복/편도 배송비를 면제합니다.',
     fields: [
-      { key: 'monthly_limit', label: '월 제한 횟수', type: 'number', unit: '회', defaultValue: 2 },
+      { key: 'monthly_limit', label: '월 제한 횟수', type: 'number', unit: '회', defaultValue: 2, allowUnlimited: true },
       {
         key: 'shipping_type', label: '배송 방식', type: 'select', defaultValue: 'round_trip',
         options: [
@@ -123,10 +125,16 @@ export function defaultBenefitParams(type: BenefitType): Record<string, number |
  */
 export function formatBenefitForDisplay(
   benefitType: BenefitType,
-  params: Record<string, number | string | boolean>
+  params: Record<string, number | string | boolean | null>
 ): { label: string; value: string } {
   const def = BENEFIT_DEFS[benefitType]
   const num = (key: string): number => (typeof params[key] === 'number' ? (params[key] as number) : 0)
+  // allowUnlimited 필드는 null이 "무제한"을 의미하므로 0으로 표시하면 안 됨 — 횟수 텍스트 전용 헬퍼.
+  const countLabel = (key: string): string => {
+    const field = def.fields.find((f) => f.key === key)
+    if (field?.allowUnlimited && (params[key] === null || params[key] === undefined)) return '무제한'
+    return `월 ${num(key)}회`
+  }
 
   switch (benefitType) {
     case 'DISCOUNT_COUPON':
@@ -134,7 +142,7 @@ export function formatBenefitForDisplay(
     case 'FREE_SHIPPING': {
       const typeLabel = def.fields.find((f) => f.key === 'shipping_type')?.options
         ?.find((o) => o.value === params.shipping_type)?.label ?? ''
-      return { label: def.label, value: `월 ${num('monthly_limit')}회${typeLabel ? ` (${typeLabel})` : ''}` }
+      return { label: def.label, value: `${countLabel('monthly_limit')}${typeLabel ? ` (${typeLabel})` : ''}` }
     }
     case 'FREE_RENTAL':
       return { label: def.label, value: `월 ${num('monthly_limit')}회 · ${num('duration_hours')}시간` }
