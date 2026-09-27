@@ -244,6 +244,8 @@ cancelled / damage_claimed → 취소 UI (✕ 아이콘 + 빨간 텍스트)
 
 ---
 
+> 📌 상태 전이 시 판매전용 재고 처리(Migration 553, 2026-09-27): confirmed 전환 → 켜져 있던 재고만 자동 비활성 + 마커(products.auto_deactivated_reservation_id) 기록 / cancelled 전환 → 마커가 그 예약인 재고만 복원. 수동 비활성 재고는 보존. 상세는 products.md §3.
+
 ## 예약 단계 버튼 (isRentalView=false 전용)
 
 | 상태 | 버튼 | action |

@@ -5,6 +5,7 @@
 // 동일하게 재사용한다. 로직 변경 없음, 순수 이동.
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { buildComboCategoryCode, getRootCode } from '$lib/utils/comboCategoryCode'
+import type { KeyValueItem } from '$lib/utils/keyValueList'
 
 export type CategoryComboItem = {
   combo_row_id: string
@@ -45,7 +46,8 @@ export type SelectedProduct = {
   description: string | null
   product_caption: string | null
   image_urls: string[]
-  specifications: Record<string, string> | null
+  /** 순서 보존 배열 [{key,value}] 또는 레거시 객체(읽기 호환) — keyValueList.ts */
+  specifications: KeyValueItem[] | Record<string, string> | null
   is_active: boolean
   created_at: string
   qr_payload: string | null
@@ -187,7 +189,7 @@ export async function loadSelectedProductDetail(
       content_blocks:      src.content_blocks,
       keywords:            src.keywords,
       components:          src.components,
-      specifications:      (src.specifications as Record<string, string> | null) ?? null,
+      specifications:      (src.specifications as KeyValueItem[] | Record<string, string> | null) ?? null,
       image_urls:          (src.image_urls as string[] | null) ?? (sp as Record<string, unknown>).image_urls as string[] ?? [],
       // 아래 duplicate-detection 블록에서 selectedProduct 자신이 부모일 때만 실제로 채움
       hasOlderDuplicateCode: false,

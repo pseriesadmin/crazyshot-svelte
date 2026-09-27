@@ -15,6 +15,7 @@ import { loadSelectedProductDetail, type RentalStatusBucket, type SelectedProduc
 import { buildComboCategoryCode, getRootCode } from '$lib/utils/comboCategoryCode'
 import { getCmsRoleForAction } from '$lib/server/getCmsRoleForAction'
 import { hasSettingsAccess } from '$lib/utils/cmsPermissions'
+import { normalizeKeyValueList, serializeKeyValueList, type KeyValueItem } from '$lib/utils/keyValueList'
 import { removeProductFromHomeCuration } from '$lib/server/removeProductFromHomeCuration'
 
 // rental_period_options / rental_method_options 는 database.ts 미등록 — 우회 헬퍼
@@ -795,10 +796,35 @@ export const actions: Actions = {
     if (!id) return fail(400, { error: '상품 ID 누락' })
 
     const admin = createClient(getSupabaseUrl(), env.SUPABASE_SERVICE_ROLE_KEY ?? '')
-    // BND-4: 서버 UPDATE 실패 시 fail() 반환
+
+    // ④ 판매 자동 비활성 마커(auto_deactivated_reservation_id) 보호 — 대여·판매 공통(마커 없는 재고는 기존 동작)
+    const { data: cur, error: curErr } = await admin
+      .from('products')
+      .select('auto_deactivated_reservation_id')
+      .eq('id', id)
+      .maybeSingle()
+    if (curErr) return fail(500, { error: '상태 변경에 실패했습니다.' })
+    const marker = (cur as { auto_deactivated_reservation_id: number | null } | null)?.auto_deactivated_reservation_id ?? null
+
+    if (marker !== null && !isActive) {
+      const { data: resv } = await admin
+        .from('rental_reservations')
+        .select('status')
+        .eq('id', marker)
+        .maybeSingle()
+      const st = (resv as { status: string } | null)?.status
+      // 취소·만료된(또는 사라진) 예약의 잔존 마커는 판매 진행 중이 아니므로 켜기 허용
+      if (st && st !== 'cancelled' && st !== 'expired') {
+        return fail(400, { error: '판매 완료된 재고입니다. 환불·취소 처리 후 자동 복원됩니다.' })
+      }
+    }
+
+    // BND-4: 서버 UPDATE 실패 시 fail() 반환. 수동 토글은 자동 복원 대상에서 제외(마커 정리)
     const { error: toggleErr } = await admin
       .from('products')
-      .update({ is_active: !isActive })
+      .update(marker !== null
+        ? { is_active: !isActive, auto_deactivated_reservation_id: null }
+        : { is_active: !isActive })
       .eq('id', id)
 
     if (toggleErr) return fail(500, { error: '상태 변경에 실패했습니다.' })
@@ -1003,10 +1029,11 @@ export const actions: Actions = {
     }
 
     if (sectionType === 'specs') {
-      let specifications: Record<string, string> | null = null
+      // 순서 보존 배열 [{key,value}]로 저장 (객체 입력도 배열로 전환 — products.md §4-1)
+      let specifications: KeyValueItem[] | null = null
       const specsStr = form.get('specifications') as string | null
       if (specsStr) {
-        try { specifications = JSON.parse(specsStr) } catch { /* ignore */ }
+        try { specifications = serializeKeyValueList(normalizeKeyValueList(JSON.parse(specsStr))) } catch { /* ignore */ }
       }
 
       const { error: updateError } = await admin
@@ -1018,10 +1045,10 @@ export const actions: Actions = {
     }
 
     if (sectionType === 'components') {
-      let components: Record<string, string> | null = null
+      let components: KeyValueItem[] | null = null
       const compStr = form.get('components') as string | null
       if (compStr) {
-        try { components = JSON.parse(compStr) } catch { /* ignore */ }
+        try { components = serializeKeyValueList(normalizeKeyValueList(JSON.parse(compStr))) } catch { /* ignore */ }
       }
 
       const { error: updateError } = await admin

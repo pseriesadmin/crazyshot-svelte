@@ -35,6 +35,12 @@
     listLabel?: string
     /** true: 툴바 등 인라인 — 제안 레이어 absolute 오버레이 (입력폼 높이·행 레이아웃 유지) */
     overlayLayer?: boolean
+    /**
+     * true: 제안 레이어를 position:fixed(화면 좌표)로 띄운다 — overflow:hidden 부모(카드·패널의 둥근 모서리 클리핑,
+     * 슬라이드 트랜지션 래퍼) 안에서 레이어가 패널 하단 밖으로 나가도 잘리거나 아래 영역에 가려지지 않는다.
+     * 기본 false(기존 absolute 동작 그대로 — 다른 사용처 무영향). 스크롤·리사이즈 시 위치를 다시 계산한다.
+     */
+    floating?: boolean
     oninput?: (value: string) => void
     onselect?: (item: SimilarNameItem, previousValue: string) => void
     field: Snippet<[SimilarNameFieldControl]>
@@ -55,6 +61,7 @@
     categoryLabels = {},
     listLabel,
     overlayLayer = false,
+    floating = false,
     oninput,
     onselect,
     field,
@@ -64,11 +71,33 @@
   let suggestOpen = $state(false)
   let suggestLoading = $state(false)
   let suggestIdx = $state(-1)
+  let wrapEl = $state<HTMLDivElement | null>(null)
+  let floatStyle = $state('')
   let suggestTimer: ReturnType<typeof setTimeout> | null = null
   // RTN-2: stale-response race 방지 — 진행 중인 fetch 취소용 AbortController
   let fetchController: AbortController | null = null
 
   const listboxId = $derived(`${id}-suggest-list`)
+
+  // floating 모드: 입력 래퍼의 화면 좌표 기준으로 레이어 위치·폭·최대 높이를 계산(뷰포트 하단을 넘지 않게 제한)
+  function updateFloatPosition(): void {
+    if (!floating || !wrapEl) return
+    const rect = wrapEl.getBoundingClientRect()
+    const below = window.innerHeight - rect.bottom - 12
+    const maxH = Math.max(120, Math.min(280, below))
+    floatStyle = `position:fixed;top:${Math.round(rect.bottom + 4)}px;left:${Math.round(rect.left)}px;width:${Math.round(rect.width)}px;right:auto;max-height:${Math.round(maxH)}px;`
+  }
+
+  $effect(() => {
+    if (!floating || !(suggestOpen || suggestLoading)) return
+    updateFloatPosition()
+    window.addEventListener('scroll', updateFloatPosition, true)
+    window.addEventListener('resize', updateFloatPosition)
+    return () => {
+      window.removeEventListener('scroll', updateFloatPosition, true)
+      window.removeEventListener('resize', updateFloatPosition)
+    }
+  })
   const listAriaLabel = $derived(
     listLabel ??
       (source === 'brand'
@@ -282,12 +311,13 @@
   })
 </script>
 
-<div class="cms-similar-name">
+<div class="cms-similar-name" bind:this={wrapEl}>
   {@render field(fieldControl)}
   {#if suggestOpen || suggestLoading}
     <div
       class="cms-similar-name-layer"
       class:cms-similar-name-layer-overlay={overlayLayer}
+      style={floating ? floatStyle : undefined}
       id={listboxId}
       role="listbox"
       aria-label={listAriaLabel}

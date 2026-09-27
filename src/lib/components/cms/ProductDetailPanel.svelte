@@ -13,6 +13,7 @@
   import CmsDragList from '$lib/components/cms/CmsDragList.svelte'
   import { productSearchOrFilter } from '$lib/utils/similarNameSuggest'
   import { buildProductQrPayload, renderQrToCanvas, downloadQrWithLabel } from '$lib/utils/qrIssue'
+  import { normalizeKeyValueList, serializeKeyValueList } from '$lib/utils/keyValueList'
 
   interface PriceRule {
     duration_type: string
@@ -48,7 +49,8 @@
     product_caption: string | null
     image_urls: string[]
     parent_product_id?: string | null
-    specifications: Record<string, string> | null
+    specifications: { key: string; value: string }[] | Record<string, string> | null
+    components?: { key: string; value: string }[] | Record<string, string> | null
     is_active: boolean
     created_at: string
     qr_payload: string | null
@@ -317,34 +319,24 @@
   }
 
   // ── 구성품 로컬 상태 ─────────────────────────────────────────
-  type ProductWithComponents = typeof product & { components?: Record<string, string> | null }
+  // 저장 형식: 순서 보존 배열 [{key,value}] (레거시 객체는 읽기 호환 — keyValueList.ts)
   let localComponents = $state<Array<{ key: string; value: string }>>(
-    Object.entries((product as ProductWithComponents).components ?? {}).map(([key, value]) => ({ key, value }))
+    normalizeKeyValueList(product.components)
   )
   // $derived: product 갱신 시 재계산 → 저장 후 isDirty 즉시 false 전환
-  const origComponentsJson = $derived(
-    JSON.stringify(
-      Object.fromEntries(Object.entries((product as ProductWithComponents).components ?? {}).map(([k, v]) => [k, v]))
-    )
-  )
+  const origComponentsJson = $derived(JSON.stringify(normalizeKeyValueList(product.components)))
   const isDirtyComponents = $derived(
-    JSON.stringify(Object.fromEntries(localComponents.filter(c => c.key).map(c => [c.key, c.value])))
-    !== origComponentsJson
+    JSON.stringify(serializeKeyValueList(localComponents)) !== origComponentsJson
   )
 
   // ── 사양 로컬 상태 ──────────────────────────────────────────
   let localSpecs = $state<Array<{ key: string; value: string }>>(
-    Object.entries(product.specifications ?? {}).map(([key, value]) => ({ key, value }))
+    normalizeKeyValueList(product.specifications)
   )
   // $derived: product 갱신 시 재계산 → 저장 후 isDirty 즉시 false 전환
-  const origSpecsJson = $derived(
-    JSON.stringify(
-      Object.fromEntries(Object.entries(product.specifications ?? {}).map(([k, v]) => [k, v]))
-    )
-  )
+  const origSpecsJson = $derived(JSON.stringify(normalizeKeyValueList(product.specifications)))
   const isDirtySpecs = $derived(
-    JSON.stringify(Object.fromEntries(localSpecs.filter(s => s.key).map(s => [s.key, s.value])))
-    !== origSpecsJson
+    JSON.stringify(serializeKeyValueList(localSpecs)) !== origSpecsJson
   )
 
   // ── 이미지 탭 전용 상태 ─────────────────────────────────────
@@ -359,11 +351,26 @@
   let fileInputEl = $state<HTMLInputElement | null>(null)
   let lightboxUrl = $state<string | null>(null)
   let holdTimer = $state<ReturnType<typeof setTimeout> | null>(null)
+  // 이미지 그리드 드래그 순서 변경 상태
+  let imgDragIdx = $state<number | null>(null)
+  let imgOverIdx = $state<number | null>(null)
+
+  function handleImgDragEnd() {
+    if (imgDragIdx !== null && imgOverIdx !== null && imgDragIdx !== imgOverIdx) {
+      const arr = [...localImages.filter(Boolean)]
+      const [moved] = arr.splice(imgDragIdx, 1)
+      arr.splice(imgOverIdx, 0, moved)
+      localImages = arr
+      void autoSave()
+    }
+    imgDragIdx = null
+    imgOverIdx = null
+  }
 
   $effect(() => {
     localImages = [...product.image_urls]
-    localSpecs = Object.entries(product.specifications ?? {}).map(([key, value]) => ({ key, value }))
-    localComponents = Object.entries((product as ProductWithComponents).components ?? {}).map(([key, value]) => ({ key, value }))
+    localSpecs = normalizeKeyValueList(product.specifications)
+    localComponents = normalizeKeyValueList(product.components)
     localSlug = product.slug
     // localBasic 전체 재동기화: product prop 변경(invalidateAll) 시 기본정보 탭 isDirtyBasic 오탐 방지
     localBasic.name     = product.name
@@ -516,6 +523,8 @@
       await invalidateAll()
     } catch {
       uploadError = '저장 실패. 다시 시도해주세요.'
+      // 화면에서만 재정렬된 상태로 서버와 어긋나지 않도록 서버 값으로 복구
+      await invalidateAll()
     } finally {
       isAutoSaving = false
     }
@@ -553,6 +562,9 @@
 
   async function handleFilesUpload(files: FileList | File[]) {
     if (isChildProduct) { csToast.warning('대표 상품에서 수정하세요.'); return }
+    // 순서 저장(autoSave)은 이미지 배열 전체를 덮어쓰고 업로드 API는 배열에 1장씩 이어 붙인다 —
+    // 저장 중에 업로드를 시작하면 방금 올린 이미지가 유실될 수 있어 저장 완료까지 막는다.
+    if (isAutoSaving) { csToast.warning('이미지 순서 저장 중입니다. 잠시 후 다시 시도하세요.'); return }
     const arr = Array.from(files)
     let added = false
     for (const file of arr) {
@@ -1788,6 +1800,7 @@
           <div class="option-search-field">
             <CmsSimilarNameInput
               id="opt-search"
+              floating={true}
               bind:value={optionKeyword}
               source="product_search"
               activeOnly={true}
@@ -1873,8 +1886,8 @@
             </div>
             <button type="button" class="btn-bulk-apply" onclick={applyBulk}>적용</button>
           </div>
-          <div class="selected-option-list">
-            {#each localOptions as opt, i (opt.option_product_id)}
+          <CmsDragList bind:items={localOptions} itemKey={(o) => o.option_product_id} class="selected-option-list">
+            {#snippet renderItem(opt, _i)}
               <div class="selected-option-card">
                 {#if opt.image_url}
                   <img src={opt.image_url} alt={opt.name} class="selected-option-thumb" width="64" height="48" loading="lazy" />
@@ -1894,8 +1907,8 @@
                 </div>
                 <button type="button" class="remove-btn" onclick={() => removeOption(opt.option_product_id)} aria-label="{opt.name} 옵션 제거">✕</button>
               </div>
-            {/each}
-          </div>
+            {/snippet}
+          </CmsDragList>
         {:else}
           <p class="no-option-msg">{optionNamesLoaded ? '추가된 옵션상품이 없습니다.' : '로딩 중...'}</p>
         {/if}
@@ -1932,6 +1945,7 @@
           <div class="option-search-field">
             <CmsSimilarNameInput
               id="bnd-search"
+              floating={true}
               bind:value={bundleKeyword}
               source="product_search"
               activeOnly={true}
@@ -2006,8 +2020,8 @@
 
         <!-- 선택된 결합상품 목록 -->
         {#if localBundles.length > 0}
-          <div class="selected-option-list">
-            {#each localBundles as bnd (bnd.bundle_product_id)}
+          <CmsDragList bind:items={localBundles} itemKey={(b) => b.bundle_product_id} class="selected-option-list">
+            {#snippet renderItem(bnd, _i)}
               <div class="selected-option-card">
                 {#if bnd.image_url}
                   <img src={bnd.image_url} alt={bnd.name} class="selected-option-thumb" width="64" height="48" loading="lazy" />
@@ -2019,8 +2033,8 @@
                 </div>
                 <button type="button" class="remove-btn" onclick={() => removeBundleProduct(bnd.bundle_product_id)} aria-label="{bnd.name} 결합상품 제거">✕</button>
               </div>
-            {/each}
-          </div>
+            {/snippet}
+          </CmsDragList>
         {:else}
           <p class="no-option-msg">추가된 결합상품이 없습니다.</p>
         {/if}
@@ -2369,7 +2383,23 @@
         {#if localImages.filter(Boolean).length > 0}
           <div class="img-card-grid">
             {#each localImages.filter(Boolean) as url, i}
-              <div class="img-card" class:primary={i === 0} role="group" aria-label={`이미지 ${i + 1}${i === 0 ? ' (대표)' : ''}`}>
+              <!-- svelte-ignore a11y_no_static_element_interactions -->
+              <div
+                class="img-card"
+                class:primary={i === 0}
+                class:img-card--dragging={imgDragIdx === i}
+                class:img-card--over={imgOverIdx === i && imgDragIdx !== i}
+                role="group"
+                aria-label={`이미지 ${i + 1}${i === 0 ? ' (대표)' : ''}`}
+                draggable={!isChildProduct && !isUploading && !isAutoSaving}
+                ondragstart={(e) => {
+                  if (isChildProduct || isUploading || isAutoSaving) { e.preventDefault(); return }
+                  cancelHold()
+                  imgDragIdx = i
+                }}
+                ondragover={(e) => { e.preventDefault(); imgOverIdx = i }}
+                ondragend={handleImgDragEnd}
+              >
                 <button
                   type="button"
                   class="img-card-view"
@@ -2426,7 +2456,7 @@
           <input type="hidden" name="product_id" value={product.id} />
           <input type="hidden" name="section_type" value="components" />
           <input type="hidden" name="components"
-            value={JSON.stringify(Object.fromEntries(localComponents.filter(c => c.key).map(c => [c.key, c.value])))} />
+            value={JSON.stringify(serializeKeyValueList(localComponents))} />
           <div class="specs-list">
             <CmsDragList bind:items={localComponents} class="specs-drag-list">
               {#snippet renderItem(comp, i)}
@@ -2467,7 +2497,7 @@
           <input type="hidden" name="product_id" value={product.id} />
           <input type="hidden" name="section_type" value="specs" />
           <input type="hidden" name="specifications"
-            value={JSON.stringify(Object.fromEntries(localSpecs.filter(s => s.key).map(s => [s.key, s.value])))} />
+            value={JSON.stringify(serializeKeyValueList(localSpecs))} />
           <div class="specs-list">
             <CmsDragList bind:items={localSpecs} class="specs-drag-list">
               {#snippet renderItem(spec, i)}
@@ -3731,6 +3761,16 @@
 
   /* 대표이미지 아웃라인 */
   .img-card.primary { outline: 3px solid var(--cs-purple); outline-offset: -1px; }
+
+  /* 이미지 그리드 드래그 피드백 */
+  .img-card[draggable="true"] { cursor: grab; }
+  .img-card[draggable="true"]:active { cursor: grabbing; }
+  .img-card--dragging { opacity: 0.4; }
+  .img-card--over {
+    background: color-mix(in srgb, var(--cs-purple) 6%, transparent);
+    outline: 2px dashed var(--cs-purple);
+    outline-offset: -2px;
+  }
 
   /* 사양 */
   .specs-list { display: flex; flex-direction: column; gap: 8px; }

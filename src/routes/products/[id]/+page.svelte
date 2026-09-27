@@ -20,6 +20,7 @@
   import SignUpModal from '$lib/components/auth/SignUpModal.svelte';
   import { csToast } from '$lib/utils/toast';
   import { toggleWish } from '$lib/utils/wishlist';
+  import { normalizeKeyValueList } from '$lib/utils/keyValueList';
 
   /** 실서비스 DB products 행 (가격·status 등 런타임 컬럼 포함) */
   type ProductRow = Tables<'products'> & {
@@ -683,11 +684,13 @@
     (product as ProductRow).base_price_12h ?? Math.round(product.base_price_daily * 0.7)
   );
 
+  // 사양: 순서 보존 배열 / 레거시 객체 모두 표시 (keyValueList.ts)
+  const productSpecs = $derived(normalizeKeyValueList((product as unknown as { specifications?: unknown }).specifications));
+
   let productComponents = $derived.by(() => {
     const raw = (product as unknown as { components?: unknown }).components;
-    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
-    const entries = Object.entries(raw as Record<string, unknown>).filter(([k]) => k.trim());
-    return entries.length > 0 ? entries as [string, string][] : null;
+    const list = normalizeKeyValueList(raw);
+    return list.length > 0 ? list.map((i) => [i.key, i.value] as [string, string]) : null;
   });
 
   const pageTitle = $derived(product?.name ? `${product.name} — CRAZYSHOT` : '상품상세 — CRAZYSHOT');
@@ -1068,12 +1071,12 @@
         </div>
       {:else if activeTab === 'spec'}
         <div class="tab-pane">
-          {#if product.specifications && typeof product.specifications === 'object' && !Array.isArray(product.specifications) && Object.keys(product.specifications).length > 0}
+          {#if productSpecs.length > 0}
             <dl class="spec-table">
-              {#each Object.entries(product.specifications as Record<string, unknown>) as [key, val]}
+              {#each productSpecs as spec}
                 <div class="spec-row">
-                  <dt class="spec-key">{key}</dt>
-                  <dd class="spec-val">{String(val ?? '')}</dd>
+                  <dt class="spec-key">{spec.key}</dt>
+                  <dd class="spec-val">{spec.value}</dd>
                 </div>
               {/each}
             </dl>

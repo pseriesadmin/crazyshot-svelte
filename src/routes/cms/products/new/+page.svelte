@@ -3,6 +3,7 @@
   import { supabase } from '$lib/services/supabase'
   import { csToast } from '$lib/utils/toast'
   import CmsSimilarNameInput from '$lib/components/cms/CmsSimilarNameInput.svelte'
+  import CmsDragList from '$lib/components/cms/CmsDragList.svelte'
   import SuggestPicker from '$lib/components/common/SuggestPicker.svelte'
   import CmsContentEditor from '$lib/components/cms/CmsContentEditor.svelte'
   import type { ContentBlock } from '$lib/types/content-editor'
@@ -15,6 +16,7 @@
   import type { PageData, ActionData } from './$types'
   import type { MappingGroupSimple, MappingItemSimple, TaxonomyCodeSimple, RentalPeriodSimple, RentalMethodSimple, PickupPointSimple, CategoryOptionSimple } from './+page.server'
   import { sortByTier } from '$lib/utils/comboCategoryCode'
+  import { serializeKeyValueList } from '$lib/utils/keyValueList'
 
   interface Props { data: PageData; form: ActionData }
   let { data, form }: Props = $props()
@@ -547,6 +549,21 @@
   let urlInputVal = $state('')
   let fileInputEl = $state<HTMLInputElement | null>(null)
   let lightboxUrl = $state<string | null>(null)
+  // 이미지 그리드 드래그 순서 변경 상태
+  let imgDragIdx = $state<number | null>(null)
+  let imgOverIdx = $state<number | null>(null)
+
+  function handleImgDragEnd() {
+    if (imgDragIdx !== null && imgOverIdx !== null && imgDragIdx !== imgOverIdx) {
+      const arr = [...imageUrls.filter(Boolean)]
+      const [moved] = arr.splice(imgDragIdx, 1)
+      arr.splice(imgOverIdx, 0, moved)
+      imageUrls = arr
+    }
+    imgDragIdx = null
+    imgOverIdx = null
+  }
+
   let specs = $state<{ key: string; value: string }[]>([{ key: '', value: '' }])
   let components = $state<{ key: string; value: string }[]>([{ key: '', value: '' }])
 
@@ -668,19 +685,11 @@
   function addComponent() { components = [...components, { key: '', value: '' }] }
   function removeComponent(i: number) { components = components.filter((_, idx) => idx !== i) }
   function serializeComponents(): string {
-    const obj: Record<string, string> = {}
-    for (const c of components) {
-      if (c.key.trim()) obj[c.key.trim()] = c.value
-    }
-    return JSON.stringify(obj)
+    return JSON.stringify(serializeKeyValueList(components))
   }
 
   function serializeSpecs(): string {
-    const obj: Record<string, string> = {}
-    for (const s of specs) {
-      if (s.key.trim()) obj[s.key.trim()] = s.value
-    }
-    return JSON.stringify(obj)
+    return JSON.stringify(serializeKeyValueList(specs))
   }
 
   function serializeImages(): string {
@@ -1211,8 +1220,8 @@
           <button type="button" class="btn-bulk-apply" onclick={applyBulk}>적용</button>
         </div>
 
-        <div class="selected-option-list">
-          {#each selectedOptions as opt, i (opt.option_product_id)}
+        <CmsDragList bind:items={selectedOptions} itemKey={(o) => o.option_product_id} class="selected-option-list">
+          {#snippet renderItem(opt, i)}
             <div class="selected-option-card">
               {#if opt.image_url}
                 <img
@@ -1265,8 +1274,8 @@
                 aria-label="{opt.name} 옵션 제거"
               >✕</button>
             </div>
-          {/each}
-        </div>
+          {/snippet}
+        </CmsDragList>
       {:else}
         <p class="no-option-msg">추가된 옵션상품이 없습니다.</p>
       {/if}
@@ -1382,8 +1391,8 @@
 
       <!-- 선택된 결합상품 목록 -->
       {#if selectedBundles.length > 0}
-        <div class="selected-option-list">
-          {#each selectedBundles as bnd (bnd.bundle_product_id)}
+        <CmsDragList bind:items={selectedBundles} itemKey={(b) => b.bundle_product_id} class="selected-option-list">
+          {#snippet renderItem(bnd, _i)}
             <div class="selected-option-card">
               {#if bnd.image_url}
                 <img
@@ -1407,8 +1416,8 @@
                 aria-label="{bnd.name} 결합상품 제거"
               >✕</button>
             </div>
-          {/each}
-        </div>
+          {/snippet}
+        </CmsDragList>
       {:else}
         <p class="no-option-msg">추가된 결합상품이 없습니다.</p>
       {/if}
@@ -1671,7 +1680,22 @@
       {#if imageUrls.filter(Boolean).length > 0}
         <div class="img-card-grid">
           {#each imageUrls.filter(Boolean) as url, i}
-            <div class="img-card" class:primary={i === 0} role="group" aria-label={`이미지 ${i + 1}${i === 0 ? ' (대표)' : ''}`}>
+            <!-- svelte-ignore a11y_no_static_element_interactions -->
+            <div
+              class="img-card"
+              class:primary={i === 0}
+              class:img-card--dragging={imgDragIdx === i}
+              class:img-card--over={imgOverIdx === i && imgDragIdx !== i}
+              role="group"
+              aria-label={`이미지 ${i + 1}${i === 0 ? ' (대표)' : ''}`}
+              draggable={!isUploading}
+              ondragstart={(e) => {
+                if (isUploading) { e.preventDefault(); return }
+                imgDragIdx = i
+              }}
+              ondragover={(e) => { e.preventDefault(); imgOverIdx = i }}
+              ondragend={handleImgDragEnd}
+            >
               <button
                 type="button"
                 class="img-card-view"
@@ -1983,6 +2007,17 @@
   .img-card:hover .img-card-remove { opacity: 1; }
   .img-card-remove:hover { background: var(--cs-red-badge); color: var(--cs-white); }
   .img-card.primary { outline: 3px solid var(--cs-purple); outline-offset: -1px; }
+
+  /* 이미지 그리드 드래그 피드백 */
+  .img-card[draggable="true"] { cursor: grab; }
+  .img-card[draggable="true"]:active { cursor: grabbing; }
+  .img-card--dragging { opacity: 0.4; }
+  .img-card--over {
+    background: color-mix(in srgb, var(--cs-purple) 6%, transparent);
+    outline: 2px dashed var(--cs-purple);
+    outline-offset: -2px;
+  }
+
   .empty-hint { font: var(--text-pc-script-12); color: var(--cs-text-light); margin: 0; }
 
   .lightbox-backdrop {
