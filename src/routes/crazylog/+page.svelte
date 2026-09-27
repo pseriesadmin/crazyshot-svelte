@@ -80,16 +80,6 @@
     }
   }))
 
-  // K-Trail Log With a Pro 섹션 데이터
-  const KTLOG_KEYWORDS = ['CANON 100mm', 'FeiyuTech SCORP Mini 2', 'FDR-AX43', 'Air 3S Drone']
-  const KTLOG_CARDS = [
-    { span: 'full',   height: 620, category: 'With a Pro',   icons: ['mem', 'deal'], title: 'Explore the Hot\nStreets of Hongdae', price: '$ 350 / 1w', img: '/hype-pack/d-ktlog-main.png' },
-    { span: 'normal', height: 620, category: 'With a Pro',   icons: ['mem', 'deal'], title: 'Taste Jongro',                        price: '$ 100 / 1h', img: '/hype-pack/d-ktlog-jongro.png' },
-    { span: 'normal', height: 620, category: 'Creator Pack', icons: ['deal'],        title: 'Walk in Bukchon',                     price: '$ 100 / 1h', img: '/hype-pack/d-ktlog-bukchon.png' },
-    { span: 'normal', height: 620, category: 'With a Pro',   icons: ['mem', 'deal'], title: 'Yangyang Beach Sunset',               price: '$ 100 / 1h', img: '/hype-pack/d-ktlog-yangyang.png' },
-    { span: 'normal', height: 620, category: 'Creator Pack', icons: ['mem'],         title: 'Gyeongbokgung\nHanbok Experience',    price: '$ 150 / 1h', img: '/hype-pack/d-ktlog-gyeongbok.png' },
-    { span: 'wide',   height: 620, category: 'With a Pro',   icons: ['mem', 'deal'], title: 'K-Pop Fan Meet\n& Concert Journey',   price: '$ 100 / 1h', img: '/hype-pack/d-ktlog-kpop-bg.png' },
-  ]
 
 </script>
 
@@ -266,60 +256,6 @@
     </div>
   </section>
 
-  <!-- K-Trail Log With a Pro 섹션 — 콘텐츠 목록 아래 배치 -->
-  <section class="d-ktlog-section">
-    <div class="d-ktlog-wrap">
-      <div class="d-ktlog-titlebar">
-        <div class="d-ktlog-titlebar-inner">
-          <h2 class="d-ktlog-title">K-Trail Log With a Pro</h2>
-          <div class="d-ktlog-chips">
-            {#each KTLOG_KEYWORDS as kw}
-              <span class="d-chip">{kw}</span>
-            {/each}
-          </div>
-        </div>
-      </div>
-      <div class="d-ktlog-grid">
-        {#each KTLOG_CARDS as card}
-          <article
-            class="d-ktlog-card"
-            class:d-ktlog-card-full={card.span === 'full'}
-            class:d-ktlog-card-wide={card.span === 'wide'}
-            style="height: {card.height}px;"
-            aria-label={card.title}
-          >
-            <img src={card.img} alt="" class="d-ktlog-card-bg" aria-hidden="true" />
-            <div class="d-ktlog-card-overlay" aria-hidden="true"></div>
-            <div class="d-ktlog-card-content">
-              <div class="d-ktlog-card-badges">
-                {#each card.icons as icon}
-                  <span
-                    class="d-ktlog-badge {icon === 'mem' ? 'd-ktlog-badge-red' : 'd-ktlog-badge-purple'}"
-                    aria-label={icon === 'mem' ? '멤버십 혜택' : '딜'}
-                    aria-hidden="true"
-                  >
-                    {#if icon === 'mem'}
-                      <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 28 28" fill="none" aria-hidden="true">
-                        <path d="M14 2l2.7 5.46L23 8.6l-4.5 4.38 1.06 6.19L14 16.2l-5.56 2.97 1.06-6.19L5 8.6l6.3-.91L14 2z" fill="white"/>
-                      </svg>
-                    {:else}
-                      <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 28 28" fill="none" aria-hidden="true">
-                        <path d="M4 14h20M14 4v20" stroke="white" stroke-width="2.5" stroke-linecap="round"/>
-                        <circle cx="14" cy="14" r="8" stroke="white" stroke-width="2"/>
-                      </svg>
-                    {/if}
-                  </span>
-                {/each}
-              </div>
-              <p class="d-ktlog-card-category">{card.category}</p>
-              <h3 class="d-ktlog-card-title">{card.title}</h3>
-              <p class="d-ktlog-card-price">{card.price}</p>
-            </div>
-          </article>
-        {/each}
-      </div>
-    </div>
-  </section>
 
 </div>
 
@@ -379,7 +315,7 @@
         </div>
       </div>
       <!-- Figma: horizontal scroll snap carousel -->
-      <div class="m-carousel">
+      <div class="m-carousel" class:m-carousel-static={list.cards.length <= 1}>
         {#each list.cards as card, ci}
           <a href={card.href} class="m-card">
             <div class="m-card-bg">
@@ -418,7 +354,11 @@
   <!-- Component (콘텐츠): gradient bg + article cards -->
   <section class="m-content">
     <div class="m-content-inner">
-      <p class="m-content-section-title">K-Trend Log</p>
+      <div class="m-content-title-wrap">
+        <h2 class="m-content-title"><span class="m-content-title-accent">K-Trend</span> Log</h2>
+        <div class="m-section-bar" aria-hidden="true"></div>
+        <p class="m-content-title-sub">가장 최신 크레이지로그를 놓치지 마세요.</p>
+      </div>
       {#each data.posts as post}
         <a href="/crazylog/view/{post.id}" class="m-article-card" aria-label={post.title}>
           {#if post.img}
@@ -1032,13 +972,13 @@
   .m-chip-help { width: 30px; height: 30px; flex-shrink: 0; }
 
   /* ── HeadPosts: 3 list sections ── */
-  .m-list { padding: 0 25px 10px; }
+  .m-list { padding: 0 0 10px; }
   /* Figma: py-[40px] flex justify-between items-center */
   .m-list-header {
     display: flex;
     align-items: center;
     justify-content: space-between;
-    padding: 40px 0;
+    padding: 40px 25px;
   }
   /* Figma: 21px Bold Noto #100B32 */
   .m-list-title {
@@ -1062,12 +1002,17 @@
     display: flex;
     gap: 50px;
     overflow-x: auto;
-    padding-bottom: 20px;
+    padding: 0 25px 20px;
     scroll-snap-type: x mandatory;
+    scroll-padding: 0 25px;
     -webkit-overflow-scrolling: touch;
     scrollbar-width: none;
   }
   .m-carousel::-webkit-scrollbar { display: none; }
+  /* 카드가 1개뿐이면 스크롤할 대상이 없음 — 카드(340px) 폭이 좌우 25px 패딩과
+     동시에 맞아떨어지지 않는 뷰포트(예: 375px)에서 드래그 시 여백이 좌/우로
+     쏠리는 현상을 막기 위해 스크롤 자체를 잠근다 */
+  .m-carousel-static { overflow-x: hidden; }
 
   /* Figma: card — min-w-[340px] max-w-[605px] min-h-[300px] max-h-[400px] rounded-[30px] shadow */
   .m-card {
@@ -1186,14 +1131,47 @@
   }
 
   /* ── Component (콘텐츠): gradient bg + article cards ── */
-  .m-content-section-title {
-    font: var(--text-m-ad-kr-20);
+  /* 하입팩(hype-pack) SubView 타이틀 셋트(m-subview-title-wrap)와 동일한 레이아웃 —
+     타이틀(포인트 컬러 강조어) + 그라데이션 바 + 서브타이틀 */
+  .m-content-title-wrap {
+    text-align: center;
+  }
+  .m-content-title {
+    font-family: 'Noto Sans KR', sans-serif;
+    font-size: 24px;
+    font-weight: 500;
     color: var(--cs-text);
-    margin: 0 0 16px 0;
-    letter-spacing: -0.3px;
+    margin: 0;
+    letter-spacing: -0.5px;
+    line-height: 1.6;
+  }
+  .m-content-title-accent {
+    color: var(--cs-red);
+  }
+  .m-section-bar {
+    width: 40px;
+    height: 8px;
+    border-radius: 20px;
+    background: linear-gradient(90deg, #FF3535 0%, #3B2F8A 40.865%);
+    margin: 15px auto;
+  }
+  .m-content-title-sub {
+    font-family: 'Noto Sans KR', sans-serif;
+    font-size: 14px;
+    font-weight: 700;
+    color: var(--cs-text-mid);
+    margin: 0;
+    text-align: center;
+    letter-spacing: -0.5px;
+    line-height: 2;
+  }
+  /* 마지막 m-list 섹션(채널홍보)과의 분리감 강화 — 기존 여백(10px+70px=80px) 대비 50% 추가(+40px),
+     이후 그 결과(총 120px) 대비 다시 50% 추가(+60px) → margin-top 100px, 총 180px */
+  .m-content {
+    margin-top: 100px;
   }
   /* Figma: from-rgba(225,222,243,0.95) via-rgba(225,222,243,0.8) to-rgba(225,222,243,0)
-     rounded-bl-[50px] rounded-tr-[50px] pt-[70px] pb-[100px] px-[25px] */
+     rounded-bl-[50px] rounded-tr-[50px] pt-[50px] pb-[100px] px-[25px] */
   .m-content-inner {
     background: linear-gradient(180deg,
       rgba(225,222,243,0.95) 0%,
@@ -1201,7 +1179,7 @@
       rgba(225,222,243,0)    50.5%
     );
     border-radius: 0 50px 0 50px;
-    padding: 70px 25px 100px;
+    padding: 50px 25px 100px;
     display: flex;
     flex-direction: column;
     gap: 50px;
@@ -1269,116 +1247,6 @@
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
-  }
-
-  /* ── K-Trail Log 섹션 (데스크탑) ────────────────────────────────── */
-  .d-ktlog-section { width: 100%; }
-  .d-ktlog-wrap {
-    max-width: 1240px;
-    margin: 0 auto;
-    padding: 0 20px;
-    display: flex;
-    flex-direction: column;
-    gap: 30px;
-  }
-  .d-ktlog-titlebar { width: 100%; }
-  .d-ktlog-titlebar-inner {
-    display: flex;
-    flex-direction: column;
-    gap: 14px;
-  }
-  .d-ktlog-title {
-    font-family: 'Tilt Warp', sans-serif;
-    font-size: 32px;
-    color: var(--cs-text);
-    margin: 0;
-    letter-spacing: -0.5px;
-    line-height: 1.2;
-  }
-  .d-ktlog-chips { display: flex; flex-wrap: wrap; gap: 8px; }
-  .d-chip {
-    background: var(--cs-purple);
-    color: #fff;
-    font-size: 13px;
-    font-weight: 700;
-    padding: 6px 14px;
-    border-radius: 99px;
-  }
-  .d-ktlog-grid {
-    display: grid;
-    grid-template-columns: repeat(3, 1fr);
-    column-gap: 20px;
-    row-gap: 50px;
-  }
-  .d-ktlog-card {
-    position: relative;
-    border-radius: var(--radius-2xl);
-    overflow: hidden;
-    cursor: pointer;
-  }
-  .d-ktlog-card-full { grid-column: 1 / -1; }
-  .d-ktlog-card-wide { grid-column: span 2; }
-  .d-ktlog-card-bg {
-    position: absolute;
-    inset: 0;
-    width: 100%;
-    height: 100%;
-    object-fit: cover;
-    transition: transform 0.4s ease;
-  }
-  .d-ktlog-card:hover .d-ktlog-card-bg { transform: scale(1.02); }
-  .d-ktlog-card-overlay {
-    position: absolute;
-    inset: 0;
-    background: linear-gradient(to top, rgba(16,11,50,0.75) 0%, transparent 60%);
-  }
-  .d-ktlog-card-content {
-    position: absolute;
-    bottom: 0;
-    left: 0;
-    right: 0;
-    padding: 30px;
-    display: flex;
-    flex-direction: column;
-    gap: 6px;
-  }
-  .d-ktlog-card-badges { display: flex; gap: 8px; margin-bottom: 4px; }
-  .d-ktlog-badge {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    width: 30px;
-    height: 30px;
-    border-radius: 50%;
-  }
-  .d-ktlog-badge-red    { background: var(--cs-red-badge); }
-  .d-ktlog-badge-purple { background: var(--cs-purple); }
-  .d-ktlog-card-category {
-    font-family: 'Tilt Warp', sans-serif;
-    font-size: 16px;
-    color: rgba(255,255,255,0.7);
-    margin: 0;
-  }
-  .d-ktlog-card-title {
-    font-family: 'Tilt Warp', sans-serif;
-    font-size: 30px;
-    color: #fff;
-    margin: 0;
-    white-space: pre-line;
-    line-height: 1.2;
-  }
-  .d-ktlog-card-price {
-    font-family: 'Tilt Warp', sans-serif;
-    font-size: 26px;
-    color: rgba(255,255,255,0.85);
-    margin: 0;
-  }
-  @media (min-width: 768px) and (max-width: 1024px) {
-    .d-ktlog-grid { grid-template-columns: repeat(2, 1fr); column-gap: 20px; row-gap: 30px; }
-    .d-ktlog-card-full { grid-column: 1 / -1; }
-    .d-ktlog-card-wide { grid-column: span 2; }
-    .d-ktlog-card-title { font-size: 26px; }
-    .d-ktlog-card-price { font-size: 24px; }
   }
 
 </style>
