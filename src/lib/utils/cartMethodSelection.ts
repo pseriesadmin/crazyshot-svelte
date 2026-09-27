@@ -35,6 +35,12 @@ export interface DeliveryTabMeta {
  * rentalMethod/returnMethod가 null(미선택)이면 어떤 tab.v와도 일치하지 않아 항상
  * invalid — "최초진입 시 미선택 상태에서는 예약신청완료 버튼이 막힌다"는 기존 안전장치를
  * null 허용 이후에도 그대로 보존한다(별도 null 특수분기 불필요).
+ *
+ * T2 (2026-09-27): durationType='purchase'이면 방식 검증을 통째로 건너뛴다.
+ * 구매 라인은 클라이언트가 'crazydelivery'(편도 택배 고정)를 채워 보내므로, 고객이
+ * 수령/반납 방식을 직접 선택할 필요가 없다 — 방식이 null인 상태로 제출 게이트를 통과해야
+ * 구매예약옵션 UI(수령방식 없음)와 일관된다.
+ * 대여 라인(durationType≠'purchase' 또는 미지정)은 기존 검증 그대로 유지한다(하위호환).
  */
 export function isMethodSelectionValid(params: {
   deleted: boolean
@@ -43,8 +49,12 @@ export function isMethodSelectionValid(params: {
   returnMethod: DeliveryMethod | null
   pickupVisibleTabs: DeliveryTabMeta[]
   returnVisibleTabs: DeliveryTabMeta[]
+  /** 선택: 'purchase'이면 방식 검증 우회. 미지정/null/'12h'/'24h' 등은 기존 규칙 적용. */
+  durationType?: string | null
 }): boolean {
   if (params.deleted || !params.checked) return true
+  // 구매 라인: 고객 선택 방식 없음 — 방식 검증 우회(날짜/금액은 T3에서 별도 처리)
+  if (params.durationType === 'purchase') return true
   return (
     params.pickupVisibleTabs.some(t => t.v === params.rentalMethod) &&
     params.returnVisibleTabs.some(t => t.v === params.returnMethod)

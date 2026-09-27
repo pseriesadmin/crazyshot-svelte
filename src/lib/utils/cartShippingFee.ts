@@ -30,6 +30,14 @@ export interface ShippingFeeItem {
   shipping_round_trip?: boolean | null
   shipping_delivery?: boolean | null
   shipping_return?: boolean | null
+  /**
+   * T5 (2026-09-27): 구매 상품 편도 배송비 고정 플래그.
+   * true이면 이 항목의 returnIsDelivery가 설령 true여도 anyReturnDelivery 집계에서
+   * 제외된다 — 구매 상품의 pickup=crazydelivery+return=crazydelivery 설정이
+   * round_trip_fee(왕복)가 아닌 delivery_fee(편도, 수령만) 분기로 흐르도록 강제한다.
+   * GATE B 확정: 구매 상품 배송은 편도(수령만) 배송비 기준.
+   */
+  isPurchase?: boolean
 }
 
 /**
@@ -41,7 +49,10 @@ export function calcShippingFee(settings: ShippingSettings | null, items: Shippi
   if (!settings || items.length === 0) return 0
 
   const anyPickupDelivery = items.some((it) => it.pickupIsDelivery)
-  const anyReturnDelivery = items.some((it) => it.returnIsDelivery)
+  // isPurchase=true 항목은 returnIsDelivery 값과 무관하게 반납배송 집계에서 제외한다.
+  // 이로써 구매 전용 카트(양방향 crazydelivery)가 round_trip_fee(왕복)가 아닌
+  // delivery_fee(편도, 수령만) 분기로 흐르게 된다 — GATE B 확정(2026-09-27).
+  const anyReturnDelivery = items.some((it) => !it.isPurchase && it.returnIsDelivery)
 
   if (anyPickupDelivery && anyReturnDelivery) {
     if (!settings.enable_round_trip) return 0
@@ -70,7 +81,8 @@ export function calcShippingFee(settings: ShippingSettings | null, items: Shippi
  * 재사용 — applyShippingDiscount()가 "50% 할인은 왕복요금에만 적용"을 판정할 때 쓴다.
  */
 export function isRoundTripShippingFee(items: ShippingFeeItem[]): boolean {
-  return items.some((it) => it.pickupIsDelivery) && items.some((it) => it.returnIsDelivery)
+  // isPurchase=true 항목은 반납배송 집계에서 제외 — calcShippingFee와 동일한 기준으로 판정한다.
+  return items.some((it) => it.pickupIsDelivery) && items.some((it) => !it.isPurchase && it.returnIsDelivery)
 }
 
 /**

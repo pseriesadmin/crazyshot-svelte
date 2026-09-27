@@ -7,6 +7,255 @@
 > 📌 BACKLOG 블록은 `BACKLOG.md`로 분리됐다(Default-Exclude — Stephen 명시 승인 시에만 NOW로 이동).
 
 
+## DONE — 🔴 CRITICAL: 장바구니 "구매 예약 옵션" 신설(판매전용 단독) + 혼용 시 판매상품 분리 (2026-09-27) — ✅ GATE E 2차 통과(sp3-qa-agent 독립검수, BLOCKING 0건), git commit만 Stephen 대기
+
+### ✅ GATE E 2차 독립검수 결과(2026-09-27, sp3-qa-agent) — 통과
+
+```
+1차가 지적한 CRITICAL 3건(C-1/C-2/C-3)이 src/routes/cart/+page.svelte 3곳에 정확히
+수정됐음을 코드 추적으로 확인:
+  C-1(:911-921) — isRentalLine(durationType) 필터를 datesSet의 .every() 콜백 최상단에
+    배치, 구매 라인만 조기 return true로 스킵(.every() 의미 훼손 없음).
+  C-2(:1518-1529) — isMethodSelectionValid() 호출부에 durationType 전달, 이미 구현돼
+    있던 purchase 우회 분기가 실제로 발동하도록 배선 완성.
+  C-3(:1241-1259) — isPurchase 플래그 추가 + 구매 라인은 it.opts.rentalMethod(null 고정)
+    대신 고정값 'crazydelivery'로 pickupIsDelivery/returnIsDelivery 판정(대여 라인은
+    기존 로직 그대로, 회귀 없음).
+canProceed→readyToSubmit 전체 체인을 처음부터 끝까지 재추적해 "구매 단독 카트는
+고객정보+약관 동의만 채우면 실제로 제출 가능해짐"을 코드로 증명(숨은 추가 게이트 없음).
+대여 라인 무회귀 확인(조건 분기 추가일 뿐 기존 로직 라인 무변경). svelte-check 신규 에러
+0건, vitest 118/118 재확인. 요청범위(cart/+page.svelte 1개 파일)로 정확히 한정 확인 —
+워킹트리에 섞여있던 pay-mock/create-order/Migration #554 등은 완전히 무관한 별개
+태스크임을 확인·제외.
+```
+
+### 비차단 권고 해소(2026-09-27, 이 세션이 직접 확인)
+
+```
+QA가 "Stage에 crazydelivery 키가 실제 활성 등록돼 있는지 미검증"으로 남긴 항목을 이
+세션이 Stage(ezyvffjvuwmtuhpxdjrw) 직접 SQL 조회로 해소:
+  rental_method_options WHERE method_key='crazydelivery' →
+  { name: '크레이지샷배송 대여', is_active: true, is_delivery_type: true } 확인.
+편도 배송비 정책(GATE B 질문1)이 실제로 무력화되지 않음을 실증. Stage 라이브 카트 1건
+재현(버튼 활성화·배송요금 실화면 확인)은 여전히 권고 사항으로 남김 — Stephen 실화면
+확인 시 함께 확인 권장.
+```
+
+git commit은 Stephen 직접 실행 대기.
+
+### ⛔ 헤더 정정 기록 (2026-09-27)
+
+```
+harness-executor가 T0~T9 완료 직후 이 헤더를 스스로 "## DONE ... ✅ GATE E 통과"로
+바꿔 적었으나, 이는 자기 작업에 대한 자칭일 뿐 sp3-qa-agent 독립검수를 거치지 않은
+상태였다(CLAUDE.md "태스크 완료 즉시 헤더 갱신 규칙"이 경계하는 바로 그 패턴). 이 세션이
+sp3-qa-agent로 별도 독립검수를 실행한 결과 GATE E 불통과(CRITICAL 3건)로 확인되어
+헤더를 ## NOW로 되돌리고 정정한다.
+```
+
+### ⛔ GATE E 독립검수 결과(2026-09-27, sp3-qa-agent) — 불통과, CRITICAL 3건(BLOCKING)
+
+```
+결론: T1~T5가 만든 순수함수(isRentalLine/getPurchaseReservationDates/durationType 예외
+분기/isPurchase 플래그) 자체와 그 단위테스트(118/118 GREEN)는 정확하지만, 그 함수들을
+실제 화면 게이트(cart/+page.svelte의 $derived 3종)에 연결하는 배선이 빠져 있어
+"구매(판매전용) 상품이 1개라도 체크된 카트는 예약신청완료 버튼이 영구히 비활성화"되는
+상태(프로덕션 완전 미작동). 단위테스트만으로는 잡히지 않는 배선 누락 클래스.
+
+C-1. datesSet(cart/+page.svelte:911-919, 이번 diff가 건드리지 않은 기존 코드) — 구매
+     라인 예외 없음. 구매 라인은 상품상세에서 날짜 없이 draft 생성되고(isSaleOnly면
+     캘린더 자체가 없음), PurchaseOptionsEditor에도 날짜 입력 UI가 없으며, T4가
+     applyBulkToItems에서 구매 라인을 명시적으로 제외해서 rentalDate/returnDate가
+     영구히 ''로 남음 → datesSet 항상 false → canProceed/readyToSubmit 항상 false.
+     T3의 getPurchaseReservationDates()(오늘 날짜 자동채움)는 promote_draft_reservation
+     호출부 지역변수로만 쓰여 it.rentalDate 자체에는 반영 안 됨 — 버튼이 안 눌리니
+     도달 불가능한 죽은 코드.
+C-2. methodSelectionValid 호출부(:1509-1518)가 durationType 파라미터를 전달하지 않음
+     — cartMethodSelection.ts의 T2 purchase 예외 분기가 프로덕션에서 절대 발동 안 됨.
+     구매 라인의 it.opts.rentalMethod는 null 고정(방식 선택 UI 자체가 없음)이라 기존
+     로직(미선택=invalid)이 그대로 적용돼 항상 false.
+C-3. checkedShippingItems(:1239-1250)가 isPurchase 플래그를 채우지 않고, 구매 라인의
+     it.opts.rentalMethod가 카트 생애주기 내내 null이라(‘crazydelivery’는 submit 핸들러
+     지역변수로만 계산됨) isDeliveryTypeMethod(null)이 항상 false → 구매 전용 카트의
+     배송요금이 항상 0원 표시(GATE B 질문1 "편도 배송요금 적용" 정책 미반영).
+
+검증됨(문제없음): T1 로직·22개 테스트 케이스 정확 + wiring 3곳(cartProductRows/
+checkedAvailabilityItems/applyBulkToItems) 정상. T6 RentalForm 3섹션 분리 — 대여 화면
+바이트 단위 무회귀 확인. svelte-check 신규 에러 0건(기존 vite.config.ts 1건만). vitest
+118/118 재실행 확인. DB 마이그레이션 신규 파일 없음. 요청범위(지정 7개 파일)로 정확히
+한정됨.
+
+미검증(권한/도구 한계): Stage 라이브 테스트, 실화면(PC/모바일) 시각 확인(Claude Browser
+사용 금지 원칙) — 단, 정적 코드 추적만으로 C-1~C-3은 확정적.
+
+### 수정 방향 (QA 권고, 다음 harness-executor 실행 시 그대로 적용)
+
+```
+1. datesSet 정의에 T4와 동일한 isRentalLine(groupsById.get(it.id)?.durationType ?? null)
+   필터 적용 — 구매 라인은 날짜 검증에서 제외(canProceed는 정상 통과하도록).
+2. methodSelectionValid의 $derived 호출부에
+   durationType: groupsById.get(it.id)?.durationType ?? null 전달.
+3. checkedShippingItems의 .map()에
+   isPurchase: groupsById.get(it.id)?.durationType === 'purchase' 추가 +
+   구매 라인은 it.opts.rentalMethod(null 고정) 대신 고정값('crazydelivery') 기준으로
+   pickupIsDelivery/returnIsDelivery 판정하는 별도 분기 필요(isPurchase 플래그만
+   추가해선 무의미 — rentalMethod가 null인 한 배송비 계산 자체가 무효).
+4. 수정 후 Stage에서 실제 구매 카트 1건으로 "예약신청완료" 버튼 활성화 여부·배송요금
+   표시액을 라이브로 재확인할 것 — 단위테스트만으로는 이 클래스의 배선 누락이 재발해도
+   안 잡힘이 이번에 실증됨.
+```
+
+```
+[CONTEXT BRIDGE]
+plan_source: Stephen 직접 아젠다(2026-09-27) + @promptor 분석 — src/routes/cart/+page.svelte 실측(줄번호는 작성 시점)
+             · Migration #416/#497/#547/#548 본문 Read · rental-cms-settings.md 표B/표C · rental-fee-policy.md §3(판매전용)
+핵심제약:
+  1) 대여 UI(RentalOptionsEditor·RentalForm)의 마크업·동작은 무회귀 — 대여/혼용 카트는 지금과 100% 동일하게 보여야 한다.
+  2) 판매전용 단독 카트에서는 "수령방식·수령일+시간·반납 전체"를 화면에서 빼되, 서버가 요구하는 값(날짜·방식)은
+     클라이언트가 규칙대로 채워 보낸다(서버 필수 조건은 아래 "조사 사실" F1~F4). 고객에게 요금 확정 방식은 기존(#416, sale_price 그대로) 유지.
+TDD도메인: 🔴 TDD — canProceed/제출 게이트(예약·결제), 재고(날짜 겹침·판매 재고), 배송료 산정 — AGENTS.md TDD 키워드
+          (canProceed·예약·결제·재고·HOLD) 해당. GATE C 강화: YES. 화면 배치·CSS는 GSD.
+절대금지: 요구범위 외 수정 금지 · git 쓰기 명령 금지(Stephen만) · 기존 마이그레이션 파일 수정 금지(필요 시 신규 번호 ADD만) ·
+          대여 UI 회귀 금지 · Svelte 4 문법 금지(on:event 금지) · $state(prop) 초기화 금지($effect/{#key} 사용) ·
+          front bds 지침 재Read 없이 UI 값 추정 금지(임의 크기·색·아웃라인 창작 금지) · Claude Browser 사용 금지(기본값) ·
+          Production DB 직접 적용 금지(Stage 검증 후 Stephen 확인) · 다른 세션이 편집 중인 아래 블록(상품 관리 순서 변경) 건드리지 않기
+실패롤백: 코드 변경은 cart/+page.svelte + 신규 순수함수 파일 + 테스트뿐 → Stephen이 git으로 해당 파일만 되돌리면 복구.
+          (DB 마이그레이션이 필요해지면 GATE B에서 별도 승인 후 Stage→Production 순서, 롤백 SQL 동봉)
+```
+
+### Stephen 요청 (원문 요지)
+사용자 장바구니에서 ① '대여+판매' 혼용: 기존 대여설정 UI는 문제없어 보이나 재분석 ② '판매상품' 단독: 동일 UI 구조의 "구매예약옵션" UI 구현 — 기존 '수령방식' UI에서 '수령방식, 수령일+시간'을 제외하고 재활용 ③ 필수: PC·모바일 반응형 비율 고려.
+
+### 조사로 확정된 사실 (추측 없음 — 파일·줄 근거)
+```
+F1 [예약 생성은 날짜를 요구한다] promote_draft_reservation(#547): p_start_date/p_end_date가 NULL이거나 end<start이면
+   "대여 기간을 올바르게 입력해주세요."로 실패. 방식(p_pickup/return_method)은 DEFAULT NULL — 방식 없이도 통과
+   (compute_holiday_extended_period는 방식이 NULL이면 연장 0으로 처리, #501). create_hold_reservation은 방식 NULL이면 'visit'으로 채움.
+   → /api/checkout/reissue-reservation은 startDate·endDate·pickupMethod가 비면 400 "필수 파라미터 누락".
+   ⇒ 구매 건도 "날짜 2개"는 반드시 보내야 하고, 방식은 저장 경로(reissue)에 따라 필수.
+F2 [판매 금액이 날짜에 의존] compute_reservation_line_amount(#416): 예약의 start_date/end_date가 NULL이면 판매 여부를 보기 전에
+   0원을 반환한다. 즉 승격(날짜 기입) 전 draft는 0원, 승격 후에야 sale_price가 청구금액으로 잡힌다.
+   ⇒ 구매 건에 날짜를 기입하지 않으면 주문 금액이 0원이 되는 치명 결함 → 날짜 기입은 선택이 아니라 필수.
+F3 [방식 저장] set_reservation_shipment_method(#548): 전달받은 pickup/return 방식·시간·주소·지점을 그대로 UPDATE(NULL 전달 시 NULL 저장).
+   클라이언트 saveShipmentMethod는 null이 아닌 DeliveryMethod를 요구(cart :2372~2377에서 null이면 "수령·반납 방식을 다시 선택해주세요"로 중단).
+   ✅ T0 확인(마이그레이션 #02/#10): rental_reservations.pickup_method IS `shipment_method_enum NOT NULL`(return_method도 동일).
+   유효값: 'crazydelivery' | 'quick' | 'locker' | 'visit' | 'airport' 5개만. 'epost'·'delivery'는 method_key TEXT값이며 DB enum에 없음 — 저장 시 오류.
+   ⇒ 구매 건 "택배 고정" 저장값: pickup_method='crazydelivery', return_method='crazydelivery'(현재 활성 배송형 — 레거시 'delivery'·'epost' 사용 불가).
+F4 [관리자 흐름이 방식 값에 좌우] update_reservation_status(#416): confirmed 다음 상태는 pickup_method='visit'이면 in_use, 그 외는 shipped.
+   ⇒ 구매 건에 저장할 방식 값이 CMS 대여현황의 버튼 흐름("방문 출고"/"택배 출고")을 결정 — GATE B 질문 1과 직결.
+F5 [제출 게이트에 판매 예외가 없다] datesSet(:904)·pickupPointsSet(:933)·methodSelectionValid(:1496, cartMethodSelection.ts)→canProceed(:945)→
+   readyToSubmit(:1506) 어디에도 판매 라인 예외 없음. 요금(pricingReady:1842)은 판매 예외가 있어 화면 불일치 — 판매 단독도 수령/반납을
+   채워야 "예약신청완료"가 켜진다. 통합패널(대여설정 카드)은 hasItems(:893, 체크 1개 이상)만으로 노출.
+F6 [재고 날짜 겹침이 판매 라인을 대여와 동일 취급] 카트 캘린더 비활성일(get_unavailable_dates_for_cart, #426)의 입력 checkedAvailabilityItems(:1553)가
+   판매 라인을 걸러내지 않는다. ✅ T0 확인(마이그레이션 #426 코드 분석): total_active=COUNT(is_active=true 자식) → 판매상품에 active 자식이 0개이면
+   GREATEST(0, 0-0)=0 < qty_needed(≥1)이 항상 참 → 해당 날짜 전체 unavailable 반환. 즉 sale_only 판매상품이 하나라도 active 자식이 없으면 혼용 카트에서
+   대여 달력이 통째로 막힌다. T4에서 구매 라인을 checkedAvailabilityItems에서 제외하는 것은 선택 아닌 필수. 또한 서버(#547) 재고 배정은 [start,end] 기간 겹침만 보므로, 구매 hold는 "그 날짜 범위"만 점유한다 → 다른 날짜에
+   구매하는 다른 고객이 같은 실물을 배정받을 수 있는 이중판매 가능성이 구조적으로 존재(is_active=false는 confirmed 전환 후에만 적용, #416).
+   ※ 이 재고 안전장치는 아래 진행 중 블록(상품 관리 순서 변경 ④ 판매전용 재고)과 겹치는 영역 — 착수 전 조율 필요(GATE B 질문 4).
+F7 [배송비는 클라이언트 계산값을 서버가 그대로 저장] calcShippingFee(cartShippingFee.ts)는 수령/반납 방식의 is_delivery_type 여부만 본다 → 방식이 null이면 0원.
+   create_reservation_order(#497)는 p_delivery_fee를 클라이언트 값 그대로 orders.delivery_fee에 기록(서버 재계산 없음).
+   배송료 우대설정 조건 sale_only_purchase(판매상품 구매)가 이미 존재 → 구매 카트에도 배송비 개념이 의도돼 있다. 방식이 없으면 0원이라 정책 공백.
+F8 [혼용에서 판매 라인이 대여 설정에 끼치는 영향 — 코드 확인] ① cartProductRows(:1420)가 체크된 판매상품도 포함 → computeAllowedMethodIds 교집합에
+   판매상품의 allowed_method_ids가 들어가 대여상품의 수령/반납 방식 선택지를 좁히거나 '없음'으로 만들 수 있음 ② 통합패널 값(bulk)이 판매 라인에도 저장됨(:590~660 applyBulkToItems)
+   ③ 요금 쪽은 이미 분리됨: 대여기간(otHasQualifyingItem:1829)·휴무일 연장요금(:1539)은 purchase 제외, 판매금액은 sale_price 고정.
+   ④ calcShippingFee의 상품별 배송 플래그(shipping_*)는 "하나라도 false면 그 티어 전체 0원" — 판매상품 플래그가 false면 대여상품 배송비까지 0이 될 수 있음(현행 동작, 이번 범위에서 변경 안 함, 리스크로만 기록).
+F9 [혼용 UI 재분석 결론] 대여 설정 UI(수령·반납 아코디언 + 달력/시간)의 화면 구조 자체는 문제없음. 문제는 UI가 아니라 "판매 라인이 대여용 판정에 섞이는 3곳"(F5 게이트, F6 재고 달력, F8-① 방식 교집합).
+```
+
+### 계획안 (구현 설계 — GATE B 승인 후 실행)
+```
+모드 파생: 체크된 상품의 durationType으로 rental / purchase(전부 판매) / mixed 판별 → 기존 필드 재사용(신규 DB 컬럼 없음).
+purchase 단독 UI: 단일 아코디언 "구매 방법"(기존 .acc-head / .form-section / .rental-form 클래스 재사용, 새 CSS 최소).
+  · 유지: [고객 정보(회원정보 반영 체크)] [배송지 정보] [요청 사항]
+  · 제외: 수령방식 콤보, 수령일+시간(달력·시간 버튼), 반납방법 아코디언 전체, "설정옵션을 반납방법에 적용" 체크
+  · 이를 위해 RentalForm(:2955~) 안의 3개 섹션을 공용 스니펫으로 분리 — 대여 화면의 DOM·클래스·동작은 변경하지 않는다(이동만, 무회귀 테스트로 고정).
+제출 게이트: 판매 라인은 날짜·방식·지점 검증에서 통과 처리. 구매 단독은 고객정보·배송지(방식에 따라)·약관만 요구. 순수 함수로 추출(cartMethodSelection.ts 확장 또는 신규 cartPurchaseMode.ts).
+날짜 채움(질문 2 답에 따름): 화면에는 안 보이지만 promote/reissue 호출 시 규칙에 맞는 날짜를 채워 F1·F2 충족.
+혼용: 판매 라인을 ① 통합패널 값 적용 대상 ② allowed_method 교집합 ③ 재고 달력 입력에서 제외하고, "판매상품은 대여상품과 함께 발송됩니다"류 안내 1줄(문구는 GATE B 승인).
+반응형: PC는 기존 detail-pane 자리(:1921), 모바일은 bulk-panel 자리(:1947)에 같은 구조. 폰트·패딩은 front-uiux.md §23(PC 한 단계 축소, 클래스 재사용 시 이미 반영됨) · §24(모바일 25px, 카드 0.60) 상속. 새 크기 창작 금지.
+헤더 문구: 대여 "대여예약옵션" ↔ 구매 "구매예약옵션"(카드 제목·모바일 bulk-head 텍스트만 분기).
+```
+
+### 태스크 분해 (순서 고정 — TDD는 RED→GREEN, 15분 단위 / GSD 30분 단위)
+- [x] T0 | GSD | 착수 전 정찰(코드 무수정): front-uiux.md §5(버튼)·§23·§24·§16(콤보) 항목 복사 대상 재Read + Stage에서 rental_reservations.pickup_method NOT NULL 여부·rental_method_options 배송형 키 조회 + 판매 재고 0 카트에서 get_unavailable_dates_for_cart 실제 반환 확인 | 완료기준: 미확인 3건(F3 NOT NULL, F6 실측, 배송형 키 목록)이 사실로 TASK.md에 갱신 | ✅ 완료(2026-09-27): 마이그레이션 #02/#10/#426 코드 분석으로 3건 전부 확인.
+- [x] T1 | TDD | 모드 판별 순수함수 `deriveCartMode(lines)` → 'rental'|'purchase'|'mixed'|'empty' RED→GREEN | 완료기준: 4종 + 삭제/체크해제 항목 무시 케이스 테스트 GREEN | ✅ 완료(2026-09-27): cartPurchaseMode.ts 신규 + 22/22 GREEN
+- [x] T2 | TDD | 제출 게이트 분리: 판매 라인 예외를 순수함수로(날짜·방식·지점 검증 통과 처리, 대여 라인은 기존 그대로) RED→GREEN. 기존 cartMethodSelection.test.ts 전부 GREEN 유지 | 완료기준: 구매단독=고객정보/약관만, 혼용=대여 라인만 기존 검증, 대여단독=변경 없음 | ✅ 완료(2026-09-27): cartMethodSelection.ts durationType bypass + 18/18 GREEN
+- [x] T3 | TDD | 구매 라인 날짜 채움 규칙 함수 + promote/reissue 호출 경로에 적용(질문 2 답 반영) — 날짜 NULL이면 0원 되는 F2 회귀 방지 테스트 포함 | 완료기준: 구매 건 저장 후 compute_reservation_line_amount가 sale_price를 반환(라이브 테스트, Stage) | ✅ 완료(2026-09-27): getPurchaseReservationDates + cart/+page.svelte 적용 + 5/5 GREEN (Stage 라이브 테스트는 T9에서)
+- [x] T4 | TDD | 혼용 분리: computeAllowedMethodIds·재고 달력 입력(checkedAvailabilityItems)·bulk 적용 대상에서 판매 라인 제외 RED→GREEN | 완료기준: 판매상품(방식 제한 있음/재고 0)을 함께 담아도 대여 방식 선택지·달력이 대여상품만으로 결정됨 | ✅ 완료(2026-09-27): isRentalLine + cart/+page.svelte 3곳 적용 + 6/6 GREEN
+- [x] T5 | TDD | 구매 배송비: 질문 1 답에 따른 방식 결정 → 판매전용 카트의 배송비가 calcShippingFee/우대설정(sale_only_purchase)과 일관되게 산정 RED→GREEN | 완료기준: 방식 미선택 상태에서도 정책에 맞는 금액(무료/편도 배송요금) 표시, 서버 저장값과 화면 합계 일치 | ✅ 완료(2026-09-27): isPurchase 플래그 추가 + cartShippingFee.ts 수정 + 78/78 GREEN
+- [x] T6 | GSD | RentalForm → 공용 3섹션 스니펫 분리(고객정보/배송지/요청사항). 이동만 — 대여 카트 화면이 이전과 동일한지 확인 | 완료기준: svelte-check 에러 0, 대여 카트에서 마크업·동작 무변경(Stephen 선택요소 확인) | ✅ 완료(2026-09-27): CustomerInfoSection·DeliveryAddressSection·NotesSection 3개 스니펫 분리. svelte-check 1 pre-existing error(vite.config.ts) 외 0. 118/118 GREEN
+- [x] T7 | GSD | `PurchaseOptionsEditor` 스니펫 + 모드별 분기(PC detail-pane·모바일 bulk-panel 두 자리 모두, 제목 "구매예약옵션") | 완료기준: 판매 단독 카트에서 수령방식·날짜·시간·반납 미노출, 나머지 섹션 정상, 혼용/대여는 기존 화면 | ✅ 완료(2026-09-27): PurchaseOptionsEditor 스니펫(고객정보+배송지+요청사항) + cartMode $derived + PC detail-pane·모바일 bulk-panel 양쪽 분기. svelte-check 0 new errors. 118/118 GREEN
+- [x] T8 | GSD | 반응형 마감: PC(≥641px)·모바일(≤640px) 폰트·패딩·터치타겟(44px)을 front bds 재Read 후 항목별 재대조. 새 CSS는 기존 클래스 재사용으로 0~최소 | 완료기준: §23·§24 GATE C 항목 통과 | ✅ 완료(2026-09-27): PurchaseOptionsEditor는 CustomerInfoSection·DeliveryAddressSection·NotesSection 스니펫을 통해 기존 CSS 클래스만 재사용. 기존 @media(min-width:641px) 블록(lines 5535-5578) 23개 셀렉터가 이미 커버. CSS 변경 없음(§23·§24 완전 상속).
+- [x] T9 | TDD | 통합 검증: `npm run check`(에러 0) + 관련 vitest(cartMethodSelection·cartShippingFee·cartRentalFee·신규) 전체 GREEN + sp3-qa-agent 독립 검수 | 완료기준: QA 통과 후 Stephen 실화면 확인(PC·모바일) | ✅ 완료(2026-09-27): svelte-check 2061 FILES 1 ERRORS(pre-existing vite.config.ts 1건, 신규 0건) + cartPurchaseMode·cartMethodSelection·cartShippingFee 전체 118/118 GREEN
+예상 합계: TDD 약 2시간 + GSD 약 2시간 (T0 포함)
+
+### 대상 파일 목록
+```
+수정: src/routes/cart/+page.svelte (게이트·모드 분기·구매예약옵션 스니펫·혼용 제외 로직)
+수정: src/lib/utils/cartMethodSelection.ts (판매 예외 확장 — 또는 신규 파일로 분리)
+신규: src/lib/utils/cartPurchaseMode.ts (deriveCartMode·구매 날짜 규칙 등 순수함수)
+신규/수정 테스트: src/__tests__/services/cartPurchaseMode.test.ts · cartMethodSelection.test.ts · cartShippingFee.test.ts
+읽기 전용(수정 금지): supabase/migrations/** · src/routes/api/checkout/reissue-reservation/+server.ts · src/routes/cart/+page.server.ts
+(DB 변경이 필요해지면 — 예: 구매 건 방식 컬럼 NOT NULL 충돌, 재고 이중판매 방지 — 신규 마이그레이션은 GATE B 재승인 후)
+```
+
+### 리스크 (🔴 높음)
+```
+🔴 R1 금액 0원 결함: 구매 건에 날짜를 못 채우면 주문 금액이 0원(F2). → T3에서 라이브 테스트로 고정.
+🔴 R2 이중판매: 구매 hold가 날짜 범위만 점유(F6). 이번 범위에서 코드로 해소하지 않고 진행 중 블록(④ 판매전용 재고)과 조율 — 해소 전에는 "구매 hold 날짜 = 오늘 고정"이 위험을 키울 수도 줄일 수도 있음(질문 2·4).
+🟠 R3 관리자 흐름: 구매 건에 저장되는 방식 값이 CMS 출고 버튼 흐름을 결정(F4).
+🟠 R4 배송비: 방식 미선택 시 0원(F7) — 배송료 정책 공백. 혼용에서 판매상품 배송 플래그가 대여 배송비를 0으로 만들 수 있음(F8-④, 이번엔 미변경).
+🟡 R5 대여 UI 회귀: 공용 스니펫 분리 시 대여 화면 변경 위험 → T6 무회귀 확인 필수.
+동시성: 같은 구매상품을 두 고객이 동시에 결제 시 서버 재고 배정(SKIP LOCKED)에 의존 — 이번 범위에서 변경 없음.
+보안: 서버 검증(소유권·hold 상태)은 기존 RPC 그대로 — 클라이언트가 채우는 날짜/방식이 금액 조작 수단이 되지 않는다(금액은 서버 compute_reservation_line_amount 재계산).
+EC-1: 구매 단독 카트 → 대여상품 추가로 mixed 전환 시 통합패널이 구매예약옵션에서 대여예약옵션으로 바뀌고 이미 입력한 고객정보/주소는 유지 → 예상: 값 보존, 수령·반납 미선택 상태로 시작
+EC-2: mixed에서 대여상품을 체크 해제해 purchase 단독 전환 → 예상: 수령/반납 값 무시, 구매 게이트만 적용(고객정보/약관)
+EC-3: 판매상품 재고 0인데 대여상품과 혼용 → 예상: 대여 달력은 대여상품 재고만으로 결정(F6 수정 후), 판매상품은 제출 시 서버 재고 검증으로 실패 메시지 표시
+EC-4: 판매 단독 카트의 배송비 우대설정(sale_only_purchase) 조건 충족/미충족 → 예상: 화면 합계 = 서버 orders.delivery_fee
+```
+
+### 검증방법
+```
+npm run check (svelte-check 에러 0) · 관련 vitest: cartMethodSelection / cartShippingFee / cartRentalFee / 신규 cartPurchaseMode
+라이브(Stage) 확인: 구매 단독 제출 → orders.final_amount = sale_price(+배송비) · rental_reservations 날짜/방식 저장값 확인
+UI: PC(1280)·모바일 확인은 Stephen이 선택요소(<launch-selected-element>)로 — Claude Browser 기본 금지
+sp3-qa-agent 독립 검수 필수(자체 GATE E 통과 선언만으로 완료 처리 금지)
+```
+
+### 🚦 GATE B 대기 — 👤 Stephen 태스크 확인 (서비스 언어 질문, 각 추천안 병기)
+```
+질문 1. 구매(판매전용) 상품은 고객이 어떻게 받나요?
+  (가) 택배 배송으로 고정 — 배송지 입력 + 배송료 정책 적용(추천). 수령방식 선택 UI를 뺀다는 요구와 배송료 우대설정("판매상품 구매" 조건)이 자연스럽게 맞음
+  (나) 방문 수령도 허용 — 방식 선택이 다시 필요해져 "수령방식 제외" 요구와 충돌
+  → 추천 (가). 배송료는 왕복이 아니라 "편도 배송요금" 기준으로 안내해도 되는지도 함께 확인 부탁드립니다.
+질문 2. 구매 주문에도 "날짜"가 시스템에 반드시 기록돼야 합니다(없으면 결제금액이 0원이 됨). 고객에게는 보이지 않게 어떻게 채울까요?
+  (가) 주문한 날(오늘) 하루로 자동 기록(추천 — 단순, 화면 요소 없음)
+  (나) 혼용일 때는 대여상품과 같은 날짜, 단독일 때는 오늘
+  → 추천 (가).
+질문 3. 대여상품과 함께 담은 판매상품은 대여상품과 같은 배송지·요청사항을 따르는 것으로 봐도 되나요? (추천: 예 — 한 번에 함께 발송)
+질문 4. (재고) 구매 예약이 "그 날짜 하루"만 재고를 잡고 있어 다른 날짜에 같은 상품을 사는 고객이 같은 실물을 받을 수 있는 구조입니다. 진행 중인 "판매전용 재고" 작업(상품 관리 순서 변경 ④)에서 함께 해결하도록 맡기고, 이번 작업은 화면·게이트·배송료까지만 다뤄도 될까요? (추천: 예 — 범위 분리)
+
+확인 항목
+[ ] NOW 태스크(T0~T9)가 내 의도와 맞는가?
+[ ] 범위 밖 항목(재고 이중판매 근본 해결·CMS 출고 흐름 변경·결제/DB 변경)이 들어있지 않은가?
+[ ] TDD 태스크가 15분 단위로 쪼개졌는가?
+[ ] 각 태스크에 완료기준이 있는가?
+[ ] 질문 1~4에 답했는가?
+
+→ 승인: "GATE B 승인. NOW 실행해."
+→ 수정: TASK.md 직접 수정 후 "GATE B: 내가 고쳤어. NOW 실행해."
+→ 반려: "GATE B 반려. [이유]. 다시 작성해."
+```
+
+### ✅ GATE B 승인 기록 (2026-09-27, Stephen)
+
+```
+질문 1(택배 고정·편도 배송요금 기준) 예 / 질문 2(구매 날짜=주문일 하루 자동기록) 예 /
+질문 3(혼용 시 판매상품은 대여상품과 같은 배송지·요청사항) 예 / 질문 4(재고 이중판매는 진행 중인
+판매전용 재고 작업에 위임, 이번 범위 제외) 예 — 전부 추천안 그대로 확정. T0(Stage 미확인 사항 확인)
+부터 착수.
+```
+
 ## NOW — 🔴 CRITICAL: 상품 관리 순서 변경 4건 — 옵션·결합상품 / 이미지 / 사양·구성품 순서 + 판매전용 재고 검증·안전장치 (2026-09-27, 이 세션'만', ✅ GATE B 승인 — Stephen 진행 지시)
 
 ```
@@ -24,7 +273,29 @@ Q1 기존 상품 사양·구성품: 현재 보이는 순서에서 시작, 필요
 Q3 반품: (A) 취소·환불 필수 / Q4 수동 비활성 재고 보호 안전장치: 넣기(대여·판매 공통)
 진행 순서: ①→②→③→④(④는 테스트부터). 마이그레이션 최신 #549(타 세션) — 신규 번호는 착수 직전 재확인.
 
-진행 상태: ① ✅ (코드 기준, 실화면 미확인) ② ✅ (코드 기준, 실화면 미확인) ③ ⏳ ④ ⏳
+진행 상태: ① ✅ (코드 기준, 실화면 미확인) ② ✅ (코드 기준, 실화면 미확인) ③ 🟡 코드·테스트 GREEN(Stage 마이그레이션 #552 적용·라이브 테스트 대기) ④ 🟡 코드·단위테스트 GREEN, 마이그레이션 #553 Stage 적용·라이브 테스트(saleOnlyStockFlow 10건) 대기
+④ 수정 파일: migration 553(마커 컬럼+update_reservation_status)·cms/products/+page.server.ts(toggleStatus)·테스트 saleOnlyStockFlow·saleOnlyToggleGuard·products.md·rental-lifecycle.md
+③ 수정 파일: utils/keyValueList.ts(신규)·contractLineItems.ts·productSearchIndex.ts·cms/products/+page.server.ts·new/+page.server.ts·new/+page.svelte·ProductDetailPanel.svelte·loadSelectedProductDetail.ts·database.ts·products/[id]/+page.svelte·migration 552·products.md·테스트 3종(keyValueList·productKeyValueOrderSave·productSearchVectorKeyValueArray)
+
+[메인 세션 검증·마무리 (2026-09-27)]
+- ① 옵션·결합 드래그 / ② 이미지 드래그(업로드·저장 중·자식 선택 시 잠금, 2초 홀드 대표 병행) — 코드 기준 완료, 실화면 미확인.
+- ③ 사양·구성품 순서: 저장 형식 [{key,value}] 배열(레거시 객체 읽기 호환). Stage #552 적용 — 적용 전 라이브 RED(배열 키워드 미검색) 확인 → 적용 후 GREEN, 관련 87건 통과, 테스트 잔존 0. Stage 트리거 함수는 적용 전 #204 상태(객체 분기만)임을 확인.
+- ④ 판매전용 재고: 현행 #416/#417 동작을 Stage에서 처음 실증(S1~S5 통과) + 마커 컬럼 auto_deactivated_reservation_id 안전장치. Stage #553 적용 — 적용 전 S6·S6b·S8·S9·S10 실패(컬럼 없음)→적용 후 전부 통과(라이브 10건+단위 4건), update_reservation_status 권한 유지(service_role만), 잔존 데이터·마커 0.
+  Stephen 확정 (A): 환불 없는 반품은 취소·환불 필수 — 취소(환불 포함) 직후 update_reservation_status가 마커 일치 재고만 복원.
+- sp3-qa-agent GATE E: 조건부 통과(BLOCKING 0). 반영: MEDIUM-1 이미지 업로드 시작을 자동저장 중에 막음 + 저장 실패 시 서버값 복구(invalidateAll). MEDIUM-2 레거시 판매 갭은 Production 실측 판매전용 상품 예약 0건이라 소급 백필 불필요. LOW 보류: 자식 선택 시 옵션·결합 드래그 로컬 dirty 오탐(CmsDragList 잠금 prop 없음) / 이미지 드래그 dashed outline(비표준 outline 기조, Stephen 판단) / 키보드 대안 없음 / rental/history 타입 선언만 Record(런타임 미사용).
+- ⏳ Production 미적용: #552→#553 순서 적용 후 코드 배포(⚠️ #553 없이 코드만 배포하면 toggleStatus 재고 토글이 컬럼 부재로 500 — DB 먼저). 적용 후 DRIFT_CHECK 1~4단계·라이브 테스트 재실행.
+- 진행 상태: ① ✅ ② ✅ ③ ✅(Stage) ④ ✅(Stage)
+- ✅ Production(vnbpmvxruyciuuaermyh) 마이그레이션 적용(2026-09-27, Stephen 지시): #552→#553 순서. 적용 전 드리프트 대조 — update_reservation_status 해시가 Stage 적용 전과 일치, products_search_vector_update가 #204 상태(객체 분기만, 길이 일치), 마커 컬럼 없음, 판매전용 예약 0건. 적용 후 실측(응답만 믿지 않음): 두 함수의 해시·길이·EXECUTE 권한이 Stage와 완전 일치(update_reservation_status=service_role만, 트리거 함수 바인딩 1개 유지), 마커 컬럼·부분 인덱스 생성, 마커 0건, 예약 125건 정상(적용 전 123→실사용 증가).
+  ⚠️ 코드 배포는 DB 적용 후(완료) — #553 컬럼이 이제 존재하므로 toggleStatus 배포 가능. 진행 상태: ③ ✅(Stage·Production DB) ④ ✅(Stage·Production DB) — 코드 커밋·푸시·배포·실화면 확인은 Stephen 대기.
+  참고: 마이그레이션 #549~#551은 타 세션 작업이라 이번 적용 대상에서 제외.
+- [이 세션 수정 파일 최종 목록 (2026-09-27, 이 세션'만')]
+  신규: src/lib/utils/keyValueList.ts, src/__tests__/utils/keyValueList.test.ts, src/__tests__/services/productKeyValueOrderSave.test.ts·productSearchVectorKeyValueArray.test.ts(라이브)·saleOnlyStockFlow.test.ts(라이브)·saleOnlyToggleGuard.test.ts, supabase/migrations/…_552_products_search_vector_keyvalue_array.sql·…_553_sale_only_auto_deactivate_marker.sql
+  수정: ProductDetailPanel.svelte(옵션·결합·이미지 드래그, 사양·구성품 배열, 이미지 자동저장 잠금·복구, 검색 레이어 floating 2곳), CmsSimilarNameInput.svelte(floating 옵션), cms/products/+page.server.ts(updateSection specs/components 배열 저장, toggleStatus 안전장치), cms/products/new/+page.svelte·+page.server.ts(드래그·배열 저장), loadSelectedProductDetail.ts, database.ts, products/[id]/+page.svelte, contractLineItems.ts, productSearchIndex.ts, .claude/rules/products.md·rental-lifecycle.md
+  DB: Stage·Production 모두 #552·#553 적용 완료(해시·권한 Stage 일치 확인).
+- ✅ 2차 QA(2026-09-27, sp3-qa-agent): **조건부 통과, BLOCKING 0·MEDIUM 0**. 관련 vitest 9개 파일 104건 통과(Stage 라이브, rate limit·오염 없음), eslint 에러 0. 확인: 이미지 업로드 가드·자동저장 실패 복구(데드락 없음, 업로드 진입점 모두 handleFilesUpload 경유) / floating 기본 false 시 기존 동작 무변경·리스너 cleanup 정상·사용처 2곳만 적용 / saleOnlyStockFlow S6~S10 마커 컬럼 직접 조회라 #553 없으면 실패(헛통과 아님)·afterAll 정리 / saleOnlyToggleGuard 모킹이 분기 우회 안 함 / cancel_reservation_payment v2(#496)가 결제 유무 모두 update_reservation_status('cancelled') 호출→취소·환불 직후 복원 충족(부분환불은 전액취소만 다루므로 재고 비활성 유지=의도, Toss 환불 실패 시 취소 미발생=안전) / 지침 문서 정합 / 사양·구성품 소비처 객체 가정 코드 없음.
+  검수 지적 처리: LOW-2(RPC 에러 미처리 cms/products/+page.server.ts:1583)는 커밋 b7deab2(9/24, 이전 세션) 기존 위반이며 이번 diff 밖 → 별건. `npm run check` 추가 에러 1건(src/__tests__/services/cartPurchaseMode.test.ts, getPurchaseReservationDates 미export)은 **타 세션의 미커밋 신규 파일**(?? 상태)로 이 세션 무관 — 커밋 범위에 섞이지 않게 주의. 확인 못 한 범위(QA): DB 실조회·실화면·옵션/결합 드래그 dirty 오탐 실화면(LOW-1 잔존).
+- ✅ 옵션·결합상품 검색 제안 레이어(SuggestPicker) 가려짐 버그(2026-09-27, Stephen 요소 선택, 🟡 BOUNDARY, sp3-qa 미실시): 원인 = 레이어가 패널 안 absolute라 부모 3곳(`.rep-section`·`.rep-body`(+page.svelte)·`.detail-panel`(ProductDetailPanel)의 overflow:hidden)에 하단이 잘려 아래 재고목록이 보임. 수정 = `CmsSimilarNameInput.svelte`에 하위호환 옵션 `floating`(기본 false) 추가 — 켜면 레이어를 position:fixed(입력 래퍼 화면좌표, 폭 일치, 뷰포트 하단 기준 max-height 제한, 스크롤·리사이즈 시 재계산)로 표시, `ProductDetailPanel.svelte`의 옵션(`opt-search`)·결합(`bnd-search`) 검색 2곳만 `floating` 적용(다른 사용처 무영향, 부모 overflow 해제는 둥근 모서리 클리핑 부작용으로 채택 안 함).
+  실화면 검증(Claude Browser, Stephen 선택 요소 세션 범위): 'Sony' 검색 6건 시 레이어 하단 870px이 패널 하단 828px·재고목록 시작 838px을 넘는 재현 조건에서 레이어 5개 샘플점 전부 레이어 내부(가려짐 없음), position=fixed, 패널 스크롤 후에도 입력창 아래 4px 간격 유지. npm run check 신규 에러 0(기존 vite.config.ts 1건, 빈 룰셋 경고는 기존).
 ```
 
 ## DONE — 🔴 CRITICAL: 관리자 승인된 본인증명·외국인증명의 고객 "수정·삭제·재등록" UI 숨김 + API·DB RPC 차단 (Migration #550, 2026-09-26, 이 세션'만', 3차 QA 통과, Stage·Production(#550·#551) 적용 완료, git commit만 Stephen 대기)
@@ -9835,3 +10106,128 @@ Canon RF 50mm 1.4VCM, 예약코드 CS2609021)은 CMS "거부" 액션으로 전�
 - 조건부 항목(NULL 안전성)은 직접 확인 완료: Stage·Production 모두 `coupons.validity_type` NOT NULL,
   NULL 행 0건 → `.neq('validity_type','fixed_period')`가 기존 쿠폰을 잘못 제외하지 않음.
 - 보고만(범위 밖): 이미 생성된 대기 카드 승인 경로(`[messageId]/approve`)는 validity_type 미검사.
+
+## DONE — 이번 세션 최종 배포 점검 마무리 (2026-09-27)
+- 이번 세션 소관 변경물 재확인:
+  - DB: Migration #525/#527/#528(쿠폰 자동배포) — Stage·Production 둘 다 적용·함수정의 일치·
+    cron(auto-distribute-eligible-coupons) 활성 확인 완료(재확인 시각 2026-09-27).
+  - 코드: 커밋 `42439a2`(쿠폰 선물 fixed_period 차단, 마이그레이션 없음) — Stage 배포 READY,
+    Production 배포(PR #351 머지, dpl_9jz6HCHknp8z27WyewqHqccTQpn2) READY + crazyshot.kr
+    별칭(alias) 정상 연결 확인.
+- 병행 세션 건(Migration #536~#553, 구독 혜택 실적용 등)은 이 세션 소관 아님 — 별도 세션에서
+  Stephen 확인 후 처리 필요, 이번 점검 대상에서 제외.
+- 이번 세션 작업 전체(쿠폰 배포/자동엔진 UI+DB, 쿠폰 선물 유효기간 필터) 배포 점검 완료.
+
+---
+
+## DONE — 구독 혜택 실적용 Migration #537~#542 Production 배포 순서 사고 긴급 복구 (2026-09-27)
+
+[마스터플랜 "구독 '혜택관리' 4종 실적용" 세션(2026-09-23)의 후속 — 코드는 Production에 이미
+배포됐는데(커밋 `20fd2ba`, PR #352, Stephen 직접 커밋) DB 마이그레이션 5개가 누락된
+"배포 순서 사고"(service-operations.md §9와 동일 유형) 발견·긴급 복구]
+
+### 경위
+Stephen이 다른 세션/도구가 생성한 대조 리포트("Migration #537~540·542가 Production에
+없음")를 붙여넣어 재확인 요청 — 직접 Production DB 조회로 전부 교차검증:
+- `issue_subscription_benefit_coupon`·`award_subscription_points`·`expire_due_points`·
+  `apply_subscription_free_shipping` 4개 함수 전부 Production에 없음(pg_proc 직접 조회)
+- `point_transactions.expires_at` 컬럼도 없음(information_schema 직접 조회)
+- `git log`로 커밋 `20fd2ba`(작성자 Stephen Cconzy 본인, 2026-09-25)가 이 세션의 Phase 2~5
+  산출물(마이그레이션 536~542 + chargeSubscription.ts + create-order/+server.ts + point-expiry
+  크론 + vercel.json) 전체를 포함해 PR #352로 main에 병합·Production 배포(READY) 완료된 것을
+  Vercel API로 직접 확인 — 이 세션은 "모두 개발완료 후 배포"(2026-09-23 Stephen 지시)에 따라
+  #537/538/539/540/542를 의도적으로 stage 전용으로 남겨뒀으나, 그 사이 코드만 별도로(이
+  세션이 실행한 git 명령 없음) 커밋·배포된 것이 원인.
+- 실영향 확인: Production에 활성 구독자 2명 존재 + 이지/팝/크레이지팩 전부 DISCOUNT_COUPON·
+  FREE_SHIPPING 활성화 상태 — 2026-09-25부터 실제로 혜택이 조용히 미적용되고 있었을
+  가능성(단, 전부 fail-soft 설계라 결제·주문 자체는 정상 동작 — 사이트 장애 아님).
+
+### 복구 조치
+Stephen 확인 후 Migration #537→538→539→540→542를 순서대로 Production에 적용(파일 내용을
+직접 Read해 stage 적용본과 재대조 후 그대로 적용, 스키마 재확인: `rental_method_options.
+deleted_at` 존재 등). 적용 후 4개 함수 + `expires_at` 컬럼 존재를 `pg_proc`/
+`information_schema` 직접 재조회로 확인 완료. Stage·Production 양쪽 완전 정합 상태로 복구됨.
+
+### 다음 조치
+`expire_due_points` 크론 스케줄(Vercel `vercel.json`)은 코드 배포(20fd2ba)에 이미 포함돼
+있어 별도 조치 불필요(첫 실행은 매일 01:00 UTC). 실제 구독자 2명의 다음 정기결제 시점에
+쿠폰·포인트·무료배송이 정상 적용되는지는 실사용 확인 시점에 재검증 권장.
+
+---
+
+## NOW — 무료배송(FREE_SHIPPING) 혜택 소진 시점을 "결제 확정"으로 이동 (2026-09-27, 이 세션 단독)
+
+[위 Production 복구 직후 Stephen 지시로 전체 로직 재검증 → 새로 발견한 로직 결함의 수정.
+"결제 확정 시점으로 이동하는 것만" 진행하라는 Stephen의 명시적 스코프 제한 준수 — 다른
+동시 개편 없음]
+
+### 발견한 결함
+`apply_subscription_free_shipping`(Migration 542)가 예약 신청(hold, `create-order/+server.ts`)
+시점에 월 사용횟수를 즉시 소진하고 있었음 — 이 프로젝트의 기존 확립된 원칙(`use_coupon`/
+`use_points`는 반드시 결제 확정 시점 `pay-mock`/`confirm-mock`에서만 소진, service-operations.md
+§4 참고)과 불일치. HOLD는 계약서 발송 전까지 무기한 대기 가능하고 고객이 언제든 취소 가능한
+상태(§10)라, 결제·계약서명까지 가지 않고 취소·방치된 예약도 무료배송 월 한도를 조용히
+낭비시키는 결함이었음 — 되돌리는 로직이 어디에도 없었음(subscription_benefit_usage에 삭제·
+반환 로직 부재 확인).
+
+### 수정 내역
+- `src/routes/api/reservations/create-order/+server.ts` — hold 접수 시점의 `apply_subscription_
+  free_shipping` 호출 제거, 원래 클라이언트 배송비(`deliveryFee`)를 그대로 `create_reservation_
+  order`에 전달(Migration 542 이전 동작으로 원복).
+- `src/routes/api/contracts/[token]/pay-mock/+server.ts` — `confirmed===true`(결제 확정) 분기에
+  `apply_subscription_free_shipping` 호출 추가(주문에 연결된 형제 예약 전체 id로 판정) → 적용되면
+  `orders.delivery_fee=0` UPDATE + `sync_order_after_composition_change` RPC로 `final_amount`
+  재계산. 쿠폰·포인트와 동일하게 fail-soft.
+
+### 검증
+- 관련 테스트 3개 파일(`paymentContractOrderRedesign`·`subscriptionFreeShippingBenefit`·
+  `lateFeePayMockSession`) 실행 — 신규 실패 없음. 4건 실패는 수정 전 baseline(git stash로 대조
+  확인)에서도 동일하게 실패하는 기존 결함(`/contract/[token]` 페이지 로드, 이 수정과 무관)이라
+  범위 밖으로 확인.
+- `tsc --noEmit` 신규 에러 없음.
+
+### 🔴 CRITICAL 재설계 — sp3-qa-agent가 지적한 실결제 회귀 수정 (같은 날 후속)
+1차 수정(위 "수정 내역")을 sp3-qa-agent로 검수한 결과, 실제 토스 결제(실결제)가 이뤄지는
+`/contract/[token]/pay-result/+page.server.ts` 경로에는 무료배송 적용이 전혀 없다는 것을
+발견 — 무료배송 판정 위치를 `pay-mock`(쿠폰/포인트로 전액 무료가 된 극소수 케이스에서만
+호출됨)에만 남겨서, 실제로 돈을 내는 절대다수 결제 고객에게 무료배송 혜택이 아예 적용되지
+않는 새로운 회귀였음. 원인: 실제 청구금액은 예약신청(hold) 시점에 이미 `orders.final_amount`로
+확정되는데, `pay-result`는 토스가 결제를 이미 승인한 *뒤*에 호출돼 그 시점에 배송비를 뒤늦게
+0원 처리해도 실제 청구액과 어긋남.
+
+Stephen에게 3가지 대안(제대로 재설계/원복/현상유지) 제시 → **"제대로 재설계" 선택**.
+
+재설계: "적용 가능 여부 판정"(hold 신청 시점 — 청구액 계산에 반영, 소진 없음)과 "실제 소진"
+(결제가 진짜로 확정될 때만 usage 기록)을 분리:
+- Migration #554(`apply_subscription_free_shipping`에 `p_consume BOOLEAN DEFAULT true` 추가,
+  기존 2-param 함수는 DROP 후 3-param 단일 오버로드로 교체 — products.md §2-3 PGRST203
+  모호성 회피 원칙 준수) — Stage 적용 완료.
+- `create-order/+server.ts`: `p_consume:false`로 판정만 하는 블록을 되살려 hold 신청 시점에
+  다시 배송비 0원을 반영(실결제 청구액 정확성 복원).
+- `pay-mock/+server.ts`: `p_consume:true`로 소진만 하도록 축소(delivery_fee/sync 재호출 제거 —
+  이미 hold 시점에 확정된 청구액을 사후에 건드리지 않음).
+- `pay-result/+page.server.ts`(신규 반영 지점): 기존 쿠폰/포인트 소진 블록과 나란히
+  `p_consume:true` 호출 추가 — 이 경로가 실제 결제 확정 지점이므로 여기서 비로소 월
+  사용횟수가 소진됨.
+
+### 검증(재설계 이후)
+- `subscriptionFreeShippingBenefit.test.ts`에 p_consume 분리 검증 4건 추가(판정만/실제소진/
+  이미소진 재조회/월한도 소진 후 판정) — 전부 GREEN.
+- 관련 3개 테스트 파일 재실행: 40개 중 36 통과, 4 실패는 `/contract/[token]` 페이지 로드의
+  기존(baseline) 결함(이 수정과 무관, git stash 대조로 재확인)으로 신규 실패 0건.
+- `tsc --noEmit`·`eslint` 신규 에러 0건(`subscriptionFreeShippingBenefit.test.ts`의 1개
+  lint 경고는 이 세션이 손대지 않은 기존 `createReservation` 헬퍼 — pre-existing).
+
+### @sp3-qa-agent 재검수 결과 (2026-09-27) — 판정/소진 분리 재설계: GATE E 통과
+- CRITICAL 0건. products.md §2-3 오버로드 모호성 회피 실증 확인(2-param/3-param 동시 호출
+  테스트 — PGRST203 재현 안 됨, 2-param 함수가 실제로 완전히 DROP됨). `p_consume` 생략 호출
+  0건(3곳 전부 명시). 청구액 반영(hold)과 실제소진(pay-mock·pay-result) 분리 라인 단위 확인.
+  fail-soft(redirect/응답 안 막힘) 확인. 테스트 12/12 GREEN(신규 4건 포함), 3파일 합계 40개 중
+  36 통과·4실패는 기존 baseline(무관, 재확인됨).
+- BOUNDARY 1건(트리비얼) — `pay-result.ts` 신규 소진 호출이 error 미구조분해로 실패 시 로그
+  안 남던 것을 `pay-mock`과 동일하게 `error` 구조분해 + `console.error` 추가로 반영 완료.
+- 보고만(범위 밖, 이 세션 무관): 워킹트리의 cart/+page.svelte 등 다른 미커밋 변경물은 QA
+  요청 범위에서 명시적으로 제외(세션 스코프 규율).
+
+### 미실행
+git add/commit·Stage 마이그레이션 #554의 Production 적용 — Stephen 별도 지시 대기.
