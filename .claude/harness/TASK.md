@@ -6,6 +6,27 @@
 
 > 📌 BACKLOG 블록은 `BACKLOG.md`로 분리됐다(Default-Exclude — Stephen 명시 승인 시에만 NOW로 이동).
 
+
+## NOW — 🔴 CRITICAL: 상품 관리 순서 변경 4건 — 옵션·결합상품 / 이미지 / 사양·구성품 순서 + 판매전용 재고 검증·안전장치 (2026-09-27, 이 세션'만', ✅ GATE B 승인 — Stephen 진행 지시)
+
+```
+아젠다(고객 요청 4건):
+ ① 옵션상품·결합상품 순서 변경(드래그) — 🟡 GSD, DB·서버 무변경(display_order·RPC 정렬 이미 지원)
+ ② 이미지 등록 후 순서 변경(드래그, 대표=첫 번째 유지, 2초 홀드 대표지정 병행 유지) — 🟡 GSD, 업로드·저장 중 잠금
+ ③ 사양·구성품 순서 저장 — 🔴 TDD. 원인: JSONB 객체는 키를 (길이→가나다)로 재배열. 저장 형식을 [{key,value}] 배열로 변경
+    (레거시 객체는 읽기 호환, 다음 저장 때 배열로 전환), 검색색인 트리거(#204)·계약서 비고·고객 화면·신규등록·복제 동기화
+ ④ 판매전용 재고 — 🔴 TDD 테스트 선행: 결제완료 자동확정/관리자 승인→재고 비활성, 취소·환불→복원 실측(#416/#417 무실사용 상태).
+    Stephen 확정: 환불 없는 반품은 (A) 취소·환불 처리 필수(현행), 취소·환불 직후 DB 재고 복원 보장 + 수동 비활성 재고 보호 안전장치
+    (대여·판매 공통 적용 — 자동 복원은 "자동으로 꺼진 재고"만 켜고 관리자가 수동으로 끈 재고는 유지)
+
+[GATE B 확정 답변 — Stephen 2026-09-27]
+Q1 기존 상품 사양·구성품: 현재 보이는 순서에서 시작, 필요 시 재정렬 저장 / Q2 이미지: 드래그+대표 유지+2초 홀드 병행
+Q3 반품: (A) 취소·환불 필수 / Q4 수동 비활성 재고 보호 안전장치: 넣기(대여·판매 공통)
+진행 순서: ①→②→③→④(④는 테스트부터). 마이그레이션 최신 #549(타 세션) — 신규 번호는 착수 직전 재확인.
+
+진행 상태: ① ✅ (코드 기준, 실화면 미확인) ② ✅ (코드 기준, 실화면 미확인) ③ ⏳ ④ ⏳
+```
+
 ## DONE — 🔴 CRITICAL: 관리자 승인된 본인증명·외국인증명의 고객 "수정·삭제·재등록" UI 숨김 + API·DB RPC 차단 (Migration #550, 2026-09-26, 이 세션'만', 3차 QA 통과, Stage·Production(#550·#551) 적용 완료, git commit만 Stephen 대기)
 
 - **요구**: 관리자가 CMS에서 승인(`identity_approved_at`/`foreign_approved_at`, migration #526)한 증명서는 고객 마이페이지 목록에서 수정·삭제 UI를 감추고 API도 차단. 승인 직전까지는 기존과 동일.
@@ -130,6 +151,12 @@ Production(main) — PR #344 머지(4e0bfb7, 내용=커밋 ①) 배포: READY (2
 **커밋 ① 부분은 배포까지 완료. 커밋 ② 대기 중.**
 
 ---
+
+## DONE — 🟡 BOUNDARY: 상품상세 판매전용(sale_only) UI 분기 + 「수량」 통일 + 정보 탭 줄 제거 (2026-09-27, 이 세션'만', ✅ sp3-qa-agent 통과 — 차단 0건, git commit만 Stephen 대기)
+- 판매전용 시: 가격영역 `Price N원`(sale_price) / 대여기간 블록 숨김 / 대여방식 chip 숨김 / 배송정책은 '배송요금'만(왕복·반송·안내문 숨김) / CTA '구매신청'. 대여상품은 무변경.
+- 「대여수량」→「수량」 통일(판매·대여 공통). 정보 탭 구성품 목록·구분선(.cb-divider) 줄 제거.
+- 파일: `products/[id]/+page.svelte`, `components/products/CalendarTimePicker.svelte`(saleOnly prop 신설, PC·모바일 공용). 로직·DB·결제 무변경.
+- QA(sp3): 통과. 경미 — sale_price null 시 'Price 0원'(등록 시 필수라 저확률), 판매전용 보증금 문구 유지(범위 밖). 검증: svelte-check 신규 0건. 실화면 Stephen 확인 대기. 미처리: 판매전용 보증금 표시·상품목록 카드 판매가 표시(별도 확인 필요). git commit은 Stephen 직접 실행.
 
 ## DONE — 🟢 ROUTINE: 결합상품 카드 — 상품명 한 단계 큰 폰트 + 상품 카피(옅은 컬러) 노출 (2026-09-25, 이 세션'만', ✅ sp3-qa-agent 통과 — 블로킹 0건, git commit만 Stephen 대기)
 - `src/routes/products/[id]/+page.svelte`: `.bundle-item .option-label` 한정 상품명 모바일 `--text-m-title-18B`(구 16B)/PC `--text-pc-title-18`(구 title-16), 상품명 아래 `.bundle-caption`(`--text-m-script-14`, `--cs-text-mid`) 추가. 옵션상품 카드 무변경.

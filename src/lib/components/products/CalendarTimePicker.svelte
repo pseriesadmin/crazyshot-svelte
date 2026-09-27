@@ -12,6 +12,8 @@
     mode?: 'product' | 'cart';
     rentalMethods?: RentalOption[];
     shippingPolicy?: { items: { label: string; fee: number }[]; guide: string } | null;
+    /** 판매전용 상품(2026-09-27): 대여방식 chip·왕복/반송 요금·안내문 숨김, 기본 배송요금만 노출, CTA '구매신청' */
+    saleOnly?: boolean;
     selectedMethodId?: string;
     selectedPeriodId?: string;
     reserveDisabled?: boolean;
@@ -33,6 +35,7 @@
     mode = 'product',
     rentalMethods = [],
     shippingPolicy = null,
+    saleOnly = false,
     selectedMethodId = $bindable(''),
     selectedPeriodId = $bindable(''),
     reserveDisabled = false,
@@ -42,6 +45,13 @@
     wished = false,
     onwishtoggle,
   }: Props = $props();
+
+  // 판매전용: 배송정책은 기본 배송요금('배송요금')만 노출
+  const visibleShippingItems = $derived(
+    shippingPolicy ? (saleOnly ? shippingPolicy.items.filter((i) => i.label === '배송요금') : shippingPolicy.items) : []
+  );
+  const showRentalMethods = $derived(!saleOnly && rentalMethods.length > 0);
+  const showShippingGuide = $derived(!saleOnly && !!shippingPolicy?.guide);
 
   // ── Calendar state
   const today = new Date();
@@ -389,9 +399,9 @@
     </div>
 
     <!-- 대여정책 (대여방식·배송정책) -->
-    {#if rentalMethods.length > 0 || (shippingPolicy && (shippingPolicy.items.length > 0 || shippingPolicy.guide))}
+    {#if showRentalMethods || visibleShippingItems.length > 0 || showShippingGuide}
       <div class="policy-section">
-        {#if rentalMethods.length > 0}
+        {#if showRentalMethods}
           <div class="policy-row">
             <span class="policy-lbl">대여 방식</span>
             <div class="policy-chips">
@@ -411,17 +421,17 @@
             </div>
           </div>
         {/if}
-        {#if shippingPolicy && shippingPolicy.items.length > 0}
+        {#if visibleShippingItems.length > 0}
           <div class="policy-row">
             <span class="policy-lbl">배송 정책</span>
             <div class="policy-chips">
-              {#each shippingPolicy.items as item}
+              {#each visibleShippingItems as item}
                 <span class="policy-chip policy-chip--active">{item.label} <strong>{item.fee.toLocaleString('ko-KR')}원</strong></span>
               {/each}
             </div>
           </div>
         {/if}
-        {#if shippingPolicy?.guide}
+        {#if showShippingGuide && shippingPolicy}
           <p class="sp-guide">{shippingPolicy.guide}</p>
         {/if}
       </div>
@@ -448,9 +458,9 @@
         class="reserve-btn"
         onclick={handleReserve}
         disabled={reserveDisabled}
-        aria-label="예약신청"
+        aria-label={saleOnly ? '구매신청' : '예약신청'}
       >
-        {reserveDisabled ? '필수 옵션을 선택해주세요' : '예약신청'}
+        {reserveDisabled ? '필수 옵션을 선택해주세요' : saleOnly ? '구매신청' : '예약신청'}
       </button>
       <button class="chat-btn" onclick={handleChat} aria-label="채팅 문의">
         <svg xmlns="http://www.w3.org/2000/svg" width="60" height="60" viewBox="0 0 60 60" fill="none">
