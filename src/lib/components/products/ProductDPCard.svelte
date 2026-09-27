@@ -206,7 +206,10 @@
 
   .pc-price-row {
     display: flex;
-    align-items: center;
+    /* box-center로는 레이블(14px)과 숫자(16px Black) 폰트 내부 여백 차이 때문에 레이블이
+       위로 뜬 것처럼 보임(2026-09-27, 모바일 Best Pick과 동일 원인) — 베이스라인 정렬로
+       교체. 모바일·PC 공용 규칙이라 두 breakpoint에 동시 적용됨 */
+    align-items: baseline;
     gap: 3px;
     /* purple-90 컬러토큰 반영 */
     color: var(--cs-purple-dark);
@@ -215,7 +218,7 @@
   }
   .pc-price-group {
     display: flex;
-    align-items: center;
+    align-items: baseline;
     gap: 3px;
   }
   .pc-price-label {
@@ -270,7 +273,8 @@
       height: 34px;
     }
 
-    .pc-info   { gap: var(--spacing-5); padding: var(--spacing-5) 0 0; }
+    /* 카테고리/가격/상품명 간 여백 30% 축소(요청, 2026-09-27) — 20px(--spacing-5) → 14px */
+    .pc-info   { gap: 14px; padding: 14px 0 0; }
 
     .pc-category   { font: var(--text-pc-script-12); font-weight: 700; color: var(--cs-text-light); line-height: 1; margin: 0; }
     .pc-price-row  { gap: 5px; }
