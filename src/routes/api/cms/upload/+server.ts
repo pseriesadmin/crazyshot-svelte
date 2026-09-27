@@ -118,6 +118,21 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 
   // 이력 업로드(/history 경로)가 아닌 경우 products.image_urls에 append (부모 기준)
   if (!productId.includes('/')) {
+    // ProductDetailPanel.svelte 클라이언트 상한(8장)과 동일 — append_product_image_url RPC
+    // 자체에는 개수 제한이 없어(무조건 append) 클라이언트를 거치지 않고 이 API를 직접 반복
+    // 호출하면 우회 가능했던 지점. Storage 업로드는 이미 끝났으므로 실패 시 고아 파일이
+    // 남지만, 상한 초과는 드문 경로라 별도 정리 로직 없이 에러만 반환(기존 업로드 실패
+    // 처리 패턴과 동일 — 에러 시 정리 없음).
+    const { data: currentRow } = await admin
+      .from('products')
+      .select('image_urls')
+      .eq('id', targetProductId)
+      .maybeSingle()
+    const currentCount = ((currentRow as { image_urls: string[] } | null)?.image_urls ?? []).length
+    if (currentCount >= 8) {
+      throw error(400, '이미지는 최대 8장까지 등록할 수 있습니다.')
+    }
+
     await admin.rpc('append_product_image_url', {
       p_product_id: targetProductId,
       p_url: largeUrl,

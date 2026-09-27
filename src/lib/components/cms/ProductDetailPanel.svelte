@@ -634,6 +634,13 @@
 
   async function removeImageAndSave(i: number) {
     if (isChildProduct) { csToast.warning('대표 상품에서 수정하세요.'); return }
+    // RACE-IMG-1: autoSave()는 isAutoSaving 중이면 조용히 no-op(저장 스킵)하는데, 그 아래
+    // Storage 정리 DELETE 호출은 그와 무관하게 항상 실행되며 DELETE 핸들러가 image_urls를
+    // 별도로 read-modify-write한다 — 두 번째 제거가 첫 번째 저장 도중 겹치면 DELETE의 오래된
+    // read가 첫 번째 저장 결과를 덮어써 방금 지운 이미지가 되살아날 수 있었다. 버튼
+    // disabled(§ img-card-remove)로 정상 클릭 경로는 막았지만, 여기서도 한 번 더 막아
+    // 프로그램적 호출(연타 등)에 대한 방어선을 이중으로 둔다.
+    if (isAutoSaving) { csToast.warning('이미지 저장 중입니다. 잠시 후 다시 시도하세요.'); return }
     const removedUrl = localImages[i]
     localImages = localImages.filter((_, idx) => idx !== i)
     await autoSave()
@@ -2420,6 +2427,7 @@
                 <button
                   type="button"
                   class="img-card-remove"
+                  disabled={isAutoSaving || isUploading}
                   onclick={() => removeImageAndSave(i)}
                   aria-label={`이미지 ${i + 1} 제거`}
                   title="이미지 제거"

@@ -10229,5 +10229,65 @@ Stephen에게 3가지 대안(제대로 재설계/원복/현상유지) 제시 →
 - 보고만(범위 밖, 이 세션 무관): 워킹트리의 cart/+page.svelte 등 다른 미커밋 변경물은 QA
   요청 범위에서 명시적으로 제외(세션 스코프 규율).
 
+### Production 적용 완료 (2026-09-27, Stephen 지시)
+Migration #554를 Production(vnbpmvxruyciuuaermyh)에 적용. 적용 직전 파일을 다시 Read해 Stage
+적용본과 재대조 후 그대로 적용, 적용 후 `pg_proc` 직접 조회로 `apply_subscription_free_shipping`
+함수가 `p_consume boolean DEFAULT true` 포함 3-param 단일 시그니처로만 존재함(구 2-param 잔존
+없음)을 재확인. `pay-result.ts`의 트리비얼 로깅 보완(위 QA 권장사항)도 함께 반영된 상태.
+
 ### 미실행
-git add/commit·Stage 마이그레이션 #554의 Production 적용 — Stephen 별도 지시 대기.
+git add/commit — Stephen 별도 지시 대기.
+
+## NOW — CMS 상품패널 "저장 후 다른 상품으로 재랜딩" 버그 조사 + 이미지 8장 상한 서버측 강제 + 연속삭제 경쟁상태 수정 (2026-09-27, 이 세션 단독)
+
+### 배경
+Stephen 보고: `/cms/products` 상품상세 패널에서 옵션/결합/사양/이미지 등 순서정렬(드래그)
+변경 후 저장하면, 저장 직전에 보고 있던 상품이 아니라 "목록 최상단 상품"의 패널로 재랜딩되는
+버그가 있다는 제보(Claude Browser 명시 실행 승인 하에 조사).
+
+### 조사 — 재현 시도 (재현 실패, 원인 미확정)
+- `src/routes/cms/products/+page.svelte`의 `activeSelectedId`/`selectProduct`/
+  `invalidateAll()` 흐름을 코드 레벨로 재검토 — "목록 최상단으로 폴백"하는 로직 자체가
+  존재하지 않음을 확인.
+- Claude Browser(명시 승인)로 옵션상품·결합상품·사양·이미지 4개 탭 전부 실제 드래그+저장을
+  재현(Stage DB에 임시 옵션/결합 데이터 생성 후 진행, 종료 후 원복) — 4개 경로 전부 저장 후
+  URL의 `?selected=`, 패널 상단 상품명, DB 저장값이 모두 일치해 재현 실패.
+- Stephen이 제시한 정확한 재현 URL(카테고리 필터 포함, 실제 결합상품 2건을 가진
+  `2af56415-...` SONY PXW-Z90)로도 동일하게 재현 시도했으나 재현 실패.
+- 재현 실패 + 이 세션이 같은 파일들을 동시에 수정 중이었던 정황을 근거로, Vite HMR(핫리로드)
+  타이밍이 우연히 겹쳐 발생한 개발환경상의 일시적 현상일 가능성을 Stephen에게 안내하고
+  재현 여부 재확인 요청(응답 대기 — 이 블록 작성 시점 기준 미확정 상태로 남김).
+
+### 수정 내역 (조사 중 발견한 별도의 실제 버그 2건 — Stephen 승인 하에 수정)
+1. **이미지 8장 상한 — 서버측 강제 추가** (기존엔 `ProductDetailPanel.svelte` 클라이언트
+   체크만 있어 API 직접 호출로 우회 가능했음)
+   - `src/routes/cms/products/+page.server.ts` `updateSection` sectionType==='images' 분기 —
+     `image_urls.length > 8`이면 `fail(400, '이미지는 최대 8장까지 등록할 수 있습니다.')`
+     (순서변경/삭제/URL추가 등 전체배열 교체 경로 커버)
+   - `src/routes/api/cms/upload/+server.ts` POST(파일 업로드, 실제 이미지 추가의 주 경로) —
+     `append_product_image_url` RPC 자체에 개수 제한이 전혀 없었음(무조건 append)을 발견.
+     RPC 호출 직전 현재 `image_urls` 개수를 조회해 8장 이상이면 `error(400, ...)`로 차단.
+2. **이미지 연속삭제 경쟁상태(RACE-IMG-1) 수정** — `removeImageAndSave()`가 부르는
+   `autoSave()`는 이미 저장 중이면 조용히 no-op하는데, 그 아래 Storage 정리 DELETE 호출(자체
+   `image_urls` read-modify-write 포함)은 그와 무관하게 항상 실행됨 → 이미지 두 장을 빠르게
+   연속 삭제하면 두 번째 삭제의 DELETE가 첫 번째 저장 이전의 낡은 배열을 읽어 되써서 방금
+   지운 이미지가 되살아날 수 있던 결함.
+   - `src/lib/components/cms/ProductDetailPanel.svelte` — 이미지 제거(✕) 버튼에
+     `disabled={isAutoSaving || isUploading}` 추가(드래그의 기존 `!isUploading && !isAutoSaving`
+     가드와 동일 패턴 통일).
+   - 같은 파일 `removeImageAndSave()` 함수 시작부에 `isAutoSaving`이면 토스트 안내 후 return하는
+     이중 방어 추가(버튼 disabled 타이밍을 놓친 프로그램적 연타 대비).
+
+### 검증
+- `npx svelte-check` — 수정 전(baseline, git stash 대조) "1 error, 414 warnings"와 수정 후
+  동일 — 신규 에러 0건.
+- 옵션/결합/사양/이미지 4개 탭 드래그+저장 전부 Stage DB 실측으로 저장값·패널 상태 확인
+  (버그 재현용 임시 데이터는 검증 후 전부 원복 완료 — `option_product_links`/
+  `product_bundle_links`/`image_urls`/`specifications` 원상복구 확인).
+
+### 미실행 / 대기
+- 원 버그("저장 후 다른 상품으로 재랜딩") 재현 여부 Stephen 재확인 대기 — 재현되면 후속
+  조사 필요.
+- git add/commit — Stephen 직접 실행 대기.
+- Stage에서 검증된 이 두 건의 수정은 마이그레이션이 없는 순수 애플리케이션 코드 변경이라
+  Production 배포는 git 배포 절차(커밋→PR/배포)만 따르면 됨 — 별도 DB 마이그레이션 없음.
