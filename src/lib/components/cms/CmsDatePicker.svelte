@@ -6,10 +6,14 @@
     name?: string
     placeholder?: string
     disablePast?: boolean
+    // 결함 8번(2026-09-28 신설) — CalendarGrid는 이미 minDate를 지원하지만(장바구니
+    // 수령일→반납일 제한에 기존 사용 중인 패턴) CmsDatePicker가 이를 바깥으로 노출하지
+    // 않아 CMS 화면에서는 쓸 수 없었다. 그대로 통과시키기만 함(로직 신규 작성 없음).
+    minDate?: string
     onchange?: (iso: string) => void
   }
 
-  let { value = $bindable(''), name = '', placeholder = '날짜 선택', disablePast = false, onchange }: Props = $props()
+  let { value = $bindable(''), name = '', placeholder = '날짜 선택', disablePast = false, minDate = '', onchange }: Props = $props()
 
   let open = $state(false)
   let triggerEl = $state<HTMLButtonElement | null>(null)
@@ -133,7 +137,7 @@
 
   {#if open}
     <div class="dp-popup" role="dialog" aria-label="날짜 선택" use:positionPopup>
-      <CalendarGrid {value} onselect={handleSelect} {disablePast} />
+      <CalendarGrid {value} onselect={handleSelect} {disablePast} {minDate} />
     </div>
   {/if}
 </div>

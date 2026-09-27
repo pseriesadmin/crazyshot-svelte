@@ -496,11 +496,11 @@
             <div class="form-grid">
               <div class="form-field">
                 <label for="uc-vf">시작일</label>
-                <CmsDatePicker bind:value={u_valid_from} name="valid_from" placeholder="시작일 선택" disablePast={false} />
+                <CmsDatePicker bind:value={u_valid_from} name="valid_from" placeholder="시작일 선택" disablePast={true} />
               </div>
               <div class="form-field">
                 <label for="uc-vu">종료일</label>
-                <CmsDatePicker bind:value={u_valid_until} name="valid_until" placeholder="종료일 선택" disablePast={false} />
+                <CmsDatePicker bind:value={u_valid_until} name="valid_until" placeholder="종료일 선택" disablePast={true} minDate={u_valid_from} />
               </div>
             </div>
           {/if}
