@@ -458,7 +458,7 @@
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 40px 25px;
+  padding: 50px 25px;
 }
 
 .mobile-guide-title {
