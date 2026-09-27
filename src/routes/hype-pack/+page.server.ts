@@ -26,6 +26,8 @@ export interface EnrichedBannerItem {
   mobile_image_url: string | null
   price24h: number | null
   price12h: number | null
+  sale_only: boolean
+  sale_price: number | null
 }
 
 interface ThemeGroupProduct {
@@ -116,6 +118,21 @@ export const load: PageServerLoad = async ({ locals }) => {
     }
   }
 
+  // 판매전용(sale_only) 상품은 대여가격(price_rules)이 없는 게 정상이라(products.md §2-9),
+  // sale_price/sale_only를 별도로 조회한다 — /products·홈 목록과 동일한 수정.
+  const saleOnlyMap: Record<string, boolean> = {}
+  const salePriceMap: Record<string, number> = {}
+  if (allPriceIds.length > 0) {
+    const { data: saleRows } = await locals.supabase
+      .from('products')
+      .select('id, sale_only, sale_price')
+      .in('id', allPriceIds)
+    for (const r of (saleRows ?? []) as { id: string; sale_only: boolean | null; sale_price: number | null }[]) {
+      saleOnlyMap[r.id] = !!r.sale_only
+      if (r.sale_price != null) salePriceMap[r.id] = Number(r.sale_price)
+    }
+  }
+
   // Enrich banner with product data
   let enrichedItems: EnrichedBannerItem[] = []
   if (raw.items.length > 0) {
@@ -153,6 +170,8 @@ export const load: PageServerLoad = async ({ locals }) => {
           mobile_image_url: item.mobile_image_url ?? fallbackImage,
           price24h: rule24h != null ? rule24h : (legacyDaily > 0 ? legacyDaily : null),
           price12h: price12hMap[item.product_id] ?? null,
+          sale_only: saleOnlyMap[item.product_id] ?? false,
+          sale_price: salePriceMap[item.product_id] ?? null,
         }
       })
       .filter((i) => i.name)

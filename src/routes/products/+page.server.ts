@@ -117,6 +117,8 @@ export const load: PageServerLoad = async ({ locals, url }) => {
     is_active:        Boolean(r['is_active'] ?? true),
     price_12h:        null,
     price_24h:        null,
+    sale_only:        false,
+    sale_price:       null,
   }))
   const mdProducts: ProductCard[] = applyProductOrder((mdRes.data ?? []) as ProductCard[], mdSettings)
 
@@ -145,6 +147,22 @@ export const load: PageServerLoad = async ({ locals, url }) => {
     }
   }
 
+  // 판매전용(sale_only) 상품은 대여가격(price_rules) 자체가 없는 게 정상이라(products.md §2-9),
+  // search_products RPC의 price_min/base_price_daily만으로는 가격이 전혀 안 나온다 —
+  // sale_price/sale_only를 별도로 조회해 카드에 실어준다.
+  const salePriceMap: Record<string, number> = {}
+  const saleOnlyMap: Record<string, boolean> = {}
+  if (allIds.length > 0) {
+    const { data: saleRows } = await locals.supabase
+      .from('products')
+      .select('id, sale_only, sale_price')
+      .in('id', allIds)
+    for (const r of (saleRows ?? []) as { id: string; sale_only: boolean | null; sale_price: number | null }[]) {
+      saleOnlyMap[r.id] = !!r.sale_only
+      if (r.sale_price != null) salePriceMap[r.id] = Number(r.sale_price)
+    }
+  }
+
   // 2026-09-09: CMS 가격정책(price_rules)이 항상 우선 — price_rules 24h 값이 있으면 그 값을
   // 쓰고, price_rules 자체가 없는 상품(레거시 미설정)만 옛 base_price_daily로 폴백한다.
   // products/[id]/+page.server.ts attachPrices()와 동일한 우선순위 수정(동일 버그 패턴).
@@ -152,7 +170,13 @@ export const load: PageServerLoad = async ({ locals, url }) => {
     cards.map((c) => {
       const rule24h = price24hMap[c.id]
       const price_24h = rule24h != null ? rule24h : (c.base_price_daily > 0 ? c.base_price_daily : null)
-      return { ...c, price_12h: price12hMap[c.id] ?? null, price_24h }
+      return {
+        ...c,
+        price_12h: price12hMap[c.id] ?? null,
+        price_24h,
+        sale_only: saleOnlyMap[c.id] ?? false,
+        sale_price: salePriceMap[c.id] ?? null,
+      }
     })
 
   return {
@@ -189,4 +213,6 @@ export interface ProductCard {
   is_active: boolean
   price_12h: number | null
   price_24h: number | null
+  sale_only: boolean
+  sale_price: number | null
 }

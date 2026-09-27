@@ -9,6 +9,8 @@
     imageUrl: string
     price24h?: number | null
     price12h?: number | null
+    isSaleOnly?: boolean
+    salePrice?: number | null
     href?: string
     wished?: boolean
     onWishToggle?: (id: string | undefined) => void
@@ -21,6 +23,8 @@
     imageUrl,
     price24h = null,
     price12h = null,
+    isSaleOnly = false,
+    salePrice = null,
     href,
     wished = false,
     onWishToggle,
@@ -77,7 +81,14 @@
       <p class="pc-category">{category}</p>
     {/if}
 
-    {#if price24h !== null || price12h !== null}
+    {#if isSaleOnly}
+      <div class="pc-price-row">
+        <span class="pc-price-group">
+          <span class="pc-price-label">Price</span>
+          <span class="pc-price-num">{formatPrice(salePrice ?? 0)}</span>
+        </span>
+      </div>
+    {:else if price24h !== null || price12h !== null}
       <div class="pc-price-row">
         {#if price24h !== null}
           <span class="pc-price-group">

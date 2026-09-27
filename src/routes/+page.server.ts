@@ -276,6 +276,7 @@ export const load: PageServerLoad = async ({ locals }) => {
     id: string; name: string; slug: string;
     image_urls: string[] | null; base_price_daily: number
     price_12h?: number | null; price_24h?: number | null
+    sale_only?: boolean; sale_price?: number | null
   }
   type ThemeGroupWithProducts = {
     id: string; title: string; sub_copy: string | null;
@@ -338,6 +339,7 @@ export const load: PageServerLoad = async ({ locals }) => {
     image_urls: string[] | null; base_price_daily: number
     product_caption: string | null; is_active: boolean
     price_12h?: number | null; price_24h?: number | null
+    sale_only?: boolean; sale_price?: number | null
   }
 
   const mdPickIds = mdPicksRaw.products.map((p) => p.id)
@@ -417,10 +419,28 @@ export const load: PageServerLoad = async ({ locals }) => {
       if (r.duration_type === '24h') price24hMap[r.product_id] = Number(r.price)
     }
   }
+
+  // 판매전용(sale_only) 상품은 대여가격(price_rules)이 없는 게 정상이라(products.md §2-9),
+  // sale_price/sale_only를 별도로 조회해 카드에 실어준다 — /products 목록과 동일한 수정.
+  const salePriceMap: Record<string, number> = {}
+  const saleOnlyMap: Record<string, boolean> = {}
+  if (priceProductIds.length > 0) {
+    const { data: saleRows } = await locals.supabase
+      .from('products')
+      .select('id, sale_only, sale_price')
+      .in('id', priceProductIds)
+    for (const r of (saleRows ?? []) as { id: string; sale_only: boolean | null; sale_price: number | null }[]) {
+      saleOnlyMap[r.id] = !!r.sale_only
+      if (r.sale_price != null) salePriceMap[r.id] = Number(r.sale_price)
+    }
+  }
+
   const withDualPrice = <T extends { id: string; base_price_daily: number }>(p: T) => ({
     ...p,
     price_12h: price12hMap[p.id] ?? null,
     price_24h: price24hMap[p.id] ?? (p.base_price_daily > 0 ? p.base_price_daily : null),
+    sale_only: saleOnlyMap[p.id] ?? false,
+    sale_price: salePriceMap[p.id] ?? null,
   })
   for (const g of themeGroups) g.products = g.products.map(withDualPrice)
   for (const g of themeGroupsAdmin) g.products = g.products.map(withDualPrice)

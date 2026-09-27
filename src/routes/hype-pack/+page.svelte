@@ -101,12 +101,15 @@
           class="m-ad-banner-img"
           aria-hidden="true"
         />
-        <div class="m-ad-banner-overlay" aria-hidden="true"></div>
         <div class="m-ad-banner-script">
           <p class="m-ad-banner-category">{bannerItem?.subtitle ?? 'Analog Pack'}</p>
           <h3 class="m-ad-banner-product">{bannerItem?.name ?? 'Sanyo Xacti CG10'}</h3>
           <p class="m-ad-banner-price">
-            {bannerItem?.price24h ? `1 day / ${formatWon(bannerItem.price24h)}` : '1 day / 10,000 원'}
+            {#if bannerItem?.sale_only}
+              Price / {formatWon(bannerItem.sale_price ?? 0)}
+            {:else}
+              {bannerItem?.price24h ? `1 day / ${formatWon(bannerItem.price24h)}` : '1 day / 10,000 원'}
+            {/if}
           </p>
           {#if bannerItem?.price12h}
             <p class="m-ad-banner-price">12H / {formatWon(bannerItem.price12h)}</p>
@@ -115,7 +118,6 @@
       </a>
     {:else}
       <img src="/hype-pack/d-ad-banner.png" alt="" class="m-ad-banner-img" aria-hidden="true" />
-      <div class="m-ad-banner-overlay" aria-hidden="true"></div>
       <div class="m-ad-banner-script">
         <p class="m-ad-banner-category">Analog Pack</p>
         <h3 class="m-ad-banner-product">Sanyo Xacti CG10</h3>
@@ -216,7 +218,11 @@
               <p class="d-ad-banner-category">{bannerItem?.subtitle ?? 'Analog Pack'}</p>
               <h3 class="d-ad-banner-product">{bannerItem?.name ?? 'Sanyo Xacti CG10'}</h3>
               <p class="d-ad-banner-price">
-                {bannerItem?.price24h ? `1 day / ${formatWon(bannerItem.price24h)}` : '1 day / 10,000 원'}
+                {#if bannerItem?.sale_only}
+                  Price / {formatWon(bannerItem.sale_price ?? 0)}
+                {:else}
+                  {bannerItem?.price24h ? `1 day / ${formatWon(bannerItem.price24h)}` : '1 day / 10,000 원'}
+                {/if}
               </p>
               {#if bannerItem?.price12h}
                 <p class="d-ad-banner-price">12H / {formatWon(bannerItem.price12h)}</p>
@@ -369,16 +375,13 @@
   }
   .m-ad-banner-link { display: block; width: 100%; height: 100%; }
   .m-ad-banner-img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; display: block; pointer-events: none; }
-  .m-ad-banner-overlay {
-    position: absolute;
-    inset: 0;
-    background: linear-gradient(180deg, rgba(16,11,50,0) 40%, rgba(16,11,50,0.55) 100%);
-    pointer-events: none;
-  }
+  /* PC(d-ad-banner-script) 레이아웃 규격을 모바일 크기에 맞게 반영 — 우측하단 정렬,
+     오버레이 없이 이미지 위에 직접 텍스트(§d-ad-banner와 동일 접근) */
   .m-ad-banner-script {
     position: absolute;
-    left: 20px;
+    right: 20px;
     bottom: 18px;
+    text-align: right;
     display: flex;
     flex-direction: column;
     gap: 4px;
@@ -386,21 +389,24 @@
   .m-ad-banner-category {
     font-family: 'Tilt Warp', sans-serif;
     font-size: 14px;
-    color: rgba(255,255,255,0.85);
+    color: var(--cs-text-mid);
+    text-align: right;
     margin: 0;
     letter-spacing: -0.3px;
   }
   .m-ad-banner-product {
     font-family: 'Tilt Warp', sans-serif;
     font-size: 24px;
-    color: var(--cs-white);
+    color: var(--cs-text);
+    text-align: right;
     margin: 0;
     line-height: 1.3;
   }
   .m-ad-banner-price {
     font-family: 'Tilt Warp', sans-serif;
     font-size: 18px;
-    color: var(--cs-white);
+    color: var(--cs-red-badge);
+    text-align: right;
     margin: 0;
     white-space: nowrap;
   }
@@ -651,7 +657,7 @@
   .d-ad-banner-price {
     font-family: 'Tilt Warp', sans-serif;
     font-size: 35px;
-    color: var(--cs-purple-light);
+    color: var(--cs-red-badge);
     text-align: right;
     margin: 0;
     white-space: nowrap;
