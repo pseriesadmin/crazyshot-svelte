@@ -479,6 +479,17 @@
       cancel()
       return
     }
+    // RACE-SAVE-1: use:enhance의 submit 콜백은 폼이 제출될 때마다 매번 호출되며, 이전
+    // 제출이 아직 진행 중(isSaving=true)인지 여기서 확인하지 않으면 버튼 disabled 속성이
+    // DOM에 반영되기 전(Svelte 상태 flush 이전)에 도착하는 두 번째 제출 이벤트(연타·자동화
+    // 도구의 중복 이벤트 등)가 그대로 통과해 같은 폼이 두 번 제출된다. 두 제출이 겹치면
+    // invalidateAll()도 두 번 겹쳐 호출되는데, 이 타이밍에 개발서버 HMR 등 일시적 이슈가
+    // 겹치면 이후 load() 결과가 페이지에 정상 반영되지 못해 패널 전체가 닫힌 목록 상태로
+    // 보이는 현상이 실사용 중 재현됨(2026-09-28, 사양 탭 텍스트 저장 연타로 재현 확인).
+    if (isSaving) {
+      cancel()
+      return
+    }
     isSaving = true
     return async ({ result }: { result: ActionResult }) => {
       isSaving = false

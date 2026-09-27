@@ -7,6 +7,182 @@
 > 📌 BACKLOG 블록은 `BACKLOG.md`로 분리됐다(Default-Exclude — Stephen 명시 승인 시에만 NOW로 이동).
 
 
+## DONE — 🔴 CRITICAL: 쿠폰 7건 수정 Production 재검증(Stephen 실사용 재보고 8건) + 잔여 2건 보완 (2026-09-28) — ✅ GATE E 통과(sp3-qa-agent 독립검수, BLOCKING/MEDIUM 0건), git commit만 Stephen 대기
+
+```
+[CONTEXT BRIDGE]
+plan_source: Stephen이 커밋된 c4244f2(쿠폰 결함 7건 수정) 배포 후 실사용하며 재보고한 8개
+             항목(원 플랜의 1~7번 재확인 + 신규 8번)을 `/Users/stevenmac/.claude/plans/
+             4-streamed-ritchie.md` 원본과 대조 재검증. Stephen 승인 후 ①7번 잔여 자릿수
+             불일치, ②8번(캘린더 과거일·시작일이전 비활성화) 신규 구현 진행.
+절대금지: git 쓰기 명령 금지(Stephen만) · 요청범위 외 수정 금지.
+실패롤백: 아래 "변경 파일" 3개 + CalendarGrid.svelte(전 턴, 아직 미커밋)뿐 — Stephen이
+          git으로 되돌리면 복구.
+```
+
+### 재검증 결과 (Production DB 실측 포함)
+
+```
+1(정률 100%상한)·2(날짜역전방지)·5(할인방식전환초기화)·6(소수점허용): 코드+DB 재대조로
+  전부 정상 확인(이전 세션에서 이미 실화면 검증 완료된 항목 재확인만).
+3(자동배포 OFF 오류): Stephen 본인이 "오늘 오전 미발생" 확인 + 코드 재대조로 정상 확인.
+4(코드 일련번호 미증가, Stephen "여전히 안 됨" 재보고): Production 실제 콤보
+  (category_code=UCPRT, parent_max_sequence=999, Stephen이 직접 등록한 값)를 그대로
+  가져와 BEGIN...ROLLBACK으로 안전하게 2회 발행 테스트 → issue_seq 1→2 정상 증가 확인
+  (실데이터 잔존 없음). 결론: 백엔드는 정상 — 생성 화면의 코드 배지가 항상 0-패딩
+  고정 미리보기만 보여주도록 설계된 것(buildComboPreview, 플랜에 명시된 의도된 동작)을
+  "안 바뀐다"고 오인했을 가능성이 높음. 실제 값은 생성 완료 후 "발행 관리" 목록에서만
+  확인 가능하다는 점을 Stephen에게 안내.
+```
+
+### 잔여 발견 + 이번에 보완한 2건
+
+**① 7번(폼 코드 미리보기·저장 코드 포맷 불일치) 잔여 수정**
+```
+원인: buildComboPreview()의 자식 자리 폭 계산이 max_sequence(발행 상한값)의 자릿수를
+  썼는데, 실제 채번(cms_create_coupon)·목록표시(codeDisplay)는 항상 고정폭
+  DEFAULT_CODE_FORMAT.seq_digits(3)를 쓴다. Stephen의 실제 콤보(max_sequence=9999,
+  4자리)에서 미리보기가 실제 저장 코드보다 한 자리 더 길게 보이는 불일치 발견.
+수정: coupon/new/+page.svelte buildComboPreview() — 자식 자리 폭을 max_sequence 자릿수
+  대신 항상 DEFAULT_CODE_FORMAT.seq_digits로 고정(codeDisplay()의 parentDigits/childPart
+  계산과 완전히 동일한 공식으로 정렬). parent_max_sequence(부모 자리)만 실제 자릿수를
+  좌우 — 이 부분은 원래도 정확했으므로 무변경.
+```
+
+**② 8번(캘린더 과거일·시작일이전 날짜 비활성화, 신규 발견) 구현**
+```
+확인: 쿠폰 생성·수정 화면 4개 CmsDatePicker 전부 disablePast={false}로 과거일 선택이
+  열려 있었고, 종료일 캘린더가 시작일보다 이른 날짜를 막을 수단(minDate) 자체가
+  CmsDatePicker에 노출돼 있지 않았음.
+확인(안전성): CalendarGrid는 이미 minDate prop을 완전히 지원 — 장바구니 수령일→반납일
+  제한(cart/+page.svelte)에 기존 검증된 패턴으로 이미 쓰이고 있음. 신규 로직 작성 없이
+  기존 기능을 CmsDatePicker 바깥으로 노출만 하면 되는 낮은 위험의 변경.
+구현: CmsDatePicker.svelte에 minDate prop 추가 → CalendarGrid로 그대로 전달.
+  쿠폰 생성 화면(new/+page.svelte)·수정 패널(CouponDetailPanel.svelte) 각각의 시작일
+  disablePast=false→true, 종료일 disablePast=false→true + minDate={시작일 값} 연결.
+검증: 로컬 dev server(Stage DB)에서 생성·수정 화면 둘 다 실화면 확인 — 시작일 캘린더
+  과거일 비활성(disabled=true, cal-day-past), 오늘(9/28)은 선택 가능. 종료일 캘린더는
+  시작일 선택 후 그 이전 날짜가 정확히 비활성화되고 시작일 당일은 선택 가능(종료일≥시작일
+  정책과 일치). 검증A 쿠폰 DB 상태는 저장을 누르지 않아 무변경 확인(CalendarGrid
+  type="button" 수정이 여기서도 정상 작동 — premature submit 없음).
+npx svelte-check --threshold error 신규 에러 0건(기존 vite.config.ts 1건만).
+```
+
+### 변경 파일
+```
+수정 src/routes/cms/promotion/coupon/new/+page.svelte (buildComboPreview 자릿수 정렬,
+     disablePast/minDate 배선 2곳)
+수정 src/lib/components/cms/CmsDatePicker.svelte (minDate prop 신설·전달)
+수정 src/lib/components/cms/CouponDetailPanel.svelte (disablePast/minDate 배선 2곳)
+```
+
+### ✅ GATE E 독립검수 결과(2026-09-28, sp3-qa-agent) — 통과, BLOCKING/MEDIUM 0건
+
+```
+검수범위: git 미커밋 4개 파일(CalendarGrid.svelte·coupon/new/+page.svelte·
+  CmsDatePicker.svelte·CouponDetailPanel.svelte) 전체 — 다른 세션 잔여 변경물 제외.
+
+① CalendarGrid.svelte type="button" 3곳 — 로직·마크업·CSS 무변경, 기존 .cal-title-btn류와
+   일관성 확인. front 사용처(ProfileTabContent·cart)는 <form> 자체가 없어 영향 범위 밖 재확인.
+② buildComboPreview() 자릿수 계산이 codeDisplay()(coupon/+page.svelte)의 issueSeq 계산식과
+   완전히 동일함을 코드 대조로 확인 — max_sequence는 상한검증·comboSeqMax 라벨 용도로만
+   남고 자릿수 계산에서는 정확히 배제됨.
+③ CmsDatePicker minDate — 순수 pass-through(자체 검증 없음), 옵셔널 기본값 ''으로 기존
+   미사용 4개 화면(CustomerDetailPanel·ad·coupon 사용량리포트/만료연장·point) 전부 grep
+   확인 — minDate 미전달로 무영향.
+④ disablePast/minDate 배선 — 생성/수정 화면 양쪽 변수명(f_valid_from↔until,
+   u_valid_from↔until) 교차참조 없이 정확히 연결, {#if fixed_period} 블록 안에만 존재해
+   무제한/N일 모드 무영향, 결함 2번(제출시점 가드)과 겹치지 않고 사전예방으로 보완하는
+   관계임을 확인.
+
+svelte-check·eslint 재실행 — 신규 에러 0건(vite.config.ts 1건·coupon/new의 Coupon
+unused-import 1건은 git stash 대조로 이 세션 이전부터 있던 pre-existing 이슈 재확인).
+DB 마이그레이션 미포함(순수 프론트 변경), RLS/결제/비밀키 영향 없음.
+```
+
+git commit은 Stephen 직접 실행 대기(이 세션은 실행하지 않음).
+
+⚠️ **커밋 대기 파일 누적 확인**: 이번 건 3개 + 이전 턴 `CalendarGrid.svelte`(날짜셀 암묵제출
+버그 수정)까지 총 4개 파일이 git 미커밋 상태. Stephen이 한 번에 커밋·배포해야 8번·CalendarGrid
+버그 수정이 실제 사이트에 반영됨(로컬 dev server에서는 이미 정상 작동 확인됨).
+
+
+## DONE — 🔴 CRITICAL: CalendarGrid 날짜셀 클릭 시 소속 `<form>` 암묵 제출 버그 수정 (2026-09-27) — Stephen 실시간 확인 후 즉시 적용, 실화면 재검증 완료, git commit만 Stephen 대기
+
+```
+[CONTEXT BRIDGE]
+plan_source: 쿠폰 생성 결함 7건 플랜과 무관 — 그 플랜의 CouponDetailPanel 수정 폼(결함 2번
+             날짜역전방지) 실화면 검증 도중 이 세션이 직접 발견. Stephen에게 영향범위 전수
+             조사 결과 보고 후 명시적 수정 승인("수정 진행해!") 받고 진행.
+핵심제약: 요청범위 외 발견 사항 — 반드시 Stephen 확인 후 진행 원칙 준수(영향범위 조사 →
+          보고 → 승인 순서로 진행함).
+절대금지: git 쓰기 명령 금지(Stephen만) · Production DB 무관(이 수정은 프론트 컴포넌트
+          속성 추가일 뿐 DB 변경 없음).
+실패롤백: src/lib/components/common/CalendarGrid.svelte 1개 파일, 버튼 6개에 type="button"
+          속성 추가뿐 — Stephen이 git으로 이 파일만 되돌리면 즉시 복구.
+```
+
+### 발견 경위 및 원인
+```
+쿠폰 생성 결함 7건 중 "2번(날짜 역전 방지)"을 CouponDetailPanel 수정 폼에서 실화면
+검증하던 중, 날짜를 하나 클릭할 때마다 값이 갑자기 사라지거나 저장 안 한 필드가 저장되는
+등 재현이 어려운 이상 현상이 반복됨. 근본 원인 추적 결과:
+
+`src/lib/components/common/CalendarGrid.svelte`의 날짜 셀 버튼(.cal-day, 356행)과
+이전/다음 달 이동 버튼(.cal-nav, 283·290행)에 `type="button"`이 빠져 있었다. HTML 스펙상
+<form> 안의 <button>은 type을 명시하지 않으면 기본값이 type="submit"이 되므로, 이
+컴포넌트를 감싸는 `CmsDatePicker`가 <form> 안에 들어있는 모든 화면에서 날짜 셀을
+클릭하거나 달력 페이지를 넘기는 순간 그 폼이 조용히 제출되고 있었다.
+```
+
+### 영향범위 전수조사(수정 전 Stephen에게 보고한 내용)
+```
+CalendarGrid/CmsDatePicker 전체 사용처를 grep으로 전수 확인:
+
+<form> 안에서 쓰여 버그 영향을 받는 화면(5곳):
+  - CouponDetailPanel.svelte(정보 수정 폼) — 일부 가드 있어 증상 완화돼 있었음
+  - CustomerDetailPanel.svelte(고객정보 수정 폼, 생년월일·가입일) — 가드 전혀 없음,
+    날짜 클릭 즉시 "고객 정보가 수정되었습니다" 성공 토스트까지 뜨며 실제 저장됨(최고 위험)
+  - cms/promotion/ad/+page.svelte(배너 등록 폼) — 다른 필드 required로 부분 방어
+  - cms/promotion/coupon/+page.svelte 사용량리포트 GET 필터 폼 — 낮은 위험(불필요한 새로고침만)
+  - cms/promotion/coupon/+page.svelte 만료연장 모달(?/extendCoupon) — 가드 전혀 없음,
+    날짜 클릭 즉시 실제 만료일 연장이 확인 버튼 없이 실행됨(높은 위험)
+
+<form> 밖이라 무관한 화면(2곳): ProfileTabContent.svelte(front), cart/+page.svelte(front)
+  — 둘 다 파일 전체에 <form> 자체가 없어 type 속성이 의미 없는 컨텍스트.
+
+5곳 전부 이미 별도의 명시적 제출 버튼(저장/등록/조회/연장확인)을 갖고 있어 날짜 클릭에 의한
+제출은 그 어디서도 의도된 동작이 아님(전부 사고) — type="button" 추가가 기존 의도된
+동작을 없앨 위험이 없음을 확인 후 Stephen 승인 받고 진행.
+```
+
+### 적용 내역
+```
+src/lib/components/common/CalendarGrid.svelte — 버튼 6개 전부에 type="button" 명시:
+  .cal-nav ×2(이전/다음 달), .cal-day(날짜 셀). 나머지 3개(.cal-title-btn ×2,
+  .cal-quick-item ×2 계열)는 이미 type="button"이 있어 무변경.
+```
+
+### 재검증(2026-09-27, 이 세션이 CouponDetailPanel에서 직접 재현·확인)
+```
+수정 전 재현: 검증A 쿠폰 수정 폼에서 시작일 클릭 → 종료일 비어있는 채로 즉시 자동제출,
+  이어서 종료일 클릭 → 2차 자동제출, 저장 버튼 클릭 → 3차 제출까지 겹쳐 경쟁상태 발생
+  (discount_value·validity_type·날짜 필드가 뒤섞여 저장되는 현상 실제 재현·원인 확정).
+수정 후 검증: 동일 시나리오 반복 — 시작일(9/25) 클릭 후 2초 대기해도 값 유지(자동제출
+  없음, updateCoupon 네트워크 요청 0건 확인) → 종료일(9/15, 시작일보다 이전) 클릭 후에도
+  값 유지 → "저장" 버튼 명시적 클릭 시에만 제출 시도되고, 결함 2번의 날짜역전 가드가
+  정상적으로 이를 차단(updateCoupon 요청 자체가 발생하지 않음, DB valid_from/until도
+  NULL 그대로 무변경 SQL로 확인). 이로써 쿠폰 결함 2번(날짜 역전 방지)의 CouponDetailPanel
+  측 실화면 검증도 함께 완료됨.
+검증 후 검증A 쿠폰은 validity_type=unlimited로 정상 정리(테스트 잔여 상태 청소).
+npx svelte-check --threshold error — 신규 에러 0건(기존 vite.config.ts 1건만, 무관).
+```
+
+⚠️ **CustomerDetailPanel·만료연장 모달의 실사용 데이터 영향은 이 수정으로 함께 해소되지만,
+그 두 화면 자체의 실화면 재검증은 이번 세션에서 수행하지 않음** — CalendarGrid 수정 자체가
+공용 컴포넌트 레벨이라 로직상 동일하게 적용되나, 필요시 별도로 확인 권장.
+
+
 ## DONE — 🔴 CRITICAL: 쿠폰 생성(/cms/promotion/coupon/new) 결함 7건 보완 (2026-09-27) — ✅ GATE E 통과(sp3-qa-agent 독립검수, BLOCKING 0건), git commit만 Stephen 대기
 
 ```
@@ -10577,3 +10753,65 @@ product_page_md_picks에 해당 상품 id 임시추가)으로 PC·모바일 히�
 - git commit — Stephen 직접 실행 대기(이 세션은 요청받지 않는 한 커밋 실행 안 함).
 - Production DB에는 이번 수정 대상 컬럼(`sale_only`/`sale_price`) 관련 신규 마이그레이션이
   없음(기존 컬럼을 읽기만 함) — 별도 DB 배포 불필요, 코드 배포만으로 충분.
+
+## DONE — `/products` Best Pick·전체그리드·MD추천·브랜드마퀴 UI 미세조정 다건 (2026-09-27, 이 세션 단독, launch-selected-element 연속 지시)
+
+### 배경
+직전 판매전용 가격 버그 수정 작업 중 Stephen이 실제 화면(launch-selected-element)을 보며
+연속으로 지적한 세부 UI 결함·조정 요청을 그때그때 반영. 전부 `/products` 화면(및 공용
+`ProductDPCard`)의 여백·정렬·타이포·배경 관련 미세조정이며 데이터·로직 변경은 없음.
+
+### 수정 내역 (파일 2개만 — 이 세션 범위. 같은 저장소에서 병행 중인 다른 세션의
+`+page.server.ts`(홈)·`hype-pack/*` 변경분은 이 블록에 포함하지 않음)
+
+**`src/lib/components/products/ProductDPCard.svelte`**
+- `.pc-price-row`/`.pc-price-group` — `align-items: center` → `baseline` (레이블·숫자
+  폰트 크기 차이로 레이블이 위로 뜬 것처럼 보이던 문제, 모바일·PC 공용 규칙이라 양쪽 동시 적용)
+- PC(`min-width:768px`) `.pc-info` 여백 30% 축소: `gap`/`padding-top` 20px(`--spacing-5`) → 14px
+
+**`src/routes/products/+page.svelte`**
+- MD추천 `.mdp-price-row`/`.mdp-price-group` — baseline 정렬로 동일 수정
+- `.mdp-price-label`(Day/12H) — 모바일만 14px Bold → 12px 볼드 없음(`--text-m-script-12`),
+  PC는 `--text-pc-body-14`로 기존 14px Bold 유지(모바일 전용 축소)
+- `.mdp-price-num` — 한 사이즈 확대: 모바일 `--text-m-title-18B`, PC `--text-pc-title-18`
+  (기존 16px → 18px, 양쪽 다 적용)
+- Best Pick `.m-prod-grid` 행간(상하) 여백: 10px → 20px → 30% 추가 확대해 최종 26px
+  (좌우 10px은 그대로)
+- Best Pick `.m-prod-info` 여백을 `ProductDPCard .pc-info`와 동일 토큰 기준으로 통일 후
+  10% 축소: 12px(`--spacing-3`) → 10.8px, 좌우·하단 패딩 0(상단만)
+- Best Pick `.m-prod-price-row`/`.m-prod-price-group` — baseline 정렬
+- Best Pick `.m-prod-price-label` — 14px Bold → 12px 볼드 없음(`--text-m-script-12`)
+- `.brand-marquee-wrap`(브랜드 로고 마퀴) — 상단 화이트→기존 배경색(`--cs-lilac`) 그라데이션
+  추가, 상하폭 50% 확대(90px→135px) + `display:flex; align-items:center`로 확대분 상하 균등
+  배분(PC·모바일 공용 단일 규칙)
+- `.marquee-inner` 슬라이드 애니메이션 — 모바일 전용 `marquee-mobile` 키프레임 신설
+  (`scale(0.7)` 결합)로 30% 축소 노출, PC는 `min-width:768px`에서 기존 `marquee`
+  애니메이션(원본 크기)으로 복원
+
+### 검증
+- 매 수정마다 `npx svelte-check` 실행 — 전 구간 신규 에러 0건(기존 `vite.config.ts` 1건만
+  유지, 무관함).
+- 매 수정마다 Claude Browser 로컬 프리뷰로 실측(`getComputedStyle`) + 스크린샷 대조:
+  gap/padding px값, `align-items: baseline`, `font-size`/`font-weight`, marquee
+  `animation-name`/`transform` matrix 등 전부 지시값과 일치 확인.
+- 세션 중 1회, 다른 병행 세션의 동일 파일 저장으로 `.mdp-info` PC 14px·`.m-prod-price-label`
+  12px 두 곳이 일시적으로 되돌아간 것을 Stephen이 발견 → 즉시 재적용 후 재검증 완료(파일
+  동시편집 충돌 사례, 이하 "동시편집 유의" 참고).
+
+### 동시편집 유의
+이 세션이 작업 중인 `src/routes/products/+page.svelte`·`ProductDPCard.svelte`를 다른
+세션도 함께 건드릴 수 있음이 실제로 확인됨(위 검증 절 참고). 같은 화면을 다루는 후속
+세션은 작업 시작 전 git diff로 현재 상태를 먼저 확인할 것.
+
+### @sp3-qa-agent 검수 결과 (2026-09-27)
+**GATE E 통과(GREEN)** — 수정 건 0건. git diff 스코프 정확(두 파일 `<style>` 블록 내부 CSS
+선언만, 마크업·로직 변경 0건 — `+page.server.ts`·`hype-pack/*` 등 병행 세션 변경분과 명확히
+분리 확인), `npx svelte-check` 신규 에러 0건(기존 `vite.config.ts` 1건만 유지), baseline
+정렬 5곳·`marquee-mobile` keyframes 퍼센트 translate 계산·PC 미디어쿼리 스코프(641px/768px
+각 파일 기존 컨벤션대로 정확히 위치) 전부 CSS 스펙상 문제없음, 반응형 토큰 범위 원칙 위반
+없음(하드코딩 px는 전부 PC 전용 또는 모바일 전용 블록 내에 한정, 산출근거 주석 명시).
+참고(비차단): `ProductDPCard`가 공용 컴포넌트라 이번 조정이 `/products/search`·`/products/
+[id]` 관련상품·`/hype-pack/theme/[id]`·위시리스트에도 함께 반영됨(의도된 전파).
+
+### 미실행 / 대기
+- git commit — Stephen 직접 실행 대기.
