@@ -1326,17 +1326,21 @@
   }
   .mdp-price-row {
     display: flex;
-    align-items: center;
+    /* box-center로는 레이블·숫자 폰트 내부 여백 차이 때문에 레이블이 위로 뜬 것처럼
+       보임(2026-09-27, 모바일 Best Pick·.pc-price-row와 동일 원인) — 베이스라인 정렬로 교체 */
+    align-items: baseline;
     gap: 3px;
     /* purple-90 컬러토큰 반영(ProductDPCard .pc-price-row와 통일) */
     color: var(--cs-purple-dark);
     letter-spacing: -0.5px;
     flex-wrap: wrap;
   }
-  .mdp-price-group { display: flex; align-items: center; gap: 3px; }
-  .mdp-price-label { font: var(--text-m-script-14B); line-height: 1; }
+  .mdp-price-group { display: flex; align-items: baseline; gap: 3px; }
+  .mdp-price-label { font: var(--text-m-script-12); line-height: 1; }
   .mdp-price-num {
-    font: var(--text-m-body-16B);
+    /* 한 사이즈 큰 폰트토큰 반영(요청, 2026-09-27) — 16px(--text-m-body-16B) →
+       18px(--text-m-title-18B), PC는 아래 미디어쿼리에서 --text-pc-title-18로 동일 비율 적용 */
+    font: var(--text-m-title-18B);
     font-weight: 900;
     line-height: 1;
     font-variant-numeric: tabular-nums;
@@ -1409,7 +1413,9 @@
   .m-prod-grid {
     display: flex;
     flex-wrap: wrap;
-    gap: 10px 10px;
+    /* 행 간(상하) 여백 부족 — 카드 간 좌우 여백(10px)은 유지, 상하만 확대(2026-09-27,
+       1차 10→20px 후 분리도 추가 요청으로 20px×1.3=26px 2차 확대) */
+    gap: 26px 10px;
   }
   .m-prod-card {
     width: calc(50% - 5px);
@@ -1434,12 +1440,17 @@
   }
   /* Best Pick 카드 내부 정보 구성 — ProductDPCard(.pc-info/.pc-category/.pc-price-row)와
      동일한 구성(카테고리 배지 → 가격(라벨/숫자 분리) → 상품명)으로 통일(2026-09-18).
-     카드 박스 비율(정사각 이미지)은 기존 그대로 유지, 내부 정보 레이아웃만 맞춤. */
+     카드 박스 비율(정사각 이미지)은 기존 그대로 유지, 내부 정보 레이아웃만 맞춤.
+     여백도 ProductDPCard .pc-info(모바일 gap/padding-top: --spacing-3=12px, PC: --spacing-5=
+     20px → 0.6 비율)와 동일 토큰으로 통일(2026-09-27) — 기존 5px/5px/10px 하드코딩은 이
+     비율과 무관한 값이었고, 카드 간 세로 간격은 .m-prod-grid의 gap(10px)이 이미 담당하므로
+     좌우·하단 패딩은 0으로 맞춤(.pc-info와 동일 구조: 상단만 패딩). */
   .m-prod-info {
     display: flex;
     flex-direction: column;
-    gap: 5px;
-    padding: 5px 5px 10px;
+    /* 카테고리/가격/상품명 간 여백 10% 축소(요청, 2026-09-27) — 12px(--spacing-3) → 10.8px */
+    gap: 10.8px;
+    padding: 10.8px 0 0;
   }
   .m-prod-category {
     font: var(--text-m-script-12);
@@ -1450,14 +1461,17 @@
   }
   .m-prod-price-row {
     display: flex;
-    align-items: center;
+    /* box-center(align-items:center)로는 12px 레이블과 16px Black 숫자 폰트의 내부 여백
+       차이 때문에 레이블이 위로 뜬 것처럼 보임(2026-09-27 실측 확인) — 텍스트 베이스라인
+       기준 정렬로 교체해 실제 시각적 중앙 정렬을 맞춤 */
+    align-items: baseline;
     gap: 3px;
     color: var(--cs-purple-dark);
     letter-spacing: -0.5px;
     flex-wrap: wrap;
   }
-  .m-prod-price-group { display: flex; align-items: center; gap: 3px; }
-  .m-prod-price-label { font: var(--text-m-script-14B); line-height: 1; }
+  .m-prod-price-group { display: flex; align-items: baseline; gap: 3px; }
+  .m-prod-price-label { font: var(--text-m-script-12); line-height: 1; }
   .m-prod-price-num {
     font: var(--text-m-body-16B);
     font-weight: 900;
@@ -1581,9 +1595,17 @@
     width: 100%;
     max-width: 1240px;
     margin: 0 auto;
-    height: 90px;
+    /* 레이아웃 분리도 확보를 위해 상하폭 50% 확대(요청, 2026-09-27) — 90px → 135px,
+       PC·모바일 공용 규칙(별도 breakpoint 분기 없음) */
+    height: 135px;
     overflow: hidden;
     position: relative;
+    /* 높이 확대분을 로고 행 상하로 균등 배분(세로 중앙 정렬) — 기존 block 흐름이면
+       늘어난 공간이 전부 아래쪽에만 쌓여 비대칭으로 보임 */
+    display: flex;
+    align-items: center;
+    /* 상단 화이트 → 기존 배경색(--cs-lilac) 그라데이션(요청, 2026-09-27) — PC·모바일 공용 규칙 */
+    background: linear-gradient(to bottom, #ffffff, var(--cs-lilac));
   }
   .marquee-fade-left {
     position: absolute;
@@ -1608,7 +1630,9 @@
     gap: 80px;
     align-items: center;
     width: max-content;
-    animation: marquee 28s linear infinite;
+    /* 모바일 전환 시 30% 축소 노출(요청, 2026-09-27) — PC는 아래 미디어쿼리에서 원본
+       크기(marquee) 애니메이션으로 복원 */
+    animation: marquee-mobile 28s linear infinite;
     padding: 20px 0;
   }
   .brand-marquee-wrap:hover .marquee-inner { animation-play-state: paused; }
@@ -1620,6 +1644,10 @@
   @keyframes marquee {
     from { transform: translateX(0) }
     to   { transform: translateX(-50%) }
+  }
+  @keyframes marquee-mobile {
+    from { transform: scale(0.7) translateX(0) }
+    to   { transform: scale(0.7) translateX(-50%) }
   }
 
   /* ─────────────────────────────────────────────────────────────────── */
@@ -1729,6 +1757,15 @@
     .md-pick-img-box { border-radius: 33px 13px 33px 13px; }
     .mdp-clip { top: 14px; right: 14px; width: 44px; height: 44px; }
     .mdp-clip svg { width: 34px; height: 34px; }
-    .mdp-info { gap: var(--spacing-5); padding: var(--spacing-5) 0 0; }
+    /* 카테고리/가격/상품명 간 여백 30% 축소(요청, 2026-09-27, .pc-info와 동일) — 20px → 14px */
+    .mdp-info { gap: 14px; padding: 14px 0 0; }
+    /* 한 사이즈 큰 폰트토큰 PC 반영(요청, 2026-09-27) — 18px(--text-m-title-18B) →
+       PC는 --text-pc-title-18(동일 18px이지만 PC 전용 lh/폰트 스택), ProductDPCard
+       .pc-price-num과 동일 패턴 */
+    .mdp-price-num { font: var(--text-pc-title-18); font-weight: 900; line-height: 1; font-variant-numeric: tabular-nums; }
+    /* PC는 기존 14px Bold 유지(모바일만 축소 요청, 2026-09-27) */
+    .mdp-price-label { font: var(--text-pc-body-14); line-height: 1; }
+    /* 브랜드 마퀴 — PC는 원본 크기(축소 없음) 애니메이션 복원(모바일만 30% 축소 요청, 2026-09-27) */
+    .marquee-inner { animation: marquee 28s linear infinite; }
   }
 </style>
