@@ -444,6 +444,8 @@ export interface Coupon {
     date_option: string;
     seq_digits: number;
     max_sequence: number | null;
+    parent_max_sequence?: number | null; // 2단 계층 발행 순번 상한(coupon_parent_sequences 채번 대상) — Migration #556
+    issue_seq?: number;                  // 발행 순번(CMS 표시 전용, cms_create_coupon이 채번) — Migration #556
   } | null;                            // sequenced 모드 패턴 저장 — B-1
   code_mode: 'manual' | 'sequenced';  // 기본값 'manual' — B-1
   type: CouponTypeEnum;

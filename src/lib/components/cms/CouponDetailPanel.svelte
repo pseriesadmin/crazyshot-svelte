@@ -365,6 +365,18 @@
             cancel()
             return
           }
+          // 결함 1번: 정률 할인 100% 상한 최종 재검증(입력 도중 클램프를 우회해 제출된 경우 대비)
+          if (u_discount_type === 'percentage' && u_discount_value > 100) {
+            csToast.error('정률 할인은 100%를 초과할 수 없습니다.')
+            cancel()
+            return
+          }
+          // 결함 2번: 종료일이 시작일보다 이전인 상태로 수정 저장되는 것을 차단
+          if (u_validity_type === 'fixed_period' && u_valid_from && u_valid_until && u_valid_from > u_valid_until) {
+            csToast.error('종료일은 시작일보다 같거나 나중이어야 합니다.')
+            cancel()
+            return
+          }
           updateLoading = true
           return async ({ result, update }) => {
             updateLoading = false
@@ -384,7 +396,14 @@
           </div>
           <div class="form-field">
             <label for="uc-dtype">할인 방식</label>
-            <select id="uc-dtype" name="discount_type" class="f-input" bind:value={u_discount_type}>
+            <select id="uc-dtype" name="discount_type" class="f-input" value={u_discount_type}
+              onchange={(e) => {
+                // 결함 5번: 할인 방식 전환 시 이전 방식의 할인값이 그대로 남아 단위가
+                // 오염되는 것을 방지(예: 정액 5000원 상태에서 정률로 바꾸면 5000%로 저장됨)
+                const next = (e.currentTarget as HTMLSelectElement).value
+                if (next !== u_discount_type) u_discount_value = 0
+                u_discount_type = next
+              }}>
               <option value="fixed">정액 (원)</option>
               <option value="percentage">정률 (%)</option>
               <option value="free_shipping">무료배송</option>
@@ -392,8 +411,30 @@
           </div>
           <div class="form-field">
             <label for="uc-dval">할인값</label>
-            <input id="uc-dval" name="discount_value" type="number" min="0"
-              class="f-input" bind:value={u_discount_value} />
+            {#if u_discount_type === 'percentage'}
+              <!-- 결함 6번: 정률은 소수점 1자리까지 허용(coupon/new의 parsePercentRaw와 동일 로직) -->
+              <input id="uc-dval" name="discount_value" type="text" inputmode="decimal"
+                class="f-input" value={u_discount_value}
+                oninput={(e) => {
+                  const raw = (e.currentTarget as HTMLInputElement).value
+                  const cleaned = raw.replace(/[^0-9.]/g, '')
+                  const firstDotIdx = cleaned.indexOf('.')
+                  const normalized = firstDotIdx === -1
+                    ? cleaned
+                    : cleaned.slice(0, firstDotIdx + 1) + cleaned.slice(firstDotIdx + 1).replace(/\./g, '').slice(0, 1)
+                  const n = normalized === '' || normalized === '.' ? 0 : parseFloat(normalized)
+                  const val = Number.isFinite(n) ? n : 0
+                  if (val > 100) {
+                    csToast.error('정률 할인은 100%를 초과할 수 없습니다.')
+                    u_discount_value = 100
+                  } else {
+                    u_discount_value = val
+                  }
+                }} />
+            {:else}
+              <input id="uc-dval" name="discount_value" type="number" min="0"
+                class="f-input" bind:value={u_discount_value} />
+            {/if}
           </div>
           {#if u_discount_type === 'percentage'}
             <div class="form-field">

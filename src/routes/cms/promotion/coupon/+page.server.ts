@@ -208,11 +208,22 @@ export const actions: Actions = {
       return { ok: false, error: '"첫 확인일로부터 N일" 모드는 유효일수(N)를 1 이상 입력해야 합니다.' }
     }
 
+    // 결함 2번: 종료일이 시작일보다 이전인 상태로 수정 저장되지 않도록 서버에서도 재검증
+    if (validity_type === 'fixed_period' && valid_from && valid_until && valid_from > valid_until) {
+      return { ok: false, error: '종료일은 시작일보다 같거나 나중이어야 합니다.' }
+    }
+
     // 2026-09-21 추가: coupons_discount_value_check(DB, discount_value>0)는 discount_type과
     // 무관하게 전 유형에 동일 적용된다(/cms/promotion/coupon/new와 동일 가드, §2026-09-21
     // 수정 이력 참고) — 0으로 저장 시도 시 원문 Postgres 에러가 노출되는 것을 선제 차단.
     if (!discount_value || discount_value <= 0) {
       return { ok: false, error: '할인값을 입력해주세요.' }
+    }
+
+    // 결함 1번: 정률 할인은 100을 초과할 수 없음 — DB CHECK 제약(coupons_percentage_
+    // discount_max_check, Migration #557)의 원문 에러가 노출되지 않도록 서버에서 선제 차단.
+    if (discount_type === 'percentage' && discount_value > 100) {
+      return { ok: false, error: '정률 할인은 100%를 초과할 수 없습니다.' }
     }
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any

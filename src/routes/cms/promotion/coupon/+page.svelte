@@ -133,6 +133,12 @@
   // max_sequence를 상한 체크에만 쓰고 패딩 자릿수는 항상 seq_digits만 본다
   // (LPAD(v_seq::TEXT, v_seq_digits, '0')) — max_sequence가 3자리가 아닌 코드조합
   // (예: 50, 1500)에서 프리뷰와 실채번 결과가 어긋나던 결함이라 제거.
+  // 2026-09-27(결함 4번+7번 수정) — code_series.issue_seq(cms_create_coupon이 발행
+  // 시점에 채번, Migration #556)가 있으면 0-패딩 대신 이 실값으로 자리수를 채워 표시한다.
+  // 2단 계층(parent_max_sequence 존재)은 발행순번 구간만 issue_seq로 채우고 자식 순번
+  // 구간은 기존처럼 0으로 유지 — 그 구간은 고객이 실제 "사용"하는 시점에만 별도 채번되는
+  // 값(redeemed_code)이라 이 발행관리 목록 표시와는 무관(service-operations.md §14와 동일
+  // 지연채번 원리). issue_seq가 없는 값(구버전 발급분)은 하위호환으로 기존 0-패딩 그대로.
   function codeDisplay(c: {
     code: string | null
     code_mode?: string
@@ -141,6 +147,8 @@
       category_code?: string
       date_option?: string
       seq_digits?: number
+      parent_max_sequence?: number | null
+      issue_seq?: number
     } | null
   }): string {
     if (c.code) return c.code
@@ -154,6 +162,14 @@
           })()
         : ''
       const seqDigits = c.code_series.seq_digits ?? 3
+      const issueSeq = c.code_series.issue_seq
+      const parentMax = c.code_series.parent_max_sequence
+      if (issueSeq != null) {
+        const parentDigits = parentMax != null ? String(parentMax).length : seqDigits
+        const parentPart = String(issueSeq).padStart(parentDigits, '0')
+        const childPart = parentMax != null ? '0'.repeat(seqDigits) : ''
+        return `${prefix}${cat}${datePart}${parentPart}${childPart}`
+      }
       return `${prefix}${cat}${datePart}${'0'.repeat(seqDigits)}`
     }
     return '—'
