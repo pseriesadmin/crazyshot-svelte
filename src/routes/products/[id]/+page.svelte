@@ -678,6 +678,7 @@
     catch { return []; }
   });
 
+  const isSaleOnly = $derived(!!(product as ProductRow).sale_only);
   let price12h = $derived(
     (product as ProductRow).base_price_12h ?? Math.round(product.base_price_daily * 0.7)
   );
@@ -850,24 +851,32 @@
 
         <!-- Price -->
         <div class="price-row">
-          <div class="price-unit">
-            <span class="price-period-label">Day</span>
-            <span class="price-amount">{fmt(product.base_price_daily)}</span>
-            <span class="price-currency">원</span>
-          </div>
-          <span class="price-sep">/</span>
-          <div class="price-unit">
-            <span class="price-period-label">12H</span>
-            <span class="price-amount">{fmt(price12h)}</span>
-            <span class="price-currency">원</span>
-          </div>
+          {#if isSaleOnly}
+            <div class="price-unit">
+              <span class="price-period-label">Price</span>
+              <span class="price-amount">{fmt((product as ProductRow).sale_price ?? 0)}</span>
+              <span class="price-currency">원</span>
+            </div>
+          {:else}
+            <div class="price-unit">
+              <span class="price-period-label">Day</span>
+              <span class="price-amount">{fmt(product.base_price_daily)}</span>
+              <span class="price-currency">원</span>
+            </div>
+            <span class="price-sep">/</span>
+            <div class="price-unit">
+              <span class="price-period-label">12H</span>
+              <span class="price-amount">{fmt(price12h)}</span>
+              <span class="price-currency">원</span>
+            </div>
+          {/if}
         </div>
 
         {#if data.depositAmount}
           <p class="deposit-info">보증금 <strong>{fmt(data.depositAmount)}</strong>원</p>
         {/if}
 
-        {#if data.rentalPeriods.length > 0}
+        {#if !isSaleOnly && data.rentalPeriods.length > 0}
           <div class="policy-block">
             <div class="policy-row">
               <span class="policy-label">대여 기간</span>
@@ -882,7 +891,7 @@
 
         <!-- Quantity control -->
         <div class="qty-row">
-          <span class="qty-label">대여수량</span>
+          <span class="qty-label">수량</span>
           <div class="qty-control">
             <button onclick={() => qty = clampReservationQty(qty - 1)} class="qty-btn" aria-label="수량 감소">
               <svg width="14" height="2" viewBox="0 0 14 2" fill="none">
@@ -944,6 +953,7 @@
           {optionsTotal}
           rentalMethods={data.rentalMethods}
           shippingPolicy={data.shippingPolicy}
+        saleOnly={isSaleOnly}
           mode="product"
           onreserve={handleReserve}
           onchange={handleCalChange}
@@ -971,6 +981,7 @@
         {optionsTotal}
         rentalMethods={data.rentalMethods}
         shippingPolicy={data.shippingPolicy}
+          saleOnly={isSaleOnly}
         mode="product"
         onreserve={handleReserve}
         onchange={handleCalChange}
@@ -1803,15 +1814,14 @@
     list-style: none;
     margin: 0;
     padding: 0;
-    border-top: 1px solid var(--cs-lilac);
+    /* 정보 탭 구성품 줄(선) 제거 — 설명과 하나의 섹션처럼 표시(2026-09-27) */
   }
   .comp-item {
     display: flex;
     justify-content: space-between;
     align-items: baseline;
     gap: 12px;
-    padding: 10px 0;
-    border-bottom: 1px solid var(--cs-lilac);
+    padding: 6px 0;
   }
   .comp-item-key {
     font: var(--text-m-body-16L);
@@ -1899,8 +1909,8 @@
     line-height: 1.8;
   }
   .cb-divider {
+    /* 줄(선) 제거 — 정보 탭을 하나의 섹션처럼(2026-09-27). 블록 간 간격(.cb-body gap)만 유지 */
     border: none;
-    border-top: 1px solid var(--cs-lilac);
     margin: 0;
   }
   .cb-link {
