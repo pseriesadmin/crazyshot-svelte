@@ -147,9 +147,17 @@
     if (!catCode) return '—'
     const prefix = DEFAULT_CODE_FORMAT.prefix
     const d = comboDatePart(combo) ?? ''
-    const seqPlaceholder = (combo.parent_max_sequence != null && combo.max_sequence != null)
-      ? '0'.repeat(String(combo.parent_max_sequence).length) + '0'.repeat(String(combo.max_sequence).length)
-      : '0'.repeat(combo.max_sequence != null ? String(combo.max_sequence).length : DEFAULT_CODE_FORMAT.seq_digits)
+    // 결함 7번 잔여 수정(2026-09-28): 자식 자리 폭은 max_sequence(발행 상한값)의 자릿수가
+    // 아니라 항상 실제 채번 시 쓰이는 고정폭 DEFAULT_CODE_FORMAT.seq_digits를 따라야 한다.
+    // cms_create_coupon이 저장하는 code_series.seq_digits도 이 상수 그대로이고,
+    // codeDisplay()(발행관리 목록)도 이 값으로 자식 자리를 패딩한다 — max_sequence는
+    // 상한 검증에만 쓰일 뿐 표시 자릿수와는 무관하다. 이전 로직은 max_sequence가
+    // seq_digits(3자리)와 다른 자릿수(예: 9999=4자리)일 때 미리보기가 실제 저장 코드보다
+    // 길게 보이는 불일치를 냈다(Stephen 재보고로 발견). parent_max_sequence(부모=발행순번
+    // 상한)만 실제로 자릿수를 좌우한다 — 이건 codeDisplay()의 parentDigits 계산과 동일.
+    const seqPlaceholder = combo.parent_max_sequence != null
+      ? '0'.repeat(String(combo.parent_max_sequence).length) + '0'.repeat(DEFAULT_CODE_FORMAT.seq_digits)
+      : '0'.repeat(DEFAULT_CODE_FORMAT.seq_digits)
     return `${prefix}${catCode}${d}${seqPlaceholder}`
   }
 
@@ -588,11 +596,11 @@
         <div class="form-grid">
           <div class="form-field">
             <label for="fc-vf">시작일</label>
-            <CmsDatePicker bind:value={f_valid_from} name="valid_from" placeholder="시작일 선택" disablePast={false} />
+            <CmsDatePicker bind:value={f_valid_from} name="valid_from" placeholder="시작일 선택" disablePast={true} />
           </div>
           <div class="form-field">
             <label for="fc-vu">종료일</label>
-            <CmsDatePicker bind:value={f_valid_until} name="valid_until" placeholder="종료일 선택" disablePast={false} />
+            <CmsDatePicker bind:value={f_valid_until} name="valid_until" placeholder="종료일 선택" disablePast={true} minDate={f_valid_from} />
           </div>
         </div>
       {/if}

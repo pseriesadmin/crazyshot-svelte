@@ -280,14 +280,14 @@
     {/if}
   {/if}
   <div class="cal-header">
-    <button class="cal-nav" onclick={prevMonth} aria-label="이전 달">
+    <button type="button" class="cal-nav" onclick={prevMonth} aria-label="이전 달">
       <svg width="8" height="14" viewBox="0 0 8 14" fill="none"><path d="M7 1L1 7L7 13" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"/></svg>
     </button>
     <div class="cal-title-group">
       <button type="button" class="cal-title-btn" onclick={toggleYearPicker}>{viewYear}</button>
       <button type="button" class="cal-title-btn" onclick={toggleMonthPicker}>{MONTHS[viewMonth]}</button>
     </div>
-    <button class="cal-nav" onclick={nextMonth} aria-label="다음 달">
+    <button type="button" class="cal-nav" onclick={nextMonth} aria-label="다음 달">
       <svg width="8" height="14" viewBox="0 0 8 14" fill="none"><path d="M1 1L7 7L1 13" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"/></svg>
     </button>
   </div>
@@ -354,6 +354,7 @@
           {@const returnAbsorbed = !sel && !pickupAbsorbed && (returnAbsorbedDates?.has(iso) ?? false)}
           {@const deliveryStart = !sel && !pickupAbsorbed && !returnAbsorbed && (iso === pickupDeliveryStartDate || iso === returnDeliveryStartDate)}
           <button
+            type="button"
             class="cal-day"
             class:cal-day-sel={sel}
             class:cal-day-past={past}
