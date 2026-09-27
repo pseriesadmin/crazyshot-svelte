@@ -114,30 +114,26 @@ export const actions: Actions = {
 
     const db = admin()
 
-    const { data: plan, error: planError } = await db
-      .from('subscription_plans')
-      .insert({
-        name,
-        tagline: String(formData.get('tagline') ?? '') || null,
-        description: String(formData.get('description') ?? '') || null,
-        image_url: String(formData.get('image_url') ?? '') || null,
-        monthly_price: monthlyPrice,
-        membership_grade: String(formData.get('membership_grade') ?? '') || null,
-        sort_order: Number(formData.get('sort_order') ?? 0),
-        is_popular: formData.get('is_popular') === 'true',
-        features,
-        status: 'active',
-      })
-      .select('id')
-      .single()
-
-    if (planError || !plan) return fail(500, { error: planError?.message ?? '등록에 실패했습니다' })
-
-    const regWarnings: string[] = []
-
     // 코드 조합(콤보) 선택 시 합산 분류코드를 서버에서 직접 재조회해 구성한다(클라이언트가
     // 보낸 문자열을 그대로 신뢰하지 않음 — products/new create 액션과 동일한 안전 패턴).
+    // ⛔ 2026-09-28(Stephen 확정): 구독상품도 다른 상품과 동일하게 상품별 고유 품번을 가져야
+    // 하므로, 선택한 분류(그룹)에 코드 조합이 1개 이상 존재하는데 아무것도 고르지 않았다면
+    // 등록 자체를 차단한다(subscription_plans INSERT 이전에 검사 — 실패 시 고아 row 방지).
+    // 조합이 아예 없는 분류는 기존과 동일하게 카테고리값만으로 진행 가능(요구 범위 밖 — 그
+    // 분류에 조합을 만드는 건 관리자가 /cms/codes에서 별도로 할 일).
+    const groupId = String(formData.get('group_id') ?? '').trim() || null
     const comboRowId = String(formData.get('combo_row_id') ?? '').trim() || null
+
+    if (groupId && !comboRowId) {
+      const { count: comboCount } = await db
+        .from('code_mapping_items')
+        .select('combo_row_id', { count: 'exact', head: true })
+        .eq('group_id', groupId)
+      if ((comboCount ?? 0) > 0) {
+        return fail(400, { error: '이 분류는 코드 조합을 반드시 선택해야 등록할 수 있습니다.' })
+      }
+    }
+
     let categoryCodeOverride: string | null = null
     if (comboRowId) {
       const { data: comboItems } = await db
@@ -158,6 +154,27 @@ export const actions: Actions = {
         }
       }
     }
+
+    const { data: plan, error: planError } = await db
+      .from('subscription_plans')
+      .insert({
+        name,
+        tagline: String(formData.get('tagline') ?? '') || null,
+        description: String(formData.get('description') ?? '') || null,
+        image_url: String(formData.get('image_url') ?? '') || null,
+        monthly_price: monthlyPrice,
+        membership_grade: String(formData.get('membership_grade') ?? '') || null,
+        sort_order: Number(formData.get('sort_order') ?? 0),
+        is_popular: formData.get('is_popular') === 'true',
+        features,
+        status: 'active',
+      })
+      .select('id')
+      .single()
+
+    if (planError || !plan) return fail(500, { error: planError?.message ?? '등록에 실패했습니다' })
+
+    const regWarnings: string[] = []
 
     // 부모(플랜) 품번 구조(code_series) 설정 — 실제 품번은 발급하지 않음(§2-1 부모/자식 원칙).
     // 실패해도 등록 자체는 막지 않음(regWarn — CMS 대표 패널에 "품번 체계 설정" 재시도 버튼 노출)
