@@ -148,11 +148,16 @@ export function applyIncomingMessagePreview(message: ChatMessage): void {
   if (idx < 0) return
 
   const existing = chatStore.sessions[idx]
+  // admin_only 카드(경고·검토요청 등)는 관리자에게만 보이는 내부 메시지라 — 세션 카드의
+  // "마지막 메시지 미리보기"를 그 문구로 덮어쓰면 마치 고객이 보낸 것처럼 오인될 수 있다
+  // (service-operations.md §17). 미리보기·발신자 표시는 갱신하지 않고 그대로 유지한다.
+  const isAdminOnly = message.admin_only === true
   const updated: ChatSession = {
     ...existing,
-    last_message_content: message.content ?? existing.last_message_content,
-    last_message_sender: message.sender_type,
+    last_message_content: isAdminOnly ? existing.last_message_content : (message.content ?? existing.last_message_content),
+    last_message_sender: isAdminOnly ? existing.last_message_sender : message.sender_type,
     updated_at: message.created_at ?? existing.updated_at,
+    last_message_at: isAdminOnly ? existing.last_message_at : (message.created_at ?? existing.last_message_at),
   }
 
   chatStore.sessions = [

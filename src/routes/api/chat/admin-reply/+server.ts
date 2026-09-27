@@ -39,6 +39,12 @@ export const POST: RequestHandler = async ({ request, locals }) => {
     return json({ error: 'session_id와 content는 필수입니다.' }, { status: 400 })
   }
 
+  // 고객용 엔드포인트(/api/chat/message)와 동일한 상한 — 클라이언트(ChatInput maxlength·
+  // selectCanned 등)가 우회되더라도 서버가 최종 방어(2026-09-28 발견·수정)
+  if (content.length > 1000) {
+    return json({ error: '메시지는 1000자를 초과할 수 없습니다.' }, { status: 400 })
+  }
+
   // 세션 확인
   const { data: chatSession, error: sessionErr } = await admin
     .from('chat_sessions')

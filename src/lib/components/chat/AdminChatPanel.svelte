@@ -913,6 +913,17 @@
           const already = messages.some((m) => m.id === message.id)
           if (!already) messages = [...messages, message]
         }
+        // 2026-09-28 Stephen 확정: usage_count는 "선택(미리보기)" 시점이 아니라 "실제 전송
+        // 성공" 시점에 집계한다 — 선택만 하고 편집·취소하거나 팝업만 열어본 경우까지 과다
+        // 집계되던 문제 해소(fire-and-forget, 발신 성공 자체를 막지 않음).
+        if (cannedResponseId) {
+          fetch(`/api/cms/canned-responses/${cannedResponseId}/use`, { method: 'PATCH' }).catch(() => {})
+        }
+      } else {
+        // 1000자 초과 등 서버 거부를 조용히 삼키지 않고 안내 — 과거엔 이 분기 자체가 없어
+        // "보냈는지 안 보냈는지 알 수 없는" 상태로 보였다(입력창은 이미 비워진 뒤였음).
+        const body = await res.json().catch(() => null) as { error?: string } | null
+        csToast.error(body?.error ?? '메시지 전송에 실패했습니다.')
       }
     } finally {
       isSending = false
@@ -1026,9 +1037,10 @@
     const d = new Date(iso)
     const yyyy = d.getFullYear()
     const mm = (d.getMonth() + 1).toString().padStart(2, '0')
+    const dd = d.getDate().toString().padStart(2, '0')
     const hh = d.getHours().toString().padStart(2, '0')
     const mi = d.getMinutes().toString().padStart(2, '0')
-    return `${yyyy}.${mm}  ${hh}:${mi}`
+    return `${yyyy}.${mm}.${dd}  ${hh}:${mi}`
   }
 
   function lastMessagePreview(session: ChatSession): string {
@@ -1164,7 +1176,7 @@
                 <span class="sc-last-msg">{lastMessagePreview(session)}</span>
               </div>
               <div class="sc-bottom">
-                <span class="sc-time">{formatDateTime(session.updated_at)}</span>
+                <span class="sc-time">{formatDateTime(session.last_message_at ?? session.updated_at)}</span>
                 {#if (session.unread_count ?? 0) > 0}
                   <span class="unread-badge">{session.unread_count}</span>
                 {/if}
@@ -1189,28 +1201,32 @@
       </div>
     {:else}
       <div class="chat-header">
-        <div class="chat-avatar" aria-hidden="true">
-          <span class="chat-avatar-initials">{initialsOf(sessionLabel(selectedSession))}</span>
-        </div>
-
-        <div class="chat-header-info">
-          <div class="chat-header-top">
-            <span class="chat-user">{sessionLabel(selectedSession)}</span>
-            <span class="chat-status status-{selectedSession.status}">{STATUS_LABEL[selectedSession.status as FilterTab]}</span>
+        <!-- 아바타+식별정보를 하나의 그룹으로 묶어 우측 header-toolbar 버튼군과 레이아웃상
+             명확히 분리(2026-09-28, Stephen 지시 — 이전엔 flat하게 나열돼 경계가 불명확했음) -->
+        <div class="chat-identity">
+          <div class="chat-avatar" aria-hidden="true">
+            <span class="chat-avatar-initials">{initialsOf(sessionLabel(selectedSession))}</span>
           </div>
 
-          <!-- 고객 아이디·회원코드 — 나머지 요약(등급·크레이지스코어·블랙리스트·상세정보)은
-               우측 고객정보 컬럼(customer-pane)으로 이동, 헤더에는 식별용 최소 정보만 유지 -->
-          {#if customerSummary}
-            <div class="customer-strip">
-              {#if customerSummary.email}
-                <span class="cs-item cs-email">{customerSummary.email}</span>
-              {/if}
-              {#if customerSummary.member_code}
-                <span class="cs-item cs-code">{customerSummary.member_code}</span>
-              {/if}
+          <div class="chat-header-info">
+            <div class="chat-header-top">
+              <span class="chat-user">{sessionLabel(selectedSession)}</span>
+              <span class="chat-status status-{selectedSession.status}">{STATUS_LABEL[selectedSession.status as FilterTab]}</span>
             </div>
-          {/if}
+
+            <!-- 고객 아이디·회원코드 — 나머지 요약(등급·크레이지스코어·블랙리스트·상세정보)은
+                 우측 고객정보 컬럼(customer-pane)으로 이동, 헤더에는 식별용 최소 정보만 유지 -->
+            {#if customerSummary}
+              <div class="customer-strip">
+                {#if customerSummary.email}
+                  <span class="cs-item cs-email">{customerSummary.email}</span>
+                {/if}
+                {#if customerSummary.member_code}
+                  <span class="cs-item cs-code">{customerSummary.member_code}</span>
+                {/if}
+              </div>
+            {/if}
+          </div>
         </div>
 
         <!-- GSD-7/8/12: 헤더 툴바 — 수동전환·중요카드·북마크·상태변경 -->
@@ -1312,6 +1328,7 @@
           onattach={handleAdminAttach}
           onproductmention={handleProductMention}
           oncoupongift={handleCouponGift}
+          targetUserId={selectedUserId}
         />
       </div>
 
@@ -1348,9 +1365,7 @@
                 {:else if csSaveResult === 'error'}
                   <span class="act-add-status act-add-status--error">오류</span>
                 {:else}
-                  <svg width="12" height="12" viewBox="0 0 12 12" fill="none" aria-hidden="true">
-                    <path d="M6 1.5v9M1.5 6h9" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
-                  </svg>
+                  <span class="act-add-status">저장</span>
                 {/if}
               </button>
             </div>
@@ -1831,6 +1846,23 @@
     background: var(--cs-purple-op10);
   }
 
+  /* 아바타+식별정보 그룹 카드 — chat-header 배경(--cs-purple-op10, purple-10%)과 구분되면서도
+     아주 옅게만 우측 header-toolbar 버튼군과 분리(2026-09-28). --cs-purple-pale(20%) 원색은
+     너무 진해 rgba(193,187,236, alpha) — 같은 purple-pale 색상을 희석한 값으로 조정
+     (MessageBubble.svelte .system-msg span과 동일한 기존 패턴 재사용, 신규 하드코딩 아님).
+     Stephen 피드백으로 0.4→0.25 재조정(더 옅게). 라운드값은 이 파일의 다른 카드형 요소
+     (.session-card)와 동일한 --cms-radius-md(15px). */
+  .chat-identity {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    flex: 1;
+    min-width: 0;
+    background: rgba(193, 187, 236, 0.25);
+    border-radius: var(--cms-radius-md);
+    padding: 10px 20px;
+  }
+
   /* 48px 원형 아바타 — ChatHeader.svelte 고객용 아바타(65px)와 동일 패턴, CMS 헤더 밀도에 맞춰 축소 */
   .chat-avatar {
     width: 48px;
@@ -1892,11 +1924,17 @@
   }
 
   .chat-status {
+    display: inline-block;
     font: var(--text-m-script-12);
     padding: 3px 10px;
     border-radius: var(--radius-full);
     background: var(--cs-surface-gray);
     color: var(--cs-text-mid);
+    /* .chat-header-top(flex) 안에서 .chat-user 텍스트가 길어지면 이 배지가 flex-shrink 기본값(1)
+       때문에 폭이 눌려 "진행중"이 두 줄로 쪼개지고 원형처럼 보이던 결함 수정(2026-09-28) —
+       가로 라운드 pill을 텍스트 폭 그대로 고정 유지 */
+    white-space: nowrap;
+    flex-shrink: 0;
   }
   .chat-status.status-open    { background: var(--cs-bg-success); color: var(--cs-text-success); }
   .chat-status.status-pending { background: var(--cs-bg-warning); color: var(--cs-text-warning); }

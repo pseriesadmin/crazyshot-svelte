@@ -79,13 +79,18 @@ export const GET: RequestHandler = async ({ url, locals }) => {
   if (sessionIds.length > 0) {
     const { data: allMsgs } = await admin
       .from('chat_messages')
-      .select('session_id, content, sender_type, created_at')
+      .select('session_id, content, sender_type, created_at, admin_only')
       .in('session_id', sessionIds)
       .order('created_at', { ascending: false })
 
-    type MsgRow = { session_id: string; content: string | null; sender_type: string; created_at: string }
+    type MsgRow = { session_id: string; content: string | null; sender_type: string; created_at: string; admin_only: boolean | null }
     const seenSessions = new Set<string>()
     for (const m of (allMsgs as MsgRow[] ?? [])) {
+      // admin_only 경고·검토요청 카드는 관리자 전용 내부 메시지 — 세션 목록 "마지막 메시지
+      // 미리보기"에는 그 다음(실제 고객에게 보이는) 최신 메시지를 채택한다(2026-09-28 발견·수정,
+      // service-operations.md §17 — chat_messages는 고객 세션과 공유되므로 admin_only가
+      // 고객이 보낸 것처럼 노출되면 안 됨).
+      if (m.admin_only === true) continue
       if (!seenSessions.has(m.session_id)) {
         seenSessions.add(m.session_id)
         lastMsgMap[m.session_id] = { content: m.content, sender_type: m.sender_type }

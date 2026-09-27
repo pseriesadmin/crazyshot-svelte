@@ -127,6 +127,10 @@ export interface ChatSession {
   context_reservation_id: number | null
   created_at: string
   updated_at: string
+  // 진짜 "마지막 대화 시각"(chat_messages INSERT 트리거만 갱신) — 답변모드 전환·상태전환 등
+  // 관리성 RPC는 이 컬럼을 건드리지 않는다(Migration 559, service-operations.md류 원칙과
+  // 동일하게 updated_at과 분리). 세션 목록 시간 표시는 이 값을 우선 사용한다.
+  last_message_at: string | null
   closed_at: string | null
   // 조인 데이터 (클라이언트 렌더링용)
   user_name?: string
@@ -148,6 +152,7 @@ export interface ChatMessage {
   is_read: boolean
   created_at: string
   is_bookmarked?: boolean  // GSD-12: 관리자 북마크 여부 — 클라이언트 집계 시 병합
+  admin_only?: boolean     // Migration #404 — true면 관리자에게만 보이는 카드(경고·검토요청 등)
 }
 
 export interface ChatIntentLog {
