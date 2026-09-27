@@ -1,6 +1,53 @@
 import type { PageServerLoad } from './$types'
 import { getCategoryKeyByGroupName } from '$lib/server/productCategorySettings'
 
+type ShotlogPostRow = {
+  id: string
+  title: string
+  content_blocks: unknown
+  created_at: string
+}
+
+export interface ShotlogPost {
+  id: string
+  title: string
+  img: string | null
+  desc: string | null
+  createdAt: string
+}
+
+function extractFirstImageUrl(blocks: unknown): string | null {
+  if (!Array.isArray(blocks)) return null
+  for (const block of blocks) {
+    const b = block as Record<string, unknown>
+    if (b.type === 'image' && Array.isArray(b.images) && b.images.length > 0) {
+      const img = b.images[0] as { url?: string }
+      if (img.url) return img.url
+    }
+  }
+  return null
+}
+
+function extractFirstText(blocks: unknown): string {
+  if (!Array.isArray(blocks)) return ''
+  for (const block of blocks) {
+    const b = block as Record<string, unknown>
+    if (b.type === 'text' && typeof b.html === 'string') {
+      return b.html.replace(/<[^>]*>/g, '').trim().slice(0, 120)
+    }
+  }
+  return ''
+}
+
+function shuffleArray<T>(arr: T[]): T[] {
+  const a = [...arr]
+  for (let i = a.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1))
+    ;[a[i], a[j]] = [a[j], a[i]]
+  }
+  return a
+}
+
 interface RawBannerItem {
   product_id: string
   subtitle: string
@@ -65,6 +112,26 @@ export const load: PageServerLoad = async ({ locals }) => {
 
   // 배너 상품 검색을 "패키지" 카테고리로 잠그기 위한 정본 카테고리 키(code_mapping_groups)
   const packageCategoryKey = await getCategoryKeyByGroupName('추천패키지')
+
+  // "강렬하게 보기추천!" SubView — 크레이지로그 '상품리뷰' 카테고리 콘텐츠를 최대 10개 랜덤 노출
+  // (crazylog/+page.server.ts와 동일 패턴 — 최신 30개 취득 후 셔플하여 10개 슬라이스)
+  const { data: shotlogRaw } = await locals.supabase
+    .from('user_posts')
+    .select('id, title, content_blocks, created_at')
+    .eq('status', 'published')
+    .eq('is_public', true)
+    .eq('log_type', '상품리뷰')
+    .order('created_at', { ascending: false })
+    .limit(30)
+  const shotlogPosts: ShotlogPost[] = shuffleArray((shotlogRaw ?? []) as ShotlogPostRow[])
+    .slice(0, 10)
+    .map((p) => ({
+      id: p.id,
+      title: p.title,
+      img: extractFirstImageUrl(p.content_blocks),
+      desc: extractFirstText(p.content_blocks) || null,
+      createdAt: p.created_at,
+    }))
 
   // Load banner settings from cms_settings
   const { data: settingRow } = await locals.supabase
@@ -216,5 +283,6 @@ export const load: PageServerLoad = async ({ locals }) => {
     },
     themeGroups: enrichedThemeGroups,
     themeGroupsAdmin: enrichedThemeGroupsAdmin,
+    shotlogPosts,
   }
 }

@@ -56,11 +56,17 @@
       : PACK_THEMES_FALLBACK
   )
 
-  const SHOTLOG_POSTS = [
-    { title: '휴대용 디자인으로 이동 중에도 미디어 카드에 쉽게 접근 가능',                  time: '2시간 전·by 유말자', img: '/hype-pack/m-post-1.png' },
-    { title: 'onn. 52인치 삼각대, 컴팩트 카메라, 스마트폰 및 GoPro 액션 카메라용', time: '2시간 전·by 유말자', img: '/hype-pack/m-post-2.png' },
-    { title: 'K-트레일로그를 남기는 멋진 일은 우리들에게 즐거움의 폭증이다!!',           time: '2시간 전·by 유말자', img: '/hype-pack/m-post-3.png' },
-  ]
+  function relativeTime(iso: string): string {
+    const diff = Date.now() - new Date(iso).getTime()
+    const mins  = Math.floor(diff / 60000)
+    const hours = Math.floor(diff / 3600000)
+    const days  = Math.floor(diff / 86400000)
+    if (mins  <  1) return '방금 전'
+    if (hours <  1) return `${mins}분 전`
+    if (days  <  1) return `${hours}시간 전`
+    if (days  < 30) return `${days}일 전`
+    return new Date(iso).toLocaleDateString('ko-KR')
+  }
 
 </script>
 
@@ -101,6 +107,7 @@
           class="m-ad-banner-img"
           aria-hidden="true"
         />
+        <div class="m-ad-banner-overlay" aria-hidden="true"></div>
         <div class="m-ad-banner-script">
           <p class="m-ad-banner-category">{bannerItem?.subtitle ?? 'Analog Pack'}</p>
           <h3 class="m-ad-banner-product">{bannerItem?.name ?? 'Sanyo Xacti CG10'}</h3>
@@ -118,6 +125,7 @@
       </a>
     {:else}
       <img src="/hype-pack/d-ad-banner.png" alt="" class="m-ad-banner-img" aria-hidden="true" />
+      <div class="m-ad-banner-overlay" aria-hidden="true"></div>
       <div class="m-ad-banner-script">
         <p class="m-ad-banner-category">Analog Pack</p>
         <h3 class="m-ad-banner-product">Sanyo Xacti CG10</h3>
@@ -176,16 +184,24 @@
       <p class="m-section-sub">대여 예약전에 참고하면 좋은 콘텐츠를 제안해요.</p>
     </div>
 
-    <!-- Shotlog 포스트 카드 -->
+    <!-- Shotlog 포스트 카드 — 크레이지로그 '상품리뷰' 콘텐츠 썸네일(m-article-card 스타일) -->
     <div class="m-shotlog-posts">
-      {#each SHOTLOG_POSTS as post}
-        <article class="m-shotlog-post" aria-label={post.title}>
-          <img src={post.img} alt="" class="m-shotlog-post-img" aria-hidden="true" />
-          <div class="m-shotlog-post-writing">
+      {#each data.shotlogPosts as post}
+        <a href="/crazylog/view/{post.id}" class="m-shotlog-post" aria-label={post.title}>
+          {#if post.img}
+            <img src={post.img} alt="" class="m-shotlog-post-bg" aria-hidden="true" />
+          {:else}
+            <div class="m-shotlog-post-bg m-shotlog-post-bg-empty" aria-hidden="true"></div>
+          {/if}
+          <div class="m-shotlog-post-overlay" aria-hidden="true"></div>
+          <div class="m-shotlog-post-content">
+            <span class="m-shotlog-post-date">{relativeTime(post.createdAt)}</span>
             <p class="m-shotlog-post-title">{post.title}</p>
-            <p class="m-shotlog-post-meta">{post.time}</p>
+            {#if post.desc}
+              <p class="m-shotlog-post-desc">{post.desc}</p>
+            {/if}
           </div>
-        </article>
+        </a>
       {/each}
     </div>
   </div>
@@ -214,6 +230,7 @@
                 aria-hidden="true"
               />
             </div>
+            <div class="d-ad-banner-overlay" aria-hidden="true"></div>
             <div class="d-ad-banner-script">
               <p class="d-ad-banner-category">{bannerItem?.subtitle ?? 'Analog Pack'}</p>
               <h3 class="d-ad-banner-product">{bannerItem?.name ?? 'Sanyo Xacti CG10'}</h3>
@@ -238,6 +255,7 @@
               aria-hidden="true"
             />
           </div>
+          <div class="d-ad-banner-overlay" aria-hidden="true"></div>
           <div class="d-ad-banner-script">
             <p class="d-ad-banner-category">Analog Pack</p>
             <h3 class="d-ad-banner-product">Sanyo Xacti CG10</h3>
@@ -369,44 +387,45 @@
     width: calc(100% - 50px);
     height: 460px;
     margin: 24px auto 0;
-    border-radius: var(--radius-2xl);
+    border-radius: var(--radius-xl);
     overflow: hidden;
     background: linear-gradient(99.5deg, rgb(213,199,148) 1.5%, rgb(255,254,240) 98%);
   }
   .m-ad-banner-link { display: block; width: 100%; height: 100%; }
   .m-ad-banner-img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; display: block; pointer-events: none; }
-  /* PC(d-ad-banner-script) 레이아웃 규격을 모바일 크기에 맞게 반영 — 우측하단 정렬,
-     오버레이 없이 이미지 위에 직접 텍스트(§d-ad-banner와 동일 접근) */
+  .m-ad-banner-overlay {
+    position: absolute;
+    inset: 0;
+    background: linear-gradient(180deg, rgba(16,11,50,0) 40%, rgba(16,11,50,0.55) 100%);
+    pointer-events: none;
+  }
   .m-ad-banner-script {
     position: absolute;
+    left: 20px;
     right: 20px;
-    bottom: 18px;
-    text-align: right;
+    bottom: 23.4px;
     display: flex;
     flex-direction: column;
-    gap: 4px;
+    gap: 8px;
   }
   .m-ad-banner-category {
     font-family: 'Tilt Warp', sans-serif;
     font-size: 14px;
-    color: var(--cs-text-mid);
-    text-align: right;
+    color: rgba(255,255,255,0.85);
     margin: 0;
     letter-spacing: -0.3px;
   }
   .m-ad-banner-product {
     font-family: 'Tilt Warp', sans-serif;
     font-size: 24px;
-    color: var(--cs-text);
-    text-align: right;
+    color: var(--cs-white);
     margin: 0;
     line-height: 1.3;
   }
   .m-ad-banner-price {
     font-family: 'Tilt Warp', sans-serif;
     font-size: 18px;
-    color: var(--cs-red-badge);
-    text-align: right;
+    color: var(--cs-white);
     margin: 0;
     white-space: nowrap;
   }
@@ -497,7 +516,7 @@
   .m-subview {
     background: var(--cs-purple-op10); /* #E1DEF3 */
     border-radius: 0 50px 0 0;
-    padding: 70px 25px 100px;
+    padding: 50px 25px 100px;
   }
   .m-subview-title-wrap {
     text-align: center;
@@ -517,7 +536,7 @@
     color: var(--cs-red); /* #CF0000 — Figma: #cf0000 */
   }
 
-  /* ── Shotlog 포스트 카드 ── */
+  /* ── Shotlog 포스트 카드 — 크레이지로그 m-article-card 썸네일 스타일 동일 적용 ── */
   .m-shotlog-posts {
     display: flex;
     flex-direction: column;
@@ -525,39 +544,67 @@
     max-width: 340px;
   }
   .m-shotlog-post {
-    background: var(--cs-white);
-    border-radius: var(--radius-xl); /* 30px — Figma: rounded-[30px] */
-    overflow: hidden;
-  }
-  .m-shotlog-post-img {
+    position: relative;
     display: block;
-    height: 150px;
     width: 100%;
-    object-fit: cover;
+    height: 264px;
+    border-radius: var(--radius-xl); /* 30px */
+    overflow: hidden;
+    text-decoration: none;
   }
-  .m-shotlog-post-writing {
-    padding: 20px 30px;
+  .m-shotlog-post-bg {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    pointer-events: none;
+  }
+  .m-shotlog-post-bg-empty {
+    background: var(--cs-dark);
+  }
+  .m-shotlog-post-overlay {
+    position: absolute;
+    inset: 0;
+    background: linear-gradient(
+      to top,
+      rgba(16, 11, 50, 0.82) 0%,
+      rgba(16, 11, 50, 0.30) 60%,
+      rgba(16, 11, 50, 0.05) 100%
+    );
+  }
+  .m-shotlog-post-content {
+    position: absolute;
+    inset: 0;
     display: flex;
     flex-direction: column;
-    gap: 10px;
+    justify-content: flex-end;
+    padding: 18px 22px 28px;
+    gap: 4px;
+  }
+  .m-shotlog-post-date {
+    font: var(--text-m-script-12);
+    color: rgba(255, 255, 255, 0.65);
+    letter-spacing: 0.2px;
   }
   .m-shotlog-post-title {
-    font-family: 'Noto Sans KR', sans-serif;
-    font-size: 18px;
-    font-weight: 700;
-    color: var(--cs-text-dark);
+    font: var(--text-m-ad-kr-20);
+    color: #ffffff;
     margin: 0;
+    line-height: 1.4;
     letter-spacing: -0.3px;
-    line-height: 1.6;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
-  .m-shotlog-post-meta {
-    font-family: 'Noto Sans KR', sans-serif;
-    font-size: 12px;
-    font-weight: 500;
-    color: var(--cs-text-mid);
+  .m-shotlog-post-desc {
+    font: var(--text-m-script-14B);
+    color: rgba(255, 255, 255, 0.70);
     margin: 0;
-    letter-spacing: -0.5px;
-    line-height: 1.6;
+    line-height: 1.5;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
 
 
@@ -628,11 +675,18 @@
   .d-ad-banner-link { display: block; width: 100%; height: 100%; }
   .d-ad-banner-bg { position: absolute; inset: 0; }
   .d-ad-banner-img { width: 100%; height: 100%; object-fit: cover; display: block; pointer-events: none; }
+  .d-ad-banner-overlay {
+    position: absolute;
+    inset: 0;
+    background: linear-gradient(180deg, rgba(16,11,50,0) 40%, rgba(16,11,50,0.55) 100%);
+    pointer-events: none;
+  }
   .d-ad-banner-script {
     position: absolute;
+    left: 70px;
     right: 70px;
-    bottom: 50px;
-    text-align: right;
+    bottom: 35px;
+    text-align: left;
     display: flex;
     flex-direction: column;
     gap: 10px;
@@ -640,8 +694,8 @@
   .d-ad-banner-category {
     font-family: 'Tilt Warp', sans-serif;
     font-size: 20px;
-    color: var(--cs-text-mid);
-    text-align: right;
+    color: var(--cs-white);
+    text-align: left;
     margin: 0;
     letter-spacing: -0.5px;
     line-height: 1.6;
@@ -649,8 +703,8 @@
   .d-ad-banner-product {
     font-family: 'Tilt Warp', sans-serif;
     font-size: 35px;
-    color: var(--cs-text);
-    text-align: right;
+    color: var(--cs-white);
+    text-align: left;
     margin: 0;
     line-height: 1.3;
   }
@@ -658,7 +712,7 @@
     font-family: 'Tilt Warp', sans-serif;
     font-size: 35px;
     color: var(--cs-red-badge);
-    text-align: right;
+    text-align: left;
     margin: 0;
     white-space: nowrap;
     line-height: 1.3;
