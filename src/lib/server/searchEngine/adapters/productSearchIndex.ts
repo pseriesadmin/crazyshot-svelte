@@ -113,7 +113,18 @@ export function extractContentBlocksText(blocks: unknown): string {
 // components·specifications 컬럼 형식: {"배터리": "1개", "충전케이블": "1개"} 등
 // 검색 시 "배터리", "1개", "배터리 1개" 등으로 매칭 가능하도록 변환
 export function extractJsonbKeyValues(jsonb: unknown): string {
-  if (!jsonb || typeof jsonb !== 'object' || Array.isArray(jsonb)) return ''
+  if (Array.isArray(jsonb)) {
+    // 2026-09-27: 순서 보존 배열 [{key,value}] 지원
+    const parts: string[] = []
+    for (const el of jsonb) {
+      if (!el || typeof el !== 'object' || Array.isArray(el)) continue
+      const { key, value } = el as Record<string, unknown>
+      if (key !== null && key !== undefined && String(key)) parts.push(String(key))
+      if (value !== null && value !== undefined) parts.push(String(value))
+    }
+    return parts.join(' ').trim()
+  }
+  if (!jsonb || typeof jsonb !== 'object') return ''
   const parts: string[] = []
   for (const [key, value] of Object.entries(jsonb as Record<string, unknown>)) {
     if (key) parts.push(key)

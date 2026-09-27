@@ -210,7 +210,7 @@ export interface ProductBundleLinkRow {
   link_id: string;
   bundle_product_id: string;
   bundle_name: string;
-  components: Record<string, string> | null;
+  components: { key: string; value: string }[] | Record<string, string> | null; // 순서 보존 배열(신) / 레거시 객체
   display_order: number;
   image_url: string | null;
   product_caption?: string | null;

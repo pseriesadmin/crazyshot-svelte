@@ -7,6 +7,7 @@ import { invalidateProductSearchCache } from '$lib/server/searchEngine/adapters/
 import { buildComboCategoryCode, getRootCode } from '$lib/utils/comboCategoryCode'
 import { registerCrossLingualCandidatesFromParts } from '$lib/server/crossLingualSynonymScan'
 import { extractContentBlocksText } from '$lib/server/searchEngine/adapters/productSearchIndex'
+import { normalizeKeyValueList, serializeKeyValueList, type KeyValueItem } from '$lib/utils/keyValueList'
 
 // rental_period_options / rental_method_options 는 database.ts 미등록 — 우회 헬퍼
 function untypedFrom(sb: SupabaseClient, table: string) {
@@ -151,16 +152,17 @@ export const actions: Actions = {
       return fail(400, { error: '카테고리를 설정할 수 없습니다. 코드설정 → 그룹 편집에서 기본 카테고리를 지정해주세요.' })
     }
 
-    let specifications: Record<string, string> | null = null
+    // 순서 보존 배열 [{key,value}]로 저장 (products.md §4-1)
+    let specifications: KeyValueItem[] | null = null
     const specsStr = form.get('specifications') as string | null
     if (specsStr) {
-      try { specifications = JSON.parse(specsStr) } catch { /* ignore */ }
+      try { specifications = serializeKeyValueList(normalizeKeyValueList(JSON.parse(specsStr))) } catch { /* ignore */ }
     }
 
-    let components: Record<string, string> | null = null
+    let components: KeyValueItem[] | null = null
     const compStr = form.get('components') as string | null
     if (compStr) {
-      try { components = JSON.parse(compStr) } catch { /* ignore */ }
+      try { components = serializeKeyValueList(normalizeKeyValueList(JSON.parse(compStr))) } catch { /* ignore */ }
     }
 
     let allowedPeriodIds: string[] = []

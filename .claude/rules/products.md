@@ -609,6 +609,19 @@ CMS UI           : src/lib/components/cms/ProductDetailPanel.svelte (bundles 탭
   → 서버 재조회 → product prop 변경 → $effect 동기화
 ```
 
+### 판매전용 재고 자동 비활성/복원 + 수동 비활성 보호 (Migration 553, 2026-09-27)
+
+```
+판매전용(sale_only) 예약이 confirmed 되면(결제완료 자동확정·관리자 승인) update_reservation_status가
+그 재고 자식을 is_active=false로 끄고 products.auto_deactivated_reservation_id = 예약 id 마커를 남긴다
+(켜져 있던 재고만 — 이미 수동 비활성이면 마커 NULL 유지).
+cancelled(환불 포함) 시에는 "마커가 그 예약 id인 재고"만 is_active=true + 마커 NULL로 복원한다
+(수동 비활성·다른 예약이 끈 재고는 유지). 환불 없는 반품도 취소·환불 처리가 필수(Stephen 확정).
+CMS toggleStatus(대여·판매 공통): 마커가 있고 그 예약이 취소/만료가 아니면 켜기를 400 거부
+("판매 완료된 재고입니다. 환불·취소 처리 후 자동 복원됩니다."), 수동 토글 성공 시 마커를 NULL로 정리.
+마커 없는 일반 재고는 기존 동작 그대로. 테스트: saleOnlyStockFlow(라이브)·saleOnlyToggleGuard.
+```
+
 ### ⛔ 토글 후 저장 버튼 오탐 방지 (필수)
 
 ```typescript
@@ -690,6 +703,17 @@ $effect(() => {
 
 > ⛔ 등록·수정·삭제는 항상 "실물(자식)" 단위로만 이뤄져야 한다는 원칙의 연장 — 부모의 '이력' 탭은
 > 순수 열람용 대시보드일 뿐, 데이터 입력 지점이 아니다.
+
+### 사양·구성품 저장 형식 — 순서 보존 배열 (2026-09-27 확정, Migration #552)
+
+```
+products.specifications / products.components = [{"key":"...","value":"..."}] 배열(관리자가 정한 순서 그대로).
+⛔ JSONB 객체 {"키":"값"}는 Postgres가 키를 (길이→가나다)로 재배열해 순서를 보존하지 못한다 — 신규 저장은 항상 배열.
+레거시 객체 형식은 읽기 호환만(마이그레이션으로 데이터 변환 안 함): 화면·계약서·검색 모두 normalizeKeyValueList로 읽고,
+다음 저장 때 배열로 전환. 빈 key 항목은 저장 제외, 중복 key 허용(순서 보존).
+공용 유틸: src/lib/utils/keyValueList.ts (normalize/serialize/format). 서버 updateSection specs·components·products/new는
+입력이 객체여도 배열로 재직렬화. 검색 트리거(products_search_vector_update)는 object·array 둘 다 색인.
+```
 
 ### 저장 공통 패턴
 
@@ -1014,12 +1038,14 @@ Q5. 선택된 상품(rootId)이 현재 페이지네이션 범위(productIds, 20�
 ## GATE C 확인 항목
 
 ```
+[ ] 판매 재고 자동 비활성 시 마커(auto_deactivated_reservation_id)가 남고, 취소 복원이 마커 일치 재고에만 적용되며 수동 비활성 재고는 유지되는가? toggleStatus가 마커 재고 켜기를 거부하는가? (§3)
 [ ] 새 상품 복제가 동일 부모 코드품번 상품을 만들 수 있는 경로(코드조합 미선택·1단 조합 중복·수량 2개 이상)를
     추가하지 않았는가? 화면 사전 차단과 서버 검사가 같은 규칙인가? (§2-13 R1~R4)
 [ ] 새 상품 복제가 재고(자식)를 만들거나 이미지 파일 주소를 원본과 공유하지 않는가? 장치정보·이력 외
     탭 정보가 빠짐없이 복제되는가? (§2-13 R5·R6)
 [ ] 재고 추가가 50개 초과를 허용하지 않고, 순번 상한을 넘기는 요청을 하나도 만들지 않고 차단하는가?
     (§2-13 R7·R8)
+[ ] 사양·구성품을 저장하는 새 경로가 Object.fromEntries 객체가 아닌 순서 보존 배열([{key,value}], keyValueList.ts)로 저장하는가? 읽는 곳은 normalizeKeyValueList로 레거시 객체도 처리하는가? (§4-1 저장 형식)
 [ ] 부모 상품 등록/수정 시 product_code를 채번/기록하는 코드가 추가되지 않았는가? (§2-1)
 [ ] 부모 등록 경로(products/new, cloneProduct new_product)가 generate_product_code를
     3개 인자 전부 명시해 호출하는가? (p_code_id 생략 시 PostgREST 오버로드 모호성 에러 재발생)

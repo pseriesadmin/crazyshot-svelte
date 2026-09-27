@@ -37,6 +37,7 @@
  */
 
 import type { ContractLineItem } from '$lib/types/contract-module'
+import { normalizeKeyValueList, formatKeyValueText } from '$lib/utils/keyValueList'
 
 const COMPONENTS_TEXT_MAX = 50
 
@@ -47,12 +48,9 @@ const COMPONENTS_TEXT_MAX = 50
 // 헬퍼였던 것을 이 파일로 이관 + export: "대여 장비내역" 반복영역의 {{비고}}에도 동일
 // 로직으로 각 상품(메인·옵션)의 구성품 정보를 채우기 위함(로직 이원화 방지).
 export function formatComponentsText(raw: unknown): string {
-  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return '-'
-  const entries = Object.entries(raw as Record<string, unknown>).filter(([k]) => k.trim())
-  if (entries.length === 0) return '-'
-  const joined = entries
-    .map(([k, v]) => (typeof v === 'string' && v.trim() ? `${k}: ${v}` : k))
-    .join(', ')
+  const list = normalizeKeyValueList(raw)
+  if (list.length === 0) return '-'
+  const joined = formatKeyValueText(list)
   return joined.length > COMPONENTS_TEXT_MAX
     ? joined.slice(0, COMPONENTS_TEXT_MAX) + '...'
     : joined
