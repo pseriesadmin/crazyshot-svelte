@@ -569,3 +569,99 @@ describe('computeReturnVisibleTabs', () => {
     expect(computeReturnVisibleTabs(tabs, [], 'visit')).toEqual(tabs)
   })
 })
+
+// ════════════════════════════════════════════════════════════════════
+// T5 (2026-09-27): 구매 상품 배송비 — isPurchase 플래그 + 편도(delivery_fee) 고정
+//
+// GATE B 확정 사항:
+//   - 구매 상품 배송은 고정 택배(crazydelivery), 편도(수령만) 배송비 기준
+//   - pickup_method=crazydelivery(pickupIsDelivery=true),
+//     return_method=crazydelivery(returnIsDelivery=true) 로 세팅되지만
+//     실제 청구는 delivery_fee(편도, 수령만) 1회만 부과해야 함
+//
+// 구현 기대: ShippingFeeItem에 isPurchase?: boolean 플래그 추가.
+//   anyReturnDelivery 계산에서 isPurchase=true 항목을 제외하면,
+//   구매 전용 카트에서 round_trip_fee가 아닌 delivery_fee로 분기된다.
+// ════════════════════════════════════════════════════════════════════
+describe('calcShippingFee — 구매 상품 편도 배송비(isPurchase 플래그)', () => {
+  const SHIP = {
+    enable_round_trip: true,
+    round_trip_fee: 5000,
+    enable_delivery: true,
+    delivery_fee: 3000,
+    enable_return: true,
+    return_fee: 2000,
+  }
+
+  // ─────────────────────────────────────────────
+  // Happy Path
+  // ─────────────────────────────────────────────
+  it('Happy: 구매 전용 카트(isPurchase=true, 양방향 crazydelivery) → 편도 배송요금(3000)만 부과', () => {
+    const items = [{
+      pickupIsDelivery: true,
+      returnIsDelivery: true,
+      isPurchase: true,
+      shipping_delivery: true,
+    }]
+    expect(calcShippingFee(SHIP, items)).toBe(3000)
+  })
+
+  it('Happy: 구매 2개 카트 → 편도 배송요금(3000) 1회만(스태킹 없음)', () => {
+    const items = [
+      { pickupIsDelivery: true, returnIsDelivery: true, isPurchase: true, shipping_delivery: true },
+      { pickupIsDelivery: true, returnIsDelivery: true, isPurchase: true, shipping_delivery: true },
+    ]
+    expect(calcShippingFee(SHIP, items)).toBe(3000)
+  })
+
+  it('Happy: 구매(양방향배송)+대여(방문반납) 혼용 → anyReturnDelivery=false → delivery_fee(3000)', () => {
+    // 구매: pickup=delivery, return=delivery(isPurchase=true → return 제외)
+    // 대여: pickup=delivery, return=visit(returnIsDelivery=false)
+    const items = [
+      { pickupIsDelivery: true, returnIsDelivery: true, isPurchase: true, shipping_delivery: true },
+      { pickupIsDelivery: true, returnIsDelivery: false, isPurchase: false, shipping_delivery: true },
+    ]
+    expect(calcShippingFee(SHIP, items)).toBe(3000)
+  })
+
+  it('Happy: 구매+대여(양방향배송) 혼용 → 대여 return 포함 → round_trip_fee(5000)', () => {
+    // 대여 항목이 반납도 배송이므로 anyReturnDelivery=true → 왕복요금
+    const items = [
+      { pickupIsDelivery: true, returnIsDelivery: true, isPurchase: true, shipping_round_trip: true, shipping_delivery: true },
+      { pickupIsDelivery: true, returnIsDelivery: true, isPurchase: false, shipping_round_trip: true, shipping_delivery: true },
+    ]
+    expect(calcShippingFee(SHIP, items)).toBe(5000)
+  })
+
+  // ─────────────────────────────────────────────
+  // 기존 동작 회귀(isPurchase=false/미지정 → 기존 왕복 규칙 유지)
+  // ─────────────────────────────────────────────
+  it('회귀: isPurchase=false + 양방향 배송 → 왕복요금(5000) — 기존 동작 유지', () => {
+    const items = [{ pickupIsDelivery: true, returnIsDelivery: true, isPurchase: false, shipping_round_trip: true }]
+    expect(calcShippingFee(SHIP, items)).toBe(5000)
+  })
+
+  it('회귀: isPurchase 미지정(undefined) + 양방향 배송 → 왕복요금(5000) — 하위호환', () => {
+    const items = [{ pickupIsDelivery: true, returnIsDelivery: true, shipping_round_trip: true }]
+    expect(calcShippingFee(SHIP, items)).toBe(5000)
+  })
+
+  // ─────────────────────────────────────────────
+  // Edge
+  // ─────────────────────────────────────────────
+  it('Edge: 구매 항목 isPurchase=true + enable_delivery=false → 0원(설정 비활성)', () => {
+    const noDelivery = { ...SHIP, enable_delivery: false }
+    const items = [{ pickupIsDelivery: true, returnIsDelivery: true, isPurchase: true, shipping_delivery: true }]
+    expect(calcShippingFee(noDelivery, items)).toBe(0)
+  })
+
+  it('Edge: 구매 항목 shipping_delivery=false → 0원(상품 플래그 차단)', () => {
+    const items = [{ pickupIsDelivery: true, returnIsDelivery: true, isPurchase: true, shipping_delivery: false }]
+    expect(calcShippingFee(SHIP, items)).toBe(0)
+  })
+
+  it('Edge: 구매 전용 카트 + settings=null → 0원', () => {
+    const items = [{ pickupIsDelivery: true, returnIsDelivery: true, isPurchase: true }]
+    expect(calcShippingFee(null, items)).toBe(0)
+  })
+})

@@ -90,3 +90,71 @@ describe('isMethodSelectionValid', () => {
     })).toBe(false)
   })
 })
+
+// T2 (2026-09-27): 구매 라인 방식 검증 우회 — durationType='purchase'이면 방식 미선택이어도 valid
+describe('isMethodSelectionValid — purchase durationType 우회', () => {
+  const pickupVisibleTabs = [{ v: 'visit' as const }, { v: 'crazydelivery' as const }]
+  const returnVisibleTabs = [{ v: 'visit' as const }, { v: 'crazydelivery' as const }]
+
+  it('Happy: durationType=purchase + rentalMethod=null → valid(구매 라인은 방식 검증 건너뜀)', () => {
+    expect(isMethodSelectionValid({
+      deleted: false, checked: true,
+      rentalMethod: null, returnMethod: null,
+      pickupVisibleTabs, returnVisibleTabs,
+      durationType: 'purchase',
+    })).toBe(true)
+  })
+
+  it('Happy: durationType=purchase + rentalMethod=crazydelivery → valid(채워져 있어도 통과)', () => {
+    expect(isMethodSelectionValid({
+      deleted: false, checked: true,
+      rentalMethod: 'crazydelivery', returnMethod: 'crazydelivery',
+      pickupVisibleTabs, returnVisibleTabs,
+      durationType: 'purchase',
+    })).toBe(true)
+  })
+
+  it('Edge: durationType=purchase + deleted=true → valid(삭제 항목은 기존대로 통과)', () => {
+    expect(isMethodSelectionValid({
+      deleted: true, checked: true,
+      rentalMethod: null, returnMethod: null,
+      pickupVisibleTabs, returnVisibleTabs,
+      durationType: 'purchase',
+    })).toBe(true)
+  })
+
+  it('Edge: durationType=purchase + checked=false → valid(미체크 항목은 기존대로 통과)', () => {
+    expect(isMethodSelectionValid({
+      deleted: false, checked: false,
+      rentalMethod: null, returnMethod: null,
+      pickupVisibleTabs, returnVisibleTabs,
+      durationType: 'purchase',
+    })).toBe(true)
+  })
+
+  it('Edge: durationType=24h(대여) + rentalMethod=null → invalid(구매 우회 미적용, 기존 규칙 유지)', () => {
+    expect(isMethodSelectionValid({
+      deleted: false, checked: true,
+      rentalMethod: null, returnMethod: null,
+      pickupVisibleTabs, returnVisibleTabs,
+      durationType: '24h',
+    })).toBe(false)
+  })
+
+  it('Edge: durationType=undefined(기본값) → invalid(기존 규칙 그대로 — 하위호환)', () => {
+    expect(isMethodSelectionValid({
+      deleted: false, checked: true,
+      rentalMethod: null, returnMethod: null,
+      pickupVisibleTabs, returnVisibleTabs,
+    })).toBe(false)
+  })
+
+  it('Edge: durationType=null → invalid(기존 규칙 그대로 — null은 대여로 분류)', () => {
+    expect(isMethodSelectionValid({
+      deleted: false, checked: true,
+      rentalMethod: null, returnMethod: null,
+      pickupVisibleTabs, returnVisibleTabs,
+      durationType: null,
+    })).toBe(false)
+  })
+})

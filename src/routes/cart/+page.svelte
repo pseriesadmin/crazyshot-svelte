@@ -13,6 +13,7 @@
   import { calcShippingFee, calcShippingDiscountRate, applyShippingDiscount, isRoundTripShippingFee, isFreeDeliveryCouponBlocked, computeReturnVisibleTabs, type ShippingFeeItem, type DeliveryFeeDiscountTier, type DiscountConditionItem } from '$lib/utils/cartShippingFee';
   import { calcRentalDays, calcRentalFee, calcRentalPeriodParts, computeCartTotalMinutes, calcHolidayExtension, calcHolidayExtraFee, calcOptionsHolidayExtraFee } from '$lib/utils/cartRentalFee';
   import { toDeliveryMethod, isMethodSelectionValid } from '$lib/utils/cartMethodSelection';
+  import { deriveCartMode, getPurchaseReservationDates, isRentalLine } from '$lib/utils/cartPurchaseMode';
   import {
     resolveParentProductId,
     clampToAvailableStock,
@@ -745,19 +746,25 @@
   // bulkOpts/bulkDate·bulkTime(수령)/bulkReturnDate·bulkReturnTime(반납)/bulkRentalForm/
   // bulkReturnForm 값으로 전부 덮어씀
   function applyBulkToItems() {
-    itemsState = itemsState.map(it => ({
-      ...it,
-      rentalDate: bulkDate || it.rentalDate,
-      // bulkDate를 한 번이라도 만졌다면 returnDate는 bulkReturnDate를 그대로 반영(범위선택
-      // 재시작으로 일시적으로 비어도 옛 반납일이 남아있지 않도록) — 아직 bulkDate 자체를
-      // 안 만진 경우에만 기존 개별 값 유지
-      returnDate: bulkDate ? bulkReturnDate : (bulkReturnDate || it.returnDate),
-      rentalTime: bulkTime || it.rentalTime,
-      returnTime: bulkReturnTime || it.returnTime,
-      opts: { ...it.opts, rentalMethod: bulkOpts.rentalMethod, returnMethod: bulkOpts.returnMethod },
-      rentalForm: mergeFormForBulk(bulkRentalForm, it.rentalForm),
-      returnForm: mergeFormForBulk(bulkReturnForm, it.returnForm),
-    }))
+    itemsState = itemsState.map(it => {
+      // T4: 구매(sale_only) 라인은 bulk 패널(날짜/방식/폼) 일괄 적용 대상에서 제외
+      // 구매 예약은 날짜·방식을 고객이 선택하지 않으므로 브로드캐스트가 필요 없다
+      const line = groupsById.get(it.id)
+      if (!isRentalLine(line?.durationType ?? null)) return it
+      return {
+        ...it,
+        rentalDate: bulkDate || it.rentalDate,
+        // bulkDate를 한 번이라도 만졌다면 returnDate는 bulkReturnDate를 그대로 반영(범위선택
+        // 재시작으로 일시적으로 비어도 옛 반납일이 남아있지 않도록) — 아직 bulkDate 자체를
+        // 안 만진 경우에만 기존 개별 값 유지
+        returnDate: bulkDate ? bulkReturnDate : (bulkReturnDate || it.returnDate),
+        rentalTime: bulkTime || it.rentalTime,
+        returnTime: bulkReturnTime || it.returnTime,
+        opts: { ...it.opts, rentalMethod: bulkOpts.rentalMethod, returnMethod: bulkOpts.returnMethod },
+        rentalForm: mergeFormForBulk(bulkRentalForm, it.rentalForm),
+        returnForm: mergeFormForBulk(bulkReturnForm, it.returnForm),
+      }
+    })
     // sync_cart_dates() RPC — TASK-D 연동 시 호출 예정
   }
 
@@ -904,6 +911,8 @@
   const datesSet = $derived(
     itemsState.every(it => {
       if (it.deleted || !it.checked) return true
+      // 구매 라인은 날짜 UI가 없으므로 날짜 검증에서 제외 (rentalDate/returnDate가 영구 '' 상태 — C-1)
+      if (!isRentalLine(groupsById.get(it.id)?.durationType ?? null)) return true
       const pickupTimeNeeded = !isDeliveryLocked(it.opts.rentalMethod) && !isCourierDependent(it.opts.rentalMethod)
       const returnTimeNeeded = !isDeliveryLocked(it.opts.returnMethod) && !isCourierDependent(it.opts.returnMethod)
       return it.rentalDate !== '' && (!pickupTimeNeeded || it.rentalTime !== '') &&
@@ -1233,13 +1242,20 @@
     itemsState
       .map((it) => ({ it, product: groupsById.get(it.id)?.product }))
       .filter(({ it }) => !it.deleted && it.checked)
-      .map(({ it, product }) => ({
-        pickupIsDelivery: isDeliveryTypeMethod(it.opts.rentalMethod),
-        returnIsDelivery: isDeliveryTypeMethod(it.opts.returnMethod),
-        shipping_round_trip: (product as ProductRow & { shipping_round_trip?: boolean | null } | undefined)?.shipping_round_trip ?? true,
-        shipping_delivery: (product as ProductRow & { shipping_delivery?: boolean | null } | undefined)?.shipping_delivery ?? true,
-        shipping_return: (product as ProductRow & { shipping_return?: boolean | null } | undefined)?.shipping_return ?? true,
-      }))
+      .map(({ it, product }) => {
+        // 구매 라인: rentalMethod가 영구 null이므로 'crazydelivery'(편도 택배 고정)로 판정 (C-3)
+        const isPurchase = groupsById.get(it.id)?.durationType === 'purchase'
+        const effectivePickupMethod = isPurchase ? ('crazydelivery' as const) : it.opts.rentalMethod
+        const effectiveReturnMethod = isPurchase ? ('crazydelivery' as const) : it.opts.returnMethod
+        return {
+          pickupIsDelivery: isDeliveryTypeMethod(effectivePickupMethod),
+          returnIsDelivery: isDeliveryTypeMethod(effectiveReturnMethod),
+          shipping_round_trip: (product as ProductRow & { shipping_round_trip?: boolean | null } | undefined)?.shipping_round_trip ?? true,
+          shipping_delivery: (product as ProductRow & { shipping_delivery?: boolean | null } | undefined)?.shipping_delivery ?? true,
+          shipping_return: (product as ProductRow & { shipping_return?: boolean | null } | undefined)?.shipping_return ?? true,
+          isPurchase,
+        }
+      })
   )
   const otShippingFee = $derived(calcShippingFee(sdShippingSettings, checkedShippingItems))
 
@@ -1419,7 +1435,13 @@
   // 반영하도록 itemsState 기준으로 교체(groupsById로 그룹 조회).
   const cartProductRows = $derived<ProductRow[]>(
     itemsState
-      .filter(it => !it.deleted && it.checked)
+      .filter(it => {
+        if (it.deleted || !it.checked) return false
+        // T4: 구매(sale_only) 라인은 교집합 계산에서 제외 — allowed_method_ids가
+        // 대여 방식 선택지를 좁히거나 없애는 문제(F8-①) 방지
+        const line = groupsById.get(it.id)
+        return isRentalLine(line?.durationType ?? null)
+      })
       .map(it => groupsById.get(it.id)?.product ?? null)
       .filter((p): p is ProductRow => p !== null)
   )
@@ -1501,6 +1523,8 @@
       returnMethod: it.opts.returnMethod,
       pickupVisibleTabs,
       returnVisibleTabs: returnVisibleTabsFor(it.opts.rentalMethod),
+      // 구매 라인: T2 우회 조건 전달 — durationType='purchase'이면 방식 검증 스킵 (C-2)
+      durationType: groupsById.get(it.id)?.durationType ?? null,
     }))
   )
   const readyToSubmit = $derived(canProceed && methodSelectionValid)
@@ -1552,7 +1576,13 @@
   // [수령일,d] 구간으로 검증(p_fixed_start) — RPC 자체 설명 참고.
   const checkedAvailabilityItems = $derived(
     itemsState
-      .filter(it => !it.deleted && it.checked)
+      .filter(it => {
+        if (it.deleted || !it.checked) return false
+        // T4: 구매(sale_only) 라인은 재고 달력 입력에서 제외 — sale_only 상품은 활성 자식이
+        // 0개일 수 있어 get_unavailable_dates_for_cart 입력에 포함되면 모든 날짜가 차단됨(F6)
+        const line = groupsById.get(it.id)
+        return isRentalLine(line?.durationType ?? null)
+      })
       .map(it => {
         const line = groupsById.get(it.id)
         if (!line) return null
@@ -1841,6 +1871,18 @@
   // 구매(판매) 항목은 대여기간이 0이어도 결제금액이 확정돼 있으므로 별도로 ready 처리한다.
   const pricingReady = $derived(otTotalMinutes > 0 || otHasPurchaseItem)
 
+  // T7: 체크된 미삭제 라인의 durationType 조합으로 현재 카트 모드를 판별
+  // 'purchase' 전용이면 PurchaseOptionsEditor, 그 외이면 RentalOptionsEditor를 표시
+  const cartMode = $derived(
+    deriveCartMode(
+      itemsState.map(it => ({
+        deleted: it.deleted,
+        checked: it.checked,
+        durationType: groupsById.get(it.id)?.durationType ?? null
+      }))
+    )
+  )
+
   function fmtKrw(n: number): string {
     return n === 0 ? '0' : n.toLocaleString('ko-KR')
   }
@@ -1917,12 +1959,16 @@
             {/if}
           </div>
 
-          <!-- 통합 대여예약옵션 패널 (체크된 상품 1개 이상 시 활성화) -->
+          <!-- 통합 대여예약옵션 / 구매예약옵션 패널 (체크된 상품 1개 이상 시 활성화) -->
           {#if hasItems}
             <div class="detail-pane" transition:fly={{ x: 24, duration: 200 }}>
               <div class="order-card">
                 <div class="order-card-inner">
-                  {@render RentalOptionsEditor()}
+                  {#if cartMode === 'purchase'}
+                    {@render PurchaseOptionsEditor()}
+                  {:else}
+                    {@render RentalOptionsEditor()}
+                  {/if}
                 </div>
               </div>
             </div>
@@ -1937,7 +1983,7 @@
                "헤더 단독" 케이스 자체가 더 이상 존재하지 않으므로 false로 고정 —
                true로 남기면 헤더와 바로 아래 방법 bar 사이에 불필요한 간격이 생긴다. -->
           <button class="bulk-head" class:bulk-head-closed={false} onclick={() => bulkOpen = !bulkOpen}>
-            <span class="bulk-head-title">대여예약옵션</span>
+            <span class="bulk-head-title">{cartMode === 'purchase' ? '구매예약옵션' : '대여예약옵션'}</span>
             <svg width="11" height="7" viewBox="0 0 12 8" fill="none" aria-hidden="true" class="bulk-chevron"
                  style="transform:{bulkOpen ? 'rotate(180deg)' : 'rotate(0deg)'}">
               <path d="M1 1L6 7L11 1" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
@@ -1949,7 +1995,11 @@
             {#if bulkOpen}
               {@render bulkHeadButton()}
               <div transition:slide={{ duration: 250 }} class="bulk-body">
-                {@render RentalOptionsEditor()}
+                {#if cartMode === 'purchase'}
+                  {@render PurchaseOptionsEditor()}
+                {:else}
+                  {@render RentalOptionsEditor()}
+                {/if}
               </div>
             {:else}
               <!-- 2026-09-03(Stephen 확정) — 아코디언이 접혀도(스크롤 자동접힘·수동접힘 모두)
@@ -2369,32 +2419,44 @@
                 // 이 지점에 null이 도달하지 않는다 — 그러나 saveShipmentMethod가 non-null
                 // DeliveryMethod를 요구하므로, non-null assertion 대신 실제 런타임 null 체크로
                 // 타입을 좁혀 방어한다(요청사항: non-null assertion 사용 금지).
-                const pickupMethodCo = it.opts.rentalMethod
-                const returnMethodCo = it.opts.returnMethod
-                if (!pickupMethodCo || !returnMethodCo) {
+                // T3 (2026-09-27): 판매전용 구매 라인 판별 — 방식/날짜를 자동으로 채운다.
+                // 구매 라인은 고객이 수령/반납 방식·날짜를 선택하지 않으므로
+                // 'crazydelivery'(편도 택배 고정)와 오늘 날짜를 강제 주입한다.
+                const isPurchaseCo = groupsById.get(it.id)?.product?.sale_only === true
+                const purchaseDatesCo = isPurchaseCo ? getPurchaseReservationDates(nowTimeCo) : null
+
+                // 수령·반납 방식: 구매는 편도 crazydelivery 고정, 대여는 고객 선택값 사용
+                const pickupMethodCo = isPurchaseCo ? ('crazydelivery' as const) : it.opts.rentalMethod
+                const returnMethodCo = isPurchaseCo ? ('crazydelivery' as const) : it.opts.returnMethod
+
+                // 대여 라인만 null 체크(구매는 위에서 이미 고정)
+                if (!isPurchaseCo && (!pickupMethodCo || !returnMethodCo)) {
                   csToast.error('수령·반납 방식을 다시 선택해주세요.')
                   return
                 }
-                // 리드타임 재검증 (날짜 없이 예약됐으므로 여기서 처음 검증) — 그룹 공유 날짜 기준 1회
-                const needsTwoDayLeadtime = TWO_DAY_LEADTIME_KEYS_CO.has(pickupMethodCo)
-                if (needsTwoDayLeadtime) {
-                  const twoDaysLater = new Date(nowTimeCo.getFullYear(), nowTimeCo.getMonth(), nowTimeCo.getDate() + 2)
-                  const startDateOnly = new Date(`${it.rentalDate}T00:00:00`)
-                  if (startDateOnly < twoDaysLater) {
-                    csToast.error('택배 대여는 대여일 2일 전 예약 가능합니다.')
-                    return
-                  }
-                } else {
-                  const todayIsoCo = `${nowTimeCo.getFullYear()}-${String(nowTimeCo.getMonth() + 1).padStart(2, '0')}-${String(nowTimeCo.getDate()).padStart(2, '0')}`
-                  if (it.rentalDate === todayIsoCo) {
-                    const [hStr, mStr] = (it.rentalTime || '00:00').split(':')
-                    const startH = parseInt(hStr ?? '0', 10)
-                    const startM = parseInt(mStr ?? '0', 10)
-                    const startDt = new Date(`${it.rentalDate}T${String(startH).padStart(2, '0')}:${String(startM).padStart(2, '0')}:00`)
-                    const threeHoursLater = new Date(nowTimeCo.getTime() + 3 * 60 * 60 * 1000)
-                    if (startDt < threeHoursLater) {
-                      csToast.error('당일 대여는 대여시간 기준 3시간 전 방문만 가능합니다.')
+                // 리드타임 재검증 — 구매 라인은 오늘 날짜 고정이므로 리드타임 검증을 건너뜀
+                if (!isPurchaseCo) {
+                  if (!pickupMethodCo) { csToast.error('수령 방식을 다시 선택해주세요.'); return }
+                  const needsTwoDayLeadtime = TWO_DAY_LEADTIME_KEYS_CO.has(pickupMethodCo)
+                  if (needsTwoDayLeadtime) {
+                    const twoDaysLater = new Date(nowTimeCo.getFullYear(), nowTimeCo.getMonth(), nowTimeCo.getDate() + 2)
+                    const startDateOnly = new Date(`${it.rentalDate}T00:00:00`)
+                    if (startDateOnly < twoDaysLater) {
+                      csToast.error('택배 대여는 대여일 2일 전 예약 가능합니다.')
                       return
+                    }
+                  } else {
+                    const todayIsoCo = `${nowTimeCo.getFullYear()}-${String(nowTimeCo.getMonth() + 1).padStart(2, '0')}-${String(nowTimeCo.getDate()).padStart(2, '0')}`
+                    if (it.rentalDate === todayIsoCo) {
+                      const [hStr, mStr] = (it.rentalTime || '00:00').split(':')
+                      const startH = parseInt(hStr ?? '0', 10)
+                      const startM = parseInt(mStr ?? '0', 10)
+                      const startDt = new Date(`${it.rentalDate}T${String(startH).padStart(2, '0')}:${String(startM).padStart(2, '0')}:00`)
+                      const threeHoursLater = new Date(nowTimeCo.getTime() + 3 * 60 * 60 * 1000)
+                      if (startDt < threeHoursLater) {
+                        csToast.error('당일 대여는 대여시간 기준 3시간 전 방문만 가능합니다.')
+                        return
+                      }
                     }
                   }
                 }
@@ -2406,7 +2468,7 @@
                 const startMinsCo = parseInt(rhStr ?? '0', 10) * 60 + parseInt(rmStr ?? '0', 10)
                 const endMinsCo   = parseInt(etStr ?? '0', 10) * 60 + parseInt(emStr ?? '0', 10)
                 const sameDayMinsCo   = endMinsCo - startMinsCo
-                const durationTypeCo  = groupsById.get(it.id)?.product?.sale_only
+                const durationTypeCo  = isPurchaseCo
                   ? 'purchase'
                   : (isSameDayRentalCo && sameDayMinsCo > 0 && sameDayMinsCo <= 720 ? '12h' : '24h')
 
@@ -2426,10 +2488,14 @@
                   // 로직) — 서버가 재고 가용성 체크 이전에 휴무일 자동연장을 계산할 수
                   // 있도록 방식을 함께 전달한다. is_courier_dependent가 아닌 방식이면
                   // 서버 쪽에서 자연히 0 연장으로 처리되어 기존 동작과 동일.
+                  // T3 (2026-09-27): 구매 라인은 purchaseDatesCo(오늘 날짜) 사용,
+                  // 대여 라인은 고객이 선택한 it.rentalDate/it.returnDate 유지(F2 회귀 방지).
+                  const startDateCo = purchaseDatesCo ? purchaseDatesCo.startDate : it.rentalDate
+                  const endDateCo   = purchaseDatesCo ? purchaseDatesCo.endDate   : it.returnDate
                   const { data: promoteRows, error: promoteError } = await (supabase.rpc as unknown as PromoteRpcFn)('promote_draft_reservation', {
                     p_reservation_id: Number(reservationId),
-                    p_start_date:     it.rentalDate,
-                    p_end_date:       it.returnDate,
+                    p_start_date:     startDateCo,
+                    p_end_date:       endDateCo,
                     p_pickup_method:  pickupMethodCo,
                     p_return_method:  returnMethodCo,
                   })
@@ -2440,7 +2506,12 @@
                   }
                   // 수령·반납 방식 저장 (기존 saveShipmentMethod 재사용) + 수령 주소 스냅샷(Migration 434)
                   // + 방문지점(Migration 479) — rentalForm/returnForm 각 leg의 pickupPointId 그대로 전달
-                  const shipmentResultCo = await saveShipmentMethod(reservationId, pickupMethodCo, returnMethodCo, it.rentalTime, it.returnTime, it.rentalForm.addr, it.rentalForm.addrDetail, it.rentalForm.notes, it.returnForm.notes, it.rentalForm.pickupPointId, it.returnForm.pickupPointId)
+                  // T4 타입 narrowing: L2402 null 가드(대여 null → early return) + L2408 단일방어를 통과했으므로
+                  // 이 지점에서 두 값은 반드시 non-null. ?? 폴백은 런타임에서 절대 발동하지 않으나
+                  // TypeScript 제어흐름 분석이 ternary 이후의 narrowing을 추적하지 못해 필요하다.
+                  const pickupMethodSafe: DeliveryMethod = pickupMethodCo ?? 'crazydelivery'
+                  const returnMethodSafe: DeliveryMethod = returnMethodCo ?? 'crazydelivery'
+                  const shipmentResultCo = await saveShipmentMethod(reservationId, pickupMethodSafe, returnMethodSafe, it.rentalTime, it.returnTime, it.rentalForm.addr, it.rentalForm.addrDetail, it.rentalForm.notes, it.returnForm.notes, it.rentalForm.pickupPointId, it.returnForm.pickupPointId)
                   if (!shipmentResultCo.success) {
                     csToast.error(shipmentResultCo.errorMessage ?? '수령/반납 방식 저장에 실패했습니다. 방식을 다시 선택해주세요.')
                     return
@@ -2846,6 +2917,16 @@
   </div>
 {/snippet}
 
+{#snippet PurchaseOptionsEditor()}
+  <!-- 구매 전용 옵션 편집기 — 날짜·대여방식 선택 없음. 고객 정보 + 배송지 + 요청사항만 입력 -->
+  <!-- bulkRentalForm/bulkHandleRentalForm/sdHasUserProfileInfo/sdUserProfileInfo 클로저 참조 -->
+  <div class="accordions">
+    {@render CustomerInfoSection({ form: bulkRentalForm, onFormChange: bulkHandleRentalForm, hasUserProfileInfo: sdHasUserProfileInfo, userProfileInfo: sdUserProfileInfo })}
+    {@render DeliveryAddressSection({ form: bulkRentalForm, onFormChange: bulkHandleRentalForm, method: 'crazydelivery', type: 'rental', hasUserAddress: sdHasUserAddress, userAddressInfo: sdUserAddressInfo, pickupPoints: visitPickupPoints })}
+    {@render NotesSection({ form: bulkRentalForm, onFormChange: bulkHandleRentalForm })}
+  </div>
+{/snippet}
+
 {#snippet RentalOptionsEditor()}
   <!-- 통합 단일 대여예약옵션 편집기 — bulkOpts/bulkDate/bulkTime/bulkRentalForm/bulkReturnForm 클로저 참조 -->
   <div class="accordions">
@@ -2952,6 +3033,124 @@
   </div>
 {/snippet}
 
+{#snippet CustomerInfoSection(p: { form: FormState; onFormChange: (f: FormState) => void; hasUserProfileInfo?: boolean; userProfileInfo?: UserProfileInfo })}
+  <div class="form-section">
+    <div class="form-section-header">
+      <span class="form-section-label">고객 정보</span>
+      <label class="form-check-label" class:form-check-label-disabled={!p.hasUserProfileInfo}>
+        <button
+          class="checkbox-btn checkbox-btn-terms"
+          class:checked={p.form.memberCheck}
+          disabled={!p.hasUserProfileInfo}
+          onclick={() => {
+            const next = !p.form.memberCheck
+            p.onFormChange(next
+              ? {
+                  ...p.form,
+                  memberCheck: true,
+                  name:  p.userProfileInfo?.name  ?? p.form.name,
+                  email: p.userProfileInfo?.email ?? p.form.email,
+                  phone: p.userProfileInfo?.phone ?? p.form.phone,
+                }
+              : { ...p.form, memberCheck: false })
+          }}
+          aria-label="회원정보 반영"
+        >
+          <svg viewBox="0 0 18 12" fill="none" aria-hidden="true">
+            <path d="M14.788 0.40847C15.5937 -0.206503 16.7506 -0.123176 17.4589 0.632103C18.2144 1.4379 18.1729 2.70376 17.3671 3.45925L17.3622 3.46413C17.3585 3.46759 17.3528 3.47297 17.3456 3.47976C17.3311 3.49333 17.3101 3.51407 17.2821 3.54031C17.2261 3.59279 17.1437 3.66974 17.039 3.76784C16.8294 3.96413 16.5289 4.24474 16.1669 4.58327C15.4428 5.26035 14.4707 6.169 13.4774 7.09304C12.4848 8.01654 11.4689 8.95836 10.6591 9.70144C9.90326 10.3949 9.21125 11.0229 8.954 11.219C8.38484 11.6526 7.64783 12.0001 6.7831 12.0003C5.89707 12.0003 5.14509 11.6357 4.57217 11.138C4.258 10.865 3.25694 9.9462 2.37197 9.13015C1.92122 8.71451 1.48885 8.31388 1.16885 8.01785C1.0088 7.86979 0.875998 7.74749 0.78408 7.66238C0.738281 7.61997 0.702073 7.58638 0.677634 7.56374C0.665704 7.55269 0.656551 7.54415 0.650291 7.53835C0.647126 7.53542 0.644094 7.53301 0.642478 7.53152L0.641502 7.52956H0.640525C-0.169647 6.77877 -0.217693 5.51259 0.533103 4.70242C1.28393 3.89251 2.55017 3.84526 3.36025 4.59597L3.36123 4.59792C3.3628 4.59938 3.36592 4.60089 3.36904 4.60378C3.37524 4.60953 3.38439 4.61807 3.39638 4.62917C3.42067 4.65167 3.45618 4.68551 3.50185 4.72781C3.59333 4.81251 3.72524 4.93384 3.88467 5.08132C4.2037 5.37646 4.63512 5.77493 5.08388 6.18874C5.73477 6.78894 6.40077 7.39812 6.82217 7.78054C6.86093 7.74604 6.90358 7.70918 6.94814 7.66921C7.21008 7.43424 7.55408 7.12113 7.954 6.75417C8.7536 6.02049 9.76226 5.0859 10.7528 4.16433C11.7428 3.24336 12.7128 2.33711 13.4354 1.6614C13.7965 1.32374 14.0957 1.04357 14.3046 0.847923C14.409 0.750147 14.491 0.67359 14.5468 0.621361C14.5745 0.595342 14.5959 0.575239 14.6103 0.56179C14.6174 0.555065 14.6232 0.549566 14.6269 0.546165L14.6317 0.541282L14.788 0.40847Z" fill="currentColor" />
+          </svg>
+        </button>
+        <span>회원정보 반영</span>
+      </label>
+    </div>
+    <div class="form-fields">
+      <input class="f-input" placeholder="이름 입력" value={p.form.name} oninput={(e) => p.onFormChange({ ...p.form, name: readInputValue(e) })}/>
+      <input class="f-input" placeholder="전자메일주소 입력" value={p.form.email} oninput={(e) => p.onFormChange({ ...p.form, email: readInputValue(e) })}/>
+      <input class="f-input" placeholder="휴대번호를 '-' 없이 입력" value={p.form.phone} oninput={(e) => p.onFormChange({ ...p.form, phone: readInputValue(e) })}/>
+    </div>
+  </div>
+{/snippet}
+
+{#snippet DeliveryAddressSection(p: { form: FormState; onFormChange: (f: FormState) => void; method: DeliveryMethod | null; type: 'rental' | 'return'; hasUserAddress?: boolean; userAddressInfo?: UserAddressInfo; pickupPoints?: PickupPointRow[] })}
+  {@const isPointPickupMethod = p.method === 'visit' || p.method === 'locker'}
+  {@const addrLabel = isPointPickupMethod ? '방문지점 정보' : (p.type === 'rental' ? '배송지 정보' : '반납위치 지정정보')}
+  <div class="form-section">
+    <div class="form-section-header">
+      <span class="form-section-label">{addrLabel}</span>
+      {#if !isPointPickupMethod}
+        <label class="form-check-label" class:form-check-label-disabled={!p.hasUserAddress}>
+          <button
+            class="checkbox-btn checkbox-btn-terms"
+            class:checked={p.form.memberCheck2}
+            disabled={!p.hasUserAddress}
+            onclick={() => {
+              const next = !p.form.memberCheck2
+              p.onFormChange(next
+                ? {
+                    ...p.form,
+                    memberCheck2: true,
+                    addr:       p.userAddressInfo?.road_address  ?? p.form.addr,
+                    addrDetail: p.userAddressInfo?.detail_address ?? p.form.addrDetail,
+                  }
+                : { ...p.form, memberCheck2: false })
+            }}
+            aria-label="회원정보 반영"
+          >
+            <svg viewBox="0 0 18 12" fill="none" aria-hidden="true">
+              <path d="M14.788 0.40847C15.5937 -0.206503 16.7506 -0.123176 17.4589 0.632103C18.2144 1.4379 18.1729 2.70376 17.3671 3.45925L17.3622 3.46413C17.3585 3.46759 17.3528 3.47297 17.3456 3.47976C17.3311 3.49333 17.3101 3.51407 17.2821 3.54031C17.2261 3.59279 17.1437 3.66974 17.039 3.76784C16.8294 3.96413 16.5289 4.24474 16.1669 4.58327C15.4428 5.26035 14.4707 6.169 13.4774 7.09304C12.4848 8.01654 11.4689 8.95836 10.6591 9.70144C9.90326 10.3949 9.21125 11.0229 8.954 11.219C8.38484 11.6526 7.64783 12.0001 6.7831 12.0003C5.89707 12.0003 5.14509 11.6357 4.57217 11.138C4.258 10.865 3.25694 9.9462 2.37197 9.13015C1.92122 8.71451 1.48885 8.31388 1.16885 8.01785C1.0088 7.86979 0.875998 7.74749 0.78408 7.66238C0.738281 7.61997 0.702073 7.58638 0.677634 7.56374C0.665704 7.55269 0.656551 7.54415 0.650291 7.53835C0.647126 7.53542 0.644094 7.53301 0.642478 7.53152L0.641502 7.52956H0.640525C-0.169647 6.77877 -0.217693 5.51259 0.533103 4.70242C1.28393 3.89251 2.55017 3.84526 3.36025 4.59597L3.36123 4.59792C3.3628 4.59938 3.36592 4.60089 3.36904 4.60378C3.37524 4.60953 3.38439 4.61807 3.39638 4.62917C3.42067 4.65167 3.45618 4.68551 3.50185 4.72781C3.59333 4.81251 3.72524 4.93384 3.88467 5.08132C4.2037 5.37646 4.63512 5.77493 5.08388 6.18874C5.73477 6.78894 6.40077 7.39812 6.82217 7.78054C6.86093 7.74604 6.90358 7.70918 6.94814 7.66921C7.21008 7.43424 7.55408 7.12113 7.954 6.75417C8.7536 6.02049 9.76226 5.0859 10.7528 4.16433C11.7428 3.24336 12.7128 2.33711 13.4354 1.6614C13.7965 1.32374 14.0957 1.04357 14.3046 0.847923C14.409 0.750147 14.491 0.67359 14.5468 0.621361C14.5745 0.595342 14.5959 0.575239 14.6103 0.56179C14.6174 0.555065 14.6232 0.549566 14.6269 0.546165L14.6317 0.541282L14.788 0.40847Z" fill="currentColor" />
+            </svg>
+          </button>
+          <span>회원정보 반영</span>
+        </label>
+      {/if}
+    </div>
+    {#if isPointPickupMethod}
+      <div class="visit-info">
+        {#if p.pickupPoints && p.pickupPoints.length > 0}
+          <div class="pickup-point-list">
+            {#each p.pickupPoints as point (point.id)}
+              <button
+                type="button"
+                class="pickup-point-btn"
+                class:pickup-point-btn-active={p.form.pickupPointId === point.id}
+                onclick={() => p.onFormChange({ ...p.form, pickupPointId: point.id })}
+              >
+                <span class="pickup-point-name">{point.name}</span>
+                {#if point.address}<span class="pickup-point-addr">{point.address}</span>{/if}
+              </button>
+            {/each}
+          </div>
+        {:else}
+          <p class="visit-info-empty">등록된 방문 지점이 없습니다. 고객센터로 문의해 주세요.</p>
+        {/if}
+      </div>
+    {:else}
+      <div class="form-fields">
+        <PostcodeSearchButton
+          value={p.form.addr}
+          placeholder="기본주소 입력 (클릭하여 검색)"
+          onselect={(road, postal) => {
+            p.onFormChange({ ...p.form, addr: road, postalCode: postal })
+            if (p.method) validateDeliveryAddress(road, postal, p.method)
+          }}
+        />
+        {#if p.form.postalCode}
+          <p class="cart-postal-hint">[{p.form.postalCode}]</p>
+        {/if}
+        <input class="f-input" placeholder="상세주소 입력" value={p.form.addrDetail} oninput={(e) => p.onFormChange({ ...p.form, addrDetail: readInputValue(e) })}/>
+      </div>
+    {/if}
+  </div>
+{/snippet}
+
+{#snippet NotesSection(p: { form: FormState; onFormChange: (f: FormState) => void })}
+  <div class="form-section">
+    <span class="form-section-label">요청 사항</span>
+    <input class="f-input" placeholder="알아보기 쉽게 입력 필수" value={p.form.notes} oninput={(e) => p.onFormChange({ ...p.form, notes: readInputValue(e) })}/>
+    <p class="form-note-sm">공동현관 출입번호 / 경비실 호출 / 세대호출 / 자유 출입가능 등</p>
+  </div>
+{/snippet}
+
 {#snippet RentalForm(props: {
   type: 'rental' | 'return';
   // 2026-09-04: 최초진입 시 완전 미선택 상태를 표현하기 위해 null 허용 — method===tab.v
@@ -2989,8 +3188,6 @@
        재사용해야 한다 — 별도 지점 데이터가 없으므로 기존 visitPickupPoints/pickupPointId
        인터랙션을 그대로 공유한다. isVisit(엄격히 'visit'만)은 방문+영업외시간 무인보관함
        인계 안내문(아래 form-note-locker)에서만 계속 그대로 쓰이므로 별도 변수로 분리한다. -->
-  {@const isPointPickupMethod = props.method === 'visit' || props.method === 'locker'}
-  {@const addrLabel = isPointPickupMethod ? '방문지점 정보' : (props.type === 'rental' ? '배송지 정보' : '반납위치 지정정보')}
   {@const isCalOpen = openCalId === props.calId}
   {@const isTimeOpen = openTimeId === props.timeId}
   <!-- 배송(delivery/crazydelivery) 잠금 상태(요청 A) — 시간선택 숨김 + 반납leg 콤보 잠금 기준 -->
@@ -3237,133 +3434,11 @@
       </div>
     </div>
 
-    <!-- 고객 정보 -->
-    <div class="form-section">
-      <div class="form-section-header">
-        <span class="form-section-label">고객 정보</span>
-        <label class="form-check-label" class:form-check-label-disabled={!props.hasUserProfileInfo}>
-          <button
-            class="checkbox-btn checkbox-btn-terms"
-            class:checked={props.form.memberCheck}
-            disabled={!props.hasUserProfileInfo}
-            onclick={() => {
-              const next = !props.form.memberCheck
-              props.onFormChange(next
-                ? {
-                    ...props.form,
-                    memberCheck: true,
-                    name:  props.userProfileInfo?.name  ?? props.form.name,
-                    email: props.userProfileInfo?.email ?? props.form.email,
-                    phone: props.userProfileInfo?.phone ?? props.form.phone,
-                  }
-                : { ...props.form, memberCheck: false })
-            }}
-            aria-label="회원정보 반영"
-          >
-            <svg viewBox="0 0 18 12" fill="none" aria-hidden="true">
-              <path d="M14.788 0.40847C15.5937 -0.206503 16.7506 -0.123176 17.4589 0.632103C18.2144 1.4379 18.1729 2.70376 17.3671 3.45925L17.3622 3.46413C17.3585 3.46759 17.3528 3.47297 17.3456 3.47976C17.3311 3.49333 17.3101 3.51407 17.2821 3.54031C17.2261 3.59279 17.1437 3.66974 17.039 3.76784C16.8294 3.96413 16.5289 4.24474 16.1669 4.58327C15.4428 5.26035 14.4707 6.169 13.4774 7.09304C12.4848 8.01654 11.4689 8.95836 10.6591 9.70144C9.90326 10.3949 9.21125 11.0229 8.954 11.219C8.38484 11.6526 7.64783 12.0001 6.7831 12.0003C5.89707 12.0003 5.14509 11.6357 4.57217 11.138C4.258 10.865 3.25694 9.9462 2.37197 9.13015C1.92122 8.71451 1.48885 8.31388 1.16885 8.01785C1.0088 7.86979 0.875998 7.74749 0.78408 7.66238C0.738281 7.61997 0.702073 7.58638 0.677634 7.56374C0.665704 7.55269 0.656551 7.54415 0.650291 7.53835C0.647126 7.53542 0.644094 7.53301 0.642478 7.53152L0.641502 7.52956H0.640525C-0.169647 6.77877 -0.217693 5.51259 0.533103 4.70242C1.28393 3.89251 2.55017 3.84526 3.36025 4.59597L3.36123 4.59792C3.3628 4.59938 3.36592 4.60089 3.36904 4.60378C3.37524 4.60953 3.38439 4.61807 3.39638 4.62917C3.42067 4.65167 3.45618 4.68551 3.50185 4.72781C3.59333 4.81251 3.72524 4.93384 3.88467 5.08132C4.2037 5.37646 4.63512 5.77493 5.08388 6.18874C5.73477 6.78894 6.40077 7.39812 6.82217 7.78054C6.86093 7.74604 6.90358 7.70918 6.94814 7.66921C7.21008 7.43424 7.55408 7.12113 7.954 6.75417C8.7536 6.02049 9.76226 5.0859 10.7528 4.16433C11.7428 3.24336 12.7128 2.33711 13.4354 1.6614C13.7965 1.32374 14.0957 1.04357 14.3046 0.847923C14.409 0.750147 14.491 0.67359 14.5468 0.621361C14.5745 0.595342 14.5959 0.575239 14.6103 0.56179C14.6174 0.555065 14.6232 0.549566 14.6269 0.546165L14.6317 0.541282L14.788 0.40847Z" fill="currentColor" />
-            </svg>
-          </button>
-          <span>회원정보 반영</span>
-        </label>
-      </div>
-      <div class="form-fields">
-        <input class="f-input" placeholder="이름 입력" value={props.form.name} oninput={(e) => props.onFormChange({ ...props.form, name: readInputValue(e) })}/>
-        <input class="f-input" placeholder="전자메일주소 입력" value={props.form.email} oninput={(e) => props.onFormChange({ ...props.form, email: readInputValue(e) })}/>
-        <input class="f-input" placeholder="휴대번호를 '-' 없이 입력" value={props.form.phone} oninput={(e) => props.onFormChange({ ...props.form, phone: readInputValue(e) })}/>
-      </div>
-    </div>
+    {@render CustomerInfoSection({ form: props.form, onFormChange: props.onFormChange, hasUserProfileInfo: props.hasUserProfileInfo, userProfileInfo: props.userProfileInfo })}
 
-    <!-- 배송지/반납위치 정보 -->
-    <div class="form-section">
-      <div class="form-section-header">
-        <span class="form-section-label">{addrLabel}</span>
-        {#if !isPointPickupMethod}
-          <label class="form-check-label" class:form-check-label-disabled={!props.hasUserAddress}>
-            <button
-              class="checkbox-btn checkbox-btn-terms"
-              class:checked={props.form.memberCheck2}
-              disabled={!props.hasUserAddress}
-              onclick={() => {
-                const next = !props.form.memberCheck2
-                props.onFormChange(next
-                  ? {
-                      ...props.form,
-                      memberCheck2: true,
-                      addr:       props.userAddressInfo?.road_address  ?? props.form.addr,
-                      addrDetail: props.userAddressInfo?.detail_address ?? props.form.addrDetail,
-                    }
-                  : { ...props.form, memberCheck2: false })
-              }}
-              aria-label="회원정보 반영"
-            >
-              <svg viewBox="0 0 18 12" fill="none" aria-hidden="true">
-                <path d="M14.788 0.40847C15.5937 -0.206503 16.7506 -0.123176 17.4589 0.632103C18.2144 1.4379 18.1729 2.70376 17.3671 3.45925L17.3622 3.46413C17.3585 3.46759 17.3528 3.47297 17.3456 3.47976C17.3311 3.49333 17.3101 3.51407 17.2821 3.54031C17.2261 3.59279 17.1437 3.66974 17.039 3.76784C16.8294 3.96413 16.5289 4.24474 16.1669 4.58327C15.4428 5.26035 14.4707 6.169 13.4774 7.09304C12.4848 8.01654 11.4689 8.95836 10.6591 9.70144C9.90326 10.3949 9.21125 11.0229 8.954 11.219C8.38484 11.6526 7.64783 12.0001 6.7831 12.0003C5.89707 12.0003 5.14509 11.6357 4.57217 11.138C4.258 10.865 3.25694 9.9462 2.37197 9.13015C1.92122 8.71451 1.48885 8.31388 1.16885 8.01785C1.0088 7.86979 0.875998 7.74749 0.78408 7.66238C0.738281 7.61997 0.702073 7.58638 0.677634 7.56374C0.665704 7.55269 0.656551 7.54415 0.650291 7.53835C0.647126 7.53542 0.644094 7.53301 0.642478 7.53152L0.641502 7.52956H0.640525C-0.169647 6.77877 -0.217693 5.51259 0.533103 4.70242C1.28393 3.89251 2.55017 3.84526 3.36025 4.59597L3.36123 4.59792C3.3628 4.59938 3.36592 4.60089 3.36904 4.60378C3.37524 4.60953 3.38439 4.61807 3.39638 4.62917C3.42067 4.65167 3.45618 4.68551 3.50185 4.72781C3.59333 4.81251 3.72524 4.93384 3.88467 5.08132C4.2037 5.37646 4.63512 5.77493 5.08388 6.18874C5.73477 6.78894 6.40077 7.39812 6.82217 7.78054C6.86093 7.74604 6.90358 7.70918 6.94814 7.66921C7.21008 7.43424 7.55408 7.12113 7.954 6.75417C8.7536 6.02049 9.76226 5.0859 10.7528 4.16433C11.7428 3.24336 12.7128 2.33711 13.4354 1.6614C13.7965 1.32374 14.0957 1.04357 14.3046 0.847923C14.409 0.750147 14.491 0.67359 14.5468 0.621361C14.5745 0.595342 14.5959 0.575239 14.6103 0.56179C14.6174 0.555065 14.6232 0.549566 14.6269 0.546165L14.6317 0.541282L14.788 0.40847Z" fill="currentColor" />
-              </svg>
-            </button>
-            <span>회원정보 반영</span>
-          </label>
-        {/if}
-      </div>
-      {#if isPointPickupMethod}
-        <!-- 방문대여/방문반납 선택 시 배송지 입력 대신 실제 방문 지점 정보로 대체(2026-08-17)
-             — 2026-09-07(Stephen 요청): 지점이 여러 개면 콤보버튼으로 직접 선택 가능하게
-             변경(기존엔 전부 텍스트로만 나열, 선택 자체가 불가능했음). 1개면 자동 선택
-             (아래 pickupPointId 자동선택 이펙트 참고) — 수령/반납 두 leg 모두 동일 컴포넌트
-             (RentalForm 스니펫)를 공유하므로 별도 구현 불필요.
-             2026-09-07(같은 날 후속, Stephen 재요청) — 방식 콤보(.combo-btn, 짧은 라벨
-             다건 가로배열 전용)를 그대로 재사용했던 걸 전용 스타일로 교체: 각 지점을
-             가로로 긴 버튼 1개당 1행(직렬 목록)으로 쌓고, 그 버튼 안에 점명+주소를 함께
-             표시(선택 전에도 주소가 바로 보임 — 이전엔 선택 후에만 별도로 아래 표시).
-             버튼 상하 패딩은 표준 .combo-btn(9px)의 70%(6px)로 축소.
-             2026-09-10(Stephen 확정) — '무인보관함'(locker)도 실물 지점을 방문해야 하는
-             방식이라 '배송지 정보 입력' 대신 이 방문지점 선택 UI를 그대로 공유한다(별도
-             지점 데이터 모델이 없음 — CMS `pickup_points`가 유일한 지점 소스). -->
-        <div class="visit-info">
-          {#if props.pickupPoints && props.pickupPoints.length > 0}
-            <div class="pickup-point-list">
-              {#each props.pickupPoints as point (point.id)}
-                <button
-                  type="button"
-                  class="pickup-point-btn"
-                  class:pickup-point-btn-active={props.form.pickupPointId === point.id}
-                  onclick={() => props.onFormChange({ ...props.form, pickupPointId: point.id })}
-                >
-                  <span class="pickup-point-name">{point.name}</span>
-                  {#if point.address}<span class="pickup-point-addr">{point.address}</span>{/if}
-                </button>
-              {/each}
-            </div>
-          {:else}
-            <p class="visit-info-empty">등록된 방문 지점이 없습니다. 고객센터로 문의해 주세요.</p>
-          {/if}
-        </div>
-      {:else}
-        <div class="form-fields">
-          <PostcodeSearchButton
-            value={props.form.addr}
-            placeholder="기본주소 입력 (클릭하여 검색)"
-            onselect={(road, postal) => {
-              props.onFormChange({ ...props.form, addr: road, postalCode: postal })
-              // 2026-09-04: 최초진입 시 방식이 미선택(null)일 수 있음 — 방식 자체를 아직
-              // 고르지 않은 상태에서는 배송가능지역 검증 대상 방식이 없으므로 스킵한다.
-              if (props.method) validateDeliveryAddress(road, postal, props.method)
-            }}
-          />
-          {#if props.form.postalCode}
-            <p class="cart-postal-hint">[{props.form.postalCode}]</p>
-          {/if}
-          <input class="f-input" placeholder="상세주소 입력" value={props.form.addrDetail} oninput={(e) => props.onFormChange({ ...props.form, addrDetail: readInputValue(e) })}/>
-        </div>
-      {/if}
-    </div>
+    {@render DeliveryAddressSection({ form: props.form, onFormChange: props.onFormChange, method: props.method, type: props.type, hasUserAddress: props.hasUserAddress, userAddressInfo: props.userAddressInfo, pickupPoints: props.pickupPoints })}
 
-    <!-- 요청 사항 -->
-    <div class="form-section">
-      <span class="form-section-label">요청 사항</span>
-      <input class="f-input" placeholder="알아보기 쉽게 입력 필수" value={props.form.notes} oninput={(e) => props.onFormChange({ ...props.form, notes: readInputValue(e) })}/>
-      <p class="form-note-sm">공동현관 출입번호 / 경비실 호출 / 세대호출 / 자유 출입가능 등</p>
-    </div>
+    {@render NotesSection({ form: props.form, onFormChange: props.onFormChange })}
 
     <!-- Copy to return checkbox -->
     {#if props.type === 'rental' && props.onCopyChange}

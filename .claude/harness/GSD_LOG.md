@@ -1,6 +1,9 @@
 # GSD_LOG.md — 크레이지샷 실행 이력
 # 형식: [YYYY-MM-DD HH:MM] 타입 | 타스크명 | 파일 | 소요 | 결과
 
+[2026-09-27] 🔴TDD+GSD | 장바구니 구매 예약 옵션 신설 T0~T9 완료 | src/lib/utils/cartPurchaseMode.ts(신규) · src/lib/utils/cartMethodSelection.ts · src/lib/utils/cartShippingFee.ts · src/routes/cart/+page.svelte · src/__tests__/services/cartPurchaseMode.test.ts(신규) · src/__tests__/services/cartMethodSelection.test.ts · src/__tests__/services/cartShippingFee.test.ts | svelte-check 2061 FILES 1 ERRORS(pre-existing, 신규 0건) · vitest 118/118 GREEN | GATE E: 불통과(sp3-qa CRITICAL 3건)
+[2026-09-27] 🔴TDD | 장바구니 구매 예약 옵션 — 배선 C-1/C-2/C-3 수정 | src/routes/cart/+page.svelte(datesSet·methodSelectionValid·checkedShippingItems 3곳) | svelte-check 신규에러 0건(pre-existing 1건 유지) · vitest 118/118 GREEN | 구현 완료 — 재검수 대기
+
 [2026-09-27] ⚡GSD | 상품 관리 순서 변경 ①② — 옵션·결합상품 CmsDragList 드래그 정렬 + 이미지 HTML5 드래그 순서 변경 | src/lib/components/cms/ProductDetailPanel.svelte · src/routes/cms/products/new/+page.svelte | svelte-check 신규에러 0건(기존 vite.config.ts 1건 유지) | GATE C: 완료(BOUNDARY — 코드 기준, 실화면 미확인)
 
 [2026-09-21(이 세션'만')] 🔴CRITICAL | 관리자 쿠폰 발행·정산 로직 전면 수정 — 배송비할인/중복적용/포인트병행/최대한도/적용카테고리 4+1건 죽은 필드 실동작화 + cms_create_coupon enum 캐스팅 결함으로 모든 쿠폰 발행이 막혀있던 별개 CRITICAL 결함 발견·수정 | supabase/migrations/20260921000000_510_*.sql, 20260921010000_511_*.sql, 20260921020000_512_*.sql(전부 신규) · src/routes/cms/promotion/coupon/new/+page.svelte · +page.server.ts · src/routes/cart/+page.server.ts · +page.svelte · src/routes/contract/[token]/+page.svelte · +page.server.ts · pay-result/+page.server.ts · src/lib/server/coupons/couponEligibility.ts · src/lib/utils/cartShippingFee.ts · src/__tests__/services/cartShippingFee.test.ts | Stage 실측 검증(발행 5유형 성공, 캡·게이트·카테고리 매칭/불일치 전부 재현확인, 테스트데이터 원복) + Production 3개 마이그레이션 전부 적용·라이브 재조회 확인 + 테스트 82/82 GREEN + npm run check 신규에러 0건 | GATE C: 대기(sp3-qa-agent 검수 요청)
