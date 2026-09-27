@@ -356,9 +356,13 @@
                   <span class="prod-card-name">{prod.name}</span>
                 </div>
                 <div class="prod-card-price">
-                  {#if prod.price_24h}<span class="price-label">Day</span><span class="price-num">{prod.price_24h.toLocaleString('ko-KR')}</span>{/if}
-                  {#if prod.price_24h && prod.price_12h}<span class="price-sep">/</span>{/if}
-                  {#if prod.price_12h}<span class="price-label">12H</span><span class="price-num">{prod.price_12h.toLocaleString('ko-KR')}</span>{/if}
+                  {#if prod.sale_only}
+                    <span class="price-label">Price</span><span class="price-num">{(prod.sale_price ?? 0).toLocaleString('ko-KR')}</span>
+                  {:else}
+                    {#if prod.price_24h}<span class="price-label">Day</span><span class="price-num">{prod.price_24h.toLocaleString('ko-KR')}</span>{/if}
+                    {#if prod.price_24h && prod.price_12h}<span class="price-sep">/</span>{/if}
+                    {#if prod.price_12h}<span class="price-label">12H</span><span class="price-num">{prod.price_12h.toLocaleString('ko-KR')}</span>{/if}
+                  {/if}
                 </div>
               </div>
             </div>
@@ -478,9 +482,13 @@
                   <span class="prod-card-name">{p.name}</span>
                 </div>
                 <div class="prod-card-price">
-                  {#if p.price_24h}<span class="price-label">Day</span><span class="price-num">{p.price_24h.toLocaleString('ko-KR')}</span>{/if}
-                  {#if p.price_24h && p.price_12h}<span class="price-sep">/</span>{/if}
-                  {#if p.price_12h}<span class="price-label">12H</span><span class="price-num">{p.price_12h.toLocaleString('ko-KR')}</span>{/if}
+                  {#if p.sale_only}
+                    <span class="price-label">Price</span><span class="price-num">{(p.sale_price ?? 0).toLocaleString('ko-KR')}</span>
+                  {:else}
+                    {#if p.price_24h}<span class="price-label">Day</span><span class="price-num">{p.price_24h.toLocaleString('ko-KR')}</span>{/if}
+                    {#if p.price_24h && p.price_12h}<span class="price-sep">/</span>{/if}
+                    {#if p.price_12h}<span class="price-label">12H</span><span class="price-num">{p.price_12h.toLocaleString('ko-KR')}</span>{/if}
+                  {/if}
                 </div>
                 {#if p.product_caption}<div class="prod-card-desc">{p.product_caption}</div>{/if}
               </div>
@@ -712,9 +720,13 @@
                   <span class="m-prod-name">{prod.name}</span>
                 </div>
                 <div class="m-prod-price">
-                  {#if prod.price_24h}<span class="price-label">Day</span><span class="price-num">{prod.price_24h.toLocaleString('ko-KR')}</span>{/if}
-                  {#if prod.price_24h && prod.price_12h}<span class="price-sep">/</span>{/if}
-                  {#if prod.price_12h}<span class="price-label">12H</span><span class="price-num">{prod.price_12h.toLocaleString('ko-KR')}</span>{/if}
+                  {#if prod.sale_only}
+                    <span class="price-label">Price</span><span class="price-num">{(prod.sale_price ?? 0).toLocaleString('ko-KR')}</span>
+                  {:else}
+                    {#if prod.price_24h}<span class="price-label">Day</span><span class="price-num">{prod.price_24h.toLocaleString('ko-KR')}</span>{/if}
+                    {#if prod.price_24h && prod.price_12h}<span class="price-sep">/</span>{/if}
+                    {#if prod.price_12h}<span class="price-label">12H</span><span class="price-num">{prod.price_12h.toLocaleString('ko-KR')}</span>{/if}
+                  {/if}
                 </div>
               </div>
             </div>
@@ -788,9 +800,13 @@
             <div class="md-pick-info">
               <p class="md-pick-name">{prod.name}</p>
               <p class="md-pick-price">
-                {#if prod.price_24h}Day {prod.price_24h.toLocaleString('ko-KR')}{/if}
-                {#if prod.price_24h && prod.price_12h} / {/if}
-                {#if prod.price_12h}12H {prod.price_12h.toLocaleString('ko-KR')}{/if}
+                {#if prod.sale_only}
+                  Price {(prod.sale_price ?? 0).toLocaleString('ko-KR')}
+                {:else}
+                  {#if prod.price_24h}Day {prod.price_24h.toLocaleString('ko-KR')}{/if}
+                  {#if prod.price_24h && prod.price_12h} / {/if}
+                  {#if prod.price_12h}12H {prod.price_12h.toLocaleString('ko-KR')}{/if}
+                {/if}
               </p>
             </div>
           </a>

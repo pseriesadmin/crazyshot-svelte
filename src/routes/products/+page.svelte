@@ -266,20 +266,28 @@
                 <p class="m-feat-desc">{prod.product_caption}</p>
               {/if}
               <div class="m-feat-price-row">
-                {#if (prod.price_24h ?? prod.base_price_daily) > 0}
+                {#if prod.sale_only}
                   <div class="m-feat-price-unit">
-                    <span class="m-feat-plabel">Day</span>
-                    <span class="m-feat-pnum">{formatPrice(prod.price_24h ?? prod.base_price_daily)}</span>
+                    <span class="m-feat-plabel">Price</span>
+                    <span class="m-feat-pnum">{formatPrice(prod.sale_price ?? 0)}</span>
                     <span class="m-feat-pcur">원</span>
                   </div>
-                {/if}
-                {#if prod.price_12h}
-                  <span class="m-feat-psep">/</span>
-                  <div class="m-feat-price-unit">
-                    <span class="m-feat-plabel">12H</span>
-                    <span class="m-feat-pnum">{formatPrice(prod.price_12h)}</span>
-                    <span class="m-feat-pcur">원</span>
-                  </div>
+                {:else}
+                  {#if (prod.price_24h ?? prod.base_price_daily) > 0}
+                    <div class="m-feat-price-unit">
+                      <span class="m-feat-plabel">Day</span>
+                      <span class="m-feat-pnum">{formatPrice(prod.price_24h ?? prod.base_price_daily)}</span>
+                      <span class="m-feat-pcur">원</span>
+                    </div>
+                  {/if}
+                  {#if prod.price_12h}
+                    <span class="m-feat-psep">/</span>
+                    <div class="m-feat-price-unit">
+                      <span class="m-feat-plabel">12H</span>
+                      <span class="m-feat-pnum">{formatPrice(prod.price_12h)}</span>
+                      <span class="m-feat-pcur">원</span>
+                    </div>
+                  {/if}
                 {/if}
               </div>
             </div>
@@ -337,20 +345,28 @@
                   <p class="d-feat-desc">{prod.product_caption}</p>
                 {/if}
                 <div class="d-feat-price-row">
-                  {#if (prod.price_24h ?? prod.base_price_daily) > 0}
+                  {#if prod.sale_only}
                     <div class="d-feat-price-unit">
-                      <span class="d-feat-plabel">Day</span>
-                      <span class="d-feat-pnum">{formatPrice(prod.price_24h ?? prod.base_price_daily)}</span>
+                      <span class="d-feat-plabel">Price</span>
+                      <span class="d-feat-pnum">{formatPrice(prod.sale_price ?? 0)}</span>
                       <span class="d-feat-pcur">원</span>
                     </div>
-                  {/if}
-                  {#if prod.price_12h}
-                    <span class="d-feat-psep">/</span>
-                    <div class="d-feat-price-unit">
-                      <span class="d-feat-plabel">12H</span>
-                      <span class="d-feat-pnum">{formatPrice(prod.price_12h)}</span>
-                      <span class="d-feat-pcur">원</span>
-                    </div>
+                  {:else}
+                    {#if (prod.price_24h ?? prod.base_price_daily) > 0}
+                      <div class="d-feat-price-unit">
+                        <span class="d-feat-plabel">Day</span>
+                        <span class="d-feat-pnum">{formatPrice(prod.price_24h ?? prod.base_price_daily)}</span>
+                        <span class="d-feat-pcur">원</span>
+                      </div>
+                    {/if}
+                    {#if prod.price_12h}
+                      <span class="d-feat-psep">/</span>
+                      <div class="d-feat-price-unit">
+                        <span class="d-feat-plabel">12H</span>
+                        <span class="d-feat-pnum">{formatPrice(prod.price_12h)}</span>
+                        <span class="d-feat-pcur">원</span>
+                      </div>
+                    {/if}
                   {/if}
                 </div>
               </div>
@@ -425,18 +441,25 @@
                 <p class="mdp-category">{prod.category}</p>
               {/if}
               <div class="mdp-price-row">
-                {#if (prod.price_24h ?? prod.base_price_daily) > 0}
+                {#if prod.sale_only}
                   <span class="mdp-price-group">
-                    <span class="mdp-price-label">Day</span>
-                    <span class="mdp-price-num">{formatPrice(prod.price_24h ?? prod.base_price_daily)}</span>
+                    <span class="mdp-price-label">Price</span>
+                    <span class="mdp-price-num">{formatPrice(prod.sale_price ?? 0)}</span>
                   </span>
-                {/if}
-                {#if prod.price_12h}
-                  <span class="mdp-price-sep">/</span>
-                  <span class="mdp-price-group">
-                    <span class="mdp-price-label">12H</span>
-                    <span class="mdp-price-num">{formatPrice(prod.price_12h)}</span>
-                  </span>
+                {:else}
+                  {#if (prod.price_24h ?? prod.base_price_daily) > 0}
+                    <span class="mdp-price-group">
+                      <span class="mdp-price-label">Day</span>
+                      <span class="mdp-price-num">{formatPrice(prod.price_24h ?? prod.base_price_daily)}</span>
+                    </span>
+                  {/if}
+                  {#if prod.price_12h}
+                    <span class="mdp-price-sep">/</span>
+                    <span class="mdp-price-group">
+                      <span class="mdp-price-label">12H</span>
+                      <span class="mdp-price-num">{formatPrice(prod.price_12h)}</span>
+                    </span>
+                  {/if}
                 {/if}
               </div>
               <p class="mdp-name">{prod.name}</p>
@@ -479,6 +502,8 @@
         {#each data.gridProducts.slice(0, 6) as prod}
           {@const d24 = prod.price_24h ?? (prod.base_price_daily > 0 ? prod.base_price_daily : null)}
           {@const d12 = prod.price_12h ?? null}
+          {@const isSaleOnly = prod.sale_only}
+          {@const salePrice = prod.sale_price}
           <a href={productLink(prod)} class="m-prod-card">
             <div class="m-prod-img-box">
               <img src={productImg(prod)} alt={prod.name} class="abs-img"
@@ -501,7 +526,14 @@
               {#if prod.category}
                 <p class="m-prod-category">{prod.category}</p>
               {/if}
-              {#if d24 !== null || d12 !== null}
+              {#if isSaleOnly}
+                <div class="m-prod-price-row">
+                  <span class="m-prod-price-group">
+                    <span class="m-prod-price-label">Price</span>
+                    <span class="m-prod-price-num">{formatPrice(salePrice ?? 0)}</span>
+                  </span>
+                </div>
+              {:else if d24 !== null || d12 !== null}
                 <div class="m-prod-price-row">
                   {#if d24 !== null}
                     <span class="m-prod-price-group">
@@ -568,6 +600,8 @@
         {#each data.gridProducts.slice(6) as prod}
           {@const d24 = prod.price_24h ?? (prod.base_price_daily > 0 ? prod.base_price_daily : null)}
           {@const d12 = prod.price_12h ?? null}
+          {@const isSaleOnly = prod.sale_only}
+          {@const salePrice = prod.sale_price}
           <a href={productLink(prod)} class="m-prod-card">
             <div class="m-prod-img-box">
               <img src={productImg(prod)} alt={prod.name} class="abs-img"
@@ -590,7 +624,14 @@
               {#if prod.category}
                 <p class="m-prod-category">{prod.category}</p>
               {/if}
-              {#if d24 !== null || d12 !== null}
+              {#if isSaleOnly}
+                <div class="m-prod-price-row">
+                  <span class="m-prod-price-group">
+                    <span class="m-prod-price-label">Price</span>
+                    <span class="m-prod-price-num">{formatPrice(salePrice ?? 0)}</span>
+                  </span>
+                </div>
+              {:else if d24 !== null || d12 !== null}
                 <div class="m-prod-price-row">
                   {#if d24 !== null}
                     <span class="m-prod-price-group">
@@ -654,6 +695,8 @@
               imageUrl={productImg(prod)}
               price24h={prod.price_24h ?? (prod.base_price_daily > 0 ? prod.base_price_daily : null)}
               price12h={prod.price_12h ?? null}
+              isSaleOnly={prod.sale_only}
+              salePrice={prod.sale_price}
               href={productLink(prod)}
               category={prod.category}
               wished={wishedSet.has(prod.id)}

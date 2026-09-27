@@ -140,7 +140,42 @@ proname='cms_create_coupon'`로 오버로드 1개(31-param)인지 직접 재확�
   대조 확인, 이 마이그레이션이 유발한 새로운 위험 아님).
 ```
 
-git commit은 여전히 Stephen 직접 실행 대기(이 세션은 실행하지 않음).
+### ✅ git commit·push + Stage·Production 배포 확인 완료(2026-09-27, Stephen 직접 실행)
+
+```
+커밋 c4244f2 "fix(cms/coupon): 쿠폰 생성 화면 결함 7건 보완 + 발행순번 채번체계 신설" —
+Stephen이 직접 커밋·stage 브랜치 push. Vercel 배포 확인(get_deployment):
+  Stage(stage.crazyshot.kr)      — dpl_77B7s9tVT3eRnnxGb8abZAcTXfkD, readyState=READY
+  Production(crazyshot.kr, PR #363 stage→main 자동 머지) — dpl_3ozKziiwnKFQWENXwHkR2dkLVKqG, readyState=READY
+두 배포 모두 aliasError 없음, 프레임워크 sveltekit-1 정상 인식.
+```
+
+### ✅ 실화면(로컬 dev server, Stage DB) 6가지 시나리오 클릭 검증 완료(2026-09-27)
+
+```
+Stephen이 로컬 dev server(localhost:5175, Stage DB 연결)에 로그인 후 Claude Browser로
+/cms/promotion/coupon/new에서 직접 검증(도중 dev server가 한 번 다운돼 재시작 후 이어감):
+
+1. 같은 코드조합(QT)으로 쿠폰 2개 연속 생성 → 목록 "코드" 컬럼 CSQT202609001 →
+   CSQT202609002로 issue_seq 1→2 정확히 증가 확인(과거엔 둘 다 동일하게 000으로 보이던
+   결함 완전 해소).
+2. 정률 150 입력 → 100 자동 클램프 확인.
+3. 시작일(9/20)>종료일(9/10) 상태로 제출 시도 → 서버에 요청 자체가 나가지 않고
+   클라이언트에서 완전 차단(네트워크 로그로 확인, POST 미발생).
+4. 할인방식 정액→정률 전환 시 할인값 5,000→0 정확히 초기화 확인.
+5. 정률 12.5 입력 시 소수점 그대로 유지(hidden discount_value도 12.5) 확인.
+6. 자동배포 토글 OFF로 생성한 쿠폰(검증A) → 상세패널 "상태: 자동배포 중지" /
+   ON으로 생성한 쿠폰(검증B) → "상태: 자동배포 활성" — 정확히 대조 확인.
+
+6가지 전부 통과. 검증에 사용한 테스트 쿠폰 2건은 Stephen 지시로 삭제하지 않고 Stage DB에
+보존 — 다음 쿠폰 관련 수정 시 회귀 테스트용으로 재사용할 것(임의 삭제 금지):
+  CSQT202609001 — [검증A] issue_seq 테스트 1 (auto_distribute_enabled=false)
+  CSQT202609002 — [검증B] issue_seq 테스트 2 (auto_distribute_enabled=true)
+
+참고(도구 이슈, 앱 코드 무관): 이 화면의 라디오·토글 등 일부 작은 UI 요소에서 Claude
+Browser의 좌표 기반 클릭이 간헐적으로 인식되지 않아, 표준 DOM 클릭 이벤트(실제 클릭과
+동일한 이벤트 체인)로 우회해 진행함.
+```
 
 세션 리뷰 문서(상세 근거·코드 diff 요약): `.claude/plan/세션 리뷰 — 쿠폰 생성(coupon-new) 결함 7건 보완(2026-09-27).md`
 
@@ -10384,7 +10419,7 @@ Migration #554를 Production(vnbpmvxruyciuuaermyh)에 적용. 적용 직전 파�
 ### 미실행
 git add/commit — Stephen 별도 지시 대기.
 
-## NOW — CMS 상품패널 "저장 후 다른 상품으로 재랜딩" 버그 조사 + 이미지 8장 상한 서버측 강제 + 연속삭제 경쟁상태 수정 (2026-09-27, 이 세션 단독)
+## DONE — CMS 상품패널 "저장 후 다른 상품으로 재랜딩" 버그 조사 + 이미지 8장 상한 서버측 강제 + 연속삭제 경쟁상태 수정 (2026-09-27, 이 세션 단독)
 
 ### 배경
 Stephen 보고: `/cms/products` 상품상세 패널에서 옵션/결합/사양/이미지 등 순서정렬(드래그)
@@ -10431,9 +10466,114 @@ Stephen 보고: `/cms/products` 상품상세 패널에서 옵션/결합/사양/�
   (버그 재현용 임시 데이터는 검증 후 전부 원복 완료 — `option_product_links`/
   `product_bundle_links`/`image_urls`/`specifications` 원상복구 확인).
 
+### @sp3-qa-agent 검수 결과 (2026-09-27)
+GATE E 통과 ✅ — CRITICAL 0건. 두 수정(8장 상한 서버측 강제·RACE-IMG-1) 모두 요청 범위 내
+정확히 구현, 기존 정책과 일치, 회귀 없음(`npx svelte-check` baseline 대비 신규 에러 0건,
+관련 유닛테스트 diff 전후 동일). 상세는 위 검증 절 및 세션 기록 참고.
+
+### git commit + Stage/Production 배포 확인 (2026-09-27, Stephen 직접 실행)
+- 커밋 `ddface6 fix(cms/products): 이미지 8장 상한 서버측 강제 + 연속삭제 경쟁상태 방어`
+  Stephen 직접 실행 완료 → `origin/stage` 푸시 확인(로컬 HEAD와 0 ahead/behind).
+- `stage` → `main` PR #362 머지 확인, `git merge-base --is-ancestor ddface6 origin/main` → YES.
+- Vercel CLI(`vercel ls`/`vercel inspect`, scope=pseries)로 실측: Stage(stage.crazyshot.kr,
+  git-stage) · Production(crazyshot.kr/www.crazyshot.kr, git-main) 둘 다 커밋 반영 직후
+  생성된 배포가 ● Ready — 빌드 에러 없음.
+
+### 원 버그 재현 재확인 — 종결 처리
+Stephen이 지정한 정확한 재현 조건(카테고리 필터 + `2af56415-...` SONY PXW-Z90 + 결합상품 탭
+드래그 순서변경 저장)으로 배포 완료 후 Claude Browser(명시 승인)로 재테스트 — 저장 후에도
+패널이 닫히지 않고 원래 상품(SONY PXW-Z90) 그대로 유지, URL·DOM·DB 저장값 전부 일치해
+재현 실패. 이 세션 내 총 4회 이상 정확한 조건으로 재현 시도했으나 매번 정상 동작 —
+이 세션이 관련 파일을 동시 수정 중이던 시점의 Vite HMR(핫리로드) 타이밍 우연 일치로 결론.
+**Stephen 확인 하에 이 버그는 종결(재현 불가·앱 로직 결함 아님)로 처리.**
+테스트에 사용한 실제 상품(2af56415)의 결합상품 순서는 테스트 직후 원래 순서로 복원 완료.
+
 ### 미실행 / 대기
-- 원 버그("저장 후 다른 상품으로 재랜딩") 재현 여부 Stephen 재확인 대기 — 재현되면 후속
-  조사 필요.
-- git add/commit — Stephen 직접 실행 대기.
-- Stage에서 검증된 이 두 건의 수정은 마이그레이션이 없는 순수 애플리케이션 코드 변경이라
-  Production 배포는 git 배포 절차(커밋→PR/배포)만 따르면 됨 — 별도 DB 마이그레이션 없음.
+없음 — 이 블록의 조사·수정·검수·배포·재현재확인 전 과정 완료.
+
+## DONE — 판매전용(sale_only) 상품 목록화면 가격 미노출 버그 수정 — /products·홈·하입팩 3개 화면 (2026-09-27, 이 세션 단독)
+
+### 배경
+Stephen 보고(launch-selected-element 2건 + 스크린샷): 신규 카테고리 'SHOP' 등록 후 그
+카테고리 상품 썸네일(예: "인스탁스 와이드필름 10매")을 `/products`에서 보면 상품명·카테고리는
+나오는데 판매가격(요금정보) 자체가 완전히 비어 보임. 반면 그 상품의 상세페이지
+(`/products/instax-wide-film-10-2609`)에서는 가격이 정상 노출됨.
+
+### 원인
+최근(직전 커밋들) 도입된 '판매전용(sale_only)' 상품은 products.md §2-9 정책상 대여요금
+(price_rules 12h/24h)이 원래부터 없는 게 정상 — 오직 `products.sale_price` 단일값만 있음.
+그런데 `/products`·홈·하입팩 3개 화면의 카드용 가격 계산 로직이 전부 "price_rules(대여요금)
+없으면 base_price_daily, 그것도 없으면 null" 순서로만 폴백해 `sale_price`를 아예 조회·참조
+하지 않았음 — 그 결과 판매전용 상품은 price_24h/price_12h가 전부 null이 되어 가격 영역
+(ProductDPCard 등)의 `{#if price24h !== null || price12h !== null}` 조건 자체가 거짓이 되면서
+가격 UI 블록 전체가 사라짐. 상품상세 화면(`products/[id]/+page.svelte`)은 애초에
+`isSaleOnly`/`product.sale_price` 전용 분기가 있어 정상 노출됐던 것 — 목록 3개 화면에만
+동일 분기가 누락돼 있던 구조적 공백.
+
+### 수정 내역 (요청 범위: 최초 /products만 → Stephen 추가 요청으로 홈·하입팩까지 확장)
+
+**1. `/products` (전체 그리드 PC + Best Pick 모바일)**
+- `src/routes/products/+page.server.ts`: `ProductCard` 인터페이스에 `sale_only`/`sale_price`
+  추가, `allIds` 기준 `products` 테이블에서 `sale_only, sale_price` 별도 조회(salePriceMap/
+  saleOnlyMap), `mergePrice()`가 두 필드를 함께 부착하도록 확장.
+- `src/lib/components/products/ProductDPCard.svelte`: `isSaleOnly`/`salePrice` prop 신설,
+  가격 렌더 조건에 `{#if isSaleOnly}...Price {salePrice}...{:else if price24h...}` 분기 추가
+  (상품상세와 동일하게 "Price" 단일 레이블 사용).
+- `src/routes/products/+page.svelte`: 데스크톱 `ProductDPCard` 호출부에 새 prop 연결 +
+  모바일 Best Pick 인라인 카드 2곳(슬라이스 0-6, 6~) 모두 동일 sale_only 분기 추가.
+
+**2. 홈(`/`) — 취향직격(PC+모바일)·미칠 PICK(PC)·MD 추천(모바일) 4곳**
+- `src/routes/+page.server.ts`: `ThemeGroupProduct`/`HomeProductRow` 타입에 `sale_only`/
+  `sale_price` 추가, `priceProductIds` 기준 동일한 `products` 테이블 별도조회 신설,
+  `withDualPrice()` 헬퍼가 두 필드를 함께 반환하도록 확장(themeGroups·categoryProducts·
+  mdProducts 3개 데이터소스가 전부 이 헬퍼를 공유 — 단일 수정으로 3곳 전부 커버).
+- `src/routes/+page.svelte`: `.prod-card-price`(PC 취향직격/미칠 PICK, 2곳) · `.m-prod-price`
+  (모바일 취향직격) · `.md-pick-price`(모바일 MD추천, 텍스트결합형이라 별도 분기) — 4개
+  렌더 블록 전부 sale_only 분기 추가.
+
+**3. 하입팩(`/hype-pack`) — 광고배너(PC+모바일)**
+- `src/routes/hype-pack/+page.server.ts`: `EnrichedBannerItem`에 `sale_only`/`sale_price`
+  추가, `allPriceIds` 기준 동일 조회 신설, `enrichedItems` 매핑에 필드 연결.
+- `src/routes/hype-pack/+page.svelte`: PC(`.d-ad-banner-price`)·모바일(`.m-ad-banner-price`)
+  배너 가격 텍스트 — 기존엔 판매전용 상품이면 **가짜 고정문구 "1 day / 10,000원"** 이 그대로
+  노출되던 버그(단순 미노출이 아니라 오표시)였음. sale_only 분기 추가해 "Price / {sale_price}원"
+  으로 표시하도록 수정.
+- Pack 테마목록(Idol/Activity/Analog/Traveler Pack) 카드는 애초에 개별 상품가격을 표시하지
+  않는 테마 배너 카드라 이번 버그와 무관 — 확인만 하고 미수정.
+
+### 검증
+- `npx svelte-check` — 3개 화면 관련 파일 전부 신규 에러 0건(기존 pre-existing warning만 남음).
+- Claude Browser(Stephen 세션 중 발생한 launch-selected-element 조사 목적의 실행이며,
+  이후 명시적 "확인해줘" 요청도 있었음)로 Stage DB 실제 판매전용 상품
+  (`인스탁스 와이드필름 10매`, id=d4b0ed14-..., sale_price=16000)을 기준으로 실측:
+  - `/products?category=accessory` PC·모바일 — "Price 16,000" 정상 노출 확인.
+  - 홈 MD추천(모바일) — cms_settings `product_page_md_picks`에 그 상품 id를 임시 추가해
+    "Price 16,000" 노출 확인 후 원래 설정값(byte-for-byte)으로 즉시 원복.
+  - 하입팩 배너(PC·모바일) — cms_settings `hype_pack_banner`의 배너 product_id를 임시로
+    그 상품으로 바꿔 "Price / 16,000원" 노출 확인 후 원래 값으로 즉시 원복.
+  - 홈 취향직격/미칠 PICK(PC)은 `withDualPrice()` 공유 헬퍼 재사용 구조상 위 검증과 동일
+    로직이라 별도 데이터 조작 없이 코드 검토로 확인.
+- 임시로 조작한 cms_settings 2건(product_page_md_picks, hype_pack_banner) 전부 조회로
+  원본과 완전 동일함을 재확인 완료 — 실사용자 노출 데이터 변경 없음.
+
+### @sp3-qa-agent 검수 결과 (2026-09-27)
+1차 검수: **조건부 통과** — git diff 스코프 정확·범위 외 수정 없음, `npx svelte-check`
+신규 에러 0건(기존 vite.config.ts 1건은 stash 대조로 diff와 무관함을 직접 확인), null 안전
+처리·기존 대여요금 상품 무회귀 확인, products.md §2-9 정책과 상충 없음, 검증 중 임시조작한
+Stage `cms_settings` 2건도 원상복구 재확인 완료.
+
+단, `/products` 페이지 자체 내 2곳(헤더 히어로 슬라이더 PC+모바일 `.d-feat-price-row`/
+`.m-feat-price-row`, "MD 추천" `.mdp-price-row`)이 서버는 이미 `mergePrice()`로 sale_only/
+sale_price를 내려주는데 템플릿 분기가 누락돼 동일 버그가 잠재해 있다는 경미한 지적 발견
+(CMS가 판매전용 상품을 그 자리에 노출설정하면 재현) — 즉시 반영해 3곳 모두 동일
+`{#if sale_only}...{:else}...{/if}` 패턴으로 수정 완료. Stage DB 임시설정(product_page_hero·
+product_page_md_picks에 해당 상품 id 임시추가)으로 PC·모바일 히어로 + MD추천 3곳 전부
+"Price 16,000" 정상 노출 재확인 후 두 설정 모두 원본값으로 즉시 원복(재조회로 원상복구 재검증
+완료). `npx svelte-check` 재실행도 신규 에러 0건.
+
+**최종 판정: GATE E 통과(GREEN)** — CRITICAL 0건, 지적사항 전건 반영 완료. 커밋 가능.
+
+### 미실행 / 대기
+- git commit — Stephen 직접 실행 대기(이 세션은 요청받지 않는 한 커밋 실행 안 함).
+- Production DB에는 이번 수정 대상 컬럼(`sale_only`/`sale_price`) 관련 신규 마이그레이션이
+  없음(기존 컬럼을 읽기만 함) — 별도 DB 배포 불필요, 코드 배포만으로 충분.
