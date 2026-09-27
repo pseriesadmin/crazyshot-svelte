@@ -7,6 +7,144 @@
 > 📌 BACKLOG 블록은 `BACKLOG.md`로 분리됐다(Default-Exclude — Stephen 명시 승인 시에만 NOW로 이동).
 
 
+## DONE — 🔴 CRITICAL: 쿠폰 생성(/cms/promotion/coupon/new) 결함 7건 보완 (2026-09-27) — ✅ GATE E 통과(sp3-qa-agent 독립검수, BLOCKING 0건), git commit만 Stephen 대기
+
+```
+[CONTEXT BRIDGE]
+plan_source: Stephen 승인 완료 플랜 `/Users/stevenmac/.claude/plans/4-streamed-ritchie.md`
+             (Plan 모드에서 Stephen 코드·DB 확인 후 7건 전부 실재 결함으로 검증, 우선순위·설계 승인됨)
+핵심제약:
+  1) 4번(코드 채번 체계 정비)은 신규 발행분부터만 적용 — 기존 발급 쿠폰 백필·재발행 없음(Stephen 확정).
+  2) 나머지 6건은 플랜의 "제안" 그대로 적용(추가 확인 불필요, 승인 완료).
+TDD도메인: GSD — 화면 입력검증·RPC 로직 보완, 신규 채번 테이블 1개(원자성만 요구, 별도 RED/GREEN
+          사이클 없이 SQL 직접 실행으로 원자성·상한체크·CHECK제약 검증 완료).
+절대금지: 요구범위 외 수정 금지 · git 쓰기 명령 금지(Stephen만) · 기존 마이그레이션 파일 수정 금지(신규 번호 ADD만) ·
+          Production DB 직접 적용 금지(Stage 검증 후 Stephen 확인) · Claude Browser 사용 금지(기본값).
+실패롤백: 코드 변경은 지정 6개 파일 + 신규 DB 마이그레이션 3개뿐 → Stephen이 git으로 해당 파일만
+          되돌리면 복구. Stage DB는 각 마이그레이션 파일 하단 ROLLBACK 주석 SQL로 되돌릴 것.
+```
+
+### Stephen 요청 (원문 요지)
+`/cms/promotion/coupon/new` 쿠폰 생성 화면과 관련 로직에서 발견된 7건의 결함(코드·DB 직접
+확인으로 전부 실재 확인) 보완. 4번+7번(쿠폰 코드 채번 체계 — 2단 계층 부모순번이 실제
+채번에 미반영)과 3번(자동발행/자동배포 스위치 혼선)을 1순위로, 나머지 4건(정률 상한·날짜
+역전·할인방식 전환 초기화·소수점 입력)을 2순위로 진행.
+
+### 구현 내역
+
+**1순위-A(4+7, 쿠폰 코드 채번 체계 정비)**
+- 신규 `coupon_parent_sequences` 테이블(Migration #555) — `product_parent_sequences`와
+  동일 원자 카운터 패턴, 완전 별도 테이블(카운터 공유 없음).
+- `cms_create_coupon`(Migration #556, 30→31-param) — sequenced 모드에서 "발행 순번"
+  (issue_seq)을 원자 채번 후 `code_series`에 병합 저장, `parent_max_sequence` 초과 시
+  예외(자동 롤백). 1단 계층에도 issue_seq 부여(Stephen 확정 — 상품 정책과 의도적으로 다름).
+  `generate_user_coupon_redeemed_code`(고객 실채번)는 무변경 — issue_seq는 CMS 표시 전용.
+- ⛔ **Stage 적용 중 실제로 발견·수정한 함정**: 트레일링 파라미터 추가를 DROP 없이
+  `CREATE OR REPLACE`만 하면 Postgres가 "교체"가 아니라 새 오버로드로 추가한다 —
+  30-param/31-param 두 함수가 동시에 남는 것을 `pg_proc` 조회로 실제 확인(products.md
+  `generate_product_code` PGRST203 사례와 동일 클래스). 30-param 오버로드를 명시적으로
+  DROP한 뒤 1개만 남는 것 재확인, 마이그레이션 파일에도 DROP 반영.
+- 발행관리 목록 `codeDisplay()`(`coupon/+page.svelte`) — issue_seq 실값으로 표시(2단
+  계층은 발행순번 구간만 실값, 자식순번 구간은 기존처럼 0 유지). issue_seq 없는 구버전
+  발급분은 기존 0-패딩 그대로 하위호환.
+
+**1순위-B(3, 자동발행→자동배포 통일)**
+- `cms_create_coupon`이 `auto_distribute_enabled`를 지정하지 않아 생성화면의 토글 상태와
+  무관하게 항상 DB 기본값(true)으로 시작하던 결함 수정 — `p_auto_distribute_enabled`
+  파라미터 추가(같은 마이그레이션에 합산).
+- 생성화면(`new/+page.svelte`)의 낡은 "자동 발행"(매월/기간 스케줄+배포대상 라디오) UI를
+  완전히 제거하고, `CouponDetailPanel`과 동일한 "자동배포" 단일 토글로 교체.
+
+**2순위(1·2·5·6, 입력검증·화면로직)**
+- 1(정률 100 상한): 화면 클램프+토스트 / 서버 재검증 / DB CHECK 제약(Migration #557) 3중 방어.
+- 2(날짜 역전 방지): 종료일<시작일 생성·수정 차단(생성화면+서버, `CouponDetailPanel`+서버 4곳).
+- 5(할인방식 전환 초기화): 방식이 실제로 바뀔 때만 할인값 0 리셋(단위 오염 방지).
+- 6(소수점 허용): 정률 필드만 소수점 1자리 허용하는 별도 파서(정액/배송비 필드는 기존
+  정수 파서 유지).
+
+### 변경 파일
+```
+신규 supabase/migrations/20260927040000_555_coupon_parent_sequences.sql
+신규 supabase/migrations/20260927050000_556_cms_create_coupon_issue_seq_auto_distribute.sql
+신규 supabase/migrations/20260927060000_557_coupons_percentage_discount_max_check.sql
+수정 src/routes/cms/promotion/coupon/new/+page.svelte
+수정 src/routes/cms/promotion/coupon/new/+page.server.ts
+수정 src/routes/cms/promotion/coupon/+page.svelte
+수정 src/routes/cms/promotion/coupon/+page.server.ts
+수정 src/lib/components/cms/CouponDetailPanel.svelte
+수정 src/lib/types/database.ts (Coupon.code_series에 parent_max_sequence?/issue_seq? 추가)
+```
+
+### 검증 상태
+```
+✅ Stage(ezyvffjvuwmtuhpxdjrw) DB: 신규 테이블·RPC·CHECK 제약 적용 완료. SQL 직접 실행
+   (BEGIN...ROLLBACK, 잔존 데이터 없음)으로 issue_seq 1→2 증가 확인·발행순번 상한 초과 시
+   COUPON_ISSUE_SEQ_EXCEEDED 정확히 거부(카운터 자동 롤백 포함) 확인·percentage=150
+   CHECK 위반 거부 확인.
+✅ npx svelte-check --threshold error — 신규 에러 0건(vite.config.ts 1건은 무관한 기존 이슈).
+✅ npx eslint(변경 파일 전체) — 신규 에러 0건(new/+page.svelte의 Coupon unused-import 1건은
+   이 세션 이전부터 있던 pre-existing 이슈, 요청범위 밖이라 미수정 — git stash로 기존
+   워킹트리 HEAD에도 동일 에러 있음을 확인).
+⛔ 미실행: CMS 실화면 클릭 검증(Claude Browser 기본 금지 원칙, Stephen 명시 요청 없었음) —
+   소스 검토+Stage SQL 검증으로 대체. 세션 리뷰 문서에 Stephen 실화면 확인 권장 목록 기재.
+```
+
+### ✅ GATE E 독립검수 결과(2026-09-27, sp3-qa-agent) — 통과, BLOCKING 0건
+
+```
+검수범위: 요청한 9개 파일(신규 마이그레이션 3개 + 수정 6개)만 한정 — 워킹트리에 섞여있는
+다른 미커밋 변경(장바구니 구매옵션 등)은 무관한 별개 세션 작업으로 판단해 제외 확인.
+
+① #556 오버로드 중복 우려 재확인 — 마이그레이션 파일에 30-param DROP FUNCTION이 직전
+   #520 정의와 타입·순서까지 1:1 일치함을 대조 확인, DROP 후 31-param CREATE라 재실행해도
+   오버로드 1개만 남는 것이 코드상 보장됨(PGRST203류 사고 실제로 회피).
+② PL/pgSQL 롤백 세만틱 재확인 — COUPON_ISSUE_SEQ_EXCEEDED의 RAISE EXCEPTION이 함수 최상위
+   BEGIN...EXCEPTION 블록 안이라 암묵적 서브트랜잭션으로 coupon_parent_sequences 카운터
+   증가분까지 자동 롤백됨(수동 되돌리기 로직 불필요 주장이 실제로 맞음).
+③ 정률 100 상한 3중 방어(클램프+서버+CHECK)가 percentage 전용이고 fixed/free_shipping
+   무영향 확인. ④ 날짜 역전 방지 4곳(생성 화면+서버, 수정패널+서버) 동일 패턴, unlimited/
+   relative_days 모드는 validity_type 가드로 영향 없음 확인. ⑤ 자동발행 잔존 참조 0건(grep).
+   ⑥ 할인방식 전환 시 "실제로 바뀔 때만" 리셋 확인(동일값 재선택 시 불필요한 리셋 없음).
+   ⑦ 정률 소수점 1자리 파서 정확, 정액/배송비는 기존 정수 파서 유지 확인.
+security-auth.md(getCmsRoleForAction 패턴·hasSettingsAccess 게이트 유지)·service-operations.md
+§14(issue_seq는 발행시점/redeemed_code는 사용시점 실채번 — 분리 원칙 무위반) 대조 통과.
+svelte-check·eslint 재실행 — 신규 에러 0건(vite.config.ts 1건·Coupon unused-import 1건은
+git stash 대조로 이 세션 이전부터 있던 pre-existing 이슈 재확인). console.log·신규 any 0건.
+
+미실행(비차단 권고): Supabase MCP 미보유로 Stage DB 라이브 재조회 대신 마이그레이션 SQL
+정적 검토로 대체 — Stephen 여유 있을 때 `SELECT proname,pronargs FROM pg_proc WHERE
+proname='cms_create_coupon'`로 오버로드 1개(31-param)인지 직접 재확인 권장. CMS 실화면
+클릭검증(Claude Browser 기본 금지)도 미실행 — 세션 리뷰 문서 §5 목록 참고.
+```
+
+### ✅ Production(vnbpmvxruyciuuaermyh) 마이그레이션 적용 완료(2026-09-27, Stephen 지시)
+
+```
+적용 전 확인: 기존 cms_create_coupon이 정확히 30-param 1개(Stage와 동일 시그니처)임을
+  먼저 조회해 #556의 DROP 문이 안전하게 매칭됨을 확인.
+
+⚠️ 적용 중 발견한 기존 위반 데이터(Stephen 확인 완료, 완전 삭제 후 진행):
+  coupons.id=9a483d0c-85c2-42de-abb3-2eca599d1534 — discount_type='percentage',
+  discount_value=5000(500000%)인 행이 있어 #557 CHECK 제약 추가가 그대로는 실패하는
+  상태였음. 조사 결과 display_name="[QA] 할인값0 검증"·description="QA 테스트 - 삭제
+  예정"·is_active=false·이미 deleted_at 설정(soft-delete)·usage_count=0·user_coupons
+  0건·coupon_distributions 0건 — 실사용자 영향 없는 QA 테스트 잔재로 확인. Stephen에게
+  AskUserQuestion으로 확인 후 "완전 삭제 후 제약 적용" 선택받아 hard DELETE 실행,
+  이후 CHECK 제약 정상 추가.
+
+적용 순서: #555(테이블) → #556(RPC, DROP 30-param 포함) → 잔재행 DELETE → #557(CHECK).
+사후 검증: cms_create_coupon 오버로드 정확히 1개(31-param) ·
+  coupons_percentage_discount_max_check 제약 존재 · coupon_parent_sequences 테이블 존재
+  전부 SQL 재조회로 확인. get_advisors(security) 재확인 — 신규 이슈 없음(anon 접근 경고
+  2건은 product_parent_sequences·기존 CMS RPC 전체와 동일한 기존 승인된 패턴임을
+  대조 확인, 이 마이그레이션이 유발한 새로운 위험 아님).
+```
+
+git commit은 여전히 Stephen 직접 실행 대기(이 세션은 실행하지 않음).
+
+세션 리뷰 문서(상세 근거·코드 diff 요약): `.claude/plan/세션 리뷰 — 쿠폰 생성(coupon-new) 결함 7건 보완(2026-09-27).md`
+
+
 ## DONE — 🔴 CRITICAL: 장바구니 "구매 예약 옵션" 신설(판매전용 단독) + 혼용 시 판매상품 분리 (2026-09-27) — ✅ GATE E 2차 통과(sp3-qa-agent 독립검수, BLOCKING 0건), git commit만 Stephen 대기
 
 ### ✅ GATE E 2차 독립검수 결과(2026-09-27, sp3-qa-agent) — 통과
@@ -10234,6 +10372,14 @@ Migration #554를 Production(vnbpmvxruyciuuaermyh)에 적용. 적용 직전 파�
 적용본과 재대조 후 그대로 적용, 적용 후 `pg_proc` 직접 조회로 `apply_subscription_free_shipping`
 함수가 `p_consume boolean DEFAULT true` 포함 3-param 단일 시그니처로만 존재함(구 2-param 잔존
 없음)을 재확인. `pay-result.ts`의 트리비얼 로깅 보완(위 QA 권장사항)도 함께 반영된 상태.
+
+### @sp3-qa-agent 최종 검수 결과 (2026-09-27) — GATE E 통과
+- 항목1(pay-result.ts 로깅 보완): pay-mock과 동일 패턴 확인, 부작용 없음 — 통과.
+- 항목2(Migration #554 Production 적용): 서브에이전트는 이 세션에 Supabase MCP 권한이 없어
+  Production 직접 확인이 불가해 보류 처리했으나, 메인 세션이 직접 Supabase MCP로 재확인 완료 —
+  Production 함수 3-param 단일 시그니처(구 2-param 잔존 없음), 권한 service_role만(anon/
+  authenticated 없음), Stage·Production 함수 본문 `md5(pg_get_functiondef())` 해시 완전 일치
+  (`560c865c01d82848f48a3409dc35f7dd`) 확인. GATE E 최종 통과.
 
 ### 미실행
 git add/commit — Stephen 별도 지시 대기.

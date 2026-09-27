@@ -33,13 +33,11 @@ interface CmsCreateCouponPayload {
   p_is_student_only: boolean
   p_is_walk_in_only: boolean
   p_is_subscription_only: boolean
-  p_auto_issue_enabled: boolean
-  p_auto_issue_schedule: unknown | null
-  p_distribution_target: unknown
   p_validity_type: string
   p_allow_with_points: boolean
   p_allow_stacking: boolean
   p_valid_days: number | null
+  p_auto_distribute_enabled: boolean
 }
 
 export type CouponCategoryOption = { value: string; label: string }
@@ -162,13 +160,21 @@ export const actions: Actions = {
     const is_student_only      = form.get('is_student_only') === 'true'
     const is_walk_in_only      = form.get('is_walk_in_only') === 'true'
     const is_subscription_only = form.get('is_subscription_only') === 'true'
-    const auto_issue_enabled   = form.get('auto_issue_enabled') === 'true'
+    // 결함 3번: 낡은 "자동 발행"(auto_issue_enabled 등) 파싱 제거 — 생성 화면은 이제
+    // auto_distribute_enabled(자동배포 토글)만 다룬다. 기본값 true는 DB 컬럼 기본값과 동일.
+    const auto_distribute_enabled = form.get('auto_distribute_enabled') !== 'false'
 
     // 항목 2: "무제한" 모드가 아닌데 시작일/종료일 중 하나라도 비어있으면 RPC 호출 전에
     // 즉시 차단 — coupons.valid_from/valid_until NOT NULL 위반의 Postgres 원문 에러가
     // 그대로 토스트에 노출되던 문제를 방지(무제한 모드는 두 값 다 비어야 정상)
     if (validity_type === 'fixed_period' && (!valid_from || !valid_until)) {
       return fail(400, { error: '시작일과 종료일을 모두 선택해주세요.' })
+    }
+
+    // 결함 2번: 종료일이 시작일보다 이전인 쿠폰이 그대로 생성되지 않도록 서버에서도 재검증
+    // (클라이언트 가드는 우회 가능 — 폼 직접 제출 등)
+    if (validity_type === 'fixed_period' && valid_from && valid_until && valid_from > valid_until) {
+      return fail(400, { error: '종료일은 시작일보다 같거나 나중이어야 합니다.' })
     }
 
     const valid_days = Number(form.get('valid_days') ?? 0) || null
@@ -184,33 +190,17 @@ export const actions: Actions = {
       return fail(400, { error: '할인값을 입력해주세요.' })
     }
 
+    // 결함 1번: 정률 할인은 100을 초과할 수 없음 — DB CHECK 제약(coupons_percentage_
+    // discount_max_check, Migration #557)의 원문 에러가 노출되지 않도록 서버에서 선제 차단.
+    if (discount_type === 'percentage' && discount_value > 100) {
+      return fail(400, { error: '정률 할인은 100%를 초과할 수 없습니다.' })
+    }
+
     // JSONB 필드
     const applicableRaw = form.get('applicable_categories')
     const applicable_categories = applicableRaw
       ? JSON.parse(String(applicableRaw))
       : null
-
-    const scheduleRaw = form.get('auto_issue_schedule')
-    const auto_issue_schedule = auto_issue_enabled && scheduleRaw
-      ? JSON.parse(String(scheduleRaw))
-      : null
-
-    // 2026-09-21 추가: "자동 발행 > 특정 기간 발행" 모드는 시작일/종료일 검증이 클라이언트·
-    // 서버 어디에도 없던 완전한 공백이었다(Stephen 재보고로 발견) — fixed_period/relative_days와
-    // 동일한 선제 차단 패턴 적용. 비워둔 채 제출하면 빈 문자열이 그대로 auto_issue_schedule에
-    // 저장돼, 이후 자동 발행 실행 시점에야 조용히 무동작하거나 예외가 나는 상태를 방지.
-    if (
-      auto_issue_enabled &&
-      auto_issue_schedule?.type === 'period' &&
-      (!auto_issue_schedule.from || !auto_issue_schedule.to)
-    ) {
-      return fail(400, { error: '자동 발행 시작일과 종료일을 모두 선택해주세요.' })
-    }
-
-    const distTargetRaw = form.get('distribution_target')
-    const distribution_target = distTargetRaw
-      ? JSON.parse(String(distTargetRaw))
-      : { type: 'all' }
 
     // B-5: code_mode / code_series 읽기 (콤보 선택 UI에서 hidden input으로 전달)
     const codeMode = (String(form.get('code_mode') ?? 'manual') as 'manual' | 'sequenced')
@@ -252,13 +242,11 @@ export const actions: Actions = {
       p_is_student_only:        is_student_only,
       p_is_walk_in_only:        is_walk_in_only,
       p_is_subscription_only:   is_subscription_only,
-      p_auto_issue_enabled:     auto_issue_enabled,
-      p_auto_issue_schedule:    auto_issue_schedule,
-      p_distribution_target:    distribution_target,
       p_validity_type:          validity_type,
       p_allow_with_points:      allow_with_points,
       p_allow_stacking:         allow_stacking,
       p_valid_days:             validity_type === 'relative_days' ? valid_days : null,
+      p_auto_distribute_enabled: auto_distribute_enabled,
     }
 
     // 클라이언트 캐스팅은 기존 관례 유지 (전역 타입 계약 복구는 B-0 범위 밖)

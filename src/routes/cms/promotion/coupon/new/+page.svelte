@@ -34,13 +34,11 @@
   let f_student        = $state(false)
   let f_walk_in        = $state(false)
   let f_subscription   = $state(false)
-  let f_auto_issue     = $state(false)
-  let f_auto_sched_type = $state<'monthly' | 'period'>('monthly')
-  let f_auto_day       = $state(1)
-  let f_auto_from      = $state('')
-  let f_auto_to        = $state('')
-  let f_dist_target    = $state<'all' | 'grade'>('all')
-  let f_dist_grade     = $state('')
+  // 결함 3번: 낡은 "자동 발행"(auto_issue_enabled/auto_issue_schedule/distribution_target)
+  // UI를 제거하고, CouponDetailPanel과 동일한 "자동배포" 단일 토글로 교체(Migration #527의
+  // auto_distribute_enabled 컬럼 — cms_create_coupon이 이 값을 지정하지 않아 항상 DB
+  // 기본값(true)으로 생성되던 결함 수정). 기본값 true는 기존 DB 기본값과 동일하게 유지.
+  let f_auto_distribute = $state(true)
   let f_categories     = $state<string[]>([])
   let f_display_name   = $state('')   // 항목 1: 고객 노출용 이름 (신규)
   let f_description    = $state('')   // 관리자 메모(고객에게 노출되지 않음)
@@ -51,6 +49,30 @@
   function parseAmountDigits(raw: string): number {
     const digits = raw.replace(/[^0-9]/g, '')
     return digits ? parseInt(digits, 10) : 0
+  }
+
+  // 결함 6번 수정: discount_type==='percentage'일 때만 소수점 1자리까지 허용
+  // (uiux-index.md "금액 입력폼 표준" 천단위 콤마 파서와 별개 — 이 필드는 원 단위 금액이
+  // 아니라 %값이라 정수 강제 파싱을 그대로 쓰면 "12.5" 입력이 "125"로 밀리는 결함이 있었음)
+  function parsePercentRaw(raw: string): number {
+    const cleaned = raw.replace(/[^0-9.]/g, '')
+    const firstDotIdx = cleaned.indexOf('.')
+    const normalized = firstDotIdx === -1
+      ? cleaned
+      : cleaned.slice(0, firstDotIdx + 1) + cleaned.slice(firstDotIdx + 1).replace(/\./g, '').slice(0, 1)
+    const n = normalized === '' || normalized === '.' ? 0 : parseFloat(normalized)
+    return Number.isFinite(n) ? n : 0
+  }
+
+  // 결함 1번: 정률 할인은 100을 초과할 수 없음 — 초과 입력 시 100으로 보정 + 안내
+  function onPercentInput(raw: string) {
+    const n = parsePercentRaw(raw)
+    if (n > 100) {
+      csToast.error('정률 할인은 100%를 초과할 수 없습니다.')
+      f_discount_value = 100
+    } else {
+      f_discount_value = n
+    }
   }
 
   // 카테고리 토글 — BND-COUPON-CAT-1: 하드코딩 제거, code_mapping_groups(백오피스) 기준 반영
@@ -176,6 +198,11 @@
           date_option: selectedCombo.date_option === 'none' ? 'none' : 'yyyymm',
           seq_digits: DEFAULT_CODE_FORMAT.seq_digits,
           max_sequence: selectedCombo.max_sequence,
+          // 결함 4번+7번 수정(2026-09-27): 이 필드가 빠져 있어 2단 계층 콤보의 "발행 순번"
+          // 상한이 실제 채번(cms_create_coupon)에 전혀 반영되지 않았다 — 필드 자체를
+          // payload에 추가만 하고, 미리보기(buildComboPreview)는 그대로 둔다(레코드
+          // 생성 전 시점이라 실제 채번을 미리 소비하면 안 됨).
+          parent_max_sequence: selectedCombo.parent_max_sequence,
         }
       : null
   )
@@ -219,18 +246,6 @@
   let _sel_type  = $state<string | null>('all')      // f_type 초기값과 동일(coupon_type_enum 기준 유효값)
   let _sel_grade = $state<string | null>('__all__')  // f_user_grade='' → '__all__' 매핑
 
-  let autoScheduleJson = $derived(
-    f_auto_sched_type === 'monthly'
-      ? JSON.stringify({ type: 'monthly', day: f_auto_day })
-      : JSON.stringify({ type: 'period', from: f_auto_from, to: f_auto_to })
-  )
-
-  let distTargetJson = $derived(
-    f_dist_target === 'grade'
-      ? JSON.stringify({ type: 'grade', meta: f_dist_grade })
-      : JSON.stringify({ type: 'all' })
-  )
-
   // ─ action 에러 처리 (성공 시엔 서버가 목록 화면으로 redirect하므로 이 페이지에 남지 않음) ─
   $effect(() => {
     if (form && 'error' in form && form.error) {
@@ -255,19 +270,16 @@
           cancel()
           return
         }
+        // 결함 2번: 종료일이 시작일보다 이전인 쿠폰이 그대로 생성되던 것을 선제 차단
+        if (f_validity_type === 'fixed_period' && f_valid_from && f_valid_until && f_valid_from > f_valid_until) {
+          csToast.error('종료일은 시작일보다 같거나 나중이어야 합니다.')
+          cancel()
+          return
+        }
         // 2026-09-21 추가: "첫 확인일로부터 N일" 모드도 fixed_period와 동일하게 클라이언트
         // 선제 검증이 빠져있었다(서버 검증만 존재) — 동일 패턴으로 보강.
         if (f_validity_type === 'relative_days' && (!f_valid_days || f_valid_days <= 0)) {
           csToast.error('유효일수(N)를 1 이상 입력해주세요.')
-          cancel()
-          return
-        }
-        // 2026-09-21 추가: "자동 발행 > 특정 기간 발행" 모드는 시작일/종료일에 대응하는
-        // 클라이언트·서버 검증이 아예 없던 완전한 공백이었다(Stephen 재보고로 발견) — 쿠폰
-        // 자체 유효기간(fixed_period)과 동일한 가드를 적용. 비워둔 채 제출하면 빈 문자열이
-        // 그대로 auto_issue_schedule에 실려 저장되던 상태를 선제 차단.
-        if (f_auto_issue && f_auto_sched_type === 'period' && (!f_auto_from || !f_auto_to)) {
-          csToast.error('자동 발행 시작일과 종료일을 모두 선택해주세요.')
           cancel()
           return
         }
@@ -422,7 +434,12 @@
             listLabel="할인 방식"
             variant="generic"
             minChars={0}
-            onselect={(opt) => { f_discount_type = opt.id }}
+            onselect={(opt) => {
+              // 결함 5번: 할인 방식 전환 시 이전 방식의 할인값이 그대로 남아 단위가
+              // 오염되는 것을 방지(예: 정액 5000원 상태에서 정률로 바꾸면 5000%로 저장됨)
+              if (opt.id !== f_discount_type) f_discount_value = 0
+              f_discount_type = opt.id
+            }}
           >
             {#snippet field(c)}
               <input type="text" class="f-input" id={c.id} placeholder={c.placeholder}
@@ -440,9 +457,15 @@
              f_discount_type === 'free_shipping' ? '할인값 (배송비에서 차감할 금액, 원)' :
              '할인값 (원)'}
           </label>
-          <input id="fc-dval" type="text" inputmode="numeric" class="f-input"
-            value={f_discount_value.toLocaleString('ko-KR')}
-            oninput={(e) => { f_discount_value = parseAmountDigits((e.currentTarget as HTMLInputElement).value) }} />
+          {#if f_discount_type === 'percentage'}
+            <input id="fc-dval" type="text" inputmode="decimal" class="f-input"
+              value={f_discount_value}
+              oninput={(e) => { onPercentInput((e.currentTarget as HTMLInputElement).value) }} />
+          {:else}
+            <input id="fc-dval" type="text" inputmode="numeric" class="f-input"
+              value={f_discount_value.toLocaleString('ko-KR')}
+              oninput={(e) => { f_discount_value = parseAmountDigits((e.currentTarget as HTMLInputElement).value) }} />
+          {/if}
           <input type="hidden" name="discount_value" value={f_discount_value} />
         </div>
         {#if f_discount_type === 'percentage'}
@@ -581,73 +604,26 @@
         </div>
       {/if}
 
-      <div class="fs-title">자동 발행</div>
+      <!-- 결함 3번 수정: 낡은 "자동 발행"(매월/기간 스케줄 + 배포대상 선택) UI 제거 —
+           CouponDetailPanel "정보" 탭과 동일한 "자동배포" 단일 토글로 교체. 켜두면 위
+           "사용 제한 > 필수 회원 분류" 조건을 충족하는 회원에게 pg_cron이 계속 감시하며
+           자동 배포한다(auto_distribute_eligible_coupons, Migration #527). -->
+      <div class="fs-title">자동배포</div>
       <div class="toggle-group">
         <div class="toggle-row">
-          <span>자동 발행 활성화</span>
-          <button type="button" class="tog" class:tog-on={f_auto_issue}
-            role="switch" aria-checked={f_auto_issue}
-            onclick={() => f_auto_issue = !f_auto_issue}>
+          <span>자동배포 활성화</span>
+          <button type="button" class="tog" class:tog-on={f_auto_distribute}
+            role="switch" aria-checked={f_auto_distribute} aria-label="자동배포 토글"
+            onclick={() => f_auto_distribute = !f_auto_distribute}>
             <span class="tog-thumb"></span>
           </button>
-          <input type="hidden" name="auto_issue_enabled" value={String(f_auto_issue)} />
+          <input type="hidden" name="auto_distribute_enabled" value={String(f_auto_distribute)} />
         </div>
+        <p class="auto-distribute-hint">
+          켜두면 "필수 회원 분류" 조건을 충족하는 회원에게 계속 감시하며 자동으로 배포됩니다.
+          끄면 자동배포만 중지되며, 이미 배포된 쿠폰의 사용에는 영향이 없습니다.
+        </p>
       </div>
-      {#if f_auto_issue}
-        <div class="auto-box">
-          <div class="radio-group">
-            <label class="radio-lbl">
-              <input type="radio" bind:group={f_auto_sched_type} value="monthly" />
-              매월 n일 발행
-            </label>
-            <label class="radio-lbl">
-              <input type="radio" bind:group={f_auto_sched_type} value="period" />
-              특정 기간 발행
-            </label>
-          </div>
-          {#if f_auto_sched_type === 'monthly'}
-            <div class="form-field" style="max-width:160px">
-              <label for="fc-aday">발행일 (1~31)</label>
-              <input id="fc-aday" type="number" min="1" max="31" class="f-input"
-                bind:value={f_auto_day} />
-            </div>
-          {:else}
-            <div class="form-grid">
-              <div class="form-field">
-                <label for="fc-af">시작일</label>
-                <CmsDatePicker bind:value={f_auto_from} placeholder="시작일 선택" disablePast={false} />
-              </div>
-              <div class="form-field">
-                <label for="fc-at">종료일</label>
-                <CmsDatePicker bind:value={f_auto_to} placeholder="종료일 선택" disablePast={false} />
-              </div>
-            </div>
-          {/if}
-          <input type="hidden" name="auto_issue_schedule" value={autoScheduleJson} />
-          <div class="fs-title sm">배포 대상</div>
-          <div class="radio-group">
-            <label class="radio-lbl">
-              <input type="radio" bind:group={f_dist_target} value="all" />
-              전체 회원
-            </label>
-            <label class="radio-lbl">
-              <input type="radio" bind:group={f_dist_target} value="grade" />
-              특정 등급
-            </label>
-          </div>
-          {#if f_dist_target === 'grade'}
-            <!-- 2026-09-23(버그 수정) — 위 필수 회원 분류와 동일하게 BASIC/PRO 하드코딩
-                 제거, data.gradeOptions(subscription_plans)로 교체. -->
-            <select class="f-input" style="max-width:200px;margin-top:6px"
-              bind:value={f_dist_grade}>
-              {#each data.gradeOptions as g (g.value)}
-                <option value={g.value}>{g.label}</option>
-              {/each}
-            </select>
-          {/if}
-          <input type="hidden" name="distribution_target" value={distTargetJson} />
-        </div>
-      {/if}
 
       <div class="form-actions">
         <a href="/cms/promotion/coupon?tab=manage" class="btn-ghost">취소</a>
@@ -680,7 +656,6 @@
   border-bottom: 1px solid var(--cs-surface-gray); padding-bottom: 6px;
 }
 .fs-title:first-child { margin-top: 0; }
-.fs-title.sm { margin-top: 12px; font: var(--text-pc-script-12); }
 
 /* ─ "표시 정보" 타이틀행 취소 버튼 — CMS 표준 close-red(cms-uiux.md §0-10-A,
      rep-close-btn) 재사용, 카드 코너 절대배치 대신 타이틀행 내 flex 배치로 변형 ─ */
@@ -766,11 +741,14 @@
 .s-chip--on { background: var(--cs-purple); color: var(--cs-white); border-color: var(--cs-purple); }
 .s-chip:not(.s-chip--on):hover { border-color: var(--cs-purple); color: var(--cs-purple); }
 
-/* ─ 토글 그룹(자동 발행 전용 — 단일 스위치는 기존 .tog 유지) ─ */
+/* ─ 토글 그룹(자동배포 전용 — 단일 스위치는 기존 .tog 유지) ─ */
 .toggle-group { display: flex; flex-direction: column; gap: 10px; margin-bottom: 4px; }
 .toggle-row {
   display: flex; align-items: center; gap: 12px;
   font: var(--text-pc-body-14); color: var(--cs-text);
+}
+.auto-distribute-hint {
+  font: var(--text-pc-script-12); color: var(--cs-text-light); margin: 0;
 }
 
 /* ─ 라디오 ─ */
@@ -779,12 +757,6 @@
   display: flex; align-items: center; gap: 6px;
   font: var(--text-pc-body-14); color: var(--cs-text);
   cursor: pointer; min-height: 28px;
-}
-
-/* ─ 자동 발행 박스 ─ */
-.auto-box {
-  background: var(--cs-lilac); border-radius: var(--cms-radius-sm);
-  padding: 16px; margin-top: 8px;
 }
 
 /* ─ 폼 액션 ─ */
