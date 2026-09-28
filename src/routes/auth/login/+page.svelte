@@ -971,19 +971,22 @@
   }
 
   /* 모바일 전용 상단 내비 바 (피그마 MTopGlobalArea 정합) */
+  /* z-index: 50 — GNB/topbar 전역 관례값(ui-mobile.md). 기존 1000은 채팅 바텀시트
+     (ChatBottomSheet.svelte backdrop 200 / bottom-sheet 201)보다 위에 그려져 로그인
+     화면에서 채팅창이 topbar 아래로 깔리는 겹침 버그의 원인이었음(2026-09-28 수정).
+     ⛔ 중복 선언 금지 — 과거 이 셀렉터가 두 블록으로 나뉘어 있어 한쪽만 고치면
+     다른 쪽이 조용히 덮어쓸 위험이 있었다(2026-09-28 발견·병합). */
   .m-topbar {
     position: fixed;
     top: 0; left: 0; right: 0;
-    z-index: 1000;
+    z-index: 50;
+    background: var(--cs-lilac);
+    padding: 16px 20px 8px;
+    pointer-events: none;
   }
   .m-topbar-hidden {
     pointer-events: none !important;
     visibility: hidden;
-  }
-  .m-topbar {
-    background: var(--cs-lilac);
-    padding: 16px 20px 8px;
-    pointer-events: none;
   }
   .m-topbar-inner {
     pointer-events: all;
