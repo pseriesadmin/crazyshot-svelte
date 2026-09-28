@@ -12,6 +12,29 @@
 	import PushNotificationInit from '$lib/components/common/PushNotificationInit.svelte';
 	import IosAddToHomeScreenBanner from '$lib/components/common/IosAddToHomeScreenBanner.svelte';
 	import { Toaster } from 'svelte-sonner';
+	import { csToast } from '$lib/utils/toast';
+	import { supabase } from '$lib/services/supabase';
+
+	// 푸터 법적 고지 모달
+	let policyModal = $state<{ open: boolean; title: string; text: string; loading: boolean }>({
+		open: false, title: '', text: '', loading: false
+	});
+
+	async function openPolicyModal(field: 'privacy_text' | 'terms_text' | 'refund_text', title: string) {
+		policyModal = { open: true, title, text: '', loading: true };
+		const { data, error } = await supabase.rpc('get_rental_policy_settings');
+		if (error || !data) {
+			policyModal.loading = false;
+			policyModal.text = '내용을 불러오지 못했습니다.';
+		} else {
+			policyModal.loading = false;
+			policyModal.text = (data as Record<string, string>)[field] ?? '';
+		}
+	}
+
+	function closePolicyModal() {
+		policyModal = { open: false, title: '', text: '', loading: false };
+	}
 
 	// 홈 화면(/) 데이터 호출 지연 감지 로딩 — 다른 화면에서 홈으로 이동할 때, 홈의
 	// +page.server.ts load()(배너·테마그룹·크레이지로그·FAQ·MD추천·카테고리 큐레이션 등
@@ -158,18 +181,26 @@
 				</div>
 				<!-- 링크 컬럼들 -->
 				<div class="footer-links">
-					{#each [
-						{ label: 'SNS 채널', links: ['YouTube', 'Blog'] },
-						{ label: '법적 고지', links: ['개인정보처리방침', '서비스이용정책', '환불규정'] },
-						{ label: '소개', links: ['팀', '연락처', 'FAQ'] },
-					] as col}
-						<div class="footer-link-col">
-							<p class="footer-link-heading">{col.label}</p>
-							{#each col.links as link}
-								<a href="/" class="footer-link">{link}</a>
-							{/each}
-						</div>
-					{/each}
+					<!-- SNS 채널: 준비중 토스트 -->
+					<div class="footer-link-col">
+						<p class="footer-link-heading">SNS 채널</p>
+						<button class="footer-link footer-link-btn" onclick={() => csToast.info('채널 준비중입니다')}>YouTube</button>
+						<button class="footer-link footer-link-btn" onclick={() => csToast.info('채널 준비중입니다')}>Blog</button>
+					</div>
+					<!-- 법적 고지: 모달 -->
+					<div class="footer-link-col">
+						<p class="footer-link-heading">법적 고지</p>
+						<button class="footer-link footer-link-btn" onclick={() => openPolicyModal('privacy_text', '개인정보처리방침')}>개인정보처리방침</button>
+						<button class="footer-link footer-link-btn" onclick={() => openPolicyModal('terms_text', '서비스이용정책')}>서비스이용정책</button>
+						<button class="footer-link footer-link-btn" onclick={() => openPolicyModal('refund_text', '환불규정')}>환불규정</button>
+					</div>
+					<!-- 소개: 준비중 (이번 범위 제외) -->
+					<div class="footer-link-col">
+						<p class="footer-link-heading">소개</p>
+						<a href="/" class="footer-link">팀</a>
+						<a href="/" class="footer-link">연락처</a>
+						<a href="/" class="footer-link">FAQ</a>
+					</div>
 				</div>
 			</div>
 			<div class="footer-bottom">
@@ -182,6 +213,27 @@
 			</div>
 		</div>
 	</footer>
+	{/if}
+
+	<!-- 법적 고지 모달 -->
+	{#if policyModal.open}
+		<div class="policy-overlay" onclick={closePolicyModal} role="dialog" aria-modal="true" aria-label={policyModal.title}>
+			<div class="policy-modal" onclick={(e) => e.stopPropagation()}>
+				<div class="policy-modal-head">
+					<h2 class="policy-modal-title">{policyModal.title}</h2>
+					<button class="policy-modal-close" onclick={closePolicyModal} aria-label="닫기">✕</button>
+				</div>
+				<div class="policy-modal-body">
+					{#if policyModal.loading}
+						<p class="policy-modal-loading">불러오는 중...</p>
+					{:else if policyModal.text}
+						<pre class="policy-modal-text">{policyModal.text}</pre>
+					{:else}
+						<p class="policy-modal-empty">내용이 준비 중입니다.</p>
+					{/if}
+				</div>
+			</div>
+		</div>
 	{/if}
 </div>
 
@@ -376,5 +428,81 @@
 		margin: 0;
 		line-height: 2;
 		text-align: center;
+	}
+
+	/* 푸터 버튼형 링크 (준비중 토스트 / 정책 모달) */
+	.footer-link-btn {
+		background: none;
+		border: none;
+		padding: 0;
+		cursor: pointer;
+		text-align: left;
+	}
+	.footer-link-btn:hover { color: var(--cs-points); }
+
+	/* 법적 고지 모달 */
+	.policy-overlay {
+		position: fixed;
+		inset: 0;
+		background: rgba(0, 0, 0, 0.6);
+		z-index: 9999;
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		padding: 20px;
+	}
+	.policy-modal {
+		background: #fff;
+		border-radius: 20px;
+		width: 100%;
+		max-width: 640px;
+		max-height: 80vh;
+		display: flex;
+		flex-direction: column;
+		overflow: hidden;
+	}
+	.policy-modal-head {
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		padding: 20px 24px 16px;
+		border-bottom: 1px solid #f0f0f0;
+	}
+	.policy-modal-title {
+		font-size: 18px;
+		font-weight: 700;
+		color: var(--cs-text);
+		margin: 0;
+	}
+	.policy-modal-close {
+		background: none;
+		border: none;
+		font-size: 18px;
+		cursor: pointer;
+		color: var(--cs-text-mid, #666);
+		padding: 4px 8px;
+		line-height: 1;
+	}
+	.policy-modal-body {
+		overflow-y: auto;
+		padding: 20px 24px 24px;
+		flex: 1;
+	}
+	.policy-modal-text {
+		font-size: 14px;
+		font-family: var(--font-kr);
+		color: var(--cs-text);
+		white-space: pre-wrap;
+		word-break: break-word;
+		margin: 0;
+		line-height: 1.8;
+	}
+	.policy-modal-loading,
+	.policy-modal-empty {
+		font-size: 14px;
+		color: var(--cs-text-mid, #666);
+		text-align: center;
+		padding: 40px 0;
+		margin: 0;
 	}
 </style>

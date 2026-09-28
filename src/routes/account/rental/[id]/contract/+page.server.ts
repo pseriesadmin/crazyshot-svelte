@@ -7,9 +7,9 @@ import { error, redirect } from '@sveltejs/kit'
 import { recordAuditLog } from '$lib/contract-signature/auditLog'
 import type { PageServerLoad } from './$types'
 
-export const load: PageServerLoad = async ({ params, locals }) => {
+export const load: PageServerLoad = async ({ params, locals, url }) => {
   const { session } = await locals.safeGetSession()
-  if (!session) throw redirect(303, '/auth/login')
+  if (!session) throw redirect(303, `/auth/login?redirect=${encodeURIComponent(url.pathname)}`)
 
   // 소유권 확인은 반드시 고객 세션 클라이언트(RLS)로 — 타 고객의 예약 ID를 넣어도
   // user_id 불일치 시 조회 자체가 안 됨(존재 여부조차 노출하지 않음)

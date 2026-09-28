@@ -6,6 +6,9 @@
     // 지정 시 이 날짜보다 이전(미포함)은 선택 불가 — 예: 반납일 캘린더에서 수령일 이전 선택
     // 방지. minDate 당일은 선택 가능(당일 대여/반납 케이스 허용)
     minDate?: string
+    // 지정 시 이 날짜보다 이후(미포함)는 선택 불가 — 예: 최대 대여일수 초과 반납일 방지
+    // maxDate 당일은 선택 가능(minDate 대칭 정책)
+    maxDate?: string
     // 대여 기간 범위 시각화(2026-08-17, 수령·반납 달력 공통 표시) — 지정 시 rangeStart~rangeEnd
     // 구간을 하나의 연속된 배경 밴드로 강조. 이 컴포넌트의 단일값 선택(value/onselect) 동작
     // 자체는 변경 없음 — 순수 시각적 오버레이만 추가
@@ -70,6 +73,7 @@
     onselect,
     disablePast = true,
     minDate = '',
+    maxDate = '',
     rangeStart = '',
     rangeEnd = '',
     rangeStartLabel = '시작일',
@@ -151,7 +155,9 @@
   function isPastDay(iso: string): boolean {
     const beforeToday = disablePast && new Date(iso) < new Date(today.getFullYear(), today.getMonth(), today.getDate())
     const beforeMin = minDate ? iso < minDate : false
-    return beforeToday || beforeMin
+    // [11] maxDate 당일은 선택 가능(minDate 대칭 정책 — iso > maxDate 일 때만 차단)
+    const afterMax = maxDate ? iso > maxDate : false
+    return beforeToday || beforeMin || afterMax
   }
 
   // ── 연/월 빠른 이동(항목 6, 순수 추가) ─────────────────────────────────────────

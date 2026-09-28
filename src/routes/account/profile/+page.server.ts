@@ -54,9 +54,9 @@ export interface ShippingAddress {
   created_at: string
 }
 
-export const load: PageServerLoad = async ({ locals }) => {
+export const load: PageServerLoad = async ({ locals, url }) => {
   const { session } = await locals.safeGetSession()
-  if (!session) throw redirect(303, '/auth/login')
+  if (!session) throw redirect(303, `/auth/login?redirect=${encodeURIComponent(url.pathname)}`)
 
   // relative_days("첫 확인일로부터 N일") 쿠폰: 이 화면에서 쿠폰 목록을 열어보는 시점을
   // "첫 확인"으로 기록해 유효일수 카운트다운을 시작한다 — 장바구니(cart/+page.server.ts)와

@@ -18,9 +18,9 @@ export interface MyReply {
   created_at:    string
 }
 
-export const load: PageServerLoad = async ({ locals }) => {
+export const load: PageServerLoad = async ({ locals, url }) => {
   const { session } = await locals.safeGetSession()
-  if (!session) throw redirect(303, '/auth/login')
+  if (!session) throw redirect(303, `/auth/login?redirect=${encodeURIComponent(url.pathname)}`)
 
   const { data, error } = await locals.supabase
     .from('cs_posts')

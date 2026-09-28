@@ -23,9 +23,9 @@ export interface RentalForReturnMethod {
   product_name: string | null
 }
 
-export const load: PageServerLoad = async ({ params, locals }) => {
+export const load: PageServerLoad = async ({ params, locals, url }) => {
   const { session } = await locals.safeGetSession()
-  if (!session) throw redirect(303, '/auth/login')
+  if (!session) throw redirect(303, `/auth/login?redirect=${encodeURIComponent(url.pathname)}`)
 
   const reservationId = parseInt(params.id, 10)
   if (isNaN(reservationId) || reservationId <= 0) {

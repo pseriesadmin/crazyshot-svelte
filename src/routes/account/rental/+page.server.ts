@@ -20,9 +20,9 @@ export interface MyRental {
   tracking_number:        string | null
 }
 
-export const load: PageServerLoad = async ({ locals }) => {
+export const load: PageServerLoad = async ({ locals, url }) => {
   const { session } = await locals.safeGetSession()
-  if (!session) throw redirect(303, '/auth/login')
+  if (!session) throw redirect(303, `/auth/login?redirect=${encodeURIComponent(url.pathname)}`)
 
   const { data, error } = await locals.supabase
     .from('rental_reservations')

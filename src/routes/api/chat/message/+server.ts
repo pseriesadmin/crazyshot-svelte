@@ -182,7 +182,7 @@ export const POST: RequestHandler = async ({ request, locals }) => {
                 product_image: match.image_url ?? null,
                 canned_response_id: match.id,
               }
-            : { type: 'auto_canned_reply', canned_response_id: match.id }
+            : null // text 타입은 action_payload null — message_type='text'에 non-null payload를 허용하지 않는 DB 제약 방어
 
           // sender_type='admin' INSERT는 RLS(participant_insert_message)가 실제 cms_role
           // 보유 계정에게만 허용 — 이 메시지는 관리자가 아니라 시스템 자동응답이므로
@@ -382,7 +382,11 @@ export const POST: RequestHandler = async ({ request, locals }) => {
     )
   }
 
-  const { data: aiMessage, error: aiInsertError } = await db
+  // sender_type='ai' INSERT: service_role(admin) 클라이언트로 삽입해야 RLS를 우회할 수 있음.
+  // db(고객 세션 클라이언트)로 삽입하면 RLS(participant_insert_message)가 비-'user' sender_type을
+  // 차단해 캔드매칭 실패 후 AI 폴백 응답도 DB에 저장되지 않는 무반응 상태가 됨.
+  const insertClient = admin ?? db
+  const { data: aiMessage, error: aiInsertError } = await insertClient
     .from('chat_messages')
     .insert({
       session_id: body.session_id,

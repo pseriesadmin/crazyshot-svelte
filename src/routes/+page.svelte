@@ -438,9 +438,9 @@
       <h2 class="michil-title"><span style="color:{redDeep}">미·칠</span> PICK!</h2>
     </div>
 
-    <!-- Package 타이틀 바 -->
+    <!-- 활성 카테고리 타이틀 바 -->
     <div class="pkg-bar">
-      <span class="pkg-bar-label">Package</span>
+      <span class="pkg-bar-label">{CATEGORY_TABS.find((t) => t.id === activeTab)?.label ?? 'Category'}</span>
       <div class="pkg-bar-icon">
         <svg width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden="true">
           <path d="M5 2l5 5-5 5" stroke="{purpleLight}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>

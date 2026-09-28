@@ -20,9 +20,9 @@ export interface LateFeeDetail {
   end_date: string | null
 }
 
-export const load: PageServerLoad = async ({ params, locals }) => {
+export const load: PageServerLoad = async ({ params, locals, url }) => {
   const { session } = await locals.safeGetSession()
-  if (!session) throw redirect(303, '/auth/login')
+  if (!session) throw redirect(303, `/auth/login?redirect=${encodeURIComponent(url.pathname)}`)
 
   const lateFeeId = params.id
   if (!lateFeeId) throw redirect(303, '/account')

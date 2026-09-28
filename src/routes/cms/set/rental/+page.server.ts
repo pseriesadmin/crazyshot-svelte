@@ -87,6 +87,7 @@ export interface RentalShippingSettings {
   enable_return: boolean
   return_fee: number | null
   shipping_guide: string
+  max_rental_days: number | null  // [11] 최대 대여일수 (기본값 15일)
 }
 
 export interface DeliveryFeeDiscountTier {
@@ -118,7 +119,7 @@ export const load: PageServerLoad = async ({ locals }) => {
   const supabase = locals.supabase
   const todayIso = new Date().toISOString().slice(0, 10)
 
-  const [periods, methods, branches, guide, consents, shippingRow, cutoffRow, holidays, discountTiers] = await Promise.all([
+  const [periods, methods, branches, guide, consents, shippingRow, cutoffRow, holidays, discountTiers, policyRow] = await Promise.all([
     untypedFrom(supabase, 'rental_period_options')
       .select('id, name, display_order, is_active')
       .is('deleted_at', null)
@@ -146,7 +147,7 @@ export const load: PageServerLoad = async ({ locals }) => {
       .order('display_order'),
 
     untypedFrom(supabase, 'rental_shipping_settings')
-      .select('enable_round_trip, round_trip_fee, enable_delivery, delivery_fee, enable_return, return_fee, shipping_guide')
+      .select('enable_round_trip, round_trip_fee, enable_delivery, delivery_fee, enable_return, return_fee, shipping_guide, max_rental_days')
       .limit(1)
       .single(),
 
@@ -165,9 +166,15 @@ export const load: PageServerLoad = async ({ locals }) => {
       .is('deleted_at', null)
       .order('display_order')
       .order('created_at'),
+
+    untypedFrom(supabase, 'rental_policy_settings')
+      .select('privacy_text, terms_text, refund_text')
+      .limit(1)
+      .single(),
   ])
 
   type GuideRow = { guide_text: string | null }
+  type PolicyRow = { privacy_text: string; terms_text: string; refund_text: string }
 
   return {
     periods: ((periods as { data: RentalPeriodOption[] | null }).data ?? []),
@@ -179,6 +186,7 @@ export const load: PageServerLoad = async ({ locals }) => {
     cutoffSettings: ((cutoffRow as { data: DeliveryCutoffSettings | null }).data ?? null),
     holidays: ((holidays as { data: PublicHolidayRow[] | null }).data ?? []),
     discountTiers: ((discountTiers as { data: DeliveryFeeDiscountTier[] | null }).data ?? []),
+    policySettings: ((policyRow as { data: PolicyRow | null }).data ?? { privacy_text: '', terms_text: '', refund_text: '' }),
   }
 }
 
@@ -470,6 +478,11 @@ export const actions: Actions = {
     const returnFee = returnFeeRaw !== '' ? parseInt(returnFeeRaw, 10) : null
 
     const shippingGuide = (data.get('shipping_guide') as string | null) ?? ''
+    const maxRentalDaysRaw = (data.get('max_rental_days') as string | null) ?? ''
+    const maxRentalDays = maxRentalDaysRaw !== '' ? parseInt(maxRentalDaysRaw, 10) : 15
+    if (isNaN(maxRentalDays) || maxRentalDays < 1 || maxRentalDays > 365) {
+      return fail(400, { error: '최대 대여일수는 1~365 사이 정수여야 합니다.' })
+    }
 
     if (shippingGuide.length > 200) return fail(400, { error: '배송 안내문은 최대 200자까지 입력 가능합니다.' })
 
@@ -481,6 +494,7 @@ export const actions: Actions = {
       p_enable_return:     enableReturn,
       p_return_fee:        returnFee,
       p_shipping_guide:    shippingGuide,
+      p_max_rental_days:   maxRentalDays,
     })
     if (error) return fail(500, { error: error.message })
     return { success: true }
@@ -615,6 +629,33 @@ export const actions: Actions = {
     const { error } = await untypedRpc(locals.supabase, 'upsert_rental_guide', {
       p_guide_text: guideText,
     })
+    if (error) return fail(500, { error: error.message })
+    return { success: true }
+  },
+
+  // ─── 법적 고지 텍스트 ─────────────────────────
+  savePolicy: async ({ request, locals }) => {
+    const { session } = await locals.safeGetSession()
+    if (!session) return fail(401, { error: '인증 필요' })
+    const cmsRole = await getCmsRoleForAction(locals)
+    if (!hasSettingsAccess(cmsRole ?? '')) return fail(403, { error: '권한 없음' })
+    const data = await request.formData()
+    const field = (data.get('policy_field') as string | null) ?? ''
+    const text = (data.get('policy_text') as string | null) ?? ''
+
+    if (!['privacy_text', 'terms_text', 'refund_text'].includes(field)) {
+      return fail(400, { error: '올바르지 않은 항목입니다.' })
+    }
+    if (text.length > 5000) return fail(400, { error: '내용은 최대 5,000자까지 입력 가능합니다.' })
+
+    const fieldToParam: Record<string, string> = {
+      privacy_text: 'p_privacy',
+      terms_text: 'p_terms',
+      refund_text: 'p_refund',
+    }
+    const params: Record<string, string> = { [fieldToParam[field]]: text }
+
+    const { error } = await untypedRpc(locals.supabase, 'upsert_rental_policy_settings', params)
     if (error) return fail(500, { error: error.message })
     return { success: true }
   },

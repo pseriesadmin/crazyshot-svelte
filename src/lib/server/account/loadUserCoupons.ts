@@ -2,6 +2,7 @@
 // account/+page.server.ts(PC)와 account/profile/+page.server.ts(모바일)가 공유
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type { Database } from '$lib/types/database'
+import { isCouponEligible, buildCouponEligibilityContext } from '$lib/server/coupons/couponEligibility'
 
 export interface UserCouponCard {
   id: string
@@ -25,10 +26,21 @@ interface RawCoupon {
   // 2026-09-21 추가: "첫 확인일로부터 N일" 모드(relative_days) 지원
   validity_type: string | null
   valid_days: number | null
+  // [4A] 자격조건 7개 필드 추가
+  min_rental_amount: number | null
+  min_rental_days: number | null
+  is_first_rental_only: boolean
+  is_student_only: boolean
+  is_subscription_only: boolean
+  is_walk_in_only: boolean
+  per_user_limit: number | null
+  type: string
+  applicable_categories: string[] | null
 }
 
 interface RawUserCouponRow {
   id: string
+  coupon_id: string | null
   used_at: string | null
   redeemed_code: string | null
   first_viewed_at: string | null
@@ -44,15 +56,29 @@ export async function loadUserCoupons(
   // 않으므로 만료 여부는 아래에서 직접 계산해 제외한다(2026-09-21 — 이전 주석이 RLS가
   // 유효기간까지 걸러준다고 서술했던 건 실제 라이브 정책과 달라 정정, relative_days
   // 도입 계기로 재검증).
-  const { data } = await supabase
-    .from('user_coupons')
-    .select('id, used_at, redeemed_code, first_viewed_at, coupons(code, discount_type, discount_value, display_name, valid_until, min_purchase_amount, validity_type, valid_days)')
-    .eq('user_id', userId)
-    .order('created_at', { ascending: false })
+  // [4A] 자격조건 7개 필드 포함 — 쿠폰 미노출 필터링(isCouponEligible)에 사용
+  const [{ data }, userCtx] = await Promise.all([
+    supabase
+      .from('user_coupons')
+      .select('id, coupon_id, used_at, redeemed_code, first_viewed_at, coupons(code, discount_type, discount_value, display_name, valid_until, min_purchase_amount, min_rental_amount, min_rental_days, is_first_rental_only, is_student_only, is_subscription_only, is_walk_in_only, per_user_limit, type, applicable_categories, validity_type, valid_days)')
+      .eq('user_id', userId)
+      .order('created_at', { ascending: false }),
+    // [4A] 사용자 컨텍스트 1회 조회 (주문 컨텍스트 없음 — coupon list 탭은 order 없음)
+    buildCouponEligibilityContext(supabase, userId, null),
+  ])
 
   const now = Date.now()
+  const rows = (data ?? []) as unknown as RawUserCouponRow[]
 
-  return ((data ?? []) as unknown as RawUserCouponRow[])
+  // [4A] per_user_limit 계산을 위해 coupon_id별 사용 횟수 집계 (in-memory, 추가 DB쿼리 없음)
+  const usedCountByCouponId = new Map<string, number>()
+  for (const row of rows) {
+    if (row.coupon_id && row.used_at) {
+      usedCountByCouponId.set(row.coupon_id, (usedCountByCouponId.get(row.coupon_id) ?? 0) + 1)
+    }
+  }
+
+  return rows
     .filter(row => row.coupons !== null)
     .filter(row => {
       // relative_days 만료 제외 — first_viewed_at + valid_days가 지난 쿠폰은 목록에서 뺀다
@@ -65,12 +91,40 @@ export async function loadUserCoupons(
       }
       return true
     })
+    .filter(row => {
+      // [4A] 자격조건 검증 — 미충족 쿠폰을 목록에서 제외
+      // ORDER_CONTEXT_REQUIRED는 "주문 없이 판정 불가" = 일단 표시(용도에 맞는 상황에서 검증)
+      // CATEGORY_NOT_APPLICABLE(cartCategories=null)도 카트 없이 판정 불가로 동일 처리
+      const c = row.coupons as RawCoupon
+      const perUserCount = row.coupon_id ? (usedCountByCouponId.get(row.coupon_id) ?? 0) : 0
+      const result = isCouponEligible(
+        {
+          min_purchase_amount:   c.min_purchase_amount   ?? 0,
+          min_rental_amount:     c.min_rental_amount     ?? 0,
+          min_rental_days:       c.min_rental_days       ?? 0,
+          is_first_rental_only:  c.is_first_rental_only  ?? false,
+          is_student_only:       c.is_student_only       ?? false,
+          is_subscription_only:  c.is_subscription_only  ?? false,
+          is_walk_in_only:       c.is_walk_in_only       ?? false,
+          per_user_limit:        c.per_user_limit        ?? 0,
+          type:                  c.type,
+          applicable_categories: c.applicable_categories ?? null,
+        },
+        { ...userCtx, usedCountForCoupon: perUserCount },
+      )
+      // ok=true, 또는 "주문/카트 컨텍스트 없어서 판정 불가" → 표시
+      return result.ok ||
+        result.reason === 'ORDER_CONTEXT_REQUIRED' ||
+        result.reason === 'CATEGORY_NOT_APPLICABLE'
+    })
     .map(row => {
       const c = row.coupons as RawCoupon
+      // [4A] Supabase NUMERIC(10,2)는 JS string으로 직렬화됨 → Number() 변환 필수
+      const discountValue = Number(c.discount_value)
       const label = c.display_name
         ?? (c.discount_type === 'fixed'
-          ? `${c.discount_value.toLocaleString('ko-KR')}원 할인`
-          : `${c.discount_value}% 할인`)
+          ? `${discountValue.toLocaleString('ko-KR')}원 할인`
+          : `${discountValue}% 할인`)
 
       const status: UserCouponCard['status'] = row.used_at ? 'used' : 'usable'
 

@@ -60,7 +60,6 @@
 	<!-- 장바구니 -->
 	<button
 		class="fab-btn"
-		style={peekMode ? 'pointer-events:none' : ''}
 		aria-label="장바구니"
 		onclick={() => window.location.href = '/cart'}
 	>
@@ -74,7 +73,6 @@
 	<!-- 검색 -->
 	<button
 		class="fab-btn"
-		style={peekMode ? 'pointer-events:none' : ''}
 		aria-label="검색"
 		onclick={() => window.location.href = '/products/search'}
 	>
@@ -85,8 +83,8 @@
 		</svg>
 	</button>
 
-	<!-- 채팅 FAB: peek 시 차단. 채팅 열린 동안은 pointer-events 유지 (모달 조작 가능) -->
-	<div style={(peekMode && !chatStore.isOpen) ? 'pointer-events:none' : ''}>
+	<!-- 채팅 FAB -->
+	<div>
 		<FloatingButton
 			{userId}
 			{userName}

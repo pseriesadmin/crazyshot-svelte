@@ -717,6 +717,11 @@
     applyBulkToItems()
   }
   function bulkHandleReturnDate(d: string) {
+    // [13] 반납일이 수령일보다 앞서면 차단 (수령일이 아직 미설정이면 통과)
+    if (bulkDate && d < bulkDate) {
+      csToast.warning('반납일은 수령일 이후로 설정해주세요')
+      return
+    }
     bulkReturnDate = d
     applyBulkToItems()
     openCalId = null
@@ -920,8 +925,26 @@
     })
   )
 
-  // 조건 3: 배송 마감 미초과 (TASK-D: check_delivery_deadline() 연동 후 대체)
-  const deadlineOk = $derived(true)
+  // [12] 방문 수령 최소 선택 가능일 — "1일 전 오후 7시까지" 규칙 (KST 기준)
+  // 규칙: D일 방문수령을 원하면 D-1일 deadline_time(기본 19:00) 이전에 신청해야 한다.
+  // 즉 오늘 방문수령은 항상 불가 → 최소 내일(19시 이전) 또는 모레(19시 이후)
+  const minVisitPickupDate = $derived.by(() => {
+    const visitTab = deliveryTabs.find(t => t.v === 'visit')
+    const deadlineStr = visitTab?.deadline ?? '19:00'
+    const deadlineHour = parseInt(deadlineStr.split(':')[0], 10)
+    // KST = UTC+9: new Date(Date.now() + 9h)로 오프셋 후 getUTCHours()로 KST 시각 얻기
+    const kstNow = new Date(Date.now() + 9 * 3_600_000)
+    const todayKst = kstNow.toISOString().slice(0, 10)
+    const kstH = kstNow.getUTCHours()
+    return kstH < deadlineHour ? addDays(todayKst, 1) : addDays(todayKst, 2)
+  })
+
+  // 조건 3: 방문 수령 마감시각 검사 — "1일 전 오후 7시까지" (KST)
+  // 방문(visit) 이외 방식은 항상 통과. 날짜 미선택이면 통과(제출 단계는 datesSet이 막음).
+  // 방문인데 선택한 수령일이 최소일보다 이르면 차단(이미 캘린더 minDate로도 막혀있음 — 이중 방어).
+  const deadlineOk = $derived(
+    bulkOpts.rentalMethod !== 'visit' || !bulkDate || bulkDate >= minVisitPickupDate
+  )
 
   // 조건 4: 신원 확인 완료 — 2026-08-18 정책 변경: 장바구니는 가입 완료 계정만 접근
   // 가능(+page.server.ts에서 비회원·익명세션은 이미 /auth/login으로 리다이렉트됨) —
@@ -1227,7 +1250,16 @@
     enable_delivery: boolean;   delivery_fee: number | null
     enable_return: boolean;     return_fee: number | null
     shipping_guide: string | null
+    max_rental_days: number | null  // [11] 최대 대여일수
   } | null | undefined) ?? null)
+
+  // [11] 최대 반납일 = 수령일 + max_rental_days (DB 설정값, 기본 15일)
+  // bulkDate가 없거나 max_rental_days 미설정이면 제한 없음(undefined)
+  const maxReturnDate = $derived(
+    bulkDate && sdShippingSettings?.max_rental_days
+      ? addDays(bulkDate, sdShippingSettings.max_rental_days)
+      : undefined
+  )
 
   // 2026-09-05(Stephen 지시 — 배송요금 미부과 CRITICAL 결함 수정): "이 방식이 배송인가"
   // 판정을 isDeliveryLocked(is_bulk_delivery, "요청 A" 강제묶음 전용)에서
@@ -1749,13 +1781,16 @@
       .filter((uc) => otSelectedCouponIds.has(uc.id) && uc.coupons !== null)
       .reduce((sum, uc) => {
         const c = uc.coupons!
+        // [4B] Supabase NUMERIC(10,2)은 JS string으로 직렬화됨 — 산술 전 Number() 변환 필수
+        const discountVal = Number(c.discount_value)
         const amount =
-          c.discount_type === 'fixed' ? c.discount_value :
+          c.discount_type === 'fixed' ? discountVal :
           c.discount_type === 'percentage' ? (() => {
-            const raw = Math.round(otSubtotal * c.discount_value / 100)
-            return c.max_discount_amount && c.max_discount_amount > 0 ? Math.min(raw, c.max_discount_amount) : raw
+            const raw = Math.round(otSubtotal * discountVal / 100)
+            const maxAmt = Number(c.max_discount_amount ?? 0)
+            return maxAmt > 0 ? Math.min(raw, maxAmt) : raw
           })() :
-          c.discount_type === 'free_shipping' ? Math.min(c.discount_value, otDeliveryFee) :
+          c.discount_type === 'free_shipping' ? Math.min(discountVal, otDeliveryFee) :
           0
         return sum + amount
       }, 0)
@@ -1786,9 +1821,15 @@
   // 할인 후 금액 (부가세 포함가 — 상품 단가 자체에 이미 VAT가 포함돼 있음)
   const otNetBeforeVat = $derived(otSubtotal - otMembershipDiscount)
 
+  // [14] 쿠폰 적용 후 실제 과세 기준 금액 — otVat은 이 값을 기반으로 역산해야 함
+  // (쿠폰 할인 전 otNetBeforeVat을 기준으로 하면 고객이 실제로 내는 금액보다
+  //  많은 VAT를 안내하는 표시 오류가 발생함)
+  const otNetAfterCoupon = $derived(Math.max(0, otNetBeforeVat - otCouponDiscount))
+
   // 2026-08-25: 상품 가격이 부가세 포함가라 별도로 10%를 더해서는 안 됨(이중과세) —
   // 포함가에서 역산해 "얼마가 부가세였는지"만 안내용으로 표시(합계 계산에는 더하지 않음)
-  const otVat = $derived(Math.round(otNetBeforeVat - otNetBeforeVat / 1.1))
+  // [14] otNetAfterCoupon 기준으로 수정 (쿠폰 적용 후 실제 과세액 반영)
+  const otVat = $derived(Math.round(otNetAfterCoupon - otNetAfterCoupon / 1.1))
 
   // 포인트 사용 최대값 (보유 포인트 & 결제 금액 중 작은 값) — otVat은 포함가 내역 표시용일
   // 뿐 별도 가산 항목이 아니므로 더하지 않음
@@ -2824,19 +2865,17 @@
         </svg>
       </button>
     </div>
-    <div
-      class="item-card-body"
-      role="button"
-      tabindex="0"
-      onclick={() => updateItem(item.id, { checked: !item.checked })}
-      onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); updateItem(item.id, { checked: !item.checked }) } }}
-      aria-pressed={item.checked}
-      aria-label={`${line?.product?.name ?? '상품'} 결제 포함 선택`}
-    >
+    <div class="item-card-body">
       <div class="item-card-top-row">
-        <div class="item-thumb-wrap">
+        <button
+          class="item-thumb-wrap"
+          onclick={() => updateItem(item.id, { checked: !item.checked })}
+          aria-pressed={item.checked}
+          aria-label={`${line?.product?.name ?? '상품'} 결제 포함 선택`}
+          style="background:none;border:none;padding:0;cursor:pointer;"
+        >
           <img src={line?.product?.image_urls?.[0] ?? 'https://picsum.photos/seed/cam/150/150'} alt={line?.product?.name ?? '상품'} class="item-thumb" width="108" height="108" loading="lazy"/>
-        </div>
+        </button>
         <div class="item-info">
           <p class="item-name">{line?.product?.name ?? '상품'}</p>
           <div class="item-info-top">
@@ -2943,7 +2982,7 @@
       </button>
       {#if bulkOpenAcc === 'rental'}
         <div transition:slide={{ duration: 300 }} class="acc-body">
-          {@render RentalForm({ type: 'rental', calId: 'bulk-rental', selectedDate: bulkDate, onDateChange: bulkHandleDate, timeId: 'bulk-rental-t', selectedTime: bulkTime, onTimeChange: bulkHandleTime, method: bulkOpts.rentalMethod, form: bulkRentalForm, copyToReturn: bulkOpts.copyToReturn, onMethodChange: bulkHandleMethod, onFormChange: bulkHandleRentalForm, onCopyChange: bulkHandleCopy, hasUserAddress: sdHasUserAddress, hasUserProfileInfo: sdHasUserProfileInfo, userProfileInfo: sdUserProfileInfo, userAddressInfo: sdUserAddressInfo, pickupPoints: visitPickupPoints, rangeStart: bulkDate, rangeEnd: bulkReturnDate })}
+          {@render RentalForm({ type: 'rental', calId: 'bulk-rental', selectedDate: bulkDate, onDateChange: bulkHandleDate, timeId: 'bulk-rental-t', selectedTime: bulkTime, onTimeChange: bulkHandleTime, method: bulkOpts.rentalMethod, form: bulkRentalForm, copyToReturn: bulkOpts.copyToReturn, onMethodChange: bulkHandleMethod, onFormChange: bulkHandleRentalForm, onCopyChange: bulkHandleCopy, hasUserAddress: sdHasUserAddress, hasUserProfileInfo: sdHasUserProfileInfo, userProfileInfo: sdUserProfileInfo, userAddressInfo: sdUserAddressInfo, pickupPoints: visitPickupPoints, rangeStart: bulkDate, rangeEnd: bulkReturnDate, minDate: bulkOpts.rentalMethod === 'visit' ? minVisitPickupDate : undefined })}
         </div>
       {:else if bulkDate && bulkTime}
         <!-- 2026-09-03(Stephen 확정) — "대여 방법" 아코디언이 닫혀도 이미 선택된 수령일·시간을
@@ -2992,7 +3031,7 @@
       </button>
       {#if bulkOpenAcc === 'return_'}
         <div transition:slide={{ duration: 300 }} class="acc-body">
-          {@render RentalForm({ type: 'return', calId: 'bulk-return', selectedDate: bulkReturnDate, onDateChange: bulkHandleReturnDate, timeId: 'bulk-return-t', selectedTime: bulkReturnTime, onTimeChange: bulkHandleReturnTime, method: bulkOpts.returnMethod, form: bulkReturnForm, onMethodChange: bulkHandleReturnMethod, onFormChange: bulkHandleReturnForm, hasUserAddress: sdHasUserAddress, hasUserProfileInfo: sdHasUserProfileInfo, userProfileInfo: sdUserProfileInfo, userAddressInfo: sdUserAddressInfo, pickupPoints: visitPickupPoints, minDate: bulkDate, rangeStart: bulkDate, rangeEnd: bulkReturnDate })}
+          {@render RentalForm({ type: 'return', calId: 'bulk-return', selectedDate: bulkReturnDate, onDateChange: bulkHandleReturnDate, timeId: 'bulk-return-t', selectedTime: bulkReturnTime, onTimeChange: bulkHandleReturnTime, method: bulkOpts.returnMethod, form: bulkReturnForm, onMethodChange: bulkHandleReturnMethod, onFormChange: bulkHandleReturnForm, hasUserAddress: sdHasUserAddress, hasUserProfileInfo: sdHasUserProfileInfo, userProfileInfo: sdUserProfileInfo, userAddressInfo: sdUserAddressInfo, pickupPoints: visitPickupPoints, minDate: bulkDate, maxDate: maxReturnDate, rangeStart: bulkDate, rangeEnd: bulkReturnDate })}
         </div>
       {:else if bulkReturnDate && bulkReturnTime}
         <!-- "대여 방법"과 동일하게 "반납 방법"도 접혔을 때 이미 선택된 반납일·시간을
@@ -3143,11 +3182,13 @@
   </div>
 {/snippet}
 
-{#snippet NotesSection(p: { form: FormState; onFormChange: (f: FormState) => void })}
+{#snippet NotesSection(p: { form: FormState; onFormChange: (f: FormState) => void; method?: DeliveryMethod | null })}
   <div class="form-section">
     <span class="form-section-label">요청 사항</span>
     <input class="f-input" placeholder="알아보기 쉽게 입력 필수" value={p.form.notes} oninput={(e) => p.onFormChange({ ...p.form, notes: readInputValue(e) })}/>
-    <p class="form-note-sm">공동현관 출입번호 / 경비실 호출 / 세대호출 / 자유 출입가능 등</p>
+    {#if p.method !== 'visit'}
+      <p class="form-note-sm">공동현관 출입번호 / 경비실 호출 / 세대호출 / 자유 출입가능 등</p>
+    {/if}
   </div>
 {/snippet}
 
@@ -3174,6 +3215,8 @@
   pickupPoints?: PickupPointRow[];
   // 반납일 캘린더 전용 — 수령일 이전 선택 방지(수령일자 값 그대로 전달)
   minDate?: string;
+  // [11] 반납일 캘린더 전용 — 수령일 + max_rental_days 초과 선택 방지
+  maxDate?: string;
   // 대여 기간 범위 시각화 — 수령·반납 달력 양쪽 모두에 전달해 어느 쪽을 열어도 전체
   // 기간이 하나의 밴드로 보이도록 함(2026-08-17)
   rangeStart?: string;
@@ -3356,6 +3399,7 @@
               <CalendarGrid
                 value={props.selectedDate}
                 minDate={props.minDate}
+                maxDate={props.maxDate}
                 rangeStart={props.rangeStart}
                 rangeEnd={props.rangeEnd}
                 rangeStartLabel="수령일"
@@ -3438,7 +3482,7 @@
 
     {@render DeliveryAddressSection({ form: props.form, onFormChange: props.onFormChange, method: props.method, type: props.type, hasUserAddress: props.hasUserAddress, userAddressInfo: props.userAddressInfo, pickupPoints: props.pickupPoints })}
 
-    {@render NotesSection({ form: props.form, onFormChange: props.onFormChange })}
+    {@render NotesSection({ form: props.form, onFormChange: props.onFormChange, method: props.method })}
 
     <!-- Copy to return checkbox -->
     {#if props.type === 'rental' && props.onCopyChange}
@@ -3517,7 +3561,7 @@
   /* ══ Header ══ */
   .sub-gnb-b {
     position: sticky;
-    top: 0;
+    top: var(--layout-header-h, 100px);
     z-index: 50;
     background: transparent;
     border-bottom: none;
