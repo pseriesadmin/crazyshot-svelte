@@ -1,5 +1,6 @@
 import { redirect } from '@sveltejs/kit'
 import type { PageServerLoad } from './$types'
+import { isRealMemberSession } from '$lib/utils/authGuard'
 
 // ──────────────────────────────────────────────────────────────
 // 광고 배너 타입 (CMS → 프로모션 → 광고 / promotion_banners 테이블)
@@ -36,7 +37,11 @@ const DEFAULT_BANNER: PromoBanner = {
 export const load: PageServerLoad = async ({ locals, url }) => {
   const { session } = await locals.safeGetSession()
 
-  if (session) {
+  // [BUGFIX 2026-09-28] 익명 세션(signInAnonymously, 채팅 1회 사용만으로 생성됨)을
+  // "로그인됨"으로 오판해 redirect 파라미터로 되돌려보내면, 장바구니처럼
+  // isRealMemberSession(가입 완료 세션만 인정)을 요구하는 화면과 기준이 어긋나
+  // /cart ↔ /auth/login 무한 리다이렉트 루프가 발생한다 — 실제 가입 세션만 인정하도록 통일.
+  if (session && isRealMemberSession(session)) {
     // CMS 어드민이면 로그인 페이지 접근 허용 (배너 관리 버튼 노출용)
     const { data: profile } = await locals.supabase
       .from('user_profiles')
