@@ -400,15 +400,19 @@ export const load: PageServerLoad = async ({ locals }) => {
     const optionDeliveryDisabledMap = new Map<string, boolean>()
     const optionRequiredMap = new Map<string, boolean>()
     const optionMinSelectMap = new Map<string, boolean>()
+    // OPT-QTYLOCK-1(2026-09-28): 수량이 본상품 수량에 잠기는 옵션인지 — products/[id]와 동일
+    // 판정 기준(product_option_links.qty_follows_main)을 카트 화면 스테퍼 비활성화에도 사용.
+    const optionQtyFollowsMainMap = new Map<string, boolean>()
     if (optionProductIds.length > 0) {
       const { data: optionLinkRows } = await supabase
         .from('product_option_links')
-        .select('option_product_id, delivery_rental_disabled, is_required, min_select_required')
+        .select('option_product_id, delivery_rental_disabled, is_required, min_select_required, qty_follows_main')
         .in('option_product_id', optionProductIds)
-      for (const l of (optionLinkRows ?? []) as Array<{ option_product_id: string; delivery_rental_disabled: boolean | null; is_required: boolean | null; min_select_required: boolean | null }>) {
+      for (const l of (optionLinkRows ?? []) as Array<{ option_product_id: string; delivery_rental_disabled: boolean | null; is_required: boolean | null; min_select_required: boolean | null; qty_follows_main: boolean | null }>) {
         if (l.delivery_rental_disabled) optionDeliveryDisabledMap.set(l.option_product_id, true)
         if (l.is_required) optionRequiredMap.set(l.option_product_id, true)
         if (l.min_select_required) optionMinSelectMap.set(l.option_product_id, true)
+        if (l.qty_follows_main) optionQtyFollowsMainMap.set(l.option_product_id, true)
       }
     }
 
@@ -426,6 +430,7 @@ export const load: PageServerLoad = async ({ locals }) => {
         deliveryRentalDisabled: row.option_product_id ? (optionDeliveryDisabledMap.get(row.option_product_id) ?? false) : false,
         isRequired:      row.option_product_id ? (optionRequiredMap.get(row.option_product_id) ?? false) : false,
         minSelectRequired: row.option_product_id ? (optionMinSelectMap.get(row.option_product_id) ?? false) : false,
+        qtyFollowsMain:  row.option_product_id ? (optionQtyFollowsMainMap.get(row.option_product_id) ?? false) : false,
       })
       optionsByReservation[key] = list
     }
@@ -662,6 +667,7 @@ interface CartLineItemOption {
   deliveryRentalDisabled: boolean
   isRequired: boolean
   minSelectRequired: boolean
+  qtyFollowsMain: boolean
 }
 
 interface CartLineItem {

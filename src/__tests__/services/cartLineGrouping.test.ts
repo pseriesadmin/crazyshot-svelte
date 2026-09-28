@@ -135,19 +135,19 @@ describe('groupCartLineItems — 옵션 합산(그룹 내 전체 멤버 대상)'
     const items = [
       makeItem({
         reservationId: '10',
-        options: [{ optionProductId: 'opt-1', name: '메모리카드', qty: 1, unitPrice: 5000, unitPrice12h: null, imageUrl: null, deliveryRentalDisabled: false, isRequired: false, minSelectRequired: false }],
+        options: [{ optionProductId: 'opt-1', name: '메모리카드', qty: 1, unitPrice: 5000, unitPrice12h: null, imageUrl: null, deliveryRentalDisabled: false, isRequired: false, minSelectRequired: false, qtyFollowsMain: false }],
       }),
       makeItem({
         reservationId: '20',
-        options: [{ optionProductId: 'opt-2', name: '삼각대', qty: 1, unitPrice: 3000, unitPrice12h: null, imageUrl: null, deliveryRentalDisabled: false, isRequired: false, minSelectRequired: false }],
+        options: [{ optionProductId: 'opt-2', name: '삼각대', qty: 1, unitPrice: 3000, unitPrice12h: null, imageUrl: null, deliveryRentalDisabled: false, isRequired: false, minSelectRequired: false, qtyFollowsMain: false }],
       }),
     ]
     const groups = groupCartLineItems(items)
 
     expect(groups).toHaveLength(1)
     expect(groups[0].options).toEqual([
-      { optionProductId: 'opt-1', name: '메모리카드', qty: 1, unitPrice: 5000, unitPrice12h: null, imageUrl: null, deliveryRentalDisabled: false, isRequired: false, minSelectRequired: false },
-      { optionProductId: 'opt-2', name: '삼각대', qty: 1, unitPrice: 3000, unitPrice12h: null, imageUrl: null, deliveryRentalDisabled: false, isRequired: false, minSelectRequired: false },
+      { optionProductId: 'opt-1', name: '메모리카드', qty: 1, unitPrice: 5000, unitPrice12h: null, imageUrl: null, deliveryRentalDisabled: false, isRequired: false, minSelectRequired: false, qtyFollowsMain: false },
+      { optionProductId: 'opt-2', name: '삼각대', qty: 1, unitPrice: 3000, unitPrice12h: null, imageUrl: null, deliveryRentalDisabled: false, isRequired: false, minSelectRequired: false, qtyFollowsMain: false },
     ])
   })
 
@@ -155,11 +155,11 @@ describe('groupCartLineItems — 옵션 합산(그룹 내 전체 멤버 대상)'
     const items = [
       makeItem({
         reservationId: '10',
-        options: [{ optionProductId: 'opt-1', name: '메모리카드', qty: 1, unitPrice: 5000, unitPrice12h: null, imageUrl: 'img.jpg', deliveryRentalDisabled: false, isRequired: false, minSelectRequired: false }],
+        options: [{ optionProductId: 'opt-1', name: '메모리카드', qty: 1, unitPrice: 5000, unitPrice12h: null, imageUrl: 'img.jpg', deliveryRentalDisabled: false, isRequired: false, minSelectRequired: false, qtyFollowsMain: false }],
       }),
       makeItem({
         reservationId: '20',
-        options: [{ optionProductId: 'opt-1', name: '메모리카드', qty: 2, unitPrice: 5000, unitPrice12h: null, imageUrl: null, deliveryRentalDisabled: false, isRequired: false, minSelectRequired: false }],
+        options: [{ optionProductId: 'opt-1', name: '메모리카드', qty: 2, unitPrice: 5000, unitPrice12h: null, imageUrl: null, deliveryRentalDisabled: false, isRequired: false, minSelectRequired: false, qtyFollowsMain: false }],
       }),
     ]
     const groups = groupCartLineItems(items)
@@ -174,11 +174,11 @@ describe('groupCartLineItems — 옵션 합산(그룹 내 전체 멤버 대상)'
     const items = [
       makeItem({
         reservationId: '10',
-        options: [{ optionProductId: 'opt-1', name: '메모리카드', qty: 1, unitPrice: 5000, unitPrice12h: null, imageUrl: null, deliveryRentalDisabled: false, isRequired: false, minSelectRequired: false }],
+        options: [{ optionProductId: 'opt-1', name: '메모리카드', qty: 1, unitPrice: 5000, unitPrice12h: null, imageUrl: null, deliveryRentalDisabled: false, isRequired: false, minSelectRequired: false, qtyFollowsMain: false }],
       }),
       makeItem({
         reservationId: '20',
-        options: [{ optionProductId: 'opt-1', name: '메모리카드', qty: 1, unitPrice: 5000, unitPrice12h: 4000, imageUrl: null, deliveryRentalDisabled: false, isRequired: false, minSelectRequired: false }],
+        options: [{ optionProductId: 'opt-1', name: '메모리카드', qty: 1, unitPrice: 5000, unitPrice12h: 4000, imageUrl: null, deliveryRentalDisabled: false, isRequired: false, minSelectRequired: false, qtyFollowsMain: false }],
       }),
     ]
     const groups = groupCartLineItems(items)
@@ -190,11 +190,11 @@ describe('groupCartLineItems — 옵션 합산(그룹 내 전체 멤버 대상)'
     const items = [
       makeItem({
         reservationId: '10',
-        options: [{ optionProductId: 'opt-1', name: '메모리카드', qty: 1, unitPrice: 5000, unitPrice12h: null, imageUrl: null, deliveryRentalDisabled: false, isRequired: false, minSelectRequired: false }],
+        options: [{ optionProductId: 'opt-1', name: '메모리카드', qty: 1, unitPrice: 5000, unitPrice12h: null, imageUrl: null, deliveryRentalDisabled: false, isRequired: false, minSelectRequired: false, qtyFollowsMain: false }],
       }),
       makeItem({
         reservationId: '20',
-        options: [{ optionProductId: 'opt-1', name: '메모리카드', qty: 1, unitPrice: 5000, unitPrice12h: null, imageUrl: null, deliveryRentalDisabled: true, isRequired: true, minSelectRequired: true }],
+        options: [{ optionProductId: 'opt-1', name: '메모리카드', qty: 1, unitPrice: 5000, unitPrice12h: null, imageUrl: null, deliveryRentalDisabled: true, isRequired: true, minSelectRequired: true, qtyFollowsMain: false }],
       }),
     ]
     const groups = groupCartLineItems(items)

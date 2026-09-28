@@ -22,6 +22,7 @@ export interface CartLineItemOption {
   deliveryRentalDisabled: boolean
   isRequired: boolean
   minSelectRequired: boolean
+  qtyFollowsMain: boolean
 }
 
 export interface GroupableProduct {
@@ -86,7 +87,8 @@ function fromOptionInput(
   unitPrice12hByProductId: Map<string, number | null>,
   deliveryDisabledByProductId: Map<string, boolean>,
   requiredByProductId: Map<string, boolean>,
-  minSelectByProductId: Map<string, boolean>
+  minSelectByProductId: Map<string, boolean>,
+  qtyFollowsMainByProductId: Map<string, boolean>
 ): CartLineItemOption {
   return {
     optionProductId: o.option_product_id,
@@ -106,6 +108,8 @@ function fromOptionInput(
     // "필수"/"최소 1개 선택" 배지와 동일 데이터를 카트 화면에도 노출하기 위해 추가.
     isRequired: o.option_product_id ? (requiredByProductId.get(o.option_product_id) ?? false) : false,
     minSelectRequired: o.option_product_id ? (minSelectByProductId.get(o.option_product_id) ?? false) : false,
+    // 수량 본상품 연동(product_option_links.qty_follows_main, 2026-09-28) — 위와 동일 패턴.
+    qtyFollowsMain: o.option_product_id ? (qtyFollowsMainByProductId.get(o.option_product_id) ?? false) : false,
   }
 }
 
@@ -142,6 +146,7 @@ export function groupCartLineItems(items: GroupableLineItem[]): CartLineGroup[] 
     const deliveryDisabledByProductId = new Map<string, boolean>()
     const requiredByProductId = new Map<string, boolean>()
     const minSelectByProductId = new Map<string, boolean>()
+    const qtyFollowsMainByProductId = new Map<string, boolean>()
     for (const m of members) {
       for (const o of m.options) {
         if (o.optionProductId && !imageUrlByProductId.get(o.optionProductId)) {
@@ -158,6 +163,9 @@ export function groupCartLineItems(items: GroupableLineItem[]): CartLineGroup[] 
         }
         if (o.optionProductId && !minSelectByProductId.get(o.optionProductId)) {
           minSelectByProductId.set(o.optionProductId, o.minSelectRequired)
+        }
+        if (o.optionProductId && !qtyFollowsMainByProductId.get(o.optionProductId)) {
+          qtyFollowsMainByProductId.set(o.optionProductId, o.qtyFollowsMain)
         }
       }
     }
@@ -185,7 +193,7 @@ export function groupCartLineItems(items: GroupableLineItem[]): CartLineGroup[] 
       returnTime: canonical.returnTime,
       durationType: canonical.durationType,
       status: canonical.status,
-      options: mergedOptions.map((o) => fromOptionInput(o, imageUrlByProductId, unitPrice12hByProductId, deliveryDisabledByProductId, requiredByProductId, minSelectByProductId)),
+      options: mergedOptions.map((o) => fromOptionInput(o, imageUrlByProductId, unitPrice12hByProductId, deliveryDisabledByProductId, requiredByProductId, minSelectByProductId, qtyFollowsMainByProductId)),
     }
   })
 }
