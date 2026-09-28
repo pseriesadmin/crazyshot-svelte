@@ -148,9 +148,16 @@
     onclose: () => void
     // '빠른 재고 등록' 성공 시 생성된 자식 상품 id 목록 — 부모(+page.svelte)가 QR 노출 영역에 자동 반영
     oninventorycreated?: (ids: string[], sourceProductId: string) => void
+    // PANEL-CLOSE-1: 탭 저장(기본정보/가격정책/대여정책/상품설명/구성품/사양/옵션상품/결합상품/이미지)이
+    // 성공할 때마다 호출 — invalidateAll()의 재조회가 얕은 라우팅(shallow routing)으로 열린 상세패널의
+    // ?selected= 쿼리를 프로덕션 네트워크 지연 조건에서 간헐적으로 누락시켜 패널이 닫힌 목록 상태로
+    // 보이는 결함(2026-09-28 Stephen 프로덕션 재현 확인)이 있어, 부모(+page.svelte)가 이 콜백을 받아
+    // /cms/products/{id}/detail 전용 엔드포인트(쿼리 없이 라우트 파라미터만 사용 — 이 결함의 영향을
+    // 받지 않음)로 직접 재조회해 패널을 다시 확실히 채운다.
+    onsectionsaved?: (productId: string) => void
   }
 
-  let { product, priceRules, categories, categoryLabel, initialTab = null, inventoryList = [], partnerComboItems = [], categoryComboMap = {}, rentalPeriods = [], rentalMethods = [], pickupPoints = [], shippingSettings = null, rentalStatusCounts = null, tabs: tabsFilter, onclose, oninventorycreated }: Props = $props()
+  let { product, priceRules, categories, categoryLabel, initialTab = null, inventoryList = [], partnerComboItems = [], categoryComboMap = {}, rentalPeriods = [], rentalMethods = [], pickupPoints = [], shippingSettings = null, rentalStatusCounts = null, tabs: tabsFilter, onclose, oninventorycreated, onsectionsaved }: Props = $props()
 
 
   // 카테고리 레이블 맵 (picker용)
@@ -217,7 +224,12 @@
 
   // ── 가격 포맷 헬퍼 (천단위 콤마) ───────────────────────────
   function fmtPriceStr(val: number | null | undefined): string {
-    if (!val) return ''
+    // PRICE-ZERO-1: `!val`는 0을 falsy로 취급해 실제로 저장된 0원(예: 월간요금 미사용,
+    // 보증금 0원)이 빈칸(placeholder "0")으로 표시돼 "이미 0이 들어있는지 비어있는지"를
+    // 구분할 수 없었다(+page.server.ts BND-9와 동일한 falsy-zero 버그 클래스,
+    // 2026-09-28 "가격정책 탭 저장 불가" 제보 조사 중 발견) — null/undefined만 빈 문자열,
+    // 0을 포함한 그 외 숫자는 그대로 문자열화한다.
+    if (val === null || val === undefined) return ''
     return val.toLocaleString('ko-KR')
   }
 
@@ -447,11 +459,6 @@
     downloadQrWithLabel(canvasEl, null, `qr-${code ?? product.slug}.png`)
   }
 
-  function formatPrice(p: number | null): string {
-    if (p == null) return '—'
-    return p.toLocaleString('ko-KR') + '원'
-  }
-
   function formatDate(d: string): string {
     return d.slice(0, 10).replace(/-/g, '.')
   }
@@ -479,14 +486,14 @@
       cancel()
       return
     }
-    // RACE-SAVE-1: use:enhance의 submit 콜백은 폼이 제출될 때마다 매번 호출되며, 이전
-    // 제출이 아직 진행 중(isSaving=true)인지 여기서 확인하지 않으면 버튼 disabled 속성이
-    // DOM에 반영되기 전(Svelte 상태 flush 이전)에 도착하는 두 번째 제출 이벤트(연타·자동화
-    // 도구의 중복 이벤트 등)가 그대로 통과해 같은 폼이 두 번 제출된다. 두 제출이 겹치면
-    // invalidateAll()도 두 번 겹쳐 호출되는데, 이 타이밍에 개발서버 HMR 등 일시적 이슈가
-    // 겹치면 이후 load() 결과가 페이지에 정상 반영되지 못해 패널 전체가 닫힌 목록 상태로
-    // 보이는 현상이 실사용 중 재현됨(2026-09-28, 사양 탭 텍스트 저장 연타로 재현 확인).
-    if (isSaving) {
+    // RACE-SAVE-1(+PANEL-CLOSE-1로 확장): use:enhance의 submit 콜백은 폼이 제출될 때마다
+    // 매번 호출되며, 이전 제출이 아직 진행 중인지 여기서 확인하지 않으면 버튼 disabled 속성이
+    // DOM에 반영되기 전(Svelte 상태 flush 이전)에 도착하는 두 번째 제출 이벤트(연타·다른 탭의
+    // 저장 등)가 그대로 통과해 invalidateAll()이 겹쳐 호출된다. 실사용(프로덕션)에서 겹친
+    // invalidateAll() 요청 중 하나가 net::ERR_ABORTED로 취소되고 그 여파로 선택된 상품 정보를
+    // 잃은 채 패널이 닫힌 목록 화면으로 보이는 결함이 재현됨(2026-09-28) — isSaving 단독이
+    // 아니라 옵션·결합·이미지 탭까지 포함한 isAnySaving으로 차단 범위를 넓힘.
+    if (isAnySaving) {
       cancel()
       return
     }
@@ -507,12 +514,21 @@
         ].filter(Boolean) as string[]
 
         await invalidateAll()
+        onsectionsaved?.(product.id)
 
         if (otherDirtyTabs.length > 0) {
           csToast.warning(`저장됐습니다. [${otherDirtyTabs.join('·')}] 탭의 미저장 내용이 초기화됐습니다.`)
         } else {
           csToast.success('저장됐습니다.')
         }
+      } else if (result.type === 'failure') {
+        // BND-9 등 서버측 검증 실패(예: sale_only 아닌 상품의 24시간 가격 0원)가 여기서
+        // 아무 표시 없이 조용히 무시되고 있었다 — handleReassignCodeSeries/cloneProduct와
+        // 동일한 패턴으로 fail()의 error 메시지를 토스트로 노출(2026-09-28, "가격정책 탭
+        // 저장이 안 된다" 제보로 발견).
+        const msg = (result.data as { error?: string } | undefined)?.error ?? '저장에 실패했습니다.'
+        csToast.error(msg)
+        await applyAction(result)
       } else {
         await applyAction(result)
       }
@@ -522,7 +538,7 @@
   // ─── 이미지 탭 함수 ───────────────────────────────────────
 
   async function autoSave() {
-    if (isAutoSaving) return
+    if (isAnySaving) return
     isAutoSaving = true
     uploadError = null
     try {
@@ -532,10 +548,12 @@
       fd.append('image_urls', JSON.stringify(localImages.filter(Boolean)))
       await fetch('?/updateSection', { method: 'POST', body: fd })
       await invalidateAll()
+      onsectionsaved?.(product.id)
     } catch {
       uploadError = '저장 실패. 다시 시도해주세요.'
       // 화면에서만 재정렬된 상태로 서버와 어긋나지 않도록 서버 값으로 복구
       await invalidateAll()
+      onsectionsaved?.(product.id)
     } finally {
       isAutoSaving = false
     }
@@ -575,7 +593,9 @@
     if (isChildProduct) { csToast.warning('대표 상품에서 수정하세요.'); return }
     // 순서 저장(autoSave)은 이미지 배열 전체를 덮어쓰고 업로드 API는 배열에 1장씩 이어 붙인다 —
     // 저장 중에 업로드를 시작하면 방금 올린 이미지가 유실될 수 있어 저장 완료까지 막는다.
-    if (isAutoSaving) { csToast.warning('이미지 순서 저장 중입니다. 잠시 후 다시 시도하세요.'); return }
+    // PANEL-CLOSE-1: 다른 탭 저장(invalidateAll())과 겹치는 것도 함께 차단하기 위해
+    // isAutoSaving 단독이 아닌 isAnySaving으로 확장.
+    if (isAnySaving) { csToast.warning('저장 중입니다. 잠시 후 다시 시도하세요.'); return }
     const arr = Array.from(files)
     let added = false
     for (const file of arr) {
@@ -650,8 +670,9 @@
     // 별도로 read-modify-write한다 — 두 번째 제거가 첫 번째 저장 도중 겹치면 DELETE의 오래된
     // read가 첫 번째 저장 결과를 덮어써 방금 지운 이미지가 되살아날 수 있었다. 버튼
     // disabled(§ img-card-remove)로 정상 클릭 경로는 막았지만, 여기서도 한 번 더 막아
-    // 프로그램적 호출(연타 등)에 대한 방어선을 이중으로 둔다.
-    if (isAutoSaving) { csToast.warning('이미지 저장 중입니다. 잠시 후 다시 시도하세요.'); return }
+    // 프로그램적 호출(연타 등)에 대한 방어선을 이중으로 둔다. PANEL-CLOSE-1로 다른 탭 저장과의
+    // 겹침도 함께 차단(isAnySaving).
+    if (isAnySaving) { csToast.warning('저장 중입니다. 잠시 후 다시 시도하세요.'); return }
     const removedUrl = localImages[i]
     localImages = localImages.filter((_, idx) => idx !== i)
     await autoSave()
@@ -1185,6 +1206,7 @@
       csToast.warning('대표 상품에서 수정하세요.')
       return
     }
+    if (isAnySaving) return
     isSavingOptions = true
     try {
       const fd = new FormData()
@@ -1202,6 +1224,7 @@
       const res = await fetch('?/updateSection', { method: 'POST', body: fd })
       if (!res.ok) throw new Error('저장 실패')
       await invalidateAll()
+      onsectionsaved?.(product.id)
       csToast.success('저장됐습니다.')
     } catch {
       csToast.error('저장에 실패했습니다.')
@@ -1238,6 +1261,14 @@
   let bundleResults = $state<OptionSearchResult[]>([])
   let bundleSearching = $state(false)
   let isSavingBundles = $state(false)
+  // PANEL-CLOSE-1: 기본정보/가격정책/대여정책/상품설명/구성품/사양(isSaving)·옵션상품
+  // (isSavingOptions)·결합상품(isSavingBundles)·이미지(isAutoSaving)는 서로 독립된 저장
+  // 플래그라, 한 탭 저장이 아직 끝나기 전(invalidateAll() 응답 대기 중)에 다른 탭을 연달아
+  // 저장하면 invalidateAll() 요청 두 개가 겹쳐 호출될 수 있었다 — 실사용(프로덕션)에서 겹친
+  // 요청 중 하나가 net::ERR_ABORTED로 취소되고, 그 여파로 선택된 상품 정보를 잃은 채 패널이
+  // 닫힌 목록 화면으로 보이는 결함이 재현됨(2026-09-28). 네 플래그를 하나로 묶어 어느 탭에서든
+  // 저장이 진행 중이면 다른 모든 탭의 저장 시도를 차단해 invalidateAll() 중복 호출 자체를 막는다.
+  const isAnySaving = $derived(isSaving || isSavingOptions || isSavingBundles || isAutoSaving)
   const isDirtyBundles = $derived.by(() => {
     const toKey = (bundles: BundleLink[]) =>
       JSON.stringify(bundles.map((b) => b.bundle_product_id))
@@ -1308,6 +1339,7 @@
       csToast.warning('대표 상품에서 수정하세요.')
       return
     }
+    if (isAnySaving) return
     isSavingBundles = true
     try {
       const fd = new FormData()
@@ -1328,6 +1360,7 @@
         return
       }
       await invalidateAll()
+      onsectionsaved?.(product.id)
       csToast.success('저장됐습니다.')
     } catch {
       csToast.error('저장에 실패했습니다.')
@@ -1568,12 +1601,11 @@
   <div class="summary-bar">
     <div class="summary-bar-left">
       <div class="summary-badges">
-        <!-- QR-DUP-1: 자식 선택 시 가격은 대표 상품과 동일 값(관리도 자식에서 불가)이라
-             중복 노출 — 부모 패널에서만 표시 -->
-        {#if !isChildProduct}
-          <span class="sb-price-badge">12H {formatPrice(product.price12h)}</span>
-          <span class="sb-price-badge">Day {formatPrice(product.price24h)}</span>
-        {/if}
+        <!-- PRICE-DUP-1(2026-09-28): 가격 배지는 이 패널 바로 위 rep-header(대표 상품정보
+             미니카드)에 항상 노출돼 있어(접힌 상태에서도) 패널을 펼치면 동일 값이 바로 아래
+             한 번 더 중복 표시되던 것을 제거 — 실제 편집 가능한 값은 가격정책 탭에만 남김.
+             (과거 QR-DUP-1: 자식 선택 시 부모와 동일 값이라 부모 패널에서만 표시하던 조건도
+             이번에 통째로 제거 — 애초에 항상 중복이었으므로) -->
         <span class="sb-date-badge">등록(수정): {formatDate(product.created_at)}</span>
       </div>
       <span class="sb-status-pill" class:sb-status-on={product.is_active}>
@@ -1627,7 +1659,7 @@
             type="submit"
             class="btn-save-inline"
             class:dirty={isDirtyBasic}
-            disabled={!isDirtyBasic || isSaving}
+            disabled={!isDirtyBasic || isAnySaving}
           >{isSaving ? '저장 중...' : '저장'}</button>
           {/if}
         </div>
@@ -1721,7 +1753,7 @@
               {#if !isChildProduct}
               <button form="form-slug" type="submit" class="btn-save-inline"
                 class:dirty={isDirtySlug}
-                disabled={!isDirtySlug || isSaving}>
+                disabled={!isDirtySlug || isAnySaving}>
                 {isSaving ? '저장 중...' : '저장'}
               </button>
               {/if}
@@ -1800,7 +1832,7 @@
           {#if !isChildProduct}
           <button type="button" class="btn-save-inline"
             class:dirty={isDirtyOptions}
-            disabled={!isDirtyOptions || isSavingOptions}
+            disabled={!isDirtyOptions || isAnySaving}
             onclick={saveOptions}>
             {isSavingOptions ? '저장 중...' : '저장'}
           </button>
@@ -1941,7 +1973,7 @@
           {#if !isChildProduct}
           <button type="button" class="btn-save-inline"
             class:dirty={isDirtyBundles}
-            disabled={!isDirtyBundles || isSavingBundles || !!product.bundleLinksError}
+            disabled={!isDirtyBundles || isAnySaving || !!product.bundleLinksError}
             onclick={saveBundles}>
             {isSavingBundles ? '저장 중...' : '저장'}
           </button>
@@ -2073,7 +2105,7 @@
             type="submit"
             class="btn-save-inline"
             class:dirty={isDirtyPricing}
-            disabled={!isDirtyPricing || isSaving}
+            disabled={!isDirtyPricing || isAnySaving}
           >{isSaving ? '저장 중...' : '저장'}</button>
           {/if}
         </div>
@@ -2099,7 +2131,7 @@
               oncompositionend={(e) => handlePriceInput('price_12h', e.currentTarget.value)} />
           </div>
           <div class="inline-row" class:row-disabled={localSaleOnly}>
-            <label class="vr-label" for="ip-24h">24시간(1일) <span class="required">*</span></label>
+            <label class="vr-label" for="ip-24h">24시간(1일)</label>
             <input id="ip-24h" class="il-input il-number" type="text" inputmode="numeric" placeholder="0"
               disabled={localSaleOnly}
               value={localPricing.price_24h}
@@ -2173,7 +2205,7 @@
             type="submit"
             class="btn-save-inline"
             class:dirty={isDirtyRental}
-            disabled={!isDirtyRental || isSaving}
+            disabled={!isDirtyRental || isAnySaving}
           >{isSaving ? '저장 중...' : '저장'}</button>
           {/if}
         </div>
@@ -2409,9 +2441,9 @@
                 class:img-card--over={imgOverIdx === i && imgDragIdx !== i}
                 role="group"
                 aria-label={`이미지 ${i + 1}${i === 0 ? ' (대표)' : ''}`}
-                draggable={!isChildProduct && !isUploading && !isAutoSaving}
+                draggable={!isChildProduct && !isUploading && !isAnySaving}
                 ondragstart={(e) => {
-                  if (isChildProduct || isUploading || isAutoSaving) { e.preventDefault(); return }
+                  if (isChildProduct || isUploading || isAnySaving) { e.preventDefault(); return }
                   cancelHold()
                   imgDragIdx = i
                 }}
@@ -2438,7 +2470,7 @@
                 <button
                   type="button"
                   class="img-card-remove"
-                  disabled={isAutoSaving || isUploading}
+                  disabled={isAnySaving || isUploading}
                   onclick={() => removeImageAndSave(i)}
                   aria-label={`이미지 ${i + 1} 제거`}
                   title="이미지 제거"
@@ -2467,7 +2499,7 @@
             type="submit"
             class="btn-save-inline"
             class:dirty={isDirtyComponents}
-            disabled={!isDirtyComponents || isSaving}
+            disabled={!isDirtyComponents || isAnySaving}
           >{isSaving ? '저장 중...' : '저장'}</button>
           {/if}
         </div>
@@ -2508,7 +2540,7 @@
             type="submit"
             class="btn-save-inline"
             class:dirty={isDirtySpecs}
-            disabled={!isDirtySpecs || isSaving}
+            disabled={!isDirtySpecs || isAnySaving}
           >{isSaving ? '저장 중...' : '저장'}</button>
           {/if}
         </div>
@@ -3281,18 +3313,6 @@
     display: flex;
     align-items: center;
     gap: 20px;
-  }
-  /* 12H / Day 가격 배지 — bg purpleTint-200 #E1DEF3, 16px/700, letter-spacing -0.5 */
-  .sb-price-badge {
-    display: inline-flex;
-    align-items: center;
-    padding: 5px 10px;
-    background: var(--cs-purple-op10);
-    color: var(--cs-purple);
-    border-radius: var(--radius-sm);
-    font: var(--text-pc-title-16);
-    letter-spacing: -0.5px;
-    white-space: nowrap;
   }
   /* 등록(수정) 날짜 배지 — bg purpleTint-100 #ECEBF4, 10px/400 */
   .sb-date-badge {

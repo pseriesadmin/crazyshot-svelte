@@ -314,6 +314,17 @@
     selectProduct(expectedProductId)
   }
 
+  // PANEL-CLOSE-1(2026-09-28): 탭 저장(기본정보/가격정책/대여정책/상품설명/구성품/사양/
+  // 옵션상품/결합상품/이미지) 성공 후에도 REFRESH-STALE-1과 동일한 근본 원인(shallow-routing
+  // 중 invalidateAll()이 얕은 라우팅으로 열린 ?selected= 쿼리를 반영하지 못해 data.selectedId가
+  // 어긋나는 경우가 있음)으로 패널이 닫힌 목록 상태로 보이는 결함이 프로덕션에서 재현됨(net::
+  // ERR_ABORTED 동반 확인). expectedProductId(자식 컴포넌트가 저장 "시작 시점" product.id를
+  // 고정해 넘겨주는 값)로 selectProduct()를 재호출해 선택 상태를 명시적으로 복구한다 — 이미
+  // 정확히 그 상품이 선택된 상태면 멱등이라 안전(REFRESH-STALE-1과 동일 원리).
+  function handleSectionSaved(expectedProductId: string) {
+    selectProduct(expectedProductId)
+  }
+
   async function printSelectedQR() {
     const selected = (activeDetail.inventoryList ?? []).filter(
       (u: { id: string; product_code: string | null }) => selectedInvIds.has(u.id) && u.product_code
@@ -664,6 +675,7 @@
                   rentalStatusCounts={activeDetail.rootRentalStatusCounts}
                   onclose={closePanel}
                   oninventorycreated={handleInventoryCreated}
+                  onsectionsaved={handleSectionSaved}
                 />
               {/key}
             </div>
@@ -753,6 +765,7 @@
                           shippingSettings={data.shippingSettings}
                           onclose={closePanel}
                           oninventorycreated={handleInventoryCreated}
+                          onsectionsaved={handleSectionSaved}
                         />
                       {/key}
                     </div>

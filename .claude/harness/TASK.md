@@ -7,6 +7,156 @@
 > 📌 BACKLOG 블록은 `BACKLOG.md`로 분리됐다(Default-Exclude — Stephen 명시 승인 시에만 NOW로 이동).
 
 
+## DONE — 🔴 CRITICAL(정밀검증 중 발견·즉시 수정): '서비스 기본 정보' CMS 설정 신설 + 계약서·PC/모바일 푸터 연동 + 저장 100% 실패 결함 2건 수정 (Migration #566·#567·#568, 2026-09-28, 이 세션'만', ⏳ sp3-qa-agent 검수 대기 — Stage 적용 완료·Production 대기, git commit은 Stephen 대기)
+
+플랜 문서(`~/.cursor/plans/서비스_기본_정보_cms_설정_신설_3ca37cda.plan.md`) 리뷰 후 즉시 구현.
+사업자명·대표자명·사업자번호 등 9개 필드가 PC 공통푸터/모바일 멤버십 푸터/표준계약서 임대인
+정보 3곳에 서로 다른 값으로 하드코딩돼 있던 것을 `service_info_settings` 단일 테이블로 통합.
+
+- **DB**: Migration #566(`service_info_settings` 테이블 + RLS + `get_service_info_settings`
+  (공개, anon/authenticated) + `upsert_service_info_settings`(authenticated, is_cms_user 체크)
+  + 시드) — `rental_policy_settings`(#565) 패턴 그대로 복제. 시드값은 Stephen 확정에 따라
+  PC 공통푸터의 기존 하드코딩 값을 정본으로 채택(사업자명 `(주)크레이지샷`·사업자번호
+  `372-81-03954` 등 — 계약서의 옛 값 `주식회사 크레이지샷`/`372-81-03554`, 모바일 푸터의
+  옛 값 `107-88-22133` 등은 모두 이 값으로 통일됨).
+- **공유 유틸**: `src/lib/services/serviceInfoSettings.ts` `getServiceInfoSettings(client)` —
+  4개 소비처(PC/모바일 푸터, 계약서 3개 데이터 빌드 지점)가 재사용. RPC 실패 시 throw 없이
+  빈 값 객체 반환(fail-soft).
+- **CMS 화면**: `/cms/set/rental` 맨 아래 "서비스 기본 정보" 섹션 신설(사업정보 7필드 +
+  안내정보 2필드, 단일 폼 + `btn-save-inline` 저장 버튼, 기존 `.field-row`/`.field-label`/
+  `.field-input` 재사용 + 라벨 폭만 `--wide` modifier로 확장). `+page.server.ts` load()에
+  `service_info_settings` 조회 추가 + `saveServiceInfo` 액션 신설(manager+ 게이트, 필드별
+  200자 상한).
+- **계약서 연동**: `ContractSubstitutionData`에 `임대인상호명`/`임대인대표자명`/
+  `임대인사업자번호`/`임대인사업장주소` 4개 추가. `defaultRentalContractHtml.ts` "임대인 정보"
+  표의 하드코딩 4칸을 `{{}}` 변수로 교체. 실제 치환이 일어나는 유일한 지점은 CMS
+  `contract-data/+server.ts`(html 모드는 발행 시점에 치환 완료되어 저장되므로 이 API 하나만
+  고치면 CMS 미리보기·고객 서명 페이지·마이페이지 3곳 모두 반영됨 — 나머지 두 화면은
+  이미 치환된 `html_document`를 그대로 렌더링). canvas 모드 대비로 `/contract/[token]`·
+  `/account/rental/[id]/contract`의 substitutionMap에도 동일 4개를 추가(현재 운영 템플릿은
+  html 모드라 당장 효과는 없으나 향후 canvas 템플릿 대비).
+- **테스트 갱신**(파일 상단 "변수 추가 시 함께 갱신" 규칙 준수): `contractHtmlSubstitution.test.ts`
+  baseData에 4개 필드 추가 + 신규 치환 테스트 1건, `contractUnresolvedVariables.test.ts`에
+  4개 변수 발송전 검증 테스트 1건 추가. `contractHtmlSubstitution`·`contractUnresolvedVariables`·
+  `contractAuthGates`·`contractDataLineItems` 4개 파일 143/143 GREEN 재확인.
+- **PC 공통푸터**(`+layout.svelte`): 하드코딩 텍스트(고객센터·운영시간·상호명·대표자·주소·
+  사업자번호·통신판매업신고·개인정보관리책임자·이메일)를 전부 `serviceInfo.*`로 교체.
+  이 파일이 그동안 `data` prop 자체를 선언하지 않고 있어(`<slot />` 레거시 문법, `$props()`
+  미사용) `+layout.server.ts`의 `load()` 반환값이 전혀 소비되지 않던 상태였음 —
+  `let { data }: Props = $props()` 추가. `+layout.server.ts`는 세션 유무와 무관하게 항상
+  `get_service_info_settings()`를 조회하도록 수정(기존엔 세션 없으면 `{}` 즉시 반환).
+- **모바일 멤버십 푸터**(`CommonBenefits.svelte`): `serviceInfo` prop 신설(기본값 빈 객체) +
+  법인정보 블록 하드코딩 텍스트 교체. 호출부 `members/+page.svelte`는 별도 서버 조회 없이
+  루트 레이아웃 데이터 상속만으로 `data.serviceInfo` 사용 가능(SvelteKit PageData 병합).
+- **검증**: `svelte-check` 전체 재실행 — 신규 에러 0건(기존 `vite.config.ts` 1건만 무관하게
+  유지), 신규 경고 0건(내가 건드린 `$state(data.serviceInfo)` 초기화는 이 파일 기존 관행과
+  동일하게 `$effect` 재동기화로 core-rules.md "$state(prop) 초기화 금지" 규칙 준수).
+- **UI 후속 수정(Stephen 지시, 같은 날)**: "사업정보"·"안내정보" 7·2필드를 세로 1열 나열에서
+  `.service-info-grid`(2열 그리드) 병렬 정렬로 변경(기존 `.field-row`/`.field-label`/
+  `.field-input` 클래스 재사용, 컨테이너만 추가) + 섹션 상단 설명문구
+  ("사업자 정보와 고객센터 안내입니다...") 제거.
+
+### 정밀 검증(Stephen 지시) 중 발견한 🔴 CRITICAL 결함 — Migration #567로 즉시 수정
+
+Stephen 지시로 "선택영역(서비스 기본 정보 섹션)의 변수값이 공통 푸터·계약서 표준양식에
+실제로 연동 파싱되는지 정밀 검증"을 진행 — Claude Browser 선택영역 세션이 진행 중이라
+CLAUDE.md 조건①로 능동 조작 허용된 범위 내에서 실브라우저로 저장→새로고침→푸터/계약서
+반영까지 실측했다.
+
+- **1차 발견(치명적)**: CMS 화면에서 실제로 "저장"을 누르면 **매번 100% 실패**했다
+  (`{"code":"21000","message":"UPDATE requires a WHERE clause"}`). 원인: 이 Supabase
+  프로젝트는 PostgREST가 접속하는 `authenticator` 역할에 `session_preload_libraries=
+  supautils, safeupdate`가 Supabase 플랫폼 표준으로 이미 걸려 있다(Stephen이나 이 세션이
+  켠 게 아님) — `safeupdate` 확장이 WHERE절 없는 UPDATE/DELETE를 무조건 거부한다.
+  `upsert_service_info_settings`(#566)의 UPDATE 분기가 "싱글톤 테이블이라 항상 1행"이라는
+  전제로 WHERE절을 생략하고 있었는데, 이 세션의 SQL 실행 도구(postgres 역할, authenticator
+  미경유)로는 재현되지 않고 **실제 CMS 화면이 쓰는 PostgREST RPC 경로에서만** 100% 재현되는
+  함정이었다 — 처음엔 브라우저 HMR 노이즈로 오인했으나, 인증된 세션의 access_token으로
+  REST API를 직접 호출해 SQLSTATE 21000을 명확히 재현·확정.
+- **수정(Migration #567)**: `SELECT id INTO v_id ... ; UPDATE ... WHERE id = v_id`로 최소
+  수정(로직·시그니처·권한 무변경). Stage 적용 후 실제 CMS 폼 액션(`?/saveServiceInfo`)으로
+  재현 테스트 — 204/200 정상 저장 확인.
+- **전체 체인 재검증(전부 통과)**: CMS 저장 → PC 공통푸터(`/`) 9개 값 반영 확인 → 모바일
+  멤버십 푸터(`/members`, CommonBenefits 블록) 반영 확인 → CMS 화면 재조회 시 저장값 표시
+  확인 → `/api/cms/reservations/{id}/contract-data` 응답의 임대인 4개 필드가 저장값과 일치
+  확인 → `/api/cms/contract-templates`가 반환하는 html 템플릿에 `{{임대인...}}` 마커 4개가
+  실제로 존재하고 구 하드코딩값(`372-81-03554`·`주식회사 크레이지샷`)이 사라졌음을 확인.
+  검증 후 테스트값은 전부 원래 시드값으로 복원(Stage에 테스트 잔여값 없음, DB 행 1건 유지).
+- ✅ **동일 클래스 결함(`rental_policy_settings.upsert_rental_policy_settings`, #565 "법적
+  고지" 섹션)도 Stephen 지시로 같은 날 같은 방식으로 즉시 수정 완료(Migration #568)** —
+  #567과 동일 패턴(`SELECT id INTO v_id ...; UPDATE ... WHERE id = v_id`), 시그니처·권한
+  무변경. Stage 적용 후 실제 `?/savePolicy` 액션으로 재현 테스트(이전엔 100% 실패 확인 —
+  DB에 저장된 정책 텍스트가 그동안 전무했다는 사실 자체가 이 결함의 방증) → 저장 성공 +
+  홈페이지 "개인정보처리방침" 푸터 모달에서 저장값 실제 노출 확인 → 테스트값 제거,
+  원래 상태(3개 필드 전부 빈 문자열)로 복원 완료.
+- ⚠️ **Migration #566·#567·#568 Stage(ezyvffjvuwmtuhpxdjrw)만 적용, Production
+  (vnbpmvxruyciuuaermyh) 미적용** — 아직 코드가 커밋·배포되지 않아 화면에 반영될 일이 없으므로
+  이번엔 Stage 검증만 하고 대기. Stephen이 코드 리뷰·커밋 후 배포 직전에 **#566·#567·#568을
+  함께** Production 적용 필요(DB 마이그레이션 필수 순서, service-operations.md §9 "코드
+  배포 ≠ DB 마이그레이션 적용" 사고 재발 방지 — #567·#568 없이 #566만 적용하면 Production
+  에서도 두 저장 기능 모두 100% 실패하는 상태가 됨).
+- ⚠️ **트레이드오프(플랜에 이미 명시)**: 사업자명 필드 1개를 푸터(구어체 `(주)크레이지샷`)와
+  계약서(과거 정식 표기 `주식회사 크레이지샷`) 양쪽이 공유 — 이제 하나의 CMS 값으로 통일되며,
+  Stephen이 필요 시 CMS 화면에서 표기를 바꾸면 3곳 모두 함께 바뀐다.
+- git 쓰기(add/commit/push)는 Stephen 직접 실행 — 신규 파일: 마이그레이션 #566·#567·#568,
+  `serviceInfoSettings.ts`. 수정 파일: `cms/set/rental/+page.{svelte,server.ts}`(2단 그리드
+  레이아웃 반영 + 섹션 설명문구 제거 포함),
+  `contract-module.ts`, `defaultRentalContractHtml.ts`,
+  `api/cms/reservations/[id]/contract-data/+server.ts`, `contract/[token]/+page.{svelte,server.ts}`,
+  `account/rental/[id]/contract/+page.{svelte,server.ts}`, `+layout.{svelte,server.ts}`,
+  `CommonBenefits.svelte`, `members/+page.svelte`, `contractHtmlSubstitution.test.ts`,
+  `contractUnresolvedVariables.test.ts`.
+
+## DONE — 🟢 ROUTINE: Cursor 세션 front UI — 브랜드마퀴·검색·크레이지로그·FloatingBar (2026-09-28, 이 세션'만', sp3-qa-agent 검수 완료)
+
+```
+등급: 🟢 ROUTINE (UI·퍼블리싱 — 결제/예약/DB 변경 없음)
+세션: Cursor 채팅(브랜드마퀴 All↔초기화면 정합 + 연관 front UI 보완)
+
+### 완료 내역
+
+[BM-1] BrandMarquee 공통 컴포넌트 신설(SSOT)
+  - src/lib/components/products/BrandMarquee.svelte(신규)
+  - All(/products) surface=products(기본): white→lilac 그라데이션 + 641px+ PC 좌우 white 페이드
+  - 초기화면 surface=home: purple-20(--cs-purple-pale) 상단 알파0→하단 solid + lilac 좌우 페이드
+  - 로고 자산·치수·marquee-mobile/marquee 애니메이션 /products 정본 이관
+
+[BM-2] 초기화면 브랜드 마퀴 All 정합
+  - src/routes/+page.svelte — desktop-wrap·mobile-wrap 모두 <BrandMarquee surface="home" />
+  - 구 cz-track/BARNDS_D 마크업·CSS 제거
+
+[BM-3] All 화면 BrandMarquee 컴포넌트화
+  - src/routes/products/+page.svelte — 인라인 마퀴 → <BrandMarquee /> (surface 기본 products)
+
+[CL-1] 크레이지로그 PC 서브 GNB 이중 노출 수정
+  - src/routes/+layout.svelte — /crazylog/* GNB 제외(허브 /crazylog 제외)
+  - src/routes/crazylog/view/[slug]/+page.svelte · list · [slug] — SubGnb noGnbOffset·padding 정리
+
+[FB-1] FloatingBar 모바일 1터치(Proposal A)
+  - src/lib/components/common/FloatingBar.svelte — expandFromPeek·beforeFabAction
+  - src/lib/components/chat/FloatingButton.svelte — onBeforeToggle
+
+[SCH-1] 검색·키워드 UI
+  - src/lib/utils/keywordDisplay.ts + src/__tests__/utils/keywordDisplay.test.ts(신규, 3/3 GREEN)
+  - SearchKeywordBar.svelte · products/+page.svelte kw-pill — truncateKeywordLabel(10자)
+  - SearchProductGrid.svelte — 모바일 2열 flex(calc 50%-5px) /products .m-prod-grid 정합
+  - products/search/+page.svelte · +page.server.ts — 추천상품 RPC·mapSearchApiRow
+
+[UI-M] 기타 ROUTINE
+  - cart/+page.svelte — empty-text --text-m-body-16B
+  - SubGnb.svelte · auth/login/+page.svelte · ProductHero.svelte — sub-gnb-b §13-2 pill
+
+### 검증 (sp3-qa-agent, 2026-09-28)
+  - npm run check: 신규 에러 0건(기존 vite.config.ts 1건만)
+  - vitest keywordDisplay.test.ts: 3/3 GREEN
+  - frozen 파일(supabase.ts·hooks.server.ts·api/*) 미변경
+  - git commit: Stephen 직접 실행 대기
+
+### GATE
+  - GATE B: ROUTINE 자동 통과
+  - GATE E: ✅ 조건부 통과(sp3-qa-agent — BLOCKING 0건, Stephen 실화면 확인 권장)
+```
+
 ## DONE — 🔴 CRITICAL: 사용자 화면(front) 전역 UI/UX 결함 26건 보완 (2026-09-28)
 
 ```
@@ -11321,3 +11471,124 @@ product_page_md_picks에 해당 상품 id 임시추가)으로 PC·모바일 히�
 
 ### 미실행 / 대기
 - git commit — Stephen 직접 실행 대기.
+
+---
+
+## DONE — CMS 구독 상세패널 "삭제" 버튼 신설 + 삭제→고객화면 정합 재확인 (2026-09-28, 이 세션 단독)
+
+Stephen이 `/cms/subscriptions` 구독목록 상세패널을 보다 2가지 지적: ① 삭제 시 고객화면
+(`/subscribe/[planId]`·`/members`)과 실제로 정합되는지 재확인, ② 상세패널 안에 "삭제" 버튼
+자체가 없음(표준 디자인시스템 패널 삭제버튼 규격 반영 필요).
+
+### 조사 결과
+- ①(정합) — **기존 로직 자체는 문제 없음**. `/cms/subscriptions/+page.server.ts`의
+  `deleteSubscription` 액션(soft delete, `subscription_plans.deleted_at`만 세팅, 하드
+  DELETE 아님)은 이미 존재했고, `/subscribe/[planId]/+page.server.ts`·`/members/+page.server.ts`
+  둘 다 `status='active' AND deleted_at IS NULL`로 정확히 필터링해 조회 중 — 삭제 즉시
+  고객화면에서 사라짐. 다만 `deleteSubscription` 액션을 호출하는 UI가 어디에도 없어 **죽은
+  코드 상태**였음(Stephen 지적 ②가 정확한 원인).
+- 부수 확인: `claim_subscriptions_due_for_billing`(정기 재청구 크론)·
+  `apply_subscription_free_shipping` 둘 다 `subscription_plans.deleted_at`을 검사하지
+  않음 — 플랜을 삭제해도 **이미 가입한 기존 구독자의 정기결제·혜택은 그대로 유지**됨(신규
+  노출만 차단하는 안전한 "단종" 의미로 동작, 기존 구독자 billing 깨짐 없음 확인).
+
+### 구현 내역
+- `SubscriptionDetailPanel.svelte` "기본정보" 탭 하단에 `CmsDeleteButton`(size="lg", cms-uiux.md
+  §0-10-G-1 규격, `RentalContractViewer.svelte`가 이미 쓰는 것과 동일 컴포넌트 재사용 — 신규
+  컴포넌트 작성 없음) 추가, `action="?/deleteSubscription"`으로 기존 서버 액션에 연결.
+  삭제 성공 시 패널 자동 닫힘(`onclose?.()`) + 목록 자동 새로고침(`CmsDeleteButton` 내장
+  `update()` 기본 동작).
+- 요구 범위 밖 확장 없음: 구독자 수 경고 등 신규 비즈니스 규칙 추가 안 함(2단계 확인 토스트만
+  — 다른 삭제 버튼과 동일한 기존 표준 안전장치).
+
+### 검증
+- `tsc --noEmit`·`eslint` 신규 에러/경고 0건.
+
+### 미실행
+git add/commit — Stephen 별도 지시 대기.
+
+## DONE — CMS 상품패널 저장 후 패널 닫힘(PANEL-CLOSE-1) 근본 수정 + 가격정책 탭 무응답 실패·24h 필수 정책 반전·요약바 가격 중복 제거 (2026-09-28, 이 세션 단독)
+
+### 배경
+직전 DONE 블록("이미지 8장 상한 서버측 강제 + 연속삭제 경쟁상태 수정")에서 원 버그("저장 후
+다른 상품으로 재랜딩")는 재현 불가로 종결 처리했으나, 같은 세션 내에서 Stephen이 이후에도
+동일 계열 증상("저장 즉시 패널이 닫힌 목록 상태로 보임")을 실서버(Production,
+crazyshot-svelte.vercel.app)에서 재차 제보 — 이번엔 Claude Browser로 직접 실서버 재현에
+성공해 근본 원인을 확정하고 수정했다. 이어서 같은 상세패널을 검토하는 과정에서 파생된
+가격정책 탭 관련 결함 3건(무응답 저장 실패·불필요한 필수 검증·요약바 가격 중복 표시)도
+함께 조사·수정했다.
+
+### 수정 내역 1 — PANEL-CLOSE-1: 저장 겹침으로 인한 패널 닫힘 근본 수정
+- **재현·근거**: 실서버에서 사양 탭 항목 추가→저장→제거→저장을 반복하다 재현.
+  `read_network_requests`로 확인한 네트워크 로그에 `__data.json` 재조회 요청 2건이
+  `net::ERR_ABORTED`(다른 요청에 의해 취소됨)로 찍혔고, 최종 URL이 `?selected=`가 완전히
+  사라진 `/cms/products`(하드 리로드)로 바뀌어 있었음을 직접 확인.
+- **원인**: 기본정보·가격정책·대여정책·상품설명·구성품·사양(`isSaving`) / 옵션상품
+  (`isSavingOptions`) / 결합상품(`isSavingBundles`) / 이미지(`isAutoSaving`) 4개 저장
+  플래그가 서로 완전히 독립적이라, 한 탭 저장(`invalidateAll()`)이 끝나기 전에 다른 탭을
+  연달아 저장하면 서버 재조회 요청이 겹쳤다. 로컬은 응답이 빨라 이 겹침 구간이 거의 안
+  생겨 재현이 안 됐고, 프로덕션 네트워크 지연 조건에서만 뚜렷이 드러남.
+- **수정** (`ProductDetailPanel.svelte`, `+page.svelte`):
+  1. 4개 플래그를 `isAnySaving`(하나라도 저장 중이면 true) 하나로 묶어, 8개 저장 진입점
+     (폼 제출·옵션·결합·이미지 업로드/삭제/순서변경) 전부가 "다른 탭이 저장 중이면 대기"
+     하도록 확장 — 겹친 `invalidateAll()` 자체가 발생하지 않게 원천 차단. 버튼 `disabled`
+     바인딩도 전부 `isAnySaving`으로 통일.
+  2. 모든 저장 성공 시 기존 "빠른 재고 등록"(REFRESH-STALE-1)과 동일한 패턴으로
+     `onsectionsaved(productId)` 콜백을 부모(`+page.svelte`)에 전달 → `handleSectionSaved`가
+     `selectProduct(expectedProductId)`를 재호출해 얕은 라우팅 선택 상태를 명시적으로 재확인·
+     복구(이미 정확히 그 상품이 선택돼 있으면 멱등이라 안전).
+- **로컬 검증**: 정상 저장 흐름 회귀 없음 확인(반복 저장 수십 회, 코드 레벨 double-submit도
+  `window.fetch` 가로채기로 실제 1회만 발생함을 확인). 단, 이 결함 자체가 프로덕션 네트워크
+  지연 조건에서만 뚜렷했던 만큼, 로컬 검증만으로 "완전히 해결됐다"고 단정하기 어려움 —
+  배포 후 실서버 재테스트 필요(§미실행 참고).
+
+### 수정 내역 2 — 가격정책 탭 저장 실패 시 무응답(에러 미표시)
+- **원인**: `handleSectionSave`(기본정보/가격정책/대여정책/상품설명/구성품/사양 6개 탭 공용
+  저장 핸들러)가 `result.type !== 'success'`일 때 `applyAction(result)`만 호출하고 토스트를
+  전혀 띄우지 않았다 — 같은 파일의 다른 핸들러들(`saveBundles`·`handleReassignCodeSeries`·
+  `cloneProduct`)은 전부 `else if (result.type === 'failure') { csToast.error(...) }` 패턴을
+  쓰는데 이 핸들러만 빠져 있었음. 그 결과 서버가 `BND-9`(24시간 가격 필수) 등으로 `fail(400)`
+  거절해도 화면엔 아무 표시가 없어 "저장이 안 된다"는 제보로 이어짐(실제로는 저장이 막힌 게
+  아니라 거절 사유를 안 보여준 것).
+- **수정**: `handleSectionSave`에 `else if (result.type === 'failure')` 분기를 추가해 서버
+  에러 메시지를 `csToast.error()`로 노출(다른 핸들러와 동일 패턴 통일).
+- **라이브 검증**: 24시간 가격을 0으로 만들고 저장 → "24시간(1일) 가격은 필수입니다." 토스트가
+  정확히 뜨는 것을 스크린샷으로 확인(수정 전에는 아무 반응 없었음).
+
+### 수정 내역 3 — 24시간(1일) 가격 필수 정책 폐기 (Stephen 직접 지시, products.md §2-9 반전)
+- `+page.server.ts`(updateSection pricing)·`new/+page.server.ts`(신규등록) 양쪽의
+  `fail(400, '24시간(1일) 가격은 필수입니다.')` 게이트(BND-9) 제거 — 12h/24h/월간 전부
+  선택 입력으로 통일. 신규등록 쪽은 이미 `price > 0`일 때만 `price_rules`에 삽입하는 가드가
+  있어(§2-9 재확인) 게이트 제거만으로 안전.
+- 화면 표시 동기화: `ProductDetailPanel.svelte`의 "*" 필수 표시 제거, `new/+page.svelte`
+  안내 문구를 "가격 항목은 전부 선택 입력입니다"로 정정, `aria-label`의 "(필수)" 제거.
+- **연쇄 발견·수정(BND-PRICEDEL-1)**: 기존상품 수정 시 가격을 비워 저장하면 12h/월간은
+  소프트삭제되는데 24h만 "필수 보호"를 이유로 이 소프트삭제 대상에서 명시적으로 제외돼
+  있었다 — 그 결과 24h를 비워도 서버가 조용히 아무 것도 안 해 화면(목록 카드·패널 요약바)에
+  옛 가격이 그대로 남아있는 것처럼 보였음(Stephen이 "요금 정보 변경해도 두 선택영역에
+  미반영"으로 별도 제보한 것과 동일 원인으로 확인). `dtype !== '24h'` 예외 조건을 제거해
+  24h도 12h/월간과 동일하게 동작하도록 통일.
+- `products.md §2-9` 정책 문서 반전 내용으로 갱신 + GATE C 체크리스트 2건 교체.
+- **라이브 검증**: 24시간 가격을 비우고 저장 → 저장 성공 토스트 + 목록 카드·패널 요약바
+  둘 다 "Day —"로 정확히 갱신되는 것을 스크린샷으로 확인. 이후 원래 값(200,000원)으로 복원.
+
+### 수정 내역 4 — 상세패널 가격 정보 3중 중복 중 1곳 제거
+Stephen 지적: 가격 정보가 ①대표 상품정보 미니카드(rep-header, 항상 노출) ②패널 요약바
+(summary-bar, 펼쳤을 때만) ③가격정책 탭(실제 편집 필드) 3곳에 중복 표시됨. 판단: ②는 ①이
+이미 항상 보여주는 것과 완전히 동일한 값을 패널을 펼쳤을 때만 한 번 더 반복하는 순수 중복
+(등록일·노출상태·대여현황 칩 등 ②만의 고유 정보는 유지) — ②의 가격 배지만 제거.
+- `ProductDetailPanel.svelte` `summary-bar`에서 `sb-price-badge` 2개 제거, 더 이상 쓰이지
+  않는 `formatPrice()` 함수와 `.sb-price-badge` CSS도 함께 삭제(죽은 코드 방치 금지).
+- **라이브 검증**: 요약바에 가격 배지 없이 "등록(수정): 날짜 / 노출상태"만 남는 것을
+  스크린샷으로 확인.
+
+### 검증 (공통)
+- `npx svelte-check` — 4건 수정 전 구간 대비(baseline, 이 세션 시작 시점) 신규 에러 0건 유지
+  (1 error/422 warnings, 동일 파일 warning 개수도 회귀 없음 확인).
+- 4건 전부 Claude Browser(명시 승인)로 로컬 라이브 재현·검증 완료.
+
+### 미실행 / 대기
+- git add/commit — Stephen 직접 실행 대기.
+- **PANEL-CLOSE-1의 실서버 재검증** — 이 결함은 프로덕션 네트워크 지연 조건에서만 뚜렷했던
+  만큼, 배포 후 동일 방식(연속 저장)으로 실서버 재테스트 필요.
+- Migration 없음(순수 애플리케이션 코드 변경) — 별도 DB 배포 절차 불필요.
