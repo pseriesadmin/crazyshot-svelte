@@ -5,6 +5,7 @@ import { error, redirect } from '@sveltejs/kit'
 import { recordAuditLog } from '$lib/contract-signature/auditLog'
 import { isCouponEligible } from '$lib/server/coupons/couponEligibility'
 import { isContractIssueBlocked } from '$lib/utils/contractIssueGuard'
+import { getServiceInfoSettings } from '$lib/services/serviceInfoSettings'
 import type { PageServerLoad } from './$types'
 
 export const load: PageServerLoad = async ({ params }) => {
@@ -366,12 +367,19 @@ export const load: PageServerLoad = async ({ params }) => {
     : null
   const preselectedPoints = Math.max(0, Math.min(orderData?.selected_points ?? 0, userPoints))
 
+  // '서비스 기본 정보'(Migration #566) — canvas 모드 substitutionMap의 임대인 4개 변수 소스.
+  // html 모드는 발행 시점(CMS contract-data API)에 이미 치환된 html_document를 그대로
+  // 렌더링하므로 이 값이 불필요하지만, canvas 모드 템플릿이 {{임대인...}}을 바인딩할 수도
+  // 있어 일관되게 함께 내려준다(실패해도 fail-soft로 빈 값).
+  const serviceInfo = await getServiceInfoSettings(admin)
+
   return {
     signing,
     customer,
     issuerSignatures,
     shippingAddress,
     orderData,
+    serviceInfo,
     userCoupons,
     userPoints,
     preselectedCouponId,

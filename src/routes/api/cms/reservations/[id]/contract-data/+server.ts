@@ -9,6 +9,7 @@ import { hasSettingsAccess } from '$lib/utils/cmsPermissions'
 import { buildLineItems, formatComponentsText } from '$lib/utils/contractLineItems'
 import type { ReservationForLineItems, BundleLink } from '$lib/utils/contractLineItems'
 import { calcRentalMinutes, calcRentalPeriodParts } from '$lib/utils/cartRentalFee'
+import { getServiceInfoSettings } from '$lib/services/serviceInfoSettings'
 
 // cart/+page.svelte DUR_TYPES · ProductDetailPanel.svelte "24시간(1일)" 표기 관례와 동일
 const DURATION_TYPE_LABELS: Record<string, string> = {
@@ -207,7 +208,7 @@ export const GET: RequestHandler = async ({ params, locals }) => {
   const pointIds = [res.pickup_point_id, res.return_point_id].filter((v): v is string => !!v)
 
   // ── 2. 병렬 조회: 기본 예약의 스칼라 필드용 데이터 ────────────────────────
-  const [productRes, userRes, orderItemRes, methodOptsRes, addrRes, pointRes, ownPriceRes] = await Promise.all([
+  const [productRes, userRes, orderItemRes, methodOptsRes, addrRes, pointRes, ownPriceRes, serviceInfo] = await Promise.all([
     admin.from('products').select('name, product_code, components, parent_product_id').eq('id', res.product_id).maybeSingle(),
     admin.from('user_profiles').select('full_name, phone, email').eq('id', res.user_id).maybeSingle(),
     admin.from('order_items').select('order_id').eq('reservation_id', reservationId).maybeSingle(),
@@ -247,6 +248,9 @@ export const GET: RequestHandler = async ({ params, locals }) => {
           .is('deleted_at', null)
           .maybeSingle()
       : Promise.resolve({ data: null as { price: number } | null, error: null }),
+    // '서비스 기본 정보'(사업자 정보, Migration #566) — 임대인 정보 4개 변수 소스.
+    // 공개 RPC라 admin 클라이언트로도 그대로 호출 가능, 실패해도 빈 값으로 fail-soft.
+    getServiceInfoSettings(admin),
   ])
 
   // 기준 예약(단독/주문묶음 공용) 메인상품 구성품 — 부모 해석 적용(위 resolveComponentsMap 참고)
@@ -605,6 +609,11 @@ export const GET: RequestHandler = async ({ params, locals }) => {
       isReturnDelivery ? null : res.return_time,
     ),
     할인반영금액: formatAmount(couponDiscountAmount),
+    // '서비스 기본 정보' CMS 설정(Migration #566) — 임대인 정보 4개
+    임대인상호명: serviceInfo.company_name,
+    임대인대표자명: serviceInfo.ceo_name,
+    임대인사업자번호: serviceInfo.biz_reg_no,
+    임대인사업장주소: serviceInfo.biz_address,
   }
 
   return json(data)

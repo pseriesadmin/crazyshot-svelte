@@ -51,7 +51,7 @@
     </section>
 
     <section class="pc-section" aria-label="K-트레일 혜택">
-      <CommonBenefits policyItems={data.policyItems} />
+      <CommonBenefits policyItems={data.policyItems} serviceInfo={data.serviceInfo} />
     </section>
   </div>
 </div>

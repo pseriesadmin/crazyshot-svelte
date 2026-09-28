@@ -39,6 +39,12 @@ const baseData: ContractSubstitutionData = {
   요금유형: '24시간(1일)',
   할인금액: '0원',
   부가세: '0원',
+  // 2026-09-28 추가(Migration #566, '서비스 기본 정보' CMS 설정 연동) — defaultRentalContractHtml.ts
+  // "임대인 정보" 표 4칸이 하드코딩에서 변수로 바뀌었으므로 이 파일 상단 규칙에 따라 픽스처에 반영.
+  임대인상호명: '(주)크레이지샷',
+  임대인대표자명: '한광익',
+  임대인사업자번호: '372-81-03954',
+  임대인사업장주소: '서울특별시 강서구 양천로 418. 2층 202호(등촌동)',
 }
 
 const sampleItems: ContractLineItem[] = [
@@ -76,6 +82,17 @@ describe('substituteHtmlDocument', () => {
     expect(result).toContain('kim@example.com')
     expect(result).toContain('서울시 강남구 테헤란로 1')
     expect(result).not.toMatch(/\{\{[^}]+\}\}/) // 치환 잔여 없음
+  })
+
+  it('[HT-1] 임대인 정보 변수(서비스 기본 정보 CMS 연동)를 정상 치환한다', async () => {
+    const { substituteHtmlDocument } = await import('$lib/utils/contract-substitution.js')
+    const html = '<td>{{임대인사업자번호}}</td><td>{{임대인대표자명}} (인)</td><td>{{임대인상호명}}</td><td>{{임대인사업장주소}}</td>'
+    const result = substituteHtmlDocument(html, baseData)
+    expect(result).toContain('372-81-03954')
+    expect(result).toContain('한광익 (인)')
+    expect(result).toContain('(주)크레이지샷')
+    expect(result).toContain('서울특별시 강서구 양천로 418. 2층 202호(등촌동)')
+    expect(result).not.toMatch(/\{\{임대인[^}]+\}\}/)
   })
 
   // ── HT-2: 반복 영역 확장 ─────────────────────────────────────────────────

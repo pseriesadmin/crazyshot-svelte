@@ -1,11 +1,19 @@
 <script lang="ts">
   import type { SubscriptionPolicyItem } from '$lib/types/database'
+  import type { ServiceInfoSettings } from '$lib/services/serviceInfoSettings'
+
+  const EMPTY_SERVICE_INFO: ServiceInfoSettings = {
+    company_name: '', ceo_name: '', biz_address: '', biz_reg_no: '', mail_order_biz_no: '',
+    privacy_officer: '', ceo_email: '', cs_phone: '', business_hours: '',
+  }
 
   interface Props {
     policyItems?: SubscriptionPolicyItem[]
+    /** '서비스 기본 정보'(Migration #566) — PC 공통푸터와 동일한 단일 소스. 미전달 시 빈 값. */
+    serviceInfo?: ServiceInfoSettings
   }
 
-  let { policyItems = [] }: Props = $props()
+  let { policyItems = [], serviceInfo = EMPTY_SERVICE_INFO }: Props = $props()
 
   let openSNS = $state(false)
   let openLegal = $state(false)
@@ -126,12 +134,12 @@
 
     <!-- 법인 정보 -->
     <div class="m-legal-info">
-      <p class="m-legal-company">(주)크레이지샷</p>
+      <p class="m-legal-company">{serviceInfo.company_name}</p>
       <p class="m-legal-detail">
-        대표자 : 한광익  |  서울특별시 강서구 양천로 418 1,2층 101,201호(등촌동)  |
-        사업자 등록번호 : 107-88-22133
-        통신판매업신고 : 2023-서울강서-1755  |  개인정보관리책임자 : 이용희  |
-        Email : crazymedia@hanmail.net
+        대표자 : {serviceInfo.ceo_name}  |  {serviceInfo.biz_address}  |
+        사업자 등록번호 : {serviceInfo.biz_reg_no}
+        통신판매업신고 : {serviceInfo.mail_order_biz_no}  |  개인정보관리책임자 : {serviceInfo.privacy_officer}  |
+        Email : {serviceInfo.ceo_email}
       </p>
       <p class="m-legal-copy">Copyrightⓒ crazymedia 2025. All right reserved.</p>
     </div>

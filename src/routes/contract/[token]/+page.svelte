@@ -157,6 +157,11 @@
     '배송비':       formatAmount(orderData?.delivery_fee),
     '부가세':       formatAmount(orderData?.tax_amount),
     '최종합계':     formatAmount(orderData?.final_amount),
+    // '서비스 기본 정보' CMS 설정(Migration #566) — 임대인 정보 4개
+    '임대인상호명':     data.serviceInfo?.company_name ?? '',
+    '임대인대표자명':   data.serviceInfo?.ceo_name ?? '',
+    '임대인사업자번호': data.serviceInfo?.biz_reg_no ?? '',
+    '임대인사업장주소': data.serviceInfo?.biz_address ?? '',
   })
 
   let agreed    = $state(false)

@@ -88,4 +88,22 @@ describe('findHtmlUnresolvedVariables — html 모드 원본 템플릿 사전검
       '<p>{{계약서발행일}}</p>'
     expect(findHtmlUnresolvedVariables(html, baseData)).toEqual(['계약서발행일'])
   })
+
+  // 2026-09-28 추가(Migration #566) — defaultRentalContractHtml.ts "임대인 정보" 표가
+  // 하드코딩에서 {{임대인상호명}} 등 변수로 바뀌었다. 데이터 빌드 지점(contract-data API)이
+  // 이 4개를 채우지 않으면 발송 전 이 함수가 반드시 잡아내야 한다.
+  it('임대인 정보 4개 변수 — 데이터에 있으면 통과, 하나라도 없으면 잡힌다', () => {
+    const withLandlord: ContractSubstitutionData = {
+      ...baseData,
+      임대인상호명: '(주)크레이지샷',
+      임대인대표자명: '한광익',
+      임대인사업자번호: '372-81-03954',
+      임대인사업장주소: '서울특별시 강서구 양천로 418. 2층 202호(등촌동)',
+    }
+    const html = '<td>{{임대인사업자번호}}</td><td>{{임대인대표자명}}</td><td>{{임대인상호명}}</td><td>{{임대인사업장주소}}</td>'
+    expect(findHtmlUnresolvedVariables(html, withLandlord)).toEqual([])
+    expect(findHtmlUnresolvedVariables(html, baseData)).toEqual([
+      '임대인사업자번호', '임대인대표자명', '임대인상호명', '임대인사업장주소',
+    ])
+  })
 })

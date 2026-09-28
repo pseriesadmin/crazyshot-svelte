@@ -125,4 +125,16 @@ export interface ContractSubstitutionData {
    * `총사용시간`(배송 시 '-')과 다르다 — 의도된 차이(원시 경과시간 vs 청구 기준 일수).
    */
   대여일수?: string
+  // ── 신규: 임대인(사업자) 정보 — '서비스 기본 정보' CMS 설정 연동 (2026-09-28, Migration #566) ──
+  /**
+   * service_info_settings(단일 소스) → get_service_info_settings() RPC 값을 그대로 매핑.
+   * 이전에는 defaultRentalContractHtml.ts에 사업자명·대표자명·사업자번호·사업장주소가
+   * 하드코딩돼 있었다 — 이제 CMS(`/cms/set/rental` "서비스 기본 정보" 섹션)에서 관리하는
+   * 값으로 치환된다. 데이터 빌드 지점(contract-data API 등)에서 이 4개를 채우지 않으면
+   * findHtmlUnresolvedVariables()가 발송 전에 잔존 변수로 잡아낸다.
+   */
+  임대인상호명?: string
+  임대인대표자명?: string
+  임대인사업자번호?: string
+  임대인사업장주소?: string
 }

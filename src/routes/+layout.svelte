@@ -14,6 +14,17 @@
 	import { Toaster } from 'svelte-sonner';
 	import { csToast } from '$lib/utils/toast';
 	import { supabase } from '$lib/services/supabase';
+	import type { PageData } from './$types';
+
+	interface Props { data: PageData }
+	let { data }: Props = $props();
+
+	// '서비스 기본 정보'(Migration #566) — 공통 푸터가 참조하는 단일 소스. +layout.server.ts가
+	// 세션 유무와 무관하게 항상 내려주므로 데이터가 없을 일은 없으나, 방어적으로 빈 값 폴백.
+	const serviceInfo = $derived(data.serviceInfo ?? {
+		company_name: '', ceo_name: '', biz_address: '', biz_reg_no: '', mail_order_biz_no: '',
+		privacy_officer: '', ceo_email: '', cs_phone: '', business_hours: '',
+	});
 
 	// 푸터 법적 고지 모달
 	let policyModal = $state<{ open: boolean; title: string; text: string; loading: boolean }>({
@@ -158,11 +169,11 @@
 					<div class="footer-contact">
 						<div class="contact-col">
 							<p class="contact-label">고객센터</p>
-							<p class="contact-value">1588-0033</p>
+							<p class="contact-value">{serviceInfo.cs_phone}</p>
 						</div>
 						<div class="contact-col">
 							<p class="contact-label">운영시간</p>
-							<p class="contact-hours">평일·공휴일&nbsp; 09:00 ~22:00</p>
+							<p class="contact-hours">{serviceInfo.business_hours}</p>
 						</div>
 					</div>
 					<!-- SNS 아이콘 -->
@@ -205,9 +216,9 @@
 			</div>
 			<div class="footer-bottom">
 				<div class="footer-biz-block">
-					<p class="footer-company">(주)크레이지샷</p>
-					<p class="footer-biz">대표자 : 한광익&nbsp; |&nbsp; 서울특별시 강서구 양천로 418. 2층 202호(등촌동)&nbsp; |&nbsp; 사업자 등록번호 : 372-81-03954</p>
-					<p class="footer-biz">통신판매업신고 : 제 2026-서울강서-0597호&nbsp; |&nbsp; 개인정보관리책임자 : 한광익&nbsp; |&nbsp; Email : crazyshothq@naver.com</p>
+					<p class="footer-company">{serviceInfo.company_name}</p>
+					<p class="footer-biz">대표자 : {serviceInfo.ceo_name}&nbsp; |&nbsp; {serviceInfo.biz_address}&nbsp; |&nbsp; 사업자 등록번호 : {serviceInfo.biz_reg_no}</p>
+					<p class="footer-biz">통신판매업신고 : {serviceInfo.mail_order_biz_no}&nbsp; |&nbsp; 개인정보관리책임자 : {serviceInfo.privacy_officer}&nbsp; |&nbsp; Email : {serviceInfo.ceo_email}</p>
 				</div>
 				<p class="footer-copy">copyrightⓒ crazymedia 2025. All right reserved.</p>
 			</div>

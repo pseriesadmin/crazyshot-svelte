@@ -309,23 +309,24 @@ export const DEFAULT_RENTAL_CONTRACT_HTML = `
     <p class="issue-date">(계약서 발행일시: {{계약서발행일}})</p><!--DOCUMENT_QR-->
   </div>
 
-  <!-- 임대인 정보 (고정) -->
+  <!-- 임대인 정보 — '서비스 기본 정보' CMS 설정(service_info_settings) 변수 치환
+       (2026-09-28, Migration #566 — 이전엔 이 4칸이 하드코딩값이었음) -->
   <table>
     <tbody>
       <tr>
         <td class="label-cell">임대인</td>
         <td class="label-cell">사업자등록번호</td>
-        <td>372-81-03554</td>
+        <td>{{임대인사업자번호}}</td>
         <td class="label-cell">대표이사</td>
-        <td class="sig-host-cell">한광익 (인)<!--ISSUER_SIGNATURE--></td>
+        <td class="sig-host-cell">{{임대인대표자명}} (인)<!--ISSUER_SIGNATURE--></td>
       </tr>
       <tr>
         <td class="label-cell">상호명</td>
-        <td colspan="4">주식회사 크레이지샷</td>
+        <td colspan="4">{{임대인상호명}}</td>
       </tr>
       <tr>
         <td class="label-cell">사업장 소재지</td>
-        <td colspan="4">서울특별시강서구양천로418,2층202호</td>
+        <td colspan="4">{{임대인사업장주소}}</td>
       </tr>
     </tbody>
   </table>

@@ -5,6 +5,7 @@ import { createClient, type SupabaseClient } from '@supabase/supabase-js'
 import { getCmsRoleForAction } from '$lib/server/getCmsRoleForAction'
 import { hasSettingsAccess } from '$lib/utils/cmsPermissions'
 import { syncNationalHolidays } from '$lib/server/holidaySync'
+import type { ServiceInfoSettings } from '$lib/services/serviceInfoSettings'
 import type { Actions, PageServerLoad } from './$types'
 
 // database.ts에 신규 테이블/RPC 미등록 상태 — generate_typescript_types 이후 제거
@@ -119,7 +120,7 @@ export const load: PageServerLoad = async ({ locals }) => {
   const supabase = locals.supabase
   const todayIso = new Date().toISOString().slice(0, 10)
 
-  const [periods, methods, branches, guide, consents, shippingRow, cutoffRow, holidays, discountTiers, policyRow] = await Promise.all([
+  const [periods, methods, branches, guide, consents, shippingRow, cutoffRow, holidays, discountTiers, policyRow, serviceInfoRow] = await Promise.all([
     untypedFrom(supabase, 'rental_period_options')
       .select('id, name, display_order, is_active')
       .is('deleted_at', null)
@@ -171,10 +172,19 @@ export const load: PageServerLoad = async ({ locals }) => {
       .select('privacy_text, terms_text, refund_text')
       .limit(1)
       .single(),
+
+    untypedFrom(supabase, 'service_info_settings')
+      .select('company_name, ceo_name, biz_address, biz_reg_no, mail_order_biz_no, privacy_officer, ceo_email, cs_phone, business_hours')
+      .limit(1)
+      .single(),
   ])
 
   type GuideRow = { guide_text: string | null }
   type PolicyRow = { privacy_text: string; terms_text: string; refund_text: string }
+  const emptyServiceInfo: ServiceInfoSettings = {
+    company_name: '', ceo_name: '', biz_address: '', biz_reg_no: '', mail_order_biz_no: '',
+    privacy_officer: '', ceo_email: '', cs_phone: '', business_hours: '',
+  }
 
   return {
     periods: ((periods as { data: RentalPeriodOption[] | null }).data ?? []),
@@ -187,6 +197,7 @@ export const load: PageServerLoad = async ({ locals }) => {
     holidays: ((holidays as { data: PublicHolidayRow[] | null }).data ?? []),
     discountTiers: ((discountTiers as { data: DeliveryFeeDiscountTier[] | null }).data ?? []),
     policySettings: ((policyRow as { data: PolicyRow | null }).data ?? { privacy_text: '', terms_text: '', refund_text: '' }),
+    serviceInfo: ((serviceInfoRow as { data: ServiceInfoSettings | null }).data ?? emptyServiceInfo),
   }
 }
 
@@ -656,6 +667,47 @@ export const actions: Actions = {
     const params: Record<string, string> = { [fieldToParam[field]]: text }
 
     const { error } = await untypedRpc(locals.supabase, 'upsert_rental_policy_settings', params)
+    if (error) return fail(500, { error: error.message })
+    return { success: true }
+  },
+
+  // ─── 서비스 기본 정보(사업자 정보, Migration #566) ─────
+  // PC 공통푸터·모바일 멤버십 푸터·표준계약서 임대인 정보 3곳이 이 값을 단일 소스로 참조한다
+  // (src/lib/services/serviceInfoSettings.ts). 9개 필드를 단일 폼으로 한 번에 저장.
+  saveServiceInfo: async ({ request, locals }) => {
+    const { session } = await locals.safeGetSession()
+    if (!session) return fail(401, { error: '인증 필요' })
+    const cmsRole = await getCmsRoleForAction(locals)
+    if (!hasSettingsAccess(cmsRole ?? '')) return fail(403, { error: '권한 없음' })
+    const data = await request.formData()
+
+    const fields = {
+      company_name:      (data.get('company_name') as string | null)?.trim() ?? '',
+      ceo_name:           (data.get('ceo_name') as string | null)?.trim() ?? '',
+      biz_address:        (data.get('biz_address') as string | null)?.trim() ?? '',
+      biz_reg_no:         (data.get('biz_reg_no') as string | null)?.trim() ?? '',
+      mail_order_biz_no:  (data.get('mail_order_biz_no') as string | null)?.trim() ?? '',
+      privacy_officer:    (data.get('privacy_officer') as string | null)?.trim() ?? '',
+      ceo_email:          (data.get('ceo_email') as string | null)?.trim() ?? '',
+      cs_phone:           (data.get('cs_phone') as string | null)?.trim() ?? '',
+      business_hours:     (data.get('business_hours') as string | null)?.trim() ?? '',
+    }
+
+    for (const [key, value] of Object.entries(fields)) {
+      if (value.length > 200) return fail(400, { error: `${key} 항목은 최대 200자까지 입력 가능합니다.` })
+    }
+
+    const { error } = await untypedRpc(locals.supabase, 'upsert_service_info_settings', {
+      p_company_name: fields.company_name,
+      p_ceo_name: fields.ceo_name,
+      p_biz_address: fields.biz_address,
+      p_biz_reg_no: fields.biz_reg_no,
+      p_mail_order_biz_no: fields.mail_order_biz_no,
+      p_privacy_officer: fields.privacy_officer,
+      p_ceo_email: fields.ceo_email,
+      p_cs_phone: fields.cs_phone,
+      p_business_hours: fields.business_hours,
+    })
     if (error) return fail(500, { error: error.message })
     return { success: true }
   },
