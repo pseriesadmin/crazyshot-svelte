@@ -497,6 +497,15 @@
       cancel()
       return
     }
+    // PRODUCT-NULL-RACE-1(2026-09-28): 저장 시작 시점의 product.id를 미리 스냅샷해둔다 —
+    // 아래 콜백은 await invalidateAll() 이후에 실행되는데, product는 $props()로 받은 살아있는
+    // 반응형 값이라 그 사이 부모의 activeDetail이 일시적으로 재계산되며 product가 null이 될
+    // 수 있다(정확히 이 타이밍에 재현 확인, 2026-09-28). 그 순간 product.id를 다시 읽으면
+    // "Cannot read properties of null (reading 'id')"로 크래시하고, 이 크래시가 saveOptions/
+    // saveBundles처럼 try 블록 안에서 발생하면 catch에 걸려 "저장은 실제로 성공했는데 실패
+    // 토스트가 뜨는" 것처럼 보인다. 저장 시작 시점엔 product가 반드시 유효하므로(위 체크들을
+    // 통과했다는 것 자체가 증거) 여기서 미리 값을 고정해 이후 재평가를 피한다.
+    const savedProductId = product.id
     isSaving = true
     return async ({ result }: { result: ActionResult }) => {
       isSaving = false
@@ -514,7 +523,7 @@
         ].filter(Boolean) as string[]
 
         await invalidateAll()
-        onsectionsaved?.(product.id)
+        onsectionsaved?.(savedProductId)
 
         if (otherDirtyTabs.length > 0) {
           csToast.warning(`저장됐습니다. [${otherDirtyTabs.join('·')}] 탭의 미저장 내용이 초기화됐습니다.`)
@@ -539,21 +548,23 @@
 
   async function autoSave() {
     if (isAnySaving) return
+    // PRODUCT-NULL-RACE-1: product.id를 시작 시점에 스냅샷(위 handleSectionSave 주석 참고)
+    const savedProductId = product.id
     isAutoSaving = true
     uploadError = null
     try {
       const fd = new FormData()
-      fd.append('product_id', product.id)
+      fd.append('product_id', savedProductId)
       fd.append('section_type', 'images')
       fd.append('image_urls', JSON.stringify(localImages.filter(Boolean)))
       await fetch('?/updateSection', { method: 'POST', body: fd })
       await invalidateAll()
-      onsectionsaved?.(product.id)
+      onsectionsaved?.(savedProductId)
     } catch {
       uploadError = '저장 실패. 다시 시도해주세요.'
       // 화면에서만 재정렬된 상태로 서버와 어긋나지 않도록 서버 값으로 복구
       await invalidateAll()
-      onsectionsaved?.(product.id)
+      onsectionsaved?.(savedProductId)
     } finally {
       isAutoSaving = false
     }
@@ -1023,16 +1034,26 @@
 
   async function saveContent() {
     if (isChildProduct) { csToast.warning('대표 상품에서 수정하세요.'); return }
+    if (isAnySaving) return
+    // PRODUCT-NULL-RACE-1: product.id를 시작 시점에 스냅샷(handleSectionSave 주석 참고)
+    const savedProductId = product.id
     isSavingContent = true
     try {
       const fd = new FormData()
-      fd.append('product_id', product.id)
+      fd.append('product_id', savedProductId)
       fd.append('section_type', 'content')
       fd.append('content_blocks', JSON.stringify(localContentBlocks))
       fd.append('keywords', JSON.stringify(localKeywords))
       const res = await fetch('?/updateSection', { method: 'POST', body: fd })
-      if (!res.ok) throw new Error('저장 실패')
+      // OPT-SAVE-ERR-1과 동일 수정: res.ok가 아니라 deserialize로 판정해야 실제 실패
+      // 사유(세션 만료 등, CMS 중앙 게이트 차단 포함)가 화면에 정확히 표시된다.
+      const result = deserialize(await res.text()) as { type: string; data?: { error?: string } }
+      if (result.type !== 'success') {
+        csToast.error(result.data?.error ?? '저장에 실패했습니다.')
+        return
+      }
       await invalidateAll()
+      onsectionsaved?.(savedProductId)
       csToast.success('저장됐습니다.')
     } catch {
       csToast.error('저장에 실패했습니다.')
@@ -1051,6 +1072,8 @@
     is_required: boolean
     min_select_required: boolean
     delivery_rental_disabled: boolean
+    is_free: boolean
+    qty_follows_main: boolean
   }
   interface OptionSearchResult {
     id: string
@@ -1081,6 +1104,8 @@
         is_required: (l.is_required as boolean) ?? false,
         min_select_required: (l.min_select_required as boolean) ?? false,
         delivery_rental_disabled: (l.delivery_rental_disabled as boolean) ?? false,
+        is_free: (l.is_free as boolean) ?? false,
+        qty_follows_main: (l.qty_follows_main as boolean) ?? false,
       }))
     } catch { return [] }
   }
@@ -1094,6 +1119,8 @@
   let bulkRequired = $state(false)
   let bulkMinSelectRequired = $state(false)
   let bulkDeliveryDisabled = $state(false)
+  let bulkFree = $state(false)
+  let bulkQtyFollowsMain = $state(false)
   let isSavingOptions = $state(false)
   const isDirtyOptions = $derived.by(() => {
     const toSaveKey = (opts: OptionLink[]) =>
@@ -1102,6 +1129,8 @@
         is_required: o.is_required,
         min_select_required: o.min_select_required,
         delivery_rental_disabled: o.delivery_rental_disabled,
+        is_free: o.is_free,
+        qty_follows_main: o.qty_follows_main,
         display_order: i,
       })))
     return toSaveKey(localOptions) !== toSaveKey(parseOptionLinks(product))
@@ -1181,6 +1210,8 @@
         is_required: false,
         min_select_required: false,
         delivery_rental_disabled: false,
+        is_free: false,
+        qty_follows_main: false,
       },
     ]
     showOptionModal = false
@@ -1198,6 +1229,8 @@
       is_required: bulkRequired,
       min_select_required: bulkMinSelectRequired,
       delivery_rental_disabled: bulkDeliveryDisabled,
+      is_free: bulkFree,
+      qty_follows_main: bulkQtyFollowsMain,
     }))
   }
 
@@ -1207,10 +1240,14 @@
       return
     }
     if (isAnySaving) return
+    // PRODUCT-NULL-RACE-1: product.id를 시작 시점에 스냅샷(handleSectionSave 주석 참고) —
+    // 실제로 이 지점에서 "저장은 성공했는데 catch에 걸려 실패 토스트가 뜨는" 증상이
+    // 재현됐다(2026-09-28, Stephen 제보로 발견).
+    const savedProductId = product.id
     isSavingOptions = true
     try {
       const fd = new FormData()
-      fd.append('product_id', product.id)
+      fd.append('product_id', savedProductId)
       fd.append('section_type', 'options')
       fd.append('option_links', JSON.stringify(
         localOptions.map((o, i) => ({
@@ -1218,13 +1255,23 @@
           is_required: o.is_required,
           min_select_required: o.min_select_required,
           delivery_rental_disabled: o.delivery_rental_disabled,
+          is_free: o.is_free,
+          qty_follows_main: o.qty_follows_main,
           display_order: i,
         }))
       ))
       const res = await fetch('?/updateSection', { method: 'POST', body: fd })
-      if (!res.ok) throw new Error('저장 실패')
+      // OPT-SAVE-ERR-1(2026-09-28): action의 fail()은 HTTP 200 + type:'failure'로 오므로
+      // res.ok가 아니라 deserialize로 판정해야 한다(saveBundles/retryProductCode와 동일 패턴).
+      // res.ok만 보면 실제 실패 사유(세션 만료 등)가 전부 뭉뚱그려져 "저장에 실패했습니다"로만
+      // 표시되고, CMS 중앙 게이트가 막은 경우 등 실제 원인을 알 수 없었다.
+      const result = deserialize(await res.text()) as { type: string; data?: { error?: string } }
+      if (result.type !== 'success') {
+        csToast.error(result.data?.error ?? '저장에 실패했습니다.')
+        return
+      }
       await invalidateAll()
-      onsectionsaved?.(product.id)
+      onsectionsaved?.(savedProductId)
       csToast.success('저장됐습니다.')
     } catch {
       csToast.error('저장에 실패했습니다.')
@@ -1268,7 +1315,10 @@
   // 요청 중 하나가 net::ERR_ABORTED로 취소되고, 그 여파로 선택된 상품 정보를 잃은 채 패널이
   // 닫힌 목록 화면으로 보이는 결함이 재현됨(2026-09-28). 네 플래그를 하나로 묶어 어느 탭에서든
   // 저장이 진행 중이면 다른 모든 탭의 저장 시도를 차단해 invalidateAll() 중복 호출 자체를 막는다.
-  const isAnySaving = $derived(isSaving || isSavingOptions || isSavingBundles || isAutoSaving)
+  // PANEL-CLOSE-1 누락분 수정(2026-09-28): 상품설명(content) 탭의 isSavingContent가 이
+  // 통합 플래그에서 빠져 있었다 — 상품설명 저장 중에 다른 탭을 저장하면(또는 그 반대) 여전히
+  // invalidateAll() 중복 호출 경합이 가능한 상태였다.
+  const isAnySaving = $derived(isSaving || isSavingOptions || isSavingBundles || isSavingContent || isAutoSaving)
   const isDirtyBundles = $derived.by(() => {
     const toKey = (bundles: BundleLink[]) =>
       JSON.stringify(bundles.map((b) => b.bundle_product_id))
@@ -1308,10 +1358,10 @@
       csToast.warning('자기 자신을 결합상품으로 추가할 수 없습니다.')
       return
     }
-    if (localOptions.some((o) => o.option_product_id === item.id)) {
-      csToast.warning('이미 옵션상품으로 추가된 상품입니다.')
-      return
-    }
+    // Migration #572(2026-09-28, Stephen 지시): 옵션상품과 겹치는 상품도 결합상품으로 등록
+    // 가능하도록 정책 변경 — 서버(upsert_product_bundle_links RPC)의 BUNDLE_OPTION_OVERLAP
+    // 검증은 이미 제거했으나, 여기 클라이언트 쪽에 남아있던 동일 차단 로직을 놓쳐서 화면에서
+    // 먼저 막히고 있었다(서버까지 요청이 가지도 않음) — 함께 제거.
     if (localBundles.some((b) => b.bundle_product_id === item.id)) {
       csToast.info('이미 추가된 상품입니다.')
       return
@@ -1340,10 +1390,12 @@
       return
     }
     if (isAnySaving) return
+    // PRODUCT-NULL-RACE-1: product.id를 시작 시점에 스냅샷(handleSectionSave 주석 참고)
+    const savedProductId = product.id
     isSavingBundles = true
     try {
       const fd = new FormData()
-      fd.append('product_id', product.id)
+      fd.append('product_id', savedProductId)
       fd.append('section_type', 'bundles')
       fd.append('bundle_links', JSON.stringify(
         localBundles.map((b, i) => ({
@@ -1360,7 +1412,7 @@
         return
       }
       await invalidateAll()
-      onsectionsaved?.(product.id)
+      onsectionsaved?.(savedProductId)
       csToast.success('저장됐습니다.')
     } catch {
       csToast.error('저장에 실패했습니다.')
@@ -1933,6 +1985,10 @@
                 onclick={() => { bulkMinSelectRequired = !bulkMinSelectRequired }}>최소 1개 선택 필수</button>
               <button type="button" class="opt-combo-btn" class:opt-combo-btn--on={bulkDeliveryDisabled}
                 onclick={() => { bulkDeliveryDisabled = !bulkDeliveryDisabled }}>배송 대여 불가</button>
+              <button type="button" class="opt-combo-btn" class:opt-combo-btn--on={bulkFree}
+                onclick={() => { bulkFree = !bulkFree }}>무료 제공</button>
+              <button type="button" class="opt-combo-btn" class:opt-combo-btn--on={bulkQtyFollowsMain}
+                onclick={() => { bulkQtyFollowsMain = !bulkQtyFollowsMain }}>수량 본상품 연동</button>
             </div>
             <button type="button" class="btn-bulk-apply" onclick={applyBulk}>적용</button>
           </div>
@@ -1953,6 +2009,10 @@
                       onclick={() => { opt.min_select_required = !opt.min_select_required }}>최소 1개 선택 필수</button>
                     <button type="button" class="opt-combo-btn" class:opt-combo-btn--on={opt.delivery_rental_disabled}
                       onclick={() => { opt.delivery_rental_disabled = !opt.delivery_rental_disabled }}>배송 대여 불가</button>
+                    <button type="button" class="opt-combo-btn" class:opt-combo-btn--on={opt.is_free}
+                      onclick={() => { opt.is_free = !opt.is_free }}>무료 제공</button>
+                    <button type="button" class="opt-combo-btn" class:opt-combo-btn--on={opt.qty_follows_main}
+                      onclick={() => { opt.qty_follows_main = !opt.qty_follows_main }}>수량 본상품 연동</button>
                   </div>
                 </div>
                 <button type="button" class="remove-btn" onclick={() => removeOption(opt.option_product_id)} aria-label="{opt.name} 옵션 제거">✕</button>
@@ -2348,7 +2408,7 @@
           {#if !isChildProduct}
           <button type="button" class="btn-save-inline"
             class:dirty={isDirtyContent}
-            disabled={!isDirtyContent || isSavingContent}
+            disabled={!isDirtyContent || isAnySaving}
             onclick={saveContent}>
             {isSavingContent ? '저장 중...' : '저장'}
           </button>

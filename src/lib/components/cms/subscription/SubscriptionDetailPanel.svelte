@@ -256,11 +256,14 @@
     fd.set('content_blocks', JSON.stringify(localContentBlocks))
     const res = await fetch('?/updateSection', { method: 'POST', body: fd })
     isSaving = false
-    if (res.ok) {
+    // OPT-SAVE-ERR-1과 동일 수정: res.ok만으로는 실제 실패 사유를 알 수 없음(SvelteKit
+    // fail()도 HTTP 200으로 내려옴) — deserialize로 ActionResult를 직접 해석한다.
+    const result = deserialize(await res.text()) as { type: string; data?: { error?: string } }
+    if (result.type === 'success') {
       await invalidateAll()
       csToast.success('저장됐습니다.')
     } else {
-      csToast.error('저장에 실패했습니다.')
+      csToast.error(result.data?.error ?? '저장에 실패했습니다.')
     }
   }
 
@@ -315,11 +318,13 @@
     fd.set('product_ids', JSON.stringify(freeRentalSelectedIds))
     const res = await fetch('?/updateSection', { method: 'POST', body: fd })
     isSaving = false
-    if (res.ok) {
+    // OPT-SAVE-ERR-1과 동일 수정: res.ok 대신 deserialize로 ActionResult를 직접 해석.
+    const result = deserialize(await res.text()) as { type: string; data?: { error?: string } }
+    if (result.type === 'success') {
       await invalidateAll()
       csToast.success('저장됐습니다.')
     } else {
-      csToast.error('저장에 실패했습니다.')
+      csToast.error(result.data?.error ?? '저장에 실패했습니다.')
     }
   }
 </script>

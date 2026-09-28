@@ -1,5 +1,6 @@
 <script lang="ts">
   import { goto, replaceState } from '$app/navigation'
+  import { deserialize } from '$app/forms'
   import { page } from '$app/state'
   import CmsPagination from '$lib/components/cms/CmsPagination.svelte'
   import SubscriptionDetailPanel from '$lib/components/cms/subscription/SubscriptionDetailPanel.svelte'
@@ -54,10 +55,13 @@
     fd.set('id', String(id))
     fd.set('status', status)
     const res = await fetch('?/toggleStatus', { method: 'POST', body: fd })
-    if (res.ok) {
+    // OPT-SAVE-ERR-1과 동일 수정: res.ok만으로는 실제 실패 사유를 알 수 없음(SvelteKit
+    // fail()도 HTTP 200으로 내려옴) — deserialize로 ActionResult를 직접 해석한다.
+    const result = deserialize(await res.text()) as { type: string; data?: { error?: string } }
+    if (result.type === 'success') {
       void goto(window.location.href, { invalidateAll: true, noScroll: true, keepFocus: true })
     } else {
-      csToast.error('상태 변경에 실패했습니다.')
+      csToast.error(result.data?.error ?? '상태 변경에 실패했습니다.')
     }
   }
 </script>

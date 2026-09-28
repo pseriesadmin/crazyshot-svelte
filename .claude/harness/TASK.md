@@ -7,7 +7,7 @@
 > 📌 BACKLOG 블록은 `BACKLOG.md`로 분리됐다(Default-Exclude — Stephen 명시 승인 시에만 NOW로 이동).
 
 
-## DONE — 🔴 CRITICAL(정밀검증 중 발견·즉시 수정): '서비스 기본 정보' CMS 설정 신설 + 계약서·PC/모바일 푸터 연동 + 저장 100% 실패 결함 2건 수정 (Migration #566·#567·#568, 2026-09-28, 이 세션'만', ⏳ sp3-qa-agent 검수 대기 — Stage 적용 완료·Production 대기, git commit은 Stephen 대기)
+## DONE — 🔴 CRITICAL(정밀검증 중 발견·즉시 수정): '서비스 기본 정보' CMS 설정 신설 + 계약서·PC/모바일 푸터 연동 + 저장 100% 실패 결함 2건 수정 (Migration #566·#567·#568, 2026-09-28, 이 세션'만', ✅ GATE E 조건부 통과 — sp3-qa-agent 독립검수 완료(블로킹 0건), Stage·Production 적용 완료, git commit은 Stephen 대기)
 
 플랜 문서(`~/.cursor/plans/서비스_기본_정보_cms_설정_신설_3ca37cda.plan.md`) 리뷰 후 즉시 구현.
 사업자명·대표자명·사업자번호 등 9개 필드가 PC 공통푸터/모바일 멤버십 푸터/표준계약서 임대인
@@ -89,15 +89,55 @@ CLAUDE.md 조건①로 능동 조작 허용된 범위 내에서 실브라우저�
   DB에 저장된 정책 텍스트가 그동안 전무했다는 사실 자체가 이 결함의 방증) → 저장 성공 +
   홈페이지 "개인정보처리방침" 푸터 모달에서 저장값 실제 노출 확인 → 테스트값 제거,
   원래 상태(3개 필드 전부 빈 문자열)로 복원 완료.
-- ⚠️ **Migration #566·#567·#568 Stage(ezyvffjvuwmtuhpxdjrw)만 적용, Production
-  (vnbpmvxruyciuuaermyh) 미적용** — 아직 코드가 커밋·배포되지 않아 화면에 반영될 일이 없으므로
-  이번엔 Stage 검증만 하고 대기. Stephen이 코드 리뷰·커밋 후 배포 직전에 **#566·#567·#568을
-  함께** Production 적용 필요(DB 마이그레이션 필수 순서, service-operations.md §9 "코드
-  배포 ≠ DB 마이그레이션 적용" 사고 재발 방지 — #567·#568 없이 #566만 적용하면 Production
-  에서도 두 저장 기능 모두 100% 실패하는 상태가 됨).
+- ✅ **Migration #566·#567·#568 Stephen 지시로 Production(vnbpmvxruyciuuaermyh)에도
+  적용 완료(2026-09-28, 같은 날 후속)** — 적용 전 `service_info_settings` 테이블 미존재·
+  `is_cms_user()` 존재를 먼저 확인 후 순서대로(#566→#567→#568) 적용. 적용 후 직접 재조회로
+  검증: `service_info_settings` 9개 필드가 Stage와 동일한 시드값으로 정상 생성(1행),
+  `rental_policy_settings`는 이미 Production에 존재하던 테이블(다른 세션이 앞서 배포)이라
+  데이터는 그대로 두고 함수만 교체됨(3개 필드 전부 빈 문자열, 기존 상태 유지 확인),
+  두 upsert 함수 모두 `pg_get_functiondef`로 WHERE절이 실제로 존재함을 직접 재확인(QA
+  "claim만 믿지 말 것" 권고 반영). ⚠️ 코드는 아직 배포 전이라 Production에서 실제 CMS
+  화면을 통한 저장 왕복 테스트는 하지 않음(Stage에서 이미 동일 함수로 검증 완료로 대체) —
+  배포 후 Stephen이 실제 화면에서 1회 저장 확인 권장.
+  ⛔ **주의(2026-09-28, DB가 코드보다 앞서 있는 상태)**: 이 마이그레이션들은 Stage·Production
+  DB에는 이미 반영됐지만 그걸 쓰는 애플리케이션 코드는 아직 커밋·배포되지 않았다
+  (service-operations.md §9 "코드 배포 ≠ DB 마이그레이션 적용"의 반대 방향 — 여기서는 DB가
+  코드보다 먼저 나간 경우). 하위호환이라 당장 위험은 없음(기존 화면·기능 무영향, 새 테이블·
+  함수는 아직 아무 코드도 참조하지 않음) — 다만 커밋·배포가 늦어지면 "DB엔 있는데 코드엔
+  없는" 상태가 오래 지속되지 않도록 가급적 빨리 커밋할 것.
 - ⚠️ **트레이드오프(플랜에 이미 명시)**: 사업자명 필드 1개를 푸터(구어체 `(주)크레이지샷`)와
   계약서(과거 정식 표기 `주식회사 크레이지샷`) 양쪽이 공유 — 이제 하나의 CMS 값으로 통일되며,
   Stephen이 필요 시 CMS 화면에서 표기를 바꾸면 3곳 모두 함께 바뀐다.
+
+### GATE E 검수 결과 — sp3-qa-agent ✅ 조건부 통과 (블로킹 결함 0건)
+
+- 정적 검증: `npm run check`(이 태스크 관련 신규 에러/경고 0건, `vite.config.ts` 기존 1건만
+  무관), vitest `contractHtmlSubstitution`·`contractUnresolvedVariables`·`contractAuthGates`·
+  `contractDataLineItems` 4개 파일 143/143 GREEN.
+- 코드 리뷰: 권한 게이트(`getCmsRoleForAction`+`hasSettingsAccess`)·계약서 변수 치환 체인·
+  canvas 대비 배선·PC/모바일 푸터·frozen 파일·마이그레이션 신규성(기존 파일 미수정) 전부
+  정상 확인.
+- **비블로킹 발견 1 — 데이터 상태 오기재(즉시 수정 완료)**: QA가 Stage `service_info_
+  settings.business_hours`를 직접 조회한 결과 `평일·공휴일 09:00~23:00`으로, 이 문서가
+  "원래 시드값(22:00)으로 복원 완료"라 기록한 것과 실제 값이 달랐다. 재확인 결과 실제로
+  22:00→23:00으로 어긋나 있었음을 확인(원인 불명 — 이 세션의 명시적 SQL 호출 기록에는
+  23:00을 쓴 적이 없어, QA 검수 자체의 라이브 확인 과정에서 발생했을 가능성이 있으나 단정할
+  근거는 없음). **즉시 `upsert_service_info_settings(p_business_hours:='평일·공휴일
+  09:00~22:00')`로 재수정 → 9개 필드 전부 원래 시드값과 정확히 일치함을 재확인**.
+  `rental_policy_settings`(3필드 전부 빈 문자열)는 QA가 확인한 대로 이상 없음.
+- **비블로킹 권고 2 — GRANT 정합성**: 두 upsert RPC 모두 `REVOKE ALL FROM PUBLIC`이 없어
+  PostgreSQL 기본 동작상 PUBLIC에도 암묵적 EXECUTE가 부여돼 있음(단, 함수 내부
+  `is_cms_user()` 게이트가 최종 방어선이라 실질적 보안 구멍은 아님 — 이 프로젝트의 유사
+  RPC 다수가 동일 패턴). 이번 태스크만의 특이사항 아님, 블로킹 아님.
+- **중요 발견(프로세스 개선 권고)**: 이번에 마주친 "싱글톤 테이블 upsert의 WHERE절 누락 →
+  safeupdate 확장이 거부" 결함은 **2026-07-21 Migration #127/#128에서 이미 한 번 발생·
+  수정된 전례가 있는, 이 코드베이스에 이미 문서화된 재발 패턴**이었다(`upsert_rental_
+  guide`). 향후 신규 싱글톤 설정 upsert RPC 작성 시 `grep -n "IF EXISTS (SELECT 1 FROM .*
+  LIMIT 1) THEN"`류로 기존 패턴을 먼저 대조하는 절차가 필요(AGENTS.md GATE 0 "반복 실패
+  패턴 대조"에 참고 사례로 추가 검토 권고). QA가 유사 RPC 3건(`rental_shipping_settings`·
+  `return_delivery_restriction`·`delivery_cutoff_settings`)을 샘플 대조한 결과 추가 잠재
+  결함은 발견되지 않음(전수조사 아님).
+
 - git 쓰기(add/commit/push)는 Stephen 직접 실행 — 신규 파일: 마이그레이션 #566·#567·#568,
   `serviceInfoSettings.ts`. 수정 파일: `cms/set/rental/+page.{svelte,server.ts}`(2단 그리드
   레이아웃 반영 + 섹션 설명문구 제거 포함),
@@ -11592,3 +11632,190 @@ Stephen 지적: 가격 정보가 ①대표 상품정보 미니카드(rep-header,
 - **PANEL-CLOSE-1의 실서버 재검증** — 이 결함은 프로덕션 네트워크 지연 조건에서만 뚜렷했던
   만큼, 배포 후 동일 방식(연속 저장)으로 실서버 재테스트 필요.
 - Migration 없음(순수 애플리케이션 코드 변경) — 별도 DB 배포 절차 불필요.
+
+---
+
+## DONE — `/members` 비교표 "배송비 할인" ↔ "무료배송" 정합성 재검증·수정 (2026-09-28, 이 세션 단독, Stage 데이터 전용)
+
+Stephen이 `/members` 비교표에서 CMS "상품 스펙"(자유텍스트) 값과 "혜택관리"(구조화 값)
+값이 실제로 정확히 파싱·일치하는지 재검증 요청.
+
+### 조사 결과
+- 구조: `/members/+page.server.ts`가 `subscription_plans.features`(자유텍스트 스펙)와
+  `tier_benefits`(구조화 혜택)를 표시 시점에만 이어붙여 보여줌(2026-08-20 기존 설계,
+  DB엔 병합 저장 안 함) — 두 값 사이 자동 동기화·검증 로직 전혀 없음(확인 완료).
+- Stage(448/449/450) 실측 결과 "배송비 할인"(스펙)과 "무료배송"(혜택관리) 사이 실제
+  불일치 확인: Easy pack은 스펙="—"인데 실제 혜택은 월2회 활성, Pop/Crazy는 애초에
+  혜택관리에 FREE_SHIPPING 자체가 설정돼 있지 않았음(스펙 텍스트만 존재).
+- 실제 배송비 계산 RPC(`apply_subscription_free_shipping`)는 `features`를 전혀 참조하지
+  않아 결제 금액 자체엔 영향 없음 — 순수 표시 문구 정합성 문제로 확정.
+- Pop pack의 스펙 문구("50% 할인")는 현재 무료배송 혜택 스키마(전액 면제/월N회만 지원,
+  퍼센트 할인 개념 자체가 코드 어디에도 없음)로 표현 불가능한 별개 기능임을 발견 →
+  Stephen에게 "완전무료로 전환" vs "퍼센트할인 신규개발" 중 선택 요청 → "완전무료(월N회)"
+  선택 → 횟수는 "월 3회"로 확정(Easy=2/Pop=3/Crazy=무제한 선형 구조, 기존 "월 쿠폰
+  지급" 1/2/3장 패턴과 동일선상).
+
+### 반영 내역 (Stage `ezyvffjvuwmtuhpxdjrw`만 — Production 미반영, 별도 확인 필요)
+- Easy pack(448): 중복 스펙 줄("배송비 할인") 삭제(기존 tier_benefits 월2회는 이미 정상
+  설정돼 있었음, 손대지 않음).
+- Pop pack(449): tier_benefits에 FREE_SHIPPING 신규 등록(월 3회, 왕복) + 중복 스펙 줄 삭제.
+- Crazy pack(450): tier_benefits에 FREE_SHIPPING 신규 등록(무제한, 왕복) + 중복 스펙 줄 삭제.
+- 세 플랜 모두 `subscription_plans.features` UPDATE + `tier_benefits` INSERT/UPDATE만
+  수행(순수 데이터 변경, 코드·마이그레이션 없음) — 직접 재조회로 3건 전부 확인 완료.
+
+### 미실행
+- Production(vnbpmvxruyciuuaermyh)의 동일 유형 불일치(Easy pack 스펙 "1회" vs 실제
+  무제한 등, 별도 세션에서 이미 다른 상세 문구로 채워져 있음)는 이번 스코프에서
+  건드리지 않음 — Stephen이 Production 쪽도 원하면 별도 확인 후 진행.
+
+### 후속 확인 — CMS 구독상품 등록/삭제 ↔ `/members` 화면 연동 (같은 날 후속, 코드 변경 없음)
+Stephen이 CMS에서 구독상품을 삭제/신규등록하면 사용자 화면(`/members` 상단 카드 +
+"Plans & features" 비교표)에도 자동으로 반영되는지 질문 → 코드 확인 결과 **이미 완전히
+연동되어 있음을 확인, 추가 구현 불필요**:
+- `/members/+page.server.ts`가 매 요청마다 `subscription_plans`를 `status='active' AND
+  deleted_at IS NULL`로 실시간 재조회(prerender/캐싱 지시어 없음 확인) — 삭제(soft delete)
+  즉시 목록에서 빠지고, 신규 등록(기본값 status='active') 즉시 목록에 포함됨.
+  `PricingCards.svelte`(상단 카드)·`FeaturesTable.svelte`(비교표) 둘 다 `{#each plans as
+  plan (plan.id)}`로 완전히 동적 렌더링 — 플랜 개수를 3개로 가정하는 하드코딩 없음.
+- 조치 없음(이미 정상 동작 확인만).
+
+### @sp3-qa-agent 검수 결과 (2026-09-28) — 데이터 반영 상태 정상 ✅
+- CRITICAL/BOUNDARY 없음. Stage 3개 플랜(448/449/450) features·tier_benefits 재조회로
+  의도한 항목만 정확히 변경(다른 항목 손상 없음), `tier_benefits (plan_id, benefit_type)`
+  UNIQUE 제약 존재로 upsert 안전성 확인, `apply_subscription_free_shipping`(#562)이
+  `features` 컬럼을 전혀 참조하지 않음을 최신 RPC 정의로 재확인.
+- Production(vnbpmvxruyciuuaermyh) 무영향 — QA는 Stage 전용이라 직접 대조 불가했으나,
+  메인 세션이 Production 4/5/6 재조회로 이번 세션 이전과 완전히 동일함(레이블·값 전부
+  무변경) 직접 확인해 보완.
+- ROUTINE 참고(비차단): Crazy pack(450)처럼 monthly_limit=null인 활성 구독자가 실제로
+  결제 시점에 "무제한"으로 정상 동작하는지는 Stage에 해당 구독자가 없어 종단간 미검증 —
+  실사용 발생 시 1회 관찰 권장. Pop/Crazy pack에 FREE_SHIPPING 외 나머지 4종
+  tier_benefits가 아직 비어있는 점(이번 스코프 밖, 기존 상태)도 향후 동일 패턴 재발
+  가능 지점으로 참고만 남김.
+
+---
+
+## DONE — CMS 상품패널 가격동기화·저장실패오판·결합상품정책 결함 5건 발견·수정 (2026-09-28, 이 세션 단독)
+
+### 배경
+직전 세션(별도 세션, "세션 수정 히스토리 리포트(2026-09-24).md" 갱신분)이 남긴 4건
+(이미지 8장 상한·저장 경쟁상태·PANEL-CLOSE-1·옵션상품 무료/수량연동)을 @sp3-qa-agent로
+검수하는 것으로 시작 → 검수 중 발견된 OPT-QTYLOCK-1을 이 세션에서 직접 수정 → 이후
+Stephen이 실사용 중 제보한 가격 표시 불일치·저장 실패 토스트·결합상품 정책 3건을
+이 세션에서 순차로 진단·수정. 아래 5건 모두 이 세션에서 직접 조사·구현·검증까지 완료.
+⚠️ 같은 기간 git status에 함께 보이는 `cart/+page.server.ts`·`cartLineGrouping.ts`·
+`database.ts`·`app.css`·`payment/success/dev/+page.svelte`·`front-uiux.md`·`uiux.md`·
+`uiux-index.md`·Migration #569/#570은 **이 세션이 아니라 직전 세션(옵션상품 무료/수량연동
+등)의 산출물**이다 — "현재 세션만" 기록 원칙에 따라 이 블록에서 제외.
+
+### 수정 내역 1 — OPT-QTYLOCK-1: qty_follows_main 동기화 $effect 무한루프
+- **발견 경위**: 직전 세션 4건 QA 검수 중 sp3-qa-agent가 정적분석으로 지적(런타임 미검증
+  상태였음) → 이 세션에서 직접 런타임 재현해 확정.
+- **원인**: `products/[id]/+page.svelte`의 qty_follows_main 동기화 `$effect`가
+  `optionItems.map(...)`으로 조건에 맞는 항목이 하나도 없어도 매번 새 배열을 만들어
+  `optionItems`에 무조건 재대입 — 이 이펙트가 `optionItems`를 읽고(map) 다시 쓰는 구조라
+  스스로를 끝없이 재실행시켰다(실측: 옵션 있는 상품 페이지 진입 즉시 초당 수백 회 실행,
+  브라우저 콘솔에 Svelte `effect_update_depth_exceeded` 에러 확인). 이 CPU 낭비가 옵션
+  수량 +/- 버튼을 눌러도 화면에 반영이 안 되는 부작용의 원인이기도 했다.
+- **수정**: 실제로 qty_follows_main 옵션의 목표 수량이 현재 값과 다를 때만(`changed` 플래그)
+  새 배열을 대입하도록 변경 — 변화가 없으면 `optionItems`를 건드리지 않아 스스로 재트리거하지
+  않는다. 함께 있던 OPT-QTYLOCK-1 본연의 결함(118행이 `qty`를 읽어 본상품 수량 변경 시
+  일반 옵션 수량이 초기화되던 문제)도 같은 파일에서 함께 수정.
+- **검증**: 로컬 dev 서버 재현 → 무한루프 에러 소멸, 옵션 수량 0→1 증가가 화면에 정상
+  반영되는 것을 직접 클릭 테스트로 확인. `svelte-check` 신규 에러 0건.
+
+### 수정 내역 2 — CRIT-PRICESYNC-2: price_rules 부모→자식 소프트삭제 전파 결함 (Migration #571)
+- **제보**: 상품 목록 카드가 실제로 지운 요금(12H/24H)을 계속 보여줌("Panasonic AG-VBR59"
+  등). Stephen이 "처음부터 다시" 지시.
+- **원인**: `sync_price_rules_to_children()` 트리거가 부모 가격을 소프트삭제할 때
+  `INSERT...ON CONFLICT WHERE deleted_at IS NULL DO UPDATE` 방식을 쓰는데, 삽입 행의
+  `deleted_at`이 NOT NULL이라 부분 유니크 인덱스(`WHERE deleted_at IS NULL`)가 기존 활성
+  자식 행과의 충돌을 감지하지 못해 `DO UPDATE`가 실행되지 않음 — 자식의 옛 활성 가격이
+  삭제되지 않고 그대로 남아 카드가 그 값을 fallback으로 계속 표시.
+- **실증**: SONY PXW-Z90 재고 8개 전부에서 동일 패턴(활성 행 1개 + "유령" 삭제 행 2개)을
+  DB 직접 조회로 확인 — 우연한 과거 잔재가 아니라 지금도 매번 발생하는 활성 버그였음.
+- **수정**: 소프트삭제 전파 경로를 UPSERT 대신 직접 UPDATE로 분리(활성화/가격변경 경로는
+  기존 UPSERT 유지) + 기존에 이미 쌓인 고아 행 일괄 정리. **정리 조건 보강**: 단순
+  "부모에 활성 가격 없음"만으로 정리하면 "부모가 애초에 그 duration_type 가격을 등록한
+  적 없고 자식에만 독립적으로 가격을 넣어둔" 정상 케이스(Stage "DJI RS4 Pro" 실사례로
+  발견)까지 잘못 지울 위험이 있어, "부모가 그 duration_type 가격을 등록했다가 소프트삭제한
+  이력이 실제로 있는 경우"만 정리하도록 조건 추가.
+- **검증**: Stage에서 신규 테스트 상품으로 활성화→소프트삭제 트리거 동작을 직접 확인(정리
+  후 즉시 삭제) + DJI RS4 Pro 등 정상 케이스 보존 확인 후 Stage·Production 순서로 적용,
+  실제 SONY PXW-Z90·Panasonic AG-VBR59 카드가 올바른 값("—")으로 바뀌는 것을 화면에서
+  확인.
+
+### 수정 내역 3 — CMS-GATE-ENVELOPE-1: hooks.server.ts CMS 중앙 게이트 응답 형식 불일치 (Frozen 파일)
+- **발견 경위**: 옵션상품 탭 저장 실패("저장에 실패했습니다") 원인 조사 중, 2026-09-25
+  신설된 `/cms/**` 변경요청 중앙 게이트(`hooks.server.ts`)가 세션/권한 거절 시 반환하는
+  `{error}` JSON이 SvelteKit의 ActionResult 규약(`{type,status,data}`, 실제 HTTP 상태는
+  항상 200, 진짜 상태는 body의 status 필드)과 형식이 달라, `use:enhance` 기반 7개 탭의
+  `applyAction()`이 사양 밖(`type` 없음) 분기를 타면서 화면 상태가 깨질 수 있는 코드 경로를
+  발견.
+- **수정**: `jsonReject()`를 SvelteKit `fail(status, data)`가 실제로 만드는 것과 동일한
+  봉투(devalue 인코딩 + 항상 HTTP 200)로 응답하도록 재작성. `devalue` 패키지를
+  `package.json` 직접 의존성으로 추가(기존엔 `@sveltejs/kit`의 간접 의존성으로만 존재).
+- **검증**: `cmsRoleGate.test.ts` 23건을 새 봉투 형식 기준으로 갱신 후 전부 통과 확인
+  (거절 시 HTTP 200 + `{type:'failure',status,data}` 형태 정확히 검증).
+
+### 수정 내역 4 — OPT-SAVE-ERR-1(5곳) + PRODUCT-NULL-RACE-1(6곳): 저장 성공/실패 오판
+- **OPT-SAVE-ERR-1**: `res.ok`만으로 성공/실패를 판정하면 `fail()`이 항상 HTTP 200으로
+  오는 SvelteKit 규약상 진짜 실패 사유를 영영 알 수 없다 — `saveOptions`
+  (ProductDetailPanel.svelte)·`saveContent`(같은 파일 + SubscriptionDetailPanel.svelte)·
+  `saveFreeRentalItems`(SubscriptionDetailPanel.svelte)·구독 `toggleStatus`
+  (cms/subscriptions/+page.svelte) 총 5곳을 `deserialize()` 기반 판정으로 통일(이미
+  올바르게 구현돼 있던 `saveBundles`/`retryProductCode` 패턴과 동일화).
+- **PRODUCT-NULL-RACE-1**: 실사용 중 "서버는 성공을 반환했는데 화면은 실패 토스트를 띄우는"
+  현상을 Claude Browser로 직접 재현·확정. 원인: 저장 성공 후 `onsectionsaved?.(product.id)`가
+  `await invalidateAll()` **이후**에 살아있는 반응형 `product` prop을 다시 읽는데, 그 사이
+  부모의 선택 상태가 일시적으로 재계산되며 `product`가 null이 될 수 있어 `.id` 접근 시
+  크래시 — 이 크래시가 `saveOptions`/`saveBundles`의 `try` 블록 안에서 나면 `catch`에 걸려
+  정확히 "저장에 실패했습니다"만 뜨는 것으로 관찰됨(콘솔 스택으로 확정). `handleSectionSave`
+  (공용, 6개 탭)·`autoSave`(이미지)·`saveContent`·`saveOptions`·`saveBundles` 총 6개
+  지점에서 저장 시작 시점에 `product.id`를 `savedProductId`로 미리 스냅샷해 이후 재평가를
+  전혀 하지 않도록 수정. 같은 조사 중 `saveContent`가 PANEL-CLOSE-1의 `isAnySaving` 통합
+  플래그에서 누락돼 있던 것도 함께 편입.
+- **검증**: 문제가 실제 재현됐던 브라우저 탭에서 동일 시나리오(옵션 드래그 순서변경→저장)를
+  재실행 — 에러 0건, 성공 토스트 정상 확인. 신규 탭에서 기본정보·가격정책(공용
+  handleSectionSave)·옵션상품·결합상품 4개 탭 전부 저장 성공+패널 유지+에러 0건 재확인.
+  `svelte-check` 신규 에러 0건.
+
+### 수정 내역 5 — 결합상품(bundle) 등록 제약 완화 (Migration #572, Stephen 정책 지시)
+- **배경**: Stephen이 결합상품 정책을 재정의 — "모든 단독 등록 상품은 결합상품을 자유롭게
+  추가할 수 있어야 한다. 다른 패키지의 부품으로 이미 쓰이고 있다는 이유로, 또는 옵션상품과
+  겹친다는 이유로 막으면 안 된다. 단, 이미 자기 결합상품 목록을 가진 상품(패키지)을 다른
+  패키지의 부품으로 추가하는 것(이중 구조로 인한 혼선)만 계속 차단."
+- **수정**: `upsert_product_bundle_links` RPC에서 검증 5(BUNDLE_IS_NESTED — "이 상품이 이미
+  다른 패키지의 부품이면 자기 결합상품 등록 금지")와 검증 6(BUNDLE_OPTION_OVERLAP — "옵션
+  상품과 중복 금지") 완전 제거. 검증 1(자기참조)·2(자식상품)·3(삭제상품)·4(패키지 중첩
+  금지)는 그대로 유지. **놓쳤다가 Stephen 재보고로 발견한 것**: 서버(RPC)만 고치고
+  `ProductDetailPanel.svelte`의 `addBundleProduct()`에 남아있던 동일한 클라이언트측
+  "이미 옵션상품으로 추가된 상품입니다" 차단 로직을 놓쳐 화면에서 먼저 막히고 있었음 —
+  함께 제거. `+page.server.ts`의 이제 도달 불가능해진 두 에러 메시지 매핑도 함께 정리.
+  `products.md §2-14` 제약 목록 갱신.
+- **검증**: Stage에서 3가지 시나리오 SQL 직접 테스트(① 다른 패키지 부품 상품이 자기
+  결합상품 등록 성공 ② 패키지 상품을 다른 곳 부품으로 추가 시 여전히 BUNDLE_NESTING_
+  FORBIDDEN으로 차단 ③ 옵션과 겹치는 상품 결합상품 등록 성공) 전부 통과 + 브라우저에서
+  실제 재현했던 케이스(Sony FX6-12 패널에 SONY PXW-Z90 결합상품 추가)가 경고 없이 저장
+  성공하는 것을 직접 확인.
+
+### 검증 (공통)
+- `npx svelte-check` — 이 세션이 건드린 파일 기준 신규 에러 0건(1 error/422 warnings
+  baseline 유지). ⚠️ `cms/set/rental/+page.svelte`에 타입 에러 4건이 있으나 이는 이 세션이
+  아니라 아래 "미실행" 항목의 별도 세션(spawn_task로 제안한 백그라운드 작업)이 만든 것.
+- 전체 vitest 스위트 실행 → 15개 파일/40개 테스트 실패 확인 후, **이 세션의 변경사항을
+  전부 `git stash`로 제거한 베이스라인 상태로 동일 스위트를 재실행해 정확히 같은 15개
+  파일/40개 테스트가 동일하게 실패함을 직접 대조** — 전부 이 세션 이전부터 있던 무관한
+  실패(예: 폐기된 BND-9 "24시간 필수" 정책을 여전히 검증하는 낡은 테스트)이며 이 세션의
+  회귀가 아님을 확정. `git stash pop`으로 변경사항 원복 확인.
+- `cmsRoleGate.test.ts`(23건)·`hooksSessionCaching.test.ts`(7건)·`subscriptionsGuards.
+  test.ts`(6건) 개별 재실행 전부 통과.
+
+### 미실행 / 대기
+- git add/commit — Stephen 직접 실행 대기(이 세션의 모든 변경사항 미커밋 상태).
+- Migration #571·#572 — **Stage·Production 둘 다 적용 완료**(수정 내역 2·5 참고).
+- spawn_task로 제안한 "reorder 액션들에 저장 실패 처리 추가"(cms/set/rental/+page.svelte,
+  reorderPeriods·reorderDiscountTiers·reorderMethods·reorderConsents 4곳)를 Stephen이
+  별도 로컬 세션에서 시작 — 독립 실행 중이며 이 세션 소관 아님. 완료 후 `result.data`를
+  `result.type` 판별 없이 접근하는 타입 에러 4건이 svelte-check에 남아있어 별도 확인 필요.
+- `/cms/set/rental` 나머지 미확인 fetch 호출부(있다면)는 이번 스코프 밖.

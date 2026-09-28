@@ -1120,13 +1120,15 @@ export const actions: Actions = {
         })
 
       if (updateError) {
+        // Migration #572(2026-09-28, Stephen 지시): BUNDLE_IS_NESTED("이미 다른 패키지의
+        // 결합상품이면 이 상품에 결합상품 등록 금지")·BUNDLE_OPTION_OVERLAP("옵션상품과
+        // 중복 금지") 두 제약을 RPC에서 완전히 제거했으므로, 그 두 예외 메시지 매핑도 함께
+        // 제거한다(RPC가 더 이상 이 코드를 던지지 않으므로 죽은 분기가 됨).
         const msg = updateError.message
         if (msg.includes('BUNDLE_SELF_REF'))         return fail(400, { error: '자기 자신을 결합상품으로 추가할 수 없습니다.' })
         if (msg.includes('BUNDLE_CHILD_PRODUCT'))    return fail(400, { error: '재고 단위 상품은 결합상품으로 추가할 수 없습니다.' })
         if (msg.includes('BUNDLE_DELETED_PRODUCT'))  return fail(400, { error: '삭제된 상품은 결합상품으로 추가할 수 없습니다.' })
         if (msg.includes('BUNDLE_NESTING_FORBIDDEN')) return fail(400, { error: '이미 결합상품 목록을 가진 상품은 결합상품으로 추가할 수 없습니다.' })
-        if (msg.includes('BUNDLE_IS_NESTED'))        return fail(400, { error: '이 상품은 다른 패키지의 결합상품입니다. 결합상품 탭을 사용할 수 없습니다.' })
-        if (msg.includes('BUNDLE_OPTION_OVERLAP'))   return fail(400, { error: '이미 옵션상품으로 등록된 상품은 결합상품으로 추가할 수 없습니다.' })
         return fail(500, { error: `결합상품 수정에 실패했습니다: ${msg}` })
       }
     }

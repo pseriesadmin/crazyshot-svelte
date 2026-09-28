@@ -104,16 +104,29 @@
     return links.map((link) => ({
       id: link.option_product_id,
       label: link.option_product_name,
-      price: link.price_24h ?? 0,
-      price12h: link.price_12h ?? null,
+      // OPT-FREE-1: 무료 제공(is_free) 옵션은 화면에 0원으로 표시하고, 실제 제출 시에도
+      // unit_price=0으로 보낸다(서버 set_reservation_options가 이를 다시 한번 강제하므로
+      // 이중 방어) — CMS ProductDetailPanel.svelte의 동일 토글과 짝을 이루는 고객화면 반영.
+      price: link.is_free ? 0 : (link.price_24h ?? 0),
+      price12h: link.is_free ? 0 : (link.price_12h ?? null),
       // [C-1] 필수 옵션 기본 수량 1 — 단, 가용재고가 0이면 무조건 1로 세팅하지 않고 0으로 시작
       // (2026-09-03, QA 지적 — 재고 0인 필수옵션도 예약이 그대로 제출되던 결함 수정).
       // handleReserve 제출 검증이 "필수 옵션 qty===0"이면 별도 안내 후 차단하므로, 재고가
       // 없는 필수 옵션은 이 경로로 자연스럽게 제출이 막힌다.
+      // OPT-QTYLOCK-1(2026-09-28 수정): 여기서 qty(본상품 수량) 상태를 절대 읽지 않는다 —
+      // buildOptionItems는 data.optionLinks 변경 시 재호출되는 아래 $effect 안에서 실행되는데,
+      // 여기서 qty를 읽으면 Svelte 5가 그 이펙트를 qty에도 의존하게 만들어 "본상품 수량을
+      // 바꿀 때마다 모든 옵션이 data.optionLinks 기준으로 통째로 재생성되며, 일반(필수 아님·
+      // 수량연동 아님) 옵션이 사용자가 늘려둔 수량과 무관하게 조용히 0으로 초기화"되는 결함을
+      // 낳았다(필수+일반 옵션이 함께 있는 실제 운영 상품으로 재현 확인됨). qty_follows_main
+      // 옵션의 실제 수량 동기화는 아래 두 번째 $effect(마운트 시에도 1회 실행되므로 초기값도
+      // 거기서 보정됨) 전용으로 맡기고, 여기서는 qty_follows_main을 이 조건에서 제외한다.
       qty: link.is_required ? Math.min(1, stockCapFor(link.option_product_id)) : 0,
       is_required: link.is_required,
       min_select_required: link.min_select_required,
       delivery_rental_disabled: link.delivery_rental_disabled,
+      is_free: link.is_free,
+      qty_follows_main: link.qty_follows_main,
       image_url: link.image_url,
     }));
   }
@@ -121,6 +134,32 @@
   // 상품 상세는 같은 컴포넌트가 SPA 네비게이션으로 재사용됨 — data.optionLinks 변경 시 재동기화 필수
   $effect(() => {
     optionItems = buildOptionItems(data.optionLinks);
+  });
+  // OPT-QTYLOCK-1: 본상품 수량(qty)이 바뀔 때마다 qty_follows_main 옵션의 수량을 그대로
+  // 따라가게 동기화 — 스테퍼가 비활성화돼 있어 이 옵션들의 수량을 바꿀 수 있는 유일한 경로.
+  //
+  // ⛔ 무한루프 결함(2026-09-28 발견·수정, OPT-QTYLOCK-1과 같은 코드에서 함께 발견됨):
+  // 이전 코드는 `optionItems.map(...)`으로 무조건 새 배열을 만들어 매번 `optionItems`에
+  // 재대입했다. `.map()`은 내용이 하나도 안 바뀌어도 항상 새 배열 참조를 반환하므로, 이
+  // 이펙트가 `optionItems`를 읽고(map 호출) 또 그 결과를 `optionItems`에 다시 쓰는 매 실행마다
+  // "변경"으로 감지되어 스스로를 끝없이 재실행시켰다(실측: 페이지 진입 직후 초당 수백 회
+  // 무한 실행 — qty_follows_main 옵션이 단 하나도 없는 상품에서도 발생). 이 CPU 낭비가 옵션
+  // 수량 +/- 버튼 클릭 시 화면이 갱신되지 않는 것처럼 보이는 원인이기도 했다(렌더링이 이
+  // 무한루프에 계속 밀려 사용자 클릭으로 인한 정상 업데이트가 화면에 안착하지 못함).
+  // 수정: 실제로 qty_follows_main 옵션의 목표 수량이 현재 값과 달라졌을 때만 새 배열을
+  // 만들어 대입한다(changed 플래그) — 아무 변화가 없으면 optionItems를 건드리지 않아
+  // 이 이펙트가 스스로를 재트리거하지 않는다.
+  $effect(() => {
+    const mainQty = qty;
+    let changed = false;
+    const next = optionItems.map((o) => {
+      if (!o.qty_follows_main) return o;
+      const target = Math.min(mainQty, stockCapFor(o.id));
+      if (o.qty === target) return o;
+      changed = true;
+      return { ...o, qty: target };
+    });
+    if (changed) optionItems = next;
   });
 
   // 결합상품 (Phase 1 — name only, no click navigation)
@@ -795,8 +834,12 @@
                     </div>
                   </div>
                 </div>
-                <div class="qty-control small">
-                  <button onclick={() => { opt.qty = Math.max(0, opt.qty - 1); }} class="qty-btn" aria-label="옵션 수량 감소">
+                <div class="qty-control small" class:qty-control--locked={opt.qty_follows_main}>
+                  <button
+                    onclick={() => { opt.qty = Math.max(0, opt.qty - 1); }}
+                    disabled={opt.qty_follows_main}
+                    class="qty-btn" aria-label="옵션 수량 감소"
+                  >
                     <svg width="12" height="2" viewBox="0 0 14 2" fill="none">
                       <path d="M1 1H13" stroke="var(--cs-text-dark)" stroke-width="2" stroke-linecap="round"/>
                     </svg>
@@ -805,6 +848,7 @@
                     <input
                       type="number"
                       bind:value={opt.qty}
+                      disabled={opt.qty_follows_main}
                       onchange={() => {
                         const cap = stockCapFor(opt.id);
                         if (opt.qty > cap) {
@@ -817,10 +861,14 @@
                       min="0"
                       max={stockCapFor(opt.id)}
                       class="qty-input"
-                      aria-label="옵션 수량"
+                      aria-label={opt.qty_follows_main ? '옵션 수량 (본상품 수량과 동일, 조절 불가)' : '옵션 수량'}
                     />
                   </div>
-                  <button onclick={() => incrementOptionQty(opt)} disabled={opt.qty >= stockCapFor(opt.id)} class="qty-btn" aria-label="옵션 수량 증가">
+                  <button
+                    onclick={() => incrementOptionQty(opt)}
+                    disabled={opt.qty_follows_main || opt.qty >= stockCapFor(opt.id)}
+                    class="qty-btn" aria-label="옵션 수량 증가"
+                  >
                     <svg width="12" height="12" viewBox="0 0 14 14" fill="none">
                       <path d="M1 7H13M7 1V13" stroke="var(--cs-text-dark)" stroke-width="2" stroke-linecap="round"/>
                     </svg>
@@ -1677,6 +1725,10 @@
     .option-price-unit { font-size: 11px; }
   }
   .qty-control.small { gap: 12px; }
+  /* OPT-QTYLOCK-1: 수량이 본상품 수량에 잠긴 옵션 — 조절 불가 상태를 시각적으로 표시 */
+  .qty-control--locked { opacity: 0.5; }
+  .qty-control--locked .qty-btn { cursor: not-allowed; }
+  .qty-control--locked .qty-input { cursor: not-allowed; }
 
   /* ── Tabs */
   .tabs-section {
