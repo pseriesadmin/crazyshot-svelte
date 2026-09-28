@@ -212,7 +212,7 @@ border: 1px solid rgba(255,255,255,0.6);
 --layout-pc-max:      1240px   /* 콘텐츠 최대폭 */
 --layout-pc-pad:      40px     /* PC 좌우 패딩 */
 --layout-tab-pad:     32px     /* 태블릿 (≤1024px) */
---layout-mob-pad:     20px     /* 모바일 (≤640px) */
+--layout-mob-pad:     25px     /* 모바일 (≤640px) — 2026-09-25 20→25 통일 */
 --layout-section-gap: 50px     /* 메인 섹션 간격 */
 --layout-header-h:    100px    /* 헤더 고정 높이 */
 --layout-footer-h:    80px     /* 하단 고정 바 높이 */
