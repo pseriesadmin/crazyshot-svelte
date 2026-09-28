@@ -10,6 +10,7 @@
   import ChevronIcon from '$lib/components/common/ChevronIcon.svelte'
   import type { PageData, ActionData } from './$types'
   import type { RentalPeriodOption, RentalMethodOption, PickupPoint, RentalConsentItem, RentalShippingSettings, PublicHolidayRow, DeliveryFeeDiscountTier } from './+page.server'
+  import type { ServiceInfoSettings } from '$lib/services/serviceInfoSettings'
 
   interface Props {
     data: PageData
@@ -204,6 +205,22 @@
     termsText   = data.policySettings?.terms_text   ?? ''
     refundText  = data.policySettings?.refund_text  ?? ''
   })
+
+  // ─── 서비스 기본 정보(사업자 정보, Migration #566) ───
+  // PC 공통푸터·모바일 멤버십 푸터·표준계약서 임대인 정보가 이 9개 필드를 단일 소스로 참조한다.
+  const EMPTY_SERVICE_INFO: ServiceInfoSettings = {
+    company_name: '', ceo_name: '', biz_address: '', biz_reg_no: '', mail_order_biz_no: '',
+    privacy_officer: '', ceo_email: '', cs_phone: '', business_hours: '',
+  }
+  let serviceInfo = $state<ServiceInfoSettings>({ ...EMPTY_SERVICE_INFO, ...data.serviceInfo })
+  let serviceInfoLoading = $state(false)
+  let serviceInfoIsDirty = $derived.by(() => {
+    const orig = { ...EMPTY_SERVICE_INFO, ...data.serviceInfo }
+    return (Object.keys(EMPTY_SERVICE_INFO) as (keyof ServiceInfoSettings)[])
+      .some((key) => serviceInfo[key] !== orig[key])
+  })
+
+  $effect(() => { serviceInfo = { ...EMPTY_SERVICE_INFO, ...data.serviceInfo } })
 
   // ─── 필수 동의문 ───
   let consents = $state<RentalConsentItem[]>(data.consents)
@@ -1541,6 +1558,90 @@
       </div>
     </section>
 
+    <!-- ══════════════════════════════════════════
+         섹션 5: 서비스 기본 정보 (Migration #566)
+    ══════════════════════════════════════════ -->
+    <section class="setting-section">
+      <div class="section-head">
+        <h2 class="section-title">서비스 기본 정보</h2>
+      </div>
+
+      <form
+        method="POST"
+        action="?/saveServiceInfo"
+        use:enhance={() => {
+          serviceInfoLoading = true
+          return async ({ result, update }) => {
+            serviceInfoLoading = false
+            if (result.type === 'success') {
+              csToast.success('서비스 기본 정보가 저장되었습니다.')
+              await update({ reset: false })
+            } else if (result.type === 'failure') {
+              csToast.error((result.data as { error?: string })?.error ?? '저장에 실패했습니다.')
+            }
+          }
+        }}
+      >
+        <div class="subsection">
+          <div class="subsection-head subsection-head--between">
+            <h3 class="subsection-title">사업정보</h3>
+            <button
+              type="submit"
+              class="btn-save-inline"
+              class:dirty={serviceInfoIsDirty}
+              disabled={serviceInfoLoading || !serviceInfoIsDirty}
+            >
+              {serviceInfoLoading ? '저장 중...' : '저장'}
+            </button>
+          </div>
+          <div class="service-info-grid">
+            <div class="field-row field-row--wide">
+              <label class="field-label field-label--wide" for="si-company">사업자명(상호명)</label>
+              <input id="si-company" type="text" name="company_name" class="field-input" maxlength="100" bind:value={serviceInfo.company_name} />
+            </div>
+            <div class="field-row field-row--wide">
+              <label class="field-label field-label--wide" for="si-ceo">대표자명</label>
+              <input id="si-ceo" type="text" name="ceo_name" class="field-input" maxlength="50" bind:value={serviceInfo.ceo_name} />
+            </div>
+            <div class="field-row field-row--wide">
+              <label class="field-label field-label--wide" for="si-addr">사업장 소재지</label>
+              <input id="si-addr" type="text" name="biz_address" class="field-input" maxlength="200" bind:value={serviceInfo.biz_address} />
+            </div>
+            <div class="field-row field-row--wide">
+              <label class="field-label field-label--wide" for="si-regno">사업자등록번호</label>
+              <input id="si-regno" type="text" name="biz_reg_no" class="field-input" maxlength="30" placeholder="000-00-00000" bind:value={serviceInfo.biz_reg_no} />
+            </div>
+            <div class="field-row field-row--wide">
+              <label class="field-label field-label--wide" for="si-mailorder">통신판매업신고</label>
+              <input id="si-mailorder" type="text" name="mail_order_biz_no" class="field-input" maxlength="50" bind:value={serviceInfo.mail_order_biz_no} />
+            </div>
+            <div class="field-row field-row--wide">
+              <label class="field-label field-label--wide" for="si-officer">개인정보관리책임자</label>
+              <input id="si-officer" type="text" name="privacy_officer" class="field-input" maxlength="50" bind:value={serviceInfo.privacy_officer} />
+            </div>
+            <div class="field-row field-row--wide">
+              <label class="field-label field-label--wide" for="si-email">대표 이메일</label>
+              <input id="si-email" type="email" name="ceo_email" class="field-input" maxlength="100" bind:value={serviceInfo.ceo_email} />
+            </div>
+          </div>
+        </div>
+
+        <div class="subsection">
+          <h3 class="subsection-title">안내정보</h3>
+          <div class="service-info-grid">
+            <div class="field-row field-row--wide">
+              <label class="field-label field-label--wide" for="si-csphone">고객센터 번호</label>
+              <input id="si-csphone" type="text" name="cs_phone" class="field-input" maxlength="30" placeholder="1588-0033" bind:value={serviceInfo.cs_phone} />
+            </div>
+            <div class="field-row field-row--wide">
+              <label class="field-label field-label--wide" for="si-hours">운영시간 안내</label>
+              <input id="si-hours" type="text" name="business_hours" class="field-input" maxlength="100" bind:value={serviceInfo.business_hours} />
+            </div>
+          </div>
+        </div>
+      </form>
+    </section>
+
   </div>
 </div>
 
@@ -2147,6 +2248,25 @@
     align-items: center;
     gap: 10px;
     margin-bottom: 10px;
+  }
+
+  /* '서비스 기본 정보' 필드 — 라벨이 길어(예: 통신판매업신고, 개인정보관리책임자) 지점
+     상세 폼의 80px 라벨 폭으로는 줄바꿈됨. .field-row/.field-label/.field-input 기본
+     스타일은 그대로 재사용하고 라벨 폭만 modifier로 넓힘(2026-09-28, Migration #566). */
+  .field-row--wide {
+    grid-template-columns: 140px 1fr;
+  }
+
+  /* '서비스 기본 정보' 병렬 2단 정렬(2026-09-28, Stephen 지시) — .field-row--wide 항목들을
+     좌우 2열로 배치. 항목 수가 홀수(사업정보 7개)면 마지막 항목만 1열에 단독 배치됨(정상). */
+  .service-info-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    column-gap: 32px;
+  }
+
+  .field-label--wide {
+    white-space: normal;
   }
 
   .field-label {

@@ -5,6 +5,7 @@ import { SUPABASE_SERVICE_ROLE_KEY } from '$env/static/private'
 import { PUBLIC_SUPABASE_URL } from '$env/static/public'
 import { error, redirect } from '@sveltejs/kit'
 import { recordAuditLog } from '$lib/contract-signature/auditLog'
+import { getServiceInfoSettings } from '$lib/services/serviceInfoSettings'
 import type { PageServerLoad } from './$types'
 
 export const load: PageServerLoad = async ({ params, locals, url }) => {
@@ -84,7 +85,7 @@ export const load: PageServerLoad = async ({ params, locals, url }) => {
   if (!signingRow) {
     // 목록 페이지는 서명 완료 건에만 버튼을 노출하지만, 그 사이 상태가 바뀌었을 수 있는
     // 엣지케이스 — 하드 에러 대신 화면에서 안내 문구로 처리
-    return { reservation: res, contract: null, mySignature: null, customer: null, issuerSignatures: [], shippingAddress: null, orderData: null }
+    return { reservation: res, contract: null, mySignature: null, customer: null, issuerSignatures: [], shippingAddress: null, orderData: null, serviceInfo: null }
   }
 
   const liveContract = signingRow.contracts as unknown as {
@@ -184,6 +185,10 @@ export const load: PageServerLoad = async ({ params, locals, url }) => {
     orderData = o as typeof orderData
   }
 
+  // '서비스 기본 정보'(Migration #566) — canvas 모드 substitutionMap 임대인 4개 변수 소스.
+  // /contract/[token]과 동일한 이유(html 모드는 발행 시점에 이미 치환 완료).
+  const serviceInfo = await getServiceInfoSettings(admin)
+
   return {
     reservation: res,
     contract,
@@ -196,5 +201,6 @@ export const load: PageServerLoad = async ({ params, locals, url }) => {
     issuerSignatures: isigs ?? [],
     shippingAddress,
     orderData,
+    serviceInfo,
   }
 }

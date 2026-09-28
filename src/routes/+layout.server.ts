@@ -1,4 +1,5 @@
 import type { ServerLoad } from '@sveltejs/kit'
+import { getServiceInfoSettings } from '$lib/services/serviceInfoSettings'
 
 /**
  * 루트 레이아웃 서버 로드 — 탈퇴 자동복구 통합 지점
@@ -16,8 +17,13 @@ import type { ServerLoad } from '@sveltejs/kit'
 export const load: ServerLoad = async ({ locals }) => {
   const { session } = await locals.safeGetSession()
 
+  // '서비스 기본 정보'(사업자 정보, Migration #566) — PC/모바일 공통 푸터가 사이트 전체에서
+  // 참조하는 단일 소스. 공개 RPC라 세션 유무와 무관하게 항상 조회(url 의존성이 없어
+  // SvelteKit이 클라이언트 내비게이션 시 재요청하지 않고 캐시된 값을 재사용한다).
+  const serviceInfo = await getServiceInfoSettings(locals.supabase)
+
   if (!session) {
-    return {}
+    return { serviceInfo }
   }
 
   // PK 단건 조회 — withdrawal_status만 확인 (저비용)
@@ -37,5 +43,5 @@ export const load: ServerLoad = async ({ locals }) => {
     await locals.supabase.rpc('restore_withdrawn_account')
   }
 
-  return {}
+  return { serviceInfo }
 }
