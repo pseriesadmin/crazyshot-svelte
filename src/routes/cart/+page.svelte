@@ -784,7 +784,7 @@
   type ProductRow = { id: string; name: string; category: string; brand: string | null; slug: string; image_urls: string[]; is_active: boolean; shipping_round_trip?: boolean | null; shipping_delivery?: boolean | null; shipping_return?: boolean | null; sale_only?: boolean | null; sale_price?: number | null }
   type UserCouponExt = { id: string; coupon_id: string; first_viewed_at: string | null; coupons: { id: string; code: string; type: string; discount_type: string; discount_value: number; display_name: string | null; allow_stacking: boolean; valid_until: string; validity_type: string; valid_days: number | null; max_discount_amount: number | null; allow_with_points: boolean } | null }
   type PriceRuleExt = { price12h: number | null; price24h: number | null; deposit: number | null }
-  type CartLineItemOption = { optionProductId: string | null; name: string; qty: number; unitPrice: number; unitPrice12h: number | null; imageUrl: string | null; deliveryRentalDisabled: boolean; isRequired: boolean; minSelectRequired: boolean }
+  type CartLineItemOption = { optionProductId: string | null; name: string; qty: number; unitPrice: number; unitPrice12h: number | null; imageUrl: string | null; deliveryRentalDisabled: boolean; isRequired: boolean; minSelectRequired: boolean; qtyFollowsMain: boolean }
   type CartLineItem = { reservationId: string; productId: string | null; product: ProductRow | null; price12h: number | null; price24h: number | null; deposit: number | null; startDate: string; endDate: string; pickupMethod: string | null; returnMethod: string | null; pickupTime: string | null; returnTime: string | null; durationType: string | null; options: CartLineItemOption[]; status: string }
   // 2026-08-28: 동일 부모상품 중복담기 병합 — 서버(cartLineGrouping.ts groupCartLineItems)가
   // 예약행(재고단위) 여러 건을 하나의 그룹으로 묶어 내려준다. qty=reservationIds.length,
@@ -2833,9 +2833,9 @@
                       </div>
                     </div>
                     <div class="opt-qty-ctrl">
-                      <button class="opt-qty-arrow" onclick={() => updateOptionQty(item.id, line, opt.optionProductId, opt.qty - 1)} disabled={opt.qty <= 1 || pendingOptionKey === `${item.id}:${opt.optionProductId}`} aria-label="옵션 수량 감소">−</button>
+                      <button class="opt-qty-arrow" onclick={() => updateOptionQty(item.id, line, opt.optionProductId, opt.qty - 1)} disabled={opt.qty <= 1 || opt.qtyFollowsMain || pendingOptionKey === `${item.id}:${opt.optionProductId}`} aria-label="옵션 수량 감소">−</button>
                       <span class="opt-qty-num">{opt.qty}</span>
-                      <button class="opt-qty-arrow" onclick={() => updateOptionQty(item.id, line, opt.optionProductId, opt.qty + 1)} disabled={pendingOptionKey === `${item.id}:${opt.optionProductId}` || opt.qty >= stockCapFor(opt.optionProductId)} aria-label="옵션 수량 증가">+</button>
+                      <button class="opt-qty-arrow" onclick={() => updateOptionQty(item.id, line, opt.optionProductId, opt.qty + 1)} disabled={opt.qtyFollowsMain || pendingOptionKey === `${item.id}:${opt.optionProductId}` || opt.qty >= stockCapFor(opt.optionProductId)} aria-label="옵션 수량 증가">+</button>
                     </div>
                   </div>
                 </div>
@@ -2942,9 +2942,9 @@
                     </div>
                   </div>
                   <div class="opt-qty-ctrl">
-                    <button class="opt-qty-arrow" onclick={(e) => { e.stopPropagation(); updateOptionQty(item.id, line, opt.optionProductId, opt.qty - 1) }} disabled={opt.qty <= 1 || pendingOptionKey === `${item.id}:${opt.optionProductId}`} aria-label="옵션 수량 감소">−</button>
+                    <button class="opt-qty-arrow" onclick={(e) => { e.stopPropagation(); updateOptionQty(item.id, line, opt.optionProductId, opt.qty - 1) }} disabled={opt.qty <= 1 || opt.qtyFollowsMain || pendingOptionKey === `${item.id}:${opt.optionProductId}`} aria-label="옵션 수량 감소">−</button>
                     <span class="opt-qty-num">{opt.qty}</span>
-                    <button class="opt-qty-arrow" onclick={(e) => { e.stopPropagation(); updateOptionQty(item.id, line, opt.optionProductId, opt.qty + 1) }} disabled={pendingOptionKey === `${item.id}:${opt.optionProductId}` || opt.qty >= stockCapFor(opt.optionProductId)} aria-label="옵션 수량 증가">+</button>
+                    <button class="opt-qty-arrow" onclick={(e) => { e.stopPropagation(); updateOptionQty(item.id, line, opt.optionProductId, opt.qty + 1) }} disabled={opt.qtyFollowsMain || pendingOptionKey === `${item.id}:${opt.optionProductId}` || opt.qty >= stockCapFor(opt.optionProductId)} aria-label="옵션 수량 증가">+</button>
                   </div>
                 </div>
               </div>

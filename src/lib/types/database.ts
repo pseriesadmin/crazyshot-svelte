@@ -170,6 +170,8 @@ export interface ProductOptionLink {
   is_required: boolean;
   min_select_required: boolean;
   delivery_rental_disabled: boolean;
+  is_free: boolean;
+  qty_follows_main: boolean;
   display_order: number;
   created_at: string;
   updated_at: string;
@@ -187,6 +189,8 @@ export interface ProductOptionLinkRow {
   is_required: boolean;
   min_select_required: boolean;
   delivery_rental_disabled: boolean;
+  is_free: boolean;
+  qty_follows_main: boolean;
   display_order: number;
   image_url: string | null;
 }
