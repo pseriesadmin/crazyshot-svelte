@@ -938,9 +938,9 @@ export const actions: Actions = {
         'monthly': parseFloat((form.get('price_monthly') as string | null) ?? '') || null,
       }
 
-      // BND-9: 24시간 가격 필수 강제 (sale_only 상품은 대여가격 불필요 — 스킵)
-      if (!saleOnly && (!priceMap['24h'] || priceMap['24h'] <= 0))
-        return fail(400, { error: '24시간(1일) 가격은 필수입니다.' })
+      // BND-9 폐기(2026-09-28, Stephen 지시): 24시간 가격 필수 강제 제거 — products.md §2-9
+      // 정책 반전, 대여가격 항목(12h/24h/월간) 전부 선택 입력으로 통일. 신규등록(new/+page.server.ts)
+      // 동일 게이트도 함께 제거.
       // QA(2026-09-01, Migration #416 검수) 발견 — sale_only인데 판매금액이 비어있으면
       // 고객이 실제로 0원에 구매를 완료할 수 있는 결제 위험이 있어 BND-9와 대칭으로 필수화.
       if (saleOnly && (salePrice === null || salePrice <= 0))
@@ -990,8 +990,11 @@ export const actions: Actions = {
             })
             if (priceInsertError) return fail(500, { error: '가격정책 저장에 실패했습니다.' })
           }
-        } else if (dtype !== '24h' && anyRule && !anyRule.deleted_at) {
-          // BND-PRICEDEL-1: 12h/monthly 가격을 비워서 저장하면 소프트삭제 (24h 제외 — 필수 보호됨)
+        } else if (anyRule && !anyRule.deleted_at) {
+          // BND-PRICEDEL-1(2026-09-28, BND-9 폐기에 맞춰 24h 예외 제거): 12h/24h/monthly
+          // 전부 가격을 비워서 저장하면 소프트삭제 — 과거엔 24h만 "필수 보호"를 이유로
+          // 예외 처리해, 24h를 비워도 서버가 조용히 아무 것도 안 해 화면(목록 카드·패널
+          // 요약바)에 기존 값이 그대로 남아있는 것처럼 보이는 원인이었다(2026-09-28 제보).
           // anyRule.deleted_at이 null인 active 행만 대상 (이미 soft-deleted인 행은 변경 불필요)
           const { error: priceDeleteError } = await admin.from('price_rules').update({
             is_active: false,

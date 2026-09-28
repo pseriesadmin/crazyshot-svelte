@@ -260,9 +260,9 @@ export const actions: Actions = {
       return fail(400, { error: '파손비율은 0~100 사이여야 합니다.' })
     if (salePrice !== null && (salePrice < 0 || salePrice > 99_999_999))
       return fail(400, { error: '판매가 범위를 초과했습니다.' })
-    // BND-9: 24시간 가격 필수 (sale_only 상품은 대여가격 불필요 — 스킵)
-    if (!saleOnly && (isNaN(price24hPre) || price24hPre <= 0))
-      return fail(400, { error: '24시간(1일) 가격은 필수입니다.' })
+    // BND-9 폐기(2026-09-28, Stephen 지시): 24시간 가격 필수 강제 제거 — products.md §2-9
+    // 정책 반전, 대여가격 항목(12h/24h/월간) 전부 선택 입력으로 통일. 아래 priceRules 구성부는
+    // 이미 각 항목을 `> 0`일 때만 삽입하는 가드가 있어(418~426행) 이 게이트 제거만으로 안전.
     // QA(2026-09-01, Migration #416 검수) 발견 — sale_only인데 판매금액이 비어있으면
     // 고객이 실제로 0원에 구매를 완료할 수 있는 결제 위험이 있어 BND-9와 대칭으로 필수화.
     if (saleOnly && (salePrice === null || salePrice <= 0))

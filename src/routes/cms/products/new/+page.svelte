@@ -1426,7 +1426,7 @@
     <!-- ④ 가격 정책 -->
     <section class="form-section">
       <h2 class="section-title">④ 가격 정책</h2>
-      <p class="section-desc">24시간 가격은 필수입니다. 미입력 시 해당 유형 가격정책은 생성되지 않습니다.</p>
+      <p class="section-desc">가격 항목은 전부 선택 입력입니다. 미입력 시 해당 유형 가격정책은 생성되지 않습니다.</p>
 
       <div class="price-grid">
         <div class="field-row" class:row-disabled={saleOnly}>
@@ -1450,7 +1450,7 @@
             inputmode="numeric"
             class="f-input f-input-number"
             placeholder="24시간 가격 (원)-예: 85,000"
-            aria-label="24시간 가격 (원) (필수)"
+            aria-label="24시간 가격 (원)"
             disabled={saleOnly}
             value={localPricing.price_24h}
             oninput={(e) => handlePriceInput('price_24h', e.currentTarget.value, isComposingEvent(e))}
