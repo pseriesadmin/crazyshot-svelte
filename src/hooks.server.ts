@@ -1,5 +1,6 @@
 import { createServerClient } from '@supabase/ssr'
 import type { Handle } from '@sveltejs/kit'
+import { stringify } from 'devalue'
 import { requireSupabasePublicEnv } from '$lib/env/supabasePublic'
 import { getCmsRoleForAction } from '$lib/server/getCmsRoleForAction'
 
@@ -23,9 +24,28 @@ function isCmsMutationGated(method: string, pathname: string): boolean {
   return !(path === '/cms/login' || path.startsWith('/cms/login/'))
 }
 
+// ⛔ CMS-GATE-ENVELOPE-1(2026-09-28 발견·수정): 이 게이트는 SvelteKit의 form action
+// 파이프라인을 거치지 않고 handle()에서 곧바로 Response를 반환하므로, 이전에는 단순
+// `{ error }` + 실제 401/403 HTTP 상태로 응답했다. 그런데 클라이언트(ProductDetailPanel.svelte
+// 등)는 모든 CMS 저장 요청을 SvelteKit의 ActionResult 규약(`{type,status,data}`, HTTP 상태는
+// 항상 200이고 진짜 상태값은 body의 status 필드에 담김 — `fail()`이 실제로 이렇게 동작함)으로
+// 가정하고 처리한다. 형식이 다르면:
+//   - use:enhance 기반 탭(기본정보·가격정책·대여정책 등)은 `deserialize()`가 `type` 없는
+//     객체를 반환해 `applyAction()`의 사양 밖 분기(else)를 타면서 페이지 상태가 깨짐
+//   - 커스텀 fetch 기반 탭(옵션상품)은 res.ok만 보고 사유 없이 "저장에 실패했습니다"만 표시
+// 세션 만료 등으로 이 게이트가 실제 CMS 요청을 차단할 때마다 두 결함이 함께 발생했다.
+// 해결: SvelteKit의 `fail(status, data)`가 실제로 만드는 것과 동일한 봉투
+// (`$app/forms`의 deserialize()가 기대하는 devalue 인코딩 + 항상 HTTP 200)로 응답한다 —
+// 이러면 기존 `handleSectionSave`/`saveBundles`의 "type==='failure'" 처리 로직이 그대로
+// 정상 동작해 실제 차단 사유(인증 필요/권한 없음)가 화면에 정확히 표시된다.
 function jsonReject(status: number, message: string): Response {
-  return new Response(JSON.stringify({ error: message }), {
+  const envelope = {
+    type: 'failure' as const,
     status,
+    data: stringify({ error: message }),
+  }
+  return new Response(JSON.stringify(envelope), {
+    status: 200,
     headers: { 'content-type': 'application/json' },
   })
 }

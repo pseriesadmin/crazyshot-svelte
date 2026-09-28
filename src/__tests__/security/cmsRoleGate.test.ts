@@ -1,10 +1,25 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { parse as devalueParse } from 'devalue'
 
 /**
  * CMS 중앙 역할 게이트(hooks.server.ts) 단위 테스트
  * /cms/** 변경 요청(POST 등)은 어떤 cms_role이든 보유해야 통과한다.
  * 세부 등급 게이트는 각 액션이 담당 — 여기서는 "CMS 직원 여부"만 검증.
+ *
+ * CMS-GATE-ENVELOPE-1(2026-09-28): 거절 응답은 SvelteKit의 fail() 규약과 동일하게
+ * HTTP 상태 항상 200 + body가 { type:'failure', status, data(devalue 인코딩) } 형태다
+ * (use:enhance 기반 탭의 deserialize()/applyAction()이 정상 해석하도록). 아래
+ * expectRejected() 헬퍼가 이 봉투를 해석해 실제 상태코드를 검증한다.
  */
+async function expectRejected(res: Response, expectedStatus: number) {
+  expect(res.status).toBe(200)
+  expect(res.headers.get('content-type')).toContain('application/json')
+  const body = (await res.json()) as { type: string; status: number; data: string }
+  expect(body.type).toBe('failure')
+  expect(body.status).toBe(expectedStatus)
+  const data = devalueParse(body.data) as { error?: string }
+  expect(data).toHaveProperty('error')
+}
 
 vi.mock('$lib/env/supabasePublic', () => ({
   requireSupabasePublicEnv: () => ({ url: 'https://test.supabase.co', anonKey: 'anon' }),
@@ -56,40 +71,38 @@ beforeEach(() => {
 })
 
 describe('CMS 중앙 게이트 — 거절', () => {
-  it('(a) POST /cms/products 세션 없음 → 401, resolve 미호출', async () => {
+  it('(a) POST /cms/products 세션 없음 → 401(봉투), resolve 미호출', async () => {
     const { res, resolve } = await run('POST', '/cms/products?/updateSection')
-    expect(res.status).toBe(401)
-    expect(res.headers.get('content-type')).toContain('application/json')
-    expect(await res.json()).toHaveProperty('error')
+    await expectRejected(res, 401)
     expect(resolve).not.toHaveBeenCalled()
   })
 
-  it('(b) 세션 있으나 cms_role 없음(일반/익명 고객) → 403', async () => {
+  it('(b) 세션 있으나 cms_role 없음(일반/익명 고객) → 403(봉투)', async () => {
     authState.session = { user: { id: 'cust-1' } }
     fetchProfile.mockResolvedValue({ cms_role: null, name: 'x' })
     const { res, resolve } = await run('POST', '/cms/products?/deleteProduct')
-    expect(res.status).toBe(403)
+    await expectRejected(res, 403)
     expect(resolve).not.toHaveBeenCalled()
   })
 
-  it('(b2) 프로필 자체가 없는 익명 사용자 → 403', async () => {
+  it('(b2) 프로필 자체가 없는 익명 사용자 → 403(봉투)', async () => {
     authState.session = { user: { id: 'anon-1' } }
     fetchProfile.mockResolvedValue(null)
     const { res } = await run('POST', '/cms/products/new')
-    expect(res.status).toBe(403)
+    await expectRejected(res, 403)
   })
 
-  it('(g) 역할 조회 예외 → 안전측 거절(403)', async () => {
+  it('(g) 역할 조회 예외 → 안전측 거절(403, 봉투)', async () => {
     authState.session = { user: { id: 'u' } }
     fetchProfile.mockRejectedValue(new Error('db down'))
     const { res, resolve } = await run('POST', '/cms/products')
-    expect(res.status).toBe(403)
+    await expectRejected(res, 403)
     expect(resolve).not.toHaveBeenCalled()
   })
 
   it.each(['PUT', 'PATCH', 'DELETE'])('%s /cms/* 도 게이트 대상', async (m) => {
     const { res } = await run(m, '/cms/customers')
-    expect(res.status).toBe(401)
+    await expectRejected(res, 401)
   })
 
   it.each([
@@ -99,9 +112,9 @@ describe('CMS 중앙 게이트 — 거절', () => {
     ['퍼센트 인코딩', '/%63ms/products'],
     ['/cms 루트', '/cms'],
     ['깊은 하위', '/cms/mobile/qr/abc'],
-  ])('(h) 우회 시도 — %s → 401', async (_n, p) => {
+  ])('(h) 우회 시도 — %s → 401(봉투)', async (_n, p) => {
     const { res, resolve } = await run('POST', p)
-    expect(res.status).toBe(401)
+    await expectRejected(res, 401)
     expect(resolve).not.toHaveBeenCalled()
   })
 })
