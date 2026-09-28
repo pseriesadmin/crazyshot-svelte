@@ -1,5 +1,5 @@
 <script lang="ts">
-  import svgPaths from '$lib/assets/svg/search-output-paths'
+  import { truncateKeywordLabel } from '$lib/utils/keywordDisplay'
 
   interface Props {
     keywords?: string[]
@@ -7,43 +7,31 @@
   }
 
   let {
-    keywords = [
-      'CANON 100mm',
-      'FeiyuTech SCORP Mini 2',
-      'FDR-AX43',
-      'Air 3S Drone',
-      'Air 3S Drone',
-      'Air 3S Drone',
-    ],
+    keywords = [],
     onkeywordclick,
   }: Props = $props()
 </script>
 
+{#if keywords.length > 0}
 <section class="keywords-section">
   <div class="keywords-inner">
     <div class="title-bar">
       <h2 class="title-text">관심집중 키워드</h2>
-      <span class="title-dots" aria-hidden="true">···</span>
-      <div class="plus-box" aria-hidden="true">
-        <svg width="22" height="22" viewBox="0 0 22 22" fill="none">
-          <rect width="22" height="22" rx="7" fill="#E1DEF3" />
-          <path d={svgPaths.p160bd500} fill="#553FE0" />
-        </svg>
-      </div>
     </div>
 
     <div class="chip-bar">
       {#each keywords as kw, i (i)}
-        <button class="chip" onclick={() => onkeywordclick?.(kw)}>{kw}</button>
+        <button
+          class="chip"
+          title={kw}
+          aria-label={kw}
+          onclick={() => onkeywordclick?.(kw)}
+        >{truncateKeywordLabel(kw)}</button>
       {/each}
-      <span class="fire-badge" aria-hidden="true">
-        <svg width="30" height="30" viewBox="0 0 29.9999 29.9999" fill="none">
-          <path d={svgPaths.p3a2fea00} fill="#FF3535" />
-        </svg>
-      </span>
     </div>
   </div>
 </section>
+{/if}
 
 <style>
   .keywords-section {
@@ -67,34 +55,18 @@
     padding-top: 40px;
     padding-bottom: 25px;
   }
+  /* 모바ile 섹션 헤더 — /products .m-sec-label(21px)과 동급, 18B(소제목)보다 한 단계 큰 공식 토큰
+     (18↔21 사이 중간 토큰 없음 — uiux-index Mobile heading-lg = --text-m-title-21) */
   .title-text {
-    font-size: 21px;
-    font-weight: 700;
-    line-height: 1.6;
+    font: var(--text-m-title-21);
     letter-spacing: -0.3px;
-    color: #100b32;
-    font-family: 'Noto Sans KR', sans-serif;
+    color: var(--cs-text);
+    margin: 0;
   }
-  @media (min-width: 1024px) {
+  @media (min-width: 768px) {
     .title-text {
-      font-size: 25px;
+      font: var(--text-pc-title-18);
     }
-  }
-  .title-dots {
-    font-size: 21px;
-    font-weight: 700;
-    line-height: 1.6;
-    color: #100b32;
-    font-family: 'Tilt Warp', sans-serif;
-  }
-  @media (min-width: 1024px) {
-    .title-dots {
-      font-size: 25px;
-    }
-  }
-  .plus-box {
-    display: flex;
-    align-items: center;
   }
   .chip-bar {
     display: flex;
@@ -120,10 +92,5 @@
   }
   .chip:hover {
     background: #c1bbec;
-  }
-  .fire-badge {
-    display: flex;
-    align-items: center;
-    flex-shrink: 0;
   }
 </style>

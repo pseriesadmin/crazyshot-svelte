@@ -147,7 +147,7 @@
 <!-- ══════════════════════════════════════════════════════════════
      Crazylog 목록 리스트 — 퍼블리싱 소스: Publish Crazylog list Design/App.tsx
 ══════════════════════════════════════════════════════════════ -->
-<SubGnb title="모든 로그" />
+<SubGnb title="모든 로그" noGnbOffset />
 
 <div class="list-root">
   <div class="list-wrap">
@@ -581,7 +581,7 @@
   .pc-content {
     width: 100%;
     border-radius: 0 50px 0 50px;
-    padding: calc(var(--layout-header-h) + 60px) 25px 100px; /* GNB 120px + 여백 40px */
+    padding: 60px 25px 100px; /* sub-GNB만 — main GNB 미렌더(+layout) */
     background: linear-gradient(
       to bottom,
       rgba(225, 222, 243, 0.95) 0%,
@@ -745,7 +745,7 @@
     .list-wrap  { max-width: 1600px; }
     .m-write-cta,
     .m-content  { display: none; }
-    /* Common GNB(100px) + 상단 여백 50px */
-    .tab-section { padding-top: calc(var(--layout-header-h) + 50px); }
+    /* sub-GNB만 — main GNB 미렌더(+layout) */
+    .tab-section { padding-top: 50px; }
   }
 </style>

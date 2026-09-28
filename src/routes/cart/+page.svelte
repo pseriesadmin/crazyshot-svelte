@@ -3561,7 +3561,7 @@
   /* ══ Header ══ */
   .sub-gnb-b {
     position: sticky;
-    top: var(--layout-header-h, 100px);
+    top: 0; /* GNB-less 페이지 표준 — +layout.svelte가 /cart에서 GNB 미렌더, SubGnb noGnbOffset·§13-2와 동일 */
     z-index: 50;
     background: transparent;
     border-bottom: none;
@@ -3604,7 +3604,7 @@
     justify-content: space-between;
     gap: 16px;
     padding: 14px 40px;
-    border-radius: 25px;
+    border-radius: var(--radius-lg);
     width: 100%;
     max-width: none;
     min-width: 0;
@@ -5446,11 +5446,11 @@
     .option-subcard-list { margin-top: -9px; }
     /* 2026-08-19(재정정): 가로 1열 재배치는 Stephen이 요청한 적 없는 임의 변경이었음 —
        PC와 동일한 세로중앙정렬 구조(column/center)로 되돌리고, 패딩만 카드 크기에 맞춰
-       축소 유지. 아이콘은 PC 대비 1.5배(56px→84px) 유지, 안내텍스트는 1.5배(24px)가
-       과했다는 후속 지적으로 한 단계 아래 토큰(--text-m-title-21, 21px)으로 하향 조정 */
+       축소 유지. 2026-09-28: 빈 상태 아이콘 84px→42px(50% 축소), 안내텍스트
+       --text-m-title-21→--text-m-title-18B→--text-m-body-16B(한 단계 추가 하향) */
     .empty-card { padding: 40px 24px; gap: 20px; }
-    .empty-icon { width: 84px; }
-    .empty-text { font: var(--text-m-title-21); }
+    .empty-icon { width: 42px; }
+    .empty-text { font: var(--text-m-body-16B); }
 
     /* 2026-08-24(재변경): 세로 2줄 구조 대신, 쿠폰명 말줄임(ellipsis)으로 항상 한 줄 유지 —
        아래 .coupon-label 말줄임 처리와 세트(PC·모바일 공통 로직으로 이동, 이 오버라이드 제거) */
@@ -5564,7 +5564,7 @@
     .f-input { letter-spacing: -0.5px; }
     .copy-label { letter-spacing: -0.5px; }
     .acc-label { letter-spacing: -0.3px; }
-    .sub-gnb-b-pill { padding: 12px 20px; border-radius: 18px; min-height: 44px; }
+    .sub-gnb-b-pill { padding: 12px 20px; border-radius: var(--radius-lg); min-height: 44px; }
   }
 
   /* 2026-09-21(Stephen 지시, PC 반응형 폰트 축소 파일럿) — 장바구니 화면 3개 영역

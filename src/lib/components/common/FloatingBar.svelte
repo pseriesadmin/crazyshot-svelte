@@ -23,11 +23,35 @@
 	let peekMode = $state(true)
 	let bubbling = $state(false)
 
-	function handleBarClick() {
+	function expandFromPeek(): void {
 		if (!peekMode) return
 		peekMode = false
 		bubbling = true
 		setTimeout(() => { bubbling = false }, 700)
+	}
+
+	/** 모바일(<640px) peek 중 버튼 1-touch: 펼침 + 실행(제안 A, 2026-09-28) */
+	function beforeFabAction(): void {
+		if (typeof window !== 'undefined' && window.matchMedia('(max-width: 639px)').matches) {
+			expandFromPeek()
+		}
+	}
+
+	function handleBarClick(e: MouseEvent) {
+		if (e.target !== e.currentTarget) return
+		expandFromPeek()
+	}
+
+	function handleCartClick(e: MouseEvent): void {
+		e.stopPropagation()
+		beforeFabAction()
+		window.location.href = '/cart'
+	}
+
+	function handleSearchClick(e: MouseEvent): void {
+		e.stopPropagation()
+		beforeFabAction()
+		window.location.href = '/products/search'
 	}
 
 	function handleChatClose() {
@@ -61,7 +85,7 @@
 	<button
 		class="fab-btn"
 		aria-label="장바구니"
-		onclick={() => window.location.href = '/cart'}
+		onclick={handleCartClick}
 	>
 		<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 35 35" fill="none" aria-hidden="true">
 			<path d="M35 17.5C35 27.165 27.165 35 17.5 35C7.83502 35 0 27.165 0 17.5C0 7.83502 7.83502 0 17.5 0C27.165 0 35 7.83502 35 17.5Z" fill="#3B2F8A"/>
@@ -74,7 +98,7 @@
 	<button
 		class="fab-btn"
 		aria-label="검색"
-		onclick={() => window.location.href = '/products/search'}
+		onclick={handleSearchClick}
 	>
 		<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 70 70" fill="none" aria-hidden="true">
 			<path d="M70 35C70 54.33 54.33 70 35 70C15.67 70 0 54.33 0 35C0 15.67 15.67 0 35 0C54.33 0 70 15.67 70 35Z" fill="#3B2F8A"/>
@@ -92,6 +116,7 @@
 			{contextType}
 			{contextId}
 			hideSheet
+			onBeforeToggle={beforeFabAction}
 		/>
 	</div>
 </div>

@@ -6,6 +6,7 @@
   import ProductCategoryModal from '$lib/components/products/admin/ProductCategoryModal.svelte'
   import HomeCategoryProductsModal from '$lib/components/home/admin/HomeCategoryProductsModal.svelte'
   import ProductMdPickModal from '$lib/components/products/admin/ProductMdPickModal.svelte'
+  import BrandMarquee from '$lib/components/products/BrandMarquee.svelte'
   import type { PageData } from './$types'
 
   interface Props { data: PageData }
@@ -105,14 +106,6 @@
   }
 
   // FAQ_DESKTOP / FAQ_MOBILE 제거 — data.topFaqs(DB 동기화, canned_responses 상위5)로 교체됨 (Phase 1-B)
-
-  const BRANDS_D = [
-    { src: '/home/desktop/afdabe0224a76bddaf34a6ba1df6f2fb289d8214.png', alt: 'Canon' },
-    { src: '/home/desktop/68085f48f1a825b8f17e0c88f7958688209f59e9.png', alt: 'Samsung' },
-    { src: '/home/desktop/bc2936fc3f0a008369055bc303d4364526f9b3a4.png', alt: 'Nikon' },
-    { src: '/home/desktop/f1b4eb241fae7316a6d60c6720300e7c0d2c2038.png', alt: 'GoPro' },
-  ]
-  const BRAND_SET = [...BRANDS_D, ...BRANDS_D, ...BRANDS_D, ...BRANDS_D]
 
   const CATEGORY_ICON_BY_CODE: Record<string, string> = {
     hypepack:   'package',
@@ -594,16 +587,8 @@
     </div>
   </div>
 
-  <!-- ⑦ 브랜드 마퀴 -->
-  <div class="brand-marquee-wrap">
-    <div class="cz-track">
-      {#each BRAND_SET as brand}
-        <div class="cz-logo">
-          <img src={brand.src} alt={brand.alt} class="cz-logo-img"/>
-        </div>
-      {/each}
-    </div>
-  </div>
+  <!-- ⑦ 브랜드 마퀴 — BrandMarquee(/products 정본 SSOT) -->
+  <BrandMarquee surface="home" />
 
 </div><!-- /desktop-wrap -->
 
@@ -937,16 +922,8 @@
     </div>
   </div>
 
-  <!-- ⑦ 브랜드 마퀴 -->
-  <div class="brand-marquee-wrap">
-    <div class="cz-track">
-      {#each BRAND_SET as brand}
-        <div class="cz-logo">
-          <img src={brand.src} alt={brand.alt} class="cz-logo-img"/>
-        </div>
-      {/each}
-    </div>
-  </div>
+  <!-- ⑦ 브랜드 마퀴 — 초기화면 전용 surface(home) -->
+  <BrandMarquee surface="home" />
 
   <!-- ⑧ 모바일 하단 탭바 -->
   <div class="m-tab-bar" class:tab-bar-hidden={tabBarHidden}>
@@ -1734,34 +1711,6 @@
     padding: 20px 32px;
   }
   .faq-a p { font-family: var(--font-kr); font-size: 14px; color: #c1bbec; line-height: 1.8; margin: 0; }
-
-  /* ── BRAND MARQUEE ── */
-  .brand-marquee-wrap {
-    background: white;
-    overflow: hidden;
-    padding: 28px 0;
-  }
-  .cz-track {
-    display: flex;
-    align-items: center;
-    gap: 80px;
-    width: max-content;
-    animation: cz-marquee 22s linear infinite;
-  }
-  .cz-track:hover { animation-play-state: paused; }
-  @keyframes cz-marquee {
-    from { transform: translateX(0); }
-    to   { transform: translateX(-50%); }
-  }
-  .cz-logo {
-    height: 38px;
-    flex-shrink: 0;
-    opacity: 0.55;
-    cursor: pointer;
-    transition: opacity 0.2s;
-  }
-  .cz-logo:hover { opacity: 1; }
-  .cz-logo-img { height: 100%; max-width: 160px; object-fit: contain; }
 
   /* ── MOBILE HERO ── */
   .m-hero {
