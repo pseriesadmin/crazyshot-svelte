@@ -270,8 +270,17 @@
     const ids = periods.map((p) => p.id)
     const fd = new FormData()
     fd.set('ids', JSON.stringify(ids))
-    await fetch('?/reorderPeriods', { method: 'POST', body: fd })
-    await invalidateAll()
+    try {
+      const res = await fetch('?/reorderPeriods', { method: 'POST', body: fd })
+      const result = deserialize(await res.text())
+      if (result.type === 'success') {
+        await invalidateAll()
+        return
+      }
+      csToast.error(result.type === 'failure' ? ((result.data as { error?: string })?.error ?? '순서 저장에 실패했습니다.') : '순서 저장에 실패했습니다.')
+    } catch {
+      csToast.error('순서 저장에 실패했습니다.')
+    }
   }
 
   // 달력 레이어 모달(CmsHolidayCalendar)의 임시 휴무일 등록·수정 저장(2026-09-24, Stephen 지시) —
@@ -304,24 +313,51 @@
     const ids = discountTiers.map((t) => t.id)
     const fd = new FormData()
     fd.set('ids', JSON.stringify(ids))
-    await fetch('?/reorderDiscountTiers', { method: 'POST', body: fd })
-    await invalidateAll()
+    try {
+      const res = await fetch('?/reorderDiscountTiers', { method: 'POST', body: fd })
+      const result = deserialize(await res.text())
+      if (result.type === 'success') {
+        await invalidateAll()
+        return
+      }
+      csToast.error(result.type === 'failure' ? ((result.data as { error?: string })?.error ?? '순서 저장에 실패했습니다.') : '순서 저장에 실패했습니다.')
+    } catch {
+      csToast.error('순서 저장에 실패했습니다.')
+    }
   }
 
   async function saveMethodOrder(): Promise<void> {
     const ids = methods.map((m) => m.id)
     const fd = new FormData()
     fd.set('ids', JSON.stringify(ids))
-    await fetch('?/reorderMethods', { method: 'POST', body: fd })
-    await invalidateAll()
+    try {
+      const res = await fetch('?/reorderMethods', { method: 'POST', body: fd })
+      const result = deserialize(await res.text())
+      if (result.type === 'success') {
+        await invalidateAll()
+        return
+      }
+      csToast.error(result.type === 'failure' ? ((result.data as { error?: string })?.error ?? '순서 저장에 실패했습니다.') : '순서 저장에 실패했습니다.')
+    } catch {
+      csToast.error('순서 저장에 실패했습니다.')
+    }
   }
 
   async function saveConsentOrder(): Promise<void> {
     const ids = consents.map((c) => c.id)
     const fd = new FormData()
     fd.set('ids', JSON.stringify(ids))
-    await fetch('?/reorderConsents', { method: 'POST', body: fd })
-    await invalidateAll()
+    try {
+      const res = await fetch('?/reorderConsents', { method: 'POST', body: fd })
+      const result = deserialize(await res.text())
+      if (result.type === 'success') {
+        await invalidateAll()
+        return
+      }
+      csToast.error(result.type === 'failure' ? ((result.data as { error?: string })?.error ?? '순서 저장에 실패했습니다.') : '순서 저장에 실패했습니다.')
+    } catch {
+      csToast.error('순서 저장에 실패했습니다.')
+    }
   }
 </script>
 
