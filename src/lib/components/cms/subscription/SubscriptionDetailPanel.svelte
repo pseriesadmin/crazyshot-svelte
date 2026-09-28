@@ -4,6 +4,7 @@
   import { csToast } from '$lib/utils/toast'
   import FreeRentalItemSelector from './FreeRentalItemSelector.svelte'
   import CmsContentEditor from '$lib/components/cms/CmsContentEditor.svelte'
+  import CmsDeleteButton from '$lib/components/cms/CmsDeleteButton.svelte'
   import { resizeProductImage } from '$lib/utils/imageResize'
   import {
     BENEFIT_TYPES,
@@ -404,6 +405,16 @@
               <span class="vr-hint">/members 비교표 '인기' 배지 표시 (여러 플랜 동시 허용)</span>
             </div>
           </form>
+          <div class="delete-plan-section">
+            <CmsDeleteButton
+              size="lg"
+              action="?/deleteSubscription"
+              id={String(plan.id)}
+              warnMessage="한번 더 선택 시 이 구독상품이 삭제됩니다."
+              successMessage="구독상품이 삭제되었습니다."
+              onsuccess={() => onclose?.()}
+            />
+          </div>
         </div>
       {/if}
 
@@ -831,6 +842,9 @@
   }
   .btn-save-inline.dirty { border-color: var(--cs-purple); background: var(--cs-purple); color: var(--cs-white); cursor: pointer; }
   .btn-save-inline.dirty:hover { opacity: 0.85; }
+
+  /* cms-uiux.md §0-10-G-1 — DetailPanel 대형 삭제 버튼 배치: 삭제 섹션 우측 정렬 */
+  .delete-plan-section { display: flex; justify-content: flex-end; margin-top: 8px; padding-top: 16px; border-top: 1px solid var(--cs-surface-gray); }
 
   .inline-form { display: flex; flex-direction: column; gap: 0; }
   .inline-row { display: flex; align-items: center; gap: 16px; padding: 9px 0; border-bottom: 1px solid var(--cs-surface-gray); }
