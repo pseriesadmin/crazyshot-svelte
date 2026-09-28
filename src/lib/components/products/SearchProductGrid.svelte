@@ -61,6 +61,12 @@
     {/if}
   </div>
 </section>
+{:else}
+<section class="results-section results-section--empty">
+  <div class="results-inner">
+    <p class="empty-msg">검색 결과가 없습니다.<br>다른 키워드로 검색해보세요.</p>
+  </div>
+</section>
 {/if}
 
 <style>
@@ -69,6 +75,15 @@
     padding: 0 25px 100px;
     background: var(--cs-bg-primary, #ffffff);
     border-radius: 0 50px 0 0;
+  }
+  .results-section--empty {
+    padding: 60px 25px;
+    text-align: center;
+  }
+  .empty-msg {
+    font-size: 15px;
+    color: var(--cs-text-mid, #666666);
+    line-height: 1.7;
   }
   @media (min-width: 1024px) {
     .results-section {

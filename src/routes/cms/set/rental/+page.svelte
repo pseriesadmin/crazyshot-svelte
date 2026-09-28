@@ -129,6 +129,7 @@
   let enableReturn     = $state(data.shippingSettings?.enable_return       ?? false)
   let returnFee        = $state<number | ''>(data.shippingSettings?.return_fee       ?? '')
   let shippingGuide    = $state(data.shippingSettings?.shipping_guide      ?? '')
+  let maxRentalDays    = $state<number | ''>(data.shippingSettings?.max_rental_days ?? 15)
   let shippingLoading  = $state(false)
   let shippingFormEl = $state<HTMLFormElement | undefined>(undefined)
   let shippingGuideCount = $derived(shippingGuide.length)
@@ -156,6 +157,7 @@
     enableReturn    = data.shippingSettings?.enable_return       ?? false
     returnFee       = data.shippingSettings?.return_fee          ?? ''
     shippingGuide   = data.shippingSettings?.shipping_guide      ?? ''
+    maxRentalDays   = data.shippingSettings?.max_rental_days     ?? 15
   })
 
   // ─── 택배 휴무일 캘린더 제어 ───
@@ -186,6 +188,22 @@
   let guideIsDirty = $derived.by(() => guideText !== data.guideText)
 
   $effect(() => { guideText = data.guideText })
+
+  // ─── 법적 고지 텍스트 ───
+  let privacyText   = $state(data.policySettings?.privacy_text ?? '')
+  let termsText     = $state(data.policySettings?.terms_text   ?? '')
+  let refundText    = $state(data.policySettings?.refund_text  ?? '')
+  let policyLoading = $state<'privacy' | 'terms' | 'refund' | null>(null)
+
+  let privacyIsDirty = $derived.by(() => privacyText !== (data.policySettings?.privacy_text ?? ''))
+  let termsIsDirty   = $derived.by(() => termsText   !== (data.policySettings?.terms_text   ?? ''))
+  let refundIsDirty  = $derived.by(() => refundText  !== (data.policySettings?.refund_text  ?? ''))
+
+  $effect(() => {
+    privacyText = data.policySettings?.privacy_text ?? ''
+    termsText   = data.policySettings?.terms_text   ?? ''
+    refundText  = data.policySettings?.refund_text  ?? ''
+  })
 
   // ─── 필수 동의문 ───
   let consents = $state<RentalConsentItem[]>(data.consents)
@@ -619,6 +637,8 @@
         <input type="hidden" name="enable_round_trip" value={enableRoundTrip ? 'true' : 'false'} />
         <input type="hidden" name="enable_delivery"   value={enableDelivery   ? 'true' : 'false'} />
         <input type="hidden" name="enable_return"      value={enableReturn      ? 'true' : 'false'} />
+        <!-- [11] 최대 대여일수 hidden input (요금행과 동일한 자동저장 방식) -->
+        <input type="hidden" name="max_rental_days" value={maxRentalDays} />
 
         <!-- 요금 입력 (활성/비활성) -->
         <div class="fee-grid fee-grid--spaced">
@@ -705,6 +725,27 @@
               disabled={shippingLoading}
               onclick={async () => { enableReturn = !enableReturn; await tick(); shippingFormEl?.requestSubmit() }}
             >반납요금</button>
+          </div>
+        </div>
+
+        <!-- [11] 최대 대여일수 설정 -->
+        <div class="fee-row fee-row--max-days">
+          <span class="fee-label">최대 대여일수</span>
+          <div class="fee-input-wrap">
+            <input
+              type="text"
+              inputmode="numeric"
+              class="add-input fee-input fee-input--days"
+              value={maxRentalDays}
+              placeholder="15"
+              aria-label="최대 대여일수"
+              oninput={(e) => {
+                const digits = e.currentTarget.value.replace(/[^0-9]/g, '')
+                maxRentalDays = digits ? Math.min(365, Math.max(1, parseInt(digits, 10))) : ''
+              }}
+              onblur={async () => { await tick(); shippingFormEl?.requestSubmit() }}
+            />
+            <span class="fee-unit">일</span>
           </div>
         </div>
 
@@ -1366,6 +1407,69 @@
           </div>
         </form>
       </div>
+
+      <!-- 법적 고지 텍스트 -->
+      {#each ([
+        { key: 'privacy' as const, field: 'privacy_text' as const, label: '개인정보처리방침', bind: privacyText, dirty: privacyIsDirty },
+        { key: 'terms'   as const, field: 'terms_text'   as const, label: '이용약관',         bind: termsText,   dirty: termsIsDirty   },
+        { key: 'refund'  as const, field: 'refund_text'  as const, label: '환불·취소 정책',   bind: refundText,  dirty: refundIsDirty  },
+      ] as const) as item}
+        <div class="subsection">
+          <div class="subsection-head subsection-head--between">
+            <h3 class="subsection-title">{item.label}</h3>
+            <button
+              type="submit"
+              form="policy-form-{item.key}"
+              class="btn-save-inline"
+              class:dirty={item.dirty}
+              disabled={policyLoading !== null || !item.dirty}
+            >
+              {policyLoading === item.key ? '저장 중...' : '저장'}
+            </button>
+          </div>
+          <form
+            id="policy-form-{item.key}"
+            method="POST"
+            action="?/savePolicy"
+            use:enhance={() => {
+              policyLoading = item.key
+              return async ({ result, update }) => {
+                policyLoading = null
+                if (result.type === 'success') {
+                  csToast.success(`${item.label}이(가) 저장되었습니다.`)
+                  await update({ reset: false })
+                } else if (result.type === 'failure') {
+                  csToast.error((result.data as { error?: string })?.error ?? '저장에 실패했습니다.')
+                }
+              }
+            }}
+          >
+            <input type="hidden" name="policy_field" value={item.field} />
+            <div class="textarea-wrap">
+              <textarea
+                name="policy_text"
+                class="guide-textarea"
+                placeholder="{item.label} 내용을 입력하세요 (최대 5,000자)"
+                maxlength="5000"
+                rows="6"
+                value={item.key === 'privacy' ? privacyText : item.key === 'terms' ? termsText : refundText}
+                oninput={(e) => {
+                  const v = (e.target as HTMLTextAreaElement).value
+                  if (item.key === 'privacy') privacyText = v
+                  else if (item.key === 'terms') termsText = v
+                  else refundText = v
+                }}
+                aria-label={item.label}
+              ></textarea>
+              <span class="char-count" class:char-count--warn={
+                (item.key === 'privacy' ? privacyText : item.key === 'terms' ? termsText : refundText).length > 4500
+              }>
+                {(item.key === 'privacy' ? privacyText : item.key === 'terms' ? termsText : refundText).length} / 5,000
+              </span>
+            </div>
+          </form>
+        </div>
+      {/each}
 
       <!-- 필수 동의문 -->
       <div class="subsection">

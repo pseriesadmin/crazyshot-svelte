@@ -94,6 +94,11 @@
       })
   })())
 
+  // 카테고리 코드 → 한글 이름 맵 (내부코드 노출 방지)
+  let categoryNameMap = $derived<Record<string, string>>(
+    Object.fromEntries(data.categories.map((c) => [c.id, c.name]))
+  )
+
   // 활성 카테고리 — URL ?category= 파라미터 기준 (SSR 데이터 반영, 없으면 'all')
   let activeCategory = $derived(data.urlCategory ?? 'all')
   let activeCategoryLabel = $derived(
@@ -178,9 +183,9 @@
   <div class="body-wrap">
     <div class="cat-section">
 
-      <!-- Desktop: "Package" title bar (desktop only) -->
+      <!-- Desktop: "Category" title bar (desktop only) -->
       <div class="d-pkg-title-bar">
-        <span class="d-pkg-title">Package</span>
+        <span class="d-pkg-title">Category</span>
       </div>
 
       <!-- Category icons -->
@@ -190,7 +195,10 @@
           <button
             class="cat-btn"
             class:active={activeCategory === cat.id}
-            onclick={() => goto(cat.id === 'all' ? '/products' : `/products?category=${cat.id}`)}
+            onclick={() => {
+              if (cat.name === '추천패키지') { goto('/hype-pack'); return }
+              goto(cat.id === 'all' ? '/products' : `/products?category=${cat.id}`)
+            }}
             aria-pressed={activeCategory === cat.id}
           >
             {#if cat.icon_url}
@@ -438,7 +446,7 @@
             </div>
             <div class="mdp-info">
               {#if prod.category}
-                <p class="mdp-category">{prod.category}</p>
+                <p class="mdp-category">{categoryNameMap[prod.category] ?? prod.category}</p>
               {/if}
               <div class="mdp-price-row">
                 {#if prod.sale_only}
@@ -524,7 +532,7 @@
             </div>
             <div class="m-prod-info">
               {#if prod.category}
-                <p class="m-prod-category">{prod.category}</p>
+                <p class="m-prod-category">{categoryNameMap[prod.category] ?? prod.category}</p>
               {/if}
               {#if isSaleOnly}
                 <div class="m-prod-price-row">
@@ -622,7 +630,7 @@
             </div>
             <div class="m-prod-info">
               {#if prod.category}
-                <p class="m-prod-category">{prod.category}</p>
+                <p class="m-prod-category">{categoryNameMap[prod.category] ?? prod.category}</p>
               {/if}
               {#if isSaleOnly}
                 <div class="m-prod-price-row">

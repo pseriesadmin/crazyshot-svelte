@@ -35,9 +35,9 @@ export interface ReservationAmount {
   deposit:      number
 }
 
-export const load: PageServerLoad = async ({ params, locals }) => {
+export const load: PageServerLoad = async ({ params, locals, url }) => {
   const { session } = await locals.safeGetSession()
-  if (!session) throw redirect(303, '/auth/login')
+  if (!session) throw redirect(303, `/auth/login?redirect=${encodeURIComponent(url.pathname)}`)
 
   // 소유권 확인은 RLS 클라이언트로 — user_id 불일치 시 조회 자체가 안 됨
   const { data: raw } = await locals.supabase

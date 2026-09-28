@@ -119,7 +119,7 @@
         <!-- 프로필 카드 -->
         <div class="relative shrink-0 w-full">
           <div class="flex flex-col items-start pt-[50px] px-[25px] relative size-full">
-            <ProfileCard userName={data.user.name} benefitCount={data.benefitCount} onQrClick={() => (showQrModal = true)} />
+            <ProfileCard userEmail={data.user.email} benefitCount={data.benefitCount} onQrClick={() => (showQrModal = true)} />
           </div>
         </div>
 
@@ -167,7 +167,7 @@
         <!-- 프로필 카드 -->
         <div class="bg-[#ffffff] rounded-[30px] px-[20px] py-[20px] flex items-center justify-between">
               <div class="flex flex-col gap-[5px]">
-                <p class="font-['Noto_Sans_KR',sans-serif] font-bold text-[#100b32] text-[21px] tracking-[-0.3px] leading-[1.6]">{data.user.name}님,</p>
+                <p class="font-['Noto_Sans_KR',sans-serif] text-[#100b32] tracking-[-0.3px] leading-[1.6]" style="font: var(--text-pc-title-16); word-break:break-all;">{data.user.email}</p>
                 <p class="font-['Noto_Sans_KR',sans-serif] font-medium text-[#666] text-[14px] tracking-[-0.5px] leading-[1.6]">
                   지금 <span class="font-bold text-[#553fe0]">{data.benefitCount} </span>가지 혜택·이벤트 확인요망
                 </p>

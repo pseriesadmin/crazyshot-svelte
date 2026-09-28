@@ -1,11 +1,11 @@
 <script lang="ts">
   interface Props {
-    userName?: string
+    userEmail?: string
     benefitCount?: number
     onQrClick?: () => void
   }
 
-  let { userName = '스티브 꽁지', benefitCount = 3, onQrClick }: Props = $props()
+  let { userEmail = '', benefitCount = 3, onQrClick }: Props = $props()
 
   const writingPath = 'M22.9985 1L1 13.6663L6.47363 25.9984L25.0278 15.7259V1H22.9985ZM5.02791 23.9987L2.00012 13.6663L5.02791 23.9987Z'
   const qrPaths = {
@@ -22,8 +22,8 @@
   <div class="flex flex-row items-center justify-center size-full">
     <div class="flex items-center justify-between px-[25px] py-[20px] relative size-full">
       <div class="flex flex-col gap-[5px] items-start justify-center relative flex-1 min-w-0 pr-[16px]">
-        <div class="flex flex-col justify-center relative shrink-0 w-full" style="font: var(--text-m-htitle-24B); color: var(--cs-text); letter-spacing: -0.3px;">
-          <p>{userName}님,</p>
+        <div class="flex flex-col justify-center relative shrink-0 w-full" style="font: var(--text-m-body-16B); color: var(--cs-text); letter-spacing: -0.3px;">
+          <p style="word-break:break-all;">{userEmail}</p>
         </div>
         <div class="flex flex-col justify-center relative shrink-0 w-full" style="font: var(--text-m-body-16L); color: var(--cs-text-mid); letter-spacing: -0.5px;">
           <p class="whitespace-pre-wrap">

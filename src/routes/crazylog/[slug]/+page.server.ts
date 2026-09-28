@@ -11,10 +11,10 @@ function calcLevel(creditScore: number | null): string {
 	return 'LV.1'
 }
 
-export const load: PageServerLoad = async ({ locals, params }) => {
+export const load: PageServerLoad = async ({ locals, params, url }) => {
 	const { session } = await locals.safeGetSession()
 	if (!session) {
-		throw redirect(303, '/auth/login')
+		throw redirect(303, `/auth/login?redirect=${encodeURIComponent(url.pathname)}`)
 	}
 
 	const userId = session.user.id

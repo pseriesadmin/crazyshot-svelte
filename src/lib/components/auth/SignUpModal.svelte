@@ -72,7 +72,15 @@
     emailDuplicate = false
     const val = el.value
     if (emailCheckTimer) { clearTimeout(emailCheckTimer); emailCheckTimer = null }
-    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(val)) return
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(val)) {
+      // 형식 오류: @ 입력 후에도 형식이 안 맞으면 안내 (타이핑 중 과도한 경고 방지)
+      if (val.includes('@')) {
+        emailCheckTimer = setTimeout(() => {
+          csToast.warning('이메일 형식을 확인해주세요.')
+        }, 600)
+      }
+      return
+    }
     emailCheckTimer = setTimeout(async () => {
       const { data } = await supabase.rpc('check_email_registered', { p_email: val } as never)
       if (data) {
