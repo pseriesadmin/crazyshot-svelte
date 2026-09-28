@@ -9,9 +9,19 @@
     mobileOnly?: boolean    // PC 숨김 — cart처럼 자체 PC 헤더가 있을 때
     transparent?: boolean   // PC 배경 제거 — 히어로 이미지 위 overlay 배치 시
     noGnbOffset?: boolean   // GNB 없는 페이지 — PC sticky top을 0으로
+    /** 페이지 타이틀 서체 — §13-2: en=Tilt Warp 계열, kr=SB Aggro/Noto 한글 메뉴 */
+    titleLocale?: 'en' | 'kr'
   }
 
-  let { title, floating = false, pcOnly = false, mobileOnly = false, transparent = false, noGnbOffset = false }: Props = $props()
+  let {
+    title,
+    floating = false,
+    pcOnly = false,
+    mobileOnly = false,
+    transparent = false,
+    noGnbOffset = false,
+    titleLocale = 'kr'
+  }: Props = $props()
 
   let moreMenuOpen = $state(false)
 
@@ -53,7 +63,7 @@
         </svg>
         <span class="pc-back-text">Back</span>
       </div>
-      <span class="pc-title">{title}</span>
+      <span class="pc-title" class:pc-title--kr={titleLocale === 'kr'}>{title}</span>
     </button>
   </div>
 </header>
@@ -99,8 +109,10 @@
     .sub-gnb-pc {
       display: block;
       position: sticky;
-      top: 100px;
+      top: var(--layout-header-h, 100px);
       z-index: 50;
+      background: transparent;
+      border-bottom: none;
     }
     .sub-gnb-pc.no-gnb-offset {
       top: 0;
@@ -120,11 +132,12 @@
       width: 100%;
       max-width: var(--layout-pc-max);
       margin: 0 auto;
-      padding: 20px clamp(16px, 2.5vw, 30px);
+      padding: 20px var(--layout-pc-pad);
       flex-wrap: nowrap;
       box-sizing: border-box;
     }
 
+    /* §13-2 sub-gnb_navi_b — cart/+page.svelte .sub-gnb-b-pill 정본(2026-09-21 축소) */
     .pc-pill {
       background: rgba(225, 222, 243, 0.4);
       border: none;
@@ -133,12 +146,13 @@
       align-items: center;
       justify-content: space-between;
       gap: 16px;
-      padding: 20px 40px;
-      border-radius: 25px;
+      padding: 14px 40px;
+      border-radius: var(--radius-lg);
       width: 100%;
+      max-width: none;
       min-width: 0;
-      min-height: 62px;
-      flex: 1 1 0;
+      min-height: 43px;
+      flex: 1 1 auto;
       box-sizing: border-box;
       color: var(--cs-text);
       transition: background 0.2s;
@@ -156,25 +170,39 @@
     }
 
     .pc-pill-arrow {
-      width: 22px;
-      height: 18px;
+      width: 11px;
+      height: 9px;
       flex-shrink: 0;
-      color: var(--cs-text-light);
     }
 
     .pc-back-text {
-      font: var(--text-pc-title-16);
-      color: var(--cs-text-mid);
+      font: var(--text-pc-body-14);
+      color: var(--cs-text);
       white-space: nowrap;
     }
 
     .pc-title {
       font: var(--text-pc-menu-en-20);
-      color: var(--cs-text-mid);
+      font-size: 18px;
+      color: var(--cs-text);
       flex-shrink: 0;
       white-space: nowrap;
     }
+    .pc-title.pc-title--kr {
+      font: var(--text-pc-menu-kr-20);
+      font-size: 18px;
+    }
+  }
 
+  @media (min-width: 768px) and (max-width: 1024px) {
+    .sub-gnb-pc-inner {
+      padding: 16px var(--layout-tab-pad);
+      gap: 20px;
+    }
+    .pc-pill {
+      padding: 14px 28px;
+      min-height: 56px;
+    }
   }
 
   /* ══ Mobile Sub GNB ══ */

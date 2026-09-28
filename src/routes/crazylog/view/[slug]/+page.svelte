@@ -3,6 +3,7 @@
   import type { PageData } from './$types'
   import CrazylogWriteCard from '$lib/components/common/CrazylogWriteCard.svelte'
   import BottomTabBar from '$lib/components/common/BottomTabBar.svelte'
+  import SubGnb from '$lib/components/common/SubGnb.svelte'
 
   interface Props { data: PageData }
   let { data }: Props = $props()
@@ -301,21 +302,24 @@
      PC LAYOUT (≥ 1024px)
 ══════════════════════════════════ -->
 <div class="d-view">
+  <!-- PC sub-GNB — §13-2 sub-gnb_navi_b (cart 정본, GNB 있음 → sticky top GNB 높이) -->
+  <header class="sub-gnb-b">
+    <div class="sub-gnb-b-inner">
+      <button type="button" class="sub-gnb-b-pill" onclick={() => history.back()} aria-label="뒤로 가기">
+        <div class="sub-gnb-b-pill-left">
+          <svg class="sub-gnb-b-arrow" viewBox="0 0 21.3844 17.1421" fill="none" aria-hidden="true">
+            <path d={PC_SVG.backArrow} stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+          <span class="sub-gnb-b-back">Back</span>
+        </div>
+        <span class="sub-gnb-b-title sub-gnb-b-title--kr">{post?.logType ?? ''}</span>
+      </button>
+    </div>
+  </header>
+
   <div class="d-body">
 
-    <!-- 1. Navi-bar -->
-    <div class="d-navi-bar">
-      <button class="d-back-btn" onclick={() => history.back()} aria-label="뒤로 가기">
-        <svg width="21.38" height="17.14" viewBox="0 0 21.3844 17.1421" fill="none">
-          <path d={PC_SVG.backArrow} stroke="#100B32" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
-        </svg>
-        <span>Back</span>
-      </button>
-      <span class="d-navi-title">{post?.logType ?? ''}</span>
-      <div class="d-navi-actions"></div>
-    </div>
-
-    <!-- 2. PostsEng (본문 카드) -->
+    <!-- PostsEng (본문 카드) -->
     <div class="d-posts-eng" data-name="Posts-eng">
       <!-- Img() -->
       <div
@@ -443,28 +447,8 @@
 ══════════════════════════════════ -->
 <div class="m-view">
 
-  <!-- 1. TopThumbView: pt-[40px] px-[25px] -->
-  <div class="m-top">
-    <div class="m-nav-pill">
-      <button class="m-back" onclick={() => history.back()} aria-label="뒤로 가기">
-        <svg width="17" height="12" viewBox="0 0 17 12" fill="none">
-          <path d={MOB_SVG.back} stroke="#444444" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
-        </svg>
-      </button>
-      <span class="m-nav-title">{post?.logType ?? ''}</span>
-      <!-- Single SVG: viewBox="0 0 20 16.5", both bars in one <g> -->
-      <button class="m-hamburger" aria-label="메뉴">
-        <div class="m-hamburger-icon">
-          <svg width="20" height="16.5" viewBox="0 0 20 16.5" fill="none" style="width:20px;height:16.5px;">
-            <g>
-              <path d={MOB_SVG.burgerMid} fill="#CF0000" />
-              <path d={MOB_SVG.burgerTop} fill="#201857" />
-            </g>
-          </svg>
-        </div>
-      </button>
-    </div>
-  </div>
+  <!-- 모바일 sub-GNB — SubGnb.svelte 표준(cart·search와 동일, noGnbOffset) -->
+  <SubGnb title={post?.logType ?? ''} titleLocale="kr" mobileOnly noGnbOffset />
 
   <!-- 2. Body: pt-[50px] -->
   <div class="m-body">
@@ -700,51 +684,100 @@
   /* ══════════════════════════════════
      PC
   ══════════════════════════════════ */
-  .d-body {
+  .d-view {
     background: var(--cs-lilac);
     min-height: 100vh;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    padding: calc(var(--layout-header-h, 100px) + 50px) 40px 50px;
-    gap: 50px;
   }
 
-  /* 1. Navi-bar */
-  .d-navi-bar {
+  /* §13-2 sub-gnb_navi_b — cart/+page.svelte 정본 (sub-only: main GNB 미렌더) */
+  .sub-gnb-b {
+    position: sticky;
+    top: 0;
+    z-index: 50;
+    background: transparent;
+    border-bottom: none;
+    width: 100%;
+  }
+  .sub-gnb-b-inner {
     display: flex;
     align-items: center;
     justify-content: space-between;
+    gap: 30px;
     width: 100%;
-    max-width: 1240px;
-    background: rgba(225,222,243,0.4);
-    border-radius: 25px;
-    padding: 20px 40px;
+    max-width: var(--layout-pc-max);
+    margin: 0 auto;
+    padding: 20px var(--layout-pc-pad);
+    flex-wrap: nowrap;
+    box-sizing: border-box;
   }
-  .d-back-btn {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    background: none;
+  .sub-gnb-b-pill {
+    background: rgba(225, 222, 243, 0.4);
     border: none;
     cursor: pointer;
-    font-size: 16px;
-    font-weight: 700;
-    font-family: 'Noto Sans KR', sans-serif;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+    padding: 14px 40px;
+    border-radius: var(--radius-lg);
+    width: 100%;
+    max-width: none;
+    min-width: 0;
+    min-height: 43px;
+    flex: 1 1 auto;
+    box-sizing: border-box;
     color: var(--cs-text);
-    min-height: 44px;
-    padding: 0;
-    transition: opacity 0.15s;
+    transition: background 0.2s;
   }
-  .d-back-btn:hover { opacity: 0.7; }
-  .d-navi-title {
+  .sub-gnb-b-pill:hover { background: rgba(225, 222, 243, 0.85); }
+  .sub-gnb-b-pill-left {
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    min-width: 0;
+  }
+  .sub-gnb-b-arrow {
+    width: 11px;
+    height: 9px;
+    flex-shrink: 0;
+  }
+  .sub-gnb-b-back {
+    font: var(--text-pc-body-14);
+    color: var(--cs-text);
+    white-space: nowrap;
+  }
+  .sub-gnb-b-title {
+    font: var(--text-pc-menu-en-20);
+    font-size: 18px;
+    color: var(--cs-text);
+    flex-shrink: 0;
+    white-space: nowrap;
+  }
+  .sub-gnb-b-title--kr {
     font: var(--text-pc-menu-kr-20);
-    color: var(--cs-text-mid);
-    margin-left: auto;
-    order: 3;
+    font-size: 18px;
   }
 
-  /* 2. PostsEng */
+  @media (max-width: 1024px) {
+    .sub-gnb-b-inner {
+      padding: 16px var(--layout-tab-pad);
+      gap: 20px;
+    }
+    .sub-gnb-b-pill {
+      padding: 14px 28px;
+      min-height: 56px;
+    }
+  }
+
+  .d-body {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 50px 40px;
+    gap: 50px;
+  }
+
+  /* PostsEng */
   .d-posts-eng {
     background: var(--cs-white);
     border-radius: 30px;
@@ -1008,64 +1041,18 @@
     .m-view { display: flex; }
   }
 
-  /* 1. TopThumbView: pt-[40px] px-[25px] */
-  .m-top {
-    width: 100%;
-    padding: 40px 25px 0;
-  }
-  .m-nav-pill {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    background: var(--cs-purple-op10);
-    border-radius: 20px;
-    min-height: 60px;
-    padding: 5px 20px;
-    position: relative;
-    width: 100%;
-  }
-  .m-back {
-    background: none;
-    border: none;
-    cursor: pointer;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    width: 18px;
-    height: 18px;
-    min-width: 44px;
-    min-height: 44px;
-    padding: 0;
-  }
-  .m-nav-title {
-    font-size: 16px;
-    font-weight: 700;
-    font-family: 'Noto Sans KR', sans-serif;
-    color: var(--cs-text);
-    position: absolute;
-    left: 50%;
-    transform: translateX(-50%);
-    text-align: center;
-    line-height: 1.6;
-    letter-spacing: -0.5px;
-  }
-  .m-hamburger {
-    background: none;
-    border: none;
-    cursor: pointer;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    min-width: 44px;
-    min-height: 44px;
-    padding: 0;
-  }
-  .m-hamburger-icon {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    width: 20px;
-    height: 16.5px;
+  /* 이 페이지는 PC/모바일 분기가 1024px — SubGnb 기본(768px)보다 넓은 구간에서도
+     모바일 sub-GNB를 유지(cart·search와 동일 top:0·~74px 높이) */
+  @media (max-width: 1023px) {
+    .m-view :global(.sub-gnb-mobile-wrap) {
+      display: block !important;
+      overflow: hidden;
+      max-height: 100px;
+      width: 100%;
+    }
+    .m-view :global(.sub-gnb-mobile) {
+      display: block !important;
+    }
   }
 
   /* 2. Body: pt-[50px] */

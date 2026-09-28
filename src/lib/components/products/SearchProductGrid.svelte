@@ -40,10 +40,11 @@
     </button>
 
     {#if expanded}
+      <!-- 표시 순서 = products 배열 순서(API search_products RPC 랭킹 그대로) -->
       <div class="product-grid">
         {#each products as p (p.id)}
           <!-- svelte-ignore a11y_no_static_element_interactions -->
-          <div onclick={() => onProductClick?.(String(p.id))}>
+          <div class="product-grid-item" onclick={() => onProductClick?.(String(p.id))}>
             <ProductDPCard
               id={String(p.id)}
               name={p.name}
@@ -121,27 +122,38 @@
     font-family: 'Noto Sans KR', sans-serif;
   }
 
-  /* ProductDPCard 그리드 — 카드 고정폭 해제, 셀 크기에 맞춤 */
+  /* 모바일 2열 — /products .m-prod-grid 동일 패턴(flex + calc(50% - 5px), 2026-09-28) */
   .product-grid {
-    display: grid;
-    grid-template-columns: repeat(2, 1fr);
-    column-gap: 15px;
-    row-gap: 40px;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 26px 10px;
   }
-  .product-grid :global(.pc-card) {
+  .product-grid-item {
+    width: calc(50% - 5px);
+    min-width: 0;
+    box-sizing: border-box;
+  }
+  .product-grid-item :global(.pc-card) {
     width: 100%;
+    max-width: 100%;
+    min-width: 0;
+    flex-shrink: 1;
   }
-  .product-grid :global(.pc-img-wrap) {
+  .product-grid-item :global(.pc-img-wrap) {
     width: 100%;
     height: auto;
     aspect-ratio: 1;
+    flex-shrink: 1;
   }
 
   @media (min-width: 768px) {
     .product-grid {
+      display: grid;
       grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
-      column-gap: 30px;
-      row-gap: 60px;
+      gap: 60px 30px;
+    }
+    .product-grid-item {
+      width: auto;
     }
   }
 </style>

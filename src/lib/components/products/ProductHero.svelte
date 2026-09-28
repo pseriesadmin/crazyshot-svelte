@@ -80,7 +80,7 @@
           </svg>
           <span class="sub-gnb-b-back">Back</span>
         </div>
-        <span class="sub-gnb-b-title">{displayCategoryLabel}</span>
+        <span class="sub-gnb-b-title sub-gnb-b-title--kr">{displayCategoryLabel}</span>
       </button>
 
       <div class="sub-gnb-b-cats">
@@ -231,6 +231,7 @@
     box-sizing: border-box;
   }
 
+  /* pill — §13-2 sub-gnb_navi_b 축소 규격(cart 정본). 카테고리 행(.sub-gnb-b-cats)은 navi_c 전용 */
   .sub-gnb-b-pill {
     background: rgba(225, 222, 243, 0.4);
     border: none;
@@ -239,12 +240,12 @@
     align-items: center;
     justify-content: space-between;
     gap: 16px;
-    padding: 20px 40px;
-    border-radius: 25px;
+    padding: 14px 40px;
+    border-radius: var(--radius-lg);
     width: 100%;
     max-width: 460px;
     min-width: 0;
-    min-height: 62px;
+    min-height: 43px;
     flex: 0 1 460px;
     box-sizing: border-box;
     color: var(--cs-text);
@@ -260,23 +261,38 @@
   }
 
   .sub-gnb-b-arrow {
-    width: 22px;
-    height: 18px;
+    width: 11px;
+    height: 9px;
     flex-shrink: 0;
-    color: var(--cs-text-light);
   }
 
   .sub-gnb-b-back {
-    font: var(--text-pc-title-16);
-    color: var(--cs-text-mid);
+    font: var(--text-pc-body-14);
+    color: var(--cs-text);
     white-space: nowrap;
   }
 
   .sub-gnb-b-title {
     font: var(--text-pc-menu-en-20);
-    color: var(--cs-text-mid);
+    font-size: 18px;
+    color: var(--cs-text);
     flex-shrink: 0;
     white-space: nowrap;
+  }
+  .sub-gnb-b-title--kr {
+    font: var(--text-pc-menu-kr-20);
+    font-size: 18px;
+  }
+
+  @media (max-width: 1024px) {
+    .sub-gnb-b-inner {
+      padding: 16px var(--layout-tab-pad);
+      gap: 20px;
+    }
+    .sub-gnb-b-pill {
+      padding: 14px 28px;
+      min-height: 56px;
+    }
   }
 
   .sub-gnb-b-cats {

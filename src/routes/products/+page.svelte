@@ -1,9 +1,11 @@
 <script lang="ts">
   import { goto } from '$app/navigation'
+  import { truncateKeywordLabel } from '$lib/utils/keywordDisplay'
   import { fly } from 'svelte/transition'
   import type { PageData } from './$types'
   import type { ProductCard } from './+page.server'
   import BottomTabBar from '$lib/components/common/BottomTabBar.svelte'
+  import BrandMarquee from '$lib/components/products/BrandMarquee.svelte'
   import ProductDPCard from '$lib/components/products/ProductDPCard.svelte'
   import ProductCategoryModal from '$lib/components/products/admin/ProductCategoryModal.svelte'
   import ProductHeroModal from '$lib/components/products/admin/ProductHeroModal.svelte'
@@ -62,13 +64,6 @@
     { img:'/images/products/mob-2.png',   imgStyle:{h:'172.35%',l:'-16.43%',t:'-33.37%',w:'208.9%' }, name:'SONY A7S3', price:'120,000 원 / 1일' },
     { img:'/images/products/feat-2.png',  imgStyle:{h:'103.88%',l:'-10.76%',t:'-1.06%', w:'125.91%'}, name:'인스타 360',price:'120,000 원 / 1일' },
     { img:'/images/products/feat-5.png',  imgStyle:{h:'152.17%',l:'-57.19%',t:'-28.84%',w:'212.12%'}, name:'캐논 300m', price:'120,000 원 / 1일' },
-  ]
-
-  const BRAND_LOGOS = [
-    { src:'/images/products/brand-canon.png',   h:'27.68px', w:'93px',      imgStyle:{h:'145.67%',l:'-16.29%',t:'-20.32%',w:'132.5%'} },
-    { src:'/images/products/brand-samsung.png', h:'23.602px',w:'154px',     cover:true },
-    { src:'/images/products/brand-nikon.png',   h:'25px',    w:'143.191px', imgStyle:{h:'140.12%',l:'-3.16%', t:'-18.25%',w:'106.15%'} },
-    { src:'/images/products/brand-gopro.png',   h:'33px',    w:'102.969px', imgStyle:{h:'325.76%',l:'-34.39%',t:'-112.88%',w:'167.04%'} },
   ]
 
   // ── 카테고리: 저장된 설정 기준 표시 (순서·아이콘URL 반영) ───────────────
@@ -224,7 +219,12 @@
       {#if displayKeywords.length > 0}
         <div class="m-keywords">
           {#each displayKeywords as kw}
-            <button class="kw-pill" onclick={() => goto(`/products/search?q=${encodeURIComponent(kw)}`)}>{kw}</button>
+            <button
+              class="kw-pill"
+              title={kw}
+              aria-label={kw}
+              onclick={() => goto(`/products/search?q=${encodeURIComponent(kw)}`)}
+            >{truncateKeywordLabel(kw)}</button>
           {/each}
         </div>
       {/if}
@@ -724,24 +724,7 @@
     </div>
   </div>
 
-  <!-- Brand marquee (all viewports) -->
-  <div class="brand-marquee-wrap">
-    <div class="marquee-fade-left" aria-hidden="true"></div>
-    <div class="marquee-fade-right" aria-hidden="true"></div>
-    <div class="marquee-inner">
-      {#each [...BRAND_LOGOS, ...BRAND_LOGOS, ...BRAND_LOGOS, ...BRAND_LOGOS] as logo}
-        <div class="marquee-logo-box" style="height:{logo.h};width:{logo.w}">
-          {#if logo.cover}
-            <img src={logo.src} alt="" class="abs-img" style="inset:0;width:100%;height:100%;object-fit:cover" loading="lazy" />
-          {:else if logo.imgStyle}
-            <img src={logo.src} alt="" class="abs-img"
-              style="height:{logo.imgStyle.h};left:{logo.imgStyle.l};top:{logo.imgStyle.t};width:{logo.imgStyle.w}"
-              loading="lazy" />
-          {/if}
-        </div>
-      {/each}
-    </div>
-  </div>
+  <BrandMarquee />
 
 </div>
 
@@ -1597,68 +1580,6 @@
   }
 
   /* ─────────────────────────────────────────────────────────────────── */
-  /* BRAND MARQUEE */
-  /* ─────────────────────────────────────────────────────────────────── */
-  .brand-marquee-wrap {
-    width: 100%;
-    max-width: 1240px;
-    margin: 0 auto;
-    /* 레이아웃 분리도 확보를 위해 상하폭 50% 확대(요청, 2026-09-27) — 90px → 135px,
-       PC·모바일 공용 규칙(별도 breakpoint 분기 없음) */
-    height: 135px;
-    overflow: hidden;
-    position: relative;
-    /* 높이 확대분을 로고 행 상하로 균등 배분(세로 중앙 정렬) — 기존 block 흐름이면
-       늘어난 공간이 전부 아래쪽에만 쌓여 비대칭으로 보임 */
-    display: flex;
-    align-items: center;
-    /* 상단 화이트 → 기존 배경색(--cs-lilac) 그라데이션(요청, 2026-09-27) — PC·모바일 공용 규칙 */
-    background: linear-gradient(to bottom, #ffffff, var(--cs-lilac));
-  }
-  .marquee-fade-left {
-    position: absolute;
-    inset-block: 0;
-    left: 0;
-    width: 60px;
-    z-index: 10;
-    background: linear-gradient(to right, #ecebf4, transparent);
-    pointer-events: none;
-  }
-  .marquee-fade-right {
-    position: absolute;
-    inset-block: 0;
-    right: 0;
-    width: 60px;
-    z-index: 10;
-    background: linear-gradient(to left, #ecebf4, transparent);
-    pointer-events: none;
-  }
-  .marquee-inner {
-    display: flex;
-    gap: 80px;
-    align-items: center;
-    width: max-content;
-    /* 모바일 전환 시 30% 축소 노출(요청, 2026-09-27) — PC는 아래 미디어쿼리에서 원본
-       크기(marquee) 애니메이션으로 복원 */
-    animation: marquee-mobile 28s linear infinite;
-    padding: 20px 0;
-  }
-  .brand-marquee-wrap:hover .marquee-inner { animation-play-state: paused; }
-  .marquee-logo-box {
-    position: relative;
-    flex-shrink: 0;
-    overflow: hidden;
-  }
-  @keyframes marquee {
-    from { transform: translateX(0) }
-    to   { transform: translateX(-50%) }
-  }
-  @keyframes marquee-mobile {
-    from { transform: scale(0.7) translateX(0) }
-    to   { transform: scale(0.7) translateX(-50%) }
-  }
-
-  /* ─────────────────────────────────────────────────────────────────── */
   /* 관리자 공통 버튼 (front-uiux.md 토큰 기반) */
   /* ─────────────────────────────────────────────────────────────────── */
   .admin-edit-btn {
@@ -1754,11 +1675,6 @@
     .m-list { display: none; }
     .d-list { display: block; }
 
-    /* Brand marquee: white background on desktop */
-    .brand-marquee-wrap { max-width: 100%; }
-    .marquee-fade-left  { background: linear-gradient(to right, white, transparent); }
-    .marquee-fade-right { background: linear-gradient(to left, white, transparent); }
-
     /* MD picks: desktop layout */
     .md-picks-section { padding: 20px 56px 40px; max-width: 100%; }
     .md-pick-card { width: 290px; }
@@ -1773,7 +1689,5 @@
     .mdp-price-num { font: var(--text-pc-title-18); font-weight: 900; line-height: 1; font-variant-numeric: tabular-nums; }
     /* PC는 기존 14px Bold 유지(모바일만 축소 요청, 2026-09-27) */
     .mdp-price-label { font: var(--text-pc-body-14); line-height: 1; }
-    /* 브랜드 마퀴 — PC는 원본 크기(축소 없음) 애니메이션 복원(모바일만 30% 축소 요청, 2026-09-27) */
-    .marquee-inner { animation: marquee 28s linear infinite; }
   }
 </style>

@@ -1,5 +1,4 @@
 <script lang="ts">
-  import { supabase } from '$lib/services/supabase'
   import BottomTabBar from '$lib/components/common/BottomTabBar.svelte'
   import SubGnb from '$lib/components/common/SubGnb.svelte'
   import SuggestPicker from '$lib/components/common/SuggestPicker.svelte'
@@ -21,9 +20,37 @@
   /** G-3: 현재 검색 세션의 log ID — recordSearchClick에 전달 */
   let searchLogId      = $state<string | null>(null)
 
-  interface SearchProduct { id: string; name: string; category: string; price24h: number; price12h: number; img: string; slug?: string; wished?: boolean }
+  interface SearchProduct {
+    id: string
+    name: string
+    category: string
+    price24h: number
+    price12h: number
+    img: string
+    slug?: string
+    href?: string
+    wished?: boolean
+  }
   let searchResults      = $state<SearchProduct[]>([])
   let recommendedProducts = $state<SearchProduct[]>([])
+
+  /** API 응답 → 그리드 카드 (RPC 랭킹 순서 유지 — 클라이언트 재정렬 없음) */
+  function mapSearchApiRow(r: Record<string, unknown>): SearchProduct {
+    const p24 = Number(r['price_min'] ?? r['base_price_daily'] ?? 0)
+    const slug = r['slug'] ? String(r['slug']) : null
+    return {
+      id:       String(r['product_id'] ?? r['id'] ?? ''),
+      name:     String(r['name'] ?? ''),
+      category: String(r['category'] ?? ''),
+      slug:     slug ?? undefined,
+      price24h: p24,
+      price12h: Math.round(p24 * 0.7),
+      img:      ((r['image_urls'] as string[] | null)?.[0])
+        ?? (r['image_url'] ? String(r['image_url']) : '/images/products/grid-flat.png'),
+      href:     slug ? `/products/${slug}` : undefined,
+      wished:   Boolean(r['wished']),
+    }
+  }
 
   // 마운트 시 URL ?q= 파라미터가 있으면 즉시 검색 실행
   $effect(() => {
@@ -31,40 +58,15 @@
     if (initialQ) doSearch(initialQ)
   })
 
-  // 마운트 시 추천 상품 로드
+  // 추천 상품 — All(/products) 그리드와 동일 search_products RPC 랭킹 경유
   $effect(() => {
-    supabase
-      .from('products')
-      .select('id, name, category, image_urls, slug, price_rules(price, duration_type)')
-      .eq('is_active', true)
-      .eq('option_only', false)
-      .limit(6)
-      .then(async ({ data: rows }) => {
-        if (!rows) return
-        recommendedProducts = (rows as Record<string, unknown>[]).map(r => {
-          const rules = (r['price_rules'] as { price: number; duration_type: string }[] | null) ?? []
-          const p24 = rules.find(x => x.duration_type === '24h')?.price ?? 0
-          const p12 = rules.find(x => x.duration_type === '12h')?.price ?? Math.round(p24 * 0.7)
-          const imgs = r['image_urls'] as string[] | null
-          return {
-            id:       String(r['id'] ?? ''),
-            name:     String(r['name'] ?? ''),
-            category: String(r['category'] ?? ''),
-            slug:     r['slug'] ? String(r['slug']) : undefined,
-            price24h: p24,
-            price12h: p12,
-            img:      imgs?.[0] ?? '/images/products/grid-flat.png',
-          }
-        })
-
-        if (!data.isLoggedIn || recommendedProducts.length === 0) return
-        const { data: wishRows } = await supabase
-          .from('product_wishlists')
-          .select('product_id')
-          .in('product_id', recommendedProducts.map(p => p.id))
-        const wishedSet = new Set(((wishRows ?? []) as { product_id: string }[]).map(w => w.product_id))
-        recommendedProducts = recommendedProducts.map(p => ({ ...p, wished: wishedSet.has(p.id) }))
+    fetch('/api/search/products?limit=6')
+      .then(async (resp) => {
+        if (!resp.ok) return
+        const payload = await resp.json() as { results: Record<string, unknown>[] }
+        recommendedProducts = (payload.results ?? []).map(mapSearchApiRow)
       })
+      .catch(() => { recommendedProducts = [] })
   })
 
   const pickerOptions = $derived<SuggestPickerOption[]>(
@@ -89,21 +91,7 @@
       const payload = await resp.json() as { results: Record<string, unknown>[]; search_log_id?: string | null }
       // G-3: search_log_id 캡처 (migration 203 이후 RPC가 반환)
       searchLogId = payload.search_log_id ?? null
-      searchResults = (payload.results ?? []).map(r => {
-        const p24 = Number(r['price_min'] ?? r['base_price_daily'] ?? 0)
-        const slug = r['slug'] ? String(r['slug']) : null
-        return {
-          id:       String(r['product_id'] ?? r['id'] ?? ''),
-          name:     String(r['name'] ?? ''),
-          category: String(r['category'] ?? ''),
-          slug:     slug ?? undefined,
-          price24h: p24,
-          price12h: Math.round(p24 * 0.7),
-          img:      ((r['image_urls'] as string[] | null)?.[0]) ?? (r['image_url'] ? String(r['image_url']) : '/images/products/grid-flat.png'),
-          href:     slug ? `/products/${slug}` : undefined,
-          wished:   Boolean(r['wished']),
-        }
-      })
+      searchResults = (payload.results ?? []).map(mapSearchApiRow)
     } catch {
       searchResults = []
     } finally {
@@ -190,7 +178,7 @@
 
   <!-- ── 관심집중 키워드 ── -->
   <SearchKeywordBar
-    keywords={data.trendingKeywords.length > 0 ? data.trendingKeywords : undefined}
+    keywords={data.interestKeywords}
     onkeywordclick={(kw) => { searchQuery = kw; doSearch(kw) }}
   />
 

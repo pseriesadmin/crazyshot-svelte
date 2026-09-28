@@ -90,24 +90,23 @@
      PC (≥ 768px)
 ════════════════════════════════════════════════ -->
 <div class="d-wrap">
-  <!-- Body — 메인 레이아웃 GNB(fixed 100px) 아래부터 시작 -->
+  <!-- PC sub-GNB — §13-2 sub-gnb_navi_b (cart/+page.svelte 정본, GNB-less → top:0) -->
+  <header class="sub-gnb-b">
+    <div class="sub-gnb-b-inner">
+      <button type="button" class="sub-gnb-b-pill" onclick={handleBack} aria-label="이전 페이지로">
+        <div class="sub-gnb-b-pill-left">
+          <svg class="sub-gnb-b-arrow" viewBox="0 0 21.3844 17.1421" fill="none" aria-hidden="true">
+            <path d="M19.8844 8.5707L1.5 8.57107M8.57107 1.5L1.5 8.57107L8.57107 15.6421" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="3"/>
+          </svg>
+          <span class="sub-gnb-b-back">Back</span>
+        </div>
+        <span class="sub-gnb-b-title">Log In</span>
+      </button>
+    </div>
+  </header>
+
   <div class="d-body">
     <div class="d-container">
-      <!-- 백 버튼 nav pill (sub-gnb_navi_b 표준) -->
-      <button class="d-nav-pill" onclick={handleBack} aria-label="이전 페이지로">
-        <div class="d-nav-pill-left">
-          <span class="d-back-icon" aria-hidden="true">
-            <svg width="21" height="17" viewBox="0 0 21.3844 17.1421" fill="none">
-              <path d="M20.3844 8.5711H1M8.5 1L1 8.5711L8.5 16.1421"
-                stroke="currentColor" stroke-width="3"
-                stroke-linecap="round" stroke-linejoin="round"/>
-            </svg>
-          </span>
-          <span class="d-back-label">Back</span>
-        </div>
-        <span class="d-nav-pill-title">Log In</span>
-      </button>
-
       <!-- 메인 카드 -->
       <div class="d-card">
         <!-- 좌: Title 패널 -->
@@ -618,13 +617,12 @@
     .m-wrap  { display: none !important; }
   }
 
-  /* Body — GNB 없는 auth 전용 레이아웃, 상단 여백 */
+  /* Body — GNB 없는 auth 전용 레이아웃 */
   .d-body {
     flex: 1;
     display: flex;
     flex-direction: column;
     align-items: center;
-    padding-top: 40px;
     padding-bottom: 80px;
   }
   .d-container {
@@ -636,38 +634,80 @@
     gap: 50px;
   }
 
-  /* 백 버튼 nav pill — sub-gnb_navi_b 표준 (front-uiux.md §13-2) */
-  .d-nav-pill {
+  /* §13-2 sub-gnb_navi_b — cart/+page.svelte 정본 */
+  .sub-gnb-b {
+    position: sticky;
+    top: 0;
+    z-index: 50;
+    background: transparent;
+    border-bottom: none;
+    width: 100%;
+  }
+  .sub-gnb-b-inner {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 30px;
+    width: 100%;
+    max-width: var(--layout-pc-max);
+    margin: 0 auto;
+    padding: 20px var(--layout-pc-pad);
+    flex-wrap: nowrap;
+    box-sizing: border-box;
+  }
+  .sub-gnb-b-pill {
     background: rgba(225, 222, 243, 0.4);
     border: none;
-    border-radius: 25px;
-    padding: 20px 40px;
+    cursor: pointer;
     display: flex;
     align-items: center;
     justify-content: space-between;
     gap: 16px;
-    cursor: pointer;
+    padding: 14px 40px;
+    border-radius: var(--radius-lg);
     width: 100%;
-    align-self: stretch;   /* .d-body align-items:center 수축 방지 (front-uiux.md §13 가로폭 확보 규칙) */
+    max-width: none;
     min-width: 0;
-    min-height: 62px;
+    min-height: 43px;
+    flex: 1 1 auto;
     box-sizing: border-box;
     color: var(--cs-text);
     transition: background 0.2s;
   }
-  .d-nav-pill:hover { background: rgba(225, 222, 243, 0.65); }
-  .d-nav-pill-left { display: flex; align-items: center; gap: 12px; }
-  .d-back-icon { display: flex; align-items: center; }
-  .d-back-label {
-    font: var(--text-pc-title-16);
+  .sub-gnb-b-pill:hover { background: rgba(225, 222, 243, 0.85); }
+  .sub-gnb-b-pill-left {
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    min-width: 0;
+  }
+  .sub-gnb-b-arrow {
+    width: 11px;
+    height: 9px;
+    flex-shrink: 0;
+  }
+  .sub-gnb-b-back {
+    font: var(--text-pc-body-14);
     color: var(--cs-text);
     white-space: nowrap;
   }
-  .d-nav-pill-title {
+  .sub-gnb-b-title {
     font: var(--text-pc-menu-en-20);
+    font-size: 18px;
     color: var(--cs-text);
     flex-shrink: 0;
     white-space: nowrap;
+  }
+
+  @media (max-width: 1024px) {
+    .sub-gnb-b-inner {
+      padding: 16px var(--layout-tab-pad);
+      gap: 20px;
+    }
+    .sub-gnb-b-pill {
+      padding: 14px 28px;
+      min-height: 56px;
+    }
   }
 
   /* 메인 카드 */

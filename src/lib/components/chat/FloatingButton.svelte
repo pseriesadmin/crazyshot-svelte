@@ -25,6 +25,8 @@
         position:fixed 충돌" 참고, 2026-08-19 발견·수정) — 이 경우 호출부가 ChatBottomSheet를
         transform 영향이 없는 위치에 별도로 렌더링해야 함 */
     hideSheet?: boolean
+    /** FAB 탭 직전 호출 — FloatingBar peek 1-touch 실행 등 */
+    onBeforeToggle?: () => void
   }
 
   let {
@@ -35,13 +37,16 @@
     contextId,
     hideFab = false,
     hideSheet = false,
+    onBeforeToggle
   }: Props = $props()
 
   let isOpen = $derived(chatStore.isOpen)
   let unreadCount = $derived(chatStore.unreadCount)
   let badgeLabel = $derived(unreadCount > 99 ? '99+' : String(unreadCount))
 
-  function handleToggle() {
+  function handleToggle(e: MouseEvent) {
+    e.stopPropagation()
+    onBeforeToggle?.()
     toggleChat()
     if (chatStore.isOpen) resetUnreadCount()
   }

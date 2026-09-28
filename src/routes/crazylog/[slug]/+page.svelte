@@ -1354,7 +1354,6 @@
 			display: block;
 			background: var(--cs-lilac);
 			min-height: 100vh;
-			padding-top: var(--layout-header-h);
 		}
 	}
 
@@ -1631,7 +1630,7 @@
 		min-width: 220px;
 		max-width: 340px;
 		position: sticky;
-		top: calc(var(--layout-header-h) + 20px);
+		top: 20px;
 		display: flex;
 		flex-direction: column;
 		gap: 20px;
