@@ -42,7 +42,7 @@ export const load: PageServerLoad = async ({ params, locals, url }) => {
   // 소유권 확인은 RLS 클라이언트로 — user_id 불일치 시 조회 자체가 안 됨
   const { data: raw } = await locals.supabase
     .from('rental_reservations')
-    .select('id, status, reservation_code, start_date, end_date, pickup_method, return_method, pickup_time, return_time, products(name, category)')
+    .select('id, status, reservation_code, start_date, end_date, pickup_method, return_method, pickup_time, return_time, products!rental_reservations_product_id_fkey(name, category)')
     .eq('id', params.id)
     .eq('user_id', session.user.id)
     .maybeSingle()

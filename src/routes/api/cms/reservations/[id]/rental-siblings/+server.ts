@@ -27,7 +27,7 @@ export const GET: RequestHandler = async ({ params, locals }) => {
   // (QA GATE E에서 발견, 2026-09-03).
   const { data: mainResRow, error: mainErr } = await admin
     .from('rental_reservations')
-    .select(`products(parent_product_id)`)
+    .select(`products!rental_reservations_product_id_fkey(parent_product_id)`)
     .eq('id', reservationId)
     .maybeSingle()
 
@@ -65,7 +65,7 @@ export const GET: RequestHandler = async ({ params, locals }) => {
     .select(`
       id, reservation_code, status, start_date, end_date, pickup_method, return_method,
       payment_confirmed_at, tracking_number,
-      products(name, product_code, category, image_urls, parent_product_id)
+      products!rental_reservations_product_id_fkey(name, product_code, category, image_urls, parent_product_id)
     `)
     .in('id', siblingIds)
 

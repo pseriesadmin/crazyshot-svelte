@@ -44,7 +44,7 @@ export const GET: RequestHandler = async ({ params, locals }) => {
 
   const { data: rows, error: rowsErr } = await admin
     .from('rental_reservations')
-    .select('id, reservation_code, status, product_id, products(name)')
+    .select('id, reservation_code, status, product_id, products!rental_reservations_product_id_fkey(name)')
     .in('id', siblingIds)
 
   if (rowsErr) return json({ error: rowsErr.message }, { status: 500 })

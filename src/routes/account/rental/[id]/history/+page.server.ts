@@ -49,7 +49,7 @@ export const load: PageServerLoad = async ({ params, locals, url }) => {
   // 예약 정보 + 상품명 조회 (소유권 검증 포함)
   const { data: reservation, error: resErr } = await locals.supabase
     .from('rental_reservations')
-    .select('id, status, reservation_code, start_date, end_date, product_id, products(name, category)')
+    .select('id, status, reservation_code, start_date, end_date, product_id, products!rental_reservations_product_id_fkey(name, category)')
     .eq('id', reservationId)
     .eq('user_id', session.user.id)
     .maybeSingle()
