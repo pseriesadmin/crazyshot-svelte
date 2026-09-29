@@ -54,6 +54,11 @@ export type SelectedProduct = {
   sale_price: number | null
   sale_only: boolean
   option_only: boolean
+  // 2026-09-29 정책: "결합상품" 분류는 등록 시점에만 결정·영구 고정(products.is_bundle_product
+  // 컬럼). ProductDetailPanel의 '결합상품' 탭은 이 값이 true인 상품에만 노출된다 — 기존
+  // 단일상품에 결합상품을 추가해 사후에 결합상품으로 전환하는 것은 금지 정책이라, 탭 노출
+  // 여부를 product_bundle_links 존재 유무(가변)가 아니라 이 영구 컬럼(불변)으로 판정한다.
+  is_bundle_product: boolean
   assetCount: number
   price12h: number | null
   price24h: number | null
@@ -96,6 +101,10 @@ export type RootProductInfo = {
   sale_only: boolean
   assetCount: number
   assetTotal: number
+  // 결합상품(패키지) 분류 여부 — products.is_bundle_product 컬럼(등록 시점 영구 고정,
+  // 2026-09-29 정책). CMS 대표카드 "결합상품" 배지 표시에 사용. 예전엔 product_bundle_links
+  // 존재 여부로 가변 판정했으나, "사후 전환 금지" 정책으로 영구 컬럼 판정으로 교체.
+  isBundleProduct: boolean
 }
 
 export type SelectedProductDetail = {
@@ -145,7 +154,7 @@ export async function loadSelectedProductDetail(
       spParentId
         ? admin
             .from('products')
-            .select('name, brand, category, product_caption, slug, image_urls, allowed_period_ids, allowed_method_ids, allowed_pickup_ids, shipping_round_trip, shipping_delivery, shipping_return, sale_price, sale_only, option_only, content_blocks, keywords, components, specifications')
+            .select('name, brand, category, product_caption, slug, image_urls, allowed_period_ids, allowed_method_ids, allowed_pickup_ids, shipping_round_trip, shipping_delivery, shipping_return, sale_price, sale_only, option_only, is_bundle_product, content_blocks, keywords, components, specifications')
             .eq('id', spParentId)
             .is('deleted_at', null)  // BND-2: 삭제된 부모가 선택된 경우 데이터 노출 차단
             .single()
@@ -177,6 +186,7 @@ export async function loadSelectedProductDetail(
       sale_price: (src.sale_price as number | null) ?? null,
       sale_only: (src.sale_only as boolean) ?? false,
       option_only: (src.option_only as boolean) ?? false,
+      is_bundle_product: (src.is_bundle_product as boolean) ?? false,
       allowed_period_ids: (src.allowed_period_ids as string[] | null) ?? [],
       allowed_method_ids: (src.allowed_method_ids as string[] | null) ?? [],
       allowed_pickup_ids: (src.allowed_pickup_ids as string[] | null) ?? [],
@@ -406,7 +416,7 @@ export async function loadSelectedProductDetail(
     // 자식 선택: 부모 데이터 별도 조회 (BND-2: 삭제된 부모 노출 차단)
     const { data: rpData } = await admin
       .from('products')
-      .select('id, name, brand, category, image_urls, product_code, code_series, sale_only')
+      .select('id, name, brand, category, image_urls, product_code, code_series, sale_only, is_bundle_product')
       .eq('id', rootId)
       .is('deleted_at', null)
       .single()
@@ -426,6 +436,7 @@ export async function loadSelectedProductDetail(
         sale_only: (rpData as Record<string, unknown>).sale_only as boolean ?? false,
         assetCount: rootAssetCount,
         assetTotal: rootAssetTotal,
+        isBundleProduct: (rpData as Record<string, unknown>).is_bundle_product as boolean ?? false,
       }
     }
   } else if (selectedProduct) {
@@ -443,6 +454,7 @@ export async function loadSelectedProductDetail(
       sale_only: selectedProduct.sale_only,
       assetCount: rootAssetCount,
       assetTotal: rootAssetTotal,
+      isBundleProduct: selectedProduct.is_bundle_product,
     }
   }
 

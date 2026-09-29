@@ -159,6 +159,14 @@
     image_url: string | null
   }
   let selectedBundles = $state<NewBundleLink[]>([])
+  // 2026-09-29 Stephen 지시 — "결합상품" 콤보토글: 단품이 아닌 패키지형(다중 상품 구성)
+  // 상품임을 분류선택 단계에서 미리 표시. 기본값 false(미선택) — ③-B 섹션은 이 토글이
+  // true일 때만 노출된다(아래 템플릿).
+  // 2026-09-29 후속(Stephen 정책 확정): 이 값은 `products.is_bundle_product` 컬럼에
+  // 등록 시점에 영구 저장된다(hidden input, 아래) — "결합상품 여부"는 이제 등록 시점에
+  // 한 번 확정되며, 이후 기존 단일상품에 결합상품을 추가해 결합상품으로 전환하는 것은
+  // 금지 정책(ProductDetailPanel의 '결합상품' 탭은 이 컬럼이 true인 상품에만 노출).
+  let isBundlePackage = $state(false)
   let bundleKeyword = $state('')
   let showBundleModal = $state(false)
   let bundleResults = $state<OptionSearchResult[]>([])
@@ -752,6 +760,7 @@
     <input type="hidden" name="image_urls" value={serializeImages()} />
     <input type="hidden" name="is_active" value={isActive.toString()} />
     <input type="hidden" name="option_only" value={optionOnly.toString()} />
+    <input type="hidden" name="is_bundle_product" value={isBundlePackage.toString()} />
     <input type="hidden" name="option_links" value={serializeOptionLinks()} />
     <input type="hidden" name="bundle_links" value={serializeBundleLinks()} />
     <!-- BND-11: 임시 업로드 폴더 식별자 — 서버에서 temp/{tempId} → {productId} 이관 처리 -->
@@ -761,7 +770,8 @@
     <section class="form-section">
       <h2 class="section-title">① 기본정보</h2>
 
-      <div class="field-row">
+      <div class="field-row field-row-with-toggle">
+        <div class="field-row-picker-wrap">
         {#if (data.mappingGroups as MappingGroupSimple[]).length > 0}
           <SuggestPicker
             id="cat-group-sel"
@@ -821,6 +831,14 @@
             {/each}
           </select>
         {/if}
+        </div>
+        <button
+          type="button"
+          class="opt-combo-btn bundle-toggle-btn"
+          class:opt-combo-btn--on={isBundlePackage}
+          onclick={() => { isBundlePackage = !isBundlePackage }}
+          aria-pressed={isBundlePackage}
+        >결합상품</button>
       </div>
 
       {#if (data.mappingGroups as MappingGroupSimple[]).length > 0 && selectedGroupId}
@@ -1281,7 +1299,8 @@
       {/if}
     </section>
 
-    <!-- ③-B 결합상품 -->
+    <!-- ③-B 결합상품 — "결합상품" 콤보토글(①에서 선택) 켰을 때만 노출, 기본 미선택 시 항상 숨김 -->
+    {#if isBundlePackage}
     <section class="form-section">
       <h2 class="section-title">③-B 결합상품</h2>
       <p class="section-desc">패키지로 함께 제공되는 결합상품을 상품 DB에서 검색해 추가합니다.</p>
@@ -1422,6 +1441,7 @@
         <p class="no-option-msg">추가된 결합상품이 없습니다.</p>
       {/if}
     </section>
+    {/if}
 
     <!-- ④ 가격 정책 -->
     <section class="form-section">
@@ -1807,6 +1827,47 @@
   }
   .field-row-combo {
     gap: 10px;
+  }
+  /* 분류선택 행 우측 "결합상품" 콤보토글 — 2026-09-29 */
+  .field-row-with-toggle {
+    flex-direction: row;
+    align-items: center;
+    gap: 12px;
+  }
+  .field-row-picker-wrap {
+    flex: 1;
+    min-width: 0;
+  }
+  .bundle-toggle-btn {
+    flex-shrink: 0;
+  }
+  /* ProductDetailPanel.svelte .opt-combo-btn과 동일 스타일(기존 CMS 콤보토글 패턴 재사용) */
+  .opt-combo-btn {
+    display: inline-flex; align-items: center;
+    padding: 5px 12px;
+    border: 1.5px solid var(--cs-lilac);
+    border-radius: var(--cms-radius-md);
+    background: var(--cs-white);
+    font: var(--text-pc-script-12); font-weight: 500;
+    color: var(--cs-text-mid);
+    cursor: pointer;
+    white-space: nowrap;
+    transition: border-color .15s, background .15s, color .15s;
+  }
+  .opt-combo-btn:hover:not(.opt-combo-btn--on) {
+    border-color: var(--cs-purple);
+    background: rgba(59,47,138,.06);
+    color: var(--cs-purple);
+  }
+  .opt-combo-btn--on {
+    border-color: var(--cs-purple);
+    background: var(--cs-purple);
+    color: var(--cs-white);
+    font-weight: 600;
+  }
+  .opt-combo-btn--on:hover {
+    background: var(--cs-dark);
+    border-color: var(--cs-dark);
   }
   /* 콘텐츠 에디터(상품 설명) 블록과 구성품 블록이 동일한 16px 간격으로 붙어있어
      서로 다른 입력 영역이라는 구분이 잘 안 됐음 — 위쪽에 여백을 추가로 확보 */

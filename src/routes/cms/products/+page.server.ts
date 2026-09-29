@@ -1321,7 +1321,7 @@ export const actions: Actions = {
 
     const { data: source, error: sourceError } = await admin
       .from('products')
-      .select('id, category, name, slug, brand, description, product_caption, image_urls, specifications, sale_price, sale_only, option_only, product_code, code_series, parent_product_id, content_blocks, keywords, components, allowed_period_ids, allowed_method_ids, allowed_pickup_ids, shipping_round_trip, shipping_delivery, shipping_return')
+      .select('id, category, name, slug, brand, description, product_caption, image_urls, specifications, sale_price, sale_only, option_only, is_bundle_product, product_code, code_series, parent_product_id, content_blocks, keywords, components, allowed_period_ids, allowed_method_ids, allowed_pickup_ids, shipping_round_trip, shipping_delivery, shipping_return')
       .eq('id', sourceProductId)
       .is('deleted_at', null)
       .single()
@@ -1639,6 +1639,10 @@ export const actions: Actions = {
           sale_price: source.sale_price,
           sale_only: source.sale_only,
           option_only: (source as Record<string, unknown>).option_only ?? false,
+          // 2026-09-29 정책: 결합상품 분류는 등록 시점에만 결정·고정 — 복제도 "등록"의
+          // 일종이므로 원본의 분류를 그대로 물려받는다(아래에서 결합상품 링크도 함께
+          // 복사되므로, 분류만 빠지면 탭이 숨겨진 채 링크만 있는 불일치 상태가 됨).
+          is_bundle_product: (source as Record<string, unknown>).is_bundle_product ?? false,
         })
         .select('id')
         .single()

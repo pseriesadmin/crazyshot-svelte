@@ -58,6 +58,10 @@
     sale_price: number | null
     sale_only: boolean
     option_only: boolean
+    // 2026-09-29 정책: "결합상품" 분류는 등록 시점에만 결정·영구 고정 — '결합상품' 탭은
+    // 이 값이 true인 상품에만 노출된다(TABS derived 참고). 기존 단일상품에 결합상품을
+    // 추가해 사후 전환하는 것은 금지.
+    is_bundle_product?: boolean
     assetCount: number
     price12h: number | null
     price24h: number | null
@@ -173,6 +177,9 @@
   const parsedInitialTab: TabKey = product.parent_product_id
     ? 'history'
     : ((validTabs.includes(initialTab as TabKey) && (!tabsFilter || tabsFilter.includes(initialTab as TabKey))
+        // 2026-09-29 정책: ?tab=bundles로 직접 진입해도 결합상품 미분류 상품에는 그 탭
+        // 내용이 열리지 않게 함(TABS derived의 탭바 숨김과 동일 기준 — URL 우회 방지)
+        && (initialTab !== 'bundles' || !!product.is_bundle_product)
         ? initialTab
         : (tabsFilter?.[0] ?? 'basic')) as TabKey)
   let activeTab = $state<TabKey>(parsedInitialTab)
@@ -1456,10 +1463,15 @@
     { key: 'specs', label: '사양' },
     { key: 'history', label: '이력' },
   ]
+  // 2026-09-29 정책: "결합상품" 탭은 products.is_bundle_product가 true인 상품에만 노출된다
+  // (등록 시점에만 결정·영구 고정 — 기존 단일상품에 결합상품을 추가해 사후 전환하는 경로
+  // 자체를 화면에서 차단). isChildProduct/tabsFilter 필터와 무관하게 마지막에 한 번 더 걸러
+  // 어떤 경로로도 결합상품 탭이 잘못 노출되지 않게 한다.
   const TABS = $derived(
-    isChildProduct
+    (isChildProduct
       ? ALL_TABS.filter(t => t.key === 'history')
       : (tabsFilter ? ALL_TABS.filter(t => tabsFilter.includes(t.key)) : ALL_TABS)
+    ).filter(t => t.key !== 'bundles' || !!product.is_bundle_product)
   )
 
   // 탭메뉴 수량 배지(2026-09-29, Stephen 지시) — 목록형 탭 6종(옵션상품·결합상품·구성품·

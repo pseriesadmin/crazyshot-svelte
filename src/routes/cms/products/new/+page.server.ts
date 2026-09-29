@@ -243,6 +243,10 @@ export const actions: Actions = {
     const salePriceParsed = parseInt(salePriceRaw, 10)
     const salePrice = salePriceRaw === '' || isNaN(salePriceParsed) ? null : salePriceParsed
     const saleOnly = form.get('sale_only') === 'true'
+    // 2026-09-29 Stephen 정책 확정: "결합상품" 분류는 등록 시점에만 결정하고 영구 고정한다
+    // (기존 단일상품에 결합상품을 추가해 결합상품으로 전환하는 것은 금지 — ProductDetailPanel의
+    // '결합상품' 탭 노출 여부가 이 컬럼으로 게이팅됨).
+    const isBundleProduct = form.get('is_bundle_product') === 'true'
 
     // BND-8/9: 가격 데이터를 INSERT 전에 파싱 + 검증 (실패 시 orphaned product 방지)
     const depositAmountPre = parseFloat((form.get('deposit_amount') as string | null) ?? '0') || 0
@@ -282,6 +286,7 @@ export const actions: Actions = {
         components,
         is_active,
         option_only: optionOnly,
+        is_bundle_product: isBundleProduct,
         sale_price: salePrice,
         sale_only: saleOnly,
         content_blocks,

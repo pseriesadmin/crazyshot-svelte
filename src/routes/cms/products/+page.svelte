@@ -624,6 +624,7 @@
               <div class="rep-card-info">
                 <div class="rep-card-top">
                   <span class="cat-badge">{CATEGORY_LABEL[rp.category] ?? rp.category}</span>
+                  {#if rp.isBundleProduct}<span class="bundle-badge">결합상품</span>{/if}
                   {#if rp.sale_only}<span class="sale-only-badge">판매전용</span>{/if}
                   <span class="stock-badge" class:stock-zero={rp.assetCount === 0}>{rp.assetCount}(on) / {rp.assetTotal ?? 0}</span>
                 </div>
@@ -1065,6 +1066,15 @@
     padding: 5px 10px;
     background: rgba(255,53,53,0.10);
     color: var(--cs-red-badge);
+    border-radius: var(--radius-sm);
+    font: var(--text-pc-descript-10);
+    white-space: nowrap;
+  }
+  .bundle-badge {
+    display: inline-block;
+    padding: 5px 10px;
+    background: var(--cs-purple-op10);
+    color: var(--cs-purple);
     border-radius: var(--radius-sm);
     font: var(--text-pc-descript-10);
     white-space: nowrap;
