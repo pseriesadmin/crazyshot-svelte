@@ -42,7 +42,7 @@ export const load: PageServerLoad = async ({ params }) => {
           return_method,
           pickup_time,
           return_time,
-          products ( name, category, product_code )
+          products!rental_reservations_product_id_fkey ( name, category, product_code )
         )
       )
     `)

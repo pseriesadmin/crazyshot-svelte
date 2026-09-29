@@ -16,7 +16,7 @@ export const load: PageServerLoad = async ({ params, locals, url }) => {
   // user_id 불일치 시 조회 자체가 안 됨(존재 여부조차 노출하지 않음)
   const { data: reservation, error: reservationErr } = await locals.supabase
     .from('rental_reservations')
-    .select('id, reservation_code, start_date, end_date, pickup_method, return_method, pickup_time, return_time, product_id, products(name, category, product_code)')
+    .select('id, reservation_code, start_date, end_date, pickup_method, return_method, pickup_time, return_time, product_id, products!rental_reservations_product_id_fkey(name, category, product_code)')
     .eq('id', params.id)
     .eq('user_id', session.user.id)
     .maybeSingle()

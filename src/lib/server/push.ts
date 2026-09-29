@@ -289,7 +289,7 @@ export async function sendReservationLifecyclePush(
 
     const { data: resv } = await admin
       .from('rental_reservations')
-      .select('user_id, products(name)')
+      .select('user_id, products!rental_reservations_product_id_fkey(name)')
       .eq('id', reservationId)
       .single()
 

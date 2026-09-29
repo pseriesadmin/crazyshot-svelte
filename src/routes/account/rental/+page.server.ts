@@ -26,7 +26,7 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 
   const { data, error } = await locals.supabase
     .from('rental_reservations')
-    .select('id, status, reservation_code, start_date, end_date, created_at, product_id, tracking_number, pickup_method, pickup_time, products(name, category)')
+    .select('id, status, reservation_code, start_date, end_date, created_at, product_id, tracking_number, pickup_method, pickup_time, products!rental_reservations_product_id_fkey(name, category)')
     .eq('user_id', session.user.id)
     .in('status', ['hold', 'confirmed', 'shipped', 'in_use', 'return_requested', 'returned', 'completed'])
     .order('created_at', { ascending: false })
