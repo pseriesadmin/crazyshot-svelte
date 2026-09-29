@@ -7,6 +7,290 @@
 > 📌 BACKLOG 블록은 `BACKLOG.md`로 분리됐다(Default-Exclude — Stephen 명시 승인 시에만 NOW로 이동).
 
 
+## DONE — 🟡 BOUNDARY: 사용자 검색(/products/search)·상품 썸네일 정보 토큰·/products 노출 기준(조회수순) 개선 묶음 (2026-09-29, 이 세션'만', GATE E 검수 대기)
+
+수행 작업(이 세션 후반 — 앞선 NLSearch 묶음(Migration #307)은 별도 검수 완료분이라 제외):
+  [1] 특수문자 검색 검증(읽기 전용) — Stage에서 search_products에 특수문자 35종 직접 실행(롤백), 오류 0건
+      (websearch_to_tsquery·similarity 안전). 코드 수정 없음. 참고: searchService.getSimilarSearchTerms의
+      ilike 미이스케이프는 호출처 없음(미수정).
+  [2] /products/search 검색 동작 변경 — 실시간 결과 갱신 제거:
+      · 결과 그리드는 Enter 또는 검색 아이콘(입력창 우측 44px 버튼) 클릭 시에만 갱신
+      · 자동완성 드롭다운은 2자 이상·400ms 디바운스·AbortController·limit 8로 별도 상태(suggestResults) 분리
+      · 드롭다운 항목 선택 → /products/{slug ?? id} 상세로 즉시 이동
+      · 다른 세션이 동시 추가한 handleWishToggle을 일시 삭제했다가 복구, 중복 매핑은 mapSearchApiRow로 통일
+      · SearchProductGrid 헤더: 접힘 <button> → 일반 <div>+<h2> (expanded 상태 제거)
+  [3] 모바일 상품정보 폰트·컬러 토큰 확정 (Stephen 지시 반복 조정) — front-uiux.md §14-4에 확정값 등록:
+      카테고리 script-12 Bold / 가격행 purple-90·자간 -0.8px / 레이블 tag-11(500) / 숫자 body-16B 900 purple-60 /
+      구분자 script-14B purple-20 / 상품명 script-12 purple-90 행간 1.12 / 블록 gap·padding 10.8px
+      적용: /products 모바일 .m-prod-*(구분자 복원 포함) · .mdp-*(MD 추천) · ProductDPCard 모바일 기본
+      (PC @media에 기존 값 명시 복원) · .m-feat-*(슬라이더 카드 폰트 한 단계 축소 + 자간 -0.8px)
+  [4] /products 모바일 레이아웃 — MD 추천 섹션 상단 padding 50px, .m-list 하단 라운드 50px,
+      Best Pick 헤더의 상품 개수 숫자 제거
+  [5] /products 상품 목록(Best Pick) 노출 기준을 "상품 상세 조회수 내림차순"으로 변경 (PC·모바일 공통)
+      · Migration #576 get_most_viewed_products(p_category, p_limit, p_days) — SECURITY DEFINER, anon/authenticated
+        실행 권한, 조회수 동률·0건은 최신 등록순. Stage 검증 → Production 적용 완료(둘 다 실동작·권한 확인)
+      · products/+page.server.ts: 그리드가 이 RPC 사용, 실패 시 search_products(최신순) 폴백 + 서버 로그
+
+수정 파일:
+  - supabase/migrations/20260929030000_576_get_most_viewed_products_rpc.sql (신규)
+  - src/routes/products/+page.server.ts · src/routes/products/+page.svelte
+  - src/routes/products/search/+page.svelte
+  - src/lib/components/products/ProductDPCard.svelte · SearchProductGrid.svelte
+  - .claude/rules-ref/front-uiux.md (§14-4 모바일 상품정보 확정값 문서화)
+
+DB 마이그레이션: #576 — Stage ✅ / Production ✅ (Production 적용은 Stephen 명시 지시 후)
+
+GATE C:
+  [x] svelte-check 신규 에러 0건 (기존 a11y 경고만 잔존)
+  [x] Migration #576 Stage → Production 순서 준수·실동작 확인
+  [ ] GATE E(@sp3-qa-agent) 검수 대기
+  ⚠️ 알려진 한계: 검색 드롭다운 호출도 search_logs에 기록됨(관심집중 키워드 랭킹에 입력 중간 단계 혼입 가능)
+  ⚠️ 알려진 한계: 조회수는 전체 기간 누적(p_days=null) — 최근 N일 기준 전환은 호출 인자만 변경
+git commit: Stephen 직접 실행 필요.
+
+---
+
+## DONE — 🟡 BOUNDARY: 하입팩(/hype-pack) "추천 Package" 타이틀 축소·좌측정렬 + 테마그룹당 상품 개수 무제한 전환 (2026-09-29, 이 세션'만', GATE E 검수 대기)
+
+```
+[CONTEXT BRIDGE]
+Stephen이 <launch-selected-element>로 직접 지목한 UI 요소 2건 + CMS 기능제한 해제 1건.
+절대금지: git 쓰기 명령 금지(Stephen만) · 요청범위 외 수정 금지.
+```
+
+### 완료 내역
+
+```
+✅ [1] /hype-pack PC 화면 "추천 Package" 타이틀 — /products "Category" 타이틀과 동일하게
+   폰트 20px/weight 500로 축소 + 좌측정렬. 같은 .d-section-title 클래스를 공유하는
+   "Pack 테마목록" 제목(.theme-pick-head)은 `:not(.theme-pick-head)`로 범위를 좁혀
+   기존 25px/900/중앙정렬 그대로 유지 — 요청범위 밖 제목은 건드리지 않음.
+   수정: src/routes/hype-pack/+page.svelte (.d-section-title 규칙 추가)
+
+✅ [2] CMS "테마그룹 관리" 모달 — 테마그룹당 상품 추가 개수 제한(10개) 폐지
+   - 서버: cms_create/update_hype_pack_theme_group RPC의 MAX_10_PRODUCTS_PER_GROUP 검증 제거
+     (Migration #574 — DROP 불필요, 파라미터·반환타입 무변경. 그룹 자체 개수 제한
+     MAX_10_GROUPS는 이번 변경 대상 아니라 그대로 유지)
+   - 클라이언트: HypePackThemeGroupModal.svelte — MAX_PRODUCTS 상수·10개 도달 시 선택 차단
+     early-return·"상품 (N/10)" 라벨·10개 이후 검색창 숨김 {#if} 4곳 전부 제거,
+     라벨은 "상품 (N)"으로 단순화
+   - 무제한 전환 부작용 점검(Stephen 요청, 별도 확인) — DB CHECK 제약 없음(PK만 존재),
+     조회 RPC에 LIMIT 없음, 고객화면 그리드(flex-wrap:wrap)는 개수 무관하게 정상 렌더,
+     order 필드는 배열 인덱스 기반이라 개수 무관 정상 동작 — 구조적 문제 없음 확인
+   수정: supabase/migrations/20260929010000_574_hype_pack_theme_group_products_unlimited.sql (신규)
+        src/lib/components/hype-pack/HypePackThemeGroupModal.svelte
+```
+
+### DB 마이그레이션 — Stage·Production 둘 다 적용·검증 완료
+
+```
+supabase/migrations/20260929010000_574_hype_pack_theme_group_products_unlimited.sql
+  → Stage(ezyvffjvuwmtuhpxdjrw)✅ Production(vnbpmvxruyciuuaermyh)✅
+  (두 RPC 모두 prosrc에 MAX_10_PRODUCTS_PER_GROUP 문자열이 더 이상 없음을 직접 재조회 확인)
+```
+
+### 검증
+
+```
+npm run check(svelte-check) — 세션 도입 신규 에러 0건(기존 vite.config.ts 1건만 잔존).
+```
+
+### 미실행 / 대기
+
+```
+git commit — Stephen 직접 실행 대기(수정 파일: hype-pack/+page.svelte·
+HypePackThemeGroupModal.svelte 각 1곳 + 신규 마이그레이션 1건).
+```
+
+
+## DONE — 🔴 CRITICAL: "결합상품" 분류를 등록 시점에만 결정·영구 고정하는 정책 전환 (Migration #575, 2026-09-29, 이 세션'만', ✅ GATE E 통과 — sp3-qa-agent 독립검수 완료(블로킹 0건), Stage·Production 둘 다 적용 완료, git commit은 Stephen 대기)
+
+바로 위 블록(신규등록 "결합상품" 토글 + 대표카드 배지)을 구현한 직후, Stephen이 정책을
+한 단계 더 강화 지시: ① 결합상품으로 분류된 상품 패널에만 '결합상품' 탭을 노출하고 그 외
+일반(단일) 상품은 탭 자체를 숨길 것 ② 기존 단일상품에 결합상품을 등록해 사후에 결합상품으로
+전환하는 것은 금지 정책으로 적용할 것 ③ 결합상품은 등록 시점에만 그 분류로 등록 가능하고,
+기존 결합상품의 부품 목록 수정은 계속 가능하게 할 것.
+
+- **설계 전환**: 바로 위 블록에서는 "결합상품 여부"를 `product_bundle_links` 존재 유무로
+  가변 판정했는데(위 블록의 `hasBundleLinks`), 이 방식은 정확히 이번에 금지하려는 "사후
+  전환"을 막을 수 없다(부품을 추가하는 순간 자동으로 결합상품이 됨). 그래서 **새 DB 컬럼
+  `products.is_bundle_product`(boolean, 등록 시점에만 기록, 영구 고정)를 신설**해 판정
+  기준을 가변 상태(product_bundle_links)에서 불변 컬럼으로 전환.
+  - Stephen 확인 사항 2건: ① 이미 부품이 등록된 기존 운영 상품 19개는 이번 전환 시점에
+    자동으로 `is_bundle_product=true`로 소급 분류(선택: 자동 분류) ② 단일상품→결합상품
+    전환 금지는 화면(탭 숨김)에서만 막고 서버(RPC) 레벨 강제는 하지 않음(선택: 화면에서만).
+- **마이그레이션**(`supabase/migrations/20260929020000_575_products_is_bundle_product_column.sql`):
+  컬럼 추가(`DEFAULT false`) + 활성 `product_bundle_links`를 가진 기존 상품 백필. **Stage
+  (ezyvffjvuwmtuhpxdjrw) 적용 완료·검증**(백필 후 `is_bundle_product=true` 3건 확인 —
+  stage 데이터 규모상 production의 19건과 다름, 정상). **Production은 이 세션의 harness
+  classifier가 "Production Deploy" 액션을 자동 차단**해 직접 적용 불가 — Stephen이 아래
+  SQL을 Supabase 대시보드에서 직접 실행해야 함(이전 Migration #572와 동일한 제약).
+- **수정 1**(`src/lib/server/products/loadSelectedProductDetail.ts`): `SelectedProduct`·
+  `RootProductInfo` 타입에 `is_bundle_product`/`isBundleProduct` 필드 추가(기존
+  `hasBundleLinks` 파생 계산 → `products.is_bundle_product` 컬럼 직접 조회로 교체). 자식
+  선택 시 부모 행 조회 SELECT 목록·부모 선택 시 `selectedProduct` 스프레드 양쪽에 반영.
+- **수정 2**(`src/lib/components/cms/ProductDetailPanel.svelte`): `ProductDetail` 타입에
+  `is_bundle_product?: boolean` 추가. `TABS` derived에 `.filter(t => t.key !== 'bundles' ||
+  !!product.is_bundle_product)` 추가해 미분류 상품은 탭 자체가 안 보이게 함(기존
+  isChildProduct/tabsFilter 필터와 무관하게 마지막에 한 번 더 적용). `parsedInitialTab`에도
+  동일 기준 추가 — `?tab=bundles` URL 직접 진입으로 탭 숨김을 우회하는 경로도 함께 차단.
+- **수정 3**(`src/routes/cms/products/+page.svelte`): 대표카드 배지 조건을
+  `rp.hasBundleLinks` → `rp.isBundleProduct`로 교체(같은 배지, 판정 기준만 영구 컬럼으로).
+- **수정 4**(`src/routes/cms/products/new/+page.svelte` + `+page.server.ts`): 등록 화면의
+  "결합상품" 토글(`isBundlePackage`)을 hidden input(`is_bundle_product`)으로 서버에 전송,
+  서버 액션이 이 값을 파싱해 상품 INSERT 페이로드에 포함 — 이제 등록 시점에 선택한 분류가
+  실제로 영구 저장됨(바로 위 블록에서는 UI 상태로만 두고 전송 안 했던 것을 이번에 전환).
+- **수정 5**(`src/routes/cms/products/+page.server.ts` cloneProduct): "새 상품으로 복제"
+  시 결합상품 부품 목록(`bundle_links`)을 그대로 복사하는 기존 동작과 짝을 맞추기 위해
+  `source.is_bundle_product`도 함께 복사하도록 source SELECT·INSERT 페이로드에 추가
+  (안 하면 복제된 상품이 부품은 있는데 탭은 숨겨지는 불일치 상태가 됨 — add_inventory
+  모드(재고/자식 생성)는 자식이 탭 개념 자체가 없어 영향 없음, 손대지 않음).
+- **검증**: `npx svelte-check --tsconfig ./tsconfig.json` — 수정 5개 파일 신규 에러 0건.
+  경고는 420→422(+2)로 늘었으나 둘 다 `parsedInitialTab`에 추가한 신규 참조 2곳
+  (`initialTab`·`product`)에 대한 기존과 동일 카테고리의 "state_referenced_locally"
+  경고(이 파일에 이미 수십 건 존재하는 것과 동일 성격, 신규 버그 아님) — 직접 라인 대조로
+  확인.
+- **Production 적용 완료(2026-09-29, 같은 세션 후속)**: Stephen 지시로 이 세션이 직접
+  Production(vnbpmvxruyciuuaermyh)에 Migration #575를 적용. 직접 재조회로 검증 —
+  `is_bundle_product=true` 22건이 `product_bundle_links`(deleted_at IS NULL)에 존재하는
+  distinct product_id 22건과 정확히 1:1 일치(누락 0건). 첫 집계 쿼리에서 "21건"으로
+  보였던 차이는 그중 1건이 소프트삭제된 상품이라 `WHERE deleted_at IS NULL` 집계 조건에서
+  제외된 것일 뿐, 실제 분류 자체는 22건 전부 정상 반영됨을 별도 쿼리로 확인.
+- git 쓰기는 Stephen 직접 실행 대기.
+
+### GATE E 검수 결과 — sp3-qa-agent (1회 통과, 블로킹 없음)
+
+- **종합 판정**: ✅ GATE E 통과. `git diff --stat`으로 6개 파일(110 insertions/6 deletions)
+  전부 정확히 확인, 다른 미커밋 변경(hype-pack 등)은 무관함을 확인해 검수 범위에서 제외.
+- `upsert_product_bundle_links` RPC 자체는 이번 diff에 전혀 포함되지 않음을 확인 —
+  "서버 RPC 레벨 강제 없음"이라는 Stephen 확인 사항과 실제 코드가 정확히 일치.
+- 마이그레이션 안전성: `ADD COLUMN IF NOT EXISTS ... DEFAULT false`는 메타데이터만
+  변경되는 안전한 연산, 백필 WHERE절도 정확 — Stage에 직접 재조회해 `is_bundle_product=true`
+  3건이 활성 bundle_links를 가진 distinct product_id 3건과 정확히 1:1 일치함을 실증.
+- `TABS`/`parsedInitialTab` 양쪽 모두 `is_bundle_product` 기준으로 정확히 필터링되고,
+  `isChildProduct` 분기·다른 `tabsFilter=['history']` 고정 사용처(rental/history 등)와
+  상호작용해도 이상 없음을 실제 import 지점까지 전수 확인.
+- 신규등록 hidden input(`is_bundle_product`) ↔ 서버 파싱 필드명·boolean 로직 일치,
+  `cloneProduct`(new_product)의 SELECT·INSERT 반영 확인, `add_inventory`(자식 생성)에는
+  포함되지 않아야 하는데 실제로도 포함 안 됨을 라인 대조로 확인.
+- `svelte-check` 재실행 1 ERROR(무관)/422 WARNINGS, +2 경고 둘 다 `parsedInitialTab` 신규
+  참조 때문임을 재확인. TASK.md 서술이 diff와 정확히 일치.
+- 비블로킹 참고 1건: `src/lib/types/database.ts`에 `option_only`/`is_bundle_product` 모두
+  미등재 — 이번 건이 새로 만든 갭이 아니라 기존부터 있던 타입 동기화 공백(기존 패턴과 동일).
+
+## DONE — 🟡 BOUNDARY: 신규 상품등록에 "결합상품(패키지)" 분류토글 신설 + 등록 상품 대표카드 배지 노출 (2026-09-29, 이 세션'만', ✅ GATE E 통과 — sp3-qa-agent 독립검수 완료(블로킹 0건), git commit은 Stephen 대기)
+
+Stephen 지시: 신규 상품등록 화면(`/cms/products/new`) 분류선택 행 우측에 "결합상품" 콤보토글을
+신설 — 켜면 이미 존재하던 "③-B 결합상품" 섹션이 노출(기본 미선택 시 항상 숨김), 등록 완료된
+상품은 CMS 상품목록의 "대표 상품정보 등록관리" 요약카드(카테고리 배지 옆)에 "결합상품" 배지로
+표시.
+
+- **설계 판단**: 별도 DB 컬럼을 새로 만들지 않았다 — "결합상품(패키지)"이라는 개념은
+  products.md §2-14에 이미 "product_bundle_links를 가진 상품 = 패키지"로 정의돼 있으므로,
+  이 토글은 등록 화면에서 ③-B 섹션을 보여줄지 말지 결정하는 **순수 UI 상태**로만 두고,
+  저장 후 배지 표시 여부는 실제 `product_bundle_links` 등록 여부로 판정한다(토글값 자체는
+  서버로 전송 안 함) — 새 스키마·중복 상태 소스를 만들지 않기 위함.
+- **수정 1**(`src/routes/cms/products/new/+page.svelte`): `isBundlePackage = $state(false)`
+  신설. 분류선택 `.field-row`를 `.field-row-with-toggle`(가로 배치)로 감싸 우측에
+  `.opt-combo-btn`(ProductDetailPanel.svelte의 기존 콤보토글 스타일 그대로 복제 — 신규
+  디자인 패턴 아님) 버튼 추가. "③-B 결합상품" `<section>` 전체를 `{#if isBundlePackage}`로
+  감싸 기본 숨김·토글 on일 때만 노출되도록 변경.
+- **수정 2**(`src/lib/server/products/loadSelectedProductDetail.ts`): `RootProductInfo` 타입에
+  `hasBundleLinks: boolean` 필드 추가. 대표카드 구성 두 분기(자식 선택 시 L413-430, 부모 선택
+  시 L431-447) 모두에 `(selectedProduct?.bundle_links ?? []).length > 0`으로 채움 — 이미
+  `get_product_bundle_links(policySourceId)`로 조회돼 있는 `selectedProduct.bundle_links`가
+  두 분기 모두 항상 **rootId 기준**으로 조회된 값임을 코드로 확인해 재사용(신규 쿼리 추가
+  없음, N+1 없음).
+- **수정 3**(`src/routes/cms/products/+page.svelte`): 대표카드 `rep-card-top`의 `cat-badge`
+  바로 뒤에 `{#if rp.hasBundleLinks}<span class="bundle-badge">결합상품</span>{/if}` 추가
+  (기존 `sale-only-badge` 조건부 배지와 동일 패턴). `.bundle-badge` CSS는 `.sale-only-badge`와
+  동일 구조(padding/radius/font)에 색상만 purple 계열(`--cs-purple-op10` bg / `--cs-purple`
+  텍스트)로 구분 — 카테고리 배지(lilac)·판매전용 배지(red)와 육안 구분되도록.
+- **적용 안 한 범위**: 상품목록 그리드(일반 카드, 520행 근처)에는 배지를 추가하지 않음 —
+  Stephen이 지목한 "셋째 선택영역"은 대표카드(요약카드) 하나뿐이었고, 그리드 전체에 배지를
+  달려면 목록 전체 상품에 대한 별도 배치 조회가 필요해 요청 범위를 벗어남.
+- **검증**: `npx svelte-check --tsconfig ./tsconfig.json` — 수정 3개 파일 신규 에러 0건,
+  신규 경고 0건(전체 420건 그대로, 무관한 기존 에러 1건만 유지). DB 마이그레이션 없음.
+- 최종 수정 파일 = 3개. git 쓰기는 Stephen 직접 실행 대기.
+
+### GATE E 검수 결과 — sp3-qa-agent (1회 통과, 블로킹 없음)
+
+- **종합 판정**: ✅ GATE E 통과.
+- **가장 중요한 검증(policySourceId ≡ rootId)**: `spParentId`/`policySourceId`와
+  `parentProductId`/`rootId`가 동일한 소스 필드(`sp.parent_product_id`)에서 파생돼 두 분기
+  (자식 선택/부모 선택) 모두에서 항상 일치함을 코드 추적으로 확인 — `selectedProduct.
+  bundle_links` 재사용이 N+1 없이 안전하게 올바른 상품 기준으로 계산됨을 실증.
+- `isBundlePackage`가 hidden input·폼 필드 어디에도 배선되지 않아 서버로 전송되지 않음을
+  grep 전수 확인 — "순수 UI 상태" 설계 의도와 실제 코드 일치.
+- `{#if isBundlePackage}`가 "③-B 결합상품" 섹션의 시작·끝을 정확히 포함하고 다음 섹션(④
+  가격정책)과 경계가 정확함을 줄 번호로 확인.
+- `.opt-combo-btn` CSS가 `ProductDetailPanel.svelte` 원본과 바이트 단위로 완전히 동일함을
+  직접 대조. `.bundle-badge`가 `.sale-only-badge`와 구조 동일·색상만 차별화되고, 사용된
+  CSS 변수(`--cs-purple-op10`·`--cs-purple`)가 app.css에 실재하는 유효 토큰임을 확인.
+- `svelte-check` 재실행 1 ERROR(무관)/420 WARNINGS 동일 재확인. 그리드 카드는 의도대로
+  미변경. TASK.md 서술이 diff와 정확히 일치.
+- 신규 회귀 테스트는 순수 UI 토글/파생 배지(BOUNDARY 등급)라 비필수로 판정, 블로킹 아님.
+
+## DONE — 🔴 CRITICAL: CMS 상품검색(ilike) 괄호 포함 검색어 매칭 실패 결함 수정 (PostgREST or() DSL 이스케이프 누락, 2026-09-29, 이 세션'만', ✅ GATE E 통과 — sp3-qa-agent 독립검수 완료(블로킹 0건), git commit은 Stephen 대기)
+
+Stephen이 실서버(vnbpmvxruyciuuaermyh) `/cms/products?category=...&page=2&selected=290eb0a2-...`
+에서 "ULANZI OMBRA XIANG II (T154)" 상품을 검색했을 때, 자동완성 목록에는 뜨는데(단, 매칭
+레이블이 "키워드·상세"로 — 정상적인 "상품명" 매칭이 아니었음) 그 결과를 선택하면 실제
+상품목록 화면은 "등록된 상품이 없습니다"로 나오는 결함을 신고. 앞선 세션에서 이미 이
+상품이 production DB에 정상 등록(is_active=true, deleted_at=null, category='accessorie')돼
+있음을 확인했던 바로 그 상품이라 데이터 문제가 아님이 명확했음.
+
+- **근본원인(실증 확인)**: CMS 상품검색이 공유하는 `src/lib/utils/similarNameSuggest.ts`의
+  `toIlikePattern()`/`productSearchOrFilter()`가 검색어를 SQL ilike 와일드카드(`%`,`_`,`\`)만
+  이스케이프하고, Supabase(PostgREST)의 `.or()` 필터 DSL 자체가 문법기호로 해석하는
+  `(` `)` `.` `:` 등은 전혀 이스케이프하지 않은 채 그대로 URL 필터 문자열에 넣고 있었다.
+  상품명 "ULANZI Ombra XIANG II **(T154)**"처럼 괄호가 포함된 검색어를 쓰면 PostgREST가
+  `or=(...)` 그룹 구문을 잘못 파싱해 **에러 없이 조용히 0건 매칭**된다. production REST
+  API에 동일 필터를 직접 재현해 확진: 괄호 미이스케이프 `[]`(빈 배열) vs 값을 큰따옴표로
+  감싸면 정상 매칭 — 두 결과를 curl로 나란히 비교해 원인을 100% 실증했다.
+  - CMS 상품목록 화면의 검색은 이 ilike 매칭에만 의존해 MiniSearch 폴백이 없어 그대로
+    0건("등록된 상품이 없습니다")으로 이어졌다.
+  - 자동완성(`search-suggestions` API)은 ilike 1차 매칭이 똑같이 실패하더라도
+    `WEAK_MATCH_THRESHOLD` 이하일 때 MiniSearch 자연어 폴백이 보강해줘서 결과 자체는
+    떴다 — 단, 그 매칭이 진짜 ilike 매칭이 아니라 폴백이었다는 게 `match_label: '키워드·상세'`
+    로 이미 드러나 있었다(신고 스크린샷에서 "상품명" 대신 "키워드·상세" 배지가 뜬 이유).
+- **영향 범위**: `productSearchOrFilter`를 쓰는 모든 CMS 검색 경로 — `search-suggestions`
+  API(자동완성), `cms/products/+page.server.ts`(상품목록 검색), `ProductDetailPanel.svelte`의
+  `searchBundleProducts`/`searchOptionProducts`/`loadOptionNames`, `cms/products/new/+page.svelte`
+  동일 함수들. 괄호·마침표·콜론이 포함된 상품명(모델번호 표기 "(T154)", "(BG-3)" 등 이
+  카탈로그에 흔함)을 검색어로 쓰면 전부 동일하게 실패했을 것으로 추정(이번엔 괄호 케이스만
+  직접 재현·확진, 마침표·콜론은 코드 검토로만 동일 원리 적용을 추론).
+- **수정**(`src/lib/utils/similarNameSuggest.ts` `toIlikePattern()` 1개 함수): 기존 SQL
+  이스케이프는 그대로 유지하고, 그 결과를 PostgREST 인용 규칙대로 백슬래시(`\`→`\\`) →
+  큰따옴표(`"`→`\"`) 순서로 다시 이스케이프한 뒤 전체를 큰따옴표로 감싸도록 변경
+  (`%abc%` → `"%abc%"`). 순서(백슬래시 먼저)를 바꾸면 방금 추가한 백슬래시가 다시
+  이스케이프돼 값이 깨짐 — 직접 Node로 각 케이스를 계산해 검증.
+- **테스트**: `src/__tests__/server/cmsProductSearchSuggestions.test.ts`의 기존 3개 assertion을
+  새 큰따옴표 포맷에 맞게 갱신 + 괄호 케이스 회귀 테스트 1건 신규 추가. `npx vitest run`
+  24/24 GREEN. `npx svelte-check` 신규 에러 0건(경고 420건 그대로, 무관한 기존 에러 1건만
+  유지).
+- **적용 안 한 범위**: 고객용(front) `/api/search/products/+server.ts`는 ilike/`.or()`를
+  전혀 쓰지 않고 MiniSearch/NLSearch 엔진에만 의존함을 확인 — 동일 결함 없음, 손댈 필요 없음.
+- DB 마이그레이션 없음 — 애플리케이션 코드 2개 파일(유틸 1개 + 테스트 1개) 수정.
+- git 쓰기는 Stephen 직접 실행 대기.
+
+### GATE E 검수 결과 — sp3-qa-agent (1회 통과, 블로킹 없음)
+
+- **종합 판정**: ✅ GATE E 통과.
+- 이스케이프 순서(백슬래시 먼저→큰따옴표 나중)가 필수인 이유를 직접 검증 — 순서를 바꾸면
+  큰따옴표 치환이 삽입한 새 백슬래시가 다음 단계에서 재이스케이프돼 값이 깨짐을 확인.
+  `'a_b'`·`'a\b'`·`'a(b)c'`·`'50%'` 4개 케이스 전부 손으로 재계산해 실제 assertion과 일치.
+- `toIlikePattern`이 `similarNameSuggest.ts` 내부(`productSearchOrFilter`)와 테스트 파일
+  외에는 호출되는 곳이 없음을 grep으로 확인 — 단일 컬럼 `.ilike()`에 직접 쓰여 깨질 위험 없음.
+- `productSearchOrFilter` 소비 지점 8곳(ProductDetailPanel 2·cms/products/+page.server.ts 4·
+  cms/products/new 2·search-suggestions 2) 전부 `.or()` DSL 컨텍스트에서만 쓰임을 확인 —
+  일부는 다른 조건과 comma-join되지만 반환값이 큰따옴표로 완결돼 있어 구조가 깨지지 않음.
+- `npx vitest run` 재실행 24/24 GREEN 재확인. 특수문자 없는 일반 검색어는 두 이스케이프
+  단계 모두 값이 그대로 유지돼 회귀 없음(코드 추론 + 기존 `productSearchOrFilter('카메라')`
+  테스트로 검증됨).
+- TASK.md 서술이 실제 diff·재실행 결과와 정확히 일치. 요청 범위 외 수정 없음(`git diff`로
+  2개 파일만 확인).
+
 ## DONE — 🟡 BOUNDARY: 옵션상품·결합상품 선택 카드 목록 간 여백 누락 결함 수정 (Svelte 스코프 CSS 버그, 2026-09-29, 이 세션'만', ✅ GATE E 통과 — sp3-qa-agent 독립검수 완료(블로킹 0건, 탭메뉴 배지 블록과 함께 검수), git commit은 Stephen 대기)
 
 Stephen이 상품상세 패널 "결합상품" 탭의 선택된 카드 목록(Canon RF 24-70mm F2.8L / Manfrotto 055
